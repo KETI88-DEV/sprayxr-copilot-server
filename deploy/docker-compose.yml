@@ -1,0 +1,24 @@
+services:
+  trainer:
+    image: ship-paint-trainer:0.1
+    container_name: ship-paint-trainer
+    runtime: nvidia
+    shm_size: "32g"
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
+    environment:
+      HF_HOME: /hf-cache
+      HF_HUB_CACHE: /hf-cache/hub
+      TRANSFORMERS_CACHE: /hf-cache/transformers
+      HF_DATASETS_CACHE: /hf-cache/datasets
+    volumes:
+      - /data/ship-paint-ai/models:/models
+      - /data/ship-paint-ai/data:/data
+      - /data/ship-paint-ai/output:/output
+      - /data/ship-paint-ai/qdrant:/qdrant_storage
+      - /data/ship-paint-ai/hf-cache:/hf-cache
+      - /data/ship-paint-ai/logs:/logs
+      - /home/mjkim/ship-paint-ai:/workspace
+    working_dir: /workspace
+    command: ["sleep", "infinity"]
