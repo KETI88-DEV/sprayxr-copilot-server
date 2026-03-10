@@ -12,6 +12,47 @@ node_modules/
 # Environment variables
 .env
 
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Jupyter
+.ipynb_checkpoints
+
+# Python build
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+
+# Python testing
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+
+# Python type check
+.mypy_cache/
+.pyre/
+.ruff_cache/
+
+# ML artifacts
+models/
+data/
+datasets/
+checkpoints/
+vector_db/
+hf-cache/
+output/
+
 # Editor directories and files
 .idea
 .vscode
@@ -26,3 +67,7 @@ node_modules/
 
 # Claude
 .claude/
+
+# development
+trainer/scripts/prompt/
+trainer/scripts/temp/

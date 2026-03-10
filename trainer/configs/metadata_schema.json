@@ -1,0 +1,90 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Chunk Metadata Schema",
+  "description": "Schema for chunk-level metadata generated from deduplicated documents.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "doc_id",
+    "chunk_id",
+    "text",
+    "source_type",
+    "domain_category",
+    "process_stage",
+    "subtask",
+    "language",
+    "revision",
+    "quality_score",
+    "has_table",
+    "has_procedure",
+    "page_num",
+    "offset"
+  ],
+  "properties": {
+    "doc_id": {
+      "type": "string",
+      "description": "Source document ID."
+    },
+    "chunk_id": {
+      "type": "string",
+      "pattern": "^.+_chunk_[0-9]{3}$",
+      "description": "Chunk identifier in format {doc_id}_chunk_{NNN}."
+    },
+    "text": {
+      "type": "string",
+      "description": "Chunk text content."
+    },
+    "source_type": {
+      "type": "string",
+      "enum": ["pdf", "html", "txt"],
+      "description": "Source document type."
+    },
+    "domain_category": {
+      "type": "string",
+      "enum": ["coating", "blasting", "safety", "defects", "thickness", "general"],
+      "description": "Detected domain category."
+    },
+    "process_stage": {
+      "type": "string",
+      "enum": ["preparation", "application", "inspection", "qc", "general"],
+      "description": "Detected process stage."
+    },
+    "subtask": {
+      "type": "string",
+      "description": "Fine-grained subtask label (for example paint_mixing)."
+    },
+    "language": {
+      "type": "string",
+      "default": "ko",
+      "description": "Language code."
+    },
+    "revision": {
+      "type": "string",
+      "default": "v1.0",
+      "description": "Schema or pipeline revision."
+    },
+    "quality_score": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 1.0,
+      "description": "Heuristic quality score in range 0.0 to 1.0."
+    },
+    "has_table": {
+      "type": "boolean",
+      "description": "Whether chunk is table-derived."
+    },
+    "has_procedure": {
+      "type": "boolean",
+      "description": "Whether chunk includes numbered or bullet procedures."
+    },
+    "page_num": {
+      "type": ["integer", "null"],
+      "description": "Source page number when available."
+    },
+    "offset": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Character offset in source document."
+    }
+  }
+}
