@@ -71,3 +71,4 @@ output/
 # development
 trainer/scripts/prompt/
 trainer/scripts/temp/
+.sisyphus/ralph-loop.local.md

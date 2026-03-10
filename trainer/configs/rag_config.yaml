@@ -1,0 +1,39 @@
+# RAG Pipeline Configuration
+# Task 3: 문서 청킹 및 RAG 색인 구축
+
+chunking:
+  tokenizer_path: /models/Qwen2.5-7B-Instruct
+  min_tokens: 300
+  max_tokens: 800
+  overlap_fraction: 0.15          # 15% overlap (midpoint of 10-20%)
+  min_chunk_tokens: 50            # discard fragments smaller than this
+  chunk_id_format: "DOC-{doc_id}-C{seq:04d}"
+
+embedding:
+  model_name: BAAI/bge-m3
+  device: cuda
+  batch_size: 32
+  max_seq_length: 1024
+  normalize: true
+  dimension: 1024
+
+index:
+  type: hnsw
+  metric: inner_product           # + normalize = cosine similarity
+  hnsw_m: 32
+  ef_construction: 200
+  ef_search: 64
+
+reranker:
+  model_name: BAAI/bge-reranker-v2-m3
+  device: cuda
+  max_length: 1024
+  top_k_retrieve: 5
+  top_k_rerank: 3
+
+paths:
+  input_dir: /data/deduplicated
+  chunks_jsonl: /data/chunked/chunks.jsonl
+  faiss_index: /output/indexes/faiss.index
+  metadata_json: /output/indexes/metadata.json
+  index_config_json: /output/indexes/index_config.json

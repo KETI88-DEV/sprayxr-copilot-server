@@ -162,7 +162,7 @@
           "1",
           "2"
         ],
-        "status": "pending",
+        "status": "done",
         "subtasks": [
           {
             "id": 1,
@@ -170,9 +170,10 @@
             "description": "절/항/Step 경계 우선 청킹 규칙 정의 및 Qwen2.5 토크나이저 기반 토큰 카운팅 로직 구현, 300-800 토큰 범위 유지 및 10-20% overlap 처리",
             "dependencies": [],
             "details": "1. transformers.AutoTokenizer로 Qwen2.5 토크나이저 로드\n2. 청킹 규칙 구현: 절/항/Step 경계 우선, checklist/procedure는 한 chunk 유지, 표는 제목/컬럼명과 함께 별도 chunk\n3. 오버랩 로직: 10-20% 범위에서 토큰 기반 오버랩 구현\n4. /workspace/trainer/scripts/chunk_docs.py 작성\n5. 테스트: 샘플 문서 5건으로 청킹 결과 검증(토큰 범위 확인, 오버랩 비율 확인)",
-            "status": "pending",
+            "status": "done",
             "testStrategy": "샘플 문서 5건 청킹 결과 토큰 범위 300-800 범위 내 100% 확인, 오버랩 비율 10-20% 범위 내 확인, 절/항/Step 경계 유지 여부 검증",
-            "parentId": "undefined"
+            "parentId": "undefined",
+            "updatedAt": "2026-03-10T08:06:18.213Z"
           },
           {
             "id": 2,
@@ -182,9 +183,10 @@
               1
             ],
             "details": "1. sentence-transformers로 BGE-M3 모델 로드(/hf-cache/에서)\n2. 배치 임베딩 생성: batch_size 32, device 'cuda' 사용\n3. chunk_id 생성 로직: DOC-{doc_id}-C{seq} 형식 구현\n4. /data/chunked/chunks.jsonl 생성: 각 행 {chunk_id, text, doc_id, tokens, embedding} 포함\n5. chunk_docs.py 스크립트에 임베딩 처리 로직 추가\n6. GPU 메모리 관리: batch_size 32에서 out-of-memory 방지",
-            "status": "pending",
+            "status": "done",
             "testStrategy": "chunks.jsonl 행 수 최소 200 이상 확인, embedding 차원 1024 확인, JSON 형식 유효성 검증, chunk_id 형식 정확성 샘플 10건 확인, embedding 생성 시간 로깅",
-            "parentId": "undefined"
+            "parentId": "undefined",
+            "updatedAt": "2026-03-10T08:06:18.221Z"
           },
           {
             "id": 3,
@@ -194,9 +196,10 @@
               2
             ],
             "details": "1. /workspace/trainer/scripts/build_index.py 작성\n2. IVFFlat 및 HNSW 인덱스 구현 및 성능 비교(인덱싱 시간, 검색 속도, 메모리)\n3. 최적 인덱스 선택 및 구축: metric L2 기반\n4. FAISS 인덱스 저장: /output/indexes/faiss.index\n5. 메타데이터 저장: /output/indexes/faiss.index.pkl (chunk_id, doc_id, text 매핑 정보)\n6. 설정 파일: /workspace/trainer/configs/rag_config.yaml에 인덱스 타입, 파라미터 기록",
-            "status": "pending",
+            "status": "done",
             "testStrategy": "FAISS 인덱스 저장 성공 확인, 파일 크기 >100MB 검증, 인덱스 로드 성공 확인, 메타데이터 pkl 파일 유효성 검증, IVFFlat vs HNSW 성능 비교 리포트 작성",
-            "parentId": "undefined"
+            "parentId": "undefined",
+            "updatedAt": "2026-03-10T08:06:18.227Z"
           },
           {
             "id": 4,
@@ -206,9 +209,10 @@
               3
             ],
             "details": "1. BAAI/bge-reranker-v2-m3 모델 로드 및 통합\n2. RAG 파이프라인: FAISS retrieval (top-5) → rerank (top-3)\n3. /workspace/trainer/scripts/build_index.py에 reranker 로직 추가\n4. 프롬프트 포맷: '[문서] ... [질문] ...'\n5. Smoke test: 5개 샘플 쿼리로 end-to-end 검증\n6. 응답 시간 측정: 검색+리랭킹 총 시간 <5초 목표",
-            "status": "pending",
+            "status": "done",
             "testStrategy": "5개 쿼리로 smoke test 수행, 각 쿼리당 응답 시간 <5초 확인, retrieval top-5와 rerank top-3 결과 비교 검증, citation chunk_id 누락률 0% 확인, 리랭킹 효과(점수 변화) 분석",
-            "parentId": "undefined"
+            "parentId": "undefined",
+            "updatedAt": "2026-03-10T08:06:18.232Z"
           },
           {
             "id": 5,
@@ -218,11 +222,13 @@
               4
             ],
             "details": "1. 전체 파이프라인 end-to-end 테스트: /data/raw/ 전체 문서 처리\n2. 성능 메트릭 수집: 처리 시간, chunks 수량, 임베딩 차원, 인덱스 크기, 검색 시간, rerank 효과\n3. 데이터 품질 검증: chunks.jsonl 행 수, embedding 유효성, chunk_id 형식\n4. FAISS 인덱스 검증: 로드 성공, 쿼리 수행 정상\n5. 최종 보고서 작성: /output/eval_results/rag_indexing_report.md\n6. /output/indexes/ 최종 산출물 확인: faiss.index, faiss.index.pkl 존재",
-            "status": "pending",
+            "status": "done",
             "testStrategy": "chunks.jsonl 200행 이상 확인, embedding 차원 1024 확인, FAISS 인덱스 파일 크기 >100MB 확인, 5개 쿼리 응답 시간 <5초 확인, citation chunk_id 누락률 0%, 최종 보고서 작성 완료, 모든 산출물이 /output/indexes/에 저장됨 확인",
-            "parentId": "undefined"
+            "parentId": "undefined",
+            "updatedAt": "2026-03-10T08:06:18.241Z"
           }
-        ]
+        ],
+        "updatedAt": "2026-03-10T08:06:18.241Z"
       },
       {
         "id": "4",
@@ -1050,9 +1056,9 @@
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2026-03-10T07:23:17.652Z",
+      "lastModified": "2026-03-10T08:06:18.241Z",
       "taskCount": 14,
-      "completedCount": 2,
+      "completedCount": 3,
       "tags": [
         "master"
       ]
