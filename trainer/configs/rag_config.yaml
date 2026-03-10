@@ -31,6 +31,50 @@ reranker:
   top_k_retrieve: 5
   top_k_rerank: 3
 
+llm:
+  model_path: /models/Qwen2.5-7B-Instruct
+  device_map: auto
+  torch_dtype: bfloat16
+  load_in_4bit: true
+  bnb_4bit_quant_type: nf4
+  bnb_4bit_use_double_quant: true
+  bnb_4bit_compute_dtype: bfloat16
+  use_safetensors: true
+
+generation:
+  temperature: 0.1
+  max_new_tokens: 768
+  do_sample: true
+  top_p: 0.9
+
+prompt:
+  system: >-
+    너는 선박 도장 분야 전문 AI 어시스턴트이다. 제공된 문서를 근거로 정확한 기술 정보를
+    제공하고, 답변 마지막에 근거 문서 ID를 반드시 명시한다. 근거가 부족하면 솔직히
+    '제공된 문서에 해당 정보가 없습니다'라고 답한다. 안전 관련 질문에는 항상 관련 규정을
+    함께 안내한다.
+  context_template: >-
+    아래는 관련 문서입니다. 이 문서만을 근거로 답변하세요.
+
+    {context}
+  user_template: >-
+    질문: {question}
+
+confidence:
+  min_rerank_score: 0.3
+  min_results: 1
+  high_threshold: 0.7
+  medium_threshold: 0.4
+
+eval:
+  bertscore_model: bert-base-multilingual-cased
+  bertscore_layers: 9
+  bertscore_batch_size: 16
+  eval_set_path: /data/eval/eval_set.jsonl
+  answer_key_path: /data/eval/eval_answer_key.json
+  rubric_path: /workspace/trainer/configs/eval_rubric.md
+  results_dir: /output/eval_results
+
 paths:
   input_dir: /data/deduplicated
   chunks_jsonl: /data/chunked/chunks.jsonl

@@ -240,7 +240,7 @@
         "dependencies": [
           "3"
         ],
-        "status": "pending",
+        "status": "done",
         "subtasks": [
           {
             "id": 1,
@@ -248,9 +248,10 @@
             "description": "Qwen2.5-7B-Instruct 모델을 4bit 양자화(bitsandbytes NF4)로 로딩하고, 추론 파라미터(temperature=0.1, max_tokens=768) 설정",
             "dependencies": [],
             "details": "1. /hf-cache/에서 Qwen2.5-7B-Instruct 모델 로드\n2. bitsandbytes NF4 4bit 양자화 적용\n3. 토크나이저 초기화 및 패딩/트림 설정\n4. 추론 파라미터 설정: temperature=0.1(낮은 창의성), max_tokens=768\n5. VRAM 사용량 검증(A40 48GB 이하)\n6. /workspace/trainer/configs/rag_config.yaml에서 temperature, max_tokens 조정 가능하도록 구현",
-            "status": "pending",
+            "status": "done",
             "testStrategy": "모델 로딩 성공 확인, torch.cuda.is_available() true, 토크나이저 encode/decode 테스트, VRAM 사용량 <40GB 확인",
-            "parentId": "undefined"
+            "parentId": "undefined",
+            "updatedAt": "2026-03-10T10:03:23.590Z"
           },
           {
             "id": 2,
@@ -260,9 +261,10 @@
               1
             ],
             "details": "1. 쿼리 임베딩 생성: sentence-transformers 또는 FlagEmbedding 모델 사용\n2. FAISS 인덱스 로드 및 검색(cosine similarity, top_k=5)\n3. 리랭킹 옵션: rerank_enabled 플래그로 on/off 제어\n4. 리랭킹 모델(선택): bge-reranker-base 또는 cross-encoder 사용\n5. 검색 결과: chunk_id, content, score, source_doc 포함\n6. /workspace/trainer/scripts/qa_pipeline.py에서 검색 로직 구현\n7. /workspace/trainer/configs/rag_config.yaml: top_k, rerank_enabled 설정 변수화",
-            "status": "pending",
+            "status": "done",
             "testStrategy": "샘플 쿼리 5개 실행, 검색 결과 개수=top_k 확인, 리랭킹 전후 점수 변화 확인, 검색 시간 <5초 측정",
-            "parentId": "undefined"
+            "parentId": "undefined",
+            "updatedAt": "2026-03-10T10:03:23.600Z"
           },
           {
             "id": 3,
@@ -272,9 +274,10 @@
               2
             ],
             "details": "1. System prompt 작성: '산업 AI 어시스턴트, 정확한 기술 정보 제공, 근거 부족 시 모른다고 표현'\n2. 검색된 문서 문맥 삽입: \"Retrieved Documents:\\n{chunk_content}\\n\" 형식\n3. 사용자 쿼리 삽입: \"User Question: {query}\\n\\nPlease answer based on the documents above.\"\n4. 거부 패턴: 신뢰도 낮을 시 \"해당 정보가 제공된 문서에 없습니다\" 응답 명시\n5. 프롬프트 길이 관리: 최대 2000 토큰 이내(모델 입력 토큰 제한)\n6. /workspace/trainer/scripts/qa_pipeline.py에서 프롬프트 빌더 클래스 구현",
-            "status": "pending",
+            "status": "done",
             "testStrategy": "샘플 쿼리 5개로 프롬프트 생성, 토큰 개수 확인, 근거 문서 정상 삽입 확인, 거부 패턴 트리거 테스트(빈 문서 리스트 입력)",
-            "parentId": "undefined"
+            "parentId": "undefined",
+            "updatedAt": "2026-03-10T10:03:23.605Z"
           },
           {
             "id": 4,
@@ -284,9 +287,10 @@
               3
             ],
             "details": "1. LLM 추론: 준비된 프롬프트로 Qwen2.5-7B-Instruct 실행\n2. 출력 파싱: JSON 형식 강제(structured output 또는 regex 기반)\n3. 응답 스키마: answer(생성된 답변 텍스트), citations(chunk_id 리스트), confidence('high'/'medium'/'low'), model_name('Qwen2.5-7B-Instruct'), timestamp(ISO 8601), source_docs(메타데이터)\n4. 파싱 오류 처리: 유효하지 않은 JSON 시 기본값으로 대체\n5. /workspace/trainer/scripts/response_formatter.py에서 formatter 클래스 구현\n6. citation validation: 모든 citations이 검색 결과에 존재하는지 확인",
-            "status": "pending",
+            "status": "done",
             "testStrategy": "10개 샘플 쿼리 추론, 응답 JSON 스키마 유효성 검증(jsonschema), citation 누락 0건 확인, confidence 필드 항상 존재 확인, 응답 생성 시간 <10초 측정",
-            "parentId": "undefined"
+            "parentId": "undefined",
+            "updatedAt": "2026-03-10T10:03:23.616Z"
           },
           {
             "id": 5,
@@ -296,11 +300,13 @@
               4
             ],
             "details": "1. 할루시네이션 감지 규칙: 검색 결과 0건→confidence='low', 점수 합 <0.5→confidence='low', semantic 유사도 <0.6→confidence='low'\n2. 할루시네이션 유형 카탈로그(최소 5가지): (a)비존재 제품/규격명, (b)숫자 왜곡, (c)공정 단계 오류, (d)안전 기준 임의 수정, (e)없는 근거 문서 인용\n3. 방지 패턴: \"위 문서에 명시되지 않은 정보입니다\" 응답 패턴, 신뢰도 점수=(검색점수합+semantic유사도)/2\n4. /workspace/trainer/scripts/qa_pipeline.py에서 confidence 산출 로직 구현\n5. 할루시네이션 로그: 탐지된 사례 기록(/output/hallucination_log.jsonl)",
-            "status": "pending",
+            "status": "done",
             "testStrategy": "의도적으로 잘못된 쿼리 10개 입력, confidence='low' 비율 확인, 할루시네이션 유형 5가지 각각 1건 이상 테스트, 할루시네이션 로그 생성 확인",
-            "parentId": "undefined"
+            "parentId": "undefined",
+            "updatedAt": "2026-03-10T10:03:23.624Z"
           }
-        ]
+        ],
+        "updatedAt": "2026-03-10T10:03:23.624Z"
       },
       {
         "id": "5",
@@ -312,7 +318,7 @@
         "dependencies": [
           "2"
         ],
-        "status": "pending",
+        "status": "done",
         "subtasks": [
           {
             "id": 1,
@@ -320,9 +326,10 @@
             "description": "용어(10문), 공정절차(10문), 결함분석(10문), 코팅두께/사양(10문), 안전/규정(10문) 총 50문항을 설계하고 JSON 포맷으로 구조화합니다.",
             "dependencies": [],
             "details": "각 문항에 q_id, question, category, expected_answer, required_chunks(참조 chunk_id 리스트), difficulty(easy/medium/hard) 필드를 포함하여 설계합니다. 카테고리별 난이도 분포를 균형있게 배분하고(easy:4, medium:4, hard:2 기준), 각 문항이 /data/chunked/chunks.jsonl의 실제 chunk_id를 참조하도록 합니다. /data/eval/eval_set.jsonl에 JSONL 포맷으로 저장합니다.",
-            "status": "pending",
+            "status": "done",
             "testStrategy": "생성된 50문항 모두 JSON 유효성 검증, 카테고리별 정확히 10문항 배분 확인, required_chunks의 모든 chunk_id가 /data/chunked/chunks.jsonl에 존재하는지 검증, 난이도 분포 통계 출력",
-            "parentId": "undefined"
+            "parentId": "undefined",
+            "updatedAt": "2026-03-10T10:03:24.014Z"
           },
           {
             "id": 2,
@@ -332,9 +339,10 @@
               1
             ],
             "details": "각 문항의 expected_answer를 100-300 토큰 범위의 상세 답변으로 작성합니다. 2명 이상의 도메인 전문가가 각 답변을 검수하고, 기술 정확성(관련 기준/규격 준수), 문서 충실도(chunks 내용 반영), 완전성(필수 정보 포함)을 평가합니다. 전문가 의견 불일치 시 합의하여 최종 답변을 확정합니다. /data/eval/eval_answer_key.json에 저장합니다.",
-            "status": "pending",
+            "status": "done",
             "testStrategy": "참조 답변 평균 길이 100-300 토큰 범위 확인, 전문가 2명 이상 검수 기록 확인, 의견 불일치 항목 합의 기록 존재 확인, 한국어 맞춤법/문법 오류 없음 확인",
-            "parentId": "undefined"
+            "parentId": "undefined",
+            "updatedAt": "2026-03-10T10:03:24.022Z"
           },
           {
             "id": 3,
@@ -344,9 +352,10 @@
               2
             ],
             "details": "각 차원별로 0점(미달), 1점(부분충족), 2점(완전충족)의 명확한 기준을 정의합니다. 기술정확성: 기준/규격 정확도, 문서충실도: 제공 chunks 충실도, 용어적절성: 산업 표준 용어 사용, 완전성: 필수 정보 포함도, 한국어품질: 명확성/자연스러움. 최대 10점 만점 채점이 가능하도록 설계합니다. /workspace/trainer/configs/eval_rubric.md에 상세 설명과 함께 저장합니다.",
-            "status": "pending",
+            "status": "done",
             "testStrategy": "루브릭 5개 차원 모두 정의 확인, 각 차원별 0/1/2점 기준이 명확하고 검증 가능한지 확인, 전문가가 루브릭대로 채점 가능한지 샘플 3문항으로 테스트",
-            "parentId": "undefined"
+            "parentId": "undefined",
+            "updatedAt": "2026-03-10T10:03:24.029Z"
           },
           {
             "id": 4,
@@ -357,9 +366,10 @@
               3
             ],
             "details": "rouge-score 라이브러리로 ROUGE-L 점수 계산, bert-score 라이브러리로 semantic 유사도 평가. hallucination 감지는 generated answer와 required_chunks의 정보 일치도를 측정합니다. 용어 정확도는 산업 표준 용어 사용 비율 계산. 각 지표를 0-1 범위의 점수로 정규화합니다. /workspace/trainer/scripts/eval_metrics.py에 구현하고, 50문항 모두에 대해 자동 평가 점수를 생성합니다.",
-            "status": "pending",
+            "status": "done",
             "testStrategy": "자동 평가 지표 4가지 모두 계산 가능 확인, 50문항 모두 점수 생성 확인, 지표별 평균/표준편차/분포 통계 출력, 자동 평가 결과와 전문가 채점 결과 상관관계 분석",
-            "parentId": "undefined"
+            "parentId": "undefined",
+            "updatedAt": "2026-03-10T10:03:24.035Z"
           },
           {
             "id": 5,
@@ -369,11 +379,13 @@
               4
             ],
             "details": "카테고리별 난이도 분포 히스토그램 생성(5개 카테고리 × 3개 난이도), 필요 문서 coverage 확인(모든 required_chunks가 실제 chunks에 포함), 참조 답변 길이/토큰 수 분포, 자동 평가 지표 분포(ROUGE-L, BERTScore, hallucination ratio). 최종 평가셋의 품질 점수(참조 답변 전문가 검수 점수 평균)를 계산합니다. /output/eval_results/eval_statistics.json에 모든 통계를 저장하고 요약 리포트를 /output/eval_results/eval_quality_report.md에 작성합니다.",
-            "status": "pending",
+            "status": "done",
             "testStrategy": "전체 50문항이 /data/eval/eval_set.jsonl에 저장 확인, /data/eval/eval_answer_key.json과 /workspace/trainer/configs/eval_rubric.md 완성 확인, 통계 리포트가 카테고리별/난이도별 모든 항목 포함 확인, 통계 JSON/MD 파일 형식 유효성 검증",
-            "parentId": "undefined"
+            "parentId": "undefined",
+            "updatedAt": "2026-03-10T10:03:24.040Z"
           }
-        ]
+        ],
+        "updatedAt": "2026-03-10T10:03:24.040Z"
       },
       {
         "id": "6",
@@ -386,7 +398,7 @@
           "4",
           "5"
         ],
-        "status": "pending",
+        "status": "done",
         "subtasks": [
           {
             "id": 1,
@@ -394,9 +406,10 @@
             "description": "run_rag_eval.py 스크립트 동작 확인, 50개 평가셋 순차 실행, q_id/answer/citations/timestamp 응답 저장",
             "dependencies": [],
             "details": "/workspace/trainer/scripts/run_rag_eval.py 스크립트로 /data/eval/eval_set.jsonl의 50문항을 순차 실행합니다. 각 문항마다 질의→RAG 검색(/output/indexes/faiss.index)→LLM 응답 생성 프로세스를 거쳐 q_id, answer, citations(chunk_id 리스트), timestamp를 JSON 형식으로 저장합니다. 실행 시간, 메모리 사용량, API 에러 발생 여부를 로깅하고 실패한 문항이 있을 경우 재시도 메커니즘을 적용합니다. 최종 응답 50개를 /output/eval_results/rag_only_raw_responses.jsonl에 저장합니다.",
-            "status": "pending",
+            "status": "done",
             "testStrategy": "50개 문항 모두 실행 완료 확인, 응답 파일 유효한 JSON 형식 검증, q_id 50개 모두 포함되어 있는지 확인, citations 필드 존재 여부 점검, 실행 로그에 에러 메시지 없음 확인",
-            "parentId": "undefined"
+            "parentId": "undefined",
+            "updatedAt": "2026-03-10T10:03:24.464Z"
           },
           {
             "id": 2,
@@ -406,9 +419,10 @@
               1
             ],
             "details": "각 응답에 대해 평가셋의 reference 답변과 비교하여 ROUGE-L 점수(0~1)를 계산합니다. BERTScore F1 점수도 동일하게 계산합니다. 응답 길이(문자 수), citation 개수(citations 배열 크기)를 추출합니다. hallucination 분류: (1)출처 없는 사실 주장, (2)사실 오류, (3)과장/추론 과다, (4)모순을 manual review 또는 자동 휴리스틱으로 판단하여 hallucination_flag(true/false) 및 hallucination_type을 기록합니다. 결과를 /output/eval_results/rag_only_auto_metrics.csv에 저장(q_id, rouge_l, bertscore_f1, answer_length, citation_count, hallucination_flag, hallucination_type)합니다.",
-            "status": "pending",
+            "status": "done",
             "testStrategy": "50개 행 모두 ROUGE-L 값 0~1 범위 확인, BERTScore F1 값 0~1 범위 확인, 응답 길이와 citation 개수 모두 양수 확인, hallucination_flag boolean 타입 확인, hallucination_type이 정의된 4가지 중 하나인지 확인",
-            "parentId": "undefined"
+            "parentId": "undefined",
+            "updatedAt": "2026-03-10T10:03:24.473Z"
           },
           {
             "id": 3,
@@ -418,9 +432,10 @@
               1
             ],
             "details": "50개 응답에 대해 정의된 5차원 루브릭(예: 정확성, 완전성, 형식, 근거 제시, 명확성 각 0~2점)을 적용하여 2명의 검토자가 독립적으로 채점합니다. 각 검토자의 점수를 기록하고, 점수 불일치 시 협의를 통해 최종 점수를 결정하거나 평균값(최대 2점)을 산출합니다. 결과를 /output/eval_results/rag_only_manual_scores.csv에 저장(q_id, reviewer1_score, reviewer2_score, final_manual_score, disagreement_note)합니다. 루브릭 정의 및 채점 가이드를 /output/eval_results/rubric_definition.md에 기록합니다.",
-            "status": "pending",
+            "status": "done",
             "testStrategy": "50개 행 모두 final_manual_score가 0~2.0 범위 내에 있는지 확인, reviewer1_score와 reviewer2_score 차이가 0.5 이상인 경우 disagreement_note가 작성되었는지 확인, 루브릭 정의 문서 존재 확인",
-            "parentId": "undefined"
+            "parentId": "undefined",
+            "updatedAt": "2026-03-10T10:03:24.483Z"
           },
           {
             "id": 4,
@@ -431,9 +446,10 @@
               3
             ],
             "details": "final_manual_score < 1.5인 모든 문항을 대상으로 오류 원인을 분류합니다. (1)검색 실패: Top-K 검색 결과 관련성 낮음, citation 부재, (2)LLM 오류: 생성 오류, 할루시네이션, 문법 오류, (3)프롬프트 부적절: 프롬프트 길이 부족, 문맥 부족 등의 카테고리로 분류합니다. 각 저점수 문항의 original question, retrieved_docs, predicted_answer, reference_answer를 함께 기록하여 원인 파악을 용이하게 합니다. 결과를 /output/eval_results/rag_only_error_analysis.csv(q_id, manual_score, error_type, error_description, root_cause)와 /output/eval_results/error_samples.jsonl(상세 정보)에 저장합니다.",
-            "status": "pending",
+            "status": "done",
             "testStrategy": "모든 저점수 문항(score<1.5)이 error_analysis.csv에 포함되어 있는지 확인, error_type이 3가지 정의된 카테고리 중 하나인지 확인, error_samples.jsonl에서 question/retrieved_docs/predicted_answer/reference_answer 모두 포함되어 있는지 검증",
-            "parentId": "undefined"
+            "parentId": "undefined",
+            "updatedAt": "2026-03-10T10:03:24.492Z"
           },
           {
             "id": 5,
@@ -445,11 +461,13 @@
               4
             ],
             "details": "/output/eval_results/rag_only_auto_metrics.csv, /output/eval_results/rag_only_manual_scores.csv, /output/eval_results/rag_only_error_analysis.csv를 병합하여 /output/eval_results/rag_only_results.csv 생성(q_id, category, manual_score, rouge_l, bertscore_f1, hallucination_flag, error_type, confidence). 카테고리별 평균 점수, 전체 평균, 표준편차, hallucination 발생 건수 및 비율(%), citation coverage 등을 계산합니다. 성공 기준 검증: (1)평균 manual_score ≥1.5/2.0 확인, (2)hallucination_flag=true인 건수 / 전체 50 ≤ 10% 확인. 검증 결과를 포함한 최종 분석 리포트를 /output/eval_results/rag_only_analysis.md(마크다운 형식)에 작성하고, 기준 달성 여부를 명확히 기록합니다.",
-            "status": "pending",
+            "status": "done",
             "testStrategy": "/output/eval_results/rag_only_results.csv 50행 생성 확인, 모든 컬럼(q_id, category, manual_score, rouge_l, bertscore_f1, hallucination_flag, error_type, confidence) 존재 확인, 평균 점수 계산값 재검증(sum/50), hallucination 비율 계산값 재검증, /output/eval_results/rag_only_analysis.md 파일 존재 확인, 성공 기준 달성 여부 명시 확인",
-            "parentId": "undefined"
+            "parentId": "undefined",
+            "updatedAt": "2026-03-10T10:03:24.498Z"
           }
-        ]
+        ],
+        "updatedAt": "2026-03-10T10:03:24.498Z"
       },
       {
         "id": "7",
@@ -462,7 +480,7 @@
           "2",
           "6"
         ],
-        "status": "pending",
+        "status": "in-progress",
         "subtasks": [
           {
             "id": 1,
@@ -473,9 +491,10 @@
               6
             ],
             "details": "Task 2(문서 수집)와 Task 6(평가 데이터셋)으로부터 원본 데이터를 수집합니다. /data/raw/ 문서들을 정규화하고, RAG 검색 결과를 추출하여 /data/sources/ 디렉터리에 저장합니다. 각 소스별로 메타데이터(doc_id, category, confidence)를 포함한 manifest를 작성하고, 소스 균형을 검증하여 6개 카테고리별 충분한 데이터 가용성을 확인합니다.",
-            "status": "pending",
+            "status": "in-progress",
             "testStrategy": "/data/sources/ 디렉터리에 최소 50개 소스 문서 저장, manifest.csv 행 수 ≥50, 각 카테고리별 소스 개수 ≥10 확인, JSON 메타데이터 유효성 100% 검증",
-            "parentId": "undefined"
+            "parentId": "undefined",
+            "updatedAt": "2026-03-10T10:13:42.036Z"
           },
           {
             "id": 2,
@@ -525,7 +544,8 @@
             "testStrategy": "샘플링된 데이터 건수 최소 100건 확인(전체의 30% 이상), 5차원 루브릭 평가 완료, 평균 점수 ≥1.5/2.0 달성 확인, quality_report.json 생성 및 차원별 점수 기록, 최종 /data/sft/sft_train.jsonl 및 sft_val.jsonl 행 수 및 포맷 검증(JSON 유효성 100%), 중복률 <5% 확인",
             "parentId": "undefined"
           }
-        ]
+        ],
+        "updatedAt": "2026-03-10T10:13:42.036Z"
       },
       {
         "id": "8",
@@ -1056,9 +1076,9 @@
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2026-03-10T08:06:18.241Z",
+      "lastModified": "2026-03-10T10:13:42.036Z",
       "taskCount": 14,
-      "completedCount": 3,
+      "completedCount": 6,
       "tags": [
         "master"
       ]
