@@ -2,7 +2,7 @@
 
 **Title:** 문서 수집 및 파이프라인 설계
 
-**Status:** pending
+**Status:** done
 
 **Dependencies:** None
 
@@ -28,7 +28,7 @@
 
 ### 2.1. 선박 도장 문서 50-100건 수집 및 /data/raw/ 저장
 
-**Status:** pending  
+**Status:** done  
 **Dependencies:** None  
 
 1순위 문서(코팅/블라스팅 매뉴얼, 도료 TDS, 안전지침, 결함 설명, 도막 두께/검사 가이드)를 50-100건 수집하여 /data/raw/에 저장하고, /data/manifest.csv에 문서 메타데이터(doc_id, source, pages, bytes) 기록
@@ -39,7 +39,7 @@
 
 ### 2.2. 문서 정규화 규칙 정의 및 clean_docs.py 스켈레톤 작성
 
-**Status:** pending  
+**Status:** done  
 **Dependencies:** 2.1  
 
 Unicode NFKC 정규화, 헤더/푸터/페이지 번호 제거, 단위 통일(µm→µm, %→%, mm→mm, °C→°C), 용어 통일(DFT/WFT/SSPC-SP10/Sa 2.5) 규칙을 정의하고 /workspace/trainer/scripts/clean_docs.py 스켈레톤 작성
@@ -50,7 +50,7 @@ Unicode NFKC 정규화, 헤더/푸터/페이지 번호 제거, 단위 통일(µm
 
 ### 2.3. 중복 제거 전략 구현 및 dedup_docs.py 스켈레톤 작성
 
-**Status:** pending  
+**Status:** done  
 **Dependencies:** 2.2  
 
 문서 단위 SHA-256, near-duplicate MinHash+LSH, 문단 512자 이상 장문 중복 제거 전략을 구현하고 /workspace/trainer/scripts/dedup_docs.py 스켈레톤 작성, 중복 제거율 ≥95% 달성
@@ -61,7 +61,7 @@ Unicode NFKC 정규화, 헤더/푸터/페이지 번호 제거, 단위 통일(µm
 
 ### 2.4. 메타데이터 스키마 설계 및 chunk_docs.py 스켈레톤 작성
 
-**Status:** pending  
+**Status:** done  
 **Dependencies:** 2.3  
 
 메타데이터 스키마(doc_id, chunk_id, source_type, domain_category, process_stage, subtask, language, revision, quality_score, has_table, has_procedure) 정의하고 /workspace/trainer/scripts/chunk_docs.py 스켈레톤 작성, 각 청크에 메타데이터 부여
@@ -72,7 +72,7 @@ Unicode NFKC 정규화, 헤더/푸터/페이지 번호 제거, 단위 통일(µm
 
 ### 2.5. 파싱 포맷 정의 및 ingest_docs.py 스켈레톤 작성
 
-**Status:** pending  
+**Status:** done  
 **Dependencies:** 2.1  
 
 PDF→pymupdf, HTML→beautifulsoup4 파싱 포맷 정의하고 /workspace/trainer/scripts/ingest_docs.py 스켈레톤 작성, /data/raw/→/data/parsed/ 파이프라인 구축

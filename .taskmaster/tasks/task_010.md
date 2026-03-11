@@ -4,23 +4,22 @@
 
 **Status:** pending
 
-**Dependencies:** 4, 9
+**Dependencies:** 4 ✓, 9 ✓, 15, 16
 
-**Priority:** medium
+**Priority:** high
 
-**Description:** 기존 시뮬레이터가 내보낸 session_summary.json(평균이격거리, under/over-thickness, 도장순서, 속도, 각도 등)을 입력으로 받아 코칭 피드백 JSON 생성(행동항목, 위험플래그, 근거 문서)
+**Description:** Co-Pilot 방향 세션 코칭: session_summary.json 입력 → Tool Calling(dft_judge, anomaly_detection) → Chain of Thought 추론 → 코칭 피드백 JSON 생성. 기존 시뮬레이터 지표(이격거리, DFT, 속도, 각도, under/over-thickness)를 MCP 서버로 전달하여 분석 결과를 받고, RAG 문서 근거와 결합하여 행동항목/위험플래그/근거문서를 포함한 구조화 코칭 응답 생성
 
 **Details:**
 
-1. 입력 스키마 정의: session_id, scenario_id, mode(practice/test), avg_speed, avg_distance_mm, avg_angle_deg, dft_mean_um, dft_min_um, dft_max_um, under_thickness_ratio, over_thickness_ratio, paint_usage_ratio, notes[]
-2. 규칙 엔진(LLM 외): under/over thickness ratio, distance variance, speed consistency는 이미 계산됨, LLM은 설명/원인/개선조치만 담당
-3. 프롬프트: 지표 요약 + 선박 도장 규정 문서 검색 결과 + 코칭 생성 요청
-4. 응답 스키마: {session_id, summary, action_items[3개], risk_flags[], citations[], confidence, model_name, timestamp}
-5. 위험 플래그: under_thickness, over_thickness, distance_variance, speed_variance, angle_consistency_low, sequence_violation
-6. 행동항목 생성: 구체적 수치, 실행 순서, 재측정 시점 포함
-7. 검증: 도메인 전문가 5-10개 세션 코칭 평가(자연성, 안전성, 실행 가능성)
-8. 스크립트: /workspace/trainer/scripts/coaching_pipeline.py, session_scorer.py
-9. 통합: RAG-only 또는 RAG+QLoRA 모두 지원
+1. session_summary.json 파싱 및 지표 추출
+2. dft_judge MCP 호출: DFT 측정값 → 합부 판정
+3. anomaly_detection MCP 호출: 패턴 이상 탐지
+4. RAG 검색: 관련 문서 근거 수집
+5. CoT 추론: MCP 결과 + RAG 문서 → 코칭 피드백 생성
+6. 출력: action_items, risk_flags, citations, xr_highlights 포함 JSON
+7. PRD §3.2 시나리오 B + §16.4 시나리오 D/E 통합
+8. 산출물: /workspace/trainer/scripts/session_coach.py
 
 **Test Strategy:**
 

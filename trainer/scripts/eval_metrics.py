@@ -10,11 +10,145 @@ import json
 import logging
 import re
 from pathlib import Path
+from collections import Counter
 from typing import Any, Dict, List, Optional
 
 import yaml
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Repetition loop detection
+# ---------------------------------------------------------------------------
+
+_SENT_SPLIT_RE = re.compile(r"[.。!?\n]+")
+
+
+def compute_repetition_score(text: str, min_ngram: int = 4, min_repeat: int = 3) -> Dict[str, Any]:
+    """Detect degenerate repetition loops in generated text.
+
+    Returns a dict with:
+        score : float  – 0.0 (no repetition) to 1.0 (entirely repeated)
+        is_degenerate : bool – True when score >= 0.5 (major repetition)
+        repeated_phrase : str | None – the most repeated n-gram (if any)
+        repeat_count : int – how many times the top phrase repeats
+    """
+    if not text or len(text) < 40:
+        return {"score": 0.0, "is_degenerate": False, "repeated_phrase": None, "repeat_count": 0}
+
+    # Strategy 1: sentence-level exact repetition
+    sentences = [s.strip() for s in _SENT_SPLIT_RE.split(text) if len(s.strip()) > 10]
+    if sentences:
+        sent_counts = Counter(sentences)
+        top_sent, top_count = sent_counts.most_common(1)[0]
+        if top_count >= min_repeat:
+            ratio = top_count / len(sentences)
+            return {
+                "score": round(min(ratio, 1.0), 4),
+                "is_degenerate": ratio >= 0.5,
+                "repeated_phrase": top_sent[:80],
+                "repeat_count": top_count,
+            }
+
+    # Strategy 2: character n-gram repetition (catches partial loops)
+    text_norm = re.sub(r"\s+", " ", text)
+    best_ratio = 0.0
+    best_phrase = None
+    best_count = 0
+
+    for n in (min_ngram, min_ngram + 2, min_ngram + 4):
+        if len(text_norm) < n * 2:
+            continue
+        ngrams = [text_norm[i:i + n] for i in range(len(text_norm) - n + 1)]
+        ngram_counts = Counter(ngrams)
+        top_ngram, count = ngram_counts.most_common(1)[0]
+        # expected count for uniform text ≈ len/vocab → high ratio = repetition
+        expected = max(len(text_norm) / max(len(set(text_norm)), 1), 1.0)
+        ratio = count / max(len(ngrams), 1)
+        if ratio > best_ratio:
+            best_ratio = ratio
+            best_phrase = top_ngram
+            best_count = count
+
+    # Normalize: for random Korean text, 4-gram repetition ratio is ~0.01-0.05
+    # Degenerate loops push this above 0.3
+    score = min(best_ratio * 5.0, 1.0)  # scale so 0.2 raw → 1.0 score
+    return {
+        "score": round(score, 4),
+        "is_degenerate": score >= 0.5,
+        "repeated_phrase": best_phrase[:80] if best_phrase else None,
+        "repeat_count": best_count,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Language contamination detection
+# ---------------------------------------------------------------------------
+
+# CJK Unified Ideographs (Chinese characters)
+_CJK_RE = re.compile(r"[\u4e00-\u9fff\u3400-\u4dbf]")
+# Japanese-specific (Hiragana + Katakana)
+_JPN_RE = re.compile(r"[\u3040-\u309f\u30a0-\u30ff]")
+# Emoji (broad range)
+_EMOJI_RE = re.compile(
+    r"[\U0001F600-\U0001F64F\U0001F300-\U0001F5FF\U0001F680-\U0001F6FF"
+    r"\U0001F1E0-\U0001F1FF\U00002702-\U000027B0\U0001F900-\U0001F9FF"
+    r"\U0001FA00-\U0001FA6F\U0001FA70-\U0001FAFF]"
+)
+
+
+def detect_language_contamination(text: str) -> Dict[str, Any]:
+    """Detect non-Korean language contamination in text.
+
+    Returns a dict with:
+        is_contaminated : bool – True if meaningful contamination detected
+        contamination_type : str | None – 'chinese', 'japanese', 'emoji', or None
+        contamination_ratio : float – ratio of contaminated chars to total
+        sample_chars : str | None – up to 10 contaminated characters
+    """
+    if not text:
+        return {"is_contaminated": False, "contamination_type": None,
+                "contamination_ratio": 0.0, "sample_chars": None}
+
+    total_chars = len(text)
+
+    cjk_chars = _CJK_RE.findall(text)
+    cjk_count = len(cjk_chars)
+
+    jpn_chars = _JPN_RE.findall(text)
+    jpn_count = len(jpn_chars)
+
+    emoji_chars = _EMOJI_RE.findall(text)
+    emoji_count = len(emoji_chars)
+
+    if cjk_count >= 4:
+        ratio = cjk_count / max(total_chars, 1)
+        return {
+            "is_contaminated": True,
+            "contamination_type": "chinese",
+            "contamination_ratio": round(ratio, 4),
+            "sample_chars": "".join(cjk_chars[:10]),
+        }
+    if jpn_count >= 3:
+        ratio = jpn_count / max(total_chars, 1)
+        return {
+            "is_contaminated": True,
+            "contamination_type": "japanese",
+            "contamination_ratio": round(ratio, 4),
+            "sample_chars": "".join(jpn_chars[:10]),
+        }
+    if emoji_count >= 3:
+        ratio = emoji_count / max(total_chars, 1)
+        return {
+            "is_contaminated": True,
+            "contamination_type": "emoji",
+            "contamination_ratio": round(ratio, 4),
+            "sample_chars": "".join(emoji_chars[:10]),
+        }
+
+    return {"is_contaminated": False, "contamination_type": None,
+            "contamination_ratio": 0.0, "sample_chars": None}
+
 
 # ---------------------------------------------------------------------------
 # Korean ROUGE-L
@@ -214,7 +348,6 @@ def compute_all_metrics(
     logger.info("Computing BERTScore for %d items", len(predictions))
     bert_scores = compute_bertscore(predictions, references, config)
 
-    # Hallucination detection
     logger.info("Running hallucination detection for %d items", len(eval_results))
     hallucination_results: List[Dict[str, Any]] = []
     for result in eval_results:
@@ -223,12 +356,18 @@ def compute_all_metrics(
             text = doc.get("text", "")
             if text:
                 context_chunks.append(text)
-        # If source_docs don't have text, use empty list
         citations = result.get("citations", [])
         hal = detect_hallucination(result.get("answer", ""), context_chunks, citations)
         hallucination_results.append(hal)
 
-    # Per-question results
+    logger.info("Running repetition + language contamination detection")
+    repetition_results: List[Dict[str, Any]] = []
+    contamination_results: List[Dict[str, Any]] = []
+    for result in eval_results:
+        answer = result.get("answer", "")
+        repetition_results.append(compute_repetition_score(answer))
+        contamination_results.append(detect_language_contamination(answer))
+
     per_question: List[Dict[str, Any]] = []
     for i, qid in enumerate(q_ids):
         per_question.append({
@@ -238,14 +377,21 @@ def compute_all_metrics(
             "hallucination_flag": hallucination_results[i]["flag"],
             "hallucination_type": hallucination_results[i]["type"],
             "hallucination_reason": hallucination_results[i]["reason"],
+            "repetition_score": repetition_results[i]["score"],
+            "repetition_degenerate": repetition_results[i]["is_degenerate"],
+            "lang_contaminated": contamination_results[i]["is_contaminated"],
+            "lang_contamination_type": contamination_results[i]["contamination_type"],
         })
 
-    # Aggregates
     n = len(per_question)
     avg_rouge = sum(q["rouge_l"] for q in per_question) / max(n, 1)
     avg_bert = sum(q["bertscore_f1"] for q in per_question) / max(n, 1)
     hal_count = sum(1 for q in per_question if q["hallucination_flag"])
     hal_rate = hal_count / max(n, 1)
+    rep_degenerate_count = sum(1 for q in per_question if q["repetition_degenerate"])
+    rep_degenerate_rate = rep_degenerate_count / max(n, 1)
+    lang_contaminated_count = sum(1 for q in per_question if q["lang_contaminated"])
+    lang_contaminated_rate = lang_contaminated_count / max(n, 1)
 
     return {
         "per_question": per_question,
@@ -255,6 +401,10 @@ def compute_all_metrics(
             "bertscore_f1_mean": round(avg_bert, 4),
             "hallucination_count": hal_count,
             "hallucination_rate": round(hal_rate, 4),
+            "repetition_degenerate_count": rep_degenerate_count,
+            "repetition_degenerate_rate": round(rep_degenerate_rate, 4),
+            "lang_contaminated_count": lang_contaminated_count,
+            "lang_contaminated_rate": round(lang_contaminated_rate, 4),
         },
     }
 
@@ -356,12 +506,19 @@ def main() -> int:
     # Summary
     agg = metrics["aggregates"]
     logger.info(
-        "Summary: ROUGE-L=%.4f  BERTScore=%.4f  Hallucination=%d/%d (%.1f%%)",
+        "Summary: ROUGE-L=%.4f  BERTScore=%.4f  Hallucination=%d/%d (%.1f%%)"
+        "  RepetitionLoop=%d/%d (%.1f%%)  LangContam=%d/%d (%.1f%%)",
         agg["rouge_l_mean"],
         agg["bertscore_f1_mean"],
         agg["hallucination_count"],
         agg["count"],
         agg["hallucination_rate"] * 100,
+        agg["repetition_degenerate_count"],
+        agg["count"],
+        agg["repetition_degenerate_rate"] * 100,
+        agg["lang_contaminated_count"],
+        agg["count"],
+        agg["lang_contaminated_rate"] * 100,
     )
 
     return 0

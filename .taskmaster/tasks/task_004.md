@@ -2,9 +2,9 @@
 
 **Title:** RAG 기준선 응답 시스템 구현
 
-**Status:** pending
+**Status:** done
 
-**Dependencies:** 3
+**Dependencies:** 3 ✓
 
 **Priority:** high
 
@@ -30,7 +30,7 @@
 
 ### 4.1. LLM 모델 로딩 및 토크나이저 설정
 
-**Status:** pending  
+**Status:** done  
 **Dependencies:** None  
 
 Qwen2.5-7B-Instruct 모델을 4bit 양자화(bitsandbytes NF4)로 로딩하고, 추론 파라미터(temperature=0.1, max_tokens=768) 설정
@@ -46,7 +46,7 @@ Qwen2.5-7B-Instruct 모델을 4bit 양자화(bitsandbytes NF4)로 로딩하고, 
 
 ### 4.2. 검색 및 리랭킹 파이프라인 구현
 
-**Status:** pending  
+**Status:** done  
 **Dependencies:** 4.1  
 
 쿼리 임베딩 생성 → /output/indexes/faiss.index에서 Top-K(기본값 5) 검색 → 선택적 리랭킹(on/off 비교) 구현
@@ -63,7 +63,7 @@ Qwen2.5-7B-Instruct 모델을 4bit 양자화(bitsandbytes NF4)로 로딩하고, 
 
 ### 4.3. 프롬프트 템플릿 및 문맥 삽입 구현
 
-**Status:** pending  
+**Status:** done  
 **Dependencies:** 4.2  
 
 산업 AI 어시스턴트 역할의 system prompt + 사용자 질문 + retrieved_docs 문맥 구성, 근거 기반 답변 및 거부 패턴 포함
@@ -79,7 +79,7 @@ Qwen2.5-7B-Instruct 모델을 4bit 양자화(bitsandbytes NF4)로 로딩하고, 
 
 ### 4.4. 응답 생성 및 JSON 스키마 파싱
 
-**Status:** pending  
+**Status:** done  
 **Dependencies:** 4.3  
 
 LLM 추론 실행 → 출력 파싱 → JSON 스키마 기반 응답(answer, citations, confidence, metadata) 반환
@@ -95,7 +95,7 @@ LLM 추론 실행 → 출력 파싱 → JSON 스키마 기반 응답(answer, cit
 
 ### 4.5. 할루시네이션 방지 및 신뢰도 검증
 
-**Status:** pending  
+**Status:** done  
 **Dependencies:** 4.4  
 
 근거 부족 시 confidence='low' 설정, 주요 할루시네이션 5가지 유형 카탈로그 작성, 방지 패턴 구현

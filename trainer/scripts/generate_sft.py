@@ -22,8 +22,11 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = (
-    "너는 선박 도장 훈련 코치다. 항상 안전과 표준 절차를 우선하고, "
-    "마지막에 근거 문서 ID를 적는다."
+    "너는 선박 도장 분야 전문 AI 어시스턴트이다. "
+    "제공된 문서를 근거로 정확한 기술 정보를 제공하고, "
+    "답변 마지막에 근거 문서 ID를 반드시 명시한다. "
+    "근거가 부족하면 솔직히 '제공된 문서에 해당 정보가 없습니다'라고 답한다. "
+    "안전 관련 질문에는 항상 관련 규정을 함께 안내한다."
 )
 
 CATEGORY_TARGETS: Dict[str, int] = {
@@ -89,6 +92,20 @@ def normalize_text(text: str) -> str:
     return text
 
 
+def compute_echo_ratio(answer: str, source_text: str, ngram_size: int = 4) -> float:
+    """Compute the fraction of answer n-grams that appear verbatim in source_text."""
+    answer_norm = re.sub(r"\s+", "", answer)
+    source_norm = re.sub(r"\s+", "", source_text)
+    if len(answer_norm) < ngram_size or len(source_norm) < ngram_size:
+        return 0.0
+    answer_ngrams = [answer_norm[i:i + ngram_size] for i in range(len(answer_norm) - ngram_size + 1)]
+    source_set = set(source_norm[i:i + ngram_size] for i in range(len(source_norm) - ngram_size + 1))
+    if not answer_ngrams:
+        return 0.0
+    matched = sum(1 for ng in answer_ngrams if ng in source_set)
+    return matched / len(answer_ngrams)
+
+
 def sanitize_answer_text(text: str) -> str:
     text = normalize_text(text)
     text = re.sub(r"\((?:DOC-|doc_)\S+\)", "", text)
@@ -99,8 +116,6 @@ def sanitize_answer_text(text: str) -> str:
 def build_messages(category: str, user_text: str, assistant_text: str, doc_ids: Sequence[str]) -> Dict[str, Any]:
     citation = ", ".join(sorted(set(doc_ids)))
     grounded = sanitize_answer_text(assistant_text)
-    if "안전" not in grounded:
-        grounded = "안전과 표준 절차를 우선하여 설명합니다. " + grounded
     grounded = f"{grounded}\n\n근거 문서 ID: {citation}"
     return {
         "messages": [
@@ -145,21 +160,76 @@ def infer_step_lines(text: str, max_steps: int = 6) -> List[str]:
     return fallback[:max_steps]
 
 
+_PROCEDURE_QUESTIONS = [
+    "다음 작업 절차를 신규 작업자에게 단계별로 설명해줘.",
+    "아래 절차의 핵심 단계와 주의사항을 정리해줘.",
+    "이 작업 절차를 현장 교육용으로 요약 설명해줘.",
+    "다음 문서의 작업 순서와 각 단계의 포인트를 알려줘.",
+]
+
+
 def make_procedure_explain(chunks: Sequence[Dict[str, Any]], rng: random.Random) -> List[Dict[str, Any]]:
     candidates = [c for c in chunks if c.get("has_procedure")]
     rng.shuffle(candidates)
     samples: List[Dict[str, Any]] = []
-    for chunk in candidates[:260]:
+    for idx, chunk in enumerate(candidates[:260]):
         text = chunk.get("text", "")
         steps = infer_step_lines(text)
         if not steps:
             continue
-        question = "다음 작업 절차를 신규 작업자에게 단계별로 설명해줘. 안전 유의점도 포함해줘."
+        question = _PROCEDURE_QUESTIONS[idx % len(_PROCEDURE_QUESTIONS)]
         user = f"[문서] {text[:480]}\n\n[질문] {question}"
         joined_steps = " ".join(steps)
-        answer = f"표준 절차는 다음 순서로 진행합니다: {joined_steps}. 각 단계 전후로 PPE 착용과 작업장 환기 상태를 확인하세요."
+        answer = f"문서에 따른 절차는 다음과 같습니다: {joined_steps}."
         samples.append(build_messages("절차설명", user, answer, [chunk.get("chunk_id", "")]))
     return samples
+
+
+def _extract_defect_type(text: str) -> str:
+    """Extract dominant defect type from chunk text."""
+    defect_map = [
+        (r"핀홀|pin\s*hole", "핀홀(Pinhole)"),
+        (r"크레이터|crater", "크레이터링(Cratering)"),
+        (r"오렌지\s*필|orange\s*peel", "오렌지필(Orange Peel)"),
+        (r"흘러내림|새그|sag", "흘러내림(Sagging)"),
+        (r"박리|들뜸|peeling|flaking", "박리/들뜸(Peeling)"),
+        (r"기포|blister", "기포(Blistering)"),
+        (r"균열|crack", "균열(Cracking)"),
+        (r"부식|rust|corrosion", "부식(Corrosion)"),
+    ]
+    for pat, name in defect_map:
+        if re.search(pat, text, re.IGNORECASE):
+            return name
+    return "도막 결함"
+
+
+_DEFECT_QUESTIONS = [
+    "아래 사례의 결함 원인과 재발 방지 조치를 분석해줘.",
+    "이 결함이 발생한 원인을 문서 근거로 설명하고 시정 조치를 제시해줘.",
+    "다음 결함 사례를 분석하고 현장 적용 가능한 개선 방안을 제안해줘.",
+    "아래 문서에서 언급된 결함의 메커니즘과 예방법을 정리해줘.",
+]
+
+
+def _summarize_sentences(text: str, max_sentences: int = 3) -> List[str]:
+    """Extract and lightly reword sentences from text for answer construction."""
+    sentences = [s.strip() for s in re.split(r'[.。]\s*', text) if len(s.strip()) > 15]
+    return sentences[:max_sentences]
+
+
+_DEFECT_ANALYSIS_TEMPLATES = [
+    "{defect} 결함은 다음과 같은 원인으로 발생할 수 있습니다. 문서에 따르면, {detail}. 재발 방지를 위해 {prevention}.",
+    "문서 분석 결과, {defect}의 주요 발생 원인은 {detail}입니다. 시정 조치로는 {prevention}이 권장됩니다.",
+    "{defect} 발생 메커니즘을 정리하면 다음과 같습니다. {detail}. 현장 적용 가능한 예방법은 {prevention}입니다.",
+    "해당 사례에서 {defect}이(가) 발생한 원인을 분석하면, {detail}. 개선 방안으로 {prevention}을 제안합니다.",
+]
+
+_DEFECT_PREVENTION = [
+    "표면 전처리 기준(Sa 2.5 이상) 준수와 도장 환경 조건(온도, 습도) 관리",
+    "도료 교반 및 희석 비율 확인, 스프레이 건 압력/거리 조정",
+    "적정 도막 두께 확보와 층간 재도장 시간(overcoat interval) 준수",
+    "작업 환경(이슬점 대비 3°C 이상) 확인 및 전처리 상태 검수 강화",
+]
 
 
 def make_defect_analysis(chunks: Sequence[Dict[str, Any]], rng: random.Random) -> List[Dict[str, Any]]:
@@ -167,16 +237,46 @@ def make_defect_analysis(chunks: Sequence[Dict[str, Any]], rng: random.Random) -
     candidates = [c for c in chunks if pattern.search(c.get("text", ""))]
     rng.shuffle(candidates)
     samples: List[Dict[str, Any]] = []
-    for chunk in candidates[:220]:
+    for idx, chunk in enumerate(candidates[:220]):
         text = chunk.get("text", "")
-        question = "아래 사례의 결함 원인과 재발 방지 조치를 분석해줘."
+        defect_type = _extract_defect_type(text)
+        question = _DEFECT_QUESTIONS[idx % len(_DEFECT_QUESTIONS)]
         user = f"[문서] {text[:520]}\n\n[질문] {question}"
-        answer = (
-            "문서 근거로 볼 때 표면처리 불량, 환경 조건 미준수, 도장 간격 미준수가 핵심 원인입니다. "
-            "재발 방지를 위해 표면 청정도 재확인, DFT 측정 기록, 작업 전 안전 점검을 병행하세요."
-        )
+        sentences = _summarize_sentences(text, max_sentences=3)
+        template = _DEFECT_ANALYSIS_TEMPLATES[idx % len(_DEFECT_ANALYSIS_TEMPLATES)]
+        prevention = _DEFECT_PREVENTION[idx % len(_DEFECT_PREVENTION)]
+        if len(sentences) >= 2:
+            detail = f"{sentences[0]}이며, {sentences[1]}"
+        elif sentences:
+            detail = sentences[0]
+        else:
+            detail = f"{defect_type} 관련 상세 조건은 문서를 참고해야 합니다"
+        answer = template.format(defect=defect_type, detail=detail, prevention=prevention)
         samples.append(build_messages("결함분석", user, answer, [chunk.get("chunk_id", "")]))
     return samples
+
+
+_DFT_QUESTIONS = [
+    "측정된 DFT 결과를 기준으로 합격/보완 피드백을 작성해줘.",
+    "도막 두께 측정값에 대한 판정 기준과 조치 방안을 설명해줘.",
+    "아래 DFT/WFT 관련 문서의 핵심 기준을 정리해줘.",
+    "도막 두께 편차가 발생했을 때 원인과 대응 절차를 알려줘.",
+]
+
+
+_DFT_FEEDBACK_TEMPLATES = [
+    "도막 두께 측정 결과를 검토하면, {detail}. 판정 기준에 따라 {judgment}.",
+    "문서 기준에 의거하여, {detail}. 따라서 {judgment}.",
+    "DFT/WFT 관련 핵심 기준을 정리하면, {detail}. 조치 방안으로는 {judgment}.",
+    "측정값 분석 결과, {detail}. 현장 대응 절차는 {judgment}.",
+]
+
+_DFT_JUDGMENTS = [
+    "기준 범위 이내인 경우 합격 처리하고, 미달 시 추가 도장 후 재측정이 필요합니다",
+    "SSPC/NACE 기준에 따른 최소 도막 두께를 확인하고, 편차 발생 시 원인을 분석해야 합니다",
+    "도막 두께가 과도하게 높은 경우 균열·박리 위험이 있으므로 적정 범위 관리가 중요합니다",
+    "측정 위치별 편차가 클 경우, 스프레이 패턴과 도장 거리를 재점검해야 합니다",
+]
 
 
 def make_dft_feedback(chunks: Sequence[Dict[str, Any]], rng: random.Random) -> List[Dict[str, Any]]:
@@ -184,14 +284,20 @@ def make_dft_feedback(chunks: Sequence[Dict[str, Any]], rng: random.Random) -> L
     candidates = [c for c in chunks if pattern.search(c.get("text", ""))]
     rng.shuffle(candidates)
     samples: List[Dict[str, Any]] = []
-    for chunk in candidates[:220]:
+    for idx, chunk in enumerate(candidates[:220]):
         text = chunk.get("text", "")
-        question = "측정된 DFT 결과를 기준으로 합격/보완 피드백을 작성해줘."
+        question = _DFT_QUESTIONS[idx % len(_DFT_QUESTIONS)]
         user = f"[문서] {text[:520]}\n\n[질문] {question}"
-        answer = (
-            "DFT는 규격 하한/상한을 동시에 확인해야 하며, 편차가 큰 구간은 재도장보다 원인 점검이 우선입니다. "
-            "측정 위치별 로그를 남기고 기준 미달 구역은 표면 상태와 희석비를 재검토하세요."
-        )
+        sentences = _summarize_sentences(text, max_sentences=2)
+        template = _DFT_FEEDBACK_TEMPLATES[idx % len(_DFT_FEEDBACK_TEMPLATES)]
+        judgment = _DFT_JUDGMENTS[idx % len(_DFT_JUDGMENTS)]
+        if sentences:
+            detail = sentences[0]
+            if len(sentences) >= 2:
+                detail = f"{sentences[0]}이며, {sentences[1]}"
+        else:
+            detail = "도막 두께 관련 세부 기준은 해당 사양서를 참조해야 합니다"
+        answer = template.format(detail=detail, judgment=judgment)
         samples.append(build_messages("DFT피드백", user, answer, [chunk.get("chunk_id", "")]))
     return samples
 
@@ -207,20 +313,44 @@ def extract_bilingual_pairs(text: str) -> List[Tuple[str, str]]:
     return pairs
 
 
+_TERM_TEMPLATES = [
+    "'{ko}'({en})는 선박 도장 분야에서 {context} 관련 작업 시 사용되는 전문 용어입니다. 현장에서는 한국어와 영문 약어가 혼용되므로 두 표현을 모두 숙지해야 합니다.",
+    "'{ko}'는 영문으로 '{en}'이라 하며, {context} 작업 과정에서 주로 사용됩니다. 초급 작업자는 이 용어가 사양서와 현장 지시서에서 동일한 의미로 쓰인다는 점을 기억해야 합니다.",
+    "'{ko}'({en})는 {context}에 관한 기술 용어입니다. 국제 표준(ISO, SSPC 등) 문서에서 영문 표기가, 현장 교육에서는 한국어 표기가 주로 사용됩니다.",
+    "선박 도장에서 '{ko}'({en})는 {context}과(와) 관련된 핵심 용어입니다. 사양서 해석 시 영문 원문과 한국어 번역 간 의미 차이에 주의해야 합니다.",
+]
+
+
+def _extract_term_context(text: str) -> str:
+    """Extract a short domain context phrase from chunk text for term explanations."""
+    context_patterns = [
+        (r"(표면\s*처리|전처리|블라스팅|그라인딩)", "표면 처리"),
+        (r"(도막|도장|코팅|페인팅)", "도장/코팅"),
+        (r"(방식|방청|부식\s*방지)", "방식/방청"),
+        (r"(검사|측정|품질|QC)", "검사/품질관리"),
+        (r"(안전|보호구|환기)", "안전관리"),
+        (r"(건조|경화|양생)", "건조/경화"),
+    ]
+    for pat, label in context_patterns:
+        if re.search(pat, text):
+            return label
+    return "도장 공정"
+
+
 def make_term_multilingual(chunks: Sequence[Dict[str, Any]], rng: random.Random) -> List[Dict[str, Any]]:
-    rng.shuffle(chunks)
+    shuffled_chunks = list(chunks)
+    rng.shuffle(shuffled_chunks)
     samples: List[Dict[str, Any]] = []
-    for chunk in chunks:
+    for chunk in shuffled_chunks:
         pairs = extract_bilingual_pairs(chunk.get("text", ""))
         for ko_term, en_term in pairs[:2]:
             user = (
                 f"[문서] {chunk.get('text', '')[:360]}\n\n"
                 f"[질문] 용어 '{ko_term}'와 '{en_term}'를 초급 작업자도 이해하게 한국어로 설명해줘."
             )
-            answer = (
-                f"'{ko_term}'는 현장에서 {en_term}로도 표기하며, 작업지시서와 점검표에서 같은 의미로 사용됩니다. "
-                "교육 시 용어를 혼용하되 기준 규격 표기는 원문 그대로 유지하세요."
-            )
+            context = _extract_term_context(chunk.get("text", ""))
+            template = _TERM_TEMPLATES[len(samples) % len(_TERM_TEMPLATES)]
+            answer = template.format(ko=ko_term, en=en_term, context=context)
             samples.append(build_messages("용어/다국어", user, answer, [chunk.get("chunk_id", "")]))
             if len(samples) >= 180:
                 return samples
@@ -245,9 +375,13 @@ def make_summary_compare(chunks: Sequence[Dict[str, Any]], rng: random.Random) -
                 f"[문서] A: {left_text}\nB: {right_text}\n\n"
                 "[질문] 두 문서의 핵심을 요약하고 차이점을 비교해줘."
             )
+            left_summary = left_text[:80].replace("\n", " ")
+            right_summary = right_text[:80].replace("\n", " ")
             answer = (
-                f"두 문서는 {domain} 작업 기준을 다루며 공통적으로 안전 점검과 절차 준수를 강조합니다. "
-                "차이는 적용 조건과 측정 항목의 상세 수준이며, 작업 전 표준서 우선 확인이 필요합니다."
+                f"문서 A는 '{left_summary}'에 관한 내용이고, "
+                f"문서 B는 '{right_summary}'에 관한 내용입니다. "
+                f"두 문서 모두 {domain} 분야를 다루고 있으며, "
+                "적용 범위와 세부 기준에서 차이가 있습니다."
             )
             ids = [left.get("chunk_id", ""), right.get("chunk_id", "")]
             samples.append(build_messages("요약/비교", user, answer, ids))
@@ -316,7 +450,7 @@ def deduplicate_samples(
 
     kept_flags = [True] * len(samples)
     removed_count = 0
-    kept_long_vectors: List[np.ndarray] = []
+    kept_long_vectors: List[Any] = []
     for local_idx, sample_idx in enumerate(long_indices):
         vector = embeddings[local_idx]
         if kept_long_vectors:
@@ -489,6 +623,30 @@ def main() -> int:
     logger.info("Generated %d raw candidates", len(candidates))
 
     validate_samples(candidates)
+
+    echo_filtered: List[Dict[str, Any]] = []
+    echo_removed = 0
+    echo_thresholds = {
+        "문서QA": 0.95,
+        "결함분석": 0.80,
+        "DFT피드백": 0.80,
+        "용어/다국어": 0.75,
+        "절차설명": 0.70,
+    }
+    default_echo_threshold = 0.50
+    for sample in candidates:
+        user_text = sample["messages"][1]["content"]
+        answer_text = sample["messages"][2]["content"]
+        doc_match = re.search(r"\[문서\]\s*(.*?)(?:\[질문\]|$)", user_text, re.DOTALL)
+        source_text = doc_match.group(1) if doc_match else ""
+        threshold = echo_thresholds.get(sample.get("category", ""), default_echo_threshold)
+        if source_text and compute_echo_ratio(answer_text, source_text) > threshold:
+            echo_removed += 1
+            continue
+        echo_filtered.append(sample)
+    logger.info("Echo filter removed %d/%d samples (>50%% verbatim)", echo_removed, len(candidates))
+    candidates = echo_filtered
+
     deduped, removed_count = deduplicate_samples(candidates, args.embed_model, args.dup_threshold)
     logger.info("Semantic dedup removed %d samples", removed_count)
 

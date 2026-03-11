@@ -2,9 +2,9 @@
 
 **Title:** 50문항 평가셋 구성 및 검수
 
-**Status:** pending
+**Status:** done
 
-**Dependencies:** 2
+**Dependencies:** 2 ✓
 
 **Priority:** high
 
@@ -30,7 +30,7 @@
 
 ### 5.1. 5개 카테고리별 50문항 설계 및 JSON 구조화
 
-**Status:** pending  
+**Status:** done  
 **Dependencies:** None  
 
 용어(10문), 공정절차(10문), 결함분석(10문), 코팅두께/사양(10문), 안전/규정(10문) 총 50문항을 설계하고 JSON 포맷으로 구조화합니다.
@@ -41,7 +41,7 @@
 
 ### 5.2. 도메인 전문가 검수를 위한 참조 답변 작성 및 검증
 
-**Status:** pending  
+**Status:** done  
 **Dependencies:** 5.1  
 
 50문항 각각에 대해 도메인 전문가가 참조 답변을 작성하고, 기술 정확성/완전성/한국어 품질을 검증합니다.
@@ -52,7 +52,7 @@
 
 ### 5.3. 5차원 채점 루브릭 설계 및 확정
 
-**Status:** pending  
+**Status:** done  
 **Dependencies:** 5.2  
 
 기술정확성, 문서충실도, 용어적절성, 완전성, 한국어품질 5차원에 대해 0-2점 척도의 채점 루브릭을 설계하고 확정합니다.
@@ -63,7 +63,7 @@
 
 ### 5.4. 자동 평가 지표 구현 (ROUGE-L, BERTScore, hallucination 감지)
 
-**Status:** pending  
+**Status:** done  
 **Dependencies:** 5.2, 5.3  
 
 ROUGE-L, BERTScore, hallucination ratio, 용어 정확도를 계산하는 자동 평가 지표를 구현합니다.
@@ -74,7 +74,7 @@ rouge-score 라이브러리로 ROUGE-L 점수 계산, bert-score 라이브러리
 
 ### 5.5. 최종 평가셋 통계 분석 및 품질 검수
 
-**Status:** pending  
+**Status:** done  
 **Dependencies:** 5.4  
 
 완성된 50문항 평가셋의 카테고리별 난이도 분포, 문서 coverage, 최종 통계를 작성하고 전체 품질을 검증합니다.

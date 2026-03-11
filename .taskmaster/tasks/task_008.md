@@ -2,11 +2,11 @@
 
 **Title:** Unsloth 환경 구축 및 QLoRA 학습
 
-**Status:** pending
+**Status:** done
 
-**Dependencies:** 1, 7
+**Dependencies:** 1 ✓, 7 ✓
 
-**Priority:** medium
+**Priority:** high
 
 **Description:** Docker 컨테이너 환경에서 Unsloth 2026.2.1 기반 QLoRA 학습, 4bit NF4 양자화, A40 메모리 최적화, 3-epoch 학습, adapter 저장
 
@@ -34,7 +34,7 @@
 
 ### 8.1. Unsloth 및 의존성 라이브러리 설치 및 검증
 
-**Status:** pending  
+**Status:** done  
 **Dependencies:** None  
 
 Docker 컨테이너 환경에서 Unsloth 2026.2.1, bitsandbytes, peft, transformers 등 QLoRA 학습에 필요한 모든 라이브러리 설치 및 CUDA 호환성 검증
@@ -50,7 +50,7 @@ Docker 컨테이너 환경에서 Unsloth 2026.2.1, bitsandbytes, peft, transform
 
 ### 8.2. QLoRA 설정 YAML 파일 작성 및 파이썬 설정 검증
 
-**Status:** pending  
+**Status:** done  
 **Dependencies:** 8.1  
 
 /workspace/trainer/configs/qlora_config.yaml 파일 생성 및 설정값(rank=16, alpha=32, batch_size, seq_len, epochs 등) 검증, 파이썬 config loader 구현
@@ -66,7 +66,7 @@ Docker 컨테이너 환경에서 Unsloth 2026.2.1, bitsandbytes, peft, transform
 
 ### 8.3. Qwen2.5-7B-Instruct 모델 로딩 및 4bit 양자화 테스트
 
-**Status:** pending  
+**Status:** done  
 **Dependencies:** 8.1, 8.2  
 
 Unsloth FastLanguageModel을 사용하여 Qwen2.5-7B-Instruct 모델을 4bit NF4 양자화로 로드, /hf-cache/에서 자동 로드, 메모리 사용량 확인
@@ -83,7 +83,7 @@ Unsloth FastLanguageModel을 사용하여 Qwen2.5-7B-Instruct 모델을 4bit NF4
 
 ### 8.4. LoRA adapter 설정 및 준비, 초기 메모리 안정성 테스트
 
-**Status:** pending  
+**Status:** done  
 **Dependencies:** 8.3  
 
 PEFT를 사용하여 LoRA adapter 설정(rank=16, alpha=32, dropout=0.05, target_modules 정의), 모델에 적용, 메모리 상태 점검 및 배치 크기 1에서 안정성 테스트
@@ -100,7 +100,7 @@ PEFT를 사용하여 LoRA adapter 설정(rank=16, alpha=32, dropout=0.05, target
 
 ### 8.5. QLoRA 전체 학습 루프 구현 및 3-epoch 학습 실행
 
-**Status:** pending  
+**Status:** done  
 **Dependencies:** 8.4  
 
 /workspace/trainer/scripts/train_qlora.py 작성: SFTTrainer 또는 manual training loop 구현, gradient checkpointing 포함, /data/sft/sft_train.jsonl 데이터 로드, 3-epoch 학습 완료, adapter 저장, loss curve 추적

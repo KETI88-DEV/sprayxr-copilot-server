@@ -72,3 +72,8 @@ output/
 trainer/scripts/prompt/
 trainer/scripts/temp/
 .sisyphus/ralph-loop.local.md
+AgenticCopilot.png
+CLAUDE.md
+AgenticCopilot_Architecture.md
+dataset.md
+.taskmaster/config.json

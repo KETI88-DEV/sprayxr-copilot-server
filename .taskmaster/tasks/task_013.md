@@ -4,9 +4,9 @@
 
 **Status:** pending
 
-**Dependencies:** 1, 2, 3, 4, 7, 8, 10
+**Dependencies:** 9 ✓, 12, 19 ⧖
 
-**Priority:** high
+**Priority:** medium
 
 **Description:** /workspace/README.md(설치/실행 명령어), 설정 파일(/workspace/trainer/configs/), 주요 스크립트(/workspace/trainer/scripts/) 완성, 폴더 구조 및 버전 명시
 

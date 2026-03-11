@@ -14,6 +14,11 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 
+def _strip_think_blocks(text: str) -> str:
+    import re
+    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+
+
 def _ensure_scripts_path() -> None:
     scripts_dir = str(Path(__file__).resolve().parent)
     if scripts_dir not in sys.path:
@@ -71,7 +76,6 @@ def generate_answer(
     tokenizer: Any,
     config: Dict[str, Any],
 ) -> str:
-    """Generate answer using chat template."""
     import torch
 
     system_prompt = config["prompt"]["system"]
@@ -85,18 +89,29 @@ def generate_answer(
             "content": context_template.format(context=context) + "\n\n" + user_template.format(question=question),
         },
     ]
-    text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    enable_thinking = config["generation"].get("enable_thinking", False)
+    text = tokenizer.apply_chat_template(
+        messages, tokenize=False, add_generation_prompt=True,
+        enable_thinking=enable_thinking,
+    )
     inputs = tokenizer([text], return_tensors="pt", return_attention_mask=True).to(model.device)
+
+    gen_kwargs: dict[str, Any] = {
+        "do_sample": config["generation"]["do_sample"],
+        "temperature": config["generation"]["temperature"],
+        "max_new_tokens": config["generation"]["max_new_tokens"],
+        "pad_token_id": tokenizer.eos_token_id,
+    }
+    if "top_p" in config["generation"]:
+        gen_kwargs["top_p"] = config["generation"]["top_p"]
+    if "top_k" in config["generation"]:
+        gen_kwargs["top_k"] = config["generation"]["top_k"]
+
     with torch.inference_mode():
-        output_ids = model.generate(
-            **inputs,
-            do_sample=config["generation"]["do_sample"],
-            temperature=config["generation"]["temperature"],
-            max_new_tokens=config["generation"]["max_new_tokens"],
-            pad_token_id=tokenizer.eos_token_id,
-        )
+        output_ids = model.generate(**inputs, **gen_kwargs)
     generated = output_ids[0][inputs.input_ids.shape[1]:]
     answer = tokenizer.decode(generated, skip_special_tokens=True)
+    answer = _strip_think_blocks(answer)
     return answer
 
 
@@ -184,7 +199,7 @@ def load_all_models(config: Dict[str, Any]) -> Dict[str, Any]:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="RAG QA pipeline with FAISS retrieval and Qwen2.5-7B-Instruct generation."
+        description="RAG QA pipeline with FAISS retrieval and Qwen3 generation."
     )
     parser.add_argument(
         "--config",

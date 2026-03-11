@@ -386,7 +386,7 @@ def generate_analysis_report(
     lines.append("")
     lines.append(f"**생성일시**: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
     lines.append(f"**평가 문항 수**: {total}")
-    lines.append(f"**모델**: Qwen2.5-7B-Instruct (NF4 4-bit)")
+    lines.append(f"**모델**: Qwen3-4B (NF4 4-bit)")
     lines.append("")
     lines.append("---")
     lines.append("")

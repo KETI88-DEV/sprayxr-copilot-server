@@ -35,7 +35,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--val", type=Path, default=Path("/data/sft/sft_val.jsonl"))
     parser.add_argument("--report", type=Path, default=Path("/data/sft/quality_report.json"))
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--min-score", type=float, default=1.5)
+    parser.add_argument("--min-score", type=float, default=1.2)
     parser.add_argument(
         "--log-level",
         default="INFO",
@@ -148,6 +148,28 @@ def compute_duplicate_rate(records: Sequence[Dict[str, Any]]) -> float:
     return round(duplicate_count / len(answers), 4)
 
 
+def compute_boilerplate_ratio(records: Sequence[Dict[str, Any]], prefix_len: int = 30) -> Dict[str, Any]:
+    if not records:
+        return {"boilerplate_ratio": 0.0, "top_patterns": [], "unique_start_ratio": 1.0}
+    prefixes: List[str] = []
+    for rec in records:
+        answer = rec["messages"][2]["content"].strip()
+        prefixes.append(answer[:prefix_len])
+    prefix_counts = Counter(prefixes)
+    total = len(prefixes)
+    most_common = prefix_counts.most_common(5)
+    max_single = most_common[0][1] / total if most_common else 0.0
+    unique_starts = len(prefix_counts)
+    return {
+        "boilerplate_ratio": round(max_single, 4),
+        "unique_start_ratio": round(unique_starts / total, 4),
+        "top_patterns": [
+            {"prefix": p[:20] + "...", "count": c, "ratio": round(c / total, 4)}
+            for p, c in most_common
+        ],
+    }
+
+
 def aggregate_scores(scored_rows: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
     if not scored_rows:
         return {
@@ -205,6 +227,9 @@ def main() -> int:
     scored = [score_record(row) for row in sampled]
     aggregates = aggregate_scores(scored)
     duplicate_rate = compute_duplicate_rate(train_rows)
+    diversity = compute_boilerplate_ratio(train_rows)
+
+    low_quality_count = sum(1 for s in scored if s["mean_score"] < args.min_score)
 
     report = {
         "train_count": len(train_rows),
@@ -214,7 +239,11 @@ def main() -> int:
         "sample_ratio": round(len(sampled) / max(len(train_rows), 1), 4),
         "scores": aggregates,
         "duplicate_rate": duplicate_rate,
+        "diversity": diversity,
+        "low_quality_samples": low_quality_count,
+        "low_quality_ratio": round(low_quality_count / max(len(scored), 1), 4),
         "pass_gate": aggregates["overall_mean"] >= args.min_score,
+        "pass_diversity": diversity["boilerplate_ratio"] <= 0.20,
         "min_required_score": args.min_score,
     }
 

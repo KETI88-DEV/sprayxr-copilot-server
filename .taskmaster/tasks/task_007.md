@@ -2,9 +2,9 @@
 
 **Title:** QLoRA 학습 데이터셋 생성 및 검수
 
-**Status:** pending
+**Status:** done
 
-**Dependencies:** 2, 6
+**Dependencies:** 2 ✓, 6 ✓
 
 **Priority:** high
 
@@ -32,8 +32,8 @@
 
 ### 7.1. 데이터 소스 수집 및 준비
 
-**Status:** pending  
-**Dependencies:** 7.2, 7.6  
+**Status:** done  
+**Dependencies:** None  
 
 RAG 검색 결과, 평가셋 정답, 도메인 자료, 기존 교육 자료 등 SFT 데이터 생성을 위한 모든 소스 데이터를 수집하고 정리
 
@@ -43,7 +43,7 @@ Task 2(문서 수집)와 Task 6(평가 데이터셋)으로부터 원본 데이�
 
 ### 7.2. generate_sft.py 스크립트 개발 및 데이터셋 자동 생성
 
-**Status:** pending  
+**Status:** done  
 **Dependencies:** 7.1  
 
 템플릿 기반 자동 생성 스크립트를 개발하여 6개 카테고리(문서QA 100, 절차설명 80, 결함분석 60, DFT 60, 용어/다국어 50, 요약/비교 50)별 300-500건 SFT 데이터셋 생성
@@ -54,8 +54,8 @@ Task 2(문서 수집)와 Task 6(평가 데이터셋)으로부터 원본 데이�
 
 ### 7.3. 중복 제거 및 데이터 정제
 
-**Status:** pending  
-**Dependencies:** 7.2  
+**Status:** done  
+**Dependencies:** None  
 
 100자 이상 문장 유사도 기반으로 중복 데이터를 제거하고, 포맷 오류 및 불완전한 데이터를 정제
 
@@ -65,7 +65,7 @@ Task 2(문서 수집)와 Task 6(평가 데이터셋)으로부터 원본 데이�
 
 ### 7.4. 카테고리 균형 검증 및 학습/검증 데이터 분할
 
-**Status:** pending  
+**Status:** done  
 **Dependencies:** 7.3  
 
 카테고리별 데이터 수량이 균형을 이루는지 검증하고, 학습용/검증용으로 데이터 분할
@@ -76,7 +76,7 @@ Task 2(문서 수집)와 Task 6(평가 데이터셋)으로부터 원본 데이�
 
 ### 7.5. review_sft.py를 통한 품질 검수 및 최종 검증
 
-**Status:** pending  
+**Status:** done  
 **Dependencies:** 7.4  
 
 최소 30% 샘플에 대해 5차원 루브릭 기반 품질 검사를 수행하고, 평균 점수 ≥1.5/2.0 달성 여부 검증

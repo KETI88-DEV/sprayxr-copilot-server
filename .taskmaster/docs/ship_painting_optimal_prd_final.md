@@ -861,6 +861,232 @@ shipcoat-poc/
 
 Qwen2-VL-2B-Instruct는 향후 스크린샷/리포트 패널 해석용 후보로 적합하다. 모델 카드는 이미지 내 다국어 텍스트 이해, dynamic resolution, 문서·OCR 성능을 강조한다. 다만 Week 1 범위에는 넣지 않는다. [W2]
 
+# 16. Co-Pilot 아키텍처 방향 (2차 PoC 로드맵)
+
+## 16.1 문제 인식
+
+1차 PoC는 **문서 기반 QA + QLoRA 검증**에 성공했으나, 최종 제품 목표인 **VLM 기반 AI Co-Pilot**과 현재 구현 사이에 구조적 괴리가 존재한다.
+
+| 항목 | 1차 PoC (현재) | 최종 목표 (Co-Pilot) |
+|---|---|---|
+| 입력 | 텍스트 질문 | 센서 데이터, 자세, DFT 측정값, 시뮬레이터 상태, 이미지 |
+| 추론 | 문서 검색 → 답변 생성 | Tool Calling → MCP Server → Chain of Thought → 의사결정 |
+| 출력 | JSON 답변 + citation | XR 콘텐츠용 텍스트, 행동 지시, 시각화 데이터, 경고 |
+| 평가 | 용어/규정 조회 (50문항) | 이상 탐지, 순서 판단, 조건부 의사결정, 도구 사용 |
+| 아키텍처 | 단일 RAG 파이프라인 | Agent + Tool Calling + MCP orchestration |
+
+## 16.2 Co-Pilot 목표 아키텍처
+
+### LLM 모델 선정 (2026-03 결정)
+
+| 후보 | 결정 | 사유 |
+|---|---|---|
+| Qwen2.5-7B-Instruct | 1차 PoC 완료, 마이그레이션 대상 | Tool Calling/CoT는 프롬프트 방식만 지원 |
+| **Qwen3-4B** | **1차 마이그레이션 대상** | Apache 2.0, Thinking Mode 내장, VRAM 효율 (A40에서 36GB 여유), 파인튜닝 응답성 #1, Qwen2.5-7B를 13/15 벤치마크에서 초과 |
+| **Qwen3-8B** | **A/B 비교 대상** | Tool Calling BFCL ~85%, Thinking Mode, 한국어 더 강력 |
+| EXAONE 3.5 7.8B | ❌ 제외 | NC 라이선스 (조선소 상용 배포 불가), Native Tool Calling 미지원, trust_remote_code 필요 |
+| Gemma 3 12B | 차순위 | Gemma ToS 라이선스 제한, Tool Calling 벤치마크 미공개 |
+
+**Qwen3 핵심 이점**: Native Thinking Mode (`<think>` 블록)로 CoT 추론이 모델 내장. 복잡한 요청 시 `/think`, 단순 조회 시 `/no_think`로 턴별 전환 가능. MCP 공식 지원 (Qwen-Agent 프레임워크).
+
+```text
+┌─────────────────────────────────────────────────────┐
+│                  XR Client (Unity)                   │
+│         AR/VR 콘텐츠 렌더링 + 사용자 인터페이스           │
+└─────────────┬───────────────────────┬───────────────┘
+              │ instruction           │ sensor data
+              ▼                       ▼
+┌─────────────────────────────────────────────────────┐
+│         AI Co-Pilot Agent (Qwen3-4B/8B)              │
+│  ┌──────────┐  ┌──────────┐  ┌────────────────────┐ │
+│  │ RAG Core │  │ QLoRA    │  │ Thinking Mode      │ │
+│  │ (문서 지식)│  │ (스타일) │  │ (<think> CoT 내장)  │ │
+│  └──────────┘  └──────────┘  └────────────────────┘ │
+│                       │                              │
+│              Tool Calling Layer                       │
+│  ┌──────┬──────┬──────┬──────┬──────┬──────────────┐ │
+│  │자세  │이상  │시계열│위치  │순서  │DFT 판정      │ │
+│  │추정  │탐지  │처리  │추적  │검증  │합부 판정      │ │
+│  └──┬───┴──┬───┴──┬───┴──┬───┴──┬───┴──────┬───────┘ │
+└─────┼──────┼──────┼──────┼──────┼──────────┼─────────┘
+      ▼      ▼      ▼      ▼      ▼          ▼
+┌─────────────────────────────────────────────────────┐
+│                MCP Server Layer                       │
+│  pose_estimation | anomaly_detection | timeseries    │
+│  location_tracking | sequence_validation | dft_judge │
+└─────────────────────────────────────────────────────┘
+      ▲      ▲      ▲      ▲      ▲          ▲
+      │      │      │      │      │          │
+┌─────────────────────────────────────────────────────┐
+│         시뮬레이터 / 센서 / 측정 장비                    │
+│  RealCOAT | DFT gauge | IMU | Camera | 환경 센서     │
+└─────────────────────────────────────────────────────┘
+```
+
+## 16.3 MCP Server 인터페이스 (설계 대상)
+
+학습 데이터셋 구조(`episode_id`, `worker_pose(BVH)`, `trajectory(x,y,z,roll,pitch,yaw)`, `heatmap`, `lang_instruction` 등)를 기반으로 각 MCP 서버의 역할을 정의한다.
+
+| MCP Server | 입력 | 출력 | 용도 | 데이터 출처 |
+|---|---|---|---|---|
+| `pose_estimation` | current_pose(6DOF, BVH), reference_pose(숙련자 BVH) | 관절별 편차 벡터, 교정 방향 지시 | 숙련자 자세 대비 현재 작업자 자세 차이 분석 및 교정 | dataset `작업행동(worker_pose)` 숙련자 reference |
+| `anomaly_detection` | heatmap 이미지, DFT 측정값, 환경(온도/습도) | 이상 유형(저도막/과도막/결함), 위치, 심각도 | 도막 이상상태 탐지 — LLaSA 등 멀티모달 이미지+정량 데이터 복합 분석 | dataset `결과(heatmap)`, `장비상태` |
+| `timeseries` | 세션 내 속도/거리/각도 시계열 누적 | 추세, stroke 간 편차, 피로도 패턴 | Agent 루프의 순환 구조용 세션 state 갱신 — 매 턴 업데이트되어 context 축적 | dataset `작업시간`, `장비궤적` 시계열 |
+| `location_tracking` | 장비궤적(x,y,z) + 선박 3D 모델 메타데이터 | 현재 구역 ID/특성, 미도장 구역, 커버리지 % | 선박 3D 공간 내 현재 칠하는 구역 인식 — pose/sequence MCP에 공간 context 공급 | dataset `장비궤적`, PaintNet 기반 trajectory simulation |
+| `sequence_validation` | current_trajectory, location(구역 ID), reference_sequence(숙련자) | stroke 방향 위반 여부, 권장 다음 stroke 방향 | 현재 구역 내 도장 순서 검증 (위→아래, 아래→위 등 stroke 단위) — 공정 단계 순서가 아닌 구역 내 붓질 순서 | dataset `작업시퀀스(stroke 단위)`, `언어명령` |
+| `dft_judge` | DFT 측정값 배열, 사양 기준 | 합격/불합격, 90/10 룰 위반 포인트 목록 | 도막 두께 규격 합부 판정 — anomaly_detection과 분리하여 규제/리포트용 명시적 pass/fail 출력 | dataset `작업결과(도막상태, 스코어)` |
+
+> **anomaly_detection 구현 방향**: 두 가지 파이프라인 후보가 존재한다.
+>
+> - **옵션 A (VL 앞단 처리)**: Qwen VL 모델이 히트맵 이미지를 먼저 분석하여 `image_context` JSON(결함 위치, 색상 분포 설명 등)을 생성 → `anomaly_detection` MCP는 이 텍스트 context + DFT 수치만 입력받아 판정. 이 경우 anomaly_detection은 순수 텍스트+수치 서버가 되어 구현이 단순해진다.
+> - **옵션 B (단일 멀티모달)**: LLaSA 계열 등 멀티모달 이상탐지 모델이 이미지+수치를 직접 처리. 모델 선정 및 fine-tuning 필요.
+>
+> **현재 방향**: 옵션 A 우선 검토 (Qwen VL이 이미지 context 분석 담당, anomaly_detection은 결과를 받아 판정). Qwen VL 웨이트는 미다운로드 상태 — Phase 4 시점에 `Qwen2.5-VL` 또는 `Qwen3-VL` 계열 다운로드 예정. Phase 2 Stub은 image_context를 fixture 텍스트로 대체하여 인터페이스만 확정.
+>
+> **timeseries 역할**: 단발성 호출이 아니라 ReAct Agent 루프가 돌면서 매 턴 누적 업데이트되는 session state 역할. "3번째 stroke부터 속도가 점점 빨라지고 있다" 같은 트렌드를 잡아 다음 Tool Call 판단에 영향.
+>
+> **location_tracking 구현 의존성**: RealCOAT/Unity의 3D 좌표 export 인터페이스 및 PaintNet trajectory simulation 데이터에 의존. Phase 2 Stub은 fixture 반환으로 구현하고, 실제 연동은 Phase 4~5에서 수행.
+
+## 16.4 Co-Pilot 대표 시나리오
+
+### 시나리오 D: 실시간 코칭 (Tool Calling + CoT)
+```
+[사용자] "지금 내 도장 상태 어때?"
+[Agent]
+  1. location_tracking(trajectory) → {zone: "B-3", type: "수직 패널", coverage: 0.62}
+  2. pose_estimation(current_pose, reference_pose=숙련자_BVH)
+     → {deviation: {wrist: 8°, elbow: 5°}, correction: "스프레이건 8° 아래로 조정"}
+  3. sequence_validation(trajectory, zone="B-3", reference=숙련자_stroke_순서)
+     → {violation: true, current: "아래→위", recommended: "위→아래", reason: "수직 패널 중력 흘림 방지"}
+  4. timeseries.update(speed_history) → {trend: "속도 18% 상승", last_5min: [0.38, 0.41, 0.45, 0.48, 0.52]}
+  5. RAG 검색: 수직 패널 도장 순서 및 속도 기준
+  6. CoT: 자세 편차 + stroke 순서 위반 + 속도 상승 → 저도막 인과관계 추론
+[응답] "B-3 수직 패널에서 복합 문제가 감지됩니다.
+        ① 스프레이건 각도 8° 과다 → 건 수직 유지
+        ② 아래→위 stroke 비권장 → 위→아래로 전환 (흘림 방지)
+        ③ 속도 점진 상승 중 → 0.4m/s 이하 유지
+        이 세 가지가 복합되면 좌하단 저도막으로 이어질 수 있습니다."
+```
+
+### 시나리오 E: 이상 탐지 + 의사결정 (멀티모달 ReAct)
+```
+[사용자] "도막 상태에 이상이 있나?"
+[Agent]
+  1. [VL 앞단] Qwen VL(heatmap_image) → image_context: "좌하단 B-3-L 구역 청색 집중, 전체 대비 저도막 패턴"
+  2. anomaly_detection(image_context=위결과, dft=[150,85,92,110,78], env={temp:28, humidity:65})
+     — VL이 이미지 분석 담당, anomaly_detection은 텍스트 context + 수치로 판정
+     → {anomaly: true, type: "under_thickness", location: "좌하단 B-3-L", severity: "high",
+        image_evidence: "히트맵 청색 집중 구역 확인", likely_cause: "excessive_speed+angle"}
+  2. dft_judge.evaluate(measurements=[150,85,92,110,78], spec={nominal:100, tolerance:"90/10"})
+     → {pass: false, violations: [{point:2, value:85}, {point:5, value:78}]}
+  3. timeseries.get_context() → {speed_at_violation_zone: 0.58, avg_session: 0.41}
+  4. RAG 검색: 저도막 원인 및 재도장 절차
+  5. CoT: 이미지 근거 + 수치 위반 + 속도 상관관계 → 교정 행동 결정
+[응답] "히트맵 이미지와 DFT 측정값 모두에서 B-3 좌하단 저도막 확인.
+        포인트 2(85µm), 5(78µm) — 90/10 룰 위반.
+        원인: 해당 구간 통과 속도 0.58m/s (세션 평균 대비 41% 초과).
+        교정: ① 해당 구역 재도장 ② 이동 속도 0.35m/s 이하로 조절"
+```
+
+### 시나리오 F: XR 콘텐츠 생성
+```
+[사용자] "웰드 부위 스트라이프 코팅 방법 보여줘"
+[Agent]
+  1. RAG 검색: 스트라이프 코팅 절차, 웰드 부위 도장 규정
+  2. CoT: 문서 절차 → XR 표시 가능 형태로 변환
+[응답] {
+  "xr_type": "ar_instruction",
+  "steps": [
+    {"step": 1, "action": "웰드 양쪽 50mm 범위 마스킹", "highlight_zone": "weld±50mm"},
+    {"step": 2, "action": "붓 도장으로 스트라이프 코팅", "tool_angle": 45, "direction": "along_weld"},
+    {"step": 3, "action": "DFT 확인 (기준: 150µm 이상)", "measurement_points": 3}
+  ],
+  "citations": ["DOC-COAT-0012-C003"]
+}
+```
+
+## 16.5 단계별 로드맵
+
+| Phase | 기간 | 핵심 산출물 | 의존성 |
+|---|---|---|---|
+| **Phase 1** (완료) | Week 1 | RAG+QLoRA 문서 QA 기준선, 3-way 비교, 평가 하네스 | - |
+| **Phase 2** | Week 2-3 | Tool Calling 프레임워크, MCP Server stub, Agentic 평가셋 | Phase 1 |
+| **Phase 3** | Week 3-4 | Session Coaching + CoT, DFT 판정 도구 통합, 실시간 코칭 시연 | Phase 2 |
+| **Phase 4** | Week 4-6 | VLM stub (heatmap/screenshot 해석), XR 콘텐츠 생성 포맷 | Phase 3 |
+| **Phase 5** | Week 6-8 | 전체 Agent orchestration, 시뮬레이터 연동, 다국어 확장 | Phase 4 |
+
+### Phase 2 상세 (Week 2-3, 즉시 착수)
+
+| Task | 설명 | 산출물 |
+|---|---|---|
+| Tool Calling 인터페이스 설계 | JSON Schema 기반 tool 정의, 호출 규약 | `tool_schemas/*.json` |
+| MCP Server stub 구현 | 6개 서버의 mock 구현, 입출력 검증 | `mcp_servers/` |
+| Agentic 평가셋 설계 | Co-Pilot형 30문항 (도구 사용, 이상 탐지, 순서 판단, CoT) | `eval_set_agentic.jsonl` |
+| Session Coaching 재설계 | session_summary.json → Tool Calling → CoT → 코칭 | `session_coach.py` |
+| CoT 평가 루브릭 | 추론 과정 품질 평가 기준 | `eval_rubric_agentic.md` |
+
+## 16.6 평가셋 확장 방향
+
+기존 50문항(문서 QA)에 추가로 **Agentic 평가셋 30문항**을 설계한다.
+
+| 카테고리 | 수량 | 테스트 능력 | 예시 |
+|---|---|---|---|
+| Tool Calling | 6 | 올바른 도구 선택 + 파라미터 구성 | "현재 DFT가 [120, 85, 95, 110]이고 기준이 100µm일 때 합부 판정해줘" |
+| 이상 탐지 해석 | 6 | 센서 데이터 → 원인 분석 → 조치 | "작업 속도가 급격히 변하는 구간의 도막 품질 문제를 분석해줘" |
+| 순서/의사결정 | 6 | 조건부 분기, 우선순위 판단 | "습도 92%, 표면온도가 이슬점 이하일 때 다음 행동은?" |
+| CoT 추론 | 6 | 다단계 추론 + 근거 연결 | "블라스팅→프라이머→상도 과정에서 각 단계별 대기 시간 조건은?" |
+| XR 콘텐츠 생성 | 6 | 구조화된 지시문 생성 | "밀폐 공간 환기 절차를 AR 가이드 형식으로 생성해줘" |
+
+## 16.7 아키텍처 문서(AgenticCopilot_Architecture.md) 정합성 매핑
+
+본 절은 `AgenticCopilot_Architecture.md`의 설계 개념과 실제 구현 간 매핑을 정리한다.
+
+### MCP 모듈 매핑
+
+| 아키텍처 원본 | PRD 구현 | 실제 역할 (재정의) |
+|---|---|---|
+| MCP 자세 추정 | `pose_estimation` | 숙련자 BVH reference 대비 현재 작업자 6DOF 자세 편차 분석 및 교정 벡터 출력 |
+| MCP 이상탐지 | `anomaly_detection` | Qwen VL이 히트맵 이미지를 앞단에서 분석 → image_context JSON 생성 → anomaly_detection은 텍스트 context + DFT 수치로 판정. 단순 임계값 탐지가 아닌 이미지 근거 포함 |
+| MCP 시계열 처리 | `timeseries` | ReAct 루프 내 세션 state 갱신용. 매 턴 누적되어 속도/거리 트렌드를 다음 Tool Call 판단에 제공 |
+| MCP 위치 | `location_tracking` | 선박 3D 공간 내 현재 도장 구역 식별. pose/sequence MCP에 공간 context 공급. PaintNet trajectory 기반 |
+| MCP 순서 | `sequence_validation` | 공정 단계 순서가 아닌 **구역 내 stroke 순서** 검증 (위→아래 등). 숙련자 stroke 패턴이 reference |
+| MCP 작업 매뉴얼 | RAG Core (별도 MCP 불필요) | RAG 파이프라인이 문서 검색·제공 기능을 이미 수행하므로 별도 MCP 서버로 분리하지 않음 |
+| ••• (확장) | `dft_judge` | 규제/리포트용 명시적 pass/fail. anomaly_detection과 분리하여 90/10 룰 결과를 독립 출력 |
+
+### Tool Calling 메커니즘 매핑
+
+아키텍처에서는 CoT → Thinking 단계에서 `</ToolPos>`, `</ToolSeq>` 등 특수 종료 태그를 생성하여 Tool Calling 계층이 파싱·호출하는 방식을 정의하였다. 실제 구현에서는 **Qwen3(4B/8B)의 native function calling + Thinking Mode**를 사용한다.
+
+| 아키텍처 개념 | Qwen3 구현 방식 |
+|---|---|
+| `</ToolPos>` 태그 → Tool Calling 계층 파싱 | Qwen3 `tools` 파라미터로 도구 목록 전달, `<think>` 블록에서 도구 필요성 추론 후 `tool_calls` JSON 생성 |
+| Thinking 내 도구 식별 | Qwen3 Thinking Mode (`enable_thinking=True`): 모델이 `<think>...</think>` 내에서 자율적으로 도구 필요성 판단 → tool_call 결정. 아키텍처의 "Thinking" 컴포넌트와 1:1 대응 |
+| 빨간 점선 (Thinking → Tool Calling) | tool_calls 응답 파싱 → MCP Server HTTP 호출 → 결과를 context에 삽입 |
+| 턴별 모드 전환 | `/think` (복잡한 추론) / `/no_think` (단순 조회) 소프트 스위치로 턴별 thinking 토글 |
+
+> **모델 마이그레이션 결정 (2026-03)**: 1차 PoC의 Qwen2.5-7B-Instruct에서 **Qwen3-4B**(우선) / **Qwen3-8B**(A/B 비교)로 마이그레이션. EXAONE 3.5는 NC 라이선스 및 Native Tool Calling 미지원으로 제외.
+
+### Encoder/Decoder 및 입출력 변환 계층
+
+아키텍처의 `Conversion Request Format → Encoder → ... → Decoder → Conversion Output Format` 파이프라인은 Agent Orchestration (Task 18)에서 다음과 같이 구현한다.
+
+| 아키텍처 컴포넌트 | 구현 위치 |
+|---|---|
+| Conversion Request Format | `agent_pipeline.py` — instruction + context를 LLM 프롬프트 포맷으로 정규화 |
+| Encoder | Qwen3 tokenizer + embedding (모델 내부) |
+| LLM Backbone + CoT + Thinking | Qwen3-4B/8B 추론 (Thinking Mode `<think>` 블록 = 아키텍처의 CoT+Thinking 컴포넌트) |
+| Tool Calling → MCP Server | HTTP client → FastAPI MCP 서버 호출 |
+| Decoder | Qwen2.5 토큰 생성 (모델 내부) |
+| Conversion Output Format | 응답 후처리 — JSON 구조화 (XR 콘텐츠) 또는 텍스트 포맷 변환 |
+
+### Context 순환 갱신
+
+아키텍처 §6.3의 "응답 후 Context 업데이트 → 다음 질문 대비 순환 구조"는 다음과 같이 구현한다.
+
+- **Session Context Manager**: 각 세션의 대화 이력, MCP 호출 결과, 추론 과정을 `session_context` 딕셔너리에 누적
+- **Vector DB 갱신**: 새로운 MCP 결과가 생성될 때 Vector DB에 임시 인덱싱하여 후속 질문에서 검색 가능
+- **Context Window 관리**: 최근 N턴 대화 + 관련 MCP 결과를 LLM 입력에 포함 (max_context_turns 설정)
+
 \newpage
 
 # 부록 A. 필수 명령어 모음
@@ -954,7 +1180,7 @@ RAG baseline 완성?
 | ID | 자료 |
 |---|---|
 | W1 | Hugging Face - `Qwen/Qwen2.5-7B-Instruct` model card |
-| W2 | Hugging Face - `Qwen/Qwen2-VL-2B-Instruct` model card |
+| W2 | Hugging Face - `Qwen/Qwen3-VL-2B-Instruct` model card (Phase 4 이미지 context 분석용, `/models/Qwen3-VL-2B-Instruct` 다운로드 완료) |
 | W3 | NVIDIA - A40 공식 사양 |
 | W4 | Hugging Face Transformers / bitsandbytes 문서 - QLoRA, NF4, CUDA 지원 |
 | W5 | Hugging Face Hub 문서 - `snapshot_download`, `local_dir`, offline mode |

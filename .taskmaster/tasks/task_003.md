@@ -2,9 +2,9 @@
 
 **Title:** 문서 청킹 및 RAG 색인 구축
 
-**Status:** pending
+**Status:** done
 
-**Dependencies:** 1, 2
+**Dependencies:** 1 ✓, 2 ✓
 
 **Priority:** high
 
@@ -30,7 +30,7 @@
 
 ### 3.1. 구조적 청킹 규칙 구현 및 토큰 카운팅
 
-**Status:** pending  
+**Status:** done  
 **Dependencies:** None  
 
 절/항/Step 경계 우선 청킹 규칙 정의 및 Qwen2.5 토크나이저 기반 토큰 카운팅 로직 구현, 300-800 토큰 범위 유지 및 10-20% overlap 처리
@@ -45,7 +45,7 @@
 
 ### 3.2. BGE-M3 임베딩 생성 및 JSONL 저장
 
-**Status:** pending  
+**Status:** done  
 **Dependencies:** 3.1  
 
 /hf-cache/에서 BGE-M3 모델 로드, 청킹된 문서에 대해 배치 임베딩 생성, chunk_id(DOC-{doc_id}-C{seq}) 형식으로 /data/chunked/chunks.jsonl 생성
@@ -61,7 +61,7 @@
 
 ### 3.3. FAISS 인덱스 구축 및 메타데이터 저장
 
-**Status:** pending  
+**Status:** done  
 **Dependencies:** 3.2  
 
 IVFFlat/HNSW 비교를 통해 최적 인덱스 선택, /data/chunked/chunks.jsonl의 임베딩으로 FAISS 인덱스 구축, metric L2 기준으로 /output/indexes/에 저장
@@ -77,7 +77,7 @@ IVFFlat/HNSW 비교를 통해 최적 인덱스 선택, /data/chunked/chunks.json
 
 ### 3.4. 리랭커 통합 및 RAG 파이프라인 검증
 
-**Status:** pending  
+**Status:** done  
 **Dependencies:** 3.3  
 
 BAAI/bge-reranker-v2-m3 모델 통합, retrieval top-5 후 rerank top-3 로직 구현, smoke test 5개 쿼리로 응답 시간 및 품질 검증
@@ -93,7 +93,7 @@ BAAI/bge-reranker-v2-m3 모델 통합, retrieval top-5 후 rerank top-3 로직 �
 
 ### 3.5. RAG 인덱싱 전체 통합 테스트 및 보고서 작성
 
-**Status:** pending  
+**Status:** done  
 **Dependencies:** 3.4  
 
 전체 청킹→임베딩→인덱싱→리랭킹 파이프라인 통합 테스트, 성능 메트릭 수집, 최종 검증 보고서 작성

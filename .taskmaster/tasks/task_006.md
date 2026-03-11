@@ -2,9 +2,9 @@
 
 **Title:** RAG-Only 평가 실행 및 분석
 
-**Status:** pending
+**Status:** done
 
-**Dependencies:** 4, 5
+**Dependencies:** 4 ✓, 5 ✓
 
 **Priority:** high
 
@@ -30,7 +30,7 @@
 
 ### 6.1. 배치 실행 스크립트 검증 및 50문항 평가 일괄 실행
 
-**Status:** pending  
+**Status:** done  
 **Dependencies:** None  
 
 run_rag_eval.py 스크립트 동작 확인, 50개 평가셋 순차 실행, q_id/answer/citations/timestamp 응답 저장
@@ -41,7 +41,7 @@ run_rag_eval.py 스크립트 동작 확인, 50개 평가셋 순차 실행, q_id/
 
 ### 6.2. 자동 평가 지표 계산(ROUGE-L, BERTScore, hallucination)
 
-**Status:** pending  
+**Status:** done  
 **Dependencies:** 6.1  
 
 50개 응답에 대해 ROUGE-L, BERTScore F1, 응답 길이, citation 개수 자동 계산 및 hallucination 분류
@@ -52,7 +52,7 @@ run_rag_eval.py 스크립트 동작 확인, 50개 평가셋 순차 실행, q_id/
 
 ### 6.3. 수동 채점 수행 및 5차원 루브릭 적용
 
-**Status:** pending  
+**Status:** done  
 **Dependencies:** 6.1  
 
 2명 검토자가 50개 응답 각각에 대해 5차원 루브릭을 적용하여 수동 점수 부여 및 평균 산출
@@ -63,7 +63,7 @@ run_rag_eval.py 스크립트 동작 확인, 50개 평가셋 순차 실행, q_id/
 
 ### 6.4. 오류 분석 및 저점수 문항 원인 분류
 
-**Status:** pending  
+**Status:** done  
 **Dependencies:** 6.2, 6.3  
 
 manual_score가 1.5 미만인 문항들의 오류 원인을 검색 실패/LLM 오류/프롬프트 부적절로 분류
@@ -74,7 +74,7 @@ final_manual_score < 1.5인 모든 문항을 대상으로 오류 원인을 분�
 
 ### 6.5. 결과 집계 및 성공 기준 검증
 
-**Status:** pending  
+**Status:** done  
 **Dependencies:** 6.2, 6.3, 6.4  
 
 모든 평가 지표를 종합하여 최종 결과 CSV 및 분석 리포트 작성, 성공 기준(평균 1.5/2.0 이상, hallucination ≤10%) 달성 여부 확인

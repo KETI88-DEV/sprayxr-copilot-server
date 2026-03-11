@@ -2,7 +2,7 @@
 
 **Title:** 개발 환경 구축 및 GPU 검증
 
-**Status:** pending
+**Status:** done
 
 **Dependencies:** None
 
@@ -37,7 +37,7 @@ torch.cuda.is_available() 반환값 확인, python -c 'import unsloth; import pe
 
 ### 1.1. NVIDIA A40 GPU 및 Docker 환경 검증
 
-**Status:** pending  
+**Status:** done  
 **Dependencies:** None  
 
 nvidia-smi 명령어로 A40 48GB GDDR6 ECC GPU 확인, Docker 컨테이너의 CUDA 12.4 및 cuDNN9 설치 상태 검증
@@ -48,7 +48,7 @@ Docker 컨테이너(pytorch/pytorch:2.4.0-cuda12.4-cudnn9-runtime) 내에서 nvi
 
 ### 1.2. Docker 볼륨 마운트 지점 및 디렉터리 구조 검증
 
-**Status:** pending  
+**Status:** done  
 **Dependencies:** None  
 
 /workspace, /data, /output, /models, /hf-cache, /logs 마운트 지점 존재 확인 및 쓰기 권한 검증, 프로젝트 루트 디렉터리 구조 확인
@@ -59,7 +59,7 @@ ls -la /workspace, /data, /output, /models, /hf-cache, /logs 명령어로 마운
 
 ### 1.3. PyTorch 및 CUDA 라이브러리 버전 검증
 
-**Status:** pending  
+**Status:** done  
 **Dependencies:** 1.1  
 
 torch, transformers, accelerate 등 핵심 머신러닝 라이브러리 설치 확인 및 CUDA 가용성 검증
@@ -70,7 +70,7 @@ python -c 'import torch; print(torch.__version__)' 실행하여 torch cu124 버�
 
 ### 1.4. 양자화 및 최적화 라이브러리(bitsandbytes, peft, unsloth) 검증
 
-**Status:** pending  
+**Status:** done  
 **Dependencies:** 1.3  
 
 bitsandbytes 0.49.1, peft, unsloth 2026.2.1, trl 라이브러리 import 및 CUDA 호환성 확인
@@ -81,7 +81,7 @@ python -c 'import bitsandbytes as bnb; print(bnb.__version__)' 실행(0.49.1 확
 
 ### 1.5. RAG 및 API 관련 라이브러리 검증 및 HF_HOME 환경변수 설정 확인
 
-**Status:** pending  
+**Status:** done  
 **Dependencies:** 1.3  
 
 transformers 5.1.0, sentence-transformers 5.2.3, FlagEmbedding 1.3.5, faiss-cpu, vllm 0.16.0, fastapi, uvicorn 라이브러리 검증 및 HF_HOME, HF_HUB_CACHE 환경변수 설정 확인
