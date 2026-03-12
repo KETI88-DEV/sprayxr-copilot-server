@@ -6,7 +6,7 @@
     "tool_name": {"type": "string", "description": "호출할 MCP 도구명 (6개 중 하나)"},
     "parameters": {"type": "object", "description": "도구별 입력 파라미터 (tool_schemas/*.json 참조)"},
     "call_id": {"type": "string", "description": "고유 호출 ID (UUID4)"},
-    "timeout_ms": {"type": "integer", "default": 30000, "description": "타임아웃 (ms)"},
+    "timeout_ms": {"type": "integer", "default": 5000, "description": "타임아웃 (ms)"},
     "session_id": {"type": "string", "description": "세션 ID (timeseries 등 stateful 도구용)"}
   },
 

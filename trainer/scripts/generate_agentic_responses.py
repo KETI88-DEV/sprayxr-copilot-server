@@ -3,16 +3,22 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import logging
+import sys
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-from agent_pipeline import AgentPipeline
-
 logger = logging.getLogger(__name__)
+
+
+def _ensure_scripts_path() -> None:
+    scripts_dir = str(Path(__file__).resolve().parent)
+    if scripts_dir not in sys.path:
+        sys.path.insert(0, scripts_dir)
 
 
 def _resolve_adapter_path(adapter_arg: Path | None, qlora_config_path: Path) -> str | None:
@@ -119,6 +125,10 @@ def main() -> int:
 
     adapter_path = _resolve_adapter_path(args.adapter, args.qlora_config)
 
+    _ensure_scripts_path()
+    agent_mod = importlib.import_module("agent_pipeline")
+    AgentPipeline = agent_mod.AgentPipeline
+
     try:
         pipeline = AgentPipeline(
             config_path=args.config,
@@ -158,6 +168,7 @@ def main() -> int:
                     environment=environment,
                     session_id=q_id,
                     enable_thinking=enable_thinking,
+                    force_route="deep",
                 )
                 final_text = str(result.get("response", ""))
                 tool_calls = result.get("tool_calls", [])

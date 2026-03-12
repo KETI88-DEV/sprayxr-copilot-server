@@ -99,10 +99,19 @@ class ToolCallingAdapterTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(parsed), 1)
         self.assertEqual(parsed[0]["name"], "location_tracking")
 
-    def test_parse_tool_calls_malformed_json_raises(self) -> None:
+    def test_parse_tool_calls_malformed_json_skips(self) -> None:
         raw = '<tool_call>{"name":"dft_judge","arguments":{"x":1,}}</tool_call>'
-        with self.assertRaises(ToolValidationError):
-            self.adapter.parse_tool_calls(raw)
+        parsed = self.adapter.parse_tool_calls(raw)
+        self.assertEqual(len(parsed), 0)
+
+    def test_parse_tool_calls_mixed_valid_and_malformed(self) -> None:
+        raw = (
+            '<tool_call>{"name":"dft_judge","arguments":{"x":1,}}</tool_call>'
+            '<tool_call>{"name":"anomaly_detection","arguments":{"image_context":"test"}}</tool_call>'
+        )
+        parsed = self.adapter.parse_tool_calls(raw)
+        self.assertEqual(len(parsed), 1)
+        self.assertEqual(parsed[0]["name"], "anomaly_detection")
 
     def test_format_tool_results(self) -> None:
         results = [{"call_id": "abc", "status": "success", "result": {"ok": True}}]
@@ -266,9 +275,11 @@ class ToolCallingAdapterTest(unittest.IsolatedAsyncioTestCase):
             result = await self.adapter.dispatch_tool_call("location_tracking", args)
         self.assertEqual(result["status"], "success")
 
-    async def test_dispatch_invalid_tool_name_raises(self) -> None:
-        with self.assertRaises(ToolValidationError):
-            await self.adapter.dispatch_tool_call("unknown_tool", {"x": 1})
+    async def test_dispatch_invalid_tool_name_returns_error(self) -> None:
+        result = await self.adapter.dispatch_tool_call("unknown_tool", {"x": 1})
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["error"]["code"], "TOOL_NOT_FOUND")
+        self.assertIn("unknown_tool", result["error"]["message"])
 
     async def test_dispatch_timeout_returns_protocol_error(self) -> None:
         calls: list[dict[str, Any]] = []
@@ -304,7 +315,7 @@ class ToolCallingAdapterTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(output["final_response"], "Final answer after tool")
         self.assertGreaterEqual(len(output["tool_results"]), 1)
 
-    async def test_run_tool_loop_exceeds_rounds_raises(self) -> None:
+    async def test_run_tool_loop_exceeds_rounds_graceful_fallback(self) -> None:
         model = FakeModel(
             responses=['<tool_call>{"name":"timeseries","arguments":{"action":"query","session_id":"s1"}}</tool_call>'] * 3
         )
@@ -314,13 +325,16 @@ class ToolCallingAdapterTest(unittest.IsolatedAsyncioTestCase):
             "dispatch_tool_call",
             new=AsyncMock(return_value={"status": "success", "result": {"points": 10}}),
         ):
-            with self.assertRaises(ToolCallingError):
-                await self.adapter.run_tool_loop(
-                    messages=[{"role": "user", "content": "status?"}],
-                    model=model,
-                    tokenizer=tokenizer,
-                    max_rounds=2,
-                )
+            output = await self.adapter.run_tool_loop(
+                messages=[{"role": "user", "content": "status?"}],
+                model=model,
+                tokenizer=tokenizer,
+                max_rounds=2,
+            )
+        self.assertEqual(output["rounds"], 2)
+        self.assertTrue(output.get("truncated", False))
+        self.assertIsInstance(output["final_response"], str)
+        self.assertGreaterEqual(len(output["tool_results"]), 1)
 
 
 if __name__ == "__main__":

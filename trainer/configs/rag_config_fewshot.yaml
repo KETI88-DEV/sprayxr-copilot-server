@@ -1,0 +1,115 @@
+# RAG Pipeline Configuration
+# Task 3: 문서 청킹 및 RAG 색인 구축
+
+chunking:
+  tokenizer_path: /models/Qwen3-4B
+  min_tokens: 300
+  max_tokens: 800
+  overlap_fraction: 0.15          # 15% overlap (midpoint of 10-20%)
+  min_chunk_tokens: 50            # discard fragments smaller than this
+  chunk_id_format: "DOC-{doc_id}-C{seq:04d}"
+
+embedding:
+  model_name: BAAI/bge-m3
+  device: cuda
+  batch_size: 32
+  max_seq_length: 1024
+  normalize: true
+  dimension: 1024
+
+index:
+  type: hnsw
+  metric: inner_product           # + normalize = cosine similarity
+  hnsw_m: 32
+  ef_construction: 200
+  ef_search: 64
+
+reranker:
+  model_name: BAAI/bge-reranker-v2-m3
+  device: cuda
+  max_length: 1024
+  top_k_retrieve: 5
+  top_k_rerank: 3
+
+llm:
+  model_path: /models/Qwen3-4B
+  backend: hf
+  device_map: auto
+  torch_dtype: bfloat16
+  load_in_4bit: true
+  bnb_4bit_quant_type: nf4
+  bnb_4bit_use_double_quant: true
+  bnb_4bit_compute_dtype: bfloat16
+  use_safetensors: true
+  gpu_memory_utilization: 0.65
+  max_model_len: 4096
+  max_lora_rank: 64
+
+generation:
+  temperature: 0.7
+  max_new_tokens: 768
+  do_sample: true
+  top_p: 0.8
+  top_k: 20
+  enable_thinking: false
+
+prompt:
+  system: >-
+    너는 선박 도장 분야 전문 AI 어시스턴트이다. 제공된 문서를 근거로 정확한 기술 정보를
+    제공하고, 답변 마지막에 근거 문서 ID를 반드시 명시한다. 근거가 부족하면 솔직히
+    '제공된 문서에 해당 정보가 없습니다'라고 답한다. 안전 관련 질문에는 항상 관련 규정을
+    함께 안내한다.
+
+
+    [도구 사용 규칙]
+
+    환경 데이터에 측정값, 좌표, 센서 데이터가 포함된 경우 반드시 적절한 도구를 호출하여 분석한다.
+    도구를 호출할 때는 아래 형식을 정확히 따른다.
+
+
+    예시 1: DFT 합부 판정 요청 시
+
+    <tool_call>{"name": "dft_judge", "arguments": {"measurements": [95, 102, 88], "spec": {"nominal": 100, "tolerance_rule": "90/10"}}}</tool_call>
+
+
+    예시 2: 이상 탐지 요청 시
+
+    <tool_call>{"name": "anomaly_detection", "arguments": {"image_context": "좌하단 저도막 패턴", "dft_measurements": [85, 92, 78], "env": {"temperature": 28, "humidity": 65}}}</tool_call>
+
+
+    도구 호출 후 결과를 종합하여 최종 답변을 생성한다. 여러 도구가 필요하면 모두 호출한다.
+
+
+    [수치 정확성 규칙]
+
+    수치 분석이 필요한 경우 반드시 도구를 호출하여 결과를 얻는다.
+    도구가 반환한 수치를 그대로 인용하고, 수치를 직접 계산하거나 추정하지 않는다.
+    도구 호출 없이 합격/불합격, 정상/이상 등의 판정을 내리지 않는다.
+  context_template: >-
+    아래는 관련 문서입니다. 이 문서만을 근거로 답변하세요.
+
+    {context}
+  user_template: >-
+    질문: {question}
+
+confidence:
+  min_rerank_score: 0.3
+  min_results: 1
+  high_threshold: 0.7
+  medium_threshold: 0.4
+
+eval:
+  bertscore_model: bert-base-multilingual-cased
+  bertscore_layers: 9
+  bertscore_batch_size: 16
+  eval_set_path: /data/eval/eval_set.jsonl
+  answer_key_path: /data/eval/eval_answer_key.json
+  rubric_path: /workspace/trainer/configs/eval_rubric.md
+  results_dir: /output/eval_results
+
+paths:
+  input_dir: /data/deduplicated
+  chunks_jsonl: /data/chunked/chunks.jsonl
+  faiss_index: /output/indexes/faiss.index
+  metadata_json: /output/indexes/metadata.json
+  index_config_json: /output/indexes/index_config.json

@@ -1491,7 +1491,7 @@
         "id": 18,
         "title": "Agent Orchestration 및 CoT 추론 파이프라인",
         "description": "RAG Core + Tool Calling + Chain of Thought 통합 Agent 파이프라인. instruction → 도구 선택 → MCP 호출 → context 수집 → CoT 추론 → XR 콘텐츠용 구조화 응답 생성",
-        "status": "pending",
+        "status": "done",
         "dependencies": [
           15,
           16
@@ -1506,7 +1506,7 @@
             "description": "Architecture §4 End-to-End Pipeline의 [1]~[10] 단계를 구현하는 Agent 파이프라인 코어 클래스 설계",
             "dependencies": [],
             "details": "AgentPipeline 클래스: (1) instruction parsing (Conversion Request Format 역할), (2) context 수집 (환경 정보+사용자 입력), (3) LLM에 tools 파라미터 전달 → function calling 응답 수신, (4) tool_calls 파싱 → MCP 서버 호출, (5) MCP 결과 + RAG 검색 결과 통합 → context 구성, (6) CoT 추론 → 최종 응답 생성. 산출물: /workspace/trainer/scripts/agent_pipeline.py",
-            "status": "pending",
+            "status": "done",
             "testStrategy": "mock LLM 응답과 mock MCP 서버로 파이프라인 전체 흐름 단위 테스트."
           },
           {
@@ -1517,7 +1517,7 @@
               1
             ],
             "details": "T15의 6개 도구 JSON Schema를 Qwen3 tools 파라미터로 전달. Thinking Mode 활성 시 <think> 블록에서 도구 필요성 추론 후 tool_calls 생성. Non-thinking 모드에서는 직접 tool_calls 생성. 모델 응답에서 tool_calls 추출 → T15의 tool_calling_adapter로 라우팅. 다중 도구 호출(multi-tool) 지원: 단일 턴에서 여러 도구 동시 호출 가능. 도구 미사용 판단(RAG만으로 충분한 경우) 처리.",
-            "status": "pending",
+            "status": "done",
             "testStrategy": "시나리오 D(sequence_validation), E(dft_judge+anomaly_detection), F(RAG only) 각각에서 Qwen3 thinking/non-thinking 양쪽 모드에서 올바른 도구 선택 확인."
           },
           {
@@ -1529,7 +1529,7 @@
               2
             ],
             "details": "MCP 서버 HTTP 호출 (T16의 FastAPI 서버). 응답 파싱 + 에러 핸들링 (타임아웃, 서버 에러). RAG 검색: 기존 search_index.py 활용. context 통합 포맷: {mcp_results: {tool_name: result}, rag_context: [chunks], environment: {}, instruction: ''}. Architecture §6.3 Context 순환 갱신: 이전 턴의 context를 다음 턴에 전달하는 세션 관리.",
-            "status": "pending",
+            "status": "done",
             "testStrategy": "MCP mock 서버 + RAG 검색 결과 통합 후 context 포맷 검증. 세션 컨텍스트 2턴 연속 전달 테스트."
           },
           {
@@ -1540,7 +1540,7 @@
               3
             ],
             "details": "Qwen3 Thinking Mode 활용: enable_thinking=True로 MCP 결과 + RAG 문서 + 환경 정보를 input으로, <think> 블록에서 단계적 추론 수행 → 최종 답변 도출. <think> 블록은 사용자 응답에서 strip, 디버그/평가 로그에만 기록. 응답 포맷: 일반 텍스트 답변 + 선택적 XR 콘텐츠 JSON (PRD §16.4 시나리오 F). Conversion Output Format: 응답 유형(text, xr_instruction, alert)에 따라 구조 분기. 추론 예산 제어(token budget) 파라미터 노출.",
-            "status": "pending",
+            "status": "done",
             "testStrategy": "시나리오 D/E/F 각각에서 CoT 추론 과정 + 최종 응답 구조 검증. XR JSON 포맷 유효성 확인."
           },
           {
@@ -1552,7 +1552,7 @@
               4
             ],
             "details": "SessionContext 클래스: session_id별로 이전 턴의 mcp_results, rag_chunks, cot_reasoning을 저장. 다음 턴에서 관련 컨텍스트를 자동 주입. 컨텍스트 윈도우 관리: 최근 3턴까지 유지, 오래된 컨텍스트는 요약 후 압축. Vector DB에 세션 컨텍스트 벡터 저장 (Architecture §3.2.7).",
-            "status": "pending",
+            "status": "done",
             "testStrategy": "3턴 연속 대화 시나리오에서 이전 턴 컨텍스트 참조 확인. 컨텍스트 윈도우 초과 시 압축 동작 검증."
           },
           {
@@ -1564,7 +1564,7 @@
               5
             ],
             "details": "demo_agent.py: 3개 시나리오를 순차 실행하여 Agent 파이프라인 전체 동작을 시연. 각 시나리오별 입력 데이터 사전 정의, MCP 서버 기동 → Agent 호출 → 응답 출력. 실행 로그에 tool_calls, mcp_results, cot_reasoning, final_response 각 단계를 기록. 산출물: /workspace/trainer/scripts/demo_agent.py",
-            "status": "pending",
+            "status": "done",
             "testStrategy": "3개 시나리오 모두 에러 없이 완료. 각 시나리오의 tool_calls가 expected_tool_sequence와 일치. 응답 포맷 검증."
           }
         ]

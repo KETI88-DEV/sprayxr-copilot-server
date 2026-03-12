@@ -239,11 +239,13 @@ class IntegrationTests(unittest.TestCase):
         self.reset_state()
         client = TestClient(app)
         response = client.get("/timeseries/query", params={"session_id": "missing"})
-        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.status_code, 200)
         payload = to_dict(response_json(response))
-        self.assertEqual(payload.get("status"), "error")
-        error_payload = to_dict(payload["error"])
-        self.assertEqual(error_payload.get("code"), "SESSION_NOT_FOUND")
+        self.assertEqual(payload.get("status"), "success")
+        result = to_dict(payload["result"])
+        self.assertEqual(result.get("count"), 0)
+        self.assertEqual(result.get("trend"), "no_data")
+        self.assertIsNone(result.get("latest"))
 
     def test_location_tracking_fixture(self) -> None:
         self.reset_state()

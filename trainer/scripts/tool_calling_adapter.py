@@ -102,16 +102,23 @@ class ToolCallingAdapter:
             block = match.group(1)
             try:
                 payload = json.loads(block)
-            except json.JSONDecodeError as exc:
-                raise ToolValidationError(f"Malformed tool_call JSON: {block}") from exc
+            except json.JSONDecodeError:
+                logger.warning("Skipping malformed tool_call JSON (len=%d): %s...", len(block), block[:120])
+                continue
+
+            if not isinstance(payload, dict):
+                logger.warning("Skipping non-object tool_call payload")
+                continue
 
             tool_name = payload.get("name")
             if not isinstance(tool_name, str) or not tool_name:
-                raise ToolValidationError("Tool call missing non-empty 'name'")
+                logger.warning("Skipping tool_call with missing name")
+                continue
 
             arguments = payload.get("arguments", {})
             if not isinstance(arguments, dict):
-                raise ToolValidationError(f"Tool call arguments must be an object for '{tool_name}'")
+                logger.warning("Skipping tool_call with non-object arguments for '%s'", tool_name)
+                continue
 
             tool_calls.append(
                 {
@@ -157,21 +164,34 @@ class ToolCallingAdapter:
         session_id: str | None = None,
     ) -> dict[str, Any]:
         """Executes protocol-compliant MCP calls with retry boundaries for transient faults."""
+        call_id = str(uuid.uuid4())
+
         if tool_name not in self.registered_tools:
-            raise ToolValidationError(f"Unregistered tool requested: {tool_name}")
+            logger.warning("Unregistered tool requested: %s — returning error result", tool_name)
+            return {
+                "call_id": call_id,
+                "status": "error",
+                "error": {
+                    "code": "TOOL_NOT_FOUND",
+                    "message": f"Unregistered tool: {tool_name}",
+                    "details": {"available": sorted(self.registered_tools)},
+                },
+            }
 
         if not isinstance(arguments, dict):
-            raise ToolValidationError("Tool arguments must be a dictionary")
+            return {
+                "call_id": call_id,
+                "status": "error",
+                "error": {
+                    "code": "INVALID_PARAMS",
+                    "message": f"Arguments must be a dictionary for {tool_name}",
+                    "details": {},
+                },
+            }
 
-        call_id = str(uuid.uuid4())
-        payload: dict[str, Any] = {
-            "tool_name": tool_name,
-            "parameters": arguments,
-            "call_id": call_id,
-            "timeout_ms": self.timeout_ms,
-        }
+        mcp_body = dict(arguments)
         if session_id is not None:
-            payload["session_id"] = session_id
+            mcp_body.setdefault("session_id", session_id)
 
         url = self._resolve_endpoint(tool_name, arguments)
         timeout_seconds = self.timeout_ms / 1000.0
@@ -179,7 +199,7 @@ class ToolCallingAdapter:
         for attempt in range(self.max_retries + 1):
             try:
                 async with httpx.AsyncClient(timeout=timeout_seconds) as client:
-                    response = await client.post(url, json=payload)
+                    response = await client.post(url, json=mcp_body)
                 response.raise_for_status()
 
                 response_data = response.json()
@@ -262,7 +282,7 @@ class ToolCallingAdapter:
         def _run_generation() -> Any:
             return model.generate(
                 **inputs,
-                max_new_tokens=512,
+                max_new_tokens=1024,
                 pad_token_id=tokenizer.eos_token_id,
             )
 
@@ -321,7 +341,23 @@ class ToolCallingAdapter:
             collected_tool_results.extend(normalized_results)
             conversation.extend(self.format_tool_results(normalized_results))
 
-        raise ToolCallingError(f"Tool loop exceeded max_rounds={max_rounds}")
+        logger.warning(
+            "Tool loop reached max_rounds=%d without final answer, returning last state",
+            max_rounds,
+        )
+        last_assistant = ""
+        for msg in reversed(conversation):
+            if msg.get("role") == "assistant":
+                last_assistant = self._strip_think_blocks(msg.get("content", ""))
+                break
+
+        return {
+            "final_response": last_assistant,
+            "messages": conversation,
+            "tool_results": collected_tool_results,
+            "rounds": max_rounds,
+            "truncated": True,
+        }
 
 
 def parse_args() -> argparse.Namespace:

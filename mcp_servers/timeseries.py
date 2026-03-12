@@ -57,16 +57,22 @@ def update_timeseries(payload: TimeSeriesUpdateRequest) -> MCPResponse:
     return success_response(result=result)
 
 
-@router.get("/query", response_model=MCPResponse)
-def query_timeseries(session_id: str) -> MCPResponse:
+class TimeSeriesQueryRequest(BaseModel):
+    session_id: str
+
+
+def _query_session(session_id: str) -> MCPResponse:
     series = _sessions.get(session_id)
     if series is None:
-        raise MCPException(
-            code="SESSION_NOT_FOUND",
-            message="session_id not found",
-            details={"session_id": session_id},
-            status_code=404,
-        )
+        result = {
+            "session_id": session_id,
+            "count": 0,
+            "trend": "no_data",
+            "latest": None,
+            "means": None,
+            "message": "세션 데이터가 없습니다. update를 먼저 호출하세요.",
+        }
+        return success_response(result=result)
 
     speeds = [point.speed for point in series]
     distances = [point.distance for point in series]
@@ -83,3 +89,13 @@ def query_timeseries(session_id: str) -> MCPResponse:
         },
     }
     return success_response(result=result)
+
+
+@router.get("/query", response_model=MCPResponse)
+def query_timeseries_get(session_id: str) -> MCPResponse:
+    return _query_session(session_id)
+
+
+@router.post("/query", response_model=MCPResponse)
+def query_timeseries_post(payload: TimeSeriesQueryRequest) -> MCPResponse:
+    return _query_session(payload.session_id)
