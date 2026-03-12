@@ -1,0 +1,33 @@
+{
+  "type": "function",
+  "function": {
+    "name": "dft_judge",
+    "description": "DFT(건조도막두께) 측정값 배열과 사양 기준을 입력받아 90/10 룰 기반 합격/불합격을 판정한다. 규제/리포트용 명시적 pass/fail 출력.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "measurements": {
+          "type": "array",
+          "items": {"type": "number"},
+          "description": "DFT 측정값 배열 (단위: um)"
+        },
+        "spec": {
+          "type": "object",
+          "properties": {
+            "nominal": {
+              "type": "number",
+              "description": "기준 DFT 값 (um)"
+            },
+            "tolerance_rule": {
+              "type": "string",
+              "enum": ["90/10"],
+              "description": "허용 공차 규칙"
+            }
+          },
+          "required": ["nominal", "tolerance_rule"]
+        }
+      },
+      "required": ["measurements", "spec"]
+    }
+  }
+}

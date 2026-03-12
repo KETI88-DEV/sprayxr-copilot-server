@@ -1,0 +1,41 @@
+{
+  "type": "function",
+  "function": {
+    "name": "sequence_validation",
+    "description": "현재 구역 내 도장 stroke 순서를 검증한다. 공정 단계 순서가 아닌, 특정 구역 내 붓질 방향 순서(위->아래 등)를 숙련자 패턴과 비교하여 위반 여부를 판단한다.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "trajectory": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "x": {"type": "number"},
+              "y": {"type": "number"},
+              "z": {"type": "number"},
+              "timestamp": {"type": "number", "description": "초 단위 타임스탬프"}
+            },
+            "required": ["x", "y", "z", "timestamp"]
+          },
+          "description": "현재 작업자의 stroke 궤적 포인트 배열"
+        },
+        "zone_id": {
+          "type": "string",
+          "description": "현재 작업 구역 ID (예: 'B-3')"
+        },
+        "zone_type": {
+          "type": "string",
+          "enum": ["수직 패널", "수평 패널", "곡면", "모서리"],
+          "description": "구역 유형"
+        },
+        "reference_pattern": {
+          "type": "string",
+          "enum": ["top_to_bottom", "bottom_to_top", "left_to_right", "right_to_left"],
+          "description": "숙련자 참조 stroke 패턴"
+        }
+      },
+      "required": ["trajectory", "zone_id", "zone_type", "reference_pattern"]
+    }
+  }
+}

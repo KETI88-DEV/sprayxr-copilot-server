@@ -1,0 +1,62 @@
+{
+  "protocol_version": "1.0.0",
+  "description": "Tool Calling <-> MCP Server 호출 규약. Architecture §3.2.5 양방향 통신 구현.",
+
+  "request_format": {
+    "tool_name": {"type": "string", "description": "호출할 MCP 도구명 (6개 중 하나)"},
+    "parameters": {"type": "object", "description": "도구별 입력 파라미터 (tool_schemas/*.json 참조)"},
+    "call_id": {"type": "string", "description": "고유 호출 ID (UUID4)"},
+    "timeout_ms": {"type": "integer", "default": 30000, "description": "타임아웃 (ms)"},
+    "session_id": {"type": "string", "description": "세션 ID (timeseries 등 stateful 도구용)"}
+  },
+
+  "response_format": {
+    "call_id": {"type": "string", "description": "요청과 동일한 호출 ID"},
+    "status": {"type": "string", "enum": ["success", "error"], "description": "처리 상태"},
+    "result": {"type": "object", "description": "성공 시 도구별 결과 데이터"},
+    "error": {
+      "type": "object",
+      "description": "실패 시 에러 정보",
+      "properties": {
+        "code": {"type": "string"},
+        "message": {"type": "string"},
+        "details": {"type": "object"}
+      }
+    },
+    "timestamp": {"type": "string", "format": "date-time", "description": "응답 시각 (ISO 8601)"}
+  },
+
+  "error_codes": {
+    "TOOL_NOT_FOUND": "요청한 도구명이 등록되지 않음",
+    "INVALID_PARAMS": "입력 파라미터가 JSON Schema 검증 실패",
+    "TIMEOUT": "MCP 서버 응답 시간 초과",
+    "SERVER_ERROR": "MCP 서버 내부 오류",
+    "SESSION_NOT_FOUND": "요청한 session_id가 존재하지 않음 (timeseries 전용)"
+  },
+
+  "retry_policy": {
+    "max_retries": 1,
+    "retry_on": ["TIMEOUT", "SERVER_ERROR"],
+    "backoff_ms": 1000
+  },
+
+  "registered_tools": [
+    "dft_judge",
+    "anomaly_detection",
+    "pose_estimation",
+    "sequence_validation",
+    "timeseries",
+    "location_tracking"
+  ],
+
+  "mcp_server_base_url": "http://localhost:8100",
+
+  "endpoint_mapping": {
+    "dft_judge": "/dft_judge/evaluate",
+    "anomaly_detection": "/anomaly_detection/detect",
+    "pose_estimation": "/pose_estimation/compare",
+    "sequence_validation": "/sequence_validation/validate",
+    "timeseries": "/timeseries/{action}",
+    "location_tracking": "/location_tracking/identify"
+  }
+}

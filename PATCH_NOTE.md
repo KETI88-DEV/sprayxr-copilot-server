@@ -1146,21 +1146,307 @@ Adapter 저장 완료: `/output/adapters/qwen25_shipcoat_lora/`
 
 ---
 
-## Qwen3 마이그레이션 안내 (다음 세션용)
+## [Task 19] Qwen3 파이프라인 마이그레이션 및 A/B 비교
 
-### 변경 필요 파일
+**Status**: ✅ DONE  
+**Date**: 2026-03-11  
+**Duration**: ~4h (코드 변경 + 2회 학습 + 6회 평가)
 
-| 파일 | 변경 포인트 |
+### Summary
+
+Qwen2.5-7B-Instruct에서 Qwen3로 전체 파이프라인 마이그레이션 완료. Qwen3-4B / 8B 각각 QLoRA 학습 및 3-way 평가 후 A/B 비교. **Qwen3-8B 최종 선정** (RAG+QLoRA 1.408, hard 문항 +0.120 우위).
+
+### 코드 변경 내역
+
+| 파일 | 변경 내용 |
 |---|---|
-| `trainer/scripts/train_qlora.py` | model path → Qwen3 |
-| `trainer/scripts/run_qlora_eval.py` | model path + `_patch_torch_set_submodule` 재검토 |
-| `trainer/scripts/qa_pipeline.py` | `load_llm()` base model path |
-| `trainer/configs/qlora_config.yaml` | `base_model_name_or_path` |
-| `trainer/scripts/generate_sft.py` | 변경 불필요 (모델 무관) |
-| `trainer/scripts/eval_metrics.py` | 변경 불필요 |
+| `trainer/scripts/train_qlora.py` | `chat_template_kwargs` 주입 (enable_thinking=False) |
+| `trainer/scripts/qa_pipeline.py` | `_strip_think_blocks()`, enable_thinking param, top_p/top_k passthrough |
+| `trainer/scripts/run_qlora_eval.py` | `_strip_think_blocks()`, enable_thinking, top_p/top_k, adapter default path |
+| `trainer/scripts/run_rag_eval.py` | 모델명 Qwen3-8B 반영 |
+| `trainer/configs/qlora_config.yaml` | model_path → /models/Qwen3-8B, adapter_dir → qwen3_8b_shipcoat_lora |
+| `trainer/configs/rag_config.yaml` | llm.model_path → /models/Qwen3-8B, generation: temp=0.7, top_p=0.8, top_k=20, enable_thinking=false |
 
-### 미완료 평가 (Qwen3에서 재수행)
+### Qwen3 기술 적응 사항
 
-1. RAG+QLoRA 3-way 평가 (qlora-only, rag-qlora, compare)
-2. Iter2 최종 스코어 확정 및 Keep/Drop 판정
-3. tasks.json 상태 업데이트 (Task 9 subtasks → done)
+1. **Thinking Mode 비활성화**: SFT 학습 및 평가 시 `enable_thinking=False` 적용. 빈 `<think>\n\n</think>` 블록이 프롬프트에 주입되어 non-thinking 모드 신호 전달
+2. **chat_template_kwargs**: trl SFTTrainer의 per-example 메커니즘으로 enable_thinking 주입 (trl/data_utils.py line 613)
+3. **think 블록 후처리**: `_strip_think_blocks()` — `re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)` 적용
+4. **샘플링 파라미터**: Non-thinking mode → temp=0.7, top_p=0.8, top_k=20 (Qwen3 공식 가이드)
+
+### SFT 재생성 (Iter4)
+
+Qwen3-4B RAG 응답 기반으로 SFT 데이터 재생성하여 style mismatch 해소:
+
+| 메트릭 | Iter2 (Qwen2.5 기반) | Iter4 (Qwen3 기반) |
+|---|---|---|
+| Train samples | 380 | 380 |
+| Val samples | 20 | 20 |
+| Quality mean | 1.354 | 1.349 |
+| Quality gate | PASS (≥1.2) | PASS (≥1.2) |
+
+### A/B 비교 결과 (최종)
+
+#### RAG+QLoRA Score
+
+| Model | RAG-Only | QLoRA-Only | RAG+QLoRA | Halluc. |
+|---|---:|---:|---:|---:|
+| Qwen2.5-7B (Iter1) | 1.380 | 0.928 | 1.376 | 2.0% |
+| Qwen3-4B (Iter4) | 1.308 | 0.816 | 1.368 | 10.0% |
+| **Qwen3-8B** | 1.328 | 0.872 | **1.408** | **8.0%** |
+
+#### 카테고리별 RAG+QLoRA
+
+| Category | Qwen2.5-7B | Qwen3-4B | Qwen3-8B |
+|---|---:|---:|---:|
+| 결함분석 | 1.360 | 1.400 | **1.500** |
+| 공정절차 | 1.360 | 1.280 | 1.340 |
+| 안전_규정 | 1.240 | 1.260 | 1.260 |
+| 용어 | 1.560 | 1.520 | **1.560** |
+| 코팅두께_사양 | 1.360 | 1.380 | 1.380 |
+
+#### 난이도별 RAG+QLoRA
+
+| Difficulty | Qwen3-4B | Qwen3-8B | Delta |
+|---|---:|---:|---:|
+| easy | 1.390 | 1.440 | +0.050 |
+| medium | 1.400 | 1.390 | -0.010 |
+| hard | 1.260 | **1.380** | **+0.120** |
+
+#### Resource 사용량
+
+| Metric | Qwen2.5-7B | Qwen3-4B | Qwen3-8B |
+|---|---:|---:|---:|
+| Model Size | 14.2 GB | 7.6 GB | 16 GB |
+| Peak VRAM (train) | 14.76 GB | 7.83 GB | 15.88 GB |
+| Train Time | 14.0 min | 14.7 min | 17.2 min |
+| Trainable Params | 40.3M | 40.3M | 43.6M |
+
+### 학습 곡선
+
+| Metric | Qwen3-4B | Qwen3-8B |
+|---|---|---|
+| Loss (start→end) | 2.72 → 0.81 | 2.50 → 0.72 |
+| Eval Loss (ep1/2/3) | 1.00 / 0.86 / 0.86 | 1.00 / 0.81 / 0.79 |
+
+### 모델 선정 근거
+
+**Qwen3-8B 선정**:
+1. RAG+QLoRA 최고 점수 (1.408)
+2. Hard 문항 +0.120 우위 — Agentic CoT에 중요
+3. Hallucination 8% (4B 대비 -2pp)
+4. 학습 loss 더 낮음 (0.72 vs 0.81)
+5. A40 48GB 기준 VRAM 15.88GB — 충분
+6. Tool Calling / CoT 추론에 더 큰 모델이 유리
+
+**Qwen3-4B 보존 (fallback)**:
+- 리소스 제약 환경용 (< 10GB VRAM)
+- Adapter: `/output/adapters/qwen3_4b_shipcoat_lora_iter4/`
+
+### Adapter 디렉터리
+
+| Adapter | Model | Status |
+|---|---|---|
+| `qwen25_shipcoat_lora/` | Qwen2.5-7B | Archive |
+| `qwen3_4b_shipcoat_lora_iter3_oldsfT/` | Qwen3-4B (old SFT) | Archive |
+| `qwen3_4b_shipcoat_lora_iter4/` | Qwen3-4B (new SFT) | Fallback |
+| `qwen3_4b_shipcoat_lora/` | Qwen3-4B (active copy) | Fallback |
+| **`qwen3_8b_shipcoat_lora/`** | **Qwen3-8B** | **ACTIVE** |
+
+### 전체 Iteration History (Visualization-Ready)
+
+```json
+[
+  {"iter": "Iter0", "model": "Qwen2.5-7B", "sft": "v0_boilerplate", "rag_only": 1.380, "qlora_only": 0.980, "rag_qlora": 1.148, "halluc_pct": 10.0, "vram_gb": 14.76, "train_min": 11.9, "decision": "DROP"},
+  {"iter": "Iter1", "model": "Qwen2.5-7B", "sft": "v1_diverse", "rag_only": 1.380, "qlora_only": 0.928, "rag_qlora": 1.376, "halluc_pct": 2.0, "vram_gb": 14.76, "train_min": 14.0, "decision": "KEEP"},
+  {"iter": "Iter3", "model": "Qwen3-4B", "sft": "v1_diverse", "rag_only": 1.288, "qlora_only": 0.864, "rag_qlora": 1.348, "halluc_pct": 18.0, "vram_gb": 7.84, "train_min": 14.9, "decision": "REGEN"},
+  {"iter": "Iter4", "model": "Qwen3-4B", "sft": "v2_qwen3_rag", "rag_only": 1.308, "qlora_only": 0.816, "rag_qlora": 1.368, "halluc_pct": 10.0, "vram_gb": 7.83, "train_min": 14.7, "decision": "KEEP"},
+  {"iter": "Iter5", "model": "Qwen3-8B", "sft": "v2_qwen3_rag", "rag_only": 1.328, "qlora_only": 0.872, "rag_qlora": 1.408, "halluc_pct": 8.0, "vram_gb": 15.88, "train_min": 17.2, "decision": "SELECTED"}
+]
+```
+
+### 후속 Task 영향도
+
+| 영향 받는 Task | 변경 사항 |
+|---|---|
+| Task 15 (Tool Calling) | Qwen3-8B native FC 사용 |
+| Task 16 (MCP Server) | 변경 없음 (모델 무관) |
+| Task 17 (Agentic 평가) | Qwen3-8B 기반 평가 |
+| Task 18 (Agent Pipeline) | Qwen3-8B Thinking Mode 활용 |
+
+---
+
+## [Task 15] Qwen3 Tool Calling 어댑터 설계 및 구현
+
+**Status**: ✅ DONE  
+**Date**: 2026-03-12  
+**Model**: Qwen3-8B (native function calling)
+
+### Summary
+
+Qwen3-8B의 native function calling 포맷에 맞춘 Tool Calling 어댑터를 설계·구현하고, 6개 도장 도구의 JSON Schema 정의, 호출 프로토콜 규약, 통합 테스트를 완료함.
+
+### Subtask 결과
+
+| Subtask | 산출물 | 상태 |
+|---|---|---|
+| 15.1 6개 도구 JSON Schema | `/workspace/trainer/configs/tool_schemas/*.json` (6 files) | ✅ |
+| 15.2 FC Adapter 구현 | `/workspace/trainer/scripts/tool_calling_adapter.py` (392 lines) | ✅ |
+| 15.3 호출 규약 설계 | `/workspace/trainer/configs/tool_calling_protocol.json` | ✅ |
+| 15.4 통합 테스트 | `/workspace/trainer/scripts/test_tool_calling.py` (21 tests, ALL PASS) | ✅ |
+
+### 핵심 설계
+
+1. **Tool Schema Format**: OpenAI-compatible `{"type":"function","function":{...}}` — Qwen3 chat template이 자동으로 `<tools>` XML 주입
+2. **Parse Format**: `<tool_call>{"name":"fn","arguments":{...}}</tool_call>` regex 파싱
+3. **Thinking Mode 호환**: `<think>...</think>` 블록이 `<tool_call>` 앞에 나타나며, `_strip_think_blocks()`로 제거
+4. **Multi-turn Loop**: `run_tool_loop()` — 최대 5 라운드, 도구 호출 → MCP dispatch → 결과 주입 → 재생성 반복
+5. **Error Handling**: `ToolValidationError`, `ToolInfrastructureError`, `ToolCallingError` 3계층 예외
+6. **Retry Policy**: TIMEOUT/SERVER_ERROR에 대해 max 1회 재시도, backoff 1000ms
+
+### 도구 목록
+
+| 도구 | Schema 파일 | MCP 엔드포인트 |
+|---|---|---|
+| dft_judge | `dft_judge.json` | `/dft_judge/evaluate` |
+| anomaly_detection | `anomaly_detection.json` | `/anomaly_detection/detect` |
+| pose_estimation | `pose_estimation.json` | `/pose_estimation/compare` |
+| sequence_validation | `sequence_validation.json` | `/sequence_validation/validate` |
+| timeseries | `timeseries.json` | `/timeseries/{action}` |
+| location_tracking | `location_tracking.json` | `/location_tracking/identify` |
+
+### 테스트 결과
+
+```
+21 tests, 0 failures, 0 errors
+- parse: single, multiple, with think block, malformed JSON
+- dispatch: 6 tools × (normal + edge) + invalid name + timeout
+- loop: tool_call → final answer, max_rounds exceeded
+```
+
+---
+
+## [Task 16] MCP 서버 Stub 구현
+
+**Status**: ✅ DONE  
+**Date**: 2026-03-12  
+**Framework**: FastAPI + Pydantic + uvicorn (port 8100)
+
+### Summary
+
+6개 도장 MCP 서버를 FastAPI 기반으로 구현하고 (dft_judge는 실제 90/10 로직, 나머지 5개는 fixture/stub), 통합 라우터와 테스트를 완료함.
+
+### Subtask 결과
+
+| Subtask | 산출물 | 상태 |
+|---|---|---|
+| 16.1 공통 프레임워크 | `mcp_servers/common.py` (MCPResponse, MCPException, error handler) | ✅ |
+| 16.2 dft_judge (실제 로직) | `mcp_servers/dft_judge.py` — 90/10 rule, violations, coverage | ✅ |
+| 16.3 anomaly_detection (stub) | `mcp_servers/anomaly_detection.py` — 두께 ±20% 기반 분류 | ✅ |
+| 16.4 sequence_validation (stub) | `mcp_servers/sequence_validation.py` — 방향 감지 (수직 패널) | ✅ |
+| 16.5 pose_estimation (stub) | `mcp_servers/pose_estimation.py` — 관절 거리 기반 유사도 | ✅ |
+| 16.6 timeseries (stub) | `mcp_servers/timeseries.py` — in-memory state, trend 계산 | ✅ |
+| 16.7 location_tracking (stub) | `mcp_servers/location_tracking.py` — fixture 응답 | ✅ |
+| 16.8 통합 테스트 + 라우터 | `mcp_servers/main.py`, `test_integration.py` (15 tests, ALL PASS) | ✅ |
+
+### 서버 아키텍처
+
+```
+mcp_servers/
+├── __init__.py
+├── common.py          ← MCPResponse, MCPException, error_handler
+├── main.py            ← FastAPI app, 6 routers, /health endpoint
+├── dft_judge.py       ← REAL: 90/10 rule (threshold, mean, coverage)
+├── anomaly_detection.py ← STUB: ±20% threshold 기반 분류
+├── sequence_validation.py ← STUB: 수직 패널 방향 감지
+├── pose_estimation.py  ← STUB: 3D 관절 유클리드 거리
+├── timeseries.py       ← STUB: in-memory dict, trend 계산
+├── location_tracking.py ← STUB: fixture 응답 (zone_id="B-3")
+└── test_integration.py ← 15 integration tests
+```
+
+### 테스트 결과
+
+```
+15 tests, 0 failures, 0 errors
+- health endpoint: status=ok, servers=6
+- dft_judge: pass/fail/missing field (422)
+- anomaly_detection: under_thickness/no_anomaly
+- sequence_validation: match/mismatch
+- pose_estimation: compare/missing field (422)
+- timeseries: update/lifecycle/missing session (404)
+- location_tracking: fixture/missing coordinates (422)
+```
+
+---
+
+## [Task 17] Agentic 평가셋 설계 및 CoT 평가 루브릭
+
+**Status**: ✅ DONE  
+**Date**: 2026-03-12
+
+### Summary
+
+Agentic Co-Pilot 성능 평가를 위한 30문항 평가셋, 5차원 CoT 루브릭, 자동 평가 스크립트를 설계·구현함.
+
+### Subtask 결과
+
+| Subtask | 산출물 | 상태 |
+|---|---|---|
+| 17.1 스키마 설계 | JSONL 스키마 (q_id, category, difficulty, tool_calls_required 등) | ✅ |
+| 17.2 Tool Calling + 이상탐지 문항 | 12 questions in `eval_set_agentic.jsonl` | ✅ |
+| 17.3 순서/의사결정/CoT/XR 문항 | 18 questions in `eval_set_agentic.jsonl` | ✅ |
+| 17.4 CoT 루브릭 | `/workspace/trainer/configs/eval_rubric_agentic.md` | ✅ |
+| 17.5 평가 스크립트 | `/workspace/trainer/scripts/run_agentic_eval.py` (617 lines) | ✅ |
+
+### 평가셋 분포
+
+| Category | 문항 수 | 설명 |
+|---|---|---|
+| tool_calling | 6 | 단일/다중 도구 호출 정확도 |
+| anomaly_interpretation | 6 | 이상 탐지 결과 해석 및 원인 분석 |
+| sequence_decision | 6 | 순서 검증 + 의사결정 |
+| cot_reasoning | 6 | 다단계 Chain of Thought 추론 |
+| xr_content | 6 | XR 콘텐츠 생성 텍스트 |
+
+### CoT 루브릭 (5차원 × 0-2점 = 최대 10점)
+
+| 차원 | 설명 |
+|---|---|
+| tool_selection_accuracy | 올바른 도구를 올바른 순서로 선택 |
+| parameter_correctness | 파라미터 값, 타입, 필수 필드 정확도 |
+| reasoning_depth | 다단계 추론, 근거-논리 연결 |
+| context_integration | MCP 결과 + 문서 근거 통합 |
+| response_structure | 요구 형식 준수 (XR JSON, citation 등) |
+
+### 등급 체계
+
+| 점수 | 등급 |
+|---|---|
+| 9-10 | 우수 |
+| 7-8 | 양호 |
+| 5-6 | 보통 |
+| 3-4 | 미흡 |
+| 0-2 | 부적합 |
+
+### 평가 스크립트 기능
+
+- `run_agentic_eval.py`: argparse CLI, offline 모드 (mock 응답) + online 모드 (모델 추론)
+- tool_selection → LCS 기반 순서 인식 부분 점수
+- parameter_correctness → JSON Schema 타입 매칭 + 값 비교
+- reasoning_depth → reasoning_steps 기반 기대치 비교
+- 결과 출력: CSV + JSON + 콘솔 리포트 (카테고리별/난이도별 집계)
+
+---
+
+### Phase 2 완료 상태 요약
+
+| Task | 제목 | 상태 | 테스트 |
+|---|---|---|---|
+| Task 15 | Tool Calling 어댑터 | ✅ DONE | 21/21 pass |
+| Task 16 | MCP Server Stub | ✅ DONE | 15/15 pass |
+| Task 17 | Agentic 평가셋 + 루브릭 | ✅ DONE | 30문항 validated |
+
+**다음 단계**: Task 18 (Agent Orchestration + CoT Pipeline) — Phase 3
+
+---

@@ -1,0 +1,66 @@
+{
+  "type": "function",
+  "function": {
+    "name": "pose_estimation",
+    "description": "숙련자 BVH reference와 현재 작업자 BVH를 비교하여 관절별 자세 편차와 교정 방향 벡터를 출력한다.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "current_pose": {
+          "type": "object",
+          "description": "현재 작업자 6DOF 자세 데이터 (BVH 형식)",
+          "properties": {
+            "joints": {
+              "type": "object",
+              "description": "관절명: {x, y, z, roll, pitch, yaw} 매핑",
+              "additionalProperties": {
+                "type": "object",
+                "properties": {
+                  "x": {"type": "number"},
+                  "y": {"type": "number"},
+                  "z": {"type": "number"},
+                  "roll": {"type": "number"},
+                  "pitch": {"type": "number"},
+                  "yaw": {"type": "number"}
+                },
+                "required": ["x", "y", "z"]
+              }
+            }
+          },
+          "required": ["joints"]
+        },
+        "reference_pose": {
+          "type": "object",
+          "description": "숙련자 참조 BVH 자세 데이터 (current_pose와 동일 구조)",
+          "properties": {
+            "joints": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "object",
+                "properties": {
+                  "x": {"type": "number"},
+                  "y": {"type": "number"},
+                  "z": {"type": "number"},
+                  "roll": {"type": "number"},
+                  "pitch": {"type": "number"},
+                  "yaw": {"type": "number"}
+                },
+                "required": ["x", "y", "z"]
+              }
+            }
+          },
+          "required": ["joints"]
+        },
+        "imu_data": {
+          "type": "object",
+          "description": "선택적 IMU 센서 데이터",
+          "properties": {
+            "accel": {"type": "array", "items": {"type": "number"}, "description": "가속도 [x,y,z] m/s^2"},
+            "gyro": {"type": "array", "items": {"type": "number"}, "description": "자이로 [x,y,z] deg/s"}
+          }
+        }
+      },
+      "required": ["current_pose", "reference_pose"]
+    }
+  }
+}

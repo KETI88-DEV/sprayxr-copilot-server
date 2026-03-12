@@ -77,3 +77,4 @@ CLAUDE.md
 AgenticCopilot_Architecture.md
 dataset.md
 .taskmaster/config.json
+.taskmaster/tasks/task_*.md
