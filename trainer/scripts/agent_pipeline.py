@@ -19,6 +19,9 @@ from typing import Any
 # (e.g., by embedding models). Must be set before any vLLM import.
 os.environ.setdefault("VLLM_WORKER_MULTIPROC_METHOD", "spawn")
 
+import time
+from dataclasses import dataclass, field
+
 import torch
 import yaml
 from peft import PeftModel
@@ -26,59 +29,122 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
 try:
     import vllm as _vllm_check  # noqa: F401
-    _VLLM_AVAILABLE = True
+    _vllm_available = True
     del _vllm_check
 except ImportError:
-    _VLLM_AVAILABLE = False
+    _vllm_available = False
 
 logger = logging.getLogger(__name__)
 
 THINK_BLOCK_REGEX = re.compile(r"<think>(.*?)</think>", flags=re.DOTALL)
 TOOL_CALL_BLOCK_REGEX = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", flags=re.DOTALL)
-XR_REQUIRED_KEYS = {"xr_type", "steps"}
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.?!。\n])\s+")
 _WORD_RE = re.compile(r"\w+")
+_DOC_ID_RE = re.compile(r"DOC-[a-zA-Z0-9_-]+-C\d+")
+
+# Skill level → detail level mapping for text guide personalization
+_SKILL_DETAIL_MAP: dict[str, str] = {
+    "beginner": "detailed",
+    "intermediate": "standard",
+    "advanced": "minimal",
+}
+
+
+@dataclass
+class TraineeProfile:
+    """Trainee metadata from simulator request."""
+    trainee_id: str = ""
+    language: str = "ko"
+    skill_level: str = "beginner"
+
+    @property
+    def detail_level(self) -> str:
+        return _SKILL_DETAIL_MAP.get(self.skill_level, "standard")
 
 
 # ---------------------------------------------------------------------------
-# Semantic Router — keyword-based Fast/Deep classification
+# Semantic Router — keyword-based 3-way classification
+# Routes: training_realtime | training_review | fast
+#   training_realtime: 순서/이상탐지 (< 60s, max_rounds=3)
+#   training_review: 자세/분포분석 (no time limit, max_rounds=5)
+#   fast: simple QA, no tools (single LLM round)
 # ---------------------------------------------------------------------------
 
-# Deep path keywords: questions that need tool calling, sensor analysis, real-time data
+# Training-realtime keywords: sequence, anomaly, DFT judgment — must respond < 60s
+_TRAINING_REALTIME_KEYWORDS: set[str] = {
+    "순서", "다음", "칠하", "깎아", "순번",
+    "이상", "탐지", "anomaly", "과도막", "저도막",
+    "합격", "불합격", "판정", "합부",
+    "dft", "도막두께", "측정", "수치",
+    "실시간", "현재", "지금",
+}
+
+# Training-review keywords: posture, distribution, coaching — no strict time limit
+_TRAINING_REVIEW_KEYWORDS: set[str] = {
+    "자세", "포즈", "숙련자", "교정", "pose",
+    "분포", "분석", "원인", "추이", "시계열", "timeseries",
+    "코칭", "피드백", "세션", "리포트",
+    "위치", "좌표", "궤적", "블록", "구역", "location",
+}
+
+# General deep keywords that don't fall into training_realtime or training_review
 _DEEP_KEYWORDS: set[str] = {
-    # Tool-related (measurement, judgement)
-    "측정", "수치", "dft", "도막두께", "합격", "불합격", "판정",
-    "이상", "탐지", "anomaly", "센서", "데이터",
-    # Real-time / environment
-    "현재", "상태", "확인해", "어때", "코칭", "실시간",
-    # Tool-specific actions
-    "순서", "궤적", "자세", "포즈", "시계열", "추이",
-    "위치", "좌표", "블록", "구역",
-    # XR content
+    "센서", "데이터", "상태", "확인해", "어때",
     "보여줘", "가이드", "xr", "시연", "시각화",
-    # Comparative / analytical
-    "비교", "분석", "점검", "검사", "진단",
+    "비교", "점검", "검사", "진단",
+}
+
+# Route → max_rounds mapping
+ROUTE_MAX_ROUNDS: dict[str, int] = {
+    "training_realtime": 3,
+    "training_review": 5,
+    "fast": 1,
 }
 
 
 class SemanticRouter:
-    """Classifies questions as 'fast' (docQA only) or 'deep' (agentic tool loop).
+    """Classifies questions into training_realtime, training_review, or fast.
 
-    Fast path skips the tool loop entirely for ~3x latency reduction on simple QA.
+    - training_realtime: 순서/이상탐지 tools, max_rounds=3, target < 60s
+    - training_review: 자세/분포분석 tools, max_rounds=5, no time limit
+    - fast: docQA only, no tool loop
     """
 
-    def __init__(self, deep_keywords: set[str] | None = None) -> None:
+    def __init__(
+        self,
+        realtime_keywords: set[str] | None = None,
+        review_keywords: set[str] | None = None,
+        deep_keywords: set[str] | None = None,
+    ) -> None:
+        self.realtime_keywords = realtime_keywords or _TRAINING_REALTIME_KEYWORDS
+        self.review_keywords = review_keywords or _TRAINING_REVIEW_KEYWORDS
         self.deep_keywords = deep_keywords or _DEEP_KEYWORDS
 
     def classify(self, instruction: str, environment: dict[str, Any] | None = None) -> str:
-        """Return 'fast' or 'deep' based on instruction content and environment data."""
-        if environment and len(environment) > 0:
-            return "deep"
-
+        """Return route: 'training_realtime', 'training_review', or 'fast'."""
         text_lower = instruction.lower()
-        for keyword in self.deep_keywords:
-            if keyword.lower() in text_lower:
-                return "deep"
+
+        # Environment data always implies tool-needing deep path
+        if environment and len(environment) > 0:
+            # Check if environment relates to realtime or review
+            realtime_score = sum(1 for kw in self.realtime_keywords if kw.lower() in text_lower)
+            review_score = sum(1 for kw in self.review_keywords if kw.lower() in text_lower)
+            if realtime_score >= review_score:
+                return "training_realtime"
+            return "training_review"
+
+        # Score each route by keyword matches
+        realtime_score = sum(1 for kw in self.realtime_keywords if kw.lower() in text_lower)
+        review_score = sum(1 for kw in self.review_keywords if kw.lower() in text_lower)
+        deep_score = sum(1 for kw in self.deep_keywords if kw.lower() in text_lower)
+
+        # Highest scoring route wins; ties go to realtime (faster response needed)
+        if realtime_score > 0 and realtime_score >= review_score and realtime_score >= deep_score:
+            return "training_realtime"
+        if review_score > 0 and review_score >= deep_score:
+            return "training_review"
+        if deep_score > 0:
+            return "training_review"  # general deep → review (lenient timing)
         return "fast"
 
 
@@ -297,7 +363,7 @@ class AgentPipeline:
         adapter_path: str | Path | None,
         llm_cfg: dict[str, Any],
     ) -> tuple[Any, Any]:
-        if not _VLLM_AVAILABLE:
+        if not _vllm_available:
             raise ImportError("vLLM is not installed. pip install vllm")
 
         from vllm import LLM as _LLM, SamplingParams as _SP
@@ -428,19 +494,92 @@ class AgentPipeline:
         return blocks
 
     @staticmethod
-    def _detect_xr_content(response_text: str) -> tuple[str, dict[str, Any] | None]:
-        for block in AgentPipeline._iter_json_blocks(response_text):
-            try:
-                payload = json.loads(block)
-            except json.JSONDecodeError:
+    def _assemble_tool_sections(
+        tool_calls: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Map MCP tool results into dedicated response sections."""
+        sections: dict[str, Any] = {
+            "pose_comparison": None,
+            "next_path": None,
+            "dft_result": None,
+            "anomaly": None,
+        }
+        for call in tool_calls:
+            name = call.get("name", "")
+            result = call.get("result", {})
+            if not isinstance(result, dict) or result.get("status") == "error":
                 continue
 
-            if isinstance(payload, dict) and XR_REQUIRED_KEYS.intersection(payload.keys()):
-                text_only = response_text.replace(block, "", 1).strip()
-                if not text_only:
-                    text_only = "XR 가이드를 생성했습니다."
-                return text_only, payload
-        return response_text.strip(), None
+            if name == "pose_estimation":
+                sections["pose_comparison"] = {
+                    "similarity_score": result.get("similarity_score"),
+                    "corrections": result.get("corrections", result.get("joint_deviations", [])),
+                }
+            elif name == "sequence_validation":
+                sections["next_path"] = {
+                    "zone_id": result.get("zone_id", ""),
+                    "direction": result.get("recommended_direction", result.get("reference_pattern", "")),
+                    "reference_pattern": result.get("reference_pattern", ""),
+                    "waypoints": result.get("waypoints", []),
+                    "violation": result.get("violation", result.get("sequence_violation", False)),
+                }
+            elif name == "dft_judge":
+                sections["dft_result"] = {
+                    "verdict": result.get("verdict", ""),
+                    "nominal_um": result.get("nominal", result.get("spec", {}).get("nominal")),
+                    "measurements_um": result.get("measurements", []),
+                    "mean_um": result.get("mean"),
+                    "rule": result.get("rule", "90/10"),
+                    "out_of_spec_count": result.get("out_of_spec_count", 0),
+                }
+            elif name == "anomaly_detection":
+                sections["anomaly"] = {
+                    "detected": result.get("detected", result.get("anomaly_detected", False)),
+                    "type": result.get("anomaly_type", ""),
+                    "zone": result.get("zone", result.get("affected_zone", "")),
+                    "cause": result.get("cause", result.get("root_cause", "")),
+                    "severity": result.get("severity", "warning"),
+                }
+        return sections
+
+    @staticmethod
+    def _extract_citations(text: str, rag_chunks: list[dict[str, Any]]) -> list[str]:
+        """Extract DOC-xxx-Cxxx citations from text and RAG chunk IDs."""
+        citations = list(dict.fromkeys(_DOC_ID_RE.findall(text)))
+        for chunk in rag_chunks:
+            cid = chunk.get("chunk_id", "")
+            if cid and cid not in citations:
+                citations.append(cid)
+        return citations
+
+    @staticmethod
+    def _build_text_guide(
+        response_text: str,
+        trainee: "TraineeProfile",
+    ) -> dict[str, Any]:
+        """Build text_guide section with personalization."""
+        lines = response_text.strip().split("\n")
+        summary = lines[0][:200] if lines else response_text[:200]
+        return {
+            "language": trainee.language,
+            "detail_level": trainee.detail_level,
+            "summary": summary,
+            "body": response_text,
+        }
+
+    @staticmethod
+    def _extract_steps(response_text: str) -> list[dict[str, Any]] | None:
+        """Try to extract structured steps from response JSON blocks."""
+        for block_str in AgentPipeline._iter_json_blocks(response_text):
+            try:
+                payload = json.loads(block_str)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(payload, dict) and "steps" in payload:
+                steps = payload["steps"]
+                if isinstance(steps, list):
+                    return steps
+        return None
 
     def _build_messages(
         self,
@@ -550,14 +689,20 @@ class AgentPipeline:
         session_id: str | None = None,
         enable_thinking: bool = True,
         force_route: str | None = None,
+        mode: str | None = None,
+        trainee: dict[str, Any] | None = None,
+        request_id: str | None = None,
     ) -> dict[str, Any]:
+        t0 = time.monotonic()
         if not instruction.strip():
             raise ValueError("instruction must not be empty")
 
         search_mod = importlib.import_module("search_index")
+        active_request_id = request_id or str(uuid.uuid4())
         active_session_id = session_id or str(uuid.uuid4())
+        trainee_profile = TraineeProfile(**(trainee or {}))
 
-        route = force_route or self.router.classify(instruction, environment)
+        route = force_route or mode or self.router.classify(instruction, environment)
         logger.info("Router: %s → %s", instruction[:60], route)
 
         rag_results, rag_timing = search_mod.search_and_rerank(
@@ -602,7 +747,6 @@ class AgentPipeline:
             final_no_think, thinking = self._strip_think_blocks(raw_response)
             response_text = final_no_think.strip()
             tool_calls: list[dict[str, Any]] = []
-            xr_content = None
             rounds = 0
         else:
             messages = self._build_messages(
@@ -618,30 +762,60 @@ class AgentPipeline:
                     model=self.model,
                     tokenizer=self.tokenizer,
                     enable_thinking=enable_thinking,
-                    max_rounds=5,
+                    max_rounds=ROUTE_MAX_ROUNDS.get(route, 5),
                 )
             )
             raw_final = str(loop_output.get("final_response", ""))
             final_no_think, thinking = self._strip_think_blocks(raw_final)
-            response_text, xr_content = self._detect_xr_content(final_no_think)
+            response_text = final_no_think.strip()
             tool_calls = self._extract_tool_calls(
                 loop_output.get("messages", []),
                 loop_output.get("tool_results", []),
             )
             rounds = int(loop_output.get("rounds", 0))
 
+        latency_ms = int((time.monotonic() - t0) * 1000)
+        tool_sections = self._assemble_tool_sections(tool_calls)
+        citations = self._extract_citations(response_text, rag_chunks)
+        text_guide = self._build_text_guide(response_text, trainee_profile)
+        tools_used = list(dict.fromkeys(c.get("name", "") for c in tool_calls if c.get("name")))
+
         result = {
+            "request_id": active_request_id,
             "session_id": active_session_id,
-            "instruction": instruction,
+            "mode": route,
+            "text_guide": text_guide,
+            "pose_comparison": tool_sections["pose_comparison"],
+            "next_path": tool_sections["next_path"],
+            "dft_result": tool_sections["dft_result"],
+            "anomaly": tool_sections["anomaly"],
+            "steps": self._extract_steps(response_text),
+            "citations": citations,
+            "metadata": {
+                "latency_ms": latency_ms,
+                "tools_used": tools_used,
+                "rounds": rounds,
+                "route": route,
+                "thinking": thinking,
+            },
             "response": response_text,
-            "xr_content": xr_content,
             "tool_calls": tool_calls,
             "rag_chunks": rag_chunks,
-            "thinking": thinking,
-            "rounds": rounds,
+            "instruction": instruction,
             "environment": environment or {},
             "timing": rag_timing,
             "route": route,
+            "xr_content": None,
+            "_legacy_keys": [
+                "response",
+                "tool_calls",
+                "rag_chunks",
+                "instruction",
+                "environment",
+                "timing",
+                "route",
+                "xr_content",
+            ],
         }
 
         self.session_context.update(
@@ -716,6 +890,19 @@ def parse_args() -> argparse.Namespace:
         help="Disable Qwen3 thinking mode.",
     )
     parser.add_argument(
+        "--mode",
+        type=str,
+        default=None,
+        choices=["training_realtime", "training_review"],
+        help="Explicit mode override.",
+    )
+    parser.add_argument(
+        "--trainee",
+        type=str,
+        default="{}",
+        help="JSON string for trainee profile.",
+    )
+    parser.add_argument(
         "--log-level",
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
@@ -752,6 +939,17 @@ def main() -> int:
         logger.error("Invalid --environment JSON")
         return 1
 
+    trainee_data: dict[str, Any] | None
+    try:
+        parsed_trainee = json.loads(args.trainee)
+        if isinstance(parsed_trainee, dict):
+            trainee_data = parsed_trainee
+        else:
+            trainee_data = None
+    except json.JSONDecodeError:
+        logger.error("Invalid --trainee JSON")
+        return 1
+
     try:
         pipeline = AgentPipeline(
             config_path=args.config,
@@ -763,6 +961,8 @@ def main() -> int:
             environment=environment,
             session_id=args.session_id,
             enable_thinking=not args.disable_thinking,
+            mode=args.mode,
+            trainee=trainee_data,
         )
     except Exception:
         logger.exception("Agent pipeline execution failed")

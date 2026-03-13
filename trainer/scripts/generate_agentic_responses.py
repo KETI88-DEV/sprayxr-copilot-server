@@ -170,7 +170,8 @@ def main() -> int:
                     enable_thinking=enable_thinking,
                     force_route="deep",
                 )
-                final_text = str(result.get("response", ""))
+                text_guide = result.get("text_guide", {})
+                final_text = str(text_guide.get("body", "")) if text_guide else str(result.get("response", ""))
                 tool_calls = result.get("tool_calls", [])
                 normalized_tools = [
                     {
@@ -180,7 +181,8 @@ def main() -> int:
                     for call in tool_calls
                     if isinstance(call, dict) and call.get("name")
                 ]
-                thinking = str(result.get("thinking", ""))
+                metadata = result.get("metadata", {})
+                thinking = str(metadata.get("thinking", ""))
             except Exception:
                 logger.exception("Generation failed for %s", q_id)
                 final_text = ""

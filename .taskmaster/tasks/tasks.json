@@ -992,7 +992,7 @@
         "id": 12,
         "title": "최종 평가 리포트 및 의사결정 문서 작성",
         "description": "RAG-Only, QLoRA-Only, RAG+QLoRA 3가지 구성 비교표, 성공 기준 달성 여부, keep/drop 의사결정, 다음 단계 제안 포함한 최종 리포트 작성, /output/eval_results/에 저장",
-        "details": "1. 리포트 구성:\n   - 실행 요약(Executive Summary): 목표, 구성, 주요 결과, 의사결정\n   - 기준선 비교표: 모델별 평균 점수, hallucination율, 응답 시간, 메모리 사용, 추론 비용\n   - 상세 결과: 카테고리별 성능, 오류 분석, hallucination 유형 분포\n   - 성공 기준 검증표: 각 기준별 달성 여부\n   - 기술 의사결정: adapter keep/drop 근거, 문제점 및 해결방안\n   - 다음 단계: VLM stub 정의, 세션 export 자동화, 다국어 확장\n2. 포맷: /output/eval_results/final_report.md (마크다운), /output/eval_results/final_report.xlsx(표)\n3. 수치 데이터: CSV로 완전히 제공 가능해야 함\n4. 시각화: 카테고리별 성능 그래프, 모델 비교 차트\n5. 근거 자료: 평가 결과 상세 파일 첨부(/data/eval/eval_set.jsonl, 결과 CSV)\n6. 결론: 1차 PoC의 주요 학습, 기술적 검증, 다음 단계 우선순위",
+        "details": "1. 리포트 구성:\n   - 실행 요약(Executive Summary): 목표, 구성, 주요 결과, 의사결정\n   - 기준선 비교표: 모델별 평균 점수, hallucination율, 응답 시간, 메모리 사용, 추론 비용\n   - 상세 결과: 카테고리별 성능, 오류 분석, hallucination 유형 분포\n   - 성공 기준 검증표: 각 기준별 달성 여부\n   - 기술 의사결정: adapter keep/drop 근거, 문제점 및 해결방안\n   - 다음 단계: VLM stub 정의, 세션 export 자동화, 다국어 확장\n2. 포맷: /output/eval_results/final_report.md (마크다운), /output/eval_results/final_report.xlsx(표)\n3. 수치 데이터: CSV로 완전히 제공 가능해야 함\n4. 시각화: 카테고리별 성능 그래프, 모델 비교 차트 (matplotlib/plotly)\n5. 근거 자료: 평가 결과 상세 파일 첨부(/data/eval/eval_set.jsonl, 결과 CSV)\n6. 결론: 1차 PoC의 주요 학습, 기술적 검증, 다음 단계 우선순위\n7. [추가] 아키텍처 구조도 (Mermaid), QA 샘플 (성공/실패 예시), XR 콘텐츠 스펙, 레이턴시 분석, 3-way 라우터 문서\n8. [추가] 목표치(4.0) 도달 후 전면 재작성 예정",
         "testStrategy": "/output/eval_results/final_report.md, /output/eval_results/final_report.xlsx 파일 생성 확인, 모든 수치 근거 파일과 연결 확인, 표 데이터 정확성 검증(sum, avg 재계산), 의사결정 근거 명확성 검토",
         "priority": "high",
         "dependencies": [
@@ -1001,7 +1001,7 @@
           18,
           10
         ],
-        "status": "done",
+        "status": "in-progress",
         "subtasks": [
           {
             "id": 1,

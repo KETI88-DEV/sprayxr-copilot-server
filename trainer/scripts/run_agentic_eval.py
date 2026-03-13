@@ -126,6 +126,11 @@ class AgenticEvaluator:
         answer = response.get("answer")
         if isinstance(answer, str):
             return answer
+        text_guide = response.get("text_guide")
+        if isinstance(text_guide, dict):
+            body = text_guide.get("body")
+            if isinstance(body, str):
+                return body
         content = response.get("response")
         if isinstance(content, str):
             return content
@@ -283,6 +288,10 @@ class AgenticEvaluator:
     def score_context_integration(self, response: Dict[str, Any], context_data: Dict[str, Any]) -> int:
         text = self._extract_answer_text(response)
         citations = response.get("citations", [])
+        if not citations:
+            metadata = response.get("metadata", {})
+            if isinstance(metadata, dict):
+                citations = metadata.get("citations", [])
 
         if not text:
             return 0

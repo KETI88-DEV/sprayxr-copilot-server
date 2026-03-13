@@ -151,15 +151,18 @@ def build_coaching_response(
     risk_flags: list[dict[str, Any]],
     pipeline_result: dict[str, Any],
 ) -> CoachingResponse:
-    response_text = str(pipeline_result.get("response", ""))
+    text_guide = pipeline_result.get("text_guide", {})
+    response_text = str(text_guide.get("body", "")) if text_guide else str(pipeline_result.get("response", ""))
     tool_calls = pipeline_result.get("tool_calls", [])
-    rag_chunks = pipeline_result.get("rag_chunks", [])
 
-    citations = extract_citations(response_text)
-    for chunk in rag_chunks:
-        cid = chunk.get("chunk_id", "")
-        if cid and cid not in citations:
-            citations.append(cid)
+    citations = pipeline_result.get("citations", [])
+    if not citations:
+        citations = extract_citations(response_text)
+        rag_chunks = pipeline_result.get("rag_chunks", [])
+        for chunk in rag_chunks:
+            cid = chunk.get("chunk_id", "")
+            if cid and cid not in citations:
+                citations.append(cid)
 
     action_items = parse_action_items(response_text)
     tool_results = [

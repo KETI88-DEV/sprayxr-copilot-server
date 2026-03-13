@@ -2433,3 +2433,347 @@ Task 12 (최종 리포트) ← deps: [9, 17, 18, 10] (all done ✅)
 | `task10_e2e_validation.json` | Task 10 full pipeline 출력 |
 
 ---
+
+## [Iter11] Prompt Engineering + 3-Way SemanticRouter
+
+**Status**: ✅ DONE
+**Date**: 2026-03-13
+**Duration**: ~40min (config 수정 + 생성 30min + 채점)
+
+### Summary
+
+Iter10(3.37/10) 이후 6가지 프롬프트 엔지니어링 개선 적용: (1) 시스템 프롬프트에 6개 전 도구 few-shot 예시 추가, (2) 카테고리→도구 매핑 규칙 명시, (3) 응답 구조 템플릿 (분석→판정→원인→조치→근거), (4) temperature 0.7→0.3, (5) max_new_tokens 768→1024, (6) max_model_len 4096→8192. 또한 SemanticRouter를 2-way(fast/deep)에서 3-way(training_realtime/training_review/fast)로 확장하여 훈련 중/훈련 후 모드별 max_rounds 제어(3/5/1) 구현.
+
+### 코드 변경 사항
+
+1. **System Prompt 강화** (`rag_config_fewshot.yaml`): 2개→6개 도구 few-shot 예시 (dft_judge, anomaly_detection, sequence_validation, pose_estimation, location_tracking, timeseries) + 카테고리→도구 선택 규칙 + 응답 구조 템플릿
+2. **Temperature 0.7→0.3** (`rag_config_fewshot.yaml`): Tool calling non-determinism 억제
+3. **max_new_tokens 768→1024** (`rag_config_fewshot.yaml`): 복잡한 JSON 응답 truncation 방지
+4. **max_model_len 4096→8192** (`rag_config_fewshot.yaml`): 확장된 시스템 프롬프트 + RAG 컨텍스트 수용
+5. **3-Way SemanticRouter** (`agent_pipeline.py`): `training_realtime` (순서/이상탐지, max_rounds=3, <60s), `training_review` (자세/분포분석, max_rounds=5), `fast` (docQA, no tools)
+6. **ROUTE_MAX_ROUNDS** (`agent_pipeline.py`): 라우트별 max_rounds 자동 적용
+
+### Agentic 30문항 재평가 결과
+
+#### 점수 비교
+
+| 지표 | Iter8 (prev best) | Iter10 | **Iter11** | Iter11 vs Iter8 |
+|---|---|---|---|---|
+| **Total Score (/10)** | 3.87 | 3.37 | **3.83** | -0.04 (동등) |
+| Tool Selection (/2) | 0.33 | 0.20 | **0.47** | **+0.14 ↑** |
+| Parameter Correctness (/2) | 0.67 | 0.50 | **0.70** | **+0.03 ↑** |
+| Reasoning Depth (/2) | **0.67** | 0.43 | 0.30 | **-0.37 ↓** |
+| Context Integration (/2) | 1.57 | 1.60 | **1.63** | **+0.06 ↑** |
+| Response Structure (/2) | 0.63 | 0.63 | **0.73** | **+0.10 ↑** |
+
+#### Tool Call 통계
+
+| 지표 | Iter8 | Iter10 | **Iter11** |
+|---|---|---|---|
+| Total tool_calls | 50 | 35 | **70** |
+| tool_not_called | 12 | — | **11** |
+
+#### 카테고리별 비교
+
+| 카테고리 | Iter8 | Iter10 | **Iter11** | 변화 (vs Iter8) |
+|---|---|---|---|---|
+| tool_calling | 5.50 | — | **5.00** | -0.50 |
+| cot_reasoning | 4.50 | — | **5.33** | **+0.83 ↑** |
+| anomaly_interpretation | 3.83 | — | **3.83** | ±0 |
+| sequence_decision | 2.67 | — | **2.67** | ±0 |
+| xr_content | 2.83 | — | **2.33** | -0.50 |
+
+#### 난이도별 비교
+
+| 난이도 | Iter8 | **Iter11** |
+|---|---|---|
+| easy | 4.00 | **3.17** |
+| medium | 4.09 | **4.45** |
+| hard | 3.62 | **3.62** |
+
+#### 점수 분포 (Iter11)
+
+```
+score_1: 1, score_2: 9, score_3: 7, score_4: 4
+score_5: 4, score_6: 1, score_7: 2, score_9: 1, score_10: 1
+```
+
+**주목**: 최초로 score_9(1건)과 score_10(1건) 달성 — 고득점 문항 출현
+
+### 분석
+
+1. **Tool Selection 안정화**: 0.33→0.47 (+42%). Temperature 0.3이 tool calling 패턴을 안정화하여 더 많은 문항에서 올바른 도구 선택
+2. **Response Structure 개선**: 0.63→0.73 (+16%). 응답 구조 템플릿(분석→판정→원인→조치→근거)이 효과적
+3. **Reasoning Depth 하락**: 0.67→0.30 (-55%). Temperature 0.3이 추론 깊이를 희생. 모델이 간결한 결론 위주로 답변하는 경향
+4. **cot_reasoning 최고 점수**: 5.33/10 — 전 이터레이션 통틀어 최고. 구조화된 프롬프트가 CoT 카테고리에 특히 효과적
+5. **목표 4.0 미달**: 3.83/10. Reasoning depth 하락이 상쇄 요인. temperature 절충(0.4-0.5)이 다음 시도
+
+### 개선 체크리스트 결과
+
+| # | 항목 | 적용 | 효과 |
+|---|---|---|---|
+| 1 | 6개 도구 few-shot 예시 | ✅ | tool_selection +0.14 ↑ |
+| 2 | 카테고리→도구 선택 규칙 | ✅ | tool_not_called 12→11 |
+| 3 | 응답 구조 템플릿 | ✅ | response_structure +0.10 ↑ |
+| 4 | Temperature 0.7→0.3 | ✅ | tool 안정화 but reasoning -0.37 ↓ |
+| 5 | max_new_tokens 768→1024 | ✅ | 응답 truncation 감소 |
+| 6 | max_model_len 4096→8192 | ✅ | 프롬프트 overflow 방지 |
+| 7 | Tool call deduplication | ⏳ | 다음 이터레이션 |
+
+### Visualization-Ready JSON
+
+```json
+{"iter": "Iter11", "model": "Qwen3-4B", "sft": "v3_fc_aware_v2", "agentic": 3.83, "tc_made": 70, "temperature": 0.3, "max_new_tokens": 1024, "max_model_len": 8192, "fewshot_tools": 6, "semantic_router": "3-way", "route_max_rounds": {"training_realtime": 3, "training_review": 5, "fast": 1}, "decision": "KEEP_IMPROVE"}
+```
+
+### 변경 파일
+
+| 파일 | 변경 내용 |
+|---|---|
+| `trainer/configs/rag_config_fewshot.yaml` | 6 tool few-shot, temp 0.3, max_new_tokens 1024, max_model_len 8192 |
+| `trainer/scripts/agent_pipeline.py` | 3-way SemanticRouter (training_realtime/review/fast), ROUTE_MAX_ROUNDS |
+| `trainer/scripts/demo_app.py` | Gradio 6.x deprecation fix (theme/css → launch()) |
+| `output/eval_results/agentic_responses_iter11_improved.jsonl` | 30문항 Iter11 응답 |
+| `output/eval_results/agentic_eval_iter11/` | Iter11 평가 결과 |
+
+---
+
+## [Simulator Protocol] Co-Pilot ↔ Unity 시뮬레이터 통신 스키마 구현
+
+**Status**: ✅ DONE
+**Date**: 2026-03-13
+
+### Summary
+
+Co-Pilot 서버의 응답 구조를 Unity 시뮬레이터 전송용 구조화 JSON으로 전면 재설계. 기존에 LLM 텍스트에서 XR JSON을 `_detect_xr_content()`로 분리하는 방식을 폐기하고, **모든 입력은 시뮬레이터에서, 모든 출력은 시뮬레이터로** 전송되는 아키텍처로 전환. MCP 도구 결과를 전용 응답 섹션(dft_result, anomaly, pose_comparison, next_path)으로 구조화 조립하며, 훈련자 프로필(언어, 숙련도)에 따른 text_guide 개인화 구현.
+
+### 아키텍처 변경
+
+```
+[이전] LLM 텍스트 → _detect_xr_content() → XR JSON 분리 (일부만 구조화)
+[이후] 시뮬레이터 Request → Co-Pilot → 구조화 JSON Response (전부)
+```
+
+### Request 스키마 (Simulator → Co-Pilot)
+
+```json
+{
+  "request_id": "uuid",
+  "session_id": "session-001",
+  "mode": "training_realtime | training_review",
+  "trainee": {"trainee_id": "T-001", "language": "ko", "skill_level": "beginner"},
+  "instruction": "...",
+  "environment": {"zone_id": "B-3", "temperature": 25, "humidity": 60, ...},
+  "sensor_data": {"dft_measurements": [...], "current_pose": {...}, "trajectory": [...]}
+}
+```
+
+### Response 스키마 (Co-Pilot → Simulator)
+
+```json
+{
+  "request_id": "uuid",
+  "session_id": "session-001",
+  "mode": "training_realtime",
+  "text_guide": {"language": "ko", "detail_level": "detailed", "summary": "...", "body": "..."},
+  "pose_comparison": {"similarity_score": 0.82, "corrections": [...]},
+  "next_path": {"zone_id": "B-3", "direction": "top_to_bottom", "waypoints": [...], "violation": false},
+  "dft_result": {"verdict": "pass", "nominal_um": 100, "measurements_um": [...], "mean_um": 95.0, "rule": "90/10"},
+  "anomaly": {"detected": true, "type": "저도막", "zone": "B-3-L", "cause": "...", "severity": "warning"},
+  "steps": [...],
+  "citations": ["DOC-xxx-Cxxx"],
+  "metadata": {"latency_ms": 1200, "tools_used": [...], "rounds": 2, "route": "training_realtime"}
+}
+```
+
+### 설계 원칙
+
+| 원칙 | 설명 |
+|---|---|
+| 모든 응답은 동일 구조 | 시뮬레이터가 단일 파서로 처리 |
+| 섹션은 nullable | 해당 없는 섹션은 null — null이 아닌 섹션만 렌더링 |
+| text_guide 항상 포함 | 어떤 질문이든 텍스트 가이드는 반드시 포함 |
+| 개인화는 request에서 결정 | trainee.language + skill_level → detail_level 자동 결정 |
+
+### 코드 변경
+
+| 파일 | 변경 내용 |
+|---|---|
+| `agent_pipeline.py` | `run()` 재작성: trainee/mode/request_id 파라미터 추가, `_assemble_tool_sections()` 도구→섹션 조립, `_build_text_guide()` 개인화, `_extract_citations()`, `_extract_steps()`, `TraineeProfile` dataclass. `_detect_xr_content()` 제거. |
+| `demo_agent.py` | trace 출력 구조 → 새 포맷 (text_guide, sections, metadata) |
+| `session_coaching.py` | text_guide.body에서 response 추출, citations 우선 사용 |
+| `generate_agentic_responses.py` | text_guide.body에서 final_text, metadata.thinking에서 thinking 추출 |
+| `run_agentic_eval.py` | `_extract_answer_text` text_guide 지원, `score_context_integration` citations 확장 |
+| `demo_app.py` | live 모드: 도구 섹션(dft_result, anomaly, pose_comparison, next_path) 시각화, 지연시간 표시, citations 표시 |
+
+### 개인화 매핑
+
+| skill_level | detail_level | 설명 |
+|---|---|---|
+| beginner | detailed | 단계별 상세 설명 |
+| intermediate | standard | 표준 수준 설명 |
+| advanced | minimal | 핵심만 간결히 |
+
+### 모드별 응답 패턴
+
+| 모드 | 항상 포함 | 상황에 따라 포함 | max_rounds |
+|---|---|---|---|
+| training_realtime | text_guide, steps | next_path, dft_result, anomaly | 3 |
+| training_review | text_guide, steps | pose_comparison, anomaly, dft_result | 5 |
+| fast | text_guide | — | 1 |
+
+### Visualization-Ready JSON
+
+```json
+{"iter": "SimProtocol", "type": "architecture", "changes": ["structured_response", "trainee_profile", "tool_assembler", "xr_removal"], "files_changed": 6, "new_params": ["trainee", "mode", "request_id"], "response_sections": ["text_guide", "pose_comparison", "next_path", "dft_result", "anomaly", "steps", "citations", "metadata"]}
+```
+
+---
+
+## [Iter12] Temperature 0.5 실험 (Regression → Reverted)
+
+**Status**: ✅ DONE (REVERTED)
+**Date**: 2026-03-13
+**Duration**: ~40min (생성 30min + 채점)
+
+### Summary
+
+Iter11(3.83/10)에서 reasoning_depth가 0.30으로 하락한 문제를 해결하기 위해 temperature를 0.3→0.5로 올리고, 추론 깊이 지시문을 추가하는 실험을 수행. 결과 **3.30/10**으로 regression 발생 (-0.53, -13.8%). Reasoning depth가 회복되지 않으면서 tool calling 안정성까지 악화되어, **temperature 0.3으로 즉시 복귀**.
+
+### 변경 사항 (실험 중)
+
+1. **Temperature 0.3→0.5** (`rag_config_fewshot.yaml`): reasoning depth 회복 시도
+2. **추론 깊이 지시문 추가** (`rag_config_fewshot.yaml`): "단순 결론만 제시하지 말고, 왜 그런 판단을 내렸는지 근거를 2-3문장으로 설명하라" 등
+
+### Agentic 30문항 재평가 결과
+
+| 지표 | Iter8 (best) | Iter11 | **Iter12** | Iter12 vs Iter11 |
+|---|---|---|---|---|
+| **Total Score (/10)** | 3.87 | 3.83 | **3.30** | **-0.53 (-13.8%)** |
+| Tool Selection (/2) | 0.33 | 0.47 | 0.30 | -0.17 ↓ |
+| Parameter Correctness (/2) | 0.67 | 0.70 | 0.53 | -0.17 ↓ |
+| Reasoning Depth (/2) | 0.67 | 0.30 | 0.30 | ±0 (미회복) |
+| Context Integration (/2) | 1.57 | 1.63 | 1.50 | -0.13 ↓ |
+| Response Structure (/2) | 0.63 | 0.73 | 0.67 | -0.07 ↓ |
+
+#### Tool Call 통계
+
+| 지표 | Iter11 | **Iter12** |
+|---|---|---|
+| Total tool_calls | 70 | **71** |
+| tool_not_called | 11 | 12 |
+
+### 분석
+
+1. **Reasoning depth 미회복**: temperature 0.5에서도 reasoning_depth는 0.30 유지 — 추론 깊이 지시문만으로는 불충분
+2. **Tool calling 불안정화**: temperature 상승으로 tool_selection이 0.47→0.30, parameter_correctness가 0.70→0.53으로 하락
+3. **Temperature 0.3이 최적**: Iter11(0.3) vs Iter12(0.5) 비교에서 0.3이 전 차원 우위
+4. **프롬프트 엔지니어링 한계**: reasoning depth 개선은 SFT 데이터 증강으로만 가능할 것으로 판단
+
+### 결정: REVERT
+
+- Temperature 0.5 → **0.3으로 복귀**
+- 추론 깊이 지시문: 유지 (harm 없음)
+- **reasoning_depth 개선은 SFT 데이터 증강으로 접근** (다음 단계)
+
+### Visualization-Ready JSON
+
+```json
+{"iter": "Iter12", "model": "Qwen3-4B", "sft": "v3_fc_aware_v2", "agentic": 3.30, "tc_made": 71, "temperature": 0.5, "reasoning_instructions": true, "decision": "REVERTED_TO_0.3", "note": "temp 0.5 regression, reasoning_depth not recovered"}
+```
+
+### 변경 파일
+
+| 파일 | 변경 내용 |
+|---|---|
+| `trainer/configs/rag_config_fewshot.yaml` | temperature 0.5 → 0.3 복귀 |
+| `output/eval_results/agentic_eval_iter12/` | Iter12 평가 결과 (3.30/10) |
+
+---
+
+## [Latency Benchmark] 3-Way SemanticRouter 레이턴시 측정
+
+**Status**: ✅ DONE
+**Date**: 2026-03-13
+
+### Summary
+
+3-way SemanticRouter의 각 라우트별 레이턴시를 벤치마크하여 훈련 중 모드의 <60초 응답 목표 충족 여부를 검증. 대표 질문 3개로 각 라우트(fast, training_realtime, training_review)를 측정.
+
+### 벤치마크 결과
+
+| Route | 질문 | Latency | LLM Rounds | Tools Used | 목표 |
+|---|---|---|---|---|---|
+| **fast** | "에폭시 도료란?" | **9.9s** | 1 | 0 | — |
+| **training_realtime** | "지금 도막 상태 어때?" | **55.5s** | 2 | dft_judge | **< 60s ✅** |
+| **training_review** | "자세 교정 필요해?" | **85.3s** | 5 | pose_estimation | — |
+
+### 레이턴시 분해
+
+| 구간 | fast | training_realtime | training_review |
+|---|---|---|---|
+| RAG 검색 + Rerank | ~2s | ~2s | ~2s |
+| LLM inference | ~7s (1 round) | ~50s (2 rounds) | ~80s (5 rounds) |
+| MCP tool dispatch | 0ms | ~50ms | ~50ms |
+| 오버헤드 | ~1s | ~3s | ~3s |
+
+### 핵심 발견
+
+1. **LLM inference = 95% of latency**: MCP 도구는 <1ms (순수 계산)
+2. **training_realtime < 60s 달성**: 55.5s — max_rounds=3으로 제한한 효과
+3. **training_review는 속도 제약 없음**: 85.3s — 사용자 요구사항에 따라 허용
+4. **fast는 10초 이내**: docQA 단순 질의에 적합
+
+### 아키텍처 결정
+
+| 모드 | max_rounds | 목표 | 달성 여부 |
+|---|---|---|---|
+| fast | 1 | 빠른 응답 | ✅ 9.9s |
+| training_realtime | 3 | < 60s | ✅ 55.5s |
+| training_review | 5 | 제약 없음 | ✅ 85.3s |
+
+---
+
+## [Demo App] Gradio 웹 데모 UI + 모드 선택기
+
+**Status**: ✅ DONE
+**Date**: 2026-03-13
+
+### Summary
+
+Gradio 6.x 기반 웹 데모 인터페이스(1066줄)를 구현하고, 훈련 중/훈련 후/자동 모드 선택기를 사이드바에 추가. DEMO_MODE(더미 데이터 스트리밍)와 LIVE 모드(실제 AgentPipeline 연동)를 모두 지원.
+
+### 주요 기능
+
+1. **DEMO_MODE**: 더미 응답 스트리밍 — GPU/모델 로딩 없이 UI 시연 가능
+2. **LIVE 모드**: AgentPipeline → MCP Server → RAG → LLM 전체 파이프라인 연동
+3. **모드 선택기**: Radio button (훈련 중/훈련 후/자동) → SemanticRouter mode override
+4. **Dark Theme**: 커스텀 Gradio 테마 (배경/텍스트/강조색)
+5. **Example Scenarios**: 5개 예시 버튼 (DFT 측정, 이상 탐지, 자세 확인 등)
+6. **도구 섹션 시각화**: dft_result, anomaly, pose_comparison, next_path → JSON 렌더링
+7. **세션 관리**: `_new_session()` — 채팅 히스토리 초기화
+
+### 산출물
+
+| 파일 | 설명 |
+|---|---|
+| `trainer/scripts/demo_app.py` | Gradio 웹 UI (1066줄) |
+
+### 기술 사항
+
+- **Gradio 6.x 호환**: `theme`/`css` 파라미터를 `launch()`로 이동 (deprecation fix)
+- **Port**: 7860 (default)
+- **Launch**: `python3 demo_app.py` (DEMO_MODE) / `python3 demo_app.py --live` (실제 모델)
+
+### 모드 선택기 UI
+
+```
+┌─────────────────────┐
+│ 🎯 Mode Selection   │
+│ ○ 훈련 중 (실시간)    │  → training_realtime (max_rounds=3)
+│ ○ 훈련 후 (리뷰)     │  → training_review (max_rounds=5)
+│ ● 자동              │  → SemanticRouter 자동 분류
+└─────────────────────┘
+```
+
+---

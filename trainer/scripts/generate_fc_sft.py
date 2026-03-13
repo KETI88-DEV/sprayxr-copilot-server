@@ -17,7 +17,7 @@ import json
 import logging
 import random
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 logger = logging.getLogger(__name__)
 
@@ -639,6 +639,1284 @@ def _timeseries_samples() -> list[dict[str, Any]]:
             "category": "tool_calling_timeseries",
         })
 
+    return samples
+
+
+def _location_tracking_augment() -> list[dict[str, Any]]:
+    """Add diverse location tracking samples to improve tool balance."""
+    scenarios = [
+        {
+            "coordinates": [{"x": 305, "y": 142, "z": 265, "timestamp": 1710100001}],
+            "ship_model_id": "HULL-2025-101",
+            "zone": "B-4-L",
+            "zone_type": "hull_side",
+            "coverage": 61.2,
+            "question": "지금 어디야?",
+        },
+        {
+            "coordinates": [{"x": 535, "y": 68, "z": 322, "timestamp": 1710100120}],
+            "ship_model_id": "HULL-2025-101",
+            "zone": "A-3-R",
+            "zone_type": "upper_deck",
+            "coverage": 43.9,
+            "question": "작업 구역 확인해줘.",
+        },
+        {
+            "coordinates": [{"x": 175, "y": 218, "z": 108, "timestamp": 1710100240}],
+            "ship_model_id": "HULL-2025-102",
+            "zone": "C-2-B",
+            "zone_type": "bottom",
+            "coverage": 84.6,
+            "question": "좌표 기준 구역 파악해줘.",
+        },
+        {
+            "coordinates": [{"x": 448, "y": 112, "z": 246, "timestamp": 1710100360}],
+            "ship_model_id": "HULL-2025-103",
+            "zone": "VP-1",
+            "zone_type": "수직 패널",
+            "coverage": 57.0,
+            "question": "현재 위치 기준으로 작업 구역 알려줘.",
+        },
+        {
+            "coordinates": [{"x": 412, "y": 94, "z": 298, "timestamp": 1710100480}],
+            "ship_model_id": "HULL-2025-104",
+            "zone": "CR-2",
+            "zone_type": "곡면",
+            "coverage": 36.4,
+            "question": "지금 좌표가 어느 곡면 구역인지 확인해줘.",
+        },
+        {
+            "coordinates": [{"x": 622, "y": 58, "z": 336, "timestamp": 1710100600}],
+            "ship_model_id": "HULL-2025-105",
+            "zone": "ED-5",
+            "zone_type": "모서리",
+            "coverage": 28.8,
+            "question": "작업 구역 확인 부탁해.",
+        },
+        {
+            "coordinates": [{"x": 338, "y": 132, "z": 274, "timestamp": 1710100720}],
+            "ship_model_id": "HULL-2025-102",
+            "zone": "B-5-R",
+            "zone_type": "hull_side",
+            "coverage": 69.5,
+            "question": "지금 어디 구역에서 작업 중이야?",
+        },
+        {
+            "coordinates": [{"x": 560, "y": 72, "z": 314, "timestamp": 1710100840}],
+            "ship_model_id": "HULL-2025-106",
+            "zone": "A-1-L",
+            "zone_type": "upper_deck",
+            "coverage": 49.1,
+            "question": "좌표 기준 구역 파악해줘.",
+        },
+        {
+            "coordinates": [{"x": 208, "y": 232, "z": 118, "timestamp": 1710100960}],
+            "ship_model_id": "HULL-2025-107",
+            "zone": "C-4-B",
+            "zone_type": "bottom",
+            "coverage": 91.0,
+            "question": "지금 어디야?",
+        },
+        {
+            "coordinates": [{"x": 456, "y": 116, "z": 252, "timestamp": 1710101080}],
+            "ship_model_id": "HULL-2025-108",
+            "zone": "VP-3",
+            "zone_type": "수직 패널",
+            "coverage": 52.7,
+            "question": "작업 구역 확인해줘.",
+        },
+        {
+            "coordinates": [{"x": 394, "y": 88, "z": 286, "timestamp": 1710101200}],
+            "ship_model_id": "HULL-2025-109",
+            "zone": "CR-7",
+            "zone_type": "곡면",
+            "coverage": 40.3,
+            "question": "좌표 기준 구역 파악해줘.",
+        },
+        {
+            "coordinates": [{"x": 610, "y": 54, "z": 344, "timestamp": 1710101320}],
+            "ship_model_id": "HULL-2025-110",
+            "zone": "ED-2",
+            "zone_type": "모서리",
+            "coverage": 34.6,
+            "question": "현재 위치로 작업 구역 확인해줘.",
+        },
+        {
+            "coordinates": [{"x": 322, "y": 146, "z": 270, "timestamp": 1710101440}],
+            "ship_model_id": "HULL-2025-111",
+            "zone": "B-2-L",
+            "zone_type": "hull_side",
+            "coverage": 76.2,
+            "question": "지금 어느 구역이야?",
+        },
+        {
+            "coordinates": [{"x": 542, "y": 70, "z": 318, "timestamp": 1710101560}],
+            "ship_model_id": "HULL-2025-112",
+            "zone": "A-4-R",
+            "zone_type": "upper_deck",
+            "coverage": 47.4,
+            "question": "작업 구역 확인 부탁해.",
+        },
+        {
+            "coordinates": [{"x": 186, "y": 224, "z": 114, "timestamp": 1710101680}],
+            "ship_model_id": "HULL-2025-113",
+            "zone": "C-3-B",
+            "zone_type": "bottom",
+            "coverage": 82.9,
+            "question": "좌표 기준으로 지금 작업 구역 파악해줘.",
+        },
+    ]
+
+    samples = []
+    for sc in scenarios:
+        tc_args = {
+            "coordinates": sc["coordinates"],
+            "ship_model_id": sc["ship_model_id"],
+        }
+        tc_json = json.dumps(
+            {"name": "location_tracking", "arguments": tc_args},
+            ensure_ascii=False,
+        )
+        ctx_str = json.dumps(tc_args, ensure_ascii=False)
+        coverage = cast(float, sc["coverage"])
+        analysis = (
+            f"현재 작업 구역은 **{sc['zone']}** ({sc['zone_type']})이며 커버리지는 {coverage}%입니다. "
+            f"{'마무리 점검 단계로 전환하세요.' if coverage >= 80 else '미도장 영역을 우선 보완하세요.'}"
+        )
+        samples.append({
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT_FC},
+                {"role": "user", "content": f"[환경 데이터]\n{ctx_str}\n\n질문: {sc['question']}"},
+                {
+                    "role": "assistant",
+                    "content": (
+                        "현재 위치를 추적해 작업 구역을 확인하겠습니다.\n\n"
+                        f"<tool_call>{tc_json}</tool_call>\n\n"
+                        f"{analysis}\n\n"
+                        "근거 문서 ID: DOC-doc_0038-C0046"
+                    ),
+                },
+            ],
+            "category": "tool_calling_location_aug",
+        })
+
+    return samples
+
+
+def _pose_estimation_augment() -> list[dict[str, Any]]:
+    """Add additional pose estimation samples with varied joints."""
+    scenarios = [
+        {
+            "current": {"joints": {"wrist_r": {"x": 0.16, "y": -0.07, "z": 0.35, "roll": 12, "pitch": 26, "yaw": 14}}},
+            "reference": {"joints": {"wrist_r": {"x": 0.10, "y": -0.02, "z": 0.41, "roll": 2, "pitch": 12, "yaw": 3}}},
+            "deviation": "매우 높음",
+            "correction": "손목 pitch/yaw를 크게 줄여 스프레이 건 축을 피도체 정면으로 맞추세요.",
+            "question": "스프레이 건 각도 교정이 필요한지 봐줘.",
+        },
+        {
+            "current": {"joints": {"wrist_r": {"x": 0.13, "y": -0.04, "z": 0.38, "roll": 6, "pitch": 17, "yaw": 7}}},
+            "reference": {"joints": {"wrist_r": {"x": 0.10, "y": -0.02, "z": 0.41, "roll": 2, "pitch": 12, "yaw": 3}}},
+            "deviation": "높음",
+            "correction": "손목 각도를 완만하게 낮춰 분사 폭 편차를 줄이세요.",
+            "question": "자세 교정 포인트 알려줘.",
+        },
+        {
+            "current": {"joints": {"wrist_r": {"x": 0.11, "y": -0.03, "z": 0.39, "roll": 4, "pitch": 14, "yaw": 5}}},
+            "reference": {"joints": {"wrist_r": {"x": 0.10, "y": -0.02, "z": 0.41, "roll": 2, "pitch": 12, "yaw": 3}}},
+            "deviation": "중간",
+            "correction": "거리(z) 2cm 확보와 pitch 2° 보정으로 균일도를 높이세요.",
+            "question": "숙련자 비교해서 편차가 어느 정도야?",
+        },
+        {
+            "current": {"joints": {"wrist_r": {"x": 0.10, "y": -0.02, "z": 0.40, "roll": 3, "pitch": 13, "yaw": 4}}},
+            "reference": {"joints": {"wrist_r": {"x": 0.10, "y": -0.02, "z": 0.41, "roll": 2, "pitch": 12, "yaw": 3}}},
+            "deviation": "낮음",
+            "correction": "현재 자세를 유지하되 손목 yaw만 미세 조정하세요.",
+            "question": "현재 자세가 안정적인지 확인해줘.",
+        },
+        {
+            "current": {"joints": {"wrist_r": {"x": 0.09, "y": -0.01, "z": 0.42, "roll": 1, "pitch": 11, "yaw": 2}}},
+            "reference": {"joints": {"wrist_r": {"x": 0.10, "y": -0.02, "z": 0.41, "roll": 2, "pitch": 12, "yaw": 3}}},
+            "deviation": "매우 낮음",
+            "correction": "숙련자 패턴과 거의 일치합니다. 현재 자세를 유지하세요.",
+            "question": "숙련자랑 비교해 자세 수준이 어때?",
+        },
+        {
+            "current": {"joints": {"elbow_r": {"x": 0.22, "y": 0.11, "z": 0.34, "roll": 18, "pitch": 30, "yaw": 11}}},
+            "reference": {"joints": {"elbow_r": {"x": 0.18, "y": 0.08, "z": 0.38, "roll": 10, "pitch": 20, "yaw": 6}}},
+            "deviation": "높음",
+            "correction": "팔꿈치를 몸통 쪽으로 당겨 분사 궤적을 안정화하세요.",
+            "question": "팔꿈치 중심으로 자세 교정해줘.",
+        },
+        {
+            "current": {"joints": {"elbow_r": {"x": 0.20, "y": 0.10, "z": 0.36, "roll": 14, "pitch": 24, "yaw": 8}}},
+            "reference": {"joints": {"elbow_r": {"x": 0.18, "y": 0.08, "z": 0.38, "roll": 10, "pitch": 20, "yaw": 6}}},
+            "deviation": "중간",
+            "correction": "팔꿈치 pitch를 3~4° 줄여 오버랩 편차를 줄이세요.",
+            "question": "스프레이 작업에서 팔꿈치 각도 어때?",
+        },
+        {
+            "current": {"joints": {"elbow_r": {"x": 0.18, "y": 0.08, "z": 0.38, "roll": 11, "pitch": 21, "yaw": 6}}},
+            "reference": {"joints": {"elbow_r": {"x": 0.18, "y": 0.08, "z": 0.38, "roll": 10, "pitch": 20, "yaw": 6}}},
+            "deviation": "낮음",
+            "correction": "팔꿈치 자세는 양호합니다. 손목 궤적만 일정하게 유지하세요.",
+            "question": "숙련자 비교 기준으로 자세 진단해줘.",
+        },
+        {
+            "current": {"joints": {"shoulder_r": {"x": 0.34, "y": 0.24, "z": 0.52, "roll": 20, "pitch": 33, "yaw": 16}}},
+            "reference": {"joints": {"shoulder_r": {"x": 0.30, "y": 0.20, "z": 0.56, "roll": 12, "pitch": 24, "yaw": 8}}},
+            "deviation": "매우 높음",
+            "correction": "어깨 elevation을 낮추고 상완 회전을 줄여 피로를 줄이세요.",
+            "question": "장시간 작업용 자세 교정안 줘.",
+        },
+        {
+            "current": {"joints": {"shoulder_r": {"x": 0.32, "y": 0.22, "z": 0.54, "roll": 16, "pitch": 28, "yaw": 12}}},
+            "reference": {"joints": {"shoulder_r": {"x": 0.30, "y": 0.20, "z": 0.56, "roll": 12, "pitch": 24, "yaw": 8}}},
+            "deviation": "높음",
+            "correction": "어깨 roll을 줄여 분사선을 수평에 가깝게 유지하세요.",
+            "question": "어깨 각도 기준으로 스프레이 건 자세 봐줘.",
+        },
+        {
+            "current": {
+                "joints": {
+                    "wrist_r": {"x": 0.13, "y": -0.05, "z": 0.37, "roll": 7, "pitch": 19, "yaw": 8},
+                    "elbow_r": {"x": 0.21, "y": 0.10, "z": 0.35, "roll": 16, "pitch": 27, "yaw": 9},
+                }
+            },
+            "reference": {
+                "joints": {
+                    "wrist_r": {"x": 0.10, "y": -0.02, "z": 0.41, "roll": 2, "pitch": 12, "yaw": 3},
+                    "elbow_r": {"x": 0.18, "y": 0.08, "z": 0.38, "roll": 10, "pitch": 20, "yaw": 6},
+                }
+            },
+            "deviation": "높음",
+            "correction": "손목-팔꿈치 연동 각도를 함께 낮춰 분사 편차를 최소화하세요.",
+            "question": "다관절 기준으로 자세 교정해줘.",
+        },
+        {
+            "current": {
+                "joints": {
+                    "wrist_r": {"x": 0.11, "y": -0.03, "z": 0.39, "roll": 4, "pitch": 14, "yaw": 5},
+                    "shoulder_r": {"x": 0.31, "y": 0.21, "z": 0.55, "roll": 14, "pitch": 26, "yaw": 10},
+                }
+            },
+            "reference": {
+                "joints": {
+                    "wrist_r": {"x": 0.10, "y": -0.02, "z": 0.41, "roll": 2, "pitch": 12, "yaw": 3},
+                    "shoulder_r": {"x": 0.30, "y": 0.20, "z": 0.56, "roll": 12, "pitch": 24, "yaw": 8},
+                }
+            },
+            "deviation": "중간",
+            "correction": "손목은 미세 조정, 어깨는 2° 완화해 분사 안정성을 높이세요.",
+            "question": "숙련자 비교해서 관절별 편차 분석해줘.",
+        },
+        {
+            "current": {
+                "joints": {
+                    "elbow_r": {"x": 0.19, "y": 0.09, "z": 0.37, "roll": 12, "pitch": 22, "yaw": 7},
+                    "shoulder_r": {"x": 0.30, "y": 0.20, "z": 0.56, "roll": 13, "pitch": 25, "yaw": 9},
+                }
+            },
+            "reference": {
+                "joints": {
+                    "elbow_r": {"x": 0.18, "y": 0.08, "z": 0.38, "roll": 10, "pitch": 20, "yaw": 6},
+                    "shoulder_r": {"x": 0.30, "y": 0.20, "z": 0.56, "roll": 12, "pitch": 24, "yaw": 8},
+                }
+            },
+            "deviation": "낮음",
+            "correction": "상완 라인 유지 상태가 양호합니다. 현재 패턴을 유지하세요.",
+            "question": "스프레이 건 각도와 상체 자세 같이 봐줘.",
+        },
+        {
+            "current": {"joints": {"shoulder_r": {"x": 0.29, "y": 0.19, "z": 0.57, "roll": 11, "pitch": 23, "yaw": 7}}},
+            "reference": {"joints": {"shoulder_r": {"x": 0.30, "y": 0.20, "z": 0.56, "roll": 12, "pitch": 24, "yaw": 8}}},
+            "deviation": "매우 낮음",
+            "correction": "숙련자 자세와 거의 동일합니다.",
+            "question": "자세가 숙련자 수준인지 최종 확인해줘.",
+        },
+        {
+            "current": {
+                "joints": {
+                    "wrist_r": {"x": 0.14, "y": -0.06, "z": 0.36, "roll": 9, "pitch": 22, "yaw": 10},
+                    "elbow_r": {"x": 0.23, "y": 0.12, "z": 0.33, "roll": 19, "pitch": 31, "yaw": 12},
+                    "shoulder_r": {"x": 0.35, "y": 0.25, "z": 0.51, "roll": 21, "pitch": 34, "yaw": 17},
+                }
+            },
+            "reference": {
+                "joints": {
+                    "wrist_r": {"x": 0.10, "y": -0.02, "z": 0.41, "roll": 2, "pitch": 12, "yaw": 3},
+                    "elbow_r": {"x": 0.18, "y": 0.08, "z": 0.38, "roll": 10, "pitch": 20, "yaw": 6},
+                    "shoulder_r": {"x": 0.30, "y": 0.20, "z": 0.56, "roll": 12, "pitch": 24, "yaw": 8},
+                }
+            },
+            "deviation": "매우 높음",
+            "correction": "전반적인 관절 각도가 과도합니다. 손목-팔꿈치-어깨를 순차 교정하세요.",
+            "question": "초보자용 자세 교정안을 만들어줘.",
+        },
+    ]
+
+    samples = []
+    for sc in scenarios:
+        tc_args = {
+            "current_pose": sc["current"],
+            "reference_pose": sc["reference"],
+        }
+        tc_json = json.dumps(
+            {"name": "pose_estimation", "arguments": tc_args},
+            ensure_ascii=False,
+        )
+        ctx_str = json.dumps(tc_args, ensure_ascii=False)
+        samples.append({
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT_FC},
+                {"role": "user", "content": f"[환경 데이터]\n{ctx_str}\n\n질문: {sc['question']}"},
+                {
+                    "role": "assistant",
+                    "content": (
+                        "작업자 자세를 숙련자 기준과 비교 분석하겠습니다.\n\n"
+                        f"<tool_call>{tc_json}</tool_call>\n\n"
+                        f"자세 편차 수준은 **{sc['deviation']}**이며, 교정 방향은 {sc['correction']}\n\n"
+                        "근거 문서 ID: DOC-doc_0044-C0227"
+                    ),
+                },
+            ],
+            "category": "tool_calling_pose_aug",
+        })
+
+    return samples
+
+
+def _sequence_validation_augment() -> list[dict[str, Any]]:
+    """Add sequence validation samples with required zone/pattern coverage."""
+    scenarios = [
+        {
+            "trajectory": [
+                {"x": 110, "y": 320, "z": 210, "timestamp": 1710200001},
+                {"x": 110, "y": 260, "z": 210, "timestamp": 1710200003},
+                {"x": 110, "y": 200, "z": 210, "timestamp": 1710200005},
+            ],
+            "zone_id": "VP-1",
+            "zone_type": "수직 패널",
+            "reference_pattern": "bottom_to_top",
+            "valid": False,
+            "detected": "top_to_bottom",
+            "question": "수직 패널 작업 방향이 맞는지 검증해줘.",
+        },
+        {
+            "trajectory": [
+                {"x": 120, "y": 180, "z": 220, "timestamp": 1710200101},
+                {"x": 120, "y": 230, "z": 220, "timestamp": 1710200103},
+                {"x": 120, "y": 280, "z": 220, "timestamp": 1710200105},
+            ],
+            "zone_id": "VP-2",
+            "zone_type": "수직 패널",
+            "reference_pattern": "bottom_to_top",
+            "valid": True,
+            "detected": "bottom_to_top",
+            "question": "순서 위반 여부 확인해줘.",
+        },
+        {
+            "trajectory": [
+                {"x": 60, "y": 95, "z": 260, "timestamp": 1710200201},
+                {"x": 120, "y": 95, "z": 260, "timestamp": 1710200203},
+                {"x": 180, "y": 95, "z": 260, "timestamp": 1710200205},
+            ],
+            "zone_id": "HP-1",
+            "zone_type": "수평 패널",
+            "reference_pattern": "left_to_right",
+            "valid": True,
+            "detected": "left_to_right",
+            "question": "stroke 패턴이 기준과 같은지 봐줘.",
+        },
+        {
+            "trajectory": [
+                {"x": 190, "y": 105, "z": 255, "timestamp": 1710200301},
+                {"x": 135, "y": 105, "z": 255, "timestamp": 1710200303},
+                {"x": 80, "y": 105, "z": 255, "timestamp": 1710200305},
+            ],
+            "zone_id": "HP-2",
+            "zone_type": "수평 패널",
+            "reference_pattern": "left_to_right",
+            "valid": False,
+            "detected": "right_to_left",
+            "question": "작업 방향 위반인지 알려줘.",
+        },
+        {
+            "trajectory": [
+                {"x": 240, "y": 120, "z": 290, "timestamp": 1710200401},
+                {"x": 200, "y": 120, "z": 280, "timestamp": 1710200403},
+                {"x": 160, "y": 120, "z": 270, "timestamp": 1710200405},
+            ],
+            "zone_id": "CV-1",
+            "zone_type": "곡면",
+            "reference_pattern": "right_to_left",
+            "valid": True,
+            "detected": "right_to_left",
+            "question": "곡면 구역 순서 검증해줘.",
+        },
+        {
+            "trajectory": [
+                {"x": 150, "y": 130, "z": 265, "timestamp": 1710200501},
+                {"x": 195, "y": 130, "z": 275, "timestamp": 1710200503},
+                {"x": 240, "y": 130, "z": 285, "timestamp": 1710200505},
+            ],
+            "zone_id": "CV-2",
+            "zone_type": "곡면",
+            "reference_pattern": "right_to_left",
+            "valid": False,
+            "detected": "left_to_right",
+            "question": "곡면 작업 stroke 패턴이 맞아?",
+        },
+        {
+            "trajectory": [
+                {"x": 300, "y": 340, "z": 230, "timestamp": 1710200601},
+                {"x": 300, "y": 280, "z": 230, "timestamp": 1710200603},
+                {"x": 300, "y": 220, "z": 230, "timestamp": 1710200605},
+            ],
+            "zone_id": "ED-1",
+            "zone_type": "모서리",
+            "reference_pattern": "top_to_bottom",
+            "valid": True,
+            "detected": "top_to_bottom",
+            "question": "모서리 구역 도장 순서가 올바른지 확인해줘.",
+        },
+        {
+            "trajectory": [
+                {"x": 300, "y": 210, "z": 230, "timestamp": 1710200701},
+                {"x": 300, "y": 270, "z": 230, "timestamp": 1710200703},
+                {"x": 300, "y": 330, "z": 230, "timestamp": 1710200705},
+            ],
+            "zone_id": "ED-2",
+            "zone_type": "모서리",
+            "reference_pattern": "top_to_bottom",
+            "valid": False,
+            "detected": "bottom_to_top",
+            "question": "순서 위반 체크해줘.",
+        },
+        {
+            "trajectory": [
+                {"x": 70, "y": 110, "z": 250, "timestamp": 1710200801},
+                {"x": 125, "y": 110, "z": 250, "timestamp": 1710200803},
+                {"x": 180, "y": 110, "z": 250, "timestamp": 1710200805},
+            ],
+            "zone_id": "HP-3",
+            "zone_type": "수평 패널",
+            "reference_pattern": "left_to_right",
+            "valid": True,
+            "detected": "left_to_right",
+            "question": "작업 방향 검증해줘.",
+        },
+        {
+            "trajectory": [
+                {"x": 180, "y": 112, "z": 250, "timestamp": 1710200901},
+                {"x": 125, "y": 112, "z": 250, "timestamp": 1710200903},
+                {"x": 70, "y": 112, "z": 250, "timestamp": 1710200905},
+            ],
+            "zone_id": "HP-4",
+            "zone_type": "수평 패널",
+            "reference_pattern": "right_to_left",
+            "valid": True,
+            "detected": "right_to_left",
+            "question": "수평 패널 stroke 패턴 확인해줘.",
+        },
+        {
+            "trajectory": [
+                {"x": 126, "y": 286, "z": 214, "timestamp": 1710201001},
+                {"x": 126, "y": 236, "z": 214, "timestamp": 1710201003},
+                {"x": 126, "y": 186, "z": 214, "timestamp": 1710201005},
+            ],
+            "zone_id": "VP-4",
+            "zone_type": "수직 패널",
+            "reference_pattern": "top_to_bottom",
+            "valid": True,
+            "detected": "top_to_bottom",
+            "question": "수직 패널 작업 방향 적합한지 봐줘.",
+        },
+        {
+            "trajectory": [
+                {"x": 126, "y": 186, "z": 214, "timestamp": 1710201101},
+                {"x": 126, "y": 236, "z": 214, "timestamp": 1710201103},
+                {"x": 126, "y": 286, "z": 214, "timestamp": 1710201105},
+            ],
+            "zone_id": "VP-5",
+            "zone_type": "수직 패널",
+            "reference_pattern": "top_to_bottom",
+            "valid": False,
+            "detected": "bottom_to_top",
+            "question": "순서 위반 여부 확인해줘.",
+        },
+        {
+            "trajectory": [
+                {"x": 235, "y": 124, "z": 294, "timestamp": 1710201201},
+                {"x": 195, "y": 124, "z": 284, "timestamp": 1710201203},
+                {"x": 155, "y": 124, "z": 274, "timestamp": 1710201205},
+            ],
+            "zone_id": "CV-3",
+            "zone_type": "곡면",
+            "reference_pattern": "right_to_left",
+            "valid": True,
+            "detected": "right_to_left",
+            "question": "곡면 구역 작업 방향 분석해줘.",
+        },
+        {
+            "trajectory": [
+                {"x": 155, "y": 124, "z": 274, "timestamp": 1710201301},
+                {"x": 195, "y": 124, "z": 284, "timestamp": 1710201303},
+                {"x": 235, "y": 124, "z": 294, "timestamp": 1710201305},
+            ],
+            "zone_id": "CV-4",
+            "zone_type": "곡면",
+            "reference_pattern": "right_to_left",
+            "valid": False,
+            "detected": "left_to_right",
+            "question": "stroke 방향 위반인지 확인해줘.",
+        },
+        {
+            "trajectory": [
+                {"x": 292, "y": 332, "z": 236, "timestamp": 1710201401},
+                {"x": 292, "y": 272, "z": 236, "timestamp": 1710201403},
+                {"x": 292, "y": 212, "z": 236, "timestamp": 1710201405},
+            ],
+            "zone_id": "ED-3",
+            "zone_type": "모서리",
+            "reference_pattern": "top_to_bottom",
+            "valid": True,
+            "detected": "top_to_bottom",
+            "question": "모서리 작업 순서 검증해줘.",
+        },
+    ]
+
+    samples = []
+    for sc in scenarios:
+        tc_args = {
+            "trajectory": sc["trajectory"],
+            "zone_id": sc["zone_id"],
+            "zone_type": sc["zone_type"],
+            "reference_pattern": sc["reference_pattern"],
+        }
+        tc_json = json.dumps(
+            {"name": "sequence_validation", "arguments": tc_args},
+            ensure_ascii=False,
+        )
+        ctx_str = json.dumps(tc_args, ensure_ascii=False)
+        if sc["valid"]:
+            analysis = (
+                f"검증 결과 **적합**입니다. 감지 패턴({sc['detected']})이 참조 패턴({sc['reference_pattern']})과 일치합니다."
+            )
+        else:
+            analysis = (
+                f"검증 결과 **부적합**입니다. 감지 패턴({sc['detected']})이 참조 패턴({sc['reference_pattern']})과 다르므로 순서를 교정하세요."
+            )
+        samples.append({
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT_FC},
+                {"role": "user", "content": f"[환경 데이터]\n{ctx_str}\n\n질문: {sc['question']}"},
+                {
+                    "role": "assistant",
+                    "content": (
+                        "도장 순서와 작업 방향을 검증하겠습니다.\n\n"
+                        f"<tool_call>{tc_json}</tool_call>\n\n"
+                        f"{analysis}\n\n"
+                        "근거 문서 ID: DOC-doc_0044-C0227"
+                    ),
+                },
+            ],
+            "category": "tool_calling_sequence_aug",
+        })
+
+    return samples
+
+
+def _timeseries_augment() -> list[dict[str, Any]]:
+    """Add timeseries query/update samples including environment context."""
+    scenarios = [
+        {
+            "action": "update",
+            "session_id": "sess-ts-aug-001",
+            "data": {"timestamp": 1710300001, "speed": 0.82, "distance": 295, "angle": 49},
+            "env": {"temperature": 20, "humidity": 63},
+            "question": "속도 변화 추세 확인을 위해 현재 값을 업데이트해줘.",
+        },
+        {
+            "action": "query",
+            "session_id": "sess-ts-aug-002",
+            "data": None,
+            "env": None,
+            "question": "최근 작업 추세 확인해줘.",
+        },
+        {
+            "action": "update",
+            "session_id": "sess-ts-aug-003",
+            "data": {"timestamp": 1710300121, "speed": 1.18, "distance": 338, "angle": 41},
+            "env": {"temperature": 24, "humidity": 58},
+            "question": "속도/거리/각도 데이터 기록해줘.",
+        },
+        {
+            "action": "query",
+            "session_id": "sess-ts-aug-004",
+            "data": None,
+            "env": {"temperature": 26, "humidity": 71},
+            "question": "환경 데이터 포함해서 시계열 추세 확인해줘.",
+        },
+        {
+            "action": "update",
+            "session_id": "sess-ts-aug-005",
+            "data": {"timestamp": 1710300241, "speed": 0.91, "distance": 312, "angle": 53},
+            "env": None,
+            "question": "작업 속도 변화 분석용 업데이트 해줘.",
+        },
+        {
+            "action": "query",
+            "session_id": "sess-ts-aug-006",
+            "data": None,
+            "env": None,
+            "question": "속도 추세와 편차 조회해줘.",
+        },
+        {
+            "action": "update",
+            "session_id": "sess-ts-aug-007",
+            "data": {"timestamp": 1710300361, "speed": 1.05, "distance": 320, "angle": 47},
+            "env": {"temperature": 22, "humidity": 66},
+            "question": "환경 조건과 함께 현재 시점 데이터 반영해줘.",
+        },
+        {
+            "action": "query",
+            "session_id": "sess-ts-aug-008",
+            "data": None,
+            "env": {"temperature": 28, "humidity": 74},
+            "question": "습도 상승 구간에서 속도 변화 추세 확인해줘.",
+        },
+        {
+            "action": "update",
+            "session_id": "sess-ts-aug-009",
+            "data": {"timestamp": 1710300481, "speed": 0.88, "distance": 302, "angle": 56},
+            "env": None,
+            "question": "각도 변화가 큰 구간 데이터 업데이트해줘.",
+        },
+        {
+            "action": "query",
+            "session_id": "sess-ts-aug-010",
+            "data": None,
+            "env": None,
+            "question": "현재 세션 추세 확인 부탁해.",
+        },
+        {
+            "action": "update",
+            "session_id": "sess-ts-aug-011",
+            "data": {"timestamp": 1710300601, "speed": 1.22, "distance": 346, "angle": 39},
+            "env": {"temperature": 19, "humidity": 52},
+            "question": "고속 구간 데이터 시계열에 추가해줘.",
+        },
+        {
+            "action": "query",
+            "session_id": "sess-ts-aug-012",
+            "data": None,
+            "env": {"temperature": 17, "humidity": 80},
+            "question": "저온/고습 조건에서 추세 확인해줘.",
+        },
+        {
+            "action": "update",
+            "session_id": "sess-ts-aug-013",
+            "data": {"timestamp": 1710300721, "speed": 0.97, "distance": 315, "angle": 45},
+            "env": None,
+            "question": "중립 조건 데이터 업데이트해줘.",
+        },
+        {
+            "action": "query",
+            "session_id": "sess-ts-aug-014",
+            "data": None,
+            "env": None,
+            "question": "속도 변화 추세를 다시 조회해줘.",
+        },
+        {
+            "action": "update",
+            "session_id": "sess-ts-aug-015",
+            "data": {"timestamp": 1710300841, "speed": 1.09, "distance": 327, "angle": 43},
+            "env": {"temperature": 23, "humidity": 61},
+            "question": "환경 데이터 포함해서 업데이트해줘.",
+        },
+    ]
+
+    samples = []
+    for sc in scenarios:
+        if sc["action"] == "update":
+            update_data = cast(dict[str, Any], sc["data"])
+            tc_args: dict[str, Any] = {
+                "action": "update",
+                "session_id": sc["session_id"],
+                "data": update_data,
+            }
+            analysis = (
+                f"세션 {sc['session_id']}에 속도 {update_data['speed']}m/s, "
+                f"거리 {update_data['distance']}mm, 각도 {update_data['angle']}° 데이터가 반영되었습니다."
+            )
+        else:
+            tc_args = {"action": "query", "session_id": sc["session_id"]}
+            analysis = f"세션 {sc['session_id']}의 속도/거리/각도 추세를 조회해 편차 변화를 확인했습니다."
+
+        context_data: dict[str, Any] = {"timeseries": tc_args}
+        if sc["env"] is not None:
+            context_data["env"] = sc["env"]
+
+        tc_json = json.dumps({"name": "timeseries", "arguments": tc_args}, ensure_ascii=False)
+        ctx_str = json.dumps(context_data, ensure_ascii=False)
+        samples.append({
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT_FC},
+                {"role": "user", "content": f"[환경 데이터]\n{ctx_str}\n\n질문: {sc['question']}"},
+                {
+                    "role": "assistant",
+                    "content": (
+                        "시계열 데이터를 분석하겠습니다.\n\n"
+                        f"<tool_call>{tc_json}</tool_call>\n\n"
+                        f"{analysis}\n\n"
+                        "근거 문서 ID: DOC-doc_0018-C0037"
+                    ),
+                },
+            ],
+            "category": "tool_calling_timeseries_aug",
+        })
+
+    return samples
+
+
+def _xr_content_samples() -> list[dict[str, Any]]:
+    """Generate XR content creation samples requiring location+pose tools."""
+    scenarios = [
+        ("XR 가이드 만들어줘.", "A-2-R", "upper_deck", "pitch를 4° 낮춰 정확도를 확보"),
+        ("초보자용 튜토리얼 만들어줘.", "B-3-L", "hull_side", "손목 yaw를 3° 줄여 분사선을 안정화"),
+        ("XR 코칭 콘텐츠 생성해줘.", "C-1-B", "bottom", "피도체 거리 2cm 추가 확보"),
+        ("XR 마이크로레슨으로 정리해줘.", "VP-2", "수직 패널", "팔꿈치 각도를 완만하게 유지"),
+        ("작업 구역 기반 XR 가이드 부탁해.", "CR-4", "곡면", "어깨 roll을 2° 줄여 곡면 추종"),
+        ("신입용 XR 코칭 콘텐츠 만들어줘.", "ED-1", "모서리", "모서리 접근 시 손목 pitch를 낮춤"),
+        ("초보자 교육용 XR 튜토리얼 구성해줘.", "A-4-L", "upper_deck", "스프레이 건 yaw 흔들림 최소화"),
+        ("실습형 XR 가이드 설계해줘.", "B-1-R", "hull_side", "분사 거리 40~42cm 유지"),
+        ("현장 코칭용 XR 마이크로레슨 만들어줘.", "VP-4", "수직 패널", "bottom_to_top 구간에서 손목 고정"),
+        ("XR 튜토리얼로 자세랑 위치 같이 안내해줘.", "CR-7", "곡면", "곡면 전환부에서 어깨 긴장 완화"),
+    ]
+
+    samples = []
+    for idx, (question, zone, zone_type, correction) in enumerate(scenarios, start=1):
+        coords = [{"x": 300 + idx * 22, "y": 70 + idx * 6, "z": 250 + idx * 5, "timestamp": 1710400000 + idx * 60}]
+        current_pose = {
+            "joints": {
+                "wrist_r": {"x": 0.12 + idx * 0.001, "y": -0.04, "z": 0.38, "roll": 5 + idx % 3, "pitch": 16 + idx % 4, "yaw": 6 + idx % 3}
+            }
+        }
+        reference_pose = {
+            "joints": {
+                "wrist_r": {"x": 0.10, "y": -0.02, "z": 0.41, "roll": 2, "pitch": 12, "yaw": 3}
+            }
+        }
+        context_data = {
+            "coordinates": coords,
+            "ship_model_id": f"HULL-XR-20{idx:02d}",
+            "current_pose": current_pose,
+            "reference_pose": reference_pose,
+        }
+
+        tc_loc = json.dumps(
+            {
+                "name": "location_tracking",
+                "arguments": {
+                    "coordinates": coords,
+                    "ship_model_id": f"HULL-XR-20{idx:02d}",
+                },
+            },
+            ensure_ascii=False,
+        )
+        tc_pose = json.dumps(
+            {
+                "name": "pose_estimation",
+                "arguments": {
+                    "current_pose": current_pose,
+                    "reference_pose": reference_pose,
+                },
+            },
+            ensure_ascii=False,
+        )
+        xr_output = (
+            "XR 콘텐츠 출력:\n"
+            "- steps:\n"
+            f"  1) {zone} 구역({zone_type}) 진입 후 안전거리 확인\n"
+            "  2) 스프레이 건을 피도체와 평행하게 유지\n"
+            f"  3) 자세 교정 포인트 적용: {correction}\n"
+            "  4) 스트로크 오버랩 50% 유지하며 반복\n"
+            f"- highlight_zone: {zone}\n"
+            "- safety_notes:\n"
+            "  - 보호구 착용(방독 마스크, 보안경, 장갑)\n"
+            "  - 밀폐구역 환기 및 가연성 증기 모니터링"
+        )
+
+        samples.append({
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT_FC},
+                {"role": "user", "content": f"[환경 데이터]\n{json.dumps(context_data, ensure_ascii=False)}\n\n질문: {question}"},
+                {
+                    "role": "assistant",
+                    "content": (
+                        "XR 가이드 생성을 위해 위치와 자세를 함께 분석하겠습니다.\n\n"
+                        f"<tool_call>{tc_loc}</tool_call>\n\n"
+                        f"<tool_call>{tc_pose}</tool_call>\n\n"
+                        f"{xr_output}\n\n"
+                        "근거 문서 ID: DOC-doc_0038-C0046, DOC-doc_0044-C0227"
+                    ),
+                },
+            ],
+            "category": "tool_calling_xr",
+        })
+
+    return samples
+
+
+def _multi_tool_augment() -> list[dict[str, Any]]:
+    """Add eval-focused multi-tool combinations for underrepresented patterns."""
+    samples = []
+
+    for idx in range(1, 6):
+        ts_args: dict[str, Any] = {
+            "action": "update" if idx % 2 else "query",
+            "session_id": f"sess-mta-tsseq-{idx:02d}",
+        }
+        if ts_args["action"] == "update":
+            ts_args["data"] = {
+                "timestamp": 1710500000 + idx * 60,
+                "speed": 0.84 + idx * 0.06,
+                "distance": 298 + idx * 8,
+                "angle": 42 + idx * 2,
+            }
+        seq_args = {
+            "trajectory": [
+                {"x": 100 + idx, "y": 170, "z": 210, "timestamp": 1710500000 + idx * 60},
+                {"x": 140 + idx, "y": 170, "z": 210, "timestamp": 1710500002 + idx * 60},
+                {"x": 180 + idx, "y": 170, "z": 210, "timestamp": 1710500004 + idx * 60},
+            ],
+            "zone_id": f"HP-{idx}",
+            "zone_type": "수평 패널",
+            "reference_pattern": "left_to_right",
+        }
+        context_data = {
+            "timeseries": ts_args,
+            "sequence_validation": seq_args,
+            "env": {"temperature": 20 + idx, "humidity": 60 + idx * 2},
+        }
+        tc_ts = json.dumps({"name": "timeseries", "arguments": ts_args}, ensure_ascii=False)
+        tc_seq = json.dumps({"name": "sequence_validation", "arguments": seq_args}, ensure_ascii=False)
+        samples.append({
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT_FC},
+                {"role": "user", "content": f"[환경 데이터]\n{json.dumps(context_data, ensure_ascii=False)}\n\n질문: 환경 조건과 현재 순서를 함께 검증해줘."},
+                {
+                    "role": "assistant",
+                    "content": (
+                        "환경 조건을 고려해 시계열 추세와 작업 순서를 함께 분석하겠습니다.\n\n"
+                        f"<tool_call>{tc_ts}</tool_call>\n\n"
+                        f"<tool_call>{tc_seq}</tool_call>\n\n"
+                        "시계열 변화와 stroke 패턴을 종합해 작업 안정성과 순서 적합성을 판단했습니다.\n\n"
+                        "근거 문서 ID: DOC-doc_0018-C0037, DOC-doc_0044-C0227"
+                    ),
+                },
+            ],
+            "category": "tool_calling_multi_aug",
+        })
+
+    for idx in range(1, 4):
+        meas = [82 + idx * 2, 88 + idx, 93 + idx, 86 + idx * 2, 90 + idx]
+        loc_args = {
+            "coordinates": [{"x": 320 + idx * 20, "y": 140 - idx * 3, "z": 270 + idx * 4, "timestamp": 1710501000 + idx * 60}],
+            "ship_model_id": f"HULL-MTA-LAD-{idx:02d}",
+        }
+        anm_args = {
+            "image_context": f"B-{idx}-L 구역 국부 저도막 패턴",
+            "dft_measurements": meas,
+            "env": {"temperature": 22 + idx, "humidity": 64 + idx},
+        }
+        dft_args = {"measurements": meas, "spec": {"nominal": 100, "tolerance_rule": "90/10"}}
+        context_data = {"location": loc_args, "anomaly": anm_args, "dft": dft_args}
+        tc_loc = json.dumps({"name": "location_tracking", "arguments": loc_args}, ensure_ascii=False)
+        tc_anm = json.dumps({"name": "anomaly_detection", "arguments": anm_args}, ensure_ascii=False)
+        tc_dft = json.dumps({"name": "dft_judge", "arguments": dft_args}, ensure_ascii=False)
+        samples.append({
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT_FC},
+                {"role": "user", "content": f"[환경 데이터]\n{json.dumps(context_data, ensure_ascii=False)}\n\n질문: 위치별 결함 분석하고 최종 합부도 판단해줘."},
+                {
+                    "role": "assistant",
+                    "content": (
+                        "위치 식별 후 이상 탐지와 DFT 판정을 순차적으로 수행하겠습니다.\n\n"
+                        f"<tool_call>{tc_loc}</tool_call>\n\n"
+                        f"<tool_call>{tc_anm}</tool_call>\n\n"
+                        f"<tool_call>{tc_dft}</tool_call>\n\n"
+                        "구역 위치 기반 결함 패턴과 DFT 판정 결과를 결합해 재도장 우선순위를 제시했습니다.\n\n"
+                        "근거 문서 ID: DOC-doc_0038-C0046, DOC-doc_0037-C0308, DOC-doc_0033-C0326"
+                    ),
+                },
+            ],
+            "category": "tool_calling_multi_aug",
+        })
+
+    for idx in range(1, 4):
+        meas = [89 + idx, 111 - idx, 86 + idx, 108 - idx, 92 + idx]
+        ts_args = {
+            "action": "update",
+            "session_id": f"sess-mta-tad-{idx:02d}",
+            "data": {"timestamp": 1710502000 + idx * 60, "speed": 1.02 + idx * 0.05, "distance": 314 + idx * 7, "angle": 46 + idx * 3},
+        }
+        anm_args = {
+            "image_context": f"중앙부 교차 패턴 idx-{idx}",
+            "dft_measurements": meas,
+            "env": {"temperature": 23 + idx, "humidity": 62 + idx * 2},
+        }
+        dft_args = {"measurements": meas, "spec": {"nominal": 100, "tolerance_rule": "90/10"}}
+        context_data = {"timeseries": ts_args, "anomaly": anm_args, "dft": dft_args}
+        tc_ts = json.dumps({"name": "timeseries", "arguments": ts_args}, ensure_ascii=False)
+        tc_anm = json.dumps({"name": "anomaly_detection", "arguments": anm_args}, ensure_ascii=False)
+        tc_dft = json.dumps({"name": "dft_judge", "arguments": dft_args}, ensure_ascii=False)
+        samples.append({
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT_FC},
+                {"role": "user", "content": f"[환경 데이터]\n{json.dumps(context_data, ensure_ascii=False)}\n\n질문: 추세+이상+판정을 종합해 원인 체인 분석해줘."},
+                {
+                    "role": "assistant",
+                    "content": (
+                        "시계열 추세와 히트맵 이상, DFT 합부를 종합 분석하겠습니다.\n\n"
+                        f"<tool_call>{tc_ts}</tool_call>\n\n"
+                        f"<tool_call>{tc_anm}</tool_call>\n\n"
+                        f"<tool_call>{tc_dft}</tool_call>\n\n"
+                        "속도/각도 변동 추세와 이상 패턴, 판정 결과를 연결해 공정 원인 체인을 도출했습니다.\n\n"
+                        "근거 문서 ID: DOC-doc_0018-C0037, DOC-doc_0037-C0308, DOC-doc_0033-C0326"
+                    ),
+                },
+            ],
+            "category": "tool_calling_multi_aug",
+        })
+
+    for idx in range(1, 3):
+        loc_args = {
+            "coordinates": [{"x": 350 + idx * 18, "y": 118, "z": 260 + idx * 8, "timestamp": 1710503000 + idx * 60}],
+            "ship_model_id": f"HULL-MTA-LST-{idx:02d}",
+        }
+        seq_args = {
+            "trajectory": [
+                {"x": 110, "y": 290, "z": 220, "timestamp": 1710503000 + idx * 60},
+                {"x": 110, "y": 240, "z": 220, "timestamp": 1710503002 + idx * 60},
+                {"x": 110, "y": 190, "z": 220, "timestamp": 1710503004 + idx * 60},
+            ],
+            "zone_id": f"VP-{idx+5}",
+            "zone_type": "수직 패널",
+            "reference_pattern": "bottom_to_top",
+        }
+        ts_args = {
+            "action": "query",
+            "session_id": f"sess-mta-lst-{idx:02d}",
+        }
+        context_data = {"location": loc_args, "sequence": seq_args, "timeseries": ts_args}
+        tc_loc = json.dumps({"name": "location_tracking", "arguments": loc_args}, ensure_ascii=False)
+        tc_seq = json.dumps({"name": "sequence_validation", "arguments": seq_args}, ensure_ascii=False)
+        tc_ts = json.dumps({"name": "timeseries", "arguments": ts_args}, ensure_ascii=False)
+        samples.append({
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT_FC},
+                {"role": "user", "content": f"[환경 데이터]\n{json.dumps(context_data, ensure_ascii=False)}\n\n질문: 구역 우선순위를 위치/순서/추세 기반으로 정해줘."},
+                {
+                    "role": "assistant",
+                    "content": (
+                        "구역 우선순위 결정을 위해 위치, 순서, 시계열을 함께 분석하겠습니다.\n\n"
+                        f"<tool_call>{tc_loc}</tool_call>\n\n"
+                        f"<tool_call>{tc_seq}</tool_call>\n\n"
+                        f"<tool_call>{tc_ts}</tool_call>\n\n"
+                        "위치 기반 난이도와 순서 적합성, 추세 안정성을 결합해 우선 작업 구역을 도출했습니다.\n\n"
+                        "근거 문서 ID: DOC-doc_0038-C0046, DOC-doc_0044-C0227, DOC-doc_0018-C0037"
+                    ),
+                },
+            ],
+            "category": "tool_calling_multi_aug",
+        })
+
+    for idx in range(1, 3):
+        seq_args = {
+            "trajectory": [
+                {"x": 86, "y": 120 + idx * 2, "z": 248, "timestamp": 1710504000 + idx * 60},
+                {"x": 136, "y": 120 + idx * 2, "z": 248, "timestamp": 1710504002 + idx * 60},
+                {"x": 186, "y": 120 + idx * 2, "z": 248, "timestamp": 1710504004 + idx * 60},
+            ],
+            "zone_id": f"HP-{idx+6}",
+            "zone_type": "수평 패널",
+            "reference_pattern": "left_to_right",
+        }
+        ts_args = {
+            "action": "update",
+            "session_id": f"sess-mta-sta-{idx:02d}",
+            "data": {"timestamp": 1710504000 + idx * 60, "speed": 0.92 + idx * 0.07, "distance": 309 + idx * 6, "angle": 50 + idx * 2},
+        }
+        anm_args = {
+            "image_context": f"수평 패널 스트릭 패턴 idx-{idx}",
+            "dft_measurements": [90 + idx, 97 + idx, 85 + idx, 104 + idx, 93 + idx],
+            "env": {"temperature": 21 + idx, "humidity": 67 + idx},
+        }
+        context_data = {"sequence": seq_args, "timeseries": ts_args, "anomaly": anm_args}
+        tc_seq = json.dumps({"name": "sequence_validation", "arguments": seq_args}, ensure_ascii=False)
+        tc_ts = json.dumps({"name": "timeseries", "arguments": ts_args}, ensure_ascii=False)
+        tc_anm = json.dumps({"name": "anomaly_detection", "arguments": anm_args}, ensure_ascii=False)
+        samples.append({
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT_FC},
+                {"role": "user", "content": f"[환경 데이터]\n{json.dumps(context_data, ensure_ascii=False)}\n\n질문: 순서+추세+이상 상태를 종합 진단해줘."},
+                {
+                    "role": "assistant",
+                    "content": (
+                        "순서 검증, 시계열 추세, 이상 탐지를 통합 분석하겠습니다.\n\n"
+                        f"<tool_call>{tc_seq}</tool_call>\n\n"
+                        f"<tool_call>{tc_ts}</tool_call>\n\n"
+                        f"<tool_call>{tc_anm}</tool_call>\n\n"
+                        "작업 순서 적합성과 속도 추세, 결함 신호를 결합해 종합 리스크를 판단했습니다.\n\n"
+                        "근거 문서 ID: DOC-doc_0044-C0227, DOC-doc_0018-C0037, DOC-doc_0037-C0308"
+                    ),
+                },
+            ],
+            "category": "tool_calling_multi_aug",
+        })
+
+    return samples
+
+
+def _multi_turn_augment() -> list[dict[str, Any]]:
+    """Add multi-turn samples focused on underrepresented tools."""
+    samples = []
+
+    for idx in range(1, 3):
+        loc_args = {
+            "coordinates": [{"x": 330 + idx * 15, "y": 145 - idx * 4, "z": 272 + idx * 5, "timestamp": 1710600000 + idx * 60}],
+            "ship_model_id": f"HULL-MTLOC-{idx:02d}",
+        }
+        tool_result = json.dumps({
+            "status": "success",
+            "result": {
+                "zone_id": f"B-{idx+2}-L",
+                "zone_type": "hull_side",
+                "coverage_pct": 62.0 + idx * 9.5,
+                "uncovered_areas": ["상단 영역", "좌측 경계"],
+            },
+        }, ensure_ascii=False)
+        tc_json = json.dumps({"name": "location_tracking", "arguments": loc_args}, ensure_ascii=False)
+        samples.append({
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT_FC},
+                {"role": "user", "content": f"[환경 데이터]\n{json.dumps(loc_args, ensure_ascii=False)}\n\n질문: 지금 작업 구역 확인해줘."},
+                {"role": "assistant", "content": f"현재 작업 위치를 확인하기 위해 도구를 호출합니다.\n\n<tool_call>{tc_json}</tool_call>"},
+                {"role": "tool", "content": tool_result},
+                {
+                    "role": "assistant",
+                    "content": (
+                        "도구 분석 결과를 바탕으로 답변합니다.\n\n"
+                        f"현재 위치는 B-{idx+2}-L(hull_side)이며 미도장 구역은 상단/좌측 경계입니다. "
+                        "미도장 영역부터 우선 보완하세요.\n\n"
+                        "근거 문서 ID: DOC-doc_0038-C0046"
+                    ),
+                },
+            ],
+            "category": "multi_turn_location_aug",
+        })
+
+    for idx in range(1, 3):
+        seq_args = {
+            "trajectory": [
+                {"x": 112, "y": 304 - idx * 40, "z": 218, "timestamp": 1710601000 + idx * 60},
+                {"x": 112, "y": 254 - idx * 40, "z": 218, "timestamp": 1710601002 + idx * 60},
+                {"x": 112, "y": 204 - idx * 40, "z": 218, "timestamp": 1710601004 + idx * 60},
+            ],
+            "zone_id": f"VP-{idx+6}",
+            "zone_type": "수직 패널",
+            "reference_pattern": "bottom_to_top",
+        }
+        tool_result = json.dumps({
+            "status": "success",
+            "result": {
+                "valid": False if idx == 1 else True,
+                "detected_pattern": "top_to_bottom" if idx == 1 else "bottom_to_top",
+                "reference_pattern": "bottom_to_top",
+                "correction": "reverse_direction" if idx == 1 else "none",
+            },
+        }, ensure_ascii=False)
+        tc_json = json.dumps({"name": "sequence_validation", "arguments": seq_args}, ensure_ascii=False)
+        samples.append({
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT_FC},
+                {"role": "user", "content": f"[환경 데이터]\n{json.dumps(seq_args, ensure_ascii=False)}\n\n질문: 순서 위반 여부 확인해줘."},
+                {"role": "assistant", "content": f"도장 순서 검증을 위해 도구를 호출합니다.\n\n<tool_call>{tc_json}</tool_call>"},
+                {"role": "tool", "content": tool_result},
+                {
+                    "role": "assistant",
+                    "content": (
+                        "도구 분석 결과를 바탕으로 답변합니다.\n\n"
+                        f"검증 결과는 {'부적합' if idx == 1 else '적합'}이며, "
+                        f"감지 패턴은 {'top_to_bottom' if idx == 1 else 'bottom_to_top'}입니다.\n\n"
+                        "근거 문서 ID: DOC-doc_0044-C0227"
+                    ),
+                },
+            ],
+            "category": "multi_turn_sequence_aug",
+        })
+
+    for idx in range(1, 3):
+        ts_args: dict[str, Any] = {
+            "action": "query" if idx == 1 else "update",
+            "session_id": f"sess-mtts-{idx:02d}",
+        }
+        if idx == 2:
+            ts_args["data"] = {"timestamp": 1710602000 + idx * 60, "speed": 1.08, "distance": 324, "angle": 46}
+
+        tool_result = json.dumps({
+            "status": "success",
+            "result": {
+                "session_id": f"sess-mtts-{idx:02d}",
+                "trend": "stable" if idx == 1 else "updated",
+                "speed": {"mean": 1.01 + idx * 0.03, "std": 0.11},
+                "distance": {"mean": 312 + idx * 6, "std": 15},
+                "angle": {"mean": 47 + idx, "std": 4.8},
+            },
+        }, ensure_ascii=False)
+        tc_json = json.dumps({"name": "timeseries", "arguments": ts_args}, ensure_ascii=False)
+        samples.append({
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT_FC},
+                {"role": "user", "content": f"[환경 데이터]\n{json.dumps(ts_args, ensure_ascii=False)}\n\n질문: 속도 변화와 추세를 확인해줘."},
+                {"role": "assistant", "content": f"시계열 분석을 위해 도구를 호출합니다.\n\n<tool_call>{tc_json}</tool_call>"},
+                {"role": "tool", "content": tool_result},
+                {
+                    "role": "assistant",
+                    "content": (
+                        "도구 분석 결과를 바탕으로 답변합니다.\n\n"
+                        "세션 추세를 확인했으며 속도/거리/각도 편차를 기준 범위에서 관리 중입니다.\n\n"
+                        "근거 문서 ID: DOC-doc_0018-C0037"
+                    ),
+                },
+            ],
+            "category": "multi_turn_timeseries_aug",
+        })
+
+    for idx in range(1, 3):
+        pose_args = {
+            "current_pose": {
+                "joints": {
+                    "wrist_r": {"x": 0.12 + idx * 0.01, "y": -0.05, "z": 0.37, "roll": 5 + idx, "pitch": 17 + idx * 2, "yaw": 7 + idx}
+                }
+            },
+            "reference_pose": {
+                "joints": {
+                    "wrist_r": {"x": 0.10, "y": -0.02, "z": 0.41, "roll": 2, "pitch": 12, "yaw": 3}
+                }
+            },
+        }
+        tool_result = json.dumps({
+            "status": "success",
+            "result": {
+                "overall_deviation": "high" if idx == 1 else "medium",
+                "joint_deviations": {
+                    "wrist_r": {"pitch_error": 5 + idx, "yaw_error": 3 + idx, "z_distance_error": -0.03},
+                },
+            },
+        }, ensure_ascii=False)
+        tc_json = json.dumps({"name": "pose_estimation", "arguments": pose_args}, ensure_ascii=False)
+        samples.append({
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT_FC},
+                {"role": "user", "content": f"[환경 데이터]\n{json.dumps(pose_args, ensure_ascii=False)}\n\n질문: 자세 교정 포인트 알려줘."},
+                {"role": "assistant", "content": f"자세 분석을 위해 도구를 호출합니다.\n\n<tool_call>{tc_json}</tool_call>"},
+                {"role": "tool", "content": tool_result},
+                {
+                    "role": "assistant",
+                    "content": (
+                        "도구 분석 결과를 바탕으로 답변합니다.\n\n"
+                        "손목 pitch/yaw 편차가 확인되어 스프레이 건 각도 교정이 필요합니다.\n\n"
+                        "근거 문서 ID: DOC-doc_0044-C0227"
+                    ),
+                },
+            ],
+            "category": "multi_turn_pose_aug",
+        })
+
+    for idx in range(1, 3):
+        meas = [84 + idx, 87 + idx, 92 + idx, 88 + idx, 86 + idx]
+        combined_calls = [
+            {
+                "name": "anomaly_detection",
+                "arguments": {
+                    "image_context": f"하단 저도막 분포 idx-{idx}",
+                    "dft_measurements": meas,
+                    "env": {"temperature": 22 + idx, "humidity": 67 + idx},
+                },
+            },
+            {
+                "name": "dft_judge",
+                "arguments": {
+                    "measurements": meas,
+                    "spec": {"nominal": 100, "tolerance_rule": "90/10"},
+                },
+            },
+        ]
+        tool_result = json.dumps({
+            "status": "success",
+            "results": [
+                {"tool": "anomaly_detection", "anomaly_type": "low_thickness", "severity": "medium"},
+                {"tool": "dft_judge", "verdict": "fail", "below_90pct": 4, "total": 5},
+            ],
+        }, ensure_ascii=False)
+        tc_text = (
+            f"<tool_call>{json.dumps(combined_calls[0], ensure_ascii=False)}</tool_call>\n\n"
+            f"<tool_call>{json.dumps(combined_calls[1], ensure_ascii=False)}</tool_call>"
+        )
+        context_data = {
+            "image_context": f"하단 저도막 분포 idx-{idx}",
+            "dft_measurements": meas,
+            "env": {"temperature": 22 + idx, "humidity": 67 + idx},
+            "spec": {"nominal": 100, "tolerance_rule": "90/10"},
+        }
+        samples.append({
+            "messages": [
+                {"role": "system", "content": SYSTEM_PROMPT_FC},
+                {"role": "user", "content": f"[환경 데이터]\n{json.dumps(context_data, ensure_ascii=False)}\n\n질문: 이상과 판정을 함께 분석해 상세 원인 설명해줘."},
+                {"role": "assistant", "content": f"이상 탐지와 DFT 판정을 위해 도구를 호출합니다.\n\n{tc_text}"},
+                {"role": "tool", "content": tool_result},
+                {
+                    "role": "assistant",
+                    "content": (
+                        "도구 분석 결과를 바탕으로 답변합니다.\n\n"
+                        "저도막 이상과 DFT 불합격이 동시에 확인되었습니다. "
+                        "속도 과속 또는 분사 거리 과대로 인한 하한 미달이 원인으로 보이며, 재도장 전 분사 조건을 교정해야 합니다.\n\n"
+                        "근거 문서 ID: DOC-doc_0037-C0308, DOC-doc_0033-C0326"
+                    ),
+                },
+            ],
+            "category": "multi_turn_chain_aug",
+        })
+
+    return samples
+
+
+def _fc_volume_augment() -> list[dict[str, Any]]:
+    samples: list[dict[str, Any]] = []
+    samples.extend(_location_tracking_augment())
+    samples.extend(_pose_estimation_augment())
+    samples.extend(_sequence_validation_augment())
+    samples.extend(_timeseries_augment())
+    samples.extend(_xr_content_samples())
+    samples.extend(_multi_tool_augment())
+    samples.extend(_multi_turn_augment())
+
+    samples.extend(_dft_judge_samples())
+    samples.extend(_anomaly_detection_samples())
+    samples.extend(_location_tracking_samples())
+    samples.extend(_pose_estimation_samples())
+    samples.extend(_sequence_validation_samples())
+    samples.extend(_timeseries_samples())
+    samples.extend(_multi_tool_samples())
+    samples.extend(_multi_turn_samples())
+
+    samples.extend(_multi_tool_augment())
+    samples.extend(_multi_turn_augment())
+    samples.extend(_xr_content_samples())
+    samples.extend(_dft_judge_samples())
     return samples
 
 
@@ -1328,12 +2606,20 @@ def generate_all_fc_samples(seed: int = 42) -> list[dict[str, Any]]:
     samples.extend(_dft_judge_samples())
     samples.extend(_anomaly_detection_samples())
     samples.extend(_location_tracking_samples())
+    samples.extend(_location_tracking_augment())
     samples.extend(_pose_estimation_samples())
+    samples.extend(_pose_estimation_augment())
     samples.extend(_sequence_validation_samples())
+    samples.extend(_sequence_validation_augment())
     samples.extend(_timeseries_samples())
+    samples.extend(_timeseries_augment())
+    samples.extend(_xr_content_samples())
     samples.extend(_multi_tool_samples())
+    samples.extend(_multi_tool_augment())
     samples.extend(_multi_turn_samples())
+    samples.extend(_multi_turn_augment())
     samples.extend(_no_tool_needed_samples())
+    samples.extend(_fc_volume_augment())
 
     random.shuffle(samples)
     return samples

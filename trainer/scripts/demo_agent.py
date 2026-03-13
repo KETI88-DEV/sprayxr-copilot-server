@@ -38,30 +38,31 @@ def _resolve_adapter_path(adapter_arg: Path | None, qlora_config_path: Path) -> 
 def _print_trace(trace: dict[str, Any]) -> None:
     print("-" * 80)
     print(f"Scenario: {trace['scenario']}")
+    print(f"Mode: {trace.get('mode', 'N/A')}")
     print(f"Instruction: {trace['instruction']}")
-    print("Tool Calls:")
-    if trace["tool_calls"]:
-        for idx, call in enumerate(trace["tool_calls"], start=1):
-            print(f"  {idx}. {call.get('name')} args={json.dumps(call.get('arguments', {}), ensure_ascii=False)}")
-    else:
-        print("  (none)")
+    print(f"Latency: {trace.get('metadata', {}).get('latency_ms', 'N/A')}ms")
 
-    print("RAG Chunks:")
-    if trace["rag_chunks"]:
-        for chunk in trace["rag_chunks"]:
-            score = chunk.get("rerank_score")
-            preview = str(chunk.get("text", "")).replace("\n", " ")[:140]
-            print(f"  - {chunk.get('chunk_id')} score={score} preview={preview}")
-    else:
-        print("  (none)")
+    print("Text Guide:")
+    tg = trace.get("text_guide", {})
+    if tg:
+        print(f"  Language: {tg.get('language')}, Detail: {tg.get('detail_level')}")
+        print(f"  Summary: {tg.get('summary', '')[:200]}")
 
-    print("Thinking:")
-    print(trace["thinking"] or "(empty)")
+    tools_used = trace.get("metadata", {}).get("tools_used", [])
+    print(f"Tools Used: {', '.join(tools_used) if tools_used else '(none)'}")
+
+    for section_name in ("pose_comparison", "next_path", "dft_result", "anomaly"):
+        section = trace.get(section_name)
+        if section is not None:
+            print(f"{section_name}:")
+            print(f"  {json.dumps(section, ensure_ascii=False)}")
+
+    if trace.get("steps"):
+        print(f"Steps: {json.dumps(trace['steps'], ensure_ascii=False, indent=2)}")
+
+    print(f"Citations: {trace.get('citations', [])}")
     print("Response:")
-    print(trace["response"])
-    if trace.get("xr_content") is not None:
-        print("XR JSON:")
-        print(json.dumps(trace["xr_content"], ensure_ascii=False, indent=2))
+    print(trace.get("text_guide", {}).get("body", trace.get("response", "")))
 
 
 def parse_args() -> argparse.Namespace:
@@ -198,13 +199,17 @@ def main() -> int:
             "scenario": scenario["scenario"],
             "instruction": scenario["instruction"],
             "environment": scenario["environment"],
-            "tool_calls": result["tool_calls"],
-            "rag_chunks": result["rag_chunks"],
-            "thinking": result["thinking"],
-            "response": result["response"],
-            "xr_content": result["xr_content"],
-            "rounds": result["rounds"],
+            "mode": result.get("mode"),
+            "text_guide": result.get("text_guide"),
+            "pose_comparison": result.get("pose_comparison"),
+            "next_path": result.get("next_path"),
+            "dft_result": result.get("dft_result"),
+            "anomaly": result.get("anomaly"),
+            "steps": result.get("steps"),
+            "citations": result.get("citations", []),
+            "metadata": result.get("metadata", {}),
             "session_id": result["session_id"],
+            "response": result.get("response", ""),
         }
         traces.append(trace)
         _print_trace(trace)
