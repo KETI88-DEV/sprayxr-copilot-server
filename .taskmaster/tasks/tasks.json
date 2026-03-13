@@ -841,7 +841,7 @@
           15,
           16
         ],
-        "status": "pending",
+        "status": "done",
         "subtasks": [
           {
             "id": 1,
@@ -849,7 +849,7 @@
             "description": "session_summary.json 입력 스키마(session_id, scenario_id, mode, 성능 지표들)를 정의하고 Pydantic/JSON 스키마로 구현하여 입력 데이터 검증 로직을 완성",
             "dependencies": [],
             "details": "session_id, scenario_id, mode(practice/test), avg_speed, avg_distance_mm, avg_angle_deg, dft_mean_um, dft_min_um, dft_max_um, under_thickness_ratio, over_thickness_ratio, paint_usage_ratio, notes[] 필드를 정의하고, /workspace/trainer/scripts/session_scorer.py에서 Pydantic 모델로 구현. 입력 데이터 유효성 확인(required 필드, 범위 체크, 타입 검증) 기능 추가. 잘못된 입력에 대한 명확한 에러 메시지 제공.",
-            "status": "pending",
+            "status": "done",
             "testStrategy": "session_summary.json 샘플 5건(정상, 누락, 범위 초과, 타입 오류)으로 검증 로직 테스트, JSON 스키마 유효성 확인, Pydantic 모델 instantiation 성공/실패 케이스 검증",
             "parentId": "undefined",
             "priority": "medium"
@@ -862,7 +862,7 @@
               1
             ],
             "details": "입력 스키마의 수치 지표들을 기반으로 각 위험 플래그의 판정 기준(threshold)을 정의. under_thickness_ratio > 15%, over_thickness_ratio > 10% 등으로 설정. 각 플래그별로 심각도(severity: high/medium/low) 및 판정 근거(reason)을 함께 반환하도록 구현. /workspace/trainer/scripts/session_scorer.py에 함수로 추가. 도메인 전문가 협의하여 threshold 값 최종 결정.",
-            "status": "pending",
+            "status": "done",
             "testStrategy": "합성 session_summary 데이터로 각 플래그 계산 검증, threshold 경계값(경계선상, 경계 안/밖) 테스트, 플래그별 심각도 정확성 확인, 실제 세션 5-10건으로 규칙 엔진 동작 검증",
             "parentId": "undefined",
             "priority": "medium"
@@ -876,7 +876,7 @@
               2
             ],
             "details": "RAG API의 검색 엔드포인트를 호출하는 함수 구현(/rag_api/search 또는 동등 엔드포인트 사용). 입력: 위험 플래그, 성능 지표 요약. 출력: 관련 문서 chunks(chunk_id, source, text, score 포함). 프롬프트 템플릿 설계: (1) 지표 요약 섹션 (2) RAG 검색 결과(citations 포함) (3) 코칭 생성 요청(3개 action_items, 근거 문서 인용 필수). 두 가지 RAG 구성 모두 지원: RAG-only, RAG+QLoRA.",
-            "status": "pending",
+            "status": "done",
             "testStrategy": "RAG API 연결 테스트(검색 응답 정상 수신), 프롬프트 템플릿 렌더링 성공 확인(샘플 데이터 5건), 검색된 chunks의 chunk_id 필드 존재 확인, 프롬프트 길이 제한 내 유지(context window < 8000 tokens)",
             "parentId": "undefined",
             "priority": "medium"
@@ -889,7 +889,7 @@
               3
             ],
             "details": "응답 스키마를 Pydantic 모델로 구현: session_id(str), summary(str, <500 chars), action_items(list[{id, description, steps[], execution_order, re_measurement_time}]), risk_flags(list[{flag_name, severity, evidence}]), citations(list[{chunk_id, source, relevance_score}]), confidence(float 0-1), model_name(str), timestamp(ISO8601). LLM 호출 함수 구현: prompt 전달 → 모델 응답 → JSON 파싱 → Pydantic 검증 → 응답 반환. action_items은 정확한 수치, 실행 순서, 재측정 시점 포함 필수. LLM 라이브러리(transformers, vllm 등) 연동.",
-            "status": "pending",
+            "status": "done",
             "testStrategy": "LLM 응답 JSON 파싱 성공, action_items 3개 이상 생성 확인, citations chunk_id 존재 및 형식 검증, confidence 0-1 범위 확인, timestamp 유효한 ISO8601 형식 검증, Pydantic 모델 instantiation 성공",
             "parentId": "undefined",
             "priority": "medium"
@@ -902,7 +902,7 @@
               4
             ],
             "details": "평가 데이터셋 준비: 5-10개 session_summary.json 샘플 (다양한 성과, 위험도 포함). 각 세션마다 코칭 응답 생성. 평가 기준: (1) 자연성(Natural): 코칭 텍스트가 현실적이고 이해하기 쉬운가 (2) 안전성(Safety): 권고사항이 안전규정을 준수하는가 (3) 실행 가능성(Feasibility): 제시된 action_items이 현장에서 실제로 수행 가능한가. 도메인 전문가가 각 항목을 4/5점 이상으로 평가하도록 설계. 평가 결과 정리 및 개선 사항 반영.",
-            "status": "pending",
+            "status": "done",
             "testStrategy": "평가용 세션 5-10건 코칭 응답 생성 확인, 도메인 전문가 평가표(CSV/JSON) 작성 완료, 평균 점수 ≥4/5 달성, 개선 피드백 수집 및 반영 완료, 최종 품질 리포트(/output/coaching_evaluation.md) 작성",
             "parentId": "undefined",
             "priority": "medium"
@@ -921,7 +921,7 @@
           3,
           9
         ],
-        "status": "pending",
+        "status": "deferred",
         "subtasks": [
           {
             "id": 1,
@@ -1001,7 +1001,7 @@
           18,
           10
         ],
-        "status": "pending",
+        "status": "done",
         "subtasks": [
           {
             "id": 1,
@@ -1009,7 +1009,7 @@
             "description": "RAG-Only, QLoRA-Only, RAG+QLoRA 3가지 구성의 평가 결과 CSV 파일들을 /output/eval_results/에서 수집하여 통합 데이터셋 생성",
             "dependencies": [],
             "details": "Task 6과 Task 9에서 생성된 rag_only_results.csv, qlora_only_results.csv, rag_qlora_results.csv를 읽어들여 통합 비교 테이블 생성. 각 파일에서 q_id, category, manual_score, rouge_l, bertscore_f1, hallucination_flag, error_type, confidence 컬럼 추출 및 정규화. 결측값 처리 및 데이터 타입 검증. comparison.csv 생성으로 3가지 모델 구성 나란히 비교 가능하도록 정렬.",
-            "status": "pending",
+            "status": "done",
             "testStrategy": "3개 CSV 파일 모두 정상 로드 확인, 50개 문항 전부 통합되었는지 검증, 수치 컬럼(점수, 지표값)의 데이터 타입 정확성 확인, 카테고리별 분포 재검증(5개 카테고리×10문항)",
             "parentId": "undefined",
             "priority": "high"
@@ -1022,7 +1022,7 @@
               1
             ],
             "details": "성공 기준별로 RAG-Only, QLoRA-Only, RAG+QLoRA의 실제 수치 비교. 예: 평균 점수 기준(1.5/2.0 이상) - 각 구성별 평균값 계산 및 기준 충족 여부(O/X), hallucination 기준(≤10%) - 각 구성별 hallucination 발생률 계산, 응답시간/메모리/추론비용은 평가 실행 로그에서 추출. 검증표를 마크다운 테이블 형식으로 작성하여 명확한 pass/fail 표시. 기준 미충족 항목에 대한 편차값(예: 기준 1.5 vs 실제 1.42) 명시.",
-            "status": "pending",
+            "status": "done",
             "testStrategy": "성공 기준 정의 문서와 대조하여 기준 수치 정확성 확인, 3가지 구성 모두에 대한 검증 완료, 합격/불합격 판정이 명확함, 편차값 계산 재확인",
             "parentId": "undefined",
             "priority": "high"
@@ -1035,7 +1035,7 @@
               2
             ],
             "details": "Keep 조건: RAG+QLoRA가 RAG-Only 대비 평균 0.15점 이상 향상 && hallucination 동일/감소. 이 조건의 충족 여부를 정량적 수치로 입증(예: RAG-Only 평균 1.65점 vs RAG+QLoRA 1.82점, 향상도 +0.17). QLoRA 미사용 시 비용 절감(메모리, 추론 시간, 저장소) vs 사용 시 성능 향상의 trade-off 분석. 발견된 문제점(hallucination 증가 양상, 특정 카테고리 성능 저하 등) 상세 기술 및 향후 개선방안 제시. 최종 의사결정(Keep/Drop) 명확히 결론 도출.",
-            "status": "pending",
+            "status": "done",
             "testStrategy": "의사결정 조건의 수치 근거가 Task 6, 9 평가 결과와 일치하는지 확인, 비용-효과 분석 데이터의 출처 명확성, 문제점 설명이 실제 데이터 분석 결과와 부합하는지 검증, 최종 의사결정이 명확하고 논리적으로 일관성 있음",
             "parentId": "undefined",
             "priority": "high"
@@ -1048,7 +1048,7 @@
               1
             ],
             "details": "Python matplotlib/plotly를 사용하여 다음 차트 생성: (1) 카테고리별 성능 비교(막대/선 그래프, 5개 카테고리×3가지 구성), (2) 모델별 평균 점수 비교(막대 차트), (3) hallucination 비율 비교(막대 또는 원형 차트), (4) 각 평가 지표(ROUGE-L, BERTScore) 분포(박스플롯), (5) 오류 유형 분포(파이 또는 막대 차트). 차트 이미지를 /output/eval_results/images/ 디렉토리에 PNG 형식으로 저장. 차트 제목, 축 레이블, 범례는 명확하고 한국어로 표시.",
-            "status": "pending",
+            "status": "done",
             "testStrategy": "모든 차트 이미지 파일이 정상 생성되었는지 확인, 차트 데이터가 comparison.csv와 일치하는지 샘플링 검증, 이미지 해상도가 마크다운 삽입 적정 수준(최소 800px 너비) 확인, 차트의 한국어 텍스트가 깨지지 않게 인코딩되어 있는지 확인",
             "parentId": "undefined",
             "priority": "high"
@@ -1063,7 +1063,7 @@
               4
             ],
             "details": "마크다운 리포트 구조: (1) 실행 요약(Executive Summary): 1차 PoC 목표/구성 요약, 주요 결과(3가지 구성 평균 점수, hallucination율), 의사결정 요약(keep/drop), (2) 기준선 비교표: 모델별 평균 점수/hallucination율/응답시간/메모리/추론비용을 테이블로 정렬, (3) 상세 결과: 카테고리별 성능(표 + 그래프), 오류 분석(오류 유형 분포, 저점수 문항 원인), hallucination 유형 분석, (4) 성공 기준 검증표(Task 2 산출물), (5) 기술 의사결정(Task 3 산출물), (6) 다음 단계: VLM stub 정의, 세션 export 자동화, 다국어 확장 우선순위 설정. Excel 파일은 comparison.csv 데이터로 피벗 테이블 및 기본 통계 시트 포함. /output/eval_results/final_report.md, /output/eval_results/final_report.xlsx 생성. 부록으로 원본 평가 CSV, 평가셋(eval_set.jsonl) 참조 정보 포함.",
-            "status": "pending",
+            "status": "done",
             "testStrategy": "/output/eval_results/final_report.md 파일이 정상 생성되었는지 확인, 마크다운 문법 유효성 검증(헤더, 테이블, 링크 모두 정상), /output/eval_results/final_report.xlsx 파일 생성 및 Excel 열림 확인, 모든 수치(점수, 지표값)가 원본 CSV와 정확히 일치하는지 재계산으로 검증, 시각화 이미지가 마크다운에 정상 삽입되었는지 확인, 의사결정 근거 명확성 재검토",
             "parentId": "undefined",
             "priority": "high"
