@@ -1,0 +1,133 @@
+{
+	"meta": {
+		"generatedAt": "2026-03-16T05:12:38.156Z",
+		"tasksAnalyzed": 15,
+		"totalTasks": 34,
+		"analysisCount": 15,
+		"thresholdScore": 5,
+		"projectName": "Task Master",
+		"usedResearch": true
+	},
+	"complexityAnalysis": [
+		{
+			"taskId": 20,
+			"taskTitle": "DocQA 3-Way 재평가 (Iter14 어댑터)",
+			"complexityScore": 3,
+			"recommendedSubtasks": 3,
+			"expansionPrompt": "Break down the 3-way evaluation execution into: (1) Iter14 adapter verification and path validation, (2) Running comparison mode with run_qlora_eval.py --mode compare across existing rag_only/qlora_only/ragqlora results, (3) Report generation and visualization with generate_report_charts.py including hallucination rate validation",
+			"reasoning": "This task primarily involves running existing evaluation infrastructure (run_qlora_eval.py --mode compare is already implemented, lines 252-424). The main work is: (1) Verifying Iter14 adapter exists at correct path, (2) Executing comparison logic that aggregates existing CSV results, (3) Generating reports using existing functions. Low complexity as it reuses established patterns and doesn't require new implementation logic. Validation of hallucination rate ≤2% is straightforward CSV filtering."
+		},
+		{
+			"taskId": 21,
+			"taskTitle": "CoT 추론 강화",
+			"complexityScore": 6,
+			"recommendedSubtasks": 5,
+			"expansionPrompt": "Expand into: (1) Create generate_cot_sft.py script scaffold matching generate_sft.py patterns, (2) Implement <think> block CoT data generation for single-tool cases (30 samples), (3) Implement multi-tool sequential CoT generation (30 samples with 2-3 tools), (4) Implement complex 4+ tool CoT generation (20 samples), (5) Integrate CoT template into rag_config_fewshot.yaml and implement thinking_budget logic",
+			"reasoning": "Requires new script creation (generate_cot_sft.py) but can leverage existing generate_sft.py structure (lines 75-87 show JSONL loading pattern). Main complexity: (1) Designing synthetic CoT examples with valid reasoning chains matching domain, (2) Ensuring <think> block format compatibility with Qwen3 thinking mechanism, (3) Validating reasoning depth across tool complexities. Must handle 80+ samples with quality constraints. Dependency on Task 20 is light (uses same eval set). Moderate complexity due to need to create realistic reasoning chains."
+		},
+		{
+			"taskId": 22,
+			"taskTitle": "도구 선택 정확도 개선",
+			"complexityScore": 5,
+			"recommendedSubtasks": 4,
+			"expansionPrompt": "Break into: (1) Define explicit tool-to-intent mapping rules based on domain keywords, (2) Generate single-intent → single-tool SFT data (15 samples with diverse intents), (3) Generate complex-intent → multi-tool SFT data (15 samples), (4) Generate negative examples where no tool is required (10 samples), (5) Implement tool selection confidence threshold logic in agent_pipeline.py",
+			"reasoning": "Moderate complexity. Requires: (1) analyzing existing MCP tool schemas (dft_judge.py line 35-37 shows structure), (2) creating intent-tool mapping table, (3) generating 40 SFT samples with proper distribution. Can reuse SFT data generation patterns from generate_sft.py. Confidence threshold implementation needs integration with tool_calling_adapter.py (lines 152-164 show endpoint resolution). No new infrastructure needed, primarily data generation + integration."
+		},
+		{
+			"taskId": 23,
+			"taskTitle": "응답 구조 표준화",
+			"complexityScore": 6,
+			"recommendedSubtasks": 4,
+			"expansionPrompt": "Break into: (1) Define JSON schema for each route (training_realtime, training_review, fast) with required/optional fields, (2) Implement validate_response_structure() and ensure_citations() functions in response_formatter.py, (3) Implement JSON repair logic for malformed responses (using repair_json_structure), (4) Add post-processing validation step to agent_pipeline.py with re-generation on failure",
+			"reasoning": "Moderate-high complexity. Requires: (1) designing 3 distinct JSON schemas with semantic differences, (2) implementing validation using jsonschema library, (3) creating JSON repair logic for incomplete outputs (challenging with LLM outputs), (4) integrating into agent pipeline without breaking existing flow. Current response_formatter.py (lines 96-124) shows existing format_response() pattern. Main challenge is balancing citation auto-fill without hallucination and handling schema mismatches gracefully."
+		},
+		{
+			"taskId": 24,
+			"taskTitle": "파라미터 정확도 개선",
+			"complexityScore": 5,
+			"recommendedSubtasks": 4,
+			"expansionPrompt": "Break into: (1) Load tool_schemas/*.json and build parameter validation rules, (2) Implement validate_tool_parameters() function with type checking and coercion, (3) Implement type conversion logic (string→list, string→number) with proper error handling, (4) Add range validation for domain-specific parameters (DFT 0-500µm) and integrate into tool_calling_adapter.py dispatch path",
+			"reasoning": "Moderate complexity. Tool calling adapter already exists (tool_calling_adapter.py lines 166-259 show dispatch logic). Main work: (1) parsing tool schemas from JSON files (tool_schemas/*.json), (2) implementing type coercion with safe fallbacks, (3) handling edge cases (empty strings, null values, out-of-range values). Current code validates at infrastructure level; this adds semantic validation. Requires testing across 7 MCP tools with diverse parameter types."
+		},
+		{
+			"taskId": 25,
+			"taskTitle": "Medium 난이도 갭 해소",
+			"complexityScore": 6,
+			"recommendedSubtasks": 4,
+			"expansionPrompt": "Break into: (1) Analyze existing Medium difficulty questions to identify tool chain patterns, (2) Generate 2-3 tool sequential chain SFT data (15 samples) with explicit result passing between tools, (3) Generate 4+ tool complex chain SFT data (15 samples with branching logic), (4) Update few-shot prompts in rag_config_fewshot.yaml with multi-tool examples and test on Medium eval subset",
+			"reasoning": "Moderate-high complexity. Depends on Tasks 21-22 completion (line 3 of task description). Primary challenges: (1) designing realistic tool chain workflows (e.g., location_tracking→sequence_validation per line 8-9), (2) ensuring inter-tool parameter compatibility, (3) representing branching logic (dft_judge→anomaly_detection on failure), (4) validating semantic correctness of chains. Requires 30 samples with quality validation. Integration complexity moderate as few-shot templates already exist in rag_config_fewshot.yaml."
+		},
+		{
+			"taskId": 26,
+			"taskTitle": "P0 통합 회귀 평가 및 QLoRA 재학습",
+			"complexityScore": 7,
+			"recommendedSubtasks": 6,
+			"expansionPrompt": "Break into: (1) Create merge_sft.py script to combine 567 existing + 80 (T21) + 40 (T22) + 30 (T25) = 717 samples with deduplication, (2) Validate merged SFT dataset quality and format, (3) Execute QLoRA training (Iter15) with config validation and VRAM monitoring, (4) Run full agentic evaluation (30 items) with generate_agentic_responses.py, (5) Run DocQA regression test (50 items) with hallucination validation, (6) Generate Iter14 vs Iter15 comparative analysis report",
+			"reasoning": "High complexity. This is integration/orchestration task. Challenges: (1) SFT merging requires deduplication across multiple sources (existing generate_sft.py patterns show dedup at lines 95-100), (2) QLoRA training is compute-intensive (3-4 hours on RTX 4080), requires VRAM management, error recovery, (3) agentic evaluation has complex multi-tool orchestration across agent_pipeline.py + tool_calling_adapter.py + MCP servers, (4) requires simultaneous validation of 5 scoring dimensions and hallucination tracking. Significant bottleneck is training time; must handle failures gracefully."
+		},
+		{
+			"taskId": 27,
+			"taskTitle": "VLM 통합 (Qwen2-VL-2B-Instruct)",
+			"complexityScore": 7,
+			"recommendedSubtasks": 5,
+			"expansionPrompt": "Break into: (1) Create vlm_pipeline.py with Qwen2-VL-2B-Instruct model loading (4-bit quantization), (2) Implement heatmap image processing and ROI extraction logic, (3) Implement VLM inference pipeline with output schema validation (roi_regions, distribution_summary, overall_quality), (4) Integrate VLM results into anomaly_detection.py MCP endpoint, (5) Benchmark VRAM usage and inference latency with 71 existing heatmap images",
+			"reasoning": "High complexity. Challenges: (1) VLM model loading requires careful VRAM budget management (2GB target + 4GB LLM + overhead < 16GB safe margin), (2) heatmap image processing and ROI extraction requires computer vision logic (similar to vlm_analysis.py stub but with real implementation), (3) designing valid output schema for integration with anomaly_detection (lines 40-44 show AnomalyRequest structure), (4) handling vision model failures gracefully. No existing implementation to leverage; new infrastructure. Dependency on Task 26 is soft (uses trained model)."
+		},
+		{
+			"taskId": 28,
+			"taskTitle": "Rule Engine 통합",
+			"complexityScore": 5,
+			"recommendedSubtasks": 4,
+			"expansionPrompt": "Break into: (1) Define Rule Engine input/output contract from /workspace/trainer/docs/rule_engine_interface.md, (2) Create rule_engine_adapter.py with score transformation logic (raw scores → 0-100 standard scale), (3) Implement generate_coaching_from_scores() function to create coaching messages from low scores, (4) Integrate adapter into agent_pipeline.py with latency <2s requirement and test with synthetic motion data",
+			"reasoning": "Moderate complexity. Requires: (1) understanding external Rule Engine interface (requires reading interface.md), (2) implementing simple transformation logic (raw score normalization), (3) creating conditional coaching logic based on score thresholds, (4) integration into pipeline without blocking. Simpler than VLM as Rule Engine interface is assumed to be stable. Synthetic data path viable for development. Dependency on Task 26 is execution order (uses trained model in pipeline)."
+		},
+		{
+			"taskId": 29,
+			"taskTitle": "Session Export 자동화",
+			"complexityScore": 4,
+			"recommendedSubtasks": 4,
+			"expansionPrompt": "Break into: (1) Define session_summary.json schema with required/optional fields and implement validation function, (2) Create session_watcher.py using watchdog library to monitor /exports/realcoat/ directory, (3) Implement session detection and analysis queue registration logic with error handling and retry (max 3), (4) Test with synthetic session_summary.json files covering valid, malformed, and edge case scenarios",
+			"reasoning": "Low-moderate complexity. Straightforward watchdog-based file monitoring. Challenges: (1) schema validation (use jsonschema like Task 23), (2) queue management and retry logic, (3) error handling for invalid sessions. Simpler than Tasks 26-27 as it's primarily I/O automation rather than ML orchestration. Interface dependency on Task 28 (Rule Engine) for downstream processing. Can be developed independently with synthetic data."
+		},
+		{
+			"taskId": 30,
+			"taskTitle": "MCP Stub 실구현 전환",
+			"complexityScore": 7,
+			"recommendedSubtasks": 6,
+			"expansionPrompt": "Break into: (1) Implement anomaly_detection.py real logic (distribution analysis + root cause inference from timeseries), (2) Verify sequence_validation.py is functional (2-step logic already implemented), (3) Implement location_tracking.py with 3D→Zone mapping using synthetic zone definitions, (4) Implement timeseries.py with statistical analysis (moving average, stdev, correlation), (5) Write unit tests for each tool (100% coverage target), (6) Integration test all 4 tools via MCP endpoints with sample data",
+			"reasoning": "High complexity. Five interdependent tool implementations with varying difficulty: (1) anomaly_detection is most complex (requires distribution pattern analysis + correlation inference from timeseries data per lines 48-80 of existing stub), (2) location_tracking requires 3D geometry logic (relatively straightforward with zone mapping), (3) timeseries requires statistical computation (NumPy/SciPy usage), (4) pose_estimation deferred due to BVH data unavailability. Each tool has MCP endpoint contract (tool_calling_protocol.json lines 55-62) to satisfy. Integration testing across MCP server adds complexity."
+		},
+		{
+			"taskId": 31,
+			"taskTitle": "RLHF/DPO 학습 준비",
+			"complexityScore": 5,
+			"recommendedSubtasks": 4,
+			"expansionPrompt": "Break into: (1) Design human preference annotation protocol with 5-point evaluation rubric, (2) Set up annotation infrastructure (Label Studio or similar) for expert labeling workflow, (3) Collect preference pairs (500-1000 chosen/rejected response pairs) from evaluators, (4) Implement DPO training pipeline using trl.DPOTrainer with beta=0.1 KL penalty and evaluate hallucination <1% improvement",
+			"reasoning": "Moderate complexity but blocked by external factor (human annotation requirement). Implementation is straightforward using trl library (DPOTrainer), but data collection is the bottleneck. Requires: (1) rubric design based on existing eval_rubrics/ patterns, (2) annotation tool setup, (3) managing multiple annotators (consistency/agreement checks). Technical implementation is lower risk; primary risk is data collection timeline and quality. Dependency on Task 26 (uses Iter15 model as reference model)."
+		},
+		{
+			"taskId": 32,
+			"taskTitle": "Qdrant 벡터 DB 마이그레이션",
+			"complexityScore": 6,
+			"recommendedSubtasks": 5,
+			"expansionPrompt": "Break into: (1) Configure Qdrant in docker-compose.yml with volumes and port mapping (6333/6334), (2) Implement Qdrant collection creation and BGE-M3 embedding upload in build_index.py, (3) Convert search_index.py to use qdrant_client with HNSW search parameters, (4) Implement metadata filtering in search logic for domain_category refinement, (5) Performance benchmark (FAISS vs Qdrant search latency) and rollback plan validation",
+			"reasoning": "Moderate-high complexity. Requires: (1) Docker/infrastructure setup (low risk), (2) Qdrant API understanding (well-documented), (3) modifying existing build_index.py and search_index.py to use qdrant_client instead of FAISS, (4) ensuring embedding upload preserves metadata. Current FAISS usage is in build_index.py and search_index.py; migration is relatively isolated. Performance validation necessary (<200ms search latency per spec). No external data dependency; can be developed independently."
+		},
+		{
+			"taskId": 33,
+			"taskTitle": "음성 인터페이스 (Whisper STT + TTS)",
+			"complexityScore": 6,
+			"recommendedSubtasks": 4,
+			"expansionPrompt": "Break into: (1) Integrate Whisper model (large-v3 or small/medium variant) with Korean domain term recognition, (2) Select and integrate TTS engine (gTTS/Coqui/Azure) with audio output, (3) Build domain terminology pronunciation dictionary for fine-tuning STT accuracy, (4) Add Gradio UI speech widgets (audio_input, audio_output) and test end-to-end latency <5s requirement",
+			"reasoning": "Moderate-high complexity. Primary challenges: (1) Whisper model loading and Korean fine-tuning (domain term recognition requires 100+ audio samples), (2) TTS integration and voice quality, (3) latency optimization for real-time interaction, (4) Gradio integration with streaming audio. Blocked by audio data collection (100+ recordings). Lower priority as Phase 3 task. Can prototype with gTTS (simplest) before investing in fine-tuning."
+		},
+		{
+			"taskId": 34,
+			"taskTitle": "프로덕션 배포 (Kubernetes)",
+			"complexityScore": 7,
+			"recommendedSubtasks": 6,
+			"expansionPrompt": "Break into: (1) Write Kubernetes Deployment manifests for agent-pipeline (GPU nodeSelector), mcp-server (CPU), Service/Ingress config, (2) Configure GPU resource requests/limits and nvidia-device-plugin, (3) Set up Prometheus metrics export + Grafana dashboards for monitoring, (4) Implement HPA (Horizontal Pod Autoscaler) based on GPU utilization, (5) Configure ELK Stack or Loki for structured JSON logging, (6) Implement liveness/readiness probes on /health endpoint and disaster recovery testing",
+			"reasoning": "High complexity. Infrastructure-focused task with multiple components: (1) Kubernetes manifest authoring (requires K8s API understanding), (2) GPU resource management (nvidia-device-plugin setup, resource isolation), (3) observability stack deployment (Prometheus + Grafana + ELK/Loki) which is multi-component, (4) autoscaling tuning which requires load testing, (5) production readiness (probes, graceful shutdown, etc.). No code changes to core system; primarily DevOps work. Phase 3 priority. Requires Kubernetes cluster access."
+		}
+	]
+}

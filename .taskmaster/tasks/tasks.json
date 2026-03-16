@@ -1662,13 +1662,1060 @@
           }
         ],
         "updatedAt": "2026-03-11T12:55:00.000Z"
+      },
+      {
+        "id": "20",
+        "title": "DocQA 3-Way 재평가 (Iter14 어댑터)",
+        "description": "Iter14 어댑터 기준으로 RAG-Only / QLoRA-Only / RAG+QLoRA 3-Way 비교 완료하여 기준선 확보",
+        "details": "1) `run_qlora_eval.py --mode compare` 실행 (Iter14 어댑터 사용)\n2) Iter4 vs Iter14 비교 분석 수행\n3) 최종 리포트 및 차트 업데이트\n4) RAG+QLoRA가 RAG-Only 대비 우위 재확인\n5) hallucination ≤2% 유지 검증\n\n기술 세부사항:\n- 기존 eval_set.jsonl 50문항 사용\n- /output/adapters/qwen3_4b_shipcoat_lora_iter14/ 어댑터 경로\n- 3-Way 모드: rag-only, qlora-only, rag-qlora 각각 평가\n- 결과를 /output/eval_results/iter14_comparison.csv에 저장\n- generate_report_charts.py로 시각화 생성",
+        "testStrategy": "1) Unit test: test_iter14_rag_qlora_score() - Iter14 RAG+QLoRA 점수가 1.368 이상인지 확인\n2) Unit test: test_iter14_hallucination_rate() - hallucination 비율이 2% 이하인지 확인\n3) Integration test: test_3way_comparison_report_generated() - 비교 리포트가 생성되는지 확인\n4) Manual verification: 3-Way 비교 차트 육안 검증",
+        "priority": "high",
+        "dependencies": [],
+        "status": "done",
+        "subtasks": [],
+        "complexity": 3,
+        "recommendedSubtasks": 3,
+        "expansionPrompt": "Break down the 3-way evaluation execution into: (1) Iter14 adapter verification and path validation, (2) Running comparison mode with run_qlora_eval.py --mode compare across existing rag_only/qlora_only/ragqlora results, (3) Report generation and visualization with generate_report_charts.py including hallucination rate validation",
+        "updatedAt": "2026-03-16T05:23:46.793Z"
+      },
+      {
+        "id": "21",
+        "title": "CoT 추론 강화",
+        "description": "reasoning_depth 차원 0.77/2.0 → 1.2+/2.0 달성을 위한 step-by-step CoT 추론 강화",
+        "status": "done",
+        "dependencies": [
+          "20"
+        ],
+        "priority": "high",
+        "details": "1) 신규 스크립트 생성: /workspace/trainer/scripts/generate_cot_sft.py\n2) SFT 데이터에 <think> 블록 활용 CoT 예시 80건 추가 생성 (PRD v0.2 개정 비율 적용):\n   - **DocQA 스타일 CoT (도구 없음): 30건** — 문서 근거만으로 단계별 추론, DocQA 능력 유지 목적 (Catastrophic Forgetting 방지)\n   - 단일 도구 + CoT: 15건 (30건→15건으로 감소)\n   - 2-3 도구 순차 CoT: 15건 (30건→15건으로 감소)\n   - 4+ 도구 복합 CoT: 20건 유지 (AQ024 유형 대응)\n   - **DocQA:FC 비율 = 30:50 (37.5% DocQA 유지)**\n3) /workspace/trainer/configs/rag_config_fewshot.yaml에 CoT 템플릿 추가 (prompt.system 섹션 참조)\n4) CoT 강제 생성 규칙 구현 (generation.enable_thinking 파라미터 조정)\n5) 기존 /data/chunked/chunks.jsonl 기반 synthetic 생성\n\nCoT JSON 구조:\n```json\n{\n  \"messages\": [\n    {\"role\": \"system\", \"content\": \"...단계별로 사고하고 근거를 명시하라\"},\n    {\"role\": \"user\", \"content\": \"[문서]\\n...\\n[질문]\\n...\"},\n    {\"role\": \"assistant\", \"content\": \"<think>\\n단계 1: ...\\n단계 2: ...\\n</think>\\n{JSON 응답}\"}\n  ]\n}\n```\n\n**DocQA 균형 조건 (Critical)**: T26 Dual Gate 통과를 위해 CoT SFT 80건 중 DocQA 스타일(도구 없이 문서 근거만으로 추론) 30건 이상 포함 필수. Iter14에서 FC 편향(33%)으로 인한 DocQA halluc 2%→38% 급증 문제 재발 방지.\n\n출력: /data/sft/sft_cot.jsonl (80 samples)",
+        "testStrategy": "1) Unit test: test_cot_sft_data_count() - CoT SFT 데이터 정확히 80건 생성 확인\n2) Unit test: test_cot_docqa_count() - **DocQA 스타일 CoT 30건 이상 확인 (신규, Critical)**\n3) Unit test: test_cot_single_tool_count() - 단일 도구 CoT 15건 확인 (30→15 변경)\n4) Unit test: test_cot_multi_tool_count() - 2-3 도구 CoT 15건 확인 (30→15 변경)\n5) Unit test: test_cot_complex_tool_count() - 4+ 도구 CoT 20건 확인 (유지)\n6) Unit test: test_cot_sft_has_think_block() - 모든 샘플에 <think> 블록 포함 확인\n7) Integration test: test_reasoning_depth_improvement() - CoT 강화 후 reasoning_depth ≥1.2 확인\n8) Manual review: 생성된 CoT 샘플 10건 육안 검증 (각 카테고리별 2건 이상)",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Create generate_cot_sft.py script scaffold",
+            "description": "Create new script /workspace/trainer/scripts/generate_cot_sft.py matching generate_sft.py patterns for CoT data generation",
+            "dependencies": [],
+            "details": "Design script structure to load /data/chunked/chunks.jsonl, implement argparse CLI with --chunks and --output-dir parameters, create base CoT data generation pipeline. Reference generate_sft.py lines 75-87 for JSONL loading pattern. Include logging setup and error handling following existing trainer/scripts conventions.",
+            "status": "done",
+            "testStrategy": "Test argparse parameter parsing, verify JSONL loading succeeds with sample chunks, confirm output-dir creation and write permissions",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-16T06:00:49.492Z"
+          },
+          {
+            "id": 2,
+            "title": "Implement DocQA-style CoT generation (30 samples)",
+            "description": "Generate 30 DocQA-style CoT samples using document context only, without tool calls, to prevent catastrophic forgetting",
+            "dependencies": [
+              1
+            ],
+            "details": "Implement function to create <think> blocks with step-by-step reasoning based solely on document evidence. Structure: extract document chunks, formulate reasoning steps (단계 1, 단계 2, etc.), generate direct answers without function calls. Ensure <think> block format compatibility with Qwen3 thinking mechanism. Create realistic reasoning chains for ship coating domain (material selection, surface preparation, defect identification, etc.).",
+            "status": "done",
+            "testStrategy": "Verify 30 samples generated, validate <think> block format (XML-like tags), check no tool calls present in assistant responses, confirm all samples include document evidence references",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-16T06:00:52.926Z"
+          },
+          {
+            "id": 3,
+            "title": "Implement single-tool and sequential CoT generation (30 samples)",
+            "description": "Generate 30 CoT samples combining single-tool (15) and 2-3 tool sequential (15) cases with reasoning chains",
+            "dependencies": [
+              1
+            ],
+            "details": "Create two generation functions: (a) single-tool CoT (15 samples) with <think> block reasoning leading to one tool call, (b) sequential 2-3 tool CoT (15 samples) with <think> blocks showing reasoning for tool ordering and parameter selection. Validate tool schemas from trainer/configs/tool_schemas/*.json. Ensure reasoning depth explains why each tool is selected and what constraints guide parameter values.",
+            "status": "done",
+            "testStrategy": "Verify 15 single-tool samples with exactly 1 function_calls entry, verify 15 multi-tool samples with 2-3 ordered function_calls, validate all referenced tools exist in schema files, check reasoning chains logically precede tool selections",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-16T06:00:56.290Z"
+          },
+          {
+            "id": 4,
+            "title": "Implement complex multi-tool CoT generation (20 samples)",
+            "description": "Generate 20 CoT samples with 4+ tool complex interactions and sophisticated reasoning chains for AQ024-type scenarios",
+            "dependencies": [
+              1
+            ],
+            "details": "Create generation function for complex scenarios requiring 4+ sequential or parallel tool calls (anomaly_detection + pose_estimation + sequence_validation + dft_judge, etc.). Implement <think> blocks showing reasoning for tool dependency management, parameter derivation across multiple tool outputs, and result synthesis. Target domain scenarios: multi-step coating inspection workflows, complex defect diagnosis combining multiple sensor inputs, cross-validation patterns.",
+            "status": "done",
+            "testStrategy": "Verify 20 samples generated with ≥4 function_calls per sample, validate tool call dependencies are logically coherent, check reasoning explains inter-tool dependencies, confirm tool parameter values reference prior tool outputs appropriately",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-16T06:00:59.980Z"
+          },
+          {
+            "id": 5,
+            "title": "Integrate CoT template into rag_config_fewshot.yaml and implement thinking_budget logic",
+            "description": "Add CoT system prompt template to rag_config_fewshot.yaml and implement generation.enable_thinking parameter control",
+            "dependencies": [
+              2,
+              3,
+              4
+            ],
+            "details": "Modify /workspace/trainer/configs/rag_config_fewshot.yaml prompt.system section to include CoT instruction template. Implement generation.enable_thinking parameter to control CoT forcing in agent_pipeline.py. Add thinking_budget constraint (max tokens for <think> block). Validate 80 CoT samples written to /data/sft/sft_cot.jsonl with correct distribution: 30 DocQA, 15 single-tool, 15 multi-tool, 20 complex. Verify DocQA:FC ratio = 30:50 (37.5% DocQA) for T26 Dual Gate passage.",
+            "status": "done",
+            "testStrategy": "Unit test: test_cot_sft_data_count() - verify exactly 80 samples in sft_cot.jsonl, test_cot_docqa_count() - confirm ≥30 DocQA samples (Critical), test_cot_distribution() - verify 30:15:15:20 split, test_config_yaml_loading() - confirm rag_config_fewshot.yaml valid YAML, integration test with agent_pipeline.py to verify thinking_budget respected",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-16T06:01:03.980Z"
+          }
+        ],
+        "complexity": 6,
+        "recommendedSubtasks": 5,
+        "expansionPrompt": "Expand into: (1) Create generate_cot_sft.py script scaffold matching generate_sft.py patterns, (2) Implement <think> block CoT data generation for single-tool cases (30 samples), (3) Implement multi-tool sequential CoT generation (30 samples with 2-3 tools), (4) Implement complex 4+ tool CoT generation (20 samples), (5) Integrate CoT template into rag_config_fewshot.yaml and implement thinking_budget logic",
+        "updatedAt": "2026-03-16T06:01:03.980Z"
+      },
+      {
+        "id": "22",
+        "title": "도구 선택 정확도 개선",
+        "description": "tool_selection_accuracy 차원 0.67/2.0 → 1.2+/2.0 달성을 위한 명시적 도구 선택 규칙 강화",
+        "details": "1) 신규 스크립트: /workspace/trainer/scripts/generate_tool_sft.py\n2) rag_config_fewshot.yaml에 도구 선택 필수 규칙 추가:\n   - DFT/두께 측정값 → dft_judge\n   - 히트맵/분포/이상 → anomaly_detection\n   - 자세/관절/포즈 → pose_estimation\n   - 구역/위치/좌표 → location_tracking\n   - 다음 구역/순서 → sequence_validation\n   - 속도/거리/추세 → timeseries\n3) 도구 선택 SFT 40건 생성:\n   - 단일 의도 → 단일 도구: 15건\n   - 복합 의도 → 다중 도구: 15건\n   - 부정 예시 (도구 불필요): 10건\n4) intent-to-tool 매핑 테이블 강화\n5) 도구 선택 신뢰도 임계값 구현\n\n출력: /data/sft/sft_tool_selection.jsonl (40+ samples)",
+        "testStrategy": "1) Unit test: test_tool_selection_accuracy_improved() - tool_selection_accuracy ≥1.2 확인\n2) Unit test: test_zero_tool_call_rate() - 도구 호출 0건 비율 <10% 확인\n3) Unit test: test_tool_selection_sft_count() - 도구 선택 SFT 40건 이상 확인\n4) Unit test: test_tool_selection_confidence_threshold() - confidence threshold 동작 확인\n5) E2E test: 30개 agentic 문항에서 도구 호출 누락 사례 분석",
+        "priority": "high",
+        "dependencies": [
+          "20"
+        ],
+        "status": "done",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Define explicit tool-to-intent mapping rules",
+            "description": "Analyze MCP tool schemas and create comprehensive intent-to-tool mapping table based on domain keywords",
+            "dependencies": [],
+            "details": "Review all 7 MCP tool server schemas (dft_judge, anomaly_detection, pose_estimation, location_tracking, sequence_validation, timeseries, vlm_analysis) and identify domain keywords that should trigger each tool. Create mapping table with keywords: DFT/두께 측정값 → dft_judge, 히트맵/분포/이상 → anomaly_detection, 자세/관절/포즈 → pose_estimation, 구역/위치/좌표 → location_tracking, 다음 구역/순서 → sequence_validation, 속도/거리/추세 → timeseries. Document high-confidence keyword patterns and edge cases.",
+            "status": "done",
+            "testStrategy": "Verify mapping table completeness: all 7 tools covered, minimum 5 keywords per tool, no keyword overlap; manual review of domain expert (coach/trainer) validation on 10 sample intents",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-16T06:00:50.404Z"
+          },
+          {
+            "id": 2,
+            "title": "Generate single-intent to single-tool SFT data (15 samples)",
+            "description": "Create 15 SFT training samples with diverse single intents mapped to exactly one correct tool",
+            "dependencies": [
+              1
+            ],
+            "details": "Generate 15 diverse single-intent examples covering all 7 tools (2-3 samples per tool minimum). Each sample must include: user query in Korean, single correct tool call with realistic parameters, tool response structure. Examples should cover common coach scenarios (e.g., '도막 두께 측정값이 120µm인데 규격을 확인해줄래?' → dft_judge). Ensure variety in query phrasing and parameter values. Output format: JSON with fields {query, intent, tool_name, tool_params, expected_response}",
+            "status": "done",
+            "testStrategy": "Validate 15 samples: all have single tool call only, tool_name matches mapping table, tool_params schema valid against tool_schemas/*.json, no syntactic errors in Korean text",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-16T06:00:53.851Z"
+          },
+          {
+            "id": 3,
+            "title": "Generate complex-intent to multi-tool SFT data (15 samples)",
+            "description": "Create 15 SFT training samples where single user intent requires calling multiple tools sequentially or in combination",
+            "dependencies": [
+              1
+            ],
+            "details": "Generate 15 complex-intent examples requiring 2-3 tool calls (mix of sequential and parallel calls). Examples: '왼쪽 날개 영역의 이상 패턴을 확인하고 자세를 평가해줄래?' → anomaly_detection + pose_estimation. Each sample must include: user query, intent breakdown, ordered list of tool calls with dependencies, final combined response. Ensure realistic multi-tool workflows from coating inspection domain. Output same JSON format as single-intent samples but with tool_sequence array.",
+            "status": "done",
+            "testStrategy": "Validate 15 samples: 2-3 tools per sample, tool sequence respects dependencies, all tool_params valid, tool combinations logically coherent for domain (no contradictory tool pairs)",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-16T06:00:57.284Z"
+          },
+          {
+            "id": 4,
+            "title": "Generate negative examples and implement confidence threshold (10 samples + logic)",
+            "description": "Create 10 SFT negative examples where no tool is required and implement tool selection confidence threshold in agent_pipeline.py",
+            "dependencies": [
+              1,
+              2,
+              3
+            ],
+            "details": "Create 10 negative samples: queries that should NOT trigger any tool (e.g., '안녕하세요', '내일 작업 일정 있나요?'). Output as JSON with {query, intent, tool_name: null, reason: 'general greeting/scheduling/off-topic'}. Then implement confidence threshold logic in /workspace/trainer/scripts/agent_pipeline.py: add threshold parameter (default 0.7) to skip tool calling when all tool confidence scores < threshold, log zero-tool decisions. Integrate with tool_calling_adapter.py line 152-164 endpoint resolution. Add --tool-confidence-threshold CLI argument to demo_app.py and agentic config.",
+            "status": "done",
+            "testStrategy": "Negative samples: verify 10 samples have tool_name=null and clear reasoning; confidence threshold: unit test for threshold logic (mock 5 low-confidence intents, verify no tool calls), test zero-tool call rate <10% on eval set, verify threshold parameter correctly loaded from config and CLI args",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-16T06:01:01.153Z"
+          }
+        ],
+        "complexity": 5,
+        "recommendedSubtasks": 4,
+        "expansionPrompt": "Break into: (1) Define explicit tool-to-intent mapping rules based on domain keywords, (2) Generate single-intent → single-tool SFT data (15 samples with diverse intents), (3) Generate complex-intent → multi-tool SFT data (15 samples), (4) Generate negative examples where no tool is required (10 samples), (5) Implement tool selection confidence threshold logic in agent_pipeline.py",
+        "updatedAt": "2026-03-16T06:01:01.153Z"
+      },
+      {
+        "id": "23",
+        "title": "응답 구조 표준화",
+        "description": "response_structure 차원 0.77/2.0 → 1.3+/2.0 달성을 위한 구조화된 응답 템플릿 및 검증 로직 구현",
+        "details": "1) response_formatter.py에 route별 JSON 템플릿 추가:\n   - training_realtime_template: {text_guide, steps, citations, metadata}\n   - training_review_template: {text_guide, dft_result, citations, metadata}\n   - fast_template: {text_guide, citations, metadata}\n2) 신규 검증 함수 구현:\n   - validate_response_structure(response, route) → ValidationResult\n   - ensure_citations(response) → RAG 결과에서 자동 채움\n   - repair_json_structure(raw_text) → 불완전 JSON 수복\n3) JSON 스키마 유효성 검사 post-processing 단계 추가\n4) citation 필드 필수 강제 규칙 (누락 시 자동 보완)\n5) 응답 형식 검증 실패 시 재생성 로직\n\n기술 구현:\n- jsonschema 라이브러리 사용\n- route별 required/optional 필드 명시\n- citation 누락률 <5% 목표",
+        "testStrategy": "1) Unit test: test_response_structure_score() - response_structure ≥1.3 확인\n2) Unit test: test_citation_coverage() - citation 누락률 <5% 확인\n3) Unit test: test_json_schema_validation() - 모든 route별 스키마 통과 확인\n4) Unit test: test_json_repair() - 불완전 JSON 수복 동작 확인\n5) Integration test: 각 route별 샘플 응답 100건 검증",
+        "priority": "high",
+        "dependencies": [],
+        "status": "done",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Define JSON schemas for each route",
+            "description": "Create and document JSON schemas for training_realtime, training_review, and fast routes with specified required and optional fields",
+            "dependencies": [],
+            "details": "Design 3 distinct JSON schemas using jsonschema library format. training_realtime_template should include {text_guide, steps, citations, metadata}. training_review_template should include {text_guide, dft_result, citations, metadata}. fast_template should include {text_guide, citations, metadata}. Define required fields (citations mandatory), optional fields, and data types for each. Store schemas in trainer/configs/tool_schemas/ as JSON files. Document field purposes and validation rules.",
+            "status": "done",
+            "testStrategy": "Validate schema syntax with jsonschema.Draft7Validator, verify all required fields are marked, ensure field consistency across routes, test schema against sample responses matching each route type",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-16T05:59:29.830Z"
+          },
+          {
+            "id": 2,
+            "title": "Implement validation functions in response_formatter.py",
+            "description": "Implement validate_response_structure() and ensure_citations() functions for response validation and citation auto-fill",
+            "dependencies": [
+              1
+            ],
+            "details": "Add validate_response_structure(response, route) → ValidationResult function that checks response against route-specific JSON schema. Implement ensure_citations(response, rag_context) function that automatically fills missing citations from RAG retrieval results. Both functions should return structured ValidationResult with status, errors, and warnings. Handle edge cases: empty citations, malformed JSON, missing required fields. Update response_formatter.py lines 96-124 pattern. Ensure citation auto-fill maintains accuracy without hallucination by only using retrieved context.",
+            "status": "done",
+            "testStrategy": "Unit test validate_response_structure() against valid/invalid responses for each route, test ensure_citations() fills citations correctly from RAG context, verify citation accuracy (no hallucination), test ValidationResult structure and error messages",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-16T05:59:33.355Z"
+          },
+          {
+            "id": 3,
+            "title": "Implement JSON repair logic for malformed responses",
+            "description": "Implement repair_json_structure() function to handle incomplete or malformed JSON outputs from LLM",
+            "dependencies": [
+              1
+            ],
+            "details": "Create repair_json_structure(raw_text, route) function that recovers incomplete JSON responses. Implement strategies: add missing closing braces/brackets, handle unclosed strings, remove trailing commas, extract valid JSON from mixed text. Use regex or ast library for parsing attempts. Return repaired JSON string or original if unrepairable. Handle edge cases: completely invalid JSON, multiple JSON objects, truncated responses. Test with realistic LLM output failures. Consider using ast.literal_eval as fallback. Balance between aggressive repair (risk of data corruption) and conservative approach (risk of failure).",
+            "status": "done",
+            "testStrategy": "Test repair_json_structure() with samples: missing braces, unclosed strings, trailing commas, mixed text+JSON, truncated outputs. Verify repaired JSON validates against schema. Test failure cases where repair is impossible. Measure repair success rate target >90%",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-16T05:59:36.690Z"
+          },
+          {
+            "id": 4,
+            "title": "Integrate validation into agent_pipeline with re-generation",
+            "description": "Add post-processing validation step to agent_pipeline.py with automatic re-generation logic on validation failure",
+            "dependencies": [
+              2,
+              3
+            ],
+            "details": "Integrate validate_response_structure() into agent_pipeline.py post-processing step after LLM response generation. On validation failure: (1) attempt repair_json_structure(), (2) if repair succeeds, re-validate, (3) if still failing, trigger re-generation with corrected prompt including route schema hints. Implement max retry logic (e.g., 2 retries) to avoid infinite loops. Update response with validation metadata (validation_passed, repairs_applied, retries_used). Ensure post-processing doesn't break existing pipeline flow. Log all validation events for monitoring. Test with each semantic route (fast, training_realtime, training_review).",
+            "status": "done",
+            "testStrategy": "Integration test each route with sample LLM outputs (valid, malformed, incomplete). Verify validation catches schema violations. Test re-generation triggers correctly on failure. Confirm retry logic prevents infinite loops. Validate final responses meet schema requirements. Test citation coverage <5% missing rate target. End-to-end test: 100 sample responses per route validate successfully",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-16T05:59:40.091Z"
+          }
+        ],
+        "complexity": 6,
+        "recommendedSubtasks": 4,
+        "expansionPrompt": "Break into: (1) Define JSON schema for each route (training_realtime, training_review, fast) with required/optional fields, (2) Implement validate_response_structure() and ensure_citations() functions in response_formatter.py, (3) Implement JSON repair logic for malformed responses (using repair_json_structure), (4) Add post-processing validation step to agent_pipeline.py with re-generation on failure",
+        "updatedAt": "2026-03-16T05:59:40.091Z"
+      },
+      {
+        "id": "24",
+        "title": "파라미터 정확도 개선",
+        "description": "parameter_correctness 차원 1.17/2.0 → 1.5+/2.0 달성을 위한 파라미터 타입 검증 및 자동 수정",
+        "details": "1) tool_calling_adapter.py에 검증 로직 추가:\n   - validate_tool_parameters(tool_name, params) → ValidatedParams\n   - coerce_parameter_types(tool_name, params) → 타입 자동 변환\n   - fill_default_parameters(tool_name, params) → 디폴트값 채움\n2) 타입 변환 규칙:\n   - string '102, 95, 110' → list [102, 95, 110]\n   - string '100' → number 100\n   - missing optional → schema default\n3) 필수 필드 누락 감지 및 에러 반환\n4) 값 범위 검증 (예: DFT 0-500µm)\n5) tool_schemas/*.json 기반 런타임 검증\n\n구현 위치: /workspace/trainer/scripts/tool_calling_adapter.py (기존 파일 확장)",
+        "testStrategy": "1) Unit test: test_parameter_type_validation() - 잘못된 타입 자동 수정 확인\n2) Unit test: test_required_parameter_check() - 필수 파라미터 누락 감지 확인\n3) Unit test: test_parameter_correctness_score() - parameter_correctness ≥1.5 확인\n4) Unit test: test_value_range_validation() - 값 범위 검증 동작 확인\n5) Integration test: 7개 MCP 도구별 파라미터 검증 테스트",
+        "priority": "medium",
+        "dependencies": [],
+        "status": "done",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Load and parse tool_schemas/*.json files",
+            "description": "Load all tool schema JSON files from trainer/configs/tool_schemas/ directory and build an in-memory parameter validation rules database",
+            "dependencies": [],
+            "details": "Create a function to discover and parse all *.json files in tool_schemas/ directory. Build a dictionary mapping tool_name → {parameters: {...}, required: [...], types: {...}}. Handle schema validation errors gracefully. Test with actual tool schemas (anomaly_detection.json, pose_estimation.json, sequence_validation.json, dft_judge.json, etc.). Ensure schema parsing handles optional/required field distinctions and parameter type definitions.",
+            "status": "done",
+            "testStrategy": "Unit test: test_load_tool_schemas() - Verify all 7 tool schemas load correctly, schema structure validation, required/optional field parsing, type definitions extraction",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-16T05:59:30.937Z"
+          },
+          {
+            "id": 2,
+            "title": "Implement validate_tool_parameters() with type checking",
+            "description": "Implement the core validate_tool_parameters(tool_name, params) function in tool_calling_adapter.py that performs type validation and coercion",
+            "dependencies": [
+              1
+            ],
+            "details": "Add validate_tool_parameters() function (lines ~170 in tool_calling_adapter.py) that: (1) accepts tool_name and raw params dict, (2) looks up tool schema from loaded schemas, (3) checks required parameters present, (4) performs type coercion (string→list, string→number), (5) returns ValidatedParams object or raises ParameterValidationError with clear error messages. Handle edge cases: empty strings, null values, whitespace-only strings. Return tuple of (validated_params, errors) or raise exception with field-level error detail.",
+            "status": "done",
+            "testStrategy": "Unit test: test_validate_tool_parameters() - Valid params pass through, invalid type raises error, required field missing detected, type coercion works correctly",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-16T05:59:34.301Z"
+          },
+          {
+            "id": 3,
+            "title": "Implement type conversion logic and default parameter filling",
+            "description": "Implement coerce_parameter_types() and fill_default_parameters() functions with robust type conversion and default value handling",
+            "dependencies": [
+              2
+            ],
+            "details": "Implement two helper functions: (1) coerce_parameter_types(tool_name, params) - converts strings to lists (parse '102, 95, 110' → [102, 95, 110]), strings to numbers ('100' → 100), handles boolean/enum conversions; (2) fill_default_parameters(tool_name, params) - adds missing optional parameters with schema-defined defaults. Handle edge cases: empty arrays, nested structures, numeric precision. Add comprehensive error handling with specific error types for each conversion failure. Preserve original param values when no conversion needed.",
+            "status": "done",
+            "testStrategy": "Unit test: test_type_coercion() - string comma-separated list conversion, string-to-number conversion, boolean/enum handling. Unit test: test_default_parameters() - optional params filled with schema defaults, required params not auto-filled",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-16T05:59:37.783Z"
+          },
+          {
+            "id": 4,
+            "title": "Add range validation and integrate into dispatch path",
+            "description": "Implement domain-specific range validation for parameters (e.g., DFT 0-500µm) and integrate all validation into tool_calling_adapter.py dispatch logic",
+            "dependencies": [
+              3
+            ],
+            "details": "Add range validation layer that checks numeric parameters against schema-defined min/max bounds (e.g., DFT measurements 0-500µm, temperature ranges, percentage bounds 0-100). Integrate validated_parameters into the dispatch path (~line 200-259 in tool_calling_adapter.py): call validate_tool_parameters() before MCP service call, return validation errors as JSON response if validation fails. Add logging for parameter corrections (e.g., 'coerced string to list for anomaly_detection.values'). Update error response format to include parameter-level error details. Test with all 7 MCP tools across diverse parameter types.",
+            "status": "done",
+            "testStrategy": "Unit test: test_range_validation() - out-of-range values rejected, boundary values accepted. Integration test: test_dispatch_with_validation() - validation integrated into dispatch, invalid params return error before MCP call. Integration test: test_all_7_tools_validation() - validation works across all MCP tools with real parameter types",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-16T05:59:41.339Z"
+          }
+        ],
+        "complexity": 5,
+        "recommendedSubtasks": 4,
+        "expansionPrompt": "Break into: (1) Load tool_schemas/*.json and build parameter validation rules, (2) Implement validate_tool_parameters() function with type checking and coercion, (3) Implement type conversion logic (string→list, string→number) with proper error handling, (4) Add range validation for domain-specific parameters (DFT 0-500µm) and integrate into tool_calling_adapter.py dispatch path",
+        "updatedAt": "2026-03-16T05:59:41.339Z"
+      },
+      {
+        "id": "25",
+        "title": "Medium 난이도 갭 해소",
+        "description": "Medium 난이도 점수 4.09/10 → 5.5+/10 달성을 위한 멀티 도구 순차 호출 패턴 학습. Medium 문항은 2-3 도구 호출 + 파라미터 조합이 필요하며, 도구 간 의존성 추론이 주요 약점으로 확인됨.",
+        "status": "done",
+        "dependencies": [
+          "21",
+          "22"
+        ],
+        "priority": "medium",
+        "details": "PRD v0.2 근거: Medium 문항에서 2-3 도구 조합 시 이전 도구 결과를 다음 도구 파라미터로 전달하는 패턴이 부족. 도구 선택은 되지만 파라미터 의존성 추론이 약함.\n\n작업 내용:\n1) Medium 복잡도 멀티 도구 SFT 예시 30건 생성 (/data/sft/sft_medium.jsonl)\n   - 각 샘플은 2-3 도구 순차 호출 체인 포함\n   - 이전 도구 결과를 다음 도구 입력 파라미터로 전달하는 명시적 패턴 학습\n\n2) 도구 순차 호출 체인(chain) 패턴 정의 및 SFT 데이터화:\n   a) location_tracking → sequence_validation 체인\n      - location_tracking 호출로 현재 zone_id/block_id 식별\n      - 결과의 zone_id를 sequence_validation의 current_zone_id 파라미터로 전달\n      - 예시 시나리오: \"현재 위치가 어디인지 확인하고 다음에 칠할 구역 알려줘\"\n   \n   b) dft_judge → anomaly_detection 체인 (불합격 시)\n      - dft_judge 호출로 합격/불합격 판정\n      - 불합격 시 동일 measurements를 anomaly_detection의 dft_measurements로 전달\n      - 예시 시나리오: \"DFT 검사 결과 확인하고 불합격이면 원인 분석해줘\"\n   \n   c) pose_estimation → timeseries 체인 (자세 개선 추이)\n      - pose_estimation 호출로 현재 자세 점수 확인\n      - session_id를 timeseries로 전달하여 자세 점수 개선 추이 조회\n      - 예시 시나리오: \"자세 점수 확인하고 세션 전체 개선 추이 보여줘\"\n\n3) few-shot 프롬프트 강화 (trainer/configs/rag_config_fewshot.yaml):\n   - 기존 single-tool 예시 6개에 multi-tool chain 예시 3개 추가\n   - 각 체인 예시에 파라미터 전달 주석 명시\n   - 도구 간 context passing 규칙 명시\n\n4) 도구 간 context passing 메커니즘 강화:\n   - tool_calling_adapter.py의 format_tool_results에서 이전 도구 결과를 다음 턴 context로 명시적 전달\n   - 체인 샘플 생성 시 \"이전 도구 결과: {...}\"를 user message에 포함\n\n출력:\n- /data/sft/sft_medium.jsonl (30+ samples)\n- trainer/configs/rag_config_fewshot.yaml (few-shot 예시 추가)\n\n선행 작업: T21(CoT 추론 깊이), T22(도구 선택 정확도) 완료 후 시너지 극대화\n\n참조 파일:\n- trainer/scripts/generate_fc_sft.py (기존 SFT 생성 로직, 체인 패턴 추가 필요)\n- trainer/configs/tool_schemas/*.json (7개 도구 스키마)\n- trainer/scripts/tool_calling_adapter.py (도구 호출 어댑터)\n- trainer/configs/rag_config_fewshot.yaml (few-shot 프롬프트 설정)",
+        "testStrategy": "1) Unit test: test_medium_difficulty_score() - Medium 평균 점수 ≥5.5 확인\n2) Unit test: test_medium_sft_data_count() - /data/sft/sft_medium.jsonl 30건 이상 확인\n3) Unit test: test_tool_chain_pattern() - 각 샘플에 2-3 도구 체인 포함 여부 확인\n4) Unit test: test_parameter_passing() - 이전 도구 결과가 다음 도구 파라미터로 전달되는 패턴 10건 이상 확인\n5) Integration test: Medium 문항 11개 전체 재평가 (trainer/scripts/run_agentic_eval.py)\n   - tool_selection_accuracy 평균 ≥1.5/2.0\n   - parameter_correctness 평균 ≥1.5/2.0\n6) Manual review: 도구 체인 샘플 10건 육안 검증\n   - location_tracking→sequence_validation 체인 3건\n   - dft_judge→anomaly_detection 체인 3건\n   - pose_estimation→timeseries 체인 3건\n   - 파라미터 전달 정확성 확인",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Analyze Medium difficulty questions and identify tool chain patterns",
+            "description": "Examine existing Medium difficulty eval items to extract 2-3 tool sequential call patterns and parameter passing requirements",
+            "dependencies": [],
+            "details": "1) Load Medium eval dataset from trainer/configs/rag_config_fewshot.yaml eval items\n2) Identify all Medium difficulty samples (difficulty='medium')\n3) Catalog tool chains present: single-tool, 2-tool sequential, 3-tool sequential, branching logic (conditional chains)\n4) Map parameter dependencies: which tool outputs feed into which tool inputs\n5) Document 3 core chain patterns: (a) location_tracking→sequence_validation, (b) dft_judge→anomaly_detection (conditional), (c) pose_estimation→timeseries\n6) Create pattern_analysis.json with frequency, success rate, failure modes for each chain type\n7) Output: pattern_analysis.json in /workspace/trainer/configs/",
+            "status": "done",
+            "testStrategy": "Verify pattern_analysis.json contains ≥3 distinct chain patterns, each with ≥5 sample occurrences in eval set, parameter mappings documented with tool schema validation",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-16T06:08:04.660Z"
+          },
+          {
+            "id": 2,
+            "title": "Generate 2-3 tool sequential chain SFT data (15 samples)",
+            "description": "Create 15 SFT training samples with explicit 2-3 tool sequential chains and result passing between tools",
+            "dependencies": [
+              1
+            ],
+            "details": "1) Extend trainer/scripts/generate_fc_sft.py to support multi-tool chain generation\n2) Generate 5 samples for location_tracking→sequence_validation pattern: scenario description includes 'check current position then suggest next zone'\n3) Generate 5 samples for dft_judge→anomaly_detection pattern: conditional on dft_judge failure result\n4) Generate 5 samples for pose_estimation→timeseries pattern: pass session_id to next tool\n5) Each sample structure: {\"messages\": [{\"role\": \"user\", \"content\": \"...\"}, {\"role\": \"assistant\", \"content\": \"[tool_call_1]\\n[result_1: {...}]\\n[tool_call_2 using result_1]\"}]}\n6) Explicitly include '# Previous tool result: {...}' comment in message to highlight parameter passing\n7) Validate tool schema compatibility via trainer/configs/tool_schemas/*.json\n8) Output: /data/sft/sft_medium_2tool.jsonl with 15 samples",
+            "status": "done",
+            "testStrategy": "Verify sft_medium_2tool.jsonl has exactly 15 samples, each contains 2-3 tool calls, parameter passing validation passes for all samples, tool schemas match trainer/configs/tool_schemas/*.json",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-16T06:08:08.064Z"
+          },
+          {
+            "id": 3,
+            "title": "Generate 4+ tool complex chain SFT data (15 samples with branching logic)",
+            "description": "Create 15 SFT samples with complex 3+ tool chains including branching conditional logic and nested parameter passing",
+            "dependencies": [
+              1
+            ],
+            "details": "1) Generate 8 samples with 3-tool sequential chains (combination of patterns from subtask 1)\n2) Generate 7 samples with branching logic: if dft_judge fails → anomaly_detection; else → timeseries (success path)\n3) Include nested parameter dependencies: tool_1 output → tool_2 input AND tool_2 output → tool_3 input\n4) Represent branching as multiple assistant turns with conditional logic comments\n5) Sample structure: {\"messages\": [..., {\"role\": \"assistant\", \"content\": \"[tool_call_1]\\n[result_1]\\n[IF result_1.status=='failed': tool_call_2_alt ELSE: tool_call_2_standard]\\n...\"}]}\n6) Include realistic failure scenarios: DFT out of spec, pose score below threshold\n7) Validate all parameter types and ranges against tool_schemas\n8) Output: /data/sft/sft_medium_complex.jsonl with 15 samples",
+            "status": "done",
+            "testStrategy": "Verify sft_medium_complex.jsonl has 15 samples, branching logic present in ≥7 samples, all parameter passing chains valid, tool schema compliance 100%, conditional patterns match real failure modes",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-16T06:08:11.993Z"
+          },
+          {
+            "id": 4,
+            "title": "Update few-shot prompts and validate on Medium eval subset",
+            "description": "Enhance rag_config_fewshot.yaml with multi-tool chain examples and verify score improvement on Medium difficulty items",
+            "dependencies": [
+              2,
+              3
+            ],
+            "details": "1) Load current trainer/configs/rag_config_fewshot.yaml few-shot examples (existing 6 single-tool examples)\n2) Add 3 new few-shot examples from subtasks 2-3: one 2-tool sequential, one 3-tool sequential, one branching logic example\n3) Format each multi-tool example with: user query → assistant reasoning → tool_call_1 → result_1 (highlighted) → tool_call_2 (with parameter mapping from result_1) → result_2 → final response\n4) Add explicit comments: '# Pass zone_id from location_tracking to sequence_validation' etc.\n5) Update prompt preamble to emphasize context passing: 'When calling multiple tools sequentially, pass previous tool results as parameters to next tool calls'\n6) Save updated rag_config_fewshot.yaml\n7) Run trainer/scripts/generate_agentic_responses.py with updated config on Medium eval subset (10-15 items)\n8) Compare Medium difficulty score before/after: baseline (from current iteration) vs. new score\n9) Output: updated rag_config_fewshot.yaml + eval_report.json with before/after scores",
+            "status": "done",
+            "testStrategy": "Verify rag_config_fewshot.yaml contains ≥3 multi-tool examples, Medium eval subset score improvement ≥0.5 points (from 4.09→4.59+), tool call sequences in agentic responses match few-shot patterns, parameter passing correctness ≥90%",
+            "parentId": "undefined",
+            "updatedAt": "2026-03-16T06:08:15.555Z"
+          }
+        ],
+        "complexity": 6,
+        "recommendedSubtasks": 4,
+        "expansionPrompt": "Break into: (1) Analyze existing Medium difficulty questions to identify tool chain patterns, (2) Generate 2-3 tool sequential chain SFT data (15 samples) with explicit result passing between tools, (3) Generate 4+ tool complex chain SFT data (15 samples with branching logic), (4) Update few-shot prompts in rag_config_fewshot.yaml with multi-tool examples and test on Medium eval subset",
+        "updatedAt": "2026-03-16T06:08:15.555Z"
+      },
+      {
+        "id": "26",
+        "title": "P0 통합 회귀 평가 및 QLoRA 재학습",
+        "description": "P0 모든 개선 사항 통합 후 QLoRA Iter15 재학습 및 Agentic 6.0+/10 확인",
+        "details": "1) SFT 데이터 통합 스크립트 생성: /workspace/trainer/scripts/merge_sft.py\n2) 기존 567건 + T21(80) + T22(40) + T25(30) = ~717건 통합\n3) 중복 제거 (--dedup 옵션)\n4) QLoRA Iter15 학습:\n   - 기존 qlora_config.yaml 사용\n   - rank=16, alpha=32, lr=2e-4, 3 epochs\n   - 출력: /output/adapters/qwen3_4b_shipcoat_lora_iter15/\n5) Agentic 30문항 전체 재평가\n6) DocQA 50문항 회귀 테스트 (halluc ≤2% 유지)\n7) 5차원 점수 분석 및 리포트 생성\n8) Iter14 vs Iter15 비교 분석\n\n성공 기준:\n- Agentic ≥6.0/10\n- 모든 차원 ≥1.0/2.0\n- DocQA halluc ≤2%\n\n예상 학습 시간: RTX 4080 기준 3-4시간",
+        "testStrategy": "1) Unit test: test_agentic_score_target() - Agentic ≥6.0 확인\n2) Unit test: test_all_dimensions_above_threshold() - 모든 차원 ≥1.0 확인\n3) Unit test: test_docqa_regression() - halluc ≤2% 유지 확인\n4) Unit test: test_sft_data_total_count() - 통합 SFT 800건 이상 확인\n5) E2E test: 전체 파이프라인 end-to-end 테스트\n6) Performance test: 추론 지연 시간 벤치마크 (<10초/query)",
+        "priority": "high",
+        "dependencies": [
+          "20",
+          "21",
+          "22",
+          "23",
+          "24",
+          "25"
+        ],
+        "status": "pending",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Create merge_sft.py script with deduplication logic",
+            "description": "Implement SFT data merging script to combine 567 existing samples + T21 (80) + T22 (40) + T25 (30) = ~717 total with deduplication",
+            "dependencies": [],
+            "details": "Create /workspace/trainer/scripts/merge_sft.py that: (1) loads existing SFT from /data/sft/sft_train_docqa_only.jsonl, (2) loads T21, T22, T25 outputs, (3) implements --dedup flag for duplicate removal using MD5 hash of question+expected_answer, (4) validates output ≥717 samples, (5) saves merged dataset to /data/sft/sft_train_iter15_merged.jsonl with JSONL format. Follow existing generate_sft.py patterns (lines 95-100) for dedup implementation. Include argparse CLI, logging, type hints, and error handling for missing files.",
+            "status": "pending",
+            "testStrategy": "Unit test: verify merged file has ≥717 samples, test dedup removes exact duplicates correctly, validate JSONL format with json.loads() on each line, confirm no empty fields in merged records",
+            "parentId": "undefined"
+          },
+          {
+            "id": 2,
+            "title": "Validate merged SFT dataset quality and format",
+            "description": "Verify merged dataset has correct structure, no corruption, proper field formatting, and sample count meets expectations",
+            "dependencies": [
+              1
+            ],
+            "details": "Create validation script to: (1) load /data/sft/sft_train_iter15_merged.jsonl, (2) verify all 717+ records have required fields (instruction, input, output), (3) check for empty/null values, (4) validate UTF-8 encoding, (5) confirm no duplicate samples exist (cross-check with source files), (6) verify field lengths are reasonable (instruction 10-500 chars, output 20-2000 chars), (7) generate report with statistics: sample count by source (existing/T21/T22/T25), average field lengths, encoding issues. Save report to /output/eval_results/sft_validation_report.json.",
+            "status": "pending",
+            "testStrategy": "Unit test: assert sample count ≥717, test all records parse as valid JSON, verify no null/empty required fields, check for malformed Unicode, validate statistics report generation with expected structure",
+            "parentId": "undefined"
+          },
+          {
+            "id": 3,
+            "title": "Execute QLoRA training (Iter15) with config validation and VRAM monitoring",
+            "description": "Run QLoRA Iter15 training using merged SFT dataset with rank=16, alpha=32, lr=2e-4, 3 epochs, monitoring VRAM and error handling",
+            "dependencies": [
+              2
+            ],
+            "details": "Execute training pipeline: (1) validate qlora_config.yaml exists and has correct parameters (rank=16, alpha=32, lr=2e-4, 3 epochs, batch=1, accum=8), (2) run `python3 trainer/scripts/train_qlora.py --config trainer/configs/qlora_config.yaml --input /data/sft/sft_train_iter15_merged.jsonl`, (3) monitor VRAM usage throughout (target <15GB on RTX 4080), (4) implement checkpoint saving every 50 steps, (5) capture training logs to /output/logs/iter15_training.log, (6) validate training completes successfully with final adapter saved to /output/adapters/qwen3_4b_shipcoat_lora_iter15/, (7) expected duration 3-4 hours on RTX 4080. Include graceful error recovery and VRAM warnings at 80% threshold.",
+            "status": "pending",
+            "testStrategy": "Integration test: verify adapter directory exists post-training, check checkpoint integrity (can load with peft.AutoPeftModelForCausalLM), validate training loss decreased across epochs, confirm VRAM monitoring logs are present, verify final model can perform inference without OOM",
+            "parentId": "undefined"
+          },
+          {
+            "id": 4,
+            "title": "Run full agentic evaluation (30 items) with generate_agentic_responses.py",
+            "description": "Execute agentic evaluation across all 30 evaluation items using Iter15 adapter, capturing tool calls and scoring across 5 dimensions",
+            "dependencies": [
+              3
+            ],
+            "details": "Run agentic evaluation: (1) prepare eval_set_agentic.jsonl (30 items) with tool_calls_required, reasoning_steps, expected_tool_sequence fields, (2) execute `python3 trainer/scripts/generate_agentic_responses.py --config trainer/configs/rag_config_fewshot.yaml --adapter /output/adapters/qwen3_4b_shipcoat_lora_iter15/`, (3) ensure MCP server is running on port 8100 (uvicorn mcp_servers.main:app), (4) capture responses with tool call traces to /output/eval_results/agentic_responses_iter15.jsonl, (5) log all tool invocations and results, (6) handle tool timeouts gracefully (max retry 1, backoff 1000ms per config), (7) score across 5 dimensions: tool_accuracy, reasoning_quality, sequence_correctness, response_relevance, answer_completeness (each 0-2 points).",
+            "status": "pending",
+            "testStrategy": "Integration test: verify all 30 items generate responses, validate JSONL output has all required scoring fields, check tool call traces match expected sequences for each item, confirm agentic score ≥6.0/10 (average across 30 items), validate each dimension ≥1.0/2.0 on average",
+            "parentId": "undefined"
+          },
+          {
+            "id": 5,
+            "title": "Run DocQA regression test (50 items) with hallucination validation",
+            "description": "Execute DocQA evaluation on 50-item eval set to ensure hallucination rate ≤2% and baseline performance maintained with Iter15 adapter",
+            "dependencies": [
+              3
+            ],
+            "details": "Run DocQA regression: (1) load eval_set.jsonl (50 items: terminology, procedures, defects, thickness, safety), (2) execute `python3 trainer/scripts/run_qlora_eval.py --config trainer/configs/rag_config.yaml --mode rag-qlora --adapter /output/adapters/qwen3_4b_shipcoat_lora_iter15/`, (3) evaluate using 5-dimension rubric (technical_accuracy, doc_fidelity, terminology, completeness, korean_quality - each 0-2 points), (4) track hallucination instances: false claims, wrong context citations, invented data, (5) calculate hallucination rate = hallucinations/total_responses, (6) save detailed results to /output/eval_results/docqa_regression_iter15.csv with per-item scores and hallucination flags, (7) generate summary report with category breakdown (terminology, procedures, defects, thickness, safety).",
+            "status": "pending",
+            "testStrategy": "Unit test: verify hallucination_rate ≤2% (target <1%), test all 50 items have valid scores, validate no missing dimension scores, confirm category distribution (10 items per category). Integration test: compare Iter14 vs Iter15 regression metrics, ensure no performance degradation on any dimension",
+            "parentId": "undefined"
+          },
+          {
+            "id": 6,
+            "title": "Generate Iter14 vs Iter15 comparative analysis report",
+            "description": "Create comprehensive comparison report between Iter14 and Iter15 covering agentic scores, DocQA regression, dimension breakdown, and success criteria validation",
+            "dependencies": [
+              4,
+              5
+            ],
+            "details": "Generate comparative analysis: (1) load agentic_responses_iter14.jsonl and agentic_responses_iter15.jsonl, (2) load docqa_regression_iter14.csv and docqa_regression_iter15.csv, (3) compute aggregate metrics for both versions: overall agentic score, per-dimension averages (5 dimensions), DocQA hallucination rate, category-level DocQA scores, (4) create comparison tables: Iter14 vs Iter15 for agentic (6 tool categories), DocQA (5 content categories), (5) validate success criteria: Agentic ≥6.0/10, all dimensions ≥1.0/2.0, DocQA halluc ≤2%, (6) identify improvements/regressions by item and dimension, (7) generate final report to /output/eval_results/iter15_final_report.md with tables, visualizations (line charts for dimension progression, bar charts for category comparison), and narrative analysis. Include training duration (actual vs expected 3-4hrs), VRAM peak usage, and failure counts if any.",
+            "status": "pending",
+            "testStrategy": "Unit test: verify all success criteria met (Agentic ≥6.0, all dims ≥1.0, halluc ≤2%), validate report markdown structure, check all referenced CSV/JSONL files exist. Integration test: compare report metrics against raw JSONL/CSV to ensure accuracy, verify visualizations render correctly, confirm no missing dimensions in analysis",
+            "parentId": "undefined"
+          }
+        ],
+        "complexity": 7,
+        "recommendedSubtasks": 6,
+        "expansionPrompt": "Break into: (1) Create merge_sft.py script to combine 567 existing + 80 (T21) + 40 (T22) + 30 (T25) = 717 samples with deduplication, (2) Validate merged SFT dataset quality and format, (3) Execute QLoRA training (Iter15) with config validation and VRAM monitoring, (4) Run full agentic evaluation (30 items) with generate_agentic_responses.py, (5) Run DocQA regression test (50 items) with hallucination validation, (6) Generate Iter14 vs Iter15 comparative analysis report"
+      },
+      {
+        "id": "27",
+        "title": "VLM 통합 (Qwen2-VL-2B-Instruct)",
+        "description": "vlm_analysis 스텁을 실제 Qwen2-VL-2B-Instruct 추론 파이프라인으로 교체하여 히트맵 분석 구현",
+        "details": "1) 신규 파이프라인: /workspace/trainer/scripts/vlm_pipeline.py\n2) Qwen2-VL-2B-Instruct 모델 로딩 (4-bit, ~2GB VRAM)\n3) 히트맵 이미지 → ROI 추출 → 텍스트 설명 변환\n4) VLM 출력 스키마:\n   - roi_regions: [{zone_id, bbox, mean_intensity, severity, description}]\n   - distribution_summary: 전체 분포 패턴 요약\n   - overall_quality: fair/good/poor\n   - confidence: 0.0-1.0\n5) mcp_servers/anomaly_detection.py에 VLM 결과 연계\n6) VRAM 예산 관리:\n   - LLM 4GB + VLM 2GB = 6GB < 16GB 안전\n   - 동시 로딩 또는 순차 로딩 선택\n7) 추론 지연 벤치마크 (<5초/이미지)\n\n데이터:\n- 기존 71장 히트맵으로 시작 (미주석)\n- 합성 테스트 데이터 생성 가능\n- 실제 RealCOAT 데이터 확보 시 검증",
+        "testStrategy": "1) Unit test: test_vlm_model_loads() - Qwen2-VL-2B 정상 로딩 확인\n2) Unit test: test_vlm_heatmap_analysis() - 히트맵 분석 결과 유효성 확인\n3) Unit test: test_vlm_vram_budget() - VLM+LLM VRAM <10GB 확인\n4) Unit test: test_vlm_latency() - 추론 지연 <5초 확인\n5) Integration test: vlm_analysis → anomaly_detection 연계 동작 확인\n6) Manual verification: 10장 히트맵 분석 결과 육안 검증",
+        "priority": "high",
+        "dependencies": [
+          "26"
+        ],
+        "status": "pending",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Create vlm_pipeline.py with Qwen2-VL model loading",
+            "description": "Implement vlm_pipeline.py with Qwen2-VL-2B-Instruct model loading using 4-bit quantization, VRAM budget management (2GB target), and error handling for model initialization failures",
+            "dependencies": [],
+            "details": "1) Create /workspace/trainer/scripts/vlm_pipeline.py\n2) Load Qwen2-VL-2B-Instruct with BitsAndBytes 4-bit quantization (nf4)\n3) Implement VRAM monitoring: target 2GB for VLM + 4GB for LLM < 16GB total\n4) Add model caching and lazy loading support\n5) Include graceful fallback for OOM scenarios\n6) Add logging for memory usage at initialization\n7) CLI interface: argparse for model_id, quantize_bits, cache_dir\n8) Type hints on all public functions",
+            "status": "pending",
+            "testStrategy": "Unit test: test_vlm_model_loads() verifies model initialization, test_vlm_vram_budget() confirms VRAM <2GB for VLM alone using torch.cuda.memory_allocated(), test model can run inference on dummy image (224x224 RGB)",
+            "parentId": "undefined"
+          },
+          {
+            "id": 2,
+            "title": "Implement heatmap image processing and ROI extraction",
+            "description": "Implement image processing pipeline to extract regions of interest (ROI) from heatmap images, compute intensity statistics, and prepare inputs for VLM inference",
+            "dependencies": [
+              1
+            ],
+            "details": "1) Implement functions in vlm_pipeline.py:\n   - load_heatmap_image(path) → numpy array (normalize to 0-255 uint8)\n   - detect_roi_regions(heatmap) → list of bounding boxes\n   - extract_roi_patches(image, bboxes) → list of cropped regions\n   - compute_roi_statistics(patch) → mean_intensity, severity score (0-1)\n2) ROI detection logic: threshold-based (intensity >percentile_75) or contour-based\n3) Severity mapping: mean_intensity percentile rank (0-1 scale)\n4) Handle grayscale and RGB heatmaps\n5) Normalize patches to VLM input size (e.g., 448x448 for Qwen2-VL)\n6) Add input validation and error handling for corrupted images",
+            "status": "pending",
+            "testStrategy": "Unit test: test_vlm_heatmap_analysis() with synthetic heatmap (71x71 grayscale), verify 3-5 ROIs detected, test_roi_statistics() confirms mean_intensity in [0,255], test image preprocessing preserves aspect ratio and handles edge cases (all-black, all-white images)",
+            "parentId": "undefined"
+          },
+          {
+            "id": 3,
+            "title": "Implement VLM inference pipeline with output schema validation",
+            "description": "Implement VLM inference logic that processes ROI patches, generates textual descriptions, and validates output against the defined schema (roi_regions, distribution_summary, overall_quality, confidence)",
+            "dependencies": [
+              2
+            ],
+            "details": "1) Implement vlm_inference(heatmap_image, roi_patches) function:\n   - Construct vision-language prompt for each ROI\n   - Call Qwen2-VL with max_tokens=1024, temperature=0.3\n   - Parse VLM response (handle parsing failures gracefully)\n2) Output schema validation:\n   - roi_regions: list of {zone_id (int), bbox (list[4]), mean_intensity (0-255), severity (0.0-1.0), description (str)}\n   - distribution_summary: str (50-200 chars), overall pattern\n   - overall_quality: enum [fair/good/poor]\n   - confidence: float [0.0-1.0]\n3) Implement response_to_schema() converter with type validation\n4) Handle VLM failures (empty response, parsing errors) with fallback defaults\n5) Add latency tracking per inference call\n6) Include pydantic or dataclass for schema definition",
+            "status": "pending",
+            "testStrategy": "Unit test: test_vlm_inference() with synthetic heatmap, verify output matches schema structure, test_output_schema_validation() checks all required fields present and correct types, test_vlm_latency() confirms inference <5sec per image, test parsing robustness with malformed VLM responses",
+            "parentId": "undefined"
+          },
+          {
+            "id": 4,
+            "title": "Integrate VLM results into anomaly_detection.py MCP endpoint",
+            "description": "Integrate VLM pipeline outputs into the anomaly_detection.py MCP server, mapping VLM analysis results to AnomalyRequest/AnomalyResponse structures and ensuring API contract compliance",
+            "dependencies": [
+              3
+            ],
+            "details": "1) Review mcp_servers/anomaly_detection.py current structure (lines 40-44: AnomalyRequest schema)\n2) Modify anomaly_detection.py to:\n   - Import vlm_pipeline module\n   - Add vlm_analyze() endpoint or integrate into existing analyze() function\n   - Map VLM roi_regions → anomaly regions with severity scores\n   - Map overall_quality → anomaly severity classification\n   - Map confidence → response confidence score\n3) Ensure AnomalyResponse includes:\n   - anomalies: list of {region, severity, description, confidence}\n   - summary: distribution_summary from VLM\n   - quality_assessment: overall_quality from VLM\n4) Add error handling: VLM unavailable → fallback to stub response\n5) Implement caching: avoid re-analyzing same image within TTL\n6) Update tool schema in trainer/configs/tool_schemas/anomaly_detection.json",
+            "status": "pending",
+            "testStrategy": "Integration test: vlm_analysis → anomaly_detection endpoint works end-to-end, test AnomalyResponse validates against schema, test caching (same image twice returns cached result), test fallback when VLM unavailable, verify latency budget <10s (VLM <5s + endpoint overhead <5s)",
+            "parentId": "undefined"
+          },
+          {
+            "id": 5,
+            "title": "Benchmark VRAM usage and inference latency with 71 heatmap images",
+            "description": "Run comprehensive benchmarks on the 71 existing heatmap images to validate VRAM budget (<10GB for LLM+VLM combined) and inference latency (<5s per image), generate performance report",
+            "dependencies": [
+              4
+            ],
+            "details": "1) Create benchmark script: trainer/scripts/vlm_benchmark.py\n2) Load 71 existing heatmaps from /workspace/data or /output/\n3) Benchmark metrics:\n   - Peak VRAM during concurrent LLM+VLM loading (torch.cuda.max_memory_allocated())\n   - Per-image inference latency (mean, p50, p95, p99)\n   - Throughput (images/second)\n   - VRAM stability: check for memory leaks over 71 iterations\n4) Test both sequential and concurrent loading strategies\n5) Generate report: benchmark_results.json with:\n   - Total VRAM peak (target <10GB)\n   - Latency stats (target mean <5s)\n   - Device utilization (VRAM %, GPU compute %)\n   - Failure rate (any OOM or timeout)\n6) Produce visualization: latency histogram, VRAM usage over time\n7) Document findings and any tuning recommendations",
+            "status": "pending",
+            "testStrategy": "Run benchmark on all 71 images, verify peak VRAM <10GB (assert), verify mean latency <5s (assert), confirm zero OOM errors, check for memory leaks (peak VRAM iteration 1 vs iteration 71 <5% growth), generate CSV report: image_id, latency_ms, roi_count, quality, confidence",
+            "parentId": "undefined"
+          }
+        ],
+        "complexity": 7,
+        "recommendedSubtasks": 5,
+        "expansionPrompt": "Break into: (1) Create vlm_pipeline.py with Qwen2-VL-2B-Instruct model loading (4-bit quantization), (2) Implement heatmap image processing and ROI extraction logic, (3) Implement VLM inference pipeline with output schema validation (roi_regions, distribution_summary, overall_quality), (4) Integrate VLM results into anomaly_detection.py MCP endpoint, (5) Benchmark VRAM usage and inference latency with 71 existing heatmap images"
+      },
+      {
+        "id": "28",
+        "title": "Rule Engine 통합",
+        "description": "RealCOAT Rule Engine 점수를 에이전트 파이프라인에 연결하여 점수 기반 코칭 생성 구현",
+        "details": "1) 신규 어댑터: /workspace/trainer/scripts/rule_engine_adapter.py\n2) Rule Engine 인터페이스 계약서 기반 구현:\n   - 입력: 모션 데이터 (timestamp, speed, distance, angle)\n   - 출력: 표준 점수 (0-100)\n3) 점수 변환 로직:\n   - transform_scores(raw_scores) → 0-100 표준화\n   - 임계값 정의: speed<60=warning, distance<50=warning\n4) 에이전트 파이프라인 연동:\n   - 낮은 점수 → 자동 경고/조치 생성\n   - generate_coaching_from_scores(scores) → 코칭 메시지\n5) 합성 데이터로 개발 시작:\n   - 정규분포 기반 모션 데이터 생성\n   - RealCOAT 데이터 확보 시 검증\n6) 처리 지연 <2초 목표\n\n참조 문서: /workspace/trainer/docs/rule_engine_interface.md",
+        "testStrategy": "1) Unit test: test_rule_engine_input_validation() - 입력 스키마 검증\n2) Unit test: test_score_transformation() - 점수 변환 정확도 확인\n3) Unit test: test_coaching_generation_from_scores() - 코칭 생성 확인\n4) Unit test: test_rule_engine_latency() - 처리 시간 <2초 확인\n5) Integration test: Rule Engine → Agent Pipeline 전체 흐름 테스트\n6) Accuracy test: RealCOAT 대비 점수 일치율 95%+ 확인 (실데이터 확보 시)",
+        "priority": "high",
+        "dependencies": [
+          "26"
+        ],
+        "status": "pending",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Define Rule Engine input/output contract from interface.md",
+            "description": "Read and analyze /workspace/trainer/docs/rule_engine_interface.md to understand the Rule Engine API contract, including input schema (timestamp, speed, distance, angle) and output format (raw scores), then document the interface requirements.",
+            "dependencies": [],
+            "details": "Open /workspace/trainer/docs/rule_engine_interface.md and extract the complete Rule Engine interface specification. Document: (1) input schema with field names, types, and valid ranges, (2) output schema showing raw score format and range, (3) any constraints or assumptions about motion data, (4) error handling requirements. Create a summary document or add comments to rule_engine_adapter.py describing the contract.",
+            "status": "pending",
+            "testStrategy": "Code review: Verify interface.md was read and documented; check that input/output fields are clearly understood and written down before implementation begins",
+            "parentId": "undefined"
+          },
+          {
+            "id": 2,
+            "title": "Create rule_engine_adapter.py with score transformation logic",
+            "description": "Implement /workspace/trainer/scripts/rule_engine_adapter.py with transform_scores() function to convert raw Rule Engine scores to 0-100 standard scale, including threshold definitions for speed<60 and distance<50 warnings.",
+            "dependencies": [
+              1
+            ],
+            "details": "Create new file rule_engine_adapter.py with: (1) transform_scores(raw_scores: dict) → dict function that normalizes raw scores to 0-100 range, (2) threshold definitions as constants (SPEED_WARNING=60, DISTANCE_WARNING=50), (3) helper functions to detect warning conditions, (4) proper error handling for invalid inputs, (5) type hints and docstrings explaining the transformation formula. Use the interface contract from subtask 1 to guide implementation. Target <2s processing latency.",
+            "status": "pending",
+            "testStrategy": "Unit test: test_score_transformation() validates that raw scores are correctly normalized to 0-100 range; test boundary cases (min/max values, warning thresholds); test invalid input handling",
+            "parentId": "undefined"
+          },
+          {
+            "id": 3,
+            "title": "Implement generate_coaching_from_scores() function for coaching message creation",
+            "description": "Implement generate_coaching_from_scores(scores: dict) → str function in rule_engine_adapter.py that generates contextual coaching messages based on low scores and warning conditions, with conditional logic for speed and distance warnings.",
+            "dependencies": [
+              2
+            ],
+            "details": "Add generate_coaching_from_scores() function that: (1) accepts normalized scores (0-100) from transform_scores(), (2) creates conditional coaching messages based on score thresholds (e.g., score<60 triggers warning, score<40 triggers critical alert), (3) includes specific guidance for speed<60 and distance<50 warnings, (4) returns structured coaching output (message, severity level, recommendations), (5) keeps function logic under 40 lines with clear decision branches. Ensure messages are actionable and specific to the deficiency.",
+            "status": "pending",
+            "testStrategy": "Unit test: test_coaching_generation_from_scores() validates that low scores generate appropriate coaching messages; test that speed and distance warnings produce specific, distinct messages; test that high scores don't trigger unnecessary coaching",
+            "parentId": "undefined"
+          },
+          {
+            "id": 4,
+            "title": "Integrate adapter into agent_pipeline.py with latency <2s and synthetic data testing",
+            "description": "Integrate rule_engine_adapter.py into /workspace/trainer/scripts/agent_pipeline.py, wire transform_scores() and generate_coaching_from_scores() into the agent response flow, verify <2s latency requirement, and validate with synthetic motion data.",
+            "dependencies": [
+              2,
+              3
+            ],
+            "details": "Modify agent_pipeline.py to: (1) import rule_engine_adapter functions, (2) add Rule Engine score transformation step after motion data input, (3) pass transformed scores to generate_coaching_from_scores() to augment agent coaching output, (4) integrate into the 3-way semantic router (add Rule Engine score logic to route decisions if applicable), (5) create synthetic motion data generator (normal distribution based: speed ~70±20, distance ~100±30, angle ~45±15) for development testing, (6) add latency monitoring/logging for the Rule Engine adapter calls, (7) ensure end-to-end flow (motion data → scores → coaching) completes in <2s. Document integration points with inline comments.",
+            "status": "pending",
+            "testStrategy": "Unit test: test_rule_engine_latency() measures adapter execution time with synthetic data, confirms <2s; Integration test: full pipeline flow from synthetic motion data → Rule Engine scores → coaching messages; smoke test with 5 different synthetic motion profiles; verify no blocking calls in pipeline",
+            "parentId": "undefined"
+          }
+        ],
+        "complexity": 5,
+        "recommendedSubtasks": 4,
+        "expansionPrompt": "Break into: (1) Define Rule Engine input/output contract from /workspace/trainer/docs/rule_engine_interface.md, (2) Create rule_engine_adapter.py with score transformation logic (raw scores → 0-100 standard scale), (3) Implement generate_coaching_from_scores() function to create coaching messages from low scores, (4) Integrate adapter into agent_pipeline.py with latency <2s requirement and test with synthetic motion data"
+      },
+      {
+        "id": "29",
+        "title": "Session Export 자동화",
+        "description": "RealCOAT 세션 데이터 자동 감지 및 인덱싱 파이프라인 구축",
+        "details": "1) 신규 스크립트: /workspace/trainer/scripts/session_watcher.py\n2) /exports/realcoat/ 디렉터리 감시 (watchdog 라이브러리)\n3) 세션 파일 구조:\n   - session_summary.json (필수)\n   - heatmap.png (선택)\n   - screenshot.png (선택)\n   - motion_data.json (선택)\n   - sequence_log.json (선택)\n4) session_summary.json 스키마 검증:\n   - validate_session_summary(data) → ValidationResult\n   - 필수 필드: session_id, timestamp, user_id\n5) 검증 통과 시:\n   - 분석 큐에 등록\n   - Rule Engine + Agent Pipeline 자동 실행\n6) 검증 실패 시:\n   - 에러 로깅\n   - 재시도 큐 등록 (max 3회)\n7) 합성 session_summary.json으로 개발 시작\n\n참조 문서: /workspace/trainer/docs/export_automation.md",
+        "testStrategy": "1) Unit test: test_session_summary_schema_validation() - 유효 세션 검증 통과\n2) Unit test: test_invalid_session_summary_rejected() - 무효 세션 거부 확인\n3) Unit test: test_file_watcher_detects_new_session() - 신규 세션 자동 감지\n4) Unit test: test_failed_validation_logged() - 검증 실패 로깅 확인\n5) Integration test: 파일 감지 → 검증 → 큐 등록 전체 흐름\n6) E2E test: 실제 세션 디렉터리 생성 시 자동 분석 실행 확인",
+        "priority": "medium",
+        "dependencies": [
+          "28"
+        ],
+        "status": "pending",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Define session_summary.json schema and implement validation function",
+            "description": "Define the complete JSON schema for session_summary.json with required fields (session_id, timestamp, user_id) and optional fields (heatmap.png, screenshot.png, motion_data.json, sequence_log.json). Implement validate_session_summary(data) → ValidationResult function using jsonschema library.",
+            "dependencies": [],
+            "details": "Create schema definition in YAML/JSON format. Implement validation function in /workspace/trainer/scripts/session_validator.py. Required fields must be non-empty strings/timestamps. Optional fields checked if present. Return ValidationResult dataclass with (is_valid: bool, errors: List[str], validated_data: dict). Reference Task 23 jsonschema pattern. Handle malformed JSON gracefully.",
+            "status": "pending",
+            "testStrategy": "Unit tests: valid session passes, missing required field fails, extra fields ignored, invalid timestamp rejected, null values rejected. Test with 5 valid and 5 invalid session_summary.json samples.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 2,
+            "title": "Create session_watcher.py using watchdog library to monitor /exports/realcoat/",
+            "description": "Implement file system watcher using watchdog library to monitor /exports/realcoat/ directory for new session_summary.json files. Create event handler that detects new session directories and triggers validation pipeline.",
+            "dependencies": [
+              1
+            ],
+            "details": "Install watchdog library. Create SessionEventHandler class extending FileSystemEventHandler. Implement on_created() to detect new session_summary.json files. Set up Observer to watch /exports/realcoat/ recursively. Include graceful shutdown on KeyboardInterrupt. Log all events with timestamps. Run in main thread. Handle file lock issues (2-3 second debounce for file availability).",
+            "status": "pending",
+            "testStrategy": "Create test sessions in /exports/realcoat/, verify on_created() triggered within 1 second, verify correct session_id extracted from directory name, verify file lock handled (file still being written by simulator).",
+            "parentId": "undefined"
+          },
+          {
+            "id": 3,
+            "title": "Implement session detection and analysis queue registration with error handling and retry logic",
+            "description": "Implement queue management system to register validated sessions for analysis. Include retry queue for failed validations (max 3 attempts), error logging, and integration with downstream Rule Engine + Agent Pipeline processing.",
+            "dependencies": [
+              1,
+              2
+            ],
+            "details": "Create SessionQueue class with methods: enqueue_valid_session(session_data), enqueue_retry(session_data, attempt_count), get_next_session(). Use Python deque or simple list. Implement retry logic: on validation failure, log error, increment attempt count, re-queue if < 3 attempts, otherwise log permanent failure. Log all events to /logs/session_watcher.log. Implement graceful queue persistence (pickle or JSON dump on shutdown). Include metrics: total_sessions, valid_count, failed_count, retry_queue_size.",
+            "status": "pending",
+            "testStrategy": "Unit tests: valid session enqueued, failed session retried 3 times then dropped, error logged with session_id and error details, queue persisted on shutdown and restored on restart. Integration test: 5 valid sessions → queue → 0 remaining, 3 failed sessions → 3 retries → dropped.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 4,
+            "title": "Test with synthetic session_summary.json files covering valid, malformed, and edge case scenarios",
+            "description": "Create comprehensive test suite with synthetic session_summary.json files covering valid sessions, malformed JSON, missing required fields, invalid data types, and edge cases. Verify full pipeline (detection → validation → queueing) works correctly.",
+            "dependencies": [
+              1,
+              2,
+              3
+            ],
+            "details": "Create test fixtures in /data/test_sessions/: (1) valid_session.json - all required+optional fields, (2) missing_session_id.json - no session_id field, (3) invalid_timestamp.json - malformed timestamp, (4) extra_fields.json - additional unknown fields, (5) null_values.json - required fields = null, (6) empty_strings.json - required fields = '', (7) large_session.json - 10MB+ file, (8) concurrent_sessions.json - multiple sessions simultaneously. Run integration test: all valid detected and queued, all invalid detected and logged, file watcher maintains performance <500ms latency per detection.",
+            "status": "pending",
+            "testStrategy": "pytest with fixtures. Verify: watcher detects all test files within 1 second, validation correctly classifies valid/invalid, queue registers valid sessions and retry queue gets failed ones, logs contain session_id/error_type, concurrent file creation doesn't crash handler. Check /logs/session_watcher.log for 8 test files × 2 (detection + validation).",
+            "parentId": "undefined"
+          }
+        ],
+        "complexity": 4,
+        "recommendedSubtasks": 4,
+        "expansionPrompt": "Break into: (1) Define session_summary.json schema with required/optional fields and implement validation function, (2) Create session_watcher.py using watchdog library to monitor /exports/realcoat/ directory, (3) Implement session detection and analysis queue registration logic with error handling and retry (max 3), (4) Test with synthetic session_summary.json files covering valid, malformed, and edge case scenarios"
+      },
+      {
+        "id": "30",
+        "title": "MCP Stub 실구현 전환",
+        "description": "5개 Stub MCP 도구 중 최소 3개를 실제 로직으로 전환 (anomaly_detection, location_tracking, timeseries 우선)",
+        "details": "1) anomaly_detection.py 실구현 (우선순위 1):\n   - VLM 분석 결과 + DFT 데이터 통합\n   - 분포 패턴 분석 로직\n   - 근본 원인 추론 (속도/거리/각도)\n   - 시계열 상관관계 분석\n2) sequence_validation.py:\n   - Phase 1에서 2단계 로직 교정 완료 (실구현 전환 불필요)\n   - 블록 간 + 블록 내 순서 추천 동작 중\n3) location_tracking.py 실구현 (우선순위 3):\n   - 3D 좌표 → Zone ID 매핑\n   - 합성 Zone 정의로 시작 (가상 선박 블록)\n   - RealCOAT 3D 설정 확보 시 업데이트\n4) timeseries.py 실구현 (우선순위 4):\n   - 세션 시계열 통계 분석\n   - 속도/거리/각도 추세 계산\n   - 이동평균, 표준편차 등\n5) pose_estimation.py:\n   - BVH 데이터 미확보, Phase 3 이전 (우선순위 낮음)\n\n목표: 3/5 Stub → Real 전환\n각 도구별 단위 테스트 100% 통과",
+        "testStrategy": "1) Unit test: test_anomaly_detection_real() - 이상 탐지 로직 동작 확인\n2) Unit test: test_sequence_validation_real() - 2단계 순서 추천 동작 확인\n3) Unit test: test_location_tracking_real() - 좌표 → Zone 매핑 확인\n4) Unit test: test_timeseries_analysis_real() - 시계열 통계 계산 확인\n5) Unit test: test_stub_count_reduced() - Stub 도구 2개 이하 확인\n6) Integration test: 각 실구현 도구 MCP 엔드포인트 통합 테스트\n7) E2E test: Agent Pipeline에서 실구현 도구 호출 성공 확인",
+        "priority": "high",
+        "dependencies": [
+          "27",
+          "28"
+        ],
+        "status": "pending",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Implement anomaly_detection.py real logic with distribution analysis",
+            "description": "Replace stub with real anomaly detection logic integrating VLM analysis results and DFT data, including distribution pattern analysis and root cause inference from speed/distance/angle data.",
+            "dependencies": [],
+            "details": "Implement distribution pattern analysis using statistical methods (histogram, KDE), integrate timeseries correlation analysis to infer root causes (speed anomalies, distance irregularities, angle deviations), handle VLM analysis result integration. Reference existing stub structure in mcp_servers/anomaly_detection.py lines 48-80. Ensure MCPResponse contract compliance per tool_schemas/anomaly_detection.json. Target: Process DFT session data with 90/10 rule validation and return anomaly flags with confidence scores and inferred root causes.",
+            "status": "pending",
+            "testStrategy": "Unit test: test_anomaly_detection_real() validates distribution analysis on synthetic session data (10+ samples), verifies root cause inference accuracy (speed/distance/angle attribution), confirms MCPResponse format compliance, tests edge cases (no anomalies, multiple anomalies, insufficient data)",
+            "parentId": "undefined"
+          },
+          {
+            "id": 2,
+            "title": "Verify sequence_validation.py is functional with 2-step logic",
+            "description": "Confirm sequence_validation.py 2-step logic (inter-block and intra-block recommendations) is fully functional from Phase 1 implementation and requires no further conversion.",
+            "dependencies": [],
+            "details": "Review mcp_servers/sequence_validation.py to confirm 2-step validation logic is operational: (1) inter-block sequence validation, (2) intra-block ordering recommendations. Verify MCPResponse structure matches tool_schemas/sequence_validation.json. Run existing unit tests to validate no regressions. Document findings in task notes. No code changes required if logic is verified functional.",
+            "status": "pending",
+            "testStrategy": "Unit test: test_sequence_validation_real() executes on sample block sequences, validates inter-block recommendations against block dependency rules, confirms intra-block ordering suggestions are logically sound, verifies MCPResponse format, checks edge cases (missing blocks, circular dependencies, single block input)",
+            "parentId": "undefined"
+          },
+          {
+            "id": 3,
+            "title": "Implement location_tracking.py with 3D-to-Zone coordinate mapping",
+            "description": "Replace stub with real location tracking logic converting 3D coordinates to Zone IDs using synthetic zone definitions for virtual ship blocks, with upgrade path for RealCOAT 3D configuration.",
+            "dependencies": [],
+            "details": "Define synthetic zone boundaries (minimum 8-12 zones representing virtual ship blocks/sections). Implement 3D coordinate → Zone ID mapping logic using spatial proximity/bounding box methods. Create zone definition configuration (zone_id, name, bounds_xyz, block_name). Build lookup/spatial query functions for efficient coordinate-to-zone resolution. Reference tool_schemas/location_tracking.json for MCPResponse contract. Design extensible architecture to swap synthetic zones for RealCOAT 3D data later. Handle edge cases: coordinates outside all zones, boundary coordinates.",
+            "status": "pending",
+            "testStrategy": "Unit test: test_location_tracking_real() validates coordinate-to-zone mapping on 50+ test coordinates (known zones), verifies zone boundary precision (tolerance ±0.5m), tests edge cases (out-of-bounds coords, boundary points), confirms MCPResponse format, measures lookup latency (<100ms), tests zone definition loading/parsing",
+            "parentId": "undefined"
+          },
+          {
+            "id": 4,
+            "title": "Implement timeseries.py with statistical analysis capabilities",
+            "description": "Replace stub with real timeseries analysis logic computing session statistics including moving averages, standard deviations, and trend analysis for speed, distance, and angle metrics.",
+            "dependencies": [],
+            "details": "Implement statistical computation functions: moving average (window size 5-10 samples), standard deviation (rolling and overall), trend detection (linear regression slope), correlation analysis (speed vs distance, angle changes). Use NumPy/SciPy for efficient computation. Handle variable-length sessions and missing data points gracefully. Generate summary statistics: min/max/mean/stdev per metric, trend direction/magnitude, anomaly flags for outliers (>2-3σ). Ensure MCPResponse structure per tool_schemas/timeseries.json. Optimize for real-time processing (<500ms for 1-hour session).",
+            "status": "pending",
+            "testStrategy": "Unit test: test_timeseries_analysis_real() validates statistical calculations on synthetic 1-hour session data (60+ samples), verifies moving average accuracy (manual computation comparison), confirms stdev calculations, tests trend detection (uptrend/downtrend/flat scenarios), validates correlation computation, checks edge cases (short sessions <10 samples, constant values, NaN handling)",
+            "parentId": "undefined"
+          },
+          {
+            "id": 5,
+            "title": "Write comprehensive unit tests for all 4 implemented tools",
+            "description": "Create unit tests achieving 100% code coverage for anomaly_detection.py, location_tracking.py, timeseries.py, and sequence_validation.py with edge case validation.",
+            "dependencies": [
+              1,
+              2,
+              3,
+              4
+            ],
+            "details": "Create test file mcp_servers/test_real_tools.py with pytest framework. For each tool, write tests covering: (1) normal/happy path scenarios with realistic session data, (2) edge cases (empty input, single sample, extreme values, out-of-range coordinates), (3) MCPResponse contract validation (correct schema, required fields), (4) error handling (invalid input types, missing data, timeout simulation), (5) performance baselines (<1s per call). Use fixtures for sample data (synthetic DFT sessions, zone configs, timeseries data). Target: 100% code coverage per tool, all tests passing, execution time <60s total.",
+            "status": "pending",
+            "testStrategy": "Coverage analysis: pytest --cov=mcp_servers for anomaly_detection, location_tracking, timeseries, sequence_validation. Verify line coverage ≥95%, branch coverage ≥85%. All unit tests pass without errors. Generate coverage report in /output/test_coverage/. Manual spot-check: 5+ edge cases per tool execute correctly.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 6,
+            "title": "Integration test all 4 tools via MCP endpoints with sample data",
+            "description": "Execute end-to-end integration tests calling all 4 MCP tool endpoints via the tool_calling_adapter.py pipeline with realistic training session sample data, validating response formats and inter-tool data flow.",
+            "dependencies": [
+              1,
+              2,
+              3,
+              4,
+              5
+            ],
+            "details": "Create integration test file mcp_servers/test_mcp_integration.py simulating full request pipeline: (1) Start MCP server (uvicorn mcp_servers.main:app --port 8100), (2) Prepare sample training session JSON (with VLM results, DFT measurements, 3D coordinates, timeseries data), (3) Call endpoints in sequence: location_tracking (3D→Zone), anomaly_detection (DFT+VLM), timeseries (session stats), sequence_validation (block sequence), (4) Validate each response MCPResponse format per tool_calling_protocol.json, (5) Verify data consistency across tool outputs (e.g., Zone IDs match, session IDs consistent), (6) Check latency per tool (goal: <3s fast, <10s realtime, <30s review routes). Document response samples in /output/test_integration/.",
+            "status": "pending",
+            "testStrategy": "Run integration tests against live MCP server: test_mcp_integration.py executes 5+ realistic training scenarios, validates MCPResponse format for each tool call, checks inter-tool data consistency (matching IDs, compatible data types), measures end-to-end latency (target: <15s total for all 4 tools), confirms no 500 errors or timeouts, generates sample I/O log in /output/test_integration/integration_log.json for audit trail",
+            "parentId": "undefined"
+          }
+        ],
+        "complexity": 7,
+        "recommendedSubtasks": 6,
+        "expansionPrompt": "Break into: (1) Implement anomaly_detection.py real logic (distribution analysis + root cause inference from timeseries), (2) Verify sequence_validation.py is functional (2-step logic already implemented), (3) Implement location_tracking.py with 3D→Zone mapping using synthetic zone definitions, (4) Implement timeseries.py with statistical analysis (moving average, stdev, correlation), (5) Write unit tests for each tool (100% coverage target), (6) Integration test all 4 tools via MCP endpoints with sample data"
+      },
+      {
+        "id": "31",
+        "title": "RLHF/DPO 학습 준비",
+        "description": "Hallucination 2% → <1% 달성 및 응답 품질 일관성 향상을 위한 DPO 학습 파이프라인 구축 (Phase 3)",
+        "details": "1) DPO 학습 파이프라인 구현:\n   - trl.DPOTrainer 기반\n   - chosen/rejected 쌍 학습\n2) Human preference annotation 프로토콜 설계:\n   - 도메인 전문가 + 교관 참여\n   - 5점 척도 평가 기준\n   - 주석 도구 (Label Studio 등)\n3) Preference 쌍 500-1000건 수집:\n   - 동일 질문에 대한 2개 응답 생성\n   - 전문가가 chosen/rejected 라벨링\n   - 근거 및 개선 방향 메모\n4) DPO 학습 설정:\n   - beta=0.1 (KL divergence penalty)\n   - 기존 Iter15 어댑터를 reference model로 사용\n5) 평가: hallucination <1%, 일관성 점수 향상\n\n데이터 차단: 전문가 annotation 필수\nPhase 3 우선순위",
+        "testStrategy": "1) Unit test: test_dpo_data_format() - Preference 쌍 포맷 검증\n2) Unit test: test_dpo_trainer_initialization() - DPO Trainer 정상 초기화\n3) Integration test: test_dpo_training_pipeline() - DPO 학습 전체 파이프라인\n4) Evaluation test: test_hallucination_rate_improvement() - halluc <1% 확인\n5) Manual review: DPO 학습 후 응답 품질 육안 비교 (50문항)\n6) A/B test: Iter15 vs DPO 모델 블라인드 평가",
+        "priority": "low",
+        "dependencies": [
+          "26"
+        ],
+        "status": "pending",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Design human preference annotation protocol with 5-point evaluation rubric",
+            "description": "Create a comprehensive annotation protocol based on existing eval_rubrics patterns, defining the 5-point evaluation scale for preference annotation (chosen vs rejected responses). Include domain-specific criteria for ship coating training scenarios.",
+            "dependencies": [],
+            "details": "1. Review existing eval_rubrics/ directory to understand current rubric structure and scoring methodology\n2. Design 5-point Likert scale (1=Poor to 5=Excellent) with clear criteria for:\n   - Technical accuracy in ship coating domain\n   - Clarity and pedagogical value for XR training\n   - Safety compliance and best practice adherence\n   - Consistency with training objectives\n3. Create annotation guidelines document (English/Korean) with examples\n4. Define inter-annotator agreement targets (Cohen's kappa ≥0.65)\n5. Include training guide for domain experts and instructors",
+            "status": "pending",
+            "testStrategy": "Review rubric with 2-3 domain experts for clarity and domain relevance, validate against existing eval_rubrics patterns, confirm 5-point scale interpretability through pilot annotation (5 test cases)",
+            "parentId": "undefined"
+          },
+          {
+            "id": 2,
+            "title": "Set up annotation infrastructure (Label Studio) for expert labeling workflow",
+            "description": "Deploy and configure Label Studio instance or similar tool for managing preference pair annotation by domain experts and instructors. Establish annotator workflows, access controls, and data export pipelines.",
+            "dependencies": [
+              1
+            ],
+            "details": "1. Deploy Label Studio or alternative tool (e.g., Prodigy, Argilla) on accessible infrastructure\n2. Configure project settings:\n   - Task type: Pairwise comparison (chosen vs rejected)\n   - Custom labeling interface with 5-point rubric visible\n   - Metadata fields: question_id, model_source, annotation_date, annotator_id, confidence\n3. Set up user roles and permissions:\n   - Admin (system management)\n   - Annotator (labeling tasks)\n   - Reviewer (quality checks)\n4. Create CSV/JSONL import template for response pairs\n5. Configure export format: chosen/rejected labels, scores, reasoning notes, timestamps\n6. Document annotator onboarding and workflow SOP",
+            "status": "pending",
+            "testStrategy": "Test tool deployment with 10 sample preference pairs, verify annotation interface usability with 1-2 beta annotators, confirm data export format matches DPO training input requirements, check inter-annotator consistency metrics",
+            "parentId": "undefined"
+          },
+          {
+            "id": 3,
+            "title": "Collect preference pairs (500-1000 chosen/rejected response pairs) from domain experts",
+            "description": "Generate response pairs for identical ship coating training questions, distribute to domain experts and instructors for annotation, collect chosen/rejected labels with reasoning, manage annotator workflow and quality checks.",
+            "dependencies": [
+              2
+            ],
+            "details": "1. Prepare response pair generation:\n   - Select 250-500 diverse questions from eval dataset covering domain categories (sequence, anomaly, DFT, pose, trends, coaching)\n   - Generate 2 responses per question using Iter15 model + different prompts/temperatures\n   - Ensure response pair diversity (avoid trivially identical responses)\n2. Annotator recruitment and management:\n   - Recruit 3-5 domain experts + 2-3 instructors\n   - Conduct calibration session with shared examples\n3. Annotation campaign:\n   - Distribute batches (100-200 pairs per annotator) via Label Studio\n   - Target 2-3 annotations per pair for agreement calculation\n   - Collect rationale/notes explaining chosen preference\n4. Quality assurance:\n   - Monitor inter-annotator agreement (Cohen's kappa)\n   - Flag low-agreement pairs for re-review\n   - Track annotation pace and completeness\n5. Data compilation and validation",
+            "status": "pending",
+            "testStrategy": "Verify 500-1000 preference pairs collected with ≥80% completion rate, compute inter-annotator agreement (kappa ≥0.65), validate JSON format (chosen, rejected, score, reasoning fields), check question coverage across domain categories, identify and resolve disagreement conflicts",
+            "parentId": "undefined"
+          },
+          {
+            "id": 4,
+            "title": "Implement DPO training pipeline using trl.DPOTrainer with evaluation",
+            "description": "Build and execute DPO training using trl.DPOTrainer with Iter15 model as reference, beta=0.1 KL penalty, evaluate hallucination reduction (<1%) and response consistency improvement metrics.",
+            "dependencies": [
+              3
+            ],
+            "details": "1. Prepare DPO training data:\n   - Convert preference pairs to DPO format: {prompt, chosen, rejected}\n   - Create train/val splits (80/20)\n   - Validate data format and token counts\n2. Configure DPO training pipeline:\n   - Load Iter15 adapter as base model\n   - Set up reference model (frozen Iter15)\n   - DPOTrainer hyperparameters:\n     * beta=0.1 (KL divergence penalty)\n     * learning_rate=5e-5, epochs=1-2\n     * batch_size=2-4, gradient_accumulation=2\n     * loss_type='sigmoid'\n3. Execute training with monitoring:\n   - Track loss curves, reward margins\n   - Save checkpoints every 100 steps\n4. Evaluate hallucination and consistency:\n   - Run agentic eval on test set (30 items)\n   - Measure hallucination rate (<1% target)\n   - Compare consistency scores vs baseline Iter15\n5. Generate training report with metrics and analysis",
+            "status": "pending",
+            "testStrategy": "Unit test: test_dpo_data_format() validates preference pair JSON schema, Unit test: test_dpo_trainer_initialization() confirms DPOTrainer loads with Iter15 reference model, Integration test: test_dpo_training_pipeline() runs 10-step training and checks loss decrease, Evaluation: test_hallucination_rate_improvement() confirms hallucination <1%, Manual review of 5-10 DPO outputs for consistency improvement vs baseline",
+            "parentId": "undefined"
+          }
+        ],
+        "complexity": 5,
+        "recommendedSubtasks": 4,
+        "expansionPrompt": "Break into: (1) Design human preference annotation protocol with 5-point evaluation rubric, (2) Set up annotation infrastructure (Label Studio or similar) for expert labeling workflow, (3) Collect preference pairs (500-1000 chosen/rejected response pairs) from evaluators, (4) Implement DPO training pipeline using trl.DPOTrainer with beta=0.1 KL penalty and evaluate hallucination <1% improvement"
+      },
+      {
+        "id": "32",
+        "title": "Qdrant 벡터 DB 마이그레이션",
+        "description": "FAISS (파일 기반, 단일 클라이언트) → Qdrant (서버 기반, 멀티 클라이언트) 마이그레이션 (Phase 3)",
+        "details": "1) Qdrant 서버 Docker 배포:\n   - docker-compose.yml에 Qdrant 서비스 추가\n   - 포트: 6333 (HTTP API), 6334 (gRPC)\n   - 볼륨: /data/qdrant-storage\n2) build_index.py 마이그레이션:\n   - FAISS → Qdrant 컬렉션 생성\n   - BGE-M3 임베딩 (1024d) 업로드\n   - payload에 메타데이터 저장 (doc_id, chunk_id, domain_category)\n3) search_index.py Qdrant 클라이언트 전환:\n   - qdrant_client 라이브러리 사용\n   - HNSW 검색 유지 (m=32, ef=64)\n   - 메타데이터 필터링 활용 (domain_category 등)\n4) 성능 벤치마크:\n   - 검색 지연 시간 비교 (FAISS vs Qdrant)\n   - 동시 요청 처리 성능\n5) 롤백 계획: FAISS 백업 유지\n\nPhase 3 우선순위, 데이터 의존성 없음",
+        "testStrategy": "1) Unit test: test_qdrant_server_health() - Qdrant 서버 헬스 체크\n2) Unit test: test_qdrant_collection_creation() - 컬렉션 생성 확인\n3) Unit test: test_qdrant_embedding_upload() - 임베딩 업로드 성공 확인\n4) Integration test: test_qdrant_search_equivalence() - FAISS vs Qdrant 검색 결과 일치 확인\n5) Performance test: test_qdrant_search_latency() - 검색 지연 <200ms 확인\n6) Load test: 동시 100 요청 처리 성능 벤치마크",
+        "priority": "low",
+        "dependencies": [],
+        "status": "pending",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Configure Qdrant in docker-compose.yml with volumes and port mapping",
+            "description": "Add Qdrant service to docker-compose.yml with proper configuration for HTTP API (6333) and gRPC (6334) ports, persistent volume storage at /data/qdrant-storage, and environment variables for vector DB initialization.",
+            "dependencies": [],
+            "details": "Update /workspace/deploy/docker-compose.yml to include Qdrant service with: image specification (qdrant/qdrant:latest), port mappings (6333:6333 for HTTP, 6334:6334 for gRPC), volumes mounting (/data/qdrant-storage for data persistence), environment variables for initial config, and health check endpoint configuration. Ensure compatibility with existing service network and verify no port conflicts.",
+            "status": "pending",
+            "testStrategy": "Unit test: test_docker_compose_syntax() - validate YAML syntax; Integration test: docker-compose config validation succeeds; test_qdrant_ports_accessible() - verify ports 6333 and 6334 are reachable after container startup; test_volume_mount() - confirm /data/qdrant-storage directory created and writable.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 2,
+            "title": "Implement Qdrant collection creation and BGE-M3 embedding upload in build_index.py",
+            "description": "Modify build_index.py to create Qdrant collections, upload BGE-M3 embeddings (1024-dimensional vectors), and store metadata (doc_id, chunk_id, domain_category) as payload instead of using FAISS file-based indexing.",
+            "dependencies": [
+              1
+            ],
+            "details": "Refactor /workspace/trainer/scripts/build_index.py to: (1) replace FAISS initialization with qdrant_client.QdrantClient connection to localhost:6333, (2) create collections with VectorParams(size=1024, distance=Distance.COSINE), (3) generate BGE-M3 embeddings using sentence-transformers batch_size=32, (4) upload points to Qdrant with payload containing doc_id, chunk_id, domain_category, and token count, (5) maintain backward compatibility by reading from /data/chunked/chunks.jsonl. Add error handling for connection failures and retry logic (max 3 attempts, 1000ms backoff).",
+            "status": "pending",
+            "testStrategy": "Unit test: test_qdrant_connection() - verify client connects to Qdrant server; test_collection_creation() - confirm VectorParams match spec (size=1024, COSINE); test_embedding_dimensions() - validate all embeddings are 1024-dimensional; Integration test: test_embedding_upload_success() - verify 100+ points uploaded with complete payloads; test_metadata_persistence() - retrieve points and confirm all metadata fields present.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 3,
+            "title": "Convert search_index.py to use qdrant_client with HNSW search parameters",
+            "description": "Replace FAISS search logic in search_index.py with Qdrant client implementation, maintaining HNSW search parameters (m=32, ef=64) equivalent performance characteristics and vector similarity search functionality.",
+            "dependencies": [
+              2
+            ],
+            "details": "Refactor /workspace/trainer/scripts/search_index.py to: (1) replace faiss.read_index() with QdrantClient connection, (2) implement search_points() method with HNSW parameters equivalent to m=32, ef=64 via Qdrant's vector_params and hnsw_config, (3) query top_k results matching previous FAISS limit, (4) extract and return chunk_id and relevance scores from Qdrant response points, (5) maintain identical return data structure for downstream compatibility. Handle connection pooling for concurrent requests.",
+            "status": "pending",
+            "testStrategy": "Unit test: test_qdrant_search_initialization() - verify client connects and collection exists; test_search_response_format() - confirm output matches expected structure (chunk_id, score); Integration test: test_search_equivalence() - run identical query on both FAISS (backup) and Qdrant, compare top-3 results for >95% match; test_concurrent_searches() - execute 10 simultaneous searches, verify all complete without connection errors.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 4,
+            "title": "Implement metadata filtering in search logic for domain_category refinement",
+            "description": "Enhance Qdrant search to support metadata filtering using domain_category field, enabling refined search results and domain-specific query capabilities without additional embedding passes.",
+            "dependencies": [
+              3
+            ],
+            "details": "Extend search_index.py search_points() to: (1) accept optional domain_category filter parameter, (2) construct HasFilter condition on payload.domain_category field using Qdrant filter syntax, (3) apply filter to search_points() query before execution, (4) log filter application for debugging, (5) handle edge case of no results after filtering (return empty set or fallback to unfiltered results based on config). Add docstring explaining filter semantics. Validate filter values against known domain categories (e.g., 'surface_prep', 'coating_application', 'inspection').",
+            "status": "pending",
+            "testStrategy": "Unit test: test_filter_construction() - verify HasFilter syntax correct for domain_category; test_filter_parameters() - confirm filter accepts valid domain values; Integration test: test_filtered_search() - execute search with domain filter, verify all returned results have matching category; test_filter_fallback() - search with restrictive filter returning zero results, verify fallback behavior; test_no_filter() - confirm unfiltered search returns all relevant results.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 5,
+            "title": "Performance benchmark (FAISS vs Qdrant search latency) and rollback plan validation",
+            "description": "Execute comprehensive performance benchmarking comparing FAISS and Qdrant search latencies, concurrent request handling, and validate rollback procedures to revert to FAISS if performance targets unmet.",
+            "dependencies": [
+              2,
+              3,
+              4
+            ],
+            "details": "Create /workspace/trainer/scripts/benchmark_qdrant.py to: (1) load test queries (n=100) from evaluation dataset, (2) measure search latency for FAISS (reading from backed-up index) and Qdrant separately, recording p50/p95/p99 latencies, (3) test concurrent request throughput (10, 50, 100 concurrent clients), (4) measure memory consumption (VRAM for FAISS in-memory vs RAM for Qdrant client), (5) verify search result equivalence (top-5 overlap >95%), (6) generate benchmark report with latency comparisons. Define rollback script: backup current Qdrant collection, restore FAISS index, revert search_index.py imports and search calls. Target: <200ms p95 search latency per spec.",
+            "status": "pending",
+            "testStrategy": "Performance test: test_search_latency_benchmark() - run 100 queries on both systems, report p50/p95/p99 <200ms target met; test_concurrent_throughput() - execute 50 concurrent searches, measure requests/sec, confirm Qdrant >FAISS baseline; test_memory_efficiency() - compare peak RAM/VRAM usage during benchmark; Unit test: test_rollback_script_execution() - run rollback procedure, verify FAISS index restored and searchable; test_rollback_idempotency() - execute rollback twice, confirm second execution succeeds without errors.",
+            "parentId": "undefined"
+          }
+        ],
+        "complexity": 6,
+        "recommendedSubtasks": 5,
+        "expansionPrompt": "Break into: (1) Configure Qdrant in docker-compose.yml with volumes and port mapping (6333/6334), (2) Implement Qdrant collection creation and BGE-M3 embedding upload in build_index.py, (3) Convert search_index.py to use qdrant_client with HNSW search parameters, (4) Implement metadata filtering in search logic for domain_category refinement, (5) Performance benchmark (FAISS vs Qdrant search latency) and rollback plan validation"
+      },
+      {
+        "id": "33",
+        "title": "음성 인터페이스 (Whisper STT + TTS)",
+        "description": "조선소 현장 핸즈프리 코칭을 위한 음성 입출력 인터페이스 구축 (Phase 3)",
+        "details": "1) Whisper STT 통합:\n   - openai/whisper-large-v3 모델\n   - 또는 경량화된 whisper-small/medium\n   - 한국어 도메인 용어 인식률 튜닝\n2) TTS 엔진 선정 및 연동:\n   - gTTS (Google TTS) 또는\n   - Coqui TTS (로컬 배포 가능) 또는\n   - Azure TTS API\n3) 도메인 용어 인식률 개선:\n   - 전문 용어 발음 사전 구축\n   - fine-tuning (작업 환경 오디오 100건+)\n4) Gradio UI에 음성 입출력 위젯 추가:\n   - 마이크 입력 → STT → Agent → TTS → 스피커\n   - 녹음 버튼, 재생 버튼\n5) 작업 환경 노이즈 필터링:\n   - 조선소 환경 소음 제거 (선택)\n\n데이터 차단: 현장 오디오 샘플 100건+ 필수\nPhase 3 우선순위",
+        "testStrategy": "1) Unit test: test_whisper_stt_korean() - 한국어 STT 정확도 확인\n2) Unit test: test_domain_term_recognition() - 도메인 용어 인식률 >80% 확인\n3) Unit test: test_tts_audio_generation() - TTS 오디오 생성 확인\n4) Integration test: test_voice_pipeline_e2e() - 음성 입력 → 응답 → 음성 출력 전체 흐름\n5) User acceptance test: 교관/훈련생 10명 음성 인터페이스 사용성 평가\n6) Performance test: STT+TTS 지연 <5초 확인",
+        "priority": "low",
+        "dependencies": [
+          "26"
+        ],
+        "status": "pending",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Integrate Whisper STT (large-v3 or small variant) with Korean domain term recognition",
+            "description": "Implement Whisper speech-to-text model integration with Korean language support and shipyard-specific terminology recognition. Evaluate model size (large-v3 vs small/medium) based on latency requirements (<5s end-to-end).",
+            "dependencies": [],
+            "details": "1. Install openai/whisper library and select model variant (large-v3 for accuracy or small/medium for latency)\n2. Load model with 4-bit quantization if needed for VRAM optimization on RTX 4080\n3. Create transcription function handling Korean audio input\n4. Implement domain terminology mapping (DFT, SSPC-PA2, Sa 2.5, etc.) for post-processing OCR output\n5. Test with Korean audio samples, measure inference latency per audio duration\n6. Implement error handling for invalid/corrupted audio files\n7. Add logging for debugging transcription failures",
+            "status": "pending",
+            "testStrategy": "Unit test: test_whisper_korean_transcription() - verify Korean text output accuracy on sample audio. Benchmark latency: <5s for 30s audio. Test domain term post-processing (e.g., 'DFT' recognized correctly). Edge case: corrupted audio files, silent audio, background noise.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 2,
+            "title": "Select and integrate TTS engine (gTTS/Coqui/Azure) with audio output",
+            "description": "Evaluate and implement text-to-speech engine with Korean voice support. Compare gTTS (simplest, cloud-based), Coqui TTS (local, customizable), and Azure TTS (quality, requires API key). Select based on latency, voice quality, and deployment constraints.",
+            "dependencies": [
+              1
+            ],
+            "details": "1. Prototype with gTTS (Google TTS) as baseline: simple pip install, no GPU required, Korean support available\n2. Evaluate Coqui TTS for local deployment (lower latency, no external API dependency)\n3. Consider Azure TTS for voice quality if project budget allows\n4. Implement TTS wrapper class with model caching to avoid reload overhead\n5. Add audio output formatting (WAV/MP3) and streaming capability for real-time feedback\n6. Integrate with agent pipeline: text response → TTS → audio buffer → speaker\n7. Implement volume normalization and audio quality checks\n8. Add fallback: if TTS fails, log error and return text response",
+            "status": "pending",
+            "testStrategy": "Unit test: test_tts_audio_generation() - verify audio WAV/MP3 output for Korean text. Latency test: TTS response <2s for 100-char Korean text. Audio quality check: verify non-silent output, proper sample rate (16kHz or 22.05kHz). Integration test: verify end-to-end latency (STT + Agent + TTS) <5s for typical coaching response.",
+            "parentId": "undefined"
+          },
+          {
+            "id": 3,
+            "title": "Build domain terminology pronunciation dictionary for STT fine-tuning accuracy",
+            "description": "Create pronunciation dictionary mapping shipyard domain terms (e.g., DFT, SSPC-PA2, epoxy, blasting) to phonetic representations. Use dictionary to improve Whisper fine-tuning accuracy. Collect/curate 100+ audio samples of domain terms for future fine-tuning.",
+            "dependencies": [
+              1
+            ],
+            "details": "1. Define shipyard domain terminology list: ~50-100 unique terms (DFT, WFT, SSPC-SP10, Sa 2.5, epoxy, polyurethane, blasting, surface preparation, holiday detection, mil (thickness unit), etc.)\n2. Create pronunciation guide (IPA or phonetic notation) for each term, referencing industry standards\n3. Collect or synthesize 100+ audio samples of domain terms: 2-3 pronunciations per term, professional speaker or training operator recordings\n4. Store in structured format: JSON with term, IPA, audio file path, confidence score\n5. Implement post-processing hook in Whisper transcription: replace misrecognized terms with dictionary matches using fuzzy matching\n6. Plan for future Whisper fine-tuning: dataset structure ready (audio + transcription pairs) when audio budget allows\n7. Document domain term mapping rules and edge cases",
+            "status": "pending",
+            "testStrategy": "Unit test: test_domain_term_dictionary_lookup() - verify all 50+ terms in dictionary with correct pronunciation. Test fuzzy matching: misrecognized terms corrected >85% accuracy. Audio sample validation: verify 100+ audio files exist and are playable. Post-processing test: Whisper output corrected with domain dictionary for common errors (e.g., 'DFT' misheard as 'D-F-T' spelled out).",
+            "parentId": "undefined"
+          },
+          {
+            "id": 4,
+            "title": "Add Gradio UI speech widgets and test end-to-end latency <5s requirement",
+            "description": "Integrate Gradio audio_input and audio_output components into demo_app.py. Wire audio flow: microphone → STT → agent → TTS → speaker output. Add record/play buttons, implement streaming latency monitoring, validate <5s end-to-end requirement.",
+            "dependencies": [
+              1,
+              2
+            ],
+            "details": "1. Add Gradio audio input widget (gr.Audio) with Korean language hint, sample rate 16kHz\n2. Add Gradio audio output widget (gr.Audio) for TTS playback with auto-play option\n3. Create voice pipeline function: audio_bytes → STT → agent call → TTS → audio bytes\n4. Implement latency tracking middleware: log timestamps for each stage (audio_in, stt_start, stt_end, agent_start, agent_end, tts_start, tts_end, audio_out)\n5. Add visual latency feedback: display breakdown (STT: 1.2s, Agent: 2.1s, TTS: 0.8s) in Gradio interface\n6. Test end-to-end latency: target <5s for typical 10-15 second coaching response\n7. Add error handling: graceful fallback to text if audio fails, clear error messages in UI\n8. Implement request queuing if multiple concurrent audio requests detected\n9. Add optional noise filtering preprocessing step (librosa.effects.trim or simple RMS threshold)",
+            "status": "pending",
+            "testStrategy": "Integration test: test_voice_pipeline_e2e() - record 5-10 second audio, verify complete flow (STT→Agent→TTS) produces audio output within 5s latency. Test all combinations: (1) STT only, (2) Agent only, (3) TTS only, (4) full pipeline. Stress test: 3 concurrent audio requests, verify no OOM or hanging processes. UI test: verify Gradio widgets appear correctly, audio can be recorded/played. Latency regression: confirm <5s across 20 test runs.",
+            "parentId": "undefined"
+          }
+        ],
+        "complexity": 6,
+        "recommendedSubtasks": 4,
+        "expansionPrompt": "Break into: (1) Integrate Whisper model (large-v3 or small/medium variant) with Korean domain term recognition, (2) Select and integrate TTS engine (gTTS/Coqui/Azure) with audio output, (3) Build domain terminology pronunciation dictionary for fine-tuning STT accuracy, (4) Add Gradio UI speech widgets (audio_input, audio_output) and test end-to-end latency <5s requirement"
+      },
+      {
+        "id": "34",
+        "title": "프로덕션 배포 (Kubernetes)",
+        "description": "컨테이너 오케스트레이션, 모니터링, 오토스케일링 기반 프로덕션 배포 환경 구축 (Phase 3)",
+        "details": "1) Kubernetes 매니페스트 작성:\n   - Deployment: agent-pipeline (GPU 요구), mcp-server (CPU)\n   - Service: LoadBalancer 또는 Ingress\n   - ConfigMap: rag_config, tool_schemas\n   - Secret: API keys, 모델 경로\n2) GPU 노드 설정:\n   - nvidia-device-plugin 설치\n   - resource requests/limits 설정\n3) Prometheus + Grafana 모니터링:\n   - 메트릭: 추론 지연, VRAM 사용률, 도구 호출 빈도\n   - 대시보드: Agentic 점수 추이, 에러율\n4) 오토스케일링:\n   - HPA (Horizontal Pod Autoscaler)\n   - GPU 사용률 기반 스케일링\n5) 로깅:\n   - ELK Stack 또는 Loki\n   - 구조화된 JSON 로그\n6) 헬스체크:\n   - /health 엔드포인트\n   - Liveness/Readiness probe\n\nPhase 3 우선순위, 인프라 작업",
+        "testStrategy": "1) Unit test: test_k8s_manifest_validation() - 매니페스트 문법 검증\n2) Integration test: test_deployment_rollout() - 배포 성공 확인\n3) Integration test: test_service_reachability() - 서비스 엔드포인트 접근 확인\n4) Performance test: test_autoscaling_trigger() - 부하 시 오토스케일 동작 확인\n5) Load test: 1000 동시 요청 처리 성능 벤치마크\n6) Monitoring test: Prometheus 메트릭 수집 확인\n7) Disaster recovery test: Pod 강제 종료 후 자동 복구 확인",
+        "priority": "low",
+        "dependencies": [],
+        "status": "pending",
+        "subtasks": [
+          {
+            "id": 1,
+            "title": "Write Kubernetes Deployment & Service manifests",
+            "description": "Create YAML manifests for agent-pipeline (GPU Deployment with nvidia.com/gpu requests), mcp-server (CPU Deployment), LoadBalancer Service, and Ingress configuration with proper nodeSelector and resource constraints",
+            "dependencies": [],
+            "details": "Create deploy/k8s/ directory with: (1) agent-pipeline-deployment.yaml - includes GPU resource requests (nvidia.com/gpu: 1), nodeSelector for GPU nodes, environment variables for MODEL_PATH and MCP_BASE_URL, (2) mcp-server-deployment.yaml - CPU-only deployment with replicas: 2, (3) service.yaml - LoadBalancer service exposing ports 8000 (agent) and 8100 (mcp), (4) ingress.yaml - optional Ingress for HTTP routing. Include liveness and readiness probe stubs pointing to /health endpoint. Validate manifests with kubectl dry-run.",
+            "status": "pending",
+            "testStrategy": "kubectl apply --dry-run=client -f deploy/k8s/*.yaml; validate YAML syntax with kubeval; verify nodeSelector and GPU resource requests are present; check environment variable bindings",
+            "parentId": "undefined"
+          },
+          {
+            "id": 2,
+            "title": "Configure GPU node resources and nvidia-device-plugin",
+            "description": "Set up NVIDIA device plugin for GPU resource management, define Kubernetes resource requests/limits for GPU pods (nvidia.com/gpu), and configure node selectors for GPU workloads",
+            "dependencies": [
+              1
+            ],
+            "details": "Create deploy/k8s/gpu-setup.yaml: (1) Install NVIDIA device plugin DaemonSet (from nvidia/k8s-device-plugin), (2) Define ResourceQuota for GPU nodes limiting total nvidia.com/gpu available, (3) Configure node labels (gpu: true, gpu-memory: 16GB) for scheduling, (4) Set pod resource requests: agent-pipeline requests 1 GPU, limits 1 GPU; no GPU limits on mcp-server, (5) Document GPU memory isolation via CUDA_VISIBLE_DEVICES, (6) Add node affinity rules to ensure agent-pipeline runs only on GPU nodes. Test on Kubernetes cluster with actual GPU nodes.",
+            "status": "pending",
+            "testStrategy": "Deploy NVIDIA device plugin and verify nvidia-smi works in pod; kubectl describe node should show allocatable nvidia.com/gpu; deploy test pod requesting GPU and verify it binds; check that mcp-server pods avoid GPU nodes",
+            "parentId": "undefined"
+          },
+          {
+            "id": 3,
+            "title": "Set up Prometheus metrics export and Grafana dashboards",
+            "description": "Implement Prometheus metrics collection from agent-pipeline and mcp-server, configure Prometheus scrape jobs, and build Grafana dashboards tracking inference latency, VRAM usage, tool call frequency, agentic score trends, and error rates",
+            "dependencies": [
+              1
+            ],
+            "details": "Create deploy/k8s/monitoring/: (1) prometheus-configmap.yaml - scrape jobs for agent-pipeline:8000/metrics and mcp-server:8100/metrics, (2) prometheus-deployment.yaml - Prometheus server with persistent volume for metrics storage (30d retention), (3) grafana-deployment.yaml - Grafana with Prometheus datasource configured, (4) Custom metrics in trainer/scripts/response_formatter.py: export prometheus.Counter for tool_calls_total, prometheus.Histogram for inference_latency_seconds, prometheus.Gauge for vram_usage_percent and agentic_score. (5) Build Grafana dashboard JSON (dashboard.json) with panels for: inference latency P50/P95/P99, VRAM usage trends, tool call frequency by type, agentic score over time, error rate. Import dashboard into Grafana via provisioning ConfigMap.",
+            "status": "pending",
+            "testStrategy": "Deploy Prometheus and Grafana; verify metrics endpoint responds to curl localhost:8000/metrics; check Prometheus scrape targets are healthy; verify Grafana dashboard loads data; simulate inference load and check metrics update in real-time",
+            "parentId": "undefined"
+          },
+          {
+            "id": 4,
+            "title": "Implement HPA (Horizontal Pod Autoscaler) based on GPU utilization",
+            "description": "Configure Kubernetes HPA to automatically scale agent-pipeline replicas based on GPU utilization metrics, with min/max replica constraints and proper scaling policies",
+            "dependencies": [
+              2,
+              3
+            ],
+            "details": "Create deploy/k8s/hpa.yaml: (1) Define HPA resource targeting agent-pipeline Deployment, (2) Set custom metric: gpu_usage_percent from Prometheus (threshold 75%), (3) Min replicas: 1, max replicas: 4 (respecting total GPU availability), (4) Scale-up cooldown: 30s, scale-down cooldown: 300s to avoid thrashing, (5) Use behavior field to limit scale-up rate (doubling at most every minute), (6) Ensure custom metrics API is configured (install metrics-server if needed), (7) Export gpu_usage_percent metric from mcp-server via prometheus.Gauge. Document GPU node capacity constraints (e.g., 4 GPUs per cluster → max 4 replicas). Test HPA with load testing tool (ab, hey, or k6) generating >1000 concurrent requests to trigger scaling.",
+            "status": "pending",
+            "testStrategy": "Deploy HPA and run load test; verify pod count increases when GPU usage exceeds threshold; verify scale-down after load drops; check HPA status events with kubectl describe hpa; validate no pod evictions due to resource starvation",
+            "parentId": "undefined"
+          },
+          {
+            "id": 5,
+            "title": "Configure ELK Stack (or Loki) for structured JSON logging",
+            "description": "Deploy Elasticsearch + Logstash + Kibana (or Loki alternative) to aggregate and query structured JSON logs from all pods with filtering by log level, component, and error type",
+            "dependencies": [
+              1
+            ],
+            "details": "Create deploy/k8s/logging/: (1) elasticsearch-deployment.yaml - single-node Elasticsearch (or Loki deployment as alternative), (2) kibana-deployment.yaml - Kibana UI for log searching (or Grafana Loki UI), (3) filebeat/logstash configuration to forward pod stdout/stderr. Modify trainer/scripts/response_formatter.py and agent_pipeline.py to emit structured JSON logs: {timestamp, level, component, message, tool_call_id, inference_time_ms, error_type, stack_trace}. Configure Python logging handler to output JSON (using python-json-logger or similar). Set Kubernetes log driver to json-file. Create index pattern in Kibana for logs-* and build saved searches for: errors by type, inference latency distribution, tool call failures. Add log shipping ConfigMap/DaemonSet if using Filebeat.",
+            "status": "pending",
+            "testStrategy": "Deploy ELK/Loki; generate test logs from a pod (curl agent-pipeline/test endpoint); verify logs appear in Kibana/Loki UI within 10s; test JSON parsing with sample log query; verify filtering works (level:ERROR, component:agent_pipeline); check log retention and disk usage",
+            "parentId": "undefined"
+          },
+          {
+            "id": 6,
+            "title": "Implement liveness/readiness probes and disaster recovery testing",
+            "description": "Configure Kubernetes liveness and readiness probes on /health endpoint for both agent-pipeline and mcp-server, implement graceful shutdown handling, and conduct failure scenario testing (pod crash, node failure, service degradation)",
+            "dependencies": [
+              1,
+              5
+            ],
+            "details": "Update deploy/k8s/: (1) Add livenessProbe (HTTP GET /health, initialDelaySeconds: 30, periodSeconds: 10, failureThreshold: 3) and readinessProbe (HTTP GET /health/ready, initialDelaySeconds: 10, periodSeconds: 5) to both Deployments, (2) Implement /health and /health/ready endpoints in agent_pipeline.py and mcp_servers/main.py returning {status: 'healthy', timestamp, components: {rag_index: ok/degraded, mcp_server: ok/failed}}, (3) Add graceful shutdown: catch SIGTERM, stop accepting new requests, finish in-flight requests (timeout 30s), then exit. Use preStop hook in Pod spec. (4) Disaster recovery testing: kill running pod and verify HPA respawns it; simulate node failure (kubectl drain); verify mcp-server replicas pick up traffic; inject latency on /health endpoint and verify readiness probe detects degradation. Document recovery time objectives (RTO <1min for pod restart, <5min for node recovery).",
+            "status": "pending",
+            "testStrategy": "Deploy probes and verify they respond correctly; kubectl get pods shows Ready=1/1; kill -9 pod process and verify it restarts automatically within 30s; run chaos engineering test (Gremlin or kube-chaos) to inject failures; measure actual recovery time under various failure scenarios; verify no traffic loss during pod restarts via load test",
+            "parentId": "undefined"
+          }
+        ],
+        "complexity": 7,
+        "recommendedSubtasks": 6,
+        "expansionPrompt": "Break into: (1) Write Kubernetes Deployment manifests for agent-pipeline (GPU nodeSelector), mcp-server (CPU), Service/Ingress config, (2) Configure GPU resource requests/limits and nvidia-device-plugin, (3) Set up Prometheus metrics export + Grafana dashboards for monitoring, (4) Implement HPA (Horizontal Pod Autoscaler) based on GPU utilization, (5) Configure ELK Stack or Loki for structured JSON logging, (6) Implement liveness/readiness probes on /health endpoint and disaster recovery testing"
       }
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2026-03-13T14:10:36.305Z",
-      "taskCount": 19,
-      "completedCount": 18,
+      "lastModified": "2026-03-16T06:08:15.555Z",
+      "taskCount": 34,
+      "completedCount": 24,
       "tags": [
         "master"
       ]

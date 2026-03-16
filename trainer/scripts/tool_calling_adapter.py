@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import copy
 import json
 import logging
 import re
@@ -17,6 +18,235 @@ logger = logging.getLogger(__name__)
 
 TOOL_CALL_REGEX = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", flags=re.DOTALL)
 THINK_BLOCK_REGEX = re.compile(r"<think>.*?</think>", flags=re.DOTALL)
+
+
+def _is_type_match(value: Any, expected_type: str) -> bool:
+    if expected_type == "string":
+        return isinstance(value, str)
+    if expected_type == "number":
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if expected_type == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if expected_type == "boolean":
+        return isinstance(value, bool)
+    if expected_type == "array":
+        return isinstance(value, list)
+    if expected_type == "object":
+        return isinstance(value, dict)
+    return True
+
+
+def _coerce_scalar(value: Any, expected_type: str) -> Any:
+    if expected_type == "boolean" and isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "false"}:
+            return lowered == "true"
+
+    if expected_type in {"number", "integer"} and isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return value
+        try:
+            numeric = float(stripped)
+        except ValueError:
+            return value
+
+        if expected_type == "integer":
+            if numeric.is_integer():
+                return int(numeric)
+            return value
+
+        if numeric.is_integer():
+            return int(numeric)
+        return numeric
+
+    return value
+
+
+def _coerce_value(value: Any, schema: dict[str, Any]) -> Any:
+    expected_type = schema.get("type")
+
+    if expected_type == "array":
+        items_schema = schema.get("items", {})
+        if isinstance(value, str):
+            stripped = value.strip()
+            if stripped.startswith("[") and stripped.endswith("]"):
+                try:
+                    parsed = json.loads(stripped)
+                    if isinstance(parsed, list):
+                        value = parsed
+                except json.JSONDecodeError:
+                    pass
+            elif "," in stripped:
+                parts = [part.strip() for part in stripped.split(",") if part.strip()]
+                value = [_coerce_value(part, items_schema) for part in parts]
+
+        if isinstance(value, list):
+            return [_coerce_value(item, items_schema) for item in value]
+        return value
+
+    if expected_type == "object":
+        if isinstance(value, str):
+            stripped = value.strip()
+            if stripped.startswith("{") and stripped.endswith("}"):
+                try:
+                    parsed = json.loads(stripped)
+                    if isinstance(parsed, dict):
+                        value = parsed
+                except json.JSONDecodeError:
+                    pass
+
+        if isinstance(value, dict):
+            properties = schema.get("properties", {})
+            additional_properties = schema.get("additionalProperties")
+            coerced: dict[str, Any] = {}
+            for key, item in value.items():
+                if key in properties:
+                    coerced[key] = _coerce_value(item, properties[key])
+                elif isinstance(additional_properties, dict):
+                    coerced[key] = _coerce_value(item, additional_properties)
+                else:
+                    coerced[key] = item
+            return coerced
+        return value
+
+    if isinstance(expected_type, str):
+        return _coerce_scalar(value, expected_type)
+    return value
+
+
+def coerce_parameter_types(params: dict[str, Any], schema_properties: dict[str, Any]) -> dict[str, Any]:
+    """Auto-convert common parameter type mismatches using schema hints."""
+    coerced: dict[str, Any] = {}
+    for key, value in params.items():
+        schema = schema_properties.get(key)
+        if isinstance(schema, dict):
+            coerced[key] = _coerce_value(value, schema)
+        else:
+            coerced[key] = value
+    return coerced
+
+
+def fill_default_parameters(
+    params: dict[str, Any],
+    schema_properties: dict[str, Any],
+    required: list[str],
+) -> dict[str, Any]:
+    """Fill schema defaults and raise on missing required fields."""
+    if not isinstance(params, dict):
+        raise ValueError("Parameters must be an object")
+
+    filled = dict(params)
+
+    for key, schema in schema_properties.items():
+        if key not in filled:
+            if "default" in schema:
+                filled[key] = schema["default"]
+            elif key in required:
+                raise ValueError(f"Missing required parameter: {key}")
+            continue
+
+        value = filled[key]
+        expected_type = schema.get("type")
+        if expected_type == "object" and isinstance(value, dict):
+            child_props = schema.get("properties", {})
+            child_required = schema.get("required", [])
+            filled[key] = fill_default_parameters(value, child_props, child_required)
+        elif expected_type == "array" and isinstance(value, list):
+            item_schema = schema.get("items", {})
+            if item_schema.get("type") == "object":
+                child_props = item_schema.get("properties", {})
+                child_required = item_schema.get("required", [])
+                filled[key] = [
+                    fill_default_parameters(item, child_props, child_required) if isinstance(item, dict) else item
+                    for item in value
+                ]
+
+    return filled
+
+
+def _validate_value(path: str, value: Any, schema: dict[str, Any], errors: list[str]) -> None:
+    expected_type = schema.get("type")
+
+    if isinstance(expected_type, str) and not _is_type_match(value, expected_type):
+        errors.append(
+            f"{path}: expected {expected_type}, got {type(value).__name__}"
+        )
+        return
+
+    enum_values = schema.get("enum")
+    if isinstance(enum_values, list) and value not in enum_values:
+        errors.append(f"{path}: value {value!r} not in enum {enum_values}")
+
+    if expected_type == "object" and isinstance(value, dict):
+        properties = schema.get("properties", {})
+        required = schema.get("required", [])
+        additional_properties = schema.get("additionalProperties")
+
+        for req_key in required:
+            if req_key not in value:
+                errors.append(f"{path}.{req_key}: missing required field")
+
+        for key, item in value.items():
+            child_path = f"{path}.{key}"
+            if key in properties:
+                _validate_value(child_path, item, properties[key], errors)
+            elif isinstance(additional_properties, dict):
+                _validate_value(child_path, item, additional_properties, errors)
+
+    if expected_type == "array" and isinstance(value, list):
+        item_schema = schema.get("items", {})
+        for idx, item in enumerate(value):
+            _validate_value(f"{path}[{idx}]", item, item_schema, errors)
+
+
+def validate_tool_parameters(
+    tool_name: str,
+    params: dict[str, Any],
+    schema_dir: str | None = None,
+) -> dict[str, Any]:
+    """Validate params against tool schema and return corrected payload metadata."""
+    if schema_dir is None:
+        schema_dir = "/workspace/trainer/configs/tool_schemas"
+
+    errors: list[str] = []
+
+    schema_path = Path(schema_dir) / f"{tool_name}.json"
+    if not schema_path.is_file():
+        return {
+            "is_valid": False,
+            "errors": [f"Schema not found for tool '{tool_name}': {schema_path}"],
+            "corrected_params": params,
+        }
+
+    try:
+        with schema_path.open("r", encoding="utf-8") as fh:
+            schema = json.load(fh)
+    except json.JSONDecodeError as exc:
+        return {
+            "is_valid": False,
+            "errors": [f"Invalid schema JSON for tool '{tool_name}': {exc}"],
+            "corrected_params": params,
+        }
+
+    parameters_schema = schema.get("function", {}).get("parameters", {})
+    schema_properties = parameters_schema.get("properties", {})
+    required = parameters_schema.get("required", [])
+
+    corrected_params = coerce_parameter_types(copy.deepcopy(params), schema_properties)
+
+    try:
+        corrected_params = fill_default_parameters(corrected_params, schema_properties, required)
+    except ValueError as exc:
+        errors.append(str(exc))
+
+    _validate_value("params", corrected_params, parameters_schema, errors)
+
+    return {
+        "is_valid": len(errors) == 0,
+        "errors": errors,
+        "corrected_params": corrected_params,
+    }
 
 
 class ToolCallingError(Exception):
@@ -35,6 +265,7 @@ class ToolCallingAdapter:
     """Bridges Qwen3 native function-calling format with MCP HTTP endpoints."""
 
     def __init__(self, schema_dir: str | Path, protocol_path: str | Path, mcp_base_url: str | None = None) -> None:
+        self.logger = logger
         self.schema_dir = Path(schema_dir)
         self.protocol_path = Path(protocol_path)
         self.protocol = self._load_json_file(self.protocol_path)
@@ -195,11 +426,48 @@ class ToolCallingAdapter:
                 },
             }
 
-        mcp_body = dict(arguments)
+        validation_result = validate_tool_parameters(
+            tool_name=tool_name,
+            params=arguments,
+            schema_dir=str(self.schema_dir),
+        )
+        corrected_arguments = validation_result.get("corrected_params", arguments)
+        validation_errors = validation_result.get("errors", [])
+        if not validation_result.get("is_valid", False):
+            self.logger.warning(
+                "Tool parameter validation failed for '%s': %s",
+                tool_name,
+                validation_errors,
+            )
+            return {
+                "call_id": call_id,
+                "status": "error",
+                "error": {
+                    "code": "INVALID_PARAMS",
+                    "message": f"Invalid parameters for {tool_name}",
+                    "details": {"errors": validation_errors},
+                },
+            }
+
+        if corrected_arguments != arguments:
+            self.logger.warning(
+                "Tool parameters auto-corrected for '%s': original=%s corrected=%s",
+                tool_name,
+                arguments,
+                corrected_arguments,
+            )
+        elif validation_errors:
+            self.logger.warning(
+                "Tool parameter validation warnings for '%s': %s",
+                tool_name,
+                validation_errors,
+            )
+
+        mcp_body = dict(corrected_arguments)
         if session_id is not None:
             mcp_body.setdefault("session_id", session_id)
 
-        url = self._resolve_endpoint(tool_name, arguments)
+        url = self._resolve_endpoint(tool_name, corrected_arguments)
         timeout_seconds = self.timeout_ms / 1000.0
 
         for attempt in range(self.max_retries + 1):

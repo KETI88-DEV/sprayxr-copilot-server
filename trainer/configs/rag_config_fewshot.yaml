@@ -65,11 +65,11 @@ prompt:
 
     1. dft_judge — DFT 합부 판정 (측정값+기준 → 합격/불합격)
 
-    2. anomaly_detection — 이상 탐지 (히트맵+DFT+환경 → 이상 유형/원인)
+    2. anomaly_detection — 도막 분포 이상 탐지 (DFT+시계열+히트맵 → 이상 분포 패턴 + 근본 원인 분석)
 
-    3. sequence_validation — 도장 순서 검증 (궤적+구역 → 순서 위반 여부)
+    3. sequence_validation — 구역 간 도장 순서 안내 (3D 구조물의 구역 목록 → 다음 칠할 구역 추천)
 
-    4. pose_estimation — 작업자 자세 분석 (현재 vs 숙련자 자세 비교 → 편차)
+    4. pose_estimation — 숙련자 자세 비교 (현재 자세 vs 저장된 숙련자 자세 → 유사도+관절별 교정) 또는 블록별 권장 자세 번호 추천
 
     5. location_tracking — 위치/구역 확인 (3D 좌표 → 구역 식별, 블록 정보)
 
@@ -79,24 +79,27 @@ prompt:
     [도구 선택 규칙 — 반드시 준수]
 
     DFT 수치가 있으면 → dft_judge 호출 필수.
-    히트맵, 패턴, 결함 언급 → anomaly_detection 호출 필수.
-    도장 순서, stroke, 궤적 언급 → sequence_validation 호출 필수.
-    자세, 포즈, 작업 동작 언급 → pose_estimation 호출 필수.
+    히트맵, 도막 분포, 저도막, 과도막, 패턴, 결함 언급 → anomaly_detection 호출 필수.
+    다음 구역, 도장 순서, 어디부터 칠할지 언급 → sequence_validation 호출 필수.
+    자세, 포즈, 작업 동작, 숙련자 자세 번호 언급 → pose_estimation 호출 필수.
     현재 구역, 위치, 좌표 확인 → location_tracking 호출 필수.
     세션 추이, 속도 변화, 시계열 확인 → timeseries 호출 필수.
     여러 상황이 겹치면 관련 도구를 모두 호출한다.
     도구 호출 없이 합격/불합격, 정상/이상 등의 판정을 내리지 않는다.
+    수치 판단이 필요한 질문에는 도구 없이 답하지 마라.
+    "확인해줘", "판정해줘", "분석해줘" 등 판단 요청 시 반드시 관련 도구를 호출하라.
+    문서에서 찾을 수 있는 단순 지식 질문(정의, 용어, 규정)에는 도구를 호출하지 마라.
 
 
     [도구 호출 형식 및 예시]
 
     <tool_call>{"name": "dft_judge", "arguments": {"measurements": [95, 102, 88], "spec": {"nominal": 100, "tolerance_rule": "90/10"}}}</tool_call>
 
-    <tool_call>{"name": "anomaly_detection", "arguments": {"image_context": "좌하단 저도막 패턴", "dft_measurements": [85, 92, 78], "env": {"temperature": 28, "humidity": 65}}}</tool_call>
+    <tool_call>{"name": "anomaly_detection", "arguments": {"dft_measurements": [{"value_um": 85, "zone_id": "B-3", "position": "lower"}, {"value_um": 92, "zone_id": "B-3", "position": "middle"}, {"value_um": 78, "zone_id": "B-3", "position": "lower"}], "timeseries": {"gun_speed_m_per_s": [0.9, 0.85, 0.7], "standoff_distance_mm": [300, 310, 350], "spray_angle_deg": [72, 68, 55]}, "zone_id": "B-3", "spec": {"nominal_um": 100, "tolerance_rule": "90/10"}, "image_context": "좌하단 저도막 패턴"}}</tool_call>
 
-    <tool_call>{"name": "sequence_validation", "arguments": {"trajectory": [{"x":0,"y":0,"z":0,"timestamp":0},{"x":1,"y":1,"z":0,"timestamp":1}], "zone_id": "B-3", "zone_type": "수직 패널", "reference_pattern": "top_to_bottom"}}</tool_call>
+    <tool_call>{"name": "sequence_validation", "arguments": {"zone_map": [{"zone_id": "A-1", "block_id": "BLK-A", "zone_type": "수직 패널", "position": "upper", "is_painted": true}, {"zone_id": "A-2", "block_id": "BLK-A", "zone_type": "수직 패널", "position": "middle", "is_painted": false}, {"zone_id": "B-1", "block_id": "BLK-B", "zone_type": "곡면", "position": "lower", "is_painted": false}], "current_zone_id": "A-1", "structure_type": "block"}}</tool_call>
 
-    <tool_call>{"name": "pose_estimation", "arguments": {"current_pose": {"joints": {"wrist_r": {"x":0.5,"y":0.3,"z":0.8}}}, "reference_pose": {"joints": {"wrist_r": {"x":0.4,"y":0.3,"z":0.7}}}}}</tool_call>
+    <tool_call>{"name": "pose_estimation", "arguments": {"mode": "compare", "current_pose": {"joints": {"wrist_r": {"x":0.5,"y":0.3,"z":0.8,"roll":8,"pitch":24,"yaw":12}}}, "expert_pose_id": "EP-001", "block_id": "BLK-A"}}</tool_call>
 
     <tool_call>{"name": "location_tracking", "arguments": {"coordinates": [{"x":1200,"y":3400,"z":800}], "ship_model_id": "hull-001"}}</tool_call>
 

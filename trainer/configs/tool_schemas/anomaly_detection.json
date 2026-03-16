@@ -2,35 +2,64 @@
   "type": "function",
   "function": {
     "name": "anomaly_detection",
-    "description": "히트맵 이미지 분석 context와 DFT 측정값, 환경 조건을 입력받아 도막 이상 상태(저도막/과도막/결함)를 탐지한다. Qwen VL이 이미지를 앞단에서 분석한 image_context를 입력으로 받는다.",
+    "description": "도막 두께, 이격거리, 이동속도, 분사각도, 경로 등 시계열 데이터를 분석하여 이상(저도막/과도막)을 탐지하고, 도막 분포를 분석하며, 원인을 파악한다.",
     "parameters": {
       "type": "object",
       "properties": {
-        "image_context": {
-          "type": "string",
-          "description": "VL 모델이 히트맵 이미지를 분석하여 생성한 텍스트 context (예: '좌하단 B-3-L 구역 청색 집중, 전체 대비 저도막 패턴')"
-        },
         "dft_measurements": {
           "type": "array",
-          "items": {"type": "number"},
-          "description": "DFT 측정값 배열 (단위: um)"
-        },
-        "env": {
-          "type": "object",
-          "properties": {
-            "temperature": {
-              "type": "number",
-              "description": "온도 (C)"
+          "items": {
+            "type": "object",
+            "properties": {
+              "value_um": {"type": "number", "description": "DFT 측정값 (um)"},
+              "zone_id": {"type": "string", "description": "측정 구역 ID"},
+              "position": {"type": "string", "enum": ["upper", "middle", "lower", "left", "right", "center"], "description": "구역 내 측정 위치"}
             },
-            "humidity": {
-              "type": "number",
-              "description": "습도 (%)"
-            }
+            "required": ["value_um"]
           },
-          "required": ["temperature", "humidity"]
+          "description": "위치별 DFT 측정값 배열"
+        },
+        "timeseries": {
+          "type": "object",
+          "description": "작업 시계열 데이터",
+          "properties": {
+            "timestamps": {"type": "array", "items": {"type": "number"}, "description": "타임스탬프 배열 (초)"},
+            "standoff_distance_mm": {"type": "array", "items": {"type": "number"}, "description": "이격거리 배열 (mm)"},
+            "gun_speed_m_per_s": {"type": "array", "items": {"type": "number"}, "description": "이동속도 배열 (m/s)"},
+            "spray_angle_deg": {"type": "array", "items": {"type": "number"}, "description": "분사각도 배열 (도)"},
+            "trajectory": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "x": {"type": "number"},
+                  "y": {"type": "number"},
+                  "z": {"type": "number"}
+                },
+                "required": ["x", "y", "z"]
+              },
+              "description": "건 이동 경로 좌표 배열"
+            }
+          }
+        },
+        "zone_id": {
+          "type": "string",
+          "description": "분석 대상 구역 ID"
+        },
+        "spec": {
+          "type": "object",
+          "description": "도막 두께 기준",
+          "properties": {
+            "nominal_um": {"type": "number", "description": "기준 두께 (um)"},
+            "tolerance_rule": {"type": "string", "description": "허용 규칙 (예: '90/10')"}
+          }
+        },
+        "image_context": {
+          "type": "string",
+          "description": "VLM 모델 히트맵 분석 결과 텍스트 (선택)"
         }
       },
-      "required": ["image_context", "dft_measurements", "env"]
+      "required": ["dft_measurements"]
     }
   }
 }

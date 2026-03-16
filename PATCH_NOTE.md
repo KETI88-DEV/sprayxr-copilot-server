@@ -3176,3 +3176,160 @@ VLM(Vision Language Model) 분석 도구 스텁 및 향후 확장 인터페이�
 
 ---
 
+## Task 23: 응답 구조 표준화 (Response Structure Standardization)
+
+**Date**: 2026-03-16
+**Task ID**: T23 (Phase 2 P0)
+**Target**: response_structure 0.77/2.0 → 1.3+/2.0
+
+### Changes
+
+| File | Change |
+|---|---|
+| `trainer/scripts/response_formatter.py` | `validate_response_structure()` 추가 — route별 JSON 스키마 검증 (fast/training_realtime/training_review) |
+| `trainer/scripts/response_formatter.py` | `ensure_citations()` 추가 — RAG chunk 메타데이터에서 citation 자동 생성 (DOC-{source}-C{id} 패턴) |
+| `trainer/scripts/response_formatter.py` | `repair_json_structure()` 추가 — LLM 출력의 불완전 JSON 수복 (trailing comma, unclosed braces 등) |
+| `trainer/scripts/response_formatter.py` | `RESPONSE_SCHEMAS` dict 추가 — route별 required/optional 필드 정의 |
+
+### Route-Specific Schemas
+
+| Route | Required | Optional |
+|---|---|---|
+| fast | text_guide, citations, metadata | steps |
+| training_realtime | text_guide, citations, metadata | dft_result, next_path, anomaly, steps |
+| training_review | text_guide, citations, metadata | dft_result, pose_comparison, anomaly, steps |
+
+### Verification
+
+- `validate_response_structure()`: valid/invalid 판별 정확 확인
+- `repair_json_structure()`: trailing comma 수복 성공 확인
+- `ensure_citations()`: chunk 메타데이터 → DOC-COAT-C007 형식 자동 생성 확인
+- 모든 함수 import 성공 확인
+
+### Status
+
+- **Status**: DONE
+
+---
+
+## Task 24: 파라미터 정확도 개선 (Parameter Correctness Improvement)
+
+**Date**: 2026-03-16
+**Task ID**: T24 (Phase 2 P0)
+**Target**: parameter_correctness 1.17/2.0 → 1.5+/2.0
+
+### Changes
+
+| File | Change |
+|---|---|
+| `trainer/scripts/tool_calling_adapter.py` | `validate_tool_parameters(tool_name, params, schema_dir)` 추가 — tool_schemas/*.json 기반 런타임 파라미터 검증 |
+| `trainer/scripts/tool_calling_adapter.py` | `coerce_parameter_types(params, schema_properties)` 추가 — 자동 타입 변환 (문자열→숫자, 콤마구분→배열) |
+| `trainer/scripts/tool_calling_adapter.py` | `fill_default_parameters(params, schema_properties, required)` 추가 — 디폴트값 채움, 필수필드 누락 감지 |
+| `trainer/scripts/tool_calling_adapter.py` | `dispatch_tool_call()` 내 검증 통합 — MCP 호출 전 파라미터 사전 검증 |
+
+### Verification
+
+- Type coercion: `'102, 95, 110'` → `[102, 95, 110]`, `'100'` → `100` 정확 변환
+- Schema validation: dft_judge 정상 파라미터 → `is_valid: True`
+- Missing required: measurements 누락 시 → `is_valid: False`, 3개 에러 메시지
+- 모든 함수 import 성공
+
+### Status
+
+- **Status**: DONE
+
+---
+
+## Task 21: CoT 추론 강화 (Chain-of-Thought Enhancement)
+
+**Date**: 2026-03-16
+**Task ID**: T21 (Phase 2 P0)
+**Target**: reasoning_depth 0.77/2.0 → 1.2+/2.0
+
+### Changes
+
+| File | Change |
+|---|---|
+| `trainer/scripts/generate_cot_sft.py` | 신규 생성 — CoT SFT 데이터 생성 스크립트 (argparse CLI, 4카테고리) |
+| `/data/sft/sft_cot.jsonl` | 80건 CoT SFT 데이터 생성 |
+
+### Data Distribution
+
+| Category | Count | Description |
+|---|---|---|
+| docqa_cot | 30 | 문서 근거만 사용, 도구 호출 없음 — DocQA 능력 유지 |
+| single_tool_cot | 15 | 단일 도구 + `<think>` 블록 |
+| multi_tool_cot | 15 | 2-3 도구 순차 호출 + 의존성 추론 |
+| complex_tool_cot | 20 | 4+ 도구 복합 추론 (AQ024 유형) |
+
+### Verification
+
+- 80건, 4카테고리 분포 정확, 모든 샘플 `<think>` 포함, DocQA 30건 도구 호출 없음
+- 평균 응답 길이: 1249자
+
+### Status
+- **Status**: DONE
+
+---
+
+## Task 22: 도구 선택 정확도 개선 (Tool Selection Accuracy)
+
+**Date**: 2026-03-16
+**Task ID**: T22 (Phase 2 P0)
+**Target**: tool_selection_accuracy 0.67/2.0 → 1.2+/2.0
+
+### Changes
+
+| File | Change |
+|---|---|
+| `trainer/scripts/generate_tool_sft.py` | 신규 생성 — 도구 선택 SFT 데이터 생성 스크립트 |
+| `/data/sft/sft_tool_selection.jsonl` | 40건 도구 선택 SFT 데이터 생성 |
+| `trainer/configs/rag_config_fewshot.yaml` | 도구 선택 규칙 3개 추가 |
+
+### Data Distribution
+
+| Category | Count |
+|---|---|
+| single_tool_selection | 15 |
+| multi_tool_selection | 15 |
+| no_tool_selection | 10 |
+
+### Verification
+
+- 40건, 3카테고리 분포 정확, YAML 유효성 통과
+
+### Status
+- **Status**: DONE
+
+---
+
+## Task 25: Medium 난이도 갭 해소 (Medium Difficulty Gap)
+
+**Date**: 2026-03-16
+**Task ID**: T25 (Phase 2 P0)
+**Target**: Medium 점수 4.09/10 → 5.5+/10
+
+### Changes
+
+| File | Change |
+|---|---|
+| `trainer/scripts/generate_medium_sft.py` | 신규 생성 — Medium 복잡도 멀티 도구 체인 SFT 생성 스크립트 |
+| `/data/sft/sft_medium.jsonl` | 30건 2-tool chain SFT 데이터 생성 |
+
+### Data Distribution
+
+| Chain Type | Count | Pattern |
+|---|---|---|
+| loc_seq | 10 | location_tracking -> sequence_validation |
+| dft_anomaly | 10 | dft_judge -> anomaly_detection |
+| pose_ts | 10 | pose_estimation -> timeseries |
+
+### Verification
+
+- 30건, 3 chain type 각 10건, 모든 샘플 `<think>` + 2+ `<tool_call>` 포함
+
+### Status
+- **Status**: DONE
+
+---
+

@@ -78,3 +78,7 @@ AgenticCopilot_Architecture.md
 dataset.md
 .taskmaster/config.json
 .taskmaster/tasks/task_*.md
+
+# Task files
+# tasks.json
+# tasks/ 

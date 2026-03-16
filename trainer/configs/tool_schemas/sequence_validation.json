@@ -2,40 +2,45 @@
   "type": "function",
   "function": {
     "name": "sequence_validation",
-    "description": "현재 구역 내 도장 stroke 순서를 검증한다. 공정 단계 순서가 아닌, 특정 구역 내 붓질 방향 순서(위->아래 등)를 숙련자 패턴과 비교하여 위반 여부를 판단한다.",
+    "description": "3D 구조물의 도장 순서를 2단계로 안내한다. (1) 거대 구조물 내 블록 간 순서: 어떤 블록을 먼저 칠할지, (2) 블록 내 구역 간 순서: 해당 블록에서 어떤 위치를 먼저 칠할지. 전체 공정(프라이머/상도) 순서가 아닌, 도장 이동 경로를 판단한다.",
     "parameters": {
       "type": "object",
       "properties": {
-        "trajectory": {
+        "zone_map": {
           "type": "array",
           "items": {
             "type": "object",
             "properties": {
-              "x": {"type": "number"},
-              "y": {"type": "number"},
-              "z": {"type": "number"},
-              "timestamp": {"type": "number", "description": "초 단위 타임스탬프"}
+              "zone_id": {"type": "string", "description": "구역 ID (예: 'A-1')"},
+              "block_id": {"type": "string", "description": "소속 블록 ID (예: 'BLK-A')"},
+              "zone_type": {
+                "type": "string",
+                "enum": ["수직 패널", "수평 패널", "곡면", "모서리"],
+                "description": "구역 유형"
+              },
+              "position": {
+                "type": "string",
+                "enum": ["upper", "middle", "lower", "left", "right", "center"],
+                "description": "블록 내 구역 위치"
+              },
+              "is_painted": {"type": "boolean", "description": "도장 완료 여부"},
+              "area_m2": {"type": "number", "description": "구역 면적 (m2)"}
             },
-            "required": ["x", "y", "z", "timestamp"]
+            "required": ["zone_id", "block_id", "zone_type", "position", "is_painted"]
           },
-          "description": "현재 작업자의 stroke 궤적 포인트 배열"
+          "description": "전체 구역 목록 (블록별 그룹핑 가능)"
         },
-        "zone_id": {
+        "current_zone_id": {
           "type": "string",
-          "description": "현재 작업 구역 ID (예: 'B-3')"
+          "description": "현재 도장 중인 구역 ID (없으면 시작 블록/구역 추천)"
         },
-        "zone_type": {
+        "structure_type": {
           "type": "string",
-          "enum": ["수직 패널", "수평 패널", "곡면", "모서리"],
-          "description": "구역 유형"
-        },
-        "reference_pattern": {
-          "type": "string",
-          "enum": ["top_to_bottom", "bottom_to_top", "left_to_right", "right_to_left"],
-          "description": "숙련자 참조 stroke 패턴"
+          "enum": ["block", "hull_section", "deck", "superstructure"],
+          "description": "구조물 유형"
         }
       },
-      "required": ["trajectory", "zone_id", "zone_type", "reference_pattern"]
+      "required": ["zone_map", "structure_type"]
     }
   }
 }
