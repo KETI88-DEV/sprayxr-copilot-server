@@ -3,7 +3,7 @@
   "description": "Tool Calling <-> MCP Server 호출 규약. Architecture §3.2.5 양방향 통신 구현.",
 
   "request_format": {
-    "tool_name": {"type": "string", "description": "호출할 MCP 도구명 (6개 중 하나)"},
+    "tool_name": {"type": "string", "description": "호출할 MCP 도구명 (7개 중 하나)"},
     "parameters": {"type": "object", "description": "도구별 입력 파라미터 (tool_schemas/*.json 참조)"},
     "call_id": {"type": "string", "description": "고유 호출 ID (UUID4)"},
     "timeout_ms": {"type": "integer", "default": 5000, "description": "타임아웃 (ms)"},
@@ -46,7 +46,8 @@
     "pose_estimation",
     "sequence_validation",
     "timeseries",
-    "location_tracking"
+    "location_tracking",
+    "vlm_analysis"
   ],
 
   "mcp_server_base_url": "http://localhost:8100",
@@ -57,6 +58,7 @@
     "pose_estimation": "/pose_estimation/compare",
     "sequence_validation": "/sequence_validation/validate",
     "timeseries": "/timeseries/{action}",
-    "location_tracking": "/location_tracking/identify"
+    "location_tracking": "/location_tracking/identify",
+    "vlm_analysis": "/vlm/analyze"
   }
 }

@@ -6,7 +6,9 @@ import argparse
 import importlib
 import json
 import logging
+import signal
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -106,6 +108,12 @@ def parse_args() -> argparse.Namespace:
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         help="Logging verbosity.",
     )
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=600,
+        help="Per-question timeout in seconds (default: 600).",
+    )
     return parser.parse_args()
 
 
@@ -147,6 +155,15 @@ def main() -> int:
     tool_call_count = 0
     total_answer_chars = 0
 
+    # Per-question timeout (seconds). Prevents infinite hanging.
+    question_timeout = int(args.timeout) if hasattr(args, "timeout") and args.timeout else 600
+
+    class _QuestionTimeout(Exception):
+        pass
+
+    def _timeout_handler(signum: int, frame: Any) -> None:
+        raise _QuestionTimeout(f"Question exceeded {question_timeout}s timeout")
+
     with args.output.open("w", encoding="utf-8") as out_fh:
         for idx, item in enumerate(questions, start=1):
             q_id = str(item.get("q_id", f"AQ{idx:03d}"))
@@ -162,14 +179,19 @@ def main() -> int:
             enable_thinking = _should_enable_thinking(item)
             logger.info("[%d/%d] %s thinking=%s", idx, len(questions), q_id, enable_thinking)
 
+            q_start = time.monotonic()
             try:
+                signal.signal(signal.SIGALRM, _timeout_handler)
+                signal.alarm(question_timeout)
+
                 result = pipeline.run(
                     instruction=instruction,
                     environment=environment,
                     session_id=q_id,
                     enable_thinking=enable_thinking,
-                    force_route="deep",
                 )
+                signal.alarm(0)
+
                 text_guide = result.get("text_guide", {})
                 final_text = str(text_guide.get("body", "")) if text_guide else str(result.get("response", ""))
                 tool_calls = result.get("tool_calls", [])
@@ -183,11 +205,22 @@ def main() -> int:
                 ]
                 metadata = result.get("metadata", {})
                 thinking = str(metadata.get("thinking", ""))
+            except _QuestionTimeout:
+                signal.alarm(0)
+                logger.error("TIMEOUT: %s exceeded %ds — skipping", q_id, question_timeout)
+                final_text = "[TIMEOUT]"
+                normalized_tools = []
+                thinking = ""
             except Exception:
+                signal.alarm(0)
                 logger.exception("Generation failed for %s", q_id)
                 final_text = ""
                 normalized_tools = []
                 thinking = ""
+
+            elapsed = time.monotonic() - q_start
+            logger.info("[%d/%d] %s completed in %.1fs, tools=%d, len=%d",
+                        idx, len(questions), q_id, elapsed, len(normalized_tools), len(final_text))
 
             output_item = {
                 "q_id": q_id,
@@ -197,6 +230,7 @@ def main() -> int:
                 "thinking": thinking,
             }
             out_fh.write(json.dumps(output_item, ensure_ascii=False) + "\n")
+            out_fh.flush()  # flush after each question to prevent data loss
 
             response_count += 1
             tool_call_count += len(normalized_tools)

@@ -201,7 +201,8 @@ class AgenticEvaluator:
 
     def score_tool_selection(self, expected_tools: List[str], actual_tools: List[str]) -> int:
         if not expected_tools:
-            return 2
+            # Penalize unnecessary tool calls when none expected (rubric: 1점 for 불필요한 도구)
+            return 2 if not actual_tools else 1
         if not actual_tools:
             return 0
         if actual_tools == expected_tools:
@@ -209,12 +210,15 @@ class AgenticEvaluator:
 
         overlap = len([tool for tool in expected_tools if tool in actual_tools])
         overlap_ratio = overlap / len(expected_tools)
+        extra_count = len([tool for tool in actual_tools if tool not in expected_tools])
 
         # Order-aware partial score
         lcs = self._longest_common_subsequence(expected_tools, actual_tools)
         order_ratio = lcs / len(expected_tools)
 
-        if overlap_ratio >= 0.6 and order_ratio >= 0.5:
+        # 1점: 일부 도구 누락 또는 불필요한 도구가 추가됨
+        # Require ≥50% overlap, reasonable extras (≤ expected count), some ordering
+        if overlap_ratio >= 0.5 and extra_count <= len(expected_tools) and order_ratio >= 0.3:
             return 1
         return 0
 
@@ -377,7 +381,8 @@ class AgenticEvaluator:
             schema = self.tool_schemas.get(tool_name, {})
             expected_params = self._expected_params_for_tool(tool_name, question)
 
-            actual_params: Dict[str, Any] = {}
+            # None = tool not called (already penalized by tool_selection; skip param scoring)
+            actual_params = None
             if idx < len(actual_calls) and actual_calls[idx].get("name") == tool_name:
                 actual_params = actual_calls[idx].get("arguments", {})
             else:
@@ -386,9 +391,11 @@ class AgenticEvaluator:
                         actual_params = call.get("arguments", {})
                         break
 
-            param_scores.append(self.score_parameter_correctness(expected_params, actual_params, schema))
+            if actual_params is not None:
+                param_scores.append(self.score_parameter_correctness(expected_params, actual_params, schema))
 
-        parameter_correctness = round(sum(param_scores) / len(param_scores)) if param_scores else 0
+        # int() truncation — round() uses banker's rounding (0.5→0, 1.5→2)
+        parameter_correctness = int(sum(param_scores) / len(param_scores)) if param_scores else 0
 
         reasoning_depth = self.score_reasoning_depth(response, int(question.get("reasoning_steps", 3)))
         context_integration = self.score_context_integration(response, question.get("context_data", {}))

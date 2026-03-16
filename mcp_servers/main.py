@@ -14,6 +14,7 @@ from mcp_servers.location_tracking import router as location_tracking_router
 from mcp_servers.pose_estimation import router as pose_estimation_router
 from mcp_servers.sequence_validation import router as sequence_validation_router
 from mcp_servers.timeseries import router as timeseries_router
+from mcp_servers.vlm_analysis import router as vlm_analysis_router
 
 
 logging.basicConfig(level=logging.INFO)
@@ -28,13 +29,14 @@ app.include_router(sequence_validation_router)
 app.include_router(pose_estimation_router)
 app.include_router(timeseries_router)
 app.include_router(location_tracking_router)
+app.include_router(vlm_analysis_router)
 
 
 @app.get("/health")
 def health() -> dict[str, str | int]:
     return {
         "status": "ok",
-        "servers": 6,
+        "servers": 7,
         "timestamp": iso_timestamp(),
     }
 

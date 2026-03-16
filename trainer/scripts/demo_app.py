@@ -37,7 +37,7 @@ CONFIG_PATH: str = os.environ.get(
 ADAPTER_PATH: str = os.environ.get(
     "ADAPTER_PATH", "/output/adapters/qwen3_4b_shipcoat_lora/"
 )
-MODEL_NAME: str = "Qwen3-4B (4-bit QLoRA)"
+MODEL_NAME: str = "Qwen3-4B QLoRA (Iter14 — Pipeline Audit Fix)"
 
 # ---------------------------------------------------------------------------
 # Theme — dark navy / steel industrial

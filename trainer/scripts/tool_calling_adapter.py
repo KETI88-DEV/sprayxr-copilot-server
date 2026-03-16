@@ -116,6 +116,12 @@ class ToolCallingAdapter:
                 continue
 
             arguments = payload.get("arguments", {})
+            if isinstance(arguments, str):
+                try:
+                    arguments = json.loads(arguments)
+                except json.JSONDecodeError:
+                    logger.warning("Skipping tool_call with unparseable string arguments for '%s'", tool_name)
+                    continue
             if not isinstance(arguments, dict):
                 logger.warning("Skipping tool_call with non-object arguments for '%s'", tool_name)
                 continue

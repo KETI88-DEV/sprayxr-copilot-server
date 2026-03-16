@@ -1149,3 +1149,254 @@ python3 /workspace/trainer/scripts/train_qlora.py --config /workspace/trainer/co
 
 ---
 *본 문서는 선박 도장 AI Co-Pilot PoC의 최종 통합 PRD이며, 향후 Qwen3.5 마이그레이션 및 실무 배포의 기준점으로 활용된다.*
+
+## 18.4 상세 도구 스키마 (Full JSON)
+
+### dft_judge
+```json
+{
+  "name": "dft_judge",
+  "description": "건조 도막 두께(DFT) 측정값을 입력받아 90/10 룰에 따라 합격 여부를 판정합니다.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "measurements_um": {
+        "type": "array",
+        "items": {"type": "number"},
+        "description": "측정된 도막 두께 값들의 배열 (단위: µm)"
+      },
+      "nominal_um": {
+        "type": "number",
+        "description": "설계 도막 두께 (단위: µm)"
+      },
+      "rule": {
+        "type": "string",
+        "enum": ["90/10", "80/20"],
+        "default": "90/10",
+        "description": "적용할 판정 규칙"
+      }
+    },
+    "required": ["measurements_um", "nominal_um"]
+  }
+}
+```
+
+### anomaly_detection
+```json
+{
+  "name": "anomaly_detection",
+  "description": "히트맵 이미지 분석 결과와 센서 데이터를 종합하여 도장 결함이나 이상 상태를 탐지합니다.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "image_context": {
+        "type": "string",
+        "description": "VLM이 분석한 히트맵 이미지의 텍스트 설명"
+      },
+      "dft_measurements": {
+        "type": "array",
+        "items": {"type": "number"},
+        "description": "해당 구역의 DFT 측정값"
+      },
+      "environment": {
+        "type": "object",
+        "properties": {
+          "temperature": {"type": "number"},
+          "humidity": {"type": "number"}
+        }
+      }
+    },
+    "required": ["image_context"]
+  }
+}
+```
+
+### sequence_validation
+```json
+{
+  "name": "sequence_validation",
+  "description": "작업자의 도장 궤적을 분석하여 표준 작업 순서(Stroke 방향 등)를 준수했는지 검증합니다.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "trajectory": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "x": {"type": "number"},
+            "y": {"type": "number"},
+            "z": {"type": "number"},
+            "t": {"type": "number"}
+          }
+        },
+        "description": "도장건의 이동 궤적 데이터"
+      },
+      "zone_id": {
+        "type": "string",
+        "description": "현재 작업 중인 구역 ID"
+      }
+    },
+    "required": ["trajectory", "zone_id"]
+  }
+}
+```
+
+### pose_estimation
+```json
+{
+  "name": "pose_estimation",
+  "description": "작업자의 자세 데이터를 숙련자의 표준 자세와 비교하여 편차를 계산합니다.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "current_pose": {
+        "type": "object",
+        "description": "현재 작업자의 6DOF 자세 데이터"
+      },
+      "reference_id": {
+        "type": "string",
+        "description": "비교 대상이 될 숙련자 데이터 ID"
+      }
+    },
+    "required": ["current_pose"]
+  }
+}
+```
+
+### location_tracking
+```json
+{
+  "name": "location_tracking",
+  "description": "3D 좌표 데이터를 기반으로 현재 작업자가 선박의 어느 구역을 도장하고 있는지 식별합니다.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "coords": {
+        "type": "object",
+        "properties": {
+          "x": {"type": "number"},
+          "y": {"type": "number"},
+          "z": {"type": "number"}
+        }
+      }
+    },
+    "required": ["coords"]
+  }
+}
+```
+
+### timeseries
+```json
+{
+  "name": "timeseries",
+  "description": "세션 동안 누적된 작업 데이터를 분석하여 속도나 거리의 변화 추세를 파악합니다.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "metric": {
+        "type": "string",
+        "enum": ["speed", "distance", "angle"],
+        "description": "분석할 지표"
+      },
+      "window_size": {
+        "type": "integer",
+        "description": "분석할 최근 데이터 포인트 개수"
+      }
+    },
+    "required": ["metric"]
+  }
+}
+```
+
+# 20. 추가 부록: 트러블슈팅 가이드
+
+## A-5. 일반적인 문제 및 해결 방법
+
+### 1. 모델 로딩 시 OOM 발생
+- **원인**: RTX 4080의 16GB VRAM이 다른 프로세스에 의해 점유되어 있거나, `max_seq_len`이 너무 큼.
+- **해결**: `nvidia-smi`로 점유 프로세스 확인 후 종료. `rag_config.yaml`에서 `max_new_tokens`를 줄이거나 `load_in_4bit: true` 확인.
+
+### 2. 도구 호출 결과가 응답에 반영되지 않음
+- **원인**: LLM이 도구 결과를 무시하고 자체 지식으로 답변함.
+- **해결**: 시스템 프롬프트에서 "반드시 도구 결과를 참조하라"는 지시를 강화. QLoRA 어댑터가 도구 결과 해석 샘플을 충분히 학습했는지 확인.
+
+### 3. RAG 검색 결과의 관련성이 낮음
+- **원인**: 쿼리가 너무 짧거나 모호함. 또는 인덱스 구축 시 청킹이 부적절함.
+- **해결**: 쿼리 확장(Query Expansion) 기법 적용. 청크 크기를 조절하여 다시 인덱싱. 리랭커의 `top_n` 값을 높임.
+
+### 4. Simulator Protocol JSON 파싱 에러
+- **원인**: 모델이 유효하지 않은 JSON 형식을 생성함 (예: 콤마 누락, 따옴표 오류).
+- **해결**: `tool_calling_adapter.py`에서 정규식을 통한 유연한 파싱 로직 적용. QLoRA 학습 시 JSON 구조 보존을 위한 SFT 데이터 보강.
+
+## A-6. 용어 사전 (Glossary)
+
+| 용어 | 설명 |
+|---|---|
+| **DFT** | Dry Film Thickness. 건조 후의 도막 두께. |
+| **WFT** | Wet Film Thickness. 도장 직후 건조 전의 도막 두께. |
+| **90/10 Rule** | 측정값의 90% 이상이 설계 두께 이상이어야 하며, 나머지 10%도 설계 두께의 90% 이상이어야 한다는 합격 판정 기준. |
+| **Sa 2.5** | 표면 처리 등급 중 하나로, 매우 철저한 분사 세정 상태를 의미. |
+| **TDS** | Technical Data Sheet. 도료의 물리적 성질과 작업 지침이 담긴 기술 사양서. |
+| **MCP** | Model Context Protocol. AI 모델과 외부 도구 간의 통신 규약. |
+| **CoT** | Chain of Thought. 모델이 단계적으로 사고하여 결론에 도달하는 추론 방식. |
+
+---
+*문서 끝*
+
+# 21. 데이터 보안 및 개인정보 보호
+
+## 21.1 온프레미스 배포의 이점
+본 시스템은 조선소 내부망에 독립적으로 배포되도록 설계되었다. 이는 다음과 같은 보안 이점을 제공한다.
+- **데이터 유출 방지**: 훈련생의 작업 데이터 및 기업 비밀인 도장 SOP가 외부 클라우드로 전송되지 않는다.
+- **네트워크 독립성**: 외부 인터넷 연결이 끊긴 상태에서도 시뮬레이터와 AI Co-Pilot 간의 통신이 보장된다.
+- **접근 제어**: 조선소 내부의 권한 관리 시스템과 연동하여 인가된 사용자만 AI 서비스를 이용할 수 있게 제한할 수 있다.
+
+## 21.2 데이터 익명화 처리
+시뮬레이터에서 AI Co-Pilot으로 전송되는 `trainee_id`는 실제 성명이나 사번이 아닌 해시된 식별자를 사용한다.
+- **개인 식별 정보(PII) 제거**: 요청 데이터 내에 포함될 수 있는 개인 정보를 사전에 필터링한다.
+- **로그 관리**: 에이전트의 추론 로그는 성능 개선 목적으로만 저장되며, 일정 기간 후 자동 삭제되도록 설정한다.
+
+# 22. 향후 확장성 및 유지보수
+
+## 22.1 지식 베이스 업데이트 프로세스
+새로운 도료가 도입되거나 규정이 변경될 경우, 다음과 같은 절차로 RAG 인덱스를 업데이트한다.
+1. 신규 문서를 `/data/raw/` 디렉터리에 추가.
+2. `ingest_docs.py` 및 `clean_docs.py` 실행.
+3. `build_index.py`를 실행하여 FAISS 인덱스 갱신.
+4. 별도의 모델 재학습 없이 즉시 새로운 지식이 반영됨.
+
+## 22.2 모델 성능 모니터링
+운영 중 AI의 응답 품질을 지속적으로 모니터링하기 위해 다음과 같은 지표를 수집한다.
+- **도구 호출 성공률**: 전체 요청 대비 성공적으로 MCP 도구를 호출하고 결과를 해석한 비율.
+- **사용자 피드백**: 응답에 대한 교관의 "좋아요/싫어요" 피드백 수집.
+- **추론 지연 시간**: 각 단계별(검색, 추론, 도구 호출) 소요 시간 분석.
+
+## 22.3 하드웨어 업그레이드 가이드
+사용자 수가 증가하거나 더 복잡한 추론이 필요할 경우 하드웨어를 다음과 같이 확장할 수 있다.
+- **VRAM 확장**: RTX 4080에서 A40 또는 H100으로 교체하여 Qwen3-72B 등 대형 모델 서빙.
+- **멀티 GPU 구성**: 여러 대의 GPU를 사용하여 추론 요청을 병렬 처리(Load Balancing).
+- **전용 벡터 DB 도입**: 청크 수가 100만 개 이상으로 늘어날 경우 FAISS에서 Qdrant 또는 Milvus로 전환.
+
+---
+*최종 수정일: 2026년 3월 13일*
+*작성자: OhMyOpenCode Sisyphus-Junior*
+
+# 23. 문서 개정 이력 (Revision History)
+
+| 버전 | 날짜 | 주요 변경 내용 | 작성자 |
+|---|---|---|---|
+| v0.1 | 2026-03-09 | 초안 작성 (Qwen2.5-7B 기반) | 연구팀 |
+| v0.5 | 2026-03-11 | Qwen3 마이그레이션 및 Agentic 구조 설계 | Sisyphus-Junior |
+| v0.8 | 2026-03-12 | Simulator Protocol 확립 및 MCP Server 통합 | Sisyphus-Junior |
+| v1.0 | 2026-03-13 | 최종 통합 PRD 완성 (RTX 4080 최적화 반영) | Sisyphus-Junior |
+
+# 24. 연락처 및 기술 지원
+
+본 시스템의 구축, 운영 및 기술 지원에 관한 문의는 아래 채널을 통해 가능하다.
+- **기술 지원팀**: support@shipcoat-ai.com
+- **프로젝트 관리**: pm@shipcoat-ai.com
+- **내부 위키**: https://wiki.shipcoat-ai.internal/copilot
+
+---
+*본 문서는 선박 도장 AI Co-Pilot 프로젝트의 공식 문서이며, 무단 복제 및 배포를 금합니다.*

@@ -2,7 +2,7 @@
   "master": {
     "tasks": [
       {
-        "id": 1,
+        "id": "1",
         "title": "개발 환경 구축 및 GPU 검증",
         "description": "Docker 컨테이너(pytorch/pytorch:2.4.0-cuda12.4-cudnn9-runtime) 환경에서 NVIDIA A40 GPU 검증, /workspace 프로젝트 루트 구조 확인, 필수 라이브러리 설치 확인 및 smoke test 수행",
         "details": "1. GPU 확인: nvidia-smi, A40 48GB GDDR6 ECC 검증\n2. Docker 볼륨 마운트 확인: /workspace(코드), /data(데이터), /output(산출물), /models(모델), /hf-cache(HF 캐시), /logs(로그)\n3. 설치 완료 라이브러리 확인: torch cu124, transformers 5.1.0, accelerate 1.13.0, bitsandbytes 0.49.1, peft, trl, unsloth 2026.2.1, llama-index-core, sentence-transformers 5.2.3, FlagEmbedding 1.3.5, faiss-cpu, vllm 0.16.0, fastapi, uvicorn, pymupdf, beautifulsoup4\n4. 각 라이브러리 import 및 CUDA 가용성 확인(torch.cuda.is_available())\n5. 프로젝트 디렉터리 구조 확인:\n   - /workspace/trainer/scripts/ (Python 스크립트)\n   - /workspace/trainer/configs/ (설정 파일)\n   - /workspace/trainer/notebooks/ (Jupyter 노트북)\n   - /workspace/rag_api/ (RAG API 모듈)\n   - /workspace/deploy/ (Docker 배포)\n   - /data/{raw,parsed,cleaned,chunked,deduplicated,sft,eval,exports}\n   - /output/{indexes,adapters,checkpoints,eval_results,embeddings}\n   - /qdrant_storage/ (향후 Qdrant 벡터 DB 확장용)\n   주의: 아직 존재하지 않는 디렉터리(parsed, deduplicated, exports, indexes, embeddings)는 Task 1에서 생성 필요\n6. 오프라인 모델 사전 다운로드 확인: Qwen2.5-7B-Instruct, BAAI/bge-m3, BAAI/bge-reranker-v2-m3\n7. HF_HOME=/hf-cache, HF_HUB_CACHE=/hf-cache/hub 환경변수 설정 확인",
@@ -81,7 +81,7 @@
         "updatedAt": "2026-03-10T02:00:41.068Z"
       },
       {
-        "id": 2,
+        "id": "2",
         "title": "문서 수집 및 파이프라인 설계",
         "description": "선박 도장 관련 문서(SOP, 매뉴얼, TDS, 안전지침, 결함 가이드, 도막 두께 기준) 50-100건 수집, /data/raw/에 저장, 파싱 규칙 정의, 정규화 및 중복 제거 전략 수립",
         "details": "1. 1순위 문서 수집: coating/blasting 매뉴얼, 도료 TDS, 안전지침, 결함 설명, 도막 두께/검사 가이드 → /data/raw/\n2. 2순위 교육 자료, RealCOAT 시나리오 정의서, 훈련 평가 기준표\n3. 문서 정규화 규칙: Unicode NFKC, 헤더/푸터 제거, 페이지 번호 제거, 단위 통일(µm, %, mm, °C), 용어 통일(DFT, WFT, SSPC-SP10, Sa 2.5)\n4. 중복 제거: 문서 단위 SHA-256, near-duplicate MinHash+LSH, 문단 512자 이상 장문 중복 제거\n5. 파싱 포맷: PDF→pymupdf, HTML→beautifulsoup4, 표는 markdown/CSV 보존\n6. metadata schema 설계: doc_id, chunk_id, source_type, domain_category, process_stage, subtask, language, revision, quality_score, has_table, has_procedure\n7. 프롬프트/스크립트: /workspace/trainer/scripts/ingest_docs.py, clean_docs.py, dedup_docs.py 스켈레톤 생성",
@@ -162,15 +162,15 @@
         "updatedAt": "2026-03-10T07:23:17.651Z"
       },
       {
-        "id": 3,
+        "id": "3",
         "title": "문서 청킹 및 RAG 색인 구축",
         "description": "정제된 문서를 300-800 토큰 기반으로 구조적 청킹, BGE-M3 임베딩 생성, FAISS 색인 구축 및 /output/indexes/에 저장, 리랭커 통합",
         "details": "1. 청킹 규칙: 절/항/Step 경계 우선, checklist/procedure는 한 chunk 유지, 표는 제목/컬럼명과 함께 별도 chunk, 10-20% overlap\n2. 토큰 카운팅: transformers.AutoTokenizer로 Qwen2.5 토크나이저 기준\n3. 임베딩: sentence-transformers로 BGE-M3 로드, batch_size 32, device 'cuda'\n4. FAISS 인덱스: IVFFlat/HNSW 비교, base model 선택, metric L2\n5. chunk_id 생성: DOC-{doc_id}-C{seq} 형식\n6. chunks.jsonl: /data/chunked/chunks.jsonl에 각 행 {chunk_id, text, doc_id, tokens, embedding} 포함\n7. FAISS 저장: /output/indexes/faiss.index, /output/indexes/faiss.index.pkl(metadata)\n8. 선택적: BAAI/bge-reranker-v2-m3 통합, retrieval top-5 후 rerank top-3\n9. 스크립트: /workspace/trainer/scripts/chunk_docs.py, build_index.py, 설정 /workspace/trainer/configs/rag_config.yaml",
         "testStrategy": "/data/chunked/chunks.jsonl 행 수 확인(최소 200), 임베딩 차원 1024 확인, /output/indexes/faiss.index 저장 성공 및 파일 크기 >100MB, smoke test 5개 쿼리 retrieval 수행(응답 <5초), citation chunk_id 누락률 0%",
         "priority": "high",
         "dependencies": [
-          1,
-          2
+          "1",
+          "2"
         ],
         "status": "done",
         "subtasks": [
@@ -246,14 +246,14 @@
         "updatedAt": "2026-03-10T08:06:18.241Z"
       },
       {
-        "id": 4,
+        "id": "4",
         "title": "RAG 기준선 응답 시스템 구현",
         "description": "질의응답 엔드-투-엔드 파이프라인 구현: 쿼리 임베딩→Top-K 검색→선택적 리랭킹→LLM 응답 생성→JSON 스키마 기반 답변 및 인용 반환, /workspace/rag_api/에 서버 코드 배치",
         "details": "1. 응답 스키마: {answer, citations(chunk_id 리스트), confidence(high/medium/low), model_name, timestamp, source_docs}\n2. 프롬프트 템플릿: system role(산업 AI 어시스턴트, 근거 기반 답변, 모른다고 표현) + user 질문 + retrieved_docs\n3. LLM 설정: Qwen2.5-7B-Instruct, 4bit 로딩(bitsandbytes NF4), temperature 0.1, max_tokens 768\n4. retrieval 기본값: top-k=5, rerank on/off 비교\n5. hallucination 방지: 근거 문서 부족 시 confidence='low', 답변 거부 패턴 포함\n6. 응답 생성: retrieved chunk context를 프롬프트에 삽입, LLM 추론, JSON 파싱\n7. 스크립트: /workspace/trainer/scripts/qa_pipeline.py(retrieval→prompt→inference), response_formatter.py\n8. 구현 체크리스트: 10문항 smoke test 통과, citation 누락 0건, hallucination 유형 카탈로그(최소 5가지)\n9. 설정: /workspace/trainer/configs/rag_config.yaml에서 temperature, max_tokens, top_k, rerank_enabled 조정 가능",
         "testStrategy": "10개 수동 테스트 문항 실행, 응답 JSON 스키마 유효성(citation field 필수), 응답 시간 <10초, hallucination 주요 유형 5가지 기록, confidence 분포 확인",
         "priority": "high",
         "dependencies": [
-          3
+          "3"
         ],
         "status": "done",
         "subtasks": [
@@ -329,14 +329,14 @@
         "updatedAt": "2026-03-10T10:03:23.624Z"
       },
       {
-        "id": 5,
+        "id": "5",
         "title": "50문항 평가셋 구성 및 검수",
         "description": "용어(10문), 공정절차(10문), 결함분석(10문), 코팅두께/사양(10문), 안전/규정(10문) 균형잡힌 평가셋 작성, /data/eval/에 저장, 참조 답변 및 채점 루브릭 확정",
         "details": "1. 5개 카테고리별 10문항씩 설계\n2. 각 문항: question, expected_answer, difficulty(easy/medium/hard), category, required_chunks(참조 chunk_id 리스트)\n3. 참조 답변: 도메인 전문가 검수, 기술 정확성/완전성/한국어 품질 확인\n4. JSON 포맷: {q_id, question, category, expected_answer, required_chunks, difficulty}\n5. 채점 루브릭: 5차원(기술정확성, 문서충실도, 용어적절성, 완전성, 한국어품질) × 0-2점 = 최대 10점\n6. 자동 평가 지표: ROUGE-L(rouge-score), BERTScore(bert-score), hallucination ratio, 용어 정확도\n7. 검수 프로세스: 2명 이상 도메인 검토자 채점, 의견 불일치 시 합의\n8. 파일: /data/eval/eval_set.jsonl, /output/eval_results/eval_rubric.md, /output/eval_results/eval_answer_key.json\n9. 통계: 카테고리별 난이도 분포, 필요 문서 coverage 확인",
         "testStrategy": "50문항 모두 JSON 유효성 확인, 카테고리별 10문항 정확히 배분 검증, 참조 답변 평균 길이 100-300 토큰 범위 확인, required_chunks 모두 실제 /data/chunked/chunks.jsonl에 존재 확인",
         "priority": "high",
         "dependencies": [
-          2
+          "2"
         ],
         "status": "done",
         "subtasks": [
@@ -413,15 +413,15 @@
         "updatedAt": "2026-03-10T10:03:24.040Z"
       },
       {
-        "id": 6,
+        "id": "6",
         "title": "RAG-Only 평가 실행 및 분석",
         "description": "50문항 평가셋을 RAG-only 구성으로 일괄 실행, ROUGE-L/BERTScore 자동 평가, 수동 채점, hallucination 분류, 성공 기준(평균 1.5/2.0 이상, hallucination ≤10%) 확인, 결과 /output/eval_results/에 저장",
         "details": "1. 배치 실행: /workspace/trainer/scripts/run_rag_eval.py로 50문항 순차 실행, 응답 저장(q_id, answer, citations, timestamp)\n2. 자동 평가: ROUGE-L(reference vs predicted), BERTScore F1, 응답 길이, citation 개수\n3. hallucination 분류: 출처 없는 사실 주장, 사실 오류, 과장/추론 과다, 모순 등\n4. 수동 채점: 5차원 루브릭 적용, 2명 검토자 평균 점수\n5. 오류 분석: 저점수 문항 원인(검색 실패/LLM 오류/프롬프트 부적절) 분류\n6. 결과 CSV: /output/eval_results/rag_only_results.csv에 q_id, category, manual_score, rouge_l, bertscore_f1, hallucination_flag, error_type, confidence 포함\n7. 집계: 카테고리별 평균, 전체 평균, 표준편차, hallucination rate, citation coverage\n8. 산출물: /output/eval_results/rag_only_results.csv, /output/eval_results/rag_only_analysis.md, /output/eval_results/error_samples.jsonl\n9. Gate: 평균 점수 ≥1.5/2.0 또는 hallucination ≤10% 달성 시 다음 단계 진행",
         "testStrategy": "50개 결과 모두 /output/eval_results/rag_only_results.csv에 저장 확인, 자동 평가 지표 계산 완료, 수동 채점 점수 분포 통계(최소값/최대값/평균/중앙값), hallucination 발생 건수 카운트, 기준 충족 여부 확인",
         "priority": "high",
         "dependencies": [
-          4,
-          5
+          "4",
+          "5"
         ],
         "status": "done",
         "subtasks": [
@@ -500,15 +500,15 @@
         "updatedAt": "2026-03-10T10:03:24.498Z"
       },
       {
-        "id": 7,
+        "id": "7",
         "title": "QLoRA 학습 데이터셋 생성 및 검수",
         "description": "300-500건 SFT 데이터셋 생성(문서QA 100, 절차설명 80, 결함분석 60, DFT피드백 60, 용어/다국어 50, 요약/비교 50), 카테고리 균형 검증, 최소 30% 샘플 품질 검사, /data/sft/에 저장",
         "details": "1. 데이터 소스: RAG 검색 결과, 평가셋 정답, 도메인 자료, 기존 교육 자료\n2. 포맷: {messages: [{role, content}, ...], category}\n   - system: '너는 선박 도장 훈련 코치다. 항상 안전과 표준 절차를 우선하고, 마지막에 근거 문서 ID를 적는다.'\n   - user: '[문서] ... [질문] ...'\n   - assistant: '답변... 근거: DOC-...'\n3. 카테고리별 생성 목표수: 문서QA 100, 절차설명 80, 결함분석 60, DFT 사양 60, 용어/다국어 50, 요약/비교 50\n4. 품질 검수: 30% 샘플(최소 100건) 랜덤 선택, 5차원 루브릭(기술정확성, 충실도, 용어, 완전성, 한국어) 적용, 평균 점수 ≥1.5/2.0 필수\n5. 중복 제거: 100자 이상 문장 유사도(cosine>0.95) 제거\n6. 균형 검증: 카테고리별 수량 ±10% 범위 확인\n7. 최종 파일: /data/sft/sft_train.jsonl(학습용 380-450건), /data/sft/sft_val.jsonl(검증용 20-50건)\n8. 생성 스크립트: /workspace/trainer/scripts/generate_sft.py(template 기반 자동 생성), review_sft.py(품질 검사)",
         "testStrategy": "/data/sft/sft_train.jsonl 행 수 300-500 범위 확인, 카테고리별 분포 ±10% 검증, JSON 포맷 유효성 100% 확인, 품질 검수 샘플 30% 이상 점수 1.5/2.0 이상, 중복률 <5% 확인",
         "priority": "high",
         "dependencies": [
-          2,
-          6
+          "2",
+          "6"
         ],
         "status": "done",
         "subtasks": [
@@ -582,15 +582,15 @@
         "updatedAt": "2026-03-11T02:49:27.428Z"
       },
       {
-        "id": 8,
+        "id": "8",
         "title": "Unsloth 환경 구축 및 QLoRA 학습",
         "description": "Docker 컨테이너 환경에서 Unsloth 2026.2.1 기반 QLoRA 학습, 4bit NF4 양자화, A40 메모리 최적화, 3-epoch 학습, adapter 저장",
         "details": "1. 모델 로딩: Unsloth FastLanguageModel로 Qwen2.5-7B-Instruct 4bit 로딩\n   - load_in_4bit=True, bnb_4bit_compute_dtype=torch.bfloat16\n   - 모델은 /hf-cache/에서 자동 로드\n2. LoRA 설정: rank=16, alpha=32, dropout=0.05\n3. target_modules: q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj\n4. 학습 하이퍼파라미터: batch_size=1 시작, grad_accum=8, max_seq_len=2048, optimizer=adamw_8bit, epochs=3\n5. 안정성 단계: batch 1→2→4, seq 2048→4096, grad_accum 8→4로 점진적 상향\n6. 학습 루프: SFTTrainer(Unsloth) 또는 manual training loop, gradient checkpointing\n7. 저장: LoRA adapter를 /output/adapters/qwen25_shipcoat_lora/{adapter_config.json, adapter_model.bin}\n   - 체크포인트 저장: /output/checkpoints/에 학습 중간 체크포인트 저장(epoch별)\n8. 오류 처리: OOM 발생 시 즉시 batch 1 + seq 2048 + grad_accum 16으로 축소\n9. 스크립트: /workspace/trainer/scripts/train_qlora.py, 설정 /workspace/trainer/configs/qlora_config.yaml\n10. 모니터링: 로그 파일로 loss/accuracy 추적(/logs/train_qlora.log)",
         "testStrategy": "모델 로딩 성공(메모리 사용량 <40GB), 학습 시작 가능(첫 batch 처리 성공), adapter 저장 완료(/output/adapters/qwen25_shipcoat_lora/ 존재), loss curve 감소 추세 확인, 학습 시간 reasonable(<12시간)",
         "priority": "high",
         "dependencies": [
-          1,
-          7
+          "1",
+          "7"
         ],
         "status": "done",
         "subtasks": [
@@ -667,15 +667,15 @@
         "updatedAt": "2026-03-10T11:24:57.381Z"
       },
       {
-        "id": 9,
+        "id": "9",
         "title": "QLoRA-Only 및 RAG+QLoRA 평가 실행",
         "description": "학습된 adapter(/output/adapters/qwen25_shipcoat_lora/)를 로드하여 QLoRA-Only 구성으로 50문항 평가 실행, RAG+QLoRA 구성도 평가, RAG-Only 결과와 비교 분석",
         "details": "1. QLoRA-Only 실행: Qwen2.5-7B + adapter(/output/adapters/qwen25_shipcoat_lora/)만 로드, RAG 검색 미사용, 50문항 일괄 실행\n2. RAG+QLoRA 실행: Qwen2.5-7B + adapter + RAG 검색, 동일 프롬프트, 50문항 실행\n3. 자동 평가: 각 구성별 ROUGE-L, BERTScore, hallucination ratio, 응답 길이\n4. 수동 채점: 5차원 루브릭 재적용(동일 검수자 또는 검증 인원)\n5. 비교 분석: 3가지 구성(RAG-Only vs QLoRA-Only vs RAG+QLoRA)\n   - 평균 점수 비교\n   - hallucination 비율 비교\n   - 용어 정확도, 형식 일관성 비교\n   - 카테고리별 성능 차이\n6. Keep/Drop 의사결정:\n   - RAG+QLoRA가 RAG-Only 대비 평균 0.15점 이상 향상 && hallucination 동일/감소 → adapter 유지\n   - 그 외 → adapter 폐기\n7. 산출물: /output/eval_results/qlora_only_results.csv, /output/eval_results/ragqlora_results.csv, /output/eval_results/comparison.csv, /output/eval_results/comparison_analysis.md\n8. 시각화: 카테고리별 점수 히트맵, 오류 유형 분포도",
         "testStrategy": "세 가지 구성 모두 50문항 실행 완료, 결과 CSV 모두 /output/eval_results/에 저장, 비교 분석 문서 작성, keep/drop 의사결정 명확히 기록, 평균 점수/hallucination 수치 정량적 비교",
         "priority": "high",
         "dependencies": [
-          6,
-          8
+          "6",
+          "8"
         ],
         "status": "done",
         "subtasks": [
@@ -829,17 +829,17 @@
         "updatedAt": "2026-03-11T03:16:43.241Z"
       },
       {
-        "id": 10,
+        "id": "10",
         "title": "세션 코칭 응답 시스템 구현",
         "description": "Co-Pilot 방향 세션 코칭: session_summary.json 입력 → Tool Calling(dft_judge, anomaly_detection) → Chain of Thought 추론 → 코칭 피드백 JSON 생성. 기존 시뮬레이터 지표(이격거리, DFT, 속도, 각도, under/over-thickness)를 MCP 서버로 전달하여 분석 결과를 받고, RAG 문서 근거와 결합하여 행동항목/위험플래그/근거문서를 포함한 구조화 코칭 응답 생성",
         "details": "1. session_summary.json 파싱 및 지표 추출\n2. dft_judge MCP 호출: DFT 측정값 → 합부 판정\n3. anomaly_detection MCP 호출: 패턴 이상 탐지\n4. RAG 검색: 관련 문서 근거 수집\n5. CoT 추론: MCP 결과 + RAG 문서 → 코칭 피드백 생성\n6. 출력: action_items, risk_flags, citations, xr_highlights 포함 JSON\n7. PRD §3.2 시나리오 B + §16.4 시나리오 D/E 통합\n8. 산출물: /workspace/trainer/scripts/session_coach.py",
         "testStrategy": "세션 요약 JSON 파싱 성공, 코칭 응답 JSON 스키마 유효성 확인, action_items 최소 3개 이상, citations chunk_id 존재 확인, 도메인 검토자 5-10건 코칭 품질 평가(4점/5점 이상)",
         "priority": "high",
         "dependencies": [
-          4,
-          9,
-          15,
-          16
+          "4",
+          "9",
+          "15",
+          "16"
         ],
         "status": "done",
         "subtasks": [
@@ -911,15 +911,15 @@
         "updatedAt": "2026-03-11T06:30:00.000Z"
       },
       {
-        "id": 11,
+        "id": "11",
         "title": "vLLM API 서빙 패키징(선택 Stretch Goal)",
         "description": "Docker 컨테이너 환경에서 vLLM 0.16.0을 이용해 OpenAI-compatible REST API 패키징, 모델 선택지(base/RAG-only/RAG+QLoRA) 제공",
         "details": "1. vLLM serve 명령어: vllm serve Qwen/Qwen2.5-7B-Instruct --dtype auto --api-key shipcoat-demo-key --port 8000 --host 0.0.0.0\n   - 모델은 /hf-cache/에서 자동 로드\n2. 선택적 adapter 로드: vLLM의 lora_modules 파라미터 활용(지원 확인 필요)\n3. OpenAI-compatible endpoints: /v1/chat/completions, /v1/models, /health\n4. FastAPI wrapper 추가(선택): /workspace/rag_api/에서 custom `/qa`, `/coach/session` endpoint 구현\n5. 요청 스키마: {model, messages, temperature, max_tokens} 호환\n6. 응답: OpenAI format {choices[{message}], usage} 유지\n7. API key 검증: Authorization header 확인\n8. 스크립트: /workspace/trainer/scripts/serve_vllm.py(서버 시작), /workspace/trainer/scripts/demo_api_client.py(테스트)\n9. 설정: port 8000, host 0.0.0.0, dtype auto\n10. 문서: /workspace/README.md에서 API 사용 예시 curl/python 코드 포함",
         "testStrategy": "vLLM 서버 시작 성공(listening on 0.0.0.0:8000), curl 또는 python-openai로 chat completion 요청 성공, 응답 시간 <15초, API key 검증 동작",
         "priority": "low",
         "dependencies": [
-          3,
-          9
+          "3",
+          "9"
         ],
         "status": "deferred",
         "subtasks": [
@@ -989,19 +989,19 @@
         ]
       },
       {
-        "id": 12,
+        "id": "12",
         "title": "최종 평가 리포트 및 의사결정 문서 작성",
         "description": "RAG-Only, QLoRA-Only, RAG+QLoRA 3가지 구성 비교표, 성공 기준 달성 여부, keep/drop 의사결정, 다음 단계 제안 포함한 최종 리포트 작성, /output/eval_results/에 저장",
         "details": "1. 리포트 구성:\n   - 실행 요약(Executive Summary): 목표, 구성, 주요 결과, 의사결정\n   - 기준선 비교표: 모델별 평균 점수, hallucination율, 응답 시간, 메모리 사용, 추론 비용\n   - 상세 결과: 카테고리별 성능, 오류 분석, hallucination 유형 분포\n   - 성공 기준 검증표: 각 기준별 달성 여부\n   - 기술 의사결정: adapter keep/drop 근거, 문제점 및 해결방안\n   - 다음 단계: VLM stub 정의, 세션 export 자동화, 다국어 확장\n2. 포맷: /output/eval_results/final_report.md (마크다운), /output/eval_results/final_report.xlsx(표)\n3. 수치 데이터: CSV로 완전히 제공 가능해야 함\n4. 시각화: 카테고리별 성능 그래프, 모델 비교 차트 (matplotlib/plotly)\n5. 근거 자료: 평가 결과 상세 파일 첨부(/data/eval/eval_set.jsonl, 결과 CSV)\n6. 결론: 1차 PoC의 주요 학습, 기술적 검증, 다음 단계 우선순위\n7. [추가] 아키텍처 구조도 (Mermaid), QA 샘플 (성공/실패 예시), XR 콘텐츠 스펙, 레이턴시 분석, 3-way 라우터 문서\n8. [추가] 목표치(4.0) 도달 후 전면 재작성 예정",
         "testStrategy": "/output/eval_results/final_report.md, /output/eval_results/final_report.xlsx 파일 생성 확인, 모든 수치 근거 파일과 연결 확인, 표 데이터 정확성 검증(sum, avg 재계산), 의사결정 근거 명확성 검토",
         "priority": "high",
         "dependencies": [
-          9,
-          17,
-          18,
-          10
+          "9",
+          "17",
+          "18",
+          "10"
         ],
-        "status": "in-progress",
+        "status": "done",
         "subtasks": [
           {
             "id": 1,
@@ -1068,23 +1068,24 @@
             "parentId": "undefined",
             "priority": "high"
           }
-        ]
+        ],
+        "updatedAt": "2026-03-13T14:10:36.304Z"
       },
       {
-        "id": 13,
+        "id": "13",
         "title": "재현 가능성 문서화 및 실행 스크립트 정리",
         "description": "/workspace/README.md(설치/실행 명령어), 설정 파일(/workspace/trainer/configs/), 주요 스크립트(/workspace/trainer/scripts/) 완성, 폴더 구조 및 버전 명시",
         "details": "1. README.md 구성:\n   - 프로젝트 개요\n   - 필수 조건(Docker, NVIDIA A40, 필수 라이브러리)\n   - Docker 실행 단계(docker-compose up)\n   - 모델 다운로드(/hf-cache/ 사전 다운로드)\n   - 주요 스크립트 사용법\n   - 문제 해결(OOM, import 오류)\n   - 기본 명령어 모음(부록 A 참고)\n2. 스크립트 체크리스트:\n   - /workspace/trainer/scripts/ingest_docs.py: raw → parsed\n   - /workspace/trainer/scripts/clean_docs.py: 정규화, dedup\n   - /workspace/trainer/scripts/chunk_docs.py: chunk 생성\n   - /workspace/trainer/scripts/build_index.py: FAISS index 생성\n   - /workspace/trainer/scripts/run_rag_eval.py: 50문항 평가\n   - /workspace/trainer/scripts/generate_sft.py: SFT 데이터 생성\n   - /workspace/trainer/scripts/train_qlora.py: QLoRA 학습\n   - /workspace/trainer/scripts/serve_demo_api.py: FastAPI/vLLM 서빙\n3. 설정 파일:\n   - /workspace/trainer/configs/rag_config.yaml: top_k, rerank on/off, temperature, max_tokens\n   - /workspace/trainer/configs/qlora_config.yaml: batch, lr, epochs, seq_len, rank, alpha\n   - /workspace/trainer/configs/env.example: HF_HOME, CUDA 설정\n4. 폴더 구조 다이어그램(Docker 볼륨 기반)\n5. 버전 고정: requirements.txt 또는 uv.lock\n6. 실행 체크리스트: smoke test 확인 순서\n7. 예상 소요 시간: 각 단계별\n8. 지원 연락처 및 이슈 추적 방식",
         "testStrategy": "README 지시대로 새로운 Docker 환경에서 설치 가능 여부 확인(dry run), 모든 스크립트 entry point 확인(python -m <script> --help), 설정 파일 YAML/JSON 유효성 검증, requirements.txt 모든 패키지 설치 가능 확인",
         "priority": "medium",
         "dependencies": [
-          10,
-          12,
-          15,
-          16,
-          18
+          "10",
+          "12",
+          "15",
+          "16",
+          "18"
         ],
-        "status": "pending",
+        "status": "done",
         "subtasks": [
           {
             "id": 1,
@@ -1156,17 +1157,17 @@
         ]
       },
       {
-        "id": 14,
+        "id": "14",
         "title": "향후 확장 인터페이스 정의 및 VLM Stub 설계",
         "description": "향후 멀티모달 단계를 위해 VLM stub(heatmap/screenshot→JSON), 규칙 엔진 stub(자세/시퀀스/두께 점수), 세션 export 자동화 인터페이스 정의 및 프로토타입 스켈레톤 작성",
         "details": "1. VLM Stub 설계:\n   - 입력: heatmap.png, screenshot.png, report.json(RealCOAT export)\n   - 처리: 향후 Qwen2-VL-2B-Instruct 또는 동등 모델\n   - 출력: {regions_of_interest[], detected_issues[], paint_distribution, estimated_thickness[]}\n   - 프로토타입: 입력 수용 및 출력 스키마만 정의, 실제 VLM은 Week 2+\n   - 파일: /workspace/trainer/scripts/vlm_stub.py\n2. 규칙 엔진 Stub:\n   - 입력: motion data, thickness points, sequence log\n   - 처리: 외부 규칙/시뮬레이터(RealCOAT)가 이미 계산\n   - 출력: {speed_score, distance_score, angle_score, sequence_compliance, efficiency}\n   - 이번 주: JSON 스키마만 정의, 통합은 Day 5-6에 시도\n   - 파일: /workspace/trainer/scripts/rule_engine_interface.md\n3. 세션 Export 자동화:\n   - RealCOAT API/파일 export 인터페이스 정의\n   - session_summary.json 스키마 확정\n   - 자동 감지 및 sidecar 서버로 전달 로직\n   - 프로토타입: 수동 파일 업로드 지원, 자동화는 향후\n   - 파일: /workspace/trainer/scripts/export_automation.md\n4. 산출물:\n   - /workspace/trainer/scripts/vlm_stub.py: 입출력 스키마, mock 응답\n   - /workspace/trainer/scripts/rule_engine_interface.md: 규칙 엔진과 LLM 통합점\n   - /workspace/trainer/scripts/export_automation.md: RealCOAT 연동 프로토콜\n5. 향후 확장 로드맵: VLM 추가(Week 2) → 규칙 엔진 통합(Week 3) → 음성/UI(Week 4+)\n6. Qdrant 벡터 DB 확장: /qdrant_storage/에 벡터 인덱스 저장(FAISS→Qdrant 마이그레이션 고려)",
         "testStrategy": "스키마 JSON 유효성 확인, mock 응답 생성 가능, 프로토타입이 차기 작업 프레임워크 제시 가능 여부 확인",
         "priority": "medium",
         "dependencies": [
-          9,
-          19
+          "9",
+          "19"
         ],
-        "status": "pending",
+        "status": "done",
         "subtasks": [
           {
             "id": 1,
@@ -1235,15 +1236,15 @@
         ]
       },
       {
-        "id": 15,
+        "id": "15",
         "title": "Tool Calling 프레임워크 설계 및 인터페이스 정의",
         "description": "JSON Schema 기반 도구 정의(pose_estimation, anomaly_detection, timeseries, location_tracking, sequence_validation, dft_judge), Qwen3 native function calling + Thinking Mode 포맷 적용, 호출 규약 설계",
         "details": "1. 6개 도구의 JSON Schema 정의 (PRD §16.3 + Architecture §3.2.6 기준)\n2. Architecture §3.2.4에서 </ToolPos>, </ToolSeq> 등 custom tag 방식을 제안했으나, Qwen3는 native function calling + thinking mode를 지원하므로 표준 FC 포맷으로 구현 (Architecture의 tag 개념을 FC tool_calls로 매핑). Qwen3의 <think> 블록 내에서 도구 필요성을 추론한 뒤 tool_calls를 생성하는 방식.\n3. Qwen3(4B/8B)의 tool/function calling 포맷에 맞춘 tool description 작성 (Qwen-Agent 호환)\n4. 도구 호출 규약: request/response 포맷, 에러 코드, 타임아웃\n5. 각 도구별 입출력 예시 + 테스트 케이스\n6. Thinking Mode 연동: 복잡한 요청 시 /think → 도구 선택 추론 → tool_calls, 단순 조회 시 /no_think → 직접 호출\n7. 산출물: /workspace/trainer/configs/tool_schemas/*.json, /workspace/trainer/scripts/tool_calling_adapter.py, /workspace/trainer/scripts/test_tool_calling.py",
         "testStrategy": "JSON Schema 유효성 검증, Qwen3 function calling 포맷 테스트 (tool choice + tool response 파싱 + thinking mode 연동), 6개 도구 모두 정의 완료 확인",
         "priority": "high",
         "dependencies": [
-          9,
-          19
+          "9",
+          "19"
         ],
         "status": "done",
         "subtasks": [
@@ -1302,12 +1303,12 @@
         "updatedAt": "2026-03-11T06:30:00.000Z"
       },
       {
-        "id": 16,
+        "id": "16",
         "title": "MCP Server Stub 구현",
         "description": "6개 MCP 서버(pose_estimation, anomaly_detection, timeseries, location_tracking, sequence_validation, dft_judge)의 stub 구현. FastAPI 기반, 입력 검증 및 응답 반환. 각 서버의 역할 재정의 반영: 자세 비교, 멀티모달 이상탐지, 세션 상태 관리, 공간 인식, stroke 순서 검증, DFT 합부 판정",
         "status": "done",
         "dependencies": [
-          15
+          "15"
         ],
         "priority": "high",
         "details": "**MCP Server 역할 재정의 (PRD §16.3 + Architecture 기반):**\n\n1. **pose_estimation**: 숙련자 BVH reference vs 작업자 BVH 비교 → 관절별 자세 편차 + 교정 방향 벡터 출력\n2. **anomaly_detection**: 히트맵 이미지 + DFT 측정값 멀티모달 탐지 (LLaSA 계열). Phase 2 Stub은 이미지 경로 + DFT 배열 입력 → fixture 반환\n3. **timeseries**: ReAct 루프의 순환 구조용 세션 state. 매 턴 누적 업데이트하여 속도/거리 트렌드 제공\n4. **location_tracking**: 선박 3D 구역 인식 (PaintNet trajectory 기반). pose/sequence MCP에 공간 context 공급. Phase 2 Stub은 fixture 반환만\n5. **sequence_validation**: 구역 내 stroke 단위 도장 순서 검증 (위→아래 등). 공정 단계 순서가 아님. 숙련자 stroke 패턴이 reference\n6. **dft_judge**: 규제/리포트용 명시적 pass/fail. 90/10 룰 실제 로직 구현 (유일한 실제 로직)\n\n**구현 우선순위**: dft_judge (실제 로직) > anomaly/sequence/pose stub > timeseries stub > location stub (Phase 4 연동)\n\n**기술 스택**: FastAPI, Pydantic 입력 검증, 에러 핸들링, /health 엔드포인트\n\n**산출물**: /workspace/mcp_servers/ 디렉터리, 통합 테스트 스크립트",
@@ -1320,7 +1321,8 @@
             "dependencies": [],
             "details": "디렉터리 구조:\n- mcp_servers/__init__.py\n- mcp_servers/common.py (공통 응답 포맷, 에러 핸들러)\n- mcp_servers/pose_estimation.py\n- mcp_servers/anomaly_detection.py\n- mcp_servers/timeseries.py\n- mcp_servers/location_tracking.py\n- mcp_servers/sequence_validation.py\n- mcp_servers/dft_judge.py\n- mcp_servers/main.py (통합 라우터)\n\n공통 응답 포맷: {status, result, error, timestamp}\nHealth check 엔드포인트 포함: GET /health → {status: \"ok\", server: \"<name>\", timestamp}",
             "status": "done",
-            "testStrategy": "디렉터리 구조 확인 (ls -R mcp_servers/), 공통 모듈 import 테스트, health check 엔드포인트 응답 확인 (각 서버)"
+            "testStrategy": "디렉터리 구조 확인 (ls -R mcp_servers/), 공통 모듈 import 테스트, health check 엔드포인트 응답 확인 (각 서버)",
+            "parentId": "undefined"
           },
           {
             "id": 2,
@@ -1331,7 +1333,8 @@
             ],
             "details": "**입력 스키마** (Pydantic):\n```python\nclass DFTJudgeRequest:\n    measurements: List[float]  # DFT 측정값 배열\n    spec: DFTSpec              # nominal, tolerance_rule\n\nclass DFTSpec:\n    nominal: float             # 기준값 (µm)\n    tolerance_rule: str        # \"90/10\"\n```\n\n**90/10 룰 로직**:\n1. 모든 측정값이 nominal의 90% 이상이어야 함\n2. 전체 평균이 nominal 이상이어야 함\n\n**출력 스키마**:\n```python\nclass DFTJudgeResult:\n    pass_: bool                # 합격 여부 (pass는 예약어이므로 pass_)\n    violations: List[Violation]  # 위반 포인트 리스트\n    mean: float                # 전체 평균\n    coverage_pct: float        # 90% 기준 충족률\n\nclass Violation:\n    point_index: int\n    value: float\n    threshold: float\n    reason: str\n```\n\n**엔드포인트**: POST /dft_judge/evaluate",
             "status": "done",
-            "testStrategy": "PRD §16.4 시나리오 E 예시 데이터 검증: measurements=[150,85,92,110,78], nominal=100 → pass=false, violations 확인. 합격 케이스: [95, 102, 98, 105, 100], nominal=100 → pass=true. 엣지 케이스: 빈 배열 (에러), 단일값, 경계값 (정확히 90%)."
+            "testStrategy": "PRD §16.4 시나리오 E 예시 데이터 검증: measurements=[150,85,92,110,78], nominal=100 → pass=false, violations 확인. 합격 케이스: [95, 102, 98, 105, 100], nominal=100 → pass=true. 엣지 케이스: 빈 배열 (에러), 단일값, 경계값 (정확히 90%).",
+            "parentId": "undefined"
           },
           {
             "id": 3,
@@ -1342,7 +1345,8 @@
             ],
             "details": "**입력 스키마**:\n```python\nclass AnomalyDetectionRequest:\n    heatmap_path: str          # 히트맵 이미지 파일 경로\n    dft_measurements: List[float]  # DFT 측정값 배열\n    env: EnvironmentCondition  # 환경 조건\n\nclass EnvironmentCondition:\n    temp: float                # 온도 (°C)\n    humidity: float            # 습도 (%)\n```\n\n**출력 스키마** (fixture):\n```python\nclass AnomalyDetectionResult:\n    anomaly_detected: bool\n    anomaly_type: str          # \"under_thickness\", \"over_thickness\", \"defect\"\n    severity: str              # \"low\", \"medium\", \"high\"\n    location: str              # 구역 설명 (fixture: \"B-3 좌하단\")\n    likely_cause: str          # 원인 추정 (fixture 매핑)\n    anomaly_points: List[int]  # 이상 포인트 인덱스\n    image_evidence: str        # 이미지 근거 설명 (fixture)\n```\n\n**likely_cause fixture 매핑**:\n- under_thickness → \"excessive_speed\" or \"low_viscosity\"\n- over_thickness → \"slow_speed\" or \"high_viscosity\"\n- defect → \"contamination\" or \"improper_technique\"\n\n**엔드포인트**: POST /anomaly_detection/detect",
             "status": "done",
-            "testStrategy": "정상 입력 (heatmap_path 존재, DFT 정상 범위) → anomaly_detected=false. 이상 입력 (DFT에 극단값, 환경 조건 나쁨) → anomaly_detected=true, fixture 응답 포맷 검증. 잘못된 입력 (heatmap_path 없음, DFT 빈 배열) → 422 에러."
+            "testStrategy": "정상 입력 (heatmap_path 존재, DFT 정상 범위) → anomaly_detected=false. 이상 입력 (DFT에 극단값, 환경 조건 나쁨) → anomaly_detected=true, fixture 응답 포맷 검증. 잘못된 입력 (heatmap_path 없음, DFT 빈 배열) → 422 에러.",
+            "parentId": "undefined"
           },
           {
             "id": 4,
@@ -1353,7 +1357,8 @@
             ],
             "details": "**입력 스키마**:\n```python\nclass SequenceValidationRequest:\n    trajectory: List[StrokePoint]  # 현재 작업자의 stroke 궤적\n    zone_id: str                   # 현재 작업 구역 ID (예: \"B-3\")\n    zone_type: str                 # 구역 유형 (\"수직 패널\", \"수평 패널\" 등)\n    reference_pattern: str         # 숙련자 참조 패턴 (\"top_to_bottom\", \"bottom_to_top\")\n\nclass StrokePoint:\n    x: float\n    y: float\n    z: float\n    timestamp: float\n```\n\n**출력 스키마** (fixture):\n```python\nclass SequenceValidationResult:\n    violation: bool\n    current_direction: str         # \"top_to_bottom\", \"bottom_to_top\"\n    recommended_direction: str     # 권장 방향\n    reason: str                    # 위반 이유 (fixture)\n    correction_advice: str         # 교정 조언\n```\n\n**fixture 로직**:\n- 수직 패널 + bottom_to_top 입력 → violation=true, recommended=\"top_to_bottom\", reason=\"중력 흘림 방지\"\n- 수평 패널 → violation=false (방향 제약 없음)\n\n**엔드포인트**: POST /sequence_validation/validate",
             "status": "done",
-            "testStrategy": "정상 순서 입력 (수직 패널 + top_to_bottom) → violation=false. 순서 위반 (수직 패널 + bottom_to_top) → violation=true, reason 확인. PRD §16.4 시나리오 D 데이터 검증 (있을 경우)."
+            "testStrategy": "정상 순서 입력 (수직 패널 + top_to_bottom) → violation=false. 순서 위반 (수직 패널 + bottom_to_top) → violation=true, reason 확인. PRD §16.4 시나리오 D 데이터 검증 (있을 경우).",
+            "parentId": "undefined"
           },
           {
             "id": 5,
@@ -1364,7 +1369,8 @@
             ],
             "details": "**입력 스키마**:\n```python\nclass PoseEstimationRequest:\n    current_pose: BVHPose         # 현재 작업자 자세 (6DOF or joint coordinates)\n    reference_pose: BVHPose       # 숙련자 참조 자세\n    imu_data: Optional[IMUData]   # IMU 센서 데이터 (선택)\n\nclass BVHPose:\n    joints: Dict[str, JointPosition]  # 관절명: 좌표\n\nclass JointPosition:\n    x: float\n    y: float\n    z: float\n    roll: float\n    pitch: float\n    yaw: float\n```\n\n**출력 스키마** (fixture):\n```python\nclass PoseEstimationResult:\n    deviation: Dict[str, float]    # 관절별 편차 각도 (degree)\n    correction_vector: CorrectionVector  # 교정 방향\n    similarity_score: float        # 유사도 점수 (0-1)\n\nclass CorrectionVector:\n    target_joint: str              # 교정 대상 관절\n    direction: str                 # 교정 방향 설명\n    angle_adjustment: float        # 조정 각도\n```\n\n**fixture 예시**:\n- deviation={\"wrist\": 8.0, \"elbow\": 5.0}\n- correction_vector={target_joint=\"wrist\", direction=\"8° 아래로 조정\", angle_adjustment=-8.0}\n- similarity_score=0.82\n\n**엔드포인트**: POST /pose_estimation/compare",
             "status": "done",
-            "testStrategy": "정상 입력 (current_pose, reference_pose 제공) → fixture 응답 포맷 검증. 유사한 자세 (편차 작음) → similarity_score 높음. 다른 자세 → deviation 존재 확인."
+            "testStrategy": "정상 입력 (current_pose, reference_pose 제공) → fixture 응답 포맷 검증. 유사한 자세 (편차 작음) → similarity_score 높음. 다른 자세 → deviation 존재 확인.",
+            "parentId": "undefined"
           },
           {
             "id": 6,
@@ -1375,7 +1381,8 @@
             ],
             "details": "**입력 스키마**:\n```python\nclass TimeseriesUpdateRequest:\n    session_id: str\n    timestamp: float\n    speed: float                   # m/s\n    distance: float                # mm\n    angle: float                   # degree\n\nclass TimeseriesQueryRequest:\n    session_id: str\n```\n\n**출력 스키마** (fixture):\n```python\nclass TimeseriesResult:\n    trend: str                     # \"increasing\", \"decreasing\", \"stable\"\n    speed_history: List[float]     # 최근 N턴 속도 이력\n    deviation: Dict[str, float]    # 평균 대비 편차\n    anomaly_segments: List[int]    # 이상 구간 인덱스\n```\n\n**fixture 로직**:\n- 세션별 상태를 메모리 딕셔너리에 저장 (session_id: state)\n- update 호출 시 state에 데이터 추가\n- query 호출 시 최근 데이터 기반 트렌드 계산 (간단한 선형 회귀 또는 평균 비교)\n\n**엔드포인트**:\n- POST /timeseries/update\n- GET /timeseries/query?session_id=...",
             "status": "done",
-            "testStrategy": "세션 생성 → update 3회 호출 → query로 speed_history 확인. 속도 증가 패턴 → trend=\"increasing\". 다른 세션 ID → 독립적 상태 유지 확인."
+            "testStrategy": "세션 생성 → update 3회 호출 → query로 speed_history 확인. 속도 증가 패턴 → trend=\"increasing\". 다른 세션 ID → 독립적 상태 유지 확인.",
+            "parentId": "undefined"
           },
           {
             "id": 7,
@@ -1386,7 +1393,8 @@
             ],
             "details": "**입력 스키마**:\n```python\nclass LocationTrackingRequest:\n    coordinates: List[Coordinate3D]  # 장비 궤적\n    ship_model_id: Optional[str]     # 선박 모델 ID (선택)\n\nclass Coordinate3D:\n    x: float\n    y: float\n    z: float\n    timestamp: float\n```\n\n**출력 스키마** (fixture):\n```python\nclass LocationTrackingResult:\n    current_zone_id: str           # 현재 구역 ID (예: \"B-3\")\n    zone_type: str                 # 구역 유형 (\"수직 패널\")\n    zone_characteristics: str      # 구역 특성 설명\n    uncovered_zones: List[str]     # 미도장 구역 리스트\n    coverage_pct: float            # 커버리지 % (0-1)\n```\n\n**fixture 예시**:\n- current_zone_id=\"B-3\"\n- zone_type=\"수직 패널\"\n- uncovered_zones=[\"B-4\", \"C-1\"]\n- coverage_pct=0.62\n\n**엔드포인트**: POST /location_tracking/identify",
             "status": "done",
-            "testStrategy": "정상 입력 (좌표 배열) → fixture 응답 포맷 검증. 빈 좌표 배열 → 에러 또는 기본값. PRD §16.4 시나리오 D (location context 필요 시) 데이터 검증."
+            "testStrategy": "정상 입력 (좌표 배열) → fixture 응답 포맷 검증. 빈 좌표 배열 → 에러 또는 기본값. PRD §16.4 시나리오 D (location context 필요 시) 데이터 검증.",
+            "parentId": "undefined"
           },
           {
             "id": 8,
@@ -1402,20 +1410,21 @@
             ],
             "details": "**통합 라우터** (main.py):\n```python\nfrom fastapi import FastAPI\nfrom mcp_servers import (\n    pose_estimation,\n    anomaly_detection,\n    timeseries,\n    location_tracking,\n    sequence_validation,\n    dft_judge\n)\n\napp = FastAPI(title=\"MCP Server Aggregator\")\n\napp.include_router(dft_judge.router, prefix=\"/dft_judge\", tags=[\"dft_judge\"])\napp.include_router(anomaly_detection.router, prefix=\"/anomaly_detection\", tags=[\"anomaly\"])\napp.include_router(sequence_validation.router, prefix=\"/sequence_validation\", tags=[\"sequence\"])\napp.include_router(pose_estimation.router, prefix=\"/pose_estimation\", tags=[\"pose\"])\napp.include_router(timeseries.router, prefix=\"/timeseries\", tags=[\"timeseries\"])\napp.include_router(location_tracking.router, prefix=\"/location_tracking\", tags=[\"location\"])\n\n@app.get(\"/health\")\ndef health():\n    return {\"status\": \"ok\", \"servers\": 6}\n```\n\n**통합 테스트 스크립트** (test_integration.py):\n- FastAPI TestClient 사용\n- 각 서버 health check\n- PRD §16.4 시나리오 D/E 기반 순차 호출 테스트\n- 우선순위별 테스트: dft_judge → anomaly/sequence/pose → timeseries → location\n\n**산출물**:\n- /workspace/mcp_servers/main.py\n- /workspace/mcp_servers/test_integration.py",
             "status": "done",
-            "testStrategy": "FastAPI TestClient로 6개 서버 엔드포인트 전체 호출 + 응답 포맷 검증. 시나리오 기반 순차 호출: ① dft_judge (실제 로직) ② anomaly_detection + sequence_validation (fixture) ③ timeseries 상태 누적. 전체 health check 응답 확인."
+            "testStrategy": "FastAPI TestClient로 6개 서버 엔드포인트 전체 호출 + 응답 포맷 검증. 시나리오 기반 순차 호출: ① dft_judge (실제 로직) ② anomaly_detection + sequence_validation (fixture) ③ timeseries 상태 누적. 전체 health check 응답 확인.",
+            "parentId": "undefined"
           }
         ]
       },
       {
-        "id": 17,
+        "id": "17",
         "title": "Agentic 평가셋 설계 및 CoT 평가 루브릭",
         "description": "Co-Pilot형 30문항 설계(Tool Calling 6, 이상탐지 해석 6, 순서/의사결정 6, CoT 추론 6, XR 콘텐츠 생성 6). tool_calls_required, reasoning_steps, expected_tool_sequence 필드 포함",
         "details": "1. 기존 50문항(문서 QA)과 별도로 Agentic 평가셋 30문항 작성\n2. 각 문항 구조: q_id, question, category, difficulty, tool_calls_required[], reasoning_steps, expected_tool_sequence[], expected_answer, evaluation_criteria\n3. Tool Calling 문항: 올바른 도구 선택 + 파라미터 구성 테스트\n4. 이상 탐지: 센서 데이터 → 원인 분석 → 조치 제안\n5. 순서/의사결정: 조건부 분기, 우선순위 판단\n6. CoT 추론: 다단계 추론 + 근거 연결\n7. XR 콘텐츠: 구조화된 지시문 생성\n8. CoT 평가 루브릭 작성 (추론 과정 품질 평가 기준)\n9. 산출물: /data/eval/eval_set_agentic.jsonl, /workspace/trainer/configs/eval_rubric_agentic.md",
         "testStrategy": "30문항 전체 필드 완성도 확인, JSON Schema 유효성 검증, 카테고리별 6문항 균형 확인, 기존 50문항과 중복 없음 확인",
         "priority": "high",
         "dependencies": [
-          5,
-          15
+          "5",
+          "15"
         ],
         "status": "done",
         "subtasks": [
@@ -1488,13 +1497,13 @@
         "updatedAt": "2026-03-11T06:30:00.000Z"
       },
       {
-        "id": 18,
+        "id": "18",
         "title": "Agent Orchestration 및 CoT 추론 파이프라인",
         "description": "RAG Core + Tool Calling + Chain of Thought 통합 Agent 파이프라인. instruction → 도구 선택 → MCP 호출 → context 수집 → CoT 추론 → XR 콘텐츠용 구조화 응답 생성",
         "status": "done",
         "dependencies": [
-          15,
-          16
+          "15",
+          "16"
         ],
         "priority": "high",
         "details": "1. Agent 파이프라인 설계: Architecture §4 [1]~[11] 단계 구현\n   instruction parsing → tool selection → MCP call → context aggregation → CoT reasoning → structured response\n2. Qwen3의 native function calling + Thinking Mode 활용한 도구 선택 로직 (Architecture §3.2.4 Thinking 역할)\n   - enable_thinking=True: 복잡한 요청에서 <think> 블록으로 추론 → tool_calls 생성\n   - enable_thinking=False: 단순 조회에서 직접 tool_calls 생성 (저지연)\n   - /think, /no_think 소프트 스위치로 턴별 모드 전환\n3. MCP Server 호출 및 응답 파싱 (Architecture §3.2.5 Tool Calling ↔ MCP Server)\n4. RAG 검색 + MCP 결과 + CoT 추론 통합 (Architecture §3.2.7 전체 맥락)\n5. 구조화된 응답 생성: XR 콘텐츠용 JSON 포함 (Architecture §3.2.8 Decoder + §3.2.9 Conversion Output Format)\n   - <think> 블록은 사용자 응답에서 strip하고, 디버그 로그에만 기록\n6. 세션 컨텍스트 순환 갱신: Architecture §6.3 구현 - 응답 후 Context 업데이트 → 다음 질문에 활용\n7. Qwen-Agent 프레임워크 활용 검토 (tool-calling template + MCP 통합 내장)\n8. PRD §16.4 시나리오 D/E/F 기준 end-to-end 시연\n9. 산출물: /workspace/trainer/scripts/agent_pipeline.py, /workspace/trainer/scripts/demo_agent.py",
@@ -1507,7 +1516,8 @@
             "dependencies": [],
             "details": "AgentPipeline 클래스: (1) instruction parsing (Conversion Request Format 역할), (2) context 수집 (환경 정보+사용자 입력), (3) LLM에 tools 파라미터 전달 → function calling 응답 수신, (4) tool_calls 파싱 → MCP 서버 호출, (5) MCP 결과 + RAG 검색 결과 통합 → context 구성, (6) CoT 추론 → 최종 응답 생성. 산출물: /workspace/trainer/scripts/agent_pipeline.py",
             "status": "done",
-            "testStrategy": "mock LLM 응답과 mock MCP 서버로 파이프라인 전체 흐름 단위 테스트."
+            "testStrategy": "mock LLM 응답과 mock MCP 서버로 파이프라인 전체 흐름 단위 테스트.",
+            "parentId": "undefined"
           },
           {
             "id": 2,
@@ -1518,7 +1528,8 @@
             ],
             "details": "T15의 6개 도구 JSON Schema를 Qwen3 tools 파라미터로 전달. Thinking Mode 활성 시 <think> 블록에서 도구 필요성 추론 후 tool_calls 생성. Non-thinking 모드에서는 직접 tool_calls 생성. 모델 응답에서 tool_calls 추출 → T15의 tool_calling_adapter로 라우팅. 다중 도구 호출(multi-tool) 지원: 단일 턴에서 여러 도구 동시 호출 가능. 도구 미사용 판단(RAG만으로 충분한 경우) 처리.",
             "status": "done",
-            "testStrategy": "시나리오 D(sequence_validation), E(dft_judge+anomaly_detection), F(RAG only) 각각에서 Qwen3 thinking/non-thinking 양쪽 모드에서 올바른 도구 선택 확인."
+            "testStrategy": "시나리오 D(sequence_validation), E(dft_judge+anomaly_detection), F(RAG only) 각각에서 Qwen3 thinking/non-thinking 양쪽 모드에서 올바른 도구 선택 확인.",
+            "parentId": "undefined"
           },
           {
             "id": 3,
@@ -1530,7 +1541,8 @@
             ],
             "details": "MCP 서버 HTTP 호출 (T16의 FastAPI 서버). 응답 파싱 + 에러 핸들링 (타임아웃, 서버 에러). RAG 검색: 기존 search_index.py 활용. context 통합 포맷: {mcp_results: {tool_name: result}, rag_context: [chunks], environment: {}, instruction: ''}. Architecture §6.3 Context 순환 갱신: 이전 턴의 context를 다음 턴에 전달하는 세션 관리.",
             "status": "done",
-            "testStrategy": "MCP mock 서버 + RAG 검색 결과 통합 후 context 포맷 검증. 세션 컨텍스트 2턴 연속 전달 테스트."
+            "testStrategy": "MCP mock 서버 + RAG 검색 결과 통합 후 context 포맷 검증. 세션 컨텍스트 2턴 연속 전달 테스트.",
+            "parentId": "undefined"
           },
           {
             "id": 4,
@@ -1541,7 +1553,8 @@
             ],
             "details": "Qwen3 Thinking Mode 활용: enable_thinking=True로 MCP 결과 + RAG 문서 + 환경 정보를 input으로, <think> 블록에서 단계적 추론 수행 → 최종 답변 도출. <think> 블록은 사용자 응답에서 strip, 디버그/평가 로그에만 기록. 응답 포맷: 일반 텍스트 답변 + 선택적 XR 콘텐츠 JSON (PRD §16.4 시나리오 F). Conversion Output Format: 응답 유형(text, xr_instruction, alert)에 따라 구조 분기. 추론 예산 제어(token budget) 파라미터 노출.",
             "status": "done",
-            "testStrategy": "시나리오 D/E/F 각각에서 CoT 추론 과정 + 최종 응답 구조 검증. XR JSON 포맷 유효성 확인."
+            "testStrategy": "시나리오 D/E/F 각각에서 CoT 추론 과정 + 최종 응답 구조 검증. XR JSON 포맷 유효성 확인.",
+            "parentId": "undefined"
           },
           {
             "id": 5,
@@ -1553,7 +1566,8 @@
             ],
             "details": "SessionContext 클래스: session_id별로 이전 턴의 mcp_results, rag_chunks, cot_reasoning을 저장. 다음 턴에서 관련 컨텍스트를 자동 주입. 컨텍스트 윈도우 관리: 최근 3턴까지 유지, 오래된 컨텍스트는 요약 후 압축. Vector DB에 세션 컨텍스트 벡터 저장 (Architecture §3.2.7).",
             "status": "done",
-            "testStrategy": "3턴 연속 대화 시나리오에서 이전 턴 컨텍스트 참조 확인. 컨텍스트 윈도우 초과 시 압축 동작 검증."
+            "testStrategy": "3턴 연속 대화 시나리오에서 이전 턴 컨텍스트 참조 확인. 컨텍스트 윈도우 초과 시 압축 동작 검증.",
+            "parentId": "undefined"
           },
           {
             "id": 6,
@@ -1565,19 +1579,20 @@
             ],
             "details": "demo_agent.py: 3개 시나리오를 순차 실행하여 Agent 파이프라인 전체 동작을 시연. 각 시나리오별 입력 데이터 사전 정의, MCP 서버 기동 → Agent 호출 → 응답 출력. 실행 로그에 tool_calls, mcp_results, cot_reasoning, final_response 각 단계를 기록. 산출물: /workspace/trainer/scripts/demo_agent.py",
             "status": "done",
-            "testStrategy": "3개 시나리오 모두 에러 없이 완료. 각 시나리오의 tool_calls가 expected_tool_sequence와 일치. 응답 포맷 검증."
+            "testStrategy": "3개 시나리오 모두 에러 없이 완료. 각 시나리오의 tool_calls가 expected_tool_sequence와 일치. 응답 포맷 검증.",
+            "parentId": "undefined"
           }
         ]
       },
       {
-        "id": 19,
+        "id": "19",
         "title": "Qwen3 파이프라인 마이그레이션 및 A/B 비교",
         "description": "Qwen2.5-7B-Instruct에서 Qwen3-4B로 기본 마이그레이션 후, Qwen3-8B와 A/B 비교 평가. 학습/추론 파이프라인 전체 업데이트. Thinking Mode 통합, 샘플링 파라미터 변경, chat template 대응.",
         "details": "1. 의존성 업그레이드: transformers>=4.51.0, trl/peft/bitsandbytes 최신\n2. 모델 다운로드: Qwen/Qwen3-4B (우선), Qwen/Qwen3-8B (비교용)\n3. train_qlora.py 업데이트:\n   - model_name 변경\n   - enable_thinking=False로 SFT 학습 (non-reasoning task)\n   - 샘플링 파라미터: temp=0.7, top_p=0.8, top_k=20 (non-thinking mode)\n4. run_qlora_eval.py 업데이트:\n   - Qwen3 chat template 적용 (enable_thinking 파라미터)\n   - <think> 블록 후처리 (응답에서 strip)\n   - 추론 모드 선택: 평가 시 thinking/non-thinking 양쪽 테스트\n5. generate_sft.py: SYSTEM_PROMPT + chat template 호환성 확인\n6. qlora_config.yaml: model_name_or_path, sampling params 업데이트\n7. Qwen3-4B QLoRA 학습 → 3-way 평가 (Iter3)\n8. Qwen3-8B QLoRA 학습 → 3-way 평가 → 4B와 비교\n9. 평가 기준: 기존 50문항 + 한국어 품질 + 추론 속도 + VRAM 사용량\n10. 최종 모델 선정 및 기존 adapter 경로 업데이트\n11. 산출물: 마이그레이션 비교 리포트, 업데이트된 파이프라인 스크립트",
         "testStrategy": "Qwen3-4B QLoRA 학습 정상 완료 (loss 수렴), 3-way 평가 RAG+QLoRA avg score >= 1.2, Qwen3-4B vs Qwen3-8B 비교표 작성, Qwen2.5-7B 대비 성능 비교 (regression 없음 확인)",
         "priority": "high",
         "dependencies": [
-          9
+          "9"
         ],
         "status": "done",
         "subtasks": [
@@ -1651,14 +1666,12 @@
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2026-03-11T12:55:00.000Z",
+      "lastModified": "2026-03-13T14:10:36.305Z",
       "taskCount": 19,
-      "completedCount": 10,
+      "completedCount": 18,
       "tags": [
         "master"
-      ],
-      "created": "2026-03-11T08:12:12.583Z",
-      "description": "Tasks for master context"
+      ]
     }
   }
 }

@@ -1,0 +1,25 @@
+{
+  "type": "function",
+  "function": {
+    "name": "vlm_analysis",
+    "description": "히트맵 경로와 선택적 스크린샷, 사전 리포트 JSON을 입력받아 VLM 기반 시각 분석 결과(관심영역, 이슈, 도막 분포, 추정 두께)를 생성한다. 현재는 향후 모델 연동을 위한 인터페이스 스텁이다.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "heatmap_path": {
+          "type": "string",
+          "description": "분석 대상 히트맵 이미지 파일 경로"
+        },
+        "screenshot_path": {
+          "type": "string",
+          "description": "선택 입력: 작업 화면 스크린샷 파일 경로"
+        },
+        "report_json": {
+          "type": "object",
+          "description": "선택 입력: 상위 파이프라인이 전달하는 사전 분석 리포트 JSON"
+        }
+      },
+      "required": ["heatmap_path"]
+    }
+  }
+}

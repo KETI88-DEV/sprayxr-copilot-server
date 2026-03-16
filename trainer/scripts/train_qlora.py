@@ -96,6 +96,55 @@ def build_model_and_tokenizer(config: Dict[str, Any]) -> tuple:
     return model, tokenizer
 
 
+TRAINING_CHAT_TEMPLATE = (
+    "{%- for message in messages %}"
+    "{%- if message.role == 'system' %}"
+    "{{- '<|im_start|>system\\n' + message.content + '<|im_end|>\\n' }}"
+    "{%- elif message.role == 'user' %}"
+    "{{- '<|im_start|>user\\n' + message.content + '<|im_end|>\\n' }}"
+    "{%- elif message.role == 'assistant' %}"
+    "{{- '<|im_start|>assistant\\n' }}"
+    "{%- generation %}"
+    "{{- message.content }}"
+    "{%- endgeneration %}"
+    "{{- '<|im_end|>\\n' }}"
+    "{%- elif message.role == 'tool' %}"
+    "{{- '<|im_start|>user\\n<tool_response>\\n' + message.content + '\\n</tool_response><|im_end|>\\n' }}"
+    "{%- endif %}"
+    "{%- endfor %}"
+    "{%- if add_generation_prompt %}"
+    "{{- '<|im_start|>assistant\\n' }}"
+    "{%- endif %}"
+)
+
+
+def _build_training_chat_template() -> str:
+    return TRAINING_CHAT_TEMPLATE
+
+
+def _verify_assistant_mask(tokenizer: Any) -> None:
+    test_msgs = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": "Hi there!"},
+    ]
+    result = tokenizer.apply_chat_template(
+        test_msgs, tokenize=True, return_dict=True,
+        return_assistant_tokens_mask=True,
+    )
+    mask = result.get("assistant_masks", [])
+    if 1 not in mask:
+        raise RuntimeError(
+            "Training chat template failed: no assistant tokens detected. "
+            "Check TRAINING_CHAT_TEMPLATE for missing {%% generation %%} markers."
+        )
+    assistant_ratio = sum(mask) / len(mask) if mask else 0
+    logger.info(
+        "Assistant-only loss enabled: %d/%d tokens (%.1f%%) will receive loss",
+        sum(mask), len(mask), assistant_ratio * 100,
+    )
+
+
 def build_lora_config(config: Dict[str, Any]) -> LoraConfig:
     lora_cfg = config["lora"]
     return LoraConfig(
@@ -132,6 +181,10 @@ def build_training_args(config: Dict[str, Any]) -> SFTConfig:
         logging_steps=train_cfg.get("logging_steps", 5),
         save_strategy=train_cfg.get("save_strategy", "epoch"),
         eval_strategy=train_cfg.get("eval_strategy", "epoch"),
+        load_best_model_at_end=True,
+        metric_for_best_model="eval_loss",
+        greater_is_better=False,
+        assistant_only_loss=True,
         seed=train_cfg.get("seed", 42),
         max_length=train_cfg.get("max_seq_length", 2048),
         max_grad_norm=train_cfg.get("max_grad_norm", 1.0),
@@ -173,6 +226,10 @@ def run_training(
     logger.info("Train samples: %d, Val samples: %d", len(train_dataset), len(val_dataset))
     logger.info("First example roles: %s", [m["role"] for m in train_dataset[0]["messages"]])
 
+    original_chat_template = tokenizer.chat_template
+    tokenizer.chat_template = _build_training_chat_template()
+    _verify_assistant_mask(tokenizer)
+
     model = get_peft_model(model, lora_config)
     trainable, total = model.get_nb_trainable_parameters()
     logger.info("Trainable parameters: %d / %d (%.2f%%)", trainable, total, 100 * trainable / total)
@@ -210,6 +267,7 @@ def run_training(
     logger.info("Training completed in %.1f seconds (%.1f minutes)", elapsed, elapsed / 60)
 
     logger.info("Saving LoRA adapter to %s", adapter_dir)
+    tokenizer.chat_template = original_chat_template
     model.save_pretrained(str(adapter_dir))
     tokenizer.save_pretrained(str(adapter_dir))
 

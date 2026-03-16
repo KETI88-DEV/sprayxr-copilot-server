@@ -1913,10 +1913,6 @@ def _fc_volume_augment() -> list[dict[str, Any]]:
     samples.extend(_multi_tool_samples())
     samples.extend(_multi_turn_samples())
 
-    samples.extend(_multi_tool_augment())
-    samples.extend(_multi_turn_augment())
-    samples.extend(_xr_content_samples())
-    samples.extend(_dft_judge_samples())
     return samples
 
 
