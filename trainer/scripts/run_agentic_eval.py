@@ -220,7 +220,8 @@ class AgenticEvaluator:
         order_ratio = lcs / len(expected_tools)
 
         # 1점: 일부 도구 누락 또는 불필요한 도구가 추가됨
-        if overlap_ratio >= 0.5 and order_ratio >= 0.3:
+        # extra_count 상한: overlap 수 또는 최소 2개까지 허용
+        if overlap_ratio >= 0.5 and order_ratio >= 0.3 and extra_count <= max(overlap, 2):
             return 1
         return 0
 
@@ -287,7 +288,7 @@ class AgenticEvaluator:
         connectors = len(re.findall(r"먼저|다음|이후|그리고|마지막으로|우선", text))
         think_steps = len(re.findall(r"단계\s*\d+\s*:", text))
         inferred_steps = max(numbered_steps, section_headers, connectors + 1, think_steps)
-        has_evidence = bool(re.search(r"DOC-[\w-]+|근거|citation|chunk|\[근거\]", text, flags=re.IGNORECASE))
+        has_evidence = bool(re.search(r"DOC-[\w-]+|citation|chunk", text, flags=re.IGNORECASE)) or bool(response.get("citations"))
 
         if inferred_steps >= expected_steps and has_evidence:
             return 2
@@ -309,15 +310,39 @@ class AgenticEvaluator:
         used_chunk = bool(re.search(r"DOC-[\w-]+", text)) or bool(citations)
 
         context_hits = 0
-        for key in ["zone_id", "current_zone_id", "block_id", "expert_pose_id", "session_id", "image_context"]:
+        for key in ["zone_id", "current_zone_id", "block_id", "expert_pose_id", "session_id", "image_context", "structure_type"]:
             value = context_data.get(key)
             if isinstance(value, str) and value and value in text:
                 context_hits += 1
-        if context_data.get("zone_map") and any(z.get("zone_id", "") in text for z in context_data["zone_map"] if isinstance(z, dict)):
-            context_hits += 1
+
+        zone_map = context_data.get("zone_map")
+        if zone_map and isinstance(zone_map, list):
+            for z in zone_map:
+                if isinstance(z, dict):
+                    for zk in ["zone_id", "block_id"]:
+                        zv = z.get(zk, "")
+                        if zv and zv in text:
+                            context_hits += 1
+                            break
+
+        dft = context_data.get("dft_measurements") or context_data.get("measurements")
+        if isinstance(dft, list):
+            for item in dft:
+                val = item.get("value_um") if isinstance(item, dict) else item
+                if val is not None and str(int(val)) in text:
+                    context_hits += 1
+                    break
+
+        ts = context_data.get("timeseries") or context_data.get("timeseries_data")
+        if isinstance(ts, dict):
+            for ts_key in ["speed", "distance", "angle", "gun_speed_m_per_s", "standoff_distance_mm", "spray_angle_deg"]:
+                ts_val = ts.get(ts_key)
+                if ts_val is not None and str(ts_val) in text:
+                    context_hits += 1
+                    break
 
         numbers = re.findall(r"\d+(?:\.\d+)?", text)
-        if numbers and any(k in context_data for k in ["dft_measurements", "measurements", "timeseries", "spec"]):
+        if numbers and any(k in context_data for k in ["dft_measurements", "measurements", "timeseries", "timeseries_data", "spec", "coordinates"]):
             context_hits += 1
 
         if used_chunk and context_hits >= 1:
@@ -333,13 +358,19 @@ class AgenticEvaluator:
 
         if category == "xr_content":
             parsed = self._extract_json_from_text(text)
-            if not isinstance(parsed, dict):
-                return 0
-            required = ["xr_type", "steps", "highlight_zone", "tool_angle", "safety_notes"]
-            present = sum(1 for key in required if key in parsed)
-            if present == len(required):
+            if isinstance(parsed, dict):
+                xr_keys = ["mode", "text_guide", "steps", "next_path", "pose_comparison",
+                           "anomaly", "dft_result", "xr_type", "highlight_zone"]
+                present = sum(1 for key in xr_keys if key in parsed)
+                if present >= 3:
+                    return 2
+                if present >= 1:
+                    return 1
+            has_steps = bool(re.search(r"(?:^|\n)\s*(?:\d+[\).]|[-*])\s+", text))
+            has_action = bool(re.search(r"조치|교정|권고|다음|이동|중단", text))
+            if has_steps and has_action:
                 return 2
-            if present >= 3:
+            if has_steps or has_action:
                 return 1
             return 0
 

@@ -190,20 +190,20 @@ def chart_score_progression(history: list[dict[str, Any]], outdir: Path) -> Path
 # ---------------------------------------------------------------------------
 
 def chart_radar_comparison(history: list[dict[str, Any]], outdir: Path) -> Path:
-    """5차원 레이더 차트 — Iter13 vs Iter14."""
+    """5차원 레이더 차트 — Iter14 vs Iter17."""
     dims = ["tool_selection", "param_correctness", "reasoning_depth",
             "context_integration", "response_structure"]
     dim_labels = ["Tool\nSelection", "Parameter\nCorrectness", "Reasoning\nDepth",
                   "Context\nIntegration", "Response\nStructure"]
 
-    iter13 = next((h for h in history if h["iter"] == "Iter13"), None)
     iter14 = next((h for h in history if h["iter"] == "Iter14"), None)
-    if not iter13 or not iter14:
-        logger.warning("Missing Iter13 or Iter14 data for radar chart")
+    iter17 = next((h for h in history if h["iter"] == "Iter17"), None)
+    if not iter14 or not iter17:
+        logger.warning("Missing Iter14 or Iter17 data for radar chart")
         return outdir / "radar_comparison.png"
 
-    vals_13 = [iter13.get(d, 0) for d in dims]
-    vals_14 = [iter14.get(d, 0) for d in dims]
+    vals_13 = [iter14.get(d, 0) for d in dims]
+    vals_14 = [iter17.get(d, 0) for d in dims]
     mvp_target = [1.5, 1.4, 1.4, 1.4, 1.3]
     prod_target = [1.8, 1.7, 1.6, 1.7, 1.7]
 
@@ -227,12 +227,12 @@ def chart_radar_comparison(history: list[dict[str, Any]], outdir: Path) -> Path:
     ax.fill(angles, vals_13, alpha=0.12, color=C["iter11"])
     ax.plot(angles, vals_13, "o-", color=C["iter11"], linewidth=2,
             markersize=7, markeredgecolor=C["white"], markeredgewidth=1.5,
-            label="Iter13 (5.43)")
+            label="Iter14 (4.97)")
 
     ax.fill(angles, vals_14, alpha=0.20, color=C["iter13"])
     ax.plot(angles, vals_14, "o-", color=C["iter13"], linewidth=2.5,
             markersize=8, markeredgecolor=C["white"], markeredgewidth=1.5,
-            label="Iter14 (4.97)")
+            label="Iter17 (5.30)")
 
     ax.set_xticks(angles[:-1])
     ax.set_xticklabels(dim_labels, fontsize=11, color=C["text"])
@@ -269,7 +269,7 @@ def chart_category_scores(outdir: Path) -> Path:
     """카테고리별 점수 수평 막대 그래프."""
     cat_labels = ["Tool\nCalling", "XR\nContent", "Anomaly\nInterpretation",
                   "Sequence\nDecision", "CoT\nReasoning"]
-    scores = [5.67, 5.33, 5.17, 5.00, 3.67]
+    scores = [5.83, 4.67, 5.50, 5.00, 5.50]
 
     fig, ax = plt.subplots(figsize=(11, 5.5))
 
@@ -289,7 +289,7 @@ def chart_category_scores(outdir: Path) -> Path:
 
     ax.set_xlim(0, 9.5)
     ax.set_xlabel("Score (/10)", fontsize=12)
-    ax.set_title("Category Scores — Iter14", fontsize=16, fontweight="bold", pad=12)
+    ax.set_title("Category Scores — Iter17 (rescored)", fontsize=16, fontweight="bold", pad=12)
     ax.invert_yaxis()
 
     target_patches = [
@@ -313,7 +313,7 @@ def chart_category_scores(outdir: Path) -> Path:
 
 def chart_score_distribution(outdir: Path) -> Path:
     """30문항 점수 분포 히스토그램."""
-    score_counts = {2: 1, 3: 8, 4: 6, 5: 4, 6: 5, 7: 4, 8: 1, 9: 1}
+    score_counts = {0: 1, 3: 5, 4: 7, 5: 4, 6: 5, 7: 2, 8: 2, 9: 4}
     scores_list = []
     for score, count in score_counts.items():
         scores_list.extend([score] * count)
@@ -347,7 +347,7 @@ def chart_score_distribution(outdir: Path) -> Path:
 
     ax.set_xlabel("Score (/10)", fontsize=12)
     ax.set_ylabel("Question Count", fontsize=12)
-    ax.set_title("Score Distribution — Iter14 (30 Questions)", fontsize=16,
+    ax.set_title("Score Distribution — Iter17 rescored (30 Questions)", fontsize=16,
                  fontweight="bold", pad=12)
     ax.set_xticks(range(2, 10))
     ax.set_ylim(0, max(n) + 2)
@@ -376,11 +376,10 @@ def chart_score_distribution(outdir: Path) -> Path:
 def chart_sft_composition(outdir: Path) -> Path:
     """SFT 데이터 구성 도넛 차트."""
     labels = [
-        "Document QA", "Original FC", "Location Tracking", "Pose Estimation",
-        "Sequence Validation", "Timeseries", "XR Content", "Multi-tool",
-        "Multi-turn (aug)",
+        "Document QA", "FC Single-turn", "FC Multi-turn",
+        "Tool Selection", "CoT Augment", "Medium Augment",
     ]
-    sizes = [433, 254, 15, 15, 15, 15, 10, 15, 12]
+    sizes = [380, 173, 14, 40, 20, 15]
 
     fig, ax = plt.subplots(figsize=(10, 8))
 
@@ -400,9 +399,9 @@ def chart_sft_composition(outdir: Path) -> Path:
     ax.text(0, -0.08, "samples", ha="center", va="center",
             fontsize=12, color=C["muted"])
 
-    original = 433 + 254
+    original = 380 + 173 + 14
     augmented = total - original
-    ax.text(0, -0.22, f"Original {original}  |  Augmented {augmented}",
+    ax.text(0, -0.22, f"Base {original}  |  Augmented {augmented}",
             ha="center", va="center", fontsize=10, color=C["subtext"],
             transform=ax.transData)
 

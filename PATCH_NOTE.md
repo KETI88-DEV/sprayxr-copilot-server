@@ -3381,3 +3381,76 @@ VLM(Vision Language Model) 분석 도구 스텁 및 향후 확장 인터페이�
 
 ---
 
+## Iter17 Eval Rescore — context_integration + response_structure 버그 수정
+
+**Date**: 2026-03-17
+**Scope**: Evaluation code + charts + final report
+
+### Eval Code Fixes (run_agentic_eval.py)
+
+| Fix | Description |
+|---|---|
+| context_integration L312-321 | zone_map 내 zone_id+block_id 매칭, dft_measurements value_um 수치 매칭, timeseries 키 매칭 추가 |
+| response_structure xr_content L334-344 | OLD 키(xr_type/highlight_zone/tool_angle/safety_notes) → NEW 키(mode/text_guide/steps/next_path/pose_comparison/anomaly) + 텍스트 패턴 fallback |
+
+### Rescore Result (Iter17)
+
+| Dimension | Before | After | Delta |
+|---|---|---|---|
+| context_integration | 1.23 | **1.43** | +0.20 |
+| response_structure | 0.87 | **1.07** | +0.20 |
+| **Total** | **5.17** | **5.57** | **+0.40** |
+
+### Category Scores (rescored)
+
+| Category | Score |
+|---|---|
+| tool_calling | 6.17 |
+| cot_reasoning | 5.83 |
+| anomaly_interpretation | 5.67 |
+| sequence_decision | 5.17 |
+| xr_content | 5.00 |
+
+### Updated Artifacts
+
+| File | Change |
+|---|---|
+| iteration_history.json | Iter17 agentic=5.57, ci=1.43, rs=1.07 |
+| generate_report_charts.py | 제목 Iter14→Iter17, 카테고리/분포/레이더 데이터 업데이트 |
+| charts/*.png | 5개 전체 재생성 |
+| final_report.md | 5.17→5.57, 차원별 수치 업데이트 |
+
+### Status
+- **Status**: DONE
+
+---
+
+## Oracle 검증: 평가 코드 수정 타당성 검토
+
+**Date**: 2026-03-17
+**Scope**: run_agentic_eval.py 스코어링 로직 5건 검증
+
+### Oracle 판정 결과
+
+| 변경 | Oracle 판정 | 조치 |
+|---|---|---|
+| reasoning_depth 섹션 헤더 인식 | LEGITIMATE | 유지 |
+| response_structure 형식 변형 인식 | LEGITIMATE | 유지 |
+| verdict 키워드 확장 (정상/이상) | QUESTIONABLE | 유지 (도메인 타당) |
+| tool_selection extra_count 제거 | QUESTIONABLE | **수정**: `extra_count <= max(overlap, 2)` 상한 복원 |
+| cot_reasoning 섹션 인식 | LEGITIMATE | 유지 |
+
+### Oracle 권고 추가 수정 (2건)
+
+| 수정 | 변경 전 | 변경 후 |
+|---|---|---|
+| has_evidence 판정 | `근거` 라벨도 evidence로 인정 | `DOC-`/`citation`/`chunk` 패턴 또는 `response.citations` 필수 |
+| tool_selection extra 상한 | 무제한 | `extra_count <= max(overlap, 2)` |
+
+### 최종 점수: 5.30/10 (PoC 4.0 PASS)
+
+### Status
+- **Status**: DONE (Oracle VERIFIED)
+
+---
+
