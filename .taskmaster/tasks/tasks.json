@@ -2049,7 +2049,7 @@
           "24",
           "25"
         ],
-        "status": "pending",
+        "status": "done",
         "subtasks": [
           {
             "id": 1,
@@ -2125,7 +2125,8 @@
         ],
         "complexity": 7,
         "recommendedSubtasks": 6,
-        "expansionPrompt": "Break into: (1) Create merge_sft.py script to combine 567 existing + 80 (T21) + 40 (T22) + 30 (T25) = 717 samples with deduplication, (2) Validate merged SFT dataset quality and format, (3) Execute QLoRA training (Iter15) with config validation and VRAM monitoring, (4) Run full agentic evaluation (30 items) with generate_agentic_responses.py, (5) Run DocQA regression test (50 items) with hallucination validation, (6) Generate Iter14 vs Iter15 comparative analysis report"
+        "expansionPrompt": "Break into: (1) Create merge_sft.py script to combine 567 existing + 80 (T21) + 40 (T22) + 30 (T25) = 717 samples with deduplication, (2) Validate merged SFT dataset quality and format, (3) Execute QLoRA training (Iter15) with config validation and VRAM monitoring, (4) Run full agentic evaluation (30 items) with generate_agentic_responses.py, (5) Run DocQA regression test (50 items) with hallucination validation, (6) Generate Iter14 vs Iter15 comparative analysis report",
+        "updatedAt": "2026-03-16T12:41:06.126Z"
       },
       {
         "id": "27",
@@ -2713,9 +2714,9 @@
     ],
     "metadata": {
       "version": "1.0.0",
-      "lastModified": "2026-03-16T06:08:15.555Z",
+      "lastModified": "2026-03-16T12:41:06.126Z",
       "taskCount": 34,
-      "completedCount": 24,
+      "completedCount": 25,
       "tags": [
         "master"
       ]

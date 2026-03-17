@@ -1,0 +1,62 @@
+# QLoRA Training Configuration
+# Task 8 → Task 19: Qwen3-4B 마이그레이션 (was Qwen2.5-7B-Instruct)
+
+model:
+  model_path: /models/Qwen3-4B
+  load_in_4bit: true
+  bnb_4bit_quant_type: nf4
+  bnb_4bit_use_double_quant: true
+  bnb_4bit_compute_dtype: bfloat16
+  use_safetensors: true
+  device_map: auto
+
+lora:
+  r: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  bias: none
+  target_modules:
+    - q_proj
+    - k_proj
+    - v_proj
+    - o_proj
+    - gate_proj
+    - up_proj
+    - down_proj
+
+training:
+  num_train_epochs: 3
+  per_device_train_batch_size: 1
+  per_device_eval_batch_size: 1
+  gradient_accumulation_steps: 8
+  learning_rate: 2.0e-4
+  lr_scheduler_type: cosine
+  warmup_ratio: 0.05
+  weight_decay: 0.01
+  max_seq_length: 2048
+  bf16: true
+  gradient_checkpointing: true
+  optim: adamw_8bit
+  logging_steps: 5
+  save_strategy: epoch
+  eval_strategy: epoch
+  seed: 42
+  dataloader_num_workers: 0
+  remove_unused_columns: false
+  max_grad_norm: 1.0
+
+data:
+  train_path: /data/sft/sft_train_v5.jsonl
+  val_path: /data/sft/sft_val.jsonl
+  system_prompt: "너는 선박 도장 분야 전문 AI 어시스턴트이다. 제공된 문서를 근거로 정확한 기술 정보를 제공하고, 답변 마지막에 근거 문서 ID를 반드시 명시한다. 근거가 부족하면 솔직히 '제공된 문서에 해당 정보가 없습니다'라고 답한다. 안전 관련 질문에는 항상 관련 규정을 함께 안내한다."
+
+output:
+  adapter_dir: /output/adapters/qwen3_4b_shipcoat_lora_iter16
+  checkpoint_dir: /output/checkpoints
+  log_dir: /logs
+
+# OOM fallback settings
+oom_fallback:
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 16
+  max_seq_length: 1024

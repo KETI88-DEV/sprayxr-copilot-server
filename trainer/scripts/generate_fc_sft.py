@@ -35,8 +35,10 @@ SYSTEM_PROMPT_FC = (
     '<tool_call>{"name": "dft_judge", "arguments": {"measurements": [95, 102, 88], '
     '"spec": {"nominal": 100, "tolerance_rule": "90/10"}}}</tool_call>\n\n'
     '예시 2: 이상 탐지 요청 시\n'
-    '<tool_call>{"name": "anomaly_detection", "arguments": {"image_context": "좌하단 저도막 패턴", '
-    '"dft_measurements": [85, 92, 78], "env": {"temperature": 28, "humidity": 65}}}</tool_call>\n\n'
+    '<tool_call>{"name": "anomaly_detection", "arguments": {"dft_measurements": [{"value_um": 85, "zone_id": "B-3", "position": "lower"}, '
+    '{"value_um": 92, "zone_id": "B-3", "position": "middle"}, {"value_um": 78, "zone_id": "B-3", "position": "lower"}], '
+    '"timeseries": {"gun_speed_m_per_s": [0.9, 0.85, 0.7], "standoff_distance_mm": [300, 310, 350], "spray_angle_deg": [72, 68, 55]}, '
+    '"zone_id": "B-3", "spec": {"nominal_um": 100, "tolerance_rule": "90/10"}}}</tool_call>\n\n'
     "도구 호출 후 결과를 종합하여 최종 답변을 생성한다. 여러 도구가 필요하면 모두 호출한다.\n\n"
     "[수치 정확성 규칙]\n"
     "수치 분석이 필요한 경우 반드시 도구를 호출하여 결과를 얻는다.\n"
@@ -52,6 +54,60 @@ SYSTEM_PROMPT_DOCQA = (
     "근거가 부족하면 솔직히 '제공된 문서에 해당 정보가 없습니다'라고 답한다. "
     "안전 관련 질문에는 항상 관련 규정을 함께 안내한다."
 )
+
+
+def _build_anomaly_args(
+    image_context: str,
+    dft_values: list[int],
+    zone_id: str,
+    position: str,
+) -> dict[str, Any]:
+    return {
+        "dft_measurements": [
+            {"value_um": value, "zone_id": zone_id, "position": position}
+            for value in dft_values
+        ],
+        "timeseries": {
+            "gun_speed_m_per_s": [0.45, 0.5, 0.55],
+            "standoff_distance_mm": [300, 310, 320],
+            "spray_angle_deg": [70, 68, 65],
+        },
+        "zone_id": zone_id,
+        "spec": {"nominal_um": 100, "tolerance_rule": "90/10"},
+        "image_context": image_context,
+    }
+
+
+def _build_pose_args(current_pose: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "mode": "compare",
+        "current_pose": current_pose,
+        "expert_pose_id": "EP-001",
+        "block_id": "BLK-A",
+    }
+
+
+def _build_sequence_args(zone_id: str, zone_type: str, position: str = "upper") -> dict[str, Any]:
+    return {
+        "zone_map": [
+            {
+                "zone_id": zone_id,
+                "block_id": "BLK-A",
+                "zone_type": zone_type,
+                "position": position,
+                "is_painted": False,
+            },
+            {
+                "zone_id": "A-2",
+                "block_id": "BLK-A",
+                "zone_type": "수직 패널",
+                "position": "middle",
+                "is_painted": False,
+            },
+        ],
+        "current_zone_id": zone_id,
+        "structure_type": "block",
+    }
 
 
 def _dft_judge_samples() -> list[dict[str, Any]]:
@@ -149,77 +205,87 @@ def _anomaly_detection_samples() -> list[dict[str, Any]]:
         {
             "image_context": "좌하단 B-3-L 구역 청색 집중, 전체 대비 저도막 패턴",
             "dft": [84, 86, 91, 89, 87],
-            "env": {"temperature": 22, "humidity": 68},
+            "zone_id": "B-3",
+            "position": "lower",
             "anomaly_type": "저도막",
             "cause": "스프레이 건 거리가 과도하거나 이동 속도가 빠름",
         },
         {
             "image_context": "상단 A-2-R 구역 적색 집중, 과도막 패턴 확인",
             "dft": [135, 142, 128, 145, 138],
-            "env": {"temperature": 18, "humidity": 55},
+            "zone_id": "A-2",
+            "position": "upper",
             "anomaly_type": "과도막",
             "cause": "도장 작업 시 분사량이 과다하거나 겹침 도장이 발생",
         },
         {
             "image_context": "중앙부 불균일 분포, 줄무늬 패턴",
             "dft": [95, 112, 88, 118, 92],
-            "env": {"temperature": 25, "humidity": 72},
+            "zone_id": "B-3",
+            "position": "middle",
             "anomaly_type": "불균일 도막",
             "cause": "분사 패턴의 오버랩 불균일 또는 분사 압력 변동",
         },
         {
             "image_context": "전체 균일 분포, 이상 없음",
             "dft": [98, 102, 100, 99, 101],
-            "env": {"temperature": 20, "humidity": 60},
+            "zone_id": "B-3",
+            "position": "middle",
             "anomaly_type": "정상",
             "cause": None,
         },
         {
             "image_context": "우측 경계부 급격한 두께 변화, 엣지 효과",
             "dft": [105, 108, 72, 68, 65],
-            "env": {"temperature": 23, "humidity": 65},
+            "zone_id": "B-3",
+            "position": "middle",
             "anomaly_type": "엣지 저도막",
             "cause": "모서리 부위에서 도료 비산으로 도막 부착 불량",
         },
         {
             "image_context": "하단 전체 황색 경고, 건조 불량 의심",
             "dft": [110, 115, 108, 112, 118],
-            "env": {"temperature": 15, "humidity": 88},
+            "zone_id": "B-3",
+            "position": "lower",
             "anomaly_type": "건조 불량 의심",
             "cause": "높은 습도와 낮은 온도로 인한 건조 지연",
         },
         {
             "image_context": "좌측 상단 핀홀 패턴 산재",
             "dft": [92, 95, 88, 90, 94],
-            "env": {"temperature": 32, "humidity": 45},
+            "zone_id": "A-2",
+            "position": "upper",
             "anomaly_type": "핀홀 결함",
             "cause": "고온 환경에서 용제 급속 증발로 인한 핀홀 발생",
         },
         {
             "image_context": "구역 전체 흐름 자국 (sagging) 관찰",
             "dft": [125, 130, 140, 145, 150],
-            "env": {"temperature": 20, "humidity": 70},
+            "zone_id": "VP-1",
+            "position": "middle",
             "anomaly_type": "처짐(sagging)",
             "cause": "수직면에서 과다 도포로 인한 도료 흘러내림",
         },
         {
             "image_context": "B-1 구역 전체적으로 균일, 소규모 편차 존재",
             "dft": [97, 103, 99, 101, 98],
-            "env": {"temperature": 21, "humidity": 62},
+            "zone_id": "B-1",
+            "position": "middle",
             "anomaly_type": "정상 (미세 편차)",
             "cause": None,
         },
         {
             "image_context": "용접선 주변 도막 두께 급감",
             "dft": [100, 95, 55, 48, 92],
-            "env": {"temperature": 24, "humidity": 58},
+            "zone_id": "B-3",
+            "position": "middle",
             "anomaly_type": "용접부 저도막",
             "cause": "용접 비드 표면 요철로 인한 도료 부착 불량",
         },
     ]
 
     questions = [
-        "히트맵 분석 결과 이상이 있는지 확인해줘. DFT: {dft}, 환경: 온도 {temp}°C 습도 {hum}%.",
+        "히트맵 분석 결과 이상이 있는지 확인해줘. DFT: {dft}.",
         "이 구역 히트맵에서 {ctx} 패턴이 보여. DFT {dft}와 함께 이상 탐지 해줘.",
         "DFT가 {dft}이고 히트맵에서 {ctx} 상태야. 이상 여부 분석해줘.",
         "현재 구역 히트맵과 DFT 데이터로 도막 상태 진단해줘. DFT: {dft}.",
@@ -230,14 +296,14 @@ def _anomaly_detection_samples() -> list[dict[str, Any]]:
         q_tmpl = random.choice(questions)
         question = q_tmpl.format(
             dft=sc["dft"], ctx=sc["image_context"],
-            temp=sc["env"]["temperature"], hum=sc["env"]["humidity"],
         )
 
-        tc_args = {
-            "image_context": sc["image_context"],
-            "dft_measurements": sc["dft"],
-            "env": sc["env"],
-        }
+        tc_args = _build_anomaly_args(
+            image_context=sc["image_context"],
+            dft_values=sc["dft"],
+            zone_id=sc["zone_id"],
+            position=sc.get("position", "middle"),
+        )
         tc_json = json.dumps(
             {"name": "anomaly_detection", "arguments": tc_args},
             ensure_ascii=False,
@@ -369,31 +435,26 @@ def _pose_estimation_samples() -> list[dict[str, Any]]:
     scenarios = [
         {
             "current": {"joints": {"wrist_r": {"x": 0.12, "y": -0.05, "z": 0.38, "roll": 5, "pitch": 18, "yaw": 8}}},
-            "reference": {"joints": {"wrist_r": {"x": 0.1, "y": -0.02, "z": 0.41, "roll": 2, "pitch": 12, "yaw": 3}}},
             "deviation": "높음",
             "correction": "손목 각도를 낮추고, 팔꿈치를 몸에 더 가까이 유지",
         },
         {
             "current": {"joints": {"wrist_r": {"x": 0.10, "y": -0.02, "z": 0.40, "roll": 3, "pitch": 13, "yaw": 4}}},
-            "reference": {"joints": {"wrist_r": {"x": 0.1, "y": -0.02, "z": 0.41, "roll": 2, "pitch": 12, "yaw": 3}}},
             "deviation": "낮음",
             "correction": "현재 자세가 숙련자 패턴과 유사하여 양호",
         },
         {
             "current": {"joints": {"wrist_r": {"x": 0.15, "y": -0.08, "z": 0.35, "roll": 10, "pitch": 25, "yaw": 12}}},
-            "reference": {"joints": {"wrist_r": {"x": 0.1, "y": -0.02, "z": 0.41, "roll": 2, "pitch": 12, "yaw": 3}}},
             "deviation": "매우 높음",
             "correction": "스프레이 건 각도가 크게 벗어남, 숙련자 기준 자세로 교정 필요",
         },
         {
             "current": {"joints": {"wrist_r": {"x": 0.11, "y": -0.03, "z": 0.39, "roll": 3, "pitch": 14, "yaw": 5}}},
-            "reference": {"joints": {"wrist_r": {"x": 0.1, "y": -0.02, "z": 0.41, "roll": 2, "pitch": 12, "yaw": 3}}},
             "deviation": "중간",
             "correction": "z축 거리를 약간 늘리고 pitch를 줄여 균일한 분사 확보",
         },
         {
             "current": {"joints": {"wrist_r": {"x": 0.09, "y": -0.01, "z": 0.42, "roll": 1, "pitch": 11, "yaw": 2}}},
-            "reference": {"joints": {"wrist_r": {"x": 0.1, "y": -0.02, "z": 0.41, "roll": 2, "pitch": 12, "yaw": 3}}},
             "deviation": "매우 낮음",
             "correction": "매우 양호한 자세, 숙련자 수준",
         },
@@ -409,17 +470,14 @@ def _pose_estimation_samples() -> list[dict[str, Any]]:
     samples = []
     for sc in scenarios:
         question = random.choice(questions)
-        tc_args = {
-            "current_pose": sc["current"],
-            "reference_pose": sc["reference"],
-        }
+        tc_args = _build_pose_args(sc["current"])
         tc_json = json.dumps(
             {"name": "pose_estimation", "arguments": tc_args},
             ensure_ascii=False,
         )
 
         answer = (
-            f"작업자 자세를 숙련자 패턴과 비교 분석하겠습니다.\n\n"
+            f"작업자 자세를 숙련자 자세(EP-001) 대비 비교 분석하겠습니다.\n\n"
             f"<tool_call>{tc_json}</tool_call>\n\n"
             f"자세 편차 수준: **{sc['deviation']}**\n"
             f"교정 방향: {sc['correction']}\n\n"
@@ -445,63 +503,53 @@ def _sequence_validation_samples() -> list[dict[str, Any]]:
     """Generate sequence validation tool-calling samples."""
     scenarios = [
         {
-            "trajectory": [{"x": 100, "y": 300, "z": 200}, {"x": 100, "y": 250, "z": 200}, {"x": 100, "y": 200, "z": 200}],
             "zone_id": "B-3",
             "zone_type": "hull_side",
-            "ref_pattern": "top_to_bottom",
+            "position": "upper",
             "valid": False,
-            "correction": "bottom_to_top",
+            "next_zone": "A-2",
         },
         {
-            "trajectory": [{"x": 100, "y": 50, "z": 200}, {"x": 100, "y": 100, "z": 200}, {"x": 100, "y": 150, "z": 200}],
             "zone_id": "B-3",
             "zone_type": "hull_side",
-            "ref_pattern": "bottom_to_top",
+            "position": "middle",
             "valid": True,
-            "correction": None,
+            "next_zone": "A-2",
         },
         {
-            "trajectory": [{"x": 50, "y": 100, "z": 200}, {"x": 100, "y": 100, "z": 200}, {"x": 150, "y": 100, "z": 200}],
             "zone_id": "A-1",
             "zone_type": "upper_deck",
-            "ref_pattern": "left_to_right",
+            "position": "upper",
             "valid": True,
-            "correction": None,
+            "next_zone": "A-2",
         },
         {
-            "trajectory": [{"x": 200, "y": 100, "z": 200}, {"x": 150, "y": 100, "z": 200}, {"x": 100, "y": 100, "z": 200}],
             "zone_id": "A-1",
             "zone_type": "upper_deck",
-            "ref_pattern": "left_to_right",
+            "position": "middle",
             "valid": False,
-            "correction": "left_to_right",
+            "next_zone": "A-2",
         },
         {
-            "trajectory": [{"x": 100, "y": 200, "z": 100}, {"x": 100, "y": 150, "z": 100}, {"x": 100, "y": 100, "z": 100}],
             "zone_id": "C-2",
             "zone_type": "bottom",
-            "ref_pattern": "top_to_bottom",
+            "position": "lower",
             "valid": True,
-            "correction": None,
+            "next_zone": "A-2",
         },
     ]
 
     questions = [
-        "현재 도장 순서가 맞는지 확인해줘.",
-        "이 구역의 stroke 순서를 숙련자 기준으로 검증해줘.",
-        "작업자의 도장 방향이 올바른지 분석해줘.",
-        "도장 순서 위반 여부를 확인해줘.",
+        "현재 구역 다음 구역이 맞는지 확인해줘.",
+        "이 구역 기준으로 다음 구역과 도장 순서 안내해줘.",
+        "작업자의 다음 구역 이동 순서를 분석해줘.",
+        "도장 순서 안내 기준으로 다음 구역 확인해줘.",
     ]
 
     samples = []
     for sc in scenarios:
         question = random.choice(questions)
-        tc_args = {
-            "trajectory": sc["trajectory"],
-            "zone_id": sc["zone_id"],
-            "zone_type": sc["zone_type"],
-            "reference_pattern": sc["ref_pattern"],
-        }
+        tc_args = _build_sequence_args(sc["zone_id"], sc["zone_type"], sc.get("position", "upper"))
         tc_json = json.dumps(
             {"name": "sequence_validation", "arguments": tc_args},
             ensure_ascii=False,
@@ -509,20 +557,20 @@ def _sequence_validation_samples() -> list[dict[str, Any]]:
 
         if sc["valid"]:
             answer = (
-                f"도장 순서를 검증하겠습니다.\n\n"
+                f"다음 구역과 도장 순서를 검증하겠습니다.\n\n"
                 f"<tool_call>{tc_json}</tool_call>\n\n"
                 f"검증 결과: **적합**\n"
-                f"현재 작업자의 stroke 순서가 {sc['zone_id']} 구역({sc['zone_type']})의 "
-                f"숙련자 참조 패턴({sc['ref_pattern']})과 일치합니다.\n\n"
+                f"현재 구역은 {sc['zone_id']}({sc['zone_type']})이며 도장 순서 안내 기준을 충족합니다. "
+                f"다음 구역: {sc['next_zone']}\n\n"
                 f"근거 문서 ID: DOC-doc_0044-C0227"
             )
         else:
             answer = (
-                f"도장 순서를 검증하겠습니다.\n\n"
+                f"다음 구역과 도장 순서를 검증하겠습니다.\n\n"
                 f"<tool_call>{tc_json}</tool_call>\n\n"
-                f"검증 결과: **부적합 — 순서 위반**\n"
-                f"현재 stroke 방향이 {sc['zone_id']} 구역의 숙련자 패턴({sc['ref_pattern']})과 "
-                f"다릅니다. 교정 방향은 '{sc['correction']}'으로 변경해야 합니다.\n\n"
+                f"검증 결과: **부적합**\n"
+                f"현재 구역({sc['zone_id']}) 기준 도장 순서 안내가 필요합니다. "
+                f"다음 구역: {sc['next_zone']}\n\n"
                 f"근거 문서 ID: DOC-doc_0044-C0227"
             )
 
@@ -808,70 +856,60 @@ def _pose_estimation_augment() -> list[dict[str, Any]]:
     scenarios = [
         {
             "current": {"joints": {"wrist_r": {"x": 0.16, "y": -0.07, "z": 0.35, "roll": 12, "pitch": 26, "yaw": 14}}},
-            "reference": {"joints": {"wrist_r": {"x": 0.10, "y": -0.02, "z": 0.41, "roll": 2, "pitch": 12, "yaw": 3}}},
             "deviation": "매우 높음",
             "correction": "손목 pitch/yaw를 크게 줄여 스프레이 건 축을 피도체 정면으로 맞추세요.",
             "question": "스프레이 건 각도 교정이 필요한지 봐줘.",
         },
         {
             "current": {"joints": {"wrist_r": {"x": 0.13, "y": -0.04, "z": 0.38, "roll": 6, "pitch": 17, "yaw": 7}}},
-            "reference": {"joints": {"wrist_r": {"x": 0.10, "y": -0.02, "z": 0.41, "roll": 2, "pitch": 12, "yaw": 3}}},
             "deviation": "높음",
             "correction": "손목 각도를 완만하게 낮춰 분사 폭 편차를 줄이세요.",
             "question": "자세 교정 포인트 알려줘.",
         },
         {
             "current": {"joints": {"wrist_r": {"x": 0.11, "y": -0.03, "z": 0.39, "roll": 4, "pitch": 14, "yaw": 5}}},
-            "reference": {"joints": {"wrist_r": {"x": 0.10, "y": -0.02, "z": 0.41, "roll": 2, "pitch": 12, "yaw": 3}}},
             "deviation": "중간",
             "correction": "거리(z) 2cm 확보와 pitch 2° 보정으로 균일도를 높이세요.",
             "question": "숙련자 비교해서 편차가 어느 정도야?",
         },
         {
             "current": {"joints": {"wrist_r": {"x": 0.10, "y": -0.02, "z": 0.40, "roll": 3, "pitch": 13, "yaw": 4}}},
-            "reference": {"joints": {"wrist_r": {"x": 0.10, "y": -0.02, "z": 0.41, "roll": 2, "pitch": 12, "yaw": 3}}},
             "deviation": "낮음",
             "correction": "현재 자세를 유지하되 손목 yaw만 미세 조정하세요.",
             "question": "현재 자세가 안정적인지 확인해줘.",
         },
         {
             "current": {"joints": {"wrist_r": {"x": 0.09, "y": -0.01, "z": 0.42, "roll": 1, "pitch": 11, "yaw": 2}}},
-            "reference": {"joints": {"wrist_r": {"x": 0.10, "y": -0.02, "z": 0.41, "roll": 2, "pitch": 12, "yaw": 3}}},
             "deviation": "매우 낮음",
             "correction": "숙련자 패턴과 거의 일치합니다. 현재 자세를 유지하세요.",
             "question": "숙련자랑 비교해 자세 수준이 어때?",
         },
         {
             "current": {"joints": {"elbow_r": {"x": 0.22, "y": 0.11, "z": 0.34, "roll": 18, "pitch": 30, "yaw": 11}}},
-            "reference": {"joints": {"elbow_r": {"x": 0.18, "y": 0.08, "z": 0.38, "roll": 10, "pitch": 20, "yaw": 6}}},
             "deviation": "높음",
             "correction": "팔꿈치를 몸통 쪽으로 당겨 분사 궤적을 안정화하세요.",
             "question": "팔꿈치 중심으로 자세 교정해줘.",
         },
         {
             "current": {"joints": {"elbow_r": {"x": 0.20, "y": 0.10, "z": 0.36, "roll": 14, "pitch": 24, "yaw": 8}}},
-            "reference": {"joints": {"elbow_r": {"x": 0.18, "y": 0.08, "z": 0.38, "roll": 10, "pitch": 20, "yaw": 6}}},
             "deviation": "중간",
             "correction": "팔꿈치 pitch를 3~4° 줄여 오버랩 편차를 줄이세요.",
             "question": "스프레이 작업에서 팔꿈치 각도 어때?",
         },
         {
             "current": {"joints": {"elbow_r": {"x": 0.18, "y": 0.08, "z": 0.38, "roll": 11, "pitch": 21, "yaw": 6}}},
-            "reference": {"joints": {"elbow_r": {"x": 0.18, "y": 0.08, "z": 0.38, "roll": 10, "pitch": 20, "yaw": 6}}},
             "deviation": "낮음",
             "correction": "팔꿈치 자세는 양호합니다. 손목 궤적만 일정하게 유지하세요.",
             "question": "숙련자 비교 기준으로 자세 진단해줘.",
         },
         {
             "current": {"joints": {"shoulder_r": {"x": 0.34, "y": 0.24, "z": 0.52, "roll": 20, "pitch": 33, "yaw": 16}}},
-            "reference": {"joints": {"shoulder_r": {"x": 0.30, "y": 0.20, "z": 0.56, "roll": 12, "pitch": 24, "yaw": 8}}},
             "deviation": "매우 높음",
             "correction": "어깨 elevation을 낮추고 상완 회전을 줄여 피로를 줄이세요.",
             "question": "장시간 작업용 자세 교정안 줘.",
         },
         {
             "current": {"joints": {"shoulder_r": {"x": 0.32, "y": 0.22, "z": 0.54, "roll": 16, "pitch": 28, "yaw": 12}}},
-            "reference": {"joints": {"shoulder_r": {"x": 0.30, "y": 0.20, "z": 0.56, "roll": 12, "pitch": 24, "yaw": 8}}},
             "deviation": "높음",
             "correction": "어깨 roll을 줄여 분사선을 수평에 가깝게 유지하세요.",
             "question": "어깨 각도 기준으로 스프레이 건 자세 봐줘.",
@@ -881,12 +919,6 @@ def _pose_estimation_augment() -> list[dict[str, Any]]:
                 "joints": {
                     "wrist_r": {"x": 0.13, "y": -0.05, "z": 0.37, "roll": 7, "pitch": 19, "yaw": 8},
                     "elbow_r": {"x": 0.21, "y": 0.10, "z": 0.35, "roll": 16, "pitch": 27, "yaw": 9},
-                }
-            },
-            "reference": {
-                "joints": {
-                    "wrist_r": {"x": 0.10, "y": -0.02, "z": 0.41, "roll": 2, "pitch": 12, "yaw": 3},
-                    "elbow_r": {"x": 0.18, "y": 0.08, "z": 0.38, "roll": 10, "pitch": 20, "yaw": 6},
                 }
             },
             "deviation": "높음",
@@ -900,12 +932,6 @@ def _pose_estimation_augment() -> list[dict[str, Any]]:
                     "shoulder_r": {"x": 0.31, "y": 0.21, "z": 0.55, "roll": 14, "pitch": 26, "yaw": 10},
                 }
             },
-            "reference": {
-                "joints": {
-                    "wrist_r": {"x": 0.10, "y": -0.02, "z": 0.41, "roll": 2, "pitch": 12, "yaw": 3},
-                    "shoulder_r": {"x": 0.30, "y": 0.20, "z": 0.56, "roll": 12, "pitch": 24, "yaw": 8},
-                }
-            },
             "deviation": "중간",
             "correction": "손목은 미세 조정, 어깨는 2° 완화해 분사 안정성을 높이세요.",
             "question": "숙련자 비교해서 관절별 편차 분석해줘.",
@@ -917,19 +943,12 @@ def _pose_estimation_augment() -> list[dict[str, Any]]:
                     "shoulder_r": {"x": 0.30, "y": 0.20, "z": 0.56, "roll": 13, "pitch": 25, "yaw": 9},
                 }
             },
-            "reference": {
-                "joints": {
-                    "elbow_r": {"x": 0.18, "y": 0.08, "z": 0.38, "roll": 10, "pitch": 20, "yaw": 6},
-                    "shoulder_r": {"x": 0.30, "y": 0.20, "z": 0.56, "roll": 12, "pitch": 24, "yaw": 8},
-                }
-            },
             "deviation": "낮음",
             "correction": "상완 라인 유지 상태가 양호합니다. 현재 패턴을 유지하세요.",
             "question": "스프레이 건 각도와 상체 자세 같이 봐줘.",
         },
         {
             "current": {"joints": {"shoulder_r": {"x": 0.29, "y": 0.19, "z": 0.57, "roll": 11, "pitch": 23, "yaw": 7}}},
-            "reference": {"joints": {"shoulder_r": {"x": 0.30, "y": 0.20, "z": 0.56, "roll": 12, "pitch": 24, "yaw": 8}}},
             "deviation": "매우 낮음",
             "correction": "숙련자 자세와 거의 동일합니다.",
             "question": "자세가 숙련자 수준인지 최종 확인해줘.",
@@ -942,13 +961,6 @@ def _pose_estimation_augment() -> list[dict[str, Any]]:
                     "shoulder_r": {"x": 0.35, "y": 0.25, "z": 0.51, "roll": 21, "pitch": 34, "yaw": 17},
                 }
             },
-            "reference": {
-                "joints": {
-                    "wrist_r": {"x": 0.10, "y": -0.02, "z": 0.41, "roll": 2, "pitch": 12, "yaw": 3},
-                    "elbow_r": {"x": 0.18, "y": 0.08, "z": 0.38, "roll": 10, "pitch": 20, "yaw": 6},
-                    "shoulder_r": {"x": 0.30, "y": 0.20, "z": 0.56, "roll": 12, "pitch": 24, "yaw": 8},
-                }
-            },
             "deviation": "매우 높음",
             "correction": "전반적인 관절 각도가 과도합니다. 손목-팔꿈치-어깨를 순차 교정하세요.",
             "question": "초보자용 자세 교정안을 만들어줘.",
@@ -957,10 +969,7 @@ def _pose_estimation_augment() -> list[dict[str, Any]]:
 
     samples = []
     for sc in scenarios:
-        tc_args = {
-            "current_pose": sc["current"],
-            "reference_pose": sc["reference"],
-        }
+        tc_args = _build_pose_args(sc["current"])
         tc_json = json.dumps(
             {"name": "pose_estimation", "arguments": tc_args},
             ensure_ascii=False,
@@ -973,7 +982,7 @@ def _pose_estimation_augment() -> list[dict[str, Any]]:
                 {
                     "role": "assistant",
                     "content": (
-                        "작업자 자세를 숙련자 기준과 비교 분석하겠습니다.\n\n"
+                        "작업자 자세를 숙련자 자세(EP-001) 기준과 비교 분석하겠습니다.\n\n"
                         f"<tool_call>{tc_json}</tool_call>\n\n"
                         f"자세 편차 수준은 **{sc['deviation']}**이며, 교정 방향은 {sc['correction']}\n\n"
                         "근거 문서 ID: DOC-doc_0044-C0227"
@@ -997,7 +1006,7 @@ def _sequence_validation_augment() -> list[dict[str, Any]]:
             ],
             "zone_id": "VP-1",
             "zone_type": "수직 패널",
-            "reference_pattern": "bottom_to_top",
+            "zone_map": [{"zone_id": "A-1", "block_id": "BLK-A", "zone_type": "수직 패널", "position": "upper", "is_painted": False}], "current_zone_id": "A-1", "structure_type": "block",
             "valid": False,
             "detected": "top_to_bottom",
             "question": "수직 패널 작업 방향이 맞는지 검증해줘.",
@@ -1010,7 +1019,7 @@ def _sequence_validation_augment() -> list[dict[str, Any]]:
             ],
             "zone_id": "VP-2",
             "zone_type": "수직 패널",
-            "reference_pattern": "bottom_to_top",
+            "zone_map": [{"zone_id": "A-1", "block_id": "BLK-A", "zone_type": "수직 패널", "position": "upper", "is_painted": False}], "current_zone_id": "A-1", "structure_type": "block",
             "valid": True,
             "detected": "bottom_to_top",
             "question": "순서 위반 여부 확인해줘.",
@@ -1023,7 +1032,7 @@ def _sequence_validation_augment() -> list[dict[str, Any]]:
             ],
             "zone_id": "HP-1",
             "zone_type": "수평 패널",
-            "reference_pattern": "left_to_right",
+            "zone_map": [{"zone_id": "A-1", "block_id": "BLK-A", "zone_type": "수직 패널", "position": "upper", "is_painted": False}], "current_zone_id": "A-1", "structure_type": "block",
             "valid": True,
             "detected": "left_to_right",
             "question": "stroke 패턴이 기준과 같은지 봐줘.",
@@ -1036,7 +1045,7 @@ def _sequence_validation_augment() -> list[dict[str, Any]]:
             ],
             "zone_id": "HP-2",
             "zone_type": "수평 패널",
-            "reference_pattern": "left_to_right",
+            "zone_map": [{"zone_id": "A-1", "block_id": "BLK-A", "zone_type": "수직 패널", "position": "upper", "is_painted": False}], "current_zone_id": "A-1", "structure_type": "block",
             "valid": False,
             "detected": "right_to_left",
             "question": "작업 방향 위반인지 알려줘.",
@@ -1049,7 +1058,7 @@ def _sequence_validation_augment() -> list[dict[str, Any]]:
             ],
             "zone_id": "CV-1",
             "zone_type": "곡면",
-            "reference_pattern": "right_to_left",
+            "zone_map": [{"zone_id": "A-1", "block_id": "BLK-A", "zone_type": "수직 패널", "position": "upper", "is_painted": False}], "current_zone_id": "A-1", "structure_type": "block",
             "valid": True,
             "detected": "right_to_left",
             "question": "곡면 구역 순서 검증해줘.",
@@ -1062,7 +1071,7 @@ def _sequence_validation_augment() -> list[dict[str, Any]]:
             ],
             "zone_id": "CV-2",
             "zone_type": "곡면",
-            "reference_pattern": "right_to_left",
+            "zone_map": [{"zone_id": "A-1", "block_id": "BLK-A", "zone_type": "수직 패널", "position": "upper", "is_painted": False}], "current_zone_id": "A-1", "structure_type": "block",
             "valid": False,
             "detected": "left_to_right",
             "question": "곡면 작업 stroke 패턴이 맞아?",
@@ -1075,7 +1084,7 @@ def _sequence_validation_augment() -> list[dict[str, Any]]:
             ],
             "zone_id": "ED-1",
             "zone_type": "모서리",
-            "reference_pattern": "top_to_bottom",
+            "zone_map": [{"zone_id": "A-1", "block_id": "BLK-A", "zone_type": "수직 패널", "position": "upper", "is_painted": False}], "current_zone_id": "A-1", "structure_type": "block",
             "valid": True,
             "detected": "top_to_bottom",
             "question": "모서리 구역 도장 순서가 올바른지 확인해줘.",
@@ -1088,7 +1097,7 @@ def _sequence_validation_augment() -> list[dict[str, Any]]:
             ],
             "zone_id": "ED-2",
             "zone_type": "모서리",
-            "reference_pattern": "top_to_bottom",
+            "zone_map": [{"zone_id": "A-1", "block_id": "BLK-A", "zone_type": "수직 패널", "position": "upper", "is_painted": False}], "current_zone_id": "A-1", "structure_type": "block",
             "valid": False,
             "detected": "bottom_to_top",
             "question": "순서 위반 체크해줘.",
@@ -1101,7 +1110,7 @@ def _sequence_validation_augment() -> list[dict[str, Any]]:
             ],
             "zone_id": "HP-3",
             "zone_type": "수평 패널",
-            "reference_pattern": "left_to_right",
+            "zone_map": [{"zone_id": "A-1", "block_id": "BLK-A", "zone_type": "수직 패널", "position": "upper", "is_painted": False}], "current_zone_id": "A-1", "structure_type": "block",
             "valid": True,
             "detected": "left_to_right",
             "question": "작업 방향 검증해줘.",
@@ -1114,7 +1123,7 @@ def _sequence_validation_augment() -> list[dict[str, Any]]:
             ],
             "zone_id": "HP-4",
             "zone_type": "수평 패널",
-            "reference_pattern": "right_to_left",
+            "zone_map": [{"zone_id": "A-1", "block_id": "BLK-A", "zone_type": "수직 패널", "position": "upper", "is_painted": False}], "current_zone_id": "A-1", "structure_type": "block",
             "valid": True,
             "detected": "right_to_left",
             "question": "수평 패널 stroke 패턴 확인해줘.",
@@ -1127,7 +1136,7 @@ def _sequence_validation_augment() -> list[dict[str, Any]]:
             ],
             "zone_id": "VP-4",
             "zone_type": "수직 패널",
-            "reference_pattern": "top_to_bottom",
+            "zone_map": [{"zone_id": "A-1", "block_id": "BLK-A", "zone_type": "수직 패널", "position": "upper", "is_painted": False}], "current_zone_id": "A-1", "structure_type": "block",
             "valid": True,
             "detected": "top_to_bottom",
             "question": "수직 패널 작업 방향 적합한지 봐줘.",
@@ -1140,7 +1149,7 @@ def _sequence_validation_augment() -> list[dict[str, Any]]:
             ],
             "zone_id": "VP-5",
             "zone_type": "수직 패널",
-            "reference_pattern": "top_to_bottom",
+            "zone_map": [{"zone_id": "A-1", "block_id": "BLK-A", "zone_type": "수직 패널", "position": "upper", "is_painted": False}], "current_zone_id": "A-1", "structure_type": "block",
             "valid": False,
             "detected": "bottom_to_top",
             "question": "순서 위반 여부 확인해줘.",
@@ -1153,7 +1162,7 @@ def _sequence_validation_augment() -> list[dict[str, Any]]:
             ],
             "zone_id": "CV-3",
             "zone_type": "곡면",
-            "reference_pattern": "right_to_left",
+            "zone_map": [{"zone_id": "A-1", "block_id": "BLK-A", "zone_type": "수직 패널", "position": "upper", "is_painted": False}], "current_zone_id": "A-1", "structure_type": "block",
             "valid": True,
             "detected": "right_to_left",
             "question": "곡면 구역 작업 방향 분석해줘.",
@@ -1166,7 +1175,7 @@ def _sequence_validation_augment() -> list[dict[str, Any]]:
             ],
             "zone_id": "CV-4",
             "zone_type": "곡면",
-            "reference_pattern": "right_to_left",
+            "zone_map": [{"zone_id": "A-1", "block_id": "BLK-A", "zone_type": "수직 패널", "position": "upper", "is_painted": False}], "current_zone_id": "A-1", "structure_type": "block",
             "valid": False,
             "detected": "left_to_right",
             "question": "stroke 방향 위반인지 확인해줘.",
@@ -1179,7 +1188,7 @@ def _sequence_validation_augment() -> list[dict[str, Any]]:
             ],
             "zone_id": "ED-3",
             "zone_type": "모서리",
-            "reference_pattern": "top_to_bottom",
+            "zone_map": [{"zone_id": "A-1", "block_id": "BLK-A", "zone_type": "수직 패널", "position": "upper", "is_painted": False}], "current_zone_id": "A-1", "structure_type": "block",
             "valid": True,
             "detected": "top_to_bottom",
             "question": "모서리 작업 순서 검증해줘.",
@@ -1189,10 +1198,9 @@ def _sequence_validation_augment() -> list[dict[str, Any]]:
     samples = []
     for sc in scenarios:
         tc_args = {
-            "trajectory": sc["trajectory"],
-            "zone_id": sc["zone_id"],
+                        "zone_id": sc["zone_id"],
             "zone_type": sc["zone_type"],
-            "reference_pattern": sc["reference_pattern"],
+            "zone_map": sc.get("zone_map", [{"zone_id": "A-1", "block_id": "BLK-A", "zone_type": "수직 패널", "position": "upper", "is_painted": False}]), "current_zone_id": sc.get("current_zone_id", "A-1"), "structure_type": "block",
         }
         tc_json = json.dumps(
             {"name": "sequence_validation", "arguments": tc_args},
@@ -1201,11 +1209,11 @@ def _sequence_validation_augment() -> list[dict[str, Any]]:
         ctx_str = json.dumps(tc_args, ensure_ascii=False)
         if sc["valid"]:
             analysis = (
-                f"검증 결과 **적합**입니다. 감지 패턴({sc['detected']})이 참조 패턴({sc['reference_pattern']})과 일치합니다."
+                f"검증 결과 **적합**입니다. 감지 패턴({sc['detected']})이 참조 패턴({sc.get('structure_type', 'block')})과 일치합니다."
             )
         else:
             analysis = (
-                f"검증 결과 **부적합**입니다. 감지 패턴({sc['detected']})이 참조 패턴({sc['reference_pattern']})과 다르므로 순서를 교정하세요."
+                f"검증 결과 **부적합**입니다. 감지 패턴({sc['detected']})이 참조 패턴({sc.get('structure_type', 'block')})과 다르므로 순서를 교정하세요."
             )
         samples.append({
             "messages": [
@@ -1234,105 +1242,105 @@ def _timeseries_augment() -> list[dict[str, Any]]:
             "action": "update",
             "session_id": "sess-ts-aug-001",
             "data": {"timestamp": 1710300001, "speed": 0.82, "distance": 295, "angle": 49},
-            "env": {"temperature": 20, "humidity": 63},
+            "ambient": {"temp_c": 20, "rh_pct": 63},
             "question": "속도 변화 추세 확인을 위해 현재 값을 업데이트해줘.",
         },
         {
             "action": "query",
             "session_id": "sess-ts-aug-002",
             "data": None,
-            "env": None,
+            "ambient": None,
             "question": "최근 작업 추세 확인해줘.",
         },
         {
             "action": "update",
             "session_id": "sess-ts-aug-003",
             "data": {"timestamp": 1710300121, "speed": 1.18, "distance": 338, "angle": 41},
-            "env": {"temperature": 24, "humidity": 58},
+            "ambient": {"temp_c": 24, "rh_pct": 58},
             "question": "속도/거리/각도 데이터 기록해줘.",
         },
         {
             "action": "query",
             "session_id": "sess-ts-aug-004",
             "data": None,
-            "env": {"temperature": 26, "humidity": 71},
+            "ambient": {"temp_c": 26, "rh_pct": 71},
             "question": "환경 데이터 포함해서 시계열 추세 확인해줘.",
         },
         {
             "action": "update",
             "session_id": "sess-ts-aug-005",
             "data": {"timestamp": 1710300241, "speed": 0.91, "distance": 312, "angle": 53},
-            "env": None,
+            "ambient": None,
             "question": "작업 속도 변화 분석용 업데이트 해줘.",
         },
         {
             "action": "query",
             "session_id": "sess-ts-aug-006",
             "data": None,
-            "env": None,
+            "ambient": None,
             "question": "속도 추세와 편차 조회해줘.",
         },
         {
             "action": "update",
             "session_id": "sess-ts-aug-007",
             "data": {"timestamp": 1710300361, "speed": 1.05, "distance": 320, "angle": 47},
-            "env": {"temperature": 22, "humidity": 66},
+            "ambient": {"temp_c": 22, "rh_pct": 66},
             "question": "환경 조건과 함께 현재 시점 데이터 반영해줘.",
         },
         {
             "action": "query",
             "session_id": "sess-ts-aug-008",
             "data": None,
-            "env": {"temperature": 28, "humidity": 74},
+            "ambient": {"temp_c": 28, "rh_pct": 74},
             "question": "습도 상승 구간에서 속도 변화 추세 확인해줘.",
         },
         {
             "action": "update",
             "session_id": "sess-ts-aug-009",
             "data": {"timestamp": 1710300481, "speed": 0.88, "distance": 302, "angle": 56},
-            "env": None,
+            "ambient": None,
             "question": "각도 변화가 큰 구간 데이터 업데이트해줘.",
         },
         {
             "action": "query",
             "session_id": "sess-ts-aug-010",
             "data": None,
-            "env": None,
+            "ambient": None,
             "question": "현재 세션 추세 확인 부탁해.",
         },
         {
             "action": "update",
             "session_id": "sess-ts-aug-011",
             "data": {"timestamp": 1710300601, "speed": 1.22, "distance": 346, "angle": 39},
-            "env": {"temperature": 19, "humidity": 52},
+            "ambient": {"temp_c": 19, "rh_pct": 52},
             "question": "고속 구간 데이터 시계열에 추가해줘.",
         },
         {
             "action": "query",
             "session_id": "sess-ts-aug-012",
             "data": None,
-            "env": {"temperature": 17, "humidity": 80},
+            "ambient": {"temp_c": 17, "rh_pct": 80},
             "question": "저온/고습 조건에서 추세 확인해줘.",
         },
         {
             "action": "update",
             "session_id": "sess-ts-aug-013",
             "data": {"timestamp": 1710300721, "speed": 0.97, "distance": 315, "angle": 45},
-            "env": None,
+            "ambient": None,
             "question": "중립 조건 데이터 업데이트해줘.",
         },
         {
             "action": "query",
             "session_id": "sess-ts-aug-014",
             "data": None,
-            "env": None,
+            "ambient": None,
             "question": "속도 변화 추세를 다시 조회해줘.",
         },
         {
             "action": "update",
             "session_id": "sess-ts-aug-015",
             "data": {"timestamp": 1710300841, "speed": 1.09, "distance": 327, "angle": 43},
-            "env": {"temperature": 23, "humidity": 61},
+            "ambient": {"temp_c": 23, "rh_pct": 61},
             "question": "환경 데이터 포함해서 업데이트해줘.",
         },
     ]
@@ -1355,8 +1363,8 @@ def _timeseries_augment() -> list[dict[str, Any]]:
             analysis = f"세션 {sc['session_id']}의 속도/거리/각도 추세를 조회해 편차 변화를 확인했습니다."
 
         context_data: dict[str, Any] = {"timeseries": tc_args}
-        if sc["env"] is not None:
-            context_data["env"] = sc["env"]
+        if sc["ambient"] is not None:
+            context_data["ambient"] = sc["ambient"]
 
         tc_json = json.dumps({"name": "timeseries", "arguments": tc_args}, ensure_ascii=False)
         ctx_str = json.dumps(context_data, ensure_ascii=False)
@@ -1403,7 +1411,8 @@ def _xr_content_samples() -> list[dict[str, Any]]:
                 "wrist_r": {"x": 0.12 + idx * 0.001, "y": -0.04, "z": 0.38, "roll": 5 + idx % 3, "pitch": 16 + idx % 4, "yaw": 6 + idx % 3}
             }
         }
-        reference_pose = {
+        expert_pose_id = "EP-001"  # NEW schema
+        expert_pose_ref_data = {
             "joints": {
                 "wrist_r": {"x": 0.10, "y": -0.02, "z": 0.41, "roll": 2, "pitch": 12, "yaw": 3}
             }
@@ -1412,7 +1421,7 @@ def _xr_content_samples() -> list[dict[str, Any]]:
             "coordinates": coords,
             "ship_model_id": f"HULL-XR-20{idx:02d}",
             "current_pose": current_pose,
-            "reference_pose": reference_pose,
+            "mode": "compare", "expert_pose_id": "EP-001", "block_id": "BLK-A",
         }
 
         tc_loc = json.dumps(
@@ -1430,7 +1439,7 @@ def _xr_content_samples() -> list[dict[str, Any]]:
                 "name": "pose_estimation",
                 "arguments": {
                     "current_pose": current_pose,
-                    "reference_pose": reference_pose,
+                    "mode": "compare", "expert_pose_id": "EP-001", "block_id": "BLK-A",
                 },
             },
             ensure_ascii=False,
@@ -1493,12 +1502,12 @@ def _multi_tool_augment() -> list[dict[str, Any]]:
             ],
             "zone_id": f"HP-{idx}",
             "zone_type": "수평 패널",
-            "reference_pattern": "left_to_right",
+            "zone_map": [{"zone_id": "A-1", "block_id": "BLK-A", "zone_type": "수직 패널", "position": "upper", "is_painted": False}], "current_zone_id": "A-1", "structure_type": "block",
         }
         context_data = {
             "timeseries": ts_args,
             "sequence_validation": seq_args,
-            "env": {"temperature": 20 + idx, "humidity": 60 + idx * 2},
+            "zone_id": f"B-{idx+1}", "position": "middle",
         }
         tc_ts = json.dumps({"name": "timeseries", "arguments": ts_args}, ensure_ascii=False)
         tc_seq = json.dumps({"name": "sequence_validation", "arguments": seq_args}, ensure_ascii=False)
@@ -1529,7 +1538,7 @@ def _multi_tool_augment() -> list[dict[str, Any]]:
         anm_args = {
             "image_context": f"B-{idx}-L 구역 국부 저도막 패턴",
             "dft_measurements": meas,
-            "env": {"temperature": 22 + idx, "humidity": 64 + idx},
+            "zone_id": f"B-{idx+1}", "position": "middle",
         }
         dft_args = {"measurements": meas, "spec": {"nominal": 100, "tolerance_rule": "90/10"}}
         context_data = {"location": loc_args, "anomaly": anm_args, "dft": dft_args}
@@ -1565,7 +1574,7 @@ def _multi_tool_augment() -> list[dict[str, Any]]:
         anm_args = {
             "image_context": f"중앙부 교차 패턴 idx-{idx}",
             "dft_measurements": meas,
-            "env": {"temperature": 23 + idx, "humidity": 62 + idx * 2},
+            "zone_id": f"B-{idx+1}", "position": "middle",
         }
         dft_args = {"measurements": meas, "spec": {"nominal": 100, "tolerance_rule": "90/10"}}
         context_data = {"timeseries": ts_args, "anomaly": anm_args, "dft": dft_args}
@@ -1604,7 +1613,7 @@ def _multi_tool_augment() -> list[dict[str, Any]]:
             ],
             "zone_id": f"VP-{idx+5}",
             "zone_type": "수직 패널",
-            "reference_pattern": "bottom_to_top",
+            "zone_map": [{"zone_id": "A-1", "block_id": "BLK-A", "zone_type": "수직 패널", "position": "upper", "is_painted": False}], "current_zone_id": "A-1", "structure_type": "block",
         }
         ts_args = {
             "action": "query",
@@ -1642,7 +1651,7 @@ def _multi_tool_augment() -> list[dict[str, Any]]:
             ],
             "zone_id": f"HP-{idx+6}",
             "zone_type": "수평 패널",
-            "reference_pattern": "left_to_right",
+            "zone_map": [{"zone_id": "A-1", "block_id": "BLK-A", "zone_type": "수직 패널", "position": "upper", "is_painted": False}], "current_zone_id": "A-1", "structure_type": "block",
         }
         ts_args = {
             "action": "update",
@@ -1652,7 +1661,7 @@ def _multi_tool_augment() -> list[dict[str, Any]]:
         anm_args = {
             "image_context": f"수평 패널 스트릭 패턴 idx-{idx}",
             "dft_measurements": [90 + idx, 97 + idx, 85 + idx, 104 + idx, 93 + idx],
-            "env": {"temperature": 21 + idx, "humidity": 67 + idx},
+            "zone_id": f"B-{idx+1}", "position": "middle",
         }
         context_data = {"sequence": seq_args, "timeseries": ts_args, "anomaly": anm_args}
         tc_seq = json.dumps({"name": "sequence_validation", "arguments": seq_args}, ensure_ascii=False)
@@ -1727,14 +1736,14 @@ def _multi_turn_augment() -> list[dict[str, Any]]:
             ],
             "zone_id": f"VP-{idx+6}",
             "zone_type": "수직 패널",
-            "reference_pattern": "bottom_to_top",
+            "zone_map": [{"zone_id": "A-1", "block_id": "BLK-A", "zone_type": "수직 패널", "position": "upper", "is_painted": False}], "current_zone_id": "A-1", "structure_type": "block",
         }
         tool_result = json.dumps({
             "status": "success",
             "result": {
                 "valid": False if idx == 1 else True,
                 "detected_pattern": "top_to_bottom" if idx == 1 else "bottom_to_top",
-                "reference_pattern": "bottom_to_top",
+                "zone_map": [{"zone_id": "A-1", "block_id": "BLK-A", "zone_type": "수직 패널", "position": "upper", "is_painted": False}], "current_zone_id": "A-1", "structure_type": "block",
                 "correction": "reverse_direction" if idx == 1 else "none",
             },
         }, ensure_ascii=False)
@@ -1802,11 +1811,7 @@ def _multi_turn_augment() -> list[dict[str, Any]]:
                     "wrist_r": {"x": 0.12 + idx * 0.01, "y": -0.05, "z": 0.37, "roll": 5 + idx, "pitch": 17 + idx * 2, "yaw": 7 + idx}
                 }
             },
-            "reference_pose": {
-                "joints": {
-                    "wrist_r": {"x": 0.10, "y": -0.02, "z": 0.41, "roll": 2, "pitch": 12, "yaw": 3}
-                }
-            },
+            "mode": "compare", "expert_pose_id": "EP-001", "block_id": "BLK-A",
         }
         tool_result = json.dumps({
             "status": "success",
@@ -1844,7 +1849,7 @@ def _multi_turn_augment() -> list[dict[str, Any]]:
                 "arguments": {
                     "image_context": f"하단 저도막 분포 idx-{idx}",
                     "dft_measurements": meas,
-                    "env": {"temperature": 22 + idx, "humidity": 67 + idx},
+                    "zone_id": f"B-{idx+1}", "position": "middle",
                 },
             },
             {
@@ -1869,7 +1874,7 @@ def _multi_turn_augment() -> list[dict[str, Any]]:
         context_data = {
             "image_context": f"하단 저도막 분포 idx-{idx}",
             "dft_measurements": meas,
-            "env": {"temperature": 22 + idx, "humidity": 67 + idx},
+            "zone_id": f"B-{idx+1}", "position": "middle",
             "spec": {"nominal": 100, "tolerance_rule": "90/10"},
         }
         samples.append({
@@ -1927,7 +1932,7 @@ def _multi_tool_samples() -> list[dict[str, Any]]:
         {"name": "anomaly_detection", "arguments": {
             "image_context": "하단 영역 저도막 패턴",
             "dft_measurements": meas1,
-            "env": {"temperature": 22, "humidity": 68},
+            "zone_id": "B-3", "position": "lower",
         }}, ensure_ascii=False,
     )
     tc2_json = json.dumps(
@@ -1943,7 +1948,7 @@ def _multi_tool_samples() -> list[dict[str, Any]]:
                 "[환경 데이터]\n"
                 f"image_context: \"하단 영역 저도막 패턴\"\n"
                 f"dft_measurements: {meas1}\n"
-                f"env: {{\"temperature\": 22, \"humidity\": 68}}\n"
+                f"zone_id: \"B-3\"\n"
                 f"spec: {json.dumps(spec1, ensure_ascii=False)}\n\n"
                 "질문: 이 DFT 데이터에 이상이 있는지 확인하고 합격 여부도 알려줘."
             )},
@@ -1975,7 +1980,7 @@ def _multi_tool_samples() -> list[dict[str, Any]]:
             "trajectory": traj2,
             "zone_id": "B-3",
             "zone_type": "hull_side",
-            "reference_pattern": "bottom_to_top",
+            "zone_map": [{"zone_id": "A-1", "block_id": "BLK-A", "zone_type": "수직 패널", "position": "upper", "is_painted": False}], "current_zone_id": "A-1", "structure_type": "block",
         }}, ensure_ascii=False,
     )
     samples.append({
@@ -1986,7 +1991,7 @@ def _multi_tool_samples() -> list[dict[str, Any]]:
                 f"coordinates: {json.dumps(coords2, ensure_ascii=False)}\n"
                 f"trajectory: {json.dumps(traj2, ensure_ascii=False)}\n"
                 f"ship_model_id: \"HULL-2024-001\"\n"
-                f"reference_pattern: \"bottom_to_top\"\n\n"
+                f"구역 순서: zone_map 기반 블록/구역 간 순서 안내\n\n"
                 "질문: 현재 구역 위치 확인하고 도장 순서가 맞는지도 확인해줘."
             )},
             {"role": "assistant", "content": (
@@ -2013,7 +2018,7 @@ def _multi_tool_samples() -> list[dict[str, Any]]:
     tc6_json = json.dumps(
         {"name": "pose_estimation", "arguments": {
             "current_pose": cur_pose,
-            "reference_pose": ref_pose,
+            "mode": "compare", "expert_pose_id": "EP-001", "block_id": "BLK-A",
         }}, ensure_ascii=False,
     )
     samples.append({
@@ -2023,7 +2028,7 @@ def _multi_tool_samples() -> list[dict[str, Any]]:
                 "[환경 데이터]\n"
                 f"coordinates: {json.dumps(coords3, ensure_ascii=False)}\n"
                 f"current_pose: {json.dumps(cur_pose, ensure_ascii=False)}\n"
-                f"reference_pose: {json.dumps(ref_pose, ensure_ascii=False)}\n\n"
+                f"숙련자 자세 ID: EP-001\n\n"
                 "질문: 이 구역의 도장 방법을 XR 가이드로 만들어줘."
             )},
             {"role": "assistant", "content": (
@@ -2052,7 +2057,7 @@ def _multi_tool_samples() -> list[dict[str, Any]]:
         {"name": "anomaly_detection", "arguments": {
             "image_context": "구역 중앙 저도막과 과도막이 교차",
             "dft_measurements": meas4,
-            "env": {"temperature": 24, "humidity": 65},
+            "zone_id": "B-3", "position": "lower",
         }}, ensure_ascii=False,
     )
     tc9_json = json.dumps(
@@ -2068,7 +2073,7 @@ def _multi_tool_samples() -> list[dict[str, Any]]:
                 f"timeseries_data: {json.dumps(ts_args['data'], ensure_ascii=False)}\n"
                 f"image_context: \"구역 중앙 저도막과 과도막이 교차\"\n"
                 f"dft_measurements: {meas4}\n"
-                f"env: {{\"temperature\": 24, \"humidity\": 65}}\n"
+                f"zone_id: \"B-3\"\n"
                 f"spec: {json.dumps(spec4, ensure_ascii=False)}\n\n"
                 "질문: 최근 30분간 DFT 편차가 커졌어. 공정 최적화를 위해 원인 체인을 분석해줘."
             )},
@@ -2097,8 +2102,8 @@ def _multi_tool_samples() -> list[dict[str, Any]]:
     traj5 = [{"x": 100, "y": 50, "z": 200}, {"x": 100, "y": 100, "z": 200}, {"x": 100, "y": 150, "z": 200}]
 
     tc_loc = json.dumps({"name": "location_tracking", "arguments": {"coordinates": coords5}}, ensure_ascii=False)
-    tc_pose = json.dumps({"name": "pose_estimation", "arguments": {"current_pose": cur5, "reference_pose": ref5}}, ensure_ascii=False)
-    tc_seq = json.dumps({"name": "sequence_validation", "arguments": {"trajectory": traj5, "zone_id": "B-2", "zone_type": "hull_side", "reference_pattern": "bottom_to_top"}}, ensure_ascii=False)
+    tc_pose = json.dumps({"name": "pose_estimation", "arguments": {"current_pose": cur5, "mode": "compare", "expert_pose_id": "EP-001", "block_id": "BLK-A"}}, ensure_ascii=False)
+    tc_seq = json.dumps({"name": "sequence_validation", "arguments": {"trajectory": traj5, "zone_id": "B-2", "zone_type": "hull_side", "zone_map": [{"zone_id": "A-1", "block_id": "BLK-A", "zone_type": "수직 패널", "position": "upper", "is_painted": False}], "current_zone_id": "A-1", "structure_type": "block"}}, ensure_ascii=False)
     tc_ts = json.dumps({"name": "timeseries", "arguments": {"action": "update", "session_id": "sess-coach-001", "data": {"timestamp": 1710002400, "speed": 0.95, "distance": 310, "angle": 44}}}, ensure_ascii=False)
 
     samples.append({
@@ -2108,7 +2113,7 @@ def _multi_tool_samples() -> list[dict[str, Any]]:
                 "[환경 데이터]\n"
                 f"coordinates: {json.dumps(coords5, ensure_ascii=False)}\n"
                 f"current_pose: {json.dumps(cur5, ensure_ascii=False)}\n"
-                f"reference_pose: {json.dumps(ref5, ensure_ascii=False)}\n"
+                f"숙련자 자세 ID: EP-001\n"
                 f"trajectory: {json.dumps(traj5, ensure_ascii=False)}\n"
                 f"session_id: \"sess-coach-001\"\n"
                 f"timeseries_data: {{\"timestamp\": 1710002400, \"speed\": 0.95, \"distance\": 310, \"angle\": 44}}\n\n"
@@ -2323,7 +2328,7 @@ def _multi_turn_samples() -> list[dict[str, Any]]:
         {"name": "anomaly_detection", "arguments": {
             "image_context": "좌하단 B-3-L 구역 청색 집중, 저도막 패턴",
             "dft_measurements": [84, 86, 91, 89, 87],
-            "env": {"temperature": 22, "humidity": 68},
+            "zone_id": "B-3", "position": "lower",
         }}, ensure_ascii=False,
     )
     tool_result_mt3 = json.dumps({
@@ -2344,7 +2349,7 @@ def _multi_turn_samples() -> list[dict[str, Any]]:
                 "[환경 데이터]\n"
                 "image_context: \"좌하단 B-3-L 구역 청색 집중, 저도막 패턴\"\n"
                 "dft_measurements: [84, 86, 91, 89, 87]\n"
-                "env: {\"temperature\": 22, \"humidity\": 68}\n\n"
+                "zone_id: \"B-3\"\n\n"
                 "질문: 히트맵에서 이상이 있는지 확인해줘."
             )},
             {"role": "assistant", "content": f"히트맵 이상 탐지를 위해 도구를 호출합니다.\n\n<tool_call>{tc_mt3}</tool_call>"},
@@ -2368,7 +2373,7 @@ def _multi_turn_samples() -> list[dict[str, Any]]:
     cur_pose = {"joints": {"wrist_r": {"x": 0.12, "y": -0.05, "z": 0.38, "roll": 5, "pitch": 18, "yaw": 8}}}
     ref_pose = {"joints": {"wrist_r": {"x": 0.1, "y": -0.02, "z": 0.41, "roll": 2, "pitch": 12, "yaw": 3}}}
     tc_mt4 = json.dumps(
-        {"name": "pose_estimation", "arguments": {"current_pose": cur_pose, "reference_pose": ref_pose}},
+        {"name": "pose_estimation", "arguments": {"current_pose": cur_pose, "mode": "compare", "expert_pose_id": "EP-001", "block_id": "BLK-A"}},
         ensure_ascii=False,
     )
     tool_result_mt4 = json.dumps({
@@ -2388,7 +2393,7 @@ def _multi_turn_samples() -> list[dict[str, Any]]:
             {"role": "user", "content": (
                 "[환경 데이터]\n"
                 f"current_pose: {json.dumps(cur_pose, ensure_ascii=False)}\n"
-                f"reference_pose: {json.dumps(ref_pose, ensure_ascii=False)}\n\n"
+                f"숙련자 자세 ID: EP-001\n\n"
                 "질문: 현재 자세가 숙련자 기준에 맞는지 분석해줘."
             )},
             {"role": "assistant", "content": f"자세 비교 분석을 위해 도구를 호출합니다.\n\n<tool_call>{tc_mt4}</tool_call>"},
@@ -2414,7 +2419,7 @@ def _multi_turn_samples() -> list[dict[str, Any]]:
     tc_mt5 = json.dumps(
         {"name": "sequence_validation", "arguments": {
             "trajectory": traj_mt5, "zone_id": "B-3", "zone_type": "hull_side",
-            "reference_pattern": "bottom_to_top",
+            "zone_map": [{"zone_id": "A-1", "block_id": "BLK-A", "zone_type": "수직 패널", "position": "upper", "is_painted": False}], "current_zone_id": "A-1", "structure_type": "block",
         }}, ensure_ascii=False,
     )
     tool_result_mt5 = json.dumps({
@@ -2422,7 +2427,7 @@ def _multi_turn_samples() -> list[dict[str, Any]]:
         "result": {
             "valid": False,
             "detected_pattern": "top_to_bottom",
-            "reference_pattern": "bottom_to_top",
+            "zone_map": [{"zone_id": "A-1", "block_id": "BLK-A", "zone_type": "수직 패널", "position": "upper", "is_painted": False}], "current_zone_id": "A-1", "structure_type": "block",
             "correction": "reverse_direction",
         },
     }, ensure_ascii=False)
@@ -2434,7 +2439,7 @@ def _multi_turn_samples() -> list[dict[str, Any]]:
                 "[환경 데이터]\n"
                 f"trajectory: {json.dumps(traj_mt5, ensure_ascii=False)}\n"
                 "zone_id: \"B-3\"\nzone_type: \"hull_side\"\n"
-                "reference_pattern: \"bottom_to_top\"\n\n"
+                "구역 순서: zone_map 기반 블록/구역 간 순서 안내\n\n"
                 "질문: 도장 순서가 맞는지 확인해줘."
             )},
             {"role": "assistant", "content": f"도장 순서 검증을 위해 도구를 호출합니다.\n\n<tool_call>{tc_mt5}</tool_call>"},
@@ -2503,7 +2508,7 @@ def _multi_turn_samples() -> list[dict[str, Any]]:
         {"name": "anomaly_detection", "arguments": {
             "image_context": "하단 영역 저도막",
             "dft_measurements": meas_mt7,
-            "env": {"temperature": 22, "humidity": 68},
+            "zone_id": "B-3", "position": "lower",
         }}, ensure_ascii=False,
     )
     tc_mt7b = json.dumps(
@@ -2526,7 +2531,7 @@ def _multi_turn_samples() -> list[dict[str, Any]]:
                 "[환경 데이터]\n"
                 "image_context: \"하단 영역 저도막\"\n"
                 f"dft_measurements: {meas_mt7}\n"
-                "env: {\"temperature\": 22, \"humidity\": 68}\n"
+                "zone_id: \"B-3\"\n"
                 f"spec: {json.dumps(spec_mt7, ensure_ascii=False)}\n\n"
                 "질문: 이상 여부와 합격 여부를 모두 확인해줘."
             )},

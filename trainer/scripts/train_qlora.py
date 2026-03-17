@@ -184,7 +184,7 @@ def build_training_args(config: Dict[str, Any]) -> SFTConfig:
         load_best_model_at_end=True,
         metric_for_best_model="eval_loss",
         greater_is_better=False,
-        assistant_only_loss=True,
+        assistant_only_loss=False,
         seed=train_cfg.get("seed", 42),
         max_length=train_cfg.get("max_seq_length", 2048),
         max_grad_norm=train_cfg.get("max_grad_norm", 1.0),
@@ -211,11 +211,14 @@ def run_training(
     log_dir.mkdir(parents=True, exist_ok=True)
 
     keep_cols = {"messages", "chat_template_kwargs"}
-    cols_to_drop = [c for c in train_dataset.column_names if c not in keep_cols]
-    if cols_to_drop:
-        train_dataset = train_dataset.remove_columns(cols_to_drop)
-        val_dataset = val_dataset.remove_columns(cols_to_drop)
-        logger.info("Dropped non-messages columns: %s", cols_to_drop)
+    train_cols_to_drop = [c for c in train_dataset.column_names if c not in keep_cols]
+    if train_cols_to_drop:
+        train_dataset = train_dataset.remove_columns(train_cols_to_drop)
+        logger.info("Dropped train columns: %s", train_cols_to_drop)
+    val_cols_to_drop = [c for c in val_dataset.column_names if c not in keep_cols]
+    if val_cols_to_drop:
+        val_dataset = val_dataset.remove_columns(val_cols_to_drop)
+        logger.info("Dropped val columns: %s", val_cols_to_drop)
 
     if "chat_template_kwargs" not in train_dataset.column_names:
         ct_kwargs = {"enable_thinking": False}

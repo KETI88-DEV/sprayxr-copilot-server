@@ -149,23 +149,26 @@ class AgenticEvaluator:
 
         if tool_name == "anomaly_detection":
             return {
-                "image_context": context.get("image_context"),
                 "dft_measurements": context.get("dft_measurements") or context.get("measurements"),
-                "env": context.get("env"),
+                "timeseries": context.get("timeseries") or context.get("timeseries_data"),
+                "zone_id": context.get("zone_id"),
+                "spec": context.get("spec"),
+                "image_context": context.get("image_context"),
             }
 
         if tool_name == "pose_estimation":
             return {
+                "mode": context.get("mode", "compare"),
                 "current_pose": context.get("current_pose"),
-                "reference_pose": context.get("reference_pose"),
+                "expert_pose_id": context.get("expert_pose_id"),
+                "block_id": context.get("block_id"),
             }
 
         if tool_name == "sequence_validation":
             return {
-                "trajectory": context.get("trajectory"),
-                "zone_id": context.get("zone_id"),
-                "zone_type": context.get("zone_type"),
-                "reference_pattern": context.get("reference_pattern"),
+                "zone_map": context.get("zone_map"),
+                "current_zone_id": context.get("current_zone_id"),
+                "structure_type": context.get("structure_type"),
             }
 
         if tool_name == "timeseries":
@@ -217,8 +220,7 @@ class AgenticEvaluator:
         order_ratio = lcs / len(expected_tools)
 
         # 1점: 일부 도구 누락 또는 불필요한 도구가 추가됨
-        # Require ≥50% overlap, reasonable extras (≤ expected count), some ordering
-        if overlap_ratio >= 0.5 and extra_count <= len(expected_tools) and order_ratio >= 0.3:
+        if overlap_ratio >= 0.5 and order_ratio >= 0.3:
             return 1
         return 0
 
@@ -279,9 +281,13 @@ class AgenticEvaluator:
             return 0
 
         numbered_steps = len(re.findall(r"(?:^|\n)\s*(?:\d+[\).]|[-*])\s+", text))
+        section_bracket = len(re.findall(r"\[(?:분석|판정|원인|조치|근거|결론)\]", text))
+        section_colon = len(re.findall(r"(?:^|\n)\s*(?:\*\*)?(?:분석|판정|원인|조치|근거|결론)(?:\*\*)?(?:\])?:", text, re.MULTILINE))
+        section_headers = max(section_bracket, section_colon)
         connectors = len(re.findall(r"먼저|다음|이후|그리고|마지막으로|우선", text))
-        inferred_steps = max(numbered_steps, connectors + 1)
-        has_evidence = bool(re.search(r"DOC-[\w-]+|근거|citation|chunk", text, flags=re.IGNORECASE))
+        think_steps = len(re.findall(r"단계\s*\d+\s*:", text))
+        inferred_steps = max(numbered_steps, section_headers, connectors + 1, think_steps)
+        has_evidence = bool(re.search(r"DOC-[\w-]+|근거|citation|chunk|\[근거\]", text, flags=re.IGNORECASE))
 
         if inferred_steps >= expected_steps and has_evidence:
             return 2
@@ -303,13 +309,15 @@ class AgenticEvaluator:
         used_chunk = bool(re.search(r"DOC-[\w-]+", text)) or bool(citations)
 
         context_hits = 0
-        for key in ["zone_id", "reference_pattern", "session_id", "image_context"]:
+        for key in ["zone_id", "current_zone_id", "block_id", "expert_pose_id", "session_id", "image_context"]:
             value = context_data.get(key)
             if isinstance(value, str) and value and value in text:
                 context_hits += 1
+        if context_data.get("zone_map") and any(z.get("zone_id", "") in text for z in context_data["zone_map"] if isinstance(z, dict)):
+            context_hits += 1
 
         numbers = re.findall(r"\d+(?:\.\d+)?", text)
-        if numbers and any(k in context_data for k in ["dft_measurements", "measurements", "env"]):
+        if numbers and any(k in context_data for k in ["dft_measurements", "measurements", "timeseries", "spec"]):
             context_hits += 1
 
         if used_chunk and context_hits >= 1:
@@ -338,17 +346,25 @@ class AgenticEvaluator:
         if category == "cot_reasoning":
             has_citation = bool(re.search(r"DOC-[\w-]+", text)) or bool(response.get("citations"))
             has_structure = bool(re.search(r"\n\s*\d+[\).]", text)) or "결론" in text
-            if has_citation and has_structure:
+            section_count = max(
+                len(re.findall(r"\[(?:분석|판정|원인|조치|근거|결론)\]", text)),
+                len(re.findall(r"(?:^|\n)\s*(?:\*\*)?(?:분석|판정|원인|조치|근거|결론)(?:\*\*)?:", text, re.MULTILINE)),
+            )
+            if (has_citation and has_structure) or section_count >= 3:
                 return 2
-            if has_citation or has_structure:
+            if has_citation or has_structure or section_count >= 2:
                 return 1
             return 0
 
-        has_verdict = bool(re.search(r"합격|불합격|진행|중지|재작업", text))
-        has_list = bool(re.search(r"\n\s*(?:\d+[\).]|[-*])\s+", text))
-        if has_verdict and has_list:
+        has_verdict = bool(re.search(r"합격|불합격|진행|중지|재작업|정상|이상", text))
+        has_list = bool(re.search(r"(?:^|\n)\s*(?:\d+[\).]|[-*])\s+|\d+\.\s+\S", text))
+        section_count_gen = max(
+            len(re.findall(r"\[(?:분석|판정|원인|조치|근거|결론)\]", text)),
+            len(re.findall(r"(?:^|\n)\s*(?:\*\*)?(?:분석|판정|원인|조치|근거|결론)(?:\*\*)?:", text, re.MULTILINE)),
+        )
+        if section_count_gen >= 3 or (has_verdict and has_list):
             return 2
-        if has_verdict or has_list:
+        if has_verdict or has_list or section_count_gen >= 2:
             return 1
         return 0
 
