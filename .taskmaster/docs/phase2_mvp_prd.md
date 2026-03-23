@@ -1276,6 +1276,101 @@ P1 작업의 개발 차단을 방지하기 위해 아래 합성 데이터를 먼
 |---|---|---|---|
 | v0.1 | 2026-03-16 | Phase 2 MVP PRD 초안 작성, P0/P1/P2 분류, TDD 전략 포함 | Sisyphus-Junior |
 | v0.2 | 2026-03-16 | Iter14 DocQA 3-Way 재평가 결과 반영: T20 완료 처리, T26에 DocQA 균형 학습 전략 추가 (Dual Gate, SFT 비율 상한, Loss 전략 분기), T21 CoT에 DocQA 스타일 30건 포함, 리스크 테이블에 Catastrophic Forgetting 항목 추가 | Sisyphus |
+| v0.3 | 2026-03-17 | T35: Ollama GGUF 백엔드 추가, 배포 아키텍처를 학습(HF) / 추론(Ollama) 이원화 구조로 변경 | Sisyphus |
+
+---
+
+# 18. T35: Ollama GGUF 추론 백엔드 전환
+
+| 항목 | 내용 |
+|---|---|
+| 목표 | 배포/데모 추론을 HuggingFace → Ollama (llama.cpp 기반 GGUF)로 전환하여 소비자 GPU에서 2-3배 속도 향상 |
+| 현재 문제 | HF 4-bit (bitsandbytes NF4) 추론이 RTX 4080 Laptop에서 ~15 tok/s → realtime 60초 목표 미달 |
+| 목표 성능 | Ollama GGUF Q4_K_M에서 ~40-50 tok/s → realtime 30초 이내 |
+| 필요 데이터 | 없음 — 기존 학습 완료 모델 사용 |
+| 예상 공수 | 2일 |
+
+## 18.1 아키텍처 이원화
+
+```
+[학습 파이프라인 — HF 유지]
+  generate_sft.py → train_qlora.py → run_agentic_eval.py
+  (peft + trl + transformers — 변경 없음)
+
+[추론/배포 파이프라인 — Ollama 전환]
+  Qwen3-4B + QLoRA adapter
+       ↓ merge_and_unload()
+  merged model (FP16)
+       ↓ llama.cpp convert + quantize
+  GGUF Q4_K_M (~2.5GB)
+       ↓ Ollama Modelfile
+  ollama serve (localhost:11434)
+       ↓ REST API
+  agent_pipeline.py / demo_app.py
+```
+
+## 18.2 작업 단계
+
+### Step 1: QLoRA 어댑터 병합 스크립트
+
+`/workspace/trainer/scripts/merge_adapter.py` 생성:
+- `peft.PeftModel.from_pretrained()` → `merge_and_unload()` → `save_pretrained()`
+- 입력: base model path + adapter path
+- 출력: merged model directory
+
+### Step 2: GGUF 변환 스크립트
+
+`/workspace/trainer/scripts/convert_to_gguf.sh` 생성:
+- llama.cpp `convert_hf_to_gguf.py` 호출
+- `llama-quantize`로 Q4_K_M 양자화
+- 출력: `.gguf` 파일
+
+### Step 3: Ollama Modelfile 생성
+
+```
+FROM ./qwen3-4b-shipcoat-Q4_K_M.gguf
+PARAMETER temperature 0.3
+PARAMETER num_ctx 8192
+PARAMETER repeat_penalty 1.15
+PARAMETER stop <|im_end|>
+SYSTEM """(시스템 프롬프트)"""
+```
+
+### Step 4: agent_pipeline.py에 Ollama 백엔드 추가
+
+- `config.llm.backend` 설정: `hf` (기존) / `ollama` (신규)
+- `ollama` 백엔드: `httpx.post("http://localhost:11434/api/chat", ...)` 호출
+- tool calling: Ollama `/api/chat` + `tools` 파라미터 활용
+- 기존 HF 백엔드 코드 유지 (학습/평가용)
+
+### Step 5: demo_app.py 전환
+
+- `DEMO_MODE=false` 시 Ollama 백엔드 사용
+- 환경변수 `INFERENCE_BACKEND=ollama|hf` (기본: `ollama`)
+- Ollama 미설치 시 HF 폴백
+
+## 18.3 성능 비교 목표
+
+| 항목 | HF (현재) | Ollama (목표) |
+|---|---|---|
+| RTX 4080 Laptop 속도 | ~15 tok/s | ~40-50 tok/s |
+| VRAM 사용량 | ~4GB (NF4) | ~2.5GB (Q4_K_M) |
+| 모델 파일 크기 | ~8GB (adapter+base) | ~2.5GB (GGUF) |
+| 설치 복잡도 | pip + CUDA + bitsandbytes | `ollama serve` |
+| realtime 응답 시간 | ~50-70초 | ~20-30초 |
+
+## 18.4 성공 기준
+
+- Ollama GGUF Q4_K_M으로 RTX 4080 Laptop에서 realtime < 30초
+- Agentic 점수 HF 대비 -0.3 이내 (GGUF 양자화 품질 손실 허용 범위)
+- tool calling 정상 동작 (MCP 서버 연동)
+- demo_app.py에서 `INFERENCE_BACKEND=ollama`로 전환 가능
+
+## 18.5 선행 작업
+
+- T26 완료 (Iter17 어댑터 확정)
+- llama.cpp 빌드 환경 (cmake, gcc)
+- Ollama 설치 (`curl -fsSL https://ollama.com/install.sh | sh`)
 
 ---
 *본 문서는 선박 도장 AI Co-Pilot Phase 2 MVP의 실행 계획서이며, `task-master parse-prd --append`로 파싱하여 작업 목록을 생성한다.*

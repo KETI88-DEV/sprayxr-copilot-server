@@ -280,7 +280,7 @@ class ToolCallingAdapter:
         self.backoff_ms = int(retry_policy.get("backoff_ms", 0))
 
         request_format = self.protocol.get("request_format", {})
-        self.timeout_ms = int(request_format.get("timeout_ms", {}).get("default", 30000))
+        self.timeout_ms = int(request_format.get("timeout_ms", {}).get("default", 10000))
 
         base_url = mcp_base_url or self.protocol.get("mcp_server_base_url", "http://localhost:8100")
         self.mcp_base_url = base_url.rstrip("/")
@@ -532,6 +532,7 @@ class ToolCallingAdapter:
         model: Any,
         tokenizer: Any,
         enable_thinking: bool,
+        max_tokens: int | None = None,
     ) -> str:
         if hasattr(model, "generate_response"):
             response = model.generate_response(messages=messages, tools=self.get_tools_param())
@@ -553,11 +554,13 @@ class ToolCallingAdapter:
         if hasattr(inputs, "to") and hasattr(model, "device"):
             inputs = inputs.to(model.device)
 
+        gen_max_tokens = max_tokens or 1024
         def _run_generation() -> Any:
             return model.generate(
                 **inputs,
-                max_new_tokens=1024,
+                max_new_tokens=gen_max_tokens,
                 pad_token_id=tokenizer.eos_token_id,
+                repetition_penalty=1.15,
             )
 
         output_ids = await asyncio.to_thread(_run_generation)
@@ -571,6 +574,7 @@ class ToolCallingAdapter:
         tokenizer: Any,
         enable_thinking: bool = False,
         max_rounds: int = 5,
+        max_tokens: int | None = None,
     ) -> dict[str, Any]:
         """Runs the multi-turn tool loop until the model emits a final natural-language answer."""
         if max_rounds <= 0:
@@ -585,6 +589,7 @@ class ToolCallingAdapter:
                 model=model,
                 tokenizer=tokenizer,
                 enable_thinking=enable_thinking,
+                max_tokens=max_tokens,
             )
             tool_calls = self.parse_tool_calls(raw_text)
 

@@ -35,6 +35,8 @@ ADAPTER_PATH: str = os.environ.get(
 )
 MODEL_NAME: str = "Qwen3-4B QLoRA (Iter17 — Dual Gate PASS)"
 
+_cached_pipeline = None
+
 # ---------------------------------------------------------------------------
 # Theme — high-contrast industrial slate
 # ---------------------------------------------------------------------------
@@ -219,24 +221,28 @@ footer { display: none !important; }
 
 EXAMPLE_QUESTIONS: list[dict[str, str]] = [
     {
-        "text": "DFT 측정값 [95, 102, 88, 105, 99]로 nominal 100um 기준 합부 판정해줘",
-        "display_text": "DFT 합부 판정 요청",
+        "text": "현재 구역 도막 두께 합부 판정해줘",
+        "display_text": "DFT 합부 판정",
     },
     {
-        "text": "B-3 구역 하단에 저도막 패턴이 보여. DFT [85, 92, 78]이고 이동속도가 점점 빨라졌어. 원인 분석해줘",
-        "display_text": "도막 분포 이상 탐지",
+        "text": "현재 구역에서 도막 이상 패턴이 감지됐어. 원인 분석해줘",
+        "display_text": "도막 이상 탐지",
     },
     {
-        "text": "현재 A-1 구역을 칠하고 있는데 다음에 어디를 칠해야 해?",
+        "text": "다음에 어떤 구역을 칠해야 해?",
         "display_text": "도장 순서 안내",
     },
     {
-        "text": "실시간 코칭 모드로 현재 작업자에게 자세/순서/속도 종합 피드백을 줘",
-        "display_text": "실시간 종합 코칭",
+        "text": "현재 작업 자세랑 속도 피드백 줘",
+        "display_text": "실시간 코칭",
     },
     {
-        "text": "습도가 85%이고 이슬점 차이가 2도C일 때 도장 작업을 진행해도 되는가?",
-        "display_text": "작업 환경 적합성 판단",
+        "text": "지금 환경 조건에서 도장 작업해도 돼?",
+        "display_text": "작업 환경 판단",
+    },
+    {
+        "text": "DFT가 뭐야?",
+        "display_text": "도장 용어 질문",
     },
 ]
 
@@ -254,15 +260,15 @@ _TOOL_DISPLAY: dict[str, str] = {
 
 def _classify_question(text: str) -> str:
     t = text.lower()
-    if any(k in t for k in ("dft", "합부", "판정", "측정값", "nominal")):
+    if any(k in t for k in ("dft", "합부", "판정", "측정값", "nominal", "도막 두께 합부", "두께 판정")):
         return "dft_judge"
-    if any(k in t for k in ("이상", "히트맵", "패턴", "원인", "저도막", "과도막", "분포")):
+    if any(k in t for k in ("이상", "히트맵", "패턴", "원인", "저도막", "과도막", "분포", "이상 패턴", "감지")):
         return "anomaly"
-    if any(k in t for k in ("다음", "순서", "어디", "블록")):
+    if any(k in t for k in ("다음", "순서", "어디", "블록", "구역을 칠")):
         return "sequence"
-    if any(k in t for k in ("코칭", "자세", "포즈", "피드백", "속도")):
+    if any(k in t for k in ("코칭", "자세", "포즈", "피드백", "속도 피드백", "작업 자세")):
         return "coaching"
-    if any(k in t for k in ("습도", "이슬점", "온도", "환경", "작업 가능")):
+    if any(k in t for k in ("습도", "이슬점", "온도", "환경", "작업 가능", "환경 조건", "작업해도 돼")):
         return "environment"
     if any(k in t for k in ("블라스팅", "표면처리", "표면 처리")):
         return "qa_blasting"
@@ -559,12 +565,12 @@ DEMO_SCENARIOS: dict[str, dict[str, Any]] = {
     },
 }
 
-_session_id: str = str(uuid.uuid4())[:8]
+_session_id: str = os.environ.get("WORKER_ID", "worker-001")
 
 
 def _new_session() -> str:
     global _session_id
-    _session_id = str(uuid.uuid4())[:8]
+    _session_id = os.environ.get("WORKER_ID", "worker-001")
     return _session_id
 
 
@@ -588,7 +594,7 @@ def _demo_stream(
     rag_chunks = scenario["rag_chunks"]
     history.append(ChatMessage(role="assistant", content="", metadata={"title": "RAG 검색 중...", "status": "pending", "id": step_id}))
     yield history, xr_json
-    time.sleep(0.5)
+    time.sleep(0.15)
 
     rag_text_parts = []
     for chunk in rag_chunks:
@@ -605,7 +611,7 @@ def _demo_stream(
         display_name = _TOOL_DISPLAY.get(tool_name, tool_name)
         history.append(ChatMessage(role="assistant", content="", metadata={"title": f"MCP: {display_name} 호출 중...", "status": "pending", "id": step_id}))
         yield history, xr_json
-        time.sleep(0.3)
+        time.sleep(0.1)
         args_str = json.dumps(tc["args"], ensure_ascii=False, indent=2)
         result_str = json.dumps(tc["result"], ensure_ascii=False, indent=2)
         tool_content = f"**입력 파라미터:**\n```json\n{args_str}\n```\n\n**실행 결과:**\n```json\n{result_str}\n```"
@@ -615,7 +621,7 @@ def _demo_stream(
     step_id += 1
     history.append(ChatMessage(role="assistant", content="", metadata={"title": "QLoRA 추론 중...", "status": "pending", "id": step_id}))
     yield history, xr_json
-    time.sleep(1.0)
+    time.sleep(0.3)
     history[-1] = ChatMessage(role="assistant", content=f"모델: {MODEL_NAME}\n컨텍스트: RAG {len(rag_chunks)}건 + 도구 결과 {len(tool_calls)}건 통합 추론 완료", metadata={"title": "QLoRA 추론 완료", "status": "done", "id": step_id})
     yield history, xr_json
 
@@ -646,29 +652,110 @@ def _live_stream(
     if scripts_dir not in sys.path:
         sys.path.insert(0, scripts_dir)
 
+    global _cached_pipeline
     agent_mod = importlib.import_module("agent_pipeline")
     AgentPipeline = agent_mod.AgentPipeline
 
     step_id = 1
-    history.append(ChatMessage(role="assistant", content="파이프라인 초기화 중...", metadata={"title": "AgentPipeline 로드", "status": "pending", "id": step_id}))
-    yield history, xr_json
+    if _cached_pipeline is None:
+        history.append(ChatMessage(role="assistant", content="파이프라인 초기화 중 (최초 1회)...", metadata={"title": "AgentPipeline 로드", "status": "pending", "id": step_id}))
+        yield history, xr_json
+        try:
+            _cached_pipeline = AgentPipeline(config_path=CONFIG_PATH, adapter_path=ADAPTER_PATH, mcp_base_url=MCP_BASE_URL)
+        except Exception as e:
+            history[-1] = ChatMessage(role="assistant", content=f"파이프라인 초기화 실패: {e}", metadata={"title": "AgentPipeline 오류", "status": "done", "id": step_id})
+            yield history, xr_json
+            return
+        history[-1] = ChatMessage(role="assistant", content="모델 로드 완료 (캐시됨)", metadata={"title": "AgentPipeline 준비 완료", "status": "done", "id": step_id})
+        yield history, xr_json
+    else:
+        history.append(ChatMessage(role="assistant", content="캐시된 파이프라인 사용", metadata={"title": "AgentPipeline 준비 완료", "status": "done", "id": step_id}))
+        yield history, xr_json
 
+    pipeline = _cached_pipeline
+
+    import concurrent.futures
+    import httpx as _httpx
+
+    step_id += 1
+    mcp_ok = False
     try:
-        pipeline = AgentPipeline(config_path=CONFIG_PATH, adapter_path=ADAPTER_PATH, mcp_base_url=MCP_BASE_URL)
-    except Exception as e:
-        history[-1] = ChatMessage(role="assistant", content=f"파이프라인 초기화 실패: {e}", metadata={"title": "AgentPipeline 오류", "status": "done", "id": step_id})
+        resp = _httpx.get(f"{MCP_BASE_URL}/health", timeout=3.0)
+        mcp_ok = resp.status_code == 200
+    except Exception:
+        pass
+
+    if not mcp_ok:
+        history.append(ChatMessage(role="assistant", content=f"MCP 서버 ({MCP_BASE_URL}) 에 연결할 수 없습니다. 서버 실행 여부를 확인하세요.\n\n`uvicorn mcp_servers.main:app --host 0.0.0.0 --port 8100`", metadata={"title": "MCP 서버 미응답", "status": "done", "id": step_id}))
         yield history, xr_json
         return
 
-    history[-1] = ChatMessage(role="assistant", content="모델 및 RAG 인덱스 로드 완료", metadata={"title": "AgentPipeline 준비 완료", "status": "done", "id": step_id})
-    yield history, xr_json
+    import re as _re_prompt
+    if hasattr(pipeline, 'system_prompt'):
+        pipeline.system_prompt = _re_prompt.sub(
+            r"\[응답 구조 규칙.*?구조로 답변한다\.", "", pipeline.system_prompt, flags=_re_prompt.DOTALL
+        )
+    elif hasattr(pipeline, 'config') and 'prompt' in pipeline.config:
+        orig = pipeline.config['prompt'].get('system', '')
+        pipeline.config['prompt']['system'] = _re_prompt.sub(
+            r"\[응답 구조 규칙.*?구조로 답변한다\.", "", orig, flags=_re_prompt.DOTALL
+        )
+    if hasattr(pipeline, 'config') and 'generation' in pipeline.config:
+        pipeline.config['generation']['do_sample'] = False
+        pipeline.config['generation']['max_new_tokens'] = 256
 
-    step_id += 1
     history.append(ChatMessage(role="assistant", content="", metadata={"title": "에이전트 파이프라인 실행 중...", "status": "pending", "id": step_id}))
     yield history, xr_json
 
+    default_env = {
+        "zone_map": [
+            {"zone_id": "B-1", "block_id": "BLK-B", "zone_type": "수직 패널", "position": "upper", "is_painted": True, "area_m2": 12.5},
+            {"zone_id": "B-2", "block_id": "BLK-B", "zone_type": "수직 패널", "position": "middle", "is_painted": True, "area_m2": 14.0},
+            {"zone_id": "B-3", "block_id": "BLK-B", "zone_type": "수직 패널", "position": "lower", "is_painted": False, "area_m2": 11.8},
+            {"zone_id": "A-1", "block_id": "BLK-A", "zone_type": "수직 패널", "position": "upper", "is_painted": False, "area_m2": 13.2},
+            {"zone_id": "A-2", "block_id": "BLK-A", "zone_type": "곡면", "position": "middle", "is_painted": False, "area_m2": 9.5},
+        ],
+        "current_zone_id": "B-3",
+        "block_id": "BLK-B",
+        "structure_type": "block",
+        "coordinates": [{"x": 1200, "y": 3400, "z": 800}],
+        "ship_model_id": "hull-001",
+        "measurements": [95, 102, 88, 105, 99],
+        "dft_measurements": [
+            {"value_um": 95, "zone_id": "B-3", "position": "upper"},
+            {"value_um": 102, "zone_id": "B-3", "position": "middle"},
+            {"value_um": 88, "zone_id": "B-3", "position": "lower"},
+            {"value_um": 105, "zone_id": "B-3", "position": "upper"},
+            {"value_um": 99, "zone_id": "B-3", "position": "middle"},
+        ],
+        "spec": {"nominal_um": 100, "tolerance_rule": "90/10"},
+        "session_id": "sess-demo-001",
+        "timeseries": {
+            "gun_speed_m_per_s": [0.42, 0.45, 0.48, 0.52, 0.58],
+            "standoff_distance_mm": [300, 310, 305, 320, 340],
+            "spray_angle_deg": [72, 70, 68, 65, 60],
+        },
+        "current_pose": {
+            "joints": {
+                "wrist_r": {"x": 0.5, "y": 0.3, "z": 0.8, "roll": 8, "pitch": 24, "yaw": 12},
+                "elbow_r": {"x": 0.3, "y": 0.5, "z": 0.6, "roll": 5, "pitch": 15, "yaw": 8},
+            }
+        },
+        "expert_pose_id": "EP-001",
+        "image_context": "B-3 구역 하단에 저도막 패턴 관찰됨, 히트맵 상 하부 영역 집중",
+        "temperature_c": 23,
+        "humidity_pct": 72,
+        "dew_point_gap_c": 5,
+    }
+    pipeline_timeout = 120
     try:
-        result = pipeline.run(instruction=question, session_id=_session_id, enable_thinking=True)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(pipeline.run, instruction=question, session_id=_session_id, enable_thinking=False, environment=default_env)
+            result = future.result(timeout=pipeline_timeout)
+    except concurrent.futures.TimeoutError:
+        history[-1] = ChatMessage(role="assistant", content=f"파이프라인 응답 시간 초과 ({pipeline_timeout}초). 질문을 단순화하거나 다시 시도하세요.", metadata={"title": "타임아웃", "status": "done", "id": step_id})
+        yield history, xr_json
+        return
     except Exception as e:
         history[-1] = ChatMessage(role="assistant", content=f"실행 오류: {e}", metadata={"title": "파이프라인 오류", "status": "done", "id": step_id})
         yield history, xr_json
@@ -679,6 +766,23 @@ def _live_stream(
     rounds = meta.get("rounds", 0)
     latency = meta.get("latency_ms", 0)
     history[-1] = ChatMessage(role="assistant", content=f"모드: {route} | 라운드: {rounds} | 지연: {latency}ms", metadata={"title": "파이프라인 실행 완료", "status": "done", "id": step_id})
+
+    xr_data: dict[str, Any] = {"mode": route, "session_id": _session_id}
+    for xr_key in ["text_guide", "steps", "next_path", "pose_comparison", "anomaly", "dft_result"]:
+        val = result.get(xr_key)
+        if val is not None:
+            xr_data[xr_key] = val
+    tool_names = [tc.get("name", "") for tc in result.get("tool_calls", [])]
+    if tool_names:
+        xr_data["tools_used"] = tool_names
+    xr_data["environment"] = {
+        "zone_id": default_env["current_zone_id"],
+        "block_id": default_env["block_id"],
+        "temperature_c": default_env["temperature_c"],
+        "humidity_pct": default_env["humidity_pct"],
+    }
+    xr_json = json.dumps({"xr_simulator_protocol": xr_data}, ensure_ascii=False, indent=2)
+
     yield history, xr_json
 
     rag_chunks = result.get("rag_chunks", [])
@@ -711,6 +815,11 @@ def _live_stream(
 
     text_guide = result.get("text_guide", {})
     response_text = text_guide.get("body", "") if text_guide else result.get("response", "응답을 생성하지 못했습니다.")
+
+    import re as _re
+    response_text = _re.sub(r"(?m)^근거 문서 ID:.*$", "", response_text)
+    response_text = _re.sub(r"(?m)^\[?근거\]?\s*[:：]\s*DOC-.*$", "", response_text)
+    response_text = _re.sub(r"\n{3,}", "\n\n", response_text).strip()
     history.append(ChatMessage(role="assistant", content=""))
     yield history, xr_json
     accumulated = ""
@@ -730,11 +839,13 @@ def _live_stream(
         yield history, xr_json
 
 
+
+
 def respond(message: str, history: ChatHistory) -> Generator[tuple[ChatHistory, str], None, None]:
     if not message.strip():
         yield history, ""
         return
-    history.append(ChatMessage(role="user", content=message))
+    history.append(ChatMessage(role="user", content=message.strip()))
     yield history, ""
     if DEMO_MODE:
         yield from _demo_stream(message, history)
@@ -807,6 +918,7 @@ def create_app() -> gr.Blocks:
                 with gr.Row():
                     msg_input = gr.Textbox(placeholder="도장 관련 질문을 입력하세요...", show_label=False, scale=6, container=False, autofocus=True)
                     send_btn = gr.Button("전송", variant="primary", scale=1, min_width=80)
+                    stop_btn = gr.Button("중단", variant="stop", scale=1, min_width=80)
                     clear_btn = gr.Button("초기화", variant="secondary", scale=1, min_width=80)
 
                 gr.Markdown("#### XR Simulator Output")
@@ -825,8 +937,9 @@ def create_app() -> gr.Blocks:
                         btn = gr.Button(ex["display_text"], variant="secondary", size="sm", elem_classes=["example-btn"])
                         example_btns.append((btn, ex["text"]))
 
-        msg_input.submit(fn=respond, inputs=[msg_input, chatbot], outputs=[chatbot, xr_panel]).then(fn=lambda: "", outputs=[msg_input])
-        send_btn.click(fn=respond, inputs=[msg_input, chatbot], outputs=[chatbot, xr_panel]).then(fn=lambda: "", outputs=[msg_input])
+        submit_event = msg_input.submit(fn=respond, inputs=[msg_input, chatbot], outputs=[chatbot, xr_panel]).then(fn=lambda: "", outputs=[msg_input])
+        click_event = send_btn.click(fn=respond, inputs=[msg_input, chatbot], outputs=[chatbot, xr_panel]).then(fn=lambda: "", outputs=[msg_input])
+        stop_btn.click(fn=None, cancels=[submit_event, click_event])
         clear_btn.click(fn=lambda: ([], ""), outputs=[chatbot, xr_panel])
 
         def _reset_session() -> tuple[list[Any], str, str]:

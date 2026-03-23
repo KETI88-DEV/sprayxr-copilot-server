@@ -96,9 +96,15 @@ _DEEP_KEYWORDS: set[str] = {
 
 # Route → max_rounds mapping
 ROUTE_MAX_ROUNDS: dict[str, int] = {
-    "training_realtime": 3,
+    "training_realtime": 2,
     "training_review": 5,
     "fast": 1,
+}
+
+ROUTE_MAX_TOKENS: dict[str, int] = {
+    "training_realtime": 256,
+    "training_review": 1024,
+    "fast": 256,
 }
 
 
@@ -343,7 +349,7 @@ class AgentPipeline:
         model = AutoModelForCausalLM.from_pretrained(
             model_path,
             device_map=llm_cfg.get("device_map", "auto"),
-            torch_dtype=getattr(torch, str(llm_cfg.get("torch_dtype", "bfloat16")), torch.bfloat16),
+            dtype=getattr(torch, str(llm_cfg.get("torch_dtype", "bfloat16")), torch.bfloat16),
             quantization_config=quant_cfg,
             use_safetensors=bool(llm_cfg.get("use_safetensors", True)),
             trust_remote_code=True,
@@ -677,6 +683,7 @@ class AgentPipeline:
                 temperature=float(gen_cfg.get("temperature", 0.7)),
                 top_p=float(gen_cfg.get("top_p", 0.8)),
                 top_k=int(gen_cfg.get("top_k", 20)),
+                repetition_penalty=float(gen_cfg.get("repetition_penalty", 1.15)),
             )
 
         new_tokens = outputs[0][inputs["input_ids"].shape[1]:]
@@ -756,6 +763,7 @@ class AgentPipeline:
                 session_context_summary=summary,
             )
             logger.debug("Running tool loop with %d initial messages", len(messages))
+            route_max_tokens = ROUTE_MAX_TOKENS.get(route, 768)
             loop_output = _run_coro_sync(
                 self.tool_adapter.run_tool_loop(
                     messages=messages,
@@ -763,6 +771,7 @@ class AgentPipeline:
                     tokenizer=self.tokenizer,
                     enable_thinking=enable_thinking,
                     max_rounds=ROUTE_MAX_ROUNDS.get(route, 5),
+                    max_tokens=route_max_tokens,
                 )
             )
             raw_final = str(loop_output.get("final_response", ""))
