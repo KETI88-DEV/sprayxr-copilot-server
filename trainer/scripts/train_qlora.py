@@ -5,15 +5,19 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 import time
+
+os.environ.setdefault("HF_DEACTIVATE_ASYNC_LOAD", "1")
 from pathlib import Path
 from typing import Any, Dict, List
 
 import torch
 import yaml
 from datasets import Dataset
-from peft import LoraConfig, TaskType, get_peft_model, prepare_model_for_kbit_training
+from peft import LoraConfig, PeftConfig, TaskType, get_peft_model, prepare_model_for_kbit_training
+from safetensors.torch import load_file
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
@@ -181,7 +185,8 @@ def build_training_args(config: Dict[str, Any]) -> SFTConfig:
         logging_steps=train_cfg.get("logging_steps", 5),
         save_strategy=train_cfg.get("save_strategy", "epoch"),
         eval_strategy=train_cfg.get("eval_strategy", "epoch"),
-        load_best_model_at_end=True,
+        max_steps=train_cfg.get("max_steps", -1),
+        load_best_model_at_end=train_cfg.get("load_best_model_at_end", True),
         metric_for_best_model="eval_loss",
         greater_is_better=False,
         assistant_only_loss=False,
@@ -322,6 +327,17 @@ def parse_args() -> argparse.Namespace:
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
     )
+    parser.add_argument(
+        "--max-steps",
+        default=None,
+        type=int,
+        help="Override number of optimizer steps (overrides epochs).",
+    )
+    parser.add_argument(
+        "--smoke",
+        action="store_true",
+        help="1-step smoke run: no eval/checkpoints, adapter saved to *_smoke, save/reload verified.",
+    )
     return parser.parse_args()
 
 
@@ -337,6 +353,17 @@ def main() -> int:
         return 1
 
     config = load_config(args.config)
+
+    if args.max_steps is not None:
+        config["training"]["max_steps"] = args.max_steps
+    if args.smoke:
+        config["training"]["max_steps"] = config["training"].get("max_steps") or 1
+        config["training"]["eval_strategy"] = "no"
+        config["training"]["save_strategy"] = "no"
+        config["training"]["load_best_model_at_end"] = False
+        config["output"]["adapter_dir"] = str(config["output"]["adapter_dir"]).rstrip("/") + "_smoke"
+        logger.info("Smoke mode: max_steps=%s, adapter_dir=%s",
+                    config["training"]["max_steps"], config["output"]["adapter_dir"])
 
     data_cfg = config["data"]
     train_path = Path(data_cfg["train_path"])
@@ -377,6 +404,17 @@ def main() -> int:
     print(f"  Eval losses:        {result['eval_losses']}")
     print(f"  Peak VRAM:          {result['peak_vram_gb']} GB")
     print(f"  Adapter saved:      {result['adapter_dir']}")
+
+    if args.smoke:
+        adapter_dir = Path(result["adapter_dir"])
+        peft_cfg = PeftConfig.from_pretrained(str(adapter_dir))
+        tensors = load_file(str(adapter_dir / "adapter_model.safetensors"))
+        if not tensors:
+            logger.error("Smoke reload failed: adapter_model.safetensors has no tensors")
+            return 1
+        logger.info("Smoke reload OK: peft_type=%s, %d LoRA tensors", peft_cfg.peft_type, len(tensors))
+        print(f"  Smoke reload:       OK (peft_type={peft_cfg.peft_type}, {len(tensors)} LoRA tensors)")
+
     print("=" * 60)
 
     return 0

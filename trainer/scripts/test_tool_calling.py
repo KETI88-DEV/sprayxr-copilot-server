@@ -145,15 +145,19 @@ class ToolCallingAdapterTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_dispatch_anomaly_detection_normal(self) -> None:
         calls: list[dict[str, Any]] = []
-        replies = [DummyResponse(json_data={"status": "success", "result": {"anomaly": "low"}})]
+        replies = [DummyResponse(json_data={"status": "success", "result": {"anomaly_detected": True, "anomalies": [{"type": "저도막"}]}})]
         client_cls = self._build_client_class(replies, calls)
         with patch("tool_calling_adapter.httpx.AsyncClient", new=client_cls):
             result = await self.adapter.dispatch_tool_call(
                 "anomaly_detection",
                 {
                     "image_context": "left area thin film",
-                    "dft_measurements": [90, 88],
-                    "env": {"temperature": 23, "humidity": 55},
+                    "zone_id": "B-3",
+                    "spec": {"nominal_um": 100, "tolerance_rule": "90/10"},
+                    "dft_measurements": [
+                        {"value_um": 90, "zone_id": "B-3", "position": "left"},
+                        {"value_um": 88, "zone_id": "B-3", "position": "left"}
+                    ],
                 },
             )
         self.assertEqual(result["status"], "success")
@@ -161,27 +165,29 @@ class ToolCallingAdapterTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_dispatch_anomaly_detection_edge_boundary_env(self) -> None:
         calls: list[dict[str, Any]] = []
-        replies = [DummyResponse(json_data={"status": "success", "result": {"anomaly": "none"}})]
+        replies = [DummyResponse(json_data={"status": "success", "result": {"anomaly_detected": False, "anomalies": []}})]
         client_cls = self._build_client_class(replies, calls)
         with patch("tool_calling_adapter.httpx.AsyncClient", new=client_cls):
             result = await self.adapter.dispatch_tool_call(
                 "anomaly_detection",
                 {
                     "image_context": "stable",
-                    "dft_measurements": [100],
-                    "env": {"temperature": 0, "humidity": 0},
+                    "zone_id": "B-3",
+                    "spec": {"nominal_um": 100, "tolerance_rule": "90/10"},
+                    "dft_measurements": [{"value_um": 100, "zone_id": "B-3", "position": "center"}],
                 },
             )
         self.assertEqual(result["status"], "success")
 
     async def test_dispatch_pose_estimation_normal(self) -> None:
         calls: list[dict[str, Any]] = []
-        replies = [DummyResponse(json_data={"status": "success", "result": {"score": 0.9}})]
+        replies = [DummyResponse(json_data={"status": "success", "result": {"similarity_score": 0.9}})]
         client_cls = self._build_client_class(replies, calls)
         args = {
-            "current_pose": {"joints": {"elbow": {"x": 1, "y": 2, "z": 3}}},
-            "reference_pose": {"joints": {"elbow": {"x": 1, "y": 1.5, "z": 3}}},
-            "imu_data": {"accel": [0.1, 0.2, 0.3], "gyro": [1, 2, 3]},
+            "mode": "compare",
+            "block_id": "BLK-A",
+            "current_pose": {"joints": {"elbow_r": {"x": 1, "y": 2, "z": 3}}},
+            "expert_pose_id": "EP-001",
         }
         with patch("tool_calling_adapter.httpx.AsyncClient", new=client_cls):
             result = await self.adapter.dispatch_tool_call("pose_estimation", args)
@@ -190,11 +196,12 @@ class ToolCallingAdapterTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_dispatch_pose_estimation_edge_without_imu(self) -> None:
         calls: list[dict[str, Any]] = []
-        replies = [DummyResponse(json_data={"status": "success", "result": {"score": 0.7}})]
+        replies = [DummyResponse(json_data={"status": "success", "result": {"similarity_score": 0.7}})]
         client_cls = self._build_client_class(replies, calls)
         args = {
-            "current_pose": {"joints": {"wrist": {"x": 0, "y": 0, "z": 0}}},
-            "reference_pose": {"joints": {"wrist": {"x": 0, "y": 0.5, "z": 0}}},
+            "mode": "compare",
+            "current_pose": {"joints": {"wrist_r": {"x": 0, "y": 0, "z": 0}}},
+            "block_id": "BLK-A",
         }
         with patch("tool_calling_adapter.httpx.AsyncClient", new=client_cls):
             result = await self.adapter.dispatch_tool_call("pose_estimation", args)
@@ -202,13 +209,15 @@ class ToolCallingAdapterTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_dispatch_sequence_validation_normal(self) -> None:
         calls: list[dict[str, Any]] = []
-        replies = [DummyResponse(json_data={"status": "success", "result": {"valid": True}})]
+        replies = [DummyResponse(json_data={"status": "success", "result": {"next_zone": "B-3", "block_sequence": ["BLK-A"]}})]
         client_cls = self._build_client_class(replies, calls)
         args = {
-            "trajectory": [{"x": 0, "y": 1, "z": 2, "timestamp": 1.0}, {"x": 0, "y": 0, "z": 2, "timestamp": 2.0}],
-            "zone_id": "B-3",
-            "zone_type": "수직 패널",
-            "reference_pattern": "top_to_bottom",
+            "structure_type": "block",
+            "zone_map": [
+                {"zone_id": "B-3", "block_id": "BLK-A", "zone_type": "수직 패널", "position": "upper", "is_painted": False, "area_m2": 8.0},
+                {"zone_id": "B-4", "block_id": "BLK-A", "zone_type": "수직 패널", "position": "middle", "is_painted": False, "area_m2": 6.0}
+            ],
+            "current_zone_id": "B-3",
         }
         with patch("tool_calling_adapter.httpx.AsyncClient", new=client_cls):
             result = await self.adapter.dispatch_tool_call("sequence_validation", args)
@@ -217,13 +226,13 @@ class ToolCallingAdapterTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_dispatch_sequence_validation_edge_single_point(self) -> None:
         calls: list[dict[str, Any]] = []
-        replies = [DummyResponse(json_data={"status": "success", "result": {"valid": False}})]
+        replies = [DummyResponse(json_data={"status": "success", "result": {"next_zone": "A-1", "block_sequence": ["BLK-A"]}})]
         client_cls = self._build_client_class(replies, calls)
         args = {
-            "trajectory": [{"x": 0, "y": 0, "z": 0, "timestamp": 1.0}],
-            "zone_id": "A-1",
-            "zone_type": "수평 패널",
-            "reference_pattern": "left_to_right",
+            "structure_type": "block",
+            "zone_map": [
+                {"zone_id": "A-1", "block_id": "BLK-A", "zone_type": "수평 패널", "position": "left", "is_painted": False, "area_m2": 4.0}
+            ],
         }
         with patch("tool_calling_adapter.httpx.AsyncClient", new=client_cls):
             result = await self.adapter.dispatch_tool_call("sequence_validation", args)

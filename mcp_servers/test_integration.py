@@ -41,7 +41,7 @@ class IntegrationTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         payload = to_dict(response_json(response))
         self.assertEqual(payload.get("status"), "ok")
-        self.assertEqual(payload.get("servers"), 6)
+        self.assertEqual(payload.get("servers"), 7)
         self.assertIn("timestamp", payload)
 
     def test_dft_judge_pass(self) -> None:
@@ -90,15 +90,24 @@ class IntegrationTests(unittest.TestCase):
             "/anomaly_detection/detect",
             json={
                 "image_context": "fixture",
-                "dft_measurements": [100.0, 60.0, 100.0],
-                "env": {"temperature": 23.0, "humidity": 55.0},
+                "zone_id": "B-3",
+                "spec": {"nominal_um": 100.0, "tolerance_rule": "90/10"},
+                "dft_measurements": [
+                    {"value_um": 100.0, "zone_id": "B-3", "position": "center"},
+                    {"value_um": 60.0, "zone_id": "B-3", "position": "lower"},
+                    {"value_um": 100.0, "zone_id": "B-3", "position": "upper"}
+                ],
             },
         )
         self.assertEqual(response.status_code, 200)
         payload = to_dict(response_json(response))
         result = to_dict(payload["result"])
         self.assertEqual(result.get("anomaly_detected"), True)
-        self.assertEqual(result.get("anomaly_type"), "under_thickness")
+        self.assertEqual(result.get("anomaly_count"), 1)
+        anomalies = cast(list[object], result["anomalies"])
+        first_anomaly = to_dict(anomalies[0])
+        self.assertEqual(first_anomaly.get("type"), "저도막")
+        self.assertEqual(first_anomaly.get("position"), "lower")
 
     def test_anomaly_detection_no_anomaly(self) -> None:
         self.reset_state()
@@ -107,15 +116,21 @@ class IntegrationTests(unittest.TestCase):
             "/anomaly_detection/detect",
             json={
                 "image_context": "fixture",
-                "dft_measurements": [100.0, 102.0, 98.0],
-                "env": {"temperature": 23.0, "humidity": 55.0},
+                "zone_id": "B-3",
+                "spec": {"nominal_um": 100.0, "tolerance_rule": "90/10"},
+                "dft_measurements": [
+                    {"value_um": 100.0, "zone_id": "B-3", "position": "center"},
+                    {"value_um": 102.0, "zone_id": "B-3", "position": "lower"},
+                    {"value_um": 98.0, "zone_id": "B-3", "position": "upper"}
+                ],
             },
         )
         self.assertEqual(response.status_code, 200)
         payload = to_dict(response_json(response))
         result = to_dict(payload["result"])
         self.assertEqual(result.get("anomaly_detected"), False)
-        self.assertEqual(result.get("anomaly_type"), "none")
+        self.assertEqual(result.get("anomaly_count"), 0)
+        self.assertEqual(result.get("anomalies"), [])
 
     def test_sequence_validation_match(self) -> None:
         self.reset_state()
@@ -123,20 +138,22 @@ class IntegrationTests(unittest.TestCase):
         response = client.post(
             "/sequence_validation/validate",
             json={
-                "trajectory": [
-                    {"x": 0, "y": 10, "z": 0, "timestamp": 1},
-                    {"x": 0, "y": 5, "z": 0, "timestamp": 2},
-                    {"x": 0, "y": 2, "z": 0, "timestamp": 3},
-                ],
-                "zone_id": "B-3",
-                "zone_type": "수직 패널",
-                "reference_pattern": "top_to_bottom",
+                "structure_type": "block",
+                "current_zone_id": "A-1",
+                "zone_map": [
+                    {"zone_id": "A-1", "block_id": "BLK-A", "zone_type": "수직 패널", "position": "upper", "is_painted": False, "area_m2": 10.0},
+                    {"zone_id": "A-2", "block_id": "BLK-A", "zone_type": "수직 패널", "position": "middle", "is_painted": False, "area_m2": 8.0},
+                    {"zone_id": "B-1", "block_id": "BLK-B", "zone_type": "수직 패널", "position": "upper", "is_painted": False, "area_m2": 12.0}
+                ]
             },
         )
         self.assertEqual(response.status_code, 200)
         payload = to_dict(response_json(response))
         result = to_dict(payload["result"])
-        self.assertEqual(result.get("is_valid"), True)
+        self.assertEqual(result.get("current_block_id"), "BLK-A")
+        self.assertEqual(result.get("next_block"), "BLK-A")
+        self.assertEqual(result.get("next_zone"), "A-2")
+        self.assertEqual(result.get("current_block_remaining"), ["A-2"])
 
     def test_sequence_validation_mismatch(self) -> None:
         self.reset_state()
@@ -144,23 +161,23 @@ class IntegrationTests(unittest.TestCase):
         response = client.post(
             "/sequence_validation/validate",
             json={
-                "trajectory": [
-                    {"x": 0, "y": 1, "z": 0, "timestamp": 1},
-                    {"x": 0, "y": 4, "z": 0, "timestamp": 2},
-                    {"x": 0, "y": 8, "z": 0, "timestamp": 3},
-                ],
-                "zone_id": "B-3",
-                "zone_type": "수직 패널",
-                "reference_pattern": "top_to_bottom",
+                "structure_type": "block",
+                "current_zone_id": "A-1",
+                "zone_map": [
+                    {"zone_id": "A-1", "block_id": "BLK-A", "zone_type": "수직 패널", "position": "upper", "is_painted": False, "area_m2": 10.0},
+                    {"zone_id": "A-2", "block_id": "BLK-A", "zone_type": "수직 패널", "position": "middle", "is_painted": True, "area_m2": 8.0},
+                    {"zone_id": "B-1", "block_id": "BLK-B", "zone_type": "수직 패널", "position": "upper", "is_painted": False, "area_m2": 12.0},
+                    {"zone_id": "B-2", "block_id": "BLK-B", "zone_type": "모서리", "position": "lower", "is_painted": False, "area_m2": 3.0}
+                ]
             },
         )
         self.assertEqual(response.status_code, 200)
         payload = to_dict(response_json(response))
         result = to_dict(payload["result"])
-        self.assertEqual(result.get("is_valid"), False)
-        violations = cast(list[object], result["violations"])
-        first_violation = to_dict(violations[0])
-        self.assertEqual(first_violation.get("reason"), "direction_mismatch")
+        self.assertEqual(result.get("current_block_id"), "BLK-A")
+        self.assertEqual(result.get("next_block"), "BLK-B")
+        self.assertEqual(result.get("next_zone"), "B-1")
+        self.assertEqual(result.get("block_sequence"), ["BLK-B"])
 
     def test_pose_estimation_compare(self) -> None:
         self.reset_state()
@@ -168,26 +185,25 @@ class IntegrationTests(unittest.TestCase):
         response = client.post(
             "/pose_estimation/compare",
             json={
+                "mode": "compare",
+                "block_id": "BLK-A",
                 "current_pose": {
                     "joints": {
-                        "shoulder": {"x": 1, "y": 1, "z": 1},
-                        "elbow": {"x": 2, "y": 2, "z": 2},
+                        "wrist_r": {"x": 0.15, "y": -0.02, "z": 0.5, "roll": 2.0, "pitch": 18.0, "yaw": 5.0},
+                        "elbow_r": {"x": 0.28, "y": -0.1, "z": 0.35, "roll": 0.0, "pitch": 12.0, "yaw": 0.0}
                     }
-                },
-                "reference_pose": {
-                    "joints": {
-                        "shoulder": {"x": 1.5, "y": 1.0, "z": 0.5},
-                        "elbow": {"x": 2.0, "y": 1.5, "z": 2.5},
-                    }
-                },
+                }
             },
         )
         self.assertEqual(response.status_code, 200)
         payload = to_dict(response_json(response))
         result = to_dict(payload["result"])
+        self.assertEqual(result.get("expert_pose_id"), "EP-001")
         similarity = cast(float, result["similarity_score"])
         self.assertGreaterEqual(similarity, 0.0)
         self.assertLessEqual(similarity, 1.0)
+        corrections = cast(list[object], result["corrections"])
+        self.assertGreaterEqual(len(corrections), 1)
 
     def test_pose_estimation_missing_reference_pose(self) -> None:
         self.reset_state()

@@ -1,0 +1,134 @@
+{
+  "$comment": "운용(runtime) 예제. 시뮬레이터(Unity)가 Coaching API로 전송하는 세션 생명주기 3종 메시지. 각 top-level 키는 별개의 HTTP 요청 body다. 전송: HTTP REST(WebSocket 미채택). 식별자 session_id/user_id/event_id 필수(REQ-13).",
+  "message_1_session_start": {
+    "$endpoint": "POST /v1/sessions/start",
+    "$purpose": "세션 컨텍스트 초기화. skeleton_def/conventions는 세션당 1회 여기서만 전송. 응답에는 훈련 시작 전 순서 안내(recommended_flow)가 포함된다(계획 0.9).",
+    "body": {
+      "session_id": "S-20260722-042",
+      "user_id": "W-031",
+      "recorded_at": "2026-07-22T02:40:11Z",
+      "level_id": 1,
+      "model": "Exam",
+      "worker": {
+        "skill_level": "novice",
+        "handedness": "right",
+        "height_mm": 1682
+      },
+      "spec": {
+        "nominal_um": 100.0,
+        "tolerance_rule": "90/10"
+      },
+      "conventions": {
+        "position_unit": "m",
+        "distance_unit": "mm",
+        "speed_unit": "mm/s",
+        "rotation": { "type": "euler_deg", "order": "ZXY", "intrinsic": true, "engine": "Unity" }
+      },
+      "skeleton_def": {
+        "joint_count": 20,
+        "joints": ["Pelvis", "Spine", "Chest", "LeftShoulder", "LeftUpperArm", "LeftForeArm", "LeftHand", "RightShoulder", "RightUpperArm", "RightForeArm", "RightHand", "LeftThigh", "LeftCalf", "LeftFoot", "LeftToe", "RightThigh", "RightCalf", "RightFoot", "RightToe", "Head"],
+        "hierarchy": "standard_unity_humanoid",
+        "bind_pose_local_pos_m": {
+          "RightUpperArm": [-0.1796948, 9.536744e-10, 0.0],
+          "RightForeArm": [-0.2430327, 2.980232e-07, -7.450581e-08],
+          "RightHand": [-0.2430327, 2.23705e-08, -4.1796445e-08]
+        }
+      }
+    }
+  },
+  "message_2_event": {
+    "$endpoint": "POST /v1/sessions/{session_id}/events",
+    "$purpose": "실시간 코칭 트리거(범위: 사소한 질문 RAG + 이상탐지만 — 계획 0.9). event 1개 = spray burst 1개. sequence_data는 이벤트 시점에 분석되지 않고 timeseries에 누적되어 세션 완료 리뷰(자세 유사도/교정·순서 회고)의 1차 입력이 된다. frames는 2개만 예시(실제 수백).",
+    "body": {
+      "session_id": "S-20260722-042",
+      "user_id": "W-031",
+      "event_id": "E-0007",
+      "user_request": "지금 분사 상태 괜찮아? 이상 없어?",
+      "sequence_data": {
+        "burst_meta": {
+          "definition": "spray_trigger_on_burst",
+          "spray_range": { "start_i": 522, "end_i": 640, "t_start_sec": 12.10, "t_end_sec": 13.42 },
+          "frame_count": 119,
+          "spray_frame_count": 118
+        },
+        "target_region_summary": {
+          "region_id": "R-UP-01",
+          "frame_ratio": { "R-UP-01": 0.9, "R-EDGE-01": 0.1 }
+        },
+        "frames": [
+          {
+            "t_sec": 12.10,
+            "spray_on": true,
+            "record_flag": true,
+            "skeleton": {
+              "root_pos_m": [-0.108, -0.061, 0.041],
+              "root_rot_euler_deg": [303.0, 356.9, 66.2],
+              "joints_rot_euler_deg": {
+                "Spine": [356.4, 9.1, 51.2],
+                "Chest": [12.8, 28.7, 294.9],
+                "RightShoulder": [284.6, 132.4, 166.1],
+                "RightUpperArm": [345.2, 3.1, 56.8],
+                "RightForeArm": [0.0, 0.0, 0.0],
+                "RightHand": [327.9, 8.4, 38.2],
+                "Head": [36.1, 355.0, 13.9]
+              }
+            },
+            "active_gun_pose": {
+              "key": "gun_hangil_short",
+              "pos_m": [0.702, 4.281, 0.108],
+              "rot_euler_deg": [24.9, 232.7, 135.4]
+            },
+            "gun_metrics": { "distance_real_mm": 612.4, "speed_real_mms": 2980.0, "valid": true }
+          },
+          {
+            "t_sec": 12.111,
+            "spray_on": true,
+            "record_flag": true,
+            "skeleton": {
+              "root_pos_m": [-0.109, -0.062, 0.042],
+              "root_rot_euler_deg": [303.1, 357.2, 66.0],
+              "joints_rot_euler_deg": {
+                "Spine": [356.6, 9.4, 50.9],
+                "Chest": [12.5, 28.3, 294.7],
+                "RightShoulder": [283.1, 133.9, 165.6],
+                "RightUpperArm": [343.9, 2.9, 57.0],
+                "RightForeArm": [0.0, 0.0, 0.0],
+                "RightHand": [327.1, 8.8, 37.6],
+                "Head": [35.9, 355.2, 14.0]
+              }
+            },
+            "active_gun_pose": {
+              "key": "gun_hangil_short",
+              "pos_m": [0.700, 4.288, 0.101],
+              "rot_euler_deg": [23.1, 231.8, 135.0]
+            },
+            "gun_metrics": { "distance_real_mm": 634.1, "speed_real_mms": 3120.0, "valid": true }
+          }
+        ],
+        "$surface_hit_note": "REQ-04: 시뮬레이터가 surface_hit(hit_pos_m, face_id, region_id, normal)를 프레임에 넣어주면 최적. 미제공 시 Coaching API가 active_gun_pose 레이캐스트로 근사(정확도 저하)."
+      }
+    }
+  },
+  "message_3_session_complete": {
+    "$endpoint": "POST /v1/sessions/{session_id}/complete",
+    "$purpose": "세션 종료. 일괄 리뷰/리포트 생성 요청.",
+    "body": {
+      "session_id": "S-20260722-042",
+      "user_id": "W-031",
+      "dft_measurements": [
+        { "value_um": 82.0, "region_id": "R-UP-01", "position": "upper" },
+        { "value_um": 88.0, "region_id": "R-UP-01", "position": "middle" },
+        { "value_um": 140.0, "region_id": "R-LO-01", "position": "lower" }
+      ],
+      "region_results": [
+        { "region_id": "R-UP-01", "coverage_pct": 0.83, "mean_thickness": 85.0 },
+        { "region_id": "R-LO-01", "coverage_pct": 0.71, "mean_thickness": 140.0 }
+      ],
+      "defects": [
+        { "region_id": "R-UP-01", "type": "저도막", "position": "upper", "severity": 0.6 },
+        { "region_id": "R-LO-01", "type": "과도막", "position": "lower", "severity": 0.4 }
+      ],
+      "thickness_texture_refs": null
+    }
+  }
+}

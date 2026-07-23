@@ -67,6 +67,7 @@ output/
 
 # Claude
 .claude/
+.omc/
 
 # development
 trainer/scripts/prompt/

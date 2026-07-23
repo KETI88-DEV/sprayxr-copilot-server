@@ -1,0 +1,140 @@
+{
+  "$comment": "에이전트가 출력하여 시뮬레이터(Unity)로 회신하는 응답 3종 (계획 0.9 기능-시점 매핑 v3 반영). (A) session_start 응답 — 훈련 시작 전 순서 안내, (B) event 응답 — 실시간 코칭은 RAG 질의응답/이상탐지만(자세/순서 분석 없음, 시퀀스 데이터는 누적만), (C) session_complete 응답 — 세션 리뷰 리포트(자세 유사도/교정 + 부족 부위 분포 분석). 각 top-level 키는 별개의 HTTP 응답 body다. simulator_runtime_messages.example.json의 start/event(E-0007, 거리 612mm 과다)/complete(저도막/과도막)에 대응하는 출력.",
+  "response_to_session_start": {
+    "$http": "POST /v1/sessions/start 의 200 응답",
+    "$comment": "0.9: 순서 안내는 훈련 시작 전 1회 — sequence_validation guide 모드(결정론, LLM 라운드 불요).",
+    "session_id": "S-20260722-042",
+    "user_id": "W-031",
+    "correlation_id": "req-9f3c1a55",
+    "generated_at": "2026-07-22T02:40:12Z",
+    "sequence_guide": {
+      "flow_source": "expert",
+      "recommended_flow": ["R-UP-01", "R-MI-01", "R-LO-01", "R-EDGE-01"],
+      "region_names": { "R-UP-01": "상부 평면", "R-MI-01": "중부 평면", "R-LO-01": "하부 평면", "R-EDGE-01": "모서리" },
+      "guidance": "레벨 1은 상부(R-UP-01)에서 시작해 중부(R-MI-01), 하부(R-LO-01) 순으로 내려가며 도장하고, 모서리(R-EDGE-01)는 마지막에 처리하세요. 각 구역은 분사 거리 400~600mm를 유지하고, 한 구역을 완료한 뒤 다음 구역으로 이동합니다."
+    },
+    "spec_summary": { "nominal_um": 100.0, "tolerance_rule": "90/10" },
+    "tool_calls_made": ["sequence_validation:guide"],
+    "latency_ms": 142
+  },
+  "response_to_event": {
+    "$http": "POST /v1/sessions/{session_id}/events 의 200 응답",
+    "$comment": "0.9: 이벤트 실시간 코칭 범위 = 사소한 질문(RAG, fast) 또는 이상탐지(training_realtime)만. pose/sequence 도구는 이벤트 경로에 미노출. 수신한 sequence_data는 분석 없이 timeseries 누적(세션 완료 리뷰의 입력).",
+    "session_id": "S-20260722-042",
+    "user_id": "W-031",
+    "event_id": "E-0007",
+    "correlation_id": "req-9f3c1a80",
+    "route": "training_realtime",
+    "generated_at": "2026-07-22T02:41:33Z",
+    "text_guide": {
+      "summary": "분사 거리가 612mm로 권장 대역(400~600mm)을 초과해 저도막 위험이 있습니다. 30cm가량 다가서세요.",
+      "detail": "직전 burst의 평균 분사 거리 612mm, 이동 속도 2,980mm/s로 권장 상한을 초과합니다. 거리가 멀수록 도료 도달량이 줄어 상부 구역(R-UP-01)에 저도막이 생길 수 있습니다. 분사 거리를 400~600mm로 좁히고 이동 속도를 일정하게 유지하세요.",
+      "priority": "high"
+    },
+    "anomaly": {
+      "detected": true,
+      "items": [
+        { "type": "분사 거리 과다", "metric": "distance_real_mm", "observed": 612.4, "recommended_range": [400.0, 600.0], "severity": 0.6, "risk": "저도막" }
+      ]
+    },
+    "sequence_data_ack": {
+      "stored": true,
+      "frames_stored": 119,
+      "$comment": "자세/순서 프레임은 이벤트 시점에 분석하지 않고 (session_id, user_id, event_id) 키로 누적만 한다."
+    },
+    "dft_result": null,
+    "citations": ["DOC-0421-C0007", "DOC-0388-C0012"],
+    "tool_calls_made": ["anomaly_detection"],
+    "latency_ms": 4210
+  },
+  "response_to_session_complete": {
+    "$http": "POST /v1/sessions/{session_id}/complete 의 200 응답",
+    "$comment": "0.9: 훈련 후 분석 = (a) 자세 유사도/교정(반사실 검증 포함), (b) 부족 부위 분포 분석(dft 90/10 + anomaly 분포 + 커버리지), (c) 순서 회고(선택).",
+    "session_id": "S-20260722-042",
+    "user_id": "W-031",
+    "correlation_id": "req-9f3c1b12",
+    "route": "training_review",
+    "generated_at": "2026-07-22T02:47:05Z",
+    "summary_report": {
+      "overall_score": 0.63,
+      "dft_result": {
+        "verdict": "fail",
+        "nominal_um": 100.0,
+        "mean_um": 103.3,
+        "measurements_um": [82.0, 88.0, 140.0],
+        "rule": "90/10",
+        "threshold_um": 90.0,
+        "out_of_spec_count": 2
+      },
+      "pose_analysis": {
+        "$comment": "T12에 누적된 세션 전체 burst를 region별 expert 참조와 DTW 정렬해 산출. 이벤트 시점에는 계산하지 않음.",
+        "compared_chain": ["RightShoulder", "RightUpperArm", "RightForeArm", "RightHand", "Spine", "Chest"],
+        "events_evaluated": 6,
+        "mean_similarity": 0.74,
+        "weakest_joint": "RightUpperArm",
+        "regions": [
+          {
+            "region_id": "R-UP-01",
+            "similarity_score": 0.72,
+            "per_joint_similarity": {
+              "RightShoulder": 0.68,
+              "RightUpperArm": 0.61,
+              "RightForeArm": 0.90,
+              "RightHand": 0.79,
+              "Spine": 0.83,
+              "Chest": 0.80
+            },
+            "corrections": [
+              { "joint": "RightUpperArm", "axis": "pitch", "current_deg": 345.2, "target_deg": 356.0, "delta_deg": 10.8, "phase": "mid", "hint": "위팔을 내려 노즐을 정면으로" },
+              { "joint": "RightShoulder", "axis": "yaw", "current_deg": 284.6, "target_deg": 293.0, "delta_deg": 8.4, "phase": "mid", "hint": "어깨 뒤젖힘 완화" }
+            ],
+            "expected_similarity_after_correction": 0.86,
+            "counterfactual_verified": true
+          }
+        ]
+      },
+      "deficiency_distribution": {
+        "$comment": "분포 분석 — 어떤 부위가 부족한지. dft_judge 90/10 + anomaly_detection 분포 + region 커버리지 결합, 부족 순위로 정렬.",
+        "ranked_deficient_regions": [
+          {
+            "rank": 1,
+            "region_id": "R-UP-01",
+            "deficiency": "저도막",
+            "mean_thickness_um": 85.0,
+            "coverage_pct": 0.83,
+            "below_threshold_ratio": 0.67,
+            "severity": 0.6,
+            "root_cause": "분사 거리 과다(평균 612mm) 및 상반신 젖힘으로 도료 도달량 부족"
+          },
+          {
+            "rank": 2,
+            "region_id": "R-LO-01",
+            "deficiency": "과도막",
+            "mean_thickness_um": 140.0,
+            "coverage_pct": 0.71,
+            "below_threshold_ratio": 0.0,
+            "severity": 0.4,
+            "root_cause": "하부 구간 이동 속도 저하로 과도포"
+          }
+        ]
+      },
+      "sequence_adherence": {
+        "$comment": "순서 회고(선택) — T9 review 모드. 실시간 이탈 지적은 범위 제외.",
+        "flow_source": "expert",
+        "followed_ratio": 0.83,
+        "deviations_count": 1,
+        "deviations": [
+          { "event_id": "E-0011", "painted_region": "R-LO-01", "expected_region": "R-MI-01", "severity": "minor" }
+        ]
+      },
+      "top_corrections": [
+        { "joint": "RightUpperArm", "axis": "pitch", "typical_delta_deg": 10.5, "impact": "상부 저도막 개선" },
+        { "action": "standoff", "detail": "분사 거리를 400~600mm로 유지" }
+      ],
+      "text_report": "이번 세션은 상부(R-UP-01) 저도막과 하부(R-LO-01) 과도막이 관찰되어 DFT 90/10 기준 불합격입니다. 부족 부위 분포 분석 결과 가장 부족한 구역은 상부(R-UP-01, 평균 85µm)입니다. 자세 분석에서는 오른 위팔(RightUpperArm)을 목표보다 낮게 연 자세가 반복되어 스프레이가 위로 향했고, 위팔을 10.8도 내리면 자세 유사도가 0.72에서 0.86으로 개선되는 것으로 검증되었습니다. 분사 거리를 400~600mm로 유지하면 상부 도막이 개선됩니다. 도장 순서는 대체로 권장 흐름을 따랐으나 중부 완료 전 하부로 이동한 1회 이탈이 있었습니다."
+    },
+    "citations": ["DOC-0421-C0007", "DOC-0405-C0003"],
+    "tool_calls_made": ["dft_judge", "anomaly_detection", "pose_estimation", "sequence_validation:review", "location_tracking"],
+    "latency_ms": 21044
+  }
+}

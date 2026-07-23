@@ -65,7 +65,7 @@ class TraineeProfile:
 # ---------------------------------------------------------------------------
 # Semantic Router — keyword-based 3-way classification
 # Routes: training_realtime | training_review | fast
-#   training_realtime: 순서/이상탐지 (< 60s, max_rounds=3)
+#   training_realtime: 순서/이상탐지 (< 60s, max_rounds=2)
 #   training_review: 자세/분포분석 (no time limit, max_rounds=5)
 #   fast: simple QA, no tools (single LLM round)
 # ---------------------------------------------------------------------------
@@ -111,7 +111,7 @@ ROUTE_MAX_TOKENS: dict[str, int] = {
 class SemanticRouter:
     """Classifies questions into training_realtime, training_review, or fast.
 
-    - training_realtime: 순서/이상탐지 tools, max_rounds=3, target < 60s
+    - training_realtime: 순서/이상탐지 tools, max_rounds=2, target < 60s
     - training_review: 자세/분포분석 tools, max_rounds=5, no time limit
     - fast: docQA only, no tool loop
     """
@@ -512,9 +512,14 @@ class AgentPipeline:
         }
         for call in tool_calls:
             name = call.get("name", "")
-            result = call.get("result", {})
-            if not isinstance(result, dict) or result.get("status") == "error":
+            envelope = call.get("result", {})
+            if not isinstance(envelope, dict) or envelope.get("status") == "error":
                 continue
+
+            # Unwrap MCP envelope: business payload is nested under "result" (common.py success_response).
+            result = envelope.get("result")
+            if not isinstance(result, dict):
+                result = {}
 
             if name == "pose_estimation":
                 sections["pose_comparison"] = {

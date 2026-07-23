@@ -1,0 +1,191 @@
+{
+  "$comment": "개발용(offline) 예제. exporter가 생성해야 할 2종 아티팩트. 각 top-level 키는 물리적으로 별개의 파일이다. schema 0.4.0. 관절/건 수치는 docs/1_1000442_seq002_sample30.json 실측 기반. frames는 2개만 예시(실제는 수백 프레임).",
+  "artifact_1_level_regions": {
+    "$file": "levels/level_01_regions.json  (레벨당 1회 정적 생성. 세션과 무관)",
+    "$requirement": "REQ-06, REQ-12",
+    "level_id": 1,
+    "model": "Exam",
+    "mesh_ref": "meshes/level_01.glb",
+    "regions": [
+      {
+        "region_id": "R-UP-01",
+        "region_type": "수직 패널",
+        "position": "upper",
+        "face_ids": [1001, 1002, 1003, 1004],
+        "area_m2": 2.4,
+        "adjacency": ["R-MI-01", "R-EDGE-01"]
+      },
+      {
+        "region_id": "R-MI-01",
+        "region_type": "수직 패널",
+        "position": "middle",
+        "face_ids": [1101, 1102, 1103, 1104],
+        "area_m2": 2.6,
+        "adjacency": ["R-UP-01", "R-LO-01"]
+      },
+      {
+        "region_id": "R-LO-01",
+        "region_type": "수직 패널",
+        "position": "lower",
+        "face_ids": [1201, 1202, 1203],
+        "area_m2": 2.1,
+        "adjacency": ["R-MI-01"]
+      },
+      {
+        "region_id": "R-EDGE-01",
+        "region_type": "모서리",
+        "position": "left",
+        "face_ids": [1301, 1302],
+        "area_m2": 0.6,
+        "adjacency": ["R-UP-01"]
+      }
+    ]
+  },
+  "artifact_2_expert_session": {
+    "$file": "sessions/expert/1_1000442.json  (skill_level=expert 라벨 세션. 참조 아티팩트(자세 분포, macro flow) build 입력)",
+    "$requirement": "REQ-01, REQ-02, REQ-03, REQ-04, REQ-05, REQ-08, REQ-09, REQ-10, REQ-13",
+    "schema_version": "0.4.0",
+    "session_id": "S-20260721-001",
+    "user_id": "W-017",
+    "recorded_at": "2026-07-21T09:12:03Z",
+    "level_id": 1,
+    "model": "Exam",
+    "worker": {
+      "skill_level": "expert",
+      "handedness": "right",
+      "height_mm": 1730
+    },
+    "spec": {
+      "nominal_um": 100.0,
+      "tolerance_rule": "90/10"
+    },
+    "conventions": {
+      "position_unit": "m",
+      "distance_unit": "mm",
+      "speed_unit": "mm/s",
+      "rotation": {
+        "type": "euler_deg",
+        "order": "ZXY",
+        "intrinsic": true,
+        "engine": "Unity"
+      }
+    },
+    "skeleton_def": {
+      "joint_count": 20,
+      "joints": ["Pelvis", "Spine", "Chest", "LeftShoulder", "LeftUpperArm", "LeftForeArm", "LeftHand", "RightShoulder", "RightUpperArm", "RightForeArm", "RightHand", "LeftThigh", "LeftCalf", "LeftFoot", "LeftToe", "RightThigh", "RightCalf", "RightFoot", "RightToe", "Head"],
+      "hierarchy": {
+        "$note": "REQ-08. 표준 Unity Humanoid 계층이면 'standard_unity_humanoid' 문자열로 대체 가능.",
+        "Pelvis": ["Spine", "LeftThigh", "RightThigh"],
+        "Spine": ["Chest"],
+        "Chest": ["LeftShoulder", "RightShoulder", "Head"],
+        "RightShoulder": ["RightUpperArm"],
+        "RightUpperArm": ["RightForeArm"],
+        "RightForeArm": ["RightHand"]
+      },
+      "bind_pose_local_pos_m": {
+        "$note": "전 프레임 상수. 현행 0.3.0 값 유지.",
+        "RightUpperArm": [-0.1796948, 9.536744e-10, 0.0],
+        "RightForeArm": [-0.2430327, 2.980232e-07, -7.450581e-08],
+        "RightHand": [-0.2430327, 2.23705e-08, -4.1796445e-08]
+      }
+    },
+    "sequences": [
+      {
+        "seq_id": 2,
+        "definition": "spray_trigger_on_burst",
+        "target_region": {
+          "region_id": "R-UP-01",
+          "frame_ratio": { "R-UP-01": 0.94, "R-EDGE-01": 0.06 }
+        },
+        "spray_range": { "start_i": 522, "end_i": 1054, "t_start_sec": 5.786123, "t_end_sec": 11.69731 },
+        "stats": {
+          "spray_frame_count": 533,
+          "distance_real_mm": { "mean": 465.85, "std": 81.03, "min": 326.6, "max": 714.69 },
+          "speed_real_mms": { "mean": 3083.69, "max": 5074.0 }
+        },
+        "frames": [
+          {
+            "i": 522,
+            "t_sec": 5.786123,
+            "spray_on": true,
+            "record_flag": true,
+            "skeleton": {
+              "root_pos_m": [-0.10592, -0.05783, 0.03852],
+              "root_rot_euler_deg": [303.05, 357.53, 65.54],
+              "joints_rot_euler_deg": {
+                "Spine": [354.9, 6.5, 54.93],
+                "Chest": [15.69, 32.41, 296.55],
+                "RightShoulder": [293.32, 124.53, 170.25],
+                "RightUpperArm": [352.1, 4.47, 54.97],
+                "RightForeArm": [0.0, 0.0, 0.0],
+                "RightHand": [333.1, 5.65, 42.5],
+                "Head": [37.4, 353.9, 12.46]
+              }
+            },
+            "active_gun": {
+              "key": "gun_hangil_short",
+              "pos_m": [0.7115, 4.2591, 0.1290],
+              "rot_euler_deg": [31.83, 235.84, 136.81]
+            },
+            "gun_metrics": {
+              "distance_real_mm": 465.8,
+              "speed_real_mms": 2732.0,
+              "valid": true
+            },
+            "surface_hit": {
+              "hit_pos_m": [1.204, 4.31, 0.02],
+              "face_id": 1002,
+              "region_id": "R-UP-01",
+              "normal": [0.0, 0.0, 1.0]
+            }
+          },
+          {
+            "i": 523,
+            "t_sec": 5.797235,
+            "spray_on": true,
+            "record_flag": true,
+            "skeleton": {
+              "root_pos_m": [-0.1065, -0.0585, 0.0392],
+              "root_rot_euler_deg": [303.1, 357.9, 65.2],
+              "joints_rot_euler_deg": {
+                "Spine": [355.0, 6.9, 54.5],
+                "Chest": [15.4, 32.0, 296.4],
+                "RightShoulder": [291.8, 126.1, 169.6],
+                "RightUpperArm": [350.9, 4.2, 55.1],
+                "RightForeArm": [0.0, 0.0, 0.0],
+                "RightHand": [332.3, 6.1, 41.8],
+                "Head": [37.2, 354.1, 12.6]
+              }
+            },
+            "active_gun": {
+              "key": "gun_hangil_short",
+              "pos_m": [0.7089, 4.2662, 0.1201],
+              "rot_euler_deg": [29.5, 234.9, 136.4]
+            },
+            "gun_metrics": {
+              "distance_real_mm": 452.3,
+              "speed_real_mms": 2610.0,
+              "valid": true
+            },
+            "surface_hit": {
+              "hit_pos_m": [1.205, 4.33, 0.02],
+              "face_id": 1002,
+              "region_id": "R-UP-01",
+              "normal": [0.0, 0.0, 1.0]
+            }
+          }
+        ]
+      }
+    ],
+    "result": {
+      "dft_measurements": [
+        { "value_um": 98.0, "region_id": "R-UP-01", "position": "upper" },
+        { "value_um": 105.0, "region_id": "R-MI-01", "position": "middle" }
+      ],
+      "region_results": [
+        { "region_id": "R-UP-01", "coverage_pct": 0.98, "mean_thickness": 101.2 }
+      ],
+      "defects": []
+    }
+  }
+}

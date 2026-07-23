@@ -1,0 +1,299 @@
+{
+  "schema_version": "0.3.0",
+  "source": {
+    "level": 1,
+    "session_id": "1000442",
+    "data_files": [
+      {
+        "data_id": 1,
+        "files": [
+          "c0e0d1e3-1_1000442_1.csv",
+          "362226b9-1_1000442_1.txt",
+          "5dac8499-1_1000442_1_Input.txt"
+        ]
+      }
+    ],
+    "exporter": {
+      "sw_name": null,
+      "sw_version": null
+    }
+  },
+  "conventions": {
+    "position_unit": "m",
+    "rotation": {
+      "type": "euler_deg",
+      "order": null,
+      "engine": "Unity",
+      "note": "회전 순서 미확인 → null. Unity 기본이면 'ZXY'로 확정할 것"
+    },
+    "distance_unit": "mm",
+    "speed_unit": "mm/s",
+    "time_origin": "recording_start_per_data_file",
+    "coordinate_frame": null,
+    "null_policy": "미측정/의미미확정 값은 null. 필드 생략 금지"
+  },
+  "capture": {
+    "sampling": {
+      "fixed_rate": false,
+      "dt_mean_sec": 0.01111,
+      "dt_min_sec": 0.008333,
+      "dt_max_sec": 0.01112
+    },
+    "tracked_objects": [
+      {
+        "key": "gun_hangil_short",
+        "source_name": "한길숏건"
+      },
+      {
+        "key": "gun_hangil_pole",
+        "source_name": "한길폴건"
+      },
+      {
+        "key": "gun_bando_short",
+        "source_name": "반도숏건"
+      },
+      {
+        "key": "gun_bando_pole",
+        "source_name": "반도폴건"
+      },
+      {
+        "key": "flashlight",
+        "source_name": "플래쉬"
+      },
+      {
+        "key": "camera",
+        "source_name": "카메라"
+      }
+    ],
+    "active_gun": null
+  },
+  "settings": {
+    "varnish_id": 2,
+    "varnish_color_id": 1,
+    "nozzle_id": 3,
+    "month": 7,
+    "pressure": 360,
+    "thinner_rate": 9.6,
+    "model": "Exam"
+  },
+  "settings_scope_note": "설정은 데이터 파일 단위로 저장됨. 세션 내 모든 데이터의 설정 동일 여부를 export 시 검증하고, 다르면 시퀀스 파일 settings_override에 기록",
+  "settings_code_tables": null,
+  "worker": {
+    "worker_id": null,
+    "skill_level": null,
+    "height_mm": null,
+    "handedness": null
+  },
+  "model_input_constants": {
+    "tag": "thick",
+    "unknown_f1": 251.03,
+    "unknown_f2": 527.0,
+    "speed_input_mms": 1600.0,
+    "pressure": 360.0,
+    "distance_mm": null,
+    "unknown_f6": null,
+    "unknown_f7": 72.0,
+    "thinner_rate": 9.6,
+    "unknown_f9": 29.0,
+    "paint_maker": "JOTUN",
+    "unknown_f11": 30.0,
+    "unknown_f12": 15.0,
+    "unknown_f13": 10.0
+  },
+  "result": {
+    "thickness_texture_refs": null,
+    "report": null
+  },
+  "skeleton_def": {
+    "joint_count": 20,
+    "joints": [
+      "Pelvis",
+      "Spine",
+      "Chest",
+      "LeftShoulder",
+      "LeftUpperArm",
+      "LeftForeArm",
+      "LeftHand",
+      "RightShoulder",
+      "RightUpperArm",
+      "RightForeArm",
+      "RightHand",
+      "LeftThigh",
+      "LeftCalf",
+      "LeftFoot",
+      "LeftToe",
+      "RightThigh",
+      "RightCalf",
+      "RightFoot",
+      "RightToe",
+      "Head"
+    ],
+    "hierarchy": null,
+    "bind_pose_local_pos_m": {
+      "Spine": [
+        -0.105314,
+        -8.385659e-05,
+        -2.325905e-10
+      ],
+      "Chest": [
+        -0.1053148,
+        -8.385659e-05,
+        -2.325833e-10
+      ],
+      "LeftShoulder": [
+        0.0,
+        0.0001088562,
+        0.02835382
+      ],
+      "LeftUpperArm": [
+        -0.1796948,
+        9.536744e-10,
+        0.0
+      ],
+      "LeftForeArm": [
+        -0.2430328,
+        1.639128e-07,
+        6.705523e-08
+      ],
+      "LeftHand": [
+        -0.243033,
+        -5.960464e-08,
+        -1.6992e-07
+      ],
+      "RightShoulder": [
+        0.0,
+        0.0001090088,
+        -0.02835382
+      ],
+      "RightUpperArm": [
+        -0.1796948,
+        9.536744e-10,
+        0.0
+      ],
+      "RightForeArm": [
+        -0.2430327,
+        2.980232e-07,
+        -7.450581e-08
+      ],
+      "RightHand": [
+        -0.2430327,
+        2.2370500000000002e-08,
+        -4.1796445e-08
+      ],
+      "LeftThigh": [
+        0.09312867,
+        -0.002427452,
+        0.09650224
+      ],
+      "LeftCalf": [
+        -0.4223071,
+        2.1327285e-07,
+        -1.303851e-07
+      ],
+      "LeftFoot": [
+        -0.4109892,
+        -1.908207e-08,
+        -4.2032215e-08
+      ],
+      "LeftToe": [
+        -0.06716833,
+        0.1337485,
+        1.5040859999999999e-07
+      ],
+      "RightThigh": [
+        0.09312867,
+        -0.002426918,
+        -0.09650224
+      ],
+      "RightCalf": [
+        -0.4223069,
+        5.671754e-07,
+        1.192093e-07
+      ],
+      "RightFoot": [
+        -0.4109892,
+        1.713634e-07,
+        2.421439e-08
+      ],
+      "RightToe": [
+        -0.06716851,
+        0.1337485,
+        -1.080334e-07
+      ],
+      "Head": [
+        -0.1367727,
+        0.0,
+        1.164153e-13
+      ]
+    },
+    "bind_pose_note": "관절 로컬 위치 전 프레임 상수 검증 완료. 비상수 관절: 없음"
+  },
+  "sequences": [
+    {
+      "seq_id": 1,
+      "file": "1_1000442_seq001.json",
+      "source_data_id": 1,
+      "t_start_sec": 0.0,
+      "t_end_sec": 5.430562,
+      "spray_duration_sec": 2.133346,
+      "frame_count": 490,
+      "spray_frame_count": 193,
+      "mean_distance_real_mm": 662.79,
+      "valid_distance_ratio_pct": 13.5,
+      "texture_map_ids": [
+        "01"
+      ]
+    },
+    {
+      "seq_id": 2,
+      "file": "1_1000442_seq002.json",
+      "source_data_id": 1,
+      "t_start_sec": 5.441674,
+      "t_end_sec": 11.69731,
+      "spray_duration_sec": 5.911187,
+      "frame_count": 564,
+      "spray_frame_count": 533,
+      "mean_distance_real_mm": 465.85,
+      "valid_distance_ratio_pct": 85.4,
+      "texture_map_ids": [
+        "01"
+      ]
+    },
+    {
+      "seq_id": 3,
+      "file": "1_1000442_seq003.json",
+      "source_data_id": 1,
+      "t_start_sec": 11.70842,
+      "t_end_sec": 16.74176,
+      "spray_duration_sec": 4.84444,
+      "frame_count": 454,
+      "spray_frame_count": 437,
+      "mean_distance_real_mm": 452.9,
+      "valid_distance_ratio_pct": 79.2,
+      "texture_map_ids": [
+        "01"
+      ]
+    },
+    {
+      "seq_id": 4,
+      "file": "1_1000442_seq004.json",
+      "source_data_id": 1,
+      "t_start_sec": 16.75287,
+      "t_end_sec": 26.94102,
+      "spray_duration_sec": 4.06637,
+      "frame_count": 918,
+      "spray_frame_count": 367,
+      "mean_distance_real_mm": 483.44,
+      "valid_distance_ratio_pct": 74.9,
+      "texture_map_ids": [
+        "01"
+      ]
+    }
+  ],
+  "totals": {
+    "sequence_count": 4,
+    "frame_count": 2426,
+    "duration_sec": 26.94102,
+    "total_spray_time_sec": 16.955
+  }
+}

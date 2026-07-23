@@ -1,0 +1,305 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "JSON Schema가 아니라 data exporter/Unity 통합 개발자에게 전달하는 '데이터 요구사항 명세'다. v2는 §0.7 세션 생명주기(start/event/complete) 구조를 기준으로 재작성했다. 데이터는 2계층: (A) 런타임 메시지 스트림(Unity→Coaching API 실시간 3종), (B) 오프라인 참조 데이터(레벨 region 정의 + expert 라벨 세션). 자세(pose_estimation)·순서(sequence_validation) MCP 실구현에 필요한 필드를 정의한다.",
+  "title": "자세·순서 MCP 데이터 요구사항 (Exporter/Unity 전달용) — 세션 생명주기 기반",
+  "document_version": "2.0",
+  "supersedes": "1.0 (단일 세션파일 모델). 필드 요구는 계승하되 생명주기 메시지 구조로 재배치.",
+  "created": "2026-07-22",
+  "baseline_export_schema": "0.3.0 (docs/1_1000442_session.json / *_seqNNN.json 기준)",
+  "target_export_schema": "0.4.0 (본 요구사항 반영본)",
+  "architecture_context": {
+    "input_model": "Unity는 단일 세션 파일이 아니라 세션 생명주기에 걸친 3종 메시지를 실시간 전송한다. 과거 '세션 파일 1개'는 이제 start 1회 + event N회 + complete 1회의 메시지 스트림으로 분해된다.",
+    "transport": "HTTP REST (WebSocket 미채택). POST /v1/sessions/start, POST /v1/sessions/{session_id}/events, POST /v1/sessions/{session_id}/complete",
+    "data_layers": {
+      "A_runtime_messages": "Unity→Coaching API 실시간. session_start / event / session_complete. 자세·순서 MCP의 1차(훈련자) 입력은 event 메시지의 sequence_data.",
+      "B_offline_reference": "오프라인 사전 구축. 레벨 region 정의(정적 파일) + expert 라벨 세션(참조 아티팩트 build 입력). 런타임 비교의 기준(reference)이 됨."
+    },
+    "identifiers": {
+      "session_id": "세션 전체(start~complete) 고유. timeseries 키·리포트 집계 단위. 3종 메시지 모두 필수.",
+      "user_id": "작업자. skill_level 라벨·개인 추세 조인 키. 3종 메시지 모두 필수.",
+      "event_id": "세션 내 개별 이벤트(사용자 요청 1건 = 대체로 1 burst). (session_id, event_id) 유일. event 메시지 필수."
+    }
+  },
+  "consumers": {
+    "pose_mcp": "mcp_servers/pose_estimation.py — 상반신(스프레이 팔 체인) 전문가-훈련자 자세 유사도 + 교정 출력. 입력: event.sequence_data(단일 burst).",
+    "seq_mcp": "mcp_servers/sequence_validation.py — 레벨 단위 도장 진행 순서(macro flow) 출력. 입력: 세션 내 누적 event들의 목표 region 시퀀스."
+  },
+  "mcp_output_contracts_summary": {
+    "pose_mcp": {
+      "input": "event.sequence_data(훈련자 burst 자세 시퀀스) + session_start의 level_id/handedness + 같은 목표 region의 expert 참조",
+      "output": [
+        "similarity_score: 전문가 대비 상반신 자세 유사도 (같은 목표 region을 향하는 burst끼리 시간정렬 후 비교)",
+        "corrections[]: 관절별 교정 (joint, axis, current_deg, target_deg, delta_deg, phase)",
+        "expected_similarity_after_correction: 교정 반영 재계산 유사도 (검증용 — 반드시 상승)"
+      ]
+    },
+    "seq_mcp": {
+      "input": "세션 내 누적 event들의 (event_id, 목표 region) 시퀀스 + level_id + expert macro flow",
+      "output": [
+        "recommended_flow[]: 레벨 권장 region 도장 순서 (expert 세션 대체 흐름 기반)",
+        "deviations[]: 훈련자 진행과 권장 흐름의 이탈 지점 (event 단위)",
+        "next_region: 현재 시점 기준 다음 권장 영역"
+      ]
+    }
+  },
+  "runtime_messages": [
+    {
+      "message_type": "session_start",
+      "endpoint": "POST /v1/sessions/start",
+      "purpose": "세션 컨텍스트 초기화(레벨 region 로드, expert 참조 바인딩, worker 프로파일 확정, timeseries 세션 생성)",
+      "required_fields": {
+        "session_id": "REQ-13 — 필수",
+        "user_id": "REQ-13 — 필수",
+        "recorded_at": "ISO 8601 세션 시작 시각 — 권장",
+        "level_id": "REQ-06/REQ-12 조인 키 — 필수",
+        "model": "REQ-12 (level과 조합해 지오메트리 확정) — 필수",
+        "worker": {
+          "skill_level": "REQ-01 'expert'|'intermediate'|'novice' — 필수",
+          "handedness": "REQ-03 'right'|'left' — 필수",
+          "height_mm": "권장"
+        },
+        "spec": {
+          "nominal_um": "양수 — 필수(도막 판정 기준)",
+          "tolerance_rule": "'90/10' — 필수"
+        },
+        "skeleton_def": "REQ-08 bind pose + hierarchy (아바타 고정값, 세션당 1회 전송) — 필수",
+        "conventions": "REQ-05 rotation.order 등 (정적이면 참조로 대체 가능)"
+      }
+    },
+    {
+      "message_type": "event",
+      "endpoint": "POST /v1/sessions/{session_id}/events",
+      "purpose": "실시간 코칭 트리거. 자세·순서·이상·DFT 도구의 1차 입력. 대체로 event 1개 = spray burst 1개.",
+      "required_fields": {
+        "session_id": "REQ-13 — 필수",
+        "user_id": "REQ-13 — 필수",
+        "event_id": "REQ-13 — 필수",
+        "user_request": "코칭 질의 텍스트 (있을 때). 없으면 자동 분석 이벤트로 처리",
+        "sequence_data": {
+          "$comment": "과거 *_seqNNN.json의 frames가 여기로 이동. 단일 burst 단위.",
+          "burst_meta": "REQ-10 — spray_on 구간(start_i/end_i, t_start/t_end), frame_count, spray_frame_count. 필수",
+          "target_region_summary": "REQ-07 — 이 burst의 주 도장 region_id + 영역별 프레임 비중(%). 권장(미제공 시 MCP가 surface_hit로 자체 집계)",
+          "frames[]": {
+            "t_sec": "세션 시작 상대 초 — 필수",
+            "spray_on": "boolean — 필수",
+            "record_flag": "boolean — 권장",
+            "skeleton": "REQ-08 — root_pos_m, root_rot_euler_deg, joints_rot_euler_deg{20관절}. 상반신 관절 결측 금지. 필수",
+            "active_gun_pose": "REQ-02 — 사용 중 건(active_gun key)의 pos_m/rot_euler_deg. 미사용 건 고정좌표 제외. 필수",
+            "gun_metrics": "REQ-09 — distance_real_mm, speed_real_mms, valid 플래그. 필수",
+            "surface_hit": "REQ-04 — {hit_pos_m, face_id, region_id, normal}. spray_on=true 필수(자세 타겟 정렬·순서 복원의 핵심)"
+          }
+        }
+      }
+    },
+    {
+      "message_type": "session_complete",
+      "endpoint": "POST /v1/sessions/{session_id}/complete",
+      "purpose": "세션 종료. 일괄 리뷰/리포트 생성, timeseries 마감.",
+      "required_fields": {
+        "session_id": "REQ-13 — 필수",
+        "user_id": "REQ-13 — 필수",
+        "dft_measurements[]": "REQ(기존 dft) — {value_um, zone_id, position}. 필수(DFT 판정)",
+        "defects[]": "선택 — {region_id/zone_id, type, position, severity}",
+        "region_results[]": "REQ-11 — {region_id, coverage_pct, mean_thickness}. 선택",
+        "thickness_texture_refs": "REQ-11 — 두께맵 파일 참조. 선택"
+      }
+    }
+  ],
+  "offline_reference_data": [
+    {
+      "id": "level_regions",
+      "requirement": "REQ-06",
+      "delivery": "레벨당 1회 정적 파일 (예: levels/level_01_regions.json). 런타임 메시지와 무관하게 사전 제공.",
+      "required": true
+    },
+    {
+      "id": "expert_labeled_sessions",
+      "requirement": "REQ-01",
+      "delivery": "레벨별 expert 라벨(skill_level=expert) 세션 3개 이상 export(위 3종 메시지 로그 또는 동등 배치). 참조 자세 분포·macro flow build 입력. novice/intermediate 각 1개 이상은 분리도 검증용.",
+      "required": true
+    },
+    {
+      "id": "conventions",
+      "requirement": "REQ-05, REQ-12",
+      "delivery": "rotation.order(+intrinsic/extrinsic), (model,level)↔region 파일 조인 규약. 문서/상수로 1회 회신.",
+      "required": true
+    }
+  ],
+  "requirements": [
+    {
+      "id": "REQ-13",
+      "field": "session_id / user_id / event_id (식별자 모델)",
+      "required": true,
+      "status_in_0.3.0": "부분 (session_id·level 존재, worker_id·event_id 개념 없음)",
+      "carried_in": ["session_start", "event", "session_complete"],
+      "consumer": ["pose_mcp", "seq_mcp", "timeseries", "coaching_api"],
+      "spec": "session_id(세션 전체)·user_id(작업자, worker_id와 매핑)는 3종 메시지 모두 필수. event_id는 event 메시지 필수이며 (session_id,event_id)가 유일. timeseries 영속화(T12)와 도구 호출에 그대로 전파.",
+      "rationale": "세션 생명주기 상태 머신(start→event*→complete)과 이벤트 단위 코칭 상관 추적의 기반. 식별자 없이는 실시간 세션 컨텍스트·추세 조인·리포트 집계가 불가."
+    },
+    {
+      "id": "REQ-01",
+      "field": "worker.skill_level",
+      "required": true,
+      "status_in_0.3.0": "null",
+      "carried_in": ["session_start", "offline: expert_labeled_sessions"],
+      "consumer": ["pose_mcp", "seq_mcp"],
+      "spec": "'expert'|'intermediate'|'novice'. session_start 필수. 오프라인: 레벨별 expert 세션 3개 이상(자세 참조 분포·순서 macro flow 추출용).",
+      "rationale": "전문가 참조 데이터셋의 근거. 없으면 자세 비교 기준·순서 흐름 정답을 만들 수 없음. 두 MCP 최상위 블로커."
+    },
+    {
+      "id": "REQ-02",
+      "field": "event.sequence_data.frames[].active_gun_pose (+ session.active_gun)",
+      "required": true,
+      "status_in_0.3.0": "null (capture.active_gun)",
+      "carried_in": ["event"],
+      "consumer": ["pose_mcp"],
+      "spec": "프레임(또는 event) 단위로 실제 사용 중인 건 key('gun_hangil_short' 등)와 그 pos_m/rot_euler_deg. 미사용 건((-694,701,698) 고정좌표) 제외. 세션 내 교체 시 교체 시점 기록.",
+      "rationale": "4개 건 동시 트래킹 중 어느 건의 pos/rot이 유효한지 확정해야 스프레이 팔·건 궤적·스프레이 각을 특정할 수 있음."
+    },
+    {
+      "id": "REQ-03",
+      "field": "worker.handedness",
+      "required": true,
+      "status_in_0.3.0": "null",
+      "carried_in": ["session_start"],
+      "consumer": ["pose_mcp"],
+      "spec": "'right'|'left'. 스프레이 건을 쥔 손 기준.",
+      "rationale": "상반신 비교 대상 팔 체인(Right* vs Left* Shoulder→UpperArm→ForeArm→Hand) 선택에 필수."
+    },
+    {
+      "id": "REQ-04",
+      "field": "event.sequence_data.frames[].surface_hit",
+      "required": true,
+      "status_in_0.3.0": "null (전 프레임). 단 distance_real_mm는 계산되어 있음 = Unity가 이미 gun→표면 raycast를 수행한다는 증거",
+      "carried_in": ["event"],
+      "consumer": ["pose_mcp", "seq_mcp", "location_mcp"],
+      "acquisition": {
+        "primary_export": "Unity가 이미 계산한 RaycastHit를 그대로 export. distance_real_mm 존재가 raycast 수행의 증거이며, RaycastHit.triangleIndex는 그 raycast의 공짜 부산물(struct에 이미 존재). 따라서 이 요구는 '부담'이 아니라 '이미 있는 값의 노출'이다.",
+        "precondition": "triangleIndex/region 매핑에는 non-convex MeshCollider(convex=false) 필요. textureCoord(UV)까지 원하면 mesh Read/Write Enabled.",
+        "region_lookup": "씬 로드 시 1회 구성한 int[] triangleToRegion(submesh/material→region)으로 triangleIndex→region_id O(1).",
+        "server_fallback": "surface_hit 미제공(구버전/degraded) 시 location_tracking MCP가 mesh+active_gun_pose로 서버측 raycast 재계산(Open3D RaycastingScene, ARM64 휠 존재). 정확도는 REQ-05(rotation order)·좌표계 확정에 의존."
+      },
+      "spec": {
+        "structure": {
+          "hit_pos_m": "[x,y,z] RaycastHit.point (레벨 좌표계, m)",
+          "face_id": "int RaycastHit.triangleIndex (mesh.triangles 평면 인덱스, REQ-06 region.face_ids 조인)",
+          "submesh_id": "int 선택 — triangleIndex가 속한 submesh(material slot). region 매핑 근거",
+          "region_id": "string triangleToRegion[triangleIndex]. 매핑이 어려우면 face_id(+submesh_id)만이라도 필수",
+          "normal": "[x,y,z] RaycastHit.normal — 강력 권장(스프레이 각·cone footprint 투영)"
+        },
+        "when": "spray_on=true 프레임 필수, 조준 중(spray_on=false)이면 기록 권장"
+      },
+      "rationale": "두 MCP 공통 핵심. 자세: '같은 목표 region을 향하는 burst끼리' 정렬 비교의 매칭 키. 순서: event→region 매핑이 없으면 macro flow 복원 불가. Unity가 이미 raycast를 수행하므로 export 비용은 거의 0. 미제공 시 서버측 raycast 폴백."
+    },
+    {
+      "id": "REQ-05",
+      "field": "conventions.rotation.order",
+      "required": true,
+      "status_in_0.3.0": "null ('Unity 기본이면 ZXY로 확정할 것' 주석만)",
+      "carried_in": ["offline: conventions", "session_start"],
+      "consumer": ["pose_mcp"],
+      "spec": "오일러 회전 적용 순서 확정 문자열(예 'ZXY') + intrinsic/extrinsic 명시.",
+      "rationale": "관절 회전 FK로 (1) 팔 체인 공간 자세 복원, (2) 교정 적용 후 유사도 재계산(반사실 검증)의 전제. 회전 순서 오류 시 유사도·교정량 전부 무효."
+    },
+    {
+      "id": "REQ-06",
+      "field": "level.regions (신규 정적 레벨 메타데이터 파일)",
+      "required": true,
+      "status_in_0.3.0": "없음 (level:1 정수 ID만)",
+      "carried_in": ["offline: level_regions"],
+      "consumer": ["seq_mcp", "pose_mcp", "location_mcp"],
+      "spec": {
+        "delivery": "레벨당 1회 정적 파일. 메시지마다 반복 불필요.",
+        "structure": {
+          "level_id": "int|string — session_start.level_id와 조인",
+          "regions[]": {
+            "region_id": "string (필수)",
+            "region_type": "'수직 패널'|'수평 패널'|'곡면'|'모서리' (필수)",
+            "position": "'upper'|'middle'|'lower'|'left'|'right'|'center' (필수)",
+            "face_ids": "int[] 이 region의 mesh face ID (필수, surface_hit.face_id 조인). Unity submesh 단위면 submesh_index로 대체 가능",
+            "submesh_index": "int 선택 — 이 region에 대응하는 Unity submesh/material slot. triangleToRegion 룩업 구성 근거",
+            "area_m2": "number (권장)",
+            "adjacency": "region_id[] 인접 영역 (권장, macro flow 이동경로 판단)"
+          },
+          "mesh_ref": "string 레벨 mesh 파일 경로(glb/obj). 서버측 raycast 폴백(REQ-04)에는 필수, export 전용 운용이면 권장",
+          "triangle_to_region": "int[] 선택 — triangleIndex→region 인덱스 매핑을 사전 제공하면 Unity/서버 양쪽 룩업 즉시 사용. 미제공 시 face_ids/submesh_index로 구성"
+        }
+      },
+      "rationale": "순서 MCP 출력이 region 단위. region 분해가 없으면 '대체 흐름' 어휘가 없음. 자세 MCP의 '같은 목표' 매칭, location MCP의 raycast hit→region 매핑, Unity의 triangleToRegion 룩업 모두 이 파일에 의존."
+    },
+    {
+      "id": "REQ-07",
+      "field": "event.sequence_data.target_region_summary",
+      "required": false,
+      "status_in_0.3.0": "없음",
+      "carried_in": ["event"],
+      "consumer": ["seq_mcp", "pose_mcp"],
+      "spec": "event(=burst)별 요약: 주 도장 region_id + region별 프레임 비중(%). exporter가 surface_hit로 사전 집계 시 MCP 부하 감소. 미제공 시 MCP가 REQ-04로 자체 집계.",
+      "rationale": "편의 필드. REQ-04+REQ-06 충족 시 파생 가능하므로 optional."
+    },
+    {
+      "id": "REQ-08",
+      "field": "event.sequence_data.frames[].skeleton + session_start.skeleton_def",
+      "required": true,
+      "status_in_0.3.0": "제공됨 (20관절 로컬 오일러 + bind pose) — 유지 요청",
+      "carried_in": ["event (frames)", "session_start (skeleton_def)"],
+      "consumer": ["pose_mcp"],
+      "spec": "프레임 skeleton은 현행 유지. 추가: (a) skeleton_def.hierarchy 채우기(현재 null — FK 체인 구성 필요, 표준 Humanoid면 그 사실 명시로 대체), (b) 상반신 관절(Spine, Chest, L/R Shoulder·UpperArm·ForeArm·Hand, Head) 결측 프레임 금지. skeleton_def는 session_start에서 1회 전송.",
+      "rationale": "상반신 체인 FK 복원에 hierarchy 필요. 프레임 회전값은 이미 충족."
+    },
+    {
+      "id": "REQ-09",
+      "field": "event.sequence_data.frames[].gun_metrics",
+      "required": true,
+      "status_in_0.3.0": "제공됨 — 유지 요청 + 의미 확정 필요",
+      "carried_in": ["event"],
+      "consumer": ["pose_mcp", "seq_mcp"],
+      "spec": "현행 유지(distance_real_mm, speed_real_mms 등). 추가: distance_real '무효' 표현 규약 확정 — 프레임 단위 유효/무효 판별 기준을 문서화하고 무효 프레임은 null 또는 valid:false로 명시(현재 valid_distance_ratio_pct는 세션 요약에만 존재).",
+      "rationale": "자세 품질 지표(적정 거리 400-600mm)·순서 검증 보조 신호. 무효값 혼입 시 통계 오염."
+    },
+    {
+      "id": "REQ-10",
+      "field": "event 경계 = spray burst 경계",
+      "required": true,
+      "status_in_0.3.0": "제공됨 (spray_trigger_on_burst) — 유지 요청",
+      "carried_in": ["event (burst_meta)"],
+      "consumer": ["pose_mcp", "seq_mcp"],
+      "spec": "현행 spray burst 분할 유지. event 1개가 대체로 burst 1개에 대응. 같은 region 연속 도장과 region 이동을 구분할 수 있도록 REQ-04가 burst 전 구간에서 기록되어야 함.",
+      "rationale": "자세 MCP 비교 단위이자 순서 MCP 시퀀스 원자 단위."
+    },
+    {
+      "id": "REQ-11",
+      "field": "session_complete.region_results / thickness_texture_refs",
+      "required": false,
+      "status_in_0.3.0": "null",
+      "carried_in": ["session_complete"],
+      "consumer": ["seq_mcp"],
+      "spec": "세션 종료 시 region별 커버리지/두께 요약(region_id, coverage_pct, mean_thickness) 또는 두께맵 파일 참조.",
+      "rationale": "순서 준수와 결과 품질 상관 분석·재도장 감지 정밀화. 없어도 MCP 동작 가능하므로 optional."
+    },
+    {
+      "id": "REQ-12",
+      "field": "(model, level_id) ↔ 레벨 정의 조인 규약",
+      "required": true,
+      "status_in_0.3.0": "부분 (level:1, model:'Exam' 존재하나 조인 규약 미문서화)",
+      "carried_in": ["offline: conventions", "session_start"],
+      "consumer": ["pose_mcp", "seq_mcp"],
+      "spec": "session_start의 (model, level_id) 조합이 REQ-06 레벨 정의 파일과 1:1로 조인되는 규약 문서화. 동일 level 번호가 model마다 다른 지오메트리면 레벨 정의 파일 키에 model 포함.",
+      "rationale": "전문가 참조·macro flow는 레벨 단위 구축이므로 조인 키 모호 시 잘못된 참조와 비교."
+    }
+  ],
+  "priority_summary": {
+    "blocking_must_have": ["REQ-13 (식별자 session/user/event)", "REQ-01 (skill_level)", "REQ-04 (surface_hit)", "REQ-06 (level regions)", "REQ-05 (rotation order)", "REQ-02 (active_gun)", "REQ-03 (handedness)", "REQ-08 (hierarchy)", "REQ-12 (조인 규약)"],
+    "keep_as_is": ["REQ-08 skeleton frames (현행)", "REQ-09 gun_metrics (현행+규약)", "REQ-10 burst 경계 (현행)"],
+    "optional": ["REQ-07 (event 영역 요약)", "REQ-11 (완료 결과 두께맵)"]
+  },
+  "delivery_checklist_for_exporter": [
+    "[ ] 런타임 메시지 3종(session_start/event/session_complete)에 REQ-13 식별자(session_id/user_id/event_id) 반영",
+    "[ ] event.sequence_data 구조에 REQ-04(surface_hit)·REQ-02(active_gun_pose)·REQ-08(skeleton)·REQ-09(gun_metrics)·REQ-10(burst_meta) 반영",
+    "[ ] session_start에 REQ-01(skill_level)·REQ-03(handedness)·REQ-08(skeleton_def hierarchy)·spec 반영",
+    "[ ] 0.4.0 스키마에 REQ-01~06,08~10,12,13 반영",
+    "[ ] 레벨별 정적 region 정의 파일(REQ-06) 1종 이상 제공 (파일럿: level 1)",
+    "[ ] 레벨별 expert 라벨 세션 3개 이상 + novice/intermediate 각 1개 이상 export",
+    "[ ] rotation order(REQ-05) 확정값·intrinsic/extrinsic, (model,level) 조인 규약(REQ-12) 회신"
+  ]
+}

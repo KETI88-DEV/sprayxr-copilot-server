@@ -9,7 +9,7 @@
 - **베이스 모델**: Qwen3-4B (Apache 2.0)
 - **파인튜닝**: QLoRA (rank 16, 4-bit NF4, peft + trl SFTTrainer)
 - **지식 검색**: BGE-M3 임베딩 + FAISS HNSW 인덱스 + BGE-Reranker-v2-m3
-- **에이전트**: ReAct 오케스트레이터 + 6개 MCP 도구 서버 (FastAPI)
+- **에이전트**: ReAct 오케스트레이터 + 7개 MCP 서버 / 7개 모델-대상 도구 스키마 (FastAPI)
 - **데모 UI**: Gradio 6.x 웹 인터페이스
 
 **최종 성과 (Iter14 기준)**
@@ -35,7 +35,7 @@
 [시뮬레이터 요청] → [3-Way Semantic Router]
                          ↓              ↓              ↓
                   training_realtime  training_review   fast
-                  (max_rounds=3)     (max_rounds=5)  (no tools)
+                  (max_rounds=2)     (max_rounds=5)  (no tools)
                          ↓
                   [RAG 검색 + Rerank]
                          ↓
@@ -53,20 +53,24 @@
 
 | 라우트 | 판단 기준 | max_rounds | 응답 목표 |
 |---|---|---|---|
-| **training_realtime** | 순서, 이상탐지, 합부 판정 키워드 | 3 | < 60초 |
+| **training_realtime** | 순서, 이상탐지, 합부 판정 키워드 | 2 | < 60초 |
 | **training_review** | 자세, 추세분석, 코칭, 리포트 키워드 | 5 | 제약 없음 |
 | **fast** | 단순 지식 질문 (용어, 규정) | 1 | < 10초 |
 
-### 6개 MCP 도구 서버
+### MCP 서버/도구 현황
+
+- 마운트된 MCP 서버: 7개 (`/health` 기준, `vlm_analysis` 포함)
+- 모델-대상 도구 스키마: 7개 (`trainer/configs/tool_schemas/` 기준)
 
 | 도구명 | 엔드포인트 | 기능 | 구현 상태 |
 |---|---|---|---|
 | dft_judge | `/dft_judge/evaluate` | SSPC-PA2 90/10 룰 DFT 합부 판정 | 실제 로직 |
-| anomaly_detection | `/anomaly_detection/detect` | 두께 편차 기반 결함 유형 분류 | Stub |
-| sequence_validation | `/sequence_validation/validate` | 구역별 Stroke 방향 및 공정 순서 검증 | Stub |
-| pose_estimation | `/pose_estimation/compare` | 숙련자 BVH 대비 관절 각도 편차 산출 | Stub |
-| location_tracking | `/location_tracking/identify` | 3D 좌표 기반 Zone ID 및 커버리지 매핑 | Stub |
-| timeseries | `/timeseries/{action}` | 작업 속도/거리/각도 트렌드 분석 | Stub |
+| anomaly_detection | `/anomaly_detection/detect` | 두께 편차 기반 결함 유형 분류 및 원인 추론 | 실제 로직 |
+| sequence_validation | `/sequence_validation/validate` | 블록/구역 우선순위 기반 다음 도장 구역 추천 | 실제 로직 |
+| pose_estimation | `/pose_estimation/compare` | 저장된 숙련자 기준 자세와 현재 자세 비교/추천 | Stub (하드코딩 기준 자세) |
+| location_tracking | `/location_tracking/identify` | 3D 좌표 기반 Zone ID 및 커버리지 매핑 | Stub (fixture 응답) |
+| timeseries | `/timeseries/{action}` | 작업 속도/거리/각도 트렌드 분석 | Partial (in-memory + 실제 추세 계산) |
+| vlm_analysis | `/vlm/analyze` | 히트맵/스크린샷 기반 VLM 분석 | Stub (빈 결과) |
 
 MCP 서버 기본 URL: `http://localhost:8100`
 
@@ -185,11 +189,12 @@ DEMO_MODE=false python3 /workspace/trainer/scripts/demo_app.py
   mcp_servers/                 # MCP 도구 서버 (FastAPI)
     main.py                    # 통합 라우터 + /health 엔드포인트
     dft_judge.py               # DFT 합부 판정 (실제 로직)
-    anomaly_detection.py       # 이상 탐지 (Stub)
-    sequence_validation.py     # 순서 검증 (Stub)
-    pose_estimation.py         # 자세 분석 (Stub)
-    timeseries.py              # 시계열 분석 (Stub)
-    location_tracking.py       # 위치 추적 (Stub)
+    anomaly_detection.py       # 이상 탐지 (실제 로직)
+    sequence_validation.py     # 순서 검증 (실제 우선순위 로직)
+    pose_estimation.py         # 자세 분석 (Stub: 하드코딩 기준 자세)
+    timeseries.py              # 시계열 분석 (Partial: in-memory 추세 계산)
+    location_tracking.py       # 위치 추적 (Stub: fixture 응답)
+    vlm_analysis.py            # VLM 분석 (Stub: 빈 결과)
     common.py                  # MCPResponse, MCPException 공통 모듈
   deploy/
     docker-compose.yml         # Docker 서비스 정의
@@ -321,7 +326,7 @@ python3 trainer/scripts/generate_fc_sft.py \
   --output-dir /data/sft
 ```
 
-- 6개 도구별 synthetic FC 데이터 생성 (single-turn + multi-turn)
+- 7개 도구별 synthetic FC 데이터 생성 (single-turn + multi-turn)
 - 기존 DocQA 샘플 30%를 FC system prompt로 업그레이드
 - 출력: `/data/sft/sft_train.jsonl` (567건, Iter14 기준), `/data/sft/sft_val.jsonl` (30건)
 
@@ -430,13 +435,13 @@ python3 trainer/scripts/session_coaching.py \
 |---|---|
 | `qlora_config.yaml` | QLoRA 학습 하이퍼파라미터. 모델 경로, LoRA rank/alpha, 학습률, epoch, 배치 크기, 출력 경로 등 |
 | `rag_config.yaml` | RAG 파이프라인 설정. BGE-M3 임베딩(1024d), FAISS HNSW(m=32, efConstruction=200), top-k=5, rerank top-3, 생성 파라미터 |
-| `rag_config_fewshot.yaml` | Agentic 파이프라인 설정. 6개 도구 few-shot 예시, 도구 선택 규칙, 응답 구조 템플릿, temperature=0.3, max_new_tokens=1024 |
+| `rag_config_fewshot.yaml` | Agentic 파이프라인 설정. 7개 도구 few-shot 예시, 도구 선택 규칙, 응답 구조 템플릿, temperature=0.3, max_new_tokens=1024 |
 | `normalization_rules.yaml` | 텍스트 정규화 규칙. 단위 통일(µm, °C, mm), 도메인 용어 대체(DFT, WFT, Sa 등), 헤더/푸터 패턴 |
 | `metadata_schema.json` | 청크 메타데이터 JSON Schema (draft-07). chunk_id, doc_id, domain, text, token_count 등 |
-| `tool_calling_protocol.json` | MCP 프로토콜 규약. 6개 등록 도구, 엔드포인트 매핑, 요청/응답 포맷, 에러 코드, retry 정책(max 1회, backoff 1000ms) |
+| `tool_calling_protocol.json` | MCP 프로토콜 규약. 7개 등록 도구, 엔드포인트 매핑, 요청/응답 포맷, 에러 코드, retry 정책(max 1회, backoff 1000ms) |
 | `eval_rubric_agentic.md` | Agentic 5차원 채점 루브릭. tool_selection_accuracy, parameter_correctness, reasoning_depth, context_integration, response_structure (각 0-2점, 최대 10점) |
 | `eval_rubric.md` | DocQA 5차원 채점 루브릭. 기술 정확성, 문서 충실도, 용어 적절성, 완전성, 한국어 품질 (각 0-2점) |
-| `tool_schemas/` | 6개 MCP 도구 JSON Schema (OpenAI-compatible function calling 포맷) |
+| `tool_schemas/` | 7개 MCP 도구 JSON Schema (OpenAI-compatible function calling 포맷) |
 
 ---
 
@@ -497,7 +502,7 @@ python3 trainer/scripts/session_coaching.py \
 | Iter8 | Qwen3-4B | v3 | — | 3.87 | graceful fallback 적용 |
 | Iter9 | Qwen3-4B | v3 | — | 3.50 | SemanticRouter + adaptive compression |
 | Iter10 | Qwen3-4B | v3 | — | 3.37 | adaptive compression 검증 |
-| Iter11 | Qwen3-4B | v3 | — | 3.83 | 3-way Router, 6 tool few-shot, temp 0.3 |
+| Iter11 | Qwen3-4B | v3 | — | 3.83 | 3-way Router, 7 tool few-shot, temp 0.3 |
 | Iter12 | Qwen3-4B | v3 | — | 3.30 | temp 0.5 실험 → REVERTED |
 | Iter13 | Qwen3-4B | v4 (784건, 도구 균형) | — | 4.83 | 목표 4.0 달성 |
 | Iter14 | Qwen3-4B | v4 (567건, 중복 제거) | — | 4.97 | assistant_only_loss, 86 tool calls, POC_CONFIRMED |
