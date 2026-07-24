@@ -1,0 +1,95 @@
+# pyright: reportUnusedFunction=false, reportAny=false, reportUnusedCallResult=false
+from __future__ import annotations
+
+import argparse
+import logging
+import os
+import re
+from collections.abc import AsyncIterator
+from datetime import datetime, timezone
+from typing import cast
+
+import uvicorn
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+
+from trainer.demo_api.chat_service import ChatService
+from trainer.demo_api.contracts import ChatRequest
+from trainer.demo_api.sequence import default_snapshot
+
+logger = logging.getLogger(__name__)
+_LEVEL_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9\-_.]{0,63}$")
+
+
+def create_app(chat_service: ChatService | None = None) -> FastAPI:
+    service = chat_service if chat_service is not None else ChatService()
+    app = FastAPI(title="Ship Painting Demo API")
+    app.state.chat_service = service
+
+    allow_origins = os.environ.get(
+        "DEMO_UI_ORIGINS",
+        "http://127.0.0.1:5173,http://localhost:5173",
+    ).split(",")
+    allow_origins = [origin.strip() for origin in allow_origins if origin.strip()]
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=allow_origins,
+        allow_credentials=True,
+        allow_methods=["GET", "POST"],
+        allow_headers=["*"],
+    )
+
+    @app.get("/api/health")
+    def health() -> dict[str, object]:
+        return {
+            "status": "ok",
+            "servers": 1,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
+    @app.get("/api/sequence/{level_id}")
+    def sequence(level_id: str) -> dict[str, object]:
+        if _LEVEL_ID_PATTERN.fullmatch(level_id) is None:
+            raise HTTPException(status_code=400, detail="invalid level_id")
+        return default_snapshot(level_id).model_dump(mode="json")
+
+    @app.post("/api/chat")
+    async def chat(request: ChatRequest) -> StreamingResponse:
+        service = cast(ChatService, app.state.chat_service)
+
+        async def _sse_body() -> AsyncIterator[bytes]:
+            async for event in service.stream(request):
+                frame = f"event: {event.event}\ndata: {event.model_dump_json()}\n\n"
+                yield frame.encode("utf-8")
+
+        return StreamingResponse(
+            _sse_body(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    return app
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    _ = parser.add_argument("--host", default="127.0.0.1")
+    _ = parser.add_argument("--port", default=8120, type=int)
+    _ = parser.add_argument("--reload", action="store_true")
+    raw_args = cast(dict[str, object], vars(parser.parse_args()))
+    host = cast(str, raw_args.get("host", "127.0.0.1"))
+    port = cast(int, raw_args.get("port", 8120))
+    reload_mode = cast(bool, raw_args.get("reload", False))
+
+    logging.basicConfig(level=logging.INFO)
+    logger.info("Starting demo API on %s:%s", host, port)
+    uvicorn.run("trainer.demo_api.app:app", host=host, port=port, reload=reload_mode)
+
+
+app = create_app()
+
+
+if __name__ == "__main__":
+    main()
