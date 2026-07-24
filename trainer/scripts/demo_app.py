@@ -22,6 +22,8 @@ from typing import Any, Generator
 import gradio as gr
 from gradio import ChatMessage
 
+from trainer.demo_api.scenario_adapter import get_demo_scenario
+
 logger = logging.getLogger(__name__)
 
 DEMO_MODE: bool = os.environ.get("DEMO_MODE", "true").lower() in ("true", "1", "yes")
@@ -585,8 +587,7 @@ def _demo_stream(
     question: str,
     history: ChatHistory,
 ) -> Generator[tuple[ChatHistory, str], None, None]:
-    scenario_type = _classify_question(question)
-    scenario = DEMO_SCENARIOS.get(scenario_type, DEMO_SCENARIOS["general"])
+    scenario = get_demo_scenario(question)
     xr_json = _build_xr_json(scenario)
     step_id = 0
 
