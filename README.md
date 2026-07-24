@@ -132,6 +132,71 @@ DEMO_MODE=false python3 /workspace/trainer/scripts/demo_app.py
 
 ---
 
+## React 웹 · Electron 데스크톱 데모 (1차)
+
+기존 Gradio 데모(`trainer/scripts/demo_app.py`)는 그대로 유지된다. 아래는 새로 추가된 세 인터페이스의 실행 명령이다. 1차 구현은 3D 뷰어 없이 채팅과 구조화된 도장 순서 목록만 제공한다. 3D 시각화는 `zone_id ↔ mesh/coordinate` 매핑이 확보되는 시점에 후속 spec으로 이관된다.
+
+### 1) FastAPI 데모 백엔드
+
+```bash
+python3 -m trainer.demo_api.app --host 127.0.0.1 --port 8120
+```
+
+노출 라우트:
+- `GET  /api/health`
+- `GET  /api/sequence/{level_id}` — 초기 도장 순서 스냅샷
+- `POST /api/chat`               — SSE 스트림 (session/status/tool_result/sequence_update/message_delta/complete/error)
+
+CORS 허용 오리진은 환경변수 `DEMO_UI_ORIGINS` (콤마 구분, 기본값 `http://127.0.0.1:5173,http://localhost:5173`).
+
+### 2) React 웹 데모
+
+```bash
+cd demo-ui && npm install
+cd demo-ui && npm run dev:web -- --port 5173
+```
+
+`VITE_API_BASE_URL`을 통해 백엔드 위치를 지정한다 (기본은 same-origin). Vite 개발 서버 사용 시:
+```bash
+VITE_API_BASE_URL=http://127.0.0.1:8120 npm run dev:web -- --port 5173
+```
+
+프로덕션 정적 빌드:
+```bash
+cd demo-ui && npm run build:web
+```
+빌드 산출물은 `demo-ui/dist/`.
+
+### 3) Electron 데스크톱 데모
+
+```bash
+cd demo-ui && npm run start:electron
+```
+
+내부적으로 `build:web` + `build:electron` 후 Electron이 `dist/index.html`을 로드한다. 개발 시 라이브 리로드:
+```bash
+cd demo-ui && npm run dev:electron
+```
+
+Electron 셸은 `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`로 고정되며 preload는 `window.desktop.{ platform, electronVersion }`만 노출한다.
+
+### 4) 테스트
+
+```bash
+# Python API
+python3 -m pytest trainer/demo_api/tests -q
+
+# React (Vitest)
+cd demo-ui && npm test -- --run
+
+# 브라우저 E2E (Playwright)
+cd demo-ui && npm run test:e2e
+```
+
+### 3D 뷰어 관련 참고
+
+`SP0035_rig.glb` 같은 3D 자산은 Windows 로컬 경로에서만 접근되며 이 저장소의 컨테이너에는 마운트되어 있지 않다. 자산 매핑(`zone_id` → 메시 노드 또는 월드 좌표)이 정리되면 별도 spec에서 3D 뷰어 계층을 추가한다.
+
 ## 하드웨어 요구사항
 
 | 구분 | 사양 |
@@ -540,3 +605,4 @@ LLM inference가 전체 레이턴시의 95%를 차지한다. MCP 도구 호출�
 - `AgenticCopilot_Architecture.md`: 아키텍처 설계서
 - `PATCH_NOTE.md`: 전체 이터레이션 히스토리 (Iter0~Iter14)
 - `/output/eval_results/final_report.md`: 최종 평가 리포트
+
