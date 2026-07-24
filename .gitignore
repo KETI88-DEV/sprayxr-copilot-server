@@ -73,6 +73,13 @@ output/
 trainer/scripts/prompt/
 trainer/scripts/temp/
 .sisyphus/ralph-loop.local.md
+.omo/ralph-loop.local.md
+.omo/handoffs/
+.omo/run-continuation/
+
+# demo-ui build outputs (node_modules and dist already covered above)
+demo-ui/dist-electron/
+demo-ui/*.tsbuildinfo
 AgenticCopilot.png
 CLAUDE.md
 AgenticCopilot_Architecture.md
