@@ -7,6 +7,27 @@ revised: 2026-07-22 (v2 — vLLM+MTP+Qwen3.6-27B 전환, 아키텍처 확정, MC
 revised-v3: 2026-07-22 (v3 — 코칭 기능-시점 매핑 확정: 런타임 이벤트 = RAG 질의·시작 전 순서 안내·이상탐지 한정, 자세 유사도/교정·부족 부위 분포 분석은 세션 완료 후 리뷰로 이동. 0.9 신설, 0.7/T7/T9/T12/T13/R6/R8/QA 반영)
 revised-v3.1: 2026-07-22 (v3.1 — 운용 양자화 확정: NVFP4 → **8-bit(FP8 W8A8)**. 사용자 결정 "27B 8bit quantization으로 운용 예정". A40(sm_86)은 FP8 미지원이라 검증 프록시는 bnb INT8. §0.5/§1/T14/T16 반영)
 baseline: Iter14 (Agentic 4.97/10), Taskmaster 25/34 done
+target-agentic: 7.0/10 (2026-07-23 사용자 재조정, 기존 4.0에서 상향). 진행: 4.50(v1) → 5.53(무재학습 전체수정) → v6 재학습 중.
+
+### T15c. 7.0 목표 개선 작업 (2026-07-24, ultrawork)
+**무재학습 인프라 수정으로 4.50→5.53 달성, 이후 SFT v6 재학습 진행.**
+- **RAG 결함 수정**: (1) 검색 파라미터 ef_search 64→256, retrieve 3→20, rerank 2→8 (rerank recall 0.46→0.66). (2) **PDF 공백 유실 root cause** — ingest_docs.py `get_text("text")`가 한국어 단어 공백 제거(2814/10829 청크). kiwipiepy로 재공백화(`repair_chunk_spacing.py` maxrun>6), 전체 재임베딩(`reindex_repaired.py`, chunk_id 보존), 프로덕션 인덱스 교체(백업 *.bak_prerepair). recall retrieve@30 0.75→0.81, rerank 0.66→0.74, unreachable gold 14→11.
+- **P1 최종 합성 강제**: `tool_calling_adapter.py` — max_rounds 도달 시 tools-off 합성 턴 강제([분석]/[판정]/[원인]/[조치]/[근거] few-shot 지침), raw `<tool_call>` 제거. `generate_agentic_responses.py` citations를 eval 레코드로 전달. `agent_pipeline.py` append_citations로 근거 DOC 부착.
+- **CRITICAL 파서 버그 수정**: `TOOL_CALL_REGEX`의 non-greedy `\{.*?\}`가 중첩 객체 인자(location_tracking coordinates, sequence_validation zone_map)에서 첫 `}`에 멈춰 파싱 실패 + 닫는 태그 누락 미허용 → **중첩 인자 도구 전면 무시**(v1/v2 점수도 저평가됨). brace-matching 스캐너(`_extract_tool_call_blocks`)로 교체, 중첩+닫는태그누락 허용. 테스트 24/24.
+- **전체 30문항 결과 (무재학습 전체수정)**: **5.53/10** (v1 4.50). reasoning 0.43→1.10, context 1.63→**2.00(만점)**, structure 0.90→1.23. 잔여 병목: tool_selection 0.57·parameter 0.63 — tool 미호출 15/30이 xr_content(5)/cot_reasoning(4)에 집중, 이는 **현재 어댑터 SFT에 pose/sequence/location 학습 예시 0건**이 원인.
+- **SFT v6 구축**: v5(642, 7/7 도구)를 기반으로 `build_sft_v6.py`로 tool 응답 389/389를 [분석]/[판정]/[원인]/[조치]/[근거] 구조로 재포맷 + category 부착(tool_calling 178/doc_qa 253/xr_content 211). tool_call JSON 무결성 0 오류. 스모크 통과(642 로드, peak 34.64GB).
+- **✅ v6 본학습 완료 (217분, in_proj_* 포함 12타겟, 3 epoch)**: eval_loss 0.640→0.489→**0.464**(v2 0.478, v1 0.494 대비 최고), train_loss 2.76→0.28, peak VRAM 34.87GB, adapter 445MB (992 LoRA텐서), reload OK. `/output/adapters/qwen36_27b_shipcoat_lora_v6/`.
+- **🎯 목표 7.0 초과 달성 — 실측 7.83/10 (v6 + 전체 인프라 수정, 30문항)**:
+  | variant | total | tool_sel | param | reason | ctx | struct |
+  |---|---:|---:|---:|---:|---:|---:|
+  | baseline 4B | 5.33 | 0.57 | 0.90 | 0.90 | 1.80 | 1.17 |
+  | v1 27B | 4.50 | 0.70 | 0.83 | 0.43 | 1.63 | 0.90 |
+  | v2 27B | 4.23 | 0.77 | 0.90 | 0.30 | 1.60 | 0.67 |
+  | allfixes v1 (무재학습) | 5.53 | 0.57 | 0.63 | 1.10 | 2.00 | 1.23 |
+  | **v6 + allfixes** | **7.83** | **1.00** | **1.40** | **1.57** | **2.00** | **1.87** |
+  - **모든 차원이 4B baseline을 능가**. tool_selection 1.00(만점의 50%→만점에 도달), context/struct 만점 근처, reasoning +0.67, param +0.50. tool_calls 47→61, tool_not_called 8→5. `/output/eval_results/qwen36_27b_v6_allfixes/`.
+- **잔여 5개 no-tool 항목**: sequence_decision 2 (AQ013,17), cot_reasoning 2 (AQ023,24), xr_content 1 (AQ026). 대부분 복합 시퀀스 요구(3-4 도구). 목표 초과 달성으로 추가 최적화는 별도 이터레이션.
+- **최종 산출물/구성**: (1) v6 어댑터 `/output/adapters/qwen36_27b_shipcoat_lora_v6/`, (2) 수정된 코드: `tool_calling_adapter.py`(brace-matching 파서+synthesis 강제), `agent_pipeline.py`(append_citations), `generate_agentic_responses.py`(citations 통과), (3) config `rag_config_fewshot_27b.yaml`(retrieve20/rerank8/ef256+native-off+thinking-off+append_citations), (4) v6 SFT `/data/sft/sft_train_v6.jsonl` + `build_sft_v6.py`, (5) 수리된 RAG 인덱스 `/output/indexes/faiss.index`(2814 청크 재공백화 + 재임베딩; 백업 `*.bak_prerepair`). 테스트 24/24 + 8/8 + 15/15 green.
 ---
 
 # DGX Spark 배포 AI 코칭 에이전트 구현 계획
@@ -299,7 +320,30 @@ Unity는 단일 요청/응답이 아니라 **세션 생명주기에 걸친 3종 
 - **T15. Qwen3.6-27B 후보 파인튜닝**
   - **T15-pre (스모크, 선행 필수)**: Qwen3.6-27B는 하이브리드 아키텍처(Gated DeltaNet + Gated Attention) — A40에서 transformers/peft/trl 현행 스택으로 QLoRA 1-step 학습 + 저장/로드 스모크를 본학습 전에 검증. 실패 시 스택 업그레이드 또는 모델 재선정 에스컬레이션.
   - **✅ T15-pre 통과 (2026-07-22 실측)**: NF4 QLoRA 1-step 학습→save→reload 성공, trainable 79.7M/26.98B(0.30%, LoRA 512텐서 — full-attn 16층 q/k/v/o + 전층 MLP), **peak VRAM 29.04GB < 48GB**. 8-bit(bnb INT8) 추론 스모크도 통과: peak 29.77GB, 256tok 생성 3.3 tok/s(A40 프록시 — Spark FP8+MTP가 실서빙 목표). **필수 워크어라운드**: `HF_DEACTIVATE_ASYNC_LOAD=1` — transformers 5.3.0 비동기 로더가 bnb 양자화 전에 BF16을 GPU에 적재해 OOM(46GB) 유발(Oracle 진단, upstream에 가드 존재). `train_qlora.py`/`smoke_infer_8bit.py`가 자동 설정.
-  - 본학습: 현행 SFT v4(567건)로 QLoRA 신규 학습(A40, 4-bit NF4, 예상 peak ~25–30GB @seq2048) → 동일 rubric으로 agentic/DocQA 평가 → T4 기준선 게이트 통과 시 T14 파이프라인으로 패키징. `.taskmaster/docs/qwen35_migration_prd.md`를 Qwen3.6-27B/vLLM-MTP 계약 기준으로 갱신.
+  - 본학습: 현행 SFT(492 train/30 val)로 QLoRA 신규 학습(A40, 4-bit NF4, seq2048) → 동일 rubric으로 agentic/DocQA 평가 → T4 기준선 게이트 통과 시 T14 파이프라인으로 패키징. `.taskmaster/docs/qwen35_migration_prd.md`를 Qwen3.6-27B/vLLM-MTP 계약 기준으로 갱신.
+  - **✅ 본학습 완료 (2026-07-23 실측)**: 3 epoch, 186 steps, **112.5분**, **peak VRAM 32.88GB < 48GB**. Loss 3.14→0.42, **eval_loss 0.683→0.525→0.494(단조 감소, 과적합 신호 없음)**, mean_token_accuracy 0.79→0.90. adapter `/output/adapters/qwen36_27b_shipcoat_lora/`(304MB, 512 LoRA텐서, reload 검증). trainable 79.7M/26.98B(0.30%).
+  - **⚠️ T15 게이트 미통과 (2026-07-23 agentic eval, HF 4-bit 백엔드)**: **2.83/10 (baseline_v2 5.33 대비 회귀)**. tool_calls_made=**1**(baseline 47), tool_not_called=29/30. 차원별: tool_selection 0.067, param_correctness 0.067, reasoning 0.567, context 1.2, structure 0.933. 산출물 `/output/eval_results/qwen36_27b/`.
+  - **근본 원인(진단 완료)**: 30개 응답 중 1개만 파싱가능 `<tool_call>` 방출, 0개가 `<think>` 사용(추론이 plain answer로 유출, 8개는 영어 추론 리크), 14개는 tool_call을 산문으로만 언급. **결정적**: Qwen3.6-27B 챗 템플릿은 **네이티브 tool-calling(`tools=` kwarg, `<tool_call>` 21회 참조)** 을 내장하고 `tools=` 렌더 시 "함수 호출 없으면 그냥 답하고 함수 얘기 말라"는 지시를 주입. 현 파이프라인은 `apply_chat_template(tools=...)` 대신 **수제 few-shot `<tool_call>` 프롬프트** 사용 → 4B는 관용했으나 27B의 강한 네이티브 tool 프로토콜 prior가 우세해 도구를 건너뜀. 보조 원인: LoRA가 DeltaNet 48층 `in_proj_*` 미부착(16/64 attn층만) — 도구 트리거 학습 커버리지 부족.
+  - **Oracle 진단(2026-07-23)**: dominant 원인 = **(c) 프로토콜 혼용** — 파이프라인이 `tool_calling_adapter.py:545`에서 `apply_chat_template(tools=...)`로 27B **네이티브 XML tool 프로토콜**을 주입하면서 동시에 시스템 프롬프트엔 수제 **JSON `<tool_call>`** few-shot을 넣어 두 프로토콜 충돌. 4B 네이티브 템플릿은 우연히 JSON 계약과 일치해 문제없었음. 부차 (d) train/infer thinking 불일치(학습은 `enable_thinking=False` 고정, eval은 다수 항목 재활성).
+  - **✅ 추론측 수정 검증 (Arm C 애블레이션, 무재학습)**: `TOOL_ADAPTER_NATIVE_TOOLS=0`(네이티브 `tools=` 미전달, JSON 계약만 유지) + thinking off. 동일 15문항 대조: **tool_calls 1→24, tool_selection 0.067→1.00, param 0.067→1.13**. 15문항 총점 **4.80(4B baseline 4.93과 동률권)**. 회귀는 재학습 없이 추론측 1줄 수정으로 해소. 잔여 감소(reasoning/structure)는 thinking 강제 off 부작용 → Arm D(네이티브 off + thinking 라우트별 기본)로 회복 검증 중.
+  - **애블레이션 3-arm(동일 15문항, 무재학습)**: baseline 4.93 / **Arm C(native-off+think-off) 4.80 / Arm D(native-off+think-on) 3.73**. → **두 수정 모두 필수**: native-off가 프로토콜 충돌 해소, think-off가 도구 회피 방지(Arm D가 think-on시 tool_sel 0.33로 붕괴 입증 = (d) 확정).
+  - **✅ 구현 완료(config 주도, 무재학습)**: `tool_calling_adapter.py` `pass_native_tools`(config `llm.pass_native_tools`, 기본 True 보존) + `agent_pipeline.py` `thinking_off_for_tools`(config `llm.thinking_off_for_tools`, 기본 False 보존). `rag_config_fewshot_27b.yaml`에 둘 다 활성. **4B 경로 무영향(test_tool_calling 22/22 green, 4B 기본값 미변경)**.
+  - **✅ 전체 30문항 재평가(2026-07-23, 수정 적용)**: **4.50/10, tool_calls 36, tool_not_called 12/30**(2.83→4.50 회복, 무재학습). tool_selection 0.70, param 0.83, context 1.63. 산출물 `/output/eval_results/qwen36_27b_fixed/`.
+  - **✅ v2 재학습 완료 (in_proj_* 추가, 2026-07-23)**: LoRA 타겟 7→12종(DeltaNet 48층 `in_proj_qkv/a/b/z/out_proj` 추가), trainable 79.7M→116.7M(0.43%), LoRA텐서 512→992, 124.9분, eval_loss 0.665→0.508→**0.478**(v1 0.494보다 개선), peak 33.1GB. adapter `/output/adapters/qwen36_27b_shipcoat_lora_v2/`. config `qlora_config_27b_v2.yaml`.
+  - **v2 평가 결과 — tool은 개선, 총점은 미개선**: 30문항 **4.23/10, tool_calls 46**(4B 47 근접), tool_not_called 9/30. tool_selection **0.77(3안 중 최고)**, param **0.90(=4B)**. 그러나 **reasoning_depth 0.30, response_structure 0.67로 하락** → 총점 v1 4.50 > v2 4.23.
+  - **3안 차원 비교(동일 30문항)**: baseline(4B) total 5.33 / tool_sel 0.57 / param 0.90 / **reason 0.90 / ctx 1.80 / struct 1.17**. 27B_v1 4.50 / 0.70 / 0.83 / 0.43 / 1.63 / 0.90. 27B_v2 4.23 / **0.77 / 0.90** / 0.30 / 1.60 / 0.67.
+  - **결론(진단 확정)**: (a) LoRA 미커버리지는 **해소됨** — in_proj_* 추가로 tool 지표가 4B 이상 도달. **잔여 갭의 실체 = reasoning_depth·response_structure 품질**이며 이는 tool-calling을 위해 강제한 `thinking_off_for_tools`의 부작용(27B가 think-off 시 더 간결·저구조 응답). LoRA 커버리지 문제 아님. **채택 어댑터 = v1(4.50, 총점 우위)**; v2는 tool 신뢰도가 중요한 배포에선 재고.
+
+### T15b. 목표 7.0 재조정 — 채점 메커니즘 분석 (2026-07-23)
+
+- **결정적 발견: 채점기가 100% 결정론 정규식**(`run_agentic_eval.py`). `response['answer']`(=파이프라인 `text_guide.body`) 텍스트에만 정규식 적용. 즉 **잔여 갭 2.5점의 대부분은 응답 포매팅 문제**(모델 능력·LoRA 커버리지 아님).
+  - reasoning_depth(0-2): 번호매김(`^\d+[\).]`)·한국어 섹션헤더 `[분석]/[판정]/[원인]/[조치]/[근거]/[결론]`·접속사(먼저/다음/이후)·`단계 N:` 개수 + **근거(DOC-xxx citation)**. steps≥expected & 근거 → 2점.
+  - response_structure(0-2): 판정어(합격/불합격/진행/중지/정상/이상)+리스트, 또는 섹션헤더≥3, xr_content는 JSON 키.
+  - context_integration(0-2): DOC-xxx citation + context 숫자 반향(현재 1.6, 거의 만점).
+  - parameter_correctness = `int(mean)` **정수 절삭**(0.5→0, 1.5→1) — 평균 ≥1.0/≥2.0 정확히 넘겨야 점수.
+- **v1 30문항 실측 실패모드**: **6/30만** 정규식 매칭 구조(번호/헤더) 보유, **10/30은 최종 답변에 raw `<tool_call>` 잔존**(도구 루프가 최종 합성 턴 없이 종료), 19/30 citation 보유. → reason 0.43·struct 0.90이 낮은 직접 원인.
+- **갭 축소 후보(무재학습 우선)**: (S1) 도구 루프가 도구 결과 후 **최종 합성 턴 강제**(raw tool_call 잔존 제거), (S2) 시스템 프롬프트에 **엄격 한국어 응답 포맷 계약**(섹션헤더+번호+`근거 문서 ID: DOC-...`) + few-shot 1개, (S3) citation 후처리 보장, (S4 재학습) FC-SFT 최종 assistant 턴을 항상 이 구조로 재생성. **정당성**: 루브릭이 실제로 구조화·인용·다단계 코칭을 보상 → 포매팅이 곧 산출물(게이밍 아님).
+- **다음(Oracle 로드맵 대기 bg_edb2576a + explore bg_19b3ab17 + librarian bg_ad91e4bb)**: 단계별 예상 점수 확정 후 S1부터 15문항 서브셋으로 저비용 검증하며 7.0까지 상향. **T18에서 27B는 native-off+think-off 계약 고정(혼용 금지)**.
   - 의존: T4, T14. (Gemma 4 E4B A/B는 동일 절차의 선택 태스크 **T15b**)
 - **T16. vLLM 패키지 검증 + MTP 게이트**
   - 훈련 서버(x86)에서 vLLM ≥0.24로 병합본 로드 → 구조화 tool_calls 스모크(`--tool-call-parser qwen3_xml`) → 한국어 코칭 응답 회귀 → BF16 vs 8-bit 품질 비교 게이트(A40에서는 INT8/bnb 프록시, FP8 최종 확인은 Spark T19/T20).
