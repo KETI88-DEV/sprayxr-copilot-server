@@ -40,7 +40,7 @@ class FakeModel:
     def __init__(self, responses: list[str]) -> None:
         self.responses = responses
 
-    def generate_response(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> str:
+    def generate_response(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None) -> str:
         return self.responses.pop(0)
 
 
@@ -98,6 +98,23 @@ class ToolCallingAdapterTest(unittest.IsolatedAsyncioTestCase):
         parsed = self.adapter.parse_tool_calls(raw)
         self.assertEqual(len(parsed), 1)
         self.assertEqual(parsed[0]["name"], "location_tracking")
+
+    def test_parse_tool_calls_nested_args_no_closing_tag(self) -> None:
+        raw = '<tool_call>{"name": "location_tracking", "arguments": {"coordinates": [{"x": 910, "y": -45, "z": 250}], "ship_model_id": "default"}}'
+        parsed = self.adapter.parse_tool_calls(raw)
+        self.assertEqual(len(parsed), 1)
+        self.assertEqual(parsed[0]["name"], "location_tracking")
+        self.assertEqual(parsed[0]["arguments"]["coordinates"][0]["x"], 910)
+
+    def test_parse_tool_calls_multiple_nested_no_closing(self) -> None:
+        raw = (
+            '<tool_call>{"name": "location_tracking", "arguments": {"coordinates": [{"x": 0}]}}\n'
+            '<tool_call>{"name": "sequence_validation", "arguments": {"current_zone_id": "P-2", "zone_map": [{"zone_id":"A-2"}]}}'
+        )
+        parsed = self.adapter.parse_tool_calls(raw)
+        self.assertEqual(len(parsed), 2)
+        self.assertEqual(parsed[0]["name"], "location_tracking")
+        self.assertEqual(parsed[1]["name"], "sequence_validation")
 
     def test_parse_tool_calls_malformed_json_skips(self) -> None:
         raw = '<tool_call>{"name":"dft_judge","arguments":{"x":1,}}</tool_call>'
@@ -325,8 +342,9 @@ class ToolCallingAdapterTest(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(len(output["tool_results"]), 1)
 
     async def test_run_tool_loop_exceeds_rounds_graceful_fallback(self) -> None:
+        tool_call = '<tool_call>{"name":"timeseries","arguments":{"action":"query","session_id":"s1"}}</tool_call>'
         model = FakeModel(
-            responses=['<tool_call>{"name":"timeseries","arguments":{"action":"query","session_id":"s1"}}</tool_call>'] * 3
+            responses=[tool_call, tool_call, "[분석] 종합 결과입니다. [판정] 정상. [근거] DOC-doc_0001-C0001"]
         )
         tokenizer: Any = object()
         with patch.object(
@@ -343,6 +361,8 @@ class ToolCallingAdapterTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(output["rounds"], 2)
         self.assertTrue(output.get("truncated", False))
         self.assertIsInstance(output["final_response"], str)
+        self.assertNotIn("<tool_call>", output["final_response"])
+        self.assertTrue(output.get("synthesized", False))
         self.assertGreaterEqual(len(output["tool_results"]), 1)
 
 

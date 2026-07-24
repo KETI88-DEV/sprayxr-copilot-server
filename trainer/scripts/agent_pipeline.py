@@ -415,10 +415,12 @@ class AgentPipeline:
 
     def _load_tool_adapter(self, mcp_base_url: str) -> Any:
         adapter_mod = importlib.import_module("tool_calling_adapter")
+        llm_cfg = self.config.get("llm", {})
         return adapter_mod.ToolCallingAdapter(
             schema_dir=Path("/workspace/trainer/configs/tool_schemas"),
             protocol_path=Path("/workspace/trainer/configs/tool_calling_protocol.json"),
             mcp_base_url=mcp_base_url,
+            pass_native_tools=bool(llm_cfg.get("pass_native_tools", True)),
         )
 
     def _load_rag_components(self) -> tuple[Any, list[dict[str, Any]], Any, Any]:
@@ -453,14 +455,16 @@ class AgentPipeline:
         messages: list[dict[str, Any]],
         tool_results: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
+        from tool_calling_adapter import ToolCallingAdapter
+
         parsed_calls: list[dict[str, Any]] = []
         for message in messages:
             if message.get("role") != "assistant":
                 continue
             content = str(message.get("content", ""))
-            for match in TOOL_CALL_BLOCK_REGEX.finditer(content):
+            for block in ToolCallingAdapter._extract_tool_call_blocks(content):
                 try:
-                    payload = json.loads(match.group(1))
+                    payload = json.loads(block)
                 except json.JSONDecodeError:
                     continue
                 if not isinstance(payload, dict):
@@ -577,6 +581,15 @@ class AgentPipeline:
             "summary": summary,
             "body": response_text,
         }
+
+    @staticmethod
+    def _append_citations(response_text: str, citations: list[str]) -> str:
+        if not citations:
+            return response_text
+        if _DOC_ID_RE.search(response_text):
+            return response_text
+        cited = ", ".join(citations[:3])
+        return f"{response_text.rstrip()}\n[근거] 참조 문서 ID: {cited}"
 
     @staticmethod
     def _extract_steps(response_text: str) -> list[dict[str, Any]] | None:
@@ -769,14 +782,26 @@ class AgentPipeline:
             )
             logger.debug("Running tool loop with %d initial messages", len(messages))
             route_max_tokens = ROUTE_MAX_TOKENS.get(route, 768)
+            tool_thinking = enable_thinking
+            if bool(self.config.get("llm", {}).get("thinking_off_for_tools", False)):
+                tool_thinking = False
+            gen_cfg = self.config.get("generation", {})
+            gen_params = {
+                "do_sample": bool(gen_cfg.get("do_sample", True)),
+                "temperature": float(gen_cfg.get("temperature", 0.3)),
+                "top_p": float(gen_cfg.get("top_p", 0.8)),
+                "top_k": int(gen_cfg.get("top_k", 20)),
+                "repetition_penalty": float(gen_cfg.get("repetition_penalty", 1.15)),
+            }
             loop_output = _run_coro_sync(
                 self.tool_adapter.run_tool_loop(
                     messages=messages,
                     model=self.model,
                     tokenizer=self.tokenizer,
-                    enable_thinking=enable_thinking,
+                    enable_thinking=tool_thinking,
                     max_rounds=ROUTE_MAX_ROUNDS.get(route, 5),
                     max_tokens=route_max_tokens,
+                    gen_params=gen_params,
                 )
             )
             raw_final = str(loop_output.get("final_response", ""))
@@ -791,6 +816,8 @@ class AgentPipeline:
         latency_ms = int((time.monotonic() - t0) * 1000)
         tool_sections = self._assemble_tool_sections(tool_calls)
         citations = self._extract_citations(response_text, rag_chunks)
+        if bool(self.config.get("llm", {}).get("append_citations", False)):
+            response_text = self._append_citations(response_text, citations)
         text_guide = self._build_text_guide(response_text, trainee_profile)
         tools_used = list(dict.fromkeys(c.get("name", "") for c in tool_calls if c.get("name")))
 

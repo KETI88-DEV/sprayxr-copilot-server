@@ -7,6 +7,7 @@ import asyncio
 import copy
 import json
 import logging
+import os
 import re
 import uuid
 from pathlib import Path
@@ -17,7 +18,26 @@ import httpx
 logger = logging.getLogger(__name__)
 
 TOOL_CALL_REGEX = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", flags=re.DOTALL)
+TOOL_CALL_STRIP_REGEX = re.compile(r"<tool_call>.*?</tool_call>", flags=re.DOTALL)
 THINK_BLOCK_REGEX = re.compile(r"<think>.*?</think>", flags=re.DOTALL)
+
+SYNTHESIS_INSTRUCTION = (
+    "도구 호출이 끝났다. 이제 도구 결과와 문서 근거를 통합하여 최종 한국어 코칭 답변을 작성하라. "
+    "추가 도구 호출은 하지 마라. 반드시 아래 구조를 정확히 이 순서로 사용하라:\n"
+    "[분석] 도구 결과와 측정값을 종합한 상황 분석 (2-3문장)\n"
+    "[판정] 합격/불합격 또는 정상/이상 한 줄 결론\n"
+    "[원인] 문제가 있으면 근본 원인 1-2가지 (없으면 생략)\n"
+    "[조치] 구체적 행동 항목을 번호 목록으로 1-3개\n"
+    "[근거] 참조 문서 ID를 'DOC-xxx-Cxxx' 형식으로 명시\n\n"
+    "예시:\n"
+    "[분석] DFT 측정값 [82, 88, 140]μm을 90/10 규칙으로 판정한 결과, 90% 기준(90μm) 미만이 2건입니다.\n"
+    "[판정] 불합격\n"
+    "[원인] 하부 구간 스프레이 거리 과다로 도료 도달량이 부족했습니다.\n"
+    "[조치]\n"
+    "1. 분사 거리를 400~600mm로 유지하십시오.\n"
+    "2. 미달 구간을 재도장 후 재측정하십시오.\n"
+    "[근거] 참조 문서 ID: DOC-doc_0421-C0007"
+)
 
 
 def _is_type_match(value: Any, expected_type: str) -> bool:
@@ -264,7 +284,13 @@ class ToolInfrastructureError(ToolCallingError):
 class ToolCallingAdapter:
     """Bridges Qwen3 native function-calling format with MCP HTTP endpoints."""
 
-    def __init__(self, schema_dir: str | Path, protocol_path: str | Path, mcp_base_url: str | None = None) -> None:
+    def __init__(
+        self,
+        schema_dir: str | Path,
+        protocol_path: str | Path,
+        mcp_base_url: str | None = None,
+        pass_native_tools: bool | None = None,
+    ) -> None:
         self.logger = logger
         self.schema_dir = Path(schema_dir)
         self.protocol_path = Path(protocol_path)
@@ -284,6 +310,11 @@ class ToolCallingAdapter:
 
         base_url = mcp_base_url or self.protocol.get("mcp_server_base_url", "http://localhost:8100")
         self.mcp_base_url = base_url.rstrip("/")
+
+        if pass_native_tools is None:
+            pass_native_tools = os.environ.get("TOOL_ADAPTER_NATIVE_TOOLS", "1") != "0"
+        self.pass_native_tools = pass_native_tools
+        self.force_synthesis = os.environ.get("TOOL_ADAPTER_FORCE_SYNTHESIS", "1") != "0"
 
     @staticmethod
     def _load_json_file(path: Path) -> dict[str, Any]:
@@ -323,14 +354,54 @@ class ToolCallingAdapter:
         """Provides OpenAI-compatible tool definitions expected by Qwen3 templates."""
         return self.tool_schemas
 
+    @staticmethod
+    def _extract_tool_call_blocks(raw_text: str) -> list[str]:
+        blocks: list[str] = []
+        pos = 0
+        while True:
+            start = raw_text.find("<tool_call>", pos)
+            if start == -1:
+                break
+            brace_start = raw_text.find("{", start)
+            if brace_start == -1:
+                break
+            depth = 0
+            in_str = False
+            escape = False
+            end = -1
+            for i in range(brace_start, len(raw_text)):
+                ch = raw_text[i]
+                if escape:
+                    escape = False
+                    continue
+                if ch == "\\":
+                    escape = True
+                    continue
+                if ch == '"':
+                    in_str = not in_str
+                    continue
+                if in_str:
+                    continue
+                if ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        end = i + 1
+                        break
+            if end == -1:
+                break
+            blocks.append(raw_text[brace_start:end])
+            pos = end
+        return blocks
+
     def parse_tool_calls(self, raw_text: str) -> list[dict[str, Any]]:
-        """Extracts tool calls robustly so malformed snippets do not break full turns."""
+        """Extracts tool calls robustly, handling nested-object args and missing closing tags."""
         if not raw_text:
             return []
 
         tool_calls: list[dict[str, Any]] = []
-        for match in TOOL_CALL_REGEX.finditer(raw_text):
-            block = match.group(1)
+        for block in self._extract_tool_call_blocks(raw_text):
             try:
                 payload = json.loads(block)
             except json.JSONDecodeError:
@@ -533,6 +604,7 @@ class ToolCallingAdapter:
         tokenizer: Any,
         enable_thinking: bool,
         max_tokens: int | None = None,
+        gen_params: dict[str, Any] | None = None,
     ) -> str:
         if hasattr(model, "generate_response"):
             response = model.generate_response(messages=messages, tools=self.get_tools_param())
@@ -542,30 +614,90 @@ class ToolCallingAdapter:
                 raise ToolInfrastructureError("Model generate_response must return a string")
             return response
 
-        prompt_text = tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True,
-            tools=self.get_tools_param(),
-            enable_thinking=enable_thinking,
-        )
+        template_kwargs: dict[str, Any] = {
+            "tokenize": False,
+            "add_generation_prompt": True,
+            "enable_thinking": enable_thinking,
+        }
+        if self.pass_native_tools:
+            template_kwargs["tools"] = self.get_tools_param()
+        prompt_text = tokenizer.apply_chat_template(messages, **template_kwargs)
 
         inputs = tokenizer([prompt_text], return_tensors="pt", return_attention_mask=True)
         if hasattr(inputs, "to") and hasattr(model, "device"):
             inputs = inputs.to(model.device)
 
         gen_max_tokens = max_tokens or 1024
+        gp = gen_params or {}
+        do_sample = bool(gp.get("do_sample", True))
+        generate_kwargs: dict[str, Any] = {
+            "max_new_tokens": gen_max_tokens,
+            "pad_token_id": tokenizer.eos_token_id,
+            "repetition_penalty": float(gp.get("repetition_penalty", 1.15)),
+            "do_sample": do_sample,
+        }
+        if do_sample:
+            generate_kwargs["temperature"] = float(gp.get("temperature", 0.3))
+            generate_kwargs["top_p"] = float(gp.get("top_p", 0.8))
+            generate_kwargs["top_k"] = int(gp.get("top_k", 20))
+
         def _run_generation() -> Any:
-            return model.generate(
-                **inputs,
-                max_new_tokens=gen_max_tokens,
-                pad_token_id=tokenizer.eos_token_id,
-                repetition_penalty=1.15,
-            )
+            return model.generate(**inputs, **generate_kwargs)
 
         output_ids = await asyncio.to_thread(_run_generation)
         generated = output_ids[0][inputs.input_ids.shape[1] :]
         return tokenizer.decode(generated, skip_special_tokens=True)
+
+    async def _generate_synthesis_text(
+        self,
+        messages: list[dict[str, Any]],
+        model: Any,
+        tokenizer: Any,
+        max_tokens: int | None = None,
+        gen_params: dict[str, Any] | None = None,
+    ) -> str:
+        synthesis_messages = list(messages)
+        synthesis_messages.append({"role": "user", "content": SYNTHESIS_INSTRUCTION})
+
+        if hasattr(model, "generate_response"):
+            response = model.generate_response(messages=synthesis_messages, tools=None)
+            if asyncio.iscoroutine(response):
+                response = await response
+            if not isinstance(response, str):
+                raise ToolInfrastructureError("Model generate_response must return a string")
+            return TOOL_CALL_STRIP_REGEX.sub("", response).strip()
+
+        prompt_text = tokenizer.apply_chat_template(
+            synthesis_messages,
+            tokenize=False,
+            add_generation_prompt=True,
+            enable_thinking=False,
+        )
+        inputs = tokenizer([prompt_text], return_tensors="pt", return_attention_mask=True)
+        if hasattr(inputs, "to") and hasattr(model, "device"):
+            inputs = inputs.to(model.device)
+
+        gen_max_tokens = max_tokens or 1024
+        gp = gen_params or {}
+        do_sample = bool(gp.get("do_sample", True))
+        generate_kwargs: dict[str, Any] = {
+            "max_new_tokens": gen_max_tokens,
+            "pad_token_id": tokenizer.eos_token_id,
+            "repetition_penalty": float(gp.get("repetition_penalty", 1.15)),
+            "do_sample": do_sample,
+        }
+        if do_sample:
+            generate_kwargs["temperature"] = float(gp.get("temperature", 0.3))
+            generate_kwargs["top_p"] = float(gp.get("top_p", 0.8))
+            generate_kwargs["top_k"] = int(gp.get("top_k", 20))
+
+        def _run_generation() -> Any:
+            return model.generate(**inputs, **generate_kwargs)
+
+        output_ids = await asyncio.to_thread(_run_generation)
+        generated = output_ids[0][inputs.input_ids.shape[1] :]
+        text = tokenizer.decode(generated, skip_special_tokens=True)
+        return TOOL_CALL_STRIP_REGEX.sub("", self._strip_think_blocks(text)).strip()
 
     async def run_tool_loop(
         self,
@@ -575,6 +707,7 @@ class ToolCallingAdapter:
         enable_thinking: bool = False,
         max_rounds: int = 5,
         max_tokens: int | None = None,
+        gen_params: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Runs the multi-turn tool loop until the model emits a final natural-language answer."""
         if max_rounds <= 0:
@@ -590,11 +723,19 @@ class ToolCallingAdapter:
                 tokenizer=tokenizer,
                 enable_thinking=enable_thinking,
                 max_tokens=max_tokens,
+                gen_params=gen_params,
             )
             tool_calls = self.parse_tool_calls(raw_text)
 
             if not tool_calls:
                 final_text = self._strip_think_blocks(raw_text) if enable_thinking else raw_text.strip()
+                stripped = TOOL_CALL_STRIP_REGEX.sub("", final_text).strip()
+                if self.force_synthesis and collected_tool_results and not stripped:
+                    final_text = await self._generate_synthesis_text(
+                        conversation, model, tokenizer, max_tokens=max_tokens, gen_params=gen_params,
+                    )
+                else:
+                    final_text = stripped
                 conversation.append({"role": "assistant", "content": final_text})
                 return {
                     "final_response": final_text,
@@ -621,13 +762,30 @@ class ToolCallingAdapter:
             conversation.extend(self.format_tool_results(normalized_results))
 
         logger.warning(
-            "Tool loop reached max_rounds=%d without final answer, returning last state",
+            "Tool loop reached max_rounds=%d without final answer; forcing synthesis",
             max_rounds,
         )
+
+        if self.force_synthesis and collected_tool_results:
+            final_text = await self._generate_synthesis_text(
+                conversation, model, tokenizer, max_tokens=max_tokens, gen_params=gen_params,
+            )
+            conversation.append({"role": "assistant", "content": final_text})
+            return {
+                "final_response": final_text,
+                "messages": conversation,
+                "tool_results": collected_tool_results,
+                "rounds": max_rounds,
+                "truncated": True,
+                "synthesized": True,
+            }
+
         last_assistant = ""
         for msg in reversed(conversation):
             if msg.get("role") == "assistant":
-                last_assistant = self._strip_think_blocks(msg.get("content", ""))
+                last_assistant = TOOL_CALL_STRIP_REGEX.sub(
+                    "", self._strip_think_blocks(msg.get("content", ""))
+                ).strip()
                 break
 
         return {

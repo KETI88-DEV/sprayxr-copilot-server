@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import argparse
 import importlib
 import json
@@ -57,6 +58,11 @@ def _load_jsonl(path: Path) -> list[dict[str, Any]]:
 
 
 def _should_enable_thinking(question: dict[str, Any]) -> bool:
+    force = os.environ.get("EVAL_FORCE_THINKING")
+    if force == "0":
+        return False
+    if force == "1":
+        return True
     reasoning_steps = int(question.get("reasoning_steps", 3))
     required_tools = question.get("tool_calls_required", [])
     if reasoning_steps <= 2 and isinstance(required_tools, list) and len(required_tools) <= 1:
@@ -114,6 +120,12 @@ def parse_args() -> argparse.Namespace:
         default=600,
         help="Per-question timeout in seconds (default: 600).",
     )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed for reproducible generation (default: 42).",
+    )
     return parser.parse_args()
 
 
@@ -130,6 +142,13 @@ def main() -> int:
     if not args.config.is_file():
         logger.error("Config not found: %s", args.config)
         return 1
+
+    import random
+    import torch
+    random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    torch.cuda.manual_seed_all(args.seed)
+    logger.info("Reproducibility seed set: %d", args.seed)
 
     adapter_path = _resolve_adapter_path(args.adapter, args.qlora_config)
 
@@ -205,18 +224,21 @@ def main() -> int:
                 ]
                 metadata = result.get("metadata", {})
                 thinking = str(metadata.get("thinking", ""))
+                citations = result.get("citations", []) or []
             except _QuestionTimeout:
                 signal.alarm(0)
                 logger.error("TIMEOUT: %s exceeded %ds — skipping", q_id, question_timeout)
                 final_text = "[TIMEOUT]"
                 normalized_tools = []
                 thinking = ""
+                citations = []
             except Exception:
                 signal.alarm(0)
                 logger.exception("Generation failed for %s", q_id)
                 final_text = ""
                 normalized_tools = []
                 thinking = ""
+                citations = []
 
             elapsed = time.monotonic() - q_start
             logger.info("[%d/%d] %s completed in %.1fs, tools=%d, len=%d",
@@ -228,6 +250,7 @@ def main() -> int:
                 "answer": final_text,
                 "response": final_text,
                 "thinking": thinking,
+                "citations": citations,
             }
             out_fh.write(json.dumps(output_item, ensure_ascii=False) + "\n")
             out_fh.flush()  # flush after each question to prevent data loss
