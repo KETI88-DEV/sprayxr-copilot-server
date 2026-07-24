@@ -1,14 +1,10 @@
-# RAG Pipeline Configuration
-# Task 3: 문서 청킹 및 RAG 색인 구축
-
 chunking:
   tokenizer_path: /models/Qwen3-4B
   min_tokens: 300
   max_tokens: 800
-  overlap_fraction: 0.15          # 15% overlap (midpoint of 10-20%)
-  min_chunk_tokens: 50            # discard fragments smaller than this
-  chunk_id_format: "DOC-{doc_id}-C{seq:04d}"
-
+  overlap_fraction: 0.15
+  min_chunk_tokens: 50
+  chunk_id_format: DOC-{doc_id}-C{seq:04d}
 embedding:
   model_name: BAAI/bge-m3
   device: cuda
@@ -16,21 +12,18 @@ embedding:
   max_seq_length: 1024
   normalize: true
   dimension: 1024
-
 index:
   type: hnsw
-  metric: inner_product           # + normalize = cosine similarity
+  metric: inner_product
   hnsw_m: 32
   ef_construction: 200
-  ef_search: 64
-
+  ef_search: 256
 reranker:
   model_name: BAAI/bge-reranker-v2-m3
   device: cuda
   max_length: 1024
-  top_k_retrieve: 5
-  top_k_rerank: 3
-
+  top_k_retrieve: 30
+  top_k_rerank: 8
 llm:
   model_path: /models/Qwen3-4B
   device_map: auto
@@ -40,7 +33,6 @@ llm:
   bnb_4bit_use_double_quant: true
   bnb_4bit_compute_dtype: bfloat16
   use_safetensors: true
-
 generation:
   temperature: 0.7
   max_new_tokens: 768
@@ -48,26 +40,18 @@ generation:
   top_p: 0.8
   top_k: 20
   enable_thinking: false
-
 prompt:
-  system: >-
-    너는 선박 도장 분야 전문 AI 어시스턴트이다. 제공된 문서를 근거로 정확한 기술 정보를
-    제공하고, 답변 마지막에 근거 문서 ID를 반드시 명시한다. 근거가 부족하면 솔직히
-    '제공된 문서에 해당 정보가 없습니다'라고 답한다. 안전 관련 질문에는 항상 관련 규정을
-    함께 안내한다.
-  context_template: >-
-    아래는 관련 문서입니다. 이 문서만을 근거로 답변하세요.
+  system: 너는 선박 도장 분야 전문 AI 어시스턴트이다. 제공된 문서를 근거로 정확한 기술 정보를 제공하고, 답변 마지막에 근거 문서 ID를
+    반드시 명시한다. 근거가 부족하면 솔직히 '제공된 문서에 해당 정보가 없습니다'라고 답한다. 안전 관련 질문에는 항상 관련 규정을 함께 안내한다.
+  context_template: '아래는 관련 문서입니다. 이 문서만을 근거로 답변하세요.
 
-    {context}
-  user_template: >-
-    질문: {question}
-
+    {context}'
+  user_template: '질문: {question}'
 confidence:
   min_rerank_score: 0.3
   min_results: 1
   high_threshold: 0.7
   medium_threshold: 0.4
-
 eval:
   bertscore_model: bert-base-multilingual-cased
   bertscore_layers: 9
@@ -76,7 +60,6 @@ eval:
   answer_key_path: /data/eval/eval_answer_key.json
   rubric_path: /workspace/trainer/configs/eval_rubric.md
   results_dir: /output/eval_results
-
 paths:
   input_dir: /data/deduplicated
   chunks_jsonl: /data/chunked/chunks.jsonl
