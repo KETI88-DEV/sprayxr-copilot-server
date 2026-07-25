@@ -147,25 +147,64 @@ python3 -m trainer.demo_api.app --host 127.0.0.1 --port 8120
 - `GET  /api/sequence/{level_id}` — 초기 도장 순서 스냅샷
 - `POST /api/chat`               — SSE 스트림 (session/status/tool_result/sequence_update/message_delta/complete/error)
 
-CORS 허용 오리진은 환경변수 `DEMO_UI_ORIGINS` (콤마 구분, 기본값 `http://127.0.0.1:5173,http://localhost:5173`).
+환경변수:
+- `DEMO_UI_ORIGINS` — 콤마 구분 CORS 오리진. 미설정 시 `*` (원격 웹 접근 편의). 특정 도메인만 허용하려면 명시적으로 설정한다. 예: `https://demo.example.com,http://192.168.0.10:5173`.
+- `DEMO_LIVE_MODE` — `off`(기본) 또는 `on`. `on`이면 startup 시 `build_default_live_runner`를 부착해 실제 AgentPipeline + MCP + QLoRA 어댑터를 사용한다. 잘못된 값이면 startup 실패.
+- `CONFIG_PATH` / `ADAPTER_PATH` / `MCP_BASE_URL` — live 러너의 파이프라인 구성. 각각 기본값은 `trainer/configs/rag_config_fewshot.yaml`, `/output/adapters/qwen3_4b_shipcoat_lora/`, `http://localhost:8100`.
+
+원격 접근 (LAN/서버 배포):
+```bash
+# 기본: 모든 인터페이스에서 수신 (--host 기본값이 0.0.0.0)
+python3 -m trainer.demo_api.app --port 8120
+
+# Live 파이프라인까지 켠 상태로 기동
+python3 -m trainer.demo_api.app --port 8120 --live
+
+# 특정 오리진만 허용
+DEMO_UI_ORIGINS=https://demo.example.com python3 -m trainer.demo_api.app --port 8120 --live
+```
 
 ### 2) React 웹 데모
 
 ```bash
 cd demo-ui && npm install
-cd demo-ui && npm run dev:web -- --port 5173
+cd demo-ui && npm run dev:web             # Vite 개발 서버 (모든 인터페이스 바인딩)
 ```
 
-`VITE_API_BASE_URL`을 통해 백엔드 위치를 지정한다 (기본은 same-origin). Vite 개발 서버 사용 시:
+브라우저에서 접속:
+- 로컬: `http://127.0.0.1:5173`
+- 원격: `http://<서버 호스트>:5173` (Vite `server.host: true`가 기본)
+
+API 위치 지정 우선순위:
+1. `window.__DEMO_API_BASE_URL__` — 런타임 주입. 정적 배포 시 `index.html` 최상단에 스크립트로 넣는다.
+2. 빌드 시 `VITE_API_BASE_URL` 환경변수.
+3. 미지정 → same-origin (리버스 프록시 뒤 배치 시 권장).
+
+정적 빌드 + 미리보기:
 ```bash
-VITE_API_BASE_URL=http://127.0.0.1:8120 npm run dev:web -- --port 5173
+cd demo-ui && npm run build:web            # 산출물: demo-ui/dist/
+cd demo-ui && npm run preview:web          # 정적 서버 (host: true, port 4173)
 ```
 
-프로덕션 정적 빌드:
-```bash
-cd demo-ui && npm run build:web
+원격 배포 예시 (nginx 리버스 프록시):
+```nginx
+location /api/ {
+    proxy_pass http://127.0.0.1:8120/api/;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";        # SSE 안정성 확보
+    proxy_buffering off;
+}
+location / {
+    root /var/www/demo-ui/dist;
+    try_files $uri /index.html;
+}
 ```
-빌드 산출물은 `demo-ui/dist/`.
+이 구성이면 프런트는 same-origin으로 API를 호출하므로 CORS/베이스 URL 설정이 필요 없다.
+
+UI 조작:
+- `Enter` — 전송. `Shift+Enter` — 줄바꿈.
+- 상단 상태바 세그먼트에서 `demo` ↔ `live` 모드 전환. `live`인데 API가 `DEMO_LIVE_MODE=off`로 떠 있으면 서버가 명확한 error 이벤트를 반환한다.
+- 스트리밍 중에는 마지막 응답 말미에 커서(`▌`)가 깜박이고, 메시지가 늘면 자동으로 스크롤이 하단으로 따라간다.
 
 ### 3) Electron 데스크톱 데모
 
