@@ -15,6 +15,10 @@
 - Completed latency Task 1 through TDD, independent spec review, and independent code-quality review.
 - Rejected removal of the planned `tool_max_tokens` placeholder because Task 1 explicitly defines it and Task 2 consumes it next.
 - Recorded Task 1 permanently in `PATCH_NOTE.md` under Iter18-B.
+- Created atomic commits `6647435`, `d38d10f`, and `436f2fa` for Task 1 implementation, patch note, and synchronized worklogs.
+- Item 1 push is blocked: the `origin` HTTPS credential is unavailable and `gh auth status` reports an invalid token.
+- Completed latency Task 2: tool rounds use their own cap while both synthesis paths retain the full answer budget.
+- Corrected Task 2 test-fixture drift and removed attempted cast/ClassVar type escape hatches before review.
 
 ## Verification Ledger
 | Phase | Command/surface | Result |
@@ -27,6 +31,11 @@
 | Task 1 regression | `python3 -m pytest trainer/demo_api/tests trainer/scripts/test_tool_calling.py trainer/scripts/test_response_contract.py -q` | 51 passed; 2 pre-existing SWIG warnings. |
 | Task 1 diagnostics | LSP error diagnostics on both changed Python files | 0 errors. |
 | Task 1 reviews | Oracle spec + code quality | PASS / APPROVED. |
+| Item 1 push | `git push origin main` | Failed: no usable HTTPS username/token; `gh` token is invalid. |
+| Task 2 targeted | `python3 -m pytest trainer/scripts/test_tool_calling.py -k TokenCap -q` | 3 passed, 28 deselected. |
+| Task 2 full | `python3 -m pytest trainer/scripts/test_tool_calling.py -q` | 31 passed. |
+| Task 2 regression | `python3 -m pytest trainer/demo_api/tests trainer/scripts/test_tool_calling.py trainer/scripts/test_response_contract.py -q` | 54 passed, 2 pre-existing SWIG warnings. |
+| Task 2 reviews | Oracle spec + quality | PASS / APPROVED. |
 
 ## Next Action
-Create atomic Task 1 implementation and Iter18-B record commits, then start latency Task 2.
+Commit latency Task 2 and its Iter18-B/worklog records, then execute latency Task 3 config wiring.
