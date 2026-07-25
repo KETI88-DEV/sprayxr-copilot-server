@@ -2,7 +2,10 @@ import { z } from 'zod'
 import { chatRequestSchema, sequenceSnapshotSchema, streamEventSchema } from './contracts'
 import type { ChatRequest, SequenceSnapshot, StreamEvent } from './contracts'
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8120'
+const API_BASE_URL =
+  typeof window !== 'undefined' && window.__DEMO_API_BASE_URL__ !== undefined
+    ? window.__DEMO_API_BASE_URL__
+    : import.meta.env.VITE_API_BASE_URL ?? ''
 
 export class ApiError extends Error {
   constructor(message: string, public status?: number) {
