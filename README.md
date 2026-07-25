@@ -7,20 +7,31 @@
 **핵심 기술 스택**
 
 - **베이스 모델**: Qwen3-4B (Apache 2.0)
-- **파인튜닝**: QLoRA (rank 16, 4-bit NF4, peft + trl SFTTrainer)
-- **지식 검색**: BGE-M3 임베딩 + FAISS HNSW 인덱스 + BGE-Reranker-v2-m3
+- **파인튜닝**: QLoRA (Qwen3-4B: rank 16, 4-bit NF4 / Qwen3.6-27B: 8-bit, decontam v6.1), peft + trl SFTTrainer
+- **지식 검색**: BGE-M3 임베딩 + FAISS HNSW 인덱스 + BGE-Reranker-v2-m3 (recall@8 0.74 after re-index)
 - **에이전트**: ReAct 오케스트레이터 + 7개 MCP 서버 / 7개 모델-대상 도구 스키마 (FastAPI)
-- **데모 UI**: Gradio 6.x 웹 인터페이스
+- **데모 UI**: 3가지 병행 지원 — 기존 Gradio 6.x (`trainer/scripts/demo_app.py`) / 신규 React 웹 (`demo-ui/`) / 동일 빌드를 감싸는 Electron 데스크톱 셸
+- **데모 백엔드**: `trainer/demo_api/` FastAPI (SSE 스트리밍, `DEMO_LIVE_MODE=on`으로 실제 파이프라인 연결)
 
-**최종 성과 (Iter14 기준)**
+**최종 성과 (Iter17 기준 / Iter18 진행 중)**
 
 | 지표 | 결과 |
 |---|---|
-| Agentic 평가 점수 | 4.97/10 (목표 4.0 달성) |
+| Agentic 평가 점수 | 4.97/10 (Iter14, 목표 4.0 달성) · Iter17 rescore 5.57 (Oracle 검증 후 5.30) |
 | RAG+QLoRA DocQA 점수 | 1.368/2.0 |
 | Hallucination 비율 | 2.0% |
 | Tool Calling 작동 | 86회/30문항 |
-| RTX 4080 VRAM 사용 | ~8.5 GB (학습), ~4 GB (추론) |
+| RTX 4080 VRAM 사용 | ~8.5 GB (Qwen3-4B 학습), ~4 GB (추론) |
+| A40 48GB VRAM 사용 | peak 34.87 GB (Qwen3.6-27B 8-bit v6.1 학습) |
+| Rerank recall@8 | 0.66 → 0.74 (공백 복원 + 재임베딩) |
+
+**Iter18 하이라이트 (2026-07-25)**
+- React 웹 + Electron 데스크톱 데모 (Gradio 유지)
+- FastAPI SSE 백엔드 + `DEMO_LIVE_MODE` 스위치로 실제 AgentPipeline 연동
+- 원격 브라우저 접근 기본 지원 (0.0.0.0 바인딩, 런타임 API base URL 주입, CORS 기본 `*`)
+- Qwen3.6-27B 8-bit v6.1 재학습 완료 (multi-seed 실측 대기)
+- 도구 호출 파서 통일 및 seed-기반 재현성 확보 (`run_multiseed_eval.py`)
+- 상세: [`PATCH_NOTE.md`](PATCH_NOTE.md) → `[Iter18]` 섹션
 
 ---
 
@@ -610,8 +621,14 @@ python3 trainer/scripts/session_coaching.py \
 | Iter12 | Qwen3-4B | v3 | — | 3.30 | temp 0.5 실험 → REVERTED |
 | Iter13 | Qwen3-4B | v4 (784건, 도구 균형) | — | 4.83 | 목표 4.0 달성 |
 | Iter14 | Qwen3-4B | v4 (567건, 중복 제거) | — | 4.97 | assistant_only_loss, 86 tool calls, POC_CONFIRMED |
+| Iter15 | Qwen3-4B | v4 | — | — | 실험 구성 아카이브 (rag/router 튜닝) |
+| Iter16 | Qwen3-4B | v4 | — | — | 실험 구성 아카이브 |
+| Iter17 | Qwen3-4B | v4 | — | 5.57 | eval scorer 버그 픽스(context_integration/response_structure +0.20), Oracle rescore 5.30 |
+| Iter18 | Qwen3.6-27B (8-bit) | v6.1 (636건, decontam) | — | (multi-seed 실측 대기) | React 웹 + Electron 데스크톱 데모, FastAPI live, 원격 접근, tool-call parser 통일, rerank recall@8 0.66→0.74 |
 
 **Qwen3-4B 선정 근거**: RTX 4080 16GB 기준 VRAM ~8.5 GB (학습), ~4 GB (추론). Qwen3-8B는 학습 시 ~16 GB로 XR 시뮬레이터 동시 가동 불가.
+
+**Qwen3.6-27B 승격 근거**: 27B 8-bit QLoRA는 A40 48GB에서 peak 34.87 GB로 학습 가능하며, MTP + vLLM 기반 서빙 계획에 맞춰 DGX Spark 배포 트랙에서 활용한다. RTX 4080은 4-bit Qwen3-4B 기준선을 유지한다.
 
 ---
 

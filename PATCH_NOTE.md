@@ -3454,3 +3454,182 @@ VLM(Vision Language Model) 분석 도구 스텁 및 향후 확장 인터페이�
 
 ---
 
+## [Iter18] Chat Demo React/Electron Refactor + Live Wiring + Qwen3.6-27B v6.1 Track
+
+**Date**: 2026-07-22 ~ 2026-07-25
+**Scope**: 채팅 데모 전면 개편(React 웹 + Electron 데스크톱), FastAPI live 파이프라인 연결, 원격 브라우저 접근 지원, Qwen3.6-27B 8-bit v6/v6.1 학습 트랙, 도구 호출 파서/재현성 개선.
+
+### Summary
+- 기존 Gradio 데모(`trainer/scripts/demo_app.py`)를 유지하면서 두 개의 신규 UI를 추가: React/Vite 웹 데모(`demo-ui/`)와 동일 빌드를 감싸는 Electron 데스크톱 셸.
+- 공용 FastAPI 백엔드(`trainer/demo_api/`)가 SSE로 대화 이벤트를 스트리밍하고, `DEMO_LIVE_MODE=on` 환경변수 하나로 실제 AgentPipeline + MCP + QLoRA 어댑터를 붙일 수 있음.
+- 서버 기본 바인딩을 `0.0.0.0`으로 옮기고 Vite dev/preview 서버도 모든 인터페이스에 바인딩해 원격 브라우저 접근을 기본 지원. CORS는 `DEMO_UI_ORIGINS` 미지정 시 `*` 허용.
+- 프런트 API 베이스 URL은 `window.__DEMO_API_BASE_URL__` → `VITE_API_BASE_URL` → same-origin 우선순위로 런타임 주입 가능.
+- Qwen3.6-27B 8-bit QLoRA v6 → v6.1(오염 6건 제거) 재학습 완료. 어댑터 `/output/adapters/qwen36_27b_shipcoat_lora_v6_1/`, 227 min, 640 samples, eval loss 0.65→0.50→0.47, peak 34.87 GB.
+- 도구 호출 브레이스 파서를 어댑터·에이전트 양쪽에서 통일하고 생성 파라미터/시드를 스레딩해 다중 시드 평가의 재현성 확보(`run_multiseed_eval.py` 신설).
+- RAG 인덱스 공백 복원(`repair_chunk_spacing.py`) + 재임베딩(`reindex_repaired.py`) → rerank recall@8 0.66→0.74. `rag_config.yaml`에서 `ef_search=256`, `top_k_retrieve=30`, `top_k_rerank=8`로 상향.
+- 1차 구현에서는 3D 뷰어를 제외(`zone_id ↔ mesh/coordinate` 매핑 부재). Three.js/GLB/FBX/Blender CLI는 후속 spec으로 이관.
+
+### Architecture 변경
+
+```
+                    ┌─────────────────────┐
+Browser ───────────▶│ React/Vite Web UI   │
+                    │ (Zod, SSE parser)   │
+                    └─────────┬───────────┘
+                              │ HTTP + SSE
+Electron BrowserWindow ───────┘
+                              ▼
+                    ┌─────────────────────┐
+                    │ FastAPI Demo API    │
+                    │ chat/scene/health   │
+                    └──────┬──────────────┘
+                           │  DEMO_LIVE_MODE
+                     ┌─────┴───────┐
+                     ▼             ▼
+               demo scenarios  AgentPipeline (live)
+                     │             │
+                     └─→ MCP / RAG / QLoRA (Qwen3-4B or 27B v6.1)
+
+Gradio demo (기존) ─────▶ 공유 scenario_adapter / DEMO_SCENARIOS
+```
+
+### Subtask 결과
+
+#### 18.1 FastAPI 백엔드 및 계약 정의 ✅
+- 신규 파일: `trainer/demo_api/{__init__, contracts, scenario_adapter, sequence, chat_service, app}.py` + 5개 pytest.
+- `create_app()`: `GET /api/health`, `GET /api/sequence/{level_id}`, `POST /api/chat`(SSE).
+- Pydantic v2 strict 계약: `SequenceSnapshot`, `SequenceUpdate`, `ChatRequest`, `StreamEvent`.
+- SSE 이벤트 순서: `session` → `status` → `tool_result*` → `sequence_update?` → `message_delta+` → `complete` (또는 `error`).
+- `sequence_update_from_payload`가 AgentPipeline `next_path`/`steps`를 구조화 계약으로 변환(좌표 추론 없이).
+
+#### 18.2 Gradio 데모 어댑터 통합 ✅
+- `trainer/scripts/demo_app.py`가 `trainer.demo_api.scenario_adapter.get_demo_scenario`를 호출. 시나리오 테이블 자체는 여전히 `demo_app.py`가 소유(single source of truth).
+
+#### 18.3 React/Vite 웹 UI ✅
+- `demo-ui/`: React 19 + TypeScript strict + Vite + Zod. 루트 `package.json` 무변경.
+- 컴포넌트: `StatusBar`, `SequencePanel`, `ChatPanel`, `ToolLogPanel`.
+- `src/api.ts`: fetch + POST-SSE 파서(청크 분할 안전), `AbortSignal` 지원, Zod 검증.
+- `src/sequenceState.ts`: 결정적 리듀서(current > next > completed > pending).
+- Vitest 16 tests / 7 files(contracts, sequenceState, SequencePanel, api, App, ChatPanel, electronMain).
+
+#### 18.4 Electron 데스크톱 셸 ✅
+- 신규 파일: `demo-ui/tsconfig.electron.json`, `demo-ui/electron/{main,preload,preload.d}.ts`.
+- 보안 기본값 고정: `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`.
+- Preload 노출은 `window.desktop.{platform, electronVersion}`만.
+- 개발: `npm run dev:electron` (Vite dev URL 로드), 배포: `npm run start:electron` (`dist/index.html` 로드).
+
+#### 18.5 Playwright E2E ✅
+- `demo-ui/playwright.config.ts`가 FastAPI + Vite dev 서버를 자동 기동.
+- 2 tests / chromium-only: 채팅→순서 갱신, API offline→오프라인 상태·재연결 버튼.
+
+#### 18.6 Live 파이프라인 연결 ✅
+- `DEMO_LIVE_MODE=on` 시 `create_app()`가 `build_default_live_runner()`를 `ChatService`에 주입.
+- 잘못된 값은 startup에서 `RuntimeError`. `--live` CLI 플래그로 편리 실행.
+- `test_app_live_wiring.py`: off/on/bogus 3-way 검증(모델 로드는 트리거하지 않음).
+
+#### 18.7 원격 브라우저 접근 ✅
+- FastAPI 기본 host `127.0.0.1` → `0.0.0.0`.
+- Vite `server.host = true`, preview `host: true, port: 4173, strictPort: true`.
+- 프런트 API base URL 런타임 주입: `window.__DEMO_API_BASE_URL__` > `VITE_API_BASE_URL` > same-origin.
+- `index.html` 부트스트랩 스크립트가 Vite 미치환 리터럴을 `undefined`로 처리.
+- CORS 기본: `DEMO_UI_ORIGINS` 미설정 시 `*`, 명시 시 그 오리진만 허용.
+
+#### 18.8 UI 다듬기 ✅
+- `Enter` 전송 / `Shift+Enter` 줄바꿈.
+- 메시지·스트리밍 델타 자동 스크롤.
+- 스트리밍 중 마지막 응답에 CSS 커서 `▌` 깜박임.
+- StatusBar 세그먼트 컨트롤 `demo | live` (mode 전환).
+
+#### 18.9 Qwen3.6-27B 8-bit v6/v6.1 학습 트랙 ✅
+- 신규 configs: `qlora_config_27b_v2.yaml`, `qlora_config_27b_v6.yaml`, `qlora_config_27b_v6_1.yaml`, `rag_config_fewshot_27b.yaml`.
+- 신규 스크립트: `build_sft_v6.py` (v5 → v6 오염 제거 + `[분석]/[판정]/[원인]/[조치]/[근거]` 포맷 강제).
+- Oracle 지적 반영: 3개 eval overlap 제거 + 117개 fabricated `DOC-doc_0033-C0326` fallback 제거.
+- v6.1 재학습: 636 train / 29 val, 3 epoch, eval loss 0.65 → 0.50 → 0.47, peak 34.87 GB, 992 LoRA tensors, 216 min.
+
+#### 18.10 도구 호출 파서 통일 및 재현성 개선 ✅
+- `tool_calling_adapter.py`: 브레이스 스캐너 파서(중첩 JSON args + 닫는 태그 누락 허용). 생성 파라미터(temperature/top_p/do_sample/seed)를 tool + synthesis 생성 호출에 스레딩.
+- `agent_pipeline._extract_tool_calls`: 동일 파서로 통일.
+- `generate_agentic_responses.py`: `--seed` 추가 + Python/torch/CUDA seed 설정.
+- `test_tool_calling.py`: 중첩 args + 닫는 태그 누락 케이스 커버.
+
+#### 18.11 Multi-Seed Evaluation + Retrieval Diagnostics ✅
+- 신규 스크립트:
+  - `run_multiseed_eval.py`: N seed 반복 실행 → `multiseed_report.json` (mean/std/min/max).
+  - `eval_retrieval_recall.py`, `diag_retrieval_ceiling.py`: recall @ top-k 측정.
+  - `repair_chunk_spacing.py`: 한국어 청크 공백 복원.
+  - `reindex_repaired.py`: 재임베딩 + FAISS HNSW 재구축.
+- 결과: rerank recall@8 0.66 → 0.74. `rag_config.yaml` `ef_search=256`, `top_k_retrieve=30`, `top_k_rerank=8`.
+
+#### 18.12 DGX Spark 계획 v3 반영 ✅
+- `.omo/plans/dgx-spark-qwen-coaching-agent.md` (+ `.sisyphus/plans/` 미러) 섹션 0.9 신설: 코칭 기능-시점 매핑.
+- 훈련 중 이벤트는 RAG/anomaly만, 순서는 세션 시작 시 guide, 자세·분포·순서 회고는 세션 완료 리뷰 전용.
+
+### 자동 게이트 결과
+
+| 게이트 | 결과 |
+|---|---|
+| `pytest trainer/demo_api/tests trainer/scripts/test_tool_calling.py trainer/scripts/test_response_contract.py -q` | **47 passed** |
+| `cd demo-ui && npm test -- --run` | **16 passed / 7 files** |
+| `cd demo-ui && npm run build:web && npm run build:electron` | ✅ (dist + dist-electron 생성) |
+| `cd demo-ui && npx playwright test --reporter=list` | **2 passed** |
+| 원격 접근 smoke | `curl http://<LAN-IP>:8125/api/health` + POST /api/chat SSE 정상 |
+
+### Commits (18개)
+
+채팅 데모 트랙 (10 commits):
+```
+8f1ada2 chore(gitignore): exclude OMC handoffs, continuation state, demo-ui build artefacts
+3aa8471 chore(trainer): add package marker and pyright config for trainer.demo_api imports
+6575216 feat(trainer/demo_api): add FastAPI chat/scene/health service with SSE streaming
+c3e7b61 refactor(demo_app): route scenario lookup through shared scenario_adapter
+7080075 feat(demo-ui): scaffold React/Vite web UI with sequence panel and chat
+fb076c5 feat(demo-ui/electron): add secure Electron desktop shell
+9e970d9 test(demo-ui): add Playwright E2E for chat sequence and API-offline paths
+e295dfc docs: add electron/react chat demo spec + plan and README section
+de26a14 feat(demo_api): wire live AgentPipeline via DEMO_LIVE_MODE and bind 0.0.0.0
+a896e6d feat(demo-ui): runtime-configurable API base URL and remote-reachable dev/preview
+b48704c feat(demo-ui): enter submit, streaming cursor, auto-scroll, and demo/live mode selector
+4703126 docs(README): expand demo section with live mode, remote access, and UX tips
+```
+
+Qwen 27B 트랙 (5 commits):
+```
+03897e1 feat(qlora): add Qwen3.6-27B 8-bit configs and v6 SFT decontamination pipeline
+9844ac3 feat(agent): unify tool-call brace parser and thread generation params through synthesis
+615246f feat(eval): add multi-seed agentic eval and retrieval diagnostics scripts
+e237d8b chore(configs): tighten RAG search parameters after recall audit
+214357e docs(plan): reflect coaching-timepoint mapping (v3) in DGX Spark plan
+```
+
+기타 (1 commit):
+```
+0b9da21 chore(worklogs): refresh findings/progress/task_plan snapshots
+```
+
+### 신규 산출물
+
+| 위치 | 역할 |
+|---|---|
+| `trainer/demo_api/` | FastAPI 백엔드 + Pydantic 계약 + SSE 스트리밍 + 5 pytest |
+| `demo-ui/src/` | React 데스크톱 레이아웃 + 4 컴포넌트 + Zod 계약 + Vitest 스위트 |
+| `demo-ui/electron/` | Electron main/preload + tsconfig |
+| `demo-ui/e2e/` | Playwright 2 specs (chat-sequence, api-offline) |
+| `docs/superpowers/specs/2026-07-24-electron-glb-chat-demo-design.md` | 1차 설계(3D 제외) |
+| `docs/superpowers/plans/2026-07-24-electron-chat-demo.md` | 10-task TDD 실행 계획 |
+| `trainer/configs/qlora_config_27b_v6_1.yaml` | 27B v6.1 8-bit QLoRA 설정 |
+| `trainer/scripts/build_sft_v6.py` | v5→v6 decontamination + 포맷 강제 |
+| `trainer/scripts/run_multiseed_eval.py` | multi-seed 재현성 평가 |
+| `trainer/scripts/{eval_retrieval_recall,diag_retrieval_ceiling,repair_chunk_spacing,reindex_repaired}.py` | RAG 진단·복원 |
+| `/output/adapters/qwen36_27b_shipcoat_lora_v6_1/` | v6.1 어댑터 (216 min, eval 0.47) |
+| `/output/indexes/faiss_repaired.index` | 공백 복원 + 재임베딩 인덱스 |
+
+### 알려진 제약
+- 실행 컨테이너에 GUI 디스플레이가 없어 Electron 창은 직접 실행 불가(빌드 산출물은 정상). 실제 데스크톱 실행은 GUI 환경에서 `npm run start:electron`.
+- Windows GLB 경로 `C:\Users\KETI\...\SP0035_rig.glb`는 이 리눅스 워크스페이스에서 접근 불가. 3D 시각화는 zone↔mesh/좌표 매핑이 확보된 이후 후속 spec으로 이관.
+- Qwen3.6-27B v6.1 재현성 검증(multi-seed mean/std + Oracle 재검증)은 트래킹 완료 조건이지만 이번 커밋에서 실측 실행은 미포함.
+
+### Status
+- **Status**: DONE (Auto-gates PASS, 원격 smoke PASS, GUI/Multi-seed manual QA pending)
+
+---
+
