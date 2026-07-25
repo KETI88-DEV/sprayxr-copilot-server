@@ -3726,7 +3726,14 @@ e237d8b chore(configs): tighten RAG search parameters after recall audit
 - 다음 구현: tool/synthesis token cap 분리 → config wiring → SSE timing 계약 → 실제 FastAPI benchmark.
 - deadline 기본값 150초는 잠정값이며 실제 `synthesis_ms_p95` 측정 후 `180 - p95`로 재조정.
 
+### 18-B.2 Round-differentiated token caps ✅
+- `run_tool_loop()`의 in-loop 모델 생성만 `tool_max_tokens`를 사용하고, 미지정 시 기존 `max_tokens`로 fallback.
+- max-round/deadline synthesis와 empty-post-tool synthesis는 모두 full `max_tokens` 유지.
+- 회귀 테스트는 tool 256 → synthesis 1024, early synthesis 1024 유지, fallback 777을 각각 검증.
+- 검증: adapter **31 passed**, 확장 회귀 **54 passed**, 변경 파일 LSP error **0**.
+- 독립 review: Task 2 spec **PASS**, code quality **APPROVED**.
+
 ### Status
-- **Status**: Task 1 DONE. Live latency gate 자체는 Task 8 실측 전까지 IN PROGRESS.
+- **Status**: Tasks 1-2 DONE. Live latency gate 자체는 Task 8 실측 전까지 IN PROGRESS.
 
 ---
