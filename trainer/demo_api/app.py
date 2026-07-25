@@ -14,7 +14,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
-from trainer.demo_api.chat_service import ChatService
+from trainer.demo_api.chat_service import ChatService, build_default_live_runner
 from trainer.demo_api.contracts import ChatRequest
 from trainer.demo_api.sequence import default_snapshot
 
@@ -23,15 +23,27 @@ _LEVEL_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9\-_.]{0,63}$")
 
 
 def create_app(chat_service: ChatService | None = None) -> FastAPI:
-    service = chat_service if chat_service is not None else ChatService()
+    if chat_service is not None:
+        service = chat_service
+    else:
+        live_mode = os.environ.get("DEMO_LIVE_MODE", "off")
+        if live_mode not in {"off", "on"}:
+            raise RuntimeError("DEMO_LIVE_MODE must be 'off' or 'on'")
+
+        logger.info("DEMO_LIVE_MODE=%s", live_mode)
+
+        if live_mode == "on":
+            service = ChatService(live_runner=build_default_live_runner())
+        else:
+            service = ChatService()
     app = FastAPI(title="Ship Painting Demo API")
     app.state.chat_service = service
 
-    allow_origins = os.environ.get(
-        "DEMO_UI_ORIGINS",
-        "http://127.0.0.1:5173,http://localhost:5173",
-    ).split(",")
-    allow_origins = [origin.strip() for origin in allow_origins if origin.strip()]
+    raw_allow_origins = os.environ.get("DEMO_UI_ORIGINS")
+    if raw_allow_origins is None:
+        allow_origins = ["*"]
+    else:
+        allow_origins = [origin.strip() for origin in raw_allow_origins.split(",") if origin.strip()]
 
     app.add_middleware(
         CORSMiddleware,
@@ -75,13 +87,18 @@ def create_app(chat_service: ChatService | None = None) -> FastAPI:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    _ = parser.add_argument("--host", default="127.0.0.1")
+    _ = parser.add_argument("--host", default="0.0.0.0")
     _ = parser.add_argument("--port", default=8120, type=int)
     _ = parser.add_argument("--reload", action="store_true")
+    _ = parser.add_argument("--live", action="store_true")
     raw_args = cast(dict[str, object], vars(parser.parse_args()))
-    host = cast(str, raw_args.get("host", "127.0.0.1"))
+    host = cast(str, raw_args.get("host", "0.0.0.0"))
     port = cast(int, raw_args.get("port", 8120))
     reload_mode = cast(bool, raw_args.get("reload", False))
+    live_mode = cast(bool, raw_args.get("live", False))
+
+    if live_mode:
+        os.environ["DEMO_LIVE_MODE"] = "on"
 
     logging.basicConfig(level=logging.INFO)
     logger.info("Starting demo API on %s:%s", host, port)
