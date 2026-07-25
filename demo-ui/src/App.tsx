@@ -179,9 +179,16 @@ export function App(): ReactElement {
 
   return (
     <div className="app-shell">
-      <StatusBar online={online} levelId={snapshot.level_id} mode={mode} stage={stage} onReconnect={onReconnect} />
+      <StatusBar
+        online={online}
+        levelId={snapshot.level_id}
+        mode={mode}
+        stage={stage}
+        onModeChange={setMode}
+        onReconnect={onReconnect}
+      />
       <SequencePanel snapshot={snapshot} />
-      <ChatPanel messages={messages} busy={busy} onSubmit={onSubmit} onStop={onStop} onReset={onReset} />
+      <ChatPanel messages={messages} busy={busy} streaming={busy} onSubmit={onSubmit} onStop={onStop} onReset={onReset} />
       <ToolLogPanel entries={logEntries} />
     </div>
   )

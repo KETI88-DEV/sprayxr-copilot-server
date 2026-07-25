@@ -5,17 +5,29 @@ type Props = {
   readonly levelId: string
   readonly mode: 'demo' | 'live'
   readonly stage: string
+  readonly onModeChange: (mode: 'demo' | 'live') => void
   readonly onReconnect: () => void
 }
 
-export function StatusBar({ online, levelId, mode, stage, onReconnect }: Props): ReactElement {
+export function StatusBar({ online, levelId, mode, stage, onModeChange, onReconnect }: Props): ReactElement {
   return (
     <header className="status-bar" data-online={online}>
       <div className="status-bar__left">
         <span className="status-bar__title">Ship Painting AI Co-Pilot</span>
-        <span className="status-bar__mode" data-mode={mode}>
-          {mode.toUpperCase()}
-        </span>
+        <div className="status-bar__mode-selector" role="group" aria-label="chat mode">
+          {(['demo', 'live'] as const).map((option) => (
+            <button
+              key={option}
+              type="button"
+              className="status-bar__mode-option"
+              data-active={mode === option}
+              aria-pressed={mode === option}
+              onClick={() => onModeChange(option)}
+            >
+              {option}
+            </button>
+          ))}
+        </div>
       </div>
       <div className="status-bar__right">
         <span className="status-bar__level">{levelId}</span>

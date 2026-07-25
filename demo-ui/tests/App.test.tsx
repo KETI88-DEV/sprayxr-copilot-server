@@ -42,9 +42,11 @@ const SSE_FRAMES = [
 
 describe('App', () => {
   let fetchSpy: ReturnType<typeof vi.spyOn>
+  const chatBodies: string[] = []
 
   beforeEach(() => {
-    fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+    chatBodies.length = 0
+    fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = typeof input === 'string' ? input : (input as Request).url
       if (url.endsWith('/api/health')) {
         return new Response(JSON.stringify({ status: 'ok', servers: 1, timestamp: '2026-01-01T00:00:00Z' }), {
@@ -55,6 +57,7 @@ describe('App', () => {
         return new Response(JSON.stringify(SNAPSHOT_JSON), { status: 200, headers: { 'Content-Type': 'application/json' } })
       }
       if (url.endsWith('/api/chat')) {
+        chatBodies.push(typeof init?.body === 'string' ? init.body : '')
         return sseStream(SSE_FRAMES)
       }
       throw new Error(`unexpected fetch: ${url}`)
@@ -80,6 +83,22 @@ describe('App', () => {
     })
     await waitFor(() => {
       expect(screen.getByTestId('zone-A-2')).toHaveAttribute('data-status', 'next')
+    })
+  })
+
+  it('switches to live mode and sends live chat requests', async () => {
+    render(<App />)
+
+    await waitFor(() => {
+      expect(screen.getByText('SP0035 Level 01')).toBeInTheDocument()
+    })
+
+    await userEvent.click(screen.getByRole('button', { name: /live/i }))
+    await userEvent.type(screen.getByPlaceholderText('도장 관련 질문을 입력하세요'), '다음에 어떤 구역을 칠해야 해?')
+    await userEvent.click(screen.getByRole('button', { name: '전송' }))
+
+    await waitFor(() => {
+      expect(chatBodies.at(-1)).toContain('"mode":"live"')
     })
   })
 })
