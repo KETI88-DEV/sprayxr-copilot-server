@@ -742,7 +742,7 @@ class ToolCallingAdapter:
                 model=model,
                 tokenizer=tokenizer,
                 enable_thinking=enable_thinking,
-                max_tokens=max_tokens,
+                max_tokens=tool_max_tokens if tool_max_tokens is not None else max_tokens,
                 gen_params=gen_params,
             )
             tool_calls = self.parse_tool_calls(raw_text)

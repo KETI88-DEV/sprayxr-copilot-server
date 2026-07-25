@@ -424,10 +424,92 @@ class ToolCallingAdapterTest(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(len(output["tool_results"]), 1)
 
 
-class ToolLoopDeadlineTest(unittest.IsolatedAsyncioTestCase):
-    adapter: ToolCallingAdapter
+class ToolLoopTokenCapTest(unittest.IsolatedAsyncioTestCase):
+    def __init__(self, methodName: str = "runTest") -> None:
+        super().__init__(methodName)
+        self.adapter = ToolCallingAdapter(
+            schema_dir=Path("/workspace/trainer/configs/tool_schemas"),
+            protocol_path=Path("/workspace/trainer/configs/tool_calling_protocol.json"),
+            mcp_base_url="http://localhost:8100",
+        )
 
-    def setUp(self) -> None:
+    async def test_tool_round_uses_tool_max_tokens_when_provided_and_synthesis_keeps_max_tokens(self) -> None:
+        model = RecordingModel()
+        tokenizer = RecordingTokenizer([
+            '<tool_call>{"name":"timeseries","arguments":{"action":"query","session_id":"s1"}}</tool_call>',
+            "SYNTHESIZED",
+        ])
+
+        with patch.object(
+            self.adapter,
+            "dispatch_tool_call",
+            new=AsyncMock(return_value={"status": "success", "result": {"points": 10}}),
+        ):
+            result = await self.adapter.run_tool_loop(
+                messages=[{"role": "user", "content": "status?"}],
+                model=model,
+                tokenizer=tokenizer,
+                max_rounds=1,
+                max_tokens=1024,
+                tool_max_tokens=256,
+            )
+
+        self.assertEqual(model.calls[0]["max_new_tokens"], 256)
+        self.assertEqual(model.calls[-1]["max_new_tokens"], 1024)
+        self.assertEqual(result["final_response"], "SYNTHESIZED")
+
+    async def test_empty_tool_response_keeps_synthesis_cap_full(self) -> None:
+        model = RecordingModel()
+        tokenizer = RecordingTokenizer([
+            '<tool_call>{"name":"timeseries","arguments":{"action":"query","session_id":"s1"}}</tool_call>',
+            "",
+            "SYNTHESIZED",
+        ])
+
+        with patch.object(
+            self.adapter,
+            "dispatch_tool_call",
+            new=AsyncMock(return_value={"status": "success", "result": {"points": 10}}),
+        ):
+            result = await self.adapter.run_tool_loop(
+                messages=[{"role": "user", "content": "status?"}],
+                model=model,
+                tokenizer=tokenizer,
+                max_rounds=3,
+                max_tokens=1024,
+                tool_max_tokens=256,
+            )
+
+        self.assertEqual(model.calls[1]["max_new_tokens"], 256)
+        self.assertEqual(model.calls[2]["max_new_tokens"], 1024)
+        self.assertEqual(result["final_response"], "SYNTHESIZED")
+
+    async def test_tool_round_falls_back_to_max_tokens_when_tool_cap_missing(self) -> None:
+        model = RecordingModel()
+        tokenizer = RecordingTokenizer([
+            '<tool_call>{"name":"timeseries","arguments":{"action":"query","session_id":"s1"}}</tool_call>',
+            "plain answer",
+        ])
+
+        with patch.object(
+            self.adapter,
+            "dispatch_tool_call",
+            new=AsyncMock(return_value={"status": "success", "result": {"points": 10}}),
+        ):
+            result = await self.adapter.run_tool_loop(
+                messages=[{"role": "user", "content": "status?"}],
+                model=model,
+                tokenizer=tokenizer,
+                max_rounds=2,
+                max_tokens=777,
+            )
+
+        self.assertEqual(model.calls[0]["max_new_tokens"], 777)
+        self.assertEqual(result["final_response"], "plain answer")
+
+class ToolLoopDeadlineTest(unittest.IsolatedAsyncioTestCase):
+    def __init__(self, methodName: str = "runTest") -> None:
+        super().__init__(methodName)
         self.adapter = ToolCallingAdapter(
             schema_dir=Path("/workspace/trainer/configs/tool_schemas"),
             protocol_path=Path("/workspace/trainer/configs/tool_calling_protocol.json"),
