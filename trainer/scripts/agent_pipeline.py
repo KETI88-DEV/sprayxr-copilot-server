@@ -455,14 +455,14 @@ class AgentPipeline:
         messages: list[dict[str, Any]],
         tool_results: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
-        from tool_calling_adapter import ToolCallingAdapter
+        adapter_mod = importlib.import_module("tool_calling_adapter")
 
         parsed_calls: list[dict[str, Any]] = []
         for message in messages:
             if message.get("role") != "assistant":
                 continue
             content = str(message.get("content", ""))
-            for block in ToolCallingAdapter._extract_tool_call_blocks(content):
+            for block in adapter_mod.ToolCallingAdapter._extract_tool_call_blocks(content):
                 try:
                     payload = json.loads(block)
                 except json.JSONDecodeError:
@@ -761,6 +761,8 @@ class AgentPipeline:
         else:
             evidence = rag_chunks
 
+        deadline_hit = False
+        synthesis_ms = 0
         if route == "fast":
             messages = self._build_messages(
                 instruction=instruction,
@@ -802,6 +804,8 @@ class AgentPipeline:
                     max_rounds=ROUTE_MAX_ROUNDS.get(route, 5),
                     max_tokens=route_max_tokens,
                     gen_params=gen_params,
+                    deadline_sec=float(self.config.get("llm", {}).get("tool_deadline_sec", 150)),
+                    tool_max_tokens=int(gen_cfg.get("max_new_tokens_tool", 256)),
                 )
             )
             raw_final = str(loop_output.get("final_response", ""))
@@ -812,6 +816,8 @@ class AgentPipeline:
                 loop_output.get("tool_results", []),
             )
             rounds = int(loop_output.get("rounds", 0))
+            deadline_hit = bool(loop_output.get("deadline_hit", False))
+            synthesis_ms = int(loop_output.get("synthesis_ms", 0))
 
         latency_ms = int((time.monotonic() - t0) * 1000)
         tool_sections = self._assemble_tool_sections(tool_calls)
@@ -845,6 +851,8 @@ class AgentPipeline:
             "instruction": instruction,
             "environment": environment or {},
             "timing": rag_timing,
+            "deadline_hit": deadline_hit,
+            "synthesis_ms": synthesis_ms,
             "route": route,
             "xr_content": None,
             "_legacy_keys": [

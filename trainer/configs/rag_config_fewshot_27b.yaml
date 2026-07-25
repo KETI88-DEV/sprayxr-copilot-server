@@ -40,9 +40,11 @@ llm:
   pass_native_tools: false
   thinking_off_for_tools: true
   append_citations: true
+  tool_deadline_sec: 150
 generation:
   temperature: 0.3
   max_new_tokens: 1024
+  max_new_tokens_tool: 256
   do_sample: true
   top_p: 0.8
   top_k: 20
