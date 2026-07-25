@@ -21,7 +21,7 @@ Complete the user's original items 1 through 5 for Qwen3.6-27B: push the current
 ## Latency Plan Progress
 - [complete] Task 1: tool-loop deadline guard and synthesis timing.
 - [complete] Task 2: round-differentiated token caps.
-- [pending] Task 3: config wiring.
+- [complete] Task 3: config wiring.
 - [pending] Task 4: additive streaming contract.
 - [pending] Task 5: demo API timing propagation.
 - [pending] Task 6: frontend Zod timing contract.

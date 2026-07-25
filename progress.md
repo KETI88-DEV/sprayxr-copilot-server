@@ -19,6 +19,8 @@
 - Item 1 push is blocked: the `origin` HTTPS credential is unavailable and `gh auth status` reports an invalid token.
 - Completed latency Task 2: tool rounds use their own cap while both synthesis paths retain the full answer budget.
 - Corrected Task 2 test-fixture drift and removed attempted cast/ClassVar type escape hatches before review.
+- Completed latency Task 3: provisional deadline/tool cap config is wired through AgentPipeline and timing state is top-level for the demo API contract.
+- Cleared the changed pipeline file's pre-existing implicit-relative import diagnostic with its established importlib pattern.
 
 ## Verification Ledger
 | Phase | Command/surface | Result |
@@ -36,6 +38,9 @@
 | Task 2 full | `python3 -m pytest trainer/scripts/test_tool_calling.py -q` | 31 passed. |
 | Task 2 regression | `python3 -m pytest trainer/demo_api/tests trainer/scripts/test_tool_calling.py trainer/scripts/test_response_contract.py -q` | 54 passed, 2 pre-existing SWIG warnings. |
 | Task 2 reviews | Oracle spec + quality | PASS / APPROVED. |
+| Task 3 regression | `python3 -m pytest trainer/demo_api/tests trainer/scripts/test_tool_calling.py trainer/scripts/test_response_contract.py -q` | 54 passed, 2 pre-existing SWIG warnings. |
+| Task 3 diagnostics | LSP error diagnostics on `agent_pipeline.py` | 0 errors. |
+| Task 3 reviews | Oracle spec + quality | PASS / APPROVED. |
 
 ## Next Action
-Commit latency Task 2 and its Iter18-B/worklog records, then execute latency Task 3 config wiring.
+Commit latency Task 3 and its Iter18-B/worklog records, then execute latency Task 4 streaming path.
