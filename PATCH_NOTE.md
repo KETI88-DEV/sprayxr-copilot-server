@@ -3758,7 +3758,15 @@ e237d8b chore(configs): tighten RAG search parameters after recall audit
 - 검증: `trainer/demo_api/tests` **27 passed**, 변경 Python 3개 LSP error **0**, 독립 spec **PASS**, 최종 quality **APPROVED**.
 - 실제 uvicorn QA: health 200; live POST가 `session → status → message_delta → message_delta → complete`를 전송하고 complete에 `ttft_ms=17`, `synthesis_ms=23`, `total_ms=41`, counts, `deadline_hit=false` 포함. 빈 message는 HTTP **422**.
 
+### 18-B.6 Frontend timing-rich SSE contract ✅
+- `streamEventSchema`의 strict boundary를 유지하면서 `complete`의 optional `ttft_ms`/`synthesis_ms`/`total_ms`/`deadline_hit`, timed `error`, deadline `status.elapsed_sec`를 수용.
+- legacy RAG status의 `chunks`와 이전 backend의 timing 없는 complete/error payload도 계속 허용.
+- `App`과 `ToolLogPanel`이 deadline status를 `RAG stage=deadline_forced_synthesis elapsed=151s`로 전달·표시하고 `undefined` placeholder를 만들지 않도록 consumer type을 정렬.
+- TDD: 네 timing/status/error contract가 기존 strict schema에서 실패하는 RED를 확인한 뒤 구현. App integration fixture도 timing-rich SSE와 deadline status를 실제 stream parser 경로로 검증.
+- 검증: Vitest **20 passed**, production `tsc -b && vite build` 성공, Playwright E2E **2 passed**, `git diff --check` 성공, 독립 code review **APPROVE**, 최종 visual/CJK review **PASS**.
+- 실제 Chrome QA: FastAPI demo POST `/api/chat` 200과 timing-rich complete를 소비해 answer/sequence/tool log를 렌더. 별도 deadline SSE로 exact 1280×900, 768×900, 375×812에서 `elapsed=151s` 표시와 console error 0을 확인.
+
 ### Status
-- **Status**: Tasks 1-5 DONE. Live latency gate 자체는 Task 8 실측 전까지 IN PROGRESS.
+- **Status**: Tasks 1-6 DONE. Live latency gate 자체는 Task 8 실측 전까지 IN PROGRESS.
 
 ---
