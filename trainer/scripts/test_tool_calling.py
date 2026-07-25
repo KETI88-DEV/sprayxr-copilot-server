@@ -44,6 +44,64 @@ class FakeModel:
         return self.responses.pop(0)
 
 
+class _FakeIds:
+    shape = (1, 4)
+
+
+class _FakeInputs(dict[str, Any]):
+    def __init__(self) -> None:
+        super().__init__()
+        self.input_ids = _FakeIds()
+        self["input_ids"] = self.input_ids
+
+    def to(self, device: Any) -> "_FakeInputs":
+        return self
+
+
+class RecordingTokenizer:
+    eos_token_id = 0
+
+    def __init__(self, outputs: list[str]) -> None:
+        self.outputs = list(outputs)
+        self.decode_count = 0
+
+    def apply_chat_template(self, messages: Any, **kwargs: Any) -> str:
+        return "PROMPT"
+
+    def __call__(self, texts: Any, **kwargs: Any) -> _FakeInputs:
+        return _FakeInputs()
+
+    def decode(self, ids: Any, skip_special_tokens: bool = True) -> str:
+        out = self.outputs[self.decode_count]
+        self.decode_count += 1
+        return out
+
+
+class RecordingModel:
+    device = "cpu"
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    def generate(self, **kwargs: Any) -> Any:
+        self.calls.append(dict(kwargs))
+        return [[0] * 12]
+
+
+class ScriptedClock:
+    def __init__(self, *values: float) -> None:
+        self.values = list(values)
+        self.index = 0
+
+    def monotonic(self) -> float:
+        if self.index >= len(self.values):
+            return self.values[-1]
+        value = self.values[self.index]
+        if self.index < len(self.values) - 1:
+            self.index += 1
+        return value
+
+
 class ToolCallingAdapterTest(unittest.IsolatedAsyncioTestCase):
     def __init__(self, methodName: str = "runTest") -> None:
         super().__init__(methodName)
@@ -364,6 +422,97 @@ class ToolCallingAdapterTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("<tool_call>", output["final_response"])
         self.assertTrue(output.get("synthesized", False))
         self.assertGreaterEqual(len(output["tool_results"]), 1)
+
+
+class ToolLoopDeadlineTest(unittest.IsolatedAsyncioTestCase):
+    adapter: ToolCallingAdapter
+
+    def setUp(self) -> None:
+        self.adapter = ToolCallingAdapter(
+            schema_dir=Path("/workspace/trainer/configs/tool_schemas"),
+            protocol_path=Path("/workspace/trainer/configs/tool_calling_protocol.json"),
+            mcp_base_url="http://localhost:8100",
+        )
+
+    async def test_deadline_stops_further_rounds_and_forces_synthesis(self) -> None:
+        call = '<tool_call>{"name": "dft_judge", "arguments": {"measurements": [95], "spec": {"nominal": 100}}}</tool_call>'
+        model = FakeModel([call, call, "SYNTHESIZED"])
+        clock = ScriptedClock(0.0, 100.0, 200.0, 215.0, 216.0)
+
+        with patch.object(adapter_module, "time", clock), \
+             patch.object(self.adapter, "dispatch_tool_call", new=AsyncMock(return_value={"status": "ok"})):
+            result = await self.adapter.run_tool_loop(
+                messages=[{"role": "user", "content": "q"}],
+                model=model,
+                tokenizer=object(),
+                max_rounds=5,
+                deadline_sec=150.0,
+            )
+
+        self.assertTrue(result["deadline_hit"])
+        self.assertEqual(result["rounds"], 2)
+        self.assertEqual(result["final_response"], "SYNTHESIZED")
+        self.assertEqual(result["synthesis_ms"], 1000)
+
+    async def test_no_deadline_hit_when_within_budget(self) -> None:
+        call = '<tool_call>{"name": "timeseries", "arguments": {"action": "query", "session_id": "s1"}}</tool_call>'
+        model = FakeModel([call, "plain answer"])
+        clock = ScriptedClock(0.0, 50.0, 100.0)
+        with patch.object(adapter_module, "time", clock), \
+             patch.object(
+                 self.adapter,
+                 "dispatch_tool_call",
+                 new=AsyncMock(return_value={"status": "success", "result": {"points": 10}}),
+             ):
+            result = await self.adapter.run_tool_loop(
+                messages=[{"role": "user", "content": "q"}],
+                model=model,
+                tokenizer=object(),
+                max_rounds=5,
+                deadline_sec=150.0,
+            )
+        self.assertFalse(result["deadline_hit"])
+        self.assertEqual(result["rounds"], 2)
+        self.assertEqual(result["final_response"], "plain answer")
+
+    async def test_deadline_never_fires_before_any_tool_result(self) -> None:
+        model = FakeModel(["plain answer"])
+        clock = ScriptedClock(0.0, 200.0)
+        with patch.object(adapter_module, "time", clock):
+            result = await self.adapter.run_tool_loop(
+                messages=[{"role": "user", "content": "q"}],
+                model=model,
+                tokenizer=object(),
+                max_rounds=5,
+                deadline_sec=1.0,
+            )
+        self.assertFalse(result["deadline_hit"])
+        self.assertEqual(result["rounds"], 1)
+        self.assertEqual(result["final_response"], "plain answer")
+
+    async def test_empty_post_tool_response_reports_timed_synthesis_ms(self) -> None:
+        call = '<tool_call>{"name": "timeseries", "arguments": {"action": "query", "session_id": "s1"}}</tool_call>'
+        model = FakeModel([call, "", "SYNTHESIZED"])
+        clock = ScriptedClock(0.0, 10.0, 20.0, 25.0, 26.0)
+
+        with patch.object(adapter_module, "time", clock), \
+             patch.object(
+                 self.adapter,
+                 "dispatch_tool_call",
+                 new=AsyncMock(return_value={"status": "success", "result": {"points": 10}}),
+             ):
+            result = await self.adapter.run_tool_loop(
+                messages=[{"role": "user", "content": "q"}],
+                model=model,
+                tokenizer=object(),
+                max_rounds=5,
+                deadline_sec=150.0,
+            )
+
+        self.assertFalse(result["deadline_hit"])
+        self.assertEqual(result["rounds"], 2)
+        self.assertEqual(result["final_response"], "SYNTHESIZED")
+        self.assertEqual(result["synthesis_ms"], 5000)
 
 
 if __name__ == "__main__":

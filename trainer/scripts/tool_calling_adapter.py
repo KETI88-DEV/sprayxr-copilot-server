@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import re
+import time
 import uuid
 from pathlib import Path
 from typing import Any
@@ -708,15 +709,34 @@ class ToolCallingAdapter:
         max_rounds: int = 5,
         max_tokens: int | None = None,
         gen_params: dict[str, Any] | None = None,
+        deadline_sec: float | None = None,
+        tool_max_tokens: int | None = None,
     ) -> dict[str, Any]:
         """Runs the multi-turn tool loop until the model emits a final natural-language answer."""
         if max_rounds <= 0:
             raise ToolValidationError("max_rounds must be greater than zero")
 
+        started = time.monotonic()
+        deadline_hit = False
+        synthesis_ms = 0
         conversation = list(messages)
         collected_tool_results: list[dict[str, Any]] = []
+        round_idx = 0
 
         for round_idx in range(max_rounds):
+            if (
+                deadline_sec is not None
+                and collected_tool_results
+                and (time.monotonic() - started) >= deadline_sec
+            ):
+                deadline_hit = True
+                logger.warning(
+                    "Tool loop hit deadline %.1fs after %d rounds; forcing synthesis",
+                    deadline_sec,
+                    round_idx,
+                )
+                break
+
             raw_text = await self._generate_model_text(
                 messages=conversation,
                 model=model,
@@ -731,9 +751,11 @@ class ToolCallingAdapter:
                 final_text = self._strip_think_blocks(raw_text) if enable_thinking else raw_text.strip()
                 stripped = TOOL_CALL_STRIP_REGEX.sub("", final_text).strip()
                 if self.force_synthesis and collected_tool_results and not stripped:
+                    synth_started = time.monotonic()
                     final_text = await self._generate_synthesis_text(
                         conversation, model, tokenizer, max_tokens=max_tokens, gen_params=gen_params,
                     )
+                    synthesis_ms = int((time.monotonic() - synth_started) * 1000)
                 else:
                     final_text = stripped
                 conversation.append({"role": "assistant", "content": final_text})
@@ -742,6 +764,8 @@ class ToolCallingAdapter:
                     "messages": conversation,
                     "tool_results": collected_tool_results,
                     "rounds": round_idx + 1,
+                    "deadline_hit": False,
+                    "synthesis_ms": synthesis_ms,
                 }
 
             conversation.append({"role": "assistant", "content": raw_text})
@@ -761,23 +785,30 @@ class ToolCallingAdapter:
             collected_tool_results.extend(normalized_results)
             conversation.extend(self.format_tool_results(normalized_results))
 
-        logger.warning(
-            "Tool loop reached max_rounds=%d without final answer; forcing synthesis",
-            max_rounds,
-        )
+        rounds_used = round_idx if deadline_hit else max_rounds
+
+        if not deadline_hit:
+            logger.warning(
+                "Tool loop reached max_rounds=%d without final answer; forcing synthesis",
+                max_rounds,
+            )
 
         if self.force_synthesis and collected_tool_results:
+            synth_started = time.monotonic()
             final_text = await self._generate_synthesis_text(
                 conversation, model, tokenizer, max_tokens=max_tokens, gen_params=gen_params,
             )
+            synthesis_ms = int((time.monotonic() - synth_started) * 1000)
             conversation.append({"role": "assistant", "content": final_text})
             return {
                 "final_response": final_text,
                 "messages": conversation,
                 "tool_results": collected_tool_results,
-                "rounds": max_rounds,
+                "rounds": rounds_used,
                 "truncated": True,
                 "synthesized": True,
+                "deadline_hit": deadline_hit,
+                "synthesis_ms": synthesis_ms,
             }
 
         last_assistant = ""
@@ -792,8 +823,10 @@ class ToolCallingAdapter:
             "final_response": last_assistant,
             "messages": conversation,
             "tool_results": collected_tool_results,
-            "rounds": max_rounds,
+            "rounds": rounds_used,
             "truncated": True,
+            "deadline_hit": deadline_hit,
+            "synthesis_ms": synthesis_ms,
         }
 
 
