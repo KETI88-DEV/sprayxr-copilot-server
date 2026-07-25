@@ -51,3 +51,10 @@
 - Reuse hard multi-tool rows from `generate_fc_sft.py`, `generate_medium_sft.py`, and `generate_cot_sft.py`.
 - Clone `trainer/configs/qlora_config_27b_v6_1.yaml` to a v7 config with v7 train/val and adapter paths.
 - Keep `trainer/scripts/train_qlora.py` unchanged; it is already config-driven.
+
+## Latency Task 5 Integration Seam
+- The locked design requires the real path `POST /api/chat → ChatService → AgentPipeline.run_streaming()`; progress events do not count as TTFT and the first `message_delta` does.
+- Current live mode still calls synchronous `AgentPipeline.run()` through `LiveRunner`, then reconstructs events in `_iter_stream_events`, so Task 4 timings cannot reach SSE.
+- Task 5 must preserve demo scenario behavior while making the default live runner an async event source and mapping pipeline `delta` to API `message_delta` without recomputing complete timings.
+- The `complete` SSE payload must preserve `ttft_ms`, `synthesis_ms`, `total_ms`, `tool_call_count`, `rag_chunk_count`, and `deadline_hit`; errors must preserve timing fields when supplied.
+- `create_app(chat_service=...)` already provides the injection seam needed for GPU-free HTTP/SSE manual QA.

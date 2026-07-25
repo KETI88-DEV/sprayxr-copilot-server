@@ -23,7 +23,7 @@ Complete the user's original items 1 through 5 for Qwen3.6-27B: push the current
 - [complete] Task 2: round-differentiated token caps.
 - [complete] Task 3: config wiring.
 - [complete] Task 4: additive streaming contract.
-- [pending] Task 5: demo API timing propagation.
+- [complete] Task 5: demo API timing propagation.
 - [pending] Task 6: frontend Zod timing contract.
 - [pending] Task 7: HTTP/SSE benchmark harness.
 - [pending] Task 8: live GPU benchmark, deadline recalibration, and quality gate.

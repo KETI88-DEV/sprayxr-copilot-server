@@ -26,6 +26,11 @@
 - Finalized the streaming error boundary: blank instructions are non-retryable without invoking `run()`; internal failures are logged and returned as generic retryable errors without message leakage.
 - Added five bounded streaming regressions and obtained final independent spec PASS and quality APPROVED verdicts.
 - Drove the public async generator with GPU-free fakes and observed ordered deadline/status/tool/delta/complete events plus the blank-input error path.
+- Completed latency Task 5: the real live demo path now consumes `AgentPipeline.run_streaming()` and forwards timing-bearing pipeline events to SSE.
+- Offloaded lock-protected first pipeline construction from the ASGI event loop and added deterministic concurrent initialization coverage.
+- Sanitized and timed adapter-generated failures while preserving pipeline-originated error payloads verbatim.
+- Split Task 5 coverage into bounded event-contract and live-runner modules; obtained independent spec PASS and final quality APPROVED.
+- Drove an actual uvicorn process with an injected async live runner and observed timing-bearing SSE plus FastAPI 422 validation.
 
 ## Verification Ledger
 | Phase | Command/surface | Result |
@@ -52,6 +57,10 @@
 | Task 4 diff hygiene | `GIT_MASTER=1 git diff --check` | Exit 0; existing line-ending conversion warning only. |
 | Task 4 reviews | Oracle spec + final quality | PASS / APPROVED; no Critical or Important findings remain. |
 | Task 4 manual surface | `AgentPipeline.run_streaming()` with a fake completed result and blank input | Ordered events reconstructed the full response; complete timings/counts were present; blank input did not invoke `run()`. |
+| Task 5 focused | `python3 -m pytest trainer/demo_api/tests -q` | 27 passed. |
+| Task 5 diagnostics | LSP error diagnostics on `chat_service.py` and both Task 5 test modules | 0 errors. |
+| Task 5 reviews | Oracle spec + final quality | PASS / APPROVED after off-loop initialization, sanitized errors, and deterministic bounded tests. |
+| Task 5 manual HTTP/SSE | uvicorn on `127.0.0.1:8145` + curl `/api/health` and POST `/api/chat` | Health 200; ordered live SSE carried timing/count/deadline fields; blank message returned 422. |
 
 ## Next Action
-Commit latency Task 4 and its Iter18-B/worklog records, then execute latency Task 5 demo API timing propagation.
+Commit latency Task 5 and its Iter18-B/worklog records, then execute latency Task 6 frontend timing contract.
