@@ -1,15 +1,32 @@
 # Progress
 
-## Session Log
-- Started migration from legacy `oh-my-opencode` to `oh-my-openagent` 4.19.1.
-- Loaded the planning workflow and inspected prior planning artifacts.
-- Fetched the linked dev-branch guide once via WebFetch; recorded the guide's requirement to re-fetch raw content with curl before acting.
-- Launched an independent upstream compatibility/prerequisite check.
-- Replaced planning artifacts with the current installation plan while preserving prior task history in conversation context.
-- Fetched the 986-line raw guide with curl as required.
-- Confirmed package target/version, OpenCode 1.18.4 prerequisite, Bun 1.3.14, and existing Anthropic/OpenAI/Google credentials.
-- Baseline doctor found loaded plugin 3.17.5 while latest/target is 4.19.1; configuration itself passes validation.
-- Created timestamped backups of `opencode.json` and `oh-my-openagent.json` before installation.
-- Ran the exact-version installer for OpenCode Ultimate, then corrected the detected existing Claude tier to Max20 on an idempotent rerun; OpenAI and Gemini were enabled and existing auth preserved.
-- Updated `/root/.cache/opencode` to `oh-my-openagent@4.19.1`; inspected blocked lifecycle scripts and trusted only the current OMO package and comment-checker.
-- Final doctor reports loaded/expected plugin 4.19.1, zero failures, and one unrelated warning for unauthenticated GitHub CLI. Configuration, TUI registration, models, AST-grep, comment-checker, LSP, and MCP checks pass.
+## 2026-07-25 Session Resume
+- Restored the exact original items 1-5 from OpenCode session history.
+- Loaded Subagent-Driven Development, planning, programming, TDD, git, and verification workflows.
+- Inspected branch context and detected the repository's English semantic commit style.
+- Replaced stale planning artifacts from an unrelated plugin-install task with the active Qwen3.6 execution plan.
+- Started five independent discovery lanes for v7 requirements, evaluation artifacts, path-note rules, GPU readiness, and v7 training inputs.
+- Inspected latency call paths through `ToolCallingAdapter.run_tool_loop` and `AgentPipeline.run` using CodeGraph.
+- Found an interrupted implementation diff in the two Task 1 files; no commit has been made for it yet.
+- Recovered all five discovery reports from child-session transcripts after the background result cache expired.
+- Resolved the recording rule: update repository `PATCH_NOTE.md` as the authoritative iteration note, with detailed evidence mirrored in `findings.md` and `progress.md`.
+- Confirmed the A40 is idle and all v7 model/data/output roots have sufficient capacity.
+- Recovered the exact v7 data focus and the missing n=5 instrumentation fields.
+- Completed latency Task 1 through TDD, independent spec review, and independent code-quality review.
+- Rejected removal of the planned `tool_max_tokens` placeholder because Task 1 explicitly defines it and Task 2 consumes it next.
+- Recorded Task 1 permanently in `PATCH_NOTE.md` under Iter18-B.
+
+## Verification Ledger
+| Phase | Command/surface | Result |
+|---|---|---|
+| Resume | `git status --short --branch` | `main...origin/main [ahead 22]`; two Task 1 files modified. |
+| Resume | `git log -30` | 22/30 semantic English commit subjects; new commits will match. |
+| Discovery | `nvidia-smi` via readiness worker | A40 idle; 45,403 MiB free; no compute process. |
+| Task 1 | `python3 -m pytest trainer/scripts/test_tool_calling.py -k Deadline -q` | 3 passed, 24 deselected before spec correction. |
+| Task 1 final | `python3 -m pytest trainer/scripts/test_tool_calling.py -q` | 28 passed. |
+| Task 1 regression | `python3 -m pytest trainer/demo_api/tests trainer/scripts/test_tool_calling.py trainer/scripts/test_response_contract.py -q` | 51 passed; 2 pre-existing SWIG warnings. |
+| Task 1 diagnostics | LSP error diagnostics on both changed Python files | 0 errors. |
+| Task 1 reviews | Oracle spec + code quality | PASS / APPROVED. |
+
+## Next Action
+Create atomic Task 1 implementation and Iter18-B record commits, then start latency Task 2.

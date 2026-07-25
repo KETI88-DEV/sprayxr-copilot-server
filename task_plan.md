@@ -1,29 +1,54 @@
 # Task Plan
 
 ## Goal
-Install and configure the OpenCode Ultimate edition of `oh-my-openagent` at version 4.19.1, migrating the existing `oh-my-opencode` setup without losing provider configuration, then verify with the official doctor command.
+Complete the user's original items 1 through 5 for Qwen3.6-27B: push the current work, build and train v7 SFT, extend multi-seed evidence, run n=5 seeds to a ±0.10 CI target, and make the live demo meet the agreed latency budgets through its real HTTP/SSE surface.
 
-## Phases
-- [complete] Phase 1: Fetch the authoritative dev-branch guide exactly, inspect prerequisites, current OpenCode/plugin configuration, and infer existing provider selections safely.
-- [complete] Phase 2: Back up affected OpenCode configuration and confirm OpenCode meets the guide requirement (>=1.4.0).
-- [complete] Phase 3: Run the supported non-global `bunx oh-my-openagent@4.19.1 install` path with explicit non-interactive platform/provider flags.
-- [complete] Phase 4: Verify plugin registration, generated configuration, installed version, and `doctor` results; remediate any errors.
-- [in_progress] Phase 5: Obtain independent verifier/Oracle review and report final state.
+## Original Items
+- [pending] 1. Push committed work to `origin/main`.
+- [pending] 2. Develop and train v7 SFT for tool-call format emission failures.
+- [pending] 3. Extend multi-seed reporting with exact-sequence rate, parser rejection, and reproducibility hashes.
+- [pending] 4. Run n=5 seeds and reduce the reported confidence interval to ±0.10 or document the measured result if the statistical target is not attainable from five runs.
+- [in_progress] 5. Implement and verify the live latency budget: RAG first `message_delta` TTFT ≤30 seconds and tool-path completion ≤180 seconds for one concurrent user.
+
+## Execution Order
+1. Recover exact v7 and `path_note`/patch-note conventions; preserve evidence in `findings.md` and `progress.md`.
+2. Finish latency Tasks 1-7 under TDD, commit in atomic implementation/test units, and push durable work.
+3. Run the real live benchmark (latency Task 8), recalibrate the deadline from measured synthesis p95, and apply a kernel/backend escalation only if the first-stage gate fails.
+4. Implement v7 data/config changes under TDD, train v7, and record immutable input/config/output hashes.
+5. Extend evaluation reporting, run five seeds, compute the CI, and enforce the ≥6.60 quality gate.
+6. Update the authoritative path/patch note and README/result summaries, create final atomic documentation commits, push `main`, and independently verify all five items.
+
+## Latency Plan Progress
+- [complete] Task 1: tool-loop deadline guard and synthesis timing.
+- [pending] Task 2: round-differentiated token caps.
+- [pending] Task 3: config wiring.
+- [pending] Task 4: additive streaming contract.
+- [pending] Task 5: demo API timing propagation.
+- [pending] Task 6: frontend Zod timing contract.
+- [pending] Task 7: HTTP/SSE benchmark harness.
+- [pending] Task 8: live GPU benchmark, deadline recalibration, and quality gate.
 
 ## Constraints
-- Target exact version 4.19.1.
-- Install Ultimate edition for OpenCode; do not install Codex Light unless explicitly requested.
-- Do not expose credentials or alter provider authentication unnecessarily.
-- Preserve existing user configuration via backup and migration rather than destructive replacement.
-- Follow upstream supported `bunx` installation; no global npm/bun install of the plugin.
-
-## Key Decisions
-- The repeated OpenCode/oh-my-opencode context establishes OpenCode as the requested platform.
-- Existing provider/plugin configuration will be inspected to infer non-sensitive installer flags where possible.
-- Provider auth evidence supports OpenAI and Gemini; installer migration detection explicitly identified the prior Claude tier as `max20`, so preserve it on the corrective idempotent run. Disable providers with no local evidence and use `--skip-auth` to preserve existing credentials.
+- Preserve `AgentPipeline.run()` for frozen evaluation comparability; streaming is additive.
+- RAG latency gate is TTFT to first `message_delta`; progress events do not count.
+- Tool latency gate is full response completion within 180 seconds.
+- Quality gate is agentic total ≥6.60.
+- Deadline default starts at 150 seconds and must be recalibrated to `180 - synthesis_ms_p95` after measurement.
+- Do not install Flash Linear Attention, causal-conv1d, or switch to vLLM unless measured first-stage latency fails.
+- Record paths, commands, hashes, metrics, errors, and decisions after each phase.
+- Create atomic git commits and push; never rewrite `main` history.
 
 ## Errors Encountered
-- `customize-opencode` was advertised in environment metadata but unavailable through the runtime skill registry; proceeded with the authoritative guide and available planning/orchestration skills.
-- Initial guide retrieval used WebFetch before its embedded agent note required raw `curl`; the raw guide was fetched with `curl` before installation and treated as source of truth.
-- First install run used `--claude=yes`; installer migration detection reported prior `Claude=max20`. Resolution: rerun idempotently with `--claude=max20` to preserve the detected tier.
-- Installer warned that its temporary package lacked `dist/cli/skills/ast-grep/install.sh`; pre-install doctor already confirmed AST-grep CLI is present, so final doctor will determine whether remediation is needed.
+| Error | Attempt | Resolution |
+|---|---:|---|
+| Prior root planning files described an unrelated OpenCode installation | 1 | Replaced them with the active Qwen3.6 items 1-5 plan before further implementation. |
+| Initial Task 1 delegation was interrupted while files were being modified | 1 | Treat current diff as untrusted partial work; inspect and verify before accepting or committing. |
+| GPU readiness background dispatch returned a contradictory launch/failure result | 1 | Wait for the task notification; if no usable result arrives, run a direct read-only readiness check by a different route. |
+
+## Completion Gate
+- All five original items have durable artifacts and recorded evidence.
+- Every changed source file has clean diagnostics.
+- Relevant unit/integration/build suites pass.
+- v7 training and n=5 evaluation outputs exist with hashes and metrics.
+- The live HTTP/SSE surface has been driven and both latency budgets measured.
+- Atomic commits exist, the authoritative path/patch note is updated, and `origin/main` contains the final commits.
