@@ -3749,7 +3749,16 @@ e237d8b chore(configs): tighten RAG search parameters after recall audit
 - 검증: focused **5 passed**, 확장 회귀 **59 passed**, 두 변경 파일 LSP error **0**, 독립 spec **PASS**, 최종 quality **APPROVED**.
 - 수동 fake-run QA: deadline status와 `dft_judge` 결과 뒤 2개 delta가 원문을 정확히 복원했고 complete의 `ttft_ms`/`synthesis_ms`/`total_ms`/count/deadline 필드를 확인. blank 입력은 `run_calls=1`을 유지해 추가 `run()` 호출 없이 단일 error를 반환.
 
+### 18-B.5 Demo API streaming and timing propagation ✅
+- live `ChatService`가 synchronous result 재구성 대신 `AgentPipeline.run_streaming()` async event stream을 소비하고 pipeline `delta`만 API `message_delta`로 변환. 나머지 status/tool/sequence/complete/error payload는 그대로 전달.
+- default live runner의 최초 model/RAG 초기화를 AnyIO worker thread로 이동하고 lock-protected singleton loader를 적용해 ASGI event loop 정지와 동시 중복 GPU load를 방지.
+- adapter/constructor/protocol 예외는 서버 로그에만 상세를 남기고 client에는 generic timed error를 반환. pipeline 자체 error payload는 변경 없이 유지.
+- demo path complete에도 `ttft_ms`, `synthesis_ms`, `total_ms`, 기존 count와 `deadline_hit=false`를 추가.
+- 신규 테스트를 event-forwarding과 runner lifecycle/error 두 모듈로 분리해 각각 250 pure LOC 이하로 유지하고 Event 기반 동시성 검증으로 sleep 의존성을 제거.
+- 검증: `trainer/demo_api/tests` **27 passed**, 변경 Python 3개 LSP error **0**, 독립 spec **PASS**, 최종 quality **APPROVED**.
+- 실제 uvicorn QA: health 200; live POST가 `session → status → message_delta → message_delta → complete`를 전송하고 complete에 `ttft_ms=17`, `synthesis_ms=23`, `total_ms=41`, counts, `deadline_hit=false` 포함. 빈 message는 HTTP **422**.
+
 ### Status
-- **Status**: Tasks 1-4 DONE. Live latency gate 자체는 Task 8 실측 전까지 IN PROGRESS.
+- **Status**: Tasks 1-5 DONE. Live latency gate 자체는 Task 8 실측 전까지 IN PROGRESS.
 
 ---
