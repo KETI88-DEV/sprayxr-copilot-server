@@ -22,7 +22,7 @@ Complete the user's original items 1 through 5 for Qwen3.6-27B: push the current
 - [complete] Task 1: tool-loop deadline guard and synthesis timing.
 - [complete] Task 2: round-differentiated token caps.
 - [complete] Task 3: config wiring.
-- [pending] Task 4: additive streaming contract.
+- [complete] Task 4: additive streaming contract.
 - [pending] Task 5: demo API timing propagation.
 - [pending] Task 6: frontend Zod timing contract.
 - [pending] Task 7: HTTP/SSE benchmark harness.
@@ -46,6 +46,7 @@ Complete the user's original items 1 through 5 for Qwen3.6-27B: push the current
 | GPU readiness background dispatch returned a contradictory launch/failure result | 1 | Wait for the task notification; if no usable result arrives, run a direct read-only readiness check by a different route. |
 | `git push origin main` failed because the HTTPS token is invalid | 1 | Continue local work and retry only after a valid preconfigured credential is available; never expose or synthesize credentials. |
 | Task 2 implementer repeatedly changed existing unittest fixture scope | 1 | Restored per-instance construction, removed cast/ClassVar escape hatches, and obtained final spec/quality approval on the actual worktree. |
+| First Task 4 manual driver used `importlib` without registering the module in `sys.modules`, breaking dataclass decoration | 1 | Switched to the repository's documented `trainer/scripts` import path; the public async-generator QA then passed without product-code changes. |
 
 ## Completion Gate
 - All five original items have durable artifacts and recorded evidence.

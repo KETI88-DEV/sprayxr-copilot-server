@@ -21,6 +21,11 @@
 - Corrected Task 2 test-fixture drift and removed attempted cast/ClassVar type escape hatches before review.
 - Completed latency Task 3: provisional deadline/tool cap config is wired through AgentPipeline and timing state is top-level for the demo API contract.
 - Cleared the changed pipeline file's pre-existing implicit-relative import diagnostic with its established importlib pattern.
+- Completed latency Task 4: added the staged buffered `run_streaming()` contract while preserving the frozen `run()` path.
+- Hardened `_stream_generate()` so worker failures terminate the streamer, join the worker, and propagate the original exception.
+- Finalized the streaming error boundary: blank instructions are non-retryable without invoking `run()`; internal failures are logged and returned as generic retryable errors without message leakage.
+- Added five bounded streaming regressions and obtained final independent spec PASS and quality APPROVED verdicts.
+- Drove the public async generator with GPU-free fakes and observed ordered deadline/status/tool/delta/complete events plus the blank-input error path.
 
 ## Verification Ledger
 | Phase | Command/surface | Result |
@@ -41,6 +46,12 @@
 | Task 3 regression | `python3 -m pytest trainer/demo_api/tests trainer/scripts/test_tool_calling.py trainer/scripts/test_response_contract.py -q` | 54 passed, 2 pre-existing SWIG warnings. |
 | Task 3 diagnostics | LSP error diagnostics on `agent_pipeline.py` | 0 errors. |
 | Task 3 reviews | Oracle spec + quality | PASS / APPROVED. |
+| Task 4 focused | `python3 -m pytest trainer/scripts/test_agent_pipeline_streaming.py -q` | 5 passed, 2 pre-existing SWIG warnings. |
+| Task 4 regression | `python3 -m pytest trainer/demo_api/tests trainer/scripts/test_tool_calling.py trainer/scripts/test_response_contract.py trainer/scripts/test_agent_pipeline_streaming.py -q` | 59 passed, 2 pre-existing SWIG warnings. |
+| Task 4 diagnostics | LSP error diagnostics on `agent_pipeline.py` and `test_agent_pipeline_streaming.py` | 0 errors. |
+| Task 4 diff hygiene | `GIT_MASTER=1 git diff --check` | Exit 0; existing line-ending conversion warning only. |
+| Task 4 reviews | Oracle spec + final quality | PASS / APPROVED; no Critical or Important findings remain. |
+| Task 4 manual surface | `AgentPipeline.run_streaming()` with a fake completed result and blank input | Ordered events reconstructed the full response; complete timings/counts were present; blank input did not invoke `run()`. |
 
 ## Next Action
-Commit latency Task 3 and its Iter18-B/worklog records, then execute latency Task 4 streaming path.
+Commit latency Task 4 and its Iter18-B/worklog records, then execute latency Task 5 demo API timing propagation.
