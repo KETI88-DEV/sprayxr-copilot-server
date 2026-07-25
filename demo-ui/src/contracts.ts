@@ -108,7 +108,8 @@ const streamStatusSchema = z
     data: z
       .object({
         stage: z.string(),
-        chunks: z.number().int().nonnegative(),
+        chunks: z.number().int().nonnegative().optional(),
+        elapsed_sec: z.number().int().nonnegative().optional(),
       })
       .strict(),
   })
@@ -152,6 +153,10 @@ const streamCompleteSchema = z
       .object({
         tool_call_count: z.number().int().nonnegative(),
         rag_chunk_count: z.number().int().nonnegative(),
+        ttft_ms: z.number().int().nonnegative().nullable().optional(),
+        synthesis_ms: z.number().int().nonnegative().optional(),
+        total_ms: z.number().int().nonnegative().optional(),
+        deadline_hit: z.boolean().optional(),
       })
       .strict(),
   })
@@ -164,6 +169,8 @@ const streamErrorSchema = z
       .object({
         message: z.string(),
         retryable: z.boolean(),
+        ttft_ms: z.number().int().nonnegative().nullable().optional(),
+        total_ms: z.number().int().nonnegative().optional(),
       })
       .strict(),
   })
