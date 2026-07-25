@@ -3633,3 +3633,70 @@ e237d8b chore(configs): tighten RAG search parameters after recall audit
 
 ---
 
+## [Iter18-A] Qwen3.6-27B v6.1 Multi-Seed Eval + Oracle Ablation
+
+**Date**: 2026-07-25
+**Scope**: Qwen3.6-27B v6.1 어댑터의 재현성 실측(3 seeds)과 Oracle P0 권고(`pass_native_tools=true`, `do_sample=false`)의 4-way 어블레이션 검증.
+
+### Summary
+- 3-seed multi-seed 평가 실측: **total 6.744 ± 0.139** (POC 목표 4.0 통과, 7.83 단발 대비 -1.08).
+- Oracle P0 예측이 실측에서 **회귀**했고 4-way 어블레이션으로 **V1(V1 baseline)이 최적** 확인.
+- 최종 프로덕션 설정: `pass_native_tools=false, do_sample=true` 유지.
+- 리포트: `/output/eval_results/qwen36_27b_v6_1_multiseed/{multiseed_report.json, SUMMARY.md}` + V1/V2/ablation seed CSV·응답 JSONL.
+
+### 4-Way Ablation 결과
+
+| 설정 | seeds | total | tool_sel | param | reason | ctx | resp | tool_not_called |
+|---|---|---|---|---|---|---|---|---|
+| **nt=F ds=T (V1, 선정)** | **3** | **6.744** | **0.411** | **0.667** | **1.778** | **2.00** | **1.889** | **17.3/30** |
+| nt=T ds=F (V2, Oracle P0) | 3 | 6.367 | 0.333 | 0.567 | 1.700 | 2.00 | 1.767 | 21.0/30 |
+| nt=F ds=F (greedy 대조) | 1 | 6.633 | 0.367 | 0.700 | 1.667 | 2.00 | 1.900 | 17/30 |
+| nt=T ds=T (baseline 대조) | 1 | 6.233 | 0.333 | 0.433 | 1.700 | 2.00 | 1.767 | 22/30 |
+
+`nt` = `llm.pass_native_tools`, `ds` = `generation.do_sample`.
+
+### 핵심 발견
+- **`pass_native_tools=true`가 일관되게 총점을 낮춤** (nt 축 -0.4~-0.5). 원인: SFT v6.1이 native `tools=[...]` 파라미터 없이 학습됐고, 런타임에만 주입되면 chat template의 도구 프리앰블이 학습 분포를 벗어나 tool-call 방출을 억제. `parameter_correctness`도 0.43~0.57로 하락.
+- **`do_sample` 축은 near-neutral** (±0.15).
+- **결정론성**: `do_sample=false` 세 seed의 총점이 완전히 동일(std=0.000). 응답 텍스트는 5/30에서 표면 차이가 있으나 tool 호출 시퀀스와 채점 카테고리는 seed 독립. Oracle 재현성 gate "identical-seed rerun" 조건 PASS.
+- **AQ022 사례로 근본 원인 확증**: 모델이 후보 툴(`timeseries`, `location_tracking`)까지 서술하지만 `<tool_call>` 태그를 방출하지 않음 → SFT/prompt format 이슈이지 파서 문제 아님.
+
+### 재현성 게이트 상태
+
+| 항목 | 상태 |
+|---|---|
+| n=3 seeds + std 리포트 | PASS (std 0.139) |
+| Adapter 파일 SHA-256 기록 | PASS (multiseed_report.json → `adapter_files`) |
+| 질문별 call/no-call 매트릭스 | GAP (run_multiseed_eval 확장 필요) |
+| exact-sequence rate | GAP |
+| greedy 동일-seed 재실행 | PASS (스코어 완전 동일) |
+| n ≥ 5 seeds | GAP (n=3 → 95% t-CI 6.400–7.089) |
+
+### 결정
+- **PROD 설정 확정**: `pass_native_tools=false`, `do_sample=true`, `temperature=0.3`, `top_p=0.8`, `top_k=20`, `enable_thinking=false`, `max_new_tokens=1024`.
+- Oracle P0 권고와 실측이 반대 결과. Oracle 리포트에는 `nt=T + ds=F` 조합이 학습 조건과 어긋난다는 SFT 관점이 부족했음. 실측 우선 채택.
+- v6.1 어댑터 자체는 **CONDITIONAL PASS**: POC 4.0 훨씬 상회하나, `tool_not_called=17/30`은 SFT 측 개선(v7) 없이는 회복 불가.
+
+### 남은 조치 (v6.1 → v7 트랙)
+- **SFT augmentation**: `<tool_call>{...}</tool_call>` 태그를 프로즈 이전에 강제하는 hard multi-tool exemplar 추가. 목표 `tool_not_called ≤ 8/30`.
+- **`run_multiseed_eval.py` 확장**: per-question call/no-call 매트릭스, exact-sequence rate, 파서 rejection 수, MCP timeout, adapter/config/eval-set SHA-256 기록.
+- **Scorer 투명화**: `parameter_correctness` 분모(호출된 도구만) 명시 필드 추가, `context_integration` 원신호(citation match 여부) 추가.
+- **n=5 seeds 반복**: `{42, 43, 44, 45, 46}`으로 CI를 ±0.10 이내로 축소.
+
+### Artifacts
+- `/output/eval_results/qwen36_27b_v6_1_multiseed/multiseed_report.json` — 기계 판독 리포트 (per-seed + aggregate + adapter hashes)
+- `/output/eval_results/qwen36_27b_v6_1_multiseed/SUMMARY.md` — 사람 판독 요약 (4-way ablation + 결정)
+- `/output/eval_results/qwen36_27b_v6_1_multiseed/v1_nt0_ds1/seed_{42,43,44}/` — 프로덕션 설정 3-seed
+- `/output/eval_results/qwen36_27b_v6_1_multiseed/v2_nt1_ds0/seed_{42,43,44}/` — Oracle P0 3-seed (기각)
+- `/output/eval_results/qwen36_27b_v6_1_multiseed/ablation_{nt0_ds0,nt1_ds1}/` — 나머지 어블레이션 셀 (seed 42)
+
+### Oracle 검증 참조
+- 세션: `ses_067b68824ffeZ5YcjQqZg7wZa5` (background task `bg_8c6dda7e`).
+- Verdict: CONDITIONAL PASS. P0 권고 `pass_native_tools=true, do_sample=false`.
+- 실측: 총점 -0.38, tool_not_called +3.7 → 권고 기각. Root-cause ranking에서 (a) SFT signal shrinkage에 3% 확률 부여했으나 실제로 native tools 도입 시 학습 분포 mismatch가 지배적이었음. Audit 목적으로 V2 결과 전량 보존.
+
+### Status
+- **Status**: DONE. v6.1 프로덕션 배포 CONDITIONAL PASS (POC 4.0 통과, tool-calling regression은 v7 SFT로 이관).
+
+---
+
