@@ -58,3 +58,9 @@
 - Task 5 must preserve demo scenario behavior while making the default live runner an async event source and mapping pipeline `delta` to API `message_delta` without recomputing complete timings.
 - The `complete` SSE payload must preserve `ttft_ms`, `synthesis_ms`, `total_ms`, `tool_call_count`, `rag_chunk_count`, and `deadline_hit`; errors must preserve timing fields when supplied.
 - `create_app(chat_service=...)` already provides the injection seam needed for GPU-free HTTP/SSE manual QA.
+
+## Latency Task 6 Frontend Boundary
+- The original Task 6 plan covered only timing-rich `complete`, but the real Task 4/5 stream also emits deadline `status` without `chunks` and timed `error`; the strict frontend schema rejected both.
+- Keeping nested `.strict()` while adding only optional approved timing fields preserves rejection of unknown payload keys and compatibility with older backends.
+- `App` must preserve exact-optional typing when mapping `chunks`/`elapsed_sec`; conditional spreads avoid assigning explicit `undefined`.
+- Chrome QA exposed pre-existing out-of-scope UI debt: the 375px page retains a desktop-fixed grid and assistant Markdown is rendered as raw text. Neither was introduced by Task 6; the changed status row itself wraps cleanly.

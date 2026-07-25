@@ -31,6 +31,10 @@
 - Sanitized and timed adapter-generated failures while preserving pipeline-originated error payloads verbatim.
 - Split Task 5 coverage into bounded event-contract and live-runner modules; obtained independent spec PASS and final quality APPROVED.
 - Drove an actual uvicorn process with an injected async live runner and observed timing-bearing SSE plus FastAPI 422 validation.
+- Completed latency Task 6: strict frontend Zod schemas now accept backend complete/error timings and deadline status metadata while preserving legacy payloads.
+- Updated the React status consumer and tool log to display elapsed deadline state without undefined chunk placeholders.
+- Confirmed RED on four real backend event shapes, then passed the full 20-test Vitest suite, production build, and two Playwright E2E scenarios.
+- Drove real Chrome against FastAPI and exact timing-rich SSE; independent code review approved and fresh 1280/768/375 visual review passed for the changed status row.
 
 ## Verification Ledger
 | Phase | Command/surface | Result |
@@ -61,6 +65,10 @@
 | Task 5 diagnostics | LSP error diagnostics on `chat_service.py` and both Task 5 test modules | 0 errors. |
 | Task 5 reviews | Oracle spec + final quality | PASS / APPROVED after off-loop initialization, sanitized errors, and deterministic bounded tests. |
 | Task 5 manual HTTP/SSE | uvicorn on `127.0.0.1:8145` + curl `/api/health` and POST `/api/chat` | Health 200; ordered live SSE carried timing/count/deadline fields; blank message returned 422. |
+| Task 6 RED | `npm test -- --run tests/contracts.test.ts` before schema changes | 4 failed for timing-rich complete, null TTFT, deadline status, and timed error. |
+| Task 6 frontend gates | `npm test -- --run`; `npm run build:web`; `npm run test:e2e` | 20 passed; production build succeeded; 2 browser E2E passed. |
+| Task 6 reviews | Oracle code review + dual visual/CJK review | APPROVE / PASS; no Task 6 Critical, Important, or visual blockers. |
+| Task 6 browser surface | Chrome + real FastAPI demo, then exact deadline SSE at 1280×900, 768×900, 375×812 | POST 200; timing-rich complete parsed; elapsed status legible at all viewports; final console errors 0. |
 
 ## Next Action
-Commit latency Task 5 and its Iter18-B/worklog records, then execute latency Task 6 frontend timing contract.
+Commit latency Task 6 and its Iter18-B/worklog records, then execute latency Task 7 HTTP/SSE benchmark harness.
