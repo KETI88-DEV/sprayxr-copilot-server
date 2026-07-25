@@ -3700,3 +3700,33 @@ e237d8b chore(configs): tighten RAG search parameters after recall audit
 
 ---
 
+## [Iter18-B] Live Latency Budget — Tool Loop Deadline Foundation
+
+**Date**: 2026-07-25
+**Scope**: 원 요청 5번(Live 부하 테스트)의 선행 Task 1. 도구 루프 wall-clock deadline과 synthesis 소요시간 계측을 추가하고 모든 반환 경로의 timing 계약을 고정.
+
+### 변경
+- `trainer/scripts/tool_calling_adapter.py`
+  - `run_tool_loop(..., deadline_sec, tool_max_tokens)` 시그니처 추가. `tool_max_tokens`는 Task 2에서 소비할 계획된 placeholder.
+  - 최소 1개 tool result 이후에만 monotonic deadline을 적용해 빈 synthesis를 방지.
+  - deadline/max-round/empty-post-tool 두 synthesis 경로 모두 `synthesis_ms` 기록.
+  - 모든 반환 경로에 `deadline_hit`, `synthesis_ms`를 포함해 호출자 조건 분기 제거.
+- `trainer/scripts/test_tool_calling.py`
+  - deterministic `ScriptedClock`과 tool-result 경계 테스트 추가.
+  - deadline 이전/이후, 최초 tool result 전 guard, 두 synthesis timing 경로를 회귀 테스트로 고정.
+
+### 검증
+- `python3 -m pytest trainer/scripts/test_tool_calling.py -q` → **28 passed**.
+- `python3 -m pytest trainer/demo_api/tests trainer/scripts/test_tool_calling.py trainer/scripts/test_response_contract.py -q` → **51 passed**, SWIG deprecation warning 2건만 존재.
+- 두 변경 Python 파일 LSP error diagnostics → **0**.
+- 독립 spec review → **PASS**; 독립 code-quality review → **APPROVED**.
+
+### 다음 경로
+- 계획: `docs/superpowers/plans/2026-07-25-latency-budget.md` Task 2~8.
+- 다음 구현: tool/synthesis token cap 분리 → config wiring → SSE timing 계약 → 실제 FastAPI benchmark.
+- deadline 기본값 150초는 잠정값이며 실제 `synthesis_ms_p95` 측정 후 `180 - p95`로 재조정.
+
+### Status
+- **Status**: Task 1 DONE. Live latency gate 자체는 Task 8 실측 전까지 IN PROGRESS.
+
+---
