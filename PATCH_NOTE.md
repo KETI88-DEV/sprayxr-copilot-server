@@ -3733,7 +3733,14 @@ e237d8b chore(configs): tighten RAG search parameters after recall audit
 - 검증: adapter **31 passed**, 확장 회귀 **54 passed**, 변경 파일 LSP error **0**.
 - 독립 review: Task 2 spec **PASS**, code quality **APPROVED**.
 
+### 18-B.3 Pipeline config wiring ✅
+- `trainer/configs/rag_config_fewshot_27b.yaml`: `llm.tool_deadline_sec: 150`, `generation.max_new_tokens_tool: 256` 추가.
+- `AgentPipeline.run()`이 tool loop에 두 값을 전달하고 `deadline_hit`/`synthesis_ms`를 모든 route의 최상위 result에 노출.
+- fast route는 `False`/`0`, tool route는 adapter 반환값을 사용해 Task 5의 `scenario.get(...)` 계약과 정렬.
+- 동일 파일의 implicit-relative import를 기존 `importlib.import_module` 패턴으로 통일해 LSP error 제거.
+- 검증: 확장 회귀 **54 passed**, `agent_pipeline.py` LSP error **0**, spec **PASS**, quality **APPROVED**.
+
 ### Status
-- **Status**: Tasks 1-2 DONE. Live latency gate 자체는 Task 8 실측 전까지 IN PROGRESS.
+- **Status**: Tasks 1-3 DONE. Live latency gate 자체는 Task 8 실측 전까지 IN PROGRESS.
 
 ---
