@@ -3740,7 +3740,16 @@ e237d8b chore(configs): tighten RAG search parameters after recall audit
 - 동일 파일의 implicit-relative import를 기존 `importlib.import_module` 패턴으로 통일해 LSP error 제거.
 - 검증: 확장 회귀 **54 passed**, `agent_pipeline.py` LSP error **0**, spec **PASS**, quality **APPROVED**.
 
+### 18-B.4 Additive pipeline streaming contract ✅
+- `AgentPipeline.run_streaming()` async generator를 추가해 `status → tool_result* → delta* → complete` 계약과 deadline 강제-synthesis 상태를 노출.
+- 기존 `run()`은 변경하지 않고 worker thread에서 실행한 결과를 24자 compatibility delta로 재방출해 frozen evaluation 경로를 보존. 실제 token-level TTFT 개선은 Task 8 실측 후 판단.
+- `_stream_generate()` worker 실패 시 streamer 종료 신호를 보내고 thread를 join한 뒤 원래 예외를 재발생시켜 무한 대기와 thread leak을 방지.
+- blank instruction은 `run()` 호출 전에 단일 non-retryable error로 거부하고, 내부 실패는 로그 후 메시지를 노출하지 않는 generic retryable error로 변환. 모든 error에 `ttft_ms=None`, `total_ms` 포함.
+- 신규 `trainer/scripts/test_agent_pipeline_streaming.py`: worker failure, success event ordering/payload, blank no-run, 내부 `RuntimeError`/`ValueError` 경계를 5개 bounded regression으로 고정.
+- 검증: focused **5 passed**, 확장 회귀 **59 passed**, 두 변경 파일 LSP error **0**, 독립 spec **PASS**, 최종 quality **APPROVED**.
+- 수동 fake-run QA: deadline status와 `dft_judge` 결과 뒤 2개 delta가 원문을 정확히 복원했고 complete의 `ttft_ms`/`synthesis_ms`/`total_ms`/count/deadline 필드를 확인. blank 입력은 `run_calls=1`을 유지해 추가 `run()` 호출 없이 단일 error를 반환.
+
 ### Status
-- **Status**: Tasks 1-3 DONE. Live latency gate 자체는 Task 8 실측 전까지 IN PROGRESS.
+- **Status**: Tasks 1-4 DONE. Live latency gate 자체는 Task 8 실측 전까지 IN PROGRESS.
 
 ---
