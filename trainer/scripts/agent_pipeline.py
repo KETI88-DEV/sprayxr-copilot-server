@@ -11,6 +11,7 @@ import os
 import re
 import sys
 import uuid
+from collections.abc import AsyncIterator, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -706,6 +707,148 @@ class AgentPipeline:
 
         new_tokens = outputs[0][inputs["input_ids"].shape[1]:]
         return self.tokenizer.decode(new_tokens, skip_special_tokens=True)
+
+    def _stream_generate(
+        self,
+        prompt_text: str,
+        gen_cfg: dict[str, Any],
+        max_new_tokens: int,
+    ) -> Iterator[str]:
+        """Yields decoded text chunks as the model produces them.
+
+        ``model.generate`` runs on a worker thread. If it raises, the worker
+        records the error and enqueues the streamer stop signal so the consumer
+        loop terminates instead of blocking forever on the unbounded
+        ``queue.get`` (TextIteratorStreamer uses ``timeout=None``). The worker
+        is always joined, then the captured exception is re-raised to the caller.
+        """
+        from threading import Thread
+
+        from transformers import TextIteratorStreamer
+
+        inputs = self.tokenizer([prompt_text], return_tensors="pt", return_attention_mask=True)
+        if hasattr(inputs, "to") and hasattr(self.model, "device"):
+            inputs = inputs.to(self.model.device)
+
+        streamer = TextIteratorStreamer(
+            self.tokenizer, skip_prompt=True, skip_special_tokens=True
+        )
+        do_sample = bool(gen_cfg.get("do_sample", True))
+        kwargs: dict[str, Any] = {
+            **inputs,
+            "max_new_tokens": max_new_tokens,
+            "pad_token_id": self.tokenizer.eos_token_id,
+            "repetition_penalty": float(gen_cfg.get("repetition_penalty", 1.15)),
+            "do_sample": do_sample,
+            "streamer": streamer,
+        }
+        if do_sample:
+            kwargs["temperature"] = float(gen_cfg.get("temperature", 0.3))
+            kwargs["top_p"] = float(gen_cfg.get("top_p", 0.8))
+            kwargs["top_k"] = int(gen_cfg.get("top_k", 20))
+
+        worker_error: list[Exception] = []
+
+        def _run_generation() -> None:
+            try:
+                self.model.generate(**kwargs)
+            except Exception as exc:
+                worker_error.append(exc)
+                streamer.on_finalized_text("", stream_end=True)
+
+        thread = Thread(target=_run_generation, daemon=True)
+        thread.start()
+        try:
+            for chunk in streamer:
+                if chunk:
+                    yield chunk
+        finally:
+            thread.join()
+        if worker_error:
+            raise worker_error[0]
+
+    async def run_streaming(
+        self,
+        instruction: str,
+        environment: dict[str, Any] | None = None,
+        session_id: str | None = None,
+        enable_thinking: bool = False,
+        request_id: str | None = None,
+    ) -> AsyncIterator[tuple[str, dict[str, Any]]]:
+        """Yields (kind, payload) where kind is status|tool_result|delta|complete|error.
+
+        Staged buffered streaming: this awaits the full non-streaming run() in a
+        worker thread, then re-emits the finished answer as fixed-width (24-char)
+        compatibility chunks so callers can consume a uniform delta stream today.
+        It does NOT yet reduce time-to-first-token; true token-level streaming
+        via _stream_generate is deferred to a later task.
+
+        On failure no partial events are emitted: a blank instruction is rejected
+        up front as a single non-retryable error without invoking run(), and any
+        exception escaping run() is logged and surfaced as a single generic
+        retryable error without leaking its message. Every error event carries
+        ttft_ms=None and a measured total_ms.
+        """
+        t0 = time.monotonic()
+        ttft_ms: int | None = None
+
+        if not instruction.strip():
+            yield "error", {
+                "message": "instruction must not be empty",
+                "retryable": False,
+                "ttft_ms": None,
+                "total_ms": int((time.monotonic() - t0) * 1000),
+            }
+            return
+
+        try:
+            result = await asyncio.to_thread(
+                self.run,
+                instruction=instruction,
+                environment=environment,
+                session_id=session_id,
+                enable_thinking=enable_thinking,
+                request_id=request_id,
+            )
+        except Exception:
+            logger.exception("run_streaming: unexpected failure in run()")
+            yield "error", {
+                "message": "streaming pipeline failed",
+                "retryable": True,
+                "ttft_ms": None,
+                "total_ms": int((time.monotonic() - t0) * 1000),
+            }
+            return
+
+        yield "status", {"stage": "rag", "chunks": len(result.get("rag_chunks", []))}
+
+        if result.get("deadline_hit"):
+            yield "status", {
+                "stage": "deadline_forced_synthesis",
+                "elapsed_sec": int((time.monotonic() - t0)),
+            }
+
+        for call in result.get("tool_calls", []):
+            yield "tool_result", {
+                "name": call.get("name", ""),
+                "arguments": call.get("arguments", {}) or {},
+                "result": call.get("result", {}) or {},
+            }
+
+        text = str(result.get("response", ""))
+        for index in range(0, len(text), 24):
+            if ttft_ms is None:
+                ttft_ms = int((time.monotonic() - t0) * 1000)
+            yield "delta", {"text": text[index : index + 24]}
+
+        yield "complete", {
+            "ttft_ms": ttft_ms,
+            "synthesis_ms": int(result.get("synthesis_ms", 0)),
+            "total_ms": int((time.monotonic() - t0) * 1000),
+            "tool_call_count": len(result.get("tool_calls", [])),
+            "rag_chunk_count": len(result.get("rag_chunks", [])),
+            "deadline_hit": bool(result.get("deadline_hit", False)),
+        }
 
     def run(
         self,
