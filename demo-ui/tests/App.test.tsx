@@ -35,9 +35,10 @@ const SNAPSHOT_JSON = {
 const SSE_FRAMES = [
   'event: session\ndata: {"event":"session","data":{"session_id":"s-1","mode":"demo"}}\n\n',
   'event: status\ndata: {"event":"status","data":{"stage":"rag","chunks":1}}\n\n',
+  'event: status\ndata: {"event":"status","data":{"stage":"deadline_forced_synthesis","elapsed_sec":151}}\n\n',
   'event: sequence_update\ndata: {"event":"sequence_update","data":{"type":"update_sequence","level_id":"SP0035-L01","current_zone_id":"A-1","next_zone_ids":["A-2","A-3"],"completed_zone_ids":["A-1"]}}\n\n',
   'event: message_delta\ndata: {"event":"message_delta","data":{"text":"다음 도장 구역: A-2"}}\n\n',
-  'event: complete\ndata: {"event":"complete","data":{"tool_call_count":0,"rag_chunk_count":1}}\n\n',
+  'event: complete\ndata: {"event":"complete","data":{"tool_call_count":0,"rag_chunk_count":1,"ttft_ms":4200,"synthesis_ms":15000,"total_ms":61000,"deadline_hit":true}}\n\n',
 ]
 
 describe('App', () => {
@@ -84,6 +85,7 @@ describe('App', () => {
     await waitFor(() => {
       expect(screen.getByTestId('zone-A-2')).toHaveAttribute('data-status', 'next')
     })
+    expect(screen.getByText('RAG stage=deadline_forced_synthesis elapsed=151s')).toBeInTheDocument()
   })
 
   it('switches to live mode and sends live chat requests', async () => {

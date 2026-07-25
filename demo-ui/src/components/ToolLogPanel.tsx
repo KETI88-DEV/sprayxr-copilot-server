@@ -1,7 +1,12 @@
 import { useState, type ReactElement } from 'react'
 
 export type ToolLogEntry =
-  | { readonly kind: 'status'; readonly stage: string; readonly chunks: number }
+  | {
+      readonly kind: 'status'
+      readonly stage: string
+      readonly chunks?: number
+      readonly elapsedSec?: number
+    }
   | {
       readonly kind: 'tool_result'
       readonly name: string
@@ -27,7 +32,13 @@ export function ToolLogPanel({ entries }: { readonly entries: readonly ToolLogEn
         <ol className="tool-log__list">
           {entries.map((entry, index) => (
             <li key={index} className="tool-log__entry" data-kind={entry.kind}>
-              {entry.kind === 'status' && <span>RAG stage={entry.stage} chunks={entry.chunks}</span>}
+              {entry.kind === 'status' && (
+                <span>
+                  RAG stage={entry.stage}
+                  {entry.chunks === undefined ? '' : ` chunks=${entry.chunks}`}
+                  {entry.elapsedSec === undefined ? '' : ` elapsed=${entry.elapsedSec}s`}
+                </span>
+              )}
               {entry.kind === 'tool_result' && (
                 <details>
                   <summary>{entry.name}</summary>

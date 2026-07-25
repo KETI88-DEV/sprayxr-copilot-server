@@ -104,7 +104,12 @@ export function App(): ReactElement {
               setStage(event.data.stage)
               setLogEntries((previous) => [
                 ...previous,
-                { kind: 'status', stage: event.data.stage, chunks: event.data.chunks },
+                {
+                  kind: 'status',
+                  stage: event.data.stage,
+                  ...(event.data.chunks === undefined ? {} : { chunks: event.data.chunks }),
+                  ...(event.data.elapsed_sec === undefined ? {} : { elapsedSec: event.data.elapsed_sec }),
+                },
               ])
               break
             case 'message_delta':
