@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 import threading
 from collections.abc import AsyncIterator
+from types import ModuleType
 from typing import TypeVar
 
 import pytest
@@ -25,6 +27,9 @@ def _collect(agen: AsyncIterator[T]) -> list[T]:
 
 
 class _FakePipeline:
+    def __init__(self) -> None:
+        self.environments: list[dict[str, object]] = []
+
     async def run_streaming(
         self,
         *,
@@ -33,7 +38,8 @@ class _FakePipeline:
         enable_thinking: bool,
         environment: dict[str, object],
     ) -> AsyncIterator[PipelineEvent]:
-        _ = (instruction, session_id, enable_thinking, environment)
+        _ = (instruction, session_id, enable_thinking)
+        self.environments.append(environment)
         yield "complete", {
             "ttft_ms": 1,
             "synthesis_ms": 1,
@@ -42,6 +48,78 @@ class _FakePipeline:
             "rag_chunk_count": 0,
             "deadline_hit": False,
         }
+
+
+def test_default_runner_passes_sequence_context_to_pipeline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Given a level request, When live streaming starts, Then sequence context reaches the pipeline."""
+    pipeline = _FakePipeline()
+    monkeypatch.setattr(chat_service_mod, "_pipeline_singleton", pipeline)
+
+    request = ChatRequest(
+        message="다음 순서가 어떻게 돼?",
+        session_id="s-sequence",
+        mode="live",
+        level_id="SP0035-L01",
+    )
+    _ = _collect(ChatService(live_runner=chat_service_mod.build_default_live_runner()).stream(request))
+
+    assert pipeline.environments == [
+        {
+            "zone_map": [
+                {
+                    "zone_id": "A-1",
+                    "block_id": "BLK-A",
+                    "zone_type": "수직 패널",
+                    "position": "upper",
+                    "is_painted": True,
+                },
+                {
+                    "zone_id": "A-2",
+                    "block_id": "BLK-A",
+                    "zone_type": "수직 패널",
+                    "position": "middle",
+                    "is_painted": False,
+                },
+                {
+                    "zone_id": "A-3",
+                    "block_id": "BLK-A",
+                    "zone_type": "곡면",
+                    "position": "lower",
+                    "is_painted": False,
+                },
+            ],
+            "current_zone_id": "A-1",
+            "structure_type": "block",
+        }
+    ]
+
+
+def test_default_pipeline_uses_current_27b_paths_without_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Given no path overrides, When constructing live inference, Then the current 27B artifacts are selected."""
+    captured: dict[str, str] = {}
+    fake_module = ModuleType("trainer.scripts.agent_pipeline")
+
+    def _fake_pipeline(*, config_path: str, adapter_path: str, mcp_base_url: str) -> _FakePipeline:
+        captured.update(
+            config_path=config_path,
+            adapter_path=adapter_path,
+            mcp_base_url=mcp_base_url,
+        )
+        return _FakePipeline()
+
+    setattr(fake_module, "AgentPipeline", _fake_pipeline)
+    monkeypatch.setitem(sys.modules, "trainer.scripts.agent_pipeline", fake_module)
+    monkeypatch.delenv("CONFIG_PATH", raising=False)
+    monkeypatch.delenv("ADAPTER_PATH", raising=False)
+
+    _ = chat_service_mod._construct_default_pipeline()
+
+    assert captured["config_path"] == "/workspace/trainer/configs/rag_config_fewshot_27b.yaml"
+    assert captured["adapter_path"] == "/output/adapters/qwen36_27b_shipcoat_lora_v6_1"
 
 
 def _raising_runner(exc: Exception) -> LiveRunner:
@@ -71,7 +149,8 @@ def test_default_runner_constructs_pipeline_off_event_loop_thread(
     loop_thread = threading.get_ident()
     out = _collect(ChatService(live_runner=runner).stream(request))
 
-    assert [event.event for event in out] == ["session", "complete"]
+    assert [event.event for event in out] == ["session", "status", "complete"]
+    assert out[1].data == {"stage": "initializing", "chunks": 0}
     assert len(construction_threads) == 1
     assert construction_threads[0] != loop_thread
 
@@ -111,7 +190,7 @@ def test_default_runner_initializes_pipeline_once_under_concurrency(
     results = asyncio.run(_drive())
 
     assert len(results) == 5
-    assert all(len(result) == 2 for result in results)
+    assert all(len(result) == 3 for result in results)
     assert len(calls) == 1
     assert calls[0] != loop_thread
 

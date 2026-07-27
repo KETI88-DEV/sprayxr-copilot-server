@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from typing import Final, TypedDict
 
 from trainer.demo_api.contracts import (
     SequenceSnapshot as _SequenceSnapshot,
@@ -8,9 +9,30 @@ from trainer.demo_api.contracts import (
     SequenceZone as _SequenceZone,
 )
 
-__all__ = ["default_snapshot", "sequence_update_from_payload"]
+__all__ = ["default_snapshot", "default_tool_environment", "sequence_update_from_payload"]
 
 _ZONE_ID_PATTERN = re.compile(r"^[A-Z]-\d+$")
+
+
+class SequenceToolZone(TypedDict):
+    zone_id: str
+    block_id: str
+    zone_type: str
+    position: str
+    is_painted: bool
+
+
+class SequenceToolEnvironment(TypedDict):
+    zone_map: list[SequenceToolZone]
+    current_zone_id: str
+    structure_type: str
+
+
+_TOOL_ZONE_METADATA: Final[dict[str, tuple[str, str, str]]] = {
+    "A-1": ("BLK-A", "수직 패널", "upper"),
+    "A-2": ("BLK-A", "수직 패널", "middle"),
+    "A-3": ("BLK-A", "곡면", "lower"),
+}
 
 
 def default_snapshot(level_id: str) -> _SequenceSnapshot:
@@ -26,6 +48,28 @@ def default_snapshot(level_id: str) -> _SequenceSnapshot:
         next_zone_ids=["A-2", "A-3"],
         completed_zone_ids=["A-1"],
     )
+
+
+def default_tool_environment(level_id: str) -> SequenceToolEnvironment:
+    snapshot = default_snapshot(level_id)
+    zone_map: list[SequenceToolZone] = []
+    for zone in snapshot.zones:
+        block_id, zone_type, position = _TOOL_ZONE_METADATA[zone.zone_id]
+        zone_map.append(
+            {
+                "zone_id": zone.zone_id,
+                "block_id": block_id,
+                "zone_type": zone_type,
+                "position": position,
+                "is_painted": zone.status == "completed",
+            }
+        )
+
+    return {
+        "zone_map": zone_map,
+        "current_zone_id": snapshot.current_zone_id,
+        "structure_type": "block",
+    }
 
 
 def sequence_update_from_payload(
