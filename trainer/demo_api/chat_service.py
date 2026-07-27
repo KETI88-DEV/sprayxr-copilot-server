@@ -13,14 +13,15 @@ from pydantic import ValidationError
 
 from trainer.demo_api.contracts import ChatRequest, SequenceUpdate, StreamEvent
 from trainer.demo_api.scenario_adapter import get_demo_scenario
+from trainer.demo_api.sequence import default_tool_environment
 
 logger = logging.getLogger(__name__)
 
 # kind ∈ status|tool_result|delta|complete|error (sequence_update also allowed).
 LiveRunner = Callable[[ChatRequest], AsyncIterator[tuple[str, dict[str, object]]]]
 
-_CONFIG_PATH_DEFAULT: Final[str] = "/workspace/trainer/configs/rag_config_fewshot.yaml"
-_ADAPTER_PATH_DEFAULT: Final[str] = "/output/adapters/qwen3_4b_shipcoat_lora/"
+_CONFIG_PATH_DEFAULT: Final[str] = "/workspace/trainer/configs/rag_config_fewshot_27b.yaml"
+_ADAPTER_PATH_DEFAULT: Final[str] = "/output/adapters/qwen36_27b_shipcoat_lora_v6_1"
 _MCP_BASE_URL_DEFAULT: Final[str] = "http://localhost:8100"
 
 
@@ -50,6 +51,12 @@ class ChatService:
 
     async def stream(self, request: ChatRequest) -> AsyncIterator[StreamEvent]:
         t0 = time.monotonic()
+        logger.info(
+            "chat start session=%s mode=%s chars=%d",
+            request.session_id,
+            request.mode,
+            len(request.message),
+        )
         live_runner = self.live_runner
         if request.mode == "live" and live_runner is None:
             yield StreamEvent(
@@ -72,20 +79,40 @@ class ChatService:
             except Exception:  # noqa: BROAD_EXCEPT_OK
                 logger.exception("live stream: unexpected pipeline failure")
                 yield _boundary_error(t0, "streaming pipeline failed", retryable=True)
+            else:
+                logger.info(
+                    "chat end session=%s elapsed_ms=%d",
+                    request.session_id,
+                    int((time.monotonic() - t0) * 1000),
+                )
             return
 
         scenario = _demo_scenario(request.message)
         for event in _iter_stream_events(request, scenario):
             yield event
+        logger.info(
+            "chat end session=%s elapsed_ms=%d",
+            request.session_id,
+            int((time.monotonic() - t0) * 1000),
+        )
 
 
 def _construct_default_pipeline() -> _Pipeline:
     from trainer.scripts.agent_pipeline import AgentPipeline
 
+    config_path = os.environ.get("CONFIG_PATH", _CONFIG_PATH_DEFAULT)
+    adapter_path = os.environ.get("ADAPTER_PATH", _ADAPTER_PATH_DEFAULT)
+    mcp_base_url = os.environ.get("MCP_BASE_URL", _MCP_BASE_URL_DEFAULT)
+    logger.info(
+        "constructing live pipeline config=%s adapter=%s mcp=%s",
+        config_path,
+        adapter_path,
+        mcp_base_url,
+    )
     return AgentPipeline(
-        config_path=os.environ.get("CONFIG_PATH", _CONFIG_PATH_DEFAULT),
-        adapter_path=os.environ.get("ADAPTER_PATH", _ADAPTER_PATH_DEFAULT),
-        mcp_base_url=os.environ.get("MCP_BASE_URL", _MCP_BASE_URL_DEFAULT),
+        config_path=config_path,
+        adapter_path=adapter_path,
+        mcp_base_url=mcp_base_url,
     )
 
 
@@ -99,12 +126,13 @@ def _get_or_build_pipeline() -> _Pipeline:
 
 def build_default_live_runner() -> LiveRunner:
     async def _runner(request: ChatRequest) -> AsyncIterator[tuple[str, dict[str, object]]]:
+        yield "status", {"stage": "initializing", "chunks": 0}
         pipeline = await to_thread.run_sync(_get_or_build_pipeline)
         async for event in pipeline.run_streaming(
             instruction=request.message,
             session_id=request.session_id,
             enable_thinking=False,
-            environment={},
+            environment=dict(default_tool_environment(request.level_id)),
         ):
             yield event
 
