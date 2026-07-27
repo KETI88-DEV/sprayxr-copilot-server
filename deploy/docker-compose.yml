@@ -12,6 +12,13 @@ services:
       HF_HUB_CACHE: /hf-cache/hub
       TRANSFORMERS_CACHE: /hf-cache/transformers
       HF_DATASETS_CACHE: /hf-cache/datasets
+      HF_DEACTIVATE_ASYNC_LOAD: "1"
+      DEMO_LIVE_MODE: "on"
+      CONFIG_PATH: /workspace/trainer/configs/rag_config_fewshot_27b.yaml
+      ADAPTER_PATH: /output/adapters/qwen36_27b_shipcoat_lora_v6_1
+      MCP_BASE_URL: http://localhost:8100
+    ports:
+      - "8120:8120"
     volumes:
       - /data/ship-paint-ai/models:/models
       - /data/ship-paint-ai/data:/data
