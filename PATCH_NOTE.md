@@ -3770,3 +3770,121 @@ e237d8b chore(configs): tighten RAG search parameters after recall audit
 - **Status**: Tasks 1-6 DONE. Live latency gate 자체는 Task 8 실측 전까지 IN PROGRESS.
 
 ---
+
+### 18-B.7 HTTP/SSE latency benchmark harness ✅
+- `trainer/scripts/bench_latency.py`: `/api/chat`을 직접 호출하는 sequential CLI, Pydantic eval-set 경계, positive finite CLI validation, timestamped JSON/Markdown artifact writer를 추가.
+- `trainer/scripts/bench_sse.py`: 첫 valid `message_delta` wall TTFT와 `complete` 도착 wall total을 측정하고 connection close는 기다리지 않음. complete/error/backend timing, actual `tool_call_count`, structured MCP `TIMEOUT`을 보존.
+- `trainer/scripts/bench_report.py`: inclusive upper-index percentile, RAG 30초/tool 180초 path gate, valid/invalid/unclassified sample 수, expected-path coverage, `gate_ready`, `no_data`/`invalid` 상태를 기록해 0ms false pass를 차단.
+- SSE 경계는 strict finite payload를 요구하며 모든 delta와 nested MCP outcome을 검증. terminal error, malformed/missing terminal, answer delta 없는 complete, MCP timeout, overall heartbeat deadline은 invalid sample로 보존하되 percentile에서 제외.
+- README를 단일 MCP aggregator+7 routers, 4B default/27B opt-in, buffered compatibility streaming, pre-change 3-seed 평균 6.744/sample SD 0.139, Task 8 pending gate, explicit 27B `:8130` startup 절차로 정정.
+- TDD: benchmark focused **29 passed**; `trainer/demo_api/tests trainer/scripts/tests` 관련 회귀 **62 passed**; 변경 파일 basedpyright **0 errors / 0 warnings**; LSP diagnostics **0**.
+- 실제 fake HTTP/SSE CLI QA: success, structured MCP timeout, terminal error, malformed complete 4건을 실행해 `1 valid / 3 invalid`, `gate_ready=false`, RAG/tools `invalid`, JSON/Markdown 정상 생성을 확인. success total은 server의 의도적 2초 delayed close를 기다리지 않음.
+- 독립 Oracle code review 최종 **APPROVE** 및 README review **APPROVE**; Critical/Important finding 없음.
+
+### Status
+- **Status**: Tasks 1-7 DONE. Task 8 Qwen3.6-27B GPU 실측, deadline 재보정, latency/quality gate 판정 대기.
+
+---
+
+## [Iter18-C] Electron 데스크톱 데모 실행 결함 수정
+
+**Date**: 2026-07-27
+**Scope**: Electron 데모를 실제로 실행해 검증하고, 창이 뜨지 않는 결함과 API base URL 주입 결함을 수정. Windows 실행 가이드를 README에 추가.
+
+### 수정한 결함
+
+1. **Electron 창이 전혀 열리지 않음 (blocking)**
+   - `electron/main.ts`의 `isRunAsMain()`이 `process.argv[1]`과 `fileURLToPath(import.meta.url)` 절대경로를 비교했다. `npm run start:electron`/`dev:electron`은 `electron dist-electron/main.js`처럼 **상대경로**로 실행하므로 비교가 항상 실패해 `createWindow()`가 호출되지 않았다.
+   - Chromium 플래그를 앞에 붙이면 `argv[1]`이 플래그가 되고, Windows에서는 경로 구분자까지 달라 세 경우 모두 실패한다.
+   - 조치: argv 기반 가드를 제거하고 엔트리 모듈이 항상 부트스트랩하도록 변경. 단위 테스트는 electron mock 위에서 창 생성을 검증한다.
+
+2. **`window.__DEMO_API_BASE_URL__` 런타임 주입이 항상 무효화됨**
+   - `index.html`이 `%VITE_API_BASE_URL%`를 값과 비교문 양쪽에 사용해, Vite가 두 곳을 모두 치환하면 조건이 항상 참이 되어 주입값을 `undefined`로 덮어썼다.
+   - 결과적으로 README가 1순위로 문서화한 런타임 주입 경로가 죽어 있었고, `import.meta.env` fallback 덕분에 우연히 동작했다.
+   - 조치: 치환 여부를 값의 `%...%` 형태로 판정하는 IIFE로 교체. 빌드 주입과 `dist/index.html` 수동 수정이 모두 유효해졌다.
+
+3. **README의 원격 접속 설명이 실제 스크립트와 불일치**
+   - `dev:web`/`preview:web`은 `--host 127.0.0.1`을 고정하는데 README는 "모든 인터페이스 바인딩", "원격: `http://<서버>:5173`"으로 안내했다.
+   - 실측: 루프백 `200`, 컨테이너 IP `172.21.0.2:5173` 연결 거부, Vite 로그에 `Network` 항목 없음.
+   - 조치: 실제 바인딩을 명시하고 `-- --host 0.0.0.0` 노출 방법과 SSH 터널 권고를 추가.
+
+### 문서
+- `README.md`에 **3-1) Windows에서 Electron 데모 실행** 절을 신설: Node 20+ 준비, 컨테이너 포트 게시(`docker port`, compose `ports:`), `--host 0.0.0.0` 기동, SSH 터널, `demo-ui\.env.local`의 `VITE_API_BASE_URL`, `npm ci && npm run start:electron`, 재빌드 없이 `dist/index.html` 수정, 증상별 문제 해결 표.
+- Electron은 `file://` 오리진이라 same-origin fallback이 없다는 제약과, 헤드리스 컨테이너에서는 `xvfb-run` 검증만 가능하다는 제약을 명시.
+
+### 검증
+- TDD: 두 결함 모두 RED 재현 후 수정. `demo-ui` Vitest **24 passed** (기존 20 + Electron 엔트리 1 + index.html 부트스트랩 3).
+- `npm run build:web`, `npm run build:electron` 성공, Playwright 웹 E2E **2 passed**.
+- 실제 Electron 실행 QA (`xvfb-run` + Playwright `_electron`, 상대경로 인자):
+  - 수정 전: CDP page target **0개** (창 없음). 수정 후: **1개**, `file:///workspace/demo-ui/dist/index.html` 로드.
+  - `window.__DEMO_API_BASE_URL__` = `http://127.0.0.1:8120`(string), `file://`에서 API `GET /api/health` **200**, 상태바 `온라인`.
+  - 채팅 시나리오: 순서 스냅샷 렌더 → 질문 전송 → SSE 응답 스트리밍 → `zone A-2=next`, `A-1=completed`, 도구 로그 표시까지 통과.
+  - `dist/index.html`의 주입값을 손으로 바꾼 뒤 재빌드 없이 반영되는 것도 확인.
+
+### Status
+- **Status**: DONE. Electron 데모는 데스크톱 환경에서 실행 가능하며 원격 API 연결 절차가 문서화됨. Windows 실기 확인은 사용자 환경에서 수행 필요.
+
+---
+
+## [Iter18-D] 27B Live 로딩 OOM 및 필수 순서 도구 누락 수정
+
+**Date**: 2026-07-27
+**Scope**: Qwen3.6-27B v6.1 FastAPI live 기동, `sequence_validation` 필수 호출, 실제 HTTP/SSE 검증.
+
+### 원인과 수정
+- Transformers v5 비동기 checkpoint 로딩이 4-bit 양자화 적용 중 약 45 GiB까지 일시적으로 GPU 메모리를 점유해 A40에서 OOM이 발생했다. `HF_DEACTIVATE_ASYNC_LOAD=1` 적용 시 동일 851개 weight 로딩이 약 7초에 완료되고 전체 live pipeline은 약 24.5 GiB에 안착했다.
+- `agent_pipeline.py`가 Transformers import 전에 해당 환경변수를 기본 설정하고, `deploy/docker-compose.yml`에도 명시했다.
+- 27B 모델이 순서 질문을 `training_realtime`로 올바르게 분류하면서도 `<tool_call>`을 방출하지 않는 경우가 확인됐다. 평가 호환 경로 `AgentPipeline.run()`은 유지하고, additive `run_streaming()`에서 명시적 순서 의도에만 `sequence_validation`을 1회 보강한다.
+- 모델이 이미 `sequence_validation`을 호출했으면 중복 호출하지 않는다. fallback 성공 시 MCP `message`를 사용자 응답으로 사용해 모델 prose와 실제 다음 구역의 불일치를 차단한다.
+- live 기본값 문서를 27B config/adapter 경로와 일치시켰다.
+
+### 검증
+- TDD: async-load 환경, fallback 호출, 기존 호출 중복 방지, 비순서 realtime 제외, MCP timeout 종료 경계를 RED → GREEN으로 확인.
+- 관련 Python 회귀: **75 passed**.
+- 실제 `/api/chat` SSE (`다음 순서가 어떻게 돼?`): `sequence_validation` 1회, `next_zone=A-2`, `tool_call_count=1`, `pose_estimation` 0회, HTTP 200.
+- MCP 실제 로그: `POST /sequence_validation/validate` HTTP 200.
+- compose 렌더링과 Python byte compilation 성공.
+
+### Status
+- **Status**: DONE. MCP `:8100`과 Qwen3.6-27B live API `:8120` 재기동 및 실제 surface QA 완료.
+
+---
+
+## [Iter18-E] 지식 질문이 진단 구조로 답변되던 결함 수정
+
+**Date**: 2026-07-27
+**Scope**: live 라우팅 회귀 수정, `fast` 경로 전용 지식 응답 프롬프트, 도구 없는 답변의 허위 판정 제거.
+
+### 증상
+`블라스팅이 뭐야` 질문에 정의는 없고 `[판정] 정상`, `[원인] 측정값 편차 또는 작업 조건 이탈이 확인되었습니다`,
+`[조치] 현재 상태를 유지하고 정기 점검을 계속하십시오` 같은 진단 문구만 반환됐다.
+
+### 원인 (3단계)
+1. **라우팅 회귀 (Iter18-D에서 유입)**: live runner가 모든 턴에 ambient sequence environment를 첨부하게 되면서,
+   `SemanticRouter.classify`의 `if environment and len(environment) > 0` 단축 경로가 항상 성립했다. 그 결과 모든 live 질문이
+   `training_realtime`으로 분류되어 `fast` 경로에 도달하지 못했다. 로그 증거: `Router: 블라스팅이 뭐야 → training_realtime`.
+2. **프롬프트 범위**: 5개 섹션 진단 구조가 지식 질문에도 강제됐다.
+3. **어댑터 포맷 편향**: v6.1 SFT가 전 샘플에 5개 섹션을 강제 학습시켜 프롬프트만으로는 억제되지 않았다.
+
+### 수정
+- `run_streaming()`이 instruction만으로 분류해 `force_route`로 전달한다. `run()`의 자체 분류 규칙은 평가 안정성을 위해 그대로 둔다.
+- `prompt.fast_system`을 신설하고 `run()`의 fast 분기에서만 `_build_messages(system_prompt=...)`로 주입한다.
+  agentic eval 30문항은 전부 `context_data`를 보유해 `fast`를 사용하지 않으므로(24 realtime / 6 review) 평가 영향은 없다.
+- `trainer/scripts/live_response_contract.py` 신설. `fast` 경로이고 도구 호출이 0건일 때만, 정규 5-섹션 스캐폴드를
+  `[답변]` + `[근거]`로 정규화한다. fast 분기는 environment를 넘기지 않고 도구도 쓰지 않으므로 그 경로의 판정·원인·조치는
+  구조적으로 근거가 없다. 순서가 다르거나 중복·인라인 표기는 원문을 보존하며, 진단 경로 응답은 전혀 건드리지 않는다.
+
+### 검증
+- TDD: 라우팅, fast 프롬프트, 정규화 계약 모두 RED → GREEN.
+- 관련 Python 회귀: **130 passed**. no-excuse 감사 위반 0건. 신규 모듈 55 LOC.
+- 실제 `/api/chat`:
+  - `블라스팅이 뭐야` → `[답변]` 정의 + `[근거] DOC-doc_0086-C0001, DOC-doc_0035-C0033`, tool_call_count 0, 판정·원인·조치 없음.
+  - `다음 순서가 어떻게 돼?` → `sequence_validation` 1회, `next_zone=A-2` (Iter18-D 동작 유지).
+
+### 남은 조치
+- 어댑터 포맷 편향 자체는 v7 SFT 과제로 남는다. v7이 동일 회귀 매트릭스를 통과한 뒤에야 정규화 계층을 제거한다.
+
+### Status
+- **Status**: DONE.
+
+---
