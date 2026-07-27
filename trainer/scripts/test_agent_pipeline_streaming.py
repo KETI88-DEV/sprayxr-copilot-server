@@ -66,6 +66,7 @@ class _RaisingModel:
 def test_stream_generate_terminates_and_reraises_when_generate_raises() -> None:
     """Given generate() raises, When consumed, Then it unblocks and re-raises (no hang)."""
     pipe = AgentPipeline.__new__(AgentPipeline)
+    pipe.router = agent_pipeline.SemanticRouter()
     pipe.tokenizer = _DummyTokenizer()
     pipe.model = _RaisingModel()
 
@@ -104,6 +105,7 @@ def _fake_run_success(**_kwargs: Any) -> dict[str, Any]:
 def test_run_streaming_success_emits_exact_event_contract() -> None:
     """Given a buffered run(), When streamed, Then exact status/tool_result/delta/complete order."""
     pipe = AgentPipeline.__new__(AgentPipeline)
+    pipe.router = agent_pipeline.SemanticRouter()
     pipe.run = _fake_run_success
 
     events = _collect(pipe.run_streaming(instruction="hi"))
@@ -132,6 +134,7 @@ def test_run_streaming_success_emits_exact_event_contract() -> None:
 def test_run_streaming_blank_instruction_rejected_without_invoking_run() -> None:
     """Given a blank instruction, When streamed, Then a non-retryable error and run() is never invoked."""
     pipe = AgentPipeline.__new__(AgentPipeline)
+    pipe.router = agent_pipeline.SemanticRouter()
     run_calls: list[dict[str, Any]] = []
 
     def _tracking_run(**kwargs: Any) -> dict[str, Any]:
@@ -158,6 +161,7 @@ def test_run_streaming_unexpected_error_is_generic_retryable_and_logged(
 ) -> None:
     """Given run() raises RuntimeError, When streamed, Then generic retryable error; detail only in logs."""
     pipe = AgentPipeline.__new__(AgentPipeline)
+    pipe.router = agent_pipeline.SemanticRouter()
     secret = "SECRET-INTERNAL-STACK-9f3c"
 
     def _raise_runtime(**_kwargs: Any) -> dict[str, Any]:
@@ -185,6 +189,7 @@ def test_run_streaming_valueerror_from_run_is_generic_retryable_and_logged(
 ) -> None:
     """Given nonblank run() raises an internal ValueError, When streamed, Then generic retryable error; no leak."""
     pipe = AgentPipeline.__new__(AgentPipeline)
+    pipe.router = agent_pipeline.SemanticRouter()
     secret = "secret config path"
 
     def _raise_value(**_kwargs: Any) -> dict[str, Any]:

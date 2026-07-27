@@ -10,15 +10,17 @@ import logging
 import os
 import re
 import sys
+import threading
 import uuid
 from collections.abc import AsyncIterator, Iterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 # vLLM requires 'spawn' multiprocessing when CUDA is already initialized
 # (e.g., by embedding models). Must be set before any vLLM import.
 os.environ.setdefault("VLLM_WORKER_MULTIPROC_METHOD", "spawn")
+os.environ.setdefault("HF_DEACTIVATE_ASYNC_LOAD", "1")
 
 import time
 from dataclasses import dataclass, field
@@ -27,6 +29,12 @@ import torch
 import yaml
 from peft import PeftModel
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+
+from trainer.scripts.live_response_contract import normalize_fast_knowledge_response
+from trainer.scripts.live_sequence_fallback import (
+    LiveSequenceRequest,
+    enforce_live_sequence_validation,
+)
 
 try:
     import vllm as _vllm_check  # noqa: F401
@@ -107,6 +115,12 @@ ROUTE_MAX_TOKENS: dict[str, int] = {
     "training_review": 1024,
     "fast": 256,
 }
+
+_PROGRESS_INTERVAL_SEC: Final[float] = 3.0
+
+# Acquired inside the worker thread, so async cancellation cannot free the slot
+# while an orphaned generation is still occupying the GPU.
+_GENERATION_SLOT: Final[threading.Semaphore] = threading.Semaphore(1)
 
 
 class SemanticRouter:
@@ -612,8 +626,11 @@ class AgentPipeline:
         environment: dict[str, Any] | None,
         rag_chunks: list[dict[str, Any]],
         session_context_summary: str,
+        *,
+        system_prompt: str | None = None,
     ) -> list[dict[str, str]]:
-        system_prompt = str(self.config.get("prompt", {}).get("system", ""))
+        if system_prompt is None:
+            system_prompt = str(self.config.get("prompt", {}).get("system", ""))
         context_template = str(
             self.config.get("prompt", {}).get(
                 "context_template",
@@ -697,7 +714,7 @@ class AgentPipeline:
         with torch.no_grad():
             outputs = self.model.generate(
                 **inputs,
-                max_new_tokens=int(gen_cfg.get("max_new_tokens", 768)),
+                max_new_tokens=min(int(gen_cfg.get("max_new_tokens", 768)), ROUTE_MAX_TOKENS["fast"]),
                 do_sample=bool(gen_cfg.get("do_sample", True)),
                 temperature=float(gen_cfg.get("temperature", 0.7)),
                 top_p=float(gen_cfg.get("top_p", 0.8)),
@@ -781,7 +798,10 @@ class AgentPipeline:
         worker thread, then re-emits the finished answer as fixed-width (24-char)
         compatibility chunks so callers can consume a uniform delta stream today.
         It does NOT yet reduce time-to-first-token; true token-level streaming
-        via _stream_generate is deferred to a later task.
+        via _stream_generate is deferred to a later task. While run() is in
+        flight, a ``generating`` status carrying elapsed seconds is emitted every
+        _PROGRESS_INTERVAL_SEC so callers can show progress, and _GENERATION_SLOT
+        keeps concurrent runs from competing for the GPU.
 
         On failure no partial events are emitted: a blank instruction is rejected
         up front as a single non-retryable error without invoking run(), and any
@@ -801,15 +821,32 @@ class AgentPipeline:
             }
             return
 
+        # Ambient context rides on every live turn, so passing it here would make
+        # classify() read tool intent from state; run() keeps its rule for evaluation.
+        live_route = self.router.classify(instruction, None)
+
+        def _guarded_run() -> dict[str, Any]:
+            with _GENERATION_SLOT:
+                return self.run(
+                    instruction=instruction,
+                    environment=environment,
+                    session_id=session_id,
+                    enable_thinking=enable_thinking,
+                    request_id=request_id,
+                    force_route=live_route,
+                )
+
+        run_task = asyncio.ensure_future(asyncio.to_thread(_guarded_run))
         try:
-            result = await asyncio.to_thread(
-                self.run,
-                instruction=instruction,
-                environment=environment,
-                session_id=session_id,
-                enable_thinking=enable_thinking,
-                request_id=request_id,
-            )
+            while True:
+                finished, _pending = await asyncio.wait({run_task}, timeout=_PROGRESS_INTERVAL_SEC)
+                if finished:
+                    break
+                yield "status", {
+                    "stage": "generating",
+                    "elapsed_sec": int(time.monotonic() - t0),
+                }
+            result = run_task.result()
         except Exception:
             logger.exception("run_streaming: unexpected failure in run()")
             yield "error", {
@@ -820,6 +857,27 @@ class AgentPipeline:
             }
             return
 
+        logger.info(
+            "run_streaming: run() finished session=%s route=%s elapsed_ms=%d",
+            session_id,
+            result.get("route", ""),
+            int((time.monotonic() - t0) * 1000),
+        )
+
+        sequence_result = await enforce_live_sequence_validation(
+            LiveSequenceRequest(
+                instruction=instruction,
+                route=str(result.get("route", "")),
+                tool_calls=list(result.get("tool_calls", [])),
+                response=str(result.get("response", "")),
+                environment=environment,
+                session_id=session_id,
+            ),
+            getattr(self, "tool_adapter", None),
+        )
+        tool_calls = sequence_result.tool_calls
+        text = sequence_result.response
+
         yield "status", {"stage": "rag", "chunks": len(result.get("rag_chunks", []))}
 
         if result.get("deadline_hit"):
@@ -828,14 +886,25 @@ class AgentPipeline:
                 "elapsed_sec": int((time.monotonic() - t0)),
             }
 
-        for call in result.get("tool_calls", []):
+        for call in tool_calls:
             yield "tool_result", {
                 "name": call.get("name", ""),
                 "arguments": call.get("arguments", {}) or {},
                 "result": call.get("result", {}) or {},
             }
 
-        text = str(result.get("response", ""))
+        if sequence_result.error_retryable is not None:
+            yield "error", {
+                "message": "sequence validation failed",
+                "retryable": sequence_result.error_retryable,
+                "ttft_ms": None,
+                "total_ms": int((time.monotonic() - t0) * 1000),
+            }
+            return
+
+        if str(result.get("route", "")) == "fast" and not tool_calls:
+            text = normalize_fast_knowledge_response(text)
+
         for index in range(0, len(text), 24):
             if ttft_ms is None:
                 ttft_ms = int((time.monotonic() - t0) * 1000)
@@ -845,7 +914,7 @@ class AgentPipeline:
             "ttft_ms": ttft_ms,
             "synthesis_ms": int(result.get("synthesis_ms", 0)),
             "total_ms": int((time.monotonic() - t0) * 1000),
-            "tool_call_count": len(result.get("tool_calls", [])),
+            "tool_call_count": len(tool_calls),
             "rag_chunk_count": len(result.get("rag_chunks", [])),
             "deadline_hit": bool(result.get("deadline_hit", False)),
         }
@@ -912,6 +981,7 @@ class AgentPipeline:
                 environment=None,
                 rag_chunks=evidence,
                 session_context_summary=summary,
+                system_prompt=str(self.config.get("prompt", {}).get("fast_system", "")).strip() or None,
             )
             raw_response = self._generate_direct(messages, enable_thinking=False)
             final_no_think, thinking = self._strip_think_blocks(raw_response)
