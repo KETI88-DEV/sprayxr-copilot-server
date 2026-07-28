@@ -10,9 +10,14 @@ const PHASE_LABEL: Record<Phase, string> = {
 
 const PHASE_ORDER: readonly Phase[] = ['start', 'runtime', 'session_end']
 
+export type SimLifecycle = 'idle' | 'started'
+
 type Props = {
   readonly events: readonly MonitorEvent[]
-  readonly onSendDummy: () => void
+  readonly lifecycle: SimLifecycle
+  readonly onStart: () => void
+  readonly onRuntime: () => void
+  readonly onEnd: () => void
 }
 
 /**
@@ -21,7 +26,13 @@ type Props = {
  * The component takes events as props instead of subscribing itself, so the
  * rendering stays deterministic under test and the stream lives in one hook.
  */
-export function SimulatorMonitorPanel({ events, onSendDummy }: Props): ReactElement {
+export function SimulatorMonitorPanel({
+  events,
+  lifecycle,
+  onStart,
+  onRuntime,
+  onEnd,
+}: Props): ReactElement {
   const bySession = useMemo(() => {
     const grouped = new Map<string, MonitorEvent[]>()
     for (const event of events) {
@@ -36,9 +47,32 @@ export function SimulatorMonitorPanel({ events, onSendDummy }: Props): ReactElem
     <section className="sim-monitor" aria-label="시뮬레이터 인터페이스 모니터">
       <div className="sim-monitor__bar">
         <h3 className="sim-monitor__title">시뮬레이터 인터페이스 모니터</h3>
-        <button type="button" className="sim-monitor__send" onClick={onSendDummy}>
-          더미 세션 송신
-        </button>
+        <div className="sim-monitor__actions">
+          <button
+            type="button"
+            className="sim-monitor__send"
+            onClick={onStart}
+            disabled={lifecycle !== 'idle'}
+          >
+            세션 시작
+          </button>
+          <button
+            type="button"
+            className="sim-monitor__send"
+            onClick={onRuntime}
+            disabled={lifecycle !== 'started'}
+          >
+            런타임
+          </button>
+          <button
+            type="button"
+            className="sim-monitor__send"
+            onClick={onEnd}
+            disabled={lifecycle !== 'started'}
+          >
+            세션 끝
+          </button>
+        </div>
       </div>
 
       {bySession.length === 0 && <p className="sim-monitor__empty">아직 수신된 I/O가 없습니다.</p>}

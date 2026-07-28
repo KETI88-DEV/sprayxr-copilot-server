@@ -7,7 +7,14 @@ import { TitleBar } from './components/TitleBar'
 import { ToolLogPanel, type LiveProgress, type ToolLogEntry } from './components/ToolLogPanel'
 import type { SequenceSnapshot, SequenceUpdate } from './contracts'
 import { applySequenceUpdate } from './sequenceState'
-import { sendSessionStart } from './simMonitorClient'
+import {
+  fetchSimSession,
+  sendRuntimeEvent,
+  sendSessionEnd,
+  sendSessionStart,
+} from './simMonitorClient'
+import type { SimSession } from './simContracts'
+import type { SimLifecycle } from './components/SimulatorMonitorPanel'
 import { describeStage } from './stageLabels'
 import type { TurnMetrics } from './telemetry'
 import { useMonitorStream } from './useMonitorStream'
@@ -60,6 +67,10 @@ export function App(): ReactElement {
   const [sessionId, setSessionId] = useState<string>(() => crypto.randomUUID())
   const [turnStartedAt, setTurnStartedAt] = useState<number | null>(null)
   const [elapsedSec, setElapsedSec] = useState<number>(0)
+  const [simLifecycle, setSimLifecycle] = useState<SimLifecycle>('idle')
+  const [simSessionId, setSimSessionId] = useState<string | null>(null)
+  const [simSession, setSimSession] = useState<SimSession | null>(null)
+  const simRuntimeCountRef = useRef<number>(0)
   const abortControllerRef = useRef<AbortController | null>(null)
   /** Milestone stages already logged for the current turn, so nothing repeats. */
   const loggedStagesRef = useRef<Set<string>>(new Set())
@@ -110,6 +121,42 @@ export function App(): ReactElement {
   useEffect(() => {
     void loadOverview()
   }, [loadOverview])
+
+  // 서버가 세션 상태의 단일 소유자다. 모니터 이벤트는 재조회 신호로만 쓴다.
+  useEffect(() => {
+    if (monitorEvents.length === 0) {
+      return
+    }
+
+    let cancelled = false
+    void (async () => {
+      const [snapshotResult, sessionResult] = await Promise.allSettled([
+        fetchSequenceSnapshot(LEVEL_ID),
+        fetchSimSession(),
+      ])
+      if (cancelled) {
+        return
+      }
+      if (snapshotResult.status === 'fulfilled') {
+        setSnapshot(snapshotResult.value)
+      }
+      if (sessionResult.status === 'fulfilled') {
+        setSimSession(sessionResult.value)
+      }
+      if (snapshotResult.status === 'rejected' || sessionResult.status === 'rejected') {
+        appendLog({
+          kind: 'error',
+          at: Date.now(),
+          message: '시뮬레이터 상태 갱신 실패',
+          retryable: true,
+        })
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [monitorEvents.length, appendLog])
 
   const onSubmit = useCallback(
     async (message: string): Promise<void> => {
@@ -261,9 +308,35 @@ export function App(): ReactElement {
     setLogOpen((previous) => !previous)
   }, [])
 
-  const onSendDummySession = useCallback(() => {
-    void sendSessionStart(crypto.randomUUID(), snapshot.level_id)
+  const onSimStart = useCallback(() => {
+    const id = crypto.randomUUID()
+    simRuntimeCountRef.current = 0
+    setSimSessionId(id)
+    setSimLifecycle('started')
+    void sendSessionStart(id, snapshot.level_id)
   }, [snapshot.level_id])
+
+  const onSimRuntime = useCallback(() => {
+    if (simSessionId === null) {
+      return
+    }
+    const index = snapshot.zones.findIndex((zone) => zone.zone_id === snapshot.current_zone_id)
+    const target = snapshot.zones[index + 1] ?? snapshot.zones[index]
+    if (target === undefined) {
+      return
+    }
+    const count = simRuntimeCountRef.current
+    simRuntimeCountRef.current = count + 1
+    void sendRuntimeEvent(simSessionId, `ev-${count}`, target.zone_id, count === 0)
+  }, [simSessionId, snapshot])
+
+  const onSimEnd = useCallback(() => {
+    if (simSessionId === null) {
+      return
+    }
+    setSimLifecycle('idle')
+    void sendSessionEnd(simSessionId)
+  }, [simSessionId])
 
   const stageLabel = live === null ? null : describeStage(live.stage).label
 
@@ -290,7 +363,7 @@ export function App(): ReactElement {
           elapsedSec={busy ? elapsedSec : null}
           metrics={metrics}
           snapshot={snapshot}
-          simSession={null}
+          simSession={simSession}
           onModeChange={setMode}
           onReconnect={onReconnect}
         />
@@ -304,7 +377,13 @@ export function App(): ReactElement {
           onReset={onReset}
         />
       </div>
-      <SimulatorMonitorPanel events={monitorEvents} onSendDummy={onSendDummySession} />
+      <SimulatorMonitorPanel
+        events={monitorEvents}
+        lifecycle={simLifecycle}
+        onStart={onSimStart}
+        onRuntime={onSimRuntime}
+        onEnd={onSimEnd}
+      />
       <ToolLogPanel entries={logEntries} live={live} open={logOpen} onToggle={onToggleLog} />
     </div>
   )

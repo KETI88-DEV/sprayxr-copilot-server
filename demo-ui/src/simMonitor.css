@@ -155,3 +155,13 @@
   font-size: 0.6875rem;
   opacity: 0.7;
 }
+
+.sim-monitor__actions {
+  display: flex;
+  gap: 0.375rem;
+}
+
+.sim-monitor__send:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
