@@ -1,11 +1,16 @@
-import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import { ApiError, fetchHealth, fetchSequenceSnapshot, streamChat } from './api'
-import { ChatPanel, type ChatMessage } from './components/ChatPanel'
-import { SequencePanel } from './components/SequencePanel'
-import { StatusBar } from './components/StatusBar'
-import { ToolLogPanel, type ToolLogEntry } from './components/ToolLogPanel'
+import { ChatPanel, type ChatMessage, type ChatProgress } from './components/ChatPanel'
+import { MonitorPanel, type RunState } from './components/MonitorPanel'
+import { SimulatorMonitorPanel } from './components/SimulatorMonitorPanel'
+import { TitleBar } from './components/TitleBar'
+import { ToolLogPanel, type LiveProgress, type ToolLogEntry } from './components/ToolLogPanel'
 import type { SequenceSnapshot, SequenceUpdate } from './contracts'
 import { applySequenceUpdate } from './sequenceState'
+import { sendSessionStart } from './simMonitorClient'
+import { describeStage } from './stageLabels'
+import type { TurnMetrics } from './telemetry'
+import { useMonitorStream } from './useMonitorStream'
 import './styles.css'
 
 const LEVEL_ID = 'SP0035-L01'
@@ -45,12 +50,40 @@ export function App(): ReactElement {
   const [snapshot, setSnapshot] = useState<SequenceSnapshot>(INITIAL_SNAPSHOT)
   const [messages, setMessages] = useState<readonly ChatMessage[]>([])
   const [busy, setBusy] = useState<boolean>(false)
-  const [stage, setStage] = useState<string>('idle')
+  const [runState, setRunState] = useState<RunState>('idle')
+  const [live, setLive] = useState<LiveProgress | null>(null)
+  const [metrics, setMetrics] = useState<TurnMetrics | null>(null)
   const [logEntries, setLogEntries] = useState<readonly ToolLogEntry[]>([])
+  const [logOpen, setLogOpen] = useState<boolean>(true)
   const [online, setOnline] = useState<boolean>(false)
   const [mode, setMode] = useState<'demo' | 'live'>('demo')
   const [sessionId, setSessionId] = useState<string>(() => crypto.randomUUID())
+  const [turnStartedAt, setTurnStartedAt] = useState<number | null>(null)
+  const [elapsedSec, setElapsedSec] = useState<number>(0)
   const abortControllerRef = useRef<AbortController | null>(null)
+  /** Milestone stages already logged for the current turn, so nothing repeats. */
+  const loggedStagesRef = useRef<Set<string>>(new Set())
+  const monitorEvents = useMonitorStream()
+
+  // A queued request can wait a minute before its first token; a locally ticked
+  // counter is what tells the operator the console is alive between backend
+  // progress events.
+  useEffect(() => {
+    if (!busy || turnStartedAt === null) {
+      return
+    }
+
+    setElapsedSec(Math.max(0, Math.round((Date.now() - turnStartedAt) / 1000)))
+    const timer = window.setInterval(() => {
+      setElapsedSec(Math.max(0, Math.round((Date.now() - turnStartedAt) / 1000)))
+    }, 1000)
+
+    return () => window.clearInterval(timer)
+  }, [busy, turnStartedAt])
+
+  const appendLog = useCallback((entry: ToolLogEntry): void => {
+    setLogEntries((previous) => [...previous, entry])
+  }, [])
 
   const loadOverview = useCallback(async (): Promise<void> => {
     const [healthResult, snapshotResult] = await Promise.allSettled([
@@ -58,20 +91,21 @@ export function App(): ReactElement {
       fetchSequenceSnapshot(LEVEL_ID),
     ])
 
-    if (healthResult.status === 'fulfilled') {
-      setOnline(true)
-    } else {
-      setOnline(false)
-    }
+    setOnline(healthResult.status === 'fulfilled')
 
     if (snapshotResult.status === 'fulfilled') {
       setSnapshot(snapshotResult.value)
-    } else if (snapshotResult.reason instanceof Error) {
-      setLogEntries((previous) => [...previous, { kind: 'error', message: snapshotResult.reason.message }])
-    } else {
-      setLogEntries((previous) => [...previous, { kind: 'error', message: '스냅샷 불러오기 실패' }])
+      return
     }
-  }, [])
+
+    const reason = snapshotResult.reason
+    appendLog({
+      kind: 'error',
+      at: Date.now(),
+      message: reason instanceof Error ? reason.message : '스냅샷 불러오기 실패',
+      retryable: true,
+    })
+  }, [appendLog])
 
   useEffect(() => {
     void loadOverview()
@@ -85,7 +119,13 @@ export function App(): ReactElement {
         { role: 'user', text: message },
         { role: 'assistant', text: '' },
       ])
+      loggedStagesRef.current = new Set()
       setBusy(true)
+      setRunState('running')
+      setLive(null)
+      setMetrics(null)
+      setElapsedSec(0)
+      setTurnStartedAt(Date.now())
 
       const controller = new AbortController()
       abortControllerRef.current = controller
@@ -100,31 +140,32 @@ export function App(): ReactElement {
               setSessionId(event.data.session_id)
               setMode(event.data.mode)
               break
-            case 'status':
-              setStage(event.data.stage)
-              setLogEntries((previous) => [
-                ...previous,
-                {
-                  kind: 'status',
-                  stage: event.data.stage,
-                  ...(event.data.chunks === undefined ? {} : { chunks: event.data.chunks }),
-                  ...(event.data.elapsed_sec === undefined ? {} : { elapsedSec: event.data.elapsed_sec }),
-                },
-              ])
+            case 'status': {
+              const stage = event.data.stage
+              const chunks = event.data.chunks ?? null
+              const elapsed = event.data.elapsed_sec ?? null
+
+              // Repeating progress only mutates the single live row.
+              setLive({ stage, chunks, elapsedSec: elapsed })
+
+              const description = describeStage(stage)
+              if (description.kind === 'milestone' && !loggedStagesRef.current.has(stage)) {
+                loggedStagesRef.current.add(stage)
+                appendLog({ kind: 'stage', at: Date.now(), stage, chunks, elapsedSec: elapsed })
+              }
               break
+            }
             case 'message_delta':
               setMessages((previous) => updateAssistantMessage(previous, nextAssistantIndex, event.data.text))
               break
             case 'tool_result':
-              setLogEntries((previous) => [
-                ...previous,
-                {
-                  kind: 'tool_result',
-                  name: event.data.name,
-                  arguments: event.data.arguments,
-                  result: event.data.result,
-                },
-              ])
+              appendLog({
+                kind: 'tool_result',
+                at: Date.now(),
+                name: event.data.name,
+                arguments: event.data.arguments,
+                result: event.data.result,
+              })
               break
             case 'sequence_update': {
               const nextUpdate: SequenceUpdate = event.data
@@ -138,11 +179,31 @@ export function App(): ReactElement {
               }))
               break
             }
-            case 'complete':
+            case 'complete': {
+              const turnMetrics: TurnMetrics = {
+                ttftMs: event.data.ttft_ms ?? null,
+                totalMs: event.data.total_ms ?? null,
+                synthesisMs: event.data.synthesis_ms ?? null,
+                toolCallCount: event.data.tool_call_count,
+                ragChunkCount: event.data.rag_chunk_count,
+                deadlineHit: event.data.deadline_hit ?? false,
+              }
+              setMetrics(turnMetrics)
+              appendLog({ kind: 'complete', at: Date.now(), metrics: turnMetrics })
+              setLive(null)
+              setRunState('done')
               setBusy(false)
               break
+            }
             case 'error':
-              setLogEntries((previous) => [...previous, { kind: 'error', message: event.data.message }])
+              appendLog({
+                kind: 'error',
+                at: Date.now(),
+                message: event.data.message,
+                retryable: event.data.retryable,
+              })
+              setLive(null)
+              setRunState('error')
               setBusy(false)
               break
             default: {
@@ -153,17 +214,26 @@ export function App(): ReactElement {
         }
       } catch (error: unknown) {
         if (controller.signal.aborted) {
-          setBusy(false)
+          setRunState('idle')
           return
         }
-        const messageText = error instanceof ApiError ? error.message : getStreamErrorMessage(error)
-        setLogEntries((previous) => [...previous, { kind: 'error', message: messageText }])
+        appendLog({
+          kind: 'error',
+          at: Date.now(),
+          message: error instanceof ApiError ? error.message : getStreamErrorMessage(error),
+          retryable: true,
+        })
+        setRunState('error')
       } finally {
         abortControllerRef.current = null
         setBusy(false)
+        setLive(null)
+        // A stream that ends without a terminal event must not leave the
+        // console claiming it is still running.
+        setRunState((previous) => (previous === 'running' ? 'idle' : previous))
       }
     },
-    [messages.length, mode, sessionId, snapshot.level_id],
+    [appendLog, messages.length, mode, sessionId, snapshot.level_id],
   )
 
   const onStop = useCallback(() => {
@@ -172,9 +242,14 @@ export function App(): ReactElement {
 
   const onReset = useCallback(() => {
     abortControllerRef.current?.abort()
+    loggedStagesRef.current = new Set()
     setMessages([])
     setLogEntries([])
-    setStage('idle')
+    setLive(null)
+    setMetrics(null)
+    setRunState('idle')
+    setTurnStartedAt(null)
+    setElapsedSec(0)
     setSessionId(crypto.randomUUID())
   }, [])
 
@@ -182,19 +257,54 @@ export function App(): ReactElement {
     void loadOverview()
   }, [loadOverview])
 
+  const onToggleLog = useCallback(() => {
+    setLogOpen((previous) => !previous)
+  }, [])
+
+  const onSendDummySession = useCallback(() => {
+    void sendSessionStart(crypto.randomUUID(), snapshot.level_id)
+  }, [snapshot.level_id])
+
+  const stageLabel = live === null ? null : describeStage(live.stage).label
+
+  const chatProgress = useMemo<ChatProgress | null>(
+    () => (busy ? { label: stageLabel ?? '요청 전송 중', elapsedSec } : null),
+    [busy, elapsedSec, stageLabel],
+  )
+
   return (
     <div className="app-shell">
-      <StatusBar
-        online={online}
-        levelId={snapshot.level_id}
-        mode={mode}
-        stage={stage}
-        onModeChange={setMode}
+      <TitleBar
+        logOpen={logOpen}
+        busy={busy}
+        onToggleLog={onToggleLog}
+        onReset={onReset}
         onReconnect={onReconnect}
       />
-      <SequencePanel snapshot={snapshot} />
-      <ChatPanel messages={messages} busy={busy} streaming={busy} onSubmit={onSubmit} onStop={onStop} onReset={onReset} />
-      <ToolLogPanel entries={logEntries} />
+      <div className="workspace">
+        <MonitorPanel
+          online={online}
+          mode={mode}
+          runState={runState}
+          stageLabel={stageLabel}
+          elapsedSec={busy ? elapsedSec : null}
+          metrics={metrics}
+          snapshot={snapshot}
+          onModeChange={setMode}
+          onReconnect={onReconnect}
+        />
+        <ChatPanel
+          messages={messages}
+          busy={busy}
+          streaming={busy}
+          progress={chatProgress}
+          onSubmit={onSubmit}
+          onStop={onStop}
+          onReset={onReset}
+        />
+      </div>
+      <SimulatorMonitorPanel events={monitorEvents} onSendDummy={onSendDummySession} />
+      <ToolLogPanel entries={logEntries} live={live} open={logOpen} onToggle={onToggleLog} />
     </div>
   )
 }

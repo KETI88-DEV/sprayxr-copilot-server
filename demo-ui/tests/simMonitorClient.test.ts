@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { sendDummySession, streamMonitor } from '../src/simMonitorClient'
+import {
+  fetchSimSession,
+  sendRuntimeEvent,
+  sendSessionEnd,
+  sendSessionStart,
+  streamMonitor,
+} from '../src/simMonitorClient'
 import type { MonitorEvent } from '../src/simContracts'
 
 afterEach(() => {
@@ -19,28 +25,98 @@ function sseResponse(frames: readonly string[]): Response {
   return new Response(body, { status: 200, headers: { 'Content-Type': 'text/event-stream' } })
 }
 
-describe('sendDummySession', () => {
-  it('issues start, one event, and complete POSTs', async () => {
-    const calls: string[] = []
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (url: string) => {
-        calls.push(url)
-        return new Response(JSON.stringify({ ok: true }), { status: 200 })
-      }),
-    )
+describe('3단계 송신기', () => {
+  it('세션 시작은 start 엔드포인트에 레벨과 세션 ID를 보낸다', async () => {
+    const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
 
-    await sendDummySession('s1')
+    await sendSessionStart('s-1', 'SP0035-L01')
 
-    expect(calls.some((url) => url.endsWith('/api/sim/sessions/start'))).toBe(true)
-    expect(calls.some((url) => url.includes('/api/sim/sessions/s1/events'))).toBe(true)
-    expect(calls.some((url) => url.endsWith('/api/sim/sessions/s1/complete'))).toBe(true)
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
+    expect(url).toContain('/api/sim/sessions/start')
+    expect(JSON.parse(String(init.body))).toMatchObject({
+      session_id: 's-1',
+      level_id: 'SP0035-L01',
+    })
   })
 
-  it('raises when the interface rejects a payload', async () => {
+  it('런타임은 zone_id를 싣고 이상 여부에 따라 파라미터를 바꾼다', async () => {
+    const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await sendRuntimeEvent('s-1', 'ev-1', 'A-2', true)
+
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
+    expect(url).toContain('/api/sim/sessions/s-1/events')
+    const body = JSON.parse(String(init.body)) as Record<string, unknown>
+    expect(body).toMatchObject({ event_id: 'ev-1', zone_id: 'A-2' })
+    expect(body.telemetry).toMatchObject({ gun_metrics: { standoff_mm: 350 } })
+  })
+
+  it('정상 런타임은 대역 안 파라미터를 보낸다', async () => {
+    const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await sendRuntimeEvent('s-1', 'ev-2', 'A-3', false)
+
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
+    const body = JSON.parse(String(init.body)) as Record<string, unknown>
+    expect(body.telemetry).toMatchObject({ gun_metrics: { standoff_mm: 300 } })
+  })
+
+  it('세션 끝은 complete 엔드포인트를 호출한다', async () => {
+    const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await sendSessionEnd('s-1')
+
+    const [url] = fetchMock.mock.calls[0] as unknown as [string]
+    expect(url).toContain('/api/sim/sessions/s-1/complete')
+  })
+
+  it('인터페이스가 거부하면 예외를 던진다', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 422 })))
 
-    await expect(sendDummySession('s1')).rejects.toThrow('sim request failed: 422')
+    await expect(sendSessionStart('s-1', 'SP0035-L01')).rejects.toThrow('sim request failed: 422')
+  })
+})
+
+describe('fetchSimSession', () => {
+  it('session이 null이면 null을 돌려준다', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(JSON.stringify({ session: null }), { status: 200 })),
+    )
+
+    await expect(fetchSimSession()).resolves.toBeNull()
+  })
+
+  it('세션이 있으면 검증된 값을 돌려준다', async () => {
+    const session = {
+      session_id: 's-1',
+      level_id: 'SP0035-L01',
+      phase: 'runtime',
+      recommended_flow: ['A-1', 'A-2', 'A-3'],
+      current_zone_id: 'A-2',
+      completed_zone_ids: ['A-1'],
+      last_event_id: 'ev-1',
+      anomaly_count: 1,
+      unresolved_zone_id: null,
+      updated_at: 't',
+    }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(JSON.stringify({ session }), { status: 200 })),
+    )
+
+    const parsed = await fetchSimSession()
+    expect(parsed?.current_zone_id).toBe('A-2')
+  })
+
+  it('실패 응답이면 예외를 던진다', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 500 })))
+
+    await expect(fetchSimSession()).rejects.toThrow('sim session request failed: 500')
   })
 })
 

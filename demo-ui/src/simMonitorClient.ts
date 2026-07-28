@@ -1,5 +1,13 @@
 import { API_BASE_URL, createSseParser } from './api'
-import { monitorEventSchema, type MonitorEvent } from './simContracts'
+import {
+  monitorEventSchema,
+  simSessionResponseSchema,
+  type MonitorEvent,
+  type SimSession,
+} from './simContracts'
+
+const OUT_OF_BAND = { speed_m_per_s: 0.8, standoff_mm: 350.0, angle_deg: 55.0 }
+const IN_BAND = { speed_m_per_s: 0.8, standoff_mm: 300.0, angle_deg: 72.0 }
 
 async function postJson(path: string, body: unknown): Promise<void> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
@@ -51,19 +59,39 @@ export async function* streamMonitor(cursor = 0, signal?: AbortSignal): AsyncGen
   }
 }
 
-export async function sendDummySession(sessionId: string): Promise<void> {
+export async function sendSessionStart(sessionId: string, levelId: string): Promise<void> {
   await postJson('/api/sim/sessions/start', {
     session_id: sessionId,
-    level_id: 'SP0035-L01',
+    level_id: levelId,
     worker: { trainee_id: 't-dummy', skill_level: 'beginner', handedness: 'right' },
     spec: { nominal_um: 100.0 },
   })
+}
 
+export async function sendRuntimeEvent(
+  sessionId: string,
+  eventId: string,
+  zoneId: string,
+  anomaly: boolean,
+): Promise<void> {
   await postJson(`/api/sim/sessions/${encodeURIComponent(sessionId)}/events`, {
-    event_id: 'ev-0',
-    telemetry: { gun_metrics: { speed_m_per_s: 0.8, standoff_mm: 350.0, angle_deg: 55.0 } },
+    event_id: eventId,
+    zone_id: zoneId,
+    telemetry: { gun_metrics: anomaly ? OUT_OF_BAND : IN_BAND },
   })
+}
 
+export async function fetchSimSession(signal?: AbortSignal): Promise<SimSession | null> {
+  const init: RequestInit = signal === undefined ? {} : { signal }
+  const response = await fetch(`${API_BASE_URL}/api/sim/session`, init)
+  if (!response.ok) {
+    throw new Error(`sim session request failed: ${response.status}`)
+  }
+  const body: unknown = await response.json()
+  return simSessionResponseSchema.parse(body).session
+}
+
+export async function sendSessionEnd(sessionId: string): Promise<void> {
   await postJson(`/api/sim/sessions/${encodeURIComponent(sessionId)}/complete`, {
     session_id: sessionId,
     scenario_id: 'dummy',

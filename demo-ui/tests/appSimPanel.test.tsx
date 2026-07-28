@@ -22,7 +22,7 @@ vi.mock('../src/simMonitorClient', () => ({
       payload: { flow_source: 'rule' },
     }
   },
-  sendDummySession: vi.fn(),
+  sendSessionStart: vi.fn(),
 }))
 
 afterEach(() => {
