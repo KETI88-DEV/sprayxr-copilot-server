@@ -19,13 +19,19 @@ from trainer.demo_api.contracts import ChatRequest
 from trainer.demo_api.monitor import MonitorRecorder
 from trainer.demo_api.monitor_api import create_monitor_router
 from trainer.demo_api.sequence import default_snapshot
+from trainer.demo_api.sim_session import SimSessionStore
 from trainer.demo_api.simulator import create_simulator_router
+from trainer.demo_api.zone_resolver import McpZoneResolver
 
 logger = logging.getLogger(__name__)
 _LEVEL_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9\-_.]{0,63}$")
 
 
 def create_app(chat_service: ChatService | None = None) -> FastAPI:
+    recorder = MonitorRecorder()
+    store = SimSessionStore()
+    resolver = McpZoneResolver(os.environ.get("MCP_BASE_URL", "http://localhost:8100"))
+
     if chat_service is not None:
         service = chat_service
     else:
@@ -85,9 +91,9 @@ def create_app(chat_service: ChatService | None = None) -> FastAPI:
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
-    recorder = MonitorRecorder()
     app.state.monitor_recorder = recorder
-    app.include_router(create_simulator_router(recorder))
+    app.state.sim_session_store = store
+    app.include_router(create_simulator_router(recorder, store, resolver))
     app.include_router(create_monitor_router(recorder))
 
     return app
@@ -108,7 +114,10 @@ def main() -> None:
     if live_mode:
         os.environ["DEMO_LIVE_MODE"] = "on"
 
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
     logger.info("Starting demo API on %s:%s", host, port)
     uvicorn.run("trainer.demo_api.app:app", host=host, port=port, reload=reload_mode)
 

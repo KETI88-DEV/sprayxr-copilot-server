@@ -4,13 +4,38 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from trainer.demo_api.monitor import MonitorRecorder
+from trainer.demo_api.sim_session import SimSessionStore
 from trainer.demo_api.simulator import create_simulator_router
+from trainer.demo_api.zone_resolver import NullZoneResolver
+
+
+class _FixedResolver:
+    def __init__(self, zone_id: str | None) -> None:
+        self._zone_id = zone_id
+
+    async def resolve(self, coordinates: list[float]) -> str | None:
+        _ = coordinates
+        return self._zone_id
+
+
+def _store_client(
+    store: SimSessionStore, resolver: object = None
+) -> TestClient:
+    app = FastAPI()
+    app.include_router(
+        create_simulator_router(
+            MonitorRecorder(), store, resolver if resolver is not None else NullZoneResolver()
+        )
+    )
+    return TestClient(app)
 
 
 def _client() -> tuple[TestClient, MonitorRecorder]:
     recorder = MonitorRecorder()
     app = FastAPI()
-    app.include_router(create_simulator_router(recorder))
+    app.include_router(
+        create_simulator_router(recorder, SimSessionStore(), NullZoneResolver())
+    )
     return TestClient(app), recorder
 
 
@@ -148,3 +173,122 @@ def test_full_session_records_two_events_per_call() -> None:
         ("session_end", "output"),
     ]
     assert [event.seq for event in snapshot.events] == [1, 2, 3, 4, 5, 6]
+
+
+START_BODY: dict[str, object] = {
+    "session_id": "s-1",
+    "level_id": "SP0035-L01",
+    "worker": {"trainee_id": "t-1", "skill_level": "beginner", "handedness": "right"},
+    "spec": {"nominal_um": 100.0},
+}
+
+
+def test_start_populates_store_with_flow() -> None:
+    store = SimSessionStore()
+    response = _store_client(store).post("/api/sim/sessions/start", json=START_BODY)
+    assert response.status_code == 200
+    state = store.current()
+    assert state is not None
+    assert state.recommended_flow == ("A-1", "A-2", "A-3")
+    assert state.current_zone_id == "A-1"
+    assert state.phase == "start"
+
+
+def test_runtime_zone_id_moves_current_position() -> None:
+    store = SimSessionStore()
+    client = _store_client(store)
+    _ = client.post("/api/sim/sessions/start", json=START_BODY)
+    response = client.post(
+        "/api/sim/sessions/s-1/events", json={"event_id": "ev-0", "zone_id": "A-2"}
+    )
+    assert response.status_code == 200
+    state = store.current()
+    assert state is not None
+    assert state.current_zone_id == "A-2"
+    assert state.completed_zone_ids == ("A-1",)
+
+
+def test_runtime_falls_back_to_resolver_when_zone_id_absent() -> None:
+    store = SimSessionStore()
+    client = _store_client(store, _FixedResolver("A-3"))
+    _ = client.post("/api/sim/sessions/start", json=START_BODY)
+    _ = client.post(
+        "/api/sim/sessions/s-1/events",
+        json={"event_id": "ev-0", "telemetry": {"coordinates": [1.0, 2.0, 3.0]}},
+    )
+    state = store.current()
+    assert state is not None
+    assert state.current_zone_id == "A-3"
+
+
+def test_runtime_records_unresolved_zone_outside_flow() -> None:
+    store = SimSessionStore()
+    client = _store_client(store, _FixedResolver("B-3"))
+    _ = client.post("/api/sim/sessions/start", json=START_BODY)
+    _ = client.post(
+        "/api/sim/sessions/s-1/events",
+        json={"event_id": "ev-0", "telemetry": {"coordinates": [1.0, 2.0, 3.0]}},
+    )
+    state = store.current()
+    assert state is not None
+    assert state.current_zone_id == "A-1"
+    assert state.unresolved_zone_id == "B-3"
+
+
+def test_runtime_anomaly_output_increments_counter() -> None:
+    store = SimSessionStore()
+    client = _store_client(store)
+    _ = client.post("/api/sim/sessions/start", json=START_BODY)
+    _ = client.post(
+        "/api/sim/sessions/s-1/events",
+        json={
+            "event_id": "ev-0",
+            "telemetry": {
+                "gun_metrics": {"speed_m_per_s": 0.8, "standoff_mm": 350.0, "angle_deg": 55.0}
+            },
+        },
+    )
+    state = store.current()
+    assert state is not None
+    assert state.anomaly_count == 1
+
+
+def test_complete_marks_session_end_in_store() -> None:
+    store = SimSessionStore()
+    client = _store_client(store)
+    _ = client.post("/api/sim/sessions/start", json=START_BODY)
+    body = {**_complete_body(), "session_id": "s-1"}
+    response = client.post("/api/sim/sessions/s-1/complete", json=body)
+    assert response.status_code == 200
+    state = store.current()
+    assert state is not None
+    assert state.phase == "session_end"
+
+
+def test_rejected_payload_leaves_store_untouched() -> None:
+    store = SimSessionStore()
+    client = _store_client(store)
+    _ = client.post("/api/sim/sessions/start", json=START_BODY)
+    response = client.post("/api/sim/sessions/s-1/events", json={"zone_id": "A-2"})
+    assert response.status_code == 422
+    state = store.current()
+    assert state is not None
+    assert state.phase == "start"
+    assert state.current_zone_id == "A-1"
+
+
+def test_session_endpoint_returns_null_before_any_start() -> None:
+    response = _store_client(SimSessionStore()).get("/api/sim/session")
+    assert response.status_code == 200
+    assert response.json() == {"session": None}
+
+
+def test_session_endpoint_exposes_current_state() -> None:
+    store = SimSessionStore()
+    client = _store_client(store)
+    _ = client.post("/api/sim/sessions/start", json=START_BODY)
+    body = client.get("/api/sim/session").json()
+    assert body["session"]["session_id"] == "s-1"
+    assert body["session"]["phase"] == "start"
+    assert body["session"]["recommended_flow"] == ["A-1", "A-2", "A-3"]
+    assert body["session"]["unresolved_zone_id"] is None
