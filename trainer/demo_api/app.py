@@ -16,7 +16,10 @@ from fastapi.responses import StreamingResponse
 
 from trainer.demo_api.chat_service import ChatService, build_default_live_runner
 from trainer.demo_api.contracts import ChatRequest
+from trainer.demo_api.monitor import MonitorRecorder
+from trainer.demo_api.monitor_api import create_monitor_router
 from trainer.demo_api.sequence import default_snapshot
+from trainer.demo_api.simulator import create_simulator_router
 
 logger = logging.getLogger(__name__)
 _LEVEL_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9\-_.]{0,63}$")
@@ -81,6 +84,11 @@ def create_app(chat_service: ChatService | None = None) -> FastAPI:
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
+
+    recorder = MonitorRecorder()
+    app.state.monitor_recorder = recorder
+    app.include_router(create_simulator_router(recorder))
+    app.include_router(create_monitor_router(recorder))
 
     return app
 
