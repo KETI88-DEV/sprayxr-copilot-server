@@ -2,7 +2,7 @@ import { z } from 'zod'
 import { chatRequestSchema, sequenceSnapshotSchema, streamEventSchema } from './contracts'
 import type { ChatRequest, SequenceSnapshot, StreamEvent } from './contracts'
 
-const API_BASE_URL =
+export const API_BASE_URL =
   typeof window !== 'undefined' && window.__DEMO_API_BASE_URL__ !== undefined
     ? window.__DEMO_API_BASE_URL__
     : import.meta.env.VITE_API_BASE_URL ?? ''
