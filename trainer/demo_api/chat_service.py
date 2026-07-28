@@ -13,7 +13,8 @@ from pydantic import ValidationError
 
 from trainer.demo_api.contracts import ChatRequest, SequenceUpdate, StreamEvent
 from trainer.demo_api.scenario_adapter import get_demo_scenario
-from trainer.demo_api.sequence import default_tool_environment
+from trainer.demo_api.sequence import default_tool_environment, session_tool_environment
+from trainer.demo_api.sim_session import SimSessionStore
 
 logger = logging.getLogger(__name__)
 
@@ -124,15 +125,22 @@ def _get_or_build_pipeline() -> _Pipeline:
         return _pipeline_singleton
 
 
-def build_default_live_runner() -> LiveRunner:
+def build_default_live_runner(store: SimSessionStore | None = None) -> LiveRunner:
     async def _runner(request: ChatRequest) -> AsyncIterator[tuple[str, dict[str, object]]]:
         yield "status", {"stage": "initializing", "chunks": 0}
         pipeline = await to_thread.run_sync(_get_or_build_pipeline)
+
+        state = store.current() if store is not None else None
+        if state is not None and state.level_id == request.level_id:
+            environment = dict(session_tool_environment(state))
+        else:
+            environment = dict(default_tool_environment(request.level_id))
+
         async for event in pipeline.run_streaming(
             instruction=request.message,
             session_id=request.session_id,
             enable_thinking=False,
-            environment=dict(default_tool_environment(request.level_id)),
+            environment=environment,
         ):
             yield event
 

@@ -18,7 +18,7 @@ from trainer.demo_api.chat_service import ChatService, build_default_live_runner
 from trainer.demo_api.contracts import ChatRequest
 from trainer.demo_api.monitor import MonitorRecorder
 from trainer.demo_api.monitor_api import create_monitor_router
-from trainer.demo_api.sequence import default_snapshot
+from trainer.demo_api.sequence import default_snapshot, session_snapshot
 from trainer.demo_api.sim_session import SimSessionStore
 from trainer.demo_api.simulator import create_simulator_router
 from trainer.demo_api.zone_resolver import McpZoneResolver
@@ -42,7 +42,7 @@ def create_app(chat_service: ChatService | None = None) -> FastAPI:
         logger.info("DEMO_LIVE_MODE=%s", live_mode)
 
         if live_mode == "on":
-            service = ChatService(live_runner=build_default_live_runner())
+            service = ChatService(live_runner=build_default_live_runner(store))
         else:
             service = ChatService()
     app = FastAPI(title="Ship Painting Demo API")
@@ -74,6 +74,9 @@ def create_app(chat_service: ChatService | None = None) -> FastAPI:
     def sequence(level_id: str) -> dict[str, object]:
         if _LEVEL_ID_PATTERN.fullmatch(level_id) is None:
             raise HTTPException(status_code=400, detail="invalid level_id")
+        state = store.current()
+        if state is not None and state.level_id == level_id:
+            return session_snapshot(state).model_dump(mode="json")
         return default_snapshot(level_id).model_dump(mode="json")
 
     @app.post("/api/chat")

@@ -282,3 +282,91 @@ def test_live_pipeline_error_payload_is_preserved_verbatim() -> None:
 
     assert out[-1].event == "error"
     assert out[-1].data == pipeline_error
+
+
+def test_live_runner_environment_falls_back_to_fixture_without_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Given no simulator session, When live streaming starts, Then the fixture context is used."""
+    from trainer.demo_api.sim_session import SimSessionStore
+
+    pipeline = _FakePipeline()
+    monkeypatch.setattr(chat_service_mod, "_pipeline_singleton", pipeline)
+
+    runner = chat_service_mod.build_default_live_runner(SimSessionStore())
+    request = ChatRequest(
+        message="다음 순서가 어떻게 돼?",
+        session_id="s-1",
+        mode="live",
+        level_id="SP0035-L01",
+    )
+    _ = _collect(ChatService(live_runner=runner).stream(request))
+
+    assert len(pipeline.environments) == 1
+    environment = pipeline.environments[0]
+    assert environment["current_zone_id"] == "A-1"
+    zone_map = environment["zone_map"]
+    assert isinstance(zone_map, list)
+    painted = {zone["zone_id"]: zone["is_painted"] for zone in zone_map}
+    assert painted == {"A-1": True, "A-2": False, "A-3": False}
+
+
+def test_live_runner_environment_uses_active_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Given a simulator session at A-3, When live streaming starts, Then the model sees A-3."""
+    from trainer.demo_api.sim_session import SimSessionStore
+
+    pipeline = _FakePipeline()
+    monkeypatch.setattr(chat_service_mod, "_pipeline_singleton", pipeline)
+
+    store = SimSessionStore()
+    _ = store.start(
+        session_id="s-1", level_id="SP0035-L01", recommended_flow=["A-1", "A-2", "A-3"]
+    )
+    _ = store.runtime(session_id="s-1", event_id="ev-0", target_zone_id="A-3", anomaly=False)
+
+    runner = chat_service_mod.build_default_live_runner(store)
+    request = ChatRequest(
+        message="다음 순서가 어떻게 돼?",
+        session_id="s-1",
+        mode="live",
+        level_id="SP0035-L01",
+    )
+    _ = _collect(ChatService(live_runner=runner).stream(request))
+
+    environment = pipeline.environments[0]
+    assert environment["current_zone_id"] == "A-3"
+    zone_map = environment["zone_map"]
+    assert isinstance(zone_map, list)
+    painted = {zone["zone_id"]: zone["is_painted"] for zone in zone_map}
+    assert painted == {"A-1": True, "A-2": True, "A-3": False}
+
+
+def test_live_runner_ignores_session_for_a_different_level(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Given a session on another level, When live streaming starts, Then the fixture is used."""
+    from trainer.demo_api.sim_session import SimSessionStore
+
+    pipeline = _FakePipeline()
+    monkeypatch.setattr(chat_service_mod, "_pipeline_singleton", pipeline)
+
+    store = SimSessionStore()
+    _ = store.start(session_id="s-1", level_id="OTHER-L02", recommended_flow=["A-1", "A-2"])
+
+    runner = chat_service_mod.build_default_live_runner(store)
+    request = ChatRequest(
+        message="다음 순서가 어떻게 돼?",
+        session_id="s-1",
+        mode="live",
+        level_id="SP0035-L01",
+    )
+    _ = _collect(ChatService(live_runner=runner).stream(request))
+
+    environment = pipeline.environments[0]
+    zone_map = environment["zone_map"]
+    assert isinstance(zone_map, list)
+    assert len(zone_map) == 3
+    painted = {zone["zone_id"]: zone["is_painted"] for zone in zone_map}
+    assert painted == {"A-1": True, "A-2": False, "A-3": False}
