@@ -290,6 +290,7 @@ export function App(): ReactElement {
           elapsedSec={busy ? elapsedSec : null}
           metrics={metrics}
           snapshot={snapshot}
+          simSession={null}
           onModeChange={setMode}
           onReconnect={onReconnect}
         />
