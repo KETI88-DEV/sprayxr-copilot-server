@@ -5,8 +5,6 @@
 한 줄 요약: **도장 문서 RAG → QLoRA 파인튜닝 모델 → ReAct 도구 호출(MCP) → SSE 스트리밍 콘솔**.
 현재 기본 경로는 Qwen3.6-27B(4-bit NF4) + v6.1 어댑터이며, Qwen3-4B는 RTX 4080 기준선으로 유지한다.
 
-> 내부 PoC 저장소다. 외부 배포를 금한다.
-
 ---
 
 ## 1. 지금 동작하는 범위
@@ -398,7 +396,7 @@ RTX 4080 VRAM 예산: LLM+어댑터 ~4.5 GB, BGE-M3+FAISS ~2.0 GB, MCP ~1.5 GB, 
 |---|---|
 | [`AGENTS.md`](AGENTS.md) | 저장소 규약 — 실행 위치, 경계 계약, 커밋 규칙 |
 | [`PATCH_NOTE.md`](PATCH_NOTE.md) | Iter0~Iter18-E 전체 변경·검증 기록 |
-| [`AgenticCopilot_Architecture.md`](AgenticCopilot_Architecture.md) | 아키텍처 설계서 |
+| `AgenticCopilot_Architecture.md` | 아키텍처 설계서. gitignore 대상이라 저장소에는 없고 작업 환경에만 존재한다 |
 | [`docs/superpowers/specs/`](docs/superpowers/specs) | 승인된 설계 — Electron 데모, 레이턴시 예산, 시뮬레이터 I/O 모니터 |
 | [`docs/superpowers/plans/`](docs/superpowers/plans) | 대응 TDD 구현 계획 |
 | [`docs/session_data_schema.md`](docs/session_data_schema.md), [`docs/session_schema.json`](docs/session_schema.json) | 시뮬레이터 세션 데이터 스키마 |
