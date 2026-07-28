@@ -116,6 +116,28 @@ def test_sim_session_response_parses_full_view() -> None:
     assert response.session.current_zone_id == "A-2"
 
 
+_VALID_SESSION_VIEW: dict[str, object] = {
+    "session_id": "s-1",
+    "level_id": "SP0035-L01",
+    "phase": "runtime",
+    "recommended_flow": ["A-1", "A-2", "A-3"],
+    "current_zone_id": "A-2",
+    "completed_zone_ids": ["A-1"],
+    "last_event_id": "ev-1",
+    "anomaly_count": 1,
+    "unresolved_zone_id": None,
+    "updated_at": "2026-07-28T00:00:00+00:00",
+}
+
+
 def test_sim_session_view_rejects_unknown_field() -> None:
     with pytest.raises(ValidationError):
-        _ = SimSessionResponse.model_validate({"session": {"unexpected": 1}})
+        _ = SimSessionResponse.model_validate(
+            {"session": {**_VALID_SESSION_VIEW, "unexpected": 1}}
+        )
+
+
+def test_sim_session_view_accepts_the_same_payload_without_the_unknown_field() -> None:
+    response = SimSessionResponse.model_validate({"session": dict(_VALID_SESSION_VIEW)})
+    assert response.session is not None
+    assert response.session.anomaly_count == 1

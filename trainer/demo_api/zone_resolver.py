@@ -64,6 +64,8 @@ class McpZoneResolver:
 
         if not isinstance(body, dict):
             return None
+        if body.get("status") != "success":
+            return None
         result = body.get("result")
         if not isinstance(result, dict):
             return None

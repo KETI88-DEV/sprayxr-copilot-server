@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from trainer.demo_api.sim_session import SimSessionStore
 
 FLOW = ["A-1", "A-2", "A-3"]
@@ -105,8 +107,9 @@ def test_current_is_none_before_any_start() -> None:
     assert SimSessionStore().current() is None
 
 
-def test_start_with_empty_flow_keeps_current_zone_blank() -> None:
+def test_start_rejects_empty_flow() -> None:
+    """A zoneless session cannot produce a valid SequenceSnapshot, so refuse it at the source."""
     store = SimSessionStore()
-    state = store.start(session_id="s-1", level_id="SP0035-L01", recommended_flow=[])
-    assert state.current_zone_id == ""
-    assert state.recommended_flow == ()
+    with pytest.raises(ValueError):
+        _ = store.start(session_id="s-1", level_id="SP0035-L01", recommended_flow=[])
+    assert store.current() is None

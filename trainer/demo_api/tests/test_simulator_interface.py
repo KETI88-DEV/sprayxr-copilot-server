@@ -292,3 +292,58 @@ def test_session_endpoint_exposes_current_state() -> None:
     assert body["session"]["phase"] == "start"
     assert body["session"]["recommended_flow"] == ["A-1", "A-2", "A-3"]
     assert body["session"]["unresolved_zone_id"] is None
+
+
+def test_store_is_updated_before_the_output_event_is_published() -> None:
+    """구독자는 output 이벤트를 재조회 신호로 쓴다. 그 시점에 상태가 이미 보여야 한다."""
+    store = SimSessionStore()
+    observed: list[str | None] = []
+
+    class _OrderingRecorder(MonitorRecorder):
+        def record(self, session_id, phase, direction, payload):  # type: ignore[no-untyped-def]
+            if direction == "output":
+                state = store.current()
+                observed.append(None if state is None else state.current_zone_id)
+            return super().record(session_id, phase, direction, payload)
+
+    app = FastAPI()
+    app.include_router(create_simulator_router(_OrderingRecorder(), store, NullZoneResolver()))
+    client = TestClient(app)
+
+    _ = client.post("/api/sim/sessions/start", json=START_BODY)
+    _ = client.post("/api/sim/sessions/s-1/events", json={"event_id": "ev-0", "zone_id": "A-3"})
+
+    assert observed == ["A-1", "A-3"]
+
+
+def test_rejected_payloads_leave_the_whole_state_identical_and_record_two_events() -> None:
+    store = SimSessionStore()
+    recorder = MonitorRecorder()
+    app = FastAPI()
+    app.include_router(create_simulator_router(recorder, store, NullZoneResolver()))
+    client = TestClient(app)
+
+    _ = client.post("/api/sim/sessions/start", json=START_BODY)
+    before = store.current()
+    assert before is not None
+    baseline = recorder.snapshot(cursor=0, limit=1000).next_cursor
+
+    rejects: list[tuple[str, object]] = [
+        ("/api/sim/sessions/s-1/events", {"zone_id": "A-2"}),
+        ("/api/sim/sessions/s-1/events", {"event_id": "ev-0", "session_id": "other"}),
+        ("/api/sim/sessions/s-1/complete", {"session_id": "s-1"}),
+    ]
+    for path, body in rejects:
+        response = client.post(path, json=body)
+        assert response.status_code == 422, (path, response.text)
+
+    malformed = client.post(
+        "/api/sim/sessions/s-1/events",
+        content=b"{not json",
+        headers={"Content-Type": "application/json"},
+    )
+    assert malformed.status_code == 422
+
+    assert store.current() == before
+    after = recorder.snapshot(cursor=baseline, limit=1000)
+    assert len(after.events) == 2 * (len(rejects) + 1)

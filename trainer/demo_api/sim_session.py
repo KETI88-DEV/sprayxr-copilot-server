@@ -43,12 +43,14 @@ class SimSessionStore:
         self, *, session_id: str, level_id: str, recommended_flow: Sequence[str]
     ) -> SimSessionState:
         flow = tuple(recommended_flow)
+        if not flow:
+            raise ValueError("recommended_flow must not be empty")
         state = SimSessionState(
             session_id=session_id,
             level_id=level_id,
             phase="start",
             recommended_flow=flow,
-            current_zone_id=flow[0] if flow else "",
+            current_zone_id=flow[0],
             completed_zone_ids=(),
             last_event_id=None,
             anomaly_count=0,

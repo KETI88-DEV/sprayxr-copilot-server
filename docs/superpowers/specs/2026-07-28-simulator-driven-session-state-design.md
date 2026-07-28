@@ -159,7 +159,7 @@ class SessionEventInput(StrictModel):
 - 그 외에는 기존 `default_snapshot(level_id)`을 그대로 반환한다. 기존 테스트와 초기 화면이 유지된다.
 
 세션 파생 스냅샷:
-- `zones`: `recommended_flow` 순서. 상태는 `completed` → 완료 목록에 있는 구역, `next` → `current_zone_id`, 나머지 `pending`.
+- `zones`: `recommended_flow` 순서. 상태는 `completed` → 완료 목록에 있는 구역, `current` → `current_zone_id`, 나머지 `pending`. 기존 fixture는 작업 대상 구역을 `next`로 표시하지만, 세션에서는 실제로 작업 중인 구역이므로 `current`(UI 배지 "현재")가 맞다.
 - `label`은 기존 `default_snapshot`의 값을 재사용한다.
 
 ### 8.2 `GET /api/sim/session` (신규, read-only)
