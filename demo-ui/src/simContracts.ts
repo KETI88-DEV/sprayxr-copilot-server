@@ -26,3 +26,24 @@ export const monitorSnapshotSchema = z
   })
   .strict()
 export type MonitorSnapshot = z.infer<typeof monitorSnapshotSchema>
+
+export const simSessionSchema = z
+  .object({
+    session_id: z.string(),
+    level_id: z.string(),
+    phase: phaseSchema,
+    recommended_flow: z.array(z.string()),
+    current_zone_id: z.string(),
+    completed_zone_ids: z.array(z.string()),
+    last_event_id: z.string().nullable(),
+    anomaly_count: z.number().int().nonnegative(),
+    unresolved_zone_id: z.string().nullable(),
+    updated_at: z.string(),
+  })
+  .strict()
+export type SimSession = z.infer<typeof simSessionSchema>
+
+export const simSessionResponseSchema = z
+  .object({ session: simSessionSchema.nullable() })
+  .strict()
+export type SimSessionResponse = z.infer<typeof simSessionResponseSchema>

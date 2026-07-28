@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { monitorEventSchema, monitorSnapshotSchema } from '../src/simContracts'
+import {
+  monitorEventSchema,
+  monitorSnapshotSchema,
+  simSessionResponseSchema,
+  simSessionSchema,
+} from '../src/simContracts'
 
 describe('simContracts', () => {
   it('parses a valid monitor event', () => {
@@ -68,5 +73,37 @@ describe('simContracts', () => {
 
     expect(snapshot.dropped_before).toBe(3)
     expect(snapshot.events[0]?.phase).toBe('session_end')
+  })
+})
+
+describe('simSessionSchema', () => {
+  const valid = {
+    session_id: 's-1',
+    level_id: 'SP0035-L01',
+    phase: 'runtime',
+    recommended_flow: ['A-1', 'A-2', 'A-3'],
+    current_zone_id: 'A-2',
+    completed_zone_ids: ['A-1'],
+    last_event_id: 'ev-1',
+    anomaly_count: 1,
+    unresolved_zone_id: null,
+    updated_at: '2026-07-28T00:00:00+00:00',
+  }
+
+  it('백엔드 SimSessionView 봉투를 그대로 받는다', () => {
+    expect(simSessionSchema.parse(valid).current_zone_id).toBe('A-2')
+  })
+
+  it('알 수 없는 키를 거부한다', () => {
+    expect(() => simSessionSchema.parse({ ...valid, extra: 1 })).toThrow()
+  })
+
+  it('세션 없음을 null로 표현한다', () => {
+    expect(simSessionResponseSchema.parse({ session: null }).session).toBeNull()
+  })
+
+  it('세션이 있으면 중첩 스키마로 검증한다', () => {
+    const parsed = simSessionResponseSchema.parse({ session: valid })
+    expect(parsed.session?.completed_zone_ids).toEqual(['A-1'])
   })
 })

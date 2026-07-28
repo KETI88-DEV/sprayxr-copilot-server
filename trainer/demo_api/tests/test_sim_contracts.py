@@ -13,6 +13,7 @@ from trainer.demo_api.sim_contracts import (
     SessionReviewOutput,
     SessionStartInput,
     SessionStartOutput,
+    SimSessionResponse,
 )
 
 
@@ -77,3 +78,44 @@ def test_output_and_monitor_models_round_trip() -> None:
     )
     snapshot = MonitorSnapshot(events=[event], next_cursor=1, dropped_before=None)
     assert snapshot.events[0].direction == "input"
+
+
+def test_session_event_accepts_optional_zone_id() -> None:
+    payload = SessionEventInput.model_validate({"event_id": "ev-0", "zone_id": "A-2"})
+    assert payload.zone_id == "A-2"
+
+
+def test_session_event_zone_id_defaults_to_none() -> None:
+    payload = SessionEventInput.model_validate({"event_id": "ev-0"})
+    assert payload.zone_id is None
+
+
+def test_sim_session_response_allows_null_session() -> None:
+    response = SimSessionResponse.model_validate({"session": None})
+    assert response.session is None
+
+
+def test_sim_session_response_parses_full_view() -> None:
+    response = SimSessionResponse.model_validate(
+        {
+            "session": {
+                "session_id": "s-1",
+                "level_id": "SP0035-L01",
+                "phase": "runtime",
+                "recommended_flow": ["A-1", "A-2", "A-3"],
+                "current_zone_id": "A-2",
+                "completed_zone_ids": ["A-1"],
+                "last_event_id": "ev-1",
+                "anomaly_count": 1,
+                "unresolved_zone_id": None,
+                "updated_at": "2026-07-28T00:00:00+00:00",
+            }
+        }
+    )
+    assert response.session is not None
+    assert response.session.current_zone_id == "A-2"
+
+
+def test_sim_session_view_rejects_unknown_field() -> None:
+    with pytest.raises(ValidationError):
+        _ = SimSessionResponse.model_validate({"session": {"unexpected": 1}})

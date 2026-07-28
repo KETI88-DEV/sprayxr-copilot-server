@@ -45,6 +45,7 @@ class SessionEventInput(StrictModel):
     event_id: Annotated[str, Field(min_length=1)]
     user_request: str | None = None
     telemetry: EventTelemetry | None = None
+    zone_id: str | None = None
 
 
 class SessionStartOutput(StrictModel):
@@ -83,3 +84,20 @@ class MonitorSnapshot(StrictModel):
     events: list[MonitorEvent]
     next_cursor: int
     dropped_before: int | None = None
+
+
+class SimSessionView(StrictModel):
+    session_id: str
+    level_id: str
+    phase: Phase
+    recommended_flow: list[str]
+    current_zone_id: str
+    completed_zone_ids: list[str]
+    last_event_id: str | None
+    anomaly_count: int
+    unresolved_zone_id: str | None
+    updated_at: str
+
+
+class SimSessionResponse(StrictModel):
+    session: SimSessionView | None
