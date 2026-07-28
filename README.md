@@ -15,14 +15,16 @@
 | 에이전트 | 동작 — 3-way 라우터, 도구 루프, deadline·라운드별 token cap | [`agent_pipeline.py`](trainer/scripts/agent_pipeline.py) |
 | MCP 도구 | 동작 — 단일 프로세스에 7개 router (`:8100`). 실제 로직 3 / partial 1 / stub 3 | [`mcp_servers/main.py`](mcp_servers/main.py) |
 | 데모 API | 동작 — `:8120` SSE, demo ↔ live 전환 | [`demo_api/app.py`](trainer/demo_api/app.py) |
-| 시뮬레이터 인터페이스 | 동작 — 결정론 3단계 스텁 + I/O 모니터 | [`simulator.py`](trainer/demo_api/simulator.py), [`monitor.py`](trainer/demo_api/monitor.py) |
+| 시뮬레이터 인터페이스 | 동작 — 결정론 3단계 + I/O 모니터. **현재 작업 상태의 단일 소유자** | [`simulator.py`](trainer/demo_api/simulator.py), [`sim_session.py`](trainer/demo_api/sim_session.py), [`monitor.py`](trainer/demo_api/monitor.py) |
 | React 웹 / Electron 콘솔 | 동작 | [`demo-ui/`](demo-ui) |
 | Gradio 데모 | 유지(병행) | [`demo_app.py`](trainer/scripts/demo_app.py) |
 | 레이턴시 예산 | 계측·제어 경로 완료, **실측 gate 미실행** | [`bench_latency.py`](trainer/scripts/bench_latency.py) |
 
 아직 아닌 것 — 데모 시연 시 오해를 부르는 지점이라 명시한다.
 
-- `/api/sim/*`는 **결정론 스텁**이다. 실제 `AgentPipeline` 연결 지점은 `_run_phase(build_output=...)` 인자로만 남겨 뒀다. Unity 실클라이언트 연동·DB 영속화·인증은 범위 밖이다.
+- `/api/sim/*`의 **응답**은 아직 결정론 스텁이다(실제 코칭 LLM 미연결). 연결 지점은 `_run_phase(build_output=...)` 인자로 남겨 뒀다. 다만 시뮬레이터가 보낸 **상태**는 스텁이 아니며, 도장 순서 패널과 모델 `environment`에 실제로 반영된다(§4).
+- 세션 슬롯은 하나다. 새 `start`가 이전 세션을 대체하며, 다중 동시 세션·DB 영속화·인증·Unity 실클라이언트 연동은 범위 밖이다.
+- 좌표→구역 폴백은 배선돼 있으나 `location_tracking`이 stub(항상 `B-3`)이라 지금은 위치를 옮기지 못하고 "미매핑 구역"으로만 표시된다.
 - `run_streaming()`은 `run()` 완료 후 답변을 24자 단위 `message_delta`로 재방출하는 **buffered 경로**다. true token streaming이 아니므로 TTFT를 줄이지 않는다.
 - 27B live 경로의 레이턴시 gate(RAG TTFT p90 ≤30s / 도구 완료 p99 ≤180s)는 아직 **실측 전**이다.
 - `pose_estimation`·`location_tracking`·`vlm_analysis`는 stub 응답이다.
@@ -99,9 +101,10 @@ React 콘솔 구성(`demo-ui/src/components/`):
 |---|---|
 | `TitleBar` | 프로그램명 + 메뉴 아이콘 한 줄. 로그 토글·초기화·재연결 |
 | `MonitorPanel` | 연결/모드(demo·live)/실행 상태·경과·턴 지표(TTFT·total·synthesis·도구 수·청크 수)와 도장 순서 |
+| `SequencePanel` | 도장 순서 + 시뮬레이터 세션 단계·짧은 세션 ID·미매핑 구역 배지. 구역 상태는 `완료`/`현재`/`대기` |
 | `ChatPanel` | 질문과 응답을 시각적으로 분리. `AnswerBody`가 제목·표·강조를 렌더링 |
 | `ToolLogPanel` | 진행 단계는 한 줄이 제자리 갱신되고, 마일스톤·도구 결과·완료·오류만 누적 |
-| `SimulatorMonitorPanel` | 시뮬레이터 인터페이스 I/O를 세션·단계별 타임라인으로 표시 |
+| `SimulatorMonitorPanel` | 시뮬레이터 I/O 타임라인 + `세션 시작`·`런타임`·`세션 끝` 더미 송신 버튼 |
 
 조작: `Enter` 전송 / `Shift+Enter` 줄바꿈. 상단에서 `demo` ↔ `live` 전환. 서버가 `DEMO_LIVE_MODE=off`인데 `live`를 고르면 서버가 명시적 error 이벤트를 돌려준다.
 `SP0035-L01`은 데모 레벨 식별자다(`demo-ui/src/App.tsx`의 `LEVEL_ID`). `/api/sequence/{level_id}` 스냅샷과 시뮬레이터 더미 페이로드가 같은 값을 쓴다.
@@ -117,7 +120,13 @@ curl -s 'http://127.0.0.1:8120/api/monitor/events?limit=20'
 ```
 
 호출 1건마다 input 1건 + output 1건이 기록된다. `--events 3`이면 `(start in/out) (runtime in/out)×3 (session_end in/out)` = 10건이다.
-UI 하단 모니터의 `더미 세션 송신` 버튼도 같은 3단계를 만든다.
+
+UI 하단 모니터에서는 `세션 시작` → `런타임`(반복 가능) → `세션 끝` 버튼으로 같은 3단계를 단계별로 보낼 수 있다. 시작 전에는 나머지 두 버튼이 비활성이고, 런타임을 누를 때마다 다음 구역으로 `zone_id`를 보내므로 좌측 도장 순서가 실제로 이동한다. 상태만 따로 보려면:
+
+```bash
+curl -s http://127.0.0.1:8120/api/sim/session
+curl -s http://127.0.0.1:8120/api/sequence/SP0035-L01
+```
 
 ---
 
@@ -131,16 +140,20 @@ UI 하단 모니터의 `더미 세션 송신` 버튼도 같은 3단계를 만든
                        ▼
               데모 API :8120
    ┌───────────────────┴───────────────────┐
-   │ /api/chat (SSE)                       │ /api/sim/* (결정론 스텁)
-   ▼                                       ▼
-ChatService ─ demo scenario           MonitorRecorder (ring buffer 500)
-            └ live runner                  │
-                 └ AgentPipeline            ▼
-                      3-way router     /api/monitor/{events,stream}
-                      RAG 검색 + rerank
-                      Qwen3.6-27B (HF 4-bit NF4) + v6.1 LoRA
-                      ToolCallingAdapter → MCP :8100 (7 tools)
+   │ /api/chat (SSE)                       │ /api/sim/*  (시뮬레이터 3단계)
+   ▼                                       ├─▶ MonitorRecorder (ring buffer 500)
+ChatService ─ demo scenario                │        └─▶ /api/monitor/{events,stream}
+            └ live runner                  └─▶ SimSessionStore ◀── 현재 상태의 소유자
+                 └ AgentPipeline                     │
+                      3-way router                   ├─▶ /api/sequence/{level_id}
+                      RAG 검색 + rerank              ├─▶ /api/sim/session
+                      Qwen3.6-27B + v6.1 LoRA        └─▶ live environment ──┐
+                      ToolCallingAdapter → MCP :8100 (7 tools)              │
+                            ▲                                               │
+                            └───────────────────────────────────────────────┘
 ```
+
+시뮬레이터가 보낸 값이 모델 컨텍스트와 좌측 패널의 유일한 출처다. 활성 세션이 없으면 [`default_snapshot`](trainer/demo_api/sequence.py)의 고정 fixture로 되돌아간다.
 
 ### 3.1 3-way Semantic Router
 
@@ -182,6 +195,7 @@ ChatService ─ demo scenario           MonitorRecorder (ring buffer 500)
 | `POST` | `/api/sim/sessions/start` | 시뮬레이터 — 세션 시작 |
 | `POST` | `/api/sim/sessions/{session_id}/events` | 시뮬레이터 — 런타임 이벤트 |
 | `POST` | `/api/sim/sessions/{session_id}/complete` | 시뮬레이터 — 세션 종료 |
+| `GET` | `/api/sim/session` | 현재 세션 상태 (read-only). 세션이 없으면 `{"session": null}` |
 | `GET` | `/api/monitor/events?cursor=&limit=` | 모니터 스냅샷 (read-only) |
 | `GET` | `/api/monitor/stream?cursor=` | 모니터 SSE (replay → live) |
 
@@ -189,7 +203,13 @@ ChatService ─ demo scenario           MonitorRecorder (ring buffer 500)
 `complete`는 `ttft_ms`, `total_ms`, `synthesis_ms`, `tool_call_count`, `rag_chunk_count`, `deadline_hit`를 싣는다.
 
 **시뮬레이터 3단계**: `start`(순서 안내) → `runtime`(RAG·이상탐지) → `session_end`(회고 리뷰).
-경로의 `{session_id}`가 정본이며 본문과 불일치하면 422다. 잘못된 JSON·검증 실패도 **input/output 두 건을 그대로 기록**하므로 422가 모니터에서 사라지지 않는다.
+경로의 `{session_id}`가 정본이며 본문과 불일치하면 422다. 잘못된 JSON·검증 실패도 **input/output 두 건을 그대로 기록**하므로 422가 모니터에서 사라지지 않는다. 422는 세션 상태를 전혀 바꾸지 않는다.
+
+**현재 위치 이동**: `runtime` 입력의 `zone_id`가 있으면 그 값을, 없고 `telemetry.coordinates`가 있으면 MCP `location_tracking`으로 해석한 값을 쓴다. 둘 다 없으면 위치는 그대로다. 대상이 권장 순서 밖이면 이동하지 않고 `unresolved_zone_id`로만 기록한다.
+
+**갱신 순서**: 상태 전이는 `output` 모니터 이벤트보다 **먼저** 확정된다. UI가 그 이벤트를 재조회 신호로 쓰기 때문에, 순서가 반대면 갱신 전 상태를 읽고 다시 받을 신호가 없다.
+
+**세션이 없을 때**: `/api/sequence/{level_id}`와 live `environment` 모두 기존 fixture로 되돌아간다. 활성 세션의 `level_id`가 요청과 다를 때도 같다.
 
 **모니터**: 단일 프로세스 in-memory 링버퍼(최대 500건), 단조 증가 `seq`. `/stream`은 구독을 먼저 잡고 스냅샷을 뜬 뒤 `seq`로 중복을 제거하므로 그 사이 기록된 이벤트를 잃지 않는다. 버퍼가 넘치면 `gap` 프레임(`dropped_before`)을 먼저 보낸다. 읽기 전용이라 모니터가 세션 상태를 바꾸지 않는다.
 

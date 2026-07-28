@@ -3888,3 +3888,61 @@ e237d8b chore(configs): tighten RAG search parameters after recall audit
 - **Status**: DONE.
 
 ---
+## [Iter18-F] 시뮬레이터 상태가 채팅 컨텍스트·순서 패널에 반영되지 않던 결함 수정
+
+**Date**: 2026-07-28
+**Scope**: 시뮬레이터 인터페이스를 현재 작업 상태의 단일 소유자로 승격, 더미 입력 3단계 분리 송신, 셸 레이아웃 폭 붕괴 수정.
+**선행**: 시뮬레이터 인터페이스 I/O 모니터(`/api/sim/*`, `/api/monitor/*`) 구현 — 2026-07-27, 커밋 `a62dde9`~`79a28fe`.
+설계는 `docs/superpowers/specs/2026-07-28-simulator-driven-session-state-design.md`, 계획은 동일 날짜 `plans/`.
+
+### 증상
+1. 더미 세션을 보내도 Electron 좌측 패널(실행 상태·도장 순서)이 전혀 변하지 않았다.
+2. 사용자 질문 말풍선이 화면 밖으로 밀려 보이지 않거나 잘렸다. 컴포저의 `초기화` 버튼도 잘렸다.
+3. 더미 입력을 세션 시작/런타임/세션 끝로 나눠 보낼 수단이 없었다(버튼 1개가 3단계를 한 번에 전송).
+
+### 원인
+1. **배선 부재**: `/api/sim/*`는 `MonitorRecorder`에만 기록하고 다른 소비자가 없었다. `chat_service.py:135`의 live runner는 매 턴
+   `default_tool_environment(level_id)`를, `/api/sequence/{level_id}`는 `default_snapshot(level_id)`를 넘겼고 둘 다
+   A-1 완료 / A-2 다음으로 **하드코딩**돼 있었다. 시뮬레이터가 무엇을 보내도 모델과 UI는 같은 가짜 상태를 봤다.
+2. **레이아웃 폭 붕괴**: `.sim-monitor__payload`가 `white-space: nowrap`인데 조상 flex 체인에 `min-width: 0`이 없고
+   `.app-shell` 그리드 열이 `minmax(0, 1fr)`이 아니었다. 긴 JSON 한 줄이 셸 전체 폭을 밀어냈다.
+   실측: 뷰포트 1280px에서 `document.scrollWidth` 3020px, `.sim-monitor`를 숨기면 1280px로 복귀.
+   `justify-self: end`인 말풍선은 right=2988에 놓였다.
+
+### 수정
+- `trainer/demo_api/sim_session.py` 신설. 단일 슬롯 in-memory `SimSessionStore`(`threading.Lock`, frozen dataclass).
+  start는 전 구역 미완료·첫 구역 현재로 시작하고, runtime은 `zone_id`(신규 선택 필드) → 없으면 `coordinates`를
+  `location_tracking`으로 해석 → 둘 다 없으면 위치 유지. 순서 밖 구역은 이동 없이 `unresolved_zone_id`로만 기록.
+  `session_end`는 남은 구역을 임의로 완료 처리하지 않는다. 빈 flow는 `SequenceSnapshot` 검증을 깨므로 거부한다.
+- `trainer/demo_api/zone_resolver.py` 신설. 주입형 `ZoneResolver`. MCP는 오류도 HTTP 200으로 돌려주므로 `status`로 판별하고,
+  모든 실패 경로는 `None`을 반환한다(관측용 폴백이 인터페이스를 깨뜨리지 않는다).
+- `sequence.py`에 `session_snapshot` / `session_tool_environment` 추가. `/api/sequence/{level_id}`와
+  `build_default_live_runner`가 활성 세션을 우선 읽고, 세션이 없거나 `level_id`가 다르면 기존 fixture로 되돌아간다.
+- `GET /api/sim/session` 신설(read-only). `SequenceSnapshot`은 채팅 `sequence_update`와 미러 관계라 시뮬레이터 전용 필드를 섞지 않았다.
+- **상태 전이를 `output` 모니터 이벤트보다 먼저 확정**한다. UI가 그 이벤트를 재조회 신호로 쓰므로 순서가 반대면
+  갱신 전 상태를 읽고 다시 받을 신호가 없다(리뷰에서 발견).
+- 프런트: 3단계 송신기 + `fetchSimSession`, `세션 시작`/`런타임`/`세션 끝` 버튼과 생명주기, 모니터 이벤트 수신 시
+  `/api/sequence`와 `/api/sim/session` 재조회. 전이 규칙은 클라이언트에서 복제하지 않는다.
+- CSS: `.app-shell { grid-template-columns: minmax(0, 1fr) }` + sim-monitor flex 체인 `min-width: 0`.
+  `styles.css`가 동시 편집 중이라 두 규칙 모두 `simMonitor.css`에 뒀다.
+
+### 검증
+- TDD 11개 Task, 커밋 `db1c2a8`~`3f07506`.
+- Python **227 passed**(기준선 176). Vitest **103 passed**(기준선 79). `build:web` 성공. Playwright **3 passed**.
+- 브라우저 실조작: 시작→A-1 `현재`, 런타임→A-1 `완료`/A-2 `현재`, 런타임→A-3 `현재`, 끝→위치 유지·버튼 복귀.
+  가로 overflow 0px, console error 0건.
+- **live 27B 실측**: 시뮬레이터를 A-3까지 진행시킨 뒤 `다음 도장 순서가 어떻게 돼?` 질문 →
+  `tool_result`의 `environment.zone_map`에 `A-1 is_painted=true, A-2 is_painted=true`가 실려 갔다.
+  수정 전이라면 A-1만 painted인 고정값이 갔을 자리다. 응답은 "모든 구역의 도장이 완료되었습니다".
+
+### 남은 조치
+- `location_tracking`이 입력과 무관하게 `B-3`을 반환하는 stub이라 좌표 폴백은 지금은 "미매핑 구역"으로만 표시된다.
+  도구가 실제 구현으로 대체되면 코드 변경 없이 동작한다.
+- `/api/sim/*`의 **응답**은 여전히 결정론 스텁이다. 실제 `AgentPipeline` 연결점은 `_run_phase(build_output=...)`.
+- `SessionSummary`에 `extra="forbid"`가 없어 `complete` 경계가 느슨하다. 평가 경로(`session_coaching.py`)와 공유하므로 별건으로 남긴다.
+- 다중 동시 세션·영속화·인증은 범위 밖.
+
+### Status
+- **Status**: DONE.
+
+---

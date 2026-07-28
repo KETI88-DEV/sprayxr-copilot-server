@@ -27,7 +27,7 @@ python3 -m trainer.demo_api.app --port 8120          # demo mode, no GPU
 python3 -m trainer.demo_api.app --port 8120 --live   # live mode, GPU
 DEMO_MODE=true|false python3 trainer/scripts/demo_app.py   # Gradio, separate UI entrypoint
 
-# full Python suite — 176 tests, ~16 s
+# full Python suite — 227 tests, ~17 s
 docker exec -w /workspace ship-paint-trainer python3 -m pytest trainer mcp_servers -q
 
 # GPU-free smoke of the simulator interface + monitor
@@ -62,7 +62,9 @@ npm run start:electron
 | Fast-path answer contract | `trainer/scripts/live_response_contract.py` | Normalizes the 5-section diagnostic scaffold to `[답변]/[근거]` when route is `fast` and tool count is 0 |
 | Model-to-MCP calls | `trainer/scripts/tool_calling_adapter.py` | Protocol from `trainer/configs/tool_calling_protocol.json` |
 | Demo HTTP/SSE API | `trainer/demo_api/app.py`, `chat_service.py` | Demo/live selection, lazy pipeline singleton |
-| Simulator interface + monitor | `trainer/demo_api/simulator.py`, `monitor.py`, `monitor_api.py` | Deterministic stub. `_run_phase(build_output=...)` is the seam for a real `AgentPipeline`; every call records one input + one output event, including on 422 |
+| Simulator interface + monitor | `trainer/demo_api/simulator.py`, `monitor.py`, `monitor_api.py` | Responses are still a deterministic stub — `_run_phase(build_output=...)` is the seam for a real `AgentPipeline`. Every call records one input + one output event, including on 422. **State transitions commit before the output event is published**; reversing that order lets subscribers read pre-update state with no second refresh signal |
+| Current work state (who owns it) | `trainer/demo_api/sim_session.py` | Single-slot in-memory `SimSessionStore` is the only owner. `/api/sequence/{level_id}`, `/api/sim/session`, and the live chat `environment` all read from it and fall back to `default_snapshot` / `default_tool_environment` when no session matches the level. A 422 must leave it untouched |
+| Zone resolution fallback | `trainer/demo_api/zone_resolver.py` | Used only when a runtime event carries no `zone_id`. Every failure returns `None` — never raises, never required by tests. MCP answers errors with HTTP 200, so the `status` field decides success |
 | API event contracts | `contracts.py` ↔ `demo-ui/src/contracts.ts`, `sim_contracts.py` ↔ `simContracts.ts` | Mirrored pairs — change both sides together |
 | UI HTTP/SSE client | `demo-ui/src/api.ts` | Base URL: `window.__DEMO_API_BASE_URL__`, then Vite env, then same-origin (absent under Electron's `file://`) |
 | MCP routes/envelopes | `mcp_servers/main.py`, `common.py` | `/health` `servers: 7` = mounted routers, not processes |
