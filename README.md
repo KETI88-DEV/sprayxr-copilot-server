@@ -202,16 +202,78 @@ ChatService ─ demo scenario                │        └─▶ /api/monitor/{
 **채팅 SSE 이벤트**: `session` · `status` · `message_delta` · `tool_result` · `sequence_update` · `complete` · `error`.
 `complete`는 `ttft_ms`, `total_ms`, `synthesis_ms`, `tool_call_count`, `rag_chunk_count`, `deadline_hit`를 싣는다.
 
-**시뮬레이터 3단계**: `start`(순서 안내) → `runtime`(RAG·이상탐지) → `session_end`(회고 리뷰).
-경로의 `{session_id}`가 정본이며 본문과 불일치하면 422다. 잘못된 JSON·검증 실패도 **input/output 두 건을 그대로 기록**하므로 422가 모니터에서 사라지지 않는다. 422는 세션 상태를 전혀 바꾸지 않는다.
+### 4.1 시뮬레이터 인풋 보내기
 
-**현재 위치 이동**: `runtime` 입력의 `zone_id`가 있으면 그 값을, 없고 `telemetry.coordinates`가 있으면 MCP `location_tracking`으로 해석한 값을 쓴다. 둘 다 없으면 위치는 그대로다. 대상이 권장 순서 밖이면 이동하지 않고 `unresolved_zone_id`로만 기록한다.
+`start`(순서 안내) → `runtime`(RAG·이상탐지) → `session_end`(회고 리뷰) 3단계다. UI 버튼과 [`sim_dummy_driver.py`](trainer/scripts/sim_dummy_driver.py)(§2.4)가 아래와 똑같은 요청을 보낸다. 실제 Unity 클라이언트가 붙을 자리다.
+
+**① 세션 시작** — `POST /api/sim/sessions/start`
+
+```json
+{"session_id": "demo-1", "level_id": "SP0035-L01",
+ "worker": {"trainee_id": "t-001", "skill_level": "beginner", "handedness": "right"},
+ "spec": {"nominal_um": 100.0}}
+```
+
+`skill_level`은 `beginner|intermediate|advanced`, `handedness`는 `left|right`만 받는다.
+응답: `{"recommended_flow": ["A-1","A-2","A-3"], "flow_source": "rule", "guidance": "..."}`
+
+**② 런타임** — `POST /api/sim/sessions/{session_id}/events`
+
+```json
+{"event_id": "ev-0", "zone_id": "A-2",
+ "telemetry": {"gun_metrics": {"speed_m_per_s": 0.8, "standoff_mm": 300.0, "angle_deg": 72.0}}}
+```
+
+`event_id`만 필수이고 나머지는 전부 선택이다.
+
+| 필드 | 효과 |
+|---|---|
+| `zone_id` | **현재 위치를 이 구역으로 이동**. 권장 순서 밖이면 이동 없이 `unresolved_zone_id`로만 기록 |
+| `telemetry.coordinates` | `zone_id`가 없을 때만 MCP `location_tracking`으로 구역 해석 |
+| `telemetry.gun_metrics` | `standoff_mm > 320` **또는** `angle_deg < 60`이면 응답이 `kind:"anomaly"` |
+| `telemetry.pose_joints` | 기록만 된다 |
+| `user_request` | 있으면 `kind:"rag"` 응답. 자세 판정보다 우선한다 |
+
+**③ 세션 끝** — `POST /api/sim/sessions/{session_id}/complete`
+
+```json
+{"session_id": "demo-1", "scenario_id": "demo", "mode": "live",
+ "zone_id": "A-2", "zone_type": "panel",
+ "metrics": {"avg_dft": 92.0, "dft_values": [95.0, 102.0, 88.0],
+             "avg_speed": 0.8, "speed_variance": 0.05,
+             "avg_distance": 0.3, "distance_variance": 0.05,
+             "avg_angle": 70.0, "angle_consistency": 0.9,
+             "sequence_correct": true, "under_thickness_count": 1}}
+```
+
+`under_thickness_count`·`over_thickness_count`(기본 0), `env`, `timestamp`는 선택이다. 위험 플래그는 두께 초과/미달 외에 `distance_variance > 0.3`, `speed_variance > 0.15`, `angle_consistency < 0.7`, `sequence_correct = false`에서도 나온다([`compute_risk_flags`](trainer/scripts/session_coaching.py)).
+
+**결과 확인**
+
+```bash
+curl -s http://127.0.0.1:8120/api/sim/session           # 현재 세션 상태
+curl -s http://127.0.0.1:8120/api/sequence/SP0035-L01   # 좌측 패널이 읽는 값
+curl -s 'http://127.0.0.1:8120/api/monitor/events?limit=20'
+```
+
+**주의**
+
+- 경로의 `{session_id}`가 정본이다. 본문과 불일치하면 422.
+- `start`·`runtime`은 `extra="forbid"`라 스키마에 없는 필드를 넣으면 422다: `{"error":"validation_error","detail":[{"type":"extra_forbidden",...}]}`. `complete`는 `SessionSummary`를 재사용해 아직 느슨하다.
+- 422는 세션 상태를 전혀 바꾸지 않지만 **모니터에는 input/output 두 건이 그대로 남는다.** 거부된 요청도 관측된다.
+- 세션 슬롯은 하나다. 새 `start`가 이전 세션을 덮어쓴다.
+
+**현재 위치 이동**: `zone_id` → 없으면 `telemetry.coordinates` 해석 → 둘 다 없으면 위치 유지. 순서 밖 구역은 `unresolved_zone_id`로만 남는다.
 
 **갱신 순서**: 상태 전이는 `output` 모니터 이벤트보다 **먼저** 확정된다. UI가 그 이벤트를 재조회 신호로 쓰기 때문에, 순서가 반대면 갱신 전 상태를 읽고 다시 받을 신호가 없다.
 
 **세션이 없을 때**: `/api/sequence/{level_id}`와 live `environment` 모두 기존 fixture로 되돌아간다. 활성 세션의 `level_id`가 요청과 다를 때도 같다.
 
-**모니터**: 단일 프로세스 in-memory 링버퍼(최대 500건), 단조 증가 `seq`. `/stream`은 구독을 먼저 잡고 스냅샷을 뜬 뒤 `seq`로 중복을 제거하므로 그 사이 기록된 이벤트를 잃지 않는다. 버퍼가 넘치면 `gap` 프레임(`dropped_before`)을 먼저 보낸다. 읽기 전용이라 모니터가 세션 상태를 바꾸지 않는다.
+### 4.2 모니터
+
+단일 프로세스 in-memory 링버퍼(최대 500건), 단조 증가 `seq`. `/stream`은 구독을 먼저 잡고 스냅샷을 뜬 뒤 `seq`로 중복을 제거하므로 그 사이 기록된 이벤트를 잃지 않는다. 버퍼가 넘치면 `gap` 프레임(`dropped_before`)을 먼저 보낸다. 읽기 전용이라 모니터가 세션 상태를 바꾸지 않는다.
+
+클라이언트에 **재연결 로직이 없다.** 스트림이 끊기면(API 재기동, 네트워크 순단) 패널은 "아직 수신된 I/O가 없습니다"로 남고 스스로 복구하지 않는다. 화면을 새로고침하면 `cursor=0`으로 다시 구독해 버퍼에 남은 이벤트를 전부 리플레이한다.
 
 ---
 
