@@ -2,8 +2,8 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$comment": "JSON Schema가 아니라 data exporter/Unity 통합 개발자에게 전달하는 '데이터 요구사항 명세'다. v2는 §0.7 세션 생명주기(start/event/complete) 구조를 기준으로 재작성했다. 데이터는 2계층: (A) 런타임 메시지 스트림(Unity→Coaching API 실시간 3종), (B) 오프라인 참조 데이터(레벨 region 정의 + expert 라벨 세션). 자세(pose_estimation)·순서(sequence_validation) MCP 실구현에 필요한 필드를 정의한다.",
   "title": "자세·순서 MCP 데이터 요구사항 (Exporter/Unity 전달용) — 세션 생명주기 기반",
-  "document_version": "2.0",
-  "supersedes": "1.0 (단일 세션파일 모델). 필드 요구는 계승하되 생명주기 메시지 구조로 재배치.",
+  "document_version": "3.0",
+  "supersedes": "2.0 (세션 생명주기 재배치). 필드 요구는 계승하되, 2026-07-29 전문가 원본 데이터 100세션 전수 실측으로 각 REQ의 상태를 재판정했다. 2.0이 '없음'으로 적은 항목 다수가 실제로는 원본 CSV에 존재했고(0.3.0 JSON export가 손실 변환이었다), 반대로 2.0이 인지하지 못한 블로커 2건(REQ-14 좌표계, REQ-15 짐벌 불연속)이 새로 드러났다.",
   "created": "2026-07-22",
   "baseline_export_schema": "0.3.0 (docs/1_1000442_session.json / *_seqNNN.json 기준)",
   "target_export_schema": "0.4.0 (본 요구사항 반영본)",
@@ -131,48 +131,97 @@
       "field": "session_id / user_id / event_id (식별자 모델)",
       "required": true,
       "status_in_0.3.0": "부분 (session_id·level 존재, worker_id·event_id 개념 없음)",
-      "carried_in": ["session_start", "event", "session_complete"],
-      "consumer": ["pose_mcp", "seq_mcp", "timeseries", "coaching_api"],
+      "carried_in": [
+        "session_start",
+        "event",
+        "session_complete"
+      ],
+      "consumer": [
+        "pose_mcp",
+        "seq_mcp",
+        "timeseries",
+        "coaching_api"
+      ],
       "spec": "session_id(세션 전체)·user_id(작업자, worker_id와 매핑)는 3종 메시지 모두 필수. event_id는 event 메시지 필수이며 (session_id,event_id)가 유일. timeseries 영속화(T12)와 도구 호출에 그대로 전파.",
-      "rationale": "세션 생명주기 상태 머신(start→event*→complete)과 이벤트 단위 코칭 상관 추적의 기반. 식별자 없이는 실시간 세션 컨텍스트·추세 조인·리포트 집계가 불가."
+      "rationale": "세션 생명주기 상태 머신(start→event*→complete)과 이벤트 단위 코칭 상관 추적의 기반. 식별자 없이는 실시간 세션 컨텍스트·추세 조인·리포트 집계가 불가.",
+      "status_2026_07_29": {
+        "state": "partial",
+        "evidence": "session_id·level은 파일명에서 확보(예: 1_1000442_1.csv). worker_id·event_id 필드는 여전히 없다. burst 경계로 event를 결정론적으로 재구성할 수 있어 오프라인 분석은 가능하다.",
+        "action": "런타임 연동 시에만 필요. 오프라인 학습에는 차단 요인이 아니다."
+      }
     },
     {
       "id": "REQ-01",
       "field": "worker.skill_level",
       "required": true,
       "status_in_0.3.0": "null",
-      "carried_in": ["session_start", "offline: expert_labeled_sessions"],
-      "consumer": ["pose_mcp", "seq_mcp"],
+      "carried_in": [
+        "session_start",
+        "offline: expert_labeled_sessions"
+      ],
+      "consumer": [
+        "pose_mcp",
+        "seq_mcp"
+      ],
       "spec": "'expert'|'intermediate'|'novice'. session_start 필수. 오프라인: 레벨별 expert 세션 3개 이상(자세 참조 분포·순서 macro flow 추출용).",
-      "rationale": "전문가 참조 데이터셋의 근거. 없으면 자세 비교 기준·순서 흐름 정답을 만들 수 없음. 두 MCP 최상위 블로커."
+      "rationale": "전문가 참조 데이터셋의 근거. 없으면 자세 비교 기준·순서 흐름 정답을 만들 수 없음. 두 MCP 최상위 블로커.",
+      "status_2026_07_29": {
+        "state": "resolved_out_of_band",
+        "evidence": "데이터 필드는 여전히 null이지만, 디렉터리 경로(professionals/전형기)와 goal_year2.md의 '표준 도장작업 순서 및 자세 구축(전형기 반장)'이 skill_level=expert를 확정한다.",
+        "action": "필드로 채워주면 좋으나 차단 요인 아님. 단 novice/intermediate 코호트는 여전히 0건(REQ-16)."
+      }
     },
     {
       "id": "REQ-02",
       "field": "event.sequence_data.frames[].active_gun_pose (+ session.active_gun)",
       "required": true,
       "status_in_0.3.0": "null (capture.active_gun)",
-      "carried_in": ["event"],
-      "consumer": ["pose_mcp"],
+      "carried_in": [
+        "event"
+      ],
+      "consumer": [
+        "pose_mcp"
+      ],
       "spec": "프레임(또는 event) 단위로 실제 사용 중인 건 key('gun_hangil_short' 등)와 그 pos_m/rot_euler_deg. 미사용 건((-694,701,698) 고정좌표) 제외. 세션 내 교체 시 교체 시점 기록.",
-      "rationale": "4개 건 동시 트래킹 중 어느 건의 pos/rot이 유효한지 확정해야 스프레이 팔·건 궤적·스프레이 각을 특정할 수 있음."
+      "rationale": "4개 건 동시 트래킹 중 어느 건의 pos/rot이 유효한지 확정해야 스프레이 팔·건 궤적·스프레이 각을 특정할 수 있음.",
+      "status_2026_07_29": {
+        "state": "resolved",
+        "evidence": "실측으로 해결. 위치 분산 + 주차좌표(-694,701,698) 판별로 99/99 세션 전부 gun_hangil_short로 일관 판정됐다. 벤더 readme의 '변화하는 열로 판단' 지침과 일치한다. 다만 벤더가 '일반적으로 반도숏건을 주로 사용'이라 한 것과 달리 실제로는 한길숏건 단독이다.",
+        "action": "추가 export 불필요. 노즐 오프셋은 |건pos - Ray hit| 대비 Distance(Real)의 상수차 89.1mm로 복구 가능."
+      }
     },
     {
       "id": "REQ-03",
       "field": "worker.handedness",
       "required": true,
       "status_in_0.3.0": "null",
-      "carried_in": ["session_start"],
-      "consumer": ["pose_mcp"],
+      "carried_in": [
+        "session_start"
+      ],
+      "consumer": [
+        "pose_mcp"
+      ],
       "spec": "'right'|'left'. 스프레이 건을 쥔 손 기준.",
-      "rationale": "상반신 비교 대상 팔 체인(Right* vs Left* Shoulder→UpperArm→ForeArm→Hand) 선택에 필수."
+      "rationale": "상반신 비교 대상 팔 체인(Right* vs Left* Shoulder→UpperArm→ForeArm→Hand) 선택에 필수.",
+      "status_2026_07_29": {
+        "state": "blocked",
+        "evidence": "handedness 필드 없음. 손↔건 대응으로 유도하려 했으나 REQ-14(좌표계 분리) 때문에 불가능하다.",
+        "action": "벤더 회신 또는 촬영 기록으로 1회 확정 필요. 값 1개면 끝난다."
+      }
     },
     {
       "id": "REQ-04",
       "field": "event.sequence_data.frames[].surface_hit",
       "required": true,
       "status_in_0.3.0": "null (전 프레임). 단 distance_real_mm는 계산되어 있음 = Unity가 이미 gun→표면 raycast를 수행한다는 증거",
-      "carried_in": ["event"],
-      "consumer": ["pose_mcp", "seq_mcp", "location_mcp"],
+      "carried_in": [
+        "event"
+      ],
+      "consumer": [
+        "pose_mcp",
+        "seq_mcp",
+        "location_mcp"
+      ],
       "acquisition": {
         "primary_export": "Unity가 이미 계산한 RaycastHit를 그대로 export. distance_real_mm 존재가 raycast 수행의 증거이며, RaycastHit.triangleIndex는 그 raycast의 공짜 부산물(struct에 이미 존재). 따라서 이 요구는 '부담'이 아니라 '이미 있는 값의 노출'이다.",
         "precondition": "triangleIndex/region 매핑에는 non-convex MeshCollider(convex=false) 필요. textureCoord(UV)까지 원하면 mesh Read/Write Enabled.",
@@ -189,25 +238,46 @@
         },
         "when": "spray_on=true 프레임 필수, 조준 중(spray_on=false)이면 기록 권장"
       },
-      "rationale": "두 MCP 공통 핵심. 자세: '같은 목표 region을 향하는 burst끼리' 정렬 비교의 매칭 키. 순서: event→region 매핑이 없으면 macro flow 복원 불가. Unity가 이미 raycast를 수행하므로 export 비용은 거의 0. 미제공 시 서버측 raycast 폴백."
+      "rationale": "두 MCP 공통 핵심. 자세: '같은 목표 region을 향하는 burst끼리' 정렬 비교의 매칭 키. 순서: event→region 매핑이 없으면 macro flow 복원 불가. Unity가 이미 raycast를 수행하므로 export 비용은 거의 0. 미제공 시 서버측 raycast 폴백.",
+      "status_2026_07_29": {
+        "state": "resolved",
+        "evidence": "2.0의 '전 프레임 null' 판정은 틀렸다. 원본 CSV 컬럼 166~171에 Ray point X/Y/Z + Ray Texture Map Number + Ray Texture UV X/Y가 존재한다. 0.3.0 JSON export가 이 컬럼들을 버린 손실 변환이었다. 분사 프레임 중 레이 적중률: 학습모드 75.0~89.1%, 실전모드 95.4~99.1%.",
+        "action": "exporter 수정 불필요. 원본 CSV를 직접 파싱하면 된다. 단 face_id/normal은 없고 UV 텍셀 좌표(2048² 기준)로 대체된다 — region 매핑에는 UV가 더 낫다."
+      }
     },
     {
       "id": "REQ-05",
       "field": "conventions.rotation.order",
       "required": true,
       "status_in_0.3.0": "null ('Unity 기본이면 ZXY로 확정할 것' 주석만)",
-      "carried_in": ["offline: conventions", "session_start"],
-      "consumer": ["pose_mcp"],
+      "carried_in": [
+        "offline: conventions",
+        "session_start"
+      ],
+      "consumer": [
+        "pose_mcp"
+      ],
       "spec": "오일러 회전 적용 순서 확정 문자열(예 'ZXY') + intrinsic/extrinsic 명시.",
-      "rationale": "관절 회전 FK로 (1) 팔 체인 공간 자세 복원, (2) 교정 적용 후 유사도 재계산(반사실 검증)의 전제. 회전 순서 오류 시 유사도·교정량 전부 무효."
+      "rationale": "관절 회전 FK로 (1) 팔 체인 공간 자세 복원, (2) 교정 적용 후 유사도 재계산(반사실 검증)의 전제. 회전 순서 오류 시 유사도·교정량 전부 무효.",
+      "status_2026_07_29": {
+        "state": "blocked_and_harder_than_thought",
+        "evidence": "여전히 null. 추가로, 12개 규약(6순서 × intrinsic/extrinsic) 브루트포스로 연속성 판정을 시도했으나 전부 실패했다. 비물리적 점프가 1547~1610건이고 최대 점프가 모든 규약에서 179.4°로 동일하다. 즉 이 불연속은 오일러 순서 artifact가 아니라 데이터 자체의 성질이다(REQ-15).",
+        "action": "벤더 회신이 사실상 유일한 경로. 다만 쿼터니언 측지거리는 순서가 '일관되기만' 하면 비교 지표로는 유효하므로, 유사도 산출은 진행 가능하고 해부학적 교정 지시문 생성만 막힌다."
+      }
     },
     {
       "id": "REQ-06",
       "field": "level.regions (신규 정적 레벨 메타데이터 파일)",
       "required": true,
       "status_in_0.3.0": "없음 (level:1 정수 ID만)",
-      "carried_in": ["offline: level_regions"],
-      "consumer": ["seq_mcp", "pose_mcp", "location_mcp"],
+      "carried_in": [
+        "offline: level_regions"
+      ],
+      "consumer": [
+        "seq_mcp",
+        "pose_mcp",
+        "location_mcp"
+      ],
       "spec": {
         "delivery": "레벨당 1회 정적 파일. 메시지마다 반복 불필요.",
         "structure": {
@@ -225,81 +295,247 @@
           "triangle_to_region": "int[] 선택 — triangleIndex→region 인덱스 매핑을 사전 제공하면 Unity/서버 양쪽 룩업 즉시 사용. 미제공 시 face_ids/submesh_index로 구성"
         }
       },
-      "rationale": "순서 MCP 출력이 region 단위. region 분해가 없으면 '대체 흐름' 어휘가 없음. 자세 MCP의 '같은 목표' 매칭, location MCP의 raycast hit→region 매핑, Unity의 triangleToRegion 룩업 모두 이 파일에 의존."
+      "rationale": "순서 MCP 출력이 region 단위. region 분해가 없으면 '대체 흐름' 어휘가 없음. 자세 MCP의 '같은 목표' 매칭, location MCP의 raycast hit→region 매핑, Unity의 triangleToRegion 룩업 모두 이 파일에 의존.",
+      "status_2026_07_29": {
+        "state": "partial_geometry_delivered",
+        "evidence": "레벨 지오메트리는 확보됐다(data/sources/modelings/learning_mode_lv.1~10.fbx, 바이너리 FBX 7400). 정점·폴리곤·법선·UV 모두 파싱된다(lv1 16v/28f ~ lv9 384v/764f). CSV의 Ray UV를 2048로 나눈 값이 FBX UV 범위 안에 정확히 들어가 UV 공간이 정합한다. 그러나 머티리얼·서브메시가 0개인 단일 메시라 region 구획이 내장돼 있지 않다. 학습모드는 레벨당 Map01 하나뿐이라 맵 번호로는 region이 1개다.",
+        "action": "region 라벨은 UV 공간에서 저작해야 한다. 이것은 예산에 잡히지 않은 저작 작업이다. 실전모드 FBX는 미납(범위 외라 당장은 불필요)."
+      }
     },
     {
       "id": "REQ-07",
       "field": "event.sequence_data.target_region_summary",
       "required": false,
       "status_in_0.3.0": "없음",
-      "carried_in": ["event"],
-      "consumer": ["seq_mcp", "pose_mcp"],
+      "carried_in": [
+        "event"
+      ],
+      "consumer": [
+        "seq_mcp",
+        "pose_mcp"
+      ],
       "spec": "event(=burst)별 요약: 주 도장 region_id + region별 프레임 비중(%). exporter가 surface_hit로 사전 집계 시 MCP 부하 감소. 미제공 시 MCP가 REQ-04로 자체 집계.",
-      "rationale": "편의 필드. REQ-04+REQ-06 충족 시 파생 가능하므로 optional."
+      "rationale": "편의 필드. REQ-04+REQ-06 충족 시 파생 가능하므로 optional.",
+      "status_2026_07_29": {
+        "state": "optional_unchanged",
+        "evidence": "미제공. REQ-04로 자체 집계 가능하므로 영향 없음.",
+        "action": "없음"
+      }
     },
     {
       "id": "REQ-08",
       "field": "event.sequence_data.frames[].skeleton + session_start.skeleton_def",
       "required": true,
       "status_in_0.3.0": "제공됨 (20관절 로컬 오일러 + bind pose) — 유지 요청",
-      "carried_in": ["event (frames)", "session_start (skeleton_def)"],
-      "consumer": ["pose_mcp"],
+      "carried_in": [
+        "event (frames)",
+        "session_start (skeleton_def)"
+      ],
+      "consumer": [
+        "pose_mcp"
+      ],
       "spec": "프레임 skeleton은 현행 유지. 추가: (a) skeleton_def.hierarchy 채우기(현재 null — FK 체인 구성 필요, 표준 Humanoid면 그 사실 명시로 대체), (b) 상반신 관절(Spine, Chest, L/R Shoulder·UpperArm·ForeArm·Hand, Head) 결측 프레임 금지. skeleton_def는 session_start에서 1회 전송.",
-      "rationale": "상반신 체인 FK 복원에 hierarchy 필요. 프레임 회전값은 이미 충족."
+      "rationale": "상반신 체인 FK 복원에 hierarchy 필요. 프레임 회전값은 이미 충족.",
+      "status_2026_07_29": {
+        "state": "partial",
+        "evidence": "프레임 skeleton은 정상 제공(20관절 로컬 오일러 + 상수 bind offset). hierarchy는 여전히 null이라 FK 체인을 구성할 수 없다. bind_pose_local_pos_m은 그 자체로 골격 링크 길이 테이블이라 관절 가중치 산출에 쓸 수 있다.",
+        "action": "hierarchy 회신 필요. 표준 Humanoid면 그 사실 명시로 대체 가능."
+      }
     },
     {
       "id": "REQ-09",
       "field": "event.sequence_data.frames[].gun_metrics",
       "required": true,
       "status_in_0.3.0": "제공됨 — 유지 요청 + 의미 확정 필요",
-      "carried_in": ["event"],
-      "consumer": ["pose_mcp", "seq_mcp"],
+      "carried_in": [
+        "event"
+      ],
+      "consumer": [
+        "pose_mcp",
+        "seq_mcp"
+      ],
       "spec": "현행 유지(distance_real_mm, speed_real_mms 등). 추가: distance_real '무효' 표현 규약 확정 — 프레임 단위 유효/무효 판별 기준을 문서화하고 무효 프레임은 null 또는 valid:false로 명시(현재 valid_distance_ratio_pct는 세션 요약에만 존재).",
-      "rationale": "자세 품질 지표(적정 거리 400-600mm)·순서 검증 보조 신호. 무효값 혼입 시 통계 오염."
+      "rationale": "자세 품질 지표(적정 거리 400-600mm)·순서 검증 보조 신호. 무효값 혼입 시 통계 오염.",
+      "status_2026_07_29": {
+        "state": "resolved",
+        "evidence": "제공되며 품질도 확인됐다. 분사 프레임의 Distance(Real) 유효 비율이 전 레벨 99.9~100%. Model Input Data 13필드는 벤더 readme로 전부 해독됐다(Viscosity/Nozzle/GunSpeed/SetPressure/GunDistance/PushTime/SVR/ThinnerDilutionLaw/Temperature/MakerName/H1/H2/H3). 99/99 세션에 존재.",
+        "action": "없음."
+      }
     },
     {
       "id": "REQ-10",
       "field": "event 경계 = spray burst 경계",
       "required": true,
       "status_in_0.3.0": "제공됨 (spray_trigger_on_burst) — 유지 요청",
-      "carried_in": ["event (burst_meta)"],
-      "consumer": ["pose_mcp", "seq_mcp"],
+      "carried_in": [
+        "event (burst_meta)"
+      ],
+      "consumer": [
+        "pose_mcp",
+        "seq_mcp"
+      ],
       "spec": "현행 spray burst 분할 유지. event 1개가 대체로 burst 1개에 대응. 같은 region 연속 도장과 region 이동을 구분할 수 있도록 REQ-04가 burst 전 구간에서 기록되어야 함.",
-      "rationale": "자세 MCP 비교 단위이자 순서 MCP 시퀀스 원자 단위."
+      "rationale": "자세 MCP 비교 단위이자 순서 MCP 시퀀스 원자 단위.",
+      "status_2026_07_29": {
+        "state": "resolved",
+        "evidence": "spray_trigger_on_burst 경계가 트리거 On/Off로 결정론적으로 재구성된다. 학습모드 1,825 burst 확보. 자세와 무관한 독립 분할 신호라 정렬 기준으로 안전하다.",
+        "action": "없음."
+      }
     },
     {
       "id": "REQ-11",
       "field": "session_complete.region_results / thickness_texture_refs",
       "required": false,
       "status_in_0.3.0": "null",
-      "carried_in": ["session_complete"],
-      "consumer": ["seq_mcp"],
+      "carried_in": [
+        "session_complete"
+      ],
+      "consumer": [
+        "seq_mcp"
+      ],
       "spec": "세션 종료 시 region별 커버리지/두께 요약(region_id, coverage_pct, mean_thickness) 또는 두께맵 파일 참조.",
-      "rationale": "순서 준수와 결과 품질 상관 분석·재도장 감지 정밀화. 없어도 MCP 동작 가능하므로 optional."
+      "rationale": "순서 준수와 결과 품질 상관 분석·재도장 감지 정밀화. 없어도 MCP 동작 가능하므로 optional.",
+      "status_2026_07_29": {
+        "state": "resolved",
+        "evidence": "2.0에서 optional/null이던 두께맵이 실제로는 존재한다. 세션별 Map0k_..._Height.png(2048²). 벤더 readme의 (R/255 + G/255²)×2,000,000×0.01 식으로 µm 디코딩이 검증됐다. 학습모드 실측: 도포면적 4.3~21.8%, 중앙값 83~138.5 µm, 1차 목표 160µm의 90%(144µm) 이상 비율은 6.9~41.2%로 대부분 미달이다. Defect.png는 전 채널 0으로 비어 있고 FootPrint*.json도 대부분 빈 배열이다(벤더가 무시해도 된다고 확인).",
+        "action": "두께맵이 세션 최종 상태인지 누적 버퍼인지 확인 필요. burst 단위 귀속 가능 여부가 갈린다."
+      }
     },
     {
       "id": "REQ-12",
       "field": "(model, level_id) ↔ 레벨 정의 조인 규약",
       "required": true,
       "status_in_0.3.0": "부분 (level:1, model:'Exam' 존재하나 조인 규약 미문서화)",
-      "carried_in": ["offline: conventions", "session_start"],
-      "consumer": ["pose_mcp", "seq_mcp"],
+      "carried_in": [
+        "offline: conventions",
+        "session_start"
+      ],
+      "consumer": [
+        "pose_mcp",
+        "seq_mcp"
+      ],
       "spec": "session_start의 (model, level_id) 조합이 REQ-06 레벨 정의 파일과 1:1로 조인되는 규약 문서화. 동일 level 번호가 model마다 다른 지오메트리면 레벨 정의 파일 키에 model 포함.",
-      "rationale": "전문가 참조·macro flow는 레벨 단위 구축이므로 조인 키 모호 시 잘못된 참조와 비교."
+      "rationale": "전문가 참조·macro flow는 레벨 단위 구축이므로 조인 키 모호 시 잘못된 참조와 비교.",
+      "status_2026_07_29": {
+        "state": "partial",
+        "evidence": "modelings/learning_mode_lv.N 파일명과 CSV 파일명 접두 레벨이 대응한다. 학습모드에 한해 조인이 사실상 성립한다.",
+        "action": "실전모드 재개 시 문서화 필요."
+      }
+    },
+    {
+      "id": "REQ-14",
+      "field": "스켈레톤 ↔ 월드 좌표계 변환 (신규, 2026-07-29 실측으로 발견)",
+      "required": true,
+      "status_2026_07_29": {
+        "state": "blocked",
+        "evidence": "같은 프레임 실측: |카메라 − 한길숏건| = 0.716 m(팔 길이, 정상)인데 |카메라 − Pelvis| = 5.155 m로 인체에서 불가능하다. 축별 (카메라−Pelvis) std = 0.140/0.169/0.232 m라 상수 평행이동도 아니고, 축별 상관도 +0.243/+0.182/+0.389로 약하다. 즉 건·카메라·플래쉬·Ray 충돌점은 하나의 월드 좌표계에 있고 스켈레톤만 별도 리그 공간에 있다.",
+        "action": "프레임별 rig root의 월드 변환, 또는 대응이 알려진 캘리브레이션 프레임 1개를 요청. 요청 1건으로 기하학적 버전이 열리므로 가치가 가장 높다."
+      },
+      "consumer": [
+        "pose_mcp",
+        "location_mcp"
+      ],
+      "spec": "자세를 작업 공간 좌표에 기하학적으로 배치하려면 필수. 스켈레톤끼리만 비교하는 현 범위에서는 불필요하며, goal_year2.md의 '작업 공간 좌표-작업자 동선, 자세 데이터 매핑'은 카메라(월드)를 작업자 위치 프록시로 쓰고 자세와는 타임스탬프로 잇는 방식으로 충족한다."
+    },
+    {
+      "id": "REQ-15",
+      "field": "3-DOF 팔 관절의 ~180° 회전 불연속 (신규, 2026-07-29 실측으로 발견)",
+      "required": true,
+      "status_2026_07_29": {
+        "state": "blocked",
+        "evidence": "분사 프레임 34,460개 기준 프레임 간 쿼터니언 측지 점프(>30°/11.1ms) 발생률: RightShoulder 1.36%, RightUpperArm 1.84%, RightHand 1.09% 대 Spine 0.11%, Chest 0.08%, RightForeArm 0.14%. 3-DOF 볼조인트에만 나타나고 1-DOF 힌지(전완)는 깨끗하다. 대부분 되돌아오지 않는 step이며(어깨 389 step / 79 spike) median 필터로 제거되지 않는다.",
+        "action": "벤더에 원인 문의. 병행으로 직전 프레임 대비 분지 정규화(대체 오일러 해 선택)를 시험. 해소 전까지는 쿼터니언 측지거리 + 이상치 트리밍으로 우회한다."
+      },
+      "consumer": [
+        "pose_mcp"
+      ],
+      "spec": "자세 모델이 쓰는 바로 그 팔 사슬에서 발생하므로 프레임별 산술 비교를 무효화한다. 레퍼런스 생성 시 측지 상위 10% 트리밍과 사전 마스킹이 필요하다."
+    },
+    {
+      "id": "REQ-16",
+      "field": "훈련생(novice/intermediate) 코호트 (신규, 미확보)",
+      "required": true,
+      "status_2026_07_29": {
+        "state": "blocked",
+        "evidence": "취득 데이터는 전형기 반장 1인 100세션이 전부다. 훈련생 세션은 0건이다.",
+        "action": "goal_year2.md의 '숙련자-훈련생 자세 비교'를 납품하려면 코호트 확보가 필요하다. 확보 불가하면 산출물을 '숙련자 자신의 자연 편차 대비 교정'으로 재정의하고 훈련생 비교를 3차년도로 이관해야 한다. 납품 시점이 아니라 지금 합의할 사항이다."
+      },
+      "consumer": [
+        "pose_mcp",
+        "seq_mcp"
+      ],
+      "spec": "KPI 시행 모집단의 '기존 자세'는 현재 숙련자 본인의 편차 프레임에서 나온다. 이 사실을 산출물에 명시하지 않으면 성능 주장이 과대 해석된다."
     }
   ],
   "priority_summary": {
-    "blocking_must_have": ["REQ-13 (식별자 session/user/event)", "REQ-01 (skill_level)", "REQ-04 (surface_hit)", "REQ-06 (level regions)", "REQ-05 (rotation order)", "REQ-02 (active_gun)", "REQ-03 (handedness)", "REQ-08 (hierarchy)", "REQ-12 (조인 규약)"],
-    "keep_as_is": ["REQ-08 skeleton frames (현행)", "REQ-09 gun_metrics (현행+규약)", "REQ-10 burst 경계 (현행)"],
-    "optional": ["REQ-07 (event 영역 요약)", "REQ-11 (완료 결과 두께맵)"]
+    "resolved_by_measurement": [
+      "REQ-02 (active_gun - 분산 판별로 99/99 확정)",
+      "REQ-04 (surface_hit - 원본 CSV Ray 컬럼에 존재)",
+      "REQ-09 (gun_metrics + model_input 13필드 해독)",
+      "REQ-10 (burst 경계)",
+      "REQ-11 (두께맵 - µm 디코딩 검증)"
+    ],
+    "blocking_must_have": [
+      "REQ-14 (스켈레톤↔월드 변환) - 신규, 기하 매핑의 유일한 차단 요인",
+      "REQ-05 (rotation order) - 교정 지시문의 해부학적 의미에 필수",
+      "REQ-08 (hierarchy) - FK 구성에 필수",
+      "REQ-15 (팔 관절 180° 불연속) - 신규, 자세 지표 신뢰도 직결",
+      "REQ-03 (handedness) - 값 1개",
+      "REQ-16 (훈련생 코호트) - 신규, 계약 산출물 정의 문제"
+    ],
+    "authoring_work_not_vendor": [
+      "REQ-06 region 라벨 - FBX 지오메트리는 확보됐으나 UV 공간 구획은 직접 저작해야 한다(미계상 공수)"
+    ],
+    "optional": [
+      "REQ-07",
+      "REQ-12(실전모드 재개 시)",
+      "REQ-13(런타임 연동 시)"
+    ]
   },
   "delivery_checklist_for_exporter": [
-    "[ ] 런타임 메시지 3종(session_start/event/session_complete)에 REQ-13 식별자(session_id/user_id/event_id) 반영",
-    "[ ] event.sequence_data 구조에 REQ-04(surface_hit)·REQ-02(active_gun_pose)·REQ-08(skeleton)·REQ-09(gun_metrics)·REQ-10(burst_meta) 반영",
-    "[ ] session_start에 REQ-01(skill_level)·REQ-03(handedness)·REQ-08(skeleton_def hierarchy)·spec 반영",
-    "[ ] 0.4.0 스키마에 REQ-01~06,08~10,12,13 반영",
-    "[ ] 레벨별 정적 region 정의 파일(REQ-06) 1종 이상 제공 (파일럿: level 1)",
-    "[ ] 레벨별 expert 라벨 세션 3개 이상 + novice/intermediate 각 1개 이상 export",
-    "[ ] rotation order(REQ-05) 확정값·intrinsic/extrinsic, (model,level) 조인 규약(REQ-12) 회신"
-  ]
+    "[ ] REQ-14 프레임별 rig root 월드 변환 또는 캘리브레이션 프레임 1개 (최우선)",
+    "[ ] REQ-05 rotation order 확정값 + intrinsic/extrinsic + local/world 여부",
+    "[ ] REQ-08 skeleton_def.hierarchy (표준 Humanoid면 그 사실 명시로 대체 가능)",
+    "[ ] REQ-15 3-DOF 팔 관절에서 ~180° 회전 점프가 1~2% 프레임에 발생하는 원인",
+    "[ ] REQ-03 전형기 반장의 handedness",
+    "[ ] REQ-11 Height PNG가 세션 최종 상태인지 누적 버퍼인지",
+    "[ ] REQ-16 훈련생 코호트 확보 가능 여부 (발주처 협의 사항)",
+    "[x] REQ-04 surface_hit - 원본 CSV에 존재. exporter 수정 불필요",
+    "[x] REQ-02 active_gun - 분산 판별로 해결. 추가 export 불필요",
+    "[x] REQ-06 레벨 지오메트리 - learning_mode_lv.1~10.fbx 수령 완료"
+  ],
+  "revised": "2026-07-29",
+  "measurement_basis": {
+    "what": "data/sources/professionals/전형기 전수 실측. 원본 CSV 100개(171컬럼) 및 Height PNG 86개.",
+    "tooling": "trainer/scripts/simulator_csv.py + session_csv.py (원본 CSV 직접 파싱). 벤더 자체 export(docs/1_1000442_session.json)와 시퀀스 frame_count·spray_count가 완전히 일치함을 확인.",
+    "scope_note": "실전모드(1-A/1-B/1-C)는 사용자 결정으로 1차 범위에서 제외. 학습모드 TR 레벨 1~10만 대상. 신체 차이 정규화는 고려하지 않음. 단일 숙련자(전형기 반장) 기준은 goal_year2.md의 설계 의도.",
+    "inventory": {
+      "worker_count": 1,
+      "dates": [
+        "20250901",
+        "20250904",
+        "20250905",
+        "20250908",
+        "20250909"
+      ],
+      "learning_mode": {
+        "sessions": 79,
+        "frames": 565428,
+        "duration_sec": 6281,
+        "bursts": 1825,
+        "spray_frames": 377717,
+        "maps_per_level": 1
+      },
+      "field_mode_out_of_scope": {
+        "sessions": 20,
+        "frames": 805566,
+        "duration_sec": 8949,
+        "bursts": 1719,
+        "spray_frames": 539536,
+        "maps_per_level": 6
+      },
+      "corrupt": "1-B_1000776_1.csv 는 헤더만 있고 데이터 행이 0개다. 해당 세션의 TextureFiles만 고아로 남아 있다.",
+      "sampling_rate_hz": 90
+    }
+  }
 }

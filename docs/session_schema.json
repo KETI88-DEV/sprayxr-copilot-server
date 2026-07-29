@@ -1,6 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://ship-paint-copilot/schemas/session_schema.json",
+  "$comment": "주의(2026-07-29): 이 스키마는 제안형이며 실제 납품된 전문가 데이터와 구조가 다르다. 실 데이터는 strokes 배열이 아니라 90Hz 프레임 + spray burst 시퀀스 구조이고, 관절은 로컬 오일러 회전으로 온다. 학습·운용의 정본은 docs/dataset_spec.md와 원본 CSV(171컬럼)이며, 이 파일을 기준으로 파이프라인을 구현하지 말 것. 항목별 확보/미확보 상태는 docs/data_requirements_pose_sequence_mcp.json v3.0 참조.",
   "title": "Ship Painting Training Session",
   "description": "XR 도장 훈련 시뮬레이터(Unity)가 출력하는 세션 단위 원본 데이터 스키마. 파일 경로 규칙: sessions/{level_id}/{worker_id}/{session_id}.json (세션 1개 = 파일 1개). 필드명은 mcp_servers/의 Pydantic 모델(pose_estimation.Joint, sequence_validation.ZoneInfo, anomaly_detection.TimeseriesData/DftPoint, dft_judge.DFTSpec)과 1:1로 일치하며, RAG/순서/자세 모델 학습 데이터는 이 스키마에서 파생한다.",
   "type": "object",
