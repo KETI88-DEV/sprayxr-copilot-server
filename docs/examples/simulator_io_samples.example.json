@@ -307,7 +307,237 @@
     ]
   },
 
-  "10_error_422": {
+
+  
+  "10_runtime_pose_joints": {
+    "$endpoint": "POST /api/sim/sessions/{session_id}/events",
+    "$purpose": "자세 관절 데이터 전송. pose_joints는 관절명→각도(도) 또는 위치(미터) 딕셔너리. 현재는 기록만 되고 이상 판정에 사용되지 않는다.",
+    "request": {
+      "event_id": "ev-4",
+      "zone_id": "A-2",
+      "telemetry": {
+        "gun_metrics": {
+          "speed_m_per_s": 0.8,
+          "standoff_mm": 300.0,
+          "angle_deg": 72.0
+        },
+        "pose_joints": {
+          "wrist_r":    0.15,
+          "wrist_l":    -0.12,
+          "elbow_r":    0.28,
+          "elbow_l":    -0.26,
+          "shoulder_r": 0.36,
+          "shoulder_l": -0.35
+        }
+      }
+    },
+    "response_200": {
+      "session_id": "TR-L01-20260729-001",
+      "event_id": "ev-4",
+      "kind": "ack",
+      "message": "이벤트 누적됨.",
+      "anomaly": null
+    },
+    "$notes": [
+      "pose_joints 값은 float — 관절별 단일 스칼라(각도 또는 위치). 3D 좌표가 필요하면 MCP pose_estimation/compare를 직접 호출한다",
+      "현재 시뮬레이터 스텁은 pose_joints를 기록만 하고 이상 판정에 쓰지 않는다",
+      "자세 비교·교정 피드백은 아래 11_mcp_pose_compare 참고"
+    ]
+  },
+
+  "11_mcp_pose_compare": {
+    "$endpoint": "POST /pose_estimation/compare  (MCP :8100, 컨테이너 내부 전용)",
+    "$purpose": "현재 자세를 숙련자 기준 자세와 비교해 관절별 교정 방향과 유사도를 반환한다.",
+    "request": {
+      "mode": "compare",
+      "block_id": "BLK-A",
+      "current_pose": {
+        "joints": {
+          "wrist_r":    {"x": 0.15, "y": -0.06, "z": 0.42, "roll": 8.0,  "pitch": 25.0, "yaw": 12.0},
+          "wrist_l":    {"x": -0.12,"y": -0.05, "z": 0.43, "roll": 3.0,  "pitch": 14.0, "yaw": 6.0},
+          "elbow_r":    {"x": 0.28, "y": -0.12, "z": 0.33, "roll": 0.0,  "pitch": 18.0, "yaw": 5.0},
+          "elbow_l":    {"x": -0.26,"y": -0.11, "z": 0.34, "roll": 0.0,  "pitch": 9.0,  "yaw": 1.0},
+          "shoulder_r": {"x": 0.36, "y":  0.01, "z": 0.19, "roll": 0.0,  "pitch": 6.0,  "yaw": 2.0},
+          "shoulder_l": {"x": -0.35,"y":  0.00, "z": 0.20, "roll": 0.0,  "pitch": 5.0,  "yaw": 0.0}
+        }
+      }
+    },
+    "response_200": {
+      "status": "success",
+      "result": {
+        "mode": "compare",
+        "expert_pose_id": "EP-001",
+        "similarity_score": 0.947,
+        "corrections": [
+          {
+            "joint": "elbow_r",
+            "label": "오른쪽 팔꿈치",
+            "distance": 0.0412,
+            "angle_corrections": {"pitch": 10.0, "yaw": 5.0},
+            "correction_text": "오른쪽 팔꿈치: pitch 10° 과다, yaw 5° 과다"
+          },
+          {
+            "joint": "wrist_r",
+            "label": "오른쪽 손목",
+            "distance": 0.0574,
+            "angle_corrections": {"roll": 6.0, "pitch": 13.0, "yaw": 7.0},
+            "correction_text": "오른쪽 손목: roll 6° 과다, pitch 13° 과다, yaw 7° 과다"
+          },
+          {
+            "joint": "elbow_l",
+            "label": "왼쪽 팔꿈치",
+            "distance": 0.0173,
+            "angle_corrections": {},
+            "correction_text": "왼쪽 팔꿈치: 양호"
+          },
+          {
+            "joint": "wrist_l",
+            "label": "왼쪽 손목",
+            "distance": 0.0245,
+            "angle_corrections": {},
+            "correction_text": "왼쪽 손목: 양호"
+          },
+          {
+            "joint": "shoulder_r",
+            "label": "오른쪽 어깨",
+            "distance": 0.0173,
+            "angle_corrections": {},
+            "correction_text": "오른쪽 어깨: 양호"
+          },
+          {
+            "joint": "shoulder_l",
+            "label": "왼쪽 어깨",
+            "distance": 0.0,
+            "angle_corrections": {},
+            "correction_text": "왼쪽 어깨: 양호"
+          }
+        ],
+        "summary": "숙련자 자세(EP-001) 대비 유사도 95%. 교정 필요 관절 2개: 오른쪽 팔꿈치: pitch 10° 과다, yaw 5° 과다, 오른쪽 손목: roll 6° 과다, pitch 13° 과다, yaw 7° 과다"
+      },
+      "error": null,
+      "timestamp": "2026-07-29T02:33:44.148295+00:00"
+    },
+    "$expert_poses": {
+      "BLK-A": "EP-001",
+      "BLK-B": "EP-002",
+      "BLK-C": "EP-003"
+    },
+    "$reference_pose_EP-001": {
+      "wrist_r":    {"x": 0.10, "y": -0.04, "z": 0.44, "roll": 2.0,  "pitch": 12.0, "yaw": 5.0},
+      "wrist_l":    {"x": -0.10,"y": -0.04, "z": 0.44, "roll": 2.0,  "pitch": 12.0, "yaw": 5.0},
+      "elbow_r":    {"x": 0.25, "y": -0.10, "z": 0.35, "roll": 0.0,  "pitch": 8.0,  "yaw": 0.0},
+      "elbow_l":    {"x": -0.25,"y": -0.10, "z": 0.35, "roll": 0.0,  "pitch": 8.0,  "yaw": 0.0},
+      "shoulder_r": {"x": 0.35, "y":  0.00, "z": 0.20, "roll": 0.0,  "pitch": 5.0,  "yaw": 0.0},
+      "shoulder_l": {"x": -0.35,"y":  0.00, "z": 0.20, "roll": 0.0,  "pitch": 5.0,  "yaw": 0.0}
+    },
+    "$notes": [
+      "mode: compare | recommend",
+      "compare: current_pose 필수. block_id 또는 expert_pose_id로 기준 자세 선택",
+      "recommend: block_id 필수. 해당 블록의 권장 숙련자 자세 ID를 반환",
+      "similarity_score: 0.0~1.0. 1.0이 완전 일치",
+      "angle_corrections의 값이 양수면 '과다', 음수면 '부족'",
+      "교정 임계값: 각도 차이 3° 초과 시 corrections에 포함",
+      "현재 지원 관절: wrist_r/l, elbow_r/l, shoulder_r/l (6개)",
+      "MCP는 컨테이너 내부(:8100)에서만 접근 가능. 외부에서는 /api/chat live 경로를 통해 간접 호출됨"
+    ]
+  },
+
+  "12_mcp_pose_recommend": {
+    "$endpoint": "POST /pose_estimation/compare  (MCP :8100)",
+    "$purpose": "블록 ID로 권장 숙련자 자세 ID를 조회한다. 훈련 시작 전 기준 자세 확인용.",
+    "request": {
+      "mode": "recommend",
+      "block_id": "BLK-A"
+    },
+    "response_200": {
+      "status": "success",
+      "result": {
+        "mode": "recommend",
+        "block_id": "BLK-A",
+        "recommended_expert_pose_id": "EP-001",
+        "message": "블록 BLK-A에서 숙련자 자세 EP-001을 사용하세요."
+      },
+      "error": null,
+      "timestamp": "2026-07-29T02:33:44.281907+00:00"
+    }
+  },
+
+  "13_mcp_location_identify": {
+    "$endpoint": "POST /location_tracking/identify  (MCP :8100, 컨테이너 내부 전용)",
+    "$purpose": "3D 좌표 목록으로 현재 구역 ID와 커버리지를 반환한다. 시뮬레이터 runtime 이벤트에 zone_id가 없을 때 폴백으로 호출된다.",
+    "request": {
+      "coordinates": [
+        {"x": 1.2, "y": 3.5, "z": 0.8, "timestamp": 1753750000.0},
+        {"x": 1.3, "y": 3.6, "z": 0.9, "timestamp": 1753750001.0}
+      ],
+      "ship_model_id": "TR-L01"
+    },
+    "response_200": {
+      "status": "success",
+      "result": {
+        "zone_id": "B-3",
+        "zone_type": "수직 패널",
+        "coverage_pct": 0.62,
+        "uncovered_zones": ["B-4", "C-1"],
+        "points_processed": 2,
+        "ship_model_id": "TR-L01"
+      },
+      "error": null,
+      "timestamp": "2026-07-29T02:33:44.411007+00:00"
+    },
+    "$coordinate_format": {
+      "x": "미터 단위 X 좌표",
+      "y": "미터 단위 Y 좌표",
+      "z": "미터 단위 Z 좌표",
+      "timestamp": "Unix 타임스탬프 (선택)"
+    },
+    "$notes": [
+      "coordinates 최소 1개 필수",
+      "ship_model_id 선택 — 모델별 구역 매핑에 사용 예정",
+      "현재 stub: 입력과 무관하게 항상 zone_id='B-3' 반환",
+      "B-3는 TR-L01 구역 맵(A-1/A-2/A-3)에 없으므로 시뮬레이터 세션에서 unresolved_zone_id로 기록됨",
+      "실제 구현 시 zone_id가 권장 순서 안에 있어야 위치 이동이 발생함",
+      "zone_id가 있는 runtime 이벤트에서는 이 도구를 호출하지 않음 (zone_id 우선)"
+    ]
+  },
+
+  "14_runtime_full_telemetry": {
+    "$endpoint": "POST /api/sim/sessions/{session_id}/events",
+    "$purpose": "gun_metrics + pose_joints + coordinates를 모두 포함한 최대 페이로드 예시.",
+    "request": {
+      "event_id": "ev-5",
+      "zone_id": "A-3",
+      "telemetry": {
+        "gun_metrics": {
+          "speed_m_per_s": 0.75,
+          "standoff_mm": 310.0,
+          "angle_deg": 68.0
+        },
+        "pose_joints": {
+          "wrist_r":    0.15,
+          "wrist_l":    -0.12,
+          "elbow_r":    0.28,
+          "elbow_l":    -0.26,
+          "shoulder_r": 0.36,
+          "shoulder_l": -0.35
+        },
+        "coordinates": [1.2, 3.5, 0.8]
+      }
+    },
+    "response_200": {
+      "session_id": "TR-L01-20260729-001",
+      "event_id": "ev-5",
+      "kind": "ack",
+      "message": "이벤트 누적됨.",
+      "anomaly": null
+    },
+    "$notes": [
+      "zone_id가 있으므로 coordinates는 위치 해석에 사용되지 않는다 (zone_id 우선)",
+      "pose_joints는 기록만 됨. 자세 비교는 MCP pose_estimation/compare를 별도 호출",
+      "gun_metrics가 정상 범위(standoff ≤ 320, angle ≥ 60)이므로 kind:ack 반환"
+    ]
+  },
+  "15_error_422": {
     "$endpoint": "POST /api/sim/sessions/{session_id}/events",
     "$purpose": "422 오류 예시. 필수 필드 누락 또는 알 수 없는 필드.",
     "request_missing_required": {
