@@ -218,8 +218,9 @@ def _resample_vectors(vectors: list[list[float]], target_length: int) -> list[li
     scale = (len(vectors) - 1) / (target_length - 1) if target_length > 1 else 0.0
     for target_index in range(target_length):
         position = target_index * scale
-        lower_index = int(math.floor(position))
-        upper_index = int(math.ceil(position))
+        last_index = len(vectors) - 1
+        lower_index = min(int(math.floor(position)), last_index)
+        upper_index = min(int(math.ceil(position)), last_index)
         if lower_index == upper_index:
             resampled.append(list(vectors[lower_index]))
             continue

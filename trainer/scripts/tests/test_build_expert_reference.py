@@ -84,6 +84,16 @@ def _make_synthetic_session(tmp_path: Path, session_name: str, delta: float) -> 
     return sequence_path
 
 
+def test_resample_upsamples_without_overrunning_the_final_index() -> None:
+    vectors = [[float(step), 0.0, 0.0] for step in range(8)]
+
+    resampled = build_expert_reference._resample_vectors(vectors, 26)
+
+    assert len(resampled) == 26
+    assert resampled[0] == vectors[0]
+    assert resampled[-1] == vectors[-1]
+
+
 def test_real_sample_cli_emits_insufficient_data(tmp_path: Path) -> None:
     output_dir = tmp_path / "artifacts"
 
