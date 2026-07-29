@@ -56,7 +56,7 @@ class ChatRequest(StrictModel):
     message: Annotated[str, Field(min_length=1, max_length=4000)]
     session_id: Annotated[str, Field(min_length=1)]
     mode: Literal["demo", "live"] = "demo"
-    level_id: Annotated[str, Field(min_length=1)] = "SP0035-L01"
+    level_id: Annotated[str, Field(min_length=1)] = "TR-L01"
 
 
 class StreamEvent(StrictModel):

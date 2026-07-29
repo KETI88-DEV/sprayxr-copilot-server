@@ -10,7 +10,7 @@ const EVENTS: MonitorEvent[] = [
     phase: 'start',
     direction: 'input',
     timestamp: 't1',
-    payload: { level_id: 'SP0035-L01' },
+    payload: { level_id: 'TR-L01' },
   },
   {
     seq: 2,
@@ -51,7 +51,7 @@ describe('SimulatorMonitorPanel', () => {
     expect(inTimeline.queryByText('세션 끝')).not.toBeInTheDocument()
     expect(screen.getAllByText('input')).toHaveLength(2)
     expect(screen.getAllByText('output')).toHaveLength(1)
-    expect(screen.getByText(/SP0035-L01/)).toBeInTheDocument()
+    expect(screen.getByText(/TR-L01/)).toBeInTheDocument()
   })
 
   it('keeps sessions separate and orders phases start -> runtime -> session_end', () => {

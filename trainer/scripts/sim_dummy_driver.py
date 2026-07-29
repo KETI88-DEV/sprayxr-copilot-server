@@ -27,7 +27,7 @@ def build_dummy_session(
     """Build the start / runtime / session_end payloads for one dummy session."""
     start: dict[str, object] = {
         "session_id": session_id,
-        "level_id": "SP0035-L01",
+        "level_id": "TR-L01",
         "worker": {"trainee_id": "t-dummy", "skill_level": "beginner", "handedness": "right"},
         "spec": {"nominal_um": 100.0},
     }

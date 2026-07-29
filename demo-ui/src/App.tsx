@@ -20,11 +20,11 @@ import type { TurnMetrics } from './telemetry'
 import { useMonitorStream } from './useMonitorStream'
 import './styles.css'
 
-const LEVEL_ID = 'SP0035-L01'
+const LEVEL_ID = 'TR-L01'
 
 const INITIAL_SNAPSHOT: SequenceSnapshot = {
   level_id: LEVEL_ID,
-  label: 'SP0035 Level 01',
+  label: 'Training Level 01',
   zones: [
     { zone_id: 'A-1', label: '상부', status: 'completed' },
     { zone_id: 'A-2', label: '중간', status: 'next' },

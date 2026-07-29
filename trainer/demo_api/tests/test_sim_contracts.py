@@ -21,7 +21,7 @@ def test_session_start_input_parses_nested_models() -> None:
     parsed = SessionStartInput.model_validate(
         {
             "session_id": "s1",
-            "level_id": "SP0035-L01",
+            "level_id": "TR-L01",
             "worker": {"trainee_id": "t1", "skill_level": "beginner", "handedness": "right"},
             "spec": {"nominal_um": 100.0},
         }
@@ -100,7 +100,7 @@ def test_sim_session_response_parses_full_view() -> None:
         {
             "session": {
                 "session_id": "s-1",
-                "level_id": "SP0035-L01",
+                "level_id": "TR-L01",
                 "phase": "runtime",
                 "recommended_flow": ["A-1", "A-2", "A-3"],
                 "current_zone_id": "A-2",
@@ -118,7 +118,7 @@ def test_sim_session_response_parses_full_view() -> None:
 
 _VALID_SESSION_VIEW: dict[str, object] = {
     "session_id": "s-1",
-    "level_id": "SP0035-L01",
+    "level_id": "TR-L01",
     "phase": "runtime",
     "recommended_flow": ["A-1", "A-2", "A-3"],
     "current_zone_id": "A-2",

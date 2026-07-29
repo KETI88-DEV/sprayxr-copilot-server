@@ -42,7 +42,7 @@ def _client() -> tuple[TestClient, MonitorRecorder]:
 def _start_body() -> dict[str, object]:
     return {
         "session_id": "s1",
-        "level_id": "SP0035-L01",
+        "level_id": "TR-L01",
         "worker": {"trainee_id": "t", "skill_level": "beginner", "handedness": "right"},
         "spec": {"nominal_um": 100.0},
     }
@@ -81,7 +81,7 @@ def test_start_returns_recommended_flow_and_records_input_output() -> None:
         ("start", "input"),
         ("start", "output"),
     ]
-    assert snapshot.events[0].payload["level_id"] == "SP0035-L01"
+    assert snapshot.events[0].payload["level_id"] == "TR-L01"
     assert snapshot.events[1].payload["flow_source"] == "rule"
 
 
@@ -177,7 +177,7 @@ def test_full_session_records_two_events_per_call() -> None:
 
 START_BODY: dict[str, object] = {
     "session_id": "s-1",
-    "level_id": "SP0035-L01",
+    "level_id": "TR-L01",
     "worker": {"trainee_id": "t-1", "skill_level": "beginner", "handedness": "right"},
     "spec": {"nominal_um": 100.0},
 }

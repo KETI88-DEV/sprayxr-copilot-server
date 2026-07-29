@@ -30,13 +30,13 @@ describe('3단계 송신기', () => {
     const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }))
     vi.stubGlobal('fetch', fetchMock)
 
-    await sendSessionStart('s-1', 'SP0035-L01')
+    await sendSessionStart('s-1', 'TR-L01')
 
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
     expect(url).toContain('/api/sim/sessions/start')
     expect(JSON.parse(String(init.body))).toMatchObject({
       session_id: 's-1',
-      level_id: 'SP0035-L01',
+      level_id: 'TR-L01',
     })
   })
 
@@ -77,7 +77,7 @@ describe('3단계 송신기', () => {
   it('인터페이스가 거부하면 예외를 던진다', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 422 })))
 
-    await expect(sendSessionStart('s-1', 'SP0035-L01')).rejects.toThrow('sim request failed: 422')
+    await expect(sendSessionStart('s-1', 'TR-L01')).rejects.toThrow('sim request failed: 422')
   })
 })
 
@@ -94,7 +94,7 @@ describe('fetchSimSession', () => {
   it('세션이 있으면 검증된 값을 돌려준다', async () => {
     const session = {
       session_id: 's-1',
-      level_id: 'SP0035-L01',
+      level_id: 'TR-L01',
       phase: 'runtime',
       recommended_flow: ['A-1', 'A-2', 'A-3'],
       current_zone_id: 'A-2',
@@ -127,7 +127,7 @@ describe('streamMonitor', () => {
       vi.fn(async () =>
         sseResponse([
           'event: gap\ndata: {"dropped_before":3}\n\n',
-          'event: monitor\ndata: {"seq":3,"session_id":"s1","phase":"start","direction":"input","timestamp":"t","payload":{"level_id":"SP0035-L01"}}\n\n',
+          'event: monitor\ndata: {"seq":3,"session_id":"s1","phase":"start","direction":"input","timestamp":"t","payload":{"level_id":"TR-L01"}}\n\n',
           'event: monitor\ndata: {"seq":4,"session_id":"s1","phase":"start","direction":"output","timestamp":"t","payload":{"flow_source":"rule"}}\n\n',
         ]),
       ),

@@ -41,7 +41,7 @@ def _pipeline_capturing_route(route: str, tool_calls: list[dict[str, Any]]) -> t
 def test_live_stream_routes_knowledge_question_to_fast_despite_ambient_environment() -> None:
     """Given ambient sequence context, When a definition is asked, Then the fast route is selected."""
     pipe, captured = _pipeline_capturing_route("fast", [])
-    ambient = dict(default_tool_environment("SP0035-L01"))
+    ambient = dict(default_tool_environment("TR-L01"))
 
     _ = _collect(pipe.run_streaming(instruction="블라스팅이 뭐야", environment=ambient))
 
@@ -101,7 +101,7 @@ def test_live_stream_keeps_sequence_question_on_realtime_route_with_same_environ
         "result": {"status": "success", "result": {"next_zone": "A-2"}},
     }
     pipe, captured = _pipeline_capturing_route("training_realtime", [existing_call])
-    ambient = dict(default_tool_environment("SP0035-L01"))
+    ambient = dict(default_tool_environment("TR-L01"))
 
     _ = _collect(pipe.run_streaming(instruction="다음 순서가 어떻게 돼?", environment=ambient))
 

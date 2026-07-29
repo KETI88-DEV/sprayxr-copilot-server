@@ -79,7 +79,7 @@ describe('simContracts', () => {
 describe('simSessionSchema', () => {
   const valid = {
     session_id: 's-1',
-    level_id: 'SP0035-L01',
+    level_id: 'TR-L01',
     phase: 'runtime',
     recommended_flow: ['A-1', 'A-2', 'A-3'],
     current_zone_id: 'A-2',

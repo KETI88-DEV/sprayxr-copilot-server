@@ -4,8 +4,8 @@ import { SequencePanel } from '../src/components/SequencePanel'
 import type { SequenceSnapshot } from '../src/contracts'
 
 const snapshot: SequenceSnapshot = {
-  level_id: 'SP0035-L01',
-  label: 'SP0035 Level 01',
+  level_id: 'TR-L01',
+  label: 'Training Level 01',
   zones: [
     { zone_id: 'A-1', label: '상부', status: 'completed' },
     { zone_id: 'A-2', label: '중간', status: 'current' },
@@ -19,7 +19,7 @@ const snapshot: SequenceSnapshot = {
 describe('SequencePanel', () => {
   it('renders level label and every zone with a status badge', () => {
     render(<SequencePanel snapshot={snapshot} session={null} />)
-    expect(screen.getByText('SP0035 Level 01')).toBeInTheDocument()
+    expect(screen.getByText('Training Level 01')).toBeInTheDocument()
     expect(screen.getByTestId('zone-A-1')).toHaveAttribute('data-status', 'completed')
     expect(screen.getByTestId('zone-A-2')).toHaveAttribute('data-status', 'current')
     expect(screen.getByTestId('zone-A-3')).toHaveAttribute('data-status', 'next')
@@ -32,7 +32,7 @@ describe('SequencePanel', () => {
 describe('SequencePanel 시뮬레이터 세션 배지', () => {
   const session = {
     session_id: 'abcdef12-0000-0000-0000-000000000000',
-    level_id: 'SP0035-L01',
+    level_id: 'TR-L01',
     phase: 'runtime' as const,
     recommended_flow: ['A-1', 'A-2', 'A-3'],
     current_zone_id: 'A-2',

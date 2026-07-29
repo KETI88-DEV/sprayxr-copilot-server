@@ -107,7 +107,7 @@ React 콘솔 구성(`demo-ui/src/components/`):
 | `SimulatorMonitorPanel` | 시뮬레이터 I/O 타임라인 + `세션 시작`·`런타임`·`세션 끝` 더미 송신 버튼 |
 
 조작: `Enter` 전송 / `Shift+Enter` 줄바꿈. 상단에서 `demo` ↔ `live` 전환. 서버가 `DEMO_LIVE_MODE=off`인데 `live`를 고르면 서버가 명시적 error 이벤트를 돌려준다.
-`SP0035-L01`은 데모 레벨 식별자다(`demo-ui/src/App.tsx`의 `LEVEL_ID`). `/api/sequence/{level_id}` 스냅샷과 시뮬레이터 더미 페이로드가 같은 값을 쓴다.
+`TR-L01`은 데모 레벨 식별자다(`demo-ui/src/App.tsx`의 `LEVEL_ID`). `/api/sequence/{level_id}` 스냅샷과 시뮬레이터 더미 페이로드가 같은 값을 쓴다.
 
 컨테이너에는 디스플레이가 없어 Electron 창이 뜨지 않는다. 헤드리스 검증은 `xvfb-run`, 실제 데스크톱 실행은 Windows/macOS/데스크톱 리눅스에서 한다(§7).
 
@@ -125,7 +125,7 @@ UI 하단 모니터에서는 `세션 시작` → `런타임`(반복 가능) → 
 
 ```bash
 curl -s http://127.0.0.1:8120/api/sim/session
-curl -s http://127.0.0.1:8120/api/sequence/SP0035-L01
+curl -s http://127.0.0.1:8120/api/sequence/TR-L01
 ```
 
 ---
@@ -209,7 +209,7 @@ ChatService ─ demo scenario                │        └─▶ /api/monitor/{
 **① 세션 시작** — `POST /api/sim/sessions/start`
 
 ```json
-{"session_id": "demo-1", "level_id": "SP0035-L01",
+{"session_id": "demo-1", "level_id": "TR-L01",
  "worker": {"trainee_id": "t-001", "skill_level": "beginner", "handedness": "right"},
  "spec": {"nominal_um": 100.0}}
 ```
@@ -252,7 +252,7 @@ ChatService ─ demo scenario                │        └─▶ /api/monitor/{
 
 ```bash
 curl -s http://127.0.0.1:8120/api/sim/session           # 현재 세션 상태
-curl -s http://127.0.0.1:8120/api/sequence/SP0035-L01   # 좌측 패널이 읽는 값
+curl -s http://127.0.0.1:8120/api/sequence/TR-L01   # 좌측 패널이 읽는 값
 curl -s 'http://127.0.0.1:8120/api/monitor/events?limit=20'
 ```
 

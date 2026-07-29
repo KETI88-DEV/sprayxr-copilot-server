@@ -15,7 +15,7 @@ from trainer.scripts.session_coaching import SessionMetrics, SessionSummary
 def _start_input() -> SessionStartInput:
     return SessionStartInput(
         session_id="s1",
-        level_id="SP0035-L01",
+        level_id="TR-L01",
         worker=WorkerProfile(trainee_id="t", skill_level="beginner", handedness="right"),
         spec=PaintSpec(nominal_um=100.0),
     )
@@ -41,7 +41,7 @@ def test_start_output_uses_default_snapshot_zone_order() -> None:
     output = stub.build_start_output(_start_input())
     assert output.recommended_flow == ["A-1", "A-2", "A-3"]
     assert output.flow_source == "rule"
-    assert "SP0035-L01" in output.guidance
+    assert "TR-L01" in output.guidance
 
 
 def test_event_output_rag_when_user_request_present() -> None:

@@ -35,7 +35,7 @@ from trainer.demo_api.chat_service import ChatService
 
 START_BODY: dict[str, object] = {
     "session_id": "s-1",
-    "level_id": "SP0035-L01",
+    "level_id": "TR-L01",
     "worker": {"trainee_id": "t-1", "skill_level": "beginner", "handedness": "right"},
     "spec": {"nominal_um": 100.0},
 }
@@ -43,7 +43,7 @@ START_BODY: dict[str, object] = {
 
 def test_sequence_returns_fixture_before_any_session() -> None:
     client = TestClient(create_app(ChatService()))
-    body = client.get("/api/sequence/SP0035-L01").json()
+    body = client.get("/api/sequence/TR-L01").json()
     assert body["current_zone_id"] == "A-1"
     assert body["completed_zone_ids"] == ["A-1"]
 
@@ -53,7 +53,7 @@ def test_sequence_follows_simulator_session() -> None:
     _ = client.post("/api/sim/sessions/start", json=START_BODY)
     _ = client.post("/api/sim/sessions/s-1/events", json={"event_id": "ev-0", "zone_id": "A-2"})
 
-    body = client.get("/api/sequence/SP0035-L01").json()
+    body = client.get("/api/sequence/TR-L01").json()
     assert body["current_zone_id"] == "A-2"
     assert body["completed_zone_ids"] == ["A-1"]
     statuses = {zone["zone_id"]: zone["status"] for zone in body["zones"]}

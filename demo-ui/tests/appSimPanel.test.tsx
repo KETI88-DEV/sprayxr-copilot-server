@@ -11,7 +11,7 @@ vi.mock('../src/simMonitorClient', () => ({
       phase: 'start',
       direction: 'input',
       timestamp: 't1',
-      payload: { level_id: 'SP0035-L01' },
+      payload: { level_id: 'TR-L01' },
     }
     yield {
       seq: 2,
@@ -51,8 +51,8 @@ describe('App simulator monitor panel', () => {
 
 describe('App 시뮬레이터 3단계 버튼', () => {
   const SNAPSHOT = {
-    level_id: 'SP0035-L01',
-    label: 'SP0035 Level 01',
+    level_id: 'TR-L01',
+    label: 'Training Level 01',
     zones: [
       { zone_id: 'A-1', label: '상부', status: 'current' },
       { zone_id: 'A-2', label: '중간', status: 'pending' },
@@ -96,7 +96,7 @@ describe('App 시뮬레이터 3단계 버튼', () => {
       expect(client.sendSessionStart).toHaveBeenCalledTimes(1)
     })
     const [, levelId] = vi.mocked(client.sendSessionStart).mock.calls[0] as [string, string]
-    expect(levelId).toBe('SP0035-L01')
+    expect(levelId).toBe('TR-L01')
     await waitFor(() => {
       expect(within(panel).getByRole('button', { name: '런타임' })).toBeEnabled()
     })

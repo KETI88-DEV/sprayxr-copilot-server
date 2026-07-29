@@ -85,7 +85,7 @@ export const chatRequestSchema = z
     message: z.string().min(1).max(4000),
     session_id: z.string().min(1),
     mode: z.enum(['demo', 'live']).default('demo'),
-    level_id: z.string().min(1).default('SP0035-L01'),
+    level_id: z.string().min(1).default('TR-L01'),
   })
   .strict()
 export type ChatRequest = z.infer<typeof chatRequestSchema>

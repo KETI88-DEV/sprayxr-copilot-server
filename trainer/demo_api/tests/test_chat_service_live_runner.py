@@ -61,7 +61,7 @@ def test_default_runner_passes_sequence_context_to_pipeline(
         message="다음 순서가 어떻게 돼?",
         session_id="s-sequence",
         mode="live",
-        level_id="SP0035-L01",
+        level_id="TR-L01",
     )
     _ = _collect(ChatService(live_runner=chat_service_mod.build_default_live_runner()).stream(request))
 
@@ -298,7 +298,7 @@ def test_live_runner_environment_falls_back_to_fixture_without_session(
         message="다음 순서가 어떻게 돼?",
         session_id="s-1",
         mode="live",
-        level_id="SP0035-L01",
+        level_id="TR-L01",
     )
     _ = _collect(ChatService(live_runner=runner).stream(request))
 
@@ -322,7 +322,7 @@ def test_live_runner_environment_uses_active_session(
 
     store = SimSessionStore()
     _ = store.start(
-        session_id="s-1", level_id="SP0035-L01", recommended_flow=["A-1", "A-2", "A-3"]
+        session_id="s-1", level_id="TR-L01", recommended_flow=["A-1", "A-2", "A-3"]
     )
     _ = store.runtime(session_id="s-1", event_id="ev-0", target_zone_id="A-3", anomaly=False)
 
@@ -331,7 +331,7 @@ def test_live_runner_environment_uses_active_session(
         message="다음 순서가 어떻게 돼?",
         session_id="s-1",
         mode="live",
-        level_id="SP0035-L01",
+        level_id="TR-L01",
     )
     _ = _collect(ChatService(live_runner=runner).stream(request))
 
@@ -360,7 +360,7 @@ def test_live_runner_ignores_session_for_a_different_level(
         message="다음 순서가 어떻게 돼?",
         session_id="s-1",
         mode="live",
-        level_id="SP0035-L01",
+        level_id="TR-L01",
     )
     _ = _collect(ChatService(live_runner=runner).stream(request))
 

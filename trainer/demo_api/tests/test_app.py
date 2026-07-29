@@ -19,10 +19,10 @@ def test_health_and_sequence_routes() -> None:
     assert health["servers"] == 1
     assert datetime.fromisoformat(cast(str, health["timestamp"]))
 
-    snapshot_response = client.get("/api/sequence/SP0035-L01")
+    snapshot_response = client.get("/api/sequence/TR-L01")
     assert snapshot_response.status_code == 200
     snapshot = cast(dict[str, object], snapshot_response.json())
-    assert snapshot["level_id"] == "SP0035-L01"
+    assert snapshot["level_id"] == "TR-L01"
     assert snapshot["next_zone_ids"] == ["A-2", "A-3"]
 
     invalid_response = client.get("/api/sequence/bad level")

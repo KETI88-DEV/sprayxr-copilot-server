@@ -48,7 +48,7 @@ _UNKNOWN_ZONE_METADATA: Final[tuple[str, str, str]] = ("BLK-A", "미상", "unkno
 def default_snapshot(level_id: str) -> _SequenceSnapshot:
     return _SequenceSnapshot(
         level_id=level_id,
-        label="SP0035 Level 01",
+        label="Training Level 01",
         zones=[
             _SequenceZone(zone_id="A-1", label="상부 작업면", status="completed"),
             _SequenceZone(zone_id="A-2", label="중간부 작업면", status="next"),

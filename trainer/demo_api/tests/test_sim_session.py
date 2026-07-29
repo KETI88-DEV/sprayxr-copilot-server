@@ -9,7 +9,7 @@ FLOW = ["A-1", "A-2", "A-3"]
 
 def _started() -> SimSessionStore:
     store = SimSessionStore()
-    _ = store.start(session_id="s-1", level_id="SP0035-L01", recommended_flow=FLOW)
+    _ = store.start(session_id="s-1", level_id="TR-L01", recommended_flow=FLOW)
     return store
 
 
@@ -94,7 +94,7 @@ def test_end_for_unknown_session_is_ignored() -> None:
 def test_new_start_replaces_previous_session() -> None:
     store = _started()
     _ = store.runtime(session_id="s-1", event_id="ev-0", target_zone_id="A-3", anomaly=False)
-    _ = store.start(session_id="s-2", level_id="SP0035-L01", recommended_flow=FLOW)
+    _ = store.start(session_id="s-2", level_id="TR-L01", recommended_flow=FLOW)
     state = store.current()
     assert state is not None
     assert state.session_id == "s-2"
@@ -111,5 +111,5 @@ def test_start_rejects_empty_flow() -> None:
     """A zoneless session cannot produce a valid SequenceSnapshot, so refuse it at the source."""
     store = SimSessionStore()
     with pytest.raises(ValueError):
-        _ = store.start(session_id="s-1", level_id="SP0035-L01", recommended_flow=[])
+        _ = store.start(session_id="s-1", level_id="TR-L01", recommended_flow=[])
     assert store.current() is None

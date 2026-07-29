@@ -118,7 +118,7 @@ def test_live_sequence_update_passes_through_unchanged() -> None:
     """Given a pipeline sequence_update, When forwarded, Then name and payload are unchanged."""
     seq_payload: dict[str, object] = {
         "type": "update_sequence",
-        "level_id": "SP0035-L01",
+        "level_id": "TR-L01",
         "current_zone_id": "A-1",
         "next_zone_ids": ["A-2"],
         "completed_zone_ids": ["A-1"],

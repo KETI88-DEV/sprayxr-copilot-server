@@ -2,8 +2,8 @@ from trainer.demo_api.sequence import default_snapshot, sequence_update_from_pay
 
 
 def test_default_snapshot_has_stable_structure() -> None:
-    snapshot = default_snapshot("SP0035-L01")
-    assert snapshot.level_id == "SP0035-L01"
+    snapshot = default_snapshot("TR-L01")
+    assert snapshot.level_id == "TR-L01"
     ids = [zone.zone_id for zone in snapshot.zones]
     assert ids == ["A-1", "A-2", "A-3"]
     assert snapshot.current_zone_id == "A-1"
@@ -11,7 +11,7 @@ def test_default_snapshot_has_stable_structure() -> None:
 
 def test_next_path_becomes_sequence_update() -> None:
     update = sequence_update_from_payload(
-        "SP0035-L01",
+        "TR-L01",
         {"current_zone": "A-1", "next_zone": "A-2"},
         [{"step": 1, "action": "A-1 완료"}, {"step": 2, "action": "A-2 이동"}],
     )
@@ -21,7 +21,7 @@ def test_next_path_becomes_sequence_update() -> None:
 
 
 def test_missing_next_zone_returns_none() -> None:
-    result = sequence_update_from_payload("SP0035-L01", None, [])
+    result = sequence_update_from_payload("TR-L01", None, [])
     assert result is None
 
 
@@ -32,7 +32,7 @@ from trainer.demo_api.sim_session import SimSessionState, SimSessionStore
 def _state_at(zone_id: str) -> SimSessionState:
     store = SimSessionStore()
     _ = store.start(
-        session_id="s-1", level_id="SP0035-L01", recommended_flow=["A-1", "A-2", "A-3"]
+        session_id="s-1", level_id="TR-L01", recommended_flow=["A-1", "A-2", "A-3"]
     )
     _ = store.runtime(session_id="s-1", event_id="ev-0", target_zone_id=zone_id, anomaly=False)
     state = store.current()
@@ -47,8 +47,8 @@ def test_session_snapshot_marks_current_zone_and_completed_prefix() -> None:
     assert snapshot.current_zone_id == "A-2"
     assert snapshot.next_zone_ids == ["A-3"]
     assert snapshot.completed_zone_ids == ["A-1"]
-    assert snapshot.label == "SP0035 Level 01"
-    assert snapshot.level_id == "SP0035-L01"
+    assert snapshot.label == "Training Level 01"
+    assert snapshot.level_id == "TR-L01"
 
 
 def test_session_snapshot_at_first_zone_completes_nothing() -> None:
@@ -83,7 +83,7 @@ def test_session_tool_environment_keeps_zone_metadata() -> None:
 
 def test_session_derivations_tolerate_zone_outside_default_metadata() -> None:
     store = SimSessionStore()
-    _ = store.start(session_id="s-1", level_id="SP0035-L01", recommended_flow=["A-1", "Z-9"])
+    _ = store.start(session_id="s-1", level_id="TR-L01", recommended_flow=["A-1", "Z-9"])
     state = store.current()
     assert state is not None
 

@@ -12,7 +12,7 @@ describe('applySequenceUpdate', () => {
   it('maps completed, next, and pending statuses', () => {
     const update: SequenceUpdate = {
       type: 'update_sequence',
-      level_id: 'SP0035-L01',
+      level_id: 'TR-L01',
       current_zone_id: 'A-1',
       next_zone_ids: ['A-2'],
       completed_zone_ids: ['A-1'],
@@ -24,7 +24,7 @@ describe('applySequenceUpdate', () => {
   it('gives completed precedence over current', () => {
     const update: SequenceUpdate = {
       type: 'update_sequence',
-      level_id: 'SP0035-L01',
+      level_id: 'TR-L01',
       current_zone_id: 'A-1',
       next_zone_ids: [],
       completed_zone_ids: ['A-1'],
@@ -36,7 +36,7 @@ describe('applySequenceUpdate', () => {
   it('leaves unknown zones untouched', () => {
     const update: SequenceUpdate = {
       type: 'update_sequence',
-      level_id: 'SP0035-L01',
+      level_id: 'TR-L01',
       current_zone_id: 'Z-9',
       next_zone_ids: ['Z-8'],
       completed_zone_ids: [],
@@ -49,7 +49,7 @@ describe('applySequenceUpdate', () => {
     const snapshot: SequenceZone[] = zones.map(zone => ({ ...zone }))
     applySequenceUpdate(snapshot, {
       type: 'update_sequence',
-      level_id: 'SP0035-L01',
+      level_id: 'TR-L01',
       current_zone_id: 'A-1',
       next_zone_ids: [],
       completed_zone_ids: [],
