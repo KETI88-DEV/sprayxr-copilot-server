@@ -99,6 +99,11 @@ npm run start:electron
 - This worktree is shared with the user and other agents. Stage explicit paths — never `git add -A`. Unfamiliar modified files are someone else's in-progress work; do not revert them.
 - `main` is far ahead of `origin/main` and pushes need repaired GitHub credentials. Local verification and commits do not prove remote delivery.
 
+## Naming conventions
+
+- Level ID: **`TR-L01`** (Training Level 01). `SP0035`, `SP0035-L01`, `SP0035 Level 01`은 합의되지 않은 자산 경로 기반 식별자다. 코드·문서·응답 어디에도 쓰지 않는다.
+- Zone ID: `A-1`, `A-2`, `A-3` (현재 SP0035 리그 기준). 새 리그가 추가되면 이 파일을 갱신한다.
+
 ## Local-only files
 
 `AgenticCopilot_Architecture.md`, `dataset.md`, `AgenticCopilot.png`, `.taskmaster/config.json`, `.claude/`, `.omc/`, and the `models/ data/ output/ hf-cache/` trees are gitignored. They exist in this worktree but not in the repository — do not link them from tracked docs and do not assume a fresh clone has them.
