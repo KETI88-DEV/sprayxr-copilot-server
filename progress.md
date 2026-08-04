@@ -35,6 +35,13 @@
 - Updated the React status consumer and tool log to display elapsed deadline state without undefined chunk placeholders.
 - Confirmed RED on four real backend event shapes, then passed the full 20-test Vitest suite, production build, and two Playwright E2E scenarios.
 - Drove real Chrome against FastAPI and exact timing-rich SSE; independent code review approved and fresh 1280/768/375 visual review passed for the changed status row.
+- Started latency Task 7 with the user-requested Metis and code-simplifier reviews.
+- Rejected a proposed `route` simplification after verifying the two occurrences belong to metadata and top-level legacy contracts.
+- Locked Task 7 to a single typed `httpx` SSE benchmark module and one focused test module; comprehensive README refresh follows as a separate documentation commit.
+- Completed Task 7 with separate CLI, typed SSE boundary, and pure report modules; all remain below the 250 pure-LOC ceiling.
+- Closed repeated Oracle review findings for no-data false passes, complete-arrival timing, strict finite event parsing, structured MCP timeout handling, answer-delta requirements, overall heartbeat deadlines, contaminated-run readiness, expected-path coverage, and mutually exclusive MCP outcomes.
+- Refreshed README architecture and Task 8 operations: one MCP aggregator/seven routers, 4B default versus 27B opt-in, buffered streaming caveat, pre-change score terminology, pending gates, and explicit 27B startup on port 8130.
+- Drove the CLI against a real fake HTTP/SSE server with success, MCP timeout, terminal error, malformed complete, and delayed connection close; artifacts reported `1 valid / 3 invalid`, blocked gate readiness, and intact Markdown.
 
 ## Verification Ledger
 | Phase | Command/surface | Result |
@@ -69,6 +76,27 @@
 | Task 6 frontend gates | `npm test -- --run`; `npm run build:web`; `npm run test:e2e` | 20 passed; production build succeeded; 2 browser E2E passed. |
 | Task 6 reviews | Oracle code review + dual visual/CJK review | APPROVE / PASS; no Task 6 Critical, Important, or visual blockers. |
 | Task 6 browser surface | Chrome + real FastAPI demo, then exact deadline SSE at 1280×900, 768×900, 375×812 | POST 200; timing-rich complete parsed; elapsed status legible at all viewports; final console errors 0. |
+| Task 7 focused | `python3 -m pytest trainer/scripts/tests/test_bench_{sse,latency,cli}.py -q` | 29 passed. |
+| Task 7 regression | `python3 -m pytest trainer/demo_api/tests trainer/scripts/tests -q` | 62 passed. |
+| Task 7 typing | changed-file `basedpyright` + LSP diagnostics | 0 errors, 0 warnings; all changed Python files clean. Full repository `basedpyright` still has unrelated pre-existing errors, including `train_qlora.py`. |
+| Task 7 CLI surface | fake HTTP/SSE server + `bench_latency.py --profile mixed` | success stopped at complete before delayed close; timeout/error/malformed rows invalid; `gate_ready=false`; JSON/Markdown generated. |
+| Task 7 reviews | Oracle harness review + README review | APPROVE / APPROVE; no Critical or Important findings remain. |
+
+## 2026-07-27 Electron Demo Verification
+- Ran the Electron shell for the first time inside the container using `xvfb-run` plus Playwright `_electron`.
+- Reproduced a blocking defect: `electron dist-electron/main.js` (the npm script form) created zero CDP page targets because the argv-based entry guard never matched a relative path.
+- Reproduced a second defect: the `index.html` bootstrap compared the injected value against the same placeholder token, so Vite replaced both sides and always reset `window.__DEMO_API_BASE_URL__` to undefined.
+- Measured the Vite dev server binding: loopback returned 200 while the container IP was refused, contradicting the README remote-access instructions.
+- Fixed both defects under TDD, corrected the README host claims, and added a Windows execution guide covering port publishing, SSH tunneling, and `.env.local`.
+
+| Phase | Command/surface | Result |
+|---|---|---|
+| Electron RED | `electron dist-electron/main.js` + CDP `/json/list` | 0 page targets; absolute path produced 1. |
+| Electron unit | `npx vitest run tests/electronMain.test.ts` | 1 failed before fix; suite green after. |
+| index.html RED | `npx vitest run tests/htmlApiBaseUrl.test.ts` | 2 failed before fix. |
+| Vite binding | `curl 127.0.0.1:5173` vs `curl 172.21.0.2:5173` | 200 vs connection refused. |
+| Frontend gates | `npx vitest run`; `npm run build:web`; `npm run build:electron`; `npm run test:e2e` | 24 passed; builds succeeded; 2 E2E passed. |
+| Electron surface | `xvfb-run` + Playwright `_electron` with relative arg | Window loaded; API base URL string applied; `/api/health` 200 from `file://`; chat streamed and zones updated. |
 
 ## Next Action
-Commit latency Task 6 and its Iter18-B/worklog records, then execute latency Task 7 HTTP/SSE benchmark harness.
+Start Task 8 on the A40: launch the explicit 27B live API on port 8130, run the mixed HTTP/SSE benchmark, recalibrate `tool_deadline_sec` from synthesis p95, and judge latency plus post-change quality gates. Windows-side Electron execution still needs user confirmation on a real desktop.

@@ -28,6 +28,7 @@ vi.mock('electron', () => ({
       return Promise.resolve()
     }
   },
+  Menu: { setApplicationMenu: () => undefined },
   shell: { openExternal: () => Promise.resolve() },
   contextBridge: { exposeInMainWorld: () => undefined },
 }))

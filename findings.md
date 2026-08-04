@@ -64,3 +64,25 @@
 - Keeping nested `.strict()` while adding only optional approved timing fields preserves rejection of unknown payload keys and compatibility with older backends.
 - `App` must preserve exact-optional typing when mapping `chunks`/`elapsed_sec`; conditional spreads avoid assigning explicit `undefined`.
 - Chrome QA exposed pre-existing out-of-scope UI debt: the 375px page retains a desktop-fixed grid and assistant Markdown is rendered as raw text. Neither was introduced by Task 6; the changed status row itself wraps cleanly.
+
+## Task 7 Planning and Simplification Review
+- Metis confirmed Task 7 should remain one typed benchmark module plus one test module, followed by an independent README architecture refresh; Task 8 measurements must not be invented early.
+- The code-simplifier's proposed duplicate `route` removal was rejected after direct inspection: `metadata.route` and the top-level legacy `route` are separate compatibility surfaces.
+- Preserve the approved repository stack for this task: `argparse` and installed `httpx==0.28.1`, despite generic greenfield skill preferences for Typer/httpx2.
+- The eval set uses `q_id`, `question`, `tool_calls_required`, and `context_data`; profile filtering must use the required-tool list, while measured path classification must use actual `tool_call_count` from `complete`.
+
+## Electron Demo Execution Constraints
+- The Electron entry must not gate bootstrap on `process.argv[1]`; npm scripts pass a relative path, Chromium flags shift argv, and Windows uses different separators. The entry now bootstraps unconditionally.
+- `index.html` must not compare the injected base URL against the same `%VITE_API_BASE_URL%` token, because Vite replaces every occurrence and the comparison then always resets the value.
+- Electron loads `dist/index.html` over `file://`, so the same-origin fallback cannot work; `VITE_API_BASE_URL` at build time or a hand-edited `dist/index.html` is mandatory for remote APIs.
+- Requests from `file://` carry an opaque origin, so the demo API must keep the permissive default `DEMO_UI_ORIGINS`; narrowing it can block the desktop shell.
+- `dev:web` and `preview:web` pin `--host 127.0.0.1`, so remote browsers need an explicit `-- --host 0.0.0.0` or an SSH tunnel; the container also runs on a bridge network without published ports.
+- The container has no display; only `xvfb-run` headless verification is possible there.
+
+## Latency Task 7 Final Contract
+- The benchmark measures the user-visible `POST /api/chat` SSE boundary: wall TTFT is the first nonempty valid `message_delta`, and wall total stops at `complete` arrival rather than connection close.
+- Eval rows and metric-bearing events are parsed through strict finite Pydantic models. Every delta and nested MCP outcome is validated; contradictory success/error outcomes invalidate the sample.
+- Terminal errors, malformed or missing terminals, complete without an answer delta, structured MCP `TIMEOUT`, and monotonic overall deadline expiry remain in artifacts but are excluded from percentile math.
+- Reports expose total/valid/invalid/unclassified counts, expected-path coverage, per-path `no_data`/`invalid` states, and a report-level `gate_ready`; any invalid sample or missing expected path coverage blocks readiness.
+- README now distinguishes one MCP aggregator with seven routers, 4B live defaults versus 27B opt-in, buffered compatibility streaming, pre-change score mean/sample SD, and Task 8's explicit 27B startup on port 8130.
+- Task 7 Oracle code review and README review both ended APPROVE with no Critical or Important findings.

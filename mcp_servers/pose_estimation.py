@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from math import atan2, degrees, sqrt
-from typing import Literal, Optional
+from typing import Literal, Optional, assert_never
 
 from fastapi import APIRouter
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 from mcp_servers.common import MCPResponse, success_response
 
@@ -46,6 +46,19 @@ class PoseRequest(BaseModel):
     current_pose: Optional[Pose] = None
     expert_pose_id: str | None = None
     block_id: str | None = None
+
+    @model_validator(mode="after")
+    def mode_has_required_context(self) -> "PoseRequest":
+        match self.mode:
+            case "compare":
+                if self.current_pose is None:
+                    raise ValueError("compare mode requires current_pose")
+            case "recommend":
+                if self.block_id is None:
+                    raise ValueError("recommend mode requires block_id")
+            case unreachable:
+                assert_never(unreachable)
+        return self
 
 
 def _get_expert_pose(expert_pose_id: str | None, block_id: str | None) -> tuple[str, Pose]:

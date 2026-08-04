@@ -43,7 +43,17 @@
           "description": "현재 작업 블록 ID (예: 'BLK-A'). recommend 모드 필수, compare 모드에서 expert_pose_id 미지정 시 자동 매칭에 사용"
         }
       },
-      "required": ["mode"]
+      "required": ["mode"],
+      "allOf": [
+        {
+          "if": {"properties": {"mode": {"const": "compare"}}},
+          "then": {"required": ["current_pose"]}
+        },
+        {
+          "if": {"properties": {"mode": {"const": "recommend"}}},
+          "then": {"required": ["block_id"]}
+        }
+      ]
     }
   }
 }
