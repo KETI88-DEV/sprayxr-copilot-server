@@ -1,17 +1,31 @@
-import { app, BrowserWindow, type BrowserWindowConstructorOptions } from 'electron'
+import { app, BrowserWindow, Menu, type BrowserWindowConstructorOptions } from 'electron'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const DEFAULT_WIDTH = 1280
 const DEFAULT_HEIGHT = 800
-const BACKGROUND = '#0f1216'
+const MIN_WIDTH = 960
+const MIN_HEIGHT = 640
+
+/** Must stay in step with `--hull-900` / `--ink-100` in `src/styles.css`. */
+const BACKGROUND = '#0e1215'
+const SYMBOL = '#e6ebee'
+/** Must stay in step with the `.titlebar` height in `src/styles.css`. */
+const TITLE_BAR_HEIGHT = 44
 
 export function browserWindowOptions(preloadPath: string): BrowserWindowConstructorOptions {
   return {
     width: DEFAULT_WIDTH,
     height: DEFAULT_HEIGHT,
+    minWidth: MIN_WIDTH,
+    minHeight: MIN_HEIGHT,
     backgroundColor: BACKGROUND,
     show: false,
+    // One themed row instead of a light native title bar stacked on a dark app
+    // header: the renderer draws the bar and the OS draws its controls into it.
+    titleBarStyle: 'hidden',
+    titleBarOverlay: { color: BACKGROUND, symbolColor: SYMBOL, height: TITLE_BAR_HEIGHT },
+    trafficLightPosition: { x: 14, y: 14 },
     webPreferences: {
       preload: preloadPath,
       contextIsolation: true,
@@ -54,24 +68,19 @@ async function createWindow(): Promise<void> {
   window.once('ready-to-show', () => window.show())
 }
 
-function isRunAsMain(): boolean {
-  const currentFile = fileURLToPath(import.meta.url)
-  return process.argv[1] === currentFile
-}
-
-if (isRunAsMain()) {
-  void app.whenReady().then(() => {
-    void createWindow()
-    app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) {
-        void createWindow()
-      }
-    })
-  })
-
-  app.on('window-all-closed', () => {
-    if (process.platform !== 'darwin') {
-      app.quit()
+void app.whenReady().then(() => {
+  // The default File/Edit/View/Window menu is replaced by the in-app menu.
+  Menu.setApplicationMenu(null)
+  void createWindow()
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) {
+      void createWindow()
     }
   })
-}
+})
+
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') {
+    app.quit()
+  }
+})

@@ -3,12 +3,20 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Ship Painting AI Co-Pilot</title>
-    <script>
-      window.__DEMO_API_BASE_URL__ = "%VITE_API_BASE_URL%";
-      if (window.__DEMO_API_BASE_URL__ === "%VITE_API_BASE_URL%") {
-        window.__DEMO_API_BASE_URL__ = undefined;
+    <meta name="color-scheme" content="dark" />
+    <title>선박 도장 AI 코파일럿</title>
+    <style>
+      html {
+        background: #0e1215;
       }
+    </style>
+    <script>
+      (function () {
+        var injected = "%VITE_API_BASE_URL%";
+        var unresolved =
+          injected.charAt(0) === "%" && injected.charAt(injected.length - 1) === "%";
+        window.__DEMO_API_BASE_URL__ = unresolved ? undefined : injected;
+      })();
     </script>
   </head>
   <body>
