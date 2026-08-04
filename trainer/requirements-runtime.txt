@@ -1,0 +1,36 @@
+# 컨테이너 런타임 설치 패키지 (이미지 Dockerfile에 없는 것)
+# 2026-07-27 컨테이너 재생성으로 소실 → PATCH_NOTE.md 기록 + 소스 import 스캔으로 재구성
+# 설치: docker exec -it ship-paint-trainer pip install -r /workspace/trainer/requirements-runtime.txt
+
+# RAG 인덱스 (trainer/scripts/build_index.py, search_index.py, reindex_repaired.py)
+faiss-cpu==1.13.2          # PATCH_NOTE.md:140
+
+# 문서 수집 (trainer/scripts/ingest_docs.py)
+PyMuPDF==1.27.1            # PATCH_NOTE.md:141
+
+# 데모 UI (trainer/scripts/demo_app.py)
+gradio==6.9.0
+
+# 평가 지표 (trainer/scripts/eval_metrics.py)
+bert-score
+korouge-score
+rouge-score
+
+# 한국어 띄어쓰기 교정 (trainer/scripts/repair_chunk_spacing.py)
+kiwipiepy
+
+# 리포트 차트 (trainer/scripts/generate_report_charts.py)
+matplotlib
+seaborn
+
+# MCP 서버 (mcp_servers/*.py — 9개 파일)
+mcp
+
+# 테스트 (trainer/demo_api/tests/, trainer/scripts/test_*.py)
+pytest
+
+# --- 의도적으로 미설치 (PATCH_NOTE.md 기록) ---
+# vllm        : agent_pipeline.py에서 optional import, backend="vllm" 사용 시에만 필요
+# torchao     : torch 2.4.0 비호환으로 제거됨 (PATCH_NOTE.md:147)
+# unsloth     : transformers/trl를 다운그레이드시켜 롤백됨 (PATCH_NOTE.md:148-149)
+# datasketch  : 1.9.0 설치 기록은 있으나 현재 소스에서 미사용
