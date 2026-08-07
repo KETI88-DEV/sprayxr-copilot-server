@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** `docs/ai_copilot_response_contract.md`에 승인된 Query 4종 예시와 시뮬레이터용 이상탐지 SSE 3종 예시를 일관된 필드·enum·문체로 반영한다.
+**Goal:** `docs/ai_copilot_response_contract.md`에 Query 4종, 이상탐지 SSE 3종, 방향 5종과 내부 trajectory HTTP·시뮬레이터 HTTP/SSE 경계 예시를 일관된 필드·enum·문체로 반영한다.
 
-**Architecture:** 시퀀스 판정은 HTTP `data`에 직접 반환하고 `feedback_bundle`은 내부 전용으로 명시한다. SSE는 이상이 있을 때만 `anomaly_detection`으로 전달하며 `anomaly_type` 배열과 정렬된 `items`가 도막·경로 이상 종류를 표현한다. Query는 기존 응답 구조를 유지하되 네 `task_type`별 요청·응답 예시를 분리한다.
+**Architecture:** 내부 trajectory coaching HTTP는 원시 지표와 숙련자 비교를 반환한다. 시뮬레이터 HTTP는 전체 결과를 `trajectory_feedback` 아래 namespaced하고, SSE는 이상이 있을 때만 정규화된 `anomaly_detection` 요약을 전달한다. Query는 기존 응답 구조를 유지하되 네 `task_type`별 요청·응답 예시를 분리한다.
 
 **Tech Stack:** Markdown, JSON, SSE text frames, Python 3.11 표준 `json` 모듈(컨테이너 검증)
 
@@ -15,6 +15,7 @@
 - 위치는 `zone_id`와 `A-1`, `A-2`, `A-3`으로 통일한다.
 - 도막 상태 enum은 `under_app | normal | over_app`이다.
 - 경로 이상 enum은 `direction_error | trajectory_deviation | distance_speed_error`다.
+- 방향 enum은 `horizontal | vertical | diagonal | curved_irregular | stationary`다.
 - `anomaly_type`은 `coating`, `trajectory` 배열이며 복합 시 순서는 `coating`, `trajectory`다.
 - `action`은 단일 코드 문자열이다.
 - 안내 문구는 존댓말 기반의 중립적 시스템 안내체를 사용한다.
@@ -29,7 +30,7 @@
 
 **Interfaces:**
 - Consumes: 승인 설계의 경계 원칙과 anomaly 상위 필드
-- Produces: 평탄화된 시퀀스 HTTP `data`와 조건부 `anomaly_detection` SSE 계약
+- Produces: 시퀀스 HTTP `data`와 조건부 `anomaly_detection` SSE 계약
 
 - [ ] **Step 1: 내부·외부 경계 문구 교정**
 
@@ -92,13 +93,42 @@
 
 프롬프트는 `저도막이 무엇인지 설명해줘.`를 사용한다. `session_id=null`, 세 context `null`, `retrieval_used=true`, 비어 있지 않은 `citations`를 사용한다.
 
-### Task 3: 문서 계약 검증
+### Task 3: trajectory 응답 경계와 방향 enum
+
+**Files:**
+- Modify: `docs/ai_copilot_response_contract.md`
+
+**Interfaces:**
+- Consumes: 승인 설계의 trajectory 방향·경계 정의
+- Produces: 내부 분석 HTTP, 시뮬레이터 전체 HTTP, SSE 요약의 분리된 예시
+
+- [ ] **Step 1: 방향 enum 5종 정의**
+
+`trajectory_metrics.direction`의 허용값을 `horizontal`, `vertical`, `diagonal`, `curved_irregular`, `stationary`로 정의한다. `direction`은 기계 판정용이고 `stroke_pattern`은 사용자 표시용이라고 명시한다.
+
+- [ ] **Step 2: 내부 trajectory coaching HTTP 작성**
+
+내부 응답에는 `trajectory_metrics`, `expert_comparison`, `coaching_message` 전체를 둔다. 교정 예시는 `direction="horizontal"`, `straightness_score=72`, `expert_deviation_mm=45.8`, 목표·사용자 속도 `2800/2200`, 목표·사용자 거리 `400/450`을 사용한다.
+
+- [ ] **Step 3: 시뮬레이터 HTTP 작성**
+
+전체 trajectory 결과를 `data.trajectory_feedback` 아래에 두고, 최상위에는 `text_guide`, `sequence_data_ack`, 정규화 `anomaly`를 둔다. anomaly item은 `trajectory_deviation` 다음 `distance_speed_error` 순서로 정렬한다.
+
+- [ ] **Step 4: 시뮬레이터 SSE 요약 작성**
+
+SSE에는 `event_id`, `sequence_id`, `text_guide`, `anomaly`, `sequence_data_ack`만 두고 `trajectory_metrics`, `expert_comparison` 전체를 포함하지 않는다.
+
+- [ ] **Step 5: 계산과 안내 문구 정합성 확인**
+
+`speed_gap_mms = 2200 - 2800 = -600`, `distance_gap_mm = 450 - 400 = 50`을 유지하고 안내 문구가 속도 증가와 거리 감소를 지시하는지 확인한다.
+
+### Task 4: 문서 계약 검증
 
 **Files:**
 - Verify: `docs/ai_copilot_response_contract.md`
 
 **Interfaces:**
-- Consumes: Task 1·2의 최종 문서
+- Consumes: Task 1·2·3의 최종 문서
 - Produces: 파싱·enum·정렬·금지어 검증 증거
 
 - [ ] **Step 1: JSON과 SSE payload 파싱**
@@ -115,7 +145,11 @@ Expected: `json_sse_parse=ok`
 
 Python 검증에서 네 `task_type` 요청 예시가 각각 존재하고 SSE payload의 `anomaly_type`이 `['coating']`, `['trajectory']`, `['coating','trajectory']` 순서로 존재하는지 확인한다.
 
-- [ ] **Step 3: 금지 용어와 공백 검사**
+- [ ] **Step 3: trajectory 경계와 방향 enum 검증**
+
+내부 HTTP에 `trajectory_metrics`, `expert_comparison`이 존재하고 시뮬레이터 HTTP에서는 두 객체가 `trajectory_feedback` 아래에 있는지 확인한다. `SEQ-005` SSE payload에는 두 객체가 없는지 확인하고 방향 다섯 값과 gap 계산을 검증한다.
+
+- [ ] **Step 4: 금지 용어와 공백 검사**
 
 `source_mcp`, `region_id`, `combined`, 외부 bundle event, DFT 용어가 예시 payload에 없는지 검사하고 다음을 실행한다.
 
@@ -125,11 +159,11 @@ GIT_MASTER=1 git diff --check -- docs/ai_copilot_response_contract.md
 
 Expected: exit code 0, no output.
 
-- [ ] **Step 4: 문서만 원자적 커밋**
+- [ ] **Step 5: 문서만 원자적 커밋**
 
 ```bash
 GIT_MASTER=1 git add docs/ai_copilot_response_contract.md
-GIT_MASTER=1 git commit -m "docs(api): Query·이상탐지 응답 예시 교정"
+GIT_MASTER=1 git commit -m "docs(api): trajectory 응답 경계와 방향 enum 추가"
 ```
 
 `docs/Interface.pdf`와 다른 작업 파일은 stage하지 않는다.
