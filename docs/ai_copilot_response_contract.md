@@ -189,14 +189,15 @@ POST /sessions/end
 |---|---|:---:|---|
 | `analysis_status` | String | Y | `available`, `not_available` |
 | `reason_code` | String 또는 Null | Y | 분석 불가 사유. 분석 가능 시 `null` |
-| `reference_pose_id` | String | 조건부 | 비교에 사용한 기준 자세 ID |
-| `overall_status` | String | 조건부 | `good`, `needs_correction`, `unknown` |
-| `score` | Number | 조건부 | 자세 유사도 점수, 0~1 |
-| `joint_deviations` | Array[Object] | 조건부 | 관절별 편차와 교정 방향 |
-| `message` | String | Y | 판정 설명 또는 분석 불가 안내 |
-| `algorithm_version` | String | Y | 자세 판정 알고리즘 버전 |
+| `mode` | String | 조건부 | 현재 구현의 비교 모드 `compare` |
+| `expert_pose_id` | String | 조건부 | 비교에 사용한 현재 fixture 자세 ID |
+| `similarity_score` | Number | 조건부 | 기준 자세와의 위치 유사도, 0~1 |
+| `corrections` | Array[Object] | 조건부 | 관절별 거리·각도 차이와 생성된 교정 문구 |
+| `summary` | String | Y | MCP가 생성한 비교 요약 또는 분석 불가 안내 |
 
 조건부 필드는 `analysis_status="available"`일 때 필수다. `not_available`일 때는 생략한다. 허용 `reason_code`의 초기 집합은 `source_data_missing`, `reference_data_missing`, `quality_insufficient`, `tool_unavailable`이다.
+
+현재 `expert_pose_id`는 실제 숙련자 데이터가 아니라 코드에 고정된 `EP-001` 계열 fixture다. 단일 자세 비교는 관절 위치 거리와 `roll`, `pitch`, `yaw` 차이만 계산한다. 손떨림, 몸통 기준 이동 방향, 시간에 따른 자세 안정성은 판정하지 않는다.
 
 ### 3.7 도막 상태 불변 규칙
 
@@ -298,18 +299,21 @@ POST /sessions/end
 {
   "analysis_status": "available",
   "reason_code": null,
-  "reference_pose_id": "POSE-A-3-RH-01",
-  "overall_status": "needs_correction",
-  "score": 0.72,
-  "joint_deviations": [
+  "mode": "compare",
+  "expert_pose_id": "EP-001",
+  "similarity_score": 0.82,
+  "corrections": [
     {
-      "joint": "right_elbow",
-      "deviation_deg": 18.4,
-      "correction": "팔꿈치를 몸통 쪽으로 당기세요."
+      "joint": "elbow_r",
+      "label": "오른쪽 팔꿈치",
+      "distance": 0.08,
+      "angle_corrections": {
+        "pitch": 5.0
+      },
+      "correction_text": "오른쪽 팔꿈치: pitch 5° 과다"
     }
   ],
-  "message": "오른쪽 팔꿈치 각도가 기준보다 큽니다. 팔꿈치를 몸통 쪽으로 당기세요.",
-  "algorithm_version": "pose-feedback-1.0"
+  "summary": "숙련자 자세(EP-001) 대비 유사도 82%. 교정 필요 관절 1개: 오른쪽 팔꿈치: pitch 5° 과다"
 }
 ```
 
@@ -672,16 +676,27 @@ Query 예시는 다음 네 종류로 구분한다.
     "scenario_id": "1-A",
     "generated_at": "2026-08-06T14:33:10Z",
     "latency_ms": 210,
-    "answer": "손목을 고정하고 오른쪽 팔꿈치를 몸통 가까이 유지하세요.",
+    "answer": "숙련자 자세(EP-001) 대비 유사도는 82%입니다. 오른쪽 팔꿈치 pitch가 기준보다 5° 큽니다.",
     "resolved_intents": ["pose_recommendation"],
     "context_status": "available",
     "sequence_context": null,
     "coating_context": null,
     "pose_context": {
-      "overall_status": "needs_correction",
-      "score": 0.72,
-      "joint": "right_elbow",
-      "action": "stabilize_wrist"
+      "mode": "compare",
+      "expert_pose_id": "EP-001",
+      "similarity_score": 0.82,
+      "corrections": [
+        {
+          "joint": "elbow_r",
+          "label": "오른쪽 팔꿈치",
+          "distance": 0.08,
+          "angle_corrections": {
+            "pitch": 5.0
+          },
+          "correction_text": "오른쪽 팔꿈치: pitch 5° 과다"
+        }
+      ],
+      "summary": "숙련자 자세(EP-001) 대비 유사도 82%. 교정 필요 관절 1개: 오른쪽 팔꿈치: pitch 5° 과다"
     },
     "retrieval_used": false,
     "citations": []
@@ -826,11 +841,11 @@ Query 예시는 다음 네 종류로 구분한다.
 | `pose_report` | Object | Y | 자세 누적 판정 또는 분석 불가 상태 |
 | `llm_briefing` | String | Y | LLM 자연어 최종 브리핑 |
 
-각 하위 리포트는 `analysis_status`, `reason_code`, `algorithm_version`을 필수로 가진다. `analysis_status="available"`일 때 구조화된 누적 판정 필드를 제공한다.
+각 하위 리포트는 `analysis_status`와 `reason_code`를 필수로 가진다. `analysis_status="available"`인 도막·순서 리포트는 `algorithm_version`과 구조화된 누적 판정 필드를 제공한다.
 
 - `coating_report`: `source_artifact_id`, `coating_distribution_index`, `zone_summary`, `distribution`, `reachability`, `worst_zones`, `root_cause`, `guideline`
 - `sequence_report`: `recommended_flow`, `visited_flow`, `adherence_rate`, `deviation_count`, `deviations`, `guideline`
-- `pose_report`: `reference_pose_ids`, `evaluated_sequence_count`, `average_score`, `correction_counts`, `priority_corrections`, `guideline`
+- `pose_report`: 현재 구현은 누적 자세 평가를 지원하지 않으므로 `analysis_status="not_available"`과 `reason_code`만 제공한다.
 
 ### 5.4 최종 리포트 수치 규칙
 
@@ -848,8 +863,7 @@ coating_report.reachability.reachable + coating_report.reachability.needs_proces
 
 - `behavior_r2`, `process_r2`의 범위는 0~1이다.
 - `coating_distribution_index`의 공식과 범위는 콘텐츠센터 알고리즘 정의서에서 별도로 버전 관리한다.
-- `sequence_report.adherence_rate`와 `pose_report.average_score`의 범위는 0~1이다.
-- `pose_report.evaluated_sequence_count`는 실제 자세 판정이 가능했던 시퀀스만 집계한다.
+- `sequence_report.adherence_rate`의 범위는 0~1이다.
 - `guideline`과 `llm_briefing`은 구조화된 수치를 변경하거나 새로운 판정값을 만들어서는 안 된다.
 
 ### 5.5 완료 리포트 샘플
@@ -924,26 +938,10 @@ coating_report.reachability.reachable + coating_report.reachability.needs_proces
         "guideline": "권장 순서를 유지했습니다. 다음 훈련에서도 같은 구역 흐름을 유지하세요."
       },
       "pose_report": {
-        "analysis_status": "available",
-        "reason_code": null,
-        "algorithm_version": "pose-session-report-1.0",
-        "reference_pose_ids": ["POSE-A-1-RH-01", "POSE-A-2-RH-01", "POSE-A-3-RH-01"],
-        "evaluated_sequence_count": 11,
-        "average_score": 0.78,
-        "correction_counts": {
-          "right_elbow": 4,
-          "right_shoulder": 2
-        },
-        "priority_corrections": [
-          {
-            "joint": "right_elbow",
-            "occurrences": 4,
-            "correction": "팔꿈치를 몸통 쪽으로 당기세요."
-          }
-        ],
-        "guideline": "오른쪽 팔꿈치 각도 편차가 반복되었습니다. 분사 중 팔꿈치를 몸통 가까이 유지하세요."
+        "analysis_status": "not_available",
+        "reason_code": "reference_data_missing"
       },
-      "llm_briefing": "권장 작업 순서는 지켰지만 저도막 영역이 넓고 오른쪽 팔꿈치 편차가 반복되었습니다. 부족 구역의 체류 시간을 늘리면서 팔꿈치를 몸통 가까이 유지하세요."
+      "llm_briefing": "권장 작업 순서는 유지했지만 저도막 영역이 넓게 분포했습니다. 부족 구역의 체류 시간을 늘리세요. 현재 구현에서는 자세 누적 평가를 제공하지 않습니다."
     }
   }
 }
