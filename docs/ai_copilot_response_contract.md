@@ -879,8 +879,63 @@ coating_report.reachability.reachable + coating_report.reachability.needs_proces
 
 - `behavior_r2`, `process_r2`의 범위는 0~1이다.
 - `coating_distribution_index`의 공식과 범위는 콘텐츠센터 알고리즘 정의서에서 별도로 버전 관리한다.
-- `sequence_report.adherence_rate`의 범위는 0~1이다.
 - `guideline`과 `llm_briefing`은 구조화된 수치를 변경하거나 새로운 판정값을 만들어서는 안 된다.
+
+#### 5.4.1 순서 방문 정규화
+
+같은 zone에서 연속된 분사 버스트는 하나의 평가 방문으로 압축한다. 다른 zone으로 이동한 뒤 기존 zone으로 돌아온 경우에만 재방문으로 센다.
+
+```text
+원본 zone 흐름: A-1, A-1, A-3, A-2, A-1
+평가 방문 흐름: A-1, A-3, A-2, A-1
+최초 방문 흐름: A-1, A-3, A-2
+```
+
+`first_visit_flow`는 각 zone의 최초 방문만 담으므로 길이가 전체 zone 수를 넘지 않는다. 최종 리포트에는 개별 `sequence_id`, deviation 대표 사례 또는 무제한 `deviations[]`를 포함하지 않는다.
+
+순서 deviation은 다음 네 값만 사용한다.
+
+| `type` | 판정 조건 |
+|---|---|
+| `out_of_order` | 권장 흐름에 있는 zone이지만 현재 기대 zone과 다른 순서로 최초 진입 |
+| `zone_skipped` | 세션 종료까지 권장 zone을 한 번도 방문하지 않음 |
+| `zone_revisited` | 다른 zone으로 이동한 뒤 이미 방문·완료한 zone으로 다시 진입 |
+| `unexpected_zone` | `recommended_flow`에 없는 zone으로 진입 |
+
+평가 방문 하나에는 하나의 주 deviation만 부여한다. 우선순위는 `unexpected_zone`, `zone_revisited`, `out_of_order` 순이다. `zone_skipped`는 세션 종료 시 미방문 zone마다 추가한다.
+
+```text
+sequence_report.adherence_rate
+= on_track_visit_count / (evaluated_visit_count + skipped_zone_count)
+
+on_track_visit_count + deviation_count
+= evaluated_visit_count + skipped_zone_count
+
+sum(deviation_summary.*.count)
+= deviation_count
+```
+
+`adherence_rate`의 범위는 0~1이다. 분모가 0이면 값을 추정하지 않고 `analysis_status="not_available"`로 반환한다. `deviation_summary`는 네 유형별 `count`, `affected_zone_ids`만 제공하고, `zone_summary`는 zone별 `visit_count`, `revisit_count`, `deviation_count`만 제공한다.
+
+#### 5.4.2 direction 집계
+
+방향 오류는 trajectory 판정이지만 구역 흐름과 함께 확인할 수 있도록 `sequence_report.direction_summary`에 둔다. 순서 준수율과 direction 준수율은 서로 섞지 않는다.
+
+`direction_summary`는 독립된 `analysis_status`, `reason_code`를 가진다. 순서 집계가 가능해도 direction 기준이 없으면 direction만 `not_available`로 반환할 수 있다.
+
+```text
+direction_adherence_rate
+= matched_sequence_count / evaluated_sequence_count
+
+matched_sequence_count + direction_error_count
+= evaluated_sequence_count
+```
+
+- `direction_summary`는 `direction_error` 판정만 집계한다.
+- `distance_speed_error`, `trajectory_deviation`은 direction 준수율에 포함하지 않는다.
+- zone별로 `expected_direction`, 평가·일치·오류 건수, 방향 준수율과 `observed_direction_counts`를 제공한다.
+- `observed_direction_counts`는 `horizontal`, `vertical`, `diagonal`, `curved_irregular`, `stationary` 다섯 키를 항상 가진다.
+- 다섯 관측 건수의 합은 해당 zone의 `evaluated_sequence_count`와 같아야 한다.
 
 ### 5.5 완료 리포트 샘플
 
@@ -946,12 +1001,109 @@ coating_report.reachability.reachable + coating_report.reachability.needs_proces
         "analysis_status": "available",
         "reason_code": null,
         "algorithm_version": "sequence-session-report-1.0",
+        "source_artifact_id": "telemetry-SESSION-001.csv",
         "recommended_flow": ["A-1", "A-2", "A-3"],
-        "visited_flow": ["A-1", "A-2", "A-3"],
-        "adherence_rate": 1.0,
-        "deviation_count": 0,
-        "deviations": [],
-        "guideline": "권장 순서를 유지했습니다. 다음 훈련에서도 같은 구역 흐름을 유지하세요."
+        "first_visit_flow": ["A-1", "A-3", "A-2"],
+        "evaluated_visit_count": 37,
+        "on_track_visit_count": 29,
+        "skipped_zone_count": 0,
+        "adherence_rate": 0.784,
+        "deviation_count": 8,
+        "deviation_summary": {
+          "out_of_order": {
+            "count": 3,
+            "affected_zone_ids": ["A-2", "A-3"]
+          },
+          "zone_skipped": {
+            "count": 0,
+            "affected_zone_ids": []
+          },
+          "zone_revisited": {
+            "count": 5,
+            "affected_zone_ids": ["A-1", "A-2"]
+          },
+          "unexpected_zone": {
+            "count": 0,
+            "affected_zone_ids": []
+          }
+        },
+        "zone_summary": [
+          {
+            "zone_id": "A-1",
+            "visit_count": 14,
+            "revisit_count": 3,
+            "deviation_count": 3
+          },
+          {
+            "zone_id": "A-2",
+            "visit_count": 12,
+            "revisit_count": 2,
+            "deviation_count": 4
+          },
+          {
+            "zone_id": "A-3",
+            "visit_count": 11,
+            "revisit_count": 0,
+            "deviation_count": 1
+          }
+        ],
+        "direction_summary": {
+          "analysis_status": "available",
+          "reason_code": null,
+          "evaluated_sequence_count": 32,
+          "matched_sequence_count": 24,
+          "direction_error_count": 8,
+          "direction_adherence_rate": 0.75,
+          "affected_zone_ids": ["A-2", "A-3"],
+          "zone_summary": [
+            {
+              "zone_id": "A-1",
+              "expected_direction": "horizontal",
+              "evaluated_sequence_count": 10,
+              "matched_sequence_count": 10,
+              "direction_error_count": 0,
+              "direction_adherence_rate": 1.0,
+              "observed_direction_counts": {
+                "horizontal": 10,
+                "vertical": 0,
+                "diagonal": 0,
+                "curved_irregular": 0,
+                "stationary": 0
+              }
+            },
+            {
+              "zone_id": "A-2",
+              "expected_direction": "horizontal",
+              "evaluated_sequence_count": 12,
+              "matched_sequence_count": 8,
+              "direction_error_count": 4,
+              "direction_adherence_rate": 0.667,
+              "observed_direction_counts": {
+                "horizontal": 8,
+                "vertical": 3,
+                "diagonal": 1,
+                "curved_irregular": 0,
+                "stationary": 0
+              }
+            },
+            {
+              "zone_id": "A-3",
+              "expected_direction": "vertical",
+              "evaluated_sequence_count": 10,
+              "matched_sequence_count": 6,
+              "direction_error_count": 4,
+              "direction_adherence_rate": 0.6,
+              "observed_direction_counts": {
+                "horizontal": 2,
+                "vertical": 6,
+                "diagonal": 0,
+                "curved_irregular": 1,
+                "stationary": 1
+              }
+            }
+          ]
+        },
+        "guideline": "A-1 이후 A-2, A-3 순서로 이동하고, A-2에서는 가로 패스, A-3에서는 세로 패스를 유지하세요."
       },
       "pose_report": {
         "analysis_status": "not_available",
