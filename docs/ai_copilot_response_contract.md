@@ -29,9 +29,8 @@ GET  /stream/anomalies/{session_id}
 
 POST /telemetry/sequence
   → 시퀀스마다 도막·순서·자세 판정 실행
-  → HTTP feedback_bundle 반환
-  → SSE sequence_feedback_bundle 전달
-  → 도막 또는 순서 이상 검출 시에만 SSE anomaly_detection 추가 전달
+  → HTTP data에 판정 결과를 직접 반환
+  → 도막 또는 경로 이상 검출 시에만 SSE anomaly_detection 추가 전달
 
 POST /copilot/query
   → 순서·도막·자세·지식 질문에 답변
@@ -109,18 +108,17 @@ POST /sessions/end
   → 누적 히트맵 기반 도막 판정
   → 권장 흐름 기반 순서 판정
   → 기준 자세 기반 자세 판정
-  → HTTP feedback_bundle 반환
-  → 동일한 feedback_bundle을 SSE로 전달
+  → HTTP data에 판정 결과를 직접 반환
   → anomaly.detected=true이면 anomaly_detection SSE를 추가 전달
 ```
 
 - 정상인 축도 반드시 판정하고 결과를 반환한다.
 - 원천 데이터나 기준 데이터가 없어 분석할 수 없는 축은 값을 추정하지 않고 `analysis_status="not_available"`과 `reason_code`를 반환한다.
 - UI는 각 축의 `analysis_status="available"`인 결과만 해석하고, 해당 축의 상태가 정상 범위를 벗어날 때만 경고를 표시한다.
-- `anomaly_detection` 이벤트는 도막 또는 순서 판정 결과를 집계한 `anomaly.detected=true`인 경우에만 Push한다.
-- `anomaly.items[].axis`는 `thickness`, `order`만 사용한다. 자세는 이상탐지하지 않고 `pose_feedback`으로만 판정·안내한다.
-- HTTP와 `sequence_feedback_bundle` SSE는 번들의 동일한 `feedback_id`를 사용한다.
-- 클라이언트는 번들 `feedback_id`를 기준으로 HTTP/`sequence_feedback_bundle` 중복 표시를 방지하되, 별도 `anomaly_detection.event_id`는 표시 대상에서 제거하지 않는다.
+- `anomaly_detection` 이벤트는 도막 또는 경로 판정 결과를 집계한 `anomaly.detected=true`인 경우에만 Push한다.
+- `anomaly.items[].axis`는 `thickness`, `trajectory`만 사용한다. 자세는 이상탐지하지 않고 `pose_feedback`으로만 판정·안내한다.
+- `feedback_bundle`은 서버 내부에서 여러 판정 결과를 조합할 때 사용할 수 있지만 HTTP 또는 SSE 경계에는 노출하지 않는다.
+- 시뮬레이터는 HTTP `data`의 평탄화된 판정 결과와 조건부 `anomaly_detection` SSE만 수신한다.
 - `sequence_id`는 세션 내에서 1부터 증가하는 버스트 순번이다.
 
 ### 3.2 `sequence_data_ack`
@@ -132,18 +130,22 @@ POST /sessions/end
 | `frames_received` | Integer | Y | 요청에서 수신한 프레임 수 |
 | `frames_accepted` | Integer | Y | 검증 후 저장한 프레임 수 |
 
-### 3.3 `feedback_bundle` 공통 필드
+### 3.3 시퀀스 HTTP `data` 필드
 
 | 필드 | 타입 | 필수 | 설명 |
 |---|---|:---:|---|
-| `feedback_id` | String | Y | HTTP/SSE 중복 제거용 번들 고유 ID |
+| `event_id` | String | Y | 시퀀스 판정 이벤트 ID |
 | `sequence_id` | Integer | Y | 세션 내 버스트 순번 |
-| `measured_at` | String | Y | 측정 시각, ISO 8601 UTC |
+| `text_guide` | String | Y | 작업자에게 표시할 종합 안내 |
+| `anomaly` | Object | Y | `detected`, `anomaly_type`, `items`를 포함한 도막·경로 이상 결과 |
+| `sequence_data_ack` | Object | Y | 시퀀스 저장·프레임 수신 결과 |
 | `coating_feedback` | Object | Y | 도막 판정 또는 분석 불가 상태 |
 | `sequence_feedback` | Object | Y | 순서 판정 또는 분석 불가 상태 |
 | `pose_feedback` | Object | Y | 자세 판정 또는 분석 불가 상태 |
+| `coating_result` | Object | N | 도막 측정 상세 결과 |
+| `citations` | Array[String] | N | 안내 생성에 사용한 문서 ID |
 
-세 축 객체는 모두 `analysis_status`를 필수로 가진다. `available`이면 해당 축의 판정 필드를 제공하고 `reason_code=null`이다. `not_available`이면 판정값을 만들지 않고 `reason_code`에 안정적인 사유 코드를 제공한다.
+`feedback_bundle`이라는 내부 조합 객체를 사용하더라도 직렬화하지 않는다. 제공되는 세 축 객체는 `analysis_status`를 가진다. `available`이면 해당 축의 판정 필드를 제공하고 `reason_code=null`이다. `not_available`이면 판정값을 만들지 않고 `reason_code`에 안정적인 사유 코드를 제공한다.
 
 ### 3.4 `coating_feedback`
 
@@ -229,17 +231,28 @@ POST /sessions/end
     "scenario_id": "1-A",
     "generated_at": "2026-08-06T14:31:04Z",
     "latency_ms": 186,
+    "event_id": "anomaly-SESSION-001-12",
+    "sequence_id": 12,
+    "text_guide": "A-2 구역은 저도막입니다. 해당 구역의 체류 시간을 늘리세요.",
+    "anomaly": {
+      "detected": true,
+      "anomaly_type": ["coating"],
+      "items": [
+        {
+          "axis": "thickness",
+          "type": "under_app",
+          "zone_id": "A-2",
+          "action": "increase_dwell"
+        }
+      ]
+    },
     "sequence_data_ack": {
       "stored": true,
       "duplicate": false,
       "frames_received": 527,
       "frames_accepted": 527
     },
-    "feedback_bundle": {
-      "feedback_id": "feedback-SESSION-001-12",
-      "sequence_id": 12,
-      "measured_at": "2026-08-06T14:31:03Z",
-      "coating_feedback": {
+    "coating_feedback": {
         "analysis_status": "available",
         "reason_code": null,
         "zone_id": "A-2",
@@ -256,8 +269,8 @@ POST /sessions/end
         "message": "하단 좌측 구역이 저도막입니다. 이 구역을 조금 더 오래 또는 반복 분사하세요.",
         "provisional": false,
         "algorithm_version": "coating-feedback-1.0"
-      },
-      "sequence_feedback": {
+    },
+    "sequence_feedback": {
         "analysis_status": "available",
         "reason_code": null,
         "current_zone_id": "A-2",
@@ -267,13 +280,12 @@ POST /sessions/end
         "deviations": [],
         "message": "권장 순서에 맞게 A-2 구역을 작업하고 있습니다. 다음 구역은 A-3입니다.",
         "algorithm_version": "sequence-feedback-1.0"
-      },
-      "pose_feedback": {
+    },
+    "pose_feedback": {
         "analysis_status": "not_available",
         "reason_code": "reference_data_missing",
         "message": "이 시퀀스에 적용할 기준 자세가 없어 자세 판정을 제공할 수 없습니다.",
         "algorithm_version": "pose-feedback-1.0"
-      }
     }
   }
 }
@@ -300,37 +312,97 @@ POST /sessions/end
 }
 ```
 
-### 3.11 SSE 샘플
+### 3.11 `anomaly_detection` SSE
 
-`sequence_feedback_bundle`은 모든 시퀀스에서 HTTP 응답의 `feedback_bundle` 객체를 그대로 전달한다. `id:`와 본문의 `feedback_id`는 동일해야 한다.
-
-```text
-id: feedback-SESSION-001-12
-event: sequence_feedback_bundle
-data: {"feedback_id":"feedback-SESSION-001-12","sequence_id":12,"measured_at":"2026-08-06T14:31:03Z","coating_feedback":{"analysis_status":"available","reason_code":null,"status":"under_app","zone_class":"under1","message":"하단 좌측 구역이 저도막입니다."},"sequence_feedback":{"analysis_status":"available","reason_code":null,"adherence_status":"on_track","message":"권장 순서에 맞게 작업하고 있습니다."},"pose_feedback":{"analysis_status":"not_available","reason_code":"reference_data_missing","message":"기준 자세가 없어 자세 판정을 제공할 수 없습니다."}}
-```
-
-같은 시퀀스에서 도막 또는 순서 이상을 집계한 `anomaly.detected`가 `true`이면 다음 이벤트를 추가로 Push한다. SSE `id:`는 본문의 `event_id`와 동일하다.
+시퀀스 HTTP 응답과 별개로 도막 또는 경로 이상을 집계한 `anomaly.detected`가 `true`일 때만 Push한다. SSE `id:`는 본문의 `event_id`와 동일하다.
 
 | 필드 | 타입 | 필수 | 설명 |
 |---|---|:---:|---|
 | `event_id` | String | Y | 이상 알림 중복 제거용 고유 ID |
 | `sequence_id` | Integer | Y | 이상이 검출된 시퀀스 순번 |
 | `text_guide` | String | Y | 작업자에게 표시할 이상 대응 안내 |
-| `anomaly` | Object | Y | `detected`와 `items`를 포함한 도막·순서 이상 결과 |
-| `sequence_data_ack` | Object | Y | 해당 시퀀스의 저장·프레임 수신 결과 |
+| `anomaly` | Object | Y | `detected`, `anomaly_type`, `items`를 포함한 이상 결과 |
+| `sequence_data_ack` | Object | Y | 해당 시퀀스의 저장 결과 |
 | `coating_result` | Object | N | 도막 측정 상세 결과 |
 | `citations` | Array[String] | N | 안내 생성에 사용한 문서 ID |
+
+`anomaly_type`은 `coating`, `trajectory` 값의 배열이다. 두 이상이 함께 발생하면 `["coating", "trajectory"]` 순서로 두고 `items`도 도막 항목 다음 경로 항목으로 정렬한다. `combined` 같은 합성 값은 사용하지 않는다.
+
+공통 item은 `axis`, `type`, `zone_id`, 단일 문자열 `action`을 가진다. 자세는 이상탐지 대상이 아니므로 `axis="pose"` 항목을 생성하지 않는다.
+
+#### 3.11.1 도막 이상만 발생한 경우
 
 ```text
 id: anomaly-SESSION-001-12
 event: anomaly_detection
-data: {"event_id":"anomaly-SESSION-001-12","sequence_id":12,"text_guide":"A-2 구역은 저도막입니다. 해당 구역의 체류 시간을 늘리세요.","anomaly":{"detected":true,"items":[{"axis":"thickness","type":"under_app","region_id":"A-2","severity":"high","measured":118.0,"expected":160.0,"unit":"um","cause":["too_far","too_fast"],"recommended_action":["move_closer","move_slower"]}]},"sequence_data_ack":{"stored":true,"duplicate":false,"frames_received":527,"frames_accepted":527}}
+data: {"event_id":"anomaly-SESSION-001-12","sequence_id":12,"text_guide":"A-2 구역의 도막 두께가 부족합니다. 해당 구역의 체류 시간을 늘리세요.","anomaly":{"detected":true,"anomaly_type":["coating"],"items":[{"axis":"thickness","type":"under_app","zone_id":"A-2","action":"increase_dwell"}]},"sequence_data_ack":{"stored":true,"duplicate":false,"frames_received":527,"frames_accepted":527}}
 ```
 
-`axis="thickness"` 항목의 `type`은 도막 상태 enum인 `under_app`, `normal`, `over_app`만 사용한다. `normal`은 이상 항목이 아니므로 도막 이상만 있는 `anomaly.items`에는 포함하지 않는다.
+도막 상태 enum은 `under_app`, `normal`, `over_app`이다. 정상 시에는 SSE를 보내지 않으므로 도막 anomaly item에는 `under_app` 또는 `over_app`만 나타난다.
 
-`anomaly.detected=false`이면 `anomaly_detection` 이벤트를 Push하지 않는다. `pose_feedback.overall_status="needs_correction"`이더라도 `axis="pose"` 항목을 만들거나 자세 결과만으로 이 이벤트를 생성하지 않는다.
+#### 3.11.2 경로 이상만 발생한 경우
+
+```text
+id: anomaly-SESSION-001-13
+event: anomaly_detection
+data: {"event_id":"anomaly-SESSION-001-13","sequence_id":13,"text_guide":"손떨림으로 경로가 약 45.8mm 이탈했습니다. 손목을 고정하고 좌우 일직선 경로를 유지하세요.","anomaly":{"detected":true,"anomaly_type":["trajectory"],"items":[{"axis":"trajectory","type":"trajectory_deviation","zone_id":"A-2","deviation_mm":45.8,"action":"stabilize_wrist"}]},"sequence_data_ack":{"stored":true,"duplicate":false,"frames_received":486,"frames_accepted":486}}
+```
+
+경로 이상 `type`은 다음 세 값만 사용한다.
+
+| `type` | 의미 | 추가 시각화 필드 | `action` 예시 |
+|---|---|---|---|
+| `direction_error` | 방향성 오류 | `current_direction`, `expected_direction` | `correct_pass_direction` |
+| `trajectory_deviation` | 손떨림·궤적 이탈 | `deviation_mm` | `stabilize_wrist` |
+| `distance_speed_error` | 거리·속도 오차 | `distance_mm`, `target_distance_mm` | `adjust_distance_speed` |
+
+```json
+{
+  "axis": "trajectory",
+  "type": "direction_error",
+  "zone_id": "A-1",
+  "current_direction": "vertical",
+  "expected_direction": "horizontal",
+  "action": "correct_pass_direction"
+}
+```
+
+안내 문구: `현재 가로 50% 겹침 패스 모드이지만 세로 방향으로 도장하고 있습니다. 노즐 이동 방향을 가로 일직선으로 조정하세요.`
+
+```json
+{
+  "axis": "trajectory",
+  "type": "trajectory_deviation",
+  "zone_id": "A-2",
+  "deviation_mm": 45.8,
+  "action": "stabilize_wrist"
+}
+```
+
+안내 문구: `손떨림으로 경로가 약 45.8mm 이탈했습니다. 손목을 고정하고 좌우 일직선 경로를 유지하세요.`
+
+```json
+{
+  "axis": "trajectory",
+  "type": "distance_speed_error",
+  "zone_id": "A-3",
+  "distance_mm": 620,
+  "target_distance_mm": 400,
+  "action": "adjust_distance_speed"
+}
+```
+
+안내 문구: `이격거리가 620mm로 기준보다 멀고 이동 속도가 느립니다. 벽면과 약 400mm 거리를 유지하고 이동 속도를 높이세요.`
+
+#### 3.11.3 도막·경로 이상이 함께 발생한 경우
+
+```text
+id: anomaly-SESSION-001-14
+event: anomaly_detection
+data: {"event_id":"anomaly-SESSION-001-14","sequence_id":14,"text_guide":"A-2 구역의 도막 두께가 부족하고 경로가 약 45.8mm 이탈했습니다. 해당 구역의 체류 시간을 늘리고 손목을 고정해 좌우 일직선 경로를 유지하세요.","anomaly":{"detected":true,"anomaly_type":["coating","trajectory"],"items":[{"axis":"thickness","type":"under_app","zone_id":"A-2","action":"increase_dwell"},{"axis":"trajectory","type":"trajectory_deviation","zone_id":"A-2","deviation_mm":45.8,"action":"stabilize_wrist"}]},"sequence_data_ack":{"stored":true,"duplicate":false,"frames_received":512,"frames_accepted":512}}
+```
+
+`anomaly.detected=false`이면 `anomaly_detection` 이벤트를 Push하지 않는다.
 
 ---
 
@@ -351,19 +423,16 @@ Query는 다음 질문을 처리할 수 있다.
 
 `use_rag=false` 또는 `retrieval_mode=disabled`는 문서 검색만 비활성화한다. 현재 세션 상태, 누적 시퀀스, 최근 도막·순서·자세 판정 및 MCP 결과는 계속 사용할 수 있다.
 
-### 4.2 Query 요청 샘플
+### 4.2 `task_type`
 
-```json
-{
-  "session_id": "SESSION-001",
-  "user_id": "W-017",
-  "prompt": "현재 순서와 도막, 자세 상태 괜찮아?",
-  "task_type": "error_analysis",
-  "use_rag": true
-}
-```
+Query 예시는 다음 네 종류로 구분한다.
 
-`task_type`은 라우팅 힌트다. 하나의 Query가 순서·도막·자세처럼 여러 의도를 포함하면 서버는 복수 의도를 해석하고 여러 MCP 도구를 호출할 수 있다.
+| `task_type` | 설명 |
+|---|---|
+| `trajectory_recomm` | 다음 구역과 권장 이동 경로 안내 |
+| `pose_recomm` | 현재 자세 비교와 교정 안내 |
+| `error_analysis` | 도막·경로 이상 원인과 조치 안내 |
+| `knowledge_search` | 일반 도장 지식과 시방서 검색 |
 
 ### 4.3 Query 응답 필드
 
@@ -380,7 +449,66 @@ Query는 다음 질문을 처리할 수 있다.
 
 `route`와 `tool_calls_made`는 공개 응답에 포함하지 않고 서버 운영 로그에만 기록한다.
 
-### 4.4 세션 기반 Query 응답 샘플
+### 4.4 `trajectory_recomm` 예시
+
+#### 요청
+
+```json
+{
+  "session_id": "SESSION-001",
+  "user_id": "W-017",
+  "prompt": "다음 도장 구역과 권장 이동 경로를 알려줘.",
+  "task_type": "trajectory_recomm",
+  "use_rag": false
+}
+```
+
+#### 응답
+
+```json
+{
+  "status": "SUCCESS",
+  "code": 200,
+  "message": "Copilot query completed",
+  "data": {
+    "request_id": "req-query-0041",
+    "session_id": "SESSION-001",
+    "user_id": "W-017",
+    "scenario_id": "1-A",
+    "generated_at": "2026-08-06T14:32:40Z",
+    "latency_ms": 180,
+    "answer": "현재 A-2 구역을 작업하고 있으며 다음 권장 구역은 A-3입니다. 가로 일직선 패스를 유지하며 A-3 구역으로 이동하세요.",
+    "resolved_intents": ["trajectory_recommendation"],
+    "context_status": "available",
+    "sequence_context": {
+      "current_zone_id": "A-2",
+      "next_zone_id": "A-3",
+      "expected_direction": "horizontal",
+      "action": "continue_to_next_zone"
+    },
+    "coating_context": null,
+    "pose_context": null,
+    "retrieval_used": false,
+    "citations": []
+  }
+}
+```
+
+### 4.5 `pose_recomm` 예시
+
+#### 요청
+
+```json
+{
+  "session_id": "SESSION-001",
+  "user_id": "W-017",
+  "prompt": "현재 자세에서 교정할 부분을 알려줘.",
+  "task_type": "pose_recomm",
+  "use_rag": false
+}
+```
+
+#### 응답
 
 ```json
 {
@@ -393,50 +521,39 @@ Query는 다음 질문을 처리할 수 있다.
     "user_id": "W-017",
     "scenario_id": "1-A",
     "generated_at": "2026-08-06T14:33:10Z",
-    "latency_ms": 31240,
-    "answer": "현재 작업 순서는 권장 흐름에 맞습니다. 다만 최근 시퀀스에서 A-2 구역의 누적 두께가 118µm로 정상 범위 160~240µm보다 낮습니다. 해당 구역을 조금 더 오래 또는 반복 분사하세요. 자세는 기준 데이터가 없어 이번 응답에서는 판정하지 않았습니다.",
-    "resolved_intents": [
-      "sequence_status",
-      "coating_status",
-      "pose_status"
-    ],
+    "latency_ms": 210,
+    "answer": "손목을 고정하고 오른쪽 팔꿈치를 몸통 가까이 유지하세요.",
+    "resolved_intents": ["pose_recommendation"],
     "context_status": "available",
-    "sequence_context": {
-      "analysis_status": "available",
-      "reason_code": null,
-      "current_zone_id": "A-2",
-      "expected_zone_id": "A-2",
-      "next_zone_id": "A-3",
-      "adherence_status": "on_track",
-      "deviations": []
-    },
-    "coating_context": {
-      "analysis_status": "available",
-      "reason_code": null,
-      "feedback_id": "feedback-SESSION-001-12",
-      "sequence_id": 12,
-      "status": "under_app",
-      "zone_class": "under1",
-      "thickness_um": 118,
-      "normal_band_um": [160, 240],
-      "action": "increase_dwell",
-      "action_reachable": true
-    },
+    "sequence_context": null,
+    "coating_context": null,
     "pose_context": {
-      "analysis_status": "not_available",
-      "reason_code": "reference_data_missing",
-      "message": "이 시퀀스에 적용할 기준 자세가 없어 자세 판정을 제공할 수 없습니다."
+      "overall_status": "needs_correction",
+      "score": 0.72,
+      "joint": "right_elbow",
+      "action": "stabilize_wrist"
     },
-    "retrieval_used": true,
-    "citations": [
-      "DOC-0421-C0007",
-      "SPEC-4.2-COATING"
-    ]
+    "retrieval_used": false,
+    "citations": []
   }
 }
 ```
 
-### 4.5 일반 지식 Query 응답 샘플
+### 4.6 `error_analysis` 예시
+
+#### 요청
+
+```json
+{
+  "session_id": "SESSION-001",
+  "user_id": "W-017",
+  "prompt": "A-2 구역의 저도막 원인과 조치 방법을 알려줘.",
+  "task_type": "error_analysis",
+  "use_rag": false
+}
+```
+
+#### 응답
 
 ```json
 {
@@ -445,12 +562,59 @@ Query는 다음 질문을 처리할 수 있다.
   "message": "Copilot query completed",
   "data": {
     "request_id": "req-query-0043",
+    "session_id": "SESSION-001",
+    "user_id": "W-017",
+    "scenario_id": "1-A",
+    "generated_at": "2026-08-06T14:33:40Z",
+    "latency_ms": 195,
+    "answer": "A-2 구역은 이동 속도가 빠르고 체류 시간이 부족해 저도막이 발생했습니다. 해당 구역의 체류 시간을 늘리세요.",
+    "resolved_intents": ["coating_error_analysis"],
+    "context_status": "available",
+    "sequence_context": null,
+    "coating_context": {
+      "sequence_id": 12,
+      "zone_id": "A-2",
+      "status": "under_app",
+      "thickness_um": 118,
+      "target_thickness_um": 160,
+      "action": "increase_dwell"
+    },
+    "pose_context": null,
+    "retrieval_used": false,
+    "citations": []
+  }
+}
+```
+
+### 4.7 `knowledge_search` 예시
+
+#### 요청
+
+```json
+{
+  "session_id": null,
+  "user_id": "W-017",
+  "prompt": "저도막이 무엇인지 설명해줘.",
+  "task_type": "knowledge_search",
+  "use_rag": true
+}
+```
+
+#### 응답
+
+```json
+{
+  "status": "SUCCESS",
+  "code": 200,
+  "message": "Copilot query completed",
+  "data": {
+    "request_id": "req-query-0044",
     "session_id": null,
     "user_id": "W-017",
     "scenario_id": null,
     "generated_at": "2026-08-06T14:34:05Z",
-    "latency_ms": 18400,
-    "answer": "저도막은 요구된 최소 도막 두께보다 실제 도막 두께가 낮은 상태입니다.",
+    "latency_ms": 184,
+    "answer": "저도막은 실제 도막 두께가 요구된 최소 도막 두께보다 낮은 상태입니다.",
     "resolved_intents": ["knowledge_search"],
     "context_status": "not_available",
     "sequence_context": null,
@@ -667,8 +831,7 @@ coating_report.reachability.reachable + coating_report.reachability.needs_proces
 - 같은 `Idempotency-Key`와 같은 요청 본문을 재전송하면 최초 응답을 그대로 반환한다.
 - 같은 키에 다른 본문을 보내면 `409 Conflict`를 반환한다.
 - `(session_id, sequence_id)`는 세션 내에서 유일해야 한다.
-- 중복 시퀀스는 다시 저장하거나 다시 판정하지 않고 기존 `feedback_id`를 반환한다.
-- HTTP 응답과 `sequence_feedback_bundle` SSE가 모두 도착하더라도 UI는 `feedback_id`당 한 번만 표시한다.
+- 중복 시퀀스는 다시 저장하거나 다시 판정하지 않고 기존 `event_id`를 반환한다.
 - `anomaly_detection` SSE는 별도 알림이므로 `event_id`로 중복 제거한다.
 - Query 재전송은 동일한 `request_id` 또는 idempotency 기록으로 중복 생성을 방지한다.
 - 세션 완료 요청을 재전송하면 새 리포트를 만들지 않고 기존 `report_id`를 반환한다.
@@ -677,10 +840,9 @@ coating_report.reachability.reachable + coating_report.reachability.needs_proces
 
 ## 7. SSE 연결 규칙
 
-- 모든 시퀀스의 기본 SSE event name은 `sequence_feedback_bundle`이며 `id:`는 `feedback_id`와 동일하다.
-- 도막 또는 순서 이상 결과가 `anomaly.detected=true`인 경우에만 `anomaly_detection` 이벤트를 추가하고 SSE `id:`는 본문의 `event_id`와 동일하게 둔다.
-- `anomaly_detection` 이벤트의 `anomaly.items[].axis`는 `thickness`, `order`만 허용한다. 자세 교정 필요 상태는 이상 항목이나 이벤트 발생 조건으로 사용하지 않는다.
-- 기본 번들은 세 축의 정상·이상·분석 불가 상태를 모두 전달한다. UI는 각 축의 `analysis_status`와 판정 상태를 함께 확인한다.
+- 도막 또는 경로 이상 결과가 `anomaly.detected=true`인 경우에만 `anomaly_detection` 이벤트를 Push하고 SSE `id:`는 본문의 `event_id`와 동일하게 둔다.
+- `anomaly_detection` 이벤트의 `anomaly.items[].axis`는 `thickness`, `trajectory`만 허용한다. 자세 교정 필요 상태는 이상 항목이나 이벤트 발생 조건으로 사용하지 않는다.
+- `feedback_bundle` 또는 `sequence_feedback_bundle`은 시뮬레이터에 전송하지 않는다.
 - 재연결 시 `Last-Event-ID`를 사용해 누락 이벤트를 재전송할 수 있어야 한다.
 - 서버는 heartbeat를 주기적으로 전송한다.
 - 세션이 종료되면 스트림을 닫는다.
