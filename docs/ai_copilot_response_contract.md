@@ -118,7 +118,7 @@ POST /sessions/end
 - `anomaly_detection` 이벤트는 도막 또는 경로 판정 결과를 집계한 `anomaly.detected=true`인 경우에만 Push한다.
 - `anomaly.items[].axis`는 `thickness`, `trajectory`만 사용한다. 자세는 이상탐지하지 않고 `pose_feedback`으로만 판정·안내한다.
 - `feedback_bundle`은 서버 내부에서 여러 판정 결과를 조합할 때 사용할 수 있지만 HTTP 또는 SSE 경계에는 노출하지 않는다.
-- 시뮬레이터는 HTTP `data`의 평탄화된 판정 결과와 조건부 `anomaly_detection` SSE만 수신한다.
+- 시뮬레이터는 HTTP `data`의 공통 결과와 namespaced 모듈 결과, 조건부 `anomaly_detection` SSE만 수신한다.
 - `sequence_id`는 세션 내에서 1부터 증가하는 버스트 순번이다.
 
 ### 3.2 `sequence_data_ack`
@@ -142,6 +142,7 @@ POST /sessions/end
 | `coating_feedback` | Object | Y | 도막 판정 또는 분석 불가 상태 |
 | `sequence_feedback` | Object | Y | 순서 판정 또는 분석 불가 상태 |
 | `pose_feedback` | Object | Y | 자세 판정 또는 분석 불가 상태 |
+| `trajectory_feedback` | Object | N | 전체 경로 지표·숙련자 비교·코칭 결과 |
 | `coating_result` | Object | N | 도막 측정 상세 결과 |
 | `citations` | Array[String] | N | 안내 생성에 사용한 문서 ID |
 
@@ -323,8 +324,6 @@ POST /sessions/end
 | `text_guide` | String | Y | 작업자에게 표시할 이상 대응 안내 |
 | `anomaly` | Object | Y | `detected`, `anomaly_type`, `items`를 포함한 이상 결과 |
 | `sequence_data_ack` | Object | Y | 해당 시퀀스의 저장 결과 |
-| `coating_result` | Object | N | 도막 측정 상세 결과 |
-| `citations` | Array[String] | N | 안내 생성에 사용한 문서 ID |
 
 `anomaly_type`은 `coating`, `trajectory` 값의 배열이다. 두 이상이 함께 발생하면 `["coating", "trajectory"]` 순서로 두고 `items`도 도막 항목 다음 경로 항목으로 정렬한다. `combined` 같은 합성 값은 사용하지 않는다.
 
@@ -350,11 +349,23 @@ data: {"event_id":"anomaly-SESSION-001-13","sequence_id":13,"text_guide":"손떨
 
 경로 이상 `type`은 다음 세 값만 사용한다.
 
+`trajectory_metrics.direction`은 다음 다섯 값을 사용한다.
+
+| `direction` | 표시 의미 |
+|---|---|
+| `horizontal` | 가로 |
+| `vertical` | 세로 |
+| `diagonal` | 사선 |
+| `curved_irregular` | 곡선·불규칙 |
+| `stationary` | 제자리·정지 |
+
+`direction`은 기계 판정용 enum이고 `stroke_pattern`은 사용자 표시용 문자열이다. 현재 방향과 목표 방향이 다를 때만 `direction_error`를 생성하며 세부 분류 임계값은 궤적 분석 알고리즘이 소유한다.
+
 | `type` | 의미 | 추가 시각화 필드 | `action` 예시 |
 |---|---|---|---|
 | `direction_error` | 방향성 오류 | `current_direction`, `expected_direction` | `correct_pass_direction` |
 | `trajectory_deviation` | 손떨림·궤적 이탈 | `deviation_mm` | `stabilize_wrist` |
-| `distance_speed_error` | 거리·속도 오차 | `distance_mm`, `target_distance_mm` | `adjust_distance_speed` |
+| `distance_speed_error` | 거리·속도 오차 | `distance_mm`, `target_distance_mm`, `speed_mms`, `target_speed_mms` | `adjust_distance_speed` |
 
 ```json
 {
@@ -386,13 +397,15 @@ data: {"event_id":"anomaly-SESSION-001-13","sequence_id":13,"text_guide":"손떨
   "axis": "trajectory",
   "type": "distance_speed_error",
   "zone_id": "A-3",
-  "distance_mm": 620,
+  "distance_mm": 450,
   "target_distance_mm": 400,
+  "speed_mms": 2200,
+  "target_speed_mms": 2800,
   "action": "adjust_distance_speed"
 }
 ```
 
-안내 문구: `이격거리가 620mm로 기준보다 멀고 이동 속도가 느립니다. 벽면과 약 400mm 거리를 유지하고 이동 속도를 높이세요.`
+안내 문구: `이격거리가 450mm로 기준보다 멀고 이동 속도가 느립니다. 이격거리를 약 400mm로 줄이고 이동 속도를 2800mm/s 수준으로 높이세요.`
 
 #### 3.11.3 도막·경로 이상이 함께 발생한 경우
 
@@ -403,6 +416,143 @@ data: {"event_id":"anomaly-SESSION-001-14","sequence_id":14,"text_guide":"A-2 �
 ```
 
 `anomaly.detected=false`이면 `anomaly_detection` 이벤트를 Push하지 않는다.
+
+### 3.12 Trajectory 응답 경계
+
+내부 trajectory coaching HTTP, 시뮬레이터 HTTP와 시뮬레이터 SSE를 서로 다른 경계로 취급한다.
+
+| 경계 | 목적 | 전달 범위 |
+|---|---|---|
+| 내부 trajectory coaching HTTP | 분석 모듈 간 원시 결과 전달 | `trajectory_metrics`, `expert_comparison`, `coaching_message` 전체 |
+| 시뮬레이터 HTTP | 시퀀스 완료 후 전체 결과 조회 | 공통 응답과 namespaced `trajectory_feedback`, 정규화 `anomaly` |
+| 시뮬레이터 SSE | 이상 즉시 시각화·행동 안내 | `text_guide`, 정규화 `anomaly`, `sequence_data_ack` 요약 |
+
+내부 분석 필드를 시뮬레이터 응답 최상위에 평탄화하지 않는다. 시뮬레이터 HTTP는 전체 trajectory 결과를 `trajectory_feedback` 아래에 두고 SSE에는 전체 지표를 반복하지 않는다.
+
+#### 3.12.1 내부 trajectory coaching HTTP
+
+```json
+{
+  "status": "SUCCESS",
+  "code": 200,
+  "message": "Sequence trajectory coaching analysis completed",
+  "data": {
+    "session_id": "1_1000053_1",
+    "sequence_id": "SEQ-005",
+    "user_id": "W-017",
+    "trajectory_metrics": {
+      "direction": "horizontal",
+      "stroke_pattern": "Horizontal Stroke (가로 패스)",
+      "straightness_score": 72,
+      "spatial_span_x_m": 0.4,
+      "spatial_span_y_m": 0,
+      "expert_deviation_mm": 45.8,
+      "expert_3d_shape_dev_mm": 45.8
+    },
+    "expert_comparison": {
+      "mode_key": "MODE_1",
+      "target_pattern": "가로(Horizontal) 50% 겹침 패스",
+      "user_pattern": "Horizontal Stroke (가로 패스)",
+      "target_speed_mms": 2800,
+      "user_speed_mms": 2200,
+      "speed_gap_mms": -600,
+      "target_distance_mm": 400,
+      "user_distance_mm": 450,
+      "distance_gap_mm": 50,
+      "straightness_score": 72,
+      "expert_3d_shape_dev_mm": 45.8
+    },
+    "coaching_message": "가로 패스 방향은 적절합니다. 손목을 고정하고 이격거리를 약 400mm로 줄이며 이동 속도를 2800mm/s 수준으로 높이세요."
+  }
+}
+```
+
+#### 3.12.2 시뮬레이터 HTTP
+
+내부 `sequence_id="SEQ-005"`는 시뮬레이터 계약의 세션 내 순번 `sequence_id=5`에 대응한다. 내부 식별자와 외부 순번을 같은 필드로 혼용하지 않는다.
+
+```json
+{
+  "status": "SUCCESS",
+  "code": 200,
+  "message": "Sequence analysis completed",
+  "data": {
+    "event_id": "sequence-SESSION-001-5",
+    "request_id": "req-sequence-0005",
+    "session_id": "SESSION-001",
+    "sequence_id": 5,
+    "user_id": "W-017",
+    "scenario_id": "1-A",
+    "generated_at": "2026-08-07T10:15:00Z",
+    "latency_ms": 185,
+    "text_guide": "가로 패스 방향은 적절합니다. 손목을 고정하고 이격거리를 약 400mm로 줄이며 이동 속도를 2800mm/s 수준으로 높이세요.",
+    "sequence_data_ack": {
+      "stored": true,
+      "duplicate": false,
+      "frames_received": 486,
+      "frames_accepted": 486
+    },
+    "trajectory_feedback": {
+      "trajectory_metrics": {
+        "direction": "horizontal",
+        "stroke_pattern": "Horizontal Stroke (가로 패스)",
+        "straightness_score": 72,
+        "spatial_span_x_m": 0.4,
+        "spatial_span_y_m": 0,
+        "expert_deviation_mm": 45.8,
+        "expert_3d_shape_dev_mm": 45.8
+      },
+      "expert_comparison": {
+        "mode_key": "MODE_1",
+        "target_pattern": "가로(Horizontal) 50% 겹침 패스",
+        "user_pattern": "Horizontal Stroke (가로 패스)",
+        "target_speed_mms": 2800,
+        "user_speed_mms": 2200,
+        "speed_gap_mms": -600,
+        "target_distance_mm": 400,
+        "user_distance_mm": 450,
+        "distance_gap_mm": 50,
+        "straightness_score": 72,
+        "expert_3d_shape_dev_mm": 45.8
+      },
+      "coaching_message": "가로 패스 방향은 적절합니다. 손목을 고정하고 이격거리를 약 400mm로 줄이며 이동 속도를 2800mm/s 수준으로 높이세요."
+    },
+    "anomaly": {
+      "detected": true,
+      "anomaly_type": ["trajectory"],
+      "items": [
+        {
+          "axis": "trajectory",
+          "type": "trajectory_deviation",
+          "zone_id": "A-2",
+          "deviation_mm": 45.8,
+          "action": "stabilize_wrist"
+        },
+        {
+          "axis": "trajectory",
+          "type": "distance_speed_error",
+          "zone_id": "A-2",
+          "distance_mm": 450,
+          "target_distance_mm": 400,
+          "speed_mms": 2200,
+          "target_speed_mms": 2800,
+          "action": "adjust_distance_speed"
+        }
+      ]
+    }
+  }
+}
+```
+
+#### 3.12.3 시뮬레이터 SSE
+
+```text
+id: anomaly-SESSION-001-5
+event: anomaly_detection
+data: {"event_id":"anomaly-SESSION-001-5","sequence_id":5,"text_guide":"손목을 고정하고 이격거리를 약 400mm로 줄이며 이동 속도를 2800mm/s 수준으로 높이세요.","anomaly":{"detected":true,"anomaly_type":["trajectory"],"items":[{"axis":"trajectory","type":"trajectory_deviation","zone_id":"A-2","deviation_mm":45.8,"action":"stabilize_wrist"},{"axis":"trajectory","type":"distance_speed_error","zone_id":"A-2","distance_mm":450,"target_distance_mm":400,"speed_mms":2200,"target_speed_mms":2800,"action":"adjust_distance_speed"}]},"sequence_data_ack":{"stored":true,"duplicate":false,"frames_received":486,"frames_accepted":486}}
+```
+
+SSE에는 `trajectory_metrics`, `expert_comparison` 전체를 포함하지 않는다.
 
 ---
 
