@@ -313,7 +313,7 @@ data: {"event_id":"anomaly-SESSION-001-5","sequence_id":"SEQ-005","text_guide":"
 
 - `route`는 Query 응답에 추가하지 않는다.
 - `trajectory_recomm`은 순서·경로 추천 질문과 `sequence_context`를 사용한다.
-- `pose_recomm`은 자세 교정 질문과 `pose_context`를 사용한다.
+- `pose_recomm`은 현재 fixture 자세와의 단건 비교 질문 및 `pose_context`를 사용한다.
 - `error_analysis`는 도막 또는 경로 이상 원인·조치 질문을 사용한다.
 - `knowledge_search`는 일반 도장 지식 질문을 사용하며 세션 context는 `null`일 수 있다.
 
@@ -322,7 +322,7 @@ data: {"event_id":"anomaly-SESSION-001-5","sequence_id":"SEQ-005","text_guide":"
 | `task_type` | 요청 `prompt` | 핵심 응답 | 주요 context |
 |---|---|---|---|
 | `trajectory_recomm` | `다음 도장 구역과 권장 이동 경로를 알려줘.` | 현재 `A-2`, 다음 `A-3`, 가로 일직선 패스 유지 안내 | `sequence_context` 사용 |
-| `pose_recomm` | `현재 자세에서 교정할 부분을 알려줘.` | 손목 고정과 팔꿈치 위치 조정 안내 | `pose_context` 사용 |
+| `pose_recomm` | `현재 자세에서 교정할 부분을 알려줘.` | `EP-001` 대비 `similarity_score`와 관절별 거리·각도 차이 안내 | `pose_context` 사용 |
 | `error_analysis` | `A-2 구역의 저도막 원인과 조치 방법을 알려줘.` | `under_app` 근거와 `increase_dwell` 조치 안내 | `coating_context` 사용 |
 | `knowledge_search` | `저도막이 무엇인지 설명해줘.` | 요구 최소 도막 두께보다 낮은 상태라는 지식 답변 | 세 context 모두 `null` |
 
@@ -330,6 +330,10 @@ data: {"event_id":"anomaly-SESSION-001-5","sequence_id":"SEQ-005","text_guide":"
 - `knowledge_search` 요청은 `session_id=null`을 사용한다.
 - `knowledge_search`만 `retrieval_used=true`와 비어 있지 않은 `citations`를 사용한다.
 - 나머지 세 예시는 `retrieval_used=false`, `citations=[]`로 두고 현재 세션과 모듈 결과를 근거로 답한다.
+
+`pose_context`는 현재 MCP 출력인 `mode`, `expert_pose_id`, `similarity_score`, `corrections`, `summary`만 사용한다. `corrections` 항목은 `joint`, `label`, `distance`, `angle_corrections`, `correction_text`를 가진다.
+
+현재 `EP-001` 계열 기준 자세는 실제 숙련자 데이터가 아니라 코드에 고정된 fixture다. 단일 자세 비교로는 손떨림, 몸통 기준 이동 방향, 시간에 따른 자세 안정성을 판정할 수 없다. 따라서 자세 Query에서 손목 고정이나 팔꿈치를 몸통 쪽으로 이동하라는 의미 기반 조치를 생성하지 않고, 계산된 위치 거리와 `roll`, `pitch`, `yaw` 차이만 설명한다. 누적 자세 리포트도 현재 지원하지 않는다.
 
 ## 9. 문체와 용어
 
@@ -351,3 +355,5 @@ data: {"event_id":"anomaly-SESSION-001-5","sequence_id":"SEQ-005","text_guide":"
 - 시뮬레이터 HTTP의 전체 trajectory 결과는 `trajectory_feedback` 아래에 있어야 한다.
 - 시뮬레이터 SSE에는 `trajectory_metrics`, `expert_comparison`을 포함하지 않는다.
 - 교정 예시는 `expert_deviation_mm=45.8`, `target_distance_mm=400`, `user_distance_mm=450`, `distance_gap_mm=50`의 관계를 유지해야 한다.
+- 자세 예시는 `expert_pose_id`, `similarity_score`, `corrections`, `summary`를 사용하고 `overall_status`, `joint_deviations`, 자세 `action`을 사용하지 않는다.
+- 자세 비교 안내에는 손떨림·몸통 방향·누적 자세 평가처럼 현재 MCP가 계산하지 않는 내용을 포함하지 않는다.
