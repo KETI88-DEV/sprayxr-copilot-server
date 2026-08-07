@@ -31,6 +31,7 @@ POST /telemetry/sequence
   → 시퀀스마다 도막·순서·자세 판정 실행
   → HTTP feedback_bundle 반환
   → SSE sequence_feedback_bundle 전달
+  → 도막 또는 순서 이상 검출 시에만 SSE anomaly_detection 추가 전달
 
 POST /copilot/query
   → 순서·도막·자세·지식 질문에 답변
@@ -110,13 +111,16 @@ POST /sessions/end
   → 기준 자세 기반 자세 판정
   → HTTP feedback_bundle 반환
   → 동일한 feedback_bundle을 SSE로 전달
+  → anomaly.detected=true이면 anomaly_detection SSE를 추가 전달
 ```
 
 - 정상인 축도 반드시 판정하고 결과를 반환한다.
 - 원천 데이터나 기준 데이터가 없어 분석할 수 없는 축은 값을 추정하지 않고 `analysis_status="not_available"`과 `reason_code`를 반환한다.
 - UI는 각 축의 `analysis_status="available"`인 결과만 해석하고, 해당 축의 상태가 정상 범위를 벗어날 때만 경고를 표시한다.
-- HTTP와 SSE는 번들의 동일한 `feedback_id`를 사용한다.
-- 클라이언트는 번들 `feedback_id`를 기준으로 HTTP/SSE 중복 표시를 방지한다.
+- `anomaly_detection` 이벤트는 도막 또는 순서 판정 결과를 집계한 `anomaly.detected=true`인 경우에만 Push한다.
+- `anomaly.items[].axis`는 `thickness`, `order`만 사용한다. 자세는 이상탐지하지 않고 `pose_feedback`으로만 판정·안내한다.
+- HTTP와 `sequence_feedback_bundle` SSE는 번들의 동일한 `feedback_id`를 사용한다.
+- 클라이언트는 번들 `feedback_id`를 기준으로 HTTP/`sequence_feedback_bundle` 중복 표시를 방지하되, 별도 `anomaly_detection.event_id`는 표시 대상에서 제거하지 않는다.
 - `sequence_id`는 세션 내에서 1부터 증가하는 버스트 순번이다.
 
 ### 3.2 `sequence_data_ack`
@@ -298,13 +302,33 @@ POST /sessions/end
 
 ### 3.11 SSE 샘플
 
-SSE는 HTTP 응답의 `feedback_bundle` 객체를 그대로 전달한다. `id:`와 본문의 `feedback_id`는 동일해야 한다.
+`sequence_feedback_bundle`은 모든 시퀀스에서 HTTP 응답의 `feedback_bundle` 객체를 그대로 전달한다. `id:`와 본문의 `feedback_id`는 동일해야 한다.
 
 ```text
 id: feedback-SESSION-001-12
 event: sequence_feedback_bundle
 data: {"feedback_id":"feedback-SESSION-001-12","sequence_id":12,"measured_at":"2026-08-06T14:31:03Z","coating_feedback":{"analysis_status":"available","reason_code":null,"status":"under_app","zone_class":"under1","message":"하단 좌측 구역이 저도막입니다."},"sequence_feedback":{"analysis_status":"available","reason_code":null,"adherence_status":"on_track","message":"권장 순서에 맞게 작업하고 있습니다."},"pose_feedback":{"analysis_status":"not_available","reason_code":"reference_data_missing","message":"기준 자세가 없어 자세 판정을 제공할 수 없습니다."}}
 ```
+
+같은 시퀀스에서 도막 또는 순서 이상을 집계한 `anomaly.detected`가 `true`이면 다음 이벤트를 추가로 Push한다. SSE `id:`는 본문의 `event_id`와 동일하다.
+
+| 필드 | 타입 | 필수 | 설명 |
+|---|---|:---:|---|
+| `event_id` | String | Y | 이상 알림 중복 제거용 고유 ID |
+| `sequence_id` | Integer | Y | 이상이 검출된 시퀀스 순번 |
+| `text_guide` | String | Y | 작업자에게 표시할 이상 대응 안내 |
+| `anomaly` | Object | Y | `detected`와 `items`를 포함한 도막·순서 이상 결과 |
+| `sequence_data_ack` | Object | Y | 해당 시퀀스의 저장·프레임 수신 결과 |
+| `dft_result` | Object | N | 도막 측정 상세 결과 |
+| `citations` | Array[String] | N | 안내 생성에 사용한 문서 ID |
+
+```text
+id: anomaly-SESSION-001-12
+event: anomaly_detection
+data: {"event_id":"anomaly-SESSION-001-12","sequence_id":12,"text_guide":"A-2 구역은 저도막입니다. 해당 구역의 체류 시간을 늘리세요.","anomaly":{"detected":true,"items":[{"axis":"thickness","type":"under_paint","region_id":"A-2","severity":"high","measured":118.0,"expected":160.0,"unit":"um","cause":["too_far","too_fast"],"recommended_action":["move_closer","move_slower"]}]},"sequence_data_ack":{"stored":true,"duplicate":false,"frames_received":527,"frames_accepted":527}}
+```
+
+`anomaly.detected=false`이면 `anomaly_detection` 이벤트를 Push하지 않는다. `pose_feedback.overall_status="needs_correction"`이더라도 `axis="pose"` 항목을 만들거나 자세 결과만으로 이 이벤트를 생성하지 않는다.
 
 ---
 
@@ -642,7 +666,8 @@ coating_report.reachability.reachable + coating_report.reachability.needs_proces
 - 같은 키에 다른 본문을 보내면 `409 Conflict`를 반환한다.
 - `(session_id, sequence_id)`는 세션 내에서 유일해야 한다.
 - 중복 시퀀스는 다시 저장하거나 다시 판정하지 않고 기존 `feedback_id`를 반환한다.
-- HTTP 응답과 SSE 이벤트가 모두 도착하더라도 UI는 `feedback_id`당 한 번만 표시한다.
+- HTTP 응답과 `sequence_feedback_bundle` SSE가 모두 도착하더라도 UI는 `feedback_id`당 한 번만 표시한다.
+- `anomaly_detection` SSE는 별도 알림이므로 `event_id`로 중복 제거한다.
 - Query 재전송은 동일한 `request_id` 또는 idempotency 기록으로 중복 생성을 방지한다.
 - 세션 완료 요청을 재전송하면 새 리포트를 만들지 않고 기존 `report_id`를 반환한다.
 
@@ -650,9 +675,10 @@ coating_report.reachability.reachable + coating_report.reachability.needs_proces
 
 ## 7. SSE 연결 규칙
 
-- SSE event name은 `sequence_feedback_bundle`을 사용한다.
-- 이벤트 `id:`는 `feedback_id`와 동일하다.
-- 세 축의 정상·이상·분석 불가 상태를 모두 전달한다. UI는 각 축의 `analysis_status`와 판정 상태를 함께 확인한다.
+- 모든 시퀀스의 기본 SSE event name은 `sequence_feedback_bundle`이며 `id:`는 `feedback_id`와 동일하다.
+- 도막 또는 순서 이상 결과가 `anomaly.detected=true`인 경우에만 `anomaly_detection` 이벤트를 추가하고 SSE `id:`는 본문의 `event_id`와 동일하게 둔다.
+- `anomaly_detection` 이벤트의 `anomaly.items[].axis`는 `thickness`, `order`만 허용한다. 자세 교정 필요 상태는 이상 항목이나 이벤트 발생 조건으로 사용하지 않는다.
+- 기본 번들은 세 축의 정상·이상·분석 불가 상태를 모두 전달한다. UI는 각 축의 `analysis_status`와 판정 상태를 함께 확인한다.
 - 재연결 시 `Last-Event-ID`를 사용해 누락 이벤트를 재전송할 수 있어야 한다.
 - 서버는 heartbeat를 주기적으로 전송한다.
 - 세션이 종료되면 스트림을 닫는다.
