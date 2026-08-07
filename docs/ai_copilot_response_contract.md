@@ -937,6 +937,39 @@ matched_sequence_count + direction_error_count
 - `observed_direction_counts`는 `horizontal`, `vertical`, `diagonal`, `curved_irregular`, `stationary` 다섯 키를 항상 가진다.
 - 다섯 관측 건수의 합은 해당 zone의 `evaluated_sequence_count`와 같아야 한다.
 
+#### 5.4.3 자세 집계
+
+CSV의 Trigger ON → OFF 구간을 시퀀스 단위로 분석하고, 현재 자세 비교 결과의 `similarity_score`와 `corrections`를 집계한다.
+
+```text
+zone.average_similarity_score
+= 해당 zone의 분석 가능한 sequence similarity_score 단순 평균
+
+pose_report.average_similarity_score
+= 모든 분석 가능한 sequence similarity_score 단순 평균
+```
+
+- 분석 불가능한 시퀀스는 평균에서 제외하고 `unavailable_sequence_count`에 포함한다.
+- 전체 `evaluated_sequence_count`와 `unavailable_sequence_count`는 각각 zone별 건수의 합과 같아야 한다.
+- `problem_joints`에는 현재 MCP의 `angle_corrections`가 비어 있지 않은 관절만 포함한다.
+- 문제 관절은 `joint`, `label`, `occurrence_count`, `occurrence_rate`, `average_distance`, `angle_issues`, `correction_guidance`를 제공한다.
+- `occurrence_rate`는 해당 관절의 `occurrence_count / zone.evaluated_sequence_count`다.
+- `angle_issues[].axis`는 `roll`, `pitch`, `yaw`만 사용하고 `direction`은 `excess`, `insufficient`를 사용한다.
+- 서로 다른 부호의 차이가 상쇄되지 않도록 축과 direction별로 나누어 `average_diff_deg`를 계산한다.
+- `priority_corrections`는 발생률 내림차순으로 최대 3개를 제공한다. 동률이면 `recommended_flow`의 zone 순서와 관절 코드 순으로 정렬한다.
+
+현재 `EP-001` 계열 기준 자세는 실제 숙련자 데이터가 아니라 fixture다. 위치 거리와 `roll`, `pitch`, `yaw` 차이만 집계하며 손떨림, 몸통 기준 이동 방향, 시간에 따른 자세 안정성을 추정하지 않는다.
+
+#### 5.4.4 context별 guideline과 종합 평
+
+| 필드 | 사용할 수 있는 근거 |
+|---|---|
+| `coating_report.guideline` | 도막 분포, 최악 zone, 회복 가능성, 구조화된 처방 |
+| `sequence_report.guideline` | 순서 deviation 집계와 direction 오류 집계 |
+| `pose_report.guideline` | zone별 평균 유사도, 반복 문제 관절, 우선 교정 항목 |
+
+각 guideline은 다른 context의 수치를 가져오지 않는다. `llm_briefing`은 available context를 바탕으로 전체적으로 잘된 점, 가장 큰 도막 품질 위험, 순서·direction 문제, 자세 문제, 다음 훈련의 우선 조치 순으로 종합한다. unavailable context의 수치나 조치를 생성하지 않는다.
+
 ### 5.5 완료 리포트 샘플
 
 ```json
@@ -979,6 +1012,7 @@ matched_sequence_count + direction_error_count
         },
         "worst_zones": [
           {
+            "zone_id": "A-2",
             "map_num": 2,
             "uv_bin": [2, 3],
             "thickness_um": 56,
@@ -993,9 +1027,9 @@ matched_sequence_count + direction_error_count
           "dominant": "operator_behavior",
           "behavior_r2": 0.44,
           "process_r2": 0.12,
-          "note": "저도막 주 원인은 작업자 동작인 속도·거리·체류이며 일부 구역은 도료 세팅 병행이 필요합니다."
+          "note": "저도막의 주원인은 속도·거리·체류 시간이며 일부 구역은 공정 설정 조정이 필요합니다."
         },
-        "guideline": "부족 구역을 더 오래 또는 반복 분사하고 공정 설정 조정이 필요한 구역을 구분하세요."
+        "guideline": "A-2 부족 구역의 체류 시간을 늘리고, 작업자 동작만으로 회복하기 어려운 구역은 공정 설정을 함께 조정하세요."
       },
       "sequence_report": {
         "analysis_status": "available",
@@ -1106,10 +1140,105 @@ matched_sequence_count + direction_error_count
         "guideline": "A-1 이후 A-2, A-3 순서로 이동하고, A-2에서는 가로 패스, A-3에서는 세로 패스를 유지하세요."
       },
       "pose_report": {
-        "analysis_status": "not_available",
-        "reason_code": "reference_data_missing"
+        "analysis_status": "available",
+        "reason_code": null,
+        "algorithm_version": "pose-session-report-1.0",
+        "source_artifact_id": "telemetry-SESSION-001.csv",
+        "evaluated_sequence_count": 32,
+        "unavailable_sequence_count": 5,
+        "average_similarity_score": 0.789,
+        "zone_summary": [
+          {
+            "zone_id": "A-1",
+            "evaluated_sequence_count": 10,
+            "unavailable_sequence_count": 1,
+            "average_similarity_score": 0.86,
+            "problem_joints": [
+              {
+                "joint": "wrist_r",
+                "label": "오른쪽 손목",
+                "occurrence_count": 3,
+                "occurrence_rate": 0.3,
+                "average_distance": 0.041,
+                "angle_issues": [
+                  {
+                    "axis": "yaw",
+                    "average_diff_deg": 4.2,
+                    "direction": "excess"
+                  }
+                ],
+                "correction_guidance": "오른쪽 손목 yaw를 기준 자세에 가깝게 줄이세요."
+              }
+            ]
+          },
+          {
+            "zone_id": "A-2",
+            "evaluated_sequence_count": 12,
+            "unavailable_sequence_count": 3,
+            "average_similarity_score": 0.72,
+            "problem_joints": [
+              {
+                "joint": "elbow_r",
+                "label": "오른쪽 팔꿈치",
+                "occurrence_count": 8,
+                "occurrence_rate": 0.667,
+                "average_distance": 0.084,
+                "angle_issues": [
+                  {
+                    "axis": "pitch",
+                    "average_diff_deg": 5.8,
+                    "direction": "excess"
+                  }
+                ],
+                "correction_guidance": "오른쪽 팔꿈치 pitch를 평균 약 5.8° 줄이세요."
+              }
+            ]
+          },
+          {
+            "zone_id": "A-3",
+            "evaluated_sequence_count": 10,
+            "unavailable_sequence_count": 1,
+            "average_similarity_score": 0.8,
+            "problem_joints": [
+              {
+                "joint": "shoulder_r",
+                "label": "오른쪽 어깨",
+                "occurrence_count": 5,
+                "occurrence_rate": 0.5,
+                "average_distance": 0.057,
+                "angle_issues": [
+                  {
+                    "axis": "roll",
+                    "average_diff_deg": 4.7,
+                    "direction": "insufficient"
+                  }
+                ],
+                "correction_guidance": "오른쪽 어깨 roll을 평균 약 4.7° 높이세요."
+              }
+            ]
+          }
+        ],
+        "priority_corrections": [
+          {
+            "priority": 1,
+            "zone_id": "A-2",
+            "joint": "elbow_r",
+            "label": "오른쪽 팔꿈치",
+            "occurrence_rate": 0.667,
+            "correction_guidance": "오른쪽 팔꿈치 pitch를 줄이세요."
+          },
+          {
+            "priority": 2,
+            "zone_id": "A-3",
+            "joint": "shoulder_r",
+            "label": "오른쪽 어깨",
+            "occurrence_rate": 0.5,
+            "correction_guidance": "오른쪽 어깨 roll을 높이세요."
+          }
+        ],
+        "guideline": "A-2에서 반복된 오른쪽 팔꿈치 pitch 과다를 우선 교정하고, A-3에서는 오른쪽 어깨 roll을 기준 자세에 맞추세요."
       },
-      "llm_briefing": "권장 작업 순서는 유지했지만 저도막 영역이 넓게 분포했습니다. 부족 구역의 체류 시간을 늘리세요. 현재 구현에서는 자세 누적 평가를 제공하지 않습니다."
+      "llm_briefing": "도막 정상 비율은 24%로 낮고 A-2 저도막이 가장 큰 품질 위험입니다. 구역 순서 준수율은 78.4%이며 A-2와 A-3에서 순서 이탈이 발생했습니다. 방향 준수율은 75%로 A-2의 가로 패스와 A-3의 세로 패스를 안정적으로 유지해야 합니다. 자세 평균 유사도는 78.9%이며 A-2의 오른쪽 팔꿈치 pitch 교정이 가장 자주 필요했습니다. 다음 훈련에서는 A-2 체류 시간을 먼저 늘린 뒤 A-1→A-2→A-3 순서와 구역별 권장 방향을 유지하고 오른쪽 팔꿈치 각도를 교정하세요."
     }
   }
 }
