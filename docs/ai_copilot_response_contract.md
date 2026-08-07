@@ -155,7 +155,7 @@ POST /sessions/end
 | `map_num` | Integer | 조건부 | Height map 번호 |
 | `uv_bin` | Array[Integer] | 조건부 | `[x_bin, y_bin]` 형식의 세그먼트 좌표 |
 | `thickness_um` | Number | 조건부 | 해당 세그먼트의 현재 누적 두께(µm) |
-| `target_nDFT_um` | Number | 조건부 | 목표 명목 건조도막 두께(µm) |
+| `target_thickness_um` | Number | 조건부 | 목표 도막 두께(µm) |
 | `normal_band_um` | Array[Number] | 조건부 | `[최솟값, 최댓값]` 정상 두께 범위(µm) |
 | `status` | String | 조건부 | `under_app`, `normal`, `over_app` |
 | `zone_class` | String | 조건부 | `under2`, `under1`, `normal`, `over1`, `over2`, `over3` |
@@ -246,7 +246,7 @@ POST /sessions/end
         "map_num": 2,
         "uv_bin": [3, 1],
         "thickness_um": 118,
-        "target_nDFT_um": 160,
+        "target_thickness_um": 160,
         "normal_band_um": [160, 240],
         "status": "under_app",
         "zone_class": "under1",
@@ -319,14 +319,16 @@ data: {"feedback_id":"feedback-SESSION-001-12","sequence_id":12,"measured_at":"2
 | `text_guide` | String | Y | 작업자에게 표시할 이상 대응 안내 |
 | `anomaly` | Object | Y | `detected`와 `items`를 포함한 도막·순서 이상 결과 |
 | `sequence_data_ack` | Object | Y | 해당 시퀀스의 저장·프레임 수신 결과 |
-| `dft_result` | Object | N | 도막 측정 상세 결과 |
+| `coating_result` | Object | N | 도막 측정 상세 결과 |
 | `citations` | Array[String] | N | 안내 생성에 사용한 문서 ID |
 
 ```text
 id: anomaly-SESSION-001-12
 event: anomaly_detection
-data: {"event_id":"anomaly-SESSION-001-12","sequence_id":12,"text_guide":"A-2 구역은 저도막입니다. 해당 구역의 체류 시간을 늘리세요.","anomaly":{"detected":true,"items":[{"axis":"thickness","type":"under_paint","region_id":"A-2","severity":"high","measured":118.0,"expected":160.0,"unit":"um","cause":["too_far","too_fast"],"recommended_action":["move_closer","move_slower"]}]},"sequence_data_ack":{"stored":true,"duplicate":false,"frames_received":527,"frames_accepted":527}}
+data: {"event_id":"anomaly-SESSION-001-12","sequence_id":12,"text_guide":"A-2 구역은 저도막입니다. 해당 구역의 체류 시간을 늘리세요.","anomaly":{"detected":true,"items":[{"axis":"thickness","type":"under_app","region_id":"A-2","severity":"high","measured":118.0,"expected":160.0,"unit":"um","cause":["too_far","too_fast"],"recommended_action":["move_closer","move_slower"]}]},"sequence_data_ack":{"stored":true,"duplicate":false,"frames_received":527,"frames_accepted":527}}
 ```
+
+`axis="thickness"` 항목의 `type`은 도막 상태 enum인 `under_app`, `normal`, `over_app`만 사용한다. `normal`은 이상 항목이 아니므로 도막 이상만 있는 `anomaly.items`에는 포함하지 않는다.
 
 `anomaly.detected=false`이면 `anomaly_detection` 이벤트를 Push하지 않는다. `pose_feedback.overall_status="needs_correction"`이더라도 `axis="pose"` 항목을 만들거나 자세 결과만으로 이 이벤트를 생성하지 않는다.
 
@@ -448,7 +450,7 @@ Query는 다음 질문을 처리할 수 있다.
     "scenario_id": null,
     "generated_at": "2026-08-06T14:34:05Z",
     "latency_ms": 18400,
-    "answer": "저도막은 요구된 최소 건조도막 두께보다 실제 도막 두께가 낮은 상태입니다.",
+    "answer": "저도막은 요구된 최소 도막 두께보다 실제 도막 두께가 낮은 상태입니다.",
     "resolved_intents": ["knowledge_search"],
     "context_status": "not_available",
     "sequence_context": null,
