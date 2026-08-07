@@ -83,7 +83,7 @@
 
 - [ ] **Step 3: `pose_recomm` 요청·응답 작성**
 
-프롬프트는 `현재 자세에서 교정할 부분을 알려줘.`를 사용한다. 응답은 손목 고정과 팔꿈치 위치 조정 안내 및 `pose_context`를 포함한다.
+프롬프트는 `현재 자세에서 교정할 부분을 알려줘.`를 사용한다. 응답은 현재 MCP 출력인 `expert_pose_id`, `similarity_score`, 관절별 `distance`, `angle_corrections`, `correction_text`, `summary`를 포함한다. 손떨림·몸통 기준 방향·누적 자세 평가를 생성하지 않는다.
 
 - [ ] **Step 4: `error_analysis` 요청·응답 작성**
 
