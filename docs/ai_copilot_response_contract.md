@@ -1306,7 +1306,7 @@ pose_report.average_similarity_score
 5. `under_frac`의 공간 집계 기준과 분모
 6. `uv_bin` 해상도와 좌표 원점
 7. `map_num`과 최종 Height map artifact의 매핑 규칙
-8. 순서 이탈 유형과 `adherence_rate` 산출 기준
+8. 시나리오별 `recommended_flow`와 zone별 `expected_direction`
 9. 자세 기준 데이터 ID 체계, 관절별 허용 편차 및 점수 산출 기준
 10. Query 및 최종 리포트의 목표 처리시간과 timeout
 11. 리포트 보존 기간과 재생성 정책
