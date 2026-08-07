@@ -130,6 +130,8 @@ POST /sessions/end
 | `frames_received` | Integer | Y | 요청에서 수신한 프레임 수 |
 | `frames_accepted` | Integer | Y | 검증 후 저장한 프레임 수 |
 
+`stored=true`는 해당 시퀀스의 CSV 또는 프레임 원본 저장 성공을 의미한다. 이상 알림 payload 영속 저장이나 최종 리포트 생성 완료를 의미하지 않는다.
+
 ### 3.3 시퀀스 HTTP `data` 필드
 
 | 필드 | 타입 | 필수 | 설명 |
@@ -801,7 +803,11 @@ Query 예시는 다음 네 종류로 구분한다.
 - 리포트 생성은 장시간 실행될 수 있으므로 `202 Accepted`와 `report_id`를 먼저 반환한다.
 - 클라이언트는 `GET /sessions/{session_id}/reports/{report_id}`로 결과를 조회한다.
 - 리포트가 완료된 후 `/sessions/end`를 호출해 세션 상태와 SSE 연결을 종료한다.
-- 도막 수치와 분류는 콘텐츠센터, 순서 판정은 순서 검증 MCP, 자세 판정은 자세 추정 MCP의 결과를 그대로 사용한다.
+- 세션 입력 CSV는 리포트 재분석의 정본이다. Trigger ON → OFF 구간마다 `sequence_id`, `zone_id`, 도막·순서·direction·자세 판정과 `algorithm_version`을 파생 레코드로 기록한다.
+- 리포트는 같은 알고리즘 버전의 파생 레코드를 집계한다. 파생 레코드가 누락되었거나 버전이 다르면 정본 CSV에서 다시 분석한다.
+- 실시간 Query는 최신 파생 레코드를 사용한다. 평균과 준수율의 분모를 보존하기 위해 이상 판정뿐 아니라 정상 판정도 함께 기록한다.
+- 현재 `MonitorRecorder`는 최대 500건의 메모리 관측 버퍼이고 `SimSessionStore`는 `anomaly_count`만 유지하므로 어느 것도 리포트의 영속 정본이 아니다.
+- 단건 수치와 분류는 도막 이상탐지·콘텐츠센터, 순서 검증 MCP, 자세 추정 MCP의 결과를 사용하고 세션 리포트 분석 계층이 이를 집계한다.
 - 분석 근거가 부족한 축은 누적값을 추정하지 않고 해당 하위 리포트에 `analysis_status="not_available"`과 `reason_code`를 반환한다.
 - LLM은 `guideline`과 `llm_briefing`의 자연어 표현만 생성한다.
 
@@ -841,11 +847,21 @@ Query 예시는 다음 네 종류로 구분한다.
 | `pose_report` | Object | Y | 자세 누적 판정 또는 분석 불가 상태 |
 | `llm_briefing` | String | Y | LLM 자연어 최종 브리핑 |
 
-각 하위 리포트는 `analysis_status`와 `reason_code`를 필수로 가진다. `analysis_status="available"`인 도막·순서 리포트는 `algorithm_version`과 구조화된 누적 판정 필드를 제공한다.
+각 하위 리포트는 다음 공통 필드를 가진다.
+
+| 필드 | 조건 | 설명 |
+|---|---|---|
+| `analysis_status` | 항상 | `available`, `not_available` |
+| `reason_code` | 항상 | 분석 가능 시 `null`, 불가능 시 안정적인 사유 코드 |
+| `algorithm_version` | `available` | 집계 알고리즘 버전 |
+| `source_artifact_id` | `available` | CSV 또는 최종 히트맵 artifact ID |
+| `guideline` | 항상 | 해당 context의 구조화된 결과만 반영한 안내 |
+
+`llm_briefing`은 모든 `analysis_status="available"` context를 종합한다. LLM은 구조화된 수치, enum, 분류 또는 처방 코드를 변경하거나 새로 계산하지 않는다.
 
 - `coating_report`: `source_artifact_id`, `coating_distribution_index`, `zone_summary`, `distribution`, `reachability`, `worst_zones`, `root_cause`, `guideline`
-- `sequence_report`: `recommended_flow`, `visited_flow`, `adherence_rate`, `deviation_count`, `deviations`, `guideline`
-- `pose_report`: 현재 구현은 누적 자세 평가를 지원하지 않으므로 `analysis_status="not_available"`과 `reason_code`만 제공한다.
+- `sequence_report`: `source_artifact_id`, `recommended_flow`, `first_visit_flow`, 순서 집계, `direction_summary`, `guideline`
+- `pose_report`: `source_artifact_id`, 시퀀스 수, 평균 유사도, zone별 문제 관절, `priority_corrections`, `guideline`
 
 ### 5.4 최종 리포트 수치 규칙
 
