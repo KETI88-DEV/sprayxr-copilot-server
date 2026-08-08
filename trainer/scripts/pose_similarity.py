@@ -124,13 +124,19 @@ def normalize_pose(pose: Mapping[str, Vec3]) -> dict[str, Vec3]:
 def joint_sigmas(
     normalized: Mapping[str, Vec3], bucket: Mapping[str, object]
 ) -> dict[str, float]:
-    """관절별 편차를 숙련자 산포로 나눈 값. 산포 하한은 측정 잡음이 σ를 부풀리는 것을 막는다."""
+    """관절별 편차를 숙련자 산포로 나눈 값. 산포 하한은 측정 잡음이 σ를 부풀리는 것을 막는다.
+
+    채점 대상은 아티팩트에 든 관절 전부가 아니라 선언된 SCORING_JOINTS다. 루트는
+    정규화로 항상 원점이라 σ가 구조적으로 0이고, 채점에 섞이면 평균에 0이 강제로
+    들어가 유사도가 낙관 편향된다.
+    """
     joints = bucket.get("joints")
     if not isinstance(joints, Mapping):
         return {}
 
     sigmas: dict[str, float] = {}
-    for name, summary in joints.items():
+    for name in SCORING_JOINTS:
+        summary = joints.get(name)
         current = normalized.get(name)
         if current is None or not isinstance(summary, Mapping):
             continue

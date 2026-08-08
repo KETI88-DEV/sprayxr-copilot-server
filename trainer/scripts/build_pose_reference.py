@@ -230,13 +230,18 @@ def build_payload(
     accepted: int,
     rejected: Sequence[dict[str, object]],
 ) -> dict[str, object]:
+    scored = frozenset(pose_similarity.SCORING_JOINTS)
     buckets: dict[str, object] = {}
     total = 0
     for bucket, samples in sorted(by_bucket.items()):
         if len(samples) < MIN_BUCKET_POSES:
             continue
         total += len(samples)
-        buckets[bucket] = {"n": len(samples), "joints": summarize_joint_positions(samples)}
+        selected = [
+            {name: position for name, position in sample.items() if name in scored}
+            for sample in samples
+        ]
+        buckets[bucket] = {"n": len(samples), "joints": summarize_joint_positions(selected)}
 
     return {
         "level": level,

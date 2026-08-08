@@ -83,6 +83,28 @@ def test_bucket_frames_maps_a_pass_to_the_bvh_frames_covering_it() -> None:
     assert frames == [2, 3, 4, 5, 6, 7, 8]
 
 
+def test_build_payload_keeps_the_degenerate_root_out_of_the_artifact() -> None:
+    """정규화된 루트는 항상 원점이라 mean [0,0,0] spread 0의 무의미한 항목이 된다."""
+    sample = {"Pelvis": (0.0, 0.0, 0.0), "Chest": (0.0, 0.0, 0.3), "RightHand": (0.3, 0.3, 1.0)}
+    payload = build_pose_reference.build_payload(
+        {"horizontal-mid-+y": [sample] * 40}, "10", "전형기", accepted=1, rejected=[]
+    )
+
+    joints = payload["buckets"]["horizontal-mid-+y"]["joints"]  # type: ignore[index]
+    assert "Pelvis" not in joints
+    assert set(joints) == {"Chest", "RightHand"}
+
+
+def test_build_payload_drops_joints_outside_the_scoring_set() -> None:
+    sample = {"Chest": (0.0, 0.0, 0.3), "LeftToe": (0.1, 0.0, -0.8)}
+    payload = build_pose_reference.build_payload(
+        {"horizontal-mid-+y": [sample] * 40}, "10", "전형기", accepted=1, rejected=[]
+    )
+
+    joints = payload["buckets"]["horizontal-mid-+y"]["joints"]  # type: ignore[index]
+    assert set(joints) == {"Chest"}
+
+
 def test_session_quality_rejects_an_alignment_no_independent_signal_confirms() -> None:
     """작은 잔차는 정합의 증거가 아니다. 실측에서 잔차 14.4mm에 교차검증 -0.04가 나왔다."""
     quality = build_pose_reference.session_quality(

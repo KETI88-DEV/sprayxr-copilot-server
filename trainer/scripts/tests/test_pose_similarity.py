@@ -74,8 +74,29 @@ def _bucket() -> dict[str, object]:
 def test_joint_sigmas_are_zero_on_the_reference_pose() -> None:
     sigmas = pose_similarity.joint_sigmas(pose_similarity.normalize_pose(_pose()), _bucket())
 
-    assert set(sigmas) == set(_bucket()["joints"])  # type: ignore[arg-type]
     assert all(abs(value) < 1e-9 for value in sigmas.values())
+
+
+def test_joint_sigmas_score_only_the_declared_scoring_set() -> None:
+    """루트는 정규화로 항상 원점이라 σ가 구조적으로 0이다. 채점에 섞이면 유사도가 낙관 편향된다."""
+    bucket = _bucket()
+
+    sigmas = pose_similarity.joint_sigmas(pose_similarity.normalize_pose(_pose()), bucket)
+
+    assert pose_similarity.ROOT_JOINT in bucket["joints"]  # type: ignore[operator]
+    assert pose_similarity.ROOT_JOINT not in sigmas
+    assert set(sigmas) <= set(pose_similarity.SCORING_JOINTS)
+
+
+def test_joint_sigmas_ignore_joints_outside_the_scoring_set() -> None:
+    bucket = _bucket()
+    bucket["joints"]["LeftToe"] = {"mean": [9.0, 9.0, 9.0], "spread": 0.05}  # type: ignore[index]
+    pose = _pose()
+    pose["LeftToe"] = (0.0, 0.0, 0.0)
+
+    sigmas = pose_similarity.joint_sigmas(pose_similarity.normalize_pose(pose), bucket)
+
+    assert "LeftToe" not in sigmas
 
 
 def test_joint_sigma_is_one_at_exactly_one_spread_away() -> None:
