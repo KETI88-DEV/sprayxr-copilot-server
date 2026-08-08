@@ -282,6 +282,35 @@ class ToolCallingAdapterTest(unittest.IsolatedAsyncioTestCase):
             result = await self.adapter.dispatch_tool_call("pose_estimation", args)
         self.assertEqual(result["status"], "success")
 
+    def test_pose_schema_exposes_the_bucket_reference_parameters(self) -> None:
+        """모델은 스키마만 보고 호출한다. level/bucket이 없으면 아티팩트 경로에 도달할 수 없다."""
+        schema = json.loads(
+            (Path("/workspace/trainer/configs/tool_schemas/pose_estimation.json")).read_text(
+                encoding="utf-8"
+            )
+        )
+        properties = schema["function"]["parameters"]["properties"]
+
+        self.assertIn("bucket", properties)
+        self.assertIn("level", properties)
+
+    async def test_dispatch_pose_estimation_with_bucket_reaches_mcp(self) -> None:
+        calls: list[dict[str, Any]] = []
+        replies = [DummyResponse(json_data={"status": "success", "result": {"analysis_status": "available"}})]
+        client_cls = self._build_client_class(replies, calls)
+        args = {
+            "mode": "compare",
+            "level": "10",
+            "bucket": "horizontal-mid-+y",
+            "current_pose": {"joints": {"RightHand": {"x": 0.3, "y": 0.3, "z": 1.0}}},
+        }
+        with patch("tool_calling_adapter.httpx.AsyncClient", new=client_cls):
+            result = await self.adapter.dispatch_tool_call("pose_estimation", args)
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(calls[0]["json"]["bucket"], "horizontal-mid-+y")
+        self.assertEqual(calls[0]["json"]["level"], "10")
+
     async def test_dispatch_sequence_validation_normal(self) -> None:
         calls: list[dict[str, Any]] = []
         replies = [DummyResponse(json_data={"status": "success", "result": {"next_zone": "B-3", "block_sequence": ["BLK-A"]}})]
