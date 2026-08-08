@@ -35,9 +35,15 @@ class GunMetrics(StrictModel):
     angle_deg: float
 
 
+class JointPosition(StrictModel):
+    x: float
+    y: float
+    z: float
+
+
 class EventTelemetry(StrictModel):
     gun_metrics: GunMetrics | None = None
-    pose_joints: dict[str, float] | None = None
+    pose_joints: dict[str, JointPosition] | None = None
     coordinates: list[float] | None = None
 
 

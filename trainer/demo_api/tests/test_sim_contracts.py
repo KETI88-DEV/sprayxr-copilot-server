@@ -141,3 +141,25 @@ def test_sim_session_view_accepts_the_same_payload_without_the_unknown_field() -
     response = SimSessionResponse.model_validate({"session": dict(_VALID_SESSION_VIEW)})
     assert response.session is not None
     assert response.session.anomaly_count == 1
+
+
+def test_event_telemetry_carries_three_dimensional_joint_positions() -> None:
+    """자세 비교는 관절의 3D 위치를 요구한다. 스칼라 하나로는 비교가 성립하지 않는다."""
+    parsed = EventTelemetry.model_validate(
+        {"pose_joints": {"RightHand": {"x": 0.3, "y": 0.35, "z": 1.0}}}
+    )
+
+    assert parsed.pose_joints is not None
+    assert parsed.pose_joints["RightHand"].z == 1.0
+
+
+def test_event_telemetry_rejects_the_old_flat_scalar_joint_shape() -> None:
+    with pytest.raises(ValidationError):
+        _ = EventTelemetry.model_validate({"pose_joints": {"RightHand": 1.0}})
+
+
+def test_joint_position_rejects_extra_field() -> None:
+    with pytest.raises(ValidationError):
+        _ = EventTelemetry.model_validate(
+            {"pose_joints": {"RightHand": {"x": 0.0, "y": 0.0, "z": 0.0, "roll": 1.0}}}
+        )
