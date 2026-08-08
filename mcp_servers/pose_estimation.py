@@ -1,15 +1,23 @@
 from __future__ import annotations
 
+import json
+import os
+from functools import lru_cache
 from math import atan2, degrees, sqrt
-from typing import Literal, Optional, assert_never
+from pathlib import Path
+from typing import Any, Literal, Optional, assert_never
 
 from fastapi import APIRouter
 from pydantic import BaseModel, model_validator
 
 from mcp_servers.common import MCPResponse, success_response
+from trainer.scripts import pose_similarity
 
 
 router = APIRouter(prefix="/pose_estimation", tags=["pose_estimation"])
+
+POSE_REFERENCE_ENV = "POSE_REFERENCE_PATH"
+DEFAULT_POSE_REFERENCE = "/output/expert_reference/expert_pose_reference.json"
 
 _BLOCK_TO_EXPERT_POSE: dict[str, str] = {
     "BLK-A": "EP-001",
@@ -46,6 +54,8 @@ class PoseRequest(BaseModel):
     current_pose: Optional[Pose] = None
     expert_pose_id: str | None = None
     block_id: str | None = None
+    level: str | None = None
+    bucket: str | None = None
 
     @model_validator(mode="after")
     def mode_has_required_context(self) -> "PoseRequest":
@@ -113,8 +123,90 @@ def _compute_corrections(current: Pose, reference: Pose) -> tuple[float, list[di
     return round(similarity, 3), corrections
 
 
+@lru_cache(maxsize=4)
+def _read_reference(path: str, revision: float) -> dict[str, Any]:
+    _ = revision
+    return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+def _reference_bucket(level: str | None, bucket: str) -> dict[str, Any] | None:
+    """레퍼런스 아티팩트에서 버킷 하나를 찾는다. 없으면 추정하지 않고 None을 낸다."""
+    path = Path(os.environ.get(POSE_REFERENCE_ENV, DEFAULT_POSE_REFERENCE))
+    if not path.is_file():
+        return None
+    payload = _read_reference(str(path), path.stat().st_mtime)
+    entry = payload.get(level or "")
+    if not isinstance(entry, dict) or entry.get("status") != "ok":
+        return None
+    buckets = entry.get("buckets")
+    if not isinstance(buckets, dict):
+        return None
+    found = buckets.get(bucket)
+    return found if isinstance(found, dict) else None
+
+
+def _unavailable(reason: str, message: str) -> MCPResponse:
+    return success_response(result={
+        "mode": "compare",
+        "analysis_status": "not_available",
+        "reason_code": reason,
+        "summary": message,
+    })
+
+
+def _bucket_compare(payload: PoseRequest, bucket: str) -> MCPResponse:
+    pose = payload.current_pose
+    if pose is None or pose_similarity.ROOT_JOINT not in pose.joints:
+        return _unavailable(
+            "source_data_missing",
+            f"자세에 기준 관절({pose_similarity.ROOT_JOINT})이 없어 비교할 수 없습니다.",
+        )
+
+    reference = _reference_bucket(payload.level, bucket)
+    if reference is None:
+        return _unavailable(
+            "reference_data_missing",
+            "이 시퀀스에 적용할 기준 자세가 없어 자세 판정을 제공할 수 없습니다.",
+        )
+
+    normalized = pose_similarity.normalize_pose(
+        {name: (joint.x, joint.y, joint.z) for name, joint in pose.joints.items()}
+    )
+    sigmas = pose_similarity.joint_sigmas(normalized, reference)
+    similarity = pose_similarity.similarity_score(sigmas)
+    corrections = pose_similarity.build_corrections(normalized, reference)
+
+    detail = (
+        f"교정 필요 관절 {len(corrections)}개: "
+        + ", ".join(item.correction_text for item in corrections)
+        if corrections
+        else "모든 관절 양호."
+    )
+    return success_response(result={
+        "mode": "compare",
+        "analysis_status": "available",
+        "reason_code": None,
+        "expert_pose_id": bucket,
+        "similarity_score": round(similarity, 3),
+        "corrections": [
+            {
+                "joint": item.joint,
+                "label": item.label,
+                "distance": round(item.distance, 4),
+                "angle_corrections": item.angle_corrections,
+                "correction_text": item.correction_text,
+            }
+            for item in corrections
+        ],
+        "summary": f"숙련자 자세({bucket}) 대비 유사도 {similarity:.0%}. {detail}",
+    })
+
+
 @router.post("/compare", response_model=MCPResponse)
 def compare_pose(payload: PoseRequest) -> MCPResponse:
+    if payload.mode == "compare" and payload.bucket:
+        return _bucket_compare(payload, payload.bucket)
+
     if payload.mode == "recommend":
         pose_id = _BLOCK_TO_EXPERT_POSE.get(payload.block_id or "", _DEFAULT_EXPERT_POSE)
         return success_response(result={
@@ -137,6 +229,8 @@ def compare_pose(payload: PoseRequest) -> MCPResponse:
 
     return success_response(result={
         "mode": "compare",
+        "analysis_status": "available",
+        "reason_code": None,
         "expert_pose_id": pose_id,
         "similarity_score": similarity,
         "corrections": corrections,
