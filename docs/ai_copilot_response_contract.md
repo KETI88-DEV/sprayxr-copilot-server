@@ -192,14 +192,29 @@ POST /sessions/end
 | `analysis_status` | String | Y | `available`, `not_available` |
 | `reason_code` | String 또는 Null | Y | 분석 불가 사유. 분석 가능 시 `null` |
 | `mode` | String | 조건부 | 현재 구현의 비교 모드 `compare` |
-| `expert_pose_id` | String | 조건부 | 비교에 사용한 현재 fixture 자세 ID |
-| `similarity_score` | Number | 조건부 | 기준 자세와의 위치 유사도, 0~1 |
-| `corrections` | Array[Object] | 조건부 | 관절별 거리·각도 차이와 생성된 교정 문구 |
+| `expert_pose_id` | String | 조건부 | 비교에 사용한 기준 ID. 레퍼런스 경로는 버킷 키, fallback은 `EP-001` 계열 |
+| `similarity_score` | Number | 조건부 | 기준 자세 분포와의 유사도, 0~1 |
+| `expert_percentile` | Integer 또는 Null | 조건부 | 숙련자 held-out 분포에서의 위치. 보정이 없거나 낡으면 `null` |
+| `support` | Integer 또는 Null | 조건부 | 해당 버킷 분포를 이룬 패스 수 |
+| `reference_quality` | String 또는 Null | 조건부 | `single_worker`, `multi_worker` |
+| `corrections` | Array[Object] | 조건부 | 관절별 거리·각도 차이와 생성된 교정 문구. 없으면 빈 배열 |
 | `summary` | String | Y | MCP가 생성한 비교 요약 또는 분석 불가 안내 |
 
 조건부 필드는 `analysis_status="available"`일 때 필수다. `not_available`일 때는 생략한다. 허용 `reason_code`의 초기 집합은 `source_data_missing`, `reference_data_missing`, `quality_insufficient`, `tool_unavailable`이다.
 
-현재 `expert_pose_id`는 실제 숙련자 데이터가 아니라 코드에 고정된 `EP-001` 계열 fixture다. 단일 자세 비교는 관절 위치 거리와 `roll`, `pitch`, `yaw` 차이만 계산한다. 손떨림, 몸통 기준 이동 방향, 시간에 따른 자세 안정성은 판정하지 않는다.
+비교 경로는 둘이다. `level`과 `bucket`을 함께 주면 숙련자 자세 분포 아티팩트와 비교하고 `expert_pose_id`에 버킷 키가 실린다. `bucket`을 주지 않으면 기존 `EP-001` fixture 경로로 응답한다(하위 호환).
+
+비교 단위는 프레임이 아니라 패스다. 한 패스의 자세를 평균해 표본 하나로 요약한 뒤, 루트를 원점으로 옮기고 수직축 둘레로만 회전시켜 정규화한 좌표에서 비교한다. 높이 차는 제거하지 않는다. 자세 정보이기 때문이다.
+
+`similarity_score`가 뜻하는 것은 다음 하나다.
+
+> 이 패스의 자세가, 같은 버킷에서 기록된 한 숙련자의 **다른 날** 자세들과 얼마나 닮았는가.
+
+자세의 옳고 그름, 인체공학적 안전성, 숙련도, 도막 품질이 아니다. 규범 판정은 커버리지 불변식만 담당하며 이 점수로 합불을 정하지 않는다. 값은 RMS 정규화라 평균적인 관측이 0.6 부근에 오는 것이 정상이고 1.0은 분포 중심과 일치한다는 뜻이다. 그래서 원점수만 쓰지 말고 `expert_percentile`과 `support`를 함께 읽어야 한다.
+
+`corrections`는 숙련자 분포 기준으로 통상 범위를 벗어난 관절만 담는다. 상한은 6개지만 상한을 채우려 하지 않으며, 넘는 관절이 없으면 빈 배열이다. 각도는 위치 잔차가 아니라 해당 마디 방향 벡터에서 계산한다.
+
+`expert_percentile`은 leave-one-date-out 교차적합으로만 산출한다. 보정이 없거나 측정 당시와 다른 레퍼런스가 실려 있으면 값을 추정하지 않고 `null`을 반환한다. 손떨림, 시간에 따른 자세 안정성, 작업자 간 비교는 아직 판정하지 않는다.
 
 ### 3.7 도막 상태 불변 규칙
 
@@ -302,22 +317,27 @@ POST /sessions/end
   "analysis_status": "available",
   "reason_code": null,
   "mode": "compare",
-  "expert_pose_id": "EP-001",
-  "similarity_score": 0.82,
+  "expert_pose_id": "horizontal-mid-forward",
+  "similarity_score": 0.633,
+  "expert_percentile": 50,
+  "support": 72,
+  "reference_quality": "single_worker",
   "corrections": [
     {
-      "joint": "elbow_r",
+      "joint": "RightForeArm",
       "label": "오른쪽 팔꿈치",
-      "distance": 0.08,
+      "distance": 0.1526,
       "angle_corrections": {
-        "pitch": 5.0
+        "pitch": -14.0
       },
-      "correction_text": "오른쪽 팔꿈치: pitch 5° 과다"
+      "correction_text": "오른쪽 팔꿈치를 14° 올리세요"
     }
   ],
-  "summary": "숙련자 자세(EP-001) 대비 유사도 82%. 교정 필요 관절 1개: 오른쪽 팔꿈치: pitch 5° 과다"
+  "summary": "숙련자 자세(horizontal-mid-forward) 대비 유사도 63%. 교정 필요 관절 1개: 오른쪽 팔꿈치를 14° 올리세요"
 }
 ```
+
+`expert_pose_id`는 스트로크 종류·위치 버킷 키다. 형식은 `{horizontal|diagonal|vertical}-{low|mid|high}-{forward|back|left|right}`이고 진행 방향은 월드 축이 아니라 작업자 기준이다. `angle_corrections`의 부호는 현재 자세에서 기준을 뺀 값이라 음수는 "덜 들려 있다"는 뜻이고 문구는 "올리세요"가 된다.
 
 ### 3.11 `anomaly_detection` SSE
 
@@ -678,27 +698,30 @@ Query 예시는 다음 네 종류로 구분한다.
     "scenario_id": "1-A",
     "generated_at": "2026-08-06T14:33:10Z",
     "latency_ms": 210,
-    "answer": "숙련자 자세(EP-001) 대비 유사도는 82%입니다. 오른쪽 팔꿈치 pitch가 기준보다 5° 큽니다.",
+    "answer": "이번 가로 스트로크의 자세는 숙련자 분포 대비 유사도 63%이며, 같은 숙련자의 다른 날 자세들 중 중간 수준입니다. 오른쪽 팔꿈치를 14° 올리세요.",
     "resolved_intents": ["pose_recommendation"],
     "context_status": "available",
     "sequence_context": null,
     "coating_context": null,
     "pose_context": {
       "mode": "compare",
-      "expert_pose_id": "EP-001",
-      "similarity_score": 0.82,
+      "expert_pose_id": "horizontal-mid-forward",
+      "similarity_score": 0.633,
+      "expert_percentile": 50,
+      "support": 72,
+      "reference_quality": "single_worker",
       "corrections": [
         {
-          "joint": "elbow_r",
+          "joint": "RightForeArm",
           "label": "오른쪽 팔꿈치",
-          "distance": 0.08,
+          "distance": 0.1526,
           "angle_corrections": {
-            "pitch": 5.0
+            "pitch": -14.0
           },
-          "correction_text": "오른쪽 팔꿈치: pitch 5° 과다"
+          "correction_text": "오른쪽 팔꿈치를 14° 올리세요"
         }
       ],
-      "summary": "숙련자 자세(EP-001) 대비 유사도 82%. 교정 필요 관절 1개: 오른쪽 팔꿈치: pitch 5° 과다"
+      "summary": "숙련자 자세(horizontal-mid-forward) 대비 유사도 63%. 교정 필요 관절 1개: 오른쪽 팔꿈치를 14° 올리세요"
     },
     "retrieval_used": false,
     "citations": []
@@ -958,7 +981,11 @@ pose_report.average_similarity_score
 - 서로 다른 부호의 차이가 상쇄되지 않도록 축과 direction별로 나누어 `average_diff_deg`를 계산한다.
 - `priority_corrections`는 발생률 내림차순으로 최대 3개를 제공한다. 동률이면 `recommended_flow`의 zone 순서와 관절 코드 순으로 정렬한다.
 
-현재 `EP-001` 계열 기준 자세는 실제 숙련자 데이터가 아니라 fixture다. 위치 거리와 `roll`, `pitch`, `yaw` 차이만 집계하며 손떨림, 몸통 기준 이동 방향, 시간에 따른 자세 안정성을 추정하지 않는다.
+기준 자세는 코드에 고정된 fixture가 아니라 숙련자 패스에서 만든 버킷별 자세 분포다. 집계 단위도 프레임이 아니라 패스이며, 한 패스를 평균 자세 하나로 요약해 센다.
+
+집계 축에 미결이 하나 있다. 위 `zone_summary`는 zone 단위인데 자세 판정의 실제 조건축은 스트로크 종류·위치 버킷이다. zone 분할이 확정되기 전까지 자세 리포트는 시퀀스 단위로만 내고 zone 집계는 비워 둔다. zone 분할이 확정되면 이 절을 갱신한다.
+
+`problem_joints`에는 숙련자 통상 범위를 벗어난 관절만 담긴다. 벗어난 관절이 없으면 빈 배열이며 상한을 채우려 하지 않는다. 손떨림, 시간에 따른 자세 안정성, 작업자 간 비교는 아직 판정하지 않는다. 자세 데이터가 숙련자 1인분뿐이라 작업자 간 타당성은 미검증이다.
 
 #### 5.4.4 context별 guideline과 종합 평
 
