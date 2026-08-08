@@ -157,6 +157,39 @@ def test_build_payload_drops_joints_outside_the_scoring_set() -> None:
     assert set(joints) == {"Chest"}
 
 
+def test_shrunk_spread_falls_back_to_the_pooled_estimate_without_data() -> None:
+    """산포는 2차 모멘트라 표본이 얇으면 불안정하다. 평균과 달리 보강이 필요하다."""
+    assert build_pose_reference.shrunk_spread(0.30, 0, 0.10) == pytest.approx(0.10)
+
+
+def test_shrunk_spread_keeps_the_bucket_estimate_when_data_is_plentiful() -> None:
+    value = build_pose_reference.shrunk_spread(0.30, 100000, 0.10)
+
+    assert value == pytest.approx(0.30, abs=1e-3)
+
+
+def test_shrunk_spread_blends_variances_at_the_half_weight_point() -> None:
+    value = build_pose_reference.shrunk_spread(
+        0.30, build_pose_reference.SPREAD_SHRINK_WEIGHT, 0.10
+    )
+
+    assert value == pytest.approx(math.sqrt((0.09 + 0.01) / 2))
+
+
+def test_build_payload_shrinks_a_thin_bucket_spread_toward_the_pooled_value() -> None:
+    tight = [{"RightHand": (0.0, 0.0, 1.0 + 0.001 * i)} for i in range(10)]
+    wide = [{"RightHand": (0.0, 0.0, 1.0 + 0.05 * i)} for i in range(60)]
+
+    payload = build_pose_reference.build_payload(
+        {"horizontal-mid-forward": tight, "horizontal-high-forward": wide},
+        "10", "전형기", accepted=1, rejected=[],
+    )
+
+    thin = payload["buckets"]["horizontal-mid-forward"]["joints"]["RightHand"]  # type: ignore[index]
+    raw = build_pose_reference.summarize_joint_positions(tight)["RightHand"]
+    assert float(thin["spread"]) > float(raw["spread"])  # type: ignore[arg-type]
+
+
 def test_pass_mean_pose_averages_the_normalized_frames_of_one_pass() -> None:
     """레퍼런스는 프레임이 아니라 패스 요약에서 추정해야 긴 패스가 과대 가중되지 않는다."""
     poses = [

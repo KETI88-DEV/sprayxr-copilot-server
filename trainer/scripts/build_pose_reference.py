@@ -36,7 +36,12 @@ CAMERA_COLUMN: Final = "카메라"
 ALIGNMENT_JOINTS: Final = ("RightHand", "Head")
 GUN_HAND_JOINT: Final = "RightHand"
 
-MIN_BUCKET_POSES: Final = 30
+# 버킷 크기 중앙이 21패스라 임계 30은 질의의 38.4%를 기권시켰다(레퍼런스에 버킷이 아예 없는
+# 경우는 0.2%뿐). 평균은 8패스면 충분히 안정적이고, 불안정한 쪽인 산포는 축소추정으로 보강한다.
+MIN_BUCKET_POSES: Final = 8
+
+# 자기 산포에 절반 가중을 받는 표본 수. 이전 임계값과 같은 값을 써서 의미를 잇는다.
+SPREAD_SHRINK_WEIGHT: Final = 30
 MAX_ALIGNMENT_RESIDUAL_M: Final = 0.030
 MIN_PATH_COVERAGE: Final = 0.45
 
@@ -150,6 +155,32 @@ def bucket_frames(burst: Burst, frame_for_row: Sequence[int]) -> list[tuple[str,
         if frames:
             mapped.append((metrics.bucket, frames))
     return mapped
+
+
+def shrunk_spread(bucket_spread: float, count: int, pooled_spread: float) -> float:
+    """얇은 버킷의 산포를 전역 산포 쪽으로 당긴다. 분산 가중 평균이다.
+
+    평균은 표본이 적어도 비교적 안정적이지만 산포는 2차 모멘트라 우연히 0에 가까워질 수
+    있고, 그러면 σ가 폭발해 없는 교정을 만들어낸다.
+    """
+    weight = float(SPREAD_SHRINK_WEIGHT)
+    blended = (count * bucket_spread**2 + weight * pooled_spread**2) / (count + weight)
+    return math.sqrt(blended)
+
+
+def _pooled_spreads(
+    buckets: Mapping[str, Mapping[str, Mapping[str, object]]],
+) -> dict[str, float]:
+    totals: dict[str, float] = defaultdict(float)
+    counts: dict[str, int] = defaultdict(int)
+    for joints in buckets.values():
+        for name, summary in joints.items():
+            count = int(summary["n"])  # type: ignore[arg-type]
+            totals[name] += count * float(summary["spread"]) ** 2  # type: ignore[arg-type]
+            counts[name] += count
+    return {
+        name: math.sqrt(totals[name] / counts[name]) for name in totals if counts[name]
+    }
 
 
 def summarize_joint_positions(
@@ -316,17 +347,30 @@ def build_payload(
     rejected: Sequence[dict[str, object]],
 ) -> dict[str, object]:
     scored = frozenset(pose_similarity.SCORING_JOINTS)
-    buckets: dict[str, object] = {}
+    summarized: dict[str, dict[str, dict[str, object]]] = {}
+    sizes: dict[str, int] = {}
     total = 0
     for bucket, samples in sorted(by_bucket.items()):
         if len(samples) < MIN_BUCKET_POSES:
             continue
         total += len(samples)
-        selected = [
+        sizes[bucket] = len(samples)
+        summarized[bucket] = summarize_joint_positions([
             {name: position for name, position in sample.items() if name in scored}
             for sample in samples
-        ]
-        buckets[bucket] = {"n": len(samples), "joints": summarize_joint_positions(selected)}
+        ])
+
+    pooled = _pooled_spreads(summarized)
+    buckets: dict[str, object] = {}
+    for bucket, joints in summarized.items():
+        for name, summary in joints.items():
+            reference_spread = pooled.get(name)
+            if reference_spread is None:
+                continue
+            summary["spread"] = round(
+                shrunk_spread(float(summary["spread"]), int(summary["n"]), reference_spread), 5  # type: ignore[arg-type]
+            )
+        buckets[bucket] = {"n": sizes[bucket], "joints": joints}
 
     return {
         "level": level,
