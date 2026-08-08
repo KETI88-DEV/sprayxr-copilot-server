@@ -5,7 +5,7 @@ import os
 from functools import lru_cache
 from math import atan2, degrees, sqrt
 from pathlib import Path
-from typing import Any, Literal, Optional, assert_never
+from typing import Any, Final, Literal, Mapping, Optional, assert_never
 
 from fastapi import APIRouter
 from pydantic import BaseModel, model_validator
@@ -129,8 +129,13 @@ def _read_reference(path: str, revision: float) -> dict[str, Any]:
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
-def _reference_bucket(level: str | None, bucket: str) -> dict[str, Any] | None:
-    """레퍼런스 아티팩트에서 버킷 하나를 찾는다. 없으면 추정하지 않고 None을 낸다."""
+PERCENTILE_POINTS: Final = (10, 25, 50, 75, 90)
+
+
+def _reference_bucket(
+    level: str | None, bucket: str
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    """레퍼런스 아티팩트에서 (레벨 엔트리, 버킷)을 찾는다. 없으면 추정하지 않고 None을 낸다."""
     path = Path(os.environ.get(POSE_REFERENCE_ENV, DEFAULT_POSE_REFERENCE))
     if not path.is_file():
         return None
@@ -142,7 +147,20 @@ def _reference_bucket(level: str | None, bucket: str) -> dict[str, Any] | None:
     if not isinstance(buckets, dict):
         return None
     found = buckets.get(bucket)
-    return found if isinstance(found, dict) else None
+    return (entry, found) if isinstance(found, dict) else None
+
+
+def _expert_percentile(entry: Mapping[str, Any], score: float) -> int | None:
+    """숙련자 held-out 분포에서 이 점수가 어디쯤인지. 교차적합 보정이 없으면 None이다."""
+    calibration = entry.get("expert_similarity")
+    if not isinstance(calibration, Mapping):
+        return None
+    reached: int | None = None
+    for point in PERCENTILE_POINTS:
+        value = calibration.get(f"p{point}")
+        if isinstance(value, (int, float)) and score >= float(value):
+            reached = point
+    return 0 if reached is None else reached
 
 
 def _unavailable(reason: str, message: str) -> MCPResponse:
@@ -162,12 +180,13 @@ def _bucket_compare(payload: PoseRequest, bucket: str) -> MCPResponse:
             f"자세에 기준 관절({pose_similarity.ROOT_JOINT})이 없어 비교할 수 없습니다.",
         )
 
-    reference = _reference_bucket(payload.level, bucket)
-    if reference is None:
+    found = _reference_bucket(payload.level, bucket)
+    if found is None:
         return _unavailable(
             "reference_data_missing",
             "이 시퀀스에 적용할 기준 자세가 없어 자세 판정을 제공할 수 없습니다.",
         )
+    entry, reference = found
 
     normalized = pose_similarity.normalize_pose(
         {name: (joint.x, joint.y, joint.z) for name, joint in pose.joints.items()}
@@ -195,6 +214,9 @@ def _bucket_compare(payload: PoseRequest, bucket: str) -> MCPResponse:
         "reason_code": None,
         "expert_pose_id": bucket,
         "similarity_score": round(similarity, 3),
+        "expert_percentile": _expert_percentile(entry, similarity),
+        "support": reference.get("n"),
+        "reference_quality": entry.get("reference_quality"),
         "corrections": [
             {
                 "joint": item.joint,

@@ -181,6 +181,66 @@ def test_bucket_without_scoring_joints_reports_unusable_instead_of_zero(
     assert "similarity_score" not in result
 
 
+def test_bucket_compare_reports_how_much_data_backs_the_score(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """원점수만 내보내면 '63% 정답'으로 읽힌다. 근거량을 함께 실어야 한다."""
+    monkeypatch.setenv("POSE_REFERENCE_PATH", str(_write_artifact(tmp_path)))
+
+    result = _compare({
+        "mode": "compare",
+        "level": "10",
+        "bucket": BUCKET,
+        "current_pose": {"joints": _joints(REFERENCE_POSE)},
+    })
+
+    assert result["support"] == 400
+    assert result["reference_quality"] == "single_worker"
+
+
+def test_bucket_compare_reports_the_expert_percentile_when_calibrated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """숙련자 held-out 분포 대비 위치를 줘야 숫자가 과대 해석되지 않는다."""
+    path = _write_artifact(tmp_path)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["10"]["expert_similarity"] = {
+        "n": 2000,
+        "p10": 0.30,
+        "p25": 0.48,
+        "p50": 0.66,
+        "p75": 0.80,
+        "p90": 0.90,
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setenv("POSE_REFERENCE_PATH", str(path))
+
+    result = _compare({
+        "mode": "compare",
+        "level": "10",
+        "bucket": BUCKET,
+        "current_pose": {"joints": _joints(REFERENCE_POSE)},
+    })
+
+    assert result["similarity_score"] == pytest.approx(1.0, abs=1e-6)
+    assert result["expert_percentile"] == 90
+
+
+def test_bucket_compare_omits_the_percentile_without_calibration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("POSE_REFERENCE_PATH", str(_write_artifact(tmp_path)))
+
+    result = _compare({
+        "mode": "compare",
+        "level": "10",
+        "bucket": BUCKET,
+        "current_pose": {"joints": _joints(REFERENCE_POSE)},
+    })
+
+    assert result["expert_percentile"] is None
+
+
 def test_unknown_bucket_reports_missing_reference_instead_of_guessing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
