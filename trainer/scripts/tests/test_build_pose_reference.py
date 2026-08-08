@@ -83,6 +83,56 @@ def test_bucket_frames_maps_a_pass_to_the_bvh_frames_covering_it() -> None:
     assert frames == [2, 3, 4, 5, 6, 7, 8]
 
 
+def _facing_pose(x: float = 0.0, y: float = 0.0) -> dict[str, tuple[float, float, float]]:
+    return {
+        "Pelvis": (x, y, 0.9),
+        "LeftShoulder": (x - 0.18, y, 1.32),
+        "RightShoulder": (x + 0.18, y, 1.32),
+        "RightHand": (x + 0.3, y + 0.35, 1.0),
+    }
+
+
+def _forward_burst() -> object:
+    return build_pose_reference.Burst(
+        row_indices=list(range(12)),
+        points=[(0.0, 0.02 * i, 0.8) for i in range(12)],
+        times=[0.01 * i for i in range(12)],
+    )
+
+
+def test_body_bucket_frames_labels_the_pass_in_the_worker_frame() -> None:
+    """자세가 패스와 같은 인덱스로 들어오므로 진행 방향을 작업자 기준으로 적을 수 있다."""
+    poses = [_facing_pose() for _ in range(12)]
+
+    mapped = build_pose_reference.body_bucket_frames(
+        _forward_burst(), list(range(12)), poses
+    )
+
+    assert len(mapped) == 1
+    bucket, frames = mapped[0]
+    assert bucket == "horizontal-mid-forward"
+    assert frames == list(range(12))
+
+
+def test_body_bucket_frames_give_the_same_label_when_the_worker_is_turned() -> None:
+    angle = math.radians(137.0)
+    cos, sin = math.cos(angle), math.sin(angle)
+    turned_points = [
+        (0.0 * cos - (0.02 * i) * sin, 0.0 * sin + (0.02 * i) * cos, 0.8) for i in range(12)
+    ]
+    turned_pose = {
+        name: (px * cos - py * sin, px * sin + py * cos, pz)
+        for name, (px, py, pz) in _facing_pose().items()
+    }
+    burst = build_pose_reference.Burst(
+        row_indices=list(range(12)), points=turned_points, times=[0.01 * i for i in range(12)]
+    )
+
+    mapped = build_pose_reference.body_bucket_frames(burst, list(range(12)), [turned_pose] * 12)
+
+    assert mapped[0][0] == "horizontal-mid-forward"
+
+
 def test_build_payload_keeps_the_degenerate_root_out_of_the_artifact() -> None:
     """정규화된 루트는 항상 원점이라 mean [0,0,0] spread 0의 무의미한 항목이 된다."""
     sample = {"Pelvis": (0.0, 0.0, 0.0), "Chest": (0.0, 0.0, 0.3), "RightHand": (0.3, 0.3, 1.0)}
@@ -103,6 +153,23 @@ def test_build_payload_drops_joints_outside_the_scoring_set() -> None:
 
     joints = payload["buckets"]["horizontal-mid-+y"]["joints"]  # type: ignore[index]
     assert set(joints) == {"Chest"}
+
+
+def test_co_indexed_quality_rejects_data_that_is_not_actually_co_indexed() -> None:
+    """--co-indexed는 입력에 대한 단언이다. 79세션 BVH는 7509프레임 대 15366행으로 맞지 않는다."""
+    quality = build_pose_reference.co_indexed_quality(pose_count=7509, row_count=15366)
+
+    assert quality.usable is False
+    assert quality.reason == "not_co_indexed"
+
+
+def test_co_indexed_quality_accepts_matching_frame_counts() -> None:
+    quality = build_pose_reference.co_indexed_quality(pose_count=500, row_count=500)
+
+    assert quality.usable is True
+    assert quality.reason is None
+    assert quality.verification == 1.0
+    assert quality.residual == 0.0
 
 
 def test_session_quality_rejects_an_alignment_no_independent_signal_confirms() -> None:

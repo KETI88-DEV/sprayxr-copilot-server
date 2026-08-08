@@ -21,7 +21,7 @@ from typing import Final, Iterator, Mapping, Sequence
 import bvh_skeleton
 import pose_alignment
 import pose_similarity
-from pass_segmentation import segment_burst
+from pass_segmentation import body_bucket_key, segment_burst
 from simulator_csv import RAY_POINT_COLUMNS
 
 logger = logging.getLogger(__name__)
@@ -83,6 +83,48 @@ def session_quality(residual: float, coverage: float, verification: float) -> Se
     if coverage < MIN_PATH_COVERAGE:
         return SessionQuality(residual, coverage, verification, False, "path_coverage")
     return SessionQuality(residual, coverage, verification, True, None)
+
+
+def _pass_frames(
+    burst: Burst, frame_for_row: Sequence[int], start: int, end: int
+) -> list[int]:
+    rows = burst.row_indices[start : end + 1]
+    return sorted({frame_for_row[row] for row in rows if row < len(frame_for_row)})
+
+
+def body_bucket_frames(
+    burst: Burst, frame_for_row: Sequence[int], poses: Sequence[Mapping[str, Vec3]]
+) -> list[tuple[str, list[int]]]:
+    """패스마다 (작업자 기준 버킷, 대응 프레임들)을 낸다.
+
+    진행 방향을 작업자 기준으로 적으려면 그 순간의 자세가 필요하다. 런타임처럼 자세와
+    CSV가 같은 인덱스로 들어올 때만 성립한다.
+    """
+    mapped: list[tuple[str, list[int]]] = []
+    for metrics in segment_burst(burst.points, burst.times):
+        frames = _pass_frames(burst, frame_for_row, metrics.frame_start, metrics.frame_end)
+        if not frames:
+            continue
+        middle = frames[len(frames) // 2]
+        if middle >= len(poses):
+            continue
+        start = burst.points[metrics.frame_start]
+        end = burst.points[metrics.frame_end]
+        heading = pose_similarity.body_heading(
+            pose_similarity.facing_yaw(poses[middle]),
+            (end[0] - start[0], end[1] - start[1]),
+        )
+        mapped.append(
+            (body_bucket_key(metrics.elevation_deg, metrics.mid_height_m, heading), frames)
+        )
+    return mapped
+
+
+def co_indexed_quality(pose_count: int, row_count: int) -> SessionQuality:
+    """동일 인덱스 대응은 단언이지 관측이 아니다. 프레임 수가 다르면 그 단언이 틀린 것이다."""
+    if pose_count != row_count or row_count == 0:
+        return SessionQuality(0.0, 0.0, 0.0, False, "not_co_indexed")
+    return SessionQuality(0.0, 1.0, 1.0, True, None)
 
 
 def bucket_frames(burst: Burst, frame_for_row: Sequence[int]) -> list[tuple[str, list[int]]]:
@@ -199,25 +241,37 @@ def _sampled(frames: Sequence[int], limit: int = POSES_PER_PASS) -> list[int]:
 
 
 def collect_session(
-    bvh_path: Path, csv_path: Path
+    bvh_path: Path, csv_path: Path, co_indexed: bool = False
 ) -> tuple[dict[str, list[dict[str, Vec3]]], SessionQuality]:
+    """co_indexed면 자세와 CSV가 같은 프레임이라고 보고 작업자 기준 버킷으로 모은다."""
     clip = bvh_skeleton.parse_bvh(bvh_path)
     poses, bvh = bvh_poses(clip)
     csv_signals = csv_alignment_signal(csv_path)
 
-    alignment = pose_alignment.align_session(bvh.align, csv_signals.align)
-    verification = pose_alignment.cross_validate(
-        alignment.frame_for_row, bvh.verify, csv_signals.verify
-    )
-    coverage = bvh.path_length / csv_signals.path_length if csv_signals.path_length > 0.0 else 0.0
-    quality = session_quality(alignment.residual, coverage, verification)
+    if co_indexed:
+        alignment = pose_alignment.co_indexed_alignment(len(csv_signals.align))
+        quality = co_indexed_quality(len(poses), len(csv_signals.align))
+    else:
+        alignment = pose_alignment.align_session(bvh.align, csv_signals.align)
+        verification = pose_alignment.cross_validate(
+            alignment.frame_for_row, bvh.verify, csv_signals.verify
+        )
+        coverage = (
+            bvh.path_length / csv_signals.path_length if csv_signals.path_length > 0.0 else 0.0
+        )
+        quality = session_quality(alignment.residual, coverage, verification)
 
     by_bucket: dict[str, list[dict[str, Vec3]]] = defaultdict(list)
     if not quality.usable:
         return by_bucket, quality
 
     for burst in iter_bursts_with_rows(csv_path):
-        for bucket, frames in bucket_frames(burst, alignment.frame_for_row):
+        pairs = (
+            body_bucket_frames(burst, alignment.frame_for_row, poses)
+            if co_indexed
+            else bucket_frames(burst, alignment.frame_for_row)
+        )
+        for bucket, frames in pairs:
             for frame in _sampled(frames):
                 by_bucket[bucket].append(pose_similarity.normalize_pose(poses[frame]))
     return by_bucket, quality
@@ -278,6 +332,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--csv-root", type=Path, required=True)
     parser.add_argument("--level", default="all", help="Level key such as 10, or all.")
     parser.add_argument("--exclude-date", default=None, help="Leave-one-date-out fold to drop.")
+    parser.add_argument(
+        "--co-indexed",
+        action="store_true",
+        help="자세와 CSV가 같은 프레임으로 들어온다고 단언한다. 프레임 수가 다르면 거부된다.",
+    )
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     return parser.parse_args()
@@ -304,7 +363,7 @@ def main() -> int:
         rejected: list[dict[str, object]] = []
         accepted = 0
         for stem, bvh_path, csv_path in levels.get(level, []):
-            by_bucket, quality = collect_session(bvh_path, csv_path)
+            by_bucket, quality = collect_session(bvh_path, csv_path, args.co_indexed)
             if not quality.usable:
                 rejected.append({
                     "session": stem,
@@ -317,7 +376,9 @@ def main() -> int:
             accepted += 1
             for bucket, samples in by_bucket.items():
                 merged[bucket].extend(samples)
-        payloads[level] = build_payload(merged, level, worker, accepted, rejected)
+        payload = build_payload(merged, level, worker, accepted, rejected)
+        payload["bucket_frame"] = "body" if args.co_indexed else "world"
+        payloads[level] = payload
         logger.info(
             "level %s: %d accepted, %d rejected, %d buckets",
             level, accepted, len(rejected), len(merged),
