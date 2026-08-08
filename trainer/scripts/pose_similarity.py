@@ -38,6 +38,10 @@ MAX_SIGMA: Final = 6.0
 MIN_ANGLE_DEG: Final = 3.0
 MAX_CORRECTIONS: Final = 6
 
+# 숙련자 held-out σ 실측(n=24,660)에서 역산: σ>2.0은 숙련자 관절-패스의 3.7%만 통과하며
+# 궤적 축의 교정 필요 기준(1.3~5.1%)과 같은 대역이다. 게이트가 없으면 숙련자 본인도 100% 상한까지 받는다.
+CORRECTION_SIGMA_THRESHOLD: Final = 2.0
+
 SCORING_JOINTS: Final = (
     "Spine",
     "Chest",
@@ -221,7 +225,10 @@ def build_corrections(
     bucket: Mapping[str, object],
     limit: int = MAX_CORRECTIONS,
 ) -> list[Correction]:
-    """반사실 유사도 향상폭 내림차순으로 교정 관절을 최대 limit개 고른다."""
+    """숙련자 범위를 벗어난 관절만 반사실 향상폭 내림차순으로 최대 limit개 낸다.
+
+    임계를 넘는 관절이 없으면 빈 목록이다. 상한을 채우려 하지 않는다.
+    """
     sigmas = joint_sigmas(normalized, bucket)
     if not sigmas:
         return []
@@ -232,7 +239,11 @@ def build_corrections(
     for joint in CORRECTION_JOINTS:
         current = normalized.get(joint)
         target = reference.get(joint)
-        if current is None or target is None or sigmas.get(joint, 0.0) <= 0.0:
+        if (
+            current is None
+            or target is None
+            or sigmas.get(joint, 0.0) <= CORRECTION_SIGMA_THRESHOLD
+        ):
             continue
 
         counterfactual = dict(sigmas)

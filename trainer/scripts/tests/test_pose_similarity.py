@@ -149,11 +149,33 @@ def test_similarity_score_falls_as_deviation_grows() -> None:
     assert near > far
 
 
-def _pose_with_lowered_right_elbow() -> dict[str, Vec3]:
+def _pose_with_lowered_right_elbow(drop: float = 0.15) -> dict[str, Vec3]:
+    """버킷 산포가 0.05이므로 drop=0.15는 σ=3.0, drop=0.05는 σ=1.0(숙련자 통상 범위)이다."""
     pose = _pose()
     elbow = pose["RightForeArm"]
-    pose["RightForeArm"] = (elbow[0], elbow[1], elbow[2] - 0.1)
+    pose["RightForeArm"] = (elbow[0], elbow[1], elbow[2] - drop)
     return pose
+
+
+def test_build_corrections_stays_silent_inside_the_expert_range() -> None:
+    """숙련자 held-out σ는 p50 0.84 / p95 1.85다. 그 안의 편차를 교정이라 부르면 안 된다."""
+    corrections = pose_similarity.build_corrections(
+        pose_similarity.normalize_pose(_pose_with_lowered_right_elbow(drop=0.05)), _bucket()
+    )
+
+    assert corrections == []
+
+
+def test_build_corrections_speaks_up_for_a_clear_outlier() -> None:
+    corrections = pose_similarity.build_corrections(
+        pose_similarity.normalize_pose(_pose_with_lowered_right_elbow(drop=0.15)), _bucket()
+    )
+
+    assert [item.joint for item in corrections] == ["RightForeArm"]
+
+
+def test_correction_threshold_is_derived_from_the_expert_distribution() -> None:
+    assert pose_similarity.CORRECTION_SIGMA_THRESHOLD == 2.0
 
 
 def test_build_corrections_names_the_body_part_and_the_direction() -> None:
@@ -183,7 +205,7 @@ def test_build_corrections_returns_contract_shaped_fields() -> None:
     )
 
     top = corrections[0]
-    assert abs(top.distance - 0.1) < 1e-6
+    assert abs(top.distance - 0.15) < 1e-6
     assert isinstance(top.angle_corrections, dict)
     assert top.expected_gain > 0.0
 
