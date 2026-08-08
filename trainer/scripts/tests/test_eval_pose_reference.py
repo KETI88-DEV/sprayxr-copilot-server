@@ -89,6 +89,29 @@ def test_summarize_reports_match_rate_and_similarity_quartiles() -> None:
     assert summary["p50"] == pytest.approx(0.65)
 
 
+def _folds_with(similarities: list[float]) -> list[object]:
+    return [eval_pose_reference.FoldResult("10", "d", len(similarities), len(similarities), similarities)]
+
+
+def test_calibration_block_reports_the_percentile_ladder_the_mcp_reads() -> None:
+    """MCP는 이 사다리로 질의 점수의 숙련자 대비 위치를 매긴다."""
+    values = [index / 100.0 for index in range(100)]
+
+    block = eval_pose_reference.calibration_block(_folds_with(values))
+
+    assert block is not None
+    assert block["n"] == 100
+    assert block["p10"] == pytest.approx(0.10)
+    assert block["p50"] == pytest.approx(0.50)
+    assert block["p90"] == pytest.approx(0.90)
+    assert list(block) == ["n", "p10", "p25", "p50", "p75", "p90"]
+
+
+def test_calibration_block_is_withheld_when_there_is_too_little_data() -> None:
+    """근거가 얇으면 백분위를 만들지 않는다. 없는 게 틀린 것보다 낫다."""
+    assert eval_pose_reference.calibration_block(_folds_with([0.5, 0.6])) is None
+
+
 def test_summarize_handles_a_fold_set_with_nothing_scored() -> None:
     summary = eval_pose_reference.summarize([])
 

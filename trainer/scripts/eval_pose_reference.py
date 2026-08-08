@@ -17,7 +17,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from statistics import median, quantiles
-from typing import Mapping, Sequence
+from typing import Final, Mapping, Sequence
 
 import build_pose_reference
 import bvh_skeleton
@@ -27,6 +27,9 @@ logger = logging.getLogger(__name__)
 
 Vec3 = tuple[float, float, float]
 Samples = dict[str, list[dict[str, Vec3]]]
+
+CALIBRATION_POINTS: Final = (10, 25, 50, 75, 90)
+MIN_CALIBRATION_SAMPLES: Final = 100
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,6 +91,21 @@ def summarize(folds: Sequence[FoldResult]) -> dict[str, object]:
     return summary
 
 
+def calibration_block(folds: Sequence[FoldResult]) -> dict[str, float] | None:
+    """MCP가 질의 점수의 숙련자 대비 위치를 매길 때 읽는 백분위 사다리.
+
+    교차적합된 값만 담는다. 표본이 얇으면 만들지 않는다. 없는 백분위가 틀린 백분위보다 낫다.
+    """
+    values = sorted(value for fold in folds for value in fold.similarities)
+    if len(values) < MIN_CALIBRATION_SAMPLES:
+        return None
+    last = len(values) - 1
+    block: dict[str, float] = {"n": float(len(values))}
+    for point in CALIBRATION_POINTS:
+        block[f"p{point}"] = values[min(last, int(len(values) * point / 100.0))]
+    return block
+
+
 def collect_bvh_samples(bvh_path: Path) -> Samples:
     clip = bvh_skeleton.parse_bvh(bvh_path)
     poses, _ = build_pose_reference.bvh_poses(clip)
@@ -131,11 +149,37 @@ def run_folds(by_date: Mapping[str, Sequence[Samples]], level: str, worker: str)
     return folds
 
 
+def _write_calibration(reference: Path, calibration: Mapping[str, dict[str, float]]) -> int:
+    """아티팩트에 백분위를 심는다. 보정이 없는 레벨은 기존 값을 지우고 비워 둔다."""
+    if not reference.is_file():
+        logger.error("reference not found: %s", reference)
+        return 0
+    payload = json.loads(reference.read_text(encoding="utf-8"))
+    written = 0
+    for level, entry in payload.items():
+        if not isinstance(entry, dict):
+            continue
+        block = calibration.get(level)
+        if block is None:
+            entry.pop("expert_similarity", None)
+            continue
+        entry["expert_similarity"] = block
+        written += 1
+    reference.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return written
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Leave-one-date-out check for the pose reference.")
     parser.add_argument("--bvh-root", type=Path, required=True)
     parser.add_argument("--level", default="all", help="Level key such as 10, or all.")
     parser.add_argument("--out", type=Path, default=None, help="Optional JSON report path.")
+    parser.add_argument(
+        "--reference",
+        type=Path,
+        default=None,
+        help="레퍼런스 아티팩트에 교차적합 백분위(expert_similarity)를 써넣는다.",
+    )
     parser.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     return parser.parse_args()
 
@@ -158,9 +202,13 @@ def main() -> int:
         logger.info("scanned %d/%d %s", index, len(paths), path.name)
 
     report: dict[str, object] = {}
+    calibration: dict[str, dict[str, float]] = {}
     for level in sorted(cached, key=lambda value: (len(value), value)):
         folds = run_folds(cached[level], level, worker)
         summary = summarize(folds)
+        block = calibration_block(folds)
+        if block is not None:
+            calibration[level] = block
         summary["dates"] = sorted(cached[level])
         report[level] = summary
         logger.info(
@@ -169,6 +217,10 @@ def main() -> int:
             100.0 * float(summary["match_rate"]),  # type: ignore[arg-type]
             "n/a" if summary["p50"] is None else f"{float(summary['p50']):.3f}",  # type: ignore[arg-type]
         )
+
+    if args.reference is not None:
+        written = _write_calibration(args.reference, calibration)
+        logger.info("wrote calibration for %d level(s) into %s", written, args.reference)
 
     if args.out is not None:
         args.out.parent.mkdir(parents=True, exist_ok=True)
