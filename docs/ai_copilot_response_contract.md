@@ -317,27 +317,31 @@ POST /sessions/end
   "analysis_status": "available",
   "reason_code": null,
   "mode": "compare",
-  "expert_pose_id": "horizontal-mid-forward",
-  "similarity_score": 0.633,
-  "expert_percentile": 50,
-  "support": 72,
+  "expert_pose_id": "diagonal-low-forward",
+  "similarity_score": 0.14,
+  "expert_percentile": 0,
+  "support": 56,
   "reference_quality": "single_worker",
   "corrections": [
     {
-      "joint": "RightForeArm",
-      "label": "오른쪽 팔꿈치",
-      "distance": 0.1526,
+      "joint": "LeftUpperArm",
+      "label": "왼쪽 위팔",
+      "distance": 0.1689,
       "angle_corrections": {
-        "pitch": -14.0
+        "pitch": 14.8
       },
-      "correction_text": "오른쪽 팔꿈치를 14° 올리세요"
+      "correction_text": "왼쪽 위팔을 15° 내리세요"
     }
   ],
-  "summary": "숙련자 자세(horizontal-mid-forward) 대비 유사도 63%. 교정 필요 관절 1개: 오른쪽 팔꿈치를 14° 올리세요"
+  "summary": "숙련자 자세(diagonal-low-forward) 대비 유사도 14%. 교정 필요 관절 1개: 왼쪽 위팔을 15° 내리세요"
 }
 ```
 
-`expert_pose_id`는 스트로크 종류·위치 버킷 키다. 형식은 `{horizontal|diagonal|vertical}-{low|mid|high}-{forward|back|left|right}`이고 진행 방향은 월드 축이 아니라 작업자 기준이다. `angle_corrections`의 부호는 현재 자세에서 기준을 뺀 값이라 음수는 "덜 들려 있다"는 뜻이고 문구는 "올리세요"가 된다.
+`expert_pose_id`는 스트로크 종류·위치 버킷 키다. 형식은 `{horizontal|diagonal|vertical}-{low|mid|high}-{forward|back|left|right}`이고 진행 방향은 월드 축이 아니라 작업자 기준이다. `angle_corrections`의 부호는 현재 자세에서 기준을 뺀 값이라 양수는 "기준보다 더 들려 있다"는 뜻이고 문구는 "내리세요"가 된다.
+
+위 예시는 숙련자 분포에서 크게 벗어난 경우다. `expert_percentile`은 사다리(`p10`/`p25`/`p50`/`p75`/`p90`)에서 점수 이하인 가장 높은 지점을 낸다. 레벨10 실측 사다리는 `p10 0.309 / p25 0.499 / p50 0.653 / p75 0.768 / p90 0.850`이므로 유사도 0.14는 `p10`에도 못 미쳐 `0`이 된다.
+
+**통상 범위의 패스는 `corrections`가 빈 배열이다.** 숙련자 자신의 held-out 패스도 89.6%가 교정 0개로 나온다. 교정이 매번 채워져 나온다면 임계가 잘못된 것이다.
 
 ### 3.11 `anomaly_detection` SSE
 
@@ -698,30 +702,30 @@ Query 예시는 다음 네 종류로 구분한다.
     "scenario_id": "1-A",
     "generated_at": "2026-08-06T14:33:10Z",
     "latency_ms": 210,
-    "answer": "이번 가로 스트로크의 자세는 숙련자 분포 대비 유사도 63%이며, 같은 숙련자의 다른 날 자세들 중 중간 수준입니다. 오른쪽 팔꿈치를 14° 올리세요.",
+    "answer": "이번 사선 하단 스트로크의 자세는 숙련자 분포에서 크게 벗어나 있습니다. 왼쪽 위팔을 15° 내리세요.",
     "resolved_intents": ["pose_recommendation"],
     "context_status": "available",
     "sequence_context": null,
     "coating_context": null,
     "pose_context": {
       "mode": "compare",
-      "expert_pose_id": "horizontal-mid-forward",
-      "similarity_score": 0.633,
-      "expert_percentile": 50,
-      "support": 72,
+      "expert_pose_id": "diagonal-low-forward",
+      "similarity_score": 0.14,
+      "expert_percentile": 0,
+      "support": 56,
       "reference_quality": "single_worker",
       "corrections": [
         {
-          "joint": "RightForeArm",
-          "label": "오른쪽 팔꿈치",
-          "distance": 0.1526,
+          "joint": "LeftUpperArm",
+          "label": "왼쪽 위팔",
+          "distance": 0.1689,
           "angle_corrections": {
-            "pitch": -14.0
+            "pitch": 14.8
           },
-          "correction_text": "오른쪽 팔꿈치를 14° 올리세요"
+          "correction_text": "왼쪽 위팔을 15° 내리세요"
         }
       ],
-      "summary": "숙련자 자세(horizontal-mid-forward) 대비 유사도 63%. 교정 필요 관절 1개: 오른쪽 팔꿈치를 14° 올리세요"
+      "summary": "숙련자 자세(diagonal-low-forward) 대비 유사도 14%. 교정 필요 관절 1개: 왼쪽 위팔을 15° 내리세요"
     },
     "retrieval_used": false,
     "citations": []
