@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 import sys
 from pathlib import Path
 
@@ -105,6 +106,38 @@ def test_calibration_block_reports_the_percentile_ladder_the_mcp_reads() -> None
     assert block["p50"] == pytest.approx(0.50)
     assert block["p90"] == pytest.approx(0.90)
     assert list(block) == ["n", "p10", "p25", "p50", "p75", "p90"]
+
+
+def test_write_calibration_stamps_which_reference_it_was_measured_against(
+    tmp_path: Path,
+) -> None:
+    """레퍼런스를 다시 만들면 사다리는 무효다. 출처를 남겨야 낡은 백분위를 감지할 수 있다."""
+    artifact = tmp_path / "expert_pose_reference.json"
+    artifact.write_text(
+        json.dumps({"10": {"status": "ok", "pose_count": 849, "buckets": {}}}),
+        encoding="utf-8",
+    )
+
+    written = eval_pose_reference._write_calibration(
+        artifact, {"10": {"n": 598.0, "p50": 0.64}}
+    )
+
+    payload = json.loads(artifact.read_text(encoding="utf-8"))
+    assert written == 1
+    assert payload["10"]["expert_similarity"]["reference_pose_count"] == 849
+
+
+def test_write_calibration_clears_a_level_it_could_not_measure(tmp_path: Path) -> None:
+    artifact = tmp_path / "expert_pose_reference.json"
+    artifact.write_text(
+        json.dumps({"10": {"status": "ok", "pose_count": 5, "expert_similarity": {"p50": 0.5}}}),
+        encoding="utf-8",
+    )
+
+    eval_pose_reference._write_calibration(artifact, {})
+
+    payload = json.loads(artifact.read_text(encoding="utf-8"))
+    assert "expert_similarity" not in payload["10"]
 
 
 def test_calibration_block_is_withheld_when_there_is_too_little_data() -> None:

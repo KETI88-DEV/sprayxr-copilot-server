@@ -40,6 +40,7 @@ def _write_artifact(tmp_path: Path, spread: float = 0.05) -> Path:
             "status": "ok",
             "reference_quality": "single_worker",
             "worker_ids": ["전형기"],
+            "pose_count": 849,
             "buckets": {
                 BUCKET: {
                     "n": 400,
@@ -211,6 +212,7 @@ def test_bucket_compare_reports_the_expert_percentile_when_calibrated(
         "p50": 0.66,
         "p75": 0.80,
         "p90": 0.90,
+        "reference_pose_count": 849,
     }
     path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     monkeypatch.setenv("POSE_REFERENCE_PATH", str(path))
@@ -224,6 +226,49 @@ def test_bucket_compare_reports_the_expert_percentile_when_calibrated(
 
     assert result["similarity_score"] == pytest.approx(1.0, abs=1e-6)
     assert result["expert_percentile"] == 90
+
+
+def _calibrated(tmp_path: Path, reference_pose_count: object) -> Path:
+    path = _write_artifact(tmp_path)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    block: dict[str, Any] = {"n": 2000, "p10": 0.30, "p50": 0.66, "p90": 0.90}
+    if reference_pose_count is not None:
+        block["reference_pose_count"] = reference_pose_count
+    payload["10"]["expert_similarity"] = block
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
+def test_percentile_is_dropped_when_the_reference_was_rebuilt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """레퍼런스를 다시 만들면 사다리는 무효다. 틀린 백분위보다 없는 편이 낫다."""
+    monkeypatch.setenv("POSE_REFERENCE_PATH", str(_calibrated(tmp_path, 500)))
+
+    result = _compare({
+        "mode": "compare",
+        "level": "10",
+        "bucket": BUCKET,
+        "current_pose": {"joints": _joints(REFERENCE_POSE)},
+    })
+
+    assert result["similarity_score"] == pytest.approx(1.0, abs=1e-6)
+    assert result["expert_percentile"] is None
+
+
+def test_percentile_is_dropped_when_calibration_has_no_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("POSE_REFERENCE_PATH", str(_calibrated(tmp_path, None)))
+
+    result = _compare({
+        "mode": "compare",
+        "level": "10",
+        "bucket": BUCKET,
+        "current_pose": {"joints": _joints(REFERENCE_POSE)},
+    })
+
+    assert result["expert_percentile"] is None
 
 
 def test_bucket_compare_omits_the_percentile_without_calibration(

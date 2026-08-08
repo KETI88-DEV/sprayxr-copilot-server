@@ -155,6 +155,9 @@ def _expert_percentile(entry: Mapping[str, Any], score: float) -> int | None:
     calibration = entry.get("expert_similarity")
     if not isinstance(calibration, Mapping):
         return None
+    # 사다리는 측정 당시 레퍼런스에만 유효하다. 아티팩트만 재생성하면 틀린 백분위가 조용히 나간다.
+    if calibration.get("reference_pose_count") != entry.get("pose_count"):
+        return None
     reached: int | None = None
     for point in PERCENTILE_POINTS:
         value = calibration.get(f"p{point}")

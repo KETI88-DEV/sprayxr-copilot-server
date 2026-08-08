@@ -163,7 +163,9 @@ def _write_calibration(reference: Path, calibration: Mapping[str, dict[str, floa
         if block is None:
             entry.pop("expert_similarity", None)
             continue
-        entry["expert_similarity"] = block
+        stamped = dict(block)
+        stamped["reference_pose_count"] = entry.get("pose_count")
+        entry["expert_similarity"] = stamped
         written += 1
     reference.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     return written
