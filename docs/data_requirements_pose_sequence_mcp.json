@@ -539,13 +539,15 @@
     "source": "/data/sources/professionals/bvh_전형기 (전형기 79세션, 학습모드 CSV와 파일명 1:1)"
   },
   "delivery_checklist_for_exporter": [
-    "[ ] REQ-14 프레임별 rig root 월드 변환 또는 캘리브레이션 프레임 1개 (최우선)",
-    "[ ] REQ-05 rotation order 확정값 + intrinsic/extrinsic + local/world 여부",
-    "[ ] REQ-08 skeleton_def.hierarchy (표준 Humanoid면 그 사실 명시로 대체 가능)",
-    "[ ] REQ-15 3-DOF 팔 관절에서 ~180° 회전 점프가 1~2% 프레임에 발생하는 원인",
-    "[ ] REQ-03 전형기 반장의 handedness",
+    "[ ] REQ-17 BVH 프레임별 시뮬레이터 시간(초) 1개 컬럼 (최우선 - 자세 축의 유일한 차단 요인)",
+    "[ ] REQ-17b BVH 루트 이동이 0.54~0.89% 프레임에서 최대 0.93m 튀는 원인 (REQ-17과 함께 문의)",
+    "[ ] REQ-14 BVH 월드 <-> 시뮬레이터 월드 강체 변환 (자세 비교에는 불필요. 착탄면에 자세를 얹을 때 필요)",
     "[ ] REQ-11 Height PNG가 세션 최종 상태인지 누적 버퍼인지",
     "[ ] REQ-16 훈련생 코호트 확보 가능 여부 (발주처 협의 사항)",
+    "[x] REQ-03 handedness - BVH 강체 불변량으로 right 확정. 회신 불필요",
+    "[x] REQ-05 rotation order - BVH CHANNELS가 관절마다 ZXY 선언. 회신 불필요",
+    "[x] REQ-08 hierarchy - BVH가 중첩 구조로 명시. 회신 불필요",
+    "[x] REQ-15 3-DOF 팔 관절 회전 점프 - BVH에서 재현되지 않음. REQ-17b로 대체",
     "[x] REQ-04 surface_hit - 원본 CSV에 존재. exporter 수정 불필요",
     "[x] REQ-02 active_gun - 분산 판별로 해결. 추가 export 불필요",
     "[x] REQ-06 레벨 지오메트리 - learning_mode_lv.1~10.fbx 수령 완료"
