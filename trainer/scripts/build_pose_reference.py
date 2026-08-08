@@ -34,6 +34,7 @@ SPRAY_ON: Final = "On"
 GUN_COLUMN: Final = "한길숏건"
 CAMERA_COLUMN: Final = "카메라"
 ALIGNMENT_JOINTS: Final = ("RightHand", "Head")
+GUN_HAND_JOINT: Final = "RightHand"
 
 MIN_BUCKET_POSES: Final = 30
 MAX_ALIGNMENT_RESIDUAL_M: Final = 0.030
@@ -118,6 +119,20 @@ def body_bucket_frames(
             (body_bucket_key(metrics.elevation_deg, metrics.mid_height_m, heading), frames)
         )
     return mapped
+
+
+def bvh_burst(poses: Sequence[Mapping[str, Vec3]], frame_time: float) -> Burst:
+    """BVH 클립 전체를 하나의 버스트로 본다.
+
+    자세와 건을 쥔 손의 궤적이 같은 프레임에서 나오므로 정합 문제가 생기지 않는다.
+    다만 BVH에는 분사 신호가 없어 비분사 이동도 함께 들어온다.
+    """
+    hands = [pose[GUN_HAND_JOINT] for pose in poses if GUN_HAND_JOINT in pose]
+    return Burst(
+        row_indices=list(range(len(hands))),
+        points=hands,
+        times=[index * frame_time for index in range(len(hands))],
+    )
 
 
 def co_indexed_quality(pose_count: int, row_count: int) -> SessionQuality:
@@ -232,7 +247,7 @@ def bvh_poses(clip: bvh_skeleton.BvhClip) -> tuple[list[dict[str, Vec3]], Sessio
     )
 
 
-def _sampled(frames: Sequence[int], limit: int = POSES_PER_PASS) -> list[int]:
+def sample_frames(frames: Sequence[int], limit: int = POSES_PER_PASS) -> list[int]:
     """90Hz 연속 프레임은 거의 같은 자세라 n만 부풀리고 산포를 줄인다. 균등 표본만 쓴다."""
     if len(frames) <= limit:
         return list(frames)
@@ -272,7 +287,7 @@ def collect_session(
             else bucket_frames(burst, alignment.frame_for_row)
         )
         for bucket, frames in pairs:
-            for frame in _sampled(frames):
+            for frame in sample_frames(frames):
                 by_bucket[bucket].append(pose_similarity.normalize_pose(poses[frame]))
     return by_bucket, quality
 

@@ -1,0 +1,97 @@
+#!/usr/bin/env python3
+# pyright: reportAny=false, reportUnusedCallResult=false
+
+from __future__ import annotations
+
+import importlib
+import sys
+from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+eval_pose_reference = importlib.import_module("eval_pose_reference")
+pose_similarity = importlib.import_module("pose_similarity")
+
+BUCKET = "horizontal-mid-forward"
+
+
+def _pose(lift: float = 0.0) -> dict[str, tuple[float, float, float]]:
+    return {
+        "Pelvis": (0.0, 0.0, 0.9),
+        "Spine": (0.0, 0.0, 1.05),
+        "Chest": (0.0, 0.0, 1.2),
+        "LeftShoulder": (-0.18, 0.0, 1.32),
+        "RightShoulder": (0.18, 0.0, 1.32),
+        "RightUpperArm": (0.22, 0.02, 1.28),
+        "RightForeArm": (0.28, 0.18, 1.10 + lift),
+        "RightHand": (0.30, 0.34, 1.02),
+    }
+
+
+def _reference() -> dict[str, object]:
+    normalized = pose_similarity.normalize_pose(_pose())
+    return {
+        "buckets": {
+            BUCKET: {
+                "n": 400,
+                "joints": {
+                    name: {"n": 400, "mean": list(position), "spread": 0.05}
+                    for name, position in normalized.items()
+                    if name in pose_similarity.SCORING_JOINTS
+                },
+            }
+        }
+    }
+
+
+def test_score_samples_returns_one_similarity_per_scored_pose() -> None:
+    samples = {BUCKET: [pose_similarity.normalize_pose(_pose()) for _ in range(3)]}
+
+    result = eval_pose_reference.score_samples(samples, _reference())
+
+    assert result.scored == 3
+    assert result.matched == 3
+    assert all(value == pytest.approx(1.0, abs=1e-6) for value in result.similarities)
+
+
+def test_score_samples_counts_a_bucket_the_reference_lacks_as_unmatched() -> None:
+    samples = {"vertical-high-left": [pose_similarity.normalize_pose(_pose())]}
+
+    result = eval_pose_reference.score_samples(samples, _reference())
+
+    assert result.scored == 1
+    assert result.matched == 0
+    assert result.similarities == []
+
+
+def test_score_samples_drops_similarity_for_a_deviating_pose() -> None:
+    samples = {BUCKET: [pose_similarity.normalize_pose(_pose(lift=-0.15))]}
+
+    result = eval_pose_reference.score_samples(samples, _reference())
+
+    assert result.matched == 1
+    assert 0.0 <= result.similarities[0] < 1.0
+
+
+def test_summarize_reports_match_rate_and_similarity_quartiles() -> None:
+    summary = eval_pose_reference.summarize(
+        [
+            eval_pose_reference.FoldResult("10", "20250901", 4, 3, [0.2, 0.4, 0.6]),
+            eval_pose_reference.FoldResult("10", "20250904", 6, 5, [0.5, 0.7, 0.9, 1.0, 0.8]),
+        ]
+    )
+
+    assert summary["scored"] == 10
+    assert summary["matched"] == 8
+    assert summary["match_rate"] == pytest.approx(0.8)
+    assert summary["p50"] == pytest.approx(0.65)
+
+
+def test_summarize_handles_a_fold_set_with_nothing_scored() -> None:
+    summary = eval_pose_reference.summarize([])
+
+    assert summary["scored"] == 0
+    assert summary["match_rate"] == 0.0
+    assert summary["p50"] is None

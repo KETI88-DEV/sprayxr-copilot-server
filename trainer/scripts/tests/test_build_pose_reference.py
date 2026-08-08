@@ -8,6 +8,8 @@ import math
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 build_pose_reference = importlib.import_module("build_pose_reference")
@@ -153,6 +155,25 @@ def test_build_payload_drops_joints_outside_the_scoring_set() -> None:
 
     joints = payload["buckets"]["horizontal-mid-+y"]["joints"]  # type: ignore[index]
     assert set(joints) == {"Chest"}
+
+
+def test_bvh_burst_is_co_indexed_with_the_pose_stream_by_construction() -> None:
+    """BVH는 자세와 손 궤적이 같은 프레임에서 나온다. 정합 문제가 아예 생기지 않는다."""
+    poses = [
+        {"RightHand": (0.0, 0.02 * i, 0.8), "Pelvis": (0.0, 0.0, 0.9)} for i in range(12)
+    ]
+
+    burst = build_pose_reference.bvh_burst(poses, frame_time=0.01)
+
+    assert burst.row_indices == list(range(12))
+    assert burst.points[3] == (0.0, 0.06, 0.8)
+    assert burst.times[3] == pytest.approx(0.03)
+
+
+def test_bvh_burst_is_empty_without_the_gun_hand() -> None:
+    burst = build_pose_reference.bvh_burst([{"Pelvis": (0.0, 0.0, 0.9)}], frame_time=0.01)
+
+    assert burst.row_indices == []
 
 
 def test_co_indexed_quality_rejects_data_that_is_not_actually_co_indexed() -> None:
