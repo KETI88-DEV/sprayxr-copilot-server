@@ -21,7 +21,13 @@ from dataclasses import dataclass
 from statistics import fmean, median
 from typing import Sequence
 
-__all__ = ["Alignment", "align_session", "cross_validate", "dtw_path"]
+__all__ = [
+    "Alignment",
+    "align_session",
+    "co_indexed_alignment",
+    "cross_validate",
+    "dtw_path",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,6 +125,15 @@ def align_session(
 
     residual = median(abs(bvh_signal[frame] - csv_signal[row]) for frame, row in path)
     return Alignment(tuple(frames), residual)
+
+
+def co_indexed_alignment(row_count: int) -> Alignment:
+    """자세와 CSV가 같은 프레임으로 함께 들어올 때의 대응. 추정이 아니라 구성상 항등이다.
+
+    런타임 입력이 이 형태이므로 DTW도, 교차검증 게이트도 필요 없다. 항등 대응을
+    cross_validate에 넣으면 실제로 r=1.0이 나오므로 게이트를 우회하는 것도 아니다.
+    """
+    return Alignment(tuple(range(row_count)), 0.0)
 
 
 def cross_validate(

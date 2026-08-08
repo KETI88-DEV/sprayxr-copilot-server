@@ -58,6 +58,31 @@ def test_align_session_residual_grows_when_signals_disagree() -> None:
     assert alignment.residual == 10.0
 
 
+def test_co_indexed_alignment_is_the_identity_mapping() -> None:
+    """런타임은 자세와 CSV가 같은 프레임으로 들어온다. 대응이 주어지므로 DTW를 쓰지 않는다."""
+    alignment = pose_alignment.co_indexed_alignment(5)
+
+    assert alignment.frame_for_row == (0, 1, 2, 3, 4)
+    assert alignment.residual == 0.0
+
+
+def test_co_indexed_alignment_handles_an_empty_session() -> None:
+    alignment = pose_alignment.co_indexed_alignment(0)
+
+    assert alignment.frame_for_row == ()
+    assert alignment.residual == 0.0
+
+
+def test_cross_validate_confirms_a_co_indexed_mapping_perfectly() -> None:
+    """동일 인덱스 대응은 교차검증에서 r=1.0이 나온다. 게이트를 우회하는 게 아니라 실제로 통과한다."""
+    signal = [0.0, 1.0, 4.0, 9.0, 16.0]
+    alignment = pose_alignment.co_indexed_alignment(len(signal))
+
+    score = pose_alignment.cross_validate(alignment.frame_for_row, signal, signal)
+
+    assert score > 0.9999
+
+
 def test_cross_validate_is_high_when_an_independent_signal_also_lines_up() -> None:
     """정합에 쓰지 않은 신호가 함께 맞아야 대응이 진짜다. 정렬 신호 자체의 잔차로는 알 수 없다."""
     bvh_check = [0.0, 1.0, 2.0, 3.0, 4.0]
