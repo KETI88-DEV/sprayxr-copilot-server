@@ -39,7 +39,6 @@ GUN_HAND_JOINT: Final = "RightHand"
 MIN_BUCKET_POSES: Final = 30
 MAX_ALIGNMENT_RESIDUAL_M: Final = 0.030
 MIN_PATH_COVERAGE: Final = 0.45
-POSES_PER_PASS: Final = 5
 
 # 정합에 쓰지 않은 신호가 이만큼 따라와야 대응을 믿는다. 현재 데이터의 최고치는
 # 0.80이라 전 세션이 걸러진다. 그래야 무의미한 레퍼런스가 조용히 만들어지지 않는다.
@@ -247,12 +246,28 @@ def bvh_poses(clip: bvh_skeleton.BvhClip) -> tuple[list[dict[str, Vec3]], Sessio
     )
 
 
-def sample_frames(frames: Sequence[int], limit: int = POSES_PER_PASS) -> list[int]:
-    """90Hz 연속 프레임은 거의 같은 자세라 n만 부풀리고 산포를 줄인다. 균등 표본만 쓴다."""
-    if len(frames) <= limit:
-        return list(frames)
-    step = (len(frames) - 1) / (limit - 1)
-    return [frames[round(index * step)] for index in range(limit)]
+def pass_mean_pose(
+    poses: Sequence[Mapping[str, Vec3]], frames: Sequence[int]
+) -> dict[str, Vec3]:
+    """패스 하나를 자세 표본 하나로 요약한다.
+
+    프레임을 독립 표본으로 넣으면 긴 패스가 과대 가중되고 산포가 인위적으로 줄어든다.
+    패스 내 산포가 4.2cm(전역 0.356m 대비)로 작아 평균이 안정적인 대표값이다.
+    """
+    totals: dict[str, list[float]] = {}
+    counts: dict[str, int] = {}
+    for frame in frames:
+        if frame >= len(poses):
+            continue
+        for name, position in pose_similarity.normalize_pose(poses[frame]).items():
+            slot = totals.setdefault(name, [0.0, 0.0, 0.0])
+            for axis in range(3):
+                slot[axis] += position[axis]
+            counts[name] = counts.get(name, 0) + 1
+    return {
+        name: (slot[0] / counts[name], slot[1] / counts[name], slot[2] / counts[name])
+        for name, slot in totals.items()
+    }
 
 
 def collect_session(
@@ -287,8 +302,9 @@ def collect_session(
             else bucket_frames(burst, alignment.frame_for_row)
         )
         for bucket, frames in pairs:
-            for frame in sample_frames(frames):
-                by_bucket[bucket].append(pose_similarity.normalize_pose(poses[frame]))
+            summary = pass_mean_pose(poses, frames)
+            if summary:
+                by_bucket[bucket].append(summary)
     return by_bucket, quality
 
 

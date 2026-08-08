@@ -157,6 +157,34 @@ def test_build_payload_drops_joints_outside_the_scoring_set() -> None:
     assert set(joints) == {"Chest"}
 
 
+def test_pass_mean_pose_averages_the_normalized_frames_of_one_pass() -> None:
+    """레퍼런스는 프레임이 아니라 패스 요약에서 추정해야 긴 패스가 과대 가중되지 않는다."""
+    poses = [
+        {"Pelvis": (0.0, 0.0, 0.9), "RightHand": (0.0, 0.0, 1.0 + 0.1 * index)}
+        for index in range(3)
+    ]
+
+    mean = build_pose_reference.pass_mean_pose(poses, [0, 1, 2])
+
+    assert mean["RightHand"] == pytest.approx((0.0, 0.0, 0.2), abs=1e-9)
+
+
+def test_pass_mean_pose_skips_frames_missing_a_joint() -> None:
+    poses = [
+        {"Pelvis": (0.0, 0.0, 0.0), "RightHand": (0.0, 0.0, 1.0)},
+        {"Pelvis": (0.0, 0.0, 0.0)},
+        {"Pelvis": (0.0, 0.0, 0.0), "RightHand": (0.0, 0.0, 3.0)},
+    ]
+
+    mean = build_pose_reference.pass_mean_pose(poses, [0, 1, 2])
+
+    assert mean["RightHand"] == pytest.approx((0.0, 0.0, 2.0), abs=1e-9)
+
+
+def test_pass_mean_pose_is_empty_without_usable_frames() -> None:
+    assert build_pose_reference.pass_mean_pose([], []) == {}
+
+
 def test_bvh_burst_is_co_indexed_with_the_pose_stream_by_construction() -> None:
     """BVH는 자세와 손 궤적이 같은 프레임에서 나온다. 정합 문제가 아예 생기지 않는다."""
     poses = [

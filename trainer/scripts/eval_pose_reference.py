@@ -96,8 +96,9 @@ def collect_bvh_samples(bvh_path: Path) -> Samples:
     for bucket, frames in build_pose_reference.body_bucket_frames(
         burst, burst.row_indices, poses
     ):
-        for frame in build_pose_reference.sample_frames(frames):
-            samples[bucket].append(pose_similarity.normalize_pose(poses[frame]))
+        summary = build_pose_reference.pass_mean_pose(poses, frames)
+        if summary:
+            samples[bucket].append(summary)
     return samples
 
 
