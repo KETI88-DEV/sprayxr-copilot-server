@@ -27,7 +27,7 @@
 - 좌표→구역 폴백은 배선돼 있으나 `location_tracking`이 stub(항상 `B-3`)이라 지금은 위치를 옮기지 못하고 "미매핑 구역"으로만 표시된다.
 - `run_streaming()`은 `run()` 완료 후 답변을 24자 단위 `message_delta`로 재방출하는 **buffered 경로**다. true token streaming이 아니므로 TTFT를 줄이지 않는다.
 - 27B live 경로의 레이턴시 gate(RAG TTFT p90 ≤30s / 도구 완료 p99 ≤180s)는 아직 **실측 전**이다.
-- `pose_estimation`·`location_tracking`·`vlm_analysis`는 stub 응답이다.
+- `location_tracking`·`vlm_analysis`는 stub 응답이다. `pose_estimation`은 하드코딩 fixture 대신 숙련자 자세 분포 아티팩트를 읽도록 교체됐으나 **아직 쓸 수 있는 아티팩트가 없다**. BVH와 시뮬레이터 CSV의 프레임 대응이 복원되지 않아 레퍼런스 빌더가 전 세션을 `alignment_unverified`로 거부한다(REQ-17 대기). `bucket` 미지정 호출은 기존 `EP-001` fixture 경로로 응답한다.
 - 3D 뷰어는 없다. `zone_id ↔ mesh/좌표` 매핑이 확보되면 별도 spec으로 진행한다.
 
 ---
@@ -175,7 +175,7 @@ ChatService ─ demo scenario                │        └─▶ /api/monitor/{
 | `anomaly_detection` | `/anomaly_detection/detect` | 두께 편차 기반 결함 분류·원인 추론 | 실제 로직 |
 | `sequence_validation` | `/sequence_validation/validate` | 블록/구역 우선순위 기반 다음 구역 추천 | 실제 로직 |
 | `timeseries` | `/timeseries/{action}` | 속도·거리·각도 추세 분석 | Partial (in-memory) |
-| `pose_estimation` | `/pose_estimation/compare` | 숙련자 기준 자세 대비 비교·교정 | Stub (기준 자세 하드코딩) |
+| `pose_estimation` | `/pose_estimation/compare` | 숙련자 기준 자세 대비 비교·교정 | 실제 로직 (레퍼런스 아티팩트 미생성 — REQ-17 대기) |
 | `location_tracking` | `/location_tracking/identify` | 3D 좌표 → Zone ID·커버리지 | Stub (fixture) |
 | `vlm_analysis` | `/vlm/analyze` | 히트맵·스크린샷 VLM 분석 | Stub (빈 결과) |
 
@@ -299,6 +299,7 @@ curl -s 'http://127.0.0.1:8120/api/monitor/events?limit=20'
 | `CONFIG_PATH` | `/workspace/trainer/configs/rag_config_fewshot_27b.yaml` | live 파이프라인 설정 |
 | `ADAPTER_PATH` | `/output/adapters/qwen36_27b_shipcoat_lora_v6_1` | live QLoRA 어댑터 |
 | `MCP_BASE_URL` | `http://localhost:8100` | MCP 기본 URL |
+| `POSE_REFERENCE_PATH` | `/output/expert_reference/expert_pose_reference.json` | 자세 비교 MCP가 읽는 숙련자 자세 레퍼런스 아티팩트. 파일이 없으면 `reason_code=reference_data_missing`으로 응답한다 |
 | `VITE_API_BASE_URL` | same-origin | 프런트가 사용할 데모 API base URL |
 | `HF_DEACTIVATE_ASYNC_LOAD` | `1` | Transformers v5 양자화 로딩의 일시적 VRAM 급증 방지 |
 | `HF_HOME` | `/hf-cache` | HuggingFace 캐시 루트 |
