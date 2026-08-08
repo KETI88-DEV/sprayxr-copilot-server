@@ -17,6 +17,7 @@ from typing import Final, Literal, Sequence
 
 __all__ = [
     "PassMetrics",
+    "body_bucket_key",
     "bucket_key",
     "principal_axis",
     "segment_burst",
@@ -170,6 +171,16 @@ def height_band(mid_height_m: float) -> HeightBand:
 def bucket_key(elevation_deg: float, mid_height_m: float, heading_axis: str, heading_sign: str) -> str:
     """레퍼런스 분포의 버킷 키. 자세 레퍼런스도 같은 키를 쓴다."""
     return f"{elevation_band(elevation_deg)}-{height_band(mid_height_m)}-{heading_sign}{heading_axis}"
+
+
+def body_bucket_key(elevation_deg: float, mid_height_m: float, heading: str) -> str:
+    """진행 방향을 월드 축이 아니라 작업자 기준으로 적는 버킷 키.
+
+    월드 요가 다른 캡처끼리도 같은 스트로크가 같은 버킷에 들어간다. 방향 성분이
+    부호+축이 아니라 단어라 월드 기준 키와 문자열이 겹치지 않는다. 서로 다른 기준의
+    레퍼런스와 질의가 잘못 매칭되는 것을 키 공간 분리로 막는다.
+    """
+    return f"{elevation_band(elevation_deg)}-{height_band(mid_height_m)}-{heading}"
 
 
 def _metrics_for_span(

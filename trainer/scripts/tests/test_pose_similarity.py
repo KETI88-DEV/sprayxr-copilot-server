@@ -60,6 +60,29 @@ def test_normalize_pose_puts_pelvis_at_origin() -> None:
     assert all(abs(value) < 1e-9 for value in normalized["Pelvis"])
 
 
+def test_facing_yaw_is_zero_when_the_shoulder_line_lies_on_the_x_axis() -> None:
+    assert abs(pose_similarity.facing_yaw(_pose())) < 1e-9
+
+
+def test_body_heading_labels_the_four_directions_in_the_worker_frame() -> None:
+    """정규화 공간에서 +X는 작업자의 오른쪽, +Y는 앞이다(실측: 건 쥔 손 Y가 100% 양수)."""
+    yaw = pose_similarity.facing_yaw(_pose())
+
+    assert pose_similarity.body_heading(yaw, (0.0, 1.0)) == "forward"
+    assert pose_similarity.body_heading(yaw, (0.0, -1.0)) == "back"
+    assert pose_similarity.body_heading(yaw, (1.0, 0.0)) == "right"
+    assert pose_similarity.body_heading(yaw, (-1.0, 0.0)) == "left"
+
+
+def test_body_heading_is_invariant_to_world_yaw() -> None:
+    """월드 요가 달라도 같은 몸 기준 방향이어야 한다. 이것이 B안의 핵심이다."""
+    turned = _translated_and_yawed(_pose(), (4.0, -2.0, 0.0), 137.0)
+    angle = math.radians(137.0)
+    rotated = (0.0 * math.cos(angle) - 1.0 * math.sin(angle), 0.0 * math.sin(angle) + 1.0 * math.cos(angle))
+
+    assert pose_similarity.body_heading(pose_similarity.facing_yaw(turned), rotated) == "forward"
+
+
 def _bucket() -> dict[str, object]:
     normalized = pose_similarity.normalize_pose(_pose())
     return {

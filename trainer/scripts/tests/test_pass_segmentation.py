@@ -158,3 +158,28 @@ def test_principal_axis_recovers_direction() -> None:
     assert abs(axis[1]) == pytest.approx(1.0, abs=1e-6)
     assert abs(axis[0]) == pytest.approx(0.0, abs=1e-6)
     assert abs(axis[2]) == pytest.approx(0.0, abs=1e-6)
+
+
+def test_body_bucket_key_composes_elevation_height_and_body_direction() -> None:
+    assert pass_segmentation.body_bucket_key(5.0, 0.8, "forward") == "horizontal-mid-forward"
+    assert pass_segmentation.body_bucket_key(80.0, 1.2, "right") == "vertical-high-right"
+    assert pass_segmentation.body_bucket_key(45.0, 0.3, "back") == "diagonal-low-back"
+
+
+def test_body_bucket_keys_never_collide_with_world_frame_keys() -> None:
+    """월드 기준 레퍼런스를 몸 기준 질의로 채점하는 사고를 키 공간 분리로 막는다."""
+    world = {
+        pass_segmentation.bucket_key(elevation, height, axis, sign)
+        for elevation in (5.0, 45.0, 80.0)
+        for height in (0.3, 0.8, 1.2)
+        for axis in ("x", "y")
+        for sign in ("+", "-")
+    }
+    body = {
+        pass_segmentation.body_bucket_key(elevation, height, heading)
+        for elevation in (5.0, 45.0, 80.0)
+        for height in (0.3, 0.8, 1.2)
+        for heading in ("right", "left", "forward", "back")
+    }
+
+    assert not (world & body)

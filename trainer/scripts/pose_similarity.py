@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Final, Mapping
+from typing import Final, Literal, Mapping
 
 __all__ = [
     "CORRECTION_JOINTS",
@@ -20,13 +20,16 @@ __all__ = [
     "JOINT_LABELS",
     "ROOT_JOINT",
     "SCORING_JOINTS",
+    "body_heading",
     "build_corrections",
+    "facing_yaw",
     "joint_sigmas",
     "normalize_pose",
     "similarity_score",
 ]
 
 Vec3 = tuple[float, float, float]
+BodyHeading = Literal["right", "left", "forward", "back"]
 
 ROOT_JOINT: Final = "Pelvis"
 FACING_JOINTS: Final = ("LeftShoulder", "RightShoulder")
@@ -97,7 +100,7 @@ class Correction:
     expected_gain: float
 
 
-def _facing_yaw(pose: Mapping[str, Vec3]) -> float:
+def facing_yaw(pose: Mapping[str, Vec3]) -> float:
     """어깨선의 방위각. 이 각만큼 되돌려 몸이 항상 같은 쪽을 보게 만든다."""
     left = pose.get(FACING_JOINTS[0])
     right = pose.get(FACING_JOINTS[1])
@@ -106,10 +109,25 @@ def _facing_yaw(pose: Mapping[str, Vec3]) -> float:
     return math.atan2(right[1] - left[1], right[0] - left[0])
 
 
+def body_heading(yaw: float, heading: tuple[float, float]) -> BodyHeading:
+    """월드 수평 방향을 작업자 기준 방향으로 옮긴다. 월드 요가 달라도 라벨이 같다.
+
+    정규화 공간의 축 의미는 실측으로 확정했다. 어깨 X 부호로 +X가 오른쪽이고,
+    건을 쥔 오른손의 Y가 3세션 전부 100% 양수(중앙 +0.50~+0.60)라 +Y가 앞이다.
+    """
+    cos = math.cos(-yaw)
+    sin = math.sin(-yaw)
+    x = heading[0] * cos - heading[1] * sin
+    y = heading[0] * sin + heading[1] * cos
+    if abs(x) >= abs(y):
+        return "right" if x >= 0.0 else "left"
+    return "forward" if y >= 0.0 else "back"
+
+
 def normalize_pose(pose: Mapping[str, Vec3]) -> dict[str, Vec3]:
     """루트를 원점으로 옮기고 수직축 둘레로만 회전시켜 정면을 맞춘다."""
     origin = pose.get(ROOT_JOINT, (0.0, 0.0, 0.0))
-    angle = -_facing_yaw(pose)
+    angle = -facing_yaw(pose)
     cos = math.cos(angle)
     sin = math.sin(angle)
 
