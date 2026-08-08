@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import csv
 from pathlib import Path
-from typing import Any, Final
+from typing import Any, Final, Sequence
 
 OBJECT_KEYS: Final[dict[str, str]] = {
     "한길숏건": "gun_hangil_short",
@@ -49,8 +49,45 @@ GUN_METRIC_COLUMNS: Final[dict[str, str]] = {
 RAY_POINT_COLUMNS: Final[tuple[str, str, str]] = ("Ray point X", "Ray Point Y", "Ray Point Z")
 
 
+MIN_JOINT_MOTION_M: Final = 0.005
+
+
 def vec3(row: dict[str, str], group: str, kind: str) -> list[float]:
     return [float(row[f"{group} {kind} {axis}"]) for axis in "XYZ"]
+
+
+def joint_world_positions(row: dict[str, str]) -> dict[str, tuple[float, float, float]]:
+    """관절 Position 컬럼을 정규화된 이름으로 읽는다. 값이 월드 좌표인지는 보증하지 않는다."""
+    positions: dict[str, tuple[float, float, float]] = {}
+    for column in JOINT_COLUMNS:
+        x, y, z = vec3(row, column, "Position")
+        positions[JOINT_KEYS[column]] = (x, y, z)
+    return positions
+
+
+def has_world_joint_motion(
+    rows: Sequence[dict[str, str]], joints: Sequence[str]
+) -> bool:
+    """요청한 관절이 실제로 움직이는지. 바인드 포즈 오프셋이면 전부 상수라 거짓이다.
+
+    현재 납품본은 Pelvis를 뺀 관절 Position이 전부 상수다. 이것을 월드 좌표로 오인하면
+    모든 표본이 같은 자세가 되어 유사도가 무의미해진다.
+    """
+    if len(rows) < 2:
+        return False
+    wanted = set(joints)
+    columns = [column for column in JOINT_COLUMNS if JOINT_KEYS[column] in wanted]
+    if len(columns) != len(wanted):
+        return False
+    for column in columns:
+        samples = [vec3(row, column, "Position") for row in rows]
+        spread = max(
+            max(point[axis] for point in samples) - min(point[axis] for point in samples)
+            for axis in range(3)
+        )
+        if spread < MIN_JOINT_MOTION_M:
+            return False
+    return True
 
 
 def _model_input(raw: str) -> dict[str, Any] | None:
