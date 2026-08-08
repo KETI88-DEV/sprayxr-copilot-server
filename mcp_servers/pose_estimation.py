@@ -173,6 +173,13 @@ def _bucket_compare(payload: PoseRequest, bucket: str) -> MCPResponse:
         {name: (joint.x, joint.y, joint.z) for name, joint in pose.joints.items()}
     )
     sigmas = pose_similarity.joint_sigmas(normalized, reference)
+    if not sigmas:
+        # similarity_score는 빈 σ에 0.0을 낸다. '많이 다르다'가 아니라 '못 잰다'는 뜻이다.
+        return _unavailable(
+            "quality_insufficient",
+            "기준 자세에 채점 가능한 관절이 없어 자세 판정을 제공할 수 없습니다.",
+        )
+
     similarity = pose_similarity.similarity_score(sigmas)
     corrections = pose_similarity.build_corrections(normalized, reference)
 

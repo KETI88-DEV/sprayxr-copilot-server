@@ -152,6 +152,35 @@ def test_bucket_compare_names_the_body_part_in_korean(
     assert "오른쪽 팔꿈치" in result["summary"]
 
 
+def test_bucket_without_scoring_joints_reports_unusable_instead_of_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """채점 가능한 관절이 없으면 유사도 0.0은 '많이 다르다'가 아니라 '못 잰다'는 뜻이다."""
+    payload: dict[str, Any] = {
+        "10": {
+            "level": "10",
+            "status": "ok",
+            "buckets": {
+                BUCKET: {"n": 400, "joints": {"LeftToe": {"mean": [0.0, 0.0, 0.0], "spread": 0.05}}}
+            },
+        }
+    }
+    path = tmp_path / "expert_pose_reference.json"
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setenv("POSE_REFERENCE_PATH", str(path))
+
+    result = _compare({
+        "mode": "compare",
+        "level": "10",
+        "bucket": BUCKET,
+        "current_pose": {"joints": _joints(REFERENCE_POSE)},
+    })
+
+    assert result["analysis_status"] == "not_available"
+    assert result["reason_code"] == "quality_insufficient"
+    assert "similarity_score" not in result
+
+
 def test_unknown_bucket_reports_missing_reference_instead_of_guessing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
