@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$comment": "JSON Schema가 아니라 data exporter/Unity 통합 개발자에게 전달하는 '데이터 요구사항 명세'다. v2는 §0.7 세션 생명주기(start/event/complete) 구조를 기준으로 재작성했다. 데이터는 2계층: (A) 런타임 메시지 스트림(Unity→Coaching API 실시간 3종), (B) 오프라인 참조 데이터(레벨 region 정의 + expert 라벨 세션). 자세(pose_estimation)·순서(sequence_validation) MCP 실구현에 필요한 필드를 정의한다.",
   "title": "자세·순서 MCP 데이터 요구사항 (Exporter/Unity 전달용) — 세션 생명주기 기반",
-  "document_version": "3.0",
+  "document_version": "3.1",
   "supersedes": "2.0 (세션 생명주기 재배치). 필드 요구는 계승하되, 2026-07-29 전문가 원본 데이터 100세션 전수 실측으로 각 REQ의 상태를 재판정했다. 2.0이 '없음'으로 적은 항목 다수가 실제로는 원본 CSV에 존재했고(0.3.0 JSON export가 손실 변환이었다), 반대로 2.0이 인지하지 못한 블로커 2건(REQ-14 좌표계, REQ-15 짐벌 불연속)이 새로 드러났다.",
   "created": "2026-07-22",
   "baseline_export_schema": "0.3.0 (docs/1_1000442_session.json / *_seqNNN.json 기준)",
@@ -207,6 +207,11 @@
         "state": "blocked",
         "evidence": "handedness 필드 없음. 손↔건 대응으로 유도하려 했으나 REQ-14(좌표계 분리) 때문에 불가능하다.",
         "action": "벤더 회신 또는 촬영 기록으로 1회 확정 필요. 값 1개면 끝난다."
+      },
+      "status_2026_08_08": {
+        "state": "resolved",
+        "evidence": "BVH FK로 해결. 강체 불변량 |손-머리| 대 |건-카메라| 중앙값 비교에서 오른손이 3세션 전부 -4~+6mm로 일치하고(0.469/0.473, 0.456/0.452, 0.447/0.441) 왼손은 -110~-218mm 이탈한다. 건을 잡는 손은 오른손이다.",
+        "action": "벤더 회신 불필요. handedness=right로 확정."
       }
     },
     {
@@ -263,6 +268,11 @@
         "state": "blocked_and_harder_than_thought",
         "evidence": "여전히 null. 추가로, 12개 규약(6순서 × intrinsic/extrinsic) 브루트포스로 연속성 판정을 시도했으나 전부 실패했다. 비물리적 점프가 1547~1610건이고 최대 점프가 모든 규약에서 179.4°로 동일하다. 즉 이 불연속은 오일러 순서 artifact가 아니라 데이터 자체의 성질이다(REQ-15).",
         "action": "벤더 회신이 사실상 유일한 경로. 다만 쿼터니언 측지거리는 순서가 '일관되기만' 하면 비교 지표로는 유효하므로, 유사도 산출은 진행 가능하고 해부학적 교정 지시문 생성만 막힌다."
+      },
+      "status_2026_08_08": {
+        "state": "resolved_for_bvh",
+        "evidence": "BVH 헤더가 관절마다 회전 순서를 선언한다. ROOT Pelvis는 CHANNELS 6 Xposition Yposition Zposition Zrotation Xrotation Yrotation, 나머지 64관절은 전부 CHANNELS 3 Zrotation Xrotation Yrotation(ZXY)이다. 이 순서로 FK를 돌린 결과가 해부학적으로 정상이다(발 Z std 0.007~0.009m로 지면 고정, 머리가 골반 위 0.485m).",
+        "action": "CSV 조인트 회전 컬럼의 순서는 여전히 미상이지만, 자세는 BVH에서 취하므로 차단 요인이 아니다."
       }
     },
     {
@@ -340,6 +350,11 @@
         "state": "partial",
         "evidence": "프레임 skeleton은 정상 제공(20관절 로컬 오일러 + 상수 bind offset). hierarchy는 여전히 null이라 FK 체인을 구성할 수 없다. bind_pose_local_pos_m은 그 자체로 골격 링크 길이 테이블이라 관절 가중치 산출에 쓸 수 있다.",
         "action": "hierarchy 회신 필요. 표준 Humanoid면 그 사실 명시로 대체 가능."
+      },
+      "status_2026_08_08": {
+        "state": "resolved_for_bvh",
+        "evidence": "BVH가 계층을 중첩 구조로 명시한다. 채널 보유 노드 65개(ROOT 1 + JOINT 64) + End Site 13개이고 채널 총합 198 = 6 + 64x3이 모션 행 길이와 정확히 일치한다. FK 체인이 구성된다.",
+        "action": "없음. 좌우 명명 비대칭(LeftUpperArm vs RightArm)과 왼손 Index2~4의 mixamorig 접두어는 파서가 정규화한다."
       }
     },
     {
@@ -435,7 +450,12 @@
         "pose_mcp",
         "location_mcp"
       ],
-      "spec": "자세를 작업 공간 좌표에 기하학적으로 배치하려면 필수. 스켈레톤끼리만 비교하는 현 범위에서는 불필요하며, goal_year2.md의 '작업 공간 좌표-작업자 동선, 자세 데이터 매핑'은 카메라(월드)를 작업자 위치 프록시로 쓰고 자세와는 타임스탬프로 잇는 방식으로 충족한다."
+      "spec": "자세를 작업 공간 좌표에 기하학적으로 배치하려면 필수. 스켈레톤끼리만 비교하는 현 범위에서는 불필요하며, goal_year2.md의 '작업 공간 좌표-작업자 동선, 자세 데이터 매핑'은 카메라(월드)를 작업자 위치 프록시로 쓰고 자세와는 타임스탬프로 잇는 방식으로 충족한다.",
+      "status_2026_08_08": {
+        "state": "partially_resolved",
+        "evidence": "BVH ROOT가 월드 이동 채널을 싣는다(1세션 실측 범위 X 0.93m / Y 2.22m / Z 0.71m, 상수 아님). Z가 수직이고 발이 Z=0.089m에 고정돼 바닥면이 정의된다. 그러나 BVH 월드와 시뮬레이터 월드는 여전히 별개다. 정합된 대응쌍으로 Kabsch 강체정합을 해도 RMS 554~700mm로 실패한다.",
+        "action": "자세 비교는 루트 기준 상대량이라 이 변환 없이 성립한다(구현 완료). 착탄면·목표 지오메트리에 자세를 얹으려면 여전히 필요하다."
+      }
     },
     {
       "id": "REQ-15",
@@ -449,7 +469,12 @@
       "consumer": [
         "pose_mcp"
       ],
-      "spec": "자세 모델이 쓰는 바로 그 팔 사슬에서 발생하므로 프레임별 산술 비교를 무효화한다. 레퍼런스 생성 시 측지 상위 10% 트리밍과 사전 마스킹이 필요하다."
+      "spec": "자세 모델이 쓰는 바로 그 팔 사슬에서 발생하므로 프레임별 산술 비교를 무효화한다. 레퍼런스 생성 시 측지 상위 10% 트리밍과 사전 마스킹이 필요하다.",
+      "status_2026_08_08": {
+        "state": "not_reproduced_in_bvh",
+        "evidence": "CSV 오일러에서는 3-DOF 볼조인트만 선택적으로 나빴다(RightShoulder 1.36% / RightUpperArm 1.84% 대 RightForeArm 0.14% / Spine 0.11%). BVH FK 위치의 프레임 간 점프는 2세션 모두 전 관절 균일하다(>50mm/frame 비율 RightShoulder 0.61~0.71%, RightUpperArm 0.69~0.72%, RightForeArm 0.76~0.89%, Spine 0.57~0.67%, Chest 0.54~0.64%). Spine·Chest까지 같은 비율이므로 관절별 분지 전환이 아니라 루트 이동 불연속이다(최대 점프 0.63~0.93m).",
+        "action": "볼조인트 병리는 BVH에 없다. 대신 루트 텔레포트를 REQ-17과 함께 문의한다. 강체정합 실패의 유력한 원인이다."
+      }
     },
     {
       "id": "REQ-16",
@@ -465,6 +490,21 @@
         "seq_mcp"
       ],
       "spec": "KPI 시행 모집단의 '기존 자세'는 현재 숙련자 본인의 편차 프레임에서 나온다. 이 사실을 산출물에 명시하지 않으면 성능 주장이 과대 해석된다."
+    },
+    {
+      "id": "REQ-17",
+      "field": "bvh_frame_to_simulator_time",
+      "required": "must_have",
+      "status_in_0.3.0": "absent",
+      "carried_in": "신규 - BVH 납품(2026-08-08)으로 발생",
+      "consumer": "자세 레퍼런스 빌더(build_pose_reference), 자세 추정 MCP",
+      "spec": "BVH 프레임 i에 대응하는 시뮬레이터 시간(초) 1개 컬럼. CSV 시간(초)과 같은 원점이어야 한다.",
+      "rationale": "자세는 BVH에서, 버킷(stroke 종류·위치)은 CSV 착탄점에서 온다. 둘을 잇지 못하면 자세를 패스에 귀속시킬 수 없다.",
+      "status_2026_08_08": {
+        "state": "blocked",
+        "evidence": "BVH 헤더의 Frame Time 0.01111은 공칭값이다. 79세션에서 csvRows/bvhFrames가 1.46~10.30(중앙값 1.84)으로 흩어져 인덱스·선언시간 어느 쪽으로도 직접 대응하지 않는다. 신호 정합도 실패했다. 손-머리 거리로 DTW하면 잔차는 14.4mm로 작지만 정합에 쓰지 않은 머리 높이 상관이 -0.04(무상관)다. 거의 상수인 신호(BVH std가 평균의 11.9%)는 어떤 단조 경로에서도 잔차가 작아 잔차가 증거가 못 된다. 신호를 바꿔도 최고 0.62~0.80에 머물고 각 신호는 자기가 만들어진 것만 맞춘다(머리높이 -> 머리 0.72/손 0.34, 손높이 -> 손 0.86/머리 0.37). 선형 시간맵은 커버리지 90% 이상에서 r 0.09~0.35로 붕괴하며, 고상관 구간은 세션마다 dt 154~182Hz·오프셋 0~121s로 제각각인 국소 과적합이다. 벤더 사이드카 _Input.txt는 CSV 시간축 사본일 뿐(행 수·마지막 값 동일) 동기 정보가 아니다.",
+        "action": "프레임별 시간 1컬럼이면 끝난다. 이것이 현재 자세 축의 유일한 차단 요인이며, 확보 전까지 build_pose_reference는 교차검증 게이트에서 전 세션을 alignment_unverified로 거부한다."
+      }
     }
   ],
   "priority_summary": {
@@ -473,15 +513,20 @@
       "REQ-04 (surface_hit - 원본 CSV Ray 컬럼에 존재)",
       "REQ-09 (gun_metrics + model_input 13필드 해독)",
       "REQ-10 (burst 경계)",
-      "REQ-11 (두께맵 - µm 디코딩 검증)"
+      "REQ-11 (두께맵 - µm 디코딩 검증)",
+      "REQ-03 (handedness=right - BVH 강체 불변량으로 확정)"
+    ],
+    "resolved_by_bvh_delivery": [
+      "REQ-05 (rotation order - BVH CHANNELS가 관절마다 ZXY 선언)",
+      "REQ-08 (hierarchy - BVH가 중첩 구조로 명시, 채널 198=6+64x3 검증)",
+      "REQ-14 (부분 - BVH 루트 월드 이동은 확보. BVH 월드 <-> 시뮬레이터 월드 정합은 여전히 미해결)"
     ],
     "blocking_must_have": [
-      "REQ-14 (스켈레톤↔월드 변환) - 신규, 기하 매핑의 유일한 차단 요인",
-      "REQ-05 (rotation order) - 교정 지시문의 해부학적 의미에 필수",
-      "REQ-08 (hierarchy) - FK 구성에 필수",
-      "REQ-15 (팔 관절 180° 불연속) - 신규, 자세 지표 신뢰도 직결",
-      "REQ-03 (handedness) - 값 1개",
-      "REQ-16 (훈련생 코호트) - 신규, 계약 산출물 정의 문제"
+      "REQ-17 (BVH 프레임별 시뮬레이터 시간) - 신규, 자세 축의 유일한 차단 요인",
+      "REQ-16 (훈련생 코호트) - 발주처 합의 사항"
+    ],
+    "no_longer_blocking": [
+      "REQ-15 (팔 관절 불연속) - BVH에서 재현되지 않음. 대신 루트 이동 불연속을 REQ-17과 함께 문의"
     ],
     "authoring_work_not_vendor": [
       "REQ-06 region 라벨 - FBX 지오메트리는 확보됐으나 UV 공간 구획은 직접 저작해야 한다(미계상 공수)"
@@ -490,7 +535,8 @@
       "REQ-07",
       "REQ-12(실전모드 재개 시)",
       "REQ-13(런타임 연동 시)"
-    ]
+    ],
+    "source": "/data/sources/professionals/bvh_전형기 (전형기 79세션, 학습모드 CSV와 파일명 1:1)"
   },
   "delivery_checklist_for_exporter": [
     "[ ] REQ-14 프레임별 rig root 월드 변환 또는 캘리브레이션 프레임 1개 (최우선)",
@@ -504,7 +550,7 @@
     "[x] REQ-02 active_gun - 분산 판별로 해결. 추가 export 불필요",
     "[x] REQ-06 레벨 지오메트리 - learning_mode_lv.1~10.fbx 수령 완료"
   ],
-  "revised": "2026-07-29",
+  "revised": "2026-08-08",
   "measurement_basis": {
     "what": "data/sources/professionals/전형기 전수 실측. 원본 CSV 100개(171컬럼) 및 Height PNG 86개.",
     "tooling": "trainer/scripts/simulator_csv.py + session_csv.py (원본 CSV 직접 파싱). 벤더 자체 export(docs/1_1000442_session.json)와 시퀀스 frame_count·spray_count가 완전히 일치함을 확인.",
