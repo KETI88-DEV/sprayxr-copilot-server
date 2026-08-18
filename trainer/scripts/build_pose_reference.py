@@ -262,6 +262,34 @@ def iter_csv_passes(csv_path: Path) -> Iterator[tuple[int, str, dict[str, Vec3]]
                 yield sequence, bucket, summary
 
 
+def iter_csv_pass_frames(
+    csv_path: Path,
+) -> Iterator[tuple[int, str, list[dict[str, Vec3]]]]:
+    """패스마다 실제 정규화 프레임들을 낸다.
+
+    평균 자세는 관절 위치의 중심이라 팔다리가 수축해 사람이 취할 수 없는 모양이 된다.
+    거리 계산에는 쓸 수 있지만 몸으로 그릴 때는 실제 프레임을 써야 한다.
+    """
+    with csv_path.open(encoding="utf-8-sig", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    if not has_world_joint_motion(rows, pose_similarity.CORRECTION_JOINTS):
+        raise ValueError(
+            f"{csv_path.name}: 관절 Position이 움직이지 않는다. 바인드 포즈 오프셋으로 보인다."
+        )
+
+    poses = [joint_world_positions(row) for row in rows]
+    identity = list(range(len(poses)))
+    for sequence, burst in enumerate(iter_bursts_with_rows(csv_path), 1):
+        for bucket, frames in body_bucket_frames(burst, identity, poses):
+            normalized = [
+                pose_similarity.normalize_pose(poses[frame])
+                for frame in frames
+                if frame < len(poses)
+            ]
+            if normalized:
+                yield sequence, bucket, normalized
+
+
 def collect_csv_session(csv_path: Path) -> dict[str, list[dict[str, Vec3]]]:
     grouped: dict[str, list[dict[str, Vec3]]] = defaultdict(list)
     for _, bucket, pose in iter_csv_passes(csv_path):

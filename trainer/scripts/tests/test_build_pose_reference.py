@@ -13,6 +13,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 build_pose_reference = importlib.import_module("build_pose_reference")
+pose_similarity = importlib.import_module("pose_similarity")
 
 HEADER = "인덱스,시간(초),분사,Ray point X,Ray Point Y,Ray Point Z"
 
@@ -363,3 +364,38 @@ def test_iter_bursts_with_rows_drops_spray_frames_without_a_ray_hit(tmp_path: Pa
     bursts = list(build_pose_reference.iter_bursts_with_rows(_csv(tmp_path, rows)))
 
     assert [burst.row_indices for burst in bursts] == [[1]]
+
+
+def test_iter_csv_pass_frames_yields_real_frames_not_the_mean(tmp_path: Path) -> None:
+    """평균 자세는 팔다리가 중심으로 수축해 사람이 취할 수 없다. 그림에는 실제 프레임을 쓴다."""
+    path = _world_csv(tmp_path)
+
+    framed = list(build_pose_reference.iter_csv_pass_frames(path))
+    averaged = list(build_pose_reference.iter_csv_passes(path))
+
+    assert len(framed) == len(averaged)
+    sequence, bucket, frames = framed[0]
+    assert sequence == averaged[0][0]
+    assert bucket == averaged[0][1]
+    assert len(frames) > 1
+    assert frames[0] != frames[-1]
+
+
+def test_normalization_keeps_bone_lengths_so_the_drawing_is_honest(tmp_path: Path) -> None:
+    """정규화는 평행이동과 수직축 회전뿐이라 등거리다. 뼈 길이가 바뀌면 그림이 거짓이 된다."""
+    import csv as _csv
+    import math
+
+    from simulator_csv import BONES, joint_world_positions
+
+    path = _world_csv(tmp_path)
+    with path.open(encoding="utf-8-sig", newline="") as handle:
+        raw = [joint_world_positions(row) for row in _csv.DictReader(handle)]
+
+    for index in (0, 37, 120):
+        source = raw[index]
+        moved = pose_similarity.normalize_pose(source)
+        for start, end in BONES:
+            assert math.dist(moved[start], moved[end]) == pytest.approx(
+                math.dist(source[start], source[end]), abs=1e-9
+            ), f"{start}->{end}"
