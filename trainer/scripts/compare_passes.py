@@ -19,7 +19,6 @@
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import logging
 from collections import defaultdict
@@ -29,7 +28,6 @@ from typing import Final, Mapping, Sequence
 
 import build_pose_reference
 import pose_similarity
-from simulator_csv import has_world_joint_motion, joint_world_positions
 
 logger = logging.getLogger(__name__)
 
@@ -69,23 +67,14 @@ def same_bucket_pairs(
 
 
 def session_passes(csv_path: Path) -> list[PassSample]:
-    """납품 형식 CSV 한 개를 패스 표본으로 바꾼다. 관절과 궤적이 같은 행이라 정합이 항등이다."""
-    with csv_path.open(encoding="utf-8-sig", newline="") as handle:
-        rows = list(csv.DictReader(handle))
-    if not has_world_joint_motion(rows, pose_similarity.CORRECTION_JOINTS):
-        raise ValueError(
-            f"{csv_path.name}: 관절 Position이 움직이지 않는다. 바인드 포즈 오프셋으로 보인다."
-        )
+    """납품 형식 CSV 하나를 패스 표본으로 바꾼다.
 
-    poses = [joint_world_positions(row) for row in rows]
-    identity = list(range(len(poses)))
-    samples: list[PassSample] = []
-    for sequence, burst in enumerate(build_pose_reference.iter_bursts_with_rows(csv_path), 1):
-        for bucket, frames in build_pose_reference.body_bucket_frames(burst, identity, poses):
-            summary = build_pose_reference.pass_mean_pose(poses, frames)
-            if summary:
-                samples.append(PassSample(sequence, bucket, summary))
-    return samples
+    CSV 해석과 바인드 포즈 가드는 build_pose_reference가 단일 출처다.
+    """
+    return [
+        PassSample(sequence, bucket, pose)
+        for sequence, bucket, pose in build_pose_reference.iter_csv_passes(csv_path)
+    ]
 
 
 def bucket_scales(samples: Sequence[PassSample], bucket: str) -> dict[str, float]:

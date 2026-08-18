@@ -157,6 +157,69 @@ def test_build_payload_drops_joints_outside_the_scoring_set() -> None:
     assert set(joints) == {"Chest"}
 
 
+def _world_csv(tmp_path: Path, drop: float = 0.0) -> Path:
+    make_dummy_session = importlib.import_module("make_dummy_session")
+    poses: list[dict[str, tuple[float, float, float]]] = []
+    for index in range(240):
+        sweep = 0.01 * (index % 40)
+        lean = 0.2 * sweep
+        poses.append({
+            "Pelvis": (0.0, 0.0, 0.9),
+            "Spine": (lean, 0.0, 1.05),
+            "Chest": (lean, 0.0, 1.2),
+            "LeftShoulder": (-0.18 + lean, 0.0, 1.32),
+            "RightShoulder": (0.18 + lean, 0.0, 1.32),
+            "LeftUpperArm": (-0.22 + lean, 0.02, 1.28),
+            "RightUpperArm": (0.22 + lean, 0.02, 1.28),
+            "LeftForeArm": (-0.28 + lean, 0.18, 1.10),
+            "RightForeArm": (0.28 + sweep, 0.18, 1.10 - drop),
+            "LeftHand": (-0.30 + lean, 0.34, 1.02),
+            "RightHand": (0.30 + sweep, 0.34, 1.02),
+            "Head": (lean, 0.0, 1.45),
+        })
+    return make_dummy_session.write_session(
+        tmp_path / "10_9000001_1.csv", poses, 0.011, sequence_frames=40
+    )
+
+
+def test_iter_csv_passes_reads_poses_and_buckets_from_the_csv_alone(tmp_path: Path) -> None:
+    """실납품은 월드 좌표 CSV다. BVH 없이 이 파일만으로 레퍼런스를 만들 수 있어야 한다."""
+    entries = list(build_pose_reference.iter_csv_passes(_world_csv(tmp_path)))
+
+    assert entries
+    sequence, bucket, pose = entries[0]
+    assert sequence == 1
+    assert bucket.count("-") == 2
+    assert "RightHand" in pose
+
+
+def test_iter_csv_passes_numbers_sequences_from_one(tmp_path: Path) -> None:
+    entries = list(build_pose_reference.iter_csv_passes(_world_csv(tmp_path)))
+
+    assert min(entry[0] for entry in entries) == 1
+    assert max(entry[0] for entry in entries) > 1
+
+
+def test_collect_csv_session_groups_passes_by_bucket(tmp_path: Path) -> None:
+    grouped = build_pose_reference.collect_csv_session(_world_csv(tmp_path))
+
+    assert grouped
+    assert all(isinstance(poses, list) and poses for poses in grouped.values())
+
+
+def test_csv_collection_refuses_bind_pose_columns(tmp_path: Path) -> None:
+    """관절이 상수면 모든 표본이 같은 자세가 되어 유사도가 무의미해진다."""
+    make_dummy_session = importlib.import_module("make_dummy_session")
+    frozen = [
+        {name: (0.0, 0.0, 1.0) for name in make_dummy_session.EXPORT_JOINTS}
+        for _ in range(60)
+    ]
+    path = make_dummy_session.write_session(tmp_path / "10_9000002_1.csv", frozen, 0.011)
+
+    with pytest.raises(ValueError, match="바인드 포즈"):
+        _ = build_pose_reference.collect_csv_session(path)
+
+
 def test_shrunk_spread_falls_back_to_the_pooled_estimate_without_data() -> None:
     """산포는 2차 모멘트라 표본이 얇으면 불안정하다. 평균과 달리 보강이 필요하다."""
     assert build_pose_reference.shrunk_spread(0.30, 0, 0.10) == pytest.approx(0.10)

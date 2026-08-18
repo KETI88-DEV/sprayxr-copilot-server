@@ -22,7 +22,11 @@ import bvh_skeleton
 import pose_alignment
 import pose_similarity
 from pass_segmentation import body_bucket_key, segment_burst
-from simulator_csv import RAY_POINT_COLUMNS
+from simulator_csv import (
+    RAY_POINT_COLUMNS,
+    has_world_joint_motion,
+    joint_world_positions,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -236,6 +240,35 @@ def iter_bursts_with_rows(csv_path: Path) -> Iterator[Burst]:
             yield current
 
 
+def iter_csv_passes(csv_path: Path) -> Iterator[tuple[int, str, dict[str, Vec3]]]:
+    """납품 형식 CSV 하나를 (시퀀스 번호, 버킷, 패스 평균 자세)로 낸다.
+
+    관절과 건 궤적이 같은 행에 있으므로 시간 정합이 필요 없다. 대응이 항등이라
+    DTW도 교차검증 게이트도 개입하지 않는다.
+    """
+    with csv_path.open(encoding="utf-8-sig", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    if not has_world_joint_motion(rows, pose_similarity.CORRECTION_JOINTS):
+        raise ValueError(
+            f"{csv_path.name}: 관절 Position이 움직이지 않는다. 바인드 포즈 오프셋으로 보인다."
+        )
+
+    poses = [joint_world_positions(row) for row in rows]
+    identity = list(range(len(poses)))
+    for sequence, burst in enumerate(iter_bursts_with_rows(csv_path), 1):
+        for bucket, frames in body_bucket_frames(burst, identity, poses):
+            summary = pass_mean_pose(poses, frames)
+            if summary:
+                yield sequence, bucket, summary
+
+
+def collect_csv_session(csv_path: Path) -> dict[str, list[dict[str, Vec3]]]:
+    grouped: dict[str, list[dict[str, Vec3]]] = defaultdict(list)
+    for _, bucket, pose in iter_csv_passes(csv_path):
+        grouped[bucket].append(pose)
+    return grouped
+
+
 def _vec(row: Mapping[str, str], prefix: str) -> Vec3:
     return (
         float(row[f"{prefix} Position X"]),
@@ -403,8 +436,15 @@ def pair_sessions(bvh_root: Path, csv_root: Path) -> list[tuple[str, Path, Path]
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build expert pose reference per level from BVH.")
-    parser.add_argument("--bvh-root", type=Path, required=True)
-    parser.add_argument("--csv-root", type=Path, required=True)
+    parser.add_argument("--bvh-root", type=Path, default=None)
+    parser.add_argument("--csv-root", type=Path, default=None)
+    parser.add_argument(
+        "--world-csv-root",
+        type=Path,
+        default=None,
+        help="납품 형식 월드 좌표 CSV 루트. 주면 BVH 없이 이 파일들만으로 만든다.",
+    )
+    parser.add_argument("--worker", default="unknown", help="--world-csv-root를 쓸 때의 작업자 ID.")
     parser.add_argument("--level", default="all", help="Level key such as 10, or all.")
     parser.add_argument("--exclude-date", default=None, help="Leave-one-date-out fold to drop.")
     parser.add_argument(
@@ -417,9 +457,55 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def build_from_world_csv(root: Path, level_filter: str, worker: str) -> dict[str, object]:
+    """납품 형식 CSV만으로 레벨별 레퍼런스를 만든다. 관절이 CSV에 있어 BVH가 필요 없다."""
+    levels: dict[str, list[Path]] = defaultdict(list)
+    for path in sorted(root.glob("**/*.csv")):
+        levels[path.stem.split("_")[0]].append(path)
+
+    targets = sorted(levels) if level_filter == "all" else [level_filter]
+    payloads: dict[str, object] = {}
+    for level in targets:
+        merged: dict[str, list[dict[str, Vec3]]] = defaultdict(list)
+        rejected: list[dict[str, object]] = []
+        accepted = 0
+        for path in levels.get(level, []):
+            try:
+                by_bucket = collect_csv_session(path)
+            except ValueError as exc:
+                rejected.append({"session": path.stem, "reason": "bind_pose_columns", "detail": str(exc)})
+                continue
+            accepted += 1
+            for bucket, samples in by_bucket.items():
+                merged[bucket].extend(samples)
+        payload = build_payload(merged, level, worker, accepted, rejected)
+        payload["bucket_frame"] = "body"
+        payloads[level] = payload
+        logger.info(
+            "level %s: %d accepted, %d rejected, %d buckets",
+            level, accepted, len(rejected), len(merged),
+        )
+    return payloads
+
+
 def main() -> int:
     args = parse_args()
     logging.basicConfig(level=getattr(logging, args.log_level), format="%(asctime)s %(levelname)s %(message)s")
+
+    if args.world_csv_root is not None:
+        if not args.world_csv_root.is_dir():
+            logger.error("world csv root not found: %s", args.world_csv_root)
+            return 1
+        payloads = build_from_world_csv(args.world_csv_root, args.level, args.worker)
+        args.out.mkdir(parents=True, exist_ok=True)
+        output = args.out / "expert_pose_reference.json"
+        output.write_text(json.dumps(payloads, ensure_ascii=False, indent=2), encoding="utf-8")
+        logger.info("wrote %s (%d level(s))", output, len(payloads))
+        return 0
+
+    if args.bvh_root is None or args.csv_root is None:
+        logger.error("--bvh-root and --csv-root are required without --world-csv-root")
+        return 1
     if not args.bvh_root.is_dir() or not args.csv_root.is_dir():
         logger.error("roots not found: %s %s", args.bvh_root, args.csv_root)
         return 1
