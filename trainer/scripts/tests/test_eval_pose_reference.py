@@ -151,3 +151,35 @@ def test_summarize_handles_a_fold_set_with_nothing_scored() -> None:
     assert summary["scored"] == 0
     assert summary["match_rate"] == 0.0
     assert summary["p50"] is None
+
+
+def test_collect_csv_samples_groups_passes_by_bucket(tmp_path: Path) -> None:
+    """납품 형식 CSV로도 폴드를 만들 수 있어야 백분위 보정이 활성화된다."""
+    build_pose_reference = importlib.import_module("build_pose_reference")
+    make_dummy_session = importlib.import_module("make_dummy_session")
+    poses = []
+    for index in range(240):
+        sweep = 0.01 * (index % 40)
+        lean = 0.2 * sweep
+        poses.append({
+            "Pelvis": (0.0, 0.0, 0.9),
+            "Spine": (lean, 0.0, 1.05),
+            "Chest": (lean, 0.0, 1.2),
+            "LeftShoulder": (-0.18 + lean, 0.0, 1.32),
+            "RightShoulder": (0.18 + lean, 0.0, 1.32),
+            "LeftUpperArm": (-0.22 + lean, 0.02, 1.28),
+            "RightUpperArm": (0.22 + lean, 0.02, 1.28),
+            "LeftForeArm": (-0.28 + lean, 0.18, 1.10),
+            "RightForeArm": (0.28 + sweep, 0.18, 1.10),
+            "LeftHand": (-0.30 + lean, 0.34, 1.02),
+            "RightHand": (0.30 + sweep, 0.34, 1.02),
+            "Head": (lean, 0.0, 1.45),
+        })
+    path = make_dummy_session.write_session(
+        tmp_path / "10_9000001_1.csv", poses, 0.011, sequence_frames=40
+    )
+
+    samples = eval_pose_reference.collect_csv_samples(path)
+
+    assert samples == build_pose_reference.collect_csv_session(path)
+    assert samples

@@ -120,6 +120,11 @@ def collect_bvh_samples(bvh_path: Path) -> Samples:
     return samples
 
 
+def collect_csv_samples(csv_path: Path) -> Samples:
+    """납품 형식 CSV 한 개를 버킷별 패스 표본으로. BVH 경로와 같은 모양을 낸다."""
+    return build_pose_reference.collect_csv_session(csv_path)
+
+
 def _merged(entries: Sequence[Samples]) -> Samples:
     merged: Samples = defaultdict(list)
     for entry in entries:
@@ -173,7 +178,14 @@ def _write_calibration(reference: Path, calibration: Mapping[str, dict[str, floa
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Leave-one-date-out check for the pose reference.")
-    parser.add_argument("--bvh-root", type=Path, required=True)
+    parser.add_argument("--bvh-root", type=Path, default=None)
+    parser.add_argument(
+        "--world-csv-root",
+        type=Path,
+        default=None,
+        help="납품 형식 월드 좌표 CSV 루트. 폴드는 상위 디렉터리 이름으로 나눈다.",
+    )
+    parser.add_argument("--worker", default="unknown", help="--world-csv-root를 쓸 때의 작업자 ID.")
     parser.add_argument("--level", default="all", help="Level key such as 10, or all.")
     parser.add_argument("--out", type=Path, default=None, help="Optional JSON report path.")
     parser.add_argument(
@@ -189,18 +201,26 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     logging.basicConfig(level=getattr(logging, args.log_level), format="%(asctime)s %(levelname)s %(message)s")
-    if not args.bvh_root.is_dir():
-        logger.error("bvh root not found: %s", args.bvh_root)
+    if args.world_csv_root is not None:
+        root, pattern, collect = args.world_csv_root, "**/*.csv", collect_csv_samples
+        worker = args.worker
+    elif args.bvh_root is not None:
+        root, pattern, collect = args.bvh_root, "**/*.bvh", collect_bvh_samples
+        worker = args.bvh_root.name.removeprefix("bvh_")
+    else:
+        logger.error("--bvh-root or --world-csv-root is required")
+        return 1
+    if not root.is_dir():
+        logger.error("root not found: %s", root)
         return 1
 
-    worker = args.bvh_root.name.removeprefix("bvh_")
     cached: dict[str, dict[str, list[Samples]]] = defaultdict(lambda: defaultdict(list))
-    paths = sorted(args.bvh_root.glob("**/*.bvh"))
+    paths = sorted(root.glob(pattern))
     for index, path in enumerate(paths, 1):
         level = path.name.split("_")[0]
         if args.level != "all" and level != args.level:
             continue
-        cached[level][path.parent.name].append(collect_bvh_samples(path))
+        cached[level][path.parent.name].append(collect(path))
         logger.info("scanned %d/%d %s", index, len(paths), path.name)
 
     report: dict[str, object] = {}
