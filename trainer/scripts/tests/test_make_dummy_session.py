@@ -8,6 +8,8 @@ import importlib
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 make_dummy_session = importlib.import_module("make_dummy_session")
@@ -96,3 +98,52 @@ def test_mutation_leaves_the_source_untouched(tmp_path: Path) -> None:
     make_dummy_session.mutate(original, "RightForeArm", (0.0, 0.0, -0.15))
 
     assert original[0]["RightForeArm"] == _poses(3)[0]["RightForeArm"]
+
+
+def _bone_lengths(pose: dict[str, Vec3]) -> dict[str, float]:
+    import math
+
+    from simulator_csv import BONES
+
+    return {
+        f"{a}->{b}": math.dist(pose[a], pose[b])
+        for a, b in BONES
+        if a in pose and b in pose
+    }
+
+
+def test_mutate_limb_preserves_every_bone_length() -> None:
+    """관절 하나만 평행이동하면 붙어 있는 뼈가 늘어나 사람이 취할 수 없는 자세가 된다."""
+    original = _poses(3)
+
+    moved = make_dummy_session.mutate_limb(original, "RightForeArm", 25.0)
+
+    before = _bone_lengths(original[0])
+    after = _bone_lengths(moved[0])
+    for name, length in before.items():
+        assert after[name] == pytest.approx(length, abs=1e-9), name
+
+
+def test_mutate_limb_actually_moves_the_limb() -> None:
+    original = _poses(3)
+
+    moved = make_dummy_session.mutate_limb(original, "RightForeArm", 25.0)
+
+    assert moved[0]["RightForeArm"] != original[0]["RightForeArm"]
+
+
+def test_mutate_limb_carries_the_child_joints_along() -> None:
+    original = _poses(3)
+
+    moved = make_dummy_session.mutate_limb(original, "RightForeArm", 25.0)
+
+    assert moved[0]["RightHand"] != original[0]["RightHand"]
+
+
+def test_mutate_limb_leaves_the_other_side_alone() -> None:
+    original = _poses(3)
+
+    moved = make_dummy_session.mutate_limb(original, "RightForeArm", 25.0)
+
+    assert moved[0]["LeftHand"] == original[0]["LeftHand"]
+    assert moved[0]["RightUpperArm"] == original[0]["RightUpperArm"]

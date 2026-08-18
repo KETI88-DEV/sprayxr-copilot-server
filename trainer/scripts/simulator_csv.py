@@ -29,6 +29,44 @@ JOINT_COLUMNS: Final[tuple[str, ...]] = (
     "Head",
 )
 JOINT_KEYS: Final[dict[str, str]] = {name: name.replace(" ", "") for name in JOINT_COLUMNS}
+# 관절 계층. 뼈 길이를 보존해야 하는 쪽(주입·렌더)이 모두 이 표를 쓴다.
+BONES: Final[tuple[tuple[str, str], ...]] = (
+    ("Pelvis", "Spine"),
+    ("Spine", "Chest"),
+    ("Chest", "Head"),
+    ("Chest", "LeftShoulder"),
+    ("LeftShoulder", "LeftUpperArm"),
+    ("LeftUpperArm", "LeftForeArm"),
+    ("LeftForeArm", "LeftHand"),
+    ("Chest", "RightShoulder"),
+    ("RightShoulder", "RightUpperArm"),
+    ("RightUpperArm", "RightForeArm"),
+    ("RightForeArm", "RightHand"),
+    ("Pelvis", "LeftThigh"),
+    ("LeftThigh", "LeftCalf"),
+    ("LeftCalf", "LeftFoot"),
+    ("LeftFoot", "LeftToe"),
+    ("Pelvis", "RightThigh"),
+    ("RightThigh", "RightCalf"),
+    ("RightCalf", "RightFoot"),
+    ("RightFoot", "RightToe"),
+)
+PARENT_OF: Final[dict[str, str]] = {child: parent for parent, child in BONES}
+
+
+def descendants(joint: str) -> set[str]:
+    """joint 아래로 매달린 모든 관절. 회전 시 함께 움직여야 뼈 길이가 보존된다."""
+    found: set[str] = set()
+    frontier = [joint]
+    while frontier:
+        current = frontier.pop()
+        for parent, child in BONES:
+            if parent == current and child not in found:
+                found.add(child)
+                frontier.append(child)
+    return found
+
+
 ROOT_COLUMN: Final = "Pelvis"
 LIMB_COLUMNS: Final[tuple[str, ...]] = JOINT_COLUMNS[1:]
 
