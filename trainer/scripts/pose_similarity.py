@@ -16,12 +16,15 @@ from typing import Final, Literal, Mapping
 __all__ = [
     "CORRECTION_JOINTS",
     "Correction",
+    "JointDelta",
+    "PoseComparison",
     "FACING_JOINTS",
     "JOINT_LABELS",
     "ROOT_JOINT",
     "SCORING_JOINTS",
     "body_heading",
     "build_corrections",
+    "compare_poses",
     "facing_yaw",
     "joint_sigmas",
     "normalize_pose",
@@ -92,6 +95,23 @@ SEGMENT_PARENT: Final = {
     "RightForeArm": "RightUpperArm",
     "RightHand": "RightForeArm",
 }
+
+
+@dataclass(frozen=True, slots=True)
+class JointDelta:
+    """두 자세 사이의 관절 하나. body_delta는 (오른쪽, 앞, 위) 순의 신체 기준 차이다."""
+
+    joint: str
+    label: str
+    distance: float
+    sigma: float
+    body_delta: Vec3
+
+
+@dataclass(frozen=True, slots=True)
+class PoseComparison:
+    similarity: float | None
+    deltas: list[JointDelta]
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,6 +195,47 @@ def similarity_score(sigmas: Mapping[str, float]) -> float:
         return 0.0
     mean_square = sum(value * value for value in sigmas.values()) / len(sigmas)
     return math.exp(-0.5 * mean_square)
+
+
+def compare_poses(
+    left: Mapping[str, Vec3], right: Mapping[str, Vec3], scales: Mapping[str, float]
+) -> PoseComparison:
+    """두 패스의 자세를 관절별로 견준다.
+
+    척도는 레퍼런스 경로와 같은 숙련자 산포다. 그래야 "이만큼 다르다"가 두 경로에서
+    같은 뜻이 된다. 견줄 관절이 하나도 없으면 점수를 만들지 않는다. 1.0도 0.0도 거짓이다.
+    """
+    first_pose = normalize_pose(left)
+    second_pose = normalize_pose(right)
+
+    sigmas: dict[str, float] = {}
+    deltas: list[JointDelta] = []
+    for joint in SCORING_JOINTS:
+        scale = scales.get(joint)
+        first = first_pose.get(joint)
+        second = second_pose.get(joint)
+        if scale is None or first is None or second is None:
+            continue
+        distance = math.dist(first, second)
+        sigmas[joint] = min(distance / max(scale, MIN_SPREAD_M), MAX_SIGMA)
+        if sigmas[joint] <= 0.0:
+            continue
+        deltas.append(
+            JointDelta(
+                joint=joint,
+                label=JOINT_LABELS.get(joint, joint),
+                distance=distance,
+                sigma=sigmas[joint],
+                body_delta=(
+                    second[0] - first[0],
+                    second[1] - first[1],
+                    second[2] - first[2],
+                ),
+            )
+        )
+
+    deltas.sort(key=lambda item: item.sigma, reverse=True)
+    return PoseComparison(similarity_score(sigmas) if sigmas else None, deltas)
 
 
 def _segment_angles(positions: Mapping[str, Vec3], joint: str) -> tuple[float, float] | None:

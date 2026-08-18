@@ -8,6 +8,8 @@ import math
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 pose_similarity = importlib.import_module("pose_similarity")
@@ -81,6 +83,60 @@ def test_body_heading_is_invariant_to_world_yaw() -> None:
     rotated = (0.0 * math.cos(angle) - 1.0 * math.sin(angle), 0.0 * math.sin(angle) + 1.0 * math.cos(angle))
 
     assert pose_similarity.body_heading(pose_similarity.facing_yaw(turned), rotated) == "forward"
+
+
+def test_compare_poses_reports_zero_distance_for_the_same_pose() -> None:
+    result = pose_similarity.compare_poses(_pose(), _pose(), {"RightForeArm": 0.05})
+
+    assert result.similarity == 1.0
+    assert result.deltas == []
+
+
+def test_compare_poses_measures_the_joint_that_moved() -> None:
+    """같은 스트로크를 다른 시퀀스에서 했을 때 어느 관절이 얼마나 달랐는지가 결과다."""
+    result = pose_similarity.compare_poses(
+        _pose(), _pose_with_lowered_right_elbow(drop=0.15), {"RightForeArm": 0.05}
+    )
+
+    assert [item.joint for item in result.deltas] == ["RightForeArm"]
+    top = result.deltas[0]
+    assert top.label == "오른쪽 팔꿈치"
+    assert top.distance == pytest.approx(0.15)
+    assert top.sigma == pytest.approx(3.0)
+
+
+def test_compare_poses_reports_the_difference_along_body_axes() -> None:
+    """부호가 신체 기준이라 그대로 지시문이 된다. +right/+forward/+up."""
+    result = pose_similarity.compare_poses(
+        _pose(), _pose_with_lowered_right_elbow(drop=0.15), {"RightForeArm": 0.05}
+    )
+
+    right, forward, up = result.deltas[0].body_delta
+    assert right == pytest.approx(0.0, abs=1e-9)
+    assert forward == pytest.approx(0.0, abs=1e-9)
+    assert up == pytest.approx(-0.15)
+
+
+def test_compare_poses_ranks_by_how_much_each_joint_explains() -> None:
+    other = _pose()
+    other["RightForeArm"] = (0.28, 0.18, 1.10 - 0.15)
+    other["RightHand"] = (0.30, 0.34, 1.02 - 0.05)
+
+    result = pose_similarity.compare_poses(
+        _pose(), other, {"RightForeArm": 0.05, "RightHand": 0.05}
+    )
+
+    assert [item.joint for item in result.deltas] == ["RightForeArm", "RightHand"]
+
+
+def test_compare_poses_reports_nothing_measurable_rather_than_a_number() -> None:
+    """비교 가능한 관절이 없으면 1.0(완벽)도 0.0(전혀 다름)도 거짓이다."""
+    result = pose_similarity.compare_poses(
+        _pose(), _pose_with_lowered_right_elbow(drop=0.15), {"LeftHand": 0.05}
+    )
+
+    assert result.deltas == []
+    assert result.similarity is None
 
 
 def _bucket() -> dict[str, object]:
