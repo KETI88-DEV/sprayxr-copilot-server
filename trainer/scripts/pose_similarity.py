@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Final, Literal, Mapping
+from typing import Final, Literal, Mapping, Sequence
 
 __all__ = [
     "CORRECTION_JOINTS",
@@ -23,8 +23,10 @@ __all__ = [
     "ROOT_JOINT",
     "SCORING_JOINTS",
     "body_heading",
+    "apply_corrections",
     "build_corrections",
     "compare_poses",
+    "gap_closure",
     "facing_yaw",
     "joint_sigmas",
     "normalize_pose",
@@ -236,6 +238,44 @@ def compare_poses(
 
     deltas.sort(key=lambda item: item.sigma, reverse=True)
     return PoseComparison(similarity_score(sigmas) if sigmas else None, deltas)
+
+
+def apply_corrections(
+    normalized: Mapping[str, Vec3],
+    bucket: Mapping[str, object],
+    corrections: Sequence[Correction],
+    fraction: float = 1.0,
+) -> dict[str, Vec3]:
+    """교정을 따랐을 때의 자세. 지목된 관절만 기준 위치 쪽으로 fraction만큼 옮긴다.
+
+    fraction=1.0은 지시를 완벽히 따른 상한이다. 나머지 관절은 건드리지 않는다. 채점
+    관절이 교정 관절보다 많으므로 완벽히 따라도 유사도가 1.0이 되지는 않는다.
+    """
+    reference = _reference_positions(bucket)
+    moved = dict(normalized)
+    for correction in corrections:
+        current = moved.get(correction.joint)
+        target = reference.get(correction.joint)
+        if current is None or target is None:
+            continue
+        moved[correction.joint] = (
+            current[0] + (target[0] - current[0]) * fraction,
+            current[1] + (target[1] - current[1]) * fraction,
+            current[2] + (target[2] - current[2]) * fraction,
+        )
+    return moved
+
+
+def gap_closure(before: float, after: float) -> float | None:
+    """남아 있던 격차 중 얼마를 메웠는가. (S1-S0)/(1-S0).
+
+    이미 기준과 같으면(S0=1) 메울 격차가 없어 정의되지 않는다. 0으로 적으면 실패처럼
+    읽히므로 값을 만들지 않는다.
+    """
+    room = 1.0 - before
+    if room <= 0.0:
+        return None
+    return (after - before) / room
 
 
 def _segment_angles(positions: Mapping[str, Vec3], joint: str) -> tuple[float, float] | None:

@@ -287,6 +287,55 @@ def test_build_corrections_is_capped_and_ranked_by_expected_gain() -> None:
     assert corrections[0].expected_gain >= corrections[1].expected_gain
 
 
+def test_apply_corrections_moves_the_named_joint_onto_the_reference() -> None:
+    """교정을 따랐다면 그 관절은 기준 위치에 온다. 향상폭을 재려면 이 상태가 필요하다."""
+    normalized = pose_similarity.normalize_pose(_pose_with_lowered_right_elbow(drop=0.15))
+    bucket = _bucket()
+    corrections = pose_similarity.build_corrections(normalized, bucket)
+
+    fixed = pose_similarity.apply_corrections(normalized, bucket, corrections)
+
+    target = bucket["joints"]["RightForeArm"]["mean"]  # type: ignore[index]
+    assert fixed["RightForeArm"] == pytest.approx(tuple(target), abs=1e-9)
+
+
+def test_apply_corrections_leaves_untouched_joints_alone() -> None:
+    normalized = pose_similarity.normalize_pose(_pose_with_lowered_right_elbow(drop=0.15))
+    bucket = _bucket()
+    corrections = pose_similarity.build_corrections(normalized, bucket)
+
+    fixed = pose_similarity.apply_corrections(normalized, bucket, corrections)
+
+    assert fixed["RightHand"] == normalized["RightHand"]
+
+
+def test_apply_corrections_can_move_only_part_of_the_way() -> None:
+    normalized = pose_similarity.normalize_pose(_pose_with_lowered_right_elbow(drop=0.15))
+    bucket = _bucket()
+    corrections = pose_similarity.build_corrections(normalized, bucket)
+
+    fixed = pose_similarity.apply_corrections(normalized, bucket, corrections, fraction=0.5)
+
+    assert fixed["RightForeArm"][2] == pytest.approx(
+        normalized["RightForeArm"][2] + 0.075, abs=1e-9
+    )
+
+
+def test_gap_closure_is_the_share_of_the_remaining_gap_that_was_closed() -> None:
+    assert pose_similarity.gap_closure(0.5, 0.75) == pytest.approx(0.5)
+    assert pose_similarity.gap_closure(0.5, 1.0) == pytest.approx(1.0)
+    assert pose_similarity.gap_closure(0.5, 0.5) == pytest.approx(0.0)
+
+
+def test_gap_closure_is_negative_when_the_correction_made_it_worse() -> None:
+    assert pose_similarity.gap_closure(0.5, 0.4) < 0.0
+
+
+def test_gap_closure_is_undefined_without_room_to_improve() -> None:
+    """이미 기준과 같으면 개선율을 만들 수 없다. 0으로 적으면 실패처럼 읽힌다."""
+    assert pose_similarity.gap_closure(1.0, 1.0) is None
+
+
 def test_correction_joints_are_a_strict_subset_of_scoring_joints() -> None:
     """게이밍 방지: 채점 관절 집합이 교정 관절 집합을 진부분집합으로 포함해야 한다."""
     scoring = set(pose_similarity.SCORING_JOINTS)
