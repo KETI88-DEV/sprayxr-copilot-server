@@ -100,8 +100,8 @@ function renderAxis(root, payload) {
         : "";
   }
 
-  // 축별 σ 하나를 다시 값으로. 서버가 이 점의 이 축을 못 냈으면(현재 응답에는
-  // 점별 axis_sigmas가 실려 있지 않다) 0으로 지어내지 않고 대시다.
+  // 축별 σ 하나를 다시 값으로. 서버가 이 점의 이 축을 못 냈으면 0으로 지어내지
+  // 않고 대시다 — 없는 값과 0인 값은 다른 말이다.
   const axisSigma = (delta, axis) => {
     const value = delta.axis_sigmas?.[axis];
     return typeof value === "number" ? `${value.toFixed(2)}σ` : "—";
