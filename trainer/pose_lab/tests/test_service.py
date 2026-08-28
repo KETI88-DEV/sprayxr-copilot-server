@@ -24,3 +24,11 @@ def test_improvement_reports_split_and_same_reference() -> None:
     result = service.improvement(before=0.4, after_split=0.55, after_same=0.9)
     assert math.isclose(result["split"], 0.25, abs_tol=1e-9)
     assert math.isclose(result["same"], 0.8333333, abs_tol=1e-6)
+    assert result["split"] != result["same"]
+
+
+def test_improvement_leaves_split_none_when_not_computed() -> None:
+    """held-out 레퍼런스가 없으면 분리 채점 값을 지어내지 않는다."""
+    result = service.improvement(before=0.4, after_split=None, after_same=0.9)
+    assert result["split"] is None
+    assert math.isclose(result["same"], 0.8333333, abs_tol=1e-6)

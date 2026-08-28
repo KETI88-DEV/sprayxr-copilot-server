@@ -56,7 +56,9 @@ class FakeSource:
     def load(self, ref: PassRef) -> RawPass:
         if ref.worker == "B":
             return RawPass(rows=_rows(0.0))
-        return RawPass(rows=_rows(0.12, descending=self._mismatch))
+        # 0.3m: 오른손/머리 sigma가 CORRECTION_SIGMA_THRESHOLD(2.0)를 넘도록 벌린
+        # 값이다. 그래야 각도 미표시 불변량을 실제로 통과하는 교정 문장으로 검증한다.
+        return RawPass(rows=_rows(0.3, descending=self._mismatch))
 
 
 def test_health_reports_ready() -> None:
@@ -82,6 +84,8 @@ def test_compare_reports_both_axes() -> None:
     assert body["measured"]["basis"] == "tracked"
     assert body["joint"]["basis"] == "ik_derived"
     assert isinstance(body["measured"]["score"], float)
+    assert body["measured"]["improvement"]["split"] is None
+    assert isinstance(body["measured"]["improvement"]["same"], float)
 
 
 def test_joint_axis_never_borrows_the_measured_score() -> None:
@@ -94,9 +98,11 @@ def test_joint_axis_never_borrows_the_measured_score() -> None:
 
 
 def test_compare_emits_no_angle_in_corrections() -> None:
-    """REQ-19 게이트 통과 전까지 각도 지시를 내지 않는다."""
+    """REQ-19 게이트 통과 전까지 각도 지시를 내지 않는다. 교정 문장이 실제로 나와야
+    이 불변량이 검증된다 — 빈 리스트를 도는 assert는 아무것도 확인하지 않는다."""
     client = TestClient(create_app(source=FakeSource()))
     body = client.post("/api/compare", json={"query": QUERY, "reference": REFERENCE}).json()
+    assert len(body["measured"]["corrections"]) > 0
     for line in body["measured"]["corrections"]:
         assert "도" not in line
     assert body["joint"]["corrections"] == []

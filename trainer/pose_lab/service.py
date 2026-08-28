@@ -60,14 +60,19 @@ def gate_verdict(spread: float, error: float) -> str | None:
     return "pass" if spread / error < GATE_RATIO else "fail"
 
 
-def improvement(before: float, after_split: float, after_same: float) -> dict[str, float]:
+def improvement(
+    before: float, after_split: float | None, after_same: float
+) -> dict[str, float | None]:
     """개선율을 분리 채점과 동일 채점 둘 다 낸다.
 
     goal_year2의 문구는 목표 자세를 입력으로 주므로 동일 채점에 해당한다. 두 값을
-    병기해야 그 값이 자기충족에 얼마나 기대는지 드러난다.
+    병기해야 그 값이 자기충족에 얼마나 기대는지 드러난다. 분리 채점 점수가 없으면
+    (아직 계산되지 않았으면) 없는 값을 만들어내지 않고 None을 그대로 낸다.
     """
-    split = pose_similarity.gap_closure(before, after_split)
     same = pose_similarity.gap_closure(before, after_same)
+    if after_split is None:
+        return {"split": None, "same": same or 0.0}
+    split = pose_similarity.gap_closure(before, after_split)
     return {"split": split or 0.0, "same": same or 0.0}
 
 
@@ -173,7 +178,11 @@ def compare(
                 for delta in before.deltas
             ],
             "corrections": measured_score.corrections_text(before.deltas),
-            "improvement": improvement(before.score, after.score, after.score),
+            # 진짜 분리 채점 점수는 겹치지 않는 날짜에서 뽑은 held-out 레퍼런스가
+            # 있어야 나온다. 실제 PassSource가 배선되기 전까지는 split을 None으로
+            # 낸다 — after.score를 split 자리에 다시 넣으면 두 숫자가 항상 같아져
+            # 자기충족 정도를 가리는 바로 그 결함이 된다.
+            "improvement": improvement(before.score, None, after.score),
             "gate": gate_verdict(max(spreads.values()), DEFAULT_ERROR_M),
         },
         "joint": {
