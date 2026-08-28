@@ -37,13 +37,40 @@
 제외한다. 0으로 채우면 "교정이 악화시켰다"로 잘못 읽힌다. `summarize()`가 이 규칙을
 지킨다 — `n`은 실제로 값이 있는 표본 수이지 시도한 쌍 수가 아니다.
 
+## Fix round 1(리뷰 반영)에서 바뀐 것
+
+- **F1**: `same`/`split`이 100%에 못 미치는 이유를 "가중치 몫(1.0/1.55=64.5%)"으로
+  주장했던 것을 철회한다. 그 수는 σ(가중 평균 W)의 몫이지 gap_closure의 몫이 아니다
+  — S=exp(-W²/2)이 W에 비선형이라 W를 일부만 줄여도 gap_closure는 그보다 훨씬 크게
+  오를 수 있다(실제로 이 보고서 자신의 데이터가 0.6452보다 큰 same/split 값을
+  냈다 — 주장이 스스로의 데이터에 반박됐다). 대신 쌍마다 **오른손 σ를 완전히
+  0으로(관대하게 가정) 만들고 머리·왼손은 그대로 뒀을 때 낼 수 있는 최댓값**을
+  실제로 계산해 `ceiling` 필드로 남긴다(`_ceiling_gap_closure`). 살아남는 주장은
+  약한 것 하나뿐이다 — 머리·왼손을 절대 옮기지 않으므로 G<1.0은 항상 성립한다.
+2 - **F2**: `fired`(F/전체 레퍼런스 기준 발동 여부)를 split(A로 고르고 B로 채점) 모집단을
+  가르는 데 써서 두 갈래의 발동 결정이 뒤섞였다. `split_fired`를 A 자신의 발동 결정으로
+  따로 낸다(`_split_details`가 `spreads=`로 A/B를 각각 compare()에 직접 먹여
+  service.py를 건드리지 않고 같은 계산을 재현한다).
+- **F3**: 쌍마다의 원자료(질의·레퍼런스·상태·same·split·ceiling·발동 여부 등)를
+  JSON 아티팩트에 `pairs`로 남긴다. `summarize()`에 `min`/`max`를 추가한다.
+- **F4**: 색인 캐시에 파일 수·총 크기·최신 mtime 지문을 같이 저장하고, 재사용 시
+  지금 트리의 지문과 맞지 않으면 조용히 쓰지 않고 다시 짓는다.
+- **F5**: `PAIR_SIGMA_FACTOR=1.0` 민감도 비교를 표로 낸다(파일의 상수는 바꾸지 않고,
+  실행 중에만 `service` 모듈의 전역을 되돌렸다가 끝나면 원복한다 — 파일에 커밋된
+  값은 그대로다). `eval_pose_correction.MAX_ELIGIBLE_BEFORE` 가드를 적용했다면
+  split이 어떻게 바뀌었을지도 계산해 공개하되(before_split_score를 A/B와 같은 방식
+  으로 재현), 헤드라인에는 그 가드를 적용하지 않은 채로 둔다 — 결과를 보고 나서
+  유리한 필터를 추가하는 것은 이 계획이 금지하는 사후 선택이기 때문이다.
+
 ## 사전등록 상수 (건드리지 않는다)
 
 `CORRECTION_SIGMA_THRESHOLD`(2.0), `SIGMA_FLOOR_M`(0.02), `MAX_SIGMA`(6.0),
 `GATE_RATIO`(0.5), `DEFAULT_ERROR_M`(0.144), `N_MIN`(20), `PAIR_SIGMA_FACTOR`(√2)는
 전부 `measured_score.py`/`service.py`/`spread_reference.py`가 단일 출처다. 이 모듈은
-그것들을 읽기만 하고 재정의하지 않는다. 반쪽 두께 계층화(§half_thickness)의 문턱도
-새로 고르지 않고 이미 사전등록된 `N_MIN`(20)을 그대로 재사용한다.
+그것들을 읽기만 하고 재정의하지 않는다 — F5의 민감도 비교도 파일을 고치지 않고
+실행 중 모듈 전역을 잠깐 되돌렸다가 원복하는 방식으로만 낸다. 반쪽 두께
+계층화(§half_thickness)의 문턱도 새로 고르지 않고 이미 사전등록된 `N_MIN`(20)을
+그대로 재사용한다.
 """
 
 from __future__ import annotations
@@ -68,9 +95,10 @@ if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 motion_key = importlib.import_module("motion_key")
+eval_pose_correction = importlib.import_module("eval_pose_correction")
 
-from trainer.pose_lab import csv_source as csv_source_module  # noqa: E402
 from trainer.pose_lab import service  # noqa: E402
+from trainer.pose_lab import csv_source as csv_source_module  # noqa: E402
 from trainer.pose_lab.service import PassRef  # noqa: E402
 from trainer.pose_lab.spread_reference import N_MIN, SpreadReference  # noqa: E402
 
@@ -81,6 +109,12 @@ DEFAULT_SEED: Final = 20260828
 THRESHOLD: Final = 0.70
 # 반쪽 두께 계층화 문턱. 새로 고르지 않는다 — build_spread_reference의 N_MIN을 그대로 쓴다.
 THIN_HALF_THRESHOLD: Final = N_MIN
+# F5 민감도 비교의 대체 배율. service.py의 상수(√2)는 파일에서 바꾸지 않는다 — 실행
+# 중에만 모듈 전역을 이 값으로 되돌렸다가 끝나면 원복한다.
+SENSITIVITY_PAIR_SIGMA_FACTOR: Final = 1.0
+# eval_pose_correction.py가 이미 쓰는 문턱. 새로 고르지 않고 그대로 가져와 "적용했다면
+# 어떻게 됐을지"만 공개용으로 계산한다 — 헤드라인에는 적용하지 않는다(F5).
+MAX_ELIGIBLE_BEFORE: Final = eval_pose_correction.MAX_ELIGIBLE_BEFORE
 
 
 # --- Step 1의 집계 함수 --------------------------------------------------------
@@ -100,16 +134,22 @@ def _percentile(sorted_values: Sequence[float], fraction: float) -> float:
 
 
 def summarize(values: Sequence[float | None], threshold: float) -> dict[str, float | int | None]:
-    """분포 요약: n·중앙값·사분위·문턱 이상 비율. `None`은 표본에서 뺀다(0으로 넣지 않는다)."""
+    """분포 요약: n·중앙값·사분위·최소최대·문턱 이상 비율. `None`은 표본에서 뺀다
+    (0으로 넣지 않는다)."""
     present = sorted(value for value in values if value is not None)
     n = len(present)
     if n == 0:
-        return {"n": 0, "median": None, "q1": None, "q3": None, "at_or_above": None}
+        return {
+            "n": 0, "median": None, "q1": None, "q3": None,
+            "min": None, "max": None, "at_or_above": None,
+        }
     return {
         "n": n,
         "median": _percentile(present, 0.5),
         "q1": _percentile(present, 0.25),
         "q3": _percentile(present, 0.75),
+        "min": present[0],
+        "max": present[-1],
         "at_or_above": sum(1 for value in present if value >= threshold) / n,
     }
 
@@ -161,6 +201,24 @@ def _candidate_from_json(payload: Mapping[str, Any]) -> Candidate:
     return Candidate(ref=ref, worker=str(payload["cand_worker"]), key=str(payload["key"]))
 
 
+def _fingerprint(root: Path) -> dict[str, Any]:
+    """CSV 트리의 가벼운 지문 — 파일 수·총 바이트·최신 mtime(F4).
+
+    20GB 가까운 CSV를 해시하지 않고도 캐시가 몰래 낡는 것(파일이 추가·교체됐는데
+    캐시가 예전 후보 목록을 계속 내주는 것)을 막기에는 이 세 값으로 충분하다. 내용을
+    한 바이트도 읽지 않는다 — `stat()`만 부른다.
+    """
+    total_size = 0
+    max_mtime = 0.0
+    count = 0
+    for path in sorted(root.glob("**/*.csv")):
+        stat = path.stat()
+        total_size += stat.st_size
+        max_mtime = max(max_mtime, stat.st_mtime)
+        count += 1
+    return {"file_count": count, "total_size": total_size, "max_mtime": max_mtime}
+
+
 def index_corpus_cached(
     root: Path, cache_path: Path | None, rows_cache: int = 8
 ) -> tuple[csv_source_module.CsvPassSource, list[Candidate]]:
@@ -171,21 +229,34 @@ def index_corpus_cached(
     전혀 달라지지 않는다. 느린 것은 479개 세션 CSV(약 15.5GB)의 1회 파싱뿐이고,
     그 결과(패스 구간·모션 키)만 캐시한다 — `select_pairs`의 seed·셔플·선정 로직은
     캐시 유무와 무관하게 그대로 돈다.
+
+    F4: 캐시는 루트 경로뿐 아니라 `_fingerprint(root)`(파일 수·총 크기·최신 mtime)도
+    같이 저장한다. 재사용 시 지금 트리의 지문과 다르면(파일이 추가·삭제·교체됐으면)
+    조용히 낡은 후보를 내주지 않고 다시 짓는다.
     """
+    source = csv_source_module.CsvPassSource(root, rows_cache=rows_cache)
+    fingerprint = _fingerprint(root)
     if cache_path is not None and cache_path.is_file():
         payload = json.loads(cache_path.read_text(encoding="utf-8"))
-        if payload.get("root") == str(root):
+        if payload.get("root") == str(root) and payload.get("fingerprint") == fingerprint:
             candidates = [_candidate_from_json(item) for item in payload["candidates"]]
-            source = csv_source_module.CsvPassSource(root, rows_cache=rows_cache)
-            logger.info("loaded %d cached candidates from %s", len(candidates), cache_path)
+            logger.info(
+                "loaded %d cached candidates from %s (fingerprint matched)", len(candidates), cache_path
+            )
             return source, candidates
-        logger.warning("index cache %s was built for a different root; rebuilding", cache_path)
-    source, candidates = index_corpus(root, rows_cache=rows_cache)
+        logger.warning(
+            "index cache %s is stale (root or CSV-tree fingerprint changed); rebuilding", cache_path
+        )
+    _, candidates = index_corpus(root, rows_cache=rows_cache)
     if cache_path is not None:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         cache_path.write_text(
             json.dumps(
-                {"root": str(root), "candidates": [_candidate_to_json(c) for c in candidates]},
+                {
+                    "root": str(root),
+                    "fingerprint": fingerprint,
+                    "candidates": [_candidate_to_json(c) for c in candidates],
+                },
                 ensure_ascii=False,
             ),
             encoding="utf-8",
@@ -226,7 +297,7 @@ def select_pairs(
 # --- 실행 --------------------------------------------------------------------
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, kw_only=True)
 class Outcome:
     query: PassRef
     reference: PassRef | None
@@ -243,28 +314,141 @@ class Outcome:
     gate: str | None
     gate_reason: str | None
     normalization: str | None
+    # F/전체 레퍼런스 기준 발동 여부(same이 쓰는 잣대). `measured.finding`이 그대로 출처다.
     fired: bool | None
+    # F2: A(교정 선택 반쪽) 자신의 발동 여부. split을 가르는 데는 이 값을 써야 한다 —
+    # `fired`(F 기준)로 나누면 두 갈래의 결정이 뒤섞인다.
+    split_fired: bool | None
+    # F1: 오른손 σ를 완전히(관대하게) 0으로, 머리·왼손은 그대로 뒀을 때 낼 수 있는
+    # gap_closure 최댓값. `same`이 실제로 낸 값(자기충족 상한)과 별개로, "교정이
+    # 완벽했다면 얼마나 갈 수 있었는가"를 보여준다.
+    ceiling: float | None
+    # F5(가드 공개용): F 레퍼런스 기준 before 점수(=same의 S0)와, B 레퍼런스 기준
+    # before 점수(=split의 S0). eval_pose_correction.MAX_ELIGIBLE_BEFORE 가드를
+    # 적용했다면 무엇이 걸러졌을지 재현하는 데만 쓴다.
+    before_same_score: float | None
+    before_split_score: float | None
+
+
+def _ceiling_gap_closure(measured: Mapping[str, Any]) -> float | None:
+    """F1: 오른손 σ를 0으로(관대하게), 머리·왼손은 그대로 뒀을 때의 gap_closure 최댓값.
+
+    `apply_measured`가 실제로 옮기는 것은 오른손의 축 하나뿐이지만, 이 상한은 "오른손
+    전체(세 축 다)가 완전히 교정됐다면"이라는, 실제 교정보다 관대한 가정을 쓴다 —
+    그래도 도달 가능한 값이 얼마인지를 보여주려는 것이다. `measured_score.score_track`과
+    같은 가중 평균·`exp(-W²/2)` 공식을 그대로 쓰되, 응답에 이미 실린 `deltas`/`score`만
+    읽는다 — 새 σ를 만들지 않고 `service.py`/`measured_score.py`를 건드리지 않는다.
+    """
+    deltas = measured.get("deltas")
+    before_score = measured.get("score")
+    if not deltas or before_score is None:
+        return None
+    weights = service.measured_score.DEFAULT_WEIGHTS
+    sigmas = {delta["point"]: delta["sigma"] for delta in deltas}
+    total_weight = sum(weights.get(point, 0.0) for point in sigmas)
+    if total_weight <= 0.0:
+        return None
+    weighted_ceiling = sum(
+        weights.get(point, 0.0) * (0.0 if point == "right" else sigma)
+        for point, sigma in sigmas.items()
+    ) / total_weight
+    ceiling_score = math.exp(-0.5 * weighted_ceiling * weighted_ceiling)
+    return service.pose_similarity.gap_closure(before_score, ceiling_score)
+
+
+def _split_details(
+    source: csv_source_module.CsvPassSource,
+    reference_spreads: SpreadReference,
+    query: PassRef,
+    reference: PassRef,
+    measured: Mapping[str, Any],
+) -> dict[str, Any]:
+    """F2/F5: A(교정 선택)와 B(채점) 반쪽 각각의 배선을 `compare()`의 `spreads=` 우회
+    경로로 재현한다 — `service.py`를 고치지 않고, 그 안에 이미 있는 로직만 두 번
+    바깥에서 불러 쓴다.
+
+    `compare()`가 내부에서 `before_a = score_track(query_track, reference_track,
+    _scale_spreads(raw_a), weights, basis)`를 계산하지만 그 값도 발동 여부도 응답에
+    싣지 않는다. 대신 `compare(source, query, reference, spreads=_scale_spreads(raw_a))`를
+    한 번 더 부르면, 그 호출의 최상위 `before`가 정확히 같은 계산(같은 query_track·
+    reference_track·weights·basis·spreads)이 되므로 `measured.finding`이 곧 "A
+    기준으로 교정이 발동했는가"이고 `measured.score`가 곧 그 발동 여부를 결정한 σ의
+    점수다. B도 같은 방식으로 `before_split_score`를 재현한다.
+
+    split_reason이 있으면(계산된 split이 없으면) A/B 반쪽 자체가 없으므로 빈 결과를
+    낸다.
+    """
+    empty: dict[str, Any] = {"a_fired": None, "before_split_score": None}
+    if measured.get("split_reason") is not None:
+        return empty
+    granularity = measured.get("granularity")
+    split_dates_a = measured.get("split_dates_a") or []
+    split_dates_b = measured.get("split_dates_b") or []
+    if not granularity or not split_dates_a or not split_dates_b:
+        return empty
+
+    query_frames = service.pass_frames(source.load(query))
+    query_inputs = service.key_inputs(query_frames)
+    if query_inputs is None:
+        return empty
+    ladder_keys = service._reference_keys(query_inputs)  # noqa: SLF001 — 같은 패키지 안, T4/T5 선례와 같은 근거.
+    resolved_key = ladder_keys.get(granularity)
+    if resolved_key is None:
+        return empty
+
+    raw_a = reference_spreads.spreads_for(granularity, resolved_key, split_dates_a)
+    raw_b = reference_spreads.spreads_for(granularity, resolved_key, split_dates_b)
+
+    a_fired: bool | None = None
+    before_split_score: float | None = None
+    if raw_a is not None:
+        body_a = service.compare(source, query, reference, spreads=service._scale_spreads(raw_a))  # noqa: SLF001
+        if body_a.get("status") == "ok":
+            a_fired = bool(body_a["measured"].get("finding"))
+    if raw_b is not None:
+        body_b = service.compare(source, query, reference, spreads=service._scale_spreads(raw_b))  # noqa: SLF001
+        if body_b.get("status") == "ok":
+            before_split_score = body_b["measured"]["score"]
+    return {"a_fired": a_fired, "before_split_score": before_split_score}
 
 
 def run_pair(
-    source: csv_source_module.CsvPassSource, reference_spreads: SpreadReference, pair: Pair
+    source: csv_source_module.CsvPassSource,
+    reference_spreads: SpreadReference,
+    pair: Pair,
+    compute_extras: bool = True,
 ) -> Outcome:
     if pair.reference is None:
         return Outcome(
-            pair.query, None, pair.key, "no_expert_reference", "no_same_key_expert_pass",
-            None, None, None, None, None, None, None, None, None, None, None,
+            query=pair.query, reference=None, key=pair.key, status="no_expert_reference",
+            reason="no_same_key_expert_pass", same=None, split=None, split_reason=None,
+            granularity=None, reference_n=None, split_n_a=None, split_n_b=None,
+            gate=None, gate_reason=None, normalization=None, fired=None, split_fired=None,
+            ceiling=None, before_same_score=None, before_split_score=None,
         )
     body = service.compare(
         source, pair.query, pair.reference, reference_spreads=reference_spreads
     )
     if body.get("status") != "ok":
         return Outcome(
-            pair.query, pair.reference, pair.key, "unavailable", str(body.get("reason")),
-            None, None, None, None, None, None, None, None, None, None, None,
+            query=pair.query, reference=pair.reference, key=pair.key, status="unavailable",
+            reason=str(body.get("reason")), same=None, split=None, split_reason=None,
+            granularity=None, reference_n=None, split_n_a=None, split_n_b=None,
+            gate=None, gate_reason=None, normalization=None, fired=None, split_fired=None,
+            ceiling=None, before_same_score=None, before_split_score=None,
         )
     measured = body["measured"]
     improvement = measured["improvement"]
     fired = bool(measured.get("finding"))
+    ceiling = _ceiling_gap_closure(measured)
+
+    split_fired: bool | None = None
+    before_split_score: float | None = None
+    if compute_extras:
+        details = _split_details(source, reference_spreads, pair.query, pair.reference, measured)
+        split_fired = details["a_fired"]
+        before_split_score = details["before_split_score"]
+
     return Outcome(
         query=pair.query, reference=pair.reference, key=pair.key, status="ok", reason=None,
         same=improvement.get("same"), split=improvement.get("split"),
@@ -272,7 +456,8 @@ def run_pair(
         reference_n=measured.get("reference_n"), split_n_a=measured.get("split_n_a"),
         split_n_b=measured.get("split_n_b"), gate=measured.get("gate"),
         gate_reason=measured.get("gate_reason"), normalization=measured.get("normalization"),
-        fired=fired,
+        fired=fired, split_fired=split_fired, ceiling=ceiling,
+        before_same_score=measured.get("score"), before_split_score=before_split_score,
     )
 
 
@@ -283,7 +468,8 @@ def run_study(
     seed: int,
     progress: bool = False,
     index_cache: Path | None = None,
-) -> tuple[list[Outcome], str]:
+    compute_extras: bool = True,
+) -> tuple[list[Outcome], str, csv_source_module.CsvPassSource, SpreadReference, list[Pair]]:
     reference_spreads = SpreadReference.load(reference_path)
     expert_worker = reference_spreads.worker
     source, candidates = index_corpus_cached(root, index_cache)
@@ -291,10 +477,38 @@ def run_study(
     selected = select_pairs(candidates, expert_worker, pairs, seed)
     outcomes: list[Outcome] = []
     for index, pair in enumerate(selected):
-        outcomes.append(run_pair(source, reference_spreads, pair))
+        outcomes.append(run_pair(source, reference_spreads, pair, compute_extras=compute_extras))
         if progress and (index + 1) % 20 == 0:
             print(f"  {index + 1}/{len(selected)}", file=sys.stderr, flush=True)
-    return outcomes, expert_worker
+    return outcomes, expert_worker, source, reference_spreads, selected
+
+
+def run_sensitivity(
+    source: csv_source_module.CsvPassSource,
+    reference_spreads: SpreadReference,
+    pairs: Sequence[Pair],
+    factor: float,
+    progress: bool = False,
+) -> list[Outcome]:
+    """F5: `PAIR_SIGMA_FACTOR`를 이 값으로 바꿨다면 어땠을지.
+
+    `service.py` 파일의 상수는 그대로 둔다 — 여기서는 이미 로드된 `service` 모듈
+    객체의 전역 이름만 실행 중에 잠깐 바꾼다. `_scale_spreads`가 그 이름을 호출
+    시점에 전역에서 찾아 쓰므로(닫힘이 아니라) 이 패치가 실제로 적용되고,
+    `finally`에서 원래 값으로 되돌리므로 이 함수가 끝나면 흔적이 남지 않는다. 같은
+    200쌍(같은 `Pair` 목록)을 그대로 재사용한다 — 표집을 다시 하지 않는다.
+    """
+    original = service.PAIR_SIGMA_FACTOR
+    outcomes: list[Outcome] = []
+    try:
+        service.PAIR_SIGMA_FACTOR = factor
+        for index, pair in enumerate(pairs):
+            outcomes.append(run_pair(source, reference_spreads, pair, compute_extras=False))
+            if progress and (index + 1) % 20 == 0:
+                print(f"  [sensitivity] {index + 1}/{len(pairs)}", file=sys.stderr, flush=True)
+    finally:
+        service.PAIR_SIGMA_FACTOR = original
+    return outcomes
 
 
 # --- 집계·보고 ----------------------------------------------------------------
@@ -304,8 +518,57 @@ def _label(value: object) -> str:
     return "none" if value is None else str(value)
 
 
+def _pass_ref_json(ref: PassRef | None) -> dict[str, Any] | None:
+    if ref is None:
+        return None
+    return {
+        "worker": ref.worker, "date": ref.date, "level": ref.level,
+        "session": ref.session, "pass_index": ref.pass_index,
+    }
+
+
+def _outcome_to_json(outcome: Outcome) -> dict[str, Any]:
+    return {
+        "query": _pass_ref_json(outcome.query),
+        "reference": _pass_ref_json(outcome.reference),
+        "key": outcome.key,
+        "status": outcome.status,
+        "reason": outcome.reason,
+        "same": outcome.same,
+        "split": outcome.split,
+        "split_reason": outcome.split_reason,
+        "granularity": outcome.granularity,
+        "reference_n": outcome.reference_n,
+        "split_n_a": outcome.split_n_a,
+        "split_n_b": outcome.split_n_b,
+        "gate": outcome.gate,
+        "gate_reason": outcome.gate_reason,
+        "normalization": outcome.normalization,
+        "fired": outcome.fired,
+        "split_fired": outcome.split_fired,
+        "ceiling": outcome.ceiling,
+        "before_same_score": outcome.before_same_score,
+        "before_split_score": outcome.before_split_score,
+    }
+
+
+def _fire_rate_block(
+    all_ok: Sequence[Outcome], fired: Sequence[Outcome], not_fired: Sequence[Outcome],
+    unknown: Sequence[Outcome], value_of: Any, denom: int,
+) -> dict[str, Any]:
+    return {
+        "fired": len(fired),
+        "not_fired": len(not_fired),
+        "unknown": len(unknown),
+        "share_fired": (len(fired) / denom) if denom else None,
+        "fired_summary": summarize([value_of(o) for o in fired], THRESHOLD),
+        "not_fired_summary": summarize([value_of(o) for o in not_fired], THRESHOLD),
+    }
+
+
 def build_report(
-    outcomes: Sequence[Outcome], pairs: int, seed: int, expert_worker: str, root: Path, reference_path: Path
+    outcomes: Sequence[Outcome], pairs: int, seed: int, expert_worker: str, root: Path, reference_path: Path,
+    include_pairs: bool = True,
 ) -> dict[str, Any]:
     ok = [item for item in outcomes if item.status == "ok"]
     status_counts = Counter(item.status for item in outcomes)
@@ -322,8 +585,25 @@ def build_report(
 
     split_reason_counts = Counter(item.split_reason for item in ok)
 
-    fired = [item for item in ok if item.fired]
-    not_fired = [item for item in ok if item.fired is False]
+    # F2: same은 F(전체 레퍼런스) 기준 발동 여부(`fired`)로, split은 A(교정 선택 반쪽)
+    # 자신의 발동 여부(`split_fired`)로 각자 갈라야 한다 — 두 갈래의 결정이 다를 수
+    # 있다(실제로 이 표본에서도 다르다).
+    same_fired = [item for item in ok if item.fired]
+    same_not_fired = [item for item in ok if item.fired is False]
+    same_unknown = [item for item in ok if item.fired is None]
+
+    split_population = [item for item in ok if item.split is not None]
+    split_fired = [item for item in split_population if item.split_fired]
+    split_not_fired = [item for item in split_population if item.split_fired is False]
+    split_unknown = [item for item in split_population if item.split_fired is None]
+
+    correction_fire_rate = {
+        "same": _fire_rate_block(ok, same_fired, same_not_fired, same_unknown, lambda o: o.same, len(ok)),
+        "split": _fire_rate_block(
+            split_population, split_fired, split_not_fired, split_unknown,
+            lambda o: o.split, len(split_population),
+        ),
+    }
 
     thickness_known = [
         item for item in ok if item.split_n_a is not None and item.split_n_b is not None
@@ -337,7 +617,57 @@ def build_report(
         gate_by_layer[_label(item.granularity)][_label(item.gate)] += 1
     gate_determined = gate_counts.get("pass", 0) + gate_counts.get("fail", 0)
 
-    return {
+    # F1: 상한(오른손 σ 완전 교정, 머리·왼손 그대로). same이 실제로 발동한(fired) 표본
+    # 위에서 보고한다 — "발동했다면 이론상 어디까지 갈 수 있었는가"가 질문이기 때문이다.
+    ceiling = {
+        "all_ok": summarize([item.ceiling for item in ok], THRESHOLD),
+        "same_fired_only": summarize([item.ceiling for item in same_fired], THRESHOLD),
+    }
+
+    # F5: eval_pose_correction.MAX_ELIGIBLE_BEFORE 가드를 적용했다면 split이 어떻게
+    # 바뀌었을지 — 공개용으로만 계산한다. 헤드라인(`split` 키)에는 이 가드를 적용하지
+    # 않는다. eval_pose_correction.py의 `eligible()`은 "before"를 채점에 쓴 것과
+    # 같은 레퍼런스로 잰다 — split의 자기 자신의 분모(1-before_split_score)가 불안정한
+    # 경우를 거르려는 것이 원래 취지이므로, `before_split_score`(B 기준)로 거르는 쪽이
+    # 그 취지에 더 가깝다. 다만 `before_same_score`(F 기준, "같은 패스가 얼마나
+    # 어려운가"의 대체 지표)로 걸러도 같은 방향(70%에 한참 못 미침)이 나오므로, 어느
+    # 쪽으로 재현했는지가 뒤섞이지 않도록 **둘 다** 낸다 — 하나만 골라 싣지 않는다.
+    def _eligible(attr: str) -> list[Outcome]:
+        return [
+            item for item in split_population
+            if getattr(item, attr) is not None and getattr(item, attr) <= MAX_ELIGIBLE_BEFORE
+        ]
+
+    eligible_by_split_before = _eligible("before_split_score")
+    eligible_by_same_before = _eligible("before_same_score")
+    eligibility_guard_disclosure = {
+        "max_eligible_before": MAX_ELIGIBLE_BEFORE,
+        "source": "trainer/scripts/eval_pose_correction.py::MAX_ELIGIBLE_BEFORE",
+        "applied_to_headline": False,
+        "split_population_n": len(split_population),
+        "filtered_by_before_split_score": {
+            "n_with_known_value": sum(
+                1 for item in split_population if item.before_split_score is not None
+            ),
+            "n_excluded_by_guard": sum(
+                1 for item in split_population
+                if item.before_split_score is not None and item.before_split_score > MAX_ELIGIBLE_BEFORE
+            ),
+            "split_with_guard": summarize([item.split for item in eligible_by_split_before], THRESHOLD),
+        },
+        "filtered_by_before_same_score": {
+            "n_with_known_value": sum(
+                1 for item in split_population if item.before_same_score is not None
+            ),
+            "n_excluded_by_guard": sum(
+                1 for item in split_population
+                if item.before_same_score is not None and item.before_same_score > MAX_ELIGIBLE_BEFORE
+            ),
+            "split_with_guard": summarize([item.split for item in eligible_by_same_before], THRESHOLD),
+        },
+    }
+
+    report: dict[str, Any] = {
         "selection_rule": {
             "root": str(root),
             "reference_artifact": str(reference_path),
@@ -348,7 +678,8 @@ def build_report(
                 "질의: 전수 후보(모든 작업자, 우8 키 부착)를 seed로 셔플해 앞 N개를 "
                 "비복원으로 뽑는다. 레퍼런스: 질의와 같은 우8 키를 가진 전형기(레퍼런스 "
                 "아티팩트의 worker) 후보 중 질의 자신을 뺀 나머지에서 rng.choice로 하나. "
-                "후보가 없으면 status=no_expert_reference로 기록하고 버리지 않는다."
+                "후보가 없으면 status=no_expert_reference로 기록하고 버리지 않는다. "
+                "--pairs와 --seed는 결과를 보기 전에 코드에 고정했다."
             ),
         },
         "status_counts": {_label(key): value for key, value in status_counts.items()},
@@ -359,15 +690,8 @@ def build_report(
         "granularity_counts": {_label(key): value for key, value in granularity_counts.items()},
         "per_layer": per_layer,
         "split_reason_counts": {_label(key): value for key, value in split_reason_counts.items()},
-        "correction_fire_rate": {
-            "fired": len(fired),
-            "not_fired": len(not_fired),
-            "share_fired": (len(fired) / len(ok)) if ok else None,
-            "same_fired": summarize([item.same for item in fired], THRESHOLD),
-            "same_not_fired": summarize([item.same for item in not_fired], THRESHOLD),
-            "split_fired": summarize([item.split for item in fired], THRESHOLD),
-            "split_not_fired": summarize([item.split for item in not_fired], THRESHOLD),
-        },
+        "correction_fire_rate": correction_fire_rate,
+        "ceiling": ceiling,
         "half_thickness": {
             "thin_threshold_n_min": THIN_HALF_THRESHOLD,
             "n_with_known_thickness": len(thickness_known),
@@ -383,7 +707,11 @@ def build_report(
             ),
             "by_layer": {layer: dict(counter) for layer, counter in gate_by_layer.items()},
         },
+        "eligibility_guard_disclosure": eligibility_guard_disclosure,
     }
+    if include_pairs:
+        report["pairs"] = [_outcome_to_json(item) for item in outcomes]
+    return report
 
 
 def _fmt(value: float | int | None, digits: int = 3) -> str:
@@ -407,8 +735,17 @@ def render_summary(report: Mapping[str, Any]) -> str:
         )
     lines.append(f"입도별 n: {report['granularity_counts']}")
     lines.append(f"split_reason: {report['split_reason_counts']}")
-    fire = report["correction_fire_rate"]
-    lines.append(f"교정 발동률: {fire['share_fired']} (발동 {fire['fired']} / 미발동 {fire['not_fired']})")
+    for name in ("same", "split"):
+        fire = report["correction_fire_rate"][name]
+        lines.append(
+            f"{name} 발동률: {fire['share_fired']} "
+            f"(발동 {fire['fired']} / 미발동 {fire['not_fired']} / 불명 {fire['unknown']})"
+        )
+    ceiling = report["ceiling"]["same_fired_only"]
+    lines.append(
+        f"F1 상한(발동 표본만): median={_fmt(ceiling['median'])} max={_fmt(ceiling['max'])} "
+        f"≥{THRESHOLD:.0%}={_fmt(ceiling['at_or_above'])}"
+    )
     gate = report["gate"]
     lines.append(f"REQ-19 게이트: {gate['counts']} pass_rate={gate['pass_rate_of_determined']}")
     return "\n".join(lines)
@@ -426,10 +763,18 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--out", type=Path, default=None)
     parser.add_argument(
         "--index-cache", type=Path, default=None,
-        help="전수 색인(패스 구간·모션 키) 결과를 이 경로에 캐시하고 재사용한다. "
-        "표본 규칙을 바꾸지 않는다 — 느린 CSV 파싱만 건너뛴다.",
+        help="전수 색인(패스 구간·모션 키·CSV 트리 지문) 결과를 이 경로에 캐시하고 "
+        "재사용한다. 표본 규칙을 바꾸지 않는다 — 트리가 바뀌면(F4) 자동으로 다시 짓는다.",
     )
     parser.add_argument("--progress", action="store_true")
+    parser.add_argument(
+        "--skip-sensitivity", action="store_true",
+        help="F5 민감도(PAIR_SIGMA_FACTOR=1.0) 재실행을 건너뛴다(빠른 드라이런용).",
+    )
+    parser.add_argument(
+        "--skip-extras", action="store_true",
+        help="F2/F5용 추가 compare() 호출(A/B 반쪽 재현)을 건너뛴다(빠른 드라이런용).",
+    )
     parser.add_argument("--log-level", default="WARNING", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     return parser.parse_args(argv)
 
@@ -444,11 +789,42 @@ def main(argv: Sequence[str] | None = None) -> int:
         logger.error("reference artifact not found: %s", args.reference)
         return 1
 
-    outcomes, expert_worker = run_study(
-        args.root, args.reference, args.pairs, args.seed, args.progress, args.index_cache
+    outcomes, expert_worker, source, reference_spreads, selected = run_study(
+        args.root, args.reference, args.pairs, args.seed, args.progress,
+        args.index_cache, compute_extras=not args.skip_extras,
     )
     report = build_report(outcomes, args.pairs, args.seed, expert_worker, args.root, args.reference)
     print(render_summary(report))
+
+    if not args.skip_sensitivity:
+        if args.progress:
+            print("민감도(PAIR_SIGMA_FACTOR=1.0) 재실행 중...", file=sys.stderr, flush=True)
+        sensitivity_outcomes = run_sensitivity(
+            source, reference_spreads, selected, SENSITIVITY_PAIR_SIGMA_FACTOR, args.progress
+        )
+        sensitivity_report = build_report(
+            sensitivity_outcomes, args.pairs, args.seed, expert_worker, args.root, args.reference,
+            include_pairs=False,
+        )
+        report["sensitivity"] = {
+            "pair_sigma_factor": SENSITIVITY_PAIR_SIGMA_FACTOR,
+            "note": (
+                "service.py 파일의 PAIR_SIGMA_FACTOR(√2)는 바꾸지 않았다 — 실행 중에만 "
+                "모듈 전역을 이 값으로 되돌렸다가 끝나면 원복하고, 같은 200쌍을 다시 "
+                "돌렸다(F5)."
+            ),
+            "status_counts": sensitivity_report["status_counts"],
+            "same": sensitivity_report["same"],
+            "split": sensitivity_report["split"],
+            "correction_fire_rate": sensitivity_report["correction_fire_rate"],
+            "gate": sensitivity_report["gate"],
+        }
+        print(
+            f"[민감도] same≥70%={_fmt(sensitivity_report['same']['at_or_above'])} "
+            f"split≥70%={_fmt(sensitivity_report['split']['at_or_above'])} "
+            f"발동률(same)={sensitivity_report['correction_fire_rate']['same']['share_fired']} "
+            f"게이트={sensitivity_report['gate']['counts']}"
+        )
 
     if args.out is not None:
         args.out.parent.mkdir(parents=True, exist_ok=True)
