@@ -69,23 +69,35 @@ def _axis_values(center: float, std: float, count: int) -> list[float]:
     역산한다 — 평균은 `d`(따라서 std)와 무관하게 항상 `center`다. 표본을 만드는
     쪽에서 평균과 산포를 독립으로 조절할 수 있어야 "산포만 다르고 평균은 같은" A/B
     날짜를 쉽게 만들 수 있다.
+
+    `count < 2`면 분산이 정의되지 않으므로(`spread_stats.summarize`) 간격을 역산하지
+    않고 그냥 `center`를 `count`번 반복한다 — F2(반쪽이 표본 2개 미만인 경우)를 만드는
+    픽스처가 이 경로를 쓴다.
     """
+    if count < 2:
+        return [center] * count
     d = std / math.sqrt((count * count - 1) / 12)
     return [center + d * (i - (count - 1) / 2) for i in range(count)]
 
 
-def _bucket(std_by_date: dict[str, float], per_date: int = 10) -> dict[str, object]:
-    """날짜마다 다른 표준편차를 줄 수 있는 버킷. 세 점(right/head/left) 모두 채운다.
+def _bucket(
+    std_by_date: dict[str, float],
+    per_date: int = 10,
+    count_by_date: dict[str, int] | None = None,
+) -> dict[str, object]:
+    """날짜마다 다른 표준편차·표본 수를 줄 수 있는 버킷. 세 점(right/head/left) 모두 채운다.
 
-    모든 날짜에 같은 std를 주면(`_axis_values`가 결정론이므로) 날짜마다 완전히 같은
-    표본이 나온다 — 그래서 이 버킷의 어느 날짜 부분집합을 골라도 평균·산포가 정확히
-    같다. `test_split_is_not_backfilled_from_same`은 일부러 날짜마다 다른 std를 줘서
-    이 성질이 깨지게 만든다.
+    모든 날짜에 같은 std·표본 수를 주면(`_axis_values`가 결정론이므로) 날짜마다 완전히
+    같은 표본이 나온다 — 그래서 이 버킷의 어느 날짜 부분집합을 골라도 평균·산포가
+    정확히 같다. `test_split_is_not_backfilled_from_same`은 일부러 날짜마다 다른 std를,
+    `test_split_reports_insufficient_samples_for_a_thin_half`는 날짜마다 다른 표본
+    수(`count_by_date`)를 줘서 이 성질이 깨지게 만든다.
     """
+    counts_for = count_by_date or {date: per_date for date in std_by_date}
     dates = sorted(std_by_date)
     per_date_axes = {
         date: {
-            axis: _axis_values(center, std_by_date[date], per_date)
+            axis: _axis_values(center, std_by_date[date], counts_for[date])
             for axis, center in _AXIS_CENTERS.items()
         }
         for date in dates
@@ -110,10 +122,10 @@ def _bucket(std_by_date: dict[str, float], per_date: int = 10) -> dict[str, obje
                 merged.extend(per_date_axes[date][axis])
             counts.append(len(merged))
             points_out[point][axis] = {
-                "mean": sum(merged) / len(merged),
+                "mean": sum(merged) / len(merged) if merged else 0.0,
                 "spread": spread_stats.summarize(spread_stats.accumulate(merged))[1],
             }
-    return {"n": max(counts), "dates": dates, "by_date": by_date, "points": points_out}
+    return {"n": max(counts) if counts else 0, "dates": dates, "by_date": by_date, "points": points_out}
 
 
 def _payload_from_bucket(worker: str, key8: str, key_off: str, bucket: dict[str, object]) -> dict[str, object]:
@@ -257,6 +269,68 @@ def test_query_own_date_is_excluded_from_the_reference() -> None:
     assert _QUERY_DATE not in body["measured"]["reference_dates"]
 
 
+# --- F1: split의 A/B 반쪽도 질의 날짜를 빼야 한다 --------------------------------
+#
+# `resolve()`는 exclude_dates를 받지만 `split_dates()`/`spreads_for()`는 Task 4의
+# 확정된 계약상 그 인자가 없다. 그래서 필터는 배선 지점(`compare()`)에서 건다 — 브리핑은
+# `split_dates(granularity, key)`를 인자 없이 쓰라고 문자 그대로 적었지만, 조정자가
+# 그 문구를 이 회차에서 오버라이드했다.
+
+
+def test_query_own_date_is_excluded_from_the_split_halves_too() -> None:
+    """레퍼런스 워커가 질의 자신이면 그 날짜가 F(reference_dates)에서만이 아니라
+    split의 A/B 어느 쪽에서도 빠져야 한다. 빠지지 않으면 `reference_dates`가 말하는
+    날짜와 실제로 split을 만든 날짜가 갈라진다 — "출처가 아닌 값에 붙은 이름표"다.
+    """
+    body = _compare_expert_against_own_reference()
+    measured = body["measured"]
+    assert _QUERY_DATE not in measured["split_dates_a"]
+    assert _QUERY_DATE not in measured["split_dates_b"]
+    # 5개 날짜(0901~0905) 중 하나(질의 자신)를 뺀 나머지가 A/B로 갈리므로, 이 픽스처는
+    # split이 실제로 계산되는 경우다 — 필터링이 조용히 아무것도 안 하는 케이스가 아니다.
+    assert measured["split_reason"] is None
+    assert measured["improvement"]["split"] is not None
+    assert measured["split_n_a"] is not None and measured["split_n_a"] >= 2
+    assert measured["split_n_b"] is not None and measured["split_n_b"] >= 2
+
+
+# --- F2: 반쪽이 표본 2개 미만이면 보고하되 게이트하지 않는다 ------------------------
+
+
+def test_split_reports_insufficient_samples_for_a_thin_half() -> None:
+    """`N_MIN`(20)은 resolve()가 쓰는 사전등록 문턱이지 반쪽의 문턱이 아니다 — F2 판정.
+    유일한 문턱은 수학적 필요조건(표본 2개 미만이면 분산이 정의되지 않는다)이다.
+
+    A(0901/0903)에 표본 1개짜리 날짜를 몰아넣고 질의 자신이 0901이면, 제외 후 A에는
+    0903(표본 1개)만 남는다 — 분산이 없다. B(0902/0904)는 표본이 넉넉해 정상이다.
+    F(전체 31표본, 0901 제외)는 `N_MIN`을 넉넉히 넘으므로 normalization은 여전히
+    measured다 — 반쪽이 얇다고 전체 측정 자체가 잠정으로 떨어지지 않는다.
+    """
+    dates = ["20250901", "20250902", "20250903", "20250904"]
+    std_by_date = {date: _UNIFORM_STD for date in dates}
+    count_by_date = {"20250901": 1, "20250902": 15, "20250903": 1, "20250904": 15}
+    keys = _keys_for(_EXPERT_QUERY)
+    reference_spreads = SpreadReference(
+        _payload_from_bucket(
+            _EXPERT_WORKER, keys["uv8"], keys["uv_off"],
+            _bucket(std_by_date, count_by_date=count_by_date),
+        )
+    )
+    body = service.compare(
+        FakeSource(), PassRef(**_EXPERT_QUERY), PassRef(**REFERENCE),
+        reference_spreads=reference_spreads,
+    )
+    measured = body["measured"]
+    assert measured["normalization"] == "measured"
+    assert measured["improvement"]["split"] is None
+    assert measured["split_reason"] == "insufficient_samples"
+    # 반쪽은 버려지지 않고 실제로 걸러진 날짜·표본 수를 그대로 낸다.
+    assert measured["split_dates_a"] == ["20250903"]
+    assert measured["split_n_a"] == 1
+    assert measured["split_dates_b"] == ["20250902", "20250904"]
+    assert measured["split_n_b"] == 30
+
+
 def test_without_a_reference_it_stays_provisional() -> None:
     body = _compare_without_reference()
     assert body["measured"]["normalization"] == "provisional"
@@ -332,3 +406,123 @@ def test_create_app_without_the_env_var_stays_provisional(monkeypatch) -> None:
     response = client.post("/api/compare", json={"query": _QUERY, "reference": REFERENCE})
     body = response.json()
     assert body["measured"]["normalization"] == "provisional"
+
+
+# --- F3: axis_sigmas가 응답에 실린다 -----------------------------------------------
+
+
+def test_deltas_carry_per_axis_sigma_consistent_with_the_combined_sigma() -> None:
+    """Task 6은 점당 막대 옆에 축별(wall/vertical/lateral) σ가 필요하다.
+    `measured_score.PointDelta.axis_sigmas`는 이미 계산돼 있었지만 응답에 실리지
+    않았다. 세 축 이름이 모두 있는지, 그리고 결합 σ가 그 세 값을 실제로 어떻게
+    합치는지(제곱합의 제곱근, `MAX_SIGMA`에서 클립)까지 확인한다 — 근사가 아니라
+    `measured_score.score_track`이 실제로 쓰는 식 그대로다.
+    """
+    body = _compare_with_reference()
+    axis_order = set(service.measured_score.AXIS_ORDER)
+    deltas = body["measured"]["deltas"]
+    assert deltas
+    for delta in deltas:
+        axis_sigmas = delta["axis_sigmas"]
+        assert set(axis_sigmas) == axis_order
+        combined = math.sqrt(sum(value * value for value in axis_sigmas.values()))
+        expected = min(service.measured_score.MAX_SIGMA, combined)
+        assert math.isclose(delta["sigma"], expected, rel_tol=1e-9, abs_tol=1e-9)
+
+
+# --- F4: 경로는 있는데 파일이 없으면 조용히 넘어가지 않는다 ------------------------
+
+
+def test_missing_artifact_path_logs_a_warning_naming_the_path(tmp_path, monkeypatch, caplog) -> None:
+    missing = tmp_path / "does_not_exist.json"
+    monkeypatch.setenv(SPREAD_REFERENCE_ENV, str(missing))
+    import logging as _logging
+
+    with caplog.at_level(_logging.WARNING):
+        client = TestClient(create_app(source=FakeSource()))
+        response = client.post("/api/compare", json={"query": _QUERY, "reference": REFERENCE})
+    assert response.json()["measured"]["normalization"] == "provisional"
+    assert any(str(missing) in record.message for record in caplog.records)
+
+
+def test_unreadable_artifact_path_logs_a_warning_naming_the_path(tmp_path, monkeypatch, caplog) -> None:
+    """파일이 있어도 JSON이 아니면(깨진 아티팩트) 폴백은 유지하되 조용히 넘어가지 않는다."""
+    broken = tmp_path / "spread_reference.json"
+    broken.write_text("이건 JSON이 아니다", encoding="utf-8")
+    monkeypatch.setenv(SPREAD_REFERENCE_ENV, str(broken))
+    import logging as _logging
+
+    with caplog.at_level(_logging.WARNING):
+        client = TestClient(create_app(source=FakeSource()))
+        response = client.post("/api/compare", json={"query": _QUERY, "reference": REFERENCE})
+    assert response.json()["measured"]["normalization"] == "provisional"
+    assert any(str(broken) in record.message for record in caplog.records)
+
+
+# --- 정리: split_reason이 normalization과 모순되지 않는다 --------------------------
+
+
+def test_split_reason_does_not_contradict_a_measured_normalization() -> None:
+    """호출자가 `spreads=`를 직접 넘기면 normalization은 measured지만 날짜별 구조가
+    없어 split은 여전히 못 낸다. 그 사유가 gate_reason이 쓰는
+    "no_reference_distribution"(=측정이 아니다)이면 같은 응답 안에서 "측정이다"와
+    "측정이 아니다"가 동시에 적히는 모순이 생긴다.
+    """
+    body = service.compare(
+        FakeSource(), PassRef(**_QUERY), PassRef(**REFERENCE),
+        spreads=service.measured_score.uniform_spreads(0.06),
+    )
+    measured = body["measured"]
+    assert measured["normalization"] == "measured"
+    assert measured["improvement"]["split"] is None
+    assert measured["split_reason"] != "no_reference_distribution"
+    assert measured["split_reason"] == "no_split_reference"
+
+
+# --- 정리: _reference_keys와 build_from_root의 키-굽기가 갈라지면 시끄럽게 -----------
+
+
+@pytest.fixture
+def _keybake_root(tmp_path):
+    from trainer.pose_lab.tests.test_csv_source import _session_rows, _write
+
+    nested = tmp_path / "전형기" / "전형기_20250901" / "전형기_20250901(Sequences)"
+    _write(nested / "10_1000451_1.csv", _session_rows(shift=0.3))
+    return tmp_path
+
+
+def test_reference_keys_matches_build_from_root_for_the_same_pass(_keybake_root) -> None:
+    """`service._reference_keys`와 `build_spread_reference.build_from_root`는 같은
+    사다리(우8/우4/우2/우off) 키를 만드는 루프를 따로 갖고 있다(중복 제거는 이번
+    범위가 아니다). 둘이 갈라지면 `resolve()`가 조용히 `None`을 내고 응답은
+    `provisional`로 떨어진다 — 화면은 계속 뜨고 라벨만 조용히 틀려지는, 가장 나쁜
+    실패다. 실제 CSV 트리에서 만든 아티팩트가 굽는 키 집합과 `_reference_keys`가
+    같은 패스에 대해 내는 키를 직접 맞대본다.
+    """
+    from trainer.pose_lab import csv_source
+
+    payload = service.build_spread_reference.build_from_root(_keybake_root, "전형기", ["10"])
+    granularities = payload["granularities"]
+
+    source = csv_source.CsvPassSource(_keybake_root)
+    session = next(item for item in source.sessions() if item.worker == "전형기")
+    entries = source.index_of(session)
+    inputs = None
+    for entry in entries:
+        ref = PassRef(
+            worker=session.worker, date=session.date, level=session.level,
+            session=session.session, pass_index=entry.pass_index,
+        )
+        frames = service.pass_frames(source.load(ref))
+        candidate = service.key_inputs(frames)
+        if candidate is not None:
+            inputs = candidate
+            break
+    assert inputs is not None, "빌드가 잰 세션에는 최소 하나의 유효한 패스가 있어야 한다"
+
+    keys = service._reference_keys(inputs)
+    for layer in ("uv8", "uv4", "uv2", "uv_off"):
+        assert keys[layer] in granularities[layer], (
+            f"{layer}: _reference_keys가 낸 {keys[layer]!r}가 build_from_root가 구운 "
+            f"키 집합 {sorted(granularities[layer])!r}에 없다 — 두 키-굽기 루프가 갈라졌다"
+        )

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib
+import logging
 import os
 from pathlib import Path
 from typing import Any, Final
@@ -13,6 +14,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
 from trainer.pose_lab import service
+
+logger = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -82,16 +85,32 @@ def _reference_spreads_from_env() -> Any | None:
 
     `create_app()`을 인자 없이 부르는 테스트는 이 환경변수가 없으므로 지금까지처럼
     잠정 산포로 돈다.
+
+    경로가 **설정됐는데** 파일이 없거나 못 읽으면(오타난 경로, 지워진 아티팩트 등)
+    잠정 산포로 조용히 떨어뜨리지 않는다 — 그러면 오타난 경로와 환경변수를 아예 안
+    준 것이 로그만 봐서는 구별되지 않는다. 폴백 동작 자체는 바꾸지 않는다(계속
+    `None`을 낸다) — 여기서 예외를 던지기 시작하지는 않는다.
     """
     path_str = os.environ.get(SPREAD_REFERENCE_ENV, "").strip()
     if not path_str:
         return None
     path = Path(path_str)
     if not path.is_file():
+        logger.warning(
+            "%s=%s가 설정됐지만 파일이 없다 — 잠정 산포(provisional)로 돈다.",
+            SPREAD_REFERENCE_ENV, path,
+        )
         return None
     from trainer.pose_lab.spread_reference import SpreadReference
 
-    return SpreadReference.load(path)
+    try:
+        return SpreadReference.load(path)
+    except (OSError, ValueError) as exc:
+        logger.warning(
+            "%s=%s를 읽지 못했다(%s) — 잠정 산포(provisional)로 돈다.",
+            SPREAD_REFERENCE_ENV, path, exc,
+        )
+        return None
 
 
 def create_app(source: Any | None = None) -> FastAPI:

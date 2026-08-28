@@ -276,6 +276,36 @@ def _scale_spreads(
     }
 
 
+def _half_sample_count(
+    reference_spreads: SpreadReference, granularity: str, key: str, dates: Sequence[str]
+) -> int:
+    """분리 채점의 A/B 반쪽이 실제로 몇 표본으로 서 있는지.
+
+    `SpreadReference.spreads_for`는 σ만 내고 표본 수는 버린다 — Task 4는 리뷰를 마치고
+    닫혔으므로 `spread_reference.py`의 시그니처는 여기서 건드리지 않는다. 대신 같은
+    원시 버킷(`_bucket`)을 직접 읽어 `resolve()`/`_merge_dates`가 쓰는 것과 같은 규칙
+    (점·축 조합별로 날짜를 걸쳐 합산한 뒤 그 최댓값)으로 n을 다시 센다. `SpreadReference`
+    바깥에서 `_bucket`(비공개 이름)을 부르는 것은 계약 위반이 아니라, 그 계약이 표본
+    수를 내주지 않기 때문에 같은 패키지 안에서 원시 구조를 다시 읽는 것이다.
+    """
+    bucket = reference_spreads._bucket(granularity, key)  # noqa: SLF001
+    if bucket is None:
+        return 0
+    by_date = bucket.get("by_date")
+    if not isinstance(by_date, Mapping):
+        return 0
+    totals: dict[tuple[str, str], int] = {}
+    for date in dates:
+        day = by_date.get(date)
+        if not isinstance(day, Mapping):
+            continue
+        for point, axes in day.items():
+            for axis, raw in axes.items():
+                key_pa = (point, axis)
+                totals[key_pa] = totals.get(key_pa, 0) + int(raw.get("n", 0))
+    return max(totals.values()) if totals else 0
+
+
 def compare(
     source: PassSource,
     query: PassRef,
@@ -344,9 +374,15 @@ def compare(
     #
     # 질의가 전형기 자신이면(같은 worker) 그 날짜를 레퍼런스에서 뺀다 — 자기가 자기
     # 평균에 가까운 것은 당연하다(설계 D3).
-    assert query_inputs is not None  # query_key가 not None이므로 이 값도 not None이다.
+    if query_inputs is None:
+        # query_key가 not None으로 이미 확인됐으므로(위 두 조기 반환 중 하나로
+        # 빠지지 않았다면) 여기 오지 않는다 — `key_from`이 `query_inputs`가 있어야만
+        # `query_key`를 만들기 때문이다. `assert`는 `python -O`에서 벗겨져 나가므로
+        # 실제 제어 흐름으로 막는다.
+        raise RuntimeError("unreachable: query_key가 not None이면 query_inputs도 not None이다")
     measured_spreads = spreads is not None
     resolved: Resolved | None = None
+    exclude_dates: list[str] = []
     if spreads is not None:
         spreads_used = spreads
     elif reference_spreads is not None:
@@ -375,37 +411,74 @@ def compare(
     # 뽑는다. 채점(전·후 둘 다)은 B 하나로만 한다 — S0를 F로, S1을 B로 재면 잣대를
     # 바꾼 것만으로 gap_closure가 흔들린다(`improvement` 독스트링). B로 두 번 재면
     # 두 점수 사이에서 움직이는 것이 교정 적용 여부뿐이 된다.
+    #
+    # `normalization`이 "measured"인 것과 split을 낼 수 있는 것은 다른 질문이다 —
+    # 호출자가 `spreads=`를 직접 넘긴 경로는 measured지만 날짜별 구조가 아예 없다.
+    # 그래서 이 기본 사유는 gate_reason이 쓰는 "no_reference_distribution"(=측정이
+    # 아니다)과 다른 이름을 쓴다 — 그 문구를 여기서도 쓰면 normalization="measured"인
+    # 응답이 "측정이 아니다"라고 말하는 모순이 생긴다.
     before_split_score: float | None = None
     after_split_score: float | None = None
-    split_reason: str | None = "no_reference_distribution"
-    if resolved is not None and reference_spreads is not None:
-        split = reference_spreads.split_dates(resolved.granularity, resolved.key)
-        if split is None:
+    split_reason: str | None = "no_split_reference"
+    split_dates_a: list[str] = []
+    split_dates_b: list[str] = []
+    split_n_a: int | None = None
+    split_n_b: int | None = None
+    if resolved is not None:
+        halves = reference_spreads.split_dates(resolved.granularity, resolved.key)
+        if halves is None:
             split_reason = "insufficient_dates"
         else:
-            dates_a, dates_b = split
-            raw_a = reference_spreads.spreads_for(resolved.granularity, resolved.key, dates_a)
-            raw_b = reference_spreads.spreads_for(resolved.granularity, resolved.key, dates_b)
-            if raw_a is None or raw_b is None:
-                split_reason = "insufficient_dates"
+            # `split_dates`/`spreads_for`는 Task 4의 확정된 계약이라 질의 날짜를
+            # 모른다 — 그래서 `resolve()`에 준 것과 같은 `exclude_dates`를 여기서도
+            # 적용한다. 안 그러면 질의가 전형기 자신일 때 그 날짜가 A/B 양쪽에 새고,
+            # 응답의 `reference_dates`(F, 이미 제외됨)와 실제로 split을 만든 날짜가
+            # 서로 다른 걸 가리키게 된다 — "출처가 아닌 값에 붙은 이름표" 결함이다.
+            split_dates_a = [date for date in halves[0] if date not in exclude_dates]
+            split_dates_b = [date for date in halves[1] if date not in exclude_dates]
+            split_n_a = _half_sample_count(
+                reference_spreads, resolved.granularity, resolved.key, split_dates_a
+            )
+            split_n_b = _half_sample_count(
+                reference_spreads, resolved.granularity, resolved.key, split_dates_b
+            )
+            if split_n_a < 2 or split_n_b < 2:
+                # `N_MIN`(20)은 resolve()가 쓰는, 이전 연구에서 사전등록한 문턱이지
+                # 반쪽의 문턱이 아니다. 지금 데이터를 보고 나서 반쪽 전용 문턱을 새로
+                # 만들면 이 계획 전체가 막으려는 사후 튜닝이 되고, split을 가장 두꺼운
+                # 버킷에서만 나오게 편향시켜 Task 7의 숫자를 위로 왜곡한다. 유일한
+                # 문턱은 수학적 필요조건이다 — 표본이 2개 미만이면 분산 자체가
+                # 정의되지 않는다(`spread_stats.summarize`). 얇은 반쪽은 버리지 않고
+                # `split_n_a`/`split_n_b`로 그대로 보고해, Task 7이 두께로 계층화할
+                # 수 있게 한다.
+                split_reason = "insufficient_samples"
             else:
-                spreads_b = _scale_spreads(raw_b)
-                # A는 교정 후보(deltas)를 고르는 데만 쓴다 — 채점에는 쓰지 않는다.
-                before_a = measured_score.score_track(
-                    query_track, reference_track, _scale_spreads(raw_a), weights, basis
+                raw_a = reference_spreads.spreads_for(
+                    resolved.granularity, resolved.key, split_dates_a
                 )
-                fixed_a = measured_score.apply_measured(query_track, before_a.deltas, basis)
-                # B가 교정 전·후를 둘 다 잰다(`eval_pose_correction.measure_correction`과
-                # 같은 패턴: A로 고르고 B로 앞뒤를 다 잰다).
-                before_split = measured_score.score_track(
-                    query_track, reference_track, spreads_b, weights, basis
+                raw_b = reference_spreads.spreads_for(
+                    resolved.granularity, resolved.key, split_dates_b
                 )
-                after_split = measured_score.score_track(
-                    fixed_a, reference_track, spreads_b, weights, basis
-                )
-                before_split_score = before_split.score
-                after_split_score = after_split.score
-                split_reason = None
+                if raw_a is None or raw_b is None:
+                    split_reason = "insufficient_dates"
+                else:
+                    spreads_b = _scale_spreads(raw_b)
+                    # A는 교정 후보(deltas)를 고르는 데만 쓴다 — 채점에는 쓰지 않는다.
+                    before_a = measured_score.score_track(
+                        query_track, reference_track, _scale_spreads(raw_a), weights, basis
+                    )
+                    fixed_a = measured_score.apply_measured(query_track, before_a.deltas, basis)
+                    # B가 교정 전·후를 둘 다 잰다(`eval_pose_correction.measure_correction`과
+                    # 같은 패턴: A로 고르고 B로 앞뒤를 다 잰다).
+                    before_split = measured_score.score_track(
+                        query_track, reference_track, spreads_b, weights, basis
+                    )
+                    after_split = measured_score.score_track(
+                        fixed_a, reference_track, spreads_b, weights, basis
+                    )
+                    before_split_score = before_split.score
+                    after_split_score = after_split.score
+                    split_reason = None
 
     return {
         "status": "ok",
@@ -437,6 +510,10 @@ def compare(
                     "delta": list(delta.local_delta),
                     # 왼손은 프레임 단위로 빠지므로 점마다 받친 격자점 수가 다르다.
                     "samples": delta.samples,
+                    # 축별(wall/vertical/lateral) σ. 화면 막대 옆에 붙일 근거다 —
+                    # `delta.sigma`는 이 셋을 직교로 합친(제곱합 후 MAX_SIGMA에서
+                    # 클립한) 값이라 축 하나가 왜 이상한지는 이 필드 없이는 안 보인다.
+                    "axis_sigmas": dict(delta.axis_sigmas),
                 }
                 for delta in before.deltas
             ],
@@ -461,10 +538,20 @@ def compare(
             "improvement": improvement(
                 before.score, after_split_score, after.score, before_split_score
             ),
-            # split이 None이면 왜인지 말한다 — 레퍼런스가 아예 없거나(D3/D4 이전과
-            # 같은 잠정 상태), 있어도 날짜가 모자라 A/B로 못 가른 것이다. 값이 실려
-            # 있으면(None) 지어낼 사유가 없다는 뜻이다.
+            # split이 None이면 왜인지 말한다 — 레퍼런스 객체가 아예 없거나(D3/D4 이전과
+            # 같은 잠정/직접-spreads 상태, "no_split_reference"), 있어도 날짜가 모자라
+            # A/B로 못 가르거나("insufficient_dates"), 갈랐는데 어느 한쪽이 표본 2개
+            # 미만이거나("insufficient_samples")다. split 값이 있으면(None이 아니면)
+            # 사유도 None이다 — 지어낼 이유가 없다.
             "split_reason": split_reason,
+            # A/B가 실제로 어떤 날짜·표본 수로 섰는지. `reference_dates`(F)와 다른
+            # 것을 나타낸다는 점이 중요하다 — 여기 실리지 않으면 `reference_dates`가
+            # split의 출처인 것처럼 잘못 읽힌다. n<2로 계산을 안 한 반쪽도 실제로 걸러진
+            # 날짜/표본 수를 그대로 낸다(위 F2 사유 참고) — 만들어내지도, 숨기지도 않는다.
+            "split_dates_a": split_dates_a,
+            "split_dates_b": split_dates_b,
+            "split_n_a": split_n_a,
+            "split_n_b": split_n_b,
             # 게이트의 뜻은 "각도 지시가 이제 정당하다"다. 잰 분포가 없으면 판정을
             # 만들지 않는다. 임계 논리(`gate_verdict`)는 그대로 두고 입력이 없다는
             # 사실만 낸다.
