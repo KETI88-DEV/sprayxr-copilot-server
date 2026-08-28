@@ -204,3 +204,19 @@ def test_gate_is_judged_once_measured_spreads_arrive() -> None:
     assert measured["gate"] == "pass"
     assert measured["gate_reason"] is None
     assert measured["normalization"] == "measured"
+
+
+def test_response_discloses_the_assumed_yaw() -> None:
+    """동작 키의 ②④는 몸 기준 이름을 달고 있지만 요를 0으로 고정해 만든 값이다.
+
+    실측 요 추출은 별개 작업이다. 그때까지는 응답이 그 가정을 말해야 한다.
+    """
+    client = TestClient(create_app(source=FakeSource()))
+    body = client.post("/api/compare", json={"query": QUERY, "reference": REFERENCE}).json()
+    assert body["yaw_assumed"] == 0.0
+
+    mismatched = TestClient(create_app(source=FakeSource(mismatch=True)))
+    unavailable = mismatched.post(
+        "/api/compare", json={"query": QUERY, "reference": REFERENCE}
+    ).json()
+    assert unavailable["yaw_assumed"] == 0.0

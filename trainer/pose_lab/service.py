@@ -34,6 +34,11 @@ DEFAULT_ERROR_M: Final = 0.144
 # 유효화는 설계 §10에서 미판정이고 D4는 게이트를 옮기지 말라고 못박는다.
 PROVISIONAL_SPREADS: Final[dict[str, float]] = {"right": 0.05, "head": 0.05, "left": 0.05}
 
+# 작업자 요를 아직 실측에서 뽑지 않는다. 그래서 동작 키의 ②진행 방향과 ④몸 기준 착탄
+# 위치는 몸 기준 이름을 달고 있지만 실제로는 월드 기준 방위각이다. 실측 요 추출은 별개
+# 작업이므로 여기서는 값을 응답에 실어 그 사실을 드러낸다.
+ASSUMED_YAW: Final = 0.0
+
 JOINT_AXIS_NOTE: Final = (
     "관절 20개는 3점 추적에서 IK로 푼 값이다. 각도 지시는 REQ-19 통과 전까지 내지 않는다."
 )
@@ -91,7 +96,11 @@ def _pass_frames(raw: RawPass, samples: int) -> list[Any]:
 
 
 def _key_for(frames: Sequence[Any], params: Any) -> str | None:
-    """작업자 요는 아직 실측에서 뽑지 않는다. 지금은 0으로 두고 화면에서 판정한다."""
+    """작업자 요는 아직 실측에서 뽑지 않는다. 지금은 0으로 두고 화면에서 판정한다.
+
+    이 가정은 응답의 `yaw_assumed`로 나가고 화면이 동작 키 옆에 적는다. 몸 기준
+    이름을 단 축이 사실은 월드 기준이라는 것을 읽는 사람이 알아야 한다.
+    """
     if len(frames) < 2:
         return None
     first, last = frames[0], frames[-1]
@@ -105,7 +114,7 @@ def _key_for(frames: Sequence[Any], params: Any) -> str | None:
     middle = frames[len(frames) // 2]
     return motion_key.motion_key(
         displacement=displacement,
-        yaw=0.0,
+        yaw=ASSUMED_YAW,
         head=middle.head,
         hit=middle.hit or first.hit,
         uv=middle.uv,
@@ -180,6 +189,7 @@ def compare(
             "reason": "insufficient_frames",
             "query_key": query_key,
             "reference_key": reference_key,
+            "yaw_assumed": ASSUMED_YAW,
         }
     if query_key != reference_key:
         return {
@@ -187,6 +197,7 @@ def compare(
             "reason": "motion_key_mismatch",
             "query_key": query_key,
             "reference_key": reference_key,
+            "yaw_assumed": ASSUMED_YAW,
         }
 
     query_track = _local_tracks(query_frames)
@@ -199,6 +210,8 @@ def compare(
         "status": "ok",
         "query_key": query_key,
         "reference_key": reference_key,
+        # 몸 기준 축(②④)은 이 요 가정 위에 서 있다. 실측 요가 아니다.
+        "yaw_assumed": ASSUMED_YAW,
         "samples": before.samples,
         "measured": {
             "basis": "tracked",

@@ -83,8 +83,13 @@ async function run() {
   });
   const payload = await response.json();
 
+  // 몸 기준 축(진행 방향·몸 기준 착탄 위치)은 요 가정 위에 서 있다. 실측 요가 아니다.
+  const yaw =
+    typeof payload.yaw_assumed === "number"
+      ? `  — 몸 기준 축은 정면 고정(yaw=${payload.yaw_assumed}) 가정`
+      : "";
   $("keys").textContent =
-    `질의 ${payload.query_key ?? "-"} / 레퍼런스 ${payload.reference_key ?? "-"}`;
+    `질의 ${payload.query_key ?? "-"} / 레퍼런스 ${payload.reference_key ?? "-"}${yaw}`;
 
   if (payload.status !== "ok") {
     $("keys").textContent += "  — 동작 키가 달라 비교하지 않습니다";
