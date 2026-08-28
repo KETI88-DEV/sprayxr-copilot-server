@@ -32,7 +32,9 @@ function renderAxis(root, payload) {
   for (const delta of payload.deltas ?? []) {
     const item = document.createElement("li");
     const width = Math.min(100, (delta.sigma / 6) * 100);
-    item.innerHTML = `<span>${delta.point}</span>
+    // 표본 수를 함께 적는다. 왼손은 프레임 단위로 빠지므로 더 적은 격자점 위에 선다.
+    const backing = typeof delta.samples === "number" ? ` (n=${delta.samples})` : "";
+    item.innerHTML = `<span>${delta.point}${backing}</span>
       <span class="track" style="background:${severityColor(delta.sigma)};width:${width}%"></span>
       <span>${delta.sigma.toFixed(2)}σ</span>`;
     bars.append(item);

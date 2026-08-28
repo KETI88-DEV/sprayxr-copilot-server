@@ -105,8 +105,13 @@ def _key_for(frames: Sequence[Any], params: Any) -> str | None:
     )
 
 
-def _local_tracks(frames: Sequence[Any]) -> dict[str, list[Vec3]]:
-    tracks: dict[str, list[Vec3]] = {"right": [], "head": [], "left": []}
+def _local_tracks(frames: Sequence[Any]) -> dict[str, list[Vec3 | None]]:
+    """격자점마다 스트로크 프레임 좌표. 왼손이 없는 격자점은 자리를 남기고 None이다.
+
+    자리를 지우면 리스트가 짧아져 두 패스의 s 대응이 한 칸씩 밀린다. 왼손만 프레임
+    단위로 빠지는 설계 §5.4의 마스킹이 다른 두 점의 대응까지 망가뜨리게 된다.
+    """
+    tracks: dict[str, list[Vec3 | None]] = {"right": [], "head": [], "left": []}
     for index, frame in enumerate(frames):
         if frame.hit is None:
             continue
@@ -122,8 +127,9 @@ def _local_tracks(frames: Sequence[Any]) -> dict[str, list[Vec3]]:
         basis = stroke_frame.stroke_basis(frame.hit, tangent, frame.right)
         tracks["right"].append(stroke_frame.to_local(basis, frame.right))
         tracks["head"].append(stroke_frame.to_local(basis, frame.head))
-        if frame.left is not None:
-            tracks["left"].append(stroke_frame.to_local(basis, frame.left))
+        tracks["left"].append(
+            None if frame.left is None else stroke_frame.to_local(basis, frame.left)
+        )
     return tracks
 
 
@@ -174,6 +180,8 @@ def compare(
                     "point": delta.point,
                     "sigma": delta.sigma,
                     "delta": list(delta.local_delta),
+                    # 왼손은 프레임 단위로 빠지므로 점마다 받친 격자점 수가 다르다.
+                    "samples": delta.samples,
                 }
                 for delta in before.deltas
             ],

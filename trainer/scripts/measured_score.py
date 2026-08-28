@@ -19,6 +19,8 @@ from dataclasses import dataclass
 from typing import Final, Mapping, Sequence
 
 Vec3 = tuple[float, float, float]
+# 왼손은 프레임 단위로 빠질 수 있다(설계 §5.4). 자리는 남기고 값만 None이다.
+Track = Sequence[Vec3 | None]
 
 DEFAULT_WEIGHTS: Final[dict[str, float]] = {"right": 1.0, "head": 0.4, "left": 0.15}
 POINT_LABELS: Final[dict[str, str]] = {"right": "오른손", "head": "머리", "left": "왼손"}
@@ -33,11 +35,16 @@ MIN_CORRECTION_CM: Final = 1.0
 
 @dataclass(frozen=True, slots=True)
 class PointDelta:
-    """한 점의 이탈. local_delta는 질의에서 레퍼런스로 가는 스트로크 프레임 벡터다."""
+    """한 점의 이탈. local_delta는 질의에서 레퍼런스로 가는 스트로크 프레임 벡터다.
+
+    samples는 이 점을 실제로 받친 격자점 수다. 왼손은 프레임 단위로 빠지므로 다른
+    점보다 적은 표본 위에 서 있을 수 있고, 그 사실이 화면에 보여야 한다.
+    """
 
     point: str
     sigma: float
     local_delta: Vec3
+    samples: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,23 +64,28 @@ def _mean(points: Sequence[Vec3]) -> Vec3:
 
 
 def score_track(
-    query: Mapping[str, list[Vec3]],
-    reference: Mapping[str, list[Vec3]],
+    query: Mapping[str, Track],
+    reference: Mapping[str, Track],
     spreads: Mapping[str, float],
     weights: Mapping[str, float],
 ) -> MeasuredResult:
-    """정렬 격자 위 세 점의 가중 유사도. 못 잰 점은 0점이 아니라 제외다."""
+    """정렬 격자 위 세 점의 가중 유사도. 못 잰 점은 0점이 아니라 제외다.
+
+    격자점 하나가 비어도(왼손 마스킹) 그 점만 빼고 나머지 격자점으로 잰다. 자리를
+    없애지 않고 None으로 두는 이유는 두 패스의 같은 s가 계속 마주 보게 하기 위함이다.
+    """
     deltas: list[PointDelta] = []
     samples = 0
     for name in POINT_ORDER:
         left = query.get(name) or []
         right = reference.get(name) or []
-        if not left or not right:
+        pairs = [
+            (q, r) for q, r in zip(left, right) if q is not None and r is not None
+        ]
+        if not pairs:
             continue
-        samples = max(samples, min(len(left), len(right)))
-        mean_delta = _mean(
-            [(r[0] - q[0], r[1] - q[1], r[2] - q[2]) for q, r in zip(left, right)]
-        )
+        samples = max(samples, len(pairs))
+        mean_delta = _mean([(r[0] - q[0], r[1] - q[1], r[2] - q[2]) for q, r in pairs])
         spread = max(spreads.get(name, SIGMA_FLOOR_M), SIGMA_FLOOR_M)
         magnitude = math.sqrt(sum(axis * axis for axis in mean_delta))
         deltas.append(
@@ -81,6 +93,7 @@ def score_track(
                 point=name,
                 sigma=min(MAX_SIGMA, magnitude / spread),
                 local_delta=mean_delta,
+                samples=len(pairs),
             )
         )
 
@@ -127,24 +140,29 @@ def corrections_text(deltas: Sequence[PointDelta]) -> list[str]:
 
 
 def apply_measured(
-    query: Mapping[str, list[Vec3]],
+    query: Mapping[str, Track],
     deltas: Sequence[PointDelta],
     fraction: float = 1.0,
-) -> dict[str, list[Vec3]]:
-    """교정을 따랐을 때의 궤적. 지목된 점만 fraction만큼 레퍼런스 쪽으로 옮긴다."""
+) -> dict[str, list[Vec3 | None]]:
+    """교정을 따랐을 때의 궤적. 지목된 점만 fraction만큼 레퍼런스 쪽으로 옮긴다.
+
+    못 잰 격자점은 옮기지 않는다. 자리를 지우면 s 대응이 어긋난다.
+    """
     moves = {
         delta.point: delta.local_delta
         for delta in deltas
         if delta.sigma > CORRECTION_SIGMA_THRESHOLD
     }
-    output: dict[str, list[Vec3]] = {}
+    output: dict[str, list[Vec3 | None]] = {}
     for name, points in query.items():
         shift = moves.get(name)
         if shift is None:
             output[name] = list(points)
             continue
         output[name] = [
-            (
+            None
+            if point is None
+            else (
                 point[0] + shift[0] * fraction,
                 point[1] + shift[1] * fraction,
                 point[2] + shift[2] * fraction,

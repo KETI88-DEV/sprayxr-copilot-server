@@ -112,6 +112,12 @@ def resample_frames(
 
     격자 기준은 착탄점이다. 세 점이 같은 s에서 대응해야 "스트로크 30% 지점에서
     건이 벽에 붙는다"가 두 패스에서 같은 뜻이 된다.
+
+    왼손 마스킹은 프레임 단위다(설계 §5.4 "왼손 지표만 제외, 다른 지표는 유지").
+    한 프레임이라도 왼손이 없으면 패스 전체의 왼손을 버리는 규칙은 실데이터에서
+    상시 발동한다 — 실측 |머리-왼손| 최소가 0.000 m다. 그래서 왼손이 있는 프레임만
+    모아 그 위에서 보간하고, 왼손 데이터가 격자점을 감싸지 못하는 구간만 None으로
+    남긴다. 외삽하지 않는다.
     """
     usable = [frame for frame in frames if frame.hit is not None]
     if len(usable) < 2 or samples < 2:
@@ -127,9 +133,8 @@ def resample_frames(
     heads = [frame.head for frame in usable]
     rights = [frame.right for frame in usable]
     times = [frame.time_sec for frame in usable]
-    lefts = [frame.left for frame in usable]
-    left_track = [point for point in lefts if point is not None]
-    left_usable = len(left_track) == len(usable)
+    left_values = [value for value, frame in zip(values, usable) if frame.left is not None]
+    left_track = [frame.left for frame in usable if frame.left is not None]
 
     output: list[MeasuredFrame] = []
     for order, target in enumerate(grid):
@@ -140,12 +145,21 @@ def resample_frames(
                 time_sec=_scalar_at(values, times, target),
                 head=_point_at(values, heads, target),
                 right=_point_at(values, rights, target),
-                left=_point_at(values, left_track, target) if left_usable else None,
+                left=_left_at(left_values, left_track, target),
                 hit=_point_at(values, hits, target),
                 uv=usable[0].uv,
             )
         )
     return output
+
+
+def _left_at(
+    values: Sequence[float], points: Sequence[Vec3], target: float
+) -> Vec3 | None:
+    """왼손 보간. 관측 구간 밖이면 지어내지 않고 None이다."""
+    if len(points) < 2 or target < values[0] or target > values[-1]:
+        return None
+    return _point_at(values, points, target)
 
 
 def _normalize(vector: Vec3) -> Vec3:

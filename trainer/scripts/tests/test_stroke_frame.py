@@ -148,3 +148,39 @@ def test_resample_frames_keeps_three_points_aligned() -> None:
     assert math.isclose(resampled[-1].hit[1], 5.0, abs_tol=1e-6)
     assert math.isclose(resampled[2].head[1], 4.5, abs_tol=1e-6)
 
+
+def _frames(count: int) -> list[measured_pose.MeasuredFrame]:
+    return [
+        measured_pose.MeasuredFrame(
+            index=i,
+            time_sec=i * 0.0111,
+            head=(0.5, 4.0 + i * 0.1, 0.8),
+            right=(0.85, 4.0 + i * 0.1, 0.65),
+            left=(0.67, 4.0 + i * 0.1, 0.79),
+            hit=(1.2, 4.0 + i * 0.1, 0.8),
+            uv=(1024.0, 512.0),
+            spraying=True,
+        )
+        for i in range(count)
+    ]
+
+
+def test_one_missing_left_frame_does_not_drop_the_whole_pass() -> None:
+    """설계 §5.4는 프레임 단위 마스킹이다. 실측 |머리-왼손| 최소가 0.000 m라
+    패스 단위로 버리면 왼손 축이 상시 사라진다."""
+    frames = _frames(11)
+    frames[5] = replace(frames[5], left=None)
+    resampled = stroke_frame.resample_frames(frames, 5)
+    assert [frame.left is not None for frame in resampled] == [True] * 5
+    assert resampled[2].left is not None
+    assert math.isclose(resampled[2].left[1], 4.5, abs_tol=1e-6)
+
+
+def test_left_is_none_outside_the_observed_left_span() -> None:
+    """왼손이 없는 구간을 외삽으로 메우지 않는다."""
+    frames = _frames(11)
+    frames[0] = replace(frames[0], left=None)
+    frames[1] = replace(frames[1], left=None)
+    resampled = stroke_frame.resample_frames(frames, 5)
+    assert resampled[0].left is None
+    assert resampled[-1].left is not None
