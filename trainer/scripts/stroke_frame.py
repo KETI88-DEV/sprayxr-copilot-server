@@ -22,10 +22,22 @@ Vec3 = tuple[float, float, float]
 
 DEFAULT_SAMPLES: Final = 20
 
+# 월드 Z가 수직이다(설계 §2.5, 실측 범위 -0.149~1.456 m).
+WORLD_UP: Final[Vec3] = (0.0, 0.0, 1.0)
+# 접선이 정의되지 않을 때 쓰는 축. 벽은 X 1.2 평면이고 착탄점은 Y를 따라 흐른다.
+FALLBACK_TANGENT: Final[Vec3] = (0.0, 1.0, 0.0)
+
 
 @dataclass(frozen=True, slots=True)
 class Basis:
-    """원점이 착탄점인 정규직교 기저. normal은 작업자 쪽이 양수다."""
+    """원점이 착탄점인 정규직교 기저.
+
+    세 축의 뜻이 고정이다 — `normal`은 벽 법선이고 작업자 쪽이 양수, `tangent`는
+    스트로크 진행 방향, `up`은 수직(월드 Z)이다. 세 뜻을 다 지키면 손 방향(오른손 기준
+    ±)에 따라 삼중항의 손대칭성이 갈리는데, 여기서는 손대칭성보다 축의 의미를 지킨다.
+    "5cm 더 띄우고 15cm 올리세요"가 참이 되려면 `normal`과 `up`의 부호가 각각 벽 바깥과
+    위여야 하기 때문이다. 어떤 소비자도 이 기저로 외적을 하지 않는다.
+    """
 
     origin: Vec3
     normal: Vec3
@@ -155,25 +167,53 @@ def _dot(left: Vec3, right: Vec3) -> float:
     return sum(left[axis] * right[axis] for axis in range(3))
 
 
-def stroke_basis(hit: Vec3, tangent: Vec3, gun: Vec3) -> Basis:
-    """착탄점을 원점으로 하는 기저. 법선은 건 방향, 접선은 스트로크 진행이다."""
-    normal = _normalize((gun[0] - hit[0], gun[1] - hit[1], gun[2] - hit[2]))
-    if normal == (0.0, 0.0, 0.0):
-        normal = (1.0, 0.0, 0.0)
-
-    forward = _normalize(tangent)
-    projection = _dot(forward, normal)
-    forward = _normalize(
+def _orthogonalized(vector: Vec3, axis: Vec3) -> Vec3:
+    """axis 성분을 뺀 뒤 정규화. axis에 평행하면 영벡터가 나온다."""
+    projection = _dot(vector, axis)
+    return _normalize(
         (
-            forward[0] - projection * normal[0],
-            forward[1] - projection * normal[1],
-            forward[2] - projection * normal[2],
+            vector[0] - projection * axis[0],
+            vector[1] - projection * axis[1],
+            vector[2] - projection * axis[2],
         )
     )
-    if forward == (0.0, 0.0, 0.0):
-        forward = _normalize(_cross(normal, (0.0, 0.0, 1.0)))
 
-    return Basis(origin=hit, normal=normal, tangent=forward, up=_cross(normal, forward))
+
+def stroke_basis(hit: Vec3, tangent: Vec3, gun: Vec3) -> Basis:
+    """착탄점을 원점으로 하는 기저. 측정 대상은 축을 정의하지 않는다.
+
+    법선을 `건 - 착탄`으로 잡으면 그 프레임에서 건의 좌표가 정의상 `(거리, 0, 0)`이
+    된다. 진행 방향 성분과 수직 성분이 구조적으로 0이라 두 동작이 일치해서 0인 것과
+    구별되지 않는다. 오른손은 가중 1.0이고 이 축이 존재하는 이유인 점이므로 채점이
+    1차원으로 붕괴한다. 설계 §6.1의 "오른손을 벽에서 5cm 더 띄우고 15cm 올리세요"도
+    나올 수 없다.
+
+    그래서 축은 측정 대상이 아닌 기하에서만 만든다(설계 §5.2의 "착탄점 근방 궤적의
+    주평면 법선").
+
+    - `tangent`(착탄점 궤적의 접선)를 정규화해 진행 방향으로 쓴다.
+    - 월드 Z를 접선에 직교화해 수직축으로 쓴다.
+    - 법선은 두 축의 외적이다. 건은 이 법선의 **부호를 고르는 데만** 쓴다.
+
+    퇴화 처리는 둘이다. 접선이 영벡터면(제자리 프레임) 벽을 따라가는 축인 월드 Y를
+    접선으로 쓴다. 접선이 월드 Z와 평행하면(순수 수직 스트로크) 수직이 이미 접선이라
+    직교화가 영벡터가 되므로, 세 번째 축은 벽을 따라가는 수평축(월드 Y 직교화)으로
+    떨어뜨린다.
+    """
+    forward = _normalize(tangent)
+    if forward == (0.0, 0.0, 0.0):
+        forward = FALLBACK_TANGENT
+
+    up = _orthogonalized(WORLD_UP, forward)
+    if up == (0.0, 0.0, 0.0):
+        up = _orthogonalized(FALLBACK_TANGENT, forward)
+
+    normal = _normalize(_cross(forward, up))
+    to_worker = (gun[0] - hit[0], gun[1] - hit[1], gun[2] - hit[2])
+    if _dot(normal, to_worker) < 0.0:
+        normal = (-normal[0], -normal[1], -normal[2])
+
+    return Basis(origin=hit, normal=normal, tangent=forward, up=up)
 
 
 def to_local(basis: Basis, point: Vec3) -> Vec3:
