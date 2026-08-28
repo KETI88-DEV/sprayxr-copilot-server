@@ -8,6 +8,8 @@ import math
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 measured_score = importlib.import_module("measured_score")
@@ -377,3 +379,62 @@ def test_apply_measured_does_nothing_when_no_sentence_is_issued() -> None:
     assert measured_score.right_hand_finding(before.deltas, HORIZONTAL) is None
     fixed = measured_score.apply_measured(query, before.deltas, HORIZONTAL)
     assert fixed == {name: list(points) for name, points in query.items()}
+
+
+def test_candidates_agree_with_unfiltered_magnitudes() -> None:
+    """후보에 든 축은 임계 이상이고, 그 크기가 필터 없는 값과 정확히 같다."""
+    frame = stroke_frame.Basis(
+        origin=(0.0, 0.0, 0.0),
+        normal=(0.6, 0.8, 0.0),
+        tangent=(-0.8, 0.6, 0.0),
+        up=(0.0, 0.0, 1.0),
+    )
+    for local in [
+        (0.05, 0.03, 0.07),
+        (-0.12, 0.004, -0.02),
+        (0.002, -0.001, 0.0005),
+        (0.3, -0.25, 0.11),
+    ]:
+        magnitudes = measured_score._axis_magnitudes_cm(local, frame)
+        candidates = measured_score._correction_candidates(local, frame)
+        for axis, value, _word, _unit in candidates:
+            assert abs(value) >= measured_score.MIN_CORRECTION_CM
+            assert value == pytest.approx(magnitudes[axis])
+        named = {axis for axis, _v, _w, _u in candidates}
+        for axis in measured_score.AXIS_ORDER:
+            if axis not in named:
+                assert abs(magnitudes[axis]) < measured_score.MIN_CORRECTION_CM
+
+
+def test_vertical_normal_keeps_zero_wall_magnitude_but_no_wall_candidate() -> None:
+    """법선에 수평 성분이 없으면 크기는 0.0으로 남고 후보에서는 빠진다."""
+    frame = stroke_frame.Basis(
+        origin=(0.0, 0.0, 0.0),
+        normal=(0.0, 0.0, 1.0),
+        tangent=(1.0, 0.0, 0.0),
+        up=(0.0, 1.0, 0.0),
+    )
+    local = (0.2, 0.15, -0.1)
+    magnitudes = measured_score._axis_magnitudes_cm(local, frame)
+    assert magnitudes["wall"] == 0.0
+    assert "wall" not in {
+        axis for axis, _v, _w, _u in measured_score._correction_candidates(local, frame)
+    }
+
+
+def test_vertical_stroke_lateral_is_unsigned_in_both_paths() -> None:
+    """수평 진행이 없으면 lateral은 두 경로 모두 부호 없는 크기다."""
+    frame = stroke_frame.Basis(
+        origin=(0.0, 0.0, 0.0),
+        normal=(1.0, 0.0, 0.0),
+        tangent=(0.0, 0.0, 1.0),
+        up=(0.0, 1.0, 0.0),
+    )
+    local = (0.02, -0.18, 0.09)
+    magnitudes = measured_score._axis_magnitudes_cm(local, frame)
+    assert magnitudes["lateral"] > 0.0
+    lateral = [
+        c for c in measured_score._correction_candidates(local, frame) if c[0] == "lateral"
+    ]
+    assert lateral and lateral[0][1] == pytest.approx(magnitudes["lateral"])
+    assert lateral[0][2] == ""

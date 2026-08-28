@@ -231,14 +231,36 @@ def _world_delta(local: Vec3, frame: AxisFrame) -> Vec3:
     )
 
 
-def _axis_magnitudes_cm(local: Vec3, frame: AxisFrame) -> dict[str, float]:
-    """세 축(wall/vertical/lateral) 편차를 cm로, 임계 없이 전부 낸다.
+def _axis_components(local: Vec3, frame: AxisFrame) -> dict[str, tuple[float, Vec3 | None, str]]:
+    """세 축(wall/vertical/lateral) 기하를 **한 곳에서만** 계산한다.
 
-    `_correction_candidates`는 같은 기하를 다시 계산하되 `MIN_CORRECTION_CM` 미만은
-    후보에서 뺀다 — 그건 "문장으로 낼 만큼 크다"는 질문이다. σ는 다른 질문이다
-    ("이 축의 산포에 비춰 이상한가"). 산포가 좁으면 1cm 아래 편차도 σ가 클 수
-    있으므로 임계로 값을 지우면 σ 계산 자체가 틀린다. 그래서 필터 없는 버전을
-    따로 둔다 — `_correction_candidates`의 문구·부호·단위벡터 로직은 건드리지 않는다.
+    `_axis_magnitudes_cm`(σ가 쓴다)과 `_correction_candidates`(문장·`apply_measured`가
+    쓴다)가 예전에는 이 기하를 각자 다시 계산했다 — 그래서 한쪽만 고치면 산포가 재는
+    축과 교정이 말하는 축이 조용히 갈라질 수 있었다(Task 1이 고친 결함). 이제 이
+    함수 하나가 축마다 `(magnitude_cm, unit, word)`를 내고, 두 공개 헬퍼는 포장만 한다.
+
+    - `magnitude_cm`: 임계 없는 크기(부호 있음, wall/vertical). lateral 진행축이 없을
+      때는 늘 ≥ 0(수평 성분의 노름이므로).
+    - `unit`: 그 축의 월드 단위벡터, 또는 "이 축은 후보가 될 수 없다"를 뜻하는 `None`.
+      법선에 수평 성분이 없으면 wall이 `None`이다. 진행축에 수평 성분이 없고 남은
+      수평 잔차도 없으면(원점) lateral이 `None`이다. vertical은 항상 `WORLD_UP`이다.
+    - `word`: 그 축·부호에 대응하는 동사/방향어. 후보에 실제로 들어갈지와 무관하게
+      부호만으로 정해진다 — 임계는 호출부(`_correction_candidates`)가 따로 건다.
+
+    로컬 성분을 축 이름으로 그대로 읽으면 안 된다. `Basis.up`은 순수 수직 스트로크에서
+    수평이 되므로(그때 수직은 `tangent`다) `local[2]`를 "올리세요"로 적으면 옆으로
+    틀어진 손을 위로 올리라고 말하게 된다. 그래서 월드로 되돌린 뒤 세 방향으로 다시
+    나눈다.
+
+    - 수직(`"vertical"`): 월드 Z 성분. 어느 축에 실려 있었든 여기서만 올리/내리가 나온다.
+    - 벽(`"wall"`): 법선은 항상 수평이므로(`Basis` 독스트링) 수평 성분을 법선에 투영한다.
+    - 진행축(`"lateral"`): 법선에 직교하는 수평 방향이다. wall 성분을 뺀 뒤의 평면으로
+      잰다(뺄 것이 없으면, 즉 wall이 `None`이면 빼지 않는다) — 이 순서가 바뀌면 값이
+      달라진다. 스트로크가 수평으로 진행하면 그것이 진행 방향이라 앞뒤로 적는다.
+      수직 스트로크에는 수평 진행이 없어 좌우를 판정할 기준이 없다 — 작업자 요가
+      실측이 아니기 때문이다(`service.ASSUMED_YAW`). 그때는 방향을 지어내지 않고
+      크기만 부호 없이 내고(`hypot`), 남은 수평 잔차 방향을 단위벡터로 쓴다
+      (`word`는 빈 문자열).
     """
     world = _world_delta(local, frame)
     plane: Vec3 = (world[0], world[1], 0.0)
@@ -252,14 +274,38 @@ def _axis_magnitudes_cm(local: Vec3, frame: AxisFrame) -> dict[str, float]:
             plane[1] - normal_cm / 100.0 * wall[1],
             0.0,
         )
+    wall_word = "" if wall is None else ("띄우" if normal_cm > 0 else "붙이")
+
+    vertical_word = "올리" if up_cm > 0 else "내리"
 
     along = _flattened(frame.tangent)
     if along is None:
+        # 수평 진행이 없다. 남은 수평 성분 자체가 방향이라 크기는 늘 양수다.
+        lateral_unit = _flattened(plane)
         lateral_cm = math.hypot(plane[0], plane[1]) * 100.0
+        lateral_word = ""
     else:
+        lateral_unit = along
         lateral_cm = _dot(plane, along) * 100.0
+        lateral_word = "앞으로" if lateral_cm > 0 else "뒤로"
 
-    return {"wall": normal_cm, "vertical": up_cm, "lateral": lateral_cm}
+    return {
+        "wall": (normal_cm, wall, wall_word),
+        "vertical": (up_cm, WORLD_UP, vertical_word),
+        "lateral": (lateral_cm, lateral_unit, lateral_word),
+    }
+
+
+def _axis_magnitudes_cm(local: Vec3, frame: AxisFrame) -> dict[str, float]:
+    """세 축(wall/vertical/lateral) 편차를 cm로, 임계 없이 전부 낸다.
+
+    `_correction_candidates`는 `_axis_components`가 낸 같은 값에서 `MIN_CORRECTION_CM`
+    미만과 후보 불가(`unit is None`) 축을 걸러낸다 — 그건 "문장으로 낼 만큼 크다"는
+    질문이다. σ는 다른 질문이다("이 축의 산포에 비춰 이상한가"). 산포가 좁으면 1cm
+    아래 편차도 σ가 클 수 있으므로 임계로 값을 지우면 σ 계산 자체가 틀린다. 그래서
+    필터 없는 버전을 따로 둔다.
+    """
+    return {axis: value for axis, (value, _unit, _word) in _axis_components(local, frame).items()}
 
 
 def _correction_candidates(
@@ -267,58 +313,23 @@ def _correction_candidates(
 ) -> list[tuple[str, float, str, Vec3]]:
     """한 점의 이탈을 물리적으로 참인 후보 세 개(벽·수직·진행축)로 나눈다.
 
-    로컬 성분을 축 이름으로 읽으면 안 된다. `Basis.up`은 순수 수직 스트로크에서 수평이
-    되므로(그때 수직은 `tangent`다) `local[2]`를 "올리세요"로 적으면 옆으로 틀어진 손을
-    위로 올리라고 말하게 된다. 그래서 월드로 되돌린 뒤 세 방향으로 다시 나눈다.
-
-    - 수직(`"vertical"`): 월드 Z 성분. 어느 축에 실려 있었든 여기서만 올리/내리가 나온다.
-    - 벽(`"wall"`): 법선은 항상 수평이므로(`Basis` 독스트링) 수평 성분을 법선에 투영한다.
-    - 진행축(`"lateral"`): 법선에 직교하는 수평 방향이다. 스트로크가 수평으로 진행하면
-      그것이 진행 방향이라 앞뒤로 적는다. 수직 스트로크에는 수평 진행이 없어 좌우를
-      판정할 기준이 없다 — 작업자 요가 실측이 아니기 때문이다(`service.ASSUMED_YAW`).
-      방향을 지어내지 않고 "벽을 따라"까지만 적는다(`direction`은 빈 문자열).
-
-    임계(`MIN_CORRECTION_CM`) 아래인 후보는 목록에 넣지 않는다. 호출자가 절댓값이 가장
-    큰 후보 하나만 골라 문장 하나를 낸다 — 여러 후보를 동시에 지시하지 않는다.
+    기하는 `_axis_components`가 한 곳에서 계산한다. 여기서는 그 결과에서
+    `MIN_CORRECTION_CM` 아래인 축과 후보가 될 수 없는 축(`unit is None`)을 걸러낸다.
+    호출자가 절댓값이 가장 큰 후보 하나만 골라 문장 하나를 낸다 — 여러 후보를 동시에
+    지시하지 않는다.
 
     후보마다 **월드 단위벡터**를 함께 낸다. 그래야 교정을 따랐을 때의 궤적을 만드는
     `apply_measured`가 문장이 고른 축 하나를 정확히 그만큼만 옮길 수 있다. 크기와
     방향이 같은 곳에서 나오므로 문장과 시뮬레이션이 어긋날 수 없다 —
     `magnitude_cm/100 × unit`이 곧 지시한 월드 이동이다.
     """
-    world = _world_delta(local, frame)
-    plane: Vec3 = (world[0], world[1], 0.0)
-    up_cm = world[2] * 100.0
-
-    wall = _flattened(frame.normal)
-    normal_cm = 0.0 if wall is None else _dot(plane, wall) * 100.0
-    if wall is not None:
-        plane = (
-            plane[0] - normal_cm / 100.0 * wall[0],
-            plane[1] - normal_cm / 100.0 * wall[1],
-            0.0,
-        )
-
+    components = _axis_components(local, frame)
     candidates: list[tuple[str, float, str, Vec3]] = []
-    if wall is not None and abs(normal_cm) >= MIN_CORRECTION_CM:
-        verb = "띄우" if normal_cm > 0 else "붙이"
-        candidates.append(("wall", normal_cm, verb, wall))
-    if abs(up_cm) >= MIN_CORRECTION_CM:
-        verb = "올리" if up_cm > 0 else "내리"
-        candidates.append(("vertical", up_cm, verb, WORLD_UP))
-
-    along = _flattened(frame.tangent)
-    if along is None:
-        # 수평 진행이 없다. 남은 수평 성분 자체가 방향이라 크기는 늘 양수다.
-        residual = _flattened(plane)
-        lateral_cm = math.hypot(plane[0], plane[1]) * 100.0
-        if residual is not None and lateral_cm >= MIN_CORRECTION_CM:
-            candidates.append(("lateral", lateral_cm, "", residual))
-    else:
-        lateral_cm = _dot(plane, along) * 100.0
-        if abs(lateral_cm) >= MIN_CORRECTION_CM:
-            direction = "앞으로" if lateral_cm > 0 else "뒤로"
-            candidates.append(("lateral", lateral_cm, direction, along))
+    for axis in AXIS_ORDER:
+        value, unit, word = components[axis]
+        if unit is None or abs(value) < MIN_CORRECTION_CM:
+            continue
+        candidates.append((axis, value, word, unit))
     return candidates
 
 
