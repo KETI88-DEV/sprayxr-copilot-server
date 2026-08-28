@@ -155,7 +155,18 @@ def compare(
     query_key = _key_for(query_frames, params)
     reference_key = _key_for(reference_frames, params)
 
-    if query_key is None or reference_key is None or query_key != reference_key:
+    # 키가 None인 것과 두 키가 다른 것은 다른 사건이다. 키는 착탄점이 있는 분사
+    # 프레임이 2개 미만일 때 None이 된다 — 분사 컬럼을 못 읽었거나, 분산 기준으로
+    # 활성 건을 못 고르거나, Ray가 한 번도 맞지 않은 패스다. 그것을 "의도가 다르다"로
+    # 적으면 재지 못한 것을 재서 다르다고 말한 것이 된다.
+    if query_key is None or reference_key is None:
+        return {
+            "status": "unavailable",
+            "reason": "insufficient_frames",
+            "query_key": query_key,
+            "reference_key": reference_key,
+        }
+    if query_key != reference_key:
         return {
             "status": "unavailable",
             "reason": "motion_key_mismatch",

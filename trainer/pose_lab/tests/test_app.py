@@ -61,10 +61,14 @@ def _rows(
 
 class FakeSource:
     def __init__(
-        self, mismatch: bool = False, overlap_left_at: int | None = None
+        self,
+        mismatch: bool = False,
+        overlap_left_at: int | None = None,
+        rayless: bool = False,
     ) -> None:
         self._mismatch = mismatch
         self._overlap_left_at = overlap_left_at
+        self._rayless = rayless
 
     def workers(self) -> list[str]:
         return ["A", "B"]
@@ -74,13 +78,18 @@ class FakeSource:
             return RawPass(rows=_rows(0.0))
         # 0.3m: 오른손/머리 sigma가 CORRECTION_SIGMA_THRESHOLD(2.0)를 넘도록 벌린
         # 값이다. 그래야 각도 미표시 불변량을 실제로 통과하는 교정 문장으로 검증한다.
-        return RawPass(
-            rows=_rows(
-                0.3,
-                descending=self._mismatch,
-                overlap_left_at=self._overlap_left_at,
-            )
+        rows = _rows(
+            0.3,
+            descending=self._mismatch,
+            overlap_left_at=self._overlap_left_at,
         )
+        if self._rayless:
+            # Ray가 한 번도 맞지 않은 패스. 착탄점이 없으니 키를 만들 수 없다.
+            rows = [
+                {key: value for key, value in row.items() if not key.strip().startswith("Ray")}
+                for row in rows
+            ]
+        return RawPass(rows=rows)
 
 
 def test_health_reports_ready() -> None:
@@ -135,7 +144,22 @@ def test_compare_refuses_when_motion_keys_differ() -> None:
     client = TestClient(create_app(source=FakeSource(mismatch=True)))
     body = client.post("/api/compare", json={"query": QUERY, "reference": REFERENCE}).json()
     assert body["status"] == "unavailable"
+    assert body["reason"] == "motion_key_mismatch"
+    assert body["query_key"] is not None and body["reference_key"] is not None
     assert body["query_key"] != body["reference_key"]
+
+
+def test_unmeasurable_pass_is_not_reported_as_an_intent_mismatch() -> None:
+    """키가 None인 것은 "재지 못했다"이지 "의도가 다르다"가 아니다.
+
+    착탄점이 있는 분사 프레임이 2개 미만이면 키가 없다. 그것을 동작 불일치로 적으면
+    재지 못한 것을 재서 다르다고 말한 것이 된다.
+    """
+    client = TestClient(create_app(source=FakeSource(rayless=True)))
+    body = client.post("/api/compare", json={"query": QUERY, "reference": REFERENCE}).json()
+    assert body["status"] == "unavailable"
+    assert body["reason"] == "insufficient_frames"
+    assert body["query_key"] is None
 
 
 def test_left_axis_survives_a_single_masked_frame() -> None:
