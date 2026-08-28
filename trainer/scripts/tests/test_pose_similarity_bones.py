@@ -91,3 +91,40 @@ def test_existing_apply_corrections_is_unchanged() -> None:
     result = pose_similarity.apply_corrections(pose, bucket, corrections)
     assert isinstance(result, dict)
     assert set(result) == set(pose)
+
+
+def test_antiparallel_180_rotation() -> None:
+    """팔이 반대 방향으로 뻗어야 하면 180도 회전이 일어나야 한다."""
+    pose = pose_similarity.normalize_pose(_pose())
+
+    # RightForeArm이 반대 방향으로 뻗게 한다
+    bucket: dict[str, object] = {}
+    joints: dict[str, object] = {}
+
+    for name, position in _pose().items():
+        target = position
+        # RightForeArm을 반대 방향으로 뻗게 한다
+        if name == "RightForeArm":
+            parent_pos = pose["RightUpperArm"]
+            current_vec = (position[0] - parent_pos[0], position[1] - parent_pos[1], position[2] - parent_pos[2])
+            # 반대 방향으로 같은 거리만큼
+            opposite_vec = (-current_vec[0], -current_vec[1], -current_vec[2])
+            target = (parent_pos[0] + opposite_vec[0], parent_pos[1] + opposite_vec[1], parent_pos[2] + opposite_vec[2])
+
+        joints[name] = {"mean": list(target), "spread": 0.02}
+
+    bucket["joints"] = joints
+
+    corrections = pose_similarity.build_corrections(pose, bucket)
+    assert corrections, "반대 방향 교정이 필요해야 한다"
+
+    fixed = pose_similarity.apply_corrections_rigid(pose, bucket, corrections)
+
+    # RightForeArm이 실제로 움직였다
+    assert fixed["RightForeArm"] != pose["RightForeArm"], "180도 회전이 일어나야 한다"
+
+    # 모든 뼈 길이가 보존되었다
+    before = pose_similarity.bone_lengths(pose)
+    after = pose_similarity.bone_lengths(fixed)
+    for joint, length in before.items():
+        assert math.isclose(after[joint], length, abs_tol=1e-6), f"{joint} 뼈 길이가 변했다"

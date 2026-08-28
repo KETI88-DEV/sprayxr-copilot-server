@@ -418,8 +418,23 @@ def _rotate_about(pivot: Vec3, point: Vec3, source: Vec3, target: Vec3) -> Vec3:
     axis_raw = _cross(start, end)
     sine = math.sqrt(sum(component * component for component in axis_raw))
     cosine = _dot(start, end)
+
+    # Two cases when sine ≈ 0: parallel (cosine ≈ +1, nothing to rotate) or anti-parallel (cosine ≈ -1, need 180° rotation)
     if sine < 1e-12:
-        return point
+        if cosine > 0.0:
+            return point
+        # Anti-parallel: build perpendicular axis from world axes
+        world_axes = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+        best_axis = None
+        best_dot = 2.0
+        for world_axis in world_axes:
+            alignment = abs(_dot(start, world_axis))
+            if alignment < best_dot:
+                best_dot = alignment
+                best_axis = world_axis
+        axis_raw = _cross(best_axis, start) if best_axis else (0.0, 0.0, 1.0)
+        sine = 0.0
+        cosine = -1.0
 
     axis = _norm(axis_raw)
     local = _sub(point, pivot)
