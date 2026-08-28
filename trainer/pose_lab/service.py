@@ -68,12 +68,15 @@ def improvement(
     goal_year2의 문구는 목표 자세를 입력으로 주므로 동일 채점에 해당한다. 두 값을
     병기해야 그 값이 자기충족에 얼마나 기대는지 드러난다. 분리 채점 점수가 없으면
     (아직 계산되지 않았으면) 없는 값을 만들어내지 않고 None을 그대로 낸다.
+
+    `gap_closure`가 내는 None도 그대로 흘린다. 이미 기준과 같으면(S0=1) 메울 격차가
+    없어 개선율이 정의되지 않는데, 여기서 0.0으로 바꾸면 "메우지 못했다"로 읽힌다.
+    화면은 None을 대시로 그리고 있으므로 뒤에서 값을 지어낼 이유가 없다.
     """
     same = pose_similarity.gap_closure(before, after_same)
     if after_split is None:
-        return {"split": None, "same": same or 0.0}
-    split = pose_similarity.gap_closure(before, after_split)
-    return {"split": split or 0.0, "same": same or 0.0}
+        return {"split": None, "same": same}
+    return {"split": pose_similarity.gap_closure(before, after_split), "same": same}
 
 
 def _pass_frames(raw: RawPass, samples: int) -> list[Any]:
