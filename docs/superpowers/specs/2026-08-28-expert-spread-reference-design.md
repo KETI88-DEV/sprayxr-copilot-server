@@ -120,9 +120,11 @@
         "dates": ["YYYYMMDD", ...],
         "by_date": { "YYYYMMDD": { "n": int, "sums": {...}, "sq_sums": {...} } },
         "points": { "right"|"head"|"left": {
-            "normal"|"tangent"|"up": { "mean": float, "spread": float } } } } },
+            "wall"|"vertical"|"lateral": { "mean": float, "spread": float } } } } },
     "uv4": {...}, "uv2": {...}, "uv_off": {...} } }
 ```
+
+축 이름은 `stroke_frame.Basis`의 `normal`/`tangent`/`up`이 아니라 `measured_score._correction_candidates`가 내는 `wall`/`vertical`/`lateral`을 쓴다. 산포를 재는 축과 교정을 고르는 축이 같아야 σ 하나로 "이 편차가 이 축에서 얼마나 이상한가"를 물을 수 있다 — 이름이 갈리면 산포 테이블을 만들어도 교정 축을 고르는 쪽이 그 값을 찾을 수 없다.
 
 네 입도 층을 한 아티팩트에 담는다. 거리 분할(near/far)은 모든 층에서 유지한다.
 

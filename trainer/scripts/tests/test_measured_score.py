@@ -14,7 +14,9 @@ measured_score = importlib.import_module("measured_score")
 pose_similarity = importlib.import_module("pose_similarity")
 stroke_frame = importlib.import_module("stroke_frame")
 
-SPREADS = {"right": 0.05, "head": 0.05, "left": 0.05}
+# 축별 산포가 모두 같으므로 예전 스칼라(0.05m) 채점과 같은 sigma를 낸다 —
+# `uniform_spreads`가 그 하위호환을 보장한다(직교 기저 변환이 벡터 노름을 보존).
+SPREADS = measured_score.uniform_spreads(0.05)
 
 # 수평 스트로크: 접선이 월드 Y라 up이 정확히 월드 Z다.
 HORIZONTAL = stroke_frame.stroke_basis(

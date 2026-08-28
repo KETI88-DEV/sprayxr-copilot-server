@@ -32,7 +32,10 @@ DEFAULT_ERROR_M: Final = 0.144
 # 레퍼런스 버킷에서 잰 산포가 아니라 자리를 채워 둔 임시값이다. 이 값으로 게이트를
 # 판정하면 상수 두 개에서 나온 "pass"를 화면이 판정으로 내걸게 된다. REQ-19 각도
 # 유효화는 설계 §10에서 미판정이고 D4는 게이트를 옮기지 말라고 못박는다.
-PROVISIONAL_SPREADS: Final[dict[str, float]] = {"right": 0.05, "head": 0.05, "left": 0.05}
+#
+# 점당 스칼라가 아니라 점·축(wall/vertical/lateral)별 산포다. 값이 축마다 모두
+# 같으므로 `measured_score.uniform_spreads`가 예전 스칼라 채점과 같은 σ를 낸다.
+PROVISIONAL_SPREADS: Final[dict[str, dict[str, float]]] = measured_score.uniform_spreads(0.05)
 
 # 작업자 요는 이제 실측이다. `measured_pose.facing_yaw`가 HMD 회전에서 뽑고, 동작 키의
 # ②진행 방향과 ④몸 기준 착탄 위치가 그 위에 선다 — 이름과 실제가 처음으로 일치한다.
@@ -227,7 +230,7 @@ def compare(
     reference: PassRef,
     params: Any | None = None,
     samples: int = stroke_frame.DEFAULT_SAMPLES,
-    spreads: dict[str, float] | None = None,
+    spreads: measured_score.AxisSpreads | None = None,
     weights: dict[str, float] | None = None,
 ) -> dict[str, object]:
     """비교 1건. 동작 키가 다르면 지표를 만들지 않는다."""
@@ -332,8 +335,14 @@ def compare(
             # 게이트의 뜻은 "각도 지시가 이제 정당하다"다. 잰 분포가 없으면 판정을
             # 만들지 않는다. 임계 논리(`gate_verdict`)는 그대로 두고 입력이 없다는
             # 사실만 낸다.
+            # 산포가 점·축별이 된 뒤에도 게이트 임계 논리는 스칼라 하나를 받는다.
+            # 가장 넓은(가장 관대한) 축·점의 산포로 판정한다 — 예전에 점당 스칼라의
+            # 최댓값을 쓰던 것과 같은 "최악의 경우로 판정" 규칙을 축 차원까지 넓힌다.
             "gate": (
-                gate_verdict(max(spreads.values()), DEFAULT_ERROR_M)
+                gate_verdict(
+                    max(value for axes in spreads.values() for value in axes.values()),
+                    DEFAULT_ERROR_M,
+                )
                 if measured_spreads
                 else None
             ),

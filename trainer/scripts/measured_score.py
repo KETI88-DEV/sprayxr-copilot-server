@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Final, Mapping, Protocol, Sequence
 
 Vec3 = tuple[float, float, float]
@@ -25,6 +25,23 @@ Track = Sequence[Vec3 | None]
 DEFAULT_WEIGHTS: Final[dict[str, float]] = {"right": 1.0, "head": 0.4, "left": 0.15}
 POINT_LABELS: Final[dict[str, str]] = {"right": "오른손", "head": "머리", "left": "왼손"}
 POINT_ORDER: Final[tuple[str, ...]] = ("right", "head", "left")
+
+# `_correction_candidates`가 내는 세 축과 이름을 맞춘다. 산포 축과 교정 축이 다르면
+# σ가 교정 축을 고를 수 없다 — 산포는 재는 축, 교정은 말하는 축인데 그 둘이 같은
+# 좌표계를 가리켜야 σ 하나로 두 일을 다 할 수 있다.
+AXIS_ORDER: Final[tuple[str, ...]] = ("wall", "vertical", "lateral")
+# 점 → 축 → 산포(m). 실측 산포가 없을 때는 `uniform_spreads`로 스칼라 하나를 편다.
+AxisSpreads = Mapping[str, Mapping[str, float]]
+
+
+def uniform_spreads(value: float) -> dict[str, dict[str, float]]:
+    """스칼라 하나를 점·축 전부에 편다. 실측 산포가 없을 때의 잠정값이다.
+
+    축별 산포가 모두 같으면 새 계산이 예전 스칼라 채점과 같은 σ를 낸다(직교 기저
+    변환은 벡터 노름을 보존하므로) — 그래서 이 함수가 하위호환의 다리다.
+    """
+    return {point: {axis: value for axis in AXIS_ORDER} for point in POINT_ORDER}
+
 
 # 산포 하한. 측정 잡음이 작을 때 σ가 무한히 부풀지 않게 한다.
 SIGMA_FLOOR_M: Final = 0.02
@@ -77,6 +94,9 @@ class PointDelta:
     sigma: float
     local_delta: Vec3
     samples: int = 0
+    # 축별 σ. 비어 있으면(구조체를 직접 만든 옛 호출자) `_largest_correction`이
+    # 예전처럼 절댓값 크기로 후보를 고른다.
+    axis_sigmas: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,13 +134,22 @@ def _mean(points: Sequence[Vec3]) -> Vec3:
 def score_track(
     query: Mapping[str, Track],
     reference: Mapping[str, Track],
-    spreads: Mapping[str, float],
+    spreads: AxisSpreads,
     weights: Mapping[str, float],
+    frame: AxisFrame = WORLD_FRAME,
 ) -> MeasuredResult:
     """정렬 격자 위 세 점의 가중 유사도. 못 잰 점은 0점이 아니라 제외다.
 
     격자점 하나가 비어도(왼손 마스킹) 그 점만 빼고 나머지 격자점으로 잰다. 자리를
     없애지 않고 None으로 두는 이유는 두 패스의 같은 s가 계속 마주 보게 하기 위함이다.
+
+    σ는 이제 점당 하나가 아니라 축(`AXIS_ORDER`)마다 하나다. 축별 산포로 나눈 뒤
+    벡터 노름으로 합친다 — 직교 기저 변환은 노름을 보존하므로 `uniform_spreads`로
+    편 산포에서는 예전 스칼라 σ와 정확히 같은 값이 나온다(하위호환).
+
+    `frame`은 로컬 성분을 wall/vertical/lateral로 나누는 기저다. 기본값
+    `WORLD_FRAME`은 기존 호출자(성분을 월드 좌표로 직접 주는 단위 테스트 등)가
+    그대로 동작하게 한다.
     """
     deltas: list[PointDelta] = []
     samples = 0
@@ -134,14 +163,23 @@ def score_track(
             continue
         samples = max(samples, len(pairs))
         mean_delta = _mean([(r[0] - q[0], r[1] - q[1], r[2] - q[2]) for q, r in pairs])
-        spread = max(spreads.get(name, SIGMA_FLOOR_M), SIGMA_FLOOR_M)
-        magnitude = math.sqrt(sum(axis * axis for axis in mean_delta))
+        axis_spread = spreads.get(name) or {}
+        axis_magnitudes = _axis_magnitudes_cm(mean_delta, frame)
+        axis_sigmas: dict[str, float] = {}
+        total = 0.0
+        for axis in AXIS_ORDER:
+            floor = max(float(axis_spread.get(axis, SIGMA_FLOOR_M)), SIGMA_FLOOR_M)
+            value = min(MAX_SIGMA, abs(axis_magnitudes[axis]) / 100.0 / floor)
+            axis_sigmas[axis] = value
+            total += value * value
+        combined = min(MAX_SIGMA, math.sqrt(total))
         deltas.append(
             PointDelta(
                 point=name,
-                sigma=min(MAX_SIGMA, magnitude / spread),
+                sigma=combined,
                 local_delta=mean_delta,
                 samples=len(pairs),
+                axis_sigmas=axis_sigmas,
             )
         )
 
@@ -191,6 +229,37 @@ def _world_delta(local: Vec3, frame: AxisFrame) -> Vec3:
         local[0] * frame.normal[1] + local[1] * frame.tangent[1] + local[2] * frame.up[1],
         local[0] * frame.normal[2] + local[1] * frame.tangent[2] + local[2] * frame.up[2],
     )
+
+
+def _axis_magnitudes_cm(local: Vec3, frame: AxisFrame) -> dict[str, float]:
+    """세 축(wall/vertical/lateral) 편차를 cm로, 임계 없이 전부 낸다.
+
+    `_correction_candidates`는 같은 기하를 다시 계산하되 `MIN_CORRECTION_CM` 미만은
+    후보에서 뺀다 — 그건 "문장으로 낼 만큼 크다"는 질문이다. σ는 다른 질문이다
+    ("이 축의 산포에 비춰 이상한가"). 산포가 좁으면 1cm 아래 편차도 σ가 클 수
+    있으므로 임계로 값을 지우면 σ 계산 자체가 틀린다. 그래서 필터 없는 버전을
+    따로 둔다 — `_correction_candidates`의 문구·부호·단위벡터 로직은 건드리지 않는다.
+    """
+    world = _world_delta(local, frame)
+    plane: Vec3 = (world[0], world[1], 0.0)
+    up_cm = world[2] * 100.0
+
+    wall = _flattened(frame.normal)
+    normal_cm = 0.0 if wall is None else _dot(plane, wall) * 100.0
+    if wall is not None:
+        plane = (
+            plane[0] - normal_cm / 100.0 * wall[0],
+            plane[1] - normal_cm / 100.0 * wall[1],
+            0.0,
+        )
+
+    along = _flattened(frame.tangent)
+    if along is None:
+        lateral_cm = math.hypot(plane[0], plane[1]) * 100.0
+    else:
+        lateral_cm = _dot(plane, along) * 100.0
+
+    return {"wall": normal_cm, "vertical": up_cm, "lateral": lateral_cm}
 
 
 def _correction_candidates(
@@ -254,12 +323,19 @@ def _correction_candidates(
 
 
 def _largest_correction(
-    local: Vec3, frame: AxisFrame
+    local: Vec3, frame: AxisFrame, axis_sigmas: Mapping[str, float] | None = None
 ) -> tuple[str, float, str, Vec3] | None:
-    """절댓값이 가장 큰 후보 하나. 사람은 한 번에 하나만 고칠 수 있다."""
+    """가장 이상한 후보 하나. 가장 큰 것과 가장 이상한 것은 다르다.
+
+    벽 거리가 3cm로 일정하고 진행 방향이 20cm로 느슨한 사람에게 진행 방향 17cm는
+    정상이고 벽 5cm가 이상한 것이다. 축별 산포(σ)가 있으면 σ가 가장 큰 후보를,
+    없으면(구조체를 직접 만든 옛 호출자) 예전처럼 절댓값이 가장 큰 후보를 고른다.
+    """
     candidates = _correction_candidates(local, frame)
     if not candidates:
         return None
+    if axis_sigmas:
+        return max(candidates, key=lambda candidate: axis_sigmas.get(candidate[0], 0.0))
     return max(candidates, key=lambda candidate: abs(candidate[1]))
 
 
@@ -275,7 +351,7 @@ def right_hand_finding(
     right = next((delta for delta in deltas if delta.point == "right"), None)
     if right is None or right.sigma <= CORRECTION_SIGMA_THRESHOLD:
         return None
-    candidate = _largest_correction(right.local_delta, frame)
+    candidate = _largest_correction(right.local_delta, frame, right.axis_sigmas)
     if candidate is None:
         return None
     axis, magnitude_cm, direction, _unit = candidate
@@ -333,7 +409,7 @@ def issued_shift(
     right = next((delta for delta in deltas if delta.point == "right"), None)
     if right is None or right.sigma <= CORRECTION_SIGMA_THRESHOLD:
         return None
-    candidate = _largest_correction(right.local_delta, frame)
+    candidate = _largest_correction(right.local_delta, frame, right.axis_sigmas)
     if candidate is None:
         return None
     _axis, magnitude_cm, _direction, unit = candidate

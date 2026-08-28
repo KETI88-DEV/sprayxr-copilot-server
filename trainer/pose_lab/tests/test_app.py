@@ -232,7 +232,7 @@ def test_gate_is_judged_once_measured_spreads_arrive() -> None:
         FakeSource(),
         PassRef(**QUERY),
         PassRef(**REFERENCE),
-        spreads={"right": 0.06, "head": 0.06, "left": 0.06},
+        spreads=service.measured_score.uniform_spreads(0.06),
     )
     measured = body["measured"]
     assert isinstance(measured, dict)
