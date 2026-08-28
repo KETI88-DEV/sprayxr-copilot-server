@@ -29,6 +29,11 @@ GATE_RATIO: Final = 0.5
 # 잡으려는 최소 자세 오류. 팔꿈치 30도에 해당하는 실측 참조값이다.
 DEFAULT_ERROR_M: Final = 0.144
 
+# 레퍼런스 버킷에서 잰 산포가 아니라 자리를 채워 둔 임시값이다. 이 값으로 게이트를
+# 판정하면 상수 두 개에서 나온 "pass"를 화면이 판정으로 내걸게 된다. REQ-19 각도
+# 유효화는 설계 §10에서 미판정이고 D4는 게이트를 옮기지 말라고 못박는다.
+PROVISIONAL_SPREADS: Final[dict[str, float]] = {"right": 0.05, "head": 0.05, "left": 0.05}
+
 JOINT_AXIS_NOTE: Final = (
     "관절 20개는 3점 추적에서 IK로 푼 값이다. 각도 지시는 REQ-19 통과 전까지 내지 않는다."
 )
@@ -147,7 +152,10 @@ def compare(
 ) -> dict[str, object]:
     """비교 1건. 동작 키가 다르면 지표를 만들지 않는다."""
     params = params or motion_key.KeyParams()
-    spreads = spreads or {"right": 0.05, "head": 0.05, "left": 0.05}
+    # 호출자가 산포를 넘겼을 때만 그것이 잰 분포다. 임시값으로는 게이트를 판정하지
+    # 않고 σ 정규화도 잠정으로 표시한다.
+    measured_spreads = spreads is not None
+    spreads = spreads or PROVISIONAL_SPREADS
     weights = weights or measured_score.DEFAULT_WEIGHTS
 
     query_frames = _pass_frames(source.load(query), samples)
@@ -187,6 +195,9 @@ def compare(
         "samples": before.samples,
         "measured": {
             "basis": "tracked",
+            # σ와 점수 exp(-σ²/2)는 이 산포로 나눈 값이다. 잰 분포가 아니면 읽는
+            # 사람이 그 사실을 알아야 한다.
+            "normalization": "measured" if measured_spreads else "provisional",
             "score": before.score,
             "score_after": after.score,
             "deltas": [
@@ -205,7 +216,15 @@ def compare(
             # 낸다 — after.score를 split 자리에 다시 넣으면 두 숫자가 항상 같아져
             # 자기충족 정도를 가리는 바로 그 결함이 된다.
             "improvement": improvement(before.score, None, after.score),
-            "gate": gate_verdict(max(spreads.values()), DEFAULT_ERROR_M),
+            # 게이트의 뜻은 "각도 지시가 이제 정당하다"다. 잰 분포가 없으면 판정을
+            # 만들지 않는다. 임계 논리(`gate_verdict`)는 그대로 두고 입력이 없다는
+            # 사실만 낸다.
+            "gate": (
+                gate_verdict(max(spreads.values()), DEFAULT_ERROR_M)
+                if measured_spreads
+                else None
+            ),
+            "gate_reason": None if measured_spreads else "no_reference_distribution",
         },
         "joint": {
             "basis": "ik_derived",
@@ -217,5 +236,6 @@ def compare(
             "corrections": [],
             "improvement": None,
             "gate": None,
+            "gate_reason": "not_wired",
         },
     }

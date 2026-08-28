@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
+from trainer.pose_lab import service
 from trainer.pose_lab.app import create_app
 from trainer.pose_lab.service import PassRef, RawPass
 
@@ -174,3 +175,32 @@ def test_left_axis_survives_a_single_masked_frame() -> None:
     deltas = {delta["point"]: delta for delta in body["measured"]["deltas"]}
     assert "left" in deltas
     assert 0 < deltas["left"]["samples"] < deltas["right"]["samples"]
+
+
+def test_gate_is_not_asserted_from_provisional_spreads() -> None:
+    """게이트의 뜻은 "각도 지시가 이제 정당하다"다.
+
+    상수 두 개(임시 산포 0.05 m / DEFAULT_ERROR_M)로 나눈 값은 언제나 pass가 나온다.
+    설계 §10은 REQ-19 각도 유효화를 미판정으로 두고 D4는 게이트를 옮기지 말라고
+    못박는다. 잰 분포가 없으면 판정을 내걸지 않는다.
+    """
+    client = TestClient(create_app(source=FakeSource()))
+    body = client.post("/api/compare", json={"query": QUERY, "reference": REFERENCE}).json()
+    assert body["measured"]["gate"] is None
+    assert body["measured"]["gate_reason"] == "no_reference_distribution"
+    assert body["measured"]["normalization"] == "provisional"
+
+
+def test_gate_is_judged_once_measured_spreads_arrive() -> None:
+    """임계 논리는 그대로다. 없는 것은 입력뿐이라 산포를 주면 판정이 나온다."""
+    body = service.compare(
+        FakeSource(),
+        PassRef(**QUERY),
+        PassRef(**REFERENCE),
+        spreads={"right": 0.06, "head": 0.06, "left": 0.06},
+    )
+    measured = body["measured"]
+    assert isinstance(measured, dict)
+    assert measured["gate"] == "pass"
+    assert measured["gate_reason"] is None
+    assert measured["normalization"] == "measured"

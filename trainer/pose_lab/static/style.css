@@ -6,8 +6,10 @@ body { font-family: system-ui, "Noto Sans KR", sans-serif; margin: 0; padding: 1
 .badge.ok { background: var(--ok); }
 .badge.warn { background: var(--warn); }
 .note { font-size: .8rem; opacity: .8; }
+.provisional { font-size: .8rem; opacity: .8; color: var(--warn); }
+.provisional:empty { display: none; }
 .bars { list-style: none; padding: 0; }
-.bars li { display: grid; grid-template-columns: 5rem 1fr 4rem; gap: .5rem; align-items: center; }
+.bars li { display: grid; grid-template-columns: 8rem 1fr 4rem; gap: .5rem; align-items: center; }
 .bars .track { height: .75rem; border-radius: .2rem; }
 .params { display: flex; gap: 1rem; flex-wrap: wrap; margin-top: 1rem; align-items: end; }
 .keys { font-family: ui-monospace, monospace; font-size: .8rem; }

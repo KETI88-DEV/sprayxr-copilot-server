@@ -7,6 +7,12 @@ const $ = (id) => document.getElementById(id);
 const QUERY = { worker: "A", date: "20250901", level: "10", session: "s1", pass_index: 0 };
 const REFERENCE = { worker: "B", date: "20250902", level: "10", session: "s2", pass_index: 0 };
 
+// 게이트가 비어 있는 이유. 판정 자리에 이유를 적어 "아직 재지 않았다"를 드러낸다.
+const GATE_REASONS = {
+  no_reference_distribution: " (레퍼런스 분포 없음 — 판정하지 않음)",
+  not_wired: " (미배선)",
+};
+
 function severityColor(sigma) {
   if (sigma <= 1) return "var(--ok)";
   if (sigma <= 2) return "var(--warn)";
@@ -20,12 +26,25 @@ function renderAxis(root, payload) {
   // 값이 없으면 0이 아니라 대시다. 0.000은 "못 쟀다"가 아니라 "완전히 다르다"로 읽힌다.
   const num = (value) => (typeof value === "number" ? value.toFixed(3) : "—");
 
+  // 게이트가 없으면 판정을 만들어 내걸지 않는다. "각도 지시가 이제 정당하다"는
+  // 뜻이라 상수에서 나온 pass를 적으면 화면이 보지 않은 데이터로 판정을 주장한다.
+  const gate = payload.gate ?? "—";
+  const gateWhy = payload.gate ? "" : GATE_REASONS[payload.gate_reason] ?? "";
+
   root.querySelector("dl").innerHTML = `
     <dt>유사도</dt><dd>${num(payload.score)}</dd>
     <dt>교정 후</dt><dd>${num(payload.score_after)}</dd>
     <dt>개선율(분리)</dt><dd>${num(payload.improvement?.split)}</dd>
     <dt>개선율(동일)</dt><dd>${num(payload.improvement?.same)}</dd>
-    <dt>REQ-19 게이트</dt><dd>${payload.gate ?? "n/a"}</dd>`;
+    <dt>REQ-19 게이트</dt><dd>${gate}${gateWhy}</dd>`;
+
+  const provisional = root.querySelector(".provisional");
+  if (provisional) {
+    provisional.textContent =
+      payload.normalization === "provisional"
+        ? "σ와 점수는 잰 분포가 아니라 임시 산포(0.05 m)로 정규화한 값이다."
+        : "";
+  }
 
   const bars = root.querySelector(".bars");
   bars.replaceChildren();
