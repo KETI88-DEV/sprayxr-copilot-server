@@ -19,7 +19,7 @@
 | React 웹 / Electron 콘솔 | 동작 | [`demo-ui/`](demo-ui) |
 | Gradio 데모 | 유지(병행) | [`demo_app.py`](trainer/scripts/demo_app.py) |
 | 레이턴시 예산 | 계측·제어 경로 완료, **실측 gate 미실행** | [`bench_latency.py`](trainer/scripts/bench_latency.py) |
-| 자세 비교 실험대 | 동작 — 실측 3점 채점 + 화면. `:8130`, compose 미공개(SSH 터널 필요). 관절 축은 응답 자리만 있고 아직 채점 미배선 | [`pose_lab/app.py`](trainer/pose_lab/app.py), [`pose_lab/static/`](trainer/pose_lab/static) |
+| 자세 비교 실험대 | 부분 — 모듈·HTTP 표면·화면은 있고 `:8130`에서 뜨지만, **실데이터 소스가 미배선**이라 비교가 아직 돌지 않는다(모든 비교가 `no_source`). compose 미공개(SSH 터널 필요) | [`pose_lab/app.py`](trainer/pose_lab/app.py), [`pose_lab/static/`](trainer/pose_lab/static) |
 
 아직 아닌 것 — 데모 시연 시 오해를 부르는 지점이라 명시한다.
 
@@ -116,6 +116,8 @@ React 콘솔 구성(`demo-ui/src/components/`):
 
 실측 축과 관절 축을 나란히 놓고 REQ-19 개선율(70%) 기준을 실데이터로 판정하기 위한 별도 테스트 도구다. `demo_api`(`:8120`)와는 분리된 프로세스다.
 
+**아직 비교가 돌지 않는다.** 채점·정렬 모듈과 HTTP 표면, 화면은 들어와 있고 프로세스도 뜨지만, CSV를 패스로 잘라 넘기는 `PassSource` 구현이 테스트 픽스처 밖에 없다. `create_app()`의 기본값이 `source=None`이라 아래 명령으로 띄운 페이지에서 비교를 누르면 모든 응답이 `{"status": "unavailable", "reason": "no_source"}`다. 실데이터 소스를 배선해야 지표가 나온다.
+
 ```bash
 docker exec -d -w /workspace ship-paint-trainer python3 -m uvicorn trainer.pose_lab.app:create_app --factory --host 0.0.0.0 --port 8130
 docker exec -w /workspace ship-paint-trainer curl -s http://127.0.0.1:8130/api/health
@@ -127,7 +129,9 @@ docker exec -w /workspace ship-paint-trainer curl -s http://127.0.0.1:8130/api/h
 ssh -L 8130:127.0.0.1:8130 <서버>
 ```
 
-이후 브라우저에서 `http://127.0.0.1:8130`을 연다. **채점은 실측 3점에서 하고 표시용 스켈레톤만 FK를 탄다** — 관절 축은 응답에 자리만 있고 IK 산출물 배지로 표시되며, 실제 채점은 실데이터 소스가 붙은 뒤 배선한다.
+이후 브라우저에서 `http://127.0.0.1:8130`을 연다. 페이지는 렌더되지만 위에 적은 대로 비교는 아직 돌지 않는다.
+
+**채점은 실측 3점에서 하고 표시용 스켈레톤만 FK를 탄다** — 관절 축은 응답에 자리만 있고 IK 산출물 배지로 표시되며, 실제 채점은 실데이터 소스가 붙은 뒤 배선한다. 실측 축의 σ와 점수도 지금은 잰 분포가 아니라 임시 산포로 정규화한 값이라 응답이 `normalization: provisional`로 표시하고, REQ-19 게이트는 잰 분포가 없어 판정하지 않는다(`gate: null`).
 
 ### 2.4 GPU 없이 시뮬레이터 I/O 확인
 
