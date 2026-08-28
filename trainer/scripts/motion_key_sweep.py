@@ -47,8 +47,10 @@ from typing import Any, Final, Iterable, Iterator, Mapping, Sequence
 import measured_pose
 import motion_key
 import rotation_math
+import stroke_frame
 
 Vec3 = tuple[float, float, float]
+Quat = tuple[float, float, float, float]
 
 # `m1:`과 문자열 공간을 나눈다. 측정용 키가 레퍼런스 아티팩트로 새어 들어가면 안 된다.
 SWEEP_PREFIX: Final = "sweep"
@@ -65,6 +67,16 @@ GUN_ROTATION_GROUP: Final = "한길숏건"
 MIN_BUCKET_N: Final = 20
 MIN_BUCKET_WORKERS: Final = 2
 MIN_COVERAGE: Final = 0.50
+
+# REQ-19 `correction_target_gate`의 각도판. `pose_lab.service.DEFAULT_ERROR_M`(0.144 m)이
+# "팔꿈치 30도에 해당하는 실측 참조값"이므로 각도판 e는 30°이고, `s/e < 0.5`는 곧
+# **버킷 산포 15° 미만**이다. 이 값을 옮기지 않는다(설계 D4).
+GATE_ERROR_DEG: Final = 30.0
+GATE_RATIO: Final = 0.5
+GATE_LIMIT_DEG: Final = GATE_ERROR_DEG * GATE_RATIO
+
+# 작업자 내/간 분해에서 한 작업자를 세는 최소 패스 수. 이전 연구와 같은 값이다.
+MIN_WORKER_PASSES: Final = 5
 
 
 @dataclass(frozen=True, slots=True)
@@ -296,6 +308,204 @@ def arithmetic_std_deg(values: Sequence[float]) -> float | None:
     return statistics.pstdev(values) if len(values) >= 2 else None
 
 
+# --- 회전 산포: 네 가지 표현 ---------------------------------------------------
+#
+# 이전 연구(`pose-lab-bucket-study.md` §6.2)가 남긴 두 가설을 갈라 재기 위한 것이다.
+#
+# (가) **월드 오일러가 표면 방향을 산포로 흡수한다.** 벽이 휘면 작업자의 기법이 똑같아도
+#      표면을 따라가는 것만으로 건의 월드 자세가 변한다. 그 변화가 버킷 산포로 나타난다.
+#      스트로크 프레임(벽 법선·진행 접선·수직)에서 다시 재면 그 몫이 빠진다.
+#
+# (나) **오일러 축별 산포는 뜻 있는 요약이 아니다.** 세 축은 독립이 아니고 특이점에서
+#      결합한다. X가 8.7°인데 Y·Z가 120°인 버킷은 그 결합의 지문일 수 있다. 표현에
+#      무관한 측도 — 쿼터니언 측지 산포 — 로 재면 갈린다.
+#
+# 두 축을 곱해 네 칸을 전부 낸다. 하나를 골라 통과를 만들지 않기 위해서다.
+
+
+@dataclass(frozen=True, slots=True)
+class Dispersion:
+    """버킷 하나의 회전 산포. 네 칸 중 한 칸이다."""
+
+    n: int
+    euler: tuple[float | None, float | None, float | None]
+    geodesic_mean: float | None
+    geodesic_rms: float | None
+
+
+def stroke_basis_of(record: PassRecord) -> Any | None:
+    """패스 대표 스트로크 기저. `service.representative_basis`와 같은 규칙이다.
+
+    접선은 착탄점 순 변위, 수직은 월드 Z를 접선에 직교화한 축, 법선은 둘의 외적이고
+    부호만 건 위치가 고른다. 축이 측정 대상(건 자세)에서 나오지 않는다는 것이 이
+    기저의 요점이며, 그래서 여기에 건 회전을 옮겨도 순환논법이 되지 않는다.
+    """
+    if record.gun_pos is None:
+        return None
+    return stroke_frame.stroke_basis(record.hit, record.displacement, record.gun_pos)
+
+
+def local_quaternion(record: PassRecord) -> Quat | None:
+    """건 자세를 스트로크 프레임으로 옮긴 회전. `R_local = Bᵀ · R_world`."""
+    if record.quat is None:
+        return None
+    basis = stroke_basis_of(record)
+    if basis is None:
+        return None
+    frame = rotation_math.basis_matrix((basis.normal, basis.tangent, basis.up))
+    world = rotation_math.quaternion_matrix(record.quat)
+    return rotation_math.matrix_quaternion(
+        rotation_math.matmul(rotation_math.transpose(frame), world)
+    )
+
+
+def euler_of(quat: Quat) -> Vec3:
+    """쿼터니언을 다시 오일러 축으로. 규약은 `measured_pose`가 고른 하나뿐이다."""
+    return rotation_math.euler_from_matrix(
+        measured_pose.EULER_ORDER,
+        rotation_math.quaternion_matrix(quat),
+        measured_pose.EULER_SIGN,
+    )
+
+
+def dispersion_of(quats: Sequence[Quat]) -> Dispersion:
+    """같은 표본에서 축별 순환 std와 측지 산포를 **함께** 낸다.
+
+    같은 쿼터니언 표본에서 둘 다 뽑는 것이 요점이다. 축별은 `record.rotation`(프레임
+    축별 순환 평균)에서, 측지는 쿼터니언 평균에서 뽑으면 대표값이 달라 네 칸이
+    비교 가능하지 않게 된다.
+    """
+    if len(quats) < 2:
+        return Dispersion(len(quats), (None, None, None), None, None)
+    angles = [euler_of(quat) for quat in quats]
+    euler = tuple(
+        circular_std_deg([angle[axis] for angle in angles]) for axis in range(3)
+    )
+    spread = rotation_math.geodesic_spread(quats)
+    return Dispersion(
+        n=len(quats),
+        euler=euler,  # pyright: ignore[reportArgumentType]
+        geodesic_mean=None if spread is None else spread[0],
+        geodesic_rms=None if spread is None else spread[1],
+    )
+
+
+def bucket_dispersions(
+    items: Sequence[PassRecord],
+) -> tuple[Dispersion, Dispersion, tuple[float | None, float | None, float | None]]:
+    """(월드, 스트로크 프레임, 이전 연구식 월드 축별) 셋.
+
+    세 번째는 `record.rotation` — 프레임마다의 오일러를 **축별로** 순환 평균한 값 — 위의
+    순환 std다. 이전 연구 §4.4가 낸 바로 그 통계이며, 재현 대조로만 싣는다.
+    """
+    world = [item.quat for item in items if item.quat is not None]
+    local = [quat for quat in (local_quaternion(item) for item in items) if quat is not None]
+    prior = tuple(
+        circular_std_deg([item.rotation[axis] for item in items if item.rotation is not None])
+        for axis in range(3)
+    )
+    return dispersion_of(world), dispersion_of(local), prior  # pyright: ignore[reportReturnType]
+
+
+def usable_buckets(
+    records: Sequence[PassRecord], config: SweepConfig
+) -> list[tuple[str, list[PassRecord]]]:
+    """§0 C1·C2를 만족하는 버킷만. 기준은 상수로 박혀 있고 여기서 옮기지 않는다."""
+    return [
+        (key, items)
+        for key, items in sorted(bucketize(records, config).items())
+        if len(items) >= MIN_BUCKET_N
+        and len({item.worker for item in items}) >= MIN_BUCKET_WORKERS
+    ]
+
+
+def _median(values: Sequence[float | None]) -> float | None:
+    found = [value for value in values if value is not None]
+    return statistics.median(found) if found else None
+
+
+def _pass_fraction(values: Sequence[float | None]) -> float | None:
+    """게이트를 통과하는 버킷의 비율. 재지 못한 버킷은 분모에서도 뺀다."""
+    found = [value for value in values if value is not None]
+    if not found:
+        return None
+    return sum(1 for value in found if value < GATE_LIMIT_DEG) / len(found)
+
+
+@dataclass(frozen=True, slots=True)
+class DispersionSummary:
+    """한 입도에서 네 표현의 산포 요약. 각 칸이 (중앙값, 게이트 통과 비율)이다."""
+
+    config: str
+    buckets: int
+    coverage: float
+    world_euler: tuple[tuple[float | None, float | None], ...]
+    world_geodesic_mean: tuple[float | None, float | None]
+    world_geodesic_rms: tuple[float | None, float | None]
+    local_euler: tuple[tuple[float | None, float | None], ...]
+    local_geodesic_mean: tuple[float | None, float | None]
+    local_geodesic_rms: tuple[float | None, float | None]
+    prior_euler: tuple[tuple[float | None, float | None], ...]
+
+
+def dispersion_summary(
+    records: Sequence[PassRecord], config: SweepConfig
+) -> DispersionSummary:
+    buckets = usable_buckets(records, config)
+    rows = [bucket_dispersions(items) for _, items in buckets]
+    total = len(records)
+    covered = sum(len(items) for _, items in buckets)
+
+    def axis_cell(
+        pick: Any, axis: int
+    ) -> tuple[float | None, float | None]:
+        values = [pick(row)[axis] for row in rows]
+        return (_median(values), _pass_fraction(values))
+
+    def scalar_cell(pick: Any) -> tuple[float | None, float | None]:
+        values = [pick(row) for row in rows]
+        return (_median(values), _pass_fraction(values))
+
+    return DispersionSummary(
+        config=config.name,
+        buckets=len(buckets),
+        coverage=0.0 if not total else covered / total,
+        world_euler=tuple(axis_cell(lambda row: row[0].euler, axis) for axis in range(3)),
+        world_geodesic_mean=scalar_cell(lambda row: row[0].geodesic_mean),
+        world_geodesic_rms=scalar_cell(lambda row: row[0].geodesic_rms),
+        local_euler=tuple(axis_cell(lambda row: row[1].euler, axis) for axis in range(3)),
+        local_geodesic_mean=scalar_cell(lambda row: row[1].geodesic_mean),
+        local_geodesic_rms=scalar_cell(lambda row: row[1].geodesic_rms),
+        prior_euler=tuple(axis_cell(lambda row: row[2], axis) for axis in range(3)),
+    )
+
+
+# --- 산포의 출처: 작업자 내 vs 작업자 간 ----------------------------------------
+
+
+def worker_split(quats_by_worker: Mapping[str, Sequence[Quat]]) -> tuple[float, float] | None:
+    """(버킷 전체 측지 산포, 작업자 평균들 사이의 측지 산포). 둘 다 RMS다.
+
+    `총² ≈ 작업자내² + 작업자간²`이므로 둘의 비가 산포의 출처를 가른다. 이전 연구는
+    오일러 축별 순환 std로 이 비를 재서 작업자 내 몫 ≈ 94%를 얻었다. 여기서는 회전
+    공간에서 같은 분해를 한다 — 인공물이 그 비를 부풀렸다면 여기서 내려가야 한다.
+    """
+    pooled = [quat for values in quats_by_worker.values() for quat in values]
+    total = rotation_math.geodesic_spread(pooled)
+    if total is None:
+        return None
+    means = [
+        mean
+        for values in quats_by_worker.values()
+        if len(values) >= MIN_WORKER_PASSES
+        and (mean := rotation_math.quaternion_mean(values)) is not None
+    ]
+    between = rotation_math.geodesic_spread(means)
+    if between is None:
+        return None
+    return (total[1], between[1])
+
+
 # --- 실데이터 훑기 ------------------------------------------------------------
 
 
@@ -515,6 +725,75 @@ def bucket_angle_report(
     return report
 
 
+def _cell(cell: tuple[float | None, float | None]) -> str:
+    median, fraction = cell
+    left = "—" if median is None else f"{median:.1f}°"
+    right = "—" if fraction is None else f"{fraction * 100:.1f}%"
+    return f"{left} | {right}"
+
+
+def format_dispersion_table(rows: Sequence[DispersionSummary]) -> str:
+    """네 표현 × (중앙 산포, 게이트 통과 비율). 한 칸도 빼지 않는다."""
+    header = (
+        "| 설정 | 기준충족 키 | 커버리지 "
+        "| 월드 오일러 X | 월드 오일러 Y | 월드 오일러 Z "
+        "| 월드 측지 mean | 월드 측지 rms "
+        "| 스트로크 오일러 X | 스트로크 오일러 Y | 스트로크 오일러 Z "
+        "| 스트로크 측지 mean | 스트로크 측지 rms |"
+    )
+    lines = [header, "|" + "---|" * 13]
+    for row in rows:
+        cells = [
+            *(_cell(row.world_euler[axis]) for axis in range(3)),
+            _cell(row.world_geodesic_mean),
+            _cell(row.world_geodesic_rms),
+            *(_cell(row.local_euler[axis]) for axis in range(3)),
+            _cell(row.local_geodesic_mean),
+            _cell(row.local_geodesic_rms),
+        ]
+        lines.append(
+            f"| {row.config} | {row.buckets} | {row.coverage * 100:.1f}% | "
+            + " | ".join(cells)
+            + " |"
+        )
+    return "\n".join(lines)
+
+
+def worker_split_report(
+    records: Sequence[PassRecord], config: SweepConfig, local: bool
+) -> dict[str, Any]:
+    """기준충족 버킷 전체에서 (총 산포, 작업자 간 산포, 작업자 간 비)의 중앙값.
+
+    `총² ≈ 작업자내² + 작업자간²`이므로 작업자 **내** 몫은 `√(1 − 비²)`다. 이전 연구가
+    오일러 축별로 얻은 0.94를 회전공간에서 다시 낸다.
+    """
+    totals: list[float] = []
+    betweens: list[float] = []
+    ratios: list[float] = []
+    for _, items in usable_buckets(records, config):
+        grouped: dict[str, list[Quat]] = defaultdict(list)
+        for item in items:
+            quat = local_quaternion(item) if local else item.quat
+            if quat is not None:
+                grouped[item.worker].append(quat)
+        split = worker_split(grouped)
+        if split is None or split[0] <= 0.0:
+            continue
+        totals.append(split[0])
+        betweens.append(split[1])
+        ratios.append(min(1.0, split[1] / split[0]))
+    if not ratios:
+        return {"buckets": 0}
+    ratio = statistics.median(ratios)
+    return {
+        "buckets": len(ratios),
+        "total_rms": statistics.median(totals),
+        "between_rms": statistics.median(betweens),
+        "between_ratio": ratio,
+        "within_share": math.sqrt(max(0.0, 1.0 - ratio * ratio)),
+    }
+
+
 # --- CLI ---------------------------------------------------------------------
 
 
@@ -546,6 +825,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     report_cmd.add_argument("--cache", type=Path, required=True)
     report_cmd.add_argument("--top", type=int, default=10)
 
+    dispersion_cmd = sub.add_parser(
+        "dispersion", help="네 표현(월드/스트로크 × 오일러/측지)의 산포와 게이트 통과 비율"
+    )
+    dispersion_cmd.add_argument("--cache", type=Path, required=True)
+
     args = parser.parse_args(argv)
     if args.command == "scan":
         workers = [name for name in args.workers.split(",") if name] or None
@@ -561,6 +845,16 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     records = read_cache(args.cache)
     configs = default_configs()
+    if args.command == "dispersion":
+        print(f"passes={len(records)}")
+        print(format_dispersion_table([dispersion_summary(records, c) for c in configs]))
+        print()
+        for config in configs[:1]:
+            for local in (False, True):
+                name = "스트로크 프레임" if local else "월드"
+                print(f"### 작업자 내/간 분해 — {config.name} · {name}")
+                print(json.dumps(worker_split_report(records, config, local), ensure_ascii=False))
+        return 0
     print(f"passes={len(records)} workers={sorted({r.worker for r in records})}")
     print(f"levels={sorted({r.level for r in records}, key=int)}")
     print(Counter(record.worker for record in records))

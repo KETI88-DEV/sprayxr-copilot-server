@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 motion_key = importlib.import_module("motion_key")
 sweep = importlib.import_module("motion_key_sweep")
+stroke_frame_module = importlib.import_module("stroke_frame")
 
 
 def _record(
@@ -322,3 +323,141 @@ def test_old_cache_lines_still_load() -> None:
     }
     record = sweep.PassRecord.from_json(payload)
     assert record.yaw is None and record.gun_pos is None and record.quat is None
+
+
+# --- 회전 산포: 네 표현 ---------------------------------------------------------
+
+
+def _rotated(worker: str, angles: tuple[float, float, float], **kwargs: object) -> object:
+    """월드 자세만 다른 패스. 스트로크 기저는 기본값에서 동일하다."""
+    rotation_math = importlib.import_module("rotation_math")
+    quat = rotation_math.matrix_quaternion(rotation_math.euler_matrix("YXZ", angles))
+    return _record(worker=worker, rotation=angles, **kwargs) and sweep.PassRecord(
+        worker=worker,
+        level="10",
+        session="s",
+        date="20250901",
+        pass_index=0,
+        displacement=kwargs.get("displacement", (0.0, 0.6, 0.0)),  # pyright: ignore[reportArgumentType]
+        head=(0.5, 4.5, 1.5),
+        hit=kwargs.get("hit", (1.2, 4.5, 0.9)),  # pyright: ignore[reportArgumentType]
+        uv=(1024.0, 512.0),
+        gun="한길숏건",
+        rotation=angles,
+        yaw=0.0,
+        gun_pos=kwargs.get("gun_pos", (0.8, 4.5, 1.1)),  # pyright: ignore[reportArgumentType]
+        quat=quat,
+    )
+
+
+def test_gate_threshold_is_the_angle_form_of_req19_and_is_not_moved() -> None:
+    """`s/e < 0.5`, `e = 30°`이므로 통과선은 15°다. 이 값을 옮기면 판정이 무의미해진다."""
+    assert sweep.GATE_ERROR_DEG == 30.0
+    assert sweep.GATE_RATIO == 0.5
+    assert sweep.GATE_LIMIT_DEG == 15.0
+
+
+def test_identical_rotations_have_zero_dispersion_in_every_representation() -> None:
+    records = [_rotated(f"W{i}", (10.0, 20.0, 30.0)) for i in range(4)]
+    world, local, prior = sweep.bucket_dispersions(records)
+    assert world.geodesic_mean is not None and world.geodesic_mean < 1e-6
+    assert local.geodesic_mean is not None and local.geodesic_mean < 1e-6
+    for axis in range(3):
+        assert (world.euler[axis] or 0.0) < 1e-6
+        assert (prior[axis] or 0.0) < 1e-6
+
+
+def test_geodesic_dispersion_is_blind_to_which_euler_axis_moved() -> None:
+    """오일러 축별 값은 어느 축이 움직였는지에 따라 갈리지만 측지 산포는 같다.
+
+    이것이 가설 (나)를 재는 근거다 — 회전량이 같으면 표현과 무관하게 같은 값이 나와야
+    한다.
+    """
+    rotation_math = importlib.import_module("rotation_math")
+    spreads = []
+    for axis in "XYZ":
+        quats = [
+            rotation_math.matrix_quaternion(rotation_math.axis_matrix(axis, angle))
+            for angle in (-20.0, 0.0, 20.0)
+        ]
+        spread = sweep.dispersion_of(quats)
+        assert spread.geodesic_mean is not None
+        spreads.append(spread.geodesic_mean)
+    assert max(spreads) - min(spreads) < 1e-6
+
+
+def test_stroke_frame_removes_a_rotation_that_only_followed_the_surface() -> None:
+    """가설 (가)를 잠그는 테스트.
+
+    스트로크 방향만 다르고 **기법이 같은** 두 패스를 만든다. 건이 스트로크 프레임에서
+    같은 자세를 유지하면 월드 자세는 갈리지만 로컬 자세는 같아야 한다. 스트로크 프레임
+    산포가 월드 산포보다 작지 않으면 (가)를 재는 경로가 배선되지 않은 것이다.
+    """
+    rotation_math = importlib.import_module("rotation_math")
+    records: list[object] = []
+    for index, tangent in enumerate(((0.0, 1.0, 0.0), (0.0, 0.0, 1.0))):
+        hit = (1.2, 4.5, 0.9)
+        gun_pos = (0.8, 4.5, 1.1)
+        basis = stroke_frame_module.stroke_basis(hit, tangent, gun_pos)
+        frame = rotation_math.basis_matrix((basis.normal, basis.tangent, basis.up))
+        # 로컬에서 항등 자세. 월드 자세는 기저를 그대로 따라간다.
+        quat = rotation_math.matrix_quaternion(frame)
+        records.append(
+            sweep.PassRecord(
+                worker=f"W{index}",
+                level="10",
+                session="s",
+                date="20250901",
+                pass_index=index,
+                displacement=tangent,
+                head=(0.5, 4.5, 1.5),
+                hit=hit,
+                uv=(1024.0, 512.0),
+                gun="한길숏건",
+                rotation=None,
+                yaw=0.0,
+                gun_pos=gun_pos,
+                quat=quat,
+            )
+        )
+    world, local, _ = sweep.bucket_dispersions(records)  # pyright: ignore[reportArgumentType]
+    assert world.geodesic_mean is not None and world.geodesic_mean > 30.0
+    assert local.geodesic_mean is not None and local.geodesic_mean < 1e-6
+
+
+def test_worker_split_separates_within_from_between() -> None:
+    """한 사람 안의 흔들림만 있으면 작업자 간 성분이 0에 붙어야 한다."""
+    rotation_math = importlib.import_module("rotation_math")
+
+    def quats(offsets: tuple[float, ...]) -> list[object]:
+        return [
+            rotation_math.matrix_quaternion(rotation_math.axis_matrix("Z", angle))
+            for angle in offsets
+        ]
+
+    same_centre = {
+        "A": quats((-20.0, 0.0, 20.0, 10.0, -10.0)),
+        "B": quats((-20.0, 0.0, 20.0, 10.0, -10.0)),
+    }
+    split = sweep.worker_split(same_centre)  # pyright: ignore[reportArgumentType]
+    assert split is not None
+    total, between = split
+    assert total > 10.0
+    assert between < 1e-6
+
+    apart = {
+        "A": quats((-2.0, 0.0, 2.0, 1.0, -1.0)),
+        "B": quats((58.0, 60.0, 62.0, 61.0, 59.0)),
+    }
+    split = sweep.worker_split(apart)  # pyright: ignore[reportArgumentType]
+    assert split is not None
+    assert split[1] > 25.0
+
+
+def test_usable_buckets_apply_the_preregistered_criterion() -> None:
+    records = [_record(worker="A") for _ in range(19)]
+    assert sweep.usable_buckets(records, sweep.SweepConfig(name="기본")) == []  # pyright: ignore[reportArgumentType]
+    records = [_record(worker="A") for _ in range(20)]
+    assert sweep.usable_buckets(records, sweep.SweepConfig(name="기본")) == []  # pyright: ignore[reportArgumentType]
+    records = [_record(worker="A") for _ in range(10)] + [_record(worker="B") for _ in range(10)]
+    assert len(sweep.usable_buckets(records, sweep.SweepConfig(name="기본"))) == 1  # pyright: ignore[reportArgumentType]

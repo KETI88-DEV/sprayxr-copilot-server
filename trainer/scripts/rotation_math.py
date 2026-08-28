@@ -13,7 +13,7 @@
 
 CSV의 오일러 규약은 벤더 문서로 확인된 적이 없다(설계 §10). 그래서 이 모듈은 규약을
 가정하지 않는다 — 순서·부호를 인자로 받고, 어느 규약이 맞는지는 데이터가 고르게 한다
-(`measured_pose.FACING`).
+(`measured_pose.EULER_ORDER` · `EULER_SIGN`).
 """
 
 from __future__ import annotations
@@ -196,8 +196,22 @@ def geodesic_deg(left: Quat, right: Quat) -> float:
     `|·|`이 있는 이유는 `q`와 `−q`가 같은 회전이기 때문이다. 이 값은 한 회전을 다른
     회전으로 옮기는 데 필요한 **최소 회전각**이고, 축이 어느 쪽이든 무관하다. 즉
     오일러 좌표계에 의존하지 않는다.
+
+    **`acos`를 직접 쓰지 않는다.** `d`가 1에 붙으면 `acos(d)`의 상대오차가 `√(1−d)`로
+    커져, 작은 각에서 자릿수를 잃는다. 이 모듈이 재려는 것이 바로 **작은 산포**이므로
+    그 손실을 감수할 수 없다. 대신 상대 회전 `q₁* · q₂`의 벡터부와 스칼라부로
+    `θ = 2·atan2(‖vec‖, |w|)`를 쓴다 — 수학적으로 같은 값이고 0 근방에서 안정하다.
     """
-    return math.degrees(2.0 * math.acos(min(1.0, abs(quat_dot(left, right)))))
+    w1, x1, y1, z1 = left
+    w2, x2, y2, z2 = right
+    scalar = w1 * w2 + x1 * x2 + y1 * y2 + z1 * z2
+    vector = (
+        w1 * x2 - x1 * w2 - y1 * z2 + z1 * y2,
+        w1 * y2 + x1 * z2 - y1 * w2 - z1 * x2,
+        w1 * z2 - x1 * y2 + y1 * x2 - z1 * w2,
+    )
+    length = math.sqrt(sum(component * component for component in vector))
+    return math.degrees(2.0 * math.atan2(length, abs(scalar)))
 
 
 def quaternion_mean(quats: Sequence[Quat], iterations: int = 64) -> Quat | None:
