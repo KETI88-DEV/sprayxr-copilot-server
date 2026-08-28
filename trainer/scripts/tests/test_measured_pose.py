@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib
+import math
 import sys
 from pathlib import Path
 
@@ -137,3 +138,51 @@ def test_missing_ray_leaves_hit_none_but_keeps_frame() -> None:
     assert frames[3].hit is None
     assert frames[3].uv is None
     assert frames[3].head == (0.5, 5.0, 0.8)
+
+
+# --- 실측 요 -------------------------------------------------------------------
+#
+# 규약(YXZ · 부호 +1 · HMD 로컬 +Z)은 실데이터가 골랐다. 판정은
+# `.superpowers/pose-lab-yaw-and-angle-study.md` §1에 있고, 여기서는 그 규약이 코드에
+# 그대로 박혀 있는지와 퇴화 처리를 잠근다.
+
+
+def test_facing_yaw_reads_the_convention_the_data_chose() -> None:
+    """YXZ에서 전방 = (sin RotY·cos RotX, −sin RotX, cos RotY·cos RotX)이다.
+
+    RotY=90이면 수평 성분이 (cos RotX, −sin RotX)라 방위가 정확히 −RotX가 된다.
+    이 항등식이 깨지면 규약이 바뀐 것이고, 그때는 몸 기준 축 전체가 조용히 틀어진다.
+    """
+    for degrees in (0.0, 30.0, 120.0, 300.0):
+        yaw = measured_pose.facing_yaw((degrees, 90.0, 0.0))
+        assert yaw is not None
+        expected = math.radians(-degrees)
+        assert math.isclose(math.cos(yaw), math.cos(expected), abs_tol=1e-9)
+        assert math.isclose(math.sin(yaw), math.sin(expected), abs_tol=1e-9)
+
+
+def test_facing_yaw_is_none_when_the_head_points_straight_up() -> None:
+    """수평 성분이 사라지면 방위가 없다. 0을 넣으면 월드 +X를 정면이라 주장하게 된다."""
+    assert measured_pose.facing_yaw((0.0, 0.0, 0.0)) is None
+
+
+def test_gun_forward_axis_is_the_spray_ray() -> None:
+    """건의 로컬 +Y가 분사 광선이다 — 이 규약을 고른 실측 판정의 핵심이다."""
+    forward = measured_pose.forward_vector((0.0, 0.0, 0.0), measured_pose.GUN_FORWARD)
+    assert forward == (0.0, 1.0, 0.0)
+
+
+def test_frames_carry_the_measured_yaw() -> None:
+    rows = _rows()
+    for row in rows:
+        for axis, value in zip("XYZ", (300.0, 90.0, 0.0)):
+            row[f"카메라 Rotation {axis}"] = str(value)
+    frames = measured_pose.measured_frames(rows)
+    assert all(frame.yaw is not None for frame in frames)
+    assert math.isclose(frames[0].yaw or 0.0, math.radians(60.0), abs_tol=1e-9)
+
+
+def test_yaw_is_none_when_the_rotation_columns_are_absent() -> None:
+    """없는 값을 0으로 채우면 몸 기준 축이 조용히 월드 방위각으로 돌아간다."""
+    frames = measured_pose.measured_frames(_rows())
+    assert all(frame.yaw is None for frame in frames)

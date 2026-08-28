@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import math
+
 from fastapi.testclient import TestClient
 
 from trainer.pose_lab import service
@@ -11,6 +13,9 @@ from trainer.pose_lab.service import PassRef, RawPass
 
 PARKED = (-694.61, 701.29, 698.25)
 STILL = (-2.99, 4.66, -0.27)
+# 정면 방위 +60°가 나오는 HMD 회전(아래 _rows 주석 참조).
+HEAD_ROTATION = (300.0, 90.0, 0.0)
+EXPECTED_YAW = math.radians(60.0)
 
 QUERY = {"worker": "A", "date": "20250901", "level": "10", "session": "s1", "pass_index": 0}
 REFERENCE = {"worker": "B", "date": "20250902", "level": "10", "session": "s2", "pass_index": 0}
@@ -41,6 +46,12 @@ def _rows(
         }
         for axis, value in zip("XYZ", (0.5, 4.2 + step, 0.8 + shift)):
             row[f"카메라 Position {axis}"] = str(value)
+        # 실측 요를 태우는 HMD 회전. `measured_pose.EULER_ORDER`(YXZ) 규약에서
+        # 전방 = (sin RotY·cos RotX, −sin RotX, cos RotY·cos RotX)이므로
+        # (RotX, RotY, RotZ) = (300, 90, 0)이면 정면 방위가 정확히 +60°다.
+        # 요가 0일 때와 몸 기준 축(②④)이 둘 다 달라지는 값을 골랐다.
+        for axis, value in zip("XYZ", HEAD_ROTATION):
+            row[f"카메라 Rotation {axis}"] = str(value)
         for axis, value in zip("XYZ", (0.85, 4.2 + step, 0.65 + shift)):
             row[f"한길숏건 Position {axis}"] = str(value)
         # 겹친 프레임은 |머리-왼손| = 0.000 m라 왼손만 마스킹된다.
@@ -230,20 +241,51 @@ def test_gate_is_judged_once_measured_spreads_arrive() -> None:
     assert measured["normalization"] == "measured"
 
 
-def test_response_discloses_the_assumed_yaw() -> None:
-    """동작 키의 ②④는 몸 기준 이름을 달고 있지만 요를 0으로 고정해 만든 값이다.
+def test_response_reports_the_measured_yaw_it_actually_used() -> None:
+    """동작 키의 ②④는 이제 실측 요 위에 선다. 응답이 그 값과 출처를 말해야 한다.
 
-    실측 요 추출은 별개 작업이다. 그때까지는 응답이 그 가정을 말해야 한다.
+    `yaw_assumed` 이름은 유지한다 — 화면과 기존 소비자가 그 키를 읽고 있고, 이름을
+    바꾸면 조용히 사라진다. 대신 값이 실제로 쓴 요가 되고 `yaw_source`가 그것이
+    실측인지 대체값인지 가른다.
     """
     client = TestClient(create_app(source=FakeSource()))
     body = client.post("/api/compare", json={"query": QUERY, "reference": REFERENCE}).json()
-    assert body["yaw_assumed"] == 0.0
+    assert body["yaw_source"] == "measured"
+    assert math.isclose(body["yaw_assumed"], EXPECTED_YAW, abs_tol=1e-9)
 
     mismatched = TestClient(create_app(source=FakeSource(mismatch=True)))
     unavailable = mismatched.post(
         "/api/compare", json={"query": QUERY, "reference": REFERENCE}
     ).json()
-    assert unavailable["yaw_assumed"] == 0.0
+    assert unavailable["status"] == "unavailable"
+    assert unavailable["yaw_source"] == "measured"
+    assert math.isclose(unavailable["yaw_assumed"], EXPECTED_YAW, abs_tol=1e-9)
+
+
+def test_measured_yaw_moves_the_body_relative_axes_of_the_key() -> None:
+    """요가 0이면 ②④는 몸 기준 이름을 단 월드 방위각이다. 그것이 이 배선의 요점이다.
+
+    같은 패스를 회전 컬럼 없이 읽으면(=대체값 0) 키가 달라져야 한다. 달라지지 않으면
+    실측 요가 키에 도달하지 않은 것이고, 그때는 이 배선이 아무것도 하지 않는다.
+    """
+    measured = service.compare(FakeSource(), PassRef(**QUERY), PassRef(**REFERENCE))
+
+    class Rotationless(FakeSource):
+        def load(self, ref: PassRef) -> RawPass:
+            raw = super().load(ref)
+            return RawPass(
+                rows=[
+                    {k: v for k, v in row.items() if not k.startswith("카메라 Rotation")}
+                    for row in raw.rows
+                ]
+            )
+
+    assumed = service.compare(Rotationless(), PassRef(**QUERY), PassRef(**REFERENCE))
+    assert assumed["yaw_source"] == "assumed"
+    assert assumed["yaw_assumed"] == service.ASSUMED_YAW
+    assert measured["query_key"] != assumed["query_key"]
+    # 바뀌는 것은 몸 기준 축뿐이다. 기울기 대역(①)은 착탄 변위에서만 나온다.
+    assert str(measured["query_key"]).split(":")[1] == str(assumed["query_key"]).split(":")[1]
 
 
 def test_improvement_counts_only_the_correction_that_was_issued() -> None:

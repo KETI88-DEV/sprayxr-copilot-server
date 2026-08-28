@@ -199,3 +199,19 @@ def test_left_is_none_outside_the_observed_left_span() -> None:
     resampled = stroke_frame.resample_frames(frames, 5)
     assert resampled[0].left is None
     assert resampled[-1].left is not None
+
+
+def test_resampled_yaw_is_interpolated_on_the_circle_not_on_the_number_line() -> None:
+    """179°와 −179° 사이는 2°다. 스칼라로 섞으면 0°가 나와 뒤를 본다고 적게 된다."""
+    frames = _frames(3)
+    angles = (math.radians(179.0), math.radians(180.0), math.radians(-179.0))
+    frames = [replace(frame, yaw=angle) for frame, angle in zip(frames, angles)]
+    resampled = stroke_frame.resample_frames(frames, 3)
+    middle = resampled[1].yaw
+    assert middle is not None
+    assert abs(abs(middle) - math.pi) < math.radians(1.0)
+
+
+def test_resampled_yaw_is_none_when_no_frame_carried_one() -> None:
+    resampled = stroke_frame.resample_frames(_frames(5), 3)
+    assert all(frame.yaw is None for frame in resampled)

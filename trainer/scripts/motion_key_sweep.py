@@ -44,15 +44,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final, Iterable, Iterator, Mapping, Sequence
 
+import measured_pose
 import motion_key
+import rotation_math
 
 Vec3 = tuple[float, float, float]
 
 # `m1:`과 문자열 공간을 나눈다. 측정용 키가 레퍼런스 아티팩트로 새어 들어가면 안 된다.
 SWEEP_PREFIX: Final = "sweep"
 
-# 작업자 요는 아직 실측에서 뽑지 않는다. `pose_lab.service.ASSUMED_YAW`와 같은 값을
-# 써야 여기서 잰 점유가 실험대가 실제로 만드는 버킷의 점유가 된다.
+# 요를 못 읽은 패스의 대체값. `pose_lab.service.ASSUMED_YAW`와 같은 값을 써야 여기서
+# 잰 점유가 실험대가 실제로 만드는 버킷의 점유가 된다. 실측 요가 있으면 그것을 쓴다.
 ASSUMED_YAW: Final = 0.0
 
 # 각도 컬럼. 설계 §2.2가 오른손 컨트롤러로 지목한 건이고, IK 산출 관절각이 아니라
@@ -100,6 +102,14 @@ class PassRecord:
     uv: tuple[float, float] | None
     gun: str | None
     rotation: Vec3 | None
+    # 실측 요(라디안). None이면 회전을 못 읽어 `ASSUMED_YAW`로 떨어진 패스다.
+    yaw: float | None = None
+    # 패스 대표 프레임의 건 위치. 스트로크 기저의 법선 **부호**를 고르는 데만 쓴다
+    # (`stroke_frame.stroke_basis`). 회전을 스트로크 프레임으로 옮기려면 필요하다.
+    gun_pos: Vec3 | None = None
+    # 패스 구간의 건 자세를 쿼터니언으로 평균한 값. 오일러 축별 순환 평균과 **다른**
+    # 값이며, 축별 평균은 회전공간의 평균이 아니기 때문에 둘을 다 들고 있는다.
+    quat: tuple[float, float, float, float] | None = None
 
     def as_json(self) -> dict[str, Any]:
         return {
@@ -114,12 +124,18 @@ class PassRecord:
             "uv": None if self.uv is None else list(self.uv),
             "gun": self.gun,
             "rotation": None if self.rotation is None else list(self.rotation),
+            "yaw": self.yaw,
+            "gun_pos": None if self.gun_pos is None else list(self.gun_pos),
+            "quat": None if self.quat is None else list(self.quat),
         }
 
     @staticmethod
     def from_json(payload: Mapping[str, Any]) -> "PassRecord":
         uv = payload["uv"]
         rotation = payload["rotation"]
+        gun_pos = payload.get("gun_pos")
+        quat = payload.get("quat")
+        yaw = payload.get("yaw")
         return PassRecord(
             worker=str(payload["worker"]),
             level=str(payload["level"]),
@@ -132,6 +148,11 @@ class PassRecord:
             uv=None if uv is None else (float(uv[0]), float(uv[1])),
             gun=None if payload["gun"] is None else str(payload["gun"]),
             rotation=None if rotation is None else _vec(rotation),
+            yaw=None if yaw is None else float(yaw),
+            gun_pos=None if gun_pos is None else _vec(gun_pos),
+            quat=None if quat is None else (
+                float(quat[0]), float(quat[1]), float(quat[2]), float(quat[3])
+            ),
         )
 
 
@@ -153,11 +174,10 @@ def sweep_key(record: PassRecord, config: SweepConfig) -> str:
         lateral_deg=config.lateral_deg,
         reach_m=config.reach_m,
     )
+    yaw = ASSUMED_YAW if record.yaw is None else record.yaw
     band = motion_key.signed_band(record.displacement)
-    heading = motion_key.heading_word(ASSUMED_YAW, record.displacement)
-    lateral, reach, height = motion_key.body_placement(
-        record.head, ASSUMED_YAW, record.hit, params
-    )
+    heading = motion_key.heading_word(yaw, record.displacement)
+    lateral, reach, height = motion_key.body_placement(record.head, yaw, record.hit, params)
     if config.uv_grid is None:
         cell = "off"
     elif record.uv is None:
@@ -333,6 +353,9 @@ def scan(
                 uv=None if inputs.uv is None else tuple(inputs.uv),
                 gun=gun,
                 rotation=rotation,
+                yaw=inputs.yaw,
+                gun_pos=gun_position(span, _simulator_csv()),
+                quat=gun_quaternion(span, _simulator_csv()),
             )
 
 
@@ -363,6 +386,51 @@ def gun_orientation(
     if any(value is None for value in means):
         return GUN_ROTATION_GROUP, None
     return GUN_ROTATION_GROUP, (means[0], means[1], means[2])  # pyright: ignore[reportArgumentType]
+
+
+def gun_position(span: Sequence[Mapping[str, str]], simulator_csv: Any) -> Vec3 | None:
+    """구간 가운데 프레임의 건 위치.
+
+    스트로크 기저의 법선 **부호**를 고르는 데만 쓰인다(`stroke_frame.stroke_basis`가
+    건을 그 용도로만 받는다). 축 방향 자체는 착탄 궤적의 기하에서만 나오므로 어느
+    프레임을 고르든 결과가 같고, 가운데를 쓰는 것은 `service.representative_basis`가
+    가운데 격자점을 쓰는 것과 맞추기 위함이다.
+    """
+    if not span:
+        return None
+    row = span[len(span) // 2]
+    try:
+        x, y, z = simulator_csv.vec3(row, GUN_ROTATION_GROUP, "Position")
+    except (KeyError, ValueError):
+        return None
+    return (x, y, z)
+
+
+def gun_quaternion(
+    span: Sequence[Mapping[str, str]], simulator_csv: Any
+) -> tuple[float, float, float, float] | None:
+    """패스 대표 건 자세를 **회전공간에서** 평균한 값.
+
+    `gun_orientation`의 축별 순환 평균과 다른 값이다. 오일러 세 축을 따로 평균하면
+    회전이 아닌 것이 나올 수 있다 — 세 축은 독립이 아니고 특이점에서 결합한다. 여기서는
+    프레임마다 회전 행렬을 만들어 쿼터니언으로 옮기고 `rotation_math.quaternion_mean`
+    (4×4 산포행렬의 최대 고유벡터)으로 평균한다.
+
+    오일러 규약은 `measured_pose.EULER_ORDER`/`EULER_SIGN` 하나만 쓴다. 그 규약은
+    건의 분사 광선이 `hit − gun`과 이루는 3차원 각의 중앙값 4.0°로 실측에서 골랐다.
+    """
+    quats: list[tuple[float, float, float, float]] = []
+    for row in span:
+        try:
+            values = simulator_csv.vec3(row, GUN_ROTATION_GROUP, "Rotation")
+        except (KeyError, ValueError):
+            continue
+        matrix = rotation_math.euler_matrix(
+            measured_pose.EULER_ORDER, (values[0], values[1], values[2]),
+            measured_pose.EULER_SIGN,
+        )
+        quats.append(rotation_math.matrix_quaternion(matrix))
+    return rotation_math.quaternion_mean(quats) if quats else None
 
 
 def _load_csv_source() -> Any:

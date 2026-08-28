@@ -34,9 +34,12 @@ DEFAULT_ERROR_M: Final = 0.144
 # 유효화는 설계 §10에서 미판정이고 D4는 게이트를 옮기지 말라고 못박는다.
 PROVISIONAL_SPREADS: Final[dict[str, float]] = {"right": 0.05, "head": 0.05, "left": 0.05}
 
-# 작업자 요를 아직 실측에서 뽑지 않는다. 그래서 동작 키의 ②진행 방향과 ④몸 기준 착탄
-# 위치는 몸 기준 이름을 달고 있지만 실제로는 월드 기준 방위각이다. 실측 요 추출은 별개
-# 작업이므로 여기서는 값을 응답에 실어 그 사실을 드러낸다.
+# 작업자 요는 이제 실측이다. `measured_pose.facing_yaw`가 HMD 회전에서 뽑고, 동작 키의
+# ②진행 방향과 ④몸 기준 착탄 위치가 그 위에 선다 — 이름과 실제가 처음으로 일치한다.
+#
+# 이 상수는 **회전 컬럼을 못 읽은 패스의 대체값**으로만 남는다. 그런 패스에서 요를
+# 지어내면 몸 기준 축이 조용히 월드 방위각으로 돌아가므로, 응답이 `yaw_source`로 어느
+# 쪽인지 말한다.
 ASSUMED_YAW: Final = 0.0
 
 JOINT_AXIS_NOTE: Final = (
@@ -108,6 +111,7 @@ class KeyInputs:
     head: Vec3
     hit: Vec3
     uv: tuple[float, float] | None
+    yaw: float | None = None
 
 
 def key_inputs(frames: Sequence[Any]) -> KeyInputs | None:
@@ -126,14 +130,16 @@ def key_inputs(frames: Sequence[Any]) -> KeyInputs | None:
         head=middle.head,
         hit=middle.hit or first.hit,
         uv=middle.uv,
+        yaw=getattr(middle, "yaw", None),
     )
 
 
 def motion_key_for(frames: Sequence[Any], params: Any) -> str | None:
-    """작업자 요는 아직 실측에서 뽑지 않는다. 지금은 0으로 두고 화면에서 판정한다.
+    """작업자 요는 실측이다. 패스 중앙 격자점의 HMD 방위를 쓴다.
 
-    이 가정은 응답의 `yaw_assumed`로 나가고 화면이 동작 키 옆에 적는다. 몸 기준
-    이름을 단 축이 사실은 월드 기준이라는 것을 읽는 사람이 알아야 한다.
+    실제로 쓴 값과 그 출처가 응답의 `yaw_assumed` · `yaw_source`로 나가고 화면이 동작
+    키 옆에 적는다. 회전을 못 읽어 대체값으로 떨어진 패스에서는 몸 기준 이름을 단 축이
+    다시 월드 기준이 되므로, 읽는 사람이 그 사실을 알아야 한다.
     """
     inputs = key_inputs(frames)
     if inputs is None:
@@ -141,10 +147,14 @@ def motion_key_for(frames: Sequence[Any], params: Any) -> str | None:
     return key_from(inputs, params)
 
 
+def yaw_of(inputs: KeyInputs) -> float:
+    return ASSUMED_YAW if inputs.yaw is None else inputs.yaw
+
+
 def key_from(inputs: KeyInputs, params: Any) -> str:
     return motion_key.motion_key(
         displacement=inputs.displacement,
-        yaw=ASSUMED_YAW,
+        yaw=yaw_of(inputs),
         head=inputs.head,
         hit=inputs.hit,
         uv=inputs.uv,
@@ -230,8 +240,15 @@ def compare(
 
     query_frames = pass_frames(source.load(query), samples)
     reference_frames = pass_frames(source.load(reference), samples)
-    query_key = motion_key_for(query_frames, params)
-    reference_key = motion_key_for(reference_frames, params)
+    query_inputs = key_inputs(query_frames)
+    reference_inputs = key_inputs(reference_frames)
+    query_key = None if query_inputs is None else key_from(query_inputs, params)
+    reference_key = None if reference_inputs is None else key_from(reference_inputs, params)
+    # 몸 기준 축(②④)이 선 요다. 실측이면 그 값을, 회전을 못 읽었으면 대체값을 낸다.
+    yaw_used = ASSUMED_YAW if query_inputs is None else yaw_of(query_inputs)
+    yaw_source = (
+        "measured" if query_inputs is not None and query_inputs.yaw is not None else "assumed"
+    )
 
     # 키가 None인 것과 두 키가 다른 것은 다른 사건이다. 키는 착탄점이 있는 분사
     # 프레임이 2개 미만일 때 None이 된다 — 분사 컬럼을 못 읽었거나, 분산 기준으로
@@ -243,7 +260,8 @@ def compare(
             "reason": "insufficient_frames",
             "query_key": query_key,
             "reference_key": reference_key,
-            "yaw_assumed": ASSUMED_YAW,
+            "yaw_assumed": yaw_used,
+            "yaw_source": yaw_source,
         }
     if query_key != reference_key:
         return {
@@ -251,7 +269,8 @@ def compare(
             "reason": "motion_key_mismatch",
             "query_key": query_key,
             "reference_key": reference_key,
-            "yaw_assumed": ASSUMED_YAW,
+            "yaw_assumed": yaw_used,
+            "yaw_source": yaw_source,
         }
 
     query_track = _local_tracks(query_frames)
@@ -270,8 +289,9 @@ def compare(
         "status": "ok",
         "query_key": query_key,
         "reference_key": reference_key,
-        # 몸 기준 축(②④)은 이 요 가정 위에 서 있다. 실측 요가 아니다.
-        "yaw_assumed": ASSUMED_YAW,
+        # 몸 기준 축(②④)이 선 요. `yaw_source`가 실측인지 대체값인지 말한다.
+        "yaw_assumed": yaw_used,
+        "yaw_source": yaw_source,
         "samples": before.samples,
         "measured": {
             "basis": "tracked",

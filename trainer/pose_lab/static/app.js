@@ -234,10 +234,14 @@ async function run() {
   });
   const payload = await response.json();
 
-  // 몸 기준 축(진행 방향·몸 기준 착탄 위치)은 요 가정 위에 서 있다. 실측 요가 아니다.
+  // 몸 기준 축(진행 방향·몸 기준 착탄 위치)이 선 요. HMD 회전에서 뽑은 실측값이면
+  // 그 값을 그대로 적고, 회전을 못 읽어 대체값으로 떨어졌으면 그렇다고 적는다 —
+  // 그 패스에서는 몸 기준 이름을 단 축이 다시 월드 방위각이기 때문이다.
   const yaw =
     typeof payload.yaw_assumed === "number"
-      ? `  — 몸 기준 축은 정면 고정(yaw=${payload.yaw_assumed}) 가정`
+      ? payload.yaw_source === "measured"
+        ? `  — 몸 기준 축은 실측 요 ${((payload.yaw_assumed * 180) / Math.PI).toFixed(1)}°`
+        : `  — 요를 못 읽어 정면 고정(yaw=${payload.yaw_assumed}) 대체값`
       : "";
   $("keys").textContent =
     `질의 ${payload.query_key ?? "-"} / 레퍼런스 ${payload.reference_key ?? "-"}${yaw}`;

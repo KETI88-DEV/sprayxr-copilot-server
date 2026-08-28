@@ -44,6 +44,22 @@ class CompareRequest(BaseModel):
     samples: int = Field(default=20, ge=2, le=200)
 
 
+def _yaw_source(entries: list[Any]) -> str:
+    """이 목록의 동작 키가 실측 요 위에 섰는가.
+
+    요는 이제 HMD 회전에서 뽑은 실측량이라 패스마다 값이 다르다. 목록 응답에 단일
+    yaw 값을 실으면 그 하나가 모든 패스의 요인 것처럼 읽히므로 값 대신 출처를 낸다.
+    회전 컬럼을 못 읽은 패스는 `service.ASSUMED_YAW`로 떨어져 몸 기준 축이 다시 월드
+    방위각이 되는데, `mixed`가 그 사실을 드러낸다.
+    """
+    if not entries:
+        return "assumed"
+    measured = sum(1 for entry in entries if entry.key_inputs.yaw is not None)
+    if measured == len(entries):
+        return "measured"
+    return "assumed" if measured == 0 else "mixed"
+
+
 def _source_from_env() -> Any | None:
     """환경변수에 루트가 있을 때만 실데이터 소스를 만든다.
 
@@ -100,7 +116,9 @@ def create_app(source: Any | None = None) -> FastAPI:
             # 키 재료는 이 리샘플 N 위에서 뽑았다. 비교를 다른 N으로 돌리면 키가
             # 미세하게 달라질 수 있고, 그때는 비교 응답이 낸 키가 사실이다.
             "samples": source.samples,
-            "yaw_assumed": service.ASSUMED_YAW,
+            # 요는 패스마다 실측이므로 목록에 단일 값이 없다. 대신 이 목록의 키가
+            # 실측 요 위에 섰는지 대체값으로 떨어진 패스가 섞였는지를 낸다.
+            "yaw_source": _yaw_source([entry for _, entry in found]),
             "passes": [
                 {
                     "worker": item.worker,

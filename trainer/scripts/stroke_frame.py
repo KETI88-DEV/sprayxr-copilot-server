@@ -144,6 +144,8 @@ def resample_frames(
     heads = [frame.head for frame in usable]
     rights = [frame.right for frame in usable]
     times = [frame.time_sec for frame in usable]
+    yaw_values = [value for value, frame in zip(values, usable) if frame.yaw is not None]
+    yaw_track = [frame.yaw for frame in usable if frame.yaw is not None]
     left_values = [value for value, frame in zip(values, usable) if frame.left is not None]
     left_track = [frame.left for frame in usable if frame.left is not None]
 
@@ -159,9 +161,32 @@ def resample_frames(
                 left=_left_at(left_values, left_track, target),
                 hit=_point_at(values, hits, target),
                 uv=usable[0].uv,
+                yaw=_yaw_at(yaw_values, yaw_track, target),
             )
         )
     return output
+
+
+def _yaw_at(
+    values: Sequence[float], angles: Sequence[float], target: float
+) -> float | None:
+    """요 보간. 각이므로 스칼라로 섞지 않고 단위벡터로 섞는다.
+
+    179°와 −179°를 산술 보간하면 0°가 나온다 — 뒤를 보고 있다고 적는 것이다.
+    `dataset_spec.md` §4.1이 산술 통계를 금한 것과 같은 이유이며, 여기서는 두 표본
+    사이의 보간이라 사인·코사인을 선형 보간한 뒤 `atan2`로 되읽는다.
+    """
+    if not angles:
+        return None
+    if len(angles) == 1:
+        return angles[0]
+    index, weight = _weight_at(values, target)
+    left, right = angles[index], angles[index + 1]
+    cos = math.cos(left) + (math.cos(right) - math.cos(left)) * weight
+    sin = math.sin(left) + (math.sin(right) - math.sin(left)) * weight
+    if math.hypot(cos, sin) < 1e-12:
+        return left
+    return math.atan2(sin, cos)
 
 
 def _left_at(

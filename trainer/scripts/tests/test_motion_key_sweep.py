@@ -21,6 +21,7 @@ def _record(
     hit: tuple[float, float, float] = (1.2, 4.5, 0.9),
     uv: tuple[float, float] | None = (1024.0, 512.0),
     rotation: tuple[float, float, float] | None = None,
+    yaw: float | None = None,
 ) -> object:
     return sweep.PassRecord(
         worker=worker,
@@ -34,6 +35,7 @@ def _record(
         uv=uv,
         gun="한길숏건",
         rotation=rotation,
+        yaw=yaw,
     )
 
 
@@ -71,12 +73,21 @@ def test_default_config_partitions_exactly_like_the_live_key() -> None:
     문자열은 다르다(`sweep:` vs `m1:`) — 설계 D5가 기존 이름공간을 지키라고 했다.
     같아야 하는 것은 어느 두 패스가 같은 버킷에 드는가다.
     """
-    records = _spread_records()
+    records = [
+        _record(
+            displacement=record.displacement,
+            head=record.head,
+            hit=record.hit,
+            uv=record.uv,
+            yaw=math.radians(35.0),
+        )
+        for record in _spread_records()
+    ]
     params = motion_key.KeyParams()
     live = [
         motion_key.motion_key(
             displacement=record.displacement,
-            yaw=sweep.ASSUMED_YAW,
+            yaw=record.yaw,
             head=record.head,
             hit=record.hit,
             uv=record.uv,
@@ -243,3 +254,71 @@ def test_records_round_trip_through_the_cache_format() -> None:
     record = _record(uv=None, rotation=(12.0, 340.0, 5.5))
     restored = sweep.PassRecord.from_json(record.as_json())
     assert restored == record
+
+
+# --- 실측 요가 키에 도달하는가 ---------------------------------------------------
+
+
+def test_sweep_key_uses_the_measured_yaw_when_the_record_carries_one() -> None:
+    """요가 0으로 고정되면 ②④는 몸 기준 이름을 단 월드 방위각이다.
+
+    같은 패스를 요만 바꿔 읽었을 때 키가 달라져야 실측 요가 키에 도달한 것이다.
+    달라지지 않으면 이 도구가 재는 점유는 여전히 월드 기준 점유다.
+    """
+    config = sweep.SweepConfig(name="기본")
+    world = sweep.sweep_key(_record(yaw=None), config)
+    turned = sweep.sweep_key(_record(yaw=math.radians(80.0)), config)
+    assert world != turned
+    # ①기울기는 착탄 변위에서만 나오므로 요와 무관하다.
+    assert world.split(":")[1] == turned.split(":")[1]
+
+
+def test_missing_yaw_falls_back_to_the_shared_constant() -> None:
+    """대체값은 `pose_lab.service.ASSUMED_YAW`와 같아야 한다. 다르면 여기서 잰 점유가
+    실험대가 만드는 버킷의 점유가 아니게 된다."""
+    config = sweep.SweepConfig(name="기본")
+    assert sweep.sweep_key(_record(yaw=None), config) == sweep.sweep_key(
+        _record(yaw=sweep.ASSUMED_YAW), config
+    )
+    assert sweep.ASSUMED_YAW == 0.0
+
+
+def test_pass_record_round_trips_the_new_fields_through_the_cache() -> None:
+    """캐시가 요·건위치·쿼터니언을 잃으면 스캔을 다시 돌려야 한다(479세션, 수 분)."""
+    record = sweep.PassRecord(
+        worker="A",
+        level="10",
+        session="s",
+        date="20250901",
+        pass_index=0,
+        displacement=(0.0, 0.6, 0.0),
+        head=(0.5, 4.5, 1.5),
+        hit=(1.2, 4.5, 0.9),
+        uv=(1024.0, 512.0),
+        gun="한길숏건",
+        rotation=(10.0, 20.0, 30.0),
+        yaw=1.234,
+        gun_pos=(0.8, 4.5, 1.2),
+        quat=(1.0, 0.0, 0.0, 0.0),
+    )
+    again = sweep.PassRecord.from_json(record.as_json())
+    assert again == record
+
+
+def test_old_cache_lines_still_load() -> None:
+    """새 필드가 없는 캐시(이전 연구가 만든 것)를 읽을 때 터지면 재현이 끊긴다."""
+    payload = {
+        "worker": "A",
+        "level": "10",
+        "session": "s",
+        "date": "20250901",
+        "pass_index": 0,
+        "displacement": [0.0, 0.6, 0.0],
+        "head": [0.5, 4.5, 1.5],
+        "hit": [1.2, 4.5, 0.9],
+        "uv": [1024.0, 512.0],
+        "gun": "한길숏건",
+        "rotation": [10.0, 20.0, 30.0],
+    }
+    record = sweep.PassRecord.from_json(payload)
+    assert record.yaw is None and record.gun_pos is None and record.quat is None
