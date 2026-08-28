@@ -46,3 +46,39 @@ def test_undefined_gap_stays_none_and_does_not_become_zero() -> None:
     result = service.improvement(before=1.0, after_split=1.0, after_same=1.0)
     assert result["split"] is None
     assert result["same"] is None
+
+
+def _vertical_frames(count: int) -> list[object]:
+    """수직으로 올라가는 스트로크. 세 점의 상대 배치는 프레임마다 같다."""
+    frames: list[object] = []
+    for index in range(count):
+        hit = (1.2, 4.5, 0.6 + 0.05 * index)
+        frames.append(
+            service.measured_pose.MeasuredFrame(
+                index=index,
+                time_sec=index * 0.0111,
+                head=(0.6, 4.6, hit[2]),
+                right=(0.7, 4.6, hit[2]),
+                left=(0.65, 4.4, hit[2]),
+                hit=hit,
+                uv=(1024.0, 512.0),
+                spraying=True,
+            )
+        )
+    return frames
+
+
+def test_last_sample_keeps_the_previous_tangent() -> None:
+    """마지막 격자점에는 다음 프레임이 없다.
+
+    월드 축으로 떨어뜨리면 그 표본의 진행·수직 축만 나머지와 다른 방향을 가리키고,
+    자세가 전혀 변하지 않은 궤적에서도 마지막 표본이 다른 좌표를 낸다. 그 차이가
+    평균 이탈에 섞여 들어간다.
+    """
+    tracks = service._local_tracks(_vertical_frames(5))
+    right = tracks["right"]
+    assert len(right) == 5
+    last, previous = right[-1], right[-2]
+    assert last is not None and previous is not None
+    for axis in range(3):
+        assert math.isclose(last[axis], previous[axis], abs_tol=1e-9)

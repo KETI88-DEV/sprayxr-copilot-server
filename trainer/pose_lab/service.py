@@ -120,18 +120,25 @@ def _local_tracks(frames: Sequence[Any]) -> dict[str, list[Vec3 | None]]:
     단위로 빠지는 설계 §5.4의 마스킹이 다른 두 점의 대응까지 망가뜨리게 된다.
     """
     tracks: dict[str, list[Vec3 | None]] = {"right": [], "head": [], "left": []}
+    previous: Vec3 = stroke_frame.FALLBACK_TANGENT
     for index, frame in enumerate(frames):
         if frame.hit is None:
             continue
-        following = frames[min(index + 1, len(frames) - 1)]
-        if following.hit is None or following is frame:
-            tangent = (0.0, 1.0, 0.0)
-        else:
+        following = frames[index + 1] if index + 1 < len(frames) else None
+        tangent = (0.0, 0.0, 0.0)
+        if following is not None and following.hit is not None:
             tangent = (
                 following.hit[0] - frame.hit[0],
                 following.hit[1] - frame.hit[1],
                 following.hit[2] - frame.hit[2],
             )
+        # 마지막 격자점에는 다음 프레임이 없다. 월드 축으로 떨어뜨리면 그 표본의
+        # 진행·수직 축만 나머지 19개와 다른 방향을 가리키고, 그 차이가 평균 이탈에
+        # 섞여 들어간다. 직전 접선을 그대로 이어 쓴다.
+        if tangent == (0.0, 0.0, 0.0):
+            tangent = previous
+        else:
+            previous = tangent
         basis = stroke_frame.stroke_basis(frame.hit, tangent, frame.right)
         tracks["right"].append(stroke_frame.to_local(basis, frame.right))
         tracks["head"].append(stroke_frame.to_local(basis, frame.head))
