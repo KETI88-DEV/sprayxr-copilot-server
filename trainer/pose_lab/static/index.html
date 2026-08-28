@@ -8,6 +8,26 @@
     <p id="keys" class="keys"></p>
   </header>
 
+  <section class="picker">
+    <article>
+      <h2>질의 패스</h2>
+      <label>작업자 <select id="queryWorker"></select></label>
+      <label>레벨 <select id="queryLevel"><option value="">전체</option></select></label>
+      <label class="wide">패스 <select id="queryPass"></select></label>
+      <p class="count" id="queryCount"></p>
+      <p class="summary" id="querySummary"></p>
+    </article>
+    <article>
+      <h2>레퍼런스 패스</h2>
+      <label>작업자 <select id="referenceWorker"></select></label>
+      <label>레벨 <select id="referenceLevel"><option value="">전체</option></select></label>
+      <label class="wide">패스 <select id="referencePass"></select></label>
+      <p class="count" id="referenceCount"></p>
+      <p class="summary" id="referenceSummary"></p>
+      <label><input id="sameKeyOnly" type="checkbox" checked> 질의와 동작 키가 같은 것만</label>
+    </article>
+  </section>
+
   <section class="axes">
     <article id="measured">
       <h2>실측 축 <span class="badge ok">측정값</span></h2>
@@ -31,6 +51,8 @@
     <label>좌우 경계(도) <input id="lateralDeg" type="number" value="30" min="1" max="90"></label>
     <label>거리 임계(m) <input id="reachM" type="number" value="0.8" step="0.1" min="0.1"></label>
     <label>리샘플 N <input id="samples" type="number" value="20" min="2" max="200"></label>
+    <label>세션 한도 <input id="sessionLimit" type="number" value="8" min="1" max="200"></label>
+    <button id="reload">목록 다시 읽기</button>
     <button id="run">비교</button>
   </section>
 </main>

@@ -16,3 +16,11 @@ body { font-family: system-ui, "Noto Sans KR", sans-serif; margin: 0; padding: 1
 dl { display: grid; grid-template-columns: auto 1fr; gap: .25rem 1rem; }
 dt { opacity: .7; }
 dd { margin: 0; font-variant-numeric: tabular-nums; }
+.picker { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 1rem; }
+.picker article { border: 1px solid currentColor; border-radius: .5rem; padding: 1rem; }
+.picker h2 { margin: 0 0 .5rem; font-size: 1rem; }
+.picker label { display: block; margin-bottom: .4rem; }
+.picker select { max-width: 100%; }
+.picker .wide select { width: 100%; font-family: ui-monospace, monospace; font-size: .8rem; }
+.count { margin: .2rem 0; font-size: .8rem; opacity: .8; }
+.summary { margin: .2rem 0; font-size: .75rem; opacity: .75; font-family: ui-monospace, monospace; }

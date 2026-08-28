@@ -32,6 +32,16 @@ MAX_HEAD_HAND_M: Final = 1.0
 MIN_HEAD_RIGHT_M: Final = 0.1
 MIN_HEAD_LEFT_M: Final = 0.05
 
+# 벤더 export는 " Ray Point Y" / " Ray Point Z"를 앞 공백째로 싣는다. 정식 리더인
+# `simulator_csv.read_rows`는 헤더를 strip하므로 같은 컬럼이 두 철자로 들어온다.
+# 한쪽만 보면 실데이터에서 착탄점이 통째로 None이 되고, 그러면 모든 패스가 키를
+# 만들지 못해 "재지 못했다"로 떨어진다. 두 철자를 다 받는다.
+RAY_POINT_SPELLINGS: Final[tuple[tuple[str, ...], ...]] = (
+    ("Ray point X", " Ray point X"),
+    ("Ray Point Y", " Ray Point Y"),
+    ("Ray Point Z", " Ray Point Z"),
+)
+
 
 @dataclass(frozen=True, slots=True)
 class MeasuredFrame:
@@ -75,17 +85,20 @@ def active_gun(rows: Sequence[dict[str, str]]) -> str | None:
     return None if best is None else best[1]
 
 
+def _column(row: dict[str, str], spellings: Sequence[str]) -> str:
+    for name in spellings:
+        if name in row:
+            return row[name]
+    raise KeyError(spellings[0])
+
+
 def _hit(row: dict[str, str]) -> tuple[Vec3, tuple[float, float]] | None:
     try:
-        point = (
-            float(row["Ray point X"]),
-            float(row[" Ray Point Y"]),
-            float(row[" Ray Point Z"]),
-        )
+        x, y, z = (float(_column(row, names)) for names in RAY_POINT_SPELLINGS)
         uv = (float(row["Ray Texture UV X"]), float(row["Ray Texture UV Y"]))
     except (KeyError, ValueError):
         return None
-    return point, uv
+    return (x, y, z), uv
 
 
 def measured_frames(rows: Sequence[dict[str, str]]) -> list[MeasuredFrame]:

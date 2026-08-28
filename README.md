@@ -116,11 +116,13 @@ React 콘솔 구성(`demo-ui/src/components/`):
 
 실측 축과 관절 축을 나란히 놓고 REQ-19 개선율(70%) 기준을 실데이터로 판정하기 위한 별도 테스트 도구다. `demo_api`(`:8120`)와는 분리된 프로세스다.
 
-**아직 비교가 돌지 않는다.** 채점·정렬 모듈과 HTTP 표면, 화면은 들어와 있고 프로세스도 뜨지만, CSV를 패스로 잘라 넘기는 `PassSource` 구현이 테스트 픽스처 밖에 없다. `create_app()`의 기본값이 `source=None`이라 아래 명령으로 띄운 페이지에서 비교를 누르면 모든 응답이 `{"status": "unavailable", "reason": "no_source"}`다. 실데이터 소스를 배선해야 지표가 나온다.
+원본 CSV에서 바로 읽는다. `POSE_LAB_DATA_ROOT`에 작업자 디렉터리들이 놓인 폴더를 주면 `create_app()`이 `CsvPassSource`를 배선한다. 환경변수가 없으면 소스 없이 떠서 모든 비교가 `{"status": "unavailable", "reason": "no_source"}`가 된다(테스트가 이 거동 위에 선다).
 
 ```bash
-docker exec -d -w /workspace ship-paint-trainer python3 -m uvicorn trainer.pose_lab.app:create_app --factory --host 0.0.0.0 --port 8130
-docker exec -w /workspace ship-paint-trainer curl -s http://127.0.0.1:8130/api/health
+docker exec -d -w /workspace -e POSE_LAB_DATA_ROOT=/data/sources/professionals \
+  ship-paint-trainer python3 -m uvicorn trainer.pose_lab.app:create_app --factory --host 0.0.0.0 --port 8130
+docker exec ship-paint-trainer curl -s http://127.0.0.1:8130/api/health
+docker exec ship-paint-trainer curl -s http://127.0.0.1:8130/api/workers
 ```
 
 `deploy/docker-compose.yml`은 `8120`만 호스트에 게시하므로 브라우저로 보려면 SSH 터널을 쓴다.
@@ -129,9 +131,19 @@ docker exec -w /workspace ship-paint-trainer curl -s http://127.0.0.1:8130/api/h
 ssh -L 8130:127.0.0.1:8130 <서버>
 ```
 
-이후 브라우저에서 `http://127.0.0.1:8130`을 연다. 페이지는 렌더되지만 위에 적은 대로 비교는 아직 돌지 않는다.
+이후 브라우저에서 `http://127.0.0.1:8130`을 연다. 작업자·레벨·패스를 양쪽 드롭다운에서 고르고 **비교**를 누른다. 패스 목록은 `GET /api/passes?worker=&level=&limit=`이 만들고, 항목마다 **동작 키**가 붙어 있어 견줄 수 있는 쌍을 눈으로 고를 수 있다. 레퍼런스 쪽의 "질의와 동작 키가 같은 것만"이 기본으로 켜져 있다.
 
-**채점은 실측 3점에서 하고 표시용 스켈레톤만 FK를 탄다** — 관절 축은 응답에 자리만 있고 IK 산출물 배지로 표시되며, 실제 채점은 실데이터 소스가 붙은 뒤 배선한다. 실측 축의 σ와 점수도 지금은 잰 분포가 아니라 임시 산포로 정규화한 값이라 응답이 `normalization: provisional`로 표시하고, REQ-19 게이트는 잰 분포가 없어 판정하지 않는다(`gate: null`).
+| 표면 | 내용 |
+|---|---|
+| `GET /api/workers` | 작업자 6인. 파일명만 읽어 즉시 답한다 |
+| `GET /api/passes` | 작업자(선택적으로 레벨·날짜)의 패스와 동작 키. `limit`은 이 요청에서 새로 훑을 **세션** 수 상한(기본 8)이고, 응답의 `sessions_total`·`truncated`가 잘린 사실을 말한다 |
+| `POST /api/compare` | 비교 1건. 두 축을 병기한다 |
+
+**세션 색인은 게을러야 한다.** 학습모드 세션이 479개이고 세션 하나가 수만 행(최대 26 MB, 파싱하면 250 MB 규모)이다. 그래서 목록은 파일명만 읽어 만들고, 패스 색인은 세션 단위로 한 번만 만들어 캐시하며, 원본 행은 작은 LRU(기본 2)로만 들고 있는다. 레벨 10 세션 3개씩 4인 = 12세션 3043패스 색인이 약 9초다.
+
+**범위는 학습모드다.** 파일명이 `1-A`/`1-B`/`1-C`로 시작하는 실전모드 세션은 건너뛴다. 세그멘테이션은 새로 만들지 않고 분사 On 버스트 안의 착탄점 궤적을 `pass_segmentation.split_pass_spans`로 자른다.
+
+**채점은 실측 3점에서 하고 표시용 스켈레톤만 FK를 탄다** — 관절 축은 응답에 자리만 있고(`status: not_wired`) IK 산출물 배지로 표시된다. 실측 축의 σ와 점수도 아직 잰 분포가 아니라 임시 산포로 정규화한 값이라 응답이 `normalization: provisional`로 표시하고, REQ-19 게이트는 잰 분포가 없어 판정하지 않는다(`gate: null`). 개선율의 분리 채점(`improvement.split`)도 겹치지 않는 날짜의 held-out 레퍼런스가 아직 없어 `null`이다 — 동일 채점 값을 그 자리에 복사하지 않는다.
 
 ### 2.4 GPU 없이 시뮬레이터 I/O 확인
 
