@@ -78,11 +78,36 @@ def test_fk_preserves_bone_lengths_under_any_rotation() -> None:
         assert math.isclose(math.dist(pose[parent], pose[child]), expected, abs_tol=1e-6), child
 
 
+# Rz(60) Rx(30) Ry(45)를 손으로 전개한 값. 구현에서 읽어 온 값이 아니다.
+#
+#   Rx(a)Ry(b) = [[cb, 0, sb], [sa*sb, ca, -sa*cb], [-ca*sb, sa, ca*cb]]
+#   Rz(g)·(그것) = [[cg*cb - sg*sa*sb, -sg*ca,  cg*sb + sg*sa*cb],
+#                   [sg*cb + cg*sa*sb,  cg*ca,  sg*sb - cg*sa*cb],
+#                   [-ca*sb,            sa,     ca*cb           ]]
+#
+# a=30, b=45, g=60을 넣으면(ca=√3/2, sa=1/2, cb=sb=√2/2, cg=1/2, sg=√3/2) 아래가 된다.
+ZXY_30_45_60: tuple[Vec3, Vec3, Vec3] = (
+    (0.04736717, -0.75000000, 0.65973961),
+    (0.78914913, 0.43301270, 0.43559574),
+    (-0.61237244, 0.50000000, 0.61237244),
+)
+
+
 def test_euler_matrix_is_zxy() -> None:
-    """BVH가 65개 관절 전부에 Zrotation Xrotation Yrotation을 선언했다. Unity 기본과 같다."""
-    matrix = pose_fk_csv.euler_matrix((0.0, 0.0, 90.0))
-    assert math.isclose(matrix[0][0], 0.0, abs_tol=1e-9)
-    assert math.isclose(matrix[1][0], 1.0, abs_tol=1e-9)
+    """BVH가 65개 관절 전부에 Zrotation Xrotation Yrotation을 선언했다. Unity 기본과 같다.
+
+    한 축만 도는 각으로는 이 규약을 고정할 수 없다. 단일 축 회전은 순서에 무관해
+    ZXY·XYZ·YXZ·ZYX가 모두 같은 행렬을 낸다. 세 각이 모두 0이 아닌 경우로 잡는다 —
+    같은 각을 XYZ로 돌리면 [0][1]이 -0.612, [2][1]이 0.780이라 아래 기대값과 갈린다.
+
+    기대값은 위 주석의 전개식에서 손으로 계산했다.
+    """
+    matrix = pose_fk_csv.euler_matrix((30.0, 45.0, 60.0))
+    for row in range(3):
+        for column in range(3):
+            assert math.isclose(
+                matrix[row][column], ZXY_30_45_60[row][column], abs_tol=1e-8
+            ), (row, column)
 
 
 def test_rotation_changes_the_pose() -> None:
