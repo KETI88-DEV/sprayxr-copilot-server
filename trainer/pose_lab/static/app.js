@@ -9,6 +9,9 @@ const GATE_REASONS = {
   not_wired: " (미배선)",
 };
 
+// 구조화 근거의 축 이름. 서버는 영문 리터럴("wall"/"vertical"/"lateral")을 낸다.
+const AXIS_LABELS = { wall: "벽", vertical: "수직", lateral: "진행축" };
+
 // 비교를 만들지 않은 이유. 서버의 reason과 1:1이다.
 const UNAVAILABLE_REASONS = {
   motion_key_mismatch: "동작 키가 달라 비교하지 않습니다",
@@ -81,6 +84,18 @@ function renderAxis(root, payload) {
     const item = document.createElement("li");
     item.textContent = line;
     list.append(item);
+  }
+
+  // 교정문 옆에 근거를 함께 보인다. 문장만으로는 표본 3개짜리 주장과 24개짜리
+  // 주장을 구별할 수 없다 — 그 구별이 이 줄의 존재 이유다.
+  const findingEl = root.querySelector(".finding");
+  if (findingEl) {
+    const finding = payload.finding ?? null;
+    findingEl.textContent = finding
+      ? `근거: ${AXIS_LABELS[finding.axis] ?? finding.axis} 축 `
+        + `${Math.abs(finding.magnitude_cm).toFixed(1)}cm${finding.direction ? ` ${finding.direction} 방향` : ""} `
+        + `· σ=${finding.sigma.toFixed(2)} · 표본 n=${finding.samples}`
+      : "";
   }
 }
 

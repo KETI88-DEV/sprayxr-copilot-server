@@ -78,28 +78,65 @@ def test_missing_point_is_skipped_not_scored_zero() -> None:
 def test_correction_text_uses_measured_quantities_not_angles() -> None:
     """REQ-19 게이트 통과 전까지 각도는 근거보다 높은 정밀도다.
 
-    문장 전체를 고정한다. 조각만 확인하면 조사·어미가 깨진 비문이 통과한다.
+    문장 전체를 고정한다. 조각만 확인하면 조사·어미가 깨진 비문이 통과한다. 벽 성분
+    (5cm)과 수직 성분(15cm)이 동시에 임계를 넘지만, 더 큰 쪽(수직) 하나만 남아야
+    한다 — 사람은 한 번에 하나만 고칠 수 있다.
     """
     deltas = [
         measured_score.PointDelta(point="right", sigma=3.0, local_delta=(0.05, 0.0, 0.15))
     ]
-    assert measured_score.corrections_text(deltas) == [
-        "오른손을 벽에서 5cm 더 띄우고 15cm 올리세요."
-    ]
+    assert measured_score.corrections_text(deltas) == ["오른손을 15cm 올리세요."]
 
 
-def test_correction_picks_the_particle_from_the_label() -> None:
-    """받침 없는 라벨에는 를이 붙는다. "머리을"은 비문이다."""
+def test_head_and_left_hand_never_produce_a_correction_sentence() -> None:
+    """머리·왼손은 σ가 임계를 크게 넘어도 지시를 내지 않는다.
+
+    오른손이 건을 쥐고 도막 품질을 직접 결정한다(§7). 머리는 작업자가 의도적으로
+    조정하는 대상이 아니고 왼손(플래시)은 작업 결과와의 인과가 약하다 — 점수 가중은
+    그대로 남지만(변경 없음) 지시는 오른손에만 낸다.
+    """
     head = measured_score.PointDelta(
-        point="head", sigma=3.0, local_delta=(0.0, -0.12, 0.0)
+        point="head", sigma=5.0, local_delta=(0.0, -0.12, 0.0)
     )
     left = measured_score.PointDelta(
-        point="left", sigma=3.0, local_delta=(0.0, 0.0, -0.08)
+        point="left", sigma=5.0, local_delta=(0.0, 0.0, -0.08)
     )
-    assert measured_score.corrections_text([head]) == [
-        "머리를 진행 방향 뒤로 12cm 옮기세요."
+    assert measured_score.corrections_text([head]) == []
+    assert measured_score.corrections_text([left]) == []
+    # 오른손이 섞여 있어도 머리·왼손 몫은 여전히 안 나오고, 오른손 문장 하나만 남는다.
+    right = measured_score.PointDelta(
+        point="right", sigma=5.0, local_delta=(0.0, 0.0, 0.2)
+    )
+    assert measured_score.corrections_text([head, right, left]) == [
+        "오른손을 20cm 올리세요."
     ]
-    assert measured_score.corrections_text([left]) == ["왼손을 8cm 내리세요."]
+
+
+def test_right_hand_within_expert_range_produces_no_sentence() -> None:
+    """오른손도 σ가 임계 이하면 아무것도 내지 않는다. 기존 규약을 유지한다."""
+    right = measured_score.PointDelta(
+        point="right", sigma=1.0, local_delta=(0.2, 0.0, 0.2)
+    )
+    assert measured_score.corrections_text([right]) == []
+
+
+def test_largest_component_is_chosen_when_two_are_close() -> None:
+    """벽 성분과 수직 성분이 근접해도 더 큰 쪽만 골라야 한다.
+
+    반대로도 확인한다 — 근접값에서 우연히 항상 같은 축이 뽑히는 구현(정렬 순서에
+    기댄 버그)을 잡는 못이다.
+    """
+    vertical_wins = measured_score.PointDelta(
+        point="right", sigma=3.0, local_delta=(0.084, 0.0, 0.086)
+    )
+    lines = measured_score.corrections_text([vertical_wins])
+    assert lines == ["오른손을 9cm 올리세요."]
+
+    wall_wins = measured_score.PointDelta(
+        point="right", sigma=3.0, local_delta=(0.096, 0.0, 0.094)
+    )
+    lines = measured_score.corrections_text([wall_wins])
+    assert lines == ["오른손을 벽에서 10cm 더 띄우세요."]
 
 
 def test_height_wording_survives_on_a_horizontal_stroke() -> None:
@@ -146,6 +183,41 @@ def test_corrections_never_carry_an_angle() -> None:
     ):
         for line in measured_score.corrections_text([_delta(basis, world)], basis):
             assert "도" not in line
+
+
+def test_right_hand_finding_carries_sample_count_and_matches_the_sentence() -> None:
+    """구조체는 문장과 같은 축·방향·부호를 내고, 문장에는 없는 표본 수를 얹는다.
+
+    표본 3개에서 나온 이탈과 24개에서 나온 이탈은 같은 주장이 아니다 — 다운스트림
+    VLM이 그 차이를 봐야 하므로 `samples`가 그대로 전달돼야 한다.
+    """
+    delta = measured_score.PointDelta(
+        point="right", sigma=3.4, local_delta=(0.0, 0.0, 0.18), samples=17
+    )
+    finding = measured_score.right_hand_finding([delta])
+    assert finding is not None
+    assert finding.axis == "vertical"
+    assert finding.direction == "올리"
+    assert finding.samples == 17
+    assert finding.sigma == 3.4
+    assert math.isclose(finding.magnitude_cm, 18.0, abs_tol=1e-9)
+
+    lines = measured_score.corrections_text([delta])
+    assert lines == ["오른손을 18cm 올리세요."]
+    assert finding.direction in lines[0]
+    assert f"{abs(finding.magnitude_cm):.0f}cm" in lines[0]
+
+
+def test_right_hand_finding_is_none_below_threshold_or_without_right_hand() -> None:
+    below = measured_score.PointDelta(
+        point="right", sigma=1.5, local_delta=(0.2, 0.0, 0.2)
+    )
+    only_head = measured_score.PointDelta(
+        point="head", sigma=5.0, local_delta=(0.0, 0.2, 0.0)
+    )
+    assert measured_score.right_hand_finding([below]) is None
+    assert measured_score.right_hand_finding([only_head]) is None
+    assert measured_score.right_hand_finding([]) is None
 
 
 def test_correction_skips_points_inside_expert_range() -> None:

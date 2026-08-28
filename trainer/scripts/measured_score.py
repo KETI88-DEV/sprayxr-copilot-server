@@ -84,6 +84,22 @@ class MeasuredResult:
     samples: int
 
 
+@dataclass(frozen=True, slots=True)
+class RightHandFinding:
+    """오른손 하나의 가장 큰 이탈. VLM이 문장을 지을 근거다.
+
+    `corrections_text`가 내는 문장은 이 구조체에서 파생된다 — 축·방향이 문장과 어긋날
+    수 없다. `samples`가 핵심이다. 표본 3개에서 나온 이탈과 24개에서 나온 이탈은 같은
+    주장이 아니고, 이 구조체를 소비하는 쪽이 그 차이를 볼 수 있어야 한다.
+    """
+
+    axis: str  # "wall" | "vertical" | "lateral"
+    magnitude_cm: float  # 부호 있음. 방향은 direction에 말로도 있다
+    direction: str  # "띄우"/"붙이"/"올리"/"내리"/"앞으로"/"뒤로" 또는 "" (일반 좌우 이동)
+    sigma: float
+    samples: int
+
+
 def _mean(points: Sequence[Vec3]) -> Vec3:
     count = len(points)
     return (
@@ -175,19 +191,24 @@ def _world_delta(local: Vec3, frame: AxisFrame) -> Vec3:
     )
 
 
-def _correction_parts(local: Vec3, frame: AxisFrame) -> list[str]:
-    """한 점의 이탈을 물리적으로 참인 말로 옮긴다.
+def _correction_candidates(
+    local: Vec3, frame: AxisFrame
+) -> list[tuple[str, float, str]]:
+    """한 점의 이탈을 물리적으로 참인 후보 세 개(벽·수직·진행축)로 나눈다.
 
     로컬 성분을 축 이름으로 읽으면 안 된다. `Basis.up`은 순수 수직 스트로크에서 수평이
     되므로(그때 수직은 `tangent`다) `local[2]`를 "올리세요"로 적으면 옆으로 틀어진 손을
     위로 올리라고 말하게 된다. 그래서 월드로 되돌린 뒤 세 방향으로 다시 나눈다.
 
-    - 수직: 월드 Z 성분. 어느 축에 실려 있었든 여기서만 올리/내리가 나온다.
-    - 벽 법선: 법선은 항상 수평이므로(`Basis` 독스트링) 수평 성분을 법선에 투영한다.
-    - 나머지 수평: 법선에 직교하는 수평 방향이다. 스트로크가 수평으로 진행하면 그것이
-      진행 방향이라 앞뒤로 적는다. 수직 스트로크에는 수평 진행이 없어 좌우를 판정할
-      기준이 없다 — 작업자 요가 실측이 아니기 때문이다(`service.ASSUMED_YAW`). 방향을
-      지어내지 않고 "벽을 따라"까지만 적는다.
+    - 수직(`"vertical"`): 월드 Z 성분. 어느 축에 실려 있었든 여기서만 올리/내리가 나온다.
+    - 벽(`"wall"`): 법선은 항상 수평이므로(`Basis` 독스트링) 수평 성분을 법선에 투영한다.
+    - 진행축(`"lateral"`): 법선에 직교하는 수평 방향이다. 스트로크가 수평으로 진행하면
+      그것이 진행 방향이라 앞뒤로 적는다. 수직 스트로크에는 수평 진행이 없어 좌우를
+      판정할 기준이 없다 — 작업자 요가 실측이 아니기 때문이다(`service.ASSUMED_YAW`).
+      방향을 지어내지 않고 "벽을 따라"까지만 적는다(`direction`은 빈 문자열).
+
+    임계(`MIN_CORRECTION_CM`) 아래인 후보는 목록에 넣지 않는다. 호출자가 절댓값이 가장
+    큰 후보 하나만 골라 문장 하나를 낸다 — 여러 후보를 동시에 지시하지 않는다.
     """
     world = _world_delta(local, frame)
     plane: Vec3 = (world[0], world[1], 0.0)
@@ -202,47 +223,93 @@ def _correction_parts(local: Vec3, frame: AxisFrame) -> list[str]:
             0.0,
         )
 
-    # 어간만 모으고 마지막에 "고 "로 이어 붙인다. 각 조각에 "고"를 넣고 잘라내면
-    # "15cm 올리 유지하세요" 같은 비문이 된다.
-    parts: list[str] = []
+    candidates: list[tuple[str, float, str]] = []
     if abs(normal_cm) >= MIN_CORRECTION_CM:
         verb = "띄우" if normal_cm > 0 else "붙이"
-        parts.append(f"벽에서 {abs(normal_cm):.0f}cm 더 {verb}")
+        candidates.append(("wall", normal_cm, verb))
     if abs(up_cm) >= MIN_CORRECTION_CM:
         verb = "올리" if up_cm > 0 else "내리"
-        parts.append(f"{abs(up_cm):.0f}cm {verb}")
+        candidates.append(("vertical", up_cm, verb))
 
     along = _flattened(frame.tangent)
     if along is None:
         lateral_cm = math.hypot(plane[0], plane[1]) * 100.0
         if lateral_cm >= MIN_CORRECTION_CM:
-            parts.append(f"벽을 따라 {lateral_cm:.0f}cm 옮기")
-        return parts
-    lateral_cm = _dot(plane, along) * 100.0
-    if abs(lateral_cm) >= MIN_CORRECTION_CM:
-        direction = "앞으로" if lateral_cm > 0 else "뒤로"
-        parts.append(f"진행 방향 {direction} {abs(lateral_cm):.0f}cm 옮기")
-    return parts
+            candidates.append(("lateral", lateral_cm, ""))
+    else:
+        lateral_cm = _dot(plane, along) * 100.0
+        if abs(lateral_cm) >= MIN_CORRECTION_CM:
+            direction = "앞으로" if lateral_cm > 0 else "뒤로"
+            candidates.append(("lateral", lateral_cm, direction))
+    return candidates
+
+
+def _largest_correction(
+    local: Vec3, frame: AxisFrame
+) -> tuple[str, float, str] | None:
+    """절댓값이 가장 큰 후보 하나. 사람은 한 번에 하나만 고칠 수 있다."""
+    candidates = _correction_candidates(local, frame)
+    if not candidates:
+        return None
+    return max(candidates, key=lambda candidate: abs(candidate[1]))
+
+
+def right_hand_finding(
+    deltas: Sequence[PointDelta], frame: AxisFrame = WORLD_FRAME
+) -> RightHandFinding | None:
+    """오른손의 가장 큰 이탈 하나. 머리·왼손은 채점에는 남지만 지목하지 않는다.
+
+    오른손이 건을 쥐고 도막 품질을 직접 결정한다(§7). 머리는 작업자가 의도적으로
+    조정하는 대상이 아니고, 왼손(플래시)은 작업 결과와의 인과가 약하다 — 가중을 낮춰
+    점수에는 남기되(변경 없음), 지시로는 내지 않는다.
+    """
+    right = next((delta for delta in deltas if delta.point == "right"), None)
+    if right is None or right.sigma <= CORRECTION_SIGMA_THRESHOLD:
+        return None
+    candidate = _largest_correction(right.local_delta, frame)
+    if candidate is None:
+        return None
+    axis, magnitude_cm, direction = candidate
+    return RightHandFinding(
+        axis=axis,
+        magnitude_cm=magnitude_cm,
+        direction=direction,
+        sigma=right.sigma,
+        samples=right.samples,
+    )
+
+
+def _finding_phrase(finding: RightHandFinding) -> str:
+    """구조체에서 문장을 짓는다. 문장과 구조체가 같은 필드에서 나오므로 어긋날 수 없다."""
+    label = POINT_LABELS["right"]
+    magnitude = abs(finding.magnitude_cm)
+    if finding.axis == "wall":
+        body = f"벽에서 {magnitude:.0f}cm 더 {finding.direction}"
+    elif finding.axis == "vertical":
+        body = f"{magnitude:.0f}cm {finding.direction}"
+    elif finding.direction:
+        body = f"진행 방향 {finding.direction} {magnitude:.0f}cm 옮기"
+    else:
+        body = f"벽을 따라 {magnitude:.0f}cm 옮기"
+    return f"{label}{_object_particle(label)} {body}세요."
 
 
 def corrections_text(
     deltas: Sequence[PointDelta], frame: AxisFrame = WORLD_FRAME
 ) -> list[str]:
-    """통상 범위를 벗어난 점만. 각도가 아니라 센티미터로 낸다.
+    """오른손 하나에 대해, 가장 큰 이탈 하나만 문장 하나로 낸다. 각도가 아니라 센티미터다.
+
+    머리·왼손은 σ가 임계를 넘어도 문장을 내지 않는다(§7 가중 근거와 별개로, 지시는
+    오른손만). 사람이 한 번에 고칠 수 있는 것은 하나뿐이라 여러 이탈을 한 문장에
+    쌓지 않는다.
 
     `frame`은 `local_delta`가 적힌 스트로크 기저다. 기저 없이 성분을 축 이름으로 읽으면
-    수직 스트로크에서 좌우 이탈이 "올리세요"로 나간다(`_correction_parts`).
+    수직 스트로크에서 좌우 이탈이 "올리세요"로 나간다(`_correction_candidates`).
     """
-    lines: list[str] = []
-    for delta in sorted(deltas, key=lambda item: item.sigma, reverse=True):
-        if delta.sigma <= CORRECTION_SIGMA_THRESHOLD:
-            continue
-        parts = _correction_parts(delta.local_delta, frame)
-        if not parts:
-            continue
-        label = POINT_LABELS.get(delta.point, delta.point)
-        lines.append(f"{label}{_object_particle(label)} {'고 '.join(parts)}세요.")
-    return lines
+    finding = right_hand_finding(deltas, frame)
+    if finding is None:
+        return []
+    return [_finding_phrase(finding)]
 
 
 def apply_measured(

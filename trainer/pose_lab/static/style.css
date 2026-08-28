@@ -8,6 +8,8 @@ body { font-family: system-ui, "Noto Sans KR", sans-serif; margin: 0; padding: 1
 .note { font-size: .8rem; opacity: .8; }
 .provisional { font-size: .8rem; opacity: .8; color: var(--warn); }
 .provisional:empty { display: none; }
+.finding { font-size: .75rem; opacity: .75; font-family: ui-monospace, monospace; }
+.finding:empty { display: none; }
 .bars { list-style: none; padding: 0; }
 .bars li { display: grid; grid-template-columns: 8rem 1fr 4rem; gap: .5rem; align-items: center; }
 .bars .track { height: .75rem; border-radius: .2rem; }

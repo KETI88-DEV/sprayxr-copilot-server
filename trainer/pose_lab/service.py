@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import importlib
 import sys
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Final, Protocol, Sequence
 
@@ -289,6 +289,19 @@ def compare(
             "corrections": measured_score.corrections_text(
                 before.deltas, representative_basis(query_frames)
             ),
+            # 최종 작업자 문구는 다운스트림 VLM이 짓는다. 문장만 주면 VLM이 근거 없이
+            # 다시 지어내야 한다 — 표본 수는 문장에 없다. 구조체를 병기해 축·부호·σ·
+            # 표본 n을 그대로 넘긴다. 오른손이 임계 아래거나 못 잰 경우 None이다.
+            "finding": (
+                None
+                if (
+                    finding := measured_score.right_hand_finding(
+                        before.deltas, representative_basis(query_frames)
+                    )
+                )
+                is None
+                else asdict(finding)
+            ),
             # 진짜 분리 채점 점수는 겹치지 않는 날짜에서 뽑은 held-out 레퍼런스가
             # 있어야 나온다. 실제 PassSource가 배선되기 전까지는 split을 None으로
             # 낸다 — after.score를 split 자리에 다시 넣으면 두 숫자가 항상 같아져
@@ -312,6 +325,7 @@ def compare(
             "score_after": None,
             "deltas": [],
             "corrections": [],
+            "finding": None,
             "improvement": None,
             "gate": None,
             "gate_reason": "not_wired",

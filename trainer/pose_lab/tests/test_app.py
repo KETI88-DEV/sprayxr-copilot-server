@@ -140,6 +140,30 @@ def test_compare_emits_no_angle_in_corrections() -> None:
     assert body["joint"]["corrections"] == []
 
 
+def test_compare_exposes_a_structured_finding_next_to_corrections() -> None:
+    """VLM이 최종 문구를 지으려면 표본 수 같은 근거가 필요하다. 문장만으로는 안 된다."""
+    client = TestClient(create_app(source=FakeSource()))
+    body = client.post("/api/compare", json={"query": QUERY, "reference": REFERENCE}).json()
+    corrections = body["measured"]["corrections"]
+    finding = body["measured"]["finding"]
+    assert len(corrections) == 1
+    assert finding is not None
+    assert finding["axis"] in ("wall", "vertical", "lateral")
+    assert isinstance(finding["magnitude_cm"], float)
+    assert isinstance(finding["sigma"], float)
+    assert isinstance(finding["samples"], int) and finding["samples"] > 0
+    # 문장과 구조체가 같은 이탈에서 나왔다는 것을 겉에서도 확인한다.
+    if finding["direction"]:
+        assert finding["direction"] in corrections[0]
+
+
+def test_joint_axis_finding_stays_none() -> None:
+    """관절 축은 배선되지 않았다. finding도 다른 literal 필드처럼 값을 빌려오지 않는다."""
+    client = TestClient(create_app(source=FakeSource()))
+    body = client.post("/api/compare", json={"query": QUERY, "reference": REFERENCE}).json()
+    assert body["joint"]["finding"] is None
+
+
 def test_compare_refuses_when_motion_keys_differ() -> None:
     """의도가 다른 동작은 비교하지 않는다. 억지로 붙이면 의도 차이가 오차로 보고된다."""
     client = TestClient(create_app(source=FakeSource(mismatch=True)))
