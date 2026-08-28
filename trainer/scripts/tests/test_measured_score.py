@@ -56,15 +56,30 @@ def test_missing_point_is_skipped_not_scored_zero() -> None:
 
 
 def test_correction_text_uses_measured_quantities_not_angles() -> None:
-    """REQ-19 게이트 통과 전까지 각도는 근거보다 높은 정밀도다."""
+    """REQ-19 게이트 통과 전까지 각도는 근거보다 높은 정밀도다.
+
+    문장 전체를 고정한다. 조각만 확인하면 조사·어미가 깨진 비문이 통과한다.
+    """
     deltas = [
         measured_score.PointDelta(point="right", sigma=3.0, local_delta=(0.05, 0.0, 0.15))
     ]
-    lines = measured_score.corrections_text(deltas)
-    assert len(lines) == 1
-    assert "오른손" in lines[0]
-    assert "5cm" in lines[0] and "15cm" in lines[0]
-    assert "도" not in lines[0]
+    assert measured_score.corrections_text(deltas) == [
+        "오른손을 벽에서 5cm 더 띄우고 15cm 올리세요."
+    ]
+
+
+def test_correction_picks_the_particle_from_the_label() -> None:
+    """받침 없는 라벨에는 를이 붙는다. "머리을"은 비문이다."""
+    head = measured_score.PointDelta(
+        point="head", sigma=3.0, local_delta=(0.0, -0.12, 0.0)
+    )
+    left = measured_score.PointDelta(
+        point="left", sigma=3.0, local_delta=(0.0, 0.0, -0.08)
+    )
+    assert measured_score.corrections_text([head]) == [
+        "머리를 진행 방향 뒤로 12cm 옮기세요."
+    ]
+    assert measured_score.corrections_text([left]) == ["왼손을 8cm 내리세요."]
 
 
 def test_correction_skips_points_inside_expert_range() -> None:

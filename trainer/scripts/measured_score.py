@@ -111,6 +111,19 @@ def score_track(
     )
 
 
+def _object_particle(label: str) -> str:
+    """목적격 조사. 받침이 있으면 을, 없으면 를이다.
+
+    "머리을"은 비문이다. 라벨이 늘 때마다 사람이 기억해야 하는 규칙이 아니라 마지막
+    글자에서 뽑는다. 한글 음절은 0xAC00부터 종성 28개 주기로 배열돼 있어 나머지가
+    0이면 받침이 없다.
+    """
+    last = label[-1] if label else ""
+    if not ("가" <= last <= "힣"):
+        return "을"
+    return "을" if (ord(last) - 0xAC00) % 28 else "를"
+
+
 def corrections_text(deltas: Sequence[PointDelta]) -> list[str]:
     """통상 범위를 벗어난 점만. 각도가 아니라 센티미터로 낸다."""
     lines: list[str] = []
@@ -135,7 +148,7 @@ def corrections_text(deltas: Sequence[PointDelta]) -> list[str]:
         if not parts:
             continue
         label = POINT_LABELS.get(delta.point, delta.point)
-        lines.append(f"{label}을 {'고 '.join(parts)}세요.")
+        lines.append(f"{label}{_object_particle(label)} {'고 '.join(parts)}세요.")
     return lines
 
 
