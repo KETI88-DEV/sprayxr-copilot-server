@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 
 spread_stats = importlib.import_module("spread_stats")
 
+import pytest
 from fastapi.testclient import TestClient
 
 from trainer.pose_lab import service
@@ -55,37 +56,39 @@ def _keys_for(query: dict[str, object]) -> dict[str, str]:
     return {"uv8": key8, "uv_off": key_off}
 
 
-def _axis_values(base: float, count: int) -> list[float]:
-    # 간격을 0.02로 벌린다 — 0.001이면 표준편차가 0.003 m 근처로 너무 얇아서 실제
-    # 이탈(수십 cm)과 나누면 MAX_SIGMA(6.0)에서 양쪽(스케일 전/후)이 다 잘려 √2 배율이
-    # 관측되지 않는다.
-    return [base + 0.02 * step for step in range(count)]
+_AXIS_CENTERS = {"wall": 0.05, "vertical": 0.06, "lateral": 0.045}
+# 대부분의 테스트가 쓰는 균일 표준편차. 바닥(SIGMA_FLOOR_M=0.02 m)과 상한(σ=MAX_SIGMA=6.0)
+# 양쪽에서 멀어야 (스케일 전/후) σ의 √2 배율이 클리핑 없이 그대로 보인다.
+_UNIFORM_STD = 0.06
 
 
-def _full_bucket(dates: list[str], per_date: int = 10) -> dict[str, object]:
-    """모든 날짜에 같은 표본을 반복해서 싣는다. 세 점(right/head/left) 모두 채운다.
+def _axis_values(center: float, std: float, count: int) -> list[float]:
+    """평균이 정확히 `center`로 고정된 등간격 표본.
 
-    반복해도 평균·산포(모표준편차)는 바뀌지 않는다 — 합/표본수 비가 그대로이기
-    때문이다. 그래서 이 버킷의 어느 날짜 부분집합(A, B, 전체)을 골라도 산포가 정확히
-    같은 값이 나오고, `test_split_never_exceeds_same`이 부동소수 오차 안에서
-    등식으로(따라서 결정론적으로 `<=`를 만족하며) 성립한다.
+    등간격 수열의 모분산은 `d²(n²-1)/12`이므로 원하는 `std`가 나오도록 간격 `d`를
+    역산한다 — 평균은 `d`(따라서 std)와 무관하게 항상 `center`다. 표본을 만드는
+    쪽에서 평균과 산포를 독립으로 조절할 수 있어야 "산포만 다르고 평균은 같은" A/B
+    날짜를 쉽게 만들 수 있다.
     """
-    per_point_axes = {
-        "right": {
-            "wall": _axis_values(0.05, per_date),
-            "vertical": _axis_values(0.06, per_date),
-            "lateral": _axis_values(0.045, per_date),
-        },
-        "head": {
-            "wall": _axis_values(0.05, per_date),
-            "vertical": _axis_values(0.06, per_date),
-            "lateral": _axis_values(0.045, per_date),
-        },
-        "left": {
-            "wall": _axis_values(0.05, per_date),
-            "vertical": _axis_values(0.06, per_date),
-            "lateral": _axis_values(0.045, per_date),
-        },
+    d = std / math.sqrt((count * count - 1) / 12)
+    return [center + d * (i - (count - 1) / 2) for i in range(count)]
+
+
+def _bucket(std_by_date: dict[str, float], per_date: int = 10) -> dict[str, object]:
+    """날짜마다 다른 표준편차를 줄 수 있는 버킷. 세 점(right/head/left) 모두 채운다.
+
+    모든 날짜에 같은 std를 주면(`_axis_values`가 결정론이므로) 날짜마다 완전히 같은
+    표본이 나온다 — 그래서 이 버킷의 어느 날짜 부분집합을 골라도 평균·산포가 정확히
+    같다. `test_split_is_not_backfilled_from_same`은 일부러 날짜마다 다른 std를 줘서
+    이 성질이 깨지게 만든다.
+    """
+    dates = sorted(std_by_date)
+    per_date_axes = {
+        date: {
+            axis: _axis_values(center, std_by_date[date], per_date)
+            for axis, center in _AXIS_CENTERS.items()
+        }
+        for date in dates
     }
     by_date = {
         date: {
@@ -93,45 +96,69 @@ def _full_bucket(dates: list[str], per_date: int = 10) -> dict[str, object]:
                 axis: spread_stats.to_json(spread_stats.accumulate(values))
                 for axis, values in axes.items()
             }
-            for point, axes in per_point_axes.items()
+            for point in ("right", "head", "left")
         }
-        for date in dates
+        for date, axes in per_date_axes.items()
     }
     points_out: dict[str, dict[str, dict[str, float]]] = {}
     counts: list[int] = []
-    for point, axes in per_point_axes.items():
+    for point in ("right", "head", "left"):
         points_out[point] = {}
-        for axis, values in axes.items():
-            merged = values * len(dates)
+        for axis in _AXIS_CENTERS:
+            merged: list[float] = []
+            for date in dates:
+                merged.extend(per_date_axes[date][axis])
             counts.append(len(merged))
             points_out[point][axis] = {
                 "mean": sum(merged) / len(merged),
                 "spread": spread_stats.summarize(spread_stats.accumulate(merged))[1],
             }
-    return {
-        "n": max(counts),
-        "dates": sorted(dates),
-        "by_date": by_date,
-        "points": points_out,
-    }
+    return {"n": max(counts), "dates": dates, "by_date": by_date, "points": points_out}
 
 
-def _payload(worker: str, key8: str, key_off: str, dates: list[str], per_date: int = 10) -> dict[str, object]:
+def _payload_from_bucket(worker: str, key8: str, key_off: str, bucket: dict[str, object]) -> dict[str, object]:
     return {
-        "version": 1, "worker": worker, "levels": ["10"], "sessions": len(dates), "n_min": 20,
+        "version": 1, "worker": worker, "levels": ["10"], "sessions": len(bucket["dates"]), "n_min": 20,
         "granularities": {
-            "uv8": {key8: _full_bucket(dates, per_date)},
-            "uv4": {}, "uv2": {},
-            "uv_off": {key_off: _full_bucket(dates, per_date)},
+            "uv8": {key8: bucket}, "uv4": {}, "uv2": {},
+            "uv_off": {key_off: bucket},
         },
     }
 
 
+def _uniform_payload(
+    worker: str, key8: str, key_off: str, dates: list[str], per_date: int = 10
+) -> dict[str, object]:
+    return _payload_from_bucket(
+        worker, key8, key_off, _bucket({date: _UNIFORM_STD for date in dates}, per_date)
+    )
+
+
+# `SpreadReference.split_dates`는 정렬된 날짜를 홀/짝 인덱스로 가른다 — 4개 날짜면
+# [0,2]가 A(교정 선택), [1,3]가 B(채점)다. 아래 두 상수가 그 순서를 그대로 반영한다.
+_SPLIT_DATES_A = ["20250901", "20250903"]
+_SPLIT_DATES_B = ["20250902", "20250904"]
+# A(교정 선택)는 CORRECTION_SIGMA_THRESHOLD(2.0)를 넘길 만큼 좁아야 교정이 실제로
+# 발동한다. B(채점)는 A보다 훨씬 좁게 잡아, 둘을 섞은 전체 레퍼런스(F, `same`이 쓰는
+# 잣대)보다도 더 엄격한 잣대가 되게 한다 — 그래야 같은 교정이라도 B로 재면 F로 잰
+# 것(same)보다 낮게 나오는, 자명하지 않은(그리고 조작되지 않은) 부등식이 나온다.
+# 값은 `docker exec ... python3`으로 (std_a, std_b) 격자를 스캔해, 바닥(0.02 m)과
+# 상한(σ=6.0)을 피하면서 split < same이 되는 조합을 확인해 골랐다 — `service.py`의
+# 임계 상수(`CORRECTION_SIGMA_THRESHOLD`/`SIGMA_FLOOR_M`/`MAX_SIGMA`)는 손대지 않았다.
+_SPLIT_STD_A = 0.09
+_SPLIT_STD_B = 0.03
+
+
 def _compare_with_reference() -> dict[str, object]:
-    dates = ["20250901", "20250902", "20250903", "20250904"]
+    """A(0901/0903)는 넓혀(σ가 임계를 겨우 넘는 정도), B(0902/0904)는 훨씬 좁힌
+    레퍼런스. `split`(B로만 채점)과 `same`(F로만 채점)이 서로 다른 잣대에서 나오므로
+    두 값이 우연히 같아지지 않는다.
+    """
     keys = _keys_for(_QUERY)
+    std_by_date = {date: _SPLIT_STD_A for date in _SPLIT_DATES_A}
+    std_by_date.update({date: _SPLIT_STD_B for date in _SPLIT_DATES_B})
     reference_spreads = SpreadReference(
-        _payload(_EXPERT_WORKER, keys["uv8"], keys["uv_off"], dates)
+        _payload_from_bucket(_EXPERT_WORKER, keys["uv8"], keys["uv_off"], _bucket(std_by_date))
     )
     return service.compare(
         FakeSource(),
@@ -144,7 +171,7 @@ def _compare_with_reference() -> dict[str, object]:
 def _compare_with_single_date_reference() -> dict[str, object]:
     keys = _keys_for(_QUERY)
     reference_spreads = SpreadReference(
-        _payload(_EXPERT_WORKER, keys["uv8"], keys["uv_off"], [_QUERY_DATE], per_date=25)
+        _uniform_payload(_EXPERT_WORKER, keys["uv8"], keys["uv_off"], [_QUERY_DATE], per_date=25)
     )
     return service.compare(
         FakeSource(),
@@ -158,7 +185,7 @@ def _compare_expert_against_own_reference() -> dict[str, object]:
     dates = ["20250901", "20250902", "20250903", "20250904", "20250905"]
     keys = _keys_for(_EXPERT_QUERY)
     reference_spreads = SpreadReference(
-        _payload(_EXPERT_WORKER, keys["uv8"], keys["uv_off"], dates)
+        _uniform_payload(_EXPERT_WORKER, keys["uv8"], keys["uv_off"], dates)
     )
     return service.compare(
         FakeSource(),
@@ -207,6 +234,18 @@ def test_split_never_exceeds_same() -> None:
         assert improvement["split"] <= improvement["same"] + 1e-9
 
 
+def test_split_is_not_backfilled_from_same() -> None:
+    """`_compare_with_reference()`의 A/B는 표준편차가 서로 다르다(`_SPLIT_STD_A` !=
+    `_SPLIT_STD_B`) — 그래서 진짜 분리 채점이면 `split`이 `same`과 우연히도 같아질
+    수 없다. `improvement.split`을 `after.score`(same이 쓰는 값)로 되메우는 결함이
+    돌아오면 이 assert가 그것을 잡는다 — `split <= same`만으로는 `split == same`(즉
+    되메움)을 못 잡는다는 것이 바로 이 테스트가 있는 이유다."""
+    body = _compare_with_reference()
+    improvement = body["measured"]["improvement"]
+    assert improvement["split"] is not None
+    assert improvement["split"] != pytest.approx(improvement["same"])
+
+
 def test_insufficient_dates_are_reported_not_invented() -> None:
     body = _compare_with_single_date_reference()
     assert body["measured"]["improvement"]["split"] is None
@@ -243,7 +282,7 @@ def test_reference_spreads_reach_the_scorer_scaled_by_sqrt2() -> None:
     dates = ["20250901", "20250902"]
     keys = _keys_for(_QUERY)
     reference_spreads = SpreadReference(
-        _payload(_EXPERT_WORKER, keys["uv8"], keys["uv_off"], dates)
+        _uniform_payload(_EXPERT_WORKER, keys["uv8"], keys["uv_off"], dates)
     )
     resolved = reference_spreads.resolve({"uv8": keys["uv8"]})
     assert resolved is not None
@@ -276,7 +315,7 @@ def test_create_app_reads_the_spread_reference_env_var(tmp_path, monkeypatch) ->
 
     dates = ["20250901", "20250902"]
     keys = _keys_for(_QUERY)
-    payload = _payload(_EXPERT_WORKER, keys["uv8"], keys["uv_off"], dates)
+    payload = _uniform_payload(_EXPERT_WORKER, keys["uv8"], keys["uv_off"], dates)
     artifact_path = tmp_path / "spread_reference.json"
     artifact_path.write_text(json.dumps(payload), encoding="utf-8")
     monkeypatch.setenv(SPREAD_REFERENCE_ENV, str(artifact_path))

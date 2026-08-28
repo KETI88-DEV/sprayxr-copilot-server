@@ -90,7 +90,10 @@ def gate_verdict(spread: float, error: float) -> str | None:
 
 
 def improvement(
-    before: float, after_split: float | None, after_same: float
+    before_same: float,
+    after_split: float | None,
+    after_same: float,
+    before_split: float | None = None,
 ) -> dict[str, float | None]:
     """개선율을 분리 채점과 동일 채점 둘 다 낸다.
 
@@ -98,14 +101,25 @@ def improvement(
     병기해야 그 값이 자기충족에 얼마나 기대는지 드러난다. 분리 채점 점수가 없으면
     (아직 계산되지 않았으면) 없는 값을 만들어내지 않고 None을 그대로 낸다.
 
+    `same`과 `split`은 각자 자기 안에서만 일관돼야 한다 — `gap_closure`는
+    `(S1-S0)/(1-S0)`인데, S0와 S1을 서로 다른 잣대(산포)로 재면 교정이 아무것도
+    옮기지 않아도 잣대를 바꾼 것만으로 G≠0이 나온다. 그 방향(향상처럼 보일지 악화처럼
+    보일지)은 두 잣대 중 어느 쪽이 더 넓은가에 좌우되고, 그건 버킷마다 다르므로 결과가
+    잣대와 함께 흔들리는 지표가 된다. 그래서 `same`은 전체 레퍼런스(F) 하나로 S0·S1을
+    다 재고, `split`은 교정을 고른 레퍼런스(A)가 아니라 **채점 레퍼런스(B) 하나로
+    S0·S1을 다 잰다** — `before_split`이 그 B 위에서 낸 교정 전 점수다. 이렇게 해야
+    두 숫자 사이에서 움직이는 것이 오직 "교정을 적용했는가"뿐이 된다
+    (`eval_pose_correction.py::measure_correction`이 이미 쓰는 패턴: A로 교정을
+    고르고 B로 앞뒤를 다 잰다).
+
     `gap_closure`가 내는 None도 그대로 흘린다. 이미 기준과 같으면(S0=1) 메울 격차가
     없어 개선율이 정의되지 않는데, 여기서 0.0으로 바꾸면 "메우지 못했다"로 읽힌다.
     화면은 None을 대시로 그리고 있으므로 뒤에서 값을 지어낼 이유가 없다.
     """
-    same = pose_similarity.gap_closure(before, after_same)
-    if after_split is None:
+    same = pose_similarity.gap_closure(before_same, after_same)
+    if after_split is None or before_split is None:
         return {"split": None, "same": same}
-    return {"split": pose_similarity.gap_closure(before, after_split), "same": same}
+    return {"split": pose_similarity.gap_closure(before_split, after_split), "same": same}
 
 
 def pass_frames(raw: RawPass, samples: int = stroke_frame.DEFAULT_SAMPLES) -> list[Any]:
@@ -356,11 +370,12 @@ def compare(
     fixed = measured_score.apply_measured(query_track, before.deltas, basis)
     after = measured_score.score_track(fixed, reference_track, spreads_used, weights, basis)
 
-    # 분리 채점: 교정에 쓴 레퍼런스(A)와 채점에 쓴 레퍼런스(B)가 겹치지 않아야
+    # 분리 채점: 교정을 고르는 레퍼런스(A)와 채점하는 레퍼런스(B)가 겹치지 않아야
     # 개선율이 자기충족이 아니다(설계 D4). 날짜를 반으로 갈라 A로 교정 후보(deltas)를
-    # 뽑고 B로 그 교정을 적용한 뒤의 점수를 잰다. `before`(위에서 낸 값)는 두 갈래
-    # 모두에서 그대로 쓴다 — 바뀌는 것은 무엇으로 교정을 고르고 무엇으로 사후 점수를
-    # 매기느냐뿐이다.
+    # 뽑는다. 채점(전·후 둘 다)은 B 하나로만 한다 — S0를 F로, S1을 B로 재면 잣대를
+    # 바꾼 것만으로 gap_closure가 흔들린다(`improvement` 독스트링). B로 두 번 재면
+    # 두 점수 사이에서 움직이는 것이 교정 적용 여부뿐이 된다.
+    before_split_score: float | None = None
     after_split_score: float | None = None
     split_reason: str | None = "no_reference_distribution"
     if resolved is not None and reference_spreads is not None:
@@ -374,13 +389,21 @@ def compare(
             if raw_a is None or raw_b is None:
                 split_reason = "insufficient_dates"
             else:
+                spreads_b = _scale_spreads(raw_b)
+                # A는 교정 후보(deltas)를 고르는 데만 쓴다 — 채점에는 쓰지 않는다.
                 before_a = measured_score.score_track(
                     query_track, reference_track, _scale_spreads(raw_a), weights, basis
                 )
                 fixed_a = measured_score.apply_measured(query_track, before_a.deltas, basis)
-                after_split = measured_score.score_track(
-                    fixed_a, reference_track, _scale_spreads(raw_b), weights, basis
+                # B가 교정 전·후를 둘 다 잰다(`eval_pose_correction.measure_correction`과
+                # 같은 패턴: A로 고르고 B로 앞뒤를 다 잰다).
+                before_split = measured_score.score_track(
+                    query_track, reference_track, spreads_b, weights, basis
                 )
+                after_split = measured_score.score_track(
+                    fixed_a, reference_track, spreads_b, weights, basis
+                )
+                before_split_score = before_split.score
                 after_split_score = after_split.score
                 split_reason = None
 
@@ -435,7 +458,9 @@ def compare(
             # 두 숫자가 항상 같아져 자기충족 정도를 가리는 바로 그 결함이 된다.
             # `after`는 위에서 낸 문장 하나를 그대로 적용한 점수다. 지시하지 않은
             # 이동은 들어 있지 않다.
-            "improvement": improvement(before.score, after_split_score, after.score),
+            "improvement": improvement(
+                before.score, after_split_score, after.score, before_split_score
+            ),
             # split이 None이면 왜인지 말한다 — 레퍼런스가 아예 없거나(D3/D4 이전과
             # 같은 잠정 상태), 있어도 날짜가 모자라 A/B로 못 가른 것이다. 값이 실려
             # 있으면(None) 지어낼 사유가 없다는 뜻이다.

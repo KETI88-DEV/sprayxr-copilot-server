@@ -22,18 +22,34 @@ def test_gate_is_none_without_an_error_scale() -> None:
 
 
 def test_improvement_reports_split_and_same_reference() -> None:
-    """교정에 쓴 분포로 다시 채점하면 향상이 자동 보장된다. 둘 다 보여야 한다."""
-    result = service.improvement(before=0.4, after_split=0.55, after_same=0.9)
-    assert math.isclose(result["split"], 0.25, abs_tol=1e-9)
+    """교정에 쓴 분포로 다시 채점하면 향상이 자동 보장된다. 둘 다 보여야 한다.
+
+    `split`은 자기 안에서 일관돼야 한다 — S0·S1을 같은(B) 잣대로 재야 잣대를 바꾼
+    것만으로 향상이 생기지 않는다. `before_split`이 그 B 위에서 낸 교정 전 점수다.
+    """
+    result = service.improvement(
+        before_same=0.4, after_split=0.55, after_same=0.9, before_split=0.3
+    )
+    assert math.isclose(result["split"], 0.3571428571, abs_tol=1e-9)
     assert math.isclose(result["same"], 0.8333333, abs_tol=1e-6)
     assert result["split"] != result["same"]
 
 
 def test_improvement_leaves_split_none_when_not_computed() -> None:
     """held-out 레퍼런스가 없으면 분리 채점 값을 지어내지 않는다."""
-    result = service.improvement(before=0.4, after_split=None, after_same=0.9)
+    result = service.improvement(before_same=0.4, after_split=None, after_same=0.9)
     assert result["split"] is None
     assert math.isclose(result["same"], 0.8333333, abs_tol=1e-6)
+
+
+def test_improvement_leaves_split_none_without_its_own_baseline() -> None:
+    """`after_split`만 있고 `before_split`이 없으면(짝이 안 맞으면) 지어내지 않는다.
+
+    `same`의 S0(`before_same`)를 대신 꿔다 쓰면 서로 다른 잣대로 S0·S1을 재는
+    결함이 되돌아온다 — 반드시 자기 짝이 있어야 split을 낸다.
+    """
+    result = service.improvement(before_same=0.4, after_split=0.55, after_same=0.9)
+    assert result["split"] is None
 
 
 def test_undefined_gap_stays_none_and_does_not_become_zero() -> None:
@@ -43,7 +59,9 @@ def test_undefined_gap_stays_none_and_does_not_become_zero() -> None:
     None을 내는데, 그것을 뒤에서 0.0으로 바꾸면 의도적인 침묵이 무너진다.
     """
     assert pose_similarity.gap_closure(1.0, 1.0) is None
-    result = service.improvement(before=1.0, after_split=1.0, after_same=1.0)
+    result = service.improvement(
+        before_same=1.0, after_split=1.0, after_same=1.0, before_split=1.0
+    )
     assert result["split"] is None
     assert result["same"] is None
 
