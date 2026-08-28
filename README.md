@@ -143,7 +143,26 @@ ssh -L 8130:127.0.0.1:8130 <서버>
 
 **범위는 학습모드다.** 파일명이 `1-A`/`1-B`/`1-C`로 시작하는 실전모드 세션은 건너뛴다. 세그멘테이션은 새로 만들지 않고 분사 On 버스트 안의 착탄점 궤적을 `pass_segmentation.split_pass_spans`로 자른다.
 
-**채점은 실측 3점에서 하고 표시용 스켈레톤만 FK를 탄다** — 관절 축은 응답에 자리만 있고(`status: not_wired`) IK 산출물 배지로 표시된다. 실측 축의 σ와 점수도 아직 잰 분포가 아니라 임시 산포로 정규화한 값이라 응답이 `normalization: provisional`로 표시하고, REQ-19 게이트는 잰 분포가 없어 판정하지 않는다(`gate: null`). 개선율의 분리 채점(`improvement.split`)도 겹치지 않는 날짜의 held-out 레퍼런스가 아직 없어 `null`이다 — 동일 채점 값을 그 자리에 복사하지 않는다.
+**채점은 실측 3점에서 하고 표시용 스켈레톤만 FK를 탄다** — 관절 축은 응답에 자리만 있고(`status: not_wired`) IK 산출물 배지로 표시된다. `POSE_LAB_SPREAD_REFERENCE`(아래)를 배선하지 않았거나 그 사다리(우8→우4→우2→우off)의 어느 층도 표본 20개를 못 채우면 실측 축의 σ와 점수는 잰 분포가 아니라 임시 산포(0.05 m)로 정규화한 값이라 응답이 `normalization: provisional`로 표시하고, REQ-19 게이트는 잰 분포가 없어 판정하지 않는다(`gate: null`). 개선율의 분리 채점(`improvement.split`)도 겹치지 않는 날짜의 held-out 레퍼런스가 아직 없으면 `null`이다 — 동일 채점 값을 그 자리에 복사하지 않는다. 화면은 이 정규화 상태·입도·표본수·레퍼런스 날짜를 값 옆에 그대로 드러낸다(측정 못한 값은 `0`이 아니라 `—`).
+
+**레퍼런스 산포 아티팩트(`POSE_LAB_SPREAD_REFERENCE`).** 산포를 전형기 한 사람의 변동으로만 재야 작업자 간 차이(교정 대상 그 자체)가 잣대에 섞이지 않는다. 컨테이너 안에서 굽는다.
+
+```bash
+docker exec -w /workspace ship-paint-trainer python3 trainer/scripts/build_spread_reference.py \
+  --root /data/sources/professionals --worker 전형기 \
+  --out /output/spread_reference_expert.json --log-level INFO
+```
+
+아티팩트는 우8/우4/우2/우off 네 입도로 버킷을 나눠 점별·축별 산포와 날짜별 부분합을 싣는다. 서버가 그 경로를 읽게 하려면 `POSE_LAB_SPREAD_REFERENCE`에 아티팩트 경로를 준다.
+
+```bash
+docker exec -d -w /workspace \
+  -e POSE_LAB_DATA_ROOT=/data/sources/professionals \
+  -e POSE_LAB_SPREAD_REFERENCE=/output/spread_reference_expert.json \
+  ship-paint-trainer python3 -m uvicorn trainer.pose_lab.app:create_app --factory --host 0.0.0.0 --port 8130
+```
+
+실측 커버리지는 고르지 않다 — 질의의 약 25%만 가장 고운 우8에서 답을 얻고, 95%는 표본 20개를 못 채워 가장 거친 우off까지 내려간다. 그래서 화면의 두 숫자가 같은 화면에 있어도 서로 다른 입도·표본수에서 나올 수 있다.
 
 ### 2.4 GPU 없이 시뮬레이터 I/O 확인
 

@@ -12,6 +12,11 @@ const GATE_REASONS = {
 // 구조화 근거의 축 이름. 서버는 영문 리터럴("wall"/"vertical"/"lateral")을 낸다.
 const AXIS_LABELS = { wall: "벽", vertical: "수직", lateral: "진행축" };
 
+// 정규화 딱지. measured/provisional 둘 다 아니면(관절 축처럼 아예 배선되지 않은
+// 경우) 값을 지어내지 않고 "—"로 낸다.
+const NORMALIZATION_LABELS = { measured: "측정된 분포", provisional: "임시" };
+const NORMALIZATION_CLASS = { measured: "measured", provisional: "provisional-flag" };
+
 // 비교를 만들지 않은 이유. 서버의 reason과 1:1이다.
 const UNAVAILABLE_REASONS = {
   motion_key_mismatch: "동작 키가 달라 비교하지 않습니다",
@@ -57,6 +62,36 @@ function renderAxis(root, payload) {
     <dt>개선율(동일)</dt><dd>${num(payload.improvement?.same)}</dd>
     <dt>REQ-19 게이트</dt><dd>${gate}${gateWhy}</dd>`;
 
+  // 정규화가 어느 값을 재정의하는지 눈에 크게 띄어야 한다 — 이 값이 틀리면 아래
+  // σ와 점수 전부가 다른 뜻이 된다. 값이 measured/provisional 둘 다 아니면(관절
+  // 축처럼 애초에 배선되지 않았으면) 지어내지 않고 "—"를 낸다.
+  const normEl = root.querySelector(".normalization");
+  if (normEl) {
+    const norm = payload.normalization ?? null;
+    normEl.textContent = `정규화: ${NORMALIZATION_LABELS[norm] ?? "—"}`;
+    normEl.className = `normalization ${NORMALIZATION_CLASS[norm] ?? "unknown"}`;
+  }
+
+  // 입도·표본. `resolved`가 답을 낸 층이 없으면(레퍼런스가 없거나 사다리 전부
+  // 실패) 값을 지어내지 않고 대시다.
+  const granEl = root.querySelector(".granularity");
+  if (granEl) {
+    const granularity = payload.granularity ?? null;
+    const referenceN = payload.reference_n;
+    granEl.textContent = granularity && typeof referenceN === "number"
+      ? `입도 · 표본: ${granularity} · n=${referenceN}`
+      : "입도 · 표본: —";
+  }
+
+  // 레퍼런스 날짜. 개수와 목록을 함께 적어 이 σ가 어느 날짜들의 평균인지 보인다.
+  const datesEl = root.querySelector(".reference-dates");
+  if (datesEl) {
+    const dates = payload.reference_dates ?? [];
+    datesEl.textContent = dates.length > 0
+      ? `레퍼런스 날짜 (${dates.length}개): ${dates.join(", ")}`
+      : "레퍼런스 날짜: —";
+  }
+
   const provisional = root.querySelector(".provisional");
   if (provisional) {
     provisional.textContent =
@@ -65,16 +100,27 @@ function renderAxis(root, payload) {
         : "";
   }
 
+  // 축별 σ 하나를 다시 값으로. 서버가 이 점의 이 축을 못 냈으면(현재 응답에는
+  // 점별 axis_sigmas가 실려 있지 않다) 0으로 지어내지 않고 대시다.
+  const axisSigma = (delta, axis) => {
+    const value = delta.axis_sigmas?.[axis];
+    return typeof value === "number" ? `${value.toFixed(2)}σ` : "—";
+  };
+
   const bars = root.querySelector(".bars");
   bars.replaceChildren();
   for (const delta of payload.deltas ?? []) {
     const item = document.createElement("li");
+    item.className = "bar";
     const width = Math.min(100, (delta.sigma / 6) * 100);
     // 표본 수를 함께 적는다. 왼손은 프레임 단위로 빠지므로 더 적은 격자점 위에 선다.
     const backing = typeof delta.samples === "number" ? ` (n=${delta.samples})` : "";
-    item.innerHTML = `<span>${delta.point}${backing}</span>
-      <span class="track" style="background:${severityColor(delta.sigma)};width:${width}%"></span>
-      <span>${delta.sigma.toFixed(2)}σ</span>`;
+    item.innerHTML = `<div class="bar-row">
+        <span>${delta.point}${backing}</span>
+        <span class="track" style="background:${severityColor(delta.sigma)};width:${width}%"></span>
+        <span>${delta.sigma.toFixed(2)}σ</span>
+      </div>
+      <span class="bar-axes">벽 ${axisSigma(delta, "wall")} · 수직 ${axisSigma(delta, "vertical")} · 진행축 ${axisSigma(delta, "lateral")}</span>`;
     bars.append(item);
   }
 

@@ -8,11 +8,38 @@ body { font-family: system-ui, "Noto Sans KR", sans-serif; margin: 0; padding: 1
 .note { font-size: .8rem; opacity: .8; }
 .provisional { font-size: .8rem; opacity: .8; color: var(--warn); }
 .provisional:empty { display: none; }
+/* 정규화 딱지. 이 값이 모든 σ와 점수의 뜻을 바꾸므로 작게 묻혀서는 안 된다. */
+.normalization {
+  display: inline-block;
+  font-weight: 700;
+  font-size: .8rem;
+  padding: .25rem .6rem;
+  border-radius: .3rem;
+  color: #fff;
+  margin: .3rem 0;
+}
+.normalization.measured { background: var(--ok); }
+.normalization.provisional-flag { background: var(--bad); }
+.normalization.unknown { background: #718096; }
+.granularity, .reference-dates {
+  font-size: .75rem;
+  opacity: .8;
+  font-family: ui-monospace, monospace;
+  margin: .15rem 0;
+}
 .finding { font-size: .75rem; opacity: .75; font-family: ui-monospace, monospace; }
 .finding:empty { display: none; }
 .bars { list-style: none; padding: 0; }
-.bars li { display: grid; grid-template-columns: 8rem 1fr 4rem; gap: .5rem; align-items: center; }
+.bars li.bar { margin-bottom: .5rem; }
+.bars .bar-row { display: grid; grid-template-columns: 8rem 1fr 4rem; gap: .5rem; align-items: center; }
 .bars .track { height: .75rem; border-radius: .2rem; }
+.bars .bar-axes {
+  display: block;
+  margin-left: calc(8rem + .5rem);
+  font-size: .7rem;
+  opacity: .75;
+  font-family: ui-monospace, monospace;
+}
 .params { display: flex; gap: 1rem; flex-wrap: wrap; margin-top: 1rem; align-items: end; }
 .keys { font-family: ui-monospace, monospace; font-size: .8rem; }
 dl { display: grid; grid-template-columns: auto 1fr; gap: .25rem 1rem; }
