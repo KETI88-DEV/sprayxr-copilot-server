@@ -1,0 +1,37 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>자세 비교 실험대</title>
+<link rel="stylesheet" href="style.css">
+<main>
+  <header>
+    <h1>자세 비교 실험대</h1>
+    <p id="keys" class="keys"></p>
+  </header>
+
+  <section class="axes">
+    <article id="measured">
+      <h2>실측 축 <span class="badge ok">측정값</span></h2>
+      <dl></dl>
+      <p class="provisional"></p>
+      <ul class="bars"></ul>
+      <ul class="corrections"></ul>
+    </article>
+    <article id="joint">
+      <h2>관절 축 <span class="badge warn">IK 산출물</span></h2>
+      <p class="note"></p>
+      <dl></dl>
+      <p class="provisional"></p>
+      <ul class="bars"></ul>
+      <ul class="corrections"></ul>
+    </article>
+  </section>
+
+  <section class="params">
+    <label>UV 격자 <input id="uvGrid" type="number" value="8" min="1" max="64"></label>
+    <label>좌우 경계(도) <input id="lateralDeg" type="number" value="30" min="1" max="90"></label>
+    <label>거리 임계(m) <input id="reachM" type="number" value="0.8" step="0.1" min="0.1"></label>
+    <label>리샘플 N <input id="samples" type="number" value="20" min="2" max="200"></label>
+    <button id="run">비교</button>
+  </section>
+</main>
+<script type="module" src="app.js"></script>

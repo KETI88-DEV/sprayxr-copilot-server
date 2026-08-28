@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import math
+import simulator_csv
 from dataclasses import dataclass
 from typing import Final, Literal, Mapping, Sequence
 
@@ -375,3 +376,111 @@ def build_corrections(
 
     corrections.sort(key=lambda item: item.expected_gain, reverse=True)
     return corrections[:limit]
+
+
+def bone_lengths(pose: Mapping[str, Vec3]) -> dict[str, float]:
+    """자식 관절별 뼈 길이. 교정 전후로 변하면 안 되는 불변량이다."""
+    lengths: dict[str, float] = {}
+    for parent, child in simulator_csv.BONES:
+        head = pose.get(parent)
+        tail = pose.get(child)
+        if head is None or tail is None:
+            continue
+        lengths[child] = math.dist(head, tail)
+    return lengths
+
+
+def _rotate_about(pivot: Vec3, point: Vec3, source: Vec3, target: Vec3) -> Vec3:
+    """pivot을 축점으로 source 방향을 target 방향으로 돌렸을 때 point가 가는 곳.
+
+    로드리게스 회전이라 pivot에서의 거리가 보존된다. 그래서 뼈 길이가 안 변한다.
+    """
+
+    def _sub(a: Vec3, b: Vec3) -> Vec3:
+        return (a[0] - b[0], a[1] - b[1], a[2] - b[2])
+
+    def _norm(v: Vec3) -> Vec3:
+        length = math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2])
+        return v if length == 0.0 else (v[0] / length, v[1] / length, v[2] / length)
+
+    def _cross(a: Vec3, b: Vec3) -> Vec3:
+        return (
+            a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0],
+        )
+
+    def _dot(a: Vec3, b: Vec3) -> float:
+        return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+
+    start = _norm(_sub(source, pivot))
+    end = _norm(_sub(target, pivot))
+    axis_raw = _cross(start, end)
+    sine = math.sqrt(sum(component * component for component in axis_raw))
+    cosine = _dot(start, end)
+
+    # Two cases when sine ≈ 0: parallel (cosine ≈ +1, nothing to rotate) or anti-parallel (cosine ≈ -1, need 180° rotation)
+    if sine < 1e-12:
+        if cosine > 0.0:
+            return point
+        # Anti-parallel: build perpendicular axis from world axes
+        world_axes = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+        best_axis = None
+        best_dot = 2.0
+        for world_axis in world_axes:
+            alignment = abs(_dot(start, world_axis))
+            if alignment < best_dot:
+                best_dot = alignment
+                best_axis = world_axis
+        axis_raw = _cross(best_axis, start) if best_axis else (0.0, 0.0, 1.0)
+        sine = 0.0
+        cosine = -1.0
+
+    axis = _norm(axis_raw)
+    local = _sub(point, pivot)
+    term_cross = _cross(axis, local)
+    term_dot = _dot(axis, local)
+    rotated = tuple(
+        local[i] * cosine + term_cross[i] * sine + axis[i] * term_dot * (1.0 - cosine)
+        for i in range(3)
+    )
+    return (pivot[0] + rotated[0], pivot[1] + rotated[1], pivot[2] + rotated[2])
+
+
+def apply_corrections_rigid(
+    normalized: Mapping[str, Vec3],
+    bucket: Mapping[str, object],
+    corrections: Sequence[Correction],
+    fraction: float = 1.0,
+) -> dict[str, Vec3]:
+    """교정을 따랐을 때의 자세. 방향만 돌리고 뼈 길이는 보존한다.
+
+    관절을 목표 위치로 그냥 옮기면 골격이 늘어나 사람이 취할 수 없는 자세가 나온다.
+    부모를 축점으로 삼아 마디 방향만 목표 쪽으로 돌리고, 아래 매달린 관절을 함께 옮긴다.
+    """
+    pose = dict(normalized)
+    targets = _reference_positions(bucket)
+
+    for correction in corrections:
+        joint = correction.joint
+        parent = simulator_csv.PARENT_OF.get(joint)
+        current = pose.get(joint)
+        goal = targets.get(joint)
+        if parent is None or current is None or goal is None:
+            continue
+        pivot = pose.get(parent)
+        if pivot is None:
+            continue
+
+        blended = (
+            current[0] + (goal[0] - current[0]) * fraction,
+            current[1] + (goal[1] - current[1]) * fraction,
+            current[2] + (goal[2] - current[2]) * fraction,
+        )
+        for name in {joint} | simulator_csv.descendants(joint):
+            point = pose.get(name)
+            if point is None:
+                continue
+            pose[name] = _rotate_about(pivot, point, current, blended)
+
+    return pose

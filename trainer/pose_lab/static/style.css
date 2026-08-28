@@ -1,0 +1,18 @@
+:root { color-scheme: light dark; --ok: #2f855a; --warn: #b7791f; --bad: #c53030; }
+body { font-family: system-ui, "Noto Sans KR", sans-serif; margin: 0; padding: 1.5rem; }
+.axes { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 1rem; }
+.axes article { border: 1px solid currentColor; border-radius: .5rem; padding: 1rem; }
+.badge { font-size: .75rem; padding: .1rem .4rem; border-radius: .25rem; color: #fff; }
+.badge.ok { background: var(--ok); }
+.badge.warn { background: var(--warn); }
+.note { font-size: .8rem; opacity: .8; }
+.provisional { font-size: .8rem; opacity: .8; color: var(--warn); }
+.provisional:empty { display: none; }
+.bars { list-style: none; padding: 0; }
+.bars li { display: grid; grid-template-columns: 8rem 1fr 4rem; gap: .5rem; align-items: center; }
+.bars .track { height: .75rem; border-radius: .2rem; }
+.params { display: flex; gap: 1rem; flex-wrap: wrap; margin-top: 1rem; align-items: end; }
+.keys { font-family: ui-monospace, monospace; font-size: .8rem; }
+dl { display: grid; grid-template-columns: auto 1fr; gap: .25rem 1rem; }
+dt { opacity: .7; }
+dd { margin: 0; font-variant-numeric: tabular-nums; }
