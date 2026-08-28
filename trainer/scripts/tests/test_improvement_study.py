@@ -39,3 +39,37 @@ def test_quartiles_are_reported() -> None:
     assert summary["q1"] is not None
     assert summary["q3"] is not None
     assert summary["q1"] <= summary["median"] <= summary["q3"]
+
+
+def _unknown_outcome() -> object:
+    """발동 여부를 재지 않은 결과 하나. 민감도 실행이 내는 모양이다."""
+    return improvement_study.Outcome(
+        query=None, reference=None, key="m1:horizontal:right:1x2:center-near-high",
+        status="ok", reason=None, same=0.2, split=0.1, split_reason=None,
+        granularity="uv2", reference_n=30, split_n_a=15, split_n_b=15,
+        gate="fail", gate_reason=None, normalization="measured",
+        fired=None, split_fired=None, ceiling=0.5,
+        before_same_score=0.3, before_split_score=0.3,
+    )
+
+
+def test_share_fired_is_none_when_nothing_was_measured() -> None:
+    """아무것도 재지 않았을 때의 0.0은 '하나도 안 발동했다'로 읽힌다. 그건 거짓이다.
+
+    민감도 실행은 compute_extras=False라 발동 여부를 아예 계산하지 않는다. 그때
+    전체 건수로 나누면 0/149 = 0.0이 나오고, 옆에 unknown=149가 적혀 있어도 그
+    0.0은 측정값처럼 읽힌다.
+    """
+    unknown = [_unknown_outcome() for _ in range(3)]
+    block = improvement_study._fire_rate_block([], [], unknown, lambda o: o.same)
+    assert block["unknown"] == 3
+    assert block["share_fired"] is None
+
+
+def test_share_fired_divides_by_what_was_actually_measured() -> None:
+    """분모는 전체가 아니라 발동 여부를 아는 건수다."""
+    fired = [_unknown_outcome()]
+    not_fired = [_unknown_outcome()]
+    unknown = [_unknown_outcome() for _ in range(8)]
+    block = improvement_study._fire_rate_block(fired, not_fired, unknown, lambda o: o.same)
+    assert math.isclose(block["share_fired"], 0.5, abs_tol=1e-9)

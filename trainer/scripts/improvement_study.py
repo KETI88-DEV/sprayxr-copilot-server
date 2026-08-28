@@ -553,14 +553,22 @@ def _outcome_to_json(outcome: Outcome) -> dict[str, Any]:
 
 
 def _fire_rate_block(
-    all_ok: Sequence[Outcome], fired: Sequence[Outcome], not_fired: Sequence[Outcome],
-    unknown: Sequence[Outcome], value_of: Any, denom: int,
+    fired: Sequence[Outcome], not_fired: Sequence[Outcome],
+    unknown: Sequence[Outcome], value_of: Any,
 ) -> dict[str, Any]:
+    """발동률의 분모는 **발동 여부를 실제로 안 건수**다.
+
+    전체 건수로 나누면 아무것도 재지 않았을 때(민감도 실행은 compute_extras=False라
+    split_fired가 전부 None이다) 0/149 = 0.0이 나온다. "재보니 하나도 안 발동했다"와
+    "재지 않았다"는 다른 말인데 그 0.0은 앞엣것으로 읽힌다 — 옆에 unknown=149가 적혀
+    있어도 그렇다. 아는 것이 없으면 None이다.
+    """
+    measured = len(fired) + len(not_fired)
     return {
         "fired": len(fired),
         "not_fired": len(not_fired),
         "unknown": len(unknown),
-        "share_fired": (len(fired) / denom) if denom else None,
+        "share_fired": (len(fired) / measured) if measured else None,
         "fired_summary": summarize([value_of(o) for o in fired], THRESHOLD),
         "not_fired_summary": summarize([value_of(o) for o in not_fired], THRESHOLD),
     }
@@ -598,10 +606,9 @@ def build_report(
     split_unknown = [item for item in split_population if item.split_fired is None]
 
     correction_fire_rate = {
-        "same": _fire_rate_block(ok, same_fired, same_not_fired, same_unknown, lambda o: o.same, len(ok)),
+        "same": _fire_rate_block(same_fired, same_not_fired, same_unknown, lambda o: o.same),
         "split": _fire_rate_block(
-            split_population, split_fired, split_not_fired, split_unknown,
-            lambda o: o.split, len(split_population),
+            split_fired, split_not_fired, split_unknown, lambda o: o.split
         ),
     }
 
