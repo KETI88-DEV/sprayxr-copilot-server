@@ -13,6 +13,13 @@ const GATE_REASONS = {
   not_wired: " (미배선)",
 };
 
+// 비교를 만들지 않은 이유. 서버의 reason과 1:1이다.
+const UNAVAILABLE_REASONS = {
+  motion_key_mismatch: "동작 키가 달라 비교하지 않습니다",
+  insufficient_frames: "착탄점이 있는 분사 프레임이 모자라 지표를 만들지 못했습니다",
+  no_source: "실데이터 소스가 배선되지 않았습니다",
+};
+
 function severityColor(sigma) {
   if (sigma <= 1) return "var(--ok)";
   if (sigma <= 2) return "var(--warn)";
@@ -92,7 +99,9 @@ async function run() {
     `질의 ${payload.query_key ?? "-"} / 레퍼런스 ${payload.reference_key ?? "-"}${yaw}`;
 
   if (payload.status !== "ok") {
-    $("keys").textContent += "  — 동작 키가 달라 비교하지 않습니다";
+    // 이유를 서버가 준 대로 적는다. 재지 못한 패스까지 "동작 키가 다르다"로 적으면
+    // 재지 못한 것을 재서 다르다고 말한 것이 된다.
+    $("keys").textContent += `  — ${UNAVAILABLE_REASONS[payload.reason] ?? "비교하지 않습니다"}`;
     return;
   }
   renderAxis($("measured"), payload.measured);
