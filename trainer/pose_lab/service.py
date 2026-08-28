@@ -278,15 +278,20 @@ def compare(
 
     query_track = _local_tracks(query_frames)
     reference_track = _local_tracks(reference_frames)
-    before = measured_score.score_track(query_track, reference_track, spreads, weights)
-    # 문장·구조체·시뮬레이션이 모두 이 하나의 기저 위에서 나온다. 기저가 갈리면 화면이
-    # 말한 교정과 개선율이 잰 교정이 달라진다.
+    # 문장·구조체·시뮬레이션·σ가 모두 이 하나의 기저 위에서 나온다. `local_delta`는
+    # 스트로크 프레임 벡터이지 월드 벡터가 아니다 — score_track에 기저를 안 넘기면
+    # WORLD_FRAME으로 읽어 wall/vertical/lateral로 잘못 나눈 σ가 나오고, 그 σ가
+    # 나중에 (basis로 읽는) 교정 후보 선택과 축 이름은 같지만 물리적으로 다른 방향을
+    # 가리키게 된다 — 축별 산포가 균일하지 않으면 그 어긋남이 σ와 교정 선택을 조용히
+    # 오염시킨다. 기저를 먼저 구해 모든 소비자(score_track ×2, apply_measured,
+    # corrections_text, right_hand_finding)에 하나만 넘긴다.
     basis = representative_basis(query_frames)
+    before = measured_score.score_track(query_track, reference_track, spreads, weights, basis)
     # 개선율은 "교정 알고리즘의 출력을 적용한 뒤의 상승"이다(goal_year2). 그래서
     # 시뮬레이션에 같은 기저를 넘겨 내준 지시 하나만 적용한다 — 오른손, 문장이 지목한
     # 성분 하나. 머리·왼손은 점수에는 남지만 지시가 없으므로 옮기지 않는다.
     fixed = measured_score.apply_measured(query_track, before.deltas, basis)
-    after = measured_score.score_track(fixed, reference_track, spreads, weights)
+    after = measured_score.score_track(fixed, reference_track, spreads, weights, basis)
 
     return {
         "status": "ok",

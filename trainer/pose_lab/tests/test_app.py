@@ -348,3 +348,161 @@ def test_improvement_counts_only_the_correction_that_was_issued() -> None:
     )
     assert measured["score_after"] < wide.score
     assert measured["score_after"] > measured["score"]
+
+
+# --- compare()가 score_track에 대표 기저를 넘기는지 --------------------------------
+#
+# `_local_tracks`가 만드는 local_delta는 스트로크 프레임 벡터이지 월드 벡터가 아니다.
+# compare()가 score_track에 기저(basis)를 안 넘기면 σ가 WORLD_FRAME으로 잘못 나뉘고,
+# 그 σ로 `right_hand_finding`이 축을 고르면 축 이름은 같아도(wall/vertical/lateral)
+# 물리적으로 다른 방향을 가리키는 값을 근거로 삼게 된다. 아래 두 테스트는 착탄점
+# 궤적을 대각으로 만들어(대표 기저의 tangent·up이 월드 Y·Z에서 45° 돈다) 그 어긋남을
+# 실제로 관측 가능하게 만든다.
+
+
+def _rotated_rows(shift_z: float = 0.0, shift_y: float = 0.0) -> list[dict[str, str]]:
+    """`_rows`와 같은 대각 착탄점 궤적(Ray Y·Z가 함께 늘어난다)을 쓴다.
+
+    그래서 대표 기저의 normal은 우연히 월드 X와 겹치지만 tangent·up은 월드 Y·Z에서
+    45° 돌아간다 — WORLD_FRAME과 실제 기저가 벌어지는 조건이다. 오른손(한길숏건)
+    위치만 `shift_z`/`shift_y`로 독립적으로 어긋난다. 착탄점 궤적 자체는 이 두 값의
+    영향을 받지 않으므로 대표 기저는 두 패스에서 동일하다.
+    """
+    rows: list[dict[str, str]] = []
+    for i in range(30):
+        step = i * 0.03
+        row: dict[str, str] = {
+            "인덱스": str(i),
+            "시간(초)": f"{i * 0.0111:.4f}",
+            "분사": "On",
+            "Ray point X": "1.26",
+            " Ray Point Y": str(4.2 + step),
+            " Ray Point Z": str(0.7 + step),
+            "Ray Texture UV X": "1024",
+            "Ray Texture UV Y": "512",
+        }
+        for axis, value in zip("XYZ", (0.5, 4.2 + step, 0.8)):
+            row[f"카메라 Position {axis}"] = str(value)
+        for axis, value in zip("XYZ", HEAD_ROTATION):
+            row[f"카메라 Rotation {axis}"] = str(value)
+        for axis, value in zip("XYZ", (0.85, 4.2 + step + shift_y, 0.65 + shift_z)):
+            row[f"한길숏건 Position {axis}"] = str(value)
+        for axis, value in zip("XYZ", (0.67, 4.2 + step, 0.79)):
+            row[f"플래쉬 Position {axis}"] = str(value)
+        for axis, value in zip("XYZ", PARKED):
+            row[f"한길폴건 Position {axis}"] = str(value)
+            row[f"반도폴건 Position {axis}"] = str(value)
+        for axis, value in zip("XYZ", STILL):
+            row[f"반도숏건 Position {axis}"] = str(value)
+        rows.append(row)
+    return rows
+
+
+class _RotatedBasisSource:
+    """착탄점이 대각으로 흘러 대표 기저가 월드 축에서 회전한 픽스처."""
+
+    def workers(self) -> list[str]:
+        return ["A", "B"]
+
+    def load(self, ref: PassRef) -> RawPass:
+        if ref.worker == "B":
+            return RawPass(rows=_rotated_rows())
+        return RawPass(rows=_rotated_rows(shift_z=-0.30, shift_y=0.30))
+
+
+# wall은 넓게(이 시나리오에선 편차가 0이라 무관), vertical·lateral은 서로 다르게
+# 좁혀서 WORLD_FRAME과 실제 기저의 σ가 서로 다른 축·다른 크기를 내도록 만든다
+# (vertical/lateral 산포가 같으면 45° 회전 앞뒤로 벡터 노름이 보존돼 결합 σ가
+# 우연히 같아진다 — 두 산포를 다르게 잡아야 그 우연을 깬다).
+_ROTATED_SPREADS = {
+    "right": {"wall": 0.5, "vertical": 0.15, "lateral": 0.06},
+    "head": {"wall": 0.5, "vertical": 0.5, "lateral": 0.5},
+    "left": {"wall": 0.5, "vertical": 0.5, "lateral": 0.5},
+}
+
+
+def test_sigma_is_decomposed_in_the_representative_basis_not_world_frame() -> None:
+    """compare()가 보고하는 σ는 WORLD_FRAME이 아니라 실제 대표 기저로 나뉜 값이어야
+    한다.
+
+    산포가 축마다 다르고(vertical 15cm, lateral 6cm, wall 50cm) 대표 기저가 월드
+    축에서 45° 돌아가 있으면, WORLD_FRAME으로 읽은 σ와 실제 기저로 읽은 σ가
+    벌어진다. compare()가 score_track에 기저를 안 넘기면(수정 전 결함) WORLD_FRAME
+    값이 새어 나온다.
+    """
+    source = _RotatedBasisSource()
+    query = PassRef(**QUERY)
+    reference = PassRef(**REFERENCE)
+
+    query_frames = service.pass_frames(source.load(query))
+    reference_frames = service.pass_frames(source.load(reference))
+    query_track = service._local_tracks(query_frames)
+    reference_track = service._local_tracks(reference_frames)
+    basis = service.representative_basis(query_frames)
+
+    # 이 기저가 정말 월드 축에서 벗어나 있는지 먼저 확인한다 — 안 그러면 아래
+    # assertion이 우연히 통과할 수 있어 아무것도 검증하지 못한다.
+    assert not math.isclose(basis.tangent[2], 0.0, abs_tol=1e-6), "기저가 회전하지 않았다"
+
+    measured_score = service.measured_score
+    correct = measured_score.score_track(
+        query_track, reference_track, _ROTATED_SPREADS, measured_score.DEFAULT_WEIGHTS, basis
+    )
+    world_default = measured_score.score_track(
+        query_track, reference_track, _ROTATED_SPREADS, measured_score.DEFAULT_WEIGHTS
+    )
+    correct_right = next(d for d in correct.deltas if d.point == "right")
+    world_right = next(d for d in world_default.deltas if d.point == "right")
+    # 이 시나리오가 실제로 두 σ를 갈라놓는지 먼저 확인한다(가드) — 그렇지 않으면 아래
+    # assertion이 우연히 통과할 수 있다.
+    assert not math.isclose(correct_right.sigma, world_right.sigma, abs_tol=1e-6)
+
+    body = service.compare(source, query, reference, spreads=_ROTATED_SPREADS)
+    assert body["status"] == "ok"
+    actual_right = next(d for d in body["measured"]["deltas"] if d["point"] == "right")
+    # 수정 전에는 이 값이 world_right.sigma와 같았다 — 대표 기저가 아니라 WORLD_FRAME
+    # 으로 나뉜 σ가 새어 나왔기 때문이다.
+    assert math.isclose(actual_right["sigma"], correct_right.sigma, abs_tol=1e-6)
+
+
+def test_finding_axis_matches_the_basis_score_track_used() -> None:
+    """right_hand_finding이 고르는 축은 score_track이 실제로 쓴 기저의 σ를 따라야
+    한다.
+
+    교정 후보 목록(`_correction_candidates`)은 항상 올바른 기저로 만들어지므로 축
+    이름·부호·방향은 늘 맞다. 하지만 그 후보들의 순위를 매기는 σ가 WORLD_FRAME에서
+    새어 나오면(수정 전 결함) 물리적으로 틀린 축이 뽑힌다 — 이 시나리오에서는 아예
+    반대 축이 뽑힌다.
+    """
+    source = _RotatedBasisSource()
+    query = PassRef(**QUERY)
+    reference = PassRef(**REFERENCE)
+
+    query_frames = service.pass_frames(source.load(query))
+    reference_frames = service.pass_frames(source.load(reference))
+    basis = service.representative_basis(query_frames)
+
+    body = service.compare(source, query, reference, spreads=_ROTATED_SPREADS)
+    assert body["status"] == "ok"
+    finding = body["measured"]["finding"]
+    assert finding is not None
+
+    query_track = service._local_tracks(query_frames)
+    reference_track = service._local_tracks(reference_frames)
+    measured_score = service.measured_score
+    correct = measured_score.score_track(
+        query_track, reference_track, _ROTATED_SPREADS, measured_score.DEFAULT_WEIGHTS, basis
+    )
+    expected = measured_score.right_hand_finding(correct.deltas, basis)
+    assert expected is not None
+
+    # WORLD_FRAME으로 σ를 잘못 읽으면 이 시나리오는 반대 축을 고른다(가드) — 그렇지
+    # 않으면 아래 assertion이 아무것도 검증하지 못한다.
+    world_default = measured_score.score_track(
+        query_track, reference_track, _ROTATED_SPREADS, measured_score.DEFAULT_WEIGHTS
+    )
+    wrong = measured_score.right_hand_finding(world_default.deltas, basis)
+    assert wrong is not None and wrong.axis != expected.axis
+
+    assert finding["axis"] == expected.axis
+    assert math.isclose(finding["magnitude_cm"], expected.magnitude_cm, abs_tol=1e-6)
