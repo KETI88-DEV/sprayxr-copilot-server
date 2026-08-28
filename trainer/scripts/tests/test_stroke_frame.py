@@ -112,6 +112,21 @@ def test_basis_stays_orthonormal_for_a_vertical_stroke() -> None:
     assert basis.normal[0] < 0.0
 
 
+def test_up_axis_is_horizontal_on_a_vertical_stroke() -> None:
+    """이름과 달리 `up`은 수직 스트로크에서 수평이다.
+
+    접선이 이미 월드 Z라 직교화가 영벡터가 되고 대체축(월드 Y)이 들어온다. 독스트링이
+    이 사실을 말해야 하고, 소비자는 성분을 축 이름이 아니라 축 벡터로 읽어야 한다.
+    """
+    basis = stroke_frame.stroke_basis(
+        hit=(1.2, 4.5, 0.8), tangent=(0.0, 0.0, 1.0), gun=(0.6, 4.5, 0.9)
+    )
+    assert math.isclose(basis.up[2], 0.0, abs_tol=1e-9)
+    assert math.isclose(basis.tangent[2], 1.0, abs_tol=1e-9)
+    # 법선은 어떤 스트로크에서도 수평이다. 벽 거리 문구가 그 위에 선다.
+    assert math.isclose(basis.normal[2], 0.0, abs_tol=1e-9)
+
+
 def test_basis_survives_a_dwell_frame_with_zero_tangent() -> None:
     basis = stroke_frame.stroke_basis(
         hit=(1.2, 4.5, 0.8), tangent=(0.0, 0.0, 0.0), gun=(0.6, 4.5, 0.8)

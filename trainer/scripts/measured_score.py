@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Final, Mapping, Sequence
+from typing import Final, Mapping, Protocol, Sequence
 
 Vec3 = tuple[float, float, float]
 # 왼손은 프레임 단위로 빠질 수 있다(설계 §5.4). 자리는 남기고 값만 None이다.
@@ -31,6 +31,36 @@ SIGMA_FLOOR_M: Final = 0.02
 CORRECTION_SIGMA_THRESHOLD: Final = 2.0
 MAX_SIGMA: Final = 6.0
 MIN_CORRECTION_CM: Final = 1.0
+# 수평면에서 이보다 짧은 축 성분은 방향이 정해지지 않은 것으로 본다.
+MIN_AXIS_LENGTH: Final = 1e-9
+
+
+class AxisFrame(Protocol):
+    """스트로크 기저의 세 축. `stroke_frame.Basis`가 이 모양이다.
+
+    읽기 전용으로 선언한다. 구현이 frozen 데이터클래스라 쓰기 가능한 속성으로 두면
+    구조적 부합이 깨진다.
+    """
+
+    @property
+    def normal(self) -> Vec3: ...
+
+    @property
+    def tangent(self) -> Vec3: ...
+
+    @property
+    def up(self) -> Vec3: ...
+
+
+@dataclass(frozen=True, slots=True)
+class _WorldFrame:
+    normal: Vec3 = (1.0, 0.0, 0.0)
+    tangent: Vec3 = (0.0, 1.0, 0.0)
+    up: Vec3 = (0.0, 0.0, 1.0)
+
+
+# 기저를 주지 않은 호출자에게 쓰는 기본값. 로컬 성분을 월드 축으로 그대로 읽는다.
+WORLD_FRAME: Final = _WorldFrame()
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,27 +154,90 @@ def _object_particle(label: str) -> str:
     return "을" if (ord(last) - 0xAC00) % 28 else "를"
 
 
-def corrections_text(deltas: Sequence[PointDelta]) -> list[str]:
-    """통상 범위를 벗어난 점만. 각도가 아니라 센티미터로 낸다."""
+def _dot(left: Vec3, right: Vec3) -> float:
+    return left[0] * right[0] + left[1] * right[1] + left[2] * right[2]
+
+
+def _flattened(vector: Vec3) -> Vec3 | None:
+    """수평 성분의 단위벡터. 축이 수직이면 수평 방향이 없으므로 None이다."""
+    length = math.hypot(vector[0], vector[1])
+    if length < MIN_AXIS_LENGTH:
+        return None
+    return (vector[0] / length, vector[1] / length, 0.0)
+
+
+def _world_delta(local: Vec3, frame: AxisFrame) -> Vec3:
+    """로컬 성분을 월드로 되돌린다. 축 벡터가 성분의 뜻이다."""
+    return (
+        local[0] * frame.normal[0] + local[1] * frame.tangent[0] + local[2] * frame.up[0],
+        local[0] * frame.normal[1] + local[1] * frame.tangent[1] + local[2] * frame.up[1],
+        local[0] * frame.normal[2] + local[1] * frame.tangent[2] + local[2] * frame.up[2],
+    )
+
+
+def _correction_parts(local: Vec3, frame: AxisFrame) -> list[str]:
+    """한 점의 이탈을 물리적으로 참인 말로 옮긴다.
+
+    로컬 성분을 축 이름으로 읽으면 안 된다. `Basis.up`은 순수 수직 스트로크에서 수평이
+    되므로(그때 수직은 `tangent`다) `local[2]`를 "올리세요"로 적으면 옆으로 틀어진 손을
+    위로 올리라고 말하게 된다. 그래서 월드로 되돌린 뒤 세 방향으로 다시 나눈다.
+
+    - 수직: 월드 Z 성분. 어느 축에 실려 있었든 여기서만 올리/내리가 나온다.
+    - 벽 법선: 법선은 항상 수평이므로(`Basis` 독스트링) 수평 성분을 법선에 투영한다.
+    - 나머지 수평: 법선에 직교하는 수평 방향이다. 스트로크가 수평으로 진행하면 그것이
+      진행 방향이라 앞뒤로 적는다. 수직 스트로크에는 수평 진행이 없어 좌우를 판정할
+      기준이 없다 — 작업자 요가 실측이 아니기 때문이다(`service.ASSUMED_YAW`). 방향을
+      지어내지 않고 "벽을 따라"까지만 적는다.
+    """
+    world = _world_delta(local, frame)
+    plane: Vec3 = (world[0], world[1], 0.0)
+    up_cm = world[2] * 100.0
+
+    wall = _flattened(frame.normal)
+    normal_cm = 0.0 if wall is None else _dot(plane, wall) * 100.0
+    if wall is not None:
+        plane = (
+            plane[0] - normal_cm / 100.0 * wall[0],
+            plane[1] - normal_cm / 100.0 * wall[1],
+            0.0,
+        )
+
+    # 어간만 모으고 마지막에 "고 "로 이어 붙인다. 각 조각에 "고"를 넣고 잘라내면
+    # "15cm 올리 유지하세요" 같은 비문이 된다.
+    parts: list[str] = []
+    if abs(normal_cm) >= MIN_CORRECTION_CM:
+        verb = "띄우" if normal_cm > 0 else "붙이"
+        parts.append(f"벽에서 {abs(normal_cm):.0f}cm 더 {verb}")
+    if abs(up_cm) >= MIN_CORRECTION_CM:
+        verb = "올리" if up_cm > 0 else "내리"
+        parts.append(f"{abs(up_cm):.0f}cm {verb}")
+
+    along = _flattened(frame.tangent)
+    if along is None:
+        lateral_cm = math.hypot(plane[0], plane[1]) * 100.0
+        if lateral_cm >= MIN_CORRECTION_CM:
+            parts.append(f"벽을 따라 {lateral_cm:.0f}cm 옮기")
+        return parts
+    lateral_cm = _dot(plane, along) * 100.0
+    if abs(lateral_cm) >= MIN_CORRECTION_CM:
+        direction = "앞으로" if lateral_cm > 0 else "뒤로"
+        parts.append(f"진행 방향 {direction} {abs(lateral_cm):.0f}cm 옮기")
+    return parts
+
+
+def corrections_text(
+    deltas: Sequence[PointDelta], frame: AxisFrame = WORLD_FRAME
+) -> list[str]:
+    """통상 범위를 벗어난 점만. 각도가 아니라 센티미터로 낸다.
+
+    `frame`은 `local_delta`가 적힌 스트로크 기저다. 기저 없이 성분을 축 이름으로 읽으면
+    수직 스트로크에서 좌우 이탈이 "올리세요"로 나간다(`_correction_parts`).
+    """
     lines: list[str] = []
     for delta in sorted(deltas, key=lambda item: item.sigma, reverse=True):
         if delta.sigma <= CORRECTION_SIGMA_THRESHOLD:
             continue
-        parts: list[str] = []
-        normal_cm = delta.local_delta[0] * 100.0
-        along_cm = delta.local_delta[1] * 100.0
-        up_cm = delta.local_delta[2] * 100.0
-        # 어간만 모으고 마지막에 "고 "로 이어 붙인다. 각 조각에 "고"를 넣고 잘라내면
-        # "15cm 올리 유지하세요" 같은 비문이 된다.
-        if abs(normal_cm) >= MIN_CORRECTION_CM:
-            verb = "띄우" if normal_cm > 0 else "붙이"
-            parts.append(f"벽에서 {abs(normal_cm):.0f}cm 더 {verb}")
-        if abs(up_cm) >= MIN_CORRECTION_CM:
-            verb = "올리" if up_cm > 0 else "내리"
-            parts.append(f"{abs(up_cm):.0f}cm {verb}")
-        if abs(along_cm) >= MIN_CORRECTION_CM:
-            direction = "앞으로" if along_cm > 0 else "뒤로"
-            parts.append(f"진행 방향 {direction} {abs(along_cm):.0f}cm 옮기")
+        parts = _correction_parts(delta.local_delta, frame)
         if not parts:
             continue
         label = POINT_LABELS.get(delta.point, delta.point)

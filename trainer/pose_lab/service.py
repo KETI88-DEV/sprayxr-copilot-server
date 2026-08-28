@@ -89,37 +89,91 @@ def improvement(
     return {"split": pose_similarity.gap_closure(before, after_split), "same": same}
 
 
-def _pass_frames(raw: RawPass, samples: int) -> list[Any]:
+def pass_frames(raw: RawPass, samples: int = stroke_frame.DEFAULT_SAMPLES) -> list[Any]:
+    """패스 한 건의 정렬 격자. 분사 중이고 착탄점이 있는 프레임만 남는다."""
     frames = measured_pose.measured_frames(raw.rows)
     spraying = [frame for frame in frames if frame.spraying and frame.hit is not None]
     return stroke_frame.resample_frames(spraying, samples)
 
 
-def _key_for(frames: Sequence[Any], params: Any) -> str | None:
-    """작업자 요는 아직 실측에서 뽑지 않는다. 지금은 0으로 두고 화면에서 판정한다.
+@dataclass(frozen=True, slots=True)
+class KeyInputs:
+    """동작 키를 만드는 재료. 판정 경계(KeyParams)와 분리해 둔다.
 
-    이 가정은 응답의 `yaw_assumed`로 나가고 화면이 동작 키 옆에 적는다. 몸 기준
-    이름을 단 축이 사실은 월드 기준이라는 것을 읽는 사람이 알아야 한다.
+    재료는 패스에서 한 번 뽑고 경계는 요청마다 달라진다. 둘을 붙여 두면 화면이 UV
+    격자를 바꿀 때마다 CSV를 다시 읽어야 한다.
     """
+
+    displacement: Vec3
+    head: Vec3
+    hit: Vec3
+    uv: tuple[float, float] | None
+
+
+def key_inputs(frames: Sequence[Any]) -> KeyInputs | None:
     if len(frames) < 2:
         return None
     first, last = frames[0], frames[-1]
     if first.hit is None or last.hit is None:
         return None
-    displacement = (
+    middle = frames[len(frames) // 2]
+    return KeyInputs(
+        displacement=(
+            last.hit[0] - first.hit[0],
+            last.hit[1] - first.hit[1],
+            last.hit[2] - first.hit[2],
+        ),
+        head=middle.head,
+        hit=middle.hit or first.hit,
+        uv=middle.uv,
+    )
+
+
+def motion_key_for(frames: Sequence[Any], params: Any) -> str | None:
+    """작업자 요는 아직 실측에서 뽑지 않는다. 지금은 0으로 두고 화면에서 판정한다.
+
+    이 가정은 응답의 `yaw_assumed`로 나가고 화면이 동작 키 옆에 적는다. 몸 기준
+    이름을 단 축이 사실은 월드 기준이라는 것을 읽는 사람이 알아야 한다.
+    """
+    inputs = key_inputs(frames)
+    if inputs is None:
+        return None
+    return key_from(inputs, params)
+
+
+def key_from(inputs: KeyInputs, params: Any) -> str:
+    return motion_key.motion_key(
+        displacement=inputs.displacement,
+        yaw=ASSUMED_YAW,
+        head=inputs.head,
+        hit=inputs.hit,
+        uv=inputs.uv,
+        params=params,
+    )
+
+
+def representative_basis(frames: Sequence[Any]) -> Any:
+    """패스 하나를 대표하는 스트로크 기저.
+
+    격자점마다 기저가 다른데 교정문은 하나다. 어느 기저에서 적힌 성분인지 정하지 않고
+    말로 옮기면 축 이름이 뜻을 대신하게 되고, 그것이 수직 스트로크에서 좌우 이탈을
+    "올리세요"로 만든 결함이다. 패스는 방향 전환에서 잘린 직선 구간이므로 순 변위를
+    접선으로 삼은 기저가 격자점 기저들을 대표한다.
+
+    질의 쪽 기저를 쓴다. 교정을 따를 사람이 질의 패스의 작업자이기 때문이다.
+    """
+    if not frames:
+        return measured_score.WORLD_FRAME
+    first, last = frames[0], frames[-1]
+    middle = frames[len(frames) // 2]
+    if first.hit is None or last.hit is None or middle.hit is None:
+        return measured_score.WORLD_FRAME
+    tangent = (
         last.hit[0] - first.hit[0],
         last.hit[1] - first.hit[1],
         last.hit[2] - first.hit[2],
     )
-    middle = frames[len(frames) // 2]
-    return motion_key.motion_key(
-        displacement=displacement,
-        yaw=ASSUMED_YAW,
-        head=middle.head,
-        hit=middle.hit or first.hit,
-        uv=middle.uv,
-        params=params,
-    )
+    return stroke_frame.stroke_basis(middle.hit, tangent, middle.right)
 
 
 def _local_tracks(frames: Sequence[Any]) -> dict[str, list[Vec3 | None]]:
@@ -174,10 +228,10 @@ def compare(
     spreads = spreads or PROVISIONAL_SPREADS
     weights = weights or measured_score.DEFAULT_WEIGHTS
 
-    query_frames = _pass_frames(source.load(query), samples)
-    reference_frames = _pass_frames(source.load(reference), samples)
-    query_key = _key_for(query_frames, params)
-    reference_key = _key_for(reference_frames, params)
+    query_frames = pass_frames(source.load(query), samples)
+    reference_frames = pass_frames(source.load(reference), samples)
+    query_key = motion_key_for(query_frames, params)
+    reference_key = motion_key_for(reference_frames, params)
 
     # 키가 None인 것과 두 키가 다른 것은 다른 사건이다. 키는 착탄점이 있는 분사
     # 프레임이 2개 미만일 때 None이 된다 — 분사 컬럼을 못 읽었거나, 분산 기준으로
@@ -230,7 +284,11 @@ def compare(
                 }
                 for delta in before.deltas
             ],
-            "corrections": measured_score.corrections_text(before.deltas),
+            # 기저를 함께 넘긴다. 성분을 축 이름으로 읽으면 수직 스트로크에서 좌우
+            # 이탈이 "올리세요"로 나간다(`stroke_frame.Basis` 독스트링).
+            "corrections": measured_score.corrections_text(
+                before.deltas, representative_basis(query_frames)
+            ),
             # 진짜 분리 채점 점수는 겹치지 않는 날짜에서 뽑은 held-out 레퍼런스가
             # 있어야 나온다. 실제 PassSource가 배선되기 전까지는 split을 None으로
             # 낸다 — after.score를 split 자리에 다시 넣으면 두 숫자가 항상 같아져
