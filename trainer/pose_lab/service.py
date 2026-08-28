@@ -257,7 +257,13 @@ def compare(
     query_track = _local_tracks(query_frames)
     reference_track = _local_tracks(reference_frames)
     before = measured_score.score_track(query_track, reference_track, spreads, weights)
-    fixed = measured_score.apply_measured(query_track, before.deltas)
+    # 문장·구조체·시뮬레이션이 모두 이 하나의 기저 위에서 나온다. 기저가 갈리면 화면이
+    # 말한 교정과 개선율이 잰 교정이 달라진다.
+    basis = representative_basis(query_frames)
+    # 개선율은 "교정 알고리즘의 출력을 적용한 뒤의 상승"이다(goal_year2). 그래서
+    # 시뮬레이션에 같은 기저를 넘겨 내준 지시 하나만 적용한다 — 오른손, 문장이 지목한
+    # 성분 하나. 머리·왼손은 점수에는 남지만 지시가 없으므로 옮기지 않는다.
+    fixed = measured_score.apply_measured(query_track, before.deltas, basis)
     after = measured_score.score_track(fixed, reference_track, spreads, weights)
 
     return {
@@ -286,19 +292,13 @@ def compare(
             ],
             # 기저를 함께 넘긴다. 성분을 축 이름으로 읽으면 수직 스트로크에서 좌우
             # 이탈이 "올리세요"로 나간다(`stroke_frame.Basis` 독스트링).
-            "corrections": measured_score.corrections_text(
-                before.deltas, representative_basis(query_frames)
-            ),
+            "corrections": measured_score.corrections_text(before.deltas, basis),
             # 최종 작업자 문구는 다운스트림 VLM이 짓는다. 문장만 주면 VLM이 근거 없이
             # 다시 지어내야 한다 — 표본 수는 문장에 없다. 구조체를 병기해 축·부호·σ·
             # 표본 n을 그대로 넘긴다. 오른손이 임계 아래거나 못 잰 경우 None이다.
             "finding": (
                 None
-                if (
-                    finding := measured_score.right_hand_finding(
-                        before.deltas, representative_basis(query_frames)
-                    )
-                )
+                if (finding := measured_score.right_hand_finding(before.deltas, basis))
                 is None
                 else asdict(finding)
             ),
@@ -306,6 +306,8 @@ def compare(
             # 있어야 나온다. 실제 PassSource가 배선되기 전까지는 split을 None으로
             # 낸다 — after.score를 split 자리에 다시 넣으면 두 숫자가 항상 같아져
             # 자기충족 정도를 가리는 바로 그 결함이 된다.
+            # `after`는 위에서 낸 문장 하나를 그대로 적용한 점수다. 지시하지 않은
+            # 이동은 들어 있지 않다.
             "improvement": improvement(before.score, None, after.score),
             # 게이트의 뜻은 "각도 지시가 이제 정당하다"다. 잰 분포가 없으면 판정을
             # 만들지 않는다. 임계 논리(`gate_verdict`)는 그대로 두고 입력이 없다는

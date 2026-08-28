@@ -244,3 +244,65 @@ def test_response_discloses_the_assumed_yaw() -> None:
         "/api/compare", json={"query": QUERY, "reference": REFERENCE}
     ).json()
     assert unavailable["yaw_assumed"] == 0.0
+
+
+def test_improvement_counts_only_the_correction_that_was_issued() -> None:
+    """화면이 말한 교정과 개선율이 잰 교정이 같아야 한다.
+
+    개선율은 goal_year2의 납품 지표이고 그 정의는 "교정 알고리즘의 출력을 적용한 뒤의
+    유사도 상승"이다. 교정문은 fa9c4b0 이후 오른손 하나의 최대 이탈 성분 하나뿐인데
+    시뮬레이션이 임계를 넘은 세 점을 전부 옮기면, 작업자에게 오른손만 말하고 머리·
+    왼손까지 고쳤을 때의 향상을 보고하게 된다.
+    """
+    measured_score = service.measured_score
+    body = service.compare(FakeSource(), PassRef(**QUERY), PassRef(**REFERENCE))
+    measured = body["measured"]
+    assert isinstance(measured, dict)
+
+    corrections = measured["corrections"]
+    assert isinstance(corrections, list)
+    assert len(corrections) == 1
+    assert corrections[0].startswith("오른손")
+
+    deltas = measured["deltas"]
+    assert isinstance(deltas, list)
+    sigmas = {item["point"]: item["sigma"] for item in deltas}
+    # 머리도 임계를 넘는다. 그래서 옛 시뮬레이션이라면 머리까지 옮겼을 상황이다.
+    assert sigmas["head"] > measured_score.CORRECTION_SIGMA_THRESHOLD
+
+    source = FakeSource()
+    query_frames = service.pass_frames(source.load(PassRef(**QUERY)))
+    reference_frames = service.pass_frames(source.load(PassRef(**REFERENCE)))
+    query_track = service._local_tracks(query_frames)
+    reference_track = service._local_tracks(reference_frames)
+    before = measured_score.score_track(
+        query_track,
+        reference_track,
+        service.PROVISIONAL_SPREADS,
+        measured_score.DEFAULT_WEIGHTS,
+    )
+    moves = {
+        delta.point: delta.local_delta
+        for delta in before.deltas
+        if delta.sigma > measured_score.CORRECTION_SIGMA_THRESHOLD
+    }
+    assert set(moves) > {"right"}, "머리·왼손도 임계를 넘어야 이 회귀가 뜻을 갖는다"
+    all_points = {
+        name: [
+            None
+            if point is None
+            else tuple(point[axis] + moves[name][axis] for axis in range(3))
+            for point in points
+        ]
+        if name in moves
+        else list(points)
+        for name, points in query_track.items()
+    }
+    wide = measured_score.score_track(
+        all_points,
+        reference_track,
+        service.PROVISIONAL_SPREADS,
+        measured_score.DEFAULT_WEIGHTS,
+    )
+    assert measured["score_after"] < wide.score
+    assert measured["score_after"] > measured["score"]

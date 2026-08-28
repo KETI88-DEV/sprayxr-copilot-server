@@ -245,3 +245,133 @@ def test_gap_closure_reuses_the_existing_metric() -> None:
     closure = pose_similarity.gap_closure(0.4, 0.7)
     assert closure is not None
     assert math.isclose(closure, 0.5, abs_tol=1e-9)
+
+
+# --- 교정 시뮬레이션이 실제로 낸 지시와 같은가 -------------------------------------
+
+
+def _old_all_points_apply(
+    query: dict[str, list[tuple[float, float, float]]],
+    deltas: list[object],
+) -> dict[str, list[tuple[float, float, float]]]:
+    """fa9c4b0 이전의 시뮬레이션. 임계를 넘은 **모든** 점을 3성분 전부 옮겼다.
+
+    회귀 기준으로만 쓴다. 새 시뮬레이션이 이보다 관대하면(점수가 더 높으면) 내주지
+    않은 교정을 개선율에 계상하고 있다는 뜻이다.
+    """
+    moves = {
+        delta.point: delta.local_delta
+        for delta in deltas
+        if delta.sigma > measured_score.CORRECTION_SIGMA_THRESHOLD
+    }
+    output: dict[str, list[tuple[float, float, float]]] = {}
+    for name, points in query.items():
+        shift = moves.get(name)
+        if shift is None:
+            output[name] = list(points)
+            continue
+        output[name] = [
+            (point[0] + shift[0], point[1] + shift[1], point[2] + shift[2])
+            for point in points
+        ]
+    return output
+
+
+def _three_point_case() -> tuple[
+    dict[str, list[tuple[float, float, float]]],
+    dict[str, list[tuple[float, float, float]]],
+]:
+    """세 점 모두 임계를 넘게 어긋난 질의/레퍼런스. 실측 축 채점 경로와 같은 형식이다."""
+    reference = {name: [(0.30, 0.00, 0.10)] * 5 for name in ("right", "head", "left")}
+    query = {
+        "right": [(0.30 + 0.09, 0.00 + 0.05, 0.10 + 0.14)] * 5,
+        "head": [(0.30 + 0.22, 0.00 - 0.11, 0.10 + 0.07)] * 5,
+        "left": [(0.30 - 0.18, 0.00 + 0.13, 0.10 - 0.09)] * 5,
+    }
+    return query, reference
+
+
+def test_apply_measured_leaves_head_and_left_where_they_are() -> None:
+    """교정문은 오른손 하나만 낸다. 시뮬레이션이 머리·왼손까지 옮기면 개선율이 부푼다.
+
+    fa9c4b0이 문장을 오른손 하나로 좁혔는데 시뮬레이션은 임계를 넘은 세 점을 모두
+    옮기고 있었다. 그러면 작업자에게는 오른손만 말하고 개선율은 머리·왼손까지 고쳤을
+    때의 값을 낸다. 개선율은 goal_year2의 납품 지표라 그 차이가 계약의 뜻을 바꾼다.
+    """
+    query, reference = _three_point_case()
+    before = measured_score.score_track(
+        query, reference, SPREADS, measured_score.DEFAULT_WEIGHTS
+    )
+    sigmas = {delta.point: delta.sigma for delta in before.deltas}
+    assert min(sigmas.values()) > measured_score.CORRECTION_SIGMA_THRESHOLD
+
+    fixed = measured_score.apply_measured(query, before.deltas, HORIZONTAL)
+    assert fixed["head"] == query["head"]
+    assert fixed["left"] == query["left"]
+    assert fixed["right"] != query["right"]
+
+
+def test_apply_measured_moves_only_the_component_the_sentence_names() -> None:
+    """문장이 고른 성분 하나만 옮긴다. 나머지 두 성분은 그대로다.
+
+    문장은 후보 셋 중 절댓값이 가장 큰 하나만 말한다. 시뮬레이션이 세 성분을 다 옮기면
+    말하지 않은 두 축의 교정까지 개선율에 계상된다.
+    """
+    query, reference = _three_point_case()
+    before = measured_score.score_track(
+        query, reference, SPREADS, measured_score.DEFAULT_WEIGHTS
+    )
+    finding = measured_score.right_hand_finding(before.deltas, HORIZONTAL)
+    assert finding is not None
+
+    fixed = measured_score.apply_measured(query, before.deltas, HORIZONTAL)
+    moved = (
+        fixed["right"][0][0] - query["right"][0][0],
+        fixed["right"][0][1] - query["right"][0][1],
+        fixed["right"][0][2] - query["right"][0][2],
+    )
+    world = measured_score._world_delta(moved, HORIZONTAL)
+
+    # HORIZONTAL은 접선이 월드 Y, up이 월드 Z, normal이 월드 X다.
+    axis_index = {"wall": 0, "lateral": 1, "vertical": 2}[finding.axis]
+    assert math.isclose(
+        world[axis_index] * 100.0, finding.magnitude_cm, abs_tol=1e-6
+    )
+    for other in range(3):
+        if other != axis_index:
+            assert math.isclose(world[other], 0.0, abs_tol=1e-9)
+
+
+def test_apply_measured_is_never_more_generous_than_the_old_all_points_sim() -> None:
+    """덜 고치므로 교정 후 점수가 옛 시뮬레이션보다 높을 수 없다."""
+    query, reference = _three_point_case()
+    before = measured_score.score_track(
+        query, reference, SPREADS, measured_score.DEFAULT_WEIGHTS
+    )
+    narrow = measured_score.score_track(
+        measured_score.apply_measured(query, before.deltas, HORIZONTAL),
+        reference,
+        SPREADS,
+        measured_score.DEFAULT_WEIGHTS,
+    )
+    wide = measured_score.score_track(
+        _old_all_points_apply(query, list(before.deltas)),
+        reference,
+        SPREADS,
+        measured_score.DEFAULT_WEIGHTS,
+    )
+    assert narrow.score <= wide.score
+    assert narrow.score > before.score
+
+
+def test_apply_measured_does_nothing_when_no_sentence_is_issued() -> None:
+    """오른손이 임계 아래면 문장이 없다. 없는 지시를 개선율에 계상하지 않는다."""
+    reference = {name: [(0.30, 0.00, 0.10)] * 5 for name in ("right", "head", "left")}
+    query = dict(reference)
+    query["head"] = [(0.55, 0.00, 0.10)] * 5
+    before = measured_score.score_track(
+        query, reference, SPREADS, measured_score.DEFAULT_WEIGHTS
+    )
+    assert measured_score.right_hand_finding(before.deltas, HORIZONTAL) is None
+    fixed = measured_score.apply_measured(query, before.deltas, HORIZONTAL)
+    assert fixed == {name: list(points) for name, points in query.items()}

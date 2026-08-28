@@ -33,6 +33,8 @@ MAX_SIGMA: Final = 6.0
 MIN_CORRECTION_CM: Final = 1.0
 # 수평면에서 이보다 짧은 축 성분은 방향이 정해지지 않은 것으로 본다.
 MIN_AXIS_LENGTH: Final = 1e-9
+# 월드 수직. 설계 §2.5 — 착탄점 Z가 −0.149~1.456 m로 수직축이다.
+WORLD_UP: Final[Vec3] = (0.0, 0.0, 1.0)
 
 
 class AxisFrame(Protocol):
@@ -193,7 +195,7 @@ def _world_delta(local: Vec3, frame: AxisFrame) -> Vec3:
 
 def _correction_candidates(
     local: Vec3, frame: AxisFrame
-) -> list[tuple[str, float, str]]:
+) -> list[tuple[str, float, str, Vec3]]:
     """한 점의 이탈을 물리적으로 참인 후보 세 개(벽·수직·진행축)로 나눈다.
 
     로컬 성분을 축 이름으로 읽으면 안 된다. `Basis.up`은 순수 수직 스트로크에서 수평이
@@ -209,6 +211,11 @@ def _correction_candidates(
 
     임계(`MIN_CORRECTION_CM`) 아래인 후보는 목록에 넣지 않는다. 호출자가 절댓값이 가장
     큰 후보 하나만 골라 문장 하나를 낸다 — 여러 후보를 동시에 지시하지 않는다.
+
+    후보마다 **월드 단위벡터**를 함께 낸다. 그래야 교정을 따랐을 때의 궤적을 만드는
+    `apply_measured`가 문장이 고른 축 하나를 정확히 그만큼만 옮길 수 있다. 크기와
+    방향이 같은 곳에서 나오므로 문장과 시뮬레이션이 어긋날 수 없다 —
+    `magnitude_cm/100 × unit`이 곧 지시한 월드 이동이다.
     """
     world = _world_delta(local, frame)
     plane: Vec3 = (world[0], world[1], 0.0)
@@ -223,30 +230,32 @@ def _correction_candidates(
             0.0,
         )
 
-    candidates: list[tuple[str, float, str]] = []
-    if abs(normal_cm) >= MIN_CORRECTION_CM:
+    candidates: list[tuple[str, float, str, Vec3]] = []
+    if wall is not None and abs(normal_cm) >= MIN_CORRECTION_CM:
         verb = "띄우" if normal_cm > 0 else "붙이"
-        candidates.append(("wall", normal_cm, verb))
+        candidates.append(("wall", normal_cm, verb, wall))
     if abs(up_cm) >= MIN_CORRECTION_CM:
         verb = "올리" if up_cm > 0 else "내리"
-        candidates.append(("vertical", up_cm, verb))
+        candidates.append(("vertical", up_cm, verb, WORLD_UP))
 
     along = _flattened(frame.tangent)
     if along is None:
+        # 수평 진행이 없다. 남은 수평 성분 자체가 방향이라 크기는 늘 양수다.
+        residual = _flattened(plane)
         lateral_cm = math.hypot(plane[0], plane[1]) * 100.0
-        if lateral_cm >= MIN_CORRECTION_CM:
-            candidates.append(("lateral", lateral_cm, ""))
+        if residual is not None and lateral_cm >= MIN_CORRECTION_CM:
+            candidates.append(("lateral", lateral_cm, "", residual))
     else:
         lateral_cm = _dot(plane, along) * 100.0
         if abs(lateral_cm) >= MIN_CORRECTION_CM:
             direction = "앞으로" if lateral_cm > 0 else "뒤로"
-            candidates.append(("lateral", lateral_cm, direction))
+            candidates.append(("lateral", lateral_cm, direction, along))
     return candidates
 
 
 def _largest_correction(
     local: Vec3, frame: AxisFrame
-) -> tuple[str, float, str] | None:
+) -> tuple[str, float, str, Vec3] | None:
     """절댓값이 가장 큰 후보 하나. 사람은 한 번에 하나만 고칠 수 있다."""
     candidates = _correction_candidates(local, frame)
     if not candidates:
@@ -269,7 +278,7 @@ def right_hand_finding(
     candidate = _largest_correction(right.local_delta, frame)
     if candidate is None:
         return None
-    axis, magnitude_cm, direction = candidate
+    axis, magnitude_cm, direction, _unit = candidate
     return RightHandFinding(
         axis=axis,
         magnitude_cm=magnitude_cm,
@@ -312,24 +321,52 @@ def corrections_text(
     return [_finding_phrase(finding)]
 
 
+def issued_shift(
+    deltas: Sequence[PointDelta], frame: AxisFrame = WORLD_FRAME
+) -> Vec3 | None:
+    """실제로 내준 교정 하나를 스트로크 프레임 성분으로 옮긴 이동벡터.
+
+    `corrections_text`가 내는 문장과 **같은 후보**에서 나온다. 문장이 고른 축의 월드
+    단위벡터에 문장이 말한 크기를 곱하고, 그것을 기저로 되돌린다. 문장이 없으면
+    이동도 없다(None).
+    """
+    right = next((delta for delta in deltas if delta.point == "right"), None)
+    if right is None or right.sigma <= CORRECTION_SIGMA_THRESHOLD:
+        return None
+    candidate = _largest_correction(right.local_delta, frame)
+    if candidate is None:
+        return None
+    _axis, magnitude_cm, _direction, unit = candidate
+    metres = magnitude_cm / 100.0
+    world: Vec3 = (unit[0] * metres, unit[1] * metres, unit[2] * metres)
+    # 기저가 정규직교라 각 축과의 내적이 곧 그 축의 성분이다.
+    return (_dot(world, frame.normal), _dot(world, frame.tangent), _dot(world, frame.up))
+
+
 def apply_measured(
     query: Mapping[str, Track],
     deltas: Sequence[PointDelta],
+    frame: AxisFrame = WORLD_FRAME,
     fraction: float = 1.0,
 ) -> dict[str, list[Vec3 | None]]:
-    """교정을 따랐을 때의 궤적. 지목된 점만 fraction만큼 레퍼런스 쪽으로 옮긴다.
+    """교정을 따랐을 때의 궤적. **내준 지시 그대로**만 옮긴다.
+
+    개선율은 goal_year2의 납품 지표이고 그 정의는 "교정 알고리즘의 출력을 적용한 뒤의
+    유사도 상승"이다. 그래서 시뮬레이션은 출력과 같아야 한다. `corrections_text`는
+    fa9c4b0 이후 오른손 하나에 대해 가장 큰 이탈 성분 하나만 문장으로 내므로 여기서도
+    오른손 하나를, 그 성분 하나만 옮긴다.
+
+    머리·왼손은 σ가 임계를 넘어도 제자리다. 지시하지 않은 이동을 개선율에 계상하면
+    작업자에게 말한 것과 보고하는 숫자가 달라진다 — 오른손만 고치라고 하고, 머리와
+    왼손까지 고쳤을 때의 향상을 내걸게 된다. 문장이 좁아진 만큼 이 숫자도 작아지고
+    그것이 맞다.
 
     못 잰 격자점은 옮기지 않는다. 자리를 지우면 s 대응이 어긋난다.
     """
-    moves = {
-        delta.point: delta.local_delta
-        for delta in deltas
-        if delta.sigma > CORRECTION_SIGMA_THRESHOLD
-    }
+    shift = issued_shift(deltas, frame)
     output: dict[str, list[Vec3 | None]] = {}
     for name, points in query.items():
-        shift = moves.get(name)
-        if shift is None:
+        if shift is None or name != "right":
             output[name] = list(points)
             continue
         output[name] = [
