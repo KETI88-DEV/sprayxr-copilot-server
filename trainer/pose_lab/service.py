@@ -9,10 +9,11 @@ IK 산출물이다. 어느 쪽이 개선율 70%를 낼 수 있는지 지금 아�
 from __future__ import annotations
 
 import importlib
+import math
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Final, Protocol, Sequence
+from typing import Any, Final, Mapping, Protocol, Sequence
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
@@ -21,6 +22,9 @@ measured_score = importlib.import_module("measured_score")
 motion_key = importlib.import_module("motion_key")
 pose_similarity = importlib.import_module("pose_similarity")
 stroke_frame = importlib.import_module("stroke_frame")
+build_spread_reference = importlib.import_module("build_spread_reference")
+
+from trainer.pose_lab.spread_reference import Resolved, SpreadReference
 
 Vec3 = tuple[float, float, float]
 
@@ -28,6 +32,15 @@ Vec3 = tuple[float, float, float]
 GATE_RATIO: Final = 0.5
 # 잡으려는 최소 자세 오류. 팔꿈치 30도에 해당하는 실측 참조값이다.
 DEFAULT_ERROR_M: Final = 0.144
+
+# 레퍼런스가 버킷 평균이 아니라 **한 패스**다(`build_spread_reference.pass_axis_values`가
+# 패스 하나의 점별 평균 위치를 wall/vertical/lateral로 분해한 값의 산포다). 질의와
+# 레퍼런스가 같은 분포에서 독립으로 뽑힌 두 표본이므로 그 차의 분산은 2σ²다 — σ로
+# 그대로 나누면 모든 z가 √2배 부풀고, 아무 문제 없는 사람도 1.41σ로 읽혀 임계 2.0에
+# 육박한다. 아티팩트의 σ는 절대 위치의 산포이고 score_track이 재는 것은 차이이므로,
+# 여기(배선 지점)에서 다리를 놓는다. `measured_score.py`는 건드리지 않는다 — 거기서
+# 고치면 기존 테스트가 전부 흔들리고 이유가 묻힌다.
+PAIR_SIGMA_FACTOR: Final = math.sqrt(2.0)
 
 # 레퍼런스 버킷에서 잰 산포가 아니라 자리를 채워 둔 임시값이다. 이 값으로 게이트를
 # 판정하면 상수 두 개에서 나온 "pass"를 화면이 판정으로 내걸게 된다. REQ-19 각도
@@ -224,6 +237,31 @@ def _local_tracks(frames: Sequence[Any]) -> dict[str, list[Vec3 | None]]:
     return tracks
 
 
+def _reference_keys(inputs: KeyInputs) -> dict[str, str]:
+    """질의 패스의 사다리 네 층 키. `SpreadReference.resolve`가 훑는 층 이름과 같아야
+    버킷을 찾는다 — `build_spread_reference.build_from_root`가 굽는 키와 동일한 규칙
+    (uv8/uv4/uv2는 `KeyParams(uv_grid=N)`, uv_off는 uv8 키의 UV 성분을 na로 치환)이다.
+    """
+    keys: dict[str, str] = {}
+    for layer, grid in build_spread_reference.GRANULARITIES:
+        if layer == "uv_off":
+            continue
+        keys[layer] = key_from(inputs, motion_key.KeyParams(uv_grid=grid))
+    keys["uv_off"] = build_spread_reference.key_without_uv(keys["uv8"])
+    return keys
+
+
+def _scale_spreads(
+    spreads: Mapping[str, Mapping[str, float]],
+) -> dict[str, dict[str, float]]:
+    """레퍼런스 σ(절대 위치의 산포)를 질의-레퍼런스 차분의 σ로 바꾼다. `PAIR_SIGMA_FACTOR`
+    독스트링 참조."""
+    return {
+        point: {axis: value * PAIR_SIGMA_FACTOR for axis, value in axes.items()}
+        for point, axes in spreads.items()
+    }
+
+
 def compare(
     source: PassSource,
     query: PassRef,
@@ -232,13 +270,10 @@ def compare(
     samples: int = stroke_frame.DEFAULT_SAMPLES,
     spreads: measured_score.AxisSpreads | None = None,
     weights: dict[str, float] | None = None,
+    reference_spreads: SpreadReference | None = None,
 ) -> dict[str, object]:
     """비교 1건. 동작 키가 다르면 지표를 만들지 않는다."""
     params = params or motion_key.KeyParams()
-    # 호출자가 산포를 넘겼을 때만 그것이 잰 분포다. 임시값으로는 게이트를 판정하지
-    # 않고 σ 정규화도 잠정으로 표시한다.
-    measured_spreads = spreads is not None
-    spreads = spreads or PROVISIONAL_SPREADS
     weights = weights or measured_score.DEFAULT_WEIGHTS
 
     query_frames = pass_frames(source.load(query), samples)
@@ -286,12 +321,68 @@ def compare(
     # 오염시킨다. 기저를 먼저 구해 모든 소비자(score_track ×2, apply_measured,
     # corrections_text, right_hand_finding)에 하나만 넘긴다.
     basis = representative_basis(query_frames)
-    before = measured_score.score_track(query_track, reference_track, spreads, weights, basis)
+
+    # 산포 출처는 세 갈래다. (1) 호출자가 이미 계산된 산포를 직접 넘기면(`spreads`)
+    # 그것이 우선이고 그대로 쓴다 — 기존 계약, 스케일을 건드리지 않는다. (2) 아니면
+    # `reference_spreads` 아티팩트를 사다리(우8→우4→우2→우off)로 훑어 답을 낸 층을
+    # 쓴다 — 이때는 `PAIR_SIGMA_FACTOR`로 스케일한다(레퍼런스가 한 패스이지 버킷
+    # 평균이 아니므로). (3) 둘 다 없으면 잠정 상수로 떨어진다.
+    #
+    # 질의가 전형기 자신이면(같은 worker) 그 날짜를 레퍼런스에서 뺀다 — 자기가 자기
+    # 평균에 가까운 것은 당연하다(설계 D3).
+    assert query_inputs is not None  # query_key가 not None이므로 이 값도 not None이다.
+    measured_spreads = spreads is not None
+    resolved: Resolved | None = None
+    if spreads is not None:
+        spreads_used = spreads
+    elif reference_spreads is not None:
+        ladder_keys = _reference_keys(query_inputs)
+        exclude_dates = (
+            [query.date] if query.worker == reference_spreads.worker else []
+        )
+        resolved = reference_spreads.resolve(ladder_keys, exclude_dates=exclude_dates)
+        if resolved is not None:
+            measured_spreads = True
+            spreads_used = _scale_spreads(resolved.spreads)
+        else:
+            spreads_used = PROVISIONAL_SPREADS
+    else:
+        spreads_used = PROVISIONAL_SPREADS
+
+    before = measured_score.score_track(query_track, reference_track, spreads_used, weights, basis)
     # 개선율은 "교정 알고리즘의 출력을 적용한 뒤의 상승"이다(goal_year2). 그래서
     # 시뮬레이션에 같은 기저를 넘겨 내준 지시 하나만 적용한다 — 오른손, 문장이 지목한
     # 성분 하나. 머리·왼손은 점수에는 남지만 지시가 없으므로 옮기지 않는다.
     fixed = measured_score.apply_measured(query_track, before.deltas, basis)
-    after = measured_score.score_track(fixed, reference_track, spreads, weights, basis)
+    after = measured_score.score_track(fixed, reference_track, spreads_used, weights, basis)
+
+    # 분리 채점: 교정에 쓴 레퍼런스(A)와 채점에 쓴 레퍼런스(B)가 겹치지 않아야
+    # 개선율이 자기충족이 아니다(설계 D4). 날짜를 반으로 갈라 A로 교정 후보(deltas)를
+    # 뽑고 B로 그 교정을 적용한 뒤의 점수를 잰다. `before`(위에서 낸 값)는 두 갈래
+    # 모두에서 그대로 쓴다 — 바뀌는 것은 무엇으로 교정을 고르고 무엇으로 사후 점수를
+    # 매기느냐뿐이다.
+    after_split_score: float | None = None
+    split_reason: str | None = "no_reference_distribution"
+    if resolved is not None and reference_spreads is not None:
+        split = reference_spreads.split_dates(resolved.granularity, resolved.key)
+        if split is None:
+            split_reason = "insufficient_dates"
+        else:
+            dates_a, dates_b = split
+            raw_a = reference_spreads.spreads_for(resolved.granularity, resolved.key, dates_a)
+            raw_b = reference_spreads.spreads_for(resolved.granularity, resolved.key, dates_b)
+            if raw_a is None or raw_b is None:
+                split_reason = "insufficient_dates"
+            else:
+                before_a = measured_score.score_track(
+                    query_track, reference_track, _scale_spreads(raw_a), weights, basis
+                )
+                fixed_a = measured_score.apply_measured(query_track, before_a.deltas, basis)
+                after_split = measured_score.score_track(
+                    fixed_a, reference_track, _scale_spreads(raw_b), weights, basis
+                )
+                after_split_score = after_split.score
+                split_reason = None
 
     return {
         "status": "ok",
@@ -304,8 +395,16 @@ def compare(
         "measured": {
             "basis": "tracked",
             # σ와 점수 exp(-σ²/2)는 이 산포로 나눈 값이다. 잰 분포가 아니면 읽는
-            # 사람이 그 사실을 알아야 한다.
+            # 사람이 그 사실을 알아야 한다. resolve()가 None을 낸 경우(사다리의 어느
+            # 층도 n_min을 못 채움)에도 여기서 잠정으로 떨어진다 — 잠정 상수 위에
+            # "measured" 딱지를 붙이는 것이 이 배선에서 낼 수 있는 최악의 결과다.
             "normalization": "measured" if measured_spreads else "provisional",
+            # `resolved`가 실제로 답을 낸 층이지 질의가 요청한 층이 아니다. 없으면
+            # (레퍼런스가 없거나 사다리 전부 실패) 어느 층에서 나온 숫자도 아니므로
+            # None이다 — 기본값이나 요청값을 대신 채우지 않는다.
+            "granularity": resolved.granularity if resolved is not None else None,
+            "reference_n": resolved.n if resolved is not None else None,
+            "reference_dates": resolved.dates if resolved is not None else [],
             "score": before.score,
             "score_after": after.score,
             "deltas": [
@@ -331,21 +430,27 @@ def compare(
                 else asdict(finding)
             ),
             # 진짜 분리 채점 점수는 겹치지 않는 날짜에서 뽑은 held-out 레퍼런스가
-            # 있어야 나온다. 실제 PassSource가 배선되기 전까지는 split을 None으로
-            # 낸다 — after.score를 split 자리에 다시 넣으면 두 숫자가 항상 같아져
-            # 자기충족 정도를 가리는 바로 그 결함이 된다.
+            # 있어야 나온다(위의 `after_split_score`). 없으면(레퍼런스가 없거나 날짜가
+            # 모자라면) split을 None으로 낸다 — after.score를 split 자리에 다시 넣으면
+            # 두 숫자가 항상 같아져 자기충족 정도를 가리는 바로 그 결함이 된다.
             # `after`는 위에서 낸 문장 하나를 그대로 적용한 점수다. 지시하지 않은
             # 이동은 들어 있지 않다.
-            "improvement": improvement(before.score, None, after.score),
+            "improvement": improvement(before.score, after_split_score, after.score),
+            # split이 None이면 왜인지 말한다 — 레퍼런스가 아예 없거나(D3/D4 이전과
+            # 같은 잠정 상태), 있어도 날짜가 모자라 A/B로 못 가른 것이다. 값이 실려
+            # 있으면(None) 지어낼 사유가 없다는 뜻이다.
+            "split_reason": split_reason,
             # 게이트의 뜻은 "각도 지시가 이제 정당하다"다. 잰 분포가 없으면 판정을
             # 만들지 않는다. 임계 논리(`gate_verdict`)는 그대로 두고 입력이 없다는
             # 사실만 낸다.
             # 산포가 점·축별이 된 뒤에도 게이트 임계 논리는 스칼라 하나를 받는다.
             # 가장 넓은(가장 관대한) 축·점의 산포로 판정한다 — 예전에 점당 스칼라의
             # 최댓값을 쓰던 것과 같은 "최악의 경우로 판정" 규칙을 축 차원까지 넓힌다.
+            # `spreads_used`는 이미 (레퍼런스에서 왔다면) √2로 스케일된 값이다 — 실제
+            # score_track이 나눈 산포와 게이트가 판정하는 산포가 같아야 한다.
             "gate": (
                 gate_verdict(
-                    max(value for axes in spreads.values() for value in axes.values()),
+                    max(value for axes in spreads_used.values() for value in axes.values()),
                     DEFAULT_ERROR_M,
                 )
                 if measured_spreads

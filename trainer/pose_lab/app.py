@@ -18,6 +18,9 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 # 원본 CSV 트리의 루트. 비어 있으면 소스를 배선하지 않고 지금까지의 거동을 유지한다.
 DATA_ROOT_ENV: Final = "POSE_LAB_DATA_ROOT"
+# 실측 산포 아티팩트(build_spread_reference의 출력)의 경로. 비어 있거나 파일이 없으면
+# service.compare가 잠정 산포로 돈다 — 지금까지의 거동과 같다.
+SPREAD_REFERENCE_ENV: Final = "POSE_LAB_SPREAD_REFERENCE"
 # 한 요청에서 새로 훑을 세션 수의 상한. 세션 하나가 수만 행이라 전수 스캔은 화면을
 # 멈춘다. 자른 사실은 응답의 sessions_total과 truncated로 나간다.
 DEFAULT_SESSION_LIMIT: Final = 8
@@ -74,11 +77,29 @@ def _source_from_env() -> Any | None:
     return csv_source.CsvPassSource(Path(root))
 
 
+def _reference_spreads_from_env() -> Any | None:
+    """환경변수에 경로가 있고 그 경로에 파일이 있을 때만 레퍼런스를 읽는다.
+
+    `create_app()`을 인자 없이 부르는 테스트는 이 환경변수가 없으므로 지금까지처럼
+    잠정 산포로 돈다.
+    """
+    path_str = os.environ.get(SPREAD_REFERENCE_ENV, "").strip()
+    if not path_str:
+        return None
+    path = Path(path_str)
+    if not path.is_file():
+        return None
+    from trainer.pose_lab.spread_reference import SpreadReference
+
+    return SpreadReference.load(path)
+
+
 def create_app(source: Any | None = None) -> FastAPI:
     app = FastAPI(title="pose lab")
     motion_key = importlib.import_module("motion_key")
     if source is None:
         source = _source_from_env()
+    reference_spreads = _reference_spreads_from_env()
 
     @app.get("/api/health")
     def health() -> dict[str, str]:
@@ -150,6 +171,7 @@ def create_app(source: Any | None = None) -> FastAPI:
                 service.PassRef(**request.reference.model_dump()),
                 params=params,
                 samples=request.samples,
+                reference_spreads=reference_spreads,
             )
         except LookupError:
             # 없는 패스를 가리킨 것과 프레임이 모자란 것은 다른 사건이다. 목록이
