@@ -322,16 +322,22 @@ class Outcome:
     gate: str | None
     gate_reason: str | None
     normalization: str | None
-    # F/전체 레퍼런스 기준 발동 여부(same이 쓰는 잣대). `measured.finding`이 그대로 출처다.
-    # 오른손 문장(`corrections_text`/`finding`)의 발동 여부다 — 머리는 별도(`head_fired`).
+    # F/전체 레퍼런스 기준 발동 여부(same이 쓰는 잣대) — **어느 쪽이든 지시가 하나라도
+    # 나갔는가**(오른손 축 또는 머리 자세). Fix round 1(F1) 전에는 `measured.finding`
+    # (오른손뿐)만 봤다 — 그러면 머리만 발동한 6쌍이 "미발동"으로 잘못 분류돼
+    # not_fired_summary에 0이 아닌 improvement가 섞였다(`max=0.2972`가 그 증거였다).
+    # 이제 `measured.finding` OR `measured.stance`다.
     fired: bool | None
-    # F2: A(교정 선택 반쪽) 자신의 발동 여부. split을 가르는 데는 이 값을 써야 한다 —
-    # `fired`(F 기준)로 나누면 두 갈래의 결정이 뒤섞인다.
+    # F2/F1: A(교정 선택 반쪽) 자신의 발동 여부 — 역시 오른손 OR 머리 어느 쪽이든.
+    # split을 가르는 데는 이 값을 써야 한다 — `fired`(F 기준)로 나누면 두 갈래의
+    # 결정이 뒤섞인다.
     split_fired: bool | None
-    # Task 6: 머리 자세 발동 여부(F 기준, `fired`와 같은 잣대). `measured.stance`가
-    # 출처다 — §10의 열린 위험(오른손·머리 지시가 같은 자세 문제의 두 증상이라 겹칠
-    # 수 있다)을 head-only/right-only/both로 나눠 보려면 이 필드가 있어야 한다.
+    # Task 6: 머리 자세만의 발동 여부(F 기준). `measured.stance`가 출처다.
     head_fired: bool | None = None
+    # F1: 오른손 문장만의 발동 여부(F 기준). `measured.finding`이 출처다 — `fired`가
+    # 오른손·머리를 합친 값이 된 뒤에도 `fired_overlap`의 head-only/right-only/both
+    # 분해에는 오른손 단독 신호가 따로 필요하다.
+    right_fired: bool | None = None
     # F1: 오른손 σ를 완전히(관대하게) 0으로, 머리·왼손은 그대로 뒀을 때 낼 수 있는
     # gap_closure 최댓값. `same`이 실제로 낸 값(자기충족 상한)과 별개로, "교정이
     # 완벽했다면 얼마나 갈 수 있었는가"를 보여준다.
@@ -421,9 +427,13 @@ def _split_details(
     _scale_spreads(raw_a), weights, basis)`를 계산하지만 그 값도 발동 여부도 응답에
     싣지 않는다. 대신 `compare(source, query, reference, spreads=_scale_spreads(raw_a))`를
     한 번 더 부르면, 그 호출의 최상위 `before`가 정확히 같은 계산(같은 query_track·
-    reference_track·weights·basis·spreads)이 되므로 `measured.finding`이 곧 "A
-    기준으로 교정이 발동했는가"이고 `measured.score`가 곧 그 발동 여부를 결정한 σ의
-    점수다. B도 같은 방식으로 `before_split_score`를 재현한다.
+    reference_track·weights·basis·spreads)이 되므로 `measured.finding`/`measured.stance`가
+    곧 "A 기준으로 오른손/머리가 발동했는가"이고 `measured.score`가 곧 그 발동 여부를
+    결정한 σ의 점수다. B도 같은 방식으로 `before_split_score`를 재현한다.
+
+    F1: `a_fired`는 **오른손 OR 머리** — 어느 쪽이든 A 기준으로 지시가 하나라도 나갔는가
+    다. 오른손(`finding`)만 보면 머리만 발동한 쌍이 "A도 미발동"으로 잘못 읽힌다 —
+    `run_pair`의 F-기준 `fired`와 같은 결함이었다.
 
     split_reason이 있으면(계산된 split이 없으면) A/B 반쪽 자체가 없으므로 빈 결과를
     낸다.
@@ -454,7 +464,8 @@ def _split_details(
     if raw_a is not None:
         body_a = service.compare(source, query, reference, spreads=service._scale_spreads(raw_a))  # noqa: SLF001
         if body_a.get("status") == "ok":
-            a_fired = bool(body_a["measured"].get("finding"))
+            a_measured = body_a["measured"]
+            a_fired = bool(a_measured.get("finding")) or bool(a_measured.get("stance"))
     if raw_b is not None:
         body_b = service.compare(source, query, reference, spreads=service._scale_spreads(raw_b))  # noqa: SLF001
         if body_b.get("status") == "ok":
@@ -489,11 +500,13 @@ def run_pair(
         )
     measured = body["measured"]
     improvement = measured["improvement"]
-    fired = bool(measured.get("finding"))
-    # Task 6: 머리 자세가 발동했는지(`stance_block`이 None이 아니면 발동). `fired`와
-    # 같은 F(전체 레퍼런스) 기준이라 head-only/right-only/both 분류가 두 값을 바로
-    # 조합해서 낼 수 있다.
+    # F1(Fix round 1): 오른손 문장(`finding`)과 머리 자세(`stance`)는 각자 따로 두고,
+    # "발동했다"(`fired`)는 **둘 중 하나라도** 났을 때다. 오른손만 보면(예전처럼)
+    # 머리만 발동한 쌍이 "미발동"으로 잘못 분류된다 — not_fired 표본에 improvement가
+    # 0이 아닌 쌍이 섞이는 형태로 드러난다(그 쌍은 실제로는 지시를 받았기 때문이다).
+    right_fired = bool(measured.get("finding"))
     head_fired = bool(measured.get("stance"))
+    fired = right_fired or head_fired
     ceiling = _ceiling_gap_closure(measured)
 
     split_fired: bool | None = None
@@ -510,7 +523,8 @@ def run_pair(
         reference_n=measured.get("reference_n"), split_n_a=measured.get("split_n_a"),
         split_n_b=measured.get("split_n_b"), gate=measured.get("gate"),
         gate_reason=measured.get("gate_reason"), normalization=measured.get("normalization"),
-        fired=fired, split_fired=split_fired, head_fired=head_fired, ceiling=ceiling,
+        fired=fired, split_fired=split_fired, head_fired=head_fired, right_fired=right_fired,
+        ceiling=ceiling,
         before_same_score=measured.get("score"), before_split_score=before_split_score,
     )
 
@@ -601,6 +615,7 @@ def _outcome_to_json(outcome: Outcome) -> dict[str, Any]:
         "fired": outcome.fired,
         "split_fired": outcome.split_fired,
         "head_fired": outcome.head_fired,
+        "right_fired": outcome.right_fired,
         "ceiling": outcome.ceiling,
         "before_same_score": outcome.before_same_score,
         "before_split_score": outcome.before_split_score,
@@ -648,9 +663,12 @@ def build_report(
 
     split_reason_counts = Counter(item.split_reason for item in ok)
 
-    # F2: same은 F(전체 레퍼런스) 기준 발동 여부(`fired`)로, split은 A(교정 선택 반쪽)
-    # 자신의 발동 여부(`split_fired`)로 각자 갈라야 한다 — 두 갈래의 결정이 다를 수
-    # 있다(실제로 이 표본에서도 다르다).
+    # F1(Fix round 1): "발동"은 오른손 축 OR 머리 자세 — 어느 쪽이든 지시가 하나라도
+    # 나갔는가다. same은 F(전체 레퍼런스) 기준 발동 여부(`fired`)로, split은
+    # A(교정 선택 반쪽) 자신의 발동 여부(`split_fired`)로 각자 갈라야 한다 — 두 갈래의
+    # 결정이 다를 수 있다(실제로 이 표본에서도 다르다). 오른손만 보던 예전 버전은
+    # 머리만 발동한 쌍을 "미발동"에 잘못 넣었다 — `not_fired_summary`에 0이 아닌
+    # improvement가 섞여 있었던 것이 그 증거다(아래 검증 참고).
     same_fired = [item for item in ok if item.fired]
     same_not_fired = [item for item in ok if item.fired is False]
     same_unknown = [item for item in ok if item.fired is None]
@@ -667,17 +685,29 @@ def build_report(
         ),
     }
 
-    # Task 6/§10: 오른손 문장(`fired`)과 머리 자세(`head_fired`)가 같은 자세 문제의 두
-    # 증상이면 겹칠 것이고(둘 다 발동이 큰 몫), 서로 독립이면 head-only/right-only가
-    # 크다. 둘 다 F(전체 레퍼런스) 기준이라 같은 잣대로 조합할 수 있다. 어느 쪽이든
-    # 발동 여부를 모르면(None) 이 표에서 뺀다 — 0으로 채우지 않는다.
-    both_known = [item for item in ok if item.fired is not None and item.head_fired is not None]
-    head_only = [item for item in both_known if item.head_fired and not item.fired]
-    right_only = [item for item in both_known if item.fired and not item.head_fired]
-    both_fired = [item for item in both_known if item.fired and item.head_fired]
-    neither_fired = [item for item in both_known if not item.fired and not item.head_fired]
+    # F1: not_fired 버킷의 모든 값이 정확히 0.0이어야 한다 — 아무 지시도 안 나갔으면
+    # `apply_measured`가 아무것도 옮기지 않으므로 before==after이고 gap_closure는
+    # 0이다. 전수(표본이 아니라)를 확인하고 결과를 report에 남긴다.
+    correction_fire_rate["same"]["not_fired_all_zero"] = all(
+        item.same == 0.0 for item in same_not_fired
+    )
+    correction_fire_rate["split"]["not_fired_all_zero"] = all(
+        item.split == 0.0 for item in split_not_fired
+    )
+
+    # Task 6/§10: 오른손 문장(`right_fired`)과 머리 자세(`head_fired`)가 같은 자세
+    # 문제의 두 증상이면 겹칠 것이고(둘 다 발동이 큰 몫), 서로 독립이면
+    # head-only/right-only가 크다. 둘 다 F(전체 레퍼런스) 기준이라 같은 잣대로 조합할
+    # 수 있다. `right_fired`(오른손 단독 신호)를 쓴다 — 합친 `fired`를 쓰면 이 분해
+    # 자체가 성립하지 않는다. 어느 쪽이든 발동 여부를 모르면(None) 이 표에서 뺀다 —
+    # 0으로 채우지 않는다.
+    both_known = [item for item in ok if item.right_fired is not None and item.head_fired is not None]
+    head_only = [item for item in both_known if item.head_fired and not item.right_fired]
+    right_only = [item for item in both_known if item.right_fired and not item.head_fired]
+    both_fired = [item for item in both_known if item.right_fired and item.head_fired]
+    neither_fired = [item for item in both_known if not item.right_fired and not item.head_fired]
     fired_overlap = {
-        "basis": "F(전체 레퍼런스) 기준 — same이 쓰는 것과 같은 발동 잣대",
+        "basis": "F(전체 레퍼런스) 기준, 오른손/머리 각자의 단독 신호(`right_fired`/`head_fired`) — 합친 `fired`(correction_fire_rate가 쓰는 것)와는 다른 잣대다",
         "n_known": len(both_known),
         "head_only": len(head_only),
         "right_only": len(right_only),
@@ -707,6 +737,59 @@ def build_report(
     ceiling = {
         "all_ok": summarize([item.ceiling for item in ok], THRESHOLD),
         "same_fired_only": summarize([item.ceiling for item in same_fired], THRESHOLD),
+    }
+
+    # Fix round 1, F3: 발동한 쌍마다 "낼 수 있었던 것(ceiling) 중 실제로 낸 것
+    # (same/split)의 몫"을 잰다. 천장은 크게 올랐는데(중앙 0.706→0.833) split이 여전히
+    # 70%를 거의 못 채운다면, 문제는 "천장이 낮다"가 아니라 "발동은 했는데 그 발동이
+    # 천장의 일부만 채운다"는 것이다 — 이 몫이 head-only/right-only/both 버킷별로
+    # 고르게 낮은지, 특정 버킷에 몰려 있는지가 다음 手(축을 더 낼지, 축당 크기를 고칠지)
+    # 를 가른다. `same_fired`(F 기준, 오른손 OR 머리 — F1로 넓어진 발동 모집단) 위에서
+    # 잰다. `ceiling`이 0이면(이미 완전 일치라 메울 격차가 없음) 나눗셈이 정의되지
+    # 않으므로 그 쌍은 뺀다 — 0으로 채우지 않는다.
+    def _capturable(population: Sequence[Outcome]) -> list[Outcome]:
+        return [item for item in population if item.ceiling is not None and item.ceiling > 0.0]
+
+    def _capture_ratio(attr: str, population: Sequence[Outcome]) -> dict[str, float | int | None]:
+        values = [
+            getattr(item, attr) / item.ceiling
+            for item in population
+            if getattr(item, attr) is not None
+        ]
+        return summarize(values, THRESHOLD)
+
+    capturable = _capturable(same_fired)
+    capturable_head_only = _capturable(head_only)
+    capturable_right_only = _capturable(right_only)
+    capturable_both = _capturable(both_fired)
+    capture = {
+        "note": (
+            "발동한(오른손 OR 머리, F 기준) 쌍마다 same/ceiling·split/ceiling — 그 쌍이 "
+            "낼 수 있었던 gap_closure 중 실제로 낸 몫. ceiling<=0인 쌍은 뺀다(나눗셈 "
+            "미정의). ≥0.70 열은 '이 쌍이 자신의 천장의 70% 이상을 실제로 회수했다'는 "
+            "뜻이지 종합 개선율의 70% 목표와는 다른 잣대다 — 참고용으로만 낸다."
+        ),
+        "n_fired": len(same_fired),
+        "n_capturable": len(capturable),
+        "same_over_ceiling": _capture_ratio("same", capturable),
+        "split_over_ceiling": _capture_ratio("split", capturable),
+        "by_bucket": {
+            "head_only": {
+                "n_capturable": len(capturable_head_only),
+                "same_over_ceiling": _capture_ratio("same", capturable_head_only),
+                "split_over_ceiling": _capture_ratio("split", capturable_head_only),
+            },
+            "right_only": {
+                "n_capturable": len(capturable_right_only),
+                "same_over_ceiling": _capture_ratio("same", capturable_right_only),
+                "split_over_ceiling": _capture_ratio("split", capturable_right_only),
+            },
+            "both": {
+                "n_capturable": len(capturable_both),
+                "same_over_ceiling": _capture_ratio("same", capturable_both),
+                "split_over_ceiling": _capture_ratio("split", capturable_both),
+            },
+        },
     }
 
     # F5: eval_pose_correction.MAX_ELIGIBLE_BEFORE 가드를 적용했다면 split이 어떻게
@@ -778,6 +861,7 @@ def build_report(
         "correction_fire_rate": correction_fire_rate,
         "fired_overlap": fired_overlap,
         "ceiling": ceiling,
+        "capture": capture,
         "half_thickness": {
             "thin_threshold_n_min": THIN_HALF_THRESHOLD,
             "n_with_known_thickness": len(thickness_known),
