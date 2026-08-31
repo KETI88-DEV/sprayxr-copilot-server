@@ -168,8 +168,10 @@ function renderAxis(root, payload) {
     stanceEl.textContent = stance ? stance.text : "";
   }
 
-  // 발부한 축 전부. `axes`가 곧 `apply_measured`가 옮기는 것이라 이 표의 숫자와
-  // 개선율이 같은 이동을 잰다.
+  // 발부한 축 전부 — 작업자가 실제로 받는 지시다. 이 표의 숫자가 곧 교정 후
+  // 궤적이 옮긴 양이라 개선율(동일)과 같은 이동을 잰다. 개선율(분리)은 교정 후보를
+  // A 반쪽에서 다시 고르므로 이 표와 축 집합이 갈릴 수 있다(자기충족을 피하려는
+  // 설계다). 이 표를 분리 개선율의 근거로 읽지 말 것.
   const axesBody = root.querySelector(".issued-axes tbody");
   if (axesBody) {
     axesBody.replaceChildren();

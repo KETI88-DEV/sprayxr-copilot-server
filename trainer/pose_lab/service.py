@@ -439,8 +439,10 @@ def compare(
 
     before = measured_score.score_track(query_track, reference_track, spreads_used, weights, basis)
     # 개선율은 "교정 알고리즘의 출력을 적용한 뒤의 상승"이다(goal_year2). 그래서
-    # 시뮬레이션에 같은 기저를 넘겨 내준 지시 하나만 적용한다 — 오른손, 문장이 지목한
-    # 성분 하나. 머리·왼손은 점수에는 남지만 지시가 없으므로 옮기지 않는다.
+    # 시뮬레이션에 같은 기저를 넘겨 **발부한 것만** 적용한다 — 오른손의 임계를 넘은
+    # 축 전부와, 자세 문장이 나갔다면 머리의 그 축. 왼손은 어떤 경우에도 제자리다
+    # (`measured_score.issued_axes`가 애초에 내지 않는다). 점수는 세 점을 다 보지만
+    # 지시하지 않은 점을 옮기면 작업자에게 말한 것과 보고하는 숫자가 달라진다.
     fixed = measured_score.apply_measured(query_track, before.deltas, basis)
     after = measured_score.score_track(fixed, reference_track, spreads_used, weights, basis)
 
@@ -558,8 +560,13 @@ def compare(
             # 기저를 함께 넘긴다. 성분을 축 이름으로 읽으면 수직 스트로크에서 좌우
             # 이탈이 "올리세요"로 나간다(`stroke_frame.Basis` 독스트링).
             "corrections": measured_score.corrections_text(before.deltas, basis),
-            # 자세 문장 하나(머리)와 발부한 축 전부(오른손+머리). `axes`가 곧
-            # `apply_measured`가 옮기는 것이라 화면 숫자와 개선율이 같은 이동을 잰다.
+            # 자세 문장 하나(머리)와 발부한 축 전부(오른손+머리).
+            # `axes`는 **작업자가 실제로 받는 지시**이고, 그것이 곧 위 `fixed`가 옮긴
+            # 것이다 — 그래서 화면 숫자와 `improvement.same`이 같은 이동을 잰다.
+            # `improvement.split`은 다르다: 자기충족을 피하려고 교정 후보를 A 반쪽의
+            # 산포로 **다시 고르므로**(`before_a.deltas`) σ가 달라져 발부 축 집합이
+            # 이 목록과 갈릴 수 있다. 그것이 split의 설계이지 결함이 아니다 —
+            # 다만 "화면 = split"이라고 읽으면 안 된다.
             "stance": stance_block(before.deltas, basis),
             "axes": axes_block(before.deltas, basis),
             # 최종 작업자 문구는 다운스트림 VLM이 짓는다. 문장만 주면 VLM이 근거 없이
