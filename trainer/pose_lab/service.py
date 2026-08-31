@@ -311,8 +311,13 @@ def axes_block(
 ) -> list[dict[str, object]]:
     """발부한 축 전부를 sigma 내림차순으로. 작업자에게 가는 숫자 패널의 원본이다.
 
-    이 목록이 곧 `apply_measured`가 옮기는 것이므로, 화면에 보이는 숫자와 개선율이
-    재는 이동이 같다.
+    이 목록은 `compare()`가 실제로 발부하는 지시이고, 그것이 곧 `apply_measured`가
+    옮기는 것이다 — 그래서 화면 숫자와 `improvement.same`이 같은 이동을 잰다.
+
+    `improvement.split`에는 그 등식이 성립하지 않는다. split은 자기충족을 피하려고
+    교정 후보를 A 반쪽의 산포로 다시 고르므로(`before_a.deltas`) sigma가 달라져
+    발부 축 집합이 이 목록과 갈릴 수 있다. 그것이 split의 설계지 결함이 아니다 —
+    다만 이 목록을 split의 근거로 읽으면 안 된다.
     """
     return [
         {
