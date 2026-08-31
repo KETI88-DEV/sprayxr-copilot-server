@@ -306,6 +306,44 @@ def _half_sample_count(
     return max(totals.values()) if totals else 0
 
 
+def axes_block(
+    deltas: Sequence[measured_score.PointDelta], frame: measured_score.AxisFrame
+) -> list[dict[str, object]]:
+    """발부한 축 전부를 sigma 내림차순으로. 작업자에게 가는 숫자 패널의 원본이다.
+
+    이 목록이 곧 `apply_measured`가 옮기는 것이므로, 화면에 보이는 숫자와 개선율이
+    재는 이동이 같다.
+    """
+    return [
+        {
+            "point": correction.point,
+            "axis": correction.axis,
+            "magnitude_cm": correction.magnitude_cm,
+            "direction": correction.direction,
+            "sigma": correction.sigma,
+        }
+        for correction in measured_score.issued_axes(deltas, frame)
+    ]
+
+
+def stance_block(
+    deltas: Sequence[measured_score.PointDelta], frame: measured_score.AxisFrame
+) -> dict[str, object] | None:
+    """자세 문장 하나. 머리가 조용하면 None이다(0이 아니다)."""
+    head = next((delta for delta in deltas if delta.point == "head"), None)
+    if head is None:
+        return None
+    stance = measured_score.head_stance(head, frame)
+    if stance is None:
+        return None
+    return {
+        "text": measured_score.stance_text(stance),
+        "axis": stance.axis,
+        "magnitude_cm": stance.magnitude_cm,
+        "sigma": stance.sigma,
+    }
+
+
 def compare(
     source: PassSource,
     query: PassRef,
@@ -520,6 +558,10 @@ def compare(
             # 기저를 함께 넘긴다. 성분을 축 이름으로 읽으면 수직 스트로크에서 좌우
             # 이탈이 "올리세요"로 나간다(`stroke_frame.Basis` 독스트링).
             "corrections": measured_score.corrections_text(before.deltas, basis),
+            # 자세 문장 하나(머리)와 발부한 축 전부(오른손+머리). `axes`가 곧
+            # `apply_measured`가 옮기는 것이라 화면 숫자와 개선율이 같은 이동을 잰다.
+            "stance": stance_block(before.deltas, basis),
+            "axes": axes_block(before.deltas, basis),
             # 최종 작업자 문구는 다운스트림 VLM이 짓는다. 문장만 주면 VLM이 근거 없이
             # 다시 지어내야 한다 — 표본 수는 문장에 없다. 구조체를 병기해 축·부호·σ·
             # 표본 n을 그대로 넘긴다. 오른손이 임계 아래거나 못 잰 경우 None이다.
@@ -578,6 +620,8 @@ def compare(
             "score_after": None,
             "deltas": [],
             "corrections": [],
+            "stance": None,
+            "axes": [],
             "finding": None,
             "improvement": None,
             "gate": None,
