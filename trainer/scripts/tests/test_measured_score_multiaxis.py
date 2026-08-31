@@ -146,10 +146,17 @@ def test_head_wall_distance_becomes_a_step_back_sentence() -> None:
 
 
 def test_only_one_stance_sentence_even_when_both_axes_fire() -> None:
-    """자세 문장도 하나다. 두 가지를 동시에 시키면 아무것도 안 한다."""
-    delta = _head((0.18, 0.0, -0.12), {"wall": 3.4, "vertical": 2.9, "lateral": 0.1})
+    """자세 문장도 하나이고, 고르는 기준은 크기가 아니라 sigma다.
+
+    이 픽스처는 sigma와 크기를 **일부러 어긋나게** 둔다. wall이 18cm로 더 크지만
+    vertical이 sigma 3.4로 더 이상하다. wall은 AXIS_ORDER에서도 앞이다. 따라서
+    vertical이 나와야만 "sigma로 골랐다"가 증명된다 — 세 기준이 같은 답을 내는
+    픽스처로는 아무것도 증명하지 못한다(초안이 그랬다).
+    """
+    delta = _head((0.18, 0.0, -0.12), {"wall": 2.9, "vertical": 3.4, "lateral": 0.1})
     stance = measured_score.head_stance(delta, HORIZONTAL)
-    assert stance is not None and stance.axis == "wall"  # sigma가 큰 쪽
+    assert stance is not None
+    assert stance.axis == "vertical"  # sigma가 큰 쪽. 크기로 고르면 wall이 나온다.
 
 
 def test_head_lateral_is_never_issued() -> None:
