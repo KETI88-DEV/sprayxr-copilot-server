@@ -77,15 +77,24 @@ function renderAxis(root, payload) {
   // 개선율(분리)이 왜 산출되지 않았는지, 산출됐다면 A/B 반쪽이 몇 표본으로 섰는지.
   // 이 줄이 없으면 위의 레퍼런스 날짜(F, 전체 레퍼런스) 줄이 마치 split의 출처인
   // 것처럼 읽힌다 — split은 F가 아니라 별도로 나뉜 A/B 위에서 난다.
+  // 키가 **없는 것**과 null은 다른 말이다. 비교 자체를 만들지 않은 응답
+  // (motion_key_mismatch, insufficient_frames)에는 measured 블록이 통째로 없어서
+  // split_reason이 undefined다. 그걸 null과 같이 취급하면 "split은 돌았고 개수만
+  // 모른다"(A n=— / B n=—)로 읽힌다 — 아무것도 비교하지 않았는데 그렇게 읽힌다.
+  // null은 "split이 났고 사유를 댈 것이 없다"는 뜻이라 그 갈래만 개수를 낸다.
   const splitNote = root.querySelector(".split-note");
   if (splitNote) {
-    const reason = payload.split_reason ?? null;
     const a = payload.split_n_a;
     const b = payload.split_n_b;
-    splitNote.textContent =
-      reason !== null
-        ? `산출 안 됨: ${SPLIT_REASONS[reason] ?? reason}`
-        : `A n=${typeof a === "number" ? a : "—"} / B n=${typeof b === "number" ? b : "—"}`;
+    if (!Object.hasOwn(payload, "split_reason")) {
+      splitNote.textContent = "";
+    } else {
+      const reason = payload.split_reason ?? null;
+      splitNote.textContent =
+        reason !== null
+          ? `산출 안 됨: ${SPLIT_REASONS[reason] ?? reason}`
+          : `A n=${typeof a === "number" ? a : "—"} / B n=${typeof b === "number" ? b : "—"}`;
+    }
   }
 
   // 정규화가 어느 값을 재정의하는지 눈에 크게 띄어야 한다 — 이 값이 틀리면 아래
