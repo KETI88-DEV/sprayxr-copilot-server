@@ -117,3 +117,60 @@ def test_magnitude_and_unit_agree_so_the_sentence_cannot_drift() -> None:
     assert abs(wall.unit[0]) > 0.99
     reconstructed_world_x = wall.magnitude_cm / 100.0 * wall.unit[0]
     assert abs(reconstructed_world_x - 0.08) < 0.005
+
+
+def _head(world: tuple[float, float, float], axis_sigmas: dict[str, float]) -> object:
+    return measured_score.PointDelta(
+        point="head",
+        sigma=3.0,
+        local_delta=_local(HORIZONTAL, world),
+        samples=30,
+        axis_sigmas=axis_sigmas,
+    )
+
+
+def test_head_height_becomes_a_stance_sentence() -> None:
+    delta = _head((0.0, 0.0, -0.12), {"wall": 0.2, "vertical": 3.1, "lateral": 0.1})
+    stance = measured_score.head_stance(delta, HORIZONTAL)
+    assert stance is not None
+    assert stance.point == "head" and stance.axis == "vertical"
+    text = measured_score.stance_text(stance)
+    assert "낮춰" in text
+
+
+def test_head_wall_distance_becomes_a_step_back_sentence() -> None:
+    delta = _head((0.18, 0.0, 0.0), {"wall": 3.4, "vertical": 0.2, "lateral": 0.1})
+    stance = measured_score.head_stance(delta, HORIZONTAL)
+    assert stance is not None and stance.axis == "wall"
+    assert "걸음" in measured_score.stance_text(stance)
+
+
+def test_only_one_stance_sentence_even_when_both_axes_fire() -> None:
+    """자세 문장도 하나다. 두 가지를 동시에 시키면 아무것도 안 한다."""
+    delta = _head((0.18, 0.0, -0.12), {"wall": 3.4, "vertical": 2.9, "lateral": 0.1})
+    stance = measured_score.head_stance(delta, HORIZONTAL)
+    assert stance is not None and stance.axis == "wall"  # sigma가 큰 쪽
+
+
+def test_head_lateral_is_never_issued() -> None:
+    """작업자 요가 실측이 아니라 좌우를 판정할 기준이 없다(service.ASSUMED_YAW)."""
+    delta = _head((0.0, 0.20, 0.0), {"wall": 0.1, "vertical": 0.1, "lateral": 5.0})
+    assert measured_score.head_stance(delta, HORIZONTAL) is None
+
+
+def test_head_below_the_threshold_says_nothing() -> None:
+    delta = _head((0.0, 0.0, -0.12), {"wall": 0.2, "vertical": 1.9, "lateral": 0.1})
+    assert measured_score.head_stance(delta, HORIZONTAL) is None
+
+
+def test_stance_text_never_claims_a_posture_we_cannot_observe() -> None:
+    """HMD로는 앉음과 쪼그림과 무릎 굽힘을 구별할 수 없다. 그러니 '앉아'라고 쓰지 않는다."""
+    for world, sigmas in (
+        ((0.0, 0.0, -0.12), {"vertical": 3.1}),
+        ((0.0, 0.0, 0.12), {"vertical": 3.1}),
+        ((0.18, 0.0, 0.0), {"wall": 3.4}),
+        ((-0.18, 0.0, 0.0), {"wall": 3.4}),
+    ):
+        stance = measured_score.head_stance(_head(world, sigmas), HORIZONTAL)
+        assert stance is not None
+        assert "앉아" not in measured_score.stance_text(stance)

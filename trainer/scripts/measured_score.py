@@ -408,6 +408,59 @@ def right_axes(
     ]
 
 
+# 자세 문구. 머리 위치를 cm로 지시하지 않는 이유는 그것이 자세의 **결과**이지
+# 직접 조작하는 대상이 아니기 때문이다 — "머리를 3cm 내리세요"는 따를 수 없는 지시다.
+# 문구는 정성적이고 정확한 cm는 `AxisCorrection.magnitude_cm`이 들고 있다.
+STANCE_PHRASES: Final[dict[tuple[str, bool], str]] = {
+    ("vertical", False): "자세를 한 단계 낮춰 작업하십시오.",
+    ("vertical", True): "자세를 한 단계 높여 작업하십시오.",
+    ("wall", True): "벽에서 한 걸음 더 떨어져 서십시오.",
+    ("wall", False): "벽에 한 걸음 더 붙어 서십시오.",
+}
+# 머리에서 자세로 번역할 수 있는 축. lateral은 없다 — 작업자 요가 실측이 아니라
+# 좌우를 판정할 기준이 없다(`service.ASSUMED_YAW`).
+STANCE_AXES: Final[tuple[str, ...]] = ("wall", "vertical")
+
+
+def head_stance(
+    delta: PointDelta, frame: AxisFrame = WORLD_FRAME
+) -> AxisCorrection | None:
+    """머리의 이탈을 자세 지시 하나로 번역한다. 없으면 None.
+
+    점 게이트를 따로 두지 않는다. 결합 sigma는 축별 sigma의 제곱합의 제곱근이므로
+    어느 축이 임계를 넘으면 결합 sigma도 반드시 넘는다 — 더해도 판정이 안 바뀐다.
+    """
+    axis_sigmas = delta.axis_sigmas
+    if not axis_sigmas:
+        return None
+    best: tuple[str, float, str, Vec3] | None = None
+    best_sigma = CORRECTION_SIGMA_THRESHOLD
+    for axis, magnitude_cm, direction, unit in _correction_candidates(
+        delta.local_delta, frame
+    ):
+        if axis not in STANCE_AXES:
+            continue
+        sigma = float(axis_sigmas.get(axis, 0.0))
+        if sigma > best_sigma:
+            best, best_sigma = (axis, magnitude_cm, direction, unit), sigma
+    if best is None:
+        return None
+    axis, magnitude_cm, direction, unit = best
+    return AxisCorrection(
+        point="head",
+        axis=axis,
+        magnitude_cm=magnitude_cm,
+        direction=direction,
+        sigma=best_sigma,
+        unit=unit,
+    )
+
+
+def stance_text(correction: AxisCorrection) -> str:
+    """자세 문장 하나. 구조체에서 지으므로 문장과 부호가 어긋날 수 없다."""
+    return STANCE_PHRASES[(correction.axis, correction.magnitude_cm > 0)]
+
+
 def right_hand_finding(
     deltas: Sequence[PointDelta], frame: AxisFrame = WORLD_FRAME
 ) -> RightHandFinding | None:
