@@ -40,6 +40,11 @@ body { font-family: system-ui, "Noto Sans KR", sans-serif; margin: 0; padding: 1
   opacity: .75;
   font-family: ui-monospace, monospace;
 }
+.stance { font-weight: 600; margin: 0 0 .5rem; }
+.issued-axes { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; margin-bottom: .5rem; }
+.issued-axes th, .issued-axes td { text-align: right; padding: .15rem .4rem; }
+.issued-axes th:first-child, .issued-axes td:first-child { text-align: left; }
+.split-note { font-size: .75rem; opacity: .75; font-family: ui-monospace, monospace; }
 .params { display: flex; gap: 1rem; flex-wrap: wrap; margin-top: 1rem; align-items: end; }
 .keys { font-family: ui-monospace, monospace; font-size: .8rem; }
 dl { display: grid; grid-template-columns: auto 1fr; gap: .25rem 1rem; }

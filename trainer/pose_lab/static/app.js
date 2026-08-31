@@ -12,6 +12,18 @@ const GATE_REASONS = {
 // 구조화 근거의 축 이름. 서버는 영문 리터럴("wall"/"vertical"/"lateral")을 낸다.
 const AXIS_LABELS = { wall: "벽", vertical: "수직", lateral: "진행축" };
 
+// 발부한 축 표의 점 이름. 서버는 영문 리터럴("right"/"head"/"left")을 낸다.
+const POINT_LABELS = { right: "오른손", head: "머리", left: "왼손" };
+
+// 개선율(분리)이 산출되지 않은 이유. `service.py::compare`의 `split_reason` 문자열과
+// 1:1이다 — 기본값은 "no_split_reference"다("no_reference_distribution"은 게이트가
+// 쓰는 다른 이름이라 여기서 쓰면 값이 안 맞는다).
+const SPLIT_REASONS = {
+  insufficient_dates: "날짜가 둘로 갈리지 않음",
+  insufficient_samples: "반쪽 표본이 2개 미만",
+  no_split_reference: "실측 레퍼런스 없음",
+};
+
 // 정규화 딱지. measured/provisional 둘 다 아니면(관절 축처럼 아예 배선되지 않은
 // 경우) 값을 지어내지 않고 "—"로 낸다.
 const NORMALIZATION_LABELS = { measured: "측정된 분포", provisional: "임시" };
@@ -58,9 +70,23 @@ function renderAxis(root, payload) {
   root.querySelector("dl").innerHTML = `
     <dt>유사도</dt><dd>${num(payload.score)}</dd>
     <dt>교정 후</dt><dd>${num(payload.score_after)}</dd>
-    <dt>개선율(분리)</dt><dd>${num(payload.improvement?.split)}</dd>
+    <dt>개선율(분리)</dt><dd>${num(payload.improvement?.split)} <span class="split-note"></span></dd>
     <dt>개선율(동일)</dt><dd>${num(payload.improvement?.same)}</dd>
     <dt>REQ-19 게이트</dt><dd>${gate}${gateWhy}</dd>`;
+
+  // 개선율(분리)이 왜 산출되지 않았는지, 산출됐다면 A/B 반쪽이 몇 표본으로 섰는지.
+  // 이 줄이 없으면 위의 레퍼런스 날짜(F, 전체 레퍼런스) 줄이 마치 split의 출처인
+  // 것처럼 읽힌다 — split은 F가 아니라 별도로 나뉜 A/B 위에서 난다.
+  const splitNote = root.querySelector(".split-note");
+  if (splitNote) {
+    const reason = payload.split_reason ?? null;
+    const a = payload.split_n_a;
+    const b = payload.split_n_b;
+    splitNote.textContent =
+      reason !== null
+        ? `산출 안 됨: ${SPLIT_REASONS[reason] ?? reason}`
+        : `A n=${typeof a === "number" ? a : "—"} / B n=${typeof b === "number" ? b : "—"}`;
+  }
 
   // 정규화가 어느 값을 재정의하는지 눈에 크게 띄어야 한다 — 이 값이 틀리면 아래
   // σ와 점수 전부가 다른 뜻이 된다. 값이 measured/provisional 둘 다 아니면(관절
@@ -122,6 +148,47 @@ function renderAxis(root, payload) {
       </div>
       <span class="bar-axes">벽 ${axisSigma(delta, "wall")} · 수직 ${axisSigma(delta, "vertical")} · 진행축 ${axisSigma(delta, "lateral")}</span>`;
     bars.append(item);
+  }
+
+  // 자세 문장 하나(머리). 머리가 조용하면(응답이 stance를 null로 낸다) 배너를 숨긴다
+  // — 0이 아니라 "낼 문장이 없다"이므로 빈 문장을 그리지 않는다.
+  const stanceEl = root.querySelector(".stance");
+  if (stanceEl) {
+    const stance = payload.stance ?? null;
+    stanceEl.hidden = stance === null;
+    stanceEl.textContent = stance ? stance.text : "";
+  }
+
+  // 발부한 축 전부. `axes`가 곧 `apply_measured`가 옮기는 것이라 이 표의 숫자와
+  // 개선율이 같은 이동을 잰다.
+  const axesBody = root.querySelector(".issued-axes tbody");
+  if (axesBody) {
+    axesBody.replaceChildren();
+    const axes = payload.axes ?? [];
+    if (axes.length === 0) {
+      const row = document.createElement("tr");
+      const cell = document.createElement("td");
+      cell.colSpan = 4;
+      cell.textContent = "발부된 교정 없음";
+      row.append(cell);
+      axesBody.append(row);
+    }
+    for (const entry of axes) {
+      const row = document.createElement("tr");
+      for (const text of [
+        POINT_LABELS[entry.point] ?? entry.point,
+        AXIS_LABELS[entry.axis] ?? entry.axis,
+        typeof entry.magnitude_cm === "number"
+          ? `${entry.magnitude_cm >= 0 ? "+" : ""}${entry.magnitude_cm.toFixed(1)}cm`
+          : "—",
+        typeof entry.sigma === "number" ? `${entry.sigma.toFixed(2)}σ` : "—",
+      ]) {
+        const cell = document.createElement("td");
+        cell.textContent = text;
+        row.append(cell);
+      }
+      axesBody.append(row);
+    }
   }
 
   const list = root.querySelector(".corrections");
