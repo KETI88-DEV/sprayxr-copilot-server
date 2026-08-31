@@ -8,9 +8,12 @@ import math
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 improvement_study = importlib.import_module("improvement_study")
+measured_score = importlib.import_module("measured_score")
 
 
 def test_summary_reports_median_quartiles_and_threshold_share() -> None:
@@ -73,3 +76,26 @@ def test_share_fired_divides_by_what_was_actually_measured() -> None:
     unknown = [_unknown_outcome() for _ in range(8)]
     block = improvement_study._fire_rate_block(fired, not_fired, unknown, lambda o: o.same)
     assert math.isclose(block["share_fired"], 0.5, abs_tol=1e-9)
+
+
+def test_ceiling_leaves_the_left_hand_and_the_head_lateral_untouched() -> None:
+    """천장은 '지시할 수 있는 것을 전부 완벽히 따랐을 때'다.
+
+    왼손은 지시 대상이 아니고 머리 lateral도 아니다. 그 둘을 0으로 치면 천장이
+    실제보다 높게 나오고, 미달 폭이 실제보다 작아 보인다.
+    """
+    sigmas = {
+        "right": {"wall": 3.0, "vertical": 3.0, "lateral": 3.0},
+        "head": {"wall": 2.5, "vertical": 2.5, "lateral": 2.5},
+        "left": {"wall": 4.0, "vertical": 4.0, "lateral": 4.0},
+    }
+    weights = {"right": 1.0, "head": 0.4, "left": 0.15}
+    residual = improvement_study.ceiling_residual_sigma(sigmas, weights)
+    assert residual["left"] == pytest.approx(4.0 * math.sqrt(3))
+    assert residual["head"] == pytest.approx(2.5)
+    assert residual["right"] == pytest.approx(0.0)
+
+
+def test_correctable_head_axes_match_the_scorer() -> None:
+    """천장이 쓰는 '지시 가능한 축'과 실제 지시 규칙이 갈라지면 천장이 틀린다."""
+    assert improvement_study.CORRECTABLE["head"] == measured_score.STANCE_AXES

@@ -43,10 +43,17 @@
   주장했던 것을 철회한다. 그 수는 σ(가중 평균 W)의 몫이지 gap_closure의 몫이 아니다
   — S=exp(-W²/2)이 W에 비선형이라 W를 일부만 줄여도 gap_closure는 그보다 훨씬 크게
   오를 수 있다(실제로 이 보고서 자신의 데이터가 0.6452보다 큰 same/split 값을
-  냈다 — 주장이 스스로의 데이터에 반박됐다). 대신 쌍마다 **오른손 σ를 완전히
-  0으로(관대하게 가정) 만들고 머리·왼손은 그대로 뒀을 때 낼 수 있는 최댓값**을
-  실제로 계산해 `ceiling` 필드로 남긴다(`_ceiling_gap_closure`). 살아남는 주장은
-  약한 것 하나뿐이다 — 머리·왼손을 절대 옮기지 않으므로 G<1.0은 항상 성립한다.
+  냈다 — 주장이 스스로의 데이터에 반박됐다). 대신 쌍마다 **지시 가능한 축을 전부
+  완벽히 따랐을 때 낼 수 있는 최댓값**을 실제로 계산해 `ceiling` 필드로 남긴다
+  (`_ceiling_gap_closure`). 살아남는 주장은 약한 것 하나뿐이다 — 왼손과 머리
+  lateral을 절대 옮기지 않으므로 G<1.0은 항상 성립한다.
+- **Task 6**: 머리가 교정 대상이 되면서(자세 문장) `_ceiling_gap_closure`의 정의를
+  고쳤다. 예전에는 "오른손 σ만 완전 소거, 머리·왼손은 그대로"였다 — 이제 머리도
+  일부(`STANCE_AXES` = wall/vertical) 지시 가능하므로 그 두 축도 소거하고, 만질 수
+  없는 몫은 **왼손 전체와 머리의 `lateral`**만 남는다(`CORRECTABLE`,
+  `ceiling_residual_sigma`). 가중 σ에서 남는 비중을 gap_closure의 남는 비중으로
+  그대로 읽지 않는다 — `exp(-W²/2)`가 W에 비선형이라 잔차 σ로 W를 다시 계산한 뒤
+  다시 `exp(-W²/2)`를 낸다.
 2 - **F2**: `fired`(F/전체 레퍼런스 기준 발동 여부)를 split(A로 고르고 B로 채점) 모집단을
   가르는 데 써서 두 갈래의 발동 결정이 뒤섞였다. `split_fired`를 A 자신의 발동 결정으로
   따로 낸다(`_split_details`가 `spreads=`로 A/B를 각각 compare()에 직접 먹여
@@ -96,6 +103,7 @@ if str(_SCRIPTS_DIR) not in sys.path:
 
 motion_key = importlib.import_module("motion_key")
 eval_pose_correction = importlib.import_module("eval_pose_correction")
+measured_score = importlib.import_module("measured_score")
 
 from trainer.pose_lab import service  # noqa: E402
 from trainer.pose_lab import csv_source as csv_source_module  # noqa: E402
@@ -315,10 +323,15 @@ class Outcome:
     gate_reason: str | None
     normalization: str | None
     # F/전체 레퍼런스 기준 발동 여부(same이 쓰는 잣대). `measured.finding`이 그대로 출처다.
+    # 오른손 문장(`corrections_text`/`finding`)의 발동 여부다 — 머리는 별도(`head_fired`).
     fired: bool | None
     # F2: A(교정 선택 반쪽) 자신의 발동 여부. split을 가르는 데는 이 값을 써야 한다 —
     # `fired`(F 기준)로 나누면 두 갈래의 결정이 뒤섞인다.
     split_fired: bool | None
+    # Task 6: 머리 자세 발동 여부(F 기준, `fired`와 같은 잣대). `measured.stance`가
+    # 출처다 — §10의 열린 위험(오른손·머리 지시가 같은 자세 문제의 두 증상이라 겹칠
+    # 수 있다)을 head-only/right-only/both로 나눠 보려면 이 필드가 있어야 한다.
+    head_fired: bool | None = None
     # F1: 오른손 σ를 완전히(관대하게) 0으로, 머리·왼손은 그대로 뒀을 때 낼 수 있는
     # gap_closure 최댓값. `same`이 실제로 낸 값(자기충족 상한)과 별개로, "교정이
     # 완벽했다면 얼마나 갈 수 있었는가"를 보여준다.
@@ -330,27 +343,64 @@ class Outcome:
     before_split_score: float | None
 
 
-def _ceiling_gap_closure(measured: Mapping[str, Any]) -> float | None:
-    """F1: 오른손 σ를 0으로(관대하게), 머리·왼손은 그대로 뒀을 때의 gap_closure 최댓값.
+# 지시할 수 있는 축. 이것 밖은 완벽한 교정으로도 남는다.
+# head는 measured_score.STANCE_AXES와 같아야 한다 — 갈라지면 천장이 틀린다.
+CORRECTABLE: Final[dict[str, tuple[str, ...]]] = {
+    "right": measured_score.AXIS_ORDER,
+    "head": measured_score.STANCE_AXES,
+    "left": (),  # 지시 대상이 아니다
+}
 
-    `apply_measured`가 실제로 옮기는 것은 오른손의 축 하나뿐이지만, 이 상한은 "오른손
-    전체(세 축 다)가 완전히 교정됐다면"이라는, 실제 교정보다 관대한 가정을 쓴다 —
-    그래도 도달 가능한 값이 얼마인지를 보여주려는 것이다. `measured_score.score_track`과
-    같은 가중 평균·`exp(-W²/2)` 공식을 그대로 쓰되, 응답에 이미 실린 `deltas`/`score`만
-    읽는다 — 새 σ를 만들지 않고 `service.py`/`measured_score.py`를 건드리지 않는다.
+
+def ceiling_residual_sigma(
+    axis_sigmas: Mapping[str, Mapping[str, float]],
+    weights: Mapping[str, float],
+) -> dict[str, float]:
+    """지시 가능한 축을 전부 완벽히 따랐을 때 각 점에 남는 sigma.
+
+    `CORRECTABLE`에 없는 축은 그대로 남는다. 남는 것을 0으로 치면 천장이 실제보다
+    높게 나오고 미달 폭이 작아 보인다.
+    """
+    residual: dict[str, float] = {}
+    for point, axes in axis_sigmas.items():
+        correctable = CORRECTABLE.get(point, ())
+        total = sum(
+            float(value) ** 2 for axis, value in axes.items() if axis not in correctable
+        )
+        residual[point] = math.sqrt(total)
+    return residual
+
+
+def _ceiling_gap_closure(measured: Mapping[str, Any]) -> float | None:
+    """지시 가능한 축(`CORRECTABLE`)을 전부 완벽히 따랐을 때의 gap_closure 최댓값.
+
+    오른손은 세 축 다(`AXIS_ORDER`), 머리는 자세로 번역 가능한 두 축(`STANCE_AXES`
+    — wall/vertical)만, 왼손은 전혀 지시 대상이 아니다. 남는 것은 왼손 전체와 머리의
+    `lateral`이다 — 왼손은 인과가 약해 지시하지 않기로 했고(§7), 머리 lateral은
+    작업자 요가 실측이 아니라 좌우를 판정할 기준이 없다(`service.ASSUMED_YAW`).
+    `ceiling_residual_sigma`가 점마다 남는 σ를 실제 σ 제곱합에서 계산하고, 여기서는
+    그 잔차로 `measured_score.score_track`과 같은 가중 평균·`exp(-W²/2)` 공식을 그대로
+    쓴다. 가중 σ에서 몇 %가 남는지를 gap_closure의 몫으로 읽으면 틀린다 —
+    gap_closure=1-exp(-W²/2)는 W에 비선형이라, 남는 σ의 비중을 직접 gap_closure의
+    비중으로 전용할 수 없다. 그래서 잔차 σ로 W를 다시 계산하고 그 W로 다시
+    exp(-W²/2)를 낸다 — 지름길로 몫만 곱하지 않는다. 응답에 이미 실린 `deltas`/
+    `score`만 읽는다 — 새 σ를 만들지 않고 `service.py`/`measured_score.py`를 건드리지
+    않는다.
     """
     deltas = measured.get("deltas")
     before_score = measured.get("score")
     if not deltas or before_score is None:
         return None
     weights = service.measured_score.DEFAULT_WEIGHTS
-    sigmas = {delta["point"]: delta["sigma"] for delta in deltas}
-    total_weight = sum(weights.get(point, 0.0) for point in sigmas)
+    axis_sigmas_by_point = {
+        delta["point"]: delta.get("axis_sigmas") or {} for delta in deltas
+    }
+    residual = ceiling_residual_sigma(axis_sigmas_by_point, weights)
+    total_weight = sum(weights.get(point, 0.0) for point in residual)
     if total_weight <= 0.0:
         return None
     weighted_ceiling = sum(
-        weights.get(point, 0.0) * (0.0 if point == "right" else sigma)
-        for point, sigma in sigmas.items()
+        weights.get(point, 0.0) * sigma for point, sigma in residual.items()
     ) / total_weight
     ceiling_score = math.exp(-0.5 * weighted_ceiling * weighted_ceiling)
     return service.pose_similarity.gap_closure(before_score, ceiling_score)
@@ -440,6 +490,10 @@ def run_pair(
     measured = body["measured"]
     improvement = measured["improvement"]
     fired = bool(measured.get("finding"))
+    # Task 6: 머리 자세가 발동했는지(`stance_block`이 None이 아니면 발동). `fired`와
+    # 같은 F(전체 레퍼런스) 기준이라 head-only/right-only/both 분류가 두 값을 바로
+    # 조합해서 낼 수 있다.
+    head_fired = bool(measured.get("stance"))
     ceiling = _ceiling_gap_closure(measured)
 
     split_fired: bool | None = None
@@ -456,7 +510,7 @@ def run_pair(
         reference_n=measured.get("reference_n"), split_n_a=measured.get("split_n_a"),
         split_n_b=measured.get("split_n_b"), gate=measured.get("gate"),
         gate_reason=measured.get("gate_reason"), normalization=measured.get("normalization"),
-        fired=fired, split_fired=split_fired, ceiling=ceiling,
+        fired=fired, split_fired=split_fired, head_fired=head_fired, ceiling=ceiling,
         before_same_score=measured.get("score"), before_split_score=before_split_score,
     )
 
@@ -546,6 +600,7 @@ def _outcome_to_json(outcome: Outcome) -> dict[str, Any]:
         "normalization": outcome.normalization,
         "fired": outcome.fired,
         "split_fired": outcome.split_fired,
+        "head_fired": outcome.head_fired,
         "ceiling": outcome.ceiling,
         "before_same_score": outcome.before_same_score,
         "before_split_score": outcome.before_split_score,
@@ -610,6 +665,29 @@ def build_report(
         "split": _fire_rate_block(
             split_fired, split_not_fired, split_unknown, lambda o: o.split
         ),
+    }
+
+    # Task 6/§10: 오른손 문장(`fired`)과 머리 자세(`head_fired`)가 같은 자세 문제의 두
+    # 증상이면 겹칠 것이고(둘 다 발동이 큰 몫), 서로 독립이면 head-only/right-only가
+    # 크다. 둘 다 F(전체 레퍼런스) 기준이라 같은 잣대로 조합할 수 있다. 어느 쪽이든
+    # 발동 여부를 모르면(None) 이 표에서 뺀다 — 0으로 채우지 않는다.
+    both_known = [item for item in ok if item.fired is not None and item.head_fired is not None]
+    head_only = [item for item in both_known if item.head_fired and not item.fired]
+    right_only = [item for item in both_known if item.fired and not item.head_fired]
+    both_fired = [item for item in both_known if item.fired and item.head_fired]
+    neither_fired = [item for item in both_known if not item.fired and not item.head_fired]
+    fired_overlap = {
+        "basis": "F(전체 레퍼런스) 기준 — same이 쓰는 것과 같은 발동 잣대",
+        "n_known": len(both_known),
+        "head_only": len(head_only),
+        "right_only": len(right_only),
+        "both": len(both_fired),
+        "neither": len(neither_fired),
+        "same_by_bucket": {
+            "head_only": summarize([item.same for item in head_only], THRESHOLD),
+            "right_only": summarize([item.same for item in right_only], THRESHOLD),
+            "both": summarize([item.same for item in both_fired], THRESHOLD),
+        },
     }
 
     thickness_known = [
@@ -698,6 +776,7 @@ def build_report(
         "per_layer": per_layer,
         "split_reason_counts": {_label(key): value for key, value in split_reason_counts.items()},
         "correction_fire_rate": correction_fire_rate,
+        "fired_overlap": fired_overlap,
         "ceiling": ceiling,
         "half_thickness": {
             "thin_threshold_n_min": THIN_HALF_THRESHOLD,
