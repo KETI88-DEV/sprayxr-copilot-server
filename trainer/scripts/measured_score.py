@@ -512,6 +512,13 @@ def corrections_text(
 
     `frame`은 `local_delta`가 적힌 스트로크 기저다. 기저 없이 성분을 축 이름으로 읽으면
     수직 스트로크에서 좌우 이탈이 "올리세요"로 나간다(`_correction_candidates`).
+
+    이 함수는 여전히 문장 하나만 낸다 — 반면 `apply_measured`/`issued_shifts`는
+    발부한 축 전부(오른손 다축 + 머리 자세)를 옮긴다. 이것은 의도한 설계다:
+    작업자는 산문 한 줄과 숫자 패널을 함께 받는다. 패널이 `issued_axes`/`axes_block`
+    (`pose_lab/service.py`)이 내는 `axes[]`이고, 거기 있는 축은 이 문장이 말하지
+    않아도 실제로 발부되고 시뮬레이션도 옮긴다. 그러니 "문장과 시뮬레이션이 다른
+    것을 옮긴다"처럼 보여도 고치지 말 것 — 문장은 산문, `axes[]`는 정확한 지시다.
     """
     finding = right_hand_finding(deltas, frame)
     if finding is None:
@@ -543,9 +550,13 @@ def issued_shifts(
 ) -> dict[str, Vec3]:
     """점 -> 스트로크 프레임 이동벡터. **발부한 점만 키를 갖는다.**
 
-    딕셔너리를 내는 것이 요점이다. 키가 없는 점은 `apply_measured`가 옮길 방법
-    자체가 없으므로, 지시하지 않은 이동이 개선율에 섞이는 경로가 타입에서 막힌다.
-    한 점의 여러 축은 월드에서 더한 뒤 기저로 되돌린다.
+    `dict[str, Vec3]`라는 타입 자체는 "left" 같은 임의의 키를 막지 않는다 — 이
+    딕셔너리에 발부하지 않은 점의 키가 생기지 않는 것은 이 함수의 호출부, 즉
+    `issued_axes`가 `point == "right"`/`"head"`일 때만 `AxisCorrection`을 만들고
+    그 외에는(왼손 포함) 아무것도 만들지 않기 때문이다. `apply_measured`는 이
+    딕셔너리에서 키가 없는 점을 옮길 방법 자체가 없으므로, 지시하지 않은 이동이
+    개선율에 섞이는 경로는 `issued_axes`의 이 분기가 막는다. 한 점의 여러 축은
+    월드에서 더한 뒤 기저로 되돌린다.
     """
     world: dict[str, list[float]] = {}
     for correction in issued_axes(deltas, frame):

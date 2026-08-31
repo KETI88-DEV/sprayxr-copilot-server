@@ -213,18 +213,74 @@ def test_shifts_contain_only_points_that_were_issued() -> None:
     assert set(shifts) == {"right"}
 
 
+def _shift_by_hand(
+    corrections: list[object], frame: object
+) -> tuple[float, float, float]:
+    """`issued_shifts`를 전혀 부르지 않고 같은 계산을 손으로 다시 한다.
+
+    `magnitude_cm/100 × unit`을 월드에서 직접 더한 뒤 기저 세 축과 내적한다.
+    테스트가 `issued_shifts`를 불러 기대값을 만들면 "issued_shifts가 issued_shifts와
+    일치한다"는 동어반복이 된다 — 그러면 `+=`가 `=`로 바뀌어 다축 합산 자체가
+    사라져도 아무 테스트도 실패하지 않는다(실제로 그런 일이 있었다).
+    """
+    world = [0.0, 0.0, 0.0]
+    for correction in corrections:
+        metres = correction.magnitude_cm / 100.0  # type: ignore[attr-defined]
+        for i in range(3):
+            world[i] += correction.unit[i] * metres  # type: ignore[attr-defined]
+    return tuple(
+        sum(world[i] * axis_vec[i] for i in range(3))
+        for axis_vec in (frame.normal, frame.tangent, frame.up)  # type: ignore[attr-defined]
+    )
+
+
+def test_issued_shifts_sums_multiple_axes_for_the_same_point() -> None:
+    """다축 합산이 진짜인지 고정한다.
+
+    `issued_shifts`의 `acc[i] +=`를 `acc[i] =`로 바꾸면(마지막 축이 나머지를
+    조용히 덮어씀) 이전 스위트가 전부 그대로 통과했다 — 다축 합산은 이 계획
+    전체의 존재 이유인데 그것을 지워도 아무도 모른다는 뜻이다. 이 테스트의
+    기대값은 `_shift_by_hand`로 `issued_shifts`와 독립적으로 계산한다.
+
+    두 축(wall·vertical)은 서로 직교해 절대 평행하지 않고, 둘 다 8cm 넘게
+    커서 한쪽이 없어지면 합이 눈에 띄게 달라진다 — 축이 거의 상쇄되거나 한쪽이
+    지배적이면 `=`로 바꿔도 우연히 통과할 수 있다.
+    """
+    right = _right((0.08, 0.0, -0.09), {"wall": 3.5, "vertical": 3.0, "lateral": 0.2})
+    corrections = measured_score.issued_axes([right], HORIZONTAL)
+    assert {c.axis for c in corrections} == {"wall", "vertical"}
+    assert all(abs(c.magnitude_cm) > 5.0 for c in corrections)  # 둘 다 충분히 크다
+    wall = next(c for c in corrections if c.axis == "wall")
+    vertical = next(c for c in corrections if c.axis == "vertical")
+    dot = sum(wall.unit[i] * vertical.unit[i] for i in range(3))
+    assert abs(dot) < 1e-9  # 정말로 직교한다(평행이 아니다)
+
+    expected = _shift_by_hand(corrections, HORIZONTAL)
+    got = measured_score.issued_shifts([right], HORIZONTAL)["right"]
+    for g, e in zip(got, expected):
+        assert abs(g - e) < 1e-9
+
+
 def test_apply_measured_moves_exactly_the_issued_axes_and_nothing_else() -> None:
-    """불변식. 발부한 축의 합만큼만 옮긴다."""
+    """불변식. 발부한 축의 합만큼만 옮긴다.
+
+    기대값은 `issued_shifts`를 부르지 않고 `_shift_by_hand`로 독립적으로 계산한다
+    — `apply_measured`가 `issued_shifts`와 "일치"하는지가 아니라 물리적으로 맞는
+    이동을 내는지를 봐야 하기 때문이다.
+    """
     right = _right((0.08, 0.0, -0.06), {"wall": 3.5, "vertical": 2.6, "lateral": 0.1})
     query = {
         "right": [(0.0, 0.0, 0.0)] * 3,
         "head": [(0.0, 0.0, 0.0)] * 3,
         "left": [(0.0, 0.0, 0.0)] * 3,
     }
+    corrections = measured_score.issued_axes([right], HORIZONTAL)
+    assert len(corrections) >= 1
+    expected = _shift_by_hand(corrections, HORIZONTAL)
+
     fixed = measured_score.apply_measured(query, [right], HORIZONTAL)
     assert fixed["head"] == query["head"]
     assert fixed["left"] == query["left"]
-    expected = measured_score.issued_shifts([right], HORIZONTAL)["right"]
     moved = tuple(fixed["right"][0][i] - query["right"][0][i] for i in range(3))
     for got, want in zip(moved, expected):
         assert abs(got - want) < 1e-9

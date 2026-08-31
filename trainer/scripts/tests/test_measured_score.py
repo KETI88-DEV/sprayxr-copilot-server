@@ -315,7 +315,14 @@ def test_apply_measured_never_moves_the_left_hand() -> None:
 
 
 def test_apply_measured_moves_the_head_only_along_an_issued_stance_axis() -> None:
-    """머리는 자세 문장이 나갈 때만, 그 축으로만 움직인다."""
+    """머리는 자세 문장이 나갈 때만, 그 축으로만, 말한 만큼만 움직인다.
+
+    기대값은 `issued_shifts`를 부르지 않는다 — `head_stance`가 낸 `AxisCorrection`
+    하나에서 손으로 다시 만든다: unit × magnitude_cm/100을 월드 벡터로 만들고
+    HORIZONTAL의 normal/tangent/up과 내적해 스트로크 성분으로 되돌린다.
+    `apply_measured`가 `issued_shifts`와 "일치"하는지가 아니라 물리적으로 맞는
+    이동을 내는지를 봐야 한다.
+    """
     query, reference = _three_point_case()
     before = measured_score.score_track(
         query, reference, SPREADS, measured_score.DEFAULT_WEIGHTS
@@ -325,43 +332,56 @@ def test_apply_measured_moves_the_head_only_along_an_issued_stance_axis() -> Non
     fixed = measured_score.apply_measured(query, before.deltas, HORIZONTAL)
     if stance is None:
         assert fixed["head"] == query["head"]
-    else:
-        assert stance.axis in measured_score.STANCE_AXES
-        expected = measured_score.issued_shifts(before.deltas, HORIZONTAL)["head"]
-        moved = tuple(fixed["head"][0][i] - query["head"][0][i] for i in range(3))
-        for got, want in zip(moved, expected):
-            assert abs(got - want) < 1e-9
+        return
+
+    metres = stance.magnitude_cm / 100.0
+    world = tuple(stance.unit[i] * metres for i in range(3))
+    expected = (
+        measured_score._dot(world, HORIZONTAL.normal),
+        measured_score._dot(world, HORIZONTAL.tangent),
+        measured_score._dot(world, HORIZONTAL.up),
+    )
+    moved = tuple(fixed["head"][0][i] - query["head"][0][i] for i in range(3))
+    for got, want in zip(moved, expected):
+        assert abs(got - want) < 1e-9
 
 
-def test_apply_measured_moves_only_the_component_the_sentence_names() -> None:
-    """문장이 고른 성분 하나만 옮긴다. 나머지 두 성분은 그대로다.
+def test_apply_measured_moves_every_axis_that_clears_the_threshold() -> None:
+    """다축 교정이 진짜다: sigma가 넘는 축 전부가, 그만큼만 옮겨진다.
 
-    문장은 후보 셋 중 절댓값이 가장 큰 하나만 말한다. 시뮬레이션이 세 성분을 다 옮기면
-    말하지 않은 두 축의 교정까지 개선율에 계상된다.
+    옛 이름("성분 하나만 옮긴다")은 Task 1이 이미 버린 계약을 여전히 주장하고
+    있었다. 게다가 옛 픽스처(`_three_point_case`)의 오른손은 wall 1.8 / vertical
+    2.8 / lateral 1.0으로 마침 축 하나만 임계(2.0)를 넘어서 그 주장이 다축 경로를
+    한 번도 태우지 않은 채 우연히 통과하고 있었다. 여기서는 wall·vertical 두
+    축이 실제로 넘도록 만들어 `score_track` → `right_axes` → `apply_measured`가
+    끊기지 않고 이어지는지를 본다. 기대값은 `issued_shifts`를 부르지 않고
+    `right_axes`가 낸 `AxisCorrection`들에서 손으로 다시 계산한다.
     """
-    query, reference = _three_point_case()
+    reference = {"right": [(0.30, 0.00, 0.10)] * 5}
+    query = {"right": [(0.15, -0.03, -0.03)] * 5}
     before = measured_score.score_track(
         query, reference, SPREADS, measured_score.DEFAULT_WEIGHTS
     )
-    finding = measured_score.right_hand_finding(before.deltas, HORIZONTAL)
-    assert finding is not None
+    right = next(d for d in before.deltas if d.point == "right")
+    corrections = measured_score.right_axes(right, HORIZONTAL)
+    issued = {c.axis for c in corrections}
+    assert issued == {"wall", "vertical"}  # lateral(sigma 0.6)은 임계 아래로 남는다
+
+    world = [0.0, 0.0, 0.0]
+    for c in corrections:
+        metres = c.magnitude_cm / 100.0
+        for i in range(3):
+            world[i] += c.unit[i] * metres
+    expected = (
+        measured_score._dot(tuple(world), HORIZONTAL.normal),
+        measured_score._dot(tuple(world), HORIZONTAL.tangent),
+        measured_score._dot(tuple(world), HORIZONTAL.up),
+    )
 
     fixed = measured_score.apply_measured(query, before.deltas, HORIZONTAL)
-    moved = (
-        fixed["right"][0][0] - query["right"][0][0],
-        fixed["right"][0][1] - query["right"][0][1],
-        fixed["right"][0][2] - query["right"][0][2],
-    )
-    world = measured_score._world_delta(moved, HORIZONTAL)
-
-    # HORIZONTAL은 접선이 월드 Y, up이 월드 Z, normal이 월드 X다.
-    axis_index = {"wall": 0, "lateral": 1, "vertical": 2}[finding.axis]
-    assert math.isclose(
-        world[axis_index] * 100.0, finding.magnitude_cm, abs_tol=1e-6
-    )
-    for other in range(3):
-        if other != axis_index:
-            assert math.isclose(world[other], 0.0, abs_tol=1e-9)
+    moved = tuple(fixed["right"][0][i] - query["right"][0][i] for i in range(3))
+    for got, want in zip(moved, expected):
+        assert abs(got - want) < 1e-9
 
 
 def test_apply_measured_is_never_more_generous_than_the_old_all_points_sim() -> None:
@@ -387,9 +407,18 @@ def test_apply_measured_is_never_more_generous_than_the_old_all_points_sim() -> 
 
 
 def test_apply_measured_does_nothing_when_nothing_is_issued() -> None:
-    """아무 지시도 없으면 아무것도 옮기지 않는다. 없는 지시를 개선율에 계상하지 않는다."""
+    """점들이 진짜로 어긋나 있어도, 어느 축도 임계를 넘지 않으면 아무것도 옮기지 않는다.
+
+    전부 0인 픽스처는 게이팅이 심하게 고장나도 통과한다 — 애초에 옮길 것이 없기
+    때문이다. 여기서는 세 점 모두 몇 센티미터씩 실제로 어긋나 있지만(2~4cm) 산포
+    (5cm)에 비춰 이상하지 않은 크기라 어느 축도 발부되지 않는다.
+    """
     reference = {name: [(0.30, 0.00, 0.10)] * 5 for name in ("right", "head", "left")}
-    query = {name: list(points) for name, points in reference.items()}
+    query = {
+        "right": [(0.33, 0.02, 0.13)] * 5,
+        "head": [(0.34, -0.03, 0.09)] * 5,
+        "left": [(0.27, 0.04, 0.08)] * 5,
+    }
     before = measured_score.score_track(
         query, reference, SPREADS, measured_score.DEFAULT_WEIGHTS
     )
