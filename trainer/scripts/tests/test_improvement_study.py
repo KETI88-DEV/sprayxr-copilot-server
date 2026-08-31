@@ -83,17 +83,31 @@ def test_ceiling_leaves_the_left_hand_and_the_head_lateral_untouched() -> None:
 
     왼손은 지시 대상이 아니고 머리 lateral도 아니다. 그 둘을 0으로 치면 천장이
     실제보다 높게 나오고, 미달 폭이 실제보다 작아 보인다.
+
+    왼손의 미클립 값(4.0·√3 ≈ 6.928)은 `measured_score.MAX_SIGMA`(6.0)를 넘는다 —
+    `score_track`이 절대 내지 않을 스케일이므로 `MAX_SIGMA`에서 클립된 값을 고정한다
+    (Fix round 2, F1). 클립을 빼먹으면 이 값이 6.928로 나와 이 assert가 실패한다.
     """
     sigmas = {
         "right": {"wall": 3.0, "vertical": 3.0, "lateral": 3.0},
         "head": {"wall": 2.5, "vertical": 2.5, "lateral": 2.5},
         "left": {"wall": 4.0, "vertical": 4.0, "lateral": 4.0},
     }
-    weights = {"right": 1.0, "head": 0.4, "left": 0.15}
-    residual = improvement_study.ceiling_residual_sigma(sigmas, weights)
-    assert residual["left"] == pytest.approx(4.0 * math.sqrt(3))
+    residual = improvement_study.ceiling_residual_sigma(sigmas)
+    assert residual["left"] == pytest.approx(measured_score.MAX_SIGMA)
     assert residual["head"] == pytest.approx(2.5)
     assert residual["right"] == pytest.approx(0.0)
+
+
+def test_ceiling_residual_sigma_clamps_at_the_scorers_max_sigma() -> None:
+    """`score_track`은 결합 σ를 `min(MAX_SIGMA, ·)`로 클립한다 — 천장도 같은 클립이
+    있어야, 채점기가 절대 낼 수 없는 스케일 위에 천장이 앉지 않는다.
+
+    클립이 없으면 sqrt(5²×3) ≈ 8.660이 그대로 남아 이 assert가 실패한다.
+    """
+    sigmas = {"left": {"wall": 5.0, "vertical": 5.0, "lateral": 5.0}}
+    residual = improvement_study.ceiling_residual_sigma(sigmas)
+    assert residual["left"] == pytest.approx(measured_score.MAX_SIGMA)
 
 
 def test_correctable_head_axes_match_the_scorer() -> None:

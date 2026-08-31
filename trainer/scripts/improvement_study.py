@@ -342,6 +342,11 @@ class Outcome:
     # gap_closure 최댓값. `same`이 실제로 낸 값(자기충족 상한)과 별개로, "교정이
     # 완벽했다면 얼마나 갈 수 있었는가"를 보여준다.
     ceiling: float | None
+    # Fix round 2, F2: `ceiling`과 같은 계산이지만 B(채점 레퍼런스) 기준으로 낸
+    # gap_closure 최댓값. `split`은 B 기준으로 채점되므로(before_split/after_split이
+    # 둘 다 B 스프레드로 잰다) `split_over_ceiling`은 이 값으로 나눠야 한다 —
+    # F(전체 레퍼런스) 기준 `ceiling`으로 나누면 잣대가 섞인다.
+    ceiling_split: float | None = None
     # F5(가드 공개용): F 레퍼런스 기준 before 점수(=same의 S0)와, B 레퍼런스 기준
     # before 점수(=split의 S0). eval_pose_correction.MAX_ELIGIBLE_BEFORE 가드를
     # 적용했다면 무엇이 걸러졌을지 재현하는 데만 쓴다.
@@ -360,12 +365,18 @@ CORRECTABLE: Final[dict[str, tuple[str, ...]]] = {
 
 def ceiling_residual_sigma(
     axis_sigmas: Mapping[str, Mapping[str, float]],
-    weights: Mapping[str, float],
 ) -> dict[str, float]:
     """지시 가능한 축을 전부 완벽히 따랐을 때 각 점에 남는 sigma.
 
     `CORRECTABLE`에 없는 축은 그대로 남는다. 남는 것을 0으로 치면 천장이 실제보다
     높게 나오고 미달 폭이 작아 보인다.
+
+    Fix round 2, F1: `measured_score.score_track`이 점의 결합 σ를
+    `min(MAX_SIGMA, ·)`로 클립한다(`MAX_SIGMA=6.0`, 사전등록 상수, 여기서 정의하지
+    않고 읽기만 한다). 이 잔차도 같은 클립을 적용해야 한다 — 안 하면 채점기가 절대
+    낼 수 없는 스케일(예: 7.292) 위에 천장이 앉고, "실제로 낸 것/천장"이 산술적으로
+    1.0을 넘을 수 있다. 실제로 이 표본에서 10쌍이 이 결함에 걸렸다(Fix round 1
+    보고서의 "천장을 넘는 성과"는 이 클립 누락이 원인 중 하나였다).
     """
     residual: dict[str, float] = {}
     for point, axes in axis_sigmas.items():
@@ -373,7 +384,7 @@ def ceiling_residual_sigma(
         total = sum(
             float(value) ** 2 for axis, value in axes.items() if axis not in correctable
         )
-        residual[point] = math.sqrt(total)
+        residual[point] = min(measured_score.MAX_SIGMA, math.sqrt(total))
     return residual
 
 
@@ -401,7 +412,7 @@ def _ceiling_gap_closure(measured: Mapping[str, Any]) -> float | None:
     axis_sigmas_by_point = {
         delta["point"]: delta.get("axis_sigmas") or {} for delta in deltas
     }
-    residual = ceiling_residual_sigma(axis_sigmas_by_point, weights)
+    residual = ceiling_residual_sigma(axis_sigmas_by_point)
     total_weight = sum(weights.get(point, 0.0) for point in residual)
     if total_weight <= 0.0:
         return None
@@ -435,10 +446,17 @@ def _split_details(
     다. 오른손(`finding`)만 보면 머리만 발동한 쌍이 "A도 미발동"으로 잘못 읽힌다 —
     `run_pair`의 F-기준 `fired`와 같은 결함이었다.
 
+    Fix round 2, F2: B 호출의 `measured`에도 `deltas`/`score`가 그대로 실려 있으므로
+    `_ceiling_gap_closure(b_measured)`를 그대로 재사용해 **B 기준 천장**
+    (`ceiling_split`)을 낸다. `split`은 before/after를 둘 다 B 스프레드로 재므로
+    (`service.improvement`의 독스트링), 그 천장도 F가 아니라 B 위에서 재야 잣대가
+    맞는다 — F 기준 `ceiling`으로 `split`을 나누면(Fix round 1이 그렇게 했다)
+    분자·분모가 서로 다른 레퍼런스에서 나와 비율이 1.0을 넘거나 왜곡될 수 있다.
+
     split_reason이 있으면(계산된 split이 없으면) A/B 반쪽 자체가 없으므로 빈 결과를
     낸다.
     """
-    empty: dict[str, Any] = {"a_fired": None, "before_split_score": None}
+    empty: dict[str, Any] = {"a_fired": None, "before_split_score": None, "ceiling_split": None}
     if measured.get("split_reason") is not None:
         return empty
     granularity = measured.get("granularity")
@@ -461,6 +479,7 @@ def _split_details(
 
     a_fired: bool | None = None
     before_split_score: float | None = None
+    ceiling_split: float | None = None
     if raw_a is not None:
         body_a = service.compare(source, query, reference, spreads=service._scale_spreads(raw_a))  # noqa: SLF001
         if body_a.get("status") == "ok":
@@ -469,8 +488,14 @@ def _split_details(
     if raw_b is not None:
         body_b = service.compare(source, query, reference, spreads=service._scale_spreads(raw_b))  # noqa: SLF001
         if body_b.get("status") == "ok":
-            before_split_score = body_b["measured"]["score"]
-    return {"a_fired": a_fired, "before_split_score": before_split_score}
+            b_measured = body_b["measured"]
+            before_split_score = b_measured["score"]
+            ceiling_split = _ceiling_gap_closure(b_measured)
+    return {
+        "a_fired": a_fired,
+        "before_split_score": before_split_score,
+        "ceiling_split": ceiling_split,
+    }
 
 
 def run_pair(
@@ -511,10 +536,12 @@ def run_pair(
 
     split_fired: bool | None = None
     before_split_score: float | None = None
+    ceiling_split: float | None = None
     if compute_extras:
         details = _split_details(source, reference_spreads, pair.query, pair.reference, measured)
         split_fired = details["a_fired"]
         before_split_score = details["before_split_score"]
+        ceiling_split = details["ceiling_split"]
 
     return Outcome(
         query=pair.query, reference=pair.reference, key=pair.key, status="ok", reason=None,
@@ -524,7 +551,7 @@ def run_pair(
         split_n_b=measured.get("split_n_b"), gate=measured.get("gate"),
         gate_reason=measured.get("gate_reason"), normalization=measured.get("normalization"),
         fired=fired, split_fired=split_fired, head_fired=head_fired, right_fired=right_fired,
-        ceiling=ceiling,
+        ceiling=ceiling, ceiling_split=ceiling_split,
         before_same_score=measured.get("score"), before_split_score=before_split_score,
     )
 
@@ -617,6 +644,7 @@ def _outcome_to_json(outcome: Outcome) -> dict[str, Any]:
         "head_fired": outcome.head_fired,
         "right_fired": outcome.right_fired,
         "ceiling": outcome.ceiling,
+        "ceiling_split": outcome.ceiling_split,
         "before_same_score": outcome.before_same_score,
         "before_split_score": outcome.before_split_score,
     }
@@ -688,11 +716,15 @@ def build_report(
     # F1: not_fired 버킷의 모든 값이 정확히 0.0이어야 한다 — 아무 지시도 안 나갔으면
     # `apply_measured`가 아무것도 옮기지 않으므로 before==after이고 gap_closure는
     # 0이다. 전수(표본이 아니라)를 확인하고 결과를 report에 남긴다.
-    correction_fire_rate["same"]["not_fired_all_zero"] = all(
-        item.same == 0.0 for item in same_not_fired
+    # Fix round 2, F5: 버킷이 비어 있으면(`compute_extras=False`인 민감도 실행처럼
+    # `split_fired`가 전부 None이라 `split_not_fired`가 아예 빈 경우) `all(...)`이
+    # 공허하게 `True`를 낸다 — "검증했더니 전부 0이었다"로 잘못 읽힌다. `share_fired`가
+    # 이미 쓰는 규칙과 같게, 잰 것이 없으면 `None`을 낸다.
+    correction_fire_rate["same"]["not_fired_all_zero"] = (
+        all(item.same == 0.0 for item in same_not_fired) if same_not_fired else None
     )
-    correction_fire_rate["split"]["not_fired_all_zero"] = all(
-        item.split == 0.0 for item in split_not_fired
+    correction_fire_rate["split"]["not_fired_all_zero"] = (
+        all(item.split == 0.0 for item in split_not_fired) if split_not_fired else None
     )
 
     # Task 6/§10: 오른손 문장(`right_fired`)과 머리 자세(`head_fired`)가 같은 자세
@@ -739,55 +771,59 @@ def build_report(
         "same_fired_only": summarize([item.ceiling for item in same_fired], THRESHOLD),
     }
 
-    # Fix round 1, F3: 발동한 쌍마다 "낼 수 있었던 것(ceiling) 중 실제로 낸 것
-    # (same/split)의 몫"을 잰다. 천장은 크게 올랐는데(중앙 0.706→0.833) split이 여전히
-    # 70%를 거의 못 채운다면, 문제는 "천장이 낮다"가 아니라 "발동은 했는데 그 발동이
-    # 천장의 일부만 채운다"는 것이다 — 이 몫이 head-only/right-only/both 버킷별로
-    # 고르게 낮은지, 특정 버킷에 몰려 있는지가 다음 手(축을 더 낼지, 축당 크기를 고칠지)
-    # 를 가른다. `same_fired`(F 기준, 오른손 OR 머리 — F1로 넓어진 발동 모집단) 위에서
-    # 잰다. `ceiling`이 0이면(이미 완전 일치라 메울 격차가 없음) 나눗셈이 정의되지
-    # 않으므로 그 쌍은 뺀다 — 0으로 채우지 않는다.
-    def _capturable(population: Sequence[Outcome]) -> list[Outcome]:
-        return [item for item in population if item.ceiling is not None and item.ceiling > 0.0]
+    # 발동한 쌍마다 "낼 수 있었던 것(ceiling) 중 실제로 낸 것(same/split)의 몫"을
+    # 잰다. `same_fired`(F 기준, 오른손 OR 머리 — F1로 넓어진 발동 모집단) 위에서
+    # 잰다. Fix round 2, F2: `same`은 F(전체 레퍼런스) 기준으로 채점되므로 F 기준
+    # `ceiling`으로 나누지만, `split`은 B(채점 레퍼런스) 기준으로 채점되므로
+    # (`service.improvement`가 before_split/after_split을 둘 다 B 스프레드로 잰다)
+    # 같은 B 기준으로 낸 `ceiling_split`으로 나눈다 — 분자·분모가 다른 레퍼런스에서
+    # 나오면(Fix round 1이 그렇게 했다) 비율이 산술적으로 왜곡된다. 분모가 없거나
+    # 0 이하면(메울 격차가 없거나 그 basis에서 값을 못 낸 쌍) 그 항목만 뺀다 —
+    # 0으로 채우지 않는다.
+    def _capture_values(attr: str, ceiling_attr: str, population: Sequence[Outcome]) -> list[float]:
+        values: list[float] = []
+        for item in population:
+            value = getattr(item, attr)
+            ceiling_value = getattr(item, ceiling_attr)
+            if value is None or ceiling_value is None or ceiling_value <= 0.0:
+                continue
+            values.append(value / ceiling_value)
+        return values
 
-    def _capture_ratio(attr: str, population: Sequence[Outcome]) -> dict[str, float | int | None]:
-        values = [
-            getattr(item, attr) / item.ceiling
-            for item in population
-            if getattr(item, attr) is not None
-        ]
-        return summarize(values, THRESHOLD)
+    def _capture_block(attr: str, ceiling_attr: str, population: Sequence[Outcome]) -> dict[str, Any]:
+        values = _capture_values(attr, ceiling_attr, population)
+        summary: dict[str, Any] = summarize(values, THRESHOLD)
+        # Fix round 2: 클립·basis 결함이 고쳐졌다면 이 값은 어느 버킷에서도 0이어야
+        # 한다 — "천장을 넘는 성과"가 실제로는 계산 결함이었다는 것을 재확인한다.
+        summary["n_above_one"] = sum(1 for value in values if value > 1.0)
+        return summary
 
-    capturable = _capturable(same_fired)
-    capturable_head_only = _capturable(head_only)
-    capturable_right_only = _capturable(right_only)
-    capturable_both = _capturable(both_fired)
     capture = {
         "note": (
-            "발동한(오른손 OR 머리, F 기준) 쌍마다 same/ceiling·split/ceiling — 그 쌍이 "
-            "낼 수 있었던 gap_closure 중 실제로 낸 몫. ceiling<=0인 쌍은 뺀다(나눗셈 "
-            "미정의). ≥0.70 열은 '이 쌍이 자신의 천장의 70% 이상을 실제로 회수했다'는 "
-            "뜻이지 종합 개선율의 70% 목표와는 다른 잣대다 — 참고용으로만 낸다."
+            "발동한(오른손 OR 머리, F 기준) 쌍마다 same/ceiling(F 기준)과 "
+            "split/ceiling_split(B 기준) — 그 쌍이 낼 수 있었던 gap_closure 중 실제로 "
+            "낸 몫. 분모가 없거나 0 이하인 쌍은 그 잣대에서만 뺀다(나눗셈 미정의). "
+            "≥0.70 열은 '이 쌍이 자신의 천장의 70% 이상을 실제로 회수했다'는 뜻이지 "
+            "종합 개선율의 70% 목표와는 다른 잣대다 — 참고용으로만 낸다."
         ),
         "n_fired": len(same_fired),
-        "n_capturable": len(capturable),
-        "same_over_ceiling": _capture_ratio("same", capturable),
-        "split_over_ceiling": _capture_ratio("split", capturable),
+        "same_over_ceiling": _capture_block("same", "ceiling", same_fired),
+        "split_over_ceiling": _capture_block("split", "ceiling_split", same_fired),
         "by_bucket": {
             "head_only": {
-                "n_capturable": len(capturable_head_only),
-                "same_over_ceiling": _capture_ratio("same", capturable_head_only),
-                "split_over_ceiling": _capture_ratio("split", capturable_head_only),
+                "n_fired": len(head_only),
+                "same_over_ceiling": _capture_block("same", "ceiling", head_only),
+                "split_over_ceiling": _capture_block("split", "ceiling_split", head_only),
             },
             "right_only": {
-                "n_capturable": len(capturable_right_only),
-                "same_over_ceiling": _capture_ratio("same", capturable_right_only),
-                "split_over_ceiling": _capture_ratio("split", capturable_right_only),
+                "n_fired": len(right_only),
+                "same_over_ceiling": _capture_block("same", "ceiling", right_only),
+                "split_over_ceiling": _capture_block("split", "ceiling_split", right_only),
             },
             "both": {
-                "n_capturable": len(capturable_both),
-                "same_over_ceiling": _capture_ratio("same", capturable_both),
-                "split_over_ceiling": _capture_ratio("split", capturable_both),
+                "n_fired": len(both_fired),
+                "same_over_ceiling": _capture_block("same", "ceiling", both_fired),
+                "split_over_ceiling": _capture_block("split", "ceiling_split", both_fired),
             },
         },
     }
