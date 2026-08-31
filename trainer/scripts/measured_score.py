@@ -122,6 +122,23 @@ class RightHandFinding:
     samples: int
 
 
+@dataclass(frozen=True, slots=True)
+class AxisCorrection:
+    """발부한 축 교정 하나. **이 목록에 있는 것만 시뮬레이션이 옮긴다.**
+
+    `magnitude_cm`과 `unit`이 같은 곳(`_axis_components`)에서 나오므로 문장이 말한
+    크기와 시뮬레이션이 옮기는 양이 갈라질 수 없다. `sigma`는 그 축 자신의 값이지
+    점의 결합 sigma가 아니다 — 읽는 쪽이 어느 축이 얼마나 이상한지 봐야 한다.
+    """
+
+    point: str  # "right" | "head". "left"는 절대 들어가지 않는다.
+    axis: str  # "wall" | "vertical" | "lateral"
+    magnitude_cm: float  # 부호 있음
+    direction: str  # 동사/방향어. 판정할 수 없으면 빈 문자열
+    sigma: float  # 그 축의 sigma
+    unit: Vec3  # 월드 단위벡터
+
+
 def _mean(points: Sequence[Vec3]) -> Vec3:
     count = len(points)
     return (
@@ -348,6 +365,47 @@ def _largest_correction(
     if axis_sigmas:
         return max(candidates, key=lambda candidate: axis_sigmas.get(candidate[0], 0.0))
     return max(candidates, key=lambda candidate: abs(candidate[1]))
+
+
+def right_axes(
+    delta: PointDelta, frame: AxisFrame = WORLD_FRAME
+) -> list[AxisCorrection]:
+    """오른손에서 발부할 축 전부. 점 게이트는 그대로, 축은 자기 sigma로 판정한다.
+
+    문장 축(sigma가 가장 큰 축)은 자기 축 sigma와 무관하게 **항상** 포함한다. 이것이
+    단조 보장이다 — 결합 sigma는 축별 sigma의 제곱합의 제곱근이라 "합쳐서는 임계를
+    넘지만 개별 축은 아무도 못 넘는" 경우가 실제로 있고, 그때 축별 게이트만 걸면
+    오늘 나가던 교정이 조용히 사라진다.
+
+    `axis_sigmas`가 비어 있으면(구조체를 직접 만든 옛 호출자) 축별 판정을 할 수
+    없으므로 예전처럼 문장 축 하나만 낸다.
+    """
+    if delta.sigma <= CORRECTION_SIGMA_THRESHOLD:
+        return []
+    chosen = _largest_correction(delta.local_delta, frame, delta.axis_sigmas)
+    if chosen is None:
+        return []
+    axis_sigmas = delta.axis_sigmas
+    picked: dict[str, tuple[str, float, str, Vec3]] = {chosen[0]: chosen}
+    if axis_sigmas:
+        for axis, magnitude_cm, direction, unit in _correction_candidates(
+            delta.local_delta, frame
+        ):
+            if axis_sigmas.get(axis, 0.0) > CORRECTION_SIGMA_THRESHOLD:
+                picked[axis] = (axis, magnitude_cm, direction, unit)
+    return [
+        AxisCorrection(
+            point=delta.point,
+            axis=axis,
+            magnitude_cm=magnitude_cm,
+            direction=direction,
+            sigma=float(axis_sigmas.get(axis, delta.sigma)),
+            unit=unit,
+        )
+        for axis, magnitude_cm, direction, unit in (
+            picked[name] for name in AXIS_ORDER if name in picked
+        )
+    ]
 
 
 def right_hand_finding(
