@@ -295,12 +295,12 @@ def _three_point_case() -> tuple[
     return query, reference
 
 
-def test_apply_measured_leaves_head_and_left_where_they_are() -> None:
-    """교정문은 오른손 하나만 낸다. 시뮬레이션이 머리·왼손까지 옮기면 개선율이 부푼다.
+def test_apply_measured_never_moves_the_left_hand() -> None:
+    """왼손은 어떤 경우에도 제자리다. 지시하지 않는 점이기 때문이다.
 
-    fa9c4b0이 문장을 오른손 하나로 좁혔는데 시뮬레이션은 임계를 넘은 세 점을 모두
-    옮기고 있었다. 그러면 작업자에게는 오른손만 말하고 개선율은 머리·왼손까지 고쳤을
-    때의 값을 낸다. 개선율은 goal_year2의 납품 지표라 그 차이가 계약의 뜻을 바꾼다.
+    fa9c4b0이 문장을 좁혔는데 시뮬레이션은 임계를 넘은 세 점을 모두 옮기고 있었다.
+    그러면 작업자에게 말한 것과 개선율이 재는 것이 달라진다. 다축 교정 이후에도
+    왼손만은 계속 지시 대상이 아니므로 이 단언은 그대로 성립해야 한다.
     """
     query, reference = _three_point_case()
     before = measured_score.score_track(
@@ -310,9 +310,27 @@ def test_apply_measured_leaves_head_and_left_where_they_are() -> None:
     assert min(sigmas.values()) > measured_score.CORRECTION_SIGMA_THRESHOLD
 
     fixed = measured_score.apply_measured(query, before.deltas, HORIZONTAL)
-    assert fixed["head"] == query["head"]
     assert fixed["left"] == query["left"]
     assert fixed["right"] != query["right"]
+
+
+def test_apply_measured_moves_the_head_only_along_an_issued_stance_axis() -> None:
+    """머리는 자세 문장이 나갈 때만, 그 축으로만 움직인다."""
+    query, reference = _three_point_case()
+    before = measured_score.score_track(
+        query, reference, SPREADS, measured_score.DEFAULT_WEIGHTS
+    )
+    head = next(d for d in before.deltas if d.point == "head")
+    stance = measured_score.head_stance(head, HORIZONTAL)
+    fixed = measured_score.apply_measured(query, before.deltas, HORIZONTAL)
+    if stance is None:
+        assert fixed["head"] == query["head"]
+    else:
+        assert stance.axis in measured_score.STANCE_AXES
+        expected = measured_score.issued_shifts(before.deltas, HORIZONTAL)["head"]
+        moved = tuple(fixed["head"][0][i] - query["head"][0][i] for i in range(3))
+        for got, want in zip(moved, expected):
+            assert abs(got - want) < 1e-9
 
 
 def test_apply_measured_moves_only_the_component_the_sentence_names() -> None:
@@ -368,15 +386,14 @@ def test_apply_measured_is_never_more_generous_than_the_old_all_points_sim() -> 
     assert narrow.score > before.score
 
 
-def test_apply_measured_does_nothing_when_no_sentence_is_issued() -> None:
-    """오른손이 임계 아래면 문장이 없다. 없는 지시를 개선율에 계상하지 않는다."""
+def test_apply_measured_does_nothing_when_nothing_is_issued() -> None:
+    """아무 지시도 없으면 아무것도 옮기지 않는다. 없는 지시를 개선율에 계상하지 않는다."""
     reference = {name: [(0.30, 0.00, 0.10)] * 5 for name in ("right", "head", "left")}
-    query = dict(reference)
-    query["head"] = [(0.55, 0.00, 0.10)] * 5
+    query = {name: list(points) for name, points in reference.items()}
     before = measured_score.score_track(
         query, reference, SPREADS, measured_score.DEFAULT_WEIGHTS
     )
-    assert measured_score.right_hand_finding(before.deltas, HORIZONTAL) is None
+    assert measured_score.issued_axes(before.deltas, HORIZONTAL) == []
     fixed = measured_score.apply_measured(query, before.deltas, HORIZONTAL)
     assert fixed == {name: list(points) for name, points in query.items()}
 

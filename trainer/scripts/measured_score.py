@@ -519,26 +519,49 @@ def corrections_text(
     return [_finding_phrase(finding)]
 
 
-def issued_shift(
+def issued_axes(
     deltas: Sequence[PointDelta], frame: AxisFrame = WORLD_FRAME
-) -> Vec3 | None:
-    """실제로 내준 교정 하나를 스트로크 프레임 성분으로 옮긴 이동벡터.
+) -> list[AxisCorrection]:
+    """실제로 발부하는 축 전부. sigma 내림차순.
 
-    `corrections_text`가 내는 문장과 **같은 후보**에서 나온다. 문장이 고른 축의 월드
-    단위벡터에 문장이 말한 크기를 곱하고, 그것을 기저로 되돌린다. 문장이 없으면
-    이동도 없다(None).
+    오른손은 다축, 머리는 자세 문장 하나, 왼손은 없다. 이 목록이 작업자에게 가는
+    내용과 정확히 같아야 개선율이 정직하다 — `apply_measured`가 이것만 옮긴다.
     """
-    right = next((delta for delta in deltas if delta.point == "right"), None)
-    if right is None or right.sigma <= CORRECTION_SIGMA_THRESHOLD:
-        return None
-    candidate = _largest_correction(right.local_delta, frame, right.axis_sigmas)
-    if candidate is None:
-        return None
-    _axis, magnitude_cm, _direction, unit = candidate
-    metres = magnitude_cm / 100.0
-    world: Vec3 = (unit[0] * metres, unit[1] * metres, unit[2] * metres)
+    issued: list[AxisCorrection] = []
+    for delta in deltas:
+        if delta.point == "right":
+            issued.extend(right_axes(delta, frame))
+        elif delta.point == "head":
+            stance = head_stance(delta, frame)
+            if stance is not None:
+                issued.append(stance)
+    return sorted(issued, key=lambda c: c.sigma, reverse=True)
+
+
+def issued_shifts(
+    deltas: Sequence[PointDelta], frame: AxisFrame = WORLD_FRAME
+) -> dict[str, Vec3]:
+    """점 -> 스트로크 프레임 이동벡터. **발부한 점만 키를 갖는다.**
+
+    딕셔너리를 내는 것이 요점이다. 키가 없는 점은 `apply_measured`가 옮길 방법
+    자체가 없으므로, 지시하지 않은 이동이 개선율에 섞이는 경로가 타입에서 막힌다.
+    한 점의 여러 축은 월드에서 더한 뒤 기저로 되돌린다.
+    """
+    world: dict[str, list[float]] = {}
+    for correction in issued_axes(deltas, frame):
+        metres = correction.magnitude_cm / 100.0
+        acc = world.setdefault(correction.point, [0.0, 0.0, 0.0])
+        for i in range(3):
+            acc[i] += correction.unit[i] * metres
     # 기저가 정규직교라 각 축과의 내적이 곧 그 축의 성분이다.
-    return (_dot(world, frame.normal), _dot(world, frame.tangent), _dot(world, frame.up))
+    return {
+        point: (
+            _dot((v[0], v[1], v[2]), frame.normal),
+            _dot((v[0], v[1], v[2]), frame.tangent),
+            _dot((v[0], v[1], v[2]), frame.up),
+        )
+        for point, v in world.items()
+    }
 
 
 def apply_measured(
@@ -550,21 +573,20 @@ def apply_measured(
     """교정을 따랐을 때의 궤적. **내준 지시 그대로**만 옮긴다.
 
     개선율은 goal_year2의 납품 지표이고 그 정의는 "교정 알고리즘의 출력을 적용한 뒤의
-    유사도 상승"이다. 그래서 시뮬레이션은 출력과 같아야 한다. `corrections_text`는
-    fa9c4b0 이후 오른손 하나에 대해 가장 큰 이탈 성분 하나만 문장으로 내므로 여기서도
-    오른손 하나를, 그 성분 하나만 옮긴다.
+    유사도 상승"이다. 그래서 시뮬레이션은 출력과 같아야 한다.
 
-    머리·왼손은 σ가 임계를 넘어도 제자리다. 지시하지 않은 이동을 개선율에 계상하면
-    작업자에게 말한 것과 보고하는 숫자가 달라진다 — 오른손만 고치라고 하고, 머리와
-    왼손까지 고쳤을 때의 향상을 내걸게 된다. 문장이 좁아진 만큼 이 숫자도 작아지고
-    그것이 맞다.
+    `issued_axes`가 낸 축만, 그만큼만 옮긴다. 왼손은 어떤 경우에도 제자리다 —
+    지시하지 않은 이동을 개선율에 계상하면 작업자에게 말한 것과 보고하는 숫자가
+    달라진다. 이 함수가 `issued_shifts`의 딕셔너리를 쓰는 이유가 그것이다:
+    키가 없는 점은 옮길 방법 자체가 없다.
 
     못 잰 격자점은 옮기지 않는다. 자리를 지우면 s 대응이 어긋난다.
     """
-    shift = issued_shift(deltas, frame)
+    shifts = issued_shifts(deltas, frame)
     output: dict[str, list[Vec3 | None]] = {}
     for name, points in query.items():
-        if shift is None or name != "right":
+        shift = shifts.get(name)
+        if shift is None:
             output[name] = list(points)
             continue
         output[name] = [

@@ -174,3 +174,60 @@ def test_stance_text_never_claims_a_posture_we_cannot_observe() -> None:
         stance = measured_score.head_stance(_head(world, sigmas), HORIZONTAL)
         assert stance is not None
         assert "앉아" not in measured_score.stance_text(stance)
+
+
+def test_issued_axes_are_sorted_by_sigma_descending() -> None:
+    """읽는 사람이 위에서부터 심각한 순으로 본다."""
+    right = _right((0.08, 0.05, -0.06), {"wall": 2.2, "vertical": 3.9, "lateral": 2.6})
+    head = _head((0.18, 0.0, 0.0), {"wall": 3.4, "vertical": 0.2, "lateral": 0.1})
+    issued = measured_score.issued_axes([right, head], HORIZONTAL)
+    sigmas = [c.sigma for c in issued]
+    assert sigmas == sorted(sigmas, reverse=True)
+
+
+def test_left_hand_is_never_issued() -> None:
+    """왼손은 채점에만 남는다. 작업 결과와의 인과가 약하다."""
+    left = measured_score.PointDelta(
+        point="left",
+        sigma=5.0,
+        local_delta=_local(HORIZONTAL, (0.30, 0.30, 0.30)),
+        samples=30,
+        axis_sigmas={"wall": 5.0, "vertical": 5.0, "lateral": 5.0},
+    )
+    assert measured_score.issued_axes([left], HORIZONTAL) == []
+    assert measured_score.issued_shifts([left], HORIZONTAL) == {}
+
+
+def test_shifts_contain_only_points_that_were_issued() -> None:
+    """지시하지 않은 점은 키가 없다. 없으면 apply_measured가 옮길 방법이 없다."""
+    right = _right((0.08, 0.0, 0.0), {"wall": 3.5, "vertical": 0.1, "lateral": 0.1})
+    quiet_head = _head((0.0, 0.0, -0.01), {"wall": 0.1, "vertical": 0.1, "lateral": 0.1})
+    shifts = measured_score.issued_shifts([right, quiet_head], HORIZONTAL)
+    assert set(shifts) == {"right"}
+
+
+def test_apply_measured_moves_exactly_the_issued_axes_and_nothing_else() -> None:
+    """불변식. 발부한 축의 합만큼만 옮긴다."""
+    right = _right((0.08, 0.0, -0.06), {"wall": 3.5, "vertical": 2.6, "lateral": 0.1})
+    query = {
+        "right": [(0.0, 0.0, 0.0)] * 3,
+        "head": [(0.0, 0.0, 0.0)] * 3,
+        "left": [(0.0, 0.0, 0.0)] * 3,
+    }
+    fixed = measured_score.apply_measured(query, [right], HORIZONTAL)
+    assert fixed["head"] == query["head"]
+    assert fixed["left"] == query["left"]
+    expected = measured_score.issued_shifts([right], HORIZONTAL)["right"]
+    moved = tuple(fixed["right"][0][i] - query["right"][0][i] for i in range(3))
+    for got, want in zip(moved, expected):
+        assert abs(got - want) < 1e-9
+
+
+def test_head_moves_only_when_a_stance_sentence_was_issued() -> None:
+    """자세 문장이 나가면 머리도 옮긴다 — 말한 만큼만."""
+    head = _head((0.18, 0.0, 0.0), {"wall": 3.4, "vertical": 0.2, "lateral": 0.1})
+    query = {name: [(0.0, 0.0, 0.0)] * 3 for name in ("right", "head", "left")}
+    fixed = measured_score.apply_measured(query, [head], HORIZONTAL)
+    assert fixed["head"] != query["head"]
+    assert fixed["left"] == query["left"]
+    assert fixed["right"] == query["right"]
