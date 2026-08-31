@@ -294,3 +294,35 @@ def test_head_moves_only_when_a_stance_sentence_was_issued() -> None:
     assert fixed["head"] != query["head"]
     assert fixed["left"] == query["left"]
     assert fixed["right"] == query["right"]
+
+
+def test_inclusion_rule_is_governed_by_the_pre_registered_constants(monkeypatch) -> None:
+    """포함 규칙이 사전등록 상수를 **실제로** 참조하는지 고정한다.
+
+    스펙 §5는 임계를 움직이지 않겠다고 약속하는데, 그 약속은 상수가 동작을 지배할
+    때만 뜻이 있다. 최종 리뷰가 MIN_CORRECTION_CM을 1.0에서 4.0으로 바꿔도 스위트가
+    전부 통과함을 확인했다 — 즉 약속을 지키는지 감시하는 장치가 없었다. 여기서
+    두 상수를 각각 움직여 발부 집합이 따라 움직이는 것을 확인한다. 리터럴을 새로
+    박으면 이 테스트가 깨진다.
+    """
+    # 점 sigma를 축 sigma들보다 높게 둔다. 그래야 임계를 올렸을 때 점 게이트가 먼저
+    # 닫혀 축 게이트를 못 보는 일이 없다 — 처음 쓴 픽스처(점 sigma 3.0)가 정확히
+    # 그랬고, 이 테스트가 그것을 잡아냈다.
+    delta = measured_score.PointDelta(
+        point="right",
+        sigma=5.0,
+        local_delta=_local(HORIZONTAL, (0.08, 0.025, 0.0)),  # wall 8cm, lateral 2.5cm
+        samples=30,
+        axis_sigmas={"wall": 3.5, "vertical": 0.1, "lateral": 3.0},
+    )
+    assert {c.axis for c in measured_score.right_axes(delta, HORIZONTAL)} == {"wall", "lateral"}
+
+    # 최소 cm를 올리면 2.5cm짜리 lateral이 빠져야 한다.
+    monkeypatch.setattr(measured_score, "MIN_CORRECTION_CM", 4.0)
+    assert {c.axis for c in measured_score.right_axes(delta, HORIZONTAL)} == {"wall"}
+    monkeypatch.undo()
+
+    # sigma 임계를 lateral(3.0)과 wall(3.5) 사이에 두면 lateral만 빠져야 한다.
+    # 점 sigma가 5.0이라 점 게이트는 열린 채다.
+    monkeypatch.setattr(measured_score, "CORRECTION_SIGMA_THRESHOLD", 3.2)
+    assert {c.axis for c in measured_score.right_axes(delta, HORIZONTAL)} == {"wall"}
