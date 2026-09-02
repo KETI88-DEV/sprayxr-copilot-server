@@ -112,3 +112,44 @@ def test_frame_around_fallback_moves_with_up_index() -> None:
         assert frame.up == (1.0, 0.0, 0.0)
     finally:
         world_axes.UP_INDEX = original
+
+
+def test_every_module_follows_the_convention_not_a_literal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """UP_INDEX를 바꾸면 네 소비 모듈의 출력이 **전부** 따라 움직여야 한다.
+
+    `world_axes`는 `UP`과 `HORIZONTAL_INDICES`를 모듈 `__getattr__`로 `UP_INDEX`
+    하나에서 매번 다시 계산한다(PEP 562) — 그래서 손잡이는 `UP_INDEX` 단 하나다.
+    이 테스트는 그 손잡이 하나만 돌려서 네 모듈(`measured_score`, `stroke_frame`,
+    `measured_pose`, `motion_key`)이 전부 반응하는지 본다.
+
+    입력은 세 축 모두에 0이 아닌 뚜렷한 성분을 갖도록 골랐고, Y-up과 Z-up이 실제로
+    다른 답을 낸다는 것을 이 파일을 쓰면서 직접 실행해 확인했다 — 우연히 같은 답이
+    나오는 벡터를 썼다면 이 테스트는 아무것도 증명하지 않으면서 통과했을 것이다.
+
+    하나라도 안 움직이면 그 모듈이 리터럴을 다시 박았거나 임포트 시점에 값을
+    복사한 것이다. 그 상태는 지금 우연히 옳은 답을 낼 수 있어서 눈으로는 안 보인다.
+    """
+    measured_score = importlib.import_module("measured_score")
+    stroke_frame = importlib.import_module("stroke_frame")
+    measured_pose = importlib.import_module("measured_pose")
+    motion_key = importlib.import_module("motion_key")
+
+    def sample() -> dict[str, object]:
+        basis = stroke_frame.stroke_basis(
+            hit=(1.2, 4.5, 0.8), tangent=(0.6, 0.0, 0.8), gun=(0.6, 4.9, -0.3)
+        )
+        return {
+            "axis": measured_score._axis_components((0.11, -0.04, 0.07), basis),
+            "basis": (basis.normal, basis.tangent, basis.up),
+            "yaw": measured_pose.facing_yaw((17.0, 32.0, -11.0)),
+            "heading": motion_key.heading_word(0.3, (0.4, -0.6, 0.5)),
+        }
+
+    before = sample()
+    monkeypatch.setattr(world_axes, "UP_INDEX", 2)  # 유일한 손잡이만 돌린다.
+    after = sample()
+
+    stuck = [k for k in before if before[k] == after[k]]
+    assert not stuck, f"규약을 따르지 않는 항목: {stuck}"
