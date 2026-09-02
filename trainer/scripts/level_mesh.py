@@ -540,6 +540,7 @@ def place(mesh: Mesh, alignment: Alignment) -> Mesh:
         triangles=mesh.triangles,
         uvs=mesh.uvs,
         declared=mesh.declared,
+        uv_indices=mesh.uv_indices,
     )
 
 
@@ -992,6 +993,82 @@ def _linreg(xs: Sequence[float], ys: Sequence[float]) -> tuple[float, float, flo
     return slope, intercept, 1.0 - ss_res / syy
 
 
+def _uv_pairs_for_dominant_face(
+    mesh: Mesh,
+    points: Sequence[Vec3],
+    point_uvs: Sequence[tuple[float, float]],
+    triangle_indices: Sequence[int],
+    world_tris: Sequence[tuple[Vec3, Vec3, Vec3]],
+    dominant_sign: float,
+    face_sign_by_triangle: Sequence[float],
+) -> list[tuple[tuple[float, float], tuple[float, float]]]:
+    """큰 면(`dominant_sign`)에 대응된 점만 골라 (메시 UV, 관측 UV) 쌍을 낸다.
+
+    작은 옆면(테두리) 삼각형에 붙은 점은 뺀다 — 서로 무관한 UV를 실어 순수 이상치로
+    작용한다(리뷰 B2: 5.16%가 옆면). `_uv_agreement`(내부, `solve_alignment`의 후보
+    평가에서 씀)와 공개 `uv_pairs_on_dominant_face`(리뷰 D2, 다음 태스크의 메시
+    앵커가 씀) 둘 다 이 함수 하나로 계산한다 — 따로 베끼면 정렬 레코드와 앵커가
+    서로 다른 걸 재는 사태가 생긴다.
+    """
+    pairs: list[tuple[tuple[float, float], tuple[float, float]]] = []
+    for p, uv, ti in zip(points, point_uvs, triangle_indices):
+        if face_sign_by_triangle[ti] != dominant_sign:
+            continue
+        if ti >= len(mesh.uv_indices):
+            continue
+        aw, bw, cw = world_tris[ti]
+        cp = _closest_point_on_triangle(p, aw, bw, cw)
+        bary = _barycentric(cp, aw, bw, cw)
+        pairs.append((triangle_uv(mesh, ti, bary), uv))
+    return pairs
+
+
+def uv_regression(
+    pairs: Sequence[tuple[tuple[float, float], tuple[float, float]]], axis: int
+) -> tuple[float, float]:
+    """`uv_pairs_on_dominant_face`가 낸 (메시 UV, 관측 UV) 쌍에서 한 축의 (기울기, R²).
+
+    `axis`: 0이면 U, 1이면 V. 표본이 2개 미만이면 `(0.0, 0.0)` — 기울기를 지어내지
+    않는다(`_linreg`와 같은 규칙).
+    """
+    if len(pairs) < 2:
+        return 0.0, 0.0
+    mesh_vals = [pair[0][axis] for pair in pairs]
+    obs_vals = [pair[1][axis] for pair in pairs]
+    slope, _intercept, r2 = _linreg(mesh_vals, obs_vals)
+    return slope, r2
+
+
+def uv_pairs_on_dominant_face(
+    placed_mesh: Mesh, hits: Sequence[tuple[Vec3, tuple[float, float]]]
+) -> list[tuple[tuple[float, float], tuple[float, float]]]:
+    """리뷰 D2: 다음 태스크의 메시 앵커가 쓰는 공개 진입점.
+
+    `placed_mesh`는 `place()`를 거친(이미 세계 좌표인) 메시다. `hits`는
+    (착탄점, 관측 UV) 쌍의 나열이다. 각 착탄점의 최근접 삼각형이 큰 면(다수결로
+    정해지는 `dominant_sign`)에 속하는 것만 골라 (메시 UV, 관측 UV) 쌍을 낸다 —
+    옆벽(테두리, 약 5%)에 붙은 착탄점은 빠진다.
+
+    `solve_alignment`이 정렬을 고를 때 쓰는 `_uv_agreement`와 **같은 계산**
+    (`_uv_pairs_for_dominant_face`)을 쓴다 — 따로 다시 짜면 정렬 레코드에 적힌
+    숫자와 앵커가 재는 숫자가 서로 다른 걸 재는 사태가 생긴다.
+    """
+    if not placed_mesh.triangles or not hits:
+        return []
+    thin_axis = _thin_axis_index(placed_mesh.vertices)
+    face_sign_by_triangle = _face_sign_by_triangle(
+        placed_mesh.vertices, placed_mesh.triangles, thin_axis
+    )
+    world_tris = _world_triangles(placed_mesh)
+    points = [h[0] for h in hits]
+    point_uvs = [h[1] for h in hits]
+    triangle_indices = [_nearest_on_mesh(p, world_tris)[2] for p in points]
+    dominant_sign, _dominant_fraction = _dominant_face(face_sign_by_triangle, triangle_indices)
+    return _uv_pairs_for_dominant_face(
+        placed_mesh, points, point_uvs, triangle_indices, world_tris, dominant_sign, face_sign_by_triangle
+    )
+
+
 def _uv_agreement(
     mesh: Mesh,
     points: Sequence[Vec3],
@@ -1001,40 +1078,18 @@ def _uv_agreement(
     dominant_sign: float,
     face_sign_by_triangle: Sequence[float],
 ) -> dict[str, float]:
-    """B2: 큰 면(`dominant_sign`)에 대응된 점만 골라, 메시 UV를 CSV UV에 회귀한다.
-
-    작은 옆면(테두리) 삼각형에 붙은 점은 뺀다 — 서로 무관한 UV를 실어 순수 이상치로
-    작용한다(리뷰: 5.16%가 옆면). 반환 딕셔너리는 그대로 `Alignment.fit`에 들어간다.
+    """`solve_alignment`의 후보 평가에서 쓴다 — 대응(`triangle_indices`/`world_tris`)이
+    이미 ICP 루프에서 계산돼 있으므로 다시 최근접 탐색을 하지 않는다
+    (`uv_pairs_on_dominant_face`는 이 대응이 없어 매번 새로 찾는다). 반환 딕셔너리는
+    그대로 `Alignment.fit`에 들어간다.
     """
-    pred_u: list[float] = []
-    pred_v: list[float] = []
-    obs_u: list[float] = []
-    obs_v: list[float] = []
-    for p, uv, ti in zip(points, point_uvs, triangle_indices):
-        if face_sign_by_triangle[ti] != dominant_sign:
-            continue
-        if ti >= len(mesh.uv_indices):
-            continue
-        aw, bw, cw = world_tris[ti]
-        cp = _closest_point_on_triangle(p, aw, bw, cw)
-        bary = _barycentric(cp, aw, bw, cw)
-        pu, pv = triangle_uv(mesh, ti, bary)
-        pred_u.append(pu)
-        pred_v.append(pv)
-        obs_u.append(uv[0])
-        obs_v.append(uv[1])
-    if len(pred_u) < 2:
-        return {
-            "uv_n": float(len(pred_u)),
-            "uv_slope_u": 0.0,
-            "uv_r2_u": 0.0,
-            "uv_slope_v": 0.0,
-            "uv_r2_v": 0.0,
-        }
-    slope_u, _int_u, r2_u = _linreg(pred_u, obs_u)
-    slope_v, _int_v, r2_v = _linreg(pred_v, obs_v)
+    pairs = _uv_pairs_for_dominant_face(
+        mesh, points, point_uvs, triangle_indices, world_tris, dominant_sign, face_sign_by_triangle
+    )
+    slope_u, r2_u = uv_regression(pairs, 0)
+    slope_v, r2_v = uv_regression(pairs, 1)
     return {
-        "uv_n": float(len(pred_u)),
+        "uv_n": float(len(pairs)),
         "uv_slope_u": slope_u,
         "uv_r2_u": r2_u,
         "uv_slope_v": slope_v,
@@ -1059,15 +1114,37 @@ def _fit_stats(distances_m: Sequence[float]) -> dict[str, float]:
 
 DEFAULT_MIN_DOMINANT_FRACTION: Final = 0.9
 
-# 리뷰 C2: 얇은 축 둘레 180도 회전으로 관계된 두 orientation이 거리로도, UV R²로도
-# 갈리지 않는다 — 둘 다 median/p95/max ~0mm, UV R² 0.9999+를 낸다(직접 재현·확인).
-# 대수적으로 확인했다: "예측 UV가 월드 좌표와 CSV 관측 UV와 같은 방향으로
-# 움직이는가"는 "회귀 기울기(관측 vs 예측)가 양수인가"와 **완전히 같은 정보**다
-# (obs=k1*w+c1, pred=k2*w+c2이면 slope(obs|pred)=k1/k2이므로 부호가 같다는 것과
-# 기울기가 양수라는 것은 동치) — 그래서 순수 선형 상관으로는 이 둘을 원리적으로
-# 못 가른다. 실측 검증에서 "좋은 맞춤"의 기울기가 두 축 모두 음수(-2047.85 근방)로
-# 확인됐다 — 이 상수가 그 기준점이다. 부호는 이 상수로 고정하고, 그 부호를 만족하는
-# 후보들 중에서만 이후 단계(면 쏠림·R²)로 고른다.
+# 리뷰 C2/D1: 얇은 축 둘레 180도 회전(Rx180, `EXPECTED_UV_SLOPE`가 가르는 대칭)으로
+# 관계된 두 orientation이 거리로도, UV R²로도 갈리지 않는다 — 둘 다 median/p95/max
+# ~0mm, UV R² 0.9999+를 낸다(직접 재현·확인). 대수적으로 확인했다: "예측 UV가 월드
+# 좌표와 CSV 관측 UV와 같은 방향으로 움직이는가"는 "회귀 기울기(관측 vs 예측)가
+# 양수인가"와 **완전히 같은 정보**다(obs=k1*w+c1, pred=k2*w+c2이면
+# slope(obs|pred)=k1/k2이므로 부호가 같다는 것과 기울기가 양수라는 것은 동치) —
+# 그래서 순수 선형 상관으로는 Rx180의 두 orientation을 원리적으로 못 가른다.
+#
+# **이 상수의 값은 측정이 아니라 고른 가지(branch)다 — 그 이유를 정확히 적는다.**
+# 처음에 이 주석은 "실측 검증에서 좋은 맞춤의 기울기가 두 축 다 음수(-2047.85
+# 근방)로 확인됐다"고 -2048을 근거로 삼았는데, 그 인용이 오독이었다(리뷰가 잡음):
+# 실제 출처(`task-4-review.md` 24–26행)는 U −2047.85, **V +2047.85**로 **부호가
+# 섞여** 있다. 이 저장소의 첫 커밋(`ed71ce2`)의 실제 회전을 지금 코드로 다시
+# 재보면 그 섞인 값이 정확히 재현된다(U −2047.4, V +2047.8) — 그건 지금은 대체된
+# 그 커밋의 진짜 기하다, 측정 오류가 아니다. 그리고 그 섞인 부호는 Rx180 하나만으로는
+# 안 나온다 — Rx180은 두 기울기를 **함께** 뒤집는다. 직접 재현해 확인했다: 후보군
+# 안에는 Rx180 대칭(둘 다 같은 부호로 뒤집힘, `(+,+)`↔`(-,-)`) 말고 **또 다른**
+# 180도 대칭(하나만 뒤집힘, `(-,+)`↔`(+,-)`, `ed71ce2`가 여기 속한다)이 있다 —
+# 판 법선이 아닌 판 안의 축 둘레 180도 회전에서 온다. 그래서 실제로는 최소
+# 네 갈래(부호 조합 `++`/`--`/`-+`/`+-`)가 거리·R²로는 똑같이 좋다.
+#
+# 이 상수가 실제로 하는 일은: 네 갈래 중 **어느 것을 기록할지 정하는 것**이다.
+# 근거는 두 가지뿐이다 — (1) 15/15 시드(본 구현 12개 + 재검토자가 늘린 3개)가
+# 전부 이 갈래(두 축 다 음수)로 수렴했다, (2) 부호가 섞인 갈래는 (1,-1) 부호
+# 조합이 Rx180 하나로는 설명이 안 되므로 물리적으로 있음직하지 않다(옆에서 봤을
+# 때 U만 뒤집히고 V는 안 뒤집히는 단일 강체 회전은 판 법선 둘레가 아닌 축 둘레
+# 회전이라 착탄 평면 자체를 깨야 한다). **이 값은 유도된 게 아니다** — 데이터만
+# 으로는 두 갈래(`++` 대 `--`)를 가를 방법이 없다는 것을 이미 대수적으로 보였다.
+# 외부 근거(예: Unity 씬/프리팹 파일)가 나오면 반대 갈래가 실제였다고 밝혀질 수
+# 있고, 그러면 이 상수는 부호를 바꿔야 한다 — 지금은 그 경우에도 "조용히 틀린
+# 채로 있는" 대신 "흔들리면 보이는" 상태를 만드는 것이 이 상수의 역할이다.
 UV_ATLAS_TEXELS: Final = 2048.0
 EXPECTED_UV_SLOPE: Final = -UV_ATLAS_TEXELS
 MIN_UV_R2_FOR_SIGN_CHECK: Final = 0.9
@@ -1106,15 +1183,20 @@ def solve_alignment(
     잘못된 면으로 수렴한다(회전·평행이동·기록되는 max_mm이 실행마다 흔들리는데,
     유일하게 안정된 건 스케일뿐이었다).
 
-    **UV R²도 한 겹 더 있는 대칭을 못 가른다(리뷰 C2).** 한쪽 면으로 수렴한 뒤에도,
-    그 면 안에서 얇은 축 둘레 180° 회전으로 관계된 두 orientation이 남는다 — 부호만
-    다르고 크기·R²는 똑같다(직접 재현: 두 orientation 다 UV R² 0.9999+, 기울기
-    크기 ~2048). `abs(slope)`나 R²는 부호를 안 보므로 이 둘을 못 가른다. 그래서
+    **UV R²도 한 겹 더 있는 대칭을 못 가른다(리뷰 C2/D1).** 한쪽 면으로 수렴한
+    뒤에도, 그 면 안에 최소 네 갈래(부호 조합 `++`/`--`/`-+`/`+-`)가 남는다 — 크기·
+    R²는 다 똑같다(직접 재현: 넷 다 UV R² 0.9999+, 기울기 크기 ~2048). 둘은 얇은
+    축(판 법선) 둘레 180° 회전(Rx180)으로 관계되어 두 기울기가 함께 뒤집히고
+    (`++`↔`--`), 다른 둘은 판 안의 축 둘레 180° 회전에서 와서 하나만 뒤집힌다
+    (`-+`↔`+-`) — 첫 커밋(`ed71ce2`)이 실제로 이 후자 쪽이었다(`EXPECTED_UV_SLOPE`
+    독스트링 참고). `abs(slope)`나 R²는 부호를 안 보므로 넷 다 못 가른다. 그래서
     세 단계로 고른다: (1) 대응이 한쪽 면에 `min_dominant_fraction` 이상 쏠린
     후보만 남긴다(면 대칭 함정을 못 벗어난 후보를 거른다), (2) R²가 충분히 높은
-    (`MIN_UV_R2_FOR_SIGN_CHECK` 이상) 후보 중에서 기울기 부호까지 `EXPECTED_UV_SLOPE`
-    (실측으로 확인한 "좋은 맞춤"의 부호)에 가장 가까운 것을 고른다 — 이게 얇은 축
-    180° 대칭을 가른다. (2)를 만족하는 후보가 없으면 R²가 가장 높은 것으로 물러선다.
+    (`MIN_UV_R2_FOR_SIGN_CHECK` 이상) 후보 중에서 두 기울기 다 `EXPECTED_UV_SLOPE`
+    에 가장 가까운 것을 고른다 — 이게 네 갈래 중 하나를 결정적으로 고른다(다른
+    셋은 두 축 중 최소 하나가 목표에서 ~4096 떨어져 있어 절대 안 뽑힌다).
+    `EXPECTED_UV_SLOPE`는 **측정값이 아니라 고정한 가지**다 — 그 상수의 독스트링에
+    이유가 있다. (2)를 만족하는 후보가 없으면 R²가 가장 높은 것으로 물러선다.
 
     선택된 면·UV 회귀 결과는 `Alignment.fit`에 `face_sign`/`dominant_face_fraction`/
     `uv_slope_u`/`uv_r2_u`/`uv_slope_v`/`uv_r2_v`/`uv_n`으로 남는다(리뷰 B2) — 다음

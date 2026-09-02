@@ -65,9 +65,10 @@ def test_place_moves_vertices_by_the_alignment() -> None:
     """
     mesh = level_mesh.Mesh(
         vertices=[(1.0, 0.0, 0.0)],
-        triangles=[],
+        triangles=[(0, 0, 0)],
         uvs=[(0.1, 0.2)],
         declared={"marker": True},
+        uv_indices=[(0, 0, 0)],
     )
     rotate_90_about_z = (0.0, -1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0)
     alignment = level_mesh.Alignment(
@@ -85,6 +86,9 @@ def test_place_moves_vertices_by_the_alignment() -> None:
     assert placed.vertices[0] == pytest.approx((5.0, 8.0, 7.0))
     assert placed.uvs == mesh.uvs
     assert placed.declared == mesh.declared
+    # 리뷰 D2에서 드러난 버그: place()가 uv_indices를 안 옮겼었다 — 옮긴 메시로
+    # uv_pairs_on_dominant_face를 부르면 항상 빈 목록이 나왔다(직접 재현·확인).
+    assert placed.uv_indices == mesh.uv_indices
 
 
 # =============================================================================
@@ -185,6 +189,39 @@ def test_triangle_uv_refuses_a_mesh_without_uv_indices() -> None:
     mesh = level_mesh.Mesh(vertices=[(0.0, 0.0, 0.0)], triangles=[(0, 0, 0)], uvs=[], declared={})
     with pytest.raises(ValueError):
         level_mesh.triangle_uv(mesh, 0, (1.0, 0.0, 0.0))
+
+
+def test_uv_pairs_on_dominant_face_matches_the_committed_fit() -> None:
+    """리뷰 D2: 다음 태스크의 메시 앵커가 쓸 공개 진입점.
+
+    `_uv_agreement`(`solve_alignment`이 정렬을 고를 때 씀)와 같은 계산
+    (`_uv_pairs_for_dominant_face`)을 쓴다 — 독립적으로 다시 짠 게 아니라는 것을
+    커밋된 `fit` 값과 가까운 결과가 나오는지로 확인한다(표본이 달라 완전히
+    같지는 않다: `solve_alignment`은 무작위 15000개 부분표본을, 여기서는 처음
+    15000개를 쓴다).
+    """
+    a = level_mesh.load_alignment(1)
+    placed = level_mesh.place(level_mesh.read_fbx(LEVEL1_FBX), a)
+    hits, hit_uvs = level_mesh._collect_level_hits(1, min_hits=15000)
+    pairs = level_mesh.uv_pairs_on_dominant_face(placed, list(zip(hits[:15000], hit_uvs[:15000])))
+
+    assert len(pairs) > 14000  # 옆벽 ~5%를 뺀 나머지 대부분
+
+    slope_u, r2_u = level_mesh.uv_regression(pairs, 0)
+    slope_v, r2_v = level_mesh.uv_regression(pairs, 1)
+    assert slope_u == pytest.approx(a.fit["uv_slope_u"], abs=1.0)
+    assert slope_v == pytest.approx(a.fit["uv_slope_v"], abs=1.0)
+    assert r2_u == pytest.approx(a.fit["uv_r2_u"], abs=1e-4)
+    assert r2_v == pytest.approx(a.fit["uv_r2_v"], abs=1e-4)
+    # C2에서 고정한 부호(EXPECTED_UV_SLOPE)와도 맞아야 한다 — 앵커가 이 상수로 비교한다.
+    assert slope_u == pytest.approx(level_mesh.EXPECTED_UV_SLOPE, abs=5.0)
+    assert slope_v == pytest.approx(level_mesh.EXPECTED_UV_SLOPE, abs=5.0)
+
+
+def test_uv_regression_needs_at_least_two_pairs() -> None:
+    """B2 계열: 기울기를 지어내지 않는다 — `_linreg`와 같은 규칙."""
+    assert level_mesh.uv_regression([], 0) == (0.0, 0.0)
+    assert level_mesh.uv_regression([((0.1, 0.2), (100.0, 200.0))], 0) == (0.0, 0.0)
 
 
 # =============================================================================
