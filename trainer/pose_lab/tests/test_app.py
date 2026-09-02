@@ -37,6 +37,17 @@ def _rows(
     `world_axes.horizontal_of`가 아예 읽지 않는 축이라 이 값이 몸 기준 좌우·근원
     판정(motion_key)에 새지 않는다 — 옛 설계 의도(오른손/머리 sigma만 벌리고 동작
     키는 건드리지 않는다)를 그대로 지킨다.
+
+    `step`(벽을 따라가는 진행)과 `rise`(오르내림, `descending`이 부호를 정한다)도
+    마찬가지로 옛 Z-up 자리에 그대로 있었다(리뷰 A5) — `step`이 Y(이제 수직)에,
+    `rise`가 Z(이제 수평)에 실려 있어 착탄점 궤적이 실제로는 거의 수직으로
+    솟구치고 `descending`은 수평 성분의 부호만 바꿨다. Y·Z를 맞바꿔 `rise`를
+    Y(수직 — 오르내림이 진짜 오르내림이 되게)에, `step`을 Z(수평 — 벽을 따라가는
+    진행)에 싣는다. `head`/`gun`/`flash`의 Y도 더는 `step`을 따라가지 않는다 —
+    `4.2 + step + shift`(사람 키가 4~5m가 되던 값, 리뷰 A5)를 `0.8/0.65/0.79 +
+    shift`(사람 크기의 고정 높이)로 바꾸고, 대신 Z에 `4.2 + step`을 실어 착탄점의
+    수평 진행을 따라가게 한다(머리·오른손이 스트로크를 따라간다는 원래 의도는
+    유지된다).
     """
     rows: list[dict[str, str]] = []
     for i in range(30):
@@ -47,12 +58,12 @@ def _rows(
             "시간(초)": f"{i * 0.0111:.4f}",
             "분사": "On",
             "Ray point X": "1.26",
-            " Ray Point Y": str(4.2 + step),
-            " Ray Point Z": str(0.7 + rise),
+            " Ray Point Y": str(0.7 + rise),
+            " Ray Point Z": str(4.2 + step),
             "Ray Texture UV X": "1024",
             "Ray Texture UV Y": "512",
         }
-        for axis, value in zip("XYZ", (0.5, 4.2 + step + shift, 0.8)):
+        for axis, value in zip("XYZ", (0.5, 0.8 + shift, 4.2 + step)):
             row[f"카메라 Position {axis}"] = str(value)
         # 실측 요를 태우는 HMD 회전. `measured_pose.EULER_ORDER`(YXZ) 규약에서
         # 전방 = (sin RotY·cos RotX, −sin RotX, cos RotY·cos RotX)이고,
@@ -64,13 +75,13 @@ def _rows(
         # 값을 골랐다.
         for axis, value in zip("XYZ", HEAD_ROTATION):
             row[f"카메라 Rotation {axis}"] = str(value)
-        for axis, value in zip("XYZ", (0.85, 4.2 + step + shift, 0.65)):
+        for axis, value in zip("XYZ", (0.85, 0.65 + shift, 4.2 + step)):
             row[f"한길숏건 Position {axis}"] = str(value)
         # 겹친 프레임은 |머리-왼손| = 0.000 m라 왼손만 마스킹된다.
         left = (
-            (0.5, 4.2 + step + shift, 0.8)
+            (0.5, 0.8 + shift, 4.2 + step)
             if i == overlap_left_at
-            else (0.67, 4.2 + step + shift, 0.79)
+            else (0.67, 0.79 + shift, 4.2 + step)
         )
         for axis, value in zip("XYZ", left):
             row[f"플래쉬 Position {axis}"] = str(value)

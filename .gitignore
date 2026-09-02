@@ -53,6 +53,12 @@ vector_db/
 hf-cache/
 output/
 
+# trainer/data/ holds small checked-in artifacts (e.g. level_alignment.json),
+# not the ML "data/" this section means to ignore — un-ignore it explicitly so
+# new files there aren't silently dropped (previously needed `git add -f`).
+!trainer/data/
+!trainer/data/**
+
 # Editor directories and files
 .idea
 .vscode

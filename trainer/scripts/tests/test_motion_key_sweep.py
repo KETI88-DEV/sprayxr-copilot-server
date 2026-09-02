@@ -17,9 +17,14 @@ stroke_frame_module = importlib.import_module("stroke_frame")
 
 def _record(
     worker: str = "A",
-    displacement: tuple[float, float, float] = (0.0, 0.6, 0.0),
-    head: tuple[float, float, float] = (0.5, 4.5, 1.5),
-    hit: tuple[float, float, float] = (1.2, 4.5, 0.9),
+    # 수평 0.6m 스트로크(수평=world_axes.horizontal_of=(index0,index2)). 유니티
+    # Y-up이므로 옛 (0.0,0.6,0.0)은 이제 수직 0.6m 스트로크가 되어 있었다(리뷰 A6)
+    # — Y·Z를 맞바꾼다.
+    displacement: tuple[float, float, float] = (0.0, 0.0, 0.6),
+    # head·hit도 Y(키)·Z(벽 위치)를 맞바꾼다 — 옛 (0.5,4.5,1.5)/(1.2,4.5,0.9)는
+    # Y=4.5m인 사람을 만들고 있었다.
+    head: tuple[float, float, float] = (0.5, 1.5, 4.5),
+    hit: tuple[float, float, float] = (1.2, 0.9, 4.5),
     uv: tuple[float, float] | None = (1024.0, 512.0),
     rotation: tuple[float, float, float] | None = None,
     yaw: float | None = None,
@@ -133,14 +138,27 @@ def test_coarser_uv_grids_are_strictly_nested() -> None:
 def test_dropping_the_reach_split_merges_near_and_far_only() -> None:
     """④에서 near/far만 빠진다. 좌우와 높이대는 남아야 한다.
 
-    body_placement의 수평 성분은 (delta[0], delta[2])다(유니티 Y-up). head의 Z를
-    hit의 Z(0.9)와 같게 두어 delta[2]=0으로 만들면 azimuth가 항상 0(center)이라
-    거리(delta[0]을 통한 span)만 근/원을 가른다 — 옛 픽스처가 head.z=1.5로 두어
-    Z를 아예 안 쓰던 것과 같은 역할을 head.z=0.9(=hit.z)가 맡는다. height는 hit가
-    두 픽스처에서 같으므로(`world_axes.vertical_of(hit)=hit[1]=4.5`) 그대로 같다.
+    body_placement의 수평 성분은 (delta[0], delta[2])다(유니티 Y-up). `_record`의
+    기본 `hit`은 `(1.2, 0.9, 4.5)`다(리뷰 A6로 Y·Z를 맞바꾼 값). head의 Z를 hit의
+    Z(4.5)와 같게 두어 delta[2]=0으로 만들면 azimuth가 항상 0(center)이라
+    거리(delta[0]을 통한 span)만 근/원을 가른다. height는 hit가 두 픽스처에서
+    같으므로(`world_axes.vertical_of(hit)=hit[1]=0.9`, 0.6≤0.9<1.0 → "mid") 그대로
+    같다.
+
+    near/far의 head.Y를 **일부러 크게 다르게**(0.9 vs 5.0) 둔다(리뷰 A8) — Y가
+    horizontal_of에서 빠지는 것이 유니티 Y-up 규약 그 자체이기 때문이다. head.Y를
+    둘 다 0.9로 같게 두면(1라운드가 그랬다) world_axes를 Z-up으로 되돌려도(수평이
+    (idx0,idx1)이 되어도) delta[1]=hit.Y-head.Y가 두 픽스처에서 똑같이 0이라
+    horizontal_of의 인덱스 선택 자체가 결과에 아무 영향을 못 준다 — 이 테스트가
+    실제로는 아무 규약도 검증하지 못하고 있었다(직접 확인: world_axes.UP_INDEX=2
+    에서도 그대로 통과했다). head.Y를 다르게 두면 Y-up에서는(Y가 제외되므로) near/
+    far 모두 여전히 azimuth=0·center로 남지만, Z-up으로 되돌리면 delta[1]이
+    horizontal에 섞여 들어가 far의 azimuth가 30°를 넘어 "left"로 갈라진다 — 그러면
+    reach_split을 꺼도(`without`) near/far 키가 lateral 때문에 여전히 갈라져 두
+    번째 assert가 규약이 틀렸을 때 실제로 깨진다.
     """
-    near = _record(head=(0.9, 4.5, 0.9))
-    far = _record(head=(0.0, 4.5, 0.9))
+    near = _record(head=(0.9, 0.9, 4.5))
+    far = _record(head=(0.0, 5.0, 4.5))
     with_reach = sweep.SweepConfig(name="with", reach_split=True)
     without = sweep.SweepConfig(name="without", reach_split=False)
     assert sweep.sweep_key(near, with_reach) != sweep.sweep_key(far, with_reach)
@@ -279,11 +297,30 @@ def test_sweep_key_uses_the_measured_yaw_when_the_record_carries_one() -> None:
     (d[0],d[2])=(0,0.6), 수직=d[1]=0이라 elevation=0°=horizontal이다. yaw=0에서
     forward=0,right=0.6→"right"; yaw=80°에서 forward=sin80·0.6≈0.591,
     right=cos80·0.6≈0.104→|forward|>|right|→"forward"로 바뀐다.
+
+    head=hit로 둔다(리뷰 A8) — `_record`의 기본 head/hit를 그냥 두면
+    `body_placement`의 lateral(④)도 요에 따라 방위각이 바뀌어 `world != turned`가
+    ②(heading_word)가 아니라 ④ 하나만으로도 참이 될 수 있다. 이러면 world_axes를
+    Z-up으로 되돌려 heading_word가 조용히 "none"으로 죽어도(①이 masked) ④가
+    대신 차이를 만들어내 이 assert가 "그때도" 통과한다 — 실제로 확인했다. delta=
+    hit-head=(0,0,0)이면 forward=right=0이라 azimuth=atan2(0,0)=0(center 고정),
+    span=0(near 고정)이 되어 lateral·reach가 요와 완전히 무관해지고, 남는 차이의
+    유일한 출처가 heading_word(②)가 된다.
     """
     config = sweep.SweepConfig(name="기본")
-    world = sweep.sweep_key(_record(displacement=(0.0, 0.0, 0.6), yaw=None), config)
+    same_point = (0.5, 1.5, 4.5)
+    world = sweep.sweep_key(
+        _record(displacement=(0.0, 0.0, 0.6), head=same_point, hit=same_point, yaw=None),
+        config,
+    )
     turned = sweep.sweep_key(
-        _record(displacement=(0.0, 0.0, 0.6), yaw=math.radians(80.0)), config
+        _record(
+            displacement=(0.0, 0.0, 0.6),
+            head=same_point,
+            hit=same_point,
+            yaw=math.radians(80.0),
+        ),
+        config,
     )
     assert world != turned
     # ①기울기는 착탄 변위에서만 나오므로 요와 무관하다.

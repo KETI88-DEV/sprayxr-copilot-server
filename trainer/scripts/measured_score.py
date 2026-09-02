@@ -74,21 +74,45 @@ class AxisFrame(Protocol):
     def up(self) -> Vec3: ...
 
 
-@dataclass(frozen=True, slots=True)
+def _axis_unit(index: int) -> Vec3:
+    out = [0.0, 0.0, 0.0]
+    out[index] = 1.0
+    return (out[0], out[1], out[2])
+
+
 class _WorldFrame:
     """기저 없이 (normal, tangent, up) 슬롯 순서로 월드 축을 고정한 기본 프레임.
 
     로컬 index0/1/2는 `stroke_frame.Basis`와 같은 뜻(법선/진행/수직)을 유지해야
     한다 — 그래야 `PointDelta.local_delta`를 기저 없이 직접 준 호출자(단위 테스트 등)
     에서도 index2가 계속 "수직"으로 읽힌다. `up`을 `world_axes.UP`로, normal·tangent를
-    나머지 두 수평축으로 잡는 이유가 그것이다. 월드의 어느 축이 실제로 위인지는
-    `_axis_components`가 이 프레임으로 되돌린 월드 벡터에 `world_axes.vertical_of` 등을
-    적용해 호출 시점에 다시 판정하므로, 여기 값 자체가 매 호출 반응할 필요는 없다.
+    나머지 두 수평축(`world_axes.HORIZONTAL_INDICES`)으로 잡는 이유가 그것이다.
+
+    세 축 모두 **property**다 — frozen dataclass 필드였을 때는(`up: Vec3 =
+    world_axes.UP`) 이 클래스가 임포트되는 시점에 딱 한 번 평가돼 그 뒤로는
+    `UP_INDEX`가 바뀌어도 굳어 있었다(리뷰 A2). `WORLD_FRAME`은 모듈 하나짜리
+    싱글턴이라 `frame: AxisFrame = WORLD_FRAME` 기본 인자는 이 객체 하나만
+    한 번 붙잡지만, 그 객체의 `.normal`/`.tangent`/`.up`은 매번 접근할 때(즉
+    호출 시점에) `world_axes`를 다시 읽으므로 객체 자체는 고정돼도 값은 고정되지
+    않는다. `_axis_components`가 이 프레임으로 되돌린 월드 벡터에
+    `world_axes.vertical_of` 등을 적용해 다시 판정하는 것과는 별개의 반응성이다
+    — 프레임 자신의 축이 하나라도 굳어 있으면 `_world_delta`가 잘못된 방향으로
+    로컬 성분을 되돌린다.
     """
 
-    normal: Vec3 = (1.0, 0.0, 0.0)
-    tangent: Vec3 = (0.0, 0.0, 1.0)
-    up: Vec3 = world_axes.UP
+    @property
+    def normal(self) -> Vec3:
+        first, _second = world_axes.HORIZONTAL_INDICES
+        return _axis_unit(first)
+
+    @property
+    def tangent(self) -> Vec3:
+        _first, second = world_axes.HORIZONTAL_INDICES
+        return _axis_unit(second)
+
+    @property
+    def up(self) -> Vec3:
+        return world_axes.UP
 
 
 # 기저를 주지 않은 호출자에게 쓰는 기본값. 로컬 성분을 월드 축으로 그대로 읽는다.

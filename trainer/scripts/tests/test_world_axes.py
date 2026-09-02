@@ -117,16 +117,53 @@ def test_frame_around_fallback_moves_with_up_index() -> None:
 def test_every_module_follows_the_convention_not_a_literal(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """UP_INDEX를 바꾸면 네 소비 모듈의 출력이 **전부** 따라 움직여야 한다.
+    """UP_INDEX를 바꾸면 네 소비 모듈의 출력이 **필드마다 각각** 따라 움직여야 한다.
 
     `world_axes`는 `UP`과 `HORIZONTAL_INDICES`를 모듈 `__getattr__`로 `UP_INDEX`
     하나에서 매번 다시 계산한다(PEP 562) — 그래서 손잡이는 `UP_INDEX` 단 하나다.
     이 테스트는 그 손잡이 하나만 돌려서 네 모듈(`measured_score`, `stroke_frame`,
     `measured_pose`, `motion_key`)이 전부 반응하는지 본다.
 
-    입력은 세 축 모두에 0이 아닌 뚜렷한 성분을 갖도록 골랐고, Y-up과 Z-up이 실제로
-    다른 답을 낸다는 것을 이 파일을 쓰면서 직접 실행해 확인했다 — 우연히 같은 답이
-    나오는 벡터를 썼다면 이 테스트는 아무것도 증명하지 않으면서 통과했을 것이다.
+    **비교 단위는 개별 필드다, 묶음이 아니다 — 그리고 입력도 그 모듈 자신의
+    책임만 재도록 골라야 한다.** 예전 버전은 두 겹으로 가려질 수 있었다.
+
+    (1) `_axis_components`가 낸 `{"wall": (value, unit, word), ...}` 전체를 값
+    하나로 비교하면, `vertical`의 `value`만 리터럴로 굳어도 그 필드의 `unit`
+    (`world_axes.UP`를 호출 시점에 그대로 읽으므로 항상 움직인다)이 여전히 달라
+    "vertical 전체가 달라졌다"는 참이 된다 — 3튜플 안에서 얼어붙은 `value` 하나가
+    가려진다. 그래서 `value`/`unit`/`word`를 각각 독립된 키로 비교한다.
+
+    (2) `_axis_components`에 넘기는 `frame`을 `stroke_frame.stroke_basis(...)`의
+    결과로 두면(예전 버전이 그랬다), `frame` 자체가 `world_axes.frame_around`를
+    통해 UP_INDEX를 따라 움직이므로 `_axis_components`가 내부에서 `world_axes.
+    vertical_of`를 쓰든 `world[1]` 리터럴을 쓰든 출력값 자체는 (프레임이 바뀌어서)
+    거의 항상 달라진다 — 함수 자신의 리터럴 결함이 "프레임이 움직였다"는 잡음에
+    묻힌다. 실제로 확인했다: `_axis_components`의 `world_axes.vertical_of(world)`를
+    `world[1]`로 되박고 `stroke_basis`가 낸 프레임을 그대로 넘기면, 예전 버전도
+    지금 버전(필드별 비교)도 이 결함을 못 잡는다 — `vertical` 값이 3.2→11(예시)로
+    바뀌는데, 그 변화는 `world[1]`이 규약을 따라서가 아니라 프레임의 다른 성분이
+    바뀌었기 때문이다. 그래서 `_axis_components`에는 world_axes와 무관한, 리터럴로
+    고정한 `_FIXED_FRAME`을 넘긴다 — 이러면 `local`과 `frame`이 둘 다 완전히
+    고정되므로, UP_INDEX를 바꿨을 때 `value`가 움직이는 유일한 경로는
+    `_axis_components` 자신이 `world_axes.vertical_of`/`horizontal_of`를 호출
+    시점에 쓰는 것뿐이다. (`stroke_frame.stroke_basis` 자신의 규약 준수는 따로
+    `basis_normal`/`basis_up`으로, 실제 `stroke_basis(...)` 호출을 통해 잰다.)
+
+    `basis_tangent`는 표본에서 뺐다 — `stroke_basis`의 `tangent`는 입력 접선을
+    그대로 정규화한 것이라 규약과 무관하게 절대 움직이지 않는, 즉 이 테스트가
+    "안 움직이면 결함"이라고 말할 자격이 없는 필드이기 때문이다(넣어 두면 영원히
+    고칠 수 없는 거짓 경보가 된다).
+
+    `motion_key.body_placement`(lateral·reach·height)와 합성 키
+    `motion_key.motion_key()`도 표본에 넣는다 — 이전 표본은 `heading_word`만 재서
+    `body_placement`와 합성 키 문자열이 규약을 따르는지가 비어 있었다(리뷰 A3).
+
+    모든 입력은 이 파일을 쓰면서 직접 실행해, 아래 `stuck`이 실제로 빈 리스트임을
+    확인했다 — 우연히 같은 답이 나오는 벡터를 썼다면 그 필드는 이 테스트에서
+    아무것도 증명하지 않으면서 통과했을 것이다. `_axis_components`의
+    `world_axes.vertical_of(world)`를 `world[1]` 리터럴로 되박아 봤을 때
+    `axis_vertical_value`·`axis_vertical_word`만 `stuck`에 이름으로 잡히고
+    `axis_wall_*`/`axis_lateral_*`는 그대로 움직이는 것도 확인했다(리뷰 A1).
 
     하나라도 안 움직이면 그 모듈이 리터럴을 다시 박았거나 임포트 시점에 값을
     복사한 것이다. 그 상태는 지금 우연히 옳은 답을 낼 수 있어서 눈으로는 안 보인다.
@@ -136,16 +173,52 @@ def test_every_module_follows_the_convention_not_a_literal(
     measured_pose = importlib.import_module("measured_pose")
     motion_key = importlib.import_module("motion_key")
 
+    # world_axes와 무관한, 완전히 고정된 프레임. `_axis_components`에 이것을 넘기면
+    # UP_INDEX를 돌려도 local·frame이 똑같이 유지되므로, 출력이 움직이는 유일한
+    # 경로는 `_axis_components` 자신이 world_axes를 호출 시점에 쓰는 것뿐이다.
+    _FIXED_FRAME = stroke_frame.Basis(
+        origin=(0.0, 0.0, 0.0),
+        normal=(0.6, 0.3, 0.8),
+        tangent=(0.2, 0.9, 0.4),
+        up=(0.1, 0.5, 0.7),
+    )
+
     def sample() -> dict[str, object]:
         basis = stroke_frame.stroke_basis(
             hit=(1.2, 4.5, 0.8), tangent=(0.6, 0.0, 0.8), gun=(0.6, 4.9, -0.3)
         )
-        return {
-            "axis": measured_score._axis_components((0.11, -0.04, 0.07), basis),
-            "basis": (basis.normal, basis.tangent, basis.up),
+        axis = measured_score._axis_components((0.02, -0.15, 0.10), _FIXED_FRAME)
+        params = motion_key.KeyParams()
+        head = (0.5, 4.5, 0.9)
+        hit = (0.8, 5.4, 0.6)
+        lateral, reach, height = motion_key.body_placement(
+            head=head, yaw=0.3, hit=hit, params=params
+        )
+        key = motion_key.motion_key(
+            displacement=(0.4, -0.6, 0.5),
+            yaw=0.3,
+            head=head,
+            hit=hit,
+            uv=(1024.0, 512.0),
+            params=params,
+        )
+        out: dict[str, object] = {
+            # `tangent`은 일부러 뺀다 — 입력을 그대로 정규화한 값이라 규약과
+            # 무관하게 절대 움직이지 않는다(위 독스트링 참고).
+            "basis_normal": basis.normal,
+            "basis_up": basis.up,
             "yaw": measured_pose.facing_yaw((17.0, 32.0, -11.0)),
             "heading": motion_key.heading_word(0.3, (0.4, -0.6, 0.5)),
+            "body_placement_lateral": lateral,
+            "body_placement_reach": reach,
+            "body_placement_height": height,
+            "motion_key": key,
         }
+        for name, (value, unit, word) in axis.items():
+            out[f"axis_{name}_value"] = value
+            out[f"axis_{name}_unit"] = unit
+            out[f"axis_{name}_word"] = word
+        return out
 
     before = sample()
     monkeypatch.setattr(world_axes, "UP_INDEX", 2)  # 유일한 손잡이만 돌린다.

@@ -31,12 +31,27 @@ def _local(basis: object, world: tuple[float, float, float]) -> tuple[float, flo
 
 
 # 이 파일의 모든 `_right`/`_head` 호출은 "world" 인자에 (wall, lateral, vertical)
-# 의미의 cm 값을 실어 왔다 — 옛 HORIZONTAL(normal=X, tangent=Y, up=Z)이 항등 기저라
-# world 튜플이 곧 그 세 값이었기 때문이다. 새 HORIZONTAL은 (normal=-Z, tangent=X,
-# up=Y)이므로 `_local(HORIZONTAL, w) = (-w[2], w[0], w[1])`이다. 같은
-# (wall, lateral, vertical) 뜻을 유지하려면 인자를 `w = (lateral, vertical, -wall)`
-# 로 다시 지어야 한다 — 아래 각 호출의 world 튜플은 옛 (wall, lateral, vertical)
-# 의도를 그대로 두고 이 재배열만 적용한 값이다(주석에 옛 의도를 남긴다).
+# 의미의 cm 값을 실어 왔다. **주의**: 옛 HORIZONTAL은 항등 기저가 아니었다 — 옛
+# HORIZONTAL(tangent=(0,1,0), gun=(0.6,4.5,0.8))의 법선을 손으로 다시 계산하면(옛
+# `stroke_basis`: forward=(0,1,0), up=orthogonalized((0,0,1),forward)=(0,0,1),
+# normal=normalize(cross(forward,up))=(1,0,0), to_worker=gun-hit=(-0.6,0,0),
+# dot(normal,to_worker)=-0.6<0 → sign_toward가 뒤집는다) **normal=(-1,0,0)**이었다
+# — 이 파일이 리팩터 전부터 이미 그렇게 문서화하고 있었다(옛
+# test_magnitude_and_unit_agree_so_the_sentence_cannot_drift의 "실제로는 월드
+# -X다"). tangent=(0,1,0)·up=(0,0,1)은 부호가 그대로였으므로, 옛
+# `_local(OLD_HORIZONTAL, w) = (-w[0], w[1], w[2])`다 — 즉
+# **wall = -w_old[0]**, lateral = w_old[1], vertical = w_old[2]였다(1라운드에서
+# wall = +w_old[0]로 잘못 가정했다 — 리뷰 A4).
+#
+# 새 HORIZONTAL은 (normal=-Z, tangent=X, up=Y)이므로
+# `_local(HORIZONTAL, w) = (-w[2], w[0], w[1])`이다 — 즉 wall=-w_new[2],
+# lateral=w_new[0], vertical=w_new[1]. 같은 (wall, lateral, vertical) 뜻을
+# 유지하려면: w_new[0]=lateral=w_old[1], w_new[1]=vertical=w_old[2],
+# w_new[2]=-wall=-(-w_old[0])=w_old[0]. 즉 **w_new = (w_old[1], w_old[2],
+# w_old[0])** — w_old를 그대로 한 칸 순환시킨 값이다(1라운드의
+# `(w_old[1], w_old[2], -w_old[0])`에서 셋째 성분의 부호가 틀렸었다). 아래 각
+# 호출의 주석은 옛 (wall, lateral, vertical) 의도를 그대로 남기고, world 튜플은
+# 이 수정된 순환으로 다시 지었다.
 
 
 def _right(world: tuple[float, float, float], axis_sigmas: dict[str, float] | None) -> object:
@@ -52,8 +67,8 @@ def _right(world: tuple[float, float, float], axis_sigmas: dict[str, float] | No
 def test_every_axis_over_the_threshold_is_issued() -> None:
     """축별 sigma가 임계를 넘는 축은 전부 나간다. 하나만 내면 개선 여지를 버린다."""
     delta = _right(
-        # wall +8cm, lateral +5cm, vertical -6cm — w = (lateral, vertical, -wall)
-        (0.05, -0.06, -0.08),
+        # wall +8cm, lateral +5cm, vertical -6cm — w = (w_old[1], w_old[2], w_old[0])
+        (0.05, -0.06, 0.08),
         {"wall": 3.5, "vertical": 2.6, "lateral": 2.2},
     )
     issued = measured_score.right_axes(delta, HORIZONTAL)
@@ -64,7 +79,7 @@ def test_every_axis_over_the_threshold_is_issued() -> None:
 def test_axes_below_the_threshold_are_not_issued() -> None:
     """sigma가 임계 아래인 축은 이상하지 않다. 지시하면 지어낸 교정이다."""
     delta = _right(
-        (0.05, -0.06, -0.08),  # wall +8cm, lateral +5cm, vertical -6cm
+        (0.05, -0.06, 0.08),  # wall +8cm, lateral +5cm, vertical -6cm
         {"wall": 3.5, "vertical": 1.1, "lateral": 0.4},
     )
     issued = measured_score.right_axes(delta, HORIZONTAL)
@@ -75,7 +90,7 @@ def test_axes_below_the_minimum_centimetre_are_not_issued() -> None:
     """sigma가 커도 5mm를 옮기라는 지시는 사람이 따를 수 없다."""
     delta = _right(
         # wall 8cm, lateral 0.5cm(MIN_CORRECTION_CM 미만), vertical 0
-        (0.005, 0.0, -0.08),
+        (0.005, 0.0, 0.08),
         {"wall": 3.5, "vertical": 3.0, "lateral": 3.0},
     )
     issued = measured_score.right_axes(delta, HORIZONTAL)
@@ -89,7 +104,7 @@ def test_the_sentence_axis_is_issued_even_when_its_own_sigma_is_low() -> None:
     이 보장이 없으면 오늘 나가던 교정이 새 코드에서 사라진다.
     """
     delta = _right(
-        (0.0, 0.0, -0.08),  # wall 8cm, lateral·vertical 0
+        (0.0, 0.0, 0.08),  # wall 8cm, lateral·vertical 0
         {"wall": 1.4, "vertical": 1.3, "lateral": 1.2},  # 아무도 2.0 미만
     )
     issued = measured_score.right_axes(delta, HORIZONTAL)
@@ -98,7 +113,7 @@ def test_the_sentence_axis_is_issued_even_when_its_own_sigma_is_low() -> None:
 
 def test_no_axis_sigmas_falls_back_to_the_single_sentence_axis() -> None:
     """축별 sigma 없이 만든 구조체는 예전 동작 그대로다(옛 호출자 보호)."""
-    delta = _right((0.05, -0.06, -0.08), None)  # wall 8cm, lateral 5cm, vertical -6cm
+    delta = _right((0.05, -0.06, 0.08), None)  # wall 8cm, lateral 5cm, vertical -6cm
     issued = measured_score.right_axes(delta, HORIZONTAL)
     assert len(issued) == 1
 
@@ -109,7 +124,7 @@ def test_below_the_point_gate_nothing_is_issued() -> None:
         point="right",
         sigma=T,  # 초과가 아니라 같음 — 열리지 않아야 한다
         # wall +8cm, lateral +5cm, vertical -6cm
-        local_delta=_local(HORIZONTAL, (0.05, -0.06, -0.08)),
+        local_delta=_local(HORIZONTAL, (0.05, -0.06, 0.08)),
         samples=30,
         axis_sigmas={"wall": 3.5, "vertical": 2.6, "lateral": 2.2},
     )
@@ -121,19 +136,24 @@ def test_magnitude_and_unit_agree_so_the_sentence_cannot_drift() -> None:
 
     HORIZONTAL.normal은 월드 -Z다: tangent=X, up(=world_axes.UP)=Y이므로
     normal=cross(X,Y)=Z이고, 이 hit/gun 조합은 gun이 hit보다 -Z쪽에 있어
-    `sign_toward`가 법선을 -Z로 맞춘다(`stroke_frame.stroke_basis` 참고). world 인자
-    (0,0,-0.08)은 "wall +8cm"의 세계 표현(w=(lateral,vertical,-wall)=(0,0,-0.08))
-    이라 `magnitude_cm`는 +8.0이 맞다. 부호 자체를 어느 쪽으로 고정할지는 이
+    `sign_toward`가 법선을 -Z로 맞춘다(`stroke_frame.stroke_basis` 참고).
+
+    옛 파일(리팩터 전)은 이 픽스처에서 `wall`이 -8.0으로 나온다고 이미 적어
+    뒀었다 — 옛 HORIZONTAL.normal도 월드 -X였기 때문이다(파일 상단 주석 참고).
+    world 인자는 그 -8.0을 그대로 재현하도록 고른다: 새 좌표에서
+    `w = (w_old[1], w_old[2], w_old[0]) = (0, 0, 0.08)`(옛 w_old=(0.08,0,0),
+    "wall -8cm"). `_local(HORIZONTAL,(0,0,0.08)) = (-0.08·(-1), ·, ·) = (-0.08,…)`
+    이므로 `magnitude_cm`는 -8.0이 맞다. 부호 자체를 어느 쪽으로 고정할지는 이
     테스트의 관심사가 아니다 — 검증할 불변은 "magnitude_cm/100 × unit이 원래 월드
     이동을 정확히 되살린다"는 것이므로 그 재구성을 직접 확인한다.
     """
-    delta = _right((0.0, 0.0, -0.08), {"wall": 3.5, "vertical": 0.1, "lateral": 0.1})
+    delta = _right((0.0, 0.0, 0.08), {"wall": 3.5, "vertical": 0.1, "lateral": 0.1})
     (wall,) = measured_score.right_axes(delta, HORIZONTAL)
     assert wall.axis == "wall"
     # HORIZONTAL의 normal은 월드 -Z다(위 설명 참고).
     assert abs(wall.unit[2]) > 0.99
     reconstructed_world_z = wall.magnitude_cm / 100.0 * wall.unit[2]
-    assert abs(reconstructed_world_z - (-0.08)) < 0.005
+    assert abs(reconstructed_world_z - 0.08) < 0.005
 
 
 def _head(world: tuple[float, float, float], axis_sigmas: dict[str, float]) -> object:
@@ -155,11 +175,27 @@ def test_head_height_becomes_a_stance_sentence() -> None:
     assert "낮춰" in text
 
 
-def test_head_wall_distance_becomes_a_step_back_sentence() -> None:
-    delta = _head((0.0, 0.0, -0.18), {"wall": 3.4, "vertical": 0.2, "lateral": 0.1})
+def test_head_wall_distance_becomes_a_step_closer_sentence() -> None:
+    """w_old=(wall=0.18, 0, 0) → w_new=(w_old[1], w_old[2], w_old[0])=(0,0,0.18).
+
+    local[0] = dot(w_new, HORIZONTAL.normal=(0,0,-1)) = 0.18·(-1) = -0.18 → wall이
+    음수이므로 `STANCE_PHRASES[("wall", False)]` = "벽에 한 걸음 더 붙어 서십시오."
+    다. 이 함수 이름은 1라운드에서 "step_back"이었다 — 그때 셋째 성분 부호를
+    잘못 유도해(리뷰 A4, 파일 상단 주석) 실제로는 +18cm/"떨어져"가 나왔는데, 그
+    오류를 "걸음"만 확인하는 약한 assert(옛 이름 그대로)가 가려 아무것도 실패하지
+    않았다(리뷰 A7). 이름을 손으로 다시 유도한 진짜 부호("붙어")에 맞춘다.
+
+    `STANCE_PHRASES`의 두 wall 문구를 서로 바꿔치기(swap)하면 이 assert가 실제로
+    깨지는지 확인했다 — "걸음"만 보는 옛 assert는 swap에도 통과했다(리뷰 A7이
+    지적한 결함 그 자체).
+    """
+    delta = _head((0.0, 0.0, 0.18), {"wall": 3.4, "vertical": 0.2, "lateral": 0.1})
     stance = measured_score.head_stance(delta, HORIZONTAL)
     assert stance is not None and stance.axis == "wall"
-    assert "걸음" in measured_score.stance_text(stance)
+    assert stance.magnitude_cm < 0.0
+    text = measured_score.stance_text(stance)
+    assert "붙어" in text
+    assert "떨어져" not in text
 
 
 def test_only_one_stance_sentence_even_when_both_axes_fire() -> None:
@@ -170,7 +206,7 @@ def test_only_one_stance_sentence_even_when_both_axes_fire() -> None:
     vertical이 나와야만 "sigma로 골랐다"가 증명된다 — 세 기준이 같은 답을 내는
     픽스처로는 아무것도 증명하지 못한다(초안이 그랬다).
     """
-    delta = _head((0.0, -0.12, -0.18), {"wall": 2.9, "vertical": 3.4, "lateral": 0.1})
+    delta = _head((0.0, -0.12, 0.18), {"wall": 2.9, "vertical": 3.4, "lateral": 0.1})
     stance = measured_score.head_stance(delta, HORIZONTAL)
     assert stance is not None
     assert stance.axis == "vertical"  # sigma가 큰 쪽. 크기로 고르면 wall이 나온다.
@@ -189,12 +225,13 @@ def test_head_below_the_threshold_says_nothing() -> None:
 
 def test_stance_text_never_claims_a_posture_we_cannot_observe() -> None:
     """HMD로는 앉음과 쪼그림과 무릎 굽힘을 구별할 수 없다. 그러니 '앉아'라고 쓰지 않는다."""
-    # 각 world는 (lateral, vertical, -wall) 재배열이다: vertical -12/+12cm, wall +18/-18cm.
+    # 각 world는 (w_old[1], w_old[2], w_old[0]) 순환이다: vertical -12/+12cm,
+    # wall +18/-18cm(옛 wall = -w_old[0]이므로 w_old[0]=+0.18은 wall=-18cm다).
     for world, sigmas in (
         ((0.0, -0.12, 0.0), {"vertical": 3.1}),
         ((0.0, 0.12, 0.0), {"vertical": 3.1}),
-        ((0.0, 0.0, -0.18), {"wall": 3.4}),
         ((0.0, 0.0, 0.18), {"wall": 3.4}),
+        ((0.0, 0.0, -0.18), {"wall": 3.4}),
     ):
         stance = measured_score.head_stance(_head(world, sigmas), HORIZONTAL)
         assert stance is not None
@@ -203,8 +240,8 @@ def test_stance_text_never_claims_a_posture_we_cannot_observe() -> None:
 
 def test_issued_axes_are_sorted_by_sigma_descending() -> None:
     """읽는 사람이 위에서부터 심각한 순으로 본다."""
-    right = _right((0.05, -0.06, -0.08), {"wall": 2.2, "vertical": 3.9, "lateral": 2.6})
-    head = _head((0.0, 0.0, -0.18), {"wall": 3.4, "vertical": 0.2, "lateral": 0.1})
+    right = _right((0.05, -0.06, 0.08), {"wall": 2.2, "vertical": 3.9, "lateral": 2.6})
+    head = _head((0.0, 0.0, 0.18), {"wall": 3.4, "vertical": 0.2, "lateral": 0.1})
     issued = measured_score.issued_axes([right, head], HORIZONTAL)
     sigmas = [c.sigma for c in issued]
     assert sigmas == sorted(sigmas, reverse=True)
@@ -215,7 +252,7 @@ def test_left_hand_is_never_issued() -> None:
     left = measured_score.PointDelta(
         point="left",
         sigma=5.0,
-        local_delta=_local(HORIZONTAL, (0.30, 0.30, -0.30)),
+        local_delta=_local(HORIZONTAL, (0.30, 0.30, 0.30)),
         samples=30,
         axis_sigmas={"wall": 5.0, "vertical": 5.0, "lateral": 5.0},
     )
@@ -225,7 +262,7 @@ def test_left_hand_is_never_issued() -> None:
 
 def test_shifts_contain_only_points_that_were_issued() -> None:
     """지시하지 않은 점은 키가 없다. 없으면 apply_measured가 옮길 방법이 없다."""
-    right = _right((0.0, 0.0, -0.08), {"wall": 3.5, "vertical": 0.1, "lateral": 0.1})
+    right = _right((0.0, 0.0, 0.08), {"wall": 3.5, "vertical": 0.1, "lateral": 0.1})
     quiet_head = _head((0.0, -0.01, 0.0), {"wall": 0.1, "vertical": 0.1, "lateral": 0.1})
     shifts = measured_score.issued_shifts([right, quiet_head], HORIZONTAL)
     assert set(shifts) == {"right"}
@@ -264,7 +301,7 @@ def test_issued_shifts_sums_multiple_axes_for_the_same_point() -> None:
     커서 한쪽이 없어지면 합이 눈에 띄게 달라진다 — 축이 거의 상쇄되거나 한쪽이
     지배적이면 `=`로 바꿔도 우연히 통과할 수 있다.
     """
-    right = _right((0.0, -0.09, -0.08), {"wall": 3.5, "vertical": 3.0, "lateral": 0.2})
+    right = _right((0.0, -0.09, 0.08), {"wall": 3.5, "vertical": 3.0, "lateral": 0.2})
     corrections = measured_score.issued_axes([right], HORIZONTAL)
     assert {c.axis for c in corrections} == {"wall", "vertical"}
     assert all(abs(c.magnitude_cm) > 5.0 for c in corrections)  # 둘 다 충분히 크다
@@ -286,7 +323,7 @@ def test_apply_measured_moves_exactly_the_issued_axes_and_nothing_else() -> None
     — `apply_measured`가 `issued_shifts`와 "일치"하는지가 아니라 물리적으로 맞는
     이동을 내는지를 봐야 하기 때문이다.
     """
-    right = _right((0.0, -0.06, -0.08), {"wall": 3.5, "vertical": 2.6, "lateral": 0.1})
+    right = _right((0.0, -0.06, 0.08), {"wall": 3.5, "vertical": 2.6, "lateral": 0.1})
     query = {
         "right": [(0.0, 0.0, 0.0)] * 3,
         "head": [(0.0, 0.0, 0.0)] * 3,
@@ -306,7 +343,7 @@ def test_apply_measured_moves_exactly_the_issued_axes_and_nothing_else() -> None
 
 def test_head_moves_only_when_a_stance_sentence_was_issued() -> None:
     """자세 문장이 나가면 머리도 옮긴다 — 말한 만큼만."""
-    head = _head((0.0, 0.0, -0.18), {"wall": 3.4, "vertical": 0.2, "lateral": 0.1})
+    head = _head((0.0, 0.0, 0.18), {"wall": 3.4, "vertical": 0.2, "lateral": 0.1})
     query = {name: [(0.0, 0.0, 0.0)] * 3 for name in ("right", "head", "left")}
     fixed = measured_score.apply_measured(query, [head], HORIZONTAL)
     assert fixed["head"] != query["head"]
@@ -329,7 +366,7 @@ def test_inclusion_rule_is_governed_by_the_pre_registered_constants(monkeypatch)
     delta = measured_score.PointDelta(
         point="right",
         sigma=5.0,
-        local_delta=_local(HORIZONTAL, (0.025, 0.0, -0.08)),  # wall 8cm, lateral 2.5cm
+        local_delta=_local(HORIZONTAL, (0.025, 0.0, 0.08)),  # wall 8cm, lateral 2.5cm
         samples=30,
         axis_sigmas={"wall": 3.5, "vertical": 0.1, "lateral": 3.0},
     )

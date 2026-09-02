@@ -73,15 +73,18 @@ def test_uv_cell_quantizes() -> None:
 def test_body_placement_separates_front_from_reached_right() -> None:
     """같은 대각선이라도 몸 정면과 오른쪽으로 뻗은 것은 다른 자세다.
 
-    body_placement의 수평 성분은 (delta[0], delta[2])다(유니티 Y-up). front는
-    delta=(0.7,0,0)으로 옛/새 규약에서 값이 같아(수평 성분 (0.7,0)) 그대로 둔다.
-    reached는 "벽 위에서 오른쪽으로 0.1, 앞으로(수평 Z) 0.8" 뻗은 위치가 되어야
-    하므로 hit=head+(0.1, 0.0, 0.8) = (0.6, 4.7, 1.6)다 — 옛 hit=(0.6,5.5,0.8)이
-    Y(옛 수평 진행축)에 실었던 +0.8을 이제 Z에 싣는다.
+    head는 사람 키에 해당하는 값을 Y(수직)에 싣는다 — `head=(0.5, 4.7, 0.8)`은
+    1라운드에서 body_placement의 수평 성분(=delta[0],delta[2])만 보고 "그대로
+    둔다"고 판단했지만, 그러면 head의 절대 좌표 자체가 Y=4.7m인 사람이 된다(리뷰
+    A6). head=(0.5, 0.8, 4.7)로 Y·Z를 맞바꾼다: X=0.5, Y=0.8(키), Z=4.7(벽을
+    따라가는 임의 위치). front의 hit는 head와 같은 높이·Z에서 X만 +0.7 뗀
+    (1.2, 0.8, 4.7) — 수평 성분 (delta[0],delta[2])=(0.7,0)은 그대로다. reached는
+    "오른쪽으로 0.1, 앞으로(수평 Z) 0.8" 뻗은 위치이므로
+    hit=head+(0.1, 0.0, 0.8)=(0.6, 0.8, 5.5)다.
     """
-    head = (0.5, 4.7, 0.8)
-    front = motion_key.body_placement(head, 0.0, (1.2, 4.7, 0.8), PARAMS)
-    reached = motion_key.body_placement(head, 0.0, (0.6, 4.7, 1.6), PARAMS)
+    head = (0.5, 0.8, 4.7)
+    front = motion_key.body_placement(head, 0.0, (1.2, 0.8, 4.7), PARAMS)
+    reached = motion_key.body_placement(head, 0.0, (0.6, 0.8, 5.5), PARAMS)
     assert front[0] == "center"
     assert reached[0] == "right"
 
@@ -105,13 +108,15 @@ def test_motion_key_is_in_its_own_namespace() -> None:
 
     "diag_up"이 나오려면 수직(index 1)과 수평(index 0,2 노름)이 같은 크기여야
     한다(45°) — `test_up_and_down_diagonals_get_different_bands`와 같은 이유로
-    (1.0, 1.0, 0.0)을 쓴다.
+    (1.0, 1.0, 0.0)을 쓴다. head·hit도 `test_body_placement_separates_front_
+    from_reached_right`의 "front" 쌍과 같은 이유로 Y(키)·Z(벽 위치)를 맞바꾼다 —
+    Y=4.7m인 사람을 만들지 않는다(리뷰 A6).
     """
     key = motion_key.motion_key(
         displacement=(1.0, 1.0, 0.0),
         yaw=0.0,
-        head=(0.5, 4.7, 0.8),
-        hit=(1.2, 4.7, 0.8),
+        head=(0.5, 0.8, 4.7),
+        hit=(1.2, 0.8, 4.7),
         uv=(1024.0, 512.0),
         params=PARAMS,
     )
