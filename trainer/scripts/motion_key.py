@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from typing import Final, Literal
 
 import pass_segmentation
+import world_axes
 
 Vec3 = tuple[float, float, float]
 
@@ -39,22 +40,24 @@ class KeyParams:
 
 
 def _elevation_deg(displacement: Vec3) -> float:
-    horizontal = math.hypot(displacement[0], displacement[1])
-    if horizontal == 0.0 and displacement[2] == 0.0:
+    h0, h1 = world_axes.horizontal_of(displacement)
+    horizontal = math.hypot(h0, h1)
+    vertical = world_axes.vertical_of(displacement)
+    if horizontal == 0.0 and vertical == 0.0:
         return 0.0
-    return math.degrees(math.atan2(abs(displacement[2]), horizontal))
+    return math.degrees(math.atan2(abs(vertical), horizontal))
 
 
 def signed_band(displacement: Vec3) -> SignedBand:
     """기울기 대역. 부호는 주축이 아니라 변위에서 온다.
 
     주축은 PCA 고유벡터라 부호가 임의다. 변위 segment[-1]-segment[0]의 수직 성분만이
-    올라갔는지 내려갔는지를 알려준다.
+    올라갔는지 내려갔는지를 알려준다. "수직"이 어느 인덱스인지는 `world_axes`가 정한다.
     """
     band = pass_segmentation.elevation_band(_elevation_deg(displacement))
     if band == "horizontal":
         return "horizontal"
-    rising = displacement[2] >= 0.0
+    rising = world_axes.vertical_of(displacement) >= 0.0
     if band == "vertical":
         return "vertical_up" if rising else "vertical_down"
     return "diag_up" if rising else "diag_down"
@@ -64,8 +67,9 @@ def heading_word(yaw: float, displacement: Vec3) -> str:
     """작업자 기준 수평 진행 방향. 수직 스트로크에는 정의되지 않는다."""
     if signed_band(displacement).startswith("vertical"):
         return "none"
-    forward = math.cos(yaw) * displacement[0] + math.sin(yaw) * displacement[1]
-    right = -math.sin(yaw) * displacement[0] + math.cos(yaw) * displacement[1]
+    h0, h1 = world_axes.horizontal_of(displacement)
+    forward = math.cos(yaw) * h0 + math.sin(yaw) * h1
+    right = -math.sin(yaw) * h0 + math.cos(yaw) * h1
     if abs(forward) >= abs(right):
         return "forward" if forward >= 0.0 else "back"
     return "right" if right >= 0.0 else "left"
@@ -89,9 +93,10 @@ def body_placement(
     head: Vec3, yaw: float, hit: Vec3, params: KeyParams
 ) -> tuple[LateralBand, ReachBand, str]:
     """머리 기준 좌표계에서 본 착탄점의 위치. 머리는 실측이라 IK를 타지 않는다."""
-    delta = (hit[0] - head[0], hit[1] - head[1])
-    forward = math.cos(yaw) * delta[0] + math.sin(yaw) * delta[1]
-    right = -math.sin(yaw) * delta[0] + math.cos(yaw) * delta[1]
+    delta: Vec3 = (hit[0] - head[0], hit[1] - head[1], hit[2] - head[2])
+    d0, d1 = world_axes.horizontal_of(delta)
+    forward = math.cos(yaw) * d0 + math.sin(yaw) * d1
+    right = -math.sin(yaw) * d0 + math.cos(yaw) * d1
 
     azimuth = math.degrees(math.atan2(right, forward))
     if abs(azimuth) <= params.lateral_deg:
@@ -101,7 +106,7 @@ def body_placement(
 
     span = math.hypot(forward, right)
     reach: ReachBand = "near" if span <= params.reach_m else "far"
-    return lateral, reach, pass_segmentation.height_band(hit[2])
+    return lateral, reach, pass_segmentation.height_band(world_axes.vertical_of(hit))
 
 
 def motion_key(

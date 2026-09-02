@@ -14,7 +14,7 @@ from trainer.pose_lab.service import PassRef, RawPass
 PARKED = (-694.61, 701.29, 698.25)
 STILL = (-2.99, 4.66, -0.27)
 # 정면 방위 +60°가 나오는 HMD 회전(아래 _rows 주석 참조).
-HEAD_ROTATION = (300.0, 90.0, 0.0)
+HEAD_ROTATION = (0.0, 30.0, 0.0)
 EXPECTED_YAW = math.radians(60.0)
 
 QUERY = {"worker": "A", "date": "20250901", "level": "10", "session": "s1", "pass_index": 0}
@@ -29,6 +29,14 @@ def _rows(
     overlap_left_at은 그 프레임에서 플래쉬를 카메라에 겹쳐 놓는다. 실측 |머리-왼손|
     최소가 0.000 m라(설계 §2.2) 실데이터에서 상시 발생하는 조건이고, §5.4는 그때
     "왼손 지표만 제외"하라고 못박는다.
+
+    `shift`는 오른손/머리/왼손에만 걸리고 착탄점(Ray Point)에는 걸리지 않는 수직
+    오프셋이다(유니티 Y-up이므로 월드 Y에 싣는다 — 옛 코드는 이것을 월드 Z에 실었는데,
+    `motion_key.body_placement`의 수평이 (index 0, index 2)로 바뀌면서 Z에 실린
+    shift가 head-hit 수평 델타에 새어 들어가 근/원 판정을 오염시켰다. Y는
+    `world_axes.horizontal_of`가 아예 읽지 않는 축이라 이 값이 몸 기준 좌우·근원
+    판정(motion_key)에 새지 않는다 — 옛 설계 의도(오른손/머리 sigma만 벌리고 동작
+    키는 건드리지 않는다)를 그대로 지킨다.
     """
     rows: list[dict[str, str]] = []
     for i in range(30):
@@ -44,21 +52,25 @@ def _rows(
             "Ray Texture UV X": "1024",
             "Ray Texture UV Y": "512",
         }
-        for axis, value in zip("XYZ", (0.5, 4.2 + step, 0.8 + shift)):
+        for axis, value in zip("XYZ", (0.5, 4.2 + step + shift, 0.8)):
             row[f"카메라 Position {axis}"] = str(value)
         # 실측 요를 태우는 HMD 회전. `measured_pose.EULER_ORDER`(YXZ) 규약에서
-        # 전방 = (sin RotY·cos RotX, −sin RotX, cos RotY·cos RotX)이므로
-        # (RotX, RotY, RotZ) = (300, 90, 0)이면 정면 방위가 정확히 +60°다.
-        # 요가 0일 때와 몸 기준 축(②④)이 둘 다 달라지는 값을 골랐다.
+        # 전방 = (sin RotY·cos RotX, −sin RotX, cos RotY·cos RotX)이고,
+        # `world_axes.yaw_of`는 수평(X,Z) 성분으로 방위를 잰다(유니티 Y-up). RotX=0
+        # 이면 전방=(sin RotY, 0, cos RotY)로 수평이라 yaw=atan2(cos RotY, sin RotY)
+        # =90°−RotY다(항등식은 test_measured_pose.test_facing_yaw_reads_the_
+        # convention_the_data_chose 참고). (RotX, RotY, RotZ) = (0, 30, 0)이면
+        # 정면 방위가 정확히 +60°다. 요가 0일 때와 몸 기준 축(②④)이 둘 다 달라지는
+        # 값을 골랐다.
         for axis, value in zip("XYZ", HEAD_ROTATION):
             row[f"카메라 Rotation {axis}"] = str(value)
-        for axis, value in zip("XYZ", (0.85, 4.2 + step, 0.65 + shift)):
+        for axis, value in zip("XYZ", (0.85, 4.2 + step + shift, 0.65)):
             row[f"한길숏건 Position {axis}"] = str(value)
         # 겹친 프레임은 |머리-왼손| = 0.000 m라 왼손만 마스킹된다.
         left = (
-            (0.5, 4.2 + step, 0.8 + shift)
+            (0.5, 4.2 + step + shift, 0.8)
             if i == overlap_left_at
-            else (0.67, 4.2 + step, 0.79 + shift)
+            else (0.67, 4.2 + step + shift, 0.79)
         )
         for axis, value in zip("XYZ", left):
             row[f"플래쉬 Position {axis}"] = str(value)

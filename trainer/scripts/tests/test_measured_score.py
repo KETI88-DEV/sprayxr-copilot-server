@@ -20,14 +20,19 @@ stroke_frame = importlib.import_module("stroke_frame")
 # `uniform_spreads`가 그 하위호환을 보장한다(직교 기저 변환이 벡터 노름을 보존).
 SPREADS = measured_score.uniform_spreads(0.05)
 
-# 수평 스트로크: 접선이 월드 Y라 up이 정확히 월드 Z다.
+# 수평 스트로크: 접선이 월드 X(유니티 Y-up에서 수평)라 up의 직교화가 forward와
+# 이미 직교한 world_axes.UP 그대로, 즉 정확히 월드 Y가 된다. normal=cross(X,Y)=Z이고
+# gun을 hit에서 -Z로 0.6m 뗀 수평 위치(작업자가 벽 앞에 선다)로 두면 sign_toward가
+# normal을 -Z로 맞춘다.
 HORIZONTAL = stroke_frame.stroke_basis(
-    hit=(1.2, 4.5, 0.8), tangent=(0.0, 1.0, 0.0), gun=(0.6, 4.5, 0.8)
+    hit=(1.2, 4.5, 0.8), tangent=(1.0, 0.0, 0.0), gun=(1.2, 4.5, 0.2)
 )
-# 수직 스트로크: 접선이 월드 Z라 up의 직교화가 퇴화하고 대체축(월드 Y)이 들어온다.
-# 즉 여기서 up은 수평이고 수직은 tangent다.
+# 수직 스트로크: 접선이 월드 Y(=world_axes.UP)라 up의 직교화가 퇴화하고 대체축
+# (FALLBACK_TANGENT=(1,0,0), 수평)이 들어온다. 즉 여기서 up은 수평(X)이고 수직은
+# tangent(Y)다. normal=cross(Y,X)=-Z이고, gun을 hit에서 Y·Z로만 옮기면(X는 그대로)
+# sign_toward가 그 부호를 정한다.
 VERTICAL = stroke_frame.stroke_basis(
-    hit=(1.2, 4.5, 0.8), tangent=(0.0, 0.0, 1.0), gun=(0.6, 4.5, 0.9)
+    hit=(1.2, 4.5, 0.8), tangent=(0.0, 1.0, 0.0), gun=(1.2, 4.4, 0.2)
 )
 
 
@@ -147,9 +152,13 @@ def test_height_wording_survives_on_a_horizontal_stroke() -> None:
     """수평 스트로크에서 순수 수직 이탈은 계속 올리/내리여야 한다.
 
     수직 문구를 수직 스트로크에서 그냥 막아 버리는 식의 회피를 막는 못이다.
+
+    HORIZONTAL.up은 월드 Y이므로 순수 수직 이탈은 월드 Y 성분 0.15여야 한다(월드 Z가
+    아니다 — Z는 HORIZONTAL.normal이 서 있는 벽 축이다). local = (dot(world,normal=
+    (0,0,-1)), dot(world,tangent=(1,0,0)), dot(world,up=(0,1,0))) = (0, 0, 0.15)다.
     """
     line = measured_score.corrections_text(
-        [_delta(HORIZONTAL, (0.0, 0.0, 0.15))], HORIZONTAL
+        [_delta(HORIZONTAL, (0.0, 0.15, 0.0))], HORIZONTAL
     )
     assert line == ["오른손을 15cm 올리세요."]
 
@@ -159,9 +168,16 @@ def test_sideways_offset_on_a_vertical_stroke_is_not_called_height() -> None:
 
     성분을 축 이름으로 읽으면 옆으로 15cm 틀어진 손에 "15cm 올리세요"가 나간다.
     작업자가 그대로 따르면 이탈이 커진다.
+
+    VERTICAL.tangent가 월드 Y(진행=수직)이므로 "옆" 이탈은 VERTICAL.up이 서 있는
+    월드 X여야 한다(월드 Y가 아니다 — Y로 옮기면 그 자체가 진짜 수직 이탈이 된다).
+    local = (dot(world,normal=(0,0,-1)), dot(world,tangent=(0,1,0)),
+    dot(world,up=(1,0,0))) = (0, 0, 0.15) — normal·tangent 성분이 0이라 wall·vertical
+    후보는 모두 1cm 문턱 아래로 걸러지고, tangent에 수평 성분이 없어(along=None)
+    남은 평면 잔차(=local[2]가 만든 세계 X 성분) 하나가 부호 없는 lateral로 남는다.
     """
     lines = measured_score.corrections_text(
-        [_delta(VERTICAL, (0.0, 0.15, 0.0))], VERTICAL
+        [_delta(VERTICAL, (0.15, 0.0, 0.0))], VERTICAL
     )
     assert lines == ["오른손을 벽을 따라 15cm 옮기세요."]
     assert "올리" not in lines[0] and "내리" not in lines[0]
@@ -170,20 +186,26 @@ def test_sideways_offset_on_a_vertical_stroke_is_not_called_height() -> None:
 def test_vertical_offset_on_a_vertical_stroke_is_still_called_height() -> None:
     """수직 스트로크에서도 진짜 수직 이탈은 올리/내리로 나가야 한다.
 
-    그때 수직은 tangent에 실린다. 진행 방향으로 적으면 높이 지시가 사라진다.
+    그때 수직은 tangent(월드 Y)에 실린다. 진행 방향으로 적으면 높이 지시가 사라진다.
+    local = (dot(world,normal=(0,0,-1)), dot(world,tangent=(0,1,0)),
+    dot(world,up=(1,0,0))) = (0, -0.15, 0)다.
     """
     lines = measured_score.corrections_text(
-        [_delta(VERTICAL, (0.0, 0.0, -0.15))], VERTICAL
+        [_delta(VERTICAL, (0.0, -0.15, 0.0))], VERTICAL
     )
     assert lines == ["오른손을 15cm 내리세요."]
 
 
 def test_corrections_never_carry_an_angle() -> None:
-    """REQ-19 게이트 통과 전까지 각도를 붙이지 않는다. 새 문구에도 적용된다."""
+    """REQ-19 게이트 통과 전까지 각도를 붙이지 않는다. 새 문구에도 적용된다.
+
+    세 조합 모두 위 세 테스트가 이미 축 대응을 확인한 조합을 그대로 가져와 벽·수직을
+    함께 어긋나게 만든다 — 이 테스트 자체는 "도"가 어디에도 없는지만 본다.
+    """
     for basis, world in (
-        (HORIZONTAL, (0.05, 0.0, 0.15)),
-        (VERTICAL, (0.0, 0.15, 0.0)),
-        (VERTICAL, (0.07, 0.0, -0.15)),
+        (HORIZONTAL, (0.0, 0.15, 0.05)),
+        (VERTICAL, (0.15, 0.0, 0.0)),
+        (VERTICAL, (0.0, -0.15, 0.07)),
     ):
         for line in measured_score.corrections_text([_delta(basis, world)], basis):
             assert "도" not in line
@@ -453,12 +475,16 @@ def test_candidates_agree_with_unfiltered_magnitudes() -> None:
 
 
 def test_vertical_normal_keeps_zero_wall_magnitude_but_no_wall_candidate() -> None:
-    """법선에 수평 성분이 없으면 크기는 0.0으로 남고 후보에서는 빠진다."""
+    """법선에 수평 성분이 없으면 크기는 0.0으로 남고 후보에서는 빠진다.
+
+    수평은 (index 0, index 2)다(유니티 Y-up). normal=(0,1,0)(월드 Y=수직)이면
+    horizontal_of(normal)=(0,0)이라 `_flattened`가 None을 낸다.
+    """
     frame = stroke_frame.Basis(
         origin=(0.0, 0.0, 0.0),
-        normal=(0.0, 0.0, 1.0),
+        normal=(0.0, 1.0, 0.0),
         tangent=(1.0, 0.0, 0.0),
-        up=(0.0, 1.0, 0.0),
+        up=(0.0, 0.0, 1.0),
     )
     local = (0.2, 0.15, -0.1)
     magnitudes = measured_score._axis_magnitudes_cm(local, frame)
@@ -469,12 +495,17 @@ def test_vertical_normal_keeps_zero_wall_magnitude_but_no_wall_candidate() -> No
 
 
 def test_vertical_stroke_lateral_is_unsigned_in_both_paths() -> None:
-    """수평 진행이 없으면 lateral은 두 경로 모두 부호 없는 크기다."""
+    """수평 진행이 없으면 lateral은 두 경로 모두 부호 없는 크기다.
+
+    진행축(tangent)에 수평 성분이 없어야 하므로 tangent=(0,1,0)(월드 Y=수직)을
+    쓴다 — horizontal_of(tangent)=(0,0)이라 `_flattened`가 None을 내 along 분기가
+    막힌다.
+    """
     frame = stroke_frame.Basis(
         origin=(0.0, 0.0, 0.0),
         normal=(1.0, 0.0, 0.0),
-        tangent=(0.0, 0.0, 1.0),
-        up=(0.0, 1.0, 0.0),
+        tangent=(0.0, 1.0, 0.0),
+        up=(0.0, 0.0, 1.0),
     )
     local = (0.02, -0.18, 0.09)
     magnitudes = measured_score._axis_magnitudes_cm(local, frame)

@@ -150,20 +150,33 @@ def test_missing_ray_leaves_hit_none_but_keeps_frame() -> None:
 def test_facing_yaw_reads_the_convention_the_data_chose() -> None:
     """YXZ에서 전방 = (sin RotY·cos RotX, −sin RotX, cos RotY·cos RotX)이다.
 
-    RotY=90이면 수평 성분이 (cos RotX, −sin RotX)라 방위가 정확히 −RotX가 된다.
-    이 항등식이 깨지면 규약이 바뀐 것이고, 그때는 몸 기준 축 전체가 조용히 틀어진다.
+    `world_axes.yaw_of`는 수평(X,Z) 성분으로 방위를 잰다(유니티 Y-up이므로 Y가
+    수직이다) — RotY=90 고정·RotX 가변으로 만든 옛 픽스처는 전방[2](cos RotY·cos RotX)
+    가 RotY=90에서 늘 0이 되어(cos 90=0) 새 수평 축(X,Z) 중 Z가 상시 0으로 죽는다.
+    그래서 RotX=0으로 고정하고 RotY를 돌린다: 전방 = (sin RotY, −sin 0, cos RotY·1) =
+    (sin RotY, 0, cos RotY)다. 수평 성분은 (전방[0], 전방[2]) = (sin RotY, cos RotY)이고
+    `yaw = atan2(cos RotY, sin RotY)`다. 항등식 atan2(cosθ, sinθ) = 90° − θ(mod 360°)
+    로 손으로 유도한다(θ=0→90°=atan2(1,0) ✓, θ=90°→0=atan2(0,1) ✓, θ=180°→−90°=
+    atan2(−1,0) ✓로 검산). 이 항등식이 깨지면 규약이 바뀐 것이고, 그때는 몸 기준
+    축 전체가 조용히 틀어진다.
     """
     for degrees in (0.0, 30.0, 120.0, 300.0):
-        yaw = measured_pose.facing_yaw((degrees, 90.0, 0.0))
+        yaw = measured_pose.facing_yaw((0.0, degrees, 0.0))
         assert yaw is not None
-        expected = math.radians(-degrees)
+        expected = math.radians(90.0) - math.radians(degrees)
         assert math.isclose(math.cos(yaw), math.cos(expected), abs_tol=1e-9)
         assert math.isclose(math.sin(yaw), math.sin(expected), abs_tol=1e-9)
 
 
 def test_facing_yaw_is_none_when_the_head_points_straight_up() -> None:
-    """수평 성분이 사라지면 방위가 없다. 0을 넣으면 월드 +X를 정면이라 주장하게 된다."""
-    assert measured_pose.facing_yaw((0.0, 0.0, 0.0)) is None
+    """수평 성분이 사라지면 방위가 없다. 지어내면 월드 수평축 하나를 정면이라 주장하게
+    된다.
+
+    RotX=90이면 cos RotX=0이라 전방=(sin RotY·0, −sin 90, cos RotY·0)=(0,−1,0)으로
+    RotY와 무관하게 순수 수직(월드 Y)이 된다 — 유니티 Y-up이므로 수평(X,Z) 성분이
+    둘 다 0이다.
+    """
+    assert measured_pose.facing_yaw((90.0, 0.0, 0.0)) is None
 
 
 def test_gun_forward_axis_is_the_spray_ray() -> None:
@@ -173,9 +186,11 @@ def test_gun_forward_axis_is_the_spray_ray() -> None:
 
 
 def test_frames_carry_the_measured_yaw() -> None:
+    """RotX=0, RotY=30이면 전방=(sin30,0,cos30)이라 yaw=atan2(cos30,sin30)=90°−30°=60°다
+    (위 `test_facing_yaw_reads_the_convention_the_data_chose`의 항등식과 같다)."""
     rows = _rows()
     for row in rows:
-        for axis, value in zip("XYZ", (300.0, 90.0, 0.0)):
+        for axis, value in zip("XYZ", (0.0, 30.0, 0.0)):
             row[f"카메라 Rotation {axis}"] = str(value)
     frames = measured_pose.measured_frames(rows)
     assert all(frame.yaw is not None for frame in frames)

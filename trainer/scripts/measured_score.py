@@ -18,6 +18,8 @@ import math
 from dataclasses import dataclass, field
 from typing import Final, Mapping, Protocol, Sequence
 
+import world_axes
+
 Vec3 = tuple[float, float, float]
 # 왼손은 프레임 단위로 빠질 수 있다(설계 §5.4). 자리는 남기고 값만 None이다.
 Track = Sequence[Vec3 | None]
@@ -50,8 +52,9 @@ MAX_SIGMA: Final = 6.0
 MIN_CORRECTION_CM: Final = 1.0
 # 수평면에서 이보다 짧은 축 성분은 방향이 정해지지 않은 것으로 본다.
 MIN_AXIS_LENGTH: Final = 1e-9
-# 월드 수직. 설계 §2.5 — 착탄점 Z가 −0.149~1.456 m로 수직축이다.
-WORLD_UP: Final[Vec3] = (0.0, 0.0, 1.0)
+# 월드 수직축은 world_axes가 소유한다(캡처 CSV는 유니티 좌표 — Y가 위). 여기서 다시
+# 정의하지 않는다 — 쓰는 자리마다 `world_axes.UP`/`world_axes.vertical_of` 등을 호출
+# 시점에 읽는다. 모듈 상수로 한 번 복사해 두면 이후 규약이 바뀌어도 반응하지 않는다.
 
 
 class AxisFrame(Protocol):
@@ -73,9 +76,19 @@ class AxisFrame(Protocol):
 
 @dataclass(frozen=True, slots=True)
 class _WorldFrame:
+    """기저 없이 (normal, tangent, up) 슬롯 순서로 월드 축을 고정한 기본 프레임.
+
+    로컬 index0/1/2는 `stroke_frame.Basis`와 같은 뜻(법선/진행/수직)을 유지해야
+    한다 — 그래야 `PointDelta.local_delta`를 기저 없이 직접 준 호출자(단위 테스트 등)
+    에서도 index2가 계속 "수직"으로 읽힌다. `up`을 `world_axes.UP`로, normal·tangent를
+    나머지 두 수평축으로 잡는 이유가 그것이다. 월드의 어느 축이 실제로 위인지는
+    `_axis_components`가 이 프레임으로 되돌린 월드 벡터에 `world_axes.vertical_of` 등을
+    적용해 호출 시점에 다시 판정하므로, 여기 값 자체가 매 호출 반응할 필요는 없다.
+    """
+
     normal: Vec3 = (1.0, 0.0, 0.0)
-    tangent: Vec3 = (0.0, 1.0, 0.0)
-    up: Vec3 = (0.0, 0.0, 1.0)
+    tangent: Vec3 = (0.0, 0.0, 1.0)
+    up: Vec3 = world_axes.UP
 
 
 # 기저를 주지 않은 호출자에게 쓰는 기본값. 로컬 성분을 월드 축으로 그대로 읽는다.
@@ -232,11 +245,21 @@ def _dot(left: Vec3, right: Vec3) -> float:
 
 
 def _flattened(vector: Vec3) -> Vec3 | None:
-    """수평 성분의 단위벡터. 축이 수직이면 수평 방향이 없으므로 None이다."""
-    length = math.hypot(vector[0], vector[1])
+    """수평 성분의 단위벡터. 축이 수직이면 수평 방향이 없으므로 None이다.
+
+    어느 인덱스가 수평인지는 `world_axes.horizontal_of`가 호출 시점에 정한다 —
+    좌표를 직접 인덱싱하면(옛 코드의 `vector[0], vector[1]`) 월드 수직축이 바뀔 때
+    이 함수가 반응하지 않는다.
+    """
+    h0, h1 = world_axes.horizontal_of(vector)
+    length = math.hypot(h0, h1)
     if length < MIN_AXIS_LENGTH:
         return None
-    return (vector[0] / length, vector[1] / length, 0.0)
+    a, b = world_axes.HORIZONTAL_INDICES
+    out = [0.0, 0.0, 0.0]
+    out[a] = h0 / length
+    out[b] = h1 / length
+    return (out[0], out[1], out[2])
 
 
 def _world_delta(local: Vec3, frame: AxisFrame) -> Vec3:
@@ -260,7 +283,7 @@ def _axis_components(local: Vec3, frame: AxisFrame) -> dict[str, tuple[float, Ve
       때는 늘 ≥ 0(수평 성분의 노름이므로).
     - `unit`: 그 축의 월드 단위벡터, 또는 "이 축은 후보가 될 수 없다"를 뜻하는 `None`.
       법선에 수평 성분이 없으면 wall이 `None`이다. 진행축에 수평 성분이 없고 남은
-      수평 잔차도 없으면(원점) lateral이 `None`이다. vertical은 항상 `WORLD_UP`이다.
+      수평 잔차도 없으면(원점) lateral이 `None`이다. vertical은 항상 `world_axes.UP`이다.
     - `word`: 그 축·부호에 대응하는 동사/방향어. 후보에 실제로 들어갈지와 무관하게
       부호만으로 정해진다 — 임계는 호출부(`_correction_candidates`)가 따로 건다.
 
@@ -269,7 +292,8 @@ def _axis_components(local: Vec3, frame: AxisFrame) -> dict[str, tuple[float, Ve
     틀어진 손을 위로 올리라고 말하게 된다. 그래서 월드로 되돌린 뒤 세 방향으로 다시
     나눈다.
 
-    - 수직(`"vertical"`): 월드 Z 성분. 어느 축에 실려 있었든 여기서만 올리/내리가 나온다.
+    - 수직(`"vertical"`): 월드 수직축 성분(`world_axes.vertical_of`). 어느 축에
+      실려 있었든 여기서만 올리/내리가 나온다.
     - 벽(`"wall"`): 법선은 항상 수평이므로(`Basis` 독스트링) 수평 성분을 법선에 투영한다.
     - 진행축(`"lateral"`): 법선에 직교하는 수평 방향이다. wall 성분을 뺀 뒤의 평면으로
       잰다(뺄 것이 없으면, 즉 wall이 `None`이면 빼지 않는다) — 이 순서가 바뀌면 값이
@@ -280,8 +304,8 @@ def _axis_components(local: Vec3, frame: AxisFrame) -> dict[str, tuple[float, Ve
       (`word`는 빈 문자열).
     """
     world = _world_delta(local, frame)
-    plane: Vec3 = (world[0], world[1], 0.0)
-    up_cm = world[2] * 100.0
+    plane: Vec3 = world_axes.flatten(world)
+    up_cm = world_axes.vertical_of(world) * 100.0
 
     wall = _flattened(frame.normal)
     normal_cm = 0.0 if wall is None else _dot(plane, wall) * 100.0
@@ -289,7 +313,7 @@ def _axis_components(local: Vec3, frame: AxisFrame) -> dict[str, tuple[float, Ve
         plane = (
             plane[0] - normal_cm / 100.0 * wall[0],
             plane[1] - normal_cm / 100.0 * wall[1],
-            0.0,
+            plane[2] - normal_cm / 100.0 * wall[2],
         )
     wall_word = "" if wall is None else ("띄우" if normal_cm > 0 else "붙이")
 
@@ -299,7 +323,8 @@ def _axis_components(local: Vec3, frame: AxisFrame) -> dict[str, tuple[float, Ve
     if along is None:
         # 수평 진행이 없다. 남은 수평 성분 자체가 방향이라 크기는 늘 양수다.
         lateral_unit = _flattened(plane)
-        lateral_cm = math.hypot(plane[0], plane[1]) * 100.0
+        h0, h1 = world_axes.horizontal_of(plane)
+        lateral_cm = math.hypot(h0, h1) * 100.0
         lateral_word = ""
     else:
         lateral_unit = along
@@ -308,7 +333,7 @@ def _axis_components(local: Vec3, frame: AxisFrame) -> dict[str, tuple[float, Ve
 
     return {
         "wall": (normal_cm, wall, wall_word),
-        "vertical": (up_cm, WORLD_UP, vertical_word),
+        "vertical": (up_cm, world_axes.UP, vertical_word),
         "lateral": (lateral_cm, lateral_unit, lateral_word),
     }
 

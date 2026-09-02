@@ -64,20 +64,32 @@ def test_stroke_basis_is_orthonormal() -> None:
 
 
 def test_normal_points_from_hit_toward_the_worker() -> None:
-    """건 거리를 양수로 읽으려면 법선이 작업자 쪽을 향해야 한다."""
+    """건 거리를 양수로 읽으려면 법선이 작업자 쪽을 향해야 한다.
+
+    tangent은 월드 Z(유니티 Y-up에서 수평)를 쓴다. tangent=(0,1,0)(월드 Y=위 축)을
+    쓰면 forward가 world_axes.UP과 평행해 퇴화 분기(FALLBACK_TANGENT=(1,0,0))로
+    떨어지고, 그 분기에서 나오는 normal=cross((0,1,0),(1,0,0))=(0,0,-1)은 X만
+    어긋난 이 gun/hit 쌍의 to_worker=(-0.6,0,0)과 내적이 항상 0이라 "작업자 쪽"을
+    검증할 수 없다. 그래서 이 못은 비퇴화 경로를 골라야 뜻이 있다.
+    """
     hit = (1.2, 4.5, 0.8)
     gun = (0.6, 4.5, 0.8)
-    basis = stroke_frame.stroke_basis(hit=hit, tangent=(0.0, 1.0, 0.0), gun=gun)
+    basis = stroke_frame.stroke_basis(hit=hit, tangent=(0.0, 0.0, 1.0), gun=gun)
     to_worker = tuple(gun[axis] - hit[axis] for axis in range(3))
     assert sum(basis.normal[axis] * to_worker[axis] for axis in range(3)) > 0.0
 
 
 def test_up_axis_is_world_vertical() -> None:
-    """수직축이 위를 향해야 "15cm 올리세요"가 참이 된다(설계 §2.5, Z가 수직)."""
+    """수직축이 위를 향해야 "15cm 올리세요"가 참이 된다(유니티 Y-up이므로 Y가 수직).
+
+    tangent=(0,0,1)(월드 Z, 수평)로 forward를 잡으면 up=orthogonalized(world_axes.UP,
+    forward)은 이미 forward와 직교한 world_axes.UP=(0,1,0) 그대로다(투영이 0이므로
+    빼는 항이 없다) — 그래서 up[1]이 정확히 1.0이어야 한다.
+    """
     basis = stroke_frame.stroke_basis(
-        hit=(1.2, 4.5, 0.8), tangent=(0.0, 1.0, 0.0), gun=(0.6, 4.5, 0.8)
+        hit=(1.2, 4.5, 0.8), tangent=(0.0, 0.0, 1.0), gun=(0.6, 4.5, 0.8)
     )
-    assert math.isclose(basis.up[2], 1.0, abs_tol=1e-9)
+    assert math.isclose(basis.up[1], 1.0, abs_tol=1e-9)
 
 
 def test_gun_offsets_are_not_collapsed_onto_the_normal() -> None:
@@ -86,10 +98,16 @@ def test_gun_offsets_are_not_collapsed_onto_the_normal() -> None:
     그러면 진행 방향과 수직 성분이 구조적으로 0이라 "두 동작이 일치해서 0"과 구별되지
     않는다. 가중 1.0인 오른손이 1차원으로 붕괴하므로 이 성질을 못으로 박는다. 축을
     건 방향으로 정의하는 구현에서는 아래 두 assert가 0.0을 받아 실패한다.
+
+    tangent=(0,0,1)(월드 Z, 수평)이라 forward=(0,0,1), up=orthogonalized(world_axes.UP,
+    forward)=(0,1,0)(이미 직교), normal=cross(forward,up)=(-1,0,0)이다(부호는
+    `world_axes.sign_toward`가 gun 쪽으로 맞춘다). gun-hit=(-0.6,+0.15,+0.15)이므로
+    local[0](법선 성분)=0.6, local[1](진행 성분, tangent=Z)=0.15, local[2](수직 성분,
+    up=Y)=0.15 — 두 오프셋이 대칭(+0.15)이라 옛 값과 수치가 같다.
     """
     hit = (1.2, 4.5, 0.8)
-    gun = (0.6, 4.65, 0.95)  # 벽에서 0.6 m, 진행 방향 +0.15 m, 수직 +0.15 m
-    basis = stroke_frame.stroke_basis(hit=hit, tangent=(0.0, 1.0, 0.0), gun=gun)
+    gun = (0.6, 4.65, 0.95)  # 벽에서 0.6 m, 진행 방향(Z) +0.15 m, 수직(Y) +0.15 m
+    basis = stroke_frame.stroke_basis(hit=hit, tangent=(0.0, 0.0, 1.0), gun=gun)
     local = stroke_frame.to_local(basis, gun)
     assert math.isclose(local[0], 0.6, abs_tol=1e-9)
     assert math.isclose(local[1], 0.15, abs_tol=1e-9)
@@ -97,9 +115,19 @@ def test_gun_offsets_are_not_collapsed_onto_the_normal() -> None:
 
 
 def test_basis_stays_orthonormal_for_a_vertical_stroke() -> None:
-    """순수 수직 스트로크는 월드 Z 직교화가 영벡터다. 퇴화 대체축이 있어야 한다."""
+    """순수 수직 스트로크(접선이 world_axes.UP과 평행)는 위 축 직교화가 영벡터다.
+    퇴화 대체축이 있어야 한다.
+
+    tangent=(0,1,0)=world_axes.UP이라 forward∥UP → orthogonalized(UP,forward)=영벡터
+    → 대체축 FALLBACK_TANGENT=(1,0,0)로 떨어진다(forward와 이미 직교이므로 그대로
+    up=(1,0,0)). normal=cross(forward=(0,1,0), up=(1,0,0))=(0,0,-1). gun을
+    hit보다 Z만 −0.1 낮춰 to_worker=(-0.6,0,-0.1)로 두면
+    dot(normal,to_worker)=(-1)*(-0.1)=0.1≥0이라 부호가 뒤집히지 않고 normal[2]<0으로
+    남는다(예전 코드에서 tangent=(0,0,1)일 때 normal[0]<0이던 것과 같은 자리다 —
+    수직축이 Z→Y로 바뀌면서 퇴화 법선이 서는 축도 X→Z로 옮겨간다).
+    """
     basis = stroke_frame.stroke_basis(
-        hit=(1.2, 4.5, 0.8), tangent=(0.0, 0.0, 1.0), gun=(0.6, 4.5, 0.9)
+        hit=(1.2, 4.5, 0.8), tangent=(0.0, 1.0, 0.0), gun=(0.6, 4.5, 0.7)
     )
     axes = (basis.normal, basis.tangent, basis.up)
     for axis in axes:
@@ -109,30 +137,35 @@ def test_basis_stays_orthonormal_for_a_vertical_stroke() -> None:
             assert math.isclose(
                 sum(axes[i][k] * axes[j][k] for k in range(3)), 0.0, abs_tol=1e-9
             )
-    assert basis.normal[0] < 0.0
+    assert basis.normal[2] < 0.0
 
 
 def test_up_axis_is_horizontal_on_a_vertical_stroke() -> None:
     """이름과 달리 `up`은 수직 스트로크에서 수평이다.
 
-    접선이 이미 월드 Z라 직교화가 영벡터가 되고 대체축(월드 Y)이 들어온다. 독스트링이
-    이 사실을 말해야 하고, 소비자는 성분을 축 이름이 아니라 축 벡터로 읽어야 한다.
+    접선이 이미 world_axes.UP이라 직교화가 영벡터가 되고 대체축(FALLBACK_TANGENT,
+    수평)이 들어온다. 독스트링이 이 사실을 말해야 하고, 소비자는 성분을 축 이름이
+    아니라 축 벡터로 읽어야 한다. tangent=(0,1,0)일 때 up=(1,0,0)(FALLBACK_TANGENT
+    그대로, 이미 forward와 직교), tangent 자체가 곧 forward=(0,1,0)이라 수직 성분이
+    1.0, normal=cross(forward,up)=(0,0,-1)이라 수직 성분은 0이다.
     """
     basis = stroke_frame.stroke_basis(
-        hit=(1.2, 4.5, 0.8), tangent=(0.0, 0.0, 1.0), gun=(0.6, 4.5, 0.9)
+        hit=(1.2, 4.5, 0.8), tangent=(0.0, 1.0, 0.0), gun=(0.6, 4.5, 0.9)
     )
-    assert math.isclose(basis.up[2], 0.0, abs_tol=1e-9)
-    assert math.isclose(basis.tangent[2], 1.0, abs_tol=1e-9)
+    assert math.isclose(basis.up[1], 0.0, abs_tol=1e-9)
+    assert math.isclose(basis.tangent[1], 1.0, abs_tol=1e-9)
     # 법선은 어떤 스트로크에서도 수평이다. 벽 거리 문구가 그 위에 선다.
-    assert math.isclose(basis.normal[2], 0.0, abs_tol=1e-9)
+    assert math.isclose(basis.normal[1], 0.0, abs_tol=1e-9)
 
 
 def test_basis_survives_a_dwell_frame_with_zero_tangent() -> None:
+    """tangent=0이면 FALLBACK_TANGENT=(1,0,0)을 forward로 쓴다. forward와 이미
+    직교이므로 up=orthogonalized(world_axes.UP,forward)는 그대로 (0,1,0)이다."""
     basis = stroke_frame.stroke_basis(
         hit=(1.2, 4.5, 0.8), tangent=(0.0, 0.0, 0.0), gun=(0.6, 4.5, 0.8)
     )
     assert basis.tangent == stroke_frame.FALLBACK_TANGENT
-    assert math.isclose(basis.up[2], 1.0, abs_tol=1e-9)
+    assert math.isclose(basis.up[1], 1.0, abs_tol=1e-9)
 
 
 def test_to_local_puts_hit_at_origin() -> None:

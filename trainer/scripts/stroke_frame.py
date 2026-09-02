@@ -16,30 +16,36 @@ import math
 from dataclasses import dataclass, replace
 from typing import Final, Sequence
 
+import world_axes
 from measured_pose import MeasuredFrame
 
 Vec3 = tuple[float, float, float]
 
 DEFAULT_SAMPLES: Final = 20
 
-# 월드 Z가 수직이다(설계 §2.5, 실측 범위 -0.149~1.456 m).
-WORLD_UP: Final[Vec3] = (0.0, 0.0, 1.0)
-# 접선이 정의되지 않을 때 쓰는 축. 벽은 X 1.2 평면이고 착탄점은 Y를 따라 흐른다.
-FALLBACK_TANGENT: Final[Vec3] = (0.0, 1.0, 0.0)
+# 월드 수직 축은 world_axes가 소유한다(캡처 CSV는 유니티 좌표 — Y가 위). 여기서 다시
+# 정의하지 않는다. `stroke_basis` 안에서 `world_axes.UP`을 호출 시점에 읽는다 — 모듈
+# 상수로 한 번 복사해 두면(`WORLD_UP = world_axes.UP`) 이후 규약이 바뀌어도 이 값은
+# 그대로 굳어 반응하지 않는다.
+#
+# 접선이 정의되지 않을 때 쓰는 대체축. 수평이어야 한다(유니티 Y-up이므로 X·Z가
+# 수평이다) — 수직 벡터를 대체 접선으로 쓰면 퇴화 처리 자체가 다시 퇴화한다.
+FALLBACK_TANGENT: Final[Vec3] = (1.0, 0.0, 0.0)
 
 
 @dataclass(frozen=True, slots=True)
 class Basis:
     """원점이 착탄점인 정규직교 기저.
 
-    `normal`은 벽 법선이고 작업자 쪽이 양수다. 이 축은 항상 수평이다 — `up`이 월드 Z와
-    접선이 이루는 평면 안에 있으므로 그 둘의 외적인 `normal`은 월드 Z에 직교한다.
-    `tangent`는 스트로크 진행 방향이다.
+    `normal`은 벽 법선이고 작업자 쪽이 양수다. 이 축은 항상 수평이다 — `up`이 월드
+    수직축(`world_axes.UP`)과 접선이 이루는 평면 안에 있으므로 그 둘의 외적인
+    `normal`은 월드 수직축에 직교한다. `tangent`는 스트로크 진행 방향이다.
 
-    **`up`은 수직이 아니다.** 월드 Z를 접선에 직교화한 축이라, 접선이 수평일 때만
-    정확히 수직이고 스트로크가 기울수록 수직에서 벗어난다. 순수 수직 스트로크에서는
-    접선이 곧 월드 Z라 직교화가 영벡터가 되고, 대체축(월드 Y 직교화)이 들어와 `up`이
-    **수평**이 된다. 이름은 수평 스트로크에서의 뜻을 딴 것이고 그것이 전부다.
+    **`up`은 수직이 아니다.** 월드 수직축을 접선에 직교화한 축이라, 접선이 수평일
+    때만 정확히 수직이고 스트로크가 기울수록 수직에서 벗어난다. 순수 수직 스트로크
+    에서는 접선이 곧 월드 수직축이라 직교화가 영벡터가 되고, 대체축(`FALLBACK_TANGENT`
+    직교화)이 들어와 `up`이 **수평**이 된다. 이름은 수평 스트로크에서의 뜻을 딴 것이고
+    그것이 전부다.
 
     그래서 로컬 성분을 축 이름으로 읽어 말로 옮기면 안 된다. 수직 스트로크에서 순수한
     옆 이탈이 `local[2]`에 실리는데 그것을 "15cm 올리세요"로 적으면 작업자가 옆으로
@@ -242,26 +248,28 @@ def stroke_basis(hit: Vec3, tangent: Vec3, gun: Vec3) -> Basis:
     주평면 법선").
 
     - `tangent`(착탄점 궤적의 접선)를 정규화해 진행 방향으로 쓴다.
-    - 월드 Z를 접선에 직교화해 수직축으로 쓴다.
-    - 법선은 두 축의 외적이다. 건은 이 법선의 **부호를 고르는 데만** 쓴다.
+    - 월드 수직축(`world_axes.UP`)을 접선에 직교화해 수직축으로 쓴다.
+    - 법선은 두 축의 외적이다. 건은 이 법선의 **부호를 고르는 데만** 쓴다(`world_axes.
+      sign_toward` — 유니티는 왼손 좌표계라 외적의 방향 감각이 오른손계와 반대다).
 
-    퇴화 처리는 둘이다. 접선이 영벡터면(제자리 프레임) 벽을 따라가는 축인 월드 Y를
-    접선으로 쓴다. 접선이 월드 Z와 평행하면(순수 수직 스트로크) 수직이 이미 접선이라
-    직교화가 영벡터가 되므로, 세 번째 축은 벽을 따라가는 수평축(월드 Y 직교화)으로
+    퇴화 처리는 둘이다. 접선이 영벡터면(제자리 프레임) 수평 대체축(`FALLBACK_TANGENT`)을
+    접선으로 쓴다. 접선이 월드 수직축과 평행하면(순수 수직 스트로크) 수직이 이미 접선이라
+    직교화가 영벡터가 되므로, 세 번째 축은 수평 대체축(`FALLBACK_TANGENT` 직교화)으로
     떨어뜨린다. 이때 `up`은 수평이다 — 이름이 아니라 벡터가 그 축의 뜻이다.
     """
     forward = _normalize(tangent)
     if forward == (0.0, 0.0, 0.0):
         forward = FALLBACK_TANGENT
 
-    up = _orthogonalized(WORLD_UP, forward)
+    up = _orthogonalized(world_axes.UP, forward)
     if up == (0.0, 0.0, 0.0):
         up = _orthogonalized(FALLBACK_TANGENT, forward)
 
     normal = _normalize(_cross(forward, up))
     to_worker = (gun[0] - hit[0], gun[1] - hit[1], gun[2] - hit[2])
-    if _dot(normal, to_worker) < 0.0:
-        normal = (-normal[0], -normal[1], -normal[2])
+    # 왼손 좌표계(유니티)에서는 외적의 방향 감각이 오른손계와 반대다. `sign_toward`가
+    # 그 재보정을 한 곳에서 한다 — 여기서 부호 로직을 다시 적지 않는다.
+    normal = world_axes.sign_toward(normal, to_worker)
 
     return Basis(origin=hit, normal=normal, tangent=forward, up=up)
 

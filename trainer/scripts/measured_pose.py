@@ -18,6 +18,7 @@ from typing import Final, Sequence
 
 import rotation_math
 import simulator_csv
+import world_axes
 
 Vec3 = tuple[float, float, float]
 
@@ -45,7 +46,7 @@ HEAD_FORWARD: Final[Vec3] = (0.0, 0.0, 1.0)
 GUN_FORWARD: Final[Vec3] = (0.0, 1.0, 0.0)
 
 # 수평 성분이 이보다 짧으면 방위가 정의되지 않는다(정확히 위/아래를 본 프레임).
-MIN_FACING_HORIZONTAL: Final = 1e-9
+# 그 문턱은 world_axes가 소유한다 — `facing_yaw`가 `world_axes.yaw_of`를 그대로 쓴다.
 
 # 세션 안에서 이만큼도 안 움직이면 들지 않은 건이다.
 MIN_ACTIVE_SPREAD_M: Final = 0.05
@@ -93,18 +94,18 @@ def forward_vector(rotation: Vec3, local_axis: Vec3) -> Vec3:
 
 
 def facing_yaw(rotation: Vec3) -> float | None:
-    """HMD 회전에서 작업자 정면 방위(라디안). 수평면에서 `atan2(f_y, f_x)`다.
+    """HMD 회전에서 작업자 정면 방위(라디안). 수평면에서의 방위각이다.
 
-    `motion_key.heading_word` / `body_placement`가 `cos(yaw)·d[0] + sin(yaw)·d[1]`을
-    전방 성분으로 쓰므로 이 값이 그대로 그 요다.
+    `motion_key.heading_word` / `body_placement`가 `world_axes.horizontal_of`로 뽑은
+    같은 두 성분을 `cos(yaw)·h0 + sin(yaw)·h1`로 쓰므로 이 값이 그대로 그 요다 —
+    `world_axes.yaw_of`를 그대로 반환해 그 대응을 강제한다.
 
     정확히 위/아래를 본 프레임에서는 수평 성분이 사라져 방위가 정의되지 않는다. 그때
-    0을 넣으면 월드 +X를 정면이라고 주장하는 것이 되므로 None을 낸다.
+    0을 넣으면 월드 수평축 하나를 정면이라고 주장하는 것이 되므로 `yaw_of`가 None을
+    낸다.
     """
     forward = forward_vector(rotation, HEAD_FORWARD)
-    if math.hypot(forward[0], forward[1]) < MIN_FACING_HORIZONTAL:
-        return None
-    return math.atan2(forward[1], forward[0])
+    return world_axes.yaw_of(forward)
 
 
 def _position(row: dict[str, str], group: str) -> Vec3 | None:

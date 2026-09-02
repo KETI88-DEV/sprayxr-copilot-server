@@ -131,9 +131,16 @@ def test_coarser_uv_grids_are_strictly_nested() -> None:
 
 
 def test_dropping_the_reach_split_merges_near_and_far_only() -> None:
-    """④에서 near/far만 빠진다. 좌우와 높이대는 남아야 한다."""
-    near = _record(head=(0.9, 4.5, 1.5))
-    far = _record(head=(0.0, 4.5, 1.5))
+    """④에서 near/far만 빠진다. 좌우와 높이대는 남아야 한다.
+
+    body_placement의 수평 성분은 (delta[0], delta[2])다(유니티 Y-up). head의 Z를
+    hit의 Z(0.9)와 같게 두어 delta[2]=0으로 만들면 azimuth가 항상 0(center)이라
+    거리(delta[0]을 통한 span)만 근/원을 가른다 — 옛 픽스처가 head.z=1.5로 두어
+    Z를 아예 안 쓰던 것과 같은 역할을 head.z=0.9(=hit.z)가 맡는다. height는 hit가
+    두 픽스처에서 같으므로(`world_axes.vertical_of(hit)=hit[1]=4.5`) 그대로 같다.
+    """
+    near = _record(head=(0.9, 4.5, 0.9))
+    far = _record(head=(0.0, 4.5, 0.9))
     with_reach = sweep.SweepConfig(name="with", reach_split=True)
     without = sweep.SweepConfig(name="without", reach_split=False)
     assert sweep.sweep_key(near, with_reach) != sweep.sweep_key(far, with_reach)
@@ -265,10 +272,19 @@ def test_sweep_key_uses_the_measured_yaw_when_the_record_carries_one() -> None:
 
     같은 패스를 요만 바꿔 읽었을 때 키가 달라져야 실측 요가 키에 도달한 것이다.
     달라지지 않으면 이 도구가 재는 점유는 여전히 월드 기준 점유다.
+
+    displacement의 기본값 (0,0.6,0)은 유니티 Y-up에서 수직(index 1)이라 signed_band가
+    "vertical_*"이 되고 heading_word가 요와 무관하게 항상 "none"을 낸다(①이 masked).
+    ②가 요에 반응하는 것을 보이려면 수평이어야 하므로 (0,0,0.6)로 바꾼다: 수평=
+    (d[0],d[2])=(0,0.6), 수직=d[1]=0이라 elevation=0°=horizontal이다. yaw=0에서
+    forward=0,right=0.6→"right"; yaw=80°에서 forward=sin80·0.6≈0.591,
+    right=cos80·0.6≈0.104→|forward|>|right|→"forward"로 바뀐다.
     """
     config = sweep.SweepConfig(name="기본")
-    world = sweep.sweep_key(_record(yaw=None), config)
-    turned = sweep.sweep_key(_record(yaw=math.radians(80.0)), config)
+    world = sweep.sweep_key(_record(displacement=(0.0, 0.0, 0.6), yaw=None), config)
+    turned = sweep.sweep_key(
+        _record(displacement=(0.0, 0.0, 0.6), yaw=math.radians(80.0)), config
+    )
     assert world != turned
     # ①기울기는 착탄 변위에서만 나오므로 요와 무관하다.
     assert world.split(":")[1] == turned.split(":")[1]
