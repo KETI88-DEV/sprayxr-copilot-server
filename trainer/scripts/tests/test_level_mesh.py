@@ -305,10 +305,16 @@ def test_committed_scale_is_within_the_texel_density_band() -> None:
 
 
 def test_committed_uv_evidence_is_near_the_2048_atlas() -> None:
-    """B6/B2: `fit`의 UV 기울기가 2048에서 멀면(예: 아틀라스 크기가 잘못 기록되면) 잡는다."""
+    """B6/B2/C2: `fit`의 UV 기울기가 -2048에서 멀면(크기든 부호든) 잡는다.
+
+    `abs(slope)`가 아니라 **부호까지** 확인한다 — 리뷰 C2: 얇은 축 180도 회전으로
+    관계된 두 orientation이 크기·R²는 똑같고 부호만 다르다(직접 재현: 둘 다 R²
+    0.9999+, |slope|≈2048). `abs()`를 쓰면 이 대칭을 못 잡는다. 실측(모듈의
+    `EXPECTED_UV_SLOPE` 참고)으로 확인한 "좋은 맞춤"의 부호는 두 축 다 음수다.
+    """
     a = level_mesh.load_alignment(1)
-    assert abs(a.fit["uv_slope_u"]) == pytest.approx(2048.0, abs=5.0)
-    assert abs(a.fit["uv_slope_v"]) == pytest.approx(2048.0, abs=5.0)
+    assert a.fit["uv_slope_u"] == pytest.approx(level_mesh.EXPECTED_UV_SLOPE, abs=5.0)
+    assert a.fit["uv_slope_v"] == pytest.approx(level_mesh.EXPECTED_UV_SLOPE, abs=5.0)
     assert a.fit["uv_r2_u"] > 0.999
     assert a.fit["uv_r2_v"] > 0.999
     assert a.fit["dominant_face_fraction"] > 0.99
@@ -325,3 +331,23 @@ def test_committed_fit_distances_are_within_the_preregistered_tolerance() -> Non
     assert a.fit["median_mm"] < 1.0
     assert a.fit["p95_mm"] < 10.0
     assert a.fit["max_mm"] < 100.0
+
+
+def test_committed_translation_places_real_hits_on_the_mesh() -> None:
+    """C1: `translation`은 이전까지 어느 테스트도 읽지 않았다.
+
+    직접 확인했다: `translation`을 `[0,0,0]`으로 바꾸거나 `translation[1]`
+    (4.63m)과 `[2]`(0.66m)을 맞바꿔도 — 둘 다 시도함 — 기존 16개 테스트가 전부
+    그대로 통과했다. 저장된 숫자를 자기 자신과 비교하지 않는다 — `place()`를 거친
+    뒤 **실제 착탄점**까지의 거리로, 관측 가능한 결과를 확인한다. 성분 순서에
+    민감하다: `[1]`/`[2]`를 맞바꾸면 메시가 약 5.6 m 떨어진 곳으로 옮겨가 median이
+    폭발한다 — 크기만 같은 손상(스케일 ×1.001 등, §D5 허용치 안)과 달리 이건
+    허용치를 크게 벗어난다.
+    """
+    a = level_mesh.load_alignment(1)
+    placed = level_mesh.place(level_mesh.read_fbx(LEVEL1_FBX), a)
+    hits, _hit_uvs = level_mesh._collect_level_hits(1, min_hits=500)
+    sample = hits[:500]
+    distances = sorted(level_mesh.closest_distance(placed, h) for h in sample)
+    median = distances[len(distances) // 2]
+    assert median < 0.01  # 1cm — 실측 median은 ~0mm(§D5 p95 ≤ 10mm)에 비해 넉넉하다

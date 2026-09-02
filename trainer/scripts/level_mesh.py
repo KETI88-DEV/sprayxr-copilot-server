@@ -1059,6 +1059,19 @@ def _fit_stats(distances_m: Sequence[float]) -> dict[str, float]:
 
 DEFAULT_MIN_DOMINANT_FRACTION: Final = 0.9
 
+# 리뷰 C2: 얇은 축 둘레 180도 회전으로 관계된 두 orientation이 거리로도, UV R²로도
+# 갈리지 않는다 — 둘 다 median/p95/max ~0mm, UV R² 0.9999+를 낸다(직접 재현·확인).
+# 대수적으로 확인했다: "예측 UV가 월드 좌표와 CSV 관측 UV와 같은 방향으로
+# 움직이는가"는 "회귀 기울기(관측 vs 예측)가 양수인가"와 **완전히 같은 정보**다
+# (obs=k1*w+c1, pred=k2*w+c2이면 slope(obs|pred)=k1/k2이므로 부호가 같다는 것과
+# 기울기가 양수라는 것은 동치) — 그래서 순수 선형 상관으로는 이 둘을 원리적으로
+# 못 가른다. 실측 검증에서 "좋은 맞춤"의 기울기가 두 축 모두 음수(-2047.85 근방)로
+# 확인됐다 — 이 상수가 그 기준점이다. 부호는 이 상수로 고정하고, 그 부호를 만족하는
+# 후보들 중에서만 이후 단계(면 쏠림·R²)로 고른다.
+UV_ATLAS_TEXELS: Final = 2048.0
+EXPECTED_UV_SLOPE: Final = -UV_ATLAS_TEXELS
+MIN_UV_R2_FOR_SIGN_CHECK: Final = 0.9
+
 
 def solve_alignment(
     mesh: Mesh,
@@ -1091,16 +1104,21 @@ def solve_alignment(
     180°만큼 다른, 그러나 여전히 고유(det=+1) 회전인) 변환 둘 다 그 평면에서
     수직거리 ~0을 낸다. 실측으로 확인했다: RMS만으로 후보를 고르면 10번 중 5번이
     잘못된 면으로 수렴한다(회전·평행이동·기록되는 max_mm이 실행마다 흔들리는데,
-    유일하게 안정된 건 스케일뿐이었다). 그래서 두 단계로 고른다: (1) 대응이 한쪽
-    면에 `min_dominant_fraction` 이상 쏠린 후보만 남긴다(대칭 함정에서 못 벗어난
-    후보를 거른다), (2) 그 후보들 중 큰 면만으로 잰 UV 회귀 R²(`_uv_agreement`)가
-    가장 높은 것을 최종으로 쓴다 — 거울 대칭은 지오메트리는 맞아도 텍스처 UV는
-    안 맞는다. 어느 후보도 1단계를 통과 못 하면(전부 대칭 함정) 전체 후보 중 R²가
-    가장 높은 것을 그대로 쓴다.
+    유일하게 안정된 건 스케일뿐이었다).
+
+    **UV R²도 한 겹 더 있는 대칭을 못 가른다(리뷰 C2).** 한쪽 면으로 수렴한 뒤에도,
+    그 면 안에서 얇은 축 둘레 180° 회전으로 관계된 두 orientation이 남는다 — 부호만
+    다르고 크기·R²는 똑같다(직접 재현: 두 orientation 다 UV R² 0.9999+, 기울기
+    크기 ~2048). `abs(slope)`나 R²는 부호를 안 보므로 이 둘을 못 가른다. 그래서
+    세 단계로 고른다: (1) 대응이 한쪽 면에 `min_dominant_fraction` 이상 쏠린
+    후보만 남긴다(면 대칭 함정을 못 벗어난 후보를 거른다), (2) R²가 충분히 높은
+    (`MIN_UV_R2_FOR_SIGN_CHECK` 이상) 후보 중에서 기울기 부호까지 `EXPECTED_UV_SLOPE`
+    (실측으로 확인한 "좋은 맞춤"의 부호)에 가장 가까운 것을 고른다 — 이게 얇은 축
+    180° 대칭을 가른다. (2)를 만족하는 후보가 없으면 R²가 가장 높은 것으로 물러선다.
 
     선택된 면·UV 회귀 결과는 `Alignment.fit`에 `face_sign`/`dominant_face_fraction`/
     `uv_slope_u`/`uv_r2_u`/`uv_slope_v`/`uv_r2_v`/`uv_n`으로 남는다(리뷰 B2) — 다음
-    태스크의 메시 앵커 검사가 거리 대신 이 UV 값으로 다시 설계된다.
+    태스크의 메시 앵커 검사가 거리 대신 이 (부호 있는) UV 값으로 다시 설계된다.
     """
     if not hits:
         raise ValueError("solve_alignment: no hit points given")
@@ -1168,12 +1186,28 @@ def solve_alignment(
                     "dom_sign": dom_sign,
                     "dom_frac": dom_frac,
                     "uv_r2": min(uv_stats["uv_r2_u"], uv_stats["uv_r2_v"]),
+                    "uv_slope_u": uv_stats["uv_slope_u"],
+                    "uv_slope_v": uv_stats["uv_slope_v"],
+                    # 목표 부호(EXPECTED_UV_SLOPE)까지 거리 — 얇은 축 180도 대칭의
+                    # 두 orientation은 R²·크기가 같으므로 이 항이 실제로 갈라야 한다.
+                    "sign_error": (uv_stats["uv_slope_u"] - EXPECTED_UV_SLOPE) ** 2
+                    + (uv_stats["uv_slope_v"] - EXPECTED_UV_SLOPE) ** 2,
                 }
             )
 
     converged = [c for c in candidates if c["dom_frac"] >= min_dominant_fraction]  # type: ignore[operator]
     pool = converged if converged else candidates
-    best = max(pool, key=lambda c: c["uv_r2"])  # type: ignore[arg-type]
+
+    # 1단계: R²가 충분한 후보만(면은 맞았는지 이미 걸렀으니 여기서는 선형 적합이
+    # 정말 좋은지만 본다). 2단계: 그 중 목표 부호에 가장 가까운 것 — 이게 얇은 축
+    # 180도 대칭(리뷰 C2)을 가른다. 부호 확인을 통과하는 후보가 없으면(R²가 다
+    # 낮으면) R²로 물러선다 — 그 경우 부호 대칭 이전에 더 근본적인 문제가 있다는
+    # 뜻이라 부호로 고르는 것 자체가 의미가 없다.
+    sign_checkable = [c for c in pool if c["uv_r2"] >= MIN_UV_R2_FOR_SIGN_CHECK]  # type: ignore[operator]
+    if sign_checkable:
+        best = min(sign_checkable, key=lambda c: c["sign_error"])  # type: ignore[arg-type]
+    else:
+        best = max(pool, key=lambda c: c["uv_r2"])  # type: ignore[arg-type]
 
     r_fit: Mat3 = best["r"]  # type: ignore[assignment]
     c_fit: float = best["c"]  # type: ignore[assignment]
