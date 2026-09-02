@@ -212,6 +212,10 @@ def test_every_module_follows_the_convention_not_a_literal(
             "body_placement_lateral": lateral,
             "body_placement_reach": reach,
             "body_placement_height": height,
+            # `signed_band`를 **직접** 잰다. 합성 키 안에서만 보면 그 문자열의 다른
+            # 성분이 움직여 band가 얼어붙은 것을 가린다 — `axis` 딕셔너리에서 고친
+            # 번들 가림이 문자열 층에서 반복되는 형태다(리뷰가 재현해 확인).
+            "signed_band": motion_key.signed_band((0.4, -0.6, 0.5)),
             "motion_key": key,
         }
         for name, (value, unit, word) in axis.items():
