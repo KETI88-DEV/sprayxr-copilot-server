@@ -453,38 +453,59 @@ provenance 필드가 선언된 것과 풀어낸 것을 구분해 나른다."
 - Test: `trainer/scripts/tests/test_level_mesh.py`
 
 **Interfaces:**
-- Consumes: Task 4의 `read_fbx`, `closest_distance`, `place`, `load_alignment`
+- Consumes: Task 4의 `read_fbx`, `place`, `load_alignment`, UV 조회(B3가 노출), `closest_distance`(기록용)
 
 **배경:** 축 이름은 데이터 안에서 검증할 수 없다 — 그것이 이 결함이 640개 테스트를 통과한 이유다. **메시가 그 예외를 만든다.** 착탄점이 면 위에 놓이면 월드 좌표 해석이 외부 기하와 맞는다는 증거가 된다.
 
-**허용치는 측정을 본 뒤 정했다**(실측 p95 0.0 mm / 최대 46 mm). 이 검사는 목표를 판정하지 않고 회귀를 잡으므로 사후 선택이 허용되며, 그 사실을 독스트링에 적는다.
+**⚠️ 이 태스크의 초안 설계는 틀렸고 고쳤다. 스펙 §D5를 읽을 것.**
+
+초안은 최근접 삼각형 거리로 판정했다(p95 ≤ 10 mm, 최대 ≤ 100 mm). Task 4 리뷰가 그것이 **아무것도 판별하지 못함**을 보였다: 착탄점 15,897개가 정확히 한 평면에 있어(X의 서로 다른 float가 하나뿐) 중앙값·p95가 **모든 후보에서** ~1e-7 mm이고, 메시의 **틀린 면**에 붙은 적합이 최대 17.7 mm로 그 관문을 통과한다. `max_mm`은 같은 적합을 재실행해도 0.64~35.0 mm를 오가는 외톨이 순서통계량이다.
+
+**판정은 UV 일치로 한다.** 옳은 후보가 R² 0.9999~1.0000, 틀린 면 후보가 0.000001~0.0038로 **여섯 자릿수** 갈린다. 그 사이 어디에 선을 그어도 같은 판정이 나오므로 임계가 튜닝된 값이 아니라 자연스러운 간극이다. 거리에는 그런 간극이 없었다.
+
+거리는 **함께 기록하되 판정에 쓰지 않는다.**
 
 - [ ] **Step 1: 실패하는 테스트를 쓴다**
 
 ```python
 @pytest.mark.skipif(not LEVEL1_FBX.exists() or not CSV_ROOT.exists(),
                     reason="실데이터가 없는 환경")
-def test_hit_points_lie_on_the_level_mesh() -> None:
-    """접촉점이 레벨 1 메시 면 위에 있다. 월드 좌표 해석의 외부 앵커다.
+def test_hit_points_agree_with_the_level_mesh_uv() -> None:
+    """접촉점의 UV가 메시 면의 UV와 일치한다. 월드 좌표 해석의 외부 앵커다.
 
-    허용치(p95 10mm / 최대 100mm)는 실측(p95 0.0mm / 최대 46mm)을 **본 뒤에**
-    정했다. 목표를 판정하는 값이 아니라 회귀를 잡는 값이므로 사후 선택이 허용된다.
+    거리로 판정하지 않는다 — 착탄점이 정확히 한 평면에 있어서 거리 백분위는 틀린
+    면에 붙은 적합까지 통과시킨다(스펙 §D5). UV는 옳은 후보와 틀린 후보를 여섯
+    자릿수로 가른다.
+
+    허용치는 측정을 본 뒤 정했지만, 실측 간극이 0.9999 대 0.0038이라 그 사이
+    어디에 선을 그어도 판정이 같다. 회귀를 잡는 용도이므로 사후 선택이 허용된다.
     """
     placed = level_mesh.place(level_mesh.read_fbx(LEVEL1_FBX), level_mesh.load_alignment(1))
     hits = _level1_hits(limit=5000)
     assert len(hits) >= 5000, "표본이 모자라면 이 검사는 아무것도 보증하지 않는다"
-    d = sorted(level_mesh.closest_distance(placed, h) for h in hits)
-    p95 = d[int(len(d) * 0.95)]
-    assert p95 <= 0.010, f"p95 {p95 * 1000:.1f}mm"
-    assert d[-1] <= 0.100, f"max {d[-1] * 1000:.1f}mm"
+
+    # 옆면 삼각형(전체의 약 5%)은 무관한 UV를 갖는다. 큰 면으로 제한한다 —
+    # 안 걷어내면 순수 이상치로 R²를 끌어내린다.
+    pairs = level_mesh.uv_pairs_on_dominant_face(placed, hits)
+    assert len(pairs) >= 0.9 * len(hits), f"큰 면 비율 {len(pairs) / len(hits):.1%}"
+
+    for axis in (0, 1):
+        slope, r2 = level_mesh.uv_regression(pairs, axis)
+        assert abs(abs(slope) - 2048.0) <= 0.01 * 2048.0, f"axis {axis} 기울기 {slope:.1f}"
+        assert r2 >= 0.99, f"axis {axis} R^2 {r2:.6f}"
 ```
 
 `_level1_hits`는 `/data/sources/professionals` 아래 레벨 1 CSV에서 착탄점을 읽는 헬퍼다. `simulator_csv` / `measured_pose`의 기존 읽기 경로를 재사용하고 새로 쓰지 않는다.
 
-- [ ] **Step 2: 앵커가 진짜인지 실험으로 확인한다**
+`uv_pairs_on_dominant_face` / `uv_regression`이 `level_mesh`에 없으면 이 태스크에서 추가한다 — B2/B3가 같은 계산을 이미 하고 있으므로 **그 구현을 재사용하고 복제하지 않는다.**
 
-정렬의 평행이동에 **5 cm**를 더하고 이 테스트를 돌린다.
-Expected: FAIL. 확인 후 되돌리고 통과를 재확인한다. **관측한 실패 출력을 리포트에 적는다.**
+- [ ] **Step 2: 앵커가 진짜인지 실험으로 확인한다 — 두 가지로**
+
+(a) 정렬의 평행이동에 **5 cm**를 더한다. Expected: FAIL.
+(b) 정렬을 **틀린 패널 면**의 후보로 바꾼다(Task 4의 B2가 그 후보들을 계산할 수 있다).
+    Expected: FAIL. **초안의 거리 검사는 이것을 통과시켰다** — 그래서 이 실험이 핵심이다.
+
+각각 확인 후 되돌리고 통과를 재확인한다. **관측한 실패 출력 둘을 리포트에 적는다.**
 
 - [ ] **Step 3: 전체 스위트와 커밋**
 
