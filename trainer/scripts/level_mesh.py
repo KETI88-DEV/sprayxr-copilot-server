@@ -27,12 +27,13 @@ Umeyama의 SVD가 정확한 특이값 0을 만나 퇴화한다. `_svd3`의 문�
 
 from __future__ import annotations
 
+import itertools
 import json
 import math
 import random
 import struct
 import zlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import BinaryIO, Final, Sequence
 
@@ -172,23 +173,36 @@ def _p70_dict(node: _Node) -> dict[str, list]:
     return result
 
 
-def _triangulate(pvi: Sequence[int]) -> list[tuple[int, int, int]]:
-    """`PolygonVertexIndex`를 삼각형 부채꼴로 나눈다.
+def _triangulate(
+    pvi: Sequence[int],
+) -> tuple[list[tuple[int, int, int]], list[tuple[int, int, int]]]:
+    """`PolygonVertexIndex`를 삼각형 부채꼴로 나눈다. (정점 인덱스 삼각형, 코너 인덱스
+    삼각형)을 함께 낸다 — 후자가 `UVIndex`/`LayerElementNormal` 같은
+    "폴리곤 정점당 하나"(`ByPolygonVertex`) 배열을 잘 자리다.
 
     각 다각형의 마지막 인덱스는 비트 반전(`~i`)으로 표시된다 — `-i - 1`로 되돌린다.
+    코너 인덱스는 `PolygonVertexIndex`와 같은 길이·같은 순서를 도는 평평한 위치다
+    (부호와 무관하게 항목마다 하나씩 늘어난다) — `UVIndex` 같은 배열이 그 위치로
+    색인된다.
     """
-    triangles: list[tuple[int, int, int]] = []
-    current: list[int] = []
+    vertex_triangles: list[tuple[int, int, int]] = []
+    corner_triangles: list[tuple[int, int, int]] = []
+    current_v: list[int] = []
+    current_c: list[int] = []
+    corner = 0
     for raw in pvi:
+        idx = -raw - 1 if raw < 0 else raw
+        current_v.append(idx)
+        current_c.append(corner)
+        corner += 1
         if raw < 0:
-            current.append(-raw - 1)
-            n = len(current)
+            n = len(current_v)
             for i in range(1, n - 1):
-                triangles.append((current[0], current[i], current[i + 1]))
-            current = []
-        else:
-            current.append(raw)
-    return triangles
+                vertex_triangles.append((current_v[0], current_v[i], current_v[i + 1]))
+                corner_triangles.append((current_c[0], current_c[i], current_c[i + 1]))
+            current_v = []
+            current_c = []
+    return vertex_triangles, corner_triangles
 
 
 # =============================================================================
@@ -198,12 +212,39 @@ def _triangulate(pvi: Sequence[int]) -> list[tuple[int, int, int]]:
 
 @dataclass(frozen=True, slots=True)
 class Mesh:
-    """모델 공간 메시. `place`로 정렬을 적용하기 전까지는 FBX 파일 좌표 그대로다."""
+    """모델 공간 메시. `place`로 정렬을 적용하기 전까지는 FBX 파일 좌표 그대로다.
+
+    `uv_indices[i]`는 `triangles[i]`의 세 코너 각각이 `uvs`(UV 풀) 어디를 가리키는지다
+    — `triangle_uv`가 이걸로 무게중심 좌표에서 UV를 보간한다. 이게 없으면 `uvs`는
+    떠 있는 값 목록일 뿐이고 어느 삼각형의 어느 UV인지 되짚을 수 없다(리뷰 B3) —
+    UV 교차검증(B1/B2가 얼굴 판정에 쓰는 바로 그 검사)이 이 연결 없이는 불가능하다.
+    비어 있으면(합성 테스트 메시 등) UV가 없다는 뜻이다.
+    """
 
     vertices: list[Vec3]
     triangles: list[tuple[int, int, int]]
     uvs: list[tuple[float, float]]
     declared: dict[str, object]
+    uv_indices: list[tuple[int, int, int]] = field(default_factory=list)
+
+
+def triangle_uv(mesh: Mesh, triangle_index: int, barycentric: tuple[float, float, float]) -> tuple[float, float]:
+    """`triangle_index`번 삼각형 위의 무게중심 좌표 `barycentric`에서 UV를 보간한다.
+
+    `mesh.uv_indices`(B3)가 있어야 한다 — 없으면(합성 메시, 또는 UV 없는 파일)
+    `ValueError`다.
+    """
+    if not mesh.uv_indices:
+        raise ValueError("triangle_uv: mesh has no uv_indices (read_fbx found no LayerElementUV)")
+    if not 0 <= triangle_index < len(mesh.uv_indices):
+        raise ValueError(f"triangle_uv: triangle index {triangle_index} out of range")
+    i0, i1, i2 = mesh.uv_indices[triangle_index]
+    uv0, uv1, uv2 = mesh.uvs[i0], mesh.uvs[i1], mesh.uvs[i2]
+    u, v, w = barycentric
+    return (
+        u * uv0[0] + v * uv1[0] + w * uv2[0],
+        u * uv0[1] + v * uv1[1] + w * uv2[1],
+    )
 
 
 def read_fbx(path: Path) -> Mesh:
@@ -234,12 +275,6 @@ def read_fbx(path: Path) -> Mesh:
     gs = _p70_dict(global_settings_nodes[0])
     m = _p70_dict(model)
 
-    def scalar(d: dict[str, list], key: str, default: object) -> object:
-        return d[key][0] if key in d else default
-
-    def vec(d: dict[str, list], key: str, default: Vec3 = (0.0, 0.0, 0.0)) -> Vec3:
-        return (d[key][0], d[key][1], d[key][2]) if key in d else default
-
     vertices_node = geometry.child("Vertices")
     if vertices_node is None:
         raise ValueError(f"{path}: Geometry has no Vertices")
@@ -247,39 +282,90 @@ def read_fbx(path: Path) -> Mesh:
     vertices = [(flat_v[i], flat_v[i + 1], flat_v[i + 2]) for i in range(0, len(flat_v), 3)]
 
     pvi_node = geometry.child("PolygonVertexIndex")
-    triangles = _triangulate(pvi_node.props[0]) if pvi_node is not None else []
+    if pvi_node is not None:
+        triangles, corner_triangles = _triangulate(pvi_node.props[0])
+    else:
+        triangles, corner_triangles = [], []
 
     uvs: list[tuple[float, float]] = []
+    uv_indices: list[tuple[int, int, int]] = []
     layer_uv = geometry.child("LayerElementUV")
     if layer_uv is not None:
+        # B3: `MappingInformationType`/`ReferenceInformationType`가 이 리더가 실제로
+        # 검증한 값(레벨 1의 `ByPolygonVertex`/`IndexToDirect`)과 다르면, UVIndex를
+        # 그대로 밀어붙이는 대신 멈춘다 — 다른 매핑에서는 `triangle_uv`의 코너→UV
+        # 대응 규칙 자체가 달라진다.
+        mapping_node = layer_uv.child("MappingInformationType")
+        reference_node = layer_uv.child("ReferenceInformationType")
+        mapping = mapping_node.props[0] if mapping_node is not None else None
+        reference = reference_node.props[0] if reference_node is not None else None
+        if mapping != "ByPolygonVertex" or reference != "IndexToDirect":
+            raise NotImplementedError(
+                f"{path}: LayerElementUV mapping/reference is {mapping!r}/{reference!r}, "
+                "not ByPolygonVertex/IndexToDirect — not seen in the level fixtures this "
+                "reader was built against"
+            )
         uv_node = layer_uv.child("UV")
+        uv_index_node = layer_uv.child("UVIndex")
         if uv_node is not None:
             flat_uv = uv_node.props[0]
             uvs = [(flat_uv[i], flat_uv[i + 1]) for i in range(0, len(flat_uv), 2)]
+        if uv_index_node is not None and uvs:
+            flat_index = uv_index_node.props[0]
+            uv_indices = [
+                (flat_index[c0], flat_index[c1], flat_index[c2])
+                for c0, c1, c2 in corner_triangles
+            ]
 
     model_name = ""
     if len(model.props) > 1 and isinstance(model.props[1], str):
         model_name = model.props[1].split("\x00")[0]
 
     declared: dict[str, object] = {
-        "UpAxis": int(scalar(gs, "UpAxis", 1)),
-        "UpAxisSign": int(scalar(gs, "UpAxisSign", 1)),
-        "FrontAxis": int(scalar(gs, "FrontAxis", 2)),
-        "CoordAxis": int(scalar(gs, "CoordAxis", 0)),
-        "UnitScaleFactor": float(scalar(gs, "UnitScaleFactor", 1.0)),
-        "PreRotation": vec(m, "PreRotation"),
-        "PostRotation": vec(m, "PostRotation"),
-        "LclRotation": vec(m, "Lcl Rotation"),
-        "LclTranslation": vec(m, "Lcl Translation"),
-        "LclScaling": vec(m, "Lcl Scaling", (1.0, 1.0, 1.0)),
-        "GeometricTranslation": vec(m, "GeometricTranslation"),
-        "GeometricRotation": vec(m, "GeometricRotation"),
-        "GeometricScaling": vec(m, "GeometricScaling", (1.0, 1.0, 1.0)),
-        "RotationOrder": int(scalar(m, "RotationOrder", 0)),
+        # B5: `UpAxis`는 이 프로젝트의 "세 번째 독립 확인"이 읽는 값이다(모듈 리스트
+        # 최상단, world_axes.UP_INDEX와 비교) — 없으면 기본값(1)이 우연히 항상 참인
+        # `1 == 1` 검사가 된다. 그래서 여기서만 없으면 기본값을 쓰지 않고 멈춘다.
+        # 나머지(PreRotation 등)는 FBX 스펙상 생략 = 항등이 실제 의미라 기본값이 정당하다.
+        "UpAxis": _require_scalar(gs, "UpAxis", path, "GlobalSettings"),
+        "UpAxisSign": int(_scalar(gs, "UpAxisSign", 1)),
+        "FrontAxis": int(_scalar(gs, "FrontAxis", 2)),
+        "CoordAxis": int(_scalar(gs, "CoordAxis", 0)),
+        "UnitScaleFactor": float(_scalar(gs, "UnitScaleFactor", 1.0)),
+        "PreRotation": _vec(m, "PreRotation"),
+        "PostRotation": _vec(m, "PostRotation"),
+        "LclRotation": _vec(m, "Lcl Rotation"),
+        "LclTranslation": _vec(m, "Lcl Translation"),
+        "LclScaling": _vec(m, "Lcl Scaling", (1.0, 1.0, 1.0)),
+        "GeometricTranslation": _vec(m, "GeometricTranslation"),
+        "GeometricRotation": _vec(m, "GeometricRotation"),
+        "GeometricScaling": _vec(m, "GeometricScaling", (1.0, 1.0, 1.0)),
+        "RotationOrder": int(_scalar(m, "RotationOrder", 0)),
         "ModelName": model_name,
     }
 
-    return Mesh(vertices=vertices, triangles=triangles, uvs=uvs, declared=declared)
+    return Mesh(
+        vertices=vertices, triangles=triangles, uvs=uvs, declared=declared, uv_indices=uv_indices
+    )
+
+
+def _scalar(d: dict[str, list], key: str, default: object) -> object:
+    return d[key][0] if key in d else default
+
+
+def _require_scalar(d: dict[str, list], key: str, path: Path, node_name: str) -> int:
+    """B5: 키가 없으면 기본값으로 조용히 채우지 않고 멈춘다.
+
+    `read_fbx`가 `UpAxis`에 쓴다 — 세 번째 독립 확인(`world_axes.UP_INDEX`와 비교)이
+    실제로 파일에서 읽은 값과 규약을 비교하는 것이지, 파이썬 기본값과 규약을
+    비교하는(그래서 파일이 뭐라 하든 항상 참인) `1 == 1`이 아니게 하기 위함이다.
+    """
+    if key not in d:
+        raise ValueError(f"{path}: {node_name}.{key} is missing — required, no silent default")
+    return int(d[key][0])
+
+
+def _vec(d: dict[str, list], key: str, default: Vec3 = (0.0, 0.0, 0.0)) -> Vec3:
+    return (d[key][0], d[key][1], d[key][2]) if key in d else default
 
 
 # =============================================================================
@@ -400,6 +486,9 @@ def _barycentric(p: Vec3, a: Vec3, b: Vec3, c: Vec3) -> tuple[float, float, floa
 # =============================================================================
 
 
+VALID_PROVENANCE: Final[frozenset[str]] = frozenset({"solved", "declared"})
+
+
 @dataclass(frozen=True, slots=True)
 class Alignment:
     """`world = scale * (rotation @ raw) + translation`.
@@ -407,6 +496,10 @@ class Alignment:
     `provenance`가 "solved"면 `solve_alignment`이 실측 착탄점에 맞춰 푼 값이고,
     "declared"면 FBX가 선언한 값을 그대로 읽은 것이다. 두 주장은 다르다 — 레벨 1은
     선언된 변환이 3.68 m 어긋나므로 "solved"만 실제로 쓸 수 있다.
+
+    B4: `provenance`가 이 필드의 존재 이유 전부다 — "맞춘 값"과 "읽은 값"이 뒤섞이면
+    안 되므로, 생성 시점(`__post_init__`)에 `VALID_PROVENANCE` 밖의 값을 거절한다.
+    `load_alignment`도 이 생성자를 거치므로 손상된 JSON도 여기서 걸린다.
     """
 
     level: int
@@ -416,6 +509,13 @@ class Alignment:
     scale: float
     declared_scale: float
     fit: dict[str, float]
+
+    def __post_init__(self) -> None:
+        if self.provenance not in VALID_PROVENANCE:
+            raise ValueError(
+                f"Alignment.provenance must be one of {sorted(VALID_PROVENANCE)}, "
+                f"got {self.provenance!r}"
+            )
 
 
 def _rotation_matrix(alignment: Alignment) -> Mat3:
@@ -671,8 +771,6 @@ def _cube_rotations() -> list[Mat3]:
     추측하지 않고, 그럴듯한 후보를 넓게 두고 실측 착탄점으로 어느 것이 맞는지
     ICP로 고른다.
     """
-    import itertools
-
     mats: list[Mat3] = []
     for perm in itertools.permutations(range(3)):
         for signs in itertools.product((1, -1), repeat=3):
@@ -716,6 +814,23 @@ def _thin_axis_index(vertices: Sequence[Vec3]) -> int:
     return min(range(3), key=lambda i: extent[i])
 
 
+def _world_tris_for(
+    vertices_raw: Sequence[Vec3],
+    triangles_vidx: Sequence[tuple[int, int, int]],
+    rotation: Mat3,
+    scale: float,
+    translation: Vec3,
+) -> list[tuple[Vec3, Vec3, Vec3]]:
+    return [
+        (
+            _apply_similarity(rotation, scale, translation, vertices_raw[i0]),
+            _apply_similarity(rotation, scale, translation, vertices_raw[i1]),
+            _apply_similarity(rotation, scale, translation, vertices_raw[i2]),
+        )
+        for i0, i1, i2 in triangles_vidx
+    ]
+
+
 def _icp_surface(
     vertices_raw: Sequence[Vec3],
     triangles_vidx: Sequence[tuple[int, int, int]],
@@ -725,29 +840,27 @@ def _icp_surface(
     t_seed: Vec3,
     iters: int = 15,
     tol: float = 1e-7,
-) -> tuple[Mat3, float, Vec3, float]:
+) -> tuple[Mat3, float, Vec3, float, list[int]]:
     """점-이산표본이 아니라 점-연속표면 ICP다.
 
     각 착탄점을 어느 삼각형이든 메시 표면의 최근접점에 대응시키고, 그 점의 무게중심
     좌표로 원본 모델 공간 대응점을 만든다. 메시가 부분적으로만 덮여도(레벨 10처럼)
     덮이지 않은 영역이 맞춤을 왜곡하지 않는다 — 고정 표본점 ICP와 달리 실제로 맞은
     영역 근처의 점만 대응으로 쓰인다.
+
+    거리(`rms`)만으로 앞/뒤 면을 가릴 수 없다는 사실이 리뷰에서 드러났다(모듈
+    상단·`solve_alignment` 독스트링) — 그래서 호출자가 면·UV로 후보를 가릴 수 있게,
+    수렴한 **최종** 변환으로 다시 한 번 대응을 구해 그 삼각형 인덱스 목록도 낸다
+    (`final_ti`). 마지막 루프 반복이 낸 `rms`/대응은 그 반복 *전* 변환의 잔차라
+    반환하는 변환과 정확히 안 맞을 수 있어, 반환 변환으로 한 번 더 계산해 맞춘다.
     """
     rotation, scale, translation = r_seed, c_seed, t_seed
     last_rms: float | None = None
     for _ in range(iters):
-        world_tris: list[tuple[Vec3, Vec3, Vec3]] = []
-        raw_tris: list[tuple[Vec3, Vec3, Vec3]] = []
-        for i0, i1, i2 in triangles_vidx:
-            a_raw, b_raw, c_raw = vertices_raw[i0], vertices_raw[i1], vertices_raw[i2]
-            raw_tris.append((a_raw, b_raw, c_raw))
-            world_tris.append(
-                (
-                    _apply_similarity(rotation, scale, translation, a_raw),
-                    _apply_similarity(rotation, scale, translation, b_raw),
-                    _apply_similarity(rotation, scale, translation, c_raw),
-                )
-            )
+        world_tris = _world_tris_for(vertices_raw, triangles_vidx, rotation, scale, translation)
+        raw_tris = [
+            (vertices_raw[i0], vertices_raw[i1], vertices_raw[i2]) for i0, i1, i2 in triangles_vidx
+        ]
         corr_raw: list[Vec3] = []
         corr_hit: list[Vec3] = []
         total_d2 = 0.0
@@ -770,7 +883,10 @@ def _icp_surface(
             last_rms = rms
             break
         last_rms = rms
-    return rotation, scale, translation, last_rms  # type: ignore[return-value]
+
+    final_world_tris = _world_tris_for(vertices_raw, triangles_vidx, rotation, scale, translation)
+    final_ti = [_nearest_on_mesh(p, final_world_tris)[2] for p in hit_points]
+    return rotation, scale, translation, last_rms, final_ti  # type: ignore[return-value]
 
 
 def _prefilter_seed_rotations(
@@ -789,6 +905,143 @@ def _prefilter_seed_rotations(
     return [seed_r for _, seed_r in scored[:top_k]]
 
 
+# =============================================================================
+# 면 판정과 UV 일치도 (리뷰 B1/B2) — 거리로는 앞/뒤 면을 가릴 수 없다
+# =============================================================================
+#
+# 레벨 1의 메시는 얇은 두 면이 마주 보는 양면 패널이고, 착탄점은 정확히 평면이다.
+# 그래서 진짜 변환과 "거울 대칭"(얇은 축과 수직인 평면 기준 180°만큼 다른, 그러나
+# 여전히 고유(det=+1) 회전인) 변환 둘 다 그 평면에서 수직거리 ~0을 낸다 — median·p95
+# 는 항상 ~0이고 max_mm 하나만 남는데 그마저 표본별로 흔들린다(리뷰: 7.43~35.01mm).
+# 거리는 이 둘을 가를 능력이 없다. 실제로 가르는 건 (1) 대응이 한쪽 면에
+# 쏠렸는가(대칭 함정에 빠지지 않았는가) — `_dominant_face`, 그리고 (2) 그 면의 UV가
+# 실측 텍스처 UV와 맞는가(거울 대칭은 지오메트리는 맞아도 UV는 안 맞는다) —
+# `_uv_agreement`다.
+
+
+# 삼각형 법선이 얇은 축과 이보다 더 나란하면(내적 절대값 기준) "큰 면"이고, 아니면
+# 테두리 옆벽이다. 옆벽 삼각형(레벨 1: 84개 폴리곤 인덱스 중 일부, 넓이 27~98 —
+# 큰 면의 넓이 2015에 비해 훨씬 작다)은 두 큰 면 중 어느 쪽에도 안 넣는다.
+_BIG_FACE_NORMAL_COS: Final = 0.5
+
+
+def _face_sign_by_triangle(
+    vertices_raw: Sequence[Vec3], triangles: Sequence[tuple[int, int, int]], thin_axis: int
+) -> list[float]:
+    """삼각형마다: 큰 면 중 위쪽이면 +1, 아래쪽이면 -1, 옆벽(테두리)이면 0.
+
+    **법선 방향으로 가른다 — 얇은 축 위 중심 좌표로 가르지 않는다.** 처음엔 중심
+    좌표(centroid[thin_axis]의 부호)로 갈랐는데, 옆벽 삼각형이 프레임 둘레를 도느라
+    중심 좌표의 부호가 제각각이라(위쪽 절반 둘레는 +, 아래쪽 절반은 -) 두 "면" 각각에
+    옆벽 조각이 반반씩 섞여 들어갔다 — UV 회귀에 무관한 UV를 실은 이상치가 끼어
+    R²가 0.987 수준으로 깎였다(리뷰가 지적한, 트리밍 전 표본의 문제와 같은 종류).
+    법선이 얇은 축과 거의 나란한 것만 "큰 면"으로 인정하면 옆벽이 깨끗이 빠지고
+    R²가 트리밍된 표본 수준(0.9999998/1.0000000)까지 올라간다 — 실측으로 확인했다.
+    """
+    out: list[float] = []
+    for tri in triangles:
+        a, b, c = (vertices_raw[i] for i in tri)
+        n = _cross(_sub(b, a), _sub(c, a))
+        length = math.sqrt(_dot(n, n))
+        if length < 1e-12:
+            out.append(0.0)
+            continue
+        cos_thin = n[thin_axis] / length
+        if abs(cos_thin) < _BIG_FACE_NORMAL_COS:
+            out.append(0.0)  # 옆벽: 얇은 축과 거의 수직인 법선
+        else:
+            out.append(1.0 if cos_thin > 0 else -1.0)
+    return out
+
+
+def _dominant_face(
+    face_sign_by_triangle: Sequence[float], triangle_indices: Sequence[int]
+) -> tuple[float, float]:
+    """큰 면에 대응된 것들 중 어느 면에 더 쏠렸는지: (다수 면의 부호, 그 비율).
+
+    옆벽(부호 0)에 대응된 점은 분모에서도 뺀다 — "옆벽에 맞음"은 "틀린 큰 면에
+    맞음"과 다른 사실이라 섞으면 판정이 흐려진다. 비율이 낮으면(대칭 함정에서
+    절반씩 갈리면 ~0.5) 아직 한쪽 큰 면으로 수렴하지 않은 것이다 —
+    `solve_alignment`이 `min_dominant_fraction`으로 이런 후보를 거른다.
+    """
+    pos = sum(1 for ti in triangle_indices if face_sign_by_triangle[ti] > 0)
+    neg = sum(1 for ti in triangle_indices if face_sign_by_triangle[ti] < 0)
+    total = pos + neg
+    if total == 0:
+        return 0.0, 0.0
+    if pos >= neg:
+        return 1.0, pos / total
+    return -1.0, neg / total
+
+
+def _linreg(xs: Sequence[float], ys: Sequence[float]) -> tuple[float, float, float]:
+    """단순 최소제곱 직선 `(slope, intercept, R²)`. `xs`에 분산이 없으면 기울기 0."""
+    n = len(xs)
+    mean_x = sum(xs) / n
+    mean_y = sum(ys) / n
+    sxy = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys))
+    sxx = sum((x - mean_x) ** 2 for x in xs)
+    syy = sum((y - mean_y) ** 2 for y in ys)
+    if sxx <= 1e-15:
+        return 0.0, mean_y, 0.0
+    slope = sxy / sxx
+    intercept = mean_y - slope * mean_x
+    if syy <= 1e-15:
+        return slope, intercept, 1.0
+    ss_res = sum((y - (slope * x + intercept)) ** 2 for x, y in zip(xs, ys))
+    return slope, intercept, 1.0 - ss_res / syy
+
+
+def _uv_agreement(
+    mesh: Mesh,
+    points: Sequence[Vec3],
+    point_uvs: Sequence[tuple[float, float]],
+    triangle_indices: Sequence[int],
+    world_tris: Sequence[tuple[Vec3, Vec3, Vec3]],
+    dominant_sign: float,
+    face_sign_by_triangle: Sequence[float],
+) -> dict[str, float]:
+    """B2: 큰 면(`dominant_sign`)에 대응된 점만 골라, 메시 UV를 CSV UV에 회귀한다.
+
+    작은 옆면(테두리) 삼각형에 붙은 점은 뺀다 — 서로 무관한 UV를 실어 순수 이상치로
+    작용한다(리뷰: 5.16%가 옆면). 반환 딕셔너리는 그대로 `Alignment.fit`에 들어간다.
+    """
+    pred_u: list[float] = []
+    pred_v: list[float] = []
+    obs_u: list[float] = []
+    obs_v: list[float] = []
+    for p, uv, ti in zip(points, point_uvs, triangle_indices):
+        if face_sign_by_triangle[ti] != dominant_sign:
+            continue
+        if ti >= len(mesh.uv_indices):
+            continue
+        aw, bw, cw = world_tris[ti]
+        cp = _closest_point_on_triangle(p, aw, bw, cw)
+        bary = _barycentric(cp, aw, bw, cw)
+        pu, pv = triangle_uv(mesh, ti, bary)
+        pred_u.append(pu)
+        pred_v.append(pv)
+        obs_u.append(uv[0])
+        obs_v.append(uv[1])
+    if len(pred_u) < 2:
+        return {
+            "uv_n": float(len(pred_u)),
+            "uv_slope_u": 0.0,
+            "uv_r2_u": 0.0,
+            "uv_slope_v": 0.0,
+            "uv_r2_v": 0.0,
+        }
+    slope_u, _int_u, r2_u = _linreg(pred_u, obs_u)
+    slope_v, _int_v, r2_v = _linreg(pred_v, obs_v)
+    return {
+        "uv_n": float(len(pred_u)),
+        "uv_slope_u": slope_u,
+        "uv_r2_u": r2_u,
+        "uv_slope_v": slope_v,
+        "uv_r2_v": r2_v,
+    }
+
+
 def _fit_stats(distances_m: Sequence[float]) -> dict[str, float]:
     s = sorted(distances_m)
     n = len(s)
@@ -804,61 +1057,89 @@ def _fit_stats(distances_m: Sequence[float]) -> dict[str, float]:
     }
 
 
+DEFAULT_MIN_DOMINANT_FRACTION: Final = 0.9
+
+
 def solve_alignment(
     mesh: Mesh,
     hits: Sequence[Vec3],
     *,
+    hit_uvs: Sequence[tuple[float, float]],
     level: int = 1,
     fit_sample: int = DEFAULT_FIT_SAMPLE,
     eval_cap: int = DEFAULT_EVAL_CAP,
-    top_k: int = 3,
+    top_k: int = 8,
     icp_iters: int = 15,
     seed: int = 0,
+    min_dominant_fraction: float = DEFAULT_MIN_DOMINANT_FRACTION,
 ) -> Alignment:
-    """실측 착탄점 `hits`에 `mesh`를 맞추는 Umeyama 유사변환을 푼다.
+    """실측 착탄점 `hits`(+ 짝을 이루는 `hit_uvs`)에 `mesh`를 맞추는 Umeyama
+    유사변환을 푼다. 반환된 `Alignment.provenance`는 항상 `"solved"`다.
 
     선언된 변환은 씬 수준 회전이 빠져 있어 그대로 쓰면 미터 단위로 어긋난다
-    (모듈 독스트링). 그래서 선언된 회전에 정육면체 회전 24개를 합성해 시드 후보를
-    만들고, 실측 범위와 가장 가까운 `top_k`개만 점-표면 ICP로 정련해 최적을 고른다.
-    반환된 `Alignment.provenance`는 항상 `"solved"`다.
+    (모듈 독스트링). 그래서 선언된 회전에 정육면체 회전 24개를 합성해 후보를 만들고,
+    실측 범위와 가장 가까운 `top_k`개를 점-표면 ICP로 정련한다.
 
-    **앞/뒤 면 대칭 함정.** 레벨 1의 메시는 얇은 양면 패널이다(가장 얇은 축의 범위가
-    다른 두 축보다 훨씬 작다) — 두 큰 면이 그 얇은 축을 사이에 두고 마주 본다. 초기
-    시드의 평행이동을 전체 정점의 평균으로 두면, 그 평균이 정확히 두 면의 중간에
-    놓여 두 면에서 정확히 같은 거리가 된다. 그 대칭은 ICP가 스스로 못 깬다 — 각
-    착탄점이 두 면 중 아무 쪽에나(거의 반반) 대응되고, Umeyama가 그 반반 대응의
-    평균을 다시 내놓으면서 같은 중간 지점에 눌러앉는 안정된(그러나 틀린) 고정점이
-    된다. 실측으로 검증했다: 이 대칭을 안 깨면 최근접 삼각형 거리가 약 6 mm에서
-    수렴하지 않고 멈추는데, 이는 패널 두께의 절반과 같은 크기다(두 면의 평균이므로).
-    그래서 시드마다 얇은 축을 따라 평행이동을 아주 조금 밀어(두 부호 다 시도) 대칭을
-    미리 깬다 — 한쪽으로 밀면 그 면에 대응이 쏠리기 시작하고, ICP의 나머지 반복이
-    그 쏠림을 스스로 강화해 하나의 면으로 수렴한다. 두 부호 다 시도해 최종 RMS가 더
-    낮은 쪽을 쓴다(어느 면이 진짜인지는 착탄점만으로 미리 알 수 없다).
+    **앞/뒤 면 대칭 함정과 그 해소 (리뷰 B1).** 레벨 1의 메시는 얇은 양면 패널이다
+    — 두 큰 면이 얇은 축을 사이에 두고 마주 본다. 초기 시드의 평행이동을 전체
+    정점의 평균으로 두면 정확히 두 면의 중간이 되어 대칭이 되고, ICP가 스스로 못
+    깬다(각 착탄점이 두 면 아무 쪽에나 반반 대응되는 안정된 고정점). 시드마다 얇은
+    축으로 평행이동을 미리 밀어(두 부호 다) 대칭을 깬다.
+
+    **그런데 거리(RMS/median/p95/max)는 어느 면이 옳은지 가릴 능력이 없다** —
+    착탄점이 정확히 평면이라, 진짜 변환과 "거울 대칭"(얇은 축과 수직인 평면 기준
+    180°만큼 다른, 그러나 여전히 고유(det=+1) 회전인) 변환 둘 다 그 평면에서
+    수직거리 ~0을 낸다. 실측으로 확인했다: RMS만으로 후보를 고르면 10번 중 5번이
+    잘못된 면으로 수렴한다(회전·평행이동·기록되는 max_mm이 실행마다 흔들리는데,
+    유일하게 안정된 건 스케일뿐이었다). 그래서 두 단계로 고른다: (1) 대응이 한쪽
+    면에 `min_dominant_fraction` 이상 쏠린 후보만 남긴다(대칭 함정에서 못 벗어난
+    후보를 거른다), (2) 그 후보들 중 큰 면만으로 잰 UV 회귀 R²(`_uv_agreement`)가
+    가장 높은 것을 최종으로 쓴다 — 거울 대칭은 지오메트리는 맞아도 텍스처 UV는
+    안 맞는다. 어느 후보도 1단계를 통과 못 하면(전부 대칭 함정) 전체 후보 중 R²가
+    가장 높은 것을 그대로 쓴다.
+
+    선택된 면·UV 회귀 결과는 `Alignment.fit`에 `face_sign`/`dominant_face_fraction`/
+    `uv_slope_u`/`uv_r2_u`/`uv_slope_v`/`uv_r2_v`/`uv_n`으로 남는다(리뷰 B2) — 다음
+    태스크의 메시 앵커 검사가 거리 대신 이 UV 값으로 다시 설계된다.
     """
     if not hits:
         raise ValueError("solve_alignment: no hit points given")
+    if len(hits) != len(hit_uvs):
+        raise ValueError("solve_alignment: hits and hit_uvs must be the same length, index-paired")
     if not mesh.triangles:
         raise ValueError("solve_alignment: mesh has no triangles")
+    if not mesh.uv_indices:
+        raise ValueError(
+            "solve_alignment: mesh has no uv_indices — cannot disambiguate the correct "
+            "face from a distance-only fit (see B1/B2 in the module docstring)"
+        )
 
     declared_rotation = _declared_rotation(mesh.declared)
     declared_scale = _declared_scale(mesh.declared)
 
     hit_list = list(hits)
+    uv_list = list(hit_uvs)
+    n_hits = len(hit_list)
     hit_extent = _extents(hit_list)
     thin_axis = _thin_axis_index(mesh.vertices)
     thin_extent = _extents(mesh.vertices)[thin_axis]
     # 대칭을 깨는 데 필요한 만큼만 민다 — 두께의 몇 % 정도. 너무 작으면 부동소수
     # 잡음에 묻히고, 너무 크면 시드가 원래 놓일 자리에서 멀어진다.
     nudge = max(thin_extent * 0.05, 1e-6)
+    face_sign_by_triangle = _face_sign_by_triangle(mesh.vertices, mesh.triangles, thin_axis)
 
     rng = random.Random(seed)
-    fit_target = rng.sample(hit_list, min(fit_sample, len(hit_list)))
-    eval_sample = rng.sample(hit_list, min(eval_cap, len(hit_list)))
+    fit_idx = rng.sample(range(n_hits), min(fit_sample, n_hits))
+    eval_idx = rng.sample(range(n_hits), min(eval_cap, n_hits))
+    fit_target = [hit_list[i] for i in fit_idx]
+    fit_target_uv = [uv_list[i] for i in fit_idx]
+    eval_sample = [hit_list[i] for i in eval_idx]
+    eval_sample_uv = [uv_list[i] for i in eval_idx]
     mu_t = _mean(fit_target)
 
     seed_rotations = _prefilter_seed_rotations(mesh.vertices, declared_rotation, hit_extent, top_k)
 
-    best: tuple[float, Mat3, float, Vec3] | None = None
+    candidates: list[dict[str, object]] = []
     for seed_r in seed_rotations:
         c_seed = declared_scale
         seeded_pts = [rotation_math.matvec(seed_r, v) for v in mesh.vertices]  # type: ignore[arg-type]
@@ -871,24 +1152,50 @@ def solve_alignment(
             t_seed = tuple(
                 t_seed_centered[k] + sign * c_seed * nudge_world[k] for k in range(3)
             )
-            r_fit, c_fit, t_fit, rms = _icp_surface(
+            r_fit, c_fit, t_fit, _rms, ti_list = _icp_surface(
                 mesh.vertices, mesh.triangles, fit_target, seed_r, c_seed, t_seed, iters=icp_iters
             )
-            if best is None or rms < best[0]:
-                best = (rms, r_fit, c_fit, t_fit)  # type: ignore[assignment]
+            dom_sign, dom_frac = _dominant_face(face_sign_by_triangle, ti_list)
+            world_tris = _world_tris_for(mesh.vertices, mesh.triangles, r_fit, c_fit, t_fit)  # type: ignore[arg-type]
+            uv_stats = _uv_agreement(
+                mesh, fit_target, fit_target_uv, ti_list, world_tris, dom_sign, face_sign_by_triangle
+            )
+            candidates.append(
+                {
+                    "r": r_fit,
+                    "c": c_fit,
+                    "t": t_fit,
+                    "dom_sign": dom_sign,
+                    "dom_frac": dom_frac,
+                    "uv_r2": min(uv_stats["uv_r2_u"], uv_stats["uv_r2_v"]),
+                }
+            )
 
-    assert best is not None
-    _rms, r_fit, c_fit, t_fit = best
+    converged = [c for c in candidates if c["dom_frac"] >= min_dominant_fraction]  # type: ignore[operator]
+    pool = converged if converged else candidates
+    best = max(pool, key=lambda c: c["uv_r2"])  # type: ignore[arg-type]
 
-    world_tris = [
-        (
-            _apply_similarity(r_fit, c_fit, t_fit, mesh.vertices[a]),
-            _apply_similarity(r_fit, c_fit, t_fit, mesh.vertices[b]),
-            _apply_similarity(r_fit, c_fit, t_fit, mesh.vertices[c]),
-        )
-        for a, b, c in mesh.triangles
-    ]
-    distances = [_nearest_on_mesh(p, world_tris)[0] for p in eval_sample]
+    r_fit: Mat3 = best["r"]  # type: ignore[assignment]
+    c_fit: float = best["c"]  # type: ignore[assignment]
+    t_fit: Vec3 = best["t"]  # type: ignore[assignment]
+    dom_sign: float = best["dom_sign"]  # type: ignore[assignment]
+
+    world_tris = _world_tris_for(mesh.vertices, mesh.triangles, r_fit, c_fit, t_fit)
+    distances: list[float] = []
+    final_ti: list[int] = []
+    for p in eval_sample:
+        d, _cp, ti = _nearest_on_mesh(p, world_tris)
+        distances.append(d)
+        final_ti.append(ti)
+    _final_sign, final_dom_frac = _dominant_face(face_sign_by_triangle, final_ti)
+    uv_final = _uv_agreement(
+        mesh, eval_sample, eval_sample_uv, final_ti, world_tris, dom_sign, face_sign_by_triangle
+    )
+
+    fit = _fit_stats(distances)
+    fit["face_sign"] = dom_sign
+    fit["dominant_face_fraction"] = final_dom_frac
+    fit.update(uv_final)
 
     return Alignment(
         level=level,
@@ -897,7 +1204,7 @@ def solve_alignment(
         translation=t_fit,
         scale=c_fit,
         declared_scale=declared_scale,
-        fit=_fit_stats(distances),
+        fit=fit,
     )
 
 
@@ -908,25 +1215,28 @@ def solve_alignment(
 
 def _collect_level_hits(
     level: int, professionals_root: Path = DEFAULT_PROFESSIONALS_ROOT, min_hits: int = DEFAULT_EVAL_CAP
-) -> list[Vec3]:
-    """실전모드(`1-A` 등)를 뺀 `<level>_*.csv` 세션들에서 분사 중 착탄점을 모은다.
+) -> tuple[list[Vec3], list[tuple[float, float]]]:
+    """실전모드(`1-A` 등)를 뺀 `<level>_*.csv` 세션들에서 분사 중 착탄점과 그 UV를 모은다.
 
     CSV 리더를 새로 만들지 않는다 — `simulator_csv.read_rows` /
-    `measured_pose.measured_frames`를 그대로 쓴다.
+    `measured_pose.measured_frames`를 그대로 쓴다. UV도 함께 모은다(리뷰 B1/B2가
+    면 판정·`fit`의 UV 근거에 쓴다) — 착탄점만으로는 앞/뒤 면을 가릴 수 없다.
     """
     import measured_pose
     import simulator_csv
 
     hits: list[Vec3] = []
+    uvs: list[tuple[float, float]] = []
     for path in sorted(professionals_root.glob(f"**/{level}_*.csv")):
         rows = simulator_csv.read_rows(path)
         for frame in measured_pose.measured_frames(rows):
-            if frame.hit is None or not frame.spraying:
+            if frame.hit is None or frame.uv is None or not frame.spraying:
                 continue
             hits.append(frame.hit)
+            uvs.append(frame.uv)
         if len(hits) >= min_hits:
             break
-    return hits
+    return hits, uvs
 
 
 def build_level_alignment(
@@ -934,16 +1244,19 @@ def build_level_alignment(
     fbx_path: Path,
     professionals_root: Path = DEFAULT_PROFESSIONALS_ROOT,
     min_hits: int = DEFAULT_EVAL_CAP,
+    seed: int = 0,
 ) -> dict:
     """`level_alignment.json`에 들어갈 항목 하나를 만든다. `solve_alignment`을 그대로 쓴다."""
     mesh = read_fbx(fbx_path)
-    hits = _collect_level_hits(level, professionals_root, min_hits=min_hits)
+    hits, hit_uvs = _collect_level_hits(level, professionals_root, min_hits=min_hits)
     if len(hits) < min_hits:
         raise ValueError(
             f"only collected {len(hits)} hits for level {level}, need >= {min_hits} "
             "(the §D5 pre-registered floor)"
         )
-    alignment = solve_alignment(mesh, hits, level=level, eval_cap=min_hits)
+    alignment = solve_alignment(
+        mesh, hits, hit_uvs=hit_uvs, level=level, eval_cap=min_hits, seed=seed
+    )
     return _entry_from_alignment(alignment, source_fbx=fbx_path.name)
 
 
