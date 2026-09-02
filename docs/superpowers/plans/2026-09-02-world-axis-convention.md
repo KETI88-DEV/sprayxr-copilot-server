@@ -491,7 +491,11 @@ def test_hit_points_agree_with_the_level_mesh_uv() -> None:
 
     for axis in (0, 1):
         slope, r2 = level_mesh.uv_regression(pairs, axis)
-        assert abs(abs(slope) - 2048.0) <= 0.01 * 2048.0, f"axis {axis} 기울기 {slope:.1f}"
+        # **부호까지** 비교한다. abs(slope)로 재면 180도 뒤집힌 정렬이 그대로 통과한다 —
+        # 실제로 시드마다 그 모호성이 나왔고(Rx(180) @ R), R^2도 부호 불변이라 못 잡는다.
+        # 기준값은 level_mesh.EXPECTED_UV_SLOPE(-2048.0)이고 그 출처는 실측이다.
+        target = level_mesh.EXPECTED_UV_SLOPE
+        assert abs(slope - target) <= 0.01 * abs(target), f"axis {axis} 기울기 {slope:.1f}"
         assert r2 >= 0.99, f"axis {axis} R^2 {r2:.6f}"
 ```
 
