@@ -37,6 +37,15 @@ class KeyParams:
     lateral_deg: float = 30.0
     reach_m: float = 0.8
     uv_size: float = 2048.0
+    # Task 6: height_band의 실효 버킷이 1.000(전부 "high")이던 결함의 수정 자리.
+    # 원인은 절대 높이(world_axes.vertical_of(hit))에 Z-up 시절 임계(0.6/1.0m)를 쓴
+    # 것 — 실측 범위 3.551–5.672m가 전부 그 임계를 넘는다. height_relative=True면
+    # 머리 기준 상대 높이(vertical_of(delta), delta=hit-head)를 쓴다 — 평행이동
+    # 불변이고 수평 성분(lateral/reach)과 기준이 같아진다. 기본값은 기존과 비트
+    # 단위로 같다: height_relative=False, 임계는 pass_segmentation의 기존 상수.
+    height_relative: bool = False
+    height_low_max_m: float = pass_segmentation.HEIGHT_LOW_MAX_M
+    height_mid_max_m: float = pass_segmentation.HEIGHT_MID_MAX_M
 
 
 def _elevation_deg(displacement: Vec3) -> float:
@@ -89,14 +98,43 @@ def uv_cell(uv: tuple[float, float], params: KeyParams) -> tuple[int, int]:
     return (cell[0], cell[1])
 
 
-def body_placement(
-    head: Vec3, yaw: float, hit: Vec3, params: KeyParams
-) -> tuple[LateralBand, ReachBand, str]:
-    """머리 기준 좌표계에서 본 착탄점의 위치. 머리는 실측이라 IK를 타지 않는다."""
+def _height_band(value_m: float, low_max_m: float, mid_max_m: float) -> str:
+    """`pass_segmentation.height_band`와 같은 3단 계단이지만 임계를 인자로 받는다.
+
+    절대 임계(0.6/1.0m)는 Z-up 시절 값이라 상대 좌표(머리 기준, 음수 가능)에는
+    맞지 않는다 — 호출자가 기준에 맞는 임계를 골라 넘긴다.
+    """
+    if value_m < low_max_m:
+        return "low"
+    if value_m < mid_max_m:
+        return "mid"
+    return "high"
+
+
+def local_offsets(head: Vec3, yaw: float, hit: Vec3) -> tuple[float, float, Vec3]:
+    """머리 기준 전/우 오프셋(m)과 원 델타(`hit - head`).
+
+    `body_placement`와 Task 6 보정 스크립트(임계값을 고르기 전에 원 분포를 보는 쪽)가
+    같은 기하를 공유하는 지점이다 — 회전식을 두 곳에 따로 적으면 어긋날 위험이 있다.
+    """
     delta: Vec3 = (hit[0] - head[0], hit[1] - head[1], hit[2] - head[2])
     d0, d1 = world_axes.horizontal_of(delta)
     forward = math.cos(yaw) * d0 + math.sin(yaw) * d1
     right = -math.sin(yaw) * d0 + math.cos(yaw) * d1
+    return forward, right, delta
+
+
+def azimuth_deg(head: Vec3, yaw: float, hit: Vec3) -> float:
+    """몸 기준 좌우 방위각(도). `body_placement`의 lateral 밴드가 쓰는 값과 같다."""
+    forward, right, _ = local_offsets(head, yaw, hit)
+    return math.degrees(math.atan2(right, forward))
+
+
+def body_placement(
+    head: Vec3, yaw: float, hit: Vec3, params: KeyParams
+) -> tuple[LateralBand, ReachBand, str]:
+    """머리 기준 좌표계에서 본 착탄점의 위치. 머리는 실측이라 IK를 타지 않는다."""
+    forward, right, delta = local_offsets(head, yaw, hit)
 
     azimuth = math.degrees(math.atan2(right, forward))
     if abs(azimuth) <= params.lateral_deg:
@@ -106,7 +144,14 @@ def body_placement(
 
     span = math.hypot(forward, right)
     reach: ReachBand = "near" if span <= params.reach_m else "far"
-    return lateral, reach, pass_segmentation.height_band(world_axes.vertical_of(hit))
+    # 수평(lateral/reach)은 이미 머리 기준(delta)이다. 수직만 절대(hit)를 쓰면
+    # 몸 기준과 월드 기준이 섞인 좌표가 된다(Task 5에서 확인) — height_relative가
+    # 켜지면 수직도 delta로 통일해 함수 전체가 평행이동 불변이 되게 한다.
+    vertical_value = (
+        world_axes.vertical_of(delta) if params.height_relative else world_axes.vertical_of(hit)
+    )
+    height = _height_band(vertical_value, params.height_low_max_m, params.height_mid_max_m)
+    return lateral, reach, height
 
 
 def motion_key(
