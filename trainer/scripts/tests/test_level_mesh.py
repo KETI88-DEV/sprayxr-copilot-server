@@ -16,6 +16,7 @@ world_axes = importlib.import_module("world_axes")
 rotation_math = importlib.import_module("rotation_math")
 
 LEVEL1_FBX = Path("/data/sources/modelings/learning_mode_lv.1_rev.1.1.fbx")
+CSV_ROOT = Path("/data/sources/professionals")
 
 
 def test_reader_parses_a_known_level_exactly() -> None:
@@ -388,3 +389,49 @@ def test_committed_translation_places_real_hits_on_the_mesh() -> None:
     distances = sorted(level_mesh.closest_distance(placed, h) for h in sample)
     median = distances[len(distances) // 2]
     assert median < 0.01  # 1cm — 실측 median은 ~0mm(§D5 p95 ≤ 10mm)에 비해 넉넉하다
+
+
+# =============================================================================
+# Task 5: 메시 앵커 — 접촉점이 면 위인가 (거리가 아니라 UV로 판정한다)
+# =============================================================================
+
+
+@pytest.mark.skipif(
+    not LEVEL1_FBX.exists() or not CSV_ROOT.exists(), reason="실데이터가 없는 환경"
+)
+def test_hit_points_agree_with_the_level_mesh_uv() -> None:
+    """접촉점의 UV가 메시 면의 UV와 일치한다. 월드 좌표 해석의 외부 앵커다.
+
+    거리로 판정하지 않는다 — 착탄점이 정확히 한 평면에 있어서(X의 서로 다른 float가
+    하나뿐) 거리 백분위(median/p95)는 모든 후보에서 ~1e-7mm가 되고, 틀린 면에 붙은
+    적합까지 통과시킨다(스펙 §D5 리뷰: max_mm 하나로는 17.7mm로 그 관문을 통과했다).
+    UV는 옳은 후보(R² 0.9999~1.0000)와 틀린 면 후보(R² 0.000001~0.0038)를 여섯
+    자릿수로 가른다 — 그 사이 어디에 선을 그어도 판정이 같다.
+
+    부호까지 비교한다: `abs(slope)`와 R²는 둘 다 부호에 무관한데, 이 적합에는
+    독립인 180도 대칭이 두 개 있다(판 법선 둘레 회전은 두 기울기를 함께 뒤집고,
+    판 안의 축 둘레 회전은 하나만 뒤집는다 — `level_mesh.EXPECTED_UV_SLOPE`의
+    독스트링·`solve_alignment`의 C2/D1 절 참고). 부호까지 보지 않으면 이 중 어느
+    쪽도 못 잡는다. 기준값은 `level_mesh.EXPECTED_UV_SLOPE`(-2048.0)이고, 그 자체가
+    측정이 아니라 15/15 시드가 수렴한 가지를 고정한 것이다(모듈 상수 독스트링).
+
+    거리(`closest_distance`)는 여기서 판정에 쓰지 않는다 — 기록하려면 별도로
+    재되, 이 테스트의 pass/fail은 UV 회귀에만 걸린다.
+    """
+    placed = level_mesh.place(level_mesh.read_fbx(LEVEL1_FBX), level_mesh.load_alignment(1))
+    positions, uvs = level_mesh._collect_level_hits(1, min_hits=5000)
+    assert len(positions) >= 5000, "표본이 모자라면 이 검사는 아무것도 보증하지 않는다"
+    hits = list(zip(positions, uvs))
+
+    # 옆면 삼각형(전체의 약 5%)은 무관한 UV를 갖는다. 큰 면으로 제한한다 — 안
+    # 걷어내면 순수 이상치로 R²를 끌어내린다.
+    pairs = level_mesh.uv_pairs_on_dominant_face(placed, hits)
+    assert len(pairs) >= 0.9 * len(hits), f"큰 면 비율 {len(pairs) / len(hits):.1%}"
+
+    for axis in (0, 1):
+        slope, r2 = level_mesh.uv_regression(pairs, axis)
+        # **부호까지** 비교한다. abs(slope)로 재면 180도 뒤집힌 정렬이 그대로
+        # 통과한다.
+        target = level_mesh.EXPECTED_UV_SLOPE
+        assert abs(slope - target) <= 0.01 * abs(target), f"axis {axis} 기울기 {slope:.1f}"
+        assert r2 >= 0.99, f"axis {axis} R^2 {r2:.6f}"
