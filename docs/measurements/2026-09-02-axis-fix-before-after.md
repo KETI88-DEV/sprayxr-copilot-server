@@ -2,7 +2,9 @@
 
 **Status: done.**
 
-No code changed in this task. Two artifacts rebuilt, one report written.
+재측정 자체는 코드를 바꾸지 않았다(아티팩트 2개 재빌드, 리포트 1개).
+**다만 이 문서를 저장소에 남기는 커밋에서 코디네이터가 인덱스 캐시 지문에 축 규약을
+추가하고 테스트를 하나 넣었다** — 그 커밋 이후 스위트는 673이다.
 
 ## Sampling rule (fixed before any number below)
 
@@ -146,7 +148,7 @@ pre-registered before values (25.0/55.7/81.4/95.0) exactly, confirming it's the 
 ## Test summary
 
 `docker exec -w /workspace ship-paint-trainer python3 -m pytest trainer mcp_servers -q` →
-**672 passed**, unchanged from baseline (no production or test code touched by this task).
+재측정 시점 **672 passed**(이 태스크는 코드를 안 건드렸다). 위 지문 수정이 들어간 뒤 **673**이다.
 
 ## Artifacts written
 
