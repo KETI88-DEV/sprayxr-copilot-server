@@ -13,6 +13,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 improvement_study = importlib.import_module("improvement_study")
+world_axes = importlib.import_module("world_axes")
 measured_score = importlib.import_module("measured_score")
 
 
@@ -113,3 +114,19 @@ def test_ceiling_residual_sigma_clamps_at_the_scorers_max_sigma() -> None:
 def test_correctable_head_axes_match_the_scorer() -> None:
     """천장이 쓰는 '지시 가능한 축'과 실제 지시 규칙이 갈라지면 천장이 틀린다."""
     assert improvement_study.CORRECTABLE["head"] == measured_score.STANCE_AXES
+
+
+def test_cache_fingerprint_covers_the_axis_convention(tmp_path, monkeypatch) -> None:
+    """캐시는 CSV 트리뿐 아니라 **키를 만든 규약**에도 묶여야 한다.
+
+    캐시가 담는 것은 패스 구간과 동작 키이고, 동작 키는 world_axes.UP_INDEX에 의존한다.
+    트리만 지문으로 삼으면 옛 축으로 지어진 캐시가 트리가 그대로인 한 조용히 통과하고,
+    그러면 낡은 버킷에서 표집해 비교 전체가 소리 없이 무효가 된다 — 축 수정 직후
+    실제로 그 일이 일어났다.
+    """
+    (tmp_path / "a.csv").write_text("x", encoding="utf-8")
+    before = improvement_study._fingerprint(tmp_path)
+    monkeypatch.setattr(world_axes, "UP_INDEX", 2)
+    after = improvement_study._fingerprint(tmp_path)
+    assert before != after, "규약이 바뀌었는데 지문이 같다 — 낡은 캐시가 통과한다"
+    assert before["up_index"] != after["up_index"]

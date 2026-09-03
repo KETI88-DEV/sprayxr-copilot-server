@@ -102,6 +102,7 @@ if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 motion_key = importlib.import_module("motion_key")
+world_axes = importlib.import_module("world_axes")
 eval_pose_correction = importlib.import_module("eval_pose_correction")
 measured_score = importlib.import_module("measured_score")
 
@@ -210,11 +211,20 @@ def _candidate_from_json(payload: Mapping[str, Any]) -> Candidate:
 
 
 def _fingerprint(root: Path) -> dict[str, Any]:
-    """CSV 트리의 가벼운 지문 — 파일 수·총 바이트·최신 mtime(F4).
+    """캐시가 몰래 낡는 것을 막는 지문 — CSV 트리 **와** 키를 만든 규약.
 
-    20GB 가까운 CSV를 해시하지 않고도 캐시가 몰래 낡는 것(파일이 추가·교체됐는데
-    캐시가 예전 후보 목록을 계속 내주는 것)을 막기에는 이 세 값으로 충분하다. 내용을
-    한 바이트도 읽지 않는다 — `stat()`만 부른다.
+    트리 쪽은 파일 수·총 바이트·최신 mtime이다. 20GB 가까운 CSV를 해시하지 않고도
+    파일이 추가·교체됐는데 캐시가 예전 후보를 계속 내주는 것을 막기에 충분하고,
+    내용을 한 바이트도 읽지 않는다 — `stat()`만 부른다.
+
+    **규약 쪽이 왜 필요한가.** 캐시가 담는 것은 패스 구간과 **동작 키**인데, 동작 키는
+    `world_axes.UP_INDEX`(어느 축이 수직인가)와 `KeyParams`(격자·대역 폭)에 의존한다.
+    트리만 지문으로 삼으면 **옛 축으로 지어진 캐시가 트리가 그대로인 한 조용히 통과한다** —
+    실제로 축 수정 직후 그 일이 일어났고, 재측정을 새 경로로 돌려서 우회했을 뿐이다.
+    그러면 낡은 버킷에서 표집하게 되고 비교 전체가 소리 없이 무효가 된다.
+
+    독스트링이 한때 이 함수를 "루트가 고정이면 같은 결과를 내는 순수 함수"라고 적었는데,
+    코드에 대해서는 순수하지 않다. 그 차이가 이 필드들이 존재하는 이유다.
     """
     total_size = 0
     max_mtime = 0.0
@@ -224,7 +234,14 @@ def _fingerprint(root: Path) -> dict[str, Any]:
         total_size += stat.st_size
         max_mtime = max(max_mtime, stat.st_mtime)
         count += 1
-    return {"file_count": count, "total_size": total_size, "max_mtime": max_mtime}
+    params = motion_key.KeyParams()
+    return {
+        "file_count": count,
+        "total_size": total_size,
+        "max_mtime": max_mtime,
+        "up_index": world_axes.UP_INDEX,
+        "key_params": [params.uv_grid, params.lateral_deg, params.reach_m, params.uv_size],
+    }
 
 
 def index_corpus_cached(
