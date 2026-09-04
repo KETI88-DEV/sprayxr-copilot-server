@@ -9,6 +9,7 @@ IK 산출물이다. 어느 쪽이 개선율 70%를 낼 수 있는지 지금 아�
 from __future__ import annotations
 
 import importlib
+import json
 import math
 import sys
 from dataclasses import asdict, dataclass
@@ -23,6 +24,7 @@ motion_key = importlib.import_module("motion_key")
 pose_similarity = importlib.import_module("pose_similarity")
 stroke_frame = importlib.import_module("stroke_frame")
 build_spread_reference = importlib.import_module("build_spread_reference")
+level_mesh = importlib.import_module("level_mesh")
 
 from trainer.pose_lab.spread_reference import Resolved, SpreadReference
 
@@ -349,6 +351,197 @@ def stance_block(
     }
 
 
+def _world_layer(frames: Sequence[Any]) -> dict[str, list[Vec3 | None]]:
+    """격자점마다 월드(캡처) 좌표. `_local_tracks`와 같은 필터·순서로 프레임을 훑는다.
+
+    `_local_tracks`는 `frame.hit is None`인 프레임을 건너뛴다(그 프레임은 스트로크
+    기저를 세울 원점이 없다). 여기서도 같은 조건으로 건너뛰어야 이 층의 점 개수가
+    `_local_tracks`의 리샘플 수와 같다 — 그림과 채점이 같은 표본을 보게 하는 것이
+    이 함수의 존재 이유다. 좌표는 `pass_frames`가 낸 `MeasuredFrame`의 것 그대로다
+    (스트로크 로컬로 바꾸지 않는다) — `measured_pose` 모듈 독스트링대로 head/right/
+    left/hit 넷은 이미 같은 월드 좌표계에 있다.
+    """
+    layer: dict[str, list[Vec3 | None]] = {"head": [], "right": [], "left": [], "hit": []}
+    for frame in frames:
+        if frame.hit is None:
+            continue
+        layer["head"].append(frame.head)
+        layer["right"].append(frame.right)
+        layer["left"].append(frame.left)
+        layer["hit"].append(frame.hit)
+    return layer
+
+
+def _world_shifts(
+    corrections: Sequence[measured_score.AxisCorrection],
+) -> dict[str, Vec3]:
+    """점 -> 월드 이동벡터. `issued_axes`가 낸 축만, `unit·magnitude_cm`만 더한다.
+
+    `measured_score.issued_shifts`가 스트로크 로컬에서 하는 것과 정확히 같은 합산을
+    월드에서 한다 — 같은 `AxisCorrection` 목록 위의 같은 규칙이다. 별도 계산 경로를
+    두지 않는다: 이것이 `corrected` 층이 개선율·문장과 같은 이동을 그리는 유일한 이유다.
+    """
+    acc: dict[str, list[float]] = {}
+    for correction in corrections:
+        metres = correction.magnitude_cm / 100.0
+        vec = acc.setdefault(correction.point, [0.0, 0.0, 0.0])
+        for i in range(3):
+            vec[i] += correction.unit[i] * metres
+    return {point: (v[0], v[1], v[2]) for point, v in acc.items()}
+
+
+def _shift_point(point: Vec3 | None, shift: Vec3 | None) -> Vec3 | None:
+    if point is None or shift is None:
+        return point
+    return (point[0] + shift[0], point[1] + shift[1], point[2] + shift[2])
+
+
+def _corrected_layer(
+    query_layer: Mapping[str, list[Vec3 | None]],
+    corrections: Sequence[measured_score.AxisCorrection],
+) -> dict[str, list[Vec3 | None]]:
+    """`query` 층에 발부된 축의 월드 이동만 더한다. 발부되지 않은 점(왼손·착탄점)은
+    제자리다 — `issued_axes`가 "right"/"head" 외에는 절대 내지 않기 때문이다."""
+    shifts = _world_shifts(corrections)
+    return {
+        name: [_shift_point(point, shifts.get(name)) for point in points]
+        for name, points in query_layer.items()
+    }
+
+
+def _mean_point(points: Sequence[Vec3 | None]) -> Vec3 | None:
+    present = [point for point in points if point is not None]
+    if not present:
+        return None
+    count = len(present)
+    return (
+        sum(point[0] for point in present) / count,
+        sum(point[1] for point in present) / count,
+        sum(point[2] for point in present) / count,
+    )
+
+
+def _serialize_layer(layer: Mapping[str, list[Vec3 | None]]) -> dict[str, list[list[float] | None]]:
+    return {
+        name: [None if point is None else list(point) for point in points]
+        for name, points in layer.items()
+    }
+
+
+def _correction_arrows(
+    corrections: Sequence[measured_score.AxisCorrection],
+    query_layer: Mapping[str, list[Vec3 | None]],
+) -> list[dict[str, object]]:
+    """화살표 하나마다: 시작점은 그 점의 격자 평균 위치, 끝점은 **그 축 하나만**
+    옮긴 자리. 한 점에 축이 여럿 발부돼도(예: 오른손 wall+vertical) 화살표끼리는
+    서로의 이동을 섞지 않는다 — `to - from`이 그 축 자신의
+    `magnitude_cm/100 * unit`과 정확히 같아야 한다는 요구를 지키기 위해서다.
+    합산된 이동은 `corrected` 층에서 본다.
+    """
+    arrows: list[dict[str, object]] = []
+    for correction in corrections:
+        origin = _mean_point(query_layer.get(correction.point, []))
+        if origin is None:
+            continue
+        metres = correction.magnitude_cm / 100.0
+        to_point = (
+            origin[0] + correction.unit[0] * metres,
+            origin[1] + correction.unit[1] * metres,
+            origin[2] + correction.unit[2] * metres,
+        )
+        arrows.append(
+            {
+                "point": correction.point,
+                "axis": correction.axis,
+                "magnitude_cm": correction.magnitude_cm,
+                "direction": correction.direction,
+                "sigma": correction.sigma,
+                "unit": list(correction.unit),
+                "from": list(origin),
+                "to": list(to_point),
+            }
+        )
+    return arrows
+
+
+def _mesh_source_path(level: int) -> Path | None:
+    """정렬 레코드(`level_alignment.json`)에 적힌 원본 FBX 경로. 항목 자체가 없으면
+    None이다 — 하드코딩한 파일명 규칙을 두지 않고 레코드가 적어 둔 `source_fbx`를
+    그대로 읽는다(`level_mesh._entry_from_alignment`가 적는 바로 그 필드)."""
+    try:
+        entries = json.loads(level_mesh.ALIGNMENT_PATH.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    for entry in entries:
+        if int(entry.get("level", -1)) == level:
+            source = entry.get("source_fbx")
+            return None if not source else level_mesh.DEFAULT_MODELINGS_ROOT / str(source)
+    return None
+
+
+_NO_MESH: Final[dict[str, object]] = {"vertices": [], "triangles": []}
+
+
+def mesh_block(level_text: str) -> dict[str, object] | None:
+    """검증된("solved") 정렬이 있는 레벨만 기하를 싣는다(설계 §5).
+
+    `mesh`가 `None`인 것("이 패스의 레벨 자체를 모른다" — 예: 실전모드 `1-A`처럼
+    숫자가 아닌 레벨)과 `available: False`인 것("레벨은 알지만 검증된 정렬이 없다")을
+    구분한다 — 소비자가 두 상태를 다르게 다뤄야 한다(설계 §5).
+    """
+    if not level_text.isdigit():
+        return None
+    level = int(level_text)
+    try:
+        alignment = level_mesh.load_alignment(level)
+    except LookupError:
+        return {"level": level, "available": False, **_NO_MESH}
+    if alignment.provenance != "solved":
+        return {"level": level, "available": False, **_NO_MESH}
+    source = _mesh_source_path(level)
+    if source is None:
+        return {"level": level, "available": False, **_NO_MESH}
+    placed = level_mesh.place(level_mesh.read_fbx(source), alignment)
+    return {
+        "level": level,
+        "available": True,
+        "vertices": [list(vertex) for vertex in placed.vertices],
+        "triangles": [list(triangle) for triangle in placed.triangles],
+    }
+
+
+def view_block(
+    query_frames: Sequence[Any],
+    reference_frames: Sequence[Any],
+    deltas: Sequence[measured_score.PointDelta],
+    basis: measured_score.AxisFrame,
+    weights: Mapping[str, float],
+    level_text: str,
+    grid_n: int,
+) -> dict[str, object]:
+    """화면이 그릴 층·교정·메시·가중치. 좌표는 전부 캡처(월드) 프레임이다.
+
+    `corrected` 층과 `corrections`는 여기서 **한 번만** `measured_score.issued_axes`를
+    불러 같은 목록에서 파생된다 — 두 갈래로 나눠 계산하면 그림이 개선율·문장과
+    다른 이동을 보일 수 있다(요구사항 1).
+    """
+    query_layer = _world_layer(query_frames)
+    reference_layer = _world_layer(reference_frames)
+    corrections = measured_score.issued_axes(deltas, basis)
+    corrected_layer = _corrected_layer(query_layer, corrections)
+    return {
+        "grid_n": grid_n,
+        "layers": {
+            "query": _serialize_layer(query_layer),
+            "reference": _serialize_layer(reference_layer),
+            "corrected": _serialize_layer(corrected_layer),
+        },
+        "corrections": _correction_arrows(corrections, query_layer),
+        "mesh": mesh_block(level_text),
+        "weights": dict(weights),
+    }
+
+
 def compare(
     source: PassSource,
     query: PassRef,
@@ -533,6 +726,18 @@ def compare(
         "yaw_assumed": yaw_used,
         "yaw_source": yaw_source,
         "samples": before.samples,
+        # 스켈레톤 뷰가 그릴 층·교정 화살표·메시·가중치. 좌표는 캡처(월드) 프레임이고
+        # `corrected`/`corrections`는 아래 `axes_block`과 같은 `issued_axes` 호출에서
+        # 나온다(요구사항 1) — `before.deltas`/`basis`는 이미 위에서 구했다.
+        "view": view_block(
+            query_frames=query_frames,
+            reference_frames=reference_frames,
+            deltas=before.deltas,
+            basis=basis,
+            weights=weights,
+            level_text=query.level,
+            grid_n=samples,
+        ),
         "measured": {
             "basis": "tracked",
             # σ와 점수 exp(-σ²/2)는 이 산포로 나눈 값이다. 잰 분포가 아니면 읽는
