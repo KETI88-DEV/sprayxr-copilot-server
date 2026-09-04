@@ -240,3 +240,39 @@ def test_mesh_is_none_when_the_level_itself_is_unknown() -> None:
     """레벨 자체를 모르면(숫자가 아닌 레벨, 예: 실전모드 `1-A`) `mesh`가 `None`이다 —
     `available: False`(레벨은 알지만 정렬이 없음)와 다른 상태다(요구사항 6)."""
     assert service.mesh_block("1-A") is None
+
+
+def test_mesh_is_unavailable_when_the_source_fbx_file_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """정렬 레코드는 있고(레벨 1, provenance="solved") `source_fbx` 경로도 있지만
+    그 경로에 실제 파일이 없으면(`read_fbx`가 `FileNotFoundError`를 던진다)
+    `mesh_block`이 그 예외를 삼키지 않고 전파하면 `/api/compare` 전체가 500으로
+    죽는다(태스크 0). 장식용 벽면 하나 때문에 점수·교정까지 죽어서는 안 된다 —
+    `available: False`로 조용히 떨어져야 한다."""
+
+    def _missing(path: Path) -> object:
+        raise FileNotFoundError(path)
+
+    monkeypatch.setattr(level_mesh, "read_fbx", _missing)
+    block = service.mesh_block("1")
+    assert block is not None
+    assert block["available"] is False
+    assert block["vertices"] == []
+    assert block["triangles"] == []
+
+
+def test_mesh_parse_failure_still_propagates_instead_of_being_swallowed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """파일은 있는데 형식이 깨진 경우(`read_fbx`가 `ValueError`를 던지는 경우)는
+    버그이지 "배포 조건"이 아니다 — 파일 없음과 같은 취급으로 조용히
+    `available: False`에 떨어뜨리면 진짜 파싱 결함을 숨기게 된다. 이 예외는 계속
+    크게 터뜨려야 한다."""
+
+    def _broken(path: Path) -> object:
+        raise ValueError(f"{path}: not a binary FBX file (bad magic)")
+
+    monkeypatch.setattr(level_mesh, "read_fbx", _broken)
+    with pytest.raises(ValueError):
+        service.mesh_block("1")

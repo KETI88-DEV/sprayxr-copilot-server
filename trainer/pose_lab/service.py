@@ -501,7 +501,17 @@ def mesh_block(level_text: str) -> dict[str, object] | None:
     source = _mesh_source_path(level)
     if source is None:
         return {"level": level, "available": False, **_NO_MESH}
-    placed = level_mesh.place(level_mesh.read_fbx(source), alignment)
+    try:
+        mesh = level_mesh.read_fbx(source)
+    except FileNotFoundError:
+        # 정렬 레코드는 있고 경로도 적혀 있지만 그 경로에 실제 FBX 파일이 없다
+        # (배포 환경에서 데이터 마운트가 일시적으로 빠진 경우 등). 장식용 벽면
+        # 하나 때문에 점수·교정까지 담긴 /api/compare 전체를 500으로 죽이지
+        # 않는다 — `available: False`로 조용히 떨어뜨린다. 파일은 있는데 형식이
+        # 깨진 경우(ValueError 등, `read_fbx`가 그대로 던진다)는 버그이므로 계속
+        # 크게 터뜨린다 — 이 except는 "파일 없음" 하나만 잡는다.
+        return {"level": level, "available": False, **_NO_MESH}
+    placed = level_mesh.place(mesh, alignment)
     return {
         "level": level,
         "available": True,

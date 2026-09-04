@@ -58,3 +58,52 @@ dd { margin: 0; font-variant-numeric: tabular-nums; }
 .picker .wide select { width: 100%; font-family: ui-monospace, monospace; font-size: .8rem; }
 .count { margin: .2rem 0; font-size: .8rem; opacity: .8; }
 .summary { margin: .2rem 0; font-size: .75rem; opacity: .75; font-family: ui-monospace, monospace; }
+
+/* 3D 뷰. 교정 화살표가 주인공이고(브리프 §1) 스켈레톤은 문맥이다. */
+.view3d { border: 1px solid currentColor; border-radius: .5rem; padding: 1rem; margin-top: 1rem; }
+.view3d-head { display: flex; flex-wrap: wrap; gap: .75rem; align-items: center; justify-content: space-between; }
+.view3d-head h2 { margin: 0; font-size: 1rem; }
+.view3d-controls { display: flex; flex-wrap: wrap; gap: .25rem 1rem; align-items: center; font-size: .85rem; }
+/* three.js를 못 실었을 때(`showUnavailable`) `.hidden`으로 이 세 블록을 감춘다. 위
+   규칙들의 `display: flex`가 명시도가 같은 UA `[hidden]{display:none}`을 캐스케이드
+   순서로 이겨버려 조용히 숨지 않고 죽은 컨트롤(리스너 없는 체크박스·버튼)로
+   남는다 — 그래서 여기서 명시도를 올려 `[hidden]`이 항상 이기게 못박는다. */
+.view3d-controls[hidden], .view3d-host[hidden], .view3d-legend[hidden] { display: none; }
+.view3d-controls label { display: inline-flex; align-items: center; gap: .3rem; }
+.view3d-controls button { font-size: .8rem; padding: .2rem .6rem; }
+.view3d-host {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  margin-top: .6rem;
+  border-radius: .35rem;
+  overflow: hidden;
+  background: #11151d;
+  cursor: grab;
+}
+.view3d-host:active { cursor: grabbing; }
+.view3d-canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+.view3d-labels { position: absolute; inset: 0; pointer-events: none; }
+.view3d-label {
+  position: absolute;
+  transform: translate(-50%, -130%);
+  font-family: ui-monospace, monospace;
+  font-size: .68rem;
+  color: #f5f7fa;
+  background: rgba(10, 12, 18, .68);
+  padding: .05rem .35rem;
+  border-radius: .2rem;
+  white-space: nowrap;
+}
+.view3d-label-arrow { border: 1px solid rgba(255, 255, 255, .35); font-weight: 600; }
+.view3d-label-point { opacity: .85; }
+.view3d-legend { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; margin-top: .5rem; font-size: .75rem; opacity: .85; }
+.view3d-legend .legend-title { font-weight: 600; }
+.view3d-legend .legend-item { display: inline-flex; align-items: center; gap: .3rem; }
+.view3d-legend .swatch { width: .65rem; height: .65rem; border-radius: 50%; display: inline-block; }
+.view3d-legend .swatch.ok { background: var(--ok); }
+.view3d-legend .swatch.warn { background: var(--warn); }
+.view3d-legend .swatch.bad { background: var(--bad); }
+.view3d-note { font-size: .75rem; opacity: .75; margin: .4rem 0 0; }
+.view3d-note:empty { display: none; }
+.view3d-corrected-note { color: var(--warn); }

@@ -1,7 +1,14 @@
 // 서버 응답만으로 그린다. 지표 계산을 브라우저에서 다시 하지 않는다.
 // 두 곳에서 계산하면 값이 갈라지고 어느 쪽이 맞는지 알 수 없게 된다.
 
+import { createSkeletonView } from "./skeleton_view.js";
+
 const $ = (id) => document.getElementById(id);
+
+// 3D 뷰. three.js가 못 실렸거나(오프라인 등) 초기화가 실패해도 createSkeletonView는
+// 절대 던지지 않고 조용한 안내로만 떨어진다 — 아래 run()이 이 객체를 어떻게 쓰든
+// 숫자 패널(renderAxis)은 그 성패와 무관하게 그대로 동작한다(요구사항 3).
+const skeletonView = createSkeletonView($("view3d"));
 
 // 게이트가 비어 있는 이유. 판정 자리에 이유를 적어 "아직 재지 않았다"를 드러낸다.
 const GATE_REASONS = {
@@ -376,10 +383,19 @@ async function run() {
     $("keys").textContent += `  — ${UNAVAILABLE_REASONS[payload.reason] ?? "비교하지 않습니다"}`;
     renderAxis($("measured"), {});
     renderAxis($("joint"), {});
+    // 비교 자체가 없으니 그릴 것도 없다 — 이전 비교의 화살표를 화면에 남기지 않는다.
+    skeletonView.clear(UNAVAILABLE_REASONS[payload.reason] ?? "비교하지 않습니다");
     return;
   }
   renderAxis($("measured"), payload.measured);
   renderAxis($("joint"), payload.joint);
+  // 3D 뷰 실패가 숫자 패널을 끌고 내려가면 안 된다(요구사항 3) — 위 renderAxis 두
+  // 호출은 이미 끝났고, 그 결과와 무관하게 이 호출만 실패할 수 있게 따로 감싼다.
+  try {
+    skeletonView.render(payload);
+  } catch (err) {
+    console.error("[skeleton_view] 렌더링 실패 — 숫자 패널은 그대로 유지된다.", err);
+  }
 }
 
 for (const side of ["query", "reference"]) {

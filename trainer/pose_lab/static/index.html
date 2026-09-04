@@ -28,6 +28,8 @@
     </article>
   </section>
 
+  <section id="view3d" aria-label="3D 뷰"></section>
+
   <section class="axes">
     <article id="measured">
       <h2>실측 축 <span class="badge ok">측정값</span></h2>
@@ -69,4 +71,8 @@
     <button id="run">비교</button>
   </section>
 </main>
+<!-- 버전 고정. 쓰는 인라인/모듈 스크립트보다 먼저 실려야 THREE 전역이 준비된다.
+     못 실리면(오프라인 등) 아래 skeleton_view.js가 조용히 3D를 끄고, 숫자 패널은
+     그대로 동작한다(app.js는 이 스크립트 성패와 무관하게 돈다). -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.1/three.min.js"></script>
 <script type="module" src="app.js"></script>
