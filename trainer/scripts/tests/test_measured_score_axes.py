@@ -63,8 +63,15 @@ def test_tight_axis_makes_a_small_deviation_significant() -> None:
 
 
 def test_loose_axis_is_not_flagged_even_when_raw_magnitude_is_large() -> None:
-    """진행 방향 산포가 넓으면 17cm는 정상이다."""
-    spreads = {name: {"wall": 0.30, "vertical": 0.30, "lateral": 0.30}
+    """진행 방향 산포가 넓으면 17cm는 정상이다.
+
+    Task 10: 문턱이 0.1이 되면서(옛 2.0) 산포 0.30m에서는 17cm가 sigma 0.567로
+    이미 새 문턱을 넘어 "느슨한 축은 안 걸린다"는 성질을 더 이상 보여주지
+    못했다. 같은 이야기를 유지하려면 산포를 훨씬 더 넓혀(3.0m) sigma를 0.1
+    아래(0.057)로 다시 낮춰야 한다 — 뜻은 그대로다: 이 편차는 이 산포에 비춰
+    정상이다.
+    """
+    spreads = {name: {"wall": 3.0, "vertical": 3.0, "lateral": 3.0}
                for name in measured_score.POINT_ORDER}
     result = measured_score.score_track(
         _tracks((0.3, 0.17, 0.1)), _tracks((0.3, 0.0, 0.1)),

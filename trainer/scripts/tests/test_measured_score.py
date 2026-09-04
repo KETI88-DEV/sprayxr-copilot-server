@@ -122,9 +122,13 @@ def test_head_and_left_hand_never_produce_a_correction_sentence() -> None:
 
 
 def test_right_hand_within_expert_range_produces_no_sentence() -> None:
-    """오른손도 σ가 임계 이하면 아무것도 내지 않는다. 기존 규약을 유지한다."""
+    """오른손도 σ가 임계 이하면 아무것도 내지 않는다. 기존 규약을 유지한다.
+
+    Task 10: 문턱이 0.1이 되면서(옛 2.0) sigma=1.0은 이제 "이하"가 아니라
+    "초과"다 — 임계 아래를 나타내려면 0.1 아래 값을 써야 한다.
+    """
     right = measured_score.PointDelta(
-        point="right", sigma=1.0, local_delta=(0.2, 0.0, 0.2)
+        point="right", sigma=0.05, local_delta=(0.2, 0.0, 0.2)
     )
     assert measured_score.corrections_text([right]) == []
 
@@ -235,8 +239,9 @@ def test_right_hand_finding_carries_sample_count_and_matches_the_sentence() -> N
 
 
 def test_right_hand_finding_is_none_below_threshold_or_without_right_hand() -> None:
+    # Task 10: 문턱 0.1(옛 2.0) 아래를 나타내려면 sigma를 0.1 밑으로 낮춰야 한다.
     below = measured_score.PointDelta(
-        point="right", sigma=1.5, local_delta=(0.2, 0.0, 0.2)
+        point="right", sigma=0.05, local_delta=(0.2, 0.0, 0.2)
     )
     only_head = measured_score.PointDelta(
         point="head", sigma=5.0, local_delta=(0.0, 0.2, 0.0)
@@ -373,21 +378,27 @@ def test_apply_measured_moves_every_axis_that_clears_the_threshold() -> None:
 
     옛 이름("성분 하나만 옮긴다")은 Task 1이 이미 버린 계약을 여전히 주장하고
     있었다. 게다가 옛 픽스처(`_three_point_case`)의 오른손은 wall 1.8 / vertical
-    2.8 / lateral 1.0으로 마침 축 하나만 임계(2.0)를 넘어서 그 주장이 다축 경로를
-    한 번도 태우지 않은 채 우연히 통과하고 있었다. 여기서는 wall·vertical 두
-    축이 실제로 넘도록 만들어 `score_track` → `right_axes` → `apply_measured`가
-    끊기지 않고 이어지는지를 본다. 기대값은 `issued_shifts`를 부르지 않고
-    `right_axes`가 낸 `AxisCorrection`들에서 손으로 다시 계산한다.
+    2.8 / lateral 1.0으로 마침 축 하나만 임계(옛 2.0)를 넘어서 그 주장이 다축
+    경로를 한 번도 태우지 않은 채 우연히 통과하고 있었다. 여기서는 두 축이
+    실제로 넘고 한 축은 남도록 만들어 `score_track` → `right_axes` →
+    `apply_measured`가 끊기지 않고 이어지는지를 본다. 기대값은 `issued_shifts`를
+    부르지 않고 `right_axes`가 낸 `AxisCorrection`들에서 손으로 다시 계산한다.
+
+    Task 10: 문턱이 0.1이 되면서(옛 2.0) query의 z를 reference와 맞춰
+    vertical의 로컬 성분을 정확히 0으로 만들었다 — wall(3.0)·lateral(0.6)은
+    남고 vertical(0.0)만 임계 아래로 빠진다. 옛 픽스처(z=-0.03)는 이제
+    vertical sigma가 0.1을 넘어(3.0 근방) 셋 다 발부돼 "일부는 남는다"는
+    성질 자체를 더 이상 보여주지 못했다.
     """
     reference = {"right": [(0.30, 0.00, 0.10)] * 5}
-    query = {"right": [(0.15, -0.03, -0.03)] * 5}
+    query = {"right": [(0.15, -0.03, 0.10)] * 5}
     before = measured_score.score_track(
         query, reference, SPREADS, measured_score.DEFAULT_WEIGHTS
     )
     right = next(d for d in before.deltas if d.point == "right")
     corrections = measured_score.right_axes(right, HORIZONTAL)
     issued = {c.axis for c in corrections}
-    assert issued == {"wall", "vertical"}  # lateral(sigma 0.6)은 임계 아래로 남는다
+    assert issued == {"wall", "lateral"}  # vertical(sigma 0.0)은 임계 아래로 남는다
 
     world = [0.0, 0.0, 0.0]
     for c in corrections:
@@ -432,14 +443,18 @@ def test_apply_measured_does_nothing_when_nothing_is_issued() -> None:
     """점들이 진짜로 어긋나 있어도, 어느 축도 임계를 넘지 않으면 아무것도 옮기지 않는다.
 
     전부 0인 픽스처는 게이팅이 심하게 고장나도 통과한다 — 애초에 옮길 것이 없기
-    때문이다. 여기서는 세 점 모두 몇 센티미터씩 실제로 어긋나 있지만(2~4cm) 산포
+    때문이다. 여기서는 세 점 모두 실제로 어긋나 있지만(밀리미터 단위) 산포
     (5cm)에 비춰 이상하지 않은 크기라 어느 축도 발부되지 않는다.
+
+    Task 10: 문턱이 0.1이 되면서(옛 2.0) 옛 픽스처(2~4cm 어긋남, 산포 5cm 기준
+    sigma 0.4~0.8)는 이미 새 문턱을 넘어 이 성질을 더 이상 보여주지 못했다 —
+    "산포에 비춰 안 이상함"을 유지하려면 편차를 밀리미터대로 줄여야 한다.
     """
     reference = {name: [(0.30, 0.00, 0.10)] * 5 for name in ("right", "head", "left")}
     query = {
-        "right": [(0.33, 0.02, 0.13)] * 5,
-        "head": [(0.34, -0.03, 0.09)] * 5,
-        "left": [(0.27, 0.04, 0.08)] * 5,
+        "right": [(0.302, 0.001, 0.098)] * 5,
+        "head": [(0.298, -0.001, 0.101)] * 5,
+        "left": [(0.301, 0.002, 0.099)] * 5,
     }
     before = measured_score.score_track(
         query, reference, SPREADS, measured_score.DEFAULT_WEIGHTS

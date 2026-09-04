@@ -77,10 +77,15 @@ def test_every_axis_over_the_threshold_is_issued() -> None:
 
 
 def test_axes_below_the_threshold_are_not_issued() -> None:
-    """sigma가 임계 아래인 축은 이상하지 않다. 지시하면 지어낸 교정이다."""
+    """sigma가 임계 아래인 축은 이상하지 않다. 지시하면 지어낸 교정이다.
+
+    Task 10: 문턱이 0.1이 되면서(옛 2.0) vertical/lateral을 0.1 밑으로
+    낮췄다 — 옛 값(1.1/0.4)은 옛 문턱(2.0) 아래였을 뿐 새 문턱에서는 이미
+    "이상함"이다.
+    """
     delta = _right(
         (0.05, -0.06, 0.08),  # wall +8cm, lateral +5cm, vertical -6cm
-        {"wall": 3.5, "vertical": 1.1, "lateral": 0.4},
+        {"wall": 3.5, "vertical": 0.05, "lateral": 0.02},
     )
     issued = measured_score.right_axes(delta, HORIZONTAL)
     assert {c.axis for c in issued} == {"wall"}
@@ -219,7 +224,10 @@ def test_head_lateral_is_never_issued() -> None:
 
 
 def test_head_below_the_threshold_says_nothing() -> None:
-    delta = _head((0.0, -0.12, 0.0), {"wall": 0.2, "vertical": 1.9, "lateral": 0.1})
+    # Task 10: 문턱이 0.1이 되면서(옛 2.0) wall/vertical을 0.1 밑으로 낮췄다 —
+    # 옛 값(0.2/1.9)은 옛 문턱(2.0) 아래였을 뿐 새 문턱에서는 wall(0.2)조차
+    # 이미 넘는다.
+    delta = _head((0.0, -0.12, 0.0), {"wall": 0.05, "vertical": 0.05, "lateral": 0.1})
     assert measured_score.head_stance(delta, HORIZONTAL) is None
 
 

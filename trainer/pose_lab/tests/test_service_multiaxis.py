@@ -58,13 +58,15 @@ def test_axes_block_never_lists_the_left_hand() -> None:
 
 
 def test_stance_block_is_none_when_the_head_is_quiet() -> None:
+    # 문턱이 0.1이 됐으므로(Task 10) "조용하다"는 모든 축 sigma가 0.1 밑이어야
+    # 한다는 뜻이다 — 옛 0.2/0.1/0.1은 새 문턱에서는 이미 "시끄럽다".
     quiet = [
         measured_score.PointDelta(
             point="head",
-            sigma=0.5,
-            local_delta=(0.01, 0.0, 0.0),
+            sigma=0.05,
+            local_delta=(0.001, 0.0, 0.0),
             samples=30,
-            axis_sigmas={"wall": 0.2, "vertical": 0.1, "lateral": 0.1},
+            axis_sigmas={"wall": 0.05, "vertical": 0.02, "lateral": 0.02},
         )
     ]
     assert service.stance_block(quiet, FRAME) is None
