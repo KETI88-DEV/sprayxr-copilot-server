@@ -97,6 +97,36 @@ def test_measured_frames_reads_three_points() -> None:
     assert first.spraying is True
 
 
+def test_measured_frames_with_rows_pairs_each_frame_with_its_own_row() -> None:
+    """`measured_frames`와 같은 필터·순서로 낸 프레임에 원본 행이 그대로 붙는다."""
+    rows = _rows()
+    paired = measured_pose.measured_frames_with_rows(rows)
+    plain = measured_pose.measured_frames(rows)
+    assert len(paired) == len(plain)
+    for (frame, row), expected in zip(paired, plain):
+        assert frame == expected
+        assert row is rows[frame.index]
+
+
+def test_measured_frames_with_rows_drops_the_same_frames_as_measured_frames() -> None:
+    """오른손이 머리에서 너무 먼 행은 두 함수 모두에서 같이 빠진다."""
+    rows = _rows()
+    for axis, value in zip("XYZ", (5.0, 4.6, 0.65)):
+        rows[2][f"한길숏건 Position {axis}"] = str(value)
+    paired = measured_pose.measured_frames_with_rows(rows)
+    plain = measured_pose.measured_frames(rows)
+    assert len(paired) == len(plain) == 4
+    assert 2 not in [frame.index for frame, _ in paired]
+
+
+def test_measured_frames_with_rows_is_empty_when_no_gun_is_active() -> None:
+    rows = _rows()
+    for row in rows:
+        for axis, value in zip("XYZ", (0.85, 4.60, 0.65)):
+            row[f"한길숏건 Position {axis}"] = str(value)
+    assert measured_pose.measured_frames_with_rows(rows) == []
+
+
 def test_frame_dropped_when_gun_too_far_from_head() -> None:
     """건을 내려놓은 프레임. 실측 최대 |머리-건| 4.443m는 인체에서 불가능하다."""
     rows = _rows()

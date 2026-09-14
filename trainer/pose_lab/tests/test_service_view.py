@@ -26,9 +26,53 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 measured_score = importlib.import_module("measured_score")
 level_mesh = importlib.import_module("level_mesh")
 
+simulator_csv = importlib.import_module("simulator_csv")
+
 from trainer.pose_lab import service
-from trainer.pose_lab.service import PassRef
-from trainer.pose_lab.tests.test_app import FakeSource, QUERY, REFERENCE
+from trainer.pose_lab.service import PassRef, RawPass
+from trainer.pose_lab.tests.test_app import FakeSource, QUERY, REFERENCE, _rows
+
+# 뼈 길이(bind offset)는 프레임 불변이다 — `test_pose_fk_csv.OFFSETS`(실측치)와 같은
+# 값을 여기 다시 적는다. 임포트로 공유하지 않는 이유는 그 파일이 `trainer/scripts/tests`
+# 패키지에 있어 `trainer/pose_lab/tests`에서 상대 임포트로 닿지 않기 때문이다(두
+# 트리가 각자 `sys.path` 삽입으로 평평하게 펴져 있다) — 값 자체의 출처는 그 파일이다.
+_SKELETON_OFFSETS: dict[str, tuple[float, float, float]] = {
+    "Pelvis": (0.0, 0.0, 0.0),
+    "Spine": (-0.1053, -0.0001, 0.0),
+    "Chest": (-0.1053, -0.0001, 0.0),
+    "Head": (-0.1368, 0.0, 0.0),
+    "LeftShoulder": (0.0, 0.0001, 0.0284),
+    "LeftUpperArm": (-0.1797, 0.0, 0.0),
+    "LeftForeArm": (-0.2430, 0.0, 0.0),
+    "LeftHand": (-0.2430, 0.0, 0.0),
+    "RightShoulder": (0.0, 0.0001, -0.0284),
+    "RightUpperArm": (-0.1797, 0.0, 0.0),
+    "RightForeArm": (-0.2430, 0.0, 0.0),
+    "RightHand": (-0.2430, 0.0, 0.0),
+    "LeftThigh": (0.0931, -0.0024, 0.0965),
+    "LeftCalf": (-0.4223, 0.0, 0.0),
+    "LeftFoot": (-0.4110, 0.0, 0.0),
+    "LeftToe": (-0.0672, 0.1337, 0.0),
+    "RightThigh": (0.0931, -0.0024, -0.0965),
+    "RightCalf": (-0.4223, 0.0, 0.0),
+    "RightFoot": (-0.4110, 0.0, 0.0),
+    "RightToe": (-0.0672, 0.1337, 0.0),
+}
+
+
+def _rows_with_skeleton(shift: float) -> list[dict[str, str]]:
+    """`test_app._rows`(실측 3점)에 FK 관절 컬럼을 얹는다 — 회전은 항등(0,0,0)이라
+    `local`이 곧게 선 자세를 낸다."""
+    rows = _rows(shift)
+    for row in rows:
+        for column in simulator_csv.JOINT_COLUMNS:
+            key = simulator_csv.JOINT_KEYS[column]
+            offset = _SKELETON_OFFSETS.get(key, (0.0, 0.0, 0.0))
+            for axis, value in zip("XYZ", offset):
+                row[f"{column} Position {axis}"] = str(value)
+            for axis in "XYZ":
+                row[f"{column} Rotation {axis}"] = "0.0"
+    return rows
 
 
 def _compare() -> dict[str, object]:
@@ -276,3 +320,94 @@ def test_mesh_parse_failure_still_propagates_instead_of_being_swallowed(
     monkeypatch.setattr(level_mesh, "read_fbx", _broken)
     with pytest.raises(ValueError):
         service.mesh_block("1")
+
+
+# ---- 11-A: 스켈레톤 배선 ----------------------------------------------------
+
+
+class SkeletonFakeSource(FakeSource):
+    """질의 원본 행에 FK 관절 컬럼을 얹는다. 레퍼런스는 그대로(`FakeSource`와 동일) —
+    이 화면은 질의 층에만 스켈레톤을 얹는다(`view_block` 독스트링)."""
+
+    def load(self, ref: PassRef):  # noqa: ANN201
+        raw = super().load(ref)
+        if ref.worker == QUERY["worker"]:
+            return RawPass(rows=_rows_with_skeleton(0.3))
+        return raw
+
+
+def test_skeleton_block_returns_joints_bones_and_fit_when_fk_columns_are_present() -> None:
+    block = service.skeleton_block(RawPass(rows=_rows_with_skeleton(0.3)))
+    assert block is not None
+    assert set(simulator_csv.JOINT_KEYS.values()) <= set(block["joints"])
+    assert block["bones"] == [list(pair) for pair in simulator_csv.BONES]
+    assert block["fit"]["source"] == "fk_csv"
+    assert isinstance(block["fit"]["residual_m"], float)
+
+
+def test_skeleton_block_is_none_without_joint_columns() -> None:
+    """`FakeSource`의 원본 행에는 관절 컬럼이 없다 — FK를 못 얻으면 조용히 None이다."""
+    assert service.skeleton_block(FakeSource().load(PassRef(**QUERY))) is None
+
+
+def test_skeleton_anchors_snap_to_the_measured_position_not_the_fk_output() -> None:
+    """FK가 낸 머리·양손이 실측과 어긋나도(리그 오프셋을 3배로 부풀림) 화면에 실릴
+    머리·오른손·왼손은 실측 위치 그대로다(브리프: "실측 점은 실측 위치에 그대로")."""
+    rows = _rows_with_skeleton(0.3)
+    for row in rows:
+        for axis in "XYZ":
+            for column in simulator_csv.JOINT_COLUMNS:
+                key = f"{column} Position {axis}"
+                if key in row:
+                    row[key] = str(float(row[key]) * 3.0)  # 뼈 길이를 왜곡해 어긋남을 만든다
+    raw = RawPass(rows=rows)
+    block = service.skeleton_block(raw)
+    assert block is not None
+    assert block["fit"]["residual_m"] > 1e-6, "왜곡한 뼈 길이는 실제로 어긋나야 한다"
+
+    paired = service.measured_pose.measured_frames_with_rows(raw.rows)
+    spraying = [f for f, _ in paired if f.spraying and f.hit is not None]
+    frame = spraying[len(spraying) // 2]
+    assert list(frame.head) == block["joints"]["Head"]
+    assert list(frame.right) == block["joints"]["RightHand"]
+    assert list(frame.left) == block["joints"]["LeftHand"]
+
+
+def test_compare_wires_skeleton_into_the_query_layer_only() -> None:
+    result = service.compare(SkeletonFakeSource(), PassRef(**QUERY), PassRef(**REFERENCE))
+    assert result["status"] == "ok"
+    view = result["view"]
+    assert "joints" in view["layers"]["query"]
+    assert "bones" in view["layers"]["query"]
+    assert "joints" not in view["layers"]["reference"], "레퍼런스 층에는 스켈레톤을 얹지 않는다"
+    assert "joints" not in view["layers"]["corrected"], "교정 후 층에는 스켈레톤을 얹지 않는다"
+    assert view["fit"] is not None
+    assert view["fit"]["source"] == "fk_csv"
+
+
+def test_new_joints_are_added_to_weights_at_zero_and_covered_by_the_existing_invariant() -> None:
+    """새 관절은 전부 weights에 0.0으로 들어간다(브리프) — 채점에는 안 들어가지만
+    "weights가 그리는 모든 점을 덮는다"는 일반 불변량은 여전히 성립해야 한다."""
+    result = service.compare(SkeletonFakeSource(), PassRef(**QUERY), PassRef(**REFERENCE))
+    view = result["view"]
+    joints = view["layers"]["query"]["joints"]
+    assert joints, "이 픽스처는 스켈레톤이 실려야 한다"
+    for name in joints:
+        assert view["weights"].get(name) == 0.0, name
+    # 일반 불변량: 질의 층이 그리는 최상위 점 이름(궤적) 전부 여전히 weights에 있다.
+    drawn_points = {name for name in view["layers"]["query"] if name not in ("hit", "joints", "bones")}
+    assert drawn_points <= set(view["weights"])
+
+
+def test_view_fit_is_null_when_skeleton_is_unavailable() -> None:
+    view = _compare()["view"]
+    assert view["fit"] is None
+
+
+def test_deviation_cm_is_the_local_delta_norm_in_centimetres() -> None:
+    """②(얼마나 다른가)의 부위별 편차 — `local_delta`의 노름을 cm로 낸다(화면이
+    다시 계산하지 않는다는 이 저장소의 규칙, 브리프 ② 각주)."""
+    result = _compare()
+    for delta in result["measured"]["deltas"]:
+        expected = math.dist(delta["delta"], (0.0, 0.0, 0.0)) * 100.0
+        assert math.isclose(delta["deviation_cm"], expected, rel_tol=1e-9)

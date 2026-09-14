@@ -160,46 +160,73 @@ def _hit(row: dict[str, str]) -> tuple[Vec3, tuple[float, float]] | None:
     return (x, y, z), uv
 
 
+def _frame_from_row(offset: int, row: dict[str, str], gun: str) -> MeasuredFrame | None:
+    """행 하나 -> 프레임 하나(못 믿으면 None). `measured_frames`/
+    `measured_frames_with_rows`가 같은 필터·구성 규칙을 공유하려고 뽑아 둔다 — 둘을
+    따로 짜면 조건이 갈릴 수 있다."""
+    head = _position(row, HEAD_GROUP)
+    right = _position(row, gun)
+    if head is None or right is None:
+        return None
+    span = math.dist(head, right)
+    if span > MAX_HEAD_HAND_M or span < MIN_HEAD_RIGHT_M:
+        return None
+
+    left = _position(row, LEFT_GROUP)
+    if left is not None:
+        reach = math.dist(head, left)
+        if reach > MAX_HEAD_HAND_M or reach < MIN_HEAD_LEFT_M:
+            left = None
+
+    hit_uv = _hit(row)
+    try:
+        index = int(row["인덱스"])
+        time_sec = float(row["시간(초)"])
+    except (KeyError, ValueError):
+        index, time_sec = offset, 0.0
+
+    return MeasuredFrame(
+        index=index,
+        time_sec=time_sec,
+        head=head,
+        right=right,
+        left=left,
+        hit=None if hit_uv is None else hit_uv[0],
+        uv=None if hit_uv is None else hit_uv[1],
+        spraying=row.get("분사", "").strip() == "On",
+        yaw=None if (rot := _rotation(row, HEAD_GROUP)) is None else facing_yaw(rot),
+    )
+
+
 def measured_frames(rows: Sequence[dict[str, str]]) -> list[MeasuredFrame]:
     """실측 3점 시계열. 오른손을 못 믿는 프레임은 통째로 버린다."""
     gun = active_gun(rows)
     if gun is None:
         return []
-
     frames: list[MeasuredFrame] = []
     for offset, row in enumerate(rows):
-        head = _position(row, HEAD_GROUP)
-        right = _position(row, gun)
-        if head is None or right is None:
-            continue
-        span = math.dist(head, right)
-        if span > MAX_HEAD_HAND_M or span < MIN_HEAD_RIGHT_M:
-            continue
-
-        left = _position(row, LEFT_GROUP)
-        if left is not None:
-            reach = math.dist(head, left)
-            if reach > MAX_HEAD_HAND_M or reach < MIN_HEAD_LEFT_M:
-                left = None
-
-        hit_uv = _hit(row)
-        try:
-            index = int(row["인덱스"])
-            time_sec = float(row["시간(초)"])
-        except (KeyError, ValueError):
-            index, time_sec = offset, 0.0
-
-        frames.append(
-            MeasuredFrame(
-                index=index,
-                time_sec=time_sec,
-                head=head,
-                right=right,
-                left=left,
-                hit=None if hit_uv is None else hit_uv[0],
-                uv=None if hit_uv is None else hit_uv[1],
-                spraying=row.get("분사", "").strip() == "On",
-                yaw=None if (rot := _rotation(row, HEAD_GROUP)) is None else facing_yaw(rot),
-            )
-        )
+        frame = _frame_from_row(offset, row, gun)
+        if frame is not None:
+            frames.append(frame)
     return frames
+
+
+def measured_frames_with_rows(
+    rows: Sequence[dict[str, str]]
+) -> list[tuple[MeasuredFrame, dict[str, str]]]:
+    """`measured_frames`와 같은 필터·순서지만, 프레임마다 원본 CSV 행을 함께 낸다.
+
+    `measured_frames`만 쓰면 그 행을 잃는다 — 리샘플(보간)된 격자점은 어느 원본
+    행에도 대응하지 않지만, 전신 FK 스켈레톤(`pose_lab.skeleton`)은 회전 각(원본
+    행이 갖고 있다)과 목표 위치(프레임)를 **같은 순간**에서 함께 써야 한다. 그래서
+    보간 이전, 원본 행과 1:1인 이 목록이 필요하다.
+    """
+    gun = active_gun(rows)
+    if gun is None:
+        return []
+    paired: list[tuple[MeasuredFrame, dict[str, str]]] = []
+    for offset, row in enumerate(rows):
+        frame = _frame_from_row(offset, row, gun)
+        if frame is not None:
+            paired.append((frame, row))
+    return paired

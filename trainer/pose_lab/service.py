@@ -25,7 +25,10 @@ pose_similarity = importlib.import_module("pose_similarity")
 stroke_frame = importlib.import_module("stroke_frame")
 build_spread_reference = importlib.import_module("build_spread_reference")
 level_mesh = importlib.import_module("level_mesh")
+pose_fk_csv = importlib.import_module("pose_fk_csv")
+simulator_csv = importlib.import_module("simulator_csv")
 
+from trainer.pose_lab import skeleton
 from trainer.pose_lab.spread_reference import Resolved, SpreadReference
 
 Vec3 = tuple[float, float, float]
@@ -63,6 +66,13 @@ ASSUMED_YAW: Final = 0.0
 JOINT_AXIS_NOTE: Final = (
     "관절 20개는 3점 추적에서 IK로 푼 값이다. 각도 지시는 REQ-19 통과 전까지 내지 않는다."
 )
+
+# 기준(레퍼런스) 작업자는 이제 고를 수 없다 — 전형기로 고정이다(태스크 11 브리프,
+# 사용자 지시). `build_spread_reference.py`가 산포 아티팩트를 굽는 바로 그 작업자와
+# 같은 사람이다. 리터럴로 고정하는 이유: 이 화면은 σ 아티팩트(`reference_spreads`)가
+# 안 실려도(잠정 산포로 도는 배포에서도) 기준 후보 목록은 낼 수 있어야 하므로,
+# `reference_spreads.worker`에 의존하지 않는다.
+EXPERT_WORKER: Final = "전형기"
 
 
 @dataclass(frozen=True, slots=True)
@@ -464,6 +474,60 @@ def _correction_arrows(
     return arrows
 
 
+def skeleton_block(raw: RawPass) -> dict[str, object] | None:
+    """대표 프레임 하나에 전신 FK 스켈레톤을 강체 정렬한다(`skeleton.place_skeleton`).
+
+    회전 각은 원본 CSV 행에만 있고, 리샘플(보간)된 격자점에는 없다 — 그래서 여기서는
+    `pass_frames`가 낸 격자가 아니라 `measured_pose.measured_frames_with_rows`로
+    원본 행과 프레임을 다시 짝지어, 분사 중이고 착탄점이 있는 구간의 **가운데** 프레임
+    하나를 고른다(`representative_basis`가 기저를 고르는 것과 같은 "가운데" 규칙).
+
+    빌드 오프셋(뼈 길이)은 프레임 불변이므로 그 패스의 첫 행에서 뽑는다
+    (`pose_fk_csv.bind_offsets` 독스트링).
+
+    **실측 앵커는 실측 위치에 그대로 둔다**(브리프): `place_skeleton`의 최소제곱
+    정렬은 머리·양손을 실측에 "가깝게" 놓을 뿐 정확히 놓지 않는다(중앙값 204mm 어긋남,
+    Task 1 D0). 그 어긋남은 `residual_m`으로 정직하게 보고하되, 화면에 실제로 그릴
+    머리·오른손·왼손 좌표는 FK 결과가 아니라 그 프레임의 실측값으로 덮어쓴다 — FK가
+    주는 것은 그 사이를 잇는 몸통·다리 구조뿐이다. 왼손이 이 프레임에서 안 잡혔으면
+    (`frame.left is None`) 애초에 정렬의 앵커가 아니었으므로(2점 폴백) 덮어쓰지
+    않는다.
+
+    FK를 못 얻으면(관절 컬럼이 없거나 분사 프레임이 없거나 앵커가 2개 미만) `None`이다
+    — 그때는 화면이 점과 화살표만으로 동작해야 한다(브리프).
+    """
+    if not raw.rows:
+        return None
+    paired = measured_pose.measured_frames_with_rows(raw.rows)
+    spraying = [(frame, row) for frame, row in paired if frame.spraying and frame.hit is not None]
+    if not spraying:
+        return None
+    frame, row = spraying[len(spraying) // 2]
+
+    offsets = pose_fk_csv.bind_offsets(raw.rows[0])
+    if not offsets:
+        return None
+    local = pose_fk_csv.forward_kinematics(row, offsets)
+    placed = skeleton.place_skeleton(local, frame)
+    if placed is None:
+        return None
+    joints, residual = placed
+
+    joints = dict(joints)
+    if "Head" in joints:
+        joints["Head"] = frame.head
+    if "RightHand" in joints:
+        joints["RightHand"] = frame.right
+    if "LeftHand" in joints and frame.left is not None:
+        joints["LeftHand"] = frame.left
+
+    return {
+        "joints": {name: list(position) for name, position in joints.items()},
+        "bones": [list(pair) for pair in simulator_csv.BONES],
+        "fit": {"residual_m": residual, "source": "fk_csv"},
+    }
+
+
 def _mesh_source_path(level: int) -> Path | None:
     """정렬 레코드(`level_alignment.json`)에 적힌 원본 FBX 경로. 항목 자체가 없으면
     None이다 — 하드코딩한 파일명 규칙을 두지 않고 레코드가 적어 둔 `source_fbx`를
@@ -528,27 +592,50 @@ def view_block(
     weights: Mapping[str, float],
     level_text: str,
     grid_n: int,
+    query_raw: RawPass | None = None,
 ) -> dict[str, object]:
     """화면이 그릴 층·교정·메시·가중치. 좌표는 전부 캡처(월드) 프레임이다.
 
     `corrected` 층과 `corrections`는 여기서 **한 번만** `measured_score.issued_axes`를
     불러 같은 목록에서 파생된다 — 두 갈래로 나눠 계산하면 그림이 개선율·문장과
     다른 이동을 보일 수 있다(요구사항 1).
+
+    전신 스켈레톤(`skeleton_block`)은 **질의 층에만** 얹는다. "지금 자세가 기준과
+    얼마나 다른가"가 이 화면의 답이므로(브리프 §0) 검증 대상은 질의이고, `fit`
+    잔차도 하나만 낼 수 있는 스키마(`{residual_m, source} | null`)라 여러 층에
+    독립적으로 FK를 풀면 어느 잔차가 "그" 잔차인지 모호해진다. `query_raw`가 없으면
+    (테스트처럼 원본 행 없이 층만 조립하는 호출) 스켈레톤 없이 점·화살표만 낸다.
     """
     query_layer = _world_layer(query_frames)
     reference_layer = _world_layer(reference_frames)
     corrections = measured_score.issued_axes(deltas, basis)
     corrected_layer = _corrected_layer(query_layer, corrections)
+
+    query_layer_view: dict[str, object] = dict(_serialize_layer(query_layer))
+    weights_view = dict(weights)
+    fit: dict[str, object] | None = None
+    skeleton_data = None if query_raw is None else skeleton_block(query_raw)
+    if skeleton_data is not None:
+        query_layer_view["joints"] = skeleton_data["joints"]
+        query_layer_view["bones"] = skeleton_data["bones"]
+        fit = skeleton_data["fit"]
+        # 새 관절은 전부 weights에 넣고 값은 0.0이다(채점에 안 들어간다) — 브리프.
+        # 강조(emphasis)는 view.weights[name]에서만 파생되므로, 여기 없으면 화면이
+        # 이 관절을 "그리는 점인데 weights가 모른다"는 결함 상태로 받는다.
+        for name in skeleton_data["joints"]:
+            weights_view.setdefault(name, 0.0)
+
     return {
         "grid_n": grid_n,
         "layers": {
-            "query": _serialize_layer(query_layer),
+            "query": query_layer_view,
             "reference": _serialize_layer(reference_layer),
             "corrected": _serialize_layer(corrected_layer),
         },
         "corrections": _correction_arrows(corrections, query_layer),
         "mesh": mesh_block(level_text),
-        "weights": dict(weights),
+        "weights": weights_view,
+        "fit": fit,
     }
 
 
@@ -566,7 +653,10 @@ def compare(
     params = params or motion_key.KeyParams()
     weights = weights or measured_score.DEFAULT_WEIGHTS
 
-    query_frames = pass_frames(source.load(query), samples)
+    # 원본 행을 따로 들고 있는다 — 스켈레톤 FK(`skeleton_block`)가 회전 각을 원본
+    # 행에서만 읽을 수 있고, `pass_frames`가 낸 리샘플 격자로는 얻을 수 없다.
+    query_raw = source.load(query)
+    query_frames = pass_frames(query_raw, samples)
     reference_frames = pass_frames(source.load(reference), samples)
     query_inputs = key_inputs(query_frames)
     reference_inputs = key_inputs(reference_frames)
@@ -747,6 +837,7 @@ def compare(
             weights=weights,
             level_text=query.level,
             grid_n=samples,
+            query_raw=query_raw,
         ),
         "measured": {
             "basis": "tracked",
@@ -768,6 +859,12 @@ def compare(
                     "point": delta.point,
                     "sigma": delta.sigma,
                     "delta": list(delta.local_delta),
+                    # 대응 격자점 사이 거리(cm) — "지금 자세가 기준과 얼마나 다른가"의
+                    # 답(브리프 ②)이다. `local_delta`는 스트로크 로컬 벡터지만 회전은
+                    # 노름을 보존하므로 그 크기는 월드 프레임에서 잰 거리와 같다. 화면이
+                    # 다시 계산하지 않도록 여기서 낸다(이 저장소의 규칙 — 브리프 ②
+                    # 각주: "서버에서 내주는 쪽이 낫다").
+                    "deviation_cm": math.dist(delta.local_delta, (0.0, 0.0, 0.0)) * 100.0,
                     # 왼손은 프레임 단위로 빠지므로 점마다 받친 격자점 수가 다르다.
                     "samples": delta.samples,
                     # 축별(wall/vertical/lateral) σ. 화면 막대 옆에 붙일 근거다 —
@@ -854,4 +951,77 @@ def compare(
             "gate": None,
             "gate_reason": "not_wired",
         },
+    }
+
+
+def reference_candidates(
+    source: Any,
+    query: PassRef,
+    params: Any | None = None,
+    samples: int = stroke_frame.DEFAULT_SAMPLES,
+    limit: int = 50,
+) -> dict[str, object]:
+    """대상 패스의 기준 후보 — 사용자 지시(브리프 §"기준은 고를 수 없다"): 전형기
+    고정 · 대상과 같은 레벨 · 동작 키가 일치 · 대상 자신은 제외.
+
+    화면은 이 함수가 돌려준 `candidates` 안에서만 고른다 — 다른 작업자·다른 레벨을
+    기준으로 보낼 길이 애초에 없다. `source`는 `CsvPassSource`(또는 같은 표면을 가진
+    페이크) 전체를 받는다 — `PassSource` 프로토콜(`workers`/`load`)보다 넓다
+    (`passes`/`key_of`도 쓴다); `app.py`의 `/api/passes`가 이미 같은 폭으로
+    `source`를 직접 쓰는 것과 같은 이유다.
+    """
+    params = params or motion_key.KeyParams()
+    if EXPERT_WORKER not in source.workers():
+        return {"status": "unavailable", "reason": "no_expert_worker"}
+    try:
+        raw_query = source.load(query)
+    except LookupError:
+        return {"status": "unavailable", "reason": "pass_not_found"}
+
+    query_frames_ = pass_frames(raw_query, samples)
+    query_inputs = key_inputs(query_frames_)
+    if query_inputs is None:
+        return {"status": "unavailable", "reason": "insufficient_frames"}
+    query_key = key_from(query_inputs, params)
+
+    found, sessions_total = source.passes(EXPERT_WORKER, level=query.level, limit=limit)
+    candidates: list[dict[str, object]] = []
+    for item, entry in found:
+        ref = PassRef(
+            worker=item.worker,
+            date=item.date,
+            level=item.level,
+            session=item.session,
+            pass_index=entry.pass_index,
+        )
+        if ref == query:
+            # 자기 자신과 비교하면 편차가 0이 되어 화면이 거짓을 말한다(브리프).
+            continue
+        motion = source.key_of(entry, params)
+        if motion != query_key:
+            continue
+        candidates.append(
+            {
+                "worker": ref.worker,
+                "date": ref.date,
+                "level": ref.level,
+                "session": ref.session,
+                "pass_index": ref.pass_index,
+                "frames": entry.frames,
+                "length_mm": entry.length_m * 1000.0,
+                "motion_key": motion,
+            }
+        )
+
+    return {
+        "status": "ok",
+        "expert_worker": EXPERT_WORKER,
+        "query_key": query_key,
+        "level": query.level,
+        "sessions_scanned": min(sessions_total, limit),
+        "sessions_total": sessions_total,
+        # 훑은 세션을 한도로 잘랐다는 사실을 화면이 알아야 한다 — 숨기면 "이 동작
+        # 키의 전형기 패스가 없다"와 "한도 안에서 못 찾았다"가 구별되지 않는다.
+        "truncated": sessions_total > limit,
+        "candidates": candidates,
     }

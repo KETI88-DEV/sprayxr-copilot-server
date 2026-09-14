@@ -1,5 +1,12 @@
 // 서버 응답만으로 그린다. 지표 계산을 브라우저에서 다시 하지 않는다.
 // 두 곳에서 계산하면 값이 갈라지고 어느 쪽이 맞는지 알 수 없게 된다.
+//
+// 화면 구성은 브리프(task-11-brief.md)가 고정한 것을 그대로 따른다:
+//   ① 고르기(대상 패스만 — 기준은 고를 수 없다, 전형기로 자동 고정)
+//   ② 얼마나 다른가 (이 화면의 답 — 가장 크게)
+//   ③ 무엇을 고치나 (3D 뷰 + 발부된 교정 목록)
+//   ④ 개선율
+//   ⑤ 접이식 세부 수치
 
 import { createSkeletonView } from "./skeleton_view.js";
 
@@ -7,7 +14,7 @@ const $ = (id) => document.getElementById(id);
 
 // 3D 뷰. three.js가 못 실렸거나(오프라인 등) 초기화가 실패해도 createSkeletonView는
 // 절대 던지지 않고 조용한 안내로만 떨어진다 — 아래 run()이 이 객체를 어떻게 쓰든
-// 숫자 패널(renderAxis)은 그 성패와 무관하게 그대로 동작한다(요구사항 3).
+// 숫자 패널(renderAxis 등)은 그 성패와 무관하게 그대로 동작한다(요구사항 3).
 const skeletonView = createSkeletonView($("view3d"));
 
 // 게이트가 비어 있는 이유. 판정 자리에 이유를 적어 "아직 재지 않았다"를 드러낸다.
@@ -36,41 +43,64 @@ const SPLIT_REASONS = {
 const NORMALIZATION_LABELS = { measured: "측정된 분포", provisional: "임시" };
 const NORMALIZATION_CLASS = { measured: "measured", provisional: "provisional-flag" };
 
-// 비교를 만들지 않은 이유. 서버의 reason과 1:1이다.
+// 비교를 만들지 않은 이유. 서버의 reason과 1:1이다 — 각각 다른 문장으로 읽혀야
+// 한다(브리프: "레퍼런스 없음/동작키 불일치/데이터 없음이 각각 달리 읽혀야 한다").
 const UNAVAILABLE_REASONS = {
-  motion_key_mismatch: "동작 키가 달라 비교하지 않습니다",
-  insufficient_frames: "착탄점이 있는 분사 프레임이 모자라 지표를 만들지 못했습니다",
-  no_source: "실데이터 소스가 배선되지 않았습니다",
-  pass_not_found: "고른 패스를 원본에서 찾지 못했습니다",
+  motion_key_mismatch: "동작 키가 달라 비교하지 않습니다.",
+  insufficient_frames: "착탄점이 있는 분사 프레임이 모자라 지표를 만들지 못했습니다.",
+  no_source: "실데이터 소스가 배선되지 않았습니다.",
+  pass_not_found: "고른 패스를 원본에서 찾지 못했습니다.",
+  no_expert_worker: "이 데이터셋에 전형기 작업자가 없습니다.",
 };
 
-// 양쪽 패널의 현재 목록. 옵션 값은 인덱스라 여기서 원본 항목을 되찾는다.
-const listed = { query: [], reference: [] };
+// unavailable 사유 중 "정상적인 없음"(계산은 됐지만 결과가 없다)과 "시스템이 못
+// 답했다"를 구별한다 — 전자는 empty 톤(차분), 후자는 error 톤(빨강)으로 낸다.
+const EMPTY_REASONS = new Set([
+  "motion_key_mismatch",
+  "insufficient_frames",
+  "no_expert_worker",
+]);
 
-function params() {
-  return {
-    uv_grid: Number($("uvGrid").value),
-    lateral_deg: Number($("lateralDeg").value),
-    reach_m: Number($("reachM").value),
-    samples: Number($("samples").value),
-  };
+/** `note` 엘리먼트에 4상태(아직 안 함/로딩 중/없음/오류) 중 하나를 건다.
+ * "ok"는 note 자체를 숨기고(내용은 다른 곳에서 그린다), 나머지는 문구와 함께 보인다. */
+function setState(note, tone, text) {
+  if (tone === "ok") {
+    note.hidden = true;
+    note.removeAttribute("data-tone");
+    return;
+  }
+  note.hidden = false;
+  note.dataset.tone = tone;
+  note.textContent = text ?? "";
+}
+
+function severityTier(sigma) {
+  if (typeof sigma !== "number") return "unknown";
+  if (sigma <= 1) return "ok";
+  if (sigma <= 2) return "warn";
+  return "bad";
 }
 
 function severityColor(sigma) {
-  if (sigma <= 1) return "var(--ok)";
-  if (sigma <= 2) return "var(--warn)";
-  return "var(--bad)";
+  const tier = severityTier(sigma);
+  return tier === "unknown" ? "var(--text-faint)" : `var(--${tier})`;
+}
+
+function fmtCm(value) {
+  // 0도 값이다. `??`/`typeof` 없이 `||`를 쓰면 진짜 0cm 편차가 "값 없음"으로 보인다.
+  return typeof value === "number" ? `${value >= 0 ? "+" : ""}${value.toFixed(1)}cm` : "—";
+}
+
+function fmtScore(value) {
+  return typeof value === "number" ? value.toFixed(3) : "—";
 }
 
 function renderAxis(root, payload) {
   const note = root.querySelector(".note");
   if (note) note.textContent = payload.note ?? "";
 
-  // 값이 없으면 0이 아니라 대시다. 0.000은 "못 쟀다"가 아니라 "완전히 다르다"로 읽힌다.
   const num = (value) => (typeof value === "number" ? value.toFixed(3) : "—");
 
-  // 게이트가 없으면 판정을 만들어 내걸지 않는다. "각도 지시가 이제 정당하다"는
-  // 뜻이라 상수에서 나온 pass를 적으면 화면이 보지 않은 데이터로 판정을 주장한다.
   const gate = payload.gate ?? "—";
   const gateWhy = payload.gate ? "" : GATE_REASONS[payload.gate_reason] ?? "";
 
@@ -81,14 +111,6 @@ function renderAxis(root, payload) {
     <dt>개선율(동일)</dt><dd>${num(payload.improvement?.same)}</dd>
     <dt>REQ-19 게이트</dt><dd>${gate}${gateWhy}</dd>`;
 
-  // 개선율(분리)이 왜 산출되지 않았는지, 산출됐다면 A/B 반쪽이 몇 표본으로 섰는지.
-  // 이 줄이 없으면 위의 레퍼런스 날짜(F, 전체 레퍼런스) 줄이 마치 split의 출처인
-  // 것처럼 읽힌다 — split은 F가 아니라 별도로 나뉜 A/B 위에서 난다.
-  // 키가 **없는 것**과 null은 다른 말이다. 비교 자체를 만들지 않은 응답
-  // (motion_key_mismatch, insufficient_frames)에는 measured 블록이 통째로 없어서
-  // split_reason이 undefined다. 그걸 null과 같이 취급하면 "split은 돌았고 개수만
-  // 모른다"(A n=— / B n=—)로 읽힌다 — 아무것도 비교하지 않았는데 그렇게 읽힌다.
-  // null은 "split이 났고 사유를 댈 것이 없다"는 뜻이라 그 갈래만 개수를 낸다.
   const splitNote = root.querySelector(".split-note");
   if (splitNote) {
     const a = payload.split_n_a;
@@ -104,9 +126,6 @@ function renderAxis(root, payload) {
     }
   }
 
-  // 정규화가 어느 값을 재정의하는지 눈에 크게 띄어야 한다 — 이 값이 틀리면 아래
-  // σ와 점수 전부가 다른 뜻이 된다. 값이 measured/provisional 둘 다 아니면(관절
-  // 축처럼 애초에 배선되지 않았으면) 지어내지 않고 "—"를 낸다.
   const normEl = root.querySelector(".normalization");
   if (normEl) {
     const norm = payload.normalization ?? null;
@@ -114,8 +133,6 @@ function renderAxis(root, payload) {
     normEl.className = `normalization ${NORMALIZATION_CLASS[norm] ?? "unknown"}`;
   }
 
-  // 입도·표본. `resolved`가 답을 낸 층이 없으면(레퍼런스가 없거나 사다리 전부
-  // 실패) 값을 지어내지 않고 대시다.
   const granEl = root.querySelector(".granularity");
   if (granEl) {
     const granularity = payload.granularity ?? null;
@@ -125,7 +142,6 @@ function renderAxis(root, payload) {
       : "입도 · 표본: —";
   }
 
-  // 레퍼런스 날짜. 개수와 목록을 함께 적어 이 σ가 어느 날짜들의 평균인지 보인다.
   const datesEl = root.querySelector(".reference-dates");
   if (datesEl) {
     const dates = payload.reference_dates ?? [];
@@ -142,8 +158,6 @@ function renderAxis(root, payload) {
         : "";
   }
 
-  // 축별 σ 하나를 다시 값으로. 서버가 이 점의 이 축을 못 냈으면 0으로 지어내지
-  // 않고 대시다 — 없는 값과 0인 값은 다른 말이다.
   const axisSigma = (delta, axis) => {
     const value = delta.axis_sigmas?.[axis];
     return typeof value === "number" ? `${value.toFixed(2)}σ` : "—";
@@ -155,7 +169,6 @@ function renderAxis(root, payload) {
     const item = document.createElement("li");
     item.className = "bar";
     const width = Math.min(100, (delta.sigma / 6) * 100);
-    // 표본 수를 함께 적는다. 왼손은 프레임 단위로 빠지므로 더 적은 격자점 위에 선다.
     const backing = typeof delta.samples === "number" ? ` (n=${delta.samples})` : "";
     item.innerHTML = `<div class="bar-row">
         <span>${delta.point}${backing}</span>
@@ -166,8 +179,6 @@ function renderAxis(root, payload) {
     bars.append(item);
   }
 
-  // 자세 문장 하나(머리). 머리가 조용하면(응답이 stance를 null로 낸다) 배너를 숨긴다
-  // — 0이 아니라 "낼 문장이 없다"이므로 빈 문장을 그리지 않는다.
   const stanceEl = root.querySelector(".stance");
   if (stanceEl) {
     const stance = payload.stance ?? null;
@@ -175,10 +186,6 @@ function renderAxis(root, payload) {
     stanceEl.textContent = stance ? stance.text : "";
   }
 
-  // 발부한 축 전부 — 작업자가 실제로 받는 지시다. 이 표의 숫자가 곧 교정 후
-  // 궤적이 옮긴 양이라 개선율(동일)과 같은 이동을 잰다. 개선율(분리)은 교정 후보를
-  // A 반쪽에서 다시 고르므로 이 표와 축 집합이 갈릴 수 있다(자기충족을 피하려는
-  // 설계다). 이 표를 분리 개선율의 근거로 읽지 말 것.
   const axesBody = root.querySelector(".issued-axes tbody");
   if (axesBody) {
     axesBody.replaceChildren();
@@ -196,9 +203,7 @@ function renderAxis(root, payload) {
       for (const text of [
         POINT_LABELS[entry.point] ?? entry.point,
         AXIS_LABELS[entry.axis] ?? entry.axis,
-        typeof entry.magnitude_cm === "number"
-          ? `${entry.magnitude_cm >= 0 ? "+" : ""}${entry.magnitude_cm.toFixed(1)}cm`
-          : "—",
+        typeof entry.magnitude_cm === "number" ? fmtCm(entry.magnitude_cm) : "—",
         typeof entry.sigma === "number" ? `${entry.sigma.toFixed(2)}σ` : "—",
       ]) {
         const cell = document.createElement("td");
@@ -217,8 +222,6 @@ function renderAxis(root, payload) {
     list.append(item);
   }
 
-  // 교정문 옆에 근거를 함께 보인다. 문장만으로는 표본 3개짜리 주장과 24개짜리
-  // 주장을 구별할 수 없다 — 그 구별이 이 줄의 존재 이유다.
   const findingEl = root.querySelector(".finding");
   if (findingEl) {
     const finding = payload.finding ?? null;
@@ -230,9 +233,125 @@ function renderAxis(root, payload) {
   }
 }
 
-function selected(side) {
-  const select = $(`${side}Pass`);
-  const entry = listed[side][Number(select.value)];
+// ---- ② 얼마나 다른가 ------------------------------------------------------
+
+function renderHero(measured, keys) {
+  $("heroScore").textContent = fmtScore(measured.score);
+  $("heroMotionKey").textContent = keys ?? "—";
+  const n = measured.reference_n;
+  const granularity = measured.granularity;
+  $("heroSamples").textContent = typeof n === "number"
+    ? `n=${n}${granularity ? ` (${granularity})` : ""}`
+    : "—";
+
+  const list = $("heroDeviations");
+  list.replaceChildren();
+  for (const delta of measured.deltas ?? []) {
+    const item = document.createElement("li");
+    const name = document.createElement("span");
+    name.className = "deviation-name";
+    name.textContent = POINT_LABELS[delta.point] ?? delta.point;
+    const value = document.createElement("span");
+    value.className = "deviation-value";
+    // 0cm도 값이다 — `??`(typeof 검사)를 쓴다.
+    value.textContent = typeof delta.deviation_cm === "number" ? `${delta.deviation_cm.toFixed(1)}cm` : "—";
+    item.append(name, value);
+    list.append(item);
+  }
+}
+
+// ---- ③ 발부된 교정 목록 ---------------------------------------------------
+
+const NUMERALS = ["①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨"];
+
+function renderCorrections(view) {
+  const corrections = view?.corrections ?? [];
+  $("correctionsCount").textContent = corrections.length > 0 ? `${corrections.length}건` : "";
+  const list = $("correctionList");
+  list.replaceChildren();
+  const state = $("correctionsState");
+
+  if (corrections.length === 0) {
+    setState(state, "empty", "발부된 교정이 없습니다 — 임계를 넘는 이탈이 없습니다.");
+    return;
+  }
+  setState(state, "ok");
+
+  const maxSigma = Math.max(1, ...corrections.map((c) => (typeof c.sigma === "number" ? c.sigma : 0)));
+  corrections.forEach((entry, index) => {
+    const item = document.createElement("li");
+    item.className = "correction-item";
+    const tier = severityTier(entry.sigma);
+    const width = typeof entry.sigma === "number" ? Math.min(100, (entry.sigma / maxSigma) * 100) : 0;
+
+    const badge = document.createElement("span");
+    badge.className = "correction-badge";
+    badge.textContent = NUMERALS[index] ?? `#${index + 1}`;
+
+    const text = document.createElement("span");
+    text.className = "correction-text";
+    const point = POINT_LABELS[entry.point] ?? entry.point;
+    const axis = AXIS_LABELS[entry.axis] ?? entry.axis;
+    text.textContent = `${point} · ${axis}${entry.direction ? ` (${entry.direction})` : ""}`;
+
+    const figures = document.createElement("span");
+    figures.className = "correction-figures";
+    const cm = document.createElement("span");
+    cm.className = "correction-cm";
+    cm.textContent = fmtCm(entry.magnitude_cm);
+    const sigma = document.createElement("span");
+    sigma.className = "correction-sigma";
+    sigma.textContent = typeof entry.sigma === "number" ? `σ${entry.sigma.toFixed(2)}` : "σ—";
+    figures.append(cm, sigma);
+
+    const barTrack = document.createElement("span");
+    barTrack.className = "correction-bar-track";
+    const barFill = document.createElement("span");
+    barFill.className = "correction-bar-fill";
+    barFill.dataset.tier = tier;
+    barFill.style.width = `${width}%`;
+    barTrack.append(barFill);
+
+    item.append(badge, text, figures, barTrack);
+    list.append(item);
+  });
+}
+
+// ---- ④ 개선율 --------------------------------------------------------------
+
+function renderImprovement(measured) {
+  const el = $("improvementValues");
+  const before = measured.score;
+  const after = measured.score_after;
+  if (typeof before !== "number" || typeof after !== "number") {
+    el.textContent = "—";
+    return;
+  }
+  const delta = after - before;
+  const tone = delta >= 0 ? "ok" : "bad";
+  el.innerHTML = `${fmtScore(before)}<span class="arrow">→</span>${fmtScore(after)}` +
+    `<span class="improvement-delta" data-tone="${tone}">${delta >= 0 ? "+" : ""}${delta.toFixed(3)}</span>`;
+}
+
+// ---- ① 고르기: 패스 목록 --------------------------------------------------
+
+const listed = { query: [] };
+// 기준(레퍼런스) 후보 상태. 기준은 고를 수 없다(브리프) — 이 목록에서 자동으로
+// 고른 것을 [다른 기준 ▸]으로 순환할 뿐, 다른 작업자·레벨로 보낼 길이 없다.
+const referenceState = { phase: "idle", candidates: [], index: 0, message: "" };
+
+function params() {
+  return {
+    uv_grid: Number($("uvGrid").value),
+    lateral_deg: Number($("lateralDeg").value),
+    reach_m: Number($("reachM").value),
+    samples: Number($("samples").value),
+  };
+}
+
+function selectedQuery() {
+  const select = $("queryPass");
+  const entry = listed.query[Number(select.value)];
   return entry ?? null;
 }
 
@@ -252,48 +371,21 @@ function optionLabel(entry) {
     + `  (${entry.frames}프레임 ${length}mm)  ${entry.motion_key}`;
 }
 
-/** 레퍼런스 목록을 질의 키로 좁힌다. 4축 키가 엄격해 사람이 눈으로 찾기 어렵다. */
-function matchFilter(side) {
-  if (side !== "reference" || !$("sameKeyOnly").checked) return null;
-  const query = selected("query");
-  return query ? query.motion_key : null;
-}
-
-function fillPasses(side) {
-  const select = $(`${side}Pass`);
-  const wanted = matchFilter(side);
-  const entries = listed[side].map((entry, index) => ({ entry, index }));
-  const shown = wanted === null ? entries : entries.filter((i) => i.entry.motion_key === wanted);
-
+function fillQueryPasses() {
+  const select = $("queryPass");
   select.replaceChildren();
-  for (const { entry, index } of shown) {
+  for (const [index, entry] of listed.query.entries()) {
     const option = document.createElement("option");
     option.value = String(index);
     option.textContent = optionLabel(entry);
     select.append(option);
   }
-  select.disabled = shown.length === 0;
-  $(`${side}Count`).textContent = wanted === null
-    ? `${shown.length}개`
-    : `${shown.length}개 (질의 키와 같은 것만)`;
+  select.disabled = listed.query.length === 0;
 }
 
-/** 가장 큰 동일 키 묶음. 4축 키가 표본을 얼마나 쪼개는지 그대로 보인다(설계 D3). */
-function bucketSummary(passes) {
-  const counts = new Map();
-  for (const entry of passes) {
-    counts.set(entry.motion_key, (counts.get(entry.motion_key) ?? 0) + 1);
-  }
-  let top = null;
-  for (const [key, count] of counts) {
-    if (top === null || count > top[1]) top = [key, count];
-  }
-  if (top === null) return "패스 없음";
-  return `패스 ${passes.length}개 / 서로 다른 키 ${counts.size}개 / 최대 묶음 n=${top[1]} (${top[0]})`;
-}
-
-async function loadPasses(side) {
-  const worker = $(`${side}Worker`).value;
+async function loadQueryPasses() {
+  const worker = $("queryWorker").value;
+  const status = $("queryStatus");
   if (!worker) return;
   const query = new URLSearchParams({
     worker,
@@ -302,19 +394,29 @@ async function loadPasses(side) {
     lateral_deg: String(params().lateral_deg),
     reach_m: String(params().reach_m),
   });
-  const level = $(`${side}Level`).value;
+  const level = $("queryLevel").value;
   if (level) query.set("level", level);
 
-  $(`${side}Count`).textContent = "읽는 중…";
-  const payload = await (await fetch(`/api/passes?${query}`)).json();
+  setState(status, "loading", "패스 목록을 불러오는 중…");
+  $("run").disabled = true;
+  let payload;
+  try {
+    const response = await fetch(`/api/passes?${query}`);
+    payload = await response.json();
+  } catch (err) {
+    listed.query = [];
+    fillQueryPasses();
+    setState(status, "error", `패스 목록을 불러오지 못했습니다 — ${err}`);
+    return;
+  }
   if (payload.status !== "ok") {
-    listed[side] = [];
-    fillPasses(side);
-    $(`${side}Count`).textContent = UNAVAILABLE_REASONS[payload.reason] ?? "목록 없음";
+    listed.query = [];
+    fillQueryPasses();
+    setState(status, "empty", UNAVAILABLE_REASONS[payload.reason] ?? "목록을 불러올 수 없습니다.");
     return;
   }
 
-  const levelSelect = $(`${side}Level`);
+  const levelSelect = $("queryLevel");
   if (levelSelect.dataset.worker !== worker) {
     levelSelect.dataset.worker = worker;
     levelSelect.replaceChildren(new Option("전체", ""));
@@ -322,52 +424,200 @@ async function loadPasses(side) {
     levelSelect.value = level;
   }
 
-  listed[side] = payload.passes;
-  fillPasses(side);
-  // 훑은 세션 수를 함께 적는다. 자른 사실을 숨기면 "이 작업자에게 이 패스뿐"으로 읽힌다.
-  const scanned = `세션 ${payload.sessions_scanned}/${payload.sessions_total}`
-    + (payload.truncated ? " (잘림 — 한도를 올리면 더 훑는다)" : "");
-  $(`${side}Summary`).textContent = `${scanned} · ${bucketSummary(payload.passes)}`;
+  listed.query = payload.passes;
+  fillQueryPasses();
+
+  if (payload.passes.length === 0) {
+    setState(status, "empty", "이 조건에 맞는 패스가 없습니다.");
+  } else {
+    // "ok"지만 정보 줄로 계속 보인다(4상태의 ok는 "숨김"이 기본이나, 이 줄은 몇 개를
+    // 찾았는지 알려 주는 요약이라 남겨 둔다) — 톤은 중립(idle)으로 낮춘다.
+    const scanned = `세션 ${payload.sessions_scanned}/${payload.sessions_total}`
+      + (payload.truncated ? " (잘림 — 한도를 올리면 더 훑는다)" : "");
+    setState(status, "idle", `${scanned} · 패스 ${payload.passes.length}개`);
+  }
+  await fetchReference();
 }
 
 async function loadWorkers() {
   const payload = await (await fetch("/api/workers")).json();
-  for (const side of ["query", "reference"]) {
-    const select = $(`${side}Worker`);
-    select.replaceChildren();
-    for (const worker of payload.workers) select.append(new Option(worker, worker));
-    if (payload.workers.length === 0) {
-      $(`${side}Summary`).textContent = UNAVAILABLE_REASONS.no_source;
-    }
+  const select = $("queryWorker");
+  select.replaceChildren();
+  for (const worker of payload.workers) select.append(new Option(worker, worker));
+  if (payload.workers.length === 0) {
+    setState($("queryStatus"), "empty", UNAVAILABLE_REASONS.no_source);
+    return;
   }
-  if (payload.workers.length > 1) $("referenceWorker").value = payload.workers[1];
-  if (payload.workers.length > 0) {
-    await loadPasses("query");
-    await loadPasses("reference");
+  await loadQueryPasses();
+}
+
+// ---- ① 고르기: 기준(전형기) 자동 매칭 -------------------------------------
+//
+// `referenceState.phase`는 4상태 그대로다: "idle"(아직 안 함) · "loading"(로딩 중)
+// · "ready"(있음 — candidates.length일 수도 있고 0일 수도 있다) · "error"(오류).
+// "없음"은 phase "ready"이면서 candidates가 빈 배열인 경우로 표현한다 — 정상적으로
+// 찾아봤는데 없는 것이지 실패가 아니다.
+
+function renderReferenceLine() {
+  const line = $("referenceLine");
+  const valueEl = $("referenceValue");
+  const cycleBtn = $("cycleReference");
+  const cycleNote = $("referenceCycleNote");
+  const { phase, candidates, index, message } = referenceState;
+
+  cycleBtn.hidden = true;
+  cycleNote.textContent = "";
+  $("run").disabled = true;
+
+  if (phase === "idle") {
+    line.dataset.tone = "idle";
+    valueEl.textContent = "패스를 고르면 전형기 기준을 자동으로 찾습니다.";
+    return;
   }
+  if (phase === "loading") {
+    line.dataset.tone = "loading";
+    valueEl.textContent = "전형기 기준을 찾는 중…";
+    return;
+  }
+  if (phase === "error") {
+    line.dataset.tone = "error";
+    valueEl.textContent = message || "기준을 찾지 못했습니다.";
+    return;
+  }
+  // phase === "ready"
+  if (candidates.length === 0) {
+    line.dataset.tone = "empty";
+    valueEl.textContent = message || "이 동작 키와 일치하는 전형기 패스가 없습니다.";
+    return;
+  }
+  const chosen = candidates[index];
+  line.dataset.tone = "ok";
+  valueEl.textContent = `전형기 · L${chosen.level} · ${chosen.date} ${chosen.session} #${chosen.pass_index} (자동)`;
+  cycleBtn.hidden = candidates.length <= 1;
+  cycleNote.textContent = candidates.length > 1 ? `${candidates.length}개 중 ${index + 1}번째` : "";
+  $("run").disabled = false;
+}
+
+async function fetchReference() {
+  const query = selectedQuery();
+  if (query === null) {
+    Object.assign(referenceState, { phase: "idle", candidates: [], index: 0, message: "" });
+    renderReferenceLine();
+    return;
+  }
+  referenceState.phase = "loading";
+  renderReferenceLine();
+
+  const q = passRef(query);
+  const search = new URLSearchParams({
+    worker: q.worker,
+    date: q.date,
+    level: q.level,
+    session: q.session,
+    pass_index: String(q.pass_index),
+    uv_grid: String(params().uv_grid),
+    lateral_deg: String(params().lateral_deg),
+    reach_m: String(params().reach_m),
+    samples: String(params().samples),
+  });
+  let payload;
+  try {
+    const response = await fetch(`/api/reference?${search}`);
+    payload = await response.json();
+  } catch (err) {
+    Object.assign(referenceState, {
+      phase: "error", candidates: [], index: 0,
+      message: `기준 후보를 불러오지 못했습니다 — ${err}`,
+    });
+    renderReferenceLine();
+    return;
+  }
+  if (payload.status !== "ok") {
+    // "없음"(동작 키 불일치·전형기 없음 — 정상)과 "오류"(패스 자체를 못 읽음 등)를
+    // 구별한다: 전자는 phase "ready"에 빈 candidates로, 후자는 phase "error"로 낸다.
+    const isEmptyReason = EMPTY_REASONS.has(payload.reason);
+    Object.assign(referenceState, {
+      phase: isEmptyReason ? "ready" : "error",
+      candidates: [],
+      index: 0,
+      message: UNAVAILABLE_REASONS[payload.reason] ?? "기준을 찾지 못했습니다.",
+    });
+    renderReferenceLine();
+    return;
+  }
+  Object.assign(referenceState, {
+    phase: "ready",
+    candidates: payload.candidates ?? [],
+    index: 0,
+    message: "",
+  });
+  renderReferenceLine();
+}
+
+function cycleReference() {
+  if (referenceState.candidates.length <= 1) return;
+  referenceState.index = (referenceState.index + 1) % referenceState.candidates.length;
+  renderReferenceLine();
+  // 표시된 기준이 곧 계산에 쓰일 기준이어야 한다 — 이미 결과가 떠 있다면 새
+  // 기준으로 다시 계산해 화면과 실제로 쓰인 기준이 갈리지 않게 한다.
+  if (!$("heroBody").hidden) void run();
+}
+
+// ---- ②③④ 비교 실행 --------------------------------------------------------
+
+function showHeroState(tone, text) {
+  $("heroEmpty").hidden = true;
+  $("heroBody").hidden = true;
+  setState($("heroState"), tone, text);
+}
+
+function showHeroBody() {
+  $("heroEmpty").hidden = true;
+  $("heroBody").hidden = false;
+  setState($("heroState"), "ok");
 }
 
 async function run() {
-  const query = selected("query");
-  const reference = selected("reference");
-  if (query === null || reference === null) {
-    $("keys").textContent = "양쪽에서 패스를 하나씩 고르세요.";
+  const query = selectedQuery();
+  const reference = referenceState.candidates[referenceState.index];
+  if (query === null || reference === null || reference === undefined) {
+    showHeroState("empty", "먼저 대상 패스를 고르고, 전형기 기준이 자동으로 잡히길 기다리세요.");
     return;
   }
-  const response = await fetch("/api/compare", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      query: passRef(query),
-      reference: passRef(reference),
-      ...params(),
-    }),
-  });
-  const payload = await response.json();
+
+  $("run").disabled = true;
+  $("run").textContent = "평가 중…";
+  showHeroState("loading", "비교를 계산하는 중…");
+  setState($("correctionsState"), "loading", "비교를 계산하는 중…");
+  $("correctionList").replaceChildren();
+  $("improvementValues").textContent = "—";
+  skeletonView.loading();
+
+  let payload;
+  try {
+    const response = await fetch("/api/compare", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        query: passRef(query),
+        reference: passRef(reference),
+        ...params(),
+      }),
+    });
+    payload = await response.json();
+  } catch (err) {
+    showHeroState("error", `비교 요청이 실패했습니다 — ${err}`);
+    setState($("correctionsState"), "error", "비교 요청이 실패했습니다.");
+    skeletonView.clear("비교 요청이 실패했습니다.", "error");
+    $("run").disabled = false;
+    $("run").textContent = "평가";
+    return;
+  }
+  $("run").disabled = false;
+  $("run").textContent = "평가";
 
   // 몸 기준 축(진행 방향·몸 기준 착탄 위치)이 선 요. HMD 회전에서 뽑은 실측값이면
-  // 그 값을 그대로 적고, 회전을 못 읽어 대체값으로 떨어졌으면 그렇다고 적는다 —
-  // 그 패스에서는 몸 기준 이름을 단 축이 다시 월드 방위각이기 때문이다.
+  // 그 값을 그대로 적고, 회전을 못 읽어 대체값으로 떨어졌으면 그렇다고 적는다.
   const yaw =
     typeof payload.yaw_assumed === "number"
       ? payload.yaw_source === "measured"
@@ -378,19 +628,26 @@ async function run() {
     `질의 ${payload.query_key ?? "-"} / 레퍼런스 ${payload.reference_key ?? "-"}${yaw}`;
 
   if (payload.status !== "ok") {
-    // 이유를 서버가 준 대로 적는다. 재지 못한 패스까지 "동작 키가 다르다"로 적으면
-    // 재지 못한 것을 재서 다르다고 말한 것이 된다.
-    $("keys").textContent += `  — ${UNAVAILABLE_REASONS[payload.reason] ?? "비교하지 않습니다"}`;
+    const isEmptyReason = EMPTY_REASONS.has(payload.reason);
+    const text = UNAVAILABLE_REASONS[payload.reason] ?? "비교하지 않습니다.";
+    showHeroState(isEmptyReason ? "empty" : "error", text);
+    setState($("correctionsState"), isEmptyReason ? "empty" : "error", text);
+    $("correctionsCount").textContent = "";
+    $("improvementValues").textContent = "—";
     renderAxis($("measured"), {});
     renderAxis($("joint"), {});
-    // 비교 자체가 없으니 그릴 것도 없다 — 이전 비교의 화살표를 화면에 남기지 않는다.
-    skeletonView.clear(UNAVAILABLE_REASONS[payload.reason] ?? "비교하지 않습니다");
+    skeletonView.clear(text, isEmptyReason ? "empty" : "error");
     return;
   }
+
+  showHeroBody();
+  renderHero(payload.measured, payload.query_key);
+  renderCorrections(payload.view);
+  renderImprovement(payload.measured);
   renderAxis($("measured"), payload.measured);
   renderAxis($("joint"), payload.joint);
-  // 3D 뷰 실패가 숫자 패널을 끌고 내려가면 안 된다(요구사항 3) — 위 renderAxis 두
-  // 호출은 이미 끝났고, 그 결과와 무관하게 이 호출만 실패할 수 있게 따로 감싼다.
+  // 3D 뷰 실패가 숫자 패널을 끌고 내려가면 안 된다(요구사항 3) — 위 렌더 호출들은
+  // 이미 끝났고, 그 결과와 무관하게 이 호출만 실패할 수 있게 따로 감싼다.
   try {
     skeletonView.render(payload);
   } catch (err) {
@@ -398,18 +655,16 @@ async function run() {
   }
 }
 
-for (const side of ["query", "reference"]) {
-  $(`${side}Worker`).addEventListener("change", () => {
-    $(`${side}Level`).dataset.worker = "";
-    void loadPasses(side);
-  });
-  $(`${side}Level`).addEventListener("change", () => void loadPasses(side));
-}
-$("queryPass").addEventListener("change", () => fillPasses("reference"));
-$("sameKeyOnly").addEventListener("change", () => fillPasses("reference"));
-$("reload").addEventListener("click", () => {
-  void loadPasses("query").then(() => loadPasses("reference"));
+// ---- 배선 -------------------------------------------------------------------
+
+$("queryWorker").addEventListener("change", () => {
+  $("queryLevel").dataset.worker = "";
+  void loadQueryPasses();
 });
+$("queryLevel").addEventListener("change", () => void loadQueryPasses());
+$("queryPass").addEventListener("change", () => void fetchReference());
+$("cycleReference").addEventListener("click", () => cycleReference());
+$("reload").addEventListener("click", () => void loadQueryPasses());
 $("run").addEventListener("click", () => void run());
 
 void loadWorkers();

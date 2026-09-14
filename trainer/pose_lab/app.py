@@ -174,6 +174,34 @@ def create_app(source: Any | None = None) -> FastAPI:
             ],
         }
 
+    @app.get("/api/reference")
+    def reference(
+        worker: str = Query(min_length=1),
+        date: str = Query(min_length=1),
+        level: str = Query(min_length=1),
+        session: str = Query(min_length=1),
+        pass_index: int = Query(ge=0),
+        uv_grid: int = Query(default=8, ge=1, le=64),
+        lateral_deg: float = Query(default=30.0, gt=0.0, le=90.0),
+        reach_m: float = Query(default=0.8, gt=0.0),
+        samples: int = Query(default=20, ge=2, le=200),
+        limit: int = Query(default=50, ge=1, le=500),
+    ) -> dict[str, object]:
+        """대상 패스의 기준 후보 — 전형기 고정, 같은 레벨, 동작 키 일치, 대상 제외.
+
+        화면은 기준을 고르지 않는다(브리프). 이 목록에서만 고른다 — `[다른 기준 ▸]`이
+        `candidates`를 순환할 뿐, 다른 작업자·레벨로 보낼 길이 없다.
+        """
+        if source is None:
+            return {"status": "unavailable", "reason": "no_source"}
+        params = motion_key.KeyParams(
+            uv_grid=uv_grid, lateral_deg=lateral_deg, reach_m=reach_m
+        )
+        query = service.PassRef(
+            worker=worker, date=date, level=level, session=session, pass_index=pass_index
+        )
+        return service.reference_candidates(source, query, params, samples=samples, limit=limit)
+
     @app.post("/api/compare")
     def compare(request: CompareRequest) -> dict[str, object]:
         if source is None:
