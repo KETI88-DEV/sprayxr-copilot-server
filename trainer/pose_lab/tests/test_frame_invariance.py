@@ -201,7 +201,20 @@ def _axes_signature(body: dict[str, object]) -> list[tuple[str, str, float]]:
 # 레벨 메시 표면 위에 있는가(외부 기하 증거), (2) 검증된 정렬이 없는 레벨을 조용히
 # 통과시키지 않는가, (3) "declared"(검증되지 않은) 정렬도 조용히 쓰지 않는가.
 
-LEVEL1_FBX = Path("/data/sources/modelings/learning_mode_lv.1_rev.1.1.fbx")
+# 레벨 1은 더 이상 "solved"가 아니다 — 착탄점이 정확히 평면이라 12자유도가 데이터로
+# 결정되지 않는다(`level_mesh.GATES["cond_min_over_max"]`, 실측 2.06e-09). 이 파일은
+# "검증된 정렬이 있는 레벨 아무거나"를 써야 하지 특정 숫자에 묶이면 안 된다.
+def _first_solved_level() -> int:
+    import json
+
+    for entry in json.loads(level_mesh.ALIGNMENT_PATH.read_text(encoding="utf-8")):
+        if entry["provenance"] == "solved":
+            return int(entry["level"])
+    raise AssertionError("검증된 정렬이 하나도 없다")
+
+
+SOLVED_LEVEL = _first_solved_level()
+UNVERIFIABLE_LEVEL = 1
 # `test_level_mesh.py::test_committed_translation_places_real_hits_on_the_mesh`와
 # 같은 허용치(1cm) — 실측 median은 그보다 여섯 자릿수 이상 작다(~2e-10 m).
 _MESH_SURFACE_TOLERANCE_M = 0.01
@@ -211,7 +224,14 @@ def _mesh_in_metres(alignment) -> "level_mesh.Mesh":  # noqa: F821 — 타입은
     """레벨 메시 정점을 `alignment.scale`로만 미터로 바꾼다(회전·평행이동 없음) —
     `capture_frame.to_world`가 내는 좌표계와 정확히 짝을 이루는 메시다
     (`capture_frame.py` 모듈 독스트링의 유도 참고)."""
-    mesh = level_mesh.read_fbx(LEVEL1_FBX)
+    import json
+
+    source = next(
+        entry["source_fbx"]
+        for entry in json.loads(level_mesh.ALIGNMENT_PATH.read_text(encoding="utf-8"))
+        if int(entry["level"]) == SOLVED_LEVEL
+    )
+    mesh = level_mesh.read_fbx(level_mesh.DEFAULT_MODELINGS_ROOT / source)
     scale = alignment.scale
     return level_mesh.Mesh(
         vertices=[(v[0] * scale, v[1] * scale, v[2] * scale) for v in mesh.vertices],
@@ -223,26 +243,35 @@ def _mesh_in_metres(alignment) -> "level_mesh.Mesh":  # noqa: F821 — 타입은
 
 
 def test_to_world_lands_a_converted_hit_on_the_level_mesh_surface() -> None:
-    """캡처 착탄점을 `to_world`로 옮기면, 그 점은 레벨 1 메시 표면(미터로 바꾼 것)
+    """캡처 착탄점을 `to_world`로 옮기면, 그 점은 레벨 메시 표면(미터로 바꾼 것)
     위에 있어야 한다 — 이 저장소에서 월드 좌표 해석이 맞다는 것을 확인하는 유일한
     외부 증거(`place()`가 반대 방향에서 이미 확인한 것)를 여기서도 확인한다."""
-    alignment = level_mesh.load_alignment(1)
+    alignment = level_mesh.load_alignment(SOLVED_LEVEL)
     mesh_m = _mesh_in_metres(alignment)
-    hits, _uvs = level_mesh._collect_level_hits(1, min_hits=500)  # noqa: SLF001
+    hits, _uvs = level_mesh._collect_level_hits(SOLVED_LEVEL, min_hits=500)  # noqa: SLF001
     assert len(hits) >= 500, "표본이 모자라면 이 검사는 아무것도 보증하지 않는다"
     sample = hits[:500]
     distances = sorted(
-        level_mesh.closest_distance(mesh_m, capture_frame.to_world(hit, level=1)) for hit in sample
+        level_mesh.closest_distance(mesh_m, capture_frame.to_world(hit, level=SOLVED_LEVEL))
+        for hit in sample
     )
     median = distances[len(distances) // 2]
     assert median < _MESH_SURFACE_TOLERANCE_M
 
 
 def test_to_world_refuses_a_level_with_no_verified_alignment() -> None:
-    """`level_alignment.json`에는 지금 레벨 1 항목뿐이다. 다른 레벨을 물으면
-    캡처 좌표를 조용히 돌려주지 않고 멈춰야 한다."""
+    """`level_alignment.json`에 항목이 없는 레벨을 물으면 캡처 좌표를 조용히
+    돌려주지 않고 멈춰야 한다."""
     with pytest.raises(LookupError):
-        capture_frame.to_world((1.2, 0.8, 4.2), level=2)
+        capture_frame.to_world((1.2, 0.8, 4.2), level=99)
+
+
+def test_to_world_refuses_an_unverifiable_alignment() -> None:
+    """레벨 1은 항목은 있으나 `provenance`가 "unverifiable"이다 — 화면이 "없다"와
+    "검증할 수 없다"를 다르게 말할 수 있어야 하고, `to_world`는 둘 다 거절해야 한다."""
+    assert level_mesh.load_alignment(UNVERIFIABLE_LEVEL).provenance == "unverifiable"
+    with pytest.raises(ValueError):
+        capture_frame.to_world((1.2, 0.8, 4.2), level=UNVERIFIABLE_LEVEL)
 
 
 def test_to_world_refuses_a_declared_but_unverified_alignment(
@@ -253,11 +282,11 @@ def test_to_world_refuses_a_declared_but_unverified_alignment(
     `to_world`가 그런 항목을 조용히 쓰면 안 된다."""
     import dataclasses
 
-    real = level_mesh.load_alignment(1)
+    real = level_mesh.load_alignment(SOLVED_LEVEL)
     unverified = dataclasses.replace(real, provenance="declared")
     monkeypatch.setattr(level_mesh, "load_alignment", lambda level: unverified)
     with pytest.raises(ValueError):
-        capture_frame.to_world((1.2, 0.8, 4.2), level=1)
+        capture_frame.to_world((1.2, 0.8, 4.2), level=SOLVED_LEVEL)
 
 
 # --- 이 파일의 변환 헬퍼가 실제로 좌표를 움직이는지(검증 항목 2에 대한 상시 가드) ---

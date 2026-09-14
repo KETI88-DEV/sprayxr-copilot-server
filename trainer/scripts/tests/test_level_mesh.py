@@ -3,7 +3,12 @@
 
 from __future__ import annotations
 
+import collections
+import dataclasses
+import functools
 import importlib
+import json
+import math
 import sys
 from pathlib import Path
 
@@ -48,11 +53,17 @@ def test_closest_distance_is_to_the_triangle_not_the_nearest_vertex() -> None:
 
 
 def test_alignment_records_its_provenance() -> None:
-    """선언된 변환과 풀어낸 변환은 다른 주장이다. 그 구분이 사라지면 안 된다."""
-    a = level_mesh.load_alignment(1)
-    assert a.provenance in {"solved", "declared"}
-    assert a.provenance == "solved"  # 현재는 풀어낸 것뿐이다
-    assert a.declared_scale != a.scale  # 선언값과 다르다는 것이 이 필드의 존재 이유다
+    """선언된 변환·풀어낸 변환·검증 불가는 서로 다른 주장이다. 그 구분이 사라지면 안 된다.
+
+    레벨 1은 이제 "solved"가 아니다 — 착탄점이 정확히 평면이라 12자유도가 데이터로
+    결정되지 않는다(G7: 조건수 2.06e-09). 커밋 325ae9a의 레벨 1 항목은 "통과 중인
+    유일한 레벨"이 아니라 "틀린 채 기록된 유일한 레벨"이었다(절대 UV 잔차 수백 텍셀,
+    이 파일의 회귀 대조 테스트가 그것을 고정한다).
+    """
+    assert level_mesh.load_alignment(1).provenance == "unverifiable"
+    solved = level_mesh.load_alignment(SOLVED_LEVELS[0])
+    assert solved.provenance == "solved"
+    assert solved.declared_scale != solved.scale
 
 
 def test_place_moves_vertices_by_the_alignment() -> None:
@@ -87,8 +98,9 @@ def test_place_moves_vertices_by_the_alignment() -> None:
     assert placed.vertices[0] == pytest.approx((5.0, 8.0, 7.0))
     assert placed.uvs == mesh.uvs
     assert placed.declared == mesh.declared
-    # 리뷰 D2에서 드러난 버그: place()가 uv_indices를 안 옮겼었다 — 옮긴 메시로
-    # uv_pairs_on_dominant_face를 부르면 항상 빈 목록이 나왔다(직접 재현·확인).
+    # 리뷰 D2에서 드러난 버그: place()가 uv_indices를 안 옮겼었다 — 옮긴 메시에
+    # `triangle_uv`를 부르면 `ValueError`가 났다(직접 재현·확인). 지금은 G2가
+    # 배치된 메시의 UV를 읽으므로 이 필드가 빠지면 게이트 자체가 못 돈다.
     assert placed.uv_indices == mesh.uv_indices
 
 
@@ -107,9 +119,10 @@ _ALIGNMENT_KWARGS = dict(
 )
 
 
-def test_alignment_accepts_the_two_valid_provenance_values() -> None:
+def test_alignment_accepts_the_three_valid_provenance_values() -> None:
     level_mesh.Alignment(provenance="solved", **_ALIGNMENT_KWARGS)
     level_mesh.Alignment(provenance="declared", **_ALIGNMENT_KWARGS)
+    level_mesh.Alignment(provenance="unverifiable", **_ALIGNMENT_KWARGS)
 
 
 def test_alignment_rejects_an_invalid_provenance() -> None:
@@ -191,249 +204,480 @@ def test_triangle_uv_refuses_a_mesh_without_uv_indices() -> None:
     with pytest.raises(ValueError):
         level_mesh.triangle_uv(mesh, 0, (1.0, 0.0, 0.0))
 
+# =============================================================================
+# 절대 UV 등식 — 옛 `EXPECTED_UV_SLOPE`(부호 있는 회귀 기울기)를 대신한다.
+#
+# 옛 판별자는 적합된 기울기의 부호였고, 그것은 원리적으로 180° 대칭을 못 갈랐다
+# (모듈이 대수적으로 보였다: obs=k1·w+c1, pred=k2·w+c2면 slope(obs|pred)=k1/k2).
+# 새 판별자는 `obs = UV_ATLAS_TEXELS · mesh_uv`이고 자유 파라미터가 0개다.
+# =============================================================================
 
-def test_uv_pairs_on_dominant_face_matches_the_committed_fit() -> None:
-    """리뷰 D2: 다음 태스크의 메시 앵커가 쓸 공개 진입점.
+SOLVED_LEVELS = [
+    int(entry["level"])
+    for entry in json.loads(level_mesh.ALIGNMENT_PATH.read_text(encoding="utf-8"))
+    if entry["provenance"] == "solved"
+]
 
-    `_uv_agreement`(`solve_alignment`이 정렬을 고를 때 씀)와 같은 계산
-    (`_uv_pairs_for_dominant_face`)을 쓴다 — 독립적으로 다시 짠 게 아니라는 것을
-    커밋된 `fit` 값과 가까운 결과가 나오는지로 확인한다(표본이 달라 완전히
-    같지는 않다: `solve_alignment`은 무작위 15000개 부분표본을, 여기서는 처음
-    15000개를 쓴다).
+
+def _entry(level: int) -> dict:
+    for entry in json.loads(level_mesh.ALIGNMENT_PATH.read_text(encoding="utf-8")):
+        if int(entry["level"]) == level:
+            return entry
+    raise LookupError(level)
+
+
+@functools.lru_cache(maxsize=None)
+def _hits(level: int, min_hits: int = 3000):
+    """CSV 읽기가 이 파일에서 가장 비싼 일이다 — 레벨당 한 번만 읽는다."""
+    hits, uvs, sessions = level_mesh.collect_level_hits_by_session(level, min_hits=min_hits)
+    return hits, uvs, sessions
+
+
+@functools.lru_cache(maxsize=None)
+def _mesh_and_index(source: str):
+    mesh = level_mesh.read_fbx(level_mesh.DEFAULT_MODELINGS_ROOT / source)
+    return mesh, level_mesh.build_uv_index(mesh)
+
+
+def _fixture(level: int, n_hits: int = 120):
+    mesh, index = _mesh_and_index(_entry(level)["source_fbx"])
+    alignment = level_mesh.load_alignment(level)
+    hits, uvs, _sessions = _hits(level)
+    return mesh, index, alignment, hits[:n_hits], uvs[:n_hits]
+
+
+# commit 325ae9a가 `level_alignment.json`에 유일하게 기록했던 레벨 1 항목 그대로다.
+# **알려진 오답을 얼려 둔 회귀 대조다** — 이 항목은 옛 거리 게이트(max 8.46mm)를
+# 통과했지만 절대 UV 등식에서는 수백 텍셀 어긋난다. 누가 나중에 G2의 문턱을
+# 느슨하게 하면 이 테스트가 빨개진다.
+_LEVEL1_ENTRY_AT_325AE9A = {
+    "level": 1,
+    "provenance": "solved",
+    "solved_transform": {
+        "rotation": [
+            -2.7476412871167704e-10, -0.9999999999999868, -1.6235287959752675e-07,
+            1.5843529468245916e-05, 1.6235287522391646e-07, -0.9999999998744781,
+            0.9999999998744914, -2.7733637130933536e-10, 1.5843529468134027e-05,
+        ],
+        "translation": [1.4240009301575554, 4.629764529233568, 0.6590600777324329],
+        "scale": 0.025398112818281186,
+    },
+    "declared_scale": 0.0254,
+    "fit": {},
+}
+
+
+def test_the_level_1_entry_recorded_at_325ae9a_is_rejected_by_the_uv_gate() -> None:
+    """옛 커밋의 레벨 1 항목을 그대로 먹여 G2가 거절하는 것을 단언한다.
+
+    이 항목은 그때 유일하게 "통과"한 정렬이었고 거리로는 지금도 통과한다
+    (기록된 max_mm 8.46). 절대 UV 잔차로는 수백 텍셀이다 — 즉 새 게이트는
+    "옛 게이트가 잡던 것을 다 잡는다"보다 강하다: **옛 게이트가 놓친 것을 잡는다.**
     """
-    a = level_mesh.load_alignment(1)
-    placed = level_mesh.place(level_mesh.read_fbx(LEVEL1_FBX), a)
-    hits, hit_uvs = level_mesh._collect_level_hits(1, min_hits=15000)
-    pairs = level_mesh.uv_pairs_on_dominant_face(placed, list(zip(hits[:15000], hit_uvs[:15000])))
+    mesh = level_mesh.read_fbx(LEVEL1_FBX)
+    index = level_mesh.build_uv_index(mesh)
+    alignment = level_mesh._alignment_from_entry(_LEVEL1_ENTRY_AT_325AE9A)
+    hits, uvs, _s = _hits(1)
+    measured = level_mesh.verify_alignment(mesh, alignment, hits[:120], uvs[:120], index=index)
 
-    assert len(pairs) > 14000  # 옆벽 ~5%를 뺀 나머지 대부분
-
-    slope_u, r2_u = level_mesh.uv_regression(pairs, 0)
-    slope_v, r2_v = level_mesh.uv_regression(pairs, 1)
-    assert slope_u == pytest.approx(a.fit["uv_slope_u"], abs=1.0)
-    assert slope_v == pytest.approx(a.fit["uv_slope_v"], abs=1.0)
-    assert r2_u == pytest.approx(a.fit["uv_r2_u"], abs=1e-4)
-    assert r2_v == pytest.approx(a.fit["uv_r2_v"], abs=1e-4)
-    # C2에서 고정한 부호(EXPECTED_UV_SLOPE)와도 맞아야 한다 — 앵커가 이 상수로 비교한다.
-    assert slope_u == pytest.approx(level_mesh.EXPECTED_UV_SLOPE, abs=5.0)
-    assert slope_v == pytest.approx(level_mesh.EXPECTED_UV_SLOPE, abs=5.0)
+    assert measured["uv_abs_resid_median_texel"] > 100.0, (
+        f"옛 레벨 1 항목의 절대 UV 잔차 중앙값이 {measured['uv_abs_resid_median_texel']:.1f} 텍셀이다 — "
+        "이 값이 작아졌다면 게이트나 규약이 조용히 바뀐 것이다"
+    )
+    failures = {name for name, _v, _n in level_mesh.gate_failures(measured)}
+    assert "uv_abs_resid_p95_texel" in failures
+    # 그리고 거리로는 통과한다는 것도 함께 고정한다 — 이것이 G2가 필요한 이유다.
+    assert measured["median_mm"] < level_mesh.GATES["median_mm"]
 
 
-def test_uv_regression_needs_at_least_two_pairs() -> None:
-    """B2 계열: 기울기를 지어내지 않는다 — `_linreg`와 같은 규칙."""
-    assert level_mesh.uv_regression([], 0) == (0.0, 0.0)
-    assert level_mesh.uv_regression([((0.1, 0.2), (100.0, 200.0))], 0) == (0.0, 0.0)
+@pytest.mark.parametrize("level", SOLVED_LEVELS)
+def test_solved_entries_satisfy_the_absolute_uv_equation(level: int) -> None:
+    """기록된 정렬 전부에서 `obs = 2048 · mesh_uv`가 홀드아웃 착탄점에 성립한다."""
+    mesh, index, alignment, hits, uvs = _fixture(level)
+    measured = level_mesh.verify_alignment(mesh, alignment, hits, uvs, index=index)
+    assert measured["uv_abs_resid_p95_texel"] <= level_mesh.GATES["uv_abs_resid_p95_texel"]
+    assert measured["uv_abs_resid_max_texel"] <= level_mesh.GATES["uv_abs_resid_max_texel"]
+    assert measured["max_mm"] <= level_mesh.GATES["max_mm"]
 
 
 # =============================================================================
-# 리뷰 B6: 커밋된 상수가 깨지면 잡는 테스트
+# 합성 변이 배터리 — 각 변이가 **어느 게이트에** 걸리는지까지 단언한다
 # =============================================================================
 
 
-def test_committed_rotation_is_a_valid_near_permutation_rotation() -> None:
-    """B6: 회전을 항등원·0·임의 행렬로 바꿔도 통과하면 안 된다.
+def _mutate(alignment, mesh, kind: str, param):
+    rot = level_mesh._rotation_matrix(alignment)
+    if kind in ("rot180", "mirror"):
+        axis = param
+        base = 1.0 if kind == "mirror" else -1.0
+        m = [[0.0] * 3 for _ in range(3)]
+        for i in range(3):
+            m[i][i] = base
+        m[axis][axis] = -base
+        matrix = tuple(tuple(row) for row in m)
+        centre = level_mesh._mean(mesh.vertices)
+        new_rot = rotation_math.matmul(rot, matrix)
+        shift = level_mesh._sub(centre, rotation_math.matvec(matrix, centre))
+        rotated = rotation_math.matvec(rot, shift)
+        translation = tuple(
+            alignment.translation[d] + alignment.scale * rotated[d] for d in range(3)
+        )
+        return dataclasses.replace(
+            alignment,
+            rotation=tuple(new_rot[r][c] for r in range(3) for c in range(3)),
+            translation=translation,
+        )
+    if kind == "scale":
+        return dataclasses.replace(alignment, scale=alignment.scale * param)
+    if kind == "nudge":
+        direction, millimetres = param
+        return dataclasses.replace(
+            alignment,
+            translation=tuple(
+                alignment.translation[d] + direction[d] * millimetres / 1000.0 for d in range(3)
+            ),
+        )
+    raise ValueError(kind)
 
-    직접 깨서 확인했다: 회전을 항등 행렬로, 평행이동을 0으로, 스케일을 스파이크의
-    옛 값(0.02568)으로, `fit`을 `{}`로, `max_mm`을 999999로 바꿔도 기존 5개 테스트는
-    전부 통과했다(리뷰가 지적한 사실 그대로 재현) — 이 테스트들이 그 구멍을 막는다.
 
-    **함정 하나를 실제로 깨서 찾았다.** 처음엔 "정육면체 회전 24개 중 가장 가까운
-    것과의 잔차"만 쟀는데, **항등 행렬 자체가 그 24개 중 하나**라 이 검사가 항등
-    행렬 손상을 못 잡았다(직접 확인: 잔차 0으로 통과). 그래서 방향까지 확인하는
-    항을 더한다 — 착탄점이 정확히 평면인 세계축(가장 좁은 실측 범위)이 메시의 가장
-    얇은 원시축에 대응해야 한다(`rot[flat_world_axis][thin_axis] ≈ ±1`). 항등
-    행렬은 이 대응이 없어(그 성분이 0) 여기서 걸린다 — 재확인함.
-    """
-    a = level_mesh.load_alignment(1)
-    r = a.rotation
-    rot = ((r[0], r[1], r[2]), (r[3], r[4], r[5]), (r[6], r[7], r[8]))
-
-    rt = rotation_math.transpose(rot)
-    product = rotation_math.matmul(rot, rt)
-    identity = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
-    for i in range(3):
-        for j in range(3):
-            assert product[i][j] == pytest.approx(identity[i][j], abs=1e-6)
-    assert level_mesh._mat3_det(rot) == pytest.approx(1.0, abs=1e-6)
-
-    # 씬 배치는 90도 단위다(모듈 독스트링, D1) — 가장 가까운 정육면체 회전과 거의
-    # 같아야 한다. 성분별 제곱합 잔차 1e-4는 실측(약 5e-10)보다 훨씬 느슨하다.
-    nearest = min(
-        level_mesh._cube_rotations(),
-        key=lambda c: sum((rot[i][j] - c[i][j]) ** 2 for i in range(3) for j in range(3)),
+def _dominant_normal(mesh, alignment, hits, uvs):
+    placed = level_mesh._world_tris_for(
+        mesh.vertices, mesh.triangles, level_mesh._rotation_matrix(alignment),
+        alignment.scale, alignment.translation,
     )
-    residual = sum((rot[i][j] - nearest[i][j]) ** 2 for i in range(3) for j in range(3))
-    assert residual < 1e-4
-
-    # 방향 확인: 착탄점이 평면인 세계축(실측 범위가 가장 좁은 축)이 메시의 가장 얇은
-    # 원시축에 대응해야 한다. 항등 행렬은 이 대응이 없다 — 정육면체 회전군의 다른
-    # 23개 원소와 항등원을 가르는 지점이 바로 여기다.
-    mesh = level_mesh.read_fbx(LEVEL1_FBX)
-    hits, _hit_uvs = level_mesh._collect_level_hits(1, min_hits=15000)
-    hit_extent = level_mesh._extents(hits)
-    flat_world_axis = min(range(3), key=lambda i: hit_extent[i])
-    thin_axis = level_mesh._thin_axis_index(mesh.vertices)
-    assert abs(rot[flat_world_axis][thin_axis]) == pytest.approx(1.0, abs=1e-3)
+    _d, _r, triangle_ids, _t = level_mesh.uv_absolute_residuals(placed, mesh, hits[:40], uvs[:40])
+    common = collections.Counter(triangle_ids).most_common(1)[0][0]
+    return level_mesh._tri_normal(placed[common])
 
 
-def test_committed_scale_is_within_the_texel_density_band() -> None:
-    """B6: 스케일이 텍셀 밀도로 재구성한, 맞춤과 무관한 독립 추정치에서 크게 벗어나면 잡는다.
+_MUTATIONS = (
+    ("rot180", 0), ("rot180", 1), ("rot180", 2),
+    ("mirror", 0), ("mirror", 1), ("mirror", 2),
+    ("scale", 1.02), ("scale", 0.81),
+)
 
-    방법(리뷰가 요구한 "띠와 그 출처"): 큰 면의 안쪽 사각형(내부 구멍 테두리) 정점만
-    쓴다 — 바깥 테두리는 텍스처 블리드 여백이 섞여 원시좌표·UV의 선형 관계가 안쪽만큼
-    깨끗하지 않다(실측: 안쪽은 U·V 두 축에서 텍셀/원시단위 값이 소수점 5자리까지
-    일치하는데 바깥은 5~8% 어긋난다). CSV 쪽은 착탄점 UV를 월드 Y·Z에 바로 회귀해
-    텍셀/미터를 잰다 — 메시나 맞춤과 무관한 순수 실측이다. (텍셀/원시단위) ÷
-    (텍셀/미터) = raw→metre 스케일 추정치를 두 축에서 각각 내고, 그 평균을 기준으로
-    ±0.5%를 띠로 쓴다(맞춘 스케일은 평균보다 0.19% 위 — 여유 안이다).
+
+@pytest.mark.parametrize("level", [3, 8])
+def test_every_synthetic_mutation_is_rejected(level: int) -> None:
+    """주축 180° 회전 3개 · 주평면 반사 3개 · 스케일 ×1.02/×0.81 · 법선 이동 12/19/50 mm.
+
+    실측(커밋 f632657, 8개 채택 레벨 × 변이 11개 = 88건): **통과한 변이는 0건**이다.
     """
-    a = level_mesh.load_alignment(1)
-    mesh = level_mesh.read_fbx(LEVEL1_FBX)
-    hits, hit_uvs = level_mesh._collect_level_hits(1, min_hits=15000)
+    mesh, index, alignment, hits, uvs = _fixture(level, n_hits=120)
+    normal = _dominant_normal(mesh, alignment, hits, uvs)
+    mutations = list(_MUTATIONS) + [("nudge", (normal, mm)) for mm in (12.0, 19.0, 50.0)]
+    for kind, param in mutations:
+        measured = level_mesh.verify_alignment(
+            mesh, _mutate(alignment, mesh, kind, param), hits, uvs, index=index
+        )
+        failures = level_mesh.gate_failures(measured)
+        assert failures, f"level {level} {kind}/{param} passed every gate"
 
-    thin_axis = level_mesh._thin_axis_index(mesh.vertices)
-    in_plane = [i for i in range(3) if i != thin_axis]
-    dominant_sign = a.fit["face_sign"]
-    face_signs = level_mesh._face_sign_by_triangle(mesh.vertices, mesh.triangles, thin_axis)
 
-    pairs = sorted(
-        {
-            (vi, ui)
-            for tri, uvidx, sign in zip(mesh.triangles, mesh.uv_indices, face_signs)
-            if sign == dominant_sign
-            for vi, ui in zip(tri, uvidx)
-        }
+def test_distance_alone_would_accept_mutations_that_the_uv_gate_rejects() -> None:
+    """어블레이션 — 새 판별력이 어디서 오는지 못 박는다.
+
+    레벨 8의 방은 주축 180° 회전 셋과 주평면 반사 셋 **전부에 대해 자기 자신으로
+    사상된다**. 실측(120점 홀드아웃): 여섯 변이 전부 표면 거리 중앙값 0.0002 mm /
+    p95 0.0005 mm / max 0.0009 mm로 **G3를 온전히 통과**하고, G2가 514~1037 텍셀로
+    거절한다. 즉 G2를 "중복"이라며 지우면 레벨 8은 180° 뒤집힌 채 기록된다.
+
+    (정직하게 적는다: 나머지 일곱 레벨에서는 같은 변이를 거리도 잡는다 — 레벨 3은
+    rot180에서 중앙값 17.7~108 mm다. 거리가 대칭을 **항상** 못 잡는다는 진술은
+    측정과 어긋난다. 못 잡는 것은 자산 자신이 그 대칭을 가진 레벨에서다.)
+    """
+    mesh, index, alignment, hits, uvs = _fixture(8, n_hits=120)
+    distance_only_passes = 0
+    for kind, axis in _MUTATIONS[:6]:
+        measured = level_mesh.verify_alignment(
+            mesh, _mutate(alignment, mesh, kind, axis), hits, uvs, index=index
+        )
+        distance_gates = {"median_mm", "p95_mm", "max_mm"}
+        failed = {name for name, _v, _n in level_mesh.gate_failures(measured)}
+        if not (failed & distance_gates):
+            distance_only_passes += 1
+            assert measured["uv_abs_resid_p95_texel"] > 100.0, (
+                f"{kind}/{axis}: 거리로도 UV로도 안 걸린다 — 게이트에 구멍이 있다"
+            )
+    assert distance_only_passes == 6, (
+        f"레벨 8의 여섯 대칭 변이 중 {distance_only_passes}개만 거리 게이트를 통과했다 — "
+        "이 어블레이션의 전제(이 자산은 그 대칭들에 대해 자기 자신이다)가 바뀌었다"
     )
 
-    def radius(vertex_index: int) -> float:
-        v = mesh.vertices[vertex_index]
-        return v[in_plane[0]] ** 2 + v[in_plane[1]] ** 2
 
-    radii = sorted({radius(vi) for vi, _ in pairs})
-    assert len(radii) >= 2, "big face needs an inner and an outer boundary for this method"
-    threshold = (radii[0] + radii[-1]) / 2.0
-    inner = [(vi, ui) for vi, ui in pairs if radius(vi) < threshold]
-    assert inner
+def test_uv_gate_must_pick_the_triangle_by_3d_distance_not_by_uv_lookup() -> None:
+    """순환 방지 — UV 조회로 삼각형을 고르면 `obs = 2048·mesh_uv`가 구성상 참이 된다.
 
-    raw_a = [mesh.vertices[vi][in_plane[0]] for vi, _ in inner]
-    raw_b = [mesh.vertices[vi][in_plane[1]] for vi, _ in inner]
-    uv_u = [mesh.uvs[ui][0] for _, ui in inner]
-    uv_v = [mesh.uvs[ui][1] for _, ui in inner]
-    slope_u, _intercept_u, r2_u = level_mesh._linreg(raw_a, uv_u)
-    slope_v, _intercept_v, r2_v = level_mesh._linreg(raw_b, uv_v)
-    assert r2_u > 0.999 and r2_v > 0.999  # 이 방법 자체가 실제로 선형인지 확인
-    tex_per_raw_u = abs(slope_u) * 2048.0
-    tex_per_raw_v = abs(slope_v) * 2048.0
-
-    world_y = [h[1] for h in hits]
-    world_z = [h[2] for h in hits]
-    obs_u = [uv[0] for uv in hit_uvs]
-    obs_v = [uv[1] for uv in hit_uvs]
-    slope_v_y, _intercept_1, r2_v_y = level_mesh._linreg(world_y, obs_v)
-    slope_u_z, _intercept_2, r2_u_z = level_mesh._linreg(world_z, obs_u)
-    assert r2_v_y > 0.999 and r2_u_z > 0.999
-    tex_per_metre_v = abs(slope_v_y)
-    tex_per_metre_u = abs(slope_u_z)
-
-    scale_estimate_u = tex_per_raw_u / tex_per_metre_u
-    scale_estimate_v = tex_per_raw_v / tex_per_metre_v
-    band_center = (scale_estimate_u + scale_estimate_v) / 2.0
-
-    assert a.scale == pytest.approx(band_center, rel=0.005)  # ±0.5%
-
-
-def test_committed_uv_evidence_is_near_the_2048_atlas() -> None:
-    """B6/B2/C2: `fit`의 UV 기울기가 -2048에서 멀면(크기든 부호든) 잡는다.
-
-    `abs(slope)`가 아니라 **부호까지** 확인한다 — 리뷰 C2: 얇은 축 180도 회전으로
-    관계된 두 orientation이 크기·R²는 똑같고 부호만 다르다(직접 재현: 둘 다 R²
-    0.9999+, |slope|≈2048). `abs()`를 쓰면 이 대칭을 못 잡는다. 실측(모듈의
-    `EXPECTED_UV_SLOPE` 참고)으로 확인한 "좋은 맞춤"의 부호는 두 축 다 음수다.
+    금지 이유를 주석이 아니라 실행 가능한 형태로 남긴다: 조회로 고르는 변종에서는
+    180° 변이의 잔차가 **0으로 떨어져** 그대로 통과한다.
     """
-    a = level_mesh.load_alignment(1)
-    assert a.fit["uv_slope_u"] == pytest.approx(level_mesh.EXPECTED_UV_SLOPE, abs=5.0)
-    assert a.fit["uv_slope_v"] == pytest.approx(level_mesh.EXPECTED_UV_SLOPE, abs=5.0)
-    assert a.fit["uv_r2_u"] > 0.999
-    assert a.fit["uv_r2_v"] > 0.999
-    assert a.fit["dominant_face_fraction"] > 0.99
-    assert a.fit["face_sign"] in (1.0, -1.0)
+    mesh, index, alignment, hits, uvs = _fixture(8, n_hits=60)
+    broken = _mutate(alignment, mesh, "rot180", 0)
+
+    # 금지된 변종: 삼각형을 관측 UV로 고른다.
+    residuals = []
+    for obs in uvs:
+        kind, triangle, bary = level_mesh.uv_lookup(
+            index, (obs[0] / level_mesh.UV_ATLAS_TEXELS, obs[1] / level_mesh.UV_ATLAS_TEXELS)
+        )
+        if kind != "hit":
+            continue
+        mesh_u, mesh_v = level_mesh.triangle_uv(mesh, triangle, bary)
+        residuals.append(
+            math.hypot(
+                obs[0] - level_mesh.UV_ATLAS_TEXELS * mesh_u,
+                obs[1] - level_mesh.UV_ATLAS_TEXELS * mesh_v,
+            )
+        )
+    circular_max = max(residuals)
+
+    honest = level_mesh.verify_alignment(mesh, broken, hits, uvs, index=index)
+    assert circular_max < 1e-6, "조회로 고르면 잔차가 정렬과 무관하게 0이다 — 그래서 금지다"
+    assert honest["uv_abs_resid_p95_texel"] > 100.0, "3D 최근접으로 고르면 같은 변이가 걸린다"
 
 
-def test_committed_fit_distances_are_within_the_preregistered_tolerance() -> None:
-    """B6: `max_mm`을 999999로 바꾸는 것 같은 손상은 위 UV 검사로는 안 걸린다(UV
-    기울기·R²·face_sign은 `max_mm`과 무관한 필드다) — 별도로 스펙 §D5 허용치
-    (p95 ≤ 10mm, max ≤ 100mm)를 확인한다. 직접 깨서 확인했다: 이 assert 없이
-    `max_mm`만 999999로 바꾸면 이 파일의 나머지 테스트가 전부 통과했다.
+# =============================================================================
+# 표본 분리 · 게이트가 실제로 무언가를 거절함 · 아틀라스 단사성
+# =============================================================================
+
+
+def test_fit_and_eval_samples_are_disjoint() -> None:
+    """옛 코드는 같은 rng에서 두 번 독립 추출해 fit/eval이 거의 전부 겹쳤다."""
+    mesh, _index = _mesh_and_index(_entry(3)["source_fbx"])
+    hits, uvs, _s = _hits(3)
+    _a, measured, _eh, _eu = level_mesh.solve_alignment_uv(
+        mesh, hits, hit_uvs=uvs, level=3, fit_sample=1200, eval_cap=400
+    )
+    assert measured["fit_eval_overlap"] == 0.0
+
+
+def test_the_gate_battery_actually_rejects_part_of_the_corpus() -> None:
+    """10개가 전부 통과하면 성공이 아니라 배선이 잘못됐다는 증거로 다룬다(사전등록).
+
+    실측: 레벨 1은 G7(조건수 2.06e-09)로, 레벨 2는 G1(퇴화 UV 삼각형 오대응
+    135.9 mm, 조회 실패율 0.0035)로 떨어진다.
     """
-    a = level_mesh.load_alignment(1)
-    assert a.fit["median_mm"] < 1.0
-    assert a.fit["p95_mm"] < 10.0
-    assert a.fit["max_mm"] < 100.0
+    entries = json.loads(level_mesh.ALIGNMENT_PATH.read_text(encoding="utf-8"))
+    rejected = [e for e in entries if e["provenance"] == "unverifiable"]
+    assert rejected, "어느 레벨도 거절되지 않았다 — 게이트가 실제로 무언가를 가르는지 의심하라"
+    for entry in rejected:
+        assert entry["rejected_by"], "거절 사유가 숫자로 남아야 한다"
+        assert "solved_transform" not in entry, "검증 못 한 변환을 적어 두면 다음 사람이 쓴다"
+
+
+def test_unverifiable_alignments_carry_no_usable_transform() -> None:
+    unverifiable = [
+        e for e in json.loads(level_mesh.ALIGNMENT_PATH.read_text(encoding="utf-8"))
+        if e["provenance"] == "unverifiable"
+    ]
+    assert unverifiable
+    for entry in unverifiable:
+        alignment = level_mesh.load_alignment(int(entry["level"]))
+        assert alignment.provenance == "unverifiable"
+        assert alignment.scale == 0.0  # 쓰려고 하면 즉시 무너지는 값이다
+
+
+def test_degenerate_uv_triangles_are_never_lookup_candidates() -> None:
+    """레벨 2의 아틀라스는 단사가 아니다 — 삼각형 14개가 3D 면적을 갖고도 UV 면적이 0이다.
+
+    그 위에 떨어진 착탄점은 miss도 ambiguous도 아닌 **다른 삼각형의 깨끗한 hit**으로
+    돌아온다. 그래서 착탄점 가중 통계로는 원리적으로 못 본다 — `audit_atlas`가
+    퇴화 삼각형 위를 직접 표집해 오대응 거리를 잰다.
+    """
+    mesh = level_mesh.read_fbx(
+        level_mesh.DEFAULT_MODELINGS_ROOT / "learning_mode_lv.2_rev.1.2.fbx"
+    )
+    index = level_mesh.build_uv_index(mesh)
+    assert len(index.degenerate_triangles) == 14
+    assert all(t not in ts for ts in index.buckets.values() for t in index.degenerate_triangles)
+    audit = level_mesh.audit_atlas(mesh, index)
+    assert audit["uv_degenerate_misattribution_mm"] > level_mesh.GATES["uv_degenerate_misattribution_mm"]
+    assert audit["uv_degenerate_area_fraction"] == pytest.approx(0.0646, abs=0.001)
+
+
+def test_barycentric_2d_refuses_a_degenerate_uv_triangle() -> None:
+    """분모를 클램프하면 그 삼각형이 모든 질의점을 포함하고(모호도 1.0), nan으로
+    흘려보내면 조용히 사라진다. 같은 명세에서 정반대 판정이 나온다 — 그래서 명시적
+    None으로 고정한다."""
+    collapsed = ((0.115001, 0.799489), (0.2178, 0.799489), (0.115001, 0.799489))
+    assert level_mesh._barycentric_2d((0.15, 0.5), collapsed) is None
+
+
+def test_hit_collector_spans_workers_and_sessions() -> None:
+    """옛 수집기는 glob 순서로 읽다가 15,000점에서 멈춰 레벨 6·7·10이 1세션처럼 보였다."""
+    _h, _uvs, sessions = _hits(6)
+    assert len({level_mesh._worker_of(s) for s in sessions}) >= 4
+    assert len(set(sessions)) >= 8
+
+
+# =============================================================================
+# 손잡이(det<0)와 그 소비자
+# =============================================================================
+
+
+def test_accepted_entries_share_one_handedness() -> None:
+    """G5: 섞이면 하류에서 아무도 못 알아챈다. 실측상 채택 8개 전부 det<0이다."""
+    entries = [
+        e for e in json.loads(level_mesh.ALIGNMENT_PATH.read_text(encoding="utf-8"))
+        if e["provenance"] == "solved"
+    ]
+    assert entries
+    signs = {e["fit"]["det_sign"] < 0 for e in entries}
+    assert signs == {True}, "채택 항목의 손잡이가 섞였다"
+    for entry in entries:
+        assert entry["handedness_source"] == "data"
+
+
+def test_to_world_round_trips_through_a_reflection() -> None:
+    """det<0 소비자 감사. `capture_frame.to_world`의 역행렬은 전치인데, 반사도
+    직교행렬이므로 그대로 옳다 — 그 사실을 고정 테스트로 남긴다. 누가 나중에 정렬
+    회전을 쿼터니언으로 바꾸면 det=-1에서 조용히 망가진다.
+    """
+    capture_frame = importlib.import_module("capture_frame")
+    level = SOLVED_LEVELS[0]
+    alignment = level_mesh.load_alignment(level)
+    assert level_mesh._mat3_det(level_mesh._rotation_matrix(alignment)) < 0
+    rotation = level_mesh._rotation_matrix(alignment)
+    raw = (12.3, -4.5, 6.7)
+    world = tuple(
+        alignment.scale * rotation_math.matvec(rotation, raw)[d] + alignment.translation[d]
+        for d in range(3)
+    )
+    back = capture_frame.to_world(world, level=level)
+    assert back == pytest.approx(tuple(alignment.scale * x for x in raw), abs=1e-9)
+
+
+# =============================================================================
+# 커밋된 상수가 깨지면 잡는 테스트 (옛 B6 계열을 새 해에 맞게 다시 씀)
+# =============================================================================
+
+
+def test_committed_rotation_is_orthogonal_and_orientation_reversing() -> None:
+    """회전을 항등원·0·임의 행렬로 바꿔도 통과하면 안 된다.
+
+    옛 판본은 `det == +1`과 "정육면체 회전 24개 중 하나에 가깝다"를 단언했다. 둘 다
+    레벨 1 하나에서 나온 가정이었고 **둘 다 틀렸다**:
+
+    * `det`: 새 해는 반사를 살려 둔다(`orthogonalize`가 det 보정을 하지 않는다).
+      채택된 8개 전부 det = -1이다. `_umeyama`가 `d = ±1`로 det를 항상 +1로 만든 것이
+      레벨 2~10의 참 변환을 **원리적으로 표현하지 못하게** 한 원인이었다.
+    * "90° 단위": 실측상 레벨 3·4·5·6·7·9·10은 부호 있는 축 치환에서 잔차 1e-14이지만
+      **레벨 8은 축에서 24.172° 어긋난 yaw**다. 옛 시드 격자에 그 회전이 없었기 때문에
+      옛 솔버는 레벨 8을 원리적으로 못 찾았다. 그 사실을 숫자로 고정해 둔다.
+    """
+    axis_aligned = 0
+    for level in SOLVED_LEVELS:
+        alignment = level_mesh.load_alignment(level)
+        rot = level_mesh._rotation_matrix(alignment)
+        product = rotation_math.matmul(rot, rotation_math.transpose(rot))
+        for i in range(3):
+            for j in range(3):
+                assert product[i][j] == pytest.approx(1.0 if i == j else 0.0, abs=1e-9)
+        assert level_mesh._mat3_det(rot) == pytest.approx(-1.0, abs=1e-6)
+        nearest = min(
+            (
+                rotation_math.matmul(cube, mirror)
+                for cube in level_mesh._cube_rotations()
+                for mirror in level_mesh._mirror_matrices()
+            ),
+            key=lambda c: sum((rot[i][j] - c[i][j]) ** 2 for i in range(3) for j in range(3)),
+        )
+        residual = sum((rot[i][j] - nearest[i][j]) ** 2 for i in range(3) for j in range(3))
+        if level == 8:
+            trace = sum(sum(rot[i][k] * nearest[i][k] for i in range(3)) for k in range(3))
+            angle = math.degrees(math.acos(max(-1.0, min(1.0, (trace - 1.0) / 2.0))))
+            assert angle == pytest.approx(24.172, abs=0.02)
+        else:
+            assert residual < 1e-10, f"level {level} rotation residual {residual:.3e}"
+            axis_aligned += 1
+    assert axis_aligned == len(SOLVED_LEVELS) - 1
+
+
+def test_replacing_a_committed_rotation_with_the_identity_is_rejected() -> None:
+    """위 테스트가 손상을 못 잡는 경우를 막는다 — 항등 행렬도 직교이고 det는 +1이라
+    `det == -1` 단언이 잡지만, 그 단언만으로는 "직교이고 det=-1인 임의 반사"를 못 잡는다.
+    관측 가능한 결과로 확인한다."""
+    level = SOLVED_LEVELS[0]
+    mesh, index, alignment, hits, uvs = _fixture(level, n_hits=80)
+    identity = dataclasses.replace(
+        alignment, rotation=(1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0)
+    )
+    measured = level_mesh.verify_alignment(mesh, identity, hits, uvs, index=index)
+    assert level_mesh.gate_failures(measured)
+
+
+def _least_squares(xs, ys):
+    n = len(xs)
+    mx = sum(xs) / n
+    my = sum(ys) / n
+    sxx = sum((x - mx) ** 2 for x in xs)
+    sxy = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+    slope = sxy / sxx if sxx else 0.0
+    syy = sum((y - my) ** 2 for y in ys)
+    r2 = (sxy * sxy) / (sxx * syy) if sxx and syy else 0.0
+    return slope, r2
+
+
+def test_committed_scale_matches_an_independent_texel_density_estimate() -> None:
+    """B6: 맞춤과 무관한 추정치로 스케일을 다시 잰다.
+
+    메시 쪽: 한 삼각형의 (모델 좌표 → UV) 기울기에서 텍셀/모델단위.
+    CSV 쪽: 착탄점 월드 좌표 → 관측 텍셀 기울기에서 텍셀/미터.
+    둘의 비가 모델단위→미터 스케일이고, 적합에 들어가지 않은 수다.
+    """
+    level = SOLVED_LEVELS[0]
+    mesh, index, alignment, hits, uvs = _fixture(level, n_hits=2000)
+    placed = level_mesh._world_tris_for(
+        mesh.vertices, mesh.triangles, level_mesh._rotation_matrix(alignment),
+        alignment.scale, alignment.translation,
+    )
+    _d, _r, triangle_ids, _t = level_mesh.uv_absolute_residuals(placed, mesh, hits[:80], uvs[:80])
+    common = collections.Counter(triangle_ids).most_common(1)[0][0]
+    on_face = [i for i, t in enumerate(triangle_ids) if t == common]
+    assert len(on_face) >= 20
+
+    # 그 삼각형 평면 안의 두 직교 방향으로 (월드 거리, 관측 텍셀) 기울기를 잰다.
+    a, b, c = placed[common]
+    e1 = level_mesh._sub(b, a)
+    e1 = level_mesh._mul3(e1, 1.0 / math.sqrt(level_mesh._dot(e1, e1)))
+    normal = level_mesh._tri_normal(placed[common])
+    e2 = level_mesh._cross(normal, e1)
+    estimates = []
+    for axis_vector in (e1, e2):
+        proj = [level_mesh._dot(level_mesh._sub(hits[i], a), axis_vector) for i in on_face]
+        for uv_axis in (0, 1):
+            obs = [uvs[i][uv_axis] for i in on_face]
+            slope, r2 = _least_squares(proj, obs)
+            if r2 > 0.999 and abs(slope) > 1.0:
+                estimates.append(abs(slope))
+    assert estimates, "이 면에서 텍셀/미터를 독립으로 잴 수 있어야 한다"
+    texels_per_metre = max(estimates)
+    # 메시 쪽 텍셀/모델단위: 같은 삼각형의 UV 변 길이 ÷ 모델 변 길이
+    mu = level_mesh._tri_uv_corners(mesh, common)
+    mv = level_mesh._tri_vertices(mesh, common)
+    edge_uv = math.dist(mu[0], mu[1]) * level_mesh.UV_ATLAS_TEXELS
+    edge_model = math.dist(mv[0], mv[1])
+    texels_per_model_unit = edge_uv / edge_model
+    assert alignment.scale == pytest.approx(texels_per_model_unit / texels_per_metre, rel=0.01)
 
 
 def test_committed_translation_places_real_hits_on_the_mesh() -> None:
-    """C1: `translation`은 이전까지 어느 테스트도 읽지 않았다.
-
-    직접 확인했다: `translation`을 `[0,0,0]`으로 바꾸거나 `translation[1]`
-    (4.63m)과 `[2]`(0.66m)을 맞바꿔도 — 둘 다 시도함 — 기존 16개 테스트가 전부
-    그대로 통과했다. 저장된 숫자를 자기 자신과 비교하지 않는다 — `place()`를 거친
-    뒤 **실제 착탄점**까지의 거리로, 관측 가능한 결과를 확인한다. 성분 순서에
-    민감하다: `[1]`/`[2]`를 맞바꾸면 메시가 약 5.6 m 떨어진 곳으로 옮겨가 median이
-    폭발한다 — 크기만 같은 손상(스케일 ×1.001 등, §D5 허용치 안)과 달리 이건
-    허용치를 크게 벗어난다.
-    """
-    a = level_mesh.load_alignment(1)
-    placed = level_mesh.place(level_mesh.read_fbx(LEVEL1_FBX), a)
-    hits, _hit_uvs = level_mesh._collect_level_hits(1, min_hits=500)
-    sample = hits[:500]
-    distances = sorted(level_mesh.closest_distance(placed, h) for h in sample)
-    median = distances[len(distances) // 2]
-    assert median < 0.01  # 1cm — 실측 median은 ~0mm(§D5 p95 ≤ 10mm)에 비해 넉넉하다
+    """`translation`을 0으로 바꾸거나 성분을 맞바꾸면 잡힌다 — 저장된 숫자를 자기
+    자신과 비교하지 않고 실제 착탄점까지의 거리로 확인한다."""
+    for level in SOLVED_LEVELS:
+        alignment = level_mesh.load_alignment(level)
+        entry = _entry(level)
+        mesh, _index = _mesh_and_index(entry["source_fbx"])
+        placed = level_mesh.place(mesh, alignment)
+        hits, _uvs, _s = _hits(level)
+        distances = sorted(level_mesh.closest_distance(placed, h) for h in hits[:120])
+        assert distances[len(distances) // 2] < 1e-4
 
 
-# =============================================================================
-# Task 5: 메시 앵커 — 접촉점이 면 위인가 (거리가 아니라 UV로 판정한다)
-# =============================================================================
-
-
-@pytest.mark.skipif(
-    not LEVEL1_FBX.exists() or not CSV_ROOT.exists(), reason="실데이터가 없는 환경"
-)
-def test_hit_points_agree_with_the_level_mesh_uv() -> None:
-    """접촉점의 UV가 메시 면의 UV와 일치한다. 월드 좌표 해석의 외부 앵커다.
-
-    거리로 판정하지 않는다 — 착탄점이 정확히 한 평면에 있어서(X의 서로 다른 float가
-    하나뿐) 거리 백분위(median/p95)는 모든 후보에서 ~1e-7mm가 되고, 틀린 면에 붙은
-    적합까지 통과시킨다. 판별력이 없는 쪽은 **p95**다 — 옳은 후보와 틀린 면 후보가
-    둘 다 ~1e-7mm로 어떤 관문보다 여섯 자릿수 아래다. max는 가를 때도 있지만
-    재실행마다 값이 달라져 무엇을 통과시킬지 예측할 수 없다(스펙 §D5).
-    UV는 옳은 후보(R² 0.9999~1.0000)와 틀린 면 후보(R² 0.000001~0.0038)를 여섯
-    자릿수로 가른다 — 그 사이 어디에 선을 그어도 판정이 같다.
-
-    부호까지 비교한다: `abs(slope)`와 R²는 둘 다 부호에 무관한데, 이 적합에는
-    독립인 180도 대칭이 두 개 있다(판 법선 둘레 회전은 두 기울기를 함께 뒤집고,
-    판 안의 축 둘레 회전은 하나만 뒤집는다 — `level_mesh.EXPECTED_UV_SLOPE`의
-    독스트링·`solve_alignment`의 C2/D1 절 참고). 부호까지 보지 않으면 이 중 어느
-    쪽도 못 잡는다. 기준값은 `level_mesh.EXPECTED_UV_SLOPE`(-2048.0)이고, 그 자체가
-    측정이 아니라 15/15 시드가 수렴한 가지를 고정한 것이다(모듈 상수 독스트링).
-
-    거리(`closest_distance`)는 여기서 판정에 쓰지 않는다 — 기록하려면 별도로
-    재되, 이 테스트의 pass/fail은 UV 회귀에만 걸린다.
-    """
-    placed = level_mesh.place(level_mesh.read_fbx(LEVEL1_FBX), level_mesh.load_alignment(1))
-    positions, uvs = level_mesh._collect_level_hits(1, min_hits=5000)
-    assert len(positions) >= 5000, "표본이 모자라면 이 검사는 아무것도 보증하지 않는다"
-    hits = list(zip(positions, uvs))
-
-    # 옆면 삼각형(전체의 약 5%)은 무관한 UV를 갖는다. 큰 면으로 제한한다 — 안
-    # 걷어내면 순수 이상치로 R²를 끌어내린다.
-    pairs = level_mesh.uv_pairs_on_dominant_face(placed, hits)
-    assert len(pairs) >= 0.9 * len(hits), f"큰 면 비율 {len(pairs) / len(hits):.1%}"
-
-    for axis in (0, 1):
-        slope, r2 = level_mesh.uv_regression(pairs, axis)
-        # **부호까지** 비교한다. abs(slope)로 재면 180도 뒤집힌 정렬이 그대로
-        # 통과한다.
-        target = level_mesh.EXPECTED_UV_SLOPE
-        assert abs(slope - target) <= 0.01 * abs(target), f"axis {axis} 기울기 {slope:.1f}"
-        assert r2 >= 0.99, f"axis {axis} R^2 {r2:.6f}"
+def test_committed_fit_records_every_gate_it_was_judged_by() -> None:
+    """`fit`에 게이트가 읽는 키가 전부 남아야 한다 — 없으면 다음 사람이 재검사할 수 없다."""
+    for level in SOLVED_LEVELS:
+        fit = _entry(level)["fit"]
+        for key in level_mesh._LOWER_IS_BETTER + level_mesh._HIGHER_IS_BETTER:
+            assert key in fit, f"level {level} fit is missing {key}"
+        assert _entry(level)["uv_convention"] == level_mesh.UV_CONVENTION

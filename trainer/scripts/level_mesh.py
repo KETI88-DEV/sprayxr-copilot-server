@@ -12,17 +12,48 @@ name, props...)` 레코드가 이어지고, `tell() < endOffset - 13`인 동안 
 반전)로 표시된다.
 
 **변환은 풀어낸 것이지 선언된 것이 아니다.** FBX가 선언한 노드 변환
-(`PreRotation`/`Lcl Rotation`/`UnitScaleFactor`)으로 레벨 1을 배치하면 실제 착탄점과
-3.68 m 어긋난다 — 씬 수준 회전(~90° yaw)이 파일 어디에도 기록되지 않았기 때문이다.
-`solve_alignment`이 Umeyama 유사변환(회전+평행이동+균일 스케일)으로 그 변환을 맞춘다.
-`Alignment.provenance`가 "solved"(맞춘 것)와 "declared"(선언대로 읽은 것)를 구분해
-나른다 — 숫자만 적어두면 다음 사람이 파일이 준 값인 줄 안다.
+(`PreRotation`/`Lcl Rotation`/`UnitScaleFactor`)으로 레벨을 배치하면 실제 착탄점과
+미터 단위로 어긋난다 — 씬 수준 회전이 파일 어디에도 기록되지 않았기 때문이다.
+`Alignment.provenance`가 "solved"(맞춘 것)·"declared"(읽은 것)·"unverifiable"
+(데이터가 검증을 못 받치는 것)을 구분해 나른다.
+
+**솔버는 관측 UV로 대응을 만든다 — 시드도, ICP도, 면 판별 휴리스틱도 없다.**
+`Ray Texture UV`가 착탄점마다 이미 "메시의 어디를 맞혔는가"를 말하고 있다.
+`build_uv_index`/`uv_lookup`이 그 UV를 (삼각형, 무게중심)으로 되돌리고,
+`model_point_for_hit`이 모델 공간 점을 낸다. 그 대응에 `solve_affine_12`이
+12자유도 아핀을 폐형식으로 맞추고 `orthogonalize`가 `R·c`로 쪼갠다.
+
+이전 판본은 정육면체 회전 24개를 시드로 두고 점-표면 ICP를 돌린 뒤, 적합된 UV
+회귀 기울기의 **부호**로 180° 대칭을 갈랐다. 그 경로가 레벨 1에서만 선 이유가
+세 가지 있고 셋 다 여기서 고쳤다:
+
+* `_umeyama`가 `d = ±1`로 det를 항상 +1로 만들어, 레벨 2~10의 참 변환
+  (det = -0.0254³)을 **원리적으로 표현할 수 없었다.** `orthogonalize`는 det 보정을
+  하지 않는다 — 반사가 살아남는다. 채택된 8개 레벨 전부 det < 0이다.
+* 면 판별(`_thin_axis_index`/`_face_sign_by_triangle`)이 "마주보는 큰 면 두 개 +
+  5% 테두리"라는 레벨 1 전용 형상(두께/최대 비 0.012인 얇은 평판)을 전제했고,
+  방 모양 레벨에서는 착탄점의 72~77%를 버렸다. UV 조회에는 면 개념이 없다.
+* 판별자였던 `EXPECTED_UV_SLOPE`(부호 있는 회귀 기울기)는 180° 대칭에 대해
+  불변이다 — 모듈이 스스로 대수적으로 보였다. 대신 자유 파라미터가 0개인 절대
+  등식 `UV_CONVENTION`(`obs = 2048 · mesh_uv`)을 쓴다.
+
+**게이트가 이 모듈의 절반이다.** 검증 못 한 정렬을 넣는 것이 안 넣는 것보다 나쁘다
+— 항목이 없으면 화면이 "없다"고 말하지만, 잘못된 항목은 권위 있어 보이는 틀린
+기하를 그리고 하류에서 아무도 못 알아챈다. `GATES`가 문턱을, `verify_alignment`이
+측정을, `gate_failures`가 판정을, `AlignmentRejected`가 거절을 맡는다. 문턱은 전부
+참해의 실측 분포에서 잡았고 그 출처가 `GATES` 위에 적혀 있다.
+
+**거리만으로 판정할 수 없다 — 그리고 그것은 자산마다 다르다.** 실측(채택 8개 레벨 ×
+합성 변이 11개 = 88건): 통과한 변이는 0건이고, 8건은 **거리 게이트만으로는
+통과한다**. 그 8건 중 6건이 레벨 8이다 — 그 방은 주축 180° 회전 셋과 주평면 반사
+셋 전부에 대해 자기 자신으로 사상돼 표면 거리가 0.0002 mm로 남는다. 그 여섯 개를
+갈라내는 것은 G2(절대 UV 잔차, 514~1037 텍셀) 하나뿐이다.
 
 레벨 1의 착탄점은 정확히 평면이라(X 좌표가 7만 5천 프레임에서 비트 단위로 동일)
-Umeyama의 SVD가 정확한 특이값 0을 만나 퇴화한다. `_svd3`의 문턱을 최대 특이값
-상대값으로 두고, 특이값 하나가 0인 경우 그 열을 외적으로 채워 이 퇴화를 견딘다 —
-문턱을 절대값으로 두면 부동소수 잡음에 따라 그 판정이 흔들리고, 회전 "행"이
-`(0, 0, 0)`인 무효 행렬이 나올 수 있다(합성 퇴화 데이터로 재현·검증했다).
+12자유도가 데이터로 결정되지 않는다(조건수 2.06e-09). `_svd3`의 퇴화 분기가 그
+갈림길에서 U의 빠진 열을 외적으로 채워 **손잡이를 조용히 고르는** 자리이므로,
+새 경로는 `orthogonalize`와 `solve_affine_12` 양쪽에서 그 분기에 닿기 전에 멈춘다.
+레벨 1은 통과도 실패도 아닌 "unverifiable"로 기록된다.
 """
 
 from __future__ import annotations
@@ -486,7 +517,13 @@ def _barycentric(p: Vec3, a: Vec3, b: Vec3, c: Vec3) -> tuple[float, float, floa
 # =============================================================================
 
 
-VALID_PROVENANCE: Final[frozenset[str]] = frozenset({"solved", "declared"})
+# "solved"      게이트를 전부 통과해 실측으로 검증된 정렬이다. 화면이 그려도 된다.
+# "declared"    FBX가 선언한 값을 그대로 읽은 것 — 검증되지 않았다.
+# "unverifiable" 데이터가 검증을 받치지 못한다(예: 착탄점이 정확히 평면이라 12자유도가
+#               결정되지 않는 레벨 1). **통과도 실패도 아닌 세 번째 상태**다 — 화면이
+#               "검증된 정렬이 아직 없다"와 "이 레벨은 검증할 수 없다"를 다르게 말할 수
+#               있어야 한다. 이 항목은 `solved_transform`을 싣지 않는다.
+VALID_PROVENANCE: Final[frozenset[str]] = frozenset({"solved", "declared", "unverifiable"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -544,8 +581,17 @@ def place(mesh: Mesh, alignment: Alignment) -> Mesh:
     )
 
 
+_NO_TRANSFORM: Final[dict] = {
+    "rotation": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+    "translation": [0.0, 0.0, 0.0],
+    "scale": 0.0,
+}
+
+
 def _alignment_from_entry(entry: dict) -> Alignment:
-    solved = entry["solved_transform"]
+    # "unverifiable" 항목은 변환을 싣지 않는다 — 검증 못 한 숫자를 적어 두면 다음
+    # 사람이 그것을 쓴다. `scale=0.0`은 쓰려고 하면 즉시 무너지는 값이다.
+    solved = entry.get("solved_transform", _NO_TRANSFORM)
     return Alignment(
         level=int(entry["level"]),
         provenance=entry["provenance"],
@@ -556,8 +602,8 @@ def _alignment_from_entry(entry: dict) -> Alignment:
             float(solved["translation"][2]),
         ),
         scale=float(solved["scale"]),
-        declared_scale=float(entry["declared_scale"]),
-        fit=dict(entry["fit"]),
+        declared_scale=float(entry.get("declared_scale", 0.0)),
+        fit=dict(entry.get("fit", {})),
     )
 
 
@@ -723,6 +769,12 @@ def _umeyama(points_p: Sequence[Vec3], points_q: Sequence[Vec3]) -> tuple[Mat3, 
 
     Umeyama, 'Least-Squares Estimation of Transformation Parameters Between Two
     Point Patterns', PAMI 1991.
+
+    **정렬 풀이 경로에서는 더 이상 쓰지 않는다.** `d = ±1`로 det를 항상 +1로 만들기
+    때문에 레벨 2~10의 참 변환(det = -0.0254³)을 원리적으로 표현할 수 없다
+    (모듈 독스트링). 반사가 필요한 곳은 `solve_affine_12` + `orthogonalize`를 쓴다.
+    `pose_lab/skeleton.py`가 "여기서 내는 스케일 항을 쓰지 않는 이유"로 참조하므로
+    함수는 남겨 둔다.
     """
     n = len(points_p)
     mu_p = tuple(sum(p[k] for p in points_p) / n for k in range(3))
@@ -802,19 +854,6 @@ def _mean(points: Sequence[Vec3]) -> Vec3:
     )
 
 
-def _extents(points: Sequence[Vec3]) -> Vec3:
-    xs = [p[0] for p in points]
-    ys = [p[1] for p in points]
-    zs = [p[2] for p in points]
-    return (max(xs) - min(xs), max(ys) - min(ys), max(zs) - min(zs))
-
-
-def _thin_axis_index(vertices: Sequence[Vec3]) -> int:
-    """모델 공간에서 범위가 가장 짧은 축. 얇은 양면 패널의 두 큰 면이 갈리는 축이다."""
-    extent = _extents(vertices)
-    return min(range(3), key=lambda i: extent[i])
-
-
 def _world_tris_for(
     vertices_raw: Sequence[Vec3],
     triangles_vidx: Sequence[tuple[int, int, int]],
@@ -832,532 +871,1061 @@ def _world_tris_for(
     ]
 
 
-def _icp_surface(
-    vertices_raw: Sequence[Vec3],
-    triangles_vidx: Sequence[tuple[int, int, int]],
-    hit_points: Sequence[Vec3],
-    r_seed: Mat3,
-    c_seed: float,
-    t_seed: Vec3,
-    iters: int = 15,
-    tol: float = 1e-7,
-) -> tuple[Mat3, float, Vec3, float, list[int]]:
-    """점-이산표본이 아니라 점-연속표면 ICP다.
-
-    각 착탄점을 어느 삼각형이든 메시 표면의 최근접점에 대응시키고, 그 점의 무게중심
-    좌표로 원본 모델 공간 대응점을 만든다. 메시가 부분적으로만 덮여도(레벨 10처럼)
-    덮이지 않은 영역이 맞춤을 왜곡하지 않는다 — 고정 표본점 ICP와 달리 실제로 맞은
-    영역 근처의 점만 대응으로 쓰인다.
-
-    거리(`rms`)만으로 앞/뒤 면을 가릴 수 없다는 사실이 리뷰에서 드러났다(모듈
-    상단·`solve_alignment` 독스트링) — 그래서 호출자가 면·UV로 후보를 가릴 수 있게,
-    수렴한 **최종** 변환으로 다시 한 번 대응을 구해 그 삼각형 인덱스 목록도 낸다
-    (`final_ti`). 마지막 루프 반복이 낸 `rms`/대응은 그 반복 *전* 변환의 잔차라
-    반환하는 변환과 정확히 안 맞을 수 있어, 반환 변환으로 한 번 더 계산해 맞춘다.
-    """
-    rotation, scale, translation = r_seed, c_seed, t_seed
-    last_rms: float | None = None
-    for _ in range(iters):
-        world_tris = _world_tris_for(vertices_raw, triangles_vidx, rotation, scale, translation)
-        raw_tris = [
-            (vertices_raw[i0], vertices_raw[i1], vertices_raw[i2]) for i0, i1, i2 in triangles_vidx
-        ]
-        corr_raw: list[Vec3] = []
-        corr_hit: list[Vec3] = []
-        total_d2 = 0.0
-        for p in hit_points:
-            d, cp, ti = _nearest_on_mesh(p, world_tris)
-            total_d2 += d * d
-            aw, bw, cw = world_tris[ti]
-            u, v, w = _barycentric(cp, aw, bw, cw)  # type: ignore[arg-type]
-            ar, br, cr = raw_tris[ti]
-            p_raw = (
-                u * ar[0] + v * br[0] + w * cr[0],
-                u * ar[1] + v * br[1] + w * cr[1],
-                u * ar[2] + v * br[2] + w * cr[2],
-            )
-            corr_raw.append(p_raw)
-            corr_hit.append(p)
-        rms = math.sqrt(total_d2 / len(hit_points))
-        rotation, scale, translation = _umeyama(corr_raw, corr_hit)
-        if last_rms is not None and abs(last_rms - rms) < tol:
-            last_rms = rms
-            break
-        last_rms = rms
-
-    final_world_tris = _world_tris_for(vertices_raw, triangles_vidx, rotation, scale, translation)
-    final_ti = [_nearest_on_mesh(p, final_world_tris)[2] for p in hit_points]
-    return rotation, scale, translation, last_rms, final_ti  # type: ignore[return-value]
-
-
-def _prefilter_seed_rotations(
-    vertices_raw: Sequence[Vec3], declared_rotation: Mat3, hit_extent: Vec3, top_k: int
-) -> list[Mat3]:
-    """정육면체 회전 24개 중, 선언된 회전과 합성했을 때 실측 착탄점 범위(bounding
-    box)와 가장 가까운 범위를 내는 것들. ICP를 24번 다 돌리지 않고 후보를 좁힌다."""
-    scored: list[tuple[float, Mat3]] = []
-    for cube_r in _cube_rotations():
-        seed_r = rotation_math.matmul(cube_r, declared_rotation)
-        pts = [rotation_math.matvec(seed_r, v) for v in vertices_raw]  # type: ignore[arg-type]
-        ext = _extents(pts)  # type: ignore[arg-type]
-        err = sum(((ext[i] - hit_extent[i]) / max(hit_extent[i], 1e-6)) ** 2 for i in range(3))
-        scored.append((err, seed_r))  # type: ignore[arg-type]
-    scored.sort(key=lambda item: item[0])
-    return [seed_r for _, seed_r in scored[:top_k]]
-
 
 # =============================================================================
-# 면 판정과 UV 일치도 (리뷰 B1/B2) — 거리로는 앞/뒤 면을 가릴 수 없다
+# UV 규약 — 이름 붙인 가지 하나. 그 근거는 게이트 G0/G9가 매 빌드 다시 잰다.
 # =============================================================================
+
+UV_ATLAS_TEXELS: Final = 2048.0
+
+# CSV의 `Ray Texture UV X/Y`(텍셀)와 메시 UV(정규화 [0,1])를 잇는 등식이다.
 #
-# 레벨 1의 메시는 얇은 두 면이 마주 보는 양면 패널이고, 착탄점은 정확히 평면이다.
-# 그래서 진짜 변환과 "거울 대칭"(얇은 축과 수직인 평면 기준 180°만큼 다른, 그러나
-# 여전히 고유(det=+1) 회전인) 변환 둘 다 그 평면에서 수직거리 ~0을 낸다 — median·p95
-# 는 항상 ~0이고 max_mm 하나만 남는데 그마저 표본별로 흔들린다(리뷰: 7.43~35.01mm).
-# 거리는 이 둘을 가를 능력이 없다. 실제로 가르는 건 (1) 대응이 한쪽 면에
-# 쏠렸는가(대칭 함정에 빠지지 않았는가) — `_dominant_face`, 그리고 (2) 그 면의 UV가
-# 실측 텍스처 UV와 맞는가(거울 대칭은 지오메트리는 맞아도 UV는 안 맞는다) —
-# `_uv_agreement`다.
+# **이것은 가지(branch)다 — 그 사실을 이름으로 남긴다.** 이전 구현은 같은 성격의
+# 가지를 `EXPECTED_UV_SLOPE = -2048`로 고정했고, 그 상수를 지우면 다음 사람은
+# 가지가 있었다는 사실 자체를 모르게 된다. 그래서 상수를 없애는 대신 방향을 바꿔
+# 남긴다: 등식이 `obs = +2048 · mesh_uv`(옛 상수의 반대 부호)이고, 옛 상수와 달리
+# 이 가지는 **매 빌드 측정으로 다시 확인된다**.
+#
+# 근거 1 (G0, 정렬과 무관): 관측 UV로 조회한 모델점들의 쌍거리 × 선언 스케일이
+# 월드 착탄점의 쌍거리와 같은가. 적합도, 정렬도, 회전도 쓰지 않는다. 실측(커밋
+# f632657, FBX 10개, 학습모드 CSV, 세션 17개, 착탄점 15,283~15,912, seed 0):
+# 레벨 3~10에서 중앙값 0.00032~0.00081 mm, p95 0.00114~0.00245 mm.
+# 등식이 틀리면 이 수가 0으로 남을 이유가 없다.
+#
+# 근거 2 (G9, 규약족 대조): `mesh_uv = K - obs/2048`(점반사)과 한 축만 뒤집는 두
+# 족에 대해 K를 탐색해 다시 풀고, 그 해들이 전부 게이트에 걸리는 것을 확인한다.
+# 레벨 8에는 실제로 거의 합동인 v축 반사 가지가 있다(K=(0, 0.925), G0 중앙값
+# 0.00061 mm로 항등의 0.00064 mm보다 **좋다**) — 그러나 그 가지의 해는 참해와
+# 90° 어긋나고(정점 이동 중앙값 1919 mm), G0의 p95가 2.05 mm(항등 0.0021 mm의
+# 976배), G2가 267 텍셀, det 부호가 +1로 나머지 아홉 레벨과 반대다. 즉 **G0의
+# 중앙값만으로는 이 가지를 못 가르고 p95·max와 G5가 가른다** — 그래서 G0는
+# 중앙값만이 아니라 꼬리까지 게이트한다.
+UV_CONVENTION: Final = "obs_texel = UV_ATLAS_TEXELS * mesh_uv"
+
+# UV 삼각형의 면적이 이 아래면 UV 공간에 내부가 없다 — 조회의 후보가 될 수 없다.
+# 그런 삼각형 위에 떨어진 착탄점은 "miss"도 "ambiguous"도 아닌 **다른 삼각형의
+# 깨끗한 hit**으로 조용히 잘못 대응된다. `audit_atlas`가 그 오대응 거리를 잰다.
+UV_DEGENERATE_AREA: Final = 1e-12
+
+# UV 삼각형 내부 판정의 시임 허용치(정규화 UV 단위). 2048 텍셀 아틀라스에서 0.2텍셀.
+UV_LOOKUP_TOL: Final = 1e-4
+
+# 조회 후보가 둘 이상일 때, 그 후보들이 가리키는 **모델 공간 점**이 이 안에서
+# 같으면 모호가 아니다(UV 변을 공유하는 시임의 양쪽). 모델 단위 1e-4 ≈ 0.0025 mm.
+UV_SEAM_SAME_POINT: Final = 1e-4
+
+# G2에서 "최근접과 사실상 같은 거리"로 볼 범위(월드 미터). 착탄점이 UV 시임 위에
+# 떨어지면 변을 공유하는 두 삼각형 중 어느 쪽으로 읽어도 **같은 3D 점**이지만
+# 보간 UV는 섬이 달라 수백 텍셀 차이난다(선행 조사 실측: 레벨 6·7·9에서 450.7 /
+# 120.3 / 358.7 텍셀). 그 자리에서 잔차의 **최소**를 취한다 — 그러지 않으면 옳은
+# 정렬에서도 G2의 max가 450 텍셀로 튀어 유일한 포착자가 잡음 바닥을 갖게 된다.
+G2_TIE_EPS_M: Final = 2.0e-4
 
 
-# 삼각형 법선이 얇은 축과 이보다 더 나란하면(내적 절대값 기준) "큰 면"이고, 아니면
-# 테두리 옆벽이다. 옆벽 삼각형(레벨 1: 84개 폴리곤 인덱스 중 일부, 넓이 27~98 —
-# 큰 면의 넓이 2015에 비해 훨씬 작다)은 두 큰 면 중 어느 쪽에도 안 넣는다.
-_BIG_FACE_NORMAL_COS: Final = 0.5
+# =============================================================================
+# 게이트 문턱 — 전부 실측 분포에서 잡았다
+# =============================================================================
+
+# 출처: 커밋 f632657, FBX 10개(`/data/sources/modelings`), 학습모드 CSV 전량에서
+# 세션 17개를 가로질러 모은 착탄점(레벨당 15,283~15,912), seed 0, 적합 2,000 /
+# 평가 1,500(겹치지 않는 한 순열에서 자름). 참해(레벨 3~10)의 실측 최악값:
+#
+#   G0 중앙값 0.00081 / p95 0.00245 / max 0.00494 mm
+#   G3 중앙값 0.00030 / p95 0.00072 / max 0.00087 mm
+#   G2 p95 0.00063 / max 0.00087 텍셀
+#   비등방성 7.43e-07,  |c/declared - 1| 7.54e-07,  조건수 0.2264
+#
+# 문턱은 그 최악값의 약 20~60배 위에 둔다. **이전 제안의 문턱(G2 1텍셀 / G3 2mm /
+# aniso 1e-3)은 참해보다 네 자릿수 헐거워** 그 빈 공간에 179.9998° 뒤집힌 레벨 8
+# 쌍둥이(G3 중앙값 0.199 mm, aniso 3.85e-4)가 통째로 들어앉는 것이 실증됐다.
+# 지금 문턱에서 그 쌍둥이는 G3에서 40배, G4에서 38배 차이로 떨어진다.
+GATES: Final[dict[str, float]] = {
+    # G0 — 정렬 무관 합동성(대응 모델점 쌍거리 × 선언 스케일 대 월드 쌍거리)
+    "g0_median_mm": 0.01,
+    "g0_p95_mm": 0.05,
+    "g0_max_mm": 0.2,
+    # G1 — 아틀라스 단사성. 앞의 둘은 메시만 보고(정렬·착탄점 무관), 뒤의 둘은
+    # 착탄점 **전량**에서 잰다(부분표본에서 재면 판정을 시드가 정한다).
+    "uv_degenerate_misattribution_mm": 1.0,
+    "atlas_overlap_max_gap_mm": 1.0,
+    "uv_miss_fraction": 0.002,
+    "uv_ambiguous_fraction": 0.002,
+    # G2 — 절대 UV 잔차(3D 최근접 삼각형으로 찾고, 시임에서는 최소를 취한다)
+    "uv_abs_resid_p95_texel": 0.01,
+    "uv_abs_resid_max_texel": 0.05,
+    # G3 — 표면 거리
+    "median_mm": 0.005,
+    "p95_mm": 0.02,
+    "max_mm": 0.05,
+    # G4 — 등방성 + 선언 스케일. 두 개의 등방성을 따로 잰다:
+    #  `fit_linear_aniso`  해를 낸 **그 적합**의 선형부 — 대응이 틀리면(예: 뒤집힌 UV
+    #                      규약) 적합이 전단으로 끌려가 여기서 걸린다. 실측: 참해
+    #                      ≤ 6.3e-07, 규약족 경쟁자 1.5e-04 ~ 2.6e-03.
+    #  `linear_aniso`      기록된 정렬을 **다시 적합 없이** 재검사할 때, 주어진 착탄점의
+    #                      대응으로 12자유도를 다시 세워 잰 값. 정렬에는 무관하다
+    #                      (같은 레벨의 어떤 변이에도 같은 값이 나온다) — 그래서
+    #                      이것은 "대응이 유사변환을 허용하는가"의 검사이지 정렬 검사가
+    #                      아니다. 그 사실을 이름과 문턱 양쪽에 남긴다.
+    "fit_linear_aniso": 1.0e-5,
+    "linear_aniso": 1.0e-5,
+    "scale_ratio_to_declared": 1.0e-5,
+    # G7 — 기하 조건수 / 법선 다양성
+    "cond_min_over_max": 0.05,
+    "distinct_normals": 2,
+    # G8 — 적대적 대조에서 2등이 항등보다 이만큼은 나빠야 한다(텍셀)
+    "adversarial_runner_up_texel": 10.0,
+}
 
 
-def _face_sign_by_triangle(
-    vertices_raw: Sequence[Vec3], triangles: Sequence[tuple[int, int, int]], thin_axis: int
-) -> list[float]:
-    """삼각형마다: 큰 면 중 위쪽이면 +1, 아래쪽이면 -1, 옆벽(테두리)이면 0.
+class AlignmentRejected(Exception):
+    """게이트를 통과하지 못한 레벨. 항목을 만들지 않는다 — 화면이 "없다"고 말한다.
 
-    **법선 방향으로 가른다 — 얇은 축 위 중심 좌표로 가르지 않는다.** 처음엔 중심
-    좌표(centroid[thin_axis]의 부호)로 갈랐는데, 옆벽 삼각형이 프레임 둘레를 도느라
-    중심 좌표의 부호가 제각각이라(위쪽 절반 둘레는 +, 아래쪽 절반은 -) 두 "면" 각각에
-    옆벽 조각이 반반씩 섞여 들어갔다 — UV 회귀에 무관한 UV를 실은 이상치가 끼어
-    R²가 0.987 수준으로 깎였다(리뷰가 지적한, 트리밍 전 표본의 문제와 같은 종류).
-    법선이 얇은 축과 거의 나란한 것만 "큰 면"으로 인정하면 옆벽이 깨끗이 빠지고
-    R²가 트리밍된 표본 수준(0.9999998/1.0000000)까지 올라간다 — 실측으로 확인했다.
+    `failures`에 (게이트 이름, 잰 값, 문턱) 세 쌍이 들어간다. 문구만 남기면 나중에
+    "확인함"이 되고, 숫자가 남으면 다음 사람이 다시 잴 수 있다.
     """
-    out: list[float] = []
-    for tri in triangles:
-        a, b, c = (vertices_raw[i] for i in tri)
-        n = _cross(_sub(b, a), _sub(c, a))
-        length = math.sqrt(_dot(n, n))
-        if length < 1e-12:
-            out.append(0.0)
+
+    def __init__(self, level: int, failures: Sequence[tuple[str, object, str]]) -> None:
+        self.level = level
+        self.failures = list(failures)
+        detail = "; ".join(f"{name}={value!r} (need {need})" for name, value, need in failures)
+        super().__init__(f"level {level} rejected by {len(failures)} gate(s): {detail}")
+
+
+# =============================================================================
+# UV 색인 — 정렬 이전에 성립한다(메시만 본다)
+# =============================================================================
+
+
+def _tri_uv_corners(mesh: Mesh, triangle_index: int) -> tuple[tuple[float, float], ...]:
+    i0, i1, i2 = mesh.uv_indices[triangle_index]
+    return (mesh.uvs[i0], mesh.uvs[i1], mesh.uvs[i2])
+
+
+def _tri_vertices(mesh: Mesh, triangle_index: int) -> tuple[Vec3, Vec3, Vec3]:
+    i0, i1, i2 = mesh.triangles[triangle_index]
+    return (mesh.vertices[i0], mesh.vertices[i1], mesh.vertices[i2])
+
+
+def _uv_area(corners: Sequence[tuple[float, float]]) -> float:
+    (x1, y1), (x2, y2), (x3, y3) = corners
+    return abs((x2 - x1) * (y3 - y1) - (x3 - x1) * (y2 - y1)) / 2.0
+
+
+def _tri_area3(tri: tuple[Vec3, Vec3, Vec3]) -> float:
+    a, b, c = tri
+    cr = _cross(_sub(b, a), _sub(c, a))
+    return math.sqrt(_dot(cr, cr)) / 2.0
+
+
+def _tri_normal(tri: tuple[Vec3, Vec3, Vec3]) -> Vec3 | None:
+    a, b, c = tri
+    cr = _cross(_sub(b, a), _sub(c, a))
+    n = math.sqrt(_dot(cr, cr))
+    return None if n <= 0 else _mul3(cr, 1.0 / n)
+
+
+def _barycentric_2d(
+    p: tuple[float, float], corners: Sequence[tuple[float, float]]
+) -> tuple[float, float, float] | None:
+    (x1, y1), (x2, y2), (x3, y3) = corners
+    px, py = p
+    den = (y2 - y3) * (x1 - x3) + (x3 - x2) * (y1 - y3)
+    if abs(den) < 1e-18:
+        # UV 퇴화 삼각형. **분모를 클램프해서 밀어붙이지 않는다** — 클램프하면 그
+        # 삼각형이 (1,0,0)으로 모든 질의점을 "포함"하게 되고(레벨 2에서 모호도가
+        # 1.0000이 된다), nan으로 흘려보내면 비교가 전부 False가 되어 조용히
+        # 사라진다. 두 갈래가 같은 명세에서 정반대 판정을 낸다. 그래서 여기서
+        # **명시적으로 None**을 내고, 색인은 애초에 이런 삼각형을 넣지 않으며
+        # (`build_uv_index`), 그 사실을 `audit_atlas`가 따로 잰다.
+        return None
+    a = ((y2 - y3) * (px - x3) + (x3 - x2) * (py - y3)) / den
+    b = ((y3 - y1) * (px - x3) + (x1 - x3) * (py - y3)) / den
+    return (a, b, 1.0 - a - b)
+
+
+@dataclass(frozen=True, slots=True)
+class UvIndex:
+    """UV 공간 [0,1]²의 균일 격자 버킷 색인. **정렬 이전에 성립한다.**
+
+    `degenerate_triangles`는 UV 면적이 `UV_DEGENERATE_AREA` 이하라 색인에 들어가지
+    못한 삼각형들이다 — 조회는 이들을 절대 후보로 내지 않는다(고정된 정책).
+    """
+
+    mesh: Mesh
+    buckets: dict[tuple[int, int], list[int]]
+    resolution: int
+    degenerate_triangles: tuple[int, ...]
+
+
+def build_uv_index(mesh: Mesh, resolution: int = 64) -> UvIndex:
+    if not mesh.uv_indices:
+        raise ValueError("build_uv_index: mesh has no uv_indices (read_fbx found no LayerElementUV)")
+    buckets: dict[tuple[int, int], list[int]] = {}
+    degenerate: list[int] = []
+    for t in range(len(mesh.triangles)):
+        corners = _tri_uv_corners(mesh, t)
+        if _uv_area(corners) <= UV_DEGENERATE_AREA:
+            degenerate.append(t)
             continue
-        cos_thin = n[thin_axis] / length
-        if abs(cos_thin) < _BIG_FACE_NORMAL_COS:
-            out.append(0.0)  # 옆벽: 얇은 축과 거의 수직인 법선
-        else:
-            out.append(1.0 if cos_thin > 0 else -1.0)
-    return out
+        us = [c[0] for c in corners]
+        vs = [c[1] for c in corners]
+        i0 = max(0, int(min(us) * resolution))
+        i1 = min(resolution - 1, int(max(us) * resolution))
+        j0 = max(0, int(min(vs) * resolution))
+        j1 = min(resolution - 1, int(max(vs) * resolution))
+        for i in range(i0, i1 + 1):
+            for j in range(j0, j1 + 1):
+                buckets.setdefault((i, j), []).append(t)
+    return UvIndex(
+        mesh=mesh, buckets=buckets, resolution=resolution, degenerate_triangles=tuple(degenerate)
+    )
 
 
-def _dominant_face(
-    face_sign_by_triangle: Sequence[float], triangle_indices: Sequence[int]
-) -> tuple[float, float]:
-    """큰 면에 대응된 것들 중 어느 면에 더 쏠렸는지: (다수 면의 부호, 그 비율).
+def uv_lookup(
+    index: UvIndex, uv_normalized: tuple[float, float], tol: float = UV_LOOKUP_TOL
+) -> tuple[str, int | None, tuple[float, float, float] | None]:
+    """정규화 UV 하나를 삼각형+무게중심으로 되돌린다.
 
-    옆벽(부호 0)에 대응된 점은 분모에서도 뺀다 — "옆벽에 맞음"은 "틀린 큰 면에
-    맞음"과 다른 사실이라 섞으면 판정이 흐려진다. 비율이 낮으면(대칭 함정에서
-    절반씩 갈리면 ~0.5) 아직 한쪽 큰 면으로 수렴하지 않은 것이다 —
-    `solve_alignment`이 `min_dominant_fraction`으로 이런 후보를 거른다.
+    `("hit", triangle_index, barycentric)` / `("miss", None, None)` /
+    `("ambiguous", n_candidates, None)`. 후보가 둘 이상이어도 그 후보들이 가리키는
+    모델 점이 `UV_SEAM_SAME_POINT` 안에서 같으면(변을 공유하는 시임) 모호가 아니다.
     """
-    pos = sum(1 for ti in triangle_indices if face_sign_by_triangle[ti] > 0)
-    neg = sum(1 for ti in triangle_indices if face_sign_by_triangle[ti] < 0)
-    total = pos + neg
-    if total == 0:
-        return 0.0, 0.0
-    if pos >= neg:
-        return 1.0, pos / total
-    return -1.0, neg / total
-
-
-def _linreg(xs: Sequence[float], ys: Sequence[float]) -> tuple[float, float, float]:
-    """단순 최소제곱 직선 `(slope, intercept, R²)`. `xs`에 분산이 없으면 기울기 0."""
-    n = len(xs)
-    mean_x = sum(xs) / n
-    mean_y = sum(ys) / n
-    sxy = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys))
-    sxx = sum((x - mean_x) ** 2 for x in xs)
-    syy = sum((y - mean_y) ** 2 for y in ys)
-    if sxx <= 1e-15:
-        return 0.0, mean_y, 0.0
-    slope = sxy / sxx
-    intercept = mean_y - slope * mean_x
-    if syy <= 1e-15:
-        return slope, intercept, 1.0
-    ss_res = sum((y - (slope * x + intercept)) ** 2 for x, y in zip(xs, ys))
-    return slope, intercept, 1.0 - ss_res / syy
-
-
-def _uv_pairs_for_dominant_face(
-    mesh: Mesh,
-    points: Sequence[Vec3],
-    point_uvs: Sequence[tuple[float, float]],
-    triangle_indices: Sequence[int],
-    world_tris: Sequence[tuple[Vec3, Vec3, Vec3]],
-    dominant_sign: float,
-    face_sign_by_triangle: Sequence[float],
-) -> list[tuple[tuple[float, float], tuple[float, float]]]:
-    """큰 면(`dominant_sign`)에 대응된 점만 골라 (메시 UV, 관측 UV) 쌍을 낸다.
-
-    작은 옆면(테두리) 삼각형에 붙은 점은 뺀다 — 서로 무관한 UV를 실어 순수 이상치로
-    작용한다(리뷰 B2: 5.16%가 옆면). `_uv_agreement`(내부, `solve_alignment`의 후보
-    평가에서 씀)와 공개 `uv_pairs_on_dominant_face`(리뷰 D2, 다음 태스크의 메시
-    앵커가 씀) 둘 다 이 함수 하나로 계산한다 — 따로 베끼면 정렬 레코드와 앵커가
-    서로 다른 걸 재는 사태가 생긴다.
-    """
-    pairs: list[tuple[tuple[float, float], tuple[float, float]]] = []
-    for p, uv, ti in zip(points, point_uvs, triangle_indices):
-        if face_sign_by_triangle[ti] != dominant_sign:
+    mesh = index.mesh
+    u, v = uv_normalized
+    i = min(index.resolution - 1, max(0, int(u * index.resolution)))
+    j = min(index.resolution - 1, max(0, int(v * index.resolution)))
+    candidates: list[tuple[int, tuple[float, float, float]]] = []
+    for t in index.buckets.get((i, j), ()):
+        bary = _barycentric_2d((u, v), _tri_uv_corners(mesh, t))
+        if bary is None:
             continue
-        if ti >= len(mesh.uv_indices):
-            continue
-        aw, bw, cw = world_tris[ti]
-        cp = _closest_point_on_triangle(p, aw, bw, cw)
-        bary = _barycentric(cp, aw, bw, cw)
-        pairs.append((triangle_uv(mesh, ti, bary), uv))
-    return pairs
+        if min(bary) >= -tol:
+            candidates.append((t, bary))
+    if not candidates:
+        return ("miss", None, None)
+    if len(candidates) > 1:
+        points = [model_point_for_hit(mesh, t, bary) for t, bary in candidates]
+        spread = max(math.dist(points[0], q) for q in points)
+        if spread > UV_SEAM_SAME_POINT:
+            return ("ambiguous", len(candidates), None)
+    return ("hit", candidates[0][0], candidates[0][1])
 
 
-def uv_regression(
-    pairs: Sequence[tuple[tuple[float, float], tuple[float, float]]], axis: int
-) -> tuple[float, float]:
-    """`uv_pairs_on_dominant_face`가 낸 (메시 UV, 관측 UV) 쌍에서 한 축의 (기울기, R²).
-
-    `axis`: 0이면 U, 1이면 V. 표본이 2개 미만이면 `(0.0, 0.0)` — 기울기를 지어내지
-    않는다(`_linreg`와 같은 규칙).
-    """
-    if len(pairs) < 2:
-        return 0.0, 0.0
-    mesh_vals = [pair[0][axis] for pair in pairs]
-    obs_vals = [pair[1][axis] for pair in pairs]
-    slope, _intercept, r2 = _linreg(mesh_vals, obs_vals)
-    return slope, r2
-
-
-def uv_pairs_on_dominant_face(
-    placed_mesh: Mesh, hits: Sequence[tuple[Vec3, tuple[float, float]]]
-) -> list[tuple[tuple[float, float], tuple[float, float]]]:
-    """리뷰 D2: 다음 태스크의 메시 앵커가 쓰는 공개 진입점.
-
-    `placed_mesh`는 `place()`를 거친(이미 세계 좌표인) 메시다. `hits`는
-    (착탄점, 관측 UV) 쌍의 나열이다. 각 착탄점의 최근접 삼각형이 큰 면(다수결로
-    정해지는 `dominant_sign`)에 속하는 것만 골라 (메시 UV, 관측 UV) 쌍을 낸다 —
-    옆벽(테두리, 약 5%)에 붙은 착탄점은 빠진다.
-
-    `solve_alignment`이 정렬을 고를 때 쓰는 `_uv_agreement`와 **같은 계산**
-    (`_uv_pairs_for_dominant_face`)을 쓴다 — 따로 다시 짜면 정렬 레코드에 적힌
-    숫자와 앵커가 재는 숫자가 서로 다른 걸 재는 사태가 생긴다.
-    """
-    if not placed_mesh.triangles or not hits:
-        return []
-    thin_axis = _thin_axis_index(placed_mesh.vertices)
-    face_sign_by_triangle = _face_sign_by_triangle(
-        placed_mesh.vertices, placed_mesh.triangles, thin_axis
-    )
-    world_tris = _world_triangles(placed_mesh)
-    points = [h[0] for h in hits]
-    point_uvs = [h[1] for h in hits]
-    triangle_indices = [_nearest_on_mesh(p, world_tris)[2] for p in points]
-    dominant_sign, _dominant_fraction = _dominant_face(face_sign_by_triangle, triangle_indices)
-    return _uv_pairs_for_dominant_face(
-        placed_mesh, points, point_uvs, triangle_indices, world_tris, dominant_sign, face_sign_by_triangle
+def model_point_for_hit(
+    mesh: Mesh, triangle_index: int, barycentric: tuple[float, float, float]
+) -> Vec3:
+    """`triangle_uv`와 정확히 짝을 이루는 역방향: 무게중심 → **모델 공간** 점."""
+    a, b, c = _tri_vertices(mesh, triangle_index)
+    u, v, w = barycentric
+    return (
+        u * a[0] + v * b[0] + w * c[0],
+        u * a[1] + v * b[1] + w * c[1],
+        u * a[2] + v * b[2] + w * c[2],
     )
 
 
-def _uv_agreement(
-    mesh: Mesh,
-    points: Sequence[Vec3],
-    point_uvs: Sequence[tuple[float, float]],
-    triangle_indices: Sequence[int],
-    world_tris: Sequence[tuple[Vec3, Vec3, Vec3]],
-    dominant_sign: float,
-    face_sign_by_triangle: Sequence[float],
-) -> dict[str, float]:
-    """`solve_alignment`의 후보 평가에서 쓴다 — 대응(`triangle_indices`/`world_tris`)이
-    이미 ICP 루프에서 계산돼 있으므로 다시 최근접 탐색을 하지 않는다
-    (`uv_pairs_on_dominant_face`는 이 대응이 없어 매번 새로 찾는다). 반환 딕셔너리는
-    그대로 `Alignment.fit`에 들어간다.
+# =============================================================================
+# 폐형식 12자유도 아핀 + 직교화 (반사를 죽이지 않는다)
+# =============================================================================
+
+
+def solve_affine_12(src: Sequence[Vec3], dst: Sequence[Vec3]) -> tuple[Mat3, Vec3]:
+    """`dst ≈ A · src + b`의 최소제곱 해. 4x4 Gram 정규방정식을 가우스 소거로 푼다.
+
+    조건이 모자라면 **조용히 릿지를 넣지 않고 `ValueError`로 멈춘다** — 레벨 1의
+    착탄점은 정확히 평면이라 여기서 실제로 걸린다(그리고 걸려야 한다).
     """
-    pairs = _uv_pairs_for_dominant_face(
-        mesh, points, point_uvs, triangle_indices, world_tris, dominant_sign, face_sign_by_triangle
-    )
-    slope_u, r2_u = uv_regression(pairs, 0)
-    slope_v, r2_v = uv_regression(pairs, 1)
-    return {
-        "uv_n": float(len(pairs)),
-        "uv_slope_u": slope_u,
-        "uv_r2_u": r2_u,
-        "uv_slope_v": slope_v,
-        "uv_r2_v": r2_v,
-    }
+    gram = [[0.0] * 4 for _ in range(4)]
+    rhs = [[0.0] * 3 for _ in range(4)]
+    for p, q in zip(src, dst):
+        x = (p[0], p[1], p[2], 1.0)
+        for a in range(4):
+            xa = x[a]
+            for b in range(4):
+                gram[a][b] += xa * x[b]
+            for d in range(3):
+                rhs[a][d] += xa * q[d]
+    magnitude = max(abs(gram[r][c]) for r in range(4) for c in range(4))
+    if magnitude <= 0.0:
+        raise ValueError("solve_affine_12: empty or zero correspondence set")
+    m = [gram[r][:] + rhs[r][:] for r in range(4)]
+    for c in range(4):
+        pivot_row = max(range(c, 4), key=lambda r: abs(m[r][c]))
+        if abs(m[pivot_row][c]) < 1e-10 * magnitude:
+            raise ValueError(
+                "solve_affine_12: normal equations are rank deficient "
+                f"(pivot {abs(m[pivot_row][c]):.3e} vs magnitude {magnitude:.3e}) — "
+                "the correspondence cloud does not span three dimensions"
+            )
+        m[c], m[pivot_row] = m[pivot_row], m[c]
+        pv = m[c][c]
+        m[c] = [x / pv for x in m[c]]
+        for r in range(4):
+            if r == c:
+                continue
+            f = m[r][c]
+            if f:
+                m[r] = [a - f * b for a, b in zip(m[r], m[c])]
+    linear: Mat3 = tuple(tuple(m[r][4 + d] for r in range(3)) for d in range(3))  # type: ignore[assignment]
+    offset: Vec3 = tuple(m[3][4 + d] for d in range(3))  # type: ignore[assignment]
+    return linear, offset
 
 
-def _fit_stats(distances_m: Sequence[float]) -> dict[str, float]:
-    s = sorted(distances_m)
+def orthogonalize(linear: Mat3) -> tuple[Mat3, float, float, float, list[float]]:
+    """3x3 선형부를 `R · c`로 쪼갠다. **det 보정을 하지 않는다** — 반사가 살아남는다.
+
+    반환: `(rotation, scale, aniso, det_sign, singular_values)`.
+
+    `_svd3`의 퇴화 분기(특이값 하나가 0일 때 U의 빠진 열을 외적으로 채우는 자리)는
+    **손잡이를 조용히 고른다**. 그 분기가 새 경로에서 절대 걸리지 않도록, 특이값
+    비가 1e-6 아래면 여기서 멈춘다.
+    """
+    u, s, vt = _svd3(linear)
+    if max(s) <= 0.0 or min(s) / max(s) < 1e-6:
+        raise ValueError(
+            f"orthogonalize: linear part is near-singular (singular values {s}) — "
+            "refusing the degenerate branch of _svd3, which would pick a handedness silently"
+        )
+    scale = sum(s) / 3.0
+    aniso = (max(s) - min(s)) / scale
+    rotation = rotation_math.matmul(u, vt)
+    return rotation, scale, aniso, (1.0 if _mat3_det(rotation) > 0 else -1.0), list(s)
+
+
+def _percentiles(values: Sequence[float]) -> tuple[float, float, float]:
+    s = sorted(values)
     n = len(s)
+    if n == 0:
+        return (math.inf, math.inf, math.inf)
 
-    def pct(p: float) -> float:
+    def at(p: float) -> float:
         return s[min(n - 1, int(round(p / 100.0 * (n - 1))))]
 
+    return (at(50), at(95), at(100))
+
+
+# =============================================================================
+# G0 — 정렬 무관 합동성. `UV_CONVENTION`을 뒷받침하는 유일한 비순환 증거다.
+# =============================================================================
+
+
+def congruence_stats(
+    model_points: Sequence[Vec3],
+    world_points: Sequence[Vec3],
+    declared_scale: float,
+    *,
+    seed: int = 0,
+    n_pairs: int = 4000,
+) -> dict[str, float]:
+    """`|p_i - p_j| · declared_scale` 대 `|q_i - q_j|`. 적합도 정렬도 쓰지 않는다."""
+    n = len(model_points)
+    if n < 2:
+        return {"g0_n_pairs": 0.0, "g0_median_mm": math.inf, "g0_p95_mm": math.inf, "g0_max_mm": math.inf}
+    rng = random.Random(seed)
+    errors: list[float] = []
+    for _ in range(n_pairs):
+        i = rng.randrange(n)
+        j = rng.randrange(n)
+        if i == j:
+            continue
+        model_d = math.dist(model_points[i], model_points[j]) * declared_scale
+        world_d = math.dist(world_points[i], world_points[j])
+        errors.append(abs(model_d - world_d) * 1000.0)
+    med, p95, mx = _percentiles(errors)
     return {
-        "n_hits": n,
-        "median_mm": pct(50) * 1000.0,
-        "p95_mm": pct(95) * 1000.0,
-        "max_mm": pct(100) * 1000.0,
+        "g0_n_pairs": float(len(errors)),
+        "g0_median_mm": med,
+        "g0_p95_mm": p95,
+        "g0_max_mm": mx,
     }
 
 
-DEFAULT_MIN_DOMINANT_FRACTION: Final = 0.9
-
-# 리뷰 C2/D1: 얇은 축 둘레 180도 회전(Rx180, `EXPECTED_UV_SLOPE`가 가르는 대칭)으로
-# 관계된 두 orientation이 거리로도, UV R²로도 갈리지 않는다 — 둘 다 median/p95/max
-# ~0mm, UV R² 0.9999+를 낸다(직접 재현·확인). 대수적으로 확인했다: "예측 UV가 월드
-# 좌표와 CSV 관측 UV와 같은 방향으로 움직이는가"는 "회귀 기울기(관측 vs 예측)가
-# 양수인가"와 **완전히 같은 정보**다(obs=k1*w+c1, pred=k2*w+c2이면
-# slope(obs|pred)=k1/k2이므로 부호가 같다는 것과 기울기가 양수라는 것은 동치) —
-# 그래서 순수 선형 상관으로는 Rx180의 두 orientation을 원리적으로 못 가른다.
-#
-# **이 상수의 값은 측정이 아니라 고른 가지(branch)다 — 그 이유를 정확히 적는다.**
-# 처음에 이 주석은 "실측 검증에서 좋은 맞춤의 기울기가 두 축 다 음수(-2047.85
-# 근방)로 확인됐다"고 -2048을 근거로 삼았는데, 그 인용이 오독이었다(리뷰가 잡음):
-# 실제 출처(`task-4-review.md` 24–26행)는 U −2047.85, **V +2047.85**로 **부호가
-# 섞여** 있다. 이 저장소의 첫 커밋(`ed71ce2`)의 실제 회전을 지금 코드로 다시
-# 재보면 그 섞인 값이 정확히 재현된다(U −2047.4, V +2047.8) — 그건 지금은 대체된
-# 그 커밋의 진짜 기하다, 측정 오류가 아니다. 그리고 그 섞인 부호는 Rx180 하나만으로는
-# 안 나온다 — Rx180은 두 기울기를 **함께** 뒤집는다. 직접 재현해 확인했다: 후보군
-# 안에는 Rx180 대칭(둘 다 같은 부호로 뒤집힘, `(+,+)`↔`(-,-)`) 말고 **또 다른**
-# 180도 대칭(하나만 뒤집힘, `(-,+)`↔`(+,-)`, `ed71ce2`가 여기 속한다)이 있다 —
-# 판 법선이 아닌 판 안의 축 둘레 180도 회전에서 온다. 그래서 실제로는 최소
-# 네 갈래(부호 조합 `++`/`--`/`-+`/`+-`)가 거리·R²로는 똑같이 좋다.
-#
-# 이 상수가 실제로 하는 일은: 네 갈래 중 **어느 것을 기록할지 정하는 것**이다.
-# 근거는 **하나뿐이다** — 15/15 시드(본 구현 12개 + 재검토자가 늘린 3개)가 전부
-# 이 갈래(두 축 다 음수)로 수렴했다.
-#
-# 한때 두 번째 근거를 적었다: "부호가 섞인 갈래는 착탄 평면 자체를 깨야 하므로
-# 물리적으로 있음직하지 않다." **그 주장은 측정과 어긋나 삭제했다** — 재검토자가
-# 재보니 `ed71ce2`의 혼합 부호 회전도 착탄 평면에 똑같이 잘 맞는다(양쪽 다
-# 마이크로미터 이하 중앙 잔차). 평면 적합으로는 갈래를 가를 수 없다는 사실이
-# 오히려 이 상수가 필요한 이유다. 옛 과장을 새 과장으로 바꾸지 않는다.
-#
-# **이 값은 유도된 게 아니다** — 데이터만
-# 으로는 두 갈래(`++` 대 `--`)를 가를 방법이 없다는 것을 이미 대수적으로 보였다.
-# 외부 근거(예: Unity 씬/프리팹 파일)가 나오면 반대 갈래가 실제였다고 밝혀질 수
-# 있고, 그러면 이 상수는 부호를 바꿔야 한다 — 지금은 그 경우에도 "조용히 틀린
-# 채로 있는" 대신 "흔들리면 보이는" 상태를 만드는 것이 이 상수의 역할이다.
-UV_ATLAS_TEXELS: Final = 2048.0
-EXPECTED_UV_SLOPE: Final = -UV_ATLAS_TEXELS
-MIN_UV_R2_FOR_SIGN_CHECK: Final = 0.9
+# =============================================================================
+# G1 — 아틀라스 단사성 감사. 메시만 본다(정렬·착탄점과 무관).
+# =============================================================================
 
 
-def solve_alignment(
+def audit_atlas(
+    mesh: Mesh, index: UvIndex, *, seed: int = 0, samples_per_triangle: int = 64,
+    overlap_resolution: int = 1024,
+) -> dict[str, float]:
+    """UV 아틀라스가 3D 표면 위에서 실제로 단사인지 잰다.
+
+    **착탄점 가중 통계가 아니다.** `uv_miss_fraction`/`uv_ambiguous_fraction`은
+    UV 내부가 없는 삼각형을 **원리적으로** 볼 수 없다 — 그런 삼각형은 조회 후보가
+    될 수 없으므로, 그 위에 떨어진 점은 miss도 ambiguous도 아닌 다른 삼각형의
+    깨끗한 hit으로 돌아온다. 그래서 여기서는 퇴화 삼각형 위를 직접 표집해
+    **오대응 거리(mm)**를 잰다. 레벨 2가 이 검사에서 떨어진다(134 mm).
+    """
+    rng = random.Random(seed)
+    scale = _declared_scale(mesh.declared)
+    n_tris = len(mesh.triangles)
+    areas = [_tri_area3(_tri_vertices(mesh, t)) for t in range(n_tris)]
+    total_area = sum(areas)
+    degenerate = [t for t in index.degenerate_triangles if areas[t] > 1e-9]
+    degenerate_area = sum(areas[t] for t in degenerate)
+
+    worst_gap = 0.0
+    n_silent = 0
+    for t in degenerate:
+        a, b, c = _tri_vertices(mesh, t)
+        uva, uvb, uvc = _tri_uv_corners(mesh, t)
+        for _ in range(samples_per_triangle):
+            r1, r2 = rng.random(), rng.random()
+            if r1 + r2 > 1.0:
+                r1, r2 = 1.0 - r1, 1.0 - r2
+            w = (1.0 - r1 - r2, r1, r2)
+            true_point = tuple(w[0] * a[d] + w[1] * b[d] + w[2] * c[d] for d in range(3))
+            uv = (
+                w[0] * uva[0] + w[1] * uvb[0] + w[2] * uvc[0],
+                w[0] * uva[1] + w[1] * uvb[1] + w[2] * uvc[1],
+            )
+            kind, ti, bary = uv_lookup(index, uv)
+            if kind == "hit":
+                n_silent += 1
+                worst_gap = max(worst_gap, math.dist(true_point, model_point_for_hit(mesh, ti, bary)))  # type: ignore[arg-type]
+
+    # 비퇴화 삼각형끼리의 겹침을 아틀라스 래스터화로 확인한다 — 분사 위치와 무관하다.
+    cells: dict[tuple[int, int], list[tuple[int, tuple[float, float, float]]]] = {}
+    indexed = set(range(n_tris)) - set(index.degenerate_triangles)
+    for t in indexed:
+        corners = _tri_uv_corners(mesh, t)
+        us = [q[0] for q in corners]
+        vs = [q[1] for q in corners]
+        i0 = max(0, int(min(us) * overlap_resolution))
+        i1 = min(overlap_resolution - 1, int(max(us) * overlap_resolution))
+        j0 = max(0, int(min(vs) * overlap_resolution))
+        j1 = min(overlap_resolution - 1, int(max(vs) * overlap_resolution))
+        for i in range(i0, i1 + 1):
+            for j in range(j0, j1 + 1):
+                centre = ((i + 0.5) / overlap_resolution, (j + 0.5) / overlap_resolution)
+                bary = _barycentric_2d(centre, corners)
+                if bary is None or min(bary) < 0.0:
+                    continue
+                cells.setdefault((i, j), []).append((t, bary))
+    overlapping = 0
+    overlap_gap = 0.0
+    for hits_in_cell in cells.values():
+        if len(hits_in_cell) < 2:
+            continue
+        points = [model_point_for_hit(mesh, t, bary) for t, bary in hits_in_cell]
+        gap = max(math.dist(points[0], q) for q in points)
+        if gap > UV_SEAM_SAME_POINT:
+            overlapping += 1
+            overlap_gap = max(overlap_gap, gap)
+
+    return {
+        "uv_degenerate_tris": float(len(degenerate)),
+        "uv_degenerate_area_fraction": (degenerate_area / total_area) if total_area else 0.0,
+        "uv_degenerate_silent_samples": float(n_silent),
+        "uv_degenerate_misattribution_mm": worst_gap * scale * 1000.0,
+        "atlas_overlap_cell_fraction": (overlapping / len(cells)) if cells else 0.0,
+        "atlas_overlap_max_gap_mm": overlap_gap * scale * 1000.0,
+        "atlas_overlap_resolution": float(overlap_resolution),
+    }
+
+
+# =============================================================================
+# G2 — 절대 UV 잔차. 삼각형은 **3D 최근접**으로 찾는다(UV 조회로 찾으면 순환이다).
+# =============================================================================
+
+
+def uv_absolute_residuals(
+    placed_triangles: Sequence[tuple[Vec3, Vec3, Vec3]],
+    mesh: Mesh,
+    hits: Sequence[Vec3],
+    hit_uvs: Sequence[tuple[float, float]],
+    *,
+    tie_eps_m: float = G2_TIE_EPS_M,
+) -> tuple[list[float], list[float], list[int], int]:
+    """`|obs - UV_ATLAS_TEXELS · mesh_uv|`를 평가 착탄점마다 잰다.
+
+    삼각형은 배치된 메시에서 **3D 거리로** 고른다. UV 조회로 고르면
+    `obs = 2048 · mesh_uv`가 구성상 참이 되어 실패할 수 없는 단언이 된다 —
+    그 금지를 테스트가 지킨다(`test_level_mesh.py`의 순환 방지 검사).
+
+    반환: `(거리 m, 잔차 텍셀, 최근접 삼각형 인덱스, 시임 동점 개수)`.
+    """
+    distances: list[float] = []
+    residuals: list[float] = []
+    triangle_ids: list[int] = []
+    ties = 0
+    for point, obs in zip(hits, hit_uvs):
+        per: list[tuple[float, int, Vec3]] = []
+        best = math.inf
+        for i, (a, b, c) in enumerate(placed_triangles):
+            cp = _closest_point_on_triangle(point, a, b, c)
+            d = math.dist(point, cp)
+            per.append((d, i, cp))
+            if d < best:
+                best = d
+        near = [row for row in per if row[0] <= best + tie_eps_m]
+        if len(near) > 1:
+            ties += 1
+        residual = math.inf
+        for _d, i, cp in near:
+            bary = _barycentric(cp, *placed_triangles[i])
+            mesh_u, mesh_v = triangle_uv(mesh, i, bary)
+            residual = min(
+                residual,
+                math.hypot(
+                    obs[0] - UV_ATLAS_TEXELS * mesh_u, obs[1] - UV_ATLAS_TEXELS * mesh_v
+                ),
+            )
+        distances.append(best)
+        residuals.append(residual)
+        triangle_ids.append(near[0][1])
+    return distances, residuals, triangle_ids, ties
+
+
+def _correspondences(
+    mesh: Mesh,
+    index: UvIndex,
+    hits: Sequence[Vec3],
+    hit_uvs: Sequence[tuple[float, float]],
+    convention: tuple[str, tuple[float, float]] = ("identity", (0.0, 0.0)),
+) -> tuple[list[Vec3], list[Vec3], float, float]:
+    """관측 UV를 `convention`으로 읽어 (모델점, 월드점) 대응을 만든다.
+
+    기본값은 `UV_CONVENTION`이 고른 가지다. 다른 값은 **G9(규약족 대조)만** 쓴다 —
+    `verify_alignment`은 언제나 기본 가지로 재므로, 뒤집힌 규약에서 나온 해는
+    G2에서 자기 규약이 아니라 **이름 붙은 규약**으로 평가받는다.
+    """
+    model_points: list[Vec3] = []
+    world_points: list[Vec3] = []
+    miss = 0
+    ambiguous = 0
+    family, k = convention
+    for point, obs in zip(hits, hit_uvs):
+        kind, ti, bary = uv_lookup(index, _apply_convention(family, k, obs))
+        if kind == "miss":
+            miss += 1
+            continue
+        if kind == "ambiguous":
+            ambiguous += 1
+            continue
+        model_points.append(model_point_for_hit(mesh, ti, bary))  # type: ignore[arg-type]
+        world_points.append(point)
+    n = max(1, len(hits))
+    return model_points, world_points, miss / n, ambiguous / n
+
+
+def _conditioning(points: Sequence[Vec3]) -> tuple[float, list[float]]:
+    n = len(points)
+    if n < 3:
+        return 0.0, [0.0, 0.0, 0.0]
+    mu = _mean(points)
+    cov = [[0.0] * 3 for _ in range(3)]
+    for p in points:
+        q = _sub(p, mu)
+        for a in range(3):
+            for b in range(3):
+                cov[a][b] += q[a] * q[b]
+    cov_mat: Mat3 = tuple(tuple(x / n for x in row) for row in cov)  # type: ignore[assignment]
+    eigenvalues, _vectors = _jacobi_eigen_sym3(cov_mat)
+    sing = [math.sqrt(max(v, 0.0)) for v in eigenvalues]
+    return (sing[2] / sing[0] if sing[0] > 0 else 0.0), sing
+
+
+def _normal_diversity(mesh: Mesh, triangle_ids: Sequence[int], min_share: float = 0.05) -> int:
+    """평가 착탄점의 `min_share` 이상을 각각 담는, 서로 다른 면 법선의 개수."""
+    counts: dict[int, int] = {}
+    for t in triangle_ids:
+        counts[t] = counts.get(t, 0) + 1
+    clusters: list[tuple[Vec3, int]] = []
+    for t, count in counts.items():
+        normal = _tri_normal(_tri_vertices(mesh, t))
+        if normal is None:
+            continue
+        for k, (existing, total) in enumerate(clusters):
+            if abs(_dot(existing, normal)) > 0.99:
+                clusters[k] = (existing, total + count)
+                break
+        else:
+            clusters.append((normal, count))
+    total_hits = max(1, len(triangle_ids))
+    return sum(1 for _n, count in clusters if count / total_hits >= min_share)
+
+
+# =============================================================================
+# verify_alignment — 게이트 전부를 계산하는 독립 함수. 재적합하지 않는다.
+# =============================================================================
+
+
+def verify_alignment(
+    mesh: Mesh,
+    alignment: Alignment,
+    hits: Sequence[Vec3],
+    hit_uvs: Sequence[tuple[float, float]],
+    *,
+    index: UvIndex | None = None,
+    seed: int = 0,
+) -> dict[str, float]:
+    """기록된 정렬 하나를 **다시 적합하지 않고** 게이트 지표로 재검사한다.
+
+    `build_level_alignment`이 쓰는 것과 같은 함수다 — 그래서 커밋된 JSON을 나중에
+    그대로 먹여 볼 수 있고, 게이트 자체가 회귀 테스트의 대상이 된다.
+    """
+    if index is None:
+        index = build_uv_index(mesh)
+    declared_scale = _declared_scale(mesh.declared)
+    rotation = _rotation_matrix(alignment)
+    placed = _world_tris_for(
+        mesh.vertices, mesh.triangles, rotation, alignment.scale, alignment.translation
+    )
+    distances, residuals, triangle_ids, ties = uv_absolute_residuals(placed, mesh, hits, hit_uvs)
+    d_med, d_p95, d_max = _percentiles(distances)
+    r_med, r_p95, r_max = _percentiles(residuals)
+
+    model_points, world_points, miss, ambiguous = _correspondences(mesh, index, hits, hit_uvs)
+    stats = congruence_stats(model_points, world_points, declared_scale, seed=seed)
+
+    # G4의 비등방성은 **기록된 회전**이 아니라 이 데이터가 유사변환과 얼마나 맞는지의
+    # 성질이다. 기록된 회전을 직교화하면 언제나 0이 나와 실패할 수 없는 단언이 된다.
+    # 그래서 주어진 착탄점으로 12자유도 아핀을 다시 세워 그 선형부의 비등방성을 잰다
+    # (정렬을 다시 맞추는 것이 아니다 — 기록된 회전·평행이동·스케일은 그대로 쓴다).
+    try:
+        linear, _offset = solve_affine_12(model_points, world_points)
+        _r, _c, aniso, _sign, _sv = orthogonalize(linear)
+    except ValueError:
+        aniso = math.inf
+    cond, _cloud_sing = _conditioning(model_points)
+    identity = rotation_math.matmul(rotation, rotation_math.transpose(rotation))
+    orthogonality_error = max(
+        abs(identity[r][c] - (1.0 if r == c else 0.0)) for r in range(3) for c in range(3)
+    )
+
+    return {
+        "n_hits": float(len(hits)),
+        "median_mm": d_med * 1000.0,
+        "p95_mm": d_p95 * 1000.0,
+        "max_mm": d_max * 1000.0,
+        "uv_abs_resid_median_texel": r_med,
+        "uv_abs_resid_p95_texel": r_p95,
+        "uv_abs_resid_max_texel": r_max,
+        "uv_seam_tie_fraction": ties / max(1, len(hits)),
+        # **게이트되는 이름이 아니다.** 조회 실패·모호도의 문턱(0.002)은 부분표본의
+        # 표집 잡음 안에 있다 — 400점 표본이면 한 점이 1/400 = 0.0025로 문턱을 넘어
+        # 판정을 시드가 정한다(실측: 레벨 5). 그래서 게이트가 읽는
+        # `uv_miss_fraction`/`uv_ambiguous_fraction`은 `build_level_alignment`이
+        # **착탄점 전량**에서 재서 넣고, 여기서는 진단용 이름으로만 남긴다.
+        "eval_uv_miss_fraction": miss,
+        "eval_uv_ambiguous_fraction": ambiguous,
+        "linear_aniso": aniso,
+        "rotation_orthogonality_error": orthogonality_error,
+        "scale_ratio_to_declared": abs(alignment.scale / declared_scale - 1.0),
+        "det_sign": _mat3_det(rotation),
+        "cond_min_over_max": cond,
+        "distinct_normals": float(_normal_diversity(mesh, triangle_ids)),
+        "surface_coverage_fraction": len(set(triangle_ids)) / max(1, len(mesh.triangles)),
+        **stats,
+    }
+
+
+_LOWER_IS_BETTER: Final[tuple[str, ...]] = (
+    "g0_median_mm",
+    "g0_p95_mm",
+    "g0_max_mm",
+    "uv_degenerate_misattribution_mm",
+    "atlas_overlap_max_gap_mm",
+    "uv_miss_fraction",
+    "uv_ambiguous_fraction",
+    "uv_abs_resid_p95_texel",
+    "uv_abs_resid_max_texel",
+    "median_mm",
+    "p95_mm",
+    "max_mm",
+    "fit_linear_aniso",
+    "linear_aniso",
+    "scale_ratio_to_declared",
+)
+_HIGHER_IS_BETTER: Final[tuple[str, ...]] = ("cond_min_over_max", "distinct_normals")
+
+
+def gate_failures(measured: dict[str, float]) -> list[tuple[str, object, str]]:
+    """`GATES`와 대조해 통과하지 못한 항목을 (이름, 잰 값, 필요 조건)으로 낸다."""
+    failures: list[tuple[str, object, str]] = []
+    for key in _LOWER_IS_BETTER:
+        if key not in measured:
+            continue
+        value = measured[key]
+        if not (value <= GATES[key]):
+            failures.append((key, value, f"<= {GATES[key]}"))
+    for key in _HIGHER_IS_BETTER:
+        if key not in measured:
+            continue
+        value = measured[key]
+        if not (value >= GATES[key]):
+            failures.append((key, value, f">= {GATES[key]}"))
+    return failures
+
+
+# =============================================================================
+# 솔버 — UV 색인 조회 → 12자유도 폐형식 → 직교화 → t 재적합
+# =============================================================================
+
+
+def solve_alignment_uv(
     mesh: Mesh,
     hits: Sequence[Vec3],
     *,
     hit_uvs: Sequence[tuple[float, float]],
     level: int = 1,
-    fit_sample: int = DEFAULT_FIT_SAMPLE,
-    eval_cap: int = DEFAULT_EVAL_CAP,
-    top_k: int = 8,
-    icp_iters: int = 15,
+    index: UvIndex | None = None,
+    fit_sample: int = 2000,
+    eval_cap: int = 1500,
+    trim_fraction: float = 0.15,
     seed: int = 0,
-    min_dominant_fraction: float = DEFAULT_MIN_DOMINANT_FRACTION,
-) -> Alignment:
-    """실측 착탄점 `hits`(+ 짝을 이루는 `hit_uvs`)에 `mesh`를 맞추는 Umeyama
-    유사변환을 푼다. 반환된 `Alignment.provenance`는 항상 `"solved"`다.
+    convention: tuple[str, tuple[float, float]] = ("identity", (0.0, 0.0)),
+) -> tuple[Alignment, dict[str, float], list[Vec3], list[tuple[float, float]]]:
+    """관측 UV로 대응을 만들어 정렬을 푼다. 시드도, ICP도, 면 판별 휴리스틱도 없다.
 
-    선언된 변환은 씬 수준 회전이 빠져 있어 그대로 쓰면 미터 단위로 어긋난다
-    (모듈 독스트링). 그래서 선언된 회전에 정육면체 회전 24개를 합성해 후보를 만들고,
-    실측 범위와 가장 가까운 `top_k`개를 점-표면 ICP로 정련한다.
-
-    **앞/뒤 면 대칭 함정과 그 해소 (리뷰 B1).** 레벨 1의 메시는 얇은 양면 패널이다
-    — 두 큰 면이 얇은 축을 사이에 두고 마주 본다. 초기 시드의 평행이동을 전체
-    정점의 평균으로 두면 정확히 두 면의 중간이 되어 대칭이 되고, ICP가 스스로 못
-    깬다(각 착탄점이 두 면 아무 쪽에나 반반 대응되는 안정된 고정점). 시드마다 얇은
-    축으로 평행이동을 미리 밀어(두 부호 다) 대칭을 깬다.
-
-    **그런데 거리(RMS/median/p95/max)는 어느 면이 옳은지 가릴 능력이 없다** —
-    착탄점이 정확히 평면이라, 진짜 변환과 "거울 대칭"(얇은 축과 수직인 평면 기준
-    180°만큼 다른, 그러나 여전히 고유(det=+1) 회전인) 변환 둘 다 그 평면에서
-    수직거리 ~0을 낸다. 실측으로 확인했다: RMS만으로 후보를 고르면 10번 중 5번이
-    잘못된 면으로 수렴한다(회전·평행이동·기록되는 max_mm이 실행마다 흔들리는데,
-    유일하게 안정된 건 스케일뿐이었다).
-
-    **UV R²도 한 겹 더 있는 대칭을 못 가른다(리뷰 C2/D1).** 한쪽 면으로 수렴한
-    뒤에도, 그 면 안에 최소 네 갈래(부호 조합 `++`/`--`/`-+`/`+-`)가 남는다 — 크기·
-    R²는 다 똑같다(직접 재현: 넷 다 UV R² 0.9999+, 기울기 크기 ~2048). 둘은 얇은
-    축(판 법선) 둘레 180° 회전(Rx180)으로 관계되어 두 기울기가 함께 뒤집히고
-    (`++`↔`--`), 다른 둘은 판 안의 축 둘레 180° 회전에서 와서 하나만 뒤집힌다
-    (`-+`↔`+-`) — 첫 커밋(`ed71ce2`)이 실제로 이 후자 쪽이었다(`EXPECTED_UV_SLOPE`
-    독스트링 참고). `abs(slope)`나 R²는 부호를 안 보므로 넷 다 못 가른다. 그래서
-    세 단계로 고른다: (1) 대응이 한쪽 면에 `min_dominant_fraction` 이상 쏠린
-    후보만 남긴다(면 대칭 함정을 못 벗어난 후보를 거른다), (2) R²가 충분히 높은
-    (`MIN_UV_R2_FOR_SIGN_CHECK` 이상) 후보 중에서 두 기울기 다 `EXPECTED_UV_SLOPE`
-    에 가장 가까운 것을 고른다 — 이게 네 갈래 중 하나를 결정적으로 고른다(다른
-    셋은 두 축 중 최소 하나가 목표에서 ~4096 떨어져 있어 절대 안 뽑힌다).
-    `EXPECTED_UV_SLOPE`는 **측정값이 아니라 고정한 가지**다 — 그 상수의 독스트링에
-    이유가 있다. (2)를 만족하는 후보가 없으면 R²가 가장 높은 것으로 물러선다.
-
-    선택된 면·UV 회귀 결과는 `Alignment.fit`에 `face_sign`/`dominant_face_fraction`/
-    `uv_slope_u`/`uv_r2_u`/`uv_slope_v`/`uv_r2_v`/`uv_n`으로 남는다(리뷰 B2) — 다음
-    태스크의 메시 앵커 검사가 거리 대신 이 (부호 있는) UV 값으로 다시 설계된다.
+    반환: `(alignment, measured, eval_hits, eval_uvs)`. `measured`는 `verify_alignment`이
+    낸 게이트 지표 전부이고, `eval_*`은 **적합에 쓰이지 않은** 홀드아웃이다.
     """
     if not hits:
-        raise ValueError("solve_alignment: no hit points given")
+        raise ValueError("solve_alignment_uv: no hit points given")
     if len(hits) != len(hit_uvs):
-        raise ValueError("solve_alignment: hits and hit_uvs must be the same length, index-paired")
-    if not mesh.triangles:
-        raise ValueError("solve_alignment: mesh has no triangles")
-    if not mesh.uv_indices:
+        raise ValueError("solve_alignment_uv: hits and hit_uvs must be index-paired")
+    if index is None:
+        index = build_uv_index(mesh)
+
+    # 한 순열을 **겹치지 않게** 자른다. 옛 코드는 같은 rng에서 두 번 독립 추출해
+    # fit/eval이 거의 전부 겹쳤다 — 기록된 fit 통계가 홀드아웃이 아니었다는 뜻이다.
+    rng = random.Random(seed)
+    order = list(range(len(hits)))
+    rng.shuffle(order)
+    fit_idx = order[:fit_sample]
+    eval_idx = order[fit_sample : fit_sample + eval_cap]
+    if not eval_idx:
         raise ValueError(
-            "solve_alignment: mesh has no uv_indices — cannot disambiguate the correct "
-            "face from a distance-only fit (see B1/B2 in the module docstring)"
+            f"solve_alignment_uv: {len(hits)} hits cannot supply a disjoint holdout "
+            f"after a fit sample of {fit_sample}"
         )
 
-    declared_rotation = _declared_rotation(mesh.declared)
-    declared_scale = _declared_scale(mesh.declared)
+    fit_hits = [hits[i] for i in fit_idx]
+    fit_uvs = [hit_uvs[i] for i in fit_idx]
+    eval_hits = [hits[i] for i in eval_idx]
+    eval_uvs = [hit_uvs[i] for i in eval_idx]
 
-    hit_list = list(hits)
-    uv_list = list(hit_uvs)
-    n_hits = len(hit_list)
-    hit_extent = _extents(hit_list)
-    thin_axis = _thin_axis_index(mesh.vertices)
-    thin_extent = _extents(mesh.vertices)[thin_axis]
-    # 대칭을 깨는 데 필요한 만큼만 민다 — 두께의 몇 % 정도. 너무 작으면 부동소수
-    # 잡음에 묻히고, 너무 크면 시드가 원래 놓일 자리에서 멀어진다.
-    nudge = max(thin_extent * 0.05, 1e-6)
-    face_sign_by_triangle = _face_sign_by_triangle(mesh.vertices, mesh.triangles, thin_axis)
+    src, dst, _miss, _ambiguous = _correspondences(mesh, index, fit_hits, fit_uvs, convention)
+    if len(src) < 50:
+        raise ValueError(
+            f"solve_alignment_uv: only {len(src)} usable correspondences from "
+            f"{len(fit_hits)} fit hits — the observed UVs do not land on this atlas"
+        )
 
-    rng = random.Random(seed)
-    fit_idx = rng.sample(range(n_hits), min(fit_sample, n_hits))
-    eval_idx = rng.sample(range(n_hits), min(eval_cap, n_hits))
-    fit_target = [hit_list[i] for i in fit_idx]
-    fit_target_uv = [uv_list[i] for i in fit_idx]
-    eval_sample = [hit_list[i] for i in eval_idx]
-    eval_sample_uv = [uv_list[i] for i in eval_idx]
-    mu_t = _mean(fit_target)
-
-    seed_rotations = _prefilter_seed_rotations(mesh.vertices, declared_rotation, hit_extent, top_k)
-
-    candidates: list[dict[str, object]] = []
-    for seed_r in seed_rotations:
-        c_seed = declared_scale
-        seeded_pts = [rotation_math.matvec(seed_r, v) for v in mesh.vertices]  # type: ignore[arg-type]
-        mu_s = _mean(seeded_pts)  # type: ignore[arg-type]
-        t_seed_centered = tuple(mu_t[k] - c_seed * mu_s[k] for k in range(3))
-        nudge_raw = [0.0, 0.0, 0.0]
-        nudge_raw[thin_axis] = nudge
-        nudge_world = rotation_math.matvec(seed_r, tuple(nudge_raw))  # type: ignore[arg-type]
-        for sign in (1.0, -1.0):
-            t_seed = tuple(
-                t_seed_centered[k] + sign * c_seed * nudge_world[k] for k in range(3)
-            )
-            r_fit, c_fit, t_fit, _rms, ti_list = _icp_surface(
-                mesh.vertices, mesh.triangles, fit_target, seed_r, c_seed, t_seed, iters=icp_iters
-            )
-            dom_sign, dom_frac = _dominant_face(face_sign_by_triangle, ti_list)
-            world_tris = _world_tris_for(mesh.vertices, mesh.triangles, r_fit, c_fit, t_fit)  # type: ignore[arg-type]
-            uv_stats = _uv_agreement(
-                mesh, fit_target, fit_target_uv, ti_list, world_tris, dom_sign, face_sign_by_triangle
-            )
-            candidates.append(
-                {
-                    "r": r_fit,
-                    "c": c_fit,
-                    "t": t_fit,
-                    "dom_sign": dom_sign,
-                    "dom_frac": dom_frac,
-                    "uv_r2": min(uv_stats["uv_r2_u"], uv_stats["uv_r2_v"]),
-                    "uv_slope_u": uv_stats["uv_slope_u"],
-                    "uv_slope_v": uv_stats["uv_slope_v"],
-                    # 목표 부호(EXPECTED_UV_SLOPE)까지 거리 — 얇은 축 180도 대칭의
-                    # 두 orientation은 R²·크기가 같으므로 이 항이 실제로 갈라야 한다.
-                    "sign_error": (uv_stats["uv_slope_u"] - EXPECTED_UV_SLOPE) ** 2
-                    + (uv_stats["uv_slope_v"] - EXPECTED_UV_SLOPE) ** 2,
-                }
-            )
-
-    converged = [c for c in candidates if c["dom_frac"] >= min_dominant_fraction]  # type: ignore[operator]
-    pool = converged if converged else candidates
-
-    # 1단계: R²가 충분한 후보만(면은 맞았는지 이미 걸렀으니 여기서는 선형 적합이
-    # 정말 좋은지만 본다). 2단계: 그 중 목표 부호에 가장 가까운 것 — 이게 얇은 축
-    # 180도 대칭(리뷰 C2)을 가른다. 부호 확인을 통과하는 후보가 없으면(R²가 다
-    # 낮으면) R²로 물러선다 — 그 경우 부호 대칭 이전에 더 근본적인 문제가 있다는
-    # 뜻이라 부호로 고르는 것 자체가 의미가 없다.
-    sign_checkable = [c for c in pool if c["uv_r2"] >= MIN_UV_R2_FOR_SIGN_CHECK]  # type: ignore[operator]
-    if sign_checkable:
-        best = min(sign_checkable, key=lambda c: c["sign_error"])  # type: ignore[arg-type]
-    else:
-        best = max(pool, key=lambda c: c["uv_r2"])  # type: ignore[arg-type]
-
-    r_fit: Mat3 = best["r"]  # type: ignore[assignment]
-    c_fit: float = best["c"]  # type: ignore[assignment]
-    t_fit: Vec3 = best["t"]  # type: ignore[assignment]
-    dom_sign: float = best["dom_sign"]  # type: ignore[assignment]
-
-    world_tris = _world_tris_for(mesh.vertices, mesh.triangles, r_fit, c_fit, t_fit)
-    distances: list[float] = []
-    final_ti: list[int] = []
-    for p in eval_sample:
-        d, _cp, ti = _nearest_on_mesh(p, world_tris)
-        distances.append(d)
-        final_ti.append(ti)
-    _final_sign, final_dom_frac = _dominant_face(face_sign_by_triangle, final_ti)
-    uv_final = _uv_agreement(
-        mesh, eval_sample, eval_sample_uv, final_ti, world_tris, dom_sign, face_sign_by_triangle
+    linear, offset = solve_affine_12(src, dst)
+    ranked = sorted(
+        range(len(src)),
+        key=lambda i: math.dist(
+            tuple(sum(linear[d][k] * src[i][k] for k in range(3)) + offset[d] for d in range(3)),
+            dst[i],
+        ),
     )
+    keep = ranked[: max(50, int(len(src) * (1.0 - trim_fraction)))]
+    linear, offset = solve_affine_12([src[i] for i in keep], [dst[i] for i in keep])
 
-    fit = _fit_stats(distances)
-    fit["face_sign"] = dom_sign
-    fit["dominant_face_fraction"] = final_dom_frac
-    fit.update(uv_final)
+    rotation, scale, fit_aniso, _det_sign, _sing = orthogonalize(linear)
 
-    return Alignment(
+    # R, c를 고정하고 t만 다시 맞춘다 — 직교화가 선형부를 바꿨으므로 offset은 낡았다.
+    acc = [0.0, 0.0, 0.0]
+    for i in keep:
+        rv = rotation_math.matvec(rotation, src[i])
+        for d in range(3):
+            acc[d] += dst[i][d] - scale * rv[d]
+    translation: Vec3 = tuple(x / len(keep) for x in acc)  # type: ignore[assignment]
+
+    alignment = Alignment(
         level=level,
         provenance="solved",
-        rotation=tuple(r_fit[r][c] for r in range(3) for c in range(3)),
-        translation=t_fit,
-        scale=c_fit,
-        declared_scale=declared_scale,
-        fit=fit,
+        rotation=tuple(rotation[r][c] for r in range(3) for c in range(3)),
+        translation=translation,
+        scale=scale,
+        declared_scale=_declared_scale(mesh.declared),
+        fit={},
     )
+    measured = verify_alignment(mesh, alignment, eval_hits, eval_uvs, index=index, seed=seed)
+    # 이 해를 실제로 낸 적합의 등방성. `verify_alignment`이 내는 `linear_aniso`는
+    # 기록된 규약(identity)의 대응으로 다시 세운 것이라 정렬·규약 오류에 둔감하다.
+    measured["fit_linear_aniso"] = fit_aniso
+    measured["fit_n"] = float(len(keep))
+    measured["fit_eval_overlap"] = float(len(set(fit_idx) & set(eval_idx)))
+    return alignment, measured, eval_hits, eval_uvs
+
+
+# =============================================================================
+# G8 — 적대적 대조. 매 빌드 돌린다.
+# =============================================================================
+
+
+def _mirror_matrices() -> list[Mat3]:
+    out: list[Mat3] = []
+    for axis in range(3):
+        m = [[1.0 if i == j else 0.0 for j in range(3)] for i in range(3)]
+        m[axis][axis] = -1.0
+        out.append(tuple(tuple(row) for row in m))  # type: ignore[arg-type]
+    return out
+
+
+def adversarial_contrast(
+    mesh: Mesh,
+    alignment: Alignment,
+    hits: Sequence[Vec3],
+    hit_uvs: Sequence[tuple[float, float]],
+    *,
+    sample: int = 60,
+) -> dict[str, float]:
+    """해에 정육면체 회전 24개와 주평면 반사 3개를 **모델 중심에서** 합성해 G2를 재측정.
+
+    항등이 유일 최소여야 하고, 2등이 `GATES["adversarial_runner_up_texel"]`를 넘어야
+    한다. 통계는 **잔차 중앙값(텍셀)**이고 표본은 홀드아웃 착탄점의 앞 `sample`개다
+    — 어느 통계·어느 중심·어느 표본인지 적어 둔다(앞선 조사에서 이 수가 출처와 다른
+    라벨로 인용된 전례가 있다).
+    """
+    rotation = _rotation_matrix(alignment)
+    centre = _mean(mesh.vertices)
+    sample_hits = list(hits[:sample])
+    sample_uvs = list(hit_uvs[:sample])
+
+    def median_residual(rot: Mat3, trans: Vec3) -> float:
+        placed = _world_tris_for(mesh.vertices, mesh.triangles, rot, alignment.scale, trans)
+        _d, residuals, _t, _ties = uv_absolute_residuals(placed, mesh, sample_hits, sample_uvs)
+        return _percentiles(residuals)[0]
+
+    identity_score = median_residual(rotation, alignment.translation)
+    runner_up = math.inf
+    n_variants = 0
+    for m in _cube_rotations() + _mirror_matrices():
+        if all(
+            abs(m[r][c] - (1.0 if r == c else 0.0)) < 1e-12 for r in range(3) for c in range(3)
+        ):
+            continue
+        n_variants += 1
+        rot = rotation_math.matmul(rotation, m)
+        shift = _sub(centre, rotation_math.matvec(m, centre))
+        r_shift = rotation_math.matvec(rotation, shift)
+        trans: Vec3 = tuple(
+            alignment.translation[d] + alignment.scale * r_shift[d] for d in range(3)
+        )
+        runner_up = min(runner_up, median_residual(rot, trans))
+    return {
+        "adversarial_identity_texel": identity_score,
+        "adversarial_runner_up_texel": runner_up,
+        "adversarial_variants": float(n_variants),
+        "adversarial_sample": float(len(sample_hits)),
+    }
+
+
+# =============================================================================
+# G9 — 규약족 대조. `UV_CONVENTION`이 고른 가지가 실제로 이기는지 매 빌드 확인한다.
+# =============================================================================
+
+UV_CONVENTION_FAMILIES: Final[tuple[str, ...]] = ("point", "u", "v")
+
+
+def _apply_convention(family: str, k: tuple[float, float], obs: tuple[float, float]) -> tuple[float, float]:
+    u = obs[0] / UV_ATLAS_TEXELS
+    v = obs[1] / UV_ATLAS_TEXELS
+    if family == "identity":
+        return (u, v)
+    if family == "point":
+        return (k[0] - u, k[1] - v)
+    if family == "u":
+        return (k[0] - u, v)
+    if family == "v":
+        return (u, k[1] - v)
+    raise ValueError(f"unknown UV convention family {family!r}")
+
+
+def _convention_congruence(
+    mesh: Mesh,
+    index: UvIndex,
+    hits: Sequence[Vec3],
+    hit_uvs: Sequence[tuple[float, float]],
+    family: str,
+    k: tuple[float, float],
+    declared_scale: float,
+    *,
+    n_pairs: int = 400,
+) -> tuple[float, float]:
+    model_points: list[Vec3] = []
+    world_points: list[Vec3] = []
+    for point, obs in zip(hits, hit_uvs):
+        kind, ti, bary = uv_lookup(index, _apply_convention(family, k, obs))
+        if kind != "hit":
+            continue
+        model_points.append(model_point_for_hit(mesh, ti, bary))  # type: ignore[arg-type]
+        world_points.append(point)
+    hit_fraction = len(model_points) / max(1, len(hits))
+    if len(model_points) < 30:
+        return math.inf, hit_fraction
+    stats = congruence_stats(
+        model_points, world_points, declared_scale, seed=1, n_pairs=n_pairs
+    )
+    return stats["g0_median_mm"], hit_fraction
+
+
+def search_convention_candidates(
+    mesh: Mesh,
+    index: UvIndex,
+    hits: Sequence[Vec3],
+    hit_uvs: Sequence[tuple[float, float]],
+    *,
+    seed: int = 0,
+    sample: int = 150,
+    step: float = 0.02,
+) -> list[tuple[str, tuple[float, float], float]]:
+    """뒤집힌 UV 규약이 성립할 수 있는 `K`를 찾는다. 목적함수는 G0 합동성(정렬 무관).
+
+    성긴 격자로 걸러 국소 정련한다. 족별 최선 하나씩만 돌려준다 — 그 해들을
+    `build_level_alignment`이 실제로 풀어 게이트에 건다.
+    """
+    rng = random.Random(seed)
+    declared_scale = _declared_scale(mesh.declared)
+    picks = rng.sample(range(len(hits)), min(sample, len(hits)))
+    sample_hits = [hits[i] for i in picks]
+    sample_uvs = [hit_uvs[i] for i in picks]
+    probe_hits, probe_uvs = sample_hits[:30], sample_uvs[:30]
+    grid = [i * step for i in range(-10, int(round(2.2 / step)) + 1)]
+
+    out: list[tuple[str, tuple[float, float], float]] = []
+    for family in UV_CONVENTION_FAMILIES:
+        if family == "point":
+            candidates = [(a, b) for a in grid for b in grid]
+        elif family == "u":
+            candidates = [(a, 0.0) for a in grid]
+        else:
+            candidates = [(0.0, b) for b in grid]
+        kept: list[tuple[float, float]] = []
+        for k in candidates:
+            landed = sum(
+                1
+                for obs in probe_uvs
+                if uv_lookup(index, _apply_convention(family, k, obs))[0] == "hit"
+            )
+            if landed >= 0.8 * len(probe_uvs):
+                kept.append(k)
+        scored: list[tuple[float, tuple[float, float]]] = []
+        for k in kept:
+            score, fraction = _convention_congruence(
+                mesh, index, sample_hits, sample_uvs, family, k, declared_scale
+            )
+            if fraction > 0.85:
+                scored.append((score, k))
+        if not scored:
+            continue
+        scored.sort()
+        best_score, best_k = scored[0]
+        current = list(best_k)
+        stride = step / 2.0
+        for _ in range(8):
+            local: list[tuple[float, tuple[float, float]]] = []
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    if family == "u" and dy:
+                        continue
+                    if family == "v" and dx:
+                        continue
+                    k = (current[0] + dx * stride, current[1] + dy * stride)
+                    score, fraction = _convention_congruence(
+                        mesh, index, sample_hits, sample_uvs, family, k, declared_scale, n_pairs=600
+                    )
+                    if fraction > 0.85:
+                        local.append((score, k))
+            if not local:
+                break
+            local.sort()
+            if local[0][1] == tuple(current):
+                stride /= 2.0
+            current = list(local[0][1])
+            best_score = min(best_score, local[0][0])
+        out.append((family, (current[0], current[1]), best_score))
+    return out
 
 
 # =============================================================================
 # level_alignment.json 재생성 (`python3 level_mesh.py`)
 # =============================================================================
 
+LEVEL_FBX: Final[dict[int, str]] = {
+    1: "learning_mode_lv.1_rev.1.1.fbx",
+    2: "learning_mode_lv.2_rev.1.2.fbx",
+    3: "learning_mode_lv.3_rev.1.1.fbx",
+    4: "learning_mode_lv.4_rev.3.fbx",
+    5: "learning_mode_lv.5_rev.4.fbx",
+    6: "learning_mode_lv.6_rev.3.13.fbx",
+    7: "learning_mode_lv.7_rev.2.1.fbx",
+    8: "learning_mode_lv.8_rev.1.1.fbx",
+    9: "learning_mode_lv.9_rev.4.fbx",
+    10: "learning_mode_lv.10_rev.1.2.fbx",
+}
 
-def _collect_level_hits(
-    level: int, professionals_root: Path = DEFAULT_PROFESSIONALS_ROOT, min_hits: int = DEFAULT_EVAL_CAP
-) -> tuple[list[Vec3], list[tuple[float, float]]]:
-    """실전모드(`1-A` 등)를 뺀 `<level>_*.csv` 세션들에서 분사 중 착탄점과 그 UV를 모은다.
 
-    CSV 리더를 새로 만들지 않는다 — `simulator_csv.read_rows` /
-    `measured_pose.measured_frames`를 그대로 쓴다. UV도 함께 모은다(리뷰 B1/B2가
-    면 판정·`fit`의 UV 근거에 쓴다) — 착탄점만으로는 앞/뒤 면을 가릴 수 없다.
+def collect_level_hits_by_session(
+    level: int,
+    professionals_root: Path = DEFAULT_PROFESSIONALS_ROOT,
+    min_hits: int = DEFAULT_EVAL_CAP,
+) -> tuple[list[Vec3], list[tuple[float, float]], list[str]]:
+    """학습모드 `<level>_*.csv`에서 착탄점·UV·**세션 이름**을 모은다.
+
+    **세션을 가로질러 표집한다.** 옛 구현은 정렬된 glob 순서로 파일을 읽다가
+    `min_hits`에 닿으면 멈췄고, 그 결과 레벨 6·7·10은 1인 1세션이 전부인 것처럼
+    보였다 — 실제로는 모든 레벨에 파일 45~49개, 세션 디렉터리 13~17개가 있다.
+    그 조기 중단이 G6(교차 세션 홀드아웃)를 무력화하고 있었다. 여기서는 세션마다
+    한 파일씩 돌아가며 읽고, 파일당 상한을 둬서 한 세션이 표본을 삼키지 못하게 한다.
     """
     import measured_pose
     import simulator_csv
 
+    paths = sorted(professionals_root.glob(f"**/{level}_*.csv"))
+    if not paths:
+        return [], [], []
+    by_session: dict[str, list[Path]] = {}
+    for path in paths:
+        session = "/".join(path.relative_to(professionals_root).parts[:-1])
+        by_session.setdefault(session, []).append(path)
+    sessions = sorted(by_session)
+    per_file_cap = max(1, 3 * min_hits // len(paths))
+
     hits: list[Vec3] = []
     uvs: list[tuple[float, float]] = []
-    for path in sorted(professionals_root.glob(f"**/{level}_*.csv")):
-        rows = simulator_csv.read_rows(path)
-        for frame in measured_pose.measured_frames(rows):
-            if frame.hit is None or frame.uv is None or not frame.spraying:
+    session_ids: list[str] = []
+    queues = {name: list(files) for name, files in by_session.items()}
+    while any(queues.values()) and len(hits) < min_hits:
+        for session in sessions:
+            if not queues[session]:
                 continue
-            hits.append(frame.hit)
-            uvs.append(frame.uv)
-        if len(hits) >= min_hits:
-            break
+            rows = simulator_csv.read_rows(queues[session].pop(0))
+            taken = 0
+            for frame in measured_pose.measured_frames(rows):
+                if frame.hit is None or frame.uv is None or not frame.spraying:
+                    continue
+                hits.append(frame.hit)
+                uvs.append(frame.uv)
+                session_ids.append(session)
+                taken += 1
+                if taken >= per_file_cap:
+                    break
+            if len(hits) >= min_hits:
+                break
+    return hits, uvs, session_ids
+
+
+def _collect_level_hits(
+    level: int,
+    professionals_root: Path = DEFAULT_PROFESSIONALS_ROOT,
+    min_hits: int = DEFAULT_EVAL_CAP,
+) -> tuple[list[Vec3], list[tuple[float, float]]]:
+    """`collect_level_hits_by_session`의 (착탄점, UV) 두 값짜리 얇은 껍데기."""
+    hits, uvs, _sessions = collect_level_hits_by_session(level, professionals_root, min_hits)
     return hits, uvs
+
+
+def _worker_of(session: str) -> str:
+    """세션 이름에서 작업자를 뽑는다 — `김경호_20250831/...` → `김경호`."""
+    head = session.split("/")[0]
+    return head.split("_")[0]
 
 
 def build_level_alignment(
@@ -1367,25 +1935,255 @@ def build_level_alignment(
     min_hits: int = DEFAULT_EVAL_CAP,
     seed: int = 0,
 ) -> dict:
-    """`level_alignment.json`에 들어갈 항목 하나를 만든다. `solve_alignment`을 그대로 쓴다."""
+    """게이트를 전부 통과한 레벨 하나의 JSON 항목. 못 넘으면 `AlignmentRejected`.
+
+    통과 못 한 레벨은 **항목이 생기지 않는다** — 화면이 "검증된 정렬이 없다"고
+    말하고, 권위 있어 보이는 틀린 기하를 그리지 않는다.
+    """
     mesh = read_fbx(fbx_path)
-    hits, hit_uvs = _collect_level_hits(level, professionals_root, min_hits=min_hits)
+    index = build_uv_index(mesh)
+    hits, hit_uvs, sessions = collect_level_hits_by_session(level, professionals_root, min_hits)
     if len(hits) < min_hits:
-        raise ValueError(
-            f"only collected {len(hits)} hits for level {level}, need >= {min_hits} "
-            "(the §D5 pre-registered floor)"
+        raise ValueError(f"only collected {len(hits)} hits for level {level}, need >= {min_hits}")
+
+    # --- G1 (정렬 이전, 메시만) + 착탄점 전량의 조회 통계 ------------------------
+    atlas = audit_atlas(mesh, index, seed=seed)
+    _m, _w, miss_all, ambiguous_all = _correspondences(mesh, index, hits, hit_uvs)
+    atlas["uv_miss_fraction"] = miss_all
+    atlas["uv_ambiguous_fraction"] = ambiguous_all
+    atlas["uv_lookup_sample"] = float(len(hits))
+    # G7의 조건수는 정렬 이전에 성립한다 — 대응 구름(모델 공간)의 성질이다. 레벨 1이
+    # 여기서 떨어진다: 착탄점이 정확히 평면이라 12자유도가 데이터로 결정되지 않는다.
+    atlas["cond_min_over_max"] = _conditioning(_m)[0]
+
+    # --- G7의 조건수는 정렬 이전에 성립한다(대응 구름의 성질) --------------------
+    pre_failures = gate_failures(atlas)
+    if pre_failures:
+        raise AlignmentRejected(level, pre_failures)
+
+    try:
+        alignment, measured, eval_hits, eval_uvs = solve_alignment_uv(
+            mesh, hits, hit_uvs=hit_uvs, level=level, index=index, seed=seed
         )
-    alignment = solve_alignment(
-        mesh, hits, hit_uvs=hit_uvs, level=level, eval_cap=min_hits, seed=seed
+    except ValueError as error:
+        raise AlignmentRejected(level, [("solver", str(error), "a solvable 12-DoF system")]) from error
+
+    measured.update(atlas)
+    measured.update(adversarial_contrast(mesh, alignment, eval_hits, eval_uvs))
+    failures = gate_failures(measured)
+    if not (measured["adversarial_runner_up_texel"] > GATES["adversarial_runner_up_texel"]):
+        failures.append(
+            (
+                "adversarial_runner_up_texel",
+                measured["adversarial_runner_up_texel"],
+                f"> {GATES['adversarial_runner_up_texel']}",
+            )
+        )
+    if not (measured["adversarial_identity_texel"] < measured["adversarial_runner_up_texel"]):
+        failures.append(("adversarial_identity_not_unique_minimum", measured["adversarial_identity_texel"], "< runner-up"))
+
+    # --- G6 교차 세션 홀드아웃 (모든 레벨에 필수) --------------------------------
+    measured.update(_cross_session_check(mesh, index, hits, hit_uvs, sessions, level, seed))
+    if measured["cross_session_pass"] < 1.0:
+        failures.append(("cross_session", measured["cross_session_worst_mm"], "G2/G3 thresholds on a held-out worker"))
+
+    # --- G9 규약족 대조 ----------------------------------------------------------
+    contrast = _convention_contrast(
+        mesh, index, hits, hit_uvs, level, seed, accepted_det_sign=measured["det_sign"]
     )
-    return _entry_from_alignment(alignment, source_fbx=fbx_path.name)
+    measured.update(contrast)
+    if contrast["convention_alternatives_accepted"] > 0.0:
+        failures.append(
+            (
+                "uv_convention",
+                contrast["convention_alternatives_accepted"],
+                "no flipped UV convention may pass the gates",
+            )
+        )
+
+    if failures:
+        raise AlignmentRejected(level, failures)
+
+    alignment = Alignment(
+        level=alignment.level,
+        provenance="solved",
+        rotation=alignment.rotation,
+        translation=alignment.translation,
+        scale=alignment.scale,
+        declared_scale=alignment.declared_scale,
+        fit={k: v for k, v in sorted(measured.items())},
+    )
+    entry = _entry_from_alignment(alignment, source_fbx=fbx_path.name)
+    entry["uv_convention"] = UV_CONVENTION
+    entry["uv_convention_source"] = "measured"
+    entry["handedness_source"] = "data"
+    # G6의 근거: 이 정렬이 몇 명·몇 세션을 설명하는가. 경로 전체는 수집기가 언제든
+    # 다시 낸다 — 여기에는 판정에 쓰이는 요약만 남긴다.
+    entry["workers"] = sorted({_worker_of(name) for name in sessions})
+    entry["session_count"] = len(set(sessions))
+    return entry
+
+
+def _cross_session_check(
+    mesh: Mesh,
+    index: UvIndex,
+    hits: Sequence[Vec3],
+    hit_uvs: Sequence[tuple[float, float]],
+    sessions: Sequence[str],
+    level: int,
+    seed: int,
+) -> dict[str, float]:
+    """한 작업자의 세션으로만 적합하고, 나머지 작업자 전원에서 평가한다.
+
+    **"세션이 하나뿐이면 건너뛴다"는 갈래를 두지 않는다** — 실측상 모든 레벨에
+    작업자 6명·세션 13개 이상이 있고, 예외 갈래는 거부할 입력이 없는 검사를 만든다.
+    """
+    workers: dict[str, list[int]] = {}
+    for i, session in enumerate(sessions):
+        workers.setdefault(_worker_of(session), []).append(i)
+    if len(workers) < 2:
+        return {"cross_session_pass": 0.0, "cross_session_workers": float(len(workers)), "cross_session_worst_mm": math.inf, "cross_session_worst_texel": math.inf}
+    fit_worker = max(workers, key=lambda w: len(workers[w]))
+    fit_rows = workers[fit_worker]
+    other_rows = [i for w, rows in workers.items() if w != fit_worker for i in rows]
+    fit_hits = [hits[i] for i in fit_rows]
+    fit_uvs = [hit_uvs[i] for i in fit_rows]
+    src, dst, _miss, _ambiguous = _correspondences(mesh, index, fit_hits, fit_uvs)
+    if len(src) < 50:
+        return {"cross_session_pass": 0.0, "cross_session_workers": float(len(workers)), "cross_session_worst_mm": math.inf, "cross_session_worst_texel": math.inf}
+    linear, _offset = solve_affine_12(src, dst)
+    rotation, scale, _aniso, _det, _sing = orthogonalize(linear)
+    acc = [0.0, 0.0, 0.0]
+    for p, q in zip(src, dst):
+        rv = rotation_math.matvec(rotation, p)
+        for d in range(3):
+            acc[d] += q[d] - scale * rv[d]
+    translation: Vec3 = tuple(x / len(src) for x in acc)  # type: ignore[assignment]
+    held = Alignment(
+        level=level,
+        provenance="solved",
+        rotation=tuple(rotation[r][c] for r in range(3) for c in range(3)),
+        translation=translation,
+        scale=scale,
+        declared_scale=_declared_scale(mesh.declared),
+        fit={},
+    )
+    rng = random.Random(seed + 991)
+    picks = rng.sample(other_rows, min(600, len(other_rows)))
+    out = verify_alignment(
+        mesh, held, [hits[i] for i in picks], [hit_uvs[i] for i in picks], index=index, seed=seed
+    )
+    ok = (
+        out["p95_mm"] <= GATES["p95_mm"]
+        and out["max_mm"] <= GATES["max_mm"]
+        and out["uv_abs_resid_p95_texel"] <= GATES["uv_abs_resid_p95_texel"]
+        and out["uv_abs_resid_max_texel"] <= GATES["uv_abs_resid_max_texel"]
+    )
+    return {
+        "cross_session_pass": 1.0 if ok else 0.0,
+        "cross_session_workers": float(len(workers)),
+        "cross_session_fit_worker_rows": float(len(fit_rows)),
+        "cross_session_eval_rows": float(len(picks)),
+        "cross_session_worst_mm": out["max_mm"],
+        "cross_session_worst_texel": out["uv_abs_resid_max_texel"],
+    }
+
+
+def _convention_contrast(
+    mesh: Mesh,
+    index: UvIndex,
+    hits: Sequence[Vec3],
+    hit_uvs: Sequence[tuple[float, float]],
+    level: int,
+    seed: int,
+    accepted_det_sign: float,
+    log: bool = True,
+) -> dict[str, float]:
+    """뒤집힌 UV 규약에서 K를 찾아 **실제로 다시 풀고**, 그 해가 거절되는지 본다.
+
+    이것이 브리핑이 요구한 반박 대응의 핵심이다. 앞선 조사가 레벨 8에서
+    `mesh_uv = K - obs/2048` 가지의 해로 179.9998° 뒤집힌 정렬을 만들어 옛 게이트
+    전부를 통과시켰다. 그 공격이 성립한 전제는 "솔버와 게이트가 **같은 뒤집힌 규약**을
+    쓴다"는 것이었다 — 여기서는 게이트(`verify_alignment` → G2)가 언제나 이름 붙은
+    `UV_CONVENTION`으로 재므로, 뒤집힌 규약의 해는 자기 규약이 아니라 기록될 규약으로
+    평가받는다. 실측(레벨 8): u족 K=(0.80031, 0)의 해는 G3 중앙값 0.00284 mm로
+    **거리 게이트를 통과하고** aniso·스케일도 통과한다 — 오직 G2(p95 614 텍셀)와
+    G5(det=+1, 나머지 아홉 레벨과 반대)가 거절한다.
+    """
+    accepted = 0
+    best_rival = math.inf
+    tried = 0
+    min_failures = math.inf
+    for family, k, score in search_convention_candidates(mesh, index, hits, hit_uvs, seed=seed):
+        tried += 1
+        try:
+            _rival, rival_measured, _eh, _eu = solve_alignment_uv(
+                mesh, hits, hit_uvs=hit_uvs, level=level, index=index, seed=seed,
+                fit_sample=1200, eval_cap=400, convention=(family, k),
+            )
+        except ValueError as error:
+            if log:
+                print(f"    G9 [{family} K={tuple(round(x, 5) for x in k)}] unsolvable: {error}")
+            continue
+        rival_failures = gate_failures(rival_measured)
+        # G5: 손잡이가 채택 해와 반대인 후보는 그 자체로 거절 사유다. 이 검사에
+        # 실재하는 거절 입력을 주는 것이 바로 이 규약족 대조다.
+        if rival_measured["det_sign"] * accepted_det_sign < 0:
+            rival_failures.append(("det_sign", rival_measured["det_sign"], f"same sign as {accepted_det_sign}"))
+        min_failures = min(min_failures, len(rival_failures))
+        if not rival_failures:
+            accepted += 1
+        best_rival = min(best_rival, rival_measured["median_mm"])
+        if log:
+            names = ",".join(str(name) for name, _v, _n in rival_failures) or "NOTHING"
+            print(
+                f"    G9 [{family} K={tuple(round(x, 5) for x in k)}] g0={score:.5f} "
+                f"G3med={rival_measured['median_mm']:.5f}mm G2p95={rival_measured['uv_abs_resid_p95_texel']:.4f}tx "
+                f"det={rival_measured['det_sign']:+.3f} -> rejected by {names}"
+            )
+    return {
+        "convention_families_tried": float(tried),
+        "convention_alternatives_accepted": float(accepted),
+        "convention_rival_min_gate_failures": min_failures if math.isfinite(min_failures) else -1.0,
+        # -1.0 = 어느 뒤집힌 규약도 풀리는 해를 내지 못했다.
+        "convention_best_rival_median_mm": best_rival if math.isfinite(best_rival) else -1.0,
+    }
 
 
 def main() -> None:
-    entry = build_level_alignment(1, DEFAULT_MODELINGS_ROOT / "learning_mode_lv.1_rev.1.1.fbx")
+    entries: list[dict] = []
+    rejected: list[dict] = []
+    for level in sorted(LEVEL_FBX):
+        fbx = DEFAULT_MODELINGS_ROOT / LEVEL_FBX[level]
+        try:
+            entries.append(build_level_alignment(level, fbx))
+            print(f"level {level}: accepted", flush=True)
+        except AlignmentRejected as error:
+            rejected.append(
+                {
+                    "level": level,
+                    "provenance": "unverifiable",
+                    "source_fbx": fbx.name,
+                    "rejected_by": [
+                        {"gate": name, "measured": value, "required": need}
+                        for name, value, need in error.failures
+                    ],
+                }
+            )
+            print(f"level {level}: REJECTED — {error}", flush=True)
+
+    # G5: 채택된 항목의 손잡이가 파일 전체에서 같아야 한다. 섞이면 빌드 실패다.
+    signs = {1.0 if e["fit"]["det_sign"] > 0 else -1.0 for e in entries}
+    if len(signs) > 1:
+        raise SystemExit(f"G5 handedness is mixed across accepted entries: {sorted(signs)}")
+
     ALIGNMENT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    ALIGNMENT_PATH.write_text(json.dumps([entry], indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    print(json.dumps(entry, indent=2, ensure_ascii=False))
+    payload = entries + rejected
+    payload.sort(key=lambda e: e["level"])
+    ALIGNMENT_PATH.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
+    print(f"accepted {len(entries)} / rejected {len(rejected)}")
 
 
 if __name__ == "__main__":

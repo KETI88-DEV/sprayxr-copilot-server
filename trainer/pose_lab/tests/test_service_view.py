@@ -239,26 +239,64 @@ def test_weights_cover_every_point_the_layers_draw() -> None:
     assert drawn_points <= set(view["weights"]), (drawn_points, view["weights"])
 
 
-def test_mesh_is_unavailable_for_a_level_with_no_verified_alignment() -> None:
-    """검증된 정렬이 없는 레벨(질의 픽스처는 레벨 10)에서 `available`이 `False`이고
-    기하가 비어 있다(요구사항 6)."""
-    view = _compare()["view"]
-    mesh = view["mesh"]
+def test_mesh_is_unavailable_for_a_level_with_no_entry_at_all() -> None:
+    """`level_alignment.json`에 항목 자체가 없는 레벨에서 `available`이 `False`이고
+    기하가 비어 있다(요구사항 6).
+
+    옛 판본은 질의 픽스처의 레벨 10을 그 예로 썼다 — 그때는 레벨 1만 검증돼 있었기
+    때문이다. **지금 레벨 10은 검증된 정렬을 갖는다**(그것이 이 작업의 목적이다).
+    그래서 이 검사는 "항목 자체가 없는 레벨"로 옮긴다 — `available: False`를 내는
+    세 갈래(항목 없음 / provenance != solved / FBX 파일 없음)는 각각 따로 고정한다.
+    """
+    mesh = service.mesh_block("99")
     assert mesh is not None
     assert mesh["available"] is False
     assert mesh["vertices"] == []
     assert mesh["triangles"] == []
 
 
-def test_mesh_is_available_for_level_1_with_real_vertices() -> None:
-    """레벨 1에서 `available`이 `True`이고 정점이 있다(요구사항 6)."""
-    block = service.mesh_block("1")
+def test_the_query_fixture_level_now_draws_real_geometry() -> None:
+    """레벨 10은 이제 검증된 정렬을 갖는다 — 화면이 벽면을 실제로 그린다.
+
+    이 작업 이전에는 레벨 1만 검증돼 있어 데모에서 레벨 6·10 등을 고르면 작업 공간이
+    뜨지 않았다. 그 상태로 되돌아가면 이 테스트가 빨개진다."""
+    view = _compare()["view"]
+    mesh = view["mesh"]
+    assert mesh is not None
+    assert mesh["available"] is True
+    assert mesh["vertices"] and mesh["triangles"]
+
+
+def _first_solved_level() -> int:
+    import json
+
+    for entry in json.loads(level_mesh.ALIGNMENT_PATH.read_text(encoding="utf-8")):
+        if entry["provenance"] == "solved":
+            return int(entry["level"])
+    raise AssertionError("검증된 정렬이 하나도 없다")
+
+
+def test_mesh_is_available_for_a_verified_level_with_real_vertices() -> None:
+    """검증된 정렬이 있는 레벨에서 `available`이 `True`이고 정점이 있다(요구사항 6).
+
+    레벨 1로 고정하지 않는다 — 레벨 1은 착탄점이 정확히 평면이라 12자유도가 데이터로
+    결정되지 않아 `provenance`가 "unverifiable"이다."""
+    level = _first_solved_level()
+    block = service.mesh_block(str(level))
     assert block is not None
     assert block["available"] is True
-    assert block["vertices"], "레벨 1 메시는 정점을 가져야 한다"
-    assert block["triangles"], "레벨 1 메시는 삼각형을 가져야 한다"
-    alignment = level_mesh.load_alignment(1)
-    assert alignment.provenance == "solved"
+    assert block["vertices"], f"레벨 {level} 메시는 정점을 가져야 한다"
+    assert block["triangles"], f"레벨 {level} 메시는 삼각형을 가져야 한다"
+    assert level_mesh.load_alignment(level).provenance == "solved"
+
+
+def test_mesh_is_unavailable_for_an_unverifiable_level() -> None:
+    """레벨 1은 항목이 있으나 검증할 수 없다 — 화면이 벽을 그리면 안 된다."""
+    assert level_mesh.load_alignment(1).provenance == "unverifiable"
+    block = service.mesh_block("1")
+    assert block is not None
+    assert block["available"] is False
+    assert block["vertices"] == []
 
 
 def test_mesh_is_unavailable_for_a_declared_but_unverified_alignment(
@@ -271,10 +309,11 @@ def test_mesh_is_unavailable_for_a_declared_but_unverified_alignment(
     올리게 된다."""
     import dataclasses
 
-    real = level_mesh.load_alignment(1)
+    level = _first_solved_level()
+    real = level_mesh.load_alignment(level)
     unverified = dataclasses.replace(real, provenance="declared")
-    monkeypatch.setattr(level_mesh, "load_alignment", lambda level: unverified)
-    block = service.mesh_block("1")
+    monkeypatch.setattr(level_mesh, "load_alignment", lambda _level: unverified)
+    block = service.mesh_block(str(level))
     assert block is not None
     assert block["available"] is False
     assert block["vertices"] == []
@@ -289,7 +328,7 @@ def test_mesh_is_none_when_the_level_itself_is_unknown() -> None:
 def test_mesh_is_unavailable_when_the_source_fbx_file_is_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """정렬 레코드는 있고(레벨 1, provenance="solved") `source_fbx` 경로도 있지만
+    """정렬 레코드는 있고(검증된 레벨, provenance="solved") `source_fbx` 경로도 있지만
     그 경로에 실제 파일이 없으면(`read_fbx`가 `FileNotFoundError`를 던진다)
     `mesh_block`이 그 예외를 삼키지 않고 전파하면 `/api/compare` 전체가 500으로
     죽는다(태스크 0). 장식용 벽면 하나 때문에 점수·교정까지 죽어서는 안 된다 —
@@ -299,7 +338,7 @@ def test_mesh_is_unavailable_when_the_source_fbx_file_is_missing(
         raise FileNotFoundError(path)
 
     monkeypatch.setattr(level_mesh, "read_fbx", _missing)
-    block = service.mesh_block("1")
+    block = service.mesh_block(str(_first_solved_level()))
     assert block is not None
     assert block["available"] is False
     assert block["vertices"] == []
@@ -319,7 +358,7 @@ def test_mesh_parse_failure_still_propagates_instead_of_being_swallowed(
 
     monkeypatch.setattr(level_mesh, "read_fbx", _broken)
     with pytest.raises(ValueError):
-        service.mesh_block("1")
+        service.mesh_block(str(_first_solved_level()))
 
 
 # ---- 11-A: 스켈레톤 배선 ----------------------------------------------------
