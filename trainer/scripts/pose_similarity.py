@@ -10,9 +10,16 @@
 from __future__ import annotations
 
 import math
-import simulator_csv
 from dataclasses import dataclass
 from typing import Final, Literal, Mapping, Sequence
+
+# MCP는 `trainer.scripts.pose_similarity`로, pose_lab·스크립트·테스트는 scripts를
+# sys.path에 얹고 `pose_similarity`로 부른다. 자기가 불린 이름 공간에서 형제를
+# 잡아야 새 프로세스에서도 풀리고 simulator_csv가 두 벌로 갈라지지 않는다.
+if __package__:
+    from . import simulator_csv
+else:
+    import simulator_csv
 
 __all__ = [
     "CORRECTION_JOINTS",
