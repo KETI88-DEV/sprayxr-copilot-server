@@ -551,21 +551,31 @@ FIT_NOTES: Final[dict[str, str]] = {
 }
 LEGEND_NOTES: Final[tuple[str, ...]] = (
     "교정 화살표는 건·HMD 실측 마커에서 나갑니다",
-    "뼈 = 아바타 추정(다리는 추적 장치 없음·흐리게) · 구체 = 실측",
+    "뼈 = 아바타 추정 · 점선 다리 = 자리표시(측정 아님) · 구체 = 실측",
     "● 대표 프레임 실측 · ○ 패스 평균",
 )
 
 # 대표 스켈레톤 프레임 탐색: 분사 구간 가운데에서 가까운 순서로 이만큼만 FK를 돈다(프레임당 약 0.9 ms).
 LEG_SEARCH_MAX: Final = 120
+# 다리 고지. 기본 표시는 곧게 선 자리표시 다리다(`skeleton.standing_legs`) — IK 다리는 툴바로 켠다.
+LEGS_PLACEHOLDER_PREFIX: Final = "다리는 추적 장치가 없어 곧게 선 자리표시(점선·측정 아님)로 그렸습니다"
 LEGS_HIDDEN_NOTE: Final = (
-    "이 패스의 분사 프레임에서는 IK 다리가 해부학 범위(무릎이 발끝 쪽으로 굽음·두 발 교차 없음 등)를 "
-    "벗어나 다리를 기본으로 숨겼습니다 — 툴바 '다리(IK)'로 켤 수 있습니다."
+    LEGS_PLACEHOLDER_PREFIX
+    + " — 이 패스의 시뮬레이터 IK 다리는 해부학 범위(무릎이 발끝 쪽으로 굽음·두 발 교차 없음 등)를 벗어나 "
+    "툴바 '다리(IK)'로만 봅니다."
 )
-LEGS_SHOWN_NOTE: Final = "다리는 추적 장치 없이 시뮬레이터 IK가 지은 자세라 흐리게 그렸습니다."
+LEGS_SHOWN_NOTE: Final = LEGS_PLACEHOLDER_PREFIX + " — 시뮬레이터 IK 다리는 툴바 '다리(IK)'로 봅니다."
 LEGS_PICKED_NOTE: Final = (
-    "다리는 추적 장치 없이 시뮬레이터 IK가 지은 자세라 흐리게 그렸고, 분사 구간 가운데에서 {k}프레임 "
-    "떨어진 — 무릎·발끝이 해부학 범위 안인 — 프레임을 대표로 골랐습니다."
+    LEGS_PLACEHOLDER_PREFIX
+    + " — 툴바 '다리(IK)'의 IK 다리가 해부학 범위 안인 프레임(분사 구간 가운데에서 {k}프레임)을 대표로 골랐습니다."
 )
+# 자리표시 다리를 못 세운 경우(엉덩이 관절·다리 오프셋 없음)의 옛 고지.
+LEGS_IK_ONLY_NOTE: Final = "다리는 추적 장치 없이 시뮬레이터 IK가 지은 자세라 흐리게 그렸습니다."
+# fit.notes 항목 이름(`fit.note_keys`, 같은 순서). 화면은 위치가 아니라 이 이름으로 짝짓는다.
+NOTE_KEYS: Final[tuple[str, ...]] = ("avatar_estimate", "gravity", "legs", "torso", "grip_limit")
+# 캔버스 아래에서 접어 두는 고지. 파지 상한 고지는 3D 보정 오프셋 선 위 라벨(`offset_display`)이 같은 사실을
+# 장면 안에서 말하므로 접는다 — 접힌 고지도 한 번 누르면 그 자리에서 펼쳐진다.
+NOTES_COLLAPSED: Final[tuple[str, ...]] = ("grip_limit",)
 
 
 @dataclass(frozen=True, slots=True)
@@ -746,22 +756,32 @@ def _fit_view(
     gravity = placed.gravity_correction_deg
     faded = gravity > FADE_GRAVITY_DEG
     notes = [AVATAR_NOTE]
+    note_keys = ["avatar_estimate"]
     if faded:
         notes.append(f"실측 회전과 수직 가정이 {gravity:.0f}° 어긋나 몸을 중력 방향으로 세워 그렸습니다(흐리게 표시).")
     else:
         notes.append(f"몸의 수직은 중력 방향으로 맞춘 값입니다(보정 {gravity:.0f}°).")
+    note_keys.append("gravity")
     legs = None if chosen is None else chosen.legs
+    hit = getattr(representative.frame, "hit", None)
+    pelvis = placed.joints.get("Pelvis")
+    forward = None if hit is None or pelvis is None else [hit[i] - pelvis[i] for i in range(3)]
+    placeholder = skeleton.standing_legs(placed.joints, offsets, forward) if legs is not None else None
     if legs is not None:
-        if not legs.plausible:
+        if placeholder is None:
+            notes.append(LEGS_IK_ONLY_NOTE)
+        elif not legs.plausible:
             notes.append(LEGS_HIDDEN_NOTE)
         elif chosen is not None and chosen.offset_frames > 0:
             notes.append(LEGS_PICKED_NOTE.format(k=chosen.offset_frames))
         else:
             notes.append(LEGS_SHOWN_NOTE)
+        note_keys.append("legs")
     notes.append(
         f"이 CSV 리그에는 목·윗가슴 관절이 없고 골반→머리가 {_torso_length_m(offsets):.2f}m라 "
         "몸통이 짧게 보입니다(리그 값 그대로 그렸습니다)."
     )
+    note_keys.append("torso")
     right_norm = None if mounts.right is None else math.hypot(*mounts.right.offset)
     limit = grip_limit_m.get(representative.gun)
     if right_norm is not None and limit is not None and right_norm > limit:
@@ -769,6 +789,7 @@ def _fit_view(
             f"건 마커–손 관절 보정 거리 {right_norm:.2f}m는 손으로 쥔 거리로 설명되지 않습니다 — "
             "아바타 손과 건 강체의 어긋남을 흡수한 적합값입니다."
         )
+        note_keys.append("grip_limit")
     prefix = "적합 잔차 " if kind == MOUNTS_PASS_FIT else ""
     frame = representative.frame
     return {
@@ -810,6 +831,8 @@ def _fit_view(
             for fit in placed.anchors
         ],
         "notes": notes,
+        "note_keys": note_keys,
+        "notes_collapsed": [key for key in NOTES_COLLAPSED if key in note_keys],
         "legs": None
         if legs is None or chosen is None
         else {
@@ -819,8 +842,21 @@ def _fit_view(
             "limits": dict(skeleton.LEG_LIMITS),
             "frame_offset": chosen.offset_frames,
             "searched_frames": chosen.searched,
+            # 기본 표시: 곧게 선 자리표시 다리(측정 아님). 못 세우면 범위 안 IK 다리, 그것도 아니면 숨김.
+            "display_default": "placeholder" if placeholder is not None else ("ik" if legs.plausible else "hidden"),
+            "placeholder_joints": None if placeholder is None else {k: list(v) for k, v in placeholder.items()},
+            "placeholder_bones": None
+            if placeholder is None
+            else [["Pelvis", hip] for hip, *_ in skeleton.PLACEHOLDER_LEG_CHAIN]
+            + [
+                [a, b]
+                for chain in skeleton.PLACEHOLDER_LEG_CHAIN
+                for a, b in zip(chain, chain[1:])
+                if a in placeholder and b in placeholder
+            ],
         },
-        "legs_visible_default": bool(legs is not None and legs.plausible),
+        # IK 다리를 기본으로 켜는가. 자리표시 다리가 있으면 IK 다리는 툴바로만 켠다.
+        "legs_visible_default": bool(legs is not None and legs.plausible and placeholder is None),
     }
 
 
@@ -1124,6 +1160,7 @@ def view_block(
         "legend_notes": list(LEGEND_NOTES),
         "display_errors": [],
         "composite": None,
+        "surface_hits": [],
     }
 
 
@@ -1270,12 +1307,16 @@ def _attach_view(
 
     ok, orient = guarded("orientation", orientation.orientation_block, query_raw.rows, reference_raw.rows, geometry)
     measured["orientation"] = orient if ok else None
+    ok, joint_axes = guarded("orientation", orientation.joint_axes_block, query_raw.rows, reference_raw.rows)
+    measured["joint_axes"] = joint_axes if ok else None
 
     joints = skeleton_result.joints if skeleton_result is not None else None
     ok, composite_view = guarded(
         "composite", composite.composite_block, skeleton_result.representative, geometry, joints
     )
     view["composite"] = composite_view if ok else None
+    ok, hits = guarded("composite", composite.surface_hits, skeleton_result.representative)
+    view["surface_hits"] = hits if ok else []
     view["display_errors"] = errors
     body["view"] = view
 

@@ -42,6 +42,8 @@ AXIS_TRACE: Final[dict[str, str]] = {
 # 다가가느냐/멀어지느냐"를 정확히 말한다(`text_mode = "stroke_relative"`). 옛 강등 문장("방향 대신
 # 수치로 안내")은 행동 방향이 없어 교정 어휘로 기능하지 않았다.
 SURFACE_ANGLE_AXIS_ONLY_DEG: Final = 30.0
+# `measured.axes[].text_mode`가 낼 수 있는 값 전부(계약 문서 docs/superpowers/specs/2026-09-15-pose-lab-view-contract.md).
+TEXT_MODES: Final[tuple[str, ...]] = ("directive", "stroke_relative")
 
 STROKE_RELATIVE_RIGHT: Final[dict[str, str]] = {
     "붙이": "{obj} 착탄 궤적 쪽으로 수평으로 {m}cm 붙이세요.",

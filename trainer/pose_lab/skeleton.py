@@ -277,6 +277,53 @@ def leg_check(local_pos: Mapping[str, Vec3]) -> LegCheck | None:
     )
 
 
+# --- 자리표시 다리(표시 전용, 측정 아님) -------------------------------------------------
+#
+# 다리 관절에는 추적 장치가 없고 IK 다리는 해부학 범위를 벗어난 프레임이 많다(위 LEG_LIMITS 주석).
+# 다리를 숨기면 상체만 떠 사람 자세로 읽히지 않았고(2라운드 검증), 범위 안 IK 다리도 사선으로 뻗어
+# 원래 불만("다리가 대각선")을 되풀이했다. 그래서 기본 표시는 **곧게 선 자리표시 다리**다: 엉덩이
+# 관절(골반에 붙은 FK 위치)에서 중력 아래로 리그 허벅지·종아리 길이만큼 내리고, 발끝은 대표 프레임
+# 착탄 방향(수평)으로 리그 발 길이만큼 둔다. 뼈 길이는 리그 그대로다. 이 다리는 자세를 말하지 않는다 —
+# 화면은 점선으로 그리고 notes가 "측정 아님"을 적는다.
+PLACEHOLDER_LEG_CHAIN: Final[tuple[tuple[str, str, str, str], ...]] = (
+    ("LeftThigh", "LeftCalf", "LeftFoot", "LeftToe"),
+    ("RightThigh", "RightCalf", "RightFoot", "RightToe"),
+)
+
+
+def standing_legs(
+    joints: Mapping[str, Vec3],
+    offsets: Mapping[str, Vec3],
+    forward: Sequence[float] | None,
+) -> dict[str, Vec3] | None:
+    """곧게 선 자리표시 다리 관절(월드). 엉덩이 관절이나 다리 오프셋이 없으면 None.
+
+    `forward`는 발끝 방향 후보(월드)다. 수평 성분이 거의 없으면 발끝 관절을 싣지 않는다 — 방향을
+    지어내지 않는다.
+    """
+    down = -np.array(world_axes.UP, dtype=float)
+    up = -down
+    heading: np.ndarray | None = None
+    if forward is not None:
+        f = np.array(forward, dtype=float)
+        f = f - float(np.dot(f, up)) * up
+        if float(np.linalg.norm(f)) > 1e-6:
+            heading = f / np.linalg.norm(f)
+    out: dict[str, Vec3] = {}
+    for hip, knee, ankle, toe in PLACEHOLDER_LEG_CHAIN:
+        if hip not in joints or any(name not in offsets for name in (knee, ankle, toe)):
+            return None
+        h = np.array(joints[hip], dtype=float)
+        k = h + down * math.hypot(*offsets[knee])
+        a = k + down * math.hypot(*offsets[ankle])
+        out[hip] = _as_tuple(h)
+        out[knee] = _as_tuple(k)
+        out[ankle] = _as_tuple(a)
+        if heading is not None:
+            out[toe] = _as_tuple(a + heading * math.hypot(*offsets[toe]))
+    return out
+
+
 def _as_matrix(m: np.ndarray) -> Matrix:
     return (_as_tuple(m[0]), _as_tuple(m[1]), _as_tuple(m[2]))
 

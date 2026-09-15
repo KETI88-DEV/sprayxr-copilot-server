@@ -190,3 +190,22 @@ def test_real_level1_texts_match_the_users_screen() -> None:
     blob = json.dumps(body["measured"]["axes"], ensure_ascii=False)
     for word in ("미사용", "사용하지 않음", "unused", "not used"):
         assert word not in blob
+
+
+CONTRACT_DOC = Path(__file__).resolve().parents[3] / "docs" / "superpowers" / "specs" / "2026-09-15-pose-lab-view-contract.md"
+
+
+def test_contract_doc_lists_every_text_mode_and_note_key() -> None:
+    """응답이 내는 enum·키가 계약 문서에 적혀 있다 — 코드만 바뀌고 문서가 낡는 일(라운드 2 지적)을 막는다.
+    합성 비교의 text_mode도 이 enum 안이어야 한다."""
+    doc = CONTRACT_DOC.read_text(encoding="utf-8")
+    for mode in instructions.TEXT_MODES:
+        assert f'"{mode}"' in doc, mode
+    for key in service.NOTE_KEYS:
+        assert f"`{key}`" in doc, key
+    body = service.compare(FakeSource(), PassRef(**QUERY), PassRef(**REFERENCE))
+    assert {axis["text_mode"] for axis in body["measured"]["axes"]} <= set(instructions.TEXT_MODES)
+    for correction in (_c("right", "wall", -15.4, "붙이"), _c("head", "wall", 45.4, "띄우")):
+        for angle in (None, 10.0, 80.0):
+            assert instructions.axis_text(correction, angle)[1] in instructions.TEXT_MODES
+

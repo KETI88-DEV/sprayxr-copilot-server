@@ -33,7 +33,7 @@ DATA_ROOT = Path("/data/sources/professionals")
 SPREADS = Path("/output/spread_reference_expert_yup.json")
 
 # b5f7341 이후 표시 전용으로 더한 필드. 이것만 빼면 기준선과 같아야 한다.
-NEW_MEASURED_KEYS = frozenset({"improvement_labels", "display", "deltas_display", "orientation"})
+NEW_MEASURED_KEYS = frozenset({"improvement_labels", "display", "deltas_display", "orientation", "joint_axes"})
 NEW_AXIS_KEYS = frozenset(
     {
         "n",

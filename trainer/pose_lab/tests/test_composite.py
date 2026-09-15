@@ -75,6 +75,7 @@ def test_composite_block_without_mesh_keeps_only_the_hit() -> None:
         "pelvis_front_of_surface": None,
         "spray_ray_hits_mesh": None,
         "spray_ray_hit_miss_mm": None,
+        "spray_ray_angle_deg": 0.0,
     }
 
 
@@ -87,3 +88,35 @@ def test_composite_alignment_L3() -> None:
     assert block["hit_to_mesh_mm"] < 0.01, block
     assert block["spray_ray_hits_mesh"] is True, block
     assert block["spray_ray_hit_miss_mm"] < 50.0, block
+
+
+def test_spray_ray_angle_is_the_angle_between_spray_axis_and_gun_to_hit() -> None:
+    """거리와 무관한 척도. 분사축 +Z(Rotation X=90)에서 착탄점을 옆으로 0.1 m 옮기면 atan(0.1/0.5)."""
+    geometry = _plane()
+    block = composite.composite_block(_representative((0.2, 0.0, 1.5), (0.3, 0.0, 2.0)), geometry, None)
+    assert abs(block["spray_ray_angle_deg"] - np.degrees(np.arctan2(0.1, 0.5))) < 1e-9
+    assert abs(block["spray_ray_hit_miss_mm"] - 100.0) < 1e-6
+
+
+def test_surface_hits_are_raw_hits_on_the_real_L6_mesh() -> None:
+    """실데이터 L6(김경호 1000394_1 #0): `view.surface_hits`는 원본 착탄점이라 배치 메시 표면 0.01 mm 안이다.
+    리샘플 격자(`layers.query.hit`)는 모서리를 가로질러 벽에서 뜬다(최대 약 63 mm) — 둘을 구분한다."""
+    source, kwargs = isolation._source_for({"name": "real"})  # noqa: SLF001
+    body = service.compare(
+        source,
+        service.PassRef(worker="김경호", date="20250831", level="6", session="1000394_1", pass_index=0),
+        service.PassRef(worker="전형기", date="20250904", level="6", session="1000569_1", pass_index=0),
+        **kwargs,
+    )
+    assert body["status"] == "ok"
+    view = body["view"]
+    placed = service.placed_mesh("6")
+    geometry = composite.MeshGeometry.from_mesh(placed.mesh.vertices, placed.mesh.triangles)
+    hits = np.asarray(view["surface_hits"], dtype=float)
+    assert len(hits) >= 20
+    distance, _rows, _closest = geometry.nearest(hits)
+    assert float(distance.max()) * 1000.0 < 0.01, float(distance.max())
+    grid = np.asarray([p for p in view["layers"]["query"]["hit"] if p is not None], dtype=float)
+    grid_distance, _r, _c = geometry.nearest(grid)
+    assert float(grid_distance.max()) * 1000.0 > 1.0  # 격자점은 표면 점이 아니다(이 테스트가 무엇을 가르는지)
+

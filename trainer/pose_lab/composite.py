@@ -175,10 +175,20 @@ def composite_block(
         "pelvis_front_of_surface": None,
         "spray_ray_hits_mesh": None,
         "spray_ray_hit_miss_mm": None,
+        "spray_ray_angle_deg": None,
     }
-    if geometry is None or hit is None:
+    if hit is None:
         return block
     gun = np.asarray(frame.right, dtype=float)
+    direction = spray_direction(representative.row, representative.gun)
+    if direction is not None and float(np.linalg.norm(hit - gun)) > 0.0:
+        # 거리와 무관한 척도: 건 분사축과 (착탄점 − 건 마커) 사이 각. miss_mm는 건–벽 거리에 비례해 커지므로
+        # 레벨마다 같은 문턱으로 읽을 수 없다(2라운드 검증: L10 55.9mm). 코퍼스 64,098패스 중앙값 3.89°.
+        block["spray_ray_angle_deg"] = math.degrees(
+            math.acos(float(np.clip(np.dot(direction, hit - gun) / (np.linalg.norm(direction) * np.linalg.norm(hit - gun)), -1.0, 1.0)))
+        )
+    if geometry is None:
+        return block
     distance, rows, _closest = geometry.nearest(hit[None])
     block["hit_to_mesh_mm"] = float(distance[0] * 1000.0)
     if joints is not None and "Pelvis" in joints:
@@ -187,7 +197,6 @@ def composite_block(
         block["pelvis_front_of_surface"] = bool(
             float(np.dot(pelvis - hit, n)) * float(np.dot(gun - hit, n)) > 0.0
         )
-    direction = spray_direction(representative.row, representative.gun)
     if direction is not None:
         point = geometry.first_hit(gun, direction)
         block["spray_ray_hits_mesh"] = point is not None
@@ -218,3 +227,21 @@ def angle_between_lines_deg(u: Sequence[float], v: Sequence[float]) -> float:
     b = np.asarray(v, dtype=float)
     cosine = abs(float(np.dot(a, b)) / (float(np.linalg.norm(a)) * float(np.linalg.norm(b))))
     return math.degrees(math.acos(min(1.0, cosine)))
+
+
+MAX_SURFACE_HITS = 200
+
+
+def surface_hits(representative: Any) -> list[list[float]]:
+    """대표 패스의 **원본** 분사 착탄점(균등 추출, 최대 `MAX_SURFACE_HITS`).
+
+    `view.layers.query.hit`은 호길이 격자로 리샘플한 점이라 모서리를 가로지르면 벽에서 뜬다(L6 격자점
+    최대 62.9mm). 벽을 함께 보는 화면(벽 포함 맞춤 등)은 이 원본 점을 쓴다.
+    """
+    if representative is None:
+        return []
+    hits = [frame.hit for frame, _row in representative.spraying if frame.hit is not None]
+    if len(hits) > MAX_SURFACE_HITS:
+        picks = np.linspace(0, len(hits) - 1, MAX_SURFACE_HITS).astype(int)
+        hits = [hits[i] for i in picks]
+    return [[float(x) for x in hit] for hit in hits]

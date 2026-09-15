@@ -733,7 +733,9 @@ def test_skeleton_frame_picks_the_nearest_frame_with_anatomical_legs(test_mounts
     block = service.skeleton_block(raw)
     assert block.fit["frame_index"] == chosen.representative.frame.index
     assert block.fit["legs"]["plausible"] is True and block.fit["legs"]["frame_offset"] == 3
-    assert block.fit["legs_visible_default"] is True
+    # 기본 표시는 곧게 선 자리표시 다리다 — 범위 안 IK 다리도 툴바로만 켠다.
+    assert block.fit["legs"]["display_default"] == "placeholder"
+    assert block.fit["legs_visible_default"] is False
     assert service.LEGS_PICKED_NOTE.format(k=3) in block.fit["notes"]
     frame = chosen.representative.frame
     markers = {a["point"]: a["measured_marker"] for a in block.fit["anchors"]}
@@ -751,6 +753,34 @@ def test_fit_hides_legs_by_default_when_no_frame_is_anatomical(test_mounts) -> N
     assert block.fit["frame_index"] == service.representative_frame(raw).frame.index
     assert service.LEGS_HIDDEN_NOTE in block.fit["notes"]
     assert "아바타 추정" in block.fit["notes"][0] and "중력 방향" in block.fit["notes"][1]
+
+
+def test_placeholder_legs_stand_under_the_hips_and_note_keys_name_every_note(test_mounts) -> None:  # noqa: ANN001
+    """자리표시 다리는 배치된 엉덩이 관절에서 중력 아래로 리그 길이만큼 선다(측정 아님 고지와 함께).
+    notes는 위치가 아니라 `note_keys`로 짝짓는다 — 두 목록 길이와 순서가 같다."""
+    rows, _middle = _rows_with_leg_poses(41, ())
+    block = service.skeleton_block(RawPass(rows=rows))
+    fit = block.fit
+    legs = fit["legs"]
+    assert legs["display_default"] == "placeholder"
+    placeholder = legs["placeholder_joints"]
+    offsets = pose_fk_csv.bind_offsets(rows[0])
+    up = np.array(world_axes.UP, dtype=float)
+    for hip, knee, ankle, toe in skeleton.PLACEHOLDER_LEG_CHAIN:
+        assert placeholder[hip] == block.joints[hip]
+        for a, b in ((hip, knee), (knee, ankle)):
+            d = np.array(placeholder[b]) - np.array(placeholder[a])
+            assert abs(np.linalg.norm(d) - math.hypot(*offsets[b])) < 1e-9
+            assert np.linalg.norm(d / np.linalg.norm(d) + up) < 1e-9
+        assert toe in placeholder
+    drawn = {tuple(pair) for pair in legs["placeholder_bones"]}
+    assert ("Pelvis", "LeftThigh") in drawn and ("RightFoot", "RightToe") in drawn
+    assert len(fit["note_keys"]) == len(fit["notes"])
+    assert fit["note_keys"][:4] == ["avatar_estimate", "gravity", "legs", "torso"]
+    assert fit["notes"][fit["note_keys"].index("legs")].startswith(service.LEGS_PLACEHOLDER_PREFIX)
+    assert "측정 아님" in fit["notes"][fit["note_keys"].index("legs")]
+    assert set(fit["notes_collapsed"]) <= set(fit["note_keys"])
+    assert "torso" not in fit["notes_collapsed"] and "avatar_estimate" not in fit["notes_collapsed"]
 
 
 def test_offset_label_only_when_the_grip_limit_is_exceeded(test_mounts) -> None:  # noqa: ANN001

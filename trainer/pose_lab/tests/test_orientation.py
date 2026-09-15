@@ -133,5 +133,59 @@ def test_real_level2_incidence_is_null_and_level3_has_both_angles() -> None:
     items = level3["measured"]["orientation"]["items"]
     assert len(items) == 2
     assert all(isinstance(item["query"], float) and isinstance(item["reference"], float) for item in items)
-    assert all(item["display"]["query"] == f"{item['query']:.0f}°" for item in items)
+    assert all(item["display"]["query"] == f"{item['query']:.0f}°".replace("-", "\u2212") for item in items)
+    assert all("-" not in item["display"]["query"] + item["display"]["reference"] for item in items)
+    joint_axes = level3["measured"]["joint_axes"]
+    head = joint_axes["rows"][0]
+    assert head["key"] == "head_hmd_heading" and isinstance(head["query"], float) and isinstance(head["reference"], float)
     assert np.isfinite([item["query"] for item in items]).all()
+
+
+def test_negative_degrees_use_the_same_minus_as_correction_figures() -> None:
+    """음수 각은 U+2212로 낸다(교정 figure와 같은 부호). ASCII '-'가 섞이면 한 화면에 두 마이너스가 보인다."""
+    assert orientation._deg_display(-33.4) == "\u221233°"  # noqa: SLF001
+    assert orientation._deg_display(33.4) == "33°"  # noqa: SLF001
+    assert orientation._deg_display(-0.2) == "0°"  # noqa: SLF001
+    assert orientation._deg_display(None) == "—"  # noqa: SLF001
+    down = orientation.orientation_block(_rows(angles=(0.0, 0.0, 120.0)), _rows(), None)
+    pitch = down["items"][1]
+    assert pitch["query"] < 0 and pitch["display"]["query"].startswith("\u2212")
+
+
+def _heading_rows(yaw_offset_deg: float) -> list[dict[str, str]]:
+    """머리→착탄 수평 방위에서 `yaw_offset_deg`만큼 돌린 HMD. HMD 회전 (0, yaw, 0) → 전방 +Z를 Y축 둘레로 돌린다."""
+    rows = _rows()
+    for row in rows:
+        head = [float(row[f"카메라 Position {a}"]) for a in "XYZ"]
+        hit = [float(row[k]) for k in ("Ray point X", " Ray Point Y", " Ray Point Z")]
+        base = math.degrees(math.atan2(hit[0] - head[0], hit[2] - head[2]))
+        for axis, value in zip("XYZ", (25.0, base + yaw_offset_deg, 0.0)):
+            row[f"카메라 Rotation {axis}"] = str(value)
+    return rows
+
+
+def test_hmd_heading_to_hit_is_the_horizontal_angle_only() -> None:
+    """HMD 앙각(Rotation X=25°)은 결과를 바꾸지 않고, 수평 방위 차만 잰다. 부호는 없다."""
+    for offset in (0.0, 30.0, -30.0):
+        value, n, reason = orientation.hmd_heading_to_hit_deg(_heading_rows(offset))
+        assert reason is None and n == 12
+        assert value == pytest.approx(abs(offset), abs=1e-6)
+
+
+def test_joint_axes_block_measures_only_tracked_bodies() -> None:
+    """측정 없는 관절은 값 없이 사유만 싣는다. 값이 있는 행은 실측 강체(HMD) 하나다."""
+    block = orientation.joint_axes_block(_heading_rows(20.0), _heading_rows(5.0))
+    rows = {row["key"]: row for row in block["rows"]}
+    assert [row["key"] for row in block["rows"]] == [spec["key"] for spec in orientation.JOINT_AXIS_ROWS]
+    head = rows["head_hmd_heading"]
+    assert head["display"] == {"query": "20°", "reference": "5°"} and head["status"] == "measured"
+    for key, row in rows.items():
+        if key == "head_hmd_heading":
+            continue
+        assert row["query"] is None and row["reference"] is None and row["display"] is None
+        assert row["reason_text"] and row["status_text"] == orientation.STATUS_TEXT[row["status"]]
+    blob = json.dumps(block, ensure_ascii=False)
+    for word in ("미사용", "사용하지 않음", "unused", "not used", "늘 0°"):
+        assert word not in blob
+    assert "늘 0°" not in orientation.JOINT_ANGLES_NOTE
+

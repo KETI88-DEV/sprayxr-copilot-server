@@ -11,7 +11,13 @@
 - 건 앙각: `asin(vertical_of(s))`.
 
 HMD 전방축은 수평 방위로만 검증돼(착탄 방위 순환 상관 0.785) 시선 앙각·시선-분사 각은 싣지 않는다.
-관절 각도는 싣지 않는다 — CSV 전완 회전은 늘 0°이고 상완 회전은 프레임 사이 급변한다.
+대신 **수평 방위만** 쓰는 `hmd_heading_to_hit_deg`(HMD 전방축의 수평 방위와 머리→착탄 수평 방위 사이
+각)를 관절 축 평가표(`joint_axes_block`)의 머리 행에 싣는다.
+
+관절 각도는 싣지 않는다. 관절에는 추적 장치가 없고(시뮬레이터 IK 산출물), 오른 전완 회전은 표본 40세션
+287,712프레임의 87.6%에서 1° 미만(편 팔)이며, 상완 회전은 프레임 사이 30° 넘게 급변한다(1.7%).
+왼 전완 회전은 0°가 아니다(중앙값 114°) — 옛 문구 "전완 회전은 늘 0°"는 오른쪽에만 맞았다
+(스크래치패드 r3_forearm.py, seed 20260915).
 """
 
 from __future__ import annotations
@@ -41,8 +47,8 @@ HEADER_NOTE: Final = (
 )
 WEIGHT_NOTE: Final = "유사도는 머리·오른손·왼손 위치를 핵심 지표로 가중합니다."
 JOINT_ANGLES_NOTE: Final = (
-    "관절 각도는 표시하지 않습니다 — CSV의 전완 회전은 늘 0°이고 상완 회전은 프레임 사이 급변해 "
-    "팔꿈치·어깨 각이 측정돼 있지 않습니다. 스켈레톤은 이 회전으로 그린 아바타 추정입니다."
+    "관절 각도는 표시하지 않습니다 — 관절에는 추적 장치가 없는 시뮬레이터 IK 값이고, 오른 전완 회전은 대부분 0°(편 팔)·"
+    "상완 회전은 프레임 사이 급변해 팔꿈치·어깨 각을 담지 않습니다. 관절별 사유는 아래 관절 축 표에 있습니다."
 )
 EXCLUDED_NOTE: Final = "HMD 전방축은 수평 방위로만 검증돼 시선 앙각·시선-분사 각은 계산하지 않습니다."
 
@@ -107,8 +113,17 @@ def pass_angles(
     return out
 
 
+MINUS: Final = "\u2212"
+
+
 def _deg_display(value: float | None) -> str:
-    return "—" if value is None else f"{value:.0f}°"
+    """정수 도. 음수 부호는 교정 수치(`instructions.figure`)와 같은 U+2212다 — 한 화면에 두 마이너스를 섞지 않는다."""
+    if value is None:
+        return "—"
+    text = f"{value:.0f}"
+    if text.startswith("-"):
+        text = text[1:] if text == "-0" else MINUS + text[1:]
+    return f"{text}°"
 
 
 def orientation_block(
@@ -143,3 +158,114 @@ def orientation_block(
         "joint_angles_note": JOINT_ANGLES_NOTE,
         "excluded_note": EXCLUDED_NOTE,
     }
+
+
+# --- 관절 축 평가표(사용자 요청 5번) --------------------------------------------------------
+#
+# "관절 축 평가"를 관절마다 **무엇을 잴 수 있고 무엇을 못 재는지**로 답한다. 잴 수 있는 것은 실측 강체
+# 두 개(HMD·건)의 축뿐이다. 나머지 관절은 측정값이 아니라서 값 대신 사유를 싣는다 — 값을 지어내지 않는다.
+JOINT_AXES_TITLE: Final = "관절 축 평가 — 관절마다 잴 수 있는 것"
+JOINT_AXES_NOTE: Final = (
+    "실측 강체(HMD·건)가 붙은 축만 값을 냅니다. 점수·교정에 들어가지 않는 참고값입니다."
+)
+STATUS_TEXT: Final[dict[str, str]] = {
+    "measured": "실측",
+    "measured_above": "실측 · 위 표",
+    "not_evaluated": "평가 안 함",
+    "not_measured": "측정 없음",
+}
+HMD_HEADING_LABEL: Final = "HMD 시선 수평 방위와 착탄 방위 사이 각"
+JOINT_AXIS_ROWS: Final[tuple[dict[str, str], ...]] = (
+    {"key": "head_hmd_heading", "joint": "머리(HMD)", "status": "measured"},
+    {
+        "key": "right_gun_axis",
+        "joint": "오른손(건)",
+        "status": "measured_above",
+        "reason_text": "건 분사축의 입사각·앙각을 위 표에 싣습니다.",
+    },
+    {
+        "key": "left_flash_axis",
+        "joint": "왼손(플래쉬)",
+        "status": "not_evaluated",
+        "reason_text": "플래쉬 회전은 기록되지만 전방축을 착탄 같은 독립 근거로 검증하지 못했습니다.",
+    },
+    {
+        "key": "elbow_shoulder",
+        "joint": "팔꿈치·어깨",
+        "status": "not_measured",
+        "reason_text": "추적 장치가 없는 IK 관절입니다. 오른 전완 회전은 프레임의 88%가 0°(편 팔)이고 상완 회전은 프레임 사이 급변합니다.",
+    },
+    {
+        "key": "torso_pelvis",
+        "joint": "몸통·골반",
+        "status": "not_measured",
+        "reason_text": "추적 장치가 없고, 골반 Position 컬럼은 월드 좌표가 아닙니다.",
+    },
+    {
+        "key": "knee_ankle",
+        "joint": "무릎·발목",
+        "status": "not_measured",
+        "reason_text": "추적 장치가 없고, IK 다리가 해부학 범위 안인 분사 프레임은 37%뿐입니다.",
+    },
+)
+
+
+def hmd_heading_to_hit_deg(rows: Sequence[Mapping[str, str]]) -> tuple[float | None, int, str | None]:
+    """분사 중 착탄 프레임마다 HMD 전방축의 **수평** 방위와 머리→착탄 **수평** 방위 사이 각(부호 없음)의 평균."""
+    paired, gun = _spraying(rows)
+    if not paired or gun is None:
+        return None, 0, "no_spraying_frame"
+    angles: list[float] = []
+    for frame, row in paired:
+        try:
+            rotation = tuple(float(row[f"{measured_pose.HEAD_GROUP} Rotation {axis}"]) for axis in "XYZ")
+        except (KeyError, ValueError):
+            continue
+        forward_yaw = measured_pose.facing_yaw(rotation)
+        head = frame.head  # type: ignore[attr-defined]
+        hit = frame.hit  # type: ignore[attr-defined]
+        target_yaw = world_axes.yaw_of((hit[0] - head[0], hit[1] - head[1], hit[2] - head[2]))
+        if forward_yaw is None or target_yaw is None:
+            continue
+        delta = abs((forward_yaw - target_yaw + math.pi) % (2.0 * math.pi) - math.pi)
+        angles.append(math.degrees(delta))
+    if not angles:
+        return None, 0, "no_rotation"
+    return float(np.mean(angles)), len(angles), None
+
+
+def joint_axes_block(
+    query_rows: Sequence[Mapping[str, str]], reference_rows: Sequence[Mapping[str, str]]
+) -> dict[str, object]:
+    q_value, q_n, q_reason = hmd_heading_to_hit_deg(query_rows)
+    r_value, r_n, r_reason = hmd_heading_to_hit_deg(reference_rows)
+    rows: list[dict[str, object]] = []
+    for spec in JOINT_AXIS_ROWS:
+        row: dict[str, object] = {
+            "key": spec["key"],
+            "joint": spec["joint"],
+            "status": spec["status"],
+            "status_text": STATUS_TEXT[spec["status"]],
+            "label": None,
+            "query": None,
+            "reference": None,
+            "samples": None,
+            "display": None,
+            "reason": None,
+            "reason_text": spec.get("reason_text"),
+        }
+        if spec["key"] == "head_hmd_heading":
+            reason = q_reason or r_reason
+            row.update(
+                {
+                    "label": HMD_HEADING_LABEL,
+                    "query": q_value,
+                    "reference": r_value,
+                    "samples": {"query": q_n, "reference": r_n},
+                    "display": {"query": _deg_display(q_value), "reference": _deg_display(r_value)},
+                    "reason": reason,
+                    "reason_text": None if reason is None else REASON_TEXT[reason],
+                }
+            )
+        rows.append(row)
+    return {"title": JOINT_AXES_TITLE, "note": JOINT_AXES_NOTE, "rows": rows}

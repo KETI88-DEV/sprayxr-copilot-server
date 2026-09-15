@@ -184,3 +184,27 @@ def test_minimal_rotation_handles_antiparallel() -> None:
     r = skeleton.minimal_rotation(-up, up)
     assert np.allclose(r @ -up, up, atol=1e-12)
     assert abs(np.linalg.det(r) - 1.0) < 1e-12
+
+
+def test_standing_legs_hang_along_gravity_with_rig_bone_lengths() -> None:
+    """자리표시 다리: 엉덩이에서 중력 아래로 리그 허벅지·종아리 길이, 발끝은 수평 전방으로 리그 발 길이.
+    자세를 말하지 않는 표시이므로 방향은 정확히 −UP이고 길이는 오프셋 노름과 같아야 한다."""
+    up = np.array(world_axes.UP, dtype=float)
+    joints = {"LeftThigh": (0.3, 1.1, 0.2), "RightThigh": (0.1, 1.05, 0.25)}
+    forward = (1.0, 0.7, 0.5)  # 수직 성분은 버린다
+    legs = skeleton.standing_legs(joints, OFFSETS, forward)
+    assert legs is not None
+    for hip, knee, ankle, toe in skeleton.PLACEHOLDER_LEG_CHAIN:
+        assert legs[hip] == joints[hip]
+        for a, b, child in ((hip, knee, knee), (knee, ankle, ankle)):
+            d = np.array(legs[b]) - np.array(legs[a])
+            assert abs(np.linalg.norm(d) - math.hypot(*OFFSETS[child])) < 1e-9
+            assert np.linalg.norm(d / np.linalg.norm(d) + up) < 1e-9
+        foot = np.array(legs[toe]) - np.array(legs[ankle])
+        assert abs(np.linalg.norm(foot) - math.hypot(*OFFSETS[toe])) < 1e-9
+        assert abs(float(np.dot(foot, up))) < 1e-12
+    # 수평 성분이 없는 전방이면 발끝 방향을 지어내지 않는다.
+    no_toe = skeleton.standing_legs(joints, OFFSETS, tuple(up))
+    assert no_toe is not None and "LeftToe" not in no_toe and "RightToe" not in no_toe
+    assert skeleton.standing_legs({"LeftThigh": (0.0, 0.0, 0.0)}, OFFSETS, forward) is None
+
