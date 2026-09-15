@@ -9,7 +9,217 @@
         "measured": 2.0644827889117667e-09,
         "required": ">= 0.05"
       }
-    ]
+    ],
+    "fixed_linear_attempt": {
+      "linear_source": "fixed_signed_permutation",
+      "rule_doc": "docs/measurements/2026-09-15-fixed-linear-alignment-rule.md",
+      "scale": 0.0254,
+      "fit_n": 2000,
+      "holdout_n": 1500,
+      "holdout_overlap": 0,
+      "occlusion_threshold": 0.25,
+      "occlusion_stop_before_m": 0.002,
+      "candidates_tried": 48,
+      "candidates_passed_A": 1,
+      "candidates_passed_A_and_B": null,
+      "section_b_valid": false,
+      "section_b_invalid_reasons": [
+        "positive control hmd_occlusion > 0.25: {4: 0.41333333333333333, 5: 0.484}"
+      ],
+      "positive_controls": {
+        "3": {
+          "gun_occlusion": 0.002,
+          "hmd_occlusion": 0.24533333333333332,
+          "occlusion_n": 1500.0,
+          "flash_occlusion_n": 1500.0,
+          "flash_occlusion": 0.048
+        },
+        "4": {
+          "gun_occlusion": 0.10333333333333333,
+          "hmd_occlusion": 0.41333333333333333,
+          "occlusion_n": 1500.0,
+          "flash_occlusion_n": 1500.0,
+          "flash_occlusion": 0.49133333333333334
+        },
+        "5": {
+          "gun_occlusion": 0.014666666666666666,
+          "hmd_occlusion": 0.484,
+          "occlusion_n": 1500.0,
+          "flash_occlusion_n": 1500.0,
+          "flash_occlusion": 0.338
+        },
+        "6": {
+          "gun_occlusion": 0.01,
+          "hmd_occlusion": 0.011333333333333334,
+          "occlusion_n": 1500.0,
+          "flash_occlusion_n": 1500.0,
+          "flash_occlusion": 0.029333333333333333
+        },
+        "7": {
+          "gun_occlusion": 0.021333333333333333,
+          "hmd_occlusion": 0.118,
+          "occlusion_n": 1500.0,
+          "flash_occlusion_n": 1500.0,
+          "flash_occlusion": 0.052
+        },
+        "8": {
+          "gun_occlusion": 0.0,
+          "hmd_occlusion": 0.0006666666666666666,
+          "occlusion_n": 1500.0,
+          "flash_occlusion_n": 1500.0,
+          "flash_occlusion": 0.007333333333333333
+        },
+        "9": {
+          "gun_occlusion": 0.002,
+          "hmd_occlusion": 0.08266666666666667,
+          "occlusion_n": 1500.0,
+          "flash_occlusion_n": 1500.0,
+          "flash_occlusion": 0.030666666666666665
+        },
+        "10": {
+          "gun_occlusion": 0.014,
+          "hmd_occlusion": 0.09933333333333333,
+          "occlusion_n": 1500.0,
+          "flash_occlusion_n": 1420.0,
+          "flash_occlusion": 0.02112676056338028
+        }
+      },
+      "passing_or_reference_candidates": [
+        {
+          "rotation": [
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            -1.0,
+            0.0,
+            0.0
+          ],
+          "det": -1.0,
+          "translation": [
+            1.4489999613651592,
+            4.6170001049758165,
+            0.6569996554512653
+          ],
+          "passed_A": true,
+          "passed_B": true,
+          "gate_failures_A": [],
+          "measured": {
+            "g0_n_pairs": 3997.0,
+            "g0_median_mm": 0.00027518801803960713,
+            "g0_p95_mm": 0.0008109192349836647,
+            "g0_max_mm": 0.0014594696107206317,
+            "uv_degenerate_tris": 0.0,
+            "uv_degenerate_area_fraction": 0.0,
+            "uv_degenerate_silent_samples": 0.0,
+            "uv_degenerate_misattribution_mm": 0.0,
+            "atlas_overlap_cell_fraction": 0.0,
+            "atlas_overlap_max_gap_mm": 0.0,
+            "atlas_overlap_resolution": 1024.0,
+            "uv_miss_fraction": 0.0,
+            "uv_ambiguous_fraction": 6.53893938403191e-05,
+            "uv_lookup_sample": 15293.0,
+            "median_mm": 6.558299392445207e-05,
+            "p95_mm": 0.00016954557024995376,
+            "max_mm": 0.00020058620520124748,
+            "uv_abs_resid_median_texel": 8.910303284778072e-05,
+            "uv_abs_resid_p95_texel": 0.00018270114277350237,
+            "uv_abs_resid_max_texel": 0.00029508356739324195,
+            "uv_seam_tie_fraction": 0.0026666666666666666,
+            "gun_occlusion": 0.0,
+            "hmd_occlusion": 0.0,
+            "occlusion_n": 1500.0,
+            "flash_occlusion_n": 1410.0,
+            "flash_occlusion": 0.0,
+            "cross_session_pass": 1.0,
+            "cross_session_workers": 6.0,
+            "cross_session_fit_worker_rows": 4132.0,
+            "cross_session_eval_rows": 600.0,
+            "cross_session_worst_mm": 0.0001715639963428828,
+            "cross_session_worst_texel": 0.00024190791900651168
+          }
+        },
+        {
+          "rotation": [
+            0.0,
+            -1.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            -1.0,
+            0.0,
+            0.0
+          ],
+          "det": 1.0,
+          "translation": [
+            1.4240000386348415,
+            4.6170001049758165,
+            0.6569996554512653
+          ],
+          "passed_A": false,
+          "passed_B": false,
+          "gate_failures_A": [
+            "gun_occlusion"
+          ],
+          "measured": {
+            "g0_n_pairs": 3997.0,
+            "g0_median_mm": 0.00027518801803960713,
+            "g0_p95_mm": 0.0008109192349836647,
+            "g0_max_mm": 0.0014594696107206317,
+            "uv_degenerate_tris": 0.0,
+            "uv_degenerate_area_fraction": 0.0,
+            "uv_degenerate_silent_samples": 0.0,
+            "uv_degenerate_misattribution_mm": 0.0,
+            "atlas_overlap_cell_fraction": 0.0,
+            "atlas_overlap_max_gap_mm": 0.0,
+            "atlas_overlap_resolution": 1024.0,
+            "uv_miss_fraction": 0.0,
+            "uv_ambiguous_fraction": 6.53893938403191e-05,
+            "uv_lookup_sample": 15293.0,
+            "median_mm": 6.558299436854128e-05,
+            "p95_mm": 0.00016954557069404297,
+            "max_mm": 0.0002005862056453367,
+            "uv_abs_resid_median_texel": 8.910303284778072e-05,
+            "uv_abs_resid_p95_texel": 0.00018270114277350237,
+            "uv_abs_resid_max_texel": 0.00029508356739324195,
+            "uv_seam_tie_fraction": 0.0026666666666666666,
+            "gun_occlusion": 1.0,
+            "hmd_occlusion": 1.0,
+            "occlusion_n": 1500.0,
+            "flash_occlusion_n": 1410.0,
+            "flash_occlusion": 1.0,
+            "cross_session_pass": 1.0,
+            "cross_session_workers": 6.0,
+            "cross_session_fit_worker_rows": 4132.0,
+            "cross_session_eval_rows": 600.0,
+            "cross_session_worst_mm": 0.00017156399700901662,
+            "cross_session_worst_texel": 0.00024190791900651168
+          }
+        }
+      ],
+      "handedness_evidence": {
+        "gun_occlusion": {
+          "P": 0.0,
+          "mirror": 1.0
+        },
+        "hmd_occlusion": {
+          "P": 0.0,
+          "mirror": 1.0
+        },
+        "flash_occlusion_report": {
+          "P": 0.0,
+          "mirror": 1.0
+        },
+        "rule_doc": "docs/measurements/2026-09-15-fixed-linear-alignment-rule.md",
+        "posthoc_parts": [
+          "G_occ_gun",
+          "uniqueness"
+        ]
+      }
+    }
   },
   {
     "level": 2,
@@ -26,7 +236,231 @@
         "measured": 0.0035156004771172075,
         "required": "<= 0.002"
       }
-    ]
+    ],
+    "fixed_linear_attempt": {
+      "linear_source": "fixed_signed_permutation",
+      "rule_doc": "docs/measurements/2026-09-15-fixed-linear-alignment-rule.md",
+      "scale": 0.0254,
+      "fit_n": 2000,
+      "holdout_n": 1500,
+      "holdout_overlap": 0,
+      "occlusion_threshold": 0.25,
+      "occlusion_stop_before_m": 0.002,
+      "candidates_tried": 48,
+      "candidates_passed_A": 0,
+      "candidates_passed_A_and_B": null,
+      "section_b_valid": false,
+      "section_b_invalid_reasons": [
+        "positive control hmd_occlusion > 0.25: {4: 0.41333333333333333, 5: 0.484}"
+      ],
+      "positive_controls": {
+        "3": {
+          "gun_occlusion": 0.002,
+          "hmd_occlusion": 0.24533333333333332,
+          "occlusion_n": 1500.0,
+          "flash_occlusion_n": 1500.0,
+          "flash_occlusion": 0.048
+        },
+        "4": {
+          "gun_occlusion": 0.10333333333333333,
+          "hmd_occlusion": 0.41333333333333333,
+          "occlusion_n": 1500.0,
+          "flash_occlusion_n": 1500.0,
+          "flash_occlusion": 0.49133333333333334
+        },
+        "5": {
+          "gun_occlusion": 0.014666666666666666,
+          "hmd_occlusion": 0.484,
+          "occlusion_n": 1500.0,
+          "flash_occlusion_n": 1500.0,
+          "flash_occlusion": 0.338
+        },
+        "6": {
+          "gun_occlusion": 0.01,
+          "hmd_occlusion": 0.011333333333333334,
+          "occlusion_n": 1500.0,
+          "flash_occlusion_n": 1500.0,
+          "flash_occlusion": 0.029333333333333333
+        },
+        "7": {
+          "gun_occlusion": 0.021333333333333333,
+          "hmd_occlusion": 0.118,
+          "occlusion_n": 1500.0,
+          "flash_occlusion_n": 1500.0,
+          "flash_occlusion": 0.052
+        },
+        "8": {
+          "gun_occlusion": 0.0,
+          "hmd_occlusion": 0.0006666666666666666,
+          "occlusion_n": 1500.0,
+          "flash_occlusion_n": 1500.0,
+          "flash_occlusion": 0.007333333333333333
+        },
+        "9": {
+          "gun_occlusion": 0.002,
+          "hmd_occlusion": 0.08266666666666667,
+          "occlusion_n": 1500.0,
+          "flash_occlusion_n": 1500.0,
+          "flash_occlusion": 0.030666666666666665
+        },
+        "10": {
+          "gun_occlusion": 0.014,
+          "hmd_occlusion": 0.09933333333333333,
+          "occlusion_n": 1500.0,
+          "flash_occlusion_n": 1420.0,
+          "flash_occlusion": 0.02112676056338028
+        }
+      },
+      "passing_or_reference_candidates": [
+        {
+          "rotation": [
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            -1.0,
+            0.0,
+            0.0
+          ],
+          "det": -1.0,
+          "translation": [
+            1.123999864917255,
+            4.551000260989955,
+            0.6399996256922021
+          ],
+          "passed_A": false,
+          "passed_B": true,
+          "gate_failures_A": [
+            "g0_max_mm",
+            "uv_degenerate_misattribution_mm",
+            "uv_miss_fraction",
+            "uv_abs_resid_max_texel",
+            "cross_session"
+          ],
+          "measured": {
+            "g0_n_pairs": 3995.0,
+            "g0_median_mm": 0.0006502496860960605,
+            "g0_p95_mm": 0.002256552284807256,
+            "g0_max_mm": 5.370041693078864,
+            "uv_degenerate_tris": 14.0,
+            "uv_degenerate_area_fraction": 0.06460497795235785,
+            "uv_degenerate_silent_samples": 896.0,
+            "uv_degenerate_misattribution_mm": 135.92776457767707,
+            "atlas_overlap_cell_fraction": 0.0,
+            "atlas_overlap_max_gap_mm": 0.0,
+            "atlas_overlap_resolution": 1024.0,
+            "uv_miss_fraction": 0.0035156004771172075,
+            "uv_ambiguous_fraction": 0.0003138928997426078,
+            "uv_lookup_sample": 15929.0,
+            "median_mm": 0.00022893924400690935,
+            "p95_mm": 0.0004960798434261651,
+            "max_mm": 0.0008622505632494188,
+            "uv_abs_resid_median_texel": 0.00022112766642171572,
+            "uv_abs_resid_p95_texel": 0.000564458187467194,
+            "uv_abs_resid_max_texel": 1.455445807830605,
+            "uv_seam_tie_fraction": 0.004,
+            "gun_occlusion": 0.0,
+            "hmd_occlusion": 0.0,
+            "occlusion_n": 1500.0,
+            "flash_occlusion_n": 1500.0,
+            "flash_occlusion": 0.0,
+            "cross_session_pass": 0.0,
+            "cross_session_workers": 6.0,
+            "cross_session_fit_worker_rows": 4685.0,
+            "cross_session_eval_rows": 600.0,
+            "cross_session_worst_mm": 0.000582199972232213,
+            "cross_session_worst_texel": 1.4889051338846866
+          }
+        },
+        {
+          "rotation": [
+            0.0,
+            -1.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            -1.0,
+            0.0,
+            0.0
+          ],
+          "det": 1.0,
+          "translation": [
+            1.7864087126797394,
+            4.551000105520814,
+            0.6399996306948342
+          ],
+          "passed_A": false,
+          "passed_B": false,
+          "gate_failures_A": [
+            "g0_max_mm",
+            "uv_degenerate_misattribution_mm",
+            "uv_miss_fraction",
+            "uv_abs_resid_p95_texel",
+            "uv_abs_resid_max_texel",
+            "p95_mm",
+            "max_mm",
+            "cross_session",
+            "gun_occlusion"
+          ],
+          "measured": {
+            "g0_n_pairs": 3995.0,
+            "g0_median_mm": 0.0006502496860960605,
+            "g0_p95_mm": 0.002256552284807256,
+            "g0_max_mm": 5.370041693078864,
+            "uv_degenerate_tris": 14.0,
+            "uv_degenerate_area_fraction": 0.06460497795235785,
+            "uv_degenerate_silent_samples": 896.0,
+            "uv_degenerate_misattribution_mm": 135.92776457767707,
+            "atlas_overlap_cell_fraction": 0.0,
+            "atlas_overlap_max_gap_mm": 0.0,
+            "atlas_overlap_resolution": 1024.0,
+            "uv_miss_fraction": 0.0035156004771172075,
+            "uv_ambiguous_fraction": 0.0003138928997426078,
+            "uv_lookup_sample": 15929.0,
+            "median_mm": 0.0009616347649288708,
+            "p95_mm": 644.8186160037025,
+            "max_mm": 777.459816003701,
+            "uv_abs_resid_median_texel": 0.0005960918536766867,
+            "uv_abs_resid_p95_texel": 1208.706549137034,
+            "uv_abs_resid_max_texel": 1317.6599053406887,
+            "uv_seam_tie_fraction": 0.06666666666666667,
+            "gun_occlusion": 0.54,
+            "hmd_occlusion": 0.54,
+            "occlusion_n": 1500.0,
+            "flash_occlusion_n": 1500.0,
+            "flash_occlusion": 0.54,
+            "cross_session_pass": 0.0,
+            "cross_session_workers": 6.0,
+            "cross_session_fit_worker_rows": 4685.0,
+            "cross_session_eval_rows": 600.0,
+            "cross_session_worst_mm": 761.3863693099316,
+            "cross_session_worst_texel": 1308.9700420079091
+          }
+        }
+      ],
+      "handedness_evidence": {
+        "gun_occlusion": {
+          "P": 0.0,
+          "mirror": 0.54
+        },
+        "hmd_occlusion": {
+          "P": 0.0,
+          "mirror": 0.54
+        },
+        "flash_occlusion_report": {
+          "P": 0.0,
+          "mirror": 0.54
+        },
+        "rule_doc": "docs/measurements/2026-09-15-fixed-linear-alignment-rule.md",
+        "posthoc_parts": [
+          "G_occ_gun",
+          "uniqueness"
+        ]
+      }
+    }
   },
   {
     "level": 3,

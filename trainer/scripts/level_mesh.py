@@ -2150,6 +2150,614 @@ def _convention_contrast(
     }
 
 
+# =============================================================================
+# 선형부 고정 경로 — 부호 있는 축 순열 48개 × 평행이동 3자유도. 12자유도 경로와 G7은 그대로.
+#
+# 규칙 문서: docs/measurements/2026-09-15-fixed-linear-alignment-rule.md
+# §A(결과 관측 후 작성): 후보·s·t 재적합·G0/G1/G2/G3/G6·G_occ_gun·유일성.
+# §B(사전등록, 커밋 579e8bc가 이 코드보다 먼저): G_occ_hmd ≤ 0.25, 양성 대조 8레벨, 음성 대조.
+#
+# 레벨 1의 착탄점은 정확히 평면이라 12자유도가 결정되지 않는다(G7). 선형부를 고정하면
+# 평행이동 3자유도는 평면으로도 결정된다 — 그러니 **이 경로에는 G7을 걸지 않는다**(걸면
+# 실패할 수 없는 거절). 대신 평면 데이터의 절대 UV 등식이 원리적으로 못 가르는 후보(판 법선
+# 반사, det +1)가 남는다. 그것을 가르는 것이 가림 게이트다.
+# =============================================================================
+
+FIXED_LINEAR_SCALE: Final = 0.0254
+OCCLUSION_STOP_BEFORE_M: Final = 0.002
+OCCLUSION_THRESHOLD: Final = 0.25
+FIXED_LINEAR_RULE_DOC: Final = "docs/measurements/2026-09-15-fixed-linear-alignment-rule.md"
+# 선형부 고정 경로에서 판정에 쓰는 기존 게이트 이름. G4의 aniso·G7·G8·G9는 여기 없다 —
+# 이유는 규칙 문서 §A.3.
+FIXED_LINEAR_GATE_KEYS: Final[tuple[str, ...]] = (
+    "g0_median_mm",
+    "g0_p95_mm",
+    "g0_max_mm",
+    "uv_degenerate_misattribution_mm",
+    "atlas_overlap_max_gap_mm",
+    "uv_miss_fraction",
+    "uv_ambiguous_fraction",
+    "uv_abs_resid_p95_texel",
+    "uv_abs_resid_max_texel",
+    "median_mm",
+    "p95_mm",
+    "max_mm",
+)
+
+
+def signed_permutations() -> list[Mat3]:
+    """부호 있는 축 순열 48개(det +1 24개, det −1 24개). 순서는 결정적이다."""
+    out: list[Mat3] = []
+    for perm in itertools.permutations(range(3)):
+        for signs in itertools.product((1.0, -1.0), repeat=3):
+            m = [[0.0, 0.0, 0.0] for _ in range(3)]
+            for row in range(3):
+                m[row][perm[row]] = signs[row]
+            out.append(tuple(tuple(row) for row in m))  # type: ignore[arg-type]
+    return out
+
+
+def _segment_triangle_param(o: Vec3, e: Vec3, a: Vec3, b: Vec3, c: Vec3) -> float | None:
+    """선분 o→e와 삼각형의 교차 매개변수 s(o + s·(e−o)). 없으면 None. Möller–Trumbore."""
+    d = _sub(e, o)
+    e1 = _sub(b, a)
+    e2 = _sub(c, a)
+    pv = _cross(d, e2)
+    det = _dot(e1, pv)
+    if abs(det) < 1e-15:
+        return None
+    inv = 1.0 / det
+    tv = _sub(o, a)
+    u = _dot(tv, pv) * inv
+    if u < 0.0 or u > 1.0:
+        return None
+    qv = _cross(tv, e1)
+    v = _dot(d, qv) * inv
+    if v < 0.0 or u + v > 1.0:
+        return None
+    s = _dot(e2, qv) * inv
+    if s <= 0.0 or s >= 1.0:
+        return None
+    return s
+
+
+def occlusion_fraction(
+    placed_mesh: Mesh,
+    origins: Sequence[Vec3],
+    hits: Sequence[Vec3],
+    stop_before_m: float = OCCLUSION_STOP_BEFORE_M,
+) -> float:
+    """원점→착탄점 선분이 착탄 `stop_before_m` 앞에서 배치된 메시와 교차하는 프레임 비율.
+
+    건·HMD·플래쉬가 **같은 함수**를 쓴다 — 원점만 다르다(규칙 문서 §A.2, §B.1). 착탄점
+    자체의 면은 s·L = L이므로 `s·L < L − stop_before_m`에서 빠진다. 그 부등호가 뒤집히면
+    착탄점이 놓인 면이 늘 자기 자신을 가려 모든 프레임이 1.0이 된다.
+    """
+    if len(origins) != len(hits):
+        raise ValueError("occlusion_fraction: origins and hits must be index-paired")
+    if not hits:
+        raise ValueError("occlusion_fraction: no frames")
+    triangles = _world_triangles(placed_mesh)
+    blocked = 0
+    for origin, hit in zip(origins, hits):
+        length = math.dist(origin, hit)
+        for a, b, c in triangles:
+            s = _segment_triangle_param(origin, hit, a, b, c)
+            if s is not None and s * length < length - stop_before_m:
+                blocked += 1
+                break
+    return blocked / len(hits)
+
+
+@dataclass(frozen=True, slots=True)
+class LevelFrames:
+    """선형부 고정 경로의 표본. `collect_level_hits_by_session`과 같은 순서·같은 필터에
+    원점(건·HMD·플래쉬) 위치를 함께 싣는다. 플래쉬는 거리 필터 탈락 시 None이다."""
+
+    hits: list[Vec3]
+    uvs: list[tuple[float, float]]
+    sessions: list[str]
+    guns: list[Vec3]
+    heads: list[Vec3]
+    flashes: list[Vec3 | None]
+
+
+def collect_level_frames_by_session(
+    level: int,
+    professionals_root: Path = DEFAULT_PROFESSIONALS_ROOT,
+    min_hits: int = DEFAULT_EVAL_CAP,
+) -> LevelFrames:
+    """`collect_level_hits_by_session`과 **같은 세션 교대·파일당 상한·필터**로 모은다."""
+    import measured_pose
+    import simulator_csv
+
+    frames = LevelFrames([], [], [], [], [], [])
+    paths = sorted(professionals_root.glob(f"**/{level}_*.csv"))
+    if not paths:
+        return frames
+    by_session: dict[str, list[Path]] = {}
+    for path in paths:
+        session = "/".join(path.relative_to(professionals_root).parts[:-1])
+        by_session.setdefault(session, []).append(path)
+    sessions = sorted(by_session)
+    per_file_cap = max(1, 3 * min_hits // len(paths))
+    queues = {name: list(files) for name, files in by_session.items()}
+    while any(queues.values()) and len(frames.hits) < min_hits:
+        for session in sessions:
+            if not queues[session]:
+                continue
+            rows = simulator_csv.read_rows(queues[session].pop(0))
+            taken = 0
+            for frame in measured_pose.measured_frames(rows):
+                if frame.hit is None or frame.uv is None or not frame.spraying:
+                    continue
+                frames.hits.append(frame.hit)
+                frames.uvs.append(frame.uv)
+                frames.sessions.append(session)
+                frames.guns.append(frame.right)
+                frames.heads.append(frame.head)
+                frames.flashes.append(frame.left)
+                taken += 1
+                if taken >= per_file_cap:
+                    break
+            if len(frames.hits) >= min_hits:
+                break
+    return frames
+
+
+def split_fit_holdout(n: int, fit_sample: int, eval_cap: int, seed: int = 0) -> tuple[list[int], list[int]]:
+    """한 순열을 **겹치지 않게** 자른다(`solve_alignment_uv`와 같은 규칙)."""
+    rng = random.Random(seed)
+    order = list(range(n))
+    rng.shuffle(order)
+    return order[:fit_sample], order[fit_sample : fit_sample + eval_cap]
+
+
+def solve_translation_fixed(
+    rotation: Mat3,
+    scale: float,
+    model_points: Sequence[Vec3],
+    world_points: Sequence[Vec3],
+    inlier_m: float = 1e-3,
+) -> tuple[Vec3, int]:
+    """R·s 고정에서 t: t_i = q − s·R·p의 축별 중앙값 → 그 1 mm 안 평균. (t, 인라이어 수)."""
+    if not model_points:
+        raise ValueError("solve_translation_fixed: no correspondences")
+    ts: list[Vec3] = []
+    for p, q in zip(model_points, world_points):
+        rv = rotation_math.matvec(rotation, p)
+        ts.append((q[0] - scale * rv[0], q[1] - scale * rv[1], q[2] - scale * rv[2]))
+    median: Vec3 = tuple(sorted(t[d] for t in ts)[len(ts) // 2] for d in range(3))  # type: ignore[assignment]
+    inliers = [t for t in ts if math.dist(t, median) < inlier_m]
+    if not inliers:
+        return median, 0
+    mean: Vec3 = tuple(sum(t[d] for t in inliers) / len(inliers) for d in range(3))  # type: ignore[assignment]
+    return mean, len(inliers)
+
+
+def _fixed_alignment(level: int, rotation: Mat3, translation: Vec3, provenance: str = "solved") -> Alignment:
+    return Alignment(
+        level=level,
+        provenance=provenance,
+        rotation=tuple(rotation[r][c] for r in range(3) for c in range(3)),
+        translation=translation,
+        scale=FIXED_LINEAR_SCALE,
+        declared_scale=FIXED_LINEAR_SCALE,
+        fit={},
+    )
+
+
+def measure_placement(
+    mesh: Mesh,
+    rotation: Mat3,
+    scale: float,
+    translation: Vec3,
+    hits: Sequence[Vec3],
+    uvs: Sequence[tuple[float, float]],
+) -> dict[str, float]:
+    """G2·G3만(홀드아웃). 적합하지 않는다."""
+    placed = _world_tris_for(mesh.vertices, mesh.triangles, rotation, scale, translation)
+    distances, residuals, _tids, ties = uv_absolute_residuals(placed, mesh, hits, uvs)
+    d_med, d_p95, d_max = _percentiles(distances)
+    r_med, r_p95, r_max = _percentiles(residuals)
+    return {
+        "median_mm": d_med * 1000.0,
+        "p95_mm": d_p95 * 1000.0,
+        "max_mm": d_max * 1000.0,
+        "uv_abs_resid_median_texel": r_med,
+        "uv_abs_resid_p95_texel": r_p95,
+        "uv_abs_resid_max_texel": r_max,
+        "uv_seam_tie_fraction": ties / max(1, len(hits)),
+    }
+
+
+def _placed_mesh(mesh: Mesh, rotation: Mat3, scale: float, translation: Vec3) -> Mesh:
+    return place(
+        mesh,
+        Alignment(
+            level=0, provenance="solved",
+            rotation=tuple(rotation[r][c] for r in range(3) for c in range(3)),
+            translation=translation, scale=scale, declared_scale=scale, fit={},
+        ),
+    )
+
+
+def origin_occlusions(
+    mesh: Mesh,
+    rotation: Mat3,
+    scale: float,
+    translation: Vec3,
+    frames: LevelFrames,
+    indices: Sequence[int],
+) -> dict[str, float]:
+    """건·HMD·플래쉬 가림(같은 `occlusion_fraction`, 원점만 다름)."""
+    placed = _placed_mesh(mesh, rotation, scale, translation)
+    hits = [frames.hits[i] for i in indices]
+    flash_idx = [i for i in indices if frames.flashes[i] is not None]
+    out = {
+        "gun_occlusion": occlusion_fraction(placed, [frames.guns[i] for i in indices], hits),
+        "hmd_occlusion": occlusion_fraction(placed, [frames.heads[i] for i in indices], hits),
+        "occlusion_n": float(len(indices)),
+        "flash_occlusion_n": float(len(flash_idx)),
+    }
+    out["flash_occlusion"] = (
+        occlusion_fraction(placed, [frames.flashes[i] for i in flash_idx], [frames.hits[i] for i in flash_idx])  # type: ignore[misc]
+        if flash_idx
+        else None
+    )
+    return out  # type: ignore[return-value]
+
+
+def _cross_worker_fixed(
+    mesh: Mesh, index: UvIndex, rotation: Mat3, frames: LevelFrames, seed: int
+) -> dict[str, float]:
+    """G6(선형부 고정판): 최다 작업자로만 t를 적합, 다른 작업자 600행에서 G2·G3 p95/max."""
+    workers: dict[str, list[int]] = {}
+    for i, session in enumerate(frames.sessions):
+        workers.setdefault(_worker_of(session), []).append(i)
+    fail = {"cross_session_pass": 0.0, "cross_session_workers": float(len(workers)),
+            "cross_session_worst_mm": math.inf, "cross_session_worst_texel": math.inf}
+    if len(workers) < 2:
+        return fail
+    fit_worker = max(workers, key=lambda w: len(workers[w]))
+    fit_rows = workers[fit_worker]
+    other_rows = [i for w, rows in workers.items() if w != fit_worker for i in rows]
+    src, dst, _m, _a = _correspondences(
+        mesh, index, [frames.hits[i] for i in fit_rows], [frames.uvs[i] for i in fit_rows]
+    )
+    if len(src) < 50:
+        return fail
+    translation, _n = solve_translation_fixed(rotation, FIXED_LINEAR_SCALE, src, dst)
+    picks = random.Random(seed + 991).sample(other_rows, min(600, len(other_rows)))
+    out = measure_placement(
+        mesh, rotation, FIXED_LINEAR_SCALE, translation,
+        [frames.hits[i] for i in picks], [frames.uvs[i] for i in picks],
+    )
+    ok = (
+        out["p95_mm"] <= GATES["p95_mm"]
+        and out["max_mm"] <= GATES["max_mm"]
+        and out["uv_abs_resid_p95_texel"] <= GATES["uv_abs_resid_p95_texel"]
+        and out["uv_abs_resid_max_texel"] <= GATES["uv_abs_resid_max_texel"]
+    )
+    return {
+        "cross_session_pass": 1.0 if ok else 0.0,
+        "cross_session_workers": float(len(workers)),
+        "cross_session_fit_worker_rows": float(len(fit_rows)),
+        "cross_session_eval_rows": float(len(picks)),
+        "cross_session_worst_mm": out["max_mm"],
+        "cross_session_worst_texel": out["uv_abs_resid_max_texel"],
+    }
+
+
+def _matrix_list(m: Mat3) -> list[float]:
+    return [m[r][c] for r in range(3) for c in range(3)]
+
+
+def solve_fixed_linear(
+    level: int,
+    mesh: Mesh,
+    frames: LevelFrames,
+    *,
+    index: UvIndex | None = None,
+    fit_sample: int = 2000,
+    eval_cap: int = 1500,
+    seed: int = 0,
+    candidates: Sequence[Mat3] | None = None,
+    screen: int = 100,
+    cross_worker: bool = True,
+    atlas: dict[str, float] | None = None,
+    always_measure: Sequence[Mat3] = (),
+) -> dict:
+    """후보 R마다 t를 다시 풀고 §A·§B 지표를 잰다. **판정(유일성·§B 유효성)은 하지 않는다** —
+    §B 유효성은 다른 레벨의 양성 대조에 달려 있어 `judge_fixed_linear`이 따로 한다.
+
+    선별(`screen`): 홀드아웃 앞 `screen`점의 G2·G3 **max**가 이미 문턱을 넘는 후보는 전체
+    홀드아웃에서도 반드시 넘는다(max는 부분집합에서 줄기만 한다). 그런 후보는 전량 평가를
+    건너뛰고 `screened_out`로 기록한다 — 판정이 바뀌지 않는 가지치기다.
+    """
+    if index is None:
+        index = build_uv_index(mesh)
+    fit_idx, eval_idx = split_fit_holdout(len(frames.hits), fit_sample, eval_cap, seed)
+    if len(eval_idx) < eval_cap:
+        raise ValueError(f"solve_fixed_linear: only {len(frames.hits)} frames for fit {fit_sample} + holdout {eval_cap}")
+    fit_hits = [frames.hits[i] for i in fit_idx]
+    fit_uvs = [frames.uvs[i] for i in fit_idx]
+    eval_hits = [frames.hits[i] for i in eval_idx]
+    eval_uvs = [frames.uvs[i] for i in eval_idx]
+
+    src, dst, fit_miss, fit_amb = _correspondences(mesh, index, fit_hits, fit_uvs)
+    if len(src) < 50:
+        raise ValueError(f"solve_fixed_linear: only {len(src)} usable correspondences")
+    ev_src, ev_dst, _em, _ea = _correspondences(mesh, index, eval_hits, eval_uvs)
+    shared = congruence_stats(ev_src, ev_dst, FIXED_LINEAR_SCALE, seed=seed)
+    if atlas is None:
+        atlas = audit_atlas(mesh, index, seed=seed)
+        _m, _w, miss_all, amb_all = _correspondences(mesh, index, frames.hits, frames.uvs)
+        atlas = {**atlas, "uv_miss_fraction": miss_all, "uv_ambiguous_fraction": amb_all,
+                 "uv_lookup_sample": float(len(frames.hits))}
+    shared.update(atlas)
+
+    results: list[dict] = []
+    for rotation in (candidates if candidates is not None else signed_permutations()):
+        translation, n_inliers = solve_translation_fixed(rotation, FIXED_LINEAR_SCALE, src, dst)
+        record: dict = {
+            "rotation": _matrix_list(rotation),
+            "det": _mat3_det(rotation),
+            "translation": list(translation),
+            "fit_inliers": n_inliers,
+        }
+        probe = measure_placement(
+            mesh, rotation, FIXED_LINEAR_SCALE, translation, eval_hits[:screen], eval_uvs[:screen]
+        )
+        exempt = any(rotation == keep for keep in always_measure)
+        if not exempt and (
+            probe["max_mm"] > GATES["max_mm"] or probe["uv_abs_resid_max_texel"] > GATES["uv_abs_resid_max_texel"]
+        ):
+            record["screened_out"] = {"sample": float(min(screen, len(eval_hits))), **probe}
+            record["gate_failures_A"] = [
+                name for name in ("max_mm", "uv_abs_resid_max_texel")
+                if probe[name] > GATES[name]
+            ]
+            record["passed_A"] = False
+            record["passed_B"] = None
+            results.append(record)
+            continue
+        measured = {**shared, **measure_placement(
+            mesh, rotation, FIXED_LINEAR_SCALE, translation, eval_hits, eval_uvs
+        )}
+        measured.update(origin_occlusions(mesh, rotation, FIXED_LINEAR_SCALE, translation, frames, eval_idx))
+        if cross_worker:
+            measured.update(_cross_worker_fixed(mesh, index, rotation, frames, seed))
+        failures_a = [name for name, _v, _n in gate_failures({k: measured[k] for k in FIXED_LINEAR_GATE_KEYS})]
+        if cross_worker and measured["cross_session_pass"] < 1.0:
+            failures_a.append("cross_session")
+        if not (measured["gun_occlusion"] <= OCCLUSION_THRESHOLD):
+            failures_a.append("gun_occlusion")
+        record["measured"] = measured
+        record["gate_failures_A"] = failures_a
+        record["passed_A"] = not failures_a
+        record["passed_B"] = bool(measured["hmd_occlusion"] <= OCCLUSION_THRESHOLD)
+        results.append(record)
+
+    return {
+        "level": level,
+        "fit_n": len(fit_idx),
+        "holdout_n": len(eval_idx),
+        "fit_indices": fit_idx,
+        "eval_indices": eval_idx,
+        "holdout_overlap": len(set(fit_idx) & set(eval_idx)),
+        "fit_uv_miss_fraction": fit_miss,
+        "fit_uv_ambiguous_fraction": fit_amb,
+        "candidates": results,
+    }
+
+
+def recorded_control_occlusion(level: int, mesh: Mesh, frames: LevelFrames, *, seed: int = 0,
+                               fit_sample: int = 2000, eval_cap: int = 1500) -> dict[str, float]:
+    """§B 양성 대조: 기록된 변환 그대로(재적합 없음), §A.1과 같은 홀드아웃에서 가림을 잰다."""
+    alignment = load_alignment(level)
+    if alignment.provenance != "solved":
+        raise ValueError(f"level {level} is not a solved control")
+    _fit, eval_idx = split_fit_holdout(len(frames.hits), fit_sample, eval_cap, seed)
+    return origin_occlusions(
+        mesh, _rotation_matrix(alignment), alignment.scale, alignment.translation, frames, eval_idx
+    )
+
+
+def judge_fixed_linear(result: dict, positive_controls: dict[int, float], mirror: Mat3) -> dict:
+    """규칙 문서 §B.3·§B.4 그대로. `positive_controls`는 레벨 → G_occ_hmd."""
+    required = {3, 4, 5, 6, 7, 8, 9, 10}
+    missing = sorted(required - set(positive_controls))
+    over = {lv: v for lv, v in positive_controls.items() if not (v <= OCCLUSION_THRESHOLD)}
+    mirror_list = _matrix_list(mirror)
+    mirror_rec = next((c for c in result["candidates"] if c["rotation"] == mirror_list), None)
+    mirror_hmd = None if mirror_rec is None or "measured" not in mirror_rec else mirror_rec["measured"]["hmd_occlusion"]
+    reasons: list[str] = []
+    if missing:
+        reasons.append(f"positive controls missing: {missing}")
+    if over:
+        reasons.append(f"positive control hmd_occlusion > {OCCLUSION_THRESHOLD}: {over}")
+    if mirror_hmd is None or not (mirror_hmd > OCCLUSION_THRESHOLD):
+        reasons.append(f"negative control (mirror) hmd_occlusion {mirror_hmd} not > {OCCLUSION_THRESHOLD}")
+    valid_b = not reasons
+    passed = [c for c in result["candidates"] if c["passed_A"] and c["passed_B"]]
+    passed_a = [c for c in result["candidates"] if c["passed_A"]]
+    solved = valid_b and len(passed) == 1
+    return {
+        "section_b_valid": valid_b,
+        "section_b_invalid_reasons": reasons,
+        "candidates_passed_A": len(passed_a),
+        "candidates_passed_A_and_B": len(passed) if valid_b else None,
+        "solved": solved,
+        "winner": passed[0] if solved else None,
+        "mirror": mirror_rec,
+    }
+
+
+def _occ_pair(p: dict | None, m: dict | None, key: str) -> dict[str, float | None]:
+    def get(rec: dict | None) -> float | None:
+        if rec is None or "measured" not in rec:
+            return None
+        v = rec["measured"][key]
+        return None if isinstance(v, float) and math.isnan(v) else v
+    return {"P": get(p), "mirror": get(m)}
+
+
+def fixed_linear_entry(
+    base_entry: dict,
+    result: dict,
+    verdict: dict,
+    positive_controls: dict[int, dict[str, float]],
+    *,
+    reference: Mat3,
+    frames: LevelFrames,
+) -> dict:
+    """판정 결과로 레벨 항목을 만든다. solved면 옛 거절 기록을 `history`로 보존한다."""
+    ref_list = _matrix_list(reference)
+    ref_rec = next((c for c in result["candidates"] if c["rotation"] == ref_list), None)
+    winner = verdict["winner"]
+    evidence_p = winner if winner is not None else ref_rec
+    evidence = {
+        "gun_occlusion": _occ_pair(evidence_p, verdict["mirror"], "gun_occlusion"),
+        "hmd_occlusion": _occ_pair(evidence_p, verdict["mirror"], "hmd_occlusion"),
+        "flash_occlusion_report": _occ_pair(evidence_p, verdict["mirror"], "flash_occlusion"),
+        "rule_doc": FIXED_LINEAR_RULE_DOC,
+        "posthoc_parts": ["G_occ_gun", "uniqueness"],
+    }
+
+    def summary(rec: dict) -> dict:
+        out = {k: rec[k] for k in ("rotation", "det", "translation", "passed_A", "passed_B", "gate_failures_A")}
+        if "measured" in rec:
+            out["measured"] = rec["measured"]
+        else:
+            out["screened_out"] = rec["screened_out"]
+        return out
+
+    attempt = {
+        "linear_source": "fixed_signed_permutation",
+        "rule_doc": FIXED_LINEAR_RULE_DOC,
+        "scale": FIXED_LINEAR_SCALE,
+        "fit_n": result["fit_n"],
+        "holdout_n": result["holdout_n"],
+        "holdout_overlap": result["holdout_overlap"],
+        "occlusion_threshold": OCCLUSION_THRESHOLD,
+        "occlusion_stop_before_m": OCCLUSION_STOP_BEFORE_M,
+        "candidates_tried": len(result["candidates"]),
+        "candidates_passed_A": verdict["candidates_passed_A"],
+        "candidates_passed_A_and_B": verdict["candidates_passed_A_and_B"],
+        "section_b_valid": verdict["section_b_valid"],
+        "section_b_invalid_reasons": verdict["section_b_invalid_reasons"],
+        "positive_controls": {str(k): v for k, v in sorted(positive_controls.items())},
+        "passing_or_reference_candidates": [
+            summary(c) for c in result["candidates"]
+            if c["passed_A"] or c["rotation"] in (ref_list, _matrix_list(_plate_mirror(reference)))
+        ],
+        "handedness_evidence": evidence,
+    }
+    if not verdict["solved"]:
+        entry = {k: v for k, v in base_entry.items() if k != "fixed_linear_attempt"}
+        entry["fixed_linear_attempt"] = attempt
+        return entry
+
+    m = winner["measured"]
+    fit = {k: m[k] for k in sorted(m)}
+    fit["det_sign"] = winner["det"]
+    fit["fit_eval_overlap"] = float(result["holdout_overlap"])
+    fit["fit_n"] = float(result["fit_n"])
+    fit["n_hits"] = float(result["holdout_n"])
+    fit["scale_ratio_to_declared"] = 0.0
+    history = list(base_entry.get("history", []))
+    history.append({k: v for k, v in base_entry.items() if k not in ("history", "fixed_linear_attempt")})
+    return {
+        "level": base_entry["level"],
+        "provenance": "solved",
+        "solved_transform": {
+            "rotation": winner["rotation"],
+            "translation": winner["translation"],
+            "scale": FIXED_LINEAR_SCALE,
+        },
+        "declared_scale": FIXED_LINEAR_SCALE,
+        "fit": fit,
+        "source_fbx": base_entry["source_fbx"],
+        "uv_convention": UV_CONVENTION,
+        "uv_convention_source": "measured",
+        "linear_source": "fixed_signed_permutation",
+        "handedness_source": "data:occlusion_gun+hmd",
+        "handedness_evidence": evidence,
+        "not_gated": {
+            "reason": "12자유도 경로 전용 게이트(G4 aniso, G7, G8, G9) — 규칙 문서 §A.3",
+            "scale_ratio_to_declared_is_by_construction": True,
+        },
+        "fixed_linear_attempt": attempt,
+        "workers": sorted({_worker_of(name) for name in frames.sessions}),
+        "session_count": len(set(frames.sessions)),
+        "history": history,
+    }
+
+
+def _plate_mirror(reference: Mat3) -> Mat3:
+    """월드 X(레벨 1 판 법선) 반사를 기준 선형부에 합성한 후보."""
+    mx: Mat3 = ((-1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+    return rotation_math.matmul(mx, reference)
+
+
+GLOBAL_IMPORT_LINEAR: Final[Mat3] = ((0.0, 1.0, 0.0), (0.0, 0.0, 1.0), (-1.0, 0.0, 0.0))
+
+
+def _control_worker(level: int) -> tuple[int, dict[str, float]]:
+    mesh = read_fbx(DEFAULT_MODELINGS_ROOT / LEVEL_FBX[level])
+    frames = collect_level_frames_by_session(level)
+    out = recorded_control_occlusion(level, mesh, frames)
+    print(f"control level {level}: {out}", flush=True)
+    return level, out
+
+
+def _fixed_worker(level: int) -> tuple[int, dict, list]:
+    mesh = read_fbx(DEFAULT_MODELINGS_ROOT / LEVEL_FBX[level])
+    frames = collect_level_frames_by_session(level)
+    # 기준 선형부(P)와 판 법선 거울 후보는 선별 없이 전량 잰다 — 판정은 같고, 레벨 2 진단
+    # (G2 max 초과가 앞 100점에 걸려 선별되던 P)의 수치를 기록에 남기기 위해서다.
+    result = solve_fixed_linear(
+        level, mesh, frames, always_measure=(GLOBAL_IMPORT_LINEAR, _plate_mirror(GLOBAL_IMPORT_LINEAR))
+    )
+    passing = [(c["det"], c.get("gate_failures_A"), c.get("passed_B")) for c in result["candidates"] if "measured" in c]
+    print(f"fixed level {level}: fully evaluated {len(passing)}: {passing}", flush=True)
+    return level, result, frames.sessions
+
+
+def fixed_linear_main(out_path: Path) -> None:
+    """레벨 3~10 양성 대조 → 레벨 1·2 선형부 고정 → §B 판정 → 레벨 1·2 항목만 다시 쓴다."""
+    from multiprocessing import Pool
+
+    with Pool(10) as pool:
+        controls_async = pool.map_async(_control_worker, [3, 4, 5, 6, 7, 8, 9, 10])
+        fixed_async = pool.map_async(_fixed_worker, [1, 2])
+        controls = dict(controls_async.get())
+        fixed = {lv: (res, sess) for lv, res, sess in fixed_async.get()}
+
+    positive = {lv: v["hmd_occlusion"] for lv, v in controls.items()}
+    entries = json.loads(ALIGNMENT_PATH.read_text(encoding="utf-8"))
+    report: dict = {"controls": {str(k): v for k, v in sorted(controls.items())}, "levels": {}}
+    mirror = _plate_mirror(GLOBAL_IMPORT_LINEAR)
+    for level in (1, 2):
+        result, sessions = fixed[level]
+        verdict = judge_fixed_linear(result, positive, mirror)
+        if level == 2:
+            verdict = {**verdict, "solved": False, "winner": None}  # 사용자 결정 C: 진단만
+        frames = LevelFrames([], [], list(sessions), [], [], [])
+        i = next(k for k, e in enumerate(entries) if int(e["level"]) == level)
+        entries[i] = fixed_linear_entry(entries[i], result, verdict, controls,
+                                        reference=GLOBAL_IMPORT_LINEAR, frames=frames)
+        report["levels"][str(level)] = {
+            "verdict": {k: v for k, v in verdict.items() if k not in ("winner", "mirror")},
+            "candidates": result["candidates"],
+            "holdout_overlap": result["holdout_overlap"],
+        }
+        print(f"level {level}: {report['levels'][str(level)]['verdict']}", flush=True)
+    out_path.write_text(json.dumps(report, indent=2, ensure_ascii=False, default=str) + "\n", encoding="utf-8")
+    ALIGNMENT_PATH.write_text(json.dumps(entries, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
 def main() -> None:
     entries: list[dict] = []
     rejected: list[dict] = []
@@ -2187,4 +2795,9 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+
+    if len(sys.argv) >= 3 and sys.argv[1] == "fixed-linear":
+        fixed_linear_main(Path(sys.argv[2]))
+    else:
+        main()

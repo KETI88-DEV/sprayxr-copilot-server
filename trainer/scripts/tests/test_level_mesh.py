@@ -681,3 +681,275 @@ def test_committed_fit_records_every_gate_it_was_judged_by() -> None:
         for key in level_mesh._LOWER_IS_BETTER + level_mesh._HIGHER_IS_BETTER:
             assert key in fit, f"level {level} fit is missing {key}"
         assert _entry(level)["uv_convention"] == level_mesh.UV_CONVENTION
+
+
+# =============================================================================
+# 선형부 고정 경로(부호 있는 축 순열 48개 × 평행이동 3자유도)
+#
+# 규칙 문서: docs/measurements/2026-09-15-fixed-linear-alignment-rule.md
+# §A는 결과 관측 후 작성(post-hoc), §B(HMD 가림)는 사전등록이다. 이 테스트들은 판정
+# 도구가 **실패할 수 있음**을 고정한다 — 거울 후보·넛지·반바퀴·겹친 홀드아웃·무효 §B.
+# =============================================================================
+
+P_LINEAR = level_mesh.GLOBAL_IMPORT_LINEAR
+PLATE_MIRROR = level_mesh._plate_mirror(P_LINEAR)
+
+
+def _slab_mesh():
+    """앞면 x=0, 뒷면 x=−0.025인 2.5 cm 판(레벨 1과 같은 두께)."""
+    def quad(x):
+        return [(x, 0.0, 0.0), (x, 1.0, 0.0), (x, 1.0, 1.0), (x, 0.0, 1.0)]
+
+    return level_mesh.Mesh(
+        vertices=quad(0.0) + quad(-0.025),
+        triangles=[(0, 1, 2), (0, 2, 3), (4, 5, 6), (4, 6, 7)],
+        uvs=[],
+        declared={},
+    )
+
+
+def test_occlusion_fraction_counts_only_surfaces_before_the_hit() -> None:
+    """앞면 착탄점을 앞에서 보면 가림 0, 뒤에서(판을 뚫고) 보면 가림 1.
+
+    착탄점이 놓인 면 자체는 s·L = L이라 `s·L < L − stop_before`에서 빠져야 한다. 그
+    부등호의 부호가 뒤집히면(`L + stop_before`) 앞에서 본 프레임도 자기 면에 가려 1.0이 된다.
+    """
+    mesh = _slab_mesh()
+    # 착탄점을 앞면에서 1 mm **안쪽**에 둔다 — 실데이터의 착탄점도 표면에서 미세하게 어긋나며,
+    # 그때 자기 면을 빼 주는 것은 `s < 1`이 아니라 2 mm 허용치다. 정확히 면 위(x=0)에 두면
+    # 허용치 부호를 뒤집어도 `s >= 1` 배제가 대신 막아 이 테스트가 실패할 수 없었다(변이로 확인).
+    hits = [(-0.001, 0.5, 0.5), (-0.001, 0.2, 0.7), (-0.001, 0.8, 0.1)]
+    front = [(1.0, 0.5, 0.5), (0.8, 0.3, 0.6), (0.4, 0.7, 0.2)]
+    behind = [(-1.0, 0.5, 0.5), (-0.8, 0.3, 0.6), (-0.4, 0.7, 0.2)]
+    assert level_mesh.occlusion_fraction(mesh, front, hits) == 0.0
+    assert level_mesh.occlusion_fraction(mesh, behind, hits) == 1.0
+
+
+def test_signed_permutations_cover_both_handednesses() -> None:
+    mats = level_mesh.signed_permutations()
+    assert len(mats) == 48
+    assert sum(1 for m in mats if level_mesh._mat3_det(m) > 0) == 24
+    assert P_LINEAR in mats and PLATE_MIRROR in mats
+    assert level_mesh._mat3_det(P_LINEAR) == -1.0 and level_mesh._mat3_det(PLATE_MIRROR) == 1.0
+
+
+def test_fixed_linear_fit_and_holdout_never_overlap() -> None:
+    """적합 2,000 / 홀드아웃 1,500이 한 순열에서 겹치지 않게 잘린다."""
+    fit_idx, eval_idx = level_mesh.split_fit_holdout(3600, 2000, 1500, seed=0)
+    assert len(fit_idx) == 2000 and len(eval_idx) == 1500
+    assert set(fit_idx) & set(eval_idx) == set()
+
+
+@functools.lru_cache(maxsize=None)
+def _level1_frames():
+    return level_mesh.collect_level_frames_by_session(1, min_hits=3500)
+
+
+@functools.lru_cache(maxsize=None)
+def _level1_pair_result():
+    mesh, index = _mesh_and_index(_entry(1)["source_fbx"])
+    return level_mesh.solve_fixed_linear(
+        1, mesh, _level1_frames(), index=index, eval_cap=300, cross_worker=False,
+        candidates=[P_LINEAR, PLATE_MIRROR], always_measure=(P_LINEAR, PLATE_MIRROR),
+    )
+
+
+def _candidate(result, rotation):
+    flat = level_mesh._matrix_list(rotation)
+    return next(c for c in result["candidates"] if c["rotation"] == flat)
+
+
+def test_level1_plate_mirror_passes_uv_and_distance_but_occlusion_rejects_it() -> None:
+    """판 법선 반사(det +1)는 t를 다시 풀면 절대 UV 등식·표면 거리를 **통과한다**.
+
+    평면 착탄점으로는 그 등식이 원리적으로 손대칭을 못 가른다. 가르는 것은 건·HMD→착탄
+    선분이 판을 뚫는지다(실측 전체 홀드아웃: 거울 1.000 / P 0.000).
+    """
+    result = _level1_pair_result()
+    assert result["holdout_overlap"] == 0
+    mirror = _candidate(result, PLATE_MIRROR)["measured"]
+    for key in ("median_mm", "p95_mm", "max_mm", "uv_abs_resid_p95_texel", "uv_abs_resid_max_texel"):
+        assert mirror[key] <= level_mesh.GATES[key], f"거울 후보가 {key}에서 떨어졌다 — 전제가 바뀌었다"
+    assert mirror["gun_occlusion"] > level_mesh.OCCLUSION_THRESHOLD
+    assert mirror["hmd_occlusion"] > level_mesh.OCCLUSION_THRESHOLD
+    mirror_rec = _candidate(result, PLATE_MIRROR)
+    assert "gun_occlusion" in mirror_rec["gate_failures_A"]
+    assert mirror_rec["passed_B"] is False
+    p_rec = _candidate(result, P_LINEAR)
+    assert p_rec["passed_A"] is True and p_rec["passed_B"] is True
+
+
+def test_level1_translation_nudges_are_rejected() -> None:
+    """P의 t를 1 mm 옮기면 걸린다: 판 법선(X)은 G3 중앙값 ≈1.0 mm, 판 안(Y·Z)은 G2 p95 ≈0.26~0.28 텍셀."""
+    mesh, _index = _mesh_and_index(_entry(1)["source_fbx"])
+    frames = _level1_frames()
+    t = _candidate(_level1_pair_result(), P_LINEAR)["translation"]
+    _fit, eval_idx = level_mesh.split_fit_holdout(len(frames.hits), 2000, 300, seed=0)
+    hits = [frames.hits[i] for i in eval_idx]
+    uvs = [frames.uvs[i] for i in eval_idx]
+
+    def measure(delta):
+        moved = tuple(t[d] + delta[d] for d in range(3))
+        m = level_mesh.measure_placement(mesh, P_LINEAR, level_mesh.FIXED_LINEAR_SCALE, moved, hits, uvs)
+        return m, {name for name, _v, _n in level_mesh.gate_failures(m)}
+
+    m_x, f_x = measure((0.001, 0.0, 0.0))
+    assert "median_mm" in f_x and m_x["median_mm"] == pytest.approx(1.0, abs=0.05)
+    for delta in ((0.0, 0.001, 0.0), (0.0, 0.0, 0.001)):
+        m_yz, f_yz = measure(delta)
+        # 0.26·0.28은 15,000점 수집의 앞 300점(로그) 값이다. 이 테스트의 3,500점 수집 표본에서는
+        # 0.45 근처가 나온다 — 성질은 "1 mm 넛지가 G2 p95 문턱(0.01)의 수십 배로 걸린다"이다.
+        assert "uv_abs_resid_p95_texel" in f_yz and 0.1 < m_yz["uv_abs_resid_p95_texel"] < 1.0
+
+
+def test_level1_half_turns_are_rejected_even_with_translation_resolved() -> None:
+    """월드 X·위·Z축 180° 후보는 t를 다시 풀어도 G2 p95가 수백 텍셀이다(실측 336~452)."""
+    mesh, index = _mesh_and_index(_entry(1)["source_fbx"])
+    half_turns = [
+        ((1.0, 0.0, 0.0), (0.0, -1.0, 0.0), (0.0, 0.0, -1.0)),
+        ((-1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, -1.0)),
+        ((-1.0, 0.0, 0.0), (0.0, -1.0, 0.0), (0.0, 0.0, 1.0)),
+    ]
+    candidates = [rotation_math.matmul(h, P_LINEAR) for h in half_turns]
+    result = level_mesh.solve_fixed_linear(
+        1, mesh, _level1_frames(), index=index, eval_cap=300, cross_worker=False,
+        candidates=candidates, always_measure=tuple(candidates),
+    )
+    for rec in result["candidates"]:
+        assert rec["measured"]["uv_abs_resid_p95_texel"] > 100.0
+        assert "uv_abs_resid_p95_texel" in rec["gate_failures_A"] and rec["passed_A"] is False
+
+
+def test_level1_exactly_one_signed_permutation_passes_section_a() -> None:
+    """48 후보 × t 재적합 중 §A(G6 제외 — 이 테스트는 홀드아웃 300)를 통과하는 것은 P 하나다."""
+    mesh, index = _mesh_and_index(_entry(1)["source_fbx"])
+    result = level_mesh.solve_fixed_linear(
+        1, mesh, _level1_frames(), index=index, eval_cap=300, cross_worker=False,
+    )
+    passed = [c for c in result["candidates"] if c["passed_A"]]
+    assert len(result["candidates"]) == 48
+    assert [c["rotation"] for c in passed] == [level_mesh._matrix_list(P_LINEAR)]
+
+
+@pytest.mark.parametrize("level", [3, 4, 5, 6, 7, 9, 10])
+def test_positive_controls_pass_with_the_global_import_linear_part(level: int) -> None:
+    """양성 대조: 기록 선형부가 P인 레벨은 P 고정 + t 재적합으로 G2·G3를 통과한다."""
+    mesh, _index = _mesh_and_index(_entry(level)["source_fbx"])
+    index = level_mesh.build_uv_index(mesh)
+    hits, uvs, _s = _hits(level)
+    fit_idx, eval_idx = level_mesh.split_fit_holdout(len(hits), 2000, 200, seed=0)
+    src, dst, _m, _a = level_mesh._correspondences(mesh, index, [hits[i] for i in fit_idx], [uvs[i] for i in fit_idx])
+    t, _n = level_mesh.solve_translation_fixed(P_LINEAR, level_mesh.FIXED_LINEAR_SCALE, src, dst)
+    measured = level_mesh.measure_placement(
+        mesh, P_LINEAR, level_mesh.FIXED_LINEAR_SCALE, t, [hits[i] for i in eval_idx], [uvs[i] for i in eval_idx]
+    )
+    assert not level_mesh.gate_failures(measured), measured
+    assert math.dist(t, level_mesh.load_alignment(level).translation) < 1e-5
+
+
+def test_level8_passes_only_with_its_own_rotation() -> None:
+    """레벨 8은 P로 강제하면 G3 중앙값이 약 192 mm로 떨어지고 자기 R로만 통과한다 —
+    선형부 고정 판정이 실패할 수 있다는 증거이자, 전역 규약 하나를 강제하면 안 되는 이유다."""
+    mesh, _index = _mesh_and_index(_entry(8)["source_fbx"])
+    index = level_mesh.build_uv_index(mesh)
+    hits, uvs, _s = _hits(8)
+    fit_idx, eval_idx = level_mesh.split_fit_holdout(len(hits), 2000, 200, seed=0)
+    src, dst, _m, _a = level_mesh._correspondences(mesh, index, [hits[i] for i in fit_idx], [uvs[i] for i in fit_idx])
+    eval_hits = [hits[i] for i in eval_idx]
+    eval_uvs = [uvs[i] for i in eval_idx]
+    own = level_mesh._rotation_matrix(level_mesh.load_alignment(8))
+    out = {}
+    for name, rotation in (("own", own), ("P", P_LINEAR)):
+        t, _n = level_mesh.solve_translation_fixed(rotation, level_mesh.FIXED_LINEAR_SCALE, src, dst)
+        out[name] = level_mesh.measure_placement(mesh, rotation, level_mesh.FIXED_LINEAR_SCALE, t, eval_hits, eval_uvs)
+    assert not level_mesh.gate_failures(out["own"]), out["own"]
+    assert out["P"]["median_mm"] > 100.0
+
+
+def _synthetic_result(mirror_hmd: float, passing: int = 1):
+    base = {"passed_A": True, "passed_B": True, "measured": {"hmd_occlusion": 0.0}}
+    cands = [dict(base, rotation=[float(i)] * 9) for i in range(passing)]
+    cands.append({"rotation": level_mesh._matrix_list(PLATE_MIRROR), "passed_A": False, "passed_B": False,
+                  "measured": {"hmd_occlusion": mirror_hmd}})
+    return {"candidates": cands}
+
+
+def test_section_b_is_void_when_any_positive_control_exceeds_the_threshold() -> None:
+    """§B.3: 양성 대조 8레벨 중 하나라도 0.25를 넘으면 무효 → solved가 될 수 없다."""
+    good = {lv: 0.1 for lv in range(3, 11)}
+    ok = level_mesh.judge_fixed_linear(_synthetic_result(1.0), good, PLATE_MIRROR)
+    assert ok["section_b_valid"] is True and ok["solved"] is True
+    bad = {**good, 4: 0.41333333333333333}
+    void = level_mesh.judge_fixed_linear(_synthetic_result(1.0), bad, PLATE_MIRROR)
+    assert void["section_b_valid"] is False and void["solved"] is False
+    missing = {lv: 0.1 for lv in range(3, 10)}
+    assert level_mesh.judge_fixed_linear(_synthetic_result(1.0), missing, PLATE_MIRROR)["solved"] is False
+    no_contrast = level_mesh.judge_fixed_linear(_synthetic_result(0.2), good, PLATE_MIRROR)
+    assert no_contrast["section_b_valid"] is False
+    two = level_mesh.judge_fixed_linear(_synthetic_result(1.0, passing=2), good, PLATE_MIRROR)
+    assert two["solved"] is False
+
+
+# commit b5f7341의 레벨 3~10 항목을 json.dumps(indent=2, ensure_ascii=False)로 직렬화한 sha256.
+_LEVELS_3_TO_10_SHA256_AT_B5F7341 = "0815ef2bf11dbf0502b7a82b0fe509c1044879fccc710515cd58ac79c2649609"
+
+
+def test_levels_3_to_10_entries_are_unchanged_since_b5f7341() -> None:
+    import hashlib
+
+    entries = json.loads(level_mesh.ALIGNMENT_PATH.read_text(encoding="utf-8"))
+    tail = [e for e in entries if int(e["level"]) >= 3]
+    digest = hashlib.sha256(json.dumps(tail, indent=2, ensure_ascii=False).encode()).hexdigest()
+    assert digest == _LEVELS_3_TO_10_SHA256_AT_B5F7341
+
+
+def test_load_alignment_ignores_optional_handedness_fields(tmp_path: Path) -> None:
+    """데이터 몫 ↔ 서버 몫 계약: 선택 필드가 붙어도 기존 로더는 그대로 읽는다."""
+    entry = {
+        "level": 1,
+        "provenance": "solved",
+        "solved_transform": {"rotation": level_mesh._matrix_list(P_LINEAR), "translation": [1.0, 2.0, 3.0], "scale": 0.0254},
+        "declared_scale": 0.0254,
+        "fit": {},
+        "source_fbx": "x.fbx",
+        "handedness_source": "data:occlusion_gun+hmd",
+        "handedness_evidence": {
+            "gun_occlusion": {"P": 0.0, "mirror": 1.0},
+            "hmd_occlusion": {"P": 0.0, "mirror": 1.0},
+            "flash_occlusion_report": {"P": 0.0, "mirror": 1.0},
+            "rule_doc": level_mesh.FIXED_LINEAR_RULE_DOC,
+            "posthoc_parts": ["G_occ_gun", "uniqueness"],
+        },
+        "fixed_linear_attempt": {"section_b_valid": False},
+        "history": [{"provenance": "unverifiable"}],
+    }
+    path = tmp_path / "alignment.json"
+    path.write_text(json.dumps([entry]), encoding="utf-8")
+    alignment = level_mesh.load_alignment(1, path=path)
+    assert alignment.provenance == "solved"
+    assert alignment.translation == (1.0, 2.0, 3.0)
+
+
+def test_level1_fixed_linear_attempt_is_recorded_without_a_transform() -> None:
+    """§B가 무효라 레벨 1은 unverifiable로 남는다(양성 대조 L4 0.413, L5 0.484 > 0.25).
+    잰 수치는 기록에 남고 변환은 남지 않는다."""
+    entry = _entry(1)
+    assert entry["provenance"] == "unverifiable" and "solved_transform" not in entry
+    attempt = entry["fixed_linear_attempt"]
+    assert attempt["section_b_valid"] is False
+    assert attempt["holdout_overlap"] == 0
+    over = {lv for lv, v in attempt["positive_controls"].items() if v["hmd_occlusion"] > level_mesh.OCCLUSION_THRESHOLD}
+    assert over == {"4", "5"}
+    evidence = attempt["handedness_evidence"]
+    assert evidence["gun_occlusion"]["P"] <= 0.25 < evidence["gun_occlusion"]["mirror"]
+    assert set(evidence["posthoc_parts"]) == {"G_occ_gun", "uniqueness"}
+    assert entry["rejected_by"] == [
+        {"gate": "cond_min_over_max", "measured": 2.0644827889117667e-09, "required": ">= 0.05"}
+    ]
+
+
+def test_level2_provenance_and_rejection_are_unchanged() -> None:
+    entry = _entry(2)
+    assert entry["provenance"] == "unverifiable" and "solved_transform" not in entry
+    assert [r["gate"] for r in entry["rejected_by"]] == ["uv_degenerate_misattribution_mm", "uv_miss_fraction"]
+    assert "fixed_linear_attempt" in entry
