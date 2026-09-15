@@ -58,7 +58,11 @@ npm run start:electron
 
 | Task | Location | Notes |
 |---|---|---|
-| Agent routing / RAG / tool loop | `trainer/scripts/agent_pipeline.py` | `run()` is evaluation-compatible; `run_streaming()` is additive live delivery and classifies on instruction only via `force_route` |
+| Agent routing / RAG / tool loop | `trainer/scripts/agent_pipeline.py` | `run()` is evaluation-compatible (`use_rag=False` skips retrieval; default unchanged). `run_streaming()` classifies the route from the instruction alone (environment ignored), passes it to `run()` as `force_route` in a worker thread under the shared generation slot, then re-chunks the finished answer — no token streaming yet. A consumer that leaves cancels the openai backend between tokens |
+| OpenAI-compatible backend | `trainer/scripts/openai_backend.py`, `trainer/configs/rag_config_spark_vllm.yaml` | `llm.backend: openai`: streamed `/v1/chat/completions`, never `tools`, explicit sampling + `enable_thinking` per request. The in-process `VLLMWrapper` (`backend: vllm`) is known-broken |
+| Prompt token budget | `trainer/scripts/prompt_budget.py` | Exact count through the chat template when a tokenizer is loaded (`llm.tokenizer_path` for remote backends); `llm.max_model_len` must equal vLLM `--max-model-len` |
+| v2.5 copilot query | `trainer/demo_api/copilot_router.py`, `copilot_contracts.py` | `POST /api/v1/copilot/query`: only `knowledge_search` runs the pipeline (fast route); other task types answer 200 `not_available` without MCP. `/api/v1` validation errors use the v2.5 ERROR wrapper. Readiness: `GET /api/ready` (`readiness.py`) |
+| LoRA merge / FP8 export | `trainer/scripts/merge_lora_shards.py`, `quantize_fp8_block.py` | Shard-level BF16 merge with manifest; FP8 block-128 in the official Qwen3.6-FP8 layout |
 | Fast-path answer contract | `trainer/scripts/live_response_contract.py` | Normalizes the 5-section diagnostic scaffold to `[답변]/[근거]` when route is `fast` and tool count is 0 |
 | Model-to-MCP calls | `trainer/scripts/tool_calling_adapter.py` | Protocol from `trainer/configs/tool_calling_protocol.json` |
 | Demo HTTP/SSE API | `trainer/demo_api/app.py`, `chat_service.py` | Demo/live selection, lazy pipeline singleton |
@@ -77,7 +81,7 @@ npm run start:electron
 - Keep `AgentPipeline.run()` behavior stable for evaluation. Add live behavior through `run_streaming()` or boundary adapters.
 - `DEMO_MODE` controls Gradio only. `DEMO_LIVE_MODE` controls the FastAPI chat wiring (`--live` sets it); any other value fails startup by design.
 - Treat YAML/JSON config as source of truth when prose disagrees. `/models`, `/data`, `/output`, `/hf-cache`, `/logs` are mounted artifacts, not repository data.
-- Keep the HF 4-bit backend. Unsloth, FlagEmbedding, and vLLM must not become required dependencies.
+- Keep the HF 4-bit backend. Unsloth, FlagEmbedding, and vLLM must not become required dependencies. Production inference uses `llm.backend: openai`, which calls an external vLLM OpenAI-compatible server over HTTP (httpx; no `vllm` package). HF NF4 stays the default for training and evaluation.
 - `.taskmaster/tasks/tasks.json` is tool-managed: use Task Master, then `task-master generate`. Never hand-edit.
 - Never read, print, or commit `.env`. Runtime modules do not auto-load dotenv files.
 - Electron keeps `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`; preload exposes only platform/version metadata. Preserve that boundary.
