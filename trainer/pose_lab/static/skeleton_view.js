@@ -1,42 +1,47 @@
-// 3D 뷰. compare()가 낸 `view` 블록(커밋 a983ddc, task-23-report.md)만 그린다 —
-// 지표를 브라우저에서 다시 계산하지 않는다(app.js 머리말과 같은 규칙).
+// 3D 뷰. compare()가 낸 `view` 블록만 그린다 — 지표를 브라우저에서 다시 계산하지
+// 않고, 화면에 보이는 숫자는 서버의 표시 문자열(`miss_display` 등)만 쓴다(app.js 머리말).
 //
-// 이 화면의 주인공은 교정이다(태스크 브리프 §1) — 자세 두 개를 나란히 그리는 것이
-// 목적이 아니라 발부된 교정이 무엇이고 그것을 따르면 자세가 어떻게 되는지가
-// 보여야 한다. 그래서 화살표(`view.corrections`)가 항상 그려지고, 관절 마커·궤적은
-// 그 교정이 어디서 나왔는지 보여줄 문맥으로 존재한다.
+// 무엇을 그리나(서버 응답 계약):
+//   - 뼈(`layers.query.joints`/`bones`): 시뮬레이터 아바타 추정. 조용한 저채도 색·반투명.
+//   - 대표 프레임 실측 마커(`fit.anchors[].measured_marker`): 불투명 구체 — 실측.
+//   - 패스 평균 마커(`corrections[].from`): 속 빈 고리. 대표 프레임 마커와 회색 실선으로 잇는다.
+//   - 보정 오프셋 선(joint_position→predicted_marker)과 어긋남 점선(predicted→measured).
+//   - 교정 화살표: `from_frame`→`to_frame`(없으면 `from`→`to`). 번호 배지는 `n`.
+//   - 검증된 벽면 메시(`mesh.available`일 때만). 양면(DoubleSide) 반투명.
 //
-// 강조는 `view.weights`에서만 나온다(브리프 §3) — 부위 이름으로 분기하지 않는다.
-// 이 파일 안에서 이름(`head`/`right`/`left`)을 쓰는 곳은 그 점의 궤적·가중치를
-// 사전에서 찾는 자리뿐이고, 이름별로 다른 색·모양 규칙을 얹지 않는다.
+// 강조는 `view.weights`에서만 나온다 — 부위 이름으로 색·모양 규칙을 분기하지 않는다.
 //
 // three.js는 cdnjs에서 버전 고정으로 이 스크립트보다 먼저 실린다(index.html).
-// 못 실리면(오프라인 등) `createSkeletonView`가 아무것도 던지지 않고 조용한 안내만
-// 남긴다 — 숫자 패널은 이 모듈과 무관하게 그대로 동작해야 한다(브리프 §3, 요구사항 3).
-//
-// 스키마가 실제로 담고 있는 것: 층마다 head/right/left/hit 네 점(각각 격자점 배열)
-// 뿐이다 — 설계 문서(§2)가 그리는 "전신 FK 스켈레톤"은 아직 compare() 응답에 없다
-// (`skeleton.py`가 그 계산을 갖고 있지만 `view_block`에 배선되지 않았다). 그래서 이
-// 렌더러는 네 점의 궤적·마커만 그린다. 없는 것을 그린 척하지 않는다.
+// 못 실리면 `createSkeletonView`가 아무것도 던지지 않고 안내만 남긴다.
 
 const POINT_LABELS = { right: "오른손", head: "머리", left: "왼손", hit: "착탄점" };
-const AXIS_LABELS = { wall: "벽", vertical: "수직", lateral: "진행축" };
 
-// 층별 기본색. σ 3단(ok/warn/bad)과 헷갈리지 않도록 그 팔레트와 겹치지 않는 색을 쓴다.
+// 층별 기본색. σ 3단(ok/warn/bad)과 겹치지 않는 색. style.css의 --layer-*와 같은 값.
 const LAYER_COLOR = { query: 0x5b9bff, reference: 0xa684e0, corrected: 0x34c2c2 };
 const MESH_COLOR = 0x9aa5b1;
-// 스켈레톤(관절·뼈)은 강조 대상이 아니라 문맥이다 — 질의 층 색과 같은 계열이되
-// 더 조용한 회색쪽으로 낮춘다. weights[관절명]이 전부 0.0이라 emphasis()를 그대로
-// 쓰면 아무것도 안 보이므로(강조는 교정 채점용 점에만 쓰는 규칙), 스켈레톤은 이
-// 상수 하나로 고정한 자신만의 모양을 쓴다.
-const SKELETON_COLOR = 0xb9c2d1;
+// 추정 뼈는 실측 마커(층 색 100%)보다 한 단계 조용해야 한다 — 채도를 뺀 밝은 회청색.
+const BONE_COLOR = 0xc8d0dc;
+const LINK_COLOR = 0x8a93a3;
 
 const SIGMA_OK = 0x2f855a;
 const SIGMA_WARN = 0xb7791f;
 const SIGMA_BAD = 0xc53030;
 const SIGMA_UNKNOWN = 0x718096;
 
-/** 브리프 §3의 강조 함수. 그대로 옮긴다 — 색·굵기·마커·라벨 전부 이 하나의 함수다. */
+// 크기 상수(m). 화살표 굵기는 교정 크기와 분리한다 — 크기는 길이와 ③의 수치로 전달한다.
+const MEASURED_MARKER_RADIUS = 0.035;
+const RING_OUTER = 0.05;
+const RING_INNER = 0.04;
+const HEAD_SPHERE_RADIUS = 0.09;
+const BONE_RADIUS = 0.005;
+const ARROW_SHAFT_RADIUS = 0.006;
+const ARROW_HEAD_RADIUS = 0.016;
+const HIT_MARKER_RADIUS = 0.018;
+
+const BADGE_MIN_PX = 26;
+const FRAMING_TARGET = { pose: 0.75, tracks: 0.75, wall: 0.9 };
+
+/** 강조 함수 — 색·굵기·마커·라벨 전부 이 하나의 함수다. */
 function emphasis(weight) {
   return {
     opacity: 0.25 + 0.75 * weight,
@@ -50,28 +55,23 @@ function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
 
+function scaleColor(hex, factor) {
+  const r = Math.round(((hex >> 16) & 255) * factor);
+  const g = Math.round(((hex >> 8) & 255) * factor);
+  const b = Math.round((hex & 255) * factor);
+  return (r << 16) | (g << 8) | b;
+}
+
 function sigmaColor(sigma) {
-  // 근거가 없으면(값이 숫자가 아니면) 회색이다 — 없는 σ를 0σ(초록)로 그리면
-  // "근거가 강하다"는 거짓 인상을 준다.
+  // 근거가 없으면 회색이다 — 없는 σ를 0σ(초록)로 그리면 "근거가 강하다"는 거짓 인상을 준다.
   if (typeof sigma !== "number") return SIGMA_UNKNOWN;
   if (sigma <= 1) return SIGMA_OK;
   if (sigma <= 2) return SIGMA_WARN;
   return SIGMA_BAD;
 }
 
-function formatMagnitude(magnitudeCm) {
-  // 0도 값이다 — `??`/`typeof` 없이 `||`를 쓰면 진짜 0cm 교정이 "값 없음"으로 보인다.
-  return typeof magnitudeCm === "number"
-    ? `${magnitudeCm >= 0 ? "+" : ""}${magnitudeCm.toFixed(1)}cm`
-    : "—";
-}
-
-function correctionLabel(correction) {
-  const point = POINT_LABELS[correction.point] ?? correction.point;
-  const axis = AXIS_LABELS[correction.axis] ?? correction.axis;
-  const mag = formatMagnitude(correction.magnitude_cm);
-  const direction = correction.direction ? ` ${correction.direction}` : "";
-  return `${point} · ${axis} ${mag}${direction}`;
+function isVec3(value) {
+  return Array.isArray(value) && value.length === 3 && value.every((x) => typeof x === "number");
 }
 
 function disposeObject3D(object) {
@@ -88,10 +88,11 @@ function buildDom(container) {
   container.replaceChildren();
   container.classList.add("view3d");
 
-  const head = document.createElement("div");
-  head.className = "view3d-head";
+  const toolbar = document.createElement("div");
+  toolbar.className = "view3d-toolbar";
   const title = document.createElement("h2");
-  title.textContent = "3D 뷰 — 교정";
+  title.className = "view3d-title";
+  title.textContent = "3D 뷰";
   const controls = document.createElement("div");
   controls.className = "view3d-controls";
   controls.innerHTML = `
@@ -99,11 +100,14 @@ function buildDom(container) {
     <label><input id="view3dLayerReference" type="checkbox" checked> 기준</label>
     <label><input id="view3dLayerCorrected" type="checkbox"> 교정 후(예상)</label>
     <label><input id="view3dLayerWall" type="checkbox" checked> 벽면</label>
-    <button id="view3dPresetFit" type="button">프레임 맞춤</button>
+    <span class="view3d-controls-sep" aria-hidden="true"></span>
+    <button id="view3dPresetFit" type="button">자세 맞춤</button>
     <button id="view3dPresetFront" type="button">벽 정면</button>
     <button id="view3dPresetSide" type="button">벽 측면</button>
+    <button id="view3dPresetTracks" type="button">궤적 포함</button>
+    <button id="view3dPresetWall" type="button">벽 포함</button>
   `;
-  head.append(title, controls);
+  toolbar.append(title, controls);
 
   const host = document.createElement("div");
   host.className = "view3d-host";
@@ -115,28 +119,23 @@ function buildDom(container) {
 
   const legend = document.createElement("div");
   legend.className = "view3d-legend";
-  legend.innerHTML = `
-    <span class="legend-title">화살표 색 — 근거 σ</span>
-    <span class="legend-item"><i class="swatch ok"></i>≤1σ</span>
-    <span class="legend-item"><i class="swatch warn"></i>≤2σ</span>
-    <span class="legend-item"><i class="swatch bad"></i>&gt;2σ</span>
-    <span class="legend-item">①②③ 번호는 옆 목록(발부된 교정)과 같은 순서다</span>
-  `;
 
+  const notes = document.createElement("ul");
+  notes.className = "view3d-notes";
+  const wallNote = document.createElement("p");
+  wallNote.className = "view3d-wall-note";
+  const errors = document.createElement("p");
+  errors.className = "view3d-errors";
   const note = document.createElement("p");
   note.className = "view3d-note";
-  const fitNote = document.createElement("p");
-  fitNote.className = "view3d-fit-note";
   const correctedNote = document.createElement("p");
   correctedNote.className = "view3d-note view3d-corrected-note";
 
-  container.append(head, host, legend, note, fitNote, correctedNote);
-  return { canvas, host, labelsHost, note, fitNote, correctedNote, controls };
+  container.append(toolbar, host, legend, notes, wallNote, errors, note, correctedNote);
+  return { canvas, host, labelsHost, legend, notes, wallNote, errors, note, correctedNote, controls, toolbar };
 }
 
-/** `note`에 문구와 상태 톤을 함께 건다 — 화면 어디서든 "아직 안 함/로딩 중/없음/오류"
- * 네 상태를 구별해야 한다(브리프 재확인 지시). 빈 문구는 `.view3d-note:empty`가
- * 조용히 숨긴다(=사실상 다섯 번째 "정상, 낼 말 없음" 상태). */
+/** `note`에 문구와 상태 톤을 함께 건다. 빈 문구는 CSS `:empty`가 숨긴다. */
 function setNote(el, text, tone) {
   el.textContent = text ?? "";
   if (tone) el.dataset.tone = tone;
@@ -144,77 +143,75 @@ function setNote(el, text, tone) {
 }
 
 function showUnavailable(container, message) {
-  buildDom(container);
-  const note = container.querySelector(".view3d-note");
-  setNote(note, message, "error");
-  container.querySelector(".view3d-controls").hidden = true;
-  container.querySelector(".view3d-host").hidden = true;
-  container.querySelector(".view3d-legend").hidden = true;
+  const dom = buildDom(container);
+  setNote(dom.note, message, "error");
+  dom.toolbar.hidden = true;
+  dom.host.hidden = true;
+  dom.legend.hidden = true;
 }
 
-/** 벽 법선의 최선 추정. 카메라 프리셋 편의를 위한 것이지 측정값이 아니다.
- * 검증된 메시가 있으면 첫 삼각형의 법선을 쓰고(그 편이 더 믿을 만하다), 없으면
- * 착탄점들의 퍼짐에서 대략 추정한다. 둘 다 안 되면 null — 프리셋 버튼은 이때
- * 조용히 아무 일도 하지 않는다(측정 못한 방향을 지어내지 않는다). */
-function estimateWallNormal(THREE, view) {
-  const mesh = view.mesh;
-  if (mesh && mesh.available === true && mesh.triangles?.length > 0 && mesh.vertices?.length > 0) {
-    const [i0, i1, i2] = mesh.triangles[0];
-    const a = new THREE.Vector3(...mesh.vertices[i0]);
-    const b = new THREE.Vector3(...mesh.vertices[i1]);
-    const c = new THREE.Vector3(...mesh.vertices[i2]);
-    const normal = new THREE.Vector3().subVectors(b, a).cross(new THREE.Vector3().subVectors(c, a));
-    if (normal.lengthSq() > 1e-12) return normal.normalize();
+function legendItem(swatchClass, text) {
+  const item = document.createElement("span");
+  item.className = "legend-item";
+  if (swatchClass) {
+    const swatch = document.createElement("i");
+    swatch.className = `swatch ${swatchClass}`;
+    item.append(swatch);
   }
-  const hits = [
-    ...(view.layers?.query?.hit ?? []),
-    ...(view.layers?.reference?.hit ?? []),
-  ].filter((p) => p !== null);
-  if (hits.length >= 3) {
-    const centroid = hits.reduce((acc, p) => acc.add(new THREE.Vector3(...p)), new THREE.Vector3()).multiplyScalar(1 / hits.length);
-    let farthest = null;
-    let farthestDist = -1;
-    for (const p of hits) {
-      const v = new THREE.Vector3(...p);
-      const d = v.distanceTo(centroid);
-      if (d > farthestDist) { farthestDist = d; farthest = v; }
+  item.append(document.createTextNode(text));
+  return item;
+}
+
+function renderLegend(legend, view) {
+  legend.replaceChildren();
+  const title = document.createElement("span");
+  title.className = "legend-title";
+  title.textContent = "화살표 색 = 근거 σ";
+  legend.append(
+    title,
+    legendItem("ok", "≤1σ"),
+    legendItem("warn", "≤2σ"),
+    legendItem("bad", ">2σ"),
+  );
+  const fit = view?.fit ?? null;
+  if (fit) {
+    if (typeof fit.offset_line_label === "string") {
+      const item = legendItem("line-solid", fit.offset_line_label);
+      item.dataset.role = "offset-line";
+      legend.append(item);
     }
-    if (farthest) {
-      const v1 = new THREE.Vector3().subVectors(farthest, centroid);
-      // v1과 세계 up이 이루는 평면에서 두 번째 축을 뽑아 법선을 얻는다.
-      const up = new THREE.Vector3(0, 1, 0);
-      const v2 = new THREE.Vector3().crossVectors(v1, up);
-      const normal = new THREE.Vector3().crossVectors(v1, v2);
-      if (normal.lengthSq() > 1e-12) return normal.normalize();
+    if (typeof fit.residual_label === "string") {
+      const item = legendItem("line-dashed", `어긋남 = ${fit.residual_label}`);
+      item.dataset.role = "miss-line";
+      legend.append(item);
     }
   }
-  return null;
+  for (const text of view?.legend_notes ?? []) {
+    if (typeof text === "string") legend.append(legendItem(null, text));
+  }
 }
 
 function mount(THREE, container) {
   const dom = buildDom(container);
+  renderLegend(dom.legend, null);
   setNote(dom.note, "패스를 고르고 평가를 누르면 여기에 뜹니다.", "idle");
 
   const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(50, 1, 0.02, 100);
+  const camera = new THREE.PerspectiveCamera(50, 1, 0.02, 200);
   let renderer;
   try {
-    renderer = new THREE.WebGLRenderer({ canvas: dom.canvas, antialias: true });
+    renderer = new THREE.WebGLRenderer({ canvas: dom.canvas, antialias: true, preserveDrawingBuffer: true });
   } catch (err) {
-    // WebGL이 없는 브라우저/샌드박스에서도 여기서 멈추고 숫자 패널은 산다.
     showUnavailable(container, "이 브라우저에서 WebGL을 쓸 수 없어 3D 뷰를 그리지 않습니다.");
     return { render() {}, clear() {}, loading() {} };
   }
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   scene.background = new THREE.Color(0x070a0f);
 
-  scene.add(new THREE.AmbientLight(0xffffff, 0.65));
+  scene.add(new THREE.AmbientLight(0xffffff, 0.7));
   const key = new THREE.DirectionalLight(0xffffff, 0.9);
   key.position.set(2, 3, 2);
   scene.add(key);
-
-  const grid = new THREE.GridHelper(6, 24, 0x394252, 0x262d3a);
-  scene.add(grid);
 
   const layerGroups = {
     query: new THREE.Group(),
@@ -226,22 +223,31 @@ function mount(THREE, container) {
   const correctionsGroup = new THREE.Group();
   scene.add(correctionsGroup);
   let meshObject = null;
+  // 카메라를 향해 도는 고리(패스 평균 마커).
+  const billboards = [];
 
   const labelRegistry = [];
   function clearLabels() {
     for (const entry of labelRegistry) entry.el.remove();
     labelRegistry.length = 0;
   }
-  function registerLabel(position, text, extraClass) {
+  function registerLabel(position, text, extraClass, extra) {
     const el = document.createElement("div");
     el.className = extraClass ? `view3d-label ${extraClass}` : "view3d-label";
     el.textContent = text;
     dom.labelsHost.appendChild(el);
-    labelRegistry.push({ position: position.clone(), el });
+    const entry = { position: position.clone(), el, ...(extra ?? {}) };
+    labelRegistry.push(entry);
+    return entry;
   }
 
   // 카메라 상태(구면좌표) — 드래그 회전·휠 확대가 이 값만 바꾼다.
-  const camState = { target: new THREE.Vector3(0, 1, 0), radius: 3, theta: Math.PI / 4, phi: Math.PI / 2.6 };
+  const camState = { target: new THREE.Vector3(0, 1, 0), radius: 3, theta: Math.PI / 4, phi: Math.PI / 2.5 };
+  // 자동 맞춤 상태. 사용자가 드래그·휠로 카메라를 만지면 창 크기가 바뀌어도 다시 맞추지 않는다.
+  const framing = { mode: "pose", auto: true, ratio: null };
+  // 마지막으로 그린 view. resize()가 첫 호출부터 읽으므로 그보다 먼저 선언한다.
+  let lastView = null;
+
   function applyCamera() {
     const sinPhi = Math.sin(camState.phi);
     camera.position.set(
@@ -251,8 +257,7 @@ function mount(THREE, container) {
     );
     camera.up.set(0, 1, 0);
     camera.lookAt(camState.target);
-    // 디버그·검증 전용(§5) — 드래그 회전·휠 확대가 실제로 카메라 상태를 바꾸는지
-    // 자동으로 확인할 수 있게 구면좌표를 그대로 노출한다. 렌더링에는 영향이 없다.
+    camera.updateMatrixWorld();
     container.__view3dCameraDebug = { theta: camState.theta, phi: camState.phi, radius: camState.radius };
   }
   applyCamera();
@@ -277,6 +282,7 @@ function mount(THREE, container) {
     lastY = event.clientY;
     camState.theta -= dx * 0.008;
     camState.phi = clamp(camState.phi - dy * 0.008, 0.05, Math.PI - 0.05);
+    framing.auto = false;
     applyCamera();
   });
   dom.canvas.addEventListener(
@@ -284,51 +290,127 @@ function mount(THREE, container) {
     (event) => {
       event.preventDefault();
       const factor = event.deltaY > 0 ? 1.1 : 1 / 1.1;
-      camState.radius = clamp(camState.radius * factor, 0.5, 12);
+      camState.radius = clamp(camState.radius * factor, 0.05, 60);
+      framing.auto = false;
       applyCamera();
     },
     { passive: false },
   );
 
-  function resize() {
-    const width = dom.host.clientWidth || 1;
-    const height = dom.host.clientHeight || 1;
-    renderer.setSize(width, height, false);
-    camera.aspect = width / height;
-    camera.updateProjectionMatrix();
+  function hostSize() {
+    return { w: dom.host.clientWidth || 1, h: dom.host.clientHeight || 1 };
   }
-  const resizeObserver = new ResizeObserver(resize);
+
+  function resize() {
+    const { w, h } = hostSize();
+    renderer.setSize(w, h, false);
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+    if (lastView && framing.auto) frameTo(framing.mode);
+  }
+  const resizeObserver = new ResizeObserver(() => resize());
   resizeObserver.observe(dom.host);
   resize();
 
+  function toPixel(vector) {
+    const { w, h } = hostSize();
+    const p = vector.clone().project(camera);
+    return { x: ((p.x + 1) / 2) * w, y: ((1 - p.y) / 2) * h, z: p.z };
+  }
+
+  /** 월드 반경 r인 구(원추 밑면)가 화면에서 차지하는 지름(px). 카메라 오른쪽 축으로 잰다. */
+  function screenDiameter(center, radius) {
+    const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0).normalize();
+    const a = toPixel(center);
+    const b = toPixel(center.clone().addScaledVector(right, radius));
+    return 2 * Math.hypot(b.x - a.x, b.y - a.y);
+  }
+
+  const debugLive = {
+    badgeCenters: [],
+    arrowConeScreenDiameters: [],
+    markerScreenDiameters: {},
+    handMarkerScreenDiameter: null,
+    arrowStarts: [],
+  };
+  let coneRegistry = [];
+  let markerRegistry = [];
+
+  function layoutLabels() {
+    // 1) 글자 라벨(miss 거리 등)을 먼저 놓고 그 사각형을 장애물로 모은다.
+    // 2) 번호 배지는 앞 배지(26px 안)와 글자 라벨 사각형을 피해, 자기 화살표의 화면
+    //    방향으로 26px씩 민다. 배지가 거리 라벨을 덮으면 숫자를 읽을 수 없다.
+    const obstacles = [];
+    const visible = (entry) => {
+      const projected = entry.position.clone().project(camera);
+      const shown = projected.z <= 1 && projected.z >= -1;
+      entry.el.style.display = shown ? "" : "none";
+      return shown;
+    };
+    for (const entry of labelRegistry) {
+      if (entry.kind === "badge" || !visible(entry)) continue;
+      const px = toPixel(entry.position);
+      entry.el.style.left = `${px.x}px`;
+      entry.el.style.top = `${px.y}px`;
+      const w = entry.el.offsetWidth;
+      const h = entry.el.offsetHeight;
+      // .view3d-label의 transform: translate(-50%, -140%)
+      obstacles.push({ x0: px.x - w / 2, x1: px.x + w / 2, y0: px.y - 1.4 * h, y1: px.y - 0.4 * h });
+    }
+    const hitsObstacle = (x, y) => obstacles.some((r) => {
+      const nx = clamp(x, r.x0, r.x1);
+      const ny = clamp(y, r.y0, r.y1);
+      return Math.hypot(nx - x, ny - y) < 14;
+    });
+    const placedBadges = [];
+    let obstacleOverlaps = 0;
+    for (const entry of labelRegistry) {
+      if (entry.kind !== "badge" || !visible(entry)) continue;
+      const px = toPixel(entry.position);
+      let x = px.x;
+      let y = px.y;
+      const a = toPixel(entry.from);
+      const b = toPixel(entry.to);
+      let dx = b.x - a.x;
+      let dy = b.y - a.y;
+      const len = Math.hypot(dx, dy);
+      if (len < 1e-6) { dx = 0; dy = -1; } else { dx /= len; dy /= len; }
+      for (let step = 0; step < 10; step += 1) {
+        const clash = placedBadges.some((p) => Math.hypot(p.x - x, p.y - y) < BADGE_MIN_PX) || hitsObstacle(x, y);
+        if (!clash) break;
+        x += dx * BADGE_MIN_PX;
+        y += dy * BADGE_MIN_PX;
+      }
+      if (hitsObstacle(x, y)) obstacleOverlaps += 1;
+      placedBadges.push({ n: entry.n, x, y });
+      entry.el.style.left = `${x}px`;
+      entry.el.style.top = `${y}px`;
+    }
+    debugLive.badgeObstacleOverlaps = obstacleOverlaps;
+    debugLive.badgeCenters = placedBadges.map((p) => ({ n: p.n, x: Math.round(p.x * 10) / 10, y: Math.round(p.y * 10) / 10 }));
+    debugLive.arrowConeScreenDiameters = coneRegistry.map((c) => screenDiameter(c.center, c.radius));
+    const diameters = {};
+    for (const m of markerRegistry) diameters[m.point] = screenDiameter(m.center, MEASURED_MARKER_RADIUS);
+    debugLive.markerScreenDiameters = diameters;
+    debugLive.handMarkerScreenDiameter = typeof diameters.right === "number" ? diameters.right : null;
+  }
+
   function frame() {
     requestAnimationFrame(frame);
+    for (const ring of billboards) ring.quaternion.copy(camera.quaternion);
     renderer.render(scene, camera);
-    const halfW = dom.host.clientWidth / 2;
-    const halfH = dom.host.clientHeight / 2;
-    for (const entry of labelRegistry) {
-      const projected = entry.position.clone().project(camera);
-      if (projected.z > 1 || projected.z < -1) {
-        entry.el.style.display = "none";
-        continue;
-      }
-      entry.el.style.display = "";
-      entry.el.style.left = `${halfW + projected.x * halfW}px`;
-      entry.el.style.top = `${halfH - projected.y * halfH}px`;
-    }
+    layoutLabels();
   }
   requestAnimationFrame(frame);
 
   function buildLayerGroup(layerData, weights, layerColor, labelPointNames) {
     const group = new THREE.Group();
     for (const name of Object.keys(layerData ?? {})) {
-      // "joints"(관절명 -> 위치 하나)와 "bones"(이름 쌍 목록)는 격자점 궤적이
-      // 아니다 — 전신 스켈레톤(11-A)이고 `buildSkeletonGroup`이 따로 그린다.
       if (name === "joints" || name === "bones") continue;
       const weight = typeof weights?.[name] === "number" ? weights[name] : 0;
       const emph = emphasis(weight);
       const points = (layerData[name] ?? [])
-        .filter((p) => p !== null)
+        .filter((p) => isVec3(p))
         .map((p) => new THREE.Vector3(p[0], p[1], p[2]));
       if (points.length === 0) continue;
 
@@ -337,17 +419,14 @@ function mount(THREE, container) {
         transparent: true,
         opacity: emph.opacity,
       });
-      const geometry = new THREE.BufferGeometry().setFromPoints(points);
-      group.add(new THREE.Line(geometry, lineMaterial));
+      group.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), lineMaterial));
 
       if (emph.showMarker) {
-        const markerRadius = 0.006 * emph.width;
-        const markerGeometry = new THREE.SphereGeometry(markerRadius, 12, 8);
-        const markerMaterial = new THREE.MeshStandardMaterial({
+        const markerGeometry = new THREE.SphereGeometry(0.004 * emph.width, 10, 6);
+        const markerMaterial = new THREE.MeshBasicMaterial({
           color: layerColor,
           transparent: true,
           opacity: emph.opacity,
-          roughness: 0.6,
         });
         for (const p of points) {
           const marker = new THREE.Mesh(markerGeometry, markerMaterial);
@@ -362,60 +441,128 @@ function mount(THREE, container) {
     return group;
   }
 
-  /** 전신 FK 스켈레톤(11-A) — `view.layers.query.joints`(관절명 -> 위치 하나)와
-   * `bones`(부모-자식 이름 쌍)를 선분으로 잇고 관절에 작은 점을 찍는다.
-   *
-   * `weights`로 강조를 따지지 않는다 — 새 관절은 전부 weights에 0.0으로 실려
-   * 있지만(브리프), 그 규칙은 "교정 채점에 쓰는 점"의 강조 규칙이지 구조 표시
-   * 규칙이 아니다. 스켈레톤은 항상 같은 조용한 색 하나로, 있으면 그린다. */
-  function buildSkeletonGroup(joints, bones) {
+  /** 추정 뼈. 강조 대상이 아니라 문맥이다 — weights로 강조를 따지지 않고 저채도 한 색. */
+  function buildSkeletonGroup(joints, bones, faded) {
     const group = new THREE.Group();
     if (!joints || !bones || Object.keys(joints).length === 0) return group;
-
-    // 실선(LineBasicMaterial)은 WebGL에서 굵기를 키울 수 없어(플랫폼 대부분이
-    // linewidth를 무시한다) 아무리 진하게 칠해도 머리카락처럼 가늘게 보인다 —
-    // "스켈레톤이 없음"이 다시 "있는데 안 보임"으로 재발한다. 교정 화살표
-    // (`buildArrow`)와 같은 방식으로 실린더를 세워 실제 두께를 준다.
-    const boneMaterial = new THREE.MeshStandardMaterial({
-      color: SKELETON_COLOR,
-      transparent: true,
-      opacity: 0.88,
-      roughness: 0.55,
-    });
-    const boneRadius = 0.009;
+    const opacity = faded ? 0.35 : 0.6;
+    // 실선(LineBasicMaterial)은 WebGL에서 굵기를 키울 수 없어 머리카락처럼 보인다 —
+    // 얇은 실린더로 실제 두께를 준다. 조명과 무관한 색을 위해 MeshBasicMaterial.
+    const boneMaterial = new THREE.MeshBasicMaterial({ color: BONE_COLOR, transparent: true, opacity, depthWrite: false });
     for (const [parent, child] of bones) {
       const a = joints[parent];
       const b = joints[child];
-      if (!a || !b) continue;
+      if (!isVec3(a) || !isVec3(b)) continue;
       const start = new THREE.Vector3(...a);
       const end = new THREE.Vector3(...b);
       const dir = new THREE.Vector3().subVectors(end, start);
       const length = dir.length();
       if (length < 1e-6) continue;
       dir.normalize();
-      const quat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
-      const bone = new THREE.Mesh(new THREE.CylinderGeometry(boneRadius, boneRadius, length, 6), boneMaterial);
-      bone.quaternion.copy(quat);
+      const bone = new THREE.Mesh(new THREE.CylinderGeometry(BONE_RADIUS, BONE_RADIUS, length, 6), boneMaterial);
+      bone.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
       bone.position.copy(start).addScaledVector(dir, length / 2);
+      bone.userData.kind = "bone";
+      bone.userData.name = `${parent}>${child}`;
+      bone.userData.length = length;
       group.add(bone);
     }
-
-    const jointMaterial = new THREE.MeshStandardMaterial({
-      color: SKELETON_COLOR,
-      transparent: true,
-      opacity: 0.92,
-      roughness: 0.55,
-    });
-    const jointGeometry = new THREE.SphereGeometry(0.015, 8, 6);
+    const jointGeometry = new THREE.SphereGeometry(BONE_RADIUS * 2, 8, 6);
     for (const position of Object.values(joints)) {
-      const marker = new THREE.Mesh(jointGeometry, jointMaterial);
+      if (!isVec3(position)) continue;
+      const marker = new THREE.Mesh(jointGeometry, boneMaterial);
       marker.position.set(position[0], position[1], position[2]);
       group.add(marker);
+    }
+    if (isVec3(joints.Head)) {
+      const headMaterial = new THREE.MeshBasicMaterial({ color: BONE_COLOR, transparent: true, opacity: opacity * 0.4, depthWrite: false });
+      const head = new THREE.Mesh(new THREE.SphereGeometry(HEAD_SPHERE_RADIUS, 20, 14), headMaterial);
+      head.position.set(...joints.Head);
+      group.add(head);
     }
     return group;
   }
 
-  function buildArrow(from, to, color, magnitudeAbs) {
+  /** 대표 프레임 실측 마커(구체)·보정 오프셋 선·어긋남 점선·miss 라벨. */
+  function buildAnchorGroup(fit) {
+    const group = new THREE.Group();
+    markerRegistry = [];
+    const counts = { measuredSpheres: 0, offsetLines: 0, missLines: 0, missLabels: [] };
+    if (!fit) return { group, counts };
+    const holdout = fit.mounts === "pass_fit_holdout";
+    const markerMaterial = new THREE.MeshStandardMaterial({ color: LAYER_COLOR.query, roughness: 0.5 });
+    const markerGeometry = new THREE.SphereGeometry(MEASURED_MARKER_RADIUS, 20, 14);
+    const offsetMaterial = new THREE.LineBasicMaterial({ color: BONE_COLOR, transparent: true, opacity: 0.5 });
+    const missMaterial = new THREE.LineDashedMaterial({
+      color: 0xe8ecf3,
+      dashSize: holdout ? 0.01 : 0.03,
+      gapSize: holdout ? 0.02 : 0.015,
+    });
+    for (const anchor of fit.anchors ?? []) {
+      if (isVec3(anchor.measured_marker)) {
+        const marker = new THREE.Mesh(markerGeometry, markerMaterial);
+        marker.position.set(...anchor.measured_marker);
+        marker.userData.kind = "measured-marker";
+        group.add(marker);
+        counts.measuredSpheres += 1;
+        markerRegistry.push({ point: anchor.point, center: marker.position.clone() });
+      }
+      if (isVec3(anchor.joint_position) && isVec3(anchor.predicted_marker)) {
+        const geometry = new THREE.BufferGeometry().setFromPoints([
+          new THREE.Vector3(...anchor.joint_position),
+          new THREE.Vector3(...anchor.predicted_marker),
+        ]);
+        group.add(new THREE.Line(geometry, offsetMaterial));
+        counts.offsetLines += 1;
+      }
+      if (isVec3(anchor.predicted_marker) && isVec3(anchor.measured_marker)) {
+        const a = new THREE.Vector3(...anchor.predicted_marker);
+        const b = new THREE.Vector3(...anchor.measured_marker);
+        const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints([a, b]), missMaterial);
+        line.computeLineDistances();
+        group.add(line);
+        counts.missLines += 1;
+        if (typeof anchor.miss_display === "string") {
+          const mid = a.clone().add(b).multiplyScalar(0.5);
+          registerLabel(mid, anchor.miss_display, "view3d-label-miss");
+          counts.missLabels.push(anchor.miss_display);
+        }
+      }
+    }
+    return { group, counts };
+  }
+
+  /** 패스 평균 마커(속 빈 고리) — 교정의 `from`이 패스 평균 위치다. 대표 프레임 마커와 잇는다. */
+  function buildPassMeanGroup(corrections, fit) {
+    const group = new THREE.Group();
+    billboards.length = 0;
+    let rings = 0;
+    const seen = new Set();
+    const ringMaterial = new THREE.MeshBasicMaterial({ color: scaleColor(LAYER_COLOR.query, 0.6), side: THREE.DoubleSide });
+    const linkMaterial = new THREE.LineBasicMaterial({ color: LINK_COLOR });
+    const measuredByPoint = new Map((fit?.anchors ?? []).map((a) => [a.point, a.measured_marker]));
+    for (const correction of corrections) {
+      if (!isVec3(correction.from) || seen.has(correction.point)) continue;
+      seen.add(correction.point);
+      const ring = new THREE.Mesh(new THREE.RingGeometry(RING_INNER, RING_OUTER, 32), ringMaterial);
+      ring.position.set(...correction.from);
+      ring.userData.kind = "pass-mean-ring";
+      group.add(ring);
+      billboards.push(ring);
+      rings += 1;
+      const measured = measuredByPoint.get(correction.point);
+      if (isVec3(measured)) {
+        const geometry = new THREE.BufferGeometry().setFromPoints([
+          new THREE.Vector3(...correction.from),
+          new THREE.Vector3(...measured),
+        ]);
+        group.add(new THREE.Line(geometry, linkMaterial));
+      }
+    }
+    return { group, rings };
+  }
+
+  function buildArrow(from, to, color) {
     const start = new THREE.Vector3(...from);
     const end = new THREE.Vector3(...to);
     const dir = new THREE.Vector3().subVectors(end, start);
@@ -423,24 +570,25 @@ function mount(THREE, container) {
     if (length < 1e-6) return null;
     dir.normalize();
 
-    const mag = magnitudeAbs ?? 0;
-    const shaftRadius = clamp(0.004 + 0.0025 * mag, 0.004, 0.028);
-    const headRadius = shaftRadius * 2.2;
-    const headLength = clamp(0.03 + 0.01 * mag, 0.03, Math.max(0.03, length * 0.6));
-    const shaftLength = Math.max(length - headLength, length * 0.4);
+    const headLength = Math.min(0.04, 0.35 * length);
+    const shaftLength = Math.max(length - headLength, 0);
 
     const material = new THREE.MeshStandardMaterial({ color, roughness: 0.45, metalness: 0.05 });
     const quat = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
 
     const group = new THREE.Group();
-    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(shaftRadius, shaftRadius, shaftLength, 10), material);
-    shaft.quaternion.copy(quat);
-    shaft.position.copy(start).addScaledVector(dir, shaftLength / 2);
-    const cone = new THREE.Mesh(new THREE.ConeGeometry(headRadius, headLength, 12), material);
+    if (shaftLength > 1e-6) {
+      const shaft = new THREE.Mesh(new THREE.CylinderGeometry(ARROW_SHAFT_RADIUS, ARROW_SHAFT_RADIUS, shaftLength, 10), material);
+      shaft.quaternion.copy(quat);
+      shaft.position.copy(start).addScaledVector(dir, shaftLength / 2);
+      group.add(shaft);
+    }
+    const cone = new THREE.Mesh(new THREE.ConeGeometry(ARROW_HEAD_RADIUS, headLength, 16), material);
     cone.quaternion.copy(quat);
     cone.position.copy(start).addScaledVector(dir, shaftLength + headLength / 2);
-    group.add(shaft, cone);
-    return group;
+    group.add(cone);
+    const coneBase = start.clone().addScaledVector(dir, shaftLength);
+    return { group, coneBase };
   }
 
   function buildMesh(meshBlock) {
@@ -464,65 +612,84 @@ function mount(THREE, container) {
     geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
     geometry.setIndex(new THREE.BufferAttribute(indices, 1));
     geometry.computeVertexNormals();
+    // 정렬 변환이 반사(det<0)라 삼각형 감김이 뒤집혀 있다 — 양면으로 그려야 법선 방향과
+    // 무관하게 보인다. 반투명 벽이 뒤의 몸·마커를 깊이로 가리지 않게 depthWrite를 끈다.
     const material = new THREE.MeshStandardMaterial({
       color: MESH_COLOR,
       transparent: true,
-      opacity: 0.35,
+      opacity: 0.32,
       side: THREE.DoubleSide,
       roughness: 0.9,
+      depthWrite: false,
     });
-    return new THREE.Mesh(geometry, material);
+    const group = new THREE.Group();
+    const surface = new THREE.Mesh(geometry, material);
+    group.add(surface);
+    const edges = new THREE.LineSegments(
+      new THREE.EdgesGeometry(geometry, 25),
+      new THREE.LineBasicMaterial({ color: 0x6b7686, transparent: true, opacity: 0.7 }),
+    );
+    group.add(edges);
+    group.userData.triangleCount = triangles.length;
+    return group;
   }
 
-  /** 벽면의 네 상태(아직 안 함/로딩 중/없음/오류) 중 "없음"에 해당하는 문구와 톤.
-   * `mesh: null`(레벨 자체를 모름)과 `mesh.available: false`(레벨은 알지만 검증된
-   * 정렬이 없음)를 서로 다른 문장으로 구별한다 — 둘 다 "벽이 안 보인다"로 보이지만
-   * 사유가 다르다. 어느 레벨이 검증됐는지는 하드코딩하지 않는다 — 이 문구 자체가
-   * `mesh.available`을 그대로 따라간다(다른 레벨의 정렬이 검증되면 이 문구도 그때
-   * 자동으로 사라진다).
-   */
-  function wallNote(meshBlock) {
+  /** 벽면 줄. 문구는 서버(reason_text·handedness_note)의 것을 그대로 쓴다. */
+  function wallNoteText(meshBlock) {
     if (meshBlock === null || meshBlock === undefined) {
       return "이 패스는 레벨 정보가 없어 벽면을 그리지 않습니다.";
     }
     if (meshBlock.available !== true) {
-      return "이 레벨은 아직 검증된 벽면 정렬이 없어 벽면을 그리지 않습니다 — 없음, 오류가 아닙니다.";
+      return meshBlock.reason_text ?? "이 레벨은 벽면을 그리지 않습니다.";
+    }
+    if (typeof meshBlock.handedness_note === "string") {
+      const evidence = meshBlock.handedness_evidence;
+      const pair = (entry) => (entry ? `P ${String(entry.P)} / 거울 ${String(entry.mirror)}` : "—");
+      const detail = evidence
+        ? ` 건 가림 ${pair(evidence.gun_occlusion)} · HMD 가림 ${pair(evidence.hmd_occlusion)}`
+        : "";
+      return `${meshBlock.handedness_note}${detail}`;
     }
     return "";
   }
 
-  function fitNoteText(fit) {
-    if (fit === null || fit === undefined) {
-      return "이 프레임은 전신 스켈레톤을 맞추지 못해 점과 화살표만 표시합니다(관절 컬럼 없음 또는 앵커 부족).";
-    }
-    const cm = fit.residual_m * 100;
-    return `스켈레톤 피팅 잔차 ${cm.toFixed(1)}cm (${fit.source})`;
-  }
-
-  /** 장면이 실제로 채우는 공간(질의·기준·교정후 궤적 + 스켈레톤 관절 + 교정 화살표
-   * 끝점)의 바운딩 박스. 벽면 메시는 뺀다 — 벽은 자세보다 훨씬 커서 넣으면 자세가
-   * 화면 한 귀퉁이의 점 하나로 쪼그라든다(브리프 §11-B: "벽면은 크니 자세+화살표
-   * 기준으로 잡는다"). */
-  function sceneBounds(view) {
-    // "자세+화살표" 기준(브리프)이다 — 질의 층(스켈레톤 포함)과 교정 화살표만 쓴다.
-    // 레퍼런스·교정후 층까지 넣으면(서로 다른 사람이 서 있던 자리라 물리적으로
-    // 떨어져 있을 수 있다) 무게중심이 질의 자세 바깥으로 밀려, 정작 봐야 할
-    // 스켈레톤이 화면 한쪽에 작게 몰린다 — 실측으로 확인한 결함이었다.
+  /** 맞춤 대상 점. pose: 스켈레톤·실측/예측 마커·교정 화살표·대표 프레임 착탄점.
+   * 궤적·기준층·교정후층·메시는 뺀다(벽은 자세보다 훨씬 커서 넣으면 자세가 쪼그라든다). */
+  function framingPoints(view, mode) {
     const points = [];
-    const queryLayer = view.layers?.query ?? {};
-    for (const [name, value] of Object.entries(queryLayer)) {
-      if (name === "bones") continue;
-      if (name === "joints") {
-        points.push(...Object.values(value));
-        continue;
+    const push = (p) => { if (isVec3(p)) points.push(p); };
+    const joints = view.layers?.query?.joints ?? {};
+    const hasSkeleton = Object.keys(joints).length > 0;
+    if (hasSkeleton) {
+      for (const p of Object.values(joints)) push(p);
+      for (const anchor of view.fit?.anchors ?? []) {
+        push(anchor.measured_marker);
+        push(anchor.predicted_marker);
       }
-      for (const p of value ?? []) if (p) points.push(p);
+    } else {
+      for (const name of ["head", "right", "left"]) for (const p of view.layers?.query?.[name] ?? []) push(p);
     }
     for (const correction of view.corrections ?? []) {
-      if (correction.from) points.push(correction.from);
-      if (correction.to) points.push(correction.to);
+      if (isVec3(correction.from_frame) && isVec3(correction.to_frame)) {
+        push(correction.from_frame);
+        push(correction.to_frame);
+      } else {
+        push(correction.from);
+        push(correction.to);
+      }
     }
-    if (points.length === 0) return null;
+    push(view.composite?.hit);
+    if (mode === "tracks" || mode === "wall") {
+      for (const name of ["head", "right", "left"]) for (const p of view.layers?.query?.[name] ?? []) push(p);
+    }
+    if (mode === "wall") {
+      for (const p of view.layers?.query?.hit ?? []) push(p);
+      if (view.mesh?.available === true) for (const p of view.mesh.vertices ?? []) push(p);
+    }
+    return points;
+  }
+
+  function boundsOf(points) {
     const min = [Infinity, Infinity, Infinity];
     const max = [-Infinity, -Infinity, -Infinity];
     for (const p of points) {
@@ -534,24 +701,116 @@ function mount(THREE, container) {
     return { min, max };
   }
 
-  /** 카메라를 장면 바운딩 박스에 자동 맞춘다(브리프 §11-B). */
-  function frameToBounds() {
-    if (!lastView) return;
-    const bounds = sceneBounds(lastView);
-    if (!bounds) return;
-    const center = [0, 1, 2].map((i) => (bounds.min[i] + bounds.max[i]) / 2);
-    const size = [0, 1, 2].map((i) => Math.max(0, bounds.max[i] - bounds.min[i]));
-    const diagonal = Math.hypot(size[0], size[1], size[2]);
-    const half = diagonal / 2 || 0.3;
-    // 카메라 FOV 절반의 tan으로 필요한 거리를 구하고, 여유(30%)를 얹는다.
-    const fovHalf = (camera.fov * Math.PI) / 360;
-    const distance = half / Math.max(Math.sin(fovHalf), 0.05);
-    camState.target.set(center[0], center[1], center[2]);
-    camState.radius = clamp(distance * 1.3, 0.4, 12);
-    applyCamera();
+  /** 카메라 거리 d에서 AABB 8꼭짓점을 투영했을 때 max(높이비, 폭비). 뒤로 넘어가면 Infinity. */
+  function projectedRatio(corners, target, offsetDir, distance) {
+    const position = target.clone().addScaledVector(offsetDir, distance);
+    const forward = offsetDir.clone().negate();
+    const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0));
+    if (right.lengthSq() < 1e-12) right.set(1, 0, 0);
+    right.normalize();
+    const up = new THREE.Vector3().crossVectors(right, forward).normalize();
+    const tanV = Math.tan((camera.fov * Math.PI) / 360);
+    const tanH = tanV * camera.aspect;
+    let xmin = Infinity; let xmax = -Infinity; let ymin = Infinity; let ymax = -Infinity;
+    for (const corner of corners) {
+      const v = corner.clone().sub(position);
+      const z = v.dot(forward);
+      if (z <= camera.near) return Infinity;
+      const x = v.dot(right) / (z * tanH);
+      const y = v.dot(up) / (z * tanV);
+      xmin = Math.min(xmin, x); xmax = Math.max(xmax, x);
+      ymin = Math.min(ymin, y); ymax = Math.max(ymax, y);
+    }
+    return Math.max((xmax - xmin) / 2, (ymax - ymin) / 2);
   }
 
-  let lastView = null;
+  /** AABB 중심을 보고, 세로·가로 FOV 모두에서 목표 비율이 되는 거리를 이분법으로 찾는다. */
+  function frameTo(mode) {
+    if (!lastView) return;
+    const points = framingPoints(lastView, mode);
+    if (points.length === 0) return;
+    const { min, max } = boundsOf(points);
+    const target = new THREE.Vector3((min[0] + max[0]) / 2, (min[1] + max[1]) / 2, (min[2] + max[2]) / 2);
+    const corners = [];
+    for (const x of [min[0], max[0]]) for (const y of [min[1], max[1]]) for (const z of [min[2], max[2]]) {
+      corners.push(new THREE.Vector3(x, y, z));
+    }
+    const sinPhi = Math.sin(camState.phi);
+    const offsetDir = new THREE.Vector3(
+      sinPhi * Math.sin(camState.theta),
+      Math.cos(camState.phi),
+      sinPhi * Math.cos(camState.theta),
+    ).normalize();
+    const goal = FRAMING_TARGET[mode] ?? 0.75;
+    let lo = 0.01;
+    let hi = 100;
+    for (let i = 0; i < 60; i += 1) {
+      const mid = (lo + hi) / 2;
+      if (projectedRatio(corners, target, offsetDir, mid) > goal) lo = mid;
+      else hi = mid;
+    }
+    camState.target.copy(target);
+    camState.radius = hi;
+    framing.mode = mode;
+    framing.auto = true;
+    framing.ratio = projectedRatio(corners, target, offsetDir, hi);
+    applyCamera();
+    if (container.__view3dDebug) {
+      container.__view3dDebug.framingRatio = framing.ratio;
+      container.__view3dDebug.framingMode = mode;
+    }
+  }
+
+  /** 작업자 쪽(착탄점→골반 수평 방향)에서 옆으로 약 50° 비켜 약간 위에서 본다. */
+  function defaultAngles(view) {
+    const joints = view.layers?.query?.joints ?? {};
+    const body = isVec3(joints.Pelvis) ? joints.Pelvis : (view.corrections ?? []).map((c) => c.from).find(isVec3);
+    const hit = view.composite?.hit;
+    if (isVec3(body) && isVec3(hit)) {
+      const dx = body[0] - hit[0];
+      const dz = body[2] - hit[2];
+      if (Math.hypot(dx, dz) > 1e-6) {
+        return { theta: Math.atan2(dx, dz) + 0.9, phi: Math.PI / 2.5 };
+      }
+    }
+    return { theta: Math.PI / 4, phi: Math.PI / 2.5 };
+  }
+
+  /** 벽 법선의 최선 추정(카메라 프리셋 편의, 측정값 아님). 작업자 쪽을 향하게 부호를 맞춘다. */
+  function estimateWallNormal(view) {
+    let normal = null;
+    const mesh = view.mesh;
+    const hit = view.composite?.hit;
+    if (mesh && mesh.available === true && mesh.triangles?.length > 0 && isVec3(hit)) {
+      // 대표 착탄점에 가장 가까운 삼각형 무게중심의 법선.
+      let best = null;
+      let bestDist = Infinity;
+      const h = new THREE.Vector3(...hit);
+      for (const [i0, i1, i2] of mesh.triangles) {
+        const a = new THREE.Vector3(...mesh.vertices[i0]);
+        const b = new THREE.Vector3(...mesh.vertices[i1]);
+        const c = new THREE.Vector3(...mesh.vertices[i2]);
+        const d = a.clone().add(b).add(c).multiplyScalar(1 / 3).distanceTo(h);
+        if (d < bestDist) { bestDist = d; best = [a, b, c]; }
+      }
+      if (best) {
+        const n = new THREE.Vector3().subVectors(best[1], best[0]).cross(new THREE.Vector3().subVectors(best[2], best[0]));
+        if (n.lengthSq() > 1e-12) normal = n.normalize();
+      }
+    }
+    if (!normal) {
+      const wallCorrection = (view.corrections ?? []).find((c) => c.axis === "wall" && isVec3(c.unit));
+      if (wallCorrection) normal = new THREE.Vector3(...wallCorrection.unit).normalize();
+    }
+    if (!normal) return null;
+    const joints = view.layers?.query?.joints ?? {};
+    if (isVec3(joints.Pelvis) && isVec3(hit)) {
+      const toBody = new THREE.Vector3(...joints.Pelvis).sub(new THREE.Vector3(...hit));
+      if (normal.dot(toBody) < 0) normal.negate();
+    }
+    return normal;
+  }
+
   const checkboxes = {
     query: dom.controls.querySelector("#view3dLayerQuery"),
     reference: dom.controls.querySelector("#view3dLayerReference"),
@@ -572,24 +831,46 @@ function mount(THREE, container) {
 
   function applyPreset(offset) {
     if (!lastView) return;
-    const normal = estimateWallNormal(THREE, lastView);
+    const normal = estimateWallNormal(lastView);
     if (!normal) {
       setNote(dom.note, "벽 방향을 추정할 수 없어 프리셋을 적용하지 않았습니다.", "empty");
       return;
     }
-    camState.theta = Math.atan2(normal.x, normal.z) + Math.PI + offset;
-    camState.phi = Math.PI / 2.3;
-    applyCamera();
+    camState.theta = Math.atan2(normal.x, normal.z) + offset;
+    camState.phi = Math.PI / 2.2;
+    frameTo("pose");
   }
-  dom.controls.querySelector("#view3dPresetFit").addEventListener("click", () => frameToBounds());
+  dom.controls.querySelector("#view3dPresetFit").addEventListener("click", () => {
+    if (!lastView) return;
+    Object.assign(camState, defaultAngles(lastView));
+    frameTo("pose");
+  });
   dom.controls.querySelector("#view3dPresetFront").addEventListener("click", () => applyPreset(0));
   dom.controls.querySelector("#view3dPresetSide").addEventListener("click", () => applyPreset(Math.PI / 2));
+  dom.controls.querySelector("#view3dPresetTracks").addEventListener("click", () => frameTo("tracks"));
+  dom.controls.querySelector("#view3dPresetWall").addEventListener("click", () => frameTo("wall"));
 
-  /** 요청이 진행 중임을 보인다(4상태 중 "로딩 중"). 이전 장면은 그대로 흐리게 남겨
-   * "멈췄다"와 "계산 중이다"를 구별한다 — 화면이 비면 그 둘이 구별되지 않는다. */
   function loading(message) {
     setNote(dom.note, message ?? "비교를 계산하는 중…", "loading");
     dom.host.classList.add("is-loading");
+  }
+
+  function resetScene() {
+    for (const group of Object.values(layerGroups)) {
+      disposeObject3D(group);
+      group.clear();
+    }
+    disposeObject3D(correctionsGroup);
+    correctionsGroup.clear();
+    clearLabels();
+    billboards.length = 0;
+    coneRegistry = [];
+    markerRegistry = [];
+    if (meshObject) {
+      scene.remove(meshObject);
+      disposeObject3D(meshObject);
+      meshObject = null;
+    }
   }
 
   function render(payload) {
@@ -600,47 +881,52 @@ function mount(THREE, container) {
       return;
     }
     lastView = view;
-
-    for (const group of Object.values(layerGroups)) {
-      disposeObject3D(group);
-      group.clear();
-    }
-    disposeObject3D(correctionsGroup);
-    correctionsGroup.clear();
-    clearLabels();
-    if (meshObject) {
-      scene.remove(meshObject);
-      disposeObject3D(meshObject);
-      meshObject = null;
-    }
+    resetScene();
 
     const weights = view.weights ?? {};
-    const hasSkeleton = Object.keys(view.layers?.query?.joints ?? {}).length > 0;
-    // 스켈레톤이 있으면 머리·오른손·왼손 글자 라벨을 끈다 — 관절 구조 자체가
-    // 어느 점이 머리인지 몸으로 보여주고, 그 자리는 교정 번호(①②③) 배지와 겹치기
-    // 딱 좋은 자리라 브리프의 "라벨 겹침을 없앤다"를 스켈레톤 유무로도 지킨다.
-    // 스켈레톤이 없을 때(FK 실패)는 이 글자가 유일한 신원 단서라 그대로 켠다.
+    const fit = view.fit ?? null;
+    const joints = view.layers?.query?.joints ?? {};
+    const hasSkeleton = Object.keys(joints).length > 0;
+
     layerGroups.query.add(buildLayerGroup(view.layers?.query, weights, LAYER_COLOR.query, !hasSkeleton));
     layerGroups.reference.add(buildLayerGroup(view.layers?.reference, weights, LAYER_COLOR.reference, false));
     layerGroups.corrected.add(buildLayerGroup(view.layers?.corrected, weights, LAYER_COLOR.corrected, false));
-    // 전신 스켈레톤(11-A) — 질의 층에만 있다. 질의 체크박스에 함께 매인다.
-    layerGroups.query.add(buildSkeletonGroup(view.layers?.query?.joints, view.layers?.query?.bones));
+    layerGroups.query.add(buildSkeletonGroup(joints, view.layers?.query?.bones, fit?.faded === true));
+    const anchors = buildAnchorGroup(fit);
+    layerGroups.query.add(anchors.group);
+    const passMean = buildPassMeanGroup(view.corrections ?? [], fit);
+    layerGroups.query.add(passMean.group);
+    if (isVec3(view.composite?.hit)) {
+      const hitMarker = new THREE.Mesh(
+        new THREE.SphereGeometry(HIT_MARKER_RADIUS, 14, 10),
+        new THREE.MeshBasicMaterial({ color: LAYER_COLOR.query }),
+      );
+      hitMarker.position.set(...view.composite.hit);
+      layerGroups.query.add(hitMarker);
+    }
     layerGroups.query.visible = checkboxes.query.checked;
     layerGroups.reference.visible = checkboxes.reference.checked;
     layerGroups.corrected.visible = checkboxes.corrected.checked;
 
-    // 화살표 라벨은 번호(①②③…)만 단다 — 글자는 옆 "발부된 교정" 목록에서 같은
-    // 순서로 읽는다(브리프 §11-B: 겹치는 글자 라벨 대신). 목록과 순서가 어긋나면
-    // 안 되므로 정렬을 다시 하지 않고 `view.corrections`가 준 순서를 그대로 쓴다.
-    const numerals = ["①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨"];
-    (view.corrections ?? []).forEach((correction, index) => {
-      const color = sigmaColor(correction.sigma);
-      const magnitudeAbs = typeof correction.magnitude_cm === "number" ? Math.abs(correction.magnitude_cm) : null;
-      const arrow = buildArrow(correction.from, correction.to, color, magnitudeAbs);
-      if (arrow) correctionsGroup.add(arrow);
-      const numeral = numerals[index] ?? `#${index + 1}`;
-      registerLabel(new THREE.Vector3(...correction.to), numeral, "view3d-label-arrow");
-    });
+    // 화살표: 대표 프레임 실측 마커에서 나간다(from_frame). 번호는 서버의 n.
+    const arrowStarts = [];
+    for (const correction of view.corrections ?? []) {
+      const useFrame = isVec3(correction.from_frame) && isVec3(correction.to_frame);
+      const from = useFrame ? correction.from_frame : correction.from;
+      const to = useFrame ? correction.to_frame : correction.to;
+      if (!isVec3(from) || !isVec3(to)) continue;
+      const arrow = buildArrow(from, to, sigmaColor(correction.sigma));
+      if (!arrow) continue;
+      correctionsGroup.add(arrow.group);
+      coneRegistry.push({ n: correction.n, center: arrow.coneBase, radius: ARROW_HEAD_RADIUS });
+      arrowStarts.push({ n: correction.n, from, source: useFrame ? "from_frame" : "from" });
+      const start = new THREE.Vector3(...from);
+      const end = new THREE.Vector3(...to);
+      const mid = start.clone().add(end).multiplyScalar(0.5);
+      registerLabel(mid, typeof correction.n === "number" ? String(correction.n) : "—", "view3d-label-arrow", {
+        kind: "badge", n: correction.n, from: start, to: end,
+      });
+    }
 
     const mesh = view.mesh ?? null;
     meshObject = buildMesh(mesh);
@@ -651,54 +937,69 @@ function mount(THREE, container) {
     } else {
       checkboxes.wall.disabled = true;
     }
-    const wallText = wallNote(mesh);
-    setNote(dom.note, wallText, wallText ? "empty" : undefined);
-    setNote(dom.fitNote, fitNoteText(view.fit ?? null), view.fit ? undefined : "empty");
+
+    renderLegend(dom.legend, view);
+    dom.notes.replaceChildren();
+    if (fit) {
+      for (const text of (fit.notes ?? []).slice(0, 3)) {
+        const item = document.createElement("li");
+        item.textContent = text;
+        dom.notes.append(item);
+      }
+    } else if (typeof view.fit_note === "string") {
+      const item = document.createElement("li");
+      item.textContent = view.fit_note;
+      dom.notes.append(item);
+    }
+    const wallText = wallNoteText(mesh);
+    setNote(dom.wallNote, wallText, wallText && mesh?.available !== true ? "empty" : undefined);
+    const errors = view.display_errors ?? [];
+    setNote(
+      dom.errors,
+      errors.length > 0 ? `일부 표시 블록을 만들지 못했습니다: ${errors.map((e) => e.block).join(", ")}` : "",
+      errors.length > 0 ? "error" : undefined,
+    );
+    setNote(dom.note, "", undefined);
     if (!checkboxes.corrected.checked) dom.correctedNote.textContent = "";
 
-    frameToBounds();
+    let ringCount = 0;
+    layerGroups.query.traverse((child) => { if (child.userData.kind === "pass-mean-ring") ringCount += 1; });
+    const boneLengths = {};
+    layerGroups.query.traverse((child) => {
+      if (child.userData.kind === "bone") boneLengths[child.userData.name] = child.userData.length;
+    });
 
-    // 실제로 그려진 객체 수를 그대로 노출한다(디버그·검증 전용 — three.js 씬 그래프를
-    // 다시 세는 게 아니라 렌더링이 실제로 만든 그 객체들을 센다). 화면을 눈으로 볼 수
-    // 없는 자동 점검(§5)에서 "실제로 몇 개가 그려졌는가"를 씬을 다시 파싱하지 않고
-    // 확인하는 용도다. 렌더링 동작 자체에는 아무 영향이 없다.
-    const markerCount = ["query", "reference", "corrected"].reduce((sum, key) => {
-      let count = 0;
-      layerGroups[key].traverse((child) => {
-        if (child.geometry && child.geometry.type === "SphereGeometry") count += 1;
-      });
-      return sum + count;
-    }, 0);
-    container.__view3dDebug = {
+    container.__view3dDebug = debugLive;
+    Object.assign(debugLive, {
       arrowCount: correctionsGroup.children.length,
-      markerCount,
-      meshTriangleCount: meshObject ? meshObject.geometry.index.count / 3 : 0,
+      arrowStarts,
+      meshTriangleCount: meshObject ? meshObject.userData.triangleCount : 0,
       labelCount: labelRegistry.length,
       labels: labelRegistry.map((entry) => entry.el.textContent),
-      jointCount: Object.keys(view.layers?.query?.joints ?? {}).length,
-      fit: view.fit ?? null,
-    };
+      jointCount: Object.keys(joints).length,
+      markerKinds: { measuredSpheres: anchors.counts.measuredSpheres, passMeanRings: ringCount },
+      offsetLines: anchors.counts.offsetLines,
+      missLines: anchors.counts.missLines,
+      missLabels: anchors.counts.missLabels,
+      boneLengths,
+      fit,
+      framingRatio: null,
+    });
+
+    Object.assign(camState, defaultAngles(view));
+    frameTo("pose");
+    layoutLabels();
   }
 
-  /** `tone`: "idle" | "empty" | "error". 로딩 중이 아닌 정지 상태를 나타낸다 —
-   * `loading()`과 짝이다. */
   function clear(message, tone) {
     dom.host.classList.remove("is-loading");
-    for (const group of Object.values(layerGroups)) {
-      disposeObject3D(group);
-      group.clear();
-    }
-    disposeObject3D(correctionsGroup);
-    correctionsGroup.clear();
-    clearLabels();
-    if (meshObject) {
-      scene.remove(meshObject);
-      disposeObject3D(meshObject);
-      meshObject = null;
-    }
+    resetScene();
     lastView = null;
     setNote(dom.note, message ?? "패스를 고르고 평가를 누르면 여기에 뜹니다.", tone ?? "idle");
-    dom.fitNote.textContent = "";
+    dom.notes.replaceChildren();
+    setNote(dom.wallNote, "", undefined);
+    setNote(dom.errors, "", undefined);
+    renderLegend(dom.legend, null);
     dom.correctedNote.textContent = "";
     container.__view3dDebug = null;
   }
@@ -706,8 +1007,7 @@ function mount(THREE, container) {
   return { render, clear, loading };
 }
 
-/** 3D 뷰를 `container`에 붙인다. three.js가 없거나 초기화가 실패하면 조용한 안내만
- * 남기고 던지지 않는다 — 숫자 패널은 이 호출과 무관하게 그대로 동작해야 한다. */
+/** 3D 뷰를 `container`에 붙인다. three.js가 없거나 초기화가 실패하면 안내만 남기고 던지지 않는다. */
 export function createSkeletonView(container) {
   if (!container) return { render() {}, clear() {}, loading() {} };
   if (typeof THREE === "undefined") {

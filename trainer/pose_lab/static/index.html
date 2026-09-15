@@ -12,7 +12,7 @@
   <!-- ① 고르기 — 기준은 고를 수 없다. 전형기 중 동작 키가 같은 패스를 자동으로 고른다. -->
   <section class="panel picker" aria-label="평가할 시퀀스">
     <div class="picker-row">
-      <span class="section-title" style="margin:0">평가할 시퀀스</span>
+      <span class="section-title picker-title">평가할 시퀀스</span>
       <label class="field">작업자
         <select id="queryWorker"></select>
       </label>
@@ -24,57 +24,76 @@
       </label>
       <button id="run" class="btn-primary" disabled>평가</button>
     </div>
-    <p class="picker-status state-note" id="queryStatus" data-tone="idle" hidden></p>
-
-    <div class="reference-line" id="referenceLine" data-tone="idle">
-      <span class="reference-label">기준</span>
-      <span class="reference-value" id="referenceValue">패스를 고르면 전형기 기준을 자동으로 찾습니다.</span>
-      <button id="cycleReference" class="btn-ghost" hidden>다른 기준 ▸</button>
-      <span class="reference-cycle-note" id="referenceCycleNote"></span>
-    </div>
-  </section>
-
-  <!-- ② 얼마나 다른가 — 이 화면의 답. 가장 크게 쓴다. -->
-  <section class="panel hero" id="heroSection" aria-label="얼마나 다른가">
-    <div class="hero-empty" id="heroEmpty">
-      <p class="hero-empty-title">아직 평가하지 않았습니다</p>
-      <p class="hero-empty-body">
-        위에서 작업자 · 레벨 · 패스를 고르고 <strong>평가</strong>를 누르세요.
-        전형기 중 같은 동작(동작 키)의 패스를 기준으로 자동으로 잡습니다 — 기준은 직접
-        고르지 않습니다.
-      </p>
-    </div>
-    <div class="hero-body" id="heroBody" hidden>
-      <div class="hero-figure">
-        <span class="hero-number" id="heroScore">—</span>
-        <span class="hero-figure-label">유사도<br><span class="hero-figure-hint">1.0 = 기준과 동일</span></span>
+    <div class="picker-foot">
+      <div class="reference-line" id="referenceLine" data-tone="idle">
+        <span class="reference-label">기준</span>
+        <span class="reference-value" id="referenceValue">패스를 고르면 전형기 기준을 자동으로 찾습니다.</span>
+        <button id="cycleReference" class="btn-ghost" hidden>다른 기준 ▸</button>
+        <span class="reference-cycle-note" id="referenceCycleNote"></span>
       </div>
-      <dl class="hero-meta">
-        <div><dt>동작 키</dt><dd id="heroMotionKey">—</dd></div>
-        <div><dt>표본</dt><dd id="heroSamples">—</dd></div>
-      </dl>
-      <ul class="hero-deviations" id="heroDeviations"></ul>
-    </div>
-    <p class="state-note" id="heroState" hidden></p>
-  </section>
-
-  <!-- ③ 무엇을 고치나 — 3D 뷰(높이 상한 420px)와 교정 목록을 나란히. -->
-  <section class="panel compare-body" aria-label="무엇을 고치나">
-    <div class="view3d-col">
-      <section id="view3d" aria-label="3D 뷰"></section>
-    </div>
-    <div class="corrections-col">
-      <h2 class="section-title">발부된 교정 <span class="count-badge" id="correctionsCount"></span></h2>
-      <ol class="correction-list" id="correctionList"></ol>
-      <p class="state-note" id="correctionsState" data-tone="idle">패스를 고르고 평가를 누르면 여기에 뜹니다.</p>
+      <p class="picker-status state-note" id="queryStatus" data-tone="idle" hidden></p>
     </div>
   </section>
 
-  <!-- ④ 개선율 -->
-  <section class="panel improvement" id="improvementSection">
-    <span class="improvement-label">교정을 따르면</span>
-    <span class="improvement-values" id="improvementValues">—</span>
-  </section>
+  <!-- 넓은 창: 왼쪽 열(②③④④b) · 오른쪽 열(3D). 좁은 창: 한 열로 ②③④④b 다음 3D. -->
+  <div class="workspace">
+    <div class="workspace-left">
+      <!-- ② 얼마나 다른가 — 이 화면의 답. 가장 크게 쓴다. -->
+      <section class="panel hero" id="heroSection" aria-label="얼마나 다른가">
+        <div class="hero-empty" id="heroEmpty">
+          <p class="hero-empty-title">아직 평가하지 않았습니다</p>
+          <p class="hero-empty-body">
+            위에서 작업자 · 레벨 · 패스를 고르고 <strong>평가</strong>를 누르세요.
+            전형기 중 같은 동작(동작 키)의 패스를 기준으로 자동으로 잡습니다 — 기준은 직접
+            고르지 않습니다.
+          </p>
+        </div>
+        <div class="hero-body" id="heroBody" hidden>
+          <div class="hero-figure">
+            <span class="hero-number" id="heroScore">—</span>
+            <span class="hero-figure-label">유사도<br><span class="hero-figure-hint">1.0 = 기준과 동일</span></span>
+          </div>
+          <dl class="hero-meta">
+            <div><dt>동작 키</dt><dd id="heroMotionKey">—</dd></div>
+            <div><dt>표본</dt><dd id="heroSamples">—</dd></div>
+          </dl>
+          <ul class="hero-deviations" id="heroDeviations"></ul>
+        </div>
+        <p class="state-note" id="heroState" hidden></p>
+      </section>
+
+      <!-- ③ 무엇을 고치나 — 교정을 사람이 읽는 문장으로, 유사도 바로 아래·3D 바깥에 둔다. -->
+      <section class="panel corrections" id="corrections" aria-label="교정">
+        <h2 class="section-title">교정 <span class="count-badge" id="correctionsCount"></span></h2>
+        <ol class="correction-list" id="correctionList"></ol>
+        <p class="state-note" id="correctionsState" data-tone="idle">패스를 고르고 평가를 누르면 여기에 뜹니다.</p>
+      </section>
+
+      <!-- ④ 개선율 -->
+      <section class="panel improvement" id="improvementSection" aria-label="개선율">
+        <h2 class="section-title">교정을 따르면</h2>
+        <div class="improvement-score" id="improvementScore">—</div>
+        <dl class="improvement-rows" id="improvementRows"></dl>
+      </section>
+
+      <!-- ④b 건 각도(참고값) -->
+      <section class="panel orientation" id="orientationSection" aria-label="건 각도 참고값">
+        <h2 class="orientation-title" id="orientationTitle">건 각도</h2>
+        <p class="orientation-header-note" id="orientationHeaderNote"></p>
+        <table class="orientation-table" id="orientationTable">
+          <thead><tr><th scope="col">항목</th><th scope="col">대상</th><th scope="col">기준</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <ul class="orientation-notes" id="orientationNotes"></ul>
+      </section>
+    </div>
+
+    <div class="workspace-right">
+      <section class="panel view3d-panel" aria-label="3D 뷰">
+        <section id="view3d" aria-label="3D 뷰"></section>
+      </section>
+    </div>
+  </div>
 
   <!-- ⑤ 나머지는 접는다: 기존 축 표 · 파라미터 -->
   <details class="panel details-panel">
@@ -90,25 +109,16 @@
           <dl></dl>
           <p class="provisional"></p>
           <ul class="bars"></ul>
-          <p class="stance" hidden></p>
           <table class="issued-axes">
-            <thead><tr><th>점</th><th>축</th><th>편차</th><th>σ</th></tr></thead>
+            <thead><tr><th>번호</th><th>대상 · 축</th><th>교정</th><th>σ</th></tr></thead>
             <tbody></tbody>
           </table>
-          <ul class="corrections"></ul>
-          <p class="finding"></p>
+          <ul class="fit-notes-all"></ul>
         </article>
         <article id="joint">
           <h2>관절 축 <span class="badge warn">IK 산출물</span></h2>
           <p class="note"></p>
-          <p class="normalization"></p>
-          <p class="granularity"></p>
-          <p class="reference-dates"></p>
           <dl></dl>
-          <p class="provisional"></p>
-          <ul class="bars"></ul>
-          <ul class="corrections"></ul>
-          <p class="finding"></p>
         </article>
       </section>
 
