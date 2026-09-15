@@ -1,0 +1,10 @@
+# web.Dockerfile 전용(BuildKit). demo-ui 소스와 nginx 설정만 컨텍스트로 보낸다.
+*
+!demo-ui
+!deploy/spark/web/nginx.conf
+demo-ui/node_modules
+demo-ui/dist
+demo-ui/dist-electron
+demo-ui/test-results
+demo-ui/playwright-report
+demo-ui/*.tsbuildinfo

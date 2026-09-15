@@ -1,0 +1,176 @@
+# DGX Spark(aarch64, GB10 128GB 통합 메모리, CUDA 13) 배포 정의: vllm / mcp / agent-api / web.
+#
+# 개발용 deploy/docker-compose.yml(소스 바인드 마운트, sleep infinity)과 별개다.
+# - 이미지: 실행 코드와 고정 의존성만 (deploy/spark/images, deploy/spark/requirements).
+# - 번들(BUNDLE_DIR): 모델·임베딩·리랭커·RAG 인덱스·MCP 기준 데이터. 기동 전에
+#   scripts/bundle_manifest.py verify 로 sha256을 확인한다.
+# - 번들 안의 상대 경로는 컨테이너 경로와 1:1이다(trainer/configs/rag_config_spark_vllm.yaml 경로 그대로).
+# 절차·합격 기준: deploy/spark/README.md. 값은 .env(.env.example 복사)에서 온다.
+name: shipcoat-spark
+
+x-gpu: &gpu
+  resources:
+    reservations:
+      devices:
+        - driver: nvidia
+          count: all
+          capabilities: [gpu]
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "100m"
+    max-file: "5"
+
+services:
+  vllm:
+    # 태그 또는 태그@sha256:<digest>. digest 고정은 README §2.
+    image: ${VLLM_IMAGE:?VLLM_IMAGE must name the vLLM image (tag or tag@sha256 digest)}
+    platform: linux/arm64
+    # 인자는 entrypoint.sh가 환경 변수로 조립한다(MTP·--language-model-only 토글, D6 금지 플래그 차단).
+    entrypoint: ["/bin/bash", "/opt/shipcoat/vllm-entrypoint.sh"]
+    environment:
+      VLLM_MODEL_PATH: /models/shipcoat
+      # llm.served_model_name / llm.max_model_len 과 같아야 한다(테스트가 단언한다).
+      SERVED_MODEL_NAME: ${SERVED_MODEL_NAME:-qwen36-27b-shipcoat-v6-1-fp8}
+      MAX_MODEL_LEN: ${MAX_MODEL_LEN:-8192}
+      MAX_NUM_SEQS: ${MAX_NUM_SEQS:-4}
+      GPU_MEMORY_UTILIZATION: ${GPU_MEMORY_UTILIZATION:-0.72}
+      GENERATION_CONFIG: ${GENERATION_CONFIG:-vllm}
+      OVERRIDE_GENERATION_CONFIG: ${OVERRIDE_GENERATION_CONFIG:-}
+      ENABLE_MTP: ${ENABLE_MTP:-0}
+      MTP_NUM_SPECULATIVE_TOKENS: ${MTP_NUM_SPECULATIVE_TOKENS:-1}
+      LANGUAGE_MODEL_ONLY: ${LANGUAGE_MODEL_ONLY:-0}
+      VLLM_EXTRA_ARGS: ${VLLM_EXTRA_ARGS:-}
+      # 비어 있으면 인증 없음. 값은 argv가 아니라 환경 변수로만 넘긴다.
+      VLLM_API_KEY: ${VLLM_API_KEY:-}
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+    volumes:
+      - ${BUNDLE_DIR:?BUNDLE_DIR must point to the verified bundle}/output/merged/${MODEL_SUBDIR:-qwen36_27b_shipcoat_v6_1_fp8}:/models/shipcoat:ro
+      - ./vllm/entrypoint.sh:/opt/shipcoat/vllm-entrypoint.sh:ro
+    ports:
+      # 절차서 확인용. 기본은 호스트 루프백에만 연다.
+      - "${VLLM_BIND:-127.0.0.1}:${VLLM_HOST_PORT:-18000}:8000"
+    ipc: host
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    deploy: *gpu
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      # 29GB 가중치 로드 + 컴파일/CUDA graph 캡처. Spark 실측 전이라 넉넉히 둔다(README §6에서 실측 기록).
+      start_period: 1800s
+    restart: unless-stopped
+    stop_grace_period: 60s
+    logging: *logging
+
+  mcp:
+    image: ${MCP_IMAGE:-shipcoat/mcp:v6.1}
+    build:
+      context: ../..
+      dockerfile: deploy/spark/images/agent.Dockerfile
+      target: mcp
+      platforms: [linux/arm64]
+      args:
+        CODE_COMMIT: ${CODE_COMMIT:-unknown}
+    platform: linux/arm64
+    user: "${APP_UID:-10001}:${APP_GID:-10001}"
+    command: ["python3", "-m", "uvicorn", "mcp_servers.main:app", "--host", "0.0.0.0", "--port", "8100", "--workers", "1"]
+    environment:
+      # 번들에 파일이 없으면 pose_estimation은 추정하지 않고 None을 낸다(현재 A40 기본 경로에도 없음).
+      POSE_REFERENCE_PATH: /output/expert_reference/expert_pose_reference.json
+    volumes:
+      - ${BUNDLE_DIR:?BUNDLE_DIR must point to the verified bundle}/output/expert_reference:/output/expert_reference:ro
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8100/health', timeout=5)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    restart: unless-stopped
+    logging: *logging
+
+  agent-api:
+    image: ${AGENT_API_IMAGE:-shipcoat/agent-api:v6.1}
+    build:
+      context: ../..
+      dockerfile: deploy/spark/images/agent.Dockerfile
+      target: agent-api
+      platforms: [linux/arm64]
+      args:
+        CODE_COMMIT: ${CODE_COMMIT:-unknown}
+    platform: linux/arm64
+    user: "${APP_UID:-10001}:${APP_GID:-10001}"
+    # 단일 프로세스·단일 워커: SimSessionStore와 생성 슬롯이 프로세스 메모리에 있다.
+    command: ["python3", "-m", "trainer.demo_api.app", "--host", "0.0.0.0", "--port", "8120"]
+    environment:
+      DEMO_LIVE_MODE: "on"
+      CONFIG_PATH: ${AGENT_CONFIG_PATH:-/workspace/trainer/configs/rag_config_spark_vllm.yaml}
+      # 서빙 모델은 이미 병합본이다. 빈 값이면 NF4 어댑터 기본 경로를 쓰지 않는다.
+      ADAPTER_PATH: ""
+      LIVE_EAGER_INIT: "1"
+      MCP_BASE_URL: http://mcp:8100
+      TOOL_ADAPTER_NATIVE_TOOLS: "0"
+      TOOL_ADAPTER_FORCE_SYNTHESIS: "1"
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      HF_HOME: /tmp/hf-home
+      HOME: /tmp/app-home
+      VLLM_API_KEY: ${VLLM_API_KEY:-}
+      # 빈 값 = CORS 헤더 없음(web은 same-origin 프록시, KETI는 서버 간 호출).
+      DEMO_UI_ORIGINS: ${DEMO_UI_ORIGINS:-}
+    volumes:
+      - ${BUNDLE_DIR:?BUNDLE_DIR must point to the verified bundle}/models:/models:ro
+      - ${BUNDLE_DIR:?BUNDLE_DIR must point to the verified bundle}/output/indexes:/output/indexes:ro
+      # llm.tokenizer_path(병합본의 토크나이저 파일)
+      - ${BUNDLE_DIR:?BUNDLE_DIR must point to the verified bundle}/output/merged:/output/merged:ro
+      # 롤백 설정(scripts/render_rollback_config.py 출력)
+      - ${BUNDLE_DIR:?BUNDLE_DIR must point to the verified bundle}/config:/bundle-config:ro
+      # FP8 품질 게이트 입력·출력
+      - ${BUNDLE_DIR:?BUNDLE_DIR must point to the verified bundle}/data/eval:/data/eval:ro
+      - ${RESULTS_DIR:?RESULTS_DIR must be a directory writable by APP_UID}:/output/eval_results
+    ports:
+      # v2.5 POST /api/v1/copilot/query 를 KETI 시뮬레이터가 직접 부를 포트. 외부 공개 시 COPILOT_BIND=0.0.0.0.
+      - "${COPILOT_BIND:-127.0.0.1}:${COPILOT_PORT:-58000}:8120"
+    depends_on:
+      # 통합 메모리에서 vLLM이 먼저 메모리를 잡아야 --gpu-memory-utilization 계산이 흔들리지 않는다.
+      vllm:
+        condition: service_healthy
+      mcp:
+        condition: service_healthy
+    deploy: *gpu
+    healthcheck:
+      # /api/ready: vLLM /health + /v1/models(served name) + 파이프라인·RAG 로드. MCP는 정보용.
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8120/api/ready', timeout=10)"]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 900s
+    restart: unless-stopped
+    stop_grace_period: 30s
+    logging: *logging
+
+  web:
+    image: ${WEB_IMAGE:-shipcoat/web:v6.1}
+    build:
+      context: ../..
+      dockerfile: deploy/spark/images/web.Dockerfile
+      platforms: [linux/arm64]
+    platform: linux/arm64
+    ports:
+      - "${WEB_BIND:-0.0.0.0}:${WEB_PORT:-8080}:80"
+    depends_on:
+      agent-api:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    logging: *logging

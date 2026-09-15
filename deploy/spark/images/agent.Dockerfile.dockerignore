@@ -1,0 +1,13 @@
+# agent.Dockerfile 전용(BuildKit). 컨텍스트는 저장소 루트이고, 이미지에 들어갈 경로만 다시 연다.
+# models/ data/ output/ hf-cache/ 같은 로컬 산출물 트리는 컨텍스트로 보내지 않는다.
+*
+!trainer
+!mcp_servers
+!deploy/spark/requirements
+!deploy/spark/scripts
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+trainer/**/tests
+trainer/scripts/test_*.py
+mcp_servers/test_*.py
