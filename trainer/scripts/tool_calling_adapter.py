@@ -607,6 +607,16 @@ class ToolCallingAdapter:
         max_tokens: int | None = None,
         gen_params: dict[str, Any] | None = None,
     ) -> str:
+        complete_chat = getattr(model, "complete_chat", None)
+        if callable(complete_chat):
+            # OpenAI-compatible backend: text <tool_call> protocol, no tools field, sampling from config.
+            return await asyncio.to_thread(
+                complete_chat,
+                messages,
+                max_tokens=max_tokens or 1024,
+                enable_thinking=enable_thinking,
+            )
+
         if hasattr(model, "generate_response"):
             response = model.generate_response(messages=messages, tools=self.get_tools_param())
             if asyncio.iscoroutine(response):
@@ -659,6 +669,16 @@ class ToolCallingAdapter:
     ) -> str:
         synthesis_messages = list(messages)
         synthesis_messages.append({"role": "user", "content": SYNTHESIS_INSTRUCTION})
+
+        complete_chat = getattr(model, "complete_chat", None)
+        if callable(complete_chat):
+            text = await asyncio.to_thread(
+                complete_chat,
+                synthesis_messages,
+                max_tokens=max_tokens or 1024,
+                enable_thinking=False,
+            )
+            return TOOL_CALL_STRIP_REGEX.sub("", self._strip_think_blocks(text)).strip()
 
         if hasattr(model, "generate_response"):
             response = model.generate_response(messages=synthesis_messages, tools=None)

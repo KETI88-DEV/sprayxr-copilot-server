@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextvars
 import importlib
 import json
 import logging
@@ -34,6 +35,13 @@ from trainer.scripts.live_response_contract import normalize_fast_knowledge_resp
 from trainer.scripts.live_sequence_fallback import (
     LiveSequenceRequest,
     enforce_live_sequence_validation,
+)
+from trainer.scripts.openai_backend import (
+    ContextLengthExceededError,
+    GenerationCancelledError,
+    OpenAIBackendSettings,
+    OpenAIChatBackend,
+    generation_cancel_scope,
 )
 from trainer.scripts.prompt_budget import (
     PromptTokenCounter,
@@ -242,6 +250,15 @@ def _patch_torch_set_submodule() -> None:
     setattr(torch.nn.Module, "set_submodule", _set_submodule)
 
 
+def _drain_orphaned_run(task: asyncio.Future[Any]) -> None:
+    """Retrieves the outcome of a run whose consumer left, so it is logged once, not as 'never retrieved'."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None and not isinstance(exc, GenerationCancelledError):
+        logger.warning("run_streaming: abandoned run() ended with %s", type(exc).__name__)
+
+
 def _run_coro_sync(coro: Any) -> Any:
     try:
         loop = asyncio.get_running_loop()
@@ -252,7 +269,8 @@ def _run_coro_sync(coro: Any) -> Any:
         return loop.run_until_complete(coro)
 
     with ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(asyncio.run, coro)
+        # Carry context variables (the generation cancel scope) into the helper thread.
+        future = executor.submit(contextvars.copy_context().run, asyncio.run, coro)
         return future.result()
 
 
@@ -291,7 +309,14 @@ class SessionContext:
 
 
 class VLLMWrapper:
-    """Makes vLLM LLM compatible with tool_calling_adapter's generate_response interface."""
+    """Makes vLLM LLM compatible with tool_calling_adapter's generate_response interface.
+
+    Known defects (in-process ``llm.backend: vllm``, kept only for reproduction):
+    it passes native ``tools`` even with ``pass_native_tools: false``, and it
+    drops ``enable_thinking``, per-round ``max_tokens`` and
+    ``repetition_penalty``. Serve through ``llm.backend: openai``
+    (``trainer/scripts/openai_backend.py``) instead.
+    """
 
     def __init__(
         self,
@@ -353,6 +378,9 @@ class AgentPipeline:
 
     def _load_model_and_tokenizer(self, adapter_path: str | Path | None) -> tuple[Any, Any]:
         llm_cfg = self.config.get("llm", {})
+        if self.backend == "openai":
+            return self._load_openai_backend(adapter_path)
+
         model_path = llm_cfg.get("model_path")
         if not isinstance(model_path, str) or not model_path:
             raise ValueError("Missing llm.model_path in config")
@@ -384,6 +412,19 @@ class AgentPipeline:
 
         model.eval()
         return model, tokenizer
+
+    def _load_openai_backend(self, adapter_path: str | Path | None) -> tuple[Any, Any]:
+        """HTTP client for an external OpenAI-compatible server; no local weights, no tokenizer model.
+
+        The served checkpoint already has the LoRA merged, so ``adapter_path``
+        is ignored. Prompt accounting loads only ``llm.tokenizer_path``
+        (see ``_prompt_token_counter``).
+        """
+        settings = OpenAIBackendSettings.from_config(self.config)
+        if adapter_path:
+            logger.info("openai backend: adapter %s ignored (served model is merged)", adapter_path)
+        logger.info("openai backend: model=%s", settings.served_model_name)
+        return OpenAIChatBackend(settings), None
 
     def _load_vllm_backend(
         self,
@@ -717,6 +758,13 @@ class AgentPipeline:
             return self.model.generate_response(messages=messages, tools=None)
 
         gen_cfg = self.config.get("generation", {})
+        if isinstance(self.model, OpenAIChatBackend):
+            return self.model.complete_chat(
+                messages,
+                max_tokens=min(int(gen_cfg.get("max_new_tokens", 768)), ROUTE_MAX_TOKENS["fast"]),
+                enable_thinking=enable_thinking,
+            )
+
         prompt_text = self.tokenizer.apply_chat_template(
             messages,
             tokenize=False,
@@ -822,8 +870,15 @@ class AgentPipeline:
         On failure no partial events are emitted: a blank instruction is rejected
         up front as a single non-retryable error without invoking run(), and any
         exception escaping run() is logged and surfaced as a single generic
-        retryable error without leaking its message. Every error event carries
-        ttft_ms=None and a measured total_ms.
+        retryable error without leaking its message. A prompt that exceeds the
+        model context window is the one non-retryable run() failure. Every error
+        event carries ttft_ms=None and a measured total_ms.
+
+        If the consumer leaves (aclose or task cancellation) while run() is in
+        flight, a cancel event installed in the worker's context stops the
+        remote (openai) backend between streamed tokens and closes its request;
+        a run still waiting for _GENERATION_SLOT is skipped. The HF backend
+        cannot be interrupted and finishes in the background.
         """
         t0 = time.monotonic()
         ttft_ms: int | None = None
@@ -840,17 +895,22 @@ class AgentPipeline:
         # Ambient context rides on every live turn, so passing it here would make
         # classify() read tool intent from state; run() keeps its rule for evaluation.
         live_route = self.router.classify(instruction, None)
+        cancel_event = threading.Event()
 
         def _guarded_run() -> dict[str, Any]:
             with _GENERATION_SLOT:
-                return self.run(
-                    instruction=instruction,
-                    environment=environment,
-                    session_id=session_id,
-                    enable_thinking=enable_thinking,
-                    request_id=request_id,
-                    force_route=live_route,
-                )
+                if cancel_event.is_set():
+                    raise GenerationCancelledError("consumer left before generation started")
+                # Runs in the worker's copied context, so the scope never leaks to the caller.
+                with generation_cancel_scope(cancel_event):
+                    return self.run(
+                        instruction=instruction,
+                        environment=environment,
+                        session_id=session_id,
+                        enable_thinking=enable_thinking,
+                        request_id=request_id,
+                        force_route=live_route,
+                    )
 
         run_task = asyncio.ensure_future(asyncio.to_thread(_guarded_run))
         try:
@@ -863,6 +923,15 @@ class AgentPipeline:
                     "elapsed_sec": int(time.monotonic() - t0),
                 }
             result = run_task.result()
+        except ContextLengthExceededError:
+            logger.exception("run_streaming: prompt exceeds the model context window")
+            yield "error", {
+                "message": "prompt exceeds the model context window",
+                "retryable": False,
+                "ttft_ms": None,
+                "total_ms": int((time.monotonic() - t0) * 1000),
+            }
+            return
         except Exception:
             logger.exception("run_streaming: unexpected failure in run()")
             yield "error", {
@@ -872,6 +941,11 @@ class AgentPipeline:
                 "total_ms": int((time.monotonic() - t0) * 1000),
             }
             return
+        finally:
+            if not run_task.done():
+                logger.info("run_streaming: consumer left; cancelling generation session=%s", session_id)
+                cancel_event.set()
+                run_task.add_done_callback(_drain_orphaned_run)
 
         logger.info(
             "run_streaming: run() finished session=%s route=%s elapsed_ms=%d",

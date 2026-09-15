@@ -6,18 +6,22 @@ import logging
 import os
 import re
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import cast
 
+import httpx
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
+from trainer.demo_api import chat_service as chat_service_mod
 from trainer.demo_api.chat_service import ChatService, build_default_live_runner
 from trainer.demo_api.contracts import ChatRequest
 from trainer.demo_api.monitor import MonitorRecorder
 from trainer.demo_api.monitor_api import create_monitor_router
+from trainer.demo_api.readiness import evaluate_live_readiness
 from trainer.demo_api.sequence import default_snapshot, session_snapshot
 from trainer.demo_api.sim_session import SimSessionStore
 from trainer.demo_api.simulator import create_simulator_router
@@ -27,10 +31,15 @@ logger = logging.getLogger(__name__)
 _LEVEL_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9\-_.]{0,63}$")
 
 
-def create_app(chat_service: ChatService | None = None) -> FastAPI:
+def create_app(
+    chat_service: ChatService | None = None,
+    *,
+    probe_transport: httpx.AsyncBaseTransport | None = None,
+) -> FastAPI:
     recorder = MonitorRecorder()
     store = SimSessionStore()
-    resolver = McpZoneResolver(os.environ.get("MCP_BASE_URL", "http://localhost:8100"))
+    mcp_base_url = os.environ.get("MCP_BASE_URL", "http://localhost:8100")
+    resolver = McpZoneResolver(mcp_base_url)
 
     if chat_service is not None:
         service = chat_service
@@ -45,8 +54,17 @@ def create_app(chat_service: ChatService | None = None) -> FastAPI:
             service = ChatService(live_runner=build_default_live_runner(store))
         else:
             service = ChatService()
-    app = FastAPI(title="Ship Painting Demo API")
+    live = service.live_runner is not None
+
+    @asynccontextmanager
+    async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+        if live and os.environ.get("LIVE_EAGER_INIT") == "1":
+            app.state.eager_init_thread = chat_service_mod.start_eager_pipeline_init()
+        yield
+
+    app = FastAPI(title="Ship Painting Demo API", lifespan=_lifespan)
     app.state.chat_service = service
+    app.state.eager_init_thread = None
 
     raw_allow_origins = os.environ.get("DEMO_UI_ORIGINS")
     if raw_allow_origins is None:
@@ -69,6 +87,19 @@ def create_app(chat_service: ChatService | None = None) -> FastAPI:
             "servers": 1,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
+
+    @app.get("/api/ready")
+    async def ready() -> JSONResponse:
+        body: dict[str, object] = {"ready": True, "mode": "live" if live else "demo", "checks": {}}
+        if live:
+            is_ready, checks = await evaluate_live_readiness(
+                pipeline=chat_service_mod.loaded_pipeline(),
+                mcp_base_url=mcp_base_url,
+                transport=probe_transport,
+            )
+            body.update(ready=is_ready, checks=checks)
+        body["timestamp"] = datetime.now(timezone.utc).isoformat()
+        return JSONResponse(status_code=200 if body["ready"] else 503, content=body)
 
     @app.get("/api/sequence/{level_id}")
     def sequence(level_id: str) -> dict[str, object]:

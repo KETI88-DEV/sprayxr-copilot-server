@@ -1,0 +1,209 @@
+chunking:
+  tokenizer_path: /models/Qwen3-4B
+  min_tokens: 300
+  max_tokens: 800
+  overlap_fraction: 0.15
+  min_chunk_tokens: 50
+  chunk_id_format: DOC-{doc_id}-C{seq:04d}
+# Spark serving config: same retrieval and prompts as rag_config_fewshot_27b.yaml,
+# generation through an external vLLM OpenAI-compatible server (llm.backend: openai).
+embedding:
+  # Local directory, not the hub id. search_index loads with use_safetensors=True,
+  # and the HF cache main snapshot of BAAI/bge-m3 has only pytorch_model.bin; offline
+  # the hub id fails because safetensors auto-conversion needs the network
+  # (reproduced 2026-09-15 with HF_HUB_OFFLINE=1). The directory must hold the
+  # main snapshot files plus model.safetensors (refs/pr snapshot 9a0624b8).
+  model_name: /models/bge-m3
+  device: cuda
+  batch_size: 32
+  max_seq_length: 1024
+  normalize: true
+  dimension: 1024
+index:
+  type: hnsw
+  metric: inner_product
+  hnsw_m: 32
+  ef_construction: 200
+  ef_search: 256
+reranker:
+  # Local directory for offline start; the cached snapshot already has model.safetensors.
+  model_name: /models/bge-reranker-v2-m3
+  device: cuda
+  max_length: 1024
+  top_k_retrieve: 20
+  top_k_rerank: 8
+llm:
+  backend: openai
+  # vLLM OpenAI-compatible API root (the /v1 prefix included); /health is probed
+  # at the server root by GET /api/ready.
+  base_url: http://vllm:8000/v1
+  # Must equal vLLM --served-model-name; /api/ready requires it in /v1/models.
+  served_model_name: qwen36-27b-shipcoat-v6-1-fp8
+  # Bearer token read from this env var (vLLM --api-key); unset/empty -> no header.
+  api_key_env: VLLM_API_KEY
+  connect_timeout_sec: 5
+  # Longest wait for the next streamed bytes, prefill before the first token included.
+  request_timeout_sec: 180
+  # Tokenizer of the served merged bundle, loaded alone for exact prompt budgets.
+  # The BF16 master (/output/merged/qwen36_27b_shipcoat_v6_1_bf16) has the same tokenizer files.
+  tokenizer_path: /output/merged/qwen36_27b_shipcoat_v6_1_fp8
+  # Context window shared by every backend. A vLLM server for this config must
+  # run with the same --max-model-len; it rejects prompt + max_tokens beyond it.
+  # The prompt budget is max_model_len - generation.max_new_tokens, counted
+  # with the real tokenizer (trainer/scripts/prompt_budget.py).
+  # 8192 kept after trainer/scripts/prompt_budget_study.py (2026-09-15):
+  # - agentic eval (30): exact prompt p50 3691 / p95 5505 / max 5663 tokens;
+  #   the old len//2 estimate never let a prompt exceed 8192 - 1024.
+  # - no window reproduces the old chunk counts everywhere: AQ007 (old 5 of 8)
+  #   needs 5056-5376, AQ002 needs >= 6720. At 8192 only AQ007 changes (8 chunks).
+  # - docqa RAG (50) and 8-chunk fast prompts (30): unchanged, max 4280 tokens.
+  # - replayed tool rounds (86 runs): synthesis needs <= 6365, <= 7133 with
+  #   256 tokens of prose per round, so 7168 would be the tightest fit.
+  # - native tool declarations (pass_native_tools / vLLM tools=) add 2748 tokens.
+  # Launch vLLM with --max-model-len 8192 (same value; see the reasons above).
+  max_model_len: 8192
+  pass_native_tools: false
+  thinking_off_for_tools: true
+  append_citations: true
+  tool_deadline_sec: 150
+generation:
+  # The openai backend sends every sampling value on every request and refuses
+  # to start if one is missing: vLLM would otherwise use the checkpoint
+  # generation_config (temperature 1.0 / top_p 0.95).
+  temperature: 0.3
+  max_new_tokens: 1024
+  max_new_tokens_tool: 256
+  do_sample: true
+  top_p: 0.8
+  top_k: 20
+  repetition_penalty: 1.15
+  enable_thinking: false
+prompt:
+  system: '너는 선박 도장 분야 전문 AI 어시스턴트이다. 제공된 문서를 근거로 정확한 기술 정보를 제공하고, 답변 마지막에 근거 문서 ID를
+    반드시 명시한다. 근거가 부족하면 솔직히 ''제공된 문서에 해당 정보가 없습니다''라고 답한다. 안전 관련 질문에는 항상 관련 규정을 함께
+    안내한다.
+
+
+    [사용 가능한 도구 7종]
+
+    1. dft_judge — DFT 합부 판정 (측정값+기준 → 합격/불합격)
+
+    2. anomaly_detection — 도막 분포 이상 탐지 (DFT+시계열+히트맵 → 이상 분포 패턴 + 근본 원인 분석)
+
+    3. sequence_validation — 구역 간 도장 순서 안내 (3D 구조물의 구역 목록 → 다음 칠할 구역 추천)
+
+    4. pose_estimation — 숙련자 자세 비교 (현재 자세 vs 저장된 숙련자 자세 → 유사도+관절별 교정) 또는 블록별 권장 자세
+    번호 추천
+
+    5. location_tracking — 위치/구역 확인 (3D 좌표 → 구역 식별, 블록 정보)
+
+    6. timeseries — 세션 추이 분석 (속도/거리/각도 시계열 조회)
+
+    7. vlm_analysis — 현장 이미지 분석 (스크린샷/히트맵 → 시각적 결함 및 도막 상태 분석)
+
+
+    [도구 선택 규칙 — 반드시 준수]
+
+    DFT 수치가 있으면 → dft_judge 호출 필수. 히트맵, 도막 분포, 저도막, 과도막, 패턴, 결함 언급 → anomaly_detection
+    호출 필수. 다음 구역, 도장 순서, 어디부터 칠할지 언급 → sequence_validation 호출 필수. 자세, 포즈, 작업 동작, 숙련자
+    자세 번호 언급 → pose_estimation 호출 필수. 현재 구역, 위치, 좌표 확인 → location_tracking 호출 필수.
+    세션 추이, 속도 변화, 시계열 확인 → timeseries 호출 필수. 여러 상황이 겹치면 관련 도구를 모두 호출한다. 도구 호출 없이 합격/불합격,
+    정상/이상 등의 판정을 내리지 않는다. 수치 판단이 필요한 질문에는 도구 없이 답하지 마라. "확인해줘", "판정해줘", "분석해줘" 등 판단
+    요청 시 반드시 관련 도구를 호출하라. 문서에서 찾을 수 있는 단순 지식 질문(정의, 용어, 규정)에는 도구를 호출하지 마라.
+
+
+    [도구 호출 형식 및 예시]
+
+    <tool_call>{"name": "dft_judge", "arguments": {"measurements": [95, 102, 88],
+    "spec": {"nominal": 100, "tolerance_rule": "90/10"}}}</tool_call>
+
+    <tool_call>{"name": "anomaly_detection", "arguments": {"dft_measurements": [{"value_um":
+    85, "zone_id": "B-3", "position": "lower"}, {"value_um": 92, "zone_id": "B-3",
+    "position": "middle"}, {"value_um": 78, "zone_id": "B-3", "position": "lower"}],
+    "timeseries": {"gun_speed_m_per_s": [0.9, 0.85, 0.7], "standoff_distance_mm":
+    [300, 310, 350], "spray_angle_deg": [72, 68, 55]}, "zone_id": "B-3", "spec": {"nominal_um":
+    100, "tolerance_rule": "90/10"}, "image_context": "좌하단 저도막 패턴"}}</tool_call>
+
+    <tool_call>{"name": "sequence_validation", "arguments": {"zone_map": [{"zone_id":
+    "A-1", "block_id": "BLK-A", "zone_type": "수직 패널", "position": "upper", "is_painted":
+    true}, {"zone_id": "A-2", "block_id": "BLK-A", "zone_type": "수직 패널", "position":
+    "middle", "is_painted": false}, {"zone_id": "B-1", "block_id": "BLK-B", "zone_type":
+    "곡면", "position": "lower", "is_painted": false}], "current_zone_id": "A-1", "structure_type":
+    "block"}}</tool_call>
+
+    <tool_call>{"name": "pose_estimation", "arguments": {"mode": "compare", "current_pose":
+    {"joints": {"wrist_r": {"x":0.5,"y":0.3,"z":0.8,"roll":8,"pitch":24,"yaw":12}}},
+    "expert_pose_id": "EP-001", "block_id": "BLK-A"}}</tool_call>
+
+    <tool_call>{"name": "location_tracking", "arguments": {"coordinates": [{"x":1200,"y":3400,"z":800}],
+    "ship_model_id": "hull-001"}}</tool_call>
+
+    <tool_call>{"name": "timeseries", "arguments": {"action": "query", "session_id":
+    "sess-001"}}</tool_call>
+
+
+    [추론 깊이 규칙 — 반드시 준수]
+
+    단순 결론만 제시하지 말고, 반드시 다단계 논리 전개를 수행한다. 예를 들어 "합격입니다"가 아닌, 왜 합격인지 측정값-기준-비교-판단 단계를
+    순서대로 서술한다. 도구 결과를 받으면 그 수치가 무엇을 의미하는지 해석하고, 문서 근거와 연결하여 설명한다. 복수 도구를 사용한 경우, 각
+    결과의 상호 관계(예: DFT 이상 + 환경 원인)를 논리적으로 연결한다.
+
+
+    [응답 구조 규칙 — 반드시 아래 순서로, 각 항목은 정확히 1회만 작성]
+
+    1. [분석]: 도구 결과와 문서 근거를 종합한 상황 분석 (최소 2문장, 최대 4문장)
+
+    2. [판정]: 합격/불합격, 정상/이상 등 한 줄 결론
+
+    3. [원인]: 문제가 있는 경우 근본 원인 1-2가지 (없으면 생략)
+
+    4. [조치]: 구체적 행동 항목 1-3개 (번호 목록)
+
+    5. [근거]: 참조 문서 ID (DOC-xxx-Cxxx)
+
+    중요: 위 5개 항목을 반복하지 마라. 각 항목은 한 번만 작성한다. 도구를 여러 개 호출한 경우에도 결과를 통합하여 하나의 [분석]-[판정]-[원인]-[조치]-[근거]
+    구조로 답변한다.'
+  fast_system: '너는 선박 도장 분야 전문 AI 어시스턴트이다. 제공된 문서를 근거로 지식 질문에 직접 답한다.
+
+
+    [답변 규칙]
+
+    1. 질문이 묻는 대상을 먼저 정의하고, 필요하면 목적·적용 공정·주의사항을 이어서 설명한다.
+
+    2. 도구를 호출하지 않으며, 도구 호출이 필요한지 여부를 답변에 쓰지 않는다.
+
+    3. 측정값과 작업 상황이 주어지지 않았으므로 합격/불합격, 정상/이상 판정과 원인 추정, 점검 지시를 지어내지 않는다.
+
+    4. 문서에 근거가 없으면 ''제공된 문서에 해당 정보가 없습니다''라고 답한다.
+
+    5. 안전 관련 질문에는 관련 규정을 함께 안내한다.
+
+
+    [응답 구조 — 아래 두 항목만 정확히 1회씩 작성]
+
+    [답변]: 질문에 대한 설명 (2-5문장)
+
+    [근거]: 참조 문서 ID (DOC-xxx-Cxxx)'
+  context_template: '아래는 관련 문서입니다. 이 문서만을 근거로 답변하세요.
+
+    {context}'
+  user_template: '질문: {question}'
+confidence:
+  min_rerank_score: 0.3
+  min_results: 1
+  high_threshold: 0.7
+  medium_threshold: 0.4
+eval:
+  bertscore_model: bert-base-multilingual-cased
+  bertscore_layers: 9
+  bertscore_batch_size: 16
+  eval_set_path: /data/eval/eval_set.jsonl
+  answer_key_path: /data/eval/eval_answer_key.json
+  rubric_path: /workspace/trainer/configs/eval_rubric.md
+  results_dir: /output/eval_results
+paths:
+  input_dir: /data/deduplicated
+  chunks_jsonl: /data/chunked/chunks.jsonl
+  faiss_index: /output/indexes/faiss.index
+  metadata_json: /output/indexes/metadata.json
+  index_config_json: /output/indexes/index_config.json

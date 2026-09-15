@@ -125,6 +125,27 @@ def _get_or_build_pipeline() -> _Pipeline:
         return _pipeline_singleton
 
 
+def loaded_pipeline() -> _Pipeline | None:
+    """The live pipeline singleton if it has been built; never builds it."""
+    return _pipeline_singleton
+
+
+def start_eager_pipeline_init() -> threading.Thread:
+    """Builds the pipeline singleton on a daemon thread so startup and /api/health are not blocked."""
+
+    def _build() -> None:
+        try:
+            _ = _get_or_build_pipeline()
+        except Exception:  # noqa: BROAD_EXCEPT_OK - readiness reports it; the next request retries
+            logger.exception("eager live pipeline initialization failed")
+        else:
+            logger.info("eager live pipeline initialization finished")
+
+    thread = threading.Thread(target=_build, name="live-pipeline-eager-init", daemon=True)
+    thread.start()
+    return thread
+
+
 def build_default_live_runner(store: SimSessionStore | None = None) -> LiveRunner:
     async def _runner(request: ChatRequest) -> AsyncIterator[tuple[str, dict[str, object]]]:
         yield "status", {"stage": "initializing", "chunks": 0}

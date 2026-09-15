@@ -26,6 +26,10 @@ seaborn
 # MCP 서버 (mcp_servers/*.py — 9개 파일)
 mcp
 
+# 원격 LLM(OpenAI 호환 vLLM) 클라이언트·MCP 호출·/api/ready 프로브
+# (trainer/scripts/openai_backend.py, tool_calling_adapter.py, trainer/demo_api/readiness.py)
+httpx==0.28.1
+
 # 테스트 (trainer/demo_api/tests/, trainer/scripts/test_*.py)
 pytest
 
