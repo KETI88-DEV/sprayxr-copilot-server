@@ -6,103 +6,107 @@ REQ-18의 CSV-FK 검정은 BVH가 준 계층·본 길이·회전순서를 CSV �
 +Z와 X이고 뼈 길이도 5% 어긋난다. 69.7mm 오차와 규약이 특정되지 않는 증상이 이것으로
 설명된다.
 
-여기서는 CSV 자기 데이터만 쓴다. Position 컬럼의 프레임 불변 상수가 bind offset이고
-회전순서는 ZXY다. BVH가 65개 관절 전부에 Zrotation Xrotation Yrotation을 균일
-선언했고 이는 Unity의 기본 오일러 순서와 같다.
+여기서는 CSV 자기 데이터만 쓴다.
+
+**Position 컬럼.** Pelvis를 뺀 19관절의 Position은 18세션에서 프레임 간 std 0.0000m
+(Toe 최대 0.0001m)인 부모 기준 바인드 오프셋이다. Pelvis Position은 프레임마다
+변하고(세션 std 0.05~0.31m), 카메라와의 프레임 차분 상관이 |r|≤0.16이라 월드 좌표가
+아니다. 의미(아바타 루트 이동인지 등)는 확인하지 못했다. FK는 Pelvis를 원점에 두고
+이 값을 쓰지 않는다.
+
+**회전 규약.** 관절 Rotation은 부모 기준 로컬 오일러이고, 곱 순서는 실측 강체와 같은
+`measured_pose.EULER_ORDER`(YXZ, R = Ry·Rx·Rz)·`EULER_SIGN`(+1)이다. 사슬은
+W_child = W_parent · L_child다. 규약을 리터럴로 여기 다시 적지 않고 `measured_pose`
+상수를 읽는다 — 두 곳에 적으면 한쪽만 바뀐다.
+
+근거는 두 프레임 사이의 **상대회전각**이다. 이 각은 관절↔강체 상수 장착회전과 상수
+루트회전의 영향을 받지 않으므로 규약만 가른다. 작업자별 5세션씩 30세션(seed
+20260915, 세션당 800쌍)에서 FK 사슬 관절과 짝 강체(Head↔카메라, RightHand↔활성 건,
+LeftHand↔플래쉬)의 상대회전각 차이 — 세션 중앙값의 중앙값 — 가 YXZ+에서 오른손
+6.5°·왼손 6.3°·머리 6.1°였고, 옛 코드의 ZXY(Rz·Rx·Ry)에서는 37.7°·57.5°·32.0°였다
+(스크래치패드 sk_p10.py). 옛 판단("BVH가 Zrotation Xrotation Yrotation을 선언했다")은
+다른 리그(mixamo BVH)의 선언을 CSV에 옮긴 것이었다.
 
 채점은 이 경로를 타지 않는다. 실측 3점에서 하므로 FK가 틀려도 지표는 오염되지 않는다.
 """
 
 from __future__ import annotations
 
-import math
 from typing import Final, Mapping
 
+import measured_pose
+import rotation_math
 import simulator_csv
 
 Vec3 = tuple[float, float, float]
 Matrix = tuple[Vec3, Vec3, Vec3]
 
-ROTATION_ORDER: Final = "ZXY"
-IDENTITY: Final[Matrix] = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+IDENTITY: Final[Matrix] = rotation_math.IDENTITY
+ROOT: Final = "Pelvis"
 
 
 def bind_offsets(row: dict[str, str]) -> dict[str, Vec3]:
-    """Position 컬럼은 프레임 불변 상수다. 월드 좌표가 아니라 부모 기준 마디 벡터다."""
+    """부모 기준 바인드 오프셋. **Pelvis는 싣지 않는다.**
+
+    Pelvis를 뺀 19관절의 Position은 프레임 불변인 부모 기준 마디 벡터다. Pelvis의
+    Position은 프레임마다 움직이고 월드 좌표도 아니라(모듈 독스트링) 오프셋이 아니다 —
+    FK는 루트를 원점에 두므로 이 값이 필요 없고, 실어 두면 다음 사람이 상수로 읽는다.
+    """
     offsets: dict[str, Vec3] = {}
     for column in simulator_csv.JOINT_COLUMNS:
+        key = simulator_csv.JOINT_KEYS[column]
+        if key == ROOT:
+            continue
         try:
             x, y, z = simulator_csv.vec3(row, column, "Position")
         except (KeyError, ValueError):
             continue
-        offsets[simulator_csv.JOINT_KEYS[column]] = (x, y, z)
+        offsets[key] = (x, y, z)
     return offsets
 
 
-def _axis_matrix(axis: str, degrees: float) -> Matrix:
-    radians = math.radians(degrees)
-    cosine, sine = math.cos(radians), math.sin(radians)
-    if axis == "X":
-        return ((1.0, 0.0, 0.0), (0.0, cosine, -sine), (0.0, sine, cosine))
-    if axis == "Y":
-        return ((cosine, 0.0, sine), (0.0, 1.0, 0.0), (-sine, 0.0, cosine))
-    return ((cosine, -sine, 0.0), (sine, cosine, 0.0), (0.0, 0.0, 1.0))
-
-
-def _multiply(left: Matrix, right: Matrix) -> Matrix:
-    rows: list[Vec3] = []
-    for i in range(3):
-        rows.append(
-            (
-                sum(left[i][k] * right[k][0] for k in range(3)),
-                sum(left[i][k] * right[k][1] for k in range(3)),
-                sum(left[i][k] * right[k][2] for k in range(3)),
-            )
-        )
-    return (rows[0], rows[1], rows[2])
-
-
-def euler_matrix(degrees_xyz: Vec3, order: str = ROTATION_ORDER) -> Matrix:
-    """오일러 각을 회전행렬로. 각은 XYZ 순으로 들어오고 적용 순서는 order다."""
-    angles = {"X": degrees_xyz[0], "Y": degrees_xyz[1], "Z": degrees_xyz[2]}
-    matrix: Matrix = IDENTITY
-    for axis in order:
-        matrix = _multiply(matrix, _axis_matrix(axis, angles[axis]))
-    return matrix
-
-
-def _apply(matrix: Matrix, vector: Vec3) -> Vec3:
-    return (
-        sum(matrix[0][j] * vector[j] for j in range(3)),
-        sum(matrix[1][j] * vector[j] for j in range(3)),
-        sum(matrix[2][j] * vector[j] for j in range(3)),
+def euler_matrix(degrees_xyz: Vec3) -> Matrix:
+    """관절 로컬 오일러 → 회전행렬. 규약은 실측 강체와 같은 `measured_pose`의 것이다."""
+    return rotation_math.euler_matrix(
+        measured_pose.EULER_ORDER, degrees_xyz, measured_pose.EULER_SIGN
     )
 
 
-def forward_kinematics(
+def forward_kinematics_with_rotations(
     row: dict[str, str], offsets: Mapping[str, Vec3]
-) -> dict[str, Vec3]:
-    """루트에서 시작해 계층을 따라 내려가며 관절 위치를 만든다."""
-    rotations: dict[str, Matrix] = {}
+) -> tuple[dict[str, Vec3], dict[str, Matrix]]:
+    """관절 위치(Pelvis 원점 리그 좌표)와 관절 월드(리그) 회전 W를 함께 낸다.
+
+    W가 필요한 소비자는 `pose_lab.skeleton.place_oriented`다 — 실측 강체 회전과 FK 관절
+    회전을 맞춰 루트 방향을 푼다.
+    """
+    local: dict[str, Matrix] = {}
     for column in simulator_csv.JOINT_COLUMNS:
         key = simulator_csv.JOINT_KEYS[column]
         try:
             x, y, z = simulator_csv.vec3(row, column, "Rotation")
         except (KeyError, ValueError):
             x, y, z = 0.0, 0.0, 0.0
-        rotations[key] = euler_matrix((x, y, z))
+        local[key] = euler_matrix((x, y, z))
 
-    root = "Pelvis"
-    positions: dict[str, Vec3] = {root: (0.0, 0.0, 0.0)}
-    world: dict[str, Matrix] = {root: rotations.get(root, IDENTITY)}
+    positions: dict[str, Vec3] = {ROOT: (0.0, 0.0, 0.0)}
+    world: dict[str, Matrix] = {ROOT: local.get(ROOT, IDENTITY)}
 
     for parent, child in simulator_csv.BONES:
         if parent not in positions or child not in offsets:
             continue
         parent_rotation = world[parent]
-        offset = _apply(parent_rotation, offsets[child])
+        offset = rotation_math.matvec(parent_rotation, offsets[child])
         base = positions[parent]
         positions[child] = (base[0] + offset[0], base[1] + offset[1], base[2] + offset[2])
-        world[child] = _multiply(parent_rotation, rotations.get(child, IDENTITY))
+        world[child] = rotation_math.matmul(parent_rotation, local.get(child, IDENTITY))
 
+    return positions, world
+
+
+def forward_kinematics(
+    row: dict[str, str], offsets: Mapping[str, Vec3]
+) -> dict[str, Vec3]:
+    """루트에서 시작해 계층을 따라 내려가며 관절 위치를 만든다."""
+    positions, _world = forward_kinematics_with_rotations(row, offsets)
     return positions
