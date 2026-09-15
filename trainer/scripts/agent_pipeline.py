@@ -35,6 +35,13 @@ from trainer.scripts.live_sequence_fallback import (
     LiveSequenceRequest,
     enforce_live_sequence_validation,
 )
+from trainer.scripts.prompt_budget import (
+    PromptTokenCounter,
+    context_window,
+    load_token_counter,
+    prompt_token_budget,
+    token_counter_for,
+)
 
 try:
     import vllm as _vllm_check  # noqa: F401
@@ -628,6 +635,7 @@ class AgentPipeline:
         session_context_summary: str,
         *,
         system_prompt: str | None = None,
+        tools: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, str]]:
         if system_prompt is None:
             system_prompt = str(self.config.get("prompt", {}).get("system", ""))
@@ -638,10 +646,10 @@ class AgentPipeline:
             )
         )
 
-        # Token budget: reserve space for generation output within max_model_len
-        max_model_len = int(self.config.get("llm", {}).get("max_model_len", 4096))
-        max_gen_tokens = int(self.config.get("generation", {}).get("max_new_tokens", 768))
-        prompt_budget = max_model_len - max_gen_tokens - 64  # 64 tokens for chat template overhead
+        # The rendered prompt must leave generation.max_new_tokens inside
+        # llm.max_model_len; the count covers the chat template, not just text.
+        counter = self._prompt_token_counter()
+        prompt_budget = prompt_token_budget(self.config)
 
         context_lines: list[str] = []
         for chunk in rag_chunks:
@@ -650,47 +658,55 @@ class AgentPipeline:
             score_text = f" (score={score:.4f})" if isinstance(score, (int, float)) else ""
             context_lines.append(f"[{chunk_id}]{score_text}\n{chunk.get('text', '')}")
 
-        rag_context = context_template.format(context="\n\n".join(context_lines)) if context_lines else ""
+        def _messages_with(lines: list[str]) -> list[dict[str, str]]:
+            rag_context = context_template.format(context="\n\n".join(lines)) if lines else ""
+            user_parts: list[str] = []
+            if session_context_summary:
+                user_parts.append("[세션 이전 요약]\n" + session_context_summary)
+            if rag_context:
+                user_parts.append("[RAG 문맥]\n" + rag_context)
+            if environment:
+                user_parts.append("[환경 데이터]\n" + json.dumps(environment, ensure_ascii=False, indent=2))
+            user_parts.append("[사용자 요청]\n" + instruction)
+            return [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": "\n\n".join(user_parts)},
+            ]
 
-        user_parts: list[str] = []
-        if session_context_summary:
-            user_parts.append("[세션 이전 요약]\n" + session_context_summary)
-        if rag_context:
-            user_parts.append("[RAG 문맥]\n" + rag_context)
-        if environment:
-            user_parts.append("[환경 데이터]\n" + json.dumps(environment, ensure_ascii=False, indent=2))
-        user_parts.append("[사용자 요청]\n" + instruction)
-
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": "\n\n".join(user_parts)},
-        ]
-
-        # Truncate RAG context if prompt exceeds budget
-        total_text = system_prompt + "\n\n".join(user_parts)
-        estimated_tokens = len(total_text) // 2  # rough estimate: 1 token ≈ 2 chars for multilingual
-        if estimated_tokens > prompt_budget and context_lines:
-            # Progressively remove context chunks until within budget
-            while context_lines and estimated_tokens > prompt_budget:
+        messages = _messages_with(context_lines)
+        prompt_tokens = counter.count_messages(messages, tools=tools)
+        if prompt_tokens > prompt_budget and context_lines:
+            # Drop the lowest-ranked chunks first until the prompt fits.
+            while context_lines and prompt_tokens > prompt_budget:
                 context_lines.pop()
-                rag_context = context_template.format(context="\n\n".join(context_lines)) if context_lines else ""
-                user_parts_trimmed = []
-                if session_context_summary:
-                    user_parts_trimmed.append("[세션 이전 요약]\n" + session_context_summary)
-                if rag_context:
-                    user_parts_trimmed.append("[RAG 문맥]\n" + rag_context)
-                if environment:
-                    user_parts_trimmed.append("[환경 데이터]\n" + json.dumps(environment, ensure_ascii=False, indent=2))
-                user_parts_trimmed.append("[사용자 요청]\n" + instruction)
-                total_text = system_prompt + "\n\n".join(user_parts_trimmed)
-                estimated_tokens = len(total_text) // 2
-                messages[1]["content"] = "\n\n".join(user_parts_trimmed)
+                messages = _messages_with(context_lines)
+                prompt_tokens = counter.count_messages(messages, tools=tools)
             if not context_lines:
                 logger.warning("All RAG context dropped to fit within token budget (%d)", prompt_budget)
             else:
                 logger.info("Trimmed to %d context chunks to fit token budget", len(context_lines))
+        if prompt_tokens > prompt_budget:
+            logger.warning(
+                "Prompt is %d tokens with no RAG context left; budget is %d (exact=%s)",
+                prompt_tokens,
+                prompt_budget,
+                counter.exact,
+            )
 
         return messages
+
+    def _prompt_token_counter(self) -> PromptTokenCounter:
+        """Exact counter from the loaded tokenizer; else ``llm.tokenizer_path``; else the estimate."""
+        cached = getattr(self, "_token_counter", None)
+        if cached is not None:
+            return cached
+        tokenizer = getattr(self, "tokenizer", None)
+        if tokenizer is not None:
+            counter = token_counter_for(tokenizer)
+        else:
+            counter = load_token_counter(self.config.get("llm", {}).get("tokenizer_path"))
+        self._token_counter = counter
+        return counter
 
     def _generate_direct(
         self,
@@ -961,13 +977,11 @@ class AgentPipeline:
 
         summary = self.session_context.summarize_previous(active_session_id)
 
-        # Adaptive compression: only compress when full context exceeds budget
-        max_model_len = int(self.config.get("llm", {}).get("max_model_len", 4096))
-        max_gen = int(self.config.get("generation", {}).get("max_new_tokens", 768))
-        token_budget = max_model_len - max_gen - 64
-        full_text_len = sum(len(c.get("text", "")) for c in rag_chunks)
-        estimated_total = full_text_len // 2  # rough: 1 token ≈ 2 chars for multilingual
-        if estimated_total > token_budget:
+        # Adaptive compression: only compress when the chunk text alone exceeds the prompt budget
+        counter = self._prompt_token_counter()
+        token_budget = prompt_token_budget(self.config)
+        evidence_tokens = sum(counter.count_text(str(c.get("text", ""))) for c in rag_chunks)
+        if evidence_tokens > token_budget:
             evidence = compress_evidence(instruction, rag_chunks)
             logger.info("Compressed evidence: %d chunks, budget=%d", len(evidence), token_budget)
         else:
@@ -983,17 +997,35 @@ class AgentPipeline:
                 session_context_summary=summary,
                 system_prompt=str(self.config.get("prompt", {}).get("fast_system", "")).strip() or None,
             )
+            fast_prompt_tokens = counter.count_messages(messages)
+            fast_max_tokens = min(
+                int(self.config.get("generation", {}).get("max_new_tokens", 768)), ROUTE_MAX_TOKENS["fast"]
+            )
+            max_model_len = context_window(self.config)
+            context_report: dict[str, Any] | None = {
+                "max_model_len": max_model_len,
+                "exact": counter.exact,
+                "calls": [
+                    {"stage": "direct", "prompt_tokens": fast_prompt_tokens, "max_new_tokens": fast_max_tokens}
+                ],
+                "overflow": fast_prompt_tokens + fast_max_tokens > max_model_len,
+            }
             raw_response = self._generate_direct(messages, enable_thinking=False)
             final_no_think, thinking = self._strip_think_blocks(raw_response)
             response_text = final_no_think.strip()
             tool_calls: list[dict[str, Any]] = []
             rounds = 0
         else:
+            # The template renders native tool declarations into the prompt, so they count too.
+            native_tools = None
+            if bool(getattr(self.tool_adapter, "pass_native_tools", False)) or isinstance(self.model, VLLMWrapper):
+                native_tools = self.tool_adapter.get_tools_param()
             messages = self._build_messages(
                 instruction=instruction,
                 environment=environment,
                 rag_chunks=evidence,
                 session_context_summary=summary,
+                tools=native_tools,
             )
             logger.debug("Running tool loop with %d initial messages", len(messages))
             route_max_tokens = ROUTE_MAX_TOKENS.get(route, 768)
@@ -1019,6 +1051,8 @@ class AgentPipeline:
                     gen_params=gen_params,
                     deadline_sec=float(self.config.get("llm", {}).get("tool_deadline_sec", 150)),
                     tool_max_tokens=int(gen_cfg.get("max_new_tokens_tool", 256)),
+                    token_counter=counter,
+                    max_model_len=context_window(self.config),
                 )
             )
             raw_final = str(loop_output.get("final_response", ""))
@@ -1029,6 +1063,7 @@ class AgentPipeline:
                 loop_output.get("tool_results", []),
             )
             rounds = int(loop_output.get("rounds", 0))
+            context_report = loop_output.get("context")
             deadline_hit = bool(loop_output.get("deadline_hit", False))
             synthesis_ms = int(loop_output.get("synthesis_ms", 0))
 
@@ -1057,6 +1092,7 @@ class AgentPipeline:
                 "rounds": rounds,
                 "route": route,
                 "thinking": thinking,
+                "context": context_report,
             },
             "response": response_text,
             "tool_calls": tool_calls,

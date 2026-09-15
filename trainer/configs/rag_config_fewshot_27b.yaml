@@ -35,6 +35,19 @@ llm:
   bnb_4bit_compute_dtype: bfloat16
   use_safetensors: true
   gpu_memory_utilization: 0.65
+  # Context window shared by every backend. A vLLM server for this config must
+  # run with the same --max-model-len; it rejects prompt + max_tokens beyond it.
+  # The prompt budget is max_model_len - generation.max_new_tokens, counted
+  # with the real tokenizer (trainer/scripts/prompt_budget.py).
+  # 8192 kept after trainer/scripts/prompt_budget_study.py (2026-09-15):
+  # - agentic eval (30): exact prompt p50 3691 / p95 5505 / max 5663 tokens;
+  #   the old len//2 estimate never let a prompt exceed 8192 - 1024.
+  # - no window reproduces the old chunk counts everywhere: AQ007 (old 5 of 8)
+  #   needs 5056-5376, AQ002 needs >= 6720. At 8192 only AQ007 changes (8 chunks).
+  # - docqa RAG (50) and 8-chunk fast prompts (30): unchanged, max 4280 tokens.
+  # - replayed tool rounds (86 runs): synthesis needs <= 6365, <= 7133 with
+  #   256 tokens of prose per round, so 7168 would be the tightest fit.
+  # - native tool declarations (pass_native_tools / vLLM tools=) add 2748 tokens.
   max_model_len: 8192
   max_lora_rank: 64
   pass_native_tools: false

@@ -711,8 +711,16 @@ class ToolCallingAdapter:
         gen_params: dict[str, Any] | None = None,
         deadline_sec: float | None = None,
         tool_max_tokens: int | None = None,
+        token_counter: Any | None = None,
+        max_model_len: int | None = None,
     ) -> dict[str, Any]:
-        """Runs the multi-turn tool loop until the model emits a final natural-language answer."""
+        """Runs the multi-turn tool loop until the model emits a final natural-language answer.
+
+        With ``token_counter`` and ``max_model_len`` the loop measures every
+        prompt it is about to send, tool results accumulated so far included,
+        and adds a ``context`` report to the output. An over-window prompt is
+        logged, not altered: generation proceeds exactly as without the check.
+        """
         if max_rounds <= 0:
             raise ToolValidationError("max_rounds must be greater than zero")
 
@@ -722,6 +730,42 @@ class ToolCallingAdapter:
         conversation = list(messages)
         collected_tool_results: list[dict[str, Any]] = []
         round_idx = 0
+        context_calls: list[dict[str, Any]] = []
+
+        def _measure(stage: str, prompt_messages: list[dict[str, Any]], new_tokens: int) -> None:
+            if token_counter is None or max_model_len is None:
+                return
+            tools = None
+            if stage == "round" and (self.pass_native_tools or hasattr(model, "generate_response")):
+                tools = self.get_tools_param()
+            prompt_tokens = int(token_counter.count_messages(prompt_messages, tools=tools))
+            context_calls.append(
+                {"stage": stage, "prompt_tokens": prompt_tokens, "max_new_tokens": new_tokens}
+            )
+            if prompt_tokens + new_tokens > max_model_len:
+                logger.warning(
+                    "Tool loop %s prompt %d + max_new_tokens %d exceeds max_model_len %d",
+                    stage,
+                    prompt_tokens,
+                    new_tokens,
+                    max_model_len,
+                )
+
+        def _report(output: dict[str, Any]) -> dict[str, Any]:
+            if token_counter is None or max_model_len is None:
+                return output
+            output["context"] = {
+                "max_model_len": max_model_len,
+                "exact": bool(getattr(token_counter, "exact", False)),
+                "calls": context_calls,
+                "overflow": any(
+                    c["prompt_tokens"] + c["max_new_tokens"] > max_model_len for c in context_calls
+                ),
+            }
+            return output
+
+        def _synthesis_prompt() -> list[dict[str, Any]]:
+            return [*conversation, {"role": "user", "content": SYNTHESIS_INSTRUCTION}]
 
         for round_idx in range(max_rounds):
             if (
@@ -737,12 +781,14 @@ class ToolCallingAdapter:
                 )
                 break
 
+            round_max_tokens = tool_max_tokens if tool_max_tokens is not None else max_tokens
+            _measure("round", conversation, round_max_tokens or 1024)
             raw_text = await self._generate_model_text(
                 messages=conversation,
                 model=model,
                 tokenizer=tokenizer,
                 enable_thinking=enable_thinking,
-                max_tokens=tool_max_tokens if tool_max_tokens is not None else max_tokens,
+                max_tokens=round_max_tokens,
                 gen_params=gen_params,
             )
             tool_calls = self.parse_tool_calls(raw_text)
@@ -751,6 +797,7 @@ class ToolCallingAdapter:
                 final_text = self._strip_think_blocks(raw_text) if enable_thinking else raw_text.strip()
                 stripped = TOOL_CALL_STRIP_REGEX.sub("", final_text).strip()
                 if self.force_synthesis and collected_tool_results and not stripped:
+                    _measure("synthesis", _synthesis_prompt(), max_tokens or 1024)
                     synth_started = time.monotonic()
                     final_text = await self._generate_synthesis_text(
                         conversation, model, tokenizer, max_tokens=max_tokens, gen_params=gen_params,
@@ -759,14 +806,14 @@ class ToolCallingAdapter:
                 else:
                     final_text = stripped
                 conversation.append({"role": "assistant", "content": final_text})
-                return {
+                return _report({
                     "final_response": final_text,
                     "messages": conversation,
                     "tool_results": collected_tool_results,
                     "rounds": round_idx + 1,
                     "deadline_hit": False,
                     "synthesis_ms": synthesis_ms,
-                }
+                })
 
             conversation.append({"role": "assistant", "content": raw_text})
 
@@ -794,13 +841,14 @@ class ToolCallingAdapter:
             )
 
         if self.force_synthesis and collected_tool_results:
+            _measure("synthesis", _synthesis_prompt(), max_tokens or 1024)
             synth_started = time.monotonic()
             final_text = await self._generate_synthesis_text(
                 conversation, model, tokenizer, max_tokens=max_tokens, gen_params=gen_params,
             )
             synthesis_ms = int((time.monotonic() - synth_started) * 1000)
             conversation.append({"role": "assistant", "content": final_text})
-            return {
+            return _report({
                 "final_response": final_text,
                 "messages": conversation,
                 "tool_results": collected_tool_results,
@@ -809,7 +857,7 @@ class ToolCallingAdapter:
                 "synthesized": True,
                 "deadline_hit": deadline_hit,
                 "synthesis_ms": synthesis_ms,
-            }
+            })
 
         last_assistant = ""
         for msg in reversed(conversation):
@@ -819,7 +867,7 @@ class ToolCallingAdapter:
                 ).strip()
                 break
 
-        return {
+        return _report({
             "final_response": last_assistant,
             "messages": conversation,
             "tool_results": collected_tool_results,
@@ -827,7 +875,7 @@ class ToolCallingAdapter:
             "truncated": True,
             "deadline_hit": deadline_hit,
             "synthesis_ms": synthesis_ms,
-        }
+        })
 
 
 def parse_args() -> argparse.Namespace:
