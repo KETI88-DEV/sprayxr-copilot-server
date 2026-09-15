@@ -219,6 +219,302 @@
           "uniqueness"
         ]
       }
+    },
+    "front_face_attempt": {
+      "prereg": "docs/measurements/2026-09-15-level1-front-face-prereg.md",
+      "threshold": 0.25,
+      "min_frames": 1000,
+      "holdout_n": 1500,
+      "holdout_overlap": 0,
+      "positive_controls": {
+        "3": {
+          "hmd_back_face": {
+            "fraction": 0.212,
+            "behind": 318,
+            "n": 1500,
+            "excluded_degenerate": 0
+          },
+          "gun_back_face": {
+            "fraction": 0.0,
+            "behind": 0,
+            "n": 1500,
+            "excluded_degenerate": 0
+          },
+          "flash_back_face": {
+            "fraction": 0.037333333333333336,
+            "behind": 56,
+            "n": 1500,
+            "excluded_degenerate": 0
+          }
+        },
+        "4": {
+          "hmd_back_face": {
+            "fraction": 0.14266666666666666,
+            "behind": 214,
+            "n": 1500,
+            "excluded_degenerate": 0
+          },
+          "gun_back_face": {
+            "fraction": 0.0006666666666666666,
+            "behind": 1,
+            "n": 1500,
+            "excluded_degenerate": 0
+          },
+          "flash_back_face": {
+            "fraction": 0.14133333333333334,
+            "behind": 212,
+            "n": 1500,
+            "excluded_degenerate": 0
+          }
+        },
+        "5": {
+          "hmd_back_face": {
+            "fraction": 0.26066666666666666,
+            "behind": 391,
+            "n": 1500,
+            "excluded_degenerate": 0
+          },
+          "gun_back_face": {
+            "fraction": 0.0,
+            "behind": 0,
+            "n": 1500,
+            "excluded_degenerate": 0
+          },
+          "flash_back_face": {
+            "fraction": 0.11133333333333334,
+            "behind": 167,
+            "n": 1500,
+            "excluded_degenerate": 0
+          }
+        },
+        "6": {
+          "hmd_back_face": {
+            "fraction": 0.004,
+            "behind": 6,
+            "n": 1500,
+            "excluded_degenerate": 0
+          },
+          "gun_back_face": {
+            "fraction": 0.0,
+            "behind": 0,
+            "n": 1500,
+            "excluded_degenerate": 0
+          },
+          "flash_back_face": {
+            "fraction": 0.011333333333333334,
+            "behind": 17,
+            "n": 1500,
+            "excluded_degenerate": 0
+          }
+        },
+        "7": {
+          "hmd_back_face": {
+            "fraction": 0.07733333333333334,
+            "behind": 116,
+            "n": 1500,
+            "excluded_degenerate": 0
+          },
+          "gun_back_face": {
+            "fraction": 0.0,
+            "behind": 0,
+            "n": 1500,
+            "excluded_degenerate": 0
+          },
+          "flash_back_face": {
+            "fraction": 0.020666666666666667,
+            "behind": 31,
+            "n": 1500,
+            "excluded_degenerate": 0
+          }
+        },
+        "8": {
+          "hmd_back_face": {
+            "fraction": 0.0006666666666666666,
+            "behind": 1,
+            "n": 1500,
+            "excluded_degenerate": 0
+          },
+          "gun_back_face": {
+            "fraction": 0.0,
+            "behind": 0,
+            "n": 1500,
+            "excluded_degenerate": 0
+          },
+          "flash_back_face": {
+            "fraction": 0.008,
+            "behind": 12,
+            "n": 1500,
+            "excluded_degenerate": 0
+          }
+        },
+        "9": {
+          "hmd_back_face": {
+            "fraction": 0.06466666666666666,
+            "behind": 97,
+            "n": 1500,
+            "excluded_degenerate": 0
+          },
+          "gun_back_face": {
+            "fraction": 0.0,
+            "behind": 0,
+            "n": 1500,
+            "excluded_degenerate": 0
+          },
+          "flash_back_face": {
+            "fraction": 0.019333333333333334,
+            "behind": 29,
+            "n": 1500,
+            "excluded_degenerate": 0
+          }
+        },
+        "10": {
+          "hmd_back_face": {
+            "fraction": 0.068,
+            "behind": 102,
+            "n": 1500,
+            "excluded_degenerate": 0
+          },
+          "gun_back_face": {
+            "fraction": 0.0,
+            "behind": 0,
+            "n": 1500,
+            "excluded_degenerate": 0
+          },
+          "flash_back_face": {
+            "fraction": 0.004225352112676056,
+            "behind": 6,
+            "n": 1420,
+            "excluded_degenerate": 0
+          }
+        }
+      },
+      "section_d_valid": false,
+      "section_d_invalid_reasons": [
+        "positive control hmd_back_face > 0.25 or unmeasurable: {5: 0.26066666666666666}"
+      ],
+      "candidates_passed_A": 1,
+      "candidates_passed_A_and_D": null,
+      "candidates": [
+        {
+          "rotation": [
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            -1.0,
+            0.0,
+            0.0
+          ],
+          "det": -1.0,
+          "translation": [
+            1.4489999613651592,
+            4.6170001049758165,
+            0.6569996554512653
+          ],
+          "passed_A": true,
+          "gate_failures_A": [],
+          "front_face": {
+            "hmd_back_face": {
+              "fraction": 0.0,
+              "behind": 0,
+              "n": 1500,
+              "excluded_degenerate": 0
+            },
+            "gun_back_face": {
+              "fraction": 0.0,
+              "behind": 0,
+              "n": 1500,
+              "excluded_degenerate": 0
+            },
+            "flash_back_face": {
+              "fraction": 0.0,
+              "behind": 0,
+              "n": 1410,
+              "excluded_degenerate": 0
+            }
+          }
+        },
+        {
+          "rotation": [
+            0.0,
+            -1.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            -1.0,
+            0.0,
+            0.0
+          ],
+          "det": 1.0,
+          "translation": [
+            1.4240000386348415,
+            4.6170001049758165,
+            0.6569996554512653
+          ],
+          "passed_A": false,
+          "gate_failures_A": [
+            "gun_occlusion"
+          ],
+          "front_face": {
+            "hmd_back_face": {
+              "fraction": 1.0,
+              "behind": 1500,
+              "n": 1500,
+              "excluded_degenerate": 0
+            },
+            "gun_back_face": {
+              "fraction": 1.0,
+              "behind": 1500,
+              "n": 1500,
+              "excluded_degenerate": 0
+            },
+            "flash_back_face": {
+              "fraction": 1.0,
+              "behind": 1410,
+              "n": 1410,
+              "excluded_degenerate": 0
+            }
+          }
+        }
+      ],
+      "handedness_evidence": {
+        "gun_occlusion": {
+          "P": 0.0,
+          "mirror": 1.0
+        },
+        "hmd_occlusion": {
+          "P": 0.0,
+          "mirror": 1.0
+        },
+        "flash_occlusion_report": {
+          "P": 0.0,
+          "mirror": 1.0
+        },
+        "hmd_back_face": {
+          "P": 0.0,
+          "mirror": 1.0
+        },
+        "gun_back_face_report": {
+          "P": 0.0,
+          "mirror": 1.0
+        },
+        "flash_back_face_report": {
+          "P": 0.0,
+          "mirror": 1.0
+        },
+        "rule_doc": "docs/measurements/2026-09-15-fixed-linear-alignment-rule.md",
+        "front_face_prereg": "docs/measurements/2026-09-15-level1-front-face-prereg.md",
+        "posthoc_parts": [
+          "G_occ_gun",
+          "uniqueness"
+        ],
+        "void_gates": [
+          "G_occ_hmd"
+        ]
+      }
     }
   },
   {
@@ -458,6 +754,316 @@
         "posthoc_parts": [
           "G_occ_gun",
           "uniqueness"
+        ]
+      }
+    },
+    "front_face_attempt": {
+      "prereg": "docs/measurements/2026-09-15-level1-front-face-prereg.md",
+      "threshold": 0.25,
+      "min_frames": 1000,
+      "holdout_n": 1500,
+      "holdout_overlap": 0,
+      "positive_controls": {
+        "3": {
+          "hmd_back_face": {
+            "fraction": 0.212,
+            "behind": 318,
+            "n": 1500,
+            "excluded_degenerate": 0
+          },
+          "gun_back_face": {
+            "fraction": 0.0,
+            "behind": 0,
+            "n": 1500,
+            "excluded_degenerate": 0
+          },
+          "flash_back_face": {
+            "fraction": 0.037333333333333336,
+            "behind": 56,
+            "n": 1500,
+            "excluded_degenerate": 0
+          }
+        },
+        "4": {
+          "hmd_back_face": {
+            "fraction": 0.14266666666666666,
+            "behind": 214,
+            "n": 1500,
+            "excluded_degenerate": 0
+          },
+          "gun_back_face": {
+            "fraction": 0.0006666666666666666,
+            "behind": 1,
+            "n": 1500,
+            "excluded_degenerate": 0
+          },
+          "flash_back_face": {
+            "fraction": 0.14133333333333334,
+            "behind": 212,
+            "n": 1500,
+            "excluded_degenerate": 0
+          }
+        },
+        "5": {
+          "hmd_back_face": {
+            "fraction": 0.26066666666666666,
+            "behind": 391,
+            "n": 1500,
+            "excluded_degenerate": 0
+          },
+          "gun_back_face": {
+            "fraction": 0.0,
+            "behind": 0,
+            "n": 1500,
+            "excluded_degenerate": 0
+          },
+          "flash_back_face": {
+            "fraction": 0.11133333333333334,
+            "behind": 167,
+            "n": 1500,
+            "excluded_degenerate": 0
+          }
+        },
+        "6": {
+          "hmd_back_face": {
+            "fraction": 0.004,
+            "behind": 6,
+            "n": 1500,
+            "excluded_degenerate": 0
+          },
+          "gun_back_face": {
+            "fraction": 0.0,
+            "behind": 0,
+            "n": 1500,
+            "excluded_degenerate": 0
+          },
+          "flash_back_face": {
+            "fraction": 0.011333333333333334,
+            "behind": 17,
+            "n": 1500,
+            "excluded_degenerate": 0
+          }
+        },
+        "7": {
+          "hmd_back_face": {
+            "fraction": 0.07733333333333334,
+            "behind": 116,
+            "n": 1500,
+            "excluded_degenerate": 0
+          },
+          "gun_back_face": {
+            "fraction": 0.0,
+            "behind": 0,
+            "n": 1500,
+            "excluded_degenerate": 0
+          },
+          "flash_back_face": {
+            "fraction": 0.020666666666666667,
+            "behind": 31,
+            "n": 1500,
+            "excluded_degenerate": 0
+          }
+        },
+        "8": {
+          "hmd_back_face": {
+            "fraction": 0.0006666666666666666,
+            "behind": 1,
+            "n": 1500,
+            "excluded_degenerate": 0
+          },
+          "gun_back_face": {
+            "fraction": 0.0,
+            "behind": 0,
+            "n": 1500,
+            "excluded_degenerate": 0
+          },
+          "flash_back_face": {
+            "fraction": 0.008,
+            "behind": 12,
+            "n": 1500,
+            "excluded_degenerate": 0
+          }
+        },
+        "9": {
+          "hmd_back_face": {
+            "fraction": 0.06466666666666666,
+            "behind": 97,
+            "n": 1500,
+            "excluded_degenerate": 0
+          },
+          "gun_back_face": {
+            "fraction": 0.0,
+            "behind": 0,
+            "n": 1500,
+            "excluded_degenerate": 0
+          },
+          "flash_back_face": {
+            "fraction": 0.019333333333333334,
+            "behind": 29,
+            "n": 1500,
+            "excluded_degenerate": 0
+          }
+        },
+        "10": {
+          "hmd_back_face": {
+            "fraction": 0.068,
+            "behind": 102,
+            "n": 1500,
+            "excluded_degenerate": 0
+          },
+          "gun_back_face": {
+            "fraction": 0.0,
+            "behind": 0,
+            "n": 1500,
+            "excluded_degenerate": 0
+          },
+          "flash_back_face": {
+            "fraction": 0.004225352112676056,
+            "behind": 6,
+            "n": 1420,
+            "excluded_degenerate": 0
+          }
+        }
+      },
+      "section_d_valid": false,
+      "section_d_invalid_reasons": [
+        "positive control hmd_back_face > 0.25 or unmeasurable: {5: 0.26066666666666666}"
+      ],
+      "candidates_passed_A": 0,
+      "candidates_passed_A_and_D": null,
+      "candidates": [
+        {
+          "rotation": [
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            -1.0,
+            0.0,
+            0.0
+          ],
+          "det": -1.0,
+          "translation": [
+            1.123999864917255,
+            4.551000260989955,
+            0.6399996256922021
+          ],
+          "passed_A": false,
+          "gate_failures_A": [
+            "g0_max_mm",
+            "uv_degenerate_misattribution_mm",
+            "uv_miss_fraction",
+            "uv_abs_resid_max_texel",
+            "cross_session"
+          ],
+          "front_face": {
+            "hmd_back_face": {
+              "fraction": 0.0,
+              "behind": 0,
+              "n": 1500,
+              "excluded_degenerate": 0
+            },
+            "gun_back_face": {
+              "fraction": 0.0,
+              "behind": 0,
+              "n": 1500,
+              "excluded_degenerate": 0
+            },
+            "flash_back_face": {
+              "fraction": 0.0,
+              "behind": 0,
+              "n": 1500,
+              "excluded_degenerate": 0
+            }
+          }
+        },
+        {
+          "rotation": [
+            0.0,
+            -1.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            -1.0,
+            0.0,
+            0.0
+          ],
+          "det": 1.0,
+          "translation": [
+            1.7864087126797394,
+            4.551000105520814,
+            0.6399996306948342
+          ],
+          "passed_A": false,
+          "gate_failures_A": [
+            "g0_max_mm",
+            "uv_degenerate_misattribution_mm",
+            "uv_miss_fraction",
+            "uv_abs_resid_p95_texel",
+            "uv_abs_resid_max_texel",
+            "p95_mm",
+            "max_mm",
+            "cross_session",
+            "gun_occlusion"
+          ],
+          "front_face": {
+            "hmd_back_face": {
+              "fraction": 0.586,
+              "behind": 879,
+              "n": 1500,
+              "excluded_degenerate": 0
+            },
+            "gun_back_face": {
+              "fraction": 0.6366666666666667,
+              "behind": 955,
+              "n": 1500,
+              "excluded_degenerate": 0
+            },
+            "flash_back_face": {
+              "fraction": 0.5266666666666666,
+              "behind": 790,
+              "n": 1500,
+              "excluded_degenerate": 0
+            }
+          }
+        }
+      ],
+      "handedness_evidence": {
+        "gun_occlusion": {
+          "P": 0.0,
+          "mirror": 0.54
+        },
+        "hmd_occlusion": {
+          "P": 0.0,
+          "mirror": 0.54
+        },
+        "flash_occlusion_report": {
+          "P": 0.0,
+          "mirror": 0.54
+        },
+        "hmd_back_face": {
+          "P": 0.0,
+          "mirror": 0.586
+        },
+        "gun_back_face_report": {
+          "P": 0.0,
+          "mirror": 0.6366666666666667
+        },
+        "flash_back_face_report": {
+          "P": 0.0,
+          "mirror": 0.5266666666666666
+        },
+        "rule_doc": "docs/measurements/2026-09-15-fixed-linear-alignment-rule.md",
+        "front_face_prereg": "docs/measurements/2026-09-15-level1-front-face-prereg.md",
+        "posthoc_parts": [
+          "G_occ_gun",
+          "uniqueness"
+        ],
+        "void_gates": [
+          "G_occ_hmd"
         ]
       }
     }

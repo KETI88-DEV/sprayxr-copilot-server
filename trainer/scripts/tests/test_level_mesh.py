@@ -953,3 +953,89 @@ def test_level2_provenance_and_rejection_are_unchanged() -> None:
     assert entry["provenance"] == "unverifiable" and "solved_transform" not in entry
     assert [r["gate"] for r in entry["rejected_by"]] == ["uv_degenerate_misattribution_mm", "uv_miss_fraction"]
     assert "fixed_linear_attempt" in entry
+
+
+# =============================================================================
+# §D 사전등록 — HMD가 착탄면 앞면 쪽에 있는가
+# 문서: docs/measurements/2026-09-15-level1-front-face-prereg.md
+# =============================================================================
+
+_IDENTITY3 = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+_REFLECT_X = ((-1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+_FRONT_HITS = [(0.0, 0.3, 0.6), (0.0, 0.7, 0.2), (0.0, 0.6, 0.8)]
+
+
+def _face_frames(origins):
+    n = len(_FRONT_HITS)
+    return level_mesh.LevelFrames(
+        hits=list(_FRONT_HITS), uvs=[(0.0, 0.0)] * n, sessions=["x"] * n,
+        guns=list(origins), heads=list(origins), flashes=[None] * n,
+    )
+
+
+def test_back_face_fraction_uses_the_geometric_front_normal() -> None:
+    """모델 앞면 법선(+X)이 반사(det −1) 배치에서는 −X가 된다. 착탄점과 원점은 그대로 두고
+    선형부만 반사로 바꾸면 앞/뒤 판정이 정확히 뒤집혀야 한다. det 부호 보정을 빼면 두 배치의
+    외적이 같아 판정이 안 뒤집히고 이 테스트가 실패한다(레벨 1에서 P와 거울을 못 가르는 결함)."""
+    mesh = _slab_mesh()
+    front = [(1.0, 0.5, 0.5)] * 3
+    behind = [(-1.0, 0.5, 0.5)] * 3
+    upright = level_mesh.face_side_report(mesh, _IDENTITY3, 1.0, (0.0, 0.0, 0.0), _face_frames(front), [0, 1, 2], min_frames=1)
+    assert upright["hmd_back_face"]["fraction"] == 0.0
+    assert upright["gun_back_face"]["fraction"] == 0.0
+    reflected_front = level_mesh.face_side_report(mesh, _REFLECT_X, 1.0, (0.0, 0.0, 0.0), _face_frames(front), [0, 1, 2], min_frames=1)
+    assert reflected_front["hmd_back_face"]["fraction"] == 1.0
+    reflected_behind = level_mesh.face_side_report(mesh, _REFLECT_X, 1.0, (0.0, 0.0, 0.0), _face_frames(behind), [0, 1, 2], min_frames=1)
+    assert reflected_behind["hmd_back_face"]["fraction"] == 0.0
+    # 플래쉬가 없는 프레임만 있으면 보고값은 측정 불가다.
+    assert upright["flash_back_face"]["fraction"] is None and upright["flash_back_face"]["n"] == 0
+
+
+def test_back_face_fraction_skips_degenerate_faces_and_refuses_thin_samples() -> None:
+    normals = [None, (1.0, 0.0, 0.0), (1.0, 0.0, 0.0)]
+    origins = [(-1.0, 0.0, 0.0), (1.0, 0.0, 0.0), (-1.0, 0.0, 0.0)]
+    hits = [(0.0, 0.0, 0.0)] * 3
+    out = level_mesh.back_face_fraction(normals, origins, hits, min_frames=2)
+    assert out == {"fraction": 0.5, "behind": 1, "n": 2, "excluded_degenerate": 1}
+    assert level_mesh.back_face_fraction(normals, origins, hits, min_frames=3)["fraction"] is None
+
+
+def _front_result(mirror_back, passing: int = 1):
+    base = {"passed_A": True, "front_face": {"hmd_back_face": {"fraction": 0.0}}}
+    cands = [dict(base, rotation=[float(i)] * 9) for i in range(passing)]
+    cands.append({"rotation": level_mesh._matrix_list(PLATE_MIRROR), "passed_A": True,
+                  "front_face": {"hmd_back_face": {"fraction": mirror_back}}})
+    return {"candidates": cands}
+
+
+def test_section_d_is_void_unless_every_control_passes_and_the_mirror_fails() -> None:
+    """사전등록 §3·§4: 양성 대조 8레벨 전부 ≤ 0.25(측정 불가도 실패), 거울 > 0.25, 통과 후보 정확히 1개."""
+    good = {lv: 0.1 for lv in range(3, 11)}
+    ok = level_mesh.judge_front_face(_front_result(0.9), good, PLATE_MIRROR)
+    assert ok["section_d_valid"] is True and ok["solved"] is True
+    assert ok["winner"]["rotation"] == [0.0] * 9
+    assert level_mesh.judge_front_face(_front_result(0.9), {**good, 5: 0.26}, PLATE_MIRROR)["solved"] is False
+    unmeasurable = level_mesh.judge_front_face(_front_result(0.9), {**good, 7: None}, PLATE_MIRROR)
+    assert unmeasurable["section_d_valid"] is False
+    missing = {lv: 0.1 for lv in range(3, 10)}
+    assert level_mesh.judge_front_face(_front_result(0.9), missing, PLATE_MIRROR)["section_d_valid"] is False
+    assert level_mesh.judge_front_face(_front_result(0.25), good, PLATE_MIRROR)["section_d_valid"] is False
+    two = level_mesh.judge_front_face(_front_result(0.9, passing=2), good, PLATE_MIRROR)
+    assert two["solved"] is False and two["candidates_passed_A_and_D"] == 2
+
+
+def test_level1_front_face_attempt_is_recorded_and_void_without_a_transform() -> None:
+    """§D 결과(사전등록 문서 §6): 양성 대조 L5 0.2607 > 0.25로 무효 → 레벨 1은 여전히 변환을 싣지 않는다.
+    음성 대조(거울 1.000)는 성립했다는 수치도 기록에 남는다."""
+    entry = _entry(1)
+    assert entry["provenance"] == "unverifiable" and "solved_transform" not in entry
+    attempt = entry["front_face_attempt"]
+    assert attempt["prereg"] == level_mesh.FRONT_FACE_PREREG_DOC
+    assert attempt["section_d_valid"] is False
+    over = {lv for lv, v in attempt["positive_controls"].items()
+            if v["hmd_back_face"]["fraction"] is None or v["hmd_back_face"]["fraction"] > level_mesh.OCCLUSION_THRESHOLD}
+    assert over == {"5"}
+    evidence = attempt["handedness_evidence"]
+    assert evidence["hmd_back_face"]["P"] <= 0.25 < evidence["hmd_back_face"]["mirror"]
+    # §B 기록은 그대로 남는다.
+    assert entry["fixed_linear_attempt"]["section_b_valid"] is False

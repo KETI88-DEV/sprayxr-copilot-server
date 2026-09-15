@@ -2758,6 +2758,306 @@ def fixed_linear_main(out_path: Path) -> None:
     ALIGNMENT_PATH.write_text(json.dumps(entries, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
+# =============================================================================
+# §D 사전등록 — HMD가 착탄면의 앞면 쪽에 있는가
+# 문서: docs/measurements/2026-09-15-level1-front-face-prereg.md (측정 코드 첫 실행 전 커밋)
+# §B(HMD→착탄 선분 가림)는 방 모양 레벨 양성 대조로 무효가 됐다. 이 절은 그 뒤에 새로
+# 사전등록한 게이트이고, 규칙 문서 §A·§B 코드는 한 줄도 바꾸지 않는다.
+# =============================================================================
+
+FRONT_FACE_PREREG_DOC: Final = "docs/measurements/2026-09-15-level1-front-face-prereg.md"
+FRONT_FACE_MIN_FRAMES: Final = 1000
+FRONT_FACE_DEGENERATE: Final = 1e-12
+
+
+def hit_face_normals(placed_mesh: Mesh, det_sign: float, hits: Sequence[Vec3]) -> list[Vec3 | None]:
+    """착탄점마다 3D 최근접 삼각형(동률은 낮은 인덱스)의 **기하 앞면 법선**.
+
+    `n = sign(det R) · (b − a) × (c − a) / |·|`(사전등록 §1-2). 법선 벡터는 직교 선형부 L에
+    대해 `L·n_model`로 옮겨 가지만 옮긴 꼭짓점의 외적은 `det(L)·L·n_model`이다 — 반사는
+    감김을 뒤집으므로 부호를 되돌린다. 이 부호를 빼면 레벨 1의 P와 판 법선 거울이 같은 법선을
+    받아 게이트가 둘을 가르지 못한다(`test_back_face_fraction_uses_the_geometric_front_normal`).
+    """
+    if det_sign not in (1.0, -1.0):
+        raise ValueError("hit_face_normals: det_sign must be +1.0 or -1.0")
+    triangles = _world_triangles(placed_mesh)
+    if not triangles:
+        raise ValueError("hit_face_normals: mesh has no triangles")
+    normals: list[Vec3 | None] = []
+    for hit in hits:
+        _distance, _point, index = _nearest_on_mesh(hit, triangles)
+        a, b, c = triangles[index]
+        raw = _cross(_sub(b, a), _sub(c, a))
+        norm = math.sqrt(_dot(raw, raw))
+        normals.append(None if norm < FRONT_FACE_DEGENERATE else _mul3(raw, det_sign / norm))
+    return normals
+
+
+def back_face_fraction(
+    normals: Sequence[Vec3 | None],
+    origins: Sequence[Vec3],
+    hits: Sequence[Vec3],
+    min_frames: int = FRONT_FACE_MIN_FRAMES,
+) -> dict[str, float | int | None]:
+    """원점이 착탄면 앞면 법선의 뒤편(`dot(origin − hit, n) ≤ 0`)인 프레임 비율(사전등록 §1-4).
+
+    퇴화 삼각형 프레임은 분모에서 뺀다. 남은 프레임이 `min_frames` 미만이면 `fraction`은
+    None(측정 불가)이다 — 0으로 두면 양성 대조가 "통과"로 읽힌다.
+    """
+    if not (len(normals) == len(origins) == len(hits)):
+        raise ValueError("back_face_fraction: normals, origins and hits must be index-paired")
+    behind = 0
+    used = 0
+    degenerate = 0
+    for normal, origin, hit in zip(normals, origins, hits):
+        if normal is None:
+            degenerate += 1
+            continue
+        used += 1
+        if _dot(_sub(origin, hit), normal) <= 0.0:
+            behind += 1
+    fraction = behind / used if used > 0 and used >= min_frames else None
+    return {"fraction": fraction, "behind": behind, "n": used, "excluded_degenerate": degenerate}
+
+
+def face_side_report(
+    mesh: Mesh,
+    rotation: Mat3,
+    scale: float,
+    translation: Vec3,
+    frames: "LevelFrames",
+    indices: Sequence[int],
+    min_frames: int = FRONT_FACE_MIN_FRAMES,
+) -> dict[str, dict]:
+    """HMD(판정)·건·플래쉬(보고) 앞면 판정. 최근접 삼각형은 착탄점마다 한 번만 찾는다."""
+    placed = _placed_mesh(mesh, rotation, scale, translation)
+    det_sign = 1.0 if _mat3_det(rotation) > 0 else -1.0
+    hits = [frames.hits[i] for i in indices]
+    normals = hit_face_normals(placed, det_sign, hits)
+    flash_pos = [k for k, i in enumerate(indices) if frames.flashes[i] is not None]
+    return {
+        "hmd_back_face": back_face_fraction(normals, [frames.heads[i] for i in indices], hits, min_frames),
+        "gun_back_face": back_face_fraction(normals, [frames.guns[i] for i in indices], hits, min_frames),
+        "flash_back_face": back_face_fraction(
+            [normals[k] for k in flash_pos],
+            [frames.flashes[indices[k]] for k in flash_pos],  # type: ignore[misc]
+            [hits[k] for k in flash_pos],
+            min_frames,
+        ),
+    }
+
+
+def recorded_front_face(level: int, mesh: Mesh, frames: "LevelFrames", *, seed: int = 0,
+                        fit_sample: int = 2000, eval_cap: int = 1500) -> dict[str, dict]:
+    """§D 양성 대조: 기록된 변환 그대로, 규칙 문서 §A.1과 같은 홀드아웃."""
+    alignment = load_alignment(level)
+    if alignment.provenance != "solved":
+        raise ValueError(f"level {level} is not a solved control")
+    _fit, eval_idx = split_fit_holdout(len(frames.hits), fit_sample, eval_cap, seed)
+    return face_side_report(
+        mesh, _rotation_matrix(alignment), alignment.scale, alignment.translation, frames, eval_idx
+    )
+
+
+def _hmd_back(record: dict | None) -> float | None:
+    if record is None or "front_face" not in record:
+        return None
+    return record["front_face"]["hmd_back_face"]["fraction"]
+
+
+def judge_front_face(result: dict, positive_controls: Mapping[int, float | None], mirror: Mat3) -> dict:
+    """사전등록 §3·§4 그대로. `positive_controls`는 레벨 → G_back_hmd(None이면 측정 불가)."""
+    required = {3, 4, 5, 6, 7, 8, 9, 10}
+    missing = sorted(required - set(positive_controls))
+    over = {lv: v for lv, v in positive_controls.items() if v is None or not (v <= OCCLUSION_THRESHOLD)}
+    mirror_list = _matrix_list(mirror)
+    mirror_rec = next((c for c in result["candidates"] if c["rotation"] == mirror_list), None)
+    mirror_value = _hmd_back(mirror_rec)
+    reasons: list[str] = []
+    if missing:
+        reasons.append(f"positive controls missing: {missing}")
+    if over:
+        reasons.append(f"positive control hmd_back_face > {OCCLUSION_THRESHOLD} or unmeasurable: {over}")
+    if mirror_value is None or not (mirror_value > OCCLUSION_THRESHOLD):
+        reasons.append(f"negative control (mirror) hmd_back_face {mirror_value} not > {OCCLUSION_THRESHOLD}")
+    valid = not reasons
+    passed_a = [c for c in result["candidates"] if c.get("passed_A")]
+    passed = [c for c in passed_a if _hmd_back(c) is not None and _hmd_back(c) <= OCCLUSION_THRESHOLD]  # type: ignore[operator]
+    solved = valid and len(passed) == 1
+    return {
+        "section_d_valid": valid,
+        "section_d_invalid_reasons": reasons,
+        "candidates_passed_A": len(passed_a),
+        "candidates_passed_A_and_D": len(passed) if valid else None,
+        "solved": solved,
+        "winner": passed[0] if solved else None,
+        "mirror": mirror_rec,
+    }
+
+
+def front_face_entry(
+    base_entry: dict,
+    result: dict,
+    verdict: dict,
+    positive_controls: Mapping[int, dict],
+    *,
+    reference: Mat3,
+    sessions: Sequence[str],
+) -> dict:
+    """§D 판정으로 레벨 항목을 만든다. 옛 기록(`rejected_by`, `fixed_linear_attempt`)은 지우지 않는다."""
+    ref_list = _matrix_list(reference)
+    ref_rec = next((c for c in result["candidates"] if c["rotation"] == ref_list), None)
+    winner = verdict["winner"]
+    p_rec = winner if winner is not None else ref_rec
+    mirror_rec = verdict["mirror"]
+
+    def face_pair(key: str) -> dict[str, float | None]:
+        def get(rec: dict | None) -> float | None:
+            return None if rec is None or "front_face" not in rec else rec["front_face"][key]["fraction"]
+        return {"P": get(p_rec), "mirror": get(mirror_rec)}
+
+    evidence = {
+        "gun_occlusion": _occ_pair(p_rec, mirror_rec, "gun_occlusion"),
+        "hmd_occlusion": _occ_pair(p_rec, mirror_rec, "hmd_occlusion"),
+        "flash_occlusion_report": _occ_pair(p_rec, mirror_rec, "flash_occlusion"),
+        "hmd_back_face": face_pair("hmd_back_face"),
+        "gun_back_face_report": face_pair("gun_back_face"),
+        "flash_back_face_report": face_pair("flash_back_face"),
+        "rule_doc": FIXED_LINEAR_RULE_DOC,
+        "front_face_prereg": FRONT_FACE_PREREG_DOC,
+        "posthoc_parts": ["G_occ_gun", "uniqueness"],
+        "void_gates": ["G_occ_hmd"],
+    }
+    attempt = {
+        "prereg": FRONT_FACE_PREREG_DOC,
+        "threshold": OCCLUSION_THRESHOLD,
+        "min_frames": FRONT_FACE_MIN_FRAMES,
+        "holdout_n": result["holdout_n"],
+        "holdout_overlap": result["holdout_overlap"],
+        "positive_controls": {str(k): v for k, v in sorted(positive_controls.items())},
+        "section_d_valid": verdict["section_d_valid"],
+        "section_d_invalid_reasons": verdict["section_d_invalid_reasons"],
+        "candidates_passed_A": verdict["candidates_passed_A"],
+        "candidates_passed_A_and_D": verdict["candidates_passed_A_and_D"],
+        "candidates": [
+            {k: c[k] for k in ("rotation", "det", "translation", "passed_A", "gate_failures_A", "front_face")}
+            for c in result["candidates"]
+            if "front_face" in c
+        ],
+        "handedness_evidence": evidence,
+    }
+    if not verdict["solved"]:
+        entry = {k: v for k, v in base_entry.items() if k != "front_face_attempt"}
+        entry["front_face_attempt"] = attempt
+        return entry
+
+    m = winner["measured"]
+    fit = {k: m[k] for k in sorted(m)}
+    fit["det_sign"] = winner["det"]
+    fit["fit_eval_overlap"] = float(result["holdout_overlap"])
+    fit["fit_n"] = float(result["fit_n"])
+    fit["n_hits"] = float(result["holdout_n"])
+    fit["scale_ratio_to_declared"] = 0.0
+    history = list(base_entry.get("history", []))
+    history.append(
+        {k: v for k, v in base_entry.items() if k not in ("history", "fixed_linear_attempt", "front_face_attempt")}
+    )
+    entry = {
+        "level": base_entry["level"],
+        "provenance": "solved",
+        "solved_transform": {
+            "rotation": winner["rotation"],
+            "translation": winner["translation"],
+            "scale": FIXED_LINEAR_SCALE,
+        },
+        "declared_scale": FIXED_LINEAR_SCALE,
+        "fit": fit,
+        "source_fbx": base_entry["source_fbx"],
+        "uv_convention": UV_CONVENTION,
+        "uv_convention_source": "measured",
+        "linear_source": "fixed_signed_permutation",
+        "handedness_source": "data:occlusion_gun+hmd_front_face",
+        "handedness_evidence": evidence,
+        "not_gated": {
+            "reason": "12자유도 경로 전용 게이트(G4 aniso, G7, G8, G9) — 규칙 문서 §A.3",
+            "scale_ratio_to_declared_is_by_construction": True,
+        },
+        "front_face_attempt": attempt,
+        "workers": sorted({_worker_of(name) for name in sessions}),
+        "session_count": len(set(sessions)),
+        "history": history,
+    }
+    if "fixed_linear_attempt" in base_entry:
+        entry["fixed_linear_attempt"] = base_entry["fixed_linear_attempt"]
+    return entry
+
+
+def _front_control_worker(level: int) -> tuple[int, dict]:
+    mesh = read_fbx(DEFAULT_MODELINGS_ROOT / LEVEL_FBX[level])
+    frames = collect_level_frames_by_session(level)
+    out = recorded_front_face(level, mesh, frames)
+    print(f"front-face control level {level}: {out}", flush=True)
+    return level, out
+
+
+def _front_fixed_worker(level: int) -> tuple[int, dict, list]:
+    mesh = read_fbx(DEFAULT_MODELINGS_ROOT / LEVEL_FBX[level])
+    frames = collect_level_frames_by_session(level)
+    result = solve_fixed_linear(
+        level, mesh, frames, always_measure=(GLOBAL_IMPORT_LINEAR, _plate_mirror(GLOBAL_IMPORT_LINEAR))
+    )
+    for candidate in result["candidates"]:
+        if "measured" not in candidate:
+            continue
+        flat = candidate["rotation"]
+        rotation: Mat3 = tuple(tuple(float(x) for x in flat[r * 3 : r * 3 + 3]) for r in range(3))  # type: ignore[assignment]
+        translation = tuple(float(x) for x in candidate["translation"])
+        candidate["front_face"] = face_side_report(
+            mesh, rotation, FIXED_LINEAR_SCALE, translation, frames, result["eval_indices"]  # type: ignore[arg-type]
+        )
+    measured = [(c["det"], c["passed_A"], _hmd_back(c)) for c in result["candidates"] if "front_face" in c]
+    print(f"front-face fixed level {level}: {measured}", flush=True)
+    return level, result, frames.sessions
+
+
+def front_face_main(out_path: Path) -> None:
+    """§D: 레벨 3~10 양성 대조 → 레벨 1·2 후보 앞면 판정 → 판정 → 레벨 1·2 항목만 다시 쓴다.
+
+    보고서(`out_path`)를 정렬 파일보다 먼저 쓴다 — 측정 시각(mtime)의 증거다.
+    """
+    from multiprocessing import Pool
+
+    with Pool(10) as pool:
+        controls_async = pool.map_async(_front_control_worker, [3, 4, 5, 6, 7, 8, 9, 10])
+        fixed_async = pool.map_async(_front_fixed_worker, [1, 2])
+        controls = dict(controls_async.get())
+        fixed = {lv: (res, sess) for lv, res, sess in fixed_async.get()}
+
+    positive = {lv: v["hmd_back_face"]["fraction"] for lv, v in controls.items()}
+    entries = json.loads(ALIGNMENT_PATH.read_text(encoding="utf-8"))
+    report: dict = {"prereg": FRONT_FACE_PREREG_DOC, "controls": {str(k): v for k, v in sorted(controls.items())}, "levels": {}}
+    mirror = _plate_mirror(GLOBAL_IMPORT_LINEAR)
+    new_entries = list(entries)
+    for level in (1, 2):
+        result, sessions = fixed[level]
+        verdict = judge_front_face(result, positive, mirror)
+        if level == 2:
+            verdict = {**verdict, "solved": False, "winner": None}  # 사용자 결정 대기(C): 진단만
+        i = next(k for k, e in enumerate(entries) if int(e["level"]) == level)
+        new_entries[i] = front_face_entry(entries[i], result, verdict, controls,
+                                          reference=GLOBAL_IMPORT_LINEAR, sessions=sessions)
+        report["levels"][str(level)] = {
+            "verdict": {k: v for k, v in verdict.items() if k not in ("winner", "mirror")},
+            "candidates": [
+                {k: c.get(k) for k in ("rotation", "det", "passed_A", "gate_failures_A", "front_face")}
+                for c in result["candidates"] if "front_face" in c
+            ],
+        }
+        print(f"level {level}: {report['levels'][str(level)]['verdict']}", flush=True)
+    out_path.write_text(json.dumps(report, indent=2, ensure_ascii=False, default=str) + "\n", encoding="utf-8")
+    ALIGNMENT_PATH.write_text(json.dumps(new_entries, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
 def main() -> None:
     entries: list[dict] = []
     rejected: list[dict] = []
@@ -2799,5 +3099,7 @@ if __name__ == "__main__":
 
     if len(sys.argv) >= 3 and sys.argv[1] == "fixed-linear":
         fixed_linear_main(Path(sys.argv[2]))
+    elif len(sys.argv) >= 3 and sys.argv[1] == "front-face":
+        front_face_main(Path(sys.argv[2]))
     else:
         main()
