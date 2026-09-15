@@ -14,6 +14,7 @@ docker exec -w /workspace ship-paint-trainer python3 -m pytest trainer mcp_serve
 ```
 
 - Always run from the repo root so `trainer.*` / `mcp_servers.*` imports resolve. There is no Python manifest or lockfile — do not invent a dependency workflow.
+- Exception: `deploy/spark/requirements/*.lock.txt` pin only the Spark (aarch64) deployment images, copied from this container's installed versions; they do not change the development workflow above.
 - Packages missing after a container rebuild: `pip install -r /workspace/trainer/requirements-runtime.txt` (reconstructed list; the image Dockerfile lacks them).
 - `deploy/docker-compose.yml` publishes **only `8120`** and injects live defaults (`DEMO_LIVE_MODE=on`, 27B `CONFIG_PATH`/`ADAPTER_PATH`, `MCP_BASE_URL`). So `create_app()` inside the container defaults to **live**, and MCP `:8100` is reachable only from inside the container.
 - `--live` startup loads a 27B model, so `/api/health` stays down for a while. That is not a hang.
@@ -73,6 +74,7 @@ npm run start:electron
 | UI HTTP/SSE client | `demo-ui/src/api.ts` | Base URL: `window.__DEMO_API_BASE_URL__`, then Vite env, then same-origin (absent under Electron's `file://`) |
 | MCP routes/envelopes | `mcp_servers/main.py`, `common.py` | `/health` `servers: 7` = mounted routers, not processes |
 | Current 27B inference / training | `trainer/configs/rag_config_fewshot_27b.yaml`, `qlora_config_27b_v6_1.yaml` | Tool deadline, per-round token caps, `prompt.fast_system` |
+| Spark release package | `deploy/spark/` (`compose.yaml`, `README.md`) | vllm / mcp / agent-api / web images plus a sha256-manifested asset bundle; `trainer/scripts/tests/test_spark_deploy_contract.py` ties compose values to `rag_config_spark_vllm.yaml`. Do not build these images on the x86 host |
 | Latency contract and bench | `docs/superpowers/specs/2026-07-25-latency-budget-live-demo-design.md`, `trainer/scripts/bench_latency.py` | SSE timing semantics; `bench_report.py` is pure aggregation |
 
 ## Conventions
