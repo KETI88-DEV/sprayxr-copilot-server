@@ -55,3 +55,6 @@ T4·T6·T7 ─► T8 Spark 검증(로딩 → 단일 응답 → 스트리밍 → 
 - citations 형식(청크 ID 그대로 / 문서 단위 / SPEC 매핑), answer의 `[근거]` 꼬리 제거 여부, `use_rag` 형식 불일치(v2.5 'Y'/'N' vs 계약 문서 boolean)를 KETI와 확인한다.
 - `latency_ms` 목표: v2.5 예시의 180~210ms는 27B 생성으로는 불가능하므로 KETI와 다시 합의한다.
 - 체감 지연 개선(실제 토큰 스트리밍, fast 경로 생성 토큰 축소)은 T7 이후 별도 태스크로 한다.
+- `resolved_intents`는 `task_type` 원문(예 `trajectory_recomm`)을 그대로 돌려준다. v2.5 예시는 `trajectory_recommendation`처럼 풀어 쓴 문자열이므로 KETI 파싱과 맞는지 확인한다(리뷰 LOW, 6ca602f).
+- 잠재 위험(현재 동작 영향 없음, 2026-09-15 확인): `agent_pipeline`은 `tool_calling_adapter`를 짧은 이름으로 import하고, `openai_backend`는 `trainer.scripts.tool_calling_adapter`에서 `ToolInfrastructureError`를 상속한다. 스크립트를 경로로 실행하면 `issubclass(OpenAIBackendUnavailableError, <짧은 이름>.ToolInfrastructureError)`가 False다(재현함). 지금은 이 타입으로 예외를 잡는 런타임 코드가 없다. 컨텍스트 초과와 백엔드 불가를 잡는 곳은 모두 `trainer.scripts.openai_backend` 이름을 쓴다. 앞으로 도구 루프에서 `except ToolInfrastructureError`를 추가하려면 먼저 import 이름을 하나로 통일한다.
+- T5 기록: 평가 하네스는 42ddd16(07-27)부터 경로 실행 시 `trainer` import에 실패했다(cf95389에서 수정). 기준선은 `PYTHONPATH=<스냅숏>`으로 돌렸고 `RUN_INFO.txt`에 기록했다.
