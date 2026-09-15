@@ -370,8 +370,39 @@ function renderOrientation(orientation) {
     }
     body.append(row);
   }
-  for (const text of [orientation.weight_note, orientation.joint_angles_note, orientation.excluded_note]) {
+  for (const text of [orientation.weight_note, orientation.excluded_note]) {
     if (typeof text === "string" && text) notes.append(el("li", null, text));
+  }
+}
+
+/** 관절 축 평가표. 값은 서버 display 문자열만, 측정 없는 관절은 서버 사유 문장만 싣는다. */
+function renderJointAxes(block) {
+  const section = $("jointAxes");
+  const body = $("jointAxesTable").querySelector("tbody");
+  body.replaceChildren();
+  if (!block) {
+    section.hidden = true;
+    return;
+  }
+  section.hidden = false;
+  $("jointAxesTitle").textContent = block.title ?? "관절 축 평가";
+  $("jointAxesNote").textContent = block.note ?? "";
+  for (const row of block.rows ?? []) {
+    const tr = el("tr");
+    tr.dataset.key = row.key ?? "";
+    tr.dataset.status = row.status ?? "";
+    const head = el("th", null, row.joint ?? "—");
+    head.scope = "row";
+    tr.append(head, el("td", "joint-axis-status", row.status_text ?? "—"));
+    if (row.display && !row.reason) {
+      const label = el("td", "joint-axis-label", row.label ?? "");
+      tr.append(label, el("td", "orientation-value", shown(row.display.query)), el("td", "orientation-value", shown(row.display.reference)));
+    } else {
+      const cell = el("td", "orientation-reason", row.reason_text ?? "—");
+      cell.colSpan = 3;
+      tr.append(cell);
+    }
+    body.append(tr);
   }
 }
 
@@ -674,6 +705,7 @@ async function run() {
   renderCorrections(payload.measured);
   renderImprovement(payload.measured);
   renderOrientation(payload.measured.orientation ?? null);
+  renderJointAxes(payload.measured.joint_axes ?? null);
   renderMeasuredDetails($("measured"), payload.measured, payload.view);
   renderJointDetails($("joint"), payload.joint);
   // 3D 뷰 실패가 숫자 패널을 끌고 내려가면 안 된다 — 위 렌더는 이미 끝났다.

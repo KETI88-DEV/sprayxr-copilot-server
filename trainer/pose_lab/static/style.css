@@ -582,7 +582,7 @@ dd { margin: 0; font-family: var(--mono); }
   position: absolute;
   top: 0.5rem;
   left: 0.5rem;
-  max-width: min(46rem, calc(100% - 1rem));
+  max-width: calc(100% - 1rem);
   margin: 0;
   padding: 0.35rem 0.6rem;
   background: rgba(8, 10, 15, 0.9);
@@ -619,6 +619,17 @@ dd { margin: 0; font-family: var(--mono); }
   line-height: 1.32;
 }
 .view3d-notes:empty { display: none; }
+/* 고지는 문단처럼 흘려 쓴다 — 한 줄에 하나씩 쌓으면 3D 아래가 벽처럼 길어졌다. */
+.view3d-notes li { display: inline; }
+.view3d-notes li + li::before { content: " "; }
+.view3d-notes-more { margin: 0.1rem 0 0; font-size: var(--fs-sm); color: var(--text-dim); }
+.view3d-notes-more summary { cursor: pointer; color: var(--text-dim); }
+.view3d-notes-more summary:hover { color: var(--text); }
+.view3d-notes-more ul { list-style: none; margin: 0.15rem 0 0; padding: 0; line-height: 1.32; }
+.joint-axes { margin-top: var(--sp-3); }
+.joint-axes-table tbody th { white-space: nowrap; }
+.joint-axes-table .joint-axis-status { color: var(--text-dim); white-space: nowrap; }
+.joint-axes-table .joint-axis-label { color: var(--text-dim); }
 .view3d-wall-note, .view3d-errors, .view3d-note {
   font-size: var(--fs-sm);
   color: var(--text-dim);
