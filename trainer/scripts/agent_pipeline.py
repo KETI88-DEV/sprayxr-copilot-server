@@ -31,6 +31,10 @@ import yaml
 from peft import PeftModel
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
+# 스크립트를 경로로 실행하면 sys.path[0]이 trainer/scripts라 `agent_pipeline`으로 불리고 루트가 없다.
+if __package__ in {None, ""} and str(Path(__file__).resolve().parents[2]) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
 from trainer.scripts.live_response_contract import normalize_fast_knowledge_response
 from trainer.scripts.live_sequence_fallback import (
     LiveSequenceRequest,

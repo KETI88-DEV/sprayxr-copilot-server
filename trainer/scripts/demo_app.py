@@ -15,12 +15,18 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 import time
 import uuid
+from pathlib import Path
 from typing import Any, Generator
 
 import gradio as gr
 from gradio import ChatMessage
+
+# 스크립트를 경로로 실행하면 sys.path[0]이 trainer/scripts라 루트가 없다.
+if __package__ in {None, ""} and str(Path(__file__).resolve().parents[2]) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from trainer.demo_api.scenario_adapter import get_demo_scenario
 
