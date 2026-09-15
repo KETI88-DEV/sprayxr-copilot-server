@@ -8,13 +8,15 @@ IK 산출물이다. 어느 쪽이 개선율 70%를 낼 수 있는지 지금 아�
 
 from __future__ import annotations
 
+import functools
 import importlib
 import json
+import logging
 import math
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Final, Mapping, Protocol, Sequence
+from typing import Any, Callable, Final, Mapping, Protocol, Sequence
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
@@ -28,8 +30,10 @@ level_mesh = importlib.import_module("level_mesh")
 pose_fk_csv = importlib.import_module("pose_fk_csv")
 simulator_csv = importlib.import_module("simulator_csv")
 
-from trainer.pose_lab import skeleton
+from trainer.pose_lab import composite, instructions, orientation, skeleton
 from trainer.pose_lab.spread_reference import Resolved, SpreadReference
+
+logger = logging.getLogger(__name__)
 
 Vec3 = tuple[float, float, float]
 
@@ -319,9 +323,14 @@ def _half_sample_count(
 
 
 def axes_block(
-    deltas: Sequence[measured_score.PointDelta], frame: measured_score.AxisFrame
+    issued: Sequence[Any],
+    frame: measured_score.AxisFrame | None = None,
 ) -> list[dict[str, object]]:
     """발부한 축 전부를 sigma 내림차순으로. 작업자에게 가는 숫자 패널의 원본이다.
+
+    `issued`는 `compare()`가 `measured_score.issued_axes`를 **한 번** 불러 얻은 목록이다 —
+    이 블록과 `view.corrections`가 같은 목록을 받아야 번호(n)로 짝지을 수 있다. 옛 호출
+    형태(`axes_block(deltas, frame)`)는 여기서 `issued_axes`를 한 번 불러 같은 목록을 만든다.
 
     이 목록은 `compare()`가 실제로 발부하는 지시이고, 그것이 곧 `apply_measured`가
     옮기는 것이다 — 그래서 화면 숫자와 `improvement.same`이 같은 이동을 잰다.
@@ -331,6 +340,8 @@ def axes_block(
     발부 축 집합이 이 목록과 갈릴 수 있다. 그것이 split의 설계지 결함이 아니다 —
     다만 이 목록을 split의 근거로 읽으면 안 된다.
     """
+    if frame is not None:
+        issued = measured_score.issued_axes(issued, frame)
     return [
         {
             "point": correction.point,
@@ -339,7 +350,7 @@ def axes_block(
             "direction": correction.direction,
             "sigma": correction.sigma,
         }
-        for correction in measured_score.issued_axes(deltas, frame)
+        for correction in issued
     ]
 
 
@@ -441,15 +452,23 @@ def _serialize_layer(layer: Mapping[str, list[Vec3 | None]]) -> dict[str, list[l
 def _correction_arrows(
     corrections: Sequence[measured_score.AxisCorrection],
     query_layer: Mapping[str, list[Vec3 | None]],
+    frame_markers: Mapping[str, Vec3] | None = None,
 ) -> list[dict[str, object]]:
     """화살표 하나마다: 시작점은 그 점의 격자 평균 위치, 끝점은 **그 축 하나만**
     옮긴 자리. 한 점에 축이 여럿 발부돼도(예: 오른손 wall+vertical) 화살표끼리는
     서로의 이동을 섞지 않는다 — `to - from`이 그 축 자신의
     `magnitude_cm/100 * unit`과 정확히 같아야 한다는 요구를 지키기 위해서다.
     합산된 이동은 `corrected` 층에서 본다.
+
+    `n`은 `corrections`(= `measured.axes`와 같은 `issued` 목록) 안의 순번이다. 평균 위치를
+    못 구한 점은 화살표가 빠지므로 배열 위치가 아니라 `n`으로 짝지어야 한다.
+
+    `from_frame`/`to_frame`은 **대표 프레임**의 그 점 실측 마커(스켈레톤이 선 바로 그
+    프레임)에서 나가는 같은 이동이다. 스켈레톤은 대표 프레임이고 `from`은 패스 평균이라,
+    둘을 섞어 그리면 자세가 맞아도 화살표가 손에서 떨어져 뜬다. 스켈레톤이 없으면 None.
     """
     arrows: list[dict[str, object]] = []
-    for correction in corrections:
+    for n, correction in enumerate(corrections, start=1):
         origin = _mean_point(query_layer.get(correction.point, []))
         if origin is None:
             continue
@@ -459,6 +478,7 @@ def _correction_arrows(
             origin[1] + correction.unit[1] * metres,
             origin[2] + correction.unit[2] * metres,
         )
+        marker = None if frame_markers is None else frame_markers.get(correction.point)
         arrows.append(
             {
                 "point": correction.point,
@@ -469,63 +489,308 @@ def _correction_arrows(
                 "unit": list(correction.unit),
                 "from": list(origin),
                 "to": list(to_point),
+                "n": n,
+                "from_frame": None if marker is None else list(marker),
+                "to_frame": (
+                    None
+                    if marker is None
+                    else [
+                        marker[0] + correction.unit[0] * metres,
+                        marker[1] + correction.unit[1] * metres,
+                        marker[2] + correction.unit[2] * metres,
+                    ]
+                ),
             }
         )
     return arrows
 
 
-def skeleton_block(raw: RawPass) -> dict[str, object] | None:
-    """대표 프레임 하나에 전신 FK 스켈레톤을 강체 정렬한다(`skeleton.place_skeleton`).
+# --- 스켈레톤(표시 전용) -----------------------------------------------------------
 
-    회전 각은 원본 CSV 행에만 있고, 리샘플(보간)된 격자점에는 없다 — 그래서 여기서는
-    `pass_frames`가 낸 격자가 아니라 `measured_pose.measured_frames_with_rows`로
-    원본 행과 프레임을 다시 짝지어, 분사 중이고 착탄점이 있는 구간의 **가운데** 프레임
-    하나를 고른다(`representative_basis`가 기저를 고르는 것과 같은 "가운데" 규칙).
+# 장착 상수 아티팩트. `trainer/scripts/fit_skeleton_mounts.py`가 사전등록
+# (`docs/measurements/2026-09-15-skeleton-mounts-prereg.md`) 기준으로 적합·교차 검증해 쓴다.
+MOUNTS_PATH: Final = Path(__file__).resolve().parent / "skeleton_mounts.json"
+# 폴백(사전등록 §6): 대표 프레임 ±1.0 s를 뺀 나머지 ≥ 60 프레임으로 이 패스에서 적합한다.
+PASS_FIT_EXCLUDE_SEC: Final = 1.0
+PASS_FIT_MIN_FRAMES: Final = 60
+PASS_FIT_MAX_FRAMES: Final = 400
+# 투영 전 몸 기울기가 이보다 크면 뼈를 흐리게 그린다. 진단 분포(중앙값 11.9°, p90 33.4°)를
+# 본 뒤 정한 표시 문턱이지 게이트가 아니다(사전등록 §8).
+FADE_GRAVITY_DEG: Final = 20.0
+# 파지 상한(사전등록 §8). 넘으면 "적합값이지 쥔 거리가 아니다" 고지를 싣는다.
+DEFAULT_GRIP_LIMIT_M: Final[dict[str, float]] = {
+    "한길숏건": 0.25,
+    "반도숏건": 0.25,
+    "한길폴건": 1.2,
+    "반도폴건": 1.2,
+}
 
-    빌드 오프셋(뼈 길이)은 프레임 불변이므로 그 패스의 첫 행에서 뽑는다
-    (`pose_fk_csv.bind_offsets` 독스트링).
+MOUNTS_GLOBAL: Final = "global_lowo_validated"
+MOUNTS_PASS_FIT: Final = "pass_fit_holdout"
+FIT_METHOD: Final = "fk_csv_yxz_orient_gravity"
 
-    **실측 앵커는 실측 위치에 그대로 둔다**(브리프): `place_skeleton`의 최소제곱
-    정렬은 머리·양손을 실측에 "가깝게" 놓을 뿐 정확히 놓지 않는다(중앙값 204mm 어긋남,
-    Task 1 D0). 그 어긋남은 `residual_m`으로 정직하게 보고하되, 화면에 실제로 그릴
-    머리·오른손·왼손 좌표는 FK 결과가 아니라 그 프레임의 실측값으로 덮어쓴다 — FK가
-    주는 것은 그 사이를 잇는 몸통·다리 구조뿐이다. 왼손이 이 프레임에서 안 잡혔으면
-    (`frame.left is None`) 애초에 정렬의 앵커가 아니었으므로(2점 폴백) 덮어쓰지
-    않는다.
+AVATAR_NOTE: Final = (
+    "몸 모양은 시뮬레이터 아바타 추정입니다 — 실측은 머리(HMD)·건·플래쉬 세 강체이고 "
+    "관절 굽힘은 측정값이 아닙니다."
+)
+OFFSET_LINE_LABEL: Final = "보정 오프셋(적합값)"
+RESIDUAL_LABELS: Final[dict[str, str]] = {
+    MOUNTS_GLOBAL: "작업자 교차 검증을 통과한 상수로 잰 어긋남",
+    MOUNTS_PASS_FIT: "이 패스로 맞춘 적합 잔차(대표 프레임은 적합에서 제외)",
+}
+ROTATION_RESIDUAL_LABELS: Final[dict[str, str]] = {
+    MOUNTS_GLOBAL: "작업자 교차 검증을 통과한 장착 회전으로 잰 강체 회전 어긋남",
+    MOUNTS_PASS_FIT: "이 패스로 맞춘 장착 회전의 적합 잔차(대표 프레임은 적합에서 제외)",
+}
+FIT_NOTES: Final[dict[str, str]] = {
+    "no_joint_columns": "이 패스에는 관절 컬럼이 없어 스켈레톤을 그리지 않습니다.",
+    "no_spraying_frame": "분사 중 착탄 프레임이 없어 스켈레톤을 그리지 않습니다.",
+    "insufficient_anchors": "대표 프레임에서 위치·회전이 다 잡힌 실측 강체가 2개 미만이라 스켈레톤을 세우지 않습니다.",
+    "mounts_unavailable": "검증된 장착 상수가 없고 이 패스로 맞출 프레임도 60개 미만이라 스켈레톤을 그리지 않습니다.",
+    "display_error": "스켈레톤을 만드는 중 오류가 나 그리지 않았습니다.",
+}
+LEGEND_NOTES: Final[tuple[str, ...]] = (
+    "교정 화살표는 건·HMD 실측 마커에서 나갑니다",
+    "뼈 = 아바타 추정 · 구체 = 실측",
+    "● 대표 프레임 실측 · ○ 패스 평균",
+)
 
-    FK를 못 얻으면(관절 컬럼이 없거나 분사 프레임이 없거나 앵커가 2개 미만) `None`이다
-    — 그때는 화면이 점과 화살표만으로 동작해야 한다(브리프).
-    """
+
+@dataclass(frozen=True, slots=True)
+class MountsTable:
+    passed: bool
+    table: dict[str, skeleton.AnchorMount]
+    grip_limit_m: dict[str, float]
+
+
+def _mount_from_json(entry: Mapping[str, Any]) -> skeleton.AnchorMount:
+    rotation = entry["rotation"]
+    offset = entry["offset"]
+    return skeleton.AnchorMount(
+        rotation=tuple(tuple(float(x) for x in row) for row in rotation),  # type: ignore[arg-type]
+        offset=(float(offset[0]), float(offset[1]), float(offset[2])),
+    )
+
+
+@functools.lru_cache(maxsize=4)
+def _load_mounts_cached(path_text: str, _mtime: float) -> MountsTable:
+    data = json.loads(Path(path_text).read_text(encoding="utf-8"))
+    passed = bool(data.get("validation", {}).get("passed", False))
+    mounts = data.get("mounts", {})
+    table: dict[str, skeleton.AnchorMount] = {}
+    for point in ("head", "left"):
+        if mounts.get(point):
+            table[point] = _mount_from_json(mounts[point])
+    for group, entry in (mounts.get("right") or {}).items():
+        table[skeleton.mount_key("right", group)] = _mount_from_json(entry)
+    limits = dict(DEFAULT_GRIP_LIMIT_M)
+    limits.update({k: float(v) for k, v in (data.get("grip_limit_m") or {}).items()})
+    return MountsTable(passed=passed, table=table, grip_limit_m=limits)
+
+
+def load_mounts(path: Path = MOUNTS_PATH) -> MountsTable:
+    """장착 상수. 파일이 없으면 검증되지 않은 것으로 본다(`passed=False`)."""
+    try:
+        mtime = path.stat().st_mtime
+    except FileNotFoundError:
+        return MountsTable(passed=False, table={}, grip_limit_m=dict(DEFAULT_GRIP_LIMIT_M))
+    return _load_mounts_cached(str(path), mtime)
+
+
+@dataclass(frozen=True, slots=True)
+class Representative:
+    """대표 프레임(분사 중·착탄점 있는 구간의 가운데)과 그 원본 행."""
+
+    frame: Any
+    row: dict[str, str]
+    gun: str
+    spraying: list[tuple[Any, dict[str, str]]]
+
+
+def representative_frame(raw: RawPass) -> Representative | None:
+    """회전 각은 원본 CSV 행에만 있고 리샘플 격자에는 없다 — 그래서 `pass_frames`가 아니라
+    `measured_pose.measured_frames_with_rows`로 원본 행과 프레임을 짝지어, 분사 중이고
+    착탄점이 있는 구간의 **가운데** 프레임을 고른다(`representative_basis`와 같은 규칙)."""
     if not raw.rows:
+        return None
+    gun = measured_pose.active_gun(raw.rows)
+    if gun is None:
         return None
     paired = measured_pose.measured_frames_with_rows(raw.rows)
     spraying = [(frame, row) for frame, row in paired if frame.spraying and frame.hit is not None]
     if not spraying:
         return None
     frame, row = spraying[len(spraying) // 2]
+    return Representative(frame=frame, row=row, gun=gun, spraying=spraying)
 
-    offsets = pose_fk_csv.bind_offsets(raw.rows[0])
-    if not offsets:
-        return None
-    local = pose_fk_csv.forward_kinematics(row, offsets)
-    placed = skeleton.place_skeleton(local, frame)
-    if placed is None:
-        return None
-    joints, residual = placed
 
-    joints = dict(joints)
-    if "Head" in joints:
-        joints["Head"] = frame.head
-    if "RightHand" in joints:
-        joints["RightHand"] = frame.right
-    if "LeftHand" in joints and frame.left is not None:
-        joints["LeftHand"] = frame.left
+def pass_fit_samples(
+    representative: Representative, offsets: Mapping[str, Vec3]
+) -> list[skeleton.FrameSample]:
+    """폴백 적합 재료: 대표 프레임 시각 ±`PASS_FIT_EXCLUDE_SEC`를 **뺀** 분사 프레임.
 
+    대표 프레임을 적합에 넣으면 그 프레임의 어긋남이 표본 안 잔차가 되어, 맞춘 것이 맞은 것처럼
+    보인다. 개수 문턱은 뺀 뒤의 수로 판정한다."""
+    centre = float(representative.frame.time_sec)
+    keep = [
+        (frame, row)
+        for frame, row in representative.spraying
+        if abs(float(frame.time_sec) - centre) > PASS_FIT_EXCLUDE_SEC
+    ]
+    if len(keep) < PASS_FIT_MIN_FRAMES:
+        return []
+    if len(keep) > PASS_FIT_MAX_FRAMES:
+        step = (len(keep) - 1) / (PASS_FIT_MAX_FRAMES - 1)
+        keep = [keep[round(i * step)] for i in range(PASS_FIT_MAX_FRAMES)]
+    samples = [skeleton.frame_sample(frame, row, representative.gun, offsets) for frame, row in keep]
+    return [sample for sample in samples if sample is not None]
+
+
+def place_frame(sample: skeleton.FrameSample, mounts: skeleton.Mounts) -> skeleton.Placement | None:
+    """한 프레임 배치. 강체 변환만 — 관절을 실측 좌표로 덮어쓰지 않는다(뼈 길이 보존)."""
+    return skeleton.place_oriented(sample.local_pos, sample.local_rot, sample.measured, mounts)
+
+
+@dataclass(frozen=True, slots=True)
+class SkeletonResult:
+    joints: dict[str, list[float]] | None
+    bones: list[list[str]] | None
+    fit: dict[str, object] | None
+    fit_reason: str | None
+    fit_note: str | None
+    markers: dict[str, Vec3]
+    representative: Representative | None
+
+
+def _skeleton_failure(reason: str, representative: Representative | None = None) -> SkeletonResult:
+    return SkeletonResult(
+        joints=None,
+        bones=None,
+        fit=None,
+        fit_reason=reason,
+        fit_note=FIT_NOTES[reason],
+        markers={},
+        representative=representative,
+    )
+
+
+def _torso_length_m(offsets: Mapping[str, Vec3]) -> float:
+    return sum(math.hypot(*offsets[name]) for name in ("Spine", "Chest", "Head") if name in offsets)
+
+
+def _fit_view(
+    placed: skeleton.Placement,
+    representative: Representative,
+    kind: str,
+    mounts: skeleton.Mounts,
+    offsets: Mapping[str, Vec3],
+    grip_limit_m: Mapping[str, float],
+) -> dict[str, object]:
+    gravity = placed.gravity_correction_deg
+    faded = gravity > FADE_GRAVITY_DEG
+    notes = [AVATAR_NOTE]
+    if faded:
+        notes.append(f"실측 회전과 수직 가정이 {gravity:.0f}° 어긋나 몸을 중력 방향으로 세워 그렸습니다(흐리게 표시).")
+    else:
+        notes.append(f"몸의 수직은 중력 방향으로 맞춘 값입니다(보정 {gravity:.0f}°).")
+    notes.append(
+        f"이 CSV 리그에는 목·윗가슴 관절이 없고 골반→머리가 {_torso_length_m(offsets):.2f}m라 "
+        "몸통이 짧게 보입니다(리그 값 그대로 그렸습니다)."
+    )
+    right_norm = None if mounts.right is None else math.hypot(*mounts.right.offset)
+    limit = grip_limit_m.get(representative.gun)
+    if right_norm is not None and limit is not None and right_norm > limit:
+        notes.append(
+            f"건 마커–손 관절 보정 거리 {right_norm:.2f}m는 손으로 쥔 거리로 설명되지 않습니다 — "
+            "아바타 손과 건 강체의 어긋남을 흡수한 적합값입니다."
+        )
+    prefix = "적합 잔차 " if kind == MOUNTS_PASS_FIT else ""
+    frame = representative.frame
     return {
-        "joints": {name: list(position) for name, position in joints.items()},
-        "bones": [list(pair) for pair in simulator_csv.BONES],
-        "fit": {"residual_m": residual, "source": "fk_csv"},
+        "method": FIT_METHOD,
+        "mounts": kind,
+        "mounts_detail": {
+            "right": None if mounts.right is None else {"group": representative.gun, "offset_norm_m": right_norm},
+            "head": None if mounts.head is None else {"offset_norm_m": math.hypot(*mounts.head.offset)},
+            "left": None if mounts.left is None else {"offset_norm_m": math.hypot(*mounts.left.offset)},
+        },
+        "frame_index": int(frame.index),
+        "time_sec": float(frame.time_sec),
+        "residual_m": placed.residual_m,
+        "residual_label": RESIDUAL_LABELS[kind],
+        "gravity_correction_deg": gravity,
+        "gravity_display": f"수직 보정 {gravity:.0f}°",
+        "faded": faded,
+        "leg_tilt_deg": placed.leg_tilt_deg,
+        "rotation_residual_deg": dict(placed.rotation_residual_deg),
+        "rotation_residual_label": ROTATION_RESIDUAL_LABELS[kind],
+        "offset_line_label": OFFSET_LINE_LABEL,
+        "anchors": [
+            {
+                "point": fit.point,
+                "joint": fit.joint,
+                "joint_position": list(fit.joint_position),
+                "predicted_marker": list(fit.predicted_marker),
+                "measured_marker": list(fit.measured_marker),
+                "miss_cm": fit.miss_m * 100.0,
+                "miss_display": f"{prefix}{fit.miss_m * 100.0:.1f}cm",
+            }
+            for fit in placed.anchors
+        ],
+        "notes": notes,
     }
+
+
+def skeleton_block(
+    raw: RawPass,
+    representative: Representative | None = None,
+    mounts_table: MountsTable | None = None,
+) -> SkeletonResult:
+    """대표 프레임 하나에 전신 FK 스켈레톤을 세운다(`skeleton.place_oriented`, M6).
+
+    옛 경로는 머리·양손 세 점 위치에 Kabsch를 풀고 그 뒤 머리·양손을 실측으로 **덮어써**
+    목·전완이 0.46~2.1배로 늘고 줄었다. 여기서는 실측 강체 회전으로 루트를 세우고 중력으로
+    투영한 뒤 강체 변환만 한다 — 뼈 길이는 리그 그대로이고, 대신 앵커마다 어긋남을 싣는다.
+
+    장착 상수는 작업자 교차 검증을 통과한 전역 값(`skeleton_mounts.json`, `passed=true`이고
+    이 패스의 건 그룹 키가 있을 때)을 쓰고, 아니면 이 패스에서 대표 프레임 ±1.0 s를 뺀
+    프레임으로 맞춘다(`pass_fit_samples`). 그마저 모자라면 스켈레톤을 싣지 않는다.
+    """
+    offsets = pose_fk_csv.bind_offsets(raw.rows[0]) if raw.rows else {}
+    representative = representative if representative is not None else representative_frame(raw)
+    if not offsets:
+        return _skeleton_failure("no_joint_columns", representative)
+    if representative is None:
+        return _skeleton_failure("no_spraying_frame")
+    sample = skeleton.frame_sample(representative.frame, representative.row, representative.gun, offsets)
+    if sample is None:
+        return _skeleton_failure("no_joint_columns", representative)
+
+    table = mounts_table if mounts_table is not None else load_mounts()
+    global_mounts = skeleton.mounts_for(table.table, representative.gun)
+    if table.passed and global_mounts.right is not None and global_mounts.head is not None:
+        kind = MOUNTS_GLOBAL
+        mounts = global_mounts
+    else:
+        samples = pass_fit_samples(representative, offsets)
+        if not samples:
+            return _skeleton_failure("mounts_unavailable", representative)
+        kind = MOUNTS_PASS_FIT
+        mounts = skeleton.mounts_for(skeleton.fit_mounts([samples]), representative.gun)
+
+    placed = place_frame(sample, mounts)
+    if placed is None:
+        return _skeleton_failure("insufficient_anchors", representative)
+
+    return SkeletonResult(
+        joints={name: list(position) for name, position in placed.joints.items()},
+        bones=[list(pair) for pair in simulator_csv.BONES],
+        fit=_fit_view(placed, representative, kind, mounts, offsets, table.grip_limit_m),
+        fit_reason=None,
+        fit_note=None,
+        markers={fit.point: fit.measured_marker for fit in placed.anchors},
+        representative=representative,
+    )
 
 
 def _mesh_source_path(level: int) -> Path | None:
@@ -545,13 +810,41 @@ def _mesh_source_path(level: int) -> Path | None:
 
 _NO_MESH: Final[dict[str, object]] = {"vertices": [], "triangles": []}
 
+MESH_REASON_TEXT: Final[dict[str, str]] = {
+    "unverified_alignment": "이 레벨은 아직 검증된 벽면 정렬이 없어 벽면을 그리지 않습니다.",
+    "no_alignment_record": "이 레벨의 벽면 정렬 기록이 없어 벽면을 그리지 않습니다.",
+    "fbx_missing": "벽면 모델 파일을 찾지 못해 벽면을 그리지 않습니다.",
+    "display_error": "벽면을 만드는 중 오류가 나 그리지 않았습니다.",
+}
+HANDEDNESS_NOTE: Final = (
+    "벽 켜기·착탄 거리로는 손대칭을 판별하지 못합니다 — 판정 근거는 건·HMD 가림 비율입니다."
+)
 
-def mesh_block(level_text: str) -> dict[str, object] | None:
-    """검증된("solved") 정렬이 있는 레벨만 기하를 싣는다(설계 §5).
 
-    `mesh`가 `None`인 것("이 패스의 레벨 자체를 모른다" — 예: 실전모드 `1-A`처럼
-    숫자가 아닌 레벨)과 `available: False`인 것("레벨은 알지만 검증된 정렬이 없다")을
-    구분한다 — 소비자가 두 상태를 다르게 다뤄야 한다(설계 §5).
+def _alignment_entry(level: int) -> dict[str, Any] | None:
+    try:
+        entries = json.loads(level_mesh.ALIGNMENT_PATH.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    for entry in entries:
+        if int(entry.get("level", -1)) == level:
+            return entry
+    return None
+
+
+@dataclass(frozen=True, slots=True)
+class MeshResult:
+    level: int
+    mesh: Any | None  # level_mesh.Mesh (배치 후)
+    reason: str | None
+    entry: dict[str, Any] | None
+
+
+def placed_mesh(level_text: str) -> MeshResult | None:
+    """검증된("solved") 정렬이 있는 레벨만 배치한 메시를 낸다(설계 §5).
+
+    None("이 패스의 레벨 자체를 모른다" — 예: 실전모드 `1-A`)과 `mesh is None`("레벨은 알지만
+    그릴 기하가 없다")을 구분하고, 후자는 사유를 함께 낸다.
     """
     if not level_text.isdigit():
         return None
@@ -559,12 +852,13 @@ def mesh_block(level_text: str) -> dict[str, object] | None:
     try:
         alignment = level_mesh.load_alignment(level)
     except LookupError:
-        return {"level": level, "available": False, **_NO_MESH}
+        return MeshResult(level=level, mesh=None, reason="no_alignment_record", entry=None)
+    entry = _alignment_entry(level)
     if alignment.provenance != "solved":
-        return {"level": level, "available": False, **_NO_MESH}
+        return MeshResult(level=level, mesh=None, reason="unverified_alignment", entry=entry)
     source = _mesh_source_path(level)
     if source is None:
-        return {"level": level, "available": False, **_NO_MESH}
+        return MeshResult(level=level, mesh=None, reason="fbx_missing", entry=entry)
     try:
         mesh = level_mesh.read_fbx(source)
     except FileNotFoundError:
@@ -574,56 +868,115 @@ def mesh_block(level_text: str) -> dict[str, object] | None:
         # 않는다 — `available: False`로 조용히 떨어뜨린다. 파일은 있는데 형식이
         # 깨진 경우(ValueError 등, `read_fbx`가 그대로 던진다)는 버그이므로 계속
         # 크게 터뜨린다 — 이 except는 "파일 없음" 하나만 잡는다.
-        return {"level": level, "available": False, **_NO_MESH}
-    placed = level_mesh.place(mesh, alignment)
+        return MeshResult(level=level, mesh=None, reason="fbx_missing", entry=entry)
+    return MeshResult(level=level, mesh=level_mesh.place(mesh, alignment), reason=None, entry=entry)
+
+
+def mesh_view(result: MeshResult | None) -> dict[str, object] | None:
+    if result is None:
+        return None
+    entry = result.entry or {}
+    evidence = entry.get("handedness_evidence")
+    view: dict[str, object] = {"level": result.level, "available": result.mesh is not None}
+    if result.mesh is None:
+        view.update(_NO_MESH)
+    else:
+        view["vertices"] = [list(vertex) for vertex in result.mesh.vertices]
+        view["triangles"] = [list(triangle) for triangle in result.mesh.triangles]
+    view.update(
+        {
+            "reason": result.reason,
+            "reason_text": None if result.reason is None else MESH_REASON_TEXT[result.reason],
+            "handedness_source": entry.get("handedness_source"),
+            "handedness_evidence": evidence,
+            "handedness_note": HANDEDNESS_NOTE if evidence else None,
+        }
+    )
+    return view
+
+
+def mesh_block(level_text: str) -> dict[str, object] | None:
+    """검증된("solved") 정렬이 있는 레벨만 기하를 싣는다(설계 §5).
+
+    `mesh`가 `None`인 것("이 패스의 레벨 자체를 모른다" — 예: 실전모드 `1-A`처럼
+    숫자가 아닌 레벨)과 `available: False`인 것("레벨은 알지만 검증된 정렬이 없다")을
+    구분한다 — 소비자가 두 상태를 다르게 다뤄야 한다(설계 §5). 파싱 결함(`read_fbx`의
+    ValueError)은 여기서 삼키지 않는다 — 격리는 `compare` 층에서만, 사유를 따로 붙여 한다.
+    """
+    return mesh_view(placed_mesh(level_text))
+
+
+def _mesh_error_view(level_text: str) -> dict[str, object] | None:
+    if not level_text.isdigit():
+        return None
     return {
-        "level": level,
-        "available": True,
-        "vertices": [list(vertex) for vertex in placed.vertices],
-        "triangles": [list(triangle) for triangle in placed.triangles],
+        "level": int(level_text),
+        "available": False,
+        **_NO_MESH,
+        "reason": "display_error",
+        "reason_text": MESH_REASON_TEXT["display_error"],
+        "handedness_source": None,
+        "handedness_evidence": None,
+        "handedness_note": None,
     }
+
+
+_UNSET: Final = object()
 
 
 def view_block(
     query_frames: Sequence[Any],
     reference_frames: Sequence[Any],
-    deltas: Sequence[measured_score.PointDelta],
-    basis: measured_score.AxisFrame,
-    weights: Mapping[str, float],
-    level_text: str,
-    grid_n: int,
+    deltas: Sequence[measured_score.PointDelta] | None = None,
+    basis: measured_score.AxisFrame | None = None,
+    weights: Mapping[str, float] = measured_score.DEFAULT_WEIGHTS,
+    level_text: str = "",
+    grid_n: int = stroke_frame.DEFAULT_SAMPLES,
     query_raw: RawPass | None = None,
+    *,
+    corrections: Sequence[measured_score.AxisCorrection] | None = None,
+    skeleton_result: SkeletonResult | None = None,
+    mesh: object = _UNSET,
 ) -> dict[str, object]:
     """화면이 그릴 층·교정·메시·가중치. 좌표는 전부 캡처(월드) 프레임이다.
 
-    `corrected` 층과 `corrections`는 여기서 **한 번만** `measured_score.issued_axes`를
-    불러 같은 목록에서 파생된다 — 두 갈래로 나눠 계산하면 그림이 개선율·문장과
-    다른 이동을 보일 수 있다(요구사항 1).
+    `corrected` 층과 `corrections`는 **한 목록**(`corrections`, 없으면 여기서 한 번
+    `measured_score.issued_axes`)에서 파생된다 — 두 갈래로 나눠 계산하면 그림이 개선율·문장과
+    다른 이동을 보일 수 있다(요구사항 1). `compare()`는 `measured.axes`와 같은 `issued`를 넘긴다.
 
-    전신 스켈레톤(`skeleton_block`)은 **질의 층에만** 얹는다. "지금 자세가 기준과
-    얼마나 다른가"가 이 화면의 답이므로(브리프 §0) 검증 대상은 질의이고, `fit`
-    잔차도 하나만 낼 수 있는 스키마(`{residual_m, source} | null`)라 여러 층에
-    독립적으로 FK를 풀면 어느 잔차가 "그" 잔차인지 모호해진다. `query_raw`가 없으면
-    (테스트처럼 원본 행 없이 층만 조립하는 호출) 스켈레톤 없이 점·화살표만 낸다.
+    전신 스켈레톤은 **질의 층에만** 얹는다. "지금 자세가 기준과 얼마나 다른가"가 이 화면의
+    답이므로 검증 대상은 질의다. `query_raw`도 `skeleton_result`도 없으면(테스트처럼 원본 행
+    없이 층만 조립하는 호출) 스켈레톤 없이 점·화살표만 낸다.
     """
+    if corrections is None:
+        if deltas is None or basis is None:
+            raise ValueError("view_block: corrections 또는 (deltas, basis)가 필요하다")
+        corrections = measured_score.issued_axes(deltas, basis)
     query_layer = _world_layer(query_frames)
     reference_layer = _world_layer(reference_frames)
-    corrections = measured_score.issued_axes(deltas, basis)
     corrected_layer = _corrected_layer(query_layer, corrections)
 
     query_layer_view: dict[str, object] = dict(_serialize_layer(query_layer))
     weights_view = dict(weights)
+    if skeleton_result is None and query_raw is not None:
+        skeleton_result = skeleton_block(query_raw)
     fit: dict[str, object] | None = None
-    skeleton_data = None if query_raw is None else skeleton_block(query_raw)
-    if skeleton_data is not None:
-        query_layer_view["joints"] = skeleton_data["joints"]
-        query_layer_view["bones"] = skeleton_data["bones"]
-        fit = skeleton_data["fit"]
-        # 새 관절은 전부 weights에 넣고 값은 0.0이다(채점에 안 들어간다) — 브리프.
-        # 강조(emphasis)는 view.weights[name]에서만 파생되므로, 여기 없으면 화면이
-        # 이 관절을 "그리는 점인데 weights가 모른다"는 결함 상태로 받는다.
-        for name in skeleton_data["joints"]:
-            weights_view.setdefault(name, 0.0)
+    fit_reason: str | None = None
+    fit_note: str | None = None
+    markers: Mapping[str, Vec3] | None = None
+    if skeleton_result is not None:
+        fit_reason = skeleton_result.fit_reason
+        fit_note = skeleton_result.fit_note
+        if skeleton_result.joints is not None:
+            query_layer_view["joints"] = skeleton_result.joints
+            query_layer_view["bones"] = skeleton_result.bones
+            fit = skeleton_result.fit
+            markers = skeleton_result.markers
+            # 새 관절은 전부 weights에 넣고 값은 0.0이다(채점에 안 들어간다) — 브리프.
+            # 강조(emphasis)는 view.weights[name]에서만 파생되므로, 여기 없으면 화면이
+            # 이 관절을 "그리는 점인데 weights가 모른다"는 결함 상태로 받는다.
+            for name in skeleton_result.joints:
+                weights_view.setdefault(name, 0.0)
 
     return {
         "grid_n": grid_n,
@@ -632,11 +985,169 @@ def view_block(
             "reference": _serialize_layer(reference_layer),
             "corrected": _serialize_layer(corrected_layer),
         },
-        "corrections": _correction_arrows(corrections, query_layer),
-        "mesh": mesh_block(level_text),
+        "corrections": _correction_arrows(corrections, query_layer, markers),
+        "mesh": mesh_block(level_text) if mesh is _UNSET else mesh,
         "weights": weights_view,
         "fit": fit,
+        "fit_reason": fit_reason,
+        "fit_note": fit_note,
+        "legend_notes": list(LEGEND_NOTES),
+        "display_errors": [],
+        "composite": None,
     }
+
+
+# --- 표시 블록 격리 ----------------------------------------------------------------
+
+_TEXT_FIELDS: Final[tuple[str, ...]] = ("n", "text", "text_reason", "text_mode", "figure", "sigma_display", "trace")
+
+
+def pass_surface_angle_deg(
+    raw: RawPass, geometry: composite.MeshGeometry | None, basis: measured_score.AxisFrame
+) -> float | None:
+    """스트로크 기저 법선과 패스 착탄점들의 최근접 삼각형 법선(건 쪽 부호) 평균 사이 각."""
+    if geometry is None:
+        return None
+    paired = [
+        (frame, row)
+        for frame, row in measured_pose.measured_frames_with_rows(raw.rows)
+        if frame.spraying and frame.hit is not None
+    ]
+    if not paired:
+        return None
+    if len(paired) > orientation.MAX_FRAMES:
+        step = (len(paired) - 1) / (orientation.MAX_FRAMES - 1)
+        paired = [paired[round(i * step)] for i in range(orientation.MAX_FRAMES)]
+    mean = composite.surface_normal_mean(
+        geometry, [frame.hit for frame, _row in paired], [frame.right for frame, _row in paired]
+    )
+    if mean is None:
+        return None
+    return composite.angle_between_lines_deg(basis.normal, mean)
+
+
+def instruction_entries(
+    issued: Sequence[measured_score.AxisCorrection], surface_angle_deg: float | None
+) -> list[dict[str, object]]:
+    """`measured.axes`와 같은 순서의 표시 필드. 문장이 표에 없으면 text=None, text_reason='no_phrase'."""
+    entries: list[dict[str, object]] = []
+    for n, correction in enumerate(issued, start=1):
+        entry: dict[str, object] = {"n": n, **instructions.axis_display(correction, surface_angle_deg)}
+        try:
+            text, mode = instructions.axis_text(correction, surface_angle_deg)
+            entry.update({"text": text, "text_reason": None, "text_mode": mode})
+        except ValueError:
+            entry.update({"text": None, "text_reason": "no_phrase", "text_mode": "directive"})
+        entries.append(entry)
+    return entries
+
+
+def measured_display(measured: Mapping[str, Any]) -> dict[str, object]:
+    improvement_values = measured.get("improvement") or {}
+    return {
+        "improvement_labels": dict(instructions.IMPROVEMENT_LABELS),
+        "display": {
+            "score": instructions.score_display(measured.get("score")),
+            "score_after": instructions.score_display(measured.get("score_after")),
+            "improvement_same": instructions.score_display(improvement_values.get("same")),
+            "improvement_split": instructions.score_display(improvement_values.get("split")),
+        },
+        "deltas_display": [
+            {
+                "point": delta["point"],
+                "deviation_display": instructions.deviation_display(delta["deviation_cm"]),
+                "sigma_display": instructions.sigma_display(delta["sigma"]),
+            }
+            for delta in measured.get("deltas", [])
+        ],
+    }
+
+
+def _attach_view(
+    body: dict[str, Any],
+    *,
+    query: PassRef,
+    query_raw: RawPass,
+    reference_raw: RawPass,
+    query_frames: Sequence[Any],
+    reference_frames: Sequence[Any],
+    issued: Sequence[measured_score.AxisCorrection],
+    basis: measured_score.AxisFrame,
+    weights: Mapping[str, float],
+    samples: int,
+) -> None:
+    """채점이 끝난 응답에 표시 블록을 붙인다. 블록마다 예외를 격리한다.
+
+    표시 코드의 결함이 점수·교정·개선율 응답을 인질로 잡으면 안 된다. 블록이 던지면 로그를
+    남기고 그 블록만 null(메시는 사유 'display_error')로 두고 `view.display_errors`에 적는다.
+    `measured`의 기존 필드는 이 함수가 건드리지 않는다 — 새 표시 필드만 더한다.
+    """
+    errors: list[dict[str, str]] = []
+
+    def guarded(block: str, fn: Callable[..., Any], *args: Any) -> tuple[bool, Any]:
+        try:
+            return True, fn(*args)
+        except Exception as exc:  # noqa: BLE001 — 표시 블록 격리가 이 함수의 목적이다.
+            logger.exception("display block %s failed", block)
+            errors.append({"block": block, "error_type": type(exc).__name__})
+            return False, None
+
+    measured = body["measured"]
+
+    ok, mesh_result = guarded("mesh", placed_mesh, query.level)
+    mesh = mesh_view(mesh_result) if ok else _mesh_error_view(query.level)
+    geometry: composite.MeshGeometry | None = None
+    if ok and mesh_result is not None and mesh_result.mesh is not None:
+        ok, geometry = guarded(
+            "mesh", composite.MeshGeometry.from_mesh, mesh_result.mesh.vertices, mesh_result.mesh.triangles
+        )
+        if not ok:
+            mesh = _mesh_error_view(query.level)
+            geometry = None
+
+    rep_ok, representative = guarded("skeleton", representative_frame, query_raw)
+    skeleton_ok = False
+    skeleton_result: SkeletonResult | None = None
+    if rep_ok:
+        skeleton_ok, skeleton_result = guarded("skeleton", skeleton_block, query_raw, representative)
+    if not skeleton_ok or skeleton_result is None:
+        skeleton_result = _skeleton_failure("display_error", representative if rep_ok else None)
+
+    view = view_block(
+        query_frames,
+        reference_frames,
+        weights=weights,
+        level_text=query.level,
+        grid_n=samples,
+        corrections=issued,
+        skeleton_result=skeleton_result,
+        mesh=mesh,
+    )
+
+    ok, surface_angle = guarded("instructions", pass_surface_angle_deg, query_raw, geometry, basis)
+    ok_entries, entries = guarded("instructions", instruction_entries, issued, surface_angle if ok else None)
+    if ok_entries:
+        for axis_entry, extra in zip(measured["axes"], entries):
+            axis_entry.update(extra)
+        by_n = {entry["n"]: entry for entry in entries}
+        for arrow in view["corrections"]:
+            extra = by_n[arrow["n"]]
+            arrow.update({name: extra[name] for name in _TEXT_FIELDS})
+
+    ok, shown = guarded("instructions", measured_display, measured)
+    if ok:
+        measured.update(shown)
+
+    ok, orient = guarded("orientation", orientation.orientation_block, query_raw.rows, reference_raw.rows, geometry)
+    measured["orientation"] = orient if ok else None
+
+    joints = skeleton_result.joints if skeleton_result is not None else None
+    ok, composite_view = guarded(
+        "composite", composite.composite_block, skeleton_result.representative, geometry, joints
+    )
+    view["composite"] = composite_view if ok else None
+    view["display_errors"] = errors
+    body["view"] = view
 
 
 def compare(
@@ -648,8 +1159,16 @@ def compare(
     spreads: measured_score.AxisSpreads | None = None,
     weights: dict[str, float] | None = None,
     reference_spreads: SpreadReference | None = None,
+    *,
+    include_view: bool = True,
 ) -> dict[str, object]:
-    """비교 1건. 동작 키가 다르면 지표를 만들지 않는다."""
+    """비교 1건. 동작 키가 다르면 지표를 만들지 않는다.
+
+    `include_view=False`면 채점 필드만 낸다(`view`는 None, `measured`에 표시 전용 필드 없음).
+    개선율 측정 도구(`improvement_study.py`)는 이 모드로만 부른다 — 표시 코드의 비용이나
+    예외가 개선율 재측정을 인질로 잡지 않게 한다. 이 모드의 `measured`는 b5f7341과 JSON
+    문자열까지 같다(`test_scoring_isolation.py`).
+    """
     params = params or motion_key.KeyParams()
     weights = weights or measured_score.DEFAULT_WEIGHTS
 
@@ -657,7 +1176,8 @@ def compare(
     # 행에서만 읽을 수 있고, `pass_frames`가 낸 리샘플 격자로는 얻을 수 없다.
     query_raw = source.load(query)
     query_frames = pass_frames(query_raw, samples)
-    reference_frames = pass_frames(source.load(reference), samples)
+    reference_raw = source.load(reference)
+    reference_frames = pass_frames(reference_raw, samples)
     query_inputs = key_inputs(query_frames)
     reference_inputs = key_inputs(reference_frames)
     query_key = None if query_inputs is None else key_from(query_inputs, params)
@@ -818,7 +1338,12 @@ def compare(
                     after_split_score = after_split.score
                     split_reason = None
 
-    return {
+    # 발부 목록은 **한 번만** 구한다. `measured.axes`와 `view.corrections`가 같은 목록을
+    # 받아야 번호(n)가 짝짓는 키가 된다. `apply_measured`는 measured_score 안에서 같은
+    # 규칙(`issued_shifts` → `issued_axes`)으로 따로 부르지만 입력이 같아 같은 목록이다
+    # (`test_issued_axes_single_list_matches_apply_measured`).
+    issued = measured_score.issued_axes(before.deltas, basis)
+    body: dict[str, Any] = {
         "status": "ok",
         "query_key": query_key,
         "reference_key": reference_key,
@@ -826,19 +1351,10 @@ def compare(
         "yaw_assumed": yaw_used,
         "yaw_source": yaw_source,
         "samples": before.samples,
-        # 스켈레톤 뷰가 그릴 층·교정 화살표·메시·가중치. 좌표는 캡처(월드) 프레임이고
-        # `corrected`/`corrections`는 아래 `axes_block`과 같은 `issued_axes` 호출에서
-        # 나온다(요구사항 1) — `before.deltas`/`basis`는 이미 위에서 구했다.
-        "view": view_block(
-            query_frames=query_frames,
-            reference_frames=reference_frames,
-            deltas=before.deltas,
-            basis=basis,
-            weights=weights,
-            level_text=query.level,
-            grid_n=samples,
-            query_raw=query_raw,
-        ),
+        # 스켈레톤 뷰(층·교정 화살표·메시·가중치)는 채점 필드를 다 만든 뒤
+        # `include_view`일 때만 붙인다(아래 `_attach_view`). `corrected`/`corrections`는
+        # `axes`와 같은 `issued` 목록에서 나온다(요구사항 1).
+        "view": None,
         "measured": {
             "basis": "tracked",
             # σ와 점수 exp(-σ²/2)는 이 산포로 나눈 값이다. 잰 분포가 아니면 읽는
@@ -885,7 +1401,7 @@ def compare(
             # 이 목록과 갈릴 수 있다. 그것이 split의 설계이지 결함이 아니다 —
             # 다만 "화면 = split"이라고 읽으면 안 된다.
             "stance": stance_block(before.deltas, basis),
-            "axes": axes_block(before.deltas, basis),
+            "axes": axes_block(issued),
             # 최종 작업자 문구는 다운스트림 VLM이 짓는다. 문장만 주면 VLM이 근거 없이
             # 다시 지어내야 한다 — 표본 수는 문장에 없다. 구조체를 병기해 축·부호·σ·
             # 표본 n을 그대로 넘긴다. 오른손이 임계 아래거나 못 잰 경우 None이다.
@@ -952,6 +1468,21 @@ def compare(
             "gate_reason": "not_wired",
         },
     }
+    if not include_view:
+        return body
+    _attach_view(
+        body,
+        query=query,
+        query_raw=query_raw,
+        reference_raw=reference_raw,
+        query_frames=query_frames,
+        reference_frames=reference_frames,
+        issued=issued,
+        basis=basis,
+        weights=weights,
+        samples=samples,
+    )
+    return body
 
 
 def reference_candidates(

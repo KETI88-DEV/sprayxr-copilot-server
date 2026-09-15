@@ -16,9 +16,11 @@ from __future__ import annotations
 
 import importlib
 import math
+import random
 import sys
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
@@ -27,8 +29,13 @@ measured_score = importlib.import_module("measured_score")
 level_mesh = importlib.import_module("level_mesh")
 
 simulator_csv = importlib.import_module("simulator_csv")
+pose_fk_csv = importlib.import_module("pose_fk_csv")
+rotation_math = importlib.import_module("rotation_math")
+world_axes = importlib.import_module("world_axes")
+measured_pose = importlib.import_module("measured_pose")
 
-from trainer.pose_lab import service
+from trainer.pose_lab import service, skeleton
+from trainer.pose_lab.skeleton import AnchorMount, Mounts
 from trainer.pose_lab.service import PassRef, RawPass
 from trainer.pose_lab.tests.test_app import FakeSource, QUERY, REFERENCE, _rows
 
@@ -72,6 +79,10 @@ def _rows_with_skeleton(shift: float) -> list[dict[str, str]]:
                 row[f"{column} Position {axis}"] = str(value)
             for axis in "XYZ":
                 row[f"{column} Rotation {axis}"] = "0.0"
+        # 건·플래쉬 회전도 싣는다 — 배치(M6)는 실측 강체 **회전**으로 루트를 세운다.
+        for group in ("한길숏건", "플래쉬"):
+            for axis in "XYZ":
+                row[f"{group} Rotation {axis}"] = "0.0"
     return rows
 
 
@@ -361,7 +372,78 @@ def test_mesh_parse_failure_still_propagates_instead_of_being_swallowed(
         service.mesh_block(str(_first_solved_level()))
 
 
-# ---- 11-A: 스켈레톤 배선 ----------------------------------------------------
+# ---- 11-A → 피드백: 스켈레톤 배선(M6: 실측 회전 + 중력 투영, 스냅 없음) ----------------
+
+IDENTITY = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+_TEST_MOUNTS = service.MountsTable(
+    passed=True,
+    table={
+        "head": AnchorMount(rotation=IDENTITY, offset=(0.0, 0.05, 0.0)),
+        "left": AnchorMount(rotation=IDENTITY, offset=(0.02, 0.0, 0.0)),
+        "right:한길숏건": AnchorMount(rotation=IDENTITY, offset=(-0.1, 0.0, 0.05)),
+    },
+    grip_limit_m=dict(service.DEFAULT_GRIP_LIMIT_M),
+)
+_UNVALIDATED = service.MountsTable(passed=False, table={}, grip_limit_m=dict(service.DEFAULT_GRIP_LIMIT_M))
+
+# 합성 "참" 장착 — 일관된 실측을 만들 때 쓴다.
+_KNOWN_MOUNTS = Mounts(
+    head=AnchorMount(rotation=rotation_math.euler_matrix("YXZ", (10.0, -20.0, 5.0)), offset=(0.03, 0.08, -0.05)),
+    right=AnchorMount(rotation=rotation_math.euler_matrix("YXZ", (-30.0, 40.0, 15.0)), offset=(-0.05, 0.03, 0.06)),
+    left=AnchorMount(rotation=rotation_math.euler_matrix("YXZ", (5.0, 70.0, -10.0)), offset=(0.04, -0.02, 0.03)),
+)
+
+
+@pytest.fixture
+def test_mounts(monkeypatch: pytest.MonkeyPatch) -> service.MountsTable:
+    monkeypatch.setattr(service, "load_mounts", lambda *args, **kwargs: _TEST_MOUNTS)
+    return _TEST_MOUNTS
+
+
+def _set_vec(row: dict[str, str], group: str, kind: str, value) -> None:  # noqa: ANN001
+    for axis, component in zip("XYZ", value):
+        row[f"{group} {kind} {axis}"] = repr(float(component))
+
+
+def _consistent_rows(n: int, dt: float, seed: int = 11) -> list[dict[str, str]]:
+    """알려진 루트·관절 회전·장착(`_KNOWN_MOUNTS`)에서 실측 세 강체를 만들어 적은 행.
+
+    관절 회전은 프레임마다 무작위(±10°)라 뼈 길이 보존을 모든 프레임에서 시험할 수 있다."""
+    rng = random.Random(seed)
+    to_up = skeleton.minimal_rotation(np.array(skeleton.RIG_UP), np.array(world_axes.UP, dtype=float))
+    rows: list[dict[str, str]] = []
+    for i in range(n):
+        row: dict[str, str] = {
+            "인덱스": str(i),
+            "시간(초)": f"{i * dt:.4f}",
+            "분사": "On",
+            "Ray Texture UV X": "1024",
+            "Ray Texture UV Y": "512",
+        }
+        for column in simulator_csv.JOINT_COLUMNS:
+            key = simulator_csv.JOINT_KEYS[column]
+            _set_vec(row, column, "Position", _SKELETON_OFFSETS.get(key, (0.0, 0.0, 0.0)))
+            _set_vec(row, column, "Rotation", [rng.uniform(-10.0, 10.0) for _ in range(3)])
+        offsets = pose_fk_csv.bind_offsets(row)
+        positions, rotations = pose_fk_csv.forward_kinematics_with_rotations(row, offsets)
+        root = np.array(rotation_math.axis_matrix("Y", 30.0 + 0.5 * i)) @ to_up
+        t = np.array([0.5, 1.0, 4.2 + 0.01 * i])
+        for point, group in (("head", "카메라"), ("right", "한길숏건"), ("left", "플래쉬")):
+            mount = _KNOWN_MOUNTS.get(point)
+            joint = skeleton.ANCHOR_JOINTS[point]
+            r_meas = root @ np.array(rotations[joint]) @ np.array(mount.rotation)
+            marker = root @ np.array(positions[joint]) + t + r_meas @ np.array(mount.offset)
+            _set_vec(row, group, "Position", marker)
+            matrix = tuple(tuple(float(x) for x in line) for line in r_meas)
+            _set_vec(row, group, "Rotation", rotation_math.euler_from_matrix("YXZ", matrix, 1.0))
+            if point == "right":
+                hit = marker + np.array([0.6, 0.0, 0.0])
+        row["Ray point X"], row[" Ray Point Y"], row[" Ray Point Z"] = (repr(float(x)) for x in hit)
+        for group in ("한길폴건", "반도폴건"):
+            _set_vec(row, group, "Position", (-694.61, 701.29, 698.25))
+        _set_vec(row, "반도숏건", "Position", (-2.99, 4.66, -0.27))
+        rows.append(row)
+    return rows
 
 
 class SkeletonFakeSource(FakeSource):
@@ -375,44 +457,152 @@ class SkeletonFakeSource(FakeSource):
         return raw
 
 
-def test_skeleton_block_returns_joints_bones_and_fit_when_fk_columns_are_present() -> None:
+def test_skeleton_block_returns_joints_bones_and_fit_when_fk_columns_are_present(test_mounts) -> None:  # noqa: ANN001
     block = service.skeleton_block(RawPass(rows=_rows_with_skeleton(0.3)))
-    assert block is not None
-    assert set(simulator_csv.JOINT_KEYS.values()) <= set(block["joints"])
-    assert block["bones"] == [list(pair) for pair in simulator_csv.BONES]
-    assert block["fit"]["source"] == "fk_csv"
-    assert isinstance(block["fit"]["residual_m"], float)
+    assert block.joints is not None
+    assert set(simulator_csv.JOINT_KEYS.values()) <= set(block.joints)
+    assert block.bones == [list(pair) for pair in simulator_csv.BONES]
+    assert block.fit is not None
+    assert block.fit["method"] == "fk_csv_yxz_orient_gravity"
+    assert block.fit["mounts"] == "global_lowo_validated"
+    assert isinstance(block.fit["residual_m"], float)
+    assert block.fit_reason is None
 
 
-def test_skeleton_block_is_none_without_joint_columns() -> None:
-    """`FakeSource`의 원본 행에는 관절 컬럼이 없다 — FK를 못 얻으면 조용히 None이다."""
-    assert service.skeleton_block(FakeSource().load(PassRef(**QUERY))) is None
+def test_skeleton_block_reports_a_reason_without_joint_columns() -> None:
+    """`FakeSource`의 원본 행에는 관절 컬럼이 없다 — 스켈레톤 없이 사유를 낸다."""
+    block = service.skeleton_block(FakeSource().load(PassRef(**QUERY)))
+    assert block.joints is None
+    assert block.fit is None
+    assert block.fit_reason == "no_joint_columns"
+    assert block.fit_note == service.FIT_NOTES["no_joint_columns"]
 
 
-def test_skeleton_anchors_snap_to_the_measured_position_not_the_fk_output() -> None:
-    """FK가 낸 머리·양손이 실측과 어긋나도(리그 오프셋을 3배로 부풀림) 화면에 실릴
-    머리·오른손·왼손은 실측 위치 그대로다(브리프: "실측 점은 실측 위치에 그대로")."""
+def test_skeleton_joints_are_not_snapped_to_the_measured_markers(test_mounts) -> None:  # noqa: ANN001
+    """리그 오프셋을 3배로 부풀려 FK가 실측과 어긋나도 관절을 실측 위치로 덮어쓰지 않는다 —
+    어긋남은 앵커 miss로 드러난다(옛 스냅은 목·전완을 0.46~2.1배로 늘였다)."""
     rows = _rows_with_skeleton(0.3)
     for row in rows:
         for axis in "XYZ":
             for column in simulator_csv.JOINT_COLUMNS:
                 key = f"{column} Position {axis}"
                 if key in row:
-                    row[key] = str(float(row[key]) * 3.0)  # 뼈 길이를 왜곡해 어긋남을 만든다
+                    row[key] = str(float(row[key]) * 3.0)
     raw = RawPass(rows=rows)
     block = service.skeleton_block(raw)
-    assert block is not None
-    assert block["fit"]["residual_m"] > 1e-6, "왜곡한 뼈 길이는 실제로 어긋나야 한다"
-
-    paired = service.measured_pose.measured_frames_with_rows(raw.rows)
-    spraying = [f for f, _ in paired if f.spraying and f.hit is not None]
-    frame = spraying[len(spraying) // 2]
-    assert list(frame.head) == block["joints"]["Head"]
-    assert list(frame.right) == block["joints"]["RightHand"]
-    assert list(frame.left) == block["joints"]["LeftHand"]
+    assert block.fit is not None
+    representative = service.representative_frame(raw)
+    frame = representative.frame
+    assert block.joints["Head"] != list(frame.head)
+    assert block.joints["RightHand"] != list(frame.right)
+    assert max(anchor["miss_cm"] for anchor in block.fit["anchors"]) > 1.0
 
 
-def test_compare_wires_skeleton_into_the_query_layer_only() -> None:
+def test_skeleton_bones_preserved() -> None:
+    """모든 분사 프레임·BONES 쌍에서 배치된 뼈 길이 == 바인드 오프셋 노름(1e-9 m).
+
+    `service.place_frame`이 대표 프레임 배치(`skeleton_block`)가 쓰는 바로 그 경로다."""
+    rows = _consistent_rows(40, 0.02)
+    raw = RawPass(rows=rows)
+    offsets = pose_fk_csv.bind_offsets(rows[0])
+    gun = measured_pose.active_gun(rows)
+    paired = [(f, r) for f, r in measured_pose.measured_frames_with_rows(rows) if f.spraying and f.hit is not None]
+    assert len(paired) == 40
+    for frame, row in paired:
+        sample = skeleton.frame_sample(frame, row, gun, offsets)
+        placed = service.place_frame(sample, _KNOWN_MOUNTS)
+        assert placed is not None
+        for parent, child in simulator_csv.BONES:
+            dist = math.dist(placed.joints[parent], placed.joints[child])
+            assert abs(dist - math.hypot(*offsets[child])) < 1e-9, (frame.index, child)
+    table = service.MountsTable(
+        passed=True,
+        table={"head": _KNOWN_MOUNTS.head, "left": _KNOWN_MOUNTS.left, "right:한길숏건": _KNOWN_MOUNTS.right},
+        grip_limit_m=dict(service.DEFAULT_GRIP_LIMIT_M),
+    )
+    block = service.skeleton_block(raw, mounts_table=table)
+    for parent, child in simulator_csv.BONES:
+        dist = math.dist(block.joints[parent], block.joints[child])
+        assert abs(dist - math.hypot(*offsets[child])) < 1e-9, child
+
+
+def test_anchor_miss_is_reported_not_hidden(test_mounts) -> None:  # noqa: ANN001
+    raw = RawPass(rows=_rows_with_skeleton(0.3))
+    block = service.skeleton_block(raw)
+    frame = service.representative_frame(raw).frame
+    measured = {"head": frame.head, "right": frame.right, "left": frame.left}
+    assert {a["point"] for a in block.fit["anchors"]} == {"head", "right", "left"}
+    for anchor in block.fit["anchors"]:
+        assert anchor["measured_marker"] == list(measured[anchor["point"]])
+        dist = math.dist(anchor["predicted_marker"], anchor["measured_marker"])
+        assert abs(anchor["miss_cm"] - dist * 100.0) < 1e-9
+        assert anchor["miss_display"] == f"{anchor['miss_cm']:.1f}cm"
+
+
+def test_pass_fit_excludes_representative_frame() -> None:
+    """폴백 적합 재료에 대표 프레임 ±1.0 s가 없다 — 표본 안 잔차를 검증값처럼 보이지 않게."""
+    rows = _consistent_rows(240, 0.02)
+    raw = RawPass(rows=rows)
+    representative = service.representative_frame(raw)
+    offsets = pose_fk_csv.bind_offsets(rows[0])
+    samples = service.pass_fit_samples(representative, offsets)
+    assert len(samples) >= service.PASS_FIT_MIN_FRAMES
+    centre = representative.frame.time_sec
+    assert all(abs(sample.time_sec - centre) > service.PASS_FIT_EXCLUDE_SEC for sample in samples)
+    assert representative.frame.index not in {sample.index for sample in samples}
+
+    block = service.skeleton_block(raw, mounts_table=_UNVALIDATED)
+    assert block.fit is not None
+    assert block.fit["mounts"] == "pass_fit_holdout"
+    assert "적합 잔차" in block.fit["residual_label"]
+    assert all(anchor["miss_display"].startswith("적합 잔차 ") for anchor in block.fit["anchors"])
+    # 합성 실측은 알려진 장착에서 만들었으므로 패스 적합이 그것을 되찾아 대표 프레임에서 거의 맞는다.
+    assert max(anchor["miss_cm"] for anchor in block.fit["anchors"]) < 1.0
+
+
+def test_pass_fit_without_sixty_frames_outside_the_window_draws_no_skeleton() -> None:
+    raw = RawPass(rows=_consistent_rows(80, 0.02))  # 1.6 s — 대표 프레임 ±1.0 s를 빼면 60 미만
+    block = service.skeleton_block(raw, mounts_table=_UNVALIDATED)
+    assert block.joints is None
+    assert block.fit_reason == "mounts_unavailable"
+
+
+def test_fit_notes_disclose_estimate(test_mounts) -> None:  # noqa: ANN001
+    block = service.skeleton_block(RawPass(rows=_rows_with_skeleton(0.3)))
+    notes = block.fit["notes"]
+    assert "아바타 추정" in notes[0] and "측정값이 아닙니다" in notes[0]
+    assert "중력 방향" in notes[1]
+    assert any("목·윗가슴 관절이 없고" in note for note in notes)
+    assert block.fit["offset_line_label"] == "보정 오프셋(적합값)"
+    assert "적합 잔차" not in block.fit["residual_label"]
+
+    fitted = service.skeleton_block(RawPass(rows=_consistent_rows(240, 0.02)), mounts_table=_UNVALIDATED)
+    assert "아바타 추정" in fitted.fit["notes"][0]
+    assert "적합 잔차" in fitted.fit["residual_label"]
+
+
+def test_faded_only_when_gravity_correction_exceeds_twenty_degrees(test_mounts) -> None:  # noqa: ANN001
+    raw = RawPass(rows=_rows_with_skeleton(0.3))
+    block = service.skeleton_block(raw)
+    representative = service.representative_frame(raw)
+    offsets = pose_fk_csv.bind_offsets(raw.rows[0])
+    mounts = skeleton.mounts_for(_TEST_MOUNTS.table, representative.gun)
+    base = skeleton.place_oriented(
+        *(lambda s: (s.local_pos, s.local_rot, s.measured))(
+            skeleton.frame_sample(representative.frame, representative.row, representative.gun, offsets)
+        ),
+        mounts,
+    )
+    import dataclasses
+
+    for gravity, expected in ((20.0, False), (20.0001, True), (3.0, False)):
+        placed = dataclasses.replace(base, gravity_correction_deg=gravity)
+        fit = service._fit_view(placed, representative, service.MOUNTS_GLOBAL, mounts, offsets, {})  # noqa: SLF001
+        assert fit["faded"] is expected, gravity
+    assert block.fit["faded"] is (block.fit["gravity_correction_deg"] > 20.0)
+
+
+def test_compare_wires_skeleton_into_the_query_layer_only(test_mounts) -> None:  # noqa: ANN001
     result = service.compare(SkeletonFakeSource(), PassRef(**QUERY), PassRef(**REFERENCE))
     assert result["status"] == "ok"
     view = result["view"]
@@ -421,10 +611,11 @@ def test_compare_wires_skeleton_into_the_query_layer_only() -> None:
     assert "joints" not in view["layers"]["reference"], "레퍼런스 층에는 스켈레톤을 얹지 않는다"
     assert "joints" not in view["layers"]["corrected"], "교정 후 층에는 스켈레톤을 얹지 않는다"
     assert view["fit"] is not None
-    assert view["fit"]["source"] == "fk_csv"
+    assert view["fit"]["method"] == "fk_csv_yxz_orient_gravity"
+    assert "source" not in view["fit"]
 
 
-def test_new_joints_are_added_to_weights_at_zero_and_covered_by_the_existing_invariant() -> None:
+def test_new_joints_are_added_to_weights_at_zero_and_covered_by_the_existing_invariant(test_mounts) -> None:  # noqa: ANN001
     """새 관절은 전부 weights에 0.0으로 들어간다(브리프) — 채점에는 안 들어가지만
     "weights가 그리는 모든 점을 덮는다"는 일반 불변량은 여전히 성립해야 한다."""
     result = service.compare(SkeletonFakeSource(), PassRef(**QUERY), PassRef(**REFERENCE))
@@ -433,14 +624,72 @@ def test_new_joints_are_added_to_weights_at_zero_and_covered_by_the_existing_inv
     assert joints, "이 픽스처는 스켈레톤이 실려야 한다"
     for name in joints:
         assert view["weights"].get(name) == 0.0, name
-    # 일반 불변량: 질의 층이 그리는 최상위 점 이름(궤적) 전부 여전히 weights에 있다.
     drawn_points = {name for name in view["layers"]["query"] if name not in ("hit", "joints", "bones")}
     assert drawn_points <= set(view["weights"])
+
+
+def test_frame_arrow_starts_at_measured_marker(test_mounts) -> None:  # noqa: ANN001
+    """화살표의 대표 프레임 시작점은 그 점의 대표 프레임 실측 마커와 **정확히** 같다."""
+    result = service.compare(SkeletonFakeSource(), PassRef(**QUERY), PassRef(**REFERENCE))
+    view = result["view"]
+    markers = {anchor["point"]: anchor["measured_marker"] for anchor in view["fit"]["anchors"]}
+    drawn = [arrow for arrow in view["corrections"] if arrow["from_frame"] is not None]
+    assert drawn, "스켈레톤이 있으면 대표 프레임 화살표가 있어야 한다"
+    for arrow in drawn:
+        assert math.dist(arrow["from_frame"], markers[arrow["point"]]) == 0.0
+        metres = arrow["magnitude_cm"] / 100.0
+        for i in range(3):
+            assert arrow["to_frame"][i] == arrow["from_frame"][i] + arrow["unit"][i] * metres
+    assert any(arrow["from_frame"] != arrow["from"] for arrow in drawn)
+
+
+def test_frame_arrows_are_null_without_skeleton() -> None:
+    view = _compare()["view"]
+    assert view["corrections"]
+    assert all(arrow["from_frame"] is None and arrow["to_frame"] is None for arrow in view["corrections"])
 
 
 def test_view_fit_is_null_when_skeleton_is_unavailable() -> None:
     view = _compare()["view"]
     assert view["fit"] is None
+    assert view["fit_reason"] == "no_joint_columns"
+    assert view["fit_note"] == service.FIT_NOTES["no_joint_columns"]
+    assert view["display_errors"] == []
+    assert view["legend_notes"][0] == "교정 화살표는 건·HMD 실측 마커에서 나갑니다"
+
+
+def test_mesh_view_carries_reason_text() -> None:
+    unverified = service.mesh_block("1")
+    assert unverified["reason"] == "unverified_alignment"
+    assert unverified["reason_text"] == service.MESH_REASON_TEXT["unverified_alignment"]
+    missing = service.mesh_block("99")
+    assert missing["reason"] == "no_alignment_record"
+    solved = service.mesh_block(str(_first_solved_level()))
+    assert solved["available"] is True and solved["reason"] is None and solved["reason_text"] is None
+
+
+def test_mesh_view_passes_handedness_evidence_through(monkeypatch: pytest.MonkeyPatch) -> None:
+    level = _first_solved_level()
+    evidence = {
+        "gun_occlusion": {"P": 0.0, "mirror": 1.0},
+        "hmd_occlusion": {"P": 0.01, "mirror": 0.9},
+        "flash_occlusion_report": {"P": 0.0, "mirror": 0.5},
+        "rule_doc": "docs/measurements/2026-09-15-fixed-linear-alignment-rule.md",
+        "posthoc_parts": ["G_occ_gun", "uniqueness"],
+    }
+    real = service._alignment_entry  # noqa: SLF001
+
+    def with_evidence(lv: int):  # noqa: ANN202
+        entry = dict(real(lv) or {})
+        entry.update({"handedness_source": "data:occlusion_gun+hmd", "handedness_evidence": evidence})
+        return entry
+
+    monkeypatch.setattr(service, "_alignment_entry", with_evidence)
+    block = service.mesh_block(str(level))
+    assert block["handedness_source"] == "data:occlusion_gun+hmd"
+    assert block["handedness_evidence"] == evidence
+    assert block["handedness_note"] == service.HANDEDNESS_NOTE
+    assert service.mesh_block(str(level))["available"] is True
 
 
 def test_deviation_cm_is_the_local_delta_norm_in_centimetres() -> None:

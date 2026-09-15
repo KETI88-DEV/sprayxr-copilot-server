@@ -498,12 +498,12 @@ def _split_details(
     before_split_score: float | None = None
     ceiling_split: float | None = None
     if raw_a is not None:
-        body_a = service.compare(source, query, reference, spreads=service._scale_spreads(raw_a))  # noqa: SLF001
+        body_a = service.compare(source, query, reference, spreads=service._scale_spreads(raw_a), include_view=False)  # noqa: SLF001
         if body_a.get("status") == "ok":
             a_measured = body_a["measured"]
             a_fired = bool(a_measured.get("finding")) or bool(a_measured.get("stance"))
     if raw_b is not None:
-        body_b = service.compare(source, query, reference, spreads=service._scale_spreads(raw_b))  # noqa: SLF001
+        body_b = service.compare(source, query, reference, spreads=service._scale_spreads(raw_b), include_view=False)  # noqa: SLF001
         if body_b.get("status") == "ok":
             b_measured = body_b["measured"]
             before_split_score = b_measured["score"]
@@ -529,8 +529,10 @@ def run_pair(
             gate=None, gate_reason=None, normalization=None, fired=None, split_fired=None,
             ceiling=None, before_same_score=None, before_split_score=None,
         )
+    # 채점 필드만 받는다 — 표시 블록(스켈레톤·메시·각도표)의 비용·예외가 개선율 측정을
+    # 흔들지 않게 한다(`service.compare` 독스트링).
     body = service.compare(
-        source, pair.query, pair.reference, reference_spreads=reference_spreads
+        source, pair.query, pair.reference, reference_spreads=reference_spreads, include_view=False
     )
     if body.get("status") != "ok":
         return Outcome(
