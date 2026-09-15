@@ -182,9 +182,14 @@ button { font-family: var(--sans); cursor: pointer; }
 }
 .btn-ghost:hover { border-color: var(--accent); }
 
+/* 넓은 창에서는 필드 이름을 선택 상자 왼쪽에 둔다 — ①이 낮아진 만큼 3D 캔버스와 그 아래 고지 줄이 첫 화면에 들어온다. */
+@media (min-width: 80rem) {
+  .picker-row { align-items: center; }
+  .picker-row .field { flex-direction: row; align-items: center; gap: 0.5rem; white-space: nowrap; }
+}
 .picker-foot {
-  margin-top: var(--sp-2);
-  padding-top: var(--sp-2);
+  margin-top: var(--sp-1);
+  padding-top: var(--sp-1);
   border-top: 1px solid var(--border);
   display: flex;
   flex-wrap: wrap;
@@ -296,8 +301,8 @@ button { font-family: var(--sans); cursor: pointer; }
   grid-template-columns: 1.75rem minmax(0, 1fr) auto 5rem;
   align-items: baseline;
   column-gap: var(--sp-3);
-  row-gap: 0.15rem;
-  padding: var(--sp-2) 0;
+  row-gap: 0.1rem;
+  padding: 0.3rem 0;
   border-bottom: 1px solid var(--border);
 }
 .correction-item:last-child { border-bottom: none; }
@@ -316,7 +321,12 @@ button { font-family: var(--sans); cursor: pointer; }
   align-self: center;
 }
 .correction-text { font-size: var(--fs-lg); font-weight: 500; color: var(--text); line-height: 1.35; }
-.correction-item[data-text-mode="axis_only"] .correction-text { color: var(--text-dim); }
+/* 한국어 문장은 어절(띄어쓰기)에서만 줄을 바꾼다 — 기본값은 음절 사이에서 끊어 '옮기세/요.'가 됐다. */
+.correction-text, .correction-trace-text, .view3d-notes, .view3d-wall-note, .orientation-notes,
+.orientation-header-note, .improvement-row dd, .hero-empty-body {
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
 .correction-text-reason { font-size: var(--fs-sm); color: var(--text-dim); font-weight: 400; }
 .correction-cm {
   font-family: var(--mono);
@@ -354,6 +364,15 @@ button { font-family: var(--sans); cursor: pointer; }
 
 /* ---- ④ 개선율 ------------------------------------------------------------- */
 
+/* 제목과 "유사도 → 교정 후" 줄을 한 줄에 둔다 — 넓은 창 왼쪽 열에서 ④b가 첫 화면에 들어오게. */
+.improvement {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: var(--sp-4);
+  align-items: baseline;
+}
+.improvement > .section-title { margin: 0; }
+.improvement-rows { grid-column: 1 / -1; }
 .improvement-score {
   display: flex;
   flex-wrap: wrap;
@@ -558,6 +577,22 @@ dd { margin: 0; font-family: var(--mono); }
   transform: translate(-50%, -50%);
 }
 .view3d-label-miss { color: var(--text); }
+.view3d-label-offset { color: var(--text-dim); }
+.view3d-host .view3d-wall-note {
+  position: absolute;
+  top: 0.5rem;
+  left: 0.5rem;
+  max-width: min(46rem, calc(100% - 1rem));
+  margin: 0;
+  padding: 0.35rem 0.6rem;
+  background: rgba(8, 10, 15, 0.9);
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  color: var(--text);
+  font-size: var(--fs-sm);
+  line-height: 1.4;
+  pointer-events: none;
+}
 .view3d-legend {
   display: flex;
   flex-wrap: wrap;
@@ -581,7 +616,7 @@ dd { margin: 0; font-family: var(--mono); }
   padding: 0;
   font-size: var(--fs-sm);
   color: var(--text-dim);
-  line-height: 1.4;
+  line-height: 1.32;
 }
 .view3d-notes:empty { display: none; }
 .view3d-wall-note, .view3d-errors, .view3d-note {

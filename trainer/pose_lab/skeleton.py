@@ -188,6 +188,95 @@ def _as_tuple(v: np.ndarray) -> Vec3:
     return (float(v[0]), float(v[1]), float(v[2]))
 
 
+# --- 다리 해부학 범위(표시 규칙, 게이트 아님) ------------------------------------------
+#
+# 다리 관절에는 추적 장치가 없다 — HMD·건·플래쉬 세 강체에서 시뮬레이터 IK가 지은 값이다. 학습모드
+# 25세션의 분사 프레임 89,460개(리그 좌표, RIG_UP 기준)에서 무릎이 발끝 반대로 꺾이거나 두 발이 교차하는
+# 프레임이 흔했다. 아래 문턱은 그 분포를 **본 뒤** 정한 표시 규칙이다(스크래치패드 r2/plaus.py·plaus2.py):
+# 무릎 굴곡 ≤110°(74.3% 충족), 굽은 무릎(≥20°)의 굽는 방향과 발끝 방향 사이 ≤60°(71.2%), 좌우 발끝의
+# 수평 벌어짐 ≤60°(65.3%), 골반→양발 중점의 수직 기울기 ≤25°(81.9%), 다리 교차 없음(89.0%). 다섯 개를
+# 모두 충족하는 프레임은 37.1%였다. 채점·교정은 이 값을 읽지 않는다 — 대표 프레임 선택과 다리 표시에만 쓴다.
+LEG_LIMITS: Final[dict[str, float]] = {
+    "knee_flex_deg": 110.0,
+    "knee_toe_deg": 60.0,
+    "toe_splay_deg": 60.0,
+    "leg_tilt_deg": 25.0,
+}
+KNEE_BENT_DEG: Final = 20.0
+LEG_JOINTS: Final[tuple[str, ...]] = (
+    "LeftThigh", "LeftCalf", "LeftFoot", "LeftToe",
+    "RightThigh", "RightCalf", "RightFoot", "RightToe",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class LegCheck:
+    knee_flex_deg: float  # 두 다리 중 큰 값
+    knee_toe_deg: float  # 굽은 무릎(≥ KNEE_BENT_DEG)만 본다. 두 다리 중 큰 값, 둘 다 곧으면 0
+    toe_splay_deg: float
+    legs_crossed: bool
+    leg_tilt_deg: float
+    plausible: bool
+
+    def as_dict(self) -> dict[str, float | bool]:
+        return {
+            "knee_flex_deg": self.knee_flex_deg,
+            "knee_toe_deg": self.knee_toe_deg,
+            "toe_splay_deg": self.toe_splay_deg,
+            "legs_crossed": self.legs_crossed,
+            "leg_tilt_deg": self.leg_tilt_deg,
+        }
+
+
+def leg_check(local_pos: Mapping[str, Vec3]) -> LegCheck | None:
+    """리그 좌표(RIG_UP이 위)에서 다리가 해부학 범위 안인지. 다리 관절이 하나라도 없으면 None.
+
+    무릎 굽는 방향은 엉덩이→발목 선에 수직인 무릎 성분이다. 사람 무릎은 발끝 쪽으로 굽는다 —
+    반대로 꺾이면(각이 크면) 범위 밖이다. 각이 정의되지 않으면(NaN) 범위 밖으로 본다.
+    """
+    names = ("Pelvis",) + LEG_JOINTS
+    if any(name not in local_pos for name in names):
+        return None
+    p = {name: np.array(local_pos[name], dtype=float) for name in names}
+    up = np.array(RIG_UP, dtype=float)
+
+    def flat(v: np.ndarray) -> np.ndarray:
+        return v - float(np.dot(v, up)) * up
+
+    flexes: list[float] = []
+    knee_toes: list[float] = []
+    for side in ("Left", "Right"):
+        hip, knee, ankle, toe = p[side + "Thigh"], p[side + "Calf"], p[side + "Foot"], p[side + "Toe"]
+        flex = 180.0 - _angle_between_deg(hip - knee, ankle - knee)
+        flexes.append(flex)
+        if flex >= KNEE_BENT_DEG:
+            line = ankle - hip
+            t = float(np.dot(knee - hip, line) / np.dot(line, line))
+            bend = knee - (hip + t * line)
+            knee_toes.append(_angle_between_deg(bend, toe - ankle))
+        else:
+            knee_toes.append(0.0)
+    splay = _angle_between_deg(flat(p["LeftToe"] - p["LeftFoot"]), flat(p["RightToe"] - p["RightFoot"]))
+    crossed = bool(np.dot(p["LeftFoot"] - p["RightFoot"], p["LeftThigh"] - p["RightThigh"]) <= 0.0)
+    feet = (p["LeftFoot"] + p["RightFoot"]) / 2.0
+    tilt = _angle_between_deg(p["Pelvis"] - feet, up)
+    values = {
+        "knee_flex_deg": max(flexes),
+        "knee_toe_deg": max(knee_toes),
+        "toe_splay_deg": splay,
+        "leg_tilt_deg": tilt,
+    }
+    within = all(math.isfinite(values[key]) and values[key] <= limit for key, limit in LEG_LIMITS.items())
+    return LegCheck(
+        knee_flex_deg=values["knee_flex_deg"],
+        knee_toe_deg=values["knee_toe_deg"],
+        toe_splay_deg=values["toe_splay_deg"],
+        legs_crossed=crossed,
+        leg_tilt_deg=values["leg_tilt_deg"],
+        plausible=within and not crossed,
+    )
+
+
 def _as_matrix(m: np.ndarray) -> Matrix:
     return (_as_tuple(m[0]), _as_tuple(m[1]), _as_tuple(m[2]))
 

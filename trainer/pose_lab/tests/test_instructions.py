@@ -125,13 +125,25 @@ def test_compare_survives_phrase_error(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_wall_text_degrades_when_surface_angle_large() -> None:
+    """착탄면과 30° 넘게 어긋난 wall 축은 '벽 쪽으로'라고 쓰지 않되, 수평 법선의 부호가 정확히 말하는
+    '착탄 궤적 쪽/에서'로 **방향을 유지**한다. 부호가 뒤집히면(붙이↔띄우, 다가서↔물러서) 실패한다."""
     correction = _c("right", "wall", -15.350920007369856, "붙이")
     text, mode = instructions.axis_text(correction, 45.0)
-    assert mode == "axis_only"
-    assert text == (
-        "오른손(건)을 벽(스트로크 기준) 축으로 15.4cm 옮기세요 — 실제 착탄면 법선과 45° 어긋난 축이라 "
-        "방향 대신 수치로 안내합니다."
+    assert mode == "stroke_relative"
+    assert text == "오른손(건)을 착탄 궤적 쪽으로 수평으로 15.4cm 붙이세요."
+    away = instructions.axis_text(_c("right", "wall", 8.8, "띄우"), 83.0)
+    assert away == ("오른손(건)을 착탄 궤적에서 수평으로 8.8cm 띄우세요.", "stroke_relative")
+    assert instructions.axis_text(_c("head", "wall", -45.4, "붙이"), 83.0) == (
+        "착탄 궤적 쪽으로 수평으로 45.4cm 더 다가서세요.", "stroke_relative"
     )
+    assert instructions.axis_text(_c("head", "wall", 4.4, "띄우"), 83.0) == (
+        "착탄 궤적에서 수평으로 4.4cm 더 물러서세요.", "stroke_relative"
+    )
+    # 머리 문장의 부호는 착탄면 각과 무관하게 방향 문장(HEAD_PHRASES)과 같다.
+    for magnitude in (-3.0, 3.0):
+        near = instructions.axis_text(_c("head", "wall", magnitude, "붙이" if magnitude < 0 else "띄우"), 10.0)[0]
+        far = instructions.axis_text(_c("head", "wall", magnitude, "붙이" if magnitude < 0 else "띄우"), 80.0)[0]
+        assert ("떨어져" in near) == ("물러서" in far)
     assert instructions.axis_text(correction, 29.0)[1] == "directive"
     assert instructions.axis_text(correction, 30.0)[1] == "directive"
     assert instructions.axis_text(correction, None)[1] == "directive"

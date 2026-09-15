@@ -551,8 +551,20 @@ FIT_NOTES: Final[dict[str, str]] = {
 }
 LEGEND_NOTES: Final[tuple[str, ...]] = (
     "교정 화살표는 건·HMD 실측 마커에서 나갑니다",
-    "뼈 = 아바타 추정 · 구체 = 실측",
+    "뼈 = 아바타 추정(다리는 추적 장치 없음·흐리게) · 구체 = 실측",
     "● 대표 프레임 실측 · ○ 패스 평균",
+)
+
+# 대표 스켈레톤 프레임 탐색: 분사 구간 가운데에서 가까운 순서로 이만큼만 FK를 돈다(프레임당 약 0.9 ms).
+LEG_SEARCH_MAX: Final = 120
+LEGS_HIDDEN_NOTE: Final = (
+    "이 패스의 분사 프레임에서는 IK 다리가 해부학 범위(무릎이 발끝 쪽으로 굽음·두 발 교차 없음 등)를 "
+    "벗어나 다리를 기본으로 숨겼습니다 — 툴바 '다리(IK)'로 켤 수 있습니다."
+)
+LEGS_SHOWN_NOTE: Final = "다리는 추적 장치 없이 시뮬레이터 IK가 지은 자세라 흐리게 그렸습니다."
+LEGS_PICKED_NOTE: Final = (
+    "다리는 추적 장치 없이 시뮬레이터 IK가 지은 자세라 흐리게 그렸고, 분사 구간 가운데에서 {k}프레임 "
+    "떨어진 — 무릎·발끝이 해부학 범위 안인 — 프레임을 대표로 골랐습니다."
 )
 
 
@@ -624,6 +636,49 @@ def representative_frame(raw: RawPass) -> Representative | None:
     return Representative(frame=frame, row=row, gun=gun, spraying=spraying)
 
 
+@dataclass(frozen=True, slots=True)
+class SkeletonFrame:
+    """스켈레톤을 세울 프레임. `offset_frames`는 분사 구간 가운데 프레임에서 떨어진 프레임 수다."""
+
+    representative: Representative
+    sample: skeleton.FrameSample
+    legs: skeleton.LegCheck | None
+    offset_frames: int
+    searched: int
+
+
+def skeleton_frame(representative: Representative, offsets: Mapping[str, Vec3]) -> SkeletonFrame | None:
+    """분사 구간 **가운데에서 가까운 순서로** 최대 `LEG_SEARCH_MAX` 프레임을 보고, IK 다리가 해부학
+    범위 안(`skeleton.leg_check`)인 첫 프레임을 고른다. 없으면 가운데 프레임(다리는 화면이 숨긴다).
+
+    다리는 측정값이 아니다 — 이 선택은 실측 마커·교정 수치를 바꾸지 않고, 고른 프레임의 실측 마커가
+    그대로 화살표 시작점이 된다(`from_frame`). 무엇을 골랐는지는 `fit.legs`와 notes로 드러낸다.
+    """
+    spraying = representative.spraying
+    if not spraying or not offsets:
+        return None
+    middle = len(spraying) // 2
+    order = sorted(range(len(spraying)), key=lambda i: (abs(i - middle), i))[:LEG_SEARCH_MAX]
+    first: tuple[int, skeleton.FrameSample, skeleton.LegCheck | None] | None = None
+    for count, index in enumerate(order, 1):
+        frame, row = spraying[index]
+        sample = skeleton.frame_sample(frame, row, representative.gun, offsets)
+        if sample is None:
+            continue
+        legs = skeleton.leg_check(sample.local_pos)
+        if first is None:
+            first = (index, sample, legs)
+        if legs is not None and legs.plausible:
+            chosen = Representative(frame=frame, row=row, gun=representative.gun, spraying=spraying)
+            return SkeletonFrame(chosen, sample, legs, abs(index - middle), count)
+    if first is None:
+        return None
+    index, sample, legs = first
+    frame, row = spraying[index]
+    chosen = Representative(frame=frame, row=row, gun=representative.gun, spraying=spraying)
+    return SkeletonFrame(chosen, sample, legs, abs(index - middle), len(order))
+
+
 def pass_fit_samples(
     representative: Representative, offsets: Mapping[str, Vec3]
 ) -> list[skeleton.FrameSample]:
@@ -685,6 +740,8 @@ def _fit_view(
     mounts: skeleton.Mounts,
     offsets: Mapping[str, Vec3],
     grip_limit_m: Mapping[str, float],
+    *,
+    chosen: SkeletonFrame | None = None,
 ) -> dict[str, object]:
     gravity = placed.gravity_correction_deg
     faded = gravity > FADE_GRAVITY_DEG
@@ -693,6 +750,14 @@ def _fit_view(
         notes.append(f"실측 회전과 수직 가정이 {gravity:.0f}° 어긋나 몸을 중력 방향으로 세워 그렸습니다(흐리게 표시).")
     else:
         notes.append(f"몸의 수직은 중력 방향으로 맞춘 값입니다(보정 {gravity:.0f}°).")
+    legs = None if chosen is None else chosen.legs
+    if legs is not None:
+        if not legs.plausible:
+            notes.append(LEGS_HIDDEN_NOTE)
+        elif chosen is not None and chosen.offset_frames > 0:
+            notes.append(LEGS_PICKED_NOTE.format(k=chosen.offset_frames))
+        else:
+            notes.append(LEGS_SHOWN_NOTE)
     notes.append(
         f"이 CSV 리그에는 목·윗가슴 관절이 없고 골반→머리가 {_torso_length_m(offsets):.2f}m라 "
         "몸통이 짧게 보입니다(리그 값 그대로 그렸습니다)."
@@ -734,10 +799,28 @@ def _fit_view(
                 "measured_marker": list(fit.measured_marker),
                 "miss_cm": fit.miss_m * 100.0,
                 "miss_display": f"{prefix}{fit.miss_m * 100.0:.1f}cm",
+                # 파지 상한을 넘는 보정 오프셋에만 3D 선 위 라벨을 단다 — 손과 건 마커가 떨어진 이유가
+                # 그 선에서 바로 읽히게(notes의 파지 고지와 같은 조건).
+                "offset_display": (
+                    f"보정 오프셋 {right_norm:.2f}m(적합값)"
+                    if fit.point == "right" and right_norm is not None and limit is not None and right_norm > limit
+                    else None
+                ),
             }
             for fit in placed.anchors
         ],
         "notes": notes,
+        "legs": None
+        if legs is None or chosen is None
+        else {
+            "plausible": legs.plausible,
+            "joints": list(skeleton.LEG_JOINTS),
+            "checks": legs.as_dict(),
+            "limits": dict(skeleton.LEG_LIMITS),
+            "frame_offset": chosen.offset_frames,
+            "searched_frames": chosen.searched,
+        },
+        "legs_visible_default": bool(legs is not None and legs.plausible),
     }
 
 
@@ -762,9 +845,11 @@ def skeleton_block(
         return _skeleton_failure("no_joint_columns", representative)
     if representative is None:
         return _skeleton_failure("no_spraying_frame")
-    sample = skeleton.frame_sample(representative.frame, representative.row, representative.gun, offsets)
-    if sample is None:
+    chosen = skeleton_frame(representative, offsets)
+    if chosen is None:
         return _skeleton_failure("no_joint_columns", representative)
+    representative = chosen.representative
+    sample = chosen.sample
 
     table = mounts_table if mounts_table is not None else load_mounts()
     global_mounts = skeleton.mounts_for(table.table, representative.gun)
@@ -785,7 +870,7 @@ def skeleton_block(
     return SkeletonResult(
         joints={name: list(position) for name, position in placed.joints.items()},
         bones=[list(pair) for pair in simulator_csv.BONES],
-        fit=_fit_view(placed, representative, kind, mounts, offsets, table.grip_limit_m),
+        fit=_fit_view(placed, representative, kind, mounts, offsets, table.grip_limit_m, chosen=chosen),
         fit_reason=None,
         fit_note=None,
         markers={fit.point: fit.measured_marker for fit in placed.anchors},
@@ -872,6 +957,41 @@ def placed_mesh(level_text: str) -> MeshResult | None:
     return MeshResult(level=level, mesh=level_mesh.place(mesh, alignment), reason=None, entry=entry)
 
 
+def _solved_levels() -> list[int]:
+    try:
+        entries = json.loads(level_mesh.ALIGNMENT_PATH.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return []
+    return sorted(int(e["level"]) for e in entries if e.get("provenance") == "solved")
+
+
+def _mesh_reason_detail(entry: Mapping[str, Any]) -> str | None:
+    """정렬 기록이 **왜** 미검증인지 기록에서 읽는다(레벨 번호로 분기하지 않는다)."""
+    attempt = entry.get("front_face_attempt") or entry.get("fixed_linear_attempt")
+    if not isinstance(attempt, Mapping):
+        return None
+    passed = attempt.get("candidates_passed_A")
+    if passed == 1:
+        return (
+            "위치·표면 검증을 통과한 정렬은 하나로 좁혔지만, 벽의 앞뒤 뒤집힘(손대칭)을 사전등록한 검사로 "
+            "확정하지 못했습니다."
+        )
+    if passed == 0:
+        return "위치·표면 검증(모델 UV 잔차)을 통과한 정렬 후보가 없습니다."
+    return None
+
+
+def _evidence_display(evidence: Mapping[str, Any] | None) -> str | None:
+    if not isinstance(evidence, Mapping):
+        return None
+    parts = []
+    for key, label in (("gun_occlusion", "건 가림"), ("hmd_back_face", "HMD 뒤편 비율")):
+        pair = evidence.get(key)
+        if isinstance(pair, Mapping) and isinstance(pair.get("P"), (int, float)) and isinstance(pair.get("mirror"), (int, float)):
+            parts.append(f"{label} 채택 {pair['P']:.3f} / 거울 {pair['mirror']:.3f}")
+    return " · ".join(parts) if parts else None
+
+
 def mesh_view(result: MeshResult | None) -> dict[str, object] | None:
     if result is None:
         return None
@@ -887,9 +1007,16 @@ def mesh_view(result: MeshResult | None) -> dict[str, object] | None:
         {
             "reason": result.reason,
             "reason_text": None if result.reason is None else MESH_REASON_TEXT[result.reason],
+            "reason_detail": _mesh_reason_detail(entry) if result.reason == "unverified_alignment" else None,
+            "reason_hint": (
+                "벽면이 검증된 레벨: " + "·".join(str(level) for level in _solved_levels())
+                if result.reason == "unverified_alignment" and _solved_levels()
+                else None
+            ),
             "handedness_source": entry.get("handedness_source"),
             "handedness_evidence": evidence,
             "handedness_note": HANDEDNESS_NOTE if evidence else None,
+            "handedness_evidence_display": _evidence_display(evidence) if result.mesh is not None else None,
         }
     )
     return view
@@ -915,9 +1042,12 @@ def _mesh_error_view(level_text: str) -> dict[str, object] | None:
         **_NO_MESH,
         "reason": "display_error",
         "reason_text": MESH_REASON_TEXT["display_error"],
+        "reason_detail": None,
+        "reason_hint": None,
         "handedness_source": None,
         "handedness_evidence": None,
         "handedness_note": None,
+        "handedness_evidence_display": None,
     }
 
 

@@ -649,6 +649,137 @@ def test_frame_arrows_are_null_without_skeleton() -> None:
     assert all(arrow["from_frame"] is None and arrow["to_frame"] is None for arrow in view["corrections"])
 
 
+# 실데이터(전형기 3_1000444_1) 첫 행의 휴지 자세 관절 회전. 리그 +Z가 위로 서고 무릎이 발끝 쪽으로 약간 굽는다.
+_REST_ROTATIONS: dict[str, tuple[float, float, float]] = {
+    "Pelvis": (270.0, 90.0, 0.0),
+    "Spine": (0.0, 0.0, 0.0),
+    "Chest": (0.0, 0.0, 359.6),
+    "Left Thigh": (359.9, 179.0, 358.6),
+    "Left Calf": (0.0, 0.0, 14.7),
+    "Left Foot": (354.9, 2.1, 348.2),
+    "Left Toe": (0.0, 0.0, 270.0),
+    "Right Thigh": (0.1, 181.0, 358.6),
+    "Right Calf": (0.0, 0.0, 14.7),
+    "Right Foot": (5.1, 357.9, 348.2),
+    "Right Toe": (0.0, 0.0, 270.0),
+}
+_BACKWARD_KNEES = {**_REST_ROTATIONS, "Left Calf": (0.0, 0.0, -40.0), "Right Calf": (0.0, 0.0, -40.0)}
+
+
+def _set_rotations(row: dict[str, str], rotations) -> None:  # noqa: ANN001
+    for column, value in rotations.items():
+        _set_vec(row, column, "Rotation", value)
+
+
+def _fk_local(rotations) -> dict:  # noqa: ANN001
+    row: dict[str, str] = {}
+    for column in simulator_csv.JOINT_COLUMNS:
+        _set_vec(row, column, "Position", _SKELETON_OFFSETS.get(simulator_csv.JOINT_KEYS[column], (0.0, 0.0, 0.0)))
+        _set_vec(row, column, "Rotation", rotations.get(column, (0.0, 0.0, 0.0)))
+    return pose_fk_csv.forward_kinematics(row, pose_fk_csv.bind_offsets(row))
+
+
+def _legs(knee_x: float, left_ankle_y: float = 0.1) -> dict:
+    """리그 +Z가 위인 곧은 다리. `knee_x`만큼 무릎이 앞(+X, 발끝 방향)으로 나온다."""
+    pose = {"Pelvis": (0.0, 0.0, 0.05)}
+    for side, y, ankle_y in (("Left", 0.1, left_ankle_y), ("Right", -0.1, -left_ankle_y)):
+        pose[side + "Thigh"] = (0.0, y, 0.0)
+        pose[side + "Calf"] = (knee_x, y, -0.415)
+        pose[side + "Foot"] = (0.0, ankle_y, -0.83)
+        pose[side + "Toe"] = (0.15, ankle_y, -0.85)
+    return pose
+
+
+def test_leg_check_flags_backward_knees_and_crossed_feet() -> None:
+    """무릎이 발끝 반대로 꺾이거나 두 발이 교차하면 해부학 범위 밖이다. 휴지 자세(실데이터 회전)는 범위 안이다."""
+    assert skeleton.leg_check(_fk_local(_REST_ROTATIONS)).plausible is True
+    assert skeleton.leg_check(_fk_local(_BACKWARD_KNEES)).plausible is False
+
+    forward = skeleton.leg_check(_legs(0.12))
+    # 발끝이 약간 아래(−0.02 m)를 향해 굽는 방향과 7.6° 차이가 난다 — 같은 쪽이라는 뜻이다.
+    assert forward.knee_flex_deg >= skeleton.KNEE_BENT_DEG and forward.knee_toe_deg < 15.0 and forward.plausible
+    backward = skeleton.leg_check(_legs(-0.12))
+    assert backward.knee_toe_deg > 170.0 and backward.plausible is False
+    crossed = skeleton.leg_check(_legs(0.12, left_ankle_y=-0.1))
+    assert crossed.legs_crossed is True
+    assert crossed.knee_toe_deg <= skeleton.LEG_LIMITS["knee_toe_deg"] and crossed.leg_tilt_deg <= skeleton.LEG_LIMITS["leg_tilt_deg"]
+    assert crossed.plausible is False
+    assert skeleton.leg_check({"Pelvis": (0.0, 0.0, 0.0)}) is None
+
+
+def _rows_with_leg_poses(n: int, plausible_offsets: tuple[int, ...]) -> tuple[list[dict[str, str]], int]:
+    rows = _consistent_rows(n, 0.02)
+    for row in rows:
+        _set_rotations(row, _BACKWARD_KNEES)
+    representative = service.representative_frame(RawPass(rows=rows))
+    middle = len(representative.spraying) // 2
+    for delta in plausible_offsets:
+        index = representative.spraying[middle + delta][0].index
+        _set_rotations(next(r for r in rows if int(r["인덱스"]) == index), _REST_ROTATIONS)
+    return rows, middle
+
+
+def test_skeleton_frame_picks_the_nearest_frame_with_anatomical_legs(test_mounts) -> None:  # noqa: ANN001
+    """가운데 프레임 다리가 범위 밖이면 가운데에서 **가장 가까운** 범위 안 프레임을 고르고(+3, −7 중 +3),
+    그 프레임이 스켈레톤·실측 마커·fit의 대표 프레임이 된다. 선택은 notes와 `fit.legs`로 드러난다."""
+    rows, middle = _rows_with_leg_poses(41, (3, -7))
+    raw = RawPass(rows=rows)
+    representative = service.representative_frame(raw)
+    chosen = service.skeleton_frame(representative, pose_fk_csv.bind_offsets(rows[0]))
+    assert chosen is not None and chosen.legs.plausible is True
+    assert chosen.offset_frames == 3
+    assert chosen.representative.frame.index == representative.spraying[middle + 3][0].index
+
+    block = service.skeleton_block(raw)
+    assert block.fit["frame_index"] == chosen.representative.frame.index
+    assert block.fit["legs"]["plausible"] is True and block.fit["legs"]["frame_offset"] == 3
+    assert block.fit["legs_visible_default"] is True
+    assert service.LEGS_PICKED_NOTE.format(k=3) in block.fit["notes"]
+    frame = chosen.representative.frame
+    markers = {a["point"]: a["measured_marker"] for a in block.fit["anchors"]}
+    assert markers["head"] == list(frame.head) and markers["right"] == list(frame.right)
+
+
+def test_fit_hides_legs_by_default_when_no_frame_is_anatomical(test_mounts) -> None:  # noqa: ANN001
+    rows, _middle = _rows_with_leg_poses(41, ())
+    raw = RawPass(rows=rows)
+    block = service.skeleton_block(raw)
+    legs = block.fit["legs"]
+    assert legs["plausible"] is False and block.fit["legs_visible_default"] is False
+    assert legs["joints"] == list(skeleton.LEG_JOINTS)
+    assert legs["frame_offset"] == 0
+    assert block.fit["frame_index"] == service.representative_frame(raw).frame.index
+    assert service.LEGS_HIDDEN_NOTE in block.fit["notes"]
+    assert "아바타 추정" in block.fit["notes"][0] and "중력 방향" in block.fit["notes"][1]
+
+
+def test_offset_label_only_when_the_grip_limit_is_exceeded(test_mounts) -> None:  # noqa: ANN001
+    raw = RawPass(rows=_rows_with_skeleton(0.3))
+    representative = service.representative_frame(raw)
+    offsets = pose_fk_csv.bind_offsets(raw.rows[0])
+    mounts = skeleton.mounts_for(_TEST_MOUNTS.table, representative.gun)
+    sample = skeleton.frame_sample(representative.frame, representative.row, representative.gun, offsets)
+    placed = skeleton.place_oriented(sample.local_pos, sample.local_rot, sample.measured, mounts)
+    loose = service._fit_view(placed, representative, service.MOUNTS_GLOBAL, mounts, offsets, {representative.gun: 1.0})  # noqa: SLF001
+    assert all(a["offset_display"] is None for a in loose["anchors"])
+    tight = service._fit_view(placed, representative, service.MOUNTS_GLOBAL, mounts, offsets, {representative.gun: 0.05})  # noqa: SLF001
+    labels = {a["point"]: a["offset_display"] for a in tight["anchors"]}
+    norm = math.hypot(*_TEST_MOUNTS.table["right:한길숏건"].offset)
+    assert labels == {"head": None, "right": f"보정 오프셋 {norm:.2f}m(적합값)", "left": None}
+    assert any("손으로 쥔 거리로 설명되지 않습니다" in note for note in tight["notes"])
+
+
+def test_mesh_reason_detail_is_read_from_the_alignment_record() -> None:
+    one = service.mesh_block("1")
+    assert "손대칭" in one["reason_detail"]
+    two = service.mesh_block("2")
+    assert "모델 UV" in two["reason_detail"]
+    solved = [str(level) for level in service._solved_levels()]  # noqa: SLF001
+    assert solved and one["reason_hint"] == "벽면이 검증된 레벨: " + "·".join(solved)
+    ok = service.mesh_block(solved[0])
+    assert ok["reason_detail"] is None and ok["reason_hint"] is None
+
+
 def test_view_fit_is_null_when_skeleton_is_unavailable() -> None:
     view = _compare()["view"]
     assert view["fit"] is None

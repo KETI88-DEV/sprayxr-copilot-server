@@ -97,6 +97,7 @@ function buildDom(container) {
   controls.className = "view3d-controls";
   controls.innerHTML = `
     <label><input id="view3dLayerQuery" type="checkbox" checked> 질의(스켈레톤)</label>
+    <label><input id="view3dLayerLegs" type="checkbox" checked> 다리(IK)</label>
     <label><input id="view3dLayerReference" type="checkbox" checked> 기준</label>
     <label><input id="view3dLayerCorrected" type="checkbox"> 교정 후(예상)</label>
     <label><input id="view3dLayerWall" type="checkbox" checked> 벽면</label>
@@ -115,15 +116,16 @@ function buildDom(container) {
   canvas.className = "view3d-canvas";
   const labelsHost = document.createElement("div");
   labelsHost.className = "view3d-labels";
-  host.append(canvas, labelsHost);
+  // 벽면을 그리지 않는 사유는 캔버스 왼쪽 위에 겹쳐 띄운다 — 캔버스 아래 마지막 줄에 두면 첫눈에 안 보였다.
+  const wallNote = document.createElement("p");
+  wallNote.className = "view3d-wall-note";
+  host.append(canvas, labelsHost, wallNote);
 
   const legend = document.createElement("div");
   legend.className = "view3d-legend";
 
   const notes = document.createElement("ul");
   notes.className = "view3d-notes";
-  const wallNote = document.createElement("p");
-  wallNote.className = "view3d-wall-note";
   const errors = document.createElement("p");
   errors.className = "view3d-errors";
   const note = document.createElement("p");
@@ -131,7 +133,8 @@ function buildDom(container) {
   const correctedNote = document.createElement("p");
   correctedNote.className = "view3d-note view3d-corrected-note";
 
-  container.append(toolbar, host, legend, notes, wallNote, errors, note, correctedNote);
+  // wallNote는 위에서 host(캔버스 위 겹침)에 넣었다 — 여기서 다시 넣으면 host 밖으로 옮겨진다.
+  container.append(toolbar, host, legend, notes, errors, note, correctedNote);
   return { canvas, host, labelsHost, legend, notes, wallNote, errors, note, correctedNote, controls, toolbar };
 }
 
@@ -223,6 +226,7 @@ function mount(THREE, container) {
   const correctionsGroup = new THREE.Group();
   scene.add(correctionsGroup);
   let meshObject = null;
+  let skeletonLegs = null;
   // 카메라를 향해 도는 고리(패스 평균 마커).
   const billboards = [];
 
@@ -347,16 +351,24 @@ function mount(THREE, container) {
       entry.el.style.display = shown ? "" : "none";
       return shown;
     };
+    let labelOverlaps = 0;
     for (const entry of labelRegistry) {
       if (entry.kind === "badge" || !visible(entry)) continue;
       const px = toPixel(entry.position);
-      entry.el.style.left = `${px.x}px`;
-      entry.el.style.top = `${px.y}px`;
       const w = entry.el.offsetWidth;
       const h = entry.el.offsetHeight;
-      // .view3d-label의 transform: translate(-50%, -140%)
-      obstacles.push({ x0: px.x - w / 2, x1: px.x + w / 2, y0: px.y - 1.4 * h, y1: px.y - 0.4 * h });
+      // .view3d-label의 transform: translate(-50%, -140%). 앞 글자 라벨과 겹치면 한 줄씩 아래로 민다 —
+      // 거리 라벨(miss)과 보정 오프셋 라벨이 같은 자리에 겹쳐 숫자가 가려졌다.
+      let y = px.y;
+      const rect = (yy) => ({ x0: px.x - w / 2, x1: px.x + w / 2, y0: yy - 1.4 * h, y1: yy - 0.4 * h });
+      const clashes = (r) => obstacles.some((o) => r.x0 < o.x1 && r.x1 > o.x0 && r.y0 < o.y1 && r.y1 > o.y0);
+      for (let step = 0; step < 4 && clashes(rect(y)); step += 1) y += h + 2;
+      if (clashes(rect(y))) labelOverlaps += 1;
+      entry.el.style.left = `${px.x}px`;
+      entry.el.style.top = `${y}px`;
+      obstacles.push(rect(y));
     }
+    debugLive.labelOverlaps = labelOverlaps;
     const hitsObstacle = (x, y) => obstacles.some((r) => {
       const nx = clamp(x, r.x0, r.x1);
       const ny = clamp(y, r.y0, r.y1);
@@ -441,14 +453,19 @@ function mount(THREE, container) {
     return group;
   }
 
-  /** 추정 뼈. 강조 대상이 아니라 문맥이다 — weights로 강조를 따지지 않고 저채도 한 색. */
-  function buildSkeletonGroup(joints, bones, faded) {
+  /** 추정 뼈. 강조 대상이 아니라 문맥이다 — weights로 강조를 따지지 않고 저채도 한 색.
+   * 다리 관절 목록은 서버(`fit.legs.joints`)가 준다. 다리는 추적 장치가 없어 한 단계 더 흐리게 그리고
+   * 따로 끄고 켠다 — 부위 이름을 여기서 판단하지 않는다. */
+  function buildSkeletonGroup(joints, bones, faded, legJoints) {
     const group = new THREE.Group();
-    if (!joints || !bones || Object.keys(joints).length === 0) return group;
+    const legs = new THREE.Group();
+    if (!joints || !bones || Object.keys(joints).length === 0) return { group, legs };
+    const legSet = new Set(Array.isArray(legJoints) ? legJoints : []);
     const opacity = faded ? 0.35 : 0.6;
     // 실선(LineBasicMaterial)은 WebGL에서 굵기를 키울 수 없어 머리카락처럼 보인다 —
     // 얇은 실린더로 실제 두께를 준다. 조명과 무관한 색을 위해 MeshBasicMaterial.
     const boneMaterial = new THREE.MeshBasicMaterial({ color: BONE_COLOR, transparent: true, opacity, depthWrite: false });
+    const legMaterial = new THREE.MeshBasicMaterial({ color: BONE_COLOR, transparent: true, opacity: opacity * 0.55, depthWrite: false });
     for (const [parent, child] of bones) {
       const a = joints[parent];
       const b = joints[child];
@@ -459,20 +476,23 @@ function mount(THREE, container) {
       const length = dir.length();
       if (length < 1e-6) continue;
       dir.normalize();
-      const bone = new THREE.Mesh(new THREE.CylinderGeometry(BONE_RADIUS, BONE_RADIUS, length, 6), boneMaterial);
+      const isLeg = legSet.has(child);
+      const bone = new THREE.Mesh(new THREE.CylinderGeometry(BONE_RADIUS, BONE_RADIUS, length, 6), isLeg ? legMaterial : boneMaterial);
       bone.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
       bone.position.copy(start).addScaledVector(dir, length / 2);
       bone.userData.kind = "bone";
+      bone.userData.leg = isLeg;
       bone.userData.name = `${parent}>${child}`;
       bone.userData.length = length;
-      group.add(bone);
+      (isLeg ? legs : group).add(bone);
     }
     const jointGeometry = new THREE.SphereGeometry(BONE_RADIUS * 2, 8, 6);
-    for (const position of Object.values(joints)) {
+    for (const [name, position] of Object.entries(joints)) {
       if (!isVec3(position)) continue;
-      const marker = new THREE.Mesh(jointGeometry, boneMaterial);
+      const isLeg = legSet.has(name);
+      const marker = new THREE.Mesh(jointGeometry, isLeg ? legMaterial : boneMaterial);
       marker.position.set(position[0], position[1], position[2]);
-      group.add(marker);
+      (isLeg ? legs : group).add(marker);
     }
     if (isVec3(joints.Head)) {
       const headMaterial = new THREE.MeshBasicMaterial({ color: BONE_COLOR, transparent: true, opacity: opacity * 0.4, depthWrite: false });
@@ -480,14 +500,15 @@ function mount(THREE, container) {
       head.position.set(...joints.Head);
       group.add(head);
     }
-    return group;
+    group.add(legs);
+    return { group, legs };
   }
 
   /** 대표 프레임 실측 마커(구체)·보정 오프셋 선·어긋남 점선·miss 라벨. */
   function buildAnchorGroup(fit) {
     const group = new THREE.Group();
     markerRegistry = [];
-    const counts = { measuredSpheres: 0, offsetLines: 0, missLines: 0, missLabels: [] };
+    const counts = { measuredSpheres: 0, offsetLines: 0, missLines: 0, missLabels: [], offsetLabels: [] };
     if (!fit) return { group, counts };
     const holdout = fit.mounts === "pass_fit_holdout";
     const markerMaterial = new THREE.MeshStandardMaterial({ color: LAYER_COLOR.query, roughness: 0.5 });
@@ -514,6 +535,12 @@ function mount(THREE, container) {
         ]);
         group.add(new THREE.Line(geometry, offsetMaterial));
         counts.offsetLines += 1;
+        // 손 관절과 건 마커가 멀리 떨어진 이유를 선 위에서 바로 읽게 한다(서버 문자열, 파지 상한 초과일 때만).
+        if (typeof anchor.offset_display === "string") {
+          const mid = new THREE.Vector3(...anchor.joint_position).add(new THREE.Vector3(...anchor.predicted_marker)).multiplyScalar(0.5);
+          registerLabel(mid, anchor.offset_display, "view3d-label-offset");
+          counts.offsetLabels.push(anchor.offset_display);
+        }
       }
       if (isVec3(anchor.predicted_marker) && isVec3(anchor.measured_marker)) {
         const a = new THREE.Vector3(...anchor.predicted_marker);
@@ -640,14 +667,12 @@ function mount(THREE, container) {
       return "이 패스는 레벨 정보가 없어 벽면을 그리지 않습니다.";
     }
     if (meshBlock.available !== true) {
-      return meshBlock.reason_text ?? "이 레벨은 벽면을 그리지 않습니다.";
+      return [meshBlock.reason_text ?? "이 레벨은 벽면을 그리지 않습니다.", meshBlock.reason_detail, meshBlock.reason_hint]
+        .filter((text) => typeof text === "string" && text.length > 0)
+        .join(" ");
     }
     if (typeof meshBlock.handedness_note === "string") {
-      const evidence = meshBlock.handedness_evidence;
-      const pair = (entry) => (entry ? `P ${String(entry.P)} / 거울 ${String(entry.mirror)}` : "—");
-      const detail = evidence
-        ? ` 건 가림 ${pair(evidence.gun_occlusion)} · HMD 가림 ${pair(evidence.hmd_occlusion)}`
-        : "";
+      const detail = typeof meshBlock.handedness_evidence_display === "string" ? ` ${meshBlock.handedness_evidence_display}` : "";
       return `${meshBlock.handedness_note}${detail}`;
     }
     return "";
@@ -661,7 +686,10 @@ function mount(THREE, container) {
     const joints = view.layers?.query?.joints ?? {};
     const hasSkeleton = Object.keys(joints).length > 0;
     if (hasSkeleton) {
-      for (const p of Object.values(joints)) push(p);
+      // 숨긴 다리는 맞춤 대상에서도 뺀다 — 안 보이는 점 때문에 몸이 작아지면 안 된다.
+      const legsHidden = !checkboxes.legs.checked && Array.isArray(view.fit?.legs?.joints);
+      const hidden = new Set(legsHidden ? view.fit.legs.joints : []);
+      for (const [name, p] of Object.entries(joints)) if (!hidden.has(name)) push(p);
       for (const anchor of view.fit?.anchors ?? []) {
         push(anchor.measured_marker);
         push(anchor.predicted_marker);
@@ -816,8 +844,25 @@ function mount(THREE, container) {
     reference: dom.controls.querySelector("#view3dLayerReference"),
     corrected: dom.controls.querySelector("#view3dLayerCorrected"),
     wall: dom.controls.querySelector("#view3dLayerWall"),
+    legs: dom.controls.querySelector("#view3dLayerLegs"),
   };
   checkboxes.query.addEventListener("change", () => { layerGroups.query.visible = checkboxes.query.checked; });
+  /** 조상까지 모두 보이는 뼈 이름(검증용). three.js는 부모가 숨으면 자식도 그리지 않는다. */
+  function visibleBoneNames() {
+    const names = [];
+    layerGroups.query.traverseVisible((child) => {
+      if (child.userData.kind === "bone") names.push(child.userData.name);
+    });
+    return layerGroups.query.visible ? names : [];
+  }
+  checkboxes.legs.addEventListener("change", () => {
+    if (skeletonLegs) skeletonLegs.visible = checkboxes.legs.checked;
+    if (lastView && framing.auto) frameTo(framing.mode);
+    if (container.__view3dDebug) {
+      container.__view3dDebug.legsVisible = checkboxes.legs.checked;
+      container.__view3dDebug.visibleBones = visibleBoneNames();
+    }
+  });
   checkboxes.reference.addEventListener("change", () => { layerGroups.reference.visible = checkboxes.reference.checked; });
   checkboxes.corrected.addEventListener("change", () => {
     layerGroups.corrected.visible = checkboxes.corrected.checked;
@@ -866,6 +911,7 @@ function mount(THREE, container) {
     billboards.length = 0;
     coneRegistry = [];
     markerRegistry = [];
+    skeletonLegs = null;
     if (meshObject) {
       scene.remove(meshObject);
       disposeObject3D(meshObject);
@@ -891,7 +937,14 @@ function mount(THREE, container) {
     layerGroups.query.add(buildLayerGroup(view.layers?.query, weights, LAYER_COLOR.query, !hasSkeleton));
     layerGroups.reference.add(buildLayerGroup(view.layers?.reference, weights, LAYER_COLOR.reference, false));
     layerGroups.corrected.add(buildLayerGroup(view.layers?.corrected, weights, LAYER_COLOR.corrected, false));
-    layerGroups.query.add(buildSkeletonGroup(joints, view.layers?.query?.bones, fit?.faded === true));
+    const skeletonParts = buildSkeletonGroup(joints, view.layers?.query?.bones, fit?.faded === true, fit?.legs?.joints);
+    layerGroups.query.add(skeletonParts.group);
+    skeletonLegs = skeletonParts.legs;
+    // 다리 기본 표시는 서버 판정(`fit.legs_visible_default`)을 따른다. 판정이 없으면 다리를 따로 나누지 않았다.
+    const legsKnown = Array.isArray(fit?.legs?.joints);
+    checkboxes.legs.disabled = !legsKnown;
+    checkboxes.legs.checked = legsKnown ? fit.legs_visible_default === true : true;
+    skeletonLegs.visible = checkboxes.legs.checked;
     const anchors = buildAnchorGroup(fit);
     layerGroups.query.add(anchors.group);
     const passMean = buildPassMeanGroup(view.corrections ?? [], fit);
@@ -941,7 +994,8 @@ function mount(THREE, container) {
     renderLegend(dom.legend, view);
     dom.notes.replaceChildren();
     if (fit) {
-      for (const text of (fit.notes ?? []).slice(0, 3)) {
+      // 전부 싣는다. 잘라 내면 손–건 마커 거리를 설명하는 고지(파지 상한 초과)가 빠졌다.
+      for (const text of fit.notes ?? []) {
         const item = document.createElement("li");
         item.textContent = text;
         dom.notes.append(item);
@@ -981,6 +1035,10 @@ function mount(THREE, container) {
       offsetLines: anchors.counts.offsetLines,
       missLines: anchors.counts.missLines,
       missLabels: anchors.counts.missLabels,
+      offsetLabels: anchors.counts.offsetLabels,
+      legsVisible: checkboxes.legs.checked,
+      legsToggleDisabled: checkboxes.legs.disabled,
+      visibleBones: visibleBoneNames(),
       boneLengths,
       fit,
       framingRatio: null,

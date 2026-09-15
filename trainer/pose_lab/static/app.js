@@ -186,7 +186,7 @@ function renderMeasuredDetails(root, measured, view) {
     axesBody.append(row);
   }
 
-  // 3D 아래에는 fit.notes를 최대 3줄만 보인다. 나머지를 포함한 전부를 여기에 싣는다.
+  // 3D 아래에도 fit.notes 전부가 보인다. 여기에는 잔차 라벨까지 함께 싣는다.
   const notesList = root.querySelector(".fit-notes-all");
   notesList.replaceChildren();
   const fit = view?.fit ?? null;

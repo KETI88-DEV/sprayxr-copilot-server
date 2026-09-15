@@ -33,10 +33,25 @@ AXIS_TRACE: Final[dict[str, str]] = {
     "lateral": "진행(스트로크 기준) 축",
 }
 
-# wall 축이 실제 착탄면 법선과 이보다 크게 어긋나면 "벽 쪽으로 붙이세요" 같은 방향 명령
-# 대신 수치 안내 문장으로 낮춘다. 진단 분포(스트로크 법선 vs 메시 법선 중앙값 44°)를
-# **본 뒤** 정한 표시 규칙이지 게이트가 아니다. 채점·magnitude·축은 바뀌지 않는다.
+# wall 축이 실제 착탄면 법선과 이보다 크게 어긋나면 "벽 쪽으로 붙이세요"라고 쓰지 않는다 —
+# 화면에 그린 벽과 다른 방향을 가리키기 때문이다. 진단 분포(스트로크 법선 vs 메시 법선 중앙값
+# 44°)를 **본 뒤** 정한 표시 규칙이지 게이트가 아니다. 채점·magnitude·축은 바뀌지 않는다.
+#
+# 그때도 방향은 버리지 않는다. `stroke_frame.Basis.normal`은 정의상 **수평**이고 착탄점에서 작업자
+# (건) 쪽이 양수다. 그래서 wall 성분의 부호는 벽면이 어떻게 기울었든 "착탄 궤적 쪽으로 수평으로
+# 다가가느냐/멀어지느냐"를 정확히 말한다(`text_mode = "stroke_relative"`). 옛 강등 문장("방향 대신
+# 수치로 안내")은 행동 방향이 없어 교정 어휘로 기능하지 않았다.
 SURFACE_ANGLE_AXIS_ONLY_DEG: Final = 30.0
+
+STROKE_RELATIVE_RIGHT: Final[dict[str, str]] = {
+    "붙이": "{obj} 착탄 궤적 쪽으로 수평으로 {m}cm 붙이세요.",
+    "띄우": "{obj} 착탄 궤적에서 수평으로 {m}cm 띄우세요.",
+}
+# 머리: 부호 규칙은 `HEAD_PHRASES`와 같다(magnitude > 0 = 작업자 쪽 = 물러섬).
+STROKE_RELATIVE_HEAD: Final[dict[bool, str]] = {
+    True: "착탄 궤적에서 수평으로 {m}cm 더 물러서세요.",
+    False: "착탄 궤적 쪽으로 수평으로 {m}cm 더 다가서세요.",
+}
 
 MINUS: Final = "−"
 
@@ -101,13 +116,13 @@ def axis_text(correction: object, surface_angle_deg: float | None = None) -> tup
     amount = f"{abs(magnitude):.1f}"
 
     if axis == "wall" and surface_angle_deg is not None and surface_angle_deg > SURFACE_ANGLE_AXIS_ONLY_DEG:
-        text = (
-            f"{_object(point)} {AXIS_TRACE['wall']}으로 {amount}cm 옮기세요 — 실제 착탄면 법선과 "
-            f"{surface_angle_deg:.0f}° 어긋난 축이라 방향 대신 수치로 안내합니다."
-        )
-        # 표에 없는 조합이면 강등 문장도 내지 않는다(방향 문장과 같은 경계).
+        # 표에 없는 조합이면 이 문장도 내지 않는다(방향 문장과 같은 경계).
         _directive(point, axis, magnitude, direction, amount)
-        return text, "axis_only"
+        if point == "right":
+            text = STROKE_RELATIVE_RIGHT[direction].format(obj=_object("right"), m=amount)
+        else:
+            text = STROKE_RELATIVE_HEAD[magnitude > 0].format(m=amount)
+        return text, "stroke_relative"
     return _directive(point, axis, magnitude, direction, amount), "directive"
 
 
