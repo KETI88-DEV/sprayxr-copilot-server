@@ -6,7 +6,10 @@ import csv
 import hashlib
 import importlib.util
 import json
+import math
 import os
+import statistics
+import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -270,14 +273,14 @@ def test_extra_files_warn_and_generated_config_is_ignored(bundle: Path, capsys: 
     assert json.loads(capsys.readouterr().out)["warnings"] == ["not in manifest: notes.txt"]
 
 
-def _write_runs(root: Path, run_totals: list[list[int]]) -> None:
+def _write_runs(root: Path, run_totals: list[list[int]], *, first_question: int = 1) -> None:
     for offset, totals in enumerate(run_totals):
         target = root / f"seed_{42 + offset}" / "eval"
         target.mkdir(parents=True)
         with (target / gate.RESULTS_CSV).open("w", newline="", encoding="utf-8") as fh:
             writer = csv.writer(fh)
             writer.writerow(["q_id", "category", "difficulty", "total", "note"])
-            for index, total in enumerate(totals, start=1):
+            for index, total in enumerate(totals, start=first_question):
                 writer.writerow([f"AQ{index:03d}", "tool_calling", "easy", total, ""])
 
 
@@ -286,31 +289,196 @@ def _totals_with_sum(total: int, questions: int = 30) -> list[int]:
     return [base + (1 if i < remainder else 0) for i in range(questions)]
 
 
+def _write_run_sums(root: Path, sums: list[int], *, first_question: int = 1) -> None:
+    """실행마다 30문항 총점 합계를 정한다. 실행 평균은 합계/30이다."""
+    _write_runs(root, [_totals_with_sum(total) for total in sums], first_question=first_question)
+
+
+# 실제 NF4 기준선(/output/eval_results/qwen36_27b_v6_1_nf4_baseline_965549e) seed 42–49의 30문항 합계.
+# 실행 평균 6.704, SD 0.2149.
+NF4_BASELINE_SUMS = [204, 193, 199, 209, 210, 197, 194, 203]
+
+
+def _gate(tmp_path: Path, **overrides: object) -> tuple[int, dict]:
+    kwargs: dict = {"delta": 0.2, "min_runs": 8, "target_runs": 18, "expect_questions": 30}
+    kwargs.update(overrides)
+    return gate.evaluate(tmp_path / "baseline", tmp_path / "candidate", **kwargs)
+
+
 @pytest.mark.parametrize(
-    ("candidate_sum", "expected_code", "verdict"),
-    [(204, 0, "pass"), (203, 1, "fail")],  # 6.800 is exactly baseline 7.0 - 0.2; 6.767 is below it
+    ("df", "expected"),
+    [
+        (1, 12.706), (2, 4.303), (3, 3.182), (4, 2.776), (5, 2.571), (7, 2.365),
+        (10, 2.228), (14, 2.145), (30, 2.042), (100, 1.984), (math.inf, 1.960),
+    ],
 )
-def test_quality_gate_threshold_is_baseline_mean_minus_delta(
-    tmp_path: Path, candidate_sum: int, expected_code: int, verdict: str
-) -> None:
-    _write_runs(tmp_path / "baseline", [_totals_with_sum(210)] * 8)
-    _write_runs(tmp_path / "candidate", [_totals_with_sum(candidate_sum)] * 8)
-
-    code, report = gate.evaluate(tmp_path / "baseline", tmp_path / "candidate", delta=0.2, expect_runs=8, expect_questions=30)
-
-    assert (code, report["verdict"]) == (expected_code, verdict)
-    assert report["baseline"]["mean"] == pytest.approx(7.0)
-    assert report["candidate"]["mean"] == pytest.approx(candidate_sum / 30)
+def test_student_t_975_quantile_matches_table(df: float, expected: float) -> None:
+    assert round(gate.t_quantile_975(df), 3) == expected
 
 
-def test_quality_gate_refuses_incomplete_runs(tmp_path: Path) -> None:
+def test_student_t_quantile_is_monotone_for_fractional_welch_df() -> None:
+    assert gate.t_quantile_975(7) > gate.t_quantile_975(7.5) > gate.t_quantile_975(8)
+
+
+def test_quality_gate_passes_when_ci_lower_bound_is_above_minus_delta(tmp_path: Path) -> None:
+    _write_run_sums(tmp_path / "baseline", [210, 211, 209, 210, 210, 211, 209, 210])
+    _write_run_sums(tmp_path / "candidate", [209, 210, 208, 209, 209, 210, 208, 209])
+
+    code, report = _gate(tmp_path)
+
+    assert (code, report["verdict"]) == (0, "pass")
+    assert report["ci_low"] > -0.2
+    assert report["difference"] == pytest.approx(-1 / 30)
+    assert (report["stage"], report["n_baseline"], report["n_candidate"]) == (1, 8, 8)
+
+
+def test_quality_gate_fails_when_ci_upper_bound_is_below_minus_delta(tmp_path: Path) -> None:
+    _write_run_sums(tmp_path / "baseline", [210, 211, 209, 210, 210, 211, 209, 210])
+    _write_run_sums(tmp_path / "candidate", [195, 196, 194, 195, 195, 196, 194, 195])
+
+    code, report = _gate(tmp_path)
+
+    assert (code, report["verdict"]) == (1, "fail")
+    assert report["ci_high"] < -0.2
+
+
+def test_quality_gate_is_inconclusive_where_the_old_point_estimate_rule_passed(tmp_path: Path) -> None:
+    candidate_sums = [total - 3 for total in NF4_BASELINE_SUMS]  # 평균 0.1 하락, 같은 산포
+    _write_run_sums(tmp_path / "baseline", NF4_BASELINE_SUMS)
+    _write_run_sums(tmp_path / "candidate", candidate_sums)
+
+    code, report = _gate(tmp_path)
+
+    # 옛 규칙(후보 평균 ≥ 기준선 평균 − Δ)이면 합격이었다.
+    assert report["candidate"]["mean"] >= report["baseline"]["mean"] - 0.2
+    assert (code, report["verdict"]) == (3, "inconclusive")
+    assert report["ci_low"] < -0.2 < report["ci_high"]
+    assert report["df"] == pytest.approx(14.0)
+    assert report["t_crit"] == pytest.approx(2.1448, abs=1e-3)
+    se = math.sqrt(2 * statistics.variance([s / 30 for s in NF4_BASELINE_SUMS]) / 8)
+    assert report["se"] == pytest.approx(se)
+    assert report["ci_low"] == pytest.approx(-0.1 - report["t_crit"] * se)
+    assert "18" in report["decision"] and "--target-runs" in report["decision"]
+
+
+def test_required_runs_estimate_for_the_measured_nf4_spread_is_about_18(tmp_path: Path) -> None:
+    _write_run_sums(tmp_path / "baseline", NF4_BASELINE_SUMS)
+    _write_run_sums(tmp_path / "candidate", NF4_BASELINE_SUMS)
+
+    _, report = _gate(tmp_path)
+
+    assert report["baseline"]["sd"] == pytest.approx(0.215, abs=5e-4)
+    assert 17 <= report["required_runs_estimate"] <= 19
+
+
+def test_quality_gate_accepts_unequal_run_counts_with_welch_df(tmp_path: Path) -> None:
+    candidate_sums = [203, 200, 206] * 6
+    _write_run_sums(tmp_path / "baseline", NF4_BASELINE_SUMS)
+    _write_run_sums(tmp_path / "candidate", candidate_sums)
+
+    code, report = _gate(tmp_path)
+
+    assert code != 2, report["problems"]
+    assert (report["stage"], report["n_baseline"], report["n_candidate"]) == (1, 8, 18)
+    wb = statistics.variance([s / 30 for s in NF4_BASELINE_SUMS]) / 8
+    wc = statistics.variance([s / 30 for s in candidate_sums]) / 18
+    assert report["df"] == pytest.approx((wb + wc) ** 2 / (wb**2 / 7 + wc**2 / 17))
+    assert report["se"] == pytest.approx(math.sqrt(wb + wc))
+
+
+def test_quality_gate_stage_two_inconclusive_is_left_to_the_user(tmp_path: Path) -> None:
+    _write_run_sums(tmp_path / "baseline", [195, 207] * 9)
+    _write_run_sums(tmp_path / "candidate", [192, 204] * 9)
+
+    code, report = _gate(tmp_path)
+
+    assert (code, report["verdict"], report["stage"]) == (3, "inconclusive", 2)
+    assert "판정 불가 — 사용자 결정" in report["decision"]
+
+
+def test_quality_gate_refuses_fewer_than_min_runs(tmp_path: Path) -> None:
     _write_runs(tmp_path / "baseline", [_totals_with_sum(210)] * 8)
     _write_runs(tmp_path / "candidate", [_totals_with_sum(240)] * 7)
 
-    code, report = gate.evaluate(tmp_path / "baseline", tmp_path / "candidate", delta=0.2, expect_runs=8, expect_questions=30)
+    code, report = _gate(tmp_path)
 
-    assert code == 2
-    assert report["problems"] == ["candidate: 7 runs, expected 8"]
+    assert (code, report["verdict"]) == (2, "incomplete")
+    assert report["problems"] == ["candidate: 7 runs, expected at least 8"]
+
+
+def test_quality_gate_refuses_different_question_sets(tmp_path: Path) -> None:
+    _write_run_sums(tmp_path / "baseline", NF4_BASELINE_SUMS)
+    _write_run_sums(tmp_path / "candidate", NF4_BASELINE_SUMS, first_question=2)
+
+    code, report = _gate(tmp_path)
+
+    assert (code, report["problems"]) == (2, ["question ids differ between runs"])
+
+
+def test_quality_gate_cli_exit_code_and_report_fields(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    _write_run_sums(tmp_path / "baseline", NF4_BASELINE_SUMS)
+    _write_run_sums(tmp_path / "candidate", [total - 3 for total in NF4_BASELINE_SUMS])
+
+    code = gate.main(["--baseline-root", str(tmp_path / "baseline"), "--candidate-root", str(tmp_path / "candidate")])
+
+    report = json.loads(capsys.readouterr().out)
+    assert code == 3
+    assert {
+        "stage", "n_baseline", "n_candidate", "difference", "se", "df", "t_crit",
+        "ci_low", "ci_high", "delta", "verdict", "required_runs_estimate", "per_question",
+    } <= report.keys()
+    assert len(report["per_question"]) == 30
+
+
+def _run_gate_script(tmp_path: Path, env_extra: dict[str, str]) -> list[str]:
+    """가짜 docker로 run_fp8_gate.sh를 돌리고 생성 명령이 받은 seed 목록을 돌려준다."""
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    docker = fake_bin / "docker"
+    docker.write_text(
+        "#!/usr/bin/env bash\n"
+        'echo "$*" >> "$FAKE_LOG"\n'
+        "shift 3\n"  # compose -f <file>
+        "shift 3\n"  # exec -T agent-api
+        'case "$1" in\n'
+        "  printenv) echo 0123456789abcdef ;;\n"
+        '  test) exec test "$2" "$FAKE_ROOT$3" ;;\n'
+        "esac\n"
+        "exit 0\n"
+    )
+    docker.chmod(0o755)
+    (tmp_path / "root" / "data" / "eval").mkdir(parents=True)
+    (tmp_path / "root" / "data" / "eval" / "eval_set_agentic.jsonl").write_text("{}\n")
+    log = tmp_path / "docker.log"
+    env = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "FAKE_ROOT": str(tmp_path / "root"),
+        "FAKE_LOG": str(log),
+        "RUN_NAME": "gate_run",
+        **env_extra,
+    }
+    result = subprocess.run(["bash", str(SCRIPTS / "run_fp8_gate.sh")], env=env, capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+    seeds = []
+    for line in log.read_text().splitlines():
+        if "generate_agentic_responses.py" in line:
+            args = line.split()
+            seeds.append(args[args.index("--seed") + 1])
+    return seeds
+
+
+def test_run_fp8_gate_defaults_to_eight_runs(tmp_path: Path) -> None:
+    assert _run_gate_script(tmp_path, {}) == [str(seed) for seed in range(42, 50)]
+
+
+def test_run_fp8_gate_extends_an_existing_run_skipping_scored_seeds(tmp_path: Path) -> None:
+    for seed in range(42, 50):
+        scored = tmp_path / "root" / "output" / "eval_results" / "gate_run" / f"seed_{seed}" / "eval"
+        scored.mkdir(parents=True)
+        (scored / gate.RESULTS_CSV).write_text("q_id,total\n")
+
+    assert _run_gate_script(tmp_path, {"RUNS": "18"}) == [str(seed) for seed in range(50, 60)]
 
 
 def test_rollback_config_changes_only_the_served_name_and_tokenizer(tmp_path: Path) -> None:

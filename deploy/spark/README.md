@@ -35,8 +35,8 @@ deploy/spark/
     ├── bundle_manifest.py        # create / verify (표준 라이브러리만, 호스트 python3)
     ├── check_tokenizer_parity.py # HF 토큰 ID vs vLLM /tokenize
     ├── render_rollback_config.py # BF16 롤백 설정
-    ├── run_fp8_gate.sh           # 30문항 × 8회 생성·채점
-    ├── quality_gate.py           # NF4 기준선 대비 −Δ 판정
+    ├── run_fp8_gate.sh           # 30문항 × RUNS회(기본 8) 생성·채점, 기존 run에 이어 붙이기
+    ├── quality_gate.py           # NF4 기준선 대비 단계적 95% Welch CI 판정(exit 0/1/2/3)
     └── soak.sh                   # 장시간 소크
 ```
 
@@ -416,20 +416,94 @@ vLLM #37431 계열 크래시(SM121에서 장시간 운용 중 엔진이 종료�
 - `resources.tsv`의 사용 메모리가 단조 증가하지 않는다(누수 없음).
 - 릴리스 MTP 설정으로 최소 8시간을 돌린다.
 
-## 17. FP8 품질 게이트 (30문항 × 8회, NF4 기준선 대비 −0.2 이내)
+## 17. FP8 품질 게이트 (30문항, NF4 기준선 대비 Δ=0.2, 단계적 95% CI 규칙)
 
-기준선은 `/output/eval_results/qwen36_27b_v6_1_nf4_baseline_965549e`다(A40, HF NF4 + v6.1, seed 42–49). 2026-09-15 작성 시점에는 측정이 진행 중이었다.
+기준선은 `/output/eval_results/qwen36_27b_v6_1_nf4_baseline_965549e`다(A40, HF NF4 + v6.1, 스냅숏 965549e). seed 42–49 측정은 2026-09-15 11:45Z~18:05Z에 끝났고 total 6.704 ± 0.215(실행 평균들의 SD)다.
+
+### 판정 규칙 (사전등록, 2026-09-15 사용자 결정 "8회로 먼저 보고 결정")
+
+결과를 보기 전에 고정한 규칙이다. 결과를 본 뒤 Δ, 반복 수, 규칙을 바꾸지 않는다.
+
+- 실행 점수: seed 하나의 30문항 `total` 평균(누락 응답 0점). 차이 d = 후보 평균 − 기준선 평균.
+- Welch 표준오차 se = √(s_c²/n_c + s_b²/n_b), Welch–Satterthwaite 자유도, 양측 95% 신뢰구간 d ± t₀.₉₇₅(df)·se. t 분위수는 표준 라이브러리로 계산한다(불완전 베타 함수 + 이분법, 표값과 소수 3자리 일치를 테스트로 고정).
+- **pass**: CI 하한 > −Δ → exit 0.
+- **fail**: CI 상한 < −Δ → exit 1.
+- **inconclusive**: 그 외 → exit 3. 보고서 `decision`에 확장 권고와 현재 SD로 계산한 필요 반복 수 n ≈ 2·(1.96+0.84)²·s_pooled²/Δ²(`required_runs_estimate`, 올림)가 나온다.
+- **incomplete**: 입력 문제(각 측 실행 수 < `--min-runs`, 문항 수 ≠ 30, 문항 집합 불일치, seed 디렉터리의 CSV 개수 ≠ 1) → exit 2. 양측 실행 수는 달라도 된다.
+
+단계:
+
+1. **1단계**: 양측 각 8회(`--min-runs 8`). pass나 fail이면 그 결과로 확정한다.
+2. **2단계**(1단계가 inconclusive일 때만): 양측을 각 18회로 늘린다. 1단계 실행을 포함하고 추가분만 돌린다. 같은 규칙을 `--min-runs 18`로 한 번 더 적용하고 그 결과로 확정한다. 보고서 `stage`는 양측 min(n) ≥ `--target-runs`(18)이면 2다.
+3. 2단계에서도 inconclusive면 **판정 불가 — 사용자 결정**으로 기록한다(exit 3 그대로).
+
+한계: 같은 규칙을 최대 두 번 확인하고 2단계 표본은 1단계 표본을 포함하므로 1종 오류가 명목 5%보다 조금 커진다. 확인이 두 번뿐이라 작다고 보고 **보정하지 않는다**.
+
+### 1단계
 
 ```bash
 # 1) 기준선 CSV를 Spark로 복사(seed_<n>/…/agentic_eval_results.csv 가 seed마다 하나)
 rsync -a --include '*/' --include 'agentic_eval_results.csv' --include 'RUN_INFO.txt' --exclude '*' \
   a40:/data/ship-paint-ai/output/eval_results/qwen36_27b_v6_1_nf4_baseline_965549e/ "$RESULTS_DIR/baseline_nf4_965549e/"
-# 2) 후보 생성·채점(트래픽 없는 시간에. agent-api 안에서 파이프라인을 하나 더 만든다)
+# 2) 후보 생성·채점(트래픽 없는 시간에. agent-api 안에서 파이프라인을 하나 더 만든다). RUNS 기본 8 → seed_42..49
 scripts/run_fp8_gate.sh
 # 3) 판정
 python3 scripts/quality_gate.py --baseline-root "$RESULTS_DIR/baseline_nf4_965549e" \
-  --candidate-root "$RESULTS_DIR/qwen36_27b_v6_1_fp8_spark_<commit7>" --delta 0.2 \
-  --output "$RESULTS_DIR/fp8_gate_report.json"; echo EXIT=$?
+  --candidate-root "$RESULTS_DIR/qwen36_27b_v6_1_fp8_spark_<commit7>" --delta 0.2 --min-runs 8 --target-runs 18 \
+  --output "$RESULTS_DIR/fp8_gate_report_stage1.json"; echo EXIT=$?
+```
+
+### 2단계 (1단계 EXIT=3일 때만)
+
+**NF4 기준선 seed 50–59 추가(A40).** 라이브 API를 멈추는 창이 필요하다. 1단계 기준선 8 seed가 6시간 20분 걸렸으므로 10 seed는 약 8시간, 기동·확인을 더해 약 9시간을 잡는다. 1단계 기준선을 만든 `.claude/worktrees/nf4-baseline-965549e/run_nf4_baseline.sh`는 레포에 없는 로컬 파일이고, **seed 인자만 바꿔 다시 쓰면 안 된다**. 그 스크립트는 `RUN_INFO.txt`를 `>`로 덮어쓴다. `run_multiseed_eval.py`도 `multiseed_report.json`을 이번에 돌린 seed만으로 다시 쓴다(게이트는 CSV를 읽으므로 판정에는 영향이 없다). 컨테이너 안 git이 워크트리를 해석하지 못해 `commit:` 줄도 비어 있었다. 그래서 아래 명령을 직접 쓴다. 생성 부분(`PYTHONPATH`, 환경 변수, `run_multiseed_eval.py` 인자)은 1단계와 같고 seed만 다르다.
+
+```bash
+# A40 ship-paint-trainer 컨테이너 안. 스냅숏이 없으면 호스트 레포 루트에서:
+#   git worktree add --detach .claude/worktrees/nf4-baseline-965549e 965549e
+WT=/workspace/.claude/worktrees/nf4-baseline-965549e
+OUT=/output/eval_results/qwen36_27b_v6_1_nf4_baseline_965549e   # 1단계와 같은 결과 루트
+LOG=/logs/nf4_baseline_965549e
+mkdir -p "$LOG"
+pkill -f 'trainer.demo_api.app --host 0.0.0.0 --port 8120' || true   # 라이브 API 중단 창 시작
+pkill -f 'uvicorn mcp_servers.main:app --host 0.0.0.0 --port 8100' || true
+sleep 5
+cd "$WT"
+nohup uvicorn mcp_servers.main:app --host 0.0.0.0 --port 8100 > "$LOG/mcp_stage2.log" 2>&1 &
+until curl -sf http://127.0.0.1:8100/health | grep -q '"servers":7'; do sleep 2; done
+cp "$OUT/multiseed_report.json" "$OUT/multiseed_report_seed42-49.json"
+{
+  echo "--- stage 2: seeds 50-59"
+  echo "commit: 965549eb9ebe299b49378bc4eec8d6f0be343d1b"
+  echo "started_at: $(date -u +%FT%TZ)"
+  echo "env: TOOL_ADAPTER_NATIVE_TOOLS=0 TOOL_ADAPTER_FORCE_SYNTHESIS=1"
+  echo "pythonpath: $WT"
+  sha256sum /data/eval/eval_set_agentic.jsonl "$WT/trainer/configs/rag_config_fewshot_27b.yaml" \
+    /output/adapters/qwen36_27b_shipcoat_lora_v6_1/adapter_model.safetensors \
+    /output/indexes/faiss.index /output/indexes/metadata.json
+} >> "$OUT/RUN_INFO.txt"   # 덧붙인다. 해시가 1단계 블록과 같아야 한다
+PYTHONPATH="$WT" TOOL_ADAPTER_NATIVE_TOOLS=0 TOOL_ADAPTER_FORCE_SYNTHESIS=1 \
+python3 trainer/scripts/run_multiseed_eval.py \
+  --eval-set /data/eval/eval_set_agentic.jsonl \
+  --config "$WT/trainer/configs/rag_config_fewshot_27b.yaml" \
+  --adapter /output/adapters/qwen36_27b_shipcoat_lora_v6_1 \
+  --mcp-url http://127.0.0.1:8100 \
+  --seeds 50 51 52 53 54 55 56 57 58 59 \
+  --output-root "$OUT" \
+  --tool-schemas-dir "$WT/trainer/configs/tool_schemas" > "$LOG/multiseed_stage2.log" 2>&1
+echo "finished_at: $(date -u +%FT%TZ)" >> "$OUT/RUN_INFO.txt"
+# 이후 스냅숏 MCP를 내리고 라이브 MCP·API를 평소 방식으로 다시 올린다.
+```
+
+**후보 seed 50–59 추가(Spark)와 재판정.**
+
+```bash
+rsync -a --include '*/' --include 'agentic_eval_results.csv' --include 'RUN_INFO.txt' --exclude '*' \
+  a40:/data/ship-paint-ai/output/eval_results/qwen36_27b_v6_1_nf4_baseline_965549e/ "$RESULTS_DIR/baseline_nf4_965549e/"
+# 채점 CSV가 있는 seed_42..49는 건너뛰고 seed_50..59만 돈다. 커밋이 1단계와 다르면 RUN_NAME을 1단계 이름으로 준다.
+RUNS=18 RUN_NAME=qwen36_27b_v6_1_fp8_spark_<commit7> scripts/run_fp8_gate.sh
+python3 scripts/quality_gate.py --baseline-root "$RESULTS_DIR/baseline_nf4_965549e" \
+  --candidate-root "$RESULTS_DIR/qwen36_27b_v6_1_fp8_spark_<commit7>" --delta 0.2 --min-runs 18 --target-runs 18 \
+  --output "$RESULTS_DIR/fp8_gate_report_stage2.json"; echo EXIT=$?
 ```
 
 평가 하네스를 openai 백엔드 설정으로 돌리는 방식:
@@ -440,15 +514,17 @@ python3 scripts/quality_gate.py --baseline-root "$RESULTS_DIR/baseline_nf4_96554
 
 **명시적 한계**
 
-1. `--seed`는 torch 시드만 고정한다. openai 백엔드는 vLLM 요청에 `seed`를 보내지 않는다. 그래서 후보의 `seed_<n>`은 재현 가능한 시드가 아니라 독립 반복 번호다. 게이트는 8회 평균을 비교하므로 판정은 가능하지만, 문항별로 seed끼리 짝지어 비교하는 것은 의미가 없다.
+1. `--seed`는 torch 시드만 고정한다. openai 백엔드는 vLLM 요청에 `seed`를 보내지 않는다. 그래서 후보의 `seed_<n>`은 재현 가능한 시드가 아니라 **seed가 요청에 전달되지 않는 독립 반복** 번호다. 게이트는 실행 평균들을 독립 표본으로 비교(Welch)하므로 판정은 가능하지만, 문항별로 seed끼리 짝지어 비교하는 것은 의미가 없다.
 2. 기준선은 HF NF4(in-process), 후보는 vLLM FP8(HTTP)이다. 게이트는 양자화만의 차이가 아니라 서빙 스택 전체의 차이를 잰다.
 3. 문항별 thinking 사용 여부(`_should_enable_thinking`)와 MCP pose 기준 데이터 부재는 양쪽이 같다.
+4. 단계 규칙의 반복 확인(최대 2회)에 따른 1종 오류 증가는 보정하지 않았다(위 판정 규칙).
 
 **합격 기준**
 
-- `quality_gate.py` exit 0: `verdict: "pass"`, 후보 평균 ≥ 기준선 평균 − 0.2.
-- 입력이 불완전하면 exit 2다. 양쪽 모두 정확히 8회이고 각 30문항이며 문항 집합이 같아야 한다.
-- 보고서의 `per_question` 하위 항목(가장 크게 떨어진 문항)을 검토해 기록한다.
+- 확정 단계의 `quality_gate.py` exit 0: `verdict: "pass"`, CI 하한(`ci_low`) > −0.2.
+- exit 1(fail)은 불합격 확정이다. 1단계 exit 3이면 2단계로 간다. 2단계 exit 3은 판정 불가로 기록하고 사용자가 결정한다.
+- exit 2는 입력 문제다. 각 측 `--min-runs` 이상, 각 30문항, 문항 집합 동일, seed 디렉터리마다 CSV 1개여야 한다. 고친 뒤 같은 단계를 다시 판정한다.
+- 보고서 JSON의 `stage`, `n_baseline`, `n_candidate`, `difference`, `se`, `df`, `t_crit`, `ci_low`, `ci_high`, `delta`, `verdict`, `decision`, `required_runs_estimate`를 기록하고, `per_question` 하위 항목(가장 크게 떨어진 문항)을 검토해 기록한다.
 
 ## 18. 롤백 (BF16)
 
