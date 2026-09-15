@@ -19,6 +19,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from trainer.demo_api import chat_service as chat_service_mod
 from trainer.demo_api.chat_service import ChatService, build_default_live_runner
 from trainer.demo_api.contracts import ChatRequest
+from trainer.demo_api.copilot_router import create_copilot_router, install_copilot_error_handlers
 from trainer.demo_api.monitor import MonitorRecorder
 from trainer.demo_api.monitor_api import create_monitor_router
 from trainer.demo_api.readiness import evaluate_live_readiness
@@ -129,6 +130,11 @@ def create_app(
     app.state.sim_session_store = store
     app.include_router(create_simulator_router(recorder, store, resolver))
     app.include_router(create_monitor_router(recorder))
+    # knowledge_search shares the live pipeline singleton; resolved per call so it is built once, lazily.
+    app.include_router(
+        create_copilot_router((lambda: chat_service_mod._get_or_build_pipeline()) if live else None)
+    )
+    install_copilot_error_handlers(app)
 
     return app
 

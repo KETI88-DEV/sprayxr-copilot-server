@@ -36,6 +36,7 @@ from trainer.scripts.live_sequence_fallback import (
     LiveSequenceRequest,
     enforce_live_sequence_validation,
 )
+from trainer.scripts.generation_slot import GENERATION_SLOT
 from trainer.scripts.openai_backend import (
     ContextLengthExceededError,
     GenerationCancelledError,
@@ -134,8 +135,9 @@ ROUTE_MAX_TOKENS: dict[str, int] = {
 _PROGRESS_INTERVAL_SEC: Final[float] = 3.0
 
 # Acquired inside the worker thread, so async cancellation cannot free the slot
-# while an orphaned generation is still occupying the GPU.
-_GENERATION_SLOT: Final[threading.Semaphore] = threading.Semaphore(1)
+# while an orphaned generation is still occupying the GPU. Shared with
+# POST /api/v1/copilot/query through trainer.scripts.generation_slot.
+_GENERATION_SLOT: Final[threading.Semaphore] = GENERATION_SLOT
 
 
 class SemanticRouter:
@@ -1019,7 +1021,9 @@ class AgentPipeline:
         mode: str | None = None,
         trainee: dict[str, Any] | None = None,
         request_id: str | None = None,
+        use_rag: bool = True,
     ) -> dict[str, Any]:
+        """``use_rag=False`` skips retrieval: no RAG context, no chunk citations. The default is unchanged."""
         t0 = time.monotonic()
         if not instruction.strip():
             raise ValueError("instruction must not be empty")
@@ -1032,14 +1036,17 @@ class AgentPipeline:
         route = force_route or mode or self.router.classify(instruction, environment)
         logger.info("Router: %s → %s", instruction[:60], route)
 
-        rag_results, rag_timing = search_mod.search_and_rerank(
-            instruction,
-            self.index,
-            self.id_map,
-            self.embedder,
-            self.reranker,
-            self.config,
-        )
+        if use_rag:
+            rag_results, rag_timing = search_mod.search_and_rerank(
+                instruction,
+                self.index,
+                self.id_map,
+                self.embedder,
+                self.reranker,
+                self.config,
+            )
+        else:
+            rag_results, rag_timing = [], {"total_ms": 0.0}
         rag_chunks = [
             {
                 "chunk_id": r.get("chunk_id", ""),

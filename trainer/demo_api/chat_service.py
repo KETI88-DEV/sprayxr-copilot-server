@@ -5,7 +5,7 @@ import logging
 import os
 import threading
 import time
-from collections.abc import AsyncIterator, Callable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from typing import Final, Protocol
 
 from anyio import to_thread
@@ -35,6 +35,18 @@ class _Pipeline(Protocol):
         enable_thinking: bool,
         environment: dict[str, object],
     ) -> AsyncIterator[tuple[str, dict[str, object]]]:
+        ...
+
+    def run(
+        self,
+        *,
+        instruction: str,
+        force_route: str,
+        session_id: str | None,
+        enable_thinking: bool,
+        use_rag: bool,
+        request_id: str,
+    ) -> Mapping[str, object]:
         ...
 
 
