@@ -534,9 +534,12 @@ function mount(THREE, container) {
       (isLeg ? legs : group).add(marker);
     }
     if (isVec3(joints.Head)) {
-      const headMaterial = new THREE.MeshBasicMaterial({ color: BONE_COLOR, transparent: true, opacity: opacity * 0.4, depthWrite: false });
-      const head = new THREE.Mesh(new THREE.SphereGeometry(HEAD_SPHERE_RADIUS, 20, 14), headMaterial);
+      // 추정 머리는 **윤곽선**이다. 채운 구로 그리면 화면에서 가장 큰 구가 되고, 범례가 층 색으로
+      // 채운 구체를 실측이라 선언하는 것과 부호가 겹쳐 읽힌다(service.LEGEND_NOTES).
+      const headMaterial = new THREE.MeshBasicMaterial({ color: BONE_COLOR, transparent: true, opacity: opacity * 0.5, depthWrite: false, wireframe: true });
+      const head = new THREE.Mesh(new THREE.SphereGeometry(HEAD_SPHERE_RADIUS, 12, 8), headMaterial);
       head.position.set(...joints.Head);
+      head.userData.kind = "estimate-head";
       group.add(head);
     }
     // 자리표시 다리: 서버가 준 관절·뼈를 그대로 끊어 그린다(엉덩이는 골반에서 나간다).

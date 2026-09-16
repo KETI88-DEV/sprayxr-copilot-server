@@ -15,6 +15,8 @@ import re
 from html.parser import HTMLParser
 from pathlib import Path
 
+from trainer.pose_lab import service
+
 STATIC_DIR = Path(__file__).resolve().parents[1] / "static"
 STATIC_FILES = ("index.html", "app.js", "skeleton_view.js", "style.css")
 BANNED_PHRASES = ("미사용", "사용하지 않음", "unused", "not used")
@@ -102,3 +104,53 @@ def test_checks_can_fail():
     nested = """<main><div><section id="heroSection"></section>
       <section id="view3d"><section id="corrections"></section></section></div></main>"""
     assert corrections_placement(nested)["inside_view3d"] is True
+
+
+# --- F1: 범례 진실성 -------------------------------------------------------------------
+#
+# 실측은 머리(HMD)·건·플래쉬 세 강체의 마커뿐이다. 추정 기하(뼈·관절점·머리·다리)가 범례에서
+# "실측"으로 선언한 부호를 그대로 쓰면, 화면을 처음 보는 사람이 가장 큰 구(추정 머리, 반경 0.09m)를
+# 실측으로 읽는다. 옛 범례 "구체 = 실측"이 정확히 그랬다.
+
+HEAD_MATERIAL_RE = re.compile(r"const headMaterial = new THREE\.MeshBasicMaterial\(\{([^}]*)\}\)")
+
+
+def estimate_head_is_outline(js: str) -> bool | None:
+    """추정 머리를 채운 구가 아니라 윤곽선으로 그리는가. 재료를 못 찾으면 None."""
+    found = HEAD_MATERIAL_RE.search(js)
+    if found is None:
+        return None
+    return "wireframe: true" in found.group(1)
+
+
+def legend_truth_faults(legend_notes: tuple[str, ...], js: str) -> list[str]:
+    """범례가 선언한 '실측' 부호를 추정 기하가 나눠 쓰면 결함 이름을 돌려준다."""
+    faults = []
+    text = " / ".join(legend_notes)
+    if service.LEGEND_MEASURED_SYMBOL not in text:
+        faults.append("legend_does_not_name_the_measured_symbol")
+    if re.search(r"구체\s*=\s*실측", text) or re.search(r"(?<!색으로 채운 )구체 = ", text):
+        faults.append("legend_hands_a_bare_shape_to_measured")
+    if service.LEGEND_ESTIMATE_SYMBOL not in text:
+        faults.append("legend_does_not_name_the_estimate_symbol")
+    if estimate_head_is_outline(js) is not True:
+        faults.append("estimate_head_drawn_as_a_filled_sphere")
+    return faults
+
+
+def test_legend_does_not_hand_the_measured_symbol_to_estimated_geometry():
+    assert legend_truth_faults(service.LEGEND_NOTES, _read("skeleton_view.js")) == []
+
+
+def test_f1_checks_can_fail():
+    """F1 검사가 실패할 수 있음을 합성 입력으로 확인한다(실패할 수 없는 단언 방지)."""
+    filled = "const headMaterial = new THREE.MeshBasicMaterial({ color: BONE_COLOR, opacity: 0.4 })"
+    assert estimate_head_is_outline(filled) is False
+    assert estimate_head_is_outline("머리 재료가 없다") is None
+    old_legend = ("뼈 = 아바타 추정 · 점선 다리 = 자리표시(측정 아님) · 구체 = 실측",)
+    faults = legend_truth_faults(old_legend, filled)
+    assert "legend_hands_a_bare_shape_to_measured" in faults
+    assert "legend_does_not_name_the_measured_symbol" in faults
+    assert "estimate_head_drawn_as_a_filled_sphere" in faults
+    assert legend_truth_faults(service.LEGEND_NOTES, filled) == ["estimate_head_drawn_as_a_filled_sphere"]
+
