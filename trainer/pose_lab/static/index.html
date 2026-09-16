@@ -78,12 +78,23 @@
 
       <!-- ④b 건 각도(참고값) -->
       <section class="panel orientation" id="orientationSection" aria-label="건 각도 참고값">
-        <h2 class="orientation-title" id="orientationTitle">건 각도</h2>
-        <p class="orientation-header-note" id="orientationHeaderNote"></p>
-        <table class="orientation-table" id="orientationTable">
-          <thead><tr><th scope="col">항목</th><th scope="col">대상</th><th scope="col">기준</th></tr></thead>
-          <tbody></tbody>
-        </table>
+        <!-- 넓은 창에서 건 각도와 관절 축 평가 **요약**을 나란히 둔다 — 요약이 첫 화면 밖으로
+             밀리면 사용자 요청("관절 축 평가도 필요해 보임")에 답하지 못한다. 전체 표는 아래에 둔다. -->
+        <div class="orientation-grid">
+          <div class="orientation-col">
+            <h2 class="orientation-title" id="orientationTitle">건 각도</h2>
+            <p class="orientation-header-note" id="orientationHeaderNote"></p>
+            <table class="orientation-table" id="orientationTable">
+              <thead><tr><th scope="col">항목</th><th scope="col">대상</th><th scope="col">기준</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <div class="orientation-col joint-axes-summary" id="jointAxesSummary" hidden>
+            <h2 class="orientation-title" id="jointAxesSummaryTitle">관절 축 평가</h2>
+            <p class="orientation-header-note joint-axes-counts" id="jointAxesSummaryText"></p>
+            <ul class="joint-axes-chips" id="jointAxesChips"></ul>
+          </div>
+        </div>
         <ul class="orientation-notes" id="orientationNotes"></ul>
         <div class="joint-axes" id="jointAxes" hidden>
           <h3 class="orientation-title" id="jointAxesTitle">관절 축 평가</h3>

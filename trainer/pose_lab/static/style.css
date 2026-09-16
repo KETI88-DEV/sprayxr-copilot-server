@@ -626,6 +626,19 @@ dd { margin: 0; font-family: var(--mono); }
 .view3d-notes-more summary { cursor: pointer; color: var(--text-dim); }
 .view3d-notes-more summary:hover { color: var(--text); }
 .view3d-notes-more ul { list-style: none; margin: 0.15rem 0 0; padding: 0; line-height: 1.32; }
+/* 건 각도 · 관절 축 평가 요약: 넓은 창에서 나란히(요약이 첫 화면 안에 들어와야 한다). */
+.orientation-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-3); align-items: start; }
+.orientation-col { min-width: 0; }
+@media (min-width: 80rem) { .orientation-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
+.joint-axes-counts { margin: 0.15rem 0 var(--sp-1); }
+.joint-axes-chips { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.15rem; }
+.joint-axis-chip { display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: baseline; font-size: var(--fs-sm); }
+.joint-axis-chip-joint { color: var(--text); }
+.joint-axis-chip-status { color: var(--text-dim); }
+.joint-axis-chip[data-status="measured"] .joint-axis-chip-status,
+.joint-axis-chip[data-status="measured_above"] .joint-axis-chip-status { color: var(--ok, var(--text)); }
+.joint-axis-chip-value { font-family: var(--mono); color: var(--text); }
+
 .joint-axes { margin-top: var(--sp-3); }
 .joint-axes-table tbody th { white-space: nowrap; }
 .joint-axes-table .joint-axis-status { color: var(--text-dim); white-space: nowrap; }

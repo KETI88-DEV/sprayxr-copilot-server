@@ -154,3 +154,65 @@ def test_f1_checks_can_fail():
     assert "estimate_head_drawn_as_a_filled_sphere" in faults
     assert legend_truth_faults(service.LEGEND_NOTES, filled) == ["estimate_head_drawn_as_a_filled_sphere"]
 
+
+# --- F2: 관절 축 평가가 화면에 실제로 뜬다 ------------------------------------------------
+
+
+def orientation_layout(html: str) -> dict:
+    """관절 축 요약이 ④b 안에 있고, 전체 표(그리고 고지)보다 앞에 오는가."""
+    tree = _Tree()
+    tree.feed(html)
+    summary = tree.by_id.get("jointAxesSummary")
+    notes = tree.by_id.get("orientationNotes")
+    table = tree.by_id.get("jointAxesTable")
+    if summary is None or notes is None or table is None:
+        return {"summary_present": False, "summary_before_notes": False, "inside_orientation": False}
+
+    def order(node):
+        """문서 순서(깊이 우선) 인덱스."""
+        path = []
+        while node is not None and node.get("parent") is not None:
+            path.append(node["parent"]["children"].index(node))
+            node = node["parent"]
+        return tuple(reversed(path))
+
+    ancestors = []
+    node = summary.get("parent")
+    while node is not None:
+        if node.get("id"):
+            ancestors.append(node["id"])
+        node = node.get("parent")
+    return {
+        "summary_present": True,
+        "summary_before_notes": order(summary) < order(notes) < order(table),
+        "inside_orientation": "orientationSection" in ancestors,
+    }
+
+
+def joint_angle_note_is_rendered(app_js: str) -> bool:
+    """서버의 `joint_angles_note`를 화면이 실제로 그리는가(옛 화면은 필드를 아예 안 봤다)."""
+    return bool(re.search(r"orientation\.joint_angles_note", app_js))
+
+
+def test_joint_axes_summary_precedes_the_full_table_inside_the_angle_panel():
+    assert orientation_layout(_read("index.html")) == {
+        "summary_present": True,
+        "summary_before_notes": True,
+        "inside_orientation": True,
+    }
+
+
+def test_joint_angles_note_is_rendered_not_just_served():
+    assert joint_angle_note_is_rendered(_read("app.js")) is True
+
+
+def test_f2_checks_can_fail():
+    """F2 검사가 실패할 수 있음을 합성 입력으로 확인한다(실패할 수 없는 단언 방지)."""
+    moved = """<main><section id="orientationSection"><ul id="orientationNotes"></ul>
+      <div id="jointAxesSummary"></div><table id="jointAxesTable"></table></section></main>"""
+    assert orientation_layout(moved)["summary_before_notes"] is False
+    outside = """<main><div id="jointAxesSummary"></div><section id="orientationSection">
+      <ul id="orientationNotes"></ul><table id="jointAxesTable"></table></section></main>"""
+    assert orientation_layout(outside)["inside_orientation"] is False
+    assert orientation_layout("<main></main>")["summary_present"] is False
+    assert joint_angle_note_is_rendered("for (const t of [o.weight_note, o.excluded_note]) {}") is False

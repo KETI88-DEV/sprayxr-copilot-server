@@ -189,3 +189,39 @@ def test_joint_axes_block_measures_only_tracked_bodies() -> None:
         assert word not in blob
     assert "늘 0°" not in orientation.JOINT_ANGLES_NOTE
 
+
+
+def test_joint_axes_summary_counts_every_row_and_values_only_measured_ones() -> None:
+    """첫 화면 요약(F2)은 전체 표와 같은 문자열만 쓰고, 값은 실측 강체가 붙은 관절에만 붙는다.
+
+    요약이 전체 표와 어긋나면 첫 화면이 아래 표와 다른 말을 한다. 그래서 (1) 상태 수의 합이 행 수와
+    같고, (2) 요약 조각(joint·status_text·값)이 전부 해당 행에서 온 것인지 본다.
+    """
+    block = orientation.joint_axes_block(_heading_rows(20.0), _heading_rows(5.0))
+    rows = {row["key"]: row for row in block["rows"]}
+    summary = block["summary"]
+    assert summary["title"] == orientation.JOINT_AXES_SUMMARY_TITLE
+    assert sum(summary["counts"].values()) == len(block["rows"])
+    assert summary["counts"] == {"measured": 2, "not_evaluated": 1, "not_measured": 3}
+    assert summary["counts_text"] == "관절 6곳 — 실측 2 · 평가 안 함 1 · 측정 없음 3"
+    # 값이 붙는 칩은 실측 강체 관절뿐이고, 문자열은 전부 같은 행에서 온 것이다.
+    assert [chip["key"] for chip in summary["chips"]] == ["head_hmd_heading", "right_gun_axis"]
+    for chip in summary["chips"]:
+        row = rows[chip["key"]]
+        assert chip["joint"] == row["joint"] and chip["status_text"] == row["status_text"]
+        assert chip["status"] in orientation.MEASURED_STATUSES
+    head, gun = summary["chips"]
+    assert head["value"] == "대상 20° · 기준 5°"
+    assert gun["value"] is None
+
+
+def test_joint_axes_summary_follows_the_rows_it_summarises() -> None:
+    """요약이 행에서 나온다는 것을 확인한다 — 행을 바꾸면 요약도 바뀌어야 한다(고정 문자열이 아님)."""
+    rows = orientation.joint_axes_block(_heading_rows(20.0), _heading_rows(5.0))["rows"]
+    trimmed = [row for row in rows if row["status"] != "not_measured"]
+    summary = orientation._joint_axes_summary(trimmed)  # noqa: SLF001
+    assert summary["counts"] == {"measured": 2, "not_evaluated": 1, "not_measured": 0}
+    assert summary["counts_text"] == "관절 3곳 — 실측 2 · 평가 안 함 1 · 측정 없음 0"
+    # 실측 행에서 display를 떼면 값 칩도 사라진다.
+    stripped = [dict(row, display=None) if row["key"] == "head_hmd_heading" else row for row in rows]
+    assert orientation._joint_axes_summary(stripped)["chips"][0]["value"] is None  # noqa: SLF001

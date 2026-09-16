@@ -234,6 +234,53 @@ def hmd_heading_to_hit_deg(rows: Sequence[Mapping[str, str]]) -> tuple[float | N
     return float(np.mean(angles)), len(angles), None
 
 
+# 첫 화면 요약(사용자 요청 "관절 축 평가도 필요해 보임"). 전체 표는 아래에 그대로 두고, 여기서는
+# **무엇을 잴 수 있고 무엇을 못 재는지**만 한눈에 준다. 값·사유 문자열은 전부 아래 표와 같은 것을 쓴다 —
+# 화면은 다시 계산하지 않는다.
+JOINT_AXES_SUMMARY_TITLE: Final = "관절 축 평가"
+MEASURED_STATUSES: Final[frozenset[str]] = frozenset({"measured", "measured_above"})
+# 첫 화면 요약은 세 줄을 넘지 않는다 — 제목 · 상태 수 · 실측 축이 있는 관절. 못 재는 관절의 이름과
+# 사유는 바로 아래 전체 표가 그대로 싣는다.
+SUMMARY_COUNT_ORDER: Final[tuple[str, ...]] = ("measured", "not_evaluated", "not_measured")
+SUMMARY_COUNT_LABEL: Final[dict[str, str]] = {
+    "measured": "실측",
+    "not_evaluated": "평가 안 함",
+    "not_measured": "측정 없음",
+}
+
+
+def _joint_axes_summary(rows: Sequence[Mapping[str, object]]) -> dict[str, object]:
+    counts = {key: 0 for key in SUMMARY_COUNT_ORDER}
+    for row in rows:
+        status = str(row["status"])
+        counts["measured" if status in MEASURED_STATUSES else status] += 1
+    counts_text = " · ".join(f"{SUMMARY_COUNT_LABEL[key]} {counts[key]}" for key in SUMMARY_COUNT_ORDER)
+    chips: list[dict[str, object]] = []
+    for row in rows:
+        if row["status"] not in MEASURED_STATUSES:
+            continue
+        display = row.get("display")
+        value = None
+        if isinstance(display, Mapping) and not row.get("reason"):
+            value = f"대상 {display['query']} · 기준 {display['reference']}"
+        chips.append(
+            {
+                "key": row["key"],
+                "joint": row["joint"],
+                "status": row["status"],
+                "status_text": row["status_text"],
+                "value": value,
+                "reason_text": row.get("reason_text") if row.get("reason") else None,
+            }
+        )
+    return {
+        "title": JOINT_AXES_SUMMARY_TITLE,
+        "counts": counts,
+        "counts_text": f"관절 {len(rows)}곳 — {counts_text}",
+        "chips": chips,
+    }
+
+
 def joint_axes_block(
     query_rows: Sequence[Mapping[str, str]], reference_rows: Sequence[Mapping[str, str]]
 ) -> dict[str, object]:
@@ -268,4 +315,9 @@ def joint_axes_block(
                 }
             )
         rows.append(row)
-    return {"title": JOINT_AXES_TITLE, "note": JOINT_AXES_NOTE, "rows": rows}
+    return {
+        "title": JOINT_AXES_TITLE,
+        "note": JOINT_AXES_NOTE,
+        "rows": rows,
+        "summary": _joint_axes_summary(rows),
+    }

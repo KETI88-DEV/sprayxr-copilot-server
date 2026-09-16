@@ -370,21 +370,51 @@ function renderOrientation(orientation) {
     }
     body.append(row);
   }
-  for (const text of [orientation.weight_note, orientation.excluded_note]) {
+  // 관절 각도를 왜 안 싣는지(joint_angles_note)는 화면에 실제로 떠야 한다 — 서버만 알고 있으면
+  // 표에서 빠진 이유를 아무도 못 읽는다.
+  for (const text of [orientation.weight_note, orientation.joint_angles_note, orientation.excluded_note]) {
     if (typeof text === "string" && text) notes.append(el("li", null, text));
+  }
+}
+
+/** 첫 화면에 남는 관절 축 평가 **요약**. 문장·상태·값 문자열은 전부 서버가 준 것이다. */
+function renderJointAxesSummary(box, summary) {
+  if (!summary) {
+    box.hidden = true;
+    return;
+  }
+  box.hidden = false;
+  $("jointAxesSummaryTitle").textContent = summary.title ?? "관절 축 평가";
+  $("jointAxesSummaryText").textContent = summary.counts_text ?? "";
+  const chips = $("jointAxesChips");
+  for (const chip of summary.chips ?? []) {
+    const item = el("li", "joint-axis-chip");
+    item.dataset.key = chip.key ?? "";
+    item.dataset.status = chip.status ?? "";
+    item.append(
+      el("span", "joint-axis-chip-joint", chip.joint ?? "—"),
+      el("span", "joint-axis-chip-status", chip.status_text ?? "—"),
+    );
+    const detail = chip.value ?? chip.reason_text;
+    if (detail) item.append(el("span", "joint-axis-chip-value", detail));
+    chips.append(item);
   }
 }
 
 /** 관절 축 평가표. 값은 서버 display 문자열만, 측정 없는 관절은 서버 사유 문장만 싣는다. */
 function renderJointAxes(block) {
   const section = $("jointAxes");
+  const summaryBox = $("jointAxesSummary");
   const body = $("jointAxesTable").querySelector("tbody");
   body.replaceChildren();
+  $("jointAxesChips").replaceChildren();
   if (!block) {
     section.hidden = true;
+    summaryBox.hidden = true;
     return;
   }
   section.hidden = false;
+  renderJointAxesSummary(summaryBox, block.summary ?? null);
   $("jointAxesTitle").textContent = block.title ?? "관절 축 평가";
   $("jointAxesNote").textContent = block.note ?? "";
   for (const row of block.rows ?? []) {
