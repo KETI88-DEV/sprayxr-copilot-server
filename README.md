@@ -125,11 +125,28 @@ docker exec ship-paint-trainer curl -s http://127.0.0.1:8130/api/health
 docker exec ship-paint-trainer curl -s http://127.0.0.1:8130/api/workers
 ```
 
-`deploy/docker-compose.yml`은 `8120`만 호스트에 게시하므로 브라우저로 보려면 SSH 터널을 쓴다.
+`deploy/docker-compose.yml`은 `8120`만 호스트에 게시한다. 즉 `8130`은 컨테이너 안에만
+떠 있고 **호스트의 `127.0.0.1:8130`에는 아무것도 없다**. 터널을 뚫기 전에 호스트 루프백에
+중계를 하나 붙여야 한다(컨테이너를 다시 띄우지 않아도 되고, 사내망에 노출되지도 않는다).
 
 ```bash
-ssh -L 8130:127.0.0.1:8130 <서버>
+# 호스트에서 한 번. 컨테이너 IP는 docker inspect 로 확인한다
+CIP=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' ship-paint-trainer)
+setsid nohup socat TCP-LISTEN:8130,bind=127.0.0.1,fork,reuseaddr TCP:$CIP:8130 \
+  > /tmp/pose_lab_relay.log 2>&1 < /dev/null &
+ss -ltn | grep 8130          # 127.0.0.1:8130 LISTEN 이 보여야 한다
 ```
+
+`socat`이 없으면 같은 일을 하는 파이썬 한 줄짜리 중계로 대신해도 된다. 이 중계는
+**재부팅하면 사라진다** — 서버를 다시 띄울 때마다 같이 띄운다.
+
+그 다음 접속하는 PC에서 터널을 연다.
+
+```bash
+ssh -L 8130:127.0.0.1:8130 <user>@<서버>
+```
+
+이 명령은 **접속하는 PC에서** 실행한다. 이미 서버에 SSH로 들어와 있는 창이 아니라 새 창이다.
 
 이후 브라우저에서 `http://127.0.0.1:8130`을 연다. 작업자·레벨·패스를 양쪽 드롭다운에서 고르고 **비교**를 누른다. 패스 목록은 `GET /api/passes?worker=&level=&limit=`이 만들고, 항목마다 **동작 키**가 붙어 있어 견줄 수 있는 쌍을 눈으로 고를 수 있다. 레퍼런스 쪽의 "질의와 동작 키가 같은 것만"이 기본으로 켜져 있다.
 
