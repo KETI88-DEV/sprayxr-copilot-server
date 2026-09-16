@@ -58,11 +58,6 @@ const LABEL_PUSH_PX = 16;
 // torso("상체 확대")만 1.0이다 — 상체를 캔버스에 꽉 채우려고 일부러 다리·교정 화살표·착탄점을 맞춤
 // 대상에서 뺐고, 그래서 그것들이 화면 밖으로 나갈 수 있다. 나간 것의 이름은 캔버스 아래에 적는다.
 const FRAMING_TARGET = { pose: 0.86, tracks: 0.75, wall: 0.9, torso: 0.98 };
-// 어느 쪽을 목표 비율로 잴 것인가. 기본은 가로·세로 중 **큰 쪽**이라 아무것도 잘리지 않는다.
-// torso만 **세로**로 잰다 — 상체 상자는 양손이 벌어져 가로가 길고, 큰 쪽으로 맞추면 세로가 남는다.
-// 세로로 맞추면 가로가 넘쳐 손이 화면 밖으로 나갈 수 있다. 그것이 이 프리셋의 의도이고, 나간 것의
-// 이름을 캔버스 아래에 적는다.
-const FRAMING_AXIS = { torso: "vertical" };
 
 /** 강조 함수 — 색·굵기·마커·라벨 전부 이 하나의 함수다. */
 function emphasis(weight) {
@@ -1212,7 +1207,7 @@ function mount(THREE, container) {
   }
 
   /** 카메라 거리 d에서 주어진 점들을 투영했을 때 max(높이비, 폭비). 뒤로 넘어가면 Infinity. */
-  function projectedRatio(corners, target, offsetDir, distance, axis) {
+  function projectedRatio(corners, target, offsetDir, distance) {
     const position = target.clone().addScaledVector(offsetDir, distance);
     const forward = offsetDir.clone().negate();
     const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0));
@@ -1231,8 +1226,7 @@ function mount(THREE, container) {
       xmin = Math.min(xmin, x); xmax = Math.max(xmax, x);
       ymin = Math.min(ymin, y); ymax = Math.max(ymax, y);
     }
-    const vertical = (ymax - ymin) / 2;
-    return axis === "vertical" ? vertical : Math.max((xmax - xmin) / 2, vertical);
+    return Math.max((xmax - xmin) / 2, (ymax - ymin) / 2);
   }
 
   /** AABB 중심을 보고, 세로·가로 FOV 모두에서 목표 비율이 되는 거리를 이분법으로 찾는다. */
@@ -1252,25 +1246,26 @@ function mount(THREE, container) {
       Math.cos(camState.phi),
       sinPhi * Math.cos(camState.theta),
     ).normalize();
-    // pose(자세 맞춤·기본)는 **실제 점**에 맞춘다. AABB 8꼭짓점에 맞추면 몸 앞뒤로 부풀린 상자의
-    // 가까운 모서리가 크게 잡혀, 화면에 실제로 보이는 것보다 멀리 물러선다(L6에서 상체가 59%만
-    // 차지해야 할 거리를 75%로 세어 뒤로 물러났다). 궤적·벽 프리셋은 점이 많아 예전대로 꼭짓점을 쓴다.
+    // pose(자세 맞춤·기본)와 torso(상체 확대)는 **실제 점**에 맞춘다. AABB 8꼭짓점에 맞추면 몸 앞뒤로
+    // 부풀린 상자의 가까운 모서리가 크게 잡혀, 화면에 실제로 보이는 것보다 멀리 물러선다(L6에서 상체가
+    // 59%만 차지해야 할 거리를 75%로 세어 뒤로 물러났다). torso에서도 같은 일이 일어나 **확대 프리셋이
+    // 기본보다 작아졌다** — 실측: L3 상체 비율 0.6692(실제 점) vs 0.4864(꼭짓점), 기본이 0.5827이다.
+    // 궤적·벽 프리셋은 점이 많아 예전대로 꼭짓점을 쓴다.
     const fitPoints =
       mode === "pose" || mode === "torso" ? points.map((p) => new THREE.Vector3(...p)) : corners;
     const goal = FRAMING_TARGET[mode] ?? 0.75;
-    const axis = FRAMING_AXIS[mode];
     let lo = 0.01;
     let hi = 100;
     for (let i = 0; i < 60; i += 1) {
       const mid = (lo + hi) / 2;
-      if (projectedRatio(fitPoints, target, offsetDir, mid, axis) > goal) lo = mid;
+      if (projectedRatio(fitPoints, target, offsetDir, mid) > goal) lo = mid;
       else hi = mid;
     }
     camState.target.copy(target);
     camState.radius = hi;
     framing.mode = mode;
     framing.auto = true;
-    framing.ratio = projectedRatio(fitPoints, target, offsetDir, hi, axis);
+    framing.ratio = projectedRatio(fitPoints, target, offsetDir, hi);
     applyCamera();
     // 자른 사실은 카메라를 적용한 **뒤에** 잰다 — 투영이 새 카메라를 써야 이름이 맞는다.
     const offscreen = mode === "torso" ? offscreenFitTargets() : [];
