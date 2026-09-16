@@ -352,6 +352,61 @@ function mount(THREE, container) {
   let coneRegistry = [];
   let markerRegistry = [];
 
+  // --- 검증 계측(헤드리스 브라우저가 읽는다) ---------------------------------------------
+  // 몸통 마디: 라벨을 밀어낼 장애물이자, 라벨-몸통 겹침을 세는 대상.
+  const TORSO_BONES = [["Pelvis", "Spine"], ["Spine", "Chest"], ["Chest", "Head"]];
+  const TORSO_HALF_PX = 11;
+
+  /** 몸통 마디를 화면 사각형 여러 개로 쪼갠다(라벨 회피용 장애물). */
+  function torsoScreenRects() {
+    const joints = lastView?.layers?.query?.joints ?? {};
+    const rects = [];
+    for (const [a, b] of TORSO_BONES) {
+      if (!isVec3(joints[a]) || !isVec3(joints[b])) continue;
+      const p0 = toPixel(new THREE.Vector3(...joints[a]));
+      const p1 = toPixel(new THREE.Vector3(...joints[b]));
+      const steps = 8;
+      for (let i = 0; i <= steps; i += 1) {
+        const t = i / steps;
+        const x = p0.x + (p1.x - p0.x) * t;
+        const y = p0.y + (p1.y - p0.y) * t;
+        rects.push({ x0: x - TORSO_HALF_PX, x1: x + TORSO_HALF_PX, y0: y - TORSO_HALF_PX, y1: y + TORSO_HALF_PX });
+      }
+    }
+    return rects;
+  }
+
+  /** 다리를 뺀 상체(골반~머리·팔·실측 마커)가 캔버스에서 차지하는 세로 비율. */
+  function upperBodyScreen() {
+    if (!lastView) return null;
+    const joints = lastView.layers?.query?.joints ?? {};
+    const legSet = new Set(lastView.fit?.legs?.joints ?? []);
+    const points = [];
+    for (const [name, value] of Object.entries(joints)) if (!legSet.has(name) && isVec3(value)) points.push(value);
+    for (const anchor of lastView.fit?.anchors ?? []) if (isVec3(anchor.measured_marker)) points.push(anchor.measured_marker);
+    if (points.length === 0) return null;
+    let top = Infinity; let bottom = -Infinity; let left = Infinity; let right = -Infinity;
+    for (const value of points) {
+      const px = toPixel(new THREE.Vector3(...value));
+      top = Math.min(top, px.y); bottom = Math.max(bottom, px.y);
+      left = Math.min(left, px.x); right = Math.max(right, px.x);
+    }
+    const { w, h } = hostSize();
+    return {
+      topPx: top, bottomPx: bottom, heightPx: bottom - top, widthPx: right - left,
+      hostHeightPx: h, hostWidthPx: w, heightFraction: (bottom - top) / h,
+    };
+  }
+
+  /** 추정 머리가 채운 구가 아니라 윤곽선인지(범례 진실성). */
+  function estimateHeadIsOutline() {
+    let found = null;
+    layerGroups.query.traverse((child) => {
+      if (child.userData.kind === "estimate-head") found = child.material?.wireframe === true;
+    });
+    return found;
+  }
+
   /** 스켈레톤 가슴(없으면 골반)의 화면 위치. 스켈레톤이 없으면 null. */
   function bodyScreenCenter() {
     const joints = lastView?.layers?.query?.joints ?? {};
@@ -371,9 +426,12 @@ function mount(THREE, container) {
       return shown;
     };
     let labelOverlaps = 0;
+    // 몸통 마디도 장애물이다 — 글자 라벨이 몸통 위에 앉으면 뼈도 글자도 못 읽는다(보정 오프셋 라벨).
+    const torsoRects = torsoScreenRects();
     // 글자 라벨은 몸통 화면 위치에서 **바깥쪽**으로 민다 — 몸 한가운데에 거리·오프셋 라벨이 쌓여 팔·몸통을
     // 가렸다(2라운드). 기준점은 스켈레톤 가슴(없으면 라벨 자리 그대로).
     const body = bodyScreenCenter();
+    let torsoLabelOverlaps = 0;
     for (const entry of labelRegistry) {
       if (entry.kind === "badge" || !visible(entry)) continue;
       const px = toPixel(entry.position);
@@ -389,7 +447,8 @@ function mount(THREE, container) {
         [ox, oy] = len < 1e-6 ? [1, 0] : [dx / len, dy / len];
       }
       const rect = (xx, yy) => ({ x0: xx - w / 2, x1: xx + w / 2, y0: yy - 1.4 * h, y1: yy - 0.4 * h });
-      const clashes = (r) => obstacles.some((o) => r.x0 < o.x1 && r.x1 > o.x0 && r.y0 < o.y1 && r.y1 > o.y0);
+      const hits = (r, list) => list.some((o) => r.x0 < o.x1 && r.x1 > o.x0 && r.y0 < o.y1 && r.y1 > o.y0);
+      const clashes = (r) => hits(r, obstacles) || hits(r, torsoRects);
       let x = px.x + ox * LABEL_PUSH_PX;
       let y = px.y + oy * LABEL_PUSH_PX;
       for (let step = 0; step < 6 && clashes(rect(x, y)); step += 1) {
@@ -397,11 +456,15 @@ function mount(THREE, container) {
         y += body ? oy * (h + 2) : h + 2;
       }
       if (clashes(rect(x, y))) labelOverlaps += 1;
+      if (hits(rect(x, y), torsoRects)) torsoLabelOverlaps += 1;
       entry.el.style.left = `${x}px`;
       entry.el.style.top = `${y}px`;
       obstacles.push(rect(x, y));
     }
     debugLive.labelOverlaps = labelOverlaps;
+    debugLive.torsoLabelOverlaps = torsoLabelOverlaps;
+    debugLive.upperBody = upperBodyScreen();
+    debugLive.estimateHeadIsOutline = estimateHeadIsOutline();
     const hitsObstacle = (x, y) => obstacles.some((r) => {
       const nx = clamp(x, r.x0, r.x1);
       const ny = clamp(y, r.y0, r.y1);
@@ -760,11 +823,15 @@ function mount(THREE, container) {
     if (hasSkeleton) {
       // 숨긴 다리는 맞춤 대상에서도 뺀다 — 안 보이는 점 때문에 몸이 작아지면 안 된다. 대신 보이는
       // 자리표시 다리는 넣는다.
-      const legsHidden = !checkboxes.legs.checked && Array.isArray(view.fit?.legs?.joints);
-      const hidden = new Set(legsHidden ? view.fit.legs.joints : []);
-      for (const [name, p] of Object.entries(joints)) if (!hidden.has(name)) push(p);
+      // pose(자세 맞춤·기본)에서는 **보이든 말든** 다리를 맞춤 대상에서 뺀다. 무릎~발끝이 세로를 다
+      // 먹으면 실측 마커·교정 화살표가 모인 상체가 쪼그라든다. 다리는 그대로 그린다 — 여기서 빼는 것은
+      // 카메라 거리 계산뿐이고, 궤적·벽 프리셋은 예전대로 다리를 넣는다.
+      const legJoints = Array.isArray(view.fit?.legs?.joints) ? view.fit.legs.joints : [];
+      const legsHidden = !checkboxes.legs.checked && legJoints.length > 0;
+      const excluded = new Set(mode === "pose" || legsHidden ? legJoints : []);
+      for (const [name, p] of Object.entries(joints)) if (!excluded.has(name)) push(p);
       const placeholderJoints = view.fit?.legs?.placeholder_joints;
-      if (legsHidden && placeholderJoints) for (const p of Object.values(placeholderJoints)) push(p);
+      if (mode !== "pose" && legsHidden && placeholderJoints) for (const p of Object.values(placeholderJoints)) push(p);
       for (const anchor of view.fit?.anchors ?? []) {
         push(anchor.measured_marker);
         push(anchor.predicted_marker);
@@ -781,7 +848,9 @@ function mount(THREE, container) {
         push(correction.to);
       }
     }
-    push(view.composite?.hit);
+    // 착탄점은 벽 위에 있어 몸에서 멀다. pose(자세 맞춤·기본)는 실측 마커·교정 화살표·상체 관절을
+    // 우선하므로 넣지 않는다 — 넣으면 벽까지 담느라 상체가 다시 쪼그라든다. 궤적·벽 프리셋은 넣는다.
+    if (mode !== "pose") push(view.composite?.hit);
     if (mode === "tracks" || mode === "wall") {
       for (const name of ["head", "right", "left"]) for (const p of view.layers?.query?.[name] ?? []) push(p);
     }
@@ -805,7 +874,7 @@ function mount(THREE, container) {
     return { min, max };
   }
 
-  /** 카메라 거리 d에서 AABB 8꼭짓점을 투영했을 때 max(높이비, 폭비). 뒤로 넘어가면 Infinity. */
+  /** 카메라 거리 d에서 주어진 점들을 투영했을 때 max(높이비, 폭비). 뒤로 넘어가면 Infinity. */
   function projectedRatio(corners, target, offsetDir, distance) {
     const position = target.clone().addScaledVector(offsetDir, distance);
     const forward = offsetDir.clone().negate();
@@ -845,19 +914,23 @@ function mount(THREE, container) {
       Math.cos(camState.phi),
       sinPhi * Math.cos(camState.theta),
     ).normalize();
+    // pose(자세 맞춤·기본)는 **실제 점**에 맞춘다. AABB 8꼭짓점에 맞추면 몸 앞뒤로 부풀린 상자의
+    // 가까운 모서리가 크게 잡혀, 화면에 실제로 보이는 것보다 멀리 물러선다(L6에서 상체가 59%만
+    // 차지해야 할 거리를 75%로 세어 뒤로 물러났다). 궤적·벽 프리셋은 점이 많아 예전대로 꼭짓점을 쓴다.
+    const fitPoints = mode === "pose" ? points.map((p) => new THREE.Vector3(...p)) : corners;
     const goal = FRAMING_TARGET[mode] ?? 0.75;
     let lo = 0.01;
     let hi = 100;
     for (let i = 0; i < 60; i += 1) {
       const mid = (lo + hi) / 2;
-      if (projectedRatio(corners, target, offsetDir, mid) > goal) lo = mid;
+      if (projectedRatio(fitPoints, target, offsetDir, mid) > goal) lo = mid;
       else hi = mid;
     }
     camState.target.copy(target);
     camState.radius = hi;
     framing.mode = mode;
     framing.auto = true;
-    framing.ratio = projectedRatio(corners, target, offsetDir, hi);
+    framing.ratio = projectedRatio(fitPoints, target, offsetDir, hi);
     applyCamera();
     if (container.__view3dDebug) {
       container.__view3dDebug.framingRatio = framing.ratio;
