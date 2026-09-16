@@ -50,9 +50,13 @@
        └─ Agent API (FastAPI, port 8120/container, 58000/host)
             ├─ Session Store
             ├─ Sequence Ingestor
-            ├─ Coating / Sequence / Pose 판정 엔진
+            ├─ 필수 분석 인터페이스 5종
+            │    ├─ coating_analysis
+            │    ├─ anomaly_detection
+            │    ├─ pose_analysis
+            │    ├─ sequence_analysis
+            │    └─ knowledge_search
             ├─ RAG: BGE-M3 + reranker + FAISS
-            ├─ MCP 도구 라우터
             ├─ Report Job Store
             └─ OpenAI-compatible HTTP
                  └─ vLLM Qwen3.6-27B 병합 모델
@@ -283,12 +287,11 @@ Trigger ON→OFF 한 번을 하나의 시퀀스로 정의한다. 프레임은 �
 
 1. 세션, 구역, 단위, 프레임 순서 및 중복 여부 검증
 2. 원본 또는 정규화된 시퀀스 저장
-3. 도막 판정
-4. 구역 순서와 궤적 방향 판정
-5. 숙련자 기준 자세 비교
-6. 세션 누적 상태 반영
-7. HTTP 응답 생성
-8. 이상이 있으면 동일 판정 결과로 SSE 발행
+3. `coating_analysis`, `pose_analysis`, `sequence_analysis` 실행
+4. 세 분석 결과를 `anomaly_detection`으로 조합
+5. 세션 누적 상태 반영
+6. HTTP 응답 생성
+7. 이상이 있으면 동일 판정 결과로 SSE 발행
 
 상태 전이는 HTTP/SSE 발행 전에 확정한다. HTTP와 SSE가 서로 다른 판정을 만들어서는 안 된다.
 
@@ -331,11 +334,14 @@ Trigger ON→OFF 한 번을 하나의 시퀀스로 정의한다. 프레임은 �
     "pose_feedback": {
       "analysis_status": "available",
       "similarity_score": 0.82,
+      "correction_mode": "joint_only",
       "corrections": [
         {
           "joint": "right_elbow",
-          "delta_deg": 6.0,
-          "guidance": "오른쪽 팔꿈치를 약간 펴세요."
+          "label": "오른쪽 팔꿈치가 숙련자 통상 범위를 벗어났습니다.",
+          "target_validated": false,
+          "angle_delta_deg": null,
+          "direction": null
         }
       ]
     },
@@ -415,7 +421,7 @@ SSE의 판정 값은 같은 시퀀스 HTTP 응답의 값과 일치해야 한다.
     "generated_at": "2026-09-16T08:02:00Z",
     "latency_ms": 28450,
     "degraded": false,
-    "answer": "숙련자 자세 대비 유사도는 82%입니다. 오른쪽 팔꿈치를 약간 펴고 이격거리를 줄이세요.",
+    "answer": "숙련자 자세 대비 유사도는 82%입니다. 오른쪽 팔꿈치 자세가 통상 범위를 벗어났으므로 자세를 다시 확인하고 이격거리를 줄이세요.",
     "resolved_intents": ["pose_recommendation", "coating_error_analysis"],
     "context_status": "available",
     "sequence_context": {
@@ -431,8 +437,14 @@ SSE의 판정 값은 같은 시퀀스 HTTP 응답의 값과 일치해야 한다.
     },
     "pose_context": {
       "similarity_score": 0.82,
+      "correction_mode": "joint_only",
       "corrections": [
-        {"joint": "right_elbow", "delta_deg": 6.0}
+        {
+          "joint": "right_elbow",
+          "target_validated": false,
+          "angle_delta_deg": null,
+          "direction": null
+        }
       ]
     },
     "retrieval_used": true,
@@ -584,7 +596,7 @@ Content-Type은 `multipart/form-data`이며 다음 파트를 사용한다.
             "zone_id": "A-1",
             "joint": "right_elbow",
             "occurrence_rate": 0.67,
-            "correction_guidance": "오른쪽 팔꿈치를 약간 펴세요."
+            "correction_guidance": "오른쪽 팔꿈치 자세가 숙련자 통상 범위를 반복적으로 벗어났습니다."
           }
         ]
       },
@@ -651,6 +663,7 @@ LLM 응답 시간은 모델 정밀도와 서빙 백엔드에 따라 달라질 �
 ### 16.1 계약 시험
 
 - OpenAPI에 §5의 8개 엔드포인트가 모두 존재한다.
+- 내부 분석 인터페이스가 §18의 5종으로만 구성되고 스키마를 준수한다.
 - 모든 요청 모델은 알 수 없는 필드를 거부한다.
 - Python Pydantic 모델과 UI Zod 모델이 동일한 필드와 제약을 가진다.
 - 성공·오류 응답이 공통 래퍼를 준수한다.
@@ -704,6 +717,570 @@ LLM 응답 시간은 모델 정밀도와 서빙 백엔드에 따라 달라질 �
 | 리포트 상태·결과 | 없음 | 구현 |
 | 제품 UI | `/api/chat`, `/api/sim/*` 사용 | `/api/v1` 전환 |
 | 시퀀스 결과 | 내부 deterministic stub | 실제 판정 엔진 연결 |
+| 내부 분석 인터페이스 | 중복 책임을 가진 7개 MCP | §18의 필수 5종으로 통합 |
 | 진행 문구 | 매 요청 `모델 초기화` 표시 | 실제 단계 표시 |
 
 이 표의 모든 목표 상태가 구현되고 §16을 통과한 뒤 새 Spark 릴리스를 생성한다.
+
+## 18. 필수 분석 인터페이스 계약
+
+### 18.1 구성 원칙
+
+필수 내부 분석 인터페이스는 다음 5개뿐이다.
+
+| 인터페이스 | 단일 책임 |
+|---|---|
+| `coating_analysis` | 도막 분포와 규격 준수 판정 |
+| `pose_analysis` | 숙련자 자세 유사도와 검증된 교정 항목 산출 |
+| `sequence_analysis` | 구역 순서, 궤적, 방향, 거리와 속도 판정 |
+| `anomaly_detection` | 앞선 세 분석 결과를 정규화된 이상 목록으로 조합 |
+| `knowledge_search` | RAG 문서 검색과 citation 제공 |
+
+다음 기능은 별도 MCP로 두지 않는다.
+
+- `location_tracking`: SIM 입력이 `zone_id`, `raypoint`, `raytexmapnum`, `raytexuv`를 제공하므로 제거한다. `zone_id`가 없으면 요청을 422로 거부하며 좌표로 추정하지 않는다.
+- `timeseries`: 90 FPS `sequence_info`를 `pose_analysis`와 `sequence_analysis` 입력으로 직접 정규화한다.
+- `dft_judge`: 90/10 판정과 도막 분포 판정을 `coating_analysis`가 함께 소유한다.
+- `vlm_analysis`: v2.5 필수 실시간 경로에서 제외한다. 향후 선택 기능으로 추가하더라도 이 5개 인터페이스의 판정을 덮어쓰지 않는다.
+
+각 인터페이스는 별도 프로세스일 필요가 없다. 하나의 MCP 서버에 다섯 라우터로 탑재할 수 있지만 입력·출력과 책임 경계는 분리한다.
+
+### 18.2 공통 입력 context
+
+모든 분석 요청은 `context`를 가진다.
+
+```json
+{
+  "context": {
+    "request_id": "REQ-SEQUENCE-0001",
+    "session_id": "SESSION-001",
+    "scenario_id": "TR-L01",
+    "sequence_id": "SEQ-0001",
+    "zone_id": "A-1"
+  }
+}
+```
+
+| 필드 | 타입 | 필수 | 설명 |
+|---|---|:---:|---|
+| `request_id` | String | Y | 분석 호출 추적 ID |
+| `session_id` | String 또는 Null | 조건부 | 시퀀스 분석은 필수, 일반 지식 검색은 null 가능 |
+| `scenario_id` | String | Y | 현재 `TR-L01` |
+| `sequence_id` | String 또는 Null | 조건부 | 시퀀스 기반 분석은 필수 |
+| `zone_id` | String 또는 Null | 조건부 | 시퀀스 기반 분석은 `A-1`, `A-2`, `A-3` 중 하나 |
+
+`user_id`는 분석에 필요하지 않으므로 MCP로 전달하지 않는다. 작업자 특성 중 분석에 필요한 `skill_level`, `handedness`만 해당 입력에 명시한다.
+
+### 18.3 공통 출력 envelope
+
+```json
+{
+  "status": "success",
+  "result": {
+    "analysis_status": "available",
+    "reason_code": null,
+    "algorithm_version": "coating-2.5.0"
+  },
+  "error": null,
+  "meta": {
+    "request_id": "REQ-SEQUENCE-0001",
+    "session_id": "SESSION-001",
+    "sequence_id": "SEQ-0001",
+    "generated_at": "2026-09-16T08:01:01Z",
+    "latency_ms": 18
+  }
+}
+```
+
+- `status`: 호출 성공 여부인 `success` 또는 `error`다. 분석 결과의 정상·이상 여부가 아니다.
+- `analysis_status`: `available` 또는 `not_available`이다.
+- `reason_code`: 분석 가능 시 `null`, 불가능 시 안정적인 코드다.
+- `algorithm_version`: 결과를 만든 알고리즘 버전이다.
+- `error`: 호출 실패 시에만 `{code, message, details}`를 가진다.
+- 분석 불가능 상태를 임의의 정상값으로 대체하지 않는다.
+- 모든 입력 모델은 `extra="forbid"`와 동등하게 알 수 없는 필드를 거부한다.
+
+### 18.4 `coating_analysis`
+
+내부 경로는 `POST /coating_analysis/analyze`다. 이 인터페이스가 도막 분포와 90/10 규격 판정의 유일한 소유자다.
+
+#### 입력
+
+```json
+{
+  "context": {
+    "request_id": "REQ-SEQUENCE-0001",
+    "session_id": "SESSION-001",
+    "scenario_id": "TR-L01",
+    "sequence_id": "SEQ-0001",
+    "zone_id": "A-1"
+  },
+  "spec": {
+    "target_thickness_um": 100,
+    "normal_band_um": [90, 120],
+    "tolerance_rule": "90/10"
+  },
+  "sequence_result": {
+    "avg_thickness_um": 82,
+    "cur_sequence_heatmap": [
+      {"map_num": 1, "uv_bin": [3, 1], "thickness_um": 18}
+    ],
+    "acc_sequence_heatmap": [
+      {"map_num": 1, "uv_bin": [3, 1], "thickness_um": 82}
+    ]
+  },
+  "dft_measurements": [
+    {
+      "value_um": 82,
+      "map_num": 1,
+      "uv_bin": [3, 1],
+      "position": "lower"
+    }
+  ]
+}
+```
+
+| 필드 | 필수 | 규칙 |
+|---|:---:|---|
+| `spec.target_thickness_um` | Y | 0보다 큰 µm 값 |
+| `spec.normal_band_um` | Y | `[min, max]`, `0 < min <= max` |
+| `spec.tolerance_rule` | Y | 현재 `90/10`만 허용 |
+| `sequence_result.avg_thickness_um` | Y | SIM이 계산한 시퀀스 평균 |
+| `cur_sequence_heatmap` | Y | 현재 시퀀스가 추가한 도막의 sparse cell 배열 |
+| `acc_sequence_heatmap` | Y | 현재까지 누적된 도막의 sparse cell 배열 |
+| `dft_measurements` | N | 실제 DFT 측정값이 있을 때만 제공 |
+
+히트맵 cell은 `map_num`, `[u, v]` 정수 bin, `thickness_um`를 가진다. 이미지 파일 경로는 받지 않는다.
+
+#### 출력
+
+```json
+{
+  "status": "success",
+  "result": {
+    "analysis_status": "available",
+    "reason_code": null,
+    "algorithm_version": "coating-2.5.0",
+    "zone_id": "A-1",
+    "status": "under_app",
+    "pass_90_10": false,
+    "statistics": {
+      "mean_um": 82,
+      "min_um": 82,
+      "max_um": 82,
+      "normal_coverage_ratio": 0,
+      "under_ratio": 1,
+      "over_ratio": 0
+    },
+    "distribution": {
+      "under2": 0,
+      "under1": 1,
+      "normal": 0,
+      "over1": 0,
+      "over2": 0,
+      "over3": 0
+    },
+    "worst_regions": [
+      {
+        "map_num": 1,
+        "uv_bin": [3, 1],
+        "thickness_um": 82,
+        "zone_class": "under1",
+        "action": "increase_dwell",
+        "action_reachable": true
+      }
+    ]
+  },
+  "error": null,
+  "meta": {
+    "request_id": "REQ-SEQUENCE-0001",
+    "session_id": "SESSION-001",
+    "sequence_id": "SEQ-0001",
+    "generated_at": "2026-09-16T08:01:01Z",
+    "latency_ms": 12
+  }
+}
+```
+
+- `status`는 `under_app`, `normal`, `over_app` 중 하나다.
+- `zone_class`와 `status` 조합은 §3.7의 불변 규칙을 따른다.
+- DFT 측정이 없거나 표본이 부족하면 `pass_90_10=null`과 별도 `reason_code`를 사용한다. 히트맵 분포 결과를 DFT 실측 합불로 위장하지 않는다.
+- LLM 설명문은 생성하지 않는다.
+
+### 18.5 `pose_analysis`
+
+내부 경로는 `POST /pose_analysis/compare`다. 비교 단위는 프레임 하나가 아니라 Trigger ON→OFF 패스다.
+
+#### 입력
+
+```json
+{
+  "context": {
+    "request_id": "REQ-SEQUENCE-0001",
+    "session_id": "SESSION-001",
+    "scenario_id": "TR-L01",
+    "sequence_id": "SEQ-0001",
+    "zone_id": "A-1"
+  },
+  "worker": {
+    "skill_level": "novice",
+    "handedness": "right"
+  },
+  "reference": {
+    "level_id": "TR-L01",
+    "bucket": "horizontal-mid-+y"
+  },
+  "pose_frames": [
+    {
+      "index": 0,
+      "time": "2026-09-16T08:01:00.000Z",
+      "joints": {
+        "pelvis": {"pos": [0, 1, 0], "rot": [0, 0, 0]},
+        "right_elbow": {"pos": [0.3, 1.4, 0.2], "rot": [4, 8, 2]}
+      }
+    }
+  ]
+}
+```
+
+- Agent API는 `sequence_info[].skeleton_joints`만 `pose_frames`로 정규화한다.
+- 프레임 순서, 관절 이름, 좌표계와 단위는 요청 전에 검증한다.
+- `handedness=left`이면 좌우 관절 매핑 규칙을 적용하고 그 버전을 결과에 기록한다.
+- 레퍼런스가 없거나 품질 기준에 미달하면 값을 추정하지 않는다.
+
+#### 출력
+
+```json
+{
+  "status": "success",
+  "result": {
+    "analysis_status": "available",
+    "reason_code": null,
+    "algorithm_version": "pose-2.5.0",
+    "reference_id": "horizontal-mid-+y",
+    "reference_quality": "single_worker",
+    "support": 56,
+    "similarity_score": 0.82,
+    "expert_percentile": 68,
+    "correction_mode": "joint_only",
+    "corrections": [
+      {
+        "joint": "right_elbow",
+        "label": "오른쪽 팔꿈치가 숙련자 통상 범위를 벗어났습니다.",
+        "severity": "warning",
+        "target_validated": false,
+        "angle_delta_deg": null,
+        "direction": null
+      }
+    ]
+  },
+  "error": null,
+  "meta": {
+    "request_id": "REQ-SEQUENCE-0001",
+    "session_id": "SESSION-001",
+    "sequence_id": "SEQ-0001",
+    "generated_at": "2026-09-16T08:01:01Z",
+    "latency_ms": 24
+  }
+}
+```
+
+- `similarity_score`는 같은 버킷 숙련자 분포와의 유사도이며 자세 합불, 안전성 또는 숙련도 점수가 아니다.
+- 교정 목표 검증 게이트를 통과하기 전에는 `correction_mode="joint_only"`로 관절만 지목한다.
+- 검증되지 않은 각도와 방향을 사용자에게 지시하지 않는다. 이때 `angle_delta_deg`와 `direction`은 `null`이다.
+- `expert_percentile`은 교차적합 보정이 유효할 때만 제공하며 아니면 `null`이다.
+
+### 18.6 `sequence_analysis`
+
+내부 경로는 `POST /sequence_analysis/analyze`다. 입력에 `zone_id`가 있으므로 좌표 기반 위치 추론을 수행하지 않는다.
+
+#### 입력
+
+```json
+{
+  "context": {
+    "request_id": "REQ-SEQUENCE-0001",
+    "session_id": "SESSION-001",
+    "scenario_id": "TR-L01",
+    "sequence_id": "SEQ-0001",
+    "zone_id": "A-1"
+  },
+  "flow": {
+    "recommended_flow": ["A-1", "A-2", "A-3"],
+    "visited_flow": [],
+    "expected_zone_id": "A-1",
+    "expected_direction": "horizontal"
+  },
+  "trajectory_frames": [
+    {
+      "index": 0,
+      "time": "2026-09-16T08:01:00.000Z",
+      "tool_pos": [0.1, 1.2, 0.5],
+      "raypoint": [1.1, 1.3, 0],
+      "raytexmapnum": 1,
+      "raytexuv": [221, 144],
+      "speed_mms": 2200,
+      "distance_mm": 450,
+      "spray_angle_deg": 72
+    }
+  ],
+  "targets": {
+    "speed_mms": 2800,
+    "distance_mm": 400
+  }
+}
+```
+
+- Agent API는 `sequence_info[].tool_pos_rot`와 `gun_metrics`를 `trajectory_frames`로 정규화한다.
+- 속도는 `mm/s`, 거리는 `mm`, 각도는 degree로 고정한다.
+- `zone_id`는 public request의 값을 그대로 사용하며 분석기가 변경하지 않는다.
+
+#### 출력
+
+```json
+{
+  "status": "success",
+  "result": {
+    "analysis_status": "available",
+    "reason_code": null,
+    "algorithm_version": "sequence-2.5.0",
+    "current_zone_id": "A-1",
+    "expected_zone_id": "A-1",
+    "next_zone_id": "A-2",
+    "adherence_status": "on_track",
+    "deviations": [],
+    "trajectory_metrics": {
+      "direction": "horizontal",
+      "expected_direction": "horizontal",
+      "straightness_score": 72,
+      "deviation_mm": 45.8,
+      "mean_speed_mms": 2200,
+      "target_speed_mms": 2800,
+      "mean_distance_mm": 450,
+      "target_distance_mm": 400
+    },
+    "issues": [
+      {
+        "type": "trajectory_deviation",
+        "severity": "warning",
+        "action": "stabilize_wrist"
+      },
+      {
+        "type": "distance_speed_error",
+        "severity": "warning",
+        "action": "adjust_distance_speed"
+      }
+    ]
+  },
+  "error": null,
+  "meta": {
+    "request_id": "REQ-SEQUENCE-0001",
+    "session_id": "SESSION-001",
+    "sequence_id": "SEQ-0001",
+    "generated_at": "2026-09-16T08:01:01Z",
+    "latency_ms": 20
+  }
+}
+```
+
+방향 enum은 `horizontal`, `vertical`, `diagonal`, `curved_irregular`, `stationary`만 사용한다. 순서 이탈과 궤적 문제를 하나의 문자열로 합치지 않고 `deviations`와 `issues`로 분리한다.
+
+### 18.7 `anomaly_detection`
+
+내부 경로는 `POST /anomaly_detection/detect`다. 이 인터페이스는 원시 센서 값을 다시 판정하지 않고 세 분석 결과를 조합한다.
+
+#### 입력
+
+```json
+{
+  "context": {
+    "request_id": "REQ-SEQUENCE-0001",
+    "session_id": "SESSION-001",
+    "scenario_id": "TR-L01",
+    "sequence_id": "SEQ-0001",
+    "zone_id": "A-1"
+  },
+  "coating_result": {
+    "analysis_status": "available",
+    "status": "under_app",
+    "worst_regions": [
+      {"map_num": 1, "uv_bin": [3, 1], "action": "increase_dwell"}
+    ]
+  },
+  "pose_result": {
+    "analysis_status": "available",
+    "similarity_score": 0.82,
+    "corrections": []
+  },
+  "sequence_result": {
+    "analysis_status": "available",
+    "adherence_status": "on_track",
+    "issues": [
+      {"type": "distance_speed_error", "action": "adjust_distance_speed"}
+    ]
+  },
+  "sequence_data_ack": {
+    "stored": true,
+    "duplicate": false,
+    "frames_received": 90,
+    "frames_accepted": 90
+  }
+}
+```
+
+#### 출력
+
+```json
+{
+  "status": "success",
+  "result": {
+    "analysis_status": "available",
+    "reason_code": null,
+    "algorithm_version": "anomaly-2.5.0",
+    "detected": true,
+    "anomaly_type": ["coating", "trajectory"],
+    "items": [
+      {
+        "axis": "thickness",
+        "type": "under_app",
+        "zone_id": "A-1",
+        "map_num": 1,
+        "uv_bin": [3, 1],
+        "action": "increase_dwell"
+      },
+      {
+        "axis": "trajectory",
+        "type": "distance_speed_error",
+        "zone_id": "A-1",
+        "action": "adjust_distance_speed"
+      }
+    ],
+    "guidance_codes": ["INCREASE_DWELL", "ADJUST_DISTANCE_SPEED"],
+    "text_guide": "A-1 구역의 체류 시간을 늘리고 이격거리와 이동 속도를 기준에 맞추세요."
+  },
+  "error": null,
+  "meta": {
+    "request_id": "REQ-SEQUENCE-0001",
+    "session_id": "SESSION-001",
+    "sequence_id": "SEQ-0001",
+    "generated_at": "2026-09-16T08:01:01Z",
+    "latency_ms": 4
+  }
+}
+```
+
+- 도막 상태는 `coating_result`, 자세 상태는 `pose_result`, 순서·궤적 상태는 `sequence_result`를 정본으로 사용한다.
+- 입력 결과와 다른 수치나 분류를 새로 만들지 않는다.
+- `text_guide`는 SSE 지연 목표를 지킬 수 있도록 `guidance_codes` 기반 결정론적 템플릿으로 생성한다.
+- `detected=false`이면 SSE를 발행하지 않는다.
+
+### 18.8 `knowledge_search`
+
+내부 경로는 `POST /knowledge_search/search`다. 이 인터페이스는 검색만 담당하며 최종 자연어 답변은 Agent API의 LLM 단계가 생성한다.
+
+#### 입력
+
+```json
+{
+  "context": {
+    "request_id": "REQ-0044",
+    "session_id": null,
+    "scenario_id": "TR-L01",
+    "sequence_id": null,
+    "zone_id": null
+  },
+  "query": "저도막의 원인과 보수 방법은?",
+  "top_k": 5,
+  "filters": {
+    "domain_categories": ["coating", "safety"],
+    "source_types": ["pdf"]
+  }
+}
+```
+
+#### 출력
+
+```json
+{
+  "status": "success",
+  "result": {
+    "analysis_status": "available",
+    "reason_code": null,
+    "algorithm_version": "rag-2.5.0",
+    "retrieval_used": true,
+    "query": "저도막의 원인과 보수 방법은?",
+    "hits": [
+      {
+        "rank": 1,
+        "citation_id": "DOC-doc_0022-C0214",
+        "doc_id": "doc_0022",
+        "chunk_id": "DOC-doc_0022-C0214",
+        "text": "규정 도막 두께와 후속도장 표면상태를 확인한다.",
+        "domain_category": "coating",
+        "source_type": "pdf",
+        "rerank_score": 0.975
+      }
+    ],
+    "citations": ["DOC-doc_0022-C0214"]
+  },
+  "error": null,
+  "meta": {
+    "request_id": "REQ-0044",
+    "session_id": null,
+    "sequence_id": null,
+    "generated_at": "2026-09-16T08:02:00Z",
+    "latency_ms": 210
+  }
+}
+```
+
+- `hits[].text`는 실제 인덱스 chunk 원문이며 LLM이 만든 문장이 아니다.
+- `citation_id`는 최종 Query 응답의 `citations`와 동일한 값이다.
+- 검색 결과가 없으면 `analysis_status="available"`, `retrieval_used=true`, `hits=[]`, `citations=[]`를 반환한다. 검색 서비스 장애만 `status="error"`다.
+- `use_rag="N"`인 Query는 이 인터페이스를 호출하지 않는다.
+
+### 18.9 호출 순서와 데이터 소유권
+
+```text
+POST /api/v1/telemetry/sequence
+  → 공개 payload 검증·정규화·저장
+  → coating_analysis ─┐
+  → pose_analysis ────┼→ anomaly_detection
+  → sequence_analysis ┘
+  → 세션 상태 확정
+  → HTTP 응답
+  → detected=true일 때 동일 결과로 SSE 발행
+
+POST /api/v1/copilot/query
+  → task_type에 필요한 최신 세션 분석 결과 조회
+  → use_rag=Y일 때 knowledge_search
+  → LLM은 구조화 결과와 검색 근거를 설명
+  → v2.5 Query 응답 조립
+```
+
+| 데이터 | 정본 소유자 |
+|---|---|
+| `zone_id`, ray 충돌점, UV | SIM 입력 |
+| 도막 상태·분포·90/10 결과 | `coating_analysis` |
+| 자세 유사도·교정 가능 여부 | `pose_analysis` |
+| 순서·방향·궤적·거리·속도 결과 | `sequence_analysis` |
+| 통합 이상 목록·즉시 안내 | `anomaly_detection` |
+| 검색 chunk·citation | `knowledge_search` |
+| 자연어 Query 답변·최종 브리핑 | Agent API의 LLM 단계 |
+
+하위 인터페이스는 다른 인터페이스가 소유한 값을 재계산하거나 덮어쓰지 않는다.
+
+### 18.10 기존 MCP 정리 기준
+
+| 기존 MCP | 처리 |
+|---|---|
+| `location_tracking` | 제거 |
+| `timeseries` | `pose_analysis`, `sequence_analysis` 입력 정규화로 흡수 |
+| `dft_judge` | `coating_analysis`로 통합 |
+| `anomaly_detection` | 원시 재판정 제거 후 결과 조합기로 변경 |
+| `pose_estimation` | `pose_analysis`로 명칭과 계약 변경 |
+| `sequence_validation` | `sequence_analysis`로 확장 |
+| `vlm_analysis` | 필수 배포에서 제외 |
+| 기존 Agent RAG | `knowledge_search` 계약으로 노출 |
+
+제품 배포 전에 Agent API, 도구 스키마 JSON, MCP Pydantic 모델 및 테스트 fixture를 이 표에 맞춰 동시에 변경해야 한다.
