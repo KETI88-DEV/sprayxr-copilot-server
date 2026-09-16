@@ -100,10 +100,10 @@ def to_world(point: Vec3, level: int) -> Vec3:
         ValueError: 항목은 있지만 `provenance`가 "solved"가 아니다(검증되지 않았다).
     """
     alignment = level_mesh.load_alignment(level)
-    if alignment.provenance != "solved":
+    if not level_mesh.is_solved(alignment.provenance):
         raise ValueError(
             f"capture_frame.to_world: level {level} alignment has provenance "
-            f"{alignment.provenance!r}, not 'solved' — declared 변환은 검증되지 않았다 "
+            f"{alignment.provenance!r}, not solved — declared 변환은 검증되지 않았다 "
             "(레벨 1의 declared 변환은 실측과 3.68m 어긋났다, level_mesh.py 참고). "
             "'solved' 항목만 신뢰한다."
         )

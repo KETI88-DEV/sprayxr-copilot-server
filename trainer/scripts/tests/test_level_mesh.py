@@ -55,12 +55,13 @@ def test_closest_distance_is_to_the_triangle_not_the_nearest_vertex() -> None:
 def test_alignment_records_its_provenance() -> None:
     """선언된 변환·풀어낸 변환·검증 불가는 서로 다른 주장이다. 그 구분이 사라지면 안 된다.
 
-    레벨 1은 이제 "solved"가 아니다 — 착탄점이 정확히 평면이라 12자유도가 데이터로
-    결정되지 않는다(G7: 조건수 2.06e-09). 커밋 325ae9a의 레벨 1 항목은 "통과 중인
-    유일한 레벨"이 아니라 "틀린 채 기록된 유일한 레벨"이었다(절대 UV 잔차 수백 텍셀,
-    이 파일의 회귀 대조 테스트가 그것을 고정한다).
+    레벨 1은 12자유도 경로에서는 여전히 풀리지 않는다(G7: 조건수 2.06e-09) — 그 거절
+    기록은 `history`에 남는다. 2026-09-16 사전등록의 **선형부 고정 + 총구 가림** 경로로
+    따로 검증됐고, `provenance`가 그 경로를 이름으로 말한다. 레벨 2는 통과하지 못해
+    "unverifiable" 그대로다.
     """
-    assert level_mesh.load_alignment(1).provenance == "unverifiable"
+    assert level_mesh.load_alignment(1).provenance == "solved:fixed_linear_muzzle_occlusion"
+    assert level_mesh.load_alignment(2).provenance == "unverifiable"
     solved = level_mesh.load_alignment(SOLVED_LEVELS[0])
     assert solved.provenance == "solved"
     assert solved.declared_scale != solved.scale
@@ -931,10 +932,13 @@ def test_load_alignment_ignores_optional_handedness_fields(tmp_path: Path) -> No
 
 
 def test_level1_fixed_linear_attempt_is_recorded_without_a_transform() -> None:
-    """§B가 무효라 레벨 1은 unverifiable로 남는다(양성 대조 L4 0.413, L5 0.484 > 0.25).
-    잰 수치는 기록에 남고 변환은 남지 않는다."""
+    """§B는 무효로 끝났고 그 기록은 지워지지 않는다(양성 대조 L4 0.413, L5 0.484 > 0.25).
+
+    레벨 1은 나중에 **다른** 게이트(2026-09-16 총구 가림)로 풀렸다 — 그래도 실패한
+    게이트의 수치가 기록에서 사라지면 다음 사람은 세 번째 게이트였다는 사실을 모른다.
+    """
     entry = _entry(1)
-    assert entry["provenance"] == "unverifiable" and "solved_transform" not in entry
+    assert entry["provenance"] == "solved:fixed_linear_muzzle_occlusion"
     attempt = entry["fixed_linear_attempt"]
     assert attempt["section_b_valid"] is False
     assert attempt["holdout_overlap"] == 0
@@ -943,7 +947,9 @@ def test_level1_fixed_linear_attempt_is_recorded_without_a_transform() -> None:
     evidence = attempt["handedness_evidence"]
     assert evidence["gun_occlusion"]["P"] <= 0.25 < evidence["gun_occlusion"]["mirror"]
     assert set(evidence["posthoc_parts"]) == {"G_occ_gun", "uniqueness"}
-    assert entry["rejected_by"] == [
+    # G7의 거절 기록은 지워지지 않고 `history`로 내려간다.
+    rejected = next(h["rejected_by"] for h in entry["history"] if "rejected_by" in h)
+    assert rejected == [
         {"gate": "cond_min_over_max", "measured": 2.0644827889117667e-09, "required": ">= 0.05"}
     ]
 
@@ -1025,10 +1031,11 @@ def test_section_d_is_void_unless_every_control_passes_and_the_mirror_fails() ->
 
 
 def test_level1_front_face_attempt_is_recorded_and_void_without_a_transform() -> None:
-    """§D 결과(사전등록 문서 §6): 양성 대조 L5 0.2607 > 0.25로 무효 → 레벨 1은 여전히 변환을 싣지 않는다.
-    음성 대조(거울 1.000)는 성립했다는 수치도 기록에 남는다."""
+    """§D 결과(사전등록 문서 §6): 양성 대조 L5 0.2607 > 0.25로 무효.
+    그 뒤 총구 가림으로 풀렸어도 §D가 무효였다는 기록은 그대로 남아야 한다."""
     entry = _entry(1)
-    assert entry["provenance"] == "unverifiable" and "solved_transform" not in entry
+    assert entry["provenance"] == "solved:fixed_linear_muzzle_occlusion"
+    assert "G_front_face_hmd" in entry["handedness_evidence"]["void_gates"]
     attempt = entry["front_face_attempt"]
     assert attempt["prereg"] == level_mesh.FRONT_FACE_PREREG_DOC
     assert attempt["section_d_valid"] is False
@@ -1039,3 +1046,298 @@ def test_level1_front_face_attempt_is_recorded_and_void_without_a_transform() ->
     assert evidence["hmd_back_face"]["P"] <= 0.25 < evidence["hmd_back_face"]["mirror"]
     # §B 기록은 그대로 남는다.
     assert entry["fixed_linear_attempt"]["section_b_valid"] is False
+
+
+# =============================================================================
+# 2026-09-16 사전등록 — 총구 가림 게이트 + 메시 전용 UV 제외 규칙
+# 문서: docs/measurements/2026-09-16-level1-2-occlusion-exclusion-prereg.md
+#       (커밋 c839a37, 측정 코드 첫 실행 전)
+# =============================================================================
+
+
+def test_tagged_provenance_says_which_path_verified_the_level() -> None:
+    """`provenance == "solved"`로 직접 비교하면 꼬리표 붙은 출처가 조용히 미검증으로
+    떨어진다. 꼬리표는 **등록된 것만** 쓸 수 있다 — 자유 문자열이면 오타가 새 출처가 된다."""
+    assert level_mesh.is_solved("solved")
+    assert level_mesh.is_solved("solved:fixed_linear_muzzle_occlusion")
+    assert not level_mesh.is_solved("unverifiable")
+    assert not level_mesh.is_solved("declared")
+    assert not level_mesh.is_solved("solved:a_tag_nobody_registered")
+    with pytest.raises(ValueError, match="provenance must be one of"):
+        level_mesh.Alignment(provenance="solved:a_tag_nobody_registered", **_ALIGNMENT_KWARGS)
+
+
+def _wall_mesh(x: float, half: float = 1.0) -> "level_mesh.Mesh":
+    verts = [(x, -half, -half), (x, half, -half), (x, half, half), (x, -half, half)]
+    return level_mesh.Mesh(vertices=verts, triangles=[(0, 1, 2), (0, 2, 3)], uvs=[], declared={})
+
+
+def test_muzzle_origin_sits_on_the_hit_segment_and_short_frames_leave_the_denominator() -> None:
+    """총구는 강체 원점에서 착탄 방향으로 L_MUZZLE만큼 간 점이다. 착탄점이 총구보다
+    가까우면 선분이 뒤집히므로 그 프레임은 **분모에서 빠진다**(사전등록 §1.4)."""
+    origins, kept, short = level_mesh.muzzle_origins(
+        [(0.0, 0.0, 0.0), (0.0, 0.0, 0.0)], [(1.0, 0.0, 0.0), (0.09, 0.0, 0.0)]
+    )
+    assert short == 1, "총구보다 가까운 프레임이 분모에 남았다"
+    assert len(kept) == 1 and len(origins) == 1
+    assert origins[0] == pytest.approx((level_mesh.L_MUZZLE_M, 0.0, 0.0))
+    assert math.dist(origins[0], (0.0, 0.0, 0.0)) == pytest.approx(level_mesh.L_MUZZLE_M)
+
+
+def test_muzzle_occlusion_clears_a_plate_that_the_rigid_origin_runs_into() -> None:
+    """레벨 4의 실측(강체 원점 0.1033 → 총구 원점 0.0047)이 왜 생기는지의 최소 재현.
+
+    총구가 강체 원점과 같은 점이면(L_MUZZLE = 0) 이 테스트의 두 번째 단언이 1.0이 되어
+    실패한다 — 즉 "원점을 총구로 옮겼다"가 실제로 무언가를 바꾼다는 증거다.
+    """
+    blocker = _wall_mesh(0.05)
+    gun = [(0.0, 0.0, 0.0)]
+    hit = [(1.0, 0.0, 0.0)]
+    assert level_mesh.occlusion_fraction(blocker, gun, hit) == 1.0
+    assert level_mesh.muzzle_occlusion(blocker, gun, hit)["muzzle_occlusion"] == 0.0
+    # 총구 **앞**의 판은 총구 기준으로도 가린다 — 게이트가 모든 것을 통과시키지 않는다.
+    assert level_mesh.muzzle_occlusion(_wall_mesh(0.5), gun, hit)["muzzle_occlusion"] == 1.0
+
+
+def test_g7_cannot_reach_the_fixed_linear_path() -> None:
+    """G7(조건수·법선 다양성)은 12자유도 적합이 데이터로 결정되는지의 검사다. 자유도 3인
+    선형부 고정 경로에 걸면 "평면 착탄점이면 무조건 거절"이 되어 **실패할 수 없는 거절**이
+    된다(사전등록 §1.1). 범위 축소를 문구가 아니라 예외로 못박는다."""
+    assert not (set(level_mesh.FIXED_LINEAR_GATE_KEYS) & set(level_mesh.TWELVE_DOF_ONLY_GATES))
+    with pytest.raises(ValueError, match="12-DoF-only gates leaked"):
+        level_mesh.fixed_linear_gate_failures({"cond_min_over_max": 0.0}, ["cond_min_over_max"])
+    # 그리고 12자유도 경로에서는 G7이 **여전히** 레벨 1의 조건수를 거절한다.
+    failures = {name for name, _v, _n in level_mesh.gate_failures({"cond_min_over_max": 2.0644827889117667e-09})}
+    assert failures == {"cond_min_over_max"}
+
+
+def _quad_mesh(uv3: tuple[float, float], *, seam: bool = False) -> "level_mesh.Mesh":
+    """z=0 평면의 정사각형을 두 삼각형으로 자른 것. UV는 넷째 꼭짓점만 바꾼다."""
+    verts = [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (1.0, 1.0, 0.0), (0.0, 1.0, 0.0)]
+    uvs = [(0.0, 0.0), (0.1, 0.0), (0.1, 0.1), uv3]
+    uv_indices = [(0, 1, 2), (0, 2, 3)]
+    if seam:  # 공유 꼭짓점 A·B가 두 삼각형에서 서로 다른 UV를 받는다 = 다른 UV 섬
+        uvs = uvs + [(0.6, 0.6), (0.7, 0.7)]
+        uv_indices = [(0, 1, 2), (4, 5, 3)]
+    return level_mesh.Mesh(
+        vertices=verts, triangles=[(0, 1, 2), (0, 2, 3)], uvs=uvs, uv_indices=uv_indices, declared={}
+    )
+
+
+def test_uv_quad_ambiguity_is_computed_from_the_mesh_alone() -> None:
+    """E2는 FBX만 본다 — 착탄점도, 정렬도, 잔차도, 판정 결과도 읽지 않는다.
+
+    사변형 위에서 UV가 3D의 아핀 함수면 결손 0이고, 어긋나면 그 어긋남이 그대로 텍셀로
+    나온다. 문턱은 `GATES["uv_abs_resid_max_texel"]`(0.05) 그대로다.
+    """
+    affine = _quad_mesh((0.0, 0.1))
+    assert max(level_mesh.uv_quad_ambiguity_defects(affine).values()) < 1e-9
+    assert level_mesh.uv_quad_ambiguous_triangles(affine) == frozenset()
+
+    bent = _quad_mesh((0.0, 0.101))  # 0.001 정규화 UV = 2.048 텍셀
+    assert level_mesh.uv_quad_ambiguity_defects(bent)[0] == pytest.approx(0.001 * 2048.0)
+    assert level_mesh.uv_quad_ambiguous_triangles(bent) == frozenset({0, 1})
+
+    # 문턱 바로 아래는 남는다 — 0.05가 실제로 판정에 쓰이는 값이다.
+    faint = _quad_mesh((0.0, 0.1 + 0.00001))  # 0.02048 텍셀 < 0.05
+    assert level_mesh.uv_quad_ambiguity_defects(faint)[0] < level_mesh.GATES["uv_abs_resid_max_texel"]
+    assert level_mesh.uv_quad_ambiguous_triangles(faint) == frozenset()
+
+    # 시임(공유 꼭짓점의 UV가 두 삼각형에서 다름)은 서로 다른 UV 섬이므로 건너뛴다.
+    assert level_mesh.uv_quad_ambiguous_triangles(_quad_mesh((0.0, 0.101), seam=True)) == frozenset()
+
+
+def _two_triangle_mesh() -> "level_mesh.Mesh":
+    return level_mesh.Mesh(
+        vertices=[(0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0),
+                  (10.0, 0.0, 0.0), (11.0, 0.0, 0.0), (10.0, 1.0, 0.0)],
+        triangles=[(0, 1, 2), (3, 4, 5)],
+        uvs=[(0.1, 0.1), (0.2, 0.1), (0.1, 0.2), (0.5, 0.5), (0.6, 0.5), (0.5, 0.6)],
+        uv_indices=[(0, 1, 2), (3, 4, 5)],
+        declared={},
+    )
+
+
+def test_exclusion_drops_a_hit_from_the_uv_residual_but_never_from_the_surface_distance() -> None:
+    """제외는 **G2(UV 잔차)에만** 미친다 — 표면 거리(G3)는 착탄점 전량 그대로다
+    (사전등록 §2.4). 그리고 제외된 착탄점의 잔차는 `uv_excluded_*`로 따로 실린다 —
+    무엇을 가렸는지 감추지 않기 위해서다."""
+    mesh = _two_triangle_mesh()
+    identity: "level_mesh.Mat3" = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+    good_uv = tuple(sum(mesh.uvs[i][d] for i in (0, 1, 2)) / 3.0 for d in range(2))
+    bad_uv = tuple(sum(mesh.uvs[i][d] for i in (3, 4, 5)) / 3.0 for d in range(2))
+    hits = [(1 / 3, 1 / 3, 0.0), (31 / 3, 1 / 3, 0.0)]
+    uvs = [
+        (2048.0 * good_uv[0], 2048.0 * good_uv[1]),
+        (2048.0 * bad_uv[0] + 100.0, 2048.0 * bad_uv[1]),
+    ]
+    plain = level_mesh.measure_placement(mesh, identity, 1.0, (0.0, 0.0, 0.0), hits, uvs)
+    assert plain["uv_abs_resid_max_texel"] == pytest.approx(100.0)
+    assert "uv_excluded_hits" not in plain, "제외가 없으면 예전과 같은 키만 나와야 한다"
+
+    cut = level_mesh.measure_placement(
+        mesh, identity, 1.0, (0.0, 0.0, 0.0), hits, uvs, excluded_triangles={1}
+    )
+    assert cut["uv_abs_resid_max_texel"] == pytest.approx(0.0, abs=1e-9)
+    assert cut["uv_excluded_hits"] == 1.0 and cut["uv_kept_hits"] == 1.0
+    assert cut["uv_excluded_hit_fraction"] == pytest.approx(0.5)
+    assert cut["uv_excluded_resid_max_texel"] == pytest.approx(100.0)
+    assert cut["median_mm"] == pytest.approx(plain["median_mm"]), "G3가 제외에 흔들렸다"
+    assert cut["max_mm"] == pytest.approx(plain["max_mm"])
+
+
+def _muzzle_result(mirror_occ: float, *, passing: int = 1, holdout_n: int = 1500) -> dict:
+    def candidate(rotation, occ, passed_a=True):
+        return {
+            "rotation": level_mesh._matrix_list(rotation), "det": level_mesh._mat3_det(rotation),
+            "translation": [0.0, 0.0, 0.0], "passed_A": passed_a, "gate_failures_A": [],
+            "passed_occ": occ <= level_mesh.MUZZLE_OCCLUSION_THRESHOLD,
+            "measured": {"muzzle_occlusion": occ},
+        }
+    extra = [candidate(level_mesh.signed_permutations()[i], 0.0) for i in range(passing - 1)]
+    return {
+        "level": 1, "holdout_n": holdout_n,
+        "candidates": [candidate(P_LINEAR, 0.0), candidate(PLATE_MIRROR, mirror_occ), *extra],
+    }
+
+
+def test_muzzle_judgement_needs_the_mirror_to_fail_and_exactly_one_survivor() -> None:
+    """양성 대조는 판정 조건이 **아니다**(문턱을 그 8개 값에서 뽑았으므로 구성상 통과한다).
+    판별력은 전적으로 음성 대조에 있다 — 거울이 통과하면 게이트는 손대칭을 못 가르는 것이다."""
+    good = level_mesh.judge_muzzle(_muzzle_result(1.0), PLATE_MIRROR)
+    assert good["solved"] is True and good["candidates_passed_A_and_occ"] == 1
+
+    weak = level_mesh.judge_muzzle(_muzzle_result(0.01), PLATE_MIRROR)
+    assert weak["solved"] is False
+    assert any("negative control" in r for r in weak["not_solved_reasons"])
+
+    two = level_mesh.judge_muzzle(_muzzle_result(1.0, passing=2), PLATE_MIRROR)
+    assert two["solved"] is False and two["candidates_passed_A_and_occ"] == 2
+
+    thin = level_mesh.judge_muzzle(_muzzle_result(1.0, holdout_n=999), PLATE_MIRROR)
+    assert thin["solved"] is False
+    assert any("H2 holdout has 999 frames" in r for r in thin["not_solved_reasons"])
+
+
+def test_over_exclusion_alone_blocks_a_verdict() -> None:
+    """§2.5: 제외가 착탄점을 10% 넘게 먹거나, 남은 프레임이 1,000 미만이거나, 남은
+    착탄점의 법선이 3종 미만이면 다른 게이트가 전부 통과해도 판정하지 않는다."""
+    result = _muzzle_result(1.0)
+    result["candidates"][0]["measured"].update(
+        {"uv_excluded_hit_fraction": 0.73, "uv_kept_hits": 401.0, "uv_kept_distinct_normals": 1.0}
+    )
+    verdict = level_mesh.judge_muzzle(result, PLATE_MIRROR, exclusions={"rule": "E1|E2|E3"})
+    assert verdict["solved"] is False
+    assert verdict["over_exclusion_reasons"] == [
+        "excluded hit fraction 0.73 > 0.1",
+        "frames left after exclusion 401.0 < 1000",
+        "distinct normals among kept hits 1.0 < 3",
+    ]
+
+
+@functools.lru_cache(maxsize=None)
+def _level1_h2() -> tuple:
+    fit = level_mesh.collect_level_frames_by_session(1)
+    return fit, level_mesh.collect_frames_from_files(level_mesh.unread_level_files(1, fit.paths))
+
+
+def test_h2_opens_only_files_the_fit_sample_never_touched() -> None:
+    """H2는 목록을 하드코딩하지 않고 소비 알고리즘을 재현해 만든다(사전등록 §3.2).
+    그리고 그 분리가 **파일 단위일 뿐**이라는 것도 같이 못박는다(§3.3) — 세션은 겹친다."""
+    fit, h2 = _level1_h2()
+    assert len(fit.paths) == 18 and len(level_mesh.unread_level_files(1, fit.paths)) == 27
+    assert set(h2.paths) & set(fit.paths) == set(), "H2가 이미 열린 파일을 다시 열었다"
+    assert len(h2.hits) >= level_mesh.H2_MIN_FRAMES
+    assert set(h2.sessions) & set(fit.sessions), "세션 단위 분리인 척하면 안 된다 — 아니다"
+
+
+def test_level1_only_the_muzzle_occlusion_separates_the_plate_mirror() -> None:
+    """평면 착탄점에서는 절대 UV 등식도 표면 거리도 손대칭을 **원리적으로** 못 가른다 —
+    둘 다 게이트 A를 통과한다. 가르는 것은 총구→착탄 선분이 판을 뚫는지다(H2 실측 0.000 / 1.000)."""
+    fit, h2 = _level1_h2()
+    mesh, index = _mesh_and_index(_entry(1)["source_fbx"])
+    result = level_mesh.solve_fixed_linear_muzzle(
+        1, mesh, fit, h2, index=index, candidates=[P_LINEAR, PLATE_MIRROR],
+        always_measure=(P_LINEAR, PLATE_MIRROR),
+    )
+    p = _candidate(result, P_LINEAR)
+    mirror = _candidate(result, PLATE_MIRROR)
+    assert p["passed_A"] is True and mirror["passed_A"] is True
+    assert p["measured"]["muzzle_occlusion"] == 0.0
+    assert mirror["measured"]["muzzle_occlusion"] == 1.0
+    assert p["passed_occ"] is True and mirror["passed_occ"] is False
+    assert p["measured"]["muzzle_short_frames"] == 0.0
+
+
+def test_level1_entry_records_the_muzzle_path_and_keeps_the_confirmation_caveat() -> None:
+    """게이트를 고른 이유 자체가 레벨 1 결과였다 — `solved`가 되어도 그 문장은 남는다."""
+    entry = _entry(1)
+    assert entry["provenance"] == "solved:fixed_linear_muzzle_occlusion"
+    assert entry["prereg_doc"] == level_mesh.MUZZLE_PREREG_DOC
+    assert entry["occlusion_origin"] == "muzzle"
+    assert entry["muzzle_offset_m"] == level_mesh.L_MUZZLE_M
+    assert entry["occlusion_threshold"] == level_mesh.MUZZLE_OCCLUSION_THRESHOLD
+    assert entry["confirmation_not_out_of_sample"] is True
+    assert entry["holdout"]["kind"] == "unread_files"
+    assert entry["holdout"]["session_disjoint"] is False
+    assert entry["holdout"]["frames"] >= level_mesh.H2_MIN_FRAMES
+    assert entry["holdout"]["unread_files_available"] == 27
+    # 27개 전부를 연 것이 아니다 — 파일당 200·총 1,500 상한이 앞쪽 9개에서 멈춘다.
+    assert entry["holdout"]["files_opened"] == 9
+    assert entry["holdout"]["frames"] == level_mesh.H2_FRAME_CAP
+    evidence = entry["handedness_evidence"]
+    assert evidence["muzzle_occlusion"]["P"] <= level_mesh.MUZZLE_OCCLUSION_THRESHOLD
+    assert evidence["muzzle_occlusion"]["mirror"] > level_mesh.MUZZLE_OCCLUSION_THRESHOLD
+    assert "G_occ_muzzle" in evidence["posthoc_parts"]
+    assert set(evidence["void_gates"]) == {"G_occ_hmd", "G_front_face_hmd"}
+    assert entry["not_gated"]["gates_not_applied"] == list(level_mesh.TWELVE_DOF_ONLY_GATES)
+    # 12자유도 경로의 거절(G7)은 지워지지 않고 history로 내려간다.
+    assert any(h.get("provenance") == "unverifiable" for h in entry["history"])
+    assert level_mesh.is_solved(entry["provenance"])
+
+
+def test_level2_stays_unverifiable_and_says_what_the_exclusion_did_and_did_not_fix() -> None:
+    """레벨 2는 통과하지 못했다. 그것을 그대로 기록한다 — 검증 못 한 정렬을 solved로
+    넣는 것이 안 넣는 것보다 나쁘다."""
+    entry = _entry(2)
+    assert entry["provenance"] == "unverifiable" and "solved_transform" not in entry
+    attempt = entry["muzzle_occlusion_attempt"]
+    assert attempt["candidates_passed_A"] == 0
+    assert attempt["candidates_passed_A_and_occ"] == 0
+    # 음성 대조는 레벨 2에서도 성립했다 — 실패는 가림 게이트 탓이 아니다.
+    assert attempt["negative_control_muzzle_occlusion"] > level_mesh.MUZZLE_OCCLUSION_THRESHOLD
+    exclusion = attempt["uv_exclusion"]
+    assert exclusion["rule"] == "E1|E2|E3"
+    assert exclusion["threshold_texel"] == level_mesh.GATES["uv_abs_resid_max_texel"]
+    assert exclusion["by_rule"] == {"E1": 14, "E2": 55, "E3": 0}
+    assert exclusion["applies_to"] == ["G2", "G6 (UV part)"]
+    # 제외가 실제로 UV 잔차를 고치긴 했다(1.455 → 0.024 텍셀). 그런데 §2.5 상한에 걸렸다.
+    assert exclusion["excluded_hits_resid"]["max_texel"] > level_mesh.GATES["uv_abs_resid_max_texel"]
+    assert exclusion["excluded_hit_fraction"] > level_mesh.EXCLUDED_HIT_FRACTION_MAX
+    assert exclusion["kept_distinct_normals"] < level_mesh.EXCLUSION_MIN_DISTINCT_NORMALS
+    assert exclusion["over_exclusion_reasons"]
+    # 제외와 무관하게 전량 적용되는 게이트가 이미 떨어뜨렸다(§2.4).
+    reference = next(
+        c for c in attempt["passing_or_reference_candidates"]
+        if c["rotation"] == level_mesh._matrix_list(P_LINEAR)
+    )
+    assert "uv_degenerate_misattribution_mm" in reference["gate_failures_A"]
+    assert "uv_miss_fraction" in reference["gate_failures_A"]
+    assert "g0_max_mm" in reference["gate_failures_A"]
+
+
+def test_the_uv_exclusion_rule_is_not_cut_to_fit_level_2() -> None:
+    """E1|E2|E3은 FBX만 보고 계산된다. 레벨 2가 최댓값이면 규칙이 실패한 자리에
+    맞춰졌다는 신호다 — 실측은 L4 83.7%가 최댓값이고 레벨 2는 76.2%로 그 아래다.
+
+    동시에 이 수치는 **규칙이 너무 넓다**는 증거이기도 하다. 그래서 §2.5의 상한이 있다.
+    """
+    fractions = {}
+    for level in sorted(level_mesh.LEVEL_FBX):
+        mesh = level_mesh.read_fbx(level_mesh.DEFAULT_MODELINGS_ROOT / level_mesh.LEVEL_FBX[level])
+        exclusions = level_mesh.mesh_only_uv_exclusions(mesh)
+        fractions[level] = exclusions["excluded_triangle_fraction"]
+    assert fractions[2] == pytest.approx(61 / 80)
+    assert max(fractions, key=lambda lv: fractions[lv]) == 4
+    assert fractions[2] < max(fractions.values())
+    assert min(fractions.values()) > 0.3, "규칙이 넓다는 사실을 수치로 남긴다"

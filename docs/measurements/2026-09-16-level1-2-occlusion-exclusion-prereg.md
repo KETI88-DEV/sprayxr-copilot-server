@@ -346,6 +346,218 @@ E2는 메시만 보고 계산되므로 이 문서 전에 10개 레벨 전부에�
 
 ---
 
-## §8 결과 (측정 뒤에만 덧붙인다 — §0~§7은 고치지 않는다)
+## §8 결과 (측정 뒤에만 덧붙인다 — §0~§7은 고치지 않았다)
 
-*(비어 있음. 이 문서가 커밋된 뒤에 채운다.)*
+실행: 2026-09-16, `python3 trainer/scripts/level_mesh.py muzzle-occlusion <report>`.
+사전등록 커밋 c839a37(2026-09-16T02:33:53Z, 이 문서 1개 파일 351줄)보다 **뒤**다.
+문턱·표본·대조·반증 목록은 한 줄도 바꾸지 않았다. 아래 수치가 불리한 곳(레벨 2, 표 5)도 그대로 싣는다.
+
+기준 테스트 수는 §0에 적은 1045가 아니라 **직접 다시 잰 1052 passed / 0 failed**다(다른 워크플로가 그 사이에 테스트를 커밋했다).
+
+### 8.1 레벨 1 — `solved:fixed_linear_muzzle_occlusion`
+
+판정 조건 셋을 전부 만족했다.
+
+1. **음성 대조 성립**: 판 법선 거울 후보의 G_occ_muzzle = **1.000** > 0.05 (P는 0.000).
+2. **유일성**: 48 후보 중 게이트 A 통과 **2개**(P와 거울 — 평면 착탄점은 손대칭을 원리적으로 못 가른다),
+   그중 G_occ_muzzle ≤ 0.05 통과 **정확히 1개**.
+3. **H2 프레임 1,500** ≥ 1,000. `short_frames` 0.
+
+H2 실측(P): G3 중앙값 0.000100 / p95 0.000117 / max 0.000126 mm, G2 p95 0.000171 / max 0.000253 텍셀,
+G0 중앙값 0.000222 / p95 0.000694 / max 0.001288 mm, `uv_miss_fraction` 0.0, `uv_ambiguous_fraction` 0.0,
+G6 교차 작업자 통과, det −1.
+
+기록: `rotation` [0,1,0, 0,0,1, −1,0,0], `translation` (1.44900, 4.61700, 0.65700), `scale` 0.0254.
+`confirmation_not_out_of_sample: true`, `holdout.session_disjoint: false`는 기록과 이 문서 양쪽에 남았다.
+
+**H2의 실제 크기 — 문서의 27개 파일 전부를 연 것이 아니다.** 미개봉 파일은 계산으로도 27개였고
+그 목록은 §3.2에 적은 27개와 **완전히 일치**했다(파일명·순서 모두). 그러나 파일당 200프레임·총 1,500프레임 상한이
+경로 오름차순 **앞쪽 9개 파일**에서 걸렸다. 그래서 H2는 김경호·손영석 **두 작업자**만 담는다.
+이것은 §3.2 규칙의 결과이지 규칙 위반이 아니지만, §3.3의 "세션 단위 분리가 아니다"보다 더 좁다 —
+**작업자 단위로도 2명뿐**이다. 기록의 `holdout`에 `unread_files_available: 27`과 `files_opened: 9`를 따로 적었다.
+
+### 8.2 레벨 2 — `unverifiable` 유지
+
+제외 규칙은 **의도한 일을 했다**: P 후보의 G2 max가 1.455 → **0.0245 텍셀**로 내려가 문턱(0.05) 아래가 됐다.
+그런데도 통과하지 못했다. 이유가 넷이고 전부 사전등록에 미리 박혀 있던 것이다.
+
+1. **게이트 A(제외가 미치지 않는 부분)가 떨어뜨린다** — §2.4가 "전량 적용"이라고 못박은 것들이다:
+   `uv_degenerate_misattribution_mm` 135.93 (≤ 1.0), `uv_miss_fraction` 0.00867 (≤ 0.002),
+   `g0_p95_mm` / `g0_max_mm` 5.52 (≤ 0.2). 48 후보 중 게이트 A 통과 **0개**.
+2. **제외 착탄점 비율 0.7327 > 0.10** (§2.5).
+3. **제외 후 잔여 프레임 401 < 1,000** (§2.5).
+4. **남은 착탄점의 서로 다른 법선 1종 < 3** (§2.5).
+
+음성 대조는 레벨 2에서도 성립했다(거울 G_occ_muzzle 0.667 > 0.05) — 실패는 가림 게이트 탓이 아니다.
+제외된 착탄점 1,099개의 G2 잔차: 중앙값 0.000196 / p95 0.000616 / **max 1.4855** 텍셀(§2.4가 요구한 별도 보고).
+
+**사전등록이 스스로 만든 실행 불가능성**: `uv_miss_fraction`은 제외 전에 이미 0.0035(전체 수집)·0.0087(H2)로
+문턱 0.002를 넘고, 제외는 §2.4에 따라 이 통계에 손대지 않는다. 즉 **레벨 2는 제외 규칙이 무엇을 하든 통과할 수 없었다.**
+이것을 측정 뒤에 고치지 않는다 — 규칙을 바꾸려면 새 문서다.
+
+### 8.3 표 5 — 제외 규칙이 10개 레벨에서 빼는 것 (요구사항 §2.6)
+
+레벨 3~10은 기록된 참해 + 기존 홀드아웃 1,500프레임, 레벨 1·2는 P 후보 + H2 1,500프레임. **보고용이고 그 레벨들의 기록은 건드리지 않았다.**
+
+| 레벨 | 삼각형 | E1 | E2 | E3 | 제외 삼각형 | 비율 | 착탄점 | 제외 착탄점 | 비율 | 남은 법선 종수 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 28 | 0 | 20 | 0 | 20 | 71.4% | 1500 | 1500 | **100.0%** | 0 |
+| 2 | 80 | 14 | 55 | 0 | 61 | 76.2% | 1500 | 1099 | 73.3% | 1 |
+| 3 | 172 | 0 | 120 | 0 | 120 | 69.8% | 1500 | 1472 | 98.1% | 3 |
+| 4 | 196 | 0 | 164 | 0 | 164 | **83.7%** | 1500 | 1476 | 98.4% | 1 |
+| 5 | 236 | 0 | 73 | 0 | 73 | 30.9% | 1500 | 202 | 13.5% | 3 |
+| 6 | 342 | 0 | 123 | 0 | 123 | 36.0% | 1500 | 836 | 55.7% | 3 |
+| 7 | 428 | 2 | 245 | 0 | 245 | 57.2% | 1500 | 1362 | 90.8% | 5 |
+| 8 | 188 | 0 | 96 | 0 | 96 | 51.1% | 1500 | 1452 | 96.8% | 6 |
+| 9 | 764 | 0 | 319 | 0 | 319 | 41.8% | 1500 | 1037 | 69.1% | 4 |
+| 10 | 436 | 0 | 341 | 0 | 341 | 78.2% | 1500 | 1261 | 84.1% | 1 |
+
+읽는 법, 숨기지 않고:
+
+- **레벨 2에 맞춰졌다는 신호는 없다.** 삼각형 비율에서 레벨 2(76.2%)는 최댓값이 아니고 레벨 4(83.7%)가 최댓값이다.
+  착탄점 비율에서도 레벨 2(73.3%)는 레벨 1·3·4·7·8·10보다 낮다.
+- **대신 규칙이 너무 넓다는 것이 확정됐다.** 착탄점 기준 13.5~100%를 뺀다. §2.5의 상한(≤ 0.10)은
+  **10개 레벨 전부에서** 깨진다. 즉 이 규칙은 레벨 2에 맞춰진 것이 아니라 **어느 레벨에도 쓸 수 없다.**
+- **레벨 1이 100%다.** 만약 제외를 레벨 1에도 켰다면 남는 착탄점이 0이 되어 G2가 통째로 사라졌을 것이다
+  (측정값: 남은 잔차 p95·max가 `inf`). 사전등록이 제외를 레벨 2 전용으로 묶어 둔 것이 레벨 1의 판정을 살렸다.
+  **레벨 1의 solved 판정에는 제외 규칙이 한 번도 적용되지 않았다.**
+- **E3(아틀라스 겹침)은 10개 레벨 전부에서 0개**다 — 기록된 `atlas_overlap_cell_fraction` = 0.0과 일치한다(§2.7이 예상한 대로).
+- E2 삼각형 수가 표 4(메시만 보고 미리 잰 값)와 **네 레벨에서 다르다**: L5 73(표 4는 65), L7 245(243), L9 319(318), L10 341(334).
+  L1 20·L2 55·L3 120·L4 164·L6 123·L8 96은 일치한다. 판정에 쓰인 두 레벨은 일치했지만, 차이가 있다는 사실을 그대로 적는다.
+  스크래치패드의 `quad_probe.py`는 저장소 밖이라 원인을 대조하지 못했다.
+
+### 8.4 반증 배터리 (§4) — 전부 거부됐다
+
+요약 표 뒤에 **게이트가 낸 메시지 원문을 전량** 붙인다 — 인용 없는 "확인함"은 증거가 아니다.
+재현: `level_mesh.muzzle_falsifiers(level, mesh, index, fit_frames, h2, excluded_triangles=...)`.
+
+| # | 후보 | 결과 |
+|---|---|---|
+| 1 | 레벨 1 판 법선 거울 | G_occ_muzzle 1.000 > 0.05 → 거부 |
+| 2 | 나머지 46개 부호 있는 축 순열 | 게이트 A 통과는 P와 거울 둘뿐(예측대로) |
+| 3 | P + 1 mm (X/Y/Z) | X: G3 중앙값 1.0001 mm; Y: G2 p95 0.2625 텍셀; Z: G2 p95 0.4460 텍셀 → 전부 거부 |
+| 4 | P + 0.1 mm (X/Y/Z) | X: G3 중앙값 0.1001 mm; Y: G2 p95 0.02636; Z: G2 p95 0.04457 → 전부 거부 |
+| 5 | 월드 X·Y·Z 180° (t 재적합) | G2 p95 452.0 / 342.4 / 328.2 텍셀 → 거부 |
+| 6 | 레벨 2에서 제외를 켠 3·4·5 | 전부 거부. **다만 +1 mm Y 넛지는 제외를 켜면 G2가 더 이상 잡지 못하고 G3만 잡는다**(제외 없이는 G2 p95 0.2815로 잡았다) — 제외가 착탄점을 한 평면으로 줄여 판 안 방향의 넛지를 G2에서 보이지 않게 만든 것이다. §2.5의 "법선 3종 미만" 상한이 바로 이것을 잡았다. |
+| 7 | 레벨 2 판 법선 거울 | G_occ_muzzle 0.667 > 0.05 → 거부 |
+| 8 | 과다 제외 자체 | 레벨 2에서 세 조건 모두 위반 → 판정 중단 |
+
+게이트 메시지 원문(`AlignmentRejected`가 만든 문자열 그대로, 측정 2026-09-16T03:02:45Z):
+
+```
+[L1 제외 OFF] P (reference, unmodified) -> rejected=False
+    level 1 rejected by 0 gate(s): 
+    G_occ_muzzle=0.0 (need <= 0.05)
+[L1 제외 OFF] plate mirror (_plate_mirror, det +1, t refit) -> rejected=True
+    level 1 rejected by 0 gate(s): 
+    G_occ_muzzle=1.0 (need <= 0.05)
+[L1 제외 OFF] P + 1 mm on world X -> rejected=True
+    level 1 rejected by 3 gate(s): median_mm=1.0001001038473367 (need <= 0.005); p95_mm=1.000116936480402 (need <= 0.02); max_mm=1.0001262360790353 (need <= 0.05)
+    G_occ_muzzle=0.0 (need <= 0.05)
+[L1 제외 OFF] P + 0.1 mm on world X -> rejected=True
+    level 1 rejected by 3 gate(s): median_mm=0.1001001038476459 (need <= 0.005); p95_mm=0.10011693648048903 (need <= 0.02); max_mm=0.10012623607913441 (need <= 0.05)
+    G_occ_muzzle=0.0 (need <= 0.05)
+[L1 제외 OFF] P + 1 mm on world Y -> rejected=True
+    level 1 rejected by 2 gate(s): uv_abs_resid_p95_texel=0.26246418643311603 (need <= 0.01); uv_abs_resid_max_texel=0.3639671194078967 (need <= 0.05)
+    G_occ_muzzle=0.0 (need <= 0.05)
+[L1 제외 OFF] P + 0.1 mm on world Y -> rejected=True
+    level 1 rejected by 1 gate(s): uv_abs_resid_p95_texel=0.026364933718968864 (need <= 0.01)
+    G_occ_muzzle=0.0 (need <= 0.05)
+[L1 제외 OFF] P + 1 mm on world Z -> rejected=True
+    level 1 rejected by 3 gate(s): uv_abs_resid_p95_texel=0.44595909874333417 (need <= 0.01); uv_abs_resid_max_texel=0.46201580948167703 (need <= 0.05); max_mm=0.6511391075926636 (need <= 0.05)
+    G_occ_muzzle=0.0 (need <= 0.05)
+[L1 제외 OFF] P + 0.1 mm on world Z -> rejected=True
+    level 1 rejected by 1 gate(s): uv_abs_resid_p95_texel=0.04457220820073151 (need <= 0.01)
+    G_occ_muzzle=0.0 (need <= 0.05)
+[L1 제외 OFF] world X 180 deg (t refit) -> rejected=True
+    level 1 rejected by 3 gate(s): uv_abs_resid_p95_texel=452.03329315444034 (need <= 0.01); uv_abs_resid_max_texel=523.095062207371 (need <= 0.05); max_mm=18.338648196392082 (need <= 0.05)
+    G_occ_muzzle=0.0 (need <= 0.05)
+[L1 제외 OFF] world Y 180 deg (t refit) -> rejected=True
+    level 1 rejected by 3 gate(s): uv_abs_resid_p95_texel=342.4140545196372 (need <= 0.01); uv_abs_resid_max_texel=395.12160605497905 (need <= 0.05); max_mm=18.33864819650156 (need <= 0.05)
+    G_occ_muzzle=1.0 (need <= 0.05)
+[L1 제외 OFF] world Z 180 deg (t refit) -> rejected=True
+    level 1 rejected by 2 gate(s): uv_abs_resid_p95_texel=328.222012339486 (need <= 0.01); uv_abs_resid_max_texel=385.38418032534526 (need <= 0.05)
+    G_occ_muzzle=1.0 (need <= 0.05)
+[L2 제외 ON] P (reference, unmodified) -> rejected=False
+    level 2 rejected by 0 gate(s): 
+    G_occ_muzzle=0.0 (need <= 0.05)
+[L2 제외 ON] plate mirror (_plate_mirror, det +1, t refit) -> rejected=True
+    level 2 rejected by 4 gate(s): uv_abs_resid_p95_texel=1265.60965462245 (need <= 0.01); uv_abs_resid_max_texel=1282.5279069080202 (need <= 0.05); p95_mm=704.3417160037019 (need <= 0.02); max_mm=728.7074160037017 (need <= 0.05)
+    G_occ_muzzle=0.6666666666666666 (need <= 0.05)
+[L2 제외 ON] P + 1 mm on world X -> rejected=True
+    level 2 rejected by 5 gate(s): uv_abs_resid_p95_texel=0.2876213875465623 (need <= 0.01); uv_abs_resid_max_texel=0.28769060836180804 (need <= 0.05); median_mm=0.999512791086495 (need <= 0.005); p95_mm=1.0004691212997372 (need <= 0.02); max_mm=1.000500869997186 (need <= 0.05)
+    G_occ_muzzle=0.0 (need <= 0.05)
+[L2 제외 ON] P + 0.1 mm on world X -> rejected=True
+    level 2 rejected by 4 gate(s): uv_abs_resid_p95_texel=0.028840436045895198 (need <= 0.01); median_mm=0.09951279108655749 (need <= 0.005); p95_mm=0.10046912129979957 (need <= 0.02); max_mm=0.10050086999724839 (need <= 0.05)
+    G_occ_muzzle=0.0 (need <= 0.05)
+[L2 제외 ON] P + 1 mm on world Y -> rejected=True
+    level 2 rejected by 2 gate(s): p95_mm=0.999771060756327 (need <= 0.02); max_mm=0.999771060756327 (need <= 0.05)
+    G_occ_muzzle=0.0 (need <= 0.05)
+[L2 제외 ON] P + 0.1 mm on world Y -> rejected=True
+    level 2 rejected by 2 gate(s): p95_mm=0.09977106075576003 (need <= 0.02); max_mm=0.09977106075576003 (need <= 0.05)
+    G_occ_muzzle=0.0 (need <= 0.05)
+[L2 제외 ON] P + 1 mm on world Z -> rejected=True
+    level 2 rejected by 3 gate(s): uv_abs_resid_p95_texel=0.28175942950702765 (need <= 0.01); uv_abs_resid_max_texel=0.28190774059793944 (need <= 0.05); max_mm=0.23240608325219905 (need <= 0.05)
+    G_occ_muzzle=0.0 (need <= 0.05)
+[L2 제외 ON] P + 0.1 mm on world Z -> rejected=True
+    level 2 rejected by 1 gate(s): uv_abs_resid_p95_texel=0.028578144375824035 (need <= 0.01)
+    G_occ_muzzle=0.0 (need <= 0.05)
+[L2 제외 ON] world X 180 deg (t refit) -> rejected=True
+    level 2 rejected by 4 gate(s): uv_abs_resid_p95_texel=1091.384822139714 (need <= 0.01); uv_abs_resid_max_texel=1094.9766277393028 (need <= 0.05); p95_mm=400.0844450330692 (need <= 0.02); max_mm=402.45665799174805 (need <= 0.05)
+    G_occ_muzzle=0.6453333333333333 (need <= 0.05)
+[L2 제외 ON] world Y 180 deg (t refit) -> rejected=True
+    level 2 rejected by 4 gate(s): uv_abs_resid_p95_texel=1001.648947660115 (need <= 0.01); uv_abs_resid_max_texel=1007.8384871494496 (need <= 0.05); p95_mm=704.3415785154153 (need <= 0.02); max_mm=728.7072785154152 (need <= 0.05)
+    G_occ_muzzle=0.6666666666666666 (need <= 0.05)
+[L2 제외 ON] world Z 180 deg (t refit) -> rejected=True
+    level 2 rejected by 4 gate(s): uv_abs_resid_p95_texel=1234.1522567518193 (need <= 0.01); uv_abs_resid_max_texel=1264.2732892921133 (need <= 0.05); p95_mm=704.3426976902126 (need <= 0.02); max_mm=728.7083976902125 (need <= 0.05)
+    G_occ_muzzle=0.6353333333333333 (need <= 0.05)
+[L2 제외 OFF] P (reference, unmodified) -> rejected=True
+    level 2 rejected by 1 gate(s): uv_abs_resid_max_texel=1.485491567135604 (need <= 0.05)
+    G_occ_muzzle=0.0 (need <= 0.05)
+[L2 제외 OFF] plate mirror (_plate_mirror, det +1, t refit) -> rejected=True
+    level 2 rejected by 4 gate(s): uv_abs_resid_p95_texel=1203.2494372496008 (need <= 0.01); uv_abs_resid_max_texel=1282.5279069080202 (need <= 0.05); p95_mm=704.3417160037019 (need <= 0.02); max_mm=728.7074160037017 (need <= 0.05)
+    G_occ_muzzle=0.6666666666666666 (need <= 0.05)
+[L2 제외 OFF] P + 1 mm on world X -> rejected=True
+    level 2 rejected by 5 gate(s): uv_abs_resid_p95_texel=0.28764164625554006 (need <= 0.01); uv_abs_resid_max_texel=1.7736969622761853 (need <= 0.05); median_mm=0.999512791086495 (need <= 0.005); p95_mm=1.0004691212997372 (need <= 0.02); max_mm=1.000500869997186 (need <= 0.05)
+    G_occ_muzzle=0.0 (need <= 0.05)
+[L2 제외 OFF] P + 0.1 mm on world X -> rejected=True
+    level 2 rejected by 5 gate(s): uv_abs_resid_p95_texel=0.028842350495570053 (need <= 0.01); uv_abs_resid_max_texel=1.510840780723765 (need <= 0.05); median_mm=0.09951279108655749 (need <= 0.005); p95_mm=0.10046912129979957 (need <= 0.02); max_mm=0.10050086999724839 (need <= 0.05)
+    G_occ_muzzle=0.0 (need <= 0.05)
+[L2 제외 OFF] P + 1 mm on world Y -> rejected=True
+    level 2 rejected by 4 gate(s): uv_abs_resid_p95_texel=0.28154953494856777 (need <= 0.01); uv_abs_resid_max_texel=1329.2407156913305 (need <= 0.05); p95_mm=0.999771060756327 (need <= 0.02); max_mm=0.999771060756327 (need <= 0.05)
+    G_occ_muzzle=0.0 (need <= 0.05)
+[L2 제외 OFF] P + 0.1 mm on world Y -> rejected=True
+    level 2 rejected by 4 gate(s): uv_abs_resid_p95_texel=0.028349016935984024 (need <= 0.01); uv_abs_resid_max_texel=1.485491567135604 (need <= 0.05); p95_mm=0.09977106075576003 (need <= 0.02); max_mm=0.09977106075576003 (need <= 0.05)
+    G_occ_muzzle=0.0 (need <= 0.05)
+[L2 제외 OFF] P + 1 mm on world Z -> rejected=True
+    level 2 rejected by 3 gate(s): uv_abs_resid_p95_texel=0.28179911704966853 (need <= 0.01); uv_abs_resid_max_texel=1.5119002674227273 (need <= 0.05); max_mm=0.23240608325219905 (need <= 0.05)
+    G_occ_muzzle=0.0 (need <= 0.05)
+[L2 제외 OFF] P + 0.1 mm on world Z -> rejected=True
+    level 2 rejected by 2 gate(s): uv_abs_resid_p95_texel=0.02861553467067215 (need <= 0.01); uv_abs_resid_max_texel=1.485758788913277 (need <= 0.05)
+    G_occ_muzzle=0.0 (need <= 0.05)
+[L2 제외 OFF] world X 180 deg (t refit) -> rejected=True
+    level 2 rejected by 4 gate(s): uv_abs_resid_p95_texel=395.8709935656992 (need <= 0.01); uv_abs_resid_max_texel=1094.9766277393028 (need <= 0.05); p95_mm=400.0844450330692 (need <= 0.02); max_mm=402.45665799174805 (need <= 0.05)
+    G_occ_muzzle=0.6453333333333333 (need <= 0.05)
+[L2 제외 OFF] world Y 180 deg (t refit) -> rejected=True
+    level 2 rejected by 4 gate(s): uv_abs_resid_p95_texel=978.5944241566481 (need <= 0.01); uv_abs_resid_max_texel=1156.8988177279375 (need <= 0.05); p95_mm=704.3415785154153 (need <= 0.02); max_mm=728.7072785154152 (need <= 0.05)
+    G_occ_muzzle=0.6666666666666666 (need <= 0.05)
+[L2 제외 OFF] world Z 180 deg (t refit) -> rejected=True
+    level 2 rejected by 4 gate(s): uv_abs_resid_p95_texel=1196.5930014818357 (need <= 0.01); uv_abs_resid_max_texel=1264.2732892921133 (need <= 0.05); p95_mm=704.3426976902126 (need <= 0.02); max_mm=728.7083976902125 (need <= 0.05)
+    G_occ_muzzle=0.6353333333333333 (need <= 0.05)
+```
+
+### 8.5 양성 대조 재현 (§1.5 표 2) — 독립 검정이 아니다
+
+판정 실행이 다시 잰 값이 표 2와 **소수점까지 같다**: 총구 원점 L3 0.0020, L4 0.0047, L5 0.0073, L6 0.0013,
+L7 0.0067, L8 0.0000, L9 0.0020, L10 0.0033; 강체 원점 최댓값 L4 0.1033. `short_frames` 전부 0.
+§1.5가 미리 적어 둔 대로 **이 통과는 구성상 보장된 것**이고 게이트의 판별력은 §8.4의 음성 대조에 있다.
+
+### 8.6 남은 문제 (이 문서가 아니라 후속에서)
+
+- `trainer/pose_lab/service.py`는 `provenance == "solved"`로 **정확히** 비교한다. 꼬리표 붙은
+  `"solved:fixed_linear_muzzle_occlusion"`은 그 비교를 통과하지 못하므로 **화면은 아직 레벨 1 벽을 그리지 않는다.**
+  `capture_frame.to_world`와 `level_mesh`는 `is_solved()`로 고쳤지만 `pose_lab/`은 다른 워크플로의 소유라 손대지 않았다.
+- 같은 이유로 `trainer/pose_lab/tests/test_frame_invariance.py`(UNVERIFIABLE_LEVEL = 1)와
+  `test_service_view.py::test_mesh_is_unavailable_for_an_unverifiable_level`이 실패한다. 레벨 2가 여전히
+  `unverifiable`이므로 그 상수를 2로 옮기면 성질은 그대로 유지된다.
+- 제외 규칙 E2는 §8.3이 보인 대로 **판정에 쓸 수 없다.** 다시 쓰려면 새 사전등록이다.

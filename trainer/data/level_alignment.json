@@ -1,13 +1,653 @@
 [
   {
     "level": 1,
-    "provenance": "unverifiable",
+    "provenance": "solved:fixed_linear_muzzle_occlusion",
+    "solved_transform": {
+      "rotation": [
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        -1.0,
+        0.0,
+        0.0
+      ],
+      "translation": [
+        1.4489999613651592,
+        4.6170001049758165,
+        0.6569996554512653
+      ],
+      "scale": 0.0254
+    },
+    "declared_scale": 0.0254,
+    "fit": {
+      "atlas_overlap_cell_fraction": 0.0,
+      "atlas_overlap_max_gap_mm": 0.0,
+      "atlas_overlap_resolution": 1024.0,
+      "cross_session_eval_rows": 600.0,
+      "cross_session_fit_worker_rows": 800.0,
+      "cross_session_pass": 1.0,
+      "cross_session_workers": 2.0,
+      "cross_session_worst_mm": 5.0119935313120505e-05,
+      "cross_session_worst_texel": 0.00024671517319147304,
+      "flash_occlusion": 0.0,
+      "flash_occlusion_n": 1500.0,
+      "g0_max_mm": 0.0012882984936624098,
+      "g0_median_mm": 0.00022207943140006847,
+      "g0_n_pairs": 3997.0,
+      "g0_p95_mm": 0.0006937627100300769,
+      "gun_occlusion": 0.0,
+      "hmd_occlusion": 0.0,
+      "max_mm": 0.00012623607914541424,
+      "median_mm": 0.00010010384765557625,
+      "muzzle_occlusion": 0.0,
+      "muzzle_occlusion_n": 1500.0,
+      "muzzle_short_frames": 0.0,
+      "occlusion_n": 1500.0,
+      "p95_mm": 0.00011693648049870986,
+      "uv_abs_resid_max_texel": 0.0002530069003641026,
+      "uv_abs_resid_median_texel": 8.931230273713907e-05,
+      "uv_abs_resid_p95_texel": 0.00017082655677222444,
+      "uv_ambiguous_fraction": 0.0,
+      "uv_degenerate_area_fraction": 0.0,
+      "uv_degenerate_misattribution_mm": 0.0,
+      "uv_degenerate_silent_samples": 0.0,
+      "uv_degenerate_tris": 0.0,
+      "uv_lookup_sample": 1500.0,
+      "uv_miss_fraction": 0.0,
+      "uv_seam_tie_fraction": 0.0,
+      "det_sign": -1.0,
+      "fit_eval_overlap": 0.0,
+      "fit_n": 2000.0,
+      "n_hits": 1500.0,
+      "scale_ratio_to_declared": 0.0
+    },
     "source_fbx": "learning_mode_lv.1_rev.1.1.fbx",
-    "rejected_by": [
+    "uv_convention": "obs_texel = UV_ATLAS_TEXELS * mesh_uv",
+    "uv_convention_source": "measured",
+    "linear_source": "fixed_signed_permutation",
+    "handedness_source": "data:occlusion_muzzle",
+    "handedness_evidence": {
+      "muzzle_occlusion": {
+        "P": 0.0,
+        "mirror": 1.0
+      },
+      "gun_origin_occlusion_report": {
+        "P": 0.0,
+        "mirror": 1.0
+      },
+      "hmd_occlusion_report": {
+        "P": 0.0,
+        "mirror": 1.0
+      },
+      "occlusion_origin": "muzzle",
+      "muzzle_offset_m": 0.0892,
+      "occlusion_threshold": 0.05,
+      "prereg_doc": "docs/measurements/2026-09-16-level1-2-occlusion-exclusion-prereg.md",
+      "posthoc_parts": [
+        "G_occ_muzzle",
+        "uniqueness"
+      ],
+      "void_gates": [
+        "G_occ_hmd",
+        "G_front_face_hmd"
+      ],
+      "confirmation_not_out_of_sample": true
+    },
+    "prereg_doc": "docs/measurements/2026-09-16-level1-2-occlusion-exclusion-prereg.md",
+    "occlusion_origin": "muzzle",
+    "muzzle_offset_m": 0.0892,
+    "occlusion_threshold": 0.05,
+    "holdout": {
+      "kind": "unread_files",
+      "unread_files_available": 27,
+      "files_opened": 9,
+      "file_list": [
+        "/data/sources/professionals/김경호_20250831/김경호_20250831(Sequences)/1_1000415_1.csv",
+        "/data/sources/professionals/김경호_20250831/김경호_20250831(Sequences)/1_1000428_1.csv",
+        "/data/sources/professionals/김경호_20250905/김경호_20250905(Sequences)/1_1000622_1.csv",
+        "/data/sources/professionals/김경호_20250905/김경호_20250905(Sequences)/1_1000638_1.csv",
+        "/data/sources/professionals/손영석_20250825/손영석_20250825(Sequences)/1_1000282_1.csv",
+        "/data/sources/professionals/손영석_20250825/손영석_20250825(Sequences)/1_1000283_1.csv",
+        "/data/sources/professionals/손영석_20250825/손영석_20250825(Sequences)/1_1000296_1.csv",
+        "/data/sources/professionals/손영석_20250826/손영석_20250826(Sequences)/1_1000323_1.csv",
+        "/data/sources/professionals/손영석_20250826/손영석_20250826(Sequences)/1_1000336_1.csv"
+      ],
+      "frames": 1500,
+      "per_file_cap": 200,
+      "frame_cap": 1500,
+      "session_disjoint": false
+    },
+    "confirmation_not_out_of_sample": true,
+    "not_gated": {
+      "reason": "12자유도 경로 전용 게이트(G4 aniso, G7, G8, G9) — 사전등록 §1.3",
+      "gates_not_applied": [
+        "cond_min_over_max",
+        "distinct_normals",
+        "fit_linear_aniso",
+        "linear_aniso",
+        "scale_ratio_to_declared",
+        "adversarial_runner_up_texel"
+      ],
+      "scale_ratio_to_declared_is_by_construction": true
+    },
+    "muzzle_occlusion_attempt": {
+      "prereg_doc": "docs/measurements/2026-09-16-level1-2-occlusion-exclusion-prereg.md",
+      "linear_source": "fixed_signed_permutation",
+      "scale": 0.0254,
+      "occlusion_origin": "muzzle",
+      "muzzle_offset_m": 0.0892,
+      "occlusion_threshold": 0.05,
+      "occlusion_stop_before_m": 0.002,
+      "gates_not_applied": [
+        "cond_min_over_max",
+        "distinct_normals",
+        "fit_linear_aniso",
+        "linear_aniso",
+        "scale_ratio_to_declared",
+        "adversarial_runner_up_texel"
+      ],
+      "fit_n": 2000,
+      "holdout": {
+        "kind": "unread_files",
+        "unread_files_available": 27,
+        "files_opened": 9,
+        "file_list": [
+          "/data/sources/professionals/김경호_20250831/김경호_20250831(Sequences)/1_1000415_1.csv",
+          "/data/sources/professionals/김경호_20250831/김경호_20250831(Sequences)/1_1000428_1.csv",
+          "/data/sources/professionals/김경호_20250905/김경호_20250905(Sequences)/1_1000622_1.csv",
+          "/data/sources/professionals/김경호_20250905/김경호_20250905(Sequences)/1_1000638_1.csv",
+          "/data/sources/professionals/손영석_20250825/손영석_20250825(Sequences)/1_1000282_1.csv",
+          "/data/sources/professionals/손영석_20250825/손영석_20250825(Sequences)/1_1000283_1.csv",
+          "/data/sources/professionals/손영석_20250825/손영석_20250825(Sequences)/1_1000296_1.csv",
+          "/data/sources/professionals/손영석_20250826/손영석_20250826(Sequences)/1_1000323_1.csv",
+          "/data/sources/professionals/손영석_20250826/손영석_20250826(Sequences)/1_1000336_1.csv"
+        ],
+        "frames": 1500,
+        "per_file_cap": 200,
+        "frame_cap": 1500,
+        "session_disjoint": false
+      },
+      "candidates_tried": 48,
+      "candidates_passed_A": 2,
+      "candidates_passed_A_and_occ": 1,
+      "negative_control_muzzle_occlusion": 1.0,
+      "not_solved_reasons": [],
+      "confirmation_not_out_of_sample": true,
+      "passing_or_reference_candidates": [
+        {
+          "rotation": [
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            -1.0,
+            0.0,
+            0.0
+          ],
+          "det": -1.0,
+          "translation": [
+            1.4489999613651592,
+            4.6170001049758165,
+            0.6569996554512653
+          ],
+          "passed_A": true,
+          "passed_occ": true,
+          "gate_failures_A": [],
+          "measured": {
+            "g0_n_pairs": 3997.0,
+            "g0_median_mm": 0.00022207943140006847,
+            "g0_p95_mm": 0.0006937627100300769,
+            "g0_max_mm": 0.0012882984936624098,
+            "uv_degenerate_tris": 0.0,
+            "uv_degenerate_area_fraction": 0.0,
+            "uv_degenerate_silent_samples": 0.0,
+            "uv_degenerate_misattribution_mm": 0.0,
+            "atlas_overlap_cell_fraction": 0.0,
+            "atlas_overlap_max_gap_mm": 0.0,
+            "atlas_overlap_resolution": 1024.0,
+            "uv_miss_fraction": 0.0,
+            "uv_ambiguous_fraction": 0.0,
+            "uv_lookup_sample": 1500.0,
+            "median_mm": 0.00010010384765557625,
+            "p95_mm": 0.00011693648049870986,
+            "max_mm": 0.00012623607914541424,
+            "uv_abs_resid_median_texel": 8.931230273713907e-05,
+            "uv_abs_resid_p95_texel": 0.00017082655677222444,
+            "uv_abs_resid_max_texel": 0.0002530069003641026,
+            "uv_seam_tie_fraction": 0.0,
+            "muzzle_occlusion": 0.0,
+            "muzzle_occlusion_n": 1500.0,
+            "muzzle_short_frames": 0.0,
+            "gun_occlusion": 0.0,
+            "hmd_occlusion": 0.0,
+            "occlusion_n": 1500.0,
+            "flash_occlusion_n": 1500.0,
+            "flash_occlusion": 0.0,
+            "cross_session_pass": 1.0,
+            "cross_session_workers": 2.0,
+            "cross_session_fit_worker_rows": 800.0,
+            "cross_session_eval_rows": 600.0,
+            "cross_session_worst_mm": 5.0119935313120505e-05,
+            "cross_session_worst_texel": 0.00024671517319147304
+          }
+        },
+        {
+          "rotation": [
+            0.0,
+            -1.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            -1.0,
+            0.0,
+            0.0
+          ],
+          "det": 1.0,
+          "translation": [
+            1.4240000386348415,
+            4.6170001049758165,
+            0.6569996554512653
+          ],
+          "passed_A": true,
+          "passed_occ": false,
+          "gate_failures_A": [],
+          "measured": {
+            "g0_n_pairs": 3997.0,
+            "g0_median_mm": 0.00022207943140006847,
+            "g0_p95_mm": 0.0006937627100300769,
+            "g0_max_mm": 0.0012882984936624098,
+            "uv_degenerate_tris": 0.0,
+            "uv_degenerate_area_fraction": 0.0,
+            "uv_degenerate_silent_samples": 0.0,
+            "uv_degenerate_misattribution_mm": 0.0,
+            "atlas_overlap_cell_fraction": 0.0,
+            "atlas_overlap_max_gap_mm": 0.0,
+            "atlas_overlap_resolution": 1024.0,
+            "uv_miss_fraction": 0.0,
+            "uv_ambiguous_fraction": 0.0,
+            "uv_lookup_sample": 1500.0,
+            "median_mm": 0.00010010384721148704,
+            "p95_mm": 0.00011693648005462065,
+            "max_mm": 0.00012623607870132503,
+            "uv_abs_resid_median_texel": 8.931230273713907e-05,
+            "uv_abs_resid_p95_texel": 0.00017082655677222444,
+            "uv_abs_resid_max_texel": 0.0002530069003641026,
+            "uv_seam_tie_fraction": 0.0,
+            "muzzle_occlusion": 1.0,
+            "muzzle_occlusion_n": 1500.0,
+            "muzzle_short_frames": 0.0,
+            "gun_occlusion": 1.0,
+            "hmd_occlusion": 1.0,
+            "occlusion_n": 1500.0,
+            "flash_occlusion_n": 1500.0,
+            "flash_occlusion": 1.0,
+            "cross_session_pass": 1.0,
+            "cross_session_workers": 2.0,
+            "cross_session_fit_worker_rows": 800.0,
+            "cross_session_eval_rows": 600.0,
+            "cross_session_worst_mm": 5.011993153836222e-05,
+            "cross_session_worst_texel": 0.00024671517319147304
+          }
+        }
+      ],
+      "handedness_evidence": {
+        "muzzle_occlusion": {
+          "P": 0.0,
+          "mirror": 1.0
+        },
+        "gun_origin_occlusion_report": {
+          "P": 0.0,
+          "mirror": 1.0
+        },
+        "hmd_occlusion_report": {
+          "P": 0.0,
+          "mirror": 1.0
+        },
+        "occlusion_origin": "muzzle",
+        "muzzle_offset_m": 0.0892,
+        "occlusion_threshold": 0.05,
+        "prereg_doc": "docs/measurements/2026-09-16-level1-2-occlusion-exclusion-prereg.md",
+        "posthoc_parts": [
+          "G_occ_muzzle",
+          "uniqueness"
+        ],
+        "void_gates": [
+          "G_occ_hmd",
+          "G_front_face_hmd"
+        ],
+        "confirmation_not_out_of_sample": true
+      }
+    },
+    "workers": [
+      "김경호",
+      "손영석"
+    ],
+    "session_count": 4,
+    "history": [
       {
-        "gate": "cond_min_over_max",
-        "measured": 2.0644827889117667e-09,
-        "required": ">= 0.05"
+        "level": 1,
+        "provenance": "unverifiable",
+        "source_fbx": "learning_mode_lv.1_rev.1.1.fbx",
+        "rejected_by": [
+          {
+            "gate": "cond_min_over_max",
+            "measured": 2.0644827889117667e-09,
+            "required": ">= 0.05"
+          }
+        ]
+      },
+      {
+        "level": 1,
+        "provenance": "solved:fixed_linear_muzzle_occlusion",
+        "solved_transform": {
+          "rotation": [
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            -1.0,
+            0.0,
+            0.0
+          ],
+          "translation": [
+            1.4489999613651592,
+            4.6170001049758165,
+            0.6569996554512653
+          ],
+          "scale": 0.0254
+        },
+        "declared_scale": 0.0254,
+        "fit": {
+          "atlas_overlap_cell_fraction": 0.0,
+          "atlas_overlap_max_gap_mm": 0.0,
+          "atlas_overlap_resolution": 1024.0,
+          "cross_session_eval_rows": 600.0,
+          "cross_session_fit_worker_rows": 800.0,
+          "cross_session_pass": 1.0,
+          "cross_session_workers": 2.0,
+          "cross_session_worst_mm": 5.0119935313120505e-05,
+          "cross_session_worst_texel": 0.00024671517319147304,
+          "flash_occlusion": 0.0,
+          "flash_occlusion_n": 1500.0,
+          "g0_max_mm": 0.0012882984936624098,
+          "g0_median_mm": 0.00022207943140006847,
+          "g0_n_pairs": 3997.0,
+          "g0_p95_mm": 0.0006937627100300769,
+          "gun_occlusion": 0.0,
+          "hmd_occlusion": 0.0,
+          "max_mm": 0.00012623607914541424,
+          "median_mm": 0.00010010384765557625,
+          "muzzle_occlusion": 0.0,
+          "muzzle_occlusion_n": 1500.0,
+          "muzzle_short_frames": 0.0,
+          "occlusion_n": 1500.0,
+          "p95_mm": 0.00011693648049870986,
+          "uv_abs_resid_max_texel": 0.0002530069003641026,
+          "uv_abs_resid_median_texel": 8.931230273713907e-05,
+          "uv_abs_resid_p95_texel": 0.00017082655677222444,
+          "uv_ambiguous_fraction": 0.0,
+          "uv_degenerate_area_fraction": 0.0,
+          "uv_degenerate_misattribution_mm": 0.0,
+          "uv_degenerate_silent_samples": 0.0,
+          "uv_degenerate_tris": 0.0,
+          "uv_lookup_sample": 1500.0,
+          "uv_miss_fraction": 0.0,
+          "uv_seam_tie_fraction": 0.0,
+          "det_sign": -1.0,
+          "fit_eval_overlap": 0.0,
+          "fit_n": 2000.0,
+          "n_hits": 1500.0,
+          "scale_ratio_to_declared": 0.0
+        },
+        "source_fbx": "learning_mode_lv.1_rev.1.1.fbx",
+        "uv_convention": "obs_texel = UV_ATLAS_TEXELS * mesh_uv",
+        "uv_convention_source": "measured",
+        "linear_source": "fixed_signed_permutation",
+        "handedness_source": "data:occlusion_muzzle",
+        "handedness_evidence": {
+          "muzzle_occlusion": {
+            "P": 0.0,
+            "mirror": 1.0
+          },
+          "gun_origin_occlusion_report": {
+            "P": 0.0,
+            "mirror": 1.0
+          },
+          "hmd_occlusion_report": {
+            "P": 0.0,
+            "mirror": 1.0
+          },
+          "occlusion_origin": "muzzle",
+          "muzzle_offset_m": 0.0892,
+          "occlusion_threshold": 0.05,
+          "prereg_doc": "docs/measurements/2026-09-16-level1-2-occlusion-exclusion-prereg.md",
+          "posthoc_parts": [
+            "G_occ_muzzle",
+            "uniqueness"
+          ],
+          "void_gates": [
+            "G_occ_hmd",
+            "G_front_face_hmd"
+          ],
+          "confirmation_not_out_of_sample": true
+        },
+        "prereg_doc": "docs/measurements/2026-09-16-level1-2-occlusion-exclusion-prereg.md",
+        "occlusion_origin": "muzzle",
+        "muzzle_offset_m": 0.0892,
+        "occlusion_threshold": 0.05,
+        "holdout": {
+          "kind": "unread_files",
+          "files": 9,
+          "file_list": [
+            "/data/sources/professionals/김경호_20250831/김경호_20250831(Sequences)/1_1000415_1.csv",
+            "/data/sources/professionals/김경호_20250831/김경호_20250831(Sequences)/1_1000428_1.csv",
+            "/data/sources/professionals/김경호_20250905/김경호_20250905(Sequences)/1_1000622_1.csv",
+            "/data/sources/professionals/김경호_20250905/김경호_20250905(Sequences)/1_1000638_1.csv",
+            "/data/sources/professionals/손영석_20250825/손영석_20250825(Sequences)/1_1000282_1.csv",
+            "/data/sources/professionals/손영석_20250825/손영석_20250825(Sequences)/1_1000283_1.csv",
+            "/data/sources/professionals/손영석_20250825/손영석_20250825(Sequences)/1_1000296_1.csv",
+            "/data/sources/professionals/손영석_20250826/손영석_20250826(Sequences)/1_1000323_1.csv",
+            "/data/sources/professionals/손영석_20250826/손영석_20250826(Sequences)/1_1000336_1.csv"
+          ],
+          "frames": 1500,
+          "per_file_cap": 200,
+          "session_disjoint": false
+        },
+        "confirmation_not_out_of_sample": true,
+        "not_gated": {
+          "reason": "12자유도 경로 전용 게이트(G4 aniso, G7, G8, G9) — 사전등록 §1.3",
+          "gates_not_applied": [
+            "cond_min_over_max",
+            "distinct_normals",
+            "fit_linear_aniso",
+            "linear_aniso",
+            "scale_ratio_to_declared",
+            "adversarial_runner_up_texel"
+          ],
+          "scale_ratio_to_declared_is_by_construction": true
+        },
+        "workers": [
+          "김경호",
+          "손영석"
+        ],
+        "session_count": 4
+      },
+      {
+        "level": 1,
+        "provenance": "solved:fixed_linear_muzzle_occlusion",
+        "solved_transform": {
+          "rotation": [
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            -1.0,
+            0.0,
+            0.0
+          ],
+          "translation": [
+            1.4489999613651592,
+            4.6170001049758165,
+            0.6569996554512653
+          ],
+          "scale": 0.0254
+        },
+        "declared_scale": 0.0254,
+        "fit": {
+          "atlas_overlap_cell_fraction": 0.0,
+          "atlas_overlap_max_gap_mm": 0.0,
+          "atlas_overlap_resolution": 1024.0,
+          "cross_session_eval_rows": 600.0,
+          "cross_session_fit_worker_rows": 800.0,
+          "cross_session_pass": 1.0,
+          "cross_session_workers": 2.0,
+          "cross_session_worst_mm": 5.0119935313120505e-05,
+          "cross_session_worst_texel": 0.00024671517319147304,
+          "flash_occlusion": 0.0,
+          "flash_occlusion_n": 1500.0,
+          "g0_max_mm": 0.0012882984936624098,
+          "g0_median_mm": 0.00022207943140006847,
+          "g0_n_pairs": 3997.0,
+          "g0_p95_mm": 0.0006937627100300769,
+          "gun_occlusion": 0.0,
+          "hmd_occlusion": 0.0,
+          "max_mm": 0.00012623607914541424,
+          "median_mm": 0.00010010384765557625,
+          "muzzle_occlusion": 0.0,
+          "muzzle_occlusion_n": 1500.0,
+          "muzzle_short_frames": 0.0,
+          "occlusion_n": 1500.0,
+          "p95_mm": 0.00011693648049870986,
+          "uv_abs_resid_max_texel": 0.0002530069003641026,
+          "uv_abs_resid_median_texel": 8.931230273713907e-05,
+          "uv_abs_resid_p95_texel": 0.00017082655677222444,
+          "uv_ambiguous_fraction": 0.0,
+          "uv_degenerate_area_fraction": 0.0,
+          "uv_degenerate_misattribution_mm": 0.0,
+          "uv_degenerate_silent_samples": 0.0,
+          "uv_degenerate_tris": 0.0,
+          "uv_lookup_sample": 1500.0,
+          "uv_miss_fraction": 0.0,
+          "uv_seam_tie_fraction": 0.0,
+          "det_sign": -1.0,
+          "fit_eval_overlap": 0.0,
+          "fit_n": 2000.0,
+          "n_hits": 1500.0,
+          "scale_ratio_to_declared": 0.0
+        },
+        "source_fbx": "learning_mode_lv.1_rev.1.1.fbx",
+        "uv_convention": "obs_texel = UV_ATLAS_TEXELS * mesh_uv",
+        "uv_convention_source": "measured",
+        "linear_source": "fixed_signed_permutation",
+        "handedness_source": "data:occlusion_muzzle",
+        "handedness_evidence": {
+          "muzzle_occlusion": {
+            "P": 0.0,
+            "mirror": 1.0
+          },
+          "gun_origin_occlusion_report": {
+            "P": 0.0,
+            "mirror": 1.0
+          },
+          "hmd_occlusion_report": {
+            "P": 0.0,
+            "mirror": 1.0
+          },
+          "occlusion_origin": "muzzle",
+          "muzzle_offset_m": 0.0892,
+          "occlusion_threshold": 0.05,
+          "prereg_doc": "docs/measurements/2026-09-16-level1-2-occlusion-exclusion-prereg.md",
+          "posthoc_parts": [
+            "G_occ_muzzle",
+            "uniqueness"
+          ],
+          "void_gates": [
+            "G_occ_hmd",
+            "G_front_face_hmd"
+          ],
+          "confirmation_not_out_of_sample": true
+        },
+        "prereg_doc": "docs/measurements/2026-09-16-level1-2-occlusion-exclusion-prereg.md",
+        "occlusion_origin": "muzzle",
+        "muzzle_offset_m": 0.0892,
+        "occlusion_threshold": 0.05,
+        "holdout": {
+          "kind": "unread_files",
+          "unread_files_available": 27,
+          "files_opened": 9,
+          "file_list": [
+            "/data/sources/professionals/김경호_20250831/김경호_20250831(Sequences)/1_1000415_1.csv",
+            "/data/sources/professionals/김경호_20250831/김경호_20250831(Sequences)/1_1000428_1.csv",
+            "/data/sources/professionals/김경호_20250905/김경호_20250905(Sequences)/1_1000622_1.csv",
+            "/data/sources/professionals/김경호_20250905/김경호_20250905(Sequences)/1_1000638_1.csv",
+            "/data/sources/professionals/손영석_20250825/손영석_20250825(Sequences)/1_1000282_1.csv",
+            "/data/sources/professionals/손영석_20250825/손영석_20250825(Sequences)/1_1000283_1.csv",
+            "/data/sources/professionals/손영석_20250825/손영석_20250825(Sequences)/1_1000296_1.csv",
+            "/data/sources/professionals/손영석_20250826/손영석_20250826(Sequences)/1_1000323_1.csv",
+            "/data/sources/professionals/손영석_20250826/손영석_20250826(Sequences)/1_1000336_1.csv"
+          ],
+          "unread_file_list": [
+            "/data/sources/professionals/김경호_20250831/김경호_20250831(Sequences)/1_1000415_1.csv",
+            "/data/sources/professionals/김경호_20250831/김경호_20250831(Sequences)/1_1000428_1.csv",
+            "/data/sources/professionals/김경호_20250905/김경호_20250905(Sequences)/1_1000622_1.csv",
+            "/data/sources/professionals/김경호_20250905/김경호_20250905(Sequences)/1_1000638_1.csv",
+            "/data/sources/professionals/손영석_20250825/손영석_20250825(Sequences)/1_1000282_1.csv",
+            "/data/sources/professionals/손영석_20250825/손영석_20250825(Sequences)/1_1000283_1.csv",
+            "/data/sources/professionals/손영석_20250825/손영석_20250825(Sequences)/1_1000296_1.csv",
+            "/data/sources/professionals/손영석_20250826/손영석_20250826(Sequences)/1_1000323_1.csv",
+            "/data/sources/professionals/손영석_20250826/손영석_20250826(Sequences)/1_1000336_1.csv",
+            "/data/sources/professionals/손영석_20250827/손영석_20250827(Sequences)/1_1000364_1.csv",
+            "/data/sources/professionals/임채원_20250901/임채원_20250901(Sequences)/1_1000038_1.csv",
+            "/data/sources/professionals/임채원_20250902/임채원_20250902(Sequences)/1_1000066_1.csv",
+            "/data/sources/professionals/임채원_20250902/임채원_20250902(Sequences)/1_1000079_1.csv",
+            "/data/sources/professionals/임채원_20250903/임채원_20250903(Sequences)/1_1000107_1.csv",
+            "/data/sources/professionals/전형기/전형기_20250905/전형기_20250905(Sequences)/1_1000592_1.csv",
+            "/data/sources/professionals/전형기/전형기_20250908/전형기_20250908(Sequences)/1_1000778_1.csv",
+            "/data/sources/professionals/정희록_20250901/정희록_20250901(Sequences)/1_1000456_1.csv",
+            "/data/sources/professionals/정희록_20250901/정희록_20250901(Sequences)/1_1000469_1.csv",
+            "/data/sources/professionals/정희록_20250902/정희록_20250902(Sequences)/1_1000500_1.csv",
+            "/data/sources/professionals/정희록_20250902/정희록_20250902(Sequences)/1_1000513_1.csv",
+            "/data/sources/professionals/정희록_20250903/정희록_20250903(Sequences)/1_1000541_1.csv",
+            "/data/sources/professionals/최연진_20250906/최연진_20250906(Sequences)/1_1000677_1.csv",
+            "/data/sources/professionals/최연진_20250906/최연진_20250906(Sequences)/1_1000691_1.csv",
+            "/data/sources/professionals/최연진_20250906/최연진_20250906(Sequences)/1_1000704_1.csv",
+            "/data/sources/professionals/최연진_20250906/최연진_20250906(Sequences)/1_1000717_1.csv",
+            "/data/sources/professionals/최연진_20250906/최연진_20250906(Sequences)/1_1000730_1.csv",
+            "/data/sources/professionals/최연진_20250906/최연진_20250906(Sequences)/1_1000743_1.csv"
+          ],
+          "frames": 1500,
+          "per_file_cap": 200,
+          "frame_cap": 1500,
+          "session_disjoint": false
+        },
+        "confirmation_not_out_of_sample": true,
+        "not_gated": {
+          "reason": "12자유도 경로 전용 게이트(G4 aniso, G7, G8, G9) — 사전등록 §1.3",
+          "gates_not_applied": [
+            "cond_min_over_max",
+            "distinct_normals",
+            "fit_linear_aniso",
+            "linear_aniso",
+            "scale_ratio_to_declared",
+            "adversarial_runner_up_texel"
+          ],
+          "scale_ratio_to_declared_is_by_construction": true
+        },
+        "workers": [
+          "김경호",
+          "손영석"
+        ],
+        "session_count": 4
       }
     ],
     "fixed_linear_attempt": {
@@ -1064,6 +1704,323 @@
         ],
         "void_gates": [
           "G_occ_hmd"
+        ]
+      }
+    },
+    "muzzle_occlusion_attempt": {
+      "prereg_doc": "docs/measurements/2026-09-16-level1-2-occlusion-exclusion-prereg.md",
+      "linear_source": "fixed_signed_permutation",
+      "scale": 0.0254,
+      "occlusion_origin": "muzzle",
+      "muzzle_offset_m": 0.0892,
+      "occlusion_threshold": 0.05,
+      "occlusion_stop_before_m": 0.002,
+      "gates_not_applied": [
+        "cond_min_over_max",
+        "distinct_normals",
+        "fit_linear_aniso",
+        "linear_aniso",
+        "scale_ratio_to_declared",
+        "adversarial_runner_up_texel"
+      ],
+      "fit_n": 2000,
+      "holdout": {
+        "kind": "unread_files",
+        "unread_files_available": 31,
+        "files_opened": 8,
+        "file_list": [
+          "/data/sources/professionals/김경호_20250831/김경호_20250831(Sequences)/2_1000403_1.csv",
+          "/data/sources/professionals/김경호_20250831/김경호_20250831(Sequences)/2_1000416_1.csv",
+          "/data/sources/professionals/김경호_20250831/김경호_20250831(Sequences)/2_1000429_1.csv",
+          "/data/sources/professionals/김경호_20250905/김경호_20250905(Sequences)/2_1000623_1.csv",
+          "/data/sources/professionals/김경호_20250905/김경호_20250905(Sequences)/2_1000639_1.csv",
+          "/data/sources/professionals/김경호_20250905/김경호_20250905(Sequences)/2_1000652_1.csv",
+          "/data/sources/professionals/손영석_20250825/손영석_20250825(Sequences)/2_1000297_1.csv",
+          "/data/sources/professionals/손영석_20250826/손영석_20250826(Sequences)/2_1000324_1.csv"
+        ],
+        "frames": 1500,
+        "per_file_cap": 200,
+        "frame_cap": 1500,
+        "session_disjoint": false
+      },
+      "candidates_tried": 48,
+      "candidates_passed_A": 0,
+      "candidates_passed_A_and_occ": 0,
+      "negative_control_muzzle_occlusion": 0.6666666666666666,
+      "not_solved_reasons": [
+        "candidates passing gate A and G_occ_muzzle: 0, need exactly 1",
+        "excluded hit fraction 0.7326666666666667 > 0.1",
+        "frames left after exclusion 401.0 < 1000",
+        "distinct normals among kept hits 1.0 < 3"
+      ],
+      "confirmation_not_out_of_sample": true,
+      "passing_or_reference_candidates": [
+        {
+          "rotation": [
+            0.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            -1.0,
+            0.0,
+            0.0
+          ],
+          "det": -1.0,
+          "translation": [
+            1.123999864917255,
+            4.551000260989955,
+            0.6399996256922021
+          ],
+          "passed_A": false,
+          "passed_occ": true,
+          "gate_failures_A": [
+            "g0_p95_mm",
+            "g0_max_mm",
+            "uv_degenerate_misattribution_mm",
+            "uv_miss_fraction"
+          ],
+          "measured": {
+            "g0_n_pairs": 3995.0,
+            "g0_median_mm": 0.0006988684698172598,
+            "g0_p95_mm": 2.3430410977418603,
+            "g0_max_mm": 5.520869345388868,
+            "uv_degenerate_tris": 14.0,
+            "uv_degenerate_area_fraction": 0.06460497795235785,
+            "uv_degenerate_silent_samples": 896.0,
+            "uv_degenerate_misattribution_mm": 135.92776457767707,
+            "atlas_overlap_cell_fraction": 0.0,
+            "atlas_overlap_max_gap_mm": 0.0,
+            "atlas_overlap_resolution": 1024.0,
+            "uv_miss_fraction": 0.008666666666666666,
+            "uv_ambiguous_fraction": 0.0,
+            "uv_lookup_sample": 1500.0,
+            "median_mm": 0.00046551165011623173,
+            "p95_mm": 0.0005135250056298654,
+            "max_mm": 0.000538963008889248,
+            "uv_abs_resid_median_texel": 0.0002340354747110039,
+            "uv_abs_resid_p95_texel": 0.0005024531229575588,
+            "uv_abs_resid_max_texel": 0.024456155654411286,
+            "uv_seam_tie_fraction": 0.0013333333333333333,
+            "uv_excluded_hits": 1099.0,
+            "uv_excluded_hit_fraction": 0.7326666666666667,
+            "uv_kept_hits": 401.0,
+            "uv_excluded_resid_median_texel": 0.00019580091835369185,
+            "uv_excluded_resid_p95_texel": 0.0006155200402401333,
+            "uv_excluded_resid_max_texel": 1.485491567135604,
+            "uv_kept_distinct_normals": 1.0,
+            "muzzle_occlusion": 0.0,
+            "muzzle_occlusion_n": 1500.0,
+            "muzzle_short_frames": 0.0,
+            "gun_occlusion": 0.0,
+            "hmd_occlusion": 0.0,
+            "occlusion_n": 1500.0,
+            "flash_occlusion_n": 1500.0,
+            "flash_occlusion": 0.0,
+            "cross_session_pass": 1.0,
+            "cross_session_workers": 2.0,
+            "cross_session_fit_worker_rows": 1200.0,
+            "cross_session_eval_rows": 300.0,
+            "cross_session_worst_mm": 0.0003121732281563539,
+            "cross_session_worst_texel": 0.024456847495230267
+          }
+        },
+        {
+          "rotation": [
+            0.0,
+            -1.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            -1.0,
+            0.0,
+            0.0
+          ],
+          "det": 1.0,
+          "translation": [
+            1.7864087126797394,
+            4.551000105520814,
+            0.6399996306948342
+          ],
+          "passed_A": false,
+          "passed_occ": false,
+          "gate_failures_A": [
+            "g0_p95_mm",
+            "g0_max_mm",
+            "uv_degenerate_misattribution_mm",
+            "uv_miss_fraction",
+            "uv_abs_resid_p95_texel",
+            "uv_abs_resid_max_texel",
+            "p95_mm",
+            "max_mm",
+            "cross_session"
+          ],
+          "measured": {
+            "g0_n_pairs": 3995.0,
+            "g0_median_mm": 0.0006988684698172598,
+            "g0_p95_mm": 2.3430410977418603,
+            "g0_max_mm": 5.520869345388868,
+            "uv_degenerate_tris": 14.0,
+            "uv_degenerate_area_fraction": 0.06460497795235785,
+            "uv_degenerate_silent_samples": 896.0,
+            "uv_degenerate_misattribution_mm": 135.92776457767707,
+            "atlas_overlap_cell_fraction": 0.0,
+            "atlas_overlap_max_gap_mm": 0.0,
+            "atlas_overlap_resolution": 1024.0,
+            "uv_miss_fraction": 0.008666666666666666,
+            "uv_ambiguous_fraction": 0.0,
+            "uv_lookup_sample": 1500.0,
+            "median_mm": 0.0009509762144422173,
+            "p95_mm": 704.3417160037019,
+            "max_mm": 728.7074160037017,
+            "uv_abs_resid_median_texel": 1053.9673912292637,
+            "uv_abs_resid_p95_texel": 1265.60965462245,
+            "uv_abs_resid_max_texel": 1282.5279069080202,
+            "uv_seam_tie_fraction": 0.019333333333333334,
+            "uv_excluded_hits": 1030.0,
+            "uv_excluded_hit_fraction": 0.6866666666666666,
+            "uv_kept_hits": 470.0,
+            "uv_excluded_resid_median_texel": 0.00018391000800882192,
+            "uv_excluded_resid_p95_texel": 0.0005117902147294715,
+            "uv_excluded_resid_max_texel": 1152.5125695598654,
+            "uv_kept_distinct_normals": 1.0,
+            "muzzle_occlusion": 0.6666666666666666,
+            "muzzle_occlusion_n": 1500.0,
+            "muzzle_short_frames": 0.0,
+            "gun_occlusion": 0.6666666666666666,
+            "hmd_occlusion": 0.6666666666666666,
+            "occlusion_n": 1500.0,
+            "flash_occlusion_n": 1500.0,
+            "flash_occlusion": 0.6666666666666666,
+            "cross_session_pass": 0.0,
+            "cross_session_workers": 2.0,
+            "cross_session_fit_worker_rows": 1200.0,
+            "cross_session_eval_rows": 300.0,
+            "cross_session_worst_mm": 728.5867266214967,
+            "cross_session_worst_texel": 1279.9823916817063
+          }
+        }
+      ],
+      "handedness_evidence": {
+        "muzzle_occlusion": {
+          "P": 0.0,
+          "mirror": 0.6666666666666666
+        },
+        "gun_origin_occlusion_report": {
+          "P": 0.0,
+          "mirror": 0.6666666666666666
+        },
+        "hmd_occlusion_report": {
+          "P": 0.0,
+          "mirror": 0.6666666666666666
+        },
+        "occlusion_origin": "muzzle",
+        "muzzle_offset_m": 0.0892,
+        "occlusion_threshold": 0.05,
+        "prereg_doc": "docs/measurements/2026-09-16-level1-2-occlusion-exclusion-prereg.md",
+        "posthoc_parts": [
+          "G_occ_muzzle",
+          "uniqueness"
+        ],
+        "void_gates": [
+          "G_occ_hmd",
+          "G_front_face_hmd"
+        ],
+        "confirmation_not_out_of_sample": true
+      },
+      "uv_exclusion": {
+        "rule": "E1|E2|E3",
+        "threshold_texel": 0.05,
+        "n_triangles": 80,
+        "excluded_tris": 61,
+        "excluded_triangle_fraction": 0.7625,
+        "by_rule": {
+          "E1": 14,
+          "E2": 55,
+          "E3": 0
+        },
+        "excluded_triangle_ids": [
+          4,
+          5,
+          6,
+          7,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          24,
+          25,
+          26,
+          27,
+          29,
+          30,
+          31,
+          32,
+          34,
+          35,
+          38,
+          39,
+          40,
+          41,
+          42,
+          43,
+          44,
+          45,
+          46,
+          47,
+          48,
+          49,
+          50,
+          51,
+          52,
+          53,
+          54,
+          55,
+          56,
+          57,
+          58,
+          59,
+          60,
+          61,
+          62,
+          63,
+          64,
+          66,
+          67,
+          68,
+          69,
+          70,
+          71,
+          72,
+          73,
+          74,
+          75,
+          76,
+          77,
+          78,
+          79
+        ],
+        "excluded_hit_fraction": 0.7326666666666667,
+        "excluded_hits_resid": {
+          "n": 1099.0,
+          "median_texel": 0.00019580091835369185,
+          "p95_texel": 0.0006155200402401333,
+          "max_texel": 1.485491567135604
+        },
+        "kept_hits": 401.0,
+        "kept_distinct_normals": 1.0,
+        "over_exclusion_reasons": [
+          "excluded hit fraction 0.7326666666666667 > 0.1",
+          "frames left after exclusion 401.0 < 1000",
+          "distinct normals among kept hits 1.0 < 3"
+        ],
+        "applies_to": [
+          "G2",
+          "G6 (UV part)"
         ]
       }
     }

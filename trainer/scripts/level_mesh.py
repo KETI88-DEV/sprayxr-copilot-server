@@ -66,7 +66,7 @@ import struct
 import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import BinaryIO, Final, Sequence
+from typing import BinaryIO, Collection, Final, Mapping, Sequence
 
 import rotation_math
 
@@ -523,7 +523,26 @@ def _barycentric(p: Vec3, a: Vec3, b: Vec3, c: Vec3) -> tuple[float, float, floa
 #               결정되지 않는 레벨 1). **통과도 실패도 아닌 세 번째 상태**다 — 화면이
 #               "검증된 정렬이 아직 없다"와 "이 레벨은 검증할 수 없다"를 다르게 말할 수
 #               있어야 한다. 이 항목은 `solved_transform`을 싣지 않는다.
-VALID_PROVENANCE: Final[frozenset[str]] = frozenset({"solved", "declared", "unverifiable"})
+# 검증된 정렬이 **어느 경로로** 검증됐는지를 `provenance` 값 자체가 말한다. 2026-09-16
+# 사전등록 §6이 요구한 형식이다: 12자유도 폐형식 경로는 그냥 "solved", 선형부 고정 +
+# 총구 가림 경로는 `"solved:fixed_linear_muzzle_occlusion"`. 새 꼬리표는 여기 적어야만
+# 쓸 수 있다 — 자유 문자열이면 다음 사람이 오타로 새 출처를 만든다.
+SOLVED_VARIANTS: Final[frozenset[str]] = frozenset({
+    "solved:fixed_linear_muzzle_occlusion",
+    "solved:fixed_linear_uv_exclusion_meshonly",
+})
+VALID_PROVENANCE: Final[frozenset[str]] = (
+    frozenset({"solved", "declared", "unverifiable"}) | SOLVED_VARIANTS
+)
+
+
+def is_solved(provenance: str) -> bool:
+    """이 출처가 "게이트를 전부 통과했다"는 주장인가.
+
+    `provenance == "solved"`로 직접 비교하면 꼬리표 붙은 출처를 조용히 미검증으로
+    떨어뜨린다 — 소비자는 전부 이 함수를 거친다.
+    """
+    return provenance == "solved" or provenance in SOLVED_VARIANTS
 
 
 @dataclass(frozen=True, slots=True)
@@ -1245,6 +1264,33 @@ def congruence_stats(
 # =============================================================================
 
 
+def _atlas_overlap_cells(
+    mesh: Mesh, index: UvIndex, overlap_resolution: int
+) -> dict[tuple[int, int], list[tuple[int, tuple[float, float, float]]]]:
+    """UV 아틀라스를 `overlap_resolution` 격자로 래스터화해 셀 중심을 덮는 비퇴화
+    삼각형을 모은다. `audit_atlas`의 겹침 검사와 **같은 코드**다 — 2026-09-16 사전등록
+    §2.3(E3)이 "기존 `audit_atlas`의 겹침 검사"를 쓴다고 못박았으므로, 두 곳이 갈라지지
+    않도록 여기 한 곳에만 둔다."""
+    cells: dict[tuple[int, int], list[tuple[int, tuple[float, float, float]]]] = {}
+    indexed = set(range(len(mesh.triangles))) - set(index.degenerate_triangles)
+    for t in sorted(indexed):
+        corners = _tri_uv_corners(mesh, t)
+        us = [q[0] for q in corners]
+        vs = [q[1] for q in corners]
+        i0 = max(0, int(min(us) * overlap_resolution))
+        i1 = min(overlap_resolution - 1, int(max(us) * overlap_resolution))
+        j0 = max(0, int(min(vs) * overlap_resolution))
+        j1 = min(overlap_resolution - 1, int(max(vs) * overlap_resolution))
+        for i in range(i0, i1 + 1):
+            for j in range(j0, j1 + 1):
+                centre = ((i + 0.5) / overlap_resolution, (j + 0.5) / overlap_resolution)
+                bary = _barycentric_2d(centre, corners)
+                if bary is None or min(bary) < 0.0:
+                    continue
+                cells.setdefault((i, j), []).append((t, bary))
+    return cells
+
+
 def audit_atlas(
     mesh: Mesh, index: UvIndex, *, seed: int = 0, samples_per_triangle: int = 64,
     overlap_resolution: int = 1024,
@@ -1286,23 +1332,7 @@ def audit_atlas(
                 worst_gap = max(worst_gap, math.dist(true_point, model_point_for_hit(mesh, ti, bary)))  # type: ignore[arg-type]
 
     # 비퇴화 삼각형끼리의 겹침을 아틀라스 래스터화로 확인한다 — 분사 위치와 무관하다.
-    cells: dict[tuple[int, int], list[tuple[int, tuple[float, float, float]]]] = {}
-    indexed = set(range(n_tris)) - set(index.degenerate_triangles)
-    for t in indexed:
-        corners = _tri_uv_corners(mesh, t)
-        us = [q[0] for q in corners]
-        vs = [q[1] for q in corners]
-        i0 = max(0, int(min(us) * overlap_resolution))
-        i1 = min(overlap_resolution - 1, int(max(us) * overlap_resolution))
-        j0 = max(0, int(min(vs) * overlap_resolution))
-        j1 = min(overlap_resolution - 1, int(max(vs) * overlap_resolution))
-        for i in range(i0, i1 + 1):
-            for j in range(j0, j1 + 1):
-                centre = ((i + 0.5) / overlap_resolution, (j + 0.5) / overlap_resolution)
-                bary = _barycentric_2d(centre, corners)
-                if bary is None or min(bary) < 0.0:
-                    continue
-                cells.setdefault((i, j), []).append((t, bary))
+    cells = _atlas_overlap_cells(mesh, index, overlap_resolution)
     overlapping = 0
     overlap_gap = 0.0
     for hits_in_cell in cells.values():
@@ -1346,9 +1376,37 @@ def uv_absolute_residuals(
 
     반환: `(거리 m, 잔차 텍셀, 최근접 삼각형 인덱스, 시임 동점 개수)`.
     """
+    distances, residuals, triangle_ids, ties, _excluded = uv_absolute_residuals_excluding(
+        placed_triangles, mesh, hits, hit_uvs, tie_eps_m=tie_eps_m
+    )
+    return distances, residuals, triangle_ids, ties
+
+
+def uv_absolute_residuals_excluding(
+    placed_triangles: Sequence[tuple[Vec3, Vec3, Vec3]],
+    mesh: Mesh,
+    hits: Sequence[Vec3],
+    hit_uvs: Sequence[tuple[float, float]],
+    *,
+    tie_eps_m: float = G2_TIE_EPS_M,
+    excluded_triangles: Collection[int] = (),
+) -> tuple[list[float], list[float], list[int], int, list[bool]]:
+    """`uv_absolute_residuals`와 같은 계산에 **메시 전용 제외 규칙**을 얹은 것.
+
+    `excluded_triangles`(2026-09-16 사전등록 §2의 E1·E2·E3 합집합)는 **3D 최근접 귀속의
+    후보에서 빠진다.** 최근접 탐색 자체는 메시 전량에서 한다 — 그래야 어느 착탄점이
+    제외된 면 위에 떨어졌는지 셀 수 있다. 동률(시임) 후보 중 남은 것이 하나라도 있으면
+    그것들로 잔차를 재고, 하나도 없으면 그 착탄점은 **제외 착탄점**이다(다섯 번째 반환값
+    `True`). 제외 착탄점의 잔차도 제외 없이 계산해 그대로 실어 보낸다 — 무엇을 가렸는지
+    따로 보고해야 하기 때문이다(§2.4).
+
+    거리(G3)는 제외와 무관하게 **전량** 그대로다: 제외는 UV 잔차에만 미친다.
+    """
+    excluded_set = frozenset(excluded_triangles)
     distances: list[float] = []
     residuals: list[float] = []
     triangle_ids: list[int] = []
+    excluded_hits: list[bool] = []
     ties = 0
     for point, obs in zip(hits, hit_uvs):
         per: list[tuple[float, int, Vec3]] = []
@@ -1362,8 +1420,11 @@ def uv_absolute_residuals(
         near = [row for row in per if row[0] <= best + tie_eps_m]
         if len(near) > 1:
             ties += 1
+        kept = [row for row in near if row[1] not in excluded_set]
+        is_excluded = not kept
+        use = near if is_excluded else kept
         residual = math.inf
-        for _d, i, cp in near:
+        for _d, i, cp in use:
             bary = _barycentric(cp, *placed_triangles[i])
             mesh_u, mesh_v = triangle_uv(mesh, i, bary)
             residual = min(
@@ -1375,7 +1436,8 @@ def uv_absolute_residuals(
         distances.append(best)
         residuals.append(residual)
         triangle_ids.append(near[0][1])
-    return distances, residuals, triangle_ids, ties
+        excluded_hits.append(is_excluded)
+    return distances, residuals, triangle_ids, ties, excluded_hits
 
 
 def _correspondences(
@@ -2260,6 +2322,11 @@ class LevelFrames:
     guns: list[Vec3]
     heads: list[Vec3]
     flashes: list[Vec3 | None]
+    # 실제로 **열린** 파일의 경로(문자열). `collect_level_frames_by_session`은 15,000
+    # 프레임에서 멈추므로 한 번도 열리지 않은 파일이 남는다 — 2026-09-16 사전등록 §3.2의
+    # 새 홀드아웃 H2가 바로 그 미개봉 파일이다. 목록을 하드코딩하지 않으려면 소비
+    # 알고리즘 자신이 무엇을 먹었는지 말해야 한다.
+    paths: list[str] = field(default_factory=list)
 
 
 def collect_level_frames_by_session(
@@ -2286,7 +2353,9 @@ def collect_level_frames_by_session(
         for session in sessions:
             if not queues[session]:
                 continue
-            rows = simulator_csv.read_rows(queues[session].pop(0))
+            path = queues[session].pop(0)
+            frames.paths.append(str(path))
+            rows = simulator_csv.read_rows(path)
             taken = 0
             for frame in measured_pose.measured_frames(rows):
                 if frame.hit is None or frame.uv is None or not frame.spraying:
@@ -2354,13 +2423,24 @@ def measure_placement(
     translation: Vec3,
     hits: Sequence[Vec3],
     uvs: Sequence[tuple[float, float]],
+    *,
+    excluded_triangles: Collection[int] = (),
 ) -> dict[str, float]:
-    """G2·G3만(홀드아웃). 적합하지 않는다."""
+    """G2·G3만(홀드아웃). 적합하지 않는다.
+
+    `excluded_triangles`가 비어 있으면 예전과 **한 글자도 다르지 않은** 결과를 낸다.
+    비어 있지 않으면(2026-09-16 사전등록 §2) UV 잔차 통계는 제외되지 않은 착탄점에서만
+    재고, 표면 거리(G3)는 전량에서 그대로 재며, 제외된 착탄점의 잔차를
+    `excluded_*` 이름으로 **따로** 싣는다 — 무엇을 가렸는지 감추지 않기 위해서다.
+    """
     placed = _world_tris_for(mesh.vertices, mesh.triangles, rotation, scale, translation)
-    distances, residuals, _tids, ties = uv_absolute_residuals(placed, mesh, hits, uvs)
+    distances, residuals, tids, ties, excluded = uv_absolute_residuals_excluding(
+        placed, mesh, hits, uvs, excluded_triangles=excluded_triangles
+    )
     d_med, d_p95, d_max = _percentiles(distances)
-    r_med, r_p95, r_max = _percentiles(residuals)
-    return {
+    kept = [r for r, drop in zip(residuals, excluded) if not drop]
+    r_med, r_p95, r_max = _percentiles(kept)
+    out = {
         "median_mm": d_med * 1000.0,
         "p95_mm": d_p95 * 1000.0,
         "max_mm": d_max * 1000.0,
@@ -2369,6 +2449,21 @@ def measure_placement(
         "uv_abs_resid_max_texel": r_max,
         "uv_seam_tie_fraction": ties / max(1, len(hits)),
     }
+    if excluded_triangles:
+        dropped = [r for r, drop in zip(residuals, excluded) if drop]
+        e_med, e_p95, e_max = _percentiles(dropped)
+        out.update({
+            "uv_excluded_hits": float(len(dropped)),
+            "uv_excluded_hit_fraction": len(dropped) / max(1, len(hits)),
+            "uv_kept_hits": float(len(kept)),
+            "uv_excluded_resid_median_texel": e_med if dropped else 0.0,
+            "uv_excluded_resid_p95_texel": e_p95 if dropped else 0.0,
+            "uv_excluded_resid_max_texel": e_max if dropped else 0.0,
+            "uv_kept_distinct_normals": float(
+                _normal_diversity(mesh, [t for t, drop in zip(tids, excluded) if not drop])
+            ),
+        })
+    return out
 
 
 def _placed_mesh(mesh: Mesh, rotation: Mat3, scale: float, translation: Vec3) -> Mesh:
@@ -2409,7 +2504,8 @@ def origin_occlusions(
 
 
 def _cross_worker_fixed(
-    mesh: Mesh, index: UvIndex, rotation: Mat3, frames: LevelFrames, seed: int
+    mesh: Mesh, index: UvIndex, rotation: Mat3, frames: LevelFrames, seed: int,
+    *, excluded_triangles: Collection[int] = (),
 ) -> dict[str, float]:
     """G6(선형부 고정판): 최다 작업자로만 t를 적합, 다른 작업자 600행에서 G2·G3 p95/max."""
     workers: dict[str, list[int]] = {}
@@ -2432,6 +2528,7 @@ def _cross_worker_fixed(
     out = measure_placement(
         mesh, rotation, FIXED_LINEAR_SCALE, translation,
         [frames.hits[i] for i in picks], [frames.uvs[i] for i in picks],
+        excluded_triangles=excluded_triangles,
     )
     ok = (
         out["p95_mm"] <= GATES["p95_mm"]
@@ -2556,7 +2653,7 @@ def recorded_control_occlusion(level: int, mesh: Mesh, frames: LevelFrames, *, s
                                fit_sample: int = 2000, eval_cap: int = 1500) -> dict[str, float]:
     """§B 양성 대조: 기록된 변환 그대로(재적합 없음), §A.1과 같은 홀드아웃에서 가림을 잰다."""
     alignment = load_alignment(level)
-    if alignment.provenance != "solved":
+    if not is_solved(alignment.provenance):
         raise ValueError(f"level {level} is not a solved control")
     _fit, eval_idx = split_fit_holdout(len(frames.hits), fit_sample, eval_cap, seed)
     return origin_occlusions(
@@ -2851,7 +2948,7 @@ def recorded_front_face(level: int, mesh: Mesh, frames: "LevelFrames", *, seed: 
                         fit_sample: int = 2000, eval_cap: int = 1500) -> dict[str, dict]:
     """§D 양성 대조: 기록된 변환 그대로, 규칙 문서 §A.1과 같은 홀드아웃."""
     alignment = load_alignment(level)
-    if alignment.provenance != "solved":
+    if not is_solved(alignment.provenance):
         raise ValueError(f"level {level} is not a solved control")
     _fit, eval_idx = split_fit_holdout(len(frames.hits), fit_sample, eval_cap, seed)
     return face_side_report(
@@ -3058,6 +3155,845 @@ def front_face_main(out_path: Path) -> None:
     ALIGNMENT_PATH.write_text(json.dumps(new_entries, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
+# =============================================================================
+# §E 사전등록(2026-09-16) — 총구 가림 게이트 + 메시 전용 UV 제외 규칙
+# 문서: docs/measurements/2026-09-16-level1-2-occlusion-exclusion-prereg.md
+#       (커밋 c839a37, 측정 코드 첫 실행 **전**에 커밋)
+#
+# 앞선 두 게이트는 양성 대조에서 무효로 끝났고 그 코드는 한 줄도 바꾸지 않는다:
+#   §B HMD 선분 가림  — L4 0.4133 / L5 0.4840 > 0.25 → 무효
+#   §D HMD 앞면        — L5 0.2607 > 0.25 → 무효
+# 이번 게이트는 **건의 총구**를 원점으로 쓴다. 문턱 0.05는 레벨 3~10에서만 정했다
+# (사전등록 §1.5 표 2: 총구 원점 참해 가림 최댓값 0.0073).
+# =============================================================================
+
+MUZZLE_PREREG_DOC: Final = "docs/measurements/2026-09-16-level1-2-occlusion-exclusion-prereg.md"
+
+# 건의 CSV `Position`은 총구가 아니라 **강체 원점**이다. 레벨 3~10에서
+# `|hit − gun|×1000 − Distance (Real)`이 레벨과 무관하게 89.13~89.24 mm의 상수라는
+# 실측(사전등록 표 1)에서 고른 값이다. 소수 넷째 자리에서 끊는다.
+L_MUZZLE_M: Final = 0.0892
+# `|hit − gun|`이 총구보다 짧거나 2 mm 안이면 총구가 착탄점 뒤에 놓여 선분이 뒤집힌다.
+# 그런 프레임은 분모에서 뺀다(레벨 3~10에서는 0개였다).
+MUZZLE_SHORT_FRAME_MARGIN_M: Final = 0.002
+MUZZLE_OCCLUSION_THRESHOLD: Final = 0.05
+
+H2_PER_FILE_CAP: Final = 200
+H2_FRAME_CAP: Final = 1500
+H2_MIN_FRAMES: Final = 1000
+
+# §2.5 과다 제외 안전장치
+EXCLUDED_HIT_FRACTION_MAX: Final = 0.10
+EXCLUSION_MIN_DISTINCT_NORMALS: Final = 3
+
+# E2(삼각분할 모호)의 판별 상수. 둘 다 기하 동일성 판정의 수치 허용치일 뿐 문턱이 아니다 —
+# 제외 문턱 자체는 `GATES["uv_abs_resid_max_texel"]`(0.05 텍셀)을 그대로 쓴다.
+UV_QUAD_COPLANAR_COS: Final = 1.0 - 1e-9
+UV_QUAD_SEAM_UV: Final = 1e-9
+
+# **G7의 범위**: 조건수·법선 다양성은 12자유도 폐형식 적합이 데이터로 결정되는지의
+# 검사다. 자유도 3짜리 선형부 고정 경로에 걸면 "평면 착탄점이면 무조건 거절"이 되어
+# 실패할 수 없는 거절이 된다(사전등록 §1.1). 아래 이름들은 12자유도 경로 전용이고
+# `fixed_linear_gate_failures`가 그 경계를 **실행 시에** 지킨다.
+TWELVE_DOF_ONLY_GATES: Final[tuple[str, ...]] = (
+    "cond_min_over_max",
+    "distinct_normals",
+    "fit_linear_aniso",
+    "linear_aniso",
+    "scale_ratio_to_declared",
+    "adversarial_runner_up_texel",
+)
+
+
+def fixed_linear_gate_failures(
+    measured: Mapping[str, float], keys: Sequence[str] = FIXED_LINEAR_GATE_KEYS
+) -> list[tuple[str, object, str]]:
+    """선형부 고정 경로의 게이트 A. **12자유도 전용 게이트가 새면 멈춘다.**
+
+    `gate_failures`는 `measured`에 있는 이름만 본다 — 그래서 누군가 `cond_min_over_max`를
+    이 경로의 measured에 얹으면 조용히 G7이 켜진다. 그 사고를 문구가 아니라 예외로 막는다.
+    """
+    leaked = [k for k in keys if k in TWELVE_DOF_ONLY_GATES]
+    if leaked:
+        raise ValueError(
+            f"fixed_linear_gate_failures: 12-DoF-only gates leaked into the fixed-linear path: {leaked} "
+            f"(prereg {MUZZLE_PREREG_DOC} §1.1)"
+        )
+    return gate_failures({k: measured[k] for k in keys if k in measured})
+
+
+# -----------------------------------------------------------------------------
+# G_occ_muzzle — 원점은 총구다
+# -----------------------------------------------------------------------------
+
+
+def muzzle_origins(
+    guns: Sequence[Vec3],
+    hits: Sequence[Vec3],
+    *,
+    length_m: float = L_MUZZLE_M,
+    margin_m: float = MUZZLE_SHORT_FRAME_MARGIN_M,
+) -> tuple[list[Vec3], list[Vec3], int]:
+    """강체 원점 `gun`에서 착탄 방향으로 `length_m` 나아간 총구 위치.
+
+    반환 `(origins, hits_kept, short_frames)`. `|hit − gun| ≤ length_m + margin_m`인
+    프레임은 총구가 착탄점 뒤에 놓여 선분이 뒤집히므로 **분모에서 뺀다**.
+    """
+    if len(guns) != len(hits):
+        raise ValueError("muzzle_origins: guns and hits must be index-paired")
+    origins: list[Vec3] = []
+    kept: list[Vec3] = []
+    short = 0
+    for gun, hit in zip(guns, hits):
+        distance = math.dist(gun, hit)
+        if distance <= length_m + margin_m:
+            short += 1
+            continue
+        k = length_m / distance
+        origins.append(
+            (gun[0] + (hit[0] - gun[0]) * k, gun[1] + (hit[1] - gun[1]) * k, gun[2] + (hit[2] - gun[2]) * k)
+        )
+        kept.append(hit)
+    return origins, kept, short
+
+
+def muzzle_occlusion(
+    placed_mesh: Mesh, guns: Sequence[Vec3], hits: Sequence[Vec3]
+) -> dict[str, float]:
+    """G_occ_muzzle = 총구→착탄 선분이 배치 메시를 뚫는 프레임 비율.
+
+    교차 판정은 `occlusion_fraction`과 **같은 함수·같은 규칙**이고 원점만 다르다.
+    """
+    origins, kept, short = muzzle_origins(guns, hits)
+    if not kept:
+        return {"muzzle_occlusion": math.nan, "muzzle_occlusion_n": 0.0, "muzzle_short_frames": float(short)}
+    return {
+        "muzzle_occlusion": occlusion_fraction(placed_mesh, origins, kept),
+        "muzzle_occlusion_n": float(len(kept)),
+        "muzzle_short_frames": float(short),
+    }
+
+
+def muzzle_offset_stats(frames: LevelFrames, distances_real_mm: Sequence[float]) -> dict[str, float]:
+    """`|hit − gun|×1000 − Distance(Real)`의 분포. 사전등록 표 1의 재현용."""
+    deltas = [
+        math.dist(gun, hit) * 1000.0 - real
+        for gun, hit, real in zip(frames.guns, frames.hits, distances_real_mm)
+    ]
+    med, p95, mx = _percentiles(deltas)
+    return {"n": float(len(deltas)), "median_mm": med, "p95_mm": p95, "max_mm": mx}
+
+
+# -----------------------------------------------------------------------------
+# 메시 전용 UV 제외 규칙 E1·E2·E3 — 착탄점·잔차·판정을 한 번도 읽지 않는다
+# -----------------------------------------------------------------------------
+
+
+def uv_degenerate_triangles(mesh: Mesh) -> frozenset[int]:
+    """E1 — UV 공간 넓이 ≤ `UV_DEGENERATE_AREA`. `build_uv_index`와 같은 판정이다."""
+    return frozenset(
+        t for t in range(len(mesh.triangles)) if _uv_area(_tri_uv_corners(mesh, t)) <= UV_DEGENERATE_AREA
+    )
+
+
+def uv_quad_ambiguity_defects(mesh: Mesh) -> dict[int, float]:
+    """E2 — 삼각형마다 "삼각분할을 바꾸면 기대 UV가 얼마나 달라지는가"(텍셀).
+
+    같은 평면에서 변 하나를 공유하는 두 삼각형 t·t'가 한 사변형에서 왔는데 그 사변형의
+    UV가 3D 위치의 아핀 함수가 아니면, 내부 한 점의 기대 UV는 **어느 삼각분할을 쓰느냐에
+    따라 달라진다**. 그 어긋남을 t'의 바깥 꼭짓점 Q에서 잰다(사전등록 §2.2):
+
+      Q의 3D 위치를 t의 세 꼭짓점에 대한 무게중심 좌표로 쓰고 → 그 좌표를 t의 UV 세
+      꼭짓점에 그대로 적용 → 예측 UV. D = |예측 UV − t'가 Q에 준 UV| × 2048 텍셀.
+
+    시임(A·B의 UV가 두 삼각형에서 다름)은 서로 다른 UV 섬이므로 건너뛴다.
+    **메시만 본다** — 착탄점도 정렬도 잔차도 읽지 않는다.
+    """
+    if not mesh.uv_indices:
+        return {}
+    n = len(mesh.triangles)
+    normals = [_tri_normal(_tri_vertices(mesh, t)) for t in range(n)]
+    by_edge: dict[tuple[int, int], list[int]] = {}
+    for t in range(n):
+        vi = mesh.triangles[t]
+        for a, b in ((0, 1), (1, 2), (2, 0)):
+            by_edge.setdefault((min(vi[a], vi[b]), max(vi[a], vi[b])), []).append(t)
+
+    def uv_of(triangle: int, vertex: int) -> tuple[float, float]:
+        pos = mesh.triangles[triangle].index(vertex)
+        return mesh.uvs[mesh.uv_indices[triangle][pos]]
+
+    defects: dict[int, float] = {}
+    seen: set[tuple[int, int]] = set()
+    for neighbours in by_edge.values():
+        for t in neighbours:
+            for other in neighbours:
+                if t == other or (t, other) in seen:
+                    continue
+                seen.add((t, other))
+                shared = sorted(set(mesh.triangles[t]) & set(mesh.triangles[other]))
+                if len(shared) != 2:
+                    continue
+                nt, no = normals[t], normals[other]
+                if nt is None or no is None or abs(_dot(nt, no)) < UV_QUAD_COPLANAR_COS:
+                    continue
+                if any(math.dist(uv_of(t, v), uv_of(other, v)) > UV_QUAD_SEAM_UV for v in shared):
+                    continue  # 시임 — 서로 다른 UV 섬이다
+                rest = [v for v in mesh.triangles[other] if v not in shared]
+                if len(rest) != 1:
+                    continue
+                q = mesh.vertices[rest[0]]
+                bary = _barycentric(q, *_tri_vertices(mesh, t))
+                corners = _tri_uv_corners(mesh, t)
+                predicted = (
+                    sum(bary[k] * corners[k][0] for k in range(3)),
+                    sum(bary[k] * corners[k][1] for k in range(3)),
+                )
+                actual = uv_of(other, rest[0])
+                d = math.hypot(predicted[0] - actual[0], predicted[1] - actual[1]) * UV_ATLAS_TEXELS
+                defects[t] = max(defects.get(t, 0.0), d)
+    return defects
+
+
+def uv_quad_ambiguous_triangles(mesh: Mesh, *, threshold_texel: float | None = None) -> frozenset[int]:
+    """E2의 제외 집합. 문턱은 `GATES["uv_abs_resid_max_texel"]`(0.05) **그대로**다 —
+    "게이트가 허용하는 오차보다 큰 모호가 메시 자체에 있다"가 제외 사유이므로 문턱은
+    게이트의 것과 같아야 한다(사전등록 §2.2). 새로 고른 값이 아니다."""
+    if threshold_texel is None:
+        threshold_texel = GATES["uv_abs_resid_max_texel"]
+    return frozenset(t for t, d in uv_quad_ambiguity_defects(mesh).items() if d > threshold_texel)
+
+
+def atlas_overlap_triangles(mesh: Mesh, index: UvIndex, *, overlap_resolution: int = 1024) -> frozenset[int]:
+    """E3 — 기존 `audit_atlas`의 겹침 검사에 걸리는 삼각형(UV→3D가 다가인 면)."""
+    out: set[int] = set()
+    for hits_in_cell in _atlas_overlap_cells(mesh, index, overlap_resolution).values():
+        if len(hits_in_cell) < 2:
+            continue
+        points = [model_point_for_hit(mesh, t, bary) for t, bary in hits_in_cell]
+        if max(math.dist(points[0], q) for q in points) > UV_SEAM_SAME_POINT:
+            out.update(t for t, _bary in hits_in_cell)
+    return frozenset(out)
+
+
+def mesh_only_uv_exclusions(mesh: Mesh, index: UvIndex | None = None) -> dict[str, object]:
+    """E1·E2·E3과 그 합집합. **FBX만으로 계산된다.**"""
+    if index is None:
+        index = build_uv_index(mesh)
+    e1 = uv_degenerate_triangles(mesh)
+    e2 = uv_quad_ambiguous_triangles(mesh)
+    e3 = atlas_overlap_triangles(mesh, index)
+    union = e1 | e2 | e3
+    n = len(mesh.triangles)
+    return {
+        "rule": "E1|E2|E3",
+        "threshold_texel": GATES["uv_abs_resid_max_texel"],
+        "n_triangles": n,
+        "E1": sorted(e1),
+        "E2": sorted(e2),
+        "E3": sorted(e3),
+        "excluded": union,
+        "excluded_sorted": sorted(union),
+        "n_E1": len(e1),
+        "n_E2": len(e2),
+        "n_E3": len(e3),
+        "n_excluded": len(union),
+        "excluded_triangle_fraction": len(union) / n if n else 0.0,
+    }
+
+
+# -----------------------------------------------------------------------------
+# H2 — 한 번도 열리지 않은 파일로 만든 새 홀드아웃 (사전등록 §3.2)
+# -----------------------------------------------------------------------------
+
+
+def unread_level_files(
+    level: int, consumed_paths: Sequence[str], professionals_root: Path = DEFAULT_PROFESSIONALS_ROOT
+) -> list[Path]:
+    """`collect_level_frames_by_session`이 **한 번도 열지 않은** 학습모드 파일, 경로 오름차순.
+
+    목록을 하드코딩하지 않는다 — 소비 알고리즘 자신이 기록한 `LevelFrames.paths`를 뺀다.
+    """
+    consumed = set(consumed_paths)
+    return [p for p in sorted(professionals_root.glob(f"**/{level}_*.csv")) if str(p) not in consumed]
+
+
+def collect_frames_from_files(
+    paths: Sequence[Path], *, per_file_cap: int = H2_PER_FILE_CAP, cap: int = H2_FRAME_CAP
+) -> LevelFrames:
+    """`collect_level_frames_by_session`과 **같은 필터**로, 주어진 파일만 경로 순서대로."""
+    import measured_pose
+    import simulator_csv
+
+    frames = LevelFrames([], [], [], [], [], [], [])
+    for path in paths:
+        if len(frames.hits) >= cap:
+            break
+        frames.paths.append(str(path))
+        rows = simulator_csv.read_rows(path)
+        taken = 0
+        for frame in measured_pose.measured_frames(rows):
+            if frame.hit is None or frame.uv is None or not frame.spraying:
+                continue
+            frames.hits.append(frame.hit)
+            frames.uvs.append(frame.uv)
+            frames.sessions.append("/".join(path.parts[-3:-1]))
+            frames.guns.append(frame.right)
+            frames.heads.append(frame.head)
+            frames.flashes.append(frame.left)
+            taken += 1
+            if taken >= per_file_cap or len(frames.hits) >= cap:
+                break
+    return frames
+
+
+# -----------------------------------------------------------------------------
+# 판정 — 선형부 고정 + H2 + 총구 가림 + (레벨 2) 메시 전용 UV 제외
+# -----------------------------------------------------------------------------
+
+
+def solve_fixed_linear_muzzle(
+    level: int,
+    mesh: Mesh,
+    fit_frames: LevelFrames,
+    holdout: LevelFrames,
+    *,
+    index: UvIndex | None = None,
+    fit_sample: int = 2000,
+    eval_cap: int = 1500,
+    seed: int = 0,
+    candidates: Sequence[Mat3] | None = None,
+    screen: int = 100,
+    excluded_triangles: Collection[int] = (),
+    cross_worker: bool = True,
+    always_measure: Sequence[Mat3] = (),
+    unread_files: Sequence[str] = (),
+) -> dict:
+    """48 후보마다 t를 다시 풀고(적합 표본), **H2에서** 게이트 A와 G_occ_muzzle을 잰다.
+
+    `solve_fixed_linear`(2026-09-15 경로)은 손대지 않았다 — 이것은 표본이 다르고
+    게이트가 다른 **다른 경로**다. G7은 여기 없다(`fixed_linear_gate_failures`가 지킨다).
+    """
+    if index is None:
+        index = build_uv_index(mesh)
+    fit_idx, _unused = split_fit_holdout(len(fit_frames.hits), fit_sample, eval_cap, seed)
+    if len(fit_idx) < fit_sample:
+        raise ValueError(f"solve_fixed_linear_muzzle: only {len(fit_frames.hits)} fit frames for {fit_sample}")
+    fit_hits = [fit_frames.hits[i] for i in fit_idx]
+    fit_uvs = [fit_frames.uvs[i] for i in fit_idx]
+    src, dst, fit_miss, fit_amb = _correspondences(mesh, index, fit_hits, fit_uvs)
+    if len(src) < 50:
+        raise ValueError(f"solve_fixed_linear_muzzle: only {len(src)} usable correspondences")
+
+    eval_hits = holdout.hits
+    eval_uvs = holdout.uvs
+    eval_idx = list(range(len(eval_hits)))
+    ev_src, ev_dst, miss_h2, amb_h2 = _correspondences(mesh, index, eval_hits, eval_uvs)
+    shared = congruence_stats(ev_src, ev_dst, FIXED_LINEAR_SCALE, seed=seed)
+    atlas = audit_atlas(mesh, index, seed=seed)
+    shared.update(atlas)
+    # G1의 조회 실패·모호도는 **제외 없이 H2 전량**에서 센다 — 제외된 면 위의 착탄점도
+    # 조회 실패 통계에는 그대로 센다(사전등록 §2.4).
+    shared["uv_miss_fraction"] = miss_h2
+    shared["uv_ambiguous_fraction"] = amb_h2
+    shared["uv_lookup_sample"] = float(len(eval_hits))
+
+    results: list[dict] = []
+    for rotation in (candidates if candidates is not None else signed_permutations()):
+        translation, n_inliers = solve_translation_fixed(rotation, FIXED_LINEAR_SCALE, src, dst)
+        record: dict = {
+            "rotation": _matrix_list(rotation),
+            "det": _mat3_det(rotation),
+            "translation": list(translation),
+            "fit_inliers": n_inliers,
+        }
+        probe = measure_placement(
+            mesh, rotation, FIXED_LINEAR_SCALE, translation, eval_hits[:screen], eval_uvs[:screen],
+            excluded_triangles=excluded_triangles,
+        )
+        exempt = any(rotation == keep for keep in always_measure)
+        if not exempt and (
+            probe["max_mm"] > GATES["max_mm"] or probe["uv_abs_resid_max_texel"] > GATES["uv_abs_resid_max_texel"]
+        ):
+            record["screened_out"] = {"sample": float(min(screen, len(eval_hits))), **probe}
+            record["gate_failures_A"] = [
+                name for name in ("max_mm", "uv_abs_resid_max_texel") if probe[name] > GATES[name]
+            ]
+            record["passed_A"] = False
+            record["passed_occ"] = None
+            results.append(record)
+            continue
+        measured = {**shared, **measure_placement(
+            mesh, rotation, FIXED_LINEAR_SCALE, translation, eval_hits, eval_uvs,
+            excluded_triangles=excluded_triangles,
+        )}
+        placed = _placed_mesh(mesh, rotation, FIXED_LINEAR_SCALE, translation)
+        measured.update(muzzle_occlusion(placed, holdout.guns, eval_hits))
+        measured.update(origin_occlusions(mesh, rotation, FIXED_LINEAR_SCALE, translation, holdout, eval_idx))
+        if cross_worker:
+            measured.update(_cross_worker_fixed(
+                mesh, index, rotation, holdout, seed, excluded_triangles=excluded_triangles
+            ))
+        failures_a = [name for name, _v, _n in fixed_linear_gate_failures(measured)]
+        if cross_worker and measured["cross_session_pass"] < 1.0:
+            failures_a.append("cross_session")
+        record["measured"] = measured
+        record["gate_failures_A"] = failures_a
+        record["passed_A"] = not failures_a
+        occ = measured["muzzle_occlusion"]
+        record["passed_occ"] = bool(occ == occ and occ <= MUZZLE_OCCLUSION_THRESHOLD)
+        results.append(record)
+
+    return {
+        "level": level,
+        "prereg": MUZZLE_PREREG_DOC,
+        "fit_n": len(fit_idx),
+        "holdout_n": len(eval_hits),
+        "holdout_kind": "unread_files",
+        "holdout_files": list(holdout.paths),
+        "unread_files": list(unread_files),
+        "holdout_overlap": 0,
+        "fit_files": list(fit_frames.paths),
+        "fit_uv_miss_fraction": fit_miss,
+        "fit_uv_ambiguous_fraction": fit_amb,
+        "excluded_triangles": sorted(excluded_triangles),
+        "candidates": results,
+    }
+
+
+def judge_muzzle(
+    result: dict, mirror: Mat3, *, exclusions: dict[str, object] | None = None
+) -> dict:
+    """사전등록 §1.6 + §2.5 그대로. **양성 대조는 판정 조건이 아니다** — 문턱을 그 8개
+    값에서 뽑았으므로 구성상 통과한다(§1.5). 판별력은 전적으로 음성 대조에 달려 있다."""
+    mirror_list = _matrix_list(mirror)
+    mirror_rec = next((c for c in result["candidates"] if c["rotation"] == mirror_list), None)
+    mirror_occ = (
+        None if mirror_rec is None or "measured" not in mirror_rec
+        else mirror_rec["measured"]["muzzle_occlusion"]
+    )
+    reasons: list[str] = []
+    if result["holdout_n"] < H2_MIN_FRAMES:
+        reasons.append(f"H2 holdout has {result['holdout_n']} frames, need >= {H2_MIN_FRAMES}")
+    if mirror_occ is None or not (mirror_occ > MUZZLE_OCCLUSION_THRESHOLD):
+        reasons.append(
+            f"negative control (plate mirror) G_occ_muzzle {mirror_occ} not > {MUZZLE_OCCLUSION_THRESHOLD}"
+        )
+    passed_a = [c for c in result["candidates"] if c["passed_A"]]
+    passed = [c for c in passed_a if c["passed_occ"]]
+    if len(passed) != 1:
+        reasons.append(f"candidates passing gate A and G_occ_muzzle: {len(passed)}, need exactly 1")
+
+    over: list[str] = []
+    if exclusions is not None:
+        winner = passed[0] if len(passed) == 1 else None
+        probe = winner if winner is not None else next(
+            (c for c in result["candidates"] if "measured" in c), None
+        )
+        m = probe["measured"] if probe is not None else {}
+        fraction = m.get("uv_excluded_hit_fraction")
+        kept = m.get("uv_kept_hits")
+        normals = m.get("uv_kept_distinct_normals")
+        if fraction is None or fraction > EXCLUDED_HIT_FRACTION_MAX:
+            over.append(f"excluded hit fraction {fraction} > {EXCLUDED_HIT_FRACTION_MAX}")
+        if kept is None or kept < H2_MIN_FRAMES:
+            over.append(f"frames left after exclusion {kept} < {H2_MIN_FRAMES}")
+        if normals is None or normals < EXCLUSION_MIN_DISTINCT_NORMALS:
+            over.append(f"distinct normals among kept hits {normals} < {EXCLUSION_MIN_DISTINCT_NORMALS}")
+        reasons.extend(over)
+
+    return {
+        "prereg": MUZZLE_PREREG_DOC,
+        "negative_control_muzzle_occlusion": mirror_occ,
+        "occlusion_threshold": MUZZLE_OCCLUSION_THRESHOLD,
+        "candidates_passed_A": len(passed_a),
+        "candidates_passed_A_and_occ": len(passed),
+        "over_exclusion_reasons": over,
+        "not_solved_reasons": reasons,
+        "solved": not reasons,
+        "winner": passed[0] if len(passed) == 1 and not reasons else None,
+        "mirror": mirror_rec,
+        "confirmation_not_out_of_sample": True,
+    }
+
+
+def muzzle_entry(
+    base_entry: dict,
+    result: dict,
+    verdict: dict,
+    *,
+    reference: Mat3,
+    holdout: LevelFrames,
+    exclusions: dict[str, object] | None,
+    provenance: str,
+) -> dict:
+    """판정 결과로 레벨 항목을 만든다. 통과 못 하면 `provenance`를 올리지 않는다."""
+    ref_list = _matrix_list(reference)
+    mirror_list = _matrix_list(_plate_mirror(reference))
+    ref_rec = next((c for c in result["candidates"] if c["rotation"] == ref_list), None)
+    winner = verdict["winner"]
+    p_rec = winner if winner is not None else ref_rec
+    evidence = {
+        "muzzle_occlusion": _occ_pair(p_rec, verdict["mirror"], "muzzle_occlusion"),
+        "gun_origin_occlusion_report": _occ_pair(p_rec, verdict["mirror"], "gun_occlusion"),
+        "hmd_occlusion_report": _occ_pair(p_rec, verdict["mirror"], "hmd_occlusion"),
+        "occlusion_origin": "muzzle",
+        "muzzle_offset_m": L_MUZZLE_M,
+        "occlusion_threshold": MUZZLE_OCCLUSION_THRESHOLD,
+        "prereg_doc": MUZZLE_PREREG_DOC,
+        # 게이트를 고른 이유 자체가 레벨 1 결과였다(강체 원점에서 P 0.000 / 거울 1.000).
+        # 새 파일로 다시 재도 그 사실은 지워지지 않는다.
+        "posthoc_parts": ["G_occ_muzzle", "uniqueness"],
+        "void_gates": ["G_occ_hmd", "G_front_face_hmd"],
+        "confirmation_not_out_of_sample": True,
+    }
+
+    def summary(rec: dict) -> dict:
+        out = {k: rec[k] for k in ("rotation", "det", "translation", "passed_A", "passed_occ", "gate_failures_A")}
+        out["measured" if "measured" in rec else "screened_out"] = rec.get("measured", rec.get("screened_out"))
+        return out
+
+    attempt: dict = {
+        "prereg_doc": MUZZLE_PREREG_DOC,
+        "linear_source": "fixed_signed_permutation",
+        "scale": FIXED_LINEAR_SCALE,
+        "occlusion_origin": "muzzle",
+        "muzzle_offset_m": L_MUZZLE_M,
+        "occlusion_threshold": MUZZLE_OCCLUSION_THRESHOLD,
+        "occlusion_stop_before_m": OCCLUSION_STOP_BEFORE_M,
+        "gates_not_applied": list(TWELVE_DOF_ONLY_GATES),
+        "fit_n": result["fit_n"],
+        "holdout": {
+            "kind": "unread_files",
+            # 미개봉 파일은 27개(레벨 1)지만 파일당 200프레임 상한과 총 1,500프레임
+            # 상한 때문에 실제로 **열린** 것은 그중 앞쪽 몇 개뿐이다. 두 수를 따로
+            # 적는다 — 하나로 뭉치면 표본이 실제보다 넓어 보인다.
+            "unread_files_available": len(result.get("unread_files", ())),
+            "files_opened": len(result["holdout_files"]),
+            "file_list": result["holdout_files"],
+            # 미개봉 27개의 전량 목록은 사전등록 문서 §3.2와 측정 보고서에 있다 —
+            # 정렬 기록에는 실제로 연 것만 싣는다.
+            "frames": result["holdout_n"],
+            "per_file_cap": H2_PER_FILE_CAP,
+            "frame_cap": H2_FRAME_CAP,
+            "session_disjoint": False,
+        },
+        "candidates_tried": len(result["candidates"]),
+        "candidates_passed_A": verdict["candidates_passed_A"],
+        "candidates_passed_A_and_occ": verdict["candidates_passed_A_and_occ"],
+        "negative_control_muzzle_occlusion": verdict["negative_control_muzzle_occlusion"],
+        "not_solved_reasons": verdict["not_solved_reasons"],
+        "confirmation_not_out_of_sample": True,
+        "passing_or_reference_candidates": [
+            summary(c) for c in result["candidates"]
+            if c["passed_A"] or c["rotation"] in (ref_list, mirror_list)
+        ],
+        "handedness_evidence": evidence,
+    }
+    if exclusions is not None:
+        m = (p_rec or {}).get("measured", {})
+        attempt["uv_exclusion"] = {
+            "rule": exclusions["rule"],
+            "threshold_texel": exclusions["threshold_texel"],
+            "n_triangles": exclusions["n_triangles"],
+            "excluded_tris": exclusions["n_excluded"],
+            "excluded_triangle_fraction": exclusions["excluded_triangle_fraction"],
+            "by_rule": {"E1": exclusions["n_E1"], "E2": exclusions["n_E2"], "E3": exclusions["n_E3"]},
+            "excluded_triangle_ids": exclusions["excluded_sorted"],
+            "excluded_hit_fraction": m.get("uv_excluded_hit_fraction"),
+            "excluded_hits_resid": {
+                "n": m.get("uv_excluded_hits"),
+                "median_texel": m.get("uv_excluded_resid_median_texel"),
+                "p95_texel": m.get("uv_excluded_resid_p95_texel"),
+                "max_texel": m.get("uv_excluded_resid_max_texel"),
+            },
+            "kept_hits": m.get("uv_kept_hits"),
+            "kept_distinct_normals": m.get("uv_kept_distinct_normals"),
+            "over_exclusion_reasons": verdict["over_exclusion_reasons"],
+            "applies_to": ["G2", "G6 (UV part)"],
+        }
+
+    if not verdict["solved"]:
+        entry = {k: v for k, v in base_entry.items() if k != "muzzle_occlusion_attempt"}
+        entry["muzzle_occlusion_attempt"] = attempt
+        return entry
+
+    m = winner["measured"]
+    fit = {k: m[k] for k in sorted(m)}
+    fit["det_sign"] = winner["det"]
+    fit["fit_eval_overlap"] = 0.0
+    fit["fit_n"] = float(result["fit_n"])
+    fit["n_hits"] = float(result["holdout_n"])
+    fit["scale_ratio_to_declared"] = 0.0
+    history = list(base_entry.get("history", []))
+    history.append({
+        k: v for k, v in base_entry.items()
+        if k not in ("history", "fixed_linear_attempt", "front_face_attempt", "muzzle_occlusion_attempt")
+    })
+    entry = {
+        "level": base_entry["level"],
+        "provenance": provenance,
+        "solved_transform": {
+            "rotation": winner["rotation"],
+            "translation": winner["translation"],
+            "scale": FIXED_LINEAR_SCALE,
+        },
+        "declared_scale": FIXED_LINEAR_SCALE,
+        "fit": fit,
+        "source_fbx": base_entry["source_fbx"],
+        "uv_convention": UV_CONVENTION,
+        "uv_convention_source": "measured",
+        "linear_source": "fixed_signed_permutation",
+        "handedness_source": "data:occlusion_muzzle",
+        "handedness_evidence": evidence,
+        "prereg_doc": MUZZLE_PREREG_DOC,
+        "occlusion_origin": "muzzle",
+        "muzzle_offset_m": L_MUZZLE_M,
+        "occlusion_threshold": MUZZLE_OCCLUSION_THRESHOLD,
+        "holdout": attempt["holdout"],
+        "confirmation_not_out_of_sample": True,
+        "not_gated": {
+            "reason": "12자유도 경로 전용 게이트(G4 aniso, G7, G8, G9) — 사전등록 §1.3",
+            "gates_not_applied": list(TWELVE_DOF_ONLY_GATES),
+            "scale_ratio_to_declared_is_by_construction": True,
+        },
+        "muzzle_occlusion_attempt": attempt,
+        "workers": sorted({_worker_of(name) for name in holdout.sessions}),
+        "session_count": len(set(holdout.sessions)),
+        "history": history,
+    }
+    if exclusions is not None:
+        entry["uv_exclusion"] = attempt["uv_exclusion"]
+    for keep in ("fixed_linear_attempt", "front_face_attempt"):
+        if keep in base_entry:
+            entry[keep] = base_entry[keep]
+    return entry
+
+
+MUZZLE_PROVENANCE: Final[dict[int, str]] = {
+    1: "solved:fixed_linear_muzzle_occlusion",
+    2: "solved:fixed_linear_uv_exclusion_meshonly",
+}
+
+
+def recorded_muzzle_control(
+    level: int, mesh: Mesh, frames: LevelFrames, *, seed: int = 0,
+    fit_sample: int = 2000, eval_cap: int = 1500,
+) -> dict[str, float]:
+    """양성 대조(기록용): 기록된 참해 그대로, 기존 홀드아웃에서 강체 원점·총구 원점 가림.
+
+    **판정 조건이 아니다** — 문턱 0.05를 바로 이 8개 값에서 뽑았으므로 구성상 통과한다.
+    """
+    alignment = load_alignment(level)
+    if not is_solved(alignment.provenance):
+        raise ValueError(f"level {level} is not a solved control")
+    _fit, eval_idx = split_fit_holdout(len(frames.hits), fit_sample, eval_cap, seed)
+    rotation = _rotation_matrix(alignment)
+    placed = _placed_mesh(mesh, rotation, alignment.scale, alignment.translation)
+    hits = [frames.hits[i] for i in eval_idx]
+    guns = [frames.guns[i] for i in eval_idx]
+    out = {"rigid_origin_occlusion": occlusion_fraction(placed, guns, hits)}
+    out.update(muzzle_occlusion(placed, guns, hits))
+    return out
+
+
+def exclusion_table_row(level: int, mesh: Mesh, index: UvIndex, frames: LevelFrames,
+                        rotation: Mat3, scale: float, translation: Vec3,
+                        indices: Sequence[int]) -> dict[str, object]:
+    """한 레벨의 (제외 삼각형 수·비율, 제외 착탄점 수·비율, E1/E2/E3 몫). 표 5용."""
+    ex = mesh_only_uv_exclusions(mesh, index)
+    hits = [frames.hits[i] for i in indices]
+    uvs = [frames.uvs[i] for i in indices]
+    measured = measure_placement(
+        mesh, rotation, scale, translation, hits, uvs, excluded_triangles=ex["excluded"]  # type: ignore[arg-type]
+    )
+    return {
+        "level": level,
+        "n_triangles": ex["n_triangles"],
+        "n_E1": ex["n_E1"],
+        "n_E2": ex["n_E2"],
+        "n_E3": ex["n_E3"],
+        "n_excluded": ex["n_excluded"],
+        "excluded_triangle_fraction": ex["excluded_triangle_fraction"],
+        "n_hits": len(hits),
+        "excluded_hits": measured["uv_excluded_hits"],
+        "excluded_hit_fraction": measured["uv_excluded_hit_fraction"],
+        "kept_distinct_normals": measured["uv_kept_distinct_normals"],
+        "excluded_resid_p95_texel": measured["uv_excluded_resid_p95_texel"],
+        "excluded_resid_max_texel": measured["uv_excluded_resid_max_texel"],
+        "kept_resid_p95_texel": measured["uv_abs_resid_p95_texel"],
+        "kept_resid_max_texel": measured["uv_abs_resid_max_texel"],
+    }
+
+
+def muzzle_falsifiers(
+    level: int,
+    mesh: Mesh,
+    index: UvIndex,
+    fit_frames: LevelFrames,
+    holdout: LevelFrames,
+    *,
+    reference: Mat3 = None,  # type: ignore[assignment]
+    excluded_triangles: Collection[int] = (),
+    fit_sample: int = 2000,
+    seed: int = 0,
+) -> list[dict]:
+    """사전등록 §4 반증 배터리. **게이트가 낸 메시지를 그대로 싣는다.**
+
+    넛지와 180° 회전은 정답 후보 P를 흔든 것이다 — "게이트가 정답만 통과시킨다"가 아니라
+    "정답에서 1 mm(또는 0.1 mm)만 벗어나도 떨어진다"를 보이기 위해서다.
+    """
+    if reference is None:
+        reference = GLOBAL_IMPORT_LINEAR
+    fit_idx, _u = split_fit_holdout(len(fit_frames.hits), fit_sample, 1500, seed)
+    src, dst, _m, _a = _correspondences(
+        mesh, index, [fit_frames.hits[i] for i in fit_idx], [fit_frames.uvs[i] for i in fit_idx]
+    )
+    base_t, _n = solve_translation_fixed(reference, FIXED_LINEAR_SCALE, src, dst)
+    hits, uvs = holdout.hits, holdout.uvs
+
+    def judge(name: str, rotation: Mat3, translation: Vec3) -> dict:
+        measured = measure_placement(
+            mesh, rotation, FIXED_LINEAR_SCALE, translation, hits, uvs,
+            excluded_triangles=excluded_triangles,
+        )
+        failures = fixed_linear_gate_failures(
+            measured, [k for k in FIXED_LINEAR_GATE_KEYS if k in measured]
+        )
+        placed = _placed_mesh(mesh, rotation, FIXED_LINEAR_SCALE, translation)
+        occ = muzzle_occlusion(placed, holdout.guns, hits)
+        rejected = bool(failures) or not (occ["muzzle_occlusion"] <= MUZZLE_OCCLUSION_THRESHOLD)
+        return {
+            "level": level,
+            "candidate": name,
+            "exclusion_applied": bool(excluded_triangles),
+            "rejected": rejected,
+            "gate_message": AlignmentRejected(level, failures).args[0] if failures
+            else f"level {level} rejected by 0 gate(s): ",
+            "muzzle_occlusion": occ["muzzle_occlusion"],
+            "muzzle_occlusion_verdict": (
+                f"G_occ_muzzle={occ['muzzle_occlusion']!r} (need <= {MUZZLE_OCCLUSION_THRESHOLD})"
+            ),
+            "measured": measured,
+        }
+
+    out = [judge("P (reference, unmodified)", reference, base_t)]
+    out.append(judge("plate mirror (_plate_mirror, det +1, t refit)",
+                     _plate_mirror(reference),
+                     solve_translation_fixed(_plate_mirror(reference), FIXED_LINEAR_SCALE, src, dst)[0]))
+    for axis, name in enumerate("XYZ"):
+        for step in (0.001, 0.0001):
+            delta = tuple(step if d == axis else 0.0 for d in range(3))
+            moved: Vec3 = tuple(base_t[d] + delta[d] for d in range(3))  # type: ignore[assignment]
+            out.append(judge(f"P + {step * 1000:g} mm on world {name}", reference, moved))
+    half_turns: list[Mat3] = [
+        ((1.0, 0.0, 0.0), (0.0, -1.0, 0.0), (0.0, 0.0, -1.0)),
+        ((-1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, -1.0)),
+        ((-1.0, 0.0, 0.0), (0.0, -1.0, 0.0), (0.0, 0.0, 1.0)),
+    ]
+    for axis, half in zip("XYZ", half_turns):
+        rotation = rotation_math.matmul(half, reference)
+        translation, _k = solve_translation_fixed(rotation, FIXED_LINEAR_SCALE, src, dst)
+        out.append(judge(f"world {axis} 180 deg (t refit)", rotation, translation))
+    return out
+
+
+def _muzzle_control_worker(level: int) -> tuple[int, dict, dict]:
+    mesh = read_fbx(DEFAULT_MODELINGS_ROOT / LEVEL_FBX[level])
+    index = build_uv_index(mesh)
+    frames = collect_level_frames_by_session(level)
+    control = recorded_muzzle_control(level, mesh, frames)
+    alignment = load_alignment(level)
+    _fit, eval_idx = split_fit_holdout(len(frames.hits), 2000, 1500, 0)
+    row = exclusion_table_row(
+        level, mesh, index, frames, _rotation_matrix(alignment), alignment.scale,
+        alignment.translation, eval_idx,
+    )
+    print(f"muzzle control level {level}: {control}", flush=True)
+    return level, control, row
+
+
+def _muzzle_fixed_worker(level: int) -> tuple[int, dict, dict, dict, list, list[str], list[str]]:
+    mesh = read_fbx(DEFAULT_MODELINGS_ROOT / LEVEL_FBX[level])
+    index = build_uv_index(mesh)
+    fit_frames = collect_level_frames_by_session(level)
+    unread = unread_level_files(level, fit_frames.paths)
+    holdout = collect_frames_from_files(unread)
+    exclusions = mesh_only_uv_exclusions(mesh, index) if level == 2 else None
+    excluded: Collection[int] = exclusions["excluded"] if exclusions else ()  # type: ignore[assignment]
+    mirror = _plate_mirror(GLOBAL_IMPORT_LINEAR)
+    result = solve_fixed_linear_muzzle(
+        level, mesh, fit_frames, holdout, index=index, excluded_triangles=excluded,
+        always_measure=(GLOBAL_IMPORT_LINEAR, mirror),
+        unread_files=[str(p) for p in unread],
+    )
+    verdict = judge_muzzle(result, mirror, exclusions=exclusions)
+    falsifiers = muzzle_falsifiers(
+        level, mesh, index, fit_frames, holdout, excluded_triangles=excluded
+    )
+    if level == 2:
+        falsifiers += muzzle_falsifiers(
+            level, mesh, index, fit_frames, holdout, excluded_triangles=()
+        )
+    ref_rec = next(
+        (c for c in result["candidates"] if c["rotation"] == _matrix_list(GLOBAL_IMPORT_LINEAR)), None
+    )
+    row = exclusion_table_row(
+        level, mesh, index, holdout, GLOBAL_IMPORT_LINEAR, FIXED_LINEAR_SCALE,
+        tuple(ref_rec["translation"]), list(range(len(holdout.hits))),  # type: ignore[index,arg-type]
+    )
+    print(f"muzzle fixed level {level}: {verdict['not_solved_reasons'] or 'SOLVED'}", flush=True)
+    return level, result, verdict, row, falsifiers, list(holdout.paths), list(holdout.sessions)
+
+
+def muzzle_main(out_path: Path) -> None:
+    """2026-09-16 사전등록의 판정. 보고서를 정렬 파일보다 **먼저** 쓴다(mtime이 증거다)."""
+    from multiprocessing import Pool
+
+    with Pool(10) as pool:
+        controls_async = pool.map_async(_muzzle_control_worker, [3, 4, 5, 6, 7, 8, 9, 10])
+        fixed_async = pool.map_async(_muzzle_fixed_worker, [1, 2])
+        controls = {lv: c for lv, c, _row in controls_async.get()}
+        rows = {lv: row for lv, _c, row in controls_async.get()}
+        fixed = fixed_async.get()
+
+    report: dict = {
+        "prereg": MUZZLE_PREREG_DOC,
+        "muzzle_offset_m": L_MUZZLE_M,
+        "occlusion_threshold": MUZZLE_OCCLUSION_THRESHOLD,
+        "positive_controls_not_a_judgement_condition": True,
+        "confirmation_not_out_of_sample": True,
+        "controls": {str(k): v for k, v in sorted(controls.items())},
+        "levels": {},
+        "falsifiers": [],
+    }
+    entries = json.loads(ALIGNMENT_PATH.read_text(encoding="utf-8"))
+    new_entries = list(entries)
+    mirror = _plate_mirror(GLOBAL_IMPORT_LINEAR)
+    for level, result, verdict, row, falsifiers, paths, sessions in fixed:
+        rows[level] = row
+        exclusions = mesh_only_uv_exclusions(
+            read_fbx(DEFAULT_MODELINGS_ROOT / LEVEL_FBX[level])
+        ) if level == 2 else None
+        holdout = LevelFrames([], [], list(sessions), [], [], [], list(paths))
+        i = next(k for k, e in enumerate(entries) if int(e["level"]) == level)
+        new_entries[i] = muzzle_entry(
+            entries[i], result, verdict, reference=GLOBAL_IMPORT_LINEAR, holdout=holdout,
+            exclusions=exclusions, provenance=MUZZLE_PROVENANCE[level],
+        )
+        report["levels"][str(level)] = {
+            "verdict": {k: v for k, v in verdict.items() if k not in ("winner", "mirror")},
+            "holdout_files": paths,
+            "holdout_n": result["holdout_n"],
+            "candidates": result["candidates"],
+        }
+        report["falsifiers"].extend(falsifiers)
+        print(f"level {level}: solved={verdict['solved']} {verdict['not_solved_reasons']}", flush=True)
+    report["exclusion_table"] = [rows[lv] for lv in sorted(rows)]
+    out_path.write_text(json.dumps(report, indent=2, ensure_ascii=False, default=str) + "\n", encoding="utf-8")
+    ALIGNMENT_PATH.write_text(json.dumps(new_entries, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
 def main() -> None:
     entries: list[dict] = []
     rejected: list[dict] = []
@@ -3101,5 +4037,7 @@ if __name__ == "__main__":
         fixed_linear_main(Path(sys.argv[2]))
     elif len(sys.argv) >= 3 and sys.argv[1] == "front-face":
         front_face_main(Path(sys.argv[2]))
+    elif len(sys.argv) >= 3 and sys.argv[1] == "muzzle-occlusion":
+        muzzle_main(Path(sys.argv[2]))
     else:
         main()
