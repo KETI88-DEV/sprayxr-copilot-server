@@ -982,7 +982,7 @@ def placed_mesh(level_text: str) -> MeshResult | None:
     except LookupError:
         return MeshResult(level=level, mesh=None, reason="no_alignment_record", entry=None)
     entry = _alignment_entry(level)
-    if alignment.provenance != "solved":
+    if not level_mesh.is_solved(alignment.provenance):
         return MeshResult(level=level, mesh=None, reason="unverified_alignment", entry=entry)
     source = _mesh_source_path(level)
     if source is None:
@@ -1005,7 +1005,7 @@ def _solved_levels() -> list[int]:
         entries = json.loads(level_mesh.ALIGNMENT_PATH.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return []
-    return sorted(int(e["level"]) for e in entries if e.get("provenance") == "solved")
+    return sorted(int(e["level"]) for e in entries if level_mesh.is_solved(str(e.get("provenance", ""))))
 
 
 def _mesh_reason_detail(entry: Mapping[str, Any]) -> str | None:

@@ -290,21 +290,22 @@ def _first_solved_level() -> int:
 def test_mesh_is_available_for_a_verified_level_with_real_vertices() -> None:
     """검증된 정렬이 있는 레벨에서 `available`이 `True`이고 정점이 있다(요구사항 6).
 
-    레벨 1로 고정하지 않는다 — 레벨 1은 착탄점이 정확히 평면이라 12자유도가 데이터로
-    결정되지 않아 `provenance`가 "unverifiable"이다."""
+    레벨을 상수로 고정하지 않는다 — 어느 레벨이 검증되는지는 정렬 파일이 정하고
+    바뀔 수 있다. 레벨 1의 `provenance`는 꼬리표가 붙은 "solved:..." 변형이라
+    `is_solved()`를 거쳐야 한다."""
     level = _first_solved_level()
     block = service.mesh_block(str(level))
     assert block is not None
     assert block["available"] is True
     assert block["vertices"], f"레벨 {level} 메시는 정점을 가져야 한다"
     assert block["triangles"], f"레벨 {level} 메시는 삼각형을 가져야 한다"
-    assert level_mesh.load_alignment(level).provenance == "solved"
+    assert level_mesh.is_solved(level_mesh.load_alignment(level).provenance)
 
 
 def test_mesh_is_unavailable_for_an_unverifiable_level() -> None:
-    """레벨 1은 항목이 있으나 검증할 수 없다 — 화면이 벽을 그리면 안 된다."""
-    assert level_mesh.load_alignment(1).provenance == "unverifiable"
-    block = service.mesh_block("1")
+    """레벨 2는 항목이 있으나 검증할 수 없다 — 화면이 벽을 그리면 안 된다."""
+    assert level_mesh.load_alignment(2).provenance == "unverifiable"
+    block = service.mesh_block("2")
     assert block is not None
     assert block["available"] is False
     assert block["vertices"] == []
@@ -800,12 +801,28 @@ def test_offset_label_only_when_the_grip_limit_is_exceeded(test_mounts) -> None:
 
 
 def test_mesh_reason_detail_is_read_from_the_alignment_record() -> None:
-    one = service.mesh_block("1")
-    assert "손대칭" in one["reason_detail"]
+    """사유는 정렬 기록에서 읽는다 — 레벨 번호를 기대값에 박지 않는다.
+
+    레벨 1은 2026-09-16에 총구 가림이 손대칭을 갈라 `solved`가 됐다(그전에는 여기서
+    레벨 1의 "손대칭" 사유를 단언했고, 그래서 이 테스트가 깨졌다). 레벨 번호로 고정하는
+    대신 **합성 기록으로 분기 자체를 고정한다** — 검증된 레벨은 사유 계산에 도달조차
+    하지 않으므로, 실데이터만 보는 단언은 사유를 상수로 바꿔도 통과한다(실제로 확인했다).
+    """
+    detail = service._mesh_reason_detail  # noqa: SLF001
+    one_left = {"fixed_linear_attempt": {"candidates_passed_A": 1}}
+    none_left = {"fixed_linear_attempt": {"candidates_passed_A": 0}}
+    ambiguous = {"fixed_linear_attempt": {"candidates_passed_A": 2}}
+    assert "손대칭" in (detail(one_left) or "")
+    assert "모델 UV" in (detail(none_left) or "")
+    assert detail(one_left) != detail(none_left)
+    assert detail(ambiguous) is None
+    assert detail({}) is None
+
     two = service.mesh_block("2")
-    assert "모델 UV" in two["reason_detail"]
+    assert two["reason"] == "unverified_alignment"
+    assert two["reason_detail"] == detail(service._alignment_entry(2))  # noqa: SLF001
     solved = [str(level) for level in service._solved_levels()]  # noqa: SLF001
-    assert solved and one["reason_hint"] == "벽면이 검증된 레벨: " + "·".join(solved)
+    assert solved and two["reason_hint"] == "벽면이 검증된 레벨: " + "·".join(solved)
     ok = service.mesh_block(solved[0])
     assert ok["reason_detail"] is None and ok["reason_hint"] is None
 
@@ -820,7 +837,7 @@ def test_view_fit_is_null_when_skeleton_is_unavailable() -> None:
 
 
 def test_mesh_view_carries_reason_text() -> None:
-    unverified = service.mesh_block("1")
+    unverified = service.mesh_block("2")
     assert unverified["reason"] == "unverified_alignment"
     assert unverified["reason_text"] == service.MESH_REASON_TEXT["unverified_alignment"]
     missing = service.mesh_block("99")

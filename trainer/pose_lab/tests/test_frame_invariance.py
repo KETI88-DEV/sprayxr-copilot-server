@@ -214,7 +214,7 @@ def _first_solved_level() -> int:
 
 
 SOLVED_LEVEL = _first_solved_level()
-UNVERIFIABLE_LEVEL = 1
+UNVERIFIABLE_LEVEL = 2
 # `test_level_mesh.py::test_committed_translation_places_real_hits_on_the_mesh`와
 # 같은 허용치(1cm) — 실측 median은 그보다 여섯 자릿수 이상 작다(~2e-10 m).
 _MESH_SURFACE_TOLERANCE_M = 0.01
