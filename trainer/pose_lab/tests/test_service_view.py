@@ -979,3 +979,19 @@ def test_real_pass_feet_stop_punching_through_the_level_3_plate() -> None:
     after = min(_placeholder_feet(service.skeleton_block(raw, geometry=geometry).fit))
     assert before < floor - 0.4, (before, floor)
     assert after == pytest.approx(floor, abs=1e-9)
+
+
+def test_placeholder_feet_names_come_from_the_server_not_from_the_screen(test_mounts) -> None:  # noqa: ANN001
+    """화면이 "발이 지금 보이는가"를 재려면 어느 관절이 발인지 알아야 한다 — 그 **이름**은 서버가 준다.
+
+    화면에서 리그 이름을 지어내면 출처와 다른 라벨이 된다(D6 화면 밖 고지가 리그 이름을 그대로 쓰는
+    것과 같은 이유). `placeholder_feet`는 `placeholder_joints`에 실제로 실린 발목 관절만 담는다.
+    """
+    rows, _middle = _rows_with_leg_poses(41, ())
+    fit = service.skeleton_block(RawPass(rows=rows)).fit
+    legs = fit["legs"]
+    feet = legs["placeholder_feet"]
+    assert feet == [ankle for _hip, _knee, ankle, _toe in skeleton.PLACEHOLDER_LEG_CHAIN]
+    assert feet and all(name in legs["placeholder_joints"] for name in feet)
+    # 발끝(Toe)은 발이 아니다 — 바닥에 닿는 것은 발목이다.
+    assert not any(name.endswith("Toe") for name in feet)

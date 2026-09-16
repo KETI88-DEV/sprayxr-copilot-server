@@ -287,7 +287,15 @@ function mount(THREE, container) {
     camera.up.set(0, 1, 0);
     camera.lookAt(camState.target);
     camera.updateMatrixWorld();
-    container.__view3dCameraDebug = { theta: camState.theta, phi: camState.phi, radius: camState.radius };
+    // 검증이 **자기 손으로** 투영할 수 있도록 카메라의 날 상태만 내놓는다(계산된 측정값이 아니다).
+    container.__view3dCameraDebug = {
+      theta: camState.theta,
+      phi: camState.phi,
+      radius: camState.radius,
+      target: [camState.target.x, camState.target.y, camState.target.z],
+      fov: camera.fov,
+      near: camera.near,
+    };
   }
   applyCamera();
 
@@ -1185,13 +1193,91 @@ function mount(THREE, container) {
     return out;
   }
 
-  function describeFraming(mode) {
+  function describeTorsoFraming(mode) {
     if (mode !== "torso") return "";
     const outside = offscreenFitTargets();
     if (outside.length === 0) return "상체 확대: 맞춤 대상이 모두 화면 안에 있습니다.";
     const shown = outside.slice(0, OFFSCREEN_NAMES_SHOWN).join(" · ");
     const rest = outside.length > OFFSCREEN_NAMES_SHOWN ? ` 외 ${outside.length - OFFSCREEN_NAMES_SHOWN}개` : "";
     return `상체 확대: ${shown}${rest}${subjectParticle(rest || shown)} 화면 밖에 있습니다 — 기본 뷰는 '자세 맞춤'입니다.`;
+  }
+
+  /** 자리표시 발(D3, 바닥 맞춤)의 월드 좌표. 발 관절의 **이름은 서버**(`fit.legs.placeholder_feet`)가 준다 —
+   * 화면이 리그 이름을 지어내면 출처와 다른 라벨이 된다. 다리를 그리지 않는 화면에서는 빈 배열. */
+  function placeholderFeetPoints(view) {
+    const joints = view?.fit?.legs?.placeholder_joints;
+    const names = view?.fit?.legs?.placeholder_feet;
+    if (!joints || !Array.isArray(names)) return [];
+    return names.map((name) => joints[name]).filter(isVec3);
+  }
+
+  /** 발이 보이는지 재 볼 프리셋. 툴바 버튼과 같은 카메라를 푼다(라벨도 버튼과 같은 글자다). */
+  const PRESET_PROBES = [
+    { label: "자세 맞춤", mode: "pose", angles: "default" },
+    { label: "상체 확대", mode: "torso", angles: "current" },
+    { label: "벽 정면", mode: "pose", angles: "wall", offset: 0 },
+    { label: "벽 측면", mode: "pose", angles: "wall", offset: Math.PI / 2 },
+    { label: "궤적 포함", mode: "tracks", angles: "current" },
+    { label: "벽 포함", mode: "wall", angles: "current" },
+  ];
+
+  function solvePreset(probe) {
+    let theta = camState.theta;
+    let phi = camState.phi;
+    if (probe.angles === "default") {
+      ({ theta, phi } = defaultAngles(lastView));
+    } else if (probe.angles === "wall") {
+      const normal = estimateWallNormal(lastView);
+      if (!normal) return null;
+      theta = Math.atan2(normal.x, normal.z) + probe.offset;
+      phi = Math.PI / 2.2;
+    }
+    return solveFraming(probe.mode, theta, phi);
+  }
+
+  /** 발이 **이 프리셋에서** 화면 밖이면, 발이 보이는 프리셋의 이름을 같이 말한다.
+   *
+   * 자리표시 발을 바닥면에 세운 것(D3)이 기본 뷰('자세 맞춤')에서는 보이지 않는다 — 다리는 맞춤
+   * 대상이 아니어서 카메라가 상체에 맞춰 서기 때문이다. 실측(김경호 L1·L3·L6, 캔버스 H=600): 기본
+   * 뷰에서 발의 캔버스 y가 976·1063 / 697 / 786으로 전부 밖이었다. 그 사실을 화면이 말하지 않으면
+   * 바닥 맞춤 고지가 가리키는 것을 아무도 못 본다. 어느 프리셋에서 보이는지는 **말로 정하지 않고**
+   * 각 프리셋의 카메라를 실제로 풀어서(`solveFraming`) 투영해 확인한다. */
+  function describeFeetFraming() {
+    if (!lastView) return "";
+    const feet = placeholderFeetPoints(lastView);
+    if (feet.length === 0) return "";
+    if (feet.every((p) => onScreenNow(p))) return "";
+    const shows = PRESET_PROBES.map((probe) => {
+      const solved = solvePreset(probe);
+      if (!solved) return null;
+      return feet.every((p) => insideFrustum(p, solved)) ? probe.label : null;
+    }).filter((name) => name !== null);
+    const where = shows.length === 0 ? "" : ` — ${shows.map((n) => `'${n}'`).join(" · ")}에서 보입니다`;
+    return `바닥에 맞춘 자리표시 발은 이 프리셋에서 화면 밖에 있습니다${where}.`;
+  }
+
+  function describeFraming(mode) {
+    return [describeTorsoFraming(mode), describeFeetFraming()].filter((t) => t).join(" ");
+  }
+
+  function onScreenNow(p) {
+    const { w, h } = hostSize();
+    const px = toPixel(new THREE.Vector3(...p));
+    return !(px.z > 1 || px.x < 0 || px.y < 0 || px.x > w || px.y > h);
+  }
+
+  /** `solveFraming`이 낸 카메라(target·offsetDir·radius)로 점을 투영해 절두체 안인지 본다.
+   * `camera`를 실제로 움직이지 않고 **가정한** 프리셋을 재는 길이다. */
+  function insideFrustum(p, solved) {
+    const basis = cameraBasis(solved.offsetDir);
+    const position = solved.target.clone().addScaledVector(solved.offsetDir, solved.radius);
+    const v = new THREE.Vector3(...p).sub(position);
+    const z = v.dot(basis.forward);
+    if (z <= camera.near) return false;
+    const tanV = Math.tan((camera.fov * Math.PI) / 360);
+    const x = v.dot(basis.right) / (z * tanV * camera.aspect);
+    const y = v.dot(basis.up) / (z * tanV);
+    return Math.abs(x) <= 1 && Math.abs(y) <= 1;
   }
 
   function boundsOf(points) {
@@ -1207,13 +1293,19 @@ function mount(THREE, container) {
   }
 
   /** 카메라 거리 d에서 주어진 점들을 투영했을 때 max(높이비, 폭비). 뒤로 넘어가면 Infinity. */
-  function projectedRatio(corners, target, offsetDir, distance) {
-    const position = target.clone().addScaledVector(offsetDir, distance);
+  /** 카메라 오프셋 방향에서 (전방, 오른쪽, 위) 축. `applyCamera`의 lookAt(up=(0,1,0))과 같은 기저다. */
+  function cameraBasis(offsetDir) {
     const forward = offsetDir.clone().negate();
     const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0));
     if (right.lengthSq() < 1e-12) right.set(1, 0, 0);
     right.normalize();
     const up = new THREE.Vector3().crossVectors(right, forward).normalize();
+    return { forward, right, up };
+  }
+
+  function projectedRatio(corners, target, offsetDir, distance) {
+    const position = target.clone().addScaledVector(offsetDir, distance);
+    const { forward, right, up } = cameraBasis(offsetDir);
     const tanV = Math.tan((camera.fov * Math.PI) / 360);
     const tanH = tanV * camera.aspect;
     let xmin = Infinity; let xmax = -Infinity; let ymin = Infinity; let ymax = -Infinity;
@@ -1229,22 +1321,25 @@ function mount(THREE, container) {
     return Math.max((xmax - xmin) / 2, (ymax - ymin) / 2);
   }
 
-  /** AABB 중심을 보고, 세로·가로 FOV 모두에서 목표 비율이 되는 거리를 이분법으로 찾는다. */
-  function frameTo(mode) {
-    if (!lastView) return;
+  /** AABB 중심을 보고, 세로·가로 FOV 모두에서 목표 비율이 되는 거리를 이분법으로 찾는다.
+   *
+   * 카메라를 **움직이지 않고** 답만 낸다 — `frameTo`가 적용하고, 발이 어느 프리셋에서 보이는지 재는
+   * `describeFeetFraming`은 적용하지 않은 채로 쓴다(가정한 프리셋을 재는 데 화면을 흔들면 안 된다). */
+  function solveFraming(mode, theta, phi) {
+    if (!lastView) return null;
     const points = framingPoints(lastView, mode);
-    if (points.length === 0) return;
+    if (points.length === 0) return null;
     const { min, max } = boundsOf(points);
     const target = new THREE.Vector3((min[0] + max[0]) / 2, (min[1] + max[1]) / 2, (min[2] + max[2]) / 2);
     const corners = [];
     for (const x of [min[0], max[0]]) for (const y of [min[1], max[1]]) for (const z of [min[2], max[2]]) {
       corners.push(new THREE.Vector3(x, y, z));
     }
-    const sinPhi = Math.sin(camState.phi);
+    const sinPhi = Math.sin(phi);
     const offsetDir = new THREE.Vector3(
-      sinPhi * Math.sin(camState.theta),
-      Math.cos(camState.phi),
-      sinPhi * Math.cos(camState.theta),
+      sinPhi * Math.sin(theta),
+      Math.cos(phi),
+      sinPhi * Math.cos(theta),
     ).normalize();
     // pose(자세 맞춤·기본)와 torso(상체 확대)는 **실제 점**에 맞춘다. AABB 8꼭짓점에 맞추면 몸 앞뒤로
     // 부풀린 상자의 가까운 모서리가 크게 잡혀, 화면에 실제로 보이는 것보다 멀리 물러선다(L6에서 상체가
@@ -1261,11 +1356,17 @@ function mount(THREE, container) {
       if (projectedRatio(fitPoints, target, offsetDir, mid) > goal) lo = mid;
       else hi = mid;
     }
-    camState.target.copy(target);
-    camState.radius = hi;
+    return { target, offsetDir, radius: hi, ratio: projectedRatio(fitPoints, target, offsetDir, hi) };
+  }
+
+  function frameTo(mode) {
+    const solved = solveFraming(mode, camState.theta, camState.phi);
+    if (!solved) return;
+    camState.target.copy(solved.target);
+    camState.radius = solved.radius;
     framing.mode = mode;
     framing.auto = true;
-    framing.ratio = projectedRatio(fitPoints, target, offsetDir, hi);
+    framing.ratio = solved.ratio;
     applyCamera();
     // 자른 사실은 카메라를 적용한 **뒤에** 잰다 — 투영이 새 카메라를 써야 이름이 맞는다.
     const offscreen = mode === "torso" ? offscreenFitTargets() : [];
@@ -1277,6 +1378,15 @@ function mount(THREE, container) {
       container.__view3dDebug.framingNote = dom.framingNote.textContent;
       container.__view3dDebug.torsoSpan = torsoScreenSpan();
       container.__view3dDebug.upperBody = upperBodyScreen();
+      // D3 검증용: 바닥에 맞춘 자리표시 발이 이 프리셋에서 보이는가, 어느 프리셋이 보여 주는가.
+      const feet = placeholderFeetPoints(lastView);
+      container.__view3dDebug.feetOnScreen = feet.length > 0 && feet.every((q) => onScreenNow(q));
+      container.__view3dDebug.feetPresets = feet.length === 0
+        ? []
+        : PRESET_PROBES.map((probe) => {
+            const solved = solvePreset(probe);
+            return solved && feet.every((q) => insideFrustum(q, solved)) ? probe.label : null;
+          }).filter((n) => n !== null);
     }
   }
 

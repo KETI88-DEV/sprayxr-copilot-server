@@ -904,6 +904,11 @@ def _fit_view(
                 if a in placeholder.joints and b in placeholder.joints
             ],
             # 바닥 맞춤(D3). 값이 있어도 자리표시는 측정이 아니다.
+            # `placeholder_feet`는 바닥에 세운 **발 관절의 이름**이다 — 화면이 "발이 지금 보이는가"를
+            # 재려면 어느 관절이 발인지 알아야 하는데, 리그 이름을 화면에서 지어내면 출처와 다른 라벨이 된다.
+            "placeholder_feet": None
+            if placeholder is None
+            else [ankle for _hip, _knee, ankle, _toe in skeleton.PLACEHOLDER_LEG_CHAIN if ankle in placeholder.joints],
             "floor_vertical": None if placeholder is None else placeholder.floor_vertical,
             "placeholder_scale": None if placeholder is None else placeholder.scale,
             "placeholder_snapped": None if placeholder is None else placeholder.snapped,
