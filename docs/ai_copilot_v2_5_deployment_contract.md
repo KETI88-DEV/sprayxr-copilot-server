@@ -1,0 +1,709 @@
+# AI Co-Pilot SIM 연동 및 Spark 배포 계약 v2.5-Spark-1
+
+- 문서 상태: 구현 및 인수시험 기준안
+- 작성일: 2026-09-16
+- 적용 대상: 도장 훈련 시뮬레이터, AI Co-Pilot API, NVIDIA DGX Spark 배포본
+- 공개 API 기준 경로: `/api/v1`
+
+## 1. 목적과 판정 기준
+
+이 문서는 도장 SIM과 AI Co-Pilot 사이의 입력, 출력, 상태, 오류, 성능 및 배포 인수 기준을 하나로 정의한다. 구현 코드, 데모 UI, 예제 또는 이전 문서가 이 문서와 다르면 이 문서를 우선한다.
+
+다음 조건을 모두 만족해야 **v2.5 제품 배포 완료**로 판정한다.
+
+1. §5의 공개 엔드포인트가 모두 OpenAPI에 존재한다.
+2. §6~§12의 요청과 응답 구조를 그대로 준수한다.
+3. 세션 상태와 시퀀스 데이터가 Query 및 최종 리포트에 실제로 반영된다.
+4. 도막, 순서, 자세 판정은 결정론적 엔진이 수행하고 LLM이 수치를 재계산하지 않는다.
+5. 이상 알림 SSE와 비동기 리포트 흐름이 실제로 동작한다.
+6. §16의 계약, 성능, 재기동 및 수동 인수시험을 통과한다.
+
+모델이 로드되고 자유 대화가 가능하다는 사실만으로는 v2.5 배포 완료로 판정하지 않는다.
+
+## 2. 계약의 적용 범위
+
+### 2.1 포함
+
+- 훈련 세션 시작과 종료
+- Trigger ON→OFF 단위 90 FPS 시퀀스 업로드
+- 도막, 작업 순서, 자세의 3축 판정
+- 사용자 질의와 RAG 근거 제공
+- 이상 발생 시 SSE 알림
+- 훈련 종료 후 비동기 종합 리포트 생성과 조회
+- DGX Spark에서 실행하는 vLLM, MCP, Agent API 및 웹 클라이언트
+
+### 2.2 제외
+
+- `/api/chat`: 내부 개발용 자유 대화 SSE
+- `/api/sim/*`: 내부 시뮬레이터 데모 및 테스트 인터페이스
+- `/api/monitor/*`: 개발·운영 관찰용 인터페이스
+- 모델 학습, LoRA 생성 및 양자화 과정
+- 도장 SIM 내부 DB와 렌더링 구현
+
+제외 경로는 제품 UI가 호출하거나 외부 SIM 계약으로 노출해서는 안 된다.
+
+## 3. 목표 아키텍처와 책임
+
+```text
+도장 SIM
+  └─ HTTP/SSE /api/v1
+       └─ Agent API (FastAPI, port 8120/container, 58000/host)
+            ├─ Session Store
+            ├─ Sequence Ingestor
+            ├─ Coating / Sequence / Pose 판정 엔진
+            ├─ RAG: BGE-M3 + reranker + FAISS
+            ├─ MCP 도구 라우터
+            ├─ Report Job Store
+            └─ OpenAI-compatible HTTP
+                 └─ vLLM Qwen3.6-27B 병합 모델
+```
+
+Ollama, LangGraph 또는 특정 UI 프레임워크는 공개 계약의 일부가 아니다. 내부 구현은 교체할 수 있지만 `/api/v1`의 wire format과 동작은 유지해야 한다.
+
+### 3.1 결정론적 엔진 책임
+
+- 입력 데이터 검증과 단위 변환
+- 도막 상태 및 이상 유형 판정
+- 구역 방문 순서와 방향 판정
+- 자세 유사도와 관절 교정량 산출
+- 수치, 상태, 처방 코드 및 통계 생성
+- 중복 시퀀스 검출과 세션 상태 전이
+
+### 3.2 LLM 책임
+
+- 판정 결과를 사용자 친화적인 자연어로 설명
+- RAG 문서 근거를 이용한 지식 답변
+- 이미 산출된 상태와 처방을 문맥에 맞게 요약
+- 최종 리포트의 자연어 브리핑 생성
+
+LLM은 도막 두께, 유사도, 이상 상태, 순서 판정 또는 처방 코드를 변경하거나 새로 계산하지 않는다.
+
+### 3.3 제품 UI 책임
+
+- §6~§12의 `/api/v1`만 호출
+- 요청 ID와 세션 ID를 생성·보존
+- 구조화된 context와 citations를 텍스트 답변과 별도로 표시
+- SSE 재연결과 마지막 이벤트 ID 관리
+- 리포트 상태를 2~5초 간격으로 조회
+- 내부 단계명이나 모델 로딩 상태를 사용자에게 오해를 일으키는 문구로 표시하지 않음
+
+## 4. 공통 규약
+
+### 4.1 전송
+
+- 문자 인코딩: UTF-8
+- JSON Content-Type: `application/json`
+- SSE Content-Type: `text/event-stream`
+- 리포트 접수: `multipart/form-data`
+- 시각: ISO 8601 UTC, 예: `2026-09-16T08:45:39Z`
+- 좌표계: 모든 위치, 자세, 충돌점 및 히트맵은 동일한 월드 좌표계
+- 공개 식별자: 레벨은 `TR-L01`, 구역은 `A-1`, `A-2`, `A-3`
+
+### 4.2 공통 응답 래퍼
+
+모든 일반 HTTP 응답은 다음 구조를 사용한다.
+
+```json
+{
+  "status": "SUCCESS",
+  "code": 200,
+  "message": "Operation completed successfully",
+  "data": {}
+}
+```
+
+- `status`: `SUCCESS` 또는 `ERROR`
+- `code`: 실제 HTTP 상태 코드와 동일한 정수
+- `message`: 안정적인 사용자용 메시지
+- `data`: 성공 데이터 또는 `null`
+
+성공 `data`는 가능한 경우 다음 메타데이터를 포함한다.
+
+```json
+{
+  "request_id": "req-0001",
+  "session_id": "SESSION-001",
+  "user_id": "USER-017",
+  "scenario_id": "TR-L01",
+  "generated_at": "2026-09-16T08:45:39Z",
+  "latency_ms": 28450
+}
+```
+
+### 4.3 오류
+
+```json
+{
+  "status": "ERROR",
+  "code": 422,
+  "message": "Invalid request",
+  "data": null
+}
+```
+
+| HTTP | 의미 |
+|---:|---|
+| 400 | JSON 또는 multipart 형식 오류 |
+| 404 | 세션, 리포트 또는 자원 없음 |
+| 409 | 세션 상태 충돌 또는 식별자 충돌 |
+| 422 | 필드 타입, 값, 단위 또는 계약 위반 |
+| 503 | 모델 또는 필수 내부 서비스 사용 불가 |
+
+스택 트레이스, 파일 경로, 프롬프트, 모델 경로, 내부 URL 및 인증 정보는 반환하지 않는다.
+
+### 4.4 중복과 재전송
+
+- `request_id`는 질의와 리포트 요청의 멱등 키다.
+- `(session_id, sequence_id)`는 시퀀스 업로드의 멱등 키다.
+- 동일 키와 동일 payload의 재전송은 기존 결과를 반환한다.
+- 동일 키와 다른 payload는 HTTP 409를 반환한다.
+- 서버는 이미 확정된 상태를 중복 요청으로 다시 전이하지 않는다.
+
+## 5. 공개 엔드포인트
+
+| 기능 | Method | Path | 응답 방식 |
+|---|---|---|---|
+| 세션 시작 | POST | `/api/v1/sessions/start` | JSON |
+| 시퀀스 전송 | POST | `/api/v1/telemetry/sequence` | JSON |
+| 질의 | POST | `/api/v1/copilot/query` | JSON |
+| 이상 알림 | GET | `/api/v1/stream/anomalies/{session_id}` | SSE |
+| 세션 종료 | POST | `/api/v1/sessions/end` | JSON |
+| 분석 요청 | POST | `/api/v1/sessions/complete` | multipart/form-data |
+| 분석 상태 | GET | `/api/v1/sessions/{session_id}/reports/{report_id}` | JSON |
+| 분석 결과 | GET | `/api/v1/reports/{report_id}` | JSON |
+
+## 6. 세션 시작
+
+### 6.1 요청
+
+`POST /api/v1/sessions/start`
+
+```json
+{
+  "user_id": "USER-017",
+  "scenario_id": "TR-L01",
+  "session_id": "SESSION-001",
+  "started_at": "2026-09-16T08:00:00Z",
+  "worker": {
+    "skill_level": "novice",
+    "handedness": "right"
+  }
+}
+```
+
+| 필드 | 타입 | 필수 | 규칙 |
+|---|---|:---:|---|
+| `user_id` | String | Y | 비어 있지 않음 |
+| `scenario_id` | String | Y | 현재 레벨은 `TR-L01` |
+| `session_id` | String | Y | 세션 동안 불변 |
+| `started_at` | String | Y | ISO 8601 UTC |
+| `worker.skill_level` | String | Y | `expert` 또는 `novice` |
+| `worker.handedness` | String | Y | `right` 또는 `left` |
+
+### 6.2 응답
+
+```json
+{
+  "status": "SUCCESS",
+  "code": 200,
+  "message": "Session started",
+  "data": {
+    "request_id": "session-start-SESSION-001",
+    "session_id": "SESSION-001",
+    "user_id": "USER-017",
+    "scenario_id": "TR-L01",
+    "generated_at": "2026-09-16T08:00:00Z",
+    "latency_ms": 12,
+    "recommended_flow": ["A-1", "A-2", "A-3"],
+    "current_zone_id": "A-1"
+  }
+}
+```
+
+성공 이후에만 시퀀스, 질의, SSE 및 종료 요청을 허용한다.
+
+## 7. 시퀀스 전송과 3축 판정
+
+### 7.1 요청
+
+`POST /api/v1/telemetry/sequence`
+
+Trigger ON→OFF 한 번을 하나의 시퀀스로 정의한다. 프레임은 수집 순서대로 전송한다.
+
+```json
+{
+  "user_id": "USER-017",
+  "scenario_id": "TR-L01",
+  "session_id": "SESSION-001",
+  "zone_id": "A-1",
+  "sequence_id": "SEQ-0001",
+  "sequence_setting": {
+    "tool_type": "spray_gun",
+    "pressure_bar": 4.0,
+    "nozzle_size_inch": 0.017,
+    "thinning_ratio": 0.1,
+    "viscosity_sec": 22.0,
+    "flow_rate_ml_min": 320.0
+  },
+  "sequence_info": [
+    {
+      "index": 0,
+      "time": "2026-09-16T08:01:00.000Z",
+      "tool_pos_rot": {
+        "pos": [0.1, 1.2, 0.5],
+        "rot": [0.0, 90.0, 0.0]
+      },
+      "skeleton_joints": {
+        "pelvis": {"pos": [0.0, 1.0, 0.0], "rot": [0.0, 0.0, 0.0]},
+        "right_elbow": {"pos": [0.3, 1.4, 0.2], "rot": [4.0, 8.0, 2.0]}
+      },
+      "gun_metrics": {
+        "speed_mms": 2200.0,
+        "distance_mm": 450.0,
+        "raypoint": [1.1, 1.3, 0.0],
+        "raytexmapnum": 1,
+        "raytexuv": [221, 144],
+        "spraytime_ms": 11
+      }
+    }
+  ],
+  "sequence_result": {
+    "avg_speed_mms": 2200.0,
+    "avg_distance_mm": 450.0,
+    "avg_thickness_um": 82.0,
+    "cur_sequence_heatmap": [],
+    "acc_sequence_heatmap": []
+  }
+}
+```
+
+### 7.2 처리 규칙
+
+서버는 한 요청에서 다음 순서로 처리한다.
+
+1. 세션, 구역, 단위, 프레임 순서 및 중복 여부 검증
+2. 원본 또는 정규화된 시퀀스 저장
+3. 도막 판정
+4. 구역 순서와 궤적 방향 판정
+5. 숙련자 기준 자세 비교
+6. 세션 누적 상태 반영
+7. HTTP 응답 생성
+8. 이상이 있으면 동일 판정 결과로 SSE 발행
+
+상태 전이는 HTTP/SSE 발행 전에 확정한다. HTTP와 SSE가 서로 다른 판정을 만들어서는 안 된다.
+
+### 7.3 응답
+
+```json
+{
+  "status": "SUCCESS",
+  "code": 200,
+  "message": "Sequence evaluated",
+  "data": {
+    "request_id": "sequence-SEQ-0001",
+    "session_id": "SESSION-001",
+    "user_id": "USER-017",
+    "scenario_id": "TR-L01",
+    "generated_at": "2026-09-16T08:01:01Z",
+    "latency_ms": 185,
+    "sequence_id": "SEQ-0001",
+    "sequence_data_ack": {
+      "stored": true,
+      "duplicate": false,
+      "frames_received": 1,
+      "frames_accepted": 1
+    },
+    "coating_feedback": {
+      "status": "under_app",
+      "zone_id": "A-1",
+      "thickness_um": 82.0,
+      "nominal_um": 100.0,
+      "action_codes": ["increase_dwell", "adjust_distance"]
+    },
+    "sequence_feedback": {
+      "status": "normal",
+      "current_zone_id": "A-1",
+      "next_zone_id": "A-2",
+      "current_direction": "horizontal",
+      "expected_direction": "horizontal",
+      "deviation_mm": 12.0
+    },
+    "pose_feedback": {
+      "analysis_status": "available",
+      "similarity_score": 0.82,
+      "corrections": [
+        {
+          "joint": "right_elbow",
+          "delta_deg": 6.0,
+          "guidance": "오른쪽 팔꿈치를 약간 펴세요."
+        }
+      ]
+    },
+    "text_guide": "이격거리를 줄이고 A-1 구역의 체류 시간을 늘리세요."
+  }
+}
+```
+
+판정할 데이터가 부족하면 임의 값을 만들지 않고 `analysis_status="not_available"`과 안정적인 `reason_code`를 반환한다.
+
+## 8. 이상 알림 SSE
+
+### 8.1 연결
+
+`GET /api/v1/stream/anomalies/{session_id}`
+
+- 세션 시작 후 연결한다.
+- 이상이 있을 때만 `anomaly_detection` 이벤트를 전송한다.
+- 연결 유지용 comment heartbeat를 최대 15초 간격으로 보낸다.
+- 모든 이벤트에 증가하는 `id`를 포함한다.
+- 클라이언트는 `Last-Event-ID`로 재연결할 수 있다.
+- 같은 `sequence_id`의 동일 이상을 중복 발행하지 않는다.
+
+### 8.2 이벤트
+
+```text
+id: 42
+event: anomaly_detection
+data: {"event_id":"anomaly-SESSION-001-SEQ-0001","session_id":"SESSION-001","user_id":"USER-017","scenario_id":"TR-L01","sequence_id":"SEQ-0001","generated_at":"2026-09-16T08:01:01Z","text_guide":"이격거리를 줄이고 체류 시간을 늘리세요.","anomaly":{"detected":true,"anomaly_type":["coating"],"items":[{"axis":"thickness","type":"under_app","zone_id":"A-1","action":"increase_dwell"}]},"sequence_data_ack":{"stored":true,"duplicate":false,"frames_received":1,"frames_accepted":1}}
+
+```
+
+SSE의 판정 값은 같은 시퀀스 HTTP 응답의 값과 일치해야 한다.
+
+## 9. Co-Pilot 질의
+
+### 9.1 요청
+
+`POST /api/v1/copilot/query`
+
+```json
+{
+  "user_id": "USER-017",
+  "scenario_id": "TR-L01",
+  "session_id": "SESSION-001",
+  "request_id": "REQ-0041",
+  "prompt": "현재 자세와 도막 상태를 반영해서 다음 작업을 알려줘.",
+  "task_type": "pose_recomm",
+  "use_rag": "Y",
+  "context": {
+    "sequence_id": "SEQ-0001"
+  }
+}
+```
+
+| `task_type` | 필수 동작 |
+|---|---|
+| `trajectory_recomm` | 현재·다음 구역과 궤적 판정 설명 |
+| `pose_recomm` | 자세 유사도와 교정 항목 설명 |
+| `error_analysis` | 도막·순서·자세 판정을 조합한 원인 설명 |
+| `knowledge_search` | 도장 문서 검색과 근거 인용 |
+
+모든 `task_type`은 실제 구현되어야 한다. 고정된 “준비 중” 응답은 제품 계약 위반이다.
+
+### 9.2 응답
+
+```json
+{
+  "status": "SUCCESS",
+  "code": 200,
+  "message": "Copilot query completed",
+  "data": {
+    "request_id": "REQ-0041",
+    "session_id": "SESSION-001",
+    "user_id": "USER-017",
+    "scenario_id": "TR-L01",
+    "generated_at": "2026-09-16T08:02:00Z",
+    "latency_ms": 28450,
+    "degraded": false,
+    "answer": "숙련자 자세 대비 유사도는 82%입니다. 오른쪽 팔꿈치를 약간 펴고 이격거리를 줄이세요.",
+    "resolved_intents": ["pose_recommendation", "coating_error_analysis"],
+    "context_status": "available",
+    "sequence_context": {
+      "current_zone_id": "A-1",
+      "next_zone_id": "A-2",
+      "expected_direction": "horizontal"
+    },
+    "coating_context": {
+      "sequence_id": "SEQ-0001",
+      "zone_id": "A-1",
+      "status": "under_app",
+      "thickness_um": 82.0
+    },
+    "pose_context": {
+      "similarity_score": 0.82,
+      "corrections": [
+        {"joint": "right_elbow", "delta_deg": 6.0}
+      ]
+    },
+    "retrieval_used": true,
+    "citations": ["DOC-doc_0022-C0214"]
+  }
+}
+```
+
+### 9.3 Query 불변 규칙
+
+- `use_rag="Y"`이면 실제 검색을 수행하고 사용한 문서만 `citations`에 넣는다.
+- `use_rag="N"`이면 `retrieval_used=false`, `citations=[]`다.
+- 세션이 있으면 최신 누적 상태를 사용한다.
+- 세션이 없는 일반 지식 질의는 context를 `not_available`로 반환할 수 있다.
+- 내부 도구 호출, 프롬프트 또는 사고 과정은 반환하지 않는다.
+- 정상 완료는 `degraded=false`다.
+- 제한 시간 내 생성이 끝나지 않으면 가능한 판정 및 RAG 근거를 보존한 축약 응답과 `degraded=true`를 반환한다.
+
+## 10. 세션 종료
+
+`POST /api/v1/sessions/end`
+
+```json
+{
+  "user_id": "USER-017",
+  "scenario_id": "TR-L01",
+  "session_id": "SESSION-001",
+  "ended_at": "2026-09-16T09:00:00Z",
+  "worker": {
+    "skill_level": "novice",
+    "handedness": "right"
+  }
+}
+```
+
+성공 시 세션을 종료하고 SSE 연결을 정상 종료한다. 종료된 세션에는 새 시퀀스를 받을 수 없다. 리포트가 진행 중이라면 리포트 job은 계속 실행한다.
+
+## 11. 분석 요청과 상태 조회
+
+### 11.1 분석 요청
+
+`POST /api/v1/sessions/complete`
+
+Content-Type은 `multipart/form-data`이며 다음 파트를 사용한다.
+
+| 파트 | 타입 | 필수 | 설명 |
+|---|---|:---:|---|
+| `user_id` | String | Y | 작업자 ID |
+| `scenario_id` | String | Y | `TR-L01` |
+| `session_id` | String | Y | 세션 ID |
+| `request_id` | String | Y | 멱등 키 |
+| `final_score` | Integer | Y | 0~100 |
+| `is_pass` | Boolean | Y | 합격 여부 |
+| `avg_thickness_um` | Float | Y | 최종 평균 도막 |
+| `paint_used` | Float | Y | 도료 사용량 |
+| `paint_utilization` | Float | Y | 도료 사용률 |
+| `paint_area` | Float | Y | 작업 면적 |
+| `paint_time_ms` | Integer | Y | 작업 시간 |
+| `paint_speed_mms` | Float | Y | 작업 속도 |
+| `height_map_image` | PNG | Y | 최종 도막 Height Map |
+| `telemetry_csv` | CSV | Y | 전체 원시 텔레메트리 |
+
+접수 응답은 장기 생성을 기다리지 않는다.
+
+```json
+{
+  "status": "SUCCESS",
+  "code": 202,
+  "message": "Session report accepted",
+  "data": {
+    "request_id": "REQ-REPORT-0034",
+    "session_id": "SESSION-001",
+    "user_id": "USER-017",
+    "scenario_id": "TR-L01",
+    "generated_at": "2026-09-16T09:00:01Z",
+    "latency_ms": 450,
+    "report_id": "REPORT-SESSION-001",
+    "report_status": "pending"
+  }
+}
+```
+
+### 11.2 상태 조회
+
+`GET /api/v1/sessions/{session_id}/reports/{report_id}`
+
+`report_status`는 `pending`, `complete`, `failed` 중 하나다. job 실패는 HTTP 요청 자체가 성공했으면 HTTP 200과 `report_status="failed"`로 표현한다.
+
+```json
+{
+  "status": "SUCCESS",
+  "code": 200,
+  "message": "Session report status",
+  "data": {
+    "request_id": "REQ-REPORT-0034",
+    "session_id": "SESSION-001",
+    "user_id": "USER-017",
+    "scenario_id": "TR-L01",
+    "generated_at": "2026-09-16T09:00:10Z",
+    "latency_ms": 8,
+    "report_id": "REPORT-SESSION-001",
+    "report_status": "pending",
+    "reason_code": null
+  }
+}
+```
+
+## 12. 분석 결과
+
+`GET /api/v1/reports/{report_id}`
+
+완료 전에는 HTTP 409를 반환한다. 완료된 리포트는 네 객체를 제공한다.
+
+```json
+{
+  "status": "SUCCESS",
+  "code": 200,
+  "message": "Session report completed",
+  "data": {
+    "request_id": "REQ-REPORT-0034",
+    "session_id": "SESSION-001",
+    "user_id": "USER-017",
+    "scenario_id": "TR-L01",
+    "generated_at": "2026-09-16T09:00:30Z",
+    "latency_ms": 12,
+    "report": {
+      "report_id": "REPORT-SESSION-001",
+      "report_status": "complete",
+      "coating_report": {
+        "analysis_status": "available",
+        "algorithm_version": "coating-session-report-1.0",
+        "average_thickness_um": 96.2,
+        "guideline": "A-1 저도막 구간을 우선 보수하세요."
+      },
+      "sequence_report": {
+        "analysis_status": "available",
+        "algorithm_version": "sequence-session-report-1.0",
+        "recommended_flow": ["A-1", "A-2", "A-3"],
+        "visited_flow": ["A-1", "A-2", "A-3"],
+        "guideline": "권장 순서를 준수했습니다."
+      },
+      "pose_report": {
+        "analysis_status": "available",
+        "algorithm_version": "pose-session-report-1.0",
+        "average_similarity_score": 0.81,
+        "priority_corrections": [
+          {
+            "priority": 1,
+            "zone_id": "A-1",
+            "joint": "right_elbow",
+            "occurrence_rate": 0.67,
+            "correction_guidance": "오른쪽 팔꿈치를 약간 펴세요."
+          }
+        ]
+      },
+      "llm_briefing": {
+        "analysis_status": "available",
+        "summary": "작업 순서는 안정적이지만 A-1 저도막과 팔꿈치 자세 교정이 필요합니다.",
+        "citations": ["DOC-doc_0022-C0214"]
+      }
+    }
+  }
+}
+```
+
+수치와 상태는 결정론적 보고서에서 가져오며 `llm_briefing`은 이를 설명만 한다.
+
+## 13. 제품 UI 계약
+
+제품 UI는 내부 데모 UI와 구분한다.
+
+### 13.1 입력
+
+- 세션 화면은 `user_id`, `scenario_id`, `session_id`, 작업자 숙련도와 주손을 보존한다.
+- 질의 화면은 `prompt`, `task_type`, `use_rag`, 선택적 `context.sequence_id`를 전송한다.
+- 운영 UI는 `message`, `mode`, `level_id`만 받는 내부 `/api/chat` 구조를 사용하지 않는다.
+
+### 13.2 출력
+
+- `answer`와 구조화 context를 분리해 표시한다.
+- RAG 사용 시 citation ID를 표시한다.
+- 도막, 순서, 자세 수치와 판정 코드를 임의로 자연어에서 재추출하지 않는다.
+- 진행 상태는 `요청 검증`, `문서 검색`, `응답 생성`처럼 실제 단계를 사용한다.
+- 이미 로드된 모델에 대해 매 요청마다 `모델 초기화`라고 표시하지 않는다.
+- 리포트는 `coating_report`, `sequence_report`, `pose_report`, `llm_briefing`으로 구분한다.
+
+## 14. 성능 및 가용성 계약
+
+| 경로 | 기준 |
+|---|---|
+| 세션 시작·종료 | p95 500ms 이하 |
+| 시퀀스 HTTP 판정 | p95 500ms 이하, LLM 호출 금지 |
+| 이상 SSE | 시퀀스 판정 확정 후 1초 이내 |
+| Query | 전체 p95 60초 이하, 초과 시 축약 `degraded` 응답 |
+| 분석 요청 접수 | 2초 이내 `report_id` 반환 |
+| 분석 상태 조회 | p95 200ms 이하 |
+| 리포트 생성 | 비동기, 연결 종료와 무관하게 완료 |
+
+LLM 응답 시간은 모델 정밀도와 서빙 백엔드에 따라 달라질 수 있다. 제품 UI는 Query를 동기 HTTP로 호출하되 명확한 진행 상태를 표시한다. 실제 토큰 스트리밍을 추가할 경우 별도 버전으로 계약을 확장하며 기존 JSON 응답을 깨지 않는다.
+
+## 15. Spark 배포 계약
+
+- 제품 추론은 외부 vLLM OpenAI-compatible 서버를 사용한다.
+- 모델은 LoRA 병합이 끝난 완성 체크포인트만 배포한다.
+- Agent API는 요청마다 모델 또는 RAG 인덱스를 다시 로드하지 않는다.
+- 모델, RAG 인덱스, 임베더 및 리랭커는 readiness 전에 준비되어야 한다.
+- `/api/ready`는 파이프라인, 모델, RAG 인덱스 및 필수 서비스 상태를 검증한다.
+- 외부 공개 전 인증 또는 신뢰 네트워크 정책을 적용한다.
+- 이미지 digest, 코드 커밋 및 번들 manifest를 동일 릴리스 기록에 보존한다.
+- 양자화 후보가 품질 게이트를 실패하면 승인된 정밀도로 롤백한다.
+
+모델 정밀도 변경은 API 계약 변경이 아니다. FP8, BF16 또는 향후 승인된 형식 모두 같은 `/api/v1` 계약을 제공해야 한다.
+
+## 16. 인수시험
+
+### 16.1 계약 시험
+
+- OpenAPI에 §5의 8개 엔드포인트가 모두 존재한다.
+- 모든 요청 모델은 알 수 없는 필드를 거부한다.
+- Python Pydantic 모델과 UI Zod 모델이 동일한 필드와 제약을 가진다.
+- 성공·오류 응답이 공통 래퍼를 준수한다.
+- PDF 예제와 이 문서 예제를 fixture로 실행한다.
+
+### 16.2 상태 시험
+
+1. 세션 시작 전 시퀀스는 409다.
+2. 세션 시작 후 첫 시퀀스가 누적 상태를 갱신한다.
+3. 같은 시퀀스 재전송은 중복 저장하지 않는다.
+4. Query가 최신 도막·순서·자세 context를 사용한다.
+5. 세션 종료 후 새 시퀀스는 409다.
+6. 리포트 job은 세션 종료 또는 클라이언트 연결 종료 뒤에도 완료된다.
+
+### 16.3 실제 표면 시험
+
+- 실제 HTTP로 세션 시작부터 종료까지 전체 흐름을 수행한다.
+- 90 FPS 샘플 시퀀스를 업로드하고 HTTP 판정과 SSE가 일치하는지 확인한다.
+- 네 가지 `task_type`을 각각 호출해 고정 응답이 아닌 실제 context를 확인한다.
+- `use_rag` Y/N에 따른 citations 차이를 확인한다.
+- multipart 리포트를 접수하고 `pending → complete` 전이를 확인한다.
+- 실제 브라우저에서 입력 필드, context, citations 및 리포트 화면을 확인한다.
+- 컨테이너 재기동 후 모델과 인덱스가 한 번만 초기화되는지 확인한다.
+
+### 16.4 배포 승인 실패 조건
+
+다음 중 하나라도 해당하면 제품 배포를 승인하지 않는다.
+
+- 제품 UI가 `/api/chat` 또는 `/api/sim/*`을 호출함
+- 공개 API 일부가 OpenAPI에 없음
+- 시퀀스 판정이 stub 또는 고정 fixture임
+- 네 가지 Query task 중 하나라도 “준비 중” 고정 응답임
+- HTTP 판정과 SSE 판정이 다름
+- 리포트가 동기 장기 요청이거나 프로세스 메모리에만 존재해 재기동 시 소실됨
+- 모델 초기화가 요청마다 반복됨
+- 계약과 다른 필드명, 단위 또는 응답 래퍼를 사용함
+
+## 17. 현재 구현과의 차이
+
+2026-09-16 Spark 배포본은 모델 서빙과 내부 데모 실행에는 성공했지만 이 계약을 충족하지 않는다.
+
+| 항목 | 현재 상태 | 목표 상태 |
+|---|---|---|
+| vLLM Qwen3.6-27B | 동작 | 유지 |
+| `/api/v1/copilot/query` | `knowledge_search`만 실제 실행 | 네 task 실제 실행 |
+| `/api/v1/sessions/start` | 없음 | 구현 |
+| `/api/v1/telemetry/sequence` | 없음 | 3축 실제 판정 구현 |
+| `/api/v1/stream/anomalies/{session_id}` | 없음 | SSE 구현 |
+| `/api/v1/sessions/end` | 없음 | 구현 |
+| `/api/v1/sessions/complete` | 없음 | 비동기 job 구현 |
+| 리포트 상태·결과 | 없음 | 구현 |
+| 제품 UI | `/api/chat`, `/api/sim/*` 사용 | `/api/v1` 전환 |
+| 시퀀스 결과 | 내부 deterministic stub | 실제 판정 엔진 연결 |
+| 진행 문구 | 매 요청 `모델 초기화` 표시 | 실제 단계 표시 |
+
+이 표의 모든 목표 상태가 구현되고 §16을 통과한 뒤 새 Spark 릴리스를 생성한다.
