@@ -648,6 +648,146 @@
           "손영석"
         ],
         "session_count": 4
+      },
+      {
+        "level": 1,
+        "provenance": "solved:fixed_linear_muzzle_occlusion",
+        "solved_transform": {
+          "rotation": [
+            0.0,
+            0.0,
+            -1.0,
+            1.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0
+          ],
+          "translation": [
+            1.4489999613651592,
+            4.6170001049758165,
+            0.6569996554512653
+          ],
+          "scale": 0.0254
+        },
+        "declared_scale": 0.0254,
+        "fit": {
+          "atlas_overlap_cell_fraction": 0.0,
+          "atlas_overlap_max_gap_mm": 0.0,
+          "atlas_overlap_resolution": 1024.0,
+          "cross_session_eval_rows": 600.0,
+          "cross_session_fit_worker_rows": 800.0,
+          "cross_session_pass": 1.0,
+          "cross_session_workers": 2.0,
+          "cross_session_worst_mm": 5.0119935313120505e-05,
+          "cross_session_worst_texel": 0.00024671517319147304,
+          "flash_occlusion": 0.0,
+          "flash_occlusion_n": 1500.0,
+          "g0_max_mm": 0.0012882984936624098,
+          "g0_median_mm": 0.00022207943140006847,
+          "g0_n_pairs": 3997.0,
+          "g0_p95_mm": 0.0006937627100300769,
+          "gun_occlusion": 0.0,
+          "hmd_occlusion": 0.0,
+          "max_mm": 0.00012623607914541424,
+          "median_mm": 0.00010010384765557625,
+          "muzzle_occlusion": 0.0,
+          "muzzle_occlusion_n": 1500.0,
+          "muzzle_short_frames": 0.0,
+          "occlusion_n": 1500.0,
+          "p95_mm": 0.00011693648049870986,
+          "uv_abs_resid_max_texel": 0.0002530069003641026,
+          "uv_abs_resid_median_texel": 8.931230273713907e-05,
+          "uv_abs_resid_p95_texel": 0.00017082655677222444,
+          "uv_ambiguous_fraction": 0.0,
+          "uv_degenerate_area_fraction": 0.0,
+          "uv_degenerate_misattribution_mm": 0.0,
+          "uv_degenerate_silent_samples": 0.0,
+          "uv_degenerate_tris": 0.0,
+          "uv_lookup_sample": 1500.0,
+          "uv_miss_fraction": 0.0,
+          "uv_seam_tie_fraction": 0.0,
+          "det_sign": -1.0,
+          "fit_eval_overlap": 0.0,
+          "fit_n": 2000.0,
+          "n_hits": 1500.0,
+          "scale_ratio_to_declared": 0.0
+        },
+        "source_fbx": "learning_mode_lv.1_rev.1.1.fbx",
+        "uv_convention": "obs_texel = UV_ATLAS_TEXELS * mesh_uv",
+        "uv_convention_source": "measured",
+        "linear_source": "fixed_signed_permutation",
+        "handedness_source": "data:occlusion_muzzle",
+        "handedness_evidence": {
+          "muzzle_occlusion": {
+            "P": 0.0,
+            "mirror": 1.0
+          },
+          "gun_origin_occlusion_report": {
+            "P": 0.0,
+            "mirror": 1.0
+          },
+          "hmd_occlusion_report": {
+            "P": 0.0,
+            "mirror": 1.0
+          },
+          "occlusion_origin": "muzzle",
+          "muzzle_offset_m": 0.0892,
+          "occlusion_threshold": 0.05,
+          "prereg_doc": "docs/measurements/2026-09-16-level1-2-occlusion-exclusion-prereg.md",
+          "posthoc_parts": [
+            "G_occ_muzzle",
+            "uniqueness"
+          ],
+          "void_gates": [
+            "G_occ_hmd",
+            "G_front_face_hmd"
+          ],
+          "confirmation_not_out_of_sample": true
+        },
+        "prereg_doc": "docs/measurements/2026-09-16-level1-2-occlusion-exclusion-prereg.md",
+        "occlusion_origin": "muzzle",
+        "muzzle_offset_m": 0.0892,
+        "occlusion_threshold": 0.05,
+        "holdout": {
+          "kind": "unread_files",
+          "unread_files_available": 27,
+          "files_opened": 9,
+          "file_list": [
+            "/data/sources/professionals/김경호_20250831/김경호_20250831(Sequences)/1_1000415_1.csv",
+            "/data/sources/professionals/김경호_20250831/김경호_20250831(Sequences)/1_1000428_1.csv",
+            "/data/sources/professionals/김경호_20250905/김경호_20250905(Sequences)/1_1000622_1.csv",
+            "/data/sources/professionals/김경호_20250905/김경호_20250905(Sequences)/1_1000638_1.csv",
+            "/data/sources/professionals/손영석_20250825/손영석_20250825(Sequences)/1_1000282_1.csv",
+            "/data/sources/professionals/손영석_20250825/손영석_20250825(Sequences)/1_1000283_1.csv",
+            "/data/sources/professionals/손영석_20250825/손영석_20250825(Sequences)/1_1000296_1.csv",
+            "/data/sources/professionals/손영석_20250826/손영석_20250826(Sequences)/1_1000323_1.csv",
+            "/data/sources/professionals/손영석_20250826/손영석_20250826(Sequences)/1_1000336_1.csv"
+          ],
+          "frames": 1500,
+          "per_file_cap": 200,
+          "frame_cap": 1500,
+          "session_disjoint": false
+        },
+        "confirmation_not_out_of_sample": true,
+        "not_gated": {
+          "reason": "12자유도 경로 전용 게이트(G4 aniso, G7, G8, G9) — 사전등록 §1.3",
+          "gates_not_applied": [
+            "cond_min_over_max",
+            "distinct_normals",
+            "fit_linear_aniso",
+            "linear_aniso",
+            "scale_ratio_to_declared",
+            "adversarial_runner_up_texel"
+          ],
+          "scale_ratio_to_declared_is_by_construction": true
+        },
+        "workers": [
+          "김경호",
+          "손영석"
+        ],
+        "session_count": 4
       }
     ],
     "fixed_linear_attempt": {

@@ -219,6 +219,17 @@ SOLVED_LEVELS = [
     if entry["provenance"] == "solved"
 ]
 
+# `SOLVED_LEVELS`는 `provenance == "solved"`만 좁게 본다 — 태그 붙은 출처
+# (`solved:fixed_linear_muzzle_occlusion` 등)는 빠진다. 2026-09-16 사고가 바로 이
+# 틈으로 살아남았다: 레벨 1의 내부 게이트(그 경로 자신의 변환 적용)는 통과했지만,
+# 실제 소비자인 `level_mesh.place()`로 재면 회전이 전치돼 있어 어긋났다. `is_solved`가
+# 보는 범위 그대로 전수 검사해야 이 틈이 다시 열려도 잡는다.
+ALL_SOLVED_LEVELS = [
+    int(entry["level"])
+    for entry in json.loads(level_mesh.ALIGNMENT_PATH.read_text(encoding="utf-8"))
+    if level_mesh.is_solved(entry["provenance"])
+]
+
 
 def _entry(level: int) -> dict:
     for entry in json.loads(level_mesh.ALIGNMENT_PATH.read_text(encoding="utf-8")):
@@ -673,6 +684,33 @@ def test_committed_translation_places_real_hits_on_the_mesh() -> None:
         hits, _uvs, _s = _hits(level)
         distances = sorted(level_mesh.closest_distance(placed, h) for h in hits[:120])
         assert distances[len(distances) // 2] < 1e-4
+
+
+def test_every_solved_level_including_tagged_provenance_places_real_hits_through_place() -> None:
+    """소비자 경로 하나로 전수 검사 — 태그 붙은 출처를 빼놓지 않는다.
+
+    `test_committed_translation_places_real_hits_on_the_mesh`는 `SOLVED_LEVELS`
+    (`provenance == "solved"`만)를 돈다. 그 좁은 목록이 정확히 2026-09-16 레벨 1
+    사고가 빠져나간 틈이었다 — 그 레벨의 출처는 `"solved:fixed_linear_muzzle_occlusion"`
+    이라 `SOLVED_LEVELS`에 없었고, 그래서 `place()`로 실제 착탄점을 재는 검사를 한 번도
+    받지 않았다. 내부 게이트(`measure_placement`)는 그 경로 자신의 변환 적용으로만
+    재서 통과를 기록했지만, 기록된 회전은 `place()`가 쓰는 관례와 전치 관계로 어긋나
+    있었다 — `load_alignment`가 낸 `Alignment`를 그대로 `place()`에 먹여야만 드러난다.
+
+    이 테스트는 `is_solved()`가 보는 범위 그대로(`ALL_SOLVED_LEVELS`) 돈다 — 화면이
+    "검증됐다"고 그리는 레벨은 전부 여기를 지나야 한다.
+    """
+    for level in ALL_SOLVED_LEVELS:
+        alignment = level_mesh.load_alignment(level)
+        entry = _entry(level)
+        mesh, _index = _mesh_and_index(entry["source_fbx"])
+        placed = level_mesh.place(mesh, alignment)
+        hits, _uvs, _s = _hits(level)
+        distances = sorted(level_mesh.closest_distance(placed, h) for h in hits[:120])
+        median_mm = distances[len(distances) // 2] * 1000.0
+        max_mm = distances[-1] * 1000.0
+        assert median_mm <= level_mesh.GATES["median_mm"], (level, median_mm)
+        assert max_mm <= level_mesh.GATES["max_mm"], (level, max_mm)
 
 
 def test_committed_fit_records_every_gate_it_was_judged_by() -> None:

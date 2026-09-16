@@ -639,3 +639,59 @@ E2의 가상 재삼각분할은 이 잔차 계산에 한 번도 들어가지 않
 이 절의 수치는 전부 §0~§8과 같은 저장소 코드(`trainer/scripts/level_mesh.py`)의 기존 공개 함수만 호출해서
 낸 것이고, 새 함수를 추가하지 않았다. 스크립트는 저장소 밖 스크래치패드에 있다(§0의 관례대로 커밋하지
 않는다) — 함수 이름과 인자는 위 1~6에 전부 적었으므로 그대로 재현할 수 있다.
+
+---
+
+## §10 정정 — 2026-09-16, 화면 사용자 보고 이후 재검토
+
+**이 절도 §0의 사전등록 규칙 대상이 아니다.** §0~§9 본문은 한 글자도 고치지 않았다. 레벨 1 판정
+(`solved:fixed_linear_muzzle_occlusion`) 자체와 §9의 원인 설명 둘 다 바뀌지 않는다 — 바뀐 것은
+**커밋된 `trainer/data/level_alignment.json`의 레벨 1 `solved_transform.rotation` 값 하나**다.
+
+### 무엇이 어긋나 있었나
+
+사용자가 레벨 1에서 벽과 착탄점이 어긋난다고 보고했다. 실측: `level_mesh.place(level_mesh.read_fbx(...),
+level_mesh.load_alignment(1))`로 배치한 메시와 레벨 1 실착탄점 사이 거리가 중앙값 254~371 mm(표본에 따라),
+최댓값 485~761 mm였다 — 회전을 전치해서 배치하면 중앙값 0.0001~0.0002 mm로 떨어진다. §8~§9이 쓴 판정
+경로 자신의 게이트(`measure_placement`)는 통과(중앙값 0.0001 mm)를 기록했는데, 그 게이트가 잰 변환 적용과
+화면·`place()`가 실제로 쓰는 변환 적용이 서로 달랐던 것이 아니다 — 코드(`solve_fixed_linear_muzzle`,
+`judge_muzzle`, `muzzle_entry`)를 지금 그대로 다시 돌리면 `place()`가 쓰는 관례과 맞는 회전
+(`[0, 1, 0, 0, 0, 1, -1, 0, 0]`, `GLOBAL_IMPORT_LINEAR`와 같다)이 그대로 나온다 — 평행이동은 소수점 15자리까지
+재현 판과 커밋 판이 같았다. 즉 **코드에는 지금 시점에 전치 결함이 없다**: 커밋된 JSON의 회전 값이 그
+전치(`[0, 0, -1, 1, 0, 0, 0, 1, 0]`)로, 코드가 실제로 내는 값과 어긋나 있었을 뿐이다 — 언제 어떻게
+어긋났는지는 이 저장소의 커밋 이력만으로는 재구성하지 못했다(182da94가 커밋한 값 자체가 이미 이 전치였다).
+
+### 고친 방법
+
+손으로 JSON을 고치지 않았다 — `python3 trainer/scripts/level_mesh.py muzzle-occlusion <report>`(§8·§9와
+같은 진입점, `level_mesh.muzzle_main`)를 다시 돌려 레벨 1·2 항목을 코드가 새로 낸 값으로 **다시 썼다**.
+재실행 판정은 §8·§9와 동일하다(레벨 1 `solved`, 레벨 2 `unverifiable`, 사유 문자열까지 같다). 레벨 2와
+레벨 3~10 항목은 재실행 전후로 바이트 단위로 같다(레벨 1의 `history`에 이전 항목이 하나 더 쌓인 것만
+다르다 — 그 자체가 무엇이 바뀌었는지의 기록이다).
+
+### 놓쳤던 이유와 새 검사
+
+`trainer/scripts/tests/test_level_mesh.py::test_committed_translation_places_real_hits_on_the_mesh`는
+`provenance == "solved"`인 레벨만 돈다 — 태그 붙은 출처(`"solved:fixed_linear_muzzle_occlusion"`)는 그 밖이라
+`place()`로 실제 착탄점을 재는 검사를 한 번도 받지 않았다. 새 테스트
+`test_every_solved_level_including_tagged_provenance_places_real_hits_through_place`는
+`level_mesh.is_solved()`가 보는 범위(`ALL_SOLVED_LEVELS`) 그대로, 레벨마다 `load_alignment` → `place()` →
+실제 착탄점까지의 거리를 재고 G3 문턱(`GATES["median_mm"]`/`GATES["max_mm"]`)과 비교한다. 레벨 6의 회전을
+일부러 전치해서 돌리면 `AssertionError: (6, 411.19053980766165)`로 실패하는 것을 확인했다 — 이 실패 능력이
+핵심이었다(복구 후 되돌렸다).
+
+### `capture_frame.to_world`는 확인했다 — 고칠 필요가 없었다
+
+`to_world`는 `level_mesh._rotation_matrix`와 같은 행 우선(row-major) 배치로 회전을 다시 세우고, 그
+전치를 **역행렬**로 의도적으로 쓴다(반사라 `R⁻¹ = Rᵀ`, 독스트링 §"회전은 반사다"). `place()`의 관례와
+같은 배치를 쓰므로 이번 전치 결함과 같은 방향이 아니다 — 레벨 1 회전이 고쳐지면 `to_world`도 고쳐진
+값을 그대로 쓴다. 코드를 바꾸지 않았다.
+
+### 화면 재검증 (`view.layers.query.hit` 대 `view.mesh`, `service.compare`)
+
+김경호 20250831 레벨 1 `1000389_1` #0(레퍼런스는 `service.reference_candidates`가 고른 첫 후보)로 고치기
+전/후를 같은 파이프라인(`service.compare(..., include_view=True)`)으로 쟀다: 고치기 전 중앙값 371.4 mm ·
+최댓값 485.0 mm, 고친 뒤 중앙값 0.00018 mm · 최댓값 0.00019 mm. 레벨 3(`1000391_1` #0)·레벨 6(`1000394_1`
+#0)은 고치기 전후로 차이가 없다(레벨 3 중앙값 0.00039 mm 그대로; 레벨 6 중앙값 0.00012 mm 그대로 — 레벨
+6의 최댓값 62.9 mm는 스트로크 후반 착탄점이 벽 패널 가장자리를 벗어난 것이고 고치기 전에도 똑같이
+있었다, 이 결함과 무관하다).
