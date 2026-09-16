@@ -103,14 +103,30 @@ docker exec -w /workspace ship-paint-trainer nice -n 19 ionice -c3 python3 deplo
 
 ## 2. 이미지
 
+실행 순서는 §2의 환경 준비·vLLM 이미지 확보 → §3 반입 → §4 경로·권한 확인 → §2의 애플리케이션 이미지 빌드 → §5 이후다.
+아래 Spark 명령은 같은 Bash 세션에서 실행한다. 새 세션에서는 저장소 안에서
+`SPARK_DIR="$(git rev-parse --show-toplevel)/deploy/spark"`를 설정하고 §4의 공개 변수를 다시 설정한다.
+`.env`는 Compose 전용이며 셸로 자동 export되지 않는다. `source .env`로 실행하지 않는다.
+
 ### A. Spark에서 네이티브 빌드 (권장, 인터넷 필요)
 
 ```bash
 # Spark: 릴리스 커밋의 저장소 사본에서
-cd deploy/spark && cp .env.example .env    # CODE_COMMIT=$(git rev-parse HEAD) 등 채움(§4)
-docker compose build mcp agent-api web     # platforms: linux/arm64
-docker pull "$(grep ^VLLM_IMAGE= .env | cut -d= -f2)"
+SPARK_DIR="$(git rev-parse --show-toplevel)/deploy/spark"
+cd "$SPARK_DIR"
+if [ ! -e .env ]; then cp .env.example .env; fi
+# 기존 .env를 덮어쓰지 않는다.
+# 아래 공개 변수에는 선택한 실제 이미지 태그를 지정한다.
+VLLM_IMAGE=vllm/vllm-openai:v0.29.0
+docker pull "$VLLM_IMAGE"
 docker image inspect --format '{{index .RepoDigests 0}}' vllm/vllm-openai:v0.29.0   # → .env VLLM_IMAGE 에 digest 고정
+```
+
+§3과 §4를 완료한 뒤 다음 블록을 실행한다.
+
+```bash
+cd "$SPARK_DIR"
+docker compose build mcp agent-api web     # platforms: linux/arm64
 docker image inspect --format '{{.Id}}' shipcoat/agent-api:v6.1 shipcoat/mcp:v6.1 shipcoat/web:v6.1  # 릴리스 기록에 남김
 ```
 
@@ -145,10 +161,13 @@ QEMU 에뮬레이션에서의 빌드 시간은 측정하지 않았다(미측정)
 
 ```bash
 # rsync (-H: 하드링크 보존, 대상은 ext4/xfs. exFAT는 권한·하드링크 불가)
+sudo mkdir -p /srv/shipcoat/bundle/spark-v6.1-fp8
+sudo chown "$(id -u):$(id -g)" /srv/shipcoat/bundle/spark-v6.1-fp8
+# a40는 실제 접근 가능한 개발 서버 SSH 별칭으로 바꾼다.
 rsync -aH --info=progress2 a40:/data/ship-paint-ai/output/bundle/spark-v6.1-fp8/ /srv/shipcoat/bundle/spark-v6.1-fp8/
 
 # Spark 호스트 python3(표준 라이브러리만)로 검증
-python3 deploy/spark/scripts/bundle_manifest.py verify \
+python3 "$SPARK_DIR/scripts/bundle_manifest.py" verify \
   --bundle-dir /srv/shipcoat/bundle/spark-v6.1-fp8 --model fp8 \
   --code-commit <릴리스 커밋> --image-digest vllm=sha256:<digest>
 sha256sum /srv/shipcoat/bundle/spark-v6.1-fp8/BUNDLE_MANIFEST.json   # §1에서 따로 받은 값과 비교
@@ -164,15 +183,33 @@ sha256sum /srv/shipcoat/bundle/spark-v6.1-fp8/BUNDLE_MANIFEST.json   # §1에서
 ## 4. `.env`와 compose 검증
 
 ```bash
-cd deploy/spark && cp .env.example .env    # .env는 커밋하지 않는다
-# 채울 값: BUNDLE_DIR, RESULTS_DIR, APP_UID/APP_GID, CODE_COMMIT, VLLM_IMAGE(@digest), VLLM_API_KEY
-mkdir -p "$RESULTS_DIR" && sudo chown "$APP_UID:$APP_GID" "$RESULTS_DIR"
+cd "$SPARK_DIR"
+# 아래 경로는 실제 반입 위치로 맞춘다. .env에도 동일한 값을 작성한다.
+export BUNDLE_DIR=/srv/shipcoat/bundle/spark-v6.1-fp8
+export RESULTS_DIR=/srv/shipcoat/results
+export APP_UID=10001 APP_GID=10001
+export CODE_COMMIT="$(git rev-parse HEAD)"
+# .env에 VLLM_IMAGE(@digest), 필요한 경우 VLLM_API_KEY를 작성한다.
+# 공개 범위는 명시적으로 제한한다(Compose의 web 기본값은 0.0.0.0이다).
+export WEB_BIND=127.0.0.1 COPILOT_BIND=127.0.0.1 VLLM_BIND=127.0.0.1
+# 위 세 BIND 값도 .env에 기록하여 새 세션에서 재기동해도 유지한다.
+test -d "$BUNDLE_DIR/output/merged" || { echo '번들 반입을 먼저 완료하세요'; exit 2; }
+sudo mkdir -p "$RESULTS_DIR"
+sudo chown "$APP_UID:$APP_GID" "$RESULTS_DIR"
 # 없는 마운트 원본을 docker가 root 소유로 만들지 않게 미리 만든다
 mkdir -p "$BUNDLE_DIR/output/expert_reference" "$BUNDLE_DIR/data/eval" "$BUNDLE_DIR/config"
 docker compose config -q && echo COMPOSE_OK
 ```
 
-`COPILOT_BIND`나 `VLLM_BIND`를 `0.0.0.0`으로 열 경우 `VLLM_API_KEY`를 설정한다. 이 키는 vLLM이 환경 변수로 읽고, agent-api는 `llm.api_key_env`로 읽는다.
+`VLLM_API_KEY`는 vLLM upstream 인증용이며 웹·copilot API의 사용자 인증을 제공하지 않는다.
+nginx는 `/api/` 전체를 전달하므로 agent-api 포트만 loopback으로 제한해서는 충분하지 않다.
+이번 Tailscale 배포에서는 세 BIND를 위와 같이 제한하고 개발 PC에서
+`ssh -N -L 8080:127.0.0.1:8080 keti@spark-8bb9`로 연결한 뒤 `http://127.0.0.1:8080`에 접속한다.
+외부 직접 공개는 접근 정책 또는 인증 프록시를 별도로 검증한 뒤 진행한다.
+
+셸의 export 값은 `.env`보다 우선한다. 경로를 바꾸는 롤백에서는 셸과 `.env`를 함께 갱신한다.
+릴리스 전 이미지의 `SHIPCOAT_CODE_COMMIT`, 번들의 `code_commit`, 실제 배포 코드가 같아야 한다.
+이전 커밋으로 만든 번들은 실제 릴리스에 맞춰 매니페스트를 다시 생성·검증한다.
 
 **합격 기준**
 
@@ -437,7 +474,17 @@ vLLM #37431 계열 크래시(SM121에서 장시간 운용 중 엔진이 종료�
 2. **2단계**(1단계가 inconclusive일 때만): 양측을 각 18회로 늘린다. 1단계 실행을 포함하고 추가분만 돌린다. 같은 규칙을 `--min-runs 18`로 한 번 더 적용하고 그 결과로 확정한다. 보고서 `stage`는 양측 min(n) ≥ `--target-runs`(18)이면 2다.
 3. 2단계에서도 inconclusive면 **판정 불가 — 사용자 결정**으로 기록한다(exit 3 그대로).
 
-한계: 같은 규칙을 최대 두 번 확인하고 2단계 표본은 1단계 표본을 포함하므로 1종 오류가 명목 5%보다 조금 커진다. 확인이 두 번뿐이라 작다고 보고 **보정하지 않는다**.
+한계: 단계별 양측 95% 구간이 전체 절차의 동시 95% 포함확률을 보장하지는 않는다.
+통과 경계는 단측 2.5%이며, 각 단계의 검정이 유효하고 사전에 고정한 두 시점에서만 판정하면
+오통과 확률의 합집합 상한은 5%다. 별도 순차 보정은 적용하지 않는다.
+9~17회 중간 판정이나 결과를 보고 반복 수를 늘리는 세 번째 판정은 금지한다.
+18회는 현재 SD를 이용한 정규 근사 표본 수이며, 판정 성공이나 검정력 80%를 보장하지 않는다.
+
+**후보 동결:** 1단계 전에 코드 커밋, 이미지 digest, 모델·토크나이저·RAG·평가 데이터 해시,
+샘플링·MTP·서빙 설정과 평가기 버전을 기록한다. 2단계는 같은 후보일 때만 기존 결과에 추가한다.
+하나라도 달라지면 기존 결과와 섞지 않고 새 후보 디렉터리에서 1단계를 시작한다.
+후보 변경 후 재시험은 새 실험으로 기록하며 여러 후보 중 통과한 것만 고른 결과를 원래 두 단계의 오류율로 설명하지 않는다.
+현재 러너는 동일성을 자동 검사하지 않으므로 실행 전 수동 대조가 필수다.
 
 ### 1단계
 
@@ -499,7 +546,8 @@ echo "finished_at: $(date -u +%FT%TZ)" >> "$OUT/RUN_INFO.txt"
 ```bash
 rsync -a --include '*/' --include 'agentic_eval_results.csv' --include 'RUN_INFO.txt' --exclude '*' \
   a40:/data/ship-paint-ai/output/eval_results/qwen36_27b_v6_1_nf4_baseline_965549e/ "$RESULTS_DIR/baseline_nf4_965549e/"
-# 채점 CSV가 있는 seed_42..49는 건너뛰고 seed_50..59만 돈다. 커밋이 1단계와 다르면 RUN_NAME을 1단계 이름으로 준다.
+# 후보 동결 기록이 모두 동일한지 먼저 확인한다. 다르면 이 명령으로 이어 돌리지 않는다.
+# 동일 후보의 seed_42..49만 재사용하고 seed_50..59를 추가한다.
 RUNS=18 RUN_NAME=qwen36_27b_v6_1_fp8_spark_<commit7> scripts/run_fp8_gate.sh
 python3 scripts/quality_gate.py --baseline-root "$RESULTS_DIR/baseline_nf4_965549e" \
   --candidate-root "$RESULTS_DIR/qwen36_27b_v6_1_fp8_spark_<commit7>" --delta 0.2 --min-runs 18 --target-runs 18 \
@@ -517,19 +565,22 @@ python3 scripts/quality_gate.py --baseline-root "$RESULTS_DIR/baseline_nf4_96554
 1. `--seed`는 torch 시드만 고정한다. openai 백엔드는 vLLM 요청에 `seed`를 보내지 않는다. 그래서 후보의 `seed_<n>`은 재현 가능한 시드가 아니라 **seed가 요청에 전달되지 않는 독립 반복** 번호다. 게이트는 실행 평균들을 독립 표본으로 비교(Welch)하므로 판정은 가능하지만, 문항별로 seed끼리 짝지어 비교하는 것은 의미가 없다.
 2. 기준선은 HF NF4(in-process), 후보는 vLLM FP8(HTTP)이다. 게이트는 양자화만의 차이가 아니라 서빙 스택 전체의 차이를 잰다.
 3. 문항별 thinking 사용 여부(`_should_enable_thinking`)와 MCP pose 기준 데이터 부재는 양쪽이 같다.
-4. 단계 규칙의 반복 확인(최대 2회)에 따른 1종 오류 증가는 보정하지 않았다(위 판정 규칙).
+4. 단계별 95% 구간은 동시 신뢰구간이 아니다. 사전에 정한 8회·18회의 두 판정만 허용한다(위 판정 규칙).
+5. 현재 CLI는 잘못된 점수·CSV와 일부 잘못된 인자에서 traceback/exit 1을 내며, 비유한 Δ를 거부하지 못한다.
+   `--delta 0.2 --target-runs 18`을 고정하고 공식 평가기의 변경되지 않은 CSV만 사용한다.
+   입력 검증 보완 전에는 종료코드만으로 자동 승인·롤백하지 않는다. traceback은 입력/실행 오류로 처리한다.
 
 **합격 기준**
 
 - 확정 단계의 `quality_gate.py` exit 0: `verdict: "pass"`, CI 하한(`ci_low`) > −0.2.
-- exit 1(fail)은 불합격 확정이다. 1단계 exit 3이면 2단계로 간다. 2단계 exit 3은 판정 불가로 기록하고 사용자가 결정한다.
+- exit 1과 정상 JSON의 `verdict: "fail"`이 함께 있을 때 불합격 확정이다. traceback이나 JSON 누락은 판정 실패가 아니라 실행 오류다. 1단계 exit 3이면 2단계로 간다. 2단계 exit 3은 판정 불가로 기록하고 사용자가 결정한다.
 - exit 2는 입력 문제다. 각 측 `--min-runs` 이상, 각 30문항, 문항 집합 동일, seed 디렉터리마다 CSV 1개여야 한다. 고친 뒤 같은 단계를 다시 판정한다.
 - 보고서 JSON의 `stage`, `n_baseline`, `n_candidate`, `difference`, `se`, `df`, `t_crit`, `ci_low`, `ci_high`, `delta`, `verdict`, `decision`, `required_runs_estimate`를 기록하고, `per_question` 하위 항목(가장 크게 떨어진 문항)을 검토해 기록한다.
 
 ## 18. 롤백 (BF16)
 
 1. 번들에 BF16을 넣는다. §1에서 `--with-bf16`으로 만든다(`prepare_bundle.py`는 비어 있지 않은 디렉터리를 거부하므로 처음부터 포함한다). 또는 `--skip-fp8 --with-bf16`으로 별도 번들을 만든다.
-2. 번들을 검증한다: `bundle_manifest.py verify --model bf16`. 합격 기준은 §3과 같다.
+2. 별도 BF16 번들이면 먼저 `export BUNDLE_DIR=/srv/shipcoat/bundle/spark-v6.1-bf16`으로 실제 경로를 지정하고 `.env`의 `BUNDLE_DIR`도 바꾼다. 결합 번들이면 기존 경로를 유지한다. §4의 마운트 원본 디렉터리·권한을 새 번들에서도 확인한다. `python3 "$SPARK_DIR/scripts/bundle_manifest.py" verify --bundle-dir "$BUNDLE_DIR" --model bf16`으로 검증한다. 합격 기준은 §3과 같다.
 3. 롤백 설정을 만든다. served name과 tokenizer_path만 바꾼다.
    ```bash
    sudo chown "$APP_UID:$APP_GID" "$BUNDLE_DIR/config"
@@ -544,10 +595,10 @@ python3 scripts/quality_gate.py --baseline-root "$RESULTS_DIR/baseline_nf4_96554
    ENABLE_MTP=0
    ```
    BF16 가중치는 약 52GB다. 로그의 KV 캐시 크기를 보고 `GPU_MEMORY_UTILIZATION`을 조정한다(**미확인**).
-5. 재생성: `docker compose up -d --force-recreate vllm agent-api`
+5. `docker compose config -q` 확인 후 재생성: `docker compose up -d --force-recreate vllm agent-api mcp` (별도 번들일 때 MCP 기준 데이터 마운트도 갱신).
 6. §6, §7, §9, §10, §11을 반복한다. 합격 기준은 각 절과 같고, served name만 `-bf16`이다.
 
-FP8로 돌아갈 때는 `.env`를 되돌리고 5를 반복한다. 이미지 롤백은 이전 digest를 `.env`에 넣거나 보관한 `docker save` 묶음을 `docker load`한다.
+FP8로 돌아갈 때는 `.env`와 셸에 export한 `BUNDLE_DIR`를 원래 값으로 되돌리고 5를 반복한다. 이미지 롤백은 이전 digest를 `.env`에 넣거나 보관한 `docker save` 묶음을 `docker load`한다.
 
 ## 19. 미확인 항목
 
