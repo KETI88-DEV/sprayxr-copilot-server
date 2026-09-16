@@ -15,6 +15,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 
 level_mesh = importlib.import_module("level_mesh")
+world_axes = importlib.import_module("world_axes")
 
 from trainer.pose_lab import composite, service  # noqa: E402
 from trainer.pose_lab.tests import test_scoring_isolation as isolation  # noqa: E402
@@ -120,3 +121,73 @@ def test_surface_hits_are_raw_hits_on_the_real_L6_mesh() -> None:
     grid_distance, _r, _c = geometry.nearest(grid)
     assert float(grid_distance.max()) * 1000.0 > 1.0  # 격자점은 표면 점이 아니다(이 테스트가 무엇을 가르는지)
 
+
+
+# --- D3 바닥면 ------------------------------------------------------------------
+
+
+def _slab(bottom: float, top: float, half: float = 1.0) -> composite.MeshGeometry:
+    """수평 윗면·아랫면과 수직 옆면 네 장을 가진 상자. 수직축은 `world_axes.UP_INDEX`다."""
+    up = world_axes.UP_INDEX
+    side_a, side_b = world_axes.HORIZONTAL_INDICES
+
+    def point(a: float, b: float, v: float) -> list[float]:
+        p = [0.0, 0.0, 0.0]
+        p[side_a], p[side_b], p[up] = a, b, v
+        return p
+
+    vertices: list[list[float]] = []
+    triangles: list[list[int]] = []
+    for level in (bottom, top):
+        base = len(vertices)
+        vertices += [
+            point(-half, -half, level),
+            point(half, -half, level),
+            point(half, half, level),
+            point(-half, half, level),
+        ]
+        triangles += [[base, base + 1, base + 2], [base, base + 2, base + 3]]
+    # 옆면(수직) 한 장 — 수평면만 고르는지 가른다.
+    base = len(vertices)
+    vertices += [point(-half, -half, bottom), point(half, -half, bottom), point(half, -half, top)]
+    triangles += [[base, base + 1, base + 2]]
+    return composite.MeshGeometry.from_mesh(vertices, triangles)
+
+
+def test_floor_vertical_is_the_top_of_the_lowest_near_horizontal_face() -> None:
+    """바닥면 = 수평에 가까운 면 중 **가장 낮은** 면의 최고점. 위 선반이나 옆면을 고르면 안 된다."""
+    geometry = _slab(3.5, 5.5)
+    assert composite.floor_vertical(geometry) == 3.5
+    # 수평면이 하나도 없으면(옆면만) 바닥을 지어내지 않는다.
+    up = world_axes.UP_INDEX
+    side_a, side_b = world_axes.HORIZONTAL_INDICES
+
+    def point(a: float, b: float, v: float) -> list[float]:
+        p = [0.0, 0.0, 0.0]
+        p[side_a], p[side_b], p[up] = a, b, v
+        return p
+
+    wall = composite.MeshGeometry.from_mesh(
+        [point(-1.0, 0.0, 0.0), point(1.0, 0.0, 0.0), point(1.0, 0.0, 2.0)], [[0, 1, 2]]
+    )
+    assert composite.floor_vertical(wall) is None
+    assert composite.floor_vertical(None) is None
+
+
+def test_floor_vertical_follows_up_index_not_a_hardcoded_axis(monkeypatch) -> None:  # noqa: ANN001
+    """수직축은 `world_axes.UP_INDEX` 하나에서 온다 — 축을 바꾸면 바닥값이 따라 움직인다."""
+    before = composite.floor_vertical(_slab(3.5, 5.5))
+    monkeypatch.setattr(world_axes, "UP_INDEX", 2)
+    after = composite.floor_vertical(_slab(3.5, 5.5))
+    assert before == 3.5 and after == 3.5
+
+
+def test_floor_vertical_on_the_three_verified_levels() -> None:
+    """실데이터: 검증된 세 레벨의 바닥면이 거의 같은 높이다(시험편이 같은 바닥에 서 있다)."""
+    floors = {}
+    for level in ("1", "3", "6"):
+        placed = service.placed_mesh(level)
+        geometry = composite.MeshGeometry.from_mesh(placed.mesh.vertices, placed.mesh.triangles)
+        floors[level] = composite.floor_vertical(geometry)
+    assert all(value is not None for value in floors.values()), floors
+    assert max(floors.values()) - min(floors.values()) < 0.1, floors

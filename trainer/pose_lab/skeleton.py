@@ -290,16 +290,43 @@ PLACEHOLDER_LEG_CHAIN: Final[tuple[tuple[str, str, str, str], ...]] = (
     ("RightThigh", "RightCalf", "RightFoot", "RightToe"),
 )
 
+# 바닥 맞춤(D3). 메시가 있는 레벨에서는 자리표시 발을 `composite.floor_vertical`이 고른 바닥면 위에
+# 세운다 — 리그 길이 그대로 내리면 레벨 3에서 발이 수평판 0.52m 아래로 내려가 판을 뚫고 나온 것처럼
+# 보였다. 엉덩이 관절은 배치된 골반에 붙어 있으므로 움직일 수 없다. 그래서 **자리표시 다리의 길이만**
+# 바닥까지 늘리거나 줄인다(허벅지·종아리 같은 비율). 길이가 리그의 이 범위를 벗어나야 닿는다면 맞추지
+# 않는다 — 그때는 바닥을 잘못 고른 것이고, 다리를 0.1배로 접어 놓는 그림이 리그 길이보다 더 거짓말이다.
+# 발끝은 수평이라 배율을 받지 않는다. **이 다리는 맞춘 뒤에도 측정이 아니다.**
+PLACEHOLDER_SCALE_MIN: Final = 0.25
+PLACEHOLDER_SCALE_MAX: Final = 2.0
+
+
+@dataclass(frozen=True, slots=True)
+class PlaceholderLegs:
+    """곧게 선 자리표시 다리. 측정이 아니다 — `scale`·`floor_vertical`이 무엇을 했는지 드러낸다."""
+
+    joints: dict[str, Vec3]
+    scale: float  # 리그 허벅지·종아리 길이에 곱한 배율(1.0이면 리그 그대로)
+    floor_vertical: float | None  # 맞춘 바닥면의 월드 수직 높이. 맞추지 않았으면 None
+    floor_offered: float | None  # 바닥면을 받았는지(배율 한계로 거절했어도 값이 남는다)
+    snapped: bool
+
 
 def standing_legs(
     joints: Mapping[str, Vec3],
     offsets: Mapping[str, Vec3],
     forward: Sequence[float] | None,
-) -> dict[str, Vec3] | None:
-    """곧게 선 자리표시 다리 관절(월드). 엉덩이 관절이나 다리 오프셋이 없으면 None.
+    *,
+    floor: float | None = None,
+) -> PlaceholderLegs | None:
+    """곧게 선 자리표시 다리(월드). 엉덩이 관절이나 다리 오프셋이 없으면 None.
 
     `forward`는 발끝 방향 후보(월드)다. 수평 성분이 거의 없으면 발끝 관절을 싣지 않는다 — 방향을
     지어내지 않는다.
+
+    `floor`가 오면 발목을 그 높이에 맞추도록 허벅지·종아리 길이에 한 배율을 곱한다. 배율은 두 다리에
+    **같은 값**이다 — 다리마다 다른 배율을 주면 짝짝이 다리가 되어 자세로 읽힌다. 그 하나의 배율은
+    엉덩이가 가장 **낮은** 다리가 바닥에 닿도록 정한다(평균으로 정하면 낮은 쪽 발이 바닥 아래로
+    다시 내려간다). 나머지 발은 바닥 위에 살짝 뜬다 — 뚫고 나가는 것보다 뜨는 쪽이 낫다.
     """
     down = -np.array(world_axes.UP, dtype=float)
     up = -down
@@ -309,19 +336,44 @@ def standing_legs(
         f = f - float(np.dot(f, up)) * up
         if float(np.linalg.norm(f)) > 1e-6:
             heading = f / np.linalg.norm(f)
-    out: dict[str, Vec3] = {}
+    chain: list[tuple[str, str, str, str]] = []
     for hip, knee, ankle, toe in PLACEHOLDER_LEG_CHAIN:
         if hip not in joints or any(name not in offsets for name in (knee, ankle, toe)):
             return None
+        chain.append((hip, knee, ankle, toe))
+
+    scale = 1.0
+    snapped = False
+    if floor is not None:
+        ratios = [
+            (float(np.dot(np.array(joints[hip], dtype=float), up)) - floor)
+            / (math.hypot(*offsets[knee]) + math.hypot(*offsets[ankle]))
+            for hip, knee, ankle, _toe in chain
+            if math.hypot(*offsets[knee]) + math.hypot(*offsets[ankle]) > 1e-9
+        ]
+        if ratios:
+            candidate = min(ratios)
+            if PLACEHOLDER_SCALE_MIN <= candidate <= PLACEHOLDER_SCALE_MAX:
+                scale = candidate
+                snapped = True
+
+    out: dict[str, Vec3] = {}
+    for hip, knee, ankle, toe in chain:
         h = np.array(joints[hip], dtype=float)
-        k = h + down * math.hypot(*offsets[knee])
-        a = k + down * math.hypot(*offsets[ankle])
+        k = h + down * math.hypot(*offsets[knee]) * scale
+        a = k + down * math.hypot(*offsets[ankle]) * scale
         out[hip] = _as_tuple(h)
         out[knee] = _as_tuple(k)
         out[ankle] = _as_tuple(a)
         if heading is not None:
             out[toe] = _as_tuple(a + heading * math.hypot(*offsets[toe]))
-    return out
+    return PlaceholderLegs(
+        joints=out,
+        scale=scale,
+        floor_vertical=floor if snapped else None,
+        floor_offered=floor,
+        snapped=snapped,
+    )
 
 
 def _as_matrix(m: np.ndarray) -> Matrix:

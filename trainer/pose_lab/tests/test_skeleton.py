@@ -192,8 +192,11 @@ def test_standing_legs_hang_along_gravity_with_rig_bone_lengths() -> None:
     up = np.array(world_axes.UP, dtype=float)
     joints = {"LeftThigh": (0.3, 1.1, 0.2), "RightThigh": (0.1, 1.05, 0.25)}
     forward = (1.0, 0.7, 0.5)  # 수직 성분은 버린다
-    legs = skeleton.standing_legs(joints, OFFSETS, forward)
-    assert legs is not None
+    result = skeleton.standing_legs(joints, OFFSETS, forward)
+    assert result is not None
+    # 메시(바닥)를 주지 않으면 리그 길이 그대로다 — 배율 1.0, 맞춤 없음.
+    assert result.scale == 1.0 and result.snapped is False and result.floor_offered is None
+    legs = result.joints
     for hip, knee, ankle, toe in skeleton.PLACEHOLDER_LEG_CHAIN:
         assert legs[hip] == joints[hip]
         for a, b, child in ((hip, knee, knee), (knee, ankle, ankle)):
@@ -205,6 +208,6 @@ def test_standing_legs_hang_along_gravity_with_rig_bone_lengths() -> None:
         assert abs(float(np.dot(foot, up))) < 1e-12
     # 수평 성분이 없는 전방이면 발끝 방향을 지어내지 않는다.
     no_toe = skeleton.standing_legs(joints, OFFSETS, tuple(up))
-    assert no_toe is not None and "LeftToe" not in no_toe and "RightToe" not in no_toe
+    assert no_toe is not None and "LeftToe" not in no_toe.joints and "RightToe" not in no_toe.joints
     assert skeleton.standing_legs({"LeftThigh": (0.0, 0.0, 0.0)}, OFFSETS, forward) is None
 

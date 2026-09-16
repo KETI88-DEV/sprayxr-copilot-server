@@ -29,6 +29,7 @@ build_spread_reference = importlib.import_module("build_spread_reference")
 level_mesh = importlib.import_module("level_mesh")
 pose_fk_csv = importlib.import_module("pose_fk_csv")
 simulator_csv = importlib.import_module("simulator_csv")
+world_axes = importlib.import_module("world_axes")
 
 from trainer.pose_lab import composite, instructions, orientation, skeleton
 from trainer.pose_lab.spread_reference import Resolved, SpreadReference
@@ -572,6 +573,16 @@ LEGS_HIDDEN_NOTE: Final = (
     "툴바 '다리(IK)'로만 봅니다."
 )
 LEGS_SHOWN_NOTE: Final = LEGS_PLACEHOLDER_PREFIX + " — 시뮬레이터 IK 다리는 툴바 '다리(IK)'로 봅니다."
+# 바닥 맞춤 고지(D3). 무엇을 바닥으로 골랐는지·다리 길이를 얼마나 바꿨는지를 화면이 말한다.
+LEGS_FLOOR_NOTE: Final = (
+    " 발은 벽 메시의 바닥면(수평에 가까운 면 중 가장 낮은 면, 수직 {floor:.2f}m)에 세웠고 "
+    "자리표시 다리 길이를 리그의 {scale:.2f}배로 맞췄습니다 — 맞춘 뒤에도 측정이 아닙니다."
+)
+LEGS_FLOOR_SKIPPED_NOTE: Final = (
+    " 벽 메시의 바닥면(수직 {floor:.2f}m)에 세우려면 자리표시 다리를 리그의 {scale:.2f}배로 바꿔야 해 "
+    "맞추지 않고 리그 길이 그대로 내렸습니다."
+)
+LEGS_NO_FLOOR_NOTE: Final = " 이 레벨은 벽 메시가 없어 바닥에 맞추지 않고 리그 길이로 내렸습니다."
 LEGS_PICKED_NOTE: Final = (
     LEGS_PLACEHOLDER_PREFIX
     + " — 툴바 '다리(IK)'의 IK 다리가 해부학 범위 안인 프레임(분사 구간 가운데에서 {k}프레임)을 대표로 골랐습니다."
@@ -746,6 +757,21 @@ def _skeleton_failure(reason: str, representative: Representative | None = None)
     )
 
 
+def _floor_scale_wanted(
+    hips: Sequence[Vec3], offsets: Mapping[str, Vec3], floor: float
+) -> float:
+    """바닥에 닿으려면 자리표시 다리에 곱해야 했을 배율. 고지 문구에만 쓴다(`skeleton.standing_legs`와 같은 식)."""
+    ratios = [
+        (world_axes.vertical_of(tuple(hip)) - floor)
+        / (math.hypot(*offsets[knee]) + math.hypot(*offsets[ankle]))
+        for hip, (_name, knee, ankle, _toe) in zip(hips, skeleton.PLACEHOLDER_LEG_CHAIN)
+        if knee in offsets
+        and ankle in offsets
+        and math.hypot(*offsets[knee]) + math.hypot(*offsets[ankle]) > 1e-9
+    ]
+    return min(ratios) if ratios else float("nan")
+
+
 def _torso_length_m(offsets: Mapping[str, Vec3]) -> float:
     return sum(math.hypot(*offsets[name]) for name in ("Spine", "Chest", "Head") if name in offsets)
 
@@ -759,6 +785,7 @@ def _fit_view(
     grip_limit_m: Mapping[str, float],
     *,
     chosen: SkeletonFrame | None = None,
+    floor: float | None = None,
 ) -> dict[str, object]:
     gravity = placed.gravity_correction_deg
     faded = gravity > FADE_GRAVITY_DEG
@@ -773,16 +800,29 @@ def _fit_view(
     hit = getattr(representative.frame, "hit", None)
     pelvis = placed.joints.get("Pelvis")
     forward = None if hit is None or pelvis is None else [hit[i] - pelvis[i] for i in range(3)]
-    placeholder = skeleton.standing_legs(placed.joints, offsets, forward) if legs is not None else None
+    placeholder = (
+        skeleton.standing_legs(placed.joints, offsets, forward, floor=floor) if legs is not None else None
+    )
     if legs is not None:
         if placeholder is None:
             notes.append(LEGS_IK_ONLY_NOTE)
-        elif not legs.plausible:
-            notes.append(LEGS_HIDDEN_NOTE)
-        elif chosen is not None and chosen.offset_frames > 0:
-            notes.append(LEGS_PICKED_NOTE.format(k=chosen.offset_frames))
         else:
-            notes.append(LEGS_SHOWN_NOTE)
+            if not legs.plausible:
+                note = LEGS_HIDDEN_NOTE
+            elif chosen is not None and chosen.offset_frames > 0:
+                note = LEGS_PICKED_NOTE.format(k=chosen.offset_frames)
+            else:
+                note = LEGS_SHOWN_NOTE
+            # 바닥에 맞췄는지·왜 못 맞췄는지는 같은 줄에서 말한다 — note_keys가 "legs" 하나로 남는다.
+            if placeholder.snapped:
+                note += LEGS_FLOOR_NOTE.format(floor=placeholder.floor_vertical, scale=placeholder.scale)
+            elif placeholder.floor_offered is not None:
+                hips = [placed.joints[hip] for hip, *_ in skeleton.PLACEHOLDER_LEG_CHAIN if hip in placed.joints]
+                wanted = _floor_scale_wanted(hips, offsets, placeholder.floor_offered)
+                note += LEGS_FLOOR_SKIPPED_NOTE.format(floor=placeholder.floor_offered, scale=wanted)
+            else:
+                note += LEGS_NO_FLOOR_NOTE
+            notes.append(note)
         note_keys.append("legs")
     notes.append(
         f"이 CSV 리그에는 목·윗가슴 관절이 없고 골반→머리가 {_torso_length_m(offsets):.2f}m라 "
@@ -851,7 +891,9 @@ def _fit_view(
             "searched_frames": chosen.searched,
             # 기본 표시: 곧게 선 자리표시 다리(측정 아님). 못 세우면 범위 안 IK 다리, 그것도 아니면 숨김.
             "display_default": "placeholder" if placeholder is not None else ("ik" if legs.plausible else "hidden"),
-            "placeholder_joints": None if placeholder is None else {k: list(v) for k, v in placeholder.items()},
+            "placeholder_joints": None
+            if placeholder is None
+            else {k: list(v) for k, v in placeholder.joints.items()},
             "placeholder_bones": None
             if placeholder is None
             else [["Pelvis", hip] for hip, *_ in skeleton.PLACEHOLDER_LEG_CHAIN]
@@ -859,8 +901,12 @@ def _fit_view(
                 [a, b]
                 for chain in skeleton.PLACEHOLDER_LEG_CHAIN
                 for a, b in zip(chain, chain[1:])
-                if a in placeholder and b in placeholder
+                if a in placeholder.joints and b in placeholder.joints
             ],
+            # 바닥 맞춤(D3). 값이 있어도 자리표시는 측정이 아니다.
+            "floor_vertical": None if placeholder is None else placeholder.floor_vertical,
+            "placeholder_scale": None if placeholder is None else placeholder.scale,
+            "placeholder_snapped": None if placeholder is None else placeholder.snapped,
         },
         # IK 다리를 기본으로 켜는가. 자리표시 다리가 있으면 IK 다리는 툴바로만 켠다.
         "legs_visible_default": bool(legs is not None and legs.plausible and placeholder is None),
@@ -871,6 +917,7 @@ def skeleton_block(
     raw: RawPass,
     representative: Representative | None = None,
     mounts_table: MountsTable | None = None,
+    geometry: composite.MeshGeometry | None = None,
 ) -> SkeletonResult:
     """대표 프레임 하나에 전신 FK 스켈레톤을 세운다(`skeleton.place_oriented`, M6).
 
@@ -913,7 +960,16 @@ def skeleton_block(
     return SkeletonResult(
         joints={name: list(position) for name, position in placed.joints.items()},
         bones=[list(pair) for pair in simulator_csv.BONES],
-        fit=_fit_view(placed, representative, kind, mounts, offsets, table.grip_limit_m, chosen=chosen),
+        fit=_fit_view(
+            placed,
+            representative,
+            kind,
+            mounts,
+            offsets,
+            table.grip_limit_m,
+            chosen=chosen,
+            floor=composite.floor_vertical(geometry),
+        ),
         fit_reason=None,
         fit_note=None,
         markers={fit.point: fit.measured_marker for fit in placed.anchors},
@@ -1283,7 +1339,9 @@ def _attach_view(
     skeleton_ok = False
     skeleton_result: SkeletonResult | None = None
     if rep_ok:
-        skeleton_ok, skeleton_result = guarded("skeleton", skeleton_block, query_raw, representative)
+        skeleton_ok, skeleton_result = guarded(
+            "skeleton", skeleton_block, query_raw, representative, None, geometry
+        )
     if not skeleton_ok or skeleton_result is None:
         skeleton_result = _skeleton_failure("display_error", representative if rep_ok else None)
 

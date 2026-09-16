@@ -17,7 +17,7 @@ import math
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Final, Mapping, Sequence
 
 import numpy as np
 
@@ -26,6 +26,7 @@ if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
 
 measured_pose = importlib.import_module("measured_pose")
+world_axes = importlib.import_module("world_axes")
 
 Vec3 = tuple[float, float, float]
 
@@ -140,6 +141,29 @@ def _closest_points(p: np.ndarray, a: np.ndarray, b: np.ndarray, c: np.ndarray) 
         out[take] = choice[take]
         decided |= take
     return out
+
+
+# --- 바닥면(자리표시 다리를 세울 높이) --------------------------------------------------
+#
+# 자리표시 다리(`skeleton.standing_legs`)는 측정이 아니라 표시다. 그래도 레벨 3에서는 발이 수평판보다
+# 0.52m 아래로 내려가 판을 뚫고 나온 것처럼 보였다(실측: 발 수직 3.032m, 판 3.552m). 여기서 "바닥"을
+# 하나로 정한다 — **수평에 가까운 면(법선이 월드 수직축과 이룬 각 ≤ FLOOR_MAX_TILT_DEG) 중 가장 낮은
+# 면의 최고점**. 검증된 세 레벨에서 이 값은 L1 3.557m · L3 3.552m · L6 3.559m으로 거의 같다(시험편이
+# 같은 바닥에 서 있다는 것과 맞는다). "착탄점 아래에서 가장 높은 수평면"은 L6에서 4.33m(골반 4.085m
+# 보다 위)를 골라 다리를 거꾸로 세웠다 — 그래서 쓰지 않는다.
+FLOOR_MAX_TILT_DEG: Final = 30.0
+
+
+def floor_vertical(geometry: MeshGeometry | None) -> float | None:
+    """메시 바닥면의 월드 수직 높이. 수평에 가까운 면이 하나도 없으면 None."""
+    if geometry is None or len(geometry.normals) == 0:
+        return None
+    up = np.asarray(world_axes.UP, dtype=float)
+    horizontal = np.abs(geometry.normals @ up) >= math.cos(math.radians(FLOOR_MAX_TILT_DEG))
+    if not horizontal.any():
+        return None
+    tops = np.max(np.stack([geometry.a @ up, geometry.b @ up, geometry.c @ up], axis=1), axis=1)
+    return float(np.min(tops[horizontal]))
 
 
 def oriented_normal(geometry: MeshGeometry, row: int, toward: np.ndarray, at: np.ndarray) -> np.ndarray:

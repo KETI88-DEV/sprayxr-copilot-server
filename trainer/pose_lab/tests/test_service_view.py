@@ -34,10 +34,11 @@ rotation_math = importlib.import_module("rotation_math")
 world_axes = importlib.import_module("world_axes")
 measured_pose = importlib.import_module("measured_pose")
 
-from trainer.pose_lab import service, skeleton
+from trainer.pose_lab import composite, service, skeleton
 from trainer.pose_lab.skeleton import AnchorMount, Mounts
 from trainer.pose_lab.service import PassRef, RawPass
 from trainer.pose_lab.tests.test_app import FakeSource, QUERY, REFERENCE, _rows
+from trainer.pose_lab.tests import test_scoring_isolation as isolation
 
 # 뼈 길이(bind offset)는 프레임 불변이다 — `test_pose_fk_csv.OFFSETS`(실측치)와 같은
 # 값을 여기 다시 적는다. 임포트로 공유하지 않는 이유는 그 파일이 `trainer/scripts/tests`
@@ -737,7 +738,7 @@ def test_skeleton_frame_picks_the_nearest_frame_with_anatomical_legs(test_mounts
     # 기본 표시는 곧게 선 자리표시 다리다 — 범위 안 IK 다리도 툴바로만 켠다.
     assert block.fit["legs"]["display_default"] == "placeholder"
     assert block.fit["legs_visible_default"] is False
-    assert service.LEGS_PICKED_NOTE.format(k=3) in block.fit["notes"]
+    assert any(n.startswith(service.LEGS_PICKED_NOTE.format(k=3)) for n in block.fit["notes"])
     frame = chosen.representative.frame
     markers = {a["point"]: a["measured_marker"] for a in block.fit["anchors"]}
     assert markers["head"] == list(frame.head) and markers["right"] == list(frame.right)
@@ -752,7 +753,7 @@ def test_fit_hides_legs_by_default_when_no_frame_is_anatomical(test_mounts) -> N
     assert legs["joints"] == list(skeleton.LEG_JOINTS)
     assert legs["frame_offset"] == 0
     assert block.fit["frame_index"] == service.representative_frame(raw).frame.index
-    assert service.LEGS_HIDDEN_NOTE in block.fit["notes"]
+    assert any(n.startswith(service.LEGS_HIDDEN_NOTE) for n in block.fit["notes"])
     assert "아바타 추정" in block.fit["notes"][0] and "중력 방향" in block.fit["notes"][1]
 
 
@@ -877,3 +878,104 @@ def test_deviation_cm_is_the_local_delta_norm_in_centimetres() -> None:
     for delta in result["measured"]["deltas"]:
         expected = math.dist(delta["delta"], (0.0, 0.0, 0.0)) * 100.0
         assert math.isclose(delta["deviation_cm"], expected, rel_tol=1e-9)
+
+
+# --- D3 자리표시 다리 바닥 맞춤 ---------------------------------------------------
+
+
+def _floor_geometry(level: float, half: float = 4.0) -> composite.MeshGeometry:
+    """수평 상자 하나. **가장 낮은 수평면의 윗면**이 `level`이다 — `composite.floor_vertical`이 고르는 면.
+    0.02 m 위에 두 번째 수평면을 두어, 바닥이 더 높은 면이 아니라 가장 낮은 면에서 나오는지 가른다."""
+    up = world_axes.UP_INDEX
+    side_a, side_b = world_axes.HORIZONTAL_INDICES
+
+    def point(a: float, b: float, v: float) -> list[float]:
+        p = [0.0, 0.0, 0.0]
+        p[side_a], p[side_b], p[up] = a, b, v
+        return p
+
+    vertices: list[list[float]] = []
+    triangles: list[list[int]] = []
+    for v in (level, level + 0.02):
+        base = len(vertices)
+        vertices += [
+            point(-half, -half, v),
+            point(half, -half, v),
+            point(half, half, v),
+            point(-half, half, v),
+        ]
+        triangles += [[base, base + 1, base + 2], [base, base + 2, base + 3]]
+    return composite.MeshGeometry.from_mesh(vertices, triangles)
+
+
+def _placeholder_feet(fit: dict) -> list[float]:
+    placeholder = fit["legs"]["placeholder_joints"]
+    return [
+        world_axes.vertical_of(tuple(position))
+        for name, position in placeholder.items()
+        if name.endswith("Foot") or name.endswith("Toe")
+    ]
+
+
+def test_placeholder_feet_stand_on_the_mesh_floor_instead_of_punching_through(test_mounts) -> None:  # noqa: ANN001
+    """합성 입력으로 분기를 고정한다. 바닥 없이는 발이 바닥보다 아래로 내려가고(뚫는다), 바닥을 주면
+    가장 낮은 발이 정확히 바닥에 닿으며 어떤 발도 바닥 아래로 내려가지 않는다."""
+    rows, _middle = _rows_with_leg_poses(41, ())
+    raw = RawPass(rows=rows)
+    loose = service.skeleton_block(raw).fit
+    floor = min(_placeholder_feet(loose)) + 0.5  # 지금 발보다 0.5 m 위에 바닥을 둔다 → 뚫고 있다
+    assert loose["legs"]["floor_vertical"] is None
+    assert loose["legs"]["placeholder_scale"] == 1.0
+    assert min(_placeholder_feet(loose)) < floor - 0.49
+
+    snapped = service.skeleton_block(raw, geometry=_floor_geometry(floor)).fit
+    legs = snapped["legs"]
+    assert legs["placeholder_snapped"] is True
+    assert legs["floor_vertical"] == pytest.approx(floor)
+    feet = _placeholder_feet(snapped)
+    assert min(feet) == pytest.approx(floor, abs=1e-9)
+    assert min(feet) >= floor - 1e-9  # 어떤 발도 바닥 아래가 아니다
+    assert legs["placeholder_scale"] < 1.0
+    note = snapped["notes"][snapped["note_keys"].index("legs")]
+    assert service.LEGS_FLOOR_NOTE.format(floor=floor, scale=legs["placeholder_scale"]) in note
+    assert "측정이 아닙니다" in note and note.startswith(service.LEGS_PLACEHOLDER_PREFIX)
+    # 바닥에 맞춰도 실측 마커·대표 프레임은 그대로다 — 자리표시는 측정을 건드리지 않는다.
+    assert snapped["frame_index"] == loose["frame_index"]
+    assert [a["measured_marker"] for a in snapped["anchors"]] == [a["measured_marker"] for a in loose["anchors"]]
+
+
+def test_placeholder_legs_keep_rig_length_when_the_floor_needs_an_absurd_scale(test_mounts) -> None:  # noqa: ANN001
+    """바닥이 엉덩이 바로 아래(배율 한계 밖)면 맞추지 않고 리그 길이로 두고, 왜 안 맞췄는지 말한다."""
+    rows, _middle = _rows_with_leg_poses(41, ())
+    raw = RawPass(rows=rows)
+    loose = service.skeleton_block(raw).fit
+    hips = [loose["legs"]["placeholder_joints"][hip] for hip, *_ in skeleton.PLACEHOLDER_LEG_CHAIN]
+    floor = min(world_axes.vertical_of(tuple(hip)) for hip in hips) - 0.01
+    fit = service.skeleton_block(raw, geometry=_floor_geometry(floor)).fit
+    legs = fit["legs"]
+    assert legs["placeholder_snapped"] is False
+    assert legs["floor_vertical"] is None and legs["placeholder_scale"] == 1.0
+    assert legs["placeholder_joints"] == loose["legs"]["placeholder_joints"]
+    note = fit["notes"][fit["note_keys"].index("legs")]
+    assert "맞추지 않고 리그 길이 그대로 내렸습니다" in note and f"{floor:.2f}m" in note
+
+
+def test_placeholder_floor_note_says_there_is_no_mesh_when_the_level_has_none(test_mounts) -> None:  # noqa: ANN001
+    rows, _middle = _rows_with_leg_poses(41, ())
+    fit = service.skeleton_block(RawPass(rows=rows)).fit
+    note = fit["notes"][fit["note_keys"].index("legs")]
+    assert note.endswith(service.LEGS_NO_FLOOR_NOTE)
+    assert fit["legs"]["floor_vertical"] is None
+
+
+def test_real_pass_feet_stop_punching_through_the_level_3_plate() -> None:
+    """실데이터 L3: 바닥을 주기 전에는 발이 수평판 아래 0.5 m, 준 뒤에는 판 위에 선다."""
+    source, kwargs = isolation._source_for({"name": "real"})  # noqa: SLF001
+    raw = source.load(PassRef(worker="김경호", date="20250831", level="3", session="1000391_1", pass_index=0))
+    placed = service.placed_mesh("3")
+    geometry = composite.MeshGeometry.from_mesh(placed.mesh.vertices, placed.mesh.triangles)
+    floor = composite.floor_vertical(geometry)
+    before = min(_placeholder_feet(service.skeleton_block(raw).fit))
+    after = min(_placeholder_feet(service.skeleton_block(raw, geometry=geometry).fit))
+    assert before < floor - 0.4, (before, floor)
+    assert after == pytest.approx(floor, abs=1e-9)
