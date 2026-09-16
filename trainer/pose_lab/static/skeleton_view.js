@@ -41,6 +41,9 @@ const BONE_OPACITY_FADED = 0.45;
 // 자리표시 다리(측정 아님): 끊어 그린 실린더. 실선 뼈와 한눈에 구분되게.
 const PLACEHOLDER_DASH = 0.05;
 const PLACEHOLDER_GAP = 0.035;
+// 계산된 층(교정 후·예상)의 선. 실측 궤적의 실선과 한눈에 구분되게 끊어 그린다.
+const COMPUTED_DASH = 0.02;
+const COMPUTED_GAP = 0.02;
 const ARROW_SHAFT_RADIUS = 0.006;
 const ARROW_HEAD_RADIUS = 0.016;
 const HIT_MARKER_RADIUS = 0.018;
@@ -357,46 +360,114 @@ function mount(THREE, container) {
 
   // --- 검증 계측(헤드리스 브라우저가 읽는다) ---------------------------------------------
   // 몸통 마디: 라벨을 밀어낼 장애물이자, 라벨-몸통 겹침을 세는 대상.
+  // 몸통 **줄기**(골반-척추-가슴-머리)만. `torsoLabelOverlaps`가 세는 대상이 정확히 이 셋이다 —
+  // 팔까지 포함한 넓은 판정은 `limbScreenRects()`/`boneLabelOverlaps`가 따로 낸다.
   const TORSO_BONES = [["Pelvis", "Spine"], ["Spine", "Chest"], ["Chest", "Head"]];
   const TORSO_HALF_PX = 11;
   // 화살표 기둥 반두께(px). 기둥은 몸통보다 얇으니 몸통(11px)보다 좁게 잡는다.
   const ARROW_HALF_PX = 8;
+  // 팔·어깨 마디 반두께(px). 몸통 줄기보다 얇게 그려지므로 좁게 잡는다.
+  const LIMB_HALF_PX = 8;
+  // 보정 오프셋 선·어긋남 점선 반두께(px). 1px 가는 선이지만 글자 사이를 지나면 글자가 갈라져 보인다.
+  const THIN_LINE_HALF_PX = 5;
+  // 배지(.view3d-label-arrow) 반폭(px): 24px 원 + 1px 테두리. 중심거리 26px 검사는 대각선에서
+  // 모서리 겹침을 놓친다(검증 라운드: ④↔① 20.4px²) — 사각형으로 겹침을 본다.
+  const BADGE_HALF_PX = 13;
   const isVec3Like = (v) => v instanceof THREE.Vector3;
 
-  /** 몸통 마디를 화면 사각형 여러 개로 쪼갠다(라벨 회피용 장애물). */
+  /** 화면 선분 하나를 사각형 여러 개로 쪼갠다(라벨 회피용 장애물).
+   * 표본 수는 화면 길이에서 뽑는다 — 고정 步수(옛 코드: 팔 6步)는 긴 마디에서 사각형 사이에 틈을 남겨
+   * 라벨이 그 틈으로 뼈 위에 앉았다(840×1050의 '10.5cm' × LeftUpperArm>LeftForeArm). */
+  function segmentRects(p0, p1, half, into) {
+    const rects = into ?? [];
+    const steps = Math.max(2, Math.ceil(Math.hypot(p1.x - p0.x, p1.y - p0.y) / half));
+    for (let i = 0; i <= steps; i += 1) {
+      const t = i / steps;
+      const x = p0.x + (p1.x - p0.x) * t;
+      const y = p0.y + (p1.y - p0.y) * t;
+      rects.push({ x0: x - half, x1: x + half, y0: y - half, y1: y + half });
+    }
+    return rects;
+  }
+
+  /** 몸통 **줄기** 마디(골반-척추-가슴-머리)를 화면 사각형으로 쪼갠다. */
   function torsoScreenRects() {
     const joints = lastView?.layers?.query?.joints ?? {};
     const rects = [];
     for (const [a, b] of TORSO_BONES) {
       if (!isVec3(joints[a]) || !isVec3(joints[b])) continue;
-      const p0 = toPixel(new THREE.Vector3(...joints[a]));
-      const p1 = toPixel(new THREE.Vector3(...joints[b]));
-      const steps = 8;
-      for (let i = 0; i <= steps; i += 1) {
-        const t = i / steps;
-        const x = p0.x + (p1.x - p0.x) * t;
-        const y = p0.y + (p1.y - p0.y) * t;
-        rects.push({ x0: x - TORSO_HALF_PX, x1: x + TORSO_HALF_PX, y0: y - TORSO_HALF_PX, y1: y + TORSO_HALF_PX });
+      segmentRects(toPixel(new THREE.Vector3(...joints[a])), toPixel(new THREE.Vector3(...joints[b])), TORSO_HALF_PX, rects);
+    }
+    return rects;
+  }
+
+  /** 몸통 줄기를 뺀 **나머지 상체 마디**(어깨·팔·손)를 화면 사각형으로 쪼갠다.
+   * 다리는 뺀다 — 다리 표시 방식은 아직 정해지지 않았고, 다리를 장애물로 넣으면 라벨이 위로만 몰린다.
+   * 줄기만 장애물로 두면 거리 라벨이 팔뼈를 덮었다(검증 라운드: L3 '10.5cm' × LeftForeArm>LeftHand). */
+  function limbScreenRects() {
+    const joints = lastView?.layers?.query?.joints ?? {};
+    const bones = lastView?.layers?.query?.bones ?? [];
+    const legSet = new Set(lastView?.fit?.legs?.joints ?? []);
+    const stem = new Set(TORSO_BONES.map(([a, b]) => `${a}>${b}`));
+    const rects = [];
+    for (const [a, b] of bones) {
+      if (legSet.has(a) || legSet.has(b) || stem.has(`${a}>${b}`)) continue;
+      if (!isVec3(joints[a]) || !isVec3(joints[b])) continue;
+      segmentRects(toPixel(new THREE.Vector3(...joints[a])), toPixel(new THREE.Vector3(...joints[b])), LIMB_HALF_PX, rects);
+    }
+    return rects;
+  }
+
+  /** 교정 화살표 기둥(시작→끝)을 화살표별로 화면 사각형으로 쪼갠다.
+   * 반투명 라벨 띠가 기둥을 가로지르면 화살표가 끊겨 보인다(L6의 '보정 오프셋' 라벨).
+   * 배지는 **자기** 화살표 위에 앉아야 하므로 `n`으로 자기 기둥을 골라낼 수 있게 나눠 담는다. */
+  function arrowScreenRectsByN() {
+    const byN = [];
+    for (const entry of labelRegistry) {
+      if (entry.kind !== "badge" || !isVec3Like(entry.from) || !isVec3Like(entry.to)) continue;
+      byN.push({ n: entry.n, rects: segmentRects(toPixel(entry.from), toPixel(entry.to), ARROW_HALF_PX) });
+    }
+    return byN;
+  }
+
+  function arrowScreenRects() {
+    const rects = [];
+    for (const arrow of arrowScreenRectsByN()) rects.push(...arrow.rects);
+    return rects;
+  }
+
+  /** 보정 오프셋 선(관절→예측 마커)과 어긋남 점선(예측→실측)을 화면 사각형으로 쪼갠다.
+   * 검증 라운드에서 '보정 오프셋 0.57m(적합값)' 글자 **사이로** 바로 그 오프셋 선이 지나갔다 —
+   * 회피 장애물에 몸통·화살표 기둥은 있었지만 이 선들이 빠져 있었다. */
+  function thinLineScreenRects() {
+    const rects = [];
+    for (const anchor of lastView?.fit?.anchors ?? []) {
+      if (isVec3(anchor.joint_position) && isVec3(anchor.predicted_marker)) {
+        segmentRects(
+          toPixel(new THREE.Vector3(...anchor.joint_position)),
+          toPixel(new THREE.Vector3(...anchor.predicted_marker)),
+          THIN_LINE_HALF_PX, rects,
+        );
+      }
+      if (isVec3(anchor.predicted_marker) && isVec3(anchor.measured_marker)) {
+        segmentRects(
+          toPixel(new THREE.Vector3(...anchor.predicted_marker)),
+          toPixel(new THREE.Vector3(...anchor.measured_marker)),
+          THIN_LINE_HALF_PX, rects,
+        );
       }
     }
     return rects;
   }
 
-  /** 교정 화살표 기둥(시작→끝)을 화면 사각형 여러 개로 쪼갠다(라벨 회피용 장애물).
-   * 반투명 라벨 띠가 기둥을 가로지르면 화살표가 끊겨 보인다(L6의 '보정 오프셋' 라벨). */
-  function arrowScreenRects() {
+  /** 실측 마커 구체가 화면에서 차지하는 사각형. 라벨이 실측 부호를 스치면 안 된다
+   * (검증 라운드: L3에서 오프셋 라벨 아래 모서리가 왼손 실측 마커를 약 4px 스쳤다). */
+  function measuredMarkerScreenRects() {
     const rects = [];
-    for (const entry of labelRegistry) {
-      if (entry.kind !== "badge" || !isVec3Like(entry.from) || !isVec3Like(entry.to)) continue;
-      const p0 = toPixel(entry.from);
-      const p1 = toPixel(entry.to);
-      const steps = 12;
-      for (let i = 0; i <= steps; i += 1) {
-        const t = i / steps;
-        const x = p0.x + (p1.x - p0.x) * t;
-        const y = p0.y + (p1.y - p0.y) * t;
-        rects.push({ x0: x - ARROW_HALF_PX, x1: x + ARROW_HALF_PX, y0: y - ARROW_HALF_PX, y1: y + ARROW_HALF_PX });
-      }
+    for (const marker of markerRegistry) {
+      const px = toPixel(marker.center);
+      const half = screenDiameter(marker.center, MEASURED_MARKER_RADIUS) / 2;
+      rects.push({ x0: px.x - half, x1: px.x + half, y0: px.y - half, y1: px.y + half });
     }
     return rects;
   }
@@ -453,6 +524,20 @@ function mount(THREE, container) {
     return found;
   }
 
+  /** 계산된 층(교정 후·예상)의 표식이 채운 구가 아니라 윤곽선인지(범례 진실성).
+   * 범례 ②는 "실측은 … 층 색으로 채운 구체"라고 선언한다 — 계산값이 같은 부호를 쓰면 범례가 거짓이다.
+   * 표식이 하나도 없으면 null(판정 대상 없음). */
+  function computedLayerIsOutline() {
+    let markers = 0;
+    let outlines = 0;
+    layerGroups.corrected.traverse((child) => {
+      if (child.userData.kind !== "computed-layer-marker") return;
+      markers += 1;
+      if (child.material?.wireframe === true) outlines += 1;
+    });
+    return markers === 0 ? null : { markers, outlines, allOutline: markers === outlines };
+  }
+
   /** 스켈레톤 가슴(없으면 골반)의 화면 위치. 스켈레톤이 없으면 null. */
   function bodyScreenCenter() {
     const joints = lastView?.layers?.query?.joints ?? {};
@@ -472,15 +557,25 @@ function mount(THREE, container) {
       return shown;
     };
     let labelOverlaps = 0;
-    // 몸통 마디도 장애물이다 — 글자 라벨이 몸통 위에 앉으면 뼈도 글자도 못 읽는다(보정 오프셋 라벨).
+    // 몸통 줄기는 장애물이다 — 글자 라벨이 몸통 위에 앉으면 뼈도 글자도 못 읽는다(보정 오프셋 라벨).
     const torsoRects = torsoScreenRects();
+    // 어깨·팔·손 마디도 장애물이다(줄기만 넣었더니 거리 라벨이 팔뼈를 덮었다).
+    const limbRects = limbScreenRects();
     // 교정 화살표 기둥도 장애물이다 — 반투명 라벨 띠가 기둥을 가로지르면 화살표가 끊겨 보인다.
-    const arrowRects = arrowScreenRects();
+    const arrowsByN = arrowScreenRectsByN();
+    const arrowRects = [];
+    for (const arrow of arrowsByN) arrowRects.push(...arrow.rects);
+    // 보정 오프셋 선·어긋남 점선, 그리고 실측 마커 구체도 장애물이다.
+    const thinLineRects = thinLineScreenRects();
+    const markerRects = measuredMarkerScreenRects();
     // 글자 라벨은 몸통 화면 위치에서 **바깥쪽**으로 민다 — 몸 한가운데에 거리·오프셋 라벨이 쌓여 팔·몸통을
     // 가렸다(2라운드). 기준점은 스켈레톤 가슴(없으면 라벨 자리 그대로).
     const body = bodyScreenCenter();
     let torsoLabelOverlaps = 0;
+    let limbLabelOverlaps = 0;
     let arrowLabelOverlaps = 0;
+    let thinLineLabelOverlaps = 0;
+    let markerLabelOverlaps = 0;
     let labelsClamped = 0;
     for (const entry of labelRegistry) {
       if (entry.kind === "badge" || !visible(entry)) continue;
@@ -503,10 +598,13 @@ function mount(THREE, container) {
         const dy = Math.min(r.y1, o.y1) - Math.max(r.y0, o.y0);
         return sum + (dx > 0 && dy > 0 ? dx * dy : 0);
       }, 0);
-      const clashes = (r) => hits(r, obstacles) || hits(r, torsoRects) || hits(r, arrowRects);
-      // 가릴 때의 손해가 다르다: 몸통을 덮으면 뼈도 글자도 못 읽고, 화살표 기둥을 덮으면 교정 화살표가
-      // 끊겨 보인다. 앞 라벨끼리 겹치는 것은 그보다 가볍다.
-      const cost = (r) => 4 * area(r, torsoRects) + 2 * area(r, arrowRects) + area(r, obstacles);
+      const clashes = (r) => hits(r, obstacles) || hits(r, torsoRects) || hits(r, limbRects)
+        || hits(r, arrowRects) || hits(r, thinLineRects) || hits(r, markerRects);
+      // 가릴 때의 손해가 다르다: 몸통·팔을 덮으면 뼈도 글자도 못 읽고, 화살표 기둥을 덮으면 교정 화살표가
+      // 끊겨 보이며, 실측 마커를 덮으면 범례가 가리키는 바로 그 부호가 사라진다. 가는 오프셋 선과
+      // 앞 라벨끼리 겹치는 것은 그보다 가볍다.
+      const cost = (r) => 4 * area(r, torsoRects) + 3 * area(r, limbRects) + 2 * area(r, arrowRects)
+        + 2 * area(r, markerRects) + area(r, thinLineRects) + area(r, obstacles);
       // 캔버스 밖으로 밀려나면 글자가 잘린다 — 후보 자리마다 캔버스 안으로 되돌린 뒤에 점수를 매긴다.
       const { w: hostW, h: hostH } = hostSize();
       const fit = (xx, yy) => ({
@@ -541,48 +639,93 @@ function mount(THREE, container) {
       if (best.clamped) labelsClamped += 1;
       if (clashes(rect(x, y))) labelOverlaps += 1;
       if (hits(rect(x, y), torsoRects)) torsoLabelOverlaps += 1;
+      if (hits(rect(x, y), limbRects)) limbLabelOverlaps += 1;
       if (hits(rect(x, y), arrowRects)) arrowLabelOverlaps += 1;
+      if (hits(rect(x, y), thinLineRects)) thinLineLabelOverlaps += 1;
+      if (hits(rect(x, y), markerRects)) markerLabelOverlaps += 1;
       entry.el.style.left = `${x}px`;
       entry.el.style.top = `${y}px`;
       obstacles.push(rect(x, y));
     }
+    // 이름이 재는 것과 정확히 같아야 한다(검증 라운드 지적): `torsoLabelOverlaps`는 줄기 셋만,
+    // `boneLabelOverlaps`는 다리를 뺀 **모든** 뼈다. 배지는 글자 라벨과 따로 센다(아래).
     debugLive.labelOverlaps = labelOverlaps;
     debugLive.torsoLabelOverlaps = torsoLabelOverlaps;
+    debugLive.limbLabelOverlaps = limbLabelOverlaps;
+    debugLive.boneLabelOverlaps = torsoLabelOverlaps + limbLabelOverlaps;
     debugLive.arrowLabelOverlaps = arrowLabelOverlaps;
+    debugLive.offsetLineLabelOverlaps = thinLineLabelOverlaps;
+    debugLive.measuredMarkerLabelOverlaps = markerLabelOverlaps;
     debugLive.labelsClamped = labelsClamped;
     debugLive.upperBody = upperBodyScreen();
     debugLive.torsoSpan = torsoScreenSpan();
     debugLive.estimateHeadIsOutline = estimateHeadIsOutline();
-    const hitsObstacle = (x, y) => obstacles.some((r) => {
-      const nx = clamp(x, r.x0, r.x1);
-      const ny = clamp(y, r.y0, r.y1);
-      return Math.hypot(nx - x, ny - y) < 14;
-    });
+    debugLive.correctedLayerIsOutline = computedLayerIsOutline();
+    // 검증자가 **자기 손으로** 다시 투영할 수 있게 카메라 행렬과 캔버스 크기를 그대로 내보낸다.
+    // (구현이 낸 사각형·계수기를 믿지 않고 서버 페이로드에서 픽셀을 직접 얻는 길.)
+    camera.updateMatrixWorld();
+    debugLive.camera = {
+      projectionMatrix: camera.projectionMatrix.toArray(),
+      matrixWorldInverse: camera.matrixWorldInverse.toArray(),
+      host: hostSize(),
+    };
+    // 번호 배지. 옛 배치는 (1) 배지끼리를 중심거리 26px로만 봐서 대각선 모서리 겹침을 놓쳤고
+    // (2) 회피 탐색에서 **남의 화살표 기둥**을 아예 안 봤다(배지 ④가 화살표 ①·②의 기둥에 앉았다).
+    // 이제 사각형 겹침으로 보고, 자기 기둥만 빼고 남의 기둥도 장애물로 넣는다.
+    const badgeRect = (x, y) => ({ x0: x - BADGE_HALF_PX, x1: x + BADGE_HALF_PX, y0: y - BADGE_HALF_PX, y1: y + BADGE_HALF_PX });
+    const overlapArea = (r, list) => list.reduce((sum, o) => {
+      const dx = Math.min(r.x1, o.x1) - Math.max(r.x0, o.x0);
+      const dy = Math.min(r.y1, o.y1) - Math.max(r.y0, o.y0);
+      return sum + (dx > 0 && dy > 0 ? dx * dy : 0);
+    }, 0);
+    const overlaps = (r, list) => list.some((o) => r.x0 < o.x1 && r.x1 > o.x0 && r.y0 < o.y1 && r.y1 > o.y0);
+    const { w: badgeHostW, h: badgeHostH } = hostSize();
     const placedBadges = [];
+    const placedBadgeRects = [];
     let obstacleOverlaps = 0;
+    let badgeBadgeOverlaps = 0;
+    let badgeArrowOverlaps = 0;
     for (const entry of labelRegistry) {
       if (entry.kind !== "badge" || !visible(entry)) continue;
       const px = toPixel(entry.position);
-      let x = px.x;
-      let y = px.y;
       const a = toPixel(entry.from);
       const b = toPixel(entry.to);
       let dx = b.x - a.x;
       let dy = b.y - a.y;
       const len = Math.hypot(dx, dy);
       if (len < 1e-6) { dx = 0; dy = -1; } else { dx /= len; dy /= len; }
-      for (let step = 0; step < 10; step += 1) {
-        const clash = placedBadges.some((p) => Math.hypot(p.x - x, p.y - y) < BADGE_MIN_PX) || hitsObstacle(x, y);
-        if (!clash) break;
-        x += dx * BADGE_MIN_PX;
-        y += dy * BADGE_MIN_PX;
+      // 자기 기둥은 배지가 앉아야 할 자리다 — 장애물에서 뺀다.
+      const otherArrowRects = [];
+      for (const arrow of arrowsByN) if (arrow.n !== entry.n) otherArrowRects.push(...arrow.rects);
+      const badgeScore = (r) => 8 * overlapArea(r, placedBadgeRects) + 4 * overlapArea(r, otherArrowRects) + overlapArea(r, obstacles);
+      // 기둥을 따라 앞뒤로, 그리고 기둥에 수직으로 비켜 가며 훑는다. 기둥 방향만 쓰면 화살표 넷이 한
+      // 점에 모이는 자리(L6 오른손)에서 빠져나갈 데가 없다.
+      let best = null;
+      for (const along of [0, 1, -1, 2, -2, 3, -3, 4]) {
+        for (const side of [0, 1, -1, 2, -2]) {
+          const ux = px.x + dx * along * BADGE_MIN_PX - dy * side * BADGE_MIN_PX;
+          const uy = px.y + dy * along * BADGE_MIN_PX + dx * side * BADGE_MIN_PX;
+          const x = clamp(ux, BADGE_HALF_PX + 1, badgeHostW - BADGE_HALF_PX - 1);
+          const y = clamp(uy, BADGE_HALF_PX + 1, badgeHostH - BADGE_HALF_PX - 1);
+          const value = badgeScore(badgeRect(x, y));
+          if (best === null || value < best.value) best = { x, y, value };
+          if (value === 0) break;
+        }
+        if (best !== null && best.value === 0) break;
       }
-      if (hitsObstacle(x, y)) obstacleOverlaps += 1;
-      placedBadges.push({ n: entry.n, x, y });
-      entry.el.style.left = `${x}px`;
-      entry.el.style.top = `${y}px`;
+      const rect = badgeRect(best.x, best.y);
+      if (overlaps(rect, obstacles)) obstacleOverlaps += 1;
+      if (overlaps(rect, placedBadgeRects)) badgeBadgeOverlaps += 1;
+      if (overlaps(rect, otherArrowRects)) badgeArrowOverlaps += 1;
+      placedBadges.push({ n: entry.n, x: best.x, y: best.y });
+      placedBadgeRects.push(rect);
+      entry.el.style.left = `${best.x}px`;
+      entry.el.style.top = `${best.y}px`;
     }
+    // 이름이 재는 것과 같아야 한다: 아래 셋은 **배지** 전용 계수기다(글자 라벨은 위에서 따로 센다).
     debugLive.badgeObstacleOverlaps = obstacleOverlaps;
+    debugLive.badgeBadgeOverlaps = badgeBadgeOverlaps;
+    debugLive.badgeArrowOverlaps = badgeArrowOverlaps;
     debugLive.badgeCenters = placedBadges.map((p) => ({ n: p.n, x: Math.round(p.x * 10) / 10, y: Math.round(p.y * 10) / 10 }));
     debugLive.arrowConeScreenDiameters = coneRegistry.map((c) => screenDiameter(c.center, c.radius));
     const diameters = {};
@@ -599,7 +742,13 @@ function mount(THREE, container) {
   }
   requestAnimationFrame(frame);
 
-  function buildLayerGroup(layerData, weights, layerColor, labelPointNames) {
+  /** 층 궤적 하나를 그린다.
+   *
+   * `measured`는 이 층의 점이 관측인지 계산인지다 — 범례가 "실측 = 층 색으로 채운 구체"라고
+   * 선언했으므로, 계산된 층(교정 후·예상)이 같은 부호를 쓰면 범례가 거짓이 된다. 질의·기준 궤적은
+   * 같은 세 강체의 실측이라 채운 구를 쓰고, 교정 후 층은 **끊어 그린 선 + 속 빈(윤곽선) 표식**으로
+   * 그린다(추정 머리를 윤곽선 구로 바꾼 것과 같은 원칙). */
+  function buildLayerGroup(layerData, weights, layerColor, labelPointNames, measured) {
     const group = new THREE.Group();
     for (const name of Object.keys(layerData ?? {})) {
       // 착탄 격자(`hit`)는 호길이 리샘플이라 모서리를 가로지르면 벽에서 뜬다 — 선으로 그리지 않는다.
@@ -612,23 +761,36 @@ function mount(THREE, container) {
         .map((p) => new THREE.Vector3(p[0], p[1], p[2]));
       if (points.length === 0) continue;
 
-      const lineMaterial = new THREE.LineBasicMaterial({
-        color: layerColor,
-        transparent: true,
-        opacity: emph.opacity,
-      });
-      group.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), lineMaterial));
-
-      if (emph.showMarker) {
-        const markerGeometry = new THREE.SphereGeometry(0.004 * emph.width, 10, 6);
-        const markerMaterial = new THREE.MeshBasicMaterial({
+      const lineMaterial = measured === false
+        ? new THREE.LineDashedMaterial({
+          color: layerColor,
+          transparent: true,
+          opacity: emph.opacity,
+          dashSize: COMPUTED_DASH,
+          gapSize: COMPUTED_GAP,
+        })
+        : new THREE.LineBasicMaterial({
           color: layerColor,
           transparent: true,
           opacity: emph.opacity,
         });
+      const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), lineMaterial);
+      if (measured === false) line.computeLineDistances();
+      line.userData.kind = measured === false ? "computed-layer-line" : "measured-layer-line";
+      group.add(line);
+
+      if (emph.showMarker) {
+        const markerGeometry = new THREE.SphereGeometry(0.004 * emph.width * (measured === false ? 1.6 : 1), 10, 6);
+        const markerMaterial = new THREE.MeshBasicMaterial({
+          color: layerColor,
+          transparent: true,
+          opacity: emph.opacity,
+          wireframe: measured === false,
+        });
         for (const p of points) {
           const marker = new THREE.Mesh(markerGeometry, markerMaterial);
           marker.position.copy(p);
+          marker.userData.kind = measured === false ? "computed-layer-marker" : "measured-layer-marker";
           group.add(marker);
         }
         if (emph.showLabel && labelPointNames) {
@@ -1117,8 +1279,9 @@ function mount(THREE, container) {
   checkboxes.corrected.addEventListener("change", () => {
     layerGroups.corrected.visible = checkboxes.corrected.checked;
     dom.correctedNote.textContent = checkboxes.corrected.checked
-      ? "교정 후 층은 관측이 아니라 발부된 교정을 따랐을 때의 예상입니다."
+      ? "교정 후 층은 관측이 아니라 발부된 교정을 따랐을 때의 예상입니다 — 끊어 그린 선과 속 빈 표식으로 그립니다."
       : "";
+    if (container.__view3dDebug) container.__view3dDebug.correctedLayerIsOutline = computedLayerIsOutline();
   });
   checkboxes.wall.addEventListener("change", () => {
     if (meshObject) meshObject.visible = checkboxes.wall.checked;
@@ -1185,9 +1348,11 @@ function mount(THREE, container) {
     const joints = view.layers?.query?.joints ?? {};
     const hasSkeleton = Object.keys(joints).length > 0;
 
-    layerGroups.query.add(buildLayerGroup(view.layers?.query, weights, LAYER_COLOR.query, !hasSkeleton));
-    layerGroups.reference.add(buildLayerGroup(view.layers?.reference, weights, LAYER_COLOR.reference, false));
-    layerGroups.corrected.add(buildLayerGroup(view.layers?.corrected, weights, LAYER_COLOR.corrected, false));
+    // 마지막 인자는 "이 층의 점이 실측인가". 질의·기준은 같은 세 강체의 실측 궤적이고, 교정 후 층은
+    // 발부된 교정을 따랐을 때의 **계산값**이다 — 범례가 실측에 준 부호(층 색으로 채운 구체)를 쓰면 안 된다.
+    layerGroups.query.add(buildLayerGroup(view.layers?.query, weights, LAYER_COLOR.query, !hasSkeleton, true));
+    layerGroups.reference.add(buildLayerGroup(view.layers?.reference, weights, LAYER_COLOR.reference, false, true));
+    layerGroups.corrected.add(buildLayerGroup(view.layers?.corrected, weights, LAYER_COLOR.corrected, false, false));
     const placeholder = fit?.legs?.placeholder_joints
       ? { joints: fit.legs.placeholder_joints, bones: fit.legs.placeholder_bones }
       : null;
