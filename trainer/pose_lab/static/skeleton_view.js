@@ -321,6 +321,7 @@ function mount(THREE, container) {
     camState.phi = clamp(camState.phi - dy * 0.008, 0.05, Math.PI - 0.05);
     framing.auto = false;
     applyCamera();
+    scheduleFramingNote();
   });
   dom.canvas.addEventListener(
     "wheel",
@@ -330,6 +331,7 @@ function mount(THREE, container) {
       camState.radius = clamp(camState.radius * factor, 0.05, 60);
       framing.auto = false;
       applyCamera();
+      scheduleFramingNote();
     },
     { passive: false },
   );
@@ -1195,11 +1197,13 @@ function mount(THREE, container) {
 
   function describeTorsoFraming(mode) {
     if (mode !== "torso") return "";
+    // 프리셋을 누른 그대로면 "상체 확대", 그 뒤 카메라를 만졌으면 프리셋 이름으로 부르지 않는다.
+    const head = framing.auto ? "상체 확대" : "지금 화면(상체 확대에서 카메라를 만졌습니다)";
     const outside = offscreenFitTargets();
-    if (outside.length === 0) return "상체 확대: 맞춤 대상이 모두 화면 안에 있습니다.";
+    if (outside.length === 0) return `${head}: 맞춤 대상이 모두 화면 안에 있습니다.`;
     const shown = outside.slice(0, OFFSCREEN_NAMES_SHOWN).join(" · ");
     const rest = outside.length > OFFSCREEN_NAMES_SHOWN ? ` 외 ${outside.length - OFFSCREEN_NAMES_SHOWN}개` : "";
-    return `상체 확대: ${shown}${rest}${subjectParticle(rest || shown)} 화면 밖에 있습니다 — 기본 뷰는 '자세 맞춤'입니다.`;
+    return `${head}: ${shown}${rest}${subjectParticle(rest || shown)} 화면 밖에 있습니다 — 기본 뷰는 '자세 맞춤'입니다.`;
   }
 
   /** 자리표시 발(D3, 바닥 맞춤)의 월드 좌표. 발 관절의 **이름은 서버**(`fit.legs.placeholder_feet`)가 준다 —
@@ -1256,7 +1260,13 @@ function mount(THREE, container) {
     // 바닥에 맞춘 레벨에서만 "바닥에 맞춘"이라고 부른다. 메시가 없는 레벨(2)이나 배율 한계로 맞추지
     // 않은 패스는 리그 길이로 내린 발이다 — 맞추지 않은 것을 맞췄다고 부르면 출처와 다른 라벨이 된다.
     const what = lastView?.fit?.legs?.placeholder_snapped === true ? "바닥에 맞춘 자리표시 발" : "자리표시 발";
-    return `${what}은 이 프리셋에서 화면 밖에 있습니다${where}.`;
+    return `${what}은 ${nowWord()} 화면 밖에 있습니다${where}.`;
+  }
+
+  /** 지금 화면이 프리셋 그대로인지에 따라 고지가 자기를 부르는 말. 드래그·휠로 카메라를 만진 뒤에
+   * "이 프리셋에서"라고 말하면 프리셋이 방어해 주지 못한다 — 사람이 바꾼 것은 프리셋이 아니라 화면이다. */
+  function nowWord() {
+    return framing.auto ? "이 프리셋에서" : "지금";
   }
 
   function describeFraming(mode) {
@@ -1372,16 +1382,31 @@ function mount(THREE, container) {
     framing.ratio = solved.ratio;
     applyCamera();
     // 자른 사실은 카메라를 적용한 **뒤에** 잰다 — 투영이 새 카메라를 써야 이름이 맞는다.
-    const offscreen = mode === "torso" ? offscreenFitTargets() : [];
-    dom.framingNote.textContent = describeFraming(mode);
+    writeFramingNote();
+  }
+
+  /** 고지를 **지금 카메라로** 다시 쓴다.
+   *
+   * 예전에는 `frameTo`에서만 썼다. 그래서 사람이 드래그·휠로 카메라를 만지면 문구가 그 자리에 굳어
+   * 거짓이 됐다 — 실측(L3 '자세 맞춤', 호스트 1094×600): 캔버스 가운데를 위로 140px 끌고 휠을 12회
+   * 내리면 두 발이 화면 안(LeftFoot (482.6,323.7) · RightFoot (425.5,340.9))인데 고지는 그대로
+   * "…화면 밖에 있습니다"였다. 3D 뷰를 돌려 보는 것은 데모 관람자가 가장 먼저 하는 동작이다.
+   * 그래서 카메라가 바뀌는 **모든** 길(프리셋·드래그·휠·창 크기)이 이 함수를 지난다. */
+  function writeFramingNote() {
+    if (!lastView) return;
+    const text = describeFraming(framing.mode);
+    dom.framingNote.textContent = text;
     if (container.__view3dDebug) {
-      container.__view3dDebug.framingRatio = framing.ratio;
-      container.__view3dDebug.framingMode = mode;
-      container.__view3dDebug.framingOffscreen = offscreen;
-      container.__view3dDebug.framingNote = dom.framingNote.textContent;
+      // 프리셋이 푼 비율은 그 카메라에서만 참이다. 사람이 카메라를 만진 뒤에는 내놓지 않는다 —
+      // 지금 화면의 상체 비율은 아래 `upperBody`가 live 카메라로 잰다.
+      container.__view3dDebug.framingRatio = framing.auto ? framing.ratio : null;
+      container.__view3dDebug.framingMode = framing.mode;
+      container.__view3dDebug.framingAuto = framing.auto;
+      container.__view3dDebug.framingOffscreen = framing.mode === "torso" ? offscreenFitTargets() : [];
+      container.__view3dDebug.framingNote = text;
       container.__view3dDebug.torsoSpan = torsoScreenSpan();
       container.__view3dDebug.upperBody = upperBodyScreen();
-      // D3 검증용: 바닥에 맞춘 자리표시 발이 이 프리셋에서 보이는가, 어느 프리셋이 보여 주는가.
+      // D3 검증용: 바닥에 맞춘 자리표시 발이 지금 보이는가, 어느 프리셋이 보여 주는가.
       const feet = placeholderFeetPoints(lastView);
       container.__view3dDebug.feetOnScreen = feet.length > 0 && feet.every((q) => onScreenNow(q));
       container.__view3dDebug.feetPresets = feet.length === 0
@@ -1391,6 +1416,17 @@ function mount(THREE, container) {
             return solved && feet.every((q) => insideFrustum(q, solved)) ? probe.label : null;
           }).filter((n) => n !== null);
     }
+  }
+
+  // 드래그는 한 프레임에 여러 번 들어온다. 고지 다시 쓰기를 한 프레임에 한 번으로 모은다.
+  let framingNotePending = false;
+  function scheduleFramingNote() {
+    if (framingNotePending) return;
+    framingNotePending = true;
+    requestAnimationFrame(() => {
+      framingNotePending = false;
+      writeFramingNote();
+    });
   }
 
   /** 작업자 쪽(착탄점→골반 수평 방향)에서 옆으로 약 50° 비켜 약간 위에서 본다. */

@@ -507,8 +507,10 @@ def torso_preset_faults(js: str, html: str) -> list[str]:
         faults.append("fits_aabb_corners")
     if "function offscreenFitTargets(" not in js:
         faults.append("no_offscreen_probe")
-    if not re.search(r"dom\.framingNote\.textContent\s*=\s*describeFraming", js):
+    if not re.search(r"function writeFramingNote\(\)[\s\S]{0,400}dom\.framingNote\.textContent\s*=", js):
         faults.append("note_not_shown")
+    if not re.search(r"function frameTo\([\s\S]{0,600}writeFramingNote\(\)", js):
+        faults.append("preset_does_not_write_the_note")
     return faults
 
 
@@ -525,8 +527,12 @@ def test_torso_preset_checks_can_fail():
         'mode === "pose" ? points.map((p) => new THREE.Vector3(...p)) : corners',
     )
     assert torso_preset_faults(boxed, html) == ["fits_aabb_corners"]
-    silent = full.replace("dom.framingNote.textContent = describeFraming(mode);", "")
+    silent = full.replace("    dom.framingNote.textContent = text;\n", "")
+    assert silent != full
     assert torso_preset_faults(silent, html) == ["note_not_shown"]
+    unwired = full.replace("    // 자른 사실은 카메라를 적용한 **뒤에** 잰다 — 투영이 새 카메라를 써야 이름이 맞는다.\n    writeFramingNote();\n", "")
+    assert unwired != full
+    assert torso_preset_faults(unwired, html) == ["preset_does_not_write_the_note"]
     assert "no_button" in torso_preset_faults("", "")
 
 
@@ -692,3 +698,92 @@ def test_feet_note_checks_can_fail():
     )
     assert always != full
     assert feet_note_faults(always) == ["calls_unsnapped_feet_floor_snapped"]
+
+
+# --- D3/D6: 카메라를 만진 뒤에도 화면 밖 고지가 참인가 ------------------------------------
+#
+# 검증이 막는 문제로 지목한 자리다. 고지는 `frameTo`에서만 쓰였고, 사람이 드래그·휠로 카메라를 만지면
+# 그 자리에 굳었다. 실측(L3 '자세 맞춤', 호스트 1094×600): 캔버스 가운데를 위로 140px 끌고 휠을 12회
+# 내리면 두 발이 화면 안(LeftFoot (482.6,323.7) · RightFoot (425.5,340.9))인데 고지는 그대로
+# "바닥에 맞춘 자리표시 발은 이 프리셋에서 화면 밖에 있습니다"였다. 프리셋을 바꾼 적이 없으므로
+# "이 프리셋에서"라는 표현이 방어해 주지 못한다.
+#
+# 여기서 고정하는 성질은 두 가지다. (1) 카메라를 바꾸는 **모든** 길(프리셋·드래그·휠)이 고지를 다시
+# 쓴다. (2) "이 프리셋에서"는 카메라가 프리셋 그대로일 때만 쓴다(`framing.auto`).
+
+
+# 두 핸들러 본문은 모두 이 길이 안에 끝난다. 더 멀리 보면 `scheduleFramingNote`의 **정의**까지
+# 삼켜서, 호출을 지워도 이름이 남아 검사가 통과해 버린다(실패할 수 없는 단언).
+HANDLER_BODY_CHARS = 420
+
+
+def _handler_body(js: str, event: str) -> str:
+    """`dom.canvas.addEventListener("<event>", ...)`의 콜백 본문(다음 addEventListener 전까지)."""
+    marker = f'dom.canvas.addEventListener(\n    "{event}",'
+    if marker not in js:
+        marker = f'dom.canvas.addEventListener("{event}",'
+    if marker not in js:
+        return ""
+    rest = js.split(marker, 1)[1]
+    return rest.split("addEventListener", 1)[0][:HANDLER_BODY_CHARS]
+
+
+def live_framing_note_faults(js: str) -> list[str]:
+    faults = []
+    if "function writeFramingNote(" not in js:
+        faults.append("no_live_writer")
+    if "function scheduleFramingNote(" not in js:
+        faults.append("no_scheduler")
+    for event, fault in (("pointermove", "drag_leaves_the_note_stale"), ("wheel", "wheel_leaves_the_note_stale")):
+        body = _handler_body(js, event)
+        if "scheduleFramingNote()" not in body:
+            faults.append(fault)
+    # 고지가 자기를 "이 프리셋에서"라고 부르는 것은 framing.auto일 때뿐이어야 한다.
+    if not re.search(r"function nowWord\(\)\s*\{\s*return framing\.auto \? \"이 프리셋에서\" : \"지금\";", js):
+        faults.append("preset_wording_not_conditioned_on_camera")
+    if '이 프리셋에서 화면 밖에 있습니다' in js:
+        faults.append("feet_note_hardcodes_the_preset_wording")
+    if not re.search(r'framing\.auto \? "상체 확대" : "지금 화면\(상체 확대에서 카메라를 만졌습니다\)"', js):
+        faults.append("torso_note_hardcodes_the_preset_wording")
+    return faults
+
+
+def test_framing_note_is_rewritten_whenever_the_camera_moves():
+    assert live_framing_note_faults(_read("skeleton_view.js")) == []
+
+
+def test_live_framing_note_checks_can_fail():
+    """각 분기를 되돌려 실제로 잡히는지 확인한다(실패할 수 없는 단언 방지)."""
+    full = _read("skeleton_view.js")
+    assert live_framing_note_faults("") == [
+        "no_live_writer",
+        "no_scheduler",
+        "drag_leaves_the_note_stale",
+        "wheel_leaves_the_note_stale",
+        "preset_wording_not_conditioned_on_camera",
+        "torso_note_hardcodes_the_preset_wording",
+    ]
+    for event, fault in (("pointermove", "drag_leaves_the_note_stale"), ("wheel", "wheel_leaves_the_note_stale")):
+        body = _handler_body(full, event)
+        assert "scheduleFramingNote()" in body, event
+        stale = full.replace(body, body.replace("    scheduleFramingNote();\n", "", 1), 1)
+        assert stale != full, event
+        assert live_framing_note_faults(stale) == [fault], event
+    frozen = full.replace(
+        'return framing.auto ? "이 프리셋에서" : "지금";',
+        'return "이 프리셋에서";',
+    )
+    assert frozen != full
+    assert live_framing_note_faults(frozen) == ["preset_wording_not_conditioned_on_camera"]
+    hard = full.replace(
+        'return `${what}은 ${nowWord()} 화면 밖에 있습니다${where}.`;',
+        'return `${what}은 이 프리셋에서 화면 밖에 있습니다${where}.`;',
+    )
+    assert hard != full
+    assert live_framing_note_faults(hard) == ["feet_note_hardcodes_the_preset_wording"]
+    torso = full.replace(
+        'const head = framing.auto ? "상체 확대" : "지금 화면(상체 확대에서 카메라를 만졌습니다)";',
+        'const head = "상체 확대";',
+    )
+    assert torso != full
+    assert live_framing_note_faults(torso) == ["torso_note_hardcodes_the_preset_wording"]
