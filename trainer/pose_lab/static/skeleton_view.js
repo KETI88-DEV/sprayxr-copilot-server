@@ -48,7 +48,10 @@ const HIT_MARKER_RADIUS = 0.018;
 const BADGE_MIN_PX = 26;
 // 글자 라벨을 몸통 화면 위치에서 바깥으로 미는 첫 거리(px).
 const LABEL_PUSH_PX = 16;
-const FRAMING_TARGET = { pose: 0.75, tracks: 0.75, wall: 0.9 };
+// 맞춤 목표 = 맞춤 대상이 캔버스 반폭·반높이에서 차지할 비율. pose(기본·'자세 맞춤')는 벽도 궤적도
+// 다리도 빼고 실측 마커·교정 화살표·상체 관절만 담으므로 캔버스를 거의 채워도 잘리지 않는다. 남기는
+// 14%는 마커 구체 반지름·화살표 촉·글자 라벨 몫이다(0.75는 그만큼을 그냥 비워 뒀다).
+const FRAMING_TARGET = { pose: 0.86, tracks: 0.75, wall: 0.9 };
 
 /** 강조 함수 — 색·굵기·마커·라벨 전부 이 하나의 함수다. */
 function emphasis(weight) {
@@ -356,6 +359,9 @@ function mount(THREE, container) {
   // 몸통 마디: 라벨을 밀어낼 장애물이자, 라벨-몸통 겹침을 세는 대상.
   const TORSO_BONES = [["Pelvis", "Spine"], ["Spine", "Chest"], ["Chest", "Head"]];
   const TORSO_HALF_PX = 11;
+  // 화살표 기둥 반두께(px). 기둥은 몸통보다 얇으니 몸통(11px)보다 좁게 잡는다.
+  const ARROW_HALF_PX = 8;
+  const isVec3Like = (v) => v instanceof THREE.Vector3;
 
   /** 몸통 마디를 화면 사각형 여러 개로 쪼갠다(라벨 회피용 장애물). */
   function torsoScreenRects() {
@@ -376,7 +382,28 @@ function mount(THREE, container) {
     return rects;
   }
 
-  /** 다리를 뺀 상체(골반~머리·팔·실측 마커)가 캔버스에서 차지하는 세로 비율. */
+  /** 교정 화살표 기둥(시작→끝)을 화면 사각형 여러 개로 쪼갠다(라벨 회피용 장애물).
+   * 반투명 라벨 띠가 기둥을 가로지르면 화살표가 끊겨 보인다(L6의 '보정 오프셋' 라벨). */
+  function arrowScreenRects() {
+    const rects = [];
+    for (const entry of labelRegistry) {
+      if (entry.kind !== "badge" || !isVec3Like(entry.from) || !isVec3Like(entry.to)) continue;
+      const p0 = toPixel(entry.from);
+      const p1 = toPixel(entry.to);
+      const steps = 12;
+      for (let i = 0; i <= steps; i += 1) {
+        const t = i / steps;
+        const x = p0.x + (p1.x - p0.x) * t;
+        const y = p0.y + (p1.y - p0.y) * t;
+        rects.push({ x0: x - ARROW_HALF_PX, x1: x + ARROW_HALF_PX, y0: y - ARROW_HALF_PX, y1: y + ARROW_HALF_PX });
+      }
+    }
+    return rects;
+  }
+
+  /** 넓은 정의: 다리를 뺀 **모든** 관절(골반·척추·머리·어깨·팔·손)과 **모든** 실측/예측 마커를
+   * 화면에 투영한 바운딩 박스. 세로 양끝은 흔히 손 관절이나 손 마커다. 좁은 정의는
+   * `torsoScreenSpan()`이 따로 낸다. */
   function upperBodyScreen() {
     if (!lastView) return null;
     const joints = lastView.layers?.query?.joints ?? {};
@@ -395,6 +422,25 @@ function mount(THREE, container) {
     return {
       topPx: top, bottomPx: bottom, heightPx: bottom - top, widthPx: right - left,
       hostHeightPx: h, hostWidthPx: w, heightFraction: (bottom - top) / h,
+    };
+  }
+
+  /** 좁은 정의: 머리 **실측** 마커(HMD)와 골반 관절, 이 두 점만의 화면 세로 거리와 캔버스 대비 비율.
+   * F3 합격선 문구('상체(머리 마커~골반) ≥ 캔버스 40%')가 가리키는 바로 그 두 점이다.
+   * 넓은 정의(`upperBodyScreen`)는 손 관절·손 마커가 양끝일 때가 많아 훨씬 큰 값이 나온다 —
+   * 그 값에 이 문구의 이름을 붙이면 출처와 다른 라벨이 된다. 두 값을 따로 내보내는 이유다. */
+  function torsoScreenSpan() {
+    if (!lastView) return null;
+    const head = (lastView.fit?.anchors ?? []).find((a) => a.joint === "Head" && isVec3(a.measured_marker));
+    const pelvis = lastView.layers?.query?.joints?.Pelvis;
+    if (!head || !isVec3(pelvis)) return null;
+    const a = toPixel(new THREE.Vector3(...head.measured_marker));
+    const b = toPixel(new THREE.Vector3(...pelvis));
+    const { h } = hostSize();
+    return {
+      topPx: Math.min(a.y, b.y), bottomPx: Math.max(a.y, b.y),
+      heightPx: Math.abs(b.y - a.y), hostHeightPx: h, heightFraction: Math.abs(b.y - a.y) / h,
+      ends: ["marker:Head(HMD)", "joint:Pelvis"],
     };
   }
 
@@ -428,10 +474,14 @@ function mount(THREE, container) {
     let labelOverlaps = 0;
     // 몸통 마디도 장애물이다 — 글자 라벨이 몸통 위에 앉으면 뼈도 글자도 못 읽는다(보정 오프셋 라벨).
     const torsoRects = torsoScreenRects();
+    // 교정 화살표 기둥도 장애물이다 — 반투명 라벨 띠가 기둥을 가로지르면 화살표가 끊겨 보인다.
+    const arrowRects = arrowScreenRects();
     // 글자 라벨은 몸통 화면 위치에서 **바깥쪽**으로 민다 — 몸 한가운데에 거리·오프셋 라벨이 쌓여 팔·몸통을
     // 가렸다(2라운드). 기준점은 스켈레톤 가슴(없으면 라벨 자리 그대로).
     const body = bodyScreenCenter();
     let torsoLabelOverlaps = 0;
+    let arrowLabelOverlaps = 0;
+    let labelsClamped = 0;
     for (const entry of labelRegistry) {
       if (entry.kind === "badge" || !visible(entry)) continue;
       const px = toPixel(entry.position);
@@ -448,22 +498,60 @@ function mount(THREE, container) {
       }
       const rect = (xx, yy) => ({ x0: xx - w / 2, x1: xx + w / 2, y0: yy - 1.4 * h, y1: yy - 0.4 * h });
       const hits = (r, list) => list.some((o) => r.x0 < o.x1 && r.x1 > o.x0 && r.y0 < o.y1 && r.y1 > o.y0);
-      const clashes = (r) => hits(r, obstacles) || hits(r, torsoRects);
-      let x = px.x + ox * LABEL_PUSH_PX;
-      let y = px.y + oy * LABEL_PUSH_PX;
-      for (let step = 0; step < 6 && clashes(rect(x, y)); step += 1) {
-        x += (body ? ox : 0) * (w / 2);
-        y += body ? oy * (h + 2) : h + 2;
+      const area = (r, list) => list.reduce((sum, o) => {
+        const dx = Math.min(r.x1, o.x1) - Math.max(r.x0, o.x0);
+        const dy = Math.min(r.y1, o.y1) - Math.max(r.y0, o.y0);
+        return sum + (dx > 0 && dy > 0 ? dx * dy : 0);
+      }, 0);
+      const clashes = (r) => hits(r, obstacles) || hits(r, torsoRects) || hits(r, arrowRects);
+      // 가릴 때의 손해가 다르다: 몸통을 덮으면 뼈도 글자도 못 읽고, 화살표 기둥을 덮으면 교정 화살표가
+      // 끊겨 보인다. 앞 라벨끼리 겹치는 것은 그보다 가볍다.
+      const cost = (r) => 4 * area(r, torsoRects) + 2 * area(r, arrowRects) + area(r, obstacles);
+      // 캔버스 밖으로 밀려나면 글자가 잘린다 — 후보 자리마다 캔버스 안으로 되돌린 뒤에 점수를 매긴다.
+      const { w: hostW, h: hostH } = hostSize();
+      const fit = (xx, yy) => ({
+        x: clamp(xx, w / 2 + 2, hostW - w / 2 - 2),
+        y: clamp(yy, 1.4 * h + 2, hostH - 0.4 * h - 2),
+      });
+      // 한 방향으로만 밀면 화살표 네 개가 모인 쪽(L6 오른손)에서 빠져나갈 자리를 못 찾는다. 바깥쪽
+      // 방향을 첫 후보로 두고 ±30°씩 틀어 가며, 거리도 늘려 가며 훑는다. 전부 겹치면 손해가 가장 작은
+      // 자리를 쓴다(겹침 수는 아래에서 그대로 센다).
+      const turns = [0, 1, -1, 2, -2, 3, -3, 4, -4, 5, -5, 6];
+      const radii = [LABEL_PUSH_PX, LABEL_PUSH_PX + 26, LABEL_PUSH_PX + 58, LABEL_PUSH_PX + 96, LABEL_PUSH_PX + 140];
+      let best = null;
+      for (const radius of radii) {
+        for (const turn of turns) {
+          const angle = (turn * Math.PI) / 6;
+          const cos = Math.cos(angle);
+          const sin = Math.sin(angle);
+          const dx = ox * cos - oy * sin;
+          const dy = ox * sin + oy * cos;
+          const ux = px.x + dx * radius;
+          const uy = px.y + dy * radius;
+          const spot = fit(ux, uy);
+          const score = cost(rect(spot.x, spot.y));
+          const clamped = Math.abs(spot.x - ux) > 0.5 || Math.abs(spot.y - uy) > 0.5;
+          if (best === null || score < best.score) best = { ...spot, score, clamped };
+          if (score === 0) break;
+        }
+        if (best !== null && best.score === 0) break;
       }
+      let x = best.x;
+      let y = best.y;
+      if (best.clamped) labelsClamped += 1;
       if (clashes(rect(x, y))) labelOverlaps += 1;
       if (hits(rect(x, y), torsoRects)) torsoLabelOverlaps += 1;
+      if (hits(rect(x, y), arrowRects)) arrowLabelOverlaps += 1;
       entry.el.style.left = `${x}px`;
       entry.el.style.top = `${y}px`;
       obstacles.push(rect(x, y));
     }
     debugLive.labelOverlaps = labelOverlaps;
     debugLive.torsoLabelOverlaps = torsoLabelOverlaps;
+    debugLive.arrowLabelOverlaps = arrowLabelOverlaps;
+    debugLive.labelsClamped = labelsClamped;
     debugLive.upperBody = upperBodyScreen();
+    debugLive.torsoSpan = torsoScreenSpan();
     debugLive.estimateHeadIsOutline = estimateHeadIsOutline();
     const hitsObstacle = (x, y) => obstacles.some((r) => {
       const nx = clamp(x, r.x0, r.x1);

@@ -216,3 +216,80 @@ def test_f2_checks_can_fail():
     assert orientation_layout(outside)["inside_orientation"] is False
     assert orientation_layout("<main></main>")["summary_present"] is False
     assert joint_angle_note_is_rendered("for (const t of [o.weight_note, o.excluded_note]) {}") is False
+
+
+# --- F3: 라벨이 가리지 말아야 할 것 · 숫자에 붙는 이름 ------------------------------------
+
+
+def label_avoidance_faults(js: str) -> list[str]:
+    """글자 라벨이 피해야 할 장애물이 실제로 회피 계산에 들어가는가.
+
+    몸통 마디만 장애물로 두면 '보정 오프셋 0.57m(적합값)' 띠가 교정 화살표 기둥을 가로질러
+    화살표가 끊겨 보였다(L6 검증). 기둥 사각형을 만들기만 하고 회피·점수에 안 쓰면 그대로다.
+    """
+    faults = []
+    if "function arrowScreenRects(" not in js:
+        faults.append("arrow_shafts_not_mapped")
+    if not re.search(r"const clashes = [^\n]*arrowRects", js):
+        faults.append("arrow_shafts_not_in_clash_test")
+    if not re.search(r"const cost = [^\n]*arrowRects", js):
+        faults.append("arrow_shafts_not_in_cost")
+    if not re.search(r"const clashes = [^\n]*torsoRects", js):
+        faults.append("torso_not_in_clash_test")
+    if "debugLive.arrowLabelOverlaps" not in js:
+        faults.append("arrow_overlap_not_measured")
+    return faults
+
+
+NARROW_NAME = "머리 마커~골반"
+
+
+def measure_naming_faults(js: str) -> list[str]:
+    """화면이 내놓는 두 세로 길이가 각자 이름을 제대로 달고 있는가.
+
+    `upperBody`는 '다리를 뺀 모든 관절 + 모든 마커'의 바운딩 박스다 — 실제 양끝은 손 관절이나
+    손 마커일 때가 많다. 이 값을 '머리 마커~골반'이라 부르면 출처와 다른 라벨이 붙는다.
+    좁은 정의는 `torsoScreenSpan`이 머리 실측 마커와 골반 관절 **두 점만** 재서 따로 내놓는다.
+    """
+    faults = []
+    wide_doc = js.split("function upperBodyScreen(")[0].rsplit("/**", 1)
+    if len(wide_doc) == 2 and NARROW_NAME in wide_doc[1]:
+        faults.append("wide_measure_claims_the_narrow_name")
+    if "function torsoScreenSpan(" not in js:
+        faults.append("narrow_measure_missing")
+    else:
+        body = js.split("function torsoScreenSpan(", 1)[1].split("\n  }", 1)[0]
+        if 'a.joint === "Head"' not in body or "measured_marker" not in body:
+            faults.append("narrow_measure_does_not_use_the_head_measured_marker")
+        if "joints?.Pelvis" not in body:
+            faults.append("narrow_measure_does_not_use_the_pelvis_joint")
+        if "debugLive.torsoSpan" not in js:
+            faults.append("narrow_measure_not_published")
+    return faults
+
+
+def test_label_avoidance_covers_torso_and_correction_arrows():
+    assert label_avoidance_faults(_read("skeleton_view.js")) == []
+
+
+def test_the_two_vertical_measures_carry_their_own_names():
+    assert measure_naming_faults(_read("skeleton_view.js")) == []
+
+
+def test_f3_checks_can_fail():
+    """F3 검사가 실패할 수 있음을 합성 입력으로 확인한다(실패할 수 없는 단언 방지)."""
+    torso_only = (
+        "  const clashes = (r) => hits(r, obstacles) || hits(r, torsoRects);\n"
+        "  const cost = (r) => area(r, torsoRects);\n"
+    )
+    assert label_avoidance_faults(torso_only) == [
+        "arrow_shafts_not_mapped",
+        "arrow_shafts_not_in_clash_test",
+        "arrow_shafts_not_in_cost",
+        "arrow_overlap_not_measured",
+    ]
+    mislabelled = f"  /** 다리를 뺀 상체({NARROW_NAME})가 캔버스에서 차지하는 세로 비율. */\n  function upperBodyScreen() {{\n"
+    assert measure_naming_faults(mislabelled) == [
+        "wide_measure_claims_the_narrow_name",
+        "narrow_measure_missing",
+    ]
