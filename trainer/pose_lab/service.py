@@ -31,7 +31,7 @@ pose_fk_csv = importlib.import_module("pose_fk_csv")
 simulator_csv = importlib.import_module("simulator_csv")
 world_axes = importlib.import_module("world_axes")
 
-from trainer.pose_lab import composite, instructions, orientation, skeleton
+from trainer.pose_lab import composite, instructions, joint_angles, orientation, skeleton
 from trainer.pose_lab.spread_reference import Resolved, SpreadReference
 
 logger = logging.getLogger(__name__)
@@ -1374,6 +1374,9 @@ def _attach_view(
     measured["orientation"] = orient if ok else None
     ok, joint_axes = guarded("orientation", orientation.joint_axes_block, query_raw.rows, reference_raw.rows)
     measured["joint_axes"] = joint_axes if ok else None
+    # 관절 각도는 **추정**이다(D4) — 표시 전용 블록이고 채점 경로를 타지 않는다.
+    ok, angles = guarded("joint_angles", joint_angles.joint_angles_block, query_raw.rows, reference_raw.rows)
+    measured["joint_angles"] = angles if ok else None
 
     joints = skeleton_result.joints if skeleton_result is not None else None
     ok, composite_view = guarded(

@@ -642,6 +642,18 @@ dd { margin: 0; font-family: var(--mono); }
 .joint-axis-chip[data-status="measured_above"] .joint-axis-chip-status { color: var(--ok, var(--text)); }
 .joint-axis-chip-value { font-family: var(--mono); color: var(--text); }
 
+/* 관절 각도(추정). 값과 품질 문구를 한 칸에 위아래로 둔다 — 값만 읽고 품질을 놓치지 못하게. */
+.joint-angles { margin-top: var(--sp-3); }
+.joint-angles-table tbody th { white-space: nowrap; }
+.joint-angles-table .joint-axis-label { color: var(--text-dim); }
+.joint-angles-table .joint-angle-value { vertical-align: top; }
+.joint-angle-number { display: block; }
+.joint-angle-quality {
+  display: block; font-family: var(--sans, inherit); font-size: var(--fs-sm);
+  color: var(--text-dim); white-space: normal; max-width: 22rem;
+}
+.joint-angles-quality-note { margin-top: var(--sp-1); }
+
 .joint-axes { margin-top: var(--sp-3); }
 .joint-axes-table tbody th { white-space: nowrap; }
 .joint-axes-table .joint-axis-status { color: var(--text-dim); white-space: nowrap; }

@@ -377,6 +377,46 @@ function renderOrientation(orientation) {
   }
 }
 
+/** 관절 각도(추정) 표. 각도도 품질 문구도 서버가 만든 문자열만 그린다 — 화면은 재계산하지 않는다.
+ * 값 옆 괄호(quality_display)를 **값과 같은 칸에** 둔다: 상수인 관절을 상수인 줄 모르게 보여주면 안 된다. */
+function renderJointAngles(block) {
+  const section = $("jointAngles");
+  const body = $("jointAnglesTable").querySelector("tbody");
+  body.replaceChildren();
+  if (!block) {
+    section.hidden = true;
+    return;
+  }
+  section.hidden = false;
+  $("jointAnglesTitle").textContent = block.title ?? "관절 각도";
+  $("jointAnglesNote").textContent = block.note ?? "";
+  $("jointAnglesQualityNote").textContent = block.quality_note ?? "";
+  for (const row of block.rows ?? []) {
+    const tr = el("tr");
+    tr.dataset.key = row.key ?? "";
+    const head = el("th", null, row.joint ?? "—");
+    head.scope = "row";
+    tr.append(head);
+    if (row.reason) {
+      const cell = el("td", "orientation-reason", row.reason_text ?? row.reason);
+      cell.colSpan = 3;
+      tr.append(cell);
+    } else {
+      tr.append(el("td", "joint-axis-label", row.label ?? ""));
+      for (const side of ["query", "reference"]) {
+        const cell = el("td", "orientation-value joint-angle-value");
+        cell.append(el("span", "joint-angle-number", shown(row.display?.[side])));
+        const quality = row.quality_display?.[side];
+        if (typeof quality === "string" && quality) {
+          cell.append(el("span", "joint-angle-quality", quality));
+        }
+        tr.append(cell);
+      }
+    }
+    body.append(tr);
+  }
+}
+
 /** 첫 화면에 남는 관절 축 평가 **요약**. 문장·상태·값 문자열은 전부 서버가 준 것이다. */
 function renderJointAxesSummary(box, summary) {
   if (!summary) {
@@ -735,6 +775,7 @@ async function run() {
   renderCorrections(payload.measured);
   renderImprovement(payload.measured);
   renderOrientation(payload.measured.orientation ?? null);
+  renderJointAngles(payload.measured.joint_angles ?? null);
   renderJointAxes(payload.measured.joint_axes ?? null);
   renderMeasuredDetails($("measured"), payload.measured, payload.view);
   renderJointDetails($("joint"), payload.joint);

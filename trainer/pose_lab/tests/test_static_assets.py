@@ -266,8 +266,37 @@ def test_joint_axes_summary_precedes_the_full_table_inside_the_angle_panel():
     }
 
 
+def joint_angle_quality_is_rendered(app_js: str) -> list[str]:
+    """관절 각도 표가 값**과 품질 문구**를 함께 그리는가(D4).
+
+    값만 그리고 품질을 빼면, 오른 팔꿈치처럼 사실상 상수인 각이 상수인 줄 모르게 보인다 — 브리프가
+    명시적으로 금지한 것이다. 그리고 값·문구는 서버 문자열이어야 한다(화면이 다시 계산하지 않는다).
+    """
+    faults = []
+    if "renderJointAngles" not in app_js:
+        faults.append("no-renderer")
+    if not re.search(r"measured\.joint_angles", app_js):
+        faults.append("block-not-read")
+    if not re.search(r"row\.quality_display", app_js):
+        faults.append("quality-not-drawn")
+    if not re.search(r"row\.display", app_js):
+        faults.append("value-not-drawn")
+    return faults
+
+
 def test_joint_angles_note_is_rendered_not_just_served():
     assert joint_angle_note_is_rendered(_read("app.js")) is True
+
+
+def test_joint_angle_values_are_drawn_with_their_quality():
+    assert joint_angle_quality_is_rendered(_read("app.js")) == []
+
+
+def test_joint_angle_quality_check_can_fail():
+    """품질 문구를 뺀 합성 화면 코드는 잡혀야 한다(실패할 수 없는 단언 방지)."""
+    value_only = "function renderJointAngles(b){} payload.measured.joint_angles; row.display.query"
+    assert joint_angle_quality_is_rendered(value_only) == ["quality-not-drawn"]
+    assert "no-renderer" in joint_angle_quality_is_rendered("nothing here")
 
 
 def test_f2_checks_can_fail():
