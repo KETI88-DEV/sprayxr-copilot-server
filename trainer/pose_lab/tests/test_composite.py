@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import importlib
 import random
+import re
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -191,3 +192,71 @@ def test_floor_vertical_on_the_three_verified_levels() -> None:
         floors[level] = composite.floor_vertical(geometry)
     assert all(value is not None for value in floors.values()), floors
     assert max(floors.values()) - min(floors.values()) < 0.1, floors
+
+
+# --- 주석에 적힌 숫자가 코드가 내는 값과 같은가(출처와 다른 라벨 막기) --------------------------
+#
+# 이 저장소의 반복 결함은 "출처와 다른 라벨이 붙은 숫자"다. D3 바닥 규칙을 설명하는 주석은 레벨마다의
+# 바닥 높이와 레벨 3의 관통 깊이를 숫자로 적는데, 그 숫자가 코드가 실제로 내는 값과 어긋난 적이 있다
+# (주석 "L3 3.552m" vs 실제 3.5312m). 그래서 **주석에서 숫자를 뽑아** 다시 재서 비교한다.
+
+_SOURCE_DIR = Path(__file__).resolve().parents[1]
+FLOOR_COMMENT_TOL_M = 0.001  # 주석은 mm 단위(소수 셋째 자리)로 적는다
+
+
+def comment_numbers(text: str, pattern: str) -> list[float]:
+    return [float(value) for value in re.findall(pattern, text)]
+
+
+def test_floor_comment_numbers_match_the_code() -> None:
+    """`composite.py`의 D3 바닥 주석이 적은 레벨별 바닥 높이가 코드가 내는 값과 같다."""
+    source = (_SOURCE_DIR / "composite.py").read_text(encoding="utf-8")
+    quoted = {level: float(value) for level, value in re.findall(r"L(\d+) (\d\.\d{3})m", source)}
+    assert set(quoted) == {"1", "3", "6"}, quoted
+    for level, said in quoted.items():
+        placed = service.placed_mesh(level)
+        geometry = composite.MeshGeometry.from_mesh(placed.mesh.vertices, placed.mesh.triangles)
+        measured = composite.floor_vertical(geometry)
+        assert measured is not None
+        assert abs(measured - said) <= FLOOR_COMMENT_TOL_M, (level, said, measured)
+
+
+def test_floor_comment_can_fail_when_a_number_drifts() -> None:
+    """주석 숫자를 21mm 틀리게 써 놓으면 위 검사가 실제로 잡는다(실패할 수 없는 단언 방지)."""
+    placed = service.placed_mesh("3")
+    geometry = composite.MeshGeometry.from_mesh(placed.mesh.vertices, placed.mesh.triangles)
+    real = composite.floor_vertical(geometry)
+    drifted = 3.552  # 옛 주석이 적었던 값
+    assert abs(real - drifted) > FLOOR_COMMENT_TOL_M
+
+
+def test_level3_penetration_numbers_in_the_comments_match_the_code() -> None:
+    """주석이 적은 "레벨 3에서 발이 바닥면보다 0.540m 아래" 세 숫자를 실제 배치로 다시 잰다.
+
+    비교 대상은 `composite.py`(0.540m·2.991m·3.531m)와 `skeleton.py`(0.540m)의 D3 설명문이다.
+    """
+    source = (_SOURCE_DIR / "composite.py").read_text(encoding="utf-8")
+    gap_said = comment_numbers(source, r"바닥면보다\n# (\d\.\d{3})m 아래")[0]
+    foot_said = comment_numbers(source, r"자리표시 발 수직 (\d\.\d{3})m")[0]
+    floor_said = comment_numbers(source, r"바닥면 (\d\.\d{3})m")[0]
+    leg_source = (_SOURCE_DIR / "skeleton.py").read_text(encoding="utf-8")
+    leg_gap_said = comment_numbers(leg_source, r"발이 바닥면 (\d\.\d{3})m 아래")[0]
+
+    case = next(c for c in isolation._cases() if c["name"] == "real_L3_kkh_1000391_1_0")  # noqa: SLF001
+    legs = isolation._run(case, include_view=True)["view"]["fit"]["legs"]  # noqa: SLF001
+    up = np.asarray(world_axes.UP, dtype=float)
+    scale = legs["placeholder_scale"]
+    placeholder = legs["placeholder_joints"]
+    # 리그 길이 그대로 내렸을 때(배율 1.0)의 발: 엉덩이는 그대로 두고 내린 길이를 배율로 되돌린다.
+    rig_feet = []
+    for hip, ankle in (("LeftThigh", "LeftFoot"), ("RightThigh", "RightFoot")):
+        h = np.asarray(placeholder[hip], dtype=float)
+        drop = h - np.asarray(placeholder[ankle], dtype=float)
+        rig_feet.append(float(np.dot(h - drop / scale, up)))
+    floor = legs["floor_vertical"]
+    lowest = min(rig_feet)
+
+    assert abs(floor - floor_said) <= FLOOR_COMMENT_TOL_M, (floor, floor_said)
+    assert abs(lowest - foot_said) <= FLOOR_COMMENT_TOL_M, (lowest, foot_said)
+    assert abs((floor - lowest) - gap_said) <= FLOOR_COMMENT_TOL_M, (floor - lowest, gap_said)
+    assert leg_gap_said == gap_said, (leg_gap_said, gap_said)
