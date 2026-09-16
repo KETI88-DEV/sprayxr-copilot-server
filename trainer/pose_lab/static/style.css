@@ -626,12 +626,15 @@ dd { margin: 0; font-family: var(--mono); }
 .view3d-notes-more summary { cursor: pointer; color: var(--text-dim); }
 .view3d-notes-more summary:hover { color: var(--text); }
 .view3d-notes-more ul { list-style: none; margin: 0.15rem 0 0; padding: 0; line-height: 1.32; }
-/* 건 각도 · 관절 축 평가 요약: 넓은 창에서 나란히(요약이 첫 화면 안에 들어와야 한다). */
-.orientation-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-3); align-items: start; }
-.orientation-col { min-width: 0; }
-@media (min-width: 80rem) { .orientation-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
-.joint-axes-counts { margin: 0.15rem 0 var(--sp-1); }
-.joint-axes-chips { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.15rem; }
+/* 관절 축 평가 요약: ④b 맨 위에 가로로 흘려 쓴다. 제목·상태 수·관절 칩을 세로로 쌓으면
+   1875×1000 첫 화면 바닥에 2.7px 남기고 걸려서, 글꼴이 대체되거나 값이 한 줄 늘면 잘렸다. */
+.joint-axes-summary {
+  display: flex; flex-flow: row wrap; align-items: baseline; gap: 0.1rem 1.1rem;
+  margin: 0 0 var(--sp-2); padding: 0 0 var(--sp-2); border-bottom: 1px solid var(--border);
+}
+.joint-axes-summary > * { margin: 0; }
+.joint-axes-counts { margin: 0; }
+.joint-axes-chips { list-style: none; margin: 0; padding: 0; display: flex; flex-flow: row wrap; gap: 0.1rem 1.1rem; }
 .joint-axis-chip { display: flex; flex-wrap: wrap; gap: 0.35rem; align-items: baseline; font-size: var(--fs-sm); }
 .joint-axis-chip-joint { color: var(--text); }
 .joint-axis-chip-status { color: var(--text-dim); }
