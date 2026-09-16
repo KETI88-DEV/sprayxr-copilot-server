@@ -1253,7 +1253,10 @@ function mount(THREE, container) {
       return feet.every((p) => insideFrustum(p, solved)) ? probe.label : null;
     }).filter((name) => name !== null);
     const where = shows.length === 0 ? "" : ` — ${shows.map((n) => `'${n}'`).join(" · ")}에서 보입니다`;
-    return `바닥에 맞춘 자리표시 발은 이 프리셋에서 화면 밖에 있습니다${where}.`;
+    // 바닥에 맞춘 레벨에서만 "바닥에 맞춘"이라고 부른다. 메시가 없는 레벨(2)이나 배율 한계로 맞추지
+    // 않은 패스는 리그 길이로 내린 발이다 — 맞추지 않은 것을 맞췄다고 부르면 출처와 다른 라벨이 된다.
+    const what = lastView?.fit?.legs?.placeholder_snapped === true ? "바닥에 맞춘 자리표시 발" : "자리표시 발";
+    return `${what}은 이 프리셋에서 화면 밖에 있습니다${where}.`;
   }
 
   function describeFraming(mode) {

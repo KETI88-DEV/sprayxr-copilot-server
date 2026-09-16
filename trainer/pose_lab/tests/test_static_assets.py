@@ -655,6 +655,9 @@ def feet_note_faults(js: str) -> list[str]:
     # 프리셋 이름을 말로 정하지 않고 **풀어서** 확인하는가 — solveFraming을 실제로 부르는가.
     if not re.search(r"solvePreset\(probe\)[\s\S]{0,200}insideFrustum", js):
         faults.append("preset_names_are_not_measured")
+    # 맞추지 않은 레벨(메시 없음·배율 한계)에서 "바닥에 맞춘"이라고 부르면 출처와 다른 라벨이 된다.
+    if not re.search(r'placeholder_snapped === true \? "바닥에 맞춘 자리표시 발" : "자리표시 발"', js):
+        faults.append("calls_unsnapped_feet_floor_snapped")
     probe_block = js.split("const PRESET_PROBES = [", 1)[-1].split("];", 1)[0]
     labels = set(re.findall(r'label: "([^"]+)"', probe_block))
     buttons = set(re.findall(r'id="view3dPreset\w+" type="button">([^<]+)</button>', js))
@@ -675,6 +678,7 @@ def test_feet_note_checks_can_fail():
         "feet_names_not_from_server",
         "no_preset_probe",
         "preset_names_are_not_measured",
+        "calls_unsnapped_feet_floor_snapped",
     ]  # 빈 소스는 버튼도 없어 라벨 대조는 걸리지 않는다
     silent = full.replace('[describeTorsoFraming(mode), describeFeetFraming()]', "[describeTorsoFraming(mode)]")
     assert silent != full
@@ -682,3 +686,9 @@ def test_feet_note_checks_can_fail():
     renamed = full.replace('{ label: "궤적 포함", mode: "tracks"', '{ label: "궤적", mode: "tracks"')
     assert renamed != full
     assert feet_note_faults(renamed) == ["probe_labels_do_not_match_the_buttons"]
+    always = full.replace(
+        'lastView?.fit?.legs?.placeholder_snapped === true ? "바닥에 맞춘 자리표시 발" : "자리표시 발"',
+        '"바닥에 맞춘 자리표시 발"',
+    )
+    assert always != full
+    assert feet_note_faults(always) == ["calls_unsnapped_feet_floor_snapped"]
