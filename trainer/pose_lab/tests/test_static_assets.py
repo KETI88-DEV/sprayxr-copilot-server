@@ -748,9 +748,9 @@ def feet_note_faults(js: str) -> list[str]:
     # 프리셋 이름을 말로 정하지 않고 **풀어서** 확인하는가 — solveFraming을 실제로 부르는가.
     if not re.search(r"solvePreset\(probe\)[\s\S]{0,200}insideFrustum", js):
         faults.append("preset_names_are_not_measured")
-    # 맞추지 않은 레벨(메시 없음·배율 한계)에서 "바닥에 맞춘"이라고 부르면 출처와 다른 라벨이 된다.
-    if not re.search(r'placeholder_snapped === true \? "바닥에 맞춘 자리표시 발" : "자리표시 발"', js):
-        faults.append("calls_unsnapped_feet_floor_snapped")
+    # 다리는 이제 리그 제 길이로 내린다(배율 없음) — 발을 "바닥에 맞춘"이라고 부르면 거짓이다.
+    if "바닥에 맞춘" in js:
+        faults.append("calls_feet_floor_snapped")
     probe_block = js.split("const PRESET_PROBES = [", 1)[-1].split("];", 1)[0]
     labels = set(re.findall(r'label: "([^"]+)"', probe_block))
     buttons = set(re.findall(r'id="view3dPreset\w+" type="button">([^<]+)</button>', js))
@@ -771,7 +771,6 @@ def test_feet_note_checks_can_fail():
         "feet_names_not_from_server",
         "no_preset_probe",
         "preset_names_are_not_measured",
-        "calls_unsnapped_feet_floor_snapped",
     ]  # 빈 소스는 버튼도 없어 라벨 대조는 걸리지 않는다
     silent = full.replace('[describeTorsoFraming(mode), describeFeetFraming()]', "[describeTorsoFraming(mode)]")
     assert silent != full
@@ -779,12 +778,9 @@ def test_feet_note_checks_can_fail():
     renamed = full.replace('{ label: "궤적 포함", mode: "tracks"', '{ label: "궤적", mode: "tracks"')
     assert renamed != full
     assert feet_note_faults(renamed) == ["probe_labels_do_not_match_the_buttons"]
-    always = full.replace(
-        'lastView?.fit?.legs?.placeholder_snapped === true ? "바닥에 맞춘 자리표시 발" : "자리표시 발"',
-        '"바닥에 맞춘 자리표시 발"',
-    )
+    always = full.replace('const what = "자리표시 발";', 'const what = "바닥에 맞춘 자리표시 발";')
     assert always != full
-    assert feet_note_faults(always) == ["calls_unsnapped_feet_floor_snapped"]
+    assert feet_note_faults(always) == ["calls_feet_floor_snapped"]
 
 
 # --- D3/D6: 카메라를 만진 뒤에도 화면 밖 고지가 참인가 ------------------------------------
@@ -874,3 +870,232 @@ def test_live_framing_note_checks_can_fail():
     )
     assert torso != full
     assert live_framing_note_faults(torso) == ["torso_note_hardcodes_the_preset_wording"]
+
+
+# --- 휠 확대 감도(U3) --------------------------------------------------------------------
+#
+# 옛 핸들러는 `event.deltaY > 0 ? 1.1 : 1/1.1`이라 **부호만** 썼다. 실측(CDP): deltaY가 4든 1000이든
+# 배율이 1.1000으로 같았고, 트랙패드 한 번 쓸기(≈50 이벤트)가 1.1^50 = 117배였다. 아래 검사는
+# "deltaY 크기를 쓴다 · deltaMode를 픽셀로 정규화한다 · 한 이벤트를 자른다 · 한계가 장면에서 나온다"를
+# 고정한다.
+
+
+def wheel_zoom_faults(js: str) -> list[str]:
+    faults: list[str] = []
+    body = _handler_body(js, "wheel")
+    if "deltaY > 0 ?" in body or "deltaY < 0 ?" in body:
+        faults.append("sign_only_zoom")
+    if "wheelZoomFactor(" not in body or "wheelPixels(" not in body:
+        faults.append("handler_does_not_normalize")
+    if not re.search(r"function wheelPixels\(event, viewportHeight\)", js):
+        faults.append("no_pixel_normalizer")
+    else:
+        pixels = js.split("function wheelPixels(", 1)[1].split("\n}", 1)[0]
+        if "mode === 1" not in pixels or "WHEEL_LINE_PX" not in pixels:
+            faults.append("line_delta_mode_not_handled")
+        if "mode === 2" not in pixels or "viewportHeight" not in pixels:
+            faults.append("page_delta_mode_not_handled")
+    if not re.search(r"function wheelZoomFactor\(pixels\)", js):
+        faults.append("no_zoom_factor")
+    else:
+        factor = js.split("function wheelZoomFactor(", 1)[1].split("\n}", 1)[0]
+        if "WHEEL_PIXELS_MAX" not in factor or "clamp(" not in factor:
+            faults.append("event_not_capped")
+        if "Math.exp(" not in factor or "Math.log(WHEEL_NOTCH_FACTOR)" not in factor:
+            faults.append("not_exponential_in_pixels")
+    if "radiusLimitsFor(framing.baseRadius)" not in body:
+        faults.append("limits_not_from_the_scene")
+    if re.search(r"clamp\(camState\.radius \* factor, 0\.05, 60\)", js):
+        faults.append("absolute_limits_hardcoded_in_the_handler")
+    return faults
+
+
+def test_wheel_zoom_uses_the_delta_size_and_scene_sized_limits():
+    assert wheel_zoom_faults(_read("skeleton_view.js")) == []
+
+
+def test_wheel_zoom_checks_can_fail():
+    """각 성질을 되돌려 실제로 잡히는지 확인한다."""
+    full = _read("skeleton_view.js")
+    body = _handler_body(full, "wheel")
+    assert "wheelZoomFactor(wheelPixels(event, h))" in body
+    old = full.replace(
+        "const factor = wheelZoomFactor(wheelPixels(event, h));",
+        "const factor = event.deltaY > 0 ? 1.1 : 1 / 1.1;",
+        1,
+    )
+    assert old != full
+    assert "sign_only_zoom" in wheel_zoom_faults(old)
+    assert "handler_does_not_normalize" in wheel_zoom_faults(old)
+
+    flat = full.replace("  if (mode === 1) return delta * WHEEL_LINE_PX;\n", "", 1)
+    assert flat != full
+    assert wheel_zoom_faults(flat) == ["line_delta_mode_not_handled"]
+
+    uncapped = full.replace("  const px = clamp(pixels, -WHEEL_PIXELS_MAX, WHEEL_PIXELS_MAX);", "  const px = pixels;", 1)
+    assert uncapped != full
+    assert wheel_zoom_faults(uncapped) == ["event_not_capped"]
+
+    fixed = full.replace(
+        "      const limits = radiusLimitsFor(framing.baseRadius);\n      camState.radius = clamp(camState.radius * factor, limits.min, limits.max);",
+        "      camState.radius = clamp(camState.radius * factor, 0.05, 60);",
+        1,
+    )
+    assert fixed != full
+    assert sorted(wheel_zoom_faults(fixed)) == [
+        "absolute_limits_hardcoded_in_the_handler",
+        "limits_not_from_the_scene",
+    ]
+
+
+def test_one_wheel_notch_is_gentler_than_the_old_ten_percent():
+    """상수가 뜻하는 한 노치 배율을 파이썬에서 다시 계산한다 — 옛 1.1보다 작아야 한다."""
+    js = _read("skeleton_view.js")
+    notch_px = float(re.search(r"const WHEEL_NOTCH_PX = ([\d.]+);", js).group(1))
+    notch_factor = float(re.search(r"const WHEEL_NOTCH_FACTOR = ([\d.]+);", js).group(1))
+    pixels_max = float(re.search(r"const WHEEL_PIXELS_MAX = ([\d.]+);", js).group(1))
+    assert notch_px == 100.0  # 관측된 마우스 한 노치(deltaY=100, deltaMode=0)
+    assert 1.0 < notch_factor < 1.1, notch_factor
+    # 트랙패드가 내는 deltaY=4짜리 이벤트 한 건은 0.5%를 넘지 않아야 한다(옛 값은 10%였다).
+    assert notch_factor ** (4.0 / notch_px) < 1.005
+    # 한 이벤트가 먹을 수 있는 최대 배율(관성 스크롤 한 방)도 유한해야 한다.
+    assert notch_factor ** (pixels_max / notch_px) < 1.2
+
+
+# --- 층이 쌓이지 않는가(U2) --------------------------------------------------------------
+#
+# 사용자가 "'기준'이 세 개가 그려져"라고 했다. 재현해 세어 보니 쌓임은 아니다(기준 층 후손 64개가
+# [다른 기준 ▸] 3회·[평가] 3회 뒤에도 64개였다) — 원래 머리·오른손·왼손 **세 줄**이다. 그래도
+# 쌓임을 막는 성질은 여기서 고정한다: 다시 그리기 전에 모든 층을 비우고 dispose한다.
+
+LAYER_GROUP_NAMES = ("query", "reference", "corrected")
+
+
+def layer_reset_faults(js: str) -> list[str]:
+    faults: list[str] = []
+    if "function resetScene()" not in js:
+        return ["no_reset"]
+    body = js.split("function resetScene()", 1)[1].split("\n  }", 1)[0]
+    if "for (const group of Object.values(layerGroups))" not in body:
+        faults.append("layers_not_swept")
+    if "disposeObject3D(group)" not in body:
+        faults.append("layers_not_disposed")
+    if "group.clear()" not in body:
+        faults.append("layers_not_cleared")
+    if "correctionsGroup.clear()" not in body:
+        faults.append("corrections_not_cleared")
+    render = js.split("function render(payload)", 1)[1] if "function render(payload)" in js else ""
+    if not render:
+        faults.append("no_render")
+    else:
+        head = render.split("layerGroups.query.add(", 1)[0]
+        if "resetScene();" not in head:
+            faults.append("render_adds_before_reset")
+    # 쌓임을 **화면이 스스로 셀 수 있어야** 다시 쌓일 때 잡힌다.
+    if "layerObjectCounts: {" not in js or "function countDescendants(group)" not in js:
+        faults.append("no_layer_object_counter")
+    return faults
+
+
+def test_layers_are_emptied_and_disposed_before_every_redraw():
+    assert layer_reset_faults(_read("skeleton_view.js")) == []
+
+
+def test_layer_reset_checks_can_fail():
+    full = _read("skeleton_view.js")
+    assert layer_reset_faults("") == ["no_reset"]
+    piled = full.replace("      disposeObject3D(group);\n      group.clear();", "      disposeObject3D(group);", 1)
+    assert piled != full
+    assert layer_reset_faults(piled) == ["layers_not_cleared"]
+    leaked = full.replace("      disposeObject3D(group);\n      group.clear();", "      group.clear();", 1)
+    assert leaked != full
+    assert layer_reset_faults(leaked) == ["layers_not_disposed"]
+    blind = full.replace("      layerObjectCounts: {", "      layerObjectCountsRemoved: {", 1)
+    assert blind != full
+    assert layer_reset_faults(blind) == ["no_layer_object_counter"]
+
+
+def test_the_legend_says_how_many_tracks_a_layer_draws():
+    """"기준이 세 개"로 읽히지 않게, 층마다 몇 줄인지 서버 문구가 말한다."""
+    note = service.track_legend_note({"right": 1.0, "head": 0.4, "left": 0.15})
+    assert note is not None
+    assert note.startswith("층마다 궤적은 3줄입니다")
+    # 진한 차례 = 가중치 내림차순. 화면의 opacity 규칙과 같은 순서여야 한다.
+    assert note.index("오른손") < note.index("머리") < note.index("왼손")
+    assert "기준 3개가 아니라" in note
+    # 가중치가 바뀌면 차례도 바뀐다(문구가 상수가 아니다).
+    other = service.track_legend_note({"right": 0.1, "head": 0.9, "left": 0.5})
+    assert other is not None and other.index("머리") < other.index("왼손") < other.index("오른손")
+    # 그릴 줄이 없으면 적지 않는다.
+    assert service.track_legend_note({"Pelvis": 0.0}) is None
+
+
+# --- 스트로크는 서버가 자른 연결 구간만 그린다(U1) ---------------------------------------
+
+
+def stroke_drawing_faults(js: str) -> list[str]:
+    faults: list[str] = []
+    if "function buildStrokeGroup(strokeBlock)" not in js:
+        return ["no_stroke_builder"]
+    body = js.split("function buildStrokeGroup(strokeBlock)", 1)[1].split("\n  }", 1)[0]
+    if "strokeBlock?.runs" not in body:
+        faults.append("not_from_server_runs")
+    if "SphereGeometry" in body:
+        faults.append("stroke_draws_loose_dots")
+    # 화면이 자기 문턱으로 다시 자르면 서버 수치를 재계산하는 것이다.
+    if "STROKE_MAX_LIFT" in body or "lift" in body:
+        faults.append("screen_recomputes_the_split")
+    if "buildStrokeGroup(view.stroke)" not in js:
+        faults.append("render_does_not_draw_the_stroke")
+    # 한 폴리라인으로 이어 붙이던 옛 경로가 남아 있으면 안 된다.
+    if "surface-hit-trace" in js:
+        faults.append("old_single_polyline_remains")
+    if "setFromPoints(surfaceHits)" in js:
+        faults.append("old_single_polyline_remains")
+    # 낱개 대표 착탄 구체를 다시 그리면 안 된다.
+    if "HIT_MARKER_RADIUS" in js:
+        faults.append("lone_hit_marker_remains")
+    # 층 궤적의 표식은 점마다가 아니라 끝점 하나다.
+    if "function buildLayerGroup(" in js:
+        layer = js.split("function buildLayerGroup(", 1)[1].split("\n    return group;", 1)[0]
+        if re.search(r"for \(const p of points\) \{\s*\n\s*const marker", layer):
+            faults.append("marker_on_every_sample")
+        if "points[points.length - 1]" not in layer:
+            faults.append("no_end_marker")
+    return faults
+
+
+def test_the_stroke_is_drawn_only_from_the_server_split_runs():
+    assert stroke_drawing_faults(_read("skeleton_view.js")) == []
+
+
+def test_stroke_drawing_checks_can_fail():
+    full = _read("skeleton_view.js")
+    assert stroke_drawing_faults("") == ["no_stroke_builder"]
+    ignored = full.replace(
+        "    const runs = Array.isArray(strokeBlock?.runs) ? strokeBlock.runs : [];",
+        "    const runs = [];",
+        1,
+    )
+    assert ignored != full
+    assert stroke_drawing_faults(ignored) == ["not_from_server_runs"]
+    dotted = full.replace(
+        "        const piece = boneCylinder(points[i], points[i + 1], STROKE_RADIUS, material, \"surface-stroke\", \"\");",
+        "        const piece = new THREE.Mesh(new THREE.SphereGeometry(STROKE_RADIUS, 8, 6), material);",
+        1,
+    )
+    assert dotted != full
+    assert stroke_drawing_faults(dotted) == ["stroke_draws_loose_dots"]
+    every = full.replace(
+        "        const marker = new THREE.Mesh(markerGeometry, markerMaterial);\n"
+        "        marker.position.copy(points[points.length - 1]);",
+        "        for (const p of points) {\n"
+        "          const marker = new THREE.Mesh(markerGeometry, markerMaterial);\n"
+        "          marker.position.copy(p);\n        }\n"
+        "        const marker = new THREE.Mesh(markerGeometry, markerMaterial);",
+        1,
+    )
+    assert every != full
+    assert stroke_drawing_faults(every) == ["marker_on_every_sample"]
+    lone = full + "\nconst HIT_MARKER_RADIUS = 0.018;\n"
+    assert stroke_drawing_faults(lone) == ["lone_hit_marker_remains"]

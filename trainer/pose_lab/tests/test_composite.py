@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import importlib
+import math
 import random
 import re
 import sys
@@ -12,6 +13,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 
@@ -251,16 +253,16 @@ def test_level3_penetration_numbers_in_the_comments_match_the_code() -> None:
     case = next(c for c in isolation._cases() if c["name"] == "real_L3_kkh_1000391_1_0")  # noqa: SLF001
     legs = isolation._run(case, include_view=True)["view"]["fit"]["legs"]  # noqa: SLF001
     up = np.asarray(world_axes.UP, dtype=float)
-    scale = legs["placeholder_scale"]
     placeholder = legs["placeholder_joints"]
-    # 리그 길이 그대로 내렸을 때(배율 1.0)의 발: 엉덩이는 그대로 두고 내린 길이를 배율로 되돌린다.
-    rig_feet = []
-    for hip, ankle in (("LeftThigh", "LeftFoot"), ("RightThigh", "RightFoot")):
-        h = np.asarray(placeholder[hip], dtype=float)
-        drop = h - np.asarray(placeholder[ankle], dtype=float)
-        rig_feet.append(float(np.dot(h - drop / scale, up)))
+    # 다리는 리그 제 길이로 내린다(배율 없음) — 화면에 그려지는 발이 곧 리그 길이 발이다.
+    rig_feet = [
+        float(np.dot(np.asarray(placeholder[ankle], dtype=float), up))
+        for ankle in ("LeftFoot", "RightFoot")
+    ]
     floor = legs["floor_vertical"]
     lowest = min(rig_feet)
+    # 서버가 낸 "발이 바닥면보다 얼마나 아래인가"도 같은 값이어야 한다(라벨과 출처가 같은지).
+    assert abs(legs["feet_below_floor_m"] - (floor - lowest)) < 1e-9, legs["feet_below_floor_m"]
 
     assert abs(floor - floor_said) <= FLOOR_COMMENT_TOL_M, (floor, floor_said)
     assert abs(lowest - foot_said) <= FLOOR_COMMENT_TOL_M, (lowest, foot_said)
@@ -327,8 +329,9 @@ def test_floor_choice_comment_reports_what_stands_on_it() -> None:
             pelvis - floor,
             pelvises[level],
         )
-        torso_notes.add(next(n for n in view["fit"]["notes"] if "골반→머리가" in n))
-    # 몸통 고지가 세 레벨에서 **글자 하나까지 같다** — 몸통 길이는 상수라 배율 산포를 설명할 수 없다.
+        torso_notes.add(next(n for n in view["fit"]["notes"] if "골반→머리" in n))
+    # 몸통 고지가 세 레벨에서 **글자 하나까지 같다** — 몸통 길이는 세 레벨에서 같으므로 "발이 면보다
+    # 얼마나 아래인가"의 산포를 설명할 수 없다.
     assert len(torso_notes) == 1, torso_notes
 
 
@@ -345,3 +348,93 @@ def test_floor_choice_comment_can_fail_when_a_number_drifts() -> None:
     source = (_SOURCE_DIR / "composite.py").read_text(encoding="utf-8")
     said_l1 = comment_level_row(source, "이 면 위 머리 실측 마커(HMD)")["1"]
     assert abs((head - floor) - said_l1) > FLOOR_COMMENT_TOL_M, (head - floor, said_l1)
+
+
+# --- 벽 위 분사 스트로크: 모서리를 가로지르는 현에서 끊는다(U1) --------------------------------
+#
+# 사용자가 "벽이랑 시퀀스 접촉점이랑 정렬이 안됨"이라고 했고, 씬 그래프에서 직접 재 보니 **점은 전부
+# 벽에 붙어 있었다**(L3 38점·L6 77점 모두 0.00mm). 뜨는 것은 점을 잇는 **현**이다. 아래 검사는 그
+# 분기를 합성 기하로 직접 고정한다 — 실데이터만 보면 문턱을 아무 값으로 바꿔도 통과할 수 있다.
+
+
+def _corner(size: float = 1.0) -> composite.MeshGeometry:
+    """z=0 평면과 x=0 평면이 90°로 만나는 기하(두 사각형). 모서리는 x=0, z=0 직선."""
+    vertices = [
+        (0.0, -size, 0.0), (size, -size, 0.0), (size, size, 0.0), (0.0, size, 0.0),   # z=0 바닥
+        (0.0, -size, size), (0.0, size, size),                                        # x=0 벽 위쪽
+    ]
+    triangles = [(0, 1, 2), (0, 2, 3), (0, 3, 5), (0, 5, 4)]
+    return composite.MeshGeometry.from_mesh(vertices, triangles)
+
+
+def test_chord_lift_is_zero_along_a_face_and_large_across_a_corner() -> None:
+    """같은 면 위의 두 점을 이은 현은 벽에 붙고, 모서리를 가로지르는 현은 뜬다."""
+    geometry = _corner()
+    flat = composite.chord_lift_mm(geometry, (0.2, 0.0, 0.0), (0.8, 0.0, 0.0))
+    across = composite.chord_lift_mm(geometry, (0.5, 0.0, 0.0), (0.0, 0.0, 0.5))
+    assert flat < 1e-6, flat
+    # 두 점을 잇는 현의 중점 (0.25, 0, 0.25)에서 가장 가까운 면 위 점은 (0.25, 0, 0)·(0, 0, 0.25)이라 0.25m다.
+    assert across == pytest.approx(250.0, rel=1e-3), across
+
+
+def test_stroke_splits_only_where_the_chord_leaves_the_wall() -> None:
+    """모서리를 가로지르는 한 곳에서만 끊고, 나머지는 한 줄로 잇는다."""
+    geometry = _corner()
+    hits = [
+        (0.9, 0.0, 0.0), (0.7, 0.0, 0.0), (0.5, 0.0, 0.0),   # 바닥 위 세 점
+        (0.0, 0.0, 0.5), (0.0, 0.0, 0.7), (0.0, 0.0, 0.9),   # 벽 위 세 점
+    ]
+    block = composite.stroke_runs(geometry, hits)
+    assert block["break_count"] == 1, block
+    assert [len(run) for run in block["runs"]] == [3, 3], block["runs"]
+    # 점을 옮기거나 만들지 않는다 — 구간을 이어 붙이면 입력 그대로다.
+    assert [tuple(p) for run in block["runs"] for p in run] == hits
+    assert block["point_count"] == 6
+    assert block["max_lift_mm"] > composite.STROKE_MAX_LIFT_MM
+    assert block["max_kept_lift_mm"] <= composite.STROKE_MAX_LIFT_MM
+
+
+def test_stroke_keeps_one_run_when_every_chord_stays_on_the_wall() -> None:
+    geometry = _corner()
+    hits = [(0.9, 0.0, 0.0), (0.7, 0.0, 0.0), (0.5, 0.0, 0.0), (0.3, 0.0, 0.0)]
+    block = composite.stroke_runs(geometry, hits)
+    assert block["break_count"] == 0 and len(block["runs"]) == 1, block
+    assert block["note"] == composite.STROKE_NOTE_CLEAN
+
+
+def test_stroke_split_can_fail_when_the_tolerance_is_raised(monkeypatch) -> None:  # noqa: ANN001
+    """문턱을 이탈보다 크게 올리면 **끊지 않는다** — 위 검사가 문턱 분기를 실제로 타는지 확인한다."""
+    geometry = _corner()
+    hits = [(0.5, 0.0, 0.0), (0.0, 0.0, 0.5), (0.0, 0.0, 0.9)]
+    assert composite.stroke_runs(geometry, hits)["break_count"] == 1
+    monkeypatch.setattr(composite, "STROKE_MAX_LIFT_MM", 1000.0)
+    assert composite.stroke_runs(geometry, hits)["break_count"] == 0
+
+
+def test_stroke_without_a_mesh_says_it_did_not_measure() -> None:
+    hits = [(0.0, 0.0, 0.0), (1.0, 0.0, 0.0)]
+    block = composite.stroke_runs(None, hits)
+    assert block["runs"] == [[list(p) for p in hits]]
+    assert block["break_count"] == 0 and block["max_lift_mm"] is None
+    assert block["note"] == composite.STROKE_NOTE_NO_MESH
+
+
+def test_stroke_on_the_real_L6_mesh_breaks_at_the_two_corner_chords() -> None:
+    """실데이터 L6(김경호 1000394_1 #0): 76세그먼트 중 모서리 둘에서만 끊고, 남은 현은 문턱 안이다."""
+    view = _floor_standing_view("6")
+    block = view["stroke"]
+    assert block["point_count"] == len(view["surface_hits"])
+    assert block["break_count"] == 2, block["break_count"]
+    assert block["max_lift_mm"] > 80.0, block["max_lift_mm"]
+    assert block["max_kept_lift_mm"] <= composite.STROKE_MAX_LIFT_MM
+    # 이어 붙이면 원본 착탄점 순서 그대로다(옮기지도 만들지도 않았다).
+    joined = [p for run in block["runs"] for p in run]
+    assert joined == view["surface_hits"]
+
+
+def test_stroke_on_the_real_L3_mesh_stays_one_run() -> None:
+    """실데이터 L3(김경호 1000391_1 #0): 37세그먼트 최악 이탈이 1mm 미만이라 끊을 곳이 없다."""
+    case = next(c for c in isolation._cases() if c["name"] == "real_L3_kkh_1000391_1_0")  # noqa: SLF001
+    block = isolation._run(case, include_view=True)["view"]["stroke"]  # noqa: SLF001
+    assert block["break_count"] == 0, block
+    assert block["max_lift_mm"] < 1.0, block["max_lift_mm"]

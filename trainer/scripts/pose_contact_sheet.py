@@ -49,7 +49,7 @@ import pose_fk_csv  # noqa: E402
 import simulator_csv  # noqa: E402
 import world_axes  # noqa: E402
 
-from trainer.pose_lab import composite, joint_angles, service, skeleton  # noqa: E402
+from trainer.pose_lab import body_proportions, composite, joint_angles, service, skeleton  # noqa: E402
 
 DEFAULT_ROOT: Final = Path("/data/sources/professionals")
 DEFAULT_FRAMES: Final = 12
@@ -122,7 +122,8 @@ def build_cells(
     representative = service.representative_frame(raw)
     if representative is None or not raw.rows:
         return [], {"error": "분사 중 착탄 프레임이 없어 컨택트시트를 만들 수 없습니다."}
-    offsets = pose_fk_csv.bind_offsets(raw.rows[0])
+    # 서버(`service.skeleton_block`)와 **같은 리그**로 그린다 — 몸통 두 마디를 BVH 비례로 다시 잰 값.
+    offsets = body_proportions.rig_offsets(pose_fk_csv.bind_offsets(raw.rows[0]))
     if not offsets:
         return [], {"error": "이 패스에는 관절 컬럼이 없어 컨택트시트를 만들 수 없습니다."}
 
@@ -203,8 +204,8 @@ def build_cells(
             (
                 "자리표시 다리",
                 "리그 길이"
-                if placeholder is None or not placeholder.snapped
-                else f"바닥 맞춤 ×{placeholder.scale:.2f}",
+                if placeholder is None or placeholder.feet_below_floor_m is None
+                else f"리그 길이 · 바닥면 아래 {placeholder.feet_below_floor_m:+.2f}m",
                 False,
             ),
         ]

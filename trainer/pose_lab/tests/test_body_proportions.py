@@ -1,0 +1,284 @@
+"""몸통 비례(U4)를 고정한다.
+
+이 모듈이 지키는 성질은 둘이다.
+
+1. **상수의 출처.** `body_proportions.BVH_*_M`은 전형기 BVH 79파일에서 잰 OFFSET 노름 중앙값이다.
+   여기서 그 파일을 **다시 읽어 다시 재서** 같은 값인지 본다(출처와 다른 라벨을 막는다).
+2. **앵커 오차 불변.** 골반→가슴만 다시 재면 세 앵커(머리·오른손·왼손)의 상대 위치가 그대로라
+   배치 어긋남이 **정확히 그대로**다. 합성 프레임으로 그 분기를 직접 고정하고, 가슴→머리까지
+   함께 늘리면 **바뀐다**는 대조도 같이 잰다 — 실패할 수 없는 단언을 막는다.
+"""
+
+from __future__ import annotations
+
+import glob
+import importlib
+import math
+import statistics
+import sys
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+_SCRIPTS = str(Path(__file__).resolve().parents[3] / "scripts")
+if _SCRIPTS not in sys.path:
+    sys.path.insert(0, _SCRIPTS)
+
+from trainer.pose_lab import body_proportions as bp
+from trainer.pose_lab import skeleton
+
+rotation_math = importlib.import_module("rotation_math")
+
+BVH_GLOB = "/data/sources/professionals/bvh_전형기/*/*.bvh"
+BVH_TOL_M = 1e-6
+
+
+# --- 1. 상수의 출처 ---------------------------------------------------------------------
+
+
+def _bvh_medians() -> dict[str, float]:
+    bvh_skeleton = importlib.import_module("bvh_skeleton")
+    wanted = set(bp.BVH_TORSO_M) | set(bp.BVH_ARM_M) | set(bp.BVH_LEG_M)
+    seen: dict[str, list[float]] = {name: [] for name in wanted}
+    for path in sorted(glob.glob(BVH_GLOB)):
+        clip = bvh_skeleton.parse_bvh(path)
+        for joint in clip.joints:
+            if joint.name in seen:
+                seen[joint.name].append(math.hypot(*joint.offset))
+    return {name: statistics.median(values) for name, values in seen.items() if values}
+
+
+def test_bvh_constants_are_remeasured_from_the_bvh_files() -> None:
+    """상수 15개를 BVH 파일에서 다시 재 같은 값인지 본다. 파일이 없으면 이 검사만 건너뛴다."""
+    if not glob.glob(BVH_GLOB):
+        pytest.skip(f"BVH 파일이 없다({BVH_GLOB})")
+    measured = _bvh_medians()
+    quoted = {**bp.BVH_TORSO_M, **bp.BVH_ARM_M, **bp.BVH_LEG_M}
+    assert set(quoted) <= set(measured), sorted(set(quoted) - set(measured))
+    for name, said in quoted.items():
+        assert abs(measured[name] - said) <= BVH_TOL_M, (name, said, measured[name])
+
+
+def test_bvh_constant_check_can_fail_when_a_number_drifts() -> None:
+    """상수 하나를 1mm 틀리게 적으면 위 검사가 실제로 잡는다."""
+    if not glob.glob(BVH_GLOB):
+        pytest.skip(f"BVH 파일이 없다({BVH_GLOB})")
+    measured = _bvh_medians()
+    drifted = bp.BVH_TORSO_M["Neck"] + 0.001
+    assert abs(measured["Neck"] - drifted) > BVH_TOL_M
+
+
+def test_target_is_the_geometric_mean_of_the_arm_and_leg_derivations() -> None:
+    """목표 길이가 독스트링이 적은 대로 `sqrt(L_arm · L_leg)`인지 — 손으로 다시 계산해 본다."""
+    offsets = _csv_like_offsets()
+    arm = sum(math.hypot(*offsets[name]) for name in bp.ARM_CHAINS[0])
+    leg = sum(math.hypot(*offsets[name]) for name in bp.LEG_CHAINS[0])
+    expected = math.sqrt((arm / bp.BVH_ARM_RATIO) * (leg / bp.BVH_LEG_RATIO))
+    assert bp.target_lower_torso_m(offsets) == pytest.approx(expected, rel=1e-12)
+
+
+def test_rescaling_touches_only_the_two_lower_torso_bones() -> None:
+    offsets = _csv_like_offsets()
+    out = bp.rig_offsets(offsets)
+    changed = {
+        name
+        for name in offsets
+        if math.hypot(*out[name]) != pytest.approx(math.hypot(*offsets[name]), abs=1e-12)
+    }
+    assert changed == set(bp.RESCALED_BONES), changed
+    # 방향은 그대로다 — 스칼라만 곱한다.
+    for name in bp.RESCALED_BONES:
+        a = np.asarray(offsets[name], dtype=float)
+        b = np.asarray(out[name], dtype=float)
+        cosine = float(a @ b) / (np.linalg.norm(a) * np.linalg.norm(b))
+        assert cosine == pytest.approx(1.0, abs=1e-12), name
+
+
+def test_lower_torso_reaches_the_bvh_derived_target() -> None:
+    offsets = _csv_like_offsets()
+    out = bp.rig_offsets(offsets)
+    total = sum(math.hypot(*out[name]) for name in bp.RESCALED_BONES)
+    assert total == pytest.approx(bp.target_lower_torso_m(offsets), rel=1e-12)
+    # 마디별 배분도 BVH 몫 그대로다.
+    share_total = sum(bp.LOWER_TORSO_SHARE_M[name] for name in bp.RESCALED_BONES)
+    for name in bp.RESCALED_BONES:
+        want = total * bp.LOWER_TORSO_SHARE_M[name] / share_total
+        assert math.hypot(*out[name]) == pytest.approx(want, rel=1e-12), name
+
+
+def test_inserted_joints_lie_on_the_segment_at_the_bvh_split() -> None:
+    joints = {
+        "Spine": (0.0, 1.0, 0.0),
+        "Chest": (0.0, 1.3, 0.4),
+        "Head": (0.2, 1.7, 0.4),
+    }
+    out = bp.inserted_joints(joints)
+    assert set(out) == {"Spine1", "Neck"}
+    for name, start, end, ratio in bp.INSERTED_JOINTS:
+        a = np.asarray(joints[start], dtype=float)
+        b = np.asarray(joints[end], dtype=float)
+        assert np.allclose(np.asarray(out[name]), a + (b - a) * ratio, atol=1e-12), name
+    # 비율은 BVH가 그 선분을 가르는 몫이다(지어낸 수가 아니다).
+    assert bp.INSERTED_JOINTS[0][3] == pytest.approx(
+        bp.BVH_TORSO_M["Spine1"] / (bp.BVH_TORSO_M["Spine1"] + bp.BVH_TORSO_M["Chest"])
+    )
+    assert bp.INSERTED_JOINTS[1][3] == pytest.approx(
+        bp.BVH_TORSO_M["Neck"] / (bp.BVH_TORSO_M["Neck"] + bp.BVH_TORSO_M["Head"])
+    )
+
+
+def test_inserted_joints_are_skipped_when_an_end_is_missing() -> None:
+    assert bp.inserted_joints({"Spine": (0.0, 0.0, 0.0)}) == {}
+
+
+def test_display_bones_replaces_the_three_stem_bones_with_five() -> None:
+    joints = {name: (0.0, 0.0, 0.0) for name in ("Pelvis", "Spine", "Spine1", "Chest", "Neck", "Head")}
+    bones = [["Pelvis", "Spine"], ["Spine", "Chest"], ["Chest", "Head"], ["Chest", "LeftShoulder"]]
+    out = bp.display_bones(bones, joints)
+    assert out == [list(pair) for pair in bp.TORSO_STEM_BONES] + [["Chest", "LeftShoulder"]]
+    # 그려 넣은 관절이 없으면 원래 줄기를 남긴다.
+    assert bp.display_bones(bones, {"Pelvis": (0.0, 0.0, 0.0)}) == bones
+
+
+# --- 2. 앵커 오차 불변 ------------------------------------------------------------------
+
+
+def _csv_like_offsets() -> dict[str, bp.Vec3]:
+    """CSV 리그와 같은 마디 길이를 가진 바인드 오프셋(합성). 실측 길이는 `body_proportions` 독스트링."""
+    out: dict[str, bp.Vec3] = {
+        "Spine": (0.0, 0.10530, 0.0),
+        "Chest": (0.0, 0.10530, 0.0),
+        "Head": (0.0, 0.13680, 0.0),
+    }
+    for side, sign in (("Left", 1.0), ("Right", -1.0)):
+        out[f"{side}Shoulder"] = (sign * 0.0500, 0.0500, 0.0)
+        out[f"{side}UpperArm"] = (sign * 0.1200, 0.0, 0.0)
+        out[f"{side}ForeArm"] = (sign * 0.2600, 0.0, 0.0)
+        out[f"{side}Hand"] = (sign * 0.2141, 0.0, 0.0)
+        out[f"{side}Thigh"] = (sign * 0.0900, -0.0400, 0.0)
+        out[f"{side}Calf"] = (0.0, -0.4400, 0.0)
+        out[f"{side}Foot"] = (0.0, -0.3974, 0.0)
+        out[f"{side}Toe"] = (0.0, 0.0, 0.1500)
+    return out
+
+
+_CHAIN_PARENT = {
+    "Spine": "Pelvis",
+    "Chest": "Spine",
+    "Head": "Chest",
+    "LeftShoulder": "Chest",
+    "LeftUpperArm": "LeftShoulder",
+    "LeftForeArm": "LeftUpperArm",
+    "LeftHand": "LeftForeArm",
+    "RightShoulder": "Chest",
+    "RightUpperArm": "RightShoulder",
+    "RightForeArm": "RightUpperArm",
+    "RightHand": "RightForeArm",
+}
+
+
+def _fk(offsets: dict[str, bp.Vec3], angles: dict[str, float]) -> tuple[dict, dict]:
+    """합성 FK: 관절마다 z축 회전 `angles[name]`(도)만 준다. (위치, 회전) 사전을 낸다.
+
+    `service`가 쓰는 `pose_fk_csv`와 같은 사슬(`Pelvis → Spine → Chest → {Head, 어깨}`)이라
+    여기서 재는 불변이 서버의 불변이다.
+    """
+    positions = {"Pelvis": np.zeros(3)}
+    rotations = {"Pelvis": _rz(angles.get("Pelvis", 0.0))}
+    for name, parent in _CHAIN_PARENT.items():
+        rotations[name] = rotations[parent] @ _rz(angles.get(name, 0.0))
+        positions[name] = positions[parent] + rotations[parent] @ np.asarray(offsets[name], dtype=float)
+    return (
+        {k: tuple(float(x) for x in v) for k, v in positions.items()},
+        {k: tuple(tuple(float(x) for x in row) for row in v) for k, v in rotations.items()},
+    )
+
+
+def _rz(deg: float) -> np.ndarray:
+    c, s = math.cos(math.radians(deg)), math.sin(math.radians(deg))
+    return np.array([[c, -s, 0.0], [s, c, 0.0], [0.0, 0.0, 1.0]])
+
+
+_ANGLES = {"Pelvis": 7.0, "Spine": -4.0, "Chest": 11.0, "Head": -13.0,
+           "LeftShoulder": 8.0, "LeftUpperArm": -21.0, "LeftForeArm": 17.0, "LeftHand": 5.0,
+           "RightShoulder": -6.0, "RightUpperArm": 25.0, "RightForeArm": -19.0, "RightHand": -3.0}
+
+
+def _measured_and_mounts(offsets: dict[str, bp.Vec3]) -> tuple[dict, skeleton.Mounts]:
+    """합성 실측 강체와 장착 상수. 실측은 **원본 리그**로 만든 뒤 일부러 조금 어긋나게 둔다 —
+    어긋남이 0이면 "그대로다"가 실패할 수 없는 단언이 된다."""
+    local_pos, local_rot = _fk(offsets, _ANGLES)
+    mounts_map: dict[str, skeleton.AnchorMount] = {}
+    measured: dict[str, tuple] = {}
+    wobble = {"head": (0.021, -0.014, 0.009), "right": (-0.033, 0.012, -0.022), "left": (0.017, 0.028, -0.011)}
+    for point, joint in skeleton.ANCHOR_JOINTS.items():
+        rot = np.asarray(local_rot[joint], dtype=float)
+        mount_offset = (0.05, 0.03, -0.02) if point == "head" else (0.11, -0.04, 0.06)
+        mounts_map[skeleton.mount_key(point, "한길숏건")] = skeleton.AnchorMount(
+            rotation=tuple(tuple(float(x) for x in row) for row in np.eye(3)), offset=mount_offset
+        )
+        marker = np.asarray(local_pos[joint], dtype=float) + rot @ np.asarray(mount_offset, dtype=float)
+        marker = marker + np.asarray(wobble[point], dtype=float)
+        measured[point] = (tuple(float(x) for x in marker), tuple(tuple(float(x) for x in row) for row in rot))
+    return measured, skeleton.mounts_for(mounts_map, "한길숏건")
+
+
+def _anchor_misses(offsets: dict[str, bp.Vec3]) -> dict[str, float]:
+    measured, mounts = _measured_and_mounts(_csv_like_offsets())
+    local_pos, local_rot = _fk(offsets, _ANGLES)
+    placed = skeleton.place_oriented(local_pos, local_rot, measured, mounts)
+    assert placed is not None
+    return {fit.point: fit.miss_m for fit in placed.anchors}
+
+
+def test_rescaling_the_lower_torso_leaves_every_anchor_miss_exactly_alone() -> None:
+    """골반→가슴만 다시 재면 세 앵커 어긋남이 그대로다 — 합성 프레임에서 분기를 직접 고정한다.
+
+    `place_oriented`의 평행이동 `t`가 세 앵커의 **공통** 변위를 흡수한다. 머리·양손이 전부
+    `Chest` 아래에 달려 있으므로 `Spine`·`Chest`를 늘리면 셋이 같은 벡터만큼 움직인다.
+    """
+    base = _csv_like_offsets()
+    before = _anchor_misses(base)
+    after = _anchor_misses(bp.rig_offsets(base))
+    assert set(before) == {"head", "right", "left"}
+    assert min(before.values()) > 1e-3, before  # 어긋남이 0이 아니어야 비교가 의미 있다
+    for point in before:
+        assert after[point] == pytest.approx(before[point], abs=1e-12), (point, before, after)
+
+
+def test_stretching_chest_to_head_would_change_the_anchor_miss() -> None:
+    """대조군: 가슴→머리까지 BVH 비례로 늘리면 앵커 어긋남이 **바뀐다**.
+
+    위 검사가 무엇을 잡는지 이 대조가 정한다 — 늘려도 안 바뀌면 위 단언은 실패할 수 없다.
+    가슴→머리를 늘리지 않는 이유가 여기 있다(`body_proportions` 독스트링의 실측).
+    """
+    base = _csv_like_offsets()
+    before = _anchor_misses(base)
+    stretched = dict(bp.rig_offsets(base))
+    x, y, z = stretched["Head"]
+    factor = (bp.BVH_TORSO_M["Neck"] + bp.BVH_TORSO_M["Head"]) / bp.BVH_TORSO_M["Head"]
+    stretched["Head"] = (x * factor, y * factor, z * factor)
+    after = _anchor_misses(stretched)
+    assert after["head"] != pytest.approx(before["head"], abs=1e-6), (before, after)
+
+
+def test_rescaling_the_lower_torso_leaves_the_fitted_mounts_alone() -> None:
+    """장착 상수 적합도 그대로다 — 적합이 보는 것이 앵커 **사이의 차**(FK_a − FK_b)이기 때문이다.
+
+    그래서 `skeleton_mounts.json`을 다시 맞추지 않아도 된다.
+    """
+    base = _csv_like_offsets()
+    measured, _mounts = _measured_and_mounts(base)
+    samples = []
+    for offsets in (base, bp.rig_offsets(base)):
+        local_pos, local_rot = _fk(offsets, _ANGLES)
+        samples.append(
+            [skeleton.FrameSample(local_pos=local_pos, local_rot=local_rot, measured=measured,
+                                  group="한길숏건", index=0, time_sec=0.0)]
+        )
+    table_before = skeleton.fit_mounts([samples[0]])
+    table_after = skeleton.fit_mounts([samples[1]])
+    assert set(table_before) == set(table_after), (sorted(table_before), sorted(table_after))
+    for key, mount in table_before.items():
+        assert np.allclose(np.asarray(table_after[key].offset), np.asarray(mount.offset), atol=1e-12), key

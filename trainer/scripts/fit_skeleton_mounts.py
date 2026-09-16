@@ -36,7 +36,7 @@ import measured_pose  # noqa: E402
 import pose_fk_csv  # noqa: E402
 import simulator_csv  # noqa: E402
 
-from trainer.pose_lab import csv_source, skeleton  # noqa: E402
+from trainer.pose_lab import body_proportions, csv_source, skeleton  # noqa: E402
 
 logger = logging.getLogger("fit_skeleton_mounts")
 
@@ -80,7 +80,9 @@ def session_samples(item: csv_source.SessionFile) -> tuple[list[skeleton.FrameSa
     meta = {"worker": item.worker, "date": item.date, "level": item.level, "session": item.session, "group": gun or ""}
     if gun is None or not rows:
         return [], meta, {}
-    offsets = pose_fk_csv.bind_offsets(rows[0])
+    # 서버(`service.skeleton_block`)와 **같은 리그**로 적합해야 한다 — 몸통 세 마디를 BVH 실측
+    # 비례로 다시 잰 오프셋이다. 다른 리그로 적합하면 m_j가 서버 FK와 어긋난다.
+    offsets = body_proportions.rig_offsets(pose_fk_csv.bind_offsets(rows[0]))
     if not offsets:
         return [], meta, {}
     paired = [

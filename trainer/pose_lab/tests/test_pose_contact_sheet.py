@@ -126,18 +126,22 @@ def test_failed_frames_are_shown_with_a_reason_not_dropped(monkeypatch, test_mou
     assert broken[0].reason in svg
 
 
-def test_placeholder_legs_follow_the_floor_when_the_mesh_gives_one(test_mounts) -> None:  # noqa: ANN001
-    """시트가 화면과 같은 다리를 그린다(D3) — 바닥을 주면 배율이 1.0이 아니고 시트가 그렇게 적는다."""
+def test_placeholder_legs_keep_rig_length_and_report_the_gap_to_the_floor(test_mounts) -> None:  # noqa: ANN001
+    """시트가 화면과 같은 다리를 그린다(D3·U5) — 바닥을 줘도 다리는 리그 길이이고, 시트는 그 면과의
+    거리를 적는다. 옛 시트는 "바닥 맞춤 ×0.35"처럼 줄인 배율을 적었다."""
     rows, _middle = _rows_with_leg_poses(21, ())
     raw = RawPass(rows=rows)
     loose, _s = pose_contact_sheet.build_cells(raw, frames=3, mounts_table=test_mounts)
     assert all(("자리표시 다리", "리그 길이", False) in cell.metrics for cell in loose)
     feet = min(y for cell in loose for name, (_x, y) in cell.joints.items() if name.endswith("Foot"))
-    snapped, _s2 = pose_contact_sheet.build_cells(
+    withfloor, _s2 = pose_contact_sheet.build_cells(
         raw, frames=3, mounts_table=test_mounts, floor=feet + 0.4
     )
-    labels = [dict((name, value) for name, value, _loud in cell.metrics)["자리표시 다리"] for cell in snapped]
-    assert all(label.startswith("바닥 맞춤 ×") for label in labels), labels
+    # 관절이 한 점도 안 움직인다 — 바닥은 그림이 아니라 문구만 바꾼다.
+    assert [cell.joints for cell in withfloor] == [cell.joints for cell in loose]
+    labels = [dict((name, value) for name, value, _loud in cell.metrics)["자리표시 다리"] for cell in withfloor]
+    assert all(label.startswith("리그 길이 · 바닥면 아래 ") for label in labels), labels
+    assert not any("바닥 맞춤" in label for label in labels), labels
 
 
 def test_empty_pass_renders_a_reason_instead_of_a_blank_sheet() -> None:

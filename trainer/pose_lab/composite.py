@@ -145,17 +145,20 @@ def _closest_points(p: np.ndarray, a: np.ndarray, b: np.ndarray, c: np.ndarray) 
 
 # --- 바닥면(자리표시 다리를 세울 높이) --------------------------------------------------
 #
-# 자리표시 다리(`skeleton.standing_legs`)는 측정이 아니라 표시다. 그래도 레벨 3에서는 발이 바닥면보다
-# 0.540m 아래로 내려가 수평판을 뚫고 나온 것처럼 보였다(실측: 가장 낮은 자리표시 발 수직 2.991m,
+# 자리표시 다리(`skeleton.standing_legs`)는 측정이 아니라 표시다. 리그 제 길이로 내리면 레벨 3에서는
+# 발이 바닥면보다
+# 0.605m 아래로 내려간다(실측: 가장 낮은 자리표시 발 수직 2.926m,
 # 바닥면 3.531m). 여기서 "바닥"을 하나로 정한다 — **수평에 가까운 면(법선이 월드 수직축과 이룬 각
 # ≤ FLOOR_MAX_TILT_DEG) 중 가장 낮은 면의 최고점**. "착탄점 아래에서 가장 높은 수평면"은 L6에서
 # 4.33m(골반 4.085m 보다 위)를 골라 다리를 거꾸로 세웠다 — 그래서 쓰지 않는다.
+# **이 면을 고르는 규칙은 그대로 두고, 다리를 그 면에 닿추려고 줄이던 배율만 없앴다**(D3 재판정):
+# 발이 이 면보다 아래로 내려가는 것을 허용하고, 얼마나 아래인지를 화면이 말한다.
 #
 # 이 면은 **작업자가 선 지면이 아닐 수 있다.** 세 레벨에서 고른 면의 높이는 거의 같은데,
 # 그 위 실측 마커 높이는 그렇지 않다:
 #   바닥면 수직: L1 3.557m · L3 3.531m · L6 3.560m
 #   이 면 위 머리 실측 마커(HMD): L1 1.508m · L3 0.696m · L6 0.879m
-#   이 면 위 골반: L1 1.155m · L3 0.334m · L6 0.525m
+#   이 면 위 골반: L1 1.097m · L3 0.269m · L6 0.454m
 # L3·L6의 0.70m·0.88m는 서 있는 사람의 머리 높이가 아니다. 그래서 자리표시 배율이 레벨마다 갈린다
 # (배율 = 골반–이 면 거리 ÷ 리그 다리 길이). 리그 **몸통**이 짧은 것은 원인이 아니다 — 골반→머리는
 # 리그 값이라 네 레벨이 모두 같고(화면 고지 0.35m), 갈리는 것은 위의 골반–바닥 거리뿐이다.
@@ -284,3 +287,108 @@ def surface_hits(representative: Any) -> list[list[float]]:
         picks = np.linspace(0, len(hits) - 1, MAX_SURFACE_HITS).astype(int)
         hits = [hits[i] for i in picks]
     return [[float(x) for x in hit] for hit in hits]
+
+
+# --- 벽 위 분사 스트로크(표시 전용) ---------------------------------------------------------
+#
+# 사용자가 화면을 보고 "벽이랑 시퀀스 접촉점이랑 정렬이 안됨"이라고 했고, 이어서 "'연결된 하나의
+# 시퀀스'(=스트로크)만 남기고 부분적으로 뿌려진 건 다 없앴으면 함"이라고 했다.
+#
+# **데이터는 벽에 붙어 있다.** 씬 그래프에서 직접 잰 값(three.js에 올라간 벽 삼각형까지의 월드 거리):
+# `surface_hits` 정점은 L3(38점)·L6(77점) 모두 min/중앙/p95/최대가 전부 0.00mm였다. 뜨는 것은 점이
+# 아니라 **점을 잇는 선**이다. 폴리라인의 현이 꺾인 면을 가로지르면 공중을 질러간다:
+#
+#   L6 김경호 1000394_1 #0 — 77점 · 76세그먼트 · 총 길이 1.668m · 세그먼트 길이 중앙값 16.1mm
+#     세그먼트 #73: 길이 343.4mm · 양 끝 면 법선 사잇각 90.0° · 현 최대 이탈 84.59mm(t=0.35)
+#     세그먼트 #65: 길이  73.8mm · 법선 사잇각 66.7°      · 현 최대 이탈 21.11mm
+#     나머지 74개: 전부 2.5mm 이하
+#   L3 김경호 1000391_1 #0 — 38점 · 37세그먼트 · 5mm를 넘는 세그먼트 0개(최악 0.83mm, 법선 45° 구간)
+#
+# 그래서 뜨는 현에서 **끊는다**. 현을 표면에 투영해 붙이거나 점을 옮기지 않는다 — 그러면 없는 접촉을
+# 그리게 된다. 데이터가 끊겨 있으면 끊긴 대로 보이는 편이 낫다. 화면은 몇 곳에서 끊었는지 말한다.
+#
+# 문턱은 위 실측에서 나온다: 모서리가 아닌 세그먼트의 최대 이탈이 2.5mm(L6)·0.83mm(L3)이므로
+# 그 2배를 문턱으로 둔다. 모서리 두 곳(21.11mm·84.59mm)과는 4배 넘게 떨어져 있어 어느 쪽으로도
+# 아슬아슬하지 않다.
+STROKE_MAX_LIFT_MM: Final = 5.0
+# 현 위를 훑는 간격과 세그먼트당 표본 상한. 2mm면 L6 최악 세그먼트(343mm)도 63표본으로 본다.
+STROKE_CHORD_STEP_M: Final = 0.002
+STROKE_CHORD_SAMPLES_MAX: Final = 64
+
+STROKE_NOTE_CLEAN: Final = (
+    "벽 위 분사 스트로크는 착탄점을 이은 한 줄입니다 — 전 구간이 벽에 붙어 있습니다"
+)
+STROKE_NOTE_SPLIT: Final = (
+    "벽 위 분사 스트로크는 착탄점을 이은 한 줄입니다 — 이으면 벽에서 뜨는 {breaks}곳에서 "
+    "끊어 그렸습니다, 가장 크게 뜨던 곳이 {lift:.0f}mm입니다"
+)
+STROKE_NOTE_NO_MESH: Final = (
+    "벽 위 분사 스트로크는 착탄점을 이은 한 줄입니다 — 이 패스는 벽 메시가 없어 벽과의 거리를 "
+    "재지 않았습니다"
+)
+
+
+def chord_lift_mm(geometry: MeshGeometry, start: Sequence[float], end: Sequence[float]) -> float:
+    """두 착탄점을 이은 **현**이 벽에서 가장 크게 떨어지는 거리(mm). 양 끝은 착탄점이라 0이다."""
+    p = np.asarray(start, dtype=float)
+    q = np.asarray(end, dtype=float)
+    seg = q - p
+    length = float(np.linalg.norm(seg))
+    if length <= 1e-12:
+        return 0.0
+    steps = int(min(STROKE_CHORD_SAMPLES_MAX, max(2, math.ceil(length / STROKE_CHORD_STEP_M))))
+    ts = np.arange(1, steps, dtype=float) / steps
+    if ts.size == 0:
+        return 0.0
+    distance, _rows, _closest = geometry.nearest(p[None] + ts[:, None] * seg[None])
+    return float(np.max(distance)) * 1000.0
+
+
+def stroke_runs(
+    geometry: MeshGeometry | None, hits: Sequence[Sequence[float]]
+) -> dict[str, object]:
+    """벽에 붙은 채로 이어지는 **연결 구간들**로 자른 분사 스트로크(원본 착탄점만).
+
+    돌려주는 `runs`의 각 원소는 끊기지 않은 폴리라인이다. 점을 옮기거나 만들지 않는다 —
+    자르기만 한다. 메시가 없으면 잴 수 없으므로 자르지 않고 한 줄로 낸다.
+    """
+    points = [[float(x) for x in hit] for hit in hits if hit is not None and len(hit) == 3]
+    block: dict[str, object] = {
+        "runs": [],
+        "point_count": len(points),
+        "break_count": 0,
+        "max_lift_mm": None,
+        "max_kept_lift_mm": None,
+        "tolerance_mm": STROKE_MAX_LIFT_MM,
+        "note": STROKE_NOTE_NO_MESH,
+    }
+    if len(points) < 2:
+        block["runs"] = [points] if points else []
+        return block
+    if geometry is None or len(geometry.a) == 0:
+        block["runs"] = [points]
+        return block
+
+    lifts = [chord_lift_mm(geometry, points[i], points[i + 1]) for i in range(len(points) - 1)]
+    runs: list[list[list[float]]] = []
+    current = [points[0]]
+    kept: list[float] = []
+    for index, lift in enumerate(lifts):
+        if lift > STROKE_MAX_LIFT_MM:
+            runs.append(current)
+            current = [points[index + 1]]
+            continue
+        kept.append(lift)
+        current.append(points[index + 1])
+    runs.append(current)
+    breaks = len(runs) - 1
+    block["runs"] = [run for run in runs if len(run) >= 2]
+    block["break_count"] = breaks
+    block["max_lift_mm"] = max(lifts)
+    block["max_kept_lift_mm"] = max(kept) if kept else None
+    block["note"] = (
+        STROKE_NOTE_SPLIT.format(breaks=breaks, lift=max(lifts))
+        if breaks > 0
+        else STROKE_NOTE_CLEAN
+    )
+    return block

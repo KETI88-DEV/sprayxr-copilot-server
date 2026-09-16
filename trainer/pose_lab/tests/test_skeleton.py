@@ -10,6 +10,7 @@ import math
 import random
 
 import numpy as np
+import pytest
 
 from trainer.pose_lab import skeleton
 from trainer.pose_lab.skeleton import AnchorMount, FrameSample, Mounts
@@ -194,8 +195,8 @@ def test_standing_legs_hang_along_gravity_with_rig_bone_lengths() -> None:
     forward = (1.0, 0.7, 0.5)  # 수직 성분은 버린다
     result = skeleton.standing_legs(joints, OFFSETS, forward)
     assert result is not None
-    # 메시(바닥)를 주지 않으면 리그 길이 그대로다 — 배율 1.0, 맞춤 없음.
-    assert result.scale == 1.0 and result.snapped is False and result.floor_offered is None
+    # 메시(바닥)를 주지 않으면 잴 면이 없다.
+    assert result.floor_vertical is None and result.feet_below_floor_m is None
     legs = result.joints
     for hip, knee, ankle, toe in skeleton.PLACEHOLDER_LEG_CHAIN:
         assert legs[hip] == joints[hip]
@@ -211,3 +212,29 @@ def test_standing_legs_hang_along_gravity_with_rig_bone_lengths() -> None:
     assert no_toe is not None and "LeftToe" not in no_toe.joints and "RightToe" not in no_toe.joints
     assert skeleton.standing_legs({"LeftThigh": (0.0, 0.0, 0.0)}, OFFSETS, forward) is None
 
+
+
+def test_standing_legs_never_scale_to_reach_the_floor() -> None:
+    """바닥면을 줘도 다리 길이는 리그 그대로다(U5) — 재는 것은 "발이 그 면보다 얼마나 아래인가"뿐이다.
+
+    옛 코드는 발을 그 면에 닿추려고 허벅지·종아리에 한 배율(0.25~2.0)을 곱했다. 레벨 3에서 배율이
+    0.35라 작업자가 난쟁이로 보였고, 그 면은 애초에 작업자가 선 지면이 아니었다
+    (`skeleton.py` D3 주석). 여기서는 **어떤 바닥 높이를 줘도** 뼈 길이가 안 변하는 것을 고정한다.
+    """
+    up = np.array(world_axes.UP, dtype=float)
+    joints = {"LeftThigh": (0.3, 1.1, 0.2), "RightThigh": (0.1, 1.05, 0.25)}
+    forward = (1.0, 0.7, 0.5)
+    free = skeleton.standing_legs(joints, OFFSETS, forward)
+    assert free is not None
+    lowest = min(float(np.dot(np.array(free.joints[ankle]), up)) for _h, _k, ankle, _t in skeleton.PLACEHOLDER_LEG_CHAIN)
+    # 발보다 한참 위·한참 아래, 옛 배율 한계를 넘는 자리까지 훑는다.
+    for floor in (lowest + 2.0, lowest + 0.5, lowest, lowest - 0.5, lowest - 3.0):
+        snapped = skeleton.standing_legs(joints, OFFSETS, forward, floor=floor)
+        assert snapped is not None
+        assert snapped.joints == free.joints, floor  # 관절이 한 점도 안 움직인다
+        assert snapped.floor_vertical == pytest.approx(floor)
+        assert snapped.feet_below_floor_m == pytest.approx(floor - lowest, abs=1e-12)
+        for hip, knee, ankle, _toe in skeleton.PLACEHOLDER_LEG_CHAIN:
+            for a, b, child in ((hip, knee, knee), (knee, ankle, ankle)):
+                d = np.array(snapped.joints[b]) - np.array(snapped.joints[a])
+                assert abs(np.linalg.norm(d) - math.hypot(*OFFSETS[child])) < 1e-12, (floor, child)

@@ -46,7 +46,9 @@ const COMPUTED_DASH = 0.02;
 const COMPUTED_GAP = 0.02;
 const ARROW_SHAFT_RADIUS = 0.006;
 const ARROW_HEAD_RADIUS = 0.016;
-const HIT_MARKER_RADIUS = 0.018;
+// 벽 위 분사 스트로크의 굵기(m). 뼈(0.009)보다 가늘게 둬 몸과 위계를 지키면서, 1px 선과 달리
+// 반투명 벽 위에서 읽힌다.
+const STROKE_RADIUS = 0.006;
 
 const BADGE_MIN_PX = 26;
 // 글자 라벨을 몸통 화면 위치에서 바깥으로 미는 첫 거리(px).
@@ -73,6 +75,56 @@ function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
 
+// --- 휠 확대 ---------------------------------------------------------------------------
+//
+// 옛 핸들러는 `event.deltaY > 0 ? 1.1 : 1/1.1`이라 **부호만** 쓰고 크기를 버렸다. 실측(CDP로
+// deltaY를 4·53·100·120·240·1000으로 바꿔 32회): 배율이 전부 1.1000 / 0.90909였다 — 마우스 한
+// 노치(deltaY=100, deltaMode=0)도 트랙패드의 deltaY=4도 똑같이 10%를 먹는다. 트랙패드는 한 번
+// 쓸기에 그런 이벤트를 수십 건 내므로 1.1^50 = 117배가 한 번에 걸려 장면이 상·하한에 붙었다.
+//
+// 이제 deltaY를 **픽셀로 정규화**해 지수에 넣는다. 한 노치(WHEEL_NOTCH_PX)당 WHEEL_NOTCH_FACTOR,
+// 그 사이는 연속이다: deltaY=4면 1.05^0.04 = +0.20%. 한 이벤트가 WHEEL_PIXELS_MAX를 넘지 못하게
+// 잘라 관성 스크롤의 큰 한 방이 화면을 날려 보내지 못하게 한다.
+const WHEEL_NOTCH_PX = 100;      // 마우스 휠 한 노치(관측: deltaY=100, deltaMode=0, wheelDelta=-120)
+const WHEEL_NOTCH_FACTOR = 1.05; // 한 노치당 +5% / -4.76%(옛 값의 절반)
+const WHEEL_PIXELS_MAX = 300;    // 한 이벤트 상한 = 3노치(약 ±15%)
+const WHEEL_LINE_PX = 16;        // deltaMode=1(줄) 한 줄을 픽셀로 볼 때의 값
+// 거리 한계는 **장면 크기에서** 나온다. 옛 값 clamp(0.05, 60)은 L3 기본 거리 0.80m의 1/16배·75배로
+// 비대칭이었다. 이제 기본 프리셋('자세 맞춤')이 푼 거리를 기준으로 안쪽 1/8배·바깥쪽 24배까지 본다.
+// 실측 프리셋 거리(김경호 L1/L2/L3/L6, 1875×1000, m):
+//   자세 맞춤 1.012 / 1.260 / 0.802 / 1.237 · 상체 확대 0.636 / 0.548 / 0.708 / 0.809
+//   궤적 포함 2.836 / 3.134 / 2.391 / 2.992 · 벽 포함 3.152 / 2.908 / 3.758 / 3.491
+// 가장 가까운 프리셋(0.548)도 가장 먼 프리셋(3.758)도 그때의 한계 안이다 — 안쪽 한계가 0.100~0.158m,
+// 바깥쪽이 19.2~30.2m였다. 절대 한계는 카메라 근·원 평면(0.02m·200m) 안쪽으로 남겨 둔다.
+const RADIUS_MIN_ABS = 0.05;
+const RADIUS_MAX_ABS = 60;
+const RADIUS_IN_FACTOR = 8;
+const RADIUS_OUT_FACTOR = 24;
+
+/** 휠 이벤트 한 건의 세기를 **픽셀**로. deltaMode는 브라우저·장치마다 다른 단위를 쓴다. */
+function wheelPixels(event, viewportHeight) {
+  const mode = event.deltaMode ?? 0;
+  const delta = event.deltaY ?? 0;
+  if (mode === 1) return delta * WHEEL_LINE_PX;
+  if (mode === 2) return delta * viewportHeight;
+  return delta;
+}
+
+/** 픽셀 세기 → 카메라 거리에 곱할 배율. 한 노치가 정확히 WHEEL_NOTCH_FACTOR가 되는 지수. */
+function wheelZoomFactor(pixels) {
+  const px = clamp(pixels, -WHEEL_PIXELS_MAX, WHEEL_PIXELS_MAX);
+  return Math.exp((px / WHEEL_NOTCH_PX) * Math.log(WHEEL_NOTCH_FACTOR));
+}
+
+/** 이 장면에서 허용할 카메라 거리 범위. `base`는 기본 프리셋이 푼 거리(없으면 절대 한계만). */
+function radiusLimitsFor(base) {
+  if (!(typeof base === "number") || !(base > 0)) return { min: RADIUS_MIN_ABS, max: RADIUS_MAX_ABS };
+  return {
+    min: Math.max(RADIUS_MIN_ABS, base / RADIUS_IN_FACTOR),
+    max: Math.min(RADIUS_MAX_ABS, base * RADIUS_OUT_FACTOR),
+  };
+}
+
 function scaleColor(hex, factor) {
   const r = Math.round(((hex >> 16) & 255) * factor);
   const g = Math.round(((hex >> 8) & 255) * factor);
@@ -90,6 +142,21 @@ function sigmaColor(sigma) {
 
 function isVec3(value) {
   return Array.isArray(value) && value.length === 3 && value.every((x) => typeof x === "number");
+}
+
+/** 씬 그래프에서 이 그룹의 후손 수. 다시 그릴 때 층이 **쌓이는지**를 재는 계수기다 —
+ * `resetScene()`이 층을 비우지 않으면 [평가]를 누를 때마다 이 수가 늘어난다. */
+function countDescendants(group) {
+  let n = 0;
+  group.traverse(() => { n += 1; });
+  return n - 1; // 자기 자신은 빼고 센다
+}
+
+/** 이 그룹 안에서 `userData.kind`가 주어진 값인 객체 수. */
+function countKind(group, kind) {
+  let n = 0;
+  group.traverse((child) => { if (child.userData.kind === kind) n += 1; });
+  return n;
 }
 
 function disposeObject3D(object) {
@@ -217,6 +284,12 @@ function renderLegend(legend, view) {
   for (const text of view?.legend_notes ?? []) {
     if (typeof text === "string") legend.append(legendItem(null, text));
   }
+  // 스트로크 문구도 서버 것이다 — 몇 곳에서 끊었는지·얼마나 떴는지는 서버가 재고 화면은 옮기기만 한다.
+  if (typeof view?.stroke?.note === "string" && view.stroke.note.length > 0) {
+    const item = legendItem("line-solid", view.stroke.note);
+    item.dataset.role = "stroke";
+    legend.append(item);
+  }
 }
 
 function mount(THREE, container) {
@@ -273,7 +346,8 @@ function mount(THREE, container) {
   // 카메라 상태(구면좌표) — 드래그 회전·휠 확대가 이 값만 바꾼다.
   const camState = { target: new THREE.Vector3(0, 1, 0), radius: 3, theta: Math.PI / 4, phi: Math.PI / 2.5 };
   // 자동 맞춤 상태. 사용자가 드래그·휠로 카메라를 만지면 창 크기가 바뀌어도 다시 맞추지 않는다.
-  const framing = { mode: "pose", auto: true, ratio: null };
+  // `baseRadius`는 이 뷰의 기본 프리셋('자세 맞춤')이 푼 카메라 거리다 — 휠 한계가 장면 크기를 따른다.
+  const framing = { mode: "pose", auto: true, ratio: null, baseRadius: null };
   // 마지막으로 그린 view. resize()가 첫 호출부터 읽으므로 그보다 먼저 선언한다.
   let lastView = null;
 
@@ -327,8 +401,10 @@ function mount(THREE, container) {
     "wheel",
     (event) => {
       event.preventDefault();
-      const factor = event.deltaY > 0 ? 1.1 : 1 / 1.1;
-      camState.radius = clamp(camState.radius * factor, 0.05, 60);
+      const { h } = hostSize();
+      const factor = wheelZoomFactor(wheelPixels(event, h));
+      const limits = radiusLimitsFor(framing.baseRadius);
+      camState.radius = clamp(camState.radius * factor, limits.min, limits.max);
       framing.auto = false;
       applyCamera();
       scheduleFramingNote();
@@ -807,6 +883,10 @@ function mount(THREE, container) {
       group.add(line);
 
       if (emph.showMarker) {
+        // 표식은 궤적의 **끝점 하나**다. 옛 코드는 20개 표본마다 구체를 찍어 한 층에 60개, 질의·기준
+        // 둘이면 120개가 화면을 덮었다 — 사용자가 "부분적으로 뿌려진 건 다 없앴으면 함"이라고 한 바로
+        // 그 알갱이다. 줄 자체는 그대로라 "연결된 하나의 선"이 남고, 범례가 선언한 부호(층 색으로 채운
+        // 구체 = 실측, 속 빈 표식 = 계산)는 끝점 표식이 그대로 진다.
         const markerGeometry = new THREE.SphereGeometry(0.004 * emph.width * (measured === false ? 1.6 : 1), 10, 6);
         const markerMaterial = new THREE.MeshBasicMaterial({
           color: layerColor,
@@ -814,18 +894,47 @@ function mount(THREE, container) {
           opacity: emph.opacity,
           wireframe: measured === false,
         });
-        for (const p of points) {
-          const marker = new THREE.Mesh(markerGeometry, markerMaterial);
-          marker.position.copy(p);
-          marker.userData.kind = measured === false ? "computed-layer-marker" : "measured-layer-marker";
-          group.add(marker);
-        }
+        const marker = new THREE.Mesh(markerGeometry, markerMaterial);
+        marker.position.copy(points[points.length - 1]);
+        marker.userData.kind = measured === false ? "computed-layer-marker" : "measured-layer-marker";
+        group.add(marker);
         if (emph.showLabel && labelPointNames) {
           registerLabel(points[points.length - 1], POINT_LABELS[name] ?? name, "view3d-label-point");
         }
       }
     }
     return group;
+  }
+
+  /** 벽 위 분사 스트로크. 서버가 낸 연결 구간(`view.stroke.runs`)을 그대로 잇는다.
+   *
+   * 선(THREE.Line)은 WebGL에서 굵기를 키울 수 없어 1px로만 그려졌고, 반투명 벽 위에서 거의 보이지
+   * 않았다(옛 값 opacity 0.45). 여기서는 뼈와 같은 방식으로 **실린더**를 이어 굵기를 준다 —
+   * 벽에 붙은 한 줄로 읽힌다. 점을 옮기거나 만들지 않는다: 정점은 서버가 준 원본 착탄점 그대로다.
+   * 표식(구체)은 찍지 않는다 — 사용자가 없애 달라고 한 "낱개 점"이 바로 그것이다. */
+  function buildStrokeGroup(strokeBlock) {
+    const group = new THREE.Group();
+    const runs = Array.isArray(strokeBlock?.runs) ? strokeBlock.runs : [];
+    const material = new THREE.MeshBasicMaterial({ color: LAYER_COLOR.query, transparent: true, opacity: 0.95 });
+    let segments = 0;
+    let drawnRuns = 0;
+    for (const run of runs) {
+      const points = (Array.isArray(run) ? run : []).filter(isVec3).map((p) => new THREE.Vector3(...p));
+      if (points.length < 2) continue;
+      const runGroup = new THREE.Group();
+      runGroup.userData.kind = "surface-stroke-run";
+      runGroup.userData.points = points.length;
+      for (let i = 0; i + 1 < points.length; i += 1) {
+        const piece = boneCylinder(points[i], points[i + 1], STROKE_RADIUS, material, "surface-stroke", "");
+        if (!piece) continue;
+        runGroup.add(piece);
+        segments += 1;
+      }
+      if (runGroup.children.length === 0) continue;
+      group.add(runGroup);
+      drawnRuns += 1;
+    }
+    return { group, runs: drawnRuns, segments };
   }
 
   /** 추정 뼈. 강조 대상이 아니라 문맥이다 — weights로 강조를 따지지 않고 무채색 한 색.
@@ -1133,12 +1242,14 @@ function mount(THREE, container) {
     }
     // 착탄점은 벽 위에 있어 몸에서 멀다. pose(자세 맞춤·기본)는 실측 마커·교정 화살표·상체 관절을
     // 우선하므로 넣지 않는다 — 넣으면 벽까지 담느라 상체가 다시 쪼그라든다. 궤적·벽 프리셋은 넣는다.
+    // 대표 프레임 착탄점은 **그리지 않는다**(낱개 점이라 뺐다). 여기서는 카메라 거리 계산에만 쓴다 —
+    // 궤적 프리셋이 몸에서 벽까지를 담게 하는 기준점이다.
     if (mode !== "pose") push(view.composite?.hit);
     if (mode === "tracks" || mode === "wall") {
       for (const name of ["head", "right", "left"]) for (const p of view.layers?.query?.[name] ?? []) push(p);
     }
     if (mode === "wall") {
-      // 원본 착탄점만 — 리샘플 격자는 벽에서 뜰 수 있다.
+      // 원본 착탄점만 — 리샘플 격자는 벽에서 뜰 수 있다. 그려지는 스트로크의 정점이 이 점들이다.
       for (const p of view.surface_hits ?? []) push(p);
       if (view.mesh?.available === true) for (const p of view.mesh.vertices ?? []) push(p);
     }
@@ -1216,7 +1327,7 @@ function mount(THREE, container) {
     return `${head}: ${shown}${rest}${subjectParticle(rest || shown)} 화면 밖에 있습니다 — 기본 뷰는 '자세 맞춤'입니다.`;
   }
 
-  /** 자리표시 발(D3, 바닥 맞춤)의 월드 좌표. 발 관절의 **이름은 서버**(`fit.legs.placeholder_feet`)가 준다 —
+  /** 자리표시 발(D3)의 월드 좌표. 발 관절의 **이름은 서버**(`fit.legs.placeholder_feet`)가 준다 —
    * 화면이 리그 이름을 지어내면 출처와 다른 라벨이 된다. 다리를 그리지 않는 화면에서는 빈 배열. */
   function placeholderFeetPoints(view) {
     const joints = view?.fit?.legs?.placeholder_joints;
@@ -1251,10 +1362,10 @@ function mount(THREE, container) {
 
   /** 발이 **이 프리셋에서** 화면 밖이면, 발이 보이는 프리셋의 이름을 같이 말한다.
    *
-   * 자리표시 발을 바닥면에 세운 것(D3)이 기본 뷰('자세 맞춤')에서는 보이지 않는다 — 다리는 맞춤
+   * 리그 제 길이로 내린 자리표시 발(D3)이 기본 뷰('자세 맞춤')에서는 보이지 않는다 — 다리는 맞춤
    * 대상이 아니어서 카메라가 상체에 맞춰 서기 때문이다. 실측(김경호 L1·L3·L6, 캔버스 H=600): 기본
    * 뷰에서 발의 캔버스 y가 976·1063 / 697 / 786으로 전부 밖이었다. 그 사실을 화면이 말하지 않으면
-   * 바닥 맞춤 고지가 가리키는 것을 아무도 못 본다. 어느 프리셋에서 보이는지는 **말로 정하지 않고**
+   * 바닥면 고지가 가리키는 것을 아무도 못 본다. 어느 프리셋에서 보이는지는 **말로 정하지 않고**
    * 각 프리셋의 카메라를 실제로 풀어서(`solveFraming`) 투영해 확인한다. */
   function describeFeetFraming() {
     if (!lastView) return "";
@@ -1267,9 +1378,9 @@ function mount(THREE, container) {
       return feet.every((p) => insideFrustum(p, solved)) ? probe.label : null;
     }).filter((name) => name !== null);
     const where = shows.length === 0 ? "" : ` — ${shows.map((n) => `'${n}'`).join(" · ")}에서 보입니다`;
-    // 바닥에 맞춘 레벨에서만 "바닥에 맞춘"이라고 부른다. 메시가 없는 레벨(2)이나 배율 한계로 맞추지
-    // 않은 패스는 리그 길이로 내린 발이다 — 맞추지 않은 것을 맞췄다고 부르면 출처와 다른 라벨이 된다.
-    const what = lastView?.fit?.legs?.placeholder_snapped === true ? "바닥에 맞춘 자리표시 발" : "자리표시 발";
+    // 다리는 어느 레벨에서도 리그 제 길이로 내린다(D3 재판정) — 발을 바닥에 세웠다고 부를 근거가
+    // 없으므로 그냥 "자리표시 발"이다. 고른 면과 발의 관계는 서버 고지가 숫자로 말한다.
+    const what = "자리표시 발";
     return `${what}은 ${nowWord()} 화면 밖에 있습니다${where}.`;
   }
 
@@ -1416,7 +1527,7 @@ function mount(THREE, container) {
       container.__view3dDebug.framingNote = text;
       container.__view3dDebug.torsoSpan = torsoScreenSpan();
       container.__view3dDebug.upperBody = upperBodyScreen();
-      // D3 검증용: 바닥에 맞춘 자리표시 발이 지금 보이는가, 어느 프리셋이 보여 주는가.
+      // D3 검증용: 자리표시 발이 지금 보이는가, 어느 프리셋이 보여 주는가.
       const feet = placeholderFeetPoints(lastView);
       container.__view3dDebug.feetOnScreen = feet.length > 0 && feet.every((q) => onScreenNow(q));
       container.__view3dDebug.feetPresets = feet.length === 0
@@ -1620,28 +1731,15 @@ function mount(THREE, container) {
     checkboxes.legs.disabled = !legsKnown;
     checkboxes.legs.checked = legsKnown ? fit.legs_visible_default === true : true;
     applyLegsToggle();
-    // 질의 착탄 궤적: 원본 착탄점(벽 표면 위 실측).
-    const surfaceHits = (view.surface_hits ?? []).filter(isVec3).map((p) => new THREE.Vector3(...p));
-    if (surfaceHits.length > 1) {
-      const trace = new THREE.Line(
-        new THREE.BufferGeometry().setFromPoints(surfaceHits),
-        new THREE.LineBasicMaterial({ color: LAYER_COLOR.query, transparent: true, opacity: 0.45 }),
-      );
-      trace.userData.kind = "surface-hit-trace";
-      layerGroups.query.add(trace);
-    }
+    // 벽 위 분사 스트로크. 서버(`composite.stroke_runs`)가 **이미 잘라서** 준 연결 구간만 그린다 —
+    // 화면은 자르는 판정을 다시 하지 않는다. 옛 코드는 원본 착탄점 전부를 한 폴리라인으로 이어
+    // 모서리를 가로지르는 현이 공중에 떴다(L6 최대 84.6mm).
+    const strokeGroup = buildStrokeGroup(view.stroke);
+    layerGroups.query.add(strokeGroup.group);
     const anchors = buildAnchorGroup(fit);
     layerGroups.query.add(anchors.group);
     const passMean = buildPassMeanGroup(view.corrections ?? [], fit);
     layerGroups.query.add(passMean.group);
-    if (isVec3(view.composite?.hit)) {
-      const hitMarker = new THREE.Mesh(
-        new THREE.SphereGeometry(HIT_MARKER_RADIUS, 14, 10),
-        new THREE.MeshBasicMaterial({ color: LAYER_COLOR.query }),
-      );
-      hitMarker.position.set(...view.composite.hit);
-      layerGroups.query.add(hitMarker);
-    }
     layerGroups.query.visible = checkboxes.query.checked;
     layerGroups.reference.visible = checkboxes.reference.checked;
     layerGroups.corrected.visible = checkboxes.corrected.checked;
@@ -1758,13 +1856,47 @@ function mount(THREE, container) {
         return out;
       })(),
       notesCollapsed: moreLines,
+      // 층마다 씬에 실제로 올라간 객체 수. 같은 대상을 다시 그리면(기준을 넘기든 [평가]를 다시 누르든)
+      // 이 수가 **변하지 않아야** 한다 — 변하면 이전 층을 지우지 않고 쌓은 것이다.
+      layerObjectCounts: {
+        query: countDescendants(layerGroups.query),
+        reference: countDescendants(layerGroups.reference),
+        corrected: countDescendants(layerGroups.corrected),
+        corrections: countDescendants(correctionsGroup),
+      },
+      // 층마다 그려진 궤적 줄 수. 범례가 말하는 줄 수와 같아야 한다(서버 `legend_notes`).
+      // 벽 위 스트로크: 그려진 연결 구간 수·실린더 수. 서버 `view.stroke`가 준 것과 같아야 한다.
+      stroke: {
+        runs: strokeGroup.runs,
+        segments: strokeGroup.segments,
+        serverRuns: Array.isArray(view.stroke?.runs) ? view.stroke.runs.length : 0,
+        serverPoints: view.stroke?.point_count ?? null,
+        serverBreaks: view.stroke?.break_count ?? null,
+        serverMaxLiftMm: view.stroke?.max_lift_mm ?? null,
+        serverMaxKeptLiftMm: view.stroke?.max_kept_lift_mm ?? null,
+        note: view.stroke?.note ?? null,
+      },
+      layerTrackLines: {
+        query: countKind(layerGroups.query, "measured-layer-line"),
+        reference: countKind(layerGroups.reference, "measured-layer-line"),
+        corrected: countKind(layerGroups.corrected, "computed-layer-line"),
+      },
       boneLengths,
       fit,
       framingRatio: null,
     });
 
     Object.assign(camState, defaultAngles(view));
+    framing.baseRadius = null;
     frameTo("pose");
+    // 휠 한계의 기준은 이 뷰의 기본 프리셋 거리다(프리셋 버튼을 눌러도 바뀌지 않는다).
+    framing.baseRadius = camState.radius;
+    debugLive.wheel = {
+      notchPx: WHEEL_NOTCH_PX,
+      notchFactor: WHEEL_NOTCH_FACTOR,
+      baseRadius: framing.baseRadius,
+      limits: radiusLimitsFor(framing.baseRadius),
+    };
     layoutLabels();
   }
 
@@ -1772,6 +1904,7 @@ function mount(THREE, container) {
     dom.host.classList.remove("is-loading");
     resetScene();
     lastView = null;
+    framing.baseRadius = null;
     setNote(dom.note, message ?? "패스를 고르고 평가를 누르면 여기에 뜹니다.", tone ?? "idle");
     dom.notes.replaceChildren();
     dom.notesMore.replaceChildren();

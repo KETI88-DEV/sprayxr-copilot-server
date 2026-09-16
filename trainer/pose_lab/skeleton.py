@@ -290,25 +290,33 @@ PLACEHOLDER_LEG_CHAIN: Final[tuple[tuple[str, str, str, str], ...]] = (
     ("RightThigh", "RightCalf", "RightFoot", "RightToe"),
 )
 
-# 바닥 맞춤(D3). 메시가 있는 레벨에서는 자리표시 발을 `composite.floor_vertical`이 고른 바닥면 위에
-# 세운다 — 리그 길이 그대로 내리면 레벨 3에서 발이 바닥면 0.540m 아래로 내려가 수평판을 뚫고 나온 것처럼
-# 보였다. 엉덩이 관절은 배치된 골반에 붙어 있으므로 움직일 수 없다. 그래서 **자리표시 다리의 길이만**
-# 바닥까지 늘리거나 줄인다(허벅지·종아리 같은 비율). 길이가 리그의 이 범위를 벗어나야 닿는다면 맞추지
-# 않는다 — 그때는 바닥을 잘못 고른 것이고, 다리를 0.1배로 접어 놓는 그림이 리그 길이보다 더 거짓말이다.
-# 발끝은 수평이라 배율을 받지 않는다. **이 다리는 맞춘 뒤에도 측정이 아니다.**
-PLACEHOLDER_SCALE_MIN: Final = 0.25
-PLACEHOLDER_SCALE_MAX: Final = 2.0
+# 바닥 맞춤(D3)은 **하지 않는다** — 다리는 리그 제 길이로 내린다.
+#
+# 옛 코드는 자리표시 발을 `composite.floor_vertical`이 고른 면에 닿추려고 허벅지·종아리 길이에
+# 한 배율(0.25~2.0)을 곱했다. 그때 화면이 받던 배율은 레벨 3에서 **0.35**, 레벨 6에서 0.55였다(옛 리그 실측) — 화면의
+# 작업자가 난쟁이가 됐다. 배율이 갈리는 원인은 리그가 아니라 고른 면이다: 그 면 위 머리(HMD) 실측
+# 높이가 L1 1.51m · L3 0.70m · L6 0.88m라, **L3·L6에서 고른 면은 작업자가 선 지면이 아니다**
+# (골반→머리는 리그 값이라 네 레벨이 모두 같으므로 몸통 길이는 산포를 설명하지 못한다).
+# 지면이 아닌 면에 발을 닿추려고 다리를 줄이면, 없는 사실(그 면이 지면이라는 것)을 그림이 주장한다.
+#
+# 그래서 다리는 **리그 제 길이**로 골반에서 월드 아래로 내린다. 발이 고른 면보다 아래로 내려가는 것은
+# 허용한다 — 레벨 3에서는 발이 바닥면 0.605m 아래다. 그 관계는 숨기지 않고 화면이 말한다 —
+# `PlaceholderLegs.feet_below_floor_m`와 `service.LEGS_FLOOR_*_NOTE`.
+# 바닥면을 **고르는 규칙 자체는 그대로다**(`composite.floor_vertical`) — 바뀐 것은 배율을 먹이던 곳뿐이다.
+# 발끝은 수평이라 예전에도 배율을 받지 않았다. **이 다리는 측정이 아니다.**
 
 
 @dataclass(frozen=True, slots=True)
 class PlaceholderLegs:
-    """곧게 선 자리표시 다리. 측정이 아니다 — `scale`·`floor_vertical`이 무엇을 했는지 드러낸다."""
+    """곧게 선 자리표시 다리. 측정이 아니다 — 뼈 길이는 리그 그대로이고 배율을 먹이지 않는다.
+
+    `floor_vertical`은 벽 메시가 고른 바닥면의 월드 수직 높이(메시가 없으면 None)이고,
+    `feet_below_floor_m`는 **가장 낮은 발목**이 그 면보다 얼마나 아래인가다(음수면 위).
+    """
 
     joints: dict[str, Vec3]
-    scale: float  # 리그 허벅지·종아리 길이에 곱한 배율(1.0이면 리그 그대로)
-    floor_vertical: float | None  # 맞춘 바닥면의 월드 수직 높이. 맞추지 않았으면 None
-    floor_offered: float | None  # 바닥면을 받았는지(배율 한계로 거절했어도 값이 남는다)
-    snapped: bool
+    floor_vertical: float | None
+    feet_below_floor_m: float | None
 
 
 def standing_legs(
@@ -323,10 +331,8 @@ def standing_legs(
     `forward`는 발끝 방향 후보(월드)다. 수평 성분이 거의 없으면 발끝 관절을 싣지 않는다 — 방향을
     지어내지 않는다.
 
-    `floor`가 오면 발목을 그 높이에 맞추도록 허벅지·종아리 길이에 한 배율을 곱한다. 배율은 두 다리에
-    **같은 값**이다 — 다리마다 다른 배율을 주면 짝짝이 다리가 되어 자세로 읽힌다. 그 하나의 배율은
-    엉덩이가 가장 **낮은** 다리가 바닥에 닿도록 정한다(평균으로 정하면 낮은 쪽 발이 바닥 아래로
-    다시 내려간다). 나머지 발은 바닥 위에 살짝 뜬다 — 뚫고 나가는 것보다 뜨는 쪽이 낫다.
+    `floor`가 오면 **길이를 바꾸지 않고** 발목이 그 면보다 얼마나 아래인지만 재서 싣는다
+    (`feet_below_floor_m`). 다리를 줄이거나 늘려 면에 닿추지 않는다 — 위 D3 주석의 이유다.
     """
     down = -np.array(world_axes.UP, dtype=float)
     up = -down
@@ -342,37 +348,22 @@ def standing_legs(
             return None
         chain.append((hip, knee, ankle, toe))
 
-    scale = 1.0
-    snapped = False
-    if floor is not None:
-        ratios = [
-            (float(np.dot(np.array(joints[hip], dtype=float), up)) - floor)
-            / (math.hypot(*offsets[knee]) + math.hypot(*offsets[ankle]))
-            for hip, knee, ankle, _toe in chain
-            if math.hypot(*offsets[knee]) + math.hypot(*offsets[ankle]) > 1e-9
-        ]
-        if ratios:
-            candidate = min(ratios)
-            if PLACEHOLDER_SCALE_MIN <= candidate <= PLACEHOLDER_SCALE_MAX:
-                scale = candidate
-                snapped = True
-
     out: dict[str, Vec3] = {}
+    ankle_heights: list[float] = []
     for hip, knee, ankle, toe in chain:
         h = np.array(joints[hip], dtype=float)
-        k = h + down * math.hypot(*offsets[knee]) * scale
-        a = k + down * math.hypot(*offsets[ankle]) * scale
+        k = h + down * math.hypot(*offsets[knee])
+        a = k + down * math.hypot(*offsets[ankle])
         out[hip] = _as_tuple(h)
         out[knee] = _as_tuple(k)
         out[ankle] = _as_tuple(a)
+        ankle_heights.append(float(np.dot(a, up)))
         if heading is not None:
             out[toe] = _as_tuple(a + heading * math.hypot(*offsets[toe]))
     return PlaceholderLegs(
         joints=out,
-        scale=scale,
-        floor_vertical=floor if snapped else None,
-        floor_offered=floor,
-        snapped=snapped,
+        floor_vertical=floor,
+        feet_below_floor_m=None if floor is None or not ankle_heights else floor - min(ankle_heights),
     )
 
 

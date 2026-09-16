@@ -31,7 +31,7 @@ pose_fk_csv = importlib.import_module("pose_fk_csv")
 simulator_csv = importlib.import_module("simulator_csv")
 world_axes = importlib.import_module("world_axes")
 
-from trainer.pose_lab import composite, instructions, joint_angles, orientation, skeleton
+from trainer.pose_lab import body_proportions, composite, instructions, joint_angles, orientation, skeleton
 from trainer.pose_lab.spread_reference import Resolved, SpreadReference
 
 logger = logging.getLogger(__name__)
@@ -559,6 +559,42 @@ LEGEND_NOTES: Final[tuple[str, ...]] = (
     "아바타 추정은 모두 회색입니다 — 뼈·관절점·윤곽선 머리·점선 다리(자리표시)",
     "● 대표 프레임 실측 · ○ 패스 평균",
 )
+
+# 층마다 궤적이 **몇 줄**인지 화면이 말한다.
+#
+# 사용자가 "왜인지 '기준'이 세 개가 그려져"라고 보고했다. 재현해 세어 보니 쌓임이 아니다 —
+# `resetScene()`이 매 `render()`마다 층을 비우고, [다른 기준 ▸]을 세 번 넘겨도 [평가]를 세 번 다시
+# 눌러도 기준 층의 씬 후손 수는 64로 같았다. 원래 **세 줄**이다: `buildLayerGroup`이 층의 점 이름
+# (head·right·left)마다 폴리라인을 하나씩 만든다. 세 줄이 같은 색·라벨 없이 그려지니 "기준이 세 개"로
+# 읽힌 것이다. 화면은 그 사실을 말해야 한다 — 이름과 순서는 **가중치**에서 나온다(강조도 같은 곳에서
+# 나온다: `skeleton_view.emphasis`가 opacity를 weight로 정한다). 지어낸 순서를 적지 않는다.
+TRACK_POINT_NAMES: Final[dict[str, str]] = {"head": "머리", "right": "오른손", "left": "왼손"}
+# 동률일 때의 고정 순서. 가중치가 같으면 이 차례로 적는다(실행마다 순서가 흔들리지 않게).
+TRACK_POINT_ORDER: Final[tuple[str, ...]] = ("right", "head", "left")
+
+
+def track_legend_note(weights: Mapping[str, float]) -> str | None:
+    """층마다 궤적이 몇 줄이고 어느 줄이 무엇인지 한 줄로. 그릴 줄이 없으면 None.
+
+    진하기가 가중치라는 것은 화면 규칙이다(`emphasis(weight).opacity = 0.25 + 0.75·weight`).
+    그래서 줄 이름을 **가중치 내림차순**으로 적으면 화면에서 진한 순서와 같은 차례가 된다.
+    """
+    drawn = [
+        (name, float(weights[name]))
+        for name in TRACK_POINT_ORDER
+        if isinstance(weights.get(name), (int, float)) and float(weights[name]) > 0.0
+    ]
+    if not drawn:
+        return None
+    drawn.sort(key=lambda item: (-item[1], TRACK_POINT_ORDER.index(item[0])))
+    names = " · ".join(TRACK_POINT_NAMES[name] for name, _weight in drawn)
+    count = len(drawn)
+    return (
+        f"층마다 궤적은 {count}줄입니다 — 진한 차례로 {names}입니다. "
+        f"기준 층의 {count}줄은 기준 {count}개가 아니라 기준 한 사람의 {count}점입니다"
+    )
+
+
 # 범례가 "실측"으로 선언한 시각 부호(색). 추정 기하는 이 색을 쓰지 않는다 — 검사가 이 짝을 고정한다.
 LEGEND_MEASURED_SYMBOL: Final = "층 색으로 채운 구체"
 LEGEND_ESTIMATE_SYMBOL: Final = "회색"
@@ -573,24 +609,26 @@ LEGS_HIDDEN_NOTE: Final = (
     "툴바 '다리(IK)'로만 봅니다."
 )
 LEGS_SHOWN_NOTE: Final = LEGS_PLACEHOLDER_PREFIX + " — 시뮬레이터 IK 다리는 툴바 '다리(IK)'로 봅니다."
-# 바닥 맞춤 고지(D3). 무엇을 바닥으로 골랐는지·다리 길이를 얼마나 바꿨는지를 화면이 말한다.
-LEGS_FLOOR_NOTE: Final = (
-    " 발은 벽 메시의 바닥면(수평에 가까운 면 중 가장 낮은 면, 수직 {floor:.2f}m)에 세웠고 "
-    "자리표시 다리 길이를 리그의 {scale:.2f}배로 맞췄습니다 — 맞춘 뒤에도 측정이 아닙니다."
+# 바닥면 고지(D3). 다리는 **리그 제 길이**로 내린다 — 배율을 먹이지 않는다(`skeleton.standing_legs`).
+# 화면은 고른 면과 발의 관계를 숨기지 않고 그대로 말한다.
+LEGS_FLOOR_BELOW_NOTE: Final = (
+    " 다리는 리그 제 길이로 골반에서 아래로 내렸습니다 — 발이 벽 메시의 바닥면(수평에 가까운 면 중 "
+    "가장 낮은 면, 수직 {floor:.2f}m)보다 {below:.2f}m 아래입니다."
 )
-LEGS_FLOOR_SKIPPED_NOTE: Final = (
-    " 벽 메시의 바닥면(수직 {floor:.2f}m)에 세우려면 자리표시 다리를 리그의 {scale:.2f}배로 바꿔야 해 "
-    "맞추지 않고 리그 길이 그대로 내렸습니다."
+LEGS_FLOOR_ABOVE_NOTE: Final = (
+    " 다리는 리그 제 길이로 골반에서 아래로 내렸습니다 — 발이 벽 메시의 바닥면(수평에 가까운 면 중 "
+    "가장 낮은 면, 수직 {floor:.2f}m)보다 {above:.2f}m 위입니다."
 )
-LEGS_NO_FLOOR_NOTE: Final = " 이 레벨은 벽 메시가 없어 바닥에 맞추지 않고 리그 길이로 내렸습니다."
+LEGS_NO_FLOOR_NOTE: Final = " 다리는 리그 제 길이로 골반에서 아래로 내렸습니다 — 이 레벨은 벽 메시가 없어 바닥면을 고르지 않았습니다."
 # 고른 면이 **작업자가 선 지면인지**를 보는 사람이 판단할 수 있게, 그 면 위 머리 실측 마커 높이를 같이 적는다.
-# 배율이 레벨마다 갈리는 것은 리그 몸통 길이 때문이 아니다(골반→머리는 리그 값이라 모든 레벨이 같다).
-# 갈리는 것은 골반–이 면 거리뿐이고, 실측으로 L1 1.155m · L3 0.334m · L6 0.525m이다. 같은 자리에서 잰
+# 발이 그 면보다 얼마나 아래인지가 레벨마다 갈리는 것은 리그 몸통 길이 때문이 아니다 — 골반→머리는
+# 리그에서 유도한 값이라 모든 레벨이 같다. 갈리는 것은 골반–이 면 거리뿐이고, 실측으로
+# L1 1.097m · L3 0.269m · L6 0.454m이다. 같은 자리에서 잰
 # 머리 실측 마커는 L1 1.508m · L3 0.696m · L6 0.879m — L3·L6는 서 있는 사람의 머리 높이가 아니다.
 # 문턱은 두지 않는다. 실측 높이를 그대로 적고 판단은 보는 사람에게 남긴다(`composite.py`의 바닥 주석 참고).
 LEGS_FLOOR_HEAD_NOTE: Final = (
     " 이 면 위 머리 실측 마커는 {head:.2f}m입니다 — 서 있는 사람의 머리 높이가 아니면 고른 면이 "
-    "작업자가 선 지면이 아니라는 뜻이고, 그만큼 배율도 지면 대신 이 면을 따라갑니다."
+    "작업자가 선 지면이 아니라는 뜻이고, 발이 그 면을 지나 내려간 것도 그래서입니다."
 )
 LEGS_PICKED_NOTE: Final = (
     LEGS_PLACEHOLDER_PREFIX
@@ -766,21 +804,6 @@ def _skeleton_failure(reason: str, representative: Representative | None = None)
     )
 
 
-def _floor_scale_wanted(
-    hips: Sequence[Vec3], offsets: Mapping[str, Vec3], floor: float
-) -> float:
-    """바닥에 닿으려면 자리표시 다리에 곱해야 했을 배율. 고지 문구에만 쓴다(`skeleton.standing_legs`와 같은 식)."""
-    ratios = [
-        (world_axes.vertical_of(tuple(hip)) - floor)
-        / (math.hypot(*offsets[knee]) + math.hypot(*offsets[ankle]))
-        for hip, (_name, knee, ankle, _toe) in zip(hips, skeleton.PLACEHOLDER_LEG_CHAIN)
-        if knee in offsets
-        and ankle in offsets
-        and math.hypot(*offsets[knee]) + math.hypot(*offsets[ankle]) > 1e-9
-    ]
-    return min(ratios) if ratios else float("nan")
-
-
 def _head_above_m(placed: skeleton.Placement, floor: float) -> float | None:
     """고른 면 위 **머리 실측 마커(HMD)**의 높이. 없으면 None — 지어내지 않는다."""
     for fit in placed.anchors:
@@ -790,7 +813,7 @@ def _head_above_m(placed: skeleton.Placement, floor: float) -> float | None:
 
 
 def _torso_length_m(offsets: Mapping[str, Vec3]) -> float:
-    return sum(math.hypot(*offsets[name]) for name in ("Spine", "Chest", "Head") if name in offsets)
+    return sum(math.hypot(*offsets[name]) for name in body_proportions.TORSO_BONES if name in offsets)
 
 
 def _fit_view(
@@ -830,25 +853,25 @@ def _fit_view(
                 note = LEGS_PICKED_NOTE.format(k=chosen.offset_frames)
             else:
                 note = LEGS_SHOWN_NOTE
-            # 바닥에 맞췄는지·왜 못 맞췄는지는 같은 줄에서 말한다 — note_keys가 "legs" 하나로 남는다.
-            if placeholder.snapped:
-                note += LEGS_FLOOR_NOTE.format(floor=placeholder.floor_vertical, scale=placeholder.scale)
-            elif placeholder.floor_offered is not None:
-                hips = [placed.joints[hip] for hip, *_ in skeleton.PLACEHOLDER_LEG_CHAIN if hip in placed.joints]
-                wanted = _floor_scale_wanted(hips, offsets, placeholder.floor_offered)
-                note += LEGS_FLOOR_SKIPPED_NOTE.format(floor=placeholder.floor_offered, scale=wanted)
-            else:
+            # 고른 면과 발의 관계는 같은 줄에서 말한다 — note_keys가 "legs" 하나로 남는다.
+            below = placeholder.feet_below_floor_m
+            if placeholder.floor_vertical is None or below is None:
                 note += LEGS_NO_FLOOR_NOTE
-            # 면을 골랐으면(맞췄든 거절했든) 그 면 위 머리 실측 높이를 같이 적는다.
-            if placeholder.floor_offered is not None:
-                head_above = _head_above_m(placed, placeholder.floor_offered)
+            elif below >= 0.0:
+                note += LEGS_FLOOR_BELOW_NOTE.format(floor=placeholder.floor_vertical, below=below)
+            else:
+                note += LEGS_FLOOR_ABOVE_NOTE.format(floor=placeholder.floor_vertical, above=-below)
+            # 면을 골랐으면 그 면 위 머리 실측 높이를 같이 적는다.
+            if placeholder.floor_vertical is not None:
+                head_above = _head_above_m(placed, placeholder.floor_vertical)
                 if head_above is not None:
                     note += LEGS_FLOOR_HEAD_NOTE.format(head=head_above)
             notes.append(note)
         note_keys.append("legs")
     notes.append(
-        f"이 CSV 리그에는 목·윗가슴 관절이 없고 골반→머리가 {_torso_length_m(offsets):.2f}m라 "
-        "몸통이 짧게 보입니다(리그 값 그대로 그렸습니다)."
+        f"이 CSV 리그에는 목·윗가슴 관절이 없어 골반→머리를 같은 작업자 BVH의 뼈 길이 비례로 다시 재 "
+        f"{_torso_length_m(offsets):.2f}m로 그리고, 빠진 목·윗가슴을 그 선분 위에 그려 넣었습니다 — "
+        "실측이 아니라 추정입니다."
     )
     note_keys.append("torso")
     right_norm = None if mounts.right is None else math.hypot(*mounts.right.offset)
@@ -932,8 +955,9 @@ def _fit_view(
             if placeholder is None
             else [ankle for _hip, _knee, ankle, _toe in skeleton.PLACEHOLDER_LEG_CHAIN if ankle in placeholder.joints],
             "floor_vertical": None if placeholder is None else placeholder.floor_vertical,
-            "placeholder_scale": None if placeholder is None else placeholder.scale,
-            "placeholder_snapped": None if placeholder is None else placeholder.snapped,
+            # 자리표시 발이 고른 바닥면보다 얼마나 아래인가(음수면 위). 다리 길이는 리그 그대로다 —
+            # 배율은 더 이상 없다.
+            "feet_below_floor_m": None if placeholder is None else placeholder.feet_below_floor_m,
         },
         # IK 다리를 기본으로 켜는가. 자리표시 다리가 있으면 IK 다리는 툴바로만 켠다.
         "legs_visible_default": bool(legs is not None and legs.plausible and placeholder is None),
@@ -956,7 +980,10 @@ def skeleton_block(
     이 패스의 건 그룹 키가 있을 때)을 쓰고, 아니면 이 패스에서 대표 프레임 ±1.0 s를 뺀
     프레임으로 맞춘다(`pass_fit_samples`). 그마저 모자라면 스켈레톤을 싣지 않는다.
     """
-    offsets = pose_fk_csv.bind_offsets(raw.rows[0]) if raw.rows else {}
+    # 몸통 세 마디를 BVH 실측 비례 길이로 다시 재고(`body_proportions.rig_offsets`), 아래에서
+    # 빠진 `Spine1`·`Neck`을 그려 넣는다. FK보다 **먼저** 바꿔야 관절 위치가 같이 따라온다 —
+    # 배치(`place_oriented`)는 강체 변환뿐이라 여기서 바꾼 뼈 길이를 그대로 유지한다.
+    offsets = body_proportions.rig_offsets(pose_fk_csv.bind_offsets(raw.rows[0])) if raw.rows else {}
     representative = representative if representative is not None else representative_frame(raw)
     if not offsets:
         return _skeleton_failure("no_joint_columns", representative)
@@ -984,9 +1011,12 @@ def skeleton_block(
     if placed is None:
         return _skeleton_failure("insufficient_anchors", representative)
 
+    # 그려 넣는 두 관절은 **선분 위 내분점**이라 배치 뒤에 계산해도 같다(방향을 지어내지 않는다).
+    joints = dict(placed.joints)
+    joints.update(body_proportions.inserted_joints(joints))
     return SkeletonResult(
-        joints={name: list(position) for name, position in placed.joints.items()},
-        bones=[list(pair) for pair in simulator_csv.BONES],
+        joints={name: list(position) for name, position in joints.items()},
+        bones=body_proportions.display_bones(simulator_csv.BONES, joints),
         fit=_fit_view(
             placed,
             representative,
@@ -1247,10 +1277,15 @@ def view_block(
         "fit": fit,
         "fit_reason": fit_reason,
         "fit_note": fit_note,
-        "legend_notes": list(LEGEND_NOTES),
+        "legend_notes": [
+            note
+            for note in (*LEGEND_NOTES, track_legend_note(weights_view))
+            if isinstance(note, str)
+        ],
         "display_errors": [],
         "composite": None,
         "surface_hits": [],
+        "stroke": composite.stroke_runs(None, []),
     }
 
 
@@ -1412,6 +1447,10 @@ def _attach_view(
     view["composite"] = composite_view if ok else None
     ok, hits = guarded("composite", composite.surface_hits, skeleton_result.representative)
     view["surface_hits"] = hits if ok else []
+    # 스트로크는 **끊어진 구간 목록**으로 낸다 — 착탄점을 이은 현이 모서리를 가로질러 벽에서 뜨는
+    # 곳에서 자른다(`composite.stroke_runs`). 화면은 이 구간만 그리고 자기가 다시 자르지 않는다.
+    ok, stroke = guarded("composite", composite.stroke_runs, geometry, view["surface_hits"])
+    view["stroke"] = stroke if ok else composite.stroke_runs(None, [])
     view["display_errors"] = errors
     body["view"] = view
 
