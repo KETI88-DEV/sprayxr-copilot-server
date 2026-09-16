@@ -141,6 +141,53 @@ def test_display_bones_replaces_the_three_stem_bones_with_five() -> None:
     assert bp.display_bones(bones, {"Pelvis": (0.0, 0.0, 0.0)}) == bones
 
 
+# --- 3. 머리 구체 지름(F2) ---------------------------------------------------------------
+#
+# `skeleton_view.js`의 옛 `HEAD_SPHERE_RADIUS = 0.09`(지름 0.18m)는 그려지는 골반→머리 0.409m의
+# 44%였다 — 사람 머리는 정수리~골반 길이의 17~22%다(BVH 실측: Head 0.097643m / 골반→머리 총합
+# 0.561368m = 17.4%). 화면이 풍선처럼 보인 원인이 렌더 버그가 아니라 상수였다는 뜻이다.
+
+
+def test_head_diameter_ratio_is_the_bvh_head_bones_share_of_the_full_chain() -> None:
+    """`HEAD_DIAMETER_RATIO`가 BVH 다섯 마디 합에서 `Head`가 차지하는 몫과 같은지 다시 계산해 본다."""
+    total = sum(bp.BVH_TORSO_M.values())
+    assert total == pytest.approx(0.561368, abs=1e-6)
+    expected = bp.BVH_TORSO_M["Head"] / total
+    assert bp.HEAD_DIAMETER_RATIO == pytest.approx(expected, rel=1e-12)
+    # 사람 범위(17~22%) 안에 있는가 — 옛 44%와는 확연히 다르다.
+    assert 0.17 < bp.HEAD_DIAMETER_RATIO < 0.22, bp.HEAD_DIAMETER_RATIO
+
+
+def test_head_diameter_ratio_check_can_fail_against_the_old_44_percent() -> None:
+    """옛 상수(지름 0.18m, 골반→머리 0.409m)가 내는 44%는 이 비례 범위 **밖**이어야 한다."""
+    old_ratio = 0.18 / 0.409
+    assert not (0.17 < old_ratio < 0.22), old_ratio
+
+
+def test_head_diameter_m_is_torso_length_times_the_bvh_ratio() -> None:
+    """머리 지름이 **이 리그의** 골반→머리 길이에 실측 비례를 곱한 값인지 — 고정 상수가 아닌지 본다."""
+    offsets = _csv_like_offsets()
+    torso = bp.torso_length_m(offsets)
+    assert torso == pytest.approx(0.3474, abs=1e-3)  # 독스트링의 옛 골반→머리(다시 재기 전)
+    assert bp.head_diameter_m(offsets) == pytest.approx(torso * bp.HEAD_DIAMETER_RATIO, rel=1e-12)
+    # 리그가 달라지면(예: `rig_offsets`로 다시 잰 골반→가슴) 지름도 같이 바뀐다 — 고정 상수라면
+    # 안 바뀔 것이다.
+    rescaled = bp.rig_offsets(offsets)
+    assert bp.torso_length_m(rescaled) != pytest.approx(torso, rel=1e-9)
+    assert bp.head_diameter_m(rescaled) != pytest.approx(bp.head_diameter_m(offsets), rel=1e-9)
+    assert bp.head_diameter_m(rescaled) == pytest.approx(bp.torso_length_m(rescaled) * bp.HEAD_DIAMETER_RATIO, rel=1e-12)
+
+
+def test_head_diameter_m_uses_torso_length_not_a_different_definition() -> None:
+    """`torso_length_m`이 `TORSO_BONES`(Spine·Chest·Head)만 재는지 — 다리·팔이 섞이면 안 된다."""
+    offsets = _csv_like_offsets()
+    with_legs_and_arms = bp.torso_length_m(offsets)
+    trimmed = {k: v for k, v in offsets.items() if k in bp.TORSO_BONES}
+    assert bp.torso_length_m(trimmed) == pytest.approx(with_legs_and_arms, rel=1e-12)
+    # 팔·다리를 지워도 값이 그대로여야 실제로 세 마디만 쓴다는 증거다.
+    assert set(trimmed) < set(offsets)
+
+
 # --- 2. 앵커 오차 불변 ------------------------------------------------------------------
 
 

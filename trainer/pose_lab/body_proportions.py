@@ -106,6 +106,14 @@ BVH_LEG_TOTAL_M: Final = sum(BVH_LEG_M.values())
 BVH_ARM_RATIO: Final = BVH_ARM_TOTAL_M / BVH_LOWER_TORSO_TOTAL_M
 BVH_LEG_RATIO: Final = BVH_LEG_TOTAL_M / BVH_LOWER_TORSO_TOTAL_M
 
+# BVH 골반→머리 총합(다섯 마디: Spine·Spine1·Chest·Neck·Head). 화면의 머리 구체 지름을 이 몫으로
+# 유도한다 — 고정 상수(m)를 박아 넣으면 리그가 바뀌어도 안 따라온다. `Head`(목→머리) 뼈가 그
+# 총합에서 차지하는 몫이 "머리가 골반~정수리 중 얼마인가"의 유일한 실측 비례다(BVH_TORSO_M, 위
+# 독스트링 §"비교 대상"). 화면 상수 0.09m(지름 0.18m)는 이 리그의 골반→머리 0.409m에서 44%였다 —
+# 사람은 약 17~22%다(머리폭 대 정수리~골반 길이). 이 몫은 0.097643/0.561368 = 0.1739이고,
+# `HEAD_DIAMETER_RATIO * torso_length_m(offsets)`가 그 사람 몫의 지름(m)이다.
+HEAD_DIAMETER_RATIO: Final = BVH_TORSO_M["Head"] / sum(BVH_TORSO_M.values())
+
 # 다시 재는 CSV 마디와, 그 마디가 가져갈 BVH 길이의 몫.
 RESCALED_BONES: Final[tuple[str, ...]] = ("Spine", "Chest")
 LOWER_TORSO_SHARE_M: Final[dict[str, float]] = {
@@ -191,6 +199,25 @@ def target_lower_torso_m(offsets: Mapping[str, Vec3]) -> float | None:
     if not candidates:
         return None
     return math.exp(sum(math.log(value) for value in candidates) / len(candidates))
+
+
+def torso_length_m(offsets: Mapping[str, Vec3]) -> float:
+    """이 리그의 골반→머리 길이(m) = `TORSO_BONES`(Spine·Chest·Head) 노름의 합.
+
+    화면 고지(`service._torso_length_m`이 쓰던 정의와 같다)와 머리 구체 지름(`head_diameter_m`)이
+    **같은 길이**를 기준으로 삼아야 서로 다른 분모로 비율이 갈리지 않는다.
+    """
+    return sum(math.hypot(*offsets[name]) for name in TORSO_BONES if name in offsets)
+
+
+def head_diameter_m(offsets: Mapping[str, Vec3]) -> float:
+    """머리 구체 **지름**(m) = 이 리그의 골반→머리 길이 × BVH 실측 비례(`HEAD_DIAMETER_RATIO`).
+
+    고정 상수(예: 지름 0.18m)를 박아 넣지 않는다 — 리그의 골반→머리 길이가 바뀌면(예: 장착 상수를
+    다시 적합하거나 다른 작업자 비례를 쓰면) 머리 지름도 그 몫만큼 같이 바뀌어야, 리그가 사람보다
+    커지거나 작아져도 머리가 몸에서 뜨거나 파묻히지 않는다.
+    """
+    return torso_length_m(offsets) * HEAD_DIAMETER_RATIO
 
 
 def rig_offsets(offsets: Mapping[str, Vec3]) -> dict[str, Vec3]:

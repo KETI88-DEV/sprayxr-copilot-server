@@ -32,7 +32,12 @@ const SIGMA_UNKNOWN = 0x718096;
 const MEASURED_MARKER_RADIUS = 0.035;
 const RING_OUTER = 0.05;
 const RING_INNER = 0.04;
-const HEAD_SPHERE_RADIUS = 0.09;
+// 머리 구체 반지름 폴백(m). 서버가 `fit.head_diameter_m`을 못 주는 드문 경로(스켈레톤은 있는데
+// fit이 없는 경우)에서만 쓴다 — 정상 경로는 서버가 이 리그의 골반→머리 길이 × BVH 실측 비례로
+// 낸 지름을 쓴다(`buildSkeletonGroup`, `body_proportions.head_diameter_m`). 예전에는 고정
+// 0.09m(지름 0.18m)를 항상 썼는데, 그려지는 골반→머리 0.409m의 44%라 풍선처럼 보였다(사람은
+// 17~22%). 이 폴백 값은 그 44%가 아니라 서버가 보통 내는 값에 맞춘 근사치일 뿐이다.
+const HEAD_SPHERE_RADIUS_FALLBACK = 0.036;
 // 뼈는 장면 안에서 읽혀야 한다(2라운드: 1~2px 회색 선이 벽 메시 위에서 가장 약한 요소였다). 실측 마커(층 색
 // 구체 0.035m)와는 채도로 위계를 둔다 — 뼈는 무채색, 실측은 층 색.
 const BONE_RADIUS = 0.009;
@@ -54,8 +59,13 @@ const BADGE_MIN_PX = 26;
 // 글자 라벨을 몸통 화면 위치에서 바깥으로 미는 첫 거리(px).
 const LABEL_PUSH_PX = 16;
 // 맞춤 목표 = 맞춤 대상이 캔버스 반폭·반높이에서 차지할 비율. pose(기본·'자세 맞춤')는 벽도 궤적도
-// 다리도 빼고 실측 마커·교정 화살표·상체 관절만 담으므로 캔버스를 거의 채워도 잘리지 않는다. 남기는
-// 14%는 마커 구체 반지름·화살표 촉·글자 라벨 몫이다(0.75는 그만큼을 그냥 비워 뒀다).
+// 빼지만 **다리는 넣는다** — 작업자는 다리로 서 있어야 한다(사용자 지시, D3 재판정). 다리를 넣으면
+// 상체·팔·다리를 다 담아야 해서 예전만큼 캔버스를 채우지 못한다: 실측(헤드리스 CDP, 김경호 L1·L2·L3·L6,
+// 1875×1000) 상체(손·마커까지 넓은 정의, `upperBodyScreen`) 화면 비율이 0.305/0.245/0.415/0.315로,
+// 다리를 뺐던 시절의 목표(0.40)에 못 미치는 레벨도 있다 — 선 사람이 먼저이므로 이 값을 그대로
+// 받아들인다. 대신 8/8 케이스(레벨 1·2·3·6 × 1875×1000·840×1050)에서 발이 캔버스 안에 들어온다.
+// 남기는 14%는 마커 구체 반지름·화살표 촉·글자 라벨 몫이다
+// (0.75는 그만큼을 그냥 비워 뒀다).
 // 프리셋별 목표 비율 = 맞춤 대상 상자의 **긴 쪽**이 캔버스에서 차지하는 비율.
 // torso("상체 확대")만 1.0이다 — 상체를 캔버스에 꽉 채우려고 일부러 다리·교정 화살표·착탄점을 맞춤
 // 대상에서 뺐고, 그래서 그것들이 화면 밖으로 나갈 수 있다. 나간 것의 이름은 캔버스 아래에 적는다.
@@ -590,7 +600,10 @@ function mount(THREE, container) {
   }
 
   /** 좁은 정의: 머리 **실측** 마커(HMD)와 골반 관절, 이 두 점만의 화면 세로 거리와 캔버스 대비 비율.
-   * F3 합격선 문구('상체(머리 마커~골반) ≥ 캔버스 40%')가 가리키는 바로 그 두 점이다.
+   * 예전 합격선 문구('상체(머리 마커~골반) ≥ 캔버스 40%')가 가리키던 바로 그 두 점이지만, 그 40%
+   * 기준은 다리를 맞춤 대상에서 뺐던 시절의 것이라 지금은 안 쓴다 — 다리를 넣은 지금은 40%가
+   * 실측 상한(헤드리스 CDP, 김경호 L1·L2·L3·L6, 0.219/0.196/0.314/0.193)보다 높아 닿을 수 없었다.
+   * 이 함수는 검증용 측정치로 남긴다.
    * 넓은 정의(`upperBodyScreen`)는 손 관절·손 마커가 양끝일 때가 많아 훨씬 큰 값이 나온다 —
    * 그 값에 이 문구의 이름을 붙이면 출처와 다른 라벨이 된다. 두 값을 따로 내보내는 이유다. */
   function torsoScreenSpan() {
@@ -855,7 +868,9 @@ function mount(THREE, container) {
     const group = new THREE.Group();
     for (const name of Object.keys(layerData ?? {})) {
       // 착탄 격자(`hit`)는 호길이 리샘플이라 모서리를 가로지르면 벽에서 뜬다 — 선으로 그리지 않는다.
-      // 질의 착탄 궤적은 원본 착탄점(`view.surface_hits`)으로 따로 그린다.
+      // 분사 스트로크는 서버가 자른 연결 구간(`view.stroke`)을 `buildStrokeGroup`이 따로 그린다.
+      // `view.surface_hits`는 더 이상 여기서 그리지 않는다 — 맞춤(framing) 대상 점으로만 쓰인다
+      // (`framingPoints`의 mode === "wall" 분기).
       if (name === "joints" || name === "bones" || name === "hit") continue;
       const weight = typeof weights?.[name] === "number" ? weights[name] : 0;
       const emph = emphasis(weight);
@@ -954,7 +969,7 @@ function mount(THREE, container) {
     return mesh;
   }
 
-  function buildSkeletonGroup(joints, bones, faded, legJoints, placeholder) {
+  function buildSkeletonGroup(joints, bones, faded, legJoints, placeholder, headDiameterM) {
     const group = new THREE.Group();
     const legs = new THREE.Group();
     const placeholderLegs = new THREE.Group();
@@ -985,8 +1000,11 @@ function mount(THREE, container) {
     if (isVec3(joints.Head)) {
       // 추정 머리는 **윤곽선**이다. 채운 구로 그리면 화면에서 가장 큰 구가 되고, 범례가 층 색으로
       // 채운 구체를 실측이라 선언하는 것과 부호가 겹쳐 읽힌다(service.LEGEND_NOTES).
+      // 지름은 서버 값(`fit.head_diameter_m`)을 쓴다 — 이 리그의 골반→머리 길이 × BVH 실측 비례로
+      // 나온 값이라 고정 상수보다 이 몸에 맞는다. 못 받으면 폴백 반지름을 쓴다.
+      const radius = typeof headDiameterM === "number" && headDiameterM > 0 ? headDiameterM / 2 : HEAD_SPHERE_RADIUS_FALLBACK;
       const headMaterial = new THREE.MeshBasicMaterial({ color: BONE_COLOR, transparent: true, opacity: opacity * 0.5, depthWrite: false, wireframe: true });
-      const head = new THREE.Mesh(new THREE.SphereGeometry(HEAD_SPHERE_RADIUS, 12, 8), headMaterial);
+      const head = new THREE.Mesh(new THREE.SphereGeometry(radius, 12, 8), headMaterial);
       head.position.set(...joints.Head);
       head.userData.kind = "estimate-head";
       group.add(head);
@@ -1215,15 +1233,16 @@ function mount(THREE, container) {
     if (hasSkeleton) {
       // 숨긴 다리는 맞춤 대상에서도 뺀다 — 안 보이는 점 때문에 몸이 작아지면 안 된다. 대신 보이는
       // 자리표시 다리는 넣는다.
-      // pose(자세 맞춤·기본)에서는 **보이든 말든** 다리를 맞춤 대상에서 뺀다. 무릎~발끝이 세로를 다
-      // 먹으면 실측 마커·교정 화살표가 모인 상체가 쪼그라든다. 다리는 그대로 그린다 — 여기서 빼는 것은
-      // 카메라 거리 계산뿐이고, 궤적·벽 프리셋은 예전대로 다리를 넣는다.
+      // pose(자세 맞춤·기본)도 **다리를 맞춤 대상에 넣는다** — 작업자는 다리로 서 있어야 한다(사용자
+      // 지시). 예전에는 여기서 다리를 빼 상체를 키웠지만, 다리 길이가 리그 제 길이로 돌아온 뒤로는
+      // 그러면 발이 캔버스 아래로 잘려 나간다(실측: L1·L2·L3·L6 8가지 폭 전부 발이 200~433px 밖).
+      // 다리를 뺐던 만큼 상체가 캔버스를 덜 채우는 대가는 감수한다 — 선 사람이 먼저다.
       const legJoints = Array.isArray(view.fit?.legs?.joints) ? view.fit.legs.joints : [];
       const legsHidden = !checkboxes.legs.checked && legJoints.length > 0;
-      const excluded = new Set(mode === "pose" || legsHidden ? legJoints : []);
+      const excluded = new Set(legsHidden ? legJoints : []);
       for (const [name, p] of Object.entries(joints)) if (!excluded.has(name)) push(p);
       const placeholderJoints = view.fit?.legs?.placeholder_joints;
-      if (mode !== "pose" && legsHidden && placeholderJoints) for (const p of Object.values(placeholderJoints)) push(p);
+      if (legsHidden && placeholderJoints) for (const p of Object.values(placeholderJoints)) push(p);
       for (const anchor of view.fit?.anchors ?? []) {
         push(anchor.measured_marker);
         push(anchor.predicted_marker);
@@ -1362,11 +1381,12 @@ function mount(THREE, container) {
 
   /** 발이 **이 프리셋에서** 화면 밖이면, 발이 보이는 프리셋의 이름을 같이 말한다.
    *
-   * 리그 제 길이로 내린 자리표시 발(D3)이 기본 뷰('자세 맞춤')에서는 보이지 않는다 — 다리는 맞춤
-   * 대상이 아니어서 카메라가 상체에 맞춰 서기 때문이다. 실측(김경호 L1·L3·L6, 캔버스 H=600): 기본
-   * 뷰에서 발의 캔버스 y가 976·1063 / 697 / 786으로 전부 밖이었다. 그 사실을 화면이 말하지 않으면
-   * 바닥면 고지가 가리키는 것을 아무도 못 본다. 어느 프리셋에서 보이는지는 **말로 정하지 않고**
-   * 각 프리셋의 카메라를 실제로 풀어서(`solveFraming`) 투영해 확인한다. */
+   * pose(자세 맞춤·기본)는 이제 다리를 맞춤 대상에 넣는다(사용자 지시: 작업자는 다리로 서 있어야
+   * 한다 — 예전에는 다리를 빼 상체를 키웠지만 그러면 발이 캔버스 밖으로 잘렸다). 그래도 좁은
+   * 화면비(예: 840×1050)나 다리 체크박스를 꺼 자리표시 발만 남은 경우에는 여전히 화면 밖일 수
+   * 있어 이 고지를 남긴다. 바닥면 고지가 가리키는 발이 실제로 안 보이면 아무도 그 사실을 확인할
+   * 길이 없기 때문이다. 어느 프리셋에서 보이는지는 **말로 정하지 않고** 각 프리셋의 카메라를
+   * 실제로 풀어서(`solveFraming`) 투영해 확인한다. */
   function describeFeetFraming() {
     if (!lastView) return "";
     const feet = placeholderFeetPoints(lastView);
@@ -1722,8 +1742,9 @@ function mount(THREE, container) {
     const placeholder = fit?.legs?.placeholder_joints
       ? { joints: fit.legs.placeholder_joints, bones: fit.legs.placeholder_bones }
       : null;
-    const skeletonParts = buildSkeletonGroup(joints, view.layers?.query?.bones, fit?.faded === true, fit?.legs?.joints, placeholder);
+    const skeletonParts = buildSkeletonGroup(joints, view.layers?.query?.bones, fit?.faded === true, fit?.legs?.joints, placeholder, fit?.head_diameter_m);
     layerGroups.query.add(skeletonParts.group);
+    debugLive.headDiameterM = typeof fit?.head_diameter_m === "number" ? fit.head_diameter_m : null;
     skeletonLegs = skeletonParts.legs;
     skeletonPlaceholder = skeletonParts.placeholderLegs;
     // 다리 기본 표시는 서버 판정을 따른다: `legs_visible_default`면 IK 다리, 아니면 자리표시 다리(있을 때).

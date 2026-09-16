@@ -813,7 +813,7 @@ def _head_above_m(placed: skeleton.Placement, floor: float) -> float | None:
 
 
 def _torso_length_m(offsets: Mapping[str, Vec3]) -> float:
-    return sum(math.hypot(*offsets[name]) for name in body_proportions.TORSO_BONES if name in offsets)
+    return body_proportions.torso_length_m(offsets)
 
 
 def _fit_view(
@@ -887,6 +887,9 @@ def _fit_view(
     return {
         "method": FIT_METHOD,
         "mounts": kind,
+        # 추정 머리 구체 지름(m). 고정 상수가 아니라 이 리그의 골반→머리 길이 × BVH 실측 비례에서
+        # 나온다(`body_proportions.head_diameter_m`) — 화면은 이 값을 그대로 쓰고 다시 계산하지 않는다.
+        "head_diameter_m": body_proportions.head_diameter_m(offsets),
         "mounts_detail": {
             "right": None if mounts.right is None else {"group": representative.gun, "offset_norm_m": right_norm},
             "head": None if mounts.head is None else {"offset_norm_m": math.hypot(*mounts.head.offset)},

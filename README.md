@@ -125,6 +125,21 @@ docker exec ship-paint-trainer curl -s http://127.0.0.1:8130/api/health
 docker exec ship-paint-trainer curl -s http://127.0.0.1:8130/api/workers
 ```
 
+**서버를 다시 띄우기(코드를 바꾼 뒤).** 살아 있는 프로세스의 `comm`은 `python3`다 —
+`pgrep -x uvicorn`은 죽은 좀비만 잡고(`ps`에 `[uvicorn] <defunct>`로 여럿 남아 있을 수 있다)
+살아 있는 서버는 못 잡는다. `pgrep -f uvicorn`(앵커 없이)도 그 좀비들의 잔여 cmdline("uvicorn")에
+걸린다. 게다가 `docker exec ... bash -c "pkill -f '...uvicorn...'"`처럼 패턴이 **그 bash -c 인자
+자신**과 겹치면 셸이 자기 자신을 쳐서 죽는다(exit 143) — 재기동이 안 된다. 아래 형태가 실제로
+동작한다(앵커 `^python3 -m uvicorn`로 좀비와 bash -c 인자 양쪽을 다 피한다):
+
+```bash
+docker exec ship-paint-trainer bash -c "pkill -f '^python3 -m uvicorn trainer.pose_lab.app' ; sleep 1"
+docker exec -d -w /workspace -e POSE_LAB_DATA_ROOT=/data/sources/professionals \
+  -e POSE_LAB_SPREAD_REFERENCE=/output/spread_reference_expert_yup.json \
+  ship-paint-trainer python3 -m uvicorn trainer.pose_lab.app:create_app --factory --host 0.0.0.0 --port 8130
+docker exec ship-paint-trainer bash -c "pgrep -af '^python3 -m uvicorn'"  # 확인
+```
+
 `deploy/docker-compose.yml`은 `8120`만 호스트에 게시한다. 즉 `8130`은 컨테이너 안에만
 떠 있고 **호스트의 `127.0.0.1:8130`에는 아무것도 없다**. 터널을 뚫기 전에 호스트 루프백에
 중계를 하나 붙여야 한다(컨테이너를 다시 띄우지 않아도 되고, 사내망에 노출되지도 않는다).
@@ -191,7 +206,7 @@ docker exec -w /workspace ship-paint-trainer python3 trainer/scripts/pose_contac
 
 `--date`는 생략하면 세션에서 찾는다. 모든 칸이 **같은 축척**이라 프레임끼리 바로 비교할 수 있다. 표시 전용이며 채점·교정 경로를 타지 않는다. 끝에 찍히는 `(N bytes)`는 파일에 실제로 쓰인 UTF-8 바이트 수다.
 
-**바닥에 맞춘 자리표시 발은 기본 뷰에서 잘린다.** 다리는 카메라 맞춤 대상이 아니라서(브리프대로) '자세 맞춤'·'상체 확대'·'벽 정면'에서는 발이 캔버스 아래로 나간다 — 바닥 맞춤(D3)을 눈으로 보려면 '궤적 포함'·'벽 포함' 프리셋을 쓴다. 화면도 그 사실을 스스로 말한다: 발이 이 프리셋에서 화면 밖이면 3D 뷰 아래 고지가 "바닥에 맞춘 자리표시 발은 이 프리셋에서 화면 밖에 있습니다 — '…'에서 보입니다"라고 적고, 보인다고 적는 프리셋 이름은 말로 정하지 않고 그 프리셋의 카메라를 실제로 풀어 투영해서 고른다.
+**기본 뷰('자세 맞춤')는 다리를 포함해 맞춘다.** 작업자는 다리로 서 있어야 한다(사용자 지시) — 다리(자리표시 발 포함)가 카메라 맞춤 대상에 들어가 8가지 조합(레벨 1·2·3·6 × 1875×1000·840×1050)에서 전부 발이 캔버스 안에 들어온다. 대신 상체가 캔버스를 예전만큼 채우지 못한다(실측: 상체 화면 비율 0.245~0.415, 다리를 뺐던 시절의 목표 0.40에 못 미치는 레벨도 있다). '상체 확대'는 여전히 다리를 뺀 클로즈업이라 발이 잘릴 수 있고, 다리 체크박스를 꺼 자리표시 발만 남기면 좁은 화면비 등에서 다시 화면 밖일 수 있다. 그런 경우 화면이 스스로 말한다: 발이 이 프리셋에서 화면 밖이면 3D 뷰 아래 고지가 "자리표시 발은 이 프리셋에서 화면 밖에 있습니다 — '…'에서 보입니다"라고 적고, 보인다고 적는 프리셋 이름은 말로 정하지 않고 그 프리셋의 카메라를 실제로 풀어 투영해서 고른다.
 
 ### 2.4 GPU 없이 시뮬레이터 I/O 확인
 

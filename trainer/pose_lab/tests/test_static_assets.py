@@ -949,8 +949,17 @@ def test_wheel_zoom_checks_can_fail():
 
 
 def test_one_wheel_notch_is_gentler_than_the_old_ten_percent():
-    """상수가 뜻하는 한 노치 배율을 파이썬에서 다시 계산한다 — 옛 1.1보다 작아야 한다."""
+    """상수가 뜻하는 한 노치 배율을 파이썬에서 다시 계산한다 — 옛 1.1보다 작아야 한다.
+
+    검증 라운드: 핸들러 본문만 옛 `event.deltaY > 0 ? 1.1 : 1 / 1.1`로 되돌려도(상수 선언은 그대로
+    둔 채) 이 검사가 **통과했다** — 상수를 소스에서 다시 읽을 뿐, 그 상수가 실제로 휠 핸들러에
+    배선돼 있는지는 안 봤기 때문이다(핸들러가 상수를 한 번도 안 써도 구간 재계산은 그대로 값을
+    낸다). 그래서 배선 검사(`wheel_zoom_faults`)를 여기서도 요구한다 — 상수와 배선이 갈리면
+    이 검사가 재는 "노치가 옛 10%보다 순하다"는 배선된 핸들러의 성질이 아니라 죽은 상수의
+    성질이 된다.
+    """
     js = _read("skeleton_view.js")
+    assert wheel_zoom_faults(js) == []  # 상수가 실제로 휠 핸들러에 배선돼 있는가
     notch_px = float(re.search(r"const WHEEL_NOTCH_PX = ([\d.]+);", js).group(1))
     notch_factor = float(re.search(r"const WHEEL_NOTCH_FACTOR = ([\d.]+);", js).group(1))
     pixels_max = float(re.search(r"const WHEEL_PIXELS_MAX = ([\d.]+);", js).group(1))
@@ -960,6 +969,24 @@ def test_one_wheel_notch_is_gentler_than_the_old_ten_percent():
     assert notch_factor ** (4.0 / notch_px) < 1.005
     # 한 이벤트가 먹을 수 있는 최대 배율(관성 스크롤 한 방)도 유한해야 한다.
     assert notch_factor ** (pixels_max / notch_px) < 1.2
+
+
+def test_one_wheel_notch_check_can_fail():
+    """핸들러 본문만 옛 삼항식으로 되돌리면(상수 선언은 그대로) 위 검사가 실제로 잡는지 확인한다.
+
+    이 되돌림이 바로 검증 라운드가 재현한 실패 사례다 — 고쳐지기 전에는 `wheel_zoom_faults`를
+    묻지 않아 이 자리가 조용히 통과했다.
+    """
+    full = _read("skeleton_view.js")
+    reverted = full.replace(
+        "const factor = wheelZoomFactor(wheelPixels(event, h));",
+        "const factor = event.deltaY > 0 ? 1.1 : 1 / 1.1;",
+        1,
+    )
+    assert reverted != full
+    faults = wheel_zoom_faults(reverted)
+    assert "sign_only_zoom" in faults
+    assert "handler_does_not_normalize" in faults
 
 
 # --- 층이 쌓이지 않는가(U2) --------------------------------------------------------------
@@ -1099,3 +1126,51 @@ def test_stroke_drawing_checks_can_fail():
     assert stroke_drawing_faults(every) == ["marker_on_every_sample"]
     lone = full + "\nconst HIT_MARKER_RADIUS = 0.018;\n"
     assert stroke_drawing_faults(lone) == ["lone_hit_marker_remains"]
+
+
+# --- 머리 구체 지름은 이 리그에서 온다(F2) ------------------------------------------------
+#
+# 옛 상수 `HEAD_SPHERE_RADIUS = 0.09`(지름 0.18m)는 그려지는 골반→머리 0.409m의 44%였다 — 화면에서
+# 풍선으로 보였다. 서버가 이 리그의 골반→머리 길이 × BVH 실측 비례로 지름을 내고(`fit.head_diameter_m`,
+# `body_proportions.head_diameter_m`), 화면은 그 값만 쓴다. 폴백 상수는 `fit`이 없는 드문 경로에서만
+# 쓰인다 — 정상 경로가 폴백으로 조용히 새면 이 검사가 못 잡으므로, 정상 경로가 폴백을 **안 쓰는지**도 본다.
+
+
+def head_sphere_faults(js: str) -> list[str]:
+    faults: list[str] = []
+    if "function buildSkeletonGroup(" not in js:
+        return ["no_skeleton_builder"]
+    body = js.split("function buildSkeletonGroup(", 1)[1].split("\n  }\n", 1)[0]
+    if "headDiameterM" not in js.split("function buildSkeletonGroup(", 1)[1].split(")", 1)[0]:
+        faults.append("builder_does_not_take_head_diameter")
+    if "headDiameterM / 2" not in body:
+        faults.append("radius_not_derived_from_head_diameter")
+    if not re.search(r"new THREE\.SphereGeometry\(radius,", body):
+        faults.append("sphere_does_not_use_derived_radius")
+    call = re.search(r"= buildSkeletonGroup\([^;]*\);", js)
+    if call is None or "fit?.head_diameter_m" not in call.group(0):
+        faults.append("call_site_does_not_pass_server_value")
+    return faults
+
+
+def test_head_sphere_is_sized_from_the_rigs_own_torso_length():
+    assert head_sphere_faults(_read("skeleton_view.js")) == []
+
+
+def test_head_sphere_checks_can_fail():
+    full = _read("skeleton_view.js")
+    assert head_sphere_faults("") == ["no_skeleton_builder"]
+    fixed = full.replace(
+        'const radius = typeof headDiameterM === "number" && headDiameterM > 0 ? headDiameterM / 2 : HEAD_SPHERE_RADIUS_FALLBACK;',
+        "const radius = HEAD_SPHERE_RADIUS_FALLBACK;",
+        1,
+    )
+    assert fixed != full
+    assert "radius_not_derived_from_head_diameter" in head_sphere_faults(fixed)
+    unwired = full.replace(
+        "fit?.legs?.joints, placeholder, fit?.head_diameter_m);",
+        "fit?.legs?.joints, placeholder);",
+        1,
+    )
+    assert unwired != full
+    assert "call_site_does_not_pass_server_value" in head_sphere_faults(unwired)

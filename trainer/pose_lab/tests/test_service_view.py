@@ -990,6 +990,27 @@ def test_real_pass_feet_stay_at_rig_length_below_the_level_3_plate() -> None:
     assert after["legs"]["feet_below_floor_m"] == pytest.approx(floor - lowest, abs=1e-9)
 
 
+def test_real_pass_head_diameter_comes_from_this_rigs_torso_not_a_fixed_constant() -> None:
+    """실데이터 L3: `fit.head_diameter_m`이 이 리그의 골반→머리 길이 × BVH 실측 비례고, 고정 상수가 아니다.
+
+    옛 화면 상수(지름 0.18m)는 그려지는 골반→머리 0.409m의 44%였다 — 풍선으로 보였다(F2). 서버가
+    낸 지름이 그 44%가 아니라 사람 범위(17~22%)에 있는지, `body_proportions.head_diameter_m`을
+    독립적으로 다시 불러 같은 값인지 본다.
+    """
+    pose_fk_csv = importlib.import_module("pose_fk_csv")
+    source, kwargs = isolation._source_for({"name": "real"})  # noqa: SLF001
+    raw = source.load(PassRef(worker="김경호", date="20250831", level="3", session="1000391_1", pass_index=0))
+    fit = service.skeleton_block(raw).fit
+    offsets = body_proportions.rig_offsets(pose_fk_csv.bind_offsets(raw.rows[0]))
+    expected = body_proportions.head_diameter_m(offsets)
+    assert fit["head_diameter_m"] == pytest.approx(expected, rel=1e-12)
+    torso = body_proportions.torso_length_m(offsets)
+    ratio = fit["head_diameter_m"] / torso
+    assert 0.17 < ratio < 0.22, (fit["head_diameter_m"], torso, ratio)
+    old_ratio = 0.18 / torso
+    assert not (0.17 < old_ratio < 0.22), old_ratio  # 옛 고정 상수는 이 범위 밖이었다
+
+
 def test_placeholder_feet_names_come_from_the_server_not_from_the_screen(test_mounts) -> None:  # noqa: ANN001
     """화면이 "발이 지금 보이는가"를 재려면 어느 관절이 발인지 알아야 한다 — 그 **이름**은 서버가 준다.
 
