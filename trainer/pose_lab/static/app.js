@@ -378,7 +378,7 @@ function renderOrientation(orientation) {
 }
 
 /** 관절 각도(추정) 표. 각도도 품질 문구도 서버가 만든 문자열만 그린다 — 화면은 재계산하지 않는다.
- * 값 옆 괄호(quality_display)를 **값과 같은 칸에** 둔다: 상수인 관절을 상수인 줄 모르게 보여주면 안 된다. */
+ * 값 아래 줄(quality_display)을 **값과 같은 칸에** 둔다: 상수인 관절을 상수인 줄 모르게 보여주면 안 된다. */
 function renderJointAngles(block) {
   const section = $("jointAngles");
   const body = $("jointAnglesTable").querySelector("tbody");

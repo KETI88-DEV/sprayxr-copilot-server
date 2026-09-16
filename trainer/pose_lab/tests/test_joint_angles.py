@@ -214,3 +214,15 @@ def test_jump_threshold_matches_its_source_and_every_label() -> None:
     spec_obj = next(s for s in joint_angles.ANGLE_SPECS if s.key == "right_elbow")
     assert f"{joint_angles.JUMP_DEG:.0f}° 초과 변화" in joint_angles.quality_display(spec_obj, stats)
     assert f"{joint_angles.JUMP_DEG:.0f}°" in joint_angles.QUALITY_NOTE
+
+
+# --- 리뷰 결함 1: 화면은 값 아래 별도 줄에 품질 문구를 놓지, 괄호 안에 놓지 않는다 --------------
+#
+# CDP 측정(레벨 2·3): `.joint-angle-quality`는 `display: block`, `::before`/`::after`의 `content`는
+# 둘 다 "none"이고, 렌더된 `innerText`에 괄호 문자가 없다. `QUALITY_NOTE`가 "괄호 안은…"이라 말하면
+# 화면이 실제로 하는 일과 다른 소리를 하는 것 — 값 옆이 아니라 값 **아래**, 괄호가 아니라 별도 줄이다.
+
+
+def test_quality_note_and_docstring_do_not_claim_parentheses_the_screen_does_not_render() -> None:
+    assert "괄호" not in joint_angles.QUALITY_NOTE
+    assert "괄호" not in (joint_angles.quality_display.__doc__ or "")
