@@ -300,6 +300,41 @@ def test_joint_angle_quality_check_can_fail():
     assert "no-renderer" in joint_angle_quality_is_rendered("nothing here")
 
 
+def joint_angle_quality_layout_faults(style_css: str, app_js: str, index_html: str) -> list[str]:
+    """관절 각도 품질 칸이 실제로 '괄호'가 아니라 값 아래 **별도 줄**임을 CSS·주석에서 고정한다.
+
+    CDP 측정(레벨 2·3): `.joint-angle-quality`는 `display: block`, `::before`/`::after`의
+    `content`는 둘 다 `"none"`, 렌더된 `innerText`에 괄호 문자가 없다. 소스 주석이 '괄호'라고
+    부르면 이 사실과 어긋난다(리뷰 결함 1 — app.js·index.html도 QUALITY_NOTE와 같은 말을 반복했다).
+    """
+    faults = []
+    if ".joint-angle-quality {" not in style_css:
+        faults.append("quality_rule_missing")
+    else:
+        block = style_css.split(".joint-angle-quality {", 1)[1].split("}", 1)[0]
+        if "display: block" not in block:
+            faults.append("quality_is_not_its_own_line")
+    if "괄호" in app_js:
+        faults.append("app_js_claims_parentheses")
+    if "괄호" in index_html:
+        faults.append("index_html_claims_parentheses")
+    return faults
+
+
+def test_joint_angle_quality_wording_matches_the_block_layout():
+    assert joint_angle_quality_layout_faults(_read("style.css"), _read("app.js"), _read("index.html")) == []
+
+
+def test_joint_angle_quality_layout_check_can_fail():
+    """CSS가 인라인으로 바뀌거나 주석이 괄호를 다시 언급하면 잡혀야 한다(실패할 수 없는 단언 방지)."""
+    assert joint_angle_quality_layout_faults("", "", "") == ["quality_rule_missing"]
+    inline_css = ".joint-angle-quality { display: inline; }"
+    assert joint_angle_quality_layout_faults(inline_css, "", "") == ["quality_is_not_its_own_line"]
+    assert joint_angle_quality_layout_faults(
+        ".joint-angle-quality { display: block; }", "// 값 옆 괄호(quality_display)", "<!-- 괄호가 -->"
+    ) == ["app_js_claims_parentheses", "index_html_claims_parentheses"]
+
+
 def test_f2_checks_can_fail():
     """F2 검사가 실패할 수 있음을 합성 입력으로 확인한다(실패할 수 없는 단언 방지)."""
     moved = """<main><section id="orientationSection"><ul id="orientationNotes"></ul>
@@ -374,6 +409,51 @@ def badge_avoidance_faults(js: str) -> list[str]:
         if f"debugLive.{counter}" not in js:
             faults.append(f"{counter}_not_measured")
     return faults
+
+
+def badge_search_scans_full_circle_faults(js: str) -> list[str]:
+    """번호 배지 자리 찾기가 자기 화살표 기둥을 낀 가는 띠 안에 갇히면 안 된다.
+
+    옛 탐색은 기둥 방향(along, ×BADGE_MIN_PX)과 그 수직(side, 최대 ±2×BADGE_MIN_PX=52px)만
+    훑었다 — 기둥을 낀 얇은 직사각형 띠 밖은 아예 후보에 없었다. 라벨이 촘촘한 화면에서는 그 띠
+    안에 0점 자리가 없을 수 있다: 김경호 L2 1000390_1 #2(1875×1000, 상체 확대)에서 배지 ②가
+    "6.5cm" 라벨과 226.3px² 겹쳤다(`badgeObstacleOverlaps`=1, `labelOverlaps`=0 — 기본 화면의
+    '겹침 0' 불변식을 지키는 계수기가 이 경우를 안 덮었다). 라벨 배치(`layoutLabels` 앞부분)처럼
+    반경×회전(30° 단위) 극좌표로 기둥 주변 360°를 훑어야 띠 밖 빈 자리도 후보에 들어간다.
+    """
+    faults = []
+    if "const badgeScore = (r) =>" not in js:
+        faults.append("badge_score_not_defined")
+        return faults
+    search = js.split("const badgeScore = (r) =>", 1)[1]
+    search = search.split("const rect = badgeRect(best.x, best.y);", 1)[0] if "const rect = badgeRect(best.x, best.y);" in search else search
+    if "Math.cos" not in search or "Math.sin" not in search:
+        faults.append("badge_search_does_not_rotate_around_the_shaft")
+    radii_literal = re.search(r"radii\s*=\s*\[([^\]]+)\]", search)
+    if not radii_literal or len(radii_literal.group(1).split(",")) < 5:
+        faults.append("badge_search_radius_steps_too_few")
+    return faults
+
+
+def test_badge_search_can_escape_the_shaft_strip():
+    assert badge_search_scans_full_circle_faults(_read("skeleton_view.js")) == []
+
+
+def test_badge_search_full_circle_check_can_fail():
+    """옛 along/side 격자 탐색(회전 없음)은 잡혀야 한다(실패할 수 없는 단언 방지)."""
+    old_search = (
+        "const badgeScore = (r) => 8 * overlapArea(r, placedBadgeRects) + 4 * overlapArea(r, otherArrowRects) + overlapArea(r, obstacles);\n"
+        "for (const along of [0, 1, -1, 2, -2, 3, -3, 4]) {\n"
+        "  for (const side of [0, 1, -1, 2, -2]) {\n"
+        "    const ux = px.x + dx * along * BADGE_MIN_PX - dy * side * BADGE_MIN_PX;\n"
+        "  }\n"
+        "}\n"
+        "const rect = badgeRect(best.x, best.y);\n"
+    )
+    assert badge_search_scans_full_circle_faults(old_search) == [
+        "badge_search_does_not_rotate_around_the_shaft",
+        "badge_search_radius_steps_too_few",
+    ]
 
 
 def counter_naming_faults(js: str) -> list[str]:
@@ -543,7 +623,7 @@ def test_torso_preset_checks_can_fail():
 # 별표가 화면에 글자로 보였고, 관절 축 표의 사유가 "**아래** 관절 각도 표"라고 방향을 거꾸로 말했다 —
 # 실제 DOM 순서는 관절 각도 표가 **위**다. 그래서 문구와 **문서 순서**를 같이 본다.
 
-JOINT_ANGLE_BANNED = ("미사용", "사용하지 않", "unused", "not used", "표시하지 않습니다")
+JOINT_ANGLE_BANNED = ("미사용", "사용하지 않", "unused", "not used", "표시하지 않습니다", "괄호")
 
 
 def document_order(html: str, element_id: str):
@@ -639,6 +719,13 @@ def test_joint_angle_wording_checks_can_fail():
     assert joint_angle_wording_faults(good_note, good_axes, good_angles, swapped) == [
         "note_says_below_but_table_is_above"
     ]
+    # (6) 화면에 없는 괄호를 언급하는 품질 문구가 되돌아온 경우(리뷰 결함 1).
+    # `.joint-angle-quality`는 값 span 아래 **별도 줄**(display: block)이다 — CDP 측정: 그 요소의
+    # ::before/::after content가 둘 다 "none"이고 innerText에 괄호 문자가 없다. "괄호 안은…"은
+    # 화면이 실제로 하는 일과 다른 말이다.
+    bracketed_angles = good_angles.replace("값 아래 줄은", "괄호 안은")
+    assert bracketed_angles != good_angles
+    assert joint_angle_wording_faults(good_note, good_axes, bracketed_angles, html) == ["banned:괄호"]
 
 
 # --- D3: 바닥에 맞춘 자리표시 발이 기본 뷰에서 안 보인다는 사실을 화면이 말하는가 --------------

@@ -715,13 +715,23 @@ function mount(THREE, container) {
       const otherArrowRects = [];
       for (const arrow of arrowsByN) if (arrow.n !== entry.n) otherArrowRects.push(...arrow.rects);
       const badgeScore = (r) => 8 * overlapArea(r, placedBadgeRects) + 4 * overlapArea(r, otherArrowRects) + overlapArea(r, obstacles);
-      // 기둥을 따라 앞뒤로, 그리고 기둥에 수직으로 비켜 가며 훑는다. 기둥 방향만 쓰면 화살표 넷이 한
-      // 점에 모이는 자리(L6 오른손)에서 빠져나갈 데가 없다.
+      // 기둥 방향을 축으로 삼아 앞뒤·좌우로만 훑으면(옛 along/side 격자) 찾는 자리가 기둥을 낀 가는 띠
+      // 안으로 갇힌다 — 상체 확대처럼 라벨이 촘촘한 화면에서는 그 띠 안에 0점 자리가 없을 수 있다(검증
+      // 라운드 지적: 김경호 L2 1000390_1 #2, 1875×1000, 상체 확대에서 배지 ②가 "6.5cm" 라벨과 226px²
+      // 겹쳤다). 라벨 배치와 같은 반경×회전 극좌표 훑기로 바꿔 기둥 주변 360°를 본다. radius=1×BADGE_MIN_PX,
+      // turn=0(기둥 방향 그대로)이 첫 후보라 이미 0점을 찾던 자리는 그대로 유지된다.
+      const turns = [0, 1, -1, 2, -2, 3, -3, 4, -4, 5, -5, 6];
+      const radii = [1, 2, 3, 4, 5, 6, 7, 8].map((n) => n * BADGE_MIN_PX);
       let best = null;
-      for (const along of [0, 1, -1, 2, -2, 3, -3, 4]) {
-        for (const side of [0, 1, -1, 2, -2]) {
-          const ux = px.x + dx * along * BADGE_MIN_PX - dy * side * BADGE_MIN_PX;
-          const uy = px.y + dy * along * BADGE_MIN_PX + dx * side * BADGE_MIN_PX;
+      for (const radius of radii) {
+        for (const turn of turns) {
+          const angle = (turn * Math.PI) / 6;
+          const cos = Math.cos(angle);
+          const sin = Math.sin(angle);
+          const rdx = dx * cos - dy * sin;
+          const rdy = dx * sin + dy * cos;
+          const ux = px.x + rdx * radius;
+          const uy = px.y + rdy * radius;
           const x = clamp(ux, BADGE_HALF_PX + 1, badgeHostW - BADGE_HALF_PX - 1);
           const y = clamp(uy, BADGE_HALF_PX + 1, badgeHostH - BADGE_HALF_PX - 1);
           const value = badgeScore(badgeRect(x, y));
