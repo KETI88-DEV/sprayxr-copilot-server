@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from html.parser import HTMLParser
 from pathlib import Path
@@ -527,3 +528,157 @@ def test_torso_preset_checks_can_fail():
     silent = full.replace("dom.framingNote.textContent = describeFraming(mode);", "")
     assert torso_preset_faults(silent, html) == ["note_not_shown"]
     assert "no_button" in torso_preset_faults("", "")
+
+
+# --- D4: 관절 각도 문구가 화면에서 말이 되는가 -------------------------------------------
+#
+# 두 번 틀렸던 자리다. (1) `orientation.JOINT_ANGLES_NOTE`가 "관절 각도는 **표시하지 않습니다**"라고
+# 말하던 시절의 문구가 되돌아와도 아무 테스트도 잡지 못했다(전체 스위트 통과). (2) 리터럴 마크다운
+# 별표가 화면에 글자로 보였고, 관절 축 표의 사유가 "**아래** 관절 각도 표"라고 방향을 거꾸로 말했다 —
+# 실제 DOM 순서는 관절 각도 표가 **위**다. 그래서 문구와 **문서 순서**를 같이 본다.
+
+JOINT_ANGLE_BANNED = ("미사용", "사용하지 않", "unused", "not used", "표시하지 않습니다")
+
+
+def document_order(html: str, element_id: str):
+    """문서 순서(깊이 우선) 인덱스. 없으면 None."""
+    tree = _Tree()
+    tree.feed(html)
+    node = tree.by_id.get(element_id)
+    if node is None:
+        return None
+    path = []
+    while node is not None and node.get("parent") is not None:
+        path.append(node["parent"]["children"].index(node))
+        node = node["parent"]
+    return tuple(reversed(path))
+
+
+def joint_angle_wording_faults(note: str, axes_blob: str, angles_blob: str, html: str) -> list[str]:
+    """관절 각도 문구의 결함 목록.
+
+    `note`는 `orientation.JOINT_ANGLES_NOTE`(건 각도 표 아래 고지), `axes_blob`·`angles_blob`은
+    관절 축 평가·관절 각도 블록의 JSON 전문, `html`은 `index.html`이다.
+    """
+    faults = []
+    for phrase in JOINT_ANGLE_BANNED:
+        if phrase in note or phrase in axes_blob or phrase in angles_blob:
+            faults.append(f"banned:{phrase}")
+    if "추정" not in note:
+        faults.append("note_does_not_say_estimate")
+    for name, text in (("note", note), ("axes", axes_blob), ("angles", angles_blob)):
+        if "**" in text:
+            faults.append(f"literal_markdown:{name}")
+    notes_at = document_order(html, "orientationNotes")
+    angles_at = document_order(html, "jointAngles")
+    axes_at = document_order(html, "jointAxes")
+    if notes_at is None or angles_at is None or axes_at is None:
+        return faults + ["missing_element"]
+    # 고지가 "아래 관절 각도 표"라고 말하면, 관절 각도 표는 그 고지보다 문서에서 **뒤**에 있어야 한다.
+    if "아래 관절 각도 표" in note and not notes_at < angles_at:
+        faults.append("note_says_below_but_table_is_above")
+    if "위 관절 각도 표" in note and not angles_at < notes_at:
+        faults.append("note_says_above_but_table_is_below")
+    # 관절 축 평가 표는 관절 각도 표보다 아래에 있다 — 그 표의 사유가 "아래"라고 말하면 거꾸로다.
+    if "아래 관절 각도 표" in axes_blob and not axes_at < angles_at:
+        faults.append("axes_say_below_but_table_is_above")
+    if "위 관절 각도 표" in axes_blob and not angles_at < axes_at:
+        faults.append("axes_say_above_but_table_is_below")
+    return faults
+
+
+def _joint_angle_blobs():
+    from trainer.pose_lab import joint_angles as joint_angles_module
+    from trainer.pose_lab import orientation as orientation_module
+    from trainer.pose_lab.tests.test_orientation import _rows  # noqa: PLC0415
+
+    rows = _rows()
+    axes = json.dumps(orientation_module.joint_axes_block(rows, rows), ensure_ascii=False)
+    angles = json.dumps(joint_angles_module.joint_angles_block(rows, rows), ensure_ascii=False)
+    return orientation_module.JOINT_ANGLES_NOTE, axes, angles
+
+
+def test_joint_angle_wording_matches_the_screen():
+    note, axes, angles = _joint_angle_blobs()
+    assert joint_angle_wording_faults(note, axes, angles, _read("index.html")) == []
+
+
+def test_joint_angle_wording_checks_can_fail():
+    """합성 입력으로 분기를 하나씩 고정한다 — 이 검사들이 실제로 실패할 수 있어야 한다."""
+    html = _read("index.html")
+    good_note, good_axes, good_angles = _joint_angle_blobs()
+    # (1) 옛 문구가 되돌아온 경우 — 이것이 전체 스위트를 통과하던 구멍이었다.
+    old_note = "관절 각도는 표시하지 않습니다 — 관절에는 추적 장치가 없습니다."
+    assert joint_angle_wording_faults(old_note, good_axes, good_angles, html) == [
+        "banned:표시하지 않습니다",
+        "note_does_not_say_estimate",
+    ]
+    # (2) "추정"이 빠진 고지.
+    assert joint_angle_wording_faults("관절 각도를 싣습니다.", good_axes, good_angles, html) == [
+        "note_does_not_say_estimate"
+    ]
+    # (3) 리터럴 마크다운 별표.
+    starred = good_note.replace("추정으로", "**추정**으로")
+    assert joint_angle_wording_faults(starred, good_axes, good_angles, html) == ["literal_markdown:note"]
+    # (4) 관절 축 표가 방향을 거꾸로 말하는 경우(커밋 3253435가 실제로 낸 결함).
+    backwards = good_axes.replace("관절 각도 표에 있습니다", "아래 관절 각도 표에 있습니다")
+    assert backwards != good_axes
+    assert joint_angle_wording_faults(good_note, backwards, good_angles, html) == [
+        "axes_say_below_but_table_is_above"
+    ]
+    # (5) 고지가 "아래"라고 말하는데 DOM에서 관절 각도 표가 고지보다 위인 경우.
+    swapped = html.replace('id="jointAngles"', 'id="jointAnglesMoved"').replace(
+        'id="orientationNotes"', 'id="jointAngles"'
+    ).replace('id="jointAnglesMoved"', 'id="orientationNotes"')
+    assert joint_angle_wording_faults(good_note, good_axes, good_angles, swapped) == [
+        "note_says_below_but_table_is_above"
+    ]
+
+
+# --- D3: 바닥에 맞춘 자리표시 발이 기본 뷰에서 안 보인다는 사실을 화면이 말하는가 --------------
+#
+# 실측(헤드리스 CDP, 캔버스 H=600): 기본 뷰('자세 맞춤')에서 자리표시 발의 캔버스 y가 김경호 L1
+# 976·1063 / L3 697 / L6 786으로 전부 밖이었다. 다리는 맞춤 대상이 아니므로(브리프대로) 그대로 두되,
+# **어느 프리셋에서 보이는지**는 말로 정하지 않고 각 프리셋의 카메라를 실제로 풀어서 투영해 확인한다.
+
+
+def feet_note_faults(js: str) -> list[str]:
+    faults = []
+    if "function describeFeetFraming(" not in js:
+        faults.append("no_feet_note")
+    if not re.search(r"describeFraming\(mode\)\s*\{[\s\S]{0,200}describeFeetFraming\(\)", js):
+        faults.append("feet_note_not_in_framing_note")
+    if not re.search(r"placeholder_feet", js):
+        faults.append("feet_names_not_from_server")
+    if "function solvePreset(" not in js or "PRESET_PROBES" not in js:
+        faults.append("no_preset_probe")
+    # 프리셋 이름을 말로 정하지 않고 **풀어서** 확인하는가 — solveFraming을 실제로 부르는가.
+    if not re.search(r"solvePreset\(probe\)[\s\S]{0,200}insideFrustum", js):
+        faults.append("preset_names_are_not_measured")
+    probe_block = js.split("const PRESET_PROBES = [", 1)[-1].split("];", 1)[0]
+    labels = set(re.findall(r'label: "([^"]+)"', probe_block))
+    buttons = set(re.findall(r'id="view3dPreset\w+" type="button">([^<]+)</button>', js))
+    if labels != buttons:
+        faults.append("probe_labels_do_not_match_the_buttons")
+    return faults
+
+
+def test_screen_says_where_the_floor_snapped_feet_are_visible():
+    assert feet_note_faults(_read("skeleton_view.js")) == []
+
+
+def test_feet_note_checks_can_fail():
+    full = _read("skeleton_view.js")
+    assert feet_note_faults("") == [
+        "no_feet_note",
+        "feet_note_not_in_framing_note",
+        "feet_names_not_from_server",
+        "no_preset_probe",
+        "preset_names_are_not_measured",
+    ]  # 빈 소스는 버튼도 없어 라벨 대조는 걸리지 않는다
+    silent = full.replace('[describeTorsoFraming(mode), describeFeetFraming()]', "[describeTorsoFraming(mode)]")
+    assert silent != full
+    assert feet_note_faults(silent) == ["feet_note_not_in_framing_note"]
+    renamed = full.replace('{ label: "궤적 포함", mode: "tracks"', '{ label: "궤적", mode: "tracks"')
+    assert renamed != full
+    assert feet_note_faults(renamed) == ["probe_labels_do_not_match_the_buttons"]

@@ -370,8 +370,8 @@ function renderOrientation(orientation) {
     }
     body.append(row);
   }
-  // 관절 각도를 왜 안 싣는지(joint_angles_note)는 화면에 실제로 떠야 한다 — 서버만 알고 있으면
-  // 표에서 빠진 이유를 아무도 못 읽는다.
+  // 관절 각도를 어떻게 싣는지(joint_angles_note — 추정이고 점수에 안 들어간다)는 화면에 실제로 떠야
+  // 한다. 서버만 알고 있으면 아래 표의 값이 무엇인지 아무도 못 읽는다.
   for (const text of [orientation.weight_note, orientation.joint_angles_note, orientation.excluded_note]) {
     if (typeof text === "string" && text) notes.append(el("li", null, text));
   }
