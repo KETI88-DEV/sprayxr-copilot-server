@@ -1267,6 +1267,26 @@ def test_level1_only_the_muzzle_occlusion_separates_the_plate_mirror() -> None:
     assert mirror["measured"]["muzzle_occlusion"] == 1.0
     assert p["passed_occ"] is True and mirror["passed_occ"] is False
     assert p["measured"]["muzzle_short_frames"] == 0.0
+    # `fit`과 `h2`는 서로 다른 파일 풀에서 온다(H2는 fit이 한 번도 열지 않은 파일만
+    # 연다) — 실제로 겹치지 않는지 여기서 실측으로 확인한다. 리터럴 0을 박아 넣으면
+    # 이 확인은 성립하지 않는다.
+    assert result["holdout_overlap"] == 0
+
+
+def test_muzzle_holdout_overlap_catches_a_contaminated_split() -> None:
+    """`holdout_overlap`은 fit_frames와 holdout이 실제로 공유하는 파일 수를 세야 한다.
+
+    fit이 이미 연 파일 하나를 holdout 쪽에도 슬쩍 끼워 넣어(오염) 검증한다 — 3555행에
+    박혀 있던 리터럴 `0`은 이 오염을 원리적으로 잡을 수 없었다(입력을 전혀 보지 않으므로).
+    """
+    fit, h2 = _level1_h2()
+    assert fit.paths, "오염을 만들려면 fit이 연 파일이 있어야 한다"
+    contaminated = dataclasses.replace(h2, paths=[fit.paths[0], *h2.paths])
+    mesh, index = _mesh_and_index(_entry(1)["source_fbx"])
+    result = level_mesh.solve_fixed_linear_muzzle(
+        1, mesh, fit, contaminated, index=index, candidates=[P_LINEAR], always_measure=(P_LINEAR,),
+    )
+    assert result["holdout_overlap"] == 1
 
 
 def test_level1_entry_records_the_muzzle_path_and_keeps_the_confirmation_caveat() -> None:

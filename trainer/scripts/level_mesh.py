@@ -3552,7 +3552,11 @@ def solve_fixed_linear_muzzle(
         "holdout_kind": "unread_files",
         "holdout_files": list(holdout.paths),
         "unread_files": list(unread_files),
-        "holdout_overlap": 0,
+        # `fit_idx`/`eval_idx`는 서로 다른 배열(fit_frames.hits 대 holdout.hits)의
+        # 위치일 뿐이라 정수로 비교해도 의미가 없다 — 이 경로에서 적합/홀드아웃을
+        # 실제로 가르는 것은 파일이다(§3.2: H2는 fit_frames가 한 번도 열지 않은
+        # 파일에서만 온다). 2645행과 같은 자리에서, 같은 방식으로 실제 겹침을 센다.
+        "holdout_overlap": len(set(fit_frames.paths) & set(holdout.paths)),
         "fit_files": list(fit_frames.paths),
         "fit_uv_miss_fraction": fit_miss,
         "fit_uv_ambiguous_fraction": fit_amb,
