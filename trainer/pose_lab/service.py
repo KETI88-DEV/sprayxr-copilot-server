@@ -583,6 +583,15 @@ LEGS_FLOOR_SKIPPED_NOTE: Final = (
     "맞추지 않고 리그 길이 그대로 내렸습니다."
 )
 LEGS_NO_FLOOR_NOTE: Final = " 이 레벨은 벽 메시가 없어 바닥에 맞추지 않고 리그 길이로 내렸습니다."
+# 고른 면이 **작업자가 선 지면인지**를 보는 사람이 판단할 수 있게, 그 면 위 머리 실측 마커 높이를 같이 적는다.
+# 배율이 레벨마다 갈리는 것은 리그 몸통 길이 때문이 아니다(골반→머리는 리그 값이라 모든 레벨이 같다).
+# 갈리는 것은 골반–이 면 거리뿐이고, 실측으로 L1 1.155m · L3 0.334m · L6 0.525m이다. 같은 자리에서 잰
+# 머리 실측 마커는 L1 1.508m · L3 0.696m · L6 0.879m — L3·L6는 서 있는 사람의 머리 높이가 아니다.
+# 문턱은 두지 않는다. 실측 높이를 그대로 적고 판단은 보는 사람에게 남긴다(`composite.py`의 바닥 주석 참고).
+LEGS_FLOOR_HEAD_NOTE: Final = (
+    " 이 면 위 머리 실측 마커는 {head:.2f}m입니다 — 서 있는 사람의 머리 높이가 아니면 고른 면이 "
+    "작업자가 선 지면이 아니라는 뜻이고, 그만큼 배율도 지면 대신 이 면을 따라갑니다."
+)
 LEGS_PICKED_NOTE: Final = (
     LEGS_PLACEHOLDER_PREFIX
     + " — 툴바 '다리(IK)'의 IK 다리가 해부학 범위 안인 프레임(분사 구간 가운데에서 {k}프레임)을 대표로 골랐습니다."
@@ -772,6 +781,14 @@ def _floor_scale_wanted(
     return min(ratios) if ratios else float("nan")
 
 
+def _head_above_m(placed: skeleton.Placement, floor: float) -> float | None:
+    """고른 면 위 **머리 실측 마커(HMD)**의 높이. 없으면 None — 지어내지 않는다."""
+    for fit in placed.anchors:
+        if fit.point == "head":
+            return world_axes.vertical_of(tuple(fit.measured_marker)) - floor
+    return None
+
+
 def _torso_length_m(offsets: Mapping[str, Vec3]) -> float:
     return sum(math.hypot(*offsets[name]) for name in ("Spine", "Chest", "Head") if name in offsets)
 
@@ -822,6 +839,11 @@ def _fit_view(
                 note += LEGS_FLOOR_SKIPPED_NOTE.format(floor=placeholder.floor_offered, scale=wanted)
             else:
                 note += LEGS_NO_FLOOR_NOTE
+            # 면을 골랐으면(맞췄든 거절했든) 그 면 위 머리 실측 높이를 같이 적는다.
+            if placeholder.floor_offered is not None:
+                head_above = _head_above_m(placed, placeholder.floor_offered)
+                if head_above is not None:
+                    note += LEGS_FLOOR_HEAD_NOTE.format(head=head_above)
             notes.append(note)
         note_keys.append("legs")
     notes.append(

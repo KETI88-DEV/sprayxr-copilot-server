@@ -208,10 +208,16 @@ def comment_numbers(text: str, pattern: str) -> list[float]:
     return [float(value) for value in re.findall(pattern, text)]
 
 
+def comment_level_row(source: str, label: str) -> dict[str, float]:
+    """`#   <label>: L1 3.557m · L3 3.531m · L6 3.560m` 한 줄을 레벨→값으로 읽는다."""
+    line = next(ln for ln in source.splitlines() if ln.lstrip("# ").startswith(f"{label}:"))
+    return {level: float(value) for level, value in re.findall(r"L(\d+) (\d\.\d{3})m", line)}
+
+
 def test_floor_comment_numbers_match_the_code() -> None:
     """`composite.py`의 D3 바닥 주석이 적은 레벨별 바닥 높이가 코드가 내는 값과 같다."""
     source = (_SOURCE_DIR / "composite.py").read_text(encoding="utf-8")
-    quoted = {level: float(value) for level, value in re.findall(r"L(\d+) (\d\.\d{3})m", source)}
+    quoted = comment_level_row(source, "바닥면 수직")
     assert set(quoted) == {"1", "3", "6"}, quoted
     for level, said in quoted.items():
         placed = service.placed_mesh(level)
@@ -260,3 +266,82 @@ def test_level3_penetration_numbers_in_the_comments_match_the_code() -> None:
     assert abs(lowest - foot_said) <= FLOOR_COMMENT_TOL_M, (lowest, foot_said)
     assert abs((floor - lowest) - gap_said) <= FLOOR_COMMENT_TOL_M, (floor - lowest, gap_said)
     assert leg_gap_said == gap_said, (leg_gap_said, gap_said)
+
+
+# --- 고른 바닥면 위에 실제로 무엇이 서 있는가(D3 원인 주장 검증) --------------------------------
+#
+# 보고서가 한때 "배율이 레벨마다 다른 근본 원인은 리그 **몸통**이 짧은 것"이라고 적었다. 화면이 그 주장을
+# 반증한다: 골반→머리 고지는 네 레벨이 글자 하나까지 같은데(리그 값) 자리표시 배율은 갈린다. 실제로 갈리는
+# 것은 **골반–선택된 바닥 거리**다. 그래서 `composite.py`의 바닥 주석이 적은 세 줄(바닥면 수직 · 이 면 위
+# 머리 실측 마커 · 이 면 위 골반)을 실제 배치로 다시 재고, 몸통 길이가 세 레벨에서 **같다**는 것도 같이
+# 잰다 — 같으면 몸통은 배율 산포를 설명할 수 없다.
+
+FLOOR_STANDING_CASES = {
+    "1": {"worker": "김경호", "date": "20250831", "level": "1", "session": "1000389_1", "pass_index": 0},
+    "3": {"worker": "김경호", "date": "20250831", "level": "3", "session": "1000391_1", "pass_index": 0},
+    "6": {"worker": "김경호", "date": "20250831", "level": "6", "session": "1000394_1", "pass_index": 0},
+}
+
+
+def _floor_standing_view(level: str) -> dict:
+    source, kwargs = isolation._source_for({"name": f"real_L{level}_floor"})  # noqa: SLF001
+    query = service.PassRef(**FLOOR_STANDING_CASES[level])
+    candidates = service.reference_candidates(source, query)
+    assert candidates["status"] == "ok", (level, candidates)
+    first = candidates["candidates"][0]
+    reference = service.PassRef(
+        worker=first["worker"],
+        date=first["date"],
+        level=first["level"],
+        session=first["session"],
+        pass_index=first["pass_index"],
+    )
+    body = service.compare(source, query, reference, include_view=True, **kwargs)
+    assert body["status"] == "ok", (level, body.get("reason"))
+    return body["view"]
+
+
+def test_floor_choice_comment_reports_what_stands_on_it() -> None:
+    """바닥 주석의 세 줄(바닥면 · 그 위 머리 실측 · 그 위 골반)을 실제 배치로 다시 잰다."""
+    source = (_SOURCE_DIR / "composite.py").read_text(encoding="utf-8")
+    floors = comment_level_row(source, "바닥면 수직")
+    heads = comment_level_row(source, "이 면 위 머리 실측 마커(HMD)")
+    pelvises = comment_level_row(source, "이 면 위 골반")
+    assert set(floors) == set(heads) == set(pelvises) == {"1", "3", "6"}
+    up = np.asarray(world_axes.UP, dtype=float)
+    torso_notes = set()
+    for level in ("1", "3", "6"):
+        view = _floor_standing_view(level)
+        floor = view["fit"]["legs"]["floor_vertical"]
+        assert floor is not None, level
+        pelvis = float(np.asarray(view["layers"]["query"]["joints"]["Pelvis"], dtype=float) @ up)
+        head = next(
+            float(np.asarray(a["measured_marker"], dtype=float) @ up)
+            for a in view["fit"]["anchors"]
+            if a["point"] == "head"
+        )
+        assert abs(floor - floors[level]) <= FLOOR_COMMENT_TOL_M, (level, floor, floors[level])
+        assert abs((head - floor) - heads[level]) <= FLOOR_COMMENT_TOL_M, (level, head - floor, heads[level])
+        assert abs((pelvis - floor) - pelvises[level]) <= FLOOR_COMMENT_TOL_M, (
+            level,
+            pelvis - floor,
+            pelvises[level],
+        )
+        torso_notes.add(next(n for n in view["fit"]["notes"] if "골반→머리가" in n))
+    # 몸통 고지가 세 레벨에서 **글자 하나까지 같다** — 몸통 길이는 상수라 배율 산포를 설명할 수 없다.
+    assert len(torso_notes) == 1, torso_notes
+
+
+def test_floor_choice_comment_can_fail_when_a_number_drifts() -> None:
+    """주석의 머리 높이를 L3에서 L1 값으로 바꿔 적으면 위 검사가 실제로 잡는다."""
+    view = _floor_standing_view("3")
+    up = np.asarray(world_axes.UP, dtype=float)
+    floor = view["fit"]["legs"]["floor_vertical"]
+    head = next(
+        float(np.asarray(a["measured_marker"], dtype=float) @ up)
+        for a in view["fit"]["anchors"]
+        if a["point"] == "head"
+    )
+    source = (_SOURCE_DIR / "composite.py").read_text(encoding="utf-8")
+    said_l1 = comment_level_row(source, "이 면 위 머리 실측 마커(HMD)")["1"]
+    assert abs((head - floor) - said_l1) > FLOOR_COMMENT_TOL_M, (head - floor, said_l1)

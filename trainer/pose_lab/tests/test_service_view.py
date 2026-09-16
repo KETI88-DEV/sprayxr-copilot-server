@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import importlib
+import re
 import math
 import random
 import sys
@@ -995,3 +996,60 @@ def test_placeholder_feet_names_come_from_the_server_not_from_the_screen(test_mo
     assert feet and all(name in legs["placeholder_joints"] for name in feet)
     # 발끝(Toe)은 발이 아니다 — 바닥에 닿는 것은 발목이다.
     assert not any(name.endswith("Toe") for name in feet)
+
+
+# --- 고른 바닥면 위에 무엇이 서 있는지 화면이 말하는가 -------------------------------------
+#
+# 검증이 반증한 주장이 있다: "배율이 레벨마다 다른 근본 원인은 리그 몸통이 짧은 것". 몸통 고지는 네
+# 레벨이 같고(리그 값), 갈리는 것은 골반–선택된 바닥 거리뿐이다. 그 거리가 이상한 레벨에서는 고른 면이
+# 작업자가 선 지면이 아니다 — 실측으로 이 면 위 머리 실측 마커가 L1 1.508m인데 L3 0.696m · L6 0.879m다.
+# 문턱을 지어내지 않고 **실측 높이를 그대로** 적어 보는 사람이 판단하게 한다.
+
+
+def _head_above(fit: dict, floor: float) -> float:
+    head = next(a for a in fit["anchors"] if a["point"] == "head")
+    return world_axes.vertical_of(tuple(head["measured_marker"])) - floor
+
+
+def test_floor_note_says_how_high_the_measured_head_is_above_the_chosen_plane(test_mounts) -> None:  # noqa: ANN001
+    """바닥에 맞춘 고지가 그 면 위 머리 실측 높이를 적고, 바닥을 옮기면 그 숫자가 따라 움직인다."""
+    rows, _middle = _rows_with_leg_poses(41, ())
+    raw = RawPass(rows=rows)
+    loose = service.skeleton_block(raw).fit
+    high = min(_placeholder_feet(loose)) + 0.5
+    low = high - 0.20  # 더 낮은 면을 고르면 그 위 머리 높이는 그만큼 커진다
+
+    texts = []
+    for floor in (high, low):
+        fit = service.skeleton_block(raw, geometry=_floor_geometry(floor)).fit
+        assert fit["legs"]["placeholder_snapped"] is True, floor
+        note = fit["notes"][fit["note_keys"].index("legs")]
+        expected = service.LEGS_FLOOR_HEAD_NOTE.format(head=_head_above(fit, floor))
+        assert expected in note, (floor, note)
+        texts.append(expected)
+    # 바닥을 0.20m 내리면 적힌 높이도 0.20m 커진다 — 상수를 찍어 놓은 문구가 아니다.
+    assert texts[0] != texts[1], texts
+    said = [float(re.search(r"머리 실측 마커는 (\d+\.\d\d)m", t).group(1)) for t in texts]
+    assert said[1] - said[0] == pytest.approx(0.20, abs=0.011), said
+
+
+def test_floor_note_says_the_head_height_even_when_the_snap_was_refused(test_mounts) -> None:  # noqa: ANN001
+    """배율 한계로 맞추지 않은 경우에도 고른 면 위 머리 높이를 말한다 — 거절한 이유가 그 숫자에 있다."""
+    rows, _middle = _rows_with_leg_poses(41, ())
+    raw = RawPass(rows=rows)
+    loose = service.skeleton_block(raw).fit
+    hips = [loose["legs"]["placeholder_joints"][hip] for hip, *_ in skeleton.PLACEHOLDER_LEG_CHAIN]
+    floor = min(world_axes.vertical_of(tuple(hip)) for hip in hips) - 0.01
+    fit = service.skeleton_block(raw, geometry=_floor_geometry(floor)).fit
+    assert fit["legs"]["placeholder_snapped"] is False
+    note = fit["notes"][fit["note_keys"].index("legs")]
+    assert service.LEGS_FLOOR_HEAD_NOTE.format(head=_head_above(fit, floor)) in note
+
+
+def test_no_mesh_level_does_not_claim_a_head_height_over_a_plane_it_never_chose(test_mounts) -> None:  # noqa: ANN001
+    """벽 메시가 없는 레벨은 면을 고른 적이 없다 — 그 위 높이를 말하면 출처 없는 숫자가 된다."""
+    rows, _middle = _rows_with_leg_poses(41, ())
+    fit = service.skeleton_block(RawPass(rows=rows)).fit
+    note = fit["notes"][fit["note_keys"].index("legs")]
+    assert "머리 실측 마커는" not in note
+    assert note.endswith(service.LEGS_NO_FLOOR_NOTE)
