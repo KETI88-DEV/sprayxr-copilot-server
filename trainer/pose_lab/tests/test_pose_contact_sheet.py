@@ -155,3 +155,16 @@ def test_real_sheets_for_both_workers_report_the_same_shape() -> None:
         assert len(re.findall(r"#\d+ · \d+\.\d\ds", svg)) == 12, ref
         assert svg.count("앵커 RMS") == 12
         assert f"{ref.worker} · L{ref.level}" in svg
+
+
+def test_written_line_counts_utf8_bytes_not_characters() -> None:
+    """실행 로그가 "(N bytes)"라고 말하면 그것은 파일에 실제로 쓰인 **바이트**여야 한다.
+
+    SVG에는 한글 라벨이 많아 문자 수와 UTF-8 바이트 수가 20% 넘게 벌어진다(실측: 48,918자 /
+    50,064바이트). `len(문자열)`을 바이트라고 부르면 출처와 다른 라벨이 된다.
+    """
+    svg = '<svg>앵커 어긋남</svg>'
+    line = pose_contact_sheet.written_line(Path("/tmp/x.svg"), svg)
+    assert line == f"/tmp/x.svg ({len(svg.encode('utf-8'))} bytes)"
+    assert len(svg.encode("utf-8")) > len(svg)  # 한글이 섞이면 실제로 다르다
+    assert f"({len(svg)} bytes)" not in line

@@ -406,8 +406,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     svg = sheet_for(args.root, ref, frames=args.frames, columns=args.columns)
     args.out.write_text(svg, encoding="utf-8")
-    print(f"{args.out} ({len(svg)} bytes)")
+    # 한글이 섞여 있어 문자 수와 바이트 수가 다르다 — 파일에 실제로 쓰인 바이트를 찍는다.
+    print(written_line(args.out, svg))
     return 0
+
+
+def written_line(out: Path, svg: str) -> str:
+    """쓴 파일의 경로와 **바이트** 수. `len(svg)`는 문자 수라서 UTF-8 바이트와 다르다."""
+    return f"{out} ({len(svg.encode('utf-8'))} bytes)"
 
 
 if __name__ == "__main__":  # pragma: no cover

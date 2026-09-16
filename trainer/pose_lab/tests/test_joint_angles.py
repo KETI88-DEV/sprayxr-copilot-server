@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -188,3 +189,28 @@ def test_real_pass_shows_a_constant_right_elbow_and_says_so() -> None:
         left = next(row for row in block["rows"] if row["key"] == "left_elbow")
         assert left["quality"]["query"]["zero_pct"] == pytest.approx(0.0)
         assert abs(left["query"] - 180.0) > 30.0
+
+
+# --- 문턱이 출처와 같은가(상수를 지키는 검사) --------------------------------------------
+#
+# 세션 중에 `JUMP_DEG`가 30.0 → 5.0으로 바뀐 채 작업 트리에 남아 있었다. 그 값은 화면 문구·독스트링·
+# 보고가 인용하는 문턱과 어긋났다. 문턱은 **출처가 있는 상수**다 — `docs/dataset_spec.md` §4.2가
+# 쿼터니언 측지 점프를 ">30°/11.1 ms"로 세었고, `jump_pct`는 같은 문턱으로 같은 것을 센다.
+
+DATASET_SPEC = Path(__file__).resolve().parents[3] / "docs" / "dataset_spec.md"
+
+
+def test_jump_threshold_matches_its_source_and_every_label() -> None:
+    """`JUMP_DEG`는 dataset_spec §4.2의 문턱이고, 독스트링·화면 문구가 같은 숫자를 말한다."""
+    assert joint_angles.JUMP_DEG == 30.0
+    spec = DATASET_SPEC.read_text(encoding="utf-8")
+    assert f"측지 점프(>{joint_angles.JUMP_DEG:.0f}°/11.1 ms)" in spec
+    # 독스트링이 숫자를 직접 적는 유일한 자리 — 상수와 어긋나면 출처와 다른 라벨이 된다.
+    doc = joint_angles.__doc__ or ""
+    quoted = re.findall(r"`JUMP_DEG`\((\d+)°\)", doc)
+    assert quoted == [f"{joint_angles.JUMP_DEG:.0f}"], quoted
+    # 화면 문구는 상수에서 만들어진다(하드코딩이 아니다).
+    stats = _stats(_rows([{} for _ in range(4)]), "right_elbow")
+    spec_obj = next(s for s in joint_angles.ANGLE_SPECS if s.key == "right_elbow")
+    assert f"{joint_angles.JUMP_DEG:.0f}° 초과 변화" in joint_angles.quality_display(spec_obj, stats)
+    assert f"{joint_angles.JUMP_DEG:.0f}°" in joint_angles.QUALITY_NOTE
