@@ -54,7 +54,15 @@ const LABEL_PUSH_PX = 16;
 // 맞춤 목표 = 맞춤 대상이 캔버스 반폭·반높이에서 차지할 비율. pose(기본·'자세 맞춤')는 벽도 궤적도
 // 다리도 빼고 실측 마커·교정 화살표·상체 관절만 담으므로 캔버스를 거의 채워도 잘리지 않는다. 남기는
 // 14%는 마커 구체 반지름·화살표 촉·글자 라벨 몫이다(0.75는 그만큼을 그냥 비워 뒀다).
-const FRAMING_TARGET = { pose: 0.86, tracks: 0.75, wall: 0.9 };
+// 프리셋별 목표 비율 = 맞춤 대상 상자의 **긴 쪽**이 캔버스에서 차지하는 비율.
+// torso("상체 확대")만 1.0이다 — 상체를 캔버스에 꽉 채우려고 일부러 다리·교정 화살표·착탄점을 맞춤
+// 대상에서 뺐고, 그래서 그것들이 화면 밖으로 나갈 수 있다. 나간 것의 이름은 캔버스 아래에 적는다.
+const FRAMING_TARGET = { pose: 0.86, tracks: 0.75, wall: 0.9, torso: 0.98 };
+// 어느 쪽을 목표 비율로 잴 것인가. 기본은 가로·세로 중 **큰 쪽**이라 아무것도 잘리지 않는다.
+// torso만 **세로**로 잰다 — 상체 상자는 양손이 벌어져 가로가 길고, 큰 쪽으로 맞추면 세로가 남는다.
+// 세로로 맞추면 가로가 넘쳐 손이 화면 밖으로 나갈 수 있다. 그것이 이 프리셋의 의도이고, 나간 것의
+// 이름을 캔버스 아래에 적는다.
+const FRAMING_AXIS = { torso: "vertical" };
 
 /** 강조 함수 — 색·굵기·마커·라벨 전부 이 하나의 함수다. */
 function emphasis(weight) {
@@ -118,6 +126,7 @@ function buildDom(container) {
     <label><input id="view3dLayerWall" type="checkbox" checked> 벽면</label>
     <span class="view3d-controls-sep" aria-hidden="true"></span>
     <button id="view3dPresetFit" type="button">자세 맞춤</button>
+    <button id="view3dPresetTorso" type="button">상체 확대</button>
     <button id="view3dPresetFront" type="button">벽 정면</button>
     <button id="view3dPresetSide" type="button">벽 측면</button>
     <button id="view3dPresetTracks" type="button">궤적 포함</button>
@@ -150,10 +159,13 @@ function buildDom(container) {
   note.className = "view3d-note";
   const correctedNote = document.createElement("p");
   correctedNote.className = "view3d-note view3d-corrected-note";
+  // 상체 확대 프리셋이 화면 밖으로 내보낸 맞춤 대상의 이름. 자른 사실을 화면이 스스로 말한다.
+  const framingNote = document.createElement("p");
+  framingNote.className = "view3d-note view3d-framing-note";
 
   // wallNote는 위에서 host(캔버스 위 겹침)에 넣었다 — 여기서 다시 넣으면 host 밖으로 옮겨진다.
-  container.append(toolbar, host, legend, notes, notesMore, errors, note, correctedNote);
-  return { canvas, host, labelsHost, legend, notes, notesMore, wallNote, errors, note, correctedNote, controls, toolbar };
+  container.append(toolbar, host, legend, notes, notesMore, errors, note, correctedNote, framingNote);
+  return { canvas, host, labelsHost, legend, notes, notesMore, wallNote, errors, note, correctedNote, framingNote, controls, toolbar };
 }
 
 /** `note`에 문구와 상태 톤을 함께 건다. 빈 문구는 CSS `:empty`가 숨긴다. */
@@ -1070,6 +1082,12 @@ function mount(THREE, container) {
     const push = (p) => { if (isVec3(p)) points.push(p); };
     const joints = view.layers?.query?.joints ?? {};
     const hasSkeleton = Object.keys(joints).length > 0;
+    // torso("상체 확대"): 맞춤 대상을 **상체만**으로 좁힌다 — 다리·교정 화살표·착탄점을 다 뺀다.
+    // 다리 이름은 여기서 판단하지 않고 서버(`fit.legs.joints`)가 준 목록을 쓴다.
+    if (mode === "torso") {
+      for (const p of upperBodyPoints(view)) push(p);
+      return points;
+    }
     if (hasSkeleton) {
       // 숨긴 다리는 맞춤 대상에서도 뺀다 — 안 보이는 점 때문에 몸이 작아지면 안 된다. 대신 보이는
       // 자리표시 다리는 넣는다.
@@ -1112,6 +1130,75 @@ function mount(THREE, container) {
     return points;
   }
 
+  /** 상체 점(월드): 서버가 다리라고 이름 붙인 관절을 뺀 모든 관절 + 실측·예측 마커.
+   * 화면에 이미 있는 "상체" 정의(`upperBodyScreen`)와 **같은 점 집합**이다 — 두 곳에서 다르게 정의하면
+   * 프리셋이 키운 것과 계측이 재는 것이 달라진다. */
+  function upperBodyPoints(view) {
+    const joints = view?.layers?.query?.joints ?? {};
+    const legSet = new Set(view?.fit?.legs?.joints ?? []);
+    const points = [];
+    for (const [name, value] of Object.entries(joints)) if (!legSet.has(name) && isVec3(value)) points.push(value);
+    for (const anchor of view?.fit?.anchors ?? []) {
+      if (isVec3(anchor.measured_marker)) points.push(anchor.measured_marker);
+      if (isVec3(anchor.predicted_marker)) points.push(anchor.predicted_marker);
+    }
+    return points;
+  }
+
+  const ANCHOR_NAME = { head: "머리", right: "오른손", left: "왼손" };
+
+  /** 기본(자세 맞춤) 프리셋이 자르지 않는 맞춤 대상에 **이름**을 붙여 돌려준다.
+   * 상체 확대가 무엇을 화면 밖으로 내보냈는지 말하려면 점마다 사람이 읽는 이름이 있어야 한다. */
+  function namedFitTargets(view) {
+    const out = [];
+    const add = (name, p) => { if (isVec3(p)) out.push({ name, p }); };
+    const joints = view?.layers?.query?.joints ?? {};
+    const legSet = new Set(view?.fit?.legs?.joints ?? []);
+    for (const [name, value] of Object.entries(joints)) if (!legSet.has(name)) add(`${name} 관절`, value);
+    for (const anchor of view?.fit?.anchors ?? []) {
+      const who = ANCHOR_NAME[anchor.point] ?? anchor.point;
+      add(`${who} 실측 마커`, anchor.measured_marker);
+      add(`${who} 예측 마커`, anchor.predicted_marker);
+    }
+    for (const correction of view?.corrections ?? []) {
+      const n = typeof correction.n === "number" ? correction.n : "?";
+      const useFrame = isVec3(correction.from_frame) && isVec3(correction.to_frame);
+      add(`교정 ${n}의 시작점`, useFrame ? correction.from_frame : correction.from);
+      add(`교정 ${n}의 화살촉`, useFrame ? correction.to_frame : correction.to);
+    }
+    return out;
+  }
+
+  const OFFSCREEN_NAMES_SHOWN = 4;
+
+  /** 한글 주격 조사. 앞 글자에 받침이 있으면 "이", 없으면 "가"(숫자·영문은 "가"로 둔다). */
+  function subjectParticle(text) {
+    const code = text.charCodeAt(text.length - 1);
+    if (code < 0xac00 || code > 0xd7a3) return "가";
+    return (code - 0xac00) % 28 === 0 ? "가" : "이";
+  }
+
+  /** 지금 카메라에서 캔버스 밖에 있는 맞춤 대상의 이름. 프리셋이 무엇을 잘랐는지 화면이 스스로 말한다. */
+  function offscreenFitTargets() {
+    if (!lastView) return [];
+    const { w, h } = hostSize();
+    const out = [];
+    for (const { name, p } of namedFitTargets(lastView)) {
+      const px = toPixel(new THREE.Vector3(...p));
+      if (px.z > 1 || px.x < 0 || px.y < 0 || px.x > w || px.y > h) out.push(name);
+    }
+    return out;
+  }
+
+  function describeFraming(mode) {
+    if (mode !== "torso") return "";
+    const outside = offscreenFitTargets();
+    if (outside.length === 0) return "상체 확대: 맞춤 대상이 모두 화면 안에 있습니다.";
+    const shown = outside.slice(0, OFFSCREEN_NAMES_SHOWN).join(" · ");
+    const rest = outside.length > OFFSCREEN_NAMES_SHOWN ? ` 외 ${outside.length - OFFSCREEN_NAMES_SHOWN}개` : "";
+    return `상체 확대: ${shown}${rest}${subjectParticle(rest || shown)} 화면 밖에 있습니다 — 기본 뷰는 '자세 맞춤'입니다.`;
+  }
+
   function boundsOf(points) {
     const min = [Infinity, Infinity, Infinity];
     const max = [-Infinity, -Infinity, -Infinity];
@@ -1125,7 +1212,7 @@ function mount(THREE, container) {
   }
 
   /** 카메라 거리 d에서 주어진 점들을 투영했을 때 max(높이비, 폭비). 뒤로 넘어가면 Infinity. */
-  function projectedRatio(corners, target, offsetDir, distance) {
+  function projectedRatio(corners, target, offsetDir, distance, axis) {
     const position = target.clone().addScaledVector(offsetDir, distance);
     const forward = offsetDir.clone().negate();
     const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0));
@@ -1144,7 +1231,8 @@ function mount(THREE, container) {
       xmin = Math.min(xmin, x); xmax = Math.max(xmax, x);
       ymin = Math.min(ymin, y); ymax = Math.max(ymax, y);
     }
-    return Math.max((xmax - xmin) / 2, (ymax - ymin) / 2);
+    const vertical = (ymax - ymin) / 2;
+    return axis === "vertical" ? vertical : Math.max((xmax - xmin) / 2, vertical);
   }
 
   /** AABB 중심을 보고, 세로·가로 FOV 모두에서 목표 비율이 되는 거리를 이분법으로 찾는다. */
@@ -1167,24 +1255,33 @@ function mount(THREE, container) {
     // pose(자세 맞춤·기본)는 **실제 점**에 맞춘다. AABB 8꼭짓점에 맞추면 몸 앞뒤로 부풀린 상자의
     // 가까운 모서리가 크게 잡혀, 화면에 실제로 보이는 것보다 멀리 물러선다(L6에서 상체가 59%만
     // 차지해야 할 거리를 75%로 세어 뒤로 물러났다). 궤적·벽 프리셋은 점이 많아 예전대로 꼭짓점을 쓴다.
-    const fitPoints = mode === "pose" ? points.map((p) => new THREE.Vector3(...p)) : corners;
+    const fitPoints =
+      mode === "pose" || mode === "torso" ? points.map((p) => new THREE.Vector3(...p)) : corners;
     const goal = FRAMING_TARGET[mode] ?? 0.75;
+    const axis = FRAMING_AXIS[mode];
     let lo = 0.01;
     let hi = 100;
     for (let i = 0; i < 60; i += 1) {
       const mid = (lo + hi) / 2;
-      if (projectedRatio(fitPoints, target, offsetDir, mid) > goal) lo = mid;
+      if (projectedRatio(fitPoints, target, offsetDir, mid, axis) > goal) lo = mid;
       else hi = mid;
     }
     camState.target.copy(target);
     camState.radius = hi;
     framing.mode = mode;
     framing.auto = true;
-    framing.ratio = projectedRatio(fitPoints, target, offsetDir, hi);
+    framing.ratio = projectedRatio(fitPoints, target, offsetDir, hi, axis);
     applyCamera();
+    // 자른 사실은 카메라를 적용한 **뒤에** 잰다 — 투영이 새 카메라를 써야 이름이 맞는다.
+    const offscreen = mode === "torso" ? offscreenFitTargets() : [];
+    dom.framingNote.textContent = describeFraming(mode);
     if (container.__view3dDebug) {
       container.__view3dDebug.framingRatio = framing.ratio;
       container.__view3dDebug.framingMode = mode;
+      container.__view3dDebug.framingOffscreen = offscreen;
+      container.__view3dDebug.framingNote = dom.framingNote.textContent;
+      container.__view3dDebug.torsoSpan = torsoScreenSpan();
+      container.__view3dDebug.upperBody = upperBodyScreen();
     }
   }
 
@@ -1302,6 +1399,10 @@ function mount(THREE, container) {
     if (!lastView) return;
     Object.assign(camState, defaultAngles(lastView));
     frameTo("pose");
+  });
+  dom.controls.querySelector("#view3dPresetTorso").addEventListener("click", () => {
+    if (!lastView) return;
+    frameTo("torso");
   });
   dom.controls.querySelector("#view3dPresetFront").addEventListener("click", () => applyPreset(0));
   dom.controls.querySelector("#view3dPresetSide").addEventListener("click", () => applyPreset(Math.PI / 2));

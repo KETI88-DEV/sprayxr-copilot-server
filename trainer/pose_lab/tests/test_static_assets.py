@@ -482,3 +482,49 @@ def test_f3_checks_can_fail():
         "wide_measure_claims_the_narrow_name",
         "narrow_measure_missing",
     ]
+
+
+# --- D6: 상체 확대 프리셋 --------------------------------------------------------
+
+
+def torso_preset_faults(js: str, html: str) -> list[str]:
+    """상체 확대 프리셋이 (1) 있고, (2) 상체 점에 **세로로** 맞추고, (3) 화면 밖으로 내보낸 것의
+    이름을 재서 화면에 적는가.
+
+    (2)가 빠지면 상체 상자의 가로(벌린 두 손)가 목표를 먹어 세로가 남는다 — 실측으로 확인한
+    회귀다(L3 상체 비율 0.6692 → 0.4864). (3)이 빠지면 화면이 자른 사실을 말하지 않는다.
+    """
+    faults = []
+    if 'id="view3dPresetTorso"' not in js and 'id="view3dPresetTorso"' not in html:
+        faults.append("no_button")
+    if not re.search(r'frameTo\("torso"\)', js):
+        faults.append("button_does_not_frame")
+    if not re.search(r"FRAMING_TARGET\s*=\s*{[^}]*torso", js):
+        faults.append("no_target")
+    if not re.search(r'FRAMING_AXIS\s*=\s*{[^}]*torso:\s*"vertical"', js):
+        faults.append("not_vertical")
+    if "function offscreenFitTargets(" not in js:
+        faults.append("no_offscreen_probe")
+    if not re.search(r"dom\.framingNote\.textContent\s*=\s*describeFraming", js):
+        faults.append("note_not_shown")
+    # 기본 뷰(pose)는 지금 동작을 지킨다 — 세로 전용으로 바뀌면 안 된다.
+    if re.search(r'FRAMING_AXIS\s*=\s*{[^}]*pose:', js):
+        faults.append("default_view_axis_changed")
+    return faults
+
+
+def test_torso_preset_is_wired_and_discloses_what_it_cuts():
+    assert torso_preset_faults(_read("skeleton_view.js"), _read("index.html")) == []
+
+
+def test_torso_preset_checks_can_fail():
+    """합성 입력으로 각 분기가 실제로 잡히는지 확인한다(실패할 수 없는 단언 방지)."""
+    full = _read("skeleton_view.js")
+    html = _read("index.html")
+    horizontal = full.replace('FRAMING_AXIS = { torso: "vertical" }', "FRAMING_AXIS = { torso: null }")
+    assert torso_preset_faults(horizontal, html) == ["not_vertical"]
+    silent = full.replace("dom.framingNote.textContent = describeFraming(mode);", "")
+    assert torso_preset_faults(silent, html) == ["note_not_shown"]
+    assert "no_button" in torso_preset_faults("", "")
+    also_pose = full.replace('FRAMING_AXIS = { torso: "vertical" }', 'FRAMING_AXIS = { pose: "vertical", torso: "vertical" }')
+    assert torso_preset_faults(also_pose, html) == ["default_view_axis_changed"]

@@ -667,3 +667,5 @@ dd { margin: 0; font-family: var(--mono); }
 .view3d-errors { color: var(--bad); }
 .view3d-note[data-tone="error"] { color: var(--bad); }
 .view3d-corrected-note { color: var(--warn); }
+/* 상체 확대가 화면 밖으로 내보낸 맞춤 대상 고지. 자른 사실을 눈에 띄게 둔다. */
+.view3d-framing-note { color: var(--warn); }
