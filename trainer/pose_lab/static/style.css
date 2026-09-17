@@ -265,6 +265,10 @@ button { font-family: var(--sans); cursor: pointer; }
 .hero-meta > div { display: flex; flex-direction: column; gap: 0.1rem; }
 .hero-meta dt { margin: 0; font-size: var(--fs-sm); color: var(--text-dim); }
 .hero-meta dd { margin: 0; font-size: var(--fs-sm); font-family: var(--mono); color: var(--text); }
+/* 히어로 칸의 둘째 줄: 동작 키를 어느 단에서 맺었는지(S8) · 바닥 기준 머리가 무엇인지(S4).
+   값 아래에 붙는 설명이라 값보다 흐리게 두되 최소 글자 크기(14px = --fs-sm)를 지킨다. */
+.hero-meta-sub { margin: 0; font-size: var(--fs-sm); font-family: inherit; color: var(--text-dim); max-width: 24rem; }
+.hero-meta-sub[data-tone="relaxed"] { color: var(--warn); }
 
 .hero-deviations {
   list-style: none;
@@ -682,6 +686,16 @@ dd { margin: 0; font-family: var(--mono); }
    느슨한 일치가 같은 모양이면 화면이 "같은 동작"이라고 거짓을 말한다. */
 .reference-match { color: var(--text-dim); font-size: var(--fs-sm); }
 .reference-match[data-tone="relaxed"] { color: var(--warn); }
+
+/* ④c 관절 각도도 접어 둔다 — 점수·교정에 들어가지 않는 참고값인데 페이지에서 가장 큰
+   글자 덩어리였다(1875×1000 L1 실측 987자). 접는 모양은 관절 축 평가와 같게 한다. */
+.joint-angles > summary {
+  cursor: pointer;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  margin-top: var(--sp-3);
+}
+.joint-angles[open] > summary { margin-bottom: var(--sp-2); }
 
 /* ④d 관절 축 평가 표는 접어 둔다(S7). 요약 칩은 위에서 그대로 보인다. */
 .joint-axes > summary {

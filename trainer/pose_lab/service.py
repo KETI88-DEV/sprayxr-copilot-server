@@ -16,7 +16,7 @@ import math
 import sys
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
-from typing import Any, Callable, Final, Mapping, Protocol, Sequence
+from typing import Any, Callable, Final, Iterable, Mapping, Protocol, Sequence
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
@@ -529,6 +529,41 @@ DEVIATION_MEASURED_NOTE: Final = (
 # 실측 강체에 붙은 앵커 이름(`skeleton.place_oriented`가 내는 `AnchorFit.point`).
 DEVIATION_MEASURED_POINTS: Final[tuple[str, ...]] = ("head", "right", "left")
 
+# 진하기 눈금 범례(S1). 셋 다 **서버가 잰 값**으로 채운다 — 화면이 이름과 숫자를 조립하면
+# 눈금과 문구가 갈린다(검증 라운드: 범례가 "가장 진한 곳 79.9cm"라고 적었는데 화면 어디에도
+# 그 관절이 없었다).
+DEVIATION_SCALE_LEGEND: Final = "관절 진하기 = 기준과 벌어진 거리 — 가장 진한 {joint} {cm}cm가 눈금 끝입니다"
+DEVIATION_HIDDEN_LEGEND: Final = "안 그린 다리 관절은 눈금에서 뺐습니다 — 그중 {joint}{particle} {cm}cm로 더 멉니다"
+DEVIATION_SHIFT_LEGEND: Final = "이 거리에는 두 몸이 통째로 옮겨 앉은 몫 {cm}cm가 모든 관절에 공통으로 섞여 있습니다"
+
+# 관절 이름을 사람이 읽는 말로. 범례가 "LeftCalf"라고 적으면 화면에서 그 관절을 못 찾는다.
+JOINT_LABELS: Final[dict[str, str]] = {
+    "Pelvis": "골반", "Spine": "허리", "Spine1": "등", "Chest": "가슴", "Neck": "목", "Head": "머리",
+    "LeftShoulder": "왼 어깨", "LeftUpperArm": "왼 위팔", "LeftForeArm": "왼 전완", "LeftHand": "왼손",
+    "RightShoulder": "오른 어깨", "RightUpperArm": "오른 위팔", "RightForeArm": "오른 전완", "RightHand": "오른손",
+    "LeftThigh": "왼 허벅지", "LeftCalf": "왼 종아리", "LeftFoot": "왼발", "LeftToe": "왼 발끝",
+    "RightThigh": "오른 허벅지", "RightCalf": "오른 종아리", "RightFoot": "오른발", "RightToe": "오른 발끝",
+}
+
+
+def subject_particle(word: str) -> str:
+    """한국어 주격 조사 이/가. 끝 글자에 받침이 있으면 "이", 없으면 "가"다.
+
+    범례가 "왼 종아리이"라고 적으면 서버가 지은 문장이 사람 말이 아니게 된다.
+    """
+    if not word:
+        return "가"
+    last = word[-1]
+    if "\uac00" <= last <= "\ud7a3":
+        return "가" if (ord(last) - 0xAC00) % 28 == 0 else "이"
+    return "이"
+
+
+def joint_label(name: str) -> str:
+    """관절의 사람이 읽는 이름. 모르는 이름은 리그 이름 그대로 낸다 — 지어내지 않는다."""
+    return JOINT_LABELS.get(name, name)
+
+
 
 def _pair_distances(a: Mapping[str, Sequence[float]], b: Mapping[str, Sequence[float]]) -> dict[str, float]:
     """두 이름표 집합에 **둘 다 있는** 이름만 월드 거리를 잰다. 한쪽에만 있으면 짝이 없으므로 내지 않는다."""
@@ -536,7 +571,10 @@ def _pair_distances(a: Mapping[str, Sequence[float]], b: Mapping[str, Sequence[f
 
 
 def deviation_block(
-    query: SkeletonResult | None, reference: SkeletonResult | None
+    query: SkeletonResult | None,
+    reference: SkeletonResult | None,
+    *,
+    hidden_joints: Iterable[str] = (),
 ) -> dict[str, object] | None:
     """질의·기준 스켈레톤이 관절마다 얼마나 벌어졌는가(m). 한쪽이라도 없으면 None.
 
@@ -549,20 +587,104 @@ def deviation_block(
         return None
     joints = _pair_distances(query.joints, reference.joints)
     markers = _pair_distances(query.markers, reference.markers)
+    # 눈금에서 빼는 관절 = **화면에 그리지 않는 관절**. 안 그리는 관절이 눈금을 정하면 보이는
+    # 관절이 전부 눈금의 아랫도리에만 몰린다 — 검증 라운드 실측: L3의 argmax가 숨긴 LeftCalf
+    # 0.7988m라 보이는 관절의 t가 0.412에서 멈춰 설계된 색 범위의 26%만 썼고, 범례는 화면
+    # 어디에도 없는 "79.9cm"를 적었다. 사용자가 요청한 "유사도가 떨어지는 조인트일수록 진하게"가
+    # 가장 필요한 앉은 자세 레벨에서 가장 약해진 것이다.
+    hidden = {name for name in hidden_joints if name in joints}
+    drawn = {name: value for name, value in joints.items() if name not in hidden}
+    scale_source = drawn if drawn else joints
+    joint_max_name = max(scale_source, key=lambda name: scale_source[name]) if scale_source else None
+    joint_max_m = None if joint_max_name is None else scale_source[joint_max_name]
+    hidden_pairs = {name: joints[name] for name in hidden}
+    hidden_max_name = max(hidden_pairs, key=lambda name: hidden_pairs[name]) if hidden_pairs else None
+    hidden_max_m = None if hidden_max_name is None else hidden_pairs[hidden_max_name]
+    shift = _centroid_gap_m(query.joints, reference.joints)
     return {
         "basis": DEVIATION_BASIS,
         "joints": joints,
         "markers": markers,
         # 색 눈금. 추정과 실측을 같은 눈금으로 칠하면 둘의 구분이 색에서 사라진다.
-        "joint_max_m": max(joints.values()) if joints else None,
+        # 그리는 관절에서만 잡는다 — 눈금을 정한 관절 이름도 같이 낸다(범례가 이름으로 말한다).
+        "joint_max_m": joint_max_m,
+        "joint_max_name": joint_max_name,
+        "joint_max_label": None if joint_max_name is None else joint_label(joint_max_name),
         "marker_max_m": max(markers.values()) if markers else None,
         "joint_max_display": (
-            None if not joints else instructions.deviation_display(max(joints.values()) * 100.0)
+            None if joint_max_m is None else instructions.deviation_display(joint_max_m * 100.0)
+        ),
+        # 눈금에서 뺀 관절과 그중 가장 먼 것. 숨겼다는 사실을 숨기지 않는다.
+        "scale_excludes": sorted(hidden),
+        "hidden_max_name": hidden_max_name,
+        "hidden_max_label": None if hidden_max_name is None else joint_label(hidden_max_name),
+        "hidden_max_m": hidden_max_m,
+        "hidden_max_display": (
+            None if hidden_max_m is None else instructions.deviation_display(hidden_max_m * 100.0)
+        ),
+        # 몸 전체가 통째로 옮겨 앉은 몫(두 스켈레톤 관절 무게중심 사이 거리). 이 값이 모든 관절
+        # 편차에 공통으로 섞여 있다 — 한 관절의 색을 "이 관절만 다르다"로 읽으면 과대 해석이다.
+        "common_shift_m": shift,
+        "common_shift_display": (
+            None if shift is None else instructions.deviation_display(shift * 100.0)
         ),
         "measured_points": [name for name in DEVIATION_MEASURED_POINTS if name in markers],
         "estimate_note": DEVIATION_ESTIMATE_NOTE,
         "measured_note": DEVIATION_MEASURED_NOTE,
+        # 범례 문구는 서버가 짓는다 — 화면이 숫자와 이름을 조립하면 눈금과 문구가 갈린다.
+        "legend": _deviation_legend(
+            joint_max_label=None if joint_max_name is None else joint_label(joint_max_name),
+            joint_max_display=None if joint_max_m is None else instructions.deviation_display(joint_max_m * 100.0),
+            hidden_max_label=None if hidden_max_name is None else joint_label(hidden_max_name),
+            hidden_max_display=None if hidden_max_m is None else instructions.deviation_display(hidden_max_m * 100.0),
+            hidden_beats_drawn=(
+                hidden_max_m is not None and joint_max_m is not None and hidden_max_m > joint_max_m
+            ),
+            shift_display=None if shift is None else instructions.deviation_display(shift * 100.0),
+        ),
     }
+
+
+def _centroid_gap_m(
+    query: Mapping[str, Sequence[float]], reference: Mapping[str, Sequence[float]]
+) -> float | None:
+    """두 스켈레톤의 **짝지어진 관절 무게중심** 사이 거리(m).
+
+    같은 동작 키 칸 안이라도 두 패스의 벽 위 자리가 조금 다르면 몸 전체가 통째로 옮겨 앉는다.
+    그 평행이동은 모든 관절 편차에 공통으로 더해지므로, 한 관절의 색을 "이 관절만 다르다"로
+    읽으면 과대 해석이다. 화면이 그 사실을 말하려면 그 몫이 얼마인지 잴 값이 있어야 한다.
+    """
+    names = [name for name in query if name in reference]
+    if not names:
+        return None
+    qc = [sum(float(query[name][axis]) for name in names) / len(names) for axis in range(3)]
+    rc = [sum(float(reference[name][axis]) for name in names) / len(names) for axis in range(3)]
+    return math.dist(qc, rc)
+
+
+def _deviation_legend(
+    *,
+    joint_max_label: str | None,
+    joint_max_display: str | None,
+    hidden_max_label: str | None,
+    hidden_max_display: str | None,
+    hidden_beats_drawn: bool,
+    shift_display: str | None,
+) -> list[str]:
+    """진하기 눈금을 설명하는 범례 줄. 눈금이 없으면 아무 말도 하지 않는다."""
+    lines: list[str] = []
+    if joint_max_display is None or joint_max_label is None:
+        return lines
+    lines.append(DEVIATION_SCALE_LEGEND.format(joint=joint_max_label, cm=joint_max_display))
+    if hidden_beats_drawn and hidden_max_label is not None and hidden_max_display is not None:
+        lines.append(
+            DEVIATION_HIDDEN_LEGEND.format(
+                joint=hidden_max_label, particle=subject_particle(hidden_max_label), cm=hidden_max_display
+            )
+        )
+    if shift_display is not None:
+        lines.append(DEVIATION_SHIFT_LEGEND.format(cm=shift_display))
+    return lines
 
 
 
@@ -616,10 +738,81 @@ FIT_NOTES: Final[dict[str, str]] = {
 # 이제 관절은 **두 스켈레톤이 벌어진 거리**로 진하기가 정해진다(`deviation_block`). 그래서 범례는
 # 그 진하기가 무엇을 뜻하는지, 그리고 그 값이 추정끼리의 차이라는 것을 같이 말해야 한다 — 사용자가
 # 본 화면의 강조는 유사도가 아니라 채점 가중치였고, 그것이 이 재작업의 출발점이다.
+# 진하기 규칙은 이제 `deviation.legend`가 **잰 값과 함께** 말한다. 여기서 같은 말을 또 하면
+# 범례가 두 줄로 같은 주장을 반복하고, 편차를 못 잰 경우(한쪽 스켈레톤이 안 섬)에는 그 주장이
+# 거짓이 된다 — 그때는 진해지는 관절이 없다.
 LEGEND_NOTES: Final[tuple[str, ...]] = (
-    "대상(파랑)·기준(보라) 두 자세를 겹쳐 그립니다 — 벌어진 관절일수록 진합니다",
+    "대상(파랑)·기준(보라) 두 자세를 겹쳐 그립니다",
     "관절·뼈는 아바타 추정(속 빈 표식)이고, 실측은 머리(HMD)·건·플래쉬 셋뿐(층 색으로 채운 구체)입니다",
 )
+
+def _legs_shown(fit: Mapping[str, object] | None) -> bool:
+    """이 층이 다리를 그리는가. 서버 판정(`legs_visible_default`)이 유일한 출처다."""
+    return bool(fit is not None and fit.get("legs_visible_default") is True)
+
+
+def hidden_joints(
+    fit: Mapping[str, object] | None, reference_fit: Mapping[str, object] | None
+) -> tuple[str, ...]:
+    """화면에 **안 그려지는** 관절 이름. 두 층 다 다리를 숨길 때만 다리 관절이 여기 든다.
+
+    한 층이라도 그리면 그 관절은 화면에 있으므로 눈금에서 빼지 않는다 — 안 보이는 관절이 눈금을
+    정하면 보이는 관절이 색 범위의 아랫도리에만 몰린다(검증 라운드 실측: L3 26%).
+    """
+    if _legs_shown(fit) or _legs_shown(reference_fit):
+        return ()
+    return tuple(skeleton.LEG_JOINTS)
+
+
+def leg_notes(
+    fit: Mapping[str, object] | None, reference_fit: Mapping[str, object] | None
+) -> list[str]:
+    """다리 고지 — **층마다 한 줄**, 두 층이 같은 문장이면 "대상·기준" 한 줄로 합친다.
+
+    질의 고지만 싣던 동안에는 화면이 그림과 반대되는 말을 했다: 김경호 L1 1000389_1 #9는 기준 층
+    다리 뼈 8개가 그려져 있는데 "다리는 그리지 않았습니다"라고 적혔고, #0은 기준 다리가 없는데
+    "흐리게 그렸습니다"라고만 적혔다. 자동 기준으로 맺은 24쌍 중 10쌍(41.7%)에서 두 층의 판정이
+    갈린다 — 한 층 고지로는 맞을 수가 없다.
+    """
+    templates = [
+        (key, fit_block.get("leg_note_template"))
+        for key, fit_block in (("query", fit), ("reference", reference_fit))
+        if isinstance(fit_block, Mapping)
+    ]
+    present = [(key, text) for key, text in templates if isinstance(text, str)]
+    if not present:
+        return []
+    if len(present) == 2 and present[0][1] == present[1][1]:
+        return [present[0][1].format(who=LEG_NOTE_WHO["both"])]
+    return [text.format(who=LEG_NOTE_WHO[key]) for key, text in present]
+
+
+def head_height_block(
+    fit: Mapping[str, object] | None, reference_fit: Mapping[str, object] | None
+) -> dict[str, object]:
+    """바닥 기준 머리 높이를 **두 몸 다**. 한 값만 보이면 어느 몸의 높이인지 알 수 없다.
+
+    실측: L1 대상 1.51m · 기준 1.66m, L3 대상 0.70m · 기준 0.95m — 두 자세의 높이가 다르다.
+    벽 메시가 없어 바닥면을 못 고른 레벨은 "—" 대신 왜 없는지 적는다.
+    """
+    values: dict[str, object] = {}
+    parts: list[str] = []
+    floor: float | None = None
+    for key, fit_block in (("query", fit), ("reference", reference_fit)):
+        metres = fit_block.get("head_above_floor_m") if isinstance(fit_block, Mapping) else None
+        display = fit_block.get("head_above_floor_display") if isinstance(fit_block, Mapping) else None
+        values[f"{key}_m"] = metres
+        values[f"{key}_display"] = display
+        if isinstance(display, str):
+            parts.append(f"{LEG_NOTE_WHO[key]} {display}")
+        if floor is None and isinstance(fit_block, Mapping):
+            candidate = fit_block.get("floor_vertical")
+            if isinstance(candidate, (int, float)):
+                floor = float(candidate)
+    values["display"] = " · ".join(parts) if parts else None
+    values["note"] = HEAD_HEIGHT_NOTE.format(floor=floor) if parts and floor is not None else HEAD_HEIGHT_NO_FLOOR
+    return values
+
 
 # 층마다 궤적이 **몇 줄**인지 화면이 말한다.
 #
@@ -675,23 +868,32 @@ LEG_SEARCH_MAX: Final = 120
 #
 # 그래서 이제 둘 중 하나다: IK 다리가 해부학 범위 안이면(`skeleton.leg_check`) **흐리게** 그리고,
 # 아니면 **그리지 않고 왜 없는지 말한다**. 없는 다리를 지어내지 않는다.
-LEGS_IK_SHOWN_NOTE: Final = "다리는 추적 장치 없이 IK가 지은 자세라 흐리게 그렸습니다."
+# 고지는 **어느 몸의 다리인지**를 말한다({who} = 대상 / 기준 / 대상·기준). 두 층의 `leg_check`
+# 판정은 자주 갈린다 — 자동 기준으로 맺은 24쌍 중 10쌍(41.7%)에서 갈렸다. 질의 고지만 싣던
+# 동안에는 화면이 그림과 반대되는 말을 했다(김경호 L1 #9: 기준 다리 뼈 8개가 그려져 있는데
+# "다리는 그리지 않았습니다"라고 적혔다).
+LEGS_IK_SHOWN_NOTE: Final = "{who} 다리는 추적 장치 없이 IK가 지은 자세라 흐리게 그렸습니다."
 LEGS_IK_PICKED_NOTE: Final = (
-    "다리는 추적 장치 없이 IK가 지은 자세라 흐리게 그렸습니다 — 범위 안인 프레임"
+    "{who} 다리는 추적 장치 없이 IK가 지은 자세라 흐리게 그렸습니다 — 범위 안인 프레임"
     "(분사 구간 가운데에서 {k}프레임)을 대표로 골랐습니다."
 )
 LEGS_HIDDEN_NOTE: Final = (
-    "다리는 그리지 않았습니다 — 추적 장치가 없고, 이 패스의 IK 다리가 해부학 범위를 벗어났습니다."
+    "{who} 다리는 그리지 않았습니다 — 추적 장치가 없고, 이 패스의 IK 다리가 해부학 범위를 벗어났습니다."
 )
+# 다리 관절이 아예 없는 리그(다리 컬럼 없음)의 고지.
+LEGS_NO_JOINTS_NOTE: Final = "{who} 패스에는 다리 관절이 없어 다리를 그리지 않았습니다."
+LEG_NOTE_WHO: Final[dict[str, str]] = {"query": "대상", "reference": "기준", "both": "대상·기준"}
+
 # 바닥 기준 머리 높이. 이 한 줄이 "지금 서 있나 앉아 있나"를 말한다 — 문턱은 두지 않고 실측 높이를
 # 그대로 적는다(`composite.py`의 바닥 주석 참고). 실측: L1 1.508m · L3 0.696m · L6 0.879m.
-LEGS_FLOOR_HEAD_NOTE: Final = (
-    " 바닥면(수직 {floor:.2f}m) 위 머리 실측 마커는 {head:.2f}m입니다 — 서 있는 높이가 아니면 "
-    "앉거나 쭈그린 자세입니다."
+#
+# 이 문장은 이제 다리 고지에 붙지 않고 **히어로 패널 한 자리**(`head_height`)에만 산다. 다리 고지가
+# 두 층으로 늘어난 뒤에도 같은 문장이 두 번 실리지 않고, 사용자 불만("텍스트가 너무 많아서")을
+# 키우지 않으면서 두 몸의 높이를 나란히 보여 준다.
+HEAD_HEIGHT_NOTE: Final = (
+    "바닥면(수직 {floor:.2f}m) 위 머리 실측 마커입니다 — 서 있는 높이가 아니면 앉거나 쭈그린 자세입니다."
 )
-LEGS_NO_FLOOR_NOTE: Final = " 이 레벨은 벽 메시가 없어 바닥 기준 머리 높이를 내지 않습니다."
-# 다리 관절이 아예 없는 리그(다리 컬럼 없음)의 고지.
-LEGS_NO_JOINTS_NOTE: Final = "이 패스에는 다리 관절이 없어 다리를 그리지 않았습니다."
+HEAD_HEIGHT_NO_FLOOR: Final = "이 레벨은 벽 메시가 없어 바닥면을 고르지 못했습니다."
 
 # 오른 전완·손 저신뢰(S5). 아바타 IK 손과 트래킹된 건의 간격이 작업자·레벨 불문 중앙값 571mm다
 # (적합 상수 0.567m와 일치). 강체 변환이라 스케일 문제가 아니고(뼈 길이 1e-15 보존), 리그의 어느
@@ -897,6 +1099,7 @@ def _fit_view(
     *,
     chosen: SkeletonFrame | None = None,
     floor: float | None = None,
+    who: str = LEG_NOTE_WHO["query"],
 ) -> dict[str, object]:
     gravity = placed.gravity_correction_deg
     faded = gravity > FADE_GRAVITY_DEG
@@ -912,14 +1115,17 @@ def _fit_view(
     # 곧게 선 자리표시는 없다. IK 다리가 범위 안이면 흐리게, 아니면 안 그리고 이유를 말한다.
     legs = None if chosen is None else chosen.legs
     head_above = None if floor is None else _head_above_m(placed, floor)
+    # 고지는 **이 층의 판정**을 말한다. 두 층의 leg_check가 갈리는 일이 잦으므로(자동 기준 24쌍
+    # 중 10쌍) 질의 것만 싣던 동안에는 화면이 그림과 반대되는 말을 했다. `{who}`는 층 이름이고,
+    # 두 층이 같은 문장이면 뷰가 "대상·기준" 한 줄로 합친다.
     if legs is None:
-        notes.append(LEGS_NO_JOINTS_NOTE + _floor_head_note(floor, head_above))
+        leg_template = LEGS_NO_JOINTS_NOTE
     elif legs.plausible:
         picked = chosen is not None and chosen.offset_frames > 0
-        base = LEGS_IK_PICKED_NOTE.format(k=chosen.offset_frames) if picked else LEGS_IK_SHOWN_NOTE
-        notes.append(base + _floor_head_note(floor, head_above))
+        leg_template = LEGS_IK_PICKED_NOTE.replace("{k}", str(chosen.offset_frames)) if picked else LEGS_IK_SHOWN_NOTE
     else:
-        notes.append(LEGS_HIDDEN_NOTE + _floor_head_note(floor, head_above))
+        leg_template = LEGS_HIDDEN_NOTE
+    notes.append(leg_template.format(who=who))
     note_keys.append("legs")
 
     notes.append(
@@ -959,6 +1165,9 @@ def _fit_view(
         "leg_tilt_deg": placed.leg_tilt_deg,
         "rotation_residual_deg": dict(placed.rotation_residual_deg),
         "rotation_residual_label": ROTATION_RESIDUAL_LABELS[kind],
+        # 다리 고지의 **틀**({who} 미치환). 두 층이 같은 문장이면 뷰가 한 줄로 합친다.
+        "leg_note_template": leg_template,
+        "leg_note_who": who,
         # 바닥 기준 머리 높이(S4). 앉은 자세인지가 이 한 숫자에서 읽히므로 문구 말고 값으로도 낸다 —
         # 화면은 이 표시 문자열을 눈에 띄는 자리에 그대로 옮긴다(다시 계산하지 않는다).
         "floor_vertical": floor,
@@ -1004,18 +1213,13 @@ def _fit_view(
     }
 
 
-def _floor_head_note(floor: float | None, head_above: float | None) -> str:
-    """다리 고지 뒤에 붙는 바닥·머리 높이 한 문장. 못 고른 것을 지어내지 않는다."""
-    if floor is None or head_above is None:
-        return LEGS_NO_FLOOR_NOTE
-    return LEGS_FLOOR_HEAD_NOTE.format(floor=floor, head=head_above)
-
-
 def skeleton_block(
     raw: RawPass,
     representative: Representative | None = None,
     mounts_table: MountsTable | None = None,
     geometry: composite.MeshGeometry | None = None,
+    *,
+    who: str = LEG_NOTE_WHO["query"],
 ) -> SkeletonResult:
     """대표 프레임 하나에 전신 FK 스켈레톤을 세운다(`skeleton.place_oriented`, M6).
 
@@ -1073,6 +1277,7 @@ def skeleton_block(
             table.grip_limit_m,
             chosen=chosen,
             floor=composite.floor_vertical(geometry),
+            who=who,
         ),
         fit_reason=None,
         fit_note=None,
@@ -1344,7 +1549,15 @@ def view_block(
         "reference_fit_reason": reference_fit_reason,
         "reference_fit_note": reference_fit_note,
         # 관절마다 두 스켈레톤이 벌어진 거리. 화면은 이 값으로 진하기만 정한다(S1).
-        "deviation": deviation_block(skeleton_result, reference_skeleton),
+        # 눈금은 **그리는 관절**에서만 잡는다 — 두 층 다 다리를 숨기면 다리 관절을 눈금에서 뺀다.
+        "deviation": deviation_block(
+            skeleton_result, reference_skeleton, hidden_joints=hidden_joints(fit, reference_fit)
+        ),
+        # 다리 고지(S4). **두 층 몫을 다 낸다** — 질의 것만 싣던 동안에는 기준 다리가 그려져 있는데
+        # "다리는 그리지 않았습니다"라고 적히는 일이 24쌍 중 10쌍에서 났다. 같은 문장이면 한 줄로 합친다.
+        "leg_notes": leg_notes(fit, reference_fit),
+        # 바닥 기준 머리 높이(S4). 두 몸의 높이를 나란히 한 줄로 — 한 값만 보이면 어느 몸인지 모른다.
+        "head_height": head_height_block(fit, reference_fit),
         "legend_notes": [
             note
             for note in (*LEGEND_NOTES, track_legend_note(query_layer))
@@ -1468,19 +1681,23 @@ def _attach_view(
             mesh = _mesh_error_view(query.level)
             geometry = None
 
-    def skeleton_for(raw: RawPass) -> SkeletonResult:
-        """질의·기준을 **같은 경로**로 세운다(S1). 어느 쪽이 실패해도 표시 블록 격리는 그대로다."""
+    def skeleton_for(raw: RawPass, who: str) -> SkeletonResult:
+        """질의·기준을 **같은 경로**로 세운다(S1). 어느 쪽이 실패해도 표시 블록 격리는 그대로다.
+
+        `who`만 층마다 다르다 — 다리 고지가 **자기 층의 판정**을 말하게 하는 이름이다(S4).
+        """
         rep_ok, representative = guarded("skeleton", representative_frame, raw)
         built_ok = False
         built: SkeletonResult | None = None
         if rep_ok:
-            built_ok, built = guarded("skeleton", skeleton_block, raw, representative, None, geometry)
+            build = functools.partial(skeleton_block, who=who)
+            built_ok, built = guarded("skeleton", build, raw, representative, None, geometry)
         if not built_ok or built is None:
             return _skeleton_failure("display_error", representative if rep_ok else None)
         return built
 
-    skeleton_result = skeleton_for(query_raw)
-    reference_skeleton = skeleton_for(reference_raw)
+    skeleton_result = skeleton_for(query_raw, LEG_NOTE_WHO["query"])
+    reference_skeleton = skeleton_for(reference_raw, LEG_NOTE_WHO["reference"])
 
     view = view_block(
         query_frames,
@@ -1587,12 +1804,22 @@ def compare(
             "yaw_assumed": yaw_used,
             "yaw_source": yaw_source,
         }
-    if query_key != reference_key:
+    # 동작 키 일치는 **완화 사다리**를 탄다(S8) — 기준을 고르는 쪽(`reference_candidates`)과
+    # **같은 사다리, 같은 순서**다. 두 쪽이 갈리면 화면이 한 자리에서 서로 반대되는 말을 한다:
+    # 기준 줄은 "동작 키 완화: 벽면 4×4 칸까지 일치"를 띄우는데 [평가]는 "동작 키가 달라 비교하지
+    # 않습니다."만 남기고 3D를 아예 열지 않았다(검증 라운드가 L1 #8·L2 #0·L2 #6·L6 #11·L3 #10
+    # 다섯 건 전부에서 재현했다). 완화로 고른 기준이 비교에서 죽으면 S8이 푼 것이 아무것도 없다.
+    #
+    # 어느 단에서 만났는지는 **반드시** 응답에 싣는다(`key_match`). 엄밀 일치와 느슨한 일치를
+    # 구별하지 못하면 화면이 "같은 동작"이라고 거짓을 말한다.
+    key_match = motion_key_match(query_inputs, reference_inputs, params)
+    if key_match["granularity"] is None:
         return {
             "status": "unavailable",
             "reason": "motion_key_mismatch",
             "query_key": query_key,
             "reference_key": reference_key,
+            "key_match": key_match,
             "yaw_assumed": yaw_used,
             "yaw_source": yaw_source,
         }
@@ -1733,6 +1960,8 @@ def compare(
         "status": "ok",
         "query_key": query_key,
         "reference_key": reference_key,
+        # 어느 단에서 두 키가 만났는가(S8). 화면은 이 값으로 엄밀·완화를 구별해 말한다.
+        "key_match": key_match,
         # 몸 기준 축(②④)이 선 요. `yaw_source`가 실측인지 대체값인지 말한다.
         "yaw_assumed": yaw_used,
         "yaw_source": yaw_source,
@@ -1912,6 +2141,52 @@ def reference_ladder(params: Any) -> list[tuple[str, Any]]:
     return rungs
 
 
+def _rung_key(inputs: KeyInputs, granularity: str, rung_params: Any, loosest: Any) -> str:
+    """한 단의 동작 키. `uv_off` 단은 params가 아니라 키 변환으로 만든다(산포 사다리와 같은 변환)."""
+    if granularity == "uv_off":
+        return build_spread_reference.key_without_uv(key_from(inputs, loosest))
+    return key_from(inputs, rung_params)
+
+
+def motion_key_match(
+    query_inputs: KeyInputs | None, reference_inputs: KeyInputs | None, params: Any
+) -> dict[str, object]:
+    """두 패스의 동작 키가 **어느 단에서** 만나는가. 기준을 고르는 쪽과 같은 사다리다.
+
+    `reference_candidates`가 후보를 낸 단과 `compare`가 비교를 허락하는 단이 같아야 한다 —
+    갈리면 화면이 "동작 키 완화: 벽면 4×4 칸까지 일치"를 띄우면서 동시에 "동작 키가 달라
+    비교하지 않습니다."를 적는다(검증 라운드가 재현한 바로 그 상태).
+
+    `granularity`가 None이면 어느 단에서도 만나지 않았다는 뜻이다 — 기본값이나 요청한 단을
+    대신 채우지 않는다. 훑은 단은 전부 `ladder`에 적어 엄밀 일치가 틀렸다는 사실을 숨기지 않는다.
+    """
+    rungs = reference_ladder(params)
+    strict = rungs[0][0]
+    loosest = rungs[-1][1]
+    ladder: list[dict[str, object]] = []
+    granularity: str | None = None
+    matched_key: str | None = None
+    for name, rung_params in [*rungs, ("uv_off", None)]:
+        if query_inputs is None or reference_inputs is None:
+            break
+        q = _rung_key(query_inputs, name, rung_params, loosest)
+        r = _rung_key(reference_inputs, name, rung_params, loosest)
+        same = q == r
+        ladder.append({"granularity": name, "query_key": q, "reference_key": r, "matched": same})
+        if same and granularity is None:
+            granularity = name
+            matched_key = q
+    return {
+        "granularity": granularity,
+        "label": None if granularity is None else reference_ladder_label(granularity),
+        "key": matched_key,
+        "strict_granularity": strict,
+        "strict_label": reference_ladder_label(strict),
+        "relaxed": granularity is not None and granularity != strict,
+        "ladder": ladder,
+    }
+
+
 def reference_candidates(
     source: Any,
     query: PassRef,
@@ -1965,9 +2240,9 @@ def reference_candidates(
     for granularity, rung_params in [*rungs, ("uv_off", None)]:
         drop_uv = rung_params is None
         key_params = loosest if drop_uv else rung_params
-        rung_key = key_from(query_inputs, key_params)
-        if drop_uv:
-            rung_key = build_spread_reference.key_without_uv(rung_key)
+        # 단의 키는 `compare`의 게이트(`motion_key_match`)와 **같은 함수**로 만든다 —
+        # 두 곳에서 따로 만들면 고른 단과 허락하는 단이 조용히 갈린다.
+        rung_key = _rung_key(query_inputs, granularity, rung_params, loosest)
         matched: list[dict[str, object]] = []
         for item, entry in entries:
             motion = source.key_of(entry, key_params)

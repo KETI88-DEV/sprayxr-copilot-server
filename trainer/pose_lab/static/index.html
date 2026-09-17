@@ -57,11 +57,13 @@
             <span class="hero-figure-label">유사도<br><span class="hero-figure-hint">1.0 = 기준과 동일</span></span>
           </div>
           <dl class="hero-meta">
-            <div><dt>동작 키</dt><dd id="heroMotionKey">—</dd></div>
+            <!-- 동작 키와 **어느 단에서 맺은 쌍인지**(S8)를 한 칸에. 기준 줄이 "완화"라고 적었는데
+                 결과가 그 사실을 말하지 않으면 화면 두 자리가 다른 말을 한다. -->
+            <div><dt>동작 키</dt><dd id="heroMotionKey">—</dd><dd class="hero-meta-sub" id="heroMotionMatch" hidden></dd></div>
             <div><dt>표본</dt><dd id="heroSamples">—</dd></div>
             <!-- 바닥 기준 머리 높이(S4). 서 있는 사람의 높이가 아니면 앉거나 쭈그린 자세다 —
-                 자리표시 다리를 없앤 자리를 이 한 숫자가 대신한다. -->
-            <div><dt>바닥 기준 머리</dt><dd id="heroHeadHeight">—</dd></div>
+                 자리표시 다리를 없앤 자리를 이 한 숫자가 대신한다. 대상·기준 두 몸 몫을 다 적는다. -->
+            <div><dt>바닥 기준 머리</dt><dd id="heroHeadHeight">—</dd><dd class="hero-meta-sub" id="heroHeadHeightNote" hidden></dd></div>
           </dl>
           <ul class="hero-deviations" id="heroDeviations"></ul>
         </div>
@@ -101,8 +103,13 @@
         </table>
         <ul class="orientation-notes" id="orientationNotes"></ul>
         <!-- ④c 관절 각도(추정). 점수·교정에 들어가지 않는다 — 값 아래 줄이 그 각이 얼마나 상수인지를
-             말한다(회전 0° 프레임 비율·프레임 사이 급변 비율·표준편차). -->
-        <div class="joint-angles" id="jointAngles" hidden>
+             말한다(회전 0° 프레임 비율·프레임 사이 급변 비율·표준편차).
+             **기본 접힘**이다. 사용자가 "전체적으로 화면이 너무 복잡함 · 텍스트가 너무 많아서 무슨
+             말을 하고 싶은지 모르겠음"이라고 했고, 실측하니 이 한 블록이 페이지에서 가장 큰 글자
+             덩어리였다(1875×1000 김경호 L1: 이 블록 987자 대 3D 패널 전체 706자). 점수·교정에
+             들어가지 않는 참고값이므로 관절 축 평가와 같은 대접을 한다(S7). 펼치면 그대로 나온다. -->
+        <details class="joint-angles" id="jointAngles" hidden>
+          <summary id="jointAnglesSummaryLine">관절 각도 자세히</summary>
           <h3 class="orientation-title" id="jointAnglesTitle">관절 각도</h3>
           <p class="orientation-header-note" id="jointAnglesNote"></p>
           <table class="orientation-table joint-angles-table" id="jointAnglesTable">
@@ -110,7 +117,7 @@
             <tbody></tbody>
           </table>
           <p class="orientation-header-note joint-angles-quality-note" id="jointAnglesQualityNote"></p>
-        </div>
+        </details>
         <!-- ④d 관절 축 평가 전체 표는 **접어 둔다**(S7). 사용자가 "관절 축 평가는 접어도 되는
              부분으로 보임 · 텍스트가 너무 많아서 무슨 말을 하고 싶은지 모르겠음"이라고 했다.
              요약 칩(위 #jointAxesSummary)은 그대로 펴 둔다 — 접힌 것은 표뿐이다. -->

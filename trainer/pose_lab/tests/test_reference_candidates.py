@@ -257,3 +257,99 @@ def test_real_passes_recover_a_reference_only_after_relaxing() -> None:
         # 후보는 여전히 전형기·같은 레벨이다 — 느슨해진 것은 동작 키뿐이다.
         assert {c["worker"] for c in result["candidates"]} == {"전형기"}
         assert {c["level"] for c in result["candidates"]} == {level}
+
+
+# --- S8이 **제품 수준에서** 도는가: 고른 기준이 비교까지 살아남는가 -----------------------------
+#
+# 검증 라운드가 잡은 결함: `reference_candidates`는 사다리로 후보를 냈는데 `service.compare()`가
+# 여전히 호출자 uv_grid 기준 완전 일치를 요구해 `{status:'unavailable', reason:'motion_key_mismatch'}`
+# 를 냈다. 완화로 고른 기준 4/4가 전부 거기서 죽었고, 화면은 한 자리에서 서로 반대되는 말을 했다 —
+# 기준 줄은 "동작 키 완화: 벽면 4×4 칸까지 일치"를 경고색으로 띄우는데 [평가]를 누르면 3D가 열리지
+# 않고 "동작 키가 달라 비교하지 않습니다."만 남았다. 커밋 메시지의 "7패스가 살아난다"도 그래서
+# 과장이었다 — 기준을 고르는 데까지만 살아났다.
+
+
+def test_motion_key_match_walks_the_same_ladder_as_the_candidate_search() -> None:
+    """게이트와 후보 검색이 **같은 사다리**를 탄다. 갈리면 고른 단과 허락하는 단이 달라진다."""
+    source = FakeCandidateSource()
+    query = PassRef(worker="A", date="20250110", level="10", session="q", pass_index=0)
+    source._entries[(query.worker, query.date, query.level, query.session, query.pass_index)] = _rows(0.0)
+    params = service.motion_key.KeyParams()
+    result = service.reference_candidates(source, query, params)
+    rungs = [row["granularity"] for row in result["ladder"]]
+    assert rungs == ["uv8", "uv4", "uv2", "uv_off"], rungs
+
+    inputs = service.key_inputs(service.pass_frames(source.load(query), 20))
+    same = service.motion_key_match(inputs, inputs, params)
+    assert [row["granularity"] for row in same["ladder"]] == rungs
+    # 자기 자신과는 가장 엄밀한 단에서 만난다 — 완화라고 부르지 않는다.
+    assert same["granularity"] == "uv8" and same["relaxed"] is False
+    assert same["strict_granularity"] == "uv8"
+
+
+def test_compare_accepts_a_relaxed_reference_and_says_which_rung() -> None:
+    """실데이터: 사다리가 고른 기준으로 **비교가 실제로 돈다**(S8).
+
+    김경호 20250831 L2 1000390_1 #0은 uv8에서 후보 0건이고 uv4에서 30건이 나온다. 그 기준으로
+    `compare`를 부르면 `status == "ok"`여야 하고, 응답이 어느 단에서 만났는지(`key_match`)를
+    말해야 한다. 이전 판은 여기서 `{status:'unavailable', reason:'motion_key_mismatch'}`를 냈다 —
+    화면은 3D를 열지 못하고 "동작 키가 달라 비교하지 않습니다."만 남겼다.
+    """
+    from trainer.pose_lab.tests import test_scoring_isolation as isolation
+
+    source, kwargs = isolation._source_for({"name": "real"})  # noqa: SLF001
+    cases = {("2", "1000390_1", 0): "uv4", ("3", "1000391_1", 10): "uv_off"}
+    for (level, session, index), rung in cases.items():
+        query = PassRef(worker="김경호", date="20250831", level=level, session=session, pass_index=index)
+        found = service.reference_candidates(source, query)
+        assert found["match_granularity"] == rung and found["relaxed"] is True, (level, found["ladder"])
+        first = found["candidates"][0]
+        reference = PassRef(**{key: first[key] for key in ("worker", "date", "level", "session", "pass_index")})
+
+        body = service.compare(source, query, reference, **kwargs)
+        assert body["status"] == "ok", (level, body.get("reason"), body.get("key_match"))
+        match = body["key_match"]
+        # 고른 단과 허락한 단이 같다 — 화면 두 자리가 같은 말을 한다.
+        assert match["granularity"] == rung, (level, match)
+        assert match["relaxed"] is True and match["strict_granularity"] == "uv8"
+        assert match["label"] == found["match_label"]
+        # 엄밀 단은 실제로 맞지 않았다는 사실이 사다리에 그대로 남는다.
+        walked = {row["granularity"]: row["matched"] for row in match["ladder"]}
+        assert walked["uv8"] is False, (level, walked)
+        assert walked[rung] is True
+        # 3D 뷰가 실제로 열린다 — 이 결함의 사용자 증상이 "3D가 아예 안 뜬다"였다.
+        assert body["view"]["layers"]["query"]["joints"], level
+        assert body["view"]["layers"]["reference"]["joints"], level
+
+
+def test_strict_pair_is_not_reported_as_relaxed() -> None:
+    """엄밀 일치로 맺은 쌍은 완화라고 부르지 않는다 — 구별을 잃으면 화면이 거짓을 말한다."""
+    from trainer.pose_lab.tests import test_scoring_isolation as isolation
+
+    source, kwargs = isolation._source_for({"name": "real"})  # noqa: SLF001
+    query = PassRef(worker="김경호", date="20250831", level="1", session="1000389_1", pass_index=0)
+    found = service.reference_candidates(source, query)
+    assert found["match_granularity"] == "uv8" and found["relaxed"] is False
+    first = found["candidates"][0]
+    reference = PassRef(**{key: first[key] for key in ("worker", "date", "level", "session", "pass_index")})
+    body = service.compare(source, query, reference, **kwargs)
+    assert body["status"] == "ok"
+    assert body["key_match"]["granularity"] == "uv8"
+    assert body["key_match"]["relaxed"] is False
+    assert body["key_match"]["ladder"][0]["matched"] is True
+
+
+def test_compare_still_refuses_a_pair_that_meets_at_no_rung() -> None:
+    """어느 단에서도 만나지 않으면 여전히 거절한다 — 사다리는 게이트를 없앤 것이 아니다."""
+    source = FakeCandidateSource()
+    query = PassRef(worker="A", date="20250110", level="10", session="q", pass_index=0)
+    source._entries[(query.worker, query.date, query.level, query.session, query.pass_index)] = _rows(0.0)
+    unrelated = PassRef(worker="전형기", date="20250103", level="10", session="s3", pass_index=0)
+    body = service.compare(source, query, unrelated)
+    assert body["status"] == "unavailable"
+    assert body["reason"] == "motion_key_mismatch"
+    # 거절할 때도 **어느 단을 훑었는지** 말한다. 조용히 없애면 왜 못 맺었는지 알 수 없다.
+    match = body["key_match"]
+    assert match["granularity"] is None and match["label"] is None
+    assert [row["granularity"] for row in match["ladder"]] == ["uv8", "uv4", "uv2", "uv_off"]
+    assert all(row["matched"] is False for row in match["ladder"]), match["ladder"]

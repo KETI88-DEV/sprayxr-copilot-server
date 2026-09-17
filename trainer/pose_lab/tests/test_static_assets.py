@@ -1264,6 +1264,346 @@ def test_two_skeleton_checks_can_fail():
     assert two_skeleton_faults(recomputed) == ["screen_recomputes_the_gap"]
 
 
+def _top_level_function_body(js: str, name: str) -> str:
+    """최상위 `function name(`의 본문. 닫는 중괄호는 0열의 `}`다(이 파일의 서식 규약)."""
+    head = f"function {name}("
+    if head not in js:
+        return ""
+    after = js.split(head, 1)[1]
+    return after.split("\n}\n", 1)[0]
+
+
+def _nested_function_body(js: str, name: str) -> str:
+    """`mount()` 안에 중첩된 `function name(`의 본문. 닫는 중괄호는 2열의 `}`다."""
+    head = f"function {name}("
+    if head not in js:
+        return ""
+    return js.split(head, 1)[1].split("\n  }\n", 1)[0]
+
+
+def without_comments(js: str) -> str:
+    """주석을 지운 소스. 배선 검사가 **코드**만 보게 한다 — 주석에 적힌 이름을 배선으로 세면
+    주석을 지우는 것만으로 검사가 빨개지고, 주석만 남기고 코드를 지워도 통과한다."""
+    js = re.sub(r"/\*[\s\S]*?\*/", "", js)
+    return re.sub(r"(?m)^\s*//.*$|\s//.*$", "", js)
+
+
+def _split_top_level(text: str, separator: str = ",") -> list[str]:
+    """괄호·중괄호 깊이 0에서만 자른다."""
+    parts: list[str] = []
+    depth = 0
+    current = ""
+    for char in text:
+        if char in "([{":
+            depth += 1
+        elif char in ")]}":
+            depth -= 1
+        if char == separator and depth == 0:
+            parts.append(current)
+            current = ""
+            continue
+        current += char
+    parts.append(current)
+    return parts
+
+
+def deviation_style_faults(js: str) -> list[str]:
+    """`deviationStyle`의 **본문**이 서버가 잰 값에서 진하기를 뽑는가(S1).
+
+    검증 라운드가 구멍을 뚫어 보였다: 이 함수 안의 `t`를 상수로 바꿔 진하기를 서버 편차와 완전히
+    끊어도 정적 검사 51건이 전부 통과했다. 그때의 검사(`two_skeleton_faults`)가 **호출부 문자열**만
+    보고 함수 본문을 못 봤기 때문이다. 여기서는 본문의 배선을 본다 —
+    눈금(`maxMetres`) → `span`, 값(`metres`) ÷ `span` → `t`, `t` → 색·투명도.
+
+    이것은 소스 구조 검사이지 실행 검사가 아니다(컨테이너에 JS 엔진이 없다). 무엇을 잡고 무엇을
+    못 잡는지는 `test_deviation_style_checks_can_fail`이 변이로 직접 보인다.
+    """
+    faults: list[str] = []
+    body = _top_level_function_body(js, "deviationStyle")
+    if not body:
+        return ["no_deviation_style"]
+    span = re.search(r"const\s+span\s*=([^;]*);", body)
+    if span is None or "maxMetres" not in span.group(1):
+        faults.append("span_is_not_the_server_scale")
+    ratio = re.search(r"const\s+t\s*=([^;]*);", body)
+    if ratio is None:
+        faults.append("no_t")
+    else:
+        expression = ratio.group(1)
+        if "metres" not in expression:
+            faults.append("t_ignores_the_server_gap")
+        if "span" not in expression:
+            faults.append("t_ignores_the_scale")
+        if "/" not in expression:
+            faults.append("t_is_not_a_ratio")
+    returned = re.search(r"return\s*\{([^}]*)\}", body)
+    if returned is None:
+        faults.append("no_style_returned")
+    else:
+        fields = {}
+        for part in _split_top_level(returned.group(1)):
+            if ":" not in part:
+                continue
+            key, _, value = part.partition(":")
+            fields[key.strip()] = value
+        for key in ("color", "opacity"):
+            if key not in fields:
+                faults.append(f"style_has_no_{key}")
+            elif not re.search(r"\bt\b", fields[key]):
+                faults.append(f"{key}_ignores_t")
+    # 화면이 거리를 다시 재면 서버 수치를 재계산하는 것이다(이 저장소의 규칙).
+    if "distanceTo" in body or "Math.hypot" in body:
+        faults.append("style_recomputes_the_gap")
+    return faults
+
+
+def test_joint_shading_is_wired_to_the_server_gap_inside_the_function_body():
+    assert deviation_style_faults(_read("skeleton_view.js")) == []
+
+
+def test_deviation_style_checks_can_fail():
+    """검증 라운드가 실제로 넣었던 변이 그대로 — 본문의 `t`를 상수로 만든다."""
+    full = _read("skeleton_view.js")
+    assert deviation_style_faults("") == ["no_deviation_style"]
+    body = _top_level_function_body(full, "deviationStyle")
+    ratio = re.search(r"const\s+t\s*=[^;]*;", body).group(0)
+
+    frozen = full.replace(ratio, "const t = 0.5;", 1)
+    assert frozen != full
+    assert sorted(deviation_style_faults(frozen)) == [
+        "t_ignores_the_scale", "t_ignores_the_server_gap", "t_is_not_a_ratio",
+    ]
+    # 눈금만 끊어도 잡힌다(호출부는 그대로인 채 본문이 서버 눈금을 버리는 경우).
+    scaleless = full.replace(ratio, ratio.replace("span", "1.0"), 1)
+    assert scaleless != full
+    assert "t_ignores_the_scale" in deviation_style_faults(scaleless)
+    # 색이 t를 무시하면 진하기가 화면에 닿지 않는다.
+    flat = full.replace("color: mixColor(pale, layerColor, t)", "color: layerColor", 1)
+    assert flat != full
+    assert deviation_style_faults(flat) == ["color_ignores_t"]
+    faded = full.replace("opacity: 0.4 + 0.55 * t", "opacity: 0.9", 1)
+    assert faded != full
+    assert deviation_style_faults(faded) == ["opacity_ignores_t"]
+    # 눈금을 서버가 아니라 화면 상수에서 뽑으면 잡힌다.
+    own_scale = full.replace(
+        'const span = typeof maxMetres === "number" && maxMetres > 0 ? maxMetres : null;',
+        "const span = 1.0;", 1,
+    )
+    assert own_scale != full
+    assert deviation_style_faults(own_scale) == ["span_is_not_the_server_scale"]
+
+
+def deviation_legend_faults(js: str) -> list[str]:
+    """진하기 눈금 문구를 **서버가** 짓는가(S1).
+
+    이전 판은 화면이 `관절 진하기 = 기준과 벌어진 거리 (가장 진한 곳 ${max}cm)`를 직접 조립했고,
+    그 숫자(`joint_max_display`)가 안 그리는 다리 관절에서 나와 화면 어디에도 없는 값을 적었다.
+    """
+    faults: list[str] = []
+    code = without_comments(js)
+    if "view?.deviation?.legend" not in code and "deviation.legend" not in code:
+        faults.append("legend_lines_not_read_from_the_server")
+    if "관절 진하기" in code:
+        faults.append("screen_writes_the_scale_wording_itself")
+    if "가장 진한 곳" in code:
+        faults.append("old_scale_wording_remains")
+    return faults
+
+
+def test_the_shading_scale_wording_comes_from_the_server():
+    assert deviation_legend_faults(_read("skeleton_view.js")) == []
+
+
+def test_deviation_legend_checks_can_fail():
+    full = _read("skeleton_view.js")
+    assert deviation_legend_faults("") == ["legend_lines_not_read_from_the_server"]
+    old = full.replace(
+        "for (const text of view?.deviation?.legend ?? []) {",
+        'const max = view?.deviation?.joint_max_display;\n  const lines = [`관절 진하기 = 기준과 벌어진 거리 (가장 진한 곳 ${max}cm)`];\n  for (const text of lines) {',
+        1,
+    )
+    assert old != full
+    assert sorted(deviation_legend_faults(old)) == [
+        "legend_lines_not_read_from_the_server",
+        "old_scale_wording_remains",
+        "screen_writes_the_scale_wording_itself",
+    ]
+
+
+def leg_note_faults(js: str) -> list[str]:
+    """다리 고지가 **두 층 몫**(`view.leg_notes`)에서 오는가(S4).
+
+    질의 fit의 고지만 싣던 동안에는 기준 층 다리가 그려져 있는데 "다리는 그리지 않았습니다"라고
+    적혔다(김경호 L1 1000389_1 #9, 씬에 보이는 기준 다리 뼈 8개). 두 층의 판정은 자동 기준 24쌍
+    중 10쌍에서 갈린다.
+    """
+    faults: list[str] = []
+    code = without_comments(js)
+    if "view.leg_notes" not in code:
+        faults.append("layer_leg_notes_not_read")
+    block = code.split("dom.notes.replaceChildren()", 1)
+    if len(block) < 2:
+        return [*faults, "no_notes_block"]
+    rendering = block[1].split("dom.notesMore.hidden", 1)[0]
+    if "view.leg_notes" not in rendering:
+        faults.append("leg_notes_not_rendered_with_the_other_notes")
+    if '=== "legs"' not in rendering:
+        faults.append("query_leg_note_is_not_replaced")
+    return faults
+
+
+def test_both_layers_leg_notes_are_shown_not_just_the_query_one():
+    assert leg_note_faults(_read("skeleton_view.js")) == []
+
+
+def test_leg_note_checks_can_fail():
+    full = _read("skeleton_view.js")
+    assert leg_note_faults("") == ["layer_leg_notes_not_read", "no_notes_block"]
+    # 검증 라운드가 잡은 그 상태: 질의 fit의 고지만 싣는다.
+    query_only = full.replace('if (keys[i] === "legs") {', "if (false) {", 1)
+    assert query_only != full
+    assert leg_note_faults(query_only) == ["query_leg_note_is_not_replaced"]
+    dropped = full.replace(
+        "const legNotes = (view.leg_notes ?? []).filter((text) => typeof text === \"string\");",
+        "const legNotes = [];", 1,
+    )
+    assert dropped != full
+    assert sorted(leg_note_faults(dropped)) == [
+        "layer_leg_notes_not_read", "leg_notes_not_rendered_with_the_other_notes",
+    ]
+
+
+def default_preset_stroke_faults(js: str) -> list[str]:
+    """기본 프리셋('자세 맞춤')이 **그려진 벽면 스트로크를 맞춤 대상에 넣는가**(S2).
+
+    사용자 불만 1번이 "기준 스트로크(벽면 착탄점)이 보이지 않음"이었는데, 이전 판은 스트로크를
+    pose 맞춤에서 빼 두어 사용자가 제일 먼저 보는 화면에서 두 줄이 가장자리에 걸리거나 밖으로
+    나갔다('벽 포함'·'궤적 포함'에서만 온전히 보였다).
+    """
+    faults: list[str] = []
+    code = without_comments(js)
+    points = _nested_function_body(code, "framingPoints")
+    if not points:
+        return ["no_framing_points"]
+    if "strokePoints(view)" not in points:
+        faults.append("default_framing_ignores_the_strokes")
+    else:
+        before_mode_gate = points.split('if (mode === "wall")', 1)[0]
+        if "strokePoints(view)" not in before_mode_gate:
+            faults.append("strokes_are_only_in_the_wall_preset")
+    runs = _nested_function_body(code, "strokePoints")
+    if "reference_stroke" not in runs:
+        faults.append("reference_stroke_is_not_a_fit_target")
+    if "surface_hits" in runs:
+        faults.append("framing_uses_points_it_does_not_draw")
+    return faults
+
+
+def test_the_default_preset_frames_both_wall_strokes():
+    assert default_preset_stroke_faults(_read("skeleton_view.js")) == []
+
+
+def test_default_preset_stroke_checks_can_fail():
+    full = _read("skeleton_view.js")
+    assert default_preset_stroke_faults("") == ["no_framing_points"]
+    # 이전 판 그대로: 스트로크를 맞춤 대상에서 뺀다.
+    dropped = full.replace("    for (const p of strokePoints(view)) push(p);\n", "", 1)
+    assert dropped != full
+    assert default_preset_stroke_faults(dropped) == ["default_framing_ignores_the_strokes"]
+    # 원본 착탄점 전체(그리지 않는 점 포함)로 카메라를 끌면 잡힌다.
+    raw_hits = full.replace(
+        "for (const block of [view?.stroke, view?.reference_stroke]) {",
+        "for (const block of [{ runs: [view?.surface_hits ?? []] }]) {", 1,
+    )
+    assert raw_hits != full
+    assert sorted(default_preset_stroke_faults(raw_hits)) == [
+        "framing_uses_points_it_does_not_draw", "reference_stroke_is_not_a_fit_target",
+    ]
+
+
+def hero_disclosure_faults(app_js: str, html: str) -> list[str]:
+    """히어로 패널이 (a) 두 몸의 바닥 기준 머리 높이와 (b) 어느 단에서 맺은 쌍인지를 말하는가.
+
+    (a) 이전 판은 질의 것만 보여 줘 L1 대상 1.51m·기준 1.66m, L3 0.70m·0.95m 중 한 값만 떴다.
+    (b) 기준 줄은 "동작 키 완화: …"를 띄우는데 결과 쪽이 그 사실을 말하지 않으면 화면 두 자리가
+    다른 말을 한다.
+    """
+    faults: list[str] = []
+    if "view?.head_height?.display" not in app_js:
+        faults.append("head_height_not_from_the_server_pair")
+    if "view?.fit?.head_above_floor_display" in app_js:
+        faults.append("head_height_still_shows_only_the_query")
+    if 'id="heroHeadHeightNote"' not in html:
+        faults.append("no_head_height_note_slot")
+    if 'id="heroMotionMatch"' not in html:
+        faults.append("no_key_match_slot")
+    if "keyMatch?.label" not in app_js:
+        faults.append("key_match_label_not_read_from_the_server")
+    if "keyMatch?.relaxed" not in app_js:
+        faults.append("relaxed_pairs_are_not_marked")
+    if "payload.key_match" not in app_js:
+        faults.append("key_match_not_passed_to_the_hero")
+    return faults
+
+
+def test_hero_says_both_head_heights_and_which_rung_matched():
+    assert hero_disclosure_faults(_read("app.js"), _read("index.html")) == []
+
+
+def test_hero_disclosure_checks_can_fail():
+    app_js = _read("app.js")
+    html = _read("index.html")
+    assert sorted(hero_disclosure_faults("", "")) == [
+        "head_height_not_from_the_server_pair", "key_match_label_not_read_from_the_server",
+        "key_match_not_passed_to_the_hero", "no_head_height_note_slot", "no_key_match_slot",
+        "relaxed_pairs_are_not_marked",
+    ]
+    old = app_js.replace('view?.head_height?.display', "view?.fit?.head_above_floor_display", 1)
+    assert old != app_js
+    assert sorted(hero_disclosure_faults(old, html)) == [
+        "head_height_not_from_the_server_pair", "head_height_still_shows_only_the_query",
+    ]
+    silent = app_js.replace("keyMatch?.relaxed === true", "false", 1)
+    assert silent != app_js
+    assert hero_disclosure_faults(silent, html) == ["relaxed_pairs_are_not_marked"]
+
+
+def collapsed_joint_angle_faults(html: str) -> list[str]:
+    """관절 각도 표가 기본 접힘인가.
+
+    사용자 불만 3번("전체적으로 화면이 너무 복잡함 · 텍스트가 너무 많아서")을 실측하니 이 한
+    블록이 페이지에서 가장 큰 글자 덩어리였다(1875×1000 김경호 L1: 987자 대 3D 패널 전체 706자).
+    점수·교정에 들어가지 않는 참고값이므로 관절 축 평가와 같은 대접을 한다.
+    """
+    found = re.search(r'<(\w+) class="joint-angles" id="jointAngles"([^>]*)>', html)
+    if found is None:
+        return ["no_joint_angles_block"]
+    tag, attrs = found.group(1), found.group(2)
+    faults: list[str] = []
+    if tag != "details":
+        faults.append("joint_angles_table_is_not_collapsible")
+    if "open" in attrs.split():
+        faults.append("joint_angles_table_is_open_by_default")
+    if tag == "details" and "<summary" not in html.split(found.group(0), 1)[1][:400]:
+        faults.append("collapsed_block_has_no_summary")
+    return faults
+
+
+def test_joint_angle_table_is_collapsed_by_default():
+    assert collapsed_joint_angle_faults(_read("index.html")) == []
+
+
+def test_collapsed_joint_angle_checks_can_fail():
+    html = _read("index.html")
+    assert collapsed_joint_angle_faults("<main></main>") == ["no_joint_angles_block"]
+    flat = html.replace('<details class="joint-angles" id="jointAngles" hidden>', '<div class="joint-angles" id="jointAngles" hidden>', 1)
+    assert flat != html
+    assert collapsed_joint_angle_faults(flat) == ["joint_angles_table_is_not_collapsible"]
+    opened = html.replace('<details class="joint-angles" id="jointAngles" hidden>', '<details class="joint-angles" id="jointAngles" hidden open>', 1)
+    assert opened != html
+    assert collapsed_joint_angle_faults(opened) == ["joint_angles_table_is_open_by_default"]
+
+
 def three_d_number_faults(js: str) -> list[str]:
     """3D 장면 안에 숫자·보조선이 남아 있는가(S6). 숫자는 왼쪽 패널에만 있어야 한다."""
     faults: list[str] = []

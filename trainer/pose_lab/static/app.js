@@ -230,12 +230,25 @@ function clearDetails() {
 
 // ---- ② 얼마나 다른가 ------------------------------------------------------
 
-function renderHero(measured, keys, view) {
+function renderHero(measured, keys, view, keyMatch) {
   $("heroScore").textContent = shown(measured.display?.score);
   $("heroMotionKey").textContent = keys ?? "—";
+  // 동작 키를 어느 단까지 완화해 맺은 쌍인가(S8). 기준 줄과 **같은 사실**을 결과 쪽에서도 말한다 —
+  // 완화된 쌍을 엄밀 일치처럼 보이게 두면 화면이 "같은 동작"이라고 거짓을 말한다.
+  const matchEl = $("heroMotionMatch");
+  const label = typeof keyMatch?.label === "string" ? keyMatch.label : null;
+  matchEl.textContent = label === null ? "" : (keyMatch.relaxed === true ? `완화: ${label}` : label);
+  if (keyMatch?.relaxed === true) matchEl.dataset.tone = "relaxed";
+  else delete matchEl.dataset.tone;
+  matchEl.hidden = label === null;
   // 바닥 기준 머리 높이(S4). 곧게 선 자리표시 다리를 없앤 자리를 이 한 숫자가 대신한다 —
-  // 서 있는 사람의 머리 높이가 아니면 앉거나 쭈그린 자세다. 서버 표시 문자열을 그대로 옮긴다.
-  $("heroHeadHeight").textContent = shown(view?.fit?.head_above_floor_display);
+  // 서 있는 사람의 머리 높이가 아니면 앉거나 쭈그린 자세다. **두 몸 몫을 다** 서버가 한 문자열로
+  // 지어 준다(`view.head_height.display`) — 한 값만 보이면 어느 몸의 높이인지 알 수 없다.
+  $("heroHeadHeight").textContent = shown(view?.head_height?.display);
+  const heightNote = $("heroHeadHeightNote");
+  const noteText = typeof view?.head_height?.note === "string" ? view.head_height.note : "";
+  heightNote.textContent = noteText;
+  heightNote.hidden = noteText.length === 0;
   const n = measured.reference_n;
   const granularity = measured.granularity;
   $("heroSamples").textContent = typeof n === "number"
@@ -799,7 +812,7 @@ async function run() {
   }
 
   showHeroBody();
-  renderHero(payload.measured, payload.query_key, payload.view);
+  renderHero(payload.measured, payload.query_key, payload.view, payload.key_match);
   renderCorrections(payload.measured);
   renderImprovement(payload.measured);
   renderOrientation(payload.measured.orientation ?? null);

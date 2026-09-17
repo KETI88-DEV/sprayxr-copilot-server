@@ -322,10 +322,13 @@ function renderLegend(legend, view) {
     item.dataset.role = `stroke-${layer}`;
     legend.append(item);
   }
-  // 진하기 눈금. 최대 편차 수치는 서버 표시 문자열(`joint_max_display`)을 그대로 옮긴다.
-  const max = view?.deviation?.joint_max_display;
-  if (typeof max === "string") {
-    const item = legendItem("deviation", `관절 진하기 = 기준과 벌어진 거리 (가장 진한 곳 ${max}cm)`);
+  // 진하기 눈금 문구는 **서버가 통째로** 짓는다(`deviation.legend`). 화면이 이름과 숫자를
+  // 조립하면 눈금과 문구가 갈린다 — 이전 판은 "가장 진한 곳 79.9cm"라고 적었는데 그 79.9cm짜리
+  // 관절(LeftCalf)은 다리를 숨겨서 화면 어디에도 없었다. 이제 서버가 눈금을 그리는 관절에서만
+  // 잡고, 뺀 관절과 몸 전체 평행이동 몫까지 같은 자리에서 말한다.
+  for (const text of view?.deviation?.legend ?? []) {
+    if (typeof text !== "string" || text.length === 0) continue;
+    const item = legendItem("deviation", text);
     item.dataset.role = "deviation";
     legend.append(item);
   }
@@ -1243,11 +1246,14 @@ function mount(THREE, container) {
         push(correction.to);
       }
     }
-    // 착탄점은 벽 위에 있어 몸에서 멀다. pose(자세 맞춤·기본)는 실측 마커·교정 화살표·상체 관절을
-    // 우선하므로 넣지 않는다 — 넣으면 벽까지 담느라 상체가 다시 쪼그라든다. 궤적·벽 프리셋은 넣는다.
     // 대표 프레임 착탄점은 **그리지 않는다**(낱개 점이라 뺐다). 여기서는 카메라 거리 계산에만 쓴다 —
     // 궤적 프리셋이 몸에서 벽까지를 담게 하는 기준점이다.
     if (mode !== "pose") push(view.composite?.hit);
+    // **그려지는 벽면 스트로크는 기본 뷰에서도 맞춤 대상이다**(S2). 사용자 불만 1번이 "기준
+    // 스트로크(벽면 착탄점)이 보이지 않음"이었는데, 이전 판은 스트로크를 pose 맞춤에서 빼 두어
+    // 사용자가 제일 먼저 보는 화면에서 두 줄이 가장자리에 걸리거나 밖으로 나갔다. 원본 착탄점
+    // 전체가 아니라 **서버가 잘라 준 구간의 정점**만 넣는다 — 그리지 않는 점으로 카메라를 끌지 않는다.
+    for (const p of strokePoints(view)) push(p);
     if (mode === "tracks" || mode === "wall") {
       for (const name of ["head", "right", "left"]) for (const p of view.layers?.query?.[name] ?? []) push(p);
     }
@@ -1259,6 +1265,17 @@ function mount(THREE, container) {
       if (view.mesh?.available === true) for (const p of view.mesh.vertices ?? []) push(p);
     }
     return points;
+  }
+
+  /** 화면에 **실제로 그려지는** 벽면 스트로크의 정점(대상·기준 둘 다).
+   * 서버가 이미 잘라 준 구간(`stroke.runs` / `reference_stroke.runs`)만 본다 — 자르기 판정을
+   * 화면이 다시 하지 않고, 잘려 나간 점으로 카메라를 끌지도 않는다. */
+  function strokePoints(view) {
+    const out = [];
+    for (const block of [view?.stroke, view?.reference_stroke]) {
+      for (const run of block?.runs ?? []) for (const p of run ?? []) if (isVec3(p)) out.push(p);
+    }
+    return out;
   }
 
   /** 상체 점(월드): 서버가 다리라고 이름 붙인 관절을 뺀 모든 관절 + 실측·예측 마커.
@@ -1296,6 +1313,18 @@ function mount(THREE, container) {
       const useFrame = isVec3(correction.from_frame) && isVec3(correction.to_frame);
       add(`교정 ${n}의 시작점`, useFrame ? correction.from_frame : correction.from);
       add(`교정 ${n}의 화살촉`, useFrame ? correction.to_frame : correction.to);
+    }
+    // 벽면 스트로크도 이제 기본 맞춤 대상이다(S2) — 그러니 무엇이 잘렸는지 셀 때도 세야 한다.
+    // 정점 하나하나를 이름으로 늘어놓으면 문장이 못 읽게 되므로 줄 단위로 양 끝만 이름을 붙인다.
+    for (const [key, who] of [["stroke", "대상"], ["reference_stroke", "기준"]]) {
+      const runs = view?.[key]?.runs ?? [];
+      runs.forEach((run, i) => {
+        const points = (run ?? []).filter(isVec3);
+        if (points.length === 0) return;
+        const label = runs.length > 1 ? `${who} 벽면 스트로크 ${i + 1}번 줄` : `${who} 벽면 스트로크`;
+        add(`${label}의 시작`, points[0]);
+        add(`${label}의 끝`, points[points.length - 1]);
+      });
     }
     return out;
   }
@@ -1455,7 +1484,8 @@ function mount(THREE, container) {
     return { forward, right, up };
   }
 
-  function projectedRatio(corners, target, offsetDir, distance) {
+  /** 맞춤 대상의 화면(NDC) 범위. 뒤로 넘어간 점이 하나라도 있으면 null. */
+  function projectedExtent(corners, target, offsetDir, distance) {
     const position = target.clone().addScaledVector(offsetDir, distance);
     const { forward, right, up } = cameraBasis(offsetDir);
     const tanV = Math.tan((camera.fov * Math.PI) / 360);
@@ -1464,13 +1494,33 @@ function mount(THREE, container) {
     for (const corner of corners) {
       const v = corner.clone().sub(position);
       const z = v.dot(forward);
-      if (z <= camera.near) return Infinity;
+      if (z <= camera.near) return null;
       const x = v.dot(right) / (z * tanH);
       const y = v.dot(up) / (z * tanV);
       xmin = Math.min(xmin, x); xmax = Math.max(xmax, x);
       ymin = Math.min(ymin, y); ymax = Math.max(ymax, y);
     }
-    return Math.max((xmax - xmin) / 2, (ymax - ymin) / 2);
+    return { xmin, xmax, ymin, ymax, tanH, tanV, right, up };
+  }
+
+  function projectedRatio(corners, target, offsetDir, distance) {
+    const box = projectedExtent(corners, target, offsetDir, distance);
+    if (box === null) return Infinity;
+    return Math.max((box.xmax - box.xmin) / 2, (box.ymax - box.ymin) / 2);
+  }
+
+  /** 맞춤 대상이 화면 중심에서 **가장 멀리** 나간 정도(NDC). 1.0이 캔버스 가장자리다.
+   *
+   * `projectedRatio`는 범위의 **크기**만 본다. 카메라가 보는 곳은 AABB 중심이라, 점 구름이
+   * 한쪽으로 치우치면 크기가 목표 안이어도 한쪽이 화면 밖으로 밀린다 — 벽면 스트로크를 기본 맞춤
+   * 대상에 넣은 뒤(S2) 이것이 드러났다(김경호 L6 1000394_1 #0, 1875×1000: 스트로크 정점 77개 중
+   * 3개가 캔버스 위로 6px). 이 양을 목표 아래로 누르면 **모든** 맞춤 대상이 캔버스 안이 된다.
+   * 거리가 멀어질수록 모든 점이 화면 중심(= AABB 중심)으로 모이므로 이 값은 거리에 단조롭다 —
+   * 같은 이분법을 그대로 쓸 수 있다. 치우치지 않은 구름에서는 `projectedRatio`와 같은 값이다. */
+  function projectedReach(corners, target, offsetDir, distance) {
+    const box = projectedExtent(corners, target, offsetDir, distance);
+    if (box === null) return Infinity;
+    return Math.max(Math.abs(box.xmin), Math.abs(box.xmax), Math.abs(box.ymin), Math.abs(box.ymax));
   }
 
   /** AABB 중심을 보고, 세로·가로 FOV 모두에서 목표 비율이 되는 거리를 이분법으로 찾는다.
@@ -1501,11 +1551,16 @@ function mount(THREE, container) {
     const fitPoints =
       mode === "pose" || mode === "torso" ? points.map((p) => new THREE.Vector3(...p)) : corners;
     const goal = FRAMING_TARGET[mode] ?? 0.75;
+    // pose(자세 맞춤·기본)만 **가장 멀리 나간 점**을 목표 아래로 누른다 — 기본 뷰에서는 맞춤
+    // 대상이 하나도 잘리면 안 된다. torso("상체 확대")는 **일부러** 맞춤 대상을 상체로 좁혀
+    // 나머지를 화면 밖으로 내보내고 그 이름을 캔버스 아래에 적는다(그 프리셋의 약속). 궤적·벽은
+    // 점이 많아 예전대로 범위 크기에 맞춘다.
+    const measure = mode === "pose" ? projectedReach : projectedRatio;
     let lo = 0.01;
     let hi = 100;
     for (let i = 0; i < 60; i += 1) {
       const mid = (lo + hi) / 2;
-      if (projectedRatio(fitPoints, target, offsetDir, mid) > goal) lo = mid;
+      if (measure(fitPoints, target, offsetDir, mid) > goal) lo = mid;
       else hi = mid;
     }
     return { target, offsetDir, radius: hi, ratio: projectedRatio(fitPoints, target, offsetDir, hi) };
@@ -1840,7 +1895,20 @@ function mount(THREE, container) {
       // 캔버스 아래 고지가 벽처럼 쌓여 3D를 밀어냈다(2라운드). 짝짓기는 위치가 아니라 이름이다.
       const keys = Array.isArray(fit.note_keys) ? fit.note_keys : [];
       const collapsed = new Set(Array.isArray(fit.notes_collapsed) ? fit.notes_collapsed : []);
+      // 다리 고지는 질의 fit이 아니라 **뷰의 두 층 몫**(`view.leg_notes`)에서 온다(S4). 질의 것만
+      // 실었을 때는 기준 층 다리가 그려져 있는데 "다리는 그리지 않았습니다"라고 적히는 일이
+      // 자동 기준 24쌍 중 10쌍에서 났다. 서버가 층 이름을 붙여 주고 같은 문장이면 합쳐 준다.
+      const legNotes = (view.leg_notes ?? []).filter((text) => typeof text === "string");
       (fit.notes ?? []).forEach((text, i) => {
+        if (keys[i] === "legs") {
+          for (const line of legNotes) {
+            const own = document.createElement("li");
+            own.textContent = line;
+            own.dataset.note = "legs";
+            dom.notes.append(own);
+          }
+          return;
+        }
         if (collapsed.has(keys[i])) {
           moreLines.push(text);
           return;
