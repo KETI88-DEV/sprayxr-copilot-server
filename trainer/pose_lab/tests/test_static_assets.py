@@ -1264,6 +1264,52 @@ def test_two_skeleton_checks_can_fail():
     assert two_skeleton_faults(recomputed) == ["screen_recomputes_the_gap"]
 
 
+def deviation_source_faults(js: str) -> list[str]:
+    """`render()`가 진하기 조인트(`deviations`)를 서버 벌어짐(`view.deviation.joints`)에서 뽑는가(S1) —
+    채점 가중치(`view.weights`)로 되돌아가면 안 된다.
+
+    `two_skeleton_faults`는 `buildSkeletonGroup(` **호출부** 문자열에 `weights`가 있는지만 본다. 호출부는
+    언제나 `deviations,`라고 적혀 있으므로, `render()` 안에서 `const deviations = deviation?.joints ?? {}`를
+    `const deviations = weights;`로 바꿔치기해도 호출부 문자열은 한 글자도 바뀌지 않고, 그 검사는 통과한다.
+    이 검사는 그 배정문 자체를 본다 — 사용자가 거부한 바로 그 배선("유사도가 떨어지는 조인트"가 아니라
+    "채점 가중치"로 진하게 칠하는 것)이 돌아오면 여기서 잡는다.
+    """
+    faults: list[str] = []
+    body = _nested_function_body(js, "render")
+    if not body:
+        return ["no_render_function"]
+    assign = re.search(r"const\s+deviations\s*=([^;]*);", body)
+    if assign is None:
+        faults.append("no_deviations_assignment")
+        return faults
+    expression = assign.group(1)
+    if "weights" in expression:
+        faults.append("deviations_sourced_from_scoring_weight")
+    if "deviation" not in expression or "joints" not in expression:
+        faults.append("deviations_not_sourced_from_server_deviation_joints")
+    return faults
+
+
+def test_joint_shading_source_is_the_servers_deviation_not_the_scoring_weight():
+    assert deviation_source_faults(_read("skeleton_view.js")) == []
+
+
+def test_deviation_source_checks_can_fail():
+    """검증 라운드가 지목한 바로 그 되돌리기: `deviations`를 `weights`에서 뽑도록 바꾼다."""
+    full = _read("skeleton_view.js")
+    assert deviation_source_faults("") == ["no_render_function"]
+    reverted = full.replace(
+        "const deviations = deviation?.joints ?? {};",
+        "const deviations = weights;",
+        1,
+    )
+    assert reverted != full
+    assert sorted(deviation_source_faults(reverted)) == [
+        "deviations_not_sourced_from_server_deviation_joints",
+        "deviations_sourced_from_scoring_weight",
+    ]
+
+
 def _top_level_function_body(js: str, name: str) -> str:
     """최상위 `function name(`의 본문. 닫는 중괄호는 0열의 `}`다(이 파일의 서식 규약)."""
     head = f"function {name}("
@@ -1751,3 +1797,52 @@ def test_collapsed_axes_checks_can_fail():
                           '<details class="joint-axes" id="jointAxes" hidden open>', 1)
     assert opened != full
     assert collapsed_axes_faults(opened) == ["joint_axes_table_is_open_by_default"]
+
+
+# --- 기준 줄이 지나간 패스의 답을 들고 있으면 안 된다 --------------------------------------
+#
+# 실측: 6번에 1번, 대상 패스를 빠르게 바꾸면 앞서 나간 `/api/reference` 요청이 나중 요청보다
+# 늦게 돌아와 `referenceState`를 덮었다. 기준 줄은 옛 패스의 "동작 키 벽면 8×8 칸까지 일치"를
+# 그대로 두고, 같은 화면의 `/api/compare`는 이미 새 패스로 나가 "동작 키가 달라 비교하지
+# 않습니다"를 냈다 — 한 화면이 서로 다른 패스를 두고 말한 것. 응답을 요청과 묶고, 늦게 온
+# 것은 버려야 한다.
+
+
+def reference_staleness_faults(js: str) -> list[str]:
+    faults: list[str] = []
+    if "referenceRequestId" not in js:
+        return ["no_request_counter"]
+    body = _top_level_function_body(js, "fetchReference")
+    if not body:
+        return ["no_fetch_reference"]
+    if not re.search(r"const\s+requestId\s*=\s*\+\+referenceRequestId", body):
+        faults.append("no_request_id_stamped_per_call")
+    if "await fetch(" not in body:
+        faults.append("no_await_fetch")
+        return faults
+    after_fetch = body.split("await fetch(", 1)[1]
+    # 하나는 네트워크 오류(catch) 경로, 하나는 정상 응답 경로 — 둘 다 `referenceState`를
+    # 건드리기 전에 이 요청이 여전히 최신인지 본다.
+    guard_count = len(re.findall(r"requestId\s*!==\s*referenceRequestId", after_fetch))
+    if guard_count < 2:
+        faults.append("response_not_checked_against_latest_request")
+    return faults
+
+
+def test_stale_reference_responses_are_dropped():
+    assert reference_staleness_faults(_read("app.js")) == []
+
+
+def test_reference_staleness_checks_can_fail():
+    full = _read("app.js")
+    assert reference_staleness_faults("") == ["no_request_counter"]
+    no_stamp = full.replace("  const requestId = ++referenceRequestId;\n", "", 1)
+    assert no_stamp != full
+    assert "no_request_id_stamped_per_call" in reference_staleness_faults(no_stamp)
+    unguarded = full.replace(
+        "    if (requestId !== referenceRequestId) return; // 늦게 온 응답 — 더 새 요청이 이미 나갔다.\n", "", 1,
+    ).replace(
+        "  if (requestId !== referenceRequestId) return; // 늦게 온 응답 — 버리고 최신 요청의 결과를 기다린다.\n", "", 1,
+    )
+    assert unguarded != full
+    assert reference_staleness_faults(unguarded) == ["response_not_checked_against_latest_request"]

@@ -29,7 +29,8 @@ const GATE_REASONS = {
 };
 
 // 부위 이름. 서버는 영문 리터럴("right"/"head"/"left")을 낸다. 이름표로만 쓰고
-// 강조 규칙에는 쓰지 않는다(강조는 view.weights에서만 파생).
+// 강조 규칙에는 쓰지 않는다(강조는 view.deviation.joints — 두 스켈레톤이 벌어진 정도 — 에서만
+// 파생된다. 채점 가중치 view.weights로는 정하지 않는다).
 const POINT_LABELS = { right: "오른손", head: "머리", left: "왼손" };
 
 // 개선율(분리)이 산출되지 않은 이유. `service.py::compare`의 `split_reason`과 1:1.
@@ -509,6 +510,13 @@ const listed = { query: [] };
 // 기준(레퍼런스) 후보 상태. 기준은 고를 수 없다 — 이 목록에서 자동으로 고른 것을
 // [다른 기준 ▸]으로 순환할 뿐이다.
 const referenceState = { phase: "idle", candidates: [], index: 0, message: "", match: null, relaxed: false };
+// `/api/reference`는 대상 패스를 바꿀 때마다 다시 부른다(레벨·작업자를 바꿔도 마찬가지) — 앞
+// 요청이 늦게 돌아오면 화면이 지금 고른 패스가 아니라 이미 지나간 패스의 답으로 덮인다. 실측:
+// 6번에 1번, 기준 줄은 옛 패스의 "동작 키 벽면 8×8 칸까지 일치"를 그대로 두고 비교는 새 패스로
+// 나가 "동작 키가 달라 비교하지 않습니다"를 냈다 — 한 화면이 서로 다른 패스를 두고 말한 것이다.
+// 요청마다 번호(`referenceRequestId`)를 매기고, 응답이 돌아왔을 때 그 번호가 아직 최신이 아니면
+// (더 새 요청이 이미 나갔으면) 상태를 건드리지 않고 버린다.
+let referenceRequestId = 0;
 
 function params() {
   return {
@@ -671,6 +679,9 @@ function renderReferenceLine() {
 
 async function fetchReference() {
   const query = selectedQuery();
+  // 이 호출의 번호를 찍는다 — 응답이 돌아왔을 때 더 새 호출이 이미 나가 있으면(번호가 앞섰으면)
+  // 이 응답은 화면보다 과거의 질문에 대한 답이다. 적용하지 않고 버린다.
+  const requestId = ++referenceRequestId;
   if (query === null) {
     Object.assign(referenceState, { phase: "idle", candidates: [], index: 0, message: "", match: null, relaxed: false });
     renderReferenceLine();
@@ -696,6 +707,7 @@ async function fetchReference() {
     const response = await fetch(`/api/reference?${search}`);
     payload = await response.json();
   } catch (err) {
+    if (requestId !== referenceRequestId) return; // 늦게 온 응답 — 더 새 요청이 이미 나갔다.
     Object.assign(referenceState, {
       phase: "error", candidates: [], index: 0, match: null, relaxed: false,
       message: `기준 후보를 불러오지 못했습니다 — ${err}`,
@@ -703,6 +715,7 @@ async function fetchReference() {
     renderReferenceLine();
     return;
   }
+  if (requestId !== referenceRequestId) return; // 늦게 온 응답 — 버리고 최신 요청의 결과를 기다린다.
   if (payload.status !== "ok") {
     const isEmptyReason = EMPTY_REASONS.has(payload.reason);
     Object.assign(referenceState, {

@@ -1784,7 +1784,6 @@ function mount(THREE, container) {
     lastView = view;
     resetScene();
 
-    const weights = view.weights ?? {};
     const fit = view.fit ?? null;
     const referenceFit = view.reference_fit ?? null;
     const joints = view.layers?.query?.joints ?? {};

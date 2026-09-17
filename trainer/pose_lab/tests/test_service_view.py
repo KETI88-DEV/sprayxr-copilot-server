@@ -733,6 +733,33 @@ def test_deviation_scale_comes_from_joints_the_screen_actually_draws(test_mounts
     assert set(cut["joints"]) == set(shown["joints"])
 
 
+def test_deviation_scale_ignores_a_hidden_joint_that_is_the_true_max(test_mounts) -> None:  # noqa: ANN001
+    """검증 라운드가 지목한 구멍: `BothSkeletonFakeSource`는 강체를 통째로 옮기므로 관절마다
+    벌어짐이 거의 똑같다. 그래서 `scale_source = drawn if drawn else joints`를 `scale_source = joints`로
+    되돌려도 `test_deviation_scale_comes_from_joints_the_screen_actually_draws`는 안 빨개진다 —
+    숨긴 관절과 보이는 관절의 값이 우연히 비슷해서 argmax가 갈리지 않기 때문이다.
+
+    여기서는 숨긴 다리 관절 하나를 **일부러** 보이는 관절보다 훨씬 멀게 둬서, 눈금이 숨긴 값을
+    주워가는지를 직접 가른다. `SkeletonResult`를 바로 만들어 FK·CSV 경로를 거치지 않는다 —
+    이 검사는 `deviation_block` 하나만 본다."""
+    query = service.SkeletonResult(
+        joints={"Head": [0.0, 0.0, 0.0], "Pelvis": [0.0, 0.0, 0.0], "LeftCalf": [0.0, 0.0, 0.0]},
+        bones=[], fit=None, fit_reason=None, fit_note=None, markers={}, representative=None,
+    )
+    reference = service.SkeletonResult(
+        joints={"Head": [0.05, 0.0, 0.0], "Pelvis": [0.03, 0.0, 0.0], "LeftCalf": [5.0, 0.0, 0.0]},
+        bones=[], fit=None, fit_reason=None, fit_note=None, markers={}, representative=None,
+    )
+    cut = service.deviation_block(query, reference, hidden_joints=skeleton.LEG_JOINTS)
+    drawn = {n: v for n, v in cut["joints"].items() if n not in skeleton.LEG_JOINTS}
+    assert drawn, "이 픽스처는 다리 말고도 관절이 있어야 한다"
+    assert "LeftCalf" not in drawn
+    assert cut["joints"]["LeftCalf"] == pytest.approx(5.0), "숨긴 관절이 실제로 눈에 띄게 더 멀어야 한다"
+    assert cut["joint_max_m"] == pytest.approx(max(drawn.values()))
+    assert cut["joint_max_name"] == max(drawn, key=lambda n: drawn[n])
+    assert cut["joint_max_name"] != "LeftCalf"
+
+
 def test_deviation_legend_names_a_joint_that_is_on_the_screen(test_mounts) -> None:  # noqa: ANN001
     """범례 문구를 **서버가** 짓는다. 화면이 이름과 숫자를 조립하면 눈금과 문구가 갈린다 —
     이전 판은 "가장 진한 곳 79.9cm"라고 적었는데 그 관절은 다리를 숨겨서 화면에 없었다.
