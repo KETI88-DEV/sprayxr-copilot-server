@@ -148,3 +148,112 @@ def test_empty_candidates_list_is_still_ok_status() -> None:
     result = service.reference_candidates(source, QUERY_REF)
     assert result["status"] == "ok"
     assert result["candidates"] == []
+
+
+# --- 완화 사다리(S8) ----------------------------------------------------------------
+#
+# 채점 쪽에는 uv8→uv4→uv2→uv 무시 사다리가 있는데 기준 **패스**를 고르는 쪽에는 없어서
+# `key_from(...)` 완전 일치만 봤다. 그래서 "유사한 기준이 없다"가 자주 떴다. 이제 같은 사다리를
+# 타되, **어느 단에서 맞았는지 반드시 말한다** — 엄밀 일치와 느슨한 일치를 구별하지 못하면
+# 화면이 "같은 동작"이라고 거짓을 말하게 된다.
+
+
+class LadderFakeSource(FakeCandidateSource):
+    """전형기 패스의 **벽면 UV 칸만** 대상과 어긋나게 둔다.
+
+    uv8 키에서는 칸이 달라 하나도 안 맞고, uv4 이하에서는 전부 맞는다. 합성으로 분기를 고정하는
+    이유는 실데이터의 uv 셀 경계를 테스트가 다시 계산하지 않기 위해서다(실데이터 근거는 아래
+    `test_real_passes_recover_a_reference_only_after_relaxing`).
+    """
+
+    def key_of(self, entry: _Entry, params: object) -> str | None:
+        key = super().key_of(entry, params)
+        if key is None or int(getattr(params, "uv_grid", 8)) < 8:
+            return key
+        parts = key.split(":")
+        parts[3] = "99x99"
+        return ":".join(parts)
+
+
+def _with_query(source: FakeCandidateSource) -> FakeCandidateSource:
+    """대상 패스 자신을 원본에 넣는다 — 없으면 `pass_not_found`라 사다리까지 가지도 못한다."""
+    source._entries[("A", "20250110", "10", "q", 0)] = _rows(0.0)  # noqa: SLF001
+    return source
+
+
+def test_ladder_relaxes_and_says_which_rung_matched() -> None:
+    result = service.reference_candidates(_with_query(LadderFakeSource()), QUERY_REF)
+    assert result["status"] == "ok"
+    assert result["candidates"], "사다리를 내리면 후보가 살아나야 한다"
+    assert result["match_granularity"] == "uv4"
+    assert result["match_label"] == "벽면 4×4 칸까지 일치"
+    assert result["strict_granularity"] == "uv8"
+    assert result["relaxed"] is True, "느슨한 일치를 엄밀 일치처럼 말하면 안 된다"
+    counts = {row["granularity"]: row["count"] for row in result["ladder"]}
+    assert counts["uv8"] == 0, "엄밀 일치가 0이었다는 사실을 숨기지 않는다"
+    assert counts["uv4"] == len(result["candidates"])
+    assert [row["granularity"] for row in result["ladder"]] == ["uv8", "uv4", "uv2", "uv_off"]
+    # 후보마다 자기가 어느 단에서 걸렸는지 달고 나온다.
+    assert {c["match_granularity"] for c in result["candidates"]} == {"uv4"}
+
+
+def test_strict_match_is_not_reported_as_relaxed() -> None:
+    """엄밀 일치로 맞은 패스는 relaxed가 False다 — 둘을 구별 못 하면 화면이 거짓을 말한다."""
+    result = service.reference_candidates(_with_query(FakeCandidateSource()), QUERY_REF)
+    assert result["match_granularity"] == "uv8"
+    assert result["match_label"] == "벽면 8×8 칸까지 일치"
+    assert result["relaxed"] is False
+    assert {c["match_granularity"] for c in result["candidates"]} == {"uv8"}
+
+
+def test_no_rung_matches_is_still_ok_status_with_an_empty_ladder() -> None:
+    """어느 단에서도 못 찾으면 사다리 네 단이 전부 0이고 맞은 단은 None이다 — 기본값을 채우지 않는다."""
+    source = FakeCandidateSource()
+    for key in list(source._entries):  # noqa: SLF001
+        if key[0] == "전형기":
+            source._entries[key] = _rows(0.0, descending=True)  # noqa: SLF001
+    source._entries[("A", "20250110", "10", "q", 0)] = _rows(0.0)  # noqa: SLF001
+    result = service.reference_candidates(source, QUERY_REF)
+    assert result["status"] == "ok"
+    assert result["candidates"] == []
+    assert result["match_granularity"] is None and result["match_label"] is None
+    assert result["relaxed"] is False
+    assert all(row["count"] == 0 for row in result["ladder"]), result["ladder"]
+
+
+def test_the_target_pass_is_excluded_at_every_rung() -> None:
+    """자기 자신은 느슨한 단에서도 후보가 아니다 — 들어오면 편차 0이 되어 화면이 거짓을 말한다."""
+    source = LadderFakeSource()
+    self_query = PassRef(worker="전형기", date="20250101", level="10", session="s1", pass_index=0)
+    result = service.reference_candidates(source, self_query)
+    assert result["status"] == "ok"
+    refs = {(c["worker"], c["date"], c["session"], c["pass_index"]) for c in result["candidates"]}
+    assert ("전형기", "20250101", "s1", 0) not in refs
+    assert result["relaxed"] is True
+
+
+def test_real_passes_recover_a_reference_only_after_relaxing() -> None:
+    """실데이터 근거(S8). 엄밀 일치로 후보가 0인 패스가 사다리를 내리면 살아나고, 화면이 그 단을 말한다.
+
+    김경호 20250831: L2 1000390_1 #0은 uv8에서 0건인데 uv4에서 살아나고, L3 1000391_1 #10은
+    uv8·uv4·uv2 모두 0건인데 uv 칸을 빼면 살아난다. 실데이터가 없으면 skip하지 않고 실패한다.
+    """
+    from trainer.pose_lab.tests import test_scoring_isolation as isolation
+
+    source, _kwargs = isolation._source_for({"name": "real"})  # noqa: SLF001
+    expected = {
+        ("2", "1000390_1", 0): "uv4",
+        ("3", "1000391_1", 10): "uv_off",
+    }
+    for (level, session, index), rung in expected.items():
+        query = PassRef(worker="김경호", date="20250831", level=level, session=session, pass_index=index)
+        result = service.reference_candidates(source, query)
+        assert result["status"] == "ok", (level, result)
+        counts = {row["granularity"]: row["count"] for row in result["ladder"]}
+        assert counts["uv8"] == 0, (level, counts)
+        assert result["match_granularity"] == rung, (level, counts)
+        assert result["relaxed"] is True
+        assert result["candidates"], (level, counts)
+        # 후보는 여전히 전형기·같은 레벨이다 — 느슨해진 것은 동작 키뿐이다.
+        assert {c["worker"] for c in result["candidates"]} == {"전형기"}
+        assert {c["level"] for c in result["candidates"]} == {level}

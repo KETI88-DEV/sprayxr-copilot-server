@@ -584,7 +584,6 @@ def test_fit_notes_disclose_estimate(test_mounts) -> None:  # noqa: ANN001
     assert "아바타 추정" in notes[0] and "측정값이 아닙니다" in notes[0]
     assert "중력 방향" in notes[1]
     assert any("목·윗가슴 관절이 없어" in note and "BVH" in note for note in notes)
-    assert block.fit["offset_line_label"] == "보정 오프셋(적합값)"
     assert "적합 잔차" not in block.fit["residual_label"]
 
     fitted = service.skeleton_block(RawPass(rows=_consistent_rows(240, 0.02)), mounts_table=_UNVALIDATED)
@@ -613,17 +612,144 @@ def test_faded_only_when_gravity_correction_exceeds_twenty_degrees(test_mounts) 
     assert block.fit["faded"] is (block.fit["gravity_correction_deg"] > 20.0)
 
 
+class BothSkeletonFakeSource(FakeSource):
+    """질의·기준 **양쪽** 원본 행에 FK 관절 컬럼을 얹는다.
+
+    사용자가 원한 그림이 "기준 스켈레톤과 질의 스켈레톤을 같이 그리고 유사도가 떨어지는 조인트일수록
+    색상을 진하게"이므로(S1) 두 층이 다 서야 한다. 실측 마커를 0.3m 어긋나게 둬 관절 편차가 0이
+    아니게 만든다 — 0이면 색 규칙이 실제로 도는지 알 수 없다."""
+
+    def load(self, ref: PassRef):  # noqa: ANN201
+        return RawPass(rows=_rows_with_skeleton(0.3 if ref.worker == QUERY["worker"] else 0.0))
+
+
 def test_compare_wires_skeleton_into_the_query_layer_only(test_mounts) -> None:  # noqa: ANN001
+    """기준 원본 행에 관절 컬럼이 없으면 기준 층에는 스켈레톤이 없다 — 지어내지 않는다."""
     result = service.compare(SkeletonFakeSource(), PassRef(**QUERY), PassRef(**REFERENCE))
     assert result["status"] == "ok"
     view = result["view"]
     assert "joints" in view["layers"]["query"]
     assert "bones" in view["layers"]["query"]
-    assert "joints" not in view["layers"]["reference"], "레퍼런스 층에는 스켈레톤을 얹지 않는다"
+    assert "joints" not in view["layers"]["reference"], "기준 원본에 관절 컬럼이 없으면 세우지 않는다"
+    assert view["reference_fit"] is None
+    assert view["reference_fit_reason"] == "no_joint_columns"
+    assert view["deviation"] is None, "한쪽만 서면 벌어짐을 잴 수 없다 — 0으로 칠하지 않는다"
     assert "joints" not in view["layers"]["corrected"], "교정 후 층에는 스켈레톤을 얹지 않는다"
     assert view["fit"] is not None
     assert view["fit"]["method"] == "fk_csv_yxz_orient_gravity"
     assert "source" not in view["fit"]
+
+
+def test_reference_layer_carries_a_skeleton_built_by_the_same_path(test_mounts) -> None:  # noqa: ANN001
+    """기준도 **질의와 같은 경로**(`skeleton_block`)로 선다(S1). 두 경로를 두면 같은 사람이
+    층에 따라 다른 몸이 된다 — 여기서는 기준 층의 관절이 그 패스를 직접 세운 것과 글자까지 같다."""
+    source = BothSkeletonFakeSource()
+    result = service.compare(source, PassRef(**QUERY), PassRef(**REFERENCE))
+    view = result["view"]
+    reference = view["layers"]["reference"]
+    assert "joints" in reference and "bones" in reference
+    direct = service.skeleton_block(source.load(PassRef(**REFERENCE)))
+    assert reference["joints"] == direct.joints
+    assert reference["bones"] == direct.bones
+    assert view["reference_fit"] is not None
+    assert view["reference_fit"]["method"] == view["fit"]["method"]
+    # 기준 몸은 질의 몸과 **다른 자리**에 선다 — 같으면 겹쳐 그릴 이유가 없다.
+    assert reference["joints"] != view["layers"]["query"]["joints"]
+
+
+def test_joint_deviation_is_the_world_gap_between_the_two_skeletons(test_mounts) -> None:  # noqa: ANN001
+    """관절 색의 근거를 **서버가** 낸다(S1). 화면은 이 값으로 진하기만 정하고 다시 계산하지 않는다.
+
+    재는 것은 배치가 끝난 월드 거리다 — 화면에 실제로 보이는 간격이 곧 색이 된다. 여기서는 서버
+    값과 두 층의 관절 좌표로 독립적으로 다시 잰 거리가 같은지 본다(구현의 합산 경로를 재사용하지
+    않는다)."""
+    view = service.compare(BothSkeletonFakeSource(), PassRef(**QUERY), PassRef(**REFERENCE))["view"]
+    deviation = view["deviation"]
+    assert deviation is not None
+    assert deviation["basis"] == "world_distance_m"
+    query_joints = view["layers"]["query"]["joints"]
+    reference_joints = view["layers"]["reference"]["joints"]
+    assert set(deviation["joints"]) == set(query_joints) & set(reference_joints)
+    assert deviation["joints"], "이 픽스처는 공통 관절이 있어야 한다"
+    for name, value in deviation["joints"].items():
+        expected = math.dist(query_joints[name], reference_joints[name])
+        assert value == pytest.approx(expected, abs=1e-12), name
+    assert max(deviation["joints"].values()) > 0.0, "0이면 색 규칙이 도는지 알 수 없다"
+    assert deviation["joint_max_m"] == pytest.approx(max(deviation["joints"].values()))
+
+
+def test_deviation_keeps_measured_and_estimated_apart(test_mounts) -> None:  # noqa: ANN001
+    """실측 3점의 벌어짐은 실측이고 나머지는 추정이다 — 한 자루에 담으면 화면이 구분을 잃는다(S1).
+
+    추적 장치가 붙은 강체는 머리(HMD)·건·플래쉬 셋뿐이다. 그 셋의 마커 간격만 `markers`에 들어가고,
+    관절은 전부 `joints`에 들어가며 눈금도 따로 나온다."""
+    source = BothSkeletonFakeSource()
+    view = service.compare(source, PassRef(**QUERY), PassRef(**REFERENCE))["view"]
+    deviation = view["deviation"]
+    assert set(deviation["markers"]) <= set(service.DEVIATION_MEASURED_POINTS)
+    assert deviation["measured_points"] == [
+        name for name in service.DEVIATION_MEASURED_POINTS if name in deviation["markers"]
+    ]
+    assert deviation["markers"], "이 픽스처는 실측 앵커가 있어야 한다"
+    # 실측 마커 간격은 두 스켈레톤의 앵커에서 독립적으로 다시 잰 값과 같다.
+    query_markers = {a["point"]: a["measured_marker"] for a in view["fit"]["anchors"]}
+    reference_markers = {a["point"]: a["measured_marker"] for a in view["reference_fit"]["anchors"]}
+    for point, value in deviation["markers"].items():
+        assert value == pytest.approx(math.dist(query_markers[point], reference_markers[point]), abs=1e-12)
+    # 관절 이름이 실측 자루에 섞이지 않는다.
+    assert not (set(deviation["joints"]) & set(deviation["markers"]))
+    assert deviation["marker_max_m"] == pytest.approx(max(deviation["markers"].values()))
+    assert "추정끼리의 차이" in deviation["estimate_note"]
+    assert "실측끼리의 차이" in deviation["measured_note"]
+
+
+def test_reference_stroke_comes_from_the_reference_pass_not_the_query(test_mounts) -> None:  # noqa: ANN001
+    """기준 쪽 벽면 스트로크가 실린다(S2). 사용자가 "기준 스트로크(벽면 착탄점)이 보이지 않음"이라고
+    했고, 그 원인은 `view.surface_hits`가 질의 전용이었던 것이다. 두 줄은 서로 달라야 한다 —
+    같으면 질의 것을 두 번 그린 것이다."""
+    source, kwargs, query, reference = _real_pair("1", "1000389_1", 0)
+    view = service.compare(source, query, reference, **kwargs)["view"]
+    assert view["reference_surface_hits"], "기준 착탄점이 실려야 한다"
+    assert view["reference_surface_hits"] != view["surface_hits"]
+    direct = composite.surface_hits(service.skeleton_block(source.load(reference)).representative)
+    assert view["reference_surface_hits"] == direct
+    # 자르는 규칙은 하나다 — 기준 구간도 질의와 같은 함수(`composite.stroke_runs`)가 낸다.
+    assert view["reference_stroke"]["point_count"] == len(view["reference_surface_hits"])
+    assert view["reference_stroke"]["tolerance_mm"] == view["stroke"]["tolerance_mm"]
+    flattened = [point for run in view["reference_stroke"]["runs"] for point in run]
+    assert all(point in view["reference_surface_hits"] for point in flattened), "점을 만들지 않는다"
+
+
+def _real_pair(level: str, session: str, pass_index: int):  # noqa: ANN202
+    """실데이터 한 쌍(대상 + 자동으로 고른 전형기 기준). 실데이터가 없으면 skip하지 않고 실패한다."""
+    source, kwargs = isolation._source_for({"name": "real"})  # noqa: SLF001
+    query = PassRef(worker="김경호", date="20250831", level=level, session=session, pass_index=pass_index)
+    candidates = service.reference_candidates(source, query)
+    assert candidates["status"] == "ok" and candidates["candidates"], candidates
+    first = candidates["candidates"][0]
+    reference = PassRef(**{key: first[key] for key in ("worker", "date", "level", "session", "pass_index")})
+    return source, kwargs, query, reference
+
+
+def test_real_pass_draws_two_skeletons_close_enough_to_read_as_one_picture() -> None:
+    """실데이터: 두 스켈레톤이 **겹쳐 보이는 거리**에 선다(S1).
+
+    같은 동작 키의 두 패스라도 벽 위 자리가 다르면 월드에서 멀리 떨어져 그림이 두 사람으로
+    읽힌다. 실측(김경호 20250831 대 자동 기준): 관절 편차 중앙값이 L1 0.285m · L3 0.246m ·
+    L6 0.241m이고 최대가 0.60~0.80m다 — 사람 한 명 크기 안이다. 이 성질이 깨지면 색을
+    아무리 잘 칠해도 사용자가 원한 그림이 나오지 않는다.
+    """
+    for level, session in (("1", "1000389_1"), ("3", "1000391_1"), ("6", "1000394_1")):
+        source, kwargs, query, reference = _real_pair(level, session, 0)
+        view = service.compare(source, query, reference, **kwargs)["view"]
+        deviation = view["deviation"]
+        assert deviation is not None and deviation["joints"], level
+        values = sorted(deviation["joints"].values())
+        median = values[len(values) // 2]
+        assert 0.05 < median < 0.5, (level, median)
+        assert deviation["joint_max_m"] < 1.0, (level, deviation["joint_max_m"])
+        # 실측 3점도 다 잡힌다 — 추정만 있고 실측이 없으면 화면이 구분을 보여 줄 수 없다.
+        assert set(deviation["markers"]) == {"head", "right", "left"}, (level, deviation["markers"])
 
 
 def test_new_joints_are_added_to_weights_at_zero_and_covered_by_the_existing_invariant(test_mounts) -> None:  # noqa: ANN001
@@ -744,10 +870,10 @@ def test_skeleton_frame_picks_the_nearest_frame_with_anatomical_legs(test_mounts
     block = service.skeleton_block(raw)
     assert block.fit["frame_index"] == chosen.representative.frame.index
     assert block.fit["legs"]["plausible"] is True and block.fit["legs"]["frame_offset"] == 3
-    # 기본 표시는 곧게 선 자리표시 다리다 — 범위 안 IK 다리도 툴바로만 켠다.
-    assert block.fit["legs"]["display_default"] == "placeholder"
-    assert block.fit["legs_visible_default"] is False
-    assert any(n.startswith(service.LEGS_PICKED_NOTE.format(k=3)) for n in block.fit["notes"])
+    # 기본 표시는 **범위 안 IK 다리**다(S4) — 곧게 선 자리표시는 더 이상 없다.
+    assert block.fit["legs"]["display_default"] == "ik"
+    assert block.fit["legs_visible_default"] is True
+    assert any(n.startswith(service.LEGS_IK_PICKED_NOTE.format(k=3)) for n in block.fit["notes"])
     frame = chosen.representative.frame
     markers = {a["point"]: a["measured_marker"] for a in block.fit["anchors"]}
     assert markers["head"] == list(frame.head) and markers["right"] == list(frame.right)
@@ -766,35 +892,44 @@ def test_fit_hides_legs_by_default_when_no_frame_is_anatomical(test_mounts) -> N
     assert "아바타 추정" in block.fit["notes"][0] and "중력 방향" in block.fit["notes"][1]
 
 
-def test_placeholder_legs_stand_under_the_hips_and_note_keys_name_every_note(test_mounts) -> None:  # noqa: ANN001
-    """자리표시 다리는 배치된 엉덩이 관절에서 중력 아래로 리그 길이만큼 선다(측정 아님 고지와 함께).
-    notes는 위치가 아니라 `note_keys`로 짝짓는다 — 두 목록 길이와 순서가 같다."""
+def test_no_standing_placeholder_legs_and_note_keys_name_every_note(test_mounts) -> None:  # noqa: ANN001
+    """곧게 선 자리표시 다리는 **기본에서 사라졌다**(S4). 그것은 중립적 기본값이 아니라 자리표시로
+    위장한 거짓 주장이었다 — 고른 면 위 머리 실측 높이가 L3 0.70m·L6 0.88m로 앉거나 쭈그린 높이인데
+    화면은 곧게 선 사람을 그렸다. notes는 위치가 아니라 `note_keys`로 짝짓는다."""
     rows, _middle = _rows_with_leg_poses(41, ())
     block = service.skeleton_block(RawPass(rows=rows))
     fit = block.fit
     legs = fit["legs"]
-    assert legs["display_default"] == "placeholder"
-    placeholder = legs["placeholder_joints"]
-    offsets = pose_fk_csv.bind_offsets(rows[0])
-    up = np.array(world_axes.UP, dtype=float)
-    for hip, knee, ankle, toe in skeleton.PLACEHOLDER_LEG_CHAIN:
-        assert placeholder[hip] == block.joints[hip]
-        for a, b in ((hip, knee), (knee, ankle)):
-            d = np.array(placeholder[b]) - np.array(placeholder[a])
-            assert abs(np.linalg.norm(d) - math.hypot(*offsets[b])) < 1e-9
-            assert np.linalg.norm(d / np.linalg.norm(d) + up) < 1e-9
-        assert toe in placeholder
-    drawn = {tuple(pair) for pair in legs["placeholder_bones"]}
-    assert ("Pelvis", "LeftThigh") in drawn and ("RightFoot", "RightToe") in drawn
+    assert legs["plausible"] is False
+    assert legs["display_default"] == "hidden"
+    # 자리표시 다리 필드 자체가 없다 — 화면이 그릴 수 있는 길이 남아 있으면 안 된다.
+    assert "placeholder_joints" not in legs and "placeholder_bones" not in legs
+    assert "placeholder_feet" not in legs
     assert len(fit["note_keys"]) == len(fit["notes"])
     assert fit["note_keys"][:4] == ["avatar_estimate", "gravity", "legs", "torso"]
-    assert fit["notes"][fit["note_keys"].index("legs")].startswith(service.LEGS_PLACEHOLDER_PREFIX)
-    assert "측정 아님" in fit["notes"][fit["note_keys"].index("legs")]
+    leg_note = fit["notes"][fit["note_keys"].index("legs")]
+    assert leg_note.startswith(service.LEGS_HIDDEN_NOTE)
+    assert "자리표시" not in leg_note and "곧게" not in leg_note
     assert set(fit["notes_collapsed"]) <= set(fit["note_keys"])
-    assert "torso" not in fit["notes_collapsed"] and "avatar_estimate" not in fit["notes_collapsed"]
+    # 무엇이 추정인지·다리가 왜 없는지는 접지 않는다.
+    assert "legs" not in fit["notes_collapsed"] and "avatar_estimate" not in fit["notes_collapsed"]
 
 
-def test_offset_label_only_when_the_grip_limit_is_exceeded(test_mounts) -> None:  # noqa: ANN001
+def test_plausible_ik_legs_are_shown_faded_instead_of_a_placeholder(test_mounts) -> None:  # noqa: ANN001
+    """IK 다리가 해부학 범위 안이면 그것을 그린다(흐리게). 지어낸 다리로 덮지 않는다."""
+    rows, _middle = _rows_with_leg_poses(41, (0,))
+    fit = service.skeleton_block(RawPass(rows=rows)).fit
+    assert fit["legs"]["plausible"] is True
+    assert fit["legs"]["display_default"] == "ik"
+    assert fit["legs_visible_default"] is True
+    leg_note = fit["notes"][fit["note_keys"].index("legs")]
+    assert leg_note.startswith(service.LEGS_IK_SHOWN_NOTE)
+    assert "자리표시" not in leg_note
+
+
+def test_low_confidence_marks_the_right_forearm_when_the_grip_limit_is_exceeded(test_mounts) -> None:  # noqa: ANN001
+    """아바타 손과 건이 어긋난 패스는 **오른 전완·손**을 저신뢰로 내고, 그 사실을 적합값이 아니라
+    캡처 파이프라인의 문제로 말한다(S5). 3D 안에 걸 숫자 라벨(`offset_display`)은 더 이상 없다(S6)."""
     raw = RawPass(rows=_rows_with_skeleton(0.3))
     representative = service.representative_frame(raw)
     offsets = pose_fk_csv.bind_offsets(raw.rows[0])
@@ -802,12 +937,23 @@ def test_offset_label_only_when_the_grip_limit_is_exceeded(test_mounts) -> None:
     sample = skeleton.frame_sample(representative.frame, representative.row, representative.gun, offsets)
     placed = skeleton.place_oriented(sample.local_pos, sample.local_rot, sample.measured, mounts)
     loose = service._fit_view(placed, representative, service.MOUNTS_GLOBAL, mounts, offsets, {representative.gun: 1.0})  # noqa: SLF001
-    assert all(a["offset_display"] is None for a in loose["anchors"])
+    assert loose["low_confidence"] is False
+    assert loose["low_confidence_bones"] == [] and loose["low_confidence_joints"] == []
+    assert loose["low_confidence_gap_m"] is None
+    assert "grip_limit" not in loose["note_keys"]
+
     tight = service._fit_view(placed, representative, service.MOUNTS_GLOBAL, mounts, offsets, {representative.gun: 0.05})  # noqa: SLF001
-    labels = {a["point"]: a["offset_display"] for a in tight["anchors"]}
     norm = math.hypot(*_TEST_MOUNTS.table["right:한길숏건"].offset)
-    assert labels == {"head": None, "right": f"보정 오프셋 {norm:.2f}m(적합값)", "left": None}
-    assert any("손으로 쥔 거리로 설명되지 않습니다" in note for note in tight["notes"])
+    assert tight["low_confidence"] is True
+    assert tight["low_confidence_bones"] == [["RightForeArm", "RightHand"]]
+    assert tight["low_confidence_joints"] == ["RightHand"]
+    assert tight["low_confidence_gap_m"] == pytest.approx(norm)
+    note = tight["notes"][tight["note_keys"].index("grip_limit")]
+    assert "손 IK↔컨트롤러" in note and "쥐는 거리가 아니라" in note
+    # 적합 상수를 "보정"이라고 부르지 않는다.
+    assert "보정" not in note
+    # 3D 안에 걸 숫자 라벨은 어느 앵커에도 없다.
+    assert all("offset_display" not in anchor for anchor in tight["anchors"])
 
 
 def test_mesh_reason_detail_is_read_from_the_alignment_record() -> None:
@@ -843,7 +989,8 @@ def test_view_fit_is_null_when_skeleton_is_unavailable() -> None:
     assert view["fit_reason"] == "no_joint_columns"
     assert view["fit_note"] == service.FIT_NOTES["no_joint_columns"]
     assert view["display_errors"] == []
-    assert view["legend_notes"][0] == "교정 화살표는 건·HMD 실측 마커에서 나갑니다"
+    assert view["legend_notes"][0] == service.LEGEND_NOTES[0]
+    assert "겹쳐 그립니다" in view["legend_notes"][0]
 
 
 def test_mesh_view_carries_reason_text() -> None:
@@ -917,77 +1064,36 @@ def _floor_geometry(level: float, half: float = 4.0) -> composite.MeshGeometry:
     return composite.MeshGeometry.from_mesh(vertices, triangles)
 
 
-def _placeholder_feet(fit: dict) -> list[float]:
-    placeholder = fit["legs"]["placeholder_joints"]
-    return [
-        world_axes.vertical_of(tuple(position))
-        for name, position in placeholder.items()
-        if name.endswith("Foot") or name.endswith("Toe")
-    ]
+def _head_vertical(fit: dict) -> float:
+    """대표 프레임 머리(HMD) 실측 마커의 월드 수직 높이. 바닥면을 놓을 자리를 이 값에서 잡는다 —
+    자리표시 다리가 사라졌으므로 발 높이는 더 이상 기준점이 될 수 없다."""
+    head = next(a for a in fit["anchors"] if a["point"] == "head")
+    return world_axes.vertical_of(tuple(head["measured_marker"]))
 
 
-def test_placeholder_feet_keep_rig_length_whatever_floor_the_mesh_offers(test_mounts) -> None:  # noqa: ANN001
-    """합성 입력으로 분기를 고정한다(U5). 어떤 바닥 높이를 줘도 자리표시 다리는 **한 점도 안 움직인다** —
-    옛 코드는 발을 그 면에 닿추려고 다리 길이에 배율을 먹였고, 레벨 3에서 0.35배라 난쟁이가 됐다."""
+def test_no_standing_placeholder_survives_anywhere_in_the_view(test_mounts) -> None:  # noqa: ANN001
+    """어떤 바닥 높이를 줘도 자리표시 다리는 다시 살아나지 않는다(S4).
+
+    옛 코드는 발을 고른 면에 닿추려고 다리 길이에 배율을 먹였다가(레벨 3에서 0.35배 — 난쟁이),
+    배율을 없앤 뒤에도 **곧게 선 다리**를 기본으로 그렸다. 두 번 다 없는 자세를 그림이 주장했다.
+    """
     rows, _middle = _rows_with_leg_poses(41, ())
     raw = RawPass(rows=rows)
     loose = service.skeleton_block(raw).fit
     assert loose["legs"]["floor_vertical"] is None
-    assert loose["legs"]["feet_below_floor_m"] is None
-    lowest = min(_placeholder_feet(loose))
+    assert loose["head_above_floor_m"] is None and loose["head_above_floor_display"] is None
 
-    # 발보다 0.5 m 위에 바닥을 둔다 — 옛 코드였으면 다리를 줄여 끌어올렸을 자리다.
-    floor = lowest + 0.5
+    floor = _head_vertical(loose) - 1.20
     fit = service.skeleton_block(raw, geometry=_floor_geometry(floor)).fit
-    legs = fit["legs"]
-    assert legs["placeholder_joints"] == loose["legs"]["placeholder_joints"]
-    assert legs["floor_vertical"] == pytest.approx(floor)
-    assert legs["feet_below_floor_m"] == pytest.approx(0.5, abs=1e-9)
-    assert min(_placeholder_feet(fit)) == pytest.approx(lowest, abs=1e-12)
-    note = fit["notes"][fit["note_keys"].index("legs")]
-    assert service.LEGS_FLOOR_BELOW_NOTE.format(floor=floor, below=0.5) in note
-    assert note.startswith(service.LEGS_PLACEHOLDER_PREFIX)
-    # 화면에 배율이라는 말이 남아 있으면 안 된다 — 더 이상 배율이 없다.
-    assert "배" not in note.split("리그 제 길이")[1]
-    # 바닥면을 받아도 실측 마커·대표 프레임은 그대로다 — 자리표시는 측정을 건드리지 않는다.
+    assert fit["legs"]["floor_vertical"] == pytest.approx(floor)
+    assert set(fit["legs"]) == {
+        "plausible", "joints", "checks", "limits", "frame_offset", "searched_frames",
+        "display_default", "floor_vertical", "head_above_floor_m",
+    }
+    assert fit["legs"]["display_default"] in {"ik", "hidden"}
+    # 바닥면을 받아도 실측 마커·대표 프레임은 그대로다 — 바닥은 문구만 바꾼다.
     assert fit["frame_index"] == loose["frame_index"]
     assert [a["measured_marker"] for a in fit["anchors"]] == [a["measured_marker"] for a in loose["anchors"]]
-
-
-def test_placeholder_note_says_when_the_feet_are_above_the_chosen_floor(test_mounts) -> None:  # noqa: ANN001
-    """발이 고른 면보다 **위**면 그렇게 적는다 — 아래로만 말하면 L1에서 거짓이 된다."""
-    rows, _middle = _rows_with_leg_poses(41, ())
-    raw = RawPass(rows=rows)
-    lowest = min(_placeholder_feet(service.skeleton_block(raw).fit))
-    floor = lowest - 0.3
-    fit = service.skeleton_block(raw, geometry=_floor_geometry(floor)).fit
-    assert fit["legs"]["feet_below_floor_m"] == pytest.approx(-0.3, abs=1e-9)
-    note = fit["notes"][fit["note_keys"].index("legs")]
-    assert service.LEGS_FLOOR_ABOVE_NOTE.format(floor=floor, above=0.3) in note
-
-
-def test_placeholder_floor_note_says_there_is_no_mesh_when_the_level_has_none(test_mounts) -> None:  # noqa: ANN001
-    rows, _middle = _rows_with_leg_poses(41, ())
-    fit = service.skeleton_block(RawPass(rows=rows)).fit
-    note = fit["notes"][fit["note_keys"].index("legs")]
-    assert note.endswith(service.LEGS_NO_FLOOR_NOTE)
-    assert fit["legs"]["floor_vertical"] is None
-
-
-def test_real_pass_feet_stay_at_rig_length_below_the_level_3_plate() -> None:
-    """실데이터 L3: 발은 리그 제 길이 그대로 수평판보다 0.4 m 넘게 아래에 있고, 화면이 그 거리를 말한다."""
-    source, kwargs = isolation._source_for({"name": "real"})  # noqa: SLF001
-    raw = source.load(PassRef(worker="김경호", date="20250831", level="3", session="1000391_1", pass_index=0))
-    placed = service.placed_mesh("3")
-    geometry = composite.MeshGeometry.from_mesh(placed.mesh.vertices, placed.mesh.triangles)
-    floor = composite.floor_vertical(geometry)
-    before = service.skeleton_block(raw).fit
-    after = service.skeleton_block(raw, geometry=geometry).fit
-    # 메시를 줘도 발은 그대로다 — 움직이는 것은 화면 고지뿐이다.
-    assert after["legs"]["placeholder_joints"] == before["legs"]["placeholder_joints"]
-    lowest = min(_placeholder_feet(after))
-    assert lowest < floor - 0.4, (lowest, floor)
-    assert after["legs"]["feet_below_floor_m"] == pytest.approx(floor - lowest, abs=1e-9)
 
 
 def test_real_pass_head_diameter_comes_from_this_rigs_torso_not_a_fixed_constant() -> None:
@@ -1011,20 +1117,13 @@ def test_real_pass_head_diameter_comes_from_this_rigs_torso_not_a_fixed_constant
     assert not (0.17 < old_ratio < 0.22), old_ratio  # 옛 고정 상수는 이 범위 밖이었다
 
 
-def test_placeholder_feet_names_come_from_the_server_not_from_the_screen(test_mounts) -> None:  # noqa: ANN001
-    """화면이 "발이 지금 보이는가"를 재려면 어느 관절이 발인지 알아야 한다 — 그 **이름**은 서버가 준다.
-
-    화면에서 리그 이름을 지어내면 출처와 다른 라벨이 된다(D6 화면 밖 고지가 리그 이름을 그대로 쓰는
-    것과 같은 이유). `placeholder_feet`는 `placeholder_joints`에 실제로 실린 발목 관절만 담는다.
-    """
+def test_leg_joint_names_come_from_the_server_not_from_the_screen(test_mounts) -> None:  # noqa: ANN001
+    """화면이 "다리가 지금 보이는가"를 재려면 어느 관절이 다리인지 알아야 한다 — 그 **이름**은
+    서버가 준다. 화면에서 리그 이름을 지어내면 출처와 다른 라벨이 된다."""
     rows, _middle = _rows_with_leg_poses(41, ())
     fit = service.skeleton_block(RawPass(rows=rows)).fit
-    legs = fit["legs"]
-    feet = legs["placeholder_feet"]
-    assert feet == [ankle for _hip, _knee, ankle, _toe in skeleton.PLACEHOLDER_LEG_CHAIN]
-    assert feet and all(name in legs["placeholder_joints"] for name in feet)
-    # 발끝(Toe)은 발이 아니다 — 바닥에 닿는 것은 발목이다.
-    assert not any(name.endswith("Toe") for name in feet)
+    assert fit["legs"]["joints"] == list(skeleton.LEG_JOINTS)
+    assert all(name in fit["legs"]["joints"] for name in ("LeftFoot", "RightToe"))
 
 
 # --- 고른 바닥면 위에 무엇이 서 있는지 화면이 말하는가 -------------------------------------
@@ -1041,19 +1140,22 @@ def _head_above(fit: dict, floor: float) -> float:
 
 
 def test_floor_note_says_how_high_the_measured_head_is_above_the_chosen_plane(test_mounts) -> None:  # noqa: ANN001
-    """바닥면 고지가 그 면 위 머리 실측 높이를 적고, 바닥을 옮기면 그 숫자가 따라 움직인다."""
+    """바닥면 고지가 그 면 위 머리 실측 높이를 적고, 바닥을 옮기면 그 숫자가 따라 움직인다.
+    같은 값이 구조체(`head_above_floor_m`)로도 나가 왼쪽 패널이 다시 계산하지 않는다(S4)."""
     rows, _middle = _rows_with_leg_poses(41, ())
     raw = RawPass(rows=rows)
     loose = service.skeleton_block(raw).fit
-    high = min(_placeholder_feet(loose)) + 0.5
+    high = _head_vertical(loose) - 1.20
     low = high - 0.20  # 더 낮은 면을 고르면 그 위 머리 높이는 그만큼 커진다
 
     texts = []
     for floor in (high, low):
         fit = service.skeleton_block(raw, geometry=_floor_geometry(floor)).fit
         assert fit["legs"]["floor_vertical"] == pytest.approx(floor), floor
+        assert fit["head_above_floor_m"] == pytest.approx(_head_above(fit, floor), abs=1e-9)
+        assert fit["head_above_floor_display"] == f"{fit['head_above_floor_m']:.2f}m"
         note = fit["notes"][fit["note_keys"].index("legs")]
-        expected = service.LEGS_FLOOR_HEAD_NOTE.format(head=_head_above(fit, floor))
+        expected = service.LEGS_FLOOR_HEAD_NOTE.format(floor=floor, head=_head_above(fit, floor))
         assert expected in note, (floor, note)
         texts.append(expected)
     # 바닥을 0.20m 내리면 적힌 높이도 0.20m 커진다 — 상수를 찍어 놓은 문구가 아니다.
@@ -1067,13 +1169,13 @@ def test_floor_note_says_the_head_height_even_when_the_floor_is_far_below(test_m
     "이 면은 지면이 아니다"를 보는 사람이 판단할 근거가 그 숫자다."""
     rows, _middle = _rows_with_leg_poses(41, ())
     raw = RawPass(rows=rows)
-    loose = service.skeleton_block(raw).fit
-    hips = [loose["legs"]["placeholder_joints"][hip] for hip, *_ in skeleton.PLACEHOLDER_LEG_CHAIN]
+    block = service.skeleton_block(raw)
+    hips = [block.joints[hip] for hip, *_ in skeleton.PLACEHOLDER_LEG_CHAIN]
     floor = min(world_axes.vertical_of(tuple(hip)) for hip in hips) - 0.01
     fit = service.skeleton_block(raw, geometry=_floor_geometry(floor)).fit
     assert fit["legs"]["floor_vertical"] == pytest.approx(floor)
     note = fit["notes"][fit["note_keys"].index("legs")]
-    assert service.LEGS_FLOOR_HEAD_NOTE.format(head=_head_above(fit, floor)) in note
+    assert service.LEGS_FLOOR_HEAD_NOTE.format(floor=floor, head=_head_above(fit, floor)) in note
 
 
 def test_no_mesh_level_does_not_claim_a_head_height_over_a_plane_it_never_chose(test_mounts) -> None:  # noqa: ANN001

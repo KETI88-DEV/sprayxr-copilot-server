@@ -193,6 +193,17 @@ function renderMeasuredDetails(root, measured, view) {
   const lines = fit
     ? [...(fit.notes ?? []), fit.residual_label, fit.rotation_residual_label].filter((t) => typeof t === "string")
     : [view?.fit_note].filter((t) => typeof t === "string");
+  // 3D 안에서 걷어낸 숫자(S6)는 사라지는 것이 아니라 **여기로** 온다. 앵커마다 어긋남 수치는
+  // 서버 표시 문자열(`miss_display`)이고, 화면은 다시 포맷하지 않는다.
+  for (const anchor of fit?.anchors ?? []) {
+    if (typeof anchor.miss_display !== "string") continue;
+    lines.push(`${POINT_LABELS[anchor.point] ?? anchor.point} 어긋남 ${anchor.miss_display}`);
+  }
+  // 오른 전완·손 저신뢰 구간의 간격(S5)도 숫자는 왼쪽에서만 본다.
+  const deviation = view?.deviation ?? null;
+  if (deviation && typeof deviation.joint_max_display === "string") {
+    lines.push(`관절이 가장 크게 벌어진 곳 ${deviation.joint_max_display}cm — ${deviation.estimate_note}`);
+  }
   for (const line of lines) notesList.append(el("li", null, line));
 }
 
@@ -219,9 +230,12 @@ function clearDetails() {
 
 // ---- ② 얼마나 다른가 ------------------------------------------------------
 
-function renderHero(measured, keys) {
+function renderHero(measured, keys, view) {
   $("heroScore").textContent = shown(measured.display?.score);
   $("heroMotionKey").textContent = keys ?? "—";
+  // 바닥 기준 머리 높이(S4). 곧게 선 자리표시 다리를 없앤 자리를 이 한 숫자가 대신한다 —
+  // 서 있는 사람의 머리 높이가 아니면 앉거나 쭈그린 자세다. 서버 표시 문자열을 그대로 옮긴다.
+  $("heroHeadHeight").textContent = shown(view?.fit?.head_above_floor_display);
   const n = measured.reference_n;
   const granularity = measured.granularity;
   $("heroSamples").textContent = typeof n === "number"
@@ -481,7 +495,7 @@ function renderJointAxes(block) {
 const listed = { query: [] };
 // 기준(레퍼런스) 후보 상태. 기준은 고를 수 없다 — 이 목록에서 자동으로 고른 것을
 // [다른 기준 ▸]으로 순환할 뿐이다.
-const referenceState = { phase: "idle", candidates: [], index: 0, message: "" };
+const referenceState = { phase: "idle", candidates: [], index: 0, message: "", match: null, relaxed: false };
 
 function params() {
   return {
@@ -599,10 +613,13 @@ function renderReferenceLine() {
   const valueEl = $("referenceValue");
   const cycleBtn = $("cycleReference");
   const cycleNote = $("referenceCycleNote");
-  const { phase, candidates, index, message } = referenceState;
+  const matchEl = $("referenceMatch");
+  const { phase, candidates, index, message, match, relaxed } = referenceState;
 
   cycleBtn.hidden = true;
   cycleNote.textContent = "";
+  matchEl.textContent = "";
+  matchEl.removeAttribute("data-tone");
   $("run").disabled = true;
 
   if (phase === "idle") {
@@ -630,13 +647,19 @@ function renderReferenceLine() {
   valueEl.textContent = `전형기 · L${chosen.level} · ${chosen.date} ${chosen.session} #${chosen.pass_index} (자동)`;
   cycleBtn.hidden = candidates.length <= 1;
   cycleNote.textContent = candidates.length > 1 ? `${candidates.length}개 중 ${index + 1}번째` : "";
+  // 동작 키를 어디까지 완화해서 찾았는지(S8). 느슨한 일치를 엄밀 일치처럼 보이게 두면 화면이
+  // "같은 동작"이라고 거짓을 말한다 — 문구는 서버(`match_label`)가 준다.
+  if (typeof match === "string") {
+    matchEl.textContent = relaxed ? `동작 키 완화: ${match}` : `동작 키 ${match}`;
+    if (relaxed) matchEl.dataset.tone = "relaxed";
+  }
   $("run").disabled = false;
 }
 
 async function fetchReference() {
   const query = selectedQuery();
   if (query === null) {
-    Object.assign(referenceState, { phase: "idle", candidates: [], index: 0, message: "" });
+    Object.assign(referenceState, { phase: "idle", candidates: [], index: 0, message: "", match: null, relaxed: false });
     renderReferenceLine();
     return;
   }
@@ -661,7 +684,7 @@ async function fetchReference() {
     payload = await response.json();
   } catch (err) {
     Object.assign(referenceState, {
-      phase: "error", candidates: [], index: 0,
+      phase: "error", candidates: [], index: 0, match: null, relaxed: false,
       message: `기준 후보를 불러오지 못했습니다 — ${err}`,
     });
     renderReferenceLine();
@@ -673,6 +696,8 @@ async function fetchReference() {
       phase: isEmptyReason ? "ready" : "error",
       candidates: [],
       index: 0,
+      match: null,
+      relaxed: false,
       message: UNAVAILABLE_REASONS[payload.reason] ?? "기준을 찾지 못했습니다.",
     });
     renderReferenceLine();
@@ -683,6 +708,9 @@ async function fetchReference() {
     candidates: payload.candidates ?? [],
     index: 0,
     message: "",
+    // `match_label`이 없으면(어느 단에서도 못 찾았으면) 지어내지 않는다.
+    match: typeof payload.match_label === "string" ? payload.match_label : null,
+    relaxed: payload.relaxed === true,
   });
   renderReferenceLine();
 }
@@ -771,7 +799,7 @@ async function run() {
   }
 
   showHeroBody();
-  renderHero(payload.measured, payload.query_key);
+  renderHero(payload.measured, payload.query_key, payload.view);
   renderCorrections(payload.measured);
   renderImprovement(payload.measured);
   renderOrientation(payload.measured.orientation ?? null);

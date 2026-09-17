@@ -610,6 +610,14 @@ dd { margin: 0; font-family: var(--mono); }
 .view3d-legend .swatch.bad { background: var(--bad); }
 .view3d-legend .swatch.line-solid { width: 1.2rem; height: 0; border-radius: 0; border-top: 1px solid #c8d0dc; opacity: 0.8; }
 .view3d-legend .swatch.line-dashed { width: 1.2rem; height: 0; border-radius: 0; border-top: 2px dashed var(--text); }
+/* 벽 위 분사 스트로크 색. 3D가 쓰는 값(skeleton_view.js STROKE_COLOR)과 같아야 범례가 참이 된다. */
+.view3d-legend .swatch.stroke-query { width: 1.2rem; height: 0; border-radius: 0; border-top: 3px solid #ff7a1a; }
+.view3d-legend .swatch.stroke-reference { width: 1.2rem; height: 0; border-radius: 0; border-top: 3px solid #ffd23f; }
+/* 관절 진하기 눈금: 벌어짐 0(무채색)에서 대상 층 색(파랑)까지. */
+.view3d-legend .swatch.deviation {
+  width: 1.6rem; height: 0.55rem; border-radius: 0.28rem;
+  background: linear-gradient(90deg, #c8d0dc, var(--layer-query, #5b9bff));
+}
 .view3d-notes {
   list-style: none;
   margin: var(--sp-1) 0 0;
@@ -669,3 +677,17 @@ dd { margin: 0; font-family: var(--mono); }
 .view3d-corrected-note { color: var(--warn); }
 /* 상체 확대가 화면 밖으로 내보낸 맞춤 대상 고지. 자른 사실을 눈에 띄게 둔다. */
 .view3d-framing-note { color: var(--warn); }
+
+/* 동작 키를 어느 단까지 완화해서 찾았는지(S8). 느슨해진 경우에만 눈에 띄게 둔다 — 엄밀 일치와
+   느슨한 일치가 같은 모양이면 화면이 "같은 동작"이라고 거짓을 말한다. */
+.reference-match { color: var(--text-dim); font-size: var(--fs-sm); }
+.reference-match[data-tone="relaxed"] { color: var(--warn); }
+
+/* ④d 관절 축 평가 표는 접어 둔다(S7). 요약 칩은 위에서 그대로 보인다. */
+.joint-axes > summary {
+  cursor: pointer;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  margin-top: var(--sp-3);
+}
+.joint-axes[open] > summary { margin-bottom: var(--sp-2); }

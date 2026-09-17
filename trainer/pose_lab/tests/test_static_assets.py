@@ -159,7 +159,7 @@ def test_f1_checks_can_fail():
 # 5번째 인자(`measured`)만 본다. 4번째(`labelPointNames`)도 true/false여서 느슨한 정규식은
 # 옛 4인자 호출의 4번째 인자를 `measured`로 잘못 읽는다 — 그러면 옛 코드도 통과한다.
 LAYER_CALL_RE = re.compile(
-    r"buildLayerGroup\(view\.layers\?\.(\w+), weights, LAYER_COLOR\.\w+, [^,()]+, (true|false)\)"
+    r"buildLayerGroup\(view\.layers\?\.(\w+), LAYER_COLOR\.\w+, [^,()]+, (true|false)\)"
 )
 MARKER_MATERIAL_RE = re.compile(
     r"const markerMaterial = new THREE\.MeshBasicMaterial\(\{(.*?)\}\);", re.S
@@ -206,7 +206,7 @@ def test_computed_layer_checks_can_fail():
         "    const markerMaterial = new THREE.MeshBasicMaterial({ color: layerColor, opacity: 1 });\n"
         "    return group;\n"
         "  }\n"
-        "  layerGroups.corrected.add(buildLayerGroup(view.layers?.corrected, weights, LAYER_COLOR.corrected, false));\n"
+        "  layerGroups.corrected.add(buildLayerGroup(view.layers?.corrected, LAYER_COLOR.corrected, false));\n"
     )
     assert computed_layer_faults(old_js) == [
         "corrected_layer_not_declared_computed",
@@ -216,7 +216,7 @@ def test_computed_layer_checks_can_fail():
         "computed_layer_line_is_solid",
     ]
     assert layer_measured_flags(
-        "buildLayerGroup(view.layers?.corrected, weights, LAYER_COLOR.corrected, false, false))"
+        "buildLayerGroup(view.layers?.corrected, LAYER_COLOR.corrected, false, false))"
     ) == {"corrected": "false"}
 
 
@@ -741,8 +741,12 @@ def feet_note_faults(js: str) -> list[str]:
         faults.append("no_feet_note")
     if not re.search(r"describeFraming\(mode\)\s*\{[\s\S]{0,200}describeFeetFraming\(\)", js):
         faults.append("feet_note_not_in_framing_note")
-    if not re.search(r"placeholder_feet", js):
+    # 다리 관절 **이름**은 서버가 준다. 자리표시 다리를 없앤 뒤(S4) 그 출처는 `fit.legs.joints`다.
+    if not re.search(r"view\?\.fit\?\.legs\?\.joints", js):
         faults.append("feet_names_not_from_server")
+    # 없앤 자리표시 다리가 화면에 되살아나면 안 된다.
+    if "placeholder_joints" in js or "placeholder-bone" in js:
+        faults.append("standing_placeholder_legs_are_back")
     if "function solvePreset(" not in js or "PRESET_PROBES" not in js:
         faults.append("no_preset_probe")
     # 프리셋 이름을 말로 정하지 않고 **풀어서** 확인하는가 — solveFraming을 실제로 부르는가.
@@ -778,9 +782,12 @@ def test_feet_note_checks_can_fail():
     renamed = full.replace('{ label: "궤적 포함", mode: "tracks"', '{ label: "궤적", mode: "tracks"')
     assert renamed != full
     assert feet_note_faults(renamed) == ["probe_labels_do_not_match_the_buttons"]
-    always = full.replace('const what = "자리표시 발";', 'const what = "바닥에 맞춘 자리표시 발";')
+    always = full.replace('const what = "IK 발";', 'const what = "바닥에 맞춘 IK 발";')
     assert always != full
     assert feet_note_faults(always) == ["calls_feet_floor_snapped"]
+    revived = full.replace("  function legJointNames(view) {", "  const zombie = fit.legs.placeholder_joints;\n  function legJointNames(view) {", 1)
+    assert revived != full
+    assert feet_note_faults(revived) == ["standing_placeholder_legs_are_back"]
 
 
 # --- D3/D6: 카메라를 만진 뒤에도 화면 밖 고지가 참인가 ------------------------------------
@@ -1043,18 +1050,27 @@ def test_layer_reset_checks_can_fail():
 
 
 def test_the_legend_says_how_many_tracks_a_layer_draws():
-    """"기준이 세 개"로 읽히지 않게, 층마다 몇 줄인지 서버 문구가 말한다."""
-    note = service.track_legend_note({"right": 1.0, "head": 0.4, "left": 0.15})
+    """"기준이 세 개"로 읽히지 않게, 층마다 몇 줄인지 서버 문구가 말한다.
+
+    출처는 **그려질 층 자체**다 — 화면이 점이 하나라도 있는 이름마다 폴리라인을 만드므로 같은
+    조건으로 센다. 예전에는 가중치에서 뽑고 "진한 차례로"라고 적었는데, 그 진하기 규칙이
+    사라졌으므로(궤적은 차분한 한 색, 진해지는 것은 관절) 그 문구를 남기면 범례가 거짓말을 한다.
+    """
+    three = {"right": [[0, 0, 0]], "head": [[0, 0, 1]], "left": [[0, 1, 0]], "hit": [[1, 0, 0]]}
+    note = service.track_legend_note(three)
     assert note is not None
-    assert note.startswith("층마다 궤적은 3줄입니다")
-    # 진한 차례 = 가중치 내림차순. 화면의 opacity 규칙과 같은 순서여야 한다.
+    assert note.startswith("움직임 궤적 3줄")
     assert note.index("오른손") < note.index("머리") < note.index("왼손")
     assert "기준 3개가 아니라" in note
-    # 가중치가 바뀌면 차례도 바뀐다(문구가 상수가 아니다).
-    other = service.track_legend_note({"right": 0.1, "head": 0.9, "left": 0.5})
-    assert other is not None and other.index("머리") < other.index("왼손") < other.index("오른손")
+    # 진하기 순서를 더 이상 주장하지 않는다.
+    assert "진한 차례" not in note
+    # 왼손이 프레임마다 빠지는 층은 두 줄이라고 적는다 — 그려진 줄 수와 같은 출처다.
+    two = dict(three, left=[None, None])
+    other = service.track_legend_note(two)
+    assert other is not None and other.startswith("움직임 궤적 2줄")
+    assert "왼손" not in other
     # 그릴 줄이 없으면 적지 않는다.
-    assert service.track_legend_note({"Pelvis": 0.0}) is None
+    assert service.track_legend_note({"hit": [[0, 0, 0]]}) is None
 
 
 # --- 스트로크는 서버가 자른 연결 구간만 그린다(U1) ---------------------------------------
@@ -1062,9 +1078,9 @@ def test_the_legend_says_how_many_tracks_a_layer_draws():
 
 def stroke_drawing_faults(js: str) -> list[str]:
     faults: list[str] = []
-    if "function buildStrokeGroup(strokeBlock)" not in js:
+    if "function buildStrokeGroup(strokeBlock, color)" not in js:
         return ["no_stroke_builder"]
-    body = js.split("function buildStrokeGroup(strokeBlock)", 1)[1].split("\n  }", 1)[0]
+    body = js.split("function buildStrokeGroup(strokeBlock, color)", 1)[1].split("\n  }", 1)[0]
     if "strokeBlock?.runs" not in body:
         faults.append("not_from_server_runs")
     if "SphereGeometry" in body:
@@ -1072,8 +1088,18 @@ def stroke_drawing_faults(js: str) -> list[str]:
     # 화면이 자기 문턱으로 다시 자르면 서버 수치를 재계산하는 것이다.
     if "STROKE_MAX_LIFT" in body or "lift" in body:
         faults.append("screen_recomputes_the_split")
-    if "buildStrokeGroup(view.stroke)" not in js:
+    if "buildStrokeGroup(view.stroke, STROKE_COLOR.query)" not in js:
         faults.append("render_does_not_draw_the_stroke")
+    # 기준 쪽 벽면 스트로크도 그려야 한다(S2) — 사용자가 "기준 스트로크가 보이지 않음"이라고 했다.
+    if "buildStrokeGroup(view.reference_stroke, STROKE_COLOR.reference)" not in js:
+        faults.append("reference_stroke_not_drawn")
+    # 스트로크 색과 움직임 궤적 색이 같으면 사용자가 둘을 혼동한 그 상태로 되돌아간다.
+    stroke_colors = set(re.findall(r"const STROKE_COLOR = \{ query: (0x[0-9a-f]+), reference: (0x[0-9a-f]+) \}", js))
+    layer_colors = set(re.findall(r"const LAYER_COLOR = \{ query: (0x[0-9a-f]+), reference: (0x[0-9a-f]+)", js))
+    if not stroke_colors:
+        faults.append("no_stroke_colors")
+    elif stroke_colors & layer_colors:
+        faults.append("stroke_reuses_the_track_colors")
     # 한 폴리라인으로 이어 붙이던 옛 경로가 남아 있으면 안 된다.
     if "surface-hit-trace" in js:
         faults.append("old_single_polyline_remains")
@@ -1114,12 +1140,12 @@ def test_stroke_drawing_checks_can_fail():
     assert dotted != full
     assert stroke_drawing_faults(dotted) == ["stroke_draws_loose_dots"]
     every = full.replace(
+        "      const marker = new THREE.Mesh(markerGeometry, markerMaterial);\n"
+        "      marker.position.copy(points[points.length - 1]);",
+        "      for (const p of points) {\n"
         "        const marker = new THREE.Mesh(markerGeometry, markerMaterial);\n"
-        "        marker.position.copy(points[points.length - 1]);",
-        "        for (const p of points) {\n"
-        "          const marker = new THREE.Mesh(markerGeometry, markerMaterial);\n"
-        "          marker.position.copy(p);\n        }\n"
-        "        const marker = new THREE.Mesh(markerGeometry, markerMaterial);",
+        "        marker.position.copy(p);\n      }\n"
+        "      const marker = new THREE.Mesh(markerGeometry, markerMaterial);",
         1,
     )
     assert every != full
@@ -1168,9 +1194,220 @@ def test_head_sphere_checks_can_fail():
     assert fixed != full
     assert "radius_not_derived_from_head_diameter" in head_sphere_faults(fixed)
     unwired = full.replace(
-        "fit?.legs?.joints, placeholder, fit?.head_diameter_m);",
-        "fit?.legs?.joints, placeholder);",
+        "fit?.legs?.joints, fit?.head_diameter_m,",
+        "fit?.legs?.joints,",
         1,
     )
     assert unwired != full
     assert "call_site_does_not_pass_server_value" in head_sphere_faults(unwired)
+
+
+# --- S1/S2/S5/S6: 화면이 사용자가 요구한 그림을 실제로 그리는가 -----------------------------
+#
+# 사용자가 화면을 보고 말했다: "내가 말한 건 기준 스켈레톤과 질의 스켈레톤을 같이 그리고 유사도가
+# 떨어지는 조인트일 수록 색상을 진하게 표시하라는 거였는데 숫자며 수치 무슨 말이인지를 모르겠고
+# 보정 오프셋은 왜 표시했는지를 모르겠음." 아래 검사들은 그 그림의 뼈대를 고정한다.
+
+
+def two_skeleton_faults(js: str) -> list[str]:
+    faults: list[str] = []
+    if "function buildSkeletonGroup(" not in js:
+        return ["no_skeleton_builder"]
+    # (1) 두 층에 각각 스켈레톤을 세우고, 각자 자기 층 그룹에 넣는가.
+    if "buildSkeletonGroup(\n      joints," not in js:
+        faults.append("query_skeleton_not_built")
+    if "buildSkeletonGroup(\n      referenceJoints," not in js:
+        faults.append("reference_skeleton_not_built")
+    if "layerGroups.reference.add(referenceParts.group)" not in js:
+        faults.append("reference_skeleton_not_added_to_its_layer")
+    # (2) 진하기의 근거는 서버가 잰 벌어짐 하나뿐이다.
+    if "view.deviation" not in js:
+        faults.append("deviation_not_read_from_the_server")
+    if "deviation?.joint_max_m" not in js:
+        faults.append("scale_not_from_the_server")
+    body = js.split("function buildSkeletonGroup(", 1)[1].split("\n  }\n", 1)[0]
+    # 화면이 거리를 다시 재면 서버 수치를 재계산하는 것이다(이 저장소의 규칙).
+    if "distanceTo" in body or "Math.hypot" in body:
+        faults.append("screen_recomputes_the_gap")
+    # (3) 채점 가중치 기반 강조는 버렸다 — 사용자가 본 그 강조가 유사도가 아니라 가중치였다.
+    if "function emphasis(" in js:
+        faults.append("weight_emphasis_remains")
+    if re.search(r"buildSkeletonGroup\([^)]*weights", js):
+        faults.append("weights_still_drive_the_skeleton")
+    # (4) 추정 관절은 속 빈 표식이다 — 범례가 "채운 구체 = 실측"이라고 선언했다.
+    if 'marker.userData.kind = "estimate-joint"' not in body:
+        faults.append("joints_are_not_named_estimates")
+    if not re.search(r'kind = "estimate-joint"[\s\S]{0,400}wireframe: true', body) and "wireframe: true," not in body:
+        faults.append("estimate_joint_is_a_filled_sphere")
+    return faults
+
+
+def test_both_skeletons_are_drawn_and_coloured_by_the_server_gap():
+    assert two_skeleton_faults(_read("skeleton_view.js")) == []
+
+
+def test_two_skeleton_checks_can_fail():
+    full = _read("skeleton_view.js")
+    assert two_skeleton_faults("") == ["no_skeleton_builder"]
+    one_only = full.replace("buildSkeletonGroup(\n      referenceJoints,", "buildSkeletonGroup(\n      joints,", 1)
+    assert one_only != full
+    assert "reference_skeleton_not_built" in two_skeleton_faults(one_only)
+    fixed_scale = full.replace("const maxDeviation = deviation?.joint_max_m ?? null;", "const maxDeviation = 1.0;", 1)
+    assert fixed_scale != full
+    assert two_skeleton_faults(fixed_scale) == ["scale_not_from_the_server"]
+    recomputed = full.replace(
+        "    const devOf = (name) => deviationStyle(deviations[name], maxDeviation, layerColor);",
+        "    const devOf = (name) => deviationStyle(Math.hypot(1, 2), maxDeviation, layerColor);",
+        1,
+    )
+    assert recomputed != full
+    assert two_skeleton_faults(recomputed) == ["screen_recomputes_the_gap"]
+
+
+def three_d_number_faults(js: str) -> list[str]:
+    """3D 장면 안에 숫자·보조선이 남아 있는가(S6). 숫자는 왼쪽 패널에만 있어야 한다."""
+    faults: list[str] = []
+    for token, name in (
+        ("offset_display", "offset_label_remains"),
+        ("miss_display", "miss_label_remains"),
+        ("offset_line_label", "offset_line_legend_remains"),
+        ("view3d-label-miss", "miss_label_class_remains"),
+        ("view3d-label-offset", "offset_label_class_remains"),
+        ("pass-mean-ring", "pass_mean_ring_remains"),
+    ):
+        if token in js:
+            faults.append(name)
+    # 교정 화살표 라벨은 번호뿐이다.
+    badge = re.search(r'registerLabel\(mid, ([^,]+), "view3d-label-arrow"', js)
+    if badge is None:
+        faults.append("no_arrow_badge")
+    elif "correction.n" not in badge.group(1):
+        faults.append("arrow_label_is_not_just_the_number")
+    # 앵커 그룹은 실측 구체만 만든다 — 보정 오프셋 선·어긋남 점선은 없다.
+    if "function buildAnchorGroup(" in js:
+        anchor = js.split("function buildAnchorGroup(", 1)[1].split("\n  }\n", 1)[0]
+        if "THREE.Line" in anchor:
+            faults.append("anchor_group_still_draws_lines")
+    return faults
+
+
+def test_the_3d_scene_carries_no_numbers_but_the_arrow_badges():
+    assert three_d_number_faults(_read("skeleton_view.js")) == []
+
+
+def test_3d_number_checks_can_fail():
+    full = _read("skeleton_view.js")
+    relabelled = full.replace(
+        'registerLabel(mid, typeof correction.n === "number" ? String(correction.n) : "—", "view3d-label-arrow"',
+        'registerLabel(mid, String(correction.magnitude_cm), "view3d-label-arrow"',
+        1,
+    )
+    assert relabelled != full
+    assert three_d_number_faults(relabelled) == ["arrow_label_is_not_just_the_number"]
+    revived = full + '\n// const label = anchor.offset_display;\n'
+    assert three_d_number_faults(revived) == ["offset_label_remains"]
+
+
+def low_confidence_faults(js: str) -> list[str]:
+    """오른 전완·손 저신뢰(S5)를 화면이 **서버가 준 이름**으로만 흐리게 그리는가."""
+    faults: list[str] = []
+    if "LOW_CONFIDENCE_OPACITY_FACTOR" not in js:
+        faults.append("no_low_confidence_fade")
+    for field in ("low_confidence_bones", "low_confidence_joints"):
+        if f"fit?.{field}" not in js:
+            faults.append(f"{field}_not_from_server")
+        if f"referenceFit?.{field}" not in js:
+            faults.append(f"reference_{field}_not_from_server")
+    # 화면이 부위 이름을 지어내면 출처와 다른 라벨이 된다.
+    if "RightForeArm" in js or "RightHand" in js:
+        faults.append("screen_invents_the_bone_names")
+    return faults
+
+
+def test_low_confidence_segment_is_faded_by_server_named_bones():
+    assert low_confidence_faults(_read("skeleton_view.js")) == []
+
+
+def test_low_confidence_checks_can_fail():
+    full = _read("skeleton_view.js")
+    hardcoded = full.replace(
+        "        lowConfidenceBones: fit?.low_confidence_bones,",
+        '        lowConfidenceBones: [["RightForeArm", "RightHand"]],',
+        1,
+    )
+    assert hardcoded != full
+    assert low_confidence_faults(hardcoded) == [
+        "low_confidence_bones_not_from_server",
+        "screen_invents_the_bone_names",
+    ]
+
+
+def per_layer_leg_faults(js: str) -> list[str]:
+    """다리는 **층마다 자기 판정**으로만 보인다(S4). 한쪽 판정으로 양쪽을 켜면 범위를 벗어난
+    다리를 "기준은 이렇게 섰다"로 그리게 된다."""
+    faults: list[str] = []
+    if "legsAllowed" not in js:
+        faults.append("no_per_layer_leg_gate")
+        return faults
+    toggle = js.split("function applyLegsToggle()", 1)[1].split("\n  }", 1)[0]
+    if "legsAllowed.query" not in toggle:
+        faults.append("query_legs_not_gated")
+    if "legsAllowed.reference" not in toggle:
+        faults.append("reference_legs_not_gated")
+    if "referenceFit?.legs_visible_default" not in js:
+        faults.append("reference_gate_not_from_server")
+    return faults
+
+
+def test_each_layer_shows_only_its_own_anatomical_legs():
+    assert per_layer_leg_faults(_read("skeleton_view.js")) == []
+
+
+def test_per_layer_leg_checks_can_fail():
+    full = _read("skeleton_view.js")
+    assert per_layer_leg_faults("") == ["no_per_layer_leg_gate"]
+    shared = full.replace(
+        "    if (referenceLegs) referenceLegs.visible = on && legsAllowed.reference;",
+        "    if (referenceLegs) referenceLegs.visible = on;",
+        1,
+    )
+    assert shared != full
+    assert per_layer_leg_faults(shared) == ["reference_legs_not_gated"]
+
+
+# --- S7: 관절 축 평가는 접어 둔다 -----------------------------------------------------
+#
+# 사용자: "관절 축 평가는 접어도 되는 부분으로 보임. 텍스트가 너무 많아서 무슨 말을 하고 싶은지
+# 모르겠음." 요약 칩은 그대로 펴 두고 **전체 표만** 접는다.
+
+
+def collapsed_axes_faults(html: str) -> list[str]:
+    faults: list[str] = []
+    found = re.search(r'<(\w+) class="joint-axes" id="jointAxes"([^>]*)>', html)
+    if found is None:
+        return ["no_joint_axes_block"]
+    tag, attrs = found.group(1), found.group(2)
+    if tag != "details":
+        faults.append("joint_axes_table_is_not_collapsible")
+    if "open" in attrs.split():
+        faults.append("joint_axes_table_is_open_by_default")
+    if tag == "details" and "<summary" not in html.split(found.group(0), 1)[1][:400]:
+        faults.append("collapsed_block_has_no_summary")
+    # 요약 칩은 접지 않는다 — 접힌 것은 표뿐이다.
+    summary = re.search(r'<(\w+) class="joint-axes-summary" id="jointAxesSummary"', html)
+    if summary is None or summary.group(1) == "details":
+        faults.append("summary_chips_were_collapsed_too")
+    return faults
+
+
+def test_joint_axes_table_is_collapsed_by_default():
+    assert collapsed_axes_faults(_read("index.html")) == []
+
+
+def test_collapsed_axes_checks_can_fail():
+    full = _read("index.html")
+    assert collapsed_axes_faults("") == ["no_joint_axes_block"]
+    opened = full.replace('<details class="joint-axes" id="jointAxes" hidden>',
+                          '<details class="joint-axes" id="jointAxes" hidden open>', 1)
+    assert opened != full
+    assert collapsed_axes_faults(opened) == ["joint_axes_table_is_open_by_default"]

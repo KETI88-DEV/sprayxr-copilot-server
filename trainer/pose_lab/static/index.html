@@ -30,6 +30,9 @@
         <span class="reference-value" id="referenceValue">패스를 고르면 전형기 기준을 자동으로 찾습니다.</span>
         <button id="cycleReference" class="btn-ghost" hidden>다른 기준 ▸</button>
         <span class="reference-cycle-note" id="referenceCycleNote"></span>
+        <!-- 동작 키를 어느 단까지 완화해서 찾았는지(S8). 엄밀 일치와 느슨한 일치를 구별하지 못하면
+             화면이 "같은 동작"이라고 거짓을 말하게 된다. -->
+        <span class="reference-match" id="referenceMatch"></span>
       </div>
       <p class="picker-status state-note" id="queryStatus" data-tone="idle" hidden></p>
     </div>
@@ -56,6 +59,9 @@
           <dl class="hero-meta">
             <div><dt>동작 키</dt><dd id="heroMotionKey">—</dd></div>
             <div><dt>표본</dt><dd id="heroSamples">—</dd></div>
+            <!-- 바닥 기준 머리 높이(S4). 서 있는 사람의 높이가 아니면 앉거나 쭈그린 자세다 —
+                 자리표시 다리를 없앤 자리를 이 한 숫자가 대신한다. -->
+            <div><dt>바닥 기준 머리</dt><dd id="heroHeadHeight">—</dd></div>
           </dl>
           <ul class="hero-deviations" id="heroDeviations"></ul>
         </div>
@@ -105,14 +111,18 @@
           </table>
           <p class="orientation-header-note joint-angles-quality-note" id="jointAnglesQualityNote"></p>
         </div>
-        <div class="joint-axes" id="jointAxes" hidden>
+        <!-- ④d 관절 축 평가 전체 표는 **접어 둔다**(S7). 사용자가 "관절 축 평가는 접어도 되는
+             부분으로 보임 · 텍스트가 너무 많아서 무슨 말을 하고 싶은지 모르겠음"이라고 했다.
+             요약 칩(위 #jointAxesSummary)은 그대로 펴 둔다 — 접힌 것은 표뿐이다. -->
+        <details class="joint-axes" id="jointAxes" hidden>
+          <summary id="jointAxesSummaryLine">관절 축 평가 자세히</summary>
           <h3 class="orientation-title" id="jointAxesTitle">관절 축 평가</h3>
           <p class="orientation-header-note" id="jointAxesNote"></p>
           <table class="orientation-table joint-axes-table" id="jointAxesTable">
             <thead><tr><th scope="col">관절</th><th scope="col">상태</th><th scope="col">항목</th><th scope="col">대상</th><th scope="col">기준</th></tr></thead>
             <tbody></tbody>
           </table>
-        </div>
+        </details>
       </section>
     </div>
 

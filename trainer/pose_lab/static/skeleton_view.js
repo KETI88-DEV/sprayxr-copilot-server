@@ -1,15 +1,23 @@
 // 3D 뷰. compare()가 낸 `view` 블록만 그린다 — 지표를 브라우저에서 다시 계산하지
-// 않고, 화면에 보이는 숫자는 서버의 표시 문자열(`miss_display` 등)만 쓴다(app.js 머리말).
+// 않고, 3D 장면 안에는 숫자를 아예 걸지 않는다(교정 화살표의 번호 배지만 예외다).
+// 수치는 전부 왼쪽 패널이 서버의 표시 문자열로 낸다(app.js 머리말).
 //
 // 무엇을 그리나(서버 응답 계약):
-//   - 뼈(`layers.query.joints`/`bones`): 시뮬레이터 아바타 추정. 조용한 저채도 색·반투명.
-//   - 대표 프레임 실측 마커(`fit.anchors[].measured_marker`): 불투명 구체 — 실측.
-//   - 패스 평균 마커(`corrections[].from`): 속 빈 고리. 대표 프레임 마커와 회색 실선으로 잇는다.
-//   - 보정 오프셋 선(joint_position→predicted_marker)과 어긋남 점선(predicted→measured).
-//   - 교정 화살표: `from_frame`→`to_frame`(없으면 `from`→`to`). 번호 배지는 `n`.
+//   - **두 스켈레톤**(`layers.query.joints`/`bones`와 `layers.reference.joints`/`bones`): 대상은 파랑,
+//     기준은 보라. 둘 다 시뮬레이터 아바타 추정이라 관절 표식은 속 빈(윤곽선) 구다.
+//   - 관절 진하기 = `view.deviation.joints[name]` / `view.deviation.joint_max_m`. **서버가 잰 값**이고
+//     화면은 다시 계산하지 않는다. 사용자가 요구한 그림이 바로 이것이다: "기준 스켈레톤과 질의
+//     스켈레톤을 같이 그리고 유사도가 떨어지는 조인트일수록 색상을 진하게".
+//   - 대표 프레임 실측 마커(`fit.anchors[].measured_marker`): 층 색으로 **채운** 구체 — 실측 부호다.
+//   - 벽 위 분사 스트로크(`view.stroke` · `view.reference_stroke`): 몸 움직임 궤적과 **다른 색 계열**
+//     (따뜻한 주황·노랑)로 그린다. 사용자가 둘을 혼동한 것이 이 화면을 다시 만든 출발점이다.
+//   - 움직임 궤적(`layers.*.head/right/left`): 대상·기준 둘 다, 차분한 한 색·가는 선.
+//   - 교정 화살표: `from_frame`→`to_frame`(없으면 `from`→`to`). 3D 안 글자는 **번호뿐**이다.
 //   - 검증된 벽면 메시(`mesh.available`일 때만). 양면(DoubleSide) 반투명.
 //
-// 강조는 `view.weights`에서만 나온다 — 부위 이름으로 색·모양 규칙을 분기하지 않는다.
+// 3D 안에는 숫자를 걸지 않는다 — 수치는 전부 왼쪽 패널이다. 예전에는 보정 오프셋 선 위에
+// "보정 오프셋 0.57m(적합값)", 어긋남 점선 위에 "12.8cm" 같은 라벨이 떠 있었고, 사용자가
+// "숫자며 수치 무슨 말인지를 모르겠고 보정 오프셋은 왜 표시했는지를 모르겠음"이라고 했다.
 //
 // three.js는 cdnjs에서 버전 고정으로 이 스크립트보다 먼저 실린다(index.html).
 // 못 실리면 `createSkeletonView`가 아무것도 던지지 않고 안내만 남긴다.
@@ -20,8 +28,14 @@ const POINT_LABELS = { right: "오른손", head: "머리", left: "왼손", hit: 
 const LAYER_COLOR = { query: 0x5b9bff, reference: 0xa684e0, corrected: 0x34c2c2 };
 const MESH_COLOR = 0x9aa5b1;
 // 추정 뼈는 실측 마커(층 색 100%)보다 한 단계 조용해야 한다 — 채도를 뺀 밝은 회청색.
+// 이 색은 이제 **벌어짐 0**의 색이다: 관절이 기준과 멀어질수록 층 색 쪽으로 진해진다.
 const BONE_COLOR = 0xc8d0dc;
-const LINK_COLOR = 0x8a93a3;
+
+// 벽 위 분사 스트로크 색. 움직임 궤적(파랑·보라)과 **다른 색 계열**이어야 한다 — 사용자가 둘을
+// 혼동했고("기준 스트로크가 보이지 않음", 궤적을 스트로크로 읽음) 그것이 이 재작업의 출발점이다.
+// 따뜻한 쪽(주황·노랑)으로 몰아 층 색과 겹치지 않게 한다.
+const STROKE_COLOR = { query: 0xff7a1a, reference: 0xffd23f };
+const STROKE_LEGEND = { query: "대상 스트로크(벽면 착탄)", reference: "기준 스트로크(벽면 착탄)" };
 
 const SIGMA_OK = 0x2f855a;
 const SIGMA_WARN = 0xb7791f;
@@ -43,9 +57,11 @@ const HEAD_SPHERE_RADIUS_FALLBACK = 0.036;
 const BONE_RADIUS = 0.009;
 const BONE_OPACITY = 0.9;
 const BONE_OPACITY_FADED = 0.45;
-// 자리표시 다리(측정 아님): 끊어 그린 실린더. 실선 뼈와 한눈에 구분되게.
-const PLACEHOLDER_DASH = 0.05;
-const PLACEHOLDER_GAP = 0.035;
+// IK 다리는 **흐리게** 그린다(S4) — 추적 장치가 없고 시뮬레이터가 지은 자세다. 해부학 범위를
+// 벗어난 다리는 아예 그리지 않고 서버 고지가 왜 없는지 말한다. 곧게 선 자리표시 다리는 없앴다.
+const LEG_OPACITY_FACTOR = 0.5;
+// 오른 전완·손 저신뢰(S5). 아바타 손 IK와 트래킹된 건이 원본에서 중앙값 571mm 어긋나 있다.
+const LOW_CONFIDENCE_OPACITY_FACTOR = 0.45;
 // 계산된 층(교정 후·예상)의 선. 실측 궤적의 실선과 한눈에 구분되게 끊어 그린다.
 const COMPUTED_DASH = 0.02;
 const COMPUTED_GAP = 0.02;
@@ -71,14 +87,34 @@ const LABEL_PUSH_PX = 16;
 // 대상에서 뺐고, 그래서 그것들이 화면 밖으로 나갈 수 있다. 나간 것의 이름은 캔버스 아래에 적는다.
 const FRAMING_TARGET = { pose: 0.86, tracks: 0.75, wall: 0.9, torso: 0.98 };
 
-/** 강조 함수 — 색·굵기·마커·라벨 전부 이 하나의 함수다. */
-function emphasis(weight) {
-  return {
-    opacity: 0.25 + 0.75 * weight,
-    width: 1 + 2 * weight,
-    showMarker: weight > 0,
-    showLabel: weight > 0,
-  };
+// 움직임 궤적은 **차분한 한 색**이다(S3). 예전에는 `view.weights`(채점 가중치)로 진하기를 정했는데,
+// 사용자가 원한 강조는 가중치가 아니라 **기준과의 차이**였다("유사도가 떨어지는 조인트일수록 색상을
+// 진하게"). 진해지는 것은 이제 관절뿐이고, 궤적은 스트로크보다 눈에 덜 띄어야 한다.
+const TRACK_OPACITY = 0.3;
+const TRACK_MARKER_RADIUS = 0.006;
+
+// 벌어짐 0에서도 **층 색이 남아 있어야** 두 몸이 누구인지 구별된다. 무채색에서 시작하면 잘 맞은
+// 관절끼리는 대상·기준이 같은 회색이 되어 두 자세가 한 덩어리로 뭉친다(첫 실측 화면이 그랬다).
+// 그래서 t=0은 층 색을 회색 쪽으로 씻은 색이고, t=1이 층 색 100%다 — 색조는 층, 진하기는 벌어짐.
+const DEVIATION_WASH = 0.72;
+
+/** 벌어짐 t(0~1)를 진하기로. 눈금(최대 편차)은 서버가 준다 — 화면은 나누기만 하고 거리를 다시 재지 않는다. */
+function deviationStyle(metres, maxMetres, layerColor) {
+  const span = typeof maxMetres === "number" && maxMetres > 0 ? maxMetres : null;
+  const t = span === null || typeof metres !== "number" ? 0 : clamp(metres / span, 0, 1);
+  const pale = mixColor(layerColor, BONE_COLOR, DEVIATION_WASH);
+  return { t, color: mixColor(pale, layerColor, t), opacity: 0.4 + 0.55 * t };
+}
+
+/** 두 16진 색 사이 선형 보간. */
+function mixColor(from, to, t) {
+  const out = [];
+  for (let shift = 16; shift >= 0; shift -= 8) {
+    const a = (from >> shift) & 0xff;
+    const b = (to >> shift) & 0xff;
+    out.push(Math.round(a + (b - a) * t));
+  }
+  return (out[0] << 16) | (out[1] << 8) | out[2];
 }
 
 function clamp(value, min, max) {
@@ -191,9 +227,9 @@ function buildDom(container) {
   const controls = document.createElement("div");
   controls.className = "view3d-controls";
   controls.innerHTML = `
-    <label><input id="view3dLayerQuery" type="checkbox" checked> 질의(스켈레톤)</label>
+    <label><input id="view3dLayerQuery" type="checkbox" checked> 대상(파랑)</label>
+    <label><input id="view3dLayerReference" type="checkbox" checked> 기준(보라)</label>
     <label><input id="view3dLayerLegs" type="checkbox" checked> 다리(IK)</label>
-    <label><input id="view3dLayerReference" type="checkbox" checked> 기준</label>
     <label><input id="view3dLayerCorrected" type="checkbox"> 교정 후(예상)</label>
     <label><input id="view3dLayerWall" type="checkbox" checked> 벽면</label>
     <span class="view3d-controls-sep" aria-hidden="true"></span>
@@ -269,6 +305,8 @@ function legendItem(swatchClass, text) {
 
 function renderLegend(legend, view) {
   legend.replaceChildren();
+  // 범례는 **최소한**만 남긴다(S6): 무엇이 실측이고 무엇이 추정인지, 진하기가 무엇을 뜻하는지,
+  // 어느 색이 스트로크인지. 사용자가 "텍스트가 너무 많아서 무슨 말을 하고 싶은지 모르겠음"이라고 했다.
   const title = document.createElement("span");
   title.className = "legend-title";
   title.textContent = "화살표 색 = 근거 σ";
@@ -278,25 +316,25 @@ function renderLegend(legend, view) {
     legendItem("warn", "≤2σ"),
     legendItem("bad", ">2σ"),
   );
-  const fit = view?.fit ?? null;
-  if (fit) {
-    if (typeof fit.offset_line_label === "string") {
-      const item = legendItem("line-solid", fit.offset_line_label);
-      item.dataset.role = "offset-line";
-      legend.append(item);
-    }
-    if (typeof fit.residual_label === "string") {
-      const item = legendItem("line-dashed", `어긋남 = ${fit.residual_label}`);
-      item.dataset.role = "miss-line";
-      legend.append(item);
-    }
+  // 스트로크 색은 궤적 색과 **다른 계열**이다 — 그 사실을 범례가 말한다(S2).
+  for (const layer of ["query", "reference"]) {
+    const item = legendItem(`stroke-${layer}`, STROKE_LEGEND[layer]);
+    item.dataset.role = `stroke-${layer}`;
+    legend.append(item);
+  }
+  // 진하기 눈금. 최대 편차 수치는 서버 표시 문자열(`joint_max_display`)을 그대로 옮긴다.
+  const max = view?.deviation?.joint_max_display;
+  if (typeof max === "string") {
+    const item = legendItem("deviation", `관절 진하기 = 기준과 벌어진 거리 (가장 진한 곳 ${max}cm)`);
+    item.dataset.role = "deviation";
+    legend.append(item);
   }
   for (const text of view?.legend_notes ?? []) {
     if (typeof text === "string") legend.append(legendItem(null, text));
   }
   // 스트로크 문구도 서버 것이다 — 몇 곳에서 끊었는지·얼마나 떴는지는 서버가 재고 화면은 옮기기만 한다.
   if (typeof view?.stroke?.note === "string" && view.stroke.note.length > 0) {
-    const item = legendItem("line-solid", view.stroke.note);
+    const item = legendItem("stroke-query", view.stroke.note);
     item.dataset.role = "stroke";
     legend.append(item);
   }
@@ -335,8 +373,7 @@ function mount(THREE, container) {
   scene.add(correctionsGroup);
   let meshObject = null;
   let skeletonLegs = null;
-  // 카메라를 향해 도는 고리(패스 평균 마커).
-  const billboards = [];
+  let referenceLegs = null;
 
   const labelRegistry = [];
   function clearLabels() {
@@ -852,28 +889,25 @@ function mount(THREE, container) {
 
   function frame() {
     requestAnimationFrame(frame);
-    for (const ring of billboards) ring.quaternion.copy(camera.quaternion);
     renderer.render(scene, camera);
     layoutLabels();
   }
   requestAnimationFrame(frame);
 
-  /** 층 궤적 하나를 그린다.
+  /** 층 궤적 하나를 그린다(S3 — 대상·기준 **둘 다**, 차분한 한 색).
    *
    * `measured`는 이 층의 점이 관측인지 계산인지다 — 범례가 "실측 = 층 색으로 채운 구체"라고
    * 선언했으므로, 계산된 층(교정 후·예상)이 같은 부호를 쓰면 범례가 거짓이 된다. 질의·기준 궤적은
    * 같은 세 강체의 실측이라 채운 구를 쓰고, 교정 후 층은 **끊어 그린 선 + 속 빈(윤곽선) 표식**으로
-   * 그린다(추정 머리를 윤곽선 구로 바꾼 것과 같은 원칙). */
-  function buildLayerGroup(layerData, weights, layerColor, labelPointNames, measured) {
+   * 그린다(추정 머리를 윤곽선 구로 바꾼 것과 같은 원칙).
+   *
+   * 진하기는 더 이상 채점 가중치에서 나오지 않는다 — 궤적은 한 색이고, 진해지는 것은 관절뿐이다. */
+  function buildLayerGroup(layerData, layerColor, labelPointNames, measured) {
     const group = new THREE.Group();
     for (const name of Object.keys(layerData ?? {})) {
       // 착탄 격자(`hit`)는 호길이 리샘플이라 모서리를 가로지르면 벽에서 뜬다 — 선으로 그리지 않는다.
       // 분사 스트로크는 서버가 자른 연결 구간(`view.stroke`)을 `buildStrokeGroup`이 따로 그린다.
-      // `view.surface_hits`는 더 이상 여기서 그리지 않는다 — 맞춤(framing) 대상 점으로만 쓰인다
-      // (`framingPoints`의 mode === "wall" 분기).
       if (name === "joints" || name === "bones" || name === "hit") continue;
-      const weight = typeof weights?.[name] === "number" ? weights[name] : 0;
-      const emph = emphasis(weight);
       const points = (layerData[name] ?? [])
         .filter((p) => isVec3(p))
         .map((p) => new THREE.Vector3(p[0], p[1], p[2]));
@@ -883,39 +917,37 @@ function mount(THREE, container) {
         ? new THREE.LineDashedMaterial({
           color: layerColor,
           transparent: true,
-          opacity: emph.opacity,
+          opacity: TRACK_OPACITY,
           dashSize: COMPUTED_DASH,
           gapSize: COMPUTED_GAP,
         })
         : new THREE.LineBasicMaterial({
           color: layerColor,
           transparent: true,
-          opacity: emph.opacity,
+          opacity: TRACK_OPACITY,
         });
       const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), lineMaterial);
       if (measured === false) line.computeLineDistances();
       line.userData.kind = measured === false ? "computed-layer-line" : "measured-layer-line";
       group.add(line);
 
-      if (emph.showMarker) {
-        // 표식은 궤적의 **끝점 하나**다. 옛 코드는 20개 표본마다 구체를 찍어 한 층에 60개, 질의·기준
-        // 둘이면 120개가 화면을 덮었다 — 사용자가 "부분적으로 뿌려진 건 다 없앴으면 함"이라고 한 바로
-        // 그 알갱이다. 줄 자체는 그대로라 "연결된 하나의 선"이 남고, 범례가 선언한 부호(층 색으로 채운
-        // 구체 = 실측, 속 빈 표식 = 계산)는 끝점 표식이 그대로 진다.
-        const markerGeometry = new THREE.SphereGeometry(0.004 * emph.width * (measured === false ? 1.6 : 1), 10, 6);
-        const markerMaterial = new THREE.MeshBasicMaterial({
-          color: layerColor,
-          transparent: true,
-          opacity: emph.opacity,
-          wireframe: measured === false,
-        });
-        const marker = new THREE.Mesh(markerGeometry, markerMaterial);
-        marker.position.copy(points[points.length - 1]);
-        marker.userData.kind = measured === false ? "computed-layer-marker" : "measured-layer-marker";
-        group.add(marker);
-        if (emph.showLabel && labelPointNames) {
-          registerLabel(points[points.length - 1], POINT_LABELS[name] ?? name, "view3d-label-point");
-        }
+      // 표식은 궤적의 **끝점 하나**다. 옛 코드는 20개 표본마다 구체를 찍어 한 층에 60개, 질의·기준
+      // 둘이면 120개가 화면을 덮었다 — 사용자가 "부분적으로 뿌려진 건 다 없앴으면 함"이라고 한 바로
+      // 그 알갱이다. 줄 자체는 그대로라 "연결된 하나의 선"이 남고, 범례가 선언한 부호(층 색으로 채운
+      // 구체 = 실측, 속 빈 표식 = 계산)는 끝점 표식이 그대로 진다.
+      const markerGeometry = new THREE.SphereGeometry(TRACK_MARKER_RADIUS * (measured === false ? 1.6 : 1), 10, 6);
+      const markerMaterial = new THREE.MeshBasicMaterial({
+        color: layerColor,
+        transparent: true,
+        opacity: TRACK_OPACITY + 0.2,
+        wireframe: measured === false,
+      });
+      const marker = new THREE.Mesh(markerGeometry, markerMaterial);
+      marker.position.copy(points[points.length - 1]);
+      marker.userData.kind = measured === false ? "computed-layer-marker" : "measured-layer-marker";
+      group.add(marker);
+      if (labelPointNames) {
+        registerLabel(points[points.length - 1], POINT_LABELS[name] ?? name, "view3d-label-point");
       }
     }
     return group;
@@ -927,10 +959,10 @@ function mount(THREE, container) {
    * 않았다(옛 값 opacity 0.45). 여기서는 뼈와 같은 방식으로 **실린더**를 이어 굵기를 준다 —
    * 벽에 붙은 한 줄로 읽힌다. 점을 옮기거나 만들지 않는다: 정점은 서버가 준 원본 착탄점 그대로다.
    * 표식(구체)은 찍지 않는다 — 사용자가 없애 달라고 한 "낱개 점"이 바로 그것이다. */
-  function buildStrokeGroup(strokeBlock) {
+  function buildStrokeGroup(strokeBlock, color) {
     const group = new THREE.Group();
     const runs = Array.isArray(strokeBlock?.runs) ? strokeBlock.runs : [];
-    const material = new THREE.MeshBasicMaterial({ color: LAYER_COLOR.query, transparent: true, opacity: 0.95 });
+    const material = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.95 });
     let segments = 0;
     let drawnRuns = 0;
     for (const run of runs) {
@@ -952,9 +984,7 @@ function mount(THREE, container) {
     return { group, runs: drawnRuns, segments };
   }
 
-  /** 추정 뼈. 강조 대상이 아니라 문맥이다 — weights로 강조를 따지지 않고 무채색 한 색.
-   * 다리 관절 목록은 서버(`fit.legs.joints`)가 준다. IK 다리는 따로 끄고 켜고, 서버가 준 자리표시 다리
-   * (`fit.legs.placeholder_joints`, 측정 아님)는 끊어 그린다 — 부위 이름을 여기서 판단하지 않는다. */
+  /** 실린더 하나. 뼈·스트로크·자리표시가 모두 이 하나를 쓴다. */
   function boneCylinder(start, end, radius, material, kind, name) {
     const dir = new THREE.Vector3().subVectors(end, start);
     const length = dir.length();
@@ -969,32 +999,75 @@ function mount(THREE, container) {
     return mesh;
   }
 
-  function buildSkeletonGroup(joints, bones, faded, legJoints, placeholder, headDiameterM) {
+  /** 추정 스켈레톤 하나. **관절마다 진하기가 다르다** — 서버가 잰 벌어짐(`view.deviation`)이 근거다.
+   *
+   * 뼈 색은 양 끝 관절 벌어짐의 평균이다(뼈 하나가 두 관절 사이를 잇는 물건이므로). 관절 표식은
+   * 속 빈(윤곽선) 구다 — 범례가 "채운 구체 = 실측"이라고 선언했으니 추정이 그 부호를 쓰면 안 된다.
+   *
+   * 다리 관절 목록도, 저신뢰 구간(오른 전완·손) 이름도 **서버가** 준다 — 화면에서 부위 이름으로
+   * 규칙을 지어내지 않는다. */
+  function buildSkeletonGroup(joints, bones, faded, legJoints, headDiameterM, style) {
     const group = new THREE.Group();
     const legs = new THREE.Group();
-    const placeholderLegs = new THREE.Group();
-    if (!joints || !bones || Object.keys(joints).length === 0) return { group, legs, placeholderLegs };
+    if (!joints || !bones || Object.keys(joints).length === 0) return { group, legs };
+    const layerColor = style?.layerColor ?? LAYER_COLOR.query;
+    const deviations = style?.deviations ?? {};
+    const maxDeviation = style?.maxDeviation ?? null;
     const legSet = new Set(Array.isArray(legJoints) ? legJoints : []);
-    const opacity = faded ? BONE_OPACITY_FADED : BONE_OPACITY;
-    // 조명과 무관한 색을 위해 MeshBasicMaterial. WebGL 선은 굵기를 키울 수 없어 실린더로 그린다.
-    const boneMaterial = new THREE.MeshBasicMaterial({ color: BONE_COLOR, transparent: true, opacity, depthWrite: false });
-    const legMaterial = new THREE.MeshBasicMaterial({ color: BONE_COLOR, transparent: true, opacity: opacity * 0.55, depthWrite: false });
+    const lowJoints = new Set(Array.isArray(style?.lowConfidenceJoints) ? style.lowConfidenceJoints : []);
+    const lowBones = new Set(
+      (Array.isArray(style?.lowConfidenceBones) ? style.lowConfidenceBones : []).map((pair) => pair.join(">")),
+    );
+    const base = faded ? BONE_OPACITY_FADED : BONE_OPACITY;
+    const devOf = (name) => deviationStyle(deviations[name], maxDeviation, layerColor);
+    const materials = [];
+    const material = (color, opacity) => {
+      const made = new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthWrite: false });
+      materials.push(made);
+      return made;
+    };
     for (const [parent, child] of bones) {
       const a = joints[parent];
       const b = joints[child];
       if (!isVec3(a) || !isVec3(b)) continue;
       const isLeg = legSet.has(child);
-      const bone = boneCylinder(new THREE.Vector3(...a), new THREE.Vector3(...b), BONE_RADIUS, isLeg ? legMaterial : boneMaterial, "bone", `${parent}>${child}`);
+      // 저신뢰 구간(S5)은 더 흐리게. 아바타 손 IK와 트래킹된 건이 원본에서 이미 어긋나 있어
+      // 이 구간의 자리를 믿을 수 없다 — 서버 고지가 그 이유를 글자로 말한다.
+      const low = lowBones.has(`${parent}>${child}`);
+      const dev = devOf(child);
+      let opacity = base * dev.opacity;
+      if (isLeg) opacity *= LEG_OPACITY_FACTOR;
+      if (low) opacity *= LOW_CONFIDENCE_OPACITY_FACTOR;
+      const bone = boneCylinder(
+        new THREE.Vector3(...a), new THREE.Vector3(...b),
+        BONE_RADIUS, material(dev.color, opacity), "bone", `${parent}>${child}`,
+      );
       if (!bone) continue;
       bone.userData.leg = isLeg;
+      bone.userData.lowConfidence = low;
+      bone.userData.deviation = dev.t;
       (isLeg ? legs : group).add(bone);
     }
-    const jointGeometry = new THREE.SphereGeometry(BONE_RADIUS * 1.6, 10, 8);
+    // 관절 표식: 속 빈 구. 벌어진 관절일수록 크고 진하다 — 한눈에 "여기가 다르다"로 읽히게.
     for (const [name, position] of Object.entries(joints)) {
       if (!isVec3(position)) continue;
       const isLeg = legSet.has(name);
-      const marker = new THREE.Mesh(jointGeometry, isLeg ? legMaterial : boneMaterial);
+      const low = lowJoints.has(name);
+      const dev = devOf(name);
+      let opacity = base * dev.opacity;
+      if (isLeg) opacity *= LEG_OPACITY_FACTOR;
+      if (low) opacity *= LOW_CONFIDENCE_OPACITY_FACTOR;
+      const radius = BONE_RADIUS * (1.6 + 1.4 * dev.t);
+      const marker = new THREE.Mesh(
+        new THREE.SphereGeometry(radius, 10, 8),
+        new THREE.MeshBasicMaterial({
+          color: dev.color, transparent: true, opacity, depthWrite: false, wireframe: true,
+        }),
+      );
       marker.position.set(position[0], position[1], position[2]);
+      marker.userData.kind = "estimate-joint";
+      marker.userData.name = name;
+      marker.userData.deviation = dev.t;
       (isLeg ? legs : group).add(marker);
     }
     if (isVec3(joints.Head)) {
@@ -1003,128 +1076,41 @@ function mount(THREE, container) {
       // 지름은 서버 값(`fit.head_diameter_m`)을 쓴다 — 이 리그의 골반→머리 길이 × BVH 실측 비례로
       // 나온 값이라 고정 상수보다 이 몸에 맞는다. 못 받으면 폴백 반지름을 쓴다.
       const radius = typeof headDiameterM === "number" && headDiameterM > 0 ? headDiameterM / 2 : HEAD_SPHERE_RADIUS_FALLBACK;
-      const headMaterial = new THREE.MeshBasicMaterial({ color: BONE_COLOR, transparent: true, opacity: opacity * 0.5, depthWrite: false, wireframe: true });
+      const dev = devOf("Head");
+      const headMaterial = new THREE.MeshBasicMaterial({
+        color: dev.color, transparent: true, opacity: base * dev.opacity * 0.6, depthWrite: false, wireframe: true,
+      });
       const head = new THREE.Mesh(new THREE.SphereGeometry(radius, 12, 8), headMaterial);
       head.position.set(...joints.Head);
       head.userData.kind = "estimate-head";
       group.add(head);
     }
-    // 자리표시 다리: 서버가 준 관절·뼈를 그대로 끊어 그린다(엉덩이는 골반에서 나간다).
-    const placeholderJoints = placeholder?.joints ?? null;
-    if (placeholderJoints && Array.isArray(placeholder.bones)) {
-      const dashMaterial = new THREE.MeshBasicMaterial({ color: BONE_COLOR, transparent: true, opacity: opacity * 0.8, depthWrite: false });
-      const lookup = (name) => placeholderJoints[name] ?? joints[name];
-      for (const [parent, child] of placeholder.bones) {
-        const a = lookup(parent);
-        const b = lookup(child);
-        if (!isVec3(a) || !isVec3(b)) continue;
-        const start = new THREE.Vector3(...a);
-        const end = new THREE.Vector3(...b);
-        const dir = new THREE.Vector3().subVectors(end, start);
-        const total = dir.length();
-        if (total < 1e-6) continue;
-        dir.normalize();
-        const bone = new THREE.Group();
-        bone.userData.kind = "placeholder-bone";
-        bone.userData.name = `${parent}>${child}`;
-        bone.userData.length = total;
-        for (let t = 0; t < total; t += PLACEHOLDER_DASH + PLACEHOLDER_GAP) {
-          const s0 = start.clone().addScaledVector(dir, t);
-          const s1 = start.clone().addScaledVector(dir, Math.min(total, t + PLACEHOLDER_DASH));
-          const dash = boneCylinder(s0, s1, BONE_RADIUS * 0.8, dashMaterial, "placeholder-dash", "");
-          if (dash) bone.add(dash);
-        }
-        placeholderLegs.add(bone);
-      }
-    }
     group.add(legs);
-    group.add(placeholderLegs);
-    return { group, legs, placeholderLegs };
+    return { group, legs };
   }
 
-  /** 대표 프레임 실측 마커(구체)·보정 오프셋 선·어긋남 점선·miss 라벨. */
-  function buildAnchorGroup(fit) {
+  /** 대표 프레임 실측 마커(구체)만. 3D 안에 숫자·보조선은 걸지 않는다(S6).
+   *
+   * 예전에는 여기서 보정 오프셋 선(joint→predicted)과 어긋남 점선(predicted→measured)을 그리고
+   * 그 위에 "보정 오프셋 0.57m(적합값)"·"12.8cm" 라벨을 달았다. 사용자가 "보정 오프셋은 왜
+   * 표시했는지를 모르겠음"이라고 했고, 그 값은 교정이 아니라 캡처 파이프라인의 어긋남을 흡수한
+   * 적합값이라 "보정"이라고 부르는 것 자체가 거짓이었다. 수치는 왼쪽 패널에만 둔다. */
+  function buildAnchorGroup(fit, layerColor, register) {
     const group = new THREE.Group();
-    markerRegistry = [];
-    const counts = { measuredSpheres: 0, offsetLines: 0, missLines: 0, missLabels: [], offsetLabels: [] };
+    const counts = { measuredSpheres: 0 };
     if (!fit) return { group, counts };
-    const holdout = fit.mounts === "pass_fit_holdout";
-    const markerMaterial = new THREE.MeshStandardMaterial({ color: LAYER_COLOR.query, roughness: 0.5 });
+    const markerMaterial = new THREE.MeshStandardMaterial({ color: layerColor, roughness: 0.5 });
     const markerGeometry = new THREE.SphereGeometry(MEASURED_MARKER_RADIUS, 20, 14);
-    const offsetMaterial = new THREE.LineBasicMaterial({ color: BONE_COLOR, transparent: true, opacity: 0.5 });
-    const missMaterial = new THREE.LineDashedMaterial({
-      color: 0xe8ecf3,
-      dashSize: holdout ? 0.01 : 0.03,
-      gapSize: holdout ? 0.02 : 0.015,
-    });
     for (const anchor of fit.anchors ?? []) {
-      if (isVec3(anchor.measured_marker)) {
-        const marker = new THREE.Mesh(markerGeometry, markerMaterial);
-        marker.position.set(...anchor.measured_marker);
-        marker.userData.kind = "measured-marker";
-        group.add(marker);
-        counts.measuredSpheres += 1;
-        markerRegistry.push({ point: anchor.point, center: marker.position.clone() });
-      }
-      if (isVec3(anchor.joint_position) && isVec3(anchor.predicted_marker)) {
-        const geometry = new THREE.BufferGeometry().setFromPoints([
-          new THREE.Vector3(...anchor.joint_position),
-          new THREE.Vector3(...anchor.predicted_marker),
-        ]);
-        group.add(new THREE.Line(geometry, offsetMaterial));
-        counts.offsetLines += 1;
-        // 손 관절과 건 마커가 멀리 떨어진 이유를 선 위에서 바로 읽게 한다(서버 문자열, 파지 상한 초과일 때만).
-        if (typeof anchor.offset_display === "string") {
-          const mid = new THREE.Vector3(...anchor.joint_position).add(new THREE.Vector3(...anchor.predicted_marker)).multiplyScalar(0.5);
-          registerLabel(mid, anchor.offset_display, "view3d-label-offset");
-          counts.offsetLabels.push(anchor.offset_display);
-        }
-      }
-      if (isVec3(anchor.predicted_marker) && isVec3(anchor.measured_marker)) {
-        const a = new THREE.Vector3(...anchor.predicted_marker);
-        const b = new THREE.Vector3(...anchor.measured_marker);
-        const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints([a, b]), missMaterial);
-        line.computeLineDistances();
-        group.add(line);
-        counts.missLines += 1;
-        if (typeof anchor.miss_display === "string") {
-          const mid = a.clone().add(b).multiplyScalar(0.5);
-          registerLabel(mid, anchor.miss_display, "view3d-label-miss");
-          counts.missLabels.push(anchor.miss_display);
-        }
-      }
+      if (!isVec3(anchor.measured_marker)) continue;
+      const marker = new THREE.Mesh(markerGeometry, markerMaterial);
+      marker.position.set(...anchor.measured_marker);
+      marker.userData.kind = "measured-marker";
+      group.add(marker);
+      counts.measuredSpheres += 1;
+      if (register) markerRegistry.push({ point: anchor.point, center: marker.position.clone() });
     }
     return { group, counts };
-  }
-
-  /** 패스 평균 마커(속 빈 고리) — 교정의 `from`이 패스 평균 위치다. 대표 프레임 마커와 잇는다. */
-  function buildPassMeanGroup(corrections, fit) {
-    const group = new THREE.Group();
-    billboards.length = 0;
-    let rings = 0;
-    const seen = new Set();
-    const ringMaterial = new THREE.MeshBasicMaterial({ color: scaleColor(LAYER_COLOR.query, 0.6), side: THREE.DoubleSide });
-    const linkMaterial = new THREE.LineBasicMaterial({ color: LINK_COLOR });
-    const measuredByPoint = new Map((fit?.anchors ?? []).map((a) => [a.point, a.measured_marker]));
-    for (const correction of corrections) {
-      if (!isVec3(correction.from) || seen.has(correction.point)) continue;
-      seen.add(correction.point);
-      const ring = new THREE.Mesh(new THREE.RingGeometry(RING_INNER, RING_OUTER, 32), ringMaterial);
-      ring.position.set(...correction.from);
-      ring.userData.kind = "pass-mean-ring";
-      group.add(ring);
-      billboards.push(ring);
-      rings += 1;
-      const measured = measuredByPoint.get(correction.point);
-      if (isVec3(measured)) {
-        const geometry = new THREE.BufferGeometry().setFromPoints([
-          new THREE.Vector3(...correction.from),
-          new THREE.Vector3(...measured),
-        ]);
-        group.add(new THREE.Line(geometry, linkMaterial));
-      }
-    }
-    return { group, rings };
   }
 
   function buildArrow(from, to, color) {
@@ -1231,22 +1217,20 @@ function mount(THREE, container) {
       return points;
     }
     if (hasSkeleton) {
-      // 숨긴 다리는 맞춤 대상에서도 뺀다 — 안 보이는 점 때문에 몸이 작아지면 안 된다. 대신 보이는
-      // 자리표시 다리는 넣는다.
-      // pose(자세 맞춤·기본)도 **다리를 맞춤 대상에 넣는다** — 작업자는 다리로 서 있어야 한다(사용자
-      // 지시). 예전에는 여기서 다리를 빼 상체를 키웠지만, 다리 길이가 리그 제 길이로 돌아온 뒤로는
-      // 그러면 발이 캔버스 아래로 잘려 나간다(실측: L1·L2·L3·L6 8가지 폭 전부 발이 200~433px 밖).
-      // 다리를 뺐던 만큼 상체가 캔버스를 덜 채우는 대가는 감수한다 — 선 사람이 먼저다.
-      const legJoints = Array.isArray(view.fit?.legs?.joints) ? view.fit.legs.joints : [];
-      const legsHidden = !checkboxes.legs.checked && legJoints.length > 0;
-      const excluded = new Set(legsHidden ? legJoints : []);
+      // 숨긴 다리는 맞춤 대상에서도 뺀다 — 안 보이는 점 때문에 몸이 작아지면 안 된다.
+      // 다리가 보일 때는 **맞춤 대상에 넣는다** — 작업자는 다리로 서 있어야 한다(사용자 지시).
+      // 자리표시 다리는 더 이상 없다(S4): 다리는 해부학 범위 안 IK이거나 아예 없다.
+      const excluded = new Set(legsShown() ? [] : legJointNames(view));
       for (const [name, p] of Object.entries(joints)) if (!excluded.has(name)) push(p);
-      const placeholderJoints = view.fit?.legs?.placeholder_joints;
-      if (legsHidden && placeholderJoints) for (const p of Object.values(placeholderJoints)) push(p);
+      // **기준 몸도 맞춤 대상이다**(S1). 두 자세를 겹쳐 보여 주는 것이 이 화면의 목적이므로, 기준이
+      // 화면 밖으로 잘리면 그림이 성립하지 않는다.
+      const referenceJoints = view.layers?.reference?.joints ?? {};
+      for (const [name, p] of Object.entries(referenceJoints)) if (!excluded.has(name)) push(p);
       for (const anchor of view.fit?.anchors ?? []) {
         push(anchor.measured_marker);
         push(anchor.predicted_marker);
       }
+      for (const anchor of view.reference_fit?.anchors ?? []) push(anchor.measured_marker);
     } else {
       for (const name of ["head", "right", "left"]) for (const p of view.layers?.query?.[name] ?? []) push(p);
     }
@@ -1269,7 +1253,9 @@ function mount(THREE, container) {
     }
     if (mode === "wall") {
       // 원본 착탄점만 — 리샘플 격자는 벽에서 뜰 수 있다. 그려지는 스트로크의 정점이 이 점들이다.
+      // 기준 스트로크도 그려지므로 맞춤 대상에 넣는다(S2) — 안 넣으면 기준 줄이 화면 밖으로 나간다.
       for (const p of view.surface_hits ?? []) push(p);
+      for (const p of view.reference_surface_hits ?? []) push(p);
       if (view.mesh?.available === true) for (const p of view.mesh.vertices ?? []) push(p);
     }
     return points;
@@ -1346,13 +1332,25 @@ function mount(THREE, container) {
     return `${head}: ${shown}${rest}${subjectParticle(rest || shown)} 화면 밖에 있습니다 — 기본 뷰는 '자세 맞춤'입니다.`;
   }
 
-  /** 자리표시 발(D3)의 월드 좌표. 발 관절의 **이름은 서버**(`fit.legs.placeholder_feet`)가 준다 —
-   * 화면이 리그 이름을 지어내면 출처와 다른 라벨이 된다. 다리를 그리지 않는 화면에서는 빈 배열. */
-  function placeholderFeetPoints(view) {
-    const joints = view?.fit?.legs?.placeholder_joints;
-    const names = view?.fit?.legs?.placeholder_feet;
-    if (!joints || !Array.isArray(names)) return [];
-    return names.map((name) => joints[name]).filter(isVec3);
+  /** 다리 관절 **이름**은 서버(`fit.legs.joints`)가 준다 — 화면이 리그 이름을 지어내면
+   * 출처와 다른 라벨이 된다. */
+  function legJointNames(view) {
+    return Array.isArray(view?.fit?.legs?.joints) ? view.fit.legs.joints : [];
+  }
+
+  /** 지금 다리를 그리고 있는가. 서버 판정(`legs_visible_default`)을 사람이 툴바로 뒤집을 수 있다. */
+  function legsShown() {
+    return checkboxes.legs.checked && legsAllowed.query;
+  }
+
+  /** 그려진 IK 다리의 발 관절 월드 좌표. 다리를 그리지 않는 화면에서는 빈 배열이다. */
+  function legFeetPoints(view) {
+    const joints = view?.layers?.query?.joints;
+    if (!joints || !legsShown()) return [];
+    return legJointNames(view)
+      .filter((name) => name.endsWith("Foot"))
+      .map((name) => joints[name])
+      .filter(isVec3);
   }
 
   /** 발이 보이는지 재 볼 프리셋. 툴바 버튼과 같은 카메라를 푼다(라벨도 버튼과 같은 글자다). */
@@ -1383,13 +1381,13 @@ function mount(THREE, container) {
    *
    * pose(자세 맞춤·기본)는 이제 다리를 맞춤 대상에 넣는다(사용자 지시: 작업자는 다리로 서 있어야
    * 한다 — 예전에는 다리를 빼 상체를 키웠지만 그러면 발이 캔버스 밖으로 잘렸다). 그래도 좁은
-   * 화면비(예: 840×1050)나 다리 체크박스를 꺼 자리표시 발만 남은 경우에는 여전히 화면 밖일 수
-   * 있어 이 고지를 남긴다. 바닥면 고지가 가리키는 발이 실제로 안 보이면 아무도 그 사실을 확인할
-   * 길이 없기 때문이다. 어느 프리셋에서 보이는지는 **말로 정하지 않고** 각 프리셋의 카메라를
-   * 실제로 풀어서(`solveFraming`) 투영해 확인한다. */
+   * 화면비(예: 840×1050)에서는 여전히 화면 밖일 수 있어 이 고지를 남긴다. 바닥 기준 머리 높이
+   * 고지가 가리키는 발이 실제로 안 보이면 아무도 그 사실을 확인할 길이 없기 때문이다. 어느
+   * 프리셋에서 보이는지는 **말로 정하지 않고** 각 프리셋의 카메라를 실제로 풀어서
+   * (`solveFraming`) 투영해 확인한다. 다리를 그리지 않는 화면에서는 이 고지가 아예 없다. */
   function describeFeetFraming() {
     if (!lastView) return "";
-    const feet = placeholderFeetPoints(lastView);
+    const feet = legFeetPoints(lastView);
     if (feet.length === 0) return "";
     if (feet.every((p) => onScreenNow(p))) return "";
     const shows = PRESET_PROBES.map((probe) => {
@@ -1398,9 +1396,9 @@ function mount(THREE, container) {
       return feet.every((p) => insideFrustum(p, solved)) ? probe.label : null;
     }).filter((name) => name !== null);
     const where = shows.length === 0 ? "" : ` — ${shows.map((n) => `'${n}'`).join(" · ")}에서 보입니다`;
-    // 다리는 어느 레벨에서도 리그 제 길이로 내린다(D3 재판정) — 발을 바닥에 세웠다고 부를 근거가
-    // 없으므로 그냥 "자리표시 발"이다. 고른 면과 발의 관계는 서버 고지가 숫자로 말한다.
-    const what = "자리표시 발";
+    // 그려지는 다리는 시뮬레이터 IK가 지은 것이지 바닥면에 세운 것이 아니다 — 발을 바닥면에
+    // 맞췄다고 부를 근거가 없다. 바닥면과 머리 높이의 관계는 서버 고지가 숫자로 말한다.
+    const what = "IK 발";
     return `${what}은 ${nowWord()} 화면 밖에 있습니다${where}.`;
   }
 
@@ -1547,8 +1545,8 @@ function mount(THREE, container) {
       container.__view3dDebug.framingNote = text;
       container.__view3dDebug.torsoSpan = torsoScreenSpan();
       container.__view3dDebug.upperBody = upperBodyScreen();
-      // D3 검증용: 자리표시 발이 지금 보이는가, 어느 프리셋이 보여 주는가.
-      const feet = placeholderFeetPoints(lastView);
+      // D3 검증용: IK 발이 지금 보이는가, 어느 프리셋이 보여 주는가.
+      const feet = legFeetPoints(lastView);
       container.__view3dDebug.feetOnScreen = feet.length > 0 && feet.every((q) => onScreenNow(q));
       container.__view3dDebug.feetPresets = feet.length === 0
         ? []
@@ -1636,17 +1634,21 @@ function mount(THREE, container) {
     });
     return layerGroups.query.visible ? names : [];
   }
-  function visiblePlaceholderBones() {
-    const names = [];
+  /** 관절 하나가 받은 진하기(0~1, 검증용). 서버가 준 벌어짐이 실제로 색에 닿았는지 이 값으로 잰다. */
+  function visibleJointDeviations() {
+    const out = {};
     layerGroups.query.traverseVisible((child) => {
-      if (child.userData.kind === "placeholder-bone") names.push(child.userData.name);
+      if (child.userData.kind === "estimate-joint") out[child.userData.name] = child.userData.deviation;
     });
-    return layerGroups.query.visible ? names : [];
+    return layerGroups.query.visible ? out : {};
   }
-  let skeletonPlaceholder = null;
+  // 층마다 자기 IK 다리가 해부학 범위 안일 때만 보인다(S4). 한쪽 판정으로 양쪽을 켜면, 범위를
+  // 벗어난 다리를 "기준은 이렇게 섰다"로 그리게 된다.
+  let legsAllowed = { query: false, reference: false };
   function applyLegsToggle() {
-    if (skeletonLegs) skeletonLegs.visible = checkboxes.legs.checked;
-    if (skeletonPlaceholder) skeletonPlaceholder.visible = !checkboxes.legs.checked;
+    const on = checkboxes.legs.checked;
+    if (skeletonLegs) skeletonLegs.visible = on && legsAllowed.query;
+    if (referenceLegs) referenceLegs.visible = on && legsAllowed.reference;
   }
   checkboxes.legs.addEventListener("change", () => {
     applyLegsToggle();
@@ -1654,7 +1656,6 @@ function mount(THREE, container) {
     if (container.__view3dDebug) {
       container.__view3dDebug.legsVisible = checkboxes.legs.checked;
       container.__view3dDebug.visibleBones = visibleBoneNames();
-      container.__view3dDebug.visiblePlaceholderBones = visiblePlaceholderBones();
     }
   });
   checkboxes.reference.addEventListener("change", () => { layerGroups.reference.visible = checkboxes.reference.checked; });
@@ -1707,11 +1708,10 @@ function mount(THREE, container) {
     disposeObject3D(correctionsGroup);
     correctionsGroup.clear();
     clearLabels();
-    billboards.length = 0;
     coneRegistry = [];
     markerRegistry = [];
     skeletonLegs = null;
-    skeletonPlaceholder = null;
+    referenceLegs = null;
     if (meshObject) {
       scene.remove(meshObject);
       disposeObject3D(meshObject);
@@ -1731,36 +1731,72 @@ function mount(THREE, container) {
 
     const weights = view.weights ?? {};
     const fit = view.fit ?? null;
+    const referenceFit = view.reference_fit ?? null;
     const joints = view.layers?.query?.joints ?? {};
+    const referenceJoints = view.layers?.reference?.joints ?? {};
     const hasSkeleton = Object.keys(joints).length > 0;
+
+    // 관절 진하기의 근거는 서버가 잰 벌어짐 하나뿐이다(S1). 못 받았으면(한쪽 스켈레톤이 안 섰으면)
+    // 전부 0으로 칠하지 않고 눈금을 비워 둔다 — `deviationStyle`이 눈금 없이는 t=0을 낸다.
+    const deviation = view.deviation ?? null;
+    const deviations = deviation?.joints ?? {};
+    const maxDeviation = deviation?.joint_max_m ?? null;
 
     // 마지막 인자는 "이 층의 점이 실측인가". 질의·기준은 같은 세 강체의 실측 궤적이고, 교정 후 층은
     // 발부된 교정을 따랐을 때의 **계산값**이다 — 범례가 실측에 준 부호(층 색으로 채운 구체)를 쓰면 안 된다.
-    layerGroups.query.add(buildLayerGroup(view.layers?.query, weights, LAYER_COLOR.query, !hasSkeleton, true));
-    layerGroups.reference.add(buildLayerGroup(view.layers?.reference, weights, LAYER_COLOR.reference, false, true));
-    layerGroups.corrected.add(buildLayerGroup(view.layers?.corrected, weights, LAYER_COLOR.corrected, false, false));
-    const placeholder = fit?.legs?.placeholder_joints
-      ? { joints: fit.legs.placeholder_joints, bones: fit.legs.placeholder_bones }
-      : null;
-    const skeletonParts = buildSkeletonGroup(joints, view.layers?.query?.bones, fit?.faded === true, fit?.legs?.joints, placeholder, fit?.head_diameter_m);
+    layerGroups.query.add(buildLayerGroup(view.layers?.query, LAYER_COLOR.query, !hasSkeleton, true));
+    layerGroups.reference.add(buildLayerGroup(view.layers?.reference, LAYER_COLOR.reference, false, true));
+    layerGroups.corrected.add(buildLayerGroup(view.layers?.corrected, LAYER_COLOR.corrected, false, false));
+
+    const skeletonParts = buildSkeletonGroup(
+      joints, view.layers?.query?.bones, fit?.faded === true, fit?.legs?.joints, fit?.head_diameter_m,
+      {
+        layerColor: LAYER_COLOR.query,
+        deviations,
+        maxDeviation,
+        lowConfidenceBones: fit?.low_confidence_bones,
+        lowConfidenceJoints: fit?.low_confidence_joints,
+      },
+    );
     layerGroups.query.add(skeletonParts.group);
+    // 기준도 **같은 함수**로 그린다 — 두 그리기 경로를 두면 같은 사람이 층에 따라 다른 몸이 된다.
+    const referenceParts = buildSkeletonGroup(
+      referenceJoints, view.layers?.reference?.bones, referenceFit?.faded === true,
+      referenceFit?.legs?.joints, referenceFit?.head_diameter_m,
+      {
+        layerColor: LAYER_COLOR.reference,
+        deviations,
+        maxDeviation,
+        lowConfidenceBones: referenceFit?.low_confidence_bones,
+        lowConfidenceJoints: referenceFit?.low_confidence_joints,
+      },
+    );
+    layerGroups.reference.add(referenceParts.group);
     debugLive.headDiameterM = typeof fit?.head_diameter_m === "number" ? fit.head_diameter_m : null;
     skeletonLegs = skeletonParts.legs;
-    skeletonPlaceholder = skeletonParts.placeholderLegs;
-    // 다리 기본 표시는 서버 판정을 따른다: `legs_visible_default`면 IK 다리, 아니면 자리표시 다리(있을 때).
-    const legsKnown = Array.isArray(fit?.legs?.joints);
-    checkboxes.legs.disabled = !legsKnown;
-    checkboxes.legs.checked = legsKnown ? fit.legs_visible_default === true : true;
+    referenceLegs = referenceParts.legs;
+    // 다리 기본 표시는 서버 판정을 따른다(S4): 해부학 범위 안 IK 다리면 켜고, 아니면 끈다.
+    // 자리표시 다리는 없다 — 끄면 다리가 아예 없고 서버 고지가 왜 없는지 말한다.
+    legsAllowed = {
+      query: fit?.legs_visible_default === true,
+      reference: referenceFit?.legs_visible_default === true,
+    };
+    checkboxes.legs.disabled = !(legsAllowed.query || legsAllowed.reference);
+    checkboxes.legs.checked = legsAllowed.query || legsAllowed.reference;
     applyLegsToggle();
+
     // 벽 위 분사 스트로크. 서버(`composite.stroke_runs`)가 **이미 잘라서** 준 연결 구간만 그린다 —
-    // 화면은 자르는 판정을 다시 하지 않는다. 옛 코드는 원본 착탄점 전부를 한 폴리라인으로 이어
-    // 모서리를 가로지르는 현이 공중에 떴다(L6 최대 84.6mm).
-    const strokeGroup = buildStrokeGroup(view.stroke);
+    // 화면은 자르는 판정을 다시 하지 않는다. 대상·기준 둘 다 그리고, 몸 움직임 궤적과 다른 색 계열을
+    // 쓴다(S2) — 사용자가 둘을 혼동한 것이 이 화면을 다시 만든 출발점이다.
+    const strokeGroup = buildStrokeGroup(view.stroke, STROKE_COLOR.query);
     layerGroups.query.add(strokeGroup.group);
-    const anchors = buildAnchorGroup(fit);
+    const referenceStrokeGroup = buildStrokeGroup(view.reference_stroke, STROKE_COLOR.reference);
+    layerGroups.reference.add(referenceStrokeGroup.group);
+
+    const anchors = buildAnchorGroup(fit, LAYER_COLOR.query, true);
     layerGroups.query.add(anchors.group);
-    const passMean = buildPassMeanGroup(view.corrections ?? [], fit);
-    layerGroups.query.add(passMean.group);
+    const referenceAnchors = buildAnchorGroup(referenceFit, LAYER_COLOR.reference, false);
+    layerGroups.reference.add(referenceAnchors.group);
     layerGroups.query.visible = checkboxes.query.checked;
     layerGroups.reference.visible = checkboxes.reference.checked;
     layerGroups.corrected.visible = checkboxes.corrected.checked;
@@ -1845,8 +1881,6 @@ function mount(THREE, container) {
     setNote(dom.note, "", undefined);
     if (!checkboxes.corrected.checked) dom.correctedNote.textContent = "";
 
-    let ringCount = 0;
-    layerGroups.query.traverse((child) => { if (child.userData.kind === "pass-mean-ring") ringCount += 1; });
     const boneLengths = {};
     layerGroups.query.traverse((child) => {
       if (child.userData.kind === "bone") boneLengths[child.userData.name] = child.userData.length;
@@ -1860,22 +1894,25 @@ function mount(THREE, container) {
       labelCount: labelRegistry.length,
       labels: labelRegistry.map((entry) => entry.el.textContent),
       jointCount: Object.keys(joints).length,
-      markerKinds: { measuredSpheres: anchors.counts.measuredSpheres, passMeanRings: ringCount },
-      offsetLines: anchors.counts.offsetLines,
-      missLines: anchors.counts.missLines,
-      missLabels: anchors.counts.missLabels,
-      offsetLabels: anchors.counts.offsetLabels,
+      markerKinds: {
+        measuredSpheres: anchors.counts.measuredSpheres,
+        referenceMeasuredSpheres: referenceAnchors.counts.measuredSpheres,
+      },
       legsVisible: checkboxes.legs.checked,
       legsToggleDisabled: checkboxes.legs.disabled,
+      // 층마다 다리가 실제로 보이는가. 한쪽 판정으로 양쪽을 켜면 없는 자세를 그림이 주장한다.
+      legsShownByLayer: { query: legsShown(), reference: checkboxes.legs.checked && legsAllowed.reference },
       visibleBones: visibleBoneNames(),
-      visiblePlaceholderBones: visiblePlaceholderBones(),
-      placeholderBoneLengths: (() => {
-        const out = {};
-        layerGroups.query.traverse((child) => {
-          if (child.userData.kind === "placeholder-bone") out[child.userData.name] = child.userData.length;
-        });
-        return out;
-      })(),
+      // 관절 진하기가 서버 값에 실제로 닿았는가(0~1). 눈금은 `deviation.joint_max_m`이다.
+      jointDeviations: visibleJointDeviations(),
+      deviation: deviation === null ? null : {
+        basis: deviation.basis,
+        jointMaxM: deviation.joint_max_m ?? null,
+        markerMaxM: deviation.marker_max_m ?? null,
+        jointCount: Object.keys(deviation.joints ?? {}).length,
+        markers: deviation.markers ?? {},
+      },
+      referenceJointCount: Object.keys(referenceJoints).length,
       notesCollapsed: moreLines,
       // 층마다 씬에 실제로 올라간 객체 수. 같은 대상을 다시 그리면(기준을 넘기든 [평가]를 다시 누르든)
       // 이 수가 **변하지 않아야** 한다 — 변하면 이전 층을 지우지 않고 쌓은 것이다.
@@ -1897,6 +1934,15 @@ function mount(THREE, container) {
         serverMaxKeptLiftMm: view.stroke?.max_kept_lift_mm ?? null,
         note: view.stroke?.note ?? null,
       },
+      // 기준 스트로크도 같은 규칙으로 그려졌는가(S2). 서버가 준 구간 수와 같아야 한다.
+      referenceStroke: {
+        runs: referenceStrokeGroup.runs,
+        segments: referenceStrokeGroup.segments,
+        serverRuns: Array.isArray(view.reference_stroke?.runs) ? view.reference_stroke.runs.length : 0,
+        serverPoints: view.reference_stroke?.point_count ?? null,
+      },
+      strokeColors: { query: STROKE_COLOR.query, reference: STROKE_COLOR.reference },
+      trackColors: { query: LAYER_COLOR.query, reference: LAYER_COLOR.reference },
       layerTrackLines: {
         query: countKind(layerGroups.query, "measured-layer-line"),
         reference: countKind(layerGroups.reference, "measured-layer-line"),

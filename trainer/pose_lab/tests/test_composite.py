@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 level_mesh = importlib.import_module("level_mesh")
 world_axes = importlib.import_module("world_axes")
 
-from trainer.pose_lab import composite, service  # noqa: E402
+from trainer.pose_lab import body_proportions, composite, service, skeleton  # noqa: E402
 from trainer.pose_lab.tests import test_scoring_isolation as isolation  # noqa: E402
 
 
@@ -238,6 +238,30 @@ def test_floor_comment_can_fail_when_a_number_drifts() -> None:
     assert abs(real - drifted) > FLOOR_COMMENT_TOL_M
 
 
+def _standing_legs_for_level3() -> tuple[object, float]:
+    """레벨 3 실데이터 한 패스의 자리표시 다리와 그 레벨이 고른 바닥면 높이.
+
+    `service._fit_view`가 예전에 하던 것과 **같은 호출**이다(관절·리그 오프셋·착탄 방향·바닥면).
+    화면은 더 이상 이 다리를 그리지 않지만 `skeleton.standing_legs`의 주석이 아직 숫자를
+    주장하므로, 그 숫자를 여기서 다시 잰다.
+    """
+    pose_fk_csv = importlib.import_module("pose_fk_csv")
+    source, _kwargs = isolation._source_for({"name": "real"})  # noqa: SLF001
+    ref = service.PassRef(worker="김경호", date="20250831", level="3", session="1000391_1", pass_index=0)
+    raw = source.load(ref)
+    placed = service.placed_mesh("3")
+    geometry = composite.MeshGeometry.from_mesh(placed.mesh.vertices, placed.mesh.triangles)
+    floor = composite.floor_vertical(geometry)
+    block = service.skeleton_block(raw, geometry=geometry)
+    offsets = body_proportions.rig_offsets(pose_fk_csv.bind_offsets(raw.rows[0]))
+    hit = block.representative.frame.hit
+    pelvis = block.joints["Pelvis"]
+    forward = [hit[i] - pelvis[i] for i in range(3)]
+    legs = skeleton.standing_legs(block.joints, offsets, forward, floor=floor)
+    assert legs is not None
+    return legs, floor
+
+
 def test_level3_penetration_numbers_in_the_comments_match_the_code() -> None:
     """주석이 적은 "레벨 3에서 발이 바닥면보다 0.540m 아래" 세 숫자를 실제 배치로 다시 잰다.
 
@@ -250,19 +274,18 @@ def test_level3_penetration_numbers_in_the_comments_match_the_code() -> None:
     leg_source = (_SOURCE_DIR / "skeleton.py").read_text(encoding="utf-8")
     leg_gap_said = comment_numbers(leg_source, r"발이 바닥면 (\d\.\d{3})m 아래")[0]
 
-    case = next(c for c in isolation._cases() if c["name"] == "real_L3_kkh_1000391_1_0")  # noqa: SLF001
-    legs = isolation._run(case, include_view=True)["view"]["fit"]["legs"]  # noqa: SLF001
+    # 자리표시 다리는 3D 화면에서 사라졌지만(S4) `skeleton.standing_legs`는 진단용 접촉 시트가
+    # 그대로 쓴다. 그래서 그 함수를 **직접** 불러 잰다 — 주석이 숫자를 계속 주장하는 한 검사도 남는다.
+    placeholder, floor = _standing_legs_for_level3()
     up = np.asarray(world_axes.UP, dtype=float)
-    placeholder = legs["placeholder_joints"]
-    # 다리는 리그 제 길이로 내린다(배율 없음) — 화면에 그려지는 발이 곧 리그 길이 발이다.
+    # 다리는 리그 제 길이로 내린다(배율 없음).
     rig_feet = [
-        float(np.dot(np.asarray(placeholder[ankle], dtype=float), up))
+        float(np.dot(np.asarray(placeholder.joints[ankle], dtype=float), up))
         for ankle in ("LeftFoot", "RightFoot")
     ]
-    floor = legs["floor_vertical"]
     lowest = min(rig_feet)
-    # 서버가 낸 "발이 바닥면보다 얼마나 아래인가"도 같은 값이어야 한다(라벨과 출처가 같은지).
-    assert abs(legs["feet_below_floor_m"] - (floor - lowest)) < 1e-9, legs["feet_below_floor_m"]
+    # 함수가 낸 "발이 바닥면보다 얼마나 아래인가"도 같은 값이어야 한다(라벨과 출처가 같은지).
+    assert abs(placeholder.feet_below_floor_m - (floor - lowest)) < 1e-9, placeholder.feet_below_floor_m
 
     assert abs(floor - floor_said) <= FLOOR_COMMENT_TOL_M, (floor, floor_said)
     assert abs(lowest - foot_said) <= FLOOR_COMMENT_TOL_M, (lowest, foot_said)

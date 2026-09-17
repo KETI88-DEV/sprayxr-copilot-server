@@ -96,9 +96,15 @@ def legacy_measured(measured: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+# 기준 층에도 스켈레톤(joints/bones)이 실린 뒤로, 층 전체를 통째로 비교하면 표시 필드가 추가된 것만으로
+# 채점 격리가 깨진 것처럼 보인다. 질의 층을 여기서 아예 빼 둔 것과 같은 이유다 — 비교 대상은 채점이 보는
+# **궤적 점**이지 화면이 얹은 기하가 아니다. 점 키는 `_world_layer`가 만드는 넷 전부다.
+LEGACY_LAYER_POINTS = ("head", "right", "left", "hit")
+
+
 def legacy_view(view: dict[str, Any]) -> dict[str, Any]:
     return {
-        "view_reference": view["layers"]["reference"],
+        "view_reference": {key: view["layers"]["reference"][key] for key in LEGACY_LAYER_POINTS},
         "view_corrected": view["layers"]["corrected"],
         "view_corrections_legacy": [
             {key: arrow[key] for key in LEGACY_CORRECTION_KEYS} for arrow in view["corrections"]
