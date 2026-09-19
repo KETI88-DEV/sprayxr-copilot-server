@@ -744,6 +744,9 @@ FIT_NOTES: Final[dict[str, str]] = {
 LEGEND_NOTES: Final[tuple[str, ...]] = (
     "대상(파랑)·기준(보라) 두 자세를 겹쳐 그립니다",
     "관절·뼈는 아바타 추정(속 빈 표식)이고, 실측은 머리(HMD)·건·플래쉬 셋뿐(층 색으로 채운 구체)입니다",
+    # 자리표시 다리(B)가 기본 표시로 돌아왔으므로 범례가 그 부호를 말해야 한다 — 점선은 "재지 않은
+    # 것"이라는 뜻이고, 화면이 그렇게 말하지 않으면 그림이 재지 않은 것을 잰 것처럼 보이게 된다.
+    "점선 다리는 자리표시입니다(측정 아님) — 다리에는 추적 장치가 없습니다",
 )
 
 def _legs_shown(fit: Mapping[str, object] | None) -> bool:
@@ -860,28 +863,52 @@ LEG_SEARCH_MAX: Final = 120
 
 # 다리 고지.
 #
-# **곧게 선 자리표시 다리는 기본에서 없앴다.** 그것은 중립적 기본값이 아니라 자리표시로 위장한
-# 거짓 주장이었다: 고른 바닥면 위 머리 실측 높이가 L1 1.51m(서 있음) · L3 0.70m · L6 0.88m이고,
-# 그 세션들에서 머리·왼손 정렬 오차가 평소 50~90mm에서 300mm로 치솟는다 — 작업자는 앉거나 깊게
-# 쭈그리고 있다. 사용자도 "앉아서 칠하는 자세도 많은데(특히 좁은 공간의 경우) 다리를 전부 펴도록
-# 만들어 놔서 어색함"이라고 했다. 곧게 세우면 화면이 없는 자세를 주장한다.
+# **곧게 선** 자리표시 다리는 기본이 아니다. 곧게 세우면 화면이 없는 자세를 주장한다: 위 세 패스의
+# 대표 프레임에서 고른 바닥면 위 머리 실측 높이가 L1 1.51m(서 있음) · L3 0.70m · L6 0.88m이고,
+# **이 패스들에서** 작업자는 앉거나 깊게 쭈그리고 있다(머리·왼손 정렬 오차도 평소 50~90mm에서
+# 300mm로 치솟는다). 사용자도 "앉아서 칠하는 자세도 많은데(특히 좁은 공간의 경우) 다리를 전부
+# 펴도록 만들어 놔서 어색함"이라고 했다.
 #
-# 그래서 이제 둘 중 하나다: IK 다리가 해부학 범위 안이면(`skeleton.leg_check`) **흐리게** 그리고,
-# 아니면 **그리지 않고 왜 없는지 말한다**. 없는 다리를 지어내지 않는다.
+# 다만 그것은 **이 패스들의 사실이지 레벨의 사실이 아니다** — 같은 면 위 레벨 중앙값은 L1 1.534m ·
+# L3 1.450m · L6 1.172m이고 p95는 모든 레벨에서 선 키를 회복한다(`composite.py`의 바닥 주석).
+# 고른 면은 지면이 맞다.
+#
+# 그래서 기본은 **자리표시 다리**다(B): 무릎을 접어 발을 그 바닥면에 세우고(`standing_legs`의
+# `reach_floor=True`), 점선으로 그리고, 고지가 "측정 아님"을 먼저 말한다. 엉덩이가 리그 다리보다
+# 높아 닿지 못하면 늘리지 않고 **닿지 않는다고 적는다**. IK 다리는 해부학 범위 안일 때 토글로 본다.
 # 고지는 **어느 몸의 다리인지**를 말한다({who} = 대상 / 기준 / 대상·기준). 두 층의 `leg_check`
 # 판정은 자주 갈린다 — 자동 기준으로 맺은 24쌍 중 10쌍(41.7%)에서 갈렸다. 질의 고지만 싣던
 # 동안에는 화면이 그림과 반대되는 말을 했다(김경호 L1 #9: 기준 다리 뼈 8개가 그려져 있는데
 # "다리는 그리지 않았습니다"라고 적혔다).
-LEGS_IK_SHOWN_NOTE: Final = "{who} 다리는 추적 장치 없이 IK가 지은 자세라 흐리게 그렸습니다."
-LEGS_IK_PICKED_NOTE: Final = (
-    "{who} 다리는 추적 장치 없이 IK가 지은 자세라 흐리게 그렸습니다 — 범위 안인 프레임"
-    "(분사 구간 가운데에서 {k}프레임)을 대표로 골랐습니다."
-)
-LEGS_HIDDEN_NOTE: Final = (
-    "{who} 다리는 그리지 않았습니다 — 추적 장치가 없고, 이 패스의 IK 다리가 해부학 범위를 벗어났습니다."
-)
+# IK 다리는 이제 **토글**이다(B). 기본 그림이 자리표시이므로 IK 고지는 따로 선 문장이 아니라 위
+# 자리표시 고지에 붙는 꼬리다 — 토글을 켤 수 있는지, 없다면 왜 없는지를 그 자리에서 말한다.
+# 토글이 잠겨 있는데 이유가 화면 어디에도 없으면 고장난 것처럼 읽힌다(그 전 판이 그랬다).
+LEGS_IK_AVAILABLE_SUFFIX: Final = " '다리(IK)'를 켜면 시뮬레이터가 지은 다리를 봅니다."
+LEGS_IK_OUT_OF_RANGE_SUFFIX: Final = " '다리(IK)'는 이 패스에서 해부학 범위를 벗어나 켤 수 없습니다."
 # 다리 관절이 아예 없는 리그(다리 컬럼 없음)의 고지.
 LEGS_NO_JOINTS_NOTE: Final = "{who} 패스에는 다리 관절이 없어 다리를 그리지 않았습니다."
+
+# 자리표시 다리 고지(B). 기본 표시가 다시 자리표시 다리가 됐으므로, 화면은 **그것이 자리표시라는
+# 것**을 먼저 말해야 한다 — 재지 않은 것을 잰 것처럼 보이게 하지 않는다는 이 저장소의 규칙이다.
+#
+# 닿을 때와 못 닿을 때를 **둘 다** 말한다. 못 닿는 것을 숨기면 화면이 "발이 바닥에 있다"는 없는
+# 사실을 주장하게 된다: 실측으로 김경호 L1 첫 패스는 엉덩이가 바닥면 위 1.045m인데 리그 다리는
+# 0.833m라, 닿게 하려면 1.25배로 늘려야 한다(줄여서 난쟁이를 만든 옛 배율과 똑같은 거짓말이다).
+# 숫자 자리({floor}·{gap}·{leg})는 서버가 채워 넣고 `{who}`만 층 이름으로 남긴다 — 화면은 이
+# 문자열을 그대로 쓰고 다시 계산하지 않는다.
+LEGS_PLACEHOLDER_ON_FLOOR_NOTE: Final = (
+    "{who} 다리는 자리표시입니다(측정 아님) — 추적 장치가 없어 발을 바닥면(수직 {floor}m)에 세우고 "
+    "남는 길이는 무릎으로 접었습니다. 뼈 길이는 리그 그대로입니다."
+)
+LEGS_PLACEHOLDER_OFF_FLOOR_NOTE: Final = (
+    "{who} 다리는 자리표시입니다(측정 아님) — 엉덩이가 리그 다리({leg}m)보다 {gap}m 높아 발이 "
+    "바닥면(수직 {floor}m)에 닿지 않습니다. 닿추려고 다리 길이를 바꾸지 않았습니다."
+)
+# 바닥면을 못 고른 레벨(벽 메시 없음)의 자리표시 고지. 바닥이 없으면 세울 자리도 없다.
+LEGS_PLACEHOLDER_NO_FLOOR_NOTE: Final = (
+    "{who} 다리는 자리표시입니다(측정 아님) — 추적 장치가 없고, 이 레벨은 벽 메시가 없어 발을 세울 "
+    "바닥면을 고르지 못했습니다."
+)
 LEG_NOTE_WHO: Final[dict[str, str]] = {"query": "대상", "reference": "기준", "both": "대상·기준"}
 
 # 바닥 기준 머리 높이. 이 한 줄이 "지금 서 있나 앉아 있나"를 말한다 — 문턱은 두지 않고 실측 높이를
@@ -1085,6 +1112,23 @@ def _head_above_m(placed: skeleton.Placement, floor: float) -> float | None:
     return None
 
 
+def _placeholder_legs(
+    placed: skeleton.Placement,
+    representative: Representative,
+    offsets: Mapping[str, Vec3],
+    floor: float | None,
+) -> skeleton.PlaceholderLegs | None:
+    """이 배치의 자리표시 다리(B). 바닥면이 있으면 발을 그 면에 세운다(무릎이 남는 길이를 접는다).
+
+    발끝 방향은 대표 프레임의 **골반→착탄점** 수평 성분이다(진단용 접촉 시트가 쓰던 것과 같은 방향).
+    골반이나 착탄점이 없으면 방향을 지어내지 않고 `None`을 넘겨 발끝 관절을 싣지 않는다.
+    """
+    pelvis = placed.joints.get("Pelvis")
+    hit = representative.frame.hit
+    forward = None if pelvis is None or hit is None else [hit[i] - pelvis[i] for i in range(3)]
+    return skeleton.standing_legs(placed.joints, offsets, forward, floor=floor, reach_floor=True)
+
+
 def _torso_length_m(offsets: Mapping[str, Vec3]) -> float:
     return body_proportions.torso_length_m(offsets)
 
@@ -1111,20 +1155,30 @@ def _fit_view(
         notes.append(f"몸의 수직은 중력 방향으로 맞춘 값입니다(보정 {gravity:.0f}°).")
     note_keys.append("gravity")
 
-    # --- 다리(S4) ---------------------------------------------------------------
-    # 곧게 선 자리표시는 없다. IK 다리가 범위 안이면 흐리게, 아니면 안 그리고 이유를 말한다.
+    # --- 다리(B) -----------------------------------------------------------------
+    # 기본 표시는 **자리표시 다리**다(사용자 정책): 점선으로 그리고, 벽 메시가 있으면 발을 바닥면에
+    # 세우며(무릎이 남는 길이를 접는다), 시뮬레이터 IK 다리는 토글로 본다. 자리표시는 측정이 아니므로
+    # 고지가 **먼저 그 사실을 말한다** — 닿지 못한 경우에도 숨기지 않고 얼마나 모자라는지 적는다.
     legs = None if chosen is None else chosen.legs
     head_above = None if floor is None else _head_above_m(placed, floor)
-    # 고지는 **이 층의 판정**을 말한다. 두 층의 leg_check가 갈리는 일이 잦으므로(자동 기준 24쌍
-    # 중 10쌍) 질의 것만 싣던 동안에는 화면이 그림과 반대되는 말을 했다. `{who}`는 층 이름이고,
-    # 두 층이 같은 문장이면 뷰가 "대상·기준" 한 줄로 합친다.
-    if legs is None:
+    placeholder = _placeholder_legs(placed, representative, offsets, floor)
+    # 고지는 **이 층의 판정**을 말한다({who} = 대상/기준). 두 층이 같은 문장이면 뷰가 한 줄로 합친다.
+    if legs is None or placeholder is None:
         leg_template = LEGS_NO_JOINTS_NOTE
-    elif legs.plausible:
-        picked = chosen is not None and chosen.offset_frames > 0
-        leg_template = LEGS_IK_PICKED_NOTE.replace("{k}", str(chosen.offset_frames)) if picked else LEGS_IK_SHOWN_NOTE
+    elif placeholder.floor_vertical is None:
+        leg_template = LEGS_PLACEHOLDER_NO_FLOOR_NOTE
+    elif placeholder.reaches_floor:
+        leg_template = LEGS_PLACEHOLDER_ON_FLOOR_NOTE.replace("{floor}", f"{placeholder.floor_vertical:.2f}")
     else:
-        leg_template = LEGS_HIDDEN_NOTE
+        gap = (placeholder.hip_above_floor_m or 0.0) - (placeholder.rig_leg_length_m or 0.0)
+        leg_template = (
+            LEGS_PLACEHOLDER_OFF_FLOOR_NOTE.replace("{floor}", f"{placeholder.floor_vertical:.2f}")
+            .replace("{leg}", f"{placeholder.rig_leg_length_m:.2f}")
+            .replace("{gap}", f"{gap:.2f}")
+        )
+    # IK 토글을 켤 수 있는지를 같은 줄에서 말한다 — 잠긴 토글의 이유가 화면에 없으면 안 된다.
+    if legs is not None and placeholder is not None:
+        leg_template += LEGS_IK_AVAILABLE_SUFFIX if legs.plausible else LEGS_IK_OUT_OF_RANGE_SUFFIX
     notes.append(leg_template.format(who=who))
     note_keys.append("legs")
 
@@ -1203,13 +1257,29 @@ def _fit_view(
             "limits": dict(skeleton.LEG_LIMITS),
             "frame_offset": chosen.offset_frames,
             "searched_frames": chosen.searched,
-            # 기본 표시: 범위 안 IK 다리(흐리게), 아니면 숨김. 자리표시 다리는 더 이상 없다.
-            "display_default": "ik" if legs.plausible else "hidden",
+            # 기본 표시는 **자리표시 다리**다(B). IK는 토글로만 보고, 자리표시를 세울 수 없을 때만 숨긴다.
+            "display_default": "placeholder" if placeholder is not None else "hidden",
+            # 자리표시 기하(월드). 화면은 이 점을 **점선**으로 잇고 "측정 아님"이라고 적는다.
+            # 닿았는지와 그 이유가 되는 두 길이를 같이 싣는다 — 화면이 숫자를 다시 만들지 않는다.
+            "placeholder_joints": None
+            if placeholder is None
+            else {name: list(position) for name, position in placeholder.joints.items()},
+            # 자리표시 뼈의 짝도 **서버가 준다** — 화면이 리그 이름으로 연결 규칙을 지어내지 않는다.
+            "placeholder_bones": None
+            if placeholder is None
+            else [[a, b] for chain in skeleton.PLACEHOLDER_LEG_CHAIN for a, b in zip(chain, chain[1:])],
+            "placeholder_reaches_floor": None if placeholder is None else placeholder.reaches_floor,
+            "hip_above_floor_m": None if placeholder is None else placeholder.hip_above_floor_m,
+            "rig_leg_length_m": None if placeholder is None else placeholder.rig_leg_length_m,
             "floor_vertical": floor,
             "head_above_floor_m": head_above,
         },
-        # IK 다리를 기본으로 켜는가. 범위 안일 때만이다.
-        "legs_visible_default": bool(legs is not None and legs.plausible),
+        # IK 다리를 기본으로 켜는가 — **아니다**(B). 기본은 자리표시이고 IK는 토글이다.
+        # 이름이 곧 뜻이어야 하므로 "다리가 보이는가"와 섞지 않는다: 다리는 자리표시로 늘 보인다.
+        "legs_visible_default": False,
+        # 그 토글을 쓸 수 있는가. IK 다리가 해부학 범위 안일 때만이다 — 범위 밖 다리를 "이렇게 섰다"로
+        # 그리지 않는다는 판단(S4)은 그대로 두고, 다리가 아예 없던 문제만 자리표시로 고친다.
+        "legs_toggle_enabled": bool(legs is not None and legs.plausible),
     }
 
 

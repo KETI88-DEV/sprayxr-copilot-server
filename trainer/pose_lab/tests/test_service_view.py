@@ -769,9 +769,12 @@ def test_deviation_legend_names_a_joint_that_is_on_the_screen(test_mounts) -> No
         source, kwargs, query, reference = _real_pair(level, session, 0)
         view = service.compare(source, query, reference, **kwargs)["view"]
         deviation = view["deviation"]
-        # 이 두 레벨은 두 층 다 다리가 범위 밖이라 다리를 그리지 않는다.
+        # 이 두 레벨은 두 층 다 IK 다리가 해부학 범위 밖이라 **IK 다리**를 그리지 않는다. 자리표시
+        # 다리가 그 자리를 채우지만(B), 눈금은 층끼리 견줄 수 있는 IK 관절에서만 잡는다.
         assert view["fit"]["legs_visible_default"] is False, level
         assert view["reference_fit"]["legs_visible_default"] is False, level
+        assert view["fit"]["legs_toggle_enabled"] is False, level
+        assert view["reference_fit"]["legs_toggle_enabled"] is False, level
         assert deviation["scale_excludes"], level
         legend = deviation["legend"]
         first = legend[0]
@@ -822,24 +825,30 @@ def test_leg_notes_carry_each_layers_own_verdict(test_mounts) -> None:  # noqa: 
     10쌍(41.7%)에서 두 층의 `leg_check` 판정이 갈린다."""
     source, kwargs, query, reference = _real_pair("1", "1000389_1", 9)
     view = service.compare(source, query, reference, **kwargs)["view"]
-    # 이 쌍이 바로 검증 라운드가 잡은 방향이다: 대상은 다리를 안 그리고 기준은 그린다.
-    assert view["fit"]["legs_visible_default"] is False
-    assert view["reference_fit"]["legs_visible_default"] is True
+    # 이 쌍이 바로 검증 라운드가 잡은 방향이다: 대상은 IK가 범위 밖, 기준은 범위 안이다.
+    assert view["fit"]["legs_toggle_enabled"] is False
+    assert view["reference_fit"]["legs_toggle_enabled"] is True
     notes = view["leg_notes"]
     assert len(notes) == 2, notes
-    assert notes[0] == service.LEGS_HIDDEN_NOTE.format(who="대상")
-    assert notes[1].startswith("기준 다리는 추적 장치 없이 IK가 지은 자세라 흐리게 그렸습니다")
+    # 두 줄 다 **자리표시**를 말한다(B) — 다리가 없는 층은 이제 없다. 갈리는 것은 IK 토글 꼬리다.
+    assert all("자리표시입니다(측정 아님)" in line for line in notes), notes
+    assert notes[0].startswith("대상 ") and notes[1].startswith("기준 ")
+    assert notes[0].endswith(service.LEGS_IK_OUT_OF_RANGE_SUFFIX), notes[0]
+    assert notes[1].endswith(service.LEGS_IK_AVAILABLE_SUFFIX), notes[1]
     # 그림과 반대되는 문장이 없다: 다리를 그리는 층의 줄에 "그리지 않았습니다"가 없다.
-    assert "그리지 않았습니다" not in notes[1]
+    assert all("그리지 않았습니다" not in line for line in notes), notes
 
 
 def test_leg_notes_merge_into_one_line_when_both_layers_agree(test_mounts) -> None:  # noqa: ANN001
     """두 층이 같은 문장이면 "대상·기준" 한 줄로 합친다 — 같은 말을 두 번 싣지 않는다."""
     source, kwargs, query, reference = _real_pair("3", "1000391_1", 0)
     view = service.compare(source, query, reference, **kwargs)["view"]
-    assert view["fit"]["legs_visible_default"] is False
-    assert view["reference_fit"]["legs_visible_default"] is False
-    assert view["leg_notes"] == [service.LEGS_HIDDEN_NOTE.format(who="대상·기준")]
+    assert view["fit"]["legs_toggle_enabled"] is False
+    assert view["reference_fit"]["legs_toggle_enabled"] is False
+    merged = view["leg_notes"]
+    assert len(merged) == 1, merged
+    assert merged[0].startswith("대상·기준 ")
+    assert "자리표시입니다(측정 아님)" in merged[0], merged
 
 
 def test_reference_stroke_comes_from_the_reference_pass_not_the_query(test_mounts) -> None:  # noqa: ANN001
@@ -1009,63 +1018,69 @@ def test_skeleton_frame_picks_the_nearest_frame_with_anatomical_legs(test_mounts
     block = service.skeleton_block(raw)
     assert block.fit["frame_index"] == chosen.representative.frame.index
     assert block.fit["legs"]["plausible"] is True and block.fit["legs"]["frame_offset"] == 3
-    # 기본 표시는 **범위 안 IK 다리**다(S4) — 곧게 선 자리표시는 더 이상 없다.
-    assert block.fit["legs"]["display_default"] == "ik"
-    assert block.fit["legs_visible_default"] is True
-    assert service.LEGS_IK_PICKED_NOTE.replace("{k}", "3") == block.fit["leg_note_template"]
+    # 기본 표시는 **자리표시 다리**다(B) — IK가 범위 안이어도 기본은 자리표시이고, IK는 토글이다.
+    assert block.fit["legs"]["display_default"] == "placeholder"
+    assert block.fit["legs_visible_default"] is False
+    assert block.fit["legs_toggle_enabled"] is True
+    assert block.fit["leg_note_template"].endswith(service.LEGS_IK_AVAILABLE_SUFFIX)
     assert any(n == block.fit["leg_note_template"].format(who=block.fit["leg_note_who"]) for n in block.fit["notes"])
     frame = chosen.representative.frame
     markers = {a["point"]: a["measured_marker"] for a in block.fit["anchors"]}
     assert markers["head"] == list(frame.head) and markers["right"] == list(frame.right)
 
 
-def test_fit_hides_legs_by_default_when_no_frame_is_anatomical(test_mounts) -> None:  # noqa: ANN001
+def test_fit_keeps_the_ik_toggle_shut_when_no_frame_is_anatomical(test_mounts) -> None:  # noqa: ANN001
+    """IK가 범위 밖이면 **토글이 잠긴다**. 다리 자체는 자리표시로 그려지므로 사라지지 않는다(B)."""
     rows, _middle = _rows_with_leg_poses(41, ())
     raw = RawPass(rows=rows)
     block = service.skeleton_block(raw)
     legs = block.fit["legs"]
-    assert legs["plausible"] is False and block.fit["legs_visible_default"] is False
+    assert legs["plausible"] is False and block.fit["legs_toggle_enabled"] is False
+    assert block.fit["legs_visible_default"] is False
+    assert legs["display_default"] == "placeholder"
     assert legs["joints"] == list(skeleton.LEG_JOINTS)
     assert legs["frame_offset"] == 0
     assert block.fit["frame_index"] == service.representative_frame(raw).frame.index
-    assert block.fit["leg_note_template"] == service.LEGS_HIDDEN_NOTE
-    assert any(n == service.LEGS_HIDDEN_NOTE.format(who=block.fit["leg_note_who"]) for n in block.fit["notes"])
+    assert block.fit["leg_note_template"].endswith(service.LEGS_IK_OUT_OF_RANGE_SUFFIX)
+    assert "자리표시입니다(측정 아님)" in block.fit["leg_note_template"]
     assert "아바타 추정" in block.fit["notes"][0] and "중력 방향" in block.fit["notes"][1]
 
 
-def test_no_standing_placeholder_legs_and_note_keys_name_every_note(test_mounts) -> None:  # noqa: ANN001
-    """곧게 선 자리표시 다리는 **기본에서 사라졌다**(S4). 그것은 중립적 기본값이 아니라 자리표시로
-    위장한 거짓 주장이었다 — 고른 면 위 머리 실측 높이가 L3 0.70m·L6 0.88m로 앉거나 쭈그린 높이인데
-    화면은 곧게 선 사람을 그렸다. notes는 위치가 아니라 `note_keys`로 짝짓는다."""
+def test_placeholder_legs_are_drawn_and_the_screen_calls_them_a_placeholder(test_mounts) -> None:  # noqa: ANN001
+    """자리표시 다리가 기본 표시로 돌아왔다(B). **그리는 것과 말하는 것이 같아야 한다** —
+    재지 않은 것을 잰 것처럼 보이게 하지 않는다는 규칙이라, 그릴 기하를 싣는 바로 그 응답이
+    "측정 아님"도 같이 말해야 한다. notes는 위치가 아니라 `note_keys`로 짝짓는다."""
     rows, _middle = _rows_with_leg_poses(41, ())
     block = service.skeleton_block(RawPass(rows=rows))
     fit = block.fit
     legs = fit["legs"]
     assert legs["plausible"] is False
-    assert legs["display_default"] == "hidden"
-    # 자리표시 다리 필드 자체가 없다 — 화면이 그릴 수 있는 길이 남아 있으면 안 된다.
-    assert "placeholder_joints" not in legs and "placeholder_bones" not in legs
-    assert "placeholder_feet" not in legs
+    assert legs["display_default"] == "placeholder"
+    # 그릴 기하가 실린다 — 관절 이름도 뼈 짝도 서버가 준다(화면이 지어내지 않는다).
+    assert legs["placeholder_joints"] and legs["placeholder_bones"]
+    assert set(legs["placeholder_joints"]) <= set(skeleton.LEG_JOINTS)
+    assert legs["rig_leg_length_m"] > 0.0
     assert len(fit["note_keys"]) == len(fit["notes"])
     assert fit["note_keys"][:4] == ["avatar_estimate", "gravity", "legs", "torso"]
     leg_note = fit["notes"][fit["note_keys"].index("legs")]
-    assert leg_note == service.LEGS_HIDDEN_NOTE.format(who=fit["leg_note_who"])
-    assert "자리표시" not in leg_note and "곧게" not in leg_note
+    # 기하를 실으면서 "측정 아님"을 말하지 않는 응답은 이 검사를 통과하지 못한다.
+    assert "자리표시입니다(측정 아님)" in leg_note, leg_note
     assert set(fit["notes_collapsed"]) <= set(fit["note_keys"])
-    # 무엇이 추정인지·다리가 왜 없는지는 접지 않는다.
+    # 무엇이 추정인지·다리가 무엇인지는 접지 않는다.
     assert "legs" not in fit["notes_collapsed"] and "avatar_estimate" not in fit["notes_collapsed"]
 
 
-def test_plausible_ik_legs_are_shown_faded_instead_of_a_placeholder(test_mounts) -> None:  # noqa: ANN001
-    """IK 다리가 해부학 범위 안이면 그것을 그린다(흐리게). 지어낸 다리로 덮지 않는다."""
+def test_plausible_ik_legs_stay_behind_a_toggle_not_the_default(test_mounts) -> None:  # noqa: ANN001
+    """IK 다리가 해부학 범위 안이어도 **기본은 자리표시**다(사용자 정책 B). IK는 토글로 본다."""
     rows, _middle = _rows_with_leg_poses(41, (0,))
     fit = service.skeleton_block(RawPass(rows=rows)).fit
     assert fit["legs"]["plausible"] is True
-    assert fit["legs"]["display_default"] == "ik"
-    assert fit["legs_visible_default"] is True
+    assert fit["legs"]["display_default"] == "placeholder"
+    assert fit["legs_visible_default"] is False
+    assert fit["legs_toggle_enabled"] is True
     leg_note = fit["notes"][fit["note_keys"].index("legs")]
-    assert leg_note == service.LEGS_IK_SHOWN_NOTE.format(who=fit["leg_note_who"])
-    assert "자리표시" not in leg_note
+    assert "자리표시입니다(측정 아님)" in leg_note
+    assert leg_note.endswith(service.LEGS_IK_AVAILABLE_SUFFIX)
 
 
 def test_low_confidence_marks_the_right_forearm_when_the_grip_limit_is_exceeded(test_mounts) -> None:  # noqa: ANN001
@@ -1212,11 +1227,12 @@ def _head_vertical(fit: dict) -> float:
     return world_axes.vertical_of(tuple(head["measured_marker"]))
 
 
-def test_no_standing_placeholder_survives_anywhere_in_the_view(test_mounts) -> None:  # noqa: ANN001
-    """어떤 바닥 높이를 줘도 자리표시 다리는 다시 살아나지 않는다(S4).
+def test_placeholder_legs_never_scale_the_rig_whatever_the_floor(test_mounts) -> None:  # noqa: ANN001
+    """바닥면을 어디에 두든 자리표시 다리의 **뼈 길이는 리그 그대로**다(B).
 
-    옛 코드는 발을 고른 면에 닿추려고 다리 길이에 배율을 먹였다가(레벨 3에서 0.35배 — 난쟁이),
-    배율을 없앤 뒤에도 **곧게 선 다리**를 기본으로 그렸다. 두 번 다 없는 자세를 그림이 주장했다.
+    옛 코드는 발을 고른 면에 닿추려고 다리 길이에 배율을 먹였고(레벨 3에서 0.35배 — 난쟁이),
+    그것이 자리표시를 통째로 없앤 이유였다. 이제 닿추는 일은 **무릎 각도**가 하므로 길이는 움직이지
+    않는다 — 바닥을 발보다 한참 아래로 내려도, 다리로 닿을 만큼 올려도 같은 길이여야 한다.
     """
     rows, _middle = _rows_with_leg_poses(41, ())
     raw = RawPass(rows=rows)
@@ -1229,10 +1245,29 @@ def test_no_standing_placeholder_survives_anywhere_in_the_view(test_mounts) -> N
     assert fit["legs"]["floor_vertical"] == pytest.approx(floor)
     assert set(fit["legs"]) == {
         "plausible", "joints", "checks", "limits", "frame_offset", "searched_frames",
-        "display_default", "floor_vertical", "head_above_floor_m",
+        "display_default", "placeholder_joints", "placeholder_bones", "placeholder_reaches_floor",
+        "hip_above_floor_m", "rig_leg_length_m", "floor_vertical", "head_above_floor_m",
     }
-    assert fit["legs"]["display_default"] in {"ik", "hidden"}
-    # 바닥면을 받아도 실측 마커·대표 프레임은 그대로다 — 바닥은 문구만 바꾼다.
+    assert fit["legs"]["display_default"] == "placeholder"
+
+    def bone_lengths(block: dict) -> dict[str, float]:
+        joints = block["legs"]["placeholder_joints"]
+        return {
+            f"{a}>{b}": math.dist(joints[a], joints[b])
+            for a, b in block["legs"]["placeholder_bones"]
+            if a in joints and b in joints
+        }
+
+    far = service.skeleton_block(raw, geometry=_floor_geometry(floor - 5.0)).fit
+    near = service.skeleton_block(raw, geometry=_floor_geometry(_head_vertical(loose) - 0.60)).fit
+    # 너무 낮은 바닥에는 닿을 수 없다 — 닿추려고 늘리지 않고 닿지 않았다고 말한다.
+    assert far["legs"]["placeholder_reaches_floor"] is False
+    base = bone_lengths(fit)
+    assert base
+    for other in (far, near):
+        for name, length in bone_lengths(other).items():
+            assert length == pytest.approx(base[name], abs=1e-9), name
+    # 바닥면을 받아도 실측 마커·대표 프레임은 그대로다 — 바닥은 자리표시와 문구만 바꾼다.
     assert fit["frame_index"] == loose["frame_index"]
     assert [a["measured_marker"] for a in fit["anchors"]] == [a["measured_marker"] for a in loose["anchors"]]
 

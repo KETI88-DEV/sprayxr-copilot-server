@@ -357,6 +357,18 @@ def test_floor_choice_comment_reports_what_stands_on_it() -> None:
     # 얼마나 아래인가"의 산포를 설명할 수 없다.
     assert len(torso_notes) == 1, torso_notes
 
+    # --- 숫자에 붙은 **라벨**도 검사한다 ------------------------------------------------
+    # 위 세 줄은 재현되는 값이지만, 그것을 "레벨의 성질"로 읽으면 "바닥이 틀렸다"는 결론이 나온다 —
+    # 실제로 그 오독이 자리표시 다리를 없앴다. 그래서 주석이 스스로 "한 패스"라고 말하는지, 그리고
+    # 레벨 중앙값을 같이 적어 두 라벨이 **다른 양**임을 보이는지까지 본다.
+    assert "한 패스의 대표 프레임 한 장" in source
+    median_line = next(ln for ln in source.splitlines() if "레벨 중앙값" in ln)
+    medians = {level: float(value) for level, value in re.findall(r"L(\d+) (\d\.\d{3})m", median_line)}
+    assert set(medians) == {"1", "3", "6"}, medians
+    # 중앙값이 이 패스 값과 **다르다**. 같다면 "한 패스"라는 라벨을 붙일 이유도 없다.
+    for level in ("1", "3", "6"):
+        assert abs(medians[level] - heads[level]) > FLOOR_COMMENT_TOL_M, (level, medians[level], heads[level])
+
 
 def test_floor_choice_comment_can_fail_when_a_number_drifts() -> None:
     """주석의 머리 높이를 L3에서 L1 값으로 바꿔 적으면 위 검사가 실제로 잡는다."""
