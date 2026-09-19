@@ -880,11 +880,47 @@ LEG_SEARCH_MAX: Final = 120
 # 판정은 자주 갈린다 — 자동 기준으로 맺은 24쌍 중 10쌍(41.7%)에서 갈렸다. 질의 고지만 싣던
 # 동안에는 화면이 그림과 반대되는 말을 했다(김경호 L1 #9: 기준 다리 뼈 8개가 그려져 있는데
 # "다리는 그리지 않았습니다"라고 적혔다).
-# IK 다리는 이제 **토글**이다(B). 기본 그림이 자리표시이므로 IK 고지는 따로 선 문장이 아니라 위
-# 자리표시 고지에 붙는 꼬리다 — 토글을 켤 수 있는지, 없다면 왜 없는지를 그 자리에서 말한다.
-# 토글이 잠겨 있는데 이유가 화면 어디에도 없으면 고장난 것처럼 읽힌다(그 전 판이 그랬다).
+# IK 다리는 이제 **토글**이다(B: "IK 다리는 토글로 볼 수 있게"). 기본 그림이 자리표시이므로 IK
+# 고지는 따로 선 문장이 아니라 위 자리표시 고지에 붙는 꼬리다.
+#
+# **토글은 IK 다리가 있으면 열린다.** 예전에는 `leg_check.plausible`이 거짓이면 잠갔고, 그래서
+# 김경호 L3·L6처럼 쭈그린 패스에서 체크박스가 죽은 채로 남았다(검증 실측 6조합 중 4칸). 범위 밖
+# 다리를 **기본 그림으로** 내세우지 않는다는 판단은 그대로다 — 기본은 여전히 자리표시이고, 범위 밖
+# IK는 사람이 켰을 때만, 한 단계 더 흐리게 나온다. 그리고 어느 검사를 얼마나 벗어났는지를 숫자로
+# 적는다(`leg_range_reason`): 잠긴 컨트롤은 고장으로 읽히고, 범위 밖이라는 사실은 숨기는 것보다
+# 재서 말하는 편이 이 저장소 규칙에 맞는다.
 LEGS_IK_AVAILABLE_SUFFIX: Final = " '다리(IK)'를 켜면 시뮬레이터가 지은 다리를 봅니다."
-LEGS_IK_OUT_OF_RANGE_SUFFIX: Final = " '다리(IK)'는 이 패스에서 해부학 범위를 벗어나 켤 수 없습니다."
+LEGS_IK_OUT_OF_RANGE_SUFFIX: Final = (
+    " '다리(IK)'를 켜면 시뮬레이터가 지은 다리를 보지만, 이 패스의 IK 다리는 해부학 범위 밖입니다"
+    "({why}) — 그래서 켜도 한 단계 더 흐리게 그립니다."
+)
+# 범위 밖 사유에 쓰는 검사 이름. 문턱은 `skeleton.LEG_LIMITS`가 하나의 출처다.
+LEG_CHECK_LABELS: Final[dict[str, str]] = {
+    "knee_flex_deg": "무릎 굴곡",
+    "knee_toe_deg": "무릎-발끝",
+    "toe_splay_deg": "발끝 벌어짐",
+    "leg_tilt_deg": "다리 기울기",
+}
+
+
+def leg_range_reason(legs: skeleton.LegCheck) -> str:
+    """IK 다리가 해부학 범위를 **어느 검사에서 얼마나** 벗어났는가.
+
+    화면이 숫자를 다시 만들지 않도록 서버가 문장을 짓는다. 값도 문턱도 한 출처(`leg_check`·
+    `LEG_LIMITS`)에서 나오므로, 문턱을 바꾸면 이 문장이 같이 바뀐다.
+    """
+    parts: list[str] = []
+    for key, value in legs.as_dict().items():
+        limit = skeleton.LEG_LIMITS.get(key)
+        if limit is None or not isinstance(value, float):
+            continue
+        if not math.isfinite(value):
+            parts.append(f"{LEG_CHECK_LABELS[key]} 값 없음")
+        elif value > limit:
+            parts.append(f"{LEG_CHECK_LABELS[key]} {value:.1f}° > {limit:.0f}°")
+    if legs.legs_crossed:
+        parts.append("두 다리가 교차")
+    return " · ".join(parts) if parts else "범위 밖 검사 없음"
 # 다리 관절이 아예 없는 리그(다리 컬럼 없음)의 고지.
 LEGS_NO_JOINTS_NOTE: Final = "{who} 패스에는 다리 관절이 없어 다리를 그리지 않았습니다."
 
@@ -1176,9 +1212,14 @@ def _fit_view(
             .replace("{leg}", f"{placeholder.rig_leg_length_m:.2f}")
             .replace("{gap}", f"{gap:.2f}")
         )
-    # IK 토글을 켤 수 있는지를 같은 줄에서 말한다 — 잠긴 토글의 이유가 화면에 없으면 안 된다.
+    # IK 토글이 무엇을 보여 주는지 같은 줄에서 말한다 — 범위 밖이면 그 사실과 숫자를 붙인다.
     if legs is not None and placeholder is not None:
-        leg_template += LEGS_IK_AVAILABLE_SUFFIX if legs.plausible else LEGS_IK_OUT_OF_RANGE_SUFFIX
+        leg_template += (
+            LEGS_IK_AVAILABLE_SUFFIX
+            if legs.plausible
+            # `{who}`는 뷰가 층 이름으로 채운다 — `{why}`만 여기서 미리 메운다(format이 모르는 칸).
+            else LEGS_IK_OUT_OF_RANGE_SUFFIX.replace("{why}", leg_range_reason(legs))
+        )
     notes.append(leg_template.format(who=who))
     note_keys.append("legs")
 
@@ -1277,9 +1318,12 @@ def _fit_view(
         # IK 다리를 기본으로 켜는가 — **아니다**(B). 기본은 자리표시이고 IK는 토글이다.
         # 이름이 곧 뜻이어야 하므로 "다리가 보이는가"와 섞지 않는다: 다리는 자리표시로 늘 보인다.
         "legs_visible_default": False,
-        # 그 토글을 쓸 수 있는가. IK 다리가 해부학 범위 안일 때만이다 — 범위 밖 다리를 "이렇게 섰다"로
-        # 그리지 않는다는 판단(S4)은 그대로 두고, 다리가 아예 없던 문제만 자리표시로 고친다.
-        "legs_toggle_enabled": bool(legs is not None and legs.plausible),
+        # 그 토글을 쓸 수 있는가 — **IK 다리가 있으면 쓸 수 있다**(B: "IK는 토글로 볼 수 있게").
+        # 범위 밖인지는 아래 `legs_within_range`가 따로 말한다: 화면은 범위 밖 IK를 한 단계 더
+        # 흐리게 그리고, 고지가 어느 검사를 얼마나 벗어났는지 숫자로 적는다. 기본 그림은 그대로
+        # 자리표시다 — 범위 밖 다리가 **저절로** 나타나는 화면은 없다.
+        "legs_toggle_enabled": legs is not None,
+        "legs_within_range": bool(legs is not None and legs.plausible),
     }
 
 

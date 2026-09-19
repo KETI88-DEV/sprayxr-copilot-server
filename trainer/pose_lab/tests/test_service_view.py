@@ -769,12 +769,14 @@ def test_deviation_legend_names_a_joint_that_is_on_the_screen(test_mounts) -> No
         source, kwargs, query, reference = _real_pair(level, session, 0)
         view = service.compare(source, query, reference, **kwargs)["view"]
         deviation = view["deviation"]
-        # 이 두 레벨은 두 층 다 IK 다리가 해부학 범위 밖이라 **IK 다리**를 그리지 않는다. 자리표시
-        # 다리가 그 자리를 채우지만(B), 눈금은 층끼리 견줄 수 있는 IK 관절에서만 잡는다.
+        # 이 두 레벨은 두 층 다 IK 다리가 해부학 범위 밖이라 **기본 그림**이 자리표시 다리다(B).
+        # IK 토글은 열려 있지만 기본으로 켜지지 않으므로, 눈금은 화면에 있는 관절에서만 잡는다.
         assert view["fit"]["legs_visible_default"] is False, level
         assert view["reference_fit"]["legs_visible_default"] is False, level
-        assert view["fit"]["legs_toggle_enabled"] is False, level
-        assert view["reference_fit"]["legs_toggle_enabled"] is False, level
+        assert view["fit"]["legs_within_range"] is False, level
+        assert view["reference_fit"]["legs_within_range"] is False, level
+        assert view["fit"]["legs_toggle_enabled"] is True, level
+        assert view["reference_fit"]["legs_toggle_enabled"] is True, level
         assert deviation["scale_excludes"], level
         legend = deviation["legend"]
         first = legend[0]
@@ -826,29 +828,101 @@ def test_leg_notes_carry_each_layers_own_verdict(test_mounts) -> None:  # noqa: 
     source, kwargs, query, reference = _real_pair("1", "1000389_1", 9)
     view = service.compare(source, query, reference, **kwargs)["view"]
     # 이 쌍이 바로 검증 라운드가 잡은 방향이다: 대상은 IK가 범위 밖, 기준은 범위 안이다.
-    assert view["fit"]["legs_toggle_enabled"] is False
+    assert view["fit"]["legs_within_range"] is False
+    assert view["reference_fit"]["legs_within_range"] is True
+    # 두 층 다 IK 다리가 있으므로 **토글은 열려 있다**(B). 갈리는 것은 고지의 꼬리다.
+    assert view["fit"]["legs_toggle_enabled"] is True
     assert view["reference_fit"]["legs_toggle_enabled"] is True
     notes = view["leg_notes"]
     assert len(notes) == 2, notes
     # 두 줄 다 **자리표시**를 말한다(B) — 다리가 없는 층은 이제 없다. 갈리는 것은 IK 토글 꼬리다.
     assert all("자리표시입니다(측정 아님)" in line for line in notes), notes
     assert notes[0].startswith("대상 ") and notes[1].startswith("기준 ")
-    assert notes[0].endswith(service.LEGS_IK_OUT_OF_RANGE_SUFFIX), notes[0]
+    # 범위 밖 줄은 `{why}`가 채워져 있어 상수와 글자가 같지 않다 — 앞뒤 토막과 숫자로 확인한다.
+    head, tail = service.LEGS_IK_OUT_OF_RANGE_SUFFIX.split("{why}")
+    assert head in notes[0] and notes[0].endswith(tail), notes[0]
+    assert "°" in notes[0], notes[0]
     assert notes[1].endswith(service.LEGS_IK_AVAILABLE_SUFFIX), notes[1]
     # 그림과 반대되는 문장이 없다: 다리를 그리는 층의 줄에 "그리지 않았습니다"가 없다.
     assert all("그리지 않았습니다" not in line for line in notes), notes
 
 
-def test_leg_notes_merge_into_one_line_when_both_layers_agree(test_mounts) -> None:  # noqa: ANN001
-    """두 층이 같은 문장이면 "대상·기준" 한 줄로 합친다 — 같은 말을 두 번 싣지 않는다."""
+def test_leg_notes_merge_into_one_line_when_both_layers_agree() -> None:
+    """두 층이 **같은 문장**이면 "대상·기준" 한 줄로 합친다 — 같은 말을 두 번 싣지 않는다.
+
+    실데이터로는 이 성질을 더 이상 보일 수 없다: 범위 밖 고지에 층마다 자기 숫자가 붙어 두 문장이
+    갈리기 때문이다(아래 검사). 합치는 규칙 자체는 그대로이므로 여기서 규칙만 따로 고정한다.
+    """
+    same = {"leg_note_template": "{who} 다리는 자리표시입니다(측정 아님)."}
+    merged = service.leg_notes(dict(same), dict(same))
+    assert merged == ["대상·기준 다리는 자리표시입니다(측정 아님)."], merged
+
+
+def test_the_floating_foot_is_the_short_rig_torso_not_short_legs() -> None:
+    """서 있는 패스에서 발이 뜨는 원인을 **가른다**(A/B의 미해결 자리).
+
+    `skeleton.py`의 자리표시 주석이 적은 두 비율(골반→머리 · 골반→발목을 같은 작업자 BVH와 견준
+    값)을 **실제 배치에서 다시 재서** 그 주석과 맞춘다. 다리가 짧은 것이 아니라 몸통이 짧다는 것이
+    이 두 숫자의 뜻이고, 그래서 화면은 다리를 늘리지 않고 틈을 숫자로 말한다.
+
+    **`test_mounts` 픽스처를 쓰지 않는다.** 그 픽스처는 `service.load_mounts`를 합성 장착 상수로
+    바꾸는데, 장착 상수가 바뀌면 골반이 다른 높이에 놓인다 — 같은 패스에서 엉덩이–다리 틈이
+    합성 상수로 0.3263m, 운영 상수(`skeleton_mounts.json`, 서버가 쓰는 것)로 0.2120m다. 주석이
+    적은 값은 서버가 내는 값이므로 여기서도 운영 상수로 재야 출처와 라벨이 같아진다.
+    """
+    source, kwargs, query, reference = _real_pair("1", "1000389_1", 0)
+    view = service.compare(source, query, reference, **kwargs)["view"]
+    joints = view["layers"]["query"]["joints"]
+    legs = view["fit"]["legs"]
+
+    def span(chain: tuple[str, ...]) -> float:
+        return sum(math.dist(joints[a], joints[b]) for a, b in zip(chain, chain[1:]))
+
+    torso = span(("Pelvis", "Spine", "Spine1", "Chest", "Neck", "Head"))
+    leg = span(("Pelvis", "LeftThigh", "LeftCalf", "LeftFoot"))
+    bvh_torso = sum(body_proportions.BVH_TORSO_M.values())
+    bvh_leg = sum(body_proportions.BVH_LEG_M.values())
+
+    comment = (Path(service.__file__).parent / "skeleton.py").read_text(encoding="utf-8")
+    written = {
+        key: (float(csv), float(bvh), float(ratio))
+        for key, csv, bvh, ratio in re.findall(
+            r"골반→(머리|발목) CSV ([\d.]+)m / BVH ([\d.]+)m = ([\d.]+)", comment
+        )
+    }
+    assert set(written) == {"머리", "발목"}, written
+    for name, measured, bvh in (("머리", torso, bvh_torso), ("발목", leg, bvh_leg)):
+        csv_written, bvh_written, ratio_written = written[name]
+        assert measured == pytest.approx(csv_written, abs=5e-4), (name, measured, csv_written)
+        assert bvh == pytest.approx(bvh_written, abs=5e-4), (name, bvh, bvh_written)
+        assert measured / bvh == pytest.approx(ratio_written, abs=5e-4), (name, measured / bvh)
+    # 몸통은 짧고(<0.8) 다리는 거의 제 길이다(>0.95) — 이 순서가 뒤집히면 원인 진단이 뒤집힌다.
+    assert torso / bvh_torso < 0.8 < 0.95 < leg / bvh_leg
+    # 뜬 높이 = 엉덩이 − 리그 다리. 화면이 말하는 그 틈이다.
+    assert legs["placeholder_reaches_floor"] is False
+    assert legs["hip_above_floor_m"] - legs["rig_leg_length_m"] == pytest.approx(0.212, abs=0.005)
+
+
+def test_out_of_range_ik_opens_the_toggle_and_the_note_carries_the_numbers(test_mounts) -> None:  # noqa: ANN001
+    """범위 밖 IK도 **토글로 볼 수 있고**(B), 고지가 어느 검사를 얼마나 벗어났는지 숫자로 말한다.
+
+    예전에는 이 패스에서 체크박스가 잠겨 있었다(검증 실측: 6조합 중 4칸). 잠긴 컨트롤은 고장으로
+    읽히고, 사용자 정책은 "IK는 토글로 볼 수 있게"였다. 숫자는 `leg_check`가 잰 값이고 문턱은
+    `skeleton.LEG_LIMITS`다 — 두 출처가 한 문장에 그대로 실린다.
+    """
     source, kwargs, query, reference = _real_pair("3", "1000391_1", 0)
     view = service.compare(source, query, reference, **kwargs)["view"]
-    assert view["fit"]["legs_toggle_enabled"] is False
-    assert view["reference_fit"]["legs_toggle_enabled"] is False
-    merged = view["leg_notes"]
-    assert len(merged) == 1, merged
-    assert merged[0].startswith("대상·기준 ")
-    assert "자리표시입니다(측정 아님)" in merged[0], merged
+    assert view["fit"]["legs_toggle_enabled"] is True
+    assert view["fit"]["legs_within_range"] is False
+    notes = view["leg_notes"]
+    # 층마다 자기 숫자가 붙으므로 두 줄이다(합쳐지지 않는다).
+    assert len(notes) == 2, notes
+    note = next(line for line in notes if line.startswith("대상 "))
+    assert "무릎 굴곡 145.8° > 110°" in note, note
+    assert "무릎-발끝 101.7° > 60°" in note, note
+    assert f"> {skeleton.LEG_LIMITS['knee_flex_deg']:.0f}°" in note, note
+    # 범위 안이던 검사는 문장에 없다(실측 발끝 벌어짐 9.9° ≤ 60°).
+    assert "발끝 벌어짐" not in note, note
 
 
 def test_reference_stroke_comes_from_the_reference_pass_not_the_query(test_mounts) -> None:  # noqa: ANN001
@@ -1029,20 +1103,28 @@ def test_skeleton_frame_picks_the_nearest_frame_with_anatomical_legs(test_mounts
     assert markers["head"] == list(frame.head) and markers["right"] == list(frame.right)
 
 
-def test_fit_keeps_the_ik_toggle_shut_when_no_frame_is_anatomical(test_mounts) -> None:  # noqa: ANN001
-    """IK가 범위 밖이면 **토글이 잠긴다**. 다리 자체는 자리표시로 그려지므로 사라지지 않는다(B)."""
+def test_out_of_range_ik_stays_off_by_default_but_the_toggle_opens(test_mounts) -> None:  # noqa: ANN001
+    """IK가 범위 밖이어도 **토글은 열린다**(B) — 기본 그림만 자리표시로 남는다.
+
+    범위 밖 다리를 저절로 그리지 않는다는 판단(S4)은 `legs_visible_default is False`가 지킨다.
+    """
     rows, _middle = _rows_with_leg_poses(41, ())
     raw = RawPass(rows=rows)
     block = service.skeleton_block(raw)
     legs = block.fit["legs"]
-    assert legs["plausible"] is False and block.fit["legs_toggle_enabled"] is False
+    assert legs["plausible"] is False and block.fit["legs_within_range"] is False
+    assert block.fit["legs_toggle_enabled"] is True
     assert block.fit["legs_visible_default"] is False
     assert legs["display_default"] == "placeholder"
     assert legs["joints"] == list(skeleton.LEG_JOINTS)
     assert legs["frame_offset"] == 0
     assert block.fit["frame_index"] == service.representative_frame(raw).frame.index
-    assert block.fit["leg_note_template"].endswith(service.LEGS_IK_OUT_OF_RANGE_SUFFIX)
-    assert "자리표시입니다(측정 아님)" in block.fit["leg_note_template"]
+    head, tail = service.LEGS_IK_OUT_OF_RANGE_SUFFIX.split("{why}")
+    template = block.fit["leg_note_template"]
+    assert head in template and template.endswith(tail), template
+    # 어느 검사를 얼마나 벗어났는지가 **숫자로** 적힌다(문턱의 출처는 skeleton.LEG_LIMITS 하나뿐).
+    assert "°" in template and any(label in template for label in service.LEG_CHECK_LABELS.values()), template
+    assert "자리표시입니다(측정 아님)" in template
     assert "아바타 추정" in block.fit["notes"][0] and "중력 방향" in block.fit["notes"][1]
 
 

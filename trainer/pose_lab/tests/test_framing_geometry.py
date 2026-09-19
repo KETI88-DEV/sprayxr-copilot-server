@@ -24,8 +24,28 @@ from pathlib import Path
 import pytest
 
 STATIC = Path(__file__).resolve().parents[1] / "static"
-FOV_DEG = 45.0  # skeleton_view.js의 PerspectiveCamera fov
-NEAR = 0.01
+
+
+def camera_constants(js: str) -> tuple[float, float]:
+    """`skeleton_view.js`가 실제로 쓰는 카메라 상수(fov, near).
+
+    숫자를 여기 박아 두면 안 된다 — 예전에는 `FOV_DEG = 45.0  # skeleton_view.js의 …`,
+    `NEAR = 0.01`이라고 적혀 있었는데 소스는 `PerspectiveCamera(50, 1, 0.02, 200)`였다.
+    출처와 다른 라벨이 붙은 숫자이고, 이 파일의 모든 투영이 그 값을 썼다.
+    """
+    found = re.search(r"new THREE\.PerspectiveCamera\(\s*([\d.]+)\s*,\s*[\d.]+\s*,\s*([\d.]+)", js)
+    assert found is not None, "PerspectiveCamera 생성자를 찾지 못했다"
+    return float(found.group(1)), float(found.group(2))
+
+
+def min_torso_fraction(js: str) -> float:
+    """기본 프리셋이 지키는 상체 합격선(F). 소스가 하나의 출처다."""
+    found = re.search(r"const MIN_TORSO_FRACTION = ([\d.]+);", js)
+    assert found is not None, "MIN_TORSO_FRACTION을 찾지 못했다"
+    return float(found.group(1))
+
+
+FOV_DEG, NEAR = camera_constants((STATIC / "skeleton_view.js").read_text(encoding="utf-8"))
 
 
 def framing_targets(js: str) -> dict[str, float]:
@@ -139,6 +159,26 @@ def solve_framing(points, mode, targets, real_modes, theta, phi, aspect, reach=(
     return target, offset_dir, high
 
 
+def pull_in_to_torso_floor(target, offset_dir, distance, aspect, head, pelvis, upper, minimum):
+    """`skeleton_view.js`의 `pullInToTorsoFloor` 이식본: 상체가 합격선에 못 미치면 **당긴다**.
+
+    보는 곳은 상체 상자의 중심이고(전신 중심을 보면 같은 배율에서 머리가 먼저 잘린다), 거리는 이
+    비율에 단조라 같은 이분법을 쓴다. 이미 합격선을 넘으면 그대로 둔다 — 그때는 자르지 않는다.
+    """
+    if torso_span(head, pelvis, target, offset_dir, distance, aspect) >= minimum:
+        return target, distance
+    lo, hi = _bounds(upper)
+    centre = tuple((lo[i] + hi[i]) / 2 for i in range(3))
+    low, high = 0.01, distance
+    for _ in range(60):
+        mid = (low + high) / 2
+        if torso_span(head, pelvis, centre, offset_dir, mid, aspect) >= minimum:
+            low = mid
+        else:
+            high = mid
+    return centre, low
+
+
 def torso_span(head, pelvis, target, offset_dir, distance, aspect):
     """머리 실측 마커 ↔ 골반 관절의 화면 세로 비율(캔버스 높이 대비) — 화면의 `torsoScreenSpan`과 같은 정의."""
     a = project_ndc(head, target, offset_dir, distance, aspect)
@@ -148,11 +188,17 @@ def torso_span(head, pelvis, target, offset_dir, distance, aspect):
 
 
 # 합성 장면: 상체는 앞뒤로 두께가 있고(팔·마커가 몸 앞뒤로 벌어진다), 교정 화살표가 상체 밖으로
-# 조금 더 뻗는다 — 실제 패스의 모양이다. 이 장면에서 '자세 맞춤'의 상체 비율은 0.60으로 실측
-# (김경호 L3 1000391_1 #0, 0.5827)과 비슷한 자리에 온다.
+# 조금 더 뻗는다 — 실제 패스의 모양이다. 이 장면에서 '자세 맞춤'(당기기 전)의 상체 비율은
+# 1875×1000 화면비에서 0.495 · 840×1050에서 0.422다.
+#
+# **두께(DEPTH)를 0.5에서 0.7로 키웠다.** 카메라 상수를 소스에서 읽도록 고친 뒤(fov 45→실제 50)
+# 두께 0.5짜리 장면에서는 "꼭짓점 맞춤이 기본보다 작아진다"는 성질이 1875 화면비에서 뒤집혔다
+# (꼭짓점 0.5277 > 기본 0.5031). 이 검사가 재현하려는 결함(e69006d)은 **몸 앞뒤 두께가 만든
+# AABB 모서리**가 원인이므로, 그 두께를 실제 패스 쪽으로 키워 성질을 되살린다 — 문턱을 낮춘 것이
+# 아니라 장면을 맞춘 것이다(0.7에서 꼭짓점 0.4739 < 기본 0.4952, 840에서 0.3073 < 0.4221).
 HEAD = (0.0, 1.70, 0.0)
 PELVIS = (0.0, 1.00, 0.0)
-DEPTH = 0.5
+DEPTH = 0.7
 UPPER_BODY = [
     HEAD,
     PELVIS,
@@ -225,23 +271,75 @@ def test_fitting_the_torso_to_aabb_corners_makes_it_smaller_than_the_default(asp
 def test_source_reading_sees_the_values_the_screen_uses() -> None:
     """소스에서 읽은 목표·규칙이 실제 값이다(여기가 비면 위 두 검사가 기본값으로 조용히 통과한다)."""
     js = (STATIC / "skeleton_view.js").read_text(encoding="utf-8")
-    assert framing_targets(js) == {"pose": 0.86, "tracks": 0.75, "wall": 0.9, "torso": 0.98}
-    assert real_point_modes(js) == {"pose", "torso"}
+    assert framing_targets(js) == {"pose": 0.86, "body": 0.86, "tracks": 0.75, "wall": 0.9, "torso": 0.98}
+    assert real_point_modes(js) == {"pose", "torso", "body"}
+    # 카메라 상수도 **소스에서** 읽는다(옛 주석의 45.0/0.01이 아니라 실제 값).
+    assert camera_constants(js) == (50.0, 0.02)
+    assert min_torso_fraction(js) == 0.4
 
 
 @pytest.mark.parametrize("aspect", ASPECTS)
-def test_the_default_preset_keeps_every_fit_target_on_the_canvas(aspect: float) -> None:
-    """기본 프리셋('자세 맞춤')은 맞춤 대상을 **하나도** 화면 밖으로 내보내지 않는다.
+def test_the_full_body_preset_keeps_every_fit_target_on_the_canvas(aspect: float) -> None:
+    """'전신' 프리셋은 맞춤 대상을 **하나도** 화면 밖으로 내보내지 않는다.
 
     사용자 불만 1번이 "기준 스트로크(벽면 착탄점)이 보이지 않음"이었다. 스트로크를 맞춤 대상에
     넣기만 하면 되는 줄 알았는데, 스트로크는 벽 위 한 줄이라 점 구름이 한쪽으로 치우쳐 크기가
-    목표 안이어도 밖으로 밀린다.
+    목표 안이어도 밖으로 밀린다. 이 성질은 이제 'body'(전신)가 맡는다 — 기본 뷰는 상체 합격선(F)
+    때문에 당겨지므로 무엇인가를 자를 수 있고, 그때는 자른 것의 이름을 화면이 말한다.
     """
     js = (STATIC / "skeleton_view.js").read_text(encoding="utf-8")
     targets, real_modes, reach = framing_targets(js), real_point_modes(js), reach_modes(js)
-    assert "pose" in reach, reach
-    outside = _outside_count(POSE_WITH_STROKE, "pose", targets, real_modes, aspect, reach=reach)
+    assert "body" in reach, reach
+    outside = _outside_count(POSE_WITH_STROKE, "body", targets, real_modes, aspect, reach=reach)
     assert outside == 0, outside
+
+
+def _pose_and_body_spans(aspect: float) -> tuple[float, float, int]:
+    """같은 장면에서 (합격선을 적용한 기본 뷰, 전신 뷰)의 상체 비율과, 기본 뷰가 자른 점 수."""
+    js = (STATIC / "skeleton_view.js").read_text(encoding="utf-8")
+    targets, real_modes, reach = framing_targets(js), real_point_modes(js), reach_modes(js)
+    minimum = min_torso_fraction(js)
+    target, offset_dir, distance = solve_framing(
+        POSE_WITH_STROKE, "body", targets, real_modes, *ANGLES, aspect, reach=reach
+    )
+    body = torso_span(HEAD, PELVIS, target, offset_dir, distance, aspect)
+    pulled_target, pulled_distance = pull_in_to_torso_floor(
+        target, offset_dir, distance, aspect, HEAD, PELVIS, UPPER_BODY, minimum
+    )
+    pose = torso_span(HEAD, PELVIS, pulled_target, offset_dir, pulled_distance, aspect)
+    cut = 0
+    for p in POSE_WITH_STROKE:
+        ndc = project_ndc(p, pulled_target, offset_dir, pulled_distance, aspect)
+        if ndc is None or abs(ndc[0]) > 1.0 or abs(ndc[1]) > 1.0:
+            cut += 1
+    return pose, body, cut
+
+
+@pytest.mark.parametrize("aspect", ASPECTS)
+def test_the_default_preset_meets_the_torso_pass_line(aspect: float) -> None:
+    """기본 뷰의 상체(머리 마커~골반)가 캔버스 높이의 `MIN_TORSO_FRACTION` 이상이다(F 합격선).
+
+    벽면 스트로크가 있는 장면이라 전신으로 담으면 상체가 작아진다 — 그 상태가 합격선 아래임을
+    같이 단언한다(아래 can_fail 검사가 그 사실에 기댄다).
+    """
+    js = (STATIC / "skeleton_view.js").read_text(encoding="utf-8")
+    minimum = min_torso_fraction(js)
+    pose, body, _cut = _pose_and_body_spans(aspect)
+    assert body < minimum, body
+    assert pose >= minimum - 1e-9, (pose, minimum)
+
+
+@pytest.mark.parametrize("aspect", ASPECTS)
+def test_without_the_pull_in_the_default_view_misses_the_pass_line(aspect: float) -> None:
+    """당기지 않으면(= 전신 그대로면) 같은 장면에서 합격선에 못 미친다 — 위 검사가 공허하지 않다.
+
+    그리고 합격선을 지키는 값은 공짜가 아니다: 당긴 카메라는 맞춤 대상을 실제로 **자른다**.
+    """
+    js = (STATIC / "skeleton_view.js").read_text(encoding="utf-8")
+    minimum = min_torso_fraction(js)
+    pose, body, cut = _pose_and_body_spans(aspect)
+    assert body < minimum <= pose
+    assert cut > 0, "이 장면에서 기본 뷰가 아무것도 자르지 않는다 — 검사 장면을 고쳐야 한다"
 
 
 @pytest.mark.parametrize("aspect", ASPECTS)
@@ -255,6 +353,9 @@ def test_without_recentring_the_asymmetric_stroke_is_pushed_off_screen(aspect: f
 
 
 def test_the_reach_rule_leaves_the_torso_preset_alone() -> None:
-    """'상체 확대'는 **일부러** 맞춤 대상 밖을 잘라 내고 그 이름을 적는다 — 이 규칙 대상이 아니다."""
+    """'상체 확대'는 **일부러** 맞춤 대상 밖을 잘라 내고 그 이름을 적는다 — 이 규칙 대상이 아니다.
+
+    기본 뷰(pose)와 전신(body)은 맞춤 단계에서 하나도 자르지 않는다(pose는 그 뒤 합격선으로 당긴다).
+    """
     js = (STATIC / "skeleton_view.js").read_text(encoding="utf-8")
-    assert reach_modes(js) == {"pose"}
+    assert reach_modes(js) == {"pose", "body"}

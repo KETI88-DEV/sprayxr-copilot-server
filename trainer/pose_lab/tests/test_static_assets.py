@@ -583,7 +583,7 @@ def torso_preset_faults(js: str, html: str) -> list[str]:
         faults.append("button_does_not_frame")
     if not re.search(r"FRAMING_TARGET\s*=\s*{[^}]*torso", js):
         faults.append("no_target")
-    if not re.search(r'mode === "pose" \|\| mode === "torso" \? points\.map', js):
+    if not re.search(r'mode === "pose" \|\| mode === "torso" \|\| mode === "body"\s*\?\s*points\.map', js):
         faults.append("fits_aabb_corners")
     if "function offscreenFitTargets(" not in js:
         faults.append("no_offscreen_probe")
@@ -603,9 +603,11 @@ def test_torso_preset_checks_can_fail():
     full = _read("skeleton_view.js")
     html = _read("index.html")
     boxed = full.replace(
-        'mode === "pose" || mode === "torso" ? points.map((p) => new THREE.Vector3(...p)) : corners',
-        'mode === "pose" ? points.map((p) => new THREE.Vector3(...p)) : corners',
+        'mode === "pose" || mode === "torso" || mode === "body"\n'
+        "        ? points.map((p) => new THREE.Vector3(...p))",
+        'mode === "pose" || mode === "body"\n        ? points.map((p) => new THREE.Vector3(...p))',
     )
+    assert boxed != full
     assert torso_preset_faults(boxed, html) == ["fits_aabb_corners"]
     silent = full.replace("    dom.framingNote.textContent = text;\n", "")
     assert silent != full
@@ -785,7 +787,10 @@ def test_feet_note_checks_can_fail():
         "no_preset_probe",
         "preset_names_are_not_measured",
     ]  # 빈 소스는 버튼도 없어 라벨 대조는 걸리지 않는다
-    silent = full.replace('[describeTorsoFraming(mode), describeFeetFraming()]', "[describeTorsoFraming(mode)]")
+    silent = full.replace(
+        "[describeTorsoFraming(mode), describePoseFraming(mode), describeFeetFraming()]",
+        "[describeTorsoFraming(mode)]",
+    )
     assert silent != full
     assert feet_note_faults(silent) == ["feet_note_not_in_framing_note"]
     renamed = full.replace('{ label: "궤적 포함", mode: "tracks"', '{ label: "궤적", mode: "tracks"')
@@ -835,6 +840,61 @@ def framing_leg_faults(js: str) -> list[str]:
 
 def test_framing_always_includes_the_feet_that_are_drawn():
     assert framing_leg_faults(_read("skeleton_view.js")) == []
+
+
+def torso_floor_faults(js: str) -> list[str]:
+    """기본 뷰가 상체 합격선(F)을 **실제로 지키고**, 지키느라 자른 것을 말하고, 다시 볼 길을 주는가.
+
+    합격선('상체(머리 마커~골반) ≥ 캔버스 높이의 40%')과 "맞춤 대상을 하나도 자르지 않는다"는 한
+    카메라에서 동시에 참일 수 없다(저장한 페이로드로 푼 실측: 전신으로 담으면 김경호 L1 0.1599 ·
+    L3 0.3309 · L6 0.2103). 그래서 셋을 같이 고정한다 — 당기고, 자른 것의 이름을 말하고, '전신'
+    프리셋으로 되돌아갈 수 있어야 한다. 하나라도 빠지면 화면이 잘라 놓고 말하지 않게 된다.
+    """
+    faults: list[str] = []
+    if "const MIN_TORSO_FRACTION" not in js:
+        faults.append("no_pass_line")
+    if "function pullInToTorsoFloor(" not in js:
+        faults.append("no_pull_in")
+    if not re.search(r'return mode === "pose" \? pullInToTorsoFloor\(solved, fitPoints\)', js):
+        faults.append("default_preset_does_not_pull_in")
+    if "function torsoWorldPair(" not in js:
+        faults.append("pass_line_points_not_defined")
+    if not re.search(r"function describePoseFraming\([\s\S]{0,800}offscreenFitTargets\(\)", js):
+        faults.append("cut_targets_not_named")
+    if not re.search(r"function describeFraming\(mode\)[\s\S]{0,260}describePoseFraming\(mode\)", js):
+        faults.append("pose_note_not_in_framing_note")
+    if 'id="view3dPresetBody"' not in js:
+        faults.append("no_full_body_preset")
+    if not re.search(r'frameTo\("body"\)', js):
+        faults.append("full_body_button_does_not_frame")
+    return faults
+
+
+def test_default_view_meets_the_torso_pass_line_and_says_what_it_cut():
+    assert torso_floor_faults(_read("skeleton_view.js")) == []
+
+
+def test_torso_floor_checks_can_fail():
+    """분기를 하나씩 되돌려 실제로 잡히는지 본다(실패할 수 없는 단언 방지)."""
+    full = _read("skeleton_view.js")
+    assert "no_pass_line" in torso_floor_faults("")
+    loose = full.replace(
+        '    return mode === "pose" ? pullInToTorsoFloor(solved, fitPoints) : solved;',
+        "    return solved;",
+        1,
+    )
+    assert loose != full
+    assert torso_floor_faults(loose) == ["default_preset_does_not_pull_in"]
+    silent = full.replace(
+        "    return [describeTorsoFraming(mode), describePoseFraming(mode), describeFeetFraming()]",
+        "    return [describeTorsoFraming(mode), describeFeetFraming()]",
+        1,
+    )
+    assert silent != full
+    assert torso_floor_faults(silent) == ["pose_note_not_in_framing_note"]
+    no_body = full.replace('<button id="view3dPresetBody" type="button">전신</button>\n', "", 1)
+    assert no_body != full
+    assert torso_floor_faults(no_body) == ["no_full_body_preset"]
 
 
 def test_framing_leg_checks_can_fail():
