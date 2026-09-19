@@ -610,6 +610,12 @@ dd { margin: 0; font-family: var(--mono); }
 }
 .view3d-label-miss { color: var(--text); }
 .view3d-label-offset { color: var(--text-dim); }
+/* 자리표시 발과 바닥면 사이의 **간격** 표시. 잰 값이 아니라 틈이므로 실측 숫자(층 색)와 같은
+   무게로 읽히면 안 된다 — 흐린 글자에 점선 테두리를 둘러 옆의 점선 보조선과 같은 부호로 묶는다. */
+.view3d-label-gap {
+  color: var(--text-dim);
+  border: 1px dashed var(--border-strong);
+}
 .view3d-host .view3d-wall-note {
   position: absolute;
   top: 0.5rem;

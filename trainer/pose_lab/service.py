@@ -928,28 +928,29 @@ LEGS_NO_JOINTS_NOTE: Final = "{who} 패스에는 다리 관절이 없어 다리�
 # 자리표시 다리 고지(B). 기본 표시가 다시 자리표시 다리가 됐으므로, 화면은 **그것이 자리표시라는
 # 것**을 먼저 말해야 한다 — 재지 않은 것을 잰 것처럼 보이게 하지 않는다는 이 저장소의 규칙이다.
 #
-# **어떻게 세웠는지**를 말한다. 사용자 정책이 "벽 메시가 있으면 발을 바닥면에 세운다"이므로 발은
-# 늘 그 면에 선다. 다만 세우는 방법이 두 가지이고 값을 치르는 쪽이 다르다:
-#   무릎을 접어 세운 경우(엉덩이가 리그 다리보다 낮다): 뼈 길이는 리그 그대로다. L3·L6이 여기다.
-#   늘려서 세운 경우(엉덩이가 더 높다): 자리표시 다리에 배율을 먹였다 — 실측 김경호 L1 첫 패스는
-#     엉덩이가 바닥면 위 1.045m인데 리그 다리가 0.833m라 1.25배(+0.21m)다. 늘린 길이는 잰 값이
-#     아니므로 **화면이 배율과 늘린 길이를 그대로 적는다**. 줄이는 배율은 어느 경우에도 없다
-#     (줄여서 난쟁이를 만든 옛 배율이 이 화면에서 자리표시를 통째로 없앤 이유였다).
-# 숫자 자리({floor}·{leg}·{factor}·{add}·{gap}·{limit})는 서버가 채워 넣고 `{who}`만 층 이름으로
-# 남긴다 — 화면은 이 문자열을 그대로 쓰고 다시 계산하지 않는다.
+# **무엇을 했고 무엇을 하지 않았는지**를 말한다. 사용자 결정은 "리그 길이 지키고 발이 뜨게"다:
+#   무릎을 접어 세운 경우(엉덩이가 리그 다리보다 낮다): 발이 그 면에 선다. L3·L6이 여기다.
+#   못 닿는 경우(엉덩이가 더 높다): **늘리지 않는다**. 리그 길이 그대로 곧게 내리고 발이 뜬다 —
+#     실측 김경호 L1 첫 패스는 엉덩이가 바닥면 위 1.045m인데 리그 다리가 0.833m라 0.21m 뜬다.
+#     예전에는 여기서 다리를 1.25배 늘리고 그 배율을 고지했는데, 늘린 다리는 "이 사람의 다리가
+#     이만큼이다"라는 없는 사실을 주장한다. 뜬 높이는 다리가 아니라 **틈**이므로 문구가 그것을
+#     틈이라고 적고, 같은 숫자를 발끝→바닥 점선 보조선이 화면에서 보인다(`placeholder_floor_gaps`).
+#   발이 그 면보다 아래인 경우: 무릎을 다 접어도 닿을 수 없을 만큼 엉덩이가 낮다. 깊이를 적는다.
+# 숫자 자리({floor}·{leg}·{hip}·{gap}·{drop})는 서버가 채워 넣고 `{who}`만 층 이름으로 남긴다 —
+# 화면은 이 문자열을 그대로 쓰고 다시 계산하지 않는다.
 LEGS_PLACEHOLDER_ON_FLOOR_NOTE: Final = (
     "{who} 다리는 자리표시입니다(측정 아님) — 추적 장치가 없어 발을 바닥면(수직 {floor}m)에 세우고 "
     "남는 길이는 무릎으로 접었습니다. 뼈 길이는 리그 그대로입니다."
 )
-LEGS_PLACEHOLDER_STRETCHED_NOTE: Final = (
-    "{who} 다리는 자리표시입니다(측정 아님) — 엉덩이가 리그 다리({leg}m)보다 높아, 발을 "
-    "바닥면(수직 {floor}m)에 세우려고 자리표시 다리를 {factor}배(+{add}m) 늘려 그렸습니다. "
-    "늘린 길이는 잰 값이 아닙니다."
+LEGS_PLACEHOLDER_OFF_FLOOR_NOTE: Final = (
+    "{who} 다리는 자리표시입니다(측정 아님) — 엉덩이가 바닥면(수직 {floor}m) 위 {hip}m인데 리그 "
+    "다리는 {leg}m라, 길이를 늘리지 않고 리그 그대로 곧게 내렸습니다. 발이 바닥면에서 최대 {gap}m "
+    "떠 있고, 뜬 발마다 발끝에서 바닥까지 점선으로 그 간격을 표시했습니다."
 )
-# 늘려도 닿지 않는 경우 — 사람 엉덩이가 올 수 없는 높이라 고른 면이 지면이 아니라는 뜻이다.
-LEGS_PLACEHOLDER_CANNOT_STAND_NOTE: Final = (
-    "{who} 다리는 자리표시입니다(측정 아님) — 엉덩이가 바닥면(수직 {floor}m) 위 {gap}m라 리그 "
-    "다리({leg}m)를 {limit}배 넘게 늘려야 닿습니다. 그만큼 늘리지 않고 곧게 내려 그렸습니다."
+# 무릎을 다 접어도 닿지 않는 경우 — 엉덩이가 그 면에 너무 가깝거나 아래에 있다.
+LEGS_PLACEHOLDER_UNDER_FLOOR_NOTE: Final = (
+    "{who} 다리는 자리표시입니다(측정 아님) — 리그 길이 그대로 곧게 내려 발이 바닥면(수직 {floor}m)"
+    "보다 {drop}m 아래입니다."
 )
 # 바닥면을 못 고른 레벨(벽 메시 없음)의 자리표시 고지. 바닥이 없으면 세울 자리도 없다.
 LEGS_PLACEHOLDER_NO_FLOOR_NOTE: Final = (
@@ -1159,14 +1160,68 @@ def _head_above_m(placed: skeleton.Placement, floor: float) -> float | None:
     return None
 
 
+# 점선 보조선을 그리는 **가장 작은 틈**(m). 부동소수 잡음(1e-17)은 틈이 아니다 — 길이 0인 선과
+# "간격 0cm"라는 글자를 화면에 올리지 않는다. 실데이터의 틈은 0.14~0.42m라 이 문턱에 걸리지 않는다.
+FLOOR_GAP_MIN_M: Final = 1e-9
+
+
+def _floor_gaps(placeholder: skeleton.PlaceholderLegs | None) -> dict[str, float]:
+    """발목 이름 → 바닥면 **위로 뜬** 간격(m). 닿은 발도, 면보다 아래로 내려간 발도 여기 없다.
+
+    문구와 보조선이 같은 이 한 곳에서 나온다 — 두 곳에서 따로 고르면 화면이 말과 그림으로 갈린다.
+    """
+    heights = None if placeholder is None else placeholder.feet_above_floor_m
+    if not heights:
+        return {}
+    return {name: value for name, value in heights.items() if value > FLOOR_GAP_MIN_M}
+
+
+def _floor_gap_guides(placeholder: skeleton.PlaceholderLegs | None) -> list[dict[str, object]]:
+    """뜬 발마다 **발끝(없으면 발목)→바로 아래 바닥면**의 두 끝점과 그 옆에 적을 간격 문자열.
+
+    화면이 3D 안에서 숫자를 만들지 않도록 서버가 끝점도 글자도 다 준다. 끝 점은 그 관절에서 월드
+    수직 성분만 바닥면 높이로 바꾼 것이라 선이 정확히 수직이고, **선의 길이가 곧 적힌 간격**이다.
+    발끝은 발목과 같은 높이(수평)라 어느 쪽을 잡아도 길이가 같다.
+
+    글자는 "간격"이라고 말한다 — 이 선은 잰 값이 아니라 자리표시 발과 바닥 사이의 틈이다.
+    """
+    floor = None if placeholder is None else placeholder.floor_vertical
+    gaps = _floor_gaps(placeholder)
+    if placeholder is None or floor is None or not gaps:
+        return []
+    guides: list[dict[str, object]] = []
+    for _hip, _knee, ankle, toe in skeleton.PLACEHOLDER_LEG_CHAIN:
+        gap = gaps.get(ankle)
+        if gap is None:
+            continue
+        # 어느 관절이 발끝인지도 **서버(리그 사슬)**가 정한다 — 화면이 이름으로 짐작하지 않는다.
+        name = toe if toe in placeholder.joints else ankle
+        start = placeholder.joints.get(name)
+        if start is None:
+            continue
+        end = list(start)
+        end[world_axes.UP_INDEX] = floor
+        guides.append(
+            {
+                "joint": name,
+                "from": list(start),
+                "to": end,
+                "gap_m": gap,
+                "label": f"간격 {gap * 100.0:.0f}cm",
+            }
+        )
+    return guides
+
+
 def _placeholder_legs(
     placed: skeleton.Placement,
     representative: Representative,
     offsets: Mapping[str, Vec3],
     floor: float | None,
 ) -> skeleton.PlaceholderLegs | None:
-    """이 배치의 자리표시 다리(B). 바닥면이 있으면 발을 그 면에 **세운다** — 엉덩이가 리그 다리보다
-    낮으면 무릎이 남는 길이를 접고, 높으면 자리표시 다리를 그만큼 늘린다(배율은 `stretch_factor`).
+    """이 배치의 자리표시 다리(B). 바닥면이 있고 엉덩이가 리그 다리보다 낮으면 무릎이 남는 길이를
+    접어 발을 그 면에 세운다. 엉덩이가 더 높으면 **늘리지 않고** 리그 길이 그대로 내려 발이 뜬다 —
+    뜬 간격은 `feet_above_floor_m`이 발마다 싣고, 화면이 점선 보조선으로 그 틈을 보인다.
 
     발끝 방향은 대표 프레임의 **골반→착탄점** 수평 성분이다(진단용 접촉 시트가 쓰던 것과 같은 방향).
     골반이나 착탄점이 없으면 방향을 지어내지 않고 `None`을 넘겨 발끝 관절을 싣지 않는다.
@@ -1215,21 +1270,19 @@ def _fit_view(
         leg_template = LEGS_NO_JOINTS_NOTE
     elif placeholder.floor_vertical is None:
         leg_template = LEGS_PLACEHOLDER_NO_FLOOR_NOTE
+    elif placeholder.reaches_floor is not True and _floor_gaps(placeholder):
+        # 늘리지 않아 발이 떴다. 적는 숫자는 **발에서 직접 잰 틈**이고, 같은 값이 보조선으로도 간다.
+        leg_template = (
+            LEGS_PLACEHOLDER_OFF_FLOOR_NOTE.replace("{floor}", f"{placeholder.floor_vertical:.2f}")
+            .replace("{hip}", f"{placeholder.hip_above_floor_m or 0.0:.2f}")
+            .replace("{leg}", f"{placeholder.rig_leg_length_m or 0.0:.2f}")
+            .replace("{gap}", f"{max(_floor_gaps(placeholder).values()):.2f}")
+        )
     elif placeholder.reaches_floor is not True:
-        leg_template = (
-            LEGS_PLACEHOLDER_CANNOT_STAND_NOTE.replace("{floor}", f"{placeholder.floor_vertical:.2f}")
-            .replace("{gap}", f"{placeholder.hip_above_floor_m or 0.0:.2f}")
-            .replace("{leg}", f"{placeholder.rig_leg_length_m or 0.0:.2f}")
-            .replace("{limit}", f"{skeleton.MAX_PLACEHOLDER_STRETCH:.1f}")
-        )
-    elif (placeholder.stretch_factor or 1.0) > 1.0:
-        # 늘려서 세웠다. 배율과 늘린 길이는 서버가 잰 값이고, 화면은 이 문장을 그대로 쓴다.
-        leg_template = (
-            LEGS_PLACEHOLDER_STRETCHED_NOTE.replace("{floor}", f"{placeholder.floor_vertical:.2f}")
-            .replace("{leg}", f"{placeholder.rig_leg_length_m or 0.0:.2f}")
-            .replace("{factor}", f"{placeholder.stretch_factor:.2f}")
-            .replace("{add}", f"{placeholder.stretch_m or 0.0:.2f}")
-        )
+        # 뜬 발이 하나도 없는데 닿지도 못했다 — 발이 그 면보다 아래다.
+        leg_template = LEGS_PLACEHOLDER_UNDER_FLOOR_NOTE.replace(
+            "{floor}", f"{placeholder.floor_vertical:.2f}"
+        ).replace("{drop}", f"{placeholder.feet_below_floor_m or 0.0:.2f}")
     else:
         leg_template = LEGS_PLACEHOLDER_ON_FLOOR_NOTE.replace("{floor}", f"{placeholder.floor_vertical:.2f}")
     # IK 토글이 무엇을 보여 주는지 같은 줄에서 말한다 — 범위 밖이면 그 사실과 숫자를 붙인다.
@@ -1330,10 +1383,15 @@ def _fit_view(
             if placeholder is None
             else [[a, b] for chain in skeleton.PLACEHOLDER_LEG_CHAIN for a, b in zip(chain, chain[1:])],
             "placeholder_reaches_floor": None if placeholder is None else placeholder.reaches_floor,
-            # 세우려고 다리를 늘렸는가(1.0 = 길이 그대로, 1.0 미만은 나오지 않는다). 화면·검사가
-            # 이 값을 그대로 읽는다 — 배율을 두 곳에서 따로 계산하면 고지와 그림이 갈린다.
-            "placeholder_stretch_factor": None if placeholder is None else placeholder.stretch_factor,
-            "placeholder_stretch_m": None if placeholder is None else placeholder.stretch_m,
+            # 발목마다 바닥면 위 높이(m, 음수면 아래). 닿은 발은 0이다 — 화면·검사가 이 값을 그대로
+            # 읽는다(다시 재지 않는다).
+            "placeholder_feet_above_floor_m": None
+            if placeholder is None or placeholder.feet_above_floor_m is None
+            else dict(placeholder.feet_above_floor_m),
+            # 뜬 발마다 **발끝→바닥** 점선 보조선의 두 끝점과 그 옆에 적을 간격 문자열. 화면은 이
+            # 목록을 그대로 그린다 — 길이를 다시 재지도, cm로 다시 반올림하지도 않는다. 이것은
+            # 측정이 아니라 **틈 표시**다: 선은 점선이고 글자가 "간격"이라고 말한다.
+            "placeholder_floor_gaps": _floor_gap_guides(placeholder),
             "hip_above_floor_m": None if placeholder is None else placeholder.hip_above_floor_m,
             "rig_leg_length_m": None if placeholder is None else placeholder.rig_leg_length_m,
             "floor_vertical": floor,

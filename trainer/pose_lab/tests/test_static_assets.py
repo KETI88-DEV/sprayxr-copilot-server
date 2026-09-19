@@ -1770,7 +1770,15 @@ def test_collapsed_joint_angle_checks_can_fail():
 
 
 def three_d_number_faults(js: str) -> list[str]:
-    """3D 장면 안에 숫자·보조선이 남아 있는가(S6). 숫자는 왼쪽 패널에만 있어야 한다."""
+    """3D 장면 안에 **서버가 주지 않은** 숫자·보조선이 남아 있는가(S6).
+
+    S6의 규칙은 "숫자는 왼쪽 패널에만"이었다. 사용자 결정("리그 길이 지키고 발이 뜨게")이 그 규칙에
+    딱 한 칸을 열었다 — 자리표시 발이 바닥에 못 닿으면 **발끝→바닥 점선 보조선과 그 간격**이 3D
+    안에 뜬다(뜬 사실은 3D 안에서만 보일 수 있다). 그 칸은 서버 문자열
+    (`legs.placeholder_floor_gaps[].label`)로만 채우고, 화면이 스스로 만든 숫자는 여전히 금지다.
+    그래서 여기서는 옛 라벨(보정 오프셋·어긋남 거리)이 되살아나지 않았는지와, 3D 안 글자의
+    **종류**가 셋(화살표 번호·자리표시 간격·궤적 이름)뿐인지를 본다.
+    """
     faults: list[str] = []
     for token, name in (
         ("offset_display", "offset_label_remains"),
@@ -1793,10 +1801,15 @@ def three_d_number_faults(js: str) -> list[str]:
         anchor = js.split("function buildAnchorGroup(", 1)[1].split("\n  }\n", 1)[0]
         if "THREE.Line" in anchor:
             faults.append("anchor_group_still_draws_lines")
+    # 3D 안 글자의 **종류**. 화살표 번호(arrow) · 자리표시 간격(gap) · 궤적 이름(point) 셋뿐이다.
+    # 네 번째가 생기면 그것은 새로 들어온 3D 안 숫자이고, 이 검사가 그때 한 번 멈춰 세운다.
+    kinds = sorted(set(re.findall(r'registerLabel\([^;]*?"(view3d-label-[a-z]+)"', js)))
+    if kinds != ["view3d-label-arrow", "view3d-label-gap", "view3d-label-point"]:
+        faults.append(f"3d_label_kinds_changed:{','.join(kinds)}")
     return faults
 
 
-def test_the_3d_scene_carries_no_numbers_but_the_arrow_badges():
+def test_the_3d_scene_carries_no_numbers_but_the_arrow_badges_and_the_server_gap_label():
     assert three_d_number_faults(_read("skeleton_view.js")) == []
 
 
@@ -1811,6 +1824,90 @@ def test_3d_number_checks_can_fail():
     assert three_d_number_faults(relabelled) == ["arrow_label_is_not_just_the_number"]
     revived = full + '\n// const label = anchor.offset_display;\n'
     assert three_d_number_faults(revived) == ["offset_label_remains"]
+    # 3D 안에 네 번째 글자 종류가 들어오면 잡는다(옛 '보정 오프셋' 라벨이 그런 식으로 들어왔다).
+    fourth = full.replace(
+        'registerLabel(start.clone().lerp(end, 0.5), guide.label, "view3d-label-gap")',
+        'registerLabel(start.clone().lerp(end, 0.5), guide.label, "view3d-label-hint")',
+        1,
+    )
+    assert fourth != full
+    assert three_d_number_faults(fourth) == [
+        "3d_label_kinds_changed:view3d-label-arrow,view3d-label-hint,view3d-label-point"
+    ]
+
+
+def floor_gap_guide_faults(js: str) -> list[str]:
+    """자리표시 발이 못 닿은 층에서 **발끝→바닥 점선 보조선과 간격 글자**를 그리는가.
+
+    사용자 결정("리그 길이 지키고 발이 뜨게")에서 화면이 할 일은 **뜬 사실을 보이는 것**이다. 다리를
+    늘려 세우던 옛 화면에는 이 보조선이 아예 없었다 — 발이 늘 바닥에 붙어 있었으니 보일 틈도 없었다.
+    셋을 본다: (1) 그리는 것은 서버가 준 목록(`placeholder_floor_gaps`)뿐이고, (2) 선은 자리표시 뼈와
+    같은 점선이며(실선이면 실측 부호와 섞여 틈이 잰 값으로 읽힌다), (3) 옆에 적는 숫자는 서버 문자열
+    그대로다 — 화면이 m를 cm로 다시 나누면 같은 틈이 두 숫자로 보인다. 그리고 IK 토글을 켠 층에서는
+    선도 글자도 자리표시와 함께 사라져야 한다(그림 없는 숫자가 남으면 안 된다).
+    """
+    if "function buildPlaceholderFloorGaps(" not in js:
+        return ["no_gap_guides"]
+    faults: list[str] = []
+    body = js.split("function buildPlaceholderFloorGaps(", 1)[1].split("\n  }\n", 1)[0]
+    if "placeholder_floor_gaps" not in body:
+        faults.append("guides_not_from_server")
+    if "LineDashedMaterial" not in body or "computeLineDistances" not in body:
+        faults.append("guide_is_not_dashed")
+    if "guide.label" not in body:
+        faults.append("label_not_from_server")
+    if "cm" in body or re.search(r"\b100(\.0)?\b", body):
+        faults.append("screen_recomputes_the_gap_number")
+    for layer in ("skeletonFloorGaps", "referenceFloorGaps"):
+        if f"{layer} = buildPlaceholderFloorGaps(" not in js:
+            faults.append(f"{layer}_not_drawn")
+    toggle = (
+        js.split("function applyLegsToggle(", 1)[1].split("\n  }\n", 1)[0]
+        if "function applyLegsToggle(" in js
+        else ""
+    )
+    for token in ("skeletonFloorGaps", "referenceFloorGaps", "gapLabels"):
+        if token not in toggle:
+            faults.append(f"{token}_not_hidden_with_the_placeholder")
+    return faults
+
+
+def test_floor_gap_guides_draw_the_servers_numbers():
+    assert floor_gap_guide_faults(_read("skeleton_view.js")) == []
+
+
+def test_floor_gap_guide_checks_can_fail():
+    full = _read("skeleton_view.js")
+    # (3) 화면이 스스로 cm를 만들면 같은 틈이 두 숫자가 된다.
+    recomputed = full.replace(
+        'guide.label, "view3d-label-gap"',
+        '`간격 ${guide.gap_m * 100}cm`, "view3d-label-gap"',
+        1,
+    )
+    assert recomputed != full
+    assert floor_gap_guide_faults(recomputed) == ["screen_recomputes_the_gap_number"]
+    # 서버 문자열 대신 화면이 지은 글자를 걸면 잡는다(숫자가 아니어도 출처가 바뀐 것이다).
+    invented = full.replace(
+        'if (typeof guide.label === "string" && guide.label.length > 0) {', "if (true) {", 1
+    ).replace(
+        'registerLabel(start.clone().lerp(end, 0.5), guide.label, "view3d-label-gap")',
+        'registerLabel(start.clone().lerp(end, 0.5), "간격", "view3d-label-gap")',
+        1,
+    )
+    assert invented != full
+    assert floor_gap_guide_faults(invented) == ["label_not_from_server"]
+    # (2) 점선이 아니면 실측 부호와 섞인다.
+    solid = full.replace(
+        '      line.computeLineDistances();\n      line.userData.kind = "placeholder-floor-gap";',
+        '      line.userData.kind = "placeholder-floor-gap";',
+        1,
+    )
+    assert solid != full
+    assert floor_gap_guide_faults(solid) == ["guide_is_not_dashed"]
+    # 토글에서 글자를 빼면 IK를 켠 층에 그림 없는 숫자가 남는다.
+    stuck = full.replace("    for (const entry of gapLabels) {", "    for (const entry of []) {", 1)
+    assert stuck != full
+    assert floor_gap_guide_faults(stuck) == ["gapLabels_not_hidden_with_the_placeholder"]
 
 
 def low_confidence_faults(js: str) -> list[str]:

@@ -899,17 +899,30 @@ def test_the_floating_foot_is_the_short_rig_torso_not_short_legs() -> None:
         assert measured / bvh == pytest.approx(ratio_written, abs=5e-4), (name, measured / bvh)
     # 몸통은 짧고(<0.8) 다리는 거의 제 길이다(>0.95) — 이 순서가 뒤집히면 원인 진단이 뒤집힌다.
     assert torso / bvh_torso < 0.8 < 0.95 < leg / bvh_leg
-    # 뜨던 높이 = 엉덩이 − 리그 다리. 이제 그 틈만큼 **늘려서** 세우고, 화면이 그 숫자를 적는다.
+    # 뜨는 높이 = 엉덩이 − 리그 다리. 사용자 결정에 따라 **늘리지 않고** 그만큼 띄운 채 그 틈을
+    # 화면이 숫자와 점선으로 말한다(바로 앞 판은 여기서 다리를 1.25배 늘리고 배율을 적었다).
     gap = legs["hip_above_floor_m"] - legs["rig_leg_length_m"]
     assert gap == pytest.approx(0.212, abs=0.005)
-    assert legs["placeholder_reaches_floor"] is True
+    assert legs["placeholder_reaches_floor"] is False
     # 두 다리 길이가 1e-7m 자리에서 다르므로(리그 오프셋) 여기서는 그 자리까지만 견준다.
-    assert legs["placeholder_stretch_m"] == pytest.approx(gap, abs=1e-6)
-    assert legs["placeholder_stretch_factor"] == pytest.approx(
-        legs["hip_above_floor_m"] / legs["rig_leg_length_m"], rel=1e-6
-    )
-    # 늘리는 쪽만 있다 — 줄여서 난쟁이를 만드는 배율은 어떤 경우에도 나오지 않는다.
-    assert legs["placeholder_stretch_factor"] > 1.0
+    above = legs["placeholder_feet_above_floor_m"]
+    assert max(above.values()) == pytest.approx(gap, abs=1e-6)
+    assert min(above.values()) > 0.0, above  # 두 발 다 떠 있다
+    # 보조선은 **뜬 발마다** 하나씩이고, 선의 길이가 곧 옆에 적히는 간격이다(화면이 다시 재지 않는다).
+    expected_gap = {}
+    for _hip, _knee, ankle, toe in skeleton.PLACEHOLDER_LEG_CHAIN:
+        expected_gap[ankle] = above[ankle]
+        expected_gap[toe] = above[ankle]
+    guides = legs["placeholder_floor_gaps"]
+    assert len(guides) == len(above), guides
+    for guide in guides:
+        assert guide["gap_m"] == pytest.approx(expected_gap[guide["joint"]], abs=1e-12), guide
+        assert math.dist(guide["from"], guide["to"]) == pytest.approx(guide["gap_m"], abs=1e-9), guide
+        assert guide["label"] == f"간격 {guide['gap_m'] * 100.0:.0f}cm", guide
+    # 고지도 같은 숫자를 말하고, 그 숫자가 점선으로 그려진다는 것까지 적는다.
+    note = view["fit"]["notes"][view["fit"]["note_keys"].index("legs")]
+    assert f"최대 {max(above.values()):.2f}m 떠 있고" in note, note
+    assert "점선" in note, note
 
 
 def test_out_of_range_ik_opens_the_toggle_and_the_note_carries_the_numbers(test_mounts) -> None:  # noqa: ANN001
@@ -1318,13 +1331,15 @@ def _head_vertical(fit: dict) -> float:
     return world_axes.vertical_of(tuple(head["measured_marker"]))
 
 
-def test_placeholder_legs_stand_on_the_floor_and_never_shrink(test_mounts) -> None:  # noqa: ANN001
-    """자리표시 다리는 바닥면에 **선다** — 무릎을 접거나(길이 그대로), 모자라면 늘려서(배율 보고).
+def test_placeholder_legs_keep_rig_length_and_report_the_gap_to_the_floor(test_mounts) -> None:  # noqa: ANN001
+    """자리표시 다리는 **리그 길이를 지킨다** — 닿으면 무릎으로, 못 닿으면 뜬 채로 간격을 말한다.
 
-    옛 코드는 발을 고른 면에 닿게 하려고 다리 길이에 배율을 먹였고(레벨 3에서 0.35배 — 난쟁이),
-    그것이 자리표시를 통째로 없앤 이유였다. **줄이는 쪽은 그대로 금지**다: 짧은 쪽은 무릎 각도가
-    맡는다. 모자란 쪽만 늘리고(사용자 정책 "발을 바닥면에 세운다"), 늘린 배율·길이는 화면이 적는다.
-    한계(`skeleton.MAX_PLACEHOLDER_STRETCH`)를 넘겨야 닿는 면은 지면이 아니므로 세우지 않는다.
+    옛 코드는 발을 고른 면에 닿게 하려고 다리 길이에 배율을 먹였다: 줄이는 쪽은 레벨 3에서 0.35배
+    (난쟁이), 늘리는 쪽은 레벨 1에서 1.25배(없는 다리). 사용자가 그 둘을 다 물렸다 — "리그 길이
+    지키고 발이 뜨게". 진단용 접촉 시트는 이미 그 규칙을 고정하고 있었고
+    (`test_pose_contact_sheet.test_placeholder_legs_keep_rig_length_and_report_the_gap_to_the_floor`),
+    여기서는 **화면 경로도 같은 규칙을 쓰는지**를 본다. 이 검사의 바로 앞 판은 이 자리에서
+    `placeholder_stretch_factor > 1.0`(늘려서 세웠다)을 단언했다 — 그 성질이 뒤집혔다.
     """
     rows, _middle = _rows_with_leg_poses(41, ())
     raw = RawPass(rows=rows)
@@ -1338,7 +1353,7 @@ def test_placeholder_legs_stand_on_the_floor_and_never_shrink(test_mounts) -> No
     assert set(fit["legs"]) == {
         "plausible", "joints", "checks", "limits", "frame_offset", "searched_frames",
         "display_default", "placeholder_joints", "placeholder_bones", "placeholder_reaches_floor",
-        "placeholder_stretch_factor", "placeholder_stretch_m",
+        "placeholder_feet_above_floor_m", "placeholder_floor_gaps",
         "hip_above_floor_m", "rig_leg_length_m", "floor_vertical", "head_above_floor_m",
     }
     assert fit["legs"]["display_default"] == "placeholder"
@@ -1351,39 +1366,43 @@ def test_placeholder_legs_stand_on_the_floor_and_never_shrink(test_mounts) -> No
             if a in joints and b in joints
         }
 
-    # 세 갈래를 **엉덩이 높이에서** 잡는다: 무릎이 접어 닿는 면, 늘려야 닿는 면, 늘려도 못 닿는 면.
+    # 두 갈래를 **엉덩이 높이에서** 잡는다: 무릎이 접어 닿는 면, 엉덩이가 리그 다리보다 높은 면.
     leg_m = fit["legs"]["rig_leg_length_m"]
     hip_vertical = fit["legs"]["floor_vertical"] + fit["legs"]["hip_above_floor_m"]
-    over = skeleton.MAX_PLACEHOLDER_STRETCH + 1.0
     bend = service.skeleton_block(raw, geometry=_floor_geometry(hip_vertical - 0.5 * leg_m)).fit
-    stretch = service.skeleton_block(raw, geometry=_floor_geometry(hip_vertical - 1.2 * leg_m)).fit
-    far = service.skeleton_block(raw, geometry=_floor_geometry(hip_vertical - over * leg_m)).fit
+    hang = service.skeleton_block(raw, geometry=_floor_geometry(hip_vertical - 1.2 * leg_m)).fit
+    far = service.skeleton_block(raw, geometry=_floor_geometry(hip_vertical - 3.0 * leg_m)).fit
 
-    # 1) 무릎이 접어 닿는 면: 뼈 길이는 리그 그대로다(난쟁이 금지).
+    # 1) 무릎이 접어 닿는 면: 뼈 길이는 리그 그대로이고, 뜬 발이 없으니 보조선도 없다.
     assert bend["legs"]["placeholder_reaches_floor"] is True
-    assert bend["legs"]["placeholder_stretch_factor"] == pytest.approx(1.0)
-    assert bend["legs"]["placeholder_stretch_m"] == pytest.approx(0.0)
+    assert bend["legs"]["placeholder_floor_gaps"] == []
+    assert all(v == pytest.approx(0.0, abs=1e-9) for v in bend["legs"]["placeholder_feet_above_floor_m"].values())
     base = bone_lengths(bend)
     assert base
 
-    # 2) 늘려야 닿는 면: 발이 서고, 배율은 1보다 **크기만** 하다.
-    assert stretch["legs"]["placeholder_reaches_floor"] is True
-    factor = stretch["legs"]["placeholder_stretch_factor"]
-    assert factor > 1.0
-    assert factor == pytest.approx(stretch["legs"]["hip_above_floor_m"] / leg_m, rel=1e-9)
-    assert stretch["legs"]["placeholder_stretch_m"] == pytest.approx((factor - 1.0) * leg_m, rel=1e-9)
-    for name, length in bone_lengths(stretch).items():
-        if name.endswith("Toe"):  # 발끝은 수평이라 어느 갈래에서도 배율을 받지 않는다
-            assert length == pytest.approx(base[name], abs=1e-9), name
-        else:
-            assert length >= base[name] - 1e-12, name
-            assert length <= base[name] * factor + 1e-9, name
+    # 2) 엉덩이가 리그 다리보다 높은 면: **늘리지 않는다** — 뼈 길이가 한 마디도 안 변하고,
+    #    발마다의 간격과 그 간격을 그리는 보조선이 실린다.
+    assert hang["legs"]["placeholder_reaches_floor"] is False
+    for name, length in bone_lengths(hang).items():
+        assert length == pytest.approx(base[name], abs=1e-9), name
+    above = hang["legs"]["placeholder_feet_above_floor_m"]
+    assert min(above.values()) > 0.0, above
+    assert max(above.values()) == pytest.approx(hang["legs"]["hip_above_floor_m"] - leg_m, abs=1e-9)
+    guides = hang["legs"]["placeholder_floor_gaps"]
+    assert len(guides) == len(above), guides
+    for guide in guides:
+        assert math.dist(guide["from"], guide["to"]) == pytest.approx(guide["gap_m"], abs=1e-9), guide
+        assert guide["label"] == f"간격 {guide['gap_m'] * 100.0:.0f}cm", guide
+    # 고지가 그 간격을 말하고, 늘렸다는 말은 어디에도 없다.
+    note = hang["notes"][hang["note_keys"].index("legs")]
+    assert f"최대 {max(above.values()):.2f}m 떠 있고" in note, note
+    assert "배 늘려" not in note, note
 
-    # 3) 한계를 넘겨야 닿는 면: 늘리지도 줄이지도 않고 "닿지 않았다"고 말한다.
+    # 3) 훨씬 낮은 면(옛 배율 한계 ×2.0을 넘겨야 닿던 자리)도 규칙이 같다 — 간격만 커진다.
     assert far["legs"]["placeholder_reaches_floor"] is False
-    assert far["legs"]["placeholder_stretch_factor"] == pytest.approx(1.0)
     for name, length in bone_lengths(far).items():
         assert length == pytest.approx(base[name], abs=1e-9), name
+    assert min(far["legs"]["placeholder_feet_above_floor_m"].values()) > max(above.values())
     # 바닥면을 받아도 실측 마커·대표 프레임은 그대로다 — 바닥은 자리표시와 문구만 바꾼다.
     assert fit["frame_index"] == loose["frame_index"]
     assert [a["measured_marker"] for a in fit["anchors"]] == [a["measured_marker"] for a in loose["anchors"]]

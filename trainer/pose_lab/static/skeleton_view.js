@@ -401,11 +401,18 @@ function mount(THREE, container) {
   // 자리표시 다리(B) — 기본으로 보이는 쪽이다. IK 다리와 **한 층에서 동시에** 보이지 않는다.
   let skeletonPlaceholderLegs = null;
   let referencePlaceholderLegs = null;
+  // 자리표시 발이 바닥면에 못 닿은 층의 **간격 보조선**. 자리표시 다리와 한 몸으로 켜고 끈다.
+  let skeletonFloorGaps = null;
+  let referenceFloorGaps = null;
 
   const labelRegistry = [];
+  // 자리표시 발↔바닥면 **간격** 글자. IK 토글을 켠 층에서는 보조선과 함께 사라져야 한다 —
+  // 선 없는 숫자가 남으면 화면이 그리지 않는 것을 말하게 된다.
+  const gapLabels = [];
   function clearLabels() {
     for (const entry of labelRegistry) entry.el.remove();
     labelRegistry.length = 0;
+    gapLabels.length = 0;
   }
   function registerLabel(position, text, extraClass, extra) {
     const el = document.createElement("div");
@@ -1163,7 +1170,61 @@ function mount(THREE, container) {
     return group;
   }
 
-  /** 대표 프레임 실측 마커(구체)만. 3D 안에 숫자·보조선은 걸지 않는다(S6).
+  /** 자리표시 발과 바닥면 사이의 **간격** 표시(사용자 결정: "리그 길이 지키고 발이 뜨게").
+   *
+   * 엉덩이가 리그 다리보다 높은 패스에서는 곧게 내린 자리표시 발이 바닥면에 닿지 않는다. 예전에는
+   * 다리를 그 틈만큼 늘려 세웠는데, 늘린 다리는 없는 길이를 주장한다. 이제 뜬 채로 두고 **그 틈을
+   * 점선과 글자로** 말한다 — 두 끝점도 글자도 서버가 준다(`fit.legs.placeholder_floor_gaps`).
+   * 화면이 길이를 다시 재거나 cm로 다시 반올림하면 같은 틈이 두 숫자로 보인다.
+   *
+   * 선은 자리표시 뼈와 **같은 점선**이고 글자는 "간격"이라고 말한다 — 실측이 쓰는 부호(층 색으로
+   * 채운 구체·실선)를 쓰지 않는다. 재지 않은 것을 잰 것처럼 보이게 하지 않는다. */
+  function buildPlaceholderFloorGaps(fitBlock, layerColor, faded, layer) {
+    const group = new THREE.Group();
+    const guides = fitBlock?.legs?.placeholder_floor_gaps;
+    if (!Array.isArray(guides)) return group;
+    const opacity = (faded ? BONE_OPACITY_FADED : BONE_OPACITY) * LEG_OPACITY_FACTOR;
+    for (const guide of guides) {
+      const from = guide?.from;
+      const to = guide?.to;
+      if (!isVec3(from) || !isVec3(to)) continue;
+      const start = new THREE.Vector3(...from);
+      const end = new THREE.Vector3(...to);
+      const line = new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints([start, end]),
+        new THREE.LineDashedMaterial({
+          color: layerColor,
+          transparent: true,
+          opacity,
+          dashSize: COMPUTED_DASH,
+          gapSize: COMPUTED_GAP,
+        }),
+      );
+      line.computeLineDistances();
+      line.userData.kind = "placeholder-floor-gap";
+      line.userData.name = typeof guide.joint === "string" ? guide.joint : "";
+      group.add(line);
+      if (typeof guide.label === "string" && guide.label.length > 0) {
+        const entry = registerLabel(start.clone().lerp(end, 0.5), guide.label, "view3d-label-gap");
+        entry.layer = layer;
+        gapLabels.push(entry);
+      }
+    }
+    return group;
+  }
+
+  /** 간격 보조선이 실제로 씬에 있고 보이는가(검증용). 말이 아니라 이 값으로 잰다. */
+  function floorGapDebug(group) {
+    const names = [];
+    if (group) {
+      group.traverse((child) => {
+        if (child.userData.kind === "placeholder-floor-gap") names.push(child.userData.name);
+      });
+    }
+    return { lines: names.length, visible: group ? group.visible : false, joints: names };
+  }
+
+  /** 대표 프레임 실측 마커(구체)만. **실측 앵커에는** 숫자·보조선을 걸지 않는다(S6).
    *
    * 예전에는 여기서 보정 오프셋 선(joint→predicted)과 어긋남 점선(predicted→measured)을 그리고
    * 그 위에 "보정 오프셋 0.57m(적합값)"·"12.8cm" 라벨을 달았다. 사용자가 "보정 오프셋은 왜
@@ -1866,8 +1927,19 @@ function mount(THREE, container) {
     if (referenceLegs) referenceLegs.visible = on && legsAllowed.reference;
     // 끄면 자리표시(점선), 켜면 IK — **한 층에서 둘이 겹쳐 보이지 않는다**(B). 겹치면 어느 쪽이
     // 측정인지 읽을 수 없다. IK를 켤 수 없는 층은 자리표시가 그대로 남는다(다리 없는 화면은 없다).
-    if (skeletonPlaceholderLegs) skeletonPlaceholderLegs.visible = !(on && legsAllowed.query);
-    if (referencePlaceholderLegs) referencePlaceholderLegs.visible = !(on && legsAllowed.reference);
+    const placeholderShown = {
+      query: !(on && legsAllowed.query),
+      reference: !(on && legsAllowed.reference),
+    };
+    if (skeletonPlaceholderLegs) skeletonPlaceholderLegs.visible = placeholderShown.query;
+    if (referencePlaceholderLegs) referencePlaceholderLegs.visible = placeholderShown.reference;
+    // 간격 보조선과 그 글자는 자리표시 다리와 **한 몸**이다: IK로 바꾼 층에서는 둘 다 사라진다.
+    // 남겨 두면 IK 발 옆에 자리표시 발의 틈이 떠 있어 그림과 글자가 다른 것을 말하게 된다.
+    if (skeletonFloorGaps) skeletonFloorGaps.visible = placeholderShown.query;
+    if (referenceFloorGaps) referenceFloorGaps.visible = placeholderShown.reference;
+    for (const entry of gapLabels) {
+      entry.el.hidden = !(entry.layer === "reference" ? placeholderShown.reference : placeholderShown.query);
+    }
   }
   checkboxes.legs.addEventListener("change", () => {
     applyLegsToggle();
@@ -1939,6 +2011,8 @@ function mount(THREE, container) {
     referenceLegs = null;
     skeletonPlaceholderLegs = null;
     referencePlaceholderLegs = null;
+    skeletonFloorGaps = null;
+    referenceFloorGaps = null;
     if (meshObject) {
       scene.remove(meshObject);
       disposeObject3D(meshObject);
@@ -2010,6 +2084,13 @@ function mount(THREE, container) {
       referenceFit, LAYER_COLOR.reference, referenceFit?.faded === true,
     );
     layerGroups.reference.add(referencePlaceholderLegs);
+    // 못 닿은 발의 간격 보조선(점선 + "간격 NNcm"). 서버가 준 층만 그린다 — 닿은 층은 빈 목록이다.
+    skeletonFloorGaps = buildPlaceholderFloorGaps(fit, LAYER_COLOR.query, fit?.faded === true, "query");
+    layerGroups.query.add(skeletonFloorGaps);
+    referenceFloorGaps = buildPlaceholderFloorGaps(
+      referenceFit, LAYER_COLOR.reference, referenceFit?.faded === true, "reference",
+    );
+    layerGroups.reference.add(referenceFloorGaps);
     // 토글은 "다리가 있는가"가 아니라 **자리표시를 IK로 바꾸는가**다(B). 다리는 자리표시로 늘
     // 그려지므로 다리 없는 화면은 없다. 바꿀 IK가 해부학 범위 안인 층이 하나도 없을 때만 잠근다 —
     // 예전에는 바로 그때(L3·L6) 다리가 통째로 사라지고 토글까지 잠겨 볼 것도 바꿀 것도 없었다.
@@ -2164,6 +2245,13 @@ function mount(THREE, container) {
         query: skeletonPlaceholderLegs ? skeletonPlaceholderLegs.children.length : 0,
         reference: referencePlaceholderLegs ? referencePlaceholderLegs.children.length : 0,
       },
+      // 자리표시 발이 바닥에 못 닿은 층의 간격 보조선과 그 글자(사용자 결정: 발이 뜬다).
+      // 서버가 준 목록과 씬에 실제로 올라간 선이 같은지를 헤드리스 브라우저가 이 값으로 잰다.
+      placeholderFloorGaps: {
+        query: floorGapDebug(skeletonFloorGaps),
+        reference: floorGapDebug(referenceFloorGaps),
+      },
+      placeholderGapLabels: gapLabels.map((entry) => entry.el.textContent),
       // 층마다 다리가 실제로 보이는가. 한쪽 판정으로 양쪽을 켜면 없는 자세를 그림이 주장한다.
       legsShownByLayer: { query: legsShown(), reference: checkboxes.legs.checked && legsAllowed.reference },
       visibleBones: visibleBoneNames(),

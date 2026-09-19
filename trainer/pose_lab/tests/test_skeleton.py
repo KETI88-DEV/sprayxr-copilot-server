@@ -215,11 +215,13 @@ def test_standing_legs_hang_along_gravity_with_rig_bone_lengths() -> None:
 
 
 def test_standing_legs_never_scale_to_reach_the_floor() -> None:
-    """바닥면을 줘도 다리 길이는 리그 그대로다(U5) — 재는 것은 "발이 그 면보다 얼마나 아래인가"뿐이다.
+    """**어느 갈래에서도** 다리 길이는 리그 그대로다(U5, 사용자 결정 "리그 길이 지키고 발이 뜨게").
 
-    옛 코드는 발을 그 면에 닿게 하려고 허벅지·종아리에 한 배율(0.25~2.0)을 곱했다. 레벨 3에서 배율이
-    0.35라 작업자가 난쟁이로 보였고, 그 면은 애초에 작업자가 선 지면이 아니었다
-    (`skeleton.py` D3 주석). 여기서는 **어떤 바닥 높이를 줘도** 뼈 길이가 안 변하는 것을 고정한다.
+    옛 코드는 발을 그 면에 닿게 하려고 허벅지·종아리에 한 배율(0.25~2.0)을 곱했다 — 줄이는 쪽은
+    레벨 3에서 0.35라 작업자가 난쟁이로 보였고, 늘리는 쪽은 레벨 1에서 1.25~1.51이라 없는 다리를
+    지어냈다. **이 검사는 한때 이름이 말하는 것을 보지 않았다**: `reach_floor` 기본값(False)만 훑어,
+    배율이 실제로 살던 갈래(`reach_floor=True` — 닿게 하려는 갈래)를 한 번도 부르지 않았다. 이제 두
+    갈래를 다 훑는다 — 어떤 바닥 높이를 줘도, 닿게 해 달라고 하든 말든, 뼈 길이는 안 변한다.
     """
     up = np.array(world_axes.UP, dtype=float)
     joints = {"LeftThigh": (0.3, 1.1, 0.2), "RightThigh": (0.1, 1.05, 0.25)}
@@ -227,34 +229,39 @@ def test_standing_legs_never_scale_to_reach_the_floor() -> None:
     free = skeleton.standing_legs(joints, OFFSETS, forward)
     assert free is not None
     lowest = min(float(np.dot(np.array(free.joints[ankle]), up)) for _h, _k, ankle, _t in skeleton.PLACEHOLDER_LEG_CHAIN)
-    # 발보다 한참 위·한참 아래, 옛 배율 한계를 넘는 자리까지 훑는다.
+    # 발보다 한참 위·한참 아래, 옛 배율 한계(×2.0)를 넘는 자리까지 훑는다.
     for floor in (lowest + 2.0, lowest + 0.5, lowest, lowest - 0.5, lowest - 3.0):
-        snapped = skeleton.standing_legs(joints, OFFSETS, forward, floor=floor)
-        assert snapped is not None
-        assert snapped.joints == free.joints, floor  # 관절이 한 점도 안 움직인다
-        assert snapped.floor_vertical == pytest.approx(floor)
-        assert snapped.feet_below_floor_m == pytest.approx(floor - lowest, abs=1e-12)
-        for hip, knee, ankle, _toe in skeleton.PLACEHOLDER_LEG_CHAIN:
-            for a, b, child in ((hip, knee, knee), (knee, ankle, ankle)):
-                d = np.array(snapped.joints[b]) - np.array(snapped.joints[a])
-                assert abs(np.linalg.norm(d) - math.hypot(*OFFSETS[child])) < 1e-12, (floor, child)
+        for reach in (False, True):
+            snapped = skeleton.standing_legs(joints, OFFSETS, forward, floor=floor, reach_floor=reach)
+            assert snapped is not None
+            assert snapped.floor_vertical == pytest.approx(floor)
+            for hip, knee, ankle, _toe in skeleton.PLACEHOLDER_LEG_CHAIN:
+                for a, b, child in ((hip, knee, knee), (knee, ankle, ankle)):
+                    d = np.array(snapped.joints[b]) - np.array(snapped.joints[a])
+                    assert abs(np.linalg.norm(d) - math.hypot(*OFFSETS[child])) < 1e-12, (floor, reach, child)
+        # 닿게 해 달라고 하지 않은 갈래는 관절이 한 점도 안 움직이고, 그 면과의 거리만 잰다.
+        loose = skeleton.standing_legs(joints, OFFSETS, forward, floor=floor)
+        assert loose is not None
+        assert loose.joints == free.joints, floor
+        assert loose.feet_below_floor_m == pytest.approx(floor - lowest, abs=1e-12)
 
 
-def test_standing_legs_reach_the_floor_by_bending_or_stretching_never_shrinking() -> None:
-    """`reach_floor=True`면 발이 그 면에 **선다** — 짧은 쪽은 무릎이, 모자란 쪽은 배율이 맡는다.
+def test_standing_legs_reach_the_floor_by_bending_only_and_otherwise_report_the_gap() -> None:
+    """`reach_floor=True`는 **무릎만** 접어 세운다 — 못 닿으면 늘리지 않고 그 간격을 싣는다.
 
-    사용자 정책이 "벽 메시가 있으면 발을 바닥면에 세운다"이므로 뜬 발을 남기지 않는다. 다만 줄이는
-    배율은 어느 갈래에도 없다(그것이 난쟁이를 만들었다): 배율은 1.0 이상이고, 늘린 경우에만 1보다
-    크며, `MAX_PLACEHOLDER_STRETCH`를 넘겨야 닿는 면에서는 세우기를 포기하고 곧게 내린다.
+    사용자 결정은 "리그 길이 지키고 발이 뜨게"다. 엉덩이가 리그 다리보다 높은 면에서는 뼈 길이를
+    그대로 두고 발을 띄운 뒤 `reaches_floor=False`와 발마다의 간격(`feet_above_floor_m`)을 낸다.
+    **이 성질은 뒤집힌 것이다**: 바로 앞 판은 같은 자리에서 `stretch_factor > 1.0`(다리를 늘렸다)을
+    단언했다.
     """
     up = np.array(world_axes.UP, dtype=float)
     joints = {"LeftThigh": (0.3, 1.1, 0.2), "RightThigh": (0.1, 1.05, 0.25)}
     forward = (1.0, 0.7, 0.5)
     free = skeleton.standing_legs(joints, OFFSETS, forward)
-    assert free is not None and free.reaches_floor is None and free.stretch_factor is None
+    assert free is not None and free.reaches_floor is None and free.feet_above_floor_m is None
     leg = math.hypot(*OFFSETS["LeftCalf"]) + math.hypot(*OFFSETS["LeftFoot"])
-    hips = [float(np.dot(np.array(p), up)) for p in joints.values()]
-    lowest_hip, highest_hip = min(hips), max(hips)
+    hips = {name: float(np.dot(np.array(p), up)) for name, p in joints.items()}
+    lowest_hip, highest_hip = min(hips.values()), max(hips.values())
 
     def lengths(result):  # noqa: ANN001, ANN202
         out = {}
@@ -266,30 +273,37 @@ def test_standing_legs_reach_the_floor_by_bending_or_stretching_never_shrinking(
 
     rig = lengths(free)
 
-    # 1) 무릎이 접어 닿는 면: 길이 그대로, 두 발목이 정확히 그 면 위.
+    # 1) 무릎이 접어 닿는 면: 길이 그대로, 두 발목이 정확히 그 면 위, 간격은 0.
     bend_floor = lowest_hip - 0.5 * leg
     bent = skeleton.standing_legs(joints, OFFSETS, forward, floor=bend_floor, reach_floor=True)
     assert bent is not None and bent.reaches_floor is True
-    assert bent.stretch_factor == pytest.approx(1.0) and bent.stretch_m == pytest.approx(0.0)
     assert lengths(bent) == pytest.approx(rig, abs=1e-12)
+    assert bent.feet_above_floor_m is not None
     for _h, _k, ankle, _t in skeleton.PLACEHOLDER_LEG_CHAIN:
         assert float(np.dot(np.array(bent.joints[ankle]), up)) == pytest.approx(bend_floor, abs=1e-9)
+        assert bent.feet_above_floor_m[ankle] == pytest.approx(0.0, abs=1e-9)
 
-    # 2) 늘려야 닿는 면: 발이 서고 배율은 1보다 크다. 배율은 **더 높은** 엉덩이 쪽이다.
-    stretch_floor = lowest_hip - 1.2 * leg
-    tall = skeleton.standing_legs(joints, OFFSETS, forward, floor=stretch_floor, reach_floor=True)
-    assert tall is not None and tall.reaches_floor is True
-    assert tall.stretch_factor == pytest.approx((highest_hip - stretch_floor) / leg, rel=1e-12)
-    assert tall.stretch_factor > 1.0
-    assert tall.stretch_m == pytest.approx((tall.stretch_factor - 1.0) * leg, rel=1e-12)
-    for name, value in lengths(tall).items():
-        assert value >= rig[name] - 1e-12, name  # 줄어든 뼈는 하나도 없다
-    for _h, _k, ankle, _t in skeleton.PLACEHOLDER_LEG_CHAIN:
-        assert float(np.dot(np.array(tall.joints[ankle]), up)) == pytest.approx(stretch_floor, abs=1e-9)
-
-    # 3) 한계를 넘겨야 닿는 면: 세우지 않고 곧게 내린다 — 거인도 만들지 않는다.
-    too_low = lowest_hip - (skeleton.MAX_PLACEHOLDER_STRETCH + 1.0) * leg
-    hung = skeleton.standing_legs(joints, OFFSETS, forward, floor=too_low, reach_floor=True)
+    # 2) 엉덩이가 리그 다리보다 높은 면: **늘리지 않는다**. 관절은 묻지 않은 갈래와 한 점도 다르지
+    #    않고, 발마다의 간격이 (엉덩이 − 리그 다리)와 같다.
+    float_floor = lowest_hip - 1.2 * leg
+    hung = skeleton.standing_legs(joints, OFFSETS, forward, floor=float_floor, reach_floor=True)
     assert hung is not None and hung.reaches_floor is False
-    assert hung.stretch_factor == pytest.approx(1.0)
     assert hung.joints == free.joints
+    assert lengths(hung) == pytest.approx(rig, abs=1e-12)
+    assert hung.feet_above_floor_m is not None
+    for hip, _k, ankle, _t in skeleton.PLACEHOLDER_LEG_CHAIN:
+        expected = hips[hip] - float_floor - leg
+        assert expected > 0.0, ankle
+        assert hung.feet_above_floor_m[ankle] == pytest.approx(expected, abs=1e-12), ankle
+    # 두 발의 간격이 **서로 다르다** — 엉덩이 높이가 다르므로 한 숫자로 합치면 거짓이 된다.
+    assert abs(hung.feet_above_floor_m["LeftFoot"] - hung.feet_above_floor_m["RightFoot"]) > 1e-6
+    assert hung.hip_above_floor_m == pytest.approx(highest_hip - float_floor)
+    assert hung.rig_leg_length_m == pytest.approx(leg)
+
+    # 3) 훨씬 낮은 면(옛 배율 한계 ×2.0을 넘겨야 닿던 자리)도 규칙이 같다 — 간격만 커진다.
+    too_low = lowest_hip - 3.0 * leg
+    far = skeleton.standing_legs(joints, OFFSETS, forward, floor=too_low, reach_floor=True)
+    assert far is not None and far.reaches_floor is False
+    assert far.joints == free.joints
+    assert lengths(far) == pytest.approx(rig, abs=1e-12)
+    assert far.feet_above_floor_m["LeftFoot"] > hung.feet_above_floor_m["LeftFoot"]
