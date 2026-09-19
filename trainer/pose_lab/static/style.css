@@ -233,6 +233,26 @@ button { font-family: var(--sans); cursor: pointer; }
   .workspace-right { position: sticky; top: 1rem; }
 }
 
+/* 좁은 창(D): 두 열 래퍼를 풀고 ②③ 다음에 3D를 놓는다. 래퍼를 풀면 두 열의 자식들이 그대로
+   `.workspace` 격자의 항목이 되므로 `order`로 줄을 세울 수 있다.
+   **선택자는 래퍼를 기준으로 쓴다**(`.workspace-left > …`): `display: contents`는 그리기에서만
+   상자를 없애고 **선택자가 보는 DOM 트리는 그대로**라, `.workspace > #heroSection`은 아무것도
+   고르지 못한다 — 그렇게 썼다가 순서가 전혀 적용되지 않은 것을 헤드리스 실측으로 잡았다
+   (840×1050에서 ④ top=836이 3D 패널 top=999보다 앞에 남았다). 래퍼 기준으로 쓰면 `main`이
+   display:flex라 생기던 범위 문제(.workspace 밖으로 내보낸 ④b가 재정렬되는 것)도 함께 없다 —
+   ④b는 두 래퍼 중 어느 것의 자식도 아니므로 이 규칙들이 닿지 않는다.
+   실측(헤드리스 CDP, 840×1050, 김경호 L1·L3·L6 첫 패스, 아래 `.view3d-host` 높이까지 적용한 상태):
+   3D 패널 top=836 · 캔버스 top=931 h=460 bottom=1391 — ②③과 3D가 1.32화면 안에 들어오고
+   ④는 3D 뒤(top=1767)로 간다. scrollHeight 2439~2461.
+   1875×1000에는 이 블록이 닿지 않아 그대로다(캔버스 top=214 h=600). */
+@media (max-width: 79.99rem) {
+  .workspace-left, .workspace-right { display: contents; }
+  .workspace-left > #heroSection { order: 1; }
+  .workspace-left > #corrections { order: 2; }
+  .workspace-right > .view3d-panel { order: 3; }
+  .workspace-left > #improvementSection { order: 4; }
+}
+
 /* ---- ② 얼마나 다른가(이 화면의 답 — 가장 크게) --------------------------- */
 
 .hero-empty { color: var(--text-dim); }
@@ -552,6 +572,14 @@ dd { margin: 0; font-family: var(--mono); }
 @media (min-width: 80rem) {
   .view3d-host { height: clamp(480px, calc(100vh - var(--view3d-chrome)), 900px); }
 }
+/* 좁은 창(D): 캔버스를 뷰포트에 맞춰 낮춰 3D가 합리적인 스크롤 안에 들어오게 한다.
+   **이 규칙은 위 `.view3d-host` 기본 높이보다 뒤에 있어야 한다** — 특정도가 같아서 앞에 두면
+   나중에 오는 기본값(clamp(360px, 55vh, 560px))이 이긴다. 실제로 이 블록을 작업영역 쪽에 뒀을
+   때 840×1050에서 캔버스가 460이 아니라 560으로 남았다(헤드리스 CDP 실측).
+   캔버스를 줄여도 몸은 작아지지 않는다 — resize가 프레이밍을 다시 푼다. */
+@media (max-width: 79.99rem) {
+  .view3d-host { height: clamp(300px, 46vh, 460px); }
+}
 .view3d-host:active { cursor: grabbing; }
 .view3d-host.is-loading { opacity: 0.45; }
 .view3d-canvas { display: block; width: 100%; height: 100%; touch-action: none; }
@@ -638,8 +666,13 @@ dd { margin: 0; font-family: var(--mono); }
 .view3d-notes-more summary { cursor: pointer; color: var(--text-dim); }
 .view3d-notes-more summary:hover { color: var(--text); }
 .view3d-notes-more ul { list-style: none; margin: 0.15rem 0 0; padding: 0; line-height: 1.32; }
-/* 관절 축 평가 요약: ④b 맨 위에 가로로 흘려 쓴다. 제목·상태 수·관절 칩을 세로로 쌓으면
-   1875×1000 첫 화면 바닥에 2.7px 남기고 걸려서, 글꼴이 대체되거나 값이 한 줄 늘면 잘렸다. */
+/* 관절 축 평가 요약: ④b 맨 위에 가로로 흘려 쓴다.
+   **가로 배치 자체가 접힘선 여유를 만들지는 않는다**(C). 이 패널이 왼쪽 열에 있던 동안 이 요약은
+   그 열 폭(실측 680.9px)에서 한 줄이 아니라 두 줄(h=58px)이었고, 1875×1000에서 top=964 ·
+   bottom=1022으로 접힘선(1000)을 22px 넘겼다(840×1050에서도 1012→1070, 20px). 한 줄(h=34px)이
+   되는 것은 **넓은 창의 전폭에서**다(1875 실측 34px, 840은 전폭이어도 58px 두 줄).
+   ④b는 이제 .workspace 밖 전폭 행이다(index.html).
+   2.7px 같은 여유를 성질로 주장하지 않는다. */
 .joint-axes-summary {
   display: flex; flex-flow: row wrap; align-items: baseline; gap: 0.1rem 1.1rem;
   margin: 0 0 var(--sp-2); padding: 0 0 var(--sp-2); border-bottom: 1px solid var(--border);

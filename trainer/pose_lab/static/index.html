@@ -83,13 +83,28 @@
         <div class="improvement-score" id="improvementScore">—</div>
         <dl class="improvement-rows" id="improvementRows"></dl>
       </section>
+    </div>
 
-      <!-- ④b 건 각도 · 관절 축 평가(참고값) -->
+    <div class="workspace-right">
+      <section class="panel view3d-panel" aria-label="3D 뷰">
+        <section id="view3d" aria-label="3D 뷰"></section>
+      </section>
+    </div>
+  </div>
+
+  <!-- ④b 건 각도 · 관절 축 평가(참고값) — **.workspace 밖 전폭 행**(C).
+       왼쪽 열에 있던 동안 이 패널의 요약이 1875×1000 접힘선을 22px 넘겼다(top 964 · bottom 1022).
+       전폭으로 내리면 요약이 두 줄(58px)에서 한 줄(34px)이 되고, 왼쪽 열은 ④에서 끝나 첫 화면에 든다.
+       좁은 창 재배열(style.css의 max-width: 79.99rem)은 .workspace 안만 건드리므로 여기 order 규칙은 없다. -->
       <section class="panel orientation" id="orientationSection" aria-label="건 각도 · 관절 축 평가 참고값">
-        <!-- 관절 축 평가 **요약**을 패널 맨 위에 가로 한 줄로 둔다 — 2열로 나란히 놨을 때는
-             1875×1000 첫 화면 바닥에 2.7px 남기고 걸려서, 글꼴이 대체되거나 값이 한 줄 늘면
-             마지막 칩이 잘렸다. 가로로 흘리면 같은 내용이 더 낮은 높이에 들어가 여유가 생긴다.
-             전체 표는 그대로 아래에 둔다. -->
+        <!-- 관절 축 평가 **요약**을 패널 맨 위에 가로로 흘려 쓴다. 전체 표는 그대로 아래에 둔다.
+             **"가로로 흘리면 여유가 생긴다"고 쓰지 말 것**(C): 이 패널이 왼쪽 열에 있던 동안
+             가로 배치는 접힘선을 넘기는 것을 막지 못했다 — 왼쪽 열 폭(실측 680.9px)에서 이 요약은
+             한 줄이 아니라 **두 줄**(h=58px)이고, 1875×1000에서 top=964 · bottom=1022으로
+             접힘선(1000)을 22px 넘겼다(840×1050에서도 1012→1070, 20px). 한 줄(h=34px)이 되는 것은
+             **넓은 창의 전폭에서**다 — 이 패널을 .workspace 밖으로 내린 뒤 실측하니 1875에서 34px
+             한 줄이지만 840에서는 전폭이어도 58px 두 줄이다. 폭이 좁으면 줄 수는 늘어난다.
+             접힘선을 계약으로 삼는 대상은 ②·③(과 넓은 창의 3D)이고, 참고값인 ④b에는 걸지 않는다. -->
         <div class="joint-axes-summary" id="jointAxesSummary" hidden>
           <h2 class="orientation-title" id="jointAxesSummaryTitle">관절 축 평가</h2>
           <p class="orientation-header-note joint-axes-counts" id="jointAxesSummaryText"></p>
@@ -131,14 +146,6 @@
           </table>
         </details>
       </section>
-    </div>
-
-    <div class="workspace-right">
-      <section class="panel view3d-panel" aria-label="3D 뷰">
-        <section id="view3d" aria-label="3D 뷰"></section>
-      </section>
-    </div>
-  </div>
 
   <!-- ⑤ 나머지는 접는다: 기존 축 표 · 파라미터 -->
   <details class="panel details-panel">

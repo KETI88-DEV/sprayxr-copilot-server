@@ -377,6 +377,9 @@ function mount(THREE, container) {
   let meshObject = null;
   let skeletonLegs = null;
   let referenceLegs = null;
+  // 자리표시 다리(B) — 기본으로 보이는 쪽이다. IK 다리와 **한 층에서 동시에** 보이지 않는다.
+  let skeletonPlaceholderLegs = null;
+  let referencePlaceholderLegs = null;
 
   const labelRegistry = [];
   function clearLabels() {
@@ -642,8 +645,11 @@ function mount(THREE, container) {
   /** 좁은 정의: 머리 **실측** 마커(HMD)와 골반 관절, 이 두 점만의 화면 세로 거리와 캔버스 대비 비율.
    * 예전 합격선 문구('상체(머리 마커~골반) ≥ 캔버스 40%')가 가리키던 바로 그 두 점이지만, 그 40%
    * 기준은 다리를 맞춤 대상에서 뺐던 시절의 것이라 지금은 안 쓴다 — 다리를 넣은 지금은 40%가
-   * 실측 상한(헤드리스 CDP, 김경호 L1·L2·L3·L6, 0.219/0.196/0.314/0.193)보다 높아 닿을 수 없었다.
-   * 이 함수는 검증용 측정치로 남긴다.
+   * 실측 상한보다 높아 닿을 수 없다. 자리표시 다리를 모든 레벨의 맞춤 대상에 넣은 뒤(F) 다시 재도
+   * 마찬가지다: 기본 '자세 맞춤'에서 이 값이 김경호 L1 0.160 · L3 0.331 · L6 0.210이고
+   * (1875×1000·840×1050 동일), 맞춤 상자가 머리~바닥을 담는 한 이 대역을 벗어나지 않는다.
+   * 남은 레벨 간 차이는 프레이밍 규칙이 아니라 **자세**다 — 쭈그린 패스일수록 머리~바닥이 짧아
+   * 같은 몸통이 더 큰 비율을 차지한다. 이 함수는 검증용 측정치로 남긴다.
    * 넓은 정의(`upperBodyScreen`)는 손 관절·손 마커가 양끝일 때가 많아 훨씬 큰 값이 나온다 —
    * 그 값에 이 문구의 이름을 붙이면 출처와 다른 라벨이 된다. 두 값을 따로 내보내는 이유다. */
   function torsoScreenSpan() {
@@ -1092,6 +1098,47 @@ function mount(THREE, container) {
     return { group, legs };
   }
 
+  /** 이 층의 자리표시 다리 관절(월드). 서버가 준 것만 쓴다 — 화면이 다리를 지어내지 않는다. */
+  function placeholderJointsOf(fitBlock) {
+    const joints = fitBlock?.legs?.placeholder_joints;
+    return joints && typeof joints === "object" ? joints : {};
+  }
+
+  /** 자리표시 다리 하나(**점선**). 측정이 아니다(B).
+   *
+   * 서버가 세운 관절(`fit.legs.placeholder_joints`)을 서버가 준 짝(`placeholder_bones`)으로 잇기만
+   * 한다 — 어느 관절이 어디에 붙는지를 화면이 정하지 않는다. IK 다리의 실선 실린더도, 범례가 실측에
+   * 준 부호(층 색으로 채운 구체)도 쓰지 않는다: 점선인 것이 범례의 "점선 다리 = 자리표시(측정 아님)"와
+   * 짝이고, 그 짝이 어긋나면 화면이 재지 않은 것을 잰 것처럼 보이게 된다. */
+  function buildPlaceholderLegGroup(fitBlock, layerColor, faded) {
+    const group = new THREE.Group();
+    const joints = placeholderJointsOf(fitBlock);
+    const bones = fitBlock?.legs?.placeholder_bones;
+    if (!Array.isArray(bones)) return group;
+    const opacity = (faded ? BONE_OPACITY_FADED : BONE_OPACITY) * LEG_OPACITY_FACTOR;
+    for (const pair of bones) {
+      const [parent, child] = Array.isArray(pair) ? pair : [];
+      const a = joints[parent];
+      const b = joints[child];
+      if (!isVec3(a) || !isVec3(b)) continue;
+      const line = new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(...a), new THREE.Vector3(...b)]),
+        new THREE.LineDashedMaterial({
+          color: layerColor,
+          transparent: true,
+          opacity,
+          dashSize: COMPUTED_DASH,
+          gapSize: COMPUTED_GAP,
+        }),
+      );
+      line.computeLineDistances();
+      line.userData.kind = "placeholder-bone";
+      line.userData.name = `${parent}>${child}`;
+      group.add(line);
+    }
+    return group;
+  }
+
   /** 대표 프레임 실측 마커(구체)만. 3D 안에 숫자·보조선은 걸지 않는다(S6).
    *
    * 예전에는 여기서 보정 오프셋 선(joint→predicted)과 어긋남 점선(predicted→measured)을 그리고
@@ -1199,10 +1246,10 @@ function mount(THREE, container) {
         .filter((text) => typeof text === "string" && text.length > 0)
         .join(" ");
     }
-    if (typeof meshBlock.handedness_note === "string") {
-      const detail = typeof meshBlock.handedness_evidence_display === "string" ? ` ${meshBlock.handedness_evidence_display}` : "";
-      return `${meshBlock.handedness_note}${detail}`;
-    }
+    // 벽을 **그리는** 레벨에서 이 슬롯은 아무 말도 하지 않는다(E). 이 상자는 캔버스 위에 겹쳐
+    // 뜨는 자리라 "왜 벽이 없는가"만 말해야 하는데, 손대칭 판정 근거는 벽면 상태가 아니라 내부
+    // 사유다 — 벽을 그리는 유일한 레벨(L1)에서만 3D 위에 뜨던 것이 정확히 슬롯 용도의 정반대였다.
+    // 같은 종류의 내부 사유인 `reason_detail`과 같은 자리(캔버스 아래 '고지 더 보기')로 보낸다.
     return "";
   }
 
@@ -1220,15 +1267,23 @@ function mount(THREE, container) {
       return points;
     }
     if (hasSkeleton) {
-      // 숨긴 다리는 맞춤 대상에서도 뺀다 — 안 보이는 점 때문에 몸이 작아지면 안 된다.
-      // 다리가 보일 때는 **맞춤 대상에 넣는다** — 작업자는 다리로 서 있어야 한다(사용자 지시).
-      // 자리표시 다리는 더 이상 없다(S4): 다리는 해부학 범위 안 IK이거나 아예 없다.
-      const excluded = new Set(legsShown() ? [] : legJointNames(view));
-      for (const [name, p] of Object.entries(joints)) if (!excluded.has(name)) push(p);
+      // **그려지는 다리는 언제나 맞춤 대상이다**(F). 예전에는 이 한 줄이 `legsShown()`을 통해 서버
+      // 해부학 판정을 따라 갈렸다: 같은 프레이밍 코드가 레벨마다 다른 점 집합을 받아, L1은 다리를
+      // 넣어 상체가 캔버스의 0.240, L3·L6은 다리를 빼 0.554·0.369가 됐다. 프레이밍 규칙이 아니라
+      // **입력 점 집합**이 레벨마다 달랐던 것이다. 자리표시 다리는 모든 레벨에 있으므로, 그리는 쪽
+      // (IK 또는 자리표시)의 발을 늘 넣으면 맞춤 상자가 레벨 불문 "머리~바닥"이 되고 비율이 자세에만
+      // 의존한다. 층마다 자기 판정을 쓴다 — 두 층의 IK 판정은 자주 갈린다.
+      const legNames = new Set(legJointNames(view));
+      const queryExcluded = legsShown() ? new Set() : legNames;
+      for (const [name, p] of Object.entries(joints)) if (!queryExcluded.has(name)) push(p);
       // **기준 몸도 맞춤 대상이다**(S1). 두 자세를 겹쳐 보여 주는 것이 이 화면의 목적이므로, 기준이
       // 화면 밖으로 잘리면 그림이 성립하지 않는다.
       const referenceJoints = view.layers?.reference?.joints ?? {};
-      for (const [name, p] of Object.entries(referenceJoints)) if (!excluded.has(name)) push(p);
+      const referenceExcluded = referenceLegsShown() ? new Set() : legNames;
+      for (const [name, p] of Object.entries(referenceJoints)) if (!referenceExcluded.has(name)) push(p);
+      // IK를 끈 층은 **자리표시 다리가 그려진다** — 그 점이 맞춤 대상이다.
+      if (!legsShown()) for (const p of Object.values(placeholderJointsOf(view.fit))) push(p);
+      if (!referenceLegsShown()) for (const p of Object.values(placeholderJointsOf(view.reference_fit))) push(p);
       for (const anchor of view.fit?.anchors ?? []) {
         push(anchor.measured_marker);
         push(anchor.predicted_marker);
@@ -1367,18 +1422,31 @@ function mount(THREE, container) {
     return Array.isArray(view?.fit?.legs?.joints) ? view.fit.legs.joints : [];
   }
 
-  /** 지금 다리를 그리고 있는가. 서버 판정(`legs_visible_default`)을 사람이 툴바로 뒤집을 수 있다. */
+  /** 지금 **대상** 층이 IK 다리를 그리고 있는가. 끄면 그 자리에 자리표시 다리가 있다(B). */
   function legsShown() {
     return checkboxes.legs.checked && legsAllowed.query;
   }
 
-  /** 그려진 IK 다리의 발 관절 월드 좌표. 다리를 그리지 않는 화면에서는 빈 배열이다. */
+  /** **기준** 층이 IK 다리를 그리고 있는가. 두 층의 판정은 자주 갈리므로(자동 기준 24쌍 중 10쌍)
+   * 질의 판정으로 기준을 대신하면 맞춤 대상이 그림과 어긋난다. */
+  function referenceLegsShown() {
+    return checkboxes.legs.checked && legsAllowed.reference;
+  }
+
+  /** 지금 화면에 **그려진** 발 관절 월드 좌표. IK를 켠 층은 IK 발, 아니면 자리표시 발이다 —
+   * 이름은 어느 쪽이든 서버가 준다(`fit.legs.joints` / `fit.legs.placeholder_joints`). */
   function legFeetPoints(view) {
-    const joints = view?.layers?.query?.joints;
-    if (!joints || !legsShown()) return [];
-    return legJointNames(view)
+    if (legsShown()) {
+      const joints = view?.layers?.query?.joints ?? {};
+      return legJointNames(view)
+        .filter((name) => name.endsWith("Foot"))
+        .map((name) => joints[name])
+        .filter(isVec3);
+    }
+    const placeholder = placeholderJointsOf(view?.fit);
+    return Object.keys(placeholder)
       .filter((name) => name.endsWith("Foot"))
-      .map((name) => joints[name])
+      .map((name) => placeholder[name])
       .filter(isVec3);
   }
 
@@ -1425,9 +1493,9 @@ function mount(THREE, container) {
       return feet.every((p) => insideFrustum(p, solved)) ? probe.label : null;
     }).filter((name) => name !== null);
     const where = shows.length === 0 ? "" : ` — ${shows.map((n) => `'${n}'`).join(" · ")}에서 보입니다`;
-    // 그려지는 다리는 시뮬레이터 IK가 지은 것이지 바닥면에 세운 것이 아니다 — 발을 바닥면에
-    // 맞췄다고 부를 근거가 없다. 바닥면과 머리 높이의 관계는 서버 고지가 숫자로 말한다.
-    const what = "IK 발";
+    // 지금 그려지는 쪽의 이름을 쓴다(B). IK 발은 시뮬레이터가 지은 것이고, 자리표시 발은 서버가
+    // 바닥면에 세운 것이다 — 둘을 한 이름으로 부르면 고지가 그림과 다른 것을 가리킨다.
+    const what = legsShown() ? "IK 발" : "자리표시 발";
     return `${what}은 ${nowWord()} 화면 밖에 있습니다${where}.`;
   }
 
@@ -1704,6 +1772,10 @@ function mount(THREE, container) {
     const on = checkboxes.legs.checked;
     if (skeletonLegs) skeletonLegs.visible = on && legsAllowed.query;
     if (referenceLegs) referenceLegs.visible = on && legsAllowed.reference;
+    // 끄면 자리표시(점선), 켜면 IK — **한 층에서 둘이 겹쳐 보이지 않는다**(B). 겹치면 어느 쪽이
+    // 측정인지 읽을 수 없다. IK를 켤 수 없는 층은 자리표시가 그대로 남는다(다리 없는 화면은 없다).
+    if (skeletonPlaceholderLegs) skeletonPlaceholderLegs.visible = !(on && legsAllowed.query);
+    if (referencePlaceholderLegs) referencePlaceholderLegs.visible = !(on && legsAllowed.reference);
   }
   checkboxes.legs.addEventListener("change", () => {
     applyLegsToggle();
@@ -1767,6 +1839,8 @@ function mount(THREE, container) {
     markerRegistry = [];
     skeletonLegs = null;
     referenceLegs = null;
+    skeletonPlaceholderLegs = null;
+    referencePlaceholderLegs = null;
     if (meshObject) {
       scene.remove(meshObject);
       disposeObject3D(meshObject);
@@ -1829,14 +1903,22 @@ function mount(THREE, container) {
     debugLive.headDiameterM = typeof fit?.head_diameter_m === "number" ? fit.head_diameter_m : null;
     skeletonLegs = skeletonParts.legs;
     referenceLegs = referenceParts.legs;
-    // 다리 기본 표시는 서버 판정을 따른다(S4): 해부학 범위 안 IK 다리면 켜고, 아니면 끈다.
-    // 자리표시 다리는 없다 — 끄면 다리가 아예 없고 서버 고지가 왜 없는지 말한다.
+    // 자리표시 다리(B) — **기본으로 보이는 쪽**. 층마다 자기 fit의 것을 그린다.
+    skeletonPlaceholderLegs = buildPlaceholderLegGroup(fit, LAYER_COLOR.query, fit?.faded === true);
+    layerGroups.query.add(skeletonPlaceholderLegs);
+    referencePlaceholderLegs = buildPlaceholderLegGroup(
+      referenceFit, LAYER_COLOR.reference, referenceFit?.faded === true,
+    );
+    layerGroups.reference.add(referencePlaceholderLegs);
+    // 토글은 "다리가 있는가"가 아니라 **자리표시를 IK로 바꾸는가**다(B). 다리는 자리표시로 늘
+    // 그려지므로 다리 없는 화면은 없다. 바꿀 IK가 해부학 범위 안인 층이 하나도 없을 때만 잠근다 —
+    // 예전에는 바로 그때(L3·L6) 다리가 통째로 사라지고 토글까지 잠겨 볼 것도 바꿀 것도 없었다.
     legsAllowed = {
-      query: fit?.legs_visible_default === true,
-      reference: referenceFit?.legs_visible_default === true,
+      query: fit?.legs_toggle_enabled === true,
+      reference: referenceFit?.legs_toggle_enabled === true,
     };
     checkboxes.legs.disabled = !(legsAllowed.query || legsAllowed.reference);
-    checkboxes.legs.checked = legsAllowed.query || legsAllowed.reference;
+    checkboxes.legs.checked = false;
     applyLegsToggle();
 
     // 벽 위 분사 스트로크. 서버(`composite.stroke_runs`)가 **이미 잘라서** 준 연결 구간만 그린다 —
@@ -1922,6 +2004,12 @@ function mount(THREE, container) {
       dom.notes.append(item);
     }
     if (mesh && mesh.available !== true && typeof mesh.reason_detail === "string") moreLines.push(mesh.reason_detail);
+    // 손대칭 판정 근거(E). 벽을 그리는 레벨에서만 있는 내부 사유라 캔버스 위 벽면 슬롯이 아니라
+    // 여기(접힌 '고지 더 보기')에 둔다 — 위 `reason_detail`과 같은 종류, 같은 자리다.
+    if (mesh && mesh.available === true && typeof mesh.handedness_note === "string") {
+      const evidence = typeof mesh.handedness_evidence_display === "string" ? ` ${mesh.handedness_evidence_display}` : "";
+      moreLines.push(`${mesh.handedness_note}${evidence}`);
+    }
     if (moreLines.length > 0) {
       const summary = document.createElement("summary");
       summary.textContent = `고지 ${moreLines.length}건 더 보기`;
@@ -1967,6 +2055,15 @@ function mount(THREE, container) {
       },
       legsVisible: checkboxes.legs.checked,
       legsToggleDisabled: checkboxes.legs.disabled,
+      // 자리표시 다리(B)가 실제로 씬에 있고 보이는가 — 헤드리스 브라우저가 말이 아니라 이 값으로 잰다.
+      placeholderLegsShownByLayer: {
+        query: skeletonPlaceholderLegs ? skeletonPlaceholderLegs.visible : false,
+        reference: referencePlaceholderLegs ? referencePlaceholderLegs.visible : false,
+      },
+      placeholderBoneCounts: {
+        query: skeletonPlaceholderLegs ? skeletonPlaceholderLegs.children.length : 0,
+        reference: referencePlaceholderLegs ? referencePlaceholderLegs.children.length : 0,
+      },
       // 층마다 다리가 실제로 보이는가. 한쪽 판정으로 양쪽을 켜면 없는 자세를 그림이 주장한다.
       legsShownByLayer: { query: legsShown(), reference: checkboxes.legs.checked && legsAllowed.reference },
       visibleBones: visibleBoneNames(),

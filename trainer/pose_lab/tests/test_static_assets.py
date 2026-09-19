@@ -744,9 +744,17 @@ def feet_note_faults(js: str) -> list[str]:
     # 다리 관절 **이름**은 서버가 준다. 자리표시 다리를 없앤 뒤(S4) 그 출처는 `fit.legs.joints`다.
     if not re.search(r"view\?\.fit\?\.legs\?\.joints", js):
         faults.append("feet_names_not_from_server")
-    # 없앤 자리표시 다리가 화면에 되살아나면 안 된다.
-    if "placeholder_joints" in js or "placeholder-bone" in js:
-        faults.append("standing_placeholder_legs_are_back")
+    # 자리표시 다리(B)를 그리는 화면은 **그것이 자리표시라고 말해야 한다**. 재지 않은 다리를 IK와
+    # 같은 실선으로 그리면 잰 것처럼 보인다 — 점선이 범례("점선 다리 = 자리표시")와 짝이다.
+    # 그리고 어느 관절이 어디에 붙는지는 서버가 준 짝으로만 정한다.
+    if "function buildPlaceholderLegGroup(" not in js:
+        faults.append("no_placeholder_legs")
+    else:
+        builder = js.split("function buildPlaceholderLegGroup(", 1)[1].split("\n  }", 1)[0]
+        if "LineDashedMaterial" not in builder:
+            faults.append("placeholder_legs_are_not_dashed")
+        if "placeholder_bones" not in builder:
+            faults.append("placeholder_bones_not_from_server")
     if "function solvePreset(" not in js or "PRESET_PROBES" not in js:
         faults.append("no_preset_probe")
     # 프리셋 이름을 말로 정하지 않고 **풀어서** 확인하는가 — solveFraming을 실제로 부르는가.
@@ -773,6 +781,7 @@ def test_feet_note_checks_can_fail():
         "no_feet_note",
         "feet_note_not_in_framing_note",
         "feet_names_not_from_server",
+        "no_placeholder_legs",
         "no_preset_probe",
         "preset_names_are_not_measured",
     ]  # 빈 소스는 버튼도 없어 라벨 대조는 걸리지 않는다
@@ -782,12 +791,67 @@ def test_feet_note_checks_can_fail():
     renamed = full.replace('{ label: "궤적 포함", mode: "tracks"', '{ label: "궤적", mode: "tracks"')
     assert renamed != full
     assert feet_note_faults(renamed) == ["probe_labels_do_not_match_the_buttons"]
-    always = full.replace('const what = "IK 발";', 'const what = "바닥에 맞춘 IK 발";')
+    always = full.replace(
+        'const what = legsShown() ? "IK 발" : "자리표시 발";',
+        'const what = legsShown() ? "바닥에 맞춘 IK 발" : "자리표시 발";',
+        1,
+    )
     assert always != full
     assert feet_note_faults(always) == ["calls_feet_floor_snapped"]
-    revived = full.replace("  function legJointNames(view) {", "  const zombie = fit.legs.placeholder_joints;\n  function legJointNames(view) {", 1)
-    assert revived != full
-    assert feet_note_faults(revived) == ["standing_placeholder_legs_are_back"]
+    # 자리표시 다리를 IK와 같은 실선으로 그리면 잡는다(재지 않은 것이 잰 것처럼 보이는 경우).
+    solid = full.replace(
+        "          opacity,\n          dashSize: COMPUTED_DASH,",
+        "          opacity,\n          solidSize: COMPUTED_DASH,",
+        1,
+    ).replace("new THREE.LineDashedMaterial({\n          color: layerColor,\n          transparent: true,\n          opacity,",
+              "new THREE.LineBasicMaterial({\n          color: layerColor,\n          transparent: true,\n          opacity,", 1)
+    assert solid != full
+    assert feet_note_faults(solid) == ["placeholder_legs_are_not_dashed"]
+    # 뼈 짝을 화면이 지어내면 잡는다.
+    invented = full.replace("    const bones = fitBlock?.legs?.placeholder_bones;", "    const bones = LEG_CHAIN_GUESS;", 1)
+    assert invented != full
+    assert feet_note_faults(invented) == ["placeholder_bones_not_from_server"]
+
+
+def framing_leg_faults(js: str) -> list[str]:
+    """기본 프레이밍('자세 맞춤')이 **그리는 다리의 발**을 늘 맞춤 대상에 넣는가(F).
+
+    예전에는 이 자리의 한 줄이 서버 해부학 판정(`legsShown()`)을 따라 갈렸다: 같은 프레이밍 코드가
+    레벨마다 다른 점 집합을 받아, L1은 다리를 넣어 상체가 캔버스의 0.240, L3·L6은 다리를 빼
+    0.554·0.369가 됐다. 프레이밍 **규칙**이 아니라 **입력**이 레벨마다 달랐던 것이다. 자리표시
+    다리는 모든 레벨에 있으므로 그 발을 늘 넣으면 맞춤 상자가 레벨 불문 "머리~바닥"이 된다.
+    층마다 자기 판정을 쓴다 — 두 층의 IK 판정은 자주 갈린다.
+    """
+    if "function framingPoints(" not in js:
+        return ["no_framing_points"]
+    block = js.split("function framingPoints(", 1)[1].split("\n  }", 1)[0]
+    faults: list[str] = []
+    if "placeholderJointsOf(view.fit)" not in block:
+        faults.append("query_placeholder_feet_not_framed")
+    if "placeholderJointsOf(view.reference_fit)" not in block:
+        faults.append("reference_placeholder_feet_not_framed")
+    return faults
+
+
+def test_framing_always_includes_the_feet_that_are_drawn():
+    assert framing_leg_faults(_read("skeleton_view.js")) == []
+
+
+def test_framing_leg_checks_can_fail():
+    full = _read("skeleton_view.js")
+    assert framing_leg_faults("") == ["no_framing_points"]
+    dropped = full.replace(
+        "      if (!legsShown()) for (const p of Object.values(placeholderJointsOf(view.fit))) push(p);\n", "", 1
+    )
+    assert dropped != full
+    assert framing_leg_faults(dropped) == ["query_placeholder_feet_not_framed"]
+    reference = full.replace(
+        "      if (!referenceLegsShown()) for (const p of Object.values(placeholderJointsOf(view.reference_fit))) push(p);\n",
+        "",
+        1,
+    )
+    assert reference != full
+    assert framing_leg_faults(reference) == ["reference_placeholder_feet_not_framed"]
 
 
 # --- D3/D6: 카메라를 만진 뒤에도 화면 밖 고지가 참인가 ------------------------------------
@@ -1736,11 +1800,16 @@ def per_layer_leg_faults(js: str) -> list[str]:
         faults.append("no_per_layer_leg_gate")
         return faults
     toggle = js.split("function applyLegsToggle()", 1)[1].split("\n  }", 1)[0]
-    if "legsAllowed.query" not in toggle:
+    # **IK 다리를 켜는 줄 자체**를 본다. 자리표시 다리(B)도 같은 함수에서 같은 이름으로 문을 여닫기
+    # 때문에, "legsAllowed.reference가 이 함수 어딘가에 있다"로는 IK 쪽 빗장이 풀린 것을 못 잡는다
+    # (실제로 그 느슨한 검사는 기준 IK 다리의 빗장을 없앤 변이를 통과시켰다).
+    if "skeletonLegs.visible = on && legsAllowed.query" not in toggle:
         faults.append("query_legs_not_gated")
-    if "legsAllowed.reference" not in toggle:
+    if "referenceLegs.visible = on && legsAllowed.reference" not in toggle:
         faults.append("reference_legs_not_gated")
-    if "referenceFit?.legs_visible_default" not in js:
+    # 기준 층의 IK 토글 가능 여부도 **서버가** 준다(B에서 이름이 legs_toggle_enabled로 바뀌었다) —
+    # 화면이 질의 판정으로 기준을 대신하면 범위 밖 다리를 "기준은 이렇게 섰다"로 그리게 된다.
+    if "referenceFit?.legs_toggle_enabled" not in js:
         faults.append("reference_gate_not_from_server")
     return faults
 
