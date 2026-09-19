@@ -583,7 +583,7 @@ def torso_preset_faults(js: str, html: str) -> list[str]:
         faults.append("button_does_not_frame")
     if not re.search(r"FRAMING_TARGET\s*=\s*{[^}]*torso", js):
         faults.append("no_target")
-    if not re.search(r'mode === "pose" \|\| mode === "torso" \|\| mode === "body"\s*\?\s*points\.map', js):
+    if not re.search(r'mode === "pose" \|\| mode === "torso"\s*\?\s*points\.map', js):
         faults.append("fits_aabb_corners")
     if "function offscreenFitTargets(" not in js:
         faults.append("no_offscreen_probe")
@@ -603,9 +603,9 @@ def test_torso_preset_checks_can_fail():
     full = _read("skeleton_view.js")
     html = _read("index.html")
     boxed = full.replace(
-        'mode === "pose" || mode === "torso" || mode === "body"\n'
+        'mode === "pose" || mode === "torso"\n'
         "        ? points.map((p) => new THREE.Vector3(...p))",
-        'mode === "pose" || mode === "body"\n        ? points.map((p) => new THREE.Vector3(...p))',
+        'mode === "pose"\n        ? points.map((p) => new THREE.Vector3(...p))',
     )
     assert boxed != full
     assert torso_preset_faults(boxed, html) == ["fits_aabb_corners"]
@@ -762,9 +762,6 @@ def feet_note_faults(js: str) -> list[str]:
     # 프리셋 이름을 말로 정하지 않고 **풀어서** 확인하는가 — solveFraming을 실제로 부르는가.
     if not re.search(r"solvePreset\(probe\)[\s\S]{0,200}insideFrustum", js):
         faults.append("preset_names_are_not_measured")
-    # 다리는 이제 리그 제 길이로 내린다(배율 없음) — 발을 "바닥에 맞춘"이라고 부르면 거짓이다.
-    if "바닥에 맞춘" in js:
-        faults.append("calls_feet_floor_snapped")
     probe_block = js.split("const PRESET_PROBES = [", 1)[-1].split("];", 1)[0]
     labels = set(re.findall(r'label: "([^"]+)"', probe_block))
     buttons = set(re.findall(r'id="view3dPreset\w+" type="button">([^<]+)</button>', js))
@@ -788,7 +785,7 @@ def test_feet_note_checks_can_fail():
         "preset_names_are_not_measured",
     ]  # 빈 소스는 버튼도 없어 라벨 대조는 걸리지 않는다
     silent = full.replace(
-        "[describeTorsoFraming(mode), describePoseFraming(mode), describeFeetFraming()]",
+        "[describeTorsoFraming(mode), describePoseFraming(mode), describeTorsoShortfall(mode), describeFeetFraming()]",
         "[describeTorsoFraming(mode)]",
     )
     assert silent != full
@@ -796,13 +793,6 @@ def test_feet_note_checks_can_fail():
     renamed = full.replace('{ label: "궤적 포함", mode: "tracks"', '{ label: "궤적", mode: "tracks"')
     assert renamed != full
     assert feet_note_faults(renamed) == ["probe_labels_do_not_match_the_buttons"]
-    always = full.replace(
-        'const what = legsShown() ? "IK 발" : "자리표시 발";',
-        'const what = legsShown() ? "바닥에 맞춘 IK 발" : "자리표시 발";',
-        1,
-    )
-    assert always != full
-    assert feet_note_faults(always) == ["calls_feet_floor_snapped"]
     # 자리표시 다리를 IK와 같은 실선으로 그리면 잡는다(재지 않은 것이 잰 것처럼 보이는 경우).
     solid = full.replace(
         "          opacity,\n          dashSize: COMPUTED_DASH,",
@@ -843,34 +833,37 @@ def test_framing_always_includes_the_feet_that_are_drawn():
 
 
 def torso_floor_faults(js: str) -> list[str]:
-    """기본 뷰가 상체 합격선(F)을 **실제로 지키고**, 지키느라 자른 것을 말하고, 다시 볼 길을 주는가.
+    """기본 뷰가 **그려지는 것을 자르지 않고**, 그래서 못 미친 합격선(F)을 숫자로 말하는가.
 
     합격선('상체(머리 마커~골반) ≥ 캔버스 높이의 40%')과 "맞춤 대상을 하나도 자르지 않는다"는 한
-    카메라에서 동시에 참일 수 없다(저장한 페이로드로 푼 실측: 전신으로 담으면 김경호 L1 0.1599 ·
-    L3 0.3309 · L6 0.2103). 그래서 셋을 같이 고정한다 — 당기고, 자른 것의 이름을 말하고, '전신'
-    프리셋으로 되돌아갈 수 있어야 한다. 하나라도 빠지면 화면이 잘라 놓고 말하지 않게 된다.
+    카메라에서 동시에 참일 수 없다 — 상체는 머리~발 높이의 일부이고, 실측 김경호 L1 첫 패스에서
+    그 비의 천장이 0.4091m ÷ 1.5083m = 0.27이다. 한때 합격선까지 당겨 여섯 조합 전부 0.4000을
+    냈지만, 검증이 카메라 행렬로 투영해 보니 같은 화면에서 자리표시 다리 관절 16개 중 L1은 2개만
+    캔버스 안이었다(B 위반) — 숫자만 맞은 값이었다. 그래서 지금은 자르지 않는 쪽을 고정하고,
+    못 미친다는 사실과 지금 값을 화면이 말하는지를 같이 고정한다. 말하지 않으면 화면이 조용히
+    합격선을 어기게 된다.
     """
     faults: list[str] = []
     if "const MIN_TORSO_FRACTION" not in js:
         faults.append("no_pass_line")
-    if "function pullInToTorsoFloor(" not in js:
-        faults.append("no_pull_in")
-    if not re.search(r'return mode === "pose" \? pullInToTorsoFloor\(solved, fitPoints\)', js):
-        faults.append("default_preset_does_not_pull_in")
-    if "function torsoWorldPair(" not in js:
-        faults.append("pass_line_points_not_defined")
-    if not re.search(r"function describePoseFraming\([\s\S]{0,800}offscreenFitTargets\(\)", js):
+    if not re.search(r'const measure = mode === "pose" \? projectedReach', js):
+        faults.append("default_preset_may_cut")
+    if "function pullInToTorsoFloor(" in js:
+        faults.append("default_preset_pulls_in_again")
+    if "function describeTorsoShortfall(" not in js:
+        faults.append("no_shortfall_note")
+    if not re.search(r"function describeTorsoShortfall\([\s\S]{0,900}MIN_TORSO_FRACTION", js):
+        faults.append("shortfall_note_without_the_pass_line")
+    if not re.search(r"function describeFraming\(mode\)[\s\S]{0,300}describeTorsoShortfall\(mode\)", js):
+        faults.append("shortfall_note_not_in_framing_note")
+    if not re.search(r"function describePoseFraming\([\s\S]{0,900}offscreenFitTargets\(\)", js):
         faults.append("cut_targets_not_named")
-    if not re.search(r"function describeFraming\(mode\)[\s\S]{0,260}describePoseFraming\(mode\)", js):
-        faults.append("pose_note_not_in_framing_note")
-    if 'id="view3dPresetBody"' not in js:
-        faults.append("no_full_body_preset")
-    if not re.search(r'frameTo\("body"\)', js):
-        faults.append("full_body_button_does_not_frame")
+    if 'id="view3dPresetTorso"' not in js:
+        faults.append("no_torso_preset")
     return faults
 
 
-def test_default_view_meets_the_torso_pass_line_and_says_what_it_cut():
+def test_default_view_cuts_nothing_and_says_it_misses_the_pass_line():
     assert torso_floor_faults(_read("skeleton_view.js")) == []
 
 
@@ -879,22 +872,24 @@ def test_torso_floor_checks_can_fail():
     full = _read("skeleton_view.js")
     assert "no_pass_line" in torso_floor_faults("")
     loose = full.replace(
-        '    return mode === "pose" ? pullInToTorsoFloor(solved, fitPoints) : solved;',
-        "    return solved;",
+        '    const measure = mode === "pose" ? projectedReach : projectedRatio;',
+        "    const measure = projectedRatio;",
         1,
     )
     assert loose != full
-    assert torso_floor_faults(loose) == ["default_preset_does_not_pull_in"]
+    assert torso_floor_faults(loose) == ["default_preset_may_cut"]
     silent = full.replace(
+        "    return [describeTorsoFraming(mode), describePoseFraming(mode), describeTorsoShortfall(mode),"
+        " describeFeetFraming()]",
         "    return [describeTorsoFraming(mode), describePoseFraming(mode), describeFeetFraming()]",
-        "    return [describeTorsoFraming(mode), describeFeetFraming()]",
         1,
     )
     assert silent != full
-    assert torso_floor_faults(silent) == ["pose_note_not_in_framing_note"]
-    no_body = full.replace('<button id="view3dPresetBody" type="button">전신</button>\n', "", 1)
-    assert no_body != full
-    assert torso_floor_faults(no_body) == ["no_full_body_preset"]
+    assert torso_floor_faults(silent) == ["shortfall_note_not_in_framing_note"]
+    # 함수 정의만 이름을 바꾼다 — 호출은 남으므로 "고지가 합격선을 읽는다"는 성질만 깨진다.
+    mute = full.replace("  function describeTorsoShortfall(mode) {", "  function describeTorsoShortfallOff(mode) {", 1)
+    assert mute != full
+    assert torso_floor_faults(mute) == ["no_shortfall_note", "shortfall_note_without_the_pass_line"]
 
 
 def test_framing_leg_checks_can_fail():

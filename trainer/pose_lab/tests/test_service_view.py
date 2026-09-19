@@ -863,7 +863,8 @@ def test_the_floating_foot_is_the_short_rig_torso_not_short_legs() -> None:
 
     `skeleton.py`의 자리표시 주석이 적은 두 비율(골반→머리 · 골반→발목을 같은 작업자 BVH와 견준
     값)을 **실제 배치에서 다시 재서** 그 주석과 맞춘다. 다리가 짧은 것이 아니라 몸통이 짧다는 것이
-    이 두 숫자의 뜻이고, 그래서 화면은 다리를 늘리지 않고 틈을 숫자로 말한다.
+    이 두 숫자의 뜻이다. 몸통을 늘리면 실측(앵커 어긋남)이 나빠지므로 몸통은 그대로 두고, 측정이
+    아닌 쪽(자리표시 다리)을 그 틈만큼 늘려 발을 바닥에 세운다 — 늘린 길이는 이 틈과 같은 숫자다.
 
     **`test_mounts` 픽스처를 쓰지 않는다.** 그 픽스처는 `service.load_mounts`를 합성 장착 상수로
     바꾸는데, 장착 상수가 바뀌면 골반이 다른 높이에 놓인다 — 같은 패스에서 엉덩이–다리 틈이
@@ -898,9 +899,17 @@ def test_the_floating_foot_is_the_short_rig_torso_not_short_legs() -> None:
         assert measured / bvh == pytest.approx(ratio_written, abs=5e-4), (name, measured / bvh)
     # 몸통은 짧고(<0.8) 다리는 거의 제 길이다(>0.95) — 이 순서가 뒤집히면 원인 진단이 뒤집힌다.
     assert torso / bvh_torso < 0.8 < 0.95 < leg / bvh_leg
-    # 뜬 높이 = 엉덩이 − 리그 다리. 화면이 말하는 그 틈이다.
-    assert legs["placeholder_reaches_floor"] is False
-    assert legs["hip_above_floor_m"] - legs["rig_leg_length_m"] == pytest.approx(0.212, abs=0.005)
+    # 뜨던 높이 = 엉덩이 − 리그 다리. 이제 그 틈만큼 **늘려서** 세우고, 화면이 그 숫자를 적는다.
+    gap = legs["hip_above_floor_m"] - legs["rig_leg_length_m"]
+    assert gap == pytest.approx(0.212, abs=0.005)
+    assert legs["placeholder_reaches_floor"] is True
+    # 두 다리 길이가 1e-7m 자리에서 다르므로(리그 오프셋) 여기서는 그 자리까지만 견준다.
+    assert legs["placeholder_stretch_m"] == pytest.approx(gap, abs=1e-6)
+    assert legs["placeholder_stretch_factor"] == pytest.approx(
+        legs["hip_above_floor_m"] / legs["rig_leg_length_m"], rel=1e-6
+    )
+    # 늘리는 쪽만 있다 — 줄여서 난쟁이를 만드는 배율은 어떤 경우에도 나오지 않는다.
+    assert legs["placeholder_stretch_factor"] > 1.0
 
 
 def test_out_of_range_ik_opens_the_toggle_and_the_note_carries_the_numbers(test_mounts) -> None:  # noqa: ANN001
@@ -1309,12 +1318,13 @@ def _head_vertical(fit: dict) -> float:
     return world_axes.vertical_of(tuple(head["measured_marker"]))
 
 
-def test_placeholder_legs_never_scale_the_rig_whatever_the_floor(test_mounts) -> None:  # noqa: ANN001
-    """바닥면을 어디에 두든 자리표시 다리의 **뼈 길이는 리그 그대로**다(B).
+def test_placeholder_legs_stand_on_the_floor_and_never_shrink(test_mounts) -> None:  # noqa: ANN001
+    """자리표시 다리는 바닥면에 **선다** — 무릎을 접거나(길이 그대로), 모자라면 늘려서(배율 보고).
 
-    옛 코드는 발을 고른 면에 닿추려고 다리 길이에 배율을 먹였고(레벨 3에서 0.35배 — 난쟁이),
-    그것이 자리표시를 통째로 없앤 이유였다. 이제 닿추는 일은 **무릎 각도**가 하므로 길이는 움직이지
-    않는다 — 바닥을 발보다 한참 아래로 내려도, 다리로 닿을 만큼 올려도 같은 길이여야 한다.
+    옛 코드는 발을 고른 면에 닿게 하려고 다리 길이에 배율을 먹였고(레벨 3에서 0.35배 — 난쟁이),
+    그것이 자리표시를 통째로 없앤 이유였다. **줄이는 쪽은 그대로 금지**다: 짧은 쪽은 무릎 각도가
+    맡는다. 모자란 쪽만 늘리고(사용자 정책 "발을 바닥면에 세운다"), 늘린 배율·길이는 화면이 적는다.
+    한계(`skeleton.MAX_PLACEHOLDER_STRETCH`)를 넘겨야 닿는 면은 지면이 아니므로 세우지 않는다.
     """
     rows, _middle = _rows_with_leg_poses(41, ())
     raw = RawPass(rows=rows)
@@ -1328,6 +1338,7 @@ def test_placeholder_legs_never_scale_the_rig_whatever_the_floor(test_mounts) ->
     assert set(fit["legs"]) == {
         "plausible", "joints", "checks", "limits", "frame_offset", "searched_frames",
         "display_default", "placeholder_joints", "placeholder_bones", "placeholder_reaches_floor",
+        "placeholder_stretch_factor", "placeholder_stretch_m",
         "hip_above_floor_m", "rig_leg_length_m", "floor_vertical", "head_above_floor_m",
     }
     assert fit["legs"]["display_default"] == "placeholder"
@@ -1340,15 +1351,39 @@ def test_placeholder_legs_never_scale_the_rig_whatever_the_floor(test_mounts) ->
             if a in joints and b in joints
         }
 
-    far = service.skeleton_block(raw, geometry=_floor_geometry(floor - 5.0)).fit
-    near = service.skeleton_block(raw, geometry=_floor_geometry(_head_vertical(loose) - 0.60)).fit
-    # 너무 낮은 바닥에는 닿을 수 없다 — 닿추려고 늘리지 않고 닿지 않았다고 말한다.
-    assert far["legs"]["placeholder_reaches_floor"] is False
-    base = bone_lengths(fit)
+    # 세 갈래를 **엉덩이 높이에서** 잡는다: 무릎이 접어 닿는 면, 늘려야 닿는 면, 늘려도 못 닿는 면.
+    leg_m = fit["legs"]["rig_leg_length_m"]
+    hip_vertical = fit["legs"]["floor_vertical"] + fit["legs"]["hip_above_floor_m"]
+    over = skeleton.MAX_PLACEHOLDER_STRETCH + 1.0
+    bend = service.skeleton_block(raw, geometry=_floor_geometry(hip_vertical - 0.5 * leg_m)).fit
+    stretch = service.skeleton_block(raw, geometry=_floor_geometry(hip_vertical - 1.2 * leg_m)).fit
+    far = service.skeleton_block(raw, geometry=_floor_geometry(hip_vertical - over * leg_m)).fit
+
+    # 1) 무릎이 접어 닿는 면: 뼈 길이는 리그 그대로다(난쟁이 금지).
+    assert bend["legs"]["placeholder_reaches_floor"] is True
+    assert bend["legs"]["placeholder_stretch_factor"] == pytest.approx(1.0)
+    assert bend["legs"]["placeholder_stretch_m"] == pytest.approx(0.0)
+    base = bone_lengths(bend)
     assert base
-    for other in (far, near):
-        for name, length in bone_lengths(other).items():
+
+    # 2) 늘려야 닿는 면: 발이 서고, 배율은 1보다 **크기만** 하다.
+    assert stretch["legs"]["placeholder_reaches_floor"] is True
+    factor = stretch["legs"]["placeholder_stretch_factor"]
+    assert factor > 1.0
+    assert factor == pytest.approx(stretch["legs"]["hip_above_floor_m"] / leg_m, rel=1e-9)
+    assert stretch["legs"]["placeholder_stretch_m"] == pytest.approx((factor - 1.0) * leg_m, rel=1e-9)
+    for name, length in bone_lengths(stretch).items():
+        if name.endswith("Toe"):  # 발끝은 수평이라 어느 갈래에서도 배율을 받지 않는다
             assert length == pytest.approx(base[name], abs=1e-9), name
+        else:
+            assert length >= base[name] - 1e-12, name
+            assert length <= base[name] * factor + 1e-9, name
+
+    # 3) 한계를 넘겨야 닿는 면: 늘리지도 줄이지도 않고 "닿지 않았다"고 말한다.
+    assert far["legs"]["placeholder_reaches_floor"] is False
+    assert far["legs"]["placeholder_stretch_factor"] == pytest.approx(1.0)
+    for name, length in bone_lengths(far).items():
+        assert length == pytest.approx(base[name], abs=1e-9), name
     # 바닥면을 받아도 실측 마커·대표 프레임은 그대로다 — 바닥은 자리표시와 문구만 바꾼다.
     assert fit["frame_index"] == loose["frame_index"]
     assert [a["measured_marker"] for a in fit["anchors"]] == [a["measured_marker"] for a in loose["anchors"]]

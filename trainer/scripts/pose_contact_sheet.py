@@ -178,7 +178,8 @@ def build_cells(
             spec.key: joint_angles._angle_at(placed.joints, spec)  # noqa: SLF001
             for spec in joint_angles.ANGLE_SPECS
         }
-        # 화면과 같은 다리를 그린다 — 벽 메시가 있으면 바닥에 맞춘 자리표시 다리다(D3).
+        # 진단용이라 **리그 제 길이로 곧게** 내린다(`reach_floor` 없음). 화면은 발을 바닥면에
+        # 세우지만(무릎을 접거나 늘려서), 접촉 시트는 발이 고른 면보다 얼마나 아래인지를 보는 자리다.
         placeholder = skeleton.standing_legs(
             placed.joints,
             offsets,

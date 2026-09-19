@@ -290,10 +290,10 @@ PLACEHOLDER_LEG_CHAIN: Final[tuple[tuple[str, str, str, str], ...]] = (
     ("RightThigh", "RightCalf", "RightFoot", "RightToe"),
 )
 
-# 배율은 **절대 쓰지 않는다**. 옛 코드는 자리표시 발을 `composite.floor_vertical`이 고른 면에
-# 닿추려고 허벅지·종아리 길이에 한 배율(0.25~2.0)을 곱했고, 그 배율이 레벨 3에서 **0.35**,
+# **줄이는 배율은 절대 쓰지 않는다.** 옛 코드는 자리표시 발을 `composite.floor_vertical`이 고른
+# 면에 닿게 하려고 허벅지·종아리 길이에 한 배율(0.25~2.0)을 곱했고, 그 배율이 레벨 3에서 **0.35**,
 # 레벨 6에서 0.55가 돼 화면의 작업자가 난쟁이가 됐다(옛 리그 실측). 그 판단은 그대로 유효하다 —
-# 뼈 길이는 리그 그대로이고, 아래 어느 갈래도 길이를 건드리지 않는다.
+# 엉덩이가 바닥보다 낮게 있을 만큼 가까우면 **무릎이** 남는 길이를 접고, 길이는 건드리지 않는다.
 #
 # **고른 면은 지면이 맞다.** 예전 이 자리에는 "L3·L6에서 고른 면은 작업자가 선 지면이 아니다"라고
 # 적혀 있었고 그 문장이 자리표시 다리를 없앤 근거였는데, 규약 없는 실측(HMD 눈높이)이 그것을
@@ -305,11 +305,20 @@ PLACEHOLDER_LEG_CHAIN: Final[tuple[tuple[str, str, str, str], ...]] = (
 #   `reach_floor=False`(기본, 진단용 접촉 시트): 리그 제 길이로 곧게 내린다. 발이 고른 면보다
 #     아래로 내려가는 것을 허용한다 — 레벨 3에서는 발이 바닥면 0.605m 아래다. 그 관계는 숨기지
 #     않고 `PlaceholderLegs.feet_below_floor_m`가 그대로 싣는다.
-#   `reach_floor=True`(화면): **무릎을 굽혀** 발목을 그 면에 세운다(2마디 IK). 엉덩이–바닥 거리가
-#     리그 다리보다 짧을 때 남는 길이를 무릎이 흡수한다 — 쭈그린 패스에서 쭈그린 그림이 나온다.
-#     이것은 배율이 아니라 관절 각도라 뼈 길이를 거짓말하지 않는다. 엉덩이가 리그 다리보다 **높으면**
-#     늘리지 않는다: 곧게 내린 채 `reaches_floor=False`로 말한다(실측 김경호 L1 첫 패스는 엉덩이가
-#     바닥 위 1.045·0.975m라 리그 다리 0.833m로 닿을 수 없다).
+#   `reach_floor=True`(화면): 발목을 그 면에 **세운다**. 사용자 정책이 "벽 메시가 있으면 발을
+#     바닥면에 세운다"이므로 이 갈래는 뜬 발을 남기지 않는다. 어떻게 세우는지는 엉덩이 높이가 가른다.
+#       엉덩이–바닥 거리가 리그 다리보다 **짧으면**: **무릎을 굽힌다**(2마디 IK). 남는 길이를
+#         무릎이 흡수한다 — 쭈그린 패스에서 쭈그린 그림이 나온다. 각도라 뼈 길이를 거짓말하지 않는다.
+#         실측 김경호 L3·L6 첫 패스가 여기다(엉덩이 바닥 위 0.269·0.519m).
+#       엉덩이가 리그 다리보다 **높으면**: 자리표시 다리를 그 거리까지 **늘린다**(허벅지·종아리에
+#         같은 배율, 1.0 미만은 절대 없다). 실측 김경호 L1 첫 패스가 여기다 — 엉덩이가 바닥 위
+#         1.0453·0.9749m인데 리그 다리는 0.8333m라 배율 1.254·1.170배(+0.2120·+0.1416m)이고,
+#         기준(전형기 1000564_1 #0)은 1.407·1.505배(+0.3390·+0.4211m)다. 예전에는 이 자리에서
+#         늘리지 않고 발을 띄웠는데, 그 그림은 "작업자가 공중에 떠 있다"는, 역시 없는 사실을
+#         주장한다. **늘린 길이는 측정이 아니므로 화면이 배율과 늘린 길이를 숫자로 적는다**
+#         (`service.LEGS_PLACEHOLDER_STRETCHED_NOTE`) — 자리표시 전체가 애초에 측정이 아니다.
+#       `MAX_PLACEHOLDER_STRETCH`를 넘겨야 닿는 바닥은 **고른 면이 틀렸다는 뜻**이라 세우지 않는다
+#         (사람 엉덩이는 바닥 위 1.67m에 오지 않는다). 그때만 곧게 내린 채 `reaches_floor=False`다.
 # 바닥면을 **고르는 규칙 자체는 그대로다**(`composite.floor_vertical`).
 #
 # **왜 서 있는 패스에서 발이 뜨는가 — 다리가 아니라 몸통이다.** 이전 라운드가 "리그 다리가 짧은
@@ -325,15 +334,24 @@ PLACEHOLDER_LEG_CHAIN: Final[tuple[tuple[str, str, str, str], ...]] = (
 #
 # 몸통을 늘리는 길은 `body_proportions`가 이미 실측으로 재 봤다: 골반→가슴은 앵커 오차가 그대로라
 # 이미 늘렸고, **가슴→머리**를 BVH 비례로 늘리면 앵커 어긋남이 머리 80.6→92.8mm로 나빠진다.
-# 남은 27%는 거기에 몰려 있다. 그래서 여기서는 늘리지 않고, 화면이 틈을 숫자로 말한다.
+# 남은 27%는 거기에 몰려 있다. 그래서 **몸통은 늘리지 않는다** — 실측을 악화시키기 때문이다.
+# 대신 측정이 아닌 쪽(자리표시 다리)을 그 틈만큼 늘려 발을 바닥에 세우고, 화면이 배율과 늘린 길이를
+# 숫자로 적는다. 늘린 값과 이 틈은 같은 숫자다(엉덩이 1.0453 − 리그 다리 0.8333 = 0.2120m).
 #
 # 발끝은 수평이라 어느 갈래에서도 길이를 받지 않는다. **이 다리는 측정이 아니다** — 화면은 점선으로
 # 그리고 "자리표시(측정 아님)"라고 적는다.
 
 
+# 자리표시 다리를 바닥에 세우려고 허용하는 **최대** 배율. 1.0 미만(줄이기)은 어떤 경우에도 없다.
+# 사람 엉덩이는 바닥 위 1.67m(= 리그 다리 0.833m × 2.0)에 오지 않으므로, 이 값을 넘겨야 닿는 면은
+# 작업자가 선 지면이 아니다 — 그때는 세우지 않고 닿지 않는다고 말한다. 실데이터에서 가장 큰 배율은
+# 1.505배(김경호 L1 첫 패스의 기준 전형기 1000564_1 #0)라 이 한계는 실데이터에 걸리지 않는다.
+MAX_PLACEHOLDER_STRETCH: Final = 2.0
+
+
 @dataclass(frozen=True, slots=True)
 class PlaceholderLegs:
-    """자리표시 다리. 측정이 아니다 — 뼈 길이는 리그 그대로이고 배율을 먹이지 않는다.
+    """자리표시 다리. 측정이 아니다 — 줄이는 배율은 없고, 늘린 경우에는 얼마나 늘렸는지 싣는다.
 
     `floor_vertical`은 벽 메시가 고른 바닥면의 월드 수직 높이(메시가 없으면 None)이고,
     `feet_below_floor_m`는 **가장 낮은 발목**이 그 면보다 얼마나 아래인가다(음수면 위).
@@ -342,6 +360,11 @@ class PlaceholderLegs:
     None(물어본 적이 없다는 뜻이고, False와 구별한다). `hip_above_floor_m`는 **더 높은** 엉덩이가
     그 면 위 얼마인가, `rig_leg_length_m`는 리그 허벅지+종아리 길이다: 닿지 못했을 때 화면이
     "왜 못 닿았는가"를 지어내지 않고 이 두 숫자로 말한다.
+
+    `stretch_factor`는 세우려고 다리에 먹인 **가장 큰** 배율이다 — 1.0이면 길이를 건드리지 않았다
+    (무릎만 굽혔다), 1.0보다 작은 값은 나오지 않는다(난쟁이 금지). `stretch_m`은 그때 늘어난 길이
+    (m)다. 물어본 적이 없으면(`reach_floor=False`거나 바닥 없음) 둘 다 None이다 — 화면은 이 두
+    값으로 "늘려 그렸다"를 말하고, 스스로 배율을 다시 계산하지 않는다.
     """
 
     joints: dict[str, Vec3]
@@ -350,6 +373,8 @@ class PlaceholderLegs:
     reaches_floor: bool | None = None
     hip_above_floor_m: float | None = None
     rig_leg_length_m: float | None = None
+    stretch_factor: float | None = None
+    stretch_m: float | None = None
 
 
 def _knee_to_floor(
@@ -380,6 +405,31 @@ def _knee_to_floor(
     return knee, ankle
 
 
+def _straight_to_floor(
+    hip: np.ndarray,
+    gap: float,
+    thigh: float,
+    calf: float,
+    down: np.ndarray,
+) -> tuple[tuple[np.ndarray, np.ndarray], float] | None:
+    """엉덩이에서 바로 아래 바닥까지 **곧게 선** 다리로 잇는다. 늘려야만 닿을 때만 쓴다.
+
+    허벅지·종아리에 **같은 배율**을 먹이되 1.0 미만은 절대 내주지 않는다 — 줄여서 세우는 일(난쟁이)은
+    이 저장소가 한 번 저지른 거짓이고, 짧은 쪽은 무릎이 맡는다(`_knee_to_floor`). `MAX_PLACEHOLDER_STRETCH`를
+    넘겨야 닿는 바닥은 작업자가 선 지면이 아니라는 뜻이라 None을 돌려준다. 돌려주는 배율은 화면이
+    그대로 적는 숫자다 — 화면이 다시 계산하지 않는다.
+    """
+    length = thigh + calf
+    if not math.isfinite(gap) or length <= 0.0:
+        return None
+    scale = gap / length
+    if scale <= 1.0 or scale > MAX_PLACEHOLDER_STRETCH:
+        return None
+    knee = hip + down * (thigh * scale)
+    ankle = knee + down * (calf * scale)
+    return (knee, ankle), scale
+
+
 def standing_legs(
     joints: Mapping[str, Vec3],
     offsets: Mapping[str, Vec3],
@@ -394,9 +444,11 @@ def standing_legs(
     굽히지 않는다 — 방향을 지어내지 않는다.
 
     `reach_floor=False`(기본)면 리그 제 길이로 곧게 내리고, `floor`가 오면 발목이 그 면보다 얼마나
-    아래인지만 재서 싣는다(`feet_below_floor_m`). `reach_floor=True`면 **무릎을 굽혀** 발목을 그
-    면에 세운다(`_knee_to_floor`). 어느 쪽도 뼈 길이를 바꾸지 않는다 — 닿을 수 없으면 늘리지 않고
-    곧게 내린 채 `reaches_floor=False`로 말한다.
+    아래인지만 재서 싣는다(`feet_below_floor_m`). `reach_floor=True`면 발목을 그 면에 **세운다**:
+    엉덩이가 리그 다리보다 낮게 있으면 **무릎을 굽히고**(`_knee_to_floor`, 길이 그대로), 높으면
+    곧게 선 채로 **늘린다**(`_straight_to_floor`, 배율은 `stretch_factor`로 싣는다). 줄이는 배율은
+    어느 갈래에도 없다. `MAX_PLACEHOLDER_STRETCH`를 넘겨야 닿는 바닥에서만 세우기를 포기하고 곧게
+    내린 채 `reaches_floor=False`로 말한다.
     """
     down = -np.array(world_axes.UP, dtype=float)
     up = -down
@@ -416,6 +468,8 @@ def standing_legs(
     ankle_heights: list[float] = []
     hip_heights: list[float] = []
     reached: list[bool] = []
+    scales: list[float] = []
+    added: list[float] = []
     leg_length: float | None = None
     for hip, knee, ankle, toe in chain:
         h = np.array(joints[hip], dtype=float)
@@ -424,15 +478,25 @@ def standing_legs(
         leg_length = thigh + calf
         hip_height = float(np.dot(h, up))
         hip_heights.append(hip_height)
-        bent = None
-        if reach_floor and floor is not None and heading is not None:
-            bent = _knee_to_floor(h, hip_height - floor, thigh, calf, down, heading)
-        if bent is None:
+        stood = None
+        scale = 1.0
+        if reach_floor and floor is not None:
+            gap = hip_height - floor
+            # 짧은 쪽은 무릎이(길이 그대로), 모자란 쪽은 배율이 맡는다 — 줄이는 배율은 없다.
+            if heading is not None:
+                stood = _knee_to_floor(h, gap, thigh, calf, down, heading)
+            if stood is None:
+                stretched = _straight_to_floor(h, gap, thigh, calf, down)
+                if stretched is not None:
+                    stood, scale = stretched
+        if stood is None:
             k = h + down * thigh
             a = k + down * calf
         else:
-            k, a = bent
-        reached.append(bent is not None)
+            k, a = stood
+        reached.append(stood is not None)
+        scales.append(scale)
+        added.append((scale - 1.0) * leg_length)
         out[hip] = _as_tuple(h)
         out[knee] = _as_tuple(k)
         out[ankle] = _as_tuple(a)
@@ -447,6 +511,9 @@ def standing_legs(
         reaches_floor=all(reached) if asked else None,
         hip_above_floor_m=None if floor is None or not hip_heights else max(hip_heights) - floor,
         rig_leg_length_m=leg_length,
+        # 물어본 적이 없으면 None, 물어봤으면 실제로 먹인 **가장 큰** 배율(1.0 = 길이 그대로)이다.
+        stretch_factor=max(scales) if asked and scales else None,
+        stretch_m=max(added) if asked and added else None,
     )
 
 

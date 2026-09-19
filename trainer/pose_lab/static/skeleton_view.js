@@ -79,26 +79,33 @@ const BADGE_MIN_PX = 26;
 const LABEL_PUSH_PX = 16;
 // 맞춤 목표 = 맞춤 대상이 캔버스 반폭·반높이에서 차지할 비율. 남기는 14%는 마커 구체 반지름·
 // 화살표 촉·글자 라벨 몫이다(0.75는 그만큼을 그냥 비워 뒀다).
-//   body("전신"): 그려지는 것을 **하나도 자르지 않는다** — 두 몸·자리표시 다리·교정 화살표·벽면
-//     스트로크가 전부 캔버스 안이다. 발이 바닥면에 선 것을 보는 자리다(B).
-//   pose(기본·'자세 맞춤'): body와 **같은 점 집합·같은 목표**로 맞춘 뒤, 상체(머리 실측 마커~골반)가
-//     캔버스 높이의 `MIN_TORSO_FRACTION`에 못 미치면 그 비율이 될 때까지 당긴다(F 합격선).
+//   pose(기본·'자세 맞춤'): **그려지는 것을 하나도 자르지 않는다** — 두 몸·자리표시 다리·교정
+//     화살표·벽면 스트로크가 전부 캔버스 안이다. 발이 바닥면에 선 것을 보는 자리이고(B), 기준
+//     벽면 스트로크가 보이는 자리다(S2). 레벨과 무관하게 이 한 규칙이다(F).
 //   torso("상체 확대")만 0.98이다 — 상체를 캔버스에 꽉 채우려고 일부러 다리·교정 화살표·착탄점을
 //     맞춤 대상에서 뺐고, 그래서 그것들이 화면 밖으로 나갈 수 있다. 나간 것의 이름은 캔버스 아래에 적는다.
-const FRAMING_TARGET = { pose: 0.86, body: 0.86, tracks: 0.75, wall: 0.9, torso: 0.98 };
+const FRAMING_TARGET = { pose: 0.86, tracks: 0.75, wall: 0.9, torso: 0.98 };
 
-// F 합격선: 상체(머리 **실측** 마커~골반)가 캔버스 높이에서 차지할 **최소** 비율.
+// F 합격선: 상체(머리 **실측** 마커~골반)가 캔버스 높이에서 차지할 최소 비율. 기본 뷰는 이 선을
+// **지키지 못할 때 그 사실을 적는다**(`describeTorsoShortfall`) — 당겨서 맞추지 않는다.
 //
-// 이 한 줄이 레벨 간 산포를 없앤다. 전신('전신' 프리셋)으로 담으면 이 비율이 자세에만 달려 있어
-// 레벨마다 갈린다 — 실측(헤드리스 CDP, 김경호 L1·L3·L6 첫 패스, 기준 자동, 1875×1000의 캔버스
-// 1085×600과 840×1050의 767×460): '전신'에서 0.1599 · 0.3309 · 0.2103(창 크기와 무관하게 동일).
-// 세 레벨 다 합격선 아래이므로 기본 뷰는 여섯 조합 **전부 0.4000**이 되고 산포가 0이 된다.
+// 한때 여기서 합격선까지 당겼고(`pullInToTorsoFloor`), 여섯 조합 전부 0.4000이 나왔다. 그 값은
+// 숫자만 맞은 값이었다 — 검증이 카메라 행렬로 직접 투영해 재니 같은 화면에서 **자리표시 다리
+// 관절 16개 중 L1은 2개만** 캔버스 안이었고(발 y=942~1030, 캔버스 높이 600), 대상·기준 벽면
+// 스트로크 끝점 3개도 밖이었다. 사용자 정책은 "자리표시 다리를 기본으로 그린다"(B)이고 첫 불만은
+// "기준 스트로크가 보이지 않는다"(S2)였으므로, 그 둘을 화면 밖으로 밀어내고 얻은 합격은 합격이 아니다.
 //
-// **값을 치르는 쪽**: 전신을 담을 수 없다. 당긴 카메라에서 맞춤 대상이 캔버스 밖으로 나간다 —
-// 같은 실측에서 L1은 벽면 스트로크 끝점 3개와 자리표시 발, L6은 교정 1의 화살촉과 스트로크 3점,
-// L3은 자리표시 발이 나갔다. 합격선과 "아무것도 자르지 않는다"는 한 카메라에서 동시에 참일 수
-// 없다 — 여기서는 합격선을 지키고 **무엇이 나갔는지 이름으로 말하며**(`describePoseFraming`),
-// '전신' 프리셋이 한 번 눌러 다 보여 준다(그 프리셋에서 발이 다시 화면 안: 실측 feetOnScreen=true).
+// 둘은 한 카메라에서 동시에 참일 수 없다 — 이것은 취향이 아니라 기하다. 상체는 머리~발 높이의
+// 일부이므로 전신을 담으면 상체 비율의 천장이 (상체 길이 ÷ 머리~발 높이)다: 실측 김경호 L1 첫
+// 패스에서 머리 실측 마커가 바닥 위 1.5083m, 골반→머리 0.4091m라 천장이 0.27이고 합격선 0.40에
+// 닿지 못한다. 그래서 기본 뷰는 **자르지 않는 쪽**을 택하고, 못 미친 값과 합격선을 화면이 숫자로
+// 말하며, 그 선을 넘겨 보려는 사람은 '상체 확대'를 누른다(그 프리셋은 일부러 자른다).
+//
+// 고친 뒤 실측(헤드리스 CDP, 김경호 L1·L3·L6 첫 패스, 기준 자동, 1875×1000·840×1050 여섯 조합):
+// 기본 뷰의 상체 비율은 L1 0.1517 · L3 0.3309 · L6 0.2103(창 크기와 무관)이고, 화면 밖으로 나간
+// 맞춤 대상은 **0개**, 카메라 행렬로 직접 투영한 자리표시 다리 관절은 여섯 조합 모두 16/16이
+// 캔버스 안이다. '상체 확대'는 같은 패스에서 0.6448 · 0.7675 · 0.5266이라 합격선을 넘는다 —
+// 고지의 마지막 문장이 주장하는 그 값이 실제로 그 값이다.
 const MIN_TORSO_FRACTION = 0.4;
 
 // 움직임 궤적은 **차분한 한 색**이다(S3). 예전에는 `view.weights`(채점 가중치)로 진하기를 정했는데,
@@ -248,7 +255,6 @@ function buildDom(container) {
     <label><input id="view3dLayerWall" type="checkbox" checked> 벽면</label>
     <span class="view3d-controls-sep" aria-hidden="true"></span>
     <button id="view3dPresetFit" type="button">자세 맞춤</button>
-    <button id="view3dPresetBody" type="button">전신</button>
     <button id="view3dPresetTorso" type="button">상체 확대</button>
     <button id="view3dPresetFront" type="button">벽 정면</button>
     <button id="view3dPresetSide" type="button">벽 측면</button>
@@ -415,7 +421,7 @@ function mount(THREE, container) {
   const camState = { target: new THREE.Vector3(0, 1, 0), radius: 3, theta: Math.PI / 4, phi: Math.PI / 2.5 };
   // 자동 맞춤 상태. 사용자가 드래그·휠로 카메라를 만지면 창 크기가 바뀌어도 다시 맞추지 않는다.
   // `baseRadius`는 이 뷰의 기본 프리셋('자세 맞춤')이 푼 카메라 거리다 — 휠 한계가 장면 크기를 따른다.
-  const framing = { mode: "pose", auto: true, ratio: null, baseRadius: null, torsoClamped: false };
+  const framing = { mode: "pose", auto: true, ratio: null, baseRadius: null };
   // 마지막으로 그린 view. resize()가 첫 호출부터 읽으므로 그보다 먼저 선언한다.
   let lastView = null;
 
@@ -658,11 +664,11 @@ function mount(THREE, container) {
   }
 
   /** 좁은 정의: 머리 **실측** 마커(HMD)와 골반 관절, 이 두 점만의 화면 세로 거리와 캔버스 대비 비율.
-   * 합격선 문구('상체(머리 마커~골반) ≥ 캔버스 40%')가 가리키는 바로 그 두 점이고, 기본 프리셋은
-   * 이제 이 값을 `MIN_TORSO_FRACTION` 위로 **끌어올린다**(`pullInToTorsoFloor`).
-   * 맞춤 상자가 머리~바닥을 담는 동안에는 이 값이 자세에만 달려 있어 레벨마다 갈렸다(실측:
-   * '전신' 프리셋에서 김경호 L1 0.1599 · L3 0.3309 · L6 0.2103, 1875×1000과 840×1050 동일).
-   * 그 상자는 이제 '전신' 프리셋이 맡고, 기본 뷰는 여섯 조합 전부 0.4000을 낸다.
+   * 합격선 문구('상체(머리 마커~골반) ≥ 캔버스 40%')가 가리키는 바로 그 두 점이고, 기본 뷰는 이
+   * 값을 **재서 말한다**(`describeTorsoShortfall`) — 이 값에 맞춰 당기지는 않는다.
+   * 맞춤 상자가 머리~바닥을 담으므로 이 값은 자세에만 달려 있고 레벨마다 갈린다(실측: 김경호
+   * L1 0.1517 · L3 0.3309 · L6 0.2103, 1875×1000과 840×1050 동일 — 창 크기와 무관하다).
+   * 갈리는 것은 프레이밍 규칙이 아니라 자세다: 쭈그린 패스일수록 상체가 화면에서 크다.
    * 넓은 정의(`upperBodyScreen`)는 손 관절·손 마커가 양끝일 때가 많아 훨씬 큰 값이 나온다 —
    * 그 값에 이 문구의 이름을 붙이면 출처와 다른 라벨이 된다. 두 값을 따로 내보내는 이유다. */
   function torsoScreenSpan() {
@@ -1321,7 +1327,7 @@ function mount(THREE, container) {
     }
     // 대표 프레임 착탄점은 **그리지 않는다**(낱개 점이라 뺐다). 여기서는 카메라 거리 계산에만 쓴다 —
     // 궤적 프리셋이 몸에서 벽까지를 담게 하는 기준점이다.
-    if (mode !== "pose" && mode !== "body") push(view.composite?.hit);
+    if (mode !== "pose") push(view.composite?.hit);
     // **그려지는 벽면 스트로크는 기본 뷰에서도 맞춤 대상이다**(S2). 사용자 불만 1번이 "기준
     // 스트로크(벽면 착탄점)이 보이지 않음"이었는데, 이전 판은 스트로크를 pose 맞춤에서 빼 두어
     // 사용자가 제일 먼저 보는 화면에서 두 줄이 가장자리에 걸리거나 밖으로 나갔다. 원본 착탄점
@@ -1484,7 +1490,6 @@ function mount(THREE, container) {
   /** 발이 보이는지 재 볼 프리셋. 툴바 버튼과 같은 카메라를 푼다(라벨도 버튼과 같은 글자다). */
   const PRESET_PROBES = [
     { label: "자세 맞춤", mode: "pose", angles: "default" },
-    { label: "전신", mode: "body", angles: "default" },
     { label: "상체 확대", mode: "torso", angles: "current" },
     { label: "벽 정면", mode: "pose", angles: "wall", offset: 0 },
     { label: "벽 측면", mode: "pose", angles: "wall", offset: Math.PI / 2 },
@@ -1508,11 +1513,11 @@ function mount(THREE, container) {
 
   /** 발이 **이 프리셋에서** 화면 밖이면, 발이 보이는 프리셋의 이름을 같이 말한다.
    *
-   * pose(자세 맞춤·기본)는 다리를 맞춤 대상에 넣지만, 상체 합격선(F) 때문에 당기면 그 발이 캔버스
-   * 밖으로 나간다 — 그래서 이 고지가 꼭 필요하다. 바닥 기준 머리 높이 고지가 가리키는 발이 실제로
-   * 안 보이면 아무도 그 사실을 확인할 길이 없기 때문이다. 발이 온전히 보이는 프리셋은 '전신'이고,
-   * 그 이름도 **말로 정하지 않고** 각 프리셋의 카메라를 실제로 풀어서(`solveFraming`) 투영해
-   * 확인한다. 다리를 그리지 않는 화면에서는 이 고지가 아예 없다. */
+   * pose(자세 맞춤·기본)는 다리를 맞춤 대상에 넣고 자르지 않으므로 이 고지는 보통 비어 있다 —
+   * 사람이 카메라를 만졌거나 '상체 확대'처럼 일부러 자르는 프리셋에서만 뜬다. 바닥 기준 머리 높이
+   * 고지가 가리키는 발이 실제로 안 보이면 아무도 그 사실을 확인할 길이 없기 때문에 남겨 둔다.
+   * 발이 보이는 프리셋의 이름도 **말로 정하지 않고** 각 프리셋의 카메라를 실제로 풀어서
+   * (`solveFraming`) 투영해 확인한다. 다리를 그리지 않는 화면에서는 이 고지가 아예 없다. */
   function describeFeetFraming() {
     if (!lastView) return "";
     const feet = legFeetPoints(lastView);
@@ -1536,24 +1541,43 @@ function mount(THREE, container) {
     return framing.auto ? "이 프리셋에서" : "지금";
   }
 
-  /** 기본 뷰가 **합격선 때문에 당겨져** 무엇을 잘랐는지(F). 당기지 않았으면 아무 말도 하지 않는다 —
-   * 그때는 자른 것이 없다. 이름은 `offscreenFitTargets`가 **투영해서** 고른다(말로 정하지 않는다). */
+  /** 기본 뷰에서 **그려지는 것이 화면 밖에 있으면** 그 이름을 말한다(감시자).
+   *
+   * 기본 뷰의 약속은 "하나도 자르지 않는다"이므로 이 문장은 보통 비어 있다 — 비어 있는 것이 정상이고,
+   * 떠 있으면 약속이 깨졌다는 뜻이다(사람이 드래그·휠로 카메라를 만진 뒤에는 정상적으로 뜬다).
+   * 이름은 `offscreenFitTargets`가 **투영해서** 고른다(말로 정하지 않는다). 맞춤 규칙이 되돌아가
+   * 다시 자르기 시작하면 이 줄이 그 사실을 화면에 적는다. */
   function describePoseFraming(mode) {
-    if (mode !== "pose" || framing.torsoClamped !== true) return "";
-    const head = framing.auto ? "자세 맞춤" : "지금 화면(자세 맞춤에서 카메라를 만졌습니다)";
+    if (mode !== "pose") return "";
     const outside = offscreenFitTargets();
     if (outside.length === 0) return "";
+    const head = framing.auto ? "자세 맞춤" : "지금 화면(자세 맞춤에서 카메라를 만졌습니다)";
     const shown = outside.slice(0, OFFSCREEN_NAMES_SHOWN).join(" · ");
     const rest = outside.length > OFFSCREEN_NAMES_SHOWN ? ` 외 ${outside.length - OFFSCREEN_NAMES_SHOWN}개` : "";
-    const percent = Math.round(MIN_TORSO_FRACTION * 100);
+    const how = framing.auto ? " — '자세 맞춤'을 다시 누르면 다 보입니다" : " — '자세 맞춤'으로 돌아가면 다 보입니다";
+    return `${head}: ${shown}${rest}${subjectParticle(rest || shown)} 화면 밖에 있습니다${how}.`;
+  }
+
+  /** 기본 뷰의 상체가 합격선(F)에 **못 미치면 그 숫자를 적는다**.
+   *
+   * 합격선까지 당기는 것과 "그려지는 것을 자르지 않는 것"은 한 카메라에서 동시에 참일 수 없다 —
+   * 상체(머리 마커~골반)는 머리~발 높이의 일부이고, L1 실측에서 그 비(0.4091m ÷ 1.5083m = 0.27)가
+   * 합격선 0.40보다 작다. 여기서는 자르지 않는 쪽을 택했으므로(B·S2), **못 미친다는 사실과 지금
+   * 값을 화면이 말한다**. 말하지 않으면 화면이 조용히 합격선을 어기게 된다. */
+  function describeTorsoShortfall(mode) {
+    if (mode !== "pose" || !framing.auto) return "";
+    const span = torsoScreenSpan();
+    if (span === null || span.heightFraction >= MIN_TORSO_FRACTION) return "";
+    const now = Math.round(span.heightFraction * 100);
+    const goal = Math.round(MIN_TORSO_FRACTION * 100);
     return (
-      `${head}: 상체를 캔버스 높이의 ${percent}%까지 당겨 ${shown}${rest}`
-      + `${subjectParticle(rest || shown)} 화면 밖에 있습니다 — '전신'에서 다 보입니다.`
+      `자세 맞춤: 상체(머리 마커~골반)가 캔버스 높이의 ${now}%입니다(합격선 ${goal}%) — `
+      + "더 당기면 그려진 다리와 벽면 스트로크가 화면 밖으로 나갑니다. '상체 확대'가 그 선을 넘습니다."
     );
   }
 
   function describeFraming(mode) {
-    return [describeTorsoFraming(mode), describePoseFraming(mode), describeFeetFraming()]
+    return [describeTorsoFraming(mode), describePoseFraming(mode), describeTorsoShortfall(mode), describeFeetFraming()]
       .filter((t) => t)
       .join(" ");
   }
@@ -1659,15 +1683,15 @@ function mount(THREE, container) {
     // 기본보다 작아졌다** — 실측: L3 상체 비율 0.6692(실제 점) vs 0.4864(꼭짓점), 기본이 0.5827이다.
     // 궤적·벽 프리셋은 점이 많아 예전대로 꼭짓점을 쓴다.
     const fitPoints =
-      mode === "pose" || mode === "torso" || mode === "body"
+      mode === "pose" || mode === "torso"
         ? points.map((p) => new THREE.Vector3(...p))
         : corners;
     const goal = FRAMING_TARGET[mode] ?? 0.75;
-    // pose·body만 **가장 멀리 나간 점**을 목표 아래로 누른다 — 이 두 프리셋의 맞춤 단계에서는
-    // 맞춤 대상이 하나도 잘리면 안 된다(pose는 그 뒤 합격선 때문에 당겨질 수 있고, 그때 잘리는
-    // 것의 이름을 화면이 말한다). torso("상체 확대")는 **일부러** 맞춤 대상을 상체로 좁혀 나머지를
-    // 화면 밖으로 내보낸다(그 프리셋의 약속). 궤적·벽은 점이 많아 예전대로 범위 크기에 맞춘다.
-    const measure = mode === "pose" || mode === "body" ? projectedReach : projectedRatio;
+    // pose만 **가장 멀리 나간 점**을 목표 아래로 누른다 — 기본 뷰에서는 맞춤 대상이 하나도
+    // 잘리면 안 된다(다리 B · 벽면 스트로크 S2). torso("상체 확대")는 **일부러** 맞춤 대상을
+    // 상체로 좁혀 나머지를 화면 밖으로 내보낸다(그 프리셋의 약속). 궤적·벽은 점이 많아 예전대로
+    // 범위 크기에 맞춘다.
+    const measure = mode === "pose" ? projectedReach : projectedRatio;
     let lo = 0.01;
     let hi = 100;
     for (let i = 0; i < 60; i += 1) {
@@ -1675,16 +1699,10 @@ function mount(THREE, container) {
       if (measure(fitPoints, target, offsetDir, mid) > goal) lo = mid;
       else hi = mid;
     }
-    const solved = { target, offsetDir, radius: hi, ratio: projectedRatio(fitPoints, target, offsetDir, hi) };
-    return mode === "pose" ? pullInToTorsoFloor(solved, fitPoints) : solved;
-  }
-
-  /** 합격선이 가리키는 두 점(머리 **실측** 마커와 골반 관절)의 월드 좌표. 둘 중 하나가 없으면 null —
-   * 없는 점으로 합격선을 흉내 내지 않는다. */
-  function torsoWorldPair(view) {
-    const head = (view?.fit?.anchors ?? []).find((a) => a.joint === "Head" && isVec3(a.measured_marker));
-    const pelvis = view?.layers?.query?.joints?.Pelvis;
-    return head && isVec3(pelvis) ? [head.measured_marker, pelvis] : null;
+    // 기본 뷰는 여기서 끝난다. 예전에는 이 자리에서 상체 합격선까지 **당겼는데**(`pullInToTorsoFloor`),
+    // 당기면 그려진 다리와 벽면 스트로크가 화면 밖으로 나간다(위 `MIN_TORSO_FRACTION` 주석의 실측).
+    // 합격선은 이제 화면이 **재서 말하는 값**이지 카메라가 맞추는 값이 아니다.
+    return { target, offsetDir, radius: hi, ratio: projectedRatio(fitPoints, target, offsetDir, hi) };
   }
 
   /** **가정한** 카메라(target·offsetDir·distance)에서 점의 NDC 좌표. 뒤로 넘어가면 null.
@@ -1699,45 +1717,6 @@ function mount(THREE, container) {
     return { x: v.dot(basis.right) / (z * tanV * camera.aspect), y: v.dot(basis.up) / (z * tanV) };
   }
 
-  /** 그 두 점이 그 카메라에서 캔버스 **높이**의 몇 배인가(NDC 세로 ÷ 2). 화면의 `torsoScreenSpan`과
-   * 같은 정의이고, 다른 것은 "지금 카메라"가 아니라 "가정한 카메라"라는 점뿐이다. */
-  function torsoFractionAt(pair, target, offsetDir, distance) {
-    const a = ndcAt(pair[0], target, offsetDir, distance);
-    const b = ndcAt(pair[1], target, offsetDir, distance);
-    return a === null || b === null ? null : Math.abs(a.y - b.y) / 2;
-  }
-
-  /** 상체가 캔버스 높이의 `MIN_TORSO_FRACTION`이 되도록 **당긴다**(F 합격선).
-   *
-   * 전신이 이미 그 비율을 넘으면 그대로 둔다 — 그때는 아무것도 자르지 않는다. 당길 때 보는 곳은
-   * 전신 상자의 중심이 아니라 **두 층 상체 상자의 중심**이다: 전신 중심을 보면 같은 배율에서 머리가
-   * 먼저 잘린다. 거리는 이 비율에 단조라(가까울수록 커진다) 같은 이분법을 쓴다. */
-  function pullInToTorsoFloor(solved, fitPoints) {
-    const pair = torsoWorldPair(lastView);
-    if (pair === null) return solved;
-    const now = torsoFractionAt(pair, solved.target, solved.offsetDir, solved.radius);
-    if (now === null || now >= MIN_TORSO_FRACTION) return solved;
-    const upper = upperBodyPoints(lastView, { bothLayers: true });
-    if (upper.length === 0) return solved;
-    const { min, max } = boundsOf(upper);
-    const target = new THREE.Vector3((min[0] + max[0]) / 2, (min[1] + max[1]) / 2, (min[2] + max[2]) / 2);
-    let lo = 0.01;
-    let hi = solved.radius;
-    for (let i = 0; i < 60; i += 1) {
-      const mid = (lo + hi) / 2;
-      const fraction = torsoFractionAt(pair, target, solved.offsetDir, mid);
-      if (fraction !== null && fraction >= MIN_TORSO_FRACTION) lo = mid;
-      else hi = mid;
-    }
-    return {
-      target,
-      offsetDir: solved.offsetDir,
-      radius: lo,
-      ratio: projectedRatio(fitPoints, target, solved.offsetDir, lo),
-      torsoClamped: true,
-    };
-  }
-
   function frameTo(mode) {
     const solved = solveFraming(mode, camState.theta, camState.phi);
     if (!solved) return;
@@ -1746,8 +1725,6 @@ function mount(THREE, container) {
     framing.mode = mode;
     framing.auto = true;
     framing.ratio = solved.ratio;
-    // 합격선 때문에 당겼는가(F). 당겼을 때만 캔버스 아래가 "무엇을 잘랐는지"를 말한다.
-    framing.torsoClamped = solved.torsoClamped === true;
     applyCamera();
     // 자른 사실은 카메라를 적용한 **뒤에** 잰다 — 투영이 새 카메라를 써야 이름이 맞는다.
     writeFramingNote();
@@ -1770,12 +1747,18 @@ function mount(THREE, container) {
       container.__view3dDebug.framingRatio = framing.auto ? framing.ratio : null;
       container.__view3dDebug.framingMode = framing.mode;
       container.__view3dDebug.framingAuto = framing.auto;
-      // 자른 것의 이름은 '상체 확대'와 **합격선 때문에 당긴 기본 뷰** 둘 다에서 잰다(F).
+      // 자른 것의 이름은 '상체 확대'와 기본 뷰 둘 다에서 잰다 — 기본 뷰에서는 **0이어야** 한다(B·S2).
       container.__view3dDebug.framingOffscreen =
-        framing.mode === "torso" || framing.torsoClamped ? offscreenFitTargets() : [];
-      container.__view3dDebug.framingTorsoClamped = framing.torsoClamped === true;
+        framing.mode === "torso" || framing.mode === "pose" ? offscreenFitTargets() : [];
       container.__view3dDebug.framingNote = text;
       container.__view3dDebug.torsoSpan = torsoScreenSpan();
+      // 합격선과 지금 값을 **같이** 낸다 — 검증이 "0.4000"만 보고 합격 처리하지 않도록.
+      container.__view3dDebug.torsoPassLine = MIN_TORSO_FRACTION;
+      container.__view3dDebug.torsoMeetsPassLine =
+        torsoScreenSpan() === null ? null : torsoScreenSpan().heightFraction >= MIN_TORSO_FRACTION;
+      // 카메라 행렬은 `layoutLabels`가 이미 `debugLive.camera`로 내보낸다(projectionMatrix ·
+      // matrixWorldInverse · host). 여기서 또 쓰면 같은 이름 아래 모양이 다른 두 값이 번갈아 실려,
+      // 검증이 어느 쪽을 읽었는지에 따라 답이 달라진다 — 한 출처로 둔다.
       container.__view3dDebug.upperBody = upperBodyScreen();
       // D3 검증용: IK 발이 지금 보이는가, 어느 프리셋이 보여 주는가.
       const feet = legFeetPoints(lastView);
@@ -1892,6 +1875,12 @@ function mount(THREE, container) {
     if (container.__view3dDebug) {
       container.__view3dDebug.legsVisible = checkboxes.legs.checked;
       container.__view3dDebug.visibleBones = visibleBoneNames();
+      // 토글이 바꾼 것은 **자리표시↔IK**다. 이 값을 여기서 다시 쓰지 않으면 헤드리스 검증이
+      // 그리기 직후의 옛 값을 읽어 "IK를 켰는데도 자리표시가 보인다"고 잘못 읽는다.
+      container.__view3dDebug.placeholderLegsShownByLayer = {
+        query: skeletonPlaceholderLegs ? skeletonPlaceholderLegs.visible : false,
+        reference: referencePlaceholderLegs ? referencePlaceholderLegs.visible : false,
+      };
     }
   });
   checkboxes.reference.addEventListener("change", () => { layerGroups.reference.visible = checkboxes.reference.checked; });
@@ -1921,12 +1910,6 @@ function mount(THREE, container) {
     if (!lastView) return;
     Object.assign(camState, defaultAngles(lastView));
     frameTo("pose");
-  });
-  // '전신'은 합격선으로 당기기 **전**의 맞춤이다(F) — 그려지는 것을 하나도 자르지 않는다.
-  dom.controls.querySelector("#view3dPresetBody").addEventListener("click", () => {
-    if (!lastView) return;
-    Object.assign(camState, defaultAngles(lastView));
-    frameTo("body");
   });
   dom.controls.querySelector("#view3dPresetTorso").addEventListener("click", () => {
     if (!lastView) return;

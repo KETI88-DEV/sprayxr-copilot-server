@@ -873,9 +873,10 @@ LEG_SEARCH_MAX: Final = 120
 # L3 1.450m · L6 1.172m이고 p95는 모든 레벨에서 선 키를 회복한다(`composite.py`의 바닥 주석).
 # 고른 면은 지면이 맞다.
 #
-# 그래서 기본은 **자리표시 다리**다(B): 무릎을 접어 발을 그 바닥면에 세우고(`standing_legs`의
-# `reach_floor=True`), 점선으로 그리고, 고지가 "측정 아님"을 먼저 말한다. 엉덩이가 리그 다리보다
-# 높아 닿지 못하면 늘리지 않고 **닿지 않는다고 적는다**. IK 다리는 해부학 범위 안일 때 토글로 본다.
+# 그래서 기본은 **자리표시 다리**다(B): 발을 그 바닥면에 세우고(`standing_legs`의 `reach_floor=True`),
+# 점선으로 그리고, 고지가 "측정 아님"을 먼저 말한다. 엉덩이가 리그 다리보다 낮으면 **무릎을 접어**
+# 세우고(길이 그대로), 높으면 자리표시 다리를 그만큼 **늘려** 세운 뒤 배율과 늘린 길이를 적는다 —
+# 발을 띄워 두는 그림은 "작업자가 공중에 떠 있다"는 역시 없는 사실을 주장하기 때문이다.
 # 고지는 **어느 몸의 다리인지**를 말한다({who} = 대상 / 기준 / 대상·기준). 두 층의 `leg_check`
 # 판정은 자주 갈린다 — 자동 기준으로 맺은 24쌍 중 10쌍(41.7%)에서 갈렸다. 질의 고지만 싣던
 # 동안에는 화면이 그림과 반대되는 말을 했다(김경호 L1 #9: 기준 다리 뼈 8개가 그려져 있는데
@@ -927,18 +928,28 @@ LEGS_NO_JOINTS_NOTE: Final = "{who} 패스에는 다리 관절이 없어 다리�
 # 자리표시 다리 고지(B). 기본 표시가 다시 자리표시 다리가 됐으므로, 화면은 **그것이 자리표시라는
 # 것**을 먼저 말해야 한다 — 재지 않은 것을 잰 것처럼 보이게 하지 않는다는 이 저장소의 규칙이다.
 #
-# 닿을 때와 못 닿을 때를 **둘 다** 말한다. 못 닿는 것을 숨기면 화면이 "발이 바닥에 있다"는 없는
-# 사실을 주장하게 된다: 실측으로 김경호 L1 첫 패스는 엉덩이가 바닥면 위 1.045m인데 리그 다리는
-# 0.833m라, 닿게 하려면 1.25배로 늘려야 한다(줄여서 난쟁이를 만든 옛 배율과 똑같은 거짓말이다).
-# 숫자 자리({floor}·{gap}·{leg})는 서버가 채워 넣고 `{who}`만 층 이름으로 남긴다 — 화면은 이
-# 문자열을 그대로 쓰고 다시 계산하지 않는다.
+# **어떻게 세웠는지**를 말한다. 사용자 정책이 "벽 메시가 있으면 발을 바닥면에 세운다"이므로 발은
+# 늘 그 면에 선다. 다만 세우는 방법이 두 가지이고 값을 치르는 쪽이 다르다:
+#   무릎을 접어 세운 경우(엉덩이가 리그 다리보다 낮다): 뼈 길이는 리그 그대로다. L3·L6이 여기다.
+#   늘려서 세운 경우(엉덩이가 더 높다): 자리표시 다리에 배율을 먹였다 — 실측 김경호 L1 첫 패스는
+#     엉덩이가 바닥면 위 1.045m인데 리그 다리가 0.833m라 1.25배(+0.21m)다. 늘린 길이는 잰 값이
+#     아니므로 **화면이 배율과 늘린 길이를 그대로 적는다**. 줄이는 배율은 어느 경우에도 없다
+#     (줄여서 난쟁이를 만든 옛 배율이 이 화면에서 자리표시를 통째로 없앤 이유였다).
+# 숫자 자리({floor}·{leg}·{factor}·{add}·{gap}·{limit})는 서버가 채워 넣고 `{who}`만 층 이름으로
+# 남긴다 — 화면은 이 문자열을 그대로 쓰고 다시 계산하지 않는다.
 LEGS_PLACEHOLDER_ON_FLOOR_NOTE: Final = (
     "{who} 다리는 자리표시입니다(측정 아님) — 추적 장치가 없어 발을 바닥면(수직 {floor}m)에 세우고 "
     "남는 길이는 무릎으로 접었습니다. 뼈 길이는 리그 그대로입니다."
 )
-LEGS_PLACEHOLDER_OFF_FLOOR_NOTE: Final = (
-    "{who} 다리는 자리표시입니다(측정 아님) — 엉덩이가 리그 다리({leg}m)보다 {gap}m 높아 발이 "
-    "바닥면(수직 {floor}m)에 닿지 않습니다. 닿추려고 다리 길이를 바꾸지 않았습니다."
+LEGS_PLACEHOLDER_STRETCHED_NOTE: Final = (
+    "{who} 다리는 자리표시입니다(측정 아님) — 엉덩이가 리그 다리({leg}m)보다 높아, 발을 "
+    "바닥면(수직 {floor}m)에 세우려고 자리표시 다리를 {factor}배(+{add}m) 늘려 그렸습니다. "
+    "늘린 길이는 잰 값이 아닙니다."
+)
+# 늘려도 닿지 않는 경우 — 사람 엉덩이가 올 수 없는 높이라 고른 면이 지면이 아니라는 뜻이다.
+LEGS_PLACEHOLDER_CANNOT_STAND_NOTE: Final = (
+    "{who} 다리는 자리표시입니다(측정 아님) — 엉덩이가 바닥면(수직 {floor}m) 위 {gap}m라 리그 "
+    "다리({leg}m)를 {limit}배 넘게 늘려야 닿습니다. 그만큼 늘리지 않고 곧게 내려 그렸습니다."
 )
 # 바닥면을 못 고른 레벨(벽 메시 없음)의 자리표시 고지. 바닥이 없으면 세울 자리도 없다.
 LEGS_PLACEHOLDER_NO_FLOOR_NOTE: Final = (
@@ -1154,7 +1165,8 @@ def _placeholder_legs(
     offsets: Mapping[str, Vec3],
     floor: float | None,
 ) -> skeleton.PlaceholderLegs | None:
-    """이 배치의 자리표시 다리(B). 바닥면이 있으면 발을 그 면에 세운다(무릎이 남는 길이를 접는다).
+    """이 배치의 자리표시 다리(B). 바닥면이 있으면 발을 그 면에 **세운다** — 엉덩이가 리그 다리보다
+    낮으면 무릎이 남는 길이를 접고, 높으면 자리표시 다리를 그만큼 늘린다(배율은 `stretch_factor`).
 
     발끝 방향은 대표 프레임의 **골반→착탄점** 수평 성분이다(진단용 접촉 시트가 쓰던 것과 같은 방향).
     골반이나 착탄점이 없으면 방향을 지어내지 않고 `None`을 넘겨 발끝 관절을 싣지 않는다.
@@ -1203,15 +1215,23 @@ def _fit_view(
         leg_template = LEGS_NO_JOINTS_NOTE
     elif placeholder.floor_vertical is None:
         leg_template = LEGS_PLACEHOLDER_NO_FLOOR_NOTE
-    elif placeholder.reaches_floor:
-        leg_template = LEGS_PLACEHOLDER_ON_FLOOR_NOTE.replace("{floor}", f"{placeholder.floor_vertical:.2f}")
-    else:
-        gap = (placeholder.hip_above_floor_m or 0.0) - (placeholder.rig_leg_length_m or 0.0)
+    elif placeholder.reaches_floor is not True:
         leg_template = (
-            LEGS_PLACEHOLDER_OFF_FLOOR_NOTE.replace("{floor}", f"{placeholder.floor_vertical:.2f}")
-            .replace("{leg}", f"{placeholder.rig_leg_length_m:.2f}")
-            .replace("{gap}", f"{gap:.2f}")
+            LEGS_PLACEHOLDER_CANNOT_STAND_NOTE.replace("{floor}", f"{placeholder.floor_vertical:.2f}")
+            .replace("{gap}", f"{placeholder.hip_above_floor_m or 0.0:.2f}")
+            .replace("{leg}", f"{placeholder.rig_leg_length_m or 0.0:.2f}")
+            .replace("{limit}", f"{skeleton.MAX_PLACEHOLDER_STRETCH:.1f}")
         )
+    elif (placeholder.stretch_factor or 1.0) > 1.0:
+        # 늘려서 세웠다. 배율과 늘린 길이는 서버가 잰 값이고, 화면은 이 문장을 그대로 쓴다.
+        leg_template = (
+            LEGS_PLACEHOLDER_STRETCHED_NOTE.replace("{floor}", f"{placeholder.floor_vertical:.2f}")
+            .replace("{leg}", f"{placeholder.rig_leg_length_m or 0.0:.2f}")
+            .replace("{factor}", f"{placeholder.stretch_factor:.2f}")
+            .replace("{add}", f"{placeholder.stretch_m or 0.0:.2f}")
+        )
+    else:
+        leg_template = LEGS_PLACEHOLDER_ON_FLOOR_NOTE.replace("{floor}", f"{placeholder.floor_vertical:.2f}")
     # IK 토글이 무엇을 보여 주는지 같은 줄에서 말한다 — 범위 밖이면 그 사실과 숫자를 붙인다.
     if legs is not None and placeholder is not None:
         leg_template += (
@@ -1310,6 +1330,10 @@ def _fit_view(
             if placeholder is None
             else [[a, b] for chain in skeleton.PLACEHOLDER_LEG_CHAIN for a, b in zip(chain, chain[1:])],
             "placeholder_reaches_floor": None if placeholder is None else placeholder.reaches_floor,
+            # 세우려고 다리를 늘렸는가(1.0 = 길이 그대로, 1.0 미만은 나오지 않는다). 화면·검사가
+            # 이 값을 그대로 읽는다 — 배율을 두 곳에서 따로 계산하면 고지와 그림이 갈린다.
+            "placeholder_stretch_factor": None if placeholder is None else placeholder.stretch_factor,
+            "placeholder_stretch_m": None if placeholder is None else placeholder.stretch_m,
             "hip_above_floor_m": None if placeholder is None else placeholder.hip_above_floor_m,
             "rig_leg_length_m": None if placeholder is None else placeholder.rig_leg_length_m,
             "floor_vertical": floor,
