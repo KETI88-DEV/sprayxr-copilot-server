@@ -1408,6 +1408,108 @@ def test_placeholder_legs_keep_rig_length_and_report_the_gap_to_the_floor(test_m
     assert [a["measured_marker"] for a in fit["anchors"]] == [a["measured_marker"] for a in loose["anchors"]]
 
 
+def test_placeholder_note_says_the_drop_when_no_foot_is_above_the_floor(test_mounts) -> None:  # noqa: ANN001
+    """발이 **하나도 뜨지 않았는데 닿지도 못한** 갈래: 고지가 뜬 간격이 아니라 **내려간 깊이**를 적는다.
+
+    `service.LEGS_PLACEHOLDER_UNDER_FLOOR_NOTE`는 이 저장소가 반복해 만드는 모양이었다 — **있지만
+    한 번도 불린 적 없는 갈래**다. 실데이터 세 레벨은 엉덩이가 고른 면보다 한참 위라 여기 오지 않고,
+    그래서 검증이 "문자열을 가리키는 검사도, 이 갈래를 밟는 패스도 없다"고 적었다.
+
+    지울 갈래인지 덮을 갈래인지는 **기하가 정한다**: `_knee_to_floor`는 엉덩이–바닥 거리가 0 이하면
+    무릎을 굽히지 않으므로(`gap <= 0.0`), 고른 면이 엉덩이보다 위이면 두 다리가 리그 길이 그대로
+    곧게 내려가 **네 발이 다 그 면 아래**에 선다. 그러면 `reaches_floor`는 False인데 `_floor_gaps`는
+    비어 — 이 갈래다. 일어날 수 없는 기하가 아니라 **이 패스들에 없던 기하**이므로 지우지 않고 덮는다
+    (바닥면을 고르는 규칙 자체는 `composite.floor_vertical`뿐이고, 그 함수는 고른 면을 몸 높이와
+    견주지 않는다 — 가장 낮은 수평면의 윗면을 그대로 낸다).
+    """
+    rows, _middle = _rows_with_leg_poses(41, ())
+    raw = RawPass(rows=rows)
+    loose = service.skeleton_block(raw).fit
+    placeholder = loose["legs"]["placeholder_joints"]
+    hips = [
+        world_axes.vertical_of(tuple(placeholder[hip])) for hip, _k, _a, _t in skeleton.PLACEHOLDER_LEG_CHAIN
+    ]
+    # 고른 면을 **엉덩이 위**에 둔다 — 무릎이 굽는 갈래가 아예 열리지 않는 자리다.
+    floor = max(hips) + 0.5
+    fit = service.skeleton_block(raw, geometry=_floor_geometry(floor)).fit
+    legs = fit["legs"]
+    assert legs["floor_vertical"] == pytest.approx(floor)
+
+    above = legs["placeholder_feet_above_floor_m"]
+    # 이 갈래의 정의: 닿지 못했고(False), 그 면 **위로** 뜬 발은 하나도 없다.
+    assert legs["placeholder_reaches_floor"] is False
+    assert max(above.values()) < 0.0, above
+    # 뜬 발이 없으니 점선 보조선도 없다 — 길이 0인 선과 "간격 0cm"를 화면에 올리지 않는다.
+    assert legs["placeholder_floor_gaps"] == []
+
+    # 적히는 깊이는 **가장 낮은 발목**의 것이고, 리그 길이 그대로 곧게 내린 결과와 같아야 한다.
+    drop = -min(above.values())
+    assert drop == pytest.approx(floor - (min(hips) - legs["rig_leg_length_m"]), abs=1e-6)
+    expected = (
+        service.LEGS_PLACEHOLDER_UNDER_FLOOR_NOTE.replace("{floor}", f"{floor:.2f}")
+        .replace("{drop}", f"{drop:.2f}")
+        .format(who=fit["leg_note_who"])
+    )
+    note = fit["notes"][fit["note_keys"].index("legs")]
+    assert note.startswith(expected), note
+    # 뜬 갈래의 문장을 잘못 고르면 여기서 갈린다(그 문장은 "떠 있고"라고 적는다).
+    assert "떠 있고" not in note, note
+
+
+def test_one_foot_on_the_floor_and_one_hanging_draws_one_guide_for_that_foot() -> None:
+    """한 발은 서고 **다른 발만 뜬** 섞인 경우: 보조선도 고지의 숫자도 **뜬 그 발 하나**를 따른다.
+
+    있던 두 검사는 네 발이 다 뜬 경우만 밟았다 — `_floor_gaps`가 닿은 발을 걸러내는지도,
+    `reaches_floor`가 `all()`인지(`any()`가 아닌지)도 실행으로 본 적이 없다. 두 다리는 엉덩이
+    높이가 다르므로(실측 L1 0.0705m 차이) **그 사이에 면을 놓으면** 낮은 쪽은 무릎을 접어 서고
+    높은 쪽은 리그 길이 그대로 떠 있는다 — 이 저장소에서 실제로 일어나는 기하다.
+
+    **`test_mounts` 픽스처를 쓰지 않는다** — 합성 장착 상수는 골반을 다른 높이에 놓아 두 엉덩이의
+    높이차를 바꾼다. 이 검사가 세우는 면은 그 높이차에서 나오므로 서버가 쓰는 운영 상수로 재야 한다
+    (`test_the_floating_foot_is_the_short_rig_torso_not_short_legs`와 같은 이유).
+    """
+    source, _kwargs = isolation._source_for({"name": "real"})  # noqa: SLF001
+    query = PassRef(worker="김경호", date="20250831", level="1", session="1000389_1", pass_index=0)
+    raw = source.load(query)
+    loose = service.skeleton_block(raw).fit
+    placeholder = loose["legs"]["placeholder_joints"]
+    hips = {
+        hip: world_axes.vertical_of(tuple(placeholder[hip])) for hip, _k, _a, _t in skeleton.PLACEHOLDER_LEG_CHAIN
+    }
+    low, high = min(hips.values()), max(hips.values())
+    # 섞인 경우는 두 엉덩이 높이가 다를 때만 있다 — 없으면 이 검사가 볼 것이 없다.
+    assert high - low > 1e-3, hips
+
+    leg_m = loose["legs"]["rig_leg_length_m"]
+    # 낮은 엉덩이는 리그 다리보다 가깝고(접어서 선다), 높은 엉덩이는 멀다(그대로 뜬다).
+    floor = low - leg_m + 0.5 * (high - low)
+    fit = service.skeleton_block(raw, geometry=_floor_geometry(floor)).fit
+    legs = fit["legs"]
+    above = legs["placeholder_feet_above_floor_m"]
+    stood = {name: value for name, value in above.items() if value == pytest.approx(0.0, abs=1e-9)}
+    hanging = {name: value for name, value in above.items() if value > 1e-9}
+    assert len(stood) == 1 and len(hanging) == 1, above
+    # 한 발이 섰다고 닿은 것이 아니다 — `reaches_floor`는 **두 발 다**를 묻는다(`all`, `any` 아님).
+    assert legs["placeholder_reaches_floor"] is False
+
+    gap = next(iter(hanging.values()))
+    assert gap == pytest.approx(0.5 * (high - low), abs=1e-6)
+    # 보조선은 **뜬 발에만** 하나 — 선 발은 걸러진다.
+    guides = legs["placeholder_floor_gaps"]
+    assert len(guides) == 1, guides
+    guide = guides[0]
+    hang_chain = next(c for c in skeleton.PLACEHOLDER_LEG_CHAIN if c[2] == next(iter(hanging)))
+    assert guide["joint"] in (hang_chain[2], hang_chain[3]), (guide, hang_chain)
+    assert guide["gap_m"] == pytest.approx(gap, abs=1e-12), guide
+    assert math.dist(guide["from"], guide["to"]) == pytest.approx(gap, abs=1e-9), guide
+    assert guide["label"] == f"간격 {gap * 100.0:.0f}cm", guide
+    # 고지가 적는 숫자도 **그 발의 간격**이다(닿은 발은 최대값을 끌어내리지 않는다).
+    note = fit["notes"][fit["note_keys"].index("legs")]
+    assert f"최대 {gap:.2f}m 떠 있고" in note, note
+    # 뜬 발이 있으므로 "면보다 아래" 갈래가 아니다.
+    assert "아래입니다" not in note, note
+
+
 def test_real_pass_head_diameter_comes_from_this_rigs_torso_not_a_fixed_constant() -> None:
     """실데이터 L3: `fit.head_diameter_m`이 이 리그의 골반→머리 길이 × BVH 실측 비례고, 고정 상수가 아니다.
 
