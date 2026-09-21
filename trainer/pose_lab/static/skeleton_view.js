@@ -9,9 +9,13 @@
 //     화면은 다시 계산하지 않는다. 사용자가 요구한 그림이 바로 이것이다: "기준 스켈레톤과 질의
 //     스켈레톤을 같이 그리고 유사도가 떨어지는 조인트일수록 색상을 진하게".
 //   - 대표 프레임 실측 마커(`fit.anchors[].measured_marker`): 층 색으로 **채운** 구체 — 실측 부호다.
+//     자기 궤적 선 위의 **한 순간**이므로 선을 가로지르는 고리(`moment-ring`)를 두른다.
+//   - 장치 모양(`fit.anchors[].device`): 몸(추정 관절) → 장치(실측 구). 건은 굵은 막대(도구), HMD·
+//     플래쉬는 가는 막대. 이름과 거리 글자는 서버 문자열(`device.label`) 그대로다.
 //   - 벽 위 분사 스트로크(`view.stroke` · `view.reference_stroke`): 몸 움직임 궤적과 **다른 색 계열**
 //     (따뜻한 주황·노랑)로 그린다. 사용자가 둘을 혼동한 것이 이 화면을 다시 만든 출발점이다.
-//   - 움직임 궤적(`layers.*.head/right/left`): 대상·기준 둘 다, 차분한 한 색·가는 선.
+//   - 움직임 궤적(`layers.*.head/right/left`): 대상·기준 둘 다, 층 색(차가운 파랑·보라)의 가는 관.
+//     채점이 실제로 쓰는 실측이라 읽혀야 한다 — 다만 따뜻한 스트로크 색 계열로는 절대 가지 않는다.
 //   - 교정 화살표: `from_frame`→`to_frame`(없으면 `from`→`to`). 3D 안 글자는 **번호뿐**이다.
 //   - 검증된 벽면 메시(`mesh.available`일 때만). 양면(DoubleSide) 반투명.
 //
@@ -113,6 +117,26 @@ const MIN_TORSO_FRACTION = 0.4;
 // 진하게"). 진해지는 것은 이제 관절뿐이고, 궤적은 스트로크보다 눈에 덜 띄어야 한다.
 const TRACK_OPACITY = 0.3;
 const TRACK_MARKER_RADIUS = 0.006;
+// 실측 궤적(질의·기준)은 **읽혀야** 한다 — 채점이 실제로 쓰는 값이다. 사용자가 "진한 구와 연한 선"이
+// 무엇인지 몰랐다: 선이 0.3 불투명도 1px이라 구와 같은 장치라는 것이 안 보였다. 1px 선만으로는 WebGL에서
+// 굵기를 못 키우므로 스트로크처럼 가는 관(실린더)을 잇되, **색은 층 색(차가운 계열) 그대로**라 따뜻한
+// 벽면 스트로크(주황·노랑)와 섞이지 않는다. 관은 스트로크(0.006)보다 가늘다.
+const TRACK_LINE_OPACITY = 0.9;
+const TRACK_TUBE_RADIUS = 0.0035;
+const TRACK_TUBE_OPACITY = 0.75;
+// "이 순간" 고리: 채운 구체(대표 프레임 실측)를 둘러 궤적을 가로지르는 고리. 축은 그 자리의 궤적
+// 방향이다 — 구가 선 위의 한 점이라는 것이 모양으로 보인다. 속 빈 고리라 실측 부호(채운 구)와 다르다.
+const MOMENT_RING_RADIUS = 0.055;
+const MOMENT_RING_TUBE = 0.005;
+// 장치 모양(몸 → 장치). 건은 손에 든 도구라 굵게, HMD·플래쉬는 가늘게. 색은 층 색을 흰색 쪽으로
+// 씻은 반투명 — 채운 층 색 구(실측 부호)와도, 무채색 뼈(추정)와도 한눈에 갈린다.
+const DEVICE_TOOL_RADIUS = 0.012;
+const DEVICE_LINK_RADIUS = 0.004;
+const DEVICE_WASH = 0.45;
+const DEVICE_OPACITY = 0.6;
+// 장치 이름표 끈(px). 구 중심에서 이만큼 앞에서 멈추고(고리를 가리지 않게), 이보다 짧으면 달지 않는다.
+const LEADER_STOP_PX = 8;
+const LEADER_MIN_PX = 6;
 
 // 벌어짐 0에서도 **층 색이 남아 있어야** 두 몸이 누구인지 구별된다. 무채색에서 시작하면 잘 맞은
 // 관절끼리는 대상·기준이 같은 회색이 되어 두 자세가 한 덩어리로 뭉친다(첫 실측 화면이 그랬다).
@@ -410,9 +434,13 @@ function mount(THREE, container) {
   // 선 없는 숫자가 남으면 화면이 그리지 않는 것을 말하게 된다.
   const gapLabels = [];
   function clearLabels() {
-    for (const entry of labelRegistry) entry.el.remove();
+    for (const entry of labelRegistry) {
+      entry.el.remove();
+      if (entry.leader) entry.leader.remove();
+    }
     labelRegistry.length = 0;
     gapLabels.length = 0;
+    deviceLabels.length = 0;
   }
   function registerLabel(position, text, extraClass, extra) {
     const el = document.createElement("div");
@@ -531,6 +559,11 @@ function mount(THREE, container) {
   };
   let coneRegistry = [];
   let markerRegistry = [];
+  // 두 층의 실측 구 중심과 장치 막대(관절 → 구). 글자 라벨이 피해야 할 장애물이다.
+  let sphereObstacles = [];
+  let deviceBars = [];
+  // 장치 이름표. 층 토글을 끄면 그 층의 이름표도 사라져야 한다(그림 없는 글자가 남으면 안 된다).
+  const deviceLabels = [];
 
   // --- 검증 계측(헤드리스 브라우저가 읽는다) ---------------------------------------------
   // 몸통 마디: 라벨을 밀어낼 장애물이자, 라벨-몸통 겹침을 세는 대상.
@@ -610,27 +643,11 @@ function mount(THREE, container) {
     return rects;
   }
 
-  /** 보정 오프셋 선(관절→예측 마커)과 어긋남 점선(예측→실측)을 화면 사각형으로 쪼갠다.
-   * 검증 라운드에서 '보정 오프셋 0.57m(적합값)' 글자 **사이로** 바로 그 오프셋 선이 지나갔다 —
-   * 회피 장애물에 몸통·화살표 기둥은 있었지만 이 선들이 빠져 있었다. */
+  /** 장치 막대(몸의 추정 관절 → 실측 장치 구, 두 층 다)를 화면 사각형으로 쪼갠다.
+   * 검증 라운드에서 옛 관절→구 선의 라벨 글자 **사이로** 바로 그 선이 지나갔다 — 막대도 장애물이다. */
   function thinLineScreenRects() {
     const rects = [];
-    for (const anchor of lastView?.fit?.anchors ?? []) {
-      if (isVec3(anchor.joint_position) && isVec3(anchor.predicted_marker)) {
-        segmentRects(
-          toPixel(new THREE.Vector3(...anchor.joint_position)),
-          toPixel(new THREE.Vector3(...anchor.predicted_marker)),
-          THIN_LINE_HALF_PX, rects,
-        );
-      }
-      if (isVec3(anchor.predicted_marker) && isVec3(anchor.measured_marker)) {
-        segmentRects(
-          toPixel(new THREE.Vector3(...anchor.predicted_marker)),
-          toPixel(new THREE.Vector3(...anchor.measured_marker)),
-          THIN_LINE_HALF_PX, rects,
-        );
-      }
-    }
+    for (const bar of deviceBars) segmentRects(toPixel(bar.from), toPixel(bar.to), THIN_LINE_HALF_PX, rects);
     return rects;
   }
 
@@ -638,9 +655,10 @@ function mount(THREE, container) {
    * (검증 라운드: L3에서 오프셋 라벨 아래 모서리가 왼손 실측 마커를 약 4px 스쳤다). */
   function measuredMarkerScreenRects() {
     const rects = [];
-    for (const marker of markerRegistry) {
-      const px = toPixel(marker.center);
-      const half = screenDiameter(marker.center, MEASURED_MARKER_RADIUS) / 2;
+    for (const center of sphereObstacles) {
+      const px = toPixel(center);
+      // 구를 두른 "이 순간" 고리까지 피한다 — 고리가 구보다 크다.
+      const half = screenDiameter(center, MOMENT_RING_RADIUS) / 2;
       rects.push({ x0: px.x - half, x1: px.x + half, y0: px.y - half, y1: px.y + half });
     }
     return rects;
@@ -723,6 +741,24 @@ function mount(THREE, container) {
     return anchor ? toPixel(new THREE.Vector3(...anchor)) : null;
   }
 
+  /** 이름표 사각형의 가장 가까운 가장자리에서 구 중심 쪽으로 가는 끈(px). 구 고리 안까지는 들어가지 않는다. */
+  function placeLeader(leader, r, target) {
+    const cx = clamp(target.x, r.x0, r.x1);
+    const cy = clamp(target.y, r.y0, r.y1);
+    const dx = target.x - cx;
+    const dy = target.y - cy;
+    const len = Math.hypot(dx, dy) - LEADER_STOP_PX;
+    if (len < LEADER_MIN_PX) {
+      leader.style.display = "none";
+      return;
+    }
+    leader.style.display = "";
+    leader.style.left = `${cx}px`;
+    leader.style.top = `${cy}px`;
+    leader.style.width = `${len}px`;
+    leader.style.transform = `rotate(${Math.atan2(dy, dx)}rad)`;
+  }
+
   function layoutLabels() {
     // 1) 글자 라벨(miss 거리 등)을 먼저 놓고 그 사각형을 장애물로 모은다.
     // 2) 번호 배지는 앞 배지(26px 안)와 글자 라벨 사각형을 피해, 자기 화살표의 화면
@@ -756,7 +792,11 @@ function mount(THREE, container) {
     let markerLabelOverlaps = 0;
     let labelsClamped = 0;
     for (const entry of labelRegistry) {
-      if (entry.kind === "badge" || !visible(entry)) continue;
+      if (entry.kind === "badge") continue;
+      if (entry.el.hidden || !visible(entry)) {
+        if (entry.leader) entry.leader.style.display = "none";
+        continue;
+      }
       const px = toPixel(entry.position);
       const w = entry.el.offsetWidth;
       const h = entry.el.offsetHeight;
@@ -824,6 +864,7 @@ function mount(THREE, container) {
       entry.el.style.left = `${x}px`;
       entry.el.style.top = `${y}px`;
       obstacles.push(rect(x, y));
+      if (entry.leader) placeLeader(entry.leader, rect(x, y), px);
     }
     // 이름이 재는 것과 정확히 같아야 한다(검증 라운드 지적): `torsoLabelOverlaps`는 줄기 셋만,
     // `boneLabelOverlaps`는 다리를 뺀 **모든** 뼈다. 배지는 글자 라벨과 따로 센다(아래).
@@ -959,12 +1000,23 @@ function mount(THREE, container) {
         : new THREE.LineBasicMaterial({
           color: layerColor,
           transparent: true,
-          opacity: TRACK_OPACITY,
+          opacity: TRACK_LINE_OPACITY,
         });
       const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), lineMaterial);
       if (measured === false) line.computeLineDistances();
       line.userData.kind = measured === false ? "computed-layer-line" : "measured-layer-line";
+      line.userData.point = name;
       group.add(line);
+      // 실측 궤적은 가는 관으로 한 번 더 — 1px 선은 벽 메시 위에서 안 읽혔다. 계산된 층(끊은 선)은 그대로 둔다.
+      if (measured !== false) {
+        const tubeMaterial = new THREE.MeshBasicMaterial({
+          color: layerColor, transparent: true, opacity: TRACK_TUBE_OPACITY, depthWrite: false,
+        });
+        for (let i = 0; i + 1 < points.length; i += 1) {
+          const piece = boneCylinder(points[i], points[i + 1], TRACK_TUBE_RADIUS, tubeMaterial, "measured-layer-tube", name);
+          if (piece) group.add(piece);
+        }
+      }
 
       // 표식은 궤적의 **끝점 하나**다. 옛 코드는 20개 표본마다 구체를 찍어 한 층에 60개, 질의·기준
       // 둘이면 120개가 화면을 덮었다 — 사용자가 "부분적으로 뿌려진 건 다 없앴으면 함"이라고 한 바로
@@ -1224,18 +1276,29 @@ function mount(THREE, container) {
     return { lines: names.length, visible: group ? group.visible : false, joints: names };
   }
 
-  /** 대표 프레임 실측 마커(구체)만. **실측 앵커에는** 숫자·보조선을 걸지 않는다(S6).
+  /** 대표 프레임 실측 마커(채운 구체) + 그 자리의 "이 순간" 고리 + 장치 모양(몸 → 장치).
    *
-   * 예전에는 여기서 보정 오프셋 선(joint→predicted)과 어긋남 점선(predicted→measured)을 그리고
-   * 그 위에 "보정 오프셋 0.57m(적합값)"·"12.8cm" 라벨을 달았다. 사용자가 "보정 오프셋은 왜
-   * 표시했는지를 모르겠음"이라고 했고, 그 값은 교정이 아니라 캡처 파이프라인의 어긋남을 흡수한
-   * 적합값이라 "보정"이라고 부르는 것 자체가 거짓이었다. 수치는 왼쪽 패널에만 둔다. */
-  function buildAnchorGroup(fit, layerColor, register) {
+   * 예전에는 여기서 관절→예측 마커 선과 예측→실측 점선을 그리고 "보정 오프셋 0.57m(적합값)"·"12.8cm"
+   * 라벨을 달았다. 사용자가 "보정 오프셋은 왜 표시했는지를 모르겠음"이라고 해서 통째로 지웠는데, 그러자
+   * 채운 구가 어느 관절의 무엇인지 말해 주는 것이 화면에서 사라졌다("진한 구 형태와 연한 선과 스켈레톤은
+   * 왜 겹치는 부분이 없는지 모르겠어"). 문제는 선이 아니라 이름이었다. 이제 선은 **몸(추정 관절) →
+   * 장치(실측 구)** 막대로 돌아오고, 이름은 서버가 준 장치 이름·거리 문자열(`anchor.device.label`)이다.
+   *
+   * 막대는 실측 부호(층 색으로 채운 구체)를 쓰지 않는다 — 한쪽 끝이 추정 관절이다. 층 색을 흰색 쪽으로
+   * 씻은 반투명 실린더이고, 범례(서버 `legend_notes`)가 "장치 모양 = 몸(추정)에서 장치(실측)까지"라고 말한다.
+   * 고리는 그 층의 궤적(`trackLayer[anchor.point]`)이 구 자리에서 가는 방향을 축으로 삼는다 — 방향은
+   * 그림을 세우는 데만 쓰고, 화면에 숫자로 내지 않는다. */
+  function buildAnchorGroup(fit, layerColor, register, layer, trackLayer) {
     const group = new THREE.Group();
-    const counts = { measuredSpheres: 0 };
-    if (!fit) return { group, counts };
+    const counts = { measuredSpheres: 0, momentRings: 0, deviceShapes: 0 };
+    const devices = [];
+    if (!fit) return { group, counts, devices };
     const markerMaterial = new THREE.MeshStandardMaterial({ color: layerColor, roughness: 0.5 });
     const markerGeometry = new THREE.SphereGeometry(MEASURED_MARKER_RADIUS, 20, 14);
+    const ringMaterial = new THREE.MeshBasicMaterial({ color: layerColor, transparent: true, opacity: 0.95 });
+    const deviceMaterial = new THREE.MeshBasicMaterial({
+      color: mixColor(layerColor, 0xffffff, DEVICE_WASH), transparent: true, opacity: DEVICE_OPACITY, depthWrite: false,
+    });
     for (const anchor of fit.anchors ?? []) {
       if (!isVec3(anchor.measured_marker)) continue;
       const marker = new THREE.Mesh(markerGeometry, markerMaterial);
@@ -1244,8 +1307,74 @@ function mount(THREE, container) {
       group.add(marker);
       counts.measuredSpheres += 1;
       if (register) markerRegistry.push({ point: anchor.point, center: marker.position.clone() });
+      sphereObstacles.push(marker.position.clone());
+
+      const tangent = trackTangentAt(trackLayer?.[anchor.point], marker.position);
+      if (tangent) {
+        const ring = new THREE.Mesh(new THREE.TorusGeometry(MOMENT_RING_RADIUS, MOMENT_RING_TUBE, 8, 32), ringMaterial);
+        ring.position.copy(marker.position);
+        // TorusGeometry의 축은 +Z다 — 그 축을 궤적 방향에 맞춰 고리가 선을 가로지르게 한다.
+        ring.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), tangent.direction);
+        ring.userData.kind = "moment-ring";
+        ring.userData.point = anchor.point;
+        ring.userData.layer = layer;
+        ring.userData.trackGapM = tangent.gap;
+        group.add(ring);
+        counts.momentRings += 1;
+      }
+
+      const device = anchor.device;
+      if (!device || !isVec3(anchor.joint_position)) continue;
+      const joint = new THREE.Vector3(...anchor.joint_position);
+      const radius = device.shape === "tool" ? DEVICE_TOOL_RADIUS : DEVICE_LINK_RADIUS;
+      // 막대는 구 **표면**에서 멈춘다 — 구 안까지 파고들면 실측 구가 막대에 묻혀 보인다.
+      const toJoint = new THREE.Vector3().subVectors(joint, marker.position);
+      const span = toJoint.length();
+      if (span <= MEASURED_MARKER_RADIUS) continue;
+      const surface = marker.position.clone().addScaledVector(toJoint.normalize(), MEASURED_MARKER_RADIUS);
+      const bar = boneCylinder(joint, surface, radius, deviceMaterial, "device-shape", anchor.point);
+      if (!bar) continue;
+      bar.userData.layer = layer;
+      bar.userData.shape = device.shape;
+      bar.userData.from = [joint.x, joint.y, joint.z];
+      bar.userData.to = [...anchor.measured_marker];
+      group.add(bar);
+      counts.deviceShapes += 1;
+      deviceBars.push({ from: joint.clone(), to: marker.position.clone() });
+      let label = null;
+      if (typeof device.label === "string" && device.label.length > 0) {
+        label = registerLabel(marker.position, device.label, "view3d-label-device", { kind: "device", layer, point: anchor.point });
+        label.el.dataset.layer = layer;
+        // 이름표가 회피 배치로 구에서 멀리 밀리면 어느 구의 이름인지 잃는다 — 이름표에서 구까지 가는 끈을 단다.
+        label.leader = document.createElement("div");
+        label.leader.className = "view3d-label-leader";
+        label.leader.dataset.layer = layer;
+        dom.labelsHost.appendChild(label.leader);
+        deviceLabels.push(label);
+      }
+      devices.push({ layer, point: anchor.point, joint: anchor.joint, name: device.name, shape: device.shape, bar, label });
     }
-    return { group, counts };
+    return { group, counts, devices };
+  }
+
+  /** 궤적 폴리라인에서 `at`에 가장 가까운 선분의 진행 방향과 그 선분까지의 거리(m).
+   * 고리를 세우는 데만 쓴다 — 화면에 숫자로 내지 않는다(거리 문자열은 서버 몫이다). */
+  function trackTangentAt(track, at) {
+    const points = (Array.isArray(track) ? track : []).filter(isVec3).map((p) => new THREE.Vector3(...p));
+    if (points.length < 2) return null;
+    let best = null;
+    const segment = new THREE.Line3();
+    const closest = new THREE.Vector3();
+    for (let i = 0; i + 1 < points.length; i += 1) {
+      if (points[i].equals(points[i + 1])) continue;
+      segment.set(points[i], points[i + 1]);
+      segment.closestPointToPoint(at, true, closest);
+      const gap = closest.distanceTo(at);
+      if (best === null || gap < best.gap) {
+        best = { gap, direction: new THREE.Vector3().subVectors(points[i + 1], points[i]).normalize() };
+      }
+    }
+    return best;
   }
 
   function buildArrow(from, to, color) {
@@ -1901,7 +2030,16 @@ function mount(THREE, container) {
     wall: dom.controls.querySelector("#view3dLayerWall"),
     legs: dom.controls.querySelector("#view3dLayerLegs"),
   };
-  checkboxes.query.addEventListener("change", () => { layerGroups.query.visible = checkboxes.query.checked; });
+  checkboxes.query.addEventListener("change", () => {
+    layerGroups.query.visible = checkboxes.query.checked;
+    applyDeviceLabelVisibility();
+  });
+  /** 장치 이름표는 자기 층과 한 몸이다 — 층을 끄면 막대와 함께 이름표도 사라진다. */
+  function applyDeviceLabelVisibility() {
+    for (const entry of deviceLabels) {
+      entry.el.hidden = !(entry.layer === "reference" ? checkboxes.reference.checked : checkboxes.query.checked);
+    }
+  }
   /** 조상까지 모두 보이는 뼈 이름(검증용). three.js는 부모가 숨으면 자식도 그리지 않는다. */
   function visibleBoneNames() {
     const names = [];
@@ -1955,7 +2093,10 @@ function mount(THREE, container) {
       };
     }
   });
-  checkboxes.reference.addEventListener("change", () => { layerGroups.reference.visible = checkboxes.reference.checked; });
+  checkboxes.reference.addEventListener("change", () => {
+    layerGroups.reference.visible = checkboxes.reference.checked;
+    applyDeviceLabelVisibility();
+  });
   checkboxes.corrected.addEventListener("change", () => {
     layerGroups.corrected.visible = checkboxes.corrected.checked;
     dom.correctedNote.textContent = checkboxes.corrected.checked
@@ -2007,6 +2148,8 @@ function mount(THREE, container) {
     clearLabels();
     coneRegistry = [];
     markerRegistry = [];
+    sphereObstacles = [];
+    deviceBars = [];
     skeletonLegs = null;
     referenceLegs = null;
     skeletonPlaceholderLegs = null;
@@ -2110,12 +2253,13 @@ function mount(THREE, container) {
     const referenceStrokeGroup = buildStrokeGroup(view.reference_stroke, STROKE_COLOR.reference);
     layerGroups.reference.add(referenceStrokeGroup.group);
 
-    const anchors = buildAnchorGroup(fit, LAYER_COLOR.query, true);
+    const anchors = buildAnchorGroup(fit, LAYER_COLOR.query, true, "query", view.layers?.query);
     layerGroups.query.add(anchors.group);
-    const referenceAnchors = buildAnchorGroup(referenceFit, LAYER_COLOR.reference, false);
+    const referenceAnchors = buildAnchorGroup(referenceFit, LAYER_COLOR.reference, false, "reference", view.layers?.reference);
     layerGroups.reference.add(referenceAnchors.group);
     layerGroups.query.visible = checkboxes.query.checked;
     layerGroups.reference.visible = checkboxes.reference.checked;
+    applyDeviceLabelVisibility();
     layerGroups.corrected.visible = checkboxes.corrected.checked;
 
     // 화살표: 대표 프레임 실측 마커에서 나간다(from_frame). 번호는 서버의 n.
@@ -2233,6 +2377,40 @@ function mount(THREE, container) {
       markerKinds: {
         measuredSpheres: anchors.counts.measuredSpheres,
         referenceMeasuredSpheres: referenceAnchors.counts.measuredSpheres,
+        momentRings: anchors.counts.momentRings,
+        referenceMomentRings: referenceAnchors.counts.momentRings,
+      },
+      // 장치 모양(몸 → 장치). 양 끝점과 이름표 글자를 **씬과 DOM에서** 그대로 읽어 낸다 — 검증이 서버
+      // 앵커(`joint_position`·`measured_marker`·`device.label`)와 대조한다.
+      devices: [...anchors.devices, ...referenceAnchors.devices].map((d) => ({
+        layer: d.layer,
+        point: d.point,
+        joint: d.joint,
+        name: d.name,
+        shape: d.shape,
+        from: d.bar.userData.from,
+        to: d.bar.userData.to,
+        radius: d.shape === "tool" ? DEVICE_TOOL_RADIUS : DEVICE_LINK_RADIUS,
+        label: d.label ? d.label.el.textContent : null,
+      })),
+      momentRings: (() => {
+        const rings = [];
+        for (const group of [layerGroups.query, layerGroups.reference]) {
+          group.traverse((child) => {
+            if (child.userData.kind !== "moment-ring") return;
+            rings.push({
+              layer: child.userData.layer,
+              point: child.userData.point,
+              center: [child.position.x, child.position.y, child.position.z],
+              trackGapM: child.userData.trackGapM,
+            });
+          });
+        }
+        return rings;
+      })(),
+      trackTubes: {
+        query: countKind(layerGroups.query, "measured-layer-tube"),
+        reference: countKind(layerGroups.reference, "measured-layer-tube"),
       },
       legsVisible: checkboxes.legs.checked,
       legsToggleDisabled: checkboxes.legs.disabled,

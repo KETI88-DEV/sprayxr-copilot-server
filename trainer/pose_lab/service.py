@@ -747,7 +747,41 @@ LEGEND_NOTES: Final[tuple[str, ...]] = (
     # 자리표시 다리(B)가 기본 표시로 돌아왔으므로 범례가 그 부호를 말해야 한다 — 점선은 "재지 않은
     # 것"이라는 뜻이고, 화면이 그렇게 말하지 않으면 그림이 재지 않은 것을 잰 것처럼 보이게 된다.
     "점선 다리는 자리표시입니다(측정 아님) — 다리에는 추적 장치가 없습니다",
+    # 궤적 선과 채운 구체가 같은 장치라는 것 — 사용자가 "진한 구와 연한 선과 스켈레톤은 왜 겹치는
+    # 부분이 없는지" 물었다. 선은 패스 전체, 구체는 그중 한 순간, 스켈레톤은 그 순간의 추정 자세다.
+    "가는 선 = 장치(HMD·건·플래쉬)가 이 패스 동안 지나간 길(채점에 쓰는 실측)이고, "
+    "고리를 두른 채운 구체가 그중 이 순간(대표 프레임)입니다",
+    "장치 모양 = 몸(추정 관절)에서 장치(실측)까지 — 건은 굵은 막대(도구), HMD·플래쉬는 가는 막대이고, "
+    "이름 옆 거리는 관절에서 장치까지입니다",
 )
+
+# 장치 모양(사용자 선택 "장치를 모양으로 그리기"). 채운 구체(실측 장치)가 어느 관절의 무엇인지 화면이
+# 말하지 못했다 — 예전에는 관절→구 선에 "보정 오프셋 0.57m(적합값)"이 붙어 있었고, 그 이름이 틀려서
+# 선째로 지웠다. 문제는 선이 아니라 이름이었다: 이 거리는 교정값이 아니라 **몸(아바타 추정 관절)에서
+# 추적 장치까지**의 거리다. 건의 추적점은 손잡이가 아니라 건 몸체라서 손→건이 40cm 안팎으로 벌어진다.
+DEVICE_NAMES: Final[dict[str, str]] = {"head": "HMD", "right": "건", "left": "플래쉬"}
+DEVICE_JOINT_WORDS: Final[dict[str, str]] = {"head": "머리", "right": "오른손", "left": "왼손"}
+# 화면이 그리는 모양. 건은 손에 든 도구라 굵은 막대(`tool`), HMD·플래쉬는 가는 연결(`link`)이다.
+DEVICE_SHAPES: Final[dict[str, str]] = {"head": "link", "right": "tool", "left": "link"}
+
+
+def device_block(point: str, joint_position: Sequence[float], measured_marker: Sequence[float]) -> dict[str, object] | None:
+    """앵커 하나의 장치 모양 블록. 거리는 **관절 → 실측 구**(화면은 이 문자열을 그대로 쓴다).
+
+    적합 잔차(`miss_*`, 장착 상수로 예측한 위치 ↔ 실측 구)와 섞지 않는다 — 둘은 다른 두 점 사이다.
+    """
+    name = DEVICE_NAMES.get(point)
+    if name is None:
+        return None
+    metres = math.dist(tuple(joint_position), tuple(measured_marker))
+    return {
+        "name": name,
+        "shape": DEVICE_SHAPES[point],
+        "joint_word": DEVICE_JOINT_WORDS[point],
+        "joint_to_device_m": metres,
+        "label": f"{name} · {DEVICE_JOINT_WORDS[point]}에서 {metres * 100.0:.1f}cm",
+    }
+
 
 def _legs_shown(fit: Mapping[str, object] | None) -> bool:
     """이 층이 다리를 그리는가. 서버 판정(`legs_visible_default`)이 유일한 출처다."""
@@ -1255,7 +1289,7 @@ def _fit_view(
     if faded:
         notes.append(f"실측 회전과 수직 가정이 {gravity:.0f}° 어긋나 몸을 중력 방향으로 세워 그렸습니다(흐리게 표시).")
     else:
-        notes.append(f"몸의 수직은 중력 방향으로 맞춘 값입니다(보정 {gravity:.0f}°).")
+        notes.append(f"몸의 수직은 중력 방향으로 맞춘 값입니다(맞춘 각 {gravity:.0f}°).")
     note_keys.append("gravity")
 
     # --- 다리(B) -----------------------------------------------------------------
@@ -1328,7 +1362,7 @@ def _fit_view(
         "residual_m": placed.residual_m,
         "residual_label": RESIDUAL_LABELS[kind],
         "gravity_correction_deg": gravity,
-        "gravity_display": f"수직 보정 {gravity:.0f}°",
+        "gravity_display": f"수직 맞춤 {gravity:.0f}°",
         "faded": faded,
         "leg_tilt_deg": placed.leg_tilt_deg,
         "rotation_residual_deg": dict(placed.rotation_residual_deg),
@@ -1356,6 +1390,8 @@ def _fit_view(
                 "miss_cm": fit.miss_m * 100.0,
                 # 숫자는 왼쪽 패널에만 뜬다(S6) — 3D 안에는 이 문자열을 걸지 않는다.
                 "miss_display": f"{'적합 잔차 ' if kind == MOUNTS_PASS_FIT else ''}{fit.miss_m * 100.0:.1f}cm",
+                # 장치 모양(몸 → 장치). 거리는 **관절 → 실측 구**이고 적합 잔차(예측↔실측)와 다른 값이다.
+                "device": device_block(fit.point, fit.joint_position, fit.measured_marker),
             }
             for fit in placed.anchors
         ],

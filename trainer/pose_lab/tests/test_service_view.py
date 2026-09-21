@@ -1607,3 +1607,118 @@ def test_head_height_panel_does_not_claim_a_plane_it_never_chose(test_mounts) ->
     assert block["display"] is None
     assert block["note"] == service.HEAD_HEIGHT_NO_FLOOR
     assert "0.00m" not in str(block)
+
+
+# --- 장치 모양(몸 → 장치) ----------------------------------------------------------------
+#
+# 사용자: "진한 구 형태와 연한 선과 스켈레톤은 왜 겹치는 부분이 없는지. 정확히 뭘 의미하는지를
+# 모르겠어." 채운 구는 장치(HMD·건·플래쉬)이고 관절에 붙어 있지 않다. 화면이 그 사이를 막대로 잇고
+# 장치 이름과 **관절 → 실측 구** 거리를 적는다. 거리는 적합 잔차(예측 ↔ 실측)와 다른 값이다.
+
+
+def device_label_faults(anchor: dict) -> list[str]:  # type: ignore[type-arg]
+    """앵커 하나의 장치 블록이 (1) 장치 이름을 맞게 부르고 (2) 관절 → 실측 구 거리를 적는가."""
+    faults: list[str] = []
+    device = anchor.get("device")
+    if not isinstance(device, dict):
+        return ["no_device_block"]
+    expected_name = {"head": "HMD", "right": "건", "left": "플래쉬"}[anchor["point"]]
+    if device["name"] != expected_name:
+        faults.append("wrong_device_name")
+    if device["shape"] != ("tool" if anchor["point"] == "right" else "link"):
+        faults.append("wrong_device_shape")
+    metres = math.dist(anchor["joint_position"], anchor["measured_marker"])
+    if abs(device["joint_to_device_m"] - metres) > 1e-12:
+        faults.append("distance_is_not_joint_to_measured_sphere")
+    if device["label"] != f"{expected_name} · {device['joint_word']}에서 {metres * 100.0:.1f}cm":
+        faults.append("label_is_not_the_joint_to_measured_distance")
+    if "보정" in device["label"]:
+        faults.append("label_says_bojeong")
+    return faults
+
+
+def test_every_anchor_names_its_device_and_the_joint_to_device_distance(test_mounts) -> None:  # noqa: ANN001
+    block = service.skeleton_block(RawPass(rows=_rows_with_skeleton(0.3)))
+    anchors = block.fit["anchors"]
+    assert {a["point"] for a in anchors} == {"head", "right", "left"}
+    assert {a["point"]: device_label_faults(a) for a in anchors} == {"head": [], "right": [], "left": []}
+    # 이 픽스처에서 관절 → 구(장착 거리)와 적합 잔차는 다른 값이다 — 둘을 섞으면 위 검사가 갈린다.
+    for anchor in anchors:
+        assert abs(anchor["device"]["joint_to_device_m"] * 100.0 - anchor["miss_cm"]) > 0.05, anchor["point"]
+
+
+def test_device_label_checks_can_fail(test_mounts) -> None:  # noqa: ANN001
+    block = service.skeleton_block(RawPass(rows=_rows_with_skeleton(0.3)))
+    anchor = next(a for a in block.fit["anchors"] if a["point"] == "right")
+    assert device_label_faults(anchor) == []
+    # 적합 잔차(예측 ↔ 실측)를 거리로 적는 되돌리기.
+    residual = dict(anchor, device=service.device_block("right", anchor["predicted_marker"], anchor["measured_marker"]))
+    assert device_label_faults(residual) == [
+        "distance_is_not_joint_to_measured_sphere",
+        "label_is_not_the_joint_to_measured_distance",
+    ]
+    renamed = dict(anchor, device=dict(anchor["device"], name="보정 오프셋", label="보정 오프셋 0.57m"))
+    assert device_label_faults(renamed) == [
+        "wrong_device_name", "label_is_not_the_joint_to_measured_distance", "label_says_bojeong",
+    ]
+    assert device_label_faults(dict(anchor, device=None)) == ["no_device_block"]
+
+
+def _strings(value: object) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [s for v in value.values() for s in _strings(v)]
+    if isinstance(value, (list, tuple)):
+        return [s for v in value for s in _strings(v)]
+    return []
+
+
+def bojeong_strings(value: object) -> list[str]:
+    """응답 안에서 "보정"이라고 말하는 문자열. 이 값은 교정이 아니라 몸 → 장치 거리다."""
+    return [text for text in _strings(value) if "보정" in text]
+
+
+def test_no_string_the_server_sends_says_bojeong(test_mounts) -> None:  # noqa: ANN001
+    # 두 갈래를 다 부른다: 수직 가정이 크게 어긋난 패스(흐리게, 90°)와 작게 맞춘 패스(2° 안팎).
+    # 작게 맞춘 갈래의 고지가 예전에 "(보정 N°)"라고 적었다.
+    faded = service.skeleton_block(RawPass(rows=_rows_with_skeleton(0.3))).fit
+    upright = service.skeleton_block(RawPass(rows=_consistent_rows(240, 0.02)), mounts_table=_UNVALIDATED).fit
+    assert faded["faded"] is True and upright["faded"] is False
+    assert "gravity" in upright["note_keys"]
+    assert bojeong_strings(faded) == []
+    assert bojeong_strings(upright) == []
+    assert bojeong_strings(_compare()["view"]) == []
+    assert bojeong_strings(service.LEGEND_NOTES) == []
+
+
+def test_bojeong_check_can_fail() -> None:
+    assert bojeong_strings({"notes": ["몸의 수직은 중력 방향으로 맞춘 값입니다(보정 3°)."]}) == [
+        "몸의 수직은 중력 방향으로 맞춘 값입니다(보정 3°)."
+    ]
+
+
+def legend_device_faults(notes: tuple[str, ...] | list[str]) -> list[str]:
+    """범례가 세 가지를 말하는가: 선 = 패스 동안 지나간 길(채점 실측), 고리 두른 구 = 이 순간,
+    장치 모양 = 몸(추정)에서 장치(실측)까지."""
+    text = " / ".join(notes)
+    faults: list[str] = []
+    if not re.search(r"선 = [^/]*지나간 길[^/]*채점에 쓰는 실측", text):
+        faults.append("track_line_not_explained")
+    if not re.search(r"고리를 두른 채운 구체가 그중 이 순간", text):
+        faults.append("moment_not_explained")
+    if not re.search(r"장치 모양 = 몸\(추정[^)]*\)에서 장치\(실측\)까지", text):
+        faults.append("device_shape_not_explained")
+    return faults
+
+
+def test_the_legend_says_what_the_line_the_ring_and_the_device_shape_are() -> None:
+    assert legend_device_faults(service.LEGEND_NOTES) == []
+    view = _compare()["view"]
+    assert set(service.LEGEND_NOTES) <= set(view["legend_notes"])
+
+
+def test_legend_device_checks_can_fail() -> None:
+    assert legend_device_faults(service.LEGEND_NOTES[:3]) == [
+        "track_line_not_explained", "moment_not_explained", "device_shape_not_explained",
+    ]

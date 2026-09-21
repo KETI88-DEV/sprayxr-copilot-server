@@ -1801,11 +1801,15 @@ def three_d_number_faults(js: str) -> list[str]:
         anchor = js.split("function buildAnchorGroup(", 1)[1].split("\n  }\n", 1)[0]
         if "THREE.Line" in anchor:
             faults.append("anchor_group_still_draws_lines")
-    # 3D 안 글자의 **종류**. 화살표 번호(arrow) · 자리표시 간격(gap) · 궤적 이름(point) 셋뿐이다.
-    # 네 번째가 생기면 그것은 새로 들어온 3D 안 숫자이고, 이 검사가 그때 한 번 멈춰 세운다.
+    # 3D 안 글자의 **종류**. 화살표 번호(arrow) · 장치 이름표(device) · 자리표시 간격(gap) · 궤적
+    # 이름(point) 넷뿐이다. 장치 이름표는 사용자 선택("장치를 모양으로 그리기")이 연 칸이고 서버 문자열
+    # (`device.label`)로만 채운다. 다섯 번째가 생기면 이 검사가 그때 한 번 멈춰 세운다.
     kinds = sorted(set(re.findall(r'registerLabel\([^;]*?"(view3d-label-[a-z]+)"', js)))
-    if kinds != ["view3d-label-arrow", "view3d-label-gap", "view3d-label-point"]:
+    if kinds != ["view3d-label-arrow", "view3d-label-device", "view3d-label-gap", "view3d-label-point"]:
         faults.append(f"3d_label_kinds_changed:{','.join(kinds)}")
+    device = re.search(r'registerLabel\(([^;]*?)"view3d-label-device"', js)
+    if device is not None and "device.label" not in device.group(1):
+        faults.append("device_label_is_not_the_server_string")
     return faults
 
 
@@ -1832,8 +1836,16 @@ def test_3d_number_checks_can_fail():
     )
     assert fourth != full
     assert three_d_number_faults(fourth) == [
-        "3d_label_kinds_changed:view3d-label-arrow,view3d-label-hint,view3d-label-point"
+        "3d_label_kinds_changed:view3d-label-arrow,view3d-label-device,view3d-label-hint,view3d-label-point"
     ]
+    # 장치 이름표를 화면이 스스로 지으면(이름 + 다시 잰 거리) 잡는다.
+    self_made = full.replace(
+        'registerLabel(marker.position, device.label, "view3d-label-device"',
+        'registerLabel(marker.position, `${device.name} ${span}`, "view3d-label-device"',
+        1,
+    )
+    assert self_made != full
+    assert three_d_number_faults(self_made) == ["device_label_is_not_the_server_string"]
 
 
 def floor_gap_guide_faults(js: str) -> list[str]:
@@ -2067,3 +2079,217 @@ def test_reference_staleness_checks_can_fail():
     )
     assert unguarded != full
     assert reference_staleness_faults(unguarded) == ["response_not_checked_against_latest_request"]
+
+
+# --- 장치 모양 · 이 순간 고리 · 읽히는 궤적 -------------------------------------------------
+#
+# 사용자: "진한 구 형태와 연한 선과 스켈레톤은 왜 겹치는 부분이 없는지. 정확히 뭘 의미하는지를
+# 모르겠어." 선은 장치가 패스 동안 지나간 길(채점 실측), 채운 구는 그중 이 순간, 스켈레톤은 그 순간의
+# 추정 자세다. 화면이 세 가지를 모양으로 말하게 했다 — 아래 검사가 그 뼈대를 고정한다.
+
+
+def _hex_hue(value: int) -> float:
+    import colorsys
+
+    r, g, b = ((value >> 16) & 0xFF) / 255, ((value >> 8) & 0xFF) / 255, (value & 0xFF) / 255
+    return colorsys.rgb_to_hsv(r, g, b)[0] * 360.0
+
+
+def _const_hex(js: str, name: str, key: str) -> int | None:
+    found = re.search(rf"const {name} = \{{[^}}]*\b{key}: (0x[0-9a-fA-F]{{6}})", js)
+    return None if found is None else int(found.group(1), 16)
+
+
+def _const_number(js: str, name: str) -> float | None:
+    found = re.search(rf"const {name} = ([0-9.]+);", js)
+    return None if found is None else float(found.group(1))
+
+
+def device_shape_faults(js: str) -> list[str]:
+    """장치 모양(몸 → 장치)이 두 층에 그려지고, 실측 부호를 쓰지 않으며, 이름표가 층과 함께 꺼지는가."""
+    code = without_comments(js)
+    body = _nested_function_body(code, "buildAnchorGroup")
+    if not body:
+        return ["no_anchor_builder"]
+    faults: list[str] = []
+    for layer in ("query", "reference"):
+        if not re.search(rf'buildAnchorGroup\([^;]*"{layer}", view\.layers\?\.{layer}\)', code):
+            faults.append(f"{layer}_devices_not_drawn")
+    if "anchor.device" not in body or '"device-shape"' not in body:
+        faults.append("device_shape_not_from_server_block")
+    # 막대의 재료는 실측 구의 재료(층 색 그대로의 MeshStandardMaterial)가 아니어야 한다.
+    bar = re.search(r'boneCylinder\(joint, surface, radius, (\w+), "device-shape"', body)
+    if bar is None:
+        faults.append("device_bar_missing")
+    elif bar.group(1) == "markerMaterial":
+        faults.append("device_bar_uses_the_measured_symbol")
+    else:
+        material = re.search(rf"const {bar.group(1)} = new THREE\.(\w+)\(\{{([^}}]*)\}}", body)
+        if material is None or "mixColor(layerColor" not in material.group(2):
+            faults.append("device_bar_is_plain_layer_colour")
+    if "SphereGeometry" in body.split("const device = anchor.device;", 1)[-1]:
+        faults.append("device_drawn_as_a_sphere")
+    tool = _const_number(js, "DEVICE_TOOL_RADIUS")
+    link = _const_number(js, "DEVICE_LINK_RADIUS")
+    if tool is None or link is None or not tool > link:
+        faults.append("gun_is_not_thicker_than_the_links")
+    toggle = _nested_function_body(code, "applyDeviceLabelVisibility")
+    if "checkboxes.reference.checked" not in toggle or "checkboxes.query.checked" not in toggle:
+        faults.append("device_labels_not_tied_to_the_layer_toggle")
+    for layer in ("query", "reference"):
+        listener = code.split(f'checkboxes.{layer}.addEventListener("change"', 1)[-1].split("});", 1)[0]
+        if "applyDeviceLabelVisibility()" not in listener:
+            faults.append(f"{layer}_toggle_leaves_device_labels")
+    # 이름표는 회피 배치로 구에서 수백 px 밀린다(L3 실측: 머리 이름표 ~230px) — 끈이 없으면 어느 구의
+    # 이름인지 잃는다. 끈은 배치가 끝난 자리에서 구 쪽으로 다시 그려져야 한다.
+    if "label.leader = document.createElement" not in body:
+        faults.append("device_label_has_no_leader")
+    if "placeLeader(entry.leader, rect(x, y), px)" not in _nested_function_body(code, "layoutLabels"):
+        faults.append("leader_not_placed_after_layout")
+    # 막대도 라벨 장애물이다(옛 관절 → 구 선의 라벨 사이로 그 선이 지나갔다).
+    if "deviceBars" not in _nested_function_body(code, "thinLineScreenRects"):
+        faults.append("device_bars_not_label_obstacles")
+    return faults
+
+
+def test_device_shapes_join_body_to_device_on_both_layers():
+    assert device_shape_faults(_read("skeleton_view.js")) == []
+
+
+def test_device_shape_checks_can_fail():
+    full = _read("skeleton_view.js")
+    one = full.replace('"reference", view.layers?.reference)', '"reference", null)', 1)
+    assert one != full and device_shape_faults(one) == ["reference_devices_not_drawn"]
+    measured = full.replace(
+        'boneCylinder(joint, surface, radius, deviceMaterial, "device-shape"',
+        'boneCylinder(joint, surface, radius, markerMaterial, "device-shape"',
+        1,
+    )
+    assert measured != full and device_shape_faults(measured) == ["device_bar_uses_the_measured_symbol"]
+    plain = full.replace("color: mixColor(layerColor, 0xffffff, DEVICE_WASH),", "color: layerColor,", 1)
+    assert plain != full and device_shape_faults(plain) == ["device_bar_is_plain_layer_colour"]
+    thin = full.replace("const DEVICE_TOOL_RADIUS = 0.012;", "const DEVICE_TOOL_RADIUS = 0.004;", 1)
+    assert thin != full and device_shape_faults(thin) == ["gun_is_not_thicker_than_the_links"]
+    sticky = full.replace(
+        "    layerGroups.reference.visible = checkboxes.reference.checked;\n    applyDeviceLabelVisibility();\n  });",
+        "    layerGroups.reference.visible = checkboxes.reference.checked;\n  });",
+        1,
+    )
+    assert sticky != full and device_shape_faults(sticky) == ["reference_toggle_leaves_device_labels"]
+    blind = full.replace(
+        "for (const bar of deviceBars) segmentRects", "for (const bar of []) segmentRects", 1,
+    )
+    assert blind != full and device_shape_faults(blind) == ["device_bars_not_label_obstacles"]
+    unled = full.replace("      if (entry.leader) placeLeader(entry.leader, rect(x, y), px);\n", "", 1)
+    assert unled != full and device_shape_faults(unled) == ["leader_not_placed_after_layout"]
+
+
+def track_visibility_faults(js: str) -> list[str]:
+    """실측 궤적이 읽히는가 — 그리고 **여전히** 벽면 스트로크와 다른 색 계열인가.
+
+    옛 궤적은 불투명도 0.3의 1px 선이라 채운 구와 같은 장치라는 것이 안 보였다. 진하게 하되 사용자가
+    전에 둘을 헷갈렸으므로(궤적을 스트로크로 읽음), 궤적은 층 색(차가운 파랑·보라), 스트로크는
+    따뜻한 주황·노랑이어야 한다. 관은 스트로크보다 가늘다.
+    """
+    faults: list[str] = []
+    line = _const_number(js, "TRACK_LINE_OPACITY")
+    if line is None or line < 0.8:
+        faults.append("track_line_still_faint")
+    tube = _const_number(js, "TRACK_TUBE_RADIUS")
+    stroke = _const_number(js, "STROKE_RADIUS")
+    if tube is None or stroke is None or not 0 < tube < stroke:
+        faults.append("track_tube_not_thinner_than_the_stroke")
+    body = _nested_function_body(without_comments(js), "buildLayerGroup")
+    if '"measured-layer-tube"' not in body:
+        faults.append("measured_track_has_no_tube")
+    if "STROKE_COLOR" in body:
+        faults.append("track_borrows_the_stroke_colour")
+    tube_material = re.search(r"const tubeMaterial = new THREE\.\w+\(\{([^}]*)\}", body)
+    if tube_material is None or "color: layerColor" not in tube_material.group(1):
+        faults.append("track_tube_not_layer_colour")
+    for layer in ("query", "reference"):
+        track = _const_hex(js, "LAYER_COLOR", layer)
+        warm = _const_hex(js, "STROKE_COLOR", layer)
+        if track is None or warm is None:
+            faults.append(f"{layer}_colour_missing")
+            continue
+        if not 180.0 <= _hex_hue(track) <= 300.0:
+            faults.append(f"{layer}_track_not_cool")
+        if not _hex_hue(warm) <= 70.0:
+            faults.append(f"{layer}_stroke_not_warm")
+    return faults
+
+
+def test_measured_tracks_read_but_stay_a_different_colour_family_from_the_stroke():
+    assert track_visibility_faults(_read("skeleton_view.js")) == []
+
+
+def test_track_visibility_checks_can_fail():
+    full = _read("skeleton_view.js")
+    faint = full.replace("const TRACK_LINE_OPACITY = 0.9;", "const TRACK_LINE_OPACITY = 0.3;", 1)
+    assert faint != full and track_visibility_faults(faint) == ["track_line_still_faint"]
+    orange = full.replace("reference: 0xa684e0, corrected", "reference: 0xff9a3a, corrected", 1)
+    assert orange != full and track_visibility_faults(orange) == ["reference_track_not_cool"]
+    fat = full.replace("const TRACK_TUBE_RADIUS = 0.0035;", "const TRACK_TUBE_RADIUS = 0.008;", 1)
+    assert fat != full and track_visibility_faults(fat) == ["track_tube_not_thinner_than_the_stroke"]
+    borrowed = full.replace(
+        "color: layerColor, transparent: true, opacity: TRACK_TUBE_OPACITY",
+        "color: STROKE_COLOR.query, transparent: true, opacity: TRACK_TUBE_OPACITY",
+        1,
+    )
+    assert borrowed != full
+    assert track_visibility_faults(borrowed) == ["track_borrows_the_stroke_colour", "track_tube_not_layer_colour"]
+
+
+def moment_ring_faults(js: str) -> list[str]:
+    """채운 구가 자기 궤적 선 위의 "이 순간"이라는 것을 고리가 말하는가.
+
+    고리는 (1) 구와 같은 자리에, (2) 그 장치 자신의 궤적(`trackLayer[anchor.point]`) 방향을 축으로,
+    (3) 속 빈 고리(토러스)로 그린다 — 채운 구는 실측 부호라 또 쓰면 안 된다.
+    """
+    body = _nested_function_body(without_comments(js), "buildAnchorGroup")
+    if not body:
+        return ["no_anchor_builder"]
+    faults: list[str] = []
+    if "TorusGeometry" not in body or '"moment-ring"' not in body:
+        faults.append("no_moment_ring")
+    if "ring.position.copy(marker.position)" not in body:
+        faults.append("ring_not_at_the_sphere")
+    if "trackTangentAt(trackLayer?.[anchor.point], marker.position)" not in body:
+        faults.append("ring_not_aligned_to_its_own_track")
+    if "setFromUnitVectors(new THREE.Vector3(0, 0, 1), tangent.direction)" not in body:
+        faults.append("ring_does_not_cross_the_track")
+    return faults
+
+
+def test_the_filled_sphere_wears_a_ring_across_its_own_track():
+    assert moment_ring_faults(_read("skeleton_view.js")) == []
+
+
+def test_moment_ring_checks_can_fail():
+    full = _read("skeleton_view.js")
+    moved = full.replace("ring.position.copy(marker.position);", "ring.position.set(0, 0, 0);", 1)
+    assert moved != full and moment_ring_faults(moved) == ["ring_not_at_the_sphere"]
+    other = full.replace("trackTangentAt(trackLayer?.[anchor.point], marker.position)", "trackTangentAt(trackLayer?.right, marker.position)", 1)
+    assert other != full and moment_ring_faults(other) == ["ring_not_aligned_to_its_own_track"]
+    flat = full.replace(
+        "ring.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), tangent.direction);", "", 1,
+    )
+    assert flat != full and moment_ring_faults(flat) == ["ring_does_not_cross_the_track"]
+
+
+BOJEONG = "보정"
+
+
+def screen_bojeong(js: str) -> list[str]:
+    """주석을 뺀 화면 소스(문자열·코드)에서 "보정"을 찾는다. 이 값들은 교정이 아니다."""
+    return [line.strip() for line in without_comments(js).splitlines() if BOJEONG in line]
+
+
+def test_no_screen_text_says_bojeong():
+    found = {name: screen_bojeong(_read(name)) for name in STATIC_FILES}
+    assert found == {name: [] for name in STATIC_FILES}
+
+
+def test_screen_bojeong_check_can_fail():
+    assert screen_bojeong('// 옛 보정 오프셋\nconst t = "보정 오프셋 0.57m";') == ['const t = "보정 오프셋 0.57m";']
