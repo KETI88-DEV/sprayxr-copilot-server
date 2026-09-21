@@ -31,7 +31,7 @@ pose_fk_csv = importlib.import_module("pose_fk_csv")
 simulator_csv = importlib.import_module("simulator_csv")
 world_axes = importlib.import_module("world_axes")
 
-from trainer.pose_lab import body_proportions, composite, instructions, joint_angles, orientation, skeleton
+from trainer.pose_lab import body_proportions, composite, instructions, joint_angles, orientation, right_arm, skeleton
 from trainer.pose_lab.spread_reference import Resolved, SpreadReference
 
 logger = logging.getLogger(__name__)
@@ -731,59 +731,43 @@ FIT_NOTES: Final[dict[str, str]] = {
     "mounts_unavailable": "검증된 장착 상수가 없고 이 패스로 맞출 프레임도 60개 미만이라 스켈레톤을 그리지 않습니다.",
     "display_error": "스켈레톤을 만드는 중 오류가 나 그리지 않았습니다.",
 }
-# 범례는 **실측**을 모양으로 선언한다. 추적 장치가 붙은 강체는 머리(HMD)·건·플래쉬 셋뿐이고,
-# 아바타 추정 기하(뼈·관절점·머리)는 전부 속 빈 표식이다. 옛 문구 "구체 = 실측"은 추정 머리(반경 0.09m
-# 회색 구)와 추정 관절점도 구체여서, 화면에서 가장 큰 구를 실측이라고 읽게 만들었다.
-#
-# 이제 관절은 **두 스켈레톤이 벌어진 거리**로 진하기가 정해진다(`deviation_block`). 그래서 범례는
-# 그 진하기가 무엇을 뜻하는지, 그리고 그 값이 추정끼리의 차이라는 것을 같이 말해야 한다 — 사용자가
-# 본 화면의 강조는 유사도가 아니라 채점 가중치였고, 그것이 이 재작업의 출발점이다.
-# 진하기 규칙은 이제 `deviation.legend`가 **잰 값과 함께** 말한다. 여기서 같은 말을 또 하면
-# 범례가 두 줄로 같은 주장을 반복하고, 편차를 못 잰 경우(한쪽 스켈레톤이 안 섬)에는 그 주장이
-# 거짓이 된다 — 그때는 진해지는 관절이 없다.
-LEGEND_NOTES: Final[tuple[str, ...]] = (
-    "대상(파랑)·기준(보라) 두 자세를 겹쳐 그립니다",
-    "관절·뼈는 아바타 추정(속 빈 표식)이고, 실측은 머리(HMD)·건·플래쉬 셋뿐(층 색으로 채운 구체)입니다",
-    # 자리표시 다리(B)가 기본 표시로 돌아왔으므로 범례가 그 부호를 말해야 한다 — 점선은 "재지 않은
-    # 것"이라는 뜻이고, 화면이 그렇게 말하지 않으면 그림이 재지 않은 것을 잰 것처럼 보이게 된다.
-    "점선 다리는 자리표시입니다(측정 아님) — 다리에는 추적 장치가 없습니다",
-    # 궤적 선과 채운 구체가 같은 장치라는 것 — 사용자가 "진한 구와 연한 선과 스켈레톤은 왜 겹치는
-    # 부분이 없는지" 물었다. 선은 패스 전체, 구체는 그중 한 순간, 스켈레톤은 그 순간의 추정 자세다.
-    "가는 선 = 장치(HMD·건·플래쉬)가 이 패스 동안 지나간 길(채점에 쓰는 실측)이고, "
-    "고리를 두른 채운 구체가 그중 이 순간(대표 프레임)입니다",
-    # 막대를 "도구"라고 부르지 않는다 — 손→건 거리는 레벨·층마다 38~77cm로 흔들리는 **어긋남**이고
-    # (아래 LOW_CONFIDENCE_NOTE), 도구 길이로 읽으면 매핑 문제를 건의 기하로 둔갑시킨다.
-    "장치 모양 = 몸(추정 관절)에서 장치(실측)까지 벌어진 간격을 줄무늬 막대로 그렸습니다 — 뼈도 도구 "
-    "길이도 아니고, 이름 옆 거리가 이 순간 관절에서 장치까지입니다(건 쪽이 굵은 막대)",
-)
+# 범례는 **한 줄**이다(사용자: "UI는 간단한 편이 좋음"). 무엇이 실측이고 무엇이 추정인지는 글자가 아니라
+# **모양**이 말하고, 범례는 그 모양의 뜻만 짧게 적는다 — 채운 구 = 실측 장치(HMD·건·플래쉬), 속 빈 표식 =
+# 아바타 추정 관절, 점선 = 재지 않은 부분(자리표시 다리 · 오른손이 손잡이에 못 닿은 거리), 줄무늬 = 건.
+# 예전 범례는 다섯 문장이었고 방법 설명("몸(추정 관절)에서 장치(실측)까지 벌어진 간격…")까지 실었다 —
+# 사용자가 "분사구 0.3m(추정)과 같은 불필요한 텍스트는 넣지 말 것"이라고 했다. 가는 선(궤적)의 이름은
+# **장치** 이름이다: 궤적은 관절이 아니라 HMD·건·플래쉬가 지나간 길이다.
+LEGEND_MEASURED_WORD: Final = "채운 구 = 실측 장치"
+LEGEND_ESTIMATE_WORD: Final = "속 빈 표식 = 추정 관절"
+LEGEND_DASHED_WORD: Final = "점선 = 재지 않은 부분"
+LEGEND_GUN_WORD: Final = "줄무늬 = 건"
+LEGEND_SEPARATOR: Final = " · "
 
-# 장치 모양(사용자 선택 "장치를 모양으로 그리기"). 채운 구체(실측 장치)가 어느 관절의 무엇인지 화면이
-# 말하지 못했다 — 예전에는 관절→구 선에 "보정 오프셋 0.57m(적합값)"이 붙어 있었고, 그 이름이 틀려서
-# 선째로 지웠다. 문제는 선이 아니라 이름이었다: 이 거리는 교정값이 아니라 **몸(아바타 추정 관절)에서
-# 추적 장치까지**의 거리다. 손→건 간격은 실측 김경호 L1·L3·L6 첫 패스에서 38.7~77.1cm로 흔들린다 —
-# 건의 길이가 아니라 원본 데이터의 손 IK↔컨트롤러 어긋남이다(LOW_CONFIDENCE_NOTE와 같은 사실).
+# 장치 모양(사용자 선택 "장치를 모양으로 그리기"). 채운 구체(실측 장치)마다 짧은 이름 하나만 단다 — 거리도
+# 방법도 적지 않는다(사용자: "불필요한 텍스트는 넣지 말 것"). 이름표는 **대상 층에만** 달고(기준 층은 색이
+# 말한다), 화면이 그 규칙을 지킨다.
+#
+# 막대: 건은 **손잡이 → 트래커**(분사구) 굵은 줄무늬 막대다 — 오른팔을 건 손잡이로 세운 뒤로(`right_arm`)
+# 막대의 손 쪽 끝은 손잡이이고, 그 길이는 `right_arm.GRIP_BEHIND_TRACKER_M`이다. HMD·플래쉬는 추정 관절 →
+# 장치 가는 줄무늬다(몸과 장치 사이 간격).
 DEVICE_NAMES: Final[dict[str, str]] = {"head": "HMD", "right": "건", "left": "플래쉬"}
-DEVICE_JOINT_WORDS: Final[dict[str, str]] = {"head": "머리", "right": "오른손", "left": "왼손"}
-# 화면이 그리는 모양. 건 쪽 간격은 굵은 줄무늬 막대(`gun`), HMD·플래쉬 쪽은 가는 줄무늬(`link`)다.
-# 이름을 `tool`로 두지 않는다 — 막대는 도구가 아니라 몸과 장치 사이의 간격이다.
 DEVICE_SHAPES: Final[dict[str, str]] = {"head": "link", "right": "gun", "left": "link"}
 
 
-def device_block(point: str, joint_position: Sequence[float], measured_marker: Sequence[float]) -> dict[str, object] | None:
-    """앵커 하나의 장치 모양 블록. 거리는 **관절 → 실측 구**(화면은 이 문자열을 그대로 쓴다).
+def device_block(point: str, start: Sequence[float], measured_marker: Sequence[float]) -> dict[str, object] | None:
+    """앵커 하나의 장치 모양 블록. 막대는 `from`(건 = 손잡이, 나머지 = 추정 관절)에서 실측 구까지다.
 
-    적합 잔차(`miss_*`, 장착 상수로 예측한 위치 ↔ 실측 구)와 섞지 않는다 — 둘은 다른 두 점 사이다.
+    이름표 글자는 장치 이름뿐이다 — 거리·"(추정)"·방법 문구를 달지 않는다.
     """
     name = DEVICE_NAMES.get(point)
     if name is None:
         return None
-    metres = math.dist(tuple(joint_position), tuple(measured_marker))
     return {
         "name": name,
         "shape": DEVICE_SHAPES[point],
-        "joint_word": DEVICE_JOINT_WORDS[point],
-        "joint_to_device_m": metres,
-        "label": f"{name} · {DEVICE_JOINT_WORDS[point]}에서 {metres * 100.0:.1f}cm",
+        "label": name,
+        "from": [float(v) for v in start],
+        "to": [float(v) for v in measured_marker],
     }
 
 
@@ -874,7 +858,7 @@ TRACK_POINT_ORDER: Final[tuple[str, ...]] = ("right", "head", "left")
 
 
 def track_legend_note(layer: Mapping[str, Sequence[Any]]) -> str | None:
-    """층마다 궤적이 몇 줄이고 어느 줄이 무엇인지 한 줄로. 그릴 줄이 없으면 None.
+    """범례의 궤적 조각 — 그 층에 실제로 그려지는 줄의 **장치** 이름. 그릴 줄이 없으면 None.
 
     입력은 **그려질 층 자체**다(`_world_layer`/`_serialize_layer`의 산출물). 화면이 점이 하나라도
     있는 이름마다 폴리라인을 하나씩 만드므로, 여기서 같은 조건으로 세면 범례 숫자와 그려진 줄 수가
@@ -887,16 +871,27 @@ def track_legend_note(layer: Mapping[str, Sequence[Any]]) -> str | None:
     ]
     if not drawn:
         return None
-    names = " · ".join(TRACK_POINT_NAMES[name] for name in drawn)
-    count = len(drawn)
-    return (
-        f"움직임 궤적 {count}줄({names})은 기준 {count}개가 아니라 한 사람이 든 장치 {count}개입니다"
-    )
+    names = "·".join(TRACK_POINT_NAMES[name] for name in drawn)
+    return f"가는 선 = {names} 궤적"
 
 
 # 범례가 "실측"으로 선언한 시각 부호(모양). 추정 기하는 이 부호를 쓰지 않는다 — 검사가 이 짝을 고정한다.
-LEGEND_MEASURED_SYMBOL: Final = "층 색으로 채운 구체"
+LEGEND_MEASURED_SYMBOL: Final = "채운 구"
 LEGEND_ESTIMATE_SYMBOL: Final = "속 빈 표식"
+# 범례 한 줄의 고정 조각. 궤적 조각(`track_legend_note`)만 그 층에 실제로 그려지는 줄에 따라 달라진다.
+LEGEND_NOTES: Final[tuple[str, ...]] = (
+    LEGEND_MEASURED_WORD,
+    LEGEND_ESTIMATE_WORD,
+    LEGEND_DASHED_WORD,
+    LEGEND_GUN_WORD,
+)
+
+
+def legend_line(layer: Mapping[str, Sequence[Any]]) -> str:
+    """범례 **한 줄**. 채운 구(실측) · 가는 선(궤적) · 속 빈 표식(추정) · 점선 · 줄무늬."""
+    parts = [LEGEND_MEASURED_WORD, track_legend_note(layer), *LEGEND_NOTES[1:]]
+    return LEGEND_SEPARATOR.join(part for part in parts if isinstance(part, str))
+
 
 # 대표 스켈레톤 프레임 탐색: 분사 구간 가운데에서 가까운 순서로 이만큼만 FK를 돈다(프레임당 약 0.9 ms).
 LEG_SEARCH_MAX: Final = 120
@@ -1010,31 +1005,24 @@ HEAD_HEIGHT_NOTE: Final = (
 )
 HEAD_HEIGHT_NO_FLOOR: Final = "이 레벨은 벽 메시가 없어 바닥면을 고르지 못했습니다."
 
-# 오른 전완·손 저신뢰(S5). 아바타 IK 손과 트래킹된 건의 간격이 작업자·레벨 불문 중앙값 571mm다
-# (적합 상수 0.567m와 일치). 강체 변환이라 스케일 문제가 아니고(뼈 길이 1e-15 보존), 리그의 어느
-# 마디와도 안 맞는다(팔 0.694 · 전완+손 0.486 · 손 0.243). 손을 건에 붙이면 **더 나빠진다**:
-# 오른손 128.5→385.2mm · 머리 76.5→224.7 · 왼손 83.2→178.4(평행이동이 세 앵커에 공유되므로).
-# 캡처 파이프라인의 손 IK↔컨트롤러 매핑 문제이고 이 저장소에서 고칠 수 없다 — 화면은 이 한계를
-# 말하고 그 구간을 흐리게 그린다. 적합값을 "보정"이라고 부르지 않는다.
-LOW_CONFIDENCE_BONES: Final[tuple[tuple[str, str], ...]] = (("RightForeArm", "RightHand"),)
-LOW_CONFIDENCE_JOINTS: Final[tuple[str, ...]] = ("RightHand",)
-#
-# 이 고지와 건 이름표("건 · 오른손에서 42.0cm")는 **같은 어긋남** 하나를 말한다. 예전 문장은 적합 상수
-# 0.57m를 "이 패스에서 어긋난 거리"처럼 적어, 같은 화면의 이름표(레벨·층마다 38~77cm)와 두 숫자·두
-# 설명이 부딪혔다. 이제 이 순간의 값은 이름표가 말하고, 상수는 "전 작업자·레벨로 맞춘 대표값"이라고
-# 이름을 붙여 적는다 — 그리고 그 간격이 쥐는 거리도 건 길이도 아니라고 한 번만 말한다.
+# 오른팔 고지(S5). 아바타 IK 손과 트래킹된 건의 간격이 작업자·레벨 불문 중앙값 571mm다(적합 상수 0.567m와
+# 일치). 두 차례 사전등록 측정이 그 원인을 **데이터**로 확정했다 — 벤더 오른팔 솔버가 트래커 거리와 무관하게
+# 팔꿈치를 ~91% 편 채 고정한다(`right_arm` 머리말). 그래서 화면은 CSV 오른 전완·손을 그리지 않고 오른어깨에서
+# 건 손잡이까지 팔을 다시 세운다(표시 전용). 이 고지는 그 사실과 원본의 한계를 **접힌 상세에서** 한 번 말한다 —
+# 3D 안에는 방법·길이 문구를 걸지 않는다(사용자: "불필요한 텍스트는 넣지 말 것"). 적합값을 "보정"이라고
+# 부르지 않는다.
 LOW_CONFIDENCE_NOTE: Final = (
-    "오른 전완·손은 흐리게 그렸습니다 — 건 이름표의 거리(오른손→건)는 쥐는 거리도 건 길이도 아닙니다. "
-    "원본 데이터에서 아바타 손 IK와 트래킹된 건이 어긋나 있어 그 간격이 프레임·레벨마다 다르고"
-    "(전 작업자·레벨로 맞춘 대표값 {gap:.2f}m), 캡처 파이프라인의 손 IK↔컨트롤러 매핑 문제입니다."
+    "오른팔은 원본의 팔 관절 대신 오른어깨에서 건 손잡이까지 다시 세웠습니다 — 원본 데이터에서 아바타 손 IK와 "
+    "트래킹된 건이 어긋나 있고(전 작업자·레벨로 맞춘 대표값 {gap:.2f}m), 캡처 파이프라인의 손 IK↔컨트롤러 "
+    "매핑 문제입니다."
 )
 
 # fit.notes 항목 이름(`fit.note_keys`, 같은 순서). 화면은 위치가 아니라 이 이름으로 짝짓는다.
 NOTE_KEYS: Final[tuple[str, ...]] = ("avatar_estimate", "gravity", "legs", "torso", "grip_limit")
-# 캔버스 아래에서 접어 두는 고지. 사용자가 "텍스트가 너무 많아서 무슨 말을 하고 싶은지 모르겠음"이라고
-# 했다 — 기술적 배경(수직 보정 각·몸통 비례 재계산)은 접고, 무엇이 추정인지·다리가 왜 없는지·
-# 오른손이 왜 흐린지는 접지 않는다.
-NOTES_COLLAPSED: Final[tuple[str, ...]] = ("gravity", "torso")
+# 캔버스 아래에서 접어 두는 고지 — **전부**다. 사용자가 "텍스트가 너무 많아서 무슨 말을 하고 싶은지
+# 모르겠음", 그리고 "UI는 간단한 편이 좋음"이라고 했다. 무엇이 추정인지는 모양과 범례 한 줄이 말하고,
+# 문장은 한 번 눌러 펼치는 상세에 둔다.
+NOTES_COLLAPSED: Final[tuple[str, ...]] = NOTE_KEYS
 
 
 @dataclass(frozen=True, slots=True)
@@ -1170,6 +1158,28 @@ def pass_fit_samples(
     return [sample for sample in samples if sample is not None]
 
 
+def arm_for(
+    placed: skeleton.Placement, offsets: Mapping[str, Vec3], representative: Representative
+) -> right_arm.RightArm | None:
+    """이 배치의 표시용 오른팔 — 오른어깨에서 이 프레임 **건 손잡이**까지(`right_arm` 머리말: 벤더 오른팔
+    솔버가 팔꿈치를 편 채 고정한다). 어깨는 배치된 몸의 것이고 뼈 길이는 리그 그대로다. 채점은 이 값을 읽지
+    않는다 — 실측 장치만 쓴다."""
+    return right_arm.right_arm(
+        placed.joints, offsets, representative.row, representative.gun, representative.frame.right
+    )
+
+
+def displayed_joints(placed: skeleton.Placement, arm: right_arm.RightArm | None) -> dict[str, Vec3]:
+    """화면에 그리는 관절: 배치된 몸 + 건 손잡이로 세운 오른 팔꿈치·손 + 그려 넣은 목·윗가슴."""
+    joints = dict(placed.joints)
+    if arm is not None:
+        joints[right_arm.ELBOW] = arm.elbow
+        joints[right_arm.HAND] = arm.hand
+    # 그려 넣는 두 관절은 **선분 위 내분점**이라 배치 뒤에 계산해도 같다(방향을 지어내지 않는다).
+    joints.update(body_proportions.inserted_joints(joints))
+    return joints
+
+
 def place_frame(sample: skeleton.FrameSample, mounts: skeleton.Mounts) -> skeleton.Placement | None:
     """한 프레임 배치. 강체 변환만 — 관절을 실측 좌표로 덮어쓰지 않는다(뼈 길이 보존)."""
     return skeleton.place_oriented(sample.local_pos, sample.local_rot, sample.measured, mounts)
@@ -1293,6 +1303,7 @@ def _fit_view(
     chosen: SkeletonFrame | None = None,
     floor: float | None = None,
     who: str = LEG_NOTE_WHO["query"],
+    arm: right_arm.RightArm | None = None,
 ) -> dict[str, object]:
     gravity = placed.gravity_correction_deg
     faded = gravity > FADE_GRAVITY_DEG
@@ -1349,7 +1360,7 @@ def _fit_view(
     )
     note_keys.append("torso")
 
-    # --- 오른 전완·손 저신뢰(S5) ---------------------------------------------------
+    # --- 오른팔 고지(S5) — 원본 손 IK↔건 어긋남이 파지 상한을 넘으면 접힌 상세에 한 번 적는다 --------
     right_norm = None if mounts.right is None else math.hypot(*mounts.right.offset)
     limit = grip_limit_m.get(representative.gun)
     low_confidence = right_norm is not None and limit is not None and right_norm > limit
@@ -1387,11 +1398,13 @@ def _fit_view(
         "floor_vertical": floor,
         "head_above_floor_m": head_above,
         "head_above_floor_display": None if head_above is None else f"{head_above:.2f}m",
-        # 저신뢰 구간(S5). 이름은 서버가 준다 — 화면이 부위 이름으로 규칙을 지어내지 않는다.
+        # 원본 손 IK↔건 어긋남(S5)이 파지 상한을 넘었는가. 화면은 이제 그 CSV 오른 전완·손을 그리지 않는다 —
+        # 오른팔은 건 손잡이로 다시 세운다(`right_arm`). 그래서 흐리게 칠할 뼈 목록은 더 없다.
         "low_confidence": low_confidence,
-        "low_confidence_bones": [list(pair) for pair in LOW_CONFIDENCE_BONES] if low_confidence else [],
-        "low_confidence_joints": list(LOW_CONFIDENCE_JOINTS) if low_confidence else [],
         "low_confidence_gap_m": right_norm if low_confidence else None,
+        # 표시용 오른팔(오른어깨 → 건 손잡이 두 마디 IK). 채점은 이 값을 읽지 않는다. 닿지 못했으면
+        # `reach_gap`(손끝 → 손잡이)을 화면이 점선으로만 잇는다 — 숫자·문구는 없다.
+        "right_arm": None if arm is None else arm.as_view(),
         "anchors": [
             {
                 "point": fit.point,
@@ -1402,8 +1415,12 @@ def _fit_view(
                 "miss_cm": fit.miss_m * 100.0,
                 # 숫자는 왼쪽 패널에만 뜬다(S6) — 3D 안에는 이 문자열을 걸지 않는다.
                 "miss_display": f"{'적합 잔차 ' if kind == MOUNTS_PASS_FIT else ''}{fit.miss_m * 100.0:.1f}cm",
-                # 장치 모양(몸 → 장치). 거리는 **관절 → 실측 구**이고 적합 잔차(예측↔실측)와 다른 값이다.
-                "device": device_block(fit.point, fit.joint_position, fit.measured_marker),
+                # 장치 모양. 건 막대의 손 쪽 끝은 **손잡이**다(`right_arm`) — 추정 관절도 예측 마커도 아니다.
+                "device": device_block(
+                    fit.point,
+                    arm.grip if fit.point == "right" and arm is not None else fit.joint_position,
+                    fit.measured_marker,
+                ),
             }
             for fit in placed.anchors
         ],
@@ -1506,9 +1523,8 @@ def skeleton_block(
     if placed is None:
         return _skeleton_failure("insufficient_anchors", representative)
 
-    # 그려 넣는 두 관절은 **선분 위 내분점**이라 배치 뒤에 계산해도 같다(방향을 지어내지 않는다).
-    joints = dict(placed.joints)
-    joints.update(body_proportions.inserted_joints(joints))
+    arm = arm_for(placed, offsets, representative)
+    joints = displayed_joints(placed, arm)
     return SkeletonResult(
         joints={name: list(position) for name, position in joints.items()},
         bones=body_proportions.display_bones(simulator_csv.BONES, joints),
@@ -1522,6 +1538,7 @@ def skeleton_block(
             chosen=chosen,
             floor=composite.floor_vertical(geometry),
             who=who,
+            arm=arm,
         ),
         fit_reason=None,
         fit_note=None,
@@ -1706,6 +1723,56 @@ def _mesh_error_view(level_text: str) -> dict[str, object] | None:
 _UNSET: Final = object()
 
 
+# 바닥 격자(사용자: "3D viewer grid가 있으면 함"). 크기와 눈 간격(m). 격자는 **공간감**만 준다 — 벽 메시·궤적·
+# 스트로크와 헷갈리지 않게 화면이 옅게 그리고, 카메라 맞춤(`framingPoints`)에는 넣지 않는다.
+GRID_SIZE_M: Final = 4.0
+GRID_CELL_M: Final = 0.5
+
+
+def grid_block(
+    query_joints: Mapping[str, Sequence[float]] | None,
+    reference_joints: Mapping[str, Sequence[float]] | None,
+    fit: Mapping[str, Any] | None,
+    reference_fit: Mapping[str, Any] | None,
+) -> dict[str, object] | None:
+    """바닥 격자를 깔 높이와 자리. 그릴 몸이 없으면 None.
+
+    높이: 벽 메시가 있으면 서버가 이미 고른 **바닥면 수직**(`fit.floor_vertical`)이다. 없으면 **그려진 발**
+    — 기본 표시인 자리표시 다리 관절(없으면 스켈레톤 관절) — 의 가장 낮은 수직값이다. 자리는 두 몸 골반의
+    수평 평균이다(골반이 없으면 관절 전체의 평균).
+    """
+    fits = [f for f in (fit, reference_fit) if f]
+    floors = [f.get("floor_vertical") for f in fits if isinstance(f.get("floor_vertical"), (int, float))]
+    bodies = [j for j in (query_joints, reference_joints) if j]
+    if not bodies:
+        return None
+    if floors:
+        vertical = float(floors[0])
+        source = "floor"
+    else:
+        feet: list[Sequence[float]] = []
+        for f in fits:
+            placeholder = (f.get("legs") or {}).get("placeholder_joints") or {}
+            feet.extend(placeholder.values())
+        if not feet:
+            feet = [p for joints in bodies for p in joints.values()]
+        vertical = min(world_axes.vertical_of(tuple(p)) for p in feet)  # type: ignore[arg-type]
+        source = "feet"
+    anchors = [joints["Pelvis"] for joints in bodies if "Pelvis" in joints] or [
+        p for joints in bodies for p in joints.values()
+    ]
+    centre = [sum(float(p[i]) for p in anchors) / len(anchors) for i in range(3)]
+    centre[world_axes.UP_INDEX] = vertical
+    return {
+        "vertical": vertical,
+        "source": source,
+        "center": centre,
+        "up_index": world_axes.UP_INDEX,
+        "size_m": GRID_SIZE_M,
+        "cell_m": GRID_CELL_M,
+    }
+
+
 def view_block(
     query_frames: Sequence[Any],
     reference_frames: Sequence[Any],
@@ -1802,11 +1869,15 @@ def view_block(
         "leg_notes": leg_notes(fit, reference_fit),
         # 바닥 기준 머리 높이(S4). 두 몸의 높이를 나란히 한 줄로 — 한 값만 보이면 어느 몸인지 모른다.
         "head_height": head_height_block(fit, reference_fit),
-        "legend_notes": [
-            note
-            for note in (*LEGEND_NOTES, track_legend_note(query_layer))
-            if isinstance(note, str)
-        ],
+        # 바닥 격자 — 바닥면이 있으면 그 높이, 없으면 그려진 발의 가장 낮은 점.
+        "grid": grid_block(
+            query_layer_view.get("joints"),  # type: ignore[arg-type]
+            reference_layer_view.get("joints"),  # type: ignore[arg-type]
+            fit,
+            reference_fit,
+        ),
+        # 범례는 한 줄이다(사용자: "UI는 간단한 편이 좋음").
+        "legend_notes": [legend_line(query_layer)],
         "display_errors": [],
         "composite": None,
         "surface_hits": [],

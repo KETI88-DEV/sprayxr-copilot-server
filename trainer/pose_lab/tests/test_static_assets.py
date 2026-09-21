@@ -1168,31 +1168,22 @@ def test_layer_reset_checks_can_fail():
     assert layer_reset_faults(blind) == ["no_layer_object_counter"]
 
 
-def test_the_legend_says_how_many_tracks_a_layer_draws():
-    """"기준이 세 개"로 읽히지 않게, 층마다 몇 줄인지 서버 문구가 말한다.
-
-    출처는 **그려질 층 자체**다 — 화면이 점이 하나라도 있는 이름마다 폴리라인을 만드므로 같은
-    조건으로 센다. 예전에는 가중치에서 뽑고 "진한 차례로"라고 적었는데, 그 진하기 규칙이
-    사라졌으므로(궤적은 차분한 한 색, 진해지는 것은 관절) 그 문구를 남기면 범례가 거짓말을 한다.
+def test_the_legend_names_the_tracks_a_layer_draws_by_device():
+    """범례 한 줄의 궤적 조각은 **그려질 층 자체**에서 나온다 — 화면이 점이 하나라도 있는 이름마다
+    폴리라인을 만드므로 같은 조건으로 센다. 줄 이름은 **장치** 이름이다(궤적은 HMD·건·플래쉬가 지나간 길).
+    예전 범례는 "움직임 궤적 3줄(오른손 · 머리 · 왼손)"이라 관절 이름으로 불렀다.
     """
     three = {"right": [[0, 0, 0]], "head": [[0, 0, 1]], "left": [[0, 1, 0]], "hit": [[1, 0, 0]]}
     note = service.track_legend_note(three)
-    assert note is not None
-    assert note.startswith("움직임 궤적 3줄")
-    # 줄 이름은 **장치** 이름이다(궤적은 HMD·건·플래쉬가 지나간 길) — 관절 이름이면 같은 범례의
-    # "가는 선 = 장치가 지나간 길"과 어긋난다.
-    assert note.index("건") < note.index("HMD") < note.index("플래쉬")
+    assert note == "가는 선 = 건·HMD·플래쉬 궤적"
     assert not any(word in note for word in ("오른손", "머리", "왼손"))
-    assert "기준 3개가 아니라" in note
-    # 진하기 순서를 더 이상 주장하지 않는다.
-    assert "진한 차례" not in note
-    # 왼손이 프레임마다 빠지는 층은 두 줄이라고 적는다 — 그려진 줄 수와 같은 출처다.
+    # 왼손이 프레임마다 빠지는 층은 두 장치만 적는다 — 그려진 줄과 같은 출처다.
     two = dict(three, left=[None, None])
-    other = service.track_legend_note(two)
-    assert other is not None and other.startswith("움직임 궤적 2줄")
-    assert "플래쉬" not in other
-    # 그릴 줄이 없으면 적지 않는다.
+    assert service.track_legend_note(two) == "가는 선 = 건·HMD 궤적"
+    # 그릴 줄이 없으면 적지 않는다 — 한 줄 범례에서도 그 조각이 빠진다.
     assert service.track_legend_note({"hit": [[0, 0, 0]]}) is None
+    assert "가는 선" not in service.legend_line({"hit": [[0, 0, 0]]})
+    assert service.legend_line(three).count(service.LEGEND_SEPARATOR) == 4
 
 
 # --- 스트로크는 서버가 자른 연결 구간만 그린다(U1) ---------------------------------------
@@ -1569,7 +1560,8 @@ def deviation_legend_faults(js: str) -> list[str]:
     """
     faults: list[str] = []
     code = without_comments(js)
-    if "view?.deviation?.legend" not in code and "deviation.legend" not in code:
+    legend = _top_level_function_body(code, "renderLegend") if "function renderLegend(" in code else ""
+    if "view?.deviation?.legend" not in legend and "deviation.legend" not in legend:
         faults.append("legend_lines_not_read_from_the_server")
     if "관절 진하기" in code:
         faults.append("screen_writes_the_scale_wording_itself")
@@ -1586,8 +1578,8 @@ def test_deviation_legend_checks_can_fail():
     full = _read("skeleton_view.js")
     assert deviation_legend_faults("") == ["legend_lines_not_read_from_the_server"]
     old = full.replace(
-        "for (const text of view?.deviation?.legend ?? []) {",
-        'const max = view?.deviation?.joint_max_display;\n  const lines = [`관절 진하기 = 기준과 벌어진 거리 (가장 진한 곳 ${max}cm)`];\n  for (const text of lines) {',
+        "  const deviationLines = (view?.deviation?.legend ?? [])",
+        '  const max = view?.deviation?.joint_max_display;\n  const deviationLines = [`관절 진하기 = 기준과 벌어진 거리 (가장 진한 곳 ${max}cm)`]',
         1,
     )
     assert old != full
@@ -1925,38 +1917,95 @@ def test_floor_gap_guide_checks_can_fail():
     assert floor_gap_guide_faults(stuck) == ["gapLabels_not_hidden_with_the_placeholder"]
 
 
-def low_confidence_faults(js: str) -> list[str]:
-    """오른 전완·손 저신뢰(S5)를 화면이 **서버가 준 이름**으로만 흐리게 그리는가."""
+def right_arm_draw_faults(js: str) -> list[str]:
+    """오른팔: 관절은 서버가 건 손잡이로 세운 것(`joints`)을 그리고, 못 닿은 층은 손끝→손잡이를 **점선만**
+    긋는다 — 숫자·문구 없이. 화면이 부위 이름으로 오른팔을 지어내지 않는다."""
     faults: list[str] = []
-    if "LOW_CONFIDENCE_OPACITY_FACTOR" not in js:
-        faults.append("no_low_confidence_fade")
-    for field in ("low_confidence_bones", "low_confidence_joints"):
-        if f"fit?.{field}" not in js:
-            faults.append(f"{field}_not_from_server")
-        if f"referenceFit?.{field}" not in js:
-            faults.append(f"reference_{field}_not_from_server")
-    # 화면이 부위 이름을 지어내면 출처와 다른 라벨이 된다.
-    if "RightForeArm" in js or "RightHand" in js:
+    code = without_comments(js)
+    body = _nested_function_body(code, "buildReachGap")
+    if not body:
+        return ["no_reach_gap_builder"]
+    if "fitBlock?.right_arm?.reach_gap" not in body:
+        faults.append("reach_gap_not_from_server")
+    if "LineDashedMaterial" not in body or "computeLineDistances" not in body:
+        faults.append("reach_gap_not_dashed")
+    if "registerLabel" in body:
+        faults.append("reach_gap_carries_text")
+    for fit in ("fit", "referenceFit"):
+        if not re.search(rf"buildReachGap\({fit}, LAYER_COLOR\.\w+", code):
+            faults.append(f"{fit}_reach_gap_not_drawn")
+    if "RightForeArm" in code or "RightHand" in code:
         faults.append("screen_invents_the_bone_names")
     return faults
 
 
-def test_low_confidence_segment_is_faded_by_server_named_bones():
-    assert low_confidence_faults(_read("skeleton_view.js")) == []
+def test_the_right_arm_gap_is_a_bare_dashed_line_from_the_server():
+    assert right_arm_draw_faults(_read("skeleton_view.js")) == []
 
 
-def test_low_confidence_checks_can_fail():
+def test_right_arm_draw_checks_can_fail():
     full = _read("skeleton_view.js")
-    hardcoded = full.replace(
-        "        lowConfidenceBones: fit?.low_confidence_bones,",
-        '        lowConfidenceBones: [["RightForeArm", "RightHand"]],',
+    assert right_arm_draw_faults("") == ["no_reach_gap_builder"]
+    solid = full.replace(
+        "      new THREE.LineDashedMaterial({\n        color: layerColor,\n        transparent: true,\n        opacity: faded ? BONE_OPACITY_FADED : BONE_OPACITY,",
+        "      new THREE.LineBasicMaterial({\n        color: layerColor,\n        transparent: true,\n        opacity: faded ? BONE_OPACITY_FADED : BONE_OPACITY,",
         1,
     )
-    assert hardcoded != full
-    assert low_confidence_faults(hardcoded) == [
-        "low_confidence_bones_not_from_server",
-        "screen_invents_the_bone_names",
+    assert solid != full and right_arm_draw_faults(solid) == ["reach_gap_not_dashed"]
+    worded = full.replace(
+        "    line.userData.kind = \"reach-gap\";",
+        "    line.userData.kind = \"reach-gap\";\n    registerLabel(new THREE.Vector3(...gap.to), \"손잡이(추정)\", \"view3d-label-gap\");",
+        1,
+    )
+    assert worded != full and right_arm_draw_faults(worded) == ["reach_gap_carries_text"]
+    one = full.replace("buildReachGap(referenceFit, LAYER_COLOR.reference", "buildReachGap(null, LAYER_COLOR.reference", 1)
+    assert one != full and right_arm_draw_faults(one) == ["referenceFit_reach_gap_not_drawn"]
+    invented = full.replace(
+        "const gap = fitBlock?.right_arm?.reach_gap;",
+        "const gap = { from: fitBlock?.joints?.RightHand, to: fitBlock?.right_arm?.grip };",
+        1,
+    )
+    assert invented != full and right_arm_draw_faults(invented) == [
+        "reach_gap_not_from_server", "screen_invents_the_bone_names",
     ]
+
+
+def grid_faults(js: str) -> list[str]:
+    """바닥 격자: 서버가 준 자리(`view.grid`)에 옅게 깔고, 카메라 맞춤에는 넣지 않는다."""
+    faults: list[str] = []
+    code = without_comments(js)
+    body = _nested_function_body(code, "buildGrid")
+    if not body:
+        return ["no_grid_builder"]
+    if "buildGrid(view.grid)" not in code:
+        faults.append("grid_not_from_server")
+    if "grid.position.set(...gridBlock.center)" not in body:
+        faults.append("grid_position_not_from_server")
+    opacity = _const_number(js, "GRID_OPACITY")
+    if opacity is None or not opacity < 0.5 or "grid.material.transparent = true" not in body:
+        faults.append("grid_is_not_faint")
+    if "grid" in _nested_function_body(code, "framingPoints").lower():
+        faults.append("grid_moves_the_default_camera")
+    return faults
+
+
+def test_the_floor_grid_is_faint_and_outside_the_framing():
+    assert grid_faults(_read("skeleton_view.js")) == []
+
+
+def test_grid_checks_can_fail():
+    full = _read("skeleton_view.js")
+    assert grid_faults("") == ["no_grid_builder"]
+    loud = full.replace("const GRID_OPACITY = 0.22;", "const GRID_OPACITY = 0.9;", 1)
+    assert loud != full and grid_faults(loud) == ["grid_is_not_faint"]
+    framed = full.replace(
+        "    const joints = view.layers?.query?.joints ?? {};\n    const hasSkeleton",
+        "    if (isVec3(view.grid?.center)) points.push(view.grid.center);\n    const joints = view.layers?.query?.joints ?? {};\n    const hasSkeleton",
+        1,
+    )
+    assert framed != full and grid_faults(framed) == ["grid_moves_the_default_camera"]
+    unplaced = full.replace("    grid.position.set(...gridBlock.center);", "    grid.position.set(0, 0, 0);", 1)
+    assert unplaced != full and grid_faults(unplaced) == ["grid_position_not_from_server"]
 
 
 def per_layer_leg_faults(js: str) -> list[str]:
@@ -2126,11 +2175,11 @@ def device_shape_faults(js: str) -> list[str]:
     if bar is None:
         faults.append("device_bar_missing")
     else:
-        # 손 쪽 끝은 **추정 관절**(`anchor.joint_position`)이다 — 장착 상수로 예측한 자리(`predicted_marker`)로
-        # 바꾸면 막대가 재지도 않은 "예측"을 몸에 붙인 것처럼 그린다.
-        start = re.search(rf"const {bar.group(1)} = new THREE\.Vector3\(\.\.\.anchor\.(\w+)\)", body)
-        if start is None or start.group(1) != "joint_position" or "predicted_marker" in body:
-            faults.append("bar_hand_end_is_not_the_estimated_joint")
+        # 몸 쪽 끝은 **서버가 준 `device.from`**이다 — 건은 손잡이, HMD·플래쉬는 추정 관절. 장착 상수로 예측한
+        # 자리(`predicted_marker`)나 FK 손 관절(`anchor.joint_position`)로 바꾸면 막대가 손잡이를 떠난다.
+        start = re.search(rf"const {bar.group(1)} = new THREE\.Vector3\(\.\.\.([\w.]+)\)", body)
+        if start is None or start.group(1) != "device.from" or "predicted_marker" in body:
+            faults.append("bar_hand_end_is_not_the_server_start")
         materials = {}
         for name in bar.group(2, 3):
             found = re.search(rf"const {name} = new THREE\.(\w+)\(\{{([^}}]*)\}}", body)
@@ -2153,6 +2202,9 @@ def device_shape_faults(js: str) -> list[str]:
         faults.append("gun_is_not_thicker_than_the_links")
     if 'device.shape === "gun"' not in body:
         faults.append("gun_shape_not_read_from_server")
+    # 이름표는 **대상 층에만** — 기준 층은 색으로 구분된다(직전 라운드: 이름표 6개 + 배지 4개로 L6이 빽빽했다).
+    if 'if (layer === "query" && typeof device.label === "string"' not in body:
+        faults.append("device_labels_on_both_layers")
     # 이름표는 자기 층 체크 상자와 **정확히** 같은 값으로 숨는다. 낱말이 들어 있는지만 보면
     # `entry.el.hidden = false && !(…)`(절대 안 숨음)도 통과한다.
     toggle = _nested_function_body(code, "applyDeviceLabelVisibility")
@@ -2196,11 +2248,19 @@ def test_device_shape_checks_can_fail():
     solid = full.replace("i % 2 === 0 ? darkMaterial : lightMaterial", "darkMaterial", 1)
     assert solid != full and device_shape_faults(solid) == ["stripes_do_not_alternate"]
     predicted = full.replace(
-        "const joint = new THREE.Vector3(...anchor.joint_position);",
+        "const joint = new THREE.Vector3(...device.from);",
         "const joint = new THREE.Vector3(...anchor.predicted_marker);",
         1,
     )
-    assert predicted != full and device_shape_faults(predicted) == ["bar_hand_end_is_not_the_estimated_joint"]
+    assert predicted != full and device_shape_faults(predicted) == ["bar_hand_end_is_not_the_server_start"]
+    fk_hand = full.replace(
+        "const joint = new THREE.Vector3(...device.from);",
+        "const joint = new THREE.Vector3(...anchor.joint_position);",
+        1,
+    )
+    assert fk_hand != full and device_shape_faults(fk_hand) == ["bar_hand_end_is_not_the_server_start"]
+    both = full.replace('if (layer === "query" && typeof device.label === "string"', 'if (typeof device.label === "string"', 1)
+    assert both != full and device_shape_faults(both) == ["device_labels_on_both_layers"]
     thin = full.replace("const DEVICE_GUN_RADIUS = 0.011;", "const DEVICE_GUN_RADIUS = 0.004;", 1)
     assert thin != full and device_shape_faults(thin) == ["gun_is_not_thicker_than_the_links"]
     tool = full.replace('device.shape === "gun" ? DEVICE_GUN_RADIUS', 'device.shape === "tool" ? DEVICE_GUN_RADIUS', 1)

@@ -10,8 +10,12 @@
 //     스켈레톤을 같이 그리고 유사도가 떨어지는 조인트일수록 색상을 진하게".
 //   - 대표 프레임 실측 마커(`fit.anchors[].measured_marker`): 층 색으로 **채운** 구체 — 실측 부호다.
 //     자기 궤적 선 위의 **한 순간**이므로 선을 가로지르는 고리(`moment-ring`)를 두른다.
-//   - 장치 모양(`fit.anchors[].device`): 몸(추정 관절) → 장치(실측 구) 사이 **간격**을 줄무늬 막대로.
-//     건 쪽이 굵고 HMD·플래쉬 쪽은 가늘다. 도구도 뼈도 아니다. 이름과 거리 글자는 서버 문자열(`device.label`).
+//   - 장치 모양(`fit.anchors[].device`): `device.from` → 장치(실측 구) 줄무늬 막대. 건은 **손잡이 → 트래커**
+//     굵은 막대이고(손 쪽 끝 = 손잡이), HMD·플래쉬는 추정 관절 → 장치 가는 막대다. 이름표는 짧은 장치
+//     이름(`device.label`)뿐이고 **대상 층에만** 단다 — 기준 층은 색이 말한다.
+//   - 오른팔(`fit.right_arm`): 서버가 오른어깨→건 손잡이 두 마디 IK로 세운 관절이 `joints`에 들어 있다.
+//     손이 손잡이에 못 닿으면 손끝→손잡이(`right_arm.reach_gap`)를 **점선만** 긋는다 — 숫자·문구 없음.
+//   - 바닥 격자(`view.grid`): 옅게, 카메라 맞춤에는 넣지 않는다.
 //   - 벽 위 분사 스트로크(`view.stroke` · `view.reference_stroke`): 몸 움직임 궤적과 **다른 색 계열**
 //     (따뜻한 주황·노랑)로 그린다. 사용자가 둘을 혼동한 것이 이 화면을 다시 만든 출발점이다.
 //   - 움직임 궤적(`layers.*.head/right/left`): 대상·기준 둘 다, 층 색(차가운 파랑·보라)의 가는 관.
@@ -26,7 +30,8 @@
 // three.js는 cdnjs에서 버전 고정으로 이 스크립트보다 먼저 실린다(index.html).
 // 못 실리면 `createSkeletonView`가 아무것도 던지지 않고 안내만 남긴다.
 
-const POINT_LABELS = { right: "오른손", head: "머리", left: "왼손", hit: "착탄점" };
+// 스켈레톤이 없을 때 궤적 끝에 다는 이름. 궤적은 관절이 아니라 **장치**가 지나간 길이다.
+const POINT_LABELS = { right: "건", head: "HMD", left: "플래쉬" };
 
 // 층별 기본색. σ 3단(ok/warn/bad)과 겹치지 않는 색. style.css의 --layer-*와 같은 값.
 const LAYER_COLOR = { query: 0x5b9bff, reference: 0xa684e0, corrected: 0x34c2c2 };
@@ -39,7 +44,7 @@ const BONE_COLOR = 0xc8d0dc;
 // 혼동했고("기준 스트로크가 보이지 않음", 궤적을 스트로크로 읽음) 그것이 이 재작업의 출발점이다.
 // 따뜻한 쪽(주황·노랑)으로 몰아 층 색과 겹치지 않게 한다.
 const STROKE_COLOR = { query: 0xff7a1a, reference: 0xffd23f };
-const STROKE_LEGEND = { query: "대상 스트로크(벽면 착탄)", reference: "기준 스트로크(벽면 착탄)" };
+const STROKE_LEGEND = { query: "대상 스트로크", reference: "기준 스트로크" };
 
 const SIGMA_OK = 0x2f855a;
 const SIGMA_WARN = 0xb7791f;
@@ -67,8 +72,6 @@ const BONE_OPACITY_FADED = 0.45;
 // 있게"), 그때는 한 단계 더 흐리다 — 어느 검사를 얼마나 벗어났는지는 서버 고지가 숫자로 말한다.
 const LEG_OPACITY_FACTOR = 0.5;
 const LEG_OUT_OF_RANGE_OPACITY_FACTOR = 0.6;
-// 오른 전완·손 저신뢰(S5). 아바타 손 IK와 트래킹된 건이 원본에서 중앙값 571mm 어긋나 있다.
-const LOW_CONFIDENCE_OPACITY_FACTOR = 0.45;
 // 계산된 층(교정 후·예상)의 선. 실측 궤적의 실선과 한눈에 구분되게 끊어 그린다.
 const COMPUTED_DASH = 0.02;
 const COMPUTED_GAP = 0.02;
@@ -77,6 +80,11 @@ const ARROW_HEAD_RADIUS = 0.016;
 // 벽 위 분사 스트로크의 굵기(m). 뼈(0.009)보다 가늘게 둬 몸과 위계를 지키면서, 1px 선과 달리
 // 반투명 벽 위에서 읽힌다.
 const STROKE_RADIUS = 0.006;
+// 바닥 격자. 어두운 배경 위 **옅은** 회청색 — 벽 메시(0x9aa5b1 반투명 면)·궤적(층 색 관)·스트로크(주황·노랑)
+// 어느 것과도 겹쳐 읽히지 않게 불투명도를 낮게 둔다. 띄움은 바닥면과 깊이를 다투지 않게 하는 그리기 여유다.
+const GRID_COLOR = 0x8a96a8;
+const GRID_OPACITY = 0.22;
+const GRID_LIFT_M = 0.004;
 
 const BADGE_MIN_PX = 26;
 // 글자 라벨을 몸통 화면 위치에서 바깥으로 미는 첫 거리(px).
@@ -374,21 +382,24 @@ function renderLegend(legend, view) {
   // 조립하면 눈금과 문구가 갈린다 — 이전 판은 "가장 진한 곳 79.9cm"라고 적었는데 그 79.9cm짜리
   // 관절(LeftCalf)은 다리를 숨겨서 화면 어디에도 없었다. 이제 서버가 눈금을 그리는 관절에서만
   // 잡고, 뺀 관절과 몸 전체 평행이동 몫까지 같은 자리에서 말한다.
-  for (const text of view?.deviation?.legend ?? []) {
-    if (typeof text !== "string" || text.length === 0) continue;
-    const item = legendItem("deviation", text);
+  // 범례에는 **첫 줄**(눈금)만 둔다 — 뒤 문장(뺀 관절·공통 이동 몫)은 접힌 상세로 간다(`legendDetails`).
+  const deviationLines = (view?.deviation?.legend ?? []).filter((text) => typeof text === "string" && text.length > 0);
+  if (deviationLines.length > 0) {
+    const item = legendItem("deviation", deviationLines[0]);
     item.dataset.role = "deviation";
     legend.append(item);
   }
+  // 모양의 뜻 한 줄(서버 `legend_notes`). 추정/실측 구분은 글자가 아니라 모양이 한다.
   for (const text of view?.legend_notes ?? []) {
     if (typeof text === "string") legend.append(legendItem(null, text));
   }
-  // 스트로크 문구도 서버 것이다 — 몇 곳에서 끊었는지·얼마나 떴는지는 서버가 재고 화면은 옮기기만 한다.
-  if (typeof view?.stroke?.note === "string" && view.stroke.note.length > 0) {
-    const item = legendItem("stroke-query", view.stroke.note);
-    item.dataset.role = "stroke";
-    legend.append(item);
-  }
+}
+
+/** 범례에서 빼 접힌 상세로 보내는 서버 문장: 진하기 눈금의 뒤 문장, 벽면 스트로크를 끊은 사유. */
+function legendDetails(view) {
+  const lines = (view?.deviation?.legend ?? []).filter((text) => typeof text === "string" && text.length > 0).slice(1);
+  if (typeof view?.stroke?.note === "string" && view.stroke.note.length > 0) lines.push(view.stroke.note);
+  return lines;
 }
 
 function mount(THREE, container) {
@@ -423,6 +434,7 @@ function mount(THREE, container) {
   const correctionsGroup = new THREE.Group();
   scene.add(correctionsGroup);
   let meshObject = null;
+  let gridObject = null;
   let skeletonLegs = null;
   let referenceLegs = null;
   // 자리표시 다리(B) — 기본으로 보이는 쪽이다. IK 다리와 **한 층에서 동시에** 보이지 않는다.
@@ -559,6 +571,8 @@ function mount(THREE, container) {
     markerScreenDiameters: {},
     handMarkerScreenDiameter: null,
     arrowStarts: [],
+    // 검증용: 격자**만** 숨겼다 켠다 — 헤드리스 브라우저가 격자가 실제로 칠한 픽셀을 이 차이로 잰다.
+    setGridVisible(on) { if (gridObject) gridObject.visible = on === true; },
   };
   let coneRegistry = [];
   let markerRegistry = [];
@@ -1113,8 +1127,8 @@ function mount(THREE, container) {
    * 뼈 색은 양 끝 관절 벌어짐의 평균이다(뼈 하나가 두 관절 사이를 잇는 물건이므로). 관절 표식은
    * 속 빈(윤곽선) 구다 — 범례가 "채운 구체 = 실측"이라고 선언했으니 추정이 그 부호를 쓰면 안 된다.
    *
-   * 다리 관절 목록도, 저신뢰 구간(오른 전완·손) 이름도 **서버가** 준다 — 화면에서 부위 이름으로
-   * 규칙을 지어내지 않는다. */
+   * 다리 관절 목록도 **서버가** 준다 — 화면에서 부위 이름으로 규칙을 지어내지 않는다. 오른팔 관절은
+   * 서버가 건 손잡이로 세운 것이 이미 `joints`에 들어 있다(`fit.right_arm`). */
   function buildSkeletonGroup(joints, bones, faded, legJoints, headDiameterM, style) {
     const group = new THREE.Group();
     const legs = new THREE.Group();
@@ -1123,10 +1137,6 @@ function mount(THREE, container) {
     const deviations = style?.deviations ?? {};
     const maxDeviation = style?.maxDeviation ?? null;
     const legSet = new Set(Array.isArray(legJoints) ? legJoints : []);
-    const lowJoints = new Set(Array.isArray(style?.lowConfidenceJoints) ? style.lowConfidenceJoints : []);
-    const lowBones = new Set(
-      (Array.isArray(style?.lowConfidenceBones) ? style.lowConfidenceBones : []).map((pair) => pair.join(">")),
-    );
     const base = faded ? BONE_OPACITY_FADED : BONE_OPACITY;
     // 해부학 범위 밖 IK 다리는 한 단계 더 흐리다(B). 판정은 **서버**가 준다(`fit.legs_within_range`) —
     // 화면이 각도를 다시 재서 정하지 않는다.
@@ -1145,20 +1155,15 @@ function mount(THREE, container) {
       const b = joints[child];
       if (!isVec3(a) || !isVec3(b)) continue;
       const isLeg = legSet.has(child);
-      // 저신뢰 구간(S5)은 더 흐리게. 아바타 손 IK와 트래킹된 건이 원본에서 이미 어긋나 있어
-      // 이 구간의 자리를 믿을 수 없다 — 서버 고지가 그 이유를 글자로 말한다.
-      const low = lowBones.has(`${parent}>${child}`);
       const dev = devOf(child);
       let opacity = base * dev.opacity;
       if (isLeg) opacity *= legFactor;
-      if (low) opacity *= LOW_CONFIDENCE_OPACITY_FACTOR;
       const bone = boneCylinder(
         new THREE.Vector3(...a), new THREE.Vector3(...b),
         BONE_RADIUS, material(dev.color, opacity), "bone", `${parent}>${child}`,
       );
       if (!bone) continue;
       bone.userData.leg = isLeg;
-      bone.userData.lowConfidence = low;
       bone.userData.deviation = dev.t;
       (isLeg ? legs : group).add(bone);
     }
@@ -1166,11 +1171,9 @@ function mount(THREE, container) {
     for (const [name, position] of Object.entries(joints)) {
       if (!isVec3(position)) continue;
       const isLeg = legSet.has(name);
-      const low = lowJoints.has(name);
       const dev = devOf(name);
       let opacity = base * dev.opacity;
       if (isLeg) opacity *= legFactor;
-      if (low) opacity *= LOW_CONFIDENCE_OPACITY_FACTOR;
       const radius = BONE_RADIUS * (1.6 + 1.4 * dev.t);
       const marker = new THREE.Mesh(
         new THREE.SphereGeometry(radius, 10, 8),
@@ -1298,6 +1301,55 @@ function mount(THREE, container) {
     return { lines: names.length, visible: group ? group.visible : false, joints: names };
   }
 
+  /** 오른손이 건 손잡이에 못 닿은 층: 손끝 → 손잡이 **점선 한 줄**(`fit.right_arm.reach_gap`). 숫자·문구는
+   * 달지 않는다 — 점선이 곧 "재지 않은 부분"이다(범례 한 줄). 닿은 층은 서버가 null을 준다. */
+  function buildReachGap(fitBlock, layerColor, faded) {
+    const group = new THREE.Group();
+    const gap = fitBlock?.right_arm?.reach_gap;
+    if (!gap || !isVec3(gap.from) || !isVec3(gap.to)) return group;
+    const line = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(...gap.from), new THREE.Vector3(...gap.to)]),
+      new THREE.LineDashedMaterial({
+        color: layerColor,
+        transparent: true,
+        opacity: faded ? BONE_OPACITY_FADED : BONE_OPACITY,
+        dashSize: COMPUTED_DASH,
+        gapSize: COMPUTED_GAP,
+      }),
+    );
+    line.computeLineDistances();
+    line.userData.kind = "reach-gap";
+    line.userData.from = [...gap.from];
+    line.userData.to = [...gap.to];
+    group.add(line);
+    return group;
+  }
+
+  /** 바닥 격자(`view.grid`). 높이·자리·크기는 서버가 준다. 옅게 — 벽 메시·궤적·스트로크보다 조용해야 한다.
+   * 카메라 맞춤(`framingPoints`)에는 넣지 않는다: 격자가 기본 카메라를 바꾸면 안 된다. */
+  function buildGrid(gridBlock) {
+    if (!gridBlock || !isVec3(gridBlock.center)) return null;
+    const size = typeof gridBlock.size_m === "number" && gridBlock.size_m > 0 ? gridBlock.size_m : null;
+    const cell = typeof gridBlock.cell_m === "number" && gridBlock.cell_m > 0 ? gridBlock.cell_m : null;
+    if (size === null || cell === null) return null;
+    const grid = new THREE.GridHelper(size, Math.round(size / cell), GRID_COLOR, GRID_COLOR);
+    grid.material.transparent = true;
+    grid.material.opacity = GRID_OPACITY;
+    grid.material.depthWrite = false;
+    // GridHelper는 로컬 XZ 평면(+Y 위)이다. 서버가 말한 위 축이 Z면 그 평면을 세운다.
+    if (gridBlock.up_index === 2) grid.rotation.x = Math.PI / 2;
+    grid.position.set(...gridBlock.center);
+    // 벽 메시의 바닥면과 같은 높이면 선이 면과 깊이를 다퉈 깜빡인다 — 그리기 여유만큼만 띄운다(표시 전용).
+    const lift = [0, 0, 0];
+    lift[gridBlock.up_index === 2 ? 2 : 1] = GRID_LIFT_M;
+    grid.position.add(new THREE.Vector3(...lift));
+    grid.renderOrder = -1;
+    grid.userData.kind = "floor-grid";
+    grid.userData.vertical = gridBlock.vertical;
+    grid.userData.source = gridBlock.source;
+    return grid;
+  }
+
   /** 대표 프레임 실측 마커(채운 구체) + 그 자리의 "이 순간" 고리 + 장치 모양(몸 → 장치).
    *
    * 예전에는 여기서 관절→예측 마커 선과 예측→실측 점선을 그리고 "보정 오프셋 0.57m(적합값)"·"12.8cm"
@@ -1346,8 +1398,9 @@ function mount(THREE, container) {
       }
 
       const device = anchor.device;
-      if (!device || !isVec3(anchor.joint_position)) continue;
-      const joint = new THREE.Vector3(...anchor.joint_position);
+      // 막대의 몸 쪽 끝은 서버가 준 `device.from`이다 — 건은 **손잡이**, HMD·플래쉬는 추정 관절.
+      if (!device || !isVec3(device.from)) continue;
+      const joint = new THREE.Vector3(...device.from);
       const radius = device.shape === "gun" ? DEVICE_GUN_RADIUS : DEVICE_LINK_RADIUS;
       // 막대는 구 **표면**에서 멈춘다 — 구 안까지 파고들면 실측 구가 막대에 묻혀 보인다.
       const toJoint = new THREE.Vector3().subVectors(joint, marker.position);
@@ -1364,7 +1417,9 @@ function mount(THREE, container) {
       counts.deviceShapes += 1;
       deviceBars.push({ from: joint.clone(), to: marker.position.clone() });
       let label = null;
-      if (typeof device.label === "string" && device.label.length > 0) {
+      // 이름표는 **대상 층에만** 단다 — 기준 층은 색(보라)으로 구분된다. 두 층에 다 달면 L6에서 이름표 6개와
+      // 교정 번호 4개가 한데 뭉쳤다.
+      if (layer === "query" && typeof device.label === "string" && device.label.length > 0) {
         label = registerLabel(marker.position, device.label, "view3d-label-device", { kind: "device", layer, point: anchor.point });
         label.el.dataset.layer = layer;
         // 이름표가 회피 배치로 구에서 멀리 밀리면 어느 구의 이름인지 잃는다 — 이름표에서 구까지 가는 끈을 단다.
@@ -2183,6 +2238,11 @@ function mount(THREE, container) {
       disposeObject3D(meshObject);
       meshObject = null;
     }
+    if (gridObject) {
+      scene.remove(gridObject);
+      disposeObject3D(gridObject);
+      gridObject = null;
+    }
   }
 
   function render(payload) {
@@ -2219,8 +2279,6 @@ function mount(THREE, container) {
         layerColor: LAYER_COLOR.query,
         deviations,
         maxDeviation,
-        lowConfidenceBones: fit?.low_confidence_bones,
-        lowConfidenceJoints: fit?.low_confidence_joints,
         legsOutOfRange: fit?.legs_within_range === false,
       },
     );
@@ -2233,8 +2291,6 @@ function mount(THREE, container) {
         layerColor: LAYER_COLOR.reference,
         deviations,
         maxDeviation,
-        lowConfidenceBones: referenceFit?.low_confidence_bones,
-        lowConfidenceJoints: referenceFit?.low_confidence_joints,
         legsOutOfRange: referenceFit?.legs_within_range === false,
       },
     );
@@ -2275,6 +2331,12 @@ function mount(THREE, container) {
     const referenceStrokeGroup = buildStrokeGroup(view.reference_stroke, STROKE_COLOR.reference);
     layerGroups.reference.add(referenceStrokeGroup.group);
 
+    // 오른손이 손잡이에 못 닿은 층의 손끝→손잡이 점선. 층과 한 몸으로 켜고 끈다.
+    const reachGap = buildReachGap(fit, LAYER_COLOR.query, fit?.faded === true);
+    layerGroups.query.add(reachGap);
+    const referenceReachGap = buildReachGap(referenceFit, LAYER_COLOR.reference, referenceFit?.faded === true);
+    layerGroups.reference.add(referenceReachGap);
+
     const anchors = buildAnchorGroup(fit, LAYER_COLOR.query, true, "query", view.layers?.query);
     layerGroups.query.add(anchors.group);
     const referenceAnchors = buildAnchorGroup(referenceFit, LAYER_COLOR.reference, false, "reference", view.layers?.reference);
@@ -2304,6 +2366,9 @@ function mount(THREE, container) {
       });
     }
 
+    gridObject = buildGrid(view.grid);
+    if (gridObject) scene.add(gridObject);
+
     const mesh = view.mesh ?? null;
     meshObject = buildMesh(mesh);
     if (meshObject) {
@@ -2329,6 +2394,11 @@ function mount(THREE, container) {
       const legNotes = (view.leg_notes ?? []).filter((text) => typeof text === "string");
       (fit.notes ?? []).forEach((text, i) => {
         if (keys[i] === "legs") {
+          // 다리 고지도 서버가 접으라고 하면 접힌 상세로 간다(`notes_collapsed`).
+          if (collapsed.has("legs")) {
+            moreLines.push(...legNotes);
+            return;
+          }
           for (const line of legNotes) {
             const own = document.createElement("li");
             own.textContent = line;
@@ -2350,6 +2420,7 @@ function mount(THREE, container) {
       item.textContent = view.fit_note;
       dom.notes.append(item);
     }
+    moreLines.push(...legendDetails(view));
     if (mesh && mesh.available !== true && typeof mesh.reason_detail === "string") moreLines.push(mesh.reason_detail);
     // 손대칭 판정 근거(E). 벽을 그리는 레벨에서만 있는 내부 사유라 캔버스 위 벽면 슬롯이 아니라
     // 여기(접힌 '고지 더 보기')에 둔다 — 위 `reason_detail`과 같은 종류, 같은 자리다.
@@ -2502,6 +2573,19 @@ function mount(THREE, container) {
         corrected: countKind(layerGroups.corrected, "computed-layer-line"),
       },
       boneLengths,
+      // 오른팔(서버 `fit.right_arm`)과 씬에 실제로 올라간 오른팔 뼈·점선. 검증이 서버 값과 대조한다.
+      rightArm: [["query", fit, reachGap], ["reference", referenceFit, referenceReachGap]].map(([layer, f, g]) => {
+        const lines = [];
+        g.traverse((child) => { if (child.userData.kind === "reach-gap") lines.push({ from: child.userData.from, to: child.userData.to }); });
+        return { layer, arm: f?.right_arm ?? null, reachGapLines: lines };
+      }),
+      grid: gridObject === null ? null : {
+        vertical: gridObject.userData.vertical,
+        source: gridObject.userData.source,
+        drawnAt: [gridObject.position.x, gridObject.position.y, gridObject.position.z],
+        opacity: gridObject.material.opacity,
+        visible: gridObject.visible,
+      },
       fit,
       framingRatio: null,
     });
