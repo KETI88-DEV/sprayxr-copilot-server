@@ -361,7 +361,51 @@ def test_body_fit_check_fails_when_the_right_anchor_pulls_the_body_again() -> No
 COMPARE_QUERIES = (("1", "1000389_1"), ("3", "1000391_1"), ("6", "1000394_1"))
 
 
-def payload_arm_faults(view: dict[str, Any], offsets_by_layer: dict[str, Any]) -> dict[str, list[str]]:
+# 사용자가 고른 손잡이 추정값(m). `right_arm.GRIP_BEHIND_TRACKER_M`을 읽지 않고 여기 따로 적는다 — 페이로드의
+# 손잡이를 모듈 상수가 아니라 **사용자 결정**과 대조한다(모듈 상수는 `test_grip_sits_behind_…`가 0.30으로 고정).
+USER_GRIP_BEHIND_TRACKER_M = 0.30
+GRIP_TOL_M = 1e-9
+
+
+def measured_gun_at(rows: list[dict[str, str]], frame_index: int) -> dict[str, Any] | None:
+    """페이로드 프레임(`fit.frame_index`)의 **CSV** 건 트래커 위치와 분사 축. `right_arm`을 거치지 않는다 —
+    `measured_pose`의 회전 규약(`forward_vector`, 건 로컬 `GUN_FORWARD`)으로 원본 행에서 바로 읽는다."""
+    gun = measured_pose.active_gun(rows)
+    for frame, row in measured_pose.measured_frames_with_rows(rows):
+        if int(frame.index) != frame_index or frame.right is None:
+            continue
+        angles = tuple(float(row[f"{gun} Rotation {axis}"]) for axis in "XYZ")
+        forward = np.asarray(measured_pose.forward_vector(angles, measured_pose.GUN_FORWARD), dtype=float)
+        return {"tracker": np.asarray(frame.right, dtype=float), "forward": forward / np.linalg.norm(forward)}
+    return None
+
+
+def grip_faults(arm: dict[str, Any], right_anchor: dict[str, Any] | None, measured: dict[str, Any] | None) -> list[str]:
+    """페이로드 손잡이 = CSV 트래커 − 0.30m · CSV 건 전방인가, 그리고 건 막대가 손잡이 → 트래커인가.
+
+    자리만 보는 `arm_position_faults`는 **스스로 맞는** 틀린 손잡이(예: 몸 반대편으로 뒤집은 손잡이·팔)를
+    통과시킨다 — 손이 그 손잡이에 붙어 있고 뼈 길이도 맞기 때문이다. 손잡이 자체를 실측에서 다시 짓는다."""
+    if measured is None:
+        return ["no_csv_frame_for_the_payload"]
+    faults: list[str] = []
+    tracker = measured["tracker"]
+    expected = tracker - USER_GRIP_BEHIND_TRACKER_M * measured["forward"]
+    if float(np.linalg.norm(np.asarray(arm["tracker"], dtype=float) - tracker)) > GRIP_TOL_M:
+        faults.append("tracker_is_not_the_csv_gun")
+    if float(np.linalg.norm(np.asarray(arm["grip"], dtype=float) - expected)) > GRIP_TOL_M:
+        faults.append("grip_is_not_behind_the_measured_tracker")
+    device = (right_anchor or {}).get("device") or {}
+    # 막대의 손 쪽 끝 = 손잡이. `predicted_marker`(장착 상수 예측)나 FK 손으로 옮기면 여기서 잡힌다.
+    if not device.get("from") or float(np.linalg.norm(np.asarray(device["from"], dtype=float) - expected)) > GRIP_TOL_M:
+        faults.append("gun_bar_hand_end_is_not_the_grip")
+    if not device.get("to") or float(np.linalg.norm(np.asarray(device["to"], dtype=float) - tracker)) > GRIP_TOL_M:
+        faults.append("gun_bar_far_end_is_not_the_tracker")
+    return faults
+
+
+def payload_arm_faults(
+    view: dict[str, Any], offsets_by_layer: dict[str, Any], rows_by_layer: dict[str, Any] | None = None
+) -> dict[str, list[str]]:
     out: dict[str, list[str]] = {}
     for layer, fit_key in (("query", "fit"), ("reference", "reference_fit")):
         joints = (view.get("layers") or {}).get(layer, {}).get("joints")
@@ -375,6 +419,9 @@ def payload_arm_faults(view: dict[str, Any], offsets_by_layer: dict[str, Any]) -
             faults.append("right_anchor_is_reported_as_fitting_the_body")
         if any(a["body_fit"] is not True for a in view[fit_key]["anchors"] if a["point"] != "right"):
             faults.append("head_or_left_anchor_is_not_fitting_the_body")
+        if rows_by_layer is not None:
+            measured = measured_gun_at(rows_by_layer[layer], int(view[fit_key]["frame_index"]))
+            faults.extend(grip_faults(arm, right, measured))
         out[layer] = faults
     return out
 
@@ -393,23 +440,24 @@ def _compare_views() -> list[tuple[str, dict[str, Any], dict[str, Any]]]:
         first = candidates["candidates"][0]
         reference = service.PassRef(**{key: first[key] for key in ("worker", "date", "level", "session", "pass_index")})
         view = service.compare(source, query, reference, **kwargs)["view"]
+        rows = {layer: source.load(ref).rows for layer, ref in (("query", query), ("reference", reference))}
         offsets = {
-            layer: body_proportions.rig_offsets(pose_fk_csv.bind_offsets(source.load(ref).rows[0]))
-            for layer, ref in (("query", query), ("reference", reference))
+            layer: body_proportions.rig_offsets(pose_fk_csv.bind_offsets(layer_rows[0]))
+            for layer, layer_rows in rows.items()
         }
-        out.append((level, view, offsets))
+        out.append((level, view, offsets, rows))
     _REAL["views"] = out
     return out
 
 
 def test_compare_payload_draws_the_grip_arm_on_both_layers() -> None:
-    for level, view, offsets in _compare_views():
-        assert payload_arm_faults(view, offsets) == {"query": [], "reference": []}, level
+    for level, view, offsets, rows in _compare_views():
+        assert payload_arm_faults(view, offsets, rows) == {"query": [], "reference": []}, level
 
 
 def test_payload_arm_check_fails_when_the_payload_carries_the_csv_arm() -> None:
     """변이 M2의 모양: 페이로드 관절의 오른 팔꿈치·손을 CSV FK 자리(오른손 앵커 `joint_position`)로 되돌린다."""
-    level, view, offsets = _compare_views()[1]
+    level, view, offsets, _rows = _compare_views()[1]
     right = next(a for a in view["fit"]["anchors"] if a["point"] == "right")
     joints = dict(view["layers"]["query"]["joints"], RightHand=right["joint_position"])
     mutated = dict(view, layers=dict(view["layers"], query=dict(view["layers"]["query"], joints=joints)))
@@ -419,3 +467,55 @@ def test_payload_arm_check_fails_when_the_payload_carries_the_csv_arm() -> None:
     anchors = [fitted if a["point"] == "right" else a for a in view["fit"]["anchors"]]
     faults = payload_arm_faults(dict(view, fit=dict(view["fit"], anchors=anchors)), offsets)
     assert faults["query"] == ["right_anchor_is_reported_as_fitting_the_body"], faults
+
+
+def _flip_across_body(point: Any, head: np.ndarray, right: np.ndarray) -> list[float]:
+    v = np.asarray(point, dtype=float)
+    return [float(x) for x in v - 2.0 * float(np.dot(v - head, right)) * right]
+
+
+def test_payload_grip_check_fails_for_a_self_consistent_mirrored_grip() -> None:
+    """변이 MX2(검증 라운드): 손잡이를 몸 정중면 너머로 뒤집고 그 손잡이로 팔·점선·건 막대 손 쪽 끝을 **함께** 다시 짓는다.
+    자리 검사(`arm_position_faults`)는 이 팔을 통과시킨다 — 손이 뒤집힌 손잡이에 붙어 있고 뼈 길이도 맞다.
+    손잡이를 CSV에서 다시 짓는 검사가 잡는다. 막대 손 쪽 끝만 `predicted_marker`로 옮긴 변이도 잡는다."""
+    level, view, offsets, rows = _compare_views()[0]
+    fit = view["fit"]
+    arm = fit["right_arm"]
+    head_anchor = next(a for a in fit["anchors"] if a["point"] == "head")
+    head = np.asarray(head_anchor["measured_marker"], dtype=float)
+    front = np.asarray(world_axes.flatten(tuple(np.asarray(arm["tracker"], dtype=float) - head)))
+    front /= np.linalg.norm(front)
+    right = np.cross(np.asarray(world_axes.UP, dtype=float), front)
+    # 뒤집은 손잡이로 **같은 어깨에서** 팔을 다시 푼다 — 뼈 길이·손 자리가 그 손잡이와 스스로 맞는 팔이다.
+    grip = _flip_across_body(arm["grip"], head, right)
+    joints_now = view["layers"]["query"]["joints"]
+    elbow, hand, reached = right_arm.solve_two_bone(
+        arm["shoulder"], grip, arm["upper_arm_m"], arm["forearm_m"], right_arm.pole_direction(joints_now)
+    )
+    flipped = {"grip": grip, "elbow": list(elbow), "hand": list(hand)}
+    mirrored_arm = dict(arm, **flipped, reached=reached)
+    mirrored_arm["reach_gap"] = None if reached else {"from": flipped["hand"], "to": flipped["grip"]}
+    anchors = [
+        dict(a, device=dict(a["device"], **{"from": flipped["grip"]})) if a["point"] == "right" else a
+        for a in fit["anchors"]
+    ]
+    joints = dict(view["layers"]["query"]["joints"], RightForeArm=flipped["elbow"], RightHand=flipped["hand"])
+    mutated = dict(
+        view,
+        fit=dict(fit, right_arm=mirrored_arm, anchors=anchors),
+        layers=dict(view["layers"], query=dict(view["layers"]["query"], joints=joints)),
+    )
+    # 자리 검사만으로는 통과한다 — 이것이 검증 라운드가 짚은 공백이다.
+    assert arm_position_faults(mirrored_arm, joints, offsets["query"]) == []
+    faults = payload_arm_faults(mutated, offsets, rows)["query"]
+    assert "grip_is_not_behind_the_measured_tracker" in faults, (level, faults)
+    assert "gun_bar_hand_end_is_not_the_grip" in faults, (level, faults)
+
+    right_anchor = next(a for a in fit["anchors"] if a["point"] == "right")
+    predicted = [
+        dict(a, device=dict(a["device"], **{"from": a["predicted_marker"]})) if a["point"] == "right" else a
+        for a in fit["anchors"]
+    ]
+    assert right_anchor["predicted_marker"] != arm["grip"]
+    faults = payload_arm_faults(dict(view, fit=dict(fit, anchors=predicted)), offsets, rows)["query"]
+    assert faults == ["gun_bar_hand_end_is_not_the_grip"], (level, faults)

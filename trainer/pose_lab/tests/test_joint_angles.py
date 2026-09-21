@@ -14,6 +14,7 @@ import json
 import re
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -138,7 +139,7 @@ def test_knee_and_shoulder_use_their_own_driver_rotations() -> None:
 def test_block_contract_and_wording() -> None:
     block = joint_angles.joint_angles_block(_rows([{} for _ in range(6)]), _rows([{} for _ in range(6)]))
     assert [row["key"] for row in block["rows"]] == [spec.key for spec in joint_angles.ANGLE_SPECS]
-    elbow = next(row for row in block["rows"] if row["key"] == "right_elbow")
+    elbow = next(row for row in block["rows"] if row["key"] == "left_elbow")
     assert elbow["display"] == {"query": "180°", "reference": "180°"}
     assert "0° 100%" in elbow["quality_display"]["query"]
     assert elbow["samples"] == {"query": 6, "reference": 6}
@@ -159,8 +160,44 @@ def test_block_reports_a_reason_instead_of_inventing_values() -> None:
         assert row["display"] == {"query": "—", "reference": "—"}
 
 
+def right_arm_row_faults(block: dict[str, Any]) -> list[str]:
+    """표가 CSV 오른팔 각을 싣는가. 3D 오른팔은 건 손잡이로 세운다 — 표가 CSV 편 팔을 내면 오른팔이 둘이다."""
+    faults: list[str] = []
+    for key in ("right_elbow", "right_shoulder"):
+        row = next(row for row in block["rows"] if row["key"] == key)
+        if row["query"] is not None or row["reference"] is not None or row["display"] != {"query": "—", "reference": "—"}:
+            faults.append(f"{key}_shows_the_csv_arm")
+        if row["reason"] != "right_arm_from_gun" or row["reason_text"] != joint_angles.REASON_TEXT["right_arm_from_gun"]:
+            faults.append(f"{key}_has_no_reason")
+    return faults
+
+
+def test_right_arm_rows_carry_a_reason_not_the_csv_arm() -> None:
+    block = joint_angles.joint_angles_block(_rows([{} for _ in range(6)]), _rows([{} for _ in range(6)]))
+    assert right_arm_row_faults(block) == []
+    for word in ("미사용", "사용하지 않", "unused", "not used", "보정", "(추정)"):
+        assert word not in joint_angles.REASON_TEXT["right_arm_from_gun"]
+
+
+def test_right_arm_row_check_fails_when_the_table_shows_the_csv_arm() -> None:
+    """변이: 오른팔 행을 걸러 내지 않는다(옛 표). CSV 오른 팔꿈치 180°가 다시 실리면 잡힌다."""
+    original = joint_angles.RIGHT_ARM_KEYS
+    try:
+        joint_angles.RIGHT_ARM_KEYS = frozenset()
+        block = joint_angles.joint_angles_block(_rows([{} for _ in range(6)]), _rows([{} for _ in range(6)]))
+    finally:
+        joint_angles.RIGHT_ARM_KEYS = original
+    assert right_arm_row_faults(block) == [
+        "right_elbow_shows_the_csv_arm",
+        "right_elbow_has_no_reason",
+        "right_shoulder_shows_the_csv_arm",
+        "right_shoulder_has_no_reason",
+    ]
+
+
 def test_real_pass_shows_a_constant_right_elbow_and_says_so() -> None:
-    """실데이터 L1·L3: 오른 팔꿈치는 180°(편 팔)이고 전완 회전 0° 비율이 100%로 함께 실린다."""
+    """실데이터 L1·L3: CSV 오른 팔꿈치는 180°(편 팔)이고 전완 회전 0° 비율이 100%다 — 데이터 성질은
+    `pass_angles`가 그대로 잰다. 화면 표는 그 값 대신 3D 오른팔이 건 손잡이로 세워졌다는 사유를 싣는다."""
     source, kwargs = isolation._source_for({"name": "real"})  # noqa: SLF001
     for level, session, ref_session, ref_index in (
         ("1", "1000389_1", "1000564_1", 17),
@@ -181,10 +218,15 @@ def test_real_pass_shows_a_constant_right_elbow_and_says_so() -> None:
         assert body["status"] == "ok"
         block = body["measured"]["joint_angles"]
         assert block is not None
-        elbow = next(row for row in block["rows"] if row["key"] == "right_elbow")
-        assert elbow["query"] == pytest.approx(180.0, abs=0.5), (level, elbow)
-        assert elbow["quality"]["query"]["zero_pct"] == pytest.approx(100.0)
-        assert "0° 100%" in elbow["quality_display"]["query"]
+        assert right_arm_row_faults(block) == [], level
+        query_rows = source.load(
+            PassRef(worker="김경호", date="20250831", level=level, session=session, pass_index=0)
+        ).rows
+        elbow = joint_angles.pass_angles(query_rows)["right_elbow"]
+        assert elbow is not None
+        assert elbow.mean_deg == pytest.approx(180.0, abs=0.5), (level, elbow)
+        assert elbow.zero_pct == pytest.approx(100.0)
+        assert "0° 100%" in joint_angles.quality_display(joint_angles.ANGLE_SPECS[0], elbow)
         # 왼 팔꿈치는 상수가 아니다 — 두 관절이 같은 문구를 달면 이 표가 아무것도 말하지 않는다.
         left = next(row for row in block["rows"] if row["key"] == "left_elbow")
         assert left["quality"]["query"]["zero_pct"] == pytest.approx(0.0)

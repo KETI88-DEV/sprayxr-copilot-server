@@ -753,7 +753,7 @@ LEGEND_SEPARATOR: Final = " · "
 #
 # 막대: 건은 **손잡이 → 트래커**(분사구) 굵은 줄무늬 막대다 — 오른팔을 건 손잡이로 세운 뒤로(`right_arm`)
 # 막대의 손 쪽 끝은 손잡이이고, 그 길이는 `right_arm.GRIP_BEHIND_TRACKER_M`이다. HMD·플래쉬는 추정 관절 →
-# 장치 가는 줄무늬다(몸과 장치 사이 간격).
+# 장치 **점선**이다(몸과 장치 사이 빈자리) — 줄무늬는 건 하나뿐이라 범례 "줄무늬 = 건"이 참이다.
 DEVICE_NAMES: Final[dict[str, str]] = {"head": "HMD", "right": "건", "left": "플래쉬"}
 DEVICE_SHAPES: Final[dict[str, str]] = {"head": "link", "right": "gun", "left": "link"}
 

@@ -2194,7 +2194,11 @@ def device_shape_faults(js: str) -> list[str]:
         faults.append("device_shape_not_from_server_block")
     # 막대는 **줄무늬**다(층 색 마디와 밝은 마디를 번갈아). 한 색 반투명 원기둥이던 옛 막대는 반투명 뼈와
     # 거의 같아 "팔이 하나 더"로 읽혔다(검증 crop-vdev-L3-r1). 실측 구 재료도 쓰지 않는다.
-    bar = re.search(r'stripedBar\((\w+), surface, radius, (\w+), (\w+), "device-shape"', body)
+    # **줄무늬는 건 하나뿐이다**(범례 "줄무늬 = 건"). 건 가지는 줄무늬 막대, 나머지(HMD·플래쉬) 가지는 점선이다.
+    # 셋 다 줄무늬이던 때 범례가 셋 중 둘에서 거짓이었다(검증 라운드: HMD 줄무늬 3마디 · 플래쉬 4마디).
+    bar = re.search(
+        r'const bar = isGun\s*\?\s*stripedBar\((\w+), surface, DEVICE_GUN_RADIUS, (\w+), (\w+), "device-shape"', body
+    )
     if bar is None:
         faults.append("device_bar_missing")
     else:
@@ -2214,17 +2218,24 @@ def device_shape_faults(js: str) -> list[str]:
             and any("DEVICE_STRIPE_LIGHT" in m for m in materials.values())
         ):
             faults.append("device_bar_is_not_striped")
+    link = re.search(r'"device-shape", anchor\.point\)\s*:\s*(\w+)\(joint, surface, layerColor, "device-shape"', body)
+    if link is None or link.group(1) != "dashedLink":
+        faults.append("links_are_not_dashed")
+    dashed = _nested_function_body(code, "dashedLink")
+    if "new THREE.LineDashedMaterial" not in dashed or "stripedBar" in dashed or "computeLineDistances" not in dashed:
+        faults.append("link_line_is_not_dashed")
+    if 'const isGun = device.shape === "gun";' not in body:
+        faults.append("gun_shape_not_read_from_server")
     striped = _nested_function_body(code, "stripedBar")
     if "i % 2 === 0 ? darkMaterial : lightMaterial" not in striped:
         faults.append("stripes_do_not_alternate")
     if "SphereGeometry" in body.split("const device = anchor.device;", 1)[-1]:
         faults.append("device_drawn_as_a_sphere")
     gun = _const_number(js, "DEVICE_GUN_RADIUS")
-    link = _const_number(js, "DEVICE_LINK_RADIUS")
-    if gun is None or link is None or not gun > link:
-        faults.append("gun_is_not_thicker_than_the_links")
-    if 'device.shape === "gun"' not in body:
-        faults.append("gun_shape_not_read_from_server")
+    bone = _const_number(js, "BONE_RADIUS")
+    if gun is None or bone is None or not gun > bone:
+        # 건 막대는 반투명 뼈보다 굵다.
+        faults.append("gun_is_not_thicker_than_the_bones")
     # 이름표는 **대상 층에만** — 기준 층은 색으로 구분된다(직전 라운드: 이름표 6개 + 배지 4개로 L6이 빽빽했다).
     if 'if (layer === "query" && typeof device.label === "string"' not in body:
         faults.append("device_labels_on_both_layers")
@@ -2261,8 +2272,8 @@ def test_device_shape_checks_can_fail():
     one = full.replace('"reference", view.layers?.reference)', '"reference", null)', 1)
     assert one != full and device_shape_faults(one) == ["reference_devices_not_drawn"]
     measured = full.replace(
-        'stripedBar(joint, surface, radius, stripeDark, stripeLight, "device-shape"',
-        'stripedBar(joint, surface, radius, markerMaterial, stripeLight, "device-shape"',
+        'stripedBar(joint, surface, DEVICE_GUN_RADIUS, stripeDark, stripeLight, "device-shape"',
+        'stripedBar(joint, surface, DEVICE_GUN_RADIUS, markerMaterial, stripeLight, "device-shape"',
         1,
     )
     assert measured != full and device_shape_faults(measured) == ["device_bar_uses_the_measured_symbol"]
@@ -2285,9 +2296,22 @@ def test_device_shape_checks_can_fail():
     both = full.replace('if (layer === "query" && typeof device.label === "string"', 'if (typeof device.label === "string"', 1)
     assert both != full and device_shape_faults(both) == ["device_labels_on_both_layers"]
     thin = full.replace("const DEVICE_GUN_RADIUS = 0.011;", "const DEVICE_GUN_RADIUS = 0.004;", 1)
-    assert thin != full and device_shape_faults(thin) == ["gun_is_not_thicker_than_the_links"]
-    tool = full.replace('device.shape === "gun" ? DEVICE_GUN_RADIUS', 'device.shape === "tool" ? DEVICE_GUN_RADIUS', 1)
+    assert thin != full and device_shape_faults(thin) == ["gun_is_not_thicker_than_the_bones"]
+    tool = full.replace('const isGun = device.shape === "gun";', 'const isGun = device.shape === "tool";', 1)
     assert tool != full and device_shape_faults(tool) == ["gun_shape_not_read_from_server"]
+    # 옛 결함: HMD·플래쉬 막대도 줄무늬(범례 "줄무늬 = 건"이 거짓).
+    striped_links = full.replace(
+        ': dashedLink(joint, surface, layerColor, "device-shape", anchor.point);',
+        ': stripedBar(joint, surface, DEVICE_GUN_RADIUS, stripeDark, stripeLight, "device-shape", anchor.point);',
+        1,
+    )
+    assert striped_links != full and device_shape_faults(striped_links) == ["links_are_not_dashed"]
+    solid_link = full.replace(
+        "new THREE.LineDashedMaterial({ color, dashSize: COMPUTED_DASH, gapSize: COMPUTED_GAP })",
+        "new THREE.LineBasicMaterial({ color })",
+        1,
+    )
+    assert solid_link != full and device_shape_faults(solid_link) == ["link_line_is_not_dashed"]
     never = full.replace("entry.el.hidden = !(entry.layer", "entry.el.hidden = false && !(entry.layer", 1)
     assert never != full and device_shape_faults(never) == ["device_labels_not_tied_to_the_layer_toggle"]
     sticky = full.replace(

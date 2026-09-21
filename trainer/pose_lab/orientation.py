@@ -194,7 +194,7 @@ JOINT_AXIS_ROWS: Final[tuple[dict[str, str], ...]] = (
         "key": "elbow_shoulder",
         "joint": "팔꿈치·어깨",
         "status": "not_measured",
-        "reason_text": "추적 장치가 없는 IK 관절입니다 — 축을 실측으로 검증할 수 없습니다. 각도 추정값은 관절 각도 표에 있습니다(오른 전완 회전은 프레임의 88%가 0°, 곧 편 팔입니다).",
+        "reason_text": "추적 장치가 없는 IK 관절입니다 — 축을 실측으로 검증할 수 없습니다.",
     },
     {
         "key": "torso_pelvis",

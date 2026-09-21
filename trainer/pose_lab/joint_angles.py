@@ -129,7 +129,14 @@ ANGLE_SPECS: Final[tuple[AngleSpec, ...]] = (
 REASON_TEXT: Final[dict[str, str]] = {
     "no_spraying_frame": "분사 중 착탄 프레임이 없어 계산하지 않습니다.",
     "no_joint_columns": "이 패스에는 관절 컬럼이 없어 계산하지 않습니다.",
+    "right_arm_from_gun": "3D 오른팔은 건 손잡이로 세웠습니다 — CSV 오른팔 각은 싣지 않습니다.",
 }
+
+# 표에 CSV 값을 싣지 않는 행. 3D는 오른팔을 CSV 관절이 아니라 **실측 건 손잡이**로 다시 세운다(`right_arm`
+# 머리말: 벤더 오른팔 솔버가 트래커 거리와 무관하게 팔꿈치를 ~91% 편 채 고정한다). 이 표가 CSV 오른 팔꿈치
+# 180°·어깨 각을 그대로 내면 화면에 오른팔이 둘이 된다(검증 라운드: 3D에서 접힌 팔꿈치 옆에 표의 편 팔).
+# `pass_angles`는 이 값들을 그대로 잰다 — 데이터 성질(오른 전완 회전 0° 비율)을 검사가 계속 읽는다.
+RIGHT_ARM_KEYS: Final[frozenset[str]] = frozenset({"right_elbow", "right_shoulder"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -247,6 +254,9 @@ def joint_angles_block(
         reason: str | None = None
         if q is None or r is None:
             reason = "no_spraying_frame" if not spraying_window(query_rows) else "no_joint_columns"
+        elif spec.key in RIGHT_ARM_KEYS:
+            reason = "right_arm_from_gun"
+            q = r = None
         rows.append(
             {
                 "key": spec.key,

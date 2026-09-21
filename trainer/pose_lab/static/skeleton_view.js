@@ -10,8 +10,8 @@
 //     스켈레톤을 같이 그리고 유사도가 떨어지는 조인트일수록 색상을 진하게".
 //   - 대표 프레임 실측 마커(`fit.anchors[].measured_marker`): 층 색으로 **채운** 구체 — 실측 부호다.
 //     자기 궤적 선 위의 **한 순간**이므로 선을 가로지르는 고리(`moment-ring`)를 두른다.
-//   - 장치 모양(`fit.anchors[].device`): `device.from` → 장치(실측 구) 줄무늬 막대. 건은 **손잡이 → 트래커**
-//     굵은 막대이고(손 쪽 끝 = 손잡이), HMD·플래쉬는 추정 관절 → 장치 가는 막대다. 이름표는 짧은 장치
+//   - 장치 모양(`fit.anchors[].device`): `device.from` → 장치(실측 구). 건만 **손잡이 → 트래커** 줄무늬
+//     막대이고(손 쪽 끝 = 손잡이), HMD·플래쉬는 추정 관절 → 장치 **점선**이다. 이름표는 짧은 장치
 //     이름(`device.label`)뿐이고 **대상 층에만** 단다 — 기준 층은 색이 말한다.
 //   - 오른팔(`fit.right_arm`): 서버가 오른어깨→건 손잡이 두 마디 IK로 세운 관절이 `joints`에 들어 있다.
 //     손이 손잡이에 못 닿으면 손끝→손잡이(`right_arm.reach_gap`)를 **점선만** 긋는다 — 숫자·문구 없음.
@@ -140,9 +140,11 @@ const MOMENT_RING_OPACITY = 0.95;
 // 장치 모양(몸 → 장치 사이 간격). 예전 막대는 층 색을 씻은 반투명 원기둥이라 반투명 뼈(r=0.009)와
 // 거의 같아 보였다 — 화면에서 "팔이 하나 더" 있는 것처럼 읽혔다. 이제 **줄무늬**(층 색 마디와 흰 마디를
 // 번갈아)로 그려 뼈(한 색 반투명)·궤적(가는 한 색 관)·자리표시 다리(가는 점선)와 모양부터 다르게 한다.
-// 건 쪽이 굵다. 채운 구(실측 부호)는 쓰지 않는다 — 한쪽 끝이 추정 관절이다.
+// 채운 구(실측 부호)는 쓰지 않는다. **줄무늬는 건 하나뿐이다** — 범례가 "줄무늬 = 건"이라고 말한다.
+// HMD·플래쉬의 몸(추정 관절) → 장치 간격은 줄무늬가 아니라 **점선**(`dashedLink`)이다: 그 간격은 잰 물건이
+// 아니라 추정 몸과 실측 장치 사이 빈자리이고, 범례의 "점선 = 재지 않은 부분"이 그것을 말한다. 예전에는 셋 다
+// 줄무늬라 범례 "줄무늬 = 건"이 셋 중 둘에서 거짓이었다(검증 라운드: HMD 줄무늬 3마디 · 플래쉬 4마디).
 const DEVICE_GUN_RADIUS = 0.011;
-const DEVICE_LINK_RADIUS = 0.0055;
 const DEVICE_STRIPE_M = 0.03;
 const DEVICE_STRIPE_LIGHT = 0xf4f4f4;
 // 장치 이름표 끈(px). 구 중심에서 이만큼 앞에서 멈추고(고리를 가리지 않게), 이보다 짧으면 달지 않는다.
@@ -1134,6 +1136,20 @@ function mount(THREE, container) {
     return group;
   }
 
+  /** 몸(추정 관절) → 장치 간격 점선(HMD·플래쉬). 줄무늬를 쓰지 않는다 — 줄무늬는 건 하나다. */
+  function dashedLink(start, end, color, kind, name) {
+    if (start.distanceTo(end) < 1e-6) return null;
+    const line = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([start.clone(), end.clone()]),
+      new THREE.LineDashedMaterial({ color, dashSize: COMPUTED_DASH, gapSize: COMPUTED_GAP }),
+    );
+    line.computeLineDistances();
+    line.userData.kind = kind;
+    line.userData.name = name;
+    line.userData.length = start.distanceTo(end);
+    return line;
+  }
+
   /** 추정 스켈레톤 하나. **관절마다 진하기가 다르다** — 서버가 잰 벌어짐(`view.deviation`)이 근거다.
    *
    * 뼈 색은 양 끝 관절 벌어짐의 평균이다(뼈 하나가 두 관절 사이를 잇는 물건이므로). 관절 표식은
@@ -1370,9 +1386,9 @@ function mount(THREE, container) {
    * 왜 겹치는 부분이 없는지 모르겠어"). 문제는 선이 아니라 이름이었다. 이제 선은 **몸(추정 관절) →
    * 장치(실측 구)** 막대로 돌아오고, 이름은 서버가 준 장치 이름·거리 문자열(`anchor.device.label`)이다.
    *
-   * 막대는 실측 부호(층 색으로 채운 구체)를 쓰지 않는다 — 한쪽 끝이 추정 관절이다. 층 색·흰색 줄무늬
-   * 막대(`stripedBar`)이고, 범례(서버 `legend_notes`)가 "장치 모양 = 몸(추정)에서 장치(실측)까지 벌어진
-   * 간격 — 뼈도 도구 길이도 아니다"라고 말한다.
+   * 막대는 실측 부호(층 색으로 채운 구체)를 쓰지 않는다. 건은 손잡이 → 트래커 층 색·흰색 줄무늬 막대
+   * (`stripedBar`), HMD·플래쉬는 추정 관절 → 장치 점선(`dashedLink`)이다 — 범례 "줄무늬 = 건"·"점선 = 재지
+   * 않은 부분"과 같은 뜻이다.
    * 고리는 그 층의 궤적(`trackLayer[anchor.point]`)이 구 자리에서 가는 방향을 축으로 삼는다 — 방향은
    * 그림을 세우는 데만 쓰고, 화면에 숫자로 내지 않는다. */
   function buildAnchorGroup(fit, layerColor, register, layer, trackLayer) {
@@ -1413,13 +1429,15 @@ function mount(THREE, container) {
       // 막대의 몸 쪽 끝은 서버가 준 `device.from`이다 — 건은 **손잡이**, HMD·플래쉬는 추정 관절.
       if (!device || !isVec3(device.from)) continue;
       const joint = new THREE.Vector3(...device.from);
-      const radius = device.shape === "gun" ? DEVICE_GUN_RADIUS : DEVICE_LINK_RADIUS;
+      const isGun = device.shape === "gun";
       // 막대는 구 **표면**에서 멈춘다 — 구 안까지 파고들면 실측 구가 막대에 묻혀 보인다.
       const toJoint = new THREE.Vector3().subVectors(joint, marker.position);
       const span = toJoint.length();
       if (span <= MEASURED_MARKER_RADIUS) continue;
       const surface = marker.position.clone().addScaledVector(toJoint.normalize(), MEASURED_MARKER_RADIUS);
-      const bar = stripedBar(joint, surface, radius, stripeDark, stripeLight, "device-shape", anchor.point);
+      const bar = isGun
+        ? stripedBar(joint, surface, DEVICE_GUN_RADIUS, stripeDark, stripeLight, "device-shape", anchor.point)
+        : dashedLink(joint, surface, layerColor, "device-shape", anchor.point);
       if (!bar) continue;
       bar.userData.layer = layer;
       bar.userData.shape = device.shape;
@@ -2504,7 +2522,7 @@ function mount(THREE, container) {
         shape: d.shape,
         from: d.bar.userData.from,
         to: d.bar.userData.to,
-        radius: d.shape === "gun" ? DEVICE_GUN_RADIUS : DEVICE_LINK_RADIUS,
+        style: d.bar.isLine ? "dashed" : "striped",
         stripes: d.bar.children.length,
         label: d.label ? d.label.el.textContent : null,
       })),
