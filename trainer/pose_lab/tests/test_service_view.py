@@ -1209,7 +1209,7 @@ def test_low_confidence_marks_the_right_forearm_when_the_grip_limit_is_exceeded(
     assert tight["low_confidence_joints"] == ["RightHand"]
     assert tight["low_confidence_gap_m"] == pytest.approx(norm)
     note = tight["notes"][tight["note_keys"].index("grip_limit")]
-    assert "손 IK↔컨트롤러" in note and "쥐는 거리가 아니라" in note
+    assert "손 IK↔컨트롤러" in note and "쥐는 거리도 건 길이도 아닙니다" in note
     # 적합 상수를 "보정"이라고 부르지 않는다.
     assert "보정" not in note
     # 3D 안에 걸 숫자 라벨은 어느 앵커에도 없다.
@@ -1623,14 +1623,19 @@ def device_label_faults(anchor: dict) -> list[str]:  # type: ignore[type-arg]
     if not isinstance(device, dict):
         return ["no_device_block"]
     expected_name = {"head": "HMD", "right": "건", "left": "플래쉬"}[anchor["point"]]
+    # 관절 이름도 블록 자신의 `joint_word`가 아니라 **앵커 자리**에서 독립으로 기대한다 — 블록의 값과
+    # 비교하면 서버 표가 오른손·왼손을 바꿔 적어도("건 · 왼손에서 42.0cm") 검사가 따라 틀린다.
+    expected_joint = {"head": "머리", "right": "오른손", "left": "왼손"}[anchor["point"]]
     if device["name"] != expected_name:
         faults.append("wrong_device_name")
-    if device["shape"] != ("tool" if anchor["point"] == "right" else "link"):
+    if device["joint_word"] != expected_joint:
+        faults.append("wrong_joint_word")
+    if device["shape"] != ("gun" if anchor["point"] == "right" else "link"):
         faults.append("wrong_device_shape")
     metres = math.dist(anchor["joint_position"], anchor["measured_marker"])
     if abs(device["joint_to_device_m"] - metres) > 1e-12:
         faults.append("distance_is_not_joint_to_measured_sphere")
-    if device["label"] != f"{expected_name} · {device['joint_word']}에서 {metres * 100.0:.1f}cm":
+    if device["label"] != f"{expected_name} · {expected_joint}에서 {metres * 100.0:.1f}cm":
         faults.append("label_is_not_the_joint_to_measured_distance")
     if "보정" in device["label"]:
         faults.append("label_says_bojeong")
@@ -1662,6 +1667,10 @@ def test_device_label_checks_can_fail(test_mounts) -> None:  # noqa: ANN001
         "wrong_device_name", "label_is_not_the_joint_to_measured_distance", "label_says_bojeong",
     ]
     assert device_label_faults(dict(anchor, device=None)) == ["no_device_block"]
+    swapped = dict(anchor, device=dict(anchor["device"], joint_word="왼손", label=anchor["device"]["label"].replace("오른손", "왼손")))
+    assert device_label_faults(swapped) == ["wrong_joint_word", "label_is_not_the_joint_to_measured_distance"]
+    tool = dict(anchor, device=dict(anchor["device"], shape="tool"))
+    assert device_label_faults(tool) == ["wrong_device_shape"]
 
 
 def _strings(value: object) -> list[str]:
@@ -1722,3 +1731,81 @@ def test_legend_device_checks_can_fail() -> None:
     assert legend_device_faults(service.LEGEND_NOTES[:3]) == [
         "track_line_not_explained", "moment_not_explained", "device_shape_not_explained",
     ]
+
+
+# --- 손 → 건 간격은 한 가지 설명만 ---------------------------------------------------------
+#
+# 검증에서: 건 이름표는 "건 · 오른손에서 42.0cm"(L1·L6에서는 57~77cm)라 적는데 같은 화면의 저신뢰
+# 고지는 "0.57m 어긋나 있다(쥐는 거리가 아니다)"고, 범례는 그 막대를 "굵은 막대(도구)"라 불렀다 —
+# 한 간격에 두 숫자, 두 설명. 이제 이 순간의 값은 이름표만 말하고, 고지는 그 이름표를 가리키며 상수에
+# "대표값"이라는 이름을 붙이고, 범례는 막대가 도구도 뼈도 아니라고 말한다.
+
+
+def gap_explanation_faults(view: dict) -> list[str]:  # type: ignore[type-arg]
+    faults: list[str] = []
+    legend = list(view.get("legend_notes") or [])
+    fit = view.get("fit") or {}
+    notes = list(fit.get("notes") or [])
+    screen = legend + notes + _strings(fit.get("anchors")) + _strings((view.get("reference_fit") or {}).get("anchors"))
+    if any(re.search(r"\(도구\)|도구 막대|막대\(도구", text) for text in screen):
+        faults.append("gap_called_a_tool")
+    shape_line = next((t for t in legend if t.startswith("장치 모양 =")), "")
+    if "도구 길이도 아니" not in shape_line or "뼈도" not in shape_line:
+        faults.append("legend_does_not_say_the_bar_is_not_a_tool")
+    grip = [t for t, k in zip(notes, fit.get("note_keys") or []) if k == "grip_limit"]
+    if fit.get("low_confidence") is True:
+        if len(grip) != 1:
+            faults.append("grip_note_missing")
+        else:
+            gap = fit["low_confidence_gap_m"]
+            if "건 이름표의 거리" not in grip[0]:
+                faults.append("grip_note_does_not_point_at_the_gun_tag")
+            if f"대표값 {gap:.2f}m" not in grip[0]:
+                faults.append("constant_not_named_as_representative")
+            if re.search(rf"이미 {gap:.2f}m 어긋나", grip[0]):
+                faults.append("constant_presented_as_this_moment")
+            if "건 길이도 아닙니다" not in grip[0]:
+                faults.append("grip_note_does_not_rule_out_tool_length")
+    track = next((t for t in legend if t.startswith("움직임 궤적")), "")
+    if any(word in track for word in ("오른손", "머리", "왼손")):
+        faults.append("track_legend_names_joints")
+    return faults
+
+
+def test_the_hand_to_gun_gap_has_one_explanation_on_screen(test_mounts) -> None:  # noqa: ANN001
+    view = _compare()["view"]
+    tight = service.skeleton_block(RawPass(rows=_rows_with_skeleton(0.3)), mounts_table=service.MountsTable(
+        passed=True, table=_TEST_MOUNTS.table, grip_limit_m={k: 0.05 for k in service.DEFAULT_GRIP_LIMIT_M},
+    )).fit
+    assert tight["low_confidence"] is True
+    assert gap_explanation_faults(dict(view, fit=tight)) == []
+    assert gap_explanation_faults(view) == []
+
+
+def test_gap_explanation_checks_can_fail(test_mounts) -> None:  # noqa: ANN001
+    view = _compare()["view"]
+    tight = service.skeleton_block(RawPass(rows=_rows_with_skeleton(0.3)), mounts_table=service.MountsTable(
+        passed=True, table=_TEST_MOUNTS.table, grip_limit_m={k: 0.05 for k in service.DEFAULT_GRIP_LIMIT_M},
+    )).fit
+    gap = tight["low_confidence_gap_m"]
+    old_note = (
+        "오른 전완·손은 흐리게 그렸습니다 — 아바타 손 IK와 트래킹된 건이 원본 데이터에서 이미 "
+        f"{gap:.2f}m 어긋나 있습니다(쥐는 거리가 아니라 캡처 파이프라인의 손 IK↔컨트롤러 매핑 문제)."
+    )
+    old_fit = dict(tight, notes=[old_note if k == "grip_limit" else t for t, k in zip(tight["notes"], tight["note_keys"])])
+    assert gap_explanation_faults(dict(view, fit=old_fit)) == [
+        "grip_note_does_not_point_at_the_gun_tag", "constant_not_named_as_representative",
+        "constant_presented_as_this_moment", "grip_note_does_not_rule_out_tool_length",
+    ]
+    old_legend = [
+        "장치 모양 = 몸(추정 관절)에서 장치(실측)까지 — 건은 굵은 막대(도구), HMD·플래쉬는 가는 막대이고, "
+        "이름 옆 거리는 관절에서 장치까지입니다" if t.startswith("장치 모양 =") else
+        "움직임 궤적 3줄(오른손 · 머리 · 왼손)은 기준 3개가 아니라 한 사람의 3점입니다" if t.startswith("움직임 궤적") else t
+        for t in view["legend_notes"]
+    ]
+    assert gap_explanation_faults(dict(view, legend_notes=old_legend)) == [
+        "gap_called_a_tool", "legend_does_not_say_the_bar_is_not_a_tool", "track_legend_names_joints",
+    ]
+    kept = [(t, k) for t, k in zip(tight["notes"], tight["note_keys"]) if k != "grip_limit"]
+    silent = dict(tight, notes=[t for t, _ in kept], note_keys=[k for _, k in kept])
+    assert gap_explanation_faults(dict(view, fit=silent)) == ["grip_note_missing"]

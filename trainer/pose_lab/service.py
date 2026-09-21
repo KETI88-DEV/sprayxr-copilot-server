@@ -751,18 +751,22 @@ LEGEND_NOTES: Final[tuple[str, ...]] = (
     # 부분이 없는지" 물었다. 선은 패스 전체, 구체는 그중 한 순간, 스켈레톤은 그 순간의 추정 자세다.
     "가는 선 = 장치(HMD·건·플래쉬)가 이 패스 동안 지나간 길(채점에 쓰는 실측)이고, "
     "고리를 두른 채운 구체가 그중 이 순간(대표 프레임)입니다",
-    "장치 모양 = 몸(추정 관절)에서 장치(실측)까지 — 건은 굵은 막대(도구), HMD·플래쉬는 가는 막대이고, "
-    "이름 옆 거리는 관절에서 장치까지입니다",
+    # 막대를 "도구"라고 부르지 않는다 — 손→건 거리는 레벨·층마다 38~77cm로 흔들리는 **어긋남**이고
+    # (아래 LOW_CONFIDENCE_NOTE), 도구 길이로 읽으면 매핑 문제를 건의 기하로 둔갑시킨다.
+    "장치 모양 = 몸(추정 관절)에서 장치(실측)까지 벌어진 간격을 줄무늬 막대로 그렸습니다 — 뼈도 도구 "
+    "길이도 아니고, 이름 옆 거리가 이 순간 관절에서 장치까지입니다(건 쪽이 굵은 막대)",
 )
 
 # 장치 모양(사용자 선택 "장치를 모양으로 그리기"). 채운 구체(실측 장치)가 어느 관절의 무엇인지 화면이
 # 말하지 못했다 — 예전에는 관절→구 선에 "보정 오프셋 0.57m(적합값)"이 붙어 있었고, 그 이름이 틀려서
 # 선째로 지웠다. 문제는 선이 아니라 이름이었다: 이 거리는 교정값이 아니라 **몸(아바타 추정 관절)에서
-# 추적 장치까지**의 거리다. 건의 추적점은 손잡이가 아니라 건 몸체라서 손→건이 40cm 안팎으로 벌어진다.
+# 추적 장치까지**의 거리다. 손→건 간격은 실측 김경호 L1·L3·L6 첫 패스에서 38.7~77.1cm로 흔들린다 —
+# 건의 길이가 아니라 원본 데이터의 손 IK↔컨트롤러 어긋남이다(LOW_CONFIDENCE_NOTE와 같은 사실).
 DEVICE_NAMES: Final[dict[str, str]] = {"head": "HMD", "right": "건", "left": "플래쉬"}
 DEVICE_JOINT_WORDS: Final[dict[str, str]] = {"head": "머리", "right": "오른손", "left": "왼손"}
-# 화면이 그리는 모양. 건은 손에 든 도구라 굵은 막대(`tool`), HMD·플래쉬는 가는 연결(`link`)이다.
-DEVICE_SHAPES: Final[dict[str, str]] = {"head": "link", "right": "tool", "left": "link"}
+# 화면이 그리는 모양. 건 쪽 간격은 굵은 줄무늬 막대(`gun`), HMD·플래쉬 쪽은 가는 줄무늬(`link`)다.
+# 이름을 `tool`로 두지 않는다 — 막대는 도구가 아니라 몸과 장치 사이의 간격이다.
+DEVICE_SHAPES: Final[dict[str, str]] = {"head": "link", "right": "gun", "left": "link"}
 
 
 def device_block(point: str, joint_position: Sequence[float], measured_marker: Sequence[float]) -> dict[str, object] | None:
@@ -863,7 +867,9 @@ def head_height_block(
 # 뽑고 "진한 차례로"라고 적었는데, 그 진하기 규칙 자체가 이번에 사라진다(궤적은 차분한 한 색이고
 # 진해지는 것은 관절뿐이다 — `deviation_block`). 없어진 규칙을 범례가 계속 주장하면 화면이 거짓을
 # 말한다. 순서는 `TRACK_POINT_ORDER` 고정이다(실행마다 흔들리지 않게).
-TRACK_POINT_NAMES: Final[dict[str, str]] = {"head": "머리", "right": "오른손", "left": "왼손"}
+# 줄 이름은 **장치** 이름이다 — 궤적은 관절이 아니라 HMD·건·플래쉬가 지나간 길이다(범례의 "가는 선 =
+# 장치가 지나간 길"과 같은 말). 예전에는 "오른손 · 머리 · 왼손"이라 적어 같은 범례 안에서 서로 어긋났다.
+TRACK_POINT_NAMES: Final[dict[str, str]] = DEVICE_NAMES
 TRACK_POINT_ORDER: Final[tuple[str, ...]] = ("right", "head", "left")
 
 
@@ -884,7 +890,7 @@ def track_legend_note(layer: Mapping[str, Sequence[Any]]) -> str | None:
     names = " · ".join(TRACK_POINT_NAMES[name] for name in drawn)
     count = len(drawn)
     return (
-        f"움직임 궤적 {count}줄({names})은 기준 {count}개가 아니라 한 사람의 {count}점입니다"
+        f"움직임 궤적 {count}줄({names})은 기준 {count}개가 아니라 한 사람이 든 장치 {count}개입니다"
     )
 
 
@@ -1012,9 +1018,15 @@ HEAD_HEIGHT_NO_FLOOR: Final = "이 레벨은 벽 메시가 없어 바닥면을 �
 # 말하고 그 구간을 흐리게 그린다. 적합값을 "보정"이라고 부르지 않는다.
 LOW_CONFIDENCE_BONES: Final[tuple[tuple[str, str], ...]] = (("RightForeArm", "RightHand"),)
 LOW_CONFIDENCE_JOINTS: Final[tuple[str, ...]] = ("RightHand",)
+#
+# 이 고지와 건 이름표("건 · 오른손에서 42.0cm")는 **같은 어긋남** 하나를 말한다. 예전 문장은 적합 상수
+# 0.57m를 "이 패스에서 어긋난 거리"처럼 적어, 같은 화면의 이름표(레벨·층마다 38~77cm)와 두 숫자·두
+# 설명이 부딪혔다. 이제 이 순간의 값은 이름표가 말하고, 상수는 "전 작업자·레벨로 맞춘 대표값"이라고
+# 이름을 붙여 적는다 — 그리고 그 간격이 쥐는 거리도 건 길이도 아니라고 한 번만 말한다.
 LOW_CONFIDENCE_NOTE: Final = (
-    "오른 전완·손은 흐리게 그렸습니다 — 아바타 손 IK와 트래킹된 건이 원본 데이터에서 이미 "
-    "{gap:.2f}m 어긋나 있습니다(쥐는 거리가 아니라 캡처 파이프라인의 손 IK↔컨트롤러 매핑 문제)."
+    "오른 전완·손은 흐리게 그렸습니다 — 건 이름표의 거리(오른손→건)는 쥐는 거리도 건 길이도 아닙니다. "
+    "원본 데이터에서 아바타 손 IK와 트래킹된 건이 어긋나 있어 그 간격이 프레임·레벨마다 다르고"
+    "(전 작업자·레벨로 맞춘 대표값 {gap:.2f}m), 캡처 파이프라인의 손 IK↔컨트롤러 매핑 문제입니다."
 )
 
 # fit.notes 항목 이름(`fit.note_keys`, 같은 순서). 화면은 위치가 아니라 이 이름으로 짝짓는다.

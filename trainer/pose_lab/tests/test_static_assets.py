@@ -1179,7 +1179,10 @@ def test_the_legend_says_how_many_tracks_a_layer_draws():
     note = service.track_legend_note(three)
     assert note is not None
     assert note.startswith("움직임 궤적 3줄")
-    assert note.index("오른손") < note.index("머리") < note.index("왼손")
+    # 줄 이름은 **장치** 이름이다(궤적은 HMD·건·플래쉬가 지나간 길) — 관절 이름이면 같은 범례의
+    # "가는 선 = 장치가 지나간 길"과 어긋난다.
+    assert note.index("건") < note.index("HMD") < note.index("플래쉬")
+    assert not any(word in note for word in ("오른손", "머리", "왼손"))
     assert "기준 3개가 아니라" in note
     # 진하기 순서를 더 이상 주장하지 않는다.
     assert "진한 차례" not in note
@@ -1187,7 +1190,7 @@ def test_the_legend_says_how_many_tracks_a_layer_draws():
     two = dict(three, left=[None, None])
     other = service.track_legend_note(two)
     assert other is not None and other.startswith("움직임 궤적 2줄")
-    assert "왼손" not in other
+    assert "플래쉬" not in other
     # 그릴 줄이 없으면 적지 않는다.
     assert service.track_legend_note({"hit": [[0, 0, 0]]}) is None
 
@@ -2117,24 +2120,46 @@ def device_shape_faults(js: str) -> list[str]:
             faults.append(f"{layer}_devices_not_drawn")
     if "anchor.device" not in body or '"device-shape"' not in body:
         faults.append("device_shape_not_from_server_block")
-    # 막대의 재료는 실측 구의 재료(층 색 그대로의 MeshStandardMaterial)가 아니어야 한다.
-    bar = re.search(r'boneCylinder\(joint, surface, radius, (\w+), "device-shape"', body)
+    # 막대는 **줄무늬**다(층 색 마디와 밝은 마디를 번갈아). 한 색 반투명 원기둥이던 옛 막대는 반투명 뼈와
+    # 거의 같아 "팔이 하나 더"로 읽혔다(검증 crop-vdev-L3-r1). 실측 구 재료도 쓰지 않는다.
+    bar = re.search(r'stripedBar\((\w+), surface, radius, (\w+), (\w+), "device-shape"', body)
     if bar is None:
         faults.append("device_bar_missing")
-    elif bar.group(1) == "markerMaterial":
-        faults.append("device_bar_uses_the_measured_symbol")
     else:
-        material = re.search(rf"const {bar.group(1)} = new THREE\.(\w+)\(\{{([^}}]*)\}}", body)
-        if material is None or "mixColor(layerColor" not in material.group(2):
-            faults.append("device_bar_is_plain_layer_colour")
+        # 손 쪽 끝은 **추정 관절**(`anchor.joint_position`)이다 — 장착 상수로 예측한 자리(`predicted_marker`)로
+        # 바꾸면 막대가 재지도 않은 "예측"을 몸에 붙인 것처럼 그린다.
+        start = re.search(rf"const {bar.group(1)} = new THREE\.Vector3\(\.\.\.anchor\.(\w+)\)", body)
+        if start is None or start.group(1) != "joint_position" or "predicted_marker" in body:
+            faults.append("bar_hand_end_is_not_the_estimated_joint")
+        materials = {}
+        for name in bar.group(2, 3):
+            found = re.search(rf"const {name} = new THREE\.(\w+)\(\{{([^}}]*)\}}", body)
+            materials[name] = None if found is None else found.group(2)
+        if "markerMaterial" in bar.group(2, 3):
+            faults.append("device_bar_uses_the_measured_symbol")
+        elif None in materials.values() or not (
+            any("color: layerColor" in m for m in materials.values())
+            and any("DEVICE_STRIPE_LIGHT" in m for m in materials.values())
+        ):
+            faults.append("device_bar_is_not_striped")
+    striped = _nested_function_body(code, "stripedBar")
+    if "i % 2 === 0 ? darkMaterial : lightMaterial" not in striped:
+        faults.append("stripes_do_not_alternate")
     if "SphereGeometry" in body.split("const device = anchor.device;", 1)[-1]:
         faults.append("device_drawn_as_a_sphere")
-    tool = _const_number(js, "DEVICE_TOOL_RADIUS")
+    gun = _const_number(js, "DEVICE_GUN_RADIUS")
     link = _const_number(js, "DEVICE_LINK_RADIUS")
-    if tool is None or link is None or not tool > link:
+    if gun is None or link is None or not gun > link:
         faults.append("gun_is_not_thicker_than_the_links")
+    if 'device.shape === "gun"' not in body:
+        faults.append("gun_shape_not_read_from_server")
+    # 이름표는 자기 층 체크 상자와 **정확히** 같은 값으로 숨는다. 낱말이 들어 있는지만 보면
+    # `entry.el.hidden = false && !(…)`(절대 안 숨음)도 통과한다.
     toggle = _nested_function_body(code, "applyDeviceLabelVisibility")
-    if "checkboxes.reference.checked" not in toggle or "checkboxes.query.checked" not in toggle:
+    if (
+        "entry.el.hidden = !(entry.layer === \"reference\" ? checkboxes.reference.checked : checkboxes.query.checked);"
+        not in toggle
+    ):
         faults.append("device_labels_not_tied_to_the_layer_toggle")
     for layer in ("query", "reference"):
         listener = code.split(f'checkboxes.{layer}.addEventListener("change"', 1)[-1].split("});", 1)[0]
@@ -2161,15 +2186,27 @@ def test_device_shape_checks_can_fail():
     one = full.replace('"reference", view.layers?.reference)', '"reference", null)', 1)
     assert one != full and device_shape_faults(one) == ["reference_devices_not_drawn"]
     measured = full.replace(
-        'boneCylinder(joint, surface, radius, deviceMaterial, "device-shape"',
-        'boneCylinder(joint, surface, radius, markerMaterial, "device-shape"',
+        'stripedBar(joint, surface, radius, stripeDark, stripeLight, "device-shape"',
+        'stripedBar(joint, surface, radius, markerMaterial, stripeLight, "device-shape"',
         1,
     )
     assert measured != full and device_shape_faults(measured) == ["device_bar_uses_the_measured_symbol"]
-    plain = full.replace("color: mixColor(layerColor, 0xffffff, DEVICE_WASH),", "color: layerColor,", 1)
-    assert plain != full and device_shape_faults(plain) == ["device_bar_is_plain_layer_colour"]
-    thin = full.replace("const DEVICE_TOOL_RADIUS = 0.012;", "const DEVICE_TOOL_RADIUS = 0.004;", 1)
+    plain = full.replace("new THREE.MeshBasicMaterial({ color: DEVICE_STRIPE_LIGHT })", "new THREE.MeshBasicMaterial({ color: layerColor })", 1)
+    assert plain != full and device_shape_faults(plain) == ["device_bar_is_not_striped"]
+    solid = full.replace("i % 2 === 0 ? darkMaterial : lightMaterial", "darkMaterial", 1)
+    assert solid != full and device_shape_faults(solid) == ["stripes_do_not_alternate"]
+    predicted = full.replace(
+        "const joint = new THREE.Vector3(...anchor.joint_position);",
+        "const joint = new THREE.Vector3(...anchor.predicted_marker);",
+        1,
+    )
+    assert predicted != full and device_shape_faults(predicted) == ["bar_hand_end_is_not_the_estimated_joint"]
+    thin = full.replace("const DEVICE_GUN_RADIUS = 0.011;", "const DEVICE_GUN_RADIUS = 0.004;", 1)
     assert thin != full and device_shape_faults(thin) == ["gun_is_not_thicker_than_the_links"]
+    tool = full.replace('device.shape === "gun" ? DEVICE_GUN_RADIUS', 'device.shape === "tool" ? DEVICE_GUN_RADIUS', 1)
+    assert tool != full and device_shape_faults(tool) == ["gun_shape_not_read_from_server"]
+    never = full.replace("entry.el.hidden = !(entry.layer", "entry.el.hidden = false && !(entry.layer", 1)
+    assert never != full and device_shape_faults(never) == ["device_labels_not_tied_to_the_layer_toggle"]
     sticky = full.replace(
         "    layerGroups.reference.visible = checkboxes.reference.checked;\n    applyDeviceLabelVisibility();\n  });",
         "    layerGroups.reference.visible = checkboxes.reference.checked;\n  });",
@@ -2255,6 +2292,18 @@ def moment_ring_faults(js: str) -> list[str]:
         faults.append("no_moment_ring")
     if "ring.position.copy(marker.position)" not in body:
         faults.append("ring_not_at_the_sphere")
+    # 고리는 **보여야** 한다 — 재료가 고리 불투명도 상수를 쓰고, 그 값이 거의 불투명이다.
+    ring_material = re.search(r"const ringMaterial = new THREE\.\w+\(\{([^}]*)\}", body)
+    opacity = _const_number(js, "MOMENT_RING_OPACITY")
+    if (
+        ring_material is None
+        or "opacity: MOMENT_RING_OPACITY" not in ring_material.group(1)
+        or "visible: false" in ring_material.group(1)
+        or opacity is None
+        or opacity < 0.8
+        or "ring.visible = false" in body
+    ):
+        faults.append("ring_not_visible")
     if "trackTangentAt(trackLayer?.[anchor.point], marker.position)" not in body:
         faults.append("ring_not_aligned_to_its_own_track")
     if "setFromUnitVectors(new THREE.Vector3(0, 0, 1), tangent.direction)" not in body:
@@ -2270,6 +2319,10 @@ def test_moment_ring_checks_can_fail():
     full = _read("skeleton_view.js")
     moved = full.replace("ring.position.copy(marker.position);", "ring.position.set(0, 0, 0);", 1)
     assert moved != full and moment_ring_faults(moved) == ["ring_not_at_the_sphere"]
+    clear = full.replace("const MOMENT_RING_OPACITY = 0.95;", "const MOMENT_RING_OPACITY = 0.0;", 1)
+    assert clear != full and moment_ring_faults(clear) == ["ring_not_visible"]
+    literal = full.replace("opacity: MOMENT_RING_OPACITY });", "opacity: 0.0 });", 1)
+    assert literal != full and moment_ring_faults(literal) == ["ring_not_visible"]
     other = full.replace("trackTangentAt(trackLayer?.[anchor.point], marker.position)", "trackTangentAt(trackLayer?.right, marker.position)", 1)
     assert other != full and moment_ring_faults(other) == ["ring_not_aligned_to_its_own_track"]
     flat = full.replace(

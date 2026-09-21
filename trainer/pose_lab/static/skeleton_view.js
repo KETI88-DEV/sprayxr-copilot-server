@@ -10,8 +10,8 @@
 //     스켈레톤을 같이 그리고 유사도가 떨어지는 조인트일수록 색상을 진하게".
 //   - 대표 프레임 실측 마커(`fit.anchors[].measured_marker`): 층 색으로 **채운** 구체 — 실측 부호다.
 //     자기 궤적 선 위의 **한 순간**이므로 선을 가로지르는 고리(`moment-ring`)를 두른다.
-//   - 장치 모양(`fit.anchors[].device`): 몸(추정 관절) → 장치(실측 구). 건은 굵은 막대(도구), HMD·
-//     플래쉬는 가는 막대. 이름과 거리 글자는 서버 문자열(`device.label`) 그대로다.
+//   - 장치 모양(`fit.anchors[].device`): 몸(추정 관절) → 장치(실측 구) 사이 **간격**을 줄무늬 막대로.
+//     건 쪽이 굵고 HMD·플래쉬 쪽은 가늘다. 도구도 뼈도 아니다. 이름과 거리 글자는 서버 문자열(`device.label`).
 //   - 벽 위 분사 스트로크(`view.stroke` · `view.reference_stroke`): 몸 움직임 궤적과 **다른 색 계열**
 //     (따뜻한 주황·노랑)로 그린다. 사용자가 둘을 혼동한 것이 이 화면을 다시 만든 출발점이다.
 //   - 움직임 궤적(`layers.*.head/right/left`): 대상·기준 둘 다, 층 색(차가운 파랑·보라)의 가는 관.
@@ -128,12 +128,15 @@ const TRACK_TUBE_OPACITY = 0.75;
 // 방향이다 — 구가 선 위의 한 점이라는 것이 모양으로 보인다. 속 빈 고리라 실측 부호(채운 구)와 다르다.
 const MOMENT_RING_RADIUS = 0.055;
 const MOMENT_RING_TUBE = 0.005;
-// 장치 모양(몸 → 장치). 건은 손에 든 도구라 굵게, HMD·플래쉬는 가늘게. 색은 층 색을 흰색 쪽으로
-// 씻은 반투명 — 채운 층 색 구(실측 부호)와도, 무채색 뼈(추정)와도 한눈에 갈린다.
-const DEVICE_TOOL_RADIUS = 0.012;
-const DEVICE_LINK_RADIUS = 0.004;
-const DEVICE_WASH = 0.45;
-const DEVICE_OPACITY = 0.6;
+const MOMENT_RING_OPACITY = 0.95;
+// 장치 모양(몸 → 장치 사이 간격). 예전 막대는 층 색을 씻은 반투명 원기둥이라 반투명 뼈(r=0.009)와
+// 거의 같아 보였다 — 화면에서 "팔이 하나 더" 있는 것처럼 읽혔다. 이제 **줄무늬**(층 색 마디와 흰 마디를
+// 번갈아)로 그려 뼈(한 색 반투명)·궤적(가는 한 색 관)·자리표시 다리(가는 점선)와 모양부터 다르게 한다.
+// 건 쪽이 굵다. 채운 구(실측 부호)는 쓰지 않는다 — 한쪽 끝이 추정 관절이다.
+const DEVICE_GUN_RADIUS = 0.011;
+const DEVICE_LINK_RADIUS = 0.0055;
+const DEVICE_STRIPE_M = 0.03;
+const DEVICE_STRIPE_LIGHT = 0xf4f4f4;
 // 장치 이름표 끈(px). 구 중심에서 이만큼 앞에서 멈추고(고리를 가리지 않게), 이보다 짧으면 달지 않는다.
 const LEADER_STOP_PX = 8;
 const LEADER_MIN_PX = 6;
@@ -1086,6 +1089,25 @@ function mount(THREE, container) {
     return mesh;
   }
 
+  /** 몸 → 장치 간격 막대. 같은 굵기의 짧은 원기둥을 층 색·흰색으로 번갈아 잇는다(줄무늬). 마디 길이는
+   * `DEVICE_STRIPE_M` 안팎으로 맞추되 끝과 끝이 정확히 `start`·`end`에 닿게 개수로 나눈다. */
+  function stripedBar(start, end, radius, darkMaterial, lightMaterial, kind, name) {
+    const length = start.distanceTo(end);
+    if (length < 1e-6) return null;
+    const group = new THREE.Group();
+    const count = Math.max(2, Math.round(length / DEVICE_STRIPE_M));
+    for (let i = 0; i < count; i += 1) {
+      const a = new THREE.Vector3().lerpVectors(start, end, i / count);
+      const b = new THREE.Vector3().lerpVectors(start, end, (i + 1) / count);
+      const stripe = boneCylinder(a, b, radius, i % 2 === 0 ? darkMaterial : lightMaterial, "device-stripe", name);
+      if (stripe) group.add(stripe);
+    }
+    group.userData.kind = kind;
+    group.userData.name = name;
+    group.userData.length = length;
+    return group;
+  }
+
   /** 추정 스켈레톤 하나. **관절마다 진하기가 다르다** — 서버가 잰 벌어짐(`view.deviation`)이 근거다.
    *
    * 뼈 색은 양 끝 관절 벌어짐의 평균이다(뼈 하나가 두 관절 사이를 잇는 물건이므로). 관절 표식은
@@ -1284,8 +1306,9 @@ function mount(THREE, container) {
    * 왜 겹치는 부분이 없는지 모르겠어"). 문제는 선이 아니라 이름이었다. 이제 선은 **몸(추정 관절) →
    * 장치(실측 구)** 막대로 돌아오고, 이름은 서버가 준 장치 이름·거리 문자열(`anchor.device.label`)이다.
    *
-   * 막대는 실측 부호(층 색으로 채운 구체)를 쓰지 않는다 — 한쪽 끝이 추정 관절이다. 층 색을 흰색 쪽으로
-   * 씻은 반투명 실린더이고, 범례(서버 `legend_notes`)가 "장치 모양 = 몸(추정)에서 장치(실측)까지"라고 말한다.
+   * 막대는 실측 부호(층 색으로 채운 구체)를 쓰지 않는다 — 한쪽 끝이 추정 관절이다. 층 색·흰색 줄무늬
+   * 막대(`stripedBar`)이고, 범례(서버 `legend_notes`)가 "장치 모양 = 몸(추정)에서 장치(실측)까지 벌어진
+   * 간격 — 뼈도 도구 길이도 아니다"라고 말한다.
    * 고리는 그 층의 궤적(`trackLayer[anchor.point]`)이 구 자리에서 가는 방향을 축으로 삼는다 — 방향은
    * 그림을 세우는 데만 쓰고, 화면에 숫자로 내지 않는다. */
   function buildAnchorGroup(fit, layerColor, register, layer, trackLayer) {
@@ -1295,10 +1318,9 @@ function mount(THREE, container) {
     if (!fit) return { group, counts, devices };
     const markerMaterial = new THREE.MeshStandardMaterial({ color: layerColor, roughness: 0.5 });
     const markerGeometry = new THREE.SphereGeometry(MEASURED_MARKER_RADIUS, 20, 14);
-    const ringMaterial = new THREE.MeshBasicMaterial({ color: layerColor, transparent: true, opacity: 0.95 });
-    const deviceMaterial = new THREE.MeshBasicMaterial({
-      color: mixColor(layerColor, 0xffffff, DEVICE_WASH), transparent: true, opacity: DEVICE_OPACITY, depthWrite: false,
-    });
+    const ringMaterial = new THREE.MeshBasicMaterial({ color: layerColor, transparent: true, opacity: MOMENT_RING_OPACITY });
+    const stripeDark = new THREE.MeshBasicMaterial({ color: layerColor });
+    const stripeLight = new THREE.MeshBasicMaterial({ color: DEVICE_STRIPE_LIGHT });
     for (const anchor of fit.anchors ?? []) {
       if (!isVec3(anchor.measured_marker)) continue;
       const marker = new THREE.Mesh(markerGeometry, markerMaterial);
@@ -1326,13 +1348,13 @@ function mount(THREE, container) {
       const device = anchor.device;
       if (!device || !isVec3(anchor.joint_position)) continue;
       const joint = new THREE.Vector3(...anchor.joint_position);
-      const radius = device.shape === "tool" ? DEVICE_TOOL_RADIUS : DEVICE_LINK_RADIUS;
+      const radius = device.shape === "gun" ? DEVICE_GUN_RADIUS : DEVICE_LINK_RADIUS;
       // 막대는 구 **표면**에서 멈춘다 — 구 안까지 파고들면 실측 구가 막대에 묻혀 보인다.
       const toJoint = new THREE.Vector3().subVectors(joint, marker.position);
       const span = toJoint.length();
       if (span <= MEASURED_MARKER_RADIUS) continue;
       const surface = marker.position.clone().addScaledVector(toJoint.normalize(), MEASURED_MARKER_RADIUS);
-      const bar = boneCylinder(joint, surface, radius, deviceMaterial, "device-shape", anchor.point);
+      const bar = stripedBar(joint, surface, radius, stripeDark, stripeLight, "device-shape", anchor.point);
       if (!bar) continue;
       bar.userData.layer = layer;
       bar.userData.shape = device.shape;
@@ -2390,7 +2412,8 @@ function mount(THREE, container) {
         shape: d.shape,
         from: d.bar.userData.from,
         to: d.bar.userData.to,
-        radius: d.shape === "tool" ? DEVICE_TOOL_RADIUS : DEVICE_LINK_RADIUS,
+        radius: d.shape === "gun" ? DEVICE_GUN_RADIUS : DEVICE_LINK_RADIUS,
+        stripes: d.bar.children.length,
         label: d.label ? d.label.el.textContent : null,
       })),
       momentRings: (() => {
