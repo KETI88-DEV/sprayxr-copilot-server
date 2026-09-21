@@ -326,10 +326,22 @@ function buildDom(container) {
   // 상체 확대 프리셋이 화면 밖으로 내보낸 맞춤 대상의 이름. 자른 사실을 화면이 스스로 말한다.
   const framingNote = document.createElement("p");
   framingNote.className = "view3d-note view3d-framing-note";
+  // 기본 뷰 상체가 합격선에 못 미친다는 고지(`describeTorsoShortfall`)는 **접힌 상세**로 둔다 — 사용자:
+  // "UI는 간단한 편이 좋음". 자른 것이 있다는 감시 문구(`describeFraming`)는 위 줄에 그대로 뜬다.
+  const framingMore = document.createElement("details");
+  framingMore.className = "view3d-notes-more view3d-framing-more";
+  framingMore.hidden = true;
+  const framingMoreSummary = document.createElement("summary");
+  framingMoreSummary.textContent = "화면 맞춤 고지";
+  const framingMoreText = document.createElement("p");
+  framingMore.append(framingMoreSummary, framingMoreText);
 
   // wallNote는 위에서 host(캔버스 위 겹침)에 넣었다 — 여기서 다시 넣으면 host 밖으로 옮겨진다.
-  container.append(toolbar, host, legend, notes, notesMore, errors, note, correctedNote, framingNote);
-  return { canvas, host, labelsHost, legend, notes, notesMore, wallNote, errors, note, correctedNote, framingNote, controls, toolbar };
+  container.append(toolbar, host, legend, notes, notesMore, errors, note, correctedNote, framingNote, framingMore);
+  return {
+    canvas, host, labelsHost, legend, notes, notesMore, wallNote, errors, note, correctedNote, framingNote,
+    framingMore, framingMoreText, controls, toolbar,
+  };
 }
 
 /** `note`에 문구와 상태 톤을 함께 건다. 빈 문구는 CSS `:empty`가 숨긴다. */
@@ -1844,9 +1856,14 @@ function mount(THREE, container) {
   }
 
   function describeFraming(mode) {
-    return [describeTorsoFraming(mode), describePoseFraming(mode), describeTorsoShortfall(mode), describeFeetFraming()]
+    return [describeTorsoFraming(mode), describePoseFraming(mode), describeFeetFraming()]
       .filter((t) => t)
       .join(" ");
+  }
+
+  /** 접힌 상세('화면 맞춤 고지')에 드는 문장. 합격선에 못 미친 사실은 숨기지 않되 펼쳐야 보인다. */
+  function describeFramingDetail(mode) {
+    return describeTorsoShortfall(mode);
   }
 
   function onScreenNow(p) {
@@ -2008,6 +2025,9 @@ function mount(THREE, container) {
     if (!lastView) return;
     const text = describeFraming(framing.mode);
     dom.framingNote.textContent = text;
+    const detail = describeFramingDetail(framing.mode);
+    dom.framingMoreText.textContent = detail;
+    dom.framingMore.hidden = detail.length === 0;
     if (container.__view3dDebug) {
       // 프리셋이 푼 비율은 그 카메라에서만 참이다. 사람이 카메라를 만진 뒤에는 내놓지 않는다 —
       // 지금 화면의 상체 비율은 아래 `upperBody`가 live 카메라로 잰다.
@@ -2018,6 +2038,7 @@ function mount(THREE, container) {
       container.__view3dDebug.framingOffscreen =
         framing.mode === "torso" || framing.mode === "pose" ? offscreenFitTargets() : [];
       container.__view3dDebug.framingNote = text;
+      container.__view3dDebug.framingDetail = detail;
       container.__view3dDebug.torsoSpan = torsoScreenSpan();
       // 합격선과 지금 값을 **같이** 낸다 — 검증이 "0.4000"만 보고 합격 처리하지 않도록.
       container.__view3dDebug.torsoPassLine = MIN_TORSO_FRACTION;

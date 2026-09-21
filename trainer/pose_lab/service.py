@@ -532,7 +532,10 @@ DEVIATION_MEASURED_POINTS: Final[tuple[str, ...]] = ("head", "right", "left")
 # 진하기 눈금 범례(S1). 셋 다 **서버가 잰 값**으로 채운다 — 화면이 이름과 숫자를 조립하면
 # 눈금과 문구가 갈린다(검증 라운드: 범례가 "가장 진한 곳 79.9cm"라고 적었는데 화면 어디에도
 # 그 관절이 없었다).
-DEVIATION_SCALE_LEGEND: Final = "관절 진하기 = 기준과 벌어진 거리 — 가장 진한 {joint} {cm}cm가 눈금 끝입니다"
+# 첫 줄(범례에 뜨는 줄)은 뜻만 말한다 — 길이·관절 이름은 둘째 줄로 가서 접힌 상세에 든다(사용자: "불필요한
+# 텍스트는 넣지 말 것. UI는 간단한 편이 좋음").
+DEVIATION_MEANING_LEGEND: Final = "관절 진하기 = 기준과 벌어진 거리"
+DEVIATION_SCALE_LEGEND: Final = "가장 진한 {joint} {cm}cm가 진하기 눈금 끝입니다"
 DEVIATION_HIDDEN_LEGEND: Final = "안 그린 다리 관절은 눈금에서 뺐습니다 — 그중 {joint}{particle} {cm}cm로 더 멉니다"
 DEVIATION_SHIFT_LEGEND: Final = "이 거리에는 두 몸이 통째로 옮겨 앉은 몫 {cm}cm가 모든 관절에 공통으로 섞여 있습니다"
 
@@ -675,6 +678,7 @@ def _deviation_legend(
     lines: list[str] = []
     if joint_max_display is None or joint_max_label is None:
         return lines
+    lines.append(DEVIATION_MEANING_LEGEND)
     lines.append(DEVIATION_SCALE_LEGEND.format(joint=joint_max_label, cm=joint_max_display))
     if hidden_beats_drawn and hidden_max_label is not None and hidden_max_display is not None:
         lines.append(
@@ -1180,9 +1184,21 @@ def displayed_joints(placed: skeleton.Placement, arm: right_arm.RightArm | None)
     return joints
 
 
+# 몸을 세우는(회전·평행이동을 푸는) 앵커: **머리(HMD)와 왼손(플래쉬)**. 오른손 앵커는 CSV FK 오른손 관절에
+# 손→트래커 ~0.57m 장착 오프셋을 더한 것인데, 둘 다 쓰지 말라고 확정된 재료다(`right_arm` 머리말: 벤더
+# 오른팔 솔버가 팔꿈치를 편 채 고정하고, 그 오프셋은 분사구 길이가 아니다). 그 앵커로 몸을 끌면 오른어깨가
+# 건 손잡이 쪽으로 딸려 가 팔이 접힌다 — 실측(김경호·전형기·손영석 × L1/3/6, 624프레임): 세 앵커로 풀면
+# 머리·왼손 어긋남 중앙값 8.6·11.5cm, 오른어깨→손잡이 0.15m 미만 22.3%; 두 앵커로 풀면 3.9·3.9cm, 19.1%.
+# 두 앵커 중 하나가 없으면 쓸 수 있는 앵커 전부로 푼다(`skeleton.place_oriented`). 채점은 이 배치를 읽지 않는다.
+BODY_FIT_POINTS: Final[tuple[str, ...]] = ("head", "left")
+
+
 def place_frame(sample: skeleton.FrameSample, mounts: skeleton.Mounts) -> skeleton.Placement | None:
-    """한 프레임 배치. 강체 변환만 — 관절을 실측 좌표로 덮어쓰지 않는다(뼈 길이 보존)."""
-    return skeleton.place_oriented(sample.local_pos, sample.local_rot, sample.measured, mounts)
+    """한 프레임 배치. 강체 변환만 — 관절을 실측 좌표로 덮어쓰지 않는다(뼈 길이 보존). 몸은
+    `BODY_FIT_POINTS`로 세운다."""
+    return skeleton.place_oriented(
+        sample.local_pos, sample.local_rot, sample.measured, mounts, fit_points=BODY_FIT_POINTS
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1290,6 +1306,14 @@ def _placeholder_legs(
 
 def _torso_length_m(offsets: Mapping[str, Vec3]) -> float:
     return body_proportions.torso_length_m(offsets)
+
+
+def _body_fit_points(placed: skeleton.Placement) -> set[str]:
+    """몸을 세운 앵커. `BODY_FIT_POINTS` 중 이 배치에 있는 것이 `skeleton.MIN_ANCHORS`개 미만이면
+    배치가 앵커 전부로 풀렸다(`skeleton.place_oriented`)."""
+    present = {fit.point for fit in placed.anchors}
+    chosen = present & set(BODY_FIT_POINTS)
+    return chosen if len(chosen) >= skeleton.MIN_ANCHORS else present
 
 
 def _fit_view(
@@ -1413,8 +1437,13 @@ def _fit_view(
                 "predicted_marker": list(fit.predicted_marker),
                 "measured_marker": list(fit.measured_marker),
                 "miss_cm": fit.miss_m * 100.0,
+                # 이 앵커로 몸을 세웠는가(`BODY_FIT_POINTS`). 세우지 않은 앵커(오른손: CSV FK 손 + 장착
+                # 오프셋)의 어긋남은 그리지 않는 팔에 대한 숫자라 왼쪽 패널에 적지 않는다(`miss_display` 없음).
+                "body_fit": fit.point in _body_fit_points(placed),
                 # 숫자는 왼쪽 패널에만 뜬다(S6) — 3D 안에는 이 문자열을 걸지 않는다.
-                "miss_display": f"{'적합 잔차 ' if kind == MOUNTS_PASS_FIT else ''}{fit.miss_m * 100.0:.1f}cm",
+                "miss_display": f"{'적합 잔차 ' if kind == MOUNTS_PASS_FIT else ''}{fit.miss_m * 100.0:.1f}cm"
+                if fit.point in _body_fit_points(placed)
+                else None,
                 # 장치 모양. 건 막대의 손 쪽 끝은 **손잡이**다(`right_arm`) — 추정 관절도 예측 마커도 아니다.
                 "device": device_block(
                     fit.point,

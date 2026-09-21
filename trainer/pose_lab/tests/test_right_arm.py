@@ -217,9 +217,16 @@ def side_faults(
     frames: list[dict[str, Any]], arm_for: Callable[..., Any]
 ) -> tuple[list[str], dict[str, float]]:
     """표시 오른손이 몸 오른쪽인 비율이 실측 건의 비율과 `SIDE_TOLERANCE` 안에서 맞는가, 그리고 모든
-    프레임에서 표시 팔의 자리가 맞는가(`arm_position_faults`)."""
+    프레임에서 표시 팔의 자리가 맞는가(`arm_position_faults`).
+
+    좌우 비율은 **화면이 건을 쥔 손으로 그리는 점**에서 잰다: 닿은 프레임은 오른손, 닿지 못한 프레임은 점선이
+    끝나는 손잡이다. 닿지 못한 팔은 사용자 결정("늘리지 않는다")대로 어깨에서 손잡이 쪽으로 곧게 편 채 멈추므로
+    그 손끝은 어깨(몸 오른쪽) 가까이에 남는다 — 그 점을 건 자리로 세면 좌우가 아니라 팔 길이를 재게 된다.
+    닿은 프레임만의 손 비율도 따로 대조한다(`hand_side_does_not_match_the_measured_gun_where_reached`).
+    `hand_right`(모든 프레임의 손끝)는 참고로 싣는다."""
     faults: set[str] = set()
-    hand_right = gun_right = reached = 0
+    hand_right = shown_right = gun_right = reached = 0
+    reached_hand_right = reached_gun_right = 0
     for item in frames:
         placed, offsets, rep = item["placed"], item["offsets"], item["rep"]
         arm = arm_for(placed, offsets, rep)
@@ -228,13 +235,29 @@ def side_faults(
             continue
         joints = service.displayed_joints(placed, arm)
         faults.update(arm_position_faults(arm.as_view(), joints, offsets))
-        hand_right += _right_of_body(joints["RightHand"], rep.frame)
-        gun_right += _right_of_body(rep.frame.right, rep.frame)
-        reached += arm.reached
+        hand_side = _right_of_body(joints["RightHand"], rep.frame)
+        gun_side = _right_of_body(rep.frame.right, rep.frame)
+        hand_right += hand_side
+        gun_right += gun_side
+        shown_right += hand_side if arm.reached else _right_of_body(arm.grip, rep.frame)
+        if arm.reached:
+            reached += 1
+            reached_hand_right += hand_side
+            reached_gun_right += gun_side
     n = len(frames)
-    stats = {"frames": float(n), "hand_right": hand_right / n, "gun_right": gun_right / n, "reached": reached / n}
-    if abs(stats["hand_right"] - stats["gun_right"]) > SIDE_TOLERANCE:
+    stats = {
+        "frames": float(n),
+        "shown_right": shown_right / n,
+        "gun_right": gun_right / n,
+        "hand_right": hand_right / n,
+        "reached": reached / n,
+        "reached_hand_right": reached_hand_right / max(reached, 1),
+        "reached_gun_right": reached_gun_right / max(reached, 1),
+    }
+    if abs(stats["shown_right"] - stats["gun_right"]) > SIDE_TOLERANCE:
         faults.add("hand_side_does_not_match_the_measured_gun")
+    if abs(stats["reached_hand_right"] - stats["reached_gun_right"]) > SIDE_TOLERANCE:
+        faults.add("hand_side_does_not_match_the_measured_gun_where_reached")
     return sorted(faults), stats
 
 
@@ -245,8 +268,9 @@ def test_displayed_right_hand_is_on_the_body_side_the_measured_gun_is_on() -> No
     assert faults == [], stats
     # 실측 건 비율(사전등록 측정 77.7%)과 같은 쪽이다. CSV FK 오른손은 29.5%였다.
     assert stats["gun_right"] > 0.7, stats
-    # 대부분 손잡이에 닿는다(사전 확인 약 85%). 못 닿는 프레임도 위 자리 검사를 다 통과했다.
-    assert 0.7 < stats["reached"] < 1.0, stats
+    # 과반이 손잡이에 닿는다. 몸을 머리·왼손으로 세운 뒤로(`service.BODY_FIT_POINTS`) 61%다 — 세 앵커로 세우던
+    # 때(85%)는 CSV 오른팔이 몸을 건 쪽으로 끌어 준 몫이 섞여 있었다. 못 닿는 프레임도 위 자리 검사를 다 통과했다.
+    assert 0.5 < stats["reached"] < 1.0, stats
 
 
 def test_side_check_fails_when_the_arm_moves_to_the_other_side_keeping_the_hand_rotation() -> None:
@@ -272,4 +296,126 @@ def test_side_check_fails_when_the_arm_moves_to_the_other_side_keeping_the_hand_
 
     faults, stats = side_faults(frames, mirrored)
     assert "hand_side_does_not_match_the_measured_gun" in faults, stats
+    assert "hand_side_does_not_match_the_measured_gun_where_reached" in faults, stats
     assert "hand_not_on_the_grip" in faults, stats
+
+
+# --- 몸 배치: 머리·왼손으로 세운다(오른손 앵커 = CSV FK 손 + 장착 오프셋은 쓰지 않는다) -----------------------
+#
+# 오른손 앵커로 몸을 끌면 오른어깨가 건 손잡이 쪽으로 딸려 가 팔이 접힌다. 실측(위 624프레임): 세 앵커로 풀면
+# 머리·왼손 어긋남 중앙값 8.6·11.5cm, 두 앵커로 풀면 3.9·3.9cm.
+
+BODY_MISS_MEDIAN_LIMIT_M = 0.06
+
+
+def body_fit_faults(frames: list[dict[str, Any]]) -> tuple[list[str], dict[str, float]]:
+    """몸이 머리·왼손 실측에 붙어 서는가(어긋남 중앙값), 오른손 앵커는 몸을 세우는 데 빠졌는가."""
+    faults: set[str] = set()
+    misses: dict[str, list[float]] = {"head": [], "left": []}
+    for item in frames:
+        placed = item["placed"]
+        for fit in placed.anchors:
+            if fit.point in misses:
+                misses[fit.point].append(fit.miss_m)
+        solved = [fit.miss_m for fit in placed.anchors if fit.point in service.BODY_FIT_POINTS]
+        if len(solved) >= skeleton.MIN_ANCHORS:
+            rms = math.sqrt(sum(m * m for m in solved) / len(solved))
+            if abs(placed.residual_m - rms) > 1e-12:
+                faults.add("residual_is_not_over_the_body_fit_anchors")
+    stats = {point: float(np.median(values)) for point, values in misses.items()}
+    for point, value in stats.items():
+        if value > BODY_MISS_MEDIAN_LIMIT_M:
+            faults.add(f"body_does_not_sit_on_the_{point}_marker")
+    return sorted(faults), stats
+
+
+def test_body_is_placed_from_the_head_and_left_hand() -> None:
+    assert service.BODY_FIT_POINTS == ("head", "left")
+    faults, stats = body_fit_faults(_real_frames())
+    assert faults == [], stats
+
+
+def test_body_fit_check_fails_when_the_right_anchor_pulls_the_body_again() -> None:
+    """변이: 세 앵커 전부로 몸을 푼다(직전 라운드의 배치). 머리·왼손 어긋남이 커져 잡힌다."""
+    frames = _real_frames()
+    table = service.load_mounts()
+    old: list[dict[str, Any]] = []
+    for item in frames[::4]:
+        rep = item["rep"]
+        sample = skeleton.frame_sample(rep.frame, rep.row, rep.gun, item["offsets"])
+        placed = skeleton.place_oriented(
+            sample.local_pos, sample.local_rot, sample.measured, skeleton.mounts_for(table.table, rep.gun)
+        )
+        old.append(dict(item, placed=placed))
+    faults, stats = body_fit_faults(old)
+    assert "body_does_not_sit_on_the_left_marker" in faults, stats
+    assert "residual_is_not_over_the_body_fit_anchors" in faults, stats
+
+
+# --- 화면이 받는 바로 그 페이로드(`service.compare` → view.layers.*.joints) -------------------------------
+#
+# 위 검사들은 `service.arm_for`·`displayed_joints`를 직접 부른다. 그것만으로는 `skeleton_block`이 페이로드에
+# 싣는 관절이 이 팔인지 모른다 — `displayed_joints(placed, None)`로 되돌려 CSV FK 오른팔을 다시 실어도 스위트
+# 전체가 통과했다(검증 라운드 M2). 여기서는 `/api/compare`가 부르는 `service.compare`의 출력을 읽는다.
+
+COMPARE_QUERIES = (("1", "1000389_1"), ("3", "1000391_1"), ("6", "1000394_1"))
+
+
+def payload_arm_faults(view: dict[str, Any], offsets_by_layer: dict[str, Any]) -> dict[str, list[str]]:
+    out: dict[str, list[str]] = {}
+    for layer, fit_key in (("query", "fit"), ("reference", "reference_fit")):
+        joints = (view.get("layers") or {}).get(layer, {}).get("joints")
+        arm = (view.get(fit_key) or {}).get("right_arm")
+        if not joints or not arm:
+            out[layer] = ["no_arm_in_the_payload"]
+            continue
+        faults = arm_position_faults(arm, joints, offsets_by_layer[layer])
+        right = next((a for a in view[fit_key]["anchors"] if a["point"] == "right"), None)
+        if right is None or right["body_fit"] is not False or right["miss_display"] is not None:
+            faults.append("right_anchor_is_reported_as_fitting_the_body")
+        if any(a["body_fit"] is not True for a in view[fit_key]["anchors"] if a["point"] != "right"):
+            faults.append("head_or_left_anchor_is_not_fitting_the_body")
+        out[layer] = faults
+    return out
+
+
+def _compare_views() -> list[tuple[str, dict[str, Any], dict[str, Any]]]:
+    if "views" in _REAL:
+        return _REAL["views"]
+    from trainer.pose_lab.tests import test_scoring_isolation as isolation
+
+    source, kwargs = isolation._source_for({"name": "real"})  # noqa: SLF001
+    out = []
+    for level, session in COMPARE_QUERIES:
+        query = service.PassRef(worker="김경호", date="20250831", level=level, session=session, pass_index=0)
+        candidates = service.reference_candidates(source, query)
+        assert candidates["status"] == "ok" and candidates["candidates"], candidates
+        first = candidates["candidates"][0]
+        reference = service.PassRef(**{key: first[key] for key in ("worker", "date", "level", "session", "pass_index")})
+        view = service.compare(source, query, reference, **kwargs)["view"]
+        offsets = {
+            layer: body_proportions.rig_offsets(pose_fk_csv.bind_offsets(source.load(ref).rows[0]))
+            for layer, ref in (("query", query), ("reference", reference))
+        }
+        out.append((level, view, offsets))
+    _REAL["views"] = out
+    return out
+
+
+def test_compare_payload_draws_the_grip_arm_on_both_layers() -> None:
+    for level, view, offsets in _compare_views():
+        assert payload_arm_faults(view, offsets) == {"query": [], "reference": []}, level
+
+
+def test_payload_arm_check_fails_when_the_payload_carries_the_csv_arm() -> None:
+    """변이 M2의 모양: 페이로드 관절의 오른 팔꿈치·손을 CSV FK 자리(오른손 앵커 `joint_position`)로 되돌린다."""
+    level, view, offsets = _compare_views()[1]
+    right = next(a for a in view["fit"]["anchors"] if a["point"] == "right")
+    joints = dict(view["layers"]["query"]["joints"], RightHand=right["joint_position"])
+    mutated = dict(view, layers=dict(view["layers"], query=dict(view["layers"]["query"], joints=joints)))
+    faults = payload_arm_faults(mutated, offsets)
+    assert "drawn_joints_are_not_the_arm" in faults["query"], (level, faults)
+    fitted = dict(right, body_fit=True, miss_display="12.0cm")
+    anchors = [fitted if a["point"] == "right" else a for a in view["fit"]["anchors"]]
+    faults = payload_arm_faults(dict(view, fit=dict(view["fit"], anchors=anchors)), offsets)
+    assert faults["query"] == ["right_anchor_is_reported_as_fitting_the_body"], faults

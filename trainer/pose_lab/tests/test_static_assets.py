@@ -785,7 +785,7 @@ def test_feet_note_checks_can_fail():
         "preset_names_are_not_measured",
     ]  # 빈 소스는 버튼도 없어 라벨 대조는 걸리지 않는다
     silent = full.replace(
-        "[describeTorsoFraming(mode), describePoseFraming(mode), describeTorsoShortfall(mode), describeFeetFraming()]",
+        "[describeTorsoFraming(mode), describePoseFraming(mode), describeFeetFraming()]",
         "[describeTorsoFraming(mode)]",
     )
     assert silent != full
@@ -854,8 +854,17 @@ def torso_floor_faults(js: str) -> list[str]:
         faults.append("no_shortfall_note")
     if not re.search(r"function describeTorsoShortfall\([\s\S]{0,900}MIN_TORSO_FRACTION", js):
         faults.append("shortfall_note_without_the_pass_line")
-    if not re.search(r"function describeFraming\(mode\)[\s\S]{0,300}describeTorsoShortfall\(mode\)", js):
+    # 못 미친 사실은 **접힌 상세**('화면 맞춤 고지')에 든다 — 말은 하되 캔버스 아래 줄을 늘리지 않는다
+    # (사용자: "UI는 간단한 편이 좋음"). 보이는 줄(`describeFraming`)에 다시 섞이면 잡는다.
+    if not re.search(r"function describeFramingDetail\(mode\)[\s\S]{0,200}describeTorsoShortfall\(mode\)", js):
         faults.append("shortfall_note_not_in_framing_note")
+    if not re.search(r"function writeFramingNote\(\)[\s\S]{0,600}dom\.framingMoreText\.textContent\s*=\s*detail", js):
+        faults.append("shortfall_detail_not_written")
+    visible = re.search(r"function describeFraming\(mode\)\s*{([\s\S]*?)\n  }", js)
+    if visible and "describeTorsoShortfall" in visible.group(1):
+        faults.append("shortfall_note_is_not_collapsed")
+    if 'framingMore = document.createElement("details")' not in js:
+        faults.append("shortfall_detail_is_not_a_details")
     if not re.search(r"function describePoseFraming\([\s\S]{0,900}offscreenFitTargets\(\)", js):
         faults.append("cut_targets_not_named")
     if 'id="view3dPresetTorso"' not in js:
@@ -879,13 +888,27 @@ def test_torso_floor_checks_can_fail():
     assert loose != full
     assert torso_floor_faults(loose) == ["default_preset_may_cut"]
     silent = full.replace(
-        "    return [describeTorsoFraming(mode), describePoseFraming(mode), describeTorsoShortfall(mode),"
-        " describeFeetFraming()]",
-        "    return [describeTorsoFraming(mode), describePoseFraming(mode), describeFeetFraming()]",
+        "  function describeFramingDetail(mode) {\n    return describeTorsoShortfall(mode);",
+        "  function describeFramingDetail(mode) {\n    return \"\";",
         1,
     )
     assert silent != full
     assert torso_floor_faults(silent) == ["shortfall_note_not_in_framing_note"]
+    # 직전 라운드의 모양: 합격선 문구가 보이는 줄에 두 줄로 떠 있다.
+    loud = full.replace(
+        "    return [describeTorsoFraming(mode), describePoseFraming(mode), describeFeetFraming()]",
+        "    return [describeTorsoFraming(mode), describePoseFraming(mode), describeTorsoShortfall(mode),"
+        " describeFeetFraming()]",
+        1,
+    )
+    assert loud != full
+    assert torso_floor_faults(loud) == ["shortfall_note_is_not_collapsed"]
+    unwritten = full.replace("    dom.framingMoreText.textContent = detail;\n", "", 1)
+    assert unwritten != full
+    assert torso_floor_faults(unwritten) == ["shortfall_detail_not_written"]
+    plain = full.replace('framingMore = document.createElement("details")', 'framingMore = document.createElement("p")', 1)
+    assert plain != full
+    assert torso_floor_faults(plain) == ["shortfall_detail_is_not_a_details"]
     # 함수 정의만 이름을 바꾼다 — 호출은 남으므로 "고지가 합격선을 읽는다"는 성질만 깨진다.
     mute = full.replace("  function describeTorsoShortfall(mode) {", "  function describeTorsoShortfallOff(mode) {", 1)
     assert mute != full

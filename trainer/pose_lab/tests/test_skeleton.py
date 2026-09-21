@@ -142,6 +142,52 @@ def test_anchor_miss_is_the_distance_between_predicted_and_measured_marker() -> 
     assert max(fit.miss_m for fit in placed.anchors) > 0.03
 
 
+def fit_point_faults(placed, pos, root: np.ndarray, t: np.ndarray, moved: str) -> list[str]:  # noqa: ANN001
+    """`fit_points`로 고른 앵커만 몸을 세우는가: 고르지 않은 앵커(`moved`)의 실측을 옮겨도 관절이 참 자리에
+    있고, 그 앵커의 어긋남은 그대로 실리며, `residual_m`은 몸을 세운 앵커들의 RMS다."""
+    faults: list[str] = []
+    if any(not np.allclose(placed.joints[name], root @ np.array(p) + t, atol=1e-9) for name, p in pos.items()):
+        faults.append("body_follows_an_anchor_outside_fit_points")
+    if moved not in {fit.point for fit in placed.anchors}:
+        faults.append("anchor_outside_fit_points_is_not_reported")
+    solved = [fit.miss_m for fit in placed.anchors if fit.point != moved]
+    if abs(placed.residual_m - math.sqrt(sum(m * m for m in solved) / len(solved))) > 1e-12:
+        faults.append("residual_is_not_over_the_fit_points")
+    return faults
+
+
+def test_fit_points_place_the_body_from_those_anchors_only() -> None:
+    """화면은 몸을 머리·왼손으로 세운다(`service.BODY_FIT_POINTS`) — 오른손 앵커를 0.3m 옮겨도 몸은 그대로다."""
+    rng = random.Random(7)
+    root, t = _upright_root(20.0), np.array([0.5, 0.2, -1.0])
+    _row_, _offsets, pos, rot, measured = _synthetic_frame(rng, root, t)
+    marker, r = measured["right"]
+    measured["right"] = ((marker[0] + 0.3, marker[1] - 0.1, marker[2]), r)
+    placed = skeleton.place_oriented(pos, rot, measured, MOUNTS, fit_points=("head", "left"))
+    assert placed is not None
+    assert fit_point_faults(placed, pos, root, t, "right") == []
+    right = next(fit for fit in placed.anchors if fit.point == "right")
+    assert right.miss_m == pytest.approx(math.hypot(0.3, 0.1), abs=1e-9)
+
+
+def test_fit_point_checks_can_fail() -> None:
+    """변이: `fit_points`를 무시하고 앵커 전부로 푼다(직전 배치). 옮긴 오른손 앵커가 몸을 끌어 잡힌다."""
+    rng = random.Random(7)
+    root, t = _upright_root(20.0), np.array([0.5, 0.2, -1.0])
+    _row_, _offsets, pos, rot, measured = _synthetic_frame(rng, root, t)
+    marker, r = measured["right"]
+    measured["right"] = ((marker[0] + 0.3, marker[1] - 0.1, marker[2]), r)
+    placed = skeleton.place_oriented(pos, rot, measured, MOUNTS)
+    assert placed is not None
+    assert fit_point_faults(placed, pos, root, t, "right") == [
+        "body_follows_an_anchor_outside_fit_points", "residual_is_not_over_the_fit_points",
+    ]
+    # 고른 앵커가 둘 미만이면 앵커 전부로 푼다(몸을 세울 수 없는 배치를 만들지 않는다).
+    measured["left"] = None
+    fallback = skeleton.place_oriented(pos, rot, measured, MOUNTS, fit_points=("head", "left"))
+    assert fallback is not None and {fit.point for fit in fallback.anchors} == {"head", "right"}
+
+
 def test_fewer_than_two_anchors_is_none() -> None:
     rng = random.Random(5)
     _row_, _offsets, pos, rot, measured = _synthetic_frame(rng, _upright_root(0.0), np.zeros(3))

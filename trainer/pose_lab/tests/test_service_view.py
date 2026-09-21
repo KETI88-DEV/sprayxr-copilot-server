@@ -544,11 +544,19 @@ def test_anchor_miss_is_reported_not_hidden(test_mounts) -> None:  # noqa: ANN00
     frame = service.representative_frame(raw).frame
     measured = {"head": frame.head, "right": frame.right, "left": frame.left}
     assert {a["point"] for a in block.fit["anchors"]} == {"head", "right", "left"}
+    # 몸은 머리·왼손으로 세운다(`service.BODY_FIT_POINTS`). 그 두 앵커의 어긋남은 왼쪽 패널에 적고, 몸을
+    # 세우지 않은 오른손 앵커(CSV FK 손 + 장착 오프셋 — 화면이 그리지 않는 팔)의 숫자는 적지 않는다.
+    assert {a["point"] for a in block.fit["anchors"] if a["body_fit"]} == {"head", "left"}
     for anchor in block.fit["anchors"]:
         assert anchor["measured_marker"] == list(measured[anchor["point"]])
         dist = math.dist(anchor["predicted_marker"], anchor["measured_marker"])
         assert abs(anchor["miss_cm"] - dist * 100.0) < 1e-9
-        assert anchor["miss_display"] == f"{anchor['miss_cm']:.1f}cm"
+        if anchor["body_fit"]:
+            assert anchor["miss_display"] == f"{anchor['miss_cm']:.1f}cm"
+        else:
+            assert anchor["miss_display"] is None
+    fitted = [a["miss_cm"] / 100.0 for a in block.fit["anchors"] if a["body_fit"]]
+    assert abs(block.fit["residual_m"] - math.sqrt(sum(m * m for m in fitted) / len(fitted))) < 1e-12
 
 
 def test_pass_fit_excludes_representative_frame() -> None:
@@ -567,7 +575,7 @@ def test_pass_fit_excludes_representative_frame() -> None:
     assert block.fit is not None
     assert block.fit["mounts"] == "pass_fit_holdout"
     assert "적합 잔차" in block.fit["residual_label"]
-    assert all(anchor["miss_display"].startswith("적합 잔차 ") for anchor in block.fit["anchors"])
+    assert all(anchor["miss_display"].startswith("적합 잔차 ") for anchor in block.fit["anchors"] if anchor["body_fit"])
     # 합성 실측은 알려진 장착에서 만들었으므로 패스 적합이 그것을 되찾아 대표 프레임에서 거의 맞는다.
     assert max(anchor["miss_cm"] for anchor in block.fit["anchors"]) < 1.0
 
@@ -779,7 +787,11 @@ def test_deviation_legend_names_a_joint_that_is_on_the_screen(test_mounts) -> No
         assert view["reference_fit"]["legs_toggle_enabled"] is True, level
         assert deviation["scale_excludes"], level
         legend = deviation["legend"]
-        first = legend[0]
+        # 범례에 뜨는 첫 줄은 뜻만 말한다 — 길이·관절 이름이 없다(사용자: "UI는 간단한 편이 좋음").
+        # 눈금 끝(이름·cm)은 둘째 줄로, 화면이 접힌 상세에 넣는다(`legendDetails`).
+        assert legend[0] == service.DEVIATION_MEANING_LEGEND, (level, legend[0])
+        assert not re.search(r"\d", legend[0]) and "cm" not in legend[0], (level, legend[0])
+        first = legend[1]
         assert deviation["joint_max_label"] in first, (level, first)
         assert deviation["joint_max_display"] in first, (level, first)
         # 눈금을 정한 관절은 안 그린 관절이 아니다.
@@ -868,7 +880,7 @@ def test_the_floating_foot_is_the_short_rig_torso_not_short_legs() -> None:
 
     **`test_mounts` 픽스처를 쓰지 않는다.** 그 픽스처는 `service.load_mounts`를 합성 장착 상수로
     바꾸는데, 장착 상수가 바뀌면 골반이 다른 높이에 놓인다 — 같은 패스에서 엉덩이–다리 틈이
-    합성 상수로 0.3263m, 운영 상수(`skeleton_mounts.json`, 서버가 쓰는 것)로 0.2120m다. 주석이
+    합성 상수로 0.2338m, 운영 상수(`skeleton_mounts.json`, 서버가 쓰는 것)로 0.2290m다. 주석이
     적은 값은 서버가 내는 값이므로 여기서도 운영 상수로 재야 출처와 라벨이 같아진다.
     """
     source, kwargs, query, reference = _real_pair("1", "1000389_1", 0)
@@ -902,7 +914,7 @@ def test_the_floating_foot_is_the_short_rig_torso_not_short_legs() -> None:
     # 뜨는 높이 = 엉덩이 − 리그 다리. 사용자 결정에 따라 **늘리지 않고** 그만큼 띄운 채 그 틈을
     # 화면이 숫자와 점선으로 말한다(바로 앞 판은 여기서 다리를 1.25배 늘리고 배율을 적었다).
     gap = legs["hip_above_floor_m"] - legs["rig_leg_length_m"]
-    assert gap == pytest.approx(0.212, abs=0.005)
+    assert gap == pytest.approx(0.229, abs=0.005)
     assert legs["placeholder_reaches_floor"] is False
     # 두 다리 길이가 1e-7m 자리에서 다르므로(리그 오프셋) 여기서는 그 자리까지만 견준다.
     above = legs["placeholder_feet_above_floor_m"]

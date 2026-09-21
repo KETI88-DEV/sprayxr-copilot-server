@@ -688,6 +688,7 @@ dd { margin: 0; font-family: var(--mono); }
 .view3d-notes-more summary { cursor: pointer; color: var(--text-dim); }
 .view3d-notes-more summary:hover { color: var(--text); }
 .view3d-notes-more ul { list-style: none; margin: 0.15rem 0 0; padding: 0; line-height: 1.32; }
+.view3d-framing-more p { margin: 0.15rem 0 0; line-height: 1.32; }
 /* 관절 축 평가 요약: ④b 맨 위에 가로로 흘려 쓴다.
    **가로 배치 자체가 접힘선 여유를 만들지는 않는다**(C). 이 패널이 왼쪽 열에 있던 동안 이 요약은
    그 열 폭(실측 680.9px)에서 한 줄이 아니라 두 줄(h=58px)이었고, 1875×1000에서 top=964 ·

@@ -30,7 +30,7 @@ import math
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Final, Mapping, Sequence
+from typing import Collection, Final, Mapping, Sequence
 
 import numpy as np
 
@@ -307,16 +307,16 @@ PLACEHOLDER_LEG_CHAIN: Final[tuple[tuple[str, str, str, str], ...]] = (
 # 그래서 두 갈래인데, **엉덩이가 리그 다리보다 높은 패스에서는 둘이 같은 다리를 낸다** — 늘리지
 # 않으므로 바닥을 물어보든 말든 그림이 같고, 바닥은 문구와 보조선만 바꾼다.
 #   `reach_floor=False`(기본, 진단용 접촉 시트): 리그 제 길이로 곧게 내린다. 발이 고른 면보다
-#     아래로 내려가는 것을 허용한다 — 레벨 3에서는 발이 바닥면 0.605m 아래다. 그 관계는 숨기지
+#     아래로 내려가는 것을 허용한다 — 레벨 3에서는 발이 바닥면 0.554m 아래다. 그 관계는 숨기지
 #     않고 `PlaceholderLegs.feet_below_floor_m`가 그대로 싣는다.
 #   `reach_floor=True`(화면): 엉덩이–바닥 거리가 리그 다리보다 **짧을 때만** 무릎을 굽혀 발목을
 #     그 면에 세운다(2마디 IK). 남는 길이를 무릎이 흡수한다 — 쭈그린 패스에서 쭈그린 그림이 나온다.
-#     실측 김경호 L3·L6 첫 패스가 여기다(엉덩이 바닥 위 0.269·0.519m, 네 발 전부 바닥 위 0.0000m).
+#     실측 김경호 L3·L6 첫 패스가 여기다(엉덩이 바닥 위 0.320·0.553m, 네 발 전부 바닥 위 0.0000m).
 #     엉덩이가 리그 다리보다 **높으면 늘리지 않고 그대로 곧게 내려 발을 띄운다**: `reaches_floor=False`와
 #     **발마다의 간격**(`feet_above_floor_m`)을 싣고, 화면이 발끝에서 바닥까지 점선 보조선과 간격
 #     숫자로 그 틈을 말한다(`service.LEGS_PLACEHOLDER_OFF_FLOOR_NOTE`). 실측 김경호 L1 첫 패스가
-#     여기다 — 엉덩이가 바닥 위 1.0453·0.9749m인데 리그 다리는 0.8333m라 두 발이 0.2120m·0.1416m
-#     뜬다(기준 전형기 1000564_1 #0은 0.3390m·0.4211m). 예전에는 이 자리에서 다리를 그 틈만큼
+#     여기다 — 엉덩이가 바닥 위 1.0623·0.9919m인데 리그 다리는 0.8333m라 두 발이 0.2290m·0.1586m
+#     뜬다(기준 전형기 1000564_1 #0은 0.0656m·0.1298m). 예전에는 이 자리에서 다리를 그 틈만큼
 #     늘리고 화면이 배율을 고지했는데, 늘린 다리는 "이 사람의 다리가 이만큼이다"라는 없는 사실을
 #     주장한다. 뜬 발은 **측정이 아닌 틈**이고, 화면은 그것을 틈이라고 적지 다리라고 적지 않는다.
 #     **닿지 못한 것을 닿았다고 그리지 않는 것이 이 갈래의 전부다** — 사용자 결정이다.
@@ -327,17 +327,17 @@ PLACEHOLDER_LEG_CHAIN: Final[tuple[tuple[str, str, str, str], ...]] = (
 # 리그와 같은 작업자 BVH(전형기 79파일, `body_proportions`의 상수)를 재면 갈린다:
 #   골반→머리 CSV 0.4091m / BVH 0.5614m = 0.729
 #   골반→발목 CSV 0.9674m / BVH 0.9965m = 0.971
-# 다리는 거의 제 길이이고 **몸통이 27% 짧다**. 머리·양손이 실측 마커에 붙어 있으므로 짧은 몸통은
+# 다리는 거의 제 길이이고 **몸통이 27% 짧다**. 머리·왼손이 실측 마커에 붙어 있으므로(`service.BODY_FIT_POINTS`) 짧은 몸통은
 # 골반을 그만큼 **위로** 밀고, 그 몫이 사슬 끝인 발과 바닥 사이 틈으로 나온다 — 실측(김경호 L1 첫
-# 패스): 엉덩이가 바닥 위 1.0453m인데 리그 다리는 0.8333m라 왼발이 0.2120m 뜬다. 몸통이 BVH 길이
-# (+0.1523m)였다면 골반이 그만큼 내려가 이 틈이 약 0.07m로 줄어든다(몸통 축이 수직에서 기울어 있어
-# 수직 몫은 0.142m다). `test_service_view`가 이 숫자들을 실제 배치에서 다시 재서 이 주석과 맞춘다.
+# 패스): 엉덩이가 바닥 위 1.0623m인데 리그 다리는 0.8333m라 왼발이 0.2290m 뜬다. 몸통이 BVH 길이
+# (+0.1523m)였다면 골반이 그만큼 내려가 이 틈이 약 0.08m로 줄어든다(몸통 축이 수직에서 기울어 있어
+# 수직 몫은 0.146m다). `test_service_view`가 이 숫자들을 실제 배치에서 다시 재서 이 주석과 맞춘다.
 #
 # 몸통을 늘리는 길은 `body_proportions`가 이미 실측으로 재 봤다: 골반→가슴은 앵커 오차가 그대로라
 # 이미 늘렸고, **가슴→머리**를 BVH 비례로 늘리면 앵커 어긋남이 머리 80.6→92.8mm로 나빠진다.
 # 남은 27%는 거기에 몰려 있다. 그래서 **몸통은 늘리지 않는다** — 실측을 악화시키기 때문이다.
 # 자리표시 다리도 늘리지 않는다(위). 두 길이 다 막혔으므로 남는 것은 그 틈을 **그대로 보여 주는
-# 것**이고, 그 틈이 곧 뜬 높이다(엉덩이 1.0453 − 리그 다리 0.8333 = 0.2120m).
+# 것**이고, 그 틈이 곧 뜬 높이다(엉덩이 1.0623 − 리그 다리 0.8333 = 0.2290m).
 #
 # 발끝은 수평이라 어느 갈래에서도 길이를 받지 않는다. **이 다리는 측정이 아니다** — 화면은 점선으로
 # 그리고 "자리표시(측정 아님)"라고 적는다.
@@ -358,7 +358,7 @@ class PlaceholderLegs:
     `feet_above_floor_m`는 **발목마다** 그 면 위 높이(m, 음수면 그 면보다 아래)다. 무릎을 접어
     세운 다리는 0.0이고, 못 닿은 다리는 그 값이 곧 뜬 간격이다 — 화면은 이 값으로 발끝에서 바닥까지
     점선 보조선을 긋고 간격을 적는다(스스로 다시 재지 않는다). 두 다리의 엉덩이 높이가 다르므로 한
-    숫자로 합치지 않는다(실측 김경호 L1 첫 패스: 0.2120m·0.1416m). 바닥이 없으면 None.
+    숫자로 합치지 않는다(실측 김경호 L1 첫 패스: 0.2290m·0.1586m). 바닥이 없으면 None.
     """
 
     joints: dict[str, Vec3]
@@ -526,13 +526,23 @@ def place_oriented(
     local_rot: Mapping[str, Matrix],
     measured: Mapping[str, tuple[Vec3, Matrix] | None],
     mounts: Mounts,
+    fit_points: Collection[str] | None = None,
 ) -> Placement | None:
-    """M6 배치. 앵커(실측 위치·회전과 장착 상수가 다 있는 점)가 2개 미만이면 None."""
+    """M6 배치. 앵커(실측 위치·회전과 장착 상수가 다 있는 점)가 2개 미만이면 None.
+
+    `fit_points`가 오면 몸의 회전·평행이동은 **그 앵커들로만** 푼다(그중 쓸 수 있는 것이 `MIN_ANCHORS`개
+    이상일 때; 모자라면 쓸 수 있는 앵커 전부로 푼다). 어긋남(`anchors`)은 쓸 수 있는 앵커 전부에 대해
+    싣고, `residual_m`은 몸을 푼 앵커들의 RMS다. 기본(None)은 예전과 같다 — 앵커 전부로 푼다."""
     points = _usable_anchors(local_pos, local_rot, measured, mounts)
     if len(points) < MIN_ANCHORS:
         return None
+    solve = points
+    if fit_points is not None:
+        chosen = [point for point in points if point in fit_points]
+        if len(chosen) >= MIN_ANCHORS:
+            solve = chosen
 
-    a0 = root_rotation(local_rot, measured, mounts, points)
+    a0 = root_rotation(local_rot, measured, mounts, solve)
     a, gravity_deg = gravity_projection(a0)
 
     offsets_world: dict[str, np.ndarray] = {}
@@ -544,7 +554,8 @@ def place_oriented(
         r_meas = np.array(record[1])
         offsets_world[point] = r_meas @ np.array(mount.offset)
         target = np.array(record[0]) - offsets_world[point]
-        translations.append(target - a @ np.array(local_pos[ANCHOR_JOINTS[point]]))
+        if point in solve:
+            translations.append(target - a @ np.array(local_pos[ANCHOR_JOINTS[point]]))
     t = np.mean(np.stack(translations), axis=0)
 
     joints = {name: _as_tuple(a @ np.array(p) + t) for name, p in local_pos.items()}
@@ -573,7 +584,8 @@ def place_oriented(
             a @ np.array(local_rot[joint]) @ np.array(mount.rotation), np.array(record[1])
         )
 
-    residual = math.sqrt(sum(fit.miss_m**2 for fit in anchors) / len(anchors))
+    solved = [fit for fit in anchors if fit.point in solve]
+    residual = math.sqrt(sum(fit.miss_m**2 for fit in solved) / len(solved))
 
     leg_tilt: float | None = None
     if all(name in joints for name in ("Pelvis", "LeftFoot", "RightFoot")):
