@@ -220,3 +220,84 @@ C를 "기준선과 D1 모두 split이 계산된 질의"의 공통 집합이라 �
   측정 전에 읽은 것은 네 가지뿐이다. 코드, 옛 산출물 `improvement_study_task10_default.json`(부트스트랩 상한 3.05 %p·0.0136, 다른 레벨 짝 105/179),
   옛 색인 캐시 `_yup`(레벨별 전형기 세션 수), `/output/m2_record/`의 패치 본문이다.
 - 표기 정정(뜻은 바꾸지 않는다). §1.2의 "`candidates[0]`을 쓴 변형 `N0`은 보고만 한다(§4)"에서 가리키는 곳은 §4가 아니라 §3.3의 부가 지표 목록이다.
+
+### M0. 쌍 규칙 교정, 옛 규칙 재현, 새 기준선 (§1·§2)
+
+**범위 제한: 전문가 대 전문가 한정 수치다**(질의는 professionals 작업자 6명, 기준은 전형기). 이 절은 §1·§2만 다룬다.
+§3.2의 τ는 아직 정하지 않았다. 귀무 재추첨 4회는 돌리지 않았고, R2 번호는 τ 기록용으로 비워 둔다.
+
+**구현**(`trainer/scripts/improvement_study.py`)
+- `select_pairs`(옛 규칙 O)는 한 줄도 바꾸지 않았다. `--pair-rule legacy`가 이 함수를 그대로 부른다.
+- 새 기본값 `--pair-rule screen`(N)은 `select_pairs_screen`이다. 질의마다 `service.reference_candidates(source, query, KeyParams(), samples=20, limit=50)`를 직접 부른다.
+  후보를 `(date, session, pass_index)`로 정렬한 뒤 `random.Random(f"{seed_ref}|{worker}|{date}|{level}|{session}|{pass_index}").choice`로 하나를 고른다. `--seed-ref`의 기본값은 20260828이다.
+- 보고용 규칙은 둘이다. `legacy_same_level`(O+L)은 옛 규칙에 같은 레벨 필터만 더한 것이다. `screen_first`(N0)는 화면의 `candidates[0]`을 고른다.
+- 질의 표본은 `sample_queries`가 만든다. 옛 셔플과 같다.
+- 쌍마다 `reference_granularity`·`candidate_count`·`truncated`·`key_match_granularity`를 기록한다. 기준 단과 compare 단이 다르면 `unavailable`(`ladder_mismatch`)로 둔다(F4).
+- `_fingerprint`에 `key_prefix`를 더했다.
+- 실행하면 `assert_key_prefix`가 캐시와 쌍의 모든 키가 현행 접두어로 시작하는지 확인하고, 아니면 실행을 멈춘다(F6).
+
+**성질 검사**(`trainer/scripts/tests/test_improvement_study.py`). 각 검사는 일부러 깨뜨려 실패하는 것을 보았고, 그 뒤 원상 복구했다.
+
+| §5 | 검사 | 깨뜨린 방법 → 실패 메시지 |
+|---|---|---|
+| 1·2 | `test_screen_rule_matches_the_screen_on_real_files`(실데이터, `/api/reference`를 TestClient로 호출. 질의 4개: 김경호 L2·L3, 전형기 L2·L3. skip 없이 실패) | ① `service.reference_candidates`의 `level=query.level`→`level=None`: `AssertionError: 다른 레벨 짝: 질의 L3 ↔ 기준 L5`. ② 연구에서만 질의 세션 후보를 뺌: `AssertionError: 연구의 후보 집합이 화면과 다르다: PassRef(worker='전형기', … level='3', session='1000444_1', pass_index=5)`. ③ 연구 쪽 params를 `KeyParams(uv_grid=2)`로 바꿈: `assert 'uv2' == 'uv4'`(기준 단 불일치) |
+| 3 | `test_per_query_stream_is_isolated_from_other_queries` | 질의별 난수열을 공유 난수열로 바꿈: `AssertionError: 첫 질의의 후보 수만 바꿨는데 다른 질의 19개의 기준이 바뀌었다` |
+| 4 | `test_fingerprint_carries_the_key_prefix` | 지문의 접두어를 상수 `"m1"`로 박음: `AssertionError: 키 접두어가 바뀌었는데 지문이 같다 — 옛 키 캐시가 조용히 통과한다` |
+| 6 | `test_legacy_rule_reproduces_head_select_pairs_exactly`(HEAD 본문을 테스트에 그대로 옮겨 대조) | `select_pairs`에 레벨 필터 추가: `AssertionError: legacy 규칙이 HEAD select_pairs와 다른 쌍을 낸다 — 옛 기준선 재현이 깨진다` |
+
+- 보조 검사: `test_query_sample_is_the_legacy_shuffle`(F2의 전제), `test_seed_ref_changes_only_the_choice_not_the_candidate_set`, `test_key_prefix_guard_rejects_stale_keys`, `test_ladder_mismatch_is_unavailable_not_dropped`.
+- 성질 5(D1)는 D1 구현 단계에서 쓴다.
+
+**실행**. 모든 실행은 `--pairs 200 --seed 20260828`, 산포 `/output/spread_reference_expert_yup.json`, 캐시 `/output/samelevel/index_cache_m1.json`(64,098 후보, 지문 `key_prefix='m1'`)을 썼다.
+실행기는 `/output/samelevel/run.sh`이고, 각 실행의 `.log`·`.start`·`.end`는 같은 디렉터리에 있다.
+O와 N은 민감도와 extras를 켰다. O+L과 N0은 보고용이라 `--skip-sensitivity --skip-extras`로 돌렸다. split 값은 extras와 무관하다.
+
+| 실행 | 산출물 | UTC 시작 → 끝 |
+|---|---|---|
+| O(재현) | `/output/samelevel/study_O_m1.json` | 2026-09-22T08:11:22Z → 08:23:16Z |
+| N(기준선) | `/output/samelevel/study_N_m1.json` | 08:21:23Z → 08:29:41Z |
+| O+L | `/output/samelevel/study_OL_m1.json` | 08:21:23Z → 08:24:50Z |
+| N0 | `/output/samelevel/study_N0_m1.json` | 08:21:23Z → 08:27:42Z |
+
+**F1 — 옛 규칙 재현: 통과(비트 단위).** O 재실행의 split 중앙값은 0.8267006675193755, ≥0.70 비율은 0.7921348314606742(n=178)다.
+`/output/improvement_study_task10_default.json`과 비교하면 `split`·`same`·`status_counts`·`granularity_counts`·`sensitivity.split` 사전이 모두 같다.
+200쌍의 (질의, 기준, split, same), 키 문자열도 모두 같다. O의 다른 레벨 짝은 105쌍이다(`cross_level_pairs`).
+
+**새 기준선 N·m1**. 이후 모든 판정의 기준이다.
+
+| 항목 | O(옛 규칙, 기록용) | **N·m1(기준선)** | O+L(보고) | N0(보고) |
+|---|---|---|---|---|
+| split 중앙값 | 0.8267006675193755 | **0.8485799501432678** (`med_base`) | 0.8516666827436631 | 0.8491640164322944 |
+| split ≥0.70 | 0.7921348314606742 (141/178) | **0.8105263157894737 (154/190)** (`p_base`) | 0.8309859154929577 (118/142) | 0.8210526315789474 (156/190) |
+| split n | 178 | **190** (`n_base`) | 142 | 190 |
+| 상태 | ok 179 / no_ref 21 | ok 191 / no_ref 9(모두 `no_screen_candidate`) / unavailable 0 | ok 143 / no_ref 57 | ok 191 / no_ref 9 |
+| 기준 단 | —(uv8 엄밀) | uv8 143, uv4 22, uv2 18, uv_off 8, none 9 | — | N과 같음 |
+| 산포 단(`granularity_counts`) | uv8 72, uv4 49, uv2 42, uv_off 15, none 1 | uv8 72, uv4 53, uv2 45, uv_off 20, none 1 | | |
+| 다른 레벨 짝 | 105 | **0** | 0 | 0 |
+| same 중앙값 / ≥0.70 | 0.8468 / 0.8659 | 0.8663 / 0.8901(n=191) | | |
+| 민감도(√2→1.0) split ≥0.70 | 0.6067 | 0.6842 | — | — |
+
+출처는 각 산출물의 `split`·`same`·`status_counts`·`reference_granularity_counts`·`granularity_counts`·`cross_level_pairs`·`sensitivity.split`이다.
+
+**반증 목록 점검**(§6)
+- F2: O·N·O+L·N0의 질의 200개가 순서까지 같다(`/output/samelevel/m0_decomposition.json` `queries_identical_all_rules=true`). 통과.
+- F3: N의 191쌍 모두 기준이 전형기이고 질의와 같은 레벨이며 자기 자신이 아니다(다른 레벨 0, 자기 0). 통과.
+- F4: `ladder_mismatch` 0. ok 쌍 모두 기준 단과 `key_match.granularity`가 같다. 통과.
+- F5: `truncated` 0. 통과.
+- F6: 캐시 64,098개 키와 네 실행의 200쌍 키가 모두 `m1:`로 시작한다. 실행 중 `assert_key_prefix`도 통과했다. 통과.
+- F13: `p_base` 81.05%는 O의 79.21%보다 +1.84 %p다. 짝짓지 않은 SE(3.05 %p) 안이므로 "크게 낮다"도 "크게 높다"도 아니다.
+  다른 레벨 짝이 옛 개선율을 부풀리지는 않았다.
+
+**O→N 분해(보고용, 판정 아님).** 출처는 `/output/samelevel/m0_decomposition.json`이고, 스크립트는 같은 디렉터리의 `analyze_m0.py`다.
+- O에서 다른 레벨 짝이던 질의 105개의 split이 N에서 어떻게 됐는가. O: n=105, ≥0.70 78.10%, 중앙값 0.8267. N: n=102, ≥0.70 80.39%, 중앙값 0.8392.
+  3개는 N에서 같은 레벨 후보가 사다리 끝(uv_off)까지 없어 `no_expert_reference`가 됐다. O에만 split이 있는 질의가 이 3개다.
+- O에서 같은 레벨 짝이던 질의 74개. O: n=73, 80.82%, 0.8267. N: n=73, 82.19%, 0.8490. 기준이 O와 같은 쌍은 26개다. 나머지는 사다리 단이나 선택 난수가 달라 기준이 바뀌었다.
+- O에서 기준이 없던 질의 21개 중 15개가 N의 사다리에서 기준을 얻었다(split n=15, 80.0%, 0.8765).
+- 공통 집합(두 규칙 모두 split 있음, n=175). O 79.43% / 0.8267, N 81.14% / 0.8481.
+  짝별 차이(N−O)는 중앙값 0.0, 평균 +0.0225였다. N>O 76, N<O 74, 같음 25.
+- 레벨 필터만 넣으면(O+L) 기준 없는 질의가 57개로 는다. 같은 레벨에서는 uv8 엄밀 일치가 드물기 때문이다. 사다리가 그 대부분(57→9)을 되살린다.
+- N0(`candidates[0]`)의 ≥0.70은 82.11%로, N의 무작위 선택과 +1.05 %p 차이다. 기준이 N과 같은 쌍은 71개다.
+
+**결론(측정 교정).** 화면과 같은 쌍 규칙에서 split ≥0.70은 **81.05%(154/190), 중앙값 0.8486**이다. 전문가 대 전문가 한정 수치다.
+79.21%는 옛 규칙 O의 값으로만 남긴다. §5에 따라 N 규칙과 지문의 `key_prefix`는 유지한다.
+다음 순서는 귀무 재추첨 4회(`--seed-ref 20260829…20260832 --skip-sensitivity --skip-extras`) → τ를 R2로 커밋 → D1(m3)이다.

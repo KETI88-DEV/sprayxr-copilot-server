@@ -24,8 +24,13 @@
    않는다(둘 다 `stroke_frame.DEFAULT_SAMPLES` 리샘플 위에서 나온다).
 2. `random.Random(--seed)`로 전체 후보를 셔플하고 앞 `--pairs`개를 질의로 뽑는다 —
    **비복원**(같은 패스가 질의로 두 번 뽑히지 않는다).
-3. 질의마다, 같은 우8 키를 가진 **레퍼런스 아티팩트의 작업자(전형기)** 소속 후보
-   중에서(질의 자신과 동일한 패스는 제외) `rng.choice`로 레퍼런스 패스 하나를 고른다.
+3. 질의마다 기준 패스 하나를 고른다. **기본은 쌍 규칙 N(`--pair-rule screen`)이다** —
+   화면의 `service.reference_candidates`를 그대로 불러 후보 집합(전형기·같은 레벨·자신
+   제외·동작 키 사다리의 첫 단)을 받고, 질의별 난수열로 그 안에서 하나를 고른다
+   (`select_pairs_screen`, 사전등록 `docs/measurements/2026-09-22-same-level-pairs-d1-prereg.md`).
+   옛 규칙 O(`--pair-rule legacy`, `select_pairs`)는 비교용으로만 남긴다 — 같은 우8 키를
+   가진 전형기 후보 중에서(질의 자신 제외, **레벨은 가리지 않는다**) 공유 `rng.choice`로
+   고른다. 옛 규칙의 쌍 179개 중 105개가 다른 레벨 짝이었다(측정 결함 M0).
    후보가 없으면 그 쌍은 `status="no_expert_reference"`로 기록하고 버리지 않는다 —
    분모에서 조용히 빼면 "레퍼런스가 없어 재지 못한 몫"이 숨는다.
 4. `--pairs`(기본 200)와 `--seed`(기본 20260828)는 CLI 인자로 코드에 먼저 고정한다.
@@ -241,6 +246,9 @@ def _fingerprint(root: Path) -> dict[str, Any]:
         "max_mtime": max_mtime,
         "up_index": world_axes.UP_INDEX,
         "key_params": [params.uv_grid, params.lateral_deg, params.reach_m, params.uv_size],
+        # M0(사전등록 2026-09-22 §2): 키 정의가 바뀌면(접두어 m1→m3 등) 격자·축이 그대로여도
+        # 캐시에 든 키 문자열이 옛 정의다. 접두어를 지문에 넣어 옛 키 캐시가 조용히 통과하지 않게 한다.
+        "key_prefix": motion_key.KEY_PREFIX,
     }
 
 
@@ -295,6 +303,24 @@ class Pair:
     query: PassRef
     reference: PassRef | None
     key: str
+    # 아래는 쌍 규칙 N(`screen`)만 채운다. 옛 규칙(`legacy`)은 None으로 둔다.
+    # 기준 단 = `reference_candidates.match_granularity`. `run_pair`가 compare의
+    # `key_match.granularity`와 같은지 대조한다(사전등록 §6 F4).
+    reference_granularity: str | None = None
+    candidate_count: int | None = None
+    truncated: bool | None = None
+    # 후보 집합(`reference_candidates(...)["candidates"]`의 PassRef, 화면 순서 그대로).
+    candidates: tuple[PassRef, ...] | None = None
+    # `reference_candidates`가 status!="ok"를 냈을 때 그 reason(예: insufficient_frames).
+    candidate_reason: str | None = None
+
+
+PAIR_RULES: Final = ("screen", "legacy", "legacy_same_level", "screen_first")
+DEFAULT_PAIR_RULE: Final = "screen"
+DEFAULT_SEED_REF: Final = DEFAULT_SEED
+# 화면(`static/app.js` fetchReference → `/api/reference`)이 넘기는 값과 같다.
+SCREEN_SAMPLES: Final = 20
+SCREEN_LIMIT: Final = 50
 
 
 def select_pairs(
@@ -317,6 +343,153 @@ def select_pairs(
         reference = rng.choice(options).ref if options else None
         result.append(Pair(query=query.ref, reference=reference, key=query.key))
     return result
+
+
+def sample_queries(candidates: Sequence[Candidate], pairs: int, seed: int) -> list[Candidate]:
+    """질의 표본 — `select_pairs`(옛 규칙)의 셔플과 **같은** 표본이다.
+
+    셔플은 후보 목록의 순서에만 의존하고 키 문자열에는 의존하지 않는다. 그래서 어느 키로
+    색인해도, 어느 쌍 규칙을 써도 질의 200개가 같다(사전등록 §1.2, §6 F2).
+    """
+    rng = random.Random(seed)
+    shuffled = list(candidates)
+    rng.shuffle(shuffled)
+    return shuffled[: max(0, pairs)]
+
+
+def _query_rng(seed_ref: int, query: PassRef) -> random.Random:
+    """질의별 난수열. 문자열 시드(파이썬 버전 2 시딩, sha512)라 실행이 달라도 같다.
+
+    옛 규칙처럼 난수열 하나를 모든 질의가 나눠 쓰면, 한 질의의 후보 수가 바뀔 때 뒤따르는
+    모든 질의의 선택이 밀린다. 질의별로 두면 후보 집합이 같은 질의는 키를 바꿔도 같은
+    기준을 받는다(사전등록 §1.2).
+    """
+    return random.Random(
+        f"{seed_ref}|{query.worker}|{query.date}|{query.level}|{query.session}|{query.pass_index}"
+    )
+
+
+def _row_ref(row: Mapping[str, Any]) -> PassRef:
+    return PassRef(
+        worker=str(row["worker"]), date=str(row["date"]), level=str(row["level"]),
+        session=str(row["session"]), pass_index=int(row["pass_index"]),
+    )
+
+
+def select_pairs_screen(
+    source: Any,
+    candidates: Sequence[Candidate],
+    expert_worker: str,
+    pairs: int,
+    seed: int,
+    seed_ref: int = DEFAULT_SEED_REF,
+    choose: str = "random",
+    candidates_fn: Any | None = None,
+) -> list[Pair]:
+    """쌍 규칙 N — 화면과 **같은 함수**로 후보 집합을 만든다(사전등록 §1.2).
+
+    질의마다 `service.reference_candidates(source, query, KeyParams(), samples=20, limit=50)`를
+    직접 부르고, 그 `candidates`를 후보 집합으로 쓴다. 전형기 고정·같은 레벨·대상 자신 제외·
+    동작 키 사다리(uv8→uv4→uv2→uv_off, 후보가 나온 첫 단)는 전부 그 함수가 정한다 — 연구
+    쪽에 규칙을 다시 쓰지 않는다. 다시 쓰면 화면과 연구가 조용히 갈릴 수 있다.
+
+    `choose="random"`(N, 주 판정): 후보를 (date, session, pass_index)로 정렬하고 질의별
+    난수열에서 하나. `choose="first"`(N0, 보고용): 화면이 처음 보이는 `candidates[0]`.
+    """
+    if choose not in ("random", "first"):
+        raise ValueError(f"choose must be 'random' or 'first', got {choose!r}")
+    if expert_worker != service.EXPERT_WORKER:
+        # 화면은 전형기로 고정돼 있다. 아티팩트의 작업자가 다르면 연구와 화면이 다른 사람을 기준으로 삼는다.
+        raise ValueError(
+            f"reference artifact worker {expert_worker!r} != screen expert {service.EXPERT_WORKER!r}"
+        )
+    candidates_fn = candidates_fn or service.reference_candidates
+    params = motion_key.KeyParams()
+    result: list[Pair] = []
+    for query in sample_queries(candidates, pairs, seed):
+        found = candidates_fn(source, query.ref, params, samples=SCREEN_SAMPLES, limit=SCREEN_LIMIT)
+        if found.get("status") != "ok":
+            result.append(
+                Pair(
+                    query=query.ref, reference=None, key=query.key,
+                    candidate_reason=str(found.get("reason")),
+                )
+            )
+            continue
+        refs = tuple(_row_ref(row) for row in found["candidates"])
+        reference: PassRef | None = None
+        if refs:
+            if choose == "first":
+                reference = refs[0]
+            else:
+                ordered = sorted(refs, key=lambda ref: (ref.date, ref.session, ref.pass_index))
+                reference = _query_rng(seed_ref, query.ref).choice(ordered)
+        result.append(
+            Pair(
+                query=query.ref, reference=reference, key=query.key,
+                reference_granularity=found.get("match_granularity"),
+                candidate_count=len(refs), truncated=bool(found.get("truncated")),
+                candidates=refs,
+            )
+        )
+    return result
+
+
+def select_pairs_legacy_same_level(
+    candidates: Sequence[Candidate], expert_worker: str, pairs: int, seed: int
+) -> list[Pair]:
+    """중간 규칙 O+L(보고용) — 옛 규칙에 **같은 레벨 필터만** 더한다. 사다리는 없다.
+
+    공유 난수열·uv8 엄밀 키는 `select_pairs`와 같다. O와 N의 차이 중 레벨 필터의 몫과
+    사다리의 몫을 나누는 데만 쓴다(사전등록 §1.3).
+    """
+    rng = random.Random(seed)
+    shuffled = list(candidates)
+    rng.shuffle(shuffled)
+    queries = shuffled[: max(0, pairs)]
+
+    by_key_level_expert: dict[tuple[str, str], list[Candidate]] = defaultdict(list)
+    for candidate in candidates:
+        if candidate.worker == expert_worker:
+            by_key_level_expert[(candidate.key, candidate.ref.level)].append(candidate)
+
+    result: list[Pair] = []
+    for query in queries:
+        options = [
+            c for c in by_key_level_expert.get((query.key, query.ref.level), []) if c.ref != query.ref
+        ]
+        reference = rng.choice(options).ref if options else None
+        result.append(Pair(query=query.ref, reference=reference, key=query.key))
+    return result
+
+
+def build_pairs(
+    rule: str,
+    source: Any,
+    candidates: Sequence[Candidate],
+    expert_worker: str,
+    pairs: int,
+    seed: int,
+    seed_ref: int = DEFAULT_SEED_REF,
+) -> list[Pair]:
+    if rule == "legacy":
+        return select_pairs(candidates, expert_worker, pairs, seed)
+    if rule == "legacy_same_level":
+        return select_pairs_legacy_same_level(candidates, expert_worker, pairs, seed)
+    if rule == "screen":
+        return select_pairs_screen(source, candidates, expert_worker, pairs, seed, seed_ref)
+    if rule == "screen_first":
+        return select_pairs_screen(source, candidates, expert_worker, pairs, seed, seed_ref, choose="first")
+    raise ValueError(f"unknown pair rule {rule!r}; expected one of {PAIR_RULES}")
+
+
+def assert_key_prefix(candidates: Sequence[Candidate], pairs: Sequence[Pair]) -> None:
+    """사전등록 §6 F6: 캐시·쌍의 키가 모두 현행 접두어인가. 옛 산출물이 섞이면 실행이 무효다."""
+    prefix = f"{motion_key.KEY_PREFIX}:"
+    stale = [c.key for c in candidates if not c.key.startswith(prefix)]
+    stale += [p.key for p in pairs if not p.key.startswith(prefix)]
+    if stale:
+        raise RuntimeError(f"{len(stale)} keys lack prefix {prefix!r} (e.g. {stale[0]!r})")
 
 
 # --- 실행 --------------------------------------------------------------------
@@ -369,6 +542,12 @@ class Outcome:
     # 적용했다면 무엇이 걸러졌을지 재현하는 데만 쓴다.
     before_same_score: float | None
     before_split_score: float | None
+    # 쌍 규칙 N 기록(사전등록 §1.2). 옛 규칙에서는 None이다.
+    reference_granularity: str | None = None
+    candidate_count: int | None = None
+    truncated: bool | None = None
+    # compare가 두 키를 만나게 한 단(`key_match.granularity`). F4 대조에 쓴다.
+    key_match_granularity: str | None = None
 
 
 # 지시할 수 있는 축. 이것 밖은 완벽한 교정으로도 남는다.
@@ -521,26 +700,47 @@ def run_pair(
     pair: Pair,
     compute_extras: bool = True,
 ) -> Outcome:
+    rule_fields: dict[str, Any] = {
+        "reference_granularity": pair.reference_granularity,
+        "candidate_count": pair.candidate_count,
+        "truncated": pair.truncated,
+    }
     if pair.reference is None:
+        if pair.candidate_reason is not None:
+            reason = pair.candidate_reason
+        elif pair.candidates is not None:
+            reason = "no_screen_candidate"
+        else:
+            reason = "no_same_key_expert_pass"
         return Outcome(
             query=pair.query, reference=None, key=pair.key, status="no_expert_reference",
-            reason="no_same_key_expert_pass", same=None, split=None, split_reason=None,
+            reason=reason, same=None, split=None, split_reason=None,
             granularity=None, reference_n=None, split_n_a=None, split_n_b=None,
             gate=None, gate_reason=None, normalization=None, fired=None, split_fired=None,
-            ceiling=None, before_same_score=None, before_split_score=None,
+            ceiling=None, before_same_score=None, before_split_score=None, **rule_fields,
         )
     # 채점 필드만 받는다 — 표시 블록(스켈레톤·메시·각도표)의 비용·예외가 개선율 측정을
     # 흔들지 않게 한다(`service.compare` 독스트링).
     body = service.compare(
         source, pair.query, pair.reference, reference_spreads=reference_spreads, include_view=False
     )
+    key_match = body.get("key_match")
+    key_match_granularity = key_match.get("granularity") if isinstance(key_match, Mapping) else None
+    rule_fields["key_match_granularity"] = key_match_granularity
+    reason_unavailable: str | None = None
     if body.get("status") != "ok":
+        reason_unavailable = str(body.get("reason"))
+    elif pair.reference_granularity is not None and key_match_granularity != pair.reference_granularity:
+        # 사전등록 §6 F4: 후보를 고른 단과 compare가 허락한 단이 갈렸다. 판정에서 빼지 않고
+        # unavailable로 둔다 — 화면에서도 같은 모순이 난다는 뜻이라 결함으로 따로 보고한다.
+        reason_unavailable = "ladder_mismatch"
+    if reason_unavailable is not None:
         return Outcome(
             query=pair.query, reference=pair.reference, key=pair.key, status="unavailable",
-            reason=str(body.get("reason")), same=None, split=None, split_reason=None,
+            reason=reason_unavailable, same=None, split=None, split_reason=None,
             granularity=None, reference_n=None, split_n_a=None, split_n_b=None,
             gate=None, gate_reason=None, normalization=None, fired=None, split_fired=None,
-            ceiling=None, before_same_score=None, before_split_score=None,
+            ceiling=None, before_same_score=None, before_split_score=None, **rule_fields,
         )
     measured = body["measured"]
     improvement = measured["improvement"]
@@ -572,6 +772,7 @@ def run_pair(
         fired=fired, split_fired=split_fired, head_fired=head_fired, right_fired=right_fired,
         ceiling=ceiling, ceiling_split=ceiling_split,
         before_same_score=measured.get("score"), before_split_score=before_split_score,
+        **rule_fields,
     )
 
 
@@ -583,12 +784,15 @@ def run_study(
     progress: bool = False,
     index_cache: Path | None = None,
     compute_extras: bool = True,
+    pair_rule: str = DEFAULT_PAIR_RULE,
+    seed_ref: int = DEFAULT_SEED_REF,
 ) -> tuple[list[Outcome], str, csv_source_module.CsvPassSource, SpreadReference, list[Pair]]:
     reference_spreads = SpreadReference.load(reference_path)
     expert_worker = reference_spreads.worker
     source, candidates = index_corpus_cached(root, index_cache)
     logger.info("indexed %d candidate passes across %d sessions", len(candidates), len(source.sessions()))
-    selected = select_pairs(candidates, expert_worker, pairs, seed)
+    selected = build_pairs(pair_rule, source, candidates, expert_worker, pairs, seed, seed_ref)
+    assert_key_prefix(candidates, selected)
     outcomes: list[Outcome] = []
     for index, pair in enumerate(selected):
         outcomes.append(run_pair(source, reference_spreads, pair, compute_extras=compute_extras))
@@ -666,6 +870,10 @@ def _outcome_to_json(outcome: Outcome) -> dict[str, Any]:
         "ceiling_split": outcome.ceiling_split,
         "before_same_score": outcome.before_same_score,
         "before_split_score": outcome.before_split_score,
+        "reference_granularity": outcome.reference_granularity,
+        "candidate_count": outcome.candidate_count,
+        "truncated": outcome.truncated,
+        "key_match_granularity": outcome.key_match_granularity,
     }
 
 
@@ -691,9 +899,34 @@ def _fire_rate_block(
     }
 
 
+_SAMPLING_TEXT: Final[dict[str, str]] = {
+    "legacy": (
+        "질의: 전수 후보(모든 작업자, 우8 키 부착)를 seed로 셔플해 앞 N개를 "
+        "비복원으로 뽑는다. 레퍼런스: 질의와 같은 우8 키를 가진 전형기(레퍼런스 "
+        "아티팩트의 worker) 후보 중 질의 자신을 뺀 나머지에서 rng.choice로 하나. "
+        "후보가 없으면 status=no_expert_reference로 기록하고 버리지 않는다. "
+        "--pairs와 --seed는 결과를 보기 전에 코드에 고정했다."
+    ),
+    "legacy_same_level": (
+        "O+L(보고용): legacy와 같되 전형기 후보를 질의와 같은 레벨로만 거른다. 사다리 없음."
+    ),
+    "screen": (
+        "N(사전등록 2026-09-22 §1.2): 질의는 legacy와 같은 셔플 표본. 후보 집합은 "
+        "service.reference_candidates(source, query, KeyParams(), samples=20, limit=50)의 "
+        "candidates(전형기·같은 레벨·자신 제외·uv8→uv4→uv2→uv_off 첫 단) 그대로. "
+        "(date, session, pass_index)로 정렬한 뒤 질의별 문자열 시드 난수열로 하나를 고른다."
+    ),
+    "screen_first": (
+        "N0(보고용): N과 같은 후보 집합에서 화면이 처음 보이는 candidates[0]을 고른다."
+    ),
+}
+
+
 def build_report(
     outcomes: Sequence[Outcome], pairs: int, seed: int, expert_worker: str, root: Path, reference_path: Path,
     include_pairs: bool = True,
+    pair_rule: str = DEFAULT_PAIR_RULE,
+    seed_ref: int = DEFAULT_SEED_REF,
 ) -> dict[str, Any]:
     ok = [item for item in outcomes if item.status == "ok"]
     status_counts = Counter(item.status for item in outcomes)
@@ -897,14 +1130,20 @@ def build_report(
             "expert_worker": expert_worker,
             "pairs_requested": pairs,
             "seed": seed,
-            "sampling": (
-                "질의: 전수 후보(모든 작업자, 우8 키 부착)를 seed로 셔플해 앞 N개를 "
-                "비복원으로 뽑는다. 레퍼런스: 질의와 같은 우8 키를 가진 전형기(레퍼런스 "
-                "아티팩트의 worker) 후보 중 질의 자신을 뺀 나머지에서 rng.choice로 하나. "
-                "후보가 없으면 status=no_expert_reference로 기록하고 버리지 않는다. "
-                "--pairs와 --seed는 결과를 보기 전에 코드에 고정했다."
-            ),
+            "sampling": _SAMPLING_TEXT[pair_rule],
+            "pair_rule": pair_rule,
+            "seed_ref": seed_ref if pair_rule in ("screen", "screen_first") else None,
+            "key_prefix": motion_key.KEY_PREFIX,
         },
+        # 쌍 규칙 N의 기록(사전등록 §1.2, §6 F4·F5). 옛 규칙에서는 전부 none/0이다.
+        "reference_granularity_counts": {
+            _label(key): value for key, value in Counter(item.reference_granularity for item in outcomes).items()
+        },
+        "ladder_mismatch": sum(1 for item in outcomes if item.reason == "ladder_mismatch"),
+        "truncated_count": sum(1 for item in outcomes if item.truncated),
+        "cross_level_pairs": sum(
+            1 for item in outcomes if item.reference is not None and item.reference.level != item.query.level
+        ),
         "status_counts": {_label(key): value for key, value in status_counts.items()},
         "n_attempted": len(outcomes),
         "n_ok": len(ok),
@@ -948,7 +1187,12 @@ def render_summary(report: Mapping[str, Any]) -> str:
     rule = report["selection_rule"]
     lines.append(
         f"쌍 {rule['pairs_requested']}개 요청, seed={rule['seed']}, "
-        f"전형기={rule['expert_worker']}"
+        f"전형기={rule['expert_worker']}, 쌍 규칙={rule.get('pair_rule')}, seed_ref={rule.get('seed_ref')}"
+    )
+    lines.append(
+        f"기준 단: {report.get('reference_granularity_counts')} "
+        f"ladder_mismatch={report.get('ladder_mismatch')} truncated={report.get('truncated_count')} "
+        f"다른 레벨 짝={report.get('cross_level_pairs')}"
     )
     lines.append(f"상태: {report['status_counts']}")
     for name in ("same", "split"):
@@ -1000,6 +1244,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--skip-extras", action="store_true",
         help="F2/F5용 추가 compare() 호출(A/B 반쪽 재현)을 건너뛴다(빠른 드라이런용).",
     )
+    parser.add_argument(
+        "--pair-rule", default=DEFAULT_PAIR_RULE, choices=PAIR_RULES,
+        help="기준 패스 선택 규칙. screen(기본, 화면과 같은 후보 집합)·legacy(옛 규칙, 레벨 무시)·"
+        "legacy_same_level(O+L, 보고용)·screen_first(N0, 보고용).",
+    )
+    parser.add_argument(
+        "--seed-ref", type=int, default=DEFAULT_SEED_REF,
+        help="screen 규칙에서 질의별 기준 선택 난수열의 시드(귀무 재추첨은 이것만 바꾼다).",
+    )
     parser.add_argument("--log-level", default="WARNING", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     return parser.parse_args(argv)
 
@@ -1017,8 +1270,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     outcomes, expert_worker, source, reference_spreads, selected = run_study(
         args.root, args.reference, args.pairs, args.seed, args.progress,
         args.index_cache, compute_extras=not args.skip_extras,
+        pair_rule=args.pair_rule, seed_ref=args.seed_ref,
     )
-    report = build_report(outcomes, args.pairs, args.seed, expert_worker, args.root, args.reference)
+    report = build_report(
+        outcomes, args.pairs, args.seed, expert_worker, args.root, args.reference,
+        pair_rule=args.pair_rule, seed_ref=args.seed_ref,
+    )
     print(render_summary(report))
 
     if not args.skip_sensitivity:
@@ -1029,7 +1286,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         sensitivity_report = build_report(
             sensitivity_outcomes, args.pairs, args.seed, expert_worker, args.root, args.reference,
-            include_pairs=False,
+            include_pairs=False, pair_rule=args.pair_rule, seed_ref=args.seed_ref,
         )
         report["sensitivity"] = {
             "pair_sigma_factor": SENSITIVITY_PAIR_SIGMA_FACTOR,

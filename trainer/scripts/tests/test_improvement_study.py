@@ -130,3 +130,199 @@ def test_cache_fingerprint_covers_the_axis_convention(tmp_path, monkeypatch) -> 
     after = improvement_study._fingerprint(tmp_path)
     assert before != after, "규약이 바뀌었는데 지문이 같다 — 낡은 캐시가 통과한다"
     assert before["up_index"] != after["up_index"]
+
+
+# --- 쌍 규칙 M0(사전등록 docs/measurements/2026-09-22-same-level-pairs-d1-prereg.md §1, §5) ----------
+
+import random  # noqa: E402
+from collections import defaultdict  # noqa: E402
+
+from trainer.pose_lab import service  # noqa: E402
+from trainer.pose_lab.service import PassRef  # noqa: E402
+
+motion_key = importlib.import_module("motion_key")
+
+REAL_ROOT = Path("/data/sources/professionals")
+
+
+def _head_select_pairs(candidates, expert_worker, pairs, seed):
+    """HEAD `2e71c4b`의 `select_pairs` 본문을 그대로 옮긴 것(바꾸지 않는다). 옛 규칙 O의 비트 재현 기준."""
+    rng = random.Random(seed)
+    shuffled = list(candidates)
+    rng.shuffle(shuffled)
+    queries = shuffled[: max(0, pairs)]
+
+    by_key_expert = defaultdict(list)
+    for candidate in candidates:
+        if candidate.worker == expert_worker:
+            by_key_expert[candidate.key].append(candidate)
+
+    result = []
+    for query in queries:
+        options = [c for c in by_key_expert.get(query.key, []) if c.ref != query.ref]
+        reference = rng.choice(options).ref if options else None
+        result.append(improvement_study.Pair(query=query.ref, reference=reference, key=query.key))
+    return result
+
+
+def _synthetic_candidates() -> list:
+    """두 작업자 × 레벨 3개 × 세션 2개 × 패스 6개, 키 3종. 같은 키가 레벨을 넘나든다."""
+    out = []
+    for worker in ("전형기", "김경호"):
+        for level in ("1", "2", "3"):
+            for session in ("s1", "s2"):
+                for index in range(6):
+                    ref = PassRef(worker=worker, date="2025010" + level, level=level, session=session, pass_index=index)
+                    out.append(improvement_study.Candidate(ref=ref, worker=worker, key=f"m1:k{index % 3}"))
+    return out
+
+
+def test_legacy_rule_reproduces_head_select_pairs_exactly() -> None:
+    """성질 6: `--pair-rule legacy`는 HEAD의 `select_pairs`와 같은 쌍을 낸다(79.21% 비트 재현의 전제)."""
+    candidates = _synthetic_candidates()
+    for seed in (1, 20260828):
+        legacy = improvement_study.build_pairs("legacy", None, candidates, "전형기", 40, seed)
+        head = _head_select_pairs(candidates, "전형기", 40, seed)
+        assert legacy == head, "legacy 규칙이 HEAD select_pairs와 다른 쌍을 낸다 — 옛 기준선 재현이 깨진다"
+    # 이 합성 표본에서 옛 규칙은 실제로 다른 레벨 짝을 낸다 — 위 동등성이 공허하지 않다는 확인.
+    assert any(p.reference is not None and p.reference.level != p.query.level for p in legacy)
+
+
+def test_query_sample_is_the_legacy_shuffle() -> None:
+    """F2의 전제: N·O·O+L 어느 규칙이든 질의 표본은 같은 셔플에서 나온다."""
+    candidates = _synthetic_candidates()
+    sample = [c.ref for c in improvement_study.sample_queries(candidates, 40, 20260828)]
+    head = [p.query for p in _head_select_pairs(candidates, "전형기", 40, 20260828)]
+    same_level = [p.query for p in improvement_study.select_pairs_legacy_same_level(candidates, "전형기", 40, 20260828)]
+    assert sample == head == same_level
+
+
+def _fake_candidates_fn(counts: dict):
+    """질의별 후보 수를 정해 두는 `reference_candidates` 대역. 후보는 질의와 같은 레벨의 전형기 패스다."""
+    def fn(source, ref, params, samples, limit):
+        assert samples == improvement_study.SCREEN_SAMPLES and limit == improvement_study.SCREEN_LIMIT
+        rows = [
+            {"worker": "전형기", "date": f"2025{k:04d}", "level": ref.level, "session": f"e{k}", "pass_index": k}
+            for k in range(counts.get(ref, 5))
+        ]
+        return {"status": "ok", "match_granularity": "uv8", "truncated": False, "candidates": rows}
+    return fn
+
+
+def test_per_query_stream_is_isolated_from_other_queries() -> None:
+    """성질 3: 한 질의의 후보 수가 바뀌어도 다른 질의가 받는 기준은 그대로다(질의별 난수열)."""
+    candidates = _synthetic_candidates()
+    queries = [c.ref for c in improvement_study.sample_queries(candidates, 24, 7)]
+    first = queries[0]
+    base = improvement_study.select_pairs_screen(
+        None, candidates, "전형기", 24, 7, candidates_fn=_fake_candidates_fn({first: 0})
+    )
+    moved = improvement_study.select_pairs_screen(
+        None, candidates, "전형기", 24, 7, candidates_fn=_fake_candidates_fn({first: 9})
+    )
+    assert base[0].reference is None and moved[0].reference is not None
+    changed = [a.query for a, b in zip(base[1:], moved[1:]) if a.reference != b.reference]
+    assert changed == [], f"첫 질의의 후보 수만 바꿨는데 다른 질의 {len(changed)}개의 기준이 바뀌었다"
+
+
+def test_seed_ref_changes_only_the_choice_not_the_candidate_set() -> None:
+    """귀무 재추첨(§3.2)은 기준 선택만 바꾼다 — 질의와 후보 집합은 같다."""
+    candidates = _synthetic_candidates()
+    fn = _fake_candidates_fn({})
+    a = improvement_study.select_pairs_screen(None, candidates, "전형기", 24, 7, seed_ref=1, candidates_fn=fn)
+    b = improvement_study.select_pairs_screen(None, candidates, "전형기", 24, 7, seed_ref=2, candidates_fn=fn)
+    assert [p.query for p in a] == [p.query for p in b]
+    assert [p.candidates for p in a] == [p.candidates for p in b]
+    assert [p.reference for p in a] != [p.reference for p in b]
+
+
+def test_fingerprint_carries_the_key_prefix(tmp_path, monkeypatch) -> None:
+    """성질 4: 키 정의(접두어)가 바뀌면 캐시 지문이 달라져 옛 키 캐시가 통과하지 못한다."""
+    (tmp_path / "a.csv").write_text("x", encoding="utf-8")
+    before = improvement_study._fingerprint(tmp_path)
+    assert before["key_prefix"] == motion_key.KEY_PREFIX
+    monkeypatch.setattr(improvement_study.motion_key, "KEY_PREFIX", "m9")
+    after = improvement_study._fingerprint(tmp_path)
+    assert before != after, "키 접두어가 바뀌었는데 지문이 같다 — 옛 키 캐시가 조용히 통과한다"
+
+
+def test_key_prefix_guard_rejects_stale_keys() -> None:
+    """F6: 캐시·쌍 키 중 하나라도 현행 접두어가 아니면 실행을 멈춘다."""
+    good = _synthetic_candidates()
+    improvement_study.assert_key_prefix(good, [])
+    stale = [*good, improvement_study.Candidate(ref=good[0].ref, worker="x", key="m0:old")]
+    with pytest.raises(RuntimeError):
+        improvement_study.assert_key_prefix(stale, [])
+
+
+def test_ladder_mismatch_is_unavailable_not_dropped(monkeypatch) -> None:
+    """F4: 후보를 고른 단과 compare가 허락한 단이 갈리면 unavailable(ladder_mismatch)로 남긴다."""
+    q = PassRef(worker="김경호", date="20250101", level="1", session="s", pass_index=0)
+    r = PassRef(worker="전형기", date="20250102", level="1", session="t", pass_index=1)
+    pair = improvement_study.Pair(query=q, reference=r, key="m1:x", reference_granularity="uv8", candidate_count=1)
+    monkeypatch.setattr(
+        improvement_study.service, "compare",
+        lambda *a, **k: {"status": "ok", "key_match": {"granularity": "uv4"}},
+    )
+    outcome = improvement_study.run_pair(None, None, pair, compute_extras=False)
+    assert outcome.status == "unavailable" and outcome.reason == "ladder_mismatch"
+    assert outcome.reference_granularity == "uv8" and outcome.key_match_granularity == "uv4"
+
+
+_REAL_SOURCE: dict = {}
+
+
+def _real_queries():
+    """실데이터 질의 몇 개. 레벨 2·3, 다른 작업자 둘과 전형기 자신(같은 세션의 다른 패스가 후보로 남는가)."""
+    if not REAL_ROOT.is_dir():
+        pytest.fail(f"실데이터가 없다({REAL_ROOT}) — 이 대조는 skip하지 않는다")
+    from trainer.pose_lab import csv_source
+
+    if "source" not in _REAL_SOURCE:
+        _REAL_SOURCE["source"] = csv_source.CsvPassSource(REAL_ROOT)
+    source = _REAL_SOURCE["source"]
+    params = motion_key.KeyParams()
+    picks = [("김경호", "2", 0), ("김경호", "3", 10), ("전형기", "2", 3), ("전형기", "3", 5)]
+    candidates = []
+    for worker, level, index in picks:
+        found, _total = source.passes(worker, level=level, limit=1)
+        item, entry = next((i, e) for i, e in found if e.pass_index == index)
+        ref = PassRef(worker=item.worker, date=item.date, level=item.level, session=item.session, pass_index=index)
+        candidates.append(improvement_study.Candidate(ref=ref, worker=worker, key=source.key_of(entry, params)))
+    return source, candidates
+
+
+def test_screen_rule_matches_the_screen_on_real_files() -> None:
+    """성질 1·2(실데이터): 연구의 쌍 규칙 N이 고른 기준은 화면(`/api/reference`)이 내는 후보 목록 안에 있고,
+    후보 집합은 순서까지 같으며, N0은 화면이 처음 보이는 candidates[0]과 같다.
+    기준은 전부 전형기·질의와 같은 레벨·질의 자신이 아니다 — 다른 레벨 짝이 하나라도 나오면 실패한다.
+    """
+    from fastapi.testclient import TestClient
+
+    from trainer.pose_lab.app import create_app
+
+    source, candidates = _real_queries()
+    n = len(candidates)
+    screen = improvement_study.select_pairs_screen(source, candidates, "전형기", n, 20260828)
+    first = improvement_study.select_pairs_screen(source, candidates, "전형기", n, 20260828, choose="first")
+    client = TestClient(create_app(source=source))
+    assert sorted((p.query for p in screen), key=str) == sorted((c.ref for c in candidates), key=str)
+    for pair, pair0 in zip(screen, first):
+        q = pair.query
+        body = client.get(
+            "/api/reference",
+            params={"worker": q.worker, "date": q.date, "level": q.level, "session": q.session, "pass_index": q.pass_index},
+        ).json()
+        assert body["status"] == "ok", body
+        shown = tuple(improvement_study._row_ref(row) for row in body["candidates"])
+        assert shown, f"실데이터 질의 {q}에 화면 후보가 없다 — 대조가 공허해진다"
+        assert pair.candidates == shown, f"연구의 후보 집합이 화면과 다르다: {q}"
+        assert pair.reference in shown
+        assert pair.reference.level == q.level, f"다른 레벨 짝: 질의 L{q.level} ↔ 기준 L{pair.reference.level}"
+        assert all(ref.level == q.level for ref in pair.candidates), f"후보에 다른 레벨이 섞였다: {q}"
+        assert pair.reference.worker == service.EXPERT_WORKER
+        assert pair.reference != q
+        assert q not in pair.candidates
+        assert pair0.reference == shown[0], f"N0이 화면의 candidates[0]과 다르다: {q}"
+        assert pair.reference_granularity == body["match_granularity"]
+        assert pair.truncated is False and body["truncated"] is False
