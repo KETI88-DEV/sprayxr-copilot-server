@@ -76,8 +76,7 @@ class FakeCandidateSource:
         return matched[:limit], len(matched)
 
     def key_of(self, entry: _Entry, params: object) -> str | None:
-        frames = service.pass_frames(RawPass(rows=entry.rows))
-        inputs = service.key_inputs(frames)
+        _frames, inputs = service.pass_key_inputs(RawPass(rows=entry.rows))
         return None if inputs is None else service.key_from(inputs, params)
 
 
@@ -235,14 +234,15 @@ def test_the_target_pass_is_excluded_at_every_rung() -> None:
 def test_real_passes_recover_a_reference_only_after_relaxing() -> None:
     """실데이터 근거(S8). 엄밀 일치로 후보가 0인 패스가 사다리를 내리면 살아나고, 화면이 그 단을 말한다.
 
-    김경호 20250831: L2 1000390_1 #0은 uv8에서 0건인데 uv4에서 살아나고, L3 1000391_1 #10은
+    김경호 20250831: L2 1000390_1 #5는 uv8에서 0건인데 uv4에서 살아나고, L3 1000391_1 #10은
     uv8·uv4·uv2 모두 0건인데 uv 칸을 빼면 살아난다. 실데이터가 없으면 skip하지 않고 실패한다.
+    (m1 시절 예시였던 L2 #0은 D1(키 m3, 중점 UV) 뒤로 uv8에서 2건이 나와 엄밀 일치가 됐다.)
     """
     from trainer.pose_lab.tests import test_scoring_isolation as isolation
 
     source, _kwargs = isolation._source_for({"name": "real"})  # noqa: SLF001
     expected = {
-        ("2", "1000390_1", 0): "uv4",
+        ("2", "1000390_1", 5): "uv4",
         ("3", "1000391_1", 10): "uv_off",
     }
     for (level, session, index), rung in expected.items():
@@ -279,7 +279,7 @@ def test_motion_key_match_walks_the_same_ladder_as_the_candidate_search() -> Non
     rungs = [row["granularity"] for row in result["ladder"]]
     assert rungs == ["uv8", "uv4", "uv2", "uv_off"], rungs
 
-    inputs = service.key_inputs(service.pass_frames(source.load(query), 20))
+    _frames, inputs = service.pass_key_inputs(source.load(query), 20)
     same = service.motion_key_match(inputs, inputs, params)
     assert [row["granularity"] for row in same["ladder"]] == rungs
     # 자기 자신과는 가장 엄밀한 단에서 만난다 — 완화라고 부르지 않는다.
@@ -290,7 +290,7 @@ def test_motion_key_match_walks_the_same_ladder_as_the_candidate_search() -> Non
 def test_compare_accepts_a_relaxed_reference_and_says_which_rung() -> None:
     """실데이터: 사다리가 고른 기준으로 **비교가 실제로 돈다**(S8).
 
-    김경호 20250831 L2 1000390_1 #0은 uv8에서 후보 0건이고 uv4에서 30건이 나온다. 그 기준으로
+    김경호 20250831 L2 1000390_1 #5는 uv8에서 후보 0건이고 uv4에서 1건이 나온다(m3 키). 그 기준으로
     `compare`를 부르면 `status == "ok"`여야 하고, 응답이 어느 단에서 만났는지(`key_match`)를
     말해야 한다. 이전 판은 여기서 `{status:'unavailable', reason:'motion_key_mismatch'}`를 냈다 —
     화면은 3D를 열지 못하고 "동작 키가 달라 비교하지 않습니다."만 남겼다.
@@ -298,7 +298,7 @@ def test_compare_accepts_a_relaxed_reference_and_says_which_rung() -> None:
     from trainer.pose_lab.tests import test_scoring_isolation as isolation
 
     source, kwargs = isolation._source_for({"name": "real"})  # noqa: SLF001
-    cases = {("2", "1000390_1", 0): "uv4", ("3", "1000391_1", 10): "uv_off"}
+    cases = {("2", "1000390_1", 5): "uv4", ("3", "1000391_1", 10): "uv_off"}
     for (level, session, index), rung in cases.items():
         query = PassRef(worker="김경호", date="20250831", level=level, session=session, pass_index=index)
         found = service.reference_candidates(source, query)

@@ -141,7 +141,7 @@ def test_pass_index_carries_a_motion_key_for_the_requested_params(root: Path) ->
     entries = source.index_of(session)
     coarse = {source.key_of(entry, motion_key.KeyParams(uv_grid=1)) for entry in entries}
     fine = {source.key_of(entry, motion_key.KeyParams(uv_grid=8)) for entry in entries}
-    assert all(key.startswith("m1:") for key in coarse | fine)
+    assert all(key.startswith("m3:") for key in coarse | fine)
     assert all(":0x0:" in key for key in coarse)
     # 수직 버스트가 vertical_ 대역으로 들어간다. 부호가 살아 있어야 한다.
     assert any(":vertical_up:" in key for key in fine)
@@ -250,7 +250,7 @@ def test_passes_endpoint_offers_a_choice(root: Path) -> None:
     assert first["level"] == "10"
     assert first["session"] == "1000451_1"
     assert first["pass_index"] == 0
-    assert first["motion_key"].startswith("m1:")
+    assert first["motion_key"].startswith("m3:")
     assert first["frames"] > 0
 
 

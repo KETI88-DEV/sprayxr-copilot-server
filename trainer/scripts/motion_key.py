@@ -15,9 +15,10 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Final, Literal
+from typing import Final, Literal, Sequence
 
 import pass_segmentation
+import stroke_frame
 import world_axes
 
 Vec3 = tuple[float, float, float]
@@ -26,7 +27,10 @@ SignedBand = Literal["horizontal", "diag_up", "diag_down", "vertical_up", "verti
 LateralBand = Literal["left", "center", "right"]
 ReachBand = Literal["near", "far"]
 
-KEY_PREFIX: Final = "m1"
+# m3(사전등록 `docs/measurements/2026-09-22-same-level-pairs-d1-prereg.md` §3.1, D1): 칸 성분의 UV를
+# 원 프레임 호장 중점에서 읽는다(`midpoint_uv`). 다른 성분은 m1과 같다. 문자열 모양이 같아
+# 접두어만으로 m1 시절 산포 아티팩트·캐시와 갈린다.
+KEY_PREFIX: Final = "m3"
 
 
 @dataclass(frozen=True, slots=True)
@@ -168,3 +172,24 @@ def motion_key(
     lateral, reach, height = body_placement(head, yaw, hit, params)
     cell = "na" if uv is None else "{}x{}".format(*uv_cell(uv, params))
     return f"{KEY_PREFIX}:{band}:{heading}:{cell}:{lateral}-{reach}-{height}"
+
+
+def midpoint_uv(
+    hits: Sequence[Vec3], uvs: Sequence[tuple[float, float] | None]
+) -> tuple[float, float] | None:
+    """원 프레임(리샘플 전) 착탄 궤적에서 누적 호장이 절반에 가장 가까운 프레임의 UV.
+
+    리샘플 격자(`stroke_frame.resample_frames`)는 모든 점에 **첫 프레임의** UV를 복사한다 —
+    그 격자의 가운데 UV를 읽으면 시작점 칸이 나온다(m1 키의 결함 D1). 그 프레임에 UV가
+    없으면 UV가 있는 가장 가까운 원 프레임을 쓴다(프레임 순번 거리, 같으면 앞쪽).
+    UV가 하나도 없으면 None. 정의는 m2 사전등록(`a13f58d`)의 `cell`과 같다.
+    """
+    if not hits or len(hits) != len(uvs):
+        return None
+    values = stroke_frame.arclengths(list(hits))
+    middle = min(range(len(values)), key=lambda index: abs(values[index] - 0.5))
+    with_uv = [index for index, uv in enumerate(uvs) if uv is not None]
+    if not with_uv:
+        return None
+    chosen = min(with_uv, key=lambda index: (abs(index - middle), index))
+    return uvs[chosen]

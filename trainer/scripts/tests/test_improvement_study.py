@@ -48,7 +48,7 @@ def test_quartiles_are_reported() -> None:
 def _unknown_outcome() -> object:
     """발동 여부를 재지 않은 결과 하나. 민감도 실행이 내는 모양이다."""
     return improvement_study.Outcome(
-        query=None, reference=None, key="m1:horizontal:right:1x2:center-near-high",
+        query=None, reference=None, key="m3:horizontal:right:1x2:center-near-high",
         status="ok", reason=None, same=0.2, split=0.1, split_reason=None,
         granularity="uv2", reference_n=30, split_n_a=15, split_n_b=15,
         gate="fail", gate_reason=None, normalization="measured",
@@ -173,7 +173,7 @@ def _synthetic_candidates() -> list:
             for session in ("s1", "s2"):
                 for index in range(6):
                     ref = PassRef(worker=worker, date="2025010" + level, level=level, session=session, pass_index=index)
-                    out.append(improvement_study.Candidate(ref=ref, worker=worker, key=f"m1:k{index % 3}"))
+                    out.append(improvement_study.Candidate(ref=ref, worker=worker, key=f"m3:k{index % 3}"))
     return out
 
 
@@ -255,11 +255,26 @@ def test_key_prefix_guard_rejects_stale_keys() -> None:
         improvement_study.assert_key_prefix(stale, [])
 
 
+def test_artifact_prefix_guard_rejects_an_old_key_artifact() -> None:
+    """F6(산포 쪽): 산포 아티팩트에 현행이 아닌 접두어 버킷이 하나라도 있으면 실행을 멈춘다.
+
+    현행 접두어만 든 아티팩트는 통과해야 한다 — 늘 던지는 검사는 실패할 수 없는 단언과 같다.
+    """
+    from trainer.pose_lab.spread_reference import SpreadReference
+
+    prefix = improvement_study.motion_key.KEY_PREFIX
+    current = {"worker": "전형기", "granularities": {"uv8": {f"{prefix}:a:b:1x1:c": {}}, "uv_off": {f"{prefix}:a:b:na:c": {}}}}
+    improvement_study.assert_artifact_prefix(SpreadReference(current), "current.json")
+    mixed = {"worker": "전형기", "granularities": {**current["granularities"], "uv4": {"m1:a:b:1x1:c": {}}}}
+    with pytest.raises(RuntimeError, match="m1"):
+        improvement_study.assert_artifact_prefix(SpreadReference(mixed), "mixed.json")
+
+
 def test_ladder_mismatch_is_unavailable_not_dropped(monkeypatch) -> None:
     """F4: 후보를 고른 단과 compare가 허락한 단이 갈리면 unavailable(ladder_mismatch)로 남긴다."""
     q = PassRef(worker="김경호", date="20250101", level="1", session="s", pass_index=0)
     r = PassRef(worker="전형기", date="20250102", level="1", session="t", pass_index=1)
-    pair = improvement_study.Pair(query=q, reference=r, key="m1:x", reference_granularity="uv8", candidate_count=1)
+    pair = improvement_study.Pair(query=q, reference=r, key="m3:x", reference_granularity="uv8", candidate_count=1)
     monkeypatch.setattr(
         improvement_study.service, "compare",
         lambda *a, **k: {"status": "ok", "key_match": {"granularity": "uv4"}},

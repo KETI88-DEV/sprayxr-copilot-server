@@ -2,9 +2,13 @@
 # pyright: reportAny=false, reportUnusedCallResult=false
 """채점 격리: 표시 전용 변경이 점수·교정·개선율을 한 비트도 옮기지 않았는가.
 
-기준선은 코드 변경 전 트리(git archive b5f7341)에서 뜬 `fixtures/scoring_baseline_b5f7341.json`이다.
-합성 FakeSource 한 건과 실데이터 두 쌍(김경호 L1 1000389_1 #0 대 전형기 1000564_1 #17,
-김경호 L3 1000391_1 #0 대 전형기 1000444_1 #10)을 JSON 문자열(sort_keys)로 비교한다.
+기준선은 두 벌이다. 합성 FakeSource 한 건은 코드 변경 전 트리(git archive b5f7341)에서 뜬
+`fixtures/scoring_baseline_b5f7341.json`의 것을 그대로 쓴다. 실데이터 두 쌍(김경호 L1 1000389_1 #0 대
+전형기 1000564_1 #17, 김경호 L3 1000391_1 #0 대 전형기 1000444_1 #10)은 D1(동작 키 m3, 사전등록
+2026-09-22 §3) 채택 트리에서 새 산포(`/output/spread_reference_expert_m3.json`)로 다시 뜬
+`fixtures/scoring_baseline_real_m3.json`과 비교한다. 키 정의가 바뀌면 산포 버킷이 바뀌므로 실데이터
+점수는 의도적으로 움직였다. 합성 건은 UV가 한 칸이라 키가 바뀌지 않아 옛 기준선과 여전히 같다.
+JSON 문자열(sort_keys)로 비교한다.
 
 실데이터가 없으면 **skip하지 않고 실패한다** — skip하면 이 비교가 실패할 수 없는 단언이 된다.
 """
@@ -29,8 +33,9 @@ from trainer.pose_lab.service import PassRef  # noqa: E402
 from trainer.pose_lab.tests.test_app import QUERY, REFERENCE, FakeSource  # noqa: E402
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "scoring_baseline_b5f7341.json"
+REAL_FIXTURE = Path(__file__).resolve().parent / "fixtures" / "scoring_baseline_real_m3.json"
 DATA_ROOT = Path("/data/sources/professionals")
-SPREADS = Path("/output/spread_reference_expert_yup.json")
+SPREADS = Path("/output/spread_reference_expert_m3.json")
 
 # b5f7341 이후 표시 전용으로 더한 필드. 이것만 빼면 기준선과 같아야 한다.
 NEW_MEASURED_KEYS = frozenset(
@@ -54,7 +59,12 @@ LEGACY_CORRECTION_KEYS = ("point", "axis", "magnitude_cm", "direction", "sigma",
 
 
 def _cases() -> list[dict[str, Any]]:
-    return json.loads(FIXTURE.read_text(encoding="utf-8"))["cases"]
+    synthetic = [
+        case for case in json.loads(FIXTURE.read_text(encoding="utf-8"))["cases"]
+        if case["name"].startswith("synthetic")
+    ]
+    real = json.loads(REAL_FIXTURE.read_text(encoding="utf-8"))["cases"]
+    return synthetic + real
 
 
 CASE_NAMES = [case["name"] for case in _cases()]
@@ -189,9 +199,9 @@ def test_improvement_study_calls_compare_without_view(monkeypatch: pytest.Monkey
         def spreads_for(self, *_args: Any) -> dict[str, dict[str, float]]:
             return measured_score.uniform_spreads(0.05)
 
-    frames = service.pass_frames(FakeSource().load(query))
+    _frames, inputs = service.pass_key_inputs(FakeSource().load(query))
     granularity = "uv8"
-    assert service.key_inputs(frames) is not None
+    assert inputs is not None
     measured = {"split_reason": None, "granularity": granularity, "split_dates_a": ["d1"], "split_dates_b": ["d2"]}
     improvement_study._split_details(FakeSource(), Spreads(), query, reference, measured)  # noqa: SLF001
     assert len(calls) == 3

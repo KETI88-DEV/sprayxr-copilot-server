@@ -190,8 +190,7 @@ def build_from_root(root: Path, worker: str, levels: Sequence[str]) -> dict[str,
                 session=item.session, pass_index=entry.pass_index,
             )
             raw = source.load(ref)
-            frames = service.pass_frames(raw)
-            inputs = service.key_inputs(frames)
+            frames, inputs = service.pass_key_inputs(raw)
             if inputs is None:
                 continue
             basis = service.representative_basis(frames)

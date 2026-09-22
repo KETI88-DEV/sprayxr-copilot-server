@@ -139,11 +139,29 @@ def improvement(
     return {"split": pose_similarity.gap_closure(before_split, after_split), "same": same}
 
 
+def spray_frames(raw: RawPass) -> list[Any]:
+    """패스 한 건의 원 프레임(리샘플 전). 분사 중이고 착탄점이 있는 프레임만 남는다.
+
+    동작 키의 UV 칸은 이 원 프레임에서 읽는다(`motion_key.midpoint_uv`) — 리샘플 격자는
+    모든 점에 첫 프레임의 UV를 복사하기 때문이다.
+    """
+    frames = measured_pose.measured_frames(raw.rows)
+    return [frame for frame in frames if frame.spraying and frame.hit is not None]
+
+
 def pass_frames(raw: RawPass, samples: int = stroke_frame.DEFAULT_SAMPLES) -> list[Any]:
     """패스 한 건의 정렬 격자. 분사 중이고 착탄점이 있는 프레임만 남는다."""
-    frames = measured_pose.measured_frames(raw.rows)
-    spraying = [frame for frame in frames if frame.spraying and frame.hit is not None]
-    return stroke_frame.resample_frames(spraying, samples)
+    return stroke_frame.resample_frames(spray_frames(raw), samples)
+
+
+def pass_key_inputs(
+    raw: RawPass, samples: int = stroke_frame.DEFAULT_SAMPLES
+) -> tuple[list[Any], "KeyInputs | None"]:
+    """(리샘플 격자, 키 재료). 색인(`csv_source`)·비교(`compare`)·기준 후보·산포 빌더가
+    같은 규칙으로 키를 만든다."""
+    raw_frames = spray_frames(raw)
+    frames = stroke_frame.resample_frames(raw_frames, samples)
+    return frames, key_inputs(frames, raw_frames=raw_frames)
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,17 +175,24 @@ class KeyInputs:
     displacement: Vec3
     head: Vec3
     hit: Vec3
+    # 원 프레임 호장 중점의 UV(`motion_key.midpoint_uv`, m3). 리샘플 격자의 UV(=첫 프레임 UV)가 아니다.
     uv: tuple[float, float] | None
     yaw: float | None = None
 
 
-def key_inputs(frames: Sequence[Any]) -> KeyInputs | None:
+def key_inputs(frames: Sequence[Any], *, raw_frames: Sequence[Any]) -> KeyInputs | None:
+    """키 재료. `frames`는 리샘플 격자, `raw_frames`는 그 격자를 만든 원 프레임이다.
+
+    `raw_frames`를 키워드 필수로 둔다 — 기본값으로 빠지면 UV가 조용히 격자의 UV, 곧
+    첫 프레임 UV가 된다(m1의 결함 D1, 사전등록 2026-09-22 §3.1).
+    """
     if len(frames) < 2:
         return None
     first, last = frames[0], frames[-1]
     if first.hit is None or last.hit is None:
         return None
     middle = frames[len(frames) // 2]
+    raw_hits = [frame for frame in raw_frames if frame.hit is not None]
     return KeyInputs(
         displacement=(
             last.hit[0] - first.hit[0],
@@ -176,22 +201,9 @@ def key_inputs(frames: Sequence[Any]) -> KeyInputs | None:
         ),
         head=middle.head,
         hit=middle.hit or first.hit,
-        uv=middle.uv,
+        uv=motion_key.midpoint_uv([frame.hit for frame in raw_hits], [frame.uv for frame in raw_hits]),
         yaw=getattr(middle, "yaw", None),
     )
-
-
-def motion_key_for(frames: Sequence[Any], params: Any) -> str | None:
-    """작업자 요는 실측이다. 패스 중앙 격자점의 HMD 방위를 쓴다.
-
-    실제로 쓴 값과 그 출처가 응답의 `yaw_assumed` · `yaw_source`로 나가고 화면이 동작
-    키 옆에 적는다. 회전을 못 읽어 대체값으로 떨어진 패스에서는 몸 기준 이름을 단 축이
-    다시 월드 기준이 되므로, 읽는 사람이 그 사실을 알아야 한다.
-    """
-    inputs = key_inputs(frames)
-    if inputs is None:
-        return None
-    return key_from(inputs, params)
 
 
 def yaw_of(inputs: KeyInputs) -> float:
@@ -2122,11 +2134,9 @@ def compare(
     # 원본 행을 따로 들고 있는다 — 스켈레톤 FK(`skeleton_block`)가 회전 각을 원본
     # 행에서만 읽을 수 있고, `pass_frames`가 낸 리샘플 격자로는 얻을 수 없다.
     query_raw = source.load(query)
-    query_frames = pass_frames(query_raw, samples)
+    query_frames, query_inputs = pass_key_inputs(query_raw, samples)
     reference_raw = source.load(reference)
-    reference_frames = pass_frames(reference_raw, samples)
-    query_inputs = key_inputs(query_frames)
-    reference_inputs = key_inputs(reference_frames)
+    reference_frames, reference_inputs = pass_key_inputs(reference_raw, samples)
     query_key = None if query_inputs is None else key_from(query_inputs, params)
     reference_key = None if reference_inputs is None else key_from(reference_inputs, params)
     # 몸 기준 축(②④)이 선 요다. 실측이면 그 값을, 회전을 못 읽었으면 대체값을 낸다.
@@ -2559,8 +2569,7 @@ def reference_candidates(
     except LookupError:
         return {"status": "unavailable", "reason": "pass_not_found"}
 
-    query_frames_ = pass_frames(raw_query, samples)
-    query_inputs = key_inputs(query_frames_)
+    _query_frames, query_inputs = pass_key_inputs(raw_query, samples)
     if query_inputs is None:
         return {"status": "unavailable", "reason": "insufficient_frames"}
     query_key = key_from(query_inputs, params)

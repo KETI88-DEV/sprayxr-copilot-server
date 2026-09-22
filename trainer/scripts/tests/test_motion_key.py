@@ -120,6 +120,6 @@ def test_motion_key_is_in_its_own_namespace() -> None:
         uv=(1024.0, 512.0),
         params=PARAMS,
     )
-    assert key.startswith("m1:")
+    assert key.startswith("m3:")
     assert "diag_up" in key
     assert key != pass_segmentation.body_bucket_key(45.0, 0.8, "right")

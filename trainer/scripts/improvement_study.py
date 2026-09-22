@@ -492,6 +492,19 @@ def assert_key_prefix(candidates: Sequence[Candidate], pairs: Sequence[Pair]) ->
         raise RuntimeError(f"{len(stale)} keys lack prefix {prefix!r} (e.g. {stale[0]!r})")
 
 
+def assert_artifact_prefix(reference_spreads: SpreadReference, path: Path | str) -> None:
+    """F6의 산포 쪽: 아티팩트도 현행 키 정의로 지은 것이어야 한다. 옛 접두어 버킷이 섞이면 실행을 멈춘다.
+
+    D1(m1→m3) 뒤 옛 `_yup` 아티팩트를 주면 버킷 조회가 모두 빗나가 split이 조용히 잠정 산포로 잰
+    값이 된다 — 캐시·쌍 키 검사(`assert_key_prefix`)만으로는 이것을 잡지 못한다.
+    """
+    prefixes = reference_spreads.key_prefixes()
+    if prefixes != {motion_key.KEY_PREFIX}:
+        raise RuntimeError(
+            f"spread artifact {path} has key prefixes {sorted(prefixes)}, expected {{{motion_key.KEY_PREFIX!r}}}"
+        )
+
+
 # --- 실행 --------------------------------------------------------------------
 
 
@@ -661,8 +674,7 @@ def _split_details(
     if not granularity or not split_dates_a or not split_dates_b:
         return empty
 
-    query_frames = service.pass_frames(source.load(query))
-    query_inputs = service.key_inputs(query_frames)
+    _query_frames, query_inputs = service.pass_key_inputs(source.load(query))
     if query_inputs is None:
         return empty
     ladder_keys = service._reference_keys(query_inputs)  # noqa: SLF001 — 같은 패키지 안, T4/T5 선례와 같은 근거.
@@ -788,6 +800,7 @@ def run_study(
     seed_ref: int = DEFAULT_SEED_REF,
 ) -> tuple[list[Outcome], str, csv_source_module.CsvPassSource, SpreadReference, list[Pair]]:
     reference_spreads = SpreadReference.load(reference_path)
+    assert_artifact_prefix(reference_spreads, reference_path)
     expert_worker = reference_spreads.worker
     source, candidates = index_corpus_cached(root, index_cache)
     logger.info("indexed %d candidate passes across %d sessions", len(candidates), len(source.sessions()))

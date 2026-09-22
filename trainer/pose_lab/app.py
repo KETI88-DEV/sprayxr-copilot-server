@@ -104,13 +104,24 @@ def _reference_spreads_from_env() -> Any | None:
     from trainer.pose_lab.spread_reference import SpreadReference
 
     try:
-        return SpreadReference.load(path)
+        loaded = SpreadReference.load(path)
     except (OSError, ValueError) as exc:
         logger.warning(
             "%s=%s를 읽지 못했다(%s) — 잠정 산포(provisional)로 돈다.",
             SPREAD_REFERENCE_ENV, path, exc,
         )
         return None
+    # 키 정의가 바뀐 뒤(m1→m3) 옛 아티팩트를 주면 버킷 키가 하나도 맞지 않아 모든 비교가 조용히
+    # 잠정 산포로 떨어진다. 오타난 경로와 같은 이유로 경고하고, 섞어 쓰지 않는다.
+    expected = importlib.import_module("motion_key").KEY_PREFIX
+    prefixes = loaded.key_prefixes()
+    if prefixes != {expected}:
+        logger.warning(
+            "%s=%s의 키 접두어 %s가 현행 %r와 다르다 — 잠정 산포(provisional)로 돈다.",
+            SPREAD_REFERENCE_ENV, path, sorted(prefixes), expected,
+        )
+        return None
+    return loaded
 
 
 def create_app(source: Any | None = None) -> FastAPI:

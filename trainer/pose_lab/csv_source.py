@@ -300,7 +300,8 @@ def _entry_for(
     if start is None or end is None or end < start:
         return None
 
-    inputs = service.key_inputs(service.stroke_frame.resample_frames(span, samples))
+    # 원 프레임(`span`)을 같이 넘긴다 — 키의 UV 칸은 호장 중점의 원 프레임 UV다(m3, D1).
+    inputs = service.key_inputs(service.stroke_frame.resample_frames(span, samples), raw_frames=span)
     if inputs is None:
         return None
     return PassIndexEntry(

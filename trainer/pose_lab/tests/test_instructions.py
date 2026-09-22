@@ -179,12 +179,18 @@ def test_measured_display_strings_and_labels() -> None:
 
 
 def test_real_level1_texts_match_the_users_screen() -> None:
-    """사용자 화면(김경호 L1 1000389_1 #0 대 전형기 1000564_1 #17)의 교정 4건."""
+    """사용자 화면(김경호 L1 1000389_1 #0 대 전형기 1000564_1 #17)의 교정 4건.
+
+    D1(키 m3) 뒤로 이 패스의 산포 버킷이 uv4 층으로 바뀌어 σ로 나눈 크기 순서가 달라졌다.
+    네 교정의 크기(cm)는 m1 때와 같고 순서만 바뀌었다(m1: −15.4, +23.3, −15.7, −11.4).
+    """
     case = next(c for c in isolation._cases() if c["name"] == "real_L1_kkh_1000389_1_0")  # noqa: SLF001
     body = isolation._run(case, include_view=True)  # noqa: SLF001
     axes = body["measured"]["axes"]
-    assert [a["figure"] for a in axes] == ["−15.4", "+23.3", "−15.7", "−11.4"]
-    assert axes[0]["text"] == "오른손(건)을 벽 쪽으로 15.4cm 붙이세요."
+    assert [a["figure"] for a in axes] == ["+23.3", "−15.4", "−11.4", "−15.7"]
+    assert axes[0]["text"] == "오른손(건)을 23.3cm 올리세요."
+    wall = next(a for a in axes if a["point"] == "right" and a["axis"] == "wall")
+    assert wall["text"] == "오른손(건)을 벽 쪽으로 15.4cm 붙이세요."
     head = next(a for a in axes if a["point"] == "head")
     assert "15.7cm" in head["text"] and "한 걸음" not in head["text"]
     blob = json.dumps(body["measured"]["axes"], ensure_ascii=False)

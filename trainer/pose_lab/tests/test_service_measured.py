@@ -48,8 +48,7 @@ def _keys_for(query: dict[str, object]) -> dict[str, str]:
     `service.motion_key.KeyParams()` 기본값(uv_grid=8)이 `compare()`가 쓰는 기본
     `params`와 같으므로, 이 키가 곧 응답의 `query_key`(우8 층)와 같다.
     """
-    frames = service.pass_frames(FakeSource().load(PassRef(**query)))
-    inputs = service.key_inputs(frames)
+    _frames, inputs = service.pass_key_inputs(FakeSource().load(PassRef(**query)))
     assert inputs is not None
     key8 = service.key_from(inputs, service.motion_key.KeyParams(uv_grid=8))
     key_off = service.build_spread_reference.key_without_uv(key8)
@@ -400,6 +399,40 @@ def test_create_app_reads_the_spread_reference_env_var(tmp_path, monkeypatch) ->
     assert body["measured"]["normalization"] == "measured"
 
 
+def test_create_app_refuses_an_artifact_built_with_an_old_key_prefix(tmp_path, monkeypatch, caplog) -> None:
+    """D1(m1→m3) 뒤 옛 접두어 아티팩트를 주면 경고하고 잠정 산포로 돈다 — 섞어 쓰지 않는다.
+
+    대조군: 옛 접두어 버킷을 넣지 않은 같은 페이로드는 실측으로 돈다. 현행 키 버킷은 두 쪽이
+    같으니 결과를 가른 것은 접두어 검사뿐이다.
+    """
+    import json
+
+    dates = ["20250901", "20250902"]
+    keys = _keys_for(_QUERY)
+    prefix = service.motion_key.KEY_PREFIX
+    assert keys["uv8"].startswith(f"{prefix}:")
+    assert prefix != "m1"
+    results = {}
+    for label in ("current", "mixed"):
+        artifact_path = tmp_path / f"spread_reference_{label}.json"
+        payload = _uniform_payload(_EXPERT_WORKER, keys["uv8"], keys["uv_off"], dates)
+        if label == "mixed":
+            # 현행 키 버킷은 그대로 두고 옛 접두어 버킷을 한 벌 더 넣는다. 검사가 없으면 현행 키로
+            # 조회가 성공해 실측으로 돈다 — 옛 산출물이 섞인 아티팩트가 조용히 통과하는 경우다.
+            for layer in payload["granularities"].values():
+                for key in list(layer):
+                    layer["m1" + key[len(prefix):]] = layer[key]
+        artifact_path.write_text(json.dumps(payload), encoding="utf-8")
+        monkeypatch.setenv(SPREAD_REFERENCE_ENV, str(artifact_path))
+        caplog.clear()
+        client = TestClient(create_app(source=FakeSource()))
+        body = client.post("/api/compare", json={"query": _QUERY, "reference": REFERENCE}).json()
+        results[label] = (body["measured"]["normalization"], caplog.text)
+    assert results["current"][0] == "measured"
+    assert results["mixed"][0] == "provisional", "옛 접두어 버킷이 섞인 아티팩트가 조용히 통과했다"
+    assert "접두어" in results["mixed"][1]
+
+
 def test_create_app_without_the_env_var_stays_provisional(monkeypatch) -> None:
     monkeypatch.delenv(SPREAD_REFERENCE_ENV, raising=False)
     client = TestClient(create_app(source=FakeSource()))
@@ -513,8 +546,7 @@ def test_reference_keys_matches_build_from_root_for_the_same_pass(_keybake_root)
             worker=session.worker, date=session.date, level=session.level,
             session=session.session, pass_index=entry.pass_index,
         )
-        frames = service.pass_frames(source.load(ref))
-        candidate = service.key_inputs(frames)
+        _frames, candidate = service.pass_key_inputs(source.load(ref))
         if candidate is not None:
             inputs = candidate
             break

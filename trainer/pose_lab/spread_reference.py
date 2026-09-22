@@ -59,6 +59,18 @@ class SpreadReference:
     def worker(self) -> str:
         return str(self._payload["worker"])
 
+    def key_prefixes(self) -> set[str]:
+        """버킷 키의 접두어 집합(`m1`, `m3` …). 키 정의가 바뀌면 옛 아티팩트의 키는 하나도 맞지 않는다."""
+        granularities = self._payload.get("granularities")
+        if not isinstance(granularities, Mapping):
+            return set()
+        return {
+            str(key).split(":", 1)[0]
+            for layer in granularities.values()
+            if isinstance(layer, Mapping)
+            for key in layer
+        }
+
     def _bucket(self, granularity: str, key: str) -> Mapping[str, object] | None:
         granularities = self._payload.get("granularities")
         if not isinstance(granularities, Mapping):

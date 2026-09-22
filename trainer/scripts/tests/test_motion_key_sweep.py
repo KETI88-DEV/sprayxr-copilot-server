@@ -103,7 +103,7 @@ def test_default_config_partitions_exactly_like_the_live_key() -> None:
     ]
     swept = [sweep.sweep_key(record, sweep.SweepConfig(name="기본")) for record in records]
     assert _partition(live) == _partition(swept)
-    assert all(key.startswith("m1:") for key in live)
+    assert all(key.startswith("m3:") for key in live)
     assert all(key.startswith("sweep:") for key in swept)
 
 
