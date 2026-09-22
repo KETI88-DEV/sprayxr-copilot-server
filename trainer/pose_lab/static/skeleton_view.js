@@ -27,6 +27,9 @@
 // "보정 오프셋 0.57m(적합값)", 어긋남 점선 위에 "12.8cm" 같은 라벨이 떠 있었고, 사용자가
 // "숫자며 수치 무슨 말인지를 모르겠고 보정 오프셋은 왜 표시했는지를 모르겠음"이라고 했다.
 //
+// 좌표: 서버 좌표는 유니티(Y 위, 왼손계)이고 three.js는 오른손계다. `render()`가 받자마자 한 곳
+// (`sceneViewFromUnity`, Z 반전)에서 장면 좌표로 바꾼다 — 그러지 않으면 장면 전체가 거울상이 된다.
+//
 // three.js는 cdnjs에서 버전 고정으로 이 스크립트보다 먼저 실린다(index.html).
 // 못 실리면 `createSkeletonView`가 아무것도 던지지 않고 안내만 남긴다.
 
@@ -246,6 +249,44 @@ function sigmaColor(sigma) {
 
 function isVec3(value) {
   return Array.isArray(value) && value.length === 3 && value.every((x) => typeof x === "number");
+}
+
+// --- 좌표 경계: 유니티(왼손계) → three.js(오른손계) ------------------------------------------
+//
+// 서버가 주는 좌표는 **유니티 좌표**다 — Y 위, 왼손계(X 오른쪽, Y 위, Z 앞). 규약의 출처는
+// `trainer/scripts/world_axes.py`다(`UP_INDEX = 1`, `HANDEDNESS = "left"`: "캡처 CSV의 좌표는 유니티의
+// 것이다 — Y가 위, 왼손 좌표계"). three.js는 **오른손계**다(Y 위, 카메라는 −Z를 본다). 두 좌표계를
+// 그대로 이으면 장면 전체가 실제의 **거울상**이 된다: 오른손(건)이 화면에서 왼손 자리에 보였다(사용자:
+// "반전이 있잖아. 지금 왼손이잖아."). 실측(작업자 뒤에서 정면을 보는 카메라, 김경호 L1·L6 첫 패스):
+// 데이터에서 건이 HMD 오른쪽인 20/20 프레임이 화면에서는 20/20 왼쪽이었다.
+//
+// 손대칭은 축 하나를 뒤집어야 바뀐다. **Z를 뒤집는다** — 위(Y)는 그대로여야 하고, X를 뒤집으면 유니티의
+// "오른쪽"(+X)이 이름째 뒤집힌다. (x, y, z) → (x, y, −z)는 반사라 거리·각도는 그대로다.
+//
+// 변환은 **여기 한 곳**이다. `render()`가 서버 `view`를 받자마자 `sceneViewFromUnity`로 **한 번** 바꾸고,
+// 그 뒤의 코드(관절·실측 장치·궤적·벽 위 스트로크·착탄점·벽 메시 정점·교정 화살표의 점과 방향·건 막대·
+// 점선 연결·자리표시 다리·간격 보조선·"이 순간" 고리·바닥 격자·카메라 맞춤·라벨 투영·프리셋의 벽 법선)는
+// **장면 좌표만** 본다. 호출부마다 부호를 따로 뒤집지 않는다 — 그렇게 하면 하나만 빠져도 그 요소만
+// 거울상에 남는다. 수 세 개짜리 배열은 **전부** 좌표(점이든 방향이든 Z를 뒤집는 규칙은 같다)로 보고,
+// 예외는 아래 목록(삼각형의 정점 번호)뿐이다: 기본이 "변환"이라 서버에 새 좌표 필드가 생겨도 빠지지 않는다.
+function sceneFromUnity(p) {
+  return [p[0], p[1], -p[2]];
+}
+// 수 세 개짜리지만 좌표가 아닌 것(키 이름). 벽 메시의 `triangles`는 `vertices`의 **번호**다.
+const NON_COORDINATE_TRIPLES = new Set(["triangles"]);
+
+/** 서버 `view`(유니티 좌표)를 장면 좌표로 깊이 복사한다. 원본은 건드리지 않는다. */
+function sceneViewFromUnity(value, key) {
+  if (Array.isArray(value)) {
+    if (isVec3(value)) return NON_COORDINATE_TRIPLES.has(key) ? value.slice() : sceneFromUnity(value);
+    return value.map((item) => sceneViewFromUnity(item, key));
+  }
+  if (value !== null && typeof value === "object") {
+    const out = {};
+    for (const [name, item] of Object.entries(value)) out[name] = sceneViewFromUnity(item, name);
+    return out;
+  }
+  return value;
 }
 
 /** 씬 그래프에서 이 그룹의 후손 수. 다시 그릴 때 층이 **쌓이는지**를 재는 계수기다 —
@@ -587,6 +628,45 @@ function mount(THREE, container) {
     arrowStarts: [],
     // 검증용: 격자**만** 숨겼다 켠다 — 헤드리스 브라우저가 격자가 실제로 칠한 픽셀을 이 차이로 잰다.
     setGridVisible(on) { if (gridObject) gridObject.visible = on === true; },
+    // 검증용: **씬 그래프에서** 그려진 위치를 읽는다(월드 좌표 = 장면 좌표). 코드가 무엇을 넣었다고
+    // 말하는 값이 아니라 메시 위치·선 정점을 행렬까지 곱해 읽은 값이다 — 헤드리스 브라우저가 이것을
+    // 서버 페이로드(유니티 좌표)와 대조해 좌표 경계가 모든 요소에 걸렸는지(거리 보존)와 화면 좌우가
+    // 데이터 좌우와 같은지를 잰다. 라벨은 DOM이라 씬에 없으므로 투영 기준점(`entry.position`)을 낸다.
+    drawnPoints() {
+      scene.updateMatrixWorld(true);
+      const out = [];
+      const layerOf = (object) => {
+        for (let node = object; node; node = node.parent) {
+          for (const [name, group] of Object.entries(layerGroups)) if (node === group) return name;
+          if (node === correctionsGroup) return "corrections";
+        }
+        return "scene";
+      };
+      scene.traverse((child) => {
+        const kind = child.userData.kind;
+        if (typeof kind !== "string" || child.isGroup) return;
+        const key = child.userData.point ?? child.userData.name ?? (typeof child.userData.n === "number" ? String(child.userData.n) : "");
+        const points = [];
+        if (child.isLine || kind === "wall-mesh") {
+          const attribute = child.geometry.getAttribute("position");
+          for (let i = 0; i < attribute.count; i += 1) {
+            const v = new THREE.Vector3().fromBufferAttribute(attribute, i).applyMatrix4(child.matrixWorld);
+            points.push([v.x, v.y, v.z]);
+          }
+        } else {
+          const v = child.getWorldPosition(new THREE.Vector3());
+          points.push([v.x, v.y, v.z]);
+        }
+        out.push({ kind, layer: layerOf(child), key, visible: child.visible, points });
+      });
+      for (const entry of labelRegistry) {
+        out.push({
+          kind: `label:${entry.el.className}`, layer: entry.layer ?? "", key: entry.el.textContent,
+          visible: true, points: [[entry.position.x, entry.position.y, entry.position.z]],
+        });
+      }
+      return out;
+    },
   };
   let coneRegistry = [];
   let markerRegistry = [];
@@ -1063,6 +1143,7 @@ function mount(THREE, container) {
       const marker = new THREE.Mesh(markerGeometry, markerMaterial);
       marker.position.copy(points[points.length - 1]);
       marker.userData.kind = measured === false ? "computed-layer-marker" : "measured-layer-marker";
+      marker.userData.point = name;
       group.add(marker);
       if (labelPointNames) {
         registerLabel(points[points.length - 1], POINT_LABELS[name] ?? name, "view3d-label-point");
@@ -1406,6 +1487,7 @@ function mount(THREE, container) {
       const marker = new THREE.Mesh(markerGeometry, markerMaterial);
       marker.position.set(...anchor.measured_marker);
       marker.userData.kind = "measured-marker";
+      marker.userData.point = anchor.point;
       group.add(marker);
       counts.measuredSpheres += 1;
       if (register) markerRegistry.push({ point: anchor.point, center: marker.position.clone() });
@@ -1503,11 +1585,13 @@ function mount(THREE, container) {
       const shaft = new THREE.Mesh(new THREE.CylinderGeometry(ARROW_SHAFT_RADIUS, ARROW_SHAFT_RADIUS, shaftLength, 10), material);
       shaft.quaternion.copy(quat);
       shaft.position.copy(start).addScaledVector(dir, shaftLength / 2);
+      shaft.userData.kind = "correction-shaft";
       group.add(shaft);
     }
     const cone = new THREE.Mesh(new THREE.ConeGeometry(ARROW_HEAD_RADIUS, headLength, 16), material);
     cone.quaternion.copy(quat);
     cone.position.copy(start).addScaledVector(dir, shaftLength + headLength / 2);
+    cone.userData.kind = "correction-cone";
     group.add(cone);
     const coneBase = start.clone().addScaledVector(dir, shaftLength);
     return { group, coneBase };
@@ -1534,8 +1618,11 @@ function mount(THREE, container) {
     geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
     geometry.setIndex(new THREE.BufferAttribute(indices, 1));
     geometry.computeVertexNormals();
-    // 정렬 변환이 반사(det<0)라 삼각형 감김이 뒤집혀 있다 — 양면으로 그려야 법선 방향과
-    // 무관하게 보인다. 반투명 벽이 뒤의 몸·마커를 깊이로 가리지 않게 depthWrite를 끈다.
+    // 양면(DoubleSide)으로 그린다. 감김은 두 번 뒤집힌다 — 서버의 정렬 변환이 반사(det<0)이고, 좌표
+    // 경계(`sceneFromUnity`, Z 반전)도 반사다. 감김을 바로잡는 대신 양면을 **유지한다**: 이 벽은 반투명이라
+    // 카메라가 어느 쪽(벽 정면·측면·드래그로 뒤)에 있든 보여야 하고, 감김(=법선 방향)을 쓰는 곳은 없다 —
+    // 벽 법선을 읽는 유일한 곳(`estimateWallNormal`)은 몸 쪽으로 부호를 다시 정한다. 반투명 벽이 뒤의
+    // 몸·마커를 깊이로 가리지 않게 depthWrite를 끈다.
     const material = new THREE.MeshStandardMaterial({
       color: MESH_COLOR,
       transparent: true,
@@ -1546,6 +1633,7 @@ function mount(THREE, container) {
     });
     const group = new THREE.Group();
     const surface = new THREE.Mesh(geometry, material);
+    surface.userData.kind = "wall-mesh";
     group.add(surface);
     const edges = new THREE.LineSegments(
       new THREE.EdgesGeometry(geometry, 25),
@@ -2286,7 +2374,8 @@ function mount(THREE, container) {
 
   function render(payload) {
     dom.host.classList.remove("is-loading");
-    const view = payload?.view;
+    // 좌표 경계(`sceneViewFromUnity`). 서버 `payload`는 이 한 줄에서만 읽는다 — 이 아래는 장면 좌표다.
+    const view = payload?.view ? sceneViewFromUnity(payload.view) : null;
     if (!view) {
       clear("표시할 뷰 데이터가 없습니다.", "empty");
       return;
@@ -2395,6 +2484,7 @@ function mount(THREE, container) {
       const arrow = buildArrow(from, to, sigmaColor(correction.sigma));
       if (!arrow) continue;
       correctionsGroup.add(arrow.group);
+      arrow.group.traverse((child) => { child.userData.n = correction.n; });
       coneRegistry.push({ n: correction.n, center: arrow.coneBase, radius: ARROW_HEAD_RADIUS });
       arrowStarts.push({ n: correction.n, from, source: useFrame ? "from_frame" : "from" });
       const start = new THREE.Vector3(...from);

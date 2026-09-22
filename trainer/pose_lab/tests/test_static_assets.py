@@ -2453,3 +2453,95 @@ def test_no_screen_text_says_bojeong():
 
 def test_screen_bojeong_check_can_fail():
     assert screen_bojeong('// 옛 보정 오프셋\nconst t = "보정 오프셋 0.57m";') == ['const t = "보정 오프셋 0.57m";']
+
+
+# --- 좌표 경계: 유니티(왼손계) → three.js(오른손계) ---------------------------------------------
+#
+# 서버 좌표는 유니티 좌표(Y 위, 왼손계 — `trainer/scripts/world_axes.py`)이고 three.js는 오른손계다.
+# 예전 화면은 둘을 그대로 이어 장면 전체가 거울상이었다(사용자: "반전이 있잖아. 지금 왼손이잖아.").
+# 여기서는 소스로 고정할 수 있는 것만 본다: 변환이 **한 곳**이고, Z만 뒤집으며, 서버 페이로드가 그 한
+# 곳을 거치지 않고는 장면에 닿을 길이 없다. 실제로 화면 좌우가 데이터 좌우와 같은지(그리고 모든 요소가
+# 같은 사상 위에 있는지)는 컨테이너에 JS 엔진이 없어 헤드리스 브라우저 실측이 맡는다.
+
+
+def coordinate_boundary_faults(js: str) -> list[str]:
+    code = without_comments(js)
+    flip = re.search(r"\nfunction sceneFromUnity\((\w+)\) \{\n  return \[([^\]\n]*(?:\]\s*,?[^\]\n]*)*)\];\n\}", code)
+    if flip is None:
+        return ["no_boundary"]
+    faults: list[str] = []
+    name = flip.group(1)
+    if flip.group(2).replace(" ", "") != f"{name}[0],{name}[1],-{name}[2]":
+        faults.append("boundary_does_not_flip_only_z")
+    exempt = re.search(r"const NON_COORDINATE_TRIPLES = new Set\(\[([^\]]*)\]\);", code)
+    if exempt is None or re.findall(r'"(\w+)"', exempt.group(1)) != ["triangles"]:
+        faults.append("boundary_exempts_coordinates")
+    walker = _top_level_function_body(code, "sceneViewFromUnity")
+    if (
+        "NON_COORDINATE_TRIPLES.has(key) ? value.slice() : sceneFromUnity(value)" not in walker
+        or "value.map((item) => sceneViewFromUnity(item, key))" not in walker
+        or "out[name] = sceneViewFromUnity(item, name)" not in walker
+    ):
+        faults.append("walker_skips_nested_values")
+    # 서버 페이로드는 `render(payload)`의 한 줄에서만, 경계를 거쳐서 읽는다.
+    if (
+        "function render(payload)" not in code
+        or "const view = payload?.view ? sceneViewFromUnity(payload.view) : null;" not in code
+        or len(re.findall(r"\bpayload\b", code)) != 3
+    ):
+        faults.append("server_payload_bypasses_boundary")
+    if set(re.findall(r"\blastView = ([^;]+);", code)) - {"view", "null"}:
+        faults.append("last_view_is_not_scene_space")
+    if any(token in code for token in ("fetch(", "__lastCompare", "XMLHttpRequest")):
+        faults.append("second_server_source")
+    # 호출부마다 따로 뒤집지 않는다: 경계 함수는 정의 하나·호출 하나(깊이 복사)뿐이고, Z 부호를 바꾸는
+    # 다른 식(단항 음수 `[2]`·반사 스케일)이 없다.
+    scattered = (
+        code.count("sceneFromUnity(") != 2
+        or len(re.findall(r"[\[(,=]\s*-\s*[A-Za-z_.?]+\[2\]", code)) != 1
+        or re.search(r"scale\.(set|z)|makeScale|\.z\s*\*=\s*-|\.z\s*=\s*-", code) is not None
+    )
+    if scattered:
+        faults.append("flip_scattered_across_call_sites")
+    return faults
+
+
+def test_scene_coordinates_pass_one_unity_to_three_boundary():
+    assert coordinate_boundary_faults(_read("skeleton_view.js")) == []
+
+
+def test_coordinate_boundary_checks_can_fail():
+    full = _read("skeleton_view.js")
+    assert coordinate_boundary_faults("") == ["no_boundary"]
+    identity = full.replace("  return [p[0], p[1], -p[2]];", "  return [p[0], p[1], p[2]];", 1)
+    assert identity != full and coordinate_boundary_faults(identity) == ["boundary_does_not_flip_only_z", "flip_scattered_across_call_sites"]
+    x_flip = full.replace("  return [p[0], p[1], -p[2]];", "  return [-p[0], p[1], p[2]];", 1)
+    assert x_flip != full and coordinate_boundary_faults(x_flip) == ["boundary_does_not_flip_only_z", "flip_scattered_across_call_sites"]
+    track_left_out = full.replace('new Set(["triangles"])', 'new Set(["triangles", "right"])', 1)
+    assert track_left_out != full and coordinate_boundary_faults(track_left_out) == ["boundary_exempts_coordinates"]
+    shallow = full.replace("value.map((item) => sceneViewFromUnity(item, key))", "value.slice()", 1)
+    assert shallow != full and coordinate_boundary_faults(shallow) == ["walker_skips_nested_values"]
+    bypass = full.replace(
+        "const view = payload?.view ? sceneViewFromUnity(payload.view) : null;", "const view = payload?.view;", 1,
+    )
+    assert bypass != full and coordinate_boundary_faults(bypass) == ["server_payload_bypasses_boundary"]
+    raw_grid = full.replace("gridObject = buildGrid(view.grid);", "gridObject = buildGrid(payload.view.grid);", 1)
+    assert raw_grid != full and coordinate_boundary_faults(raw_grid) == ["server_payload_bypasses_boundary"]
+    raw_last = full.replace("    lastView = view;\n", "    lastView = payload.view;\n", 1)
+    assert raw_last != full and coordinate_boundary_faults(raw_last) == [
+        "server_payload_bypasses_boundary", "last_view_is_not_scene_space",
+    ]
+    second = full.replace("function resetScene() {", "function resetScene() {\n    void window.__lastCompare;", 1)
+    assert second != full and coordinate_boundary_faults(second) == ["second_server_source"]
+    per_site = full.replace(
+        "marker.position.set(...anchor.measured_marker);",
+        "marker.position.set(...sceneFromUnity(anchor.measured_marker));", 1,
+    )
+    assert per_site != full and coordinate_boundary_faults(per_site) == ["flip_scattered_across_call_sites"]
+    negated = full.replace(
+        "grid.position.set(...gridBlock.center);",
+        "grid.position.set(gridBlock.center[0], gridBlock.center[1], -gridBlock.center[2]);", 1,
+    )
+    assert negated != full and coordinate_boundary_faults(negated) == ["flip_scattered_across_call_sites"]
+    mirrored_group = full.replace("scene.add(correctionsGroup);", "scene.add(correctionsGroup);\n  correctionsGroup.scale.z = -1;", 1)
+    assert mirrored_group != full and coordinate_boundary_faults(mirrored_group) == ["flip_scattered_across_call_sites"]
