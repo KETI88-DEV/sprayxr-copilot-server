@@ -300,7 +300,17 @@ P1의 상황은 둘이 다르다.
 
 ### R1. 등록 기록
 
-(이 문서를 커밋한 해시와 UTC 시각, 그 시점까지 돌린 측정이 0건이라는 사실.)
+- 이 문서의 본문(§0–§8)은 커밋 `0df2f4d703943a881a980109bd6d3fde0b767ad5`(**2026-09-23T01:35:45Z**, 부모 `8ec2cf9`)로 고정했다.
+  그 시점까지 이 문서가 가리키는 측정은 **하나도 돌리지 않았다.** 귀무 8회(§3.3)도, P1 구현도, P1 측정도 시작하지 않았다.
+- 그 커밋 전에 읽은 것은 둘뿐이다.
+  1. 코드: `trainer/pose_lab/service.py`(`reference_candidates` 2544–2640행, `pass_key_inputs`·`KeyInputs`·`key_inputs` 157–221행),
+     `trainer/pose_lab/csv_source.py`(`PassIndexEntry` 72–78행, `passes`·`key_of`·`_entry_for`),
+     `trainer/pose_lab/static/app.js`(`referenceState`·`cycle`·`candidates[index]`),
+     `trainer/scripts/improvement_study.py`(`select_pairs_screen` 379–435행, `SCREEN_SAMPLES`·`SCREEN_LIMIT`·`DEFAULT_SEED_REF`),
+     `trainer/scripts/motion_key.py`(`midpoint_uv` 177–195행).
+  2. 직전 사전등록 문서 `docs/measurements/2026-09-22-same-level-pairs-d1-prereg.md`(기준선 N·m3의 수, R2의 τ 상한, R6의 화면 영향 표).
+- 새 산출물은 하나도 만들지 않았다. `/output/nearest/`는 아직 없다.
+- 커밋 시점의 작업 트리는 이 문서 말고 추적 파일 변경이 없었다.
 
 ### R2. 귀무 분포와 τ (§3.3) — P1을 구현하거나 재기 전에 확정
 
