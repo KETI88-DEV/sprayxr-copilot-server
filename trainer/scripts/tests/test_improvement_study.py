@@ -341,3 +341,30 @@ def test_screen_rule_matches_the_screen_on_real_files() -> None:
         assert pair0.reference == shown[0], f"N0이 화면의 candidates[0]과 다르다: {q}"
         assert pair.reference_granularity == body["match_granularity"]
         assert pair.truncated is False and body["truncated"] is False
+
+
+def test_random_choice_is_independent_of_the_response_order() -> None:
+    """성질 6(사전등록 2026-09-23 §7-6): `choose="random"`은 후보 목록의 **순서**와 무관하다.
+
+    `select_pairs_screen`이 뽑기 전에 후보를 `(date, session, pass_index)`로 다시 세우기
+    때문이다. 이것이 귀무 8회(§3.3)를 정렬 도입 **전** 코드에서 돌려도 되는 근거다.
+    깨지면 R2의 귀무 분포가 P1과 같은 코드 위에서 잰 값이 아니게 된다(F6).
+    """
+    candidates = _synthetic_candidates()
+    forward = _fake_candidates_fn({})
+
+    def backward(source, ref, params, samples, limit):
+        found = forward(source, ref, params, samples, limit)
+        return {**found, "candidates": list(reversed(found["candidates"]))}
+
+    a = improvement_study.select_pairs_screen(None, candidates, "전형기", 24, 7, candidates_fn=forward)
+    b = improvement_study.select_pairs_screen(None, candidates, "전형기", 24, 7, candidates_fn=backward)
+    assert [p.reference for p in a] == [p.reference for p in b], (
+        "응답 순서를 뒤집었더니 --choose random의 기준이 바뀌었다 — 귀무 분포를 정렬 코드 위에서 다시 재야 한다"
+    )
+    # 공허하지 않다는 확인: 같은 대역에서 choose="first"는 순서를 그대로 탄다.
+    a0 = improvement_study.select_pairs_screen(None, candidates, "전형기", 24, 7, choose="first", candidates_fn=forward)
+    b0 = improvement_study.select_pairs_screen(None, candidates, "전형기", 24, 7, choose="first", candidates_fn=backward)
+    assert [p.reference for p in a0] != [p.reference for p in b0], (
+        "대역이 순서를 실제로 뒤집지 못했다 — 위 단언이 공허하다"
+    )
