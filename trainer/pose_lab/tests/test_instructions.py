@@ -171,6 +171,11 @@ def test_measured_display_strings_and_labels() -> None:
     assert measured["display"]["score_after"] == f"{measured['score_after']:.3f}"
     assert measured["display"]["improvement_same"] == f"{measured['improvement']['same']:.3f}"
     assert measured["display"]["improvement_split"] == "—"  # 이 픽스처는 split이 None이다
+    # 원시 차이. G만 보면 천장 가까이에서 속으므로 실제로 몇 점 움직였는지가 같이 나간다.
+    # 값을 점수에서 직접 계산해 비교한다 — 문자열만 비교하면 부호·자릿수 규칙이 바뀌어도 통과한다.
+    raw_delta = measured["score_after"] - measured["score"]
+    assert raw_delta > 0.0, "이 픽스처의 전제: 교정이 유사도를 올린다"
+    assert measured["display"]["score_delta"] == f"+{raw_delta:.3f}"
     for shown, delta in zip(measured["deltas_display"], measured["deltas"]):
         assert shown["point"] == delta["point"]
         assert shown["deviation_display"] == f"{delta['deviation_cm']:.1f}"

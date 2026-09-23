@@ -343,7 +343,11 @@ function renderImprovement(measured) {
   const rows = $("improvementRows");
   rows.replaceChildren();
   const splitReason = measured.split_reason ?? null;
+  // 원시 차이를 정규화 지표보다 **먼저** 둔다. G=(S1−S0)/(1−S0)는 S0가 1에 가까우면
+  // 작은 움직임도 크게 보이므로(천장 압축), 실제로 몇 점 움직였는지가 같은 자리에 있어야
+  // 읽는 사람이 속지 않는다. 근거는 docs/literature_basis.md §4.2.
   for (const [key, value, label] of [
+    ["delta", display.score_delta, "유사도가 실제로 움직인 양(원시 차이)"],
     ["same", display.improvement_same, labels.same],
     ["split", display.improvement_split, labels.split],
   ]) {

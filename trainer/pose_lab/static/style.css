@@ -396,7 +396,19 @@ button { font-family: var(--sans); cursor: pointer; }
   align-items: baseline;
 }
 .improvement > .section-title { margin: 0; }
-.improvement-rows { grid-column: 1 / -1; }
+/* 접힌 영역이 그리드 전폭을 받는다. 이 규칙이 `.improvement-rows`에 남아 있으면
+   `<details>`가 한 칸만 차지해 요약과 내용이 좁은 열에 갇힌다. */
+.improvement-detail { grid-column: 1 / -1; margin-top: var(--sp-2); }
+.improvement-detail > summary {
+  cursor: pointer;
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+  list-style: none;
+}
+.improvement-detail > summary::-webkit-details-marker { display: none; }
+.improvement-detail > summary::before { content: "▸ "; }
+.improvement-detail[open] > summary::before { content: "▾ "; }
+.improvement-detail > summary:hover { color: var(--text); }
 .improvement-score {
   display: flex;
   flex-wrap: wrap;

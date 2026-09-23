@@ -203,5 +203,23 @@ def score_display(value: float | None) -> str:
     return DASH if value is None else f"{value:.3f}"
 
 
+def score_delta_display(before: float | None, after: float | None) -> str:
+    """교정 전후 유사도의 **원시 차이**. 부호를 달고 나간다.
+
+    G = (S1 − S0)/(1 − S0)만 보면 천장 가까이에서 속는다 — S0 0.950 → S1 0.970은
+    G가 0.40이지만 실제로 움직인 유사도는 0.020뿐이다. 같은 G가 S0 0.19 → 0.51에서는
+    0.32를 뜻한다. 두 경우를 같은 숫자 하나로 보여 주면 읽는 사람이 구별할 수 없다.
+    정규화 이득 계열 지표의 알려진 결함(천장 압축)이고, `docs/literature_basis.md` §4.2에
+    출처를 적었다.
+
+    `figure`와 달리 U+2212가 아니라 ASCII 하이픈을 쓰지 않는다 — 화면의 다른 수치와
+    부호 기호가 갈리면 같은 표에서 두 규칙이 섞인다.
+    """
+    if before is None or after is None:
+        return DASH
+    delta = after - before
+    return (MINUS if delta < 0 else "+") + f"{abs(delta):.3f}"
+
+
 def deviation_display(cm: float) -> str:
     return f"{cm:.1f}"

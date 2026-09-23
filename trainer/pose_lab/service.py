@@ -1981,6 +1981,9 @@ def measured_display(measured: Mapping[str, Any]) -> dict[str, object]:
         "display": {
             "score": instructions.score_display(measured.get("score")),
             "score_after": instructions.score_display(measured.get("score_after")),
+            "score_delta": instructions.score_delta_display(
+                measured.get("score"), measured.get("score_after")
+            ),
             "improvement_same": instructions.score_display(improvement_values.get("same")),
             "improvement_split": instructions.score_display(improvement_values.get("split")),
         },
