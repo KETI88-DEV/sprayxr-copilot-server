@@ -79,9 +79,11 @@
         <p class="state-note" id="correctionsState" data-tone="idle">패스를 고르고 평가를 누르면 여기에 뜹니다.</p>
       </section>
 
-      <!-- ④ 개선율 -->
-      <section class="panel improvement" id="improvementSection" aria-label="개선율">
-        <h2 class="section-title">교정을 따르면</h2>
+      <!-- ④ 지시를 그대로 따랐을 때의 상한. "개선율"이 아니다 — 작업자가 다시 뿌린 적이 없고,
+           지시한 점을 지시한 만큼 옮겨 다시 채점한 계산값이다(instructions.IMPROVEMENT_LABELS의
+           두 가정, docs/literature_basis.md §4). -->
+      <section class="panel improvement" id="improvementSection" aria-label="지시를 그대로 따랐을 때의 상한">
+        <h2 class="section-title">지시를 그대로 따르면</h2>
         <div class="improvement-score" id="improvementScore">—</div>
         <dl class="improvement-rows" id="improvementRows"></dl>
       </section>

@@ -176,8 +176,14 @@ def test_measured_display_strings_and_labels() -> None:
         assert shown["deviation_display"] == f"{delta['deviation_cm']:.1f}"
         assert shown["sigma_display"] == f"σ{delta['sigma']:.2f}"
     labels = measured["improvement_labels"]
-    assert "③ 교정을 그대로 따랐을 때" in labels["same"]
-    assert "따랐을 때" not in labels["split"]
+    # 두 값 다 "지시를 그대로 따랐을 때"의 계산값이지 관측된 향상이 아니다. 라벨에서 그 조건이
+    # 빠지면 화면의 가장 큰 숫자가 관측값처럼 읽힌다 — 이 프로젝트가 반복해서 걸려온 결함이다.
+    for key in ("same", "split"):
+        assert "따랐을 때의 상한" in labels[key], key
+    # 둘의 차이는 자기충족 여부다. 그 구분이 라벨에서 사라지면 정직한 쪽(split)과
+    # 상한인 쪽(same)을 읽는 사람이 구별할 수 없다.
+    assert "자기충족 포함" in labels["same"]
+    assert "자기충족 없음" in labels["split"]
 
 
 def test_real_level1_texts_match_the_users_screen() -> None:
