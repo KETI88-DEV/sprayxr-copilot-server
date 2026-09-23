@@ -79,11 +79,12 @@ def test_share_fired_divides_by_what_was_actually_measured() -> None:
     assert math.isclose(block["share_fired"], 0.5, abs_tol=1e-9)
 
 
-def test_ceiling_leaves_the_left_hand_and_the_head_lateral_untouched() -> None:
-    """천장은 '지시할 수 있는 것을 전부 완벽히 따랐을 때'다.
+def test_ceiling_leaves_the_left_hand_and_the_head_axes_that_are_never_issued() -> None:
+    """천장은 '**발부할 수 있는 것**을 전부 완벽히 따랐을 때'다.
 
-    왼손은 지시 대상이 아니고 머리 lateral도 아니다. 그 둘을 0으로 치면 천장이
-    실제보다 높게 나오고, 미달 폭이 실제보다 작아 보인다.
+    왼손은 지시 대상이 아니다. 머리는 자세 문장 **하나**뿐이라 `CORRECTABLE["head"]`의
+    두 축 중 σ가 큰 하나만 0이 되고, 나머지 하나와 lateral은 남는다. 머리의 두 축을
+    모두 0으로 치면 천장이 시스템이 닿을 수 없는 값 위에 앉는다.
 
     왼손의 미클립 값(4.0·√3 ≈ 6.928)은 `measured_score.MAX_SIGMA`(6.0)를 넘는다 —
     `score_track`이 절대 내지 않을 스케일이므로 `MAX_SIGMA`에서 클립된 값을 고정한다
@@ -91,13 +92,45 @@ def test_ceiling_leaves_the_left_hand_and_the_head_lateral_untouched() -> None:
     """
     sigmas = {
         "right": {"wall": 3.0, "vertical": 3.0, "lateral": 3.0},
-        "head": {"wall": 2.5, "vertical": 2.5, "lateral": 2.5},
+        "head": {"wall": 2.0, "vertical": 3.0, "lateral": 2.5},
         "left": {"wall": 4.0, "vertical": 4.0, "lateral": 4.0},
     }
     residual = improvement_study.ceiling_residual_sigma(sigmas)
     assert residual["left"] == pytest.approx(measured_score.MAX_SIGMA)
-    assert residual["head"] == pytest.approx(2.5)
+    # vertical(3.0)만 0이 된다 — wall 2.0과 lateral 2.5가 남는다.
+    assert residual["head"] == pytest.approx(math.sqrt(2.0**2 + 2.5**2))
     assert residual["right"] == pytest.approx(0.0)
+
+
+def test_the_head_ceiling_zeroes_exactly_one_axis() -> None:
+    """머리의 두 자세 축을 다 0으로 치는 구현이면 이 검사가 실패해야 한다.
+
+    앞 검사는 잔차 값 하나만 고정하므로 0이 된 축의 **개수**가 바뀌어도 값이 우연히
+    맞을 수 있다. 여기서는 두 자세 축을 같은 값으로 두고 개수를 직접 잰다 — 하나만
+    0이면 남는 것은 그 값 하나(2.0), 둘 다 0이면 0이다.
+    """
+    sigmas = {"head": {"wall": 2.0, "vertical": 2.0, "lateral": 0.0}}
+    residual = improvement_study.ceiling_residual_sigma(sigmas)
+    assert residual["head"] == pytest.approx(2.0)
+
+
+def test_the_scorer_issues_exactly_one_head_axis() -> None:
+    """천장이 모형으로 삼는 사실 자체를 잰다 — 머리는 문장 하나만 나간다.
+
+    `CORRECTABLE["head"]`가 `STANCE_AXES`와 같은지만 보는 검사는 축의 **개수**를 보지
+    못한다. 여기서는 두 자세 축이 모두 임계를 크게 넘는 델타를 주고, 실제로 발부되는
+    머리 교정이 하나인지 센다. 머리가 다축 발부로 바뀌면 이 검사가 실패하고, 그때는
+    `SINGLE_AXIS_POINTS`에서 머리를 빼야 한다는 뜻이다.
+    """
+    delta = measured_score.PointDelta(
+        point="head",
+        sigma=5.0,
+        local_delta=(0.4, 0.0, 0.3),
+        samples=10,
+        axis_sigmas={"wall": 4.0, "vertical": 3.0, "lateral": 0.0},
+    )
+    issued = measured_score.issued_axes([delta])
+    assert [correction.point for correction in issued] == ["head"]
 
 
 def test_ceiling_residual_sigma_clamps_at_the_scorers_max_sigma() -> None:

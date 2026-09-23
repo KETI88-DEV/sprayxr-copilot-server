@@ -570,15 +570,25 @@ CORRECTABLE: Final[dict[str, tuple[str, ...]]] = {
     "head": measured_score.STANCE_AXES,
     "left": (),  # 지시 대상이 아니다
 }
+# 이 점은 `CORRECTABLE`의 축 중 **하나만** 발부한다. 머리는 자세 문장 하나뿐이고
+# (`measured_score.head_stance`가 σ가 가장 큰 축 하나를 고른다) `apply_measured`도
+# 그 하나만 옮긴다. 축 집합만 맞추고 개수를 맞추지 않으면 천장이 시스템이 닿을 수
+# 없는 값 위에 앉는다 — 2026-09-23 재계산에서 190쌍의 ≥0.70 천장이 실제로는
+# 87.89%인데 91.05%로 보고되고 있었다.
+SINGLE_AXIS_POINTS: Final[frozenset[str]] = frozenset({"head"})
 
 
 def ceiling_residual_sigma(
     axis_sigmas: Mapping[str, Mapping[str, float]],
 ) -> dict[str, float]:
-    """지시 가능한 축을 전부 완벽히 따랐을 때 각 점에 남는 sigma.
+    """**실제로 발부할 수 있는** 축을 전부 완벽히 따랐을 때 각 점에 남는 sigma.
 
     `CORRECTABLE`에 없는 축은 그대로 남는다. 남는 것을 0으로 치면 천장이 실제보다
     높게 나오고 미달 폭이 작아 보인다.
+
+    `SINGLE_AXIS_POINTS`의 점은 `CORRECTABLE`의 축 중 σ가 가장 큰 **하나만** 0이
+    된다 — `measured_score.head_stance`가 고르는 축과 같은 규칙이다. 나머지 축은
+    지시가 나가지 않으므로 잔차에 남는다.
 
     Fix round 2, F1: `measured_score.score_track`이 점의 결합 σ를
     `min(MAX_SIGMA, ·)`로 클립한다(`MAX_SIGMA=6.0`, 사전등록 상수, 여기서 정의하지
@@ -589,9 +599,13 @@ def ceiling_residual_sigma(
     """
     residual: dict[str, float] = {}
     for point, axes in axis_sigmas.items():
-        correctable = CORRECTABLE.get(point, ())
+        present = [axis for axis in CORRECTABLE.get(point, ()) if axis in axes]
+        if point in SINGLE_AXIS_POINTS and present:
+            zeroed = {max(present, key=lambda axis: float(axes[axis]))}
+        else:
+            zeroed = set(present)
         total = sum(
-            float(value) ** 2 for axis, value in axes.items() if axis not in correctable
+            float(value) ** 2 for axis, value in axes.items() if axis not in zeroed
         )
         residual[point] = min(measured_score.MAX_SIGMA, math.sqrt(total))
     return residual
