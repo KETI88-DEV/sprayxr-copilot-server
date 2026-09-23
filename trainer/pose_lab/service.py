@@ -2541,6 +2541,42 @@ def motion_key_match(
     }
 
 
+def hit_distance_m(query_hit: Vec3 | None, entry: Any) -> float | None:
+    """질의와 후보의 **착탄 중점**(`KeyInputs.hit`) 사이 3차원 유클리드 거리, m. 못 구하면 None.
+
+    `hit`은 리샘플 격자의 가운데 점(`frames[len//2]`, 20점이면 정규 호장 s ≈ 0.526)의 착탄점이고
+    없으면 첫 프레임의 것이다(`key_inputs`). 색인(`csv_source.PassIndexEntry.key_inputs`)이 이미
+    들고 있어 후보마다 CSV를 다시 읽지 않는다.
+
+    좌표는 CSV 월드 그대로다(유니티 Y-up). 레벨 좌표로 투영하지 않고, 어떤 축도 가중하지 않고,
+    바닥 높이를 빼지 않는다 — 후보는 이미 질의와 같은 레벨이라 월드 거리가 같은 벽 위 두 점 사이
+    거리다. 세 축을 대칭으로 쓰므로 축 이름에 의존하지 않는다(사전등록 2026-09-23 §1.1).
+    """
+    hit = getattr(getattr(entry, "key_inputs", None), "hit", None)
+    if query_hit is None or hit is None or len(hit) != 3:
+        return None
+    distance = math.dist(query_hit, hit)
+    return distance if math.isfinite(distance) else None
+
+
+def _by_hit_distance(row: Mapping[str, Any]) -> tuple[tuple[int, float], str, str, int]:
+    """후보 정렬 키 — `(거리, date, session, pass_index)` 오름차순(사전등록 2026-09-23 §1.1).
+
+    동률이면 `(date, session, pass_index)`로 갈린다. 곧 HEAD가 목록을 세우던 바로 그 순서라
+    정렬은 결정론이고 난수를 쓰지 않는다.
+
+    거리를 못 구한 후보(`None`)는 **버리지 않고 맨 뒤**에 둔다. 버리면 후보 집합이 바뀌어
+    화면의 "N개 중 k번째"가 틀리고, 정렬이 고르는 일에 끼어든 것이 된다.
+    """
+    distance = row["hit_distance_m"]
+    return (
+        (1, 0.0) if distance is None else (0, float(distance)),
+        str(row["date"]),
+        str(row["session"]),
+        int(row["pass_index"]),
+    )
+
+
 def reference_candidates(
     source: Any,
     query: PassRef,
@@ -2586,6 +2622,9 @@ def reference_candidates(
         != query
     ]
 
+    # 후보마다 착탄 중점 거리를 한 번만 잰다 — 사다리의 단마다 다시 재지 않는다.
+    distances = [hit_distance_m(query_inputs.hit, entry) for _item, entry in entries]
+
     rungs = reference_ladder(params)
     loosest = rungs[-1][1]
     ladder: list[dict[str, object]] = []
@@ -2597,7 +2636,7 @@ def reference_candidates(
         # 두 곳에서 따로 만들면 고른 단과 허락하는 단이 조용히 갈린다.
         rung_key = _rung_key(query_inputs, granularity, rung_params, loosest)
         matched: list[dict[str, object]] = []
-        for item, entry in entries:
+        for (item, entry), distance in zip(entries, distances):
             motion = source.key_of(entry, key_params)
             if drop_uv and motion is not None:
                 motion = build_spread_reference.key_without_uv(motion)
@@ -2614,8 +2653,14 @@ def reference_candidates(
                     "length_mm": entry.length_m * 1000.0,
                     "motion_key": motion,
                     "match_granularity": granularity,
+                    "hit_distance_m": distance,
                 }
             )
+        # 가장 가까운 후보가 먼저 선다(사전등록 2026-09-23 §1.2). 이 한 줄이 구현의 전부이고,
+        # 화면(`/api/reference` → `static/app.js`의 `candidates[0]`·"다른 기준 ▸" 순환)과
+        # 연구(`improvement_study.select_pairs_screen`, `choose="first"`)가 이것 하나를 나눠 쓴다.
+        # 정렬은 고른 뒤에 하는 일이라 멤버십·사다리 단·`ladder` 건수를 바꾸지 않는다.
+        matched.sort(key=_by_hit_distance)
         ladder.append({"granularity": granularity, "key": rung_key, "count": len(matched)})
         if matched and chosen is None:
             chosen = (granularity, rung_key, matched)

@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 import pytest
 
@@ -30,6 +31,7 @@ class _Item:
 class _Entry:
     pass_index: int
     rows: list[dict[str, str]]
+    hide_hit: bool = False
 
     @property
     def frames(self) -> int:
@@ -38,6 +40,18 @@ class _Entry:
     @property
     def length_m(self) -> float:
         return 1.0
+
+    @property
+    def key_inputs(self) -> object | None:
+        """색인(`csv_source.PassIndexEntry.key_inputs`)과 같은 자리 — 착탄 중점 정렬이 읽는다.
+
+        `hide_hit`이면 None을 낸다. 색인에 올랐는데 `hit`이 없는 후보(§1.1이 "현재 코드에선
+        0이어야 한다"고 적은 경우)를 만들어, 그런 후보가 버려지지 않고 맨 뒤에 서는지 본다.
+        """
+        if self.hide_hit:
+            return None
+        _frames, inputs = service.pass_key_inputs(RawPass(rows=self.rows))
+        return inputs
 
 
 class FakeCandidateSource:
@@ -353,3 +367,270 @@ def test_compare_still_refuses_a_pair_that_meets_at_no_rung() -> None:
     assert match["granularity"] is None and match["label"] is None
     assert [row["granularity"] for row in match["ladder"]] == ["uv8", "uv4", "uv2", "uv_off"]
     assert all(row["matched"] is False for row in match["ladder"]), match["ladder"]
+
+
+# --- 착탄 중점 거리 순 정렬(P1, 사전등록 2026-09-23) --------------------------------
+#
+# 화면은 `candidates[0]`을 자동 기준으로 보여 주고 "[다른 기준 ▸]"로 그 목록을 순환한다.
+# 목록이 세션 파일 순서로 서 있으면 착탄 위치와 무관한 패스가 먼저 나온다(실측: 자동 기준까지
+# 0.360 m인데 후보 전체의 거리 중앙값은 0.195 m였다). 그래서 목록을 **질의와의 착탄 중점
+# 거리** 순으로 세운다. 정렬은 `service.reference_candidates` **한 곳**에만 있고 화면과
+# 개선율 연구가 그것을 나눠 쓴다.
+
+
+class _StubInputs:
+    """`KeyInputs`에서 정렬이 읽는 칸(`hit`)만 가진 대역."""
+
+    def __init__(self, hit: tuple[float, float, float] | None) -> None:
+        self.hit = hit
+
+
+@dataclass(frozen=True, slots=True)
+class _StubEntry:
+    pass_index: int
+    hit: tuple[float, float, float] | None
+
+    @property
+    def frames(self) -> int:
+        return 20
+
+    @property
+    def length_m(self) -> float:
+        return 1.0
+
+    @property
+    def key_inputs(self) -> object | None:
+        return None if self.hit is None else _StubInputs(self.hit)
+
+
+class OrderingFakeSource:
+    """후보의 **착탄 중점만** 정해 두는 대역. 동작 키는 전부 질의와 같아 첫 단(uv8)에서 멈춘다.
+
+    거리를 정렬이 실제로 무엇으로 재는지 고정하려고, 키 일치·레벨·자기 제외 같은 다른 조건을
+    전부 통과시켜 둔다. `reverse`는 `passes`가 후보를 내는 **입력 순서**만 뒤집는다 —
+    정렬이 입력 순서에 의존하는지 보는 손잡이다.
+    """
+
+    def __init__(self, rows: list[tuple[str, str, int, tuple[float, float, float] | None]],
+                 reverse: bool = False) -> None:
+        self.rows = rows
+        self.reverse = reverse
+        self._query_rows = _rows(0.0)
+        _frames, self.query_inputs = service.pass_key_inputs(RawPass(rows=self._query_rows))
+        assert self.query_inputs is not None
+
+    def workers(self) -> list[str]:
+        return ["A", service.EXPERT_WORKER]
+
+    def load(self, ref: PassRef) -> RawPass:
+        if ref != ORDER_QUERY:
+            raise LookupError(f"not found: {ref}")
+        return RawPass(rows=self._query_rows)
+
+    def passes(self, worker: str, level: str | None = None, date: str | None = None, limit: int = 50):
+        if worker != service.EXPERT_WORKER:
+            return [], 0
+        found = [
+            (_Item(worker=worker, date=date_, level="10", session=session),
+             _StubEntry(pass_index=index, hit=hit))
+            for date_, session, index, hit in self.rows
+        ]
+        if self.reverse:
+            found = found[::-1]
+        return found[:limit], len(found)
+
+    def key_of(self, entry: _StubEntry, params: object) -> str | None:
+        # 질의와 **같은 재료**로 키를 만든다 — 모든 후보가 어느 단에서도 질의와 일치한다.
+        return service.key_from(self.query_inputs, params)
+
+
+ORDER_QUERY = PassRef(worker="A", date="20250110", level="10", session="q", pass_index=0)
+
+
+def _shifted(base: tuple[float, float, float], delta: float) -> tuple[float, float, float]:
+    """질의 착탄점에서 한 축으로 `delta` m 떨어진 점. 거리는 정확히 |delta|다."""
+    return (base[0] + delta, base[1], base[2])
+
+
+def _order_of(result: dict[str, object]) -> list[tuple[str, str, int]]:
+    return [(c["date"], c["session"], c["pass_index"]) for c in result["candidates"]]
+
+
+def test_nearest_candidate_comes_first_and_distances_never_decrease() -> None:
+    """성질 2(§7-2): `candidates[0]`이 가장 가깝고, 목록의 거리 수열이 비내림차순이다. (F4)"""
+    source = OrderingFakeSource([])
+    base = source.query_inputs.hit
+    source.rows = [
+        ("20250101", "far", 0, _shifted(base, 0.9)),
+        ("20250102", "mid", 1, _shifted(base, 0.4)),
+        ("20250103", "near", 2, _shifted(base, 0.05)),
+    ]
+    result = service.reference_candidates(source, ORDER_QUERY)
+    assert result["status"] == "ok"
+    distances = [c["hit_distance_m"] for c in result["candidates"]]
+    assert distances == pytest.approx([0.05, 0.4, 0.9]), distances
+    assert distances[0] == pytest.approx(min(distances)), "첫 후보가 가장 가깝지 않다"
+    assert distances == sorted(distances), f"거리 수열이 비내림차순이 아니다: {distances}"
+    assert _order_of(result)[0] == ("20250103", "near", 2)
+
+
+def test_ties_break_by_date_session_pass_index_and_the_call_is_deterministic() -> None:
+    """성질 3(§7-3): 거리가 정확히 같으면 `(date, session, pass_index)` 순이고,
+    입력 순서를 뒤집어도·두 번 불러도 결과가 같다. 정렬에 난수는 없다."""
+    source = OrderingFakeSource([])
+    base = source.query_inputs.hit
+    same = _shifted(base, 0.25)
+    source.rows = [
+        ("20250103", "s3", 0, same),
+        ("20250101", "s1", 7, same),
+        ("20250101", "s1", 2, same),
+        ("20250102", "s2", 0, same),
+    ]
+    expected = [("20250101", "s1", 2), ("20250101", "s1", 7), ("20250102", "s2", 0), ("20250103", "s3", 0)]
+    forward = service.reference_candidates(source, ORDER_QUERY)
+    again = service.reference_candidates(source, ORDER_QUERY)
+    assert _order_of(forward) == expected, _order_of(forward)
+    assert _order_of(again) == expected, "같은 호출 두 번이 다른 순서를 냈다"
+    source.reverse = True
+    backward = service.reference_candidates(source, ORDER_QUERY)
+    assert _order_of(backward) == expected, (
+        f"입력 순서를 뒤집었더니 동률의 순서가 바뀌었다: {_order_of(backward)}"
+    )
+    assert [c["hit_distance_m"] for c in forward["candidates"]] == pytest.approx([0.25] * 4)
+
+
+def test_a_candidate_without_a_hit_is_kept_and_placed_last() -> None:
+    """성질 4(§7-4): 거리를 못 구하는 후보는 **버리지 않고** 맨 뒤에 둔다. (F5)
+
+    버리면 후보 집합이 바뀌어 화면의 "N개 중 k번째"가 틀리고, 정렬이 고르는 일에 끼어든 것이 된다.
+    """
+    source = OrderingFakeSource([])
+    base = source.query_inputs.hit
+    source.rows = [
+        ("20250101", "nohit", 0, None),
+        ("20250102", "far", 0, _shifted(base, 0.8)),
+        ("20250103", "near", 0, _shifted(base, 0.1)),
+    ]
+    result = service.reference_candidates(source, ORDER_QUERY)
+    assert len(result["candidates"]) == 3, "거리 없는 후보가 조용히 사라졌다"
+    assert _order_of(result) == [("20250103", "near", 0), ("20250102", "far", 0), ("20250101", "nohit", 0)]
+    assert result["candidates"][-1]["hit_distance_m"] is None
+    assert result["ladder"][0]["count"] == 3
+
+
+def test_a_non_finite_distance_is_treated_as_missing() -> None:
+    """`nan`/`inf`도 '거리를 못 구한 후보'다 — 정렬 키에 그대로 넣으면 순서가 정의되지 않는다."""
+    source = OrderingFakeSource([])
+    base = source.query_inputs.hit
+    source.rows = [
+        ("20250101", "nan", 0, (float("nan"), base[1], base[2])),
+        ("20250102", "near", 0, _shifted(base, 0.1)),
+    ]
+    result = service.reference_candidates(source, ORDER_QUERY)
+    assert _order_of(result) == [("20250102", "near", 0), ("20250101", "nan", 0)]
+    assert result["candidates"][-1]["hit_distance_m"] is None
+
+
+# --- 실데이터 대조(P1) --------------------------------------------------------------
+
+REAL_ROOT = Path("/data/sources/professionals")
+_REAL: dict[str, object] = {}
+
+# 사용자 화면 패스와 그 정렬 전 자동 기준. 출처 `/output/samelevel/screen_impact.json`(직전 사전등록 R6).
+R6_QUERY = PassRef(worker="김경호", date="20250831", level="1", session="1000389_1", pass_index=0)
+R6_REFERENCE = PassRef(worker="전형기", date="20250904", level="1", session="1000564_1", pass_index=15)
+R6_DISTANCE_M = 0.360
+
+
+def _real_source():
+    if not REAL_ROOT.is_dir():
+        pytest.fail(f"실데이터가 없다({REAL_ROOT}) — 이 대조는 skip하지 않는다")
+    from trainer.pose_lab import csv_source
+
+    if "source" not in _REAL:
+        _REAL["source"] = csv_source.CsvPassSource(REAL_ROOT)
+    return _REAL["source"]
+
+
+def _real_entry(source, ref: PassRef):
+    item = next(
+        s for s in source.sessions()
+        if (s.worker, s.date, s.level, s.session) == (ref.worker, ref.date, ref.level, ref.session)
+    )
+    return next(e for e in source.index_of(item) if e.pass_index == ref.pass_index)
+
+
+def _real_queries() -> list[PassRef]:
+    """사용자 화면 세션의 실패스 몇 개. 레벨 1·3, 후보가 실제로 여럿인 것들이다."""
+    return [
+        PassRef(worker="김경호", date="20250831", level="1", session="1000389_1", pass_index=index)
+        for index in (0, 1, 3, 5, 9)
+    ] + [
+        PassRef(worker="김경호", date="20250831", level="3", session="1000391_1", pass_index=index)
+        for index in (0, 4, 10)
+    ]
+
+
+def _refs_of(result) -> list[PassRef]:
+    return [PassRef(**{k: c[k] for k in ("worker", "date", "level", "session", "pass_index")})
+            for c in result["candidates"]]
+
+
+def test_sorting_changes_the_order_and_nothing_else_on_real_files(monkeypatch) -> None:
+    """성질 1(§7-1, 실데이터): 정렬은 **순서만** 바꾼다. (F1·F2)
+
+    대조군은 `_by_hit_distance`를 상수 키로 바꾼 같은 함수다 — `list.sort`가 안정 정렬이라
+    그때의 목록은 정렬 도입 **전** 순서(세션 파일 순서 × 패스 순번)와 같다.
+    후보의 `PassRef` 다중집합과 `match_granularity`·`ladder`·`truncated`·`sessions_scanned`·
+    `sessions_total`·`query_key`가 모두 같아야 한다.
+    """
+    source = _real_source()
+    sorted_results = {q: service.reference_candidates(source, q) for q in _real_queries()}
+    monkeypatch.setattr(service, "_by_hit_distance", lambda row: 0)
+    control_results = {q: service.reference_candidates(source, q) for q in _real_queries()}
+
+    reordered = 0
+    for query, after in sorted_results.items():
+        before = control_results[query]
+        assert after["status"] == before["status"] == "ok", query
+        assert sorted(_refs_of(after), key=str) == sorted(_refs_of(before), key=str), (
+            f"정렬이 후보 집합을 바꿨다: {query}"
+        )
+        for field in ("match_granularity", "ladder", "truncated", "sessions_scanned",
+                      "sessions_total", "query_key", "match_label", "relaxed"):
+            assert after[field] == before[field], f"정렬이 {field}를 바꿨다: {query}"
+        if _refs_of(after) != _refs_of(before):
+            reordered += 1
+    assert reordered, "어느 질의에서도 순서가 바뀌지 않았다 — 이 대조가 공허하다"
+
+
+def test_the_first_candidate_is_the_nearest_on_real_files() -> None:
+    """성질 2(§7-2, 실데이터): 모든 질의에서 `candidates[0]`의 거리가 후보 최솟값이고
+    거리 수열이 비내림차순이다. 실데이터에 거리 없는 후보가 있으면 그 사실이 드러난다(F5)."""
+    source = _real_source()
+    missing = 0
+    for query in _real_queries():
+        result = service.reference_candidates(source, query)
+        distances = [c["hit_distance_m"] for c in result["candidates"]]
+        assert len(distances) > 1, f"후보가 하나뿐이면 순서 단언이 공허하다: {query}"
+        missing += sum(d is None for d in distances)
+        known = [d for d in distances if d is not None]
+        assert distances[: len(known)] == known, f"거리 없는 후보가 앞에 섰다: {query}"
+        assert known == sorted(known), f"거리 수열이 비내림차순이 아니다: {query} {known}"
+        assert known[0] == min(known), f"첫 후보가 가장 가깝지 않다: {query}"
+    assert missing == 0, f"거리를 못 구한 후보 {missing}개 — §1.1의 전제가 틀렸다(F5)"
+
+
+def test_the_distance_definition_reproduces_the_r6_measurement() -> None:
+    """성질 7(§7-7): 김경호 L1 1000389_1 #0 ↔ 전형기 1000564_1 #15의 §1.1 거리가
+    직전 사전등록 R6의 0.360 m를 소수 셋째 자리까지 재현한다. (F13)
+
+    두 문서의 숫자를 나란히 읽을 수 있으려면 거리의 정의가 같아야 한다.
+    """
+    source = _real_source()
+    query_entry = _real_entry(source, R6_QUERY)
+    reference_entry = _real_entry(source, R6_REFERENCE)
+    distance = service.hit_distance_m(query_entry.key_inputs.hit, reference_entry)
+    assert distance == pytest.approx(R6_DISTANCE_M, abs=5e-4), (
+        f"R6이 잰 0.360 m가 재현되지 않는다: {distance}"
+    )

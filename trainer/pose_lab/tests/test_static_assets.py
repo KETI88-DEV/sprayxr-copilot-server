@@ -2545,3 +2545,18 @@ def test_coordinate_boundary_checks_can_fail():
     assert negated != full and coordinate_boundary_faults(negated) == ["flip_scattered_across_call_sites"]
     mirrored_group = full.replace("scene.add(correctionsGroup);", "scene.add(correctionsGroup);\n  correctionsGroup.scale.z = -1;", 1)
     assert mirrored_group != full and coordinate_boundary_faults(mirrored_group) == ["flip_scattered_across_call_sites"]
+
+
+def test_the_hit_distance_never_reaches_the_screen() -> None:
+    """성질 8(사전등록 2026-09-23 §7-8): 응답의 `hit_distance_m`은 연구·검사·사후 분석이 읽는
+    수이지 화면 문구가 아니다. 3D 화면에 글자를 늘리지 않는다는 상시 원칙(F14)을 고정한다.
+
+    필드 자체는 `/api/reference` 응답에 실려 있으므로(아래 단언이 확인한다) 이 검사는
+    "필드가 없어서 그릴 수 없다"를 말하는 것이 아니다 — 있는 필드를 안 그린다는 말이다.
+    """
+    served = Path(service.__file__).read_text(encoding="utf-8")
+    assert '"hit_distance_m": distance' in served, (
+        "서버가 이 필드를 더는 싣지 않는다 — 아래 단언이 공허해진다"
+    )
+    for name in STATIC_FILES:
+        assert "hit_distance" not in _read(name), f"{name}가 착탄 거리를 화면에 그린다"
