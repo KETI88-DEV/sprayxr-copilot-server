@@ -492,10 +492,27 @@ STANCE_PHRASES: Final[dict[tuple[str, bool], str]] = {
     ("vertical", True): "자세를 한 단계 높여 작업하십시오.",
     ("wall", True): "벽에서 한 걸음 더 떨어져 서십시오.",
     ("wall", False): "벽에 한 걸음 더 붙어 서십시오.",
+    # C1. 부호는 `_axis_components`의 lateral 성분 부호이고, 그 부호는 `frame.tangent`의
+    # 수평 방향과의 내적이다 — 양수면 기준이 진행 방향 쪽에 있다는 뜻이다.
+    # "앞으로/뒤로"를 쓰지 않는다: 작업자는 그것을 벽 쪽/벽 반대쪽으로 읽는데 그 뜻은
+    # 이미 wall 축이 쓰고 있다. 문장에서 진행축임이 드러나야 한다.
+    ("lateral", True): "분사 진행 방향으로 한 걸음 옮겨 서십시오.",
+    ("lateral", False): "분사 진행 반대 방향으로 한 걸음 옮겨 서십시오.",
 }
-# 머리에서 자세로 번역할 수 있는 축. lateral은 없다 — 작업자 요가 실측이 아니라
-# 좌우를 판정할 기준이 없다(`service.ASSUMED_YAW`).
-STANCE_AXES: Final[tuple[str, ...]] = ("wall", "vertical")
+# 머리에서 자세로 번역할 수 있는 축.
+#
+# lateral이 여기 있다(C1, `docs/measurements/2026-09-23-head-lateral-stance-axis-prereg.md`).
+# 예전 주석은 "lateral은 없다 — 작업자 요가 실측이 아니라 좌우를 판정할 기준이 없다
+# (`service.ASSUMED_YAW`)"였는데 두 겹으로 틀렸다. (1) 요는 실측이다 — 사전등록 §0.4의
+# 190패스 전부에서 `KeyInputs.yaw`가 `None`이 아니고, `service.py`의 주석도 "작업자 요는
+# 이제 실측이다"라고 적고 있어 두 주석이 서로 반대였다. (2) 더 근본적으로 이 lateral은 몸의
+# 좌우가 아니라 **스트로크 진행축**이라 부호와 방향어가 `frame.tangent`의 수평 성분에서
+# 나온다 — 요와 무관하다. 요가 필요한 경우는 수평 진행이 전혀 없는 순수 수직 스트로크뿐이고,
+# 그때는 `_axis_components`가 방향어를 비워 두므로 `head_stance`가 후보에서 뺀다.
+#
+# 머리 세 축의 σ 중앙값은 wall 0.515 · vertical 0.329 · lateral 0.616이었다 — 가장 큰 축이
+# 유일하게 말하지 않는 축이었다.
+STANCE_AXES: Final[tuple[str, ...]] = ("wall", "vertical", "lateral")
 
 
 def head_stance(
@@ -515,6 +532,11 @@ def head_stance(
         delta.local_delta, frame
     ):
         if axis not in STANCE_AXES:
+            continue
+        if not direction:
+            # 방향어가 없는 축(수평 진행이 없는 스트로크의 lateral)은 문장을 지을 수 없다.
+            # `STANCE_PHRASES`는 (axis, magnitude > 0)로만 조회하므로 여기서 막지 않으면
+            # 방향을 지어낸 문장이 나간다 — 사전등록 §6 F6의 안전 장치다.
             continue
         sigma = float(axis_sigmas.get(axis, 0.0))
         if sigma > best_sigma:

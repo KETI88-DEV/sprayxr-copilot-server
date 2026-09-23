@@ -99,7 +99,9 @@ def test_head_text_sign_agrees_with_stance_phrase(axis: str, magnitude: float, d
 
 @pytest.mark.parametrize(
     "correction",
-    [_c("head", "lateral", 5.0, "앞으로"), _c("right", "lateral", 5.0, "옆으로"), _c("left", "wall", -3.0, "붙이")],
+    # head/lateral은 C1에서 표에 들어갔으므로 여기서 뺀다. 남은 둘은 여전히 표에 없다 —
+    # 오른손의 "옆으로"는 `_axis_components`가 내지 않는 방향어이고, 왼손은 지시 대상이 아니다.
+    [_c("right", "lateral", 5.0, "옆으로"), _c("left", "wall", -3.0, "붙이")],
 )
 def test_unknown_combination_raises(correction) -> None:  # noqa: ANN001
     with pytest.raises(ValueError):
@@ -183,16 +185,23 @@ def test_real_level1_texts_match_the_users_screen() -> None:
 
     D1(키 m3) 뒤로 이 패스의 산포 버킷이 uv4 층으로 바뀌어 σ로 나눈 크기 순서가 달라졌다.
     네 교정의 크기(cm)는 m1 때와 같고 순서만 바뀌었다(m1: −15.4, +23.3, −15.7, −11.4).
+
+    C1(머리 자세 축에 진행축 추가) 뒤로 **머리 문장이 바뀌었다**. 예전에는 머리의
+    wall(−15.7cm, σ가 셋 중 최대였다)이 나갔는데, 이제 후보에 들어온 lateral이
+    σ1.19로 더 이상해 그쪽이 나간다(−30.7cm). 오른손 세 축은 그대로다 — C1은 머리만
+    건드린다. 이 픽스처가 그 사실을 고정한다.
     """
     case = next(c for c in isolation._cases() if c["name"] == "real_L1_kkh_1000389_1_0")  # noqa: SLF001
     body = isolation._run(case, include_view=True)  # noqa: SLF001
     axes = body["measured"]["axes"]
-    assert [a["figure"] for a in axes] == ["+23.3", "−15.4", "−11.4", "−15.7"]
+    assert [a["figure"] for a in axes] == ["+23.3", "−15.4", "−30.7", "−11.4"]
     assert axes[0]["text"] == "오른손(건)을 23.3cm 올리세요."
     wall = next(a for a in axes if a["point"] == "right" and a["axis"] == "wall")
     assert wall["text"] == "오른손(건)을 벽 쪽으로 15.4cm 붙이세요."
     head = next(a for a in axes if a["point"] == "head")
-    assert "15.7cm" in head["text"] and "한 걸음" not in head["text"]
+    assert head["axis"] == "lateral"
+    assert head["text"] == "진행 방향 뒤로 30.7cm 옮겨 서세요."
+    assert "한 걸음" not in head["text"]  # 화면 문장은 수치로 말한다(자세 문장과 다르다)
     blob = json.dumps(body["measured"]["axes"], ensure_ascii=False)
     for word in ("미사용", "사용하지 않음", "unused", "not used"):
         assert word not in blob

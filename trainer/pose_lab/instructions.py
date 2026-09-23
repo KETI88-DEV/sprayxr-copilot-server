@@ -104,7 +104,13 @@ HEAD_PHRASES: Final[dict[tuple[str, bool], str]] = {
     ("wall", False): "벽 쪽으로 {m}cm 더 붙어 서세요.",
     ("vertical", True): "자세를 {m}cm 높여 작업하세요.",
     ("vertical", False): "자세를 {m}cm 낮춰 작업하세요.",
+    # C1. 오른손의 진행축 문장(`_right_text`)과 같은 어휘를 쓴다.
+    ("lateral", True): "진행 방향 앞으로 {m}cm 옮겨 서세요.",
+    ("lateral", False): "진행 방향 뒤로 {m}cm 옮겨 서세요.",
 }
+# 수평 진행이 없는 스트로크에는 진행 방향이 없다. 방향을 지어내지 않는다 — 오른손의
+# 같은 경우(`_right_text`의 `direction == ""` 가지)와 같은 규칙이다.
+HEAD_LATERAL_NO_DIRECTION: Final = "벽을 따라 {m}cm 옮겨 서세요."
 
 
 def axis_text(correction: object, surface_angle_deg: float | None = None) -> tuple[str, str]:
@@ -131,6 +137,8 @@ def axis_text(correction: object, surface_angle_deg: float | None = None) -> tup
 def _directive(point: str, axis: str, magnitude: float, direction: str, amount: str) -> str:
     if point == "right":
         return _right_text(axis, direction, amount)
+    if axis == "lateral" and direction == "":
+        return HEAD_LATERAL_NO_DIRECTION.format(m=amount)
     key = (axis, magnitude > 0)
     if key not in HEAD_PHRASES:
         raise NoPhrase(f"no phrase for head/{axis}")

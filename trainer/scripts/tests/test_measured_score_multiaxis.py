@@ -217,10 +217,83 @@ def test_only_one_stance_sentence_even_when_both_axes_fire() -> None:
     assert stance.axis == "vertical"  # sigma가 큰 쪽. 크기로 고르면 wall이 나온다.
 
 
-def test_head_lateral_is_never_issued() -> None:
-    """작업자 요가 실측이 아니라 좌우를 판정할 기준이 없다(service.ASSUMED_YAW)."""
+def test_head_lateral_is_issued_when_it_is_the_strangest_axis() -> None:
+    """C1. 진행축은 이제 자세 문장이 될 수 있다.
+
+    이 lateral은 몸의 좌우가 아니라 **스트로크 진행축**이라 부호가 `frame.tangent`의
+    수평 성분에서 나온다 — 작업자 요와 무관하다. 픽스처는 lateral만 σ를 크게 두므로,
+    lateral이 나와야만 후보에 들어갔다는 것이 증명된다.
+
+    깨뜨리는 법: `STANCE_AXES`에서 lateral을 뺀다.
+    """
     delta = _head((0.20, 0.0, 0.0), {"wall": 0.1, "vertical": 0.1, "lateral": 5.0})
-    assert measured_score.head_stance(delta, HORIZONTAL) is None
+    stance = measured_score.head_stance(delta, HORIZONTAL)
+    assert stance is not None
+    assert stance.axis == "lateral"
+    assert "진행" in measured_score.stance_text(stance)
+
+
+def test_the_lateral_stance_sentence_agrees_with_the_sign() -> None:
+    """부호와 문장이 어긋나면 작업자를 반대로 보낸다.
+
+    앞 검사는 "진행"이 들어갔는지만 보는데 두 lateral 문장에 모두 들어 있어, 둘을
+    맞바꿔도 통과한다. 여기서는 부호마다 어느 쪽 문장인지를 고정한다.
+
+    깨뜨리는 법: `STANCE_PHRASES`의 두 lateral 문장을 서로 바꾼다.
+    """
+    forward = _head((0.20, 0.0, 0.0), {"wall": 0.05, "vertical": 0.05, "lateral": 5.0})
+    backward = _head((-0.20, 0.0, 0.0), {"wall": 0.05, "vertical": 0.05, "lateral": 5.0})
+
+    ahead = measured_score.head_stance(forward, HORIZONTAL)
+    behind = measured_score.head_stance(backward, HORIZONTAL)
+    assert ahead is not None and behind is not None
+    assert ahead.axis == behind.axis == "lateral"
+    assert ahead.magnitude_cm > 0.0 > behind.magnitude_cm
+
+    ahead_text = measured_score.stance_text(ahead)
+    behind_text = measured_score.stance_text(behind)
+    assert "반대" not in ahead_text
+    assert "반대" in behind_text
+
+
+def test_every_stance_axis_has_both_phrases() -> None:
+    """축을 더하고 문장을 빠뜨리면 `stance_text`의 조회가 런타임 `KeyError`로 죽는다.
+
+    깨뜨리는 법: `STANCE_PHRASES`에서 `("lateral", False)`를 지운다.
+    """
+    missing = [
+        (axis, sign)
+        for axis in measured_score.STANCE_AXES
+        for sign in (True, False)
+        if (axis, sign) not in measured_score.STANCE_PHRASES
+    ]
+    assert missing == []
+
+
+def test_head_lateral_without_a_travel_direction_says_nothing() -> None:
+    """수평 진행이 없는 스트로크에는 진행 방향이 없다 — 방향을 지어내지 않는다.
+
+    `_axis_components`는 그때 lateral의 방향어를 빈 문자열로 둔다. `STANCE_PHRASES`는
+    (축, 부호)로만 조회하므로 `head_stance`가 막지 않으면 "분사 진행 방향으로"라는
+    지어낸 문장이 나간다. 사전등록 §6 F6의 안전 장치다.
+
+    깨뜨리는 법: `head_stance`의 `if not direction: continue`를 지운다.
+    """
+    vertical_stroke = stroke_frame.stroke_basis(
+        hit=(1.2, 4.5, 0.8), tangent=(0.0, 1.0, 0.0), gun=(1.2, 4.5, 0.2)
+    )
+    _magnitude, _unit, word = measured_score._axis_components(  # noqa: SLF001
+        (0.2, 0.2, 0.2), vertical_stroke
+    )["lateral"]
+    assert word == "", "이 픽스처의 전제: 수직 스트로크에는 진행 방향어가 없다"
+    delta = measured_score.PointDelta(
+        point="head",
+        sigma=5.0,
+        local_delta=(0.0, 0.0, 0.20),  # 이 기저에서 up = 월드 X이고 그것이 lateral이다
+        samples=30,
+        axis_sigmas={"wall": 0.05, "vertical": 0.05, "lateral": 5.0},
+    )
+    assert measured_score.head_stance(delta, vertical_stroke) is None
 
 
 def test_head_below_the_threshold_says_nothing() -> None:
