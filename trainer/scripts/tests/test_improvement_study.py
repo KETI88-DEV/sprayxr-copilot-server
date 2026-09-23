@@ -57,6 +57,58 @@ def _unknown_outcome() -> object:
     )
 
 
+def _outcome(before: float, closure: float) -> object:
+    """교정 전 점수와 G만 다른 결과 하나."""
+    return improvement_study.Outcome(
+        query=None, reference=None, key="m3:horizontal:right:1x2:center-near-high",
+        status="ok", reason=None, same=closure, split=closure, split_reason=None,
+        granularity="uv2", reference_n=30, split_n_a=15, split_n_b=15,
+        gate="fail", gate_reason=None, normalization="measured",
+        fired=True, split_fired=True, ceiling=1.0,
+        before_same_score=before, before_split_score=before,
+    )
+
+
+def test_before_score_strata_put_each_pair_in_the_declared_bucket() -> None:
+    """구간은 왼쪽 포함·오른쪽 제외이고, 마지막만 오른쪽도 포함한다.
+
+    경계값이 어느 쪽에 들어가는지가 정해져 있지 않으면 같은 표본이 실행마다 다른 칸에
+    앉는다. 특히 S0 = 1.0은 마지막 구간이 오른쪽을 포함하지 않으면 **어디에도 안 들어가
+    조용히 사라진다** — 천장에 붙은 쌍이야말로 이 표가 보려는 것이다.
+
+    깨뜨리는 법: `before_score_strata`의 마지막 구간 처리(`last and before == hi`)를 뺀다.
+    """
+    outcomes = [_outcome(b, 0.8) for b in (0.0, 0.2, 0.5, 0.8, 0.9, 1.0)]
+    rows = improvement_study.before_score_strata(outcomes, "split", "before_split_score")
+    counts = {(row["lo"], row["hi"]): row["n"] for row in rows}
+    assert counts[(0.0, 0.2)] == 1  # 0.0
+    assert counts[(0.2, 0.4)] == 1  # 0.2 — 경계는 왼쪽 구간이 아니라 오른쪽 구간에 든다
+    assert counts[(0.4, 0.6)] == 1  # 0.5
+    assert counts[(0.8, 0.9)] == 1  # 0.8
+    assert counts[(0.9, 1.0)] == 2  # 0.9와 1.0
+    assert sum(row["n"] for row in rows) == len(outcomes)
+
+
+def test_before_score_strata_report_how_much_the_score_actually_rose() -> None:
+    """같은 G라도 어디서 났는지에 따라 실제로 오른 폭이 전혀 다르다.
+
+    G = (S1 − S0)/(1 − S0)이므로 오른 폭은 G · (1 − S0)다. 두 쌍 다 G가 0.4인데
+    S0 0.95에서는 0.02, S0 0.20에서는 0.32가 오른다 — 16배 차이다. 이 표가 그 차이를
+    보이지 못하면 실을 이유가 없다.
+
+    깨뜨리는 법: `rise`를 `closure`로 두거나 `(1 - before)`를 빼 버린다.
+    """
+    rows = improvement_study.before_score_strata(
+        [_outcome(0.95, 0.4), _outcome(0.20, 0.4)], "split", "before_split_score"
+    )
+    by_bucket = {(row["lo"], row["hi"]): row for row in rows}
+    high = by_bucket[(0.9, 1.0)]
+    low = by_bucket[(0.2, 0.4)]
+    assert high["gap_closure_median"] == pytest.approx(low["gap_closure_median"])
+    assert high["rise_median"] == pytest.approx(0.4 * (1 - 0.95))
+    assert low["rise_median"] == pytest.approx(0.4 * (1 - 0.20))
+
+
 def test_share_fired_is_none_when_nothing_was_measured() -> None:
     """아무것도 재지 않았을 때의 0.0은 '하나도 안 발동했다'로 읽힌다. 그건 거짓이다.
 

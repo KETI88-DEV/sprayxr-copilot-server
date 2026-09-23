@@ -147,6 +147,87 @@ def _percentile(sorted_values: Sequence[float], fraction: float) -> float:
     return sorted_values[lower] + (sorted_values[upper] - sorted_values[lower]) * frac
 
 
+# 교정 전 점수(S0)의 구간. **결과를 보기 전에** 고정한다.
+#
+# 등간 0.2 폭이되 천장에 붙는 0.8~1.0만 둘로 가른다. G = (S1 − S0)/(1 − S0)의 분모가
+# 0으로 가는 곳이 거기라, 그 구간을 하나로 뭉쳐 두면 "G는 큰데 유사도는 거의 안 오른"
+# 쌍이 숨는다. 0.950 → 0.970은 G가 0.40인데 실제로 오른 것은 0.020뿐이고, 같은 0.40이
+# 0.19 → 0.51에서는 0.32를 뜻한다. 근거는 `docs/literature_basis.md` §4.2.
+BEFORE_SCORE_EDGES: Final[tuple[float, ...]] = (0.0, 0.2, 0.4, 0.6, 0.8, 0.9, 1.0)
+
+
+def before_score_strata(
+    outcomes: Sequence[Outcome], value_attr: str, before_attr: str
+) -> list[dict[str, Any]]:
+    """교정 전 점수 구간별로 G와 **실제로 오른 폭**을 함께 낸다.
+
+    `rise`는 S1 − S0다. S1을 따로 들고 있지 않아도 G의 정의에서 바로 나온다 —
+    G = (S1 − S0)/(1 − S0)이므로 S1 − S0 = G · (1 − S0)다. 두 수를 같은 행에 두는
+    것이 이 표의 전부다: G만 보면 천장 가까이에서 속는다.
+
+    구간 경계는 `BEFORE_SCORE_EDGES`이고 결과를 보기 전에 고정했다. 구간은 왼쪽을
+    포함하고 오른쪽을 뺀다(마지막 구간만 오른쪽도 포함한다 — 안 그러면 S0 = 1.0이
+    어느 구간에도 안 들어간다).
+    """
+    rows: list[dict[str, Any]] = []
+    for index in range(len(BEFORE_SCORE_EDGES) - 1):
+        lo = BEFORE_SCORE_EDGES[index]
+        hi = BEFORE_SCORE_EDGES[index + 1]
+        last = index == len(BEFORE_SCORE_EDGES) - 2
+        befores: list[float] = []
+        closures: list[float] = []
+        rises: list[float] = []
+        for item in outcomes:
+            before = getattr(item, before_attr)
+            closure = getattr(item, value_attr)
+            if before is None or closure is None:
+                continue
+            if not (lo <= before < hi or (last and before == hi)):
+                continue
+            befores.append(float(before))
+            closures.append(float(closure))
+            rises.append(float(closure) * (1.0 - float(before)))
+        rows.append(
+            {
+                "lo": lo,
+                "hi": hi,
+                "n": len(closures),
+                "before_median": _percentile(sorted(befores), 0.5) if befores else None,
+                "gap_closure_median": _percentile(sorted(closures), 0.5) if closures else None,
+                "rise_median": _percentile(sorted(rises), 0.5) if rises else None,
+                "at_or_above": (
+                    sum(1 for value in closures if value >= THRESHOLD) / len(closures)
+                    if closures
+                    else None
+                ),
+            }
+        )
+    return rows
+
+
+def before_score_distribution(
+    outcomes: Sequence[Outcome], before_attr: str
+) -> dict[str, float | int | None]:
+    """교정 전 점수의 분포. "≥0.70 비율"이 교정만의 성질이 아니라 이 분포와 함께
+    정해지는 값이라는 것을 보이려고 싣는다(`docs/literature_basis.md` §4.2).
+    """
+    present = sorted(
+        float(value)
+        for value in (getattr(item, before_attr) for item in outcomes)
+        if value is not None
+    )
+    if not present:
+        return {"n": 0, "min": None, "p25": None, "median": None, "p75": None, "max": None}
+    return {
+        "n": len(present),
+        "min": present[0],
+        "p25": _percentile(present, 0.25),
+        "median": _percentile(present, 0.5),
+        "p75": _percentile(present, 0.75),
+        "max": present[-1],
+    }
+
+
 def summarize(values: Sequence[float | None], threshold: float) -> dict[str, float | int | None]:
     """분포 요약: n·중앙값·사분위·최소최대·문턱 이상 비율. `None`은 표본에서 뺀다
     (0으로 넣지 않는다)."""
@@ -1199,6 +1280,18 @@ def build_report(
             "by_layer": {layer: dict(counter) for layer, counter in gate_by_layer.items()},
         },
         "eligibility_guard_disclosure": eligibility_guard_disclosure,
+        # 교정 전 점수의 분포와 그 구간별 결과. 판정에 쓰지 않는다 — "≥0.70 비율"이
+        # 교정만의 성질이 아니라 **이 분포와 함께** 정해지는 값이고, G만 보면 천장
+        # 가까이에서 속는다는 것을 같은 보고서 안에서 보이려고 싣는다
+        # (`docs/literature_basis.md` §4.2).
+        "before_score_distribution": {
+            "same": before_score_distribution(ok, "before_same_score"),
+            "split": before_score_distribution(split_population, "before_split_score"),
+        },
+        "before_score_strata": {
+            "same": before_score_strata(ok, "same", "before_same_score"),
+            "split": before_score_strata(split_population, "split", "before_split_score"),
+        },
     }
     if include_pairs:
         report["pairs"] = [_outcome_to_json(item) for item in outcomes]
@@ -1244,6 +1337,28 @@ def render_summary(report: Mapping[str, Any]) -> str:
     )
     gate = report["gate"]
     lines.append(f"REQ-19 게이트: {gate['counts']} pass_rate={gate['pass_rate_of_determined']}")
+
+    # 교정 전 점수의 분포와 구간별 결과(판정 아님). 같은 G도 어디서 났는지에 따라
+    # 실제로 오른 폭이 전혀 다르다 — 그래서 두 수를 같은 줄에 둔다.
+    before = report.get("before_score_distribution", {}).get("split")
+    if before and before.get("n"):
+        lines.append(
+            f"교정 전 점수(split 기준): n={before['n']} "
+            f"min={_fmt(before['min'])} p25={_fmt(before['p25'])} median={_fmt(before['median'])} "
+            f"p75={_fmt(before['p75'])} max={_fmt(before['max'])}"
+        )
+    strata = report.get("before_score_strata", {}).get("split") or []
+    if any(row["n"] for row in strata):
+        lines.append("교정 전 점수 구간별 split (G와 실제로 오른 폭):")
+        for row in strata:
+            if not row["n"]:
+                continue
+            lines.append(
+                f"  [{row['lo']:.1f}, {row['hi']:.1f})  n={row['n']:<4} "
+                f"G중앙={_fmt(row['gap_closure_median'])} "
+                f"오른폭중앙={_fmt(row['rise_median'])} "
+                f"≥{THRESHOLD:.0%}={_fmt(row['at_or_above'])}"
+            )
     return "\n".join(lines)
 
 
