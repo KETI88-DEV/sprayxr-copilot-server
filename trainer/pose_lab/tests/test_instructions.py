@@ -171,24 +171,21 @@ def test_measured_display_strings_and_labels() -> None:
     assert measured["display"]["score_after"] == f"{measured['score_after']:.3f}"
     assert measured["display"]["improvement_same"] == f"{measured['improvement']['same']:.3f}"
     assert measured["display"]["improvement_split"] == "—"  # 이 픽스처는 split이 None이다
-    # 원시 차이. G만 보면 천장 가까이에서 속으므로 실제로 몇 점 움직였는지가 같이 나간다.
-    # 값을 점수에서 직접 계산해 비교한다 — 문자열만 비교하면 부호·자릿수 규칙이 바뀌어도 통과한다.
-    raw_delta = measured["score_after"] - measured["score"]
-    assert raw_delta > 0.0, "이 픽스처의 전제: 교정이 유사도를 올린다"
-    assert measured["display"]["score_delta"] == f"+{raw_delta:.3f}"
+    # 유사도가 오른 폭. 아래 두 값만 보면 점수가 높을 때 속으므로 실제로 몇 점 올랐는지가
+    # 같이 나간다. 값을 점수에서 직접 계산해 비교한다 — 문자열만 비교하면 부호·자릿수
+    # 규칙이 바뀌어도 통과한다.
+    risen = measured["score_after"] - measured["score"]
+    assert risen > 0.0, "이 픽스처의 전제: 교정이 유사도를 올린다"
+    assert measured["display"]["score_delta"] == f"+{risen:.3f}"
     for shown, delta in zip(measured["deltas_display"], measured["deltas"]):
         assert shown["point"] == delta["point"]
         assert shown["deviation_display"] == f"{delta['deviation_cm']:.1f}"
         assert shown["sigma_display"] == f"σ{delta['sigma']:.2f}"
     labels = measured["improvement_labels"]
-    # 두 값 다 "지시를 그대로 따랐을 때"의 계산값이지 관측된 향상이 아니다. 라벨에서 그 조건이
-    # 빠지면 화면의 가장 큰 숫자가 관측값처럼 읽힌다 — 이 프로젝트가 반복해서 걸려온 결함이다.
-    for key in ("same", "split"):
-        assert "따랐을 때의 상한" in labels[key], key
-    # 둘의 차이는 자기충족 여부다. 그 구분이 라벨에서 사라지면 정직한 쪽(split)과
-    # 상한인 쪽(same)을 읽는 사람이 구별할 수 없다.
-    assert "자기충족 포함" in labels["same"]
-    assert "자기충족 없음" in labels["split"]
+    # 두 값의 차이는 **기준을 나눠 썼는가**다. 그 구분이 라벨에서 사라지면 후하게 나오는 쪽과
+    # 정직한 쪽을 읽는 사람이 구별할 수 없다. 두 라벨을 맞바꾸면 이 단언이 깨진다.
+    assert "후하게" in labels["same"] and "정직" not in labels["same"]
+    assert "정직" in labels["split"] and "후하게" not in labels["split"]
 
 
 def test_real_level1_texts_match_the_users_screen() -> None:

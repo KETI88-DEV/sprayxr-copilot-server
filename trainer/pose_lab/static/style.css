@@ -409,6 +409,7 @@ button { font-family: var(--sans); cursor: pointer; }
 .improvement-detail > summary::before { content: "▸ "; }
 .improvement-detail[open] > summary::before { content: "▾ "; }
 .improvement-detail > summary:hover { color: var(--text); }
+.improvement-caveat { margin: var(--sp-2) 0 0; font-size: var(--fs-sm); color: var(--text-dim); }
 .improvement-score {
   display: flex;
   flex-wrap: wrap;
