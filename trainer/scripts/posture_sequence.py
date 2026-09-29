@@ -61,6 +61,51 @@ FLOOR_PLAUSIBLE_MAX_M: Final = 4.5
 MAX_SESSIONS: Final = 64
 MAX_SAMPLES_PER_SESSION: Final = 512
 
+# 채점 집합 v2. 정본 20종에서 이렇게 줄었다.
+#
+# - 다리 8종: 트래커가 없어 IK 산출물이다(해부 검사 통과 프레임 37% 대).
+# - `Pelvis`: 자세 정규화의 **원점**이다. 정규화하면 항상 (0,0,0)이라 정보가 없는데
+#   채점에 넣으면 분모(관절 수)만 키워 점수를 조용히 올린다.
+# - `Head`: 조건부다. 실물 SIM 샘플에서 두 시퀀스 모두 변화 폭이 정확히 0.0이다.
+#   오면 쓰고 얼어 있으면 뺀다.
+#
+# 남는 10종이 설계 문서 §4.2의 `SCORING_JOINTS_V2` 10종과 같다.
+SCORING_JOINTS_V2: Final[tuple[str, ...]] = (
+    "Spine",
+    "Chest",
+    "LeftShoulder",
+    "LeftUpperArm",
+    "LeftForeArm",
+    "LeftHand",
+    "RightShoulder",
+    "RightUpperArm",
+    "RightForeArm",
+    "RightHand",
+)
+CONDITIONAL_JOINTS_V2: Final[tuple[str, ...]] = ("Head",)
+ROOT_JOINT_V2: Final = "Pelvis"
+
+# 이보다 적은 관절로 낸 점수는 다른 점수와 비교할 수 없다 — 분모가 관절 수이기 때문이다.
+# 모자라면 점수를 만들지 않는다. **`0.0`이 아니라 `null`이다.**
+MIN_SCORED_JOINTS: Final = 8
+
+# 채점 집합이 바뀌면 점수의 뜻이 바뀐다. 응답에 이 딱지를 실어, 다른 집합으로 낸 값과
+# 나란히 놓이는 것을 막는다.
+SCORING_SET_ID: Final = "v2-upper-10"
+
+
+def scored_joints(available: Sequence[str], excluded: Sequence[str] = ()) -> tuple[str, ...]:
+    """이번 시퀀스에서 실제로 채점에 쓴 관절. 응답에 그대로 싣는다.
+
+    선언과 실효가 갈리면 점수의 분모가 조용히 달라진다 — `pose_similarity.SCORING_JOINTS`가
+    12종을 선언하고 11종으로 돌던 것이 그 예다.
+    """
+    have = set(available)
+    drop = set(excluded)
+    out = [name for name in SCORING_JOINTS_V2 if name in have and name not in drop]
+    out.extend(name for name in CONDITIONAL_JOINTS_V2 if name in have and name not in drop)
+    return tuple(out)
+
 
 @dataclass(frozen=True)
 class PostureSample:

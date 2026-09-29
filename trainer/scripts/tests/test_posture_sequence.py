@@ -179,6 +179,53 @@ def test_samples_are_bounded_per_session() -> None:
     assert len(session.samples) == posture_sequence.MAX_SAMPLES_PER_SESSION
 
 
+def test_the_scoring_set_is_ten_upper_body_joints() -> None:
+    """정본 20종 − 다리 8 − 루트(Pelvis) − 조건부(Head) = 10종.
+
+    `Pelvis`를 빼는 이유가 핵심이다 — 정규화 원점이라 정규화 후 항상 (0,0,0)이고
+    정보가 없는데, 채점에 넣으면 분모만 키워 점수를 조용히 올린다.
+
+    깨뜨리는 법: `SCORING_JOINTS_V2`에 `Pelvis`를 넣으면 실패한다.
+    """
+    joint_names = importlib.import_module("joint_names")
+    assert len(posture_sequence.SCORING_JOINTS_V2) == 10
+    assert posture_sequence.ROOT_JOINT_V2 not in posture_sequence.SCORING_JOINTS_V2
+    assert "Head" not in posture_sequence.SCORING_JOINTS_V2
+    for name in posture_sequence.SCORING_JOINTS_V2:
+        assert joint_names.is_scorable(name), name
+    scorable = {n for n in joint_names.CODE_JOINTS if joint_names.is_scorable(n)}
+    assert scorable - set(posture_sequence.SCORING_JOINTS_V2) == {"Pelvis", "Head"}
+
+
+def test_scored_joints_reports_what_was_actually_used() -> None:
+    """선언과 실효가 갈리면 점수의 분모가 조용히 달라진다.
+
+    `pose_similarity.SCORING_JOINTS`가 12종을 선언하고 11종으로 돌던 것이 그 예다.
+    """
+    available = list(posture_sequence.SCORING_JOINTS_V2) + ["Head", "Pelvis", "LeftToe"]
+    used = posture_sequence.scored_joints(available, excluded=("LeftHand",))
+    assert "Head" in used, "조건부 관절이 와 있으면 쓴다"
+    assert "Pelvis" not in used and "LeftToe" not in used
+    assert "LeftHand" not in used, "제외된 관절이 채점에 남았다"
+    assert len(used) == 10
+
+
+def test_a_frozen_head_drops_out_of_the_scored_set() -> None:
+    """실물 SIM 샘플에서 `head`가 두 시퀀스 모두 정확히 0.0이다 — 그때는 빠져야 한다."""
+    used = posture_sequence.scored_joints(
+        list(posture_sequence.SCORING_JOINTS_V2) + ["Head"], excluded=("Head",)
+    )
+    assert "Head" not in used
+    assert len(used) == 10
+
+
+def test_too_few_joints_is_a_declared_threshold() -> None:
+    """모자라면 점수를 만들지 않는다 — 분모가 관절 수라 다른 점수와 비교할 수 없다."""
+    assert posture_sequence.MIN_SCORED_JOINTS == 8
+    used = posture_sequence.scored_joints(["Spine", "Chest", "LeftHand"])
+    assert len(used) < posture_sequence.MIN_SCORED_JOINTS
+
+
 def test_report_withholds_the_score_until_references_are_rebuilt() -> None:
     """레퍼런스가 없을 때 점수는 **null이지 0.0이 아니다.**
 
