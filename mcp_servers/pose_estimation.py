@@ -610,6 +610,7 @@ def analyze_sequence(payload: SequenceRequest) -> MCPResponse:
     # `frozen_before`는 **앞선** 시퀀스의 것이어야 한다(R4c). 그래서 쌓기 전에 잰다.
     gate = skeleton_gate.evaluate(frames, frozen_before=frozenset(session.frozen_joints))
 
+    prepared_buckets = _arm_buckets()
     impacts = _impact_points(payload.sequence_info)
     reduced = posture_sequence.summarize(
         [frame.joints["Head"] for frame in frames if "Head" in frame.joints],
@@ -646,6 +647,25 @@ def analyze_sequence(payload: SequenceRequest) -> MCPResponse:
                 for item in arm_reference.joint_sigmas(normalized, bucket)
                 if item.joint not in gate.excluded_joints
             ]
+    # 위상 채점을 먼저 시도한다. 착탄이 움직이고 위상 레퍼런스가 있으면 그쪽이 낫다 —
+    # 국소 오차를 접기보다 3.7배 잡는다. **안 되면 접기로 내려간다** — 실물 SEQ-002처럼
+    # 건을 고정한 시퀀스는 정렬할 모양이 없어서 위상 채점 자체가 불가능하다.
+    scoring_mode = "fold"
+    phase_result: pose_stages.ScoreResult | None = None
+    if quality != "unavailable" and band is not None:
+        resolved = pose_stages.resolve(reach, prepared_buckets)
+        aligned = pose_stages.align(impacts, resolved)
+        attempt = pose_stages.score(
+            [dict(frame.joints) for frame in frames],
+            aligned,
+            bucket,
+            excluded=gate.excluded_joints,
+            labels=pose_similarity.JOINT_LABELS,
+        )
+        if attempt.ok:
+            phase_result, scoring_mode = attempt, "phase"
+            sigmas = list(attempt.sigmas)
+
     used = tuple(item.joint for item in sigmas)
     if reduced is not None and gate.status != "reject":
         session.add(
@@ -662,10 +682,16 @@ def analyze_sequence(payload: SequenceRequest) -> MCPResponse:
 
     report = posture_sequence.session_report(session, payload.floor_height_m)
 
-    score = arm_reference.similarity_score(sigmas)
-    corrections = arm_reference.build_corrections(
-        sigmas, pose_similarity.JOINT_LABELS, support=support
-    )
+    if phase_result is not None:
+        score = phase_result.score
+        corrections = list(phase_result.corrections)
+        plans = list(phase_result.plans)
+    else:
+        score = arm_reference.similarity_score(sigmas)
+        corrections = arm_reference.build_corrections(
+            sigmas, pose_similarity.JOINT_LABELS, support=support, reference=bucket.get("joints")
+        )
+        plans = [() for _ in corrections]
 
     reason: str | None
     if gate.status == "reject":
@@ -701,36 +727,17 @@ def analyze_sequence(payload: SequenceRequest) -> MCPResponse:
         # 점수의 절대값은 축 수·산포 하한·가중치가 스케일을 건드려 해석하기 어렵다.
         # **백분위가 해석 가능한 쪽이다** — 숙련자 분포에서 어디쯤인지.
         "expert_percentile": (
-            None if score is None else arm_reference.expert_percentile(bucket, score)
+            None
+            if score is None
+            else arm_reference.expert_percentile(bucket, score, mode=scoring_mode)
         ),
         "correction_mode": "joint_only",
-        # 각도도 방향도 싣지 않는다 — 회전순서가 미확정이고(실물 `rot`이 전 프레임 90°
-        # 배수) 방향 단서는 외적 초점을 내적 초점으로 바꾼다. 관절만 짚는다.
+        # 어느 채점을 썼나. `phase`면 DTW 정렬로 위상마다 쟀고, `fold`면 시퀀스를
+        # 한 점으로 접어 쟀다. 두 점수는 **다른 분포**라 나란히 놓으면 안 된다.
+        "scoring_mode": scoring_mode,
         "corrections": [
-            {
-                "joint": item.joint,
-                "label": item.label,
-                "severity": item.severity,
-                "angle_delta_deg": None,
-                "direction": None,
-                "evidence": {
-                    "sigma": round(item.sigma, 3),
-                    "distance_m": round(item.distance_m, 4),
-                    "axis_sigmas": dict(
-                        zip(arm_reference.AXIS_ORDER, [round(v, 3) for v in item.axis_sigmas])
-                    ),
-                    # σ를 만든 것이 '얼마나 뻗었나'인지 '어디를 향했나'인지. 손의 산포는
-                    # 96%가 방향 성분이라 둘을 안 나누면 뻗음이 희석된다.
-                    "radial_sigma": None if item.radial_sigma is None else round(item.radial_sigma, 3),
-                    "angular_sigma": None if item.angular_sigma is None else round(item.angular_sigma, 3),
-                    "radius_delta_m": None if item.radius_delta_m is None else round(item.radius_delta_m, 4),
-                    "support": support,
-                    # 모의값이다 — 이 관절을 숙련자 평균에 맞췄을 때의 점수 상승분.
-                    "expected_gain": None if item.expected_gain is None else round(item.expected_gain, 4),
-                },
-                "correction_text": f"{item.label}을(를) 보세요.",
-            }
-            for item in corrections
+            pose_stages._correction_dict(item, plans[index] if index < len(plans) else ())
+            for index, item in enumerate(corrections)
         ],
         "joint_sigmas": {item.joint: round(item.sigma, 3) for item in sigmas},
         "input_quality": {

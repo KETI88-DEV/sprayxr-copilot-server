@@ -54,6 +54,7 @@ CONTRACT_KEYS = {
     "similarity_score",
     "expert_percentile",
     "correction_mode",
+    "scoring_mode",
     "corrections",
     "joint_sigmas",
     "input_quality",
@@ -467,3 +468,58 @@ def test_a_sequence_with_no_impact_cannot_pick_a_bucket(
     assert result["reference_band"] is None
     assert result["similarity_score"] is None
     assert result["reason_code"] == "reference_data_missing"
+
+
+
+def test_the_composite_route_prefers_phase_scoring_when_it_can(
+    client, monkeypatch, tmp_path
+) -> None:
+    """합본 경로는 **위상 채점을 먼저 시도한다** — 국소 오차를 접기보다 3.7배 잡는다.
+
+    위상 레퍼런스가 있고 착탄이 움직이면 `phase`, 아니면 `fold`로 내려간다.
+
+    깨뜨리는 법: 합본 경로가 늘 `fold`를 쓰면 실패한다.
+    """
+    import importlib
+
+    stages_test = importlib.import_module("mcp_servers.test_pose_stages_route")
+    stages_test._write_phase_reference(
+        tmp_path, monkeypatch, stages_test._sweep(stages_test._sample_body("SEQ-002"))
+    )
+    # 두 사다리가 **갈리는 점수대**를 쓴다. 0.87은 접기 p10(0.90) 아래이고
+    # 위상 p90(0.50) 위라 모드를 무시하면 90이 아니라 0이 나온다.
+    body = stages_test._sweep(
+        stages_test._sample_body("SEQ-002"), arm_shift=(0.0, 0.0, 0.5), first_half_only=False
+    )
+
+    result = _post(client, body)
+    assert result["scoring_mode"] == "phase", result["reason_code"]
+    assert result["similarity_score"] == pytest.approx(0.87, abs=0.05)
+    assert result["expert_percentile"] == 90, (
+        f"점수 {result['similarity_score']}가 접기 사다리에 대해 매겨졌다"
+    )
+
+
+def test_the_composite_route_falls_back_when_the_gun_is_fixed(
+    client, monkeypatch, tmp_path
+) -> None:
+    """건을 고정하면 정렬할 모양이 없다(실물 SEQ-002). 그때도 **점수는 나와야 한다** —
+    위상이 안 된다고 채점을 포기하면 실물 시퀀스 대부분이 미측정이 된다.
+
+    깨뜨리는 법: 위상 실패 시 접기로 안 내려가면 실패한다.
+    """
+    import importlib
+
+    stages_test = importlib.import_module("mcp_servers.test_pose_stages_route")
+    swept = stages_test._sweep(stages_test._sample_body("SEQ-002"))
+    stages_test._write_phase_reference(tmp_path, monkeypatch, swept)
+
+    frozen = json.loads(json.dumps(swept))
+    for frame in frozen["sequence_info"]:
+        frame["gun_metrics"]["raypoint"] = list(
+            swept["sequence_info"][0]["gun_metrics"]["raypoint"]
+        )
+        frame["tool_pos_rot"]["pos"] = list(swept["sequence_info"][0]["tool_pos_rot"]["pos"])
+    result = _post(client, frozen)
+    assert result["scoring_mode"] == "fold", "정렬이 불가능한데 위상으로 쟀다고 나왔다"
+    assert result["similarity_score"] is not None, "접기로 내려가지 않았다"

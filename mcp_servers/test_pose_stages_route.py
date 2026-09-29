@@ -142,6 +142,15 @@ def _write_phase_reference(tmp_path: Path, monkeypatch, body: dict[str, Any]) ->
         "prototype": [list(point) for point in prototype],
         "prototype_support": {"to_prototype": 0.05, "between": 0.40, "n": 300},
         "phases": phases,
+        # 두 사다리를 **뚜렷이 다르게** 둔다. 같으면 모드를 무시해도 검사가 통과한다.
+        "expert_scores": {
+            "p10": 0.90, "p25": 0.92, "p50": 0.94, "p75": 0.96, "p90": 0.98,
+            "reference_pass_count": 300,
+        },
+        "expert_scores_phase": {
+            "p10": 0.10, "p25": 0.20, "p50": 0.30, "p75": 0.40, "p90": 0.50,
+            "reference_pass_count": 300,
+        },
     }
     path_out = tmp_path / "phase_reference.json"
     path_out.write_text(json.dumps({
