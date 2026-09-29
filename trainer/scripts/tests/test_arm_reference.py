@@ -367,3 +367,100 @@ def test_a_percentile_from_a_stale_ladder_is_refused() -> None:
     assert arm_reference.expert_percentile(fresh, 0.95) == 90
     assert arm_reference.expert_percentile(stale, 0.65) is None, "버킷이 바뀐 사다리를 썼다"
     assert arm_reference.expert_percentile({"n": 200}, 0.65) is None
+
+
+def _bucket_with_shape(radius: float = 0.50, radius_sd: float = 0.07,
+                       angular_sd: float = 0.80) -> dict:
+    """반경·방향을 실은 버킷. 값은 레벨1 실측(손 반경 0.513 ± 0.074 m, 방향 SD 0.83 rad)에서 왔다."""
+    bucket = _bucket()
+    for name, entry in bucket["joints"].items():
+        entry["radius"] = {"mean": radius, "sd": radius_sd}
+        entry["heading"] = {"mean": [1.0, 0.0, 0.0], "angular_sd": angular_sd}
+        entry["mean"] = [radius, 0.0, 0.0]
+        entry["sd"] = [0.2, 0.2, 0.2]
+    return bucket
+
+
+def test_over_extension_is_caught_even_where_the_axes_are_loose() -> None:
+    """손의 산포는 96%가 **방향** 성분이라 축별 SD가 0.2 m대로 크다.
+
+    축으로만 재면 그 큰 SD가 뻗음을 희석해 15 cm 과신전이 1σ도 안 된다 — 실측에서
+    손을 45 cm 옮겨도 교정이 안 나갔다. 반경을 따로 재면 잡힌다.
+
+    깨뜨리는 법: `joint_sigmas`에서 `radius` 가지를 지우면 축 RMS로 내려가 실패한다.
+    """
+    bucket = _bucket_with_shape()
+    # 반경 방향으로 15 cm 더 뻗은 자세. 방향은 기준과 같다.
+    normalized = {name: (0.65, 0.0, 0.0) for name in arm_reference.SCORING_JOINTS_ARM}
+    sigmas = arm_reference.joint_sigmas(normalized, bucket)
+    item = sigmas[0]
+    assert item.radial_sigma == pytest.approx(0.15 / 0.07, abs=1e-6)
+    assert item.angular_sigma == pytest.approx(0.0, abs=1e-9), "방향은 그대로인데 σ가 붙었다"
+    assert item.sigma > arm_reference.CORRECTION_SIGMA, "15 cm 과신전이 문턱을 못 넘었다"
+
+    # 대조 — 같은 편차를 축으로만 재면 문턱을 못 넘는다는 것을 직접 보인다.
+    axis_only = math.sqrt(((0.15 / 0.2) ** 2) / 3.0)
+    assert axis_only < arm_reference.CORRECTION_SIGMA
+
+
+def test_pointing_elsewhere_shows_up_as_direction_not_reach() -> None:
+    """둘은 직교한다. 방향만 틀면 반경 σ가 0이어야 한다 — 그래야 증거가 원인을 가리킨다."""
+    bucket = _bucket_with_shape()
+    turned = (0.0, 0.50, 0.0)  # 같은 반경, 90° 돌아간 방향
+    sigmas = arm_reference.joint_sigmas(
+        {name: turned for name in arm_reference.SCORING_JOINTS_ARM}, bucket
+    )
+    item = sigmas[0]
+    assert item.radial_sigma == pytest.approx(0.0, abs=1e-9)
+    assert item.angular_sigma == pytest.approx((math.pi / 2) / 0.80, abs=1e-6)
+    assert item.radius_delta_m == pytest.approx(0.0, abs=1e-9)
+
+
+def test_reach_and_direction_combine_as_their_rms() -> None:
+    """둘 다 1σ면 관절 σ는 1.0이다 — 성분 수가 점수를 흔들면 안 된다."""
+    bucket = _bucket_with_shape(radius_sd=0.10, angular_sd=0.50)
+    length = 0.60  # 반경 +0.10 = 1σ
+    angle = 0.50   # 방향 0.50 rad = 1σ
+    point = (length * math.cos(angle), length * math.sin(angle), 0.0)
+    item = arm_reference.joint_sigmas(
+        {name: point for name in arm_reference.SCORING_JOINTS_ARM}, bucket
+    )[0]
+    assert item.radial_sigma == pytest.approx(1.0, abs=1e-6)
+    assert item.angular_sigma == pytest.approx(1.0, abs=1e-6)
+    assert item.sigma == pytest.approx(1.0, abs=1e-6)
+
+
+def test_an_old_reference_without_reach_still_scores() -> None:
+    """반경·방향을 싣기 전에 구운 아티팩트가 남아 있다. 죽지 말고 축 RMS로 내려간다."""
+    plain = _bucket()
+    assert "radius" not in plain["joints"]["RightHand"]
+    item = arm_reference.joint_sigmas(
+        {name: (0.05, 0.05, 0.05) for name in arm_reference.SCORING_JOINTS_ARM}, plain
+    )[0]
+    assert item.radial_sigma is None and item.angular_sigma is None
+    assert item.sigma == pytest.approx(1.0, abs=1e-9)
+
+
+def test_the_angular_floor_stops_a_tight_bucket_from_exploding() -> None:
+    """방향 산포가 0에 가까운 버킷에서 각 σ가 무한히 부풀면 전원이 교정 대상이 된다."""
+    bucket = _bucket_with_shape(angular_sd=1e-9)
+    point = (0.50 * math.cos(0.05), 0.50 * math.sin(0.05), 0.0)
+    item = arm_reference.joint_sigmas(
+        {name: point for name in arm_reference.SCORING_JOINTS_ARM}, bucket
+    )[0]
+    assert item.angular_sigma == pytest.approx(0.05 / arm_reference.ANGULAR_SD_FLOOR, abs=1e-6)
+
+
+def test_the_builder_records_a_rigid_bone_as_a_tight_radius() -> None:
+    """위팔은 어깨에 0.1797 m 뼈로 묶여 있다 — 반경 SD가 0에 가깝게 나와야 한다.
+
+    레벨1 실측이 0.002~0.004 m다. 이 값이 커지면 굽는 쪽이 반경을 잘못 쌓고 있는 것이다.
+    """
+    accum = arm_reference.BucketAccum()
+    for angle in (0.0, 0.4, -0.4, 0.9, -0.9, 0.2):
+        point = (0.2 * math.cos(angle), 0.2 * math.sin(angle), 0.0)
+        accum.add({"RightUpperArm": point}, "w")
+    entry = accum.payload()["joints"]["RightUpperArm"]
+    assert entry["radius"]["mean"] == pytest.approx(0.2, abs=1e-9)
+    assert entry["radius"]["sd"] == pytest.approx(0.0, abs=1e-6), "강체인데 반경이 흔들렸다"
+    assert entry["heading"]["angular_sd"] > 0.1, "방향은 흩어져 있는데 0으로 나왔다"

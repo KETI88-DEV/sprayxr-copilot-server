@@ -42,10 +42,17 @@ FK 공간은 월드 정렬이 아니다(어깨축의 월드 수직 성분이 중
 **reach = 착탄 수직 − 머리 월드 수직**이다. 둘 다 월드라 차이에서 바닥 상수가 지워지고,
 런타임에도 `raypoint`와 `head`만으로 바로 난다. 실측 분포는 p10 −0.74 · p50 −0.25 · p90 +0.10 m다.
 
-## 점수
+## 점수 — 반경과 방향을 나눠 잰다
 
-축별 σ = |값 − 평균| / max(숙련자 축 표준편차, 하한), 관절 σ = **축 σ의 제곱평균(RMS)**,
-W = 관절 σ의 가중평균, **S = exp(−W²/2)**. 가중치는 `measured_score.DEFAULT_WEIGHTS`를
+관절 σ = **반경 σ와 방향 σ의 제곱평균**, W = 관절 σ의 가중평균, **S = exp(−W²/2)**.
+
+- 반경 σ = |어깨 중점까지의 거리 − 숙련자 평균| / max(반경 SD, 하한)
+- 방향 σ = 평균 방향과의 각 / max(각 산포, `ANGULAR_SD_FLOOR`)
+
+**축 3개로 재면 안 된다.** 손의 변동은 96%가 방향 성분이라 축별 SD가 0.2 m대로 크고,
+그 큰 SD가 뻗음을 희석해 15 cm 과신전이 1σ도 안 된다 — 실측에서 손을 45 cm 옮겨도
+교정이 안 나갔다. 반경(손 0.492 ± 0.071 m)과 방향은 직교하므로 나눠 재면 둘 다 산다.
+반경·방향이 없는 옛 아티팩트에는 축 RMS로 내려간다. 가중치는 `measured_score.DEFAULT_WEIGHTS`를
 읽어 온다 — 건을 쥔 오른쪽이 분사를 정하기 때문이고, 여기서 리터럴로 다시 적으면 두 곳이 갈린다.
 
 RMS인 이유는 실측에 있다. 제곱합 제곱근으로 내면 축마다 1σ인 **통상적인** 숙련자도
@@ -257,6 +264,9 @@ class AxisAccum:
 @dataclass
 class BucketAccum:
     joints: dict[str, list[AxisAccum]] = field(default_factory=dict)
+    # 반경(어깨 중점까지의 거리)과 방향(단위벡터)을 따로 쌓는다. 왜인지는 `joint_sigmas` 참고.
+    radius: dict[str, AxisAccum] = field(default_factory=dict)
+    heading: dict[str, list[AxisAccum]] = field(default_factory=dict)
     workers: set[str] = field(default_factory=set)
     n: int = 0
 
@@ -267,20 +277,43 @@ class BucketAccum:
             slot = self.joints.setdefault(name, [AxisAccum(), AxisAccum(), AxisAccum()])
             for index in range(3):
                 slot[index].add(point[index])
+            length = math.sqrt(sum(value * value for value in point))
+            self.radius.setdefault(name, AxisAccum()).add(length)
+            unit = _unit(point)
+            if unit is not None:
+                axes = self.heading.setdefault(name, [AxisAccum(), AxisAccum(), AxisAccum()])
+                for index in range(3):
+                    axes[index].add(unit[index])
 
     def payload(self) -> dict[str, object]:
-        return {
-            "n": self.n,
-            "workers": len(self.workers),
-            "joints": {
-                name: {
-                    "mean": [axis.mean() for axis in axes],
-                    "sd": [axis.sd() for axis in axes],
-                    "n": axes[0].n,
-                }
-                for name, axes in sorted(self.joints.items())
-            },
-        }
+        out: dict[str, object] = {"n": self.n, "workers": len(self.workers)}
+        joints: dict[str, object] = {}
+        for name, axes in sorted(self.joints.items()):
+            entry: dict[str, object] = {
+                "mean": [axis.mean() for axis in axes],
+                "sd": [axis.sd() for axis in axes],
+                "n": axes[0].n,
+            }
+            radius = self.radius.get(name)
+            if radius is not None and radius.n >= 2:
+                entry["radius"] = {"mean": radius.mean(), "sd": radius.sd()}
+            heading = self.heading.get(name)
+            if heading is not None and heading[0].n >= 2:
+                mean_unit = _unit(tuple(axis.mean() for axis in heading))  # type: ignore[arg-type]
+                if mean_unit is not None:
+                    # 평균 단위벡터의 길이 R에서 각 산포를 낸다(원형통계). R이 1에 가까울수록
+                    # 방향이 모여 있다. σ_ang = sqrt(-2 ln R)는 작은 산포에서 표준편차와 같아진다.
+                    resultant = math.sqrt(
+                        sum(axis.mean() ** 2 for axis in heading)
+                    )
+                    resultant = min(max(resultant, 1e-9), 1.0)
+                    entry["heading"] = {
+                        "mean": list(mean_unit),
+                        "angular_sd": math.sqrt(max(-2.0 * math.log(resultant), 0.0)),
+                    }
+            joints[name] = entry
+        out["joints"] = joints
+        return out
 
 
 def reference_quality(bucket: Mapping[str, object]) -> str:
@@ -300,12 +333,20 @@ def reference_quality(bucket: Mapping[str, object]) -> str:
 # --- 재기 -------------------------------------------------------------------
 
 
+# 방향 산포의 하한(라디안). 0.10 rad ≈ 5.7°. 측정 잡음이 작은 버킷에서 σ가 부풀지 않게 한다.
+ANGULAR_SD_FLOOR: Final = 0.10
+
+
 @dataclass(frozen=True)
 class JointSigma:
     joint: str
     sigma: float
     axis_sigmas: tuple[float, float, float]
     delta_m: tuple[float, float, float]
+    # 반경(얼마나 뻗었나)과 방향(어디를 향했나)을 나눈 몫. 레퍼런스에 재료가 없으면 `None`.
+    radial_sigma: float | None = None
+    angular_sigma: float | None = None
+    radius_delta_m: float | None = None
 
 
 def joint_sigmas(
@@ -335,16 +376,48 @@ def joint_sigmas(
             axis_sigmas.append(value)
             deltas.append(delta)
             total += value * value
+        # 축 3개로 재면 **뻗음이 희석된다.** 손의 산포는 96%가 방향 성분이라
+        # 축별 SD가 0.2 m대로 크고, 그 큰 SD로 나누면 15 cm 과신전이 1σ도 안 된다.
+        # 실측: 손을 45 cm 옮겨도 교정이 안 나갔다(0.779 → 0.769).
+        #
+        # 반경과 방향은 **직교한다**. 반경(어깨 중점까지 거리)은 SD 0.071 m로 좁고
+        # (손 p50 0.492 m), 방향은 넓다. 나눠서 재면 "얼마나 뻗었나"를 잃지 않는다.
+        radial = angular = None
+        radius_delta = None
+        radius_ref = entry.get("radius")
+        heading_ref = entry.get("heading")
+        length = math.sqrt(sum(value * value for value in point))
+        if isinstance(radius_ref, Mapping):
+            floor = max(float(radius_ref.get("sd", 0.0) or 0.0), SIGMA_FLOOR_M)
+            radius_delta = length - float(radius_ref.get("mean", 0.0) or 0.0)
+            radial = min(MAX_SIGMA, abs(radius_delta) / floor)
+        if isinstance(heading_ref, Mapping):
+            mean_unit = heading_ref.get("mean")
+            unit = _unit(point)
+            if unit is not None and isinstance(mean_unit, Sequence) and len(mean_unit) == 3:
+                cosine = max(-1.0, min(1.0, sum(unit[i] * float(mean_unit[i]) for i in range(3))))
+                floor = max(float(heading_ref.get("angular_sd", 0.0) or 0.0), ANGULAR_SD_FLOOR)
+                angular = min(MAX_SIGMA, math.acos(cosine) / floor)
+
+        if radial is not None and angular is not None:
+            combined = math.sqrt((radial * radial + angular * angular) / 2.0)
+        else:
+            # 레퍼런스가 반경·방향을 싣기 전에 구운 것이다. 축 RMS로 내려간다.
+            #
+            # **축 수로 나눈 제곱평균이다. 제곱합의 제곱근이 아니다.** 제곱합을 쓰면
+            # 축마다 딱 1σ인 **통상적인** 숙련자도 관절 σ가 √3 = 1.73이 되고
+            # `exp(−W²/2)`가 0.22로 떨어진다 — 정상값이 낮은 점수를 받는다.
+            combined = math.sqrt(total / 3.0)
+
         out.append(
             JointSigma(
                 joint=name,
-                # **축 수로 나눈 제곱평균(RMS)이다. 제곱합의 제곱근이 아니다.**
-                # 제곱합을 쓰면 축마다 딱 1σ인 **통상적인** 숙련자도 관절 σ가 √3 = 1.73이
-                # 되고 `exp(−W²/2)`가 0.22로 떨어진다 — 정상값이 낮은 점수를 받는다.
-                # RMS는 "축마다 평균 몇 σ인가"라 통상적인 숙련자가 1.0 근처에 온다.
-                sigma=min(MAX_SIGMA, math.sqrt(total / 3.0)),
+                sigma=min(MAX_SIGMA, combined),
                 axis_sigmas=(axis_sigmas[0], axis_sigmas[1], axis_sigmas[2]),
                 delta_m=(deltas[0], deltas[1], deltas[2]),
+                radial_sigma=radial,
+                angular_sigma=angular,
+                radius_delta_m=radius_delta,
             )
         )
     return out
@@ -397,6 +470,10 @@ class Correction:
     distance_m: float
     axis_sigmas: tuple[float, float, float]
     expected_gain: float | None
+    # 반경(얼마나 뻗었나)과 방향(어디를 향했나)을 나눈 몫. 어느 쪽이 σ를 만들었는지 보여 준다.
+    radial_sigma: float | None = None
+    angular_sigma: float | None = None
+    radius_delta_m: float | None = None
 
 
 def build_corrections(
@@ -441,6 +518,9 @@ def build_corrections(
                 distance_m=math.sqrt(sum(value * value for value in item.delta_m)),
                 axis_sigmas=item.axis_sigmas,
                 expected_gain=gain,
+                radial_sigma=item.radial_sigma,
+                angular_sigma=item.angular_sigma,
+                radius_delta_m=item.radius_delta_m,
             )
         )
     return out

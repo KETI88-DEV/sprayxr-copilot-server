@@ -539,6 +539,11 @@ def analyze_sequence(payload: SequenceRequest) -> MCPResponse:
                     "axis_sigmas": dict(
                         zip(arm_reference.AXIS_ORDER, [round(v, 3) for v in item.axis_sigmas])
                     ),
+                    # σ를 만든 것이 '얼마나 뻗었나'인지 '어디를 향했나'인지. 손의 산포는
+                    # 96%가 방향 성분이라 둘을 안 나누면 뻗음이 희석된다.
+                    "radial_sigma": None if item.radial_sigma is None else round(item.radial_sigma, 3),
+                    "angular_sigma": None if item.angular_sigma is None else round(item.angular_sigma, 3),
+                    "radius_delta_m": None if item.radius_delta_m is None else round(item.radius_delta_m, 4),
                     "support": support,
                     # 모의값이다 — 이 관절을 숙련자 평균에 맞췄을 때의 점수 상승분.
                     "expected_gain": None if item.expected_gain is None else round(item.expected_gain, 4),
