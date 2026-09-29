@@ -5,6 +5,10 @@
 * ``knowledge_search``: the live pipeline singleton shared with ``/api/chat``
   runs ``run(force_route="fast")`` in a worker thread inside the shared
   generation slot. ``use_rag='N'`` skips retrieval and returns no citations.
+  ``answer`` and ``citations`` both come from ``parse_knowledge_answer``, so
+  ``citations`` is what the answer cites (a subset of this request's retrieved
+  chunks), not the retrieval set itself, and no document id can appear in the
+  answer text without appearing in ``citations``.
 * ``trajectory_recomm`` / ``pose_recomm`` / ``error_analysis`` (plan D2): HTTP 200
   SUCCESS with a short "준비 중" answer and ``context_status="not_available"``.
   Neither the pipeline nor MCP is touched.
@@ -30,7 +34,7 @@ from fastapi.responses import JSONResponse
 
 from trainer.demo_api.copilot_contracts import CopilotQueryData, CopilotQueryRequest, CopilotResponse
 from trainer.scripts.generation_slot import GENERATION_SLOT
-from trainer.scripts.live_response_contract import normalize_fast_knowledge_response
+from trainer.scripts.live_response_contract import parse_knowledge_answer, retrieved_chunk_ids
 from trainer.scripts.openai_backend import OpenAIBackendUnavailableError
 
 if TYPE_CHECKING:
@@ -148,10 +152,26 @@ def create_copilot_router(
             logger.exception("copilot query: pipeline failed request_id=%s", query.request_id)
             return error_response(500, "Copilot query failed")
 
-        answer = normalize_fast_knowledge_response(str(result.get("response", "")))
-        raw_citations = result.get("citations") or []
-        citations = [str(item) for item in raw_citations] if use_rag and isinstance(raw_citations, list) else []
-        return _success_response(query, started, answer=answer, retrieval_used=use_rag, citations=citations)
+        # ``citations`` is what the answer cites, not what search returned: the parser
+        # intersects the model's ids with this request's retrieved chunks and renders the
+        # ``[근거]`` line from the survivors, so text and array cannot disagree.
+        # ``use_rag='N'`` retrieves nothing, so every document id leaves the prose.
+        retrieved = retrieved_chunk_ids(result.get("rag_chunks") or []) if use_rag else []
+        parsed = parse_knowledge_answer(str(result.get("response", "")), retrieved)
+        logger.info(
+            "copilot answer normalized request_id=%s repair_path=%s citations=%d dropped=%d",
+            query.request_id,
+            parsed.repair_path,
+            len(parsed.citations),
+            len(parsed.dropped),
+        )
+        return _success_response(
+            query,
+            started,
+            answer=parsed.answer,
+            retrieval_used=use_rag,
+            citations=list(parsed.citations),
+        )
 
     return router
 

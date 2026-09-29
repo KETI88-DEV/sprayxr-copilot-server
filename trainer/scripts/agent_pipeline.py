@@ -35,7 +35,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 if __package__ in {None, ""} and str(Path(__file__).resolve().parents[2]) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from trainer.scripts.live_response_contract import normalize_fast_knowledge_response
+from trainer.scripts.live_response_contract import parse_knowledge_answer, retrieved_chunk_ids
 from trainer.scripts.live_sequence_fallback import (
     LiveSequenceRequest,
     enforce_live_sequence_validation,
@@ -999,7 +999,9 @@ class AgentPipeline:
             return
 
         if str(result.get("route", "")) == "fast" and not tool_calls:
-            text = normalize_fast_knowledge_response(text)
+            # Citations are reconciled against what this request actually retrieved, so an
+            # id left in the streamed text is one the model was shown.
+            text = parse_knowledge_answer(text, retrieved_chunk_ids(result.get("rag_chunks", []))).answer
 
         for index in range(0, len(text), 24):
             if ttft_ms is None:

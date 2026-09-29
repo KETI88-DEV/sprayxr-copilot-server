@@ -1,21 +1,65 @@
+"""Knowledge-answer contract for the fast (toolless) route.
+
+``parse_knowledge_answer`` is total: every input, however malformed, comes back as
+``[답변] <body>`` optionally followed by ``\\n[근거] <ids>``. There is no pass-through
+branch, because a pass-through does nothing in exactly the cases that need repair
+(measured: 18.3% of 240 stored v6.1 responses deviate from the trained scaffold).
+
+Invariant the callers rely on: **every ``DOC-...`` id left in ``answer`` is in
+``citations``**. Ids the model cited but that were not retrieved for this request are
+removed from the prose and reported in ``dropped`` — the answer text and the contract's
+``citations`` array can no longer disagree.
+"""
+
 from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Iterable, Sequence
+from dataclasses import dataclass
 from typing import Final
 
 logger = logging.getLogger(__name__)
 
 _HEADING_RE: Final[re.Pattern[str]] = re.compile(r"^[ \t]*\[(답변|분석|판정|원인|조치|근거)\][ \t]*:?[ \t]*")
 _ANSWER_LABELS: Final[frozenset[str]] = frozenset({"답변", "분석"})
-_UNSUPPORTED_LABELS: Final[frozenset[str]] = frozenset({"판정", "원인", "조치"})
-_VERDICT_LABEL: Final[str] = "판정"
 _EVIDENCE_LABEL: Final[str] = "근거"
+_ANSWER_HEADING: Final[str] = "[답변]"
+_EVIDENCE_HEADING: Final[str] = "[근거]"
+
+# Same shape as ``agent_pipeline._DOC_ID_RE``; both must accept the identical id set.
+_DOC_ID_RE: Final[re.Pattern[str]] = re.compile(r"DOC-[a-zA-Z0-9_-]+-C\d+")
+
+_EMPTY_BRACKETS_RE: Final[re.Pattern[str]] = re.compile(r"[(\[]\s*[,;·、]?\s*[)\]]")
+_DANGLING_SEP_RE: Final[re.Pattern[str]] = re.compile(r"(?m)[ \t]*[,;](?=[ \t]*(?:[,;)\]]|$))")
+_MULTISPACE_RE: Final[re.Pattern[str]] = re.compile(r"[ \t]{2,}")
+_BRACKET_INNER_SPACE_RE: Final[re.Pattern[str]] = re.compile(r"(?<=[(\[])[ \t]+|[ \t]+(?=[)\]])")
+
+# Stated as our failure, not as a claim about the documents: when the model produced no
+# answer section at all we do not know whether the corpus covers the question.
+FAILED_ANSWER: Final[str] = "답변을 생성하지 못했습니다."
 
 _Section = tuple[str, list[str]]
 
 
-def _split_sections(response: str) -> list[_Section] | None:
+@dataclass(frozen=True)
+class KnowledgeAnswer:
+    """``answer`` is contract-shaped; ``citations`` is exactly the ids it cites."""
+
+    answer: str
+    citations: tuple[str, ...]
+    dropped: tuple[str, ...]
+    dropped_sections: tuple[str, ...]
+    repair_path: str
+
+
+def _split_with_preamble(response: str) -> tuple[str, list[_Section]]:
+    """``(prose before the first heading, sections)``; empty section list means no headings.
+
+    The preamble is kept rather than rejected: sending a response with a preamble down the
+    heading-less path would leave ``[분석]`` markers nested inside the answer body.
+    """
+    preamble: list[str] = []
     sections: list[_Section] = []
     current: _Section | None = None
 
@@ -27,44 +71,129 @@ def _split_sections(response: str) -> list[_Section] | None:
             current = (match.group(1), [line])
             continue
         if current is None:
-            if line.strip():
-                return None
+            preamble.append(line)
             continue
         current[1].append(line)
 
     if current is not None:
         sections.append(current)
-    return sections or None
+    return "\n".join(preamble).strip(), sections
 
 
-def _is_canonical_diagnostic_scaffold(labels: list[str]) -> bool:
-    if len(set(labels)) != len(labels):
-        return False
-    if labels[0] not in _ANSWER_LABELS:
-        return False
-    return _VERDICT_LABEL in labels and labels[-1] == _EVIDENCE_LABEL
+def _section_body(lines: list[str]) -> str:
+    head = _HEADING_RE.sub("", lines[0], count=1)
+    return "\n".join([head, *lines[1:]]).strip()
 
 
-def normalize_fast_knowledge_response(response: str) -> str:
-    """Strip verdict/cause/action from a toolless knowledge answer; any other shape passes through."""
-    sections = _split_sections(response)
-    if sections is None:
-        return response
+def _strip_ids(text: str, ids: Iterable[str]) -> str:
+    """Removes the given ids and the separators they leave behind."""
+    out = text
+    for doc_id in ids:
+        out = out.replace(doc_id, "")
+    out = _EMPTY_BRACKETS_RE.sub("", out)
+    out = _DANGLING_SEP_RE.sub("", out)
+    out = _MULTISPACE_RE.sub(" ", out)
+    out = _BRACKET_INNER_SPACE_RE.sub("", out)
+    return "\n".join(line.rstrip() for line in out.split("\n")).strip()
 
-    labels = [label for label, _ in sections]
-    if not _is_canonical_diagnostic_scaffold(labels):
-        return response
 
-    kept: list[str] = []
-    dropped: list[str] = []
-    for label, lines in sections:
-        if label in _UNSUPPORTED_LABELS:
-            dropped.append(label)
+def _ordered_unique(ids: Iterable[str]) -> list[str]:
+    return list(dict.fromkeys(ids))
+
+
+def parse_knowledge_answer(raw: str, retrieved: Sequence[str]) -> KnowledgeAnswer:
+    """Normalizes a toolless knowledge answer and reconciles its citations with ``retrieved``.
+
+    ``retrieved`` is the chunk id list actually searched for this request; an empty
+    sequence (``use_rag='N'`` or no hits) removes every id from the prose, so a request
+    that was given no documents cannot answer with document ids.
+    """
+    text = raw.strip()
+    if not text:
+        logger.warning("knowledge answer empty, repair_path=empty")
+        return KnowledgeAnswer(
+            answer=f"{_ANSWER_HEADING} {FAILED_ANSWER}",
+            citations=(),
+            dropped=(),
+            dropped_sections=(),
+            repair_path="empty",
+        )
+
+    preamble, sections = _split_with_preamble(text)
+    dropped_sections: list[str] = []
+    evidence_text = ""
+
+    if not sections:
+        body = text
+        repair_path = "fallback"
+    else:
+        answer_parts: list[str] = [preamble] if preamble else []
+        evidence_parts: list[str] = []
+        for label, lines in sections:
+            part = _section_body(lines)
+            if label == _EVIDENCE_LABEL:
+                evidence_parts.append(part)
+            elif label in _ANSWER_LABELS:
+                answer_parts.append(part)
+            else:
+                dropped_sections.append(label)
+        evidence_text = "\n".join(part for part in evidence_parts if part)
+        body = "\n".join(part for part in answer_parts if part)
+        if not answer_parts:
+            # Only a verdict/cause/action reached us. The fast route must not publish a
+            # verdict it has no measurements for, and there is nothing else to show.
+            logger.warning(
+                "knowledge answer had no answer section, labels=%s",
+                ",".join(label for label, _ in sections),
+            )
+            return KnowledgeAnswer(
+                answer=f"{_ANSWER_HEADING} {FAILED_ANSWER}",
+                citations=(),
+                dropped=tuple(_ordered_unique(_DOC_ID_RE.findall(text))),
+                dropped_sections=tuple(dropped_sections),
+                repair_path="no_answer_section",
+            )
+        repair_path = "sections"
+
+    retrieved_set = set(retrieved)
+    cited = _ordered_unique(_DOC_ID_RE.findall(evidence_text) + _DOC_ID_RE.findall(body))
+    validated = [doc_id for doc_id in cited if doc_id in retrieved_set]
+    dropped = [doc_id for doc_id in cited if doc_id not in retrieved_set]
+
+    body = _strip_ids(body, dropped)
+    if not body:
+        body = FAILED_ANSWER
+        repair_path = "body_empty"
+
+    answer = f"{_ANSWER_HEADING} {body}"
+    if validated:
+        answer = f"{answer}\n{_EVIDENCE_HEADING} {', '.join(validated)}"
+
+    if dropped:
+        logger.warning(
+            "knowledge answer cited outside the evidence, dropped=%s retrieved=%d",
+            ",".join(dropped),
+            len(retrieved_set),
+        )
+    if dropped_sections:
+        logger.info("knowledge answer dropped unsupported sections: %s", ",".join(dropped_sections))
+
+    return KnowledgeAnswer(
+        answer=answer,
+        citations=tuple(validated),
+        dropped=tuple(dropped),
+        dropped_sections=tuple(dropped_sections),
+        repair_path=repair_path,
+    )
+
+
+def retrieved_chunk_ids(rag_chunks: Sequence[object]) -> list[str]:
+    """Chunk ids from an ``AgentPipeline.run`` result's ``rag_chunks``, order preserved."""
+    ids: list[str] = []
+    for chunk in rag_chunks:
+        if not isinstance(chunk, dict):
             continue
-        block = list(lines)
-        if label == "분석":
-            block[0] = block[0].replace("[분석]", "[답변]", 1)
-        kept.extend(block)
-
-    logger.info("fast answer normalized, dropped unsupported sections: %s", ",".join(dropped))
-    return "\n".join(kept).strip()
+        chunk_id = str(chunk.get("chunk_id", "")).strip()
+        if chunk_id:
+            ids.append(chunk_id)
+    return _ordered_unique(ids)

@@ -65,7 +65,9 @@ def _stream_answer(route: str, instruction: str) -> str:
     pipe.router = SemanticRouter()
     pipe.run = lambda **_kwargs: {
         "route": route,
-        "rag_chunks": [],
+        # The scaffold cites this chunk, so search must have returned it; a citation with
+        # nothing retrieved is a state run() cannot produce.
+        "rag_chunks": [{"chunk_id": "DOC-doc_0086-C0001", "text": ""}],
         "tool_calls": [],
         "response": _DIAGNOSTIC_SCAFFOLD,
         "synthesis_ms": 0,

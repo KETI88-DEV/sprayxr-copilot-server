@@ -73,9 +73,12 @@ class _FakePipeline:
                 "session_id": kwargs.get("session_id") or _GENERATED_UUID,
                 "route": "fast",
                 "response": self.response,
+                # run() returns both: ``citations`` is the evaluation-facing union it has
+                # always been, ``rag_chunks`` is what search actually returned. The v2.5
+                # boundary reconciles against ``rag_chunks``.
                 "citations": list(self.citations),
                 "tool_calls": [],
-                "rag_chunks": [],
+                "rag_chunks": [{"chunk_id": chunk_id, "text": ""} for chunk_id in self.citations],
             }
         finally:
             with self._guard:
@@ -166,7 +169,9 @@ def test_answer_gets_the_fast_knowledge_normalization(monkeypatch: pytest.Monkey
 @pytest.mark.parametrize(
     ("use_rag", "run_flag", "retrieval_used", "citations"),
     [
-        ("Y", True, True, ["DOC-doc_0001-C0001", "DOC-doc_0002-C0003"]),
+        # Two chunks were retrieved; the answer cites one. ``citations`` reports the cited
+        # one, not the retrieval set.
+        ("Y", True, True, ["DOC-doc_0001-C0001"]),
         ("N", False, False, []),
     ],
 )
@@ -181,6 +186,27 @@ def test_use_rag_controls_retrieval_and_citations(
     assert pipeline.calls[0]["use_rag"] is run_flag
     assert data["retrieval_used"] is retrieval_used
     assert data["citations"] == citations
+
+
+def test_use_rag_n_leaves_no_document_id_in_the_answer(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Given use_rag='N', When the answer still cites a document, Then the id leaves both fields."""
+    data = _client(monkeypatch, _FakePipeline()).post(URL, json=_body(use_rag="N")).json()["data"]
+
+    assert "DOC-" not in data["answer"]
+    assert data["citations"] == []
+
+
+def test_citation_outside_the_retrieved_chunks_is_dropped(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Given an id the search never returned, When answered, Then it reaches neither field."""
+    pipeline = _FakePipeline(
+        response="[답변] SENTINEL_BODY\n[근거] DOC-doc_9999-C0001",
+        citations=("DOC-doc_0001-C0001",),
+    )
+
+    data = _client(monkeypatch, pipeline).post(URL, json=_body()).json()["data"]
+
+    assert data["answer"] == "[답변] SENTINEL_BODY"
+    assert data["citations"] == []
 
 
 def test_null_session_id_stays_null_even_when_run_invents_one(monkeypatch: pytest.MonkeyPatch) -> None:

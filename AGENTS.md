@@ -28,7 +28,7 @@ python3 -m trainer.demo_api.app --port 8120          # demo mode, no GPU
 python3 -m trainer.demo_api.app --port 8120 --live   # live mode, GPU
 DEMO_MODE=true|false python3 trainer/scripts/demo_app.py   # Gradio, separate UI entrypoint
 
-# full Python suite — 410 tests, ~17 s (2026-08-28 실측)
+# full Python suite — 1366 tests, ~263 s (2026-09-29 실측; 2026-08-28에는 410개·17초였다)
 docker exec -w /workspace ship-paint-trainer python3 -m pytest trainer mcp_servers -q
 
 # GPU-free smoke of the simulator interface + monitor

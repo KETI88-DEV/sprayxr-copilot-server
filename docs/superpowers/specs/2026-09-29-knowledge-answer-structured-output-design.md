@@ -45,6 +45,22 @@
 
 `citations` 길이가 항상 8 이상인 것은 `top_k_rerank=8`의 검색 결과 전체가 무조건 들어가기 때문이다. 본문이 실제로 기대는 id는 중앙값 1개이므로 **`citations`는 약 5.6배 과보고**한다.
 
+### 1.3 증거 밖 인용은 전부/전무다
+
+본문 id 개수와 증거 밖 개수를 같이 세면 혼합 사례가 **0건**이다.
+
+| 본문 id 수 | 증거 밖 | 건수 |
+|---|---|---|
+| 1 | 0 | 129 |
+| 1 | **1 (전부 밖)** | 12 |
+| 2 | 0 | 21 |
+| 2 | **2 (전부 밖)** | 12 |
+| 3 | 0 | 66 |
+
+즉 모델이 증거를 벗어날 때는 **일부가 아니라 전부** 벗어난다. 제공된 문서를 참조하다가 하나를 잘못 끼워 넣는 것이 아니라, 그 답변 전체가 검색 증거가 아닌 LoRA 기억에서 나온 것이다. **10.0%의 답변이 제공된 증거에 전혀 접지되어 있지 않다.**
+
+처리: 답변을 버리지 않는다(학습에서 온 내용이 맞을 수 있다). `citations=[]`가 "인용할 근거가 없다"를 정직하게 표현하고, SIM은 출처 링크를 그리지 않는다.
+
 ## 2. 결함 확정
 
 | # | 위치 | 내용 | 증거 |
@@ -125,6 +141,12 @@ dropped      = [c for c in cited if c not in retrieved]
 
 ### 3.4 정규화 함수의 전역화 (D1)
 
+구현 시 추가로 확정한 두 가지:
+
+- **머리말은 버리지 않고 본문 앞에 붙인다.** 첫 헤딩보다 앞선 산문을 헤딩 없는 경로로 보내면 답변 본문 안에 `[분석]` 마커가 중첩되어 SIM의 파싱을 깨뜨린다. `_split_with_preamble`이 머리말과 섹션을 함께 돌려준다.
+- **답변 섹션이 하나도 없으면 발행하지 않는다.** `판정|원인|조치|근거`만 온 경우(코퍼스 1건) 판정문을 답변으로 내보내면 측정값 없는 판정을 발행하는 것이다. `답변을 생성하지 못했습니다.`를 반환하고 `repair_path="no_answer_section"`으로 기록한다. 문서 커버리지에 대한 거짓 주장("문서에 정보가 없습니다")을 하지 않기 위해 우리 쪽 실패로 표현한다.
+- **산문을 다시 쓰지는 않는다.** 드롭된 id를 본문에서 제거하고 남은 구분자(빈 괄호, 중복 쉼표, 괄호 안쪽 공백)만 정돈한다. `SENTINEL(DOC-x 참조)` → `SENTINEL(참조)`.
+
 `normalize_fast_knowledge_response`를 대체한다. 새 함수는 반드시 `(answer, citations, diagnostics)`를 반환하며 **원문 통과 분기를 갖지 않는다.**
 
 ```
@@ -191,13 +213,17 @@ if grammar is not None:
 
 | 지표 | 성격 | 기준 |
 |---|---|---|
-| `manual_score` (5축 평균, `run_rag_eval.py:232`) | 단계형 통계 게이트 | Welch 95% CI, Δ=0.2. CI 하한 > −Δ면 통과, 상한 < −Δ면 실패, 그 외 8→18회 확장. FP8 때와 같은 절차 |
+| `manual_score` (5축 평균, `run_rag_eval.py:232`) | 단계형 통계 게이트 | Welch 95% CI, Δ=0.2. CI 하한 > −Δ면 통과, 상한 < −Δ면 실패, 그 외 8→18회 확장. FP8 때와 같은 절차. **예상 상쇄 −0.040은 품질 저하가 아니다**(아래) |
 | `rouge_l`, `bertscore_f1` | 참고 | 보고만 |
 | **구조 준수율** | 경성 게이트 | `off` 경로에서도 100%. 문법 경로에서 100% 미만이면 배선 결함이다 |
 | **증거 밖 인용률** | 경성 게이트 | 0%. §1.2의 10.0%가 0으로 가는 것이 이 작업의 정의다 |
 | **인용 재현율** (`validated ∩ required_chunks`) | 신설·보고 | 기준선 먼저 측정. 축소된 `citations`가 정답 청크를 놓치는지 본다 |
 | p50/p90 지연 | 경성 게이트 | 기준선 대비 +5% 이내. 문법 마스크는 디코드 시점 비용이므로 [추정] 무시 가능하지만 측정으로 확인한다 |
 | `completeness`(길이비 0.5~3.0, `run_rag_eval.py:223`) | 감시 | 문법이 본문을 짧게 만들면 이 축이 먼저 떨어진다. 하락 시 `body` 상한(600자)을 조정한다 |
+
+**게이트 해석에 필요한 보정 하나.** `run_rag_eval.py:206-214`의 `faithfulness` 축은 `len(citations) >= 1`만 요구하므로 8개를 1~3개로 좁히는 것 자체는 점수를 바꾸지 않는다. 그러나 §1.3의 전부/전무 성질 때문에 증거 밖 인용 건(10.0%)은 `validated`가 **공집합**이 되어 `faith_score`가 2→0으로 떨어진다. 이는 `manual_score`에 **−0.040**의 결정론적 상쇄를 만든다(0.100 × 0.4).
+
+이 −0.040은 올바른 필터링의 결과이며 품질 저하가 아니다. Δ=0.2가 이를 흡수하지만, **문법 경로의 하락으로 오독하지 않도록 보고서에 분리해 싣는다.** 비교는 `off`(수정 후) vs `grammar`(수정 후)로 하고, 수정 전 기준선은 별도 열로만 보여준다.
 
 측정 시 같은 컨테이너에서 다른 CPU 부하를 돌리지 않는다(과거 100.2s vs 42s 오염 사례).
 
@@ -219,8 +245,8 @@ if grammar is not None:
 
 | # | 작업 | 산출 | 시험 게이트 |
 |---|---|---|---|
-| **T1** | `_extract_citations`를 `retrieved` 소속 검사 기반으로 분리: `cited_validated`와 `retrieved_all`을 별도 반환. `citations`는 전자 | `agent_pipeline.py` | 단위: 본문 id ⊄ 검색집합 → 드롭·경고. `use_rag=False` → 본문 DOC id 제거·`citations=[]` |
-| **T2** | `parse_knowledge_answer` 전역 함수로 `normalize_fast_knowledge_response` 대체(§3.4). 라우터 배선 | `live_response_contract.py`, `copilot_router.py` | 단위: §1.1의 9개 라벨 시퀀스 전부를 입력으로 넣어 **모두** 계약 형태 반환. 중복 `[근거]` 병합. 섹션 없는 입력도 `[답변]` 접두 |
+| **T1** | 인용 소속 검사를 **경계에서** 한다. `run()`은 이미 `result["rag_chunks"]`에 검색 청크를 그대로 실어 보내므로(`agent_pipeline.py:1184`) **`run()`을 전혀 고치지 않는다.** `result["citations"]`도 불변이다 — `run_rag_eval.py:208`과 `eval_metrics.py:359`가 이 필드로 채점하므로 AGENTS.md의 "`run()` 동작을 평가용으로 안정하게 유지" 조항에 걸린다 | `live_response_contract.retrieved_chunk_ids`, `copilot_router.py` | 단위: 본문 id ⊄ 검색집합 → 드롭·경고. `use_rag='N'` → 본문 DOC id 전멸·`citations=[]`. `rag_chunks`의 비-dict 원소 무시 |
+| **T2** | `parse_knowledge_answer` 전역 함수로 `normalize_fast_knowledge_response` 대체(§3.4). 라우터와 `run_streaming` 배선 | `live_response_contract.py`, `copilot_router.py`, `agent_pipeline.py:1004` | 단위: §1.1의 9개 라벨 시퀀스 전부를 입력으로 넣어 **모두** 계약 형태 반환. 중복 `[근거]` 병합. 섹션 없는 입력도 `[답변]` 접두. 불변식 "answer의 모든 DOC id ∈ citations" |
 | **T3** | 문법 문자열 2종 + 컴파일 캐시. vLLM 실물에서 §3.6의 5개 항목 확인 | `trainer/scripts/answer_grammar.py` | 실물 스모크: 문법 적용 요청 10건이 100% 계약 형태. 컴파일 p95 기록 |
 | **T4** | `build_payload` 선택적 `extra_body` + config 스위치 + 폴백 + `/api/ready` 노출 | `openai_backend.py`, `rag_config_spark_vllm.yaml`, `readiness.py` | 단위: 스위치 3값 각각의 payload 동등성. 400 응답 → 1회 폴백. 기존 payload 키 불변 |
 | **T5** | `run_rag_eval.py`에 구조 준수율·증거 밖 인용률·인용 재현율 추가 | `run_rag_eval.py` | 단위: 세 지표의 경계 사례 |
