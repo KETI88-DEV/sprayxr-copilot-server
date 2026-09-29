@@ -382,7 +382,8 @@ def test_scored_phases_counts_only_phases_that_had_frames(
     frames, _ = pose_estimation._gate_frames(
         [pose_estimation.SequenceFrame(**frame) for frame in body["sequence_info"]]
     )
-    poses = [arm_reference.normalize(frame.joints) or {} for frame in frames]
+    # `score`는 **월드** 관절을 받는다 — 교정 계획을 월드로 되돌리려면 몸 프레임이 필요하다.
+    poses = [dict(frame.joints) for frame in frames]
 
     covered = 5
     partial = pose_stages.AlignResult(
@@ -404,3 +405,120 @@ def test_scored_phases_counts_only_phases_that_had_frames(
         phases=arm_reference.PHASES, covered_phases=arm_reference.PHASES,
     )
     assert pose_stages.score(poses, whole, bucket, labels={}).scored_phases == arm_reference.PHASES
+
+
+def test_a_handed_band_does_not_overwrite_the_measured_reach(
+    client, monkeypatch, tmp_path
+) -> None:
+    """`band`를 넘겨도 응답의 `reach_m`은 **이 시퀀스에서 잰 값**이어야 한다.
+
+    밴드의 공칭값으로 덮어쓰면 `reach_m`이 "잰 값"이 아니라 "고른 칸의 이름"이 되고,
+    밴드를 잘못 넘긴 것을 호출자가 못 본다.
+
+    깨뜨리는 법: `_resolved_of`에서 `replace(..., reach_m=prepared.reach)`를 빼면
+    밴드 공칭값이 나와 실패한다.
+    """
+    body = _sweep(_sample_body("SEQ-002"))
+    band = _write_phase_reference(tmp_path, monkeypatch, body)
+    measured = _post(client, "reference", body)["reach_m"]
+    assert measured is not None
+
+    handed = _post(client, "align", {**body, "band": band})["resolve"]
+    assert handed["band"] == band
+    assert handed["reach_m"] == pytest.approx(measured, abs=1e-9), (
+        "밴드 공칭값이 실측 reach를 덮었다"
+    )
+    assert handed["reach_m"] != pytest.approx(float(band), abs=1e-6), (
+        "이 검사가 공허하다 — 실측이 마침 밴드 경계값이다"
+    )
+
+
+def test_the_target_is_world_coordinates_the_simulator_can_apply(
+    client, monkeypatch, tmp_path
+) -> None:
+    """**Co-Pilot이 시뮬레이터에 넘기는 값이다.** 우리 몸 프레임이 아니라 월드여야 한다.
+
+    몸 프레임(어깨 중점 원점, 어깨축·몸통축)은 이 모듈 안의 약속이다. 그 좌표로 내보내면
+    받는 쪽이 우리 프레임을 다시 구현해야 하고, 그 순간 두 구현이 갈린다.
+
+    깨뜨리는 법: `correction_plan`이 `to_world`를 안 거치면 좌표가 원점 근처로 나와 실패한다.
+    """
+    # 0.35 m면 σ 1.33으로 문턱(1.5) 아래다 — 교정이 안 나간다. 0.70 m면 σ 2.90이다.
+    body = _sweep(_sample_body("SEQ-002"), arm_shift=(0.0, 0.0, 0.70), first_half_only=False)
+    _write_phase_reference(tmp_path, monkeypatch, _sweep(_sample_body("SEQ-002")))
+    result = _post(client, "score", body)
+    assert result["corrections"], "교란을 넣었는데 교정이 없다"
+    target = result["corrections"][0]["target"]
+    assert target is not None
+    assert target["frame"] == "world"
+    assert target["mode"] in ("radius", "heading")
+    assert target["per_frame"], "프레임별 값이 비었다 — 시뮬레이터가 쓸 것이 없다"
+
+    joint = result["corrections"][0]["joint"]
+    step = target["per_frame"][0]
+    frames = [pose_estimation.SequenceFrame(**f) for f in body["sequence_info"]]
+    gated, _ = pose_estimation._gate_frames(frames)
+    actual = gated[step["index"]].joints[joint]
+    assert step["current"] == pytest.approx(actual, abs=1e-3), (
+        "`current`가 그 프레임의 실제 월드 좌표가 아니다"
+    )
+    # 월드 좌표는 원점 근처가 아니다 — 이 아바타는 4 m 높이에 서 있다.
+    assert abs(step["target"][1]) > 1.0
+
+
+def test_a_target_that_breaks_a_bone_says_it_needs_ik(client, monkeypatch, tmp_path) -> None:
+    """관절 하나만 목표로 옮기면 부모와의 뼈 길이가 달라진다 — 우리는 사슬을 모델링하지 않는다.
+
+    좌표만 주고 끝내면 받는 쪽이 **불가능한 골격**을 만든다. 깨지는 양을 같이 실어
+    IK가 필요하다는 것을 알려야 한다.
+
+    깨뜨리는 법: `_feasibility`가 늘 `requires_ik: False`를 내면 실패한다.
+    """
+    # 0.35 m면 σ 1.33으로 문턱(1.5) 아래다 — 교정이 안 나간다. 0.70 m면 σ 2.90이다.
+    body = _sweep(_sample_body("SEQ-002"), arm_shift=(0.0, 0.0, 0.70), first_half_only=False)
+    _write_phase_reference(tmp_path, monkeypatch, _sweep(_sample_body("SEQ-002")))
+    target = _post(client, "score", body)["corrections"][0]["target"]
+    assert target["parent_joint"] is not None
+    assert target["bone_break_m"] is not None
+    assert target["requires_ik"] == (
+        target["bone_break_m"] > pose_estimation.pose_stages.BONE_BREAK_TOLERANCE_M
+    )
+    step = target["per_frame"][0]
+    assert "parent" in step, "IK를 풀 부모 좌표가 없다"
+
+
+def test_the_promised_gain_matches_what_the_target_delivers(
+    client, monkeypatch, tmp_path
+) -> None:
+    """**교정 정확도의 내적 일관성.** 예고한 상승분이 지시를 적용했을 때와 같아야 한다.
+
+    예전에는 `expected_gain`이 "σ를 0으로 만들면"이라는 상한이었는데 `target`은 주범
+    성분 하나만 고쳤다 — 실측에서 예고 0.0579에 실현 0.0284였다. 예고가 지시를 따라가야
+    검증이 뜻을 갖는다.
+
+    이것은 **효능이 아니다.** 실제 작업자가 이 교정을 받고 나아지는지는 런타임 데이터가
+    있어야 한다.
+
+    깨뜨리는 법: `score`에서 `expected_gain`을 `target` 적용이 아닌 σ→0으로 되돌리면 실패한다.
+    """
+    # 0.35 m면 σ 1.33으로 문턱(1.5) 아래다 — 교정이 안 나간다. 0.70 m면 σ 2.90이다.
+    body = _sweep(_sample_body("SEQ-002"), arm_shift=(0.0, 0.0, 0.70), first_half_only=False)
+    _write_phase_reference(tmp_path, monkeypatch, _sweep(_sample_body("SEQ-002")))
+    result = _post(client, "verify", body)
+    assert result["ok"] is True, result
+    assert result["expected_gain"] is not None
+    assert result["realized_gain"] == pytest.approx(result["expected_gain"], abs=1e-6), (
+        f"예고 {result['expected_gain']} 와 실현 {result['realized_gain']} 이 다르다"
+    )
+    assert result["gain_error"] == pytest.approx(0.0, abs=1e-6)
+    assert result["after"] > result["before"], "교정을 적용했는데 점수가 안 올랐다"
+
+
+def test_verify_says_so_when_there_is_nothing_to_correct(client, monkeypatch, tmp_path) -> None:
+    """고칠 곳이 없으면 잴 것도 없다. 그것도 정직한 결과다."""
+    clean = _sweep(_sample_body("SEQ-002"))
+    _write_phase_reference(tmp_path, monkeypatch, clean)
+    result = _post(client, "verify", clean)
+    assert result["ok"] is False
+    assert result["reason"] == "no_correction"
+    assert result["before"] is not None

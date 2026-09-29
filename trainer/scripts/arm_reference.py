@@ -82,7 +82,7 @@ RMS인 이유는 실측에 있다. 제곱합 제곱근으로 내면 축마다 1�
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Final, Mapping, Sequence
 
 if __package__:
@@ -269,6 +269,41 @@ def normalize_sequence(
         if all(axes)
     }
 
+
+
+def to_world(frame: BodyFrame, body_point: Vec3) -> Vec3:
+    """몸 프레임 좌표를 **월드로 되돌린다.** `normalize`의 역이다.
+
+    시뮬레이터는 우리 몸 프레임을 모른다 — 어깨 중점 원점에 어깨축·몸통축으로 세운
+    좌표계는 이 모듈 안의 약속이다. 교정을 그 좌표로 내보내면 받는 쪽이 우리 프레임을
+    다시 구현해야 하고, 그 순간 두 구현이 갈린다. **월드로 바꿔서 내보낸다.**
+    """
+    lateral, torso, depth = frame.axes
+    return (
+        frame.origin[0] + body_point[0] * lateral[0] + body_point[1] * torso[0] + body_point[2] * depth[0],
+        frame.origin[1] + body_point[0] * lateral[1] + body_point[1] * torso[1] + body_point[2] * depth[1],
+        frame.origin[2] + body_point[0] * lateral[2] + body_point[1] * torso[2] + body_point[2] * depth[2],
+    )
+
+
+def corrected_point(body_point: Vec3, target: "CorrectionTarget") -> Vec3 | None:
+    """교정을 몸 프레임 좌표에 적용한다. 적용할 것이 없으면 `None`.
+
+    `radius_m`이면 방향을 두고 길이만, `heading`이면 길이를 두고 방향만 바꾼다.
+    """
+    length = math.sqrt(sum(value * value for value in body_point))
+    if target.radius_m is not None:
+        unit = _unit(body_point)
+        if unit is None:
+            return None
+        return (unit[0] * target.radius_m, unit[1] * target.radius_m, unit[2] * target.radius_m)
+    if target.heading is not None:
+        unit = _unit(target.heading)
+        if unit is None:
+            return None
+        return (unit[0] * length, unit[1] * length, unit[2] * length)
+    return None
+
 # --- 굽기 -------------------------------------------------------------------
 
 
@@ -380,6 +415,11 @@ class JointSigma:
     radial_sigma: float | None = None
     angular_sigma: float | None = None
     radius_delta_m: float | None = None
+    # 숙련자 평균 방향과 실제로 이룬 각. **회전순서와 무관하다** — 두 위치벡터 사이의
+    # 각이라 오일러 규약을 타지 않는다. 크기이지 방향이 아니므로 "어느 쪽으로"를 말하지 않는다.
+    angle_from_expert_deg: float | None = None
+    # 스트로크의 어느 구간에서 벗어났나(0.0~1.0). 위상 채점에서만 채워진다.
+    phase_span: tuple[float, float] | None = None
 
 
 def joint_sigmas(
@@ -417,6 +457,7 @@ def joint_sigmas(
         # (손 p50 0.492 m), 방향은 넓다. 나눠서 재면 "얼마나 뻗었나"를 잃지 않는다.
         radial = angular = None
         radius_delta = None
+        angle_deg = None
         radius_ref = entry.get("radius")
         heading_ref = entry.get("heading")
         length = math.sqrt(sum(value * value for value in point))
@@ -430,7 +471,9 @@ def joint_sigmas(
             if unit is not None and isinstance(mean_unit, Sequence) and len(mean_unit) == 3:
                 cosine = max(-1.0, min(1.0, sum(unit[i] * float(mean_unit[i]) for i in range(3))))
                 floor = max(float(heading_ref.get("angular_sd", 0.0) or 0.0), ANGULAR_SD_FLOOR)
-                angular = min(MAX_SIGMA, math.acos(cosine) / floor)
+                angle = math.acos(cosine)
+                angular = min(MAX_SIGMA, angle / floor)
+                angle_deg = math.degrees(angle)
 
         if radial is not None and angular is not None:
             combined = math.sqrt((radial * radial + angular * angular) / 2.0)
@@ -451,6 +494,7 @@ def joint_sigmas(
                 radial_sigma=radial,
                 angular_sigma=angular,
                 radius_delta_m=radius_delta,
+                angle_from_expert_deg=angle_deg,
             )
         )
     return out
@@ -494,6 +538,37 @@ def severity_of(sigma: float) -> str:
     return "low"
 
 
+# 한국어 조사. 받침 유무로 고른다 — `을(를)` 같은 미처리 표기는 이 자리에서 끝낸다.
+def particle(word: str, with_final: str, without_final: str) -> str:
+    """`word` 뒤에 붙일 조사. 한글이 아니면 받침 없는 쪽을 쓴다."""
+    if not word:
+        return without_final
+    last = word[-1]
+    if not ("\uac00" <= last <= "\ud7a3"):
+        return without_final
+    return with_final if (ord(last) - 0xAC00) % 28 else without_final
+
+
+@dataclass(frozen=True)
+class CorrectionTarget:
+    """**기계가 적용할 수 있는 명제.** 이것이 있어야 교정 정확도를 잰다.
+
+    `correction_text`는 사람이 읽는 서술이고, 여기는 **replay가 그대로 적용할 값**이다.
+    적용한 뒤 다시 채점해 `expected_gain`과 맞는지 보면 교정이 말한 대로 움직이는지
+    확인된다(`verify_correction`). 그 검증이 없으면 교정은 반증 불가능한 문장일 뿐이다.
+
+    - `radius_m`: 어깨 중점에서 이 관절까지의 **숙련자 평균 거리**. 방향은 그대로 두고
+      길이만 이 값으로 맞추라는 뜻이다.
+    - `heading`: 숙련자 평균 **방향**(단위벡터). 길이는 그대로 두고 방향만 맞춘다.
+
+    둘 다 **회전순서와 무관하다** — 위치에서 바로 나오므로 오일러 규약을 타지 않는다.
+    """
+
+    joint: str
+    radius_m: float | None = None
+    heading: Vec3 | None = None
+
+
 @dataclass(frozen=True)
 class Correction:
     joint: str
@@ -507,6 +582,40 @@ class Correction:
     radial_sigma: float | None = None
     angular_sigma: float | None = None
     radius_delta_m: float | None = None
+    angle_from_expert_deg: float | None = None
+    phase_span: tuple[float, float] | None = None
+    target: CorrectionTarget | None = None
+
+    @property
+    def dominant(self) -> str:
+        """`radius`인가 `heading`인가. 둘 다 없으면 `unknown`."""
+        if self.radial_sigma is None or self.angular_sigma is None:
+            return "unknown"
+        return "radius" if self.radial_sigma >= self.angular_sigma else "heading"
+
+    def text(self) -> str:
+        """사람이 읽을 문장. **무엇이 얼마나 달랐는지**를 말하고 지시하지 않는다.
+
+        `"{label}을(를) 보세요"`는 두 가지로 잘못됐었다 — 정보가 없고, 몸에 주의를 돌리는
+        **내적 초점** 문구라 외적 초점 문헌(Chua et al. 2021)과 정반대였다.
+        """
+        where = ""
+        if self.phase_span is not None:
+            start, end = self.phase_span
+            where = f"스트로크 {start * 100:.0f}~{end * 100:.0f}% 구간에서 "
+        subject = f"{self.label}{particle(self.label, '이', '가')}"
+        if self.dominant == "radius" and self.radius_delta_m is not None:
+            far = "멀리" if self.radius_delta_m > 0 else "가까이"
+            return (
+                f"{where}{subject} 숙련자 평균보다 "
+                f"{abs(self.radius_delta_m) * 100:.0f} cm {far} 있었습니다."
+            )
+        if self.dominant == "heading" and self.angle_from_expert_deg is not None:
+            return (
+                f"{where}{subject} 향한 방향이 숙련자 평균과 "
+                f"{self.angle_from_expert_deg:.0f}° 달랐습니다."
+            )
+        return f"{where}{subject} 숙련자 통상 범위를 벗어났습니다(σ {self.sigma:.1f})."
 
 
 def build_corrections(
@@ -514,6 +623,7 @@ def build_corrections(
     labels: Mapping[str, str],
     *,
     support: int | None = None,
+    reference: Mapping[str, object] | None = None,
 ) -> list[Correction]:
     """σ가 가장 큰 관절부터 `MAX_CORRECTIONS`개. 문턱 아래면 아무것도 내지 않는다.
 
@@ -542,21 +652,51 @@ def build_corrections(
             ]
             fixed = similarity_score(without)
             gain = None if fixed is None else fixed - base
-        out.append(
-            Correction(
-                joint=item.joint,
-                label=labels.get(item.joint, item.joint),
-                severity=severity_of(item.sigma),
-                sigma=item.sigma,
-                distance_m=math.sqrt(sum(value * value for value in item.delta_m)),
-                axis_sigmas=item.axis_sigmas,
-                expected_gain=gain,
-                radial_sigma=item.radial_sigma,
-                angular_sigma=item.angular_sigma,
-                radius_delta_m=item.radius_delta_m,
-            )
+        correction = Correction(
+            joint=item.joint,
+            label=labels.get(item.joint, item.joint),
+            severity=severity_of(item.sigma),
+            sigma=item.sigma,
+            distance_m=math.sqrt(sum(value * value for value in item.delta_m)),
+            axis_sigmas=item.axis_sigmas,
+            expected_gain=gain,
+            radial_sigma=item.radial_sigma,
+            angular_sigma=item.angular_sigma,
+            radius_delta_m=item.radius_delta_m,
+            angle_from_expert_deg=item.angle_from_expert_deg,
+            phase_span=item.phase_span,
         )
+        out.append(replace(correction, target=_target_for(correction, reference)))
     return out
+
+
+def _target_for(
+    correction: Correction, reference: Mapping[str, object] | None
+) -> CorrectionTarget | None:
+    """교정을 **적용 가능한 값**으로 바꾼다. 재료가 없으면 `None`이다.
+
+    σ를 만든 쪽만 건드린다 — 반경이 주범이면 길이만, 방향이 주범이면 방향만. 둘 다
+    한꺼번에 맞추라고 하면 "숙련자 평균 자세를 그대로 취하라"가 되어 교정이 아니라 복제다.
+    """
+    if not isinstance(reference, Mapping):
+        return None
+    entry = reference.get(correction.joint)
+    if not isinstance(entry, Mapping):
+        return None
+    if correction.dominant == "radius":
+        radius = entry.get("radius")
+        if isinstance(radius, Mapping) and radius.get("mean") is not None:
+            return CorrectionTarget(correction.joint, radius_m=float(radius["mean"]))
+        return None
+    heading = entry.get("heading")
+    if isinstance(heading, Mapping):
+        mean = heading.get("mean")
+        if isinstance(mean, Sequence) and len(mean) == 3:
+            return CorrectionTarget(
+                correction.joint,
+                heading=(float(mean[0]), float(mean[1]), float(mean[2])),
+            )
+    return None
 
 
 # --- 보정: 이 점수가 숙련자 중 어디쯤인가 --------------------------------------
@@ -645,7 +785,9 @@ def phase_sigmas(
     """
     drop = set(excluded)
     collected: dict[str, list[JointSigma]] = {}
-    for pose, entry in zip(phase_poses, phase_reference):
+    phase_of: dict[str, list[int]] = {}
+    total_phases = len(phase_poses)
+    for index, (pose, entry) in enumerate(zip(phase_poses, phase_reference)):
         if pose is None or not isinstance(entry, Mapping):
             continue
         if int(entry.get("n", 0) or 0) < MIN_PHASE_SAMPLES:
@@ -654,6 +796,7 @@ def phase_sigmas(
             if item.joint in drop:
                 continue
             collected.setdefault(item.joint, []).append(item)
+            phase_of.setdefault(item.joint, []).append(index)
     out: list[JointSigma] = []
     for name in SCORING_JOINTS_ARM:
         items = collected.get(name)
@@ -664,6 +807,17 @@ def phase_sigmas(
         angular = [i.angular_sigma for i in items if i.angular_sigma is not None]
         deltas = [i.radius_delta_m for i in items if i.radius_delta_m is not None]
         worst = max(items, key=lambda i: i.sigma)
+        # 문턱을 넘은 위상들이 스트로크의 어느 구간인가. 하나도 없으면 최악 위상 하나를 쓴다.
+        indices = phase_of.get(name, [])
+        flagged = [
+            indices[k] for k, item in enumerate(items) if item.sigma >= CORRECTION_SIGMA
+        ] or [indices[items.index(worst)]] if indices else []
+        span = None
+        if flagged and total_phases > 1:
+            span = (
+                min(flagged) / total_phases,
+                (max(flagged) + 1) / total_phases,
+            )
         out.append(
             JointSigma(
                 joint=name,
@@ -679,6 +833,8 @@ def phase_sigmas(
                 radius_delta_m=(
                     max(deltas, key=abs) if deltas else None
                 ),
+                angle_from_expert_deg=worst.angle_from_expert_deg,
+                phase_span=span,
             )
         )
     return out

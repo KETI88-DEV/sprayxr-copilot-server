@@ -565,3 +565,113 @@ def test_the_phase_ladder_is_used_for_phase_scores() -> None:
     assert arm_reference.expert_percentile(bucket, 0.55, mode="phase") == 50
     assert arm_reference.expert_percentile(bucket, 0.93, mode="fold") == 25
     assert arm_reference.expert_percentile(bucket, 0.93, mode="phase") == 90
+
+
+# --- 교정 문구와 목표 --------------------------------------------------------
+
+
+def test_the_korean_particle_is_chosen_by_the_final_consonant() -> None:
+    """`을(를)` 같은 미처리 표기를 남기지 않는다. 받침으로 고른다."""
+    assert arm_reference.particle("손목", "을", "를") == "을"
+    assert arm_reference.particle("팔꿈치", "을", "를") == "를"
+    assert arm_reference.particle("왼쪽 손목", "이", "가") == "이"
+    assert arm_reference.particle("RightHand", "을", "를") == "를", "한글이 아니면 받침 없는 쪽"
+    assert arm_reference.particle("", "을", "를") == "를"
+
+
+def _correction(**kwargs) -> arm_reference.Correction:
+    base = dict(
+        joint="LeftHand", label="왼쪽 손목", severity="medium", sigma=2.3,
+        distance_m=0.63, axis_sigmas=(0.0, 0.0, 0.0), expected_gain=0.05,
+    )
+    base.update(kwargs)
+    return arm_reference.Correction(**base)
+
+
+def test_the_correction_text_says_what_was_measured() -> None:
+    """`"{label}을(를) 보세요"`는 두 가지로 잘못됐었다 — 정보가 없고, 몸에 주의를 돌리는
+    **내적 초점** 문구라 외적 초점 문헌과 정반대였다.
+
+    깨뜨리는 법: `Correction.text()`가 크기를 안 싣거나 조사를 처리하지 않으면 실패한다.
+    """
+    radial = _correction(
+        radial_sigma=2.8, angular_sigma=1.1, radius_delta_m=0.2388,
+        angle_from_expert_deg=20.0, phase_span=(0.0, 0.33),
+    )
+    text = radial.text()
+    assert "24 cm" in text and "멀리" in text
+    assert "0~33%" in text, "어느 구간에서 벗어났는지가 빠졌다"
+    assert "(를)" not in text and "(을)" not in text
+    assert "보세요" not in text, "내적 초점 문구가 남았다"
+
+    angular = _correction(
+        radial_sigma=1.1, angular_sigma=2.8, radius_delta_m=0.02,
+        angle_from_expert_deg=47.2, phase_span=(0.4, 0.8),
+    )
+    assert "47°" in angular.text()
+    assert "40~80%" in angular.text()
+
+
+def test_the_text_says_closer_when_the_joint_is_under_extended() -> None:
+    """부호를 잃으면 '덜 뻗었다'와 '더 뻗었다'가 같은 문장이 된다."""
+    under = _correction(radial_sigma=2.8, angular_sigma=1.0, radius_delta_m=-0.15)
+    assert "가까이" in under.text() and "멀리" not in under.text()
+
+
+def test_the_target_fixes_only_the_component_that_made_the_sigma() -> None:
+    """둘 다 맞추라고 하면 '숙련자 평균 자세를 그대로 취하라'가 되어 교정이 아니라 복제다."""
+    entry = {
+        "LeftHand": {
+            "radius": {"mean": 0.42, "sd": 0.05},
+            "heading": {"mean": [1.0, 0.0, 0.0], "angular_sd": 0.30},
+        }
+    }
+    radial = arm_reference.build_corrections(
+        [arm_reference.JointSigma("LeftHand", 2.3, (0, 0, 0), (0.2, 0, 0),
+                                  radial_sigma=2.8, angular_sigma=1.0, radius_delta_m=0.2)],
+        {}, reference=entry,
+    )[0]
+    assert radial.dominant == "radius"
+    assert radial.target is not None
+    assert radial.target.radius_m == pytest.approx(0.42)
+    assert radial.target.heading is None, "반경이 주범인데 방향까지 지시했다"
+
+    angular = arm_reference.build_corrections(
+        [arm_reference.JointSigma("LeftHand", 2.3, (0, 0, 0), (0.2, 0, 0),
+                                  radial_sigma=1.0, angular_sigma=2.8, radius_delta_m=0.02)],
+        {}, reference=entry,
+    )[0]
+    assert angular.dominant == "heading"
+    assert angular.target is not None
+    assert angular.target.heading == pytest.approx((1.0, 0.0, 0.0))
+    assert angular.target.radius_m is None
+
+
+def test_applying_a_radius_target_keeps_the_direction() -> None:
+    """반경 교정은 길이만 바꾼다. 방향까지 돌리면 지시한 것보다 많이 움직인다."""
+    point = (0.3, 0.4, 0.0)  # 길이 0.5
+    moved = arm_reference.corrected_point(point, arm_reference.CorrectionTarget("X", radius_m=0.25))
+    assert moved is not None
+    assert math.sqrt(sum(v * v for v in moved)) == pytest.approx(0.25)
+    assert moved[0] / moved[1] == pytest.approx(point[0] / point[1]), "방향이 돌아갔다"
+
+
+def test_applying_a_heading_target_keeps_the_length() -> None:
+    """방향 교정은 방향만 바꾼다."""
+    point = (0.3, 0.4, 0.0)
+    moved = arm_reference.corrected_point(
+        point, arm_reference.CorrectionTarget("X", heading=(0.0, 0.0, 2.0))
+    )
+    assert moved is not None
+    assert math.sqrt(sum(v * v for v in moved)) == pytest.approx(0.5)
+    assert moved == pytest.approx((0.0, 0.0, 0.5))
+
+
+def test_world_round_trip_is_exact() -> None:
+    """몸 프레임 → 월드 → 몸 프레임이 제자리로 와야 시뮬레이터에 좌표를 줄 수 있다."""
+    pose = _pose()
+    frame = arm_reference.body_frame(pose)
+    normalized = arm_reference.normalize(pose)
+    assert frame is not None and normalized is not None
+    for name, point in normalized.items():
+        assert arm_reference.to_world(frame, point) == pytest.approx(pose[name], abs=1e-9)

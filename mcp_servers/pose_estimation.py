@@ -4,7 +4,7 @@ import json
 import os
 import statistics
 from datetime import datetime
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import lru_cache
 from math import atan2, degrees, sqrt
 from pathlib import Path
@@ -467,34 +467,37 @@ def _prepare(payload: "SequenceRequest", *, touch_session: bool) -> _Prepared:
 
 
 def _resolved_of(prepared: _Prepared, band: str | None) -> pose_stages.ResolveResult:
-    """`band`가 주어지면 ①을 건너뛰고 그 버킷을 쓴다 — 앞 단계 출력을 넘겨받는 경로다."""
+    """`band`가 주어지면 ①을 건너뛰고 그 버킷을 쓴다 — 앞 단계 출력을 넘겨받는 경로다.
+
+    **실측 reach는 그대로 싣는다.** 밴드의 공칭값으로 덮어쓰면 응답의 `reach_m`이
+    "이 시퀀스에서 잰 값"이 아니라 "우리가 고른 칸의 이름"이 된다. 둘이 어긋나면
+    (밴드를 잘못 넘겼다는 뜻) 호출자가 그것을 봐야 한다.
+    """
     if band is None:
         return pose_stages.resolve(prepared.reach, prepared.buckets)
     if not isinstance(prepared.buckets, dict) or band not in prepared.buckets:
-        return pose_stages.ResolveResult(ok=False, reason="reference_data_missing", band=band)
-    # 밴드를 고정해도 reach는 그대로 싣는다 — 어긋나면 호출자가 알아야 한다.
-    forced = pose_stages.resolve(
-        arm_reference.REACH_BAND_M * _band_index(band), prepared.buckets
-    )
-    return forced
+        return pose_stages.ResolveResult(
+            ok=False, reason="reference_data_missing", band=band, reach_m=prepared.reach
+        )
+    forced = pose_stages.resolve(_band_reach(band), prepared.buckets)
+    return replace(forced, reach_m=prepared.reach)
 
 
-def _band_index(band: str) -> float:
+def _band_reach(band: str) -> float:
+    """밴드 이름 → 그 칸 안의 한 값. 버킷을 고르는 데만 쓰고 응답에 싣지 않는다."""
     try:
-        return float(band) / arm_reference.REACH_BAND_M
+        return float(band) + arm_reference.REACH_BAND_M / 2
     except ValueError:
         return 0.0
 
 
-def _normalized_frames(
-    prepared: _Prepared,
-) -> list[dict[str, tuple[float, float, float]]]:
-    """프레임마다 몸 프레임으로 정규화한 팔 자세. 못 세우면 그 프레임은 빠진다."""
-    out = []
-    for frame in prepared.frames:
-        normalized = arm_reference.normalize(frame.joints)
-        out.append(normalized if normalized is not None else {})
-    return out
+def _world_frames(prepared: _Prepared) -> list[dict[str, tuple[float, float, float]]]:
+    """프레임마다 **월드 관절**. 정규화는 `pose_stages`가 한다.
+
+    월드를 넘기는 이유: 교정 계획을 월드로 되돌리려면 그 프레임의 몸 프레임이 필요한데,
+    정규화된 좌표만 넘기면 그 정보가 사라진다.
+    """
+    return [dict(frame.joints) for frame in prepared.frames]
 
 
 @router.post("/reference", response_model=MCPResponse)
@@ -536,7 +539,7 @@ def score_sequence(payload: "SequenceRequest") -> MCPResponse:
         if isinstance(found, dict):
             bucket = found
     scored = pose_stages.score(
-        _normalized_frames(prepared),
+        _world_frames(prepared),
         aligned,
         bucket,
         excluded=prepared.gate.excluded_joints,
@@ -550,6 +553,32 @@ def score_sequence(payload: "SequenceRequest") -> MCPResponse:
         "resolve": resolved.to_dict(),
         "align": aligned.to_dict(),
         **scored.to_dict(),
+    })
+
+
+@router.post("/verify", response_model=MCPResponse)
+def verify_sequence(payload: "SequenceRequest") -> MCPResponse:
+    """교정을 **실제로 적용해** 예고한 상승분과 맞는지 잰다 — 교정 정확도의 내적 일관성.
+
+    효능(작업자가 실제로 나아지는가)이 아니다. 그건 런타임 데이터가 있어야 한다.
+    """
+    prepared = _prepare(payload, touch_session=False)
+    resolved = _resolved_of(prepared, payload.band)
+    aligned = pose_stages.align(prepared.impacts, resolved)
+    bucket: dict[str, Any] = {}
+    if resolved.band and isinstance(prepared.buckets, dict):
+        found = prepared.buckets.get(resolved.band)
+        if isinstance(found, dict):
+            bucket = found
+    verified = pose_stages.verify_correction(
+        _world_frames(prepared), aligned, bucket, excluded=prepared.gate.excluded_joints
+    )
+    return success_response(result={
+        "mode": "verify",
+        "sequence_id": payload.sequence_id,
+        "resolve": resolved.to_dict(),
+        "align": aligned.to_dict(),
+        **verified.to_dict(),
     })
 
 

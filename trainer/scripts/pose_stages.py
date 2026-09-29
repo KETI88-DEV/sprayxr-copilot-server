@@ -30,14 +30,16 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Final, Mapping, Sequence
 
 if __package__:
-    from . import arm_reference, sequence_dtw, world_axes
+    from . import arm_reference, joint_names, sequence_dtw, skeleton_gate, world_axes
 else:
     import arm_reference
+    import joint_names
     import sequence_dtw
+    import skeleton_gate
     import world_axes
 
 Vec3 = tuple[float, float, float]
@@ -131,6 +133,8 @@ class ScoreResult:
     percentile: int | None = None
     sigmas: tuple[arm_reference.JointSigma, ...] = ()
     corrections: tuple[arm_reference.Correction, ...] = ()
+    # 교정마다 프레임별 월드 계획. 시뮬레이터가 그대로 적용한다.
+    plans: tuple[tuple[Mapping[str, Any], ...], ...] = ()
     scored_phases: int = 0
     mode: str = "phase"
 
@@ -145,16 +149,82 @@ class ScoreResult:
             "scored_phases": self.scored_phases,
             "scored_joints": [item.joint for item in self.sigmas],
             "joint_sigmas": {item.joint: round(item.sigma, 3) for item in self.sigmas},
-            "corrections": [_correction_dict(item) for item in self.corrections],
+            "corrections": [
+                _correction_dict(item, self.plans[index] if index < len(self.plans) else ())
+                for index, item in enumerate(self.corrections)
+            ],
         }
 
 
-def _correction_dict(item: arm_reference.Correction) -> dict[str, Any]:
+
+
+# 뼈 길이가 이보다 틀어지면 그대로 옮길 수 없다 — 게이트 R1의 허용폭과 같은 값을 쓴다.
+BONE_BREAK_TOLERANCE_M: Final = skeleton_gate.BONE_TOLERANCE_M
+
+
+def _parent_of(joint: str) -> str | None:
+    for child, parent in skeleton_gate.BONES:
+        if child == joint:
+            return parent
+    return None
+
+
+def _feasibility(
+    item: arm_reference.Correction, plan: Sequence[Mapping[str, Any]]
+) -> dict[str, Any]:
+    """**그대로 옮기면 뼈가 깨지는가.**
+
+    우리 레퍼런스는 관절마다 따로 분포를 갖는다 — 사슬을 모델링하지 않는다. 그래서
+    한 관절만 목표로 옮기면 부모와의 뼈 길이가 달라진다. 좌표만 주고 끝내면 받는 쪽이
+    불가능한 골격을 만든다. **깨지는 양을 같이 실어 IK가 필요하다는 것을 알린다.**
+
+    `requires_ik`가 참이면 `per_frame.target`은 **도달 목표**이지 대입할 좌표가 아니다.
+    """
+    parent = _parent_of(item.joint)
+    if parent is None or not plan:
+        return {"requires_ik": False, "parent_joint": parent, "bone_break_m": None}
+    worst = 0.0
+    rig = None
+    for step in plan:
+        current = step.get("current")
+        target = step.get("target")
+        parent_point = step.get("parent")
+        if not (isinstance(current, Sequence) and isinstance(target, Sequence)):
+            continue
+        if not isinstance(parent_point, Sequence):
+            continue
+        before = math.dist(tuple(current), tuple(parent_point))
+        after = math.dist(tuple(target), tuple(parent_point))
+        rig = before if rig is None else rig
+        worst = max(worst, abs(after - before))
+    return {
+        "requires_ik": worst > BONE_BREAK_TOLERANCE_M,
+        "parent_joint": parent,
+        "bone_length_m": None if rig is None else round(rig, 4),
+        "bone_break_m": round(worst, 4),
+    }
+
+def _round3(point: Vec3) -> list[float]:
+    return [round(value, 4) for value in point]
+
+
+def _correction_dict(
+    item: arm_reference.Correction,
+    plan: Sequence[Mapping[str, Any]] = (),
+) -> dict[str, Any]:
+    """교정 하나를 JSON으로. **`target`이 시뮬레이터가 그대로 적용할 값이다.**
+
+    `correction_text`는 사람이 읽는 서술이고, 기계가 쓰는 것은 `target.per_frame`이다.
+    둘을 나누는 이유: 문장은 반증할 수 없고, 좌표는 적용해 보고 확인할 수 있다.
+    """
     return {
         "joint": item.joint,
+        # 시뮬레이터가 보낸 이름 그대로 돌려준다 — 받는 쪽이 어휘를 다시 옮기지 않게.
+        "joint_sim": joint_names.to_sim(item.joint),
         "label": item.label,
         "severity": item.severity,
-        # 각도도 방향도 싣지 않는다 — `correction_mode="joint_only"`.
+        # 각도 지시는 여전히 없다 — 오일러 회전순서가 미확정이다.
+        # `angle_from_expert_deg`는 **두 위치벡터 사이의 각**이라 규약을 타지 않는다.
         "angle_delta_deg": None,
         "direction": None,
         "evidence": {
@@ -165,11 +235,35 @@ def _correction_dict(item: arm_reference.Correction) -> dict[str, Any]:
             "radius_delta_m": (
                 None if item.radius_delta_m is None else round(item.radius_delta_m, 4)
             ),
+            "angle_from_expert_deg": (
+                None
+                if item.angle_from_expert_deg is None
+                else round(item.angle_from_expert_deg, 1)
+            ),
+            "phase_span": (
+                None
+                if item.phase_span is None
+                else [round(item.phase_span[0], 3), round(item.phase_span[1], 3)]
+            ),
+            # 모의값이다 — 아래 `target`을 그대로 적용했을 때의 점수 상승분.
+            # `verify_correction`이 실제로 적용해 이 값과 맞는지 확인한다.
             "expected_gain": (
                 None if item.expected_gain is None else round(item.expected_gain, 4)
             ),
         },
-        "correction_text": f"{item.label}을(를) 보세요.",
+        "target": None if item.target is None else {
+            **_feasibility(item, plan),
+            # 시뮬레이터가 무엇을 바꿔야 하는지. **월드 좌표다** — 우리 몸 프레임을
+            # 받는 쪽이 다시 구현하지 않아도 된다.
+            "frame": "world",
+            "mode": item.dominant,
+            "radius_m": (
+                None if item.target.radius_m is None else round(item.target.radius_m, 4)
+            ),
+            "heading": None if item.target.heading is None else _round3(item.target.heading),
+            "per_frame": list(plan),
+        },
+        "correction_text": item.text(),
     }
 
 
@@ -264,7 +358,7 @@ def align(
 
 
 def score(
-    frame_poses: Sequence[Mapping[str, Vec3]],
+    frame_poses: Sequence[Mapping[str, Vec3]],  # **월드** 관절
     aligned: AlignResult,
     bucket: Mapping[str, Any],
     *,
@@ -278,11 +372,72 @@ def score(
     if not isinstance(phase_reference, Sequence) or not phase_reference:
         return ScoreResult(ok=False, reason="phase_reference_missing")
 
+    phase_poses, reference = _phase_view(frame_poses, aligned, phase_reference)
+    sigmas = arm_reference.phase_sigmas(phase_poses, reference, excluded=excluded)
+    if len(sigmas) < arm_reference.MIN_SCORED_JOINTS:
+        return ScoreResult(ok=False, reason="quality_insufficient")
+
+    value = arm_reference.similarity_score(sigmas)
+    if value is None:
+        return ScoreResult(ok=False, reason="quality_insufficient")
+    worst_reference = _worst_phase_reference(sigmas, phase_poses, reference)
+    corrections = arm_reference.build_corrections(
+        sigmas, labels or {}, support=aligned.covered_phases, reference=worst_reference
+    )
+    plans = [tuple(correction_plan(item, frame_poses, aligned)) for item in corrections]
+
+    # **`expected_gain`은 `target`을 그대로 적용했을 때의 상승분이다.**
+    # 예전에는 "σ를 0으로 만들면"이라는 상한이었는데, `target`은 주범 성분 하나만
+    # 고치므로 예고와 지시가 달랐다 — 실측에서 예고 0.0579에 실현 0.0284였다.
+    # 예고가 지시를 따라가야 검증이 뜻을 갖는다.
+    adjusted: list[arm_reference.Correction] = []
+    for item, plan in zip(corrections, plans):
+        gain = None
+        if plan:
+            moved = apply_plan(frame_poses, item.joint, plan)
+            after_poses, after_reference = _phase_view(moved, aligned, phase_reference)
+            after = arm_reference.similarity_score(
+                arm_reference.phase_sigmas(after_poses, after_reference, excluded=excluded)
+            )
+            gain = None if after is None else after - value
+        adjusted.append(replace(item, expected_gain=gain))
+
+    scored = sum(
+        1
+        for pose, entry in zip(phase_poses, reference)
+        if pose is not None
+        and isinstance(entry, Mapping)
+        and int(entry.get("n", 0) or 0) >= arm_reference.MIN_PHASE_SAMPLES
+    )
+    return ScoreResult(
+        ok=True,
+        reason=aligned.reason,
+        score=value,
+        percentile=arm_reference.expert_percentile(bucket, value, mode="phase"),
+        sigmas=tuple(sigmas),
+        corrections=tuple(adjusted),
+        plans=tuple(plans),
+        scored_phases=scored,
+    )
+
+
+def _phase_view(
+    frame_poses: Sequence[Mapping[str, Vec3]],
+    aligned: AlignResult,
+    phase_reference: Sequence[Any],
+) -> tuple[list[Mapping[str, Vec3] | None], list[Mapping[str, object] | None]]:
+    """월드 관절 → 위상별 자세, 그리고 그에 맞춘 위상 레퍼런스.
+
+    위상 평균을 내기 전에 **프레임마다 정규화한다** — 날것 좌표를 먼저 평균하면
+    프레임마다 다른 몸 방향이 한 점에 섞인다.
+    """
+    normalized_frames = [arm_reference.normalize(joints) or {} for joints in frame_poses]
+
     per_phase: list[dict[str, list[list[float]]]] = [{} for _ in range(aligned.phases)]
     for frame_index, phase in aligned.phase_of:
-        if not 0 <= phase < aligned.phases or frame_index >= len(frame_poses):
+        if not 0 <= phase < aligned.phases or frame_index >= len(normalized_frames):
             continue
-        for name, point in frame_poses[frame_index].items():
+        for name, point in normalized_frames[frame_index].items():
             slot = per_phase[phase].setdefault(name, [[], [], []])
             for axis in range(3):
                 slot[axis].append(point[axis])
@@ -308,33 +463,84 @@ def score(
         item if isinstance(item, Mapping) else None
         for item in list(phase_reference)[: aligned.phases]
     ]
-    sigmas = arm_reference.phase_sigmas(phase_poses, reference, excluded=excluded)
-    if len(sigmas) < arm_reference.MIN_SCORED_JOINTS:
-        return ScoreResult(ok=False, reason="quality_insufficient")
+    return phase_poses, reference
 
-    value = arm_reference.similarity_score(sigmas)
-    if value is None:
-        return ScoreResult(ok=False, reason="quality_insufficient")
-    corrections = arm_reference.build_corrections(
-        sigmas, labels or {}, support=aligned.covered_phases
-    )
-    scored = sum(
-        1
-        for pose, entry in zip(phase_poses, reference)
-        if pose is not None
-        and isinstance(entry, Mapping)
-        and int(entry.get("n", 0) or 0) >= arm_reference.MIN_PHASE_SAMPLES
-    )
-    return ScoreResult(
-        ok=True,
-        reason=aligned.reason,
-        score=value,
-        percentile=arm_reference.expert_percentile(bucket, value, mode="phase"),
-        sigmas=tuple(sigmas),
-        corrections=tuple(corrections),
-        scored_phases=scored,
-    )
 
+
+
+def _worst_phase_reference(
+    sigmas: Sequence[arm_reference.JointSigma],
+    phase_poses: Sequence[Mapping[str, Vec3] | None],
+    reference: Sequence[Mapping[str, object] | None],
+) -> dict[str, object]:
+    """교정 목표를 낼 때 쓸 관절별 레퍼런스. 위상마다 값이 달라 **하나를 골라야 한다.**
+
+    `phase_span`의 시작 위상을 쓴다 — 벗어나기 **시작한** 곳이 교정의 기준이다.
+    """
+    out: dict[str, object] = {}
+    for item in sigmas:
+        index = 0
+        if item.phase_span is not None and len(reference) > 0:
+            index = min(len(reference) - 1, int(item.phase_span[0] * len(reference)))
+        entry = reference[index] if index < len(reference) else None
+        if isinstance(entry, Mapping):
+            joints = entry.get("joints")
+            if isinstance(joints, Mapping) and item.joint in joints:
+                out[item.joint] = joints[item.joint]
+    return out
+
+
+def correction_plan(
+    correction: arm_reference.Correction,
+    frame_joints: Sequence[Mapping[str, Vec3]],
+    aligned: AlignResult,
+) -> list[dict[str, Any]]:
+    """교정을 **프레임마다 월드 좌표로** 편다. 시뮬레이터가 그대로 쓰는 값이다.
+
+    `phase_span` 안의 위상에 대응하는 프레임만 낸다 — 스트로크 전체를 고치라는 것이
+    아니라 **벗어난 구간**을 고치라는 것이다.
+    """
+    target = correction.target
+    if target is None or not aligned.ok:
+        return []
+    low, high = correction.phase_span or (0.0, 1.0)
+    phases = max(aligned.phases, 1)
+    wanted = {
+        frame_index
+        for frame_index, phase in aligned.phase_of
+        if low <= phase / phases < high or (high >= 1.0 and phase == phases - 1)
+    }
+    out: list[dict[str, Any]] = []
+    for frame_index in sorted(wanted):
+        if frame_index >= len(frame_joints):
+            continue
+        joints = frame_joints[frame_index]
+        body = arm_reference.body_frame(joints)
+        current = joints.get(correction.joint)
+        if body is None or current is None:
+            continue
+        local = arm_reference.normalize(joints)
+        if local is None or correction.joint not in local:
+            continue
+        moved = arm_reference.corrected_point(local[correction.joint], target)
+        if moved is None:
+            continue
+        world = arm_reference.to_world(body, moved)
+        entry: dict[str, Any] = {
+            "index": frame_index,
+            "current": _round3(current),
+            "target": _round3(world),
+            "delta": _round3(
+                (world[0] - current[0], world[1] - current[1], world[2] - current[2])
+            ),
+        }
+        parent = _parent_of(correction.joint)
+        parent_point = joints.get(parent) if parent else None
+        if parent_point is not None:
+            # 받는 쪽이 IK를 풀 때 필요하고, 뼈가 얼마나 깨지는지도 여기서 나온다.
+            entry["parent"] = _round3(parent_point)
+        out.append(entry)
+    return out
 
 def reach_of(impact_points: Sequence[Vec3], tool_points: Sequence[Vec3]) -> float | None:
     """reach = 착탄 수직 − 건 수직. 양쪽에서 같은 정의여야 하므로 여기 한 곳에 둔다."""
@@ -343,3 +549,101 @@ def reach_of(impact_points: Sequence[Vec3], tool_points: Sequence[Vec3]) -> floa
     impacts = sorted(world_axes.vertical_of(p) for p in impact_points)
     tools = sorted(world_axes.vertical_of(p) for p in tool_points)
     return impacts[len(impacts) // 2] - tools[len(tools) // 2]
+
+
+# --- 교정 정확도 -------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class VerifyResult:
+    """교정을 **실제로 적용해** 다시 잰 결과.
+
+    `"{label}을(를) 보세요"` 같은 문장은 적용할 수 없어 반증도 못 한다. `target.per_frame`이
+    월드 좌표라 replay가 그대로 적용할 수 있고, 그래서 **예고와 실현을 견줄 수 있다.**
+
+    이것이 재는 것은 **내적 일관성**이다 — 교정이 말한 대로 움직이면 예고한 만큼
+    점수가 오르는가. **효능이 아니다** — 실제 작업자가 이 교정을 받고 나아지는지는
+    런타임 데이터가 있어야 한다. 그 주장은 여기서 하지 않는다.
+    """
+
+    ok: bool
+    reason: str | None
+    before: float | None = None
+    after: float | None = None
+    expected_gain: float | None = None
+    realized_gain: float | None = None
+
+    @property
+    def error(self) -> float | None:
+        if self.expected_gain is None or self.realized_gain is None:
+            return None
+        return self.realized_gain - self.expected_gain
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "stage": "verify",
+            "ok": self.ok,
+            "reason": self.reason,
+            "before": None if self.before is None else round(self.before, 4),
+            "after": None if self.after is None else round(self.after, 4),
+            "expected_gain": (
+                None if self.expected_gain is None else round(self.expected_gain, 4)
+            ),
+            "realized_gain": (
+                None if self.realized_gain is None else round(self.realized_gain, 4)
+            ),
+            "gain_error": None if self.error is None else round(self.error, 4),
+        }
+
+
+def apply_plan(
+    frame_poses: Sequence[Mapping[str, Vec3]],
+    joint: str,
+    plan: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Vec3]]:
+    """`target.per_frame`을 월드 관절에 그대로 적용한다 — 시뮬레이터가 할 일과 같다."""
+    moved = [dict(joints) for joints in frame_poses]
+    for step in plan:
+        index = step.get("index")
+        target = step.get("target")
+        if not isinstance(index, int) or not isinstance(target, Sequence) or len(target) != 3:
+            continue
+        if 0 <= index < len(moved):
+            moved[index][joint] = (float(target[0]), float(target[1]), float(target[2]))
+    return moved
+
+
+def verify_correction(
+    frame_poses: Sequence[Mapping[str, Vec3]],
+    aligned: AlignResult,
+    bucket: Mapping[str, Any],
+    *,
+    excluded: Sequence[str] = (),
+) -> VerifyResult:
+    """첫 교정을 적용해 보고 예고한 상승분과 견준다.
+
+    교정이 없으면 잴 것이 없다(`no_correction`). 그것도 정직한 결과다 —
+    "고칠 곳이 없다"는 판정은 검증 대상이 아니다.
+    """
+    before = score(frame_poses, aligned, bucket, excluded=excluded)
+    if not before.ok or before.score is None:
+        return VerifyResult(ok=False, reason=before.reason)
+    if not before.corrections:
+        return VerifyResult(ok=False, reason="no_correction", before=before.score)
+    correction = before.corrections[0]
+    plan = before.plans[0] if before.plans else ()
+    if not plan:
+        return VerifyResult(ok=False, reason="no_plan", before=before.score)
+
+    moved = apply_plan(frame_poses, correction.joint, plan)
+    after = score(moved, aligned, bucket, excluded=excluded)
+    if not after.ok or after.score is None:
+        return VerifyResult(ok=False, reason=after.reason, before=before.score)
+    return VerifyResult(
+        ok=True,
+        reason=None,
+        before=before.score,
+        after=after.score,
+        expected_gain=correction.expected_gain,
+        realized_gain=after.score - before.score,
+    )
