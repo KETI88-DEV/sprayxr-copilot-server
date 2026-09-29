@@ -1,0 +1,183 @@
+#!/usr/bin/env python3
+"""숙련자 CSV 코퍼스에서 팔 자세 레퍼런스를 굽는다.
+
+자세는 `pose_fk_csv`의 FK에서 온다 — CSV의 관절 Position 컬럼은 Pelvis를 뺀 19관절이
+프레임 불변 바인드 오프셋이라 월드 좌표가 아니다(`simulator_csv.joint_world_positions`
+독스트링). 회전에서 FK로 풀어야 자세가 나온다.
+
+버킷 조건은 **reach = 착탄 수직 − 머리 월드 수직**이다. 머리는 카메라 강체(실측), 착탄은
+Ray point 컬럼(실측)이라 둘 다 월드이고, 차이에서 바닥 상수가 지워진다.
+
+**패스 하나가 표본 하나다.** 프레임을 다 넣으면 같은 패스의 120프레임이 독립 표본인 척해
+n이 부풀고 산포가 좁아진다 — 좁은 산포는 모든 σ를 키워 교정을 과발부한다.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import logging
+import statistics as st
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Final
+
+import arm_reference
+import measured_pose
+import pose_fk_csv
+import simulator_csv
+import world_axes
+
+logger = logging.getLogger(__name__)
+
+DEFAULT_ROOT: Final = Path("/data/sources/professionals")
+DEFAULT_OUT: Final = Path("/output/expert_reference/expert_arm_reference.json")
+
+
+def _load_pose_lab() -> tuple[Any, Any]:
+    root = Path(__file__).resolve().parents[2]
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+    from trainer.pose_lab import csv_source, service
+
+    return csv_source, service
+
+
+def _pass_sample(rows: list[dict[str, str]]) -> tuple[dict[str, Any], float] | None:
+    """패스 하나를 (정규화된 팔 자세, reach)로 줄인다. 못 줄이면 `None`."""
+    if not rows:
+        return None
+    offsets = pose_fk_csv.bind_offsets(rows[0])
+    if not offsets:
+        return None
+
+    # 자세: `arm_reference.normalize_sequence`가 프레임별 정규화 후 중앙값을 낸다.
+    # **재는 쪽과 같은 함수여야 한다** — 순서가 갈리면 숙련자를 숙련자 기준에 대고도 0점이 나온다.
+    poses: list[dict[str, tuple[float, float, float]]] = []
+    for row in rows:
+        try:
+            poses.append(pose_fk_csv.forward_kinematics(row, offsets))
+        except (KeyError, ValueError):
+            continue
+    pose = arm_reference.normalize_sequence(poses)
+    if not pose:
+        return None
+
+    try:
+        frames = measured_pose.measured_frames(rows)
+    except (KeyError, ValueError):
+        return None
+    heads = [world_axes.vertical_of(tuple(frame.head)) for frame in frames if frame.head]
+    impacts: list[float] = []
+    for row in rows:
+        try:
+            impacts.append(
+                world_axes.vertical_of(
+                    tuple(float(row[column]) for column in simulator_csv.RAY_POINT_COLUMNS)
+                )
+            )
+        except (KeyError, ValueError):
+            continue
+    if not heads or not impacts:
+        return None
+    return pose, st.median(impacts) - st.median(heads)
+
+
+def build(root: Path, levels: set[str] | None = None) -> dict[str, object]:
+    csv_source, service = _load_pose_lab()
+    source = csv_source.CsvPassSource(root)
+    buckets: dict[str, arm_reference.BucketAccum] = {}
+    samples: list[tuple[str, dict[str, tuple[float, float, float]]]] = []
+
+    sessions = [s for s in source.sessions() if levels is None or s.level in levels]
+    workers: set[str] = set()
+    passes = 0
+    skipped = 0
+    for number, item in enumerate(sessions, start=1):
+        try:
+            entries = source.index_of(item)
+        except (OSError, ValueError, KeyError):
+            continue
+        for entry in entries:
+            ref = service.PassRef(
+                worker=item.worker, date=item.date, level=item.level,
+                session=item.session, pass_index=entry.pass_index,
+            )
+            try:
+                raw = source.load(ref)
+            except (LookupError, OSError, ValueError):
+                skipped += 1
+                continue
+            sample = _pass_sample(raw.rows)
+            if sample is None:
+                skipped += 1
+                continue
+            pose, reach = sample
+            band = arm_reference.reach_band(reach)
+            buckets.setdefault(band, arm_reference.BucketAccum()).add(pose, item.worker)
+            samples.append((band, pose))
+            workers.add(item.worker)
+            passes += 1
+        if number % 25 == 0:
+            logger.info("%d/%d sessions · %d passes · %d skipped", number, len(sessions), passes, skipped)
+
+    # 2차 통과: 숙련자 자신의 점수 분포를 잰다. 절대값이 해석 불가능하므로 백분위 사다리를
+    # 같이 실어야 "이 점수가 숙련자 중 어디쯤인가"를 말할 수 있다.
+    #
+    # **표본내다** — 각 패스가 자기 버킷의 평균에 기여했다. n이 수백이라 한 패스의 영향은
+    # 작지만 사다리가 미세하게 낙관적이라는 사실은 남는다. 응답에 `in_sample`로 적는다.
+    payloads = {band: accum.payload() for band, accum in sorted(buckets.items())}
+    scored: dict[str, list[float]] = {}
+    for band, pose in samples:
+        entry = payloads.get(band)
+        if entry is None:
+            continue
+        value = arm_reference.similarity_score(arm_reference.joint_sigmas(pose, entry))
+        if value is not None:
+            scored.setdefault(band, []).append(value)
+    for band, entry in payloads.items():
+        ladder = arm_reference.percentile_ladder(scored.get(band, []))
+        if ladder:
+            entry["expert_scores"] = {
+                **ladder,
+                "reference_pass_count": entry["n"],
+                "in_sample": True,
+            }
+
+    return {
+        "version": 1,
+        "scoring_set_id": arm_reference.SCORING_SET_ID,
+        "built_at": datetime.now(timezone.utc).isoformat(),
+        "reach_band_m": arm_reference.REACH_BAND_M,
+        "sessions": len(sessions),
+        "passes": passes,
+        "skipped": skipped,
+        "workers": sorted(workers),
+        "buckets": payloads,
+    }
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--root", type=Path, default=DEFAULT_ROOT)
+    parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    parser.add_argument("--levels", default="", help="쉼표로 구분. 비우면 전부.")
+    parser.add_argument("--limit-sessions", type=int, default=0)
+    args = parser.parse_args()
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
+    levels = {part for part in args.levels.split(",") if part} or None
+    payload = build(args.root, levels)
+    if args.limit_sessions:
+        logger.info("limit-sessions는 build 안에서 쓰지 않는다 — 전수로 돌았다")
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    args.out.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    logger.info(
+        "wrote %s · passes=%d buckets=%d workers=%d",
+        args.out, payload["passes"], len(payload["buckets"]), len(payload["workers"]),
+    )
+
+
+if __name__ == "__main__":
+    main()

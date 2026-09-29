@@ -18,7 +18,12 @@ import math
 from dataclasses import dataclass, field
 from typing import Final, Mapping, Protocol, Sequence
 
-import world_axes
+# `posture_sequence`와 같은 이유다 — 불린 이름 공간에서 형제를 잡아야
+# `world_axes`가 두 벌로 갈라지지 않는다.
+if __package__:
+    from . import world_axes
+else:
+    import world_axes
 
 Vec3 = tuple[float, float, float]
 # 왼손은 프레임 단위로 빠질 수 있다(설계 §5.4). 자리는 남기고 값만 None이다.

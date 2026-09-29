@@ -23,7 +23,7 @@ from fastapi.testclient import TestClient
 
 from mcp_servers import pose_estimation
 from mcp_servers.main import app
-from trainer.scripts import posture_sequence
+from trainer.scripts import arm_reference, joint_names, posture_sequence
 
 _SAMPLE = Path(__file__).resolve().parents[1] / "docs" / "SprayXR_CoPilot_샘플_2026-09-21.json"
 
@@ -37,11 +37,14 @@ CONTRACT_KEYS = {
     "scored_joints",
     "excluded_joints",
     "reference_quality",
+    "reference_band",
+    "reach_m",
     "support",
     "similarity_score",
     "expert_percentile",
     "correction_mode",
     "corrections",
+    "joint_sigmas",
     "input_quality",
     "posture_sequence",
     "summary",
@@ -49,10 +52,44 @@ CONTRACT_KEYS = {
 
 
 @pytest.fixture
-def client() -> TestClient:
+def client(monkeypatch, tmp_path: Path) -> TestClient:
     # 모듈 전역 저장소라 검사끼리 세션이 새면 기울기·R4c 결과가 앞 검사에 좌우된다.
     pose_estimation._SESSIONS = posture_sequence.SessionStore()
+    # `/output`은 마운트된 산출물이지 저장소 데이터가 아니다(AGENTS.md). 실물 아티팩트가
+    # 있든 없든 같은 결과가 나오도록 **검사마다 자기 레퍼런스를 깐다.**
+    monkeypatch.setenv(pose_estimation.ARM_REFERENCE_ENV, str(tmp_path / "none.json"))
     return TestClient(app)
+
+
+def _write_reference(tmp_path: Path, monkeypatch, *, sd: float = 0.05,
+                     n: int = 200, workers: int = 6) -> Path:
+    """검사용 숙련자 레퍼런스. 평균은 아래 `_synthetic`이 내는 자세에서 뽑는다."""
+    body = _synthetic("REF", "REF", 1.5, 4.5)
+    frames, _ = pose_estimation._gate_frames(
+        [pose_estimation.SequenceFrame(**frame) for frame in body["sequence_info"]]
+    )
+    normalized = arm_reference.normalize_sequence([frame.joints for frame in frames])
+    assert normalized is not None
+    path = tmp_path / "arm_reference.json"
+    path.write_text(json.dumps({
+        "version": 1,
+        "scoring_set_id": arm_reference.SCORING_SET_ID,
+        "reach_band_m": arm_reference.REACH_BAND_M,
+        "buckets": {
+            arm_reference.reach_band(reach): {
+                "n": n,
+                "workers": workers,
+                "joints": {
+                    name: {"mean": list(point), "sd": [sd, sd, sd], "n": n}
+                    for name, point in normalized.items()
+                },
+            }
+            # 합성 시퀀스의 reach 근처를 넉넉히 덮는다(머리가 프레임마다 조금 오른다).
+            for reach in (2.6, 2.8, 3.0, 3.2, 3.4)
+        },
+    }), encoding="utf-8")
+    monkeypatch.setenv(pose_estimation.ARM_REFERENCE_ENV, str(path))
+    return path
 
 
 def _sample_bodies() -> list[dict[str, Any]]:
@@ -114,16 +151,17 @@ def test_the_key_set_is_the_same_whether_rejected_or_not(client: TestClient) -> 
 
 
 @pytest.mark.skipif(not _SAMPLE.is_file(), reason="실물 샘플이 이 작업 트리에만 있다")
-def test_the_score_is_null_not_zero(client: TestClient) -> None:
-    """`0.0`은 '많이 다르다'로 읽힌다. 우리는 재지 않았다.
+def test_the_score_is_null_not_zero_when_there_is_no_reference(client: TestClient) -> None:
+    """`0.0`은 '많이 다르다'로 읽힌다. 레퍼런스가 없으면 우리는 재지 않은 것이다.
 
     깨뜨리는 법: `similarity_score`에 `0.0`을 넣으면 실패한다.
     """
     result = _post(client, _sample_bodies()[1])
     assert result["similarity_score"] is None
     assert result["reference_quality"] == "unavailable"
-    assert result["reason_code"] == "reference_rebuild_pending"
+    assert result["reason_code"] == "reference_data_missing"
     assert result["expert_percentile"] is None
+    assert result["corrections"] == []
 
 
 def test_unknown_top_level_keys_fail_loudly(client: TestClient) -> None:
@@ -167,33 +205,41 @@ def test_unknown_joint_names_are_reported(client: TestClient) -> None:
 
 
 def _synthetic(session_id: str, sequence_id: str, head: float, impact: float) -> dict[str, Any]:
-    """게이트를 통과하는 최소 시퀀스. 리그 치수는 실측(어깨 사이 0.0567 m)에서 왔다."""
+    """게이트를 통과하는 최소 시퀀스. 리그 치수는 실측(어깨 사이 0.0567 m,
+    위팔 0.1797 · 아래팔 0.2430 · 손 0.2430)에서 왔다.
+
+    **몸 전체를 프레임마다 조금씩 옮긴다.** 한 관절만 움직이면 나머지가 얼어
+    게이트의 R4가 전부 제외해 버린다 — 실제 분사 시퀀스는 그렇지 않다. 강체 평행이동이라
+    뼈 길이는 그대로 유지된다(R1).
+    """
     joints = {
         "pelvis": [0.0, head - 0.75, 0.0],
         "spine": [0.0, head - 0.55, 0.0],
-        "chest": [0.0, head - 0.35, 0.0],
+        "chest": [0.0, head - 0.2126, 0.0],
         "head": [0.0, head, 0.0],
-        "leftshoulder": [-0.02835, head - 0.33, 0.0],
-        "rightshoulder": [0.02835, head - 0.33, 0.0],
-        "leftupperarm": [-0.15, head - 0.33, 0.0],
-        "rightupperarm": [0.15, head - 0.33, 0.0],
-        "leftforearm": [-0.15, head - 0.58, 0.0],
-        "rightforearm": [0.15, head - 0.58, 0.0],
-        "lefthand": [-0.15, head - 0.80, 0.0],
-        "righthand": [0.15, head - 0.80, 0.0],
+        "leftshoulder": [-0.02835, head, 0.0],
+        "rightshoulder": [0.02835, head, 0.0],
+        "leftupperarm": [-0.2080, head, 0.0],
+        "rightupperarm": [0.2080, head, 0.0],
+        "leftforearm": [-0.2080, head - 0.2430, 0.10],
+        "rightforearm": [0.2080, head - 0.2430, 0.10],
+        "lefthand": [-0.2080, head - 0.4860, 0.20],
+        "righthand": [0.2080, head - 0.4860, 0.20],
         "lefttoe": [-0.1, head - 1.0, 0.1],
         "righttoe": [0.1, head - 1.0, 0.1],
     }
     frames = []
     for index in range(4):
-        moved = {name: list(value) for name, value in joints.items()}
-        # 전부 얼면 R4가 잡는다. 손만 움직이는 것이 실제 분사 시퀀스의 모습이다.
-        moved["righthand"][0] += 0.01 * index
+        shift = (0.004 * index, 0.002 * index, 0.003 * index)
+        moved = {
+            name: [value[axis] + shift[axis] for axis in range(3)]
+            for name, value in joints.items()
+        }
         frames.append(
             {
                 "index": index,
                 "time": 1000.0 + 0.009 * index,
-                "tool_pos_rot": {"pos": [0.15 + 0.05 * index, head - 0.80, 0.2], "rot": [0, 0, 0]},
+                "tool_pos_rot": {"pos": [0.25 + 0.05 * index, head - 0.86, 0.22], "rot": [0, 0, 0]},
                 "skeleton_joints": moved,
                 "gun_metrics": {"raypoint": [1.0, impact, 0.0]},
             }
@@ -254,8 +300,8 @@ def test_too_few_scored_joints_withholds_the_score(client: TestClient) -> None:
             ],
         },
     )
-    assert len(result["scored_joints"]) < posture_sequence.MIN_SCORED_JOINTS
-    assert result["reason_code"] == "quality_insufficient"
+    assert len(result["scored_joints"]) < arm_reference.MIN_SCORED_JOINTS
+    assert result["reason_code"] in pose_estimation.SEQUENCE_REASON_CODES
     assert result["similarity_score"] is None
 
 
@@ -288,5 +334,101 @@ def test_a_joint_frozen_twice_in_one_session_drops_out(client: TestClient) -> No
     assert second["input_quality"]["status"] == "degrade"
     assert "skeleton_joint_frozen" in second["input_quality"]["reason_codes"]
     assert "Head" in second["excluded_joints"]
-    assert second["reason_code"] == "quality_insufficient"
+    assert second["reason_code"] in pose_estimation.SEQUENCE_REASON_CODES
     assert second["similarity_score"] is None
+
+
+# --- 레퍼런스가 있을 때 -------------------------------------------------------
+
+
+def test_a_pose_on_the_expert_mean_scores_high(client, monkeypatch, tmp_path) -> None:
+    """레퍼런스가 깔리면 **실제 점수와 교정이 나온다.** 여기가 계약의 나머지 절반이다."""
+    _write_reference(tmp_path, monkeypatch)
+    result = _post(client, _synthetic("W", "SEQ-0", 1.5, 4.5))
+    assert result["analysis_status"] == "available"
+    assert result["reason_code"] is None
+    assert result["reference_quality"] == "multi_worker"
+    assert result["scoring_set_id"] == arm_reference.SCORING_SET_ID
+    assert len(result["scored_joints"]) == 6
+    assert result["similarity_score"] == pytest.approx(1.0, abs=1e-3)
+    assert result["corrections"] == [], "숙련자 평균과 같은 자세에 교정이 나왔다"
+    assert result["support"] == 200
+
+
+def test_a_departed_arm_lowers_the_score_and_names_that_joint(
+    client, monkeypatch, tmp_path
+) -> None:
+    """오른손만 20 cm 옮기면 점수가 내려가고 **그 관절이 지목돼야** 한다."""
+    _write_reference(tmp_path, monkeypatch)
+    body = _synthetic("W", "SEQ-0", 1.5, 4.5)
+    for frame in body["sequence_info"]:
+        frame["skeleton_joints"]["righthand"][2] += 0.20
+    result = _post(client, body)
+
+    assert result["similarity_score"] is not None
+    assert result["similarity_score"] < 0.9
+    assert len(result["corrections"]) == 1, "한 번에 한 관절만 짚는다"
+    correction = result["corrections"][0]
+    assert correction["joint"] == "RightHand"
+    assert correction["label"] == "오른쪽 손목"
+    assert correction["severity"] in ("medium", "high")
+    assert correction["evidence"]["sigma"] > arm_reference.CORRECTION_SIGMA
+    assert correction["evidence"]["distance_m"] == pytest.approx(0.20, abs=0.02)
+    assert correction["evidence"]["expected_gain"] > 0
+
+
+def test_the_correction_carries_no_angle_and_no_direction(
+    client, monkeypatch, tmp_path
+) -> None:
+    """`correction_mode="joint_only"`다 — 관절만 짚고 각도도 방향도 싣지 않는다.
+
+    회전순서가 미확정이고(실물 `rot`이 전 프레임 90° 배수) 방향 단서는 외적 초점을
+    내적 초점으로 바꾼다.
+    """
+    _write_reference(tmp_path, monkeypatch)
+    body = _synthetic("W", "SEQ-0", 1.5, 4.5)
+    for frame in body["sequence_info"]:
+        frame["skeleton_joints"]["righthand"][2] += 0.30
+    result = _post(client, body)
+    assert result["correction_mode"] == "joint_only"
+    correction = result["corrections"][0]
+    assert correction["angle_delta_deg"] is None
+    assert correction["direction"] is None
+    for banned in ("올리", "내리", "왼쪽으로", "오른쪽으로", "앞으로", "뒤로"):
+        assert banned not in correction["correction_text"], correction["correction_text"]
+
+
+def test_a_single_worker_reference_is_degraded_not_available(
+    client, monkeypatch, tmp_path
+) -> None:
+    """1인 산포는 '숙련자 통상 범위'가 아니라 '그 사람의 습관'이다."""
+    _write_reference(tmp_path, monkeypatch, workers=1)
+    result = _post(client, _synthetic("W", "SEQ-0", 1.5, 4.5))
+    assert result["reference_quality"] == "single_worker"
+    assert result["analysis_status"] == "degraded"
+    assert result["reason_code"] == "reference_single_worker"
+    assert result["similarity_score"] is not None, "강등이지 미측정이 아니다"
+
+
+def test_a_thin_bucket_withholds_the_score(client, monkeypatch, tmp_path) -> None:
+    """표본이 얕은 버킷으로 낸 점수는 숙련자 범위가 아니라 우연이다."""
+    _write_reference(tmp_path, monkeypatch, n=5)
+    result = _post(client, _synthetic("W", "SEQ-0", 1.5, 4.5))
+    assert result["reference_quality"] == "unavailable"
+    assert result["similarity_score"] is None
+    assert result["reason_code"] == "reference_data_missing"
+
+
+def test_a_sequence_with_no_impact_cannot_pick_a_bucket(
+    client, monkeypatch, tmp_path
+) -> None:
+    """버킷 조건이 reach(착탄 − 머리)다. 미명중이면 조건이 없으니 추정하지 않는다."""
+    _write_reference(tmp_path, monkeypatch)
+    body = _synthetic("W", "SEQ-0", 1.5, 4.5)
+    for frame in body["sequence_info"]:
+        frame["gun_metrics"]["raypoint"] = None
+    result = _post(client, body)
+    assert result["reach_m"] is None
+    assert result["reference_band"] is None
+    assert result["similarity_score"] is None
+    assert result["reason_code"] == "reference_data_missing"

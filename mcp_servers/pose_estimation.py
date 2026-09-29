@@ -2,17 +2,24 @@ from __future__ import annotations
 
 import json
 import os
+import statistics
 from datetime import datetime
 from functools import lru_cache
 from math import atan2, degrees, sqrt
 from pathlib import Path
-from typing import Any, Final, Literal, Mapping, Optional, assert_never
+from typing import Any, Final, Literal, Mapping, Optional, Sequence, assert_never
 
 from fastapi import APIRouter
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from mcp_servers.common import MCPResponse, success_response
-from trainer.scripts import joint_names, pose_similarity, posture_sequence, skeleton_gate
+from trainer.scripts import (
+    arm_reference,
+    joint_names,
+    pose_similarity,
+    posture_sequence,
+    skeleton_gate,
+)
 
 
 router = APIRouter(prefix="/pose_estimation", tags=["pose_estimation"])
@@ -297,7 +304,8 @@ _KNOWN_FRAME_FIELDS: Final[frozenset[str]] = frozenset(
 # 이 경로가 낼 수 있는 사유의 **닫힌 집합**. 게이트의 것에 배선 계층 사유 둘을 더한다.
 # 반환 직전에 대조한다 — 지어낸 문자열이 나가면 소비자가 모르는 값을 받는다.
 SEQUENCE_REASON_CODES: Final[frozenset[str]] = skeleton_gate.REASON_CODES | {
-    "reference_rebuild_pending",
+    "reference_data_missing",
+    "reference_single_worker",
     "quality_insufficient",
 }
 
@@ -342,6 +350,32 @@ class SequenceRequest(BaseModel):
     # 판정하고, 없으면 `posture_band_ok`가 `null`이다 — 모르는 것과 통과는 다르다.
     level: str | None = None
     floor_height_m: float | None = None
+
+
+ARM_REFERENCE_ENV: Final = "ARM_REFERENCE_PATH"
+DEFAULT_ARM_REFERENCE: Final = "/output/expert_reference/expert_arm_reference.json"
+
+
+@lru_cache(maxsize=2)
+def _read_arm_reference(path: str, revision: float) -> dict[str, Any]:
+    _ = revision
+    return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+def _arm_bucket(reach_m: float | None) -> tuple[str, dict[str, Any]] | None:
+    """이 reach에 해당하는 숙련자 버킷. 아티팩트가 없거나 버킷이 없으면 **추정하지 않는다**."""
+    if reach_m is None:
+        return None
+    path = Path(os.environ.get(ARM_REFERENCE_ENV, DEFAULT_ARM_REFERENCE))
+    if not path.is_file():
+        return None
+    payload = _read_arm_reference(str(path), path.stat().st_mtime)
+    buckets = payload.get("buckets")
+    if not isinstance(buckets, dict):
+        return None
+    band = arm_reference.reach_band(reach_m)
+    found = buckets.get(band)
+    return (band, found) if isinstance(found, dict) else None
 
 
 def _frame_seconds(value: str | float | None) -> float | None:
@@ -406,13 +440,33 @@ def analyze_sequence(payload: SequenceRequest) -> MCPResponse:
     # `frozen_before`는 **앞선** 시퀀스의 것이어야 한다(R4c). 그래서 쌓기 전에 잰다.
     gate = skeleton_gate.evaluate(frames, frozen_before=frozenset(session.frozen_joints))
 
-    available = sorted({name for frame in frames for name in frame.joints})
-    used = posture_sequence.scored_joints(available, excluded=gate.excluded_joints)
-
+    impacts = _impact_points(payload.sequence_info)
     reduced = posture_sequence.summarize(
         [frame.joints["Head"] for frame in frames if "Head" in frame.joints],
-        _impact_points(payload.sequence_info),
+        impacts,
     )
+
+    # reach = 착탄 수직 − 머리 월드 수직. 둘 다 월드라 차이에서 바닥 상수가 지워진다.
+    reach = None if reduced is None or reduced[1] is None else reduced[1] - reduced[0]
+    found = _arm_bucket(reach)
+    normalized = arm_reference.normalize_sequence([frame.joints for frame in frames])
+
+    sigmas: list[arm_reference.JointSigma] = []
+    quality = "unavailable"
+    band: str | None = None
+    support: int | None = None
+    bucket: dict[str, Any] = {}
+    if found is not None and normalized is not None:
+        band, bucket = found
+        quality = arm_reference.reference_quality(bucket)
+        support = int(bucket.get("n", 0) or 0)
+        if quality != "unavailable":
+            sigmas = [
+                item
+                for item in arm_reference.joint_sigmas(normalized, bucket)
+                if item.joint not in gate.excluded_joints
+            ]
+    used = tuple(item.joint for item in sigmas)
     if reduced is not None and gate.status != "reject":
         session.add(
             posture_sequence.PostureSample(
@@ -428,31 +482,72 @@ def analyze_sequence(payload: SequenceRequest) -> MCPResponse:
 
     report = posture_sequence.session_report(session, payload.floor_height_m)
 
+    score = arm_reference.similarity_score(sigmas)
+    corrections = arm_reference.build_corrections(
+        sigmas, pose_similarity.JOINT_LABELS, support=support
+    )
+
+    reason: str | None
     if gate.status == "reject":
         status, reason = "not_available", gate.reason_codes[0]
-    elif len(used) < posture_sequence.MIN_SCORED_JOINTS:
+    elif quality == "unavailable" or score is None:
+        status, reason = "not_available", "reference_data_missing"
+    elif len(used) < arm_reference.MIN_SCORED_JOINTS:
         status, reason = "not_available", "quality_insufficient"
+    elif quality in ("single_worker", "coarse_bucket"):
+        # 작업자 1인 산포는 '숙련자 통상 범위'가 아니라 '그 사람의 습관'이다.
+        status, reason = "degraded", "reference_single_worker"
+    elif gate.status == "degrade":
+        # 레퍼런스는 멀쩡하고 **입력**이 일부 빠졌다. 두 사실을 같은 사유로 적으면
+        # 소비자가 무엇을 고쳐야 하는지 못 가린다.
+        status, reason = "degraded", gate.reason_codes[0]
     else:
-        # 여기가 레퍼런스가 준비되면 `available`/`degraded`로 갈리는 자리다.
-        status, reason = "not_available", "reference_rebuild_pending"
-    assert reason in SEQUENCE_REASON_CODES, reason
+        status, reason = "available", None
+    assert reason is None or reason in SEQUENCE_REASON_CODES, reason
 
     return success_response(result={
         "mode": "sequence",
         "sequence_id": payload.sequence_id,
         "analysis_status": status,
         "reason_code": reason,
-        "scoring_set_id": posture_sequence.SCORING_SET_ID,
+        "scoring_set_id": arm_reference.SCORING_SET_ID,
         "scored_joints": list(used),
         "excluded_joints": list(gate.excluded_joints),
-        "reference_quality": report["reference_quality"],
-        "support": None,
-        "similarity_score": report["similarity_score"],
-        "expert_percentile": None,
+        "reference_quality": quality,
+        "reference_band": band,
+        "reach_m": None if reach is None else round(reach, 4),
+        "support": support,
+        "similarity_score": None if score is None else round(score, 4),
+        # 점수의 절대값은 축 수·산포 하한·가중치가 스케일을 건드려 해석하기 어렵다.
+        # **백분위가 해석 가능한 쪽이다** — 숙련자 분포에서 어디쯤인지.
+        "expert_percentile": (
+            None if score is None else arm_reference.expert_percentile(bucket, score)
+        ),
         "correction_mode": "joint_only",
-        # 각도 교정은 계약에서 빠졌다(회전순서 미확정, 실물 `rot`이 전 프레임 90° 배수).
-        # 점수가 없으므로 지금은 항상 비어 있다.
-        "corrections": [],
+        # 각도도 방향도 싣지 않는다 — 회전순서가 미확정이고(실물 `rot`이 전 프레임 90°
+        # 배수) 방향 단서는 외적 초점을 내적 초점으로 바꾼다. 관절만 짚는다.
+        "corrections": [
+            {
+                "joint": item.joint,
+                "label": item.label,
+                "severity": item.severity,
+                "angle_delta_deg": None,
+                "direction": None,
+                "evidence": {
+                    "sigma": round(item.sigma, 3),
+                    "distance_m": round(item.distance_m, 4),
+                    "axis_sigmas": dict(
+                        zip(arm_reference.AXIS_ORDER, [round(v, 3) for v in item.axis_sigmas])
+                    ),
+                    "support": support,
+                    # 모의값이다 — 이 관절을 숙련자 평균에 맞췄을 때의 점수 상승분.
+                    "expected_gain": None if item.expected_gain is None else round(item.expected_gain, 4),
+                },
+                "correction_text": f"{item.label}을(를) 보세요.",
+            }
+            for item in corrections
+        ],
+        "joint_sigmas": {item.joint: round(item.sigma, 3) for item in sigmas},
         "input_quality": {
             "status": gate.status,
             "reason_codes": list(gate.reason_codes),
@@ -475,23 +570,35 @@ def analyze_sequence(payload: SequenceRequest) -> MCPResponse:
             "frozen_joints": report["frozen_joints"],
             "evicted_sessions": _SESSIONS.evicted,
         },
-        "summary": _sequence_summary(status, reason, report, len(used)),
+        "summary": _sequence_summary(
+            status, reason, report, score,
+            None if score is None else arm_reference.expert_percentile(bucket, score),
+            corrections,
+        ),
     })
 
 
 def _sequence_summary(
-    status: str, reason: str, report: Mapping[str, object], scored: int
+    status: str,
+    reason: str | None,
+    report: Mapping[str, object],
+    score: float | None,
+    percentile: int | None,
+    corrections: Sequence[arm_reference.Correction],
 ) -> str:
-    if status != "not_available" or reason != "reference_rebuild_pending":
+    if score is None:
         return f"자세 판정을 제공할 수 없습니다({reason}). 점수는 0점이 아니라 미측정입니다."
+    head = f"숙련자 팔 자세 대비 유사도 {score:.0%}"
+    if isinstance(percentile, int):
+        head += f" — 숙련자 하위 {percentile}%" if percentile == 0 else f" — 숙련자 {percentile}백분위"
+    if status == "degraded":
+        head += "(참고용입니다)"
+    if corrections:
+        item = corrections[0]
+        head += f". 가장 벗어난 곳은 {item.label}입니다(σ {item.sigma:.1f}, {item.distance_m * 100:.0f} cm)"
+    else:
+        head += ". 여섯 관절 모두 숙련자 통상 범위 안입니다"
     slope = report.get("tracking_slope")
     if isinstance(slope, float):
-        return (
-            f"관절 {scored}개를 쟀습니다. 착탄 높이를 몸이 따라간 기울기 {slope:+.3f}"
-            f"(시퀀스 {report['tracking_n']}개). 유사도 점수는 기준 자세 재생성 전까지 내지 않습니다."
-        )
-    return (
-        f"관절 {scored}개를 쟀습니다. 기울기는 시퀀스 "
-        f"{posture_sequence.MIN_SAMPLES_FOR_SLOPE}개부터 냅니다"
-        f"(현재 {report['sequences']}개). 유사도 점수는 기준 자세 재생성 전까지 내지 않습니다."
-    )
+        head += f". 착탄을 몸이 따라간 기울기 {slope:+.3f}(시퀀스 {report['tracking_n']}개)"
+    return head + "."
