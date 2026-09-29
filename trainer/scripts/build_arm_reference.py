@@ -5,8 +5,11 @@
 프레임 불변 바인드 오프셋이라 월드 좌표가 아니다(`simulator_csv.joint_world_positions`
 독스트링). 회전에서 FK로 풀어야 자세가 나온다.
 
-버킷 조건은 **reach = 착탄 수직 − 머리 월드 수직**이다. 머리는 카메라 강체(실측), 착탄은
-Ray point 컬럼(실측)이라 둘 다 월드이고, 차이에서 바닥 상수가 지워진다.
+버킷 조건은 **reach = 착탄 수직 − 건 월드 수직**이다. 건은 활성 건 강체
+(`measured_pose.right`), 착탄은 Ray point 컬럼 — 둘 다 실측 월드라 바닥 상수가 지워진다.
+
+**머리를 쓰지 않는다.** CSV의 머리는 카메라(HMD) 강체인데 런타임이 보내는 머리는 골격
+`head` 관절이라 같은 점이 아니다. 건은 양쪽 모두 같은 물건이다(`arm_reference` 독스트링).
 
 **패스 하나가 표본 하나다.** 프레임을 다 넣으면 같은 패스의 120프레임이 독립 표본인 척해
 n이 부풀고 산포가 좁아진다 — 좁은 산포는 모든 σ를 키워 교정을 과발부한다.
@@ -68,7 +71,7 @@ def _pass_sample(rows: list[dict[str, str]]) -> tuple[dict[str, Any], float] | N
         frames = measured_pose.measured_frames(rows)
     except (KeyError, ValueError):
         return None
-    heads = [world_axes.vertical_of(tuple(frame.head)) for frame in frames if frame.head]
+    guns = [world_axes.vertical_of(tuple(frame.right)) for frame in frames if frame.right]
     impacts: list[float] = []
     for row in rows:
         try:
@@ -79,9 +82,9 @@ def _pass_sample(rows: list[dict[str, str]]) -> tuple[dict[str, Any], float] | N
             )
         except (KeyError, ValueError):
             continue
-    if not heads or not impacts:
+    if not guns or not impacts:
         return None
-    return pose, st.median(impacts) - st.median(heads)
+    return pose, st.median(impacts) - st.median(guns)
 
 
 def build(root: Path, levels: set[str] | None = None) -> dict[str, object]:

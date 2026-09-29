@@ -201,11 +201,13 @@ def test_sigma_has_a_floor_so_a_tight_bucket_cannot_explode_it() -> None:
 
 
 def test_reach_bands_are_a_grid_with_stable_edges() -> None:
-    assert arm_reference.reach_band(-0.25) == "-0.40"
-    assert arm_reference.reach_band(-0.20) == "-0.20"
+    """격자는 `REACH_BAND_M` 위에 있다. 폭을 바꿔도 성질은 같아야 한다."""
+    step = arm_reference.REACH_BAND_M
     assert arm_reference.reach_band(0.0) == "+0.00"
-    assert arm_reference.reach_band(0.19) == "+0.00"
-    assert arm_reference.reach_band(0.20) == "+0.20"
+    assert arm_reference.reach_band(step * 0.5) == f"{0.0:+.2f}"
+    assert arm_reference.reach_band(step) == f"{step:+.2f}"
+    assert arm_reference.reach_band(-step * 0.5) == f"{-step:+.2f}"
+    assert arm_reference.reach_band(-step) == f"{-step:+.2f}"
 
 
 def test_band_edges_survive_floating_point() -> None:

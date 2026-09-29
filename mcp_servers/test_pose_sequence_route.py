@@ -15,6 +15,8 @@
 from __future__ import annotations
 
 import json
+import math
+import statistics
 from pathlib import Path
 from typing import Any
 
@@ -23,7 +25,16 @@ from fastapi.testclient import TestClient
 
 from mcp_servers import pose_estimation
 from mcp_servers.main import app
-from trainer.scripts import arm_reference, joint_names, posture_sequence
+from trainer.scripts import arm_reference, joint_names, posture_sequence, world_axes
+
+def _length(point) -> float:
+    return math.sqrt(sum(value * value for value in point))
+
+
+def _unit(point):
+    length = _length(point)
+    return tuple(value / length for value in point) if length > 1e-9 else (1.0, 0.0, 0.0)
+
 
 _SAMPLE = Path(__file__).resolve().parents[1] / "docs" / "SprayXR_CoPilot_샘플_2026-09-21.json"
 
@@ -70,22 +81,40 @@ def _write_reference(tmp_path: Path, monkeypatch, *, sd: float = 0.05,
     )
     normalized = arm_reference.normalize_sequence([frame.joints for frame in frames])
     assert normalized is not None
+    # reach는 **건 기준**이다(착탄 수직 − 건 수직). 하드코딩하지 않고 본문에서 그대로
+    # 뽑는다 — 경로가 쓰는 정의가 바뀌면 이 붙박이가 조용히 어긋난다.
+    impacts = [
+        world_axes.vertical_of(tuple(frame["gun_metrics"]["raypoint"]))
+        for frame in body["sequence_info"]
+    ]
+    guns = [
+        world_axes.vertical_of(tuple(frame["tool_pos_rot"]["pos"]))
+        for frame in body["sequence_info"]
+    ]
+    reach = statistics.median(impacts) - statistics.median(guns)
+
     path = tmp_path / "arm_reference.json"
     path.write_text(json.dumps({
         "version": 1,
         "scoring_set_id": arm_reference.SCORING_SET_ID,
         "reach_band_m": arm_reference.REACH_BAND_M,
         "buckets": {
-            arm_reference.reach_band(reach): {
+            arm_reference.reach_band(reach + offset): {
                 "n": n,
                 "workers": workers,
                 "joints": {
-                    name: {"mean": list(point), "sd": [sd, sd, sd], "n": n}
+                    name: {
+                        "mean": list(point),
+                        "sd": [sd, sd, sd],
+                        "n": n,
+                        "radius": {"mean": _length(point), "sd": sd},
+                        "heading": {"mean": list(_unit(point)), "angular_sd": 0.40},
+                    }
                     for name, point in normalized.items()
                 },
             }
-            # 합성 시퀀스의 reach 근처를 넉넉히 덮는다(머리가 프레임마다 조금 오른다).
-            for reach in (2.6, 2.8, 3.0, 3.2, 3.4)
+            # 이웃 밴드까지 덮는다 — 프레임마다 몸이 조금 움직여 reach가 밴드 경계를 넘나든다.
+            for offset in (-arm_reference.REACH_BAND_M, 0.0, arm_reference.REACH_BAND_M)
         },
     }), encoding="utf-8")
     monkeypatch.setenv(pose_estimation.ARM_REFERENCE_ENV, str(path))
@@ -103,6 +132,7 @@ def _post(client: TestClient, body: dict[str, Any]) -> dict[str, Any]:
     payload = response.json()
     assert payload["status"] == "success"
     return payload["result"]
+
 
 
 @pytest.mark.skipif(not _SAMPLE.is_file(), reason="실물 샘플이 이 작업 트리에만 있다")
@@ -360,20 +390,25 @@ def test_a_departed_arm_lowers_the_score_and_names_that_joint(
 ) -> None:
     """오른손만 20 cm 옮기면 점수가 내려가고 **그 관절이 지목돼야** 한다."""
     _write_reference(tmp_path, monkeypatch)
+    # 같은 자세의 점수와 견준다. 고정 임계와 견주면 배선이 바뀔 때마다 임계를 따라 옮기게 되고,
+    # 그러면 검사가 "점수가 내려간다"가 아니라 "내가 적은 숫자와 같다"를 지키게 된다.
+    baseline = _post(client, _synthetic("W", "SEQ-base", 1.5, 4.5))["similarity_score"]
     body = _synthetic("W", "SEQ-0", 1.5, 4.5)
     for frame in body["sequence_info"]:
-        frame["skeleton_joints"]["righthand"][2] += 0.20
+        frame["skeleton_joints"]["righthand"][2] += 0.30
     result = _post(client, body)
 
-    assert result["similarity_score"] is not None
-    assert result["similarity_score"] < 0.9
+    assert baseline is not None and result["similarity_score"] is not None
+    assert result["similarity_score"] < baseline - 0.05, (
+        f"오른손을 30 cm 옮겼는데 점수가 {baseline:.3f} → {result['similarity_score']:.3f}에 그쳤다"
+    )
     assert len(result["corrections"]) == 1, "한 번에 한 관절만 짚는다"
     correction = result["corrections"][0]
     assert correction["joint"] == "RightHand"
     assert correction["label"] == "오른쪽 손목"
     assert correction["severity"] in ("medium", "high")
     assert correction["evidence"]["sigma"] > arm_reference.CORRECTION_SIGMA
-    assert correction["evidence"]["distance_m"] == pytest.approx(0.20, abs=0.02)
+    assert correction["evidence"]["distance_m"] == pytest.approx(0.30, abs=0.03)
     assert correction["evidence"]["expected_gain"] > 0
 
 

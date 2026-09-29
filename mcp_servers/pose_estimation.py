@@ -19,6 +19,7 @@ from trainer.scripts import (
     pose_similarity,
     posture_sequence,
     skeleton_gate,
+    world_axes,
 )
 
 
@@ -446,8 +447,18 @@ def analyze_sequence(payload: SequenceRequest) -> MCPResponse:
         impacts,
     )
 
-    # reach = 착탄 수직 − 머리 월드 수직. 둘 다 월드라 차이에서 바닥 상수가 지워진다.
-    reach = None if reduced is None or reduced[1] is None else reduced[1] - reduced[0]
+    # reach = 착탄 수직 − **건** 월드 수직. 머리를 쓰지 않는 이유는 `arm_reference`
+    # 독스트링에 있다 — CSV의 머리는 HMD 강체, 런타임의 머리는 골격 관절이라 같은 점이
+    # 아니고, 0.10 m 어긋나면 버킷의 44%가 바뀐다. 건은 양쪽 모두 같은 물건이다.
+    tool_heights = [
+        world_axes.vertical_of(frame.tool_pos) for frame in frames if frame.tool_pos is not None
+    ]
+    impact_height = None if reduced is None else reduced[1]
+    reach = (
+        None
+        if impact_height is None or not tool_heights
+        else impact_height - statistics.median(tool_heights)
+    )
     found = _arm_bucket(reach)
     normalized = arm_reference.normalize_sequence([frame.joints for frame in frames])
 
