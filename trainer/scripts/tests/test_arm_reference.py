@@ -466,3 +466,102 @@ def test_the_builder_records_a_rigid_bone_as_a_tight_radius() -> None:
     assert entry["radius"]["mean"] == pytest.approx(0.2, abs=1e-9)
     assert entry["radius"]["sd"] == pytest.approx(0.0, abs=1e-6), "강체인데 반경이 흔들렸다"
     assert entry["heading"]["angular_sd"] > 0.1, "방향은 흩어져 있는데 0으로 나왔다"
+
+
+# --- 위상 채점 ---------------------------------------------------------------
+
+
+def _phase_entry(offset: float = 0.0, n: int = 60) -> dict:
+    point = (0.50 + offset, 0.0, 0.0)
+    return {
+        "n": n,
+        "joints": {
+            name: {
+                "mean": [0.50, 0.0, 0.0],
+                "sd": [0.05, 0.05, 0.05],
+                "n": n,
+                "radius": {"mean": 0.50, "sd": 0.05},
+                "heading": {"mean": [1.0, 0.0, 0.0], "angular_sd": 0.30},
+            }
+            for name in arm_reference.SCORING_JOINTS_ARM
+        },
+    }, {name: point for name in arm_reference.SCORING_JOINTS_ARM}
+
+
+def test_a_thin_phase_is_skipped_not_scored() -> None:
+    """위상 하나가 표본 몇 개로 만들어졌으면 그 SD는 우연이다 — 채점에 넣지 않는다.
+
+    깨뜨리는 법: `phase_sigmas`의 `MIN_PHASE_SAMPLES` 검사를 빼면, 얕은 위상의
+    큰 편차가 σ에 들어와 값이 달라진다.
+    """
+    thick, clean = _phase_entry()
+    thin, dirty = _phase_entry(offset=0.30, n=arm_reference.MIN_PHASE_SAMPLES - 1)
+    with_thin = arm_reference.phase_sigmas([clean, dirty], [thick, thin])
+    only_thick = arm_reference.phase_sigmas([clean], [thick])
+    assert with_thin[0].sigma == pytest.approx(only_thick[0].sigma, abs=1e-9), (
+        "표본이 모자란 위상이 σ에 들어왔다"
+    )
+
+
+def test_a_phase_with_no_correspondence_does_not_dilute() -> None:
+    """대응이 없는 위상은 **건너뛴다**. 0으로 채우면 '그 구간은 완벽했다'가 된다."""
+    entry, dirty = _phase_entry(offset=0.30)
+    with_gap = arm_reference.phase_sigmas([dirty, None, None], [entry, entry, entry])
+    without = arm_reference.phase_sigmas([dirty], [entry])
+    assert with_gap[0].sigma == pytest.approx(without[0].sigma, abs=1e-9)
+    assert with_gap[0].sigma > 1.0, "이 교란은 σ를 만들어야 한다 — 검사가 공허하다"
+
+
+def test_a_local_error_survives_the_phase_aggregation() -> None:
+    """일부 위상에서만 틀린 자세가 맑은 위상 수만큼 희석되면 안 된다.
+
+    RMS라서 12위상 중 4위상이 σ 3.0이면 결과가 1.73이다(산술평균은 1.00).
+
+    깨뜨리는 법: `phase_sigmas`를 산술평균으로 되돌리면 실패한다.
+    """
+    entry, dirty = _phase_entry(offset=0.15)
+    _, clean = _phase_entry()
+    poses = [dirty] * 4 + [clean] * 8
+    sigma = arm_reference.phase_sigmas(poses, [entry] * 12)[0].sigma
+    dirty_sigma = arm_reference.phase_sigmas([dirty], [entry])[0].sigma
+    assert sigma == pytest.approx(dirty_sigma * math.sqrt(4 / 12), abs=1e-6)
+    assert sigma > dirty_sigma * 4 / 12, "산술평균으로 희석됐다"
+
+
+def test_the_worst_phase_sets_the_reported_distance() -> None:
+    """거리는 **가장 벗어난 위상**의 것이다. 평균하면 교정 문구가 가리키는 크기가
+    실제보다 작아진다."""
+    entry, mild = _phase_entry(offset=0.05)
+    _, severe = _phase_entry(offset=0.40)
+    item = arm_reference.phase_sigmas([mild, severe], [entry, entry])[0]
+    assert item.radius_delta_m == pytest.approx(0.40, abs=1e-6)
+    # 축 편차도 가장 벗어난 위상의 것이어야 한다 — 교정의 `distance_m`이 여기서 나온다.
+    assert item.delta_m[0] == pytest.approx(0.40, abs=1e-6)
+    correction = arm_reference.build_corrections([item], {})[0]
+    assert correction.distance_m == pytest.approx(0.40, abs=1e-6), (
+        "교정이 가리키는 크기가 가장 벗어난 위상이 아니라 평균이다"
+    )
+
+
+def test_the_phase_ladder_is_used_for_phase_scores() -> None:
+    """위상 점수와 접기 점수는 다른 분포다(실측 밴드 −0.10에서 0.804 vs 0.839).
+
+    접기 사다리에 위상 점수를 대면 전원이 낮게 나온다.
+
+    깨뜨리는 법: `expert_percentile`이 `mode`를 무시하면 두 값이 같아져 실패한다.
+    """
+    bucket = {
+        "n": 300,
+        "expert_scores": {
+            "p10": 0.90, "p25": 0.92, "p50": 0.94, "p75": 0.96, "p90": 0.98,
+            "reference_pass_count": 300,
+        },
+        "expert_scores_phase": {
+            "p10": 0.30, "p25": 0.40, "p50": 0.50, "p75": 0.60, "p90": 0.70,
+            "reference_pass_count": 250,
+        },
+    }
+    assert arm_reference.expert_percentile(bucket, 0.55, mode="fold") == 0
+    assert arm_reference.expert_percentile(bucket, 0.55, mode="phase") == 50
+    assert arm_reference.expert_percentile(bucket, 0.93, mode="fold") == 25
+    assert arm_reference.expert_percentile(bucket, 0.93, mode="phase") == 90

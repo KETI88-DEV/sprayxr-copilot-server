@@ -4,6 +4,7 @@ import json
 import os
 import statistics
 from datetime import datetime
+from dataclasses import dataclass
 from functools import lru_cache
 from math import atan2, degrees, sqrt
 from pathlib import Path
@@ -17,6 +18,7 @@ from trainer.scripts import (
     arm_reference,
     joint_names,
     pose_similarity,
+    pose_stages,
     posture_sequence,
     skeleton_gate,
     world_axes,
@@ -351,6 +353,8 @@ class SequenceRequest(BaseModel):
     # 판정하고, 없으면 `posture_band_ok`가 `null`이다 — 모르는 것과 통과는 다르다.
     level: str | None = None
     floor_height_m: float | None = None
+    # ①의 출력을 넘겨받는 손잡이. 주면 버킷 찾기를 건너뛴다 — 단계를 따로 부를 때 쓴다.
+    band: str | None = None
 
 
 ARM_REFERENCE_ENV: Final = "ARM_REFERENCE_PATH"
@@ -361,6 +365,16 @@ DEFAULT_ARM_REFERENCE: Final = "/output/expert_reference/expert_arm_reference.js
 def _read_arm_reference(path: str, revision: float) -> dict[str, Any]:
     _ = revision
     return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+def _arm_buckets() -> dict[str, Any] | None:
+    """아티팩트의 버킷 사전. 없으면 `None` — 추정하지 않는다."""
+    path = Path(os.environ.get(ARM_REFERENCE_ENV, DEFAULT_ARM_REFERENCE))
+    if not path.is_file():
+        return None
+    payload = _read_arm_reference(str(path), path.stat().st_mtime)
+    buckets = payload.get("buckets")
+    return buckets if isinstance(buckets, dict) else None
 
 
 def _arm_bucket(reach_m: float | None) -> tuple[str, dict[str, Any]] | None:
@@ -424,6 +438,132 @@ def _impact_points(frames: list[SequenceFrame]) -> list[tuple[float, float, floa
         if point is not None:
             found.append(point)
     return found
+
+
+@dataclass(frozen=True)
+class _Prepared:
+    """단계들이 공통으로 쓰는 재료. 한 번만 만들고 넘긴다."""
+
+    frames: list[skeleton_gate.GateFrame]
+    unknown: list[str]
+    gate: skeleton_gate.GateResult
+    impacts: list[tuple[float, float, float]]
+    reach: float | None
+    buckets: dict[str, Any] | None
+
+
+def _prepare(payload: "SequenceRequest", *, touch_session: bool) -> _Prepared:
+    """게이트까지 돌린다. `touch_session`이 False면 세션 상태를 건드리지 않는다 —
+    단계 경로를 여러 번 불러도 자세 시퀀스가 부풀지 않아야 한다."""
+    frames, unknown = _gate_frames(payload.sequence_info)
+    session = _SESSIONS.get(payload.session_id)
+    frozen_before = frozenset(session.frozen_joints) if session else frozenset()
+    gate = skeleton_gate.evaluate(frames, frozen_before=frozen_before)
+    impacts = _impact_points(payload.sequence_info)
+    tools = [frame.tool_pos for frame in frames if frame.tool_pos is not None]
+    reach = pose_stages.reach_of(impacts, tools)
+    _ = touch_session
+    return _Prepared(frames, unknown, gate, impacts, reach, _arm_buckets())
+
+
+def _resolved_of(prepared: _Prepared, band: str | None) -> pose_stages.ResolveResult:
+    """`band`가 주어지면 ①을 건너뛰고 그 버킷을 쓴다 — 앞 단계 출력을 넘겨받는 경로다."""
+    if band is None:
+        return pose_stages.resolve(prepared.reach, prepared.buckets)
+    if not isinstance(prepared.buckets, dict) or band not in prepared.buckets:
+        return pose_stages.ResolveResult(ok=False, reason="reference_data_missing", band=band)
+    # 밴드를 고정해도 reach는 그대로 싣는다 — 어긋나면 호출자가 알아야 한다.
+    forced = pose_stages.resolve(
+        arm_reference.REACH_BAND_M * _band_index(band), prepared.buckets
+    )
+    return forced
+
+
+def _band_index(band: str) -> float:
+    try:
+        return float(band) / arm_reference.REACH_BAND_M
+    except ValueError:
+        return 0.0
+
+
+def _normalized_frames(
+    prepared: _Prepared,
+) -> list[dict[str, tuple[float, float, float]]]:
+    """프레임마다 몸 프레임으로 정규화한 팔 자세. 못 세우면 그 프레임은 빠진다."""
+    out = []
+    for frame in prepared.frames:
+        normalized = arm_reference.normalize(frame.joints)
+        out.append(normalized if normalized is not None else {})
+    return out
+
+
+@router.post("/reference", response_model=MCPResponse)
+def resolve_reference(payload: "SequenceRequest") -> MCPResponse:
+    """① 이 시퀀스가 어느 숙련자 버킷인가. 정렬·채점은 하지 않는다."""
+    prepared = _prepare(payload, touch_session=False)
+    resolved = pose_stages.resolve(prepared.reach, prepared.buckets)
+    return success_response(result={
+        "mode": "reference",
+        "sequence_id": payload.sequence_id,
+        "input_quality": _quality_block(prepared),
+        **resolved.to_dict(),
+    })
+
+
+@router.post("/align", response_model=MCPResponse)
+def align_sequence(payload: "SequenceRequest") -> MCPResponse:
+    """② 착탄 경로를 버킷 프로토타입에 DTW로 맞춘다. 점수는 내지 않는다."""
+    prepared = _prepare(payload, touch_session=False)
+    resolved = _resolved_of(prepared, payload.band)
+    aligned = pose_stages.align(prepared.impacts, resolved)
+    return success_response(result={
+        "mode": "align",
+        "sequence_id": payload.sequence_id,
+        "resolve": resolved.to_dict(),
+        **aligned.to_dict(),
+    })
+
+
+@router.post("/score", response_model=MCPResponse)
+def score_sequence(payload: "SequenceRequest") -> MCPResponse:
+    """③ 위상 자세를 위상 레퍼런스에 대고 잰다. 앞 두 단계 출력도 같이 싣는다."""
+    prepared = _prepare(payload, touch_session=False)
+    resolved = _resolved_of(prepared, payload.band)
+    aligned = pose_stages.align(prepared.impacts, resolved)
+    bucket: dict[str, Any] = {}
+    if resolved.band and isinstance(prepared.buckets, dict):
+        found = prepared.buckets.get(resolved.band)
+        if isinstance(found, dict):
+            bucket = found
+    scored = pose_stages.score(
+        _normalized_frames(prepared),
+        aligned,
+        bucket,
+        excluded=prepared.gate.excluded_joints,
+        labels=pose_similarity.JOINT_LABELS,
+    )
+    return success_response(result={
+        "mode": "score",
+        "sequence_id": payload.sequence_id,
+        "scoring_set_id": arm_reference.SCORING_SET_ID,
+        "correction_mode": "joint_only",
+        "resolve": resolved.to_dict(),
+        "align": aligned.to_dict(),
+        **scored.to_dict(),
+    })
+
+
+def _quality_block(prepared: _Prepared) -> dict[str, Any]:
+    gate = prepared.gate
+    return {
+        "status": gate.status,
+        "reason_codes": list(gate.reason_codes),
+        "info_codes": list(gate.info_codes),
+        "frozen_joints": list(gate.frozen_joints),
+        "frames": len(prepared.frames),
+        "unknown_fields": prepared.unknown,
+        "measurements": {k: round(v, 4) for k, v in gate.measurements.items()},
+    }
 
 
 @router.post("/sequence", response_model=MCPResponse)

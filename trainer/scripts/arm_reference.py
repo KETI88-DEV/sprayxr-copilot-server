@@ -136,6 +136,29 @@ MAX_CORRECTIONS: Final = 2
 _BAND_EPSILON_DIGITS: Final = 9
 
 
+
+# --- 위상 (착탄 경로 DTW 정렬) ----------------------------------------------
+#
+# 중앙값 한 점으로 접으면 **스트로크 일부 구간에서만** 틀린 자세를 희석한다. 앞 절반에만
+# 0.20 m 오차를 넣었을 때 중앙값 Δσ가 0.008인데 위상 채점은 0.077이다(약 10배).
+# 측정은 `docs/measurements/2026-09-29-dtw-phase-alignment-prereg.md`.
+#
+# 위상 수. 분사 구간 실측이 p50 0.96초·115프레임(120FPS)이라 12위상이면 80 ms 간격이다.
+# 더 잘게 쪼개면 위상마다 표본이 얇아져 SD가 불안정해진다.
+PHASES: Final = 12
+
+# 위상 레퍼런스를 만들 때 밴드마다 들고 있을 시퀀스 수. 전량(밴드당 최대 14,245개)을
+# 메모리에 얹을 수 없고, 위상마다 수백 표본이면 SD가 안정적이라 이만큼만 쓴다.
+# **점 레퍼런스는 전량으로 굽는다** — 이 상한은 위상 쪽에만 걸린다.
+PHASE_SAMPLE_PER_BAND: Final = 400
+
+# DBA 프로토타입을 고를 때 쓰는 시퀀스 수. 무게중심은 표본이 많다고 좋아지지 않고
+# 비용만 제곱으로 는다.
+PROTOTYPE_SAMPLE: Final = 60
+
+# 위상 하나가 이보다 적은 표본으로 만들어졌으면 그 위상은 채점하지 않는다.
+MIN_PHASE_SAMPLES: Final = 20
+
 def reach_band(reach_m: float) -> str:
     """reach를 버킷 라벨로. 경계는 `REACH_BAND_M` 격자다."""
     index = math.floor(round(reach_m / REACH_BAND_M, _BAND_EPSILON_DIGITS))
@@ -556,16 +579,23 @@ def percentile_ladder(scores: Sequence[float]) -> dict[str, float]:
     return ladder
 
 
-def expert_percentile(bucket: Mapping[str, object], score: float) -> int | None:
+def expert_percentile(
+    bucket: Mapping[str, object], score: float, *, mode: str = "fold"
+) -> int | None:
     """이 점수가 숙련자 분포에서 어디쯤인지. 사다리가 없거나 버킷이 바뀌었으면 `None`.
 
     사다리는 **잰 당시의 버킷에만** 유효하다. 평균·산포만 다시 굽고 사다리를 그대로 두면
     틀린 백분위가 조용히 나간다 — `reference_pass_count`로 대조한다.
+
+    **`mode`가 사다리를 고른다.** 위상 점수와 접기 점수는 다른 분포다(실측 p50 0.704 vs
+    0.763). 접기용 사다리에 위상 점수를 대면 전원이 낮게 나온다.
     """
-    calibration = bucket.get("expert_scores")
+    key = "expert_scores_phase" if mode == "phase" else "expert_scores"
+    calibration = bucket.get(key)
     if not isinstance(calibration, Mapping):
         return None
-    if calibration.get("reference_pass_count") != bucket.get("n"):
+    expected = bucket.get("n") if key == "expert_scores" else calibration.get("reference_pass_count")
+    if calibration.get("reference_pass_count") != expected:
         return None
     reached: int | None = None
     for point in PERCENTILE_POINTS:
@@ -573,3 +603,82 @@ def expert_percentile(bucket: Mapping[str, object], score: float) -> int | None:
         if isinstance(value, (int, float)) and score >= float(value):
             reached = point
     return 0 if reached is None else reached
+
+
+# --- 위상별 레퍼런스 ---------------------------------------------------------
+
+
+@dataclass
+class PhaseAccum:
+    """위상 하나의 관절 분포. 점 레퍼런스의 `BucketAccum`과 같은 재료를 위상마다 쌓는다."""
+
+    joints: dict[str, BucketAccum] = field(default_factory=dict)
+
+    def add(self, normalized: Mapping[str, Vec3], worker: str) -> None:
+        slot = self.joints.setdefault("_", BucketAccum())
+        slot.add(normalized, worker)
+
+    def payload(self) -> dict[str, object]:
+        slot = self.joints.get("_")
+        if slot is None:
+            return {"n": 0, "joints": {}}
+        body = slot.payload()
+        return {"n": body["n"], "joints": body["joints"]}
+
+
+def phase_sigmas(
+    phase_poses: Sequence[Mapping[str, Vec3] | None],
+    phase_reference: Sequence[Mapping[str, object] | None],
+    excluded: Sequence[str] = (),
+) -> list[JointSigma]:
+    """위상마다 σ를 내고 관절별로 **위상 RMS**를 낸다.
+
+    축 집계와 같은 이유로 RMS다. 산술평균을 쓰면 **스트로크 일부에서만 틀린 자세가
+    맑은 위상 수만큼 희석된다** — 12위상 중 5위상이 σ 1.0이면 평균은 0.42지만 RMS는
+    0.64다. 어느 위상에서 틀렸든 그 관절이 틀린 것이다.
+
+    위상 수를 분모로 쓰지 않고 **대응이 있는 위상만** 세는 이유도 같다 — 대응이 빠진
+    위상을 0으로 세면 그런 시퀀스가 유리해진다.
+
+    대응이 없는 위상(`None`)과 표본이 얕은 위상은 **건너뛴다** — 0으로 채우면
+    "그 구간은 완벽했다"가 된다.
+    """
+    drop = set(excluded)
+    collected: dict[str, list[JointSigma]] = {}
+    for pose, entry in zip(phase_poses, phase_reference):
+        if pose is None or not isinstance(entry, Mapping):
+            continue
+        if int(entry.get("n", 0) or 0) < MIN_PHASE_SAMPLES:
+            continue
+        for item in joint_sigmas(pose, entry):
+            if item.joint in drop:
+                continue
+            collected.setdefault(item.joint, []).append(item)
+    out: list[JointSigma] = []
+    for name in SCORING_JOINTS_ARM:
+        items = collected.get(name)
+        if not items:
+            continue
+        count = len(items)
+        radial = [i.radial_sigma for i in items if i.radial_sigma is not None]
+        angular = [i.angular_sigma for i in items if i.angular_sigma is not None]
+        deltas = [i.radius_delta_m for i in items if i.radius_delta_m is not None]
+        worst = max(items, key=lambda i: i.sigma)
+        out.append(
+            JointSigma(
+                joint=name,
+                sigma=min(MAX_SIGMA, math.sqrt(sum(i.sigma ** 2 for i in items) / count)),
+                axis_sigmas=tuple(  # type: ignore[arg-type]
+                    sum(i.axis_sigmas[axis] for i in items) / count for axis in range(3)
+                ),
+                # 거리는 **가장 벗어난 위상**의 것을 싣는다. 평균하면 "언제 얼마나
+                # 벗어났나"가 흐려지고, 교정 문구가 가리키는 크기가 실제보다 작아진다.
+                delta_m=worst.delta_m,
+                radial_sigma=sum(radial) / len(radial) if radial else None,
+                angular_sigma=sum(angular) / len(angular) if angular else None,
+                radius_delta_m=(
+                    max(deltas, key=abs) if deltas else None
+                ),
+            )
+        )
+    return out
