@@ -11,6 +11,10 @@
 python3 에서도 돈다. 검사 규칙을 여기에 복제하지 않는 이유는, 복제본은 결국 구현과
 어긋나면서도 계속 통과하기 때문이다.
 
+지연은 **답변 길이로 정규화해서** 본다. 응답마다 출력 길이가 다르고 지연은
+출력 토큰 수에 거의 비례하므로(§11.4: 디코드 99.6%), 원시 지연을 조건 간에 비교하면
+길이 분산이 효과를 덮는다. 실제로 MTP 1.450배가 원시 지연 비교에서는 사라졌다.
+
 게이트(설계 2026-09-29 §11 S4):
   - 계약 형태 전부 통과
   - 본문의 모든 문서 id 가 citations 안에 있음
@@ -84,6 +88,7 @@ def main(argv: list[str]) -> int:
         answer = str(data.get("answer", ""))
         citations = [str(c) for c in (data.get("citations") or [])]
         body_text = answer.split("\n[근거]")[0]
+        chars = len(answer)
         row = {
             "i": index,
             "question": question,
@@ -91,6 +96,8 @@ def main(argv: list[str]) -> int:
             "latency_ms": latency_ms,
             "answer": answer,
             "citations": citations,
+            "answer_chars": chars,
+            "ms_per_100_chars": round(latency_ms / chars * 100, 1) if chars else None,
             "shaped": is_contract_shaped(answer),
             "ids_within_citations": set(document_ids(answer)) <= set(citations),
             "body_lines": body_text.count("\n") + 1,
@@ -99,16 +106,17 @@ def main(argv: list[str]) -> int:
         ok = row["shaped"] and row["ids_within_citations"]
         print(
             f"{index:2d} {'OK  ' if ok else 'FAIL'} rag={use_rag} "
-            f"lines={row['body_lines']} cites={len(citations)} {latency_ms:>6}ms"
+            f"lines={row['body_lines']} cites={len(citations)} "
+            f"{latency_ms:>6}ms {chars:>4}자 {row['ms_per_100_chars']:>6}ms/100자"
         )
 
-    out = Path(f"smoke-{label}.json")
-    out.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
-
     done = [r for r in rows if "error" not in r]
+    out = Path(f"smoke-{label}.json")
     if not done:
-        print("응답 없음")
+        # 전부 실패한 실행이 직전의 성공 결과를 덮어쓰지 않게 한다.
+        print(f"응답 없음 — {out} 를 덮어쓰지 않았다")
         return 1
+    out.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
     shaped = sum(1 for r in done if r["shaped"])
     within = sum(1 for r in done if r["ids_within_citations"])
     multiline = sum(1 for r in done if r["body_lines"] > 1)
@@ -129,6 +137,14 @@ def main(argv: list[str]) -> int:
     print(
         f"지연 p50={latencies[len(latencies)//2]}ms "
         f"p90={latencies[min(len(latencies)-1, int(len(latencies)*0.9))]}ms max={latencies[-1]}ms"
+    )
+    # 조건 간 비교는 이 줄로 한다. 원시 지연은 답변 길이 분산에 지배된다.
+    norm = sorted(r["ms_per_100_chars"] for r in done if r["ms_per_100_chars"] is not None)
+    total_ms = sum(r["latency_ms"] for r in done)
+    total_chars = sum(r["answer_chars"] for r in done)
+    print(
+        f"길이 정규화  p50={norm[len(norm)//2]}ms/100자  "
+        f"전체 {total_ms/total_chars*100:.1f}ms/100자 ({total_chars}자)"
     )
     print(f"저장: {out}")
     return 0 if (shaped == len(done) and within == len(done) and leaked == 0) else 1
