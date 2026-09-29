@@ -523,3 +523,36 @@ def test_the_composite_route_falls_back_when_the_gun_is_fixed(
     result = _post(client, frozen)
     assert result["scoring_mode"] == "fold", "정렬이 불가능한데 위상으로 쟀다고 나왔다"
     assert result["similarity_score"] is not None, "접기로 내려가지 않았다"
+
+
+def test_the_summary_never_contradicts_the_fields(client, monkeypatch, tmp_path) -> None:
+    """**한 응답이 두 숫자를 말하면 안 된다.**
+
+    실제로 그랬다 — `expert_percentile`은 0인데 `summary`는 "숙련자 10백분위"였다.
+    요약이 백분위를 따로 계산하면서 `mode`를 안 넘겨 접기 사다리를 썼기 때문이다.
+    거리도 갈렸다: 교정은 반경 편차 31 cm를, 요약은 3D 편차 57 cm를 말했다.
+
+    깨뜨리는 법: 요약이 백분위나 거리를 다시 계산하면 실패한다.
+    """
+    import importlib
+
+    stages_test = importlib.import_module("mcp_servers.test_pose_stages_route")
+    stages_test._write_phase_reference(
+        tmp_path, monkeypatch, stages_test._sweep(stages_test._sample_body("SEQ-002"))
+    )
+    body = stages_test._sweep(
+        stages_test._sample_body("SEQ-002"), arm_shift=(0.0, 0.0, 0.7), first_half_only=False
+    )
+    result = _post(client, body)
+    summary = result["summary"]
+
+    percentile = result["expert_percentile"]
+    assert isinstance(percentile, int)
+    written = "숙련자 하위 0%" if percentile == 0 else f"숙련자 {percentile}백분위"
+    assert written in summary, f"필드는 {percentile}인데 요약은 다르게 적었다: {summary}"
+
+    assert result["corrections"], "이 교란은 교정을 내야 한다 — 검사가 공허하다"
+    quoted = result["corrections"][0]["correction_text"]
+    assert quoted[:-1] in summary, (
+        f"요약이 교정 문장을 인용하지 않고 따로 적었다\n  교정: {quoted}\n  요약: {summary}"
+    )

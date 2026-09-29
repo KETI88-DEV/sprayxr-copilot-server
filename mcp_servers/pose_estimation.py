@@ -682,6 +682,8 @@ def analyze_sequence(payload: SequenceRequest) -> MCPResponse:
 
     report = posture_sequence.session_report(session, payload.floor_height_m)
 
+    # 백분위는 **한 번만** 낸다. 필드와 문장이 따로 계산하면 같은 응답이 두 숫자를 말한다 —
+    # 실제로 그랬다(필드 0, 문장 "10백분위"). 문장이 모드를 안 넘겨 접기 사다리를 썼다.
     if phase_result is not None:
         score = phase_result.score
         corrections = list(phase_result.corrections)
@@ -692,6 +694,9 @@ def analyze_sequence(payload: SequenceRequest) -> MCPResponse:
             sigmas, pose_similarity.JOINT_LABELS, support=support, reference=bucket.get("joints")
         )
         plans = [() for _ in corrections]
+    percentile = (
+        None if score is None else arm_reference.expert_percentile(bucket, score, mode=scoring_mode)
+    )
 
     reason: str | None
     if gate.status == "reject":
@@ -726,11 +731,7 @@ def analyze_sequence(payload: SequenceRequest) -> MCPResponse:
         "similarity_score": None if score is None else round(score, 4),
         # 점수의 절대값은 축 수·산포 하한·가중치가 스케일을 건드려 해석하기 어렵다.
         # **백분위가 해석 가능한 쪽이다** — 숙련자 분포에서 어디쯤인지.
-        "expert_percentile": (
-            None
-            if score is None
-            else arm_reference.expert_percentile(bucket, score, mode=scoring_mode)
-        ),
+        "expert_percentile": percentile,
         "correction_mode": "joint_only",
         # 어느 채점을 썼나. `phase`면 DTW 정렬로 위상마다 쟀고, `fold`면 시퀀스를
         # 한 점으로 접어 쟀다. 두 점수는 **다른 분포**라 나란히 놓으면 안 된다.
@@ -762,11 +763,7 @@ def analyze_sequence(payload: SequenceRequest) -> MCPResponse:
             "frozen_joints": report["frozen_joints"],
             "evicted_sessions": _SESSIONS.evicted,
         },
-        "summary": _sequence_summary(
-            status, reason, report, score,
-            None if score is None else arm_reference.expert_percentile(bucket, score),
-            corrections,
-        ),
+        "summary": _sequence_summary(status, reason, report, score, percentile, corrections),
     })
 
 
@@ -786,8 +783,9 @@ def _sequence_summary(
     if status == "degraded":
         head += "(참고용입니다)"
     if corrections:
-        item = corrections[0]
-        head += f". 가장 벗어난 곳은 {item.label}입니다(σ {item.sigma:.1f}, {item.distance_m * 100:.0f} cm)"
+        # **교정의 문장을 그대로 인용한다.** 요약이 거리를 따로 적으면 두 숫자가 갈린다 —
+        # 실제로 교정은 반경 편차 31 cm를, 요약은 3D 편차 57 cm를 말하고 있었다.
+        head += f". {corrections[0].text()[:-1]}"
     else:
         head += ". 여섯 관절 모두 숙련자 통상 범위 안입니다"
     slope = report.get("tracking_slope")
