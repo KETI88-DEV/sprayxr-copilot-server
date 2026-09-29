@@ -191,13 +191,22 @@ if grammar is not None:
 
 호출자(`agent_pipeline._generate_direct`)가 경로와 `retrieved`에 따라 두 정적 문법 중 하나를 고른다. 도구 경로는 이번 범위가 아니므로 문법을 주지 않는다.
 
-**기동 전 실물 확인 항목** (지금 단정할 수 없다 — 이미지 버전이 `VLLM_IMAGE` 환경변수로 외부 지정이다):
+**실물 확인 항목과 그 현재 상태.** 이 개발 호스트에는 vLLM 서버가 없다 — 없어서 못 만든 것이 아니라 설계다(§3.7). 5개 중 3개는 토크나이저만으로 해소했다.
 
-1. `guided_grammar`(또는 당해 버전의 등가 필드명)를 `/v1/chat/completions`가 받는지.
-2. `[답변]`·`[근거]` 같은 다중바이트 리터럴이 토크나이저 경계와 충돌하지 않는지. 충돌하면 문법을 바이트 단위로 재작성해야 한다.
-3. `chat_template_kwargs.enable_thinking=false`와 동시 사용 시 템플릿이 `<think>`를 전혀 내지 않는지. 낸다면 문법 `root`가 선행 `<think>...</think>`를 허용해야 한다. 패스트 경로는 `enable_thinking=false`이므로 기본 가정은 "내지 않는다"이고, 이는 **확인 항목이다.**
-4. `repetition_penalty=1.15`와의 상호작용. 문법이 토큰을 1개로 강제하는 구간에서는 패널티가 무력하고 자유 `body` 구간에서만 작용한다. 형태상 문제는 없으나 본문 품질은 §5가 잰다.
-5. 문법 컴파일 p95 — §3.3의 동적 문법 채택 여부를 결정한다.
+| # | 항목 | 상태 |
+|---|---|---|
+| 1 | `guided_grammar`(또는 당해 버전 등가 필드명)를 `/v1/chat/completions`가 받는지 | **미해소.** 배포 빌드에 달렸고 `VLLM_IMAGE`는 외부 지정이다. Spark에서만 정본 답이 나온다 |
+| 2 | `[답변]`·`[근거]` 다중바이트 리터럴의 토큰 경계 충돌 | **해소 — 충돌 없다.** 서빙 번들 토크나이저(vocab 248,044)에서 `답`=152065, `변`=151315, `근`=150858, `거`=89011로 **각 글자가 완결된 단일 토큰**이다. `[답변] `은 `[58, 152065, 151315, 60, 220]`의 정확한 토큰 열이다. `DOC-doc_0086-C0001`도 `DOC`/`-doc`/`_`/숫자 개별 토큰으로 쪼개져 `digit` 규칙과 1:1 대응한다. 바이트 단위 재작성은 필요 없다 |
+| 3 | `enable_thinking=false`와의 병용 | **해소 — 안전하다.** 템플릿이 `enable_thinking=False`에서 생성 프롬프트 말미에 **닫힌 빈 블록** `<think>\n\n</think>\n\n`을 미리 박는다. 생성은 `</think>` 이후부터 시작하므로 첫 토큰이 답변의 첫 토큰이고 `root ::= "[답변] "`가 그대로 맞는다. 반대로 `enable_thinking=True`에서는 프롬프트가 열린 `<think>\n`으로 끝나므로 **같은 문법이 템플릿이 초대한 추론을 금지한다** → `_generate_direct`가 thinking이 켜지면 문법을 버리고 경고한다 |
+| 4 | `repetition_penalty=1.15`와의 상호작용 | **구조적으로 해소.** 문법이 토큰을 1개로 강제하는 구간에서 패널티는 무력하고 자유 `body` 구간에서만 작용한다. 본문 품질 영향은 §5가 잰다 |
+| 5 | 문법이 컴파일되는지와 컴파일 p95 | **미해소.** 다만 vLLM 전체가 아니라 `xgrammar` 단독으로 서빙 토크나이저를 물려 검증할 수 있다. GBNF 문법 오류를 가장 싸게 잡는 경로다 |
+
+### 3.7 왜 개발 호스트에 vLLM 서버가 없는가
+
+- AGENTS.md가 vLLM을 **필수 의존성으로 만들지 못하게** 한다. `ship-paint-trainer`에 `vllm` 모듈이 없다(실측: `ModuleNotFoundError`). 학습·평가 기본 백엔드는 HF NF4다.
+- `deploy/docker-compose.yml`에는 vllm 서비스 정의가 **아예 없다.** 유일한 정의는 `deploy/spark/compose.yaml`이고 `platform: linux/arm64` — aarch64/GB10 전용이라 이 x86 호스트에서 실행되지 않는다.
+- 즉 `backend: openai` 경로는 Spark를 위해 만들어졌고 거기서 검증됐다. 개발 호스트의 다른 vLLM 버전에서 나온 항목 1의 답은 **정본이 아니고 전이되지 않는다.**
+- 하드웨어는 있다: A40 44.3 GiB(실측, 현재 0 MiB 사용), FP8 번들 29G도 이 호스트에 있다. BF16 52G는 들어가지 않는다. 다만 A40은 Ampere(SM 8.6)이므로 FP8 block-128 서빙 지원과 `Qwen3_5ForConditionalGeneration`(Gated DeltaNet 하이브리드·MTP·비전 타워) 지원이 x86 빌드에서 보장되지 않는다. 이 두 위험 때문에 개발용 vLLM 기동은 항목 1의 답을 얻는 수단으로는 비싸고 불확실하다.
 
 ## 4. 계약 개정안
 
@@ -250,18 +259,36 @@ if grammar is not None:
 |---|---|---|---|
 | **T1** | 인용 소속 검사를 **경계에서** 한다. `run()`은 이미 `result["rag_chunks"]`에 검색 청크를 그대로 실어 보내므로(`agent_pipeline.py:1184`) **`run()`을 전혀 고치지 않는다.** `result["citations"]`도 불변이다 — `run_rag_eval.py:208`과 `eval_metrics.py:359`가 이 필드로 채점하므로 AGENTS.md의 "`run()` 동작을 평가용으로 안정하게 유지" 조항에 걸린다 | `live_response_contract.retrieved_chunk_ids`, `copilot_router.py` | 단위: 본문 id ⊄ 검색집합 → 드롭·경고. `use_rag='N'` → 본문 DOC id 전멸·`citations=[]`. `rag_chunks`의 비-dict 원소 무시 |
 | **T2** | `parse_knowledge_answer` 전역 함수로 `normalize_fast_knowledge_response` 대체(§3.4). 라우터와 `run_streaming` 배선 | `live_response_contract.py`, `copilot_router.py`, `agent_pipeline.py:1004` | 단위: §1.1의 9개 라벨 시퀀스 전부를 입력으로 넣어 **모두** 계약 형태 반환. 중복 `[근거]` 병합. 섹션 없는 입력도 `[답변]` 접두. 불변식 "answer의 모든 DOC id ∈ citations" |
-| **T3** | 문법 문자열 2종(GBNF, 정적 상수). **실물 확인은 미완** — 이 호스트는 `backend: hf`로 돌고 vLLM 서버가 없다. §3.6의 5개 항목은 Spark 또는 vLLM 기동 서버에서 확인한다 | `trainer/scripts/answer_grammar.py` | 단위 완료: 두 문법의 구조 단언(증거 없는 문법에 `DOC-`·`근거` 부재, `evidence?` 1회, 라벨 리터럴 부재). **실물 스모크 미완**: 문법 적용 요청 10건 100% 계약 형태, 컴파일 p95 |
+| **T3** | 문법 문자열 2종(GBNF, 정적 상수). §3.6의 5개 확인 항목 중 **2·3·4는 해소**, 1·5는 미해소 | `trainer/scripts/answer_grammar.py`, `agent_pipeline.py` | 단위 완료: 두 문법의 구조 단언(증거 없는 문법에 `DOC-`·`근거` 부재, `evidence?` 1회, 라벨 리터럴 부재), thinking이 켜지면 문법을 버린다. **미완**: xgrammar 컴파일 검증(항목 5), Spark 실물 스모크 10건 100% 계약 형태(항목 1) |
 | **T4** | `build_payload` 선택적 `extra_body` + config 스위치 + 폴백 + `/api/ready` 노출 | `openai_backend.py`, `agent_pipeline.py`, `rag_config_spark_vllm.yaml`, `readiness.py` | 단위 완료: 문법 없는 payload는 기존과 바이트 동일(`extra_body`만 추가), 400 → `StructuredOutputUnsupportedError` → 1회 폴백 후 성공, 컨텍스트 길이 400은 문법 탓으로 오분류하지 않음, 폴백 off면 전파 |
 | **T5** | `run_rag_eval.py`에 구조 준수율·증거 밖 인용률·인용 재현율 추가. 계측기는 `live_response_contract.is_contract_shaped`이고, 파서 출력이 항상 이 검사를 통과한다는 불변식을 시험으로 묶었다 | `run_rag_eval.py`, `live_response_contract.py` | 단위 완료: 형태 검사 12개 경계 사례, 파서 출력 16입력 × 불변식. `citations_outside_evidence`는 검색 집합을 모르는 행에서 0이 아니라 `None`이다 — 측정 불가를 무결점으로 세지 않는다 |
-| **T6** | 게이트 실행: `off` vs `grammar`, 8회 → 필요시 18회 | 보고서 | §5 표 전체 |
-| **T7** | 통과 시 `grammar` 기본값. 계약 문서 §4 개정 반영 | `docs/ai_copilot_v2_5_deployment_contract.md` | `test_spark_deploy_contract.py` 갱신 |
+| **T6** | 게이트 실행: `off` vs `grammar`, 8회 → 필요시 18회. **Spark 필요** | 보고서 | §5 표 전체 |
+| **T7** | 계약 문서 개정 — `citations`가 검색 집합이 아니라 인용 집합임을 §9.3과 §18.8에 명문화 | `docs/ai_copilot_v2_5_deployment_contract.md` | 완료. 계약 §9.3은 이미 "사용한 문서만 넣는다"였으므로 이는 **계약 변경이 아니라 코드의 계약 위반 시정**이다 |
+| **T8** | 게이트 통과 시 `structured_output: "grammar"` 기본값. **Spark 필요** | `rag_config_spark_vllm.yaml` | `test_spark_deploy_contract.py` 갱신 |
 
-T1·T2는 순수 Python이고 컨테이너 pytest로 끝난다. T3만 실물 vLLM이 필요하며, DGX Spark 또는 개발 서버의 기동된 서버를 쓴다. x86 호스트에서 Spark 이미지를 빌드하지 않는다.
+T1·T2·T4·T5·T7은 순수 Python·문서이고 컨테이너 pytest로 끝났다. 남은 것은 §11이다.
+
+## 11. Spark에서 할 일 (개발 호스트에서 불가능한 것만)
+
+§3.7의 이유로 이 목록은 **DGX Spark에서만** 답이 나온다. 개발 호스트의 다른 vLLM 버전에서 나온 답은 정본이 아니다.
+
+| 순서 | 할 일 | 판정 기준 | 실패 시 |
+|---|---|---|---|
+| S1 | 배포 vLLM 버전을 기록한다(`GET /version` 또는 이미지 digest) | — | — |
+| S2 | 문법 필드명을 확인한다. `extra_body.guided_grammar`가 거부되면 당해 버전의 등가 필드(`guided_decoding`, `structured_outputs` 등)로 `build_payload`를 고친다 | 문법을 실은 요청이 200 | `openai_backend.build_payload`만 수정. 나머지 배선은 불변 |
+| S3 | §3.2의 두 문법이 컴파일되는지 확인하고 컴파일 p95를 잰다 | 컴파일 성공. p95 < 30ms면 §3.3의 동적 문법(증거 id 열거)도 검토 가능 | GBNF 구문을 당해 xgrammar 문법으로 조정. 문법 문자열만 수정 |
+| S4 | `structured_output: "grammar"`로 스모크 10건 | 10건 전부 `is_contract_shaped` 통과, 증거 밖 인용 0건 | `off`로 되돌리고 S2·S3 재검 |
+| S5 | `run_rag_eval.py`를 `off`와 `grammar`로 각 8회 실행 | §5 표: `manual_score` Welch 95% CI 하한 > −0.2, 형태 100%, 증거 밖 0%, p50/p90 +5% 이내 | 8→18회 확장. 그래도 실패면 `off` 유지 — **D1~D4 수정은 남는다** |
+| S6 | 통과 시 `structured_output: "grammar"`를 기본값으로 커밋(T8) | `test_spark_deploy_contract.py` 통과 | — |
+
+**게이트 해석 주의:** §5 말미의 −0.040 상쇄는 인용 필터링의 결정론적 결과다. 비교는 `off`(이번 수정 후) vs `grammar`(이번 수정 후)로 하고, 수정 전 수치를 기준선으로 쓰면 문법 탓이 아닌 하락을 문법에 돌린다.
+
+**전제:** Spark의 번들에는 이번 커밋들이 반영된 `agent-api` 이미지가 필요하다. 번들 재작성 절차는 `deploy/spark/README.md`를 따르고, x86 호스트에서 Spark 이미지를 빌드하지 않는다.
 
 ## 8. 미확인 전제
 
 1. **패스트 경로의 실제 이탈률.** §1의 18.3%는 도구 프롬프트 표본이다. `fast_system`(2섹션)은 지시가 더 단순하므로 이탈률이 낮을 [추정]. T6이 기준선으로 측정한다. 낮게 나와도 D1~D4는 코드 사실이므로 작업은 유효하다.
 2. **v6.1 LoRA가 `[답변]`/`[근거]` 2섹션 형태로 SFT됐는지.** 학습 데이터에서 확인해야 한다. 5섹션만 학습됐다면 2섹션 문법도 약한 분포 이동이며, §5의 Δ=0.2가 이를 잡는다.
-3. **배포 vLLM의 문법 지원 여부와 필드명.** §3.6의 확인 항목 1.
+3. **배포 vLLM의 문법 지원 여부와 필드명.** §3.6의 확인 항목 1 → §11의 S2.
 4. **`citations` 축소를 SIM이 감당하는지.** 계약 개정 통지 대상(§4).
 5. **동적 문법의 컴파일 비용.** §3.3의 선택 사항은 이 측정 없이 채택하지 않는다.

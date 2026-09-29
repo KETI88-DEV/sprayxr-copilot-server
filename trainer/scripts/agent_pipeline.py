@@ -788,6 +788,13 @@ class AgentPipeline:
         if isinstance(self.model, OpenAIChatBackend):
             max_tokens = min(int(gen_cfg.get("max_new_tokens", 768)), ROUTE_MAX_TOKENS["fast"])
             effective = None if getattr(self, "_structured_output_disabled", False) else grammar
+            if effective is not None and enable_thinking:
+                # With enable_thinking=False the chat template pre-closes an empty think
+                # block, so generation starts at the answer and the grammar's root matches.
+                # With thinking on the prompt ends inside an open <think>, so the same
+                # grammar would forbid the reasoning the template just invited.
+                logger.warning("grammar dropped: it is only valid with enable_thinking=false")
+                effective = None
             try:
                 return self.model.complete_chat(
                     messages,

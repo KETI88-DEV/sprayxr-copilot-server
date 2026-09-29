@@ -455,8 +455,11 @@ SSE의 판정 값은 같은 시퀀스 HTTP 응답의 값과 일치해야 한다.
 
 ### 9.3 Query 불변 규칙
 
-- `use_rag="Y"`이면 실제 검색을 수행하고 사용한 문서만 `citations`에 넣는다.
-- `use_rag="N"`이면 `retrieval_used=false`, `citations=[]`다.
+- `use_rag="Y"`이면 실제 검색을 수행하고 사용한 문서만 `citations`에 넣는다. `citations`는 **이번 요청이 검색한 청크의 부분집합**이며 검색 집합 자체가 아니다. 답변이 기대지 않은 문서는 들어가지 않으므로 보통 1~3개다.
+- **`answer` 본문에 나타나는 모든 문서 id는 `citations`에 있다.** 답변이 인용했으나 이번 요청이 검색하지 않은 id는 본문과 배열에서 함께 제거되고 서버 경고로 남는다. 본문과 배열이 어긋나는 응답은 존재하지 않는다.
+- `use_rag="N"`이면 `retrieval_used=false`, `citations=[]`이고, **`answer` 본문에도 문서 id가 나타나지 않는다.** 문서를 주지 않은 요청이 출처를 제시할 수는 없다.
+- `task_type="knowledge_search"`의 `answer`는 정확히 `[답변] <본문>` 또는 `[답변] <본문>\n[근거] <id>[, <id>]*` 형태다. 다른 절(`[판정]`·`[원인]`·`[조치]`)은 포함되지 않는다 — 측정값 없이 판정하지 않기 때문이다. 답변을 생성하지 못한 경우에도 이 형태로 `[답변] 답변을 생성하지 못했습니다.`를 반환한다.
+  - 설계·근거: `docs/superpowers/specs/2026-09-29-knowledge-answer-structured-output-design.md`
 - 세션이 있으면 최신 누적 상태를 사용한다.
 - 세션이 없는 일반 지식 질의는 context를 `not_available`로 반환할 수 있다.
 - 내부 도구 호출, 프롬프트 또는 사고 과정은 반환하지 않는다.
@@ -1235,7 +1238,7 @@ LLM 응답 시간은 모델 정밀도와 서빙 백엔드에 따라 달라질 �
 ```
 
 - `hits[].text`는 실제 인덱스 chunk 원문이며 LLM이 만든 문장이 아니다.
-- `citation_id`는 최종 Query 응답의 `citations`와 동일한 값이다.
+- `citation_id`는 최종 Query 응답의 `citations`와 **같은 식별자 공간**이며, 포함 관계는 `Query.citations ⊆ result.citations`다. 이 인터페이스의 `citations`는 검색한 청크 전체(≤ `top_k`)이고, Query 응답의 `citations`는 그중 답변이 실제로 인용한 것이다. 두 값이 같다고 가정하는 클라이언트는 답변이 기대지 않은 문서까지 출처로 표시한다.
 - 검색 결과가 없으면 `analysis_status="available"`, `retrieval_used=true`, `hits=[]`, `citations=[]`를 반환한다. 검색 서비스 장애만 `status="error"`다.
 - `use_rag="N"`인 Query는 이 인터페이스를 호출하지 않는다.
 

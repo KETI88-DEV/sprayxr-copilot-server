@@ -248,3 +248,22 @@ def test_fallback_switched_off_lets_the_rejection_surface() -> None:
 
     with pytest.raises(StructuredOutputUnsupportedError):
         pipe._generate_direct(_MESSAGES, grammar=KNOWLEDGE_GRAMMAR_NO_EVIDENCE)
+
+
+def test_grammar_is_dropped_when_thinking_is_on() -> None:
+    """Given thinking enabled, When generating, Then the grammar is not sent.
+
+    The chat template pre-closes an empty ``<think>`` block only when thinking is off; with
+    it on the prompt ends inside an open block, which this grammar's root forbids.
+    """
+    sent: list[bool] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        sent.append("extra_body" in json.loads(request.content))
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=_sse_ok())
+
+    pipe = _pipeline(_handler, structured_output="grammar")
+    pipe._generate_direct(_MESSAGES, enable_thinking=True, grammar=KNOWLEDGE_GRAMMAR_NO_EVIDENCE)
+    pipe._generate_direct(_MESSAGES, enable_thinking=False, grammar=KNOWLEDGE_GRAMMAR_NO_EVIDENCE)
+
+    assert sent == [False, True]
