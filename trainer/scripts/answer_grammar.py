@@ -1,25 +1,35 @@
-"""Decode-time grammars for the fast knowledge answer.
+"""Decode-time constraint for the fast knowledge answer.
 
-The grammar mirrors the ``[답변]``/``[근거]`` text scaffold the v6.1 adapter was
+The constraint mirrors the ``[답변]``/``[근거]`` text scaffold the v6.1 adapter was
 trained on, rather than asking for JSON: constraining the shape the model already
 learned keeps the token distribution close to the SFT target. See
-``docs/superpowers/specs/2026-09-29-knowledge-answer-structured-output-design.md`` §3.1.
+``docs/superpowers/specs/2026-09-29-knowledge-answer-structured-output-design.md``.
 
-What the grammar buys, structurally rather than by prompt text:
+**Measured against the deployed server (vLLM 0.29.0, Spark, 2026-09-29).** The
+constraint travels as ``structured_outputs.regex`` on the chat request. What was
+confirmed there, with a falsifiable probe (a sentinel the model has no reason to emit):
+
+* ``structured_outputs`` really constrains generation — ``{"regex": "SENTINEL-[0-9][0-9][0-9]-END"}``
+  produced exactly ``SENTINEL-102-END``.
+* ``guided_grammar``, at the top level and nested under ``extra_body``, is **silently
+  ignored**: the request returns 200 and the answer is unconstrained. Never send it.
+* ``guided_decoding_backend`` is not a field of ``ChatCompletionRequest`` (only of the
+  batch variant), so the backend is chosen by the server.
+* ``structured_outputs.grammar`` accepts the GBNF dialect too, but ``regex`` is used
+  because it has no dialect ambiguity.
+
+What the constraint buys, structurally rather than by prompt text:
 
 * ``[근거]`` can appear at most once (measured: 23 of 240 stored responses repeat it).
-* ``[판정]``/``[원인]``/``[조치]`` cannot appear as headings, so the fast route cannot
-  publish a verdict it has no measurements for.
-* With nothing retrieved, ``cite`` is absent from the grammar, so a request that was
-  given no documents cannot answer with document ids.
+* ``[판정]``/``[원인]``/``[조치]`` cannot appear, so the fast route cannot publish a
+  verdict it has no measurements for. The body forbids ``[`` **anywhere**, not only at a
+  line start: an unconstrained probe appended ``[분석] 이 답변은…`` on the same line, and
+  a line-start-only rule would have let that through.
+* With nothing retrieved, the evidence clause is absent from the pattern, so a request
+  that was given no documents cannot answer with document ids.
 
-The ids the grammar admits are only shape-checked; membership in the request's
-retrieved set is decided by ``live_response_contract.parse_knowledge_answer``.
-
-**Unverified against a server.** The exact request field and the handling of the
-multi-byte ``[답변]`` literal depend on the deployed vLLM build, which is chosen
-outside this repo (``VLLM_IMAGE``). ``§3.6`` lists what to confirm; until then
-``structured_output_fallback`` keeps a server that rejects the grammar serving.
+The ids the pattern admits are only shape-checked; membership in the request's retrieved
+set is decided by ``live_response_contract.parse_knowledge_answer``.
 """
 
 from __future__ import annotations
@@ -27,55 +37,46 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, Final, Literal, get_args
 
-StructuredOutputMode = Literal["grammar", "off"]
+StructuredOutputMode = Literal["on", "off"]
 
 _MODES: Final[tuple[str, ...]] = get_args(StructuredOutputMode)
 DEFAULT_MODE: Final[StructuredOutputMode] = "off"
 
-# A line may contain brackets but must not start with one, which is what keeps a
-# section heading from being reborn inside the answer body.
-_SHARED_RULES: Final[str] = """
-body ::= bodyline ("\\n" bodyline)*
-bodyline ::= bodyhead bodytail*
-bodyhead ::= [^\\n\\[]
-bodytail ::= [^\\n]
-"""
+# A body line holds at least one character and no ``[`` at all; see the module docstring
+# for why the bracket is banned outright rather than only at a line start.
+_BODY_LINE: Final[str] = r"[^\n\[]+"
+_DOC_ID: Final[str] = r"DOC-[A-Za-z0-9_-]+-C[0-9][0-9][0-9][0-9]"
 
-_CITE_RULES: Final[str] = """
-cite ::= "DOC-" idchar+ "-C" digit digit digit digit
-idchar ::= [a-zA-Z0-9_-]
-digit ::= [0-9]
-"""
+ANSWER_REGEX_NO_EVIDENCE: Final[str] = rf"\[답변\] {_BODY_LINE}(\n{_BODY_LINE})*"
 
-KNOWLEDGE_GRAMMAR_WITH_EVIDENCE: Final[str] = (
-    '\nroot ::= "[답변] " body evidence?\nevidence ::= "\\n[근거] " cite (", " cite){0,2}\n'
-    + _SHARED_RULES
-    + _CITE_RULES
-).strip() + "\n"
-
-KNOWLEDGE_GRAMMAR_NO_EVIDENCE: Final[str] = (
-    '\nroot ::= "[답변] " body\n' + _SHARED_RULES
-).strip() + "\n"
+# Body lines cannot start with ``[`` and the evidence line must, so the newline branch is
+# unambiguous. At most three ids, matching the observed citation count (median 1, max 3).
+ANSWER_REGEX_WITH_EVIDENCE: Final[str] = (
+    ANSWER_REGEX_NO_EVIDENCE + rf"(\n\[근거\] {_DOC_ID}(, {_DOC_ID}){{0,2}})?"
+)
 
 
-def knowledge_grammar(*, has_evidence: bool) -> str:
-    """The grammar for one fast knowledge request; both variants are module constants."""
-    return KNOWLEDGE_GRAMMAR_WITH_EVIDENCE if has_evidence else KNOWLEDGE_GRAMMAR_NO_EVIDENCE
+def answer_regex(*, has_evidence: bool) -> str:
+    """The constraint for one fast knowledge request; both variants are module constants."""
+    return ANSWER_REGEX_WITH_EVIDENCE if has_evidence else ANSWER_REGEX_NO_EVIDENCE
 
 
 def structured_output_mode(config: Mapping[str, Any]) -> StructuredOutputMode:
     """``llm.structured_output``; an unknown value fails loudly rather than degrading silently."""
     raw = config.get("llm", {}).get("structured_output", DEFAULT_MODE)
     mode = str(raw).strip().lower()
-    if mode == "json":
-        # Reserved for the spec's fallback (§3.1) and deliberately not silently degraded to
-        # "off": a deployment that asked for structured output must not quietly lose it.
-        raise ValueError("llm.structured_output='json' is reserved but not implemented; use 'grammar' or 'off'")
+    if mode in ("grammar", "json"):
+        # Both named a transport that this deployment does not use. Not silently mapped to
+        # "on": a config written against the old draft should be corrected, not guessed at.
+        raise ValueError(
+            f"llm.structured_output={raw!r} is obsolete; the constraint travels as "
+            "structured_outputs.regex. Use 'on' or 'off'."
+        )
     if mode not in _MODES:
         raise ValueError(f"llm.structured_output must be one of {', '.join(_MODES)}; got {raw!r}")
     return mode  # type: ignore[return-value]
 
 
 def structured_output_fallback(config: Mapping[str, Any]) -> bool:
-    """Whether a server that rejects the grammar should be retried without it (default on)."""
+    """Whether a server that rejects the constraint should be retried without it (default on)."""
     return bool(config.get("llm", {}).get("structured_output_fallback", True))

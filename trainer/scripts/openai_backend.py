@@ -84,12 +84,17 @@ class OpenAIBackendTimeoutError(OpenAIBackendUnavailableError):
 
 
 class StructuredOutputUnsupportedError(OpenAIBackendError):
-    """HTTP 400 for a request that carried a decoding grammar.
+    """HTTP 400 for a request that carried a decoding constraint.
 
-    Raised only when a grammar was sent and the message is not about context length, so
-    the caller can retry once without the grammar instead of failing the request. The
-    deployed vLLM build is chosen outside this repo (``VLLM_IMAGE``), so a server that
-    does not accept the grammar field must not take the service down.
+    Raised only when a constraint was sent and the message is not about context length, so
+    the caller can retry once without it instead of failing the request. The deployed vLLM
+    build is chosen outside this repo (``VLLM_IMAGE``), so a server that does not accept
+    ``structured_outputs`` must not take the service down.
+
+    Note this cannot catch a server that *ignores* the field: vLLM 0.29.0 answers 200 to a
+    request carrying the older ``guided_grammar`` and generates unconstrained. Only a
+    falsifiable probe catches that, which is why the field name is pinned by measurement
+    (``answer_grammar`` module docstring) rather than by trying several.
     """
 
     retryable = False
@@ -222,7 +227,7 @@ class OpenAIChatBackend:
         *,
         max_tokens: int,
         enable_thinking: bool,
-        grammar: str | None = None,
+        answer_regex: str | None = None,
     ) -> dict[str, Any]:
         sampling = self.settings.sampling
         payload: dict[str, Any] = {
@@ -237,10 +242,13 @@ class OpenAIChatBackend:
             "skip_special_tokens": True,
             "stream": True,
         }
-        if grammar:
-            # vLLM reads guided decoding options from extra_body; the keys above are
-            # untouched so a grammar-less request is byte-identical to before.
-            payload["extra_body"] = {"guided_grammar": grammar, "guided_decoding_backend": "xgrammar"}
+        if answer_regex:
+            # Measured on vLLM 0.29.0 (Spark, 2026-09-29): this is the field that actually
+            # constrains generation. ``guided_grammar`` — top level or under ``extra_body`` —
+            # returns 200 and is silently ignored, and ``guided_decoding_backend`` is not a
+            # field of this request at all. The keys above are untouched, so an
+            # unconstrained request is byte-identical to before.
+            payload["structured_outputs"] = {"regex": answer_regex}
         return payload
 
     def complete_chat(
@@ -249,7 +257,7 @@ class OpenAIChatBackend:
         *,
         max_tokens: int,
         enable_thinking: bool,
-        grammar: str | None = None,
+        answer_regex: str | None = None,
     ) -> str:
         """Returns the generated text; raises an :class:`OpenAIBackendError` subclass on failure."""
         cancel = _cancel_event.get()
@@ -257,7 +265,7 @@ class OpenAIChatBackend:
             raise GenerationCancelledError("cancelled before the request was sent")
 
         payload = self.build_payload(
-            messages, max_tokens=max_tokens, enable_thinking=enable_thinking, grammar=grammar
+            messages, max_tokens=max_tokens, enable_thinking=enable_thinking, answer_regex=answer_regex
         )
         parts: list[str] = []
         finish_reason: str | None = None
@@ -267,12 +275,12 @@ class OpenAIChatBackend:
                     body = response.read().decode("utf-8", errors="replace")
                     message = _error_message(body)
                     if (
-                        grammar is not None
+                        answer_regex is not None
                         and response.status_code == 400
                         and not _CONTEXT_LENGTH_RE.search(message)
                     ):
                         raise StructuredOutputUnsupportedError(
-                            f"model server rejected the decoding grammar: {message[:300]}"
+                            f"model server rejected the decoding constraint: {message[:300]}"
                         )
                     raise _status_error(response.status_code, message)
                 for line in response.iter_lines():

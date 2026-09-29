@@ -36,7 +36,7 @@ if __package__ in {None, ""} and str(Path(__file__).resolve().parents[2]) not in
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from trainer.scripts.answer_grammar import (
-    knowledge_grammar,
+    answer_regex as knowledge_answer_regex,
     structured_output_fallback,
     structured_output_mode,
 )
@@ -761,25 +761,25 @@ class AgentPipeline:
         self._token_counter = counter
         return counter
 
-    def _knowledge_grammar(self, *, has_evidence: bool) -> str | None:
-        """The fast-route decoding grammar, or ``None`` when this deployment cannot use one.
+    def _answer_regex(self, *, has_evidence: bool) -> str | None:
+        """The fast-route decoding constraint, or ``None`` when this deployment cannot use one.
 
         Only the remote OpenAI-compatible backend supports it; the in-process HF model would
         need its own logits processor, and it stays the training/evaluation backend.
         """
-        # getattr: the grammar is chosen before generation, and a pipeline built without a
+        # getattr: the constraint is chosen before generation, and a pipeline built without a
         # model (evaluation harnesses stub the generator) has no remote backend to constrain.
         if not isinstance(getattr(self, "model", None), OpenAIChatBackend):
             return None
-        if structured_output_mode(self.config) != "grammar":
+        if structured_output_mode(self.config) != "on":
             return None
-        return knowledge_grammar(has_evidence=has_evidence)
+        return knowledge_answer_regex(has_evidence=has_evidence)
 
     def _generate_direct(
         self,
         messages: list[dict[str, str]],
         enable_thinking: bool = False,
-        grammar: str | None = None,
+        answer_regex: str | None = None,
     ) -> str:
         if isinstance(self.model, VLLMWrapper):
             return self.model.generate_response(messages=messages, tools=None)
@@ -787,36 +787,36 @@ class AgentPipeline:
         gen_cfg = self.config.get("generation", {})
         if isinstance(self.model, OpenAIChatBackend):
             max_tokens = min(int(gen_cfg.get("max_new_tokens", 768)), ROUTE_MAX_TOKENS["fast"])
-            effective = None if getattr(self, "_structured_output_disabled", False) else grammar
+            effective = None if getattr(self, "_structured_output_disabled", False) else answer_regex
             if effective is not None and enable_thinking:
                 # With enable_thinking=False the chat template pre-closes an empty think
-                # block, so generation starts at the answer and the grammar's root matches.
-                # With thinking on the prompt ends inside an open <think>, so the same
-                # grammar would forbid the reasoning the template just invited.
-                logger.warning("grammar dropped: it is only valid with enable_thinking=false")
+                # block, so generation starts at the answer and the pattern matches from the
+                # first token. With thinking on the prompt ends inside an open <think>, so
+                # the same pattern would forbid the reasoning the template just invited.
+                logger.warning("answer constraint dropped: it is only valid with enable_thinking=false")
                 effective = None
             try:
                 return self.model.complete_chat(
                     messages,
                     max_tokens=max_tokens,
                     enable_thinking=enable_thinking,
-                    grammar=effective,
+                    answer_regex=effective,
                 )
             except StructuredOutputUnsupportedError:
                 if effective is None or not structured_output_fallback(self.config):
                     raise
                 # The deployed vLLM build is chosen outside this repo, so a server that
-                # rejects the grammar must degrade to post-hoc repair, not fail the request.
+                # rejects the constraint must degrade to post-hoc repair, not fail the request.
                 self._structured_output_disabled = True
                 logger.error(
-                    "model server rejected the decoding grammar; structured output is off for "
-                    "this process and the answer contract falls back to post-hoc repair"
+                    "model server rejected the decoding constraint; structured output is off "
+                    "for this process and the answer contract falls back to post-hoc repair"
                 )
                 return self.model.complete_chat(
                     messages,
                     max_tokens=max_tokens,
                     enable_thinking=enable_thinking,
-                    grammar=None,
+                    answer_regex=None,
                 )
 
         prompt_text = self.tokenizer.apply_chat_template(
@@ -1148,7 +1148,7 @@ class AgentPipeline:
             raw_response = self._generate_direct(
                 messages,
                 enable_thinking=False,
-                grammar=self._knowledge_grammar(has_evidence=bool(evidence)),
+                answer_regex=self._answer_regex(has_evidence=bool(evidence)),
             )
             final_no_think, thinking = self._strip_think_blocks(raw_response)
             response_text = final_no_think.strip()
