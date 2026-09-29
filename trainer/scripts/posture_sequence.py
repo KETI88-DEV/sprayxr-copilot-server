@@ -41,7 +41,13 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Final, Sequence
 
-import world_axes
+# MCP는 `trainer.scripts.posture_sequence`로, 테스트·스크립트는 scripts를 sys.path에
+# 얹고 `posture_sequence`로 부른다. 자기가 불린 이름 공간에서 형제를 잡아야
+# `world_axes`가 두 벌로 갈라지지 않는다 — 갈라지면 `UP_INDEX` 몽키패치가 한쪽에만 든다.
+if __package__:
+    from . import world_axes
+else:
+    import world_axes
 
 Vec3 = tuple[float, float, float]
 

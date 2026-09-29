@@ -24,7 +24,11 @@ import math
 from dataclasses import dataclass, field
 from typing import Final, Iterable, Literal, Mapping, Sequence
 
-import joint_names
+# `posture_sequence`와 같은 이유다 — 불린 이름 공간에서 형제를 잡는다.
+if __package__:
+    from . import joint_names
+else:
+    import joint_names
 
 Vec3 = tuple[float, float, float]
 GateStatus = Literal["pass", "degrade", "reject"]

@@ -24,11 +24,17 @@ WORKDIR /workspace
 FROM base AS mcp
 COPY deploy/spark/requirements/mcp.lock.txt /tmp/requirements.lock.txt
 RUN pip install --no-deps -r /tmp/requirements.lock.txt && pip check
-# mcp_servers가 import하는 trainer 모듈: pose_similarity와 그것이 부르는 simulator_csv(둘 다 표준 라이브러리만 사용).
+# mcp_servers가 import하는 trainer 모듈: pose_similarity와 그것이 부르는 simulator_csv,
+# 그리고 /pose_estimation/sequence가 쓰는 joint_names·skeleton_gate·posture_sequence와
+# 그것들이 부르는 world_axes. 전부 표준 라이브러리만 쓴다.
 # 이 COPY 목록은 test_spark_deploy_contract.py가 그대로 복사해 새 프로세스에서 import를 확인한다.
 COPY trainer/__init__.py trainer/__init__.py
 COPY trainer/scripts/pose_similarity.py trainer/scripts/pose_similarity.py
 COPY trainer/scripts/simulator_csv.py trainer/scripts/simulator_csv.py
+COPY trainer/scripts/world_axes.py trainer/scripts/world_axes.py
+COPY trainer/scripts/joint_names.py trainer/scripts/joint_names.py
+COPY trainer/scripts/skeleton_gate.py trainer/scripts/skeleton_gate.py
+COPY trainer/scripts/posture_sequence.py trainer/scripts/posture_sequence.py
 COPY mcp_servers/ mcp_servers/
 RUN python3 -c "import mcp_servers.main"
 USER 10001:10001
