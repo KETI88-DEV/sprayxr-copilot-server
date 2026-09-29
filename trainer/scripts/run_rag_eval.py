@@ -102,6 +102,8 @@ def compute_auto_metrics(
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from eval_metrics import compute_rouge_l, compute_bertscore, detect_hallucination  # noqa: E402
 
+    from trainer.scripts.live_response_contract import document_ids, is_contract_shaped
+
     predictions: List[str] = []
     references: List[str] = []
     q_ids: List[str] = []
@@ -141,14 +143,26 @@ def compute_auto_metrics(
             valid_chunk_ids=valid_ids,
         )
 
+        # Answer-contract metrics (design 2026-09-29 §5). ``citations_outside_evidence``
+        # is None rather than 0 when the retrieved set is unknown for this row, so an
+        # unmeasurable row is not counted as a clean one.
+        answer_text = resp.get("answer", "")
+        cited = set(document_ids(answer_text))
+        required = set(key_entry.get("required_chunks") or [])
+        outside = len(cited - set(valid_ids)) if valid_ids is not None else None
+        recall = round(len(cited & required) / len(required), 4) if required else None
+
         metrics.append({
             "q_id": q_id,
             "category": key_entry.get("category", ""),
             "difficulty": key_entry.get("difficulty", ""),
             "rouge_l": round(rouge_scores[i], 4),
             "bertscore_f1": round(bert_scores[i], 4),
-            "answer_length": len(resp.get("answer", "")),
+            "answer_length": len(answer_text),
             "citation_count": len(resp.get("citations", [])),
+            "contract_shaped": is_contract_shaped(answer_text),
+            "citations_outside_evidence": outside,
+            "citation_recall": recall,
             "confidence": resp.get("confidence", "low"),
             "hallucination_flag": hal["flag"],
             "hallucination_type": hal.get("type", ""),
@@ -612,6 +626,21 @@ def main() -> int:
     print(f"  Hallucination rate: {hal_rate:.1f}%  {'✅' if hal_rate <= 10 else '❌'} (gate: ≤10%)")
     print(f"  Avg ROUGE-L:        {avg_rouge:.4f}")
     print(f"  Avg BERTScore F1:   {avg_bert:.4f}")
+
+    # Answer-contract gates (design 2026-09-29 §5): both are hard, not statistical.
+    shaped = sum(1 for r in merged if r.get("contract_shaped"))
+    shaped_rate = shaped / max(len(merged), 1) * 100
+    measurable = [r for r in merged if r.get("citations_outside_evidence") is not None]
+    outside_rows = sum(1 for r in measurable if r["citations_outside_evidence"] > 0)
+    outside_rate = outside_rows / max(len(measurable), 1) * 100
+    recalls = [r["citation_recall"] for r in merged if r.get("citation_recall") is not None]
+    print(f"  Contract shape:     {shaped_rate:.1f}%  {'✅' if shaped == len(merged) else '❌'} (gate: 100%)")
+    print(
+        f"  Outside evidence:   {outside_rate:.1f}% of {len(measurable)} measurable  "
+        f"{'✅' if outside_rows == 0 else '❌'} (gate: 0%)"
+    )
+    if recalls:
+        print(f"  Citation recall:    {statistics.mean(recalls):.4f} (baseline metric, no gate)")
     print(f"  Error samples:      {len(errors)}")
     print("=" * 60)
     print(f"\nResults: {csv_path}")

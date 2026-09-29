@@ -6,6 +6,8 @@ import pytest
 
 from trainer.scripts.live_response_contract import (
     FAILED_ANSWER,
+    document_ids,
+    is_contract_shaped,
     parse_knowledge_answer,
     retrieved_chunk_ids,
 )
@@ -247,3 +249,53 @@ def test_retrieved_chunk_ids_preserves_order_dedupes_and_ignores_junk() -> None:
     ]
 
     assert retrieved_chunk_ids(chunks) == [DOC_B, DOC_A]
+
+
+# --- shape measurement (the gate instrument) ------------------------------
+
+
+@pytest.mark.parametrize(
+    ("answer", "shaped"),
+    [
+        ("[답변] 본문입니다.", True),
+        (f"[답변] 본문\n[근거] {DOC_A}", True),
+        (f"[답변] 본문\n[근거] {DOC_A}, {DOC_B}", True),
+        ("[답변] 첫 줄\n두 번째 줄", True),
+        (f"[답변] 본문\n[근거] {DOC_A}\n[근거] {DOC_B}", False),
+        (f"[답변] 본문\n[근거] {DOC_A}\n추가 문장", False),
+        ("[답변] 본문\n[판정] 합격", False),
+        ("[분석] 본문", False),
+        ("[답변] ", False),
+        ("본문만 있음", False),
+        ("[답변] 본문\n[근거] 참조 문서 없음", False),
+        ("", False),
+    ],
+)
+def test_contract_shape_checker(answer: str, shaped: bool) -> None:
+    """Given a published answer, When measured, Then only the contract shape passes."""
+    assert is_contract_shaped(answer) is shaped
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        CANONICAL,
+        "",
+        "본문만 있는 문단",
+        f"[판정] SENTINEL\n[근거] {DOC_A}",
+        "설명 문장입니다.\n" + CANONICAL,
+        f"[분석] SENTINEL\n[근거] {DOC_A}\n[근거] {DOC_B}",
+        f"[분석] SENTINEL\n[근거] DOC-doc_9999-C0001",
+        *[_render(labels) for labels in MEASURED_LABEL_SEQUENCES],
+    ],
+)
+def test_parser_output_always_passes_the_shape_checker(raw: str) -> None:
+    """Given any input, When parsed, Then the result satisfies the gate instrument."""
+    assert is_contract_shaped(parse_knowledge_answer(raw, RETRIEVED).answer)
+
+
+def test_document_ids_are_ordered_and_deduplicated() -> None:
+    """Given repeated ids in prose, When extracted, Then each appears once in order."""
+    text = f"{DOC_B} 그리고 {DOC_A} 그리고 다시 {DOC_B}"
+
+    assert document_ids(text) == [DOC_B, DOC_A]

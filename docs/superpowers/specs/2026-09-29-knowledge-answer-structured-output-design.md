@@ -252,7 +252,7 @@ if grammar is not None:
 | **T2** | `parse_knowledge_answer` 전역 함수로 `normalize_fast_knowledge_response` 대체(§3.4). 라우터와 `run_streaming` 배선 | `live_response_contract.py`, `copilot_router.py`, `agent_pipeline.py:1004` | 단위: §1.1의 9개 라벨 시퀀스 전부를 입력으로 넣어 **모두** 계약 형태 반환. 중복 `[근거]` 병합. 섹션 없는 입력도 `[답변]` 접두. 불변식 "answer의 모든 DOC id ∈ citations" |
 | **T3** | 문법 문자열 2종(GBNF, 정적 상수). **실물 확인은 미완** — 이 호스트는 `backend: hf`로 돌고 vLLM 서버가 없다. §3.6의 5개 항목은 Spark 또는 vLLM 기동 서버에서 확인한다 | `trainer/scripts/answer_grammar.py` | 단위 완료: 두 문법의 구조 단언(증거 없는 문법에 `DOC-`·`근거` 부재, `evidence?` 1회, 라벨 리터럴 부재). **실물 스모크 미완**: 문법 적용 요청 10건 100% 계약 형태, 컴파일 p95 |
 | **T4** | `build_payload` 선택적 `extra_body` + config 스위치 + 폴백 + `/api/ready` 노출 | `openai_backend.py`, `agent_pipeline.py`, `rag_config_spark_vllm.yaml`, `readiness.py` | 단위 완료: 문법 없는 payload는 기존과 바이트 동일(`extra_body`만 추가), 400 → `StructuredOutputUnsupportedError` → 1회 폴백 후 성공, 컨텍스트 길이 400은 문법 탓으로 오분류하지 않음, 폴백 off면 전파 |
-| **T5** | `run_rag_eval.py`에 구조 준수율·증거 밖 인용률·인용 재현율 추가 | `run_rag_eval.py` | 단위: 세 지표의 경계 사례 |
+| **T5** | `run_rag_eval.py`에 구조 준수율·증거 밖 인용률·인용 재현율 추가. 계측기는 `live_response_contract.is_contract_shaped`이고, 파서 출력이 항상 이 검사를 통과한다는 불변식을 시험으로 묶었다 | `run_rag_eval.py`, `live_response_contract.py` | 단위 완료: 형태 검사 12개 경계 사례, 파서 출력 16입력 × 불변식. `citations_outside_evidence`는 검색 집합을 모르는 행에서 0이 아니라 `None`이다 — 측정 불가를 무결점으로 세지 않는다 |
 | **T6** | 게이트 실행: `off` vs `grammar`, 8회 → 필요시 18회 | 보고서 | §5 표 전체 |
 | **T7** | 통과 시 `grammar` 기본값. 계약 문서 §4 개정 반영 | `docs/ai_copilot_v2_5_deployment_contract.md` | `test_spark_deploy_contract.py` 갱신 |
 

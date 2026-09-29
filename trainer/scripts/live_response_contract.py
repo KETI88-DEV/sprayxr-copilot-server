@@ -187,6 +187,40 @@ def parse_knowledge_answer(raw: str, retrieved: Sequence[str]) -> KnowledgeAnswe
     )
 
 
+def document_ids(text: str) -> list[str]:
+    """Document ids appearing in ``text``, in order, deduplicated."""
+    return _ordered_unique(_DOC_ID_RE.findall(text))
+
+
+def is_contract_shaped(answer: str) -> bool:
+    """Whether ``answer`` is exactly ``[답변] <body>`` plus at most one trailing ``[근거]`` line.
+
+    This is the measurement instrument for the structure-conformance gate. It judges the
+    published shape only; whether the ids are grounded is ``parse_knowledge_answer``'s job.
+    """
+    lines = answer.split("\n")
+    head = lines[0] if lines else ""
+    if not head.startswith(f"{_ANSWER_HEADING} ") or not head[len(_ANSWER_HEADING) + 1 :].strip():
+        return False
+
+    evidence_seen = False
+    for line in lines[1:]:
+        if line.startswith(f"{_EVIDENCE_HEADING} "):
+            if evidence_seen:
+                return False
+            evidence_seen = True
+            parts = [part.strip() for part in line[len(_EVIDENCE_HEADING) + 1 :].split(",")]
+            if not parts or not all(_DOC_ID_RE.fullmatch(part) for part in parts):
+                return False
+            continue
+        if evidence_seen:
+            # Nothing may follow the evidence line; it closes the answer.
+            return False
+        if _HEADING_RE.match(line):
+            return False
+    return True
+
+
 def retrieved_chunk_ids(rag_chunks: Sequence[object]) -> list[str]:
     """Chunk ids from an ``AgentPipeline.run`` result's ``rag_chunks``, order preserved."""
     ids: list[str] = []
