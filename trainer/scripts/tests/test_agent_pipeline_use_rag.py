@@ -40,7 +40,9 @@ def _pipeline() -> tuple[AgentPipeline, list[list[dict[str, str]]]]:
     pipe.index = pipe.id_map = pipe.embedder = pipe.reranker = None
     prompts: list[list[dict[str, str]]] = []
 
-    def _generate_direct(messages: list[dict[str, str]], enable_thinking: bool = False) -> str:
+    def _generate_direct(
+        messages: list[dict[str, str]], enable_thinking: bool = False, **_kwargs: object
+    ) -> str:
         prompts.append(messages)
         return "[답변] 저도막은 규정보다 얇은 도막이다."
 

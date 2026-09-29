@@ -35,6 +35,11 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 if __package__ in {None, ""} and str(Path(__file__).resolve().parents[2]) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from trainer.scripts.answer_grammar import (
+    knowledge_grammar,
+    structured_output_fallback,
+    structured_output_mode,
+)
 from trainer.scripts.live_response_contract import parse_knowledge_answer, retrieved_chunk_ids
 from trainer.scripts.live_sequence_fallback import (
     LiveSequenceRequest,
@@ -46,6 +51,7 @@ from trainer.scripts.openai_backend import (
     GenerationCancelledError,
     OpenAIBackendSettings,
     OpenAIChatBackend,
+    StructuredOutputUnsupportedError,
     generation_cancel_scope,
 )
 from trainer.scripts.prompt_budget import (
@@ -755,21 +761,56 @@ class AgentPipeline:
         self._token_counter = counter
         return counter
 
+    def _knowledge_grammar(self, *, has_evidence: bool) -> str | None:
+        """The fast-route decoding grammar, or ``None`` when this deployment cannot use one.
+
+        Only the remote OpenAI-compatible backend supports it; the in-process HF model would
+        need its own logits processor, and it stays the training/evaluation backend.
+        """
+        # getattr: the grammar is chosen before generation, and a pipeline built without a
+        # model (evaluation harnesses stub the generator) has no remote backend to constrain.
+        if not isinstance(getattr(self, "model", None), OpenAIChatBackend):
+            return None
+        if structured_output_mode(self.config) != "grammar":
+            return None
+        return knowledge_grammar(has_evidence=has_evidence)
+
     def _generate_direct(
         self,
         messages: list[dict[str, str]],
         enable_thinking: bool = False,
+        grammar: str | None = None,
     ) -> str:
         if isinstance(self.model, VLLMWrapper):
             return self.model.generate_response(messages=messages, tools=None)
 
         gen_cfg = self.config.get("generation", {})
         if isinstance(self.model, OpenAIChatBackend):
-            return self.model.complete_chat(
-                messages,
-                max_tokens=min(int(gen_cfg.get("max_new_tokens", 768)), ROUTE_MAX_TOKENS["fast"]),
-                enable_thinking=enable_thinking,
-            )
+            max_tokens = min(int(gen_cfg.get("max_new_tokens", 768)), ROUTE_MAX_TOKENS["fast"])
+            effective = None if getattr(self, "_structured_output_disabled", False) else grammar
+            try:
+                return self.model.complete_chat(
+                    messages,
+                    max_tokens=max_tokens,
+                    enable_thinking=enable_thinking,
+                    grammar=effective,
+                )
+            except StructuredOutputUnsupportedError:
+                if effective is None or not structured_output_fallback(self.config):
+                    raise
+                # The deployed vLLM build is chosen outside this repo, so a server that
+                # rejects the grammar must degrade to post-hoc repair, not fail the request.
+                self._structured_output_disabled = True
+                logger.error(
+                    "model server rejected the decoding grammar; structured output is off for "
+                    "this process and the answer contract falls back to post-hoc repair"
+                )
+                return self.model.complete_chat(
+                    messages,
+                    max_tokens=max_tokens,
+                    enable_thinking=enable_thinking,
+                    grammar=None,
+                )
 
         prompt_text = self.tokenizer.apply_chat_template(
             messages,
@@ -1097,7 +1138,11 @@ class AgentPipeline:
                 ],
                 "overflow": fast_prompt_tokens + fast_max_tokens > max_model_len,
             }
-            raw_response = self._generate_direct(messages, enable_thinking=False)
+            raw_response = self._generate_direct(
+                messages,
+                enable_thinking=False,
+                grammar=self._knowledge_grammar(has_evidence=bool(evidence)),
+            )
             final_no_think, thinking = self._strip_think_blocks(raw_response)
             response_text = final_no_think.strip()
             tool_calls: list[dict[str, Any]] = []

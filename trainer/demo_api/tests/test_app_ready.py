@@ -88,7 +88,13 @@ def test_ready_when_model_is_served_and_index_is_loaded_even_if_mcp_is_down(
     body = response.json()
     assert body["ready"] is True
     assert body["mode"] == "live"
-    assert body["checks"]["llm"] == {"ok": True, "backend": "openai", "health": True, "model_served": True}
+    assert body["checks"]["llm"] == {
+        "ok": True,
+        "backend": "openai",
+        "health": True,
+        "model_served": True,
+        "structured_output": "off",
+    }
     assert body["checks"]["pipeline"] == {"ok": True, "loaded": True, "rag_vectors": 10829}
     assert body["checks"]["mcp"] == {"ok": False, "required": False}
     assert "mcp.test" in upstreams.hosts

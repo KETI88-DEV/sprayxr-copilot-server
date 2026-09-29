@@ -169,11 +169,14 @@ parse_knowledge_answer(raw, retrieved) -> KnowledgeAnswer
 
 ```yaml
 llm:
-  structured_output: grammar    # grammar | json | off
-  structured_output_fallback: on # 서버가 문법을 거부(400)하면 off로 1회 재시도
+  structured_output: "off"        # "grammar" | "off". YAML이 off를 false로 읽으므로 인용한다
+  structured_output_fallback: true # 서버가 문법을 거부(400)하면 문법 없이 1회 재시도
 ```
 
-- `off`는 §3.4의 2a/2b 복구 경로만 쓴다. 지금 동작보다 엄격하되 문법 없이 돈다.
+- **`json`은 예약값이며 구현되어 있지 않다.** 설정하면 기동이 `ValueError`로 실패한다. 조용히 `off`로 내려가면 구조화 출력을 요구한 배포가 그것을 잃은 줄 모른다.
+- **문법은 `openai` 백엔드에서만 적용된다.** 인프로세스 HF 모델은 자체 logits processor가 필요하고, HF는 학습·평가용 백엔드로 남는다(AGENTS.md). `hf`에서는 `_knowledge_grammar`가 `None`을 반환한다.
+- 거부를 한 번 학습하면 프로세스 수준에서 기억해 매 요청 400을 물지 않는다.
+- `off`는 §3.4의 복구 경로만 쓴다. 지금 동작보다 엄격하되 문법 없이 돈다.
 - 배포된 vLLM 이미지가 문법을 지원하지 않는 상황(`VLLM_IMAGE`는 외부 지정이다)에서 서비스가 죽지 않아야 한다. 그래서 폴백은 기본 켜짐이고, 폴백 발동은 **기동 시 1회 ERROR 로그 + `/api/ready`의 `llm.structured_output` 필드**로 드러낸다.
 - §5의 게이트가 실패하면 `off`로 되돌린다. 이 스위치가 되돌릴 수단이다.
 
@@ -247,8 +250,8 @@ if grammar is not None:
 |---|---|---|---|
 | **T1** | 인용 소속 검사를 **경계에서** 한다. `run()`은 이미 `result["rag_chunks"]`에 검색 청크를 그대로 실어 보내므로(`agent_pipeline.py:1184`) **`run()`을 전혀 고치지 않는다.** `result["citations"]`도 불변이다 — `run_rag_eval.py:208`과 `eval_metrics.py:359`가 이 필드로 채점하므로 AGENTS.md의 "`run()` 동작을 평가용으로 안정하게 유지" 조항에 걸린다 | `live_response_contract.retrieved_chunk_ids`, `copilot_router.py` | 단위: 본문 id ⊄ 검색집합 → 드롭·경고. `use_rag='N'` → 본문 DOC id 전멸·`citations=[]`. `rag_chunks`의 비-dict 원소 무시 |
 | **T2** | `parse_knowledge_answer` 전역 함수로 `normalize_fast_knowledge_response` 대체(§3.4). 라우터와 `run_streaming` 배선 | `live_response_contract.py`, `copilot_router.py`, `agent_pipeline.py:1004` | 단위: §1.1의 9개 라벨 시퀀스 전부를 입력으로 넣어 **모두** 계약 형태 반환. 중복 `[근거]` 병합. 섹션 없는 입력도 `[답변]` 접두. 불변식 "answer의 모든 DOC id ∈ citations" |
-| **T3** | 문법 문자열 2종 + 컴파일 캐시. vLLM 실물에서 §3.6의 5개 항목 확인 | `trainer/scripts/answer_grammar.py` | 실물 스모크: 문법 적용 요청 10건이 100% 계약 형태. 컴파일 p95 기록 |
-| **T4** | `build_payload` 선택적 `extra_body` + config 스위치 + 폴백 + `/api/ready` 노출 | `openai_backend.py`, `rag_config_spark_vllm.yaml`, `readiness.py` | 단위: 스위치 3값 각각의 payload 동등성. 400 응답 → 1회 폴백. 기존 payload 키 불변 |
+| **T3** | 문법 문자열 2종(GBNF, 정적 상수). **실물 확인은 미완** — 이 호스트는 `backend: hf`로 돌고 vLLM 서버가 없다. §3.6의 5개 항목은 Spark 또는 vLLM 기동 서버에서 확인한다 | `trainer/scripts/answer_grammar.py` | 단위 완료: 두 문법의 구조 단언(증거 없는 문법에 `DOC-`·`근거` 부재, `evidence?` 1회, 라벨 리터럴 부재). **실물 스모크 미완**: 문법 적용 요청 10건 100% 계약 형태, 컴파일 p95 |
+| **T4** | `build_payload` 선택적 `extra_body` + config 스위치 + 폴백 + `/api/ready` 노출 | `openai_backend.py`, `agent_pipeline.py`, `rag_config_spark_vllm.yaml`, `readiness.py` | 단위 완료: 문법 없는 payload는 기존과 바이트 동일(`extra_body`만 추가), 400 → `StructuredOutputUnsupportedError` → 1회 폴백 후 성공, 컨텍스트 길이 400은 문법 탓으로 오분류하지 않음, 폴백 off면 전파 |
 | **T5** | `run_rag_eval.py`에 구조 준수율·증거 밖 인용률·인용 재현율 추가 | `run_rag_eval.py` | 단위: 세 지표의 경계 사례 |
 | **T6** | 게이트 실행: `off` vs `grammar`, 8회 → 필요시 18회 | 보고서 | §5 표 전체 |
 | **T7** | 통과 시 `grammar` 기본값. 계약 문서 §4 개정 반영 | `docs/ai_copilot_v2_5_deployment_contract.md` | `test_spark_deploy_contract.py` 갱신 |

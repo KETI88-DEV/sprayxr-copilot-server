@@ -41,6 +41,12 @@ llm:
   served_model_name: qwen36-27b-shipcoat-v6-1-fp8
   # Bearer token read from this env var (vLLM --api-key); unset/empty -> no header.
   api_key_env: VLLM_API_KEY
+  # 답변 문법 제약(설계 2026-09-29 §3.5). "grammar" | "off". YAML이 off를 false로 읽으므로
+  # 반드시 인용한다. 배포 vLLM이 문법을 거부하면 structured_output_fallback이 문법 없이
+  # 1회 재시도하고 그 사실은 /api/ready의 llm.structured_output과 ERROR 로그로 드러난다.
+  # 실물 확인(설계 §3.6의 5개 항목)과 품질 게이트(§5)를 통과하기 전까지 기본값은 "off"다.
+  structured_output: "off"
+  structured_output_fallback: true
   connect_timeout_sec: 5
   # Longest wait for the next streamed bytes, prefill before the first token included.
   request_timeout_sec: 180

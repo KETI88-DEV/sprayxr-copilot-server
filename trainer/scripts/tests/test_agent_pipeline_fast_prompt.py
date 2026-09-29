@@ -45,7 +45,9 @@ def _pipeline(monkeypatch: pytest.MonkeyPatch) -> tuple[AgentPipeline, dict[str,
 
     captured: dict[str, Any] = {}
 
-    def _fake_generate(messages: list[dict[str, str]], enable_thinking: bool = False) -> str:
+    def _fake_generate(
+        messages: list[dict[str, str]], enable_thinking: bool = False, **_kwargs: object
+    ) -> str:
         _ = enable_thinking
         captured["messages"] = messages
         return "블라스팅은 연마재를 분사해 강재 표면의 녹과 이물질을 제거하는 표면처리 공정이다."

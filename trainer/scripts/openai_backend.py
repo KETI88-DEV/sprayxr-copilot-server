@@ -83,6 +83,18 @@ class OpenAIBackendTimeoutError(OpenAIBackendUnavailableError):
     """Connect or read timeout against the model server."""
 
 
+class StructuredOutputUnsupportedError(OpenAIBackendError):
+    """HTTP 400 for a request that carried a decoding grammar.
+
+    Raised only when a grammar was sent and the message is not about context length, so
+    the caller can retry once without the grammar instead of failing the request. The
+    deployed vLLM build is chosen outside this repo (``VLLM_IMAGE``), so a server that
+    does not accept the grammar field must not take the service down.
+    """
+
+    retryable = False
+
+
 class GenerationCancelledError(OpenAIBackendError):
     """The consumer left; the upstream request was closed."""
 
@@ -210,9 +222,10 @@ class OpenAIChatBackend:
         *,
         max_tokens: int,
         enable_thinking: bool,
+        grammar: str | None = None,
     ) -> dict[str, Any]:
         sampling = self.settings.sampling
-        return {
+        payload: dict[str, Any] = {
             "model": self.settings.served_model_name,
             "messages": [dict(message) for message in messages],
             "max_tokens": int(max_tokens),
@@ -224,6 +237,11 @@ class OpenAIChatBackend:
             "skip_special_tokens": True,
             "stream": True,
         }
+        if grammar:
+            # vLLM reads guided decoding options from extra_body; the keys above are
+            # untouched so a grammar-less request is byte-identical to before.
+            payload["extra_body"] = {"guided_grammar": grammar, "guided_decoding_backend": "xgrammar"}
+        return payload
 
     def complete_chat(
         self,
@@ -231,20 +249,32 @@ class OpenAIChatBackend:
         *,
         max_tokens: int,
         enable_thinking: bool,
+        grammar: str | None = None,
     ) -> str:
         """Returns the generated text; raises an :class:`OpenAIBackendError` subclass on failure."""
         cancel = _cancel_event.get()
         if cancel is not None and cancel.is_set():
             raise GenerationCancelledError("cancelled before the request was sent")
 
-        payload = self.build_payload(messages, max_tokens=max_tokens, enable_thinking=enable_thinking)
+        payload = self.build_payload(
+            messages, max_tokens=max_tokens, enable_thinking=enable_thinking, grammar=grammar
+        )
         parts: list[str] = []
         finish_reason: str | None = None
         try:
             with self._client.stream("POST", "/chat/completions", json=payload) as response:
                 if response.status_code != 200:
                     body = response.read().decode("utf-8", errors="replace")
-                    raise _status_error(response.status_code, _error_message(body))
+                    message = _error_message(body)
+                    if (
+                        grammar is not None
+                        and response.status_code == 400
+                        and not _CONTEXT_LENGTH_RE.search(message)
+                    ):
+                        raise StructuredOutputUnsupportedError(
+                            f"model server rejected the decoding grammar: {message[:300]}"
+                        )
+                    raise _status_error(response.status_code, message)
                 for line in response.iter_lines():
                     if cancel is not None and cancel.is_set():
                         # Leaving the ``with`` closes the connection mid-body; vLLM aborts the request.

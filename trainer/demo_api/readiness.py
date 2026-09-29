@@ -20,6 +20,7 @@ from typing import Any, Final
 import httpx
 import yaml
 
+from trainer.scripts.answer_grammar import structured_output_mode
 from trainer.scripts.openai_backend import OpenAIBackendSettings, probe_openai_server
 
 logger = logging.getLogger(__name__)
@@ -58,6 +59,9 @@ async def _llm_check(
         return {"ok": pipeline_loaded, "backend": backend}
     try:
         settings = OpenAIBackendSettings.from_config(config)
+        # Reported because it changes what the server is asked to do; an unknown value is a
+        # configuration error, not a degraded mode.
+        mode = structured_output_mode(config)
     except ValueError:
         logger.warning("readiness: invalid openai backend config", exc_info=True)
         return {"ok": False, "backend": backend, "health": False, "model_served": False}
@@ -67,6 +71,7 @@ async def _llm_check(
         "backend": backend,
         "health": probe.health_ok,
         "model_served": probe.model_served,
+        "structured_output": mode,
     }
 
 
