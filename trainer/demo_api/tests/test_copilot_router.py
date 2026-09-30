@@ -26,6 +26,7 @@ _DATA_KEYS = {
     "scenario_id",
     "generated_at",
     "latency_ms",
+    "degraded",
     "answer",
     "resolved_intents",
     "context_status",
@@ -152,7 +153,11 @@ def test_success_envelope_has_every_v25_field(monkeypatch: pytest.MonkeyPatch) -
     assert (data["sequence_context"], data["coating_context"], data["pose_context"]) == (None, None, None)
     assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", data["generated_at"])
     assert isinstance(data["latency_ms"], int) and data["latency_ms"] >= 0
-    assert data["answer"].startswith("[답변] 저도막은 규정 최소 두께보다 얇은 도막이다.")
+    # §9.2 의 예시는 마커 없는 산문이다. 근거 id 는 citations 로만 간다.
+    assert data["answer"] == "저도막은 규정 최소 두께보다 얇은 도막이다."
+    assert "[답변]" not in data["answer"]
+    assert "DOC-" not in data["answer"]
+    assert data["degraded"] is False
 
 
 def test_answer_gets_the_fast_knowledge_normalization(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -160,8 +165,8 @@ def test_answer_gets_the_fast_knowledge_normalization(monkeypatch: pytest.Monkey
 
     data = _client(monkeypatch, _FakePipeline(response=scaffold)).post(URL, json=_body()).json()["data"]
 
-    assert "SENTINEL_DEFINITION" in data["answer"]
-    assert data["answer"].startswith("[답변]")
+    assert data["answer"] == "SENTINEL_DEFINITION"
+    assert "[답변]" not in data["answer"]
     assert "SENTINEL_VERDICT" not in data["answer"]
     assert "SENTINEL_ACTION" not in data["answer"]
 
@@ -205,8 +210,31 @@ def test_citation_outside_the_retrieved_chunks_is_dropped(monkeypatch: pytest.Mo
 
     data = _client(monkeypatch, pipeline).post(URL, json=_body()).json()["data"]
 
-    assert data["answer"] == "[답변] SENTINEL_BODY"
+    assert data["answer"] == "SENTINEL_BODY"
     assert data["citations"] == []
+
+
+def test_degraded_is_true_when_no_answer_could_be_produced(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Given a generation with no answer section, When answered, Then degraded reports it."""
+    pipeline = _FakePipeline(response="[판정] SENTINEL_VERDICT\n[근거] DOC-doc_0001-C0001")
+
+    data = _client(monkeypatch, pipeline).post(URL, json=_body()).json()["data"]
+
+    assert data["degraded"] is True
+    assert data["answer"] == "답변을 생성하지 못했습니다."
+    assert data["citations"] == []
+
+
+def test_pending_task_types_are_not_degraded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Given a pending task type, When answered, Then degraded is false: nothing was truncated."""
+    data = (
+        _client(monkeypatch, _FakePipeline())
+        .post(URL, json=_body(task_type="pose_recomm"))
+        .json()["data"]
+    )
+
+    assert data["degraded"] is False
+    assert data["context_status"] == "not_available"
 
 
 def test_null_session_id_stays_null_even_when_run_invents_one(monkeypatch: pytest.MonkeyPatch) -> None:

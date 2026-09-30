@@ -5,10 +5,11 @@
 * ``knowledge_search``: the live pipeline singleton shared with ``/api/chat``
   runs ``run(force_route="fast")`` in a worker thread inside the shared
   generation slot. ``use_rag='N'`` skips retrieval and returns no citations.
-  ``answer`` and ``citations`` both come from ``parse_knowledge_answer``, so
-  ``citations`` is what the answer cites (a subset of this request's retrieved
-  chunks), not the retrieval set itself, and no document id can appear in the
-  answer text without appearing in ``citations``.
+  ``answer`` is the parsed prose alone and ``citations`` is what it cites (a
+  subset of this request's retrieved chunks), matching the §9.2 example: the
+  ``[답변]``/``[근거]`` scaffold the model is trained to emit is stripped at this
+  boundary, so no document id reaches ``answer`` at all. ``degraded`` is true when
+  no full answer was produced or generation hit its deadline.
 * ``trajectory_recomm`` / ``pose_recomm`` / ``error_analysis`` (plan D2): HTTP 200
   SUCCESS with a short "준비 중" answer and ``context_status="not_available"``.
   Neither the pipeline nor MCP is touched.
@@ -34,7 +35,11 @@ from fastapi.responses import JSONResponse
 
 from trainer.demo_api.copilot_contracts import CopilotQueryData, CopilotQueryRequest, CopilotResponse
 from trainer.scripts.generation_slot import GENERATION_SLOT
-from trainer.scripts.live_response_contract import parse_knowledge_answer, retrieved_chunk_ids
+from trainer.scripts.live_response_contract import (
+    FAILED_REPAIR_PATHS,
+    parse_knowledge_answer,
+    retrieved_chunk_ids,
+)
 from trainer.scripts.openai_backend import OpenAIBackendUnavailableError
 
 if TYPE_CHECKING:
@@ -70,6 +75,7 @@ def _success_response(
     answer: str,
     retrieval_used: bool,
     citations: list[str],
+    degraded: bool = False,
 ) -> JSONResponse:
     generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     # Wall clock from handler entry to just before serialization, slot wait included.
@@ -85,6 +91,7 @@ def _success_response(
             scenario_id=query.scenario_id,
             generated_at=generated_at,
             latency_ms=latency_ms,
+            degraded=degraded,
             answer=answer,
             resolved_intents=[query.task_type],
             context_status="not_available",
@@ -168,9 +175,14 @@ def create_copilot_router(
         return _success_response(
             query,
             started,
-            answer=parsed.answer,
+            # ``body``, not ``answer``: the contract's §9.2 example is marker-free prose and
+            # the ids travel in ``citations``. The ``[답변]``/``[근거]`` scaffold is the
+            # model's training form, not part of the public contract.
+            answer=parsed.body,
             retrieval_used=use_rag,
             citations=list(parsed.citations),
+            # No full answer was produced, or generation hit its deadline.
+            degraded=parsed.repair_path in FAILED_REPAIR_PATHS or bool(result.get("deadline_hit", False)),
         )
 
     return router

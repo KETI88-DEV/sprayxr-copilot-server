@@ -39,13 +39,24 @@ _BRACKET_INNER_SPACE_RE: Final[re.Pattern[str]] = re.compile(r"(?<=[(\[])[ \t]+|
 # answer section at all we do not know whether the corpus covers the question.
 FAILED_ANSWER: Final[str] = "답변을 생성하지 못했습니다."
 
+# ``repair_path`` values that mean no real answer was produced. The v2.5 contract's
+# ``degraded`` flag covers a response that could not be delivered in full.
+FAILED_REPAIR_PATHS: Final[frozenset[str]] = frozenset({"empty", "no_answer_section", "body_empty"})
+
 _Section = tuple[str, list[str]]
 
 
 @dataclass(frozen=True)
 class KnowledgeAnswer:
-    """``answer`` is contract-shaped; ``citations`` is exactly the ids it cites."""
+    """Two renderings of one parse; ``citations`` is exactly the ids the answer cites.
 
+    ``body`` is the prose alone, which is what the v2.5 contract's ``answer`` field holds —
+    §9.2's own example is marker-free prose and the ids travel in ``citations``. ``answer``
+    keeps the ``[답변]``/``[근거]`` scaffold for the chat SSE path, whose consumer renders
+    the text the model was trained to produce.
+    """
+
+    body: str
     answer: str
     citations: tuple[str, ...]
     dropped: tuple[str, ...]
@@ -112,6 +123,7 @@ def parse_knowledge_answer(raw: str, retrieved: Sequence[str]) -> KnowledgeAnswe
     if not text:
         logger.warning("knowledge answer empty, repair_path=empty")
         return KnowledgeAnswer(
+            body=FAILED_ANSWER,
             answer=f"{_ANSWER_HEADING} {FAILED_ANSWER}",
             citations=(),
             dropped=(),
@@ -147,6 +159,7 @@ def parse_knowledge_answer(raw: str, retrieved: Sequence[str]) -> KnowledgeAnswe
                 ",".join(label for label, _ in sections),
             )
             return KnowledgeAnswer(
+                body=FAILED_ANSWER,
                 answer=f"{_ANSWER_HEADING} {FAILED_ANSWER}",
                 citations=(),
                 dropped=tuple(_ordered_unique(_DOC_ID_RE.findall(text))),
@@ -179,6 +192,7 @@ def parse_knowledge_answer(raw: str, retrieved: Sequence[str]) -> KnowledgeAnswe
         logger.info("knowledge answer dropped unsupported sections: %s", ",".join(dropped_sections))
 
     return KnowledgeAnswer(
+        body=body,
         answer=answer,
         citations=tuple(validated),
         dropped=tuple(dropped),

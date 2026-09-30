@@ -42,6 +42,9 @@ class CopilotQueryData(StrictModel):
     scenario_id: str | None
     generated_at: str
     latency_ms: Annotated[int, Field(ge=0)]
+    # v2.5 §9.2 예시와 §9.3이 요구하는 필드. 정상 완료는 false, 제한 시간 내 생성이
+    # 끝나지 않아 축약 응답을 낼 때 true다.
+    degraded: bool
     answer: str
     resolved_intents: list[str]
     context_status: ContextStatus
