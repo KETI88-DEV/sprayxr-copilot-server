@@ -753,3 +753,60 @@ def test_with_equal_thresholds_the_biggest_sigma_is_named() -> None:
     ladders = {"LeftHand": {"p97_5": 2.0}, "RightUpperArm": {"p97_5": 2.0}}
     out = arm_reference.build_corrections(sigmas, {}, ladders=ladders)
     assert [item.joint for item in out] == ["RightUpperArm"]
+
+
+# --- Bonferroni 의 K ------------------------------------------------------------
+#
+# 사전등록 `...-effective-tests-prereg.md` / 결과 `...-effective-tests-result.md`.
+# K=3(p95)을 재 보고 **채택하지 않았다** — hit 은 0.469 → 0.512 로 등록 기준 ①을
+# 세 번 만에 처음 통과했지만 위양성이 0.081 → 0.159 로 α=0.15 계약을 0.009 넘었다.
+# 여기서는 **현행 K와 사다리 눈금의 구조적 한계**를 고정한다. 코드에 손잡이를
+# 남기지 않았으므로 검사가 그 사실을 들고 있어야 다음 사람이 같은 길을 다시 파지 않는다.
+
+
+def _ladder() -> dict[str, dict[str, float]]:
+    """p95 1.45 · p97.5 1.54 인 사다리. 실측 밴드 -0.10 의 RightHand 값이다."""
+    return {
+        "RightHand": {
+            f"p{point:g}".replace(".", "_"): value
+            for point, value in zip(
+                arm_reference.SIGMA_PERCENTILES, (1.0, 1.2, 1.4, 1.45, 1.54, 1.9)
+            )
+        }
+    }
+
+
+def test_the_current_k_is_the_joint_count_and_picks_p975() -> None:
+    """α=0.15 · K=6 이면 원하는 분위가 97.5 고 사다리에서 p97.5 를 고른다.
+
+    깨뜨리는 법: `sigma_threshold`의 기본 `joints`를 3으로 바꾸면 p95 를 골라 실패한다.
+    """
+    assert arm_reference.TARGET_FALSE_POSITIVE == 0.15
+    assert len(arm_reference.SCORING_JOINTS_ARM) == 6
+    assert arm_reference.sigma_threshold("RightHand", _ladder()) == pytest.approx(1.54)
+
+
+def test_only_two_thresholds_are_reachable_between_k2_and_k6() -> None:
+    """**구조적 한계다.** 사다리 눈금이 p95·p97.5 뿐이라 K=4 도 K=5 도 현행과 같은
+    문턱을 고른다 — "조금만 낮추기"가 불가능하다. 그 사이를 원하면 눈금을 더하고
+    레퍼런스를 다시 구워야 한다(약 55분).
+
+    깨뜨리는 법: `SIGMA_PERCENTILES`에 눈금을 더하면 여기서 실패한다 — 그때는
+    새 측정과 함께 이 검사를 갱신해야 한다.
+    """
+    ladder = _ladder()
+    picked = {
+        k: arm_reference.sigma_threshold("RightHand", ladder, joints=k)
+        for k in range(2, 7)
+    }
+    assert picked[2] == picked[3] == pytest.approx(1.45), "K=2·3 은 p95 여야 한다"
+    assert picked[4] == picked[5] == picked[6] == pytest.approx(1.54), (
+        "K=4·5 가 K=6 과 다른 문턱을 골랐다 — 눈금이 늘었다"
+    )
+    assert len(set(picked.values())) == 2, "K 2~6 에서 문턱이 두 개보다 많다"
+
+
+def test_a_missing_ladder_falls_back_rather_than_guessing() -> None:
+    """사다리가 없는 버킷에서는 공통 문턱으로 내려간다 — 없는 분위를 지어내지 않는다."""
+    assert arm_reference.sigma_threshold("RightHand", None) == arm_reference.CORRECTION_SIGMA
+    assert arm_reference.sigma_threshold("없는관절", _ladder()) == arm_reference.CORRECTION_SIGMA

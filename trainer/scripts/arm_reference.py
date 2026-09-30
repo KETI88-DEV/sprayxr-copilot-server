@@ -667,6 +667,13 @@ def build_corrections(
     for item in ranked[:MAX_CORRECTIONS]:
         # **관절마다 다른 문턱이다.** σ의 숙련자 내 분포가 관절마다 다르므로 같은 문턱을
         # 쓰면 산포 큰 관절(왼손)에 위양성이 쏠린다 — 실측 99건 중 57건이었다.
+        #
+        # 문턱 분위는 `sigma_threshold`가 α/K로 고르고 **K는 관절 수(6)다.**
+        # 검정이 독립이 아니라(유효 차원 3/6) 6은 보수적이다. K=3으로 내려 재 봤고
+        # **채택하지 않았다** — hit은 0.469 → 0.512로 등록 기준 ①을 처음 통과했지만
+        # 위양성이 0.081 → 0.159로 α=0.15 계약을 0.009 넘었다. 게다가 사다리 눈금이
+        # p95·p97.5뿐이라 K=4·5도 p97.5로 떨어져 **그 사이를 고를 수 없다.**
+        # `docs/measurements/2026-09-30-effective-tests-result.md`
         if item.sigma < sigma_threshold(item.joint, ladders):
             break
         gain = None
