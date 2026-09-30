@@ -530,3 +530,43 @@ def test_vertical_stroke_lateral_is_unsigned_in_both_paths() -> None:
     ]
     assert lateral and lateral[0][1] == pytest.approx(magnitudes["lateral"])
     assert lateral[0][2] == ""
+
+
+def test_issued_corrections_move_the_query_toward_the_reference_in_world() -> None:
+    """발부한 교정은 **월드에서** 질의를 레퍼런스 쪽으로 옮긴다.
+
+    `PointDelta.local_delta`의 이름과 예전 설명("스트로크 프레임 벡터")이 사람을 오도해,
+    `apply_measured`에 `_world_delta`를 한 번 더 끼워 넣어 작동하던 경로를 깨뜨린 일이
+    있었다. 이 검사는 **월드 좌표에서 직접** 성질을 확인하므로 그 오해를 막는다.
+
+    깨뜨리는 법: `apply_measured`가 `shift`를 `_world_delta(shift, frame)`로 바꾸면 실패한다.
+    """
+    query, reference = _three_point_case()
+    before = measured_score.score_track(
+        query, reference, SPREADS, measured_score.DEFAULT_WEIGHTS
+    )
+    fixed = measured_score.apply_measured(query, before.deltas, HORIZONTAL)
+    issued = measured_score.issued_shifts(before.deltas, HORIZONTAL)
+
+    for name, points in query.items():
+        moved = tuple(fixed[name][0][i] - points[0][i] for i in range(3))
+        if name not in issued:
+            assert moved == (0.0, 0.0, 0.0), f"{name}에 지시하지 않은 이동이 생겼다"
+            continue
+        need = tuple(reference[name][0][i] - points[0][i] for i in range(3))
+        # 옮긴 각 성분은 필요한 방향과 부호가 같고 크기를 넘지 않는다 — 발부한 축만
+        # 옮기므로 일부 성분은 0일 수 있지만, 레퍼런스를 지나쳐 가면 안 된다.
+        for axis in range(3):
+            if abs(moved[axis]) < 1e-12:
+                continue
+            assert moved[axis] * need[axis] > 0, (
+                f"{name} 축{axis}: 레퍼런스 반대쪽으로 옮겼다 ({moved[axis]} vs 필요 {need[axis]})"
+            )
+            assert abs(moved[axis]) <= abs(need[axis]) + 1e-9, (
+                f"{name} 축{axis}: 레퍼런스를 지나쳤다"
+            )
+
+    after = measured_score.score_track(
+        fixed, reference, SPREADS, measured_score.DEFAULT_WEIGHTS
+    )
+    assert after.score > before.score, "월드에서 레퍼런스 쪽으로 옮겼는데 점수가 안 올랐다"
