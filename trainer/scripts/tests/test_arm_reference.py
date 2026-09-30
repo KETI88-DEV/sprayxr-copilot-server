@@ -675,3 +675,81 @@ def test_world_round_trip_is_exact() -> None:
     assert frame is not None and normalized is not None
     for name, point in normalized.items():
         assert arm_reference.to_world(frame, point) == pytest.approx(pose[name], abs=1e-9)
+
+
+# --- 교정 후보 순위 ------------------------------------------------------------
+#
+# 사전등록 `2026-09-30-correction-ranking-prereg.md` / 결과 `...-ranking-result.md`.
+# σ÷문턱 순위를 재 보고 **채택하지 않았다** — 조용한 이탈은 0이 되지만 반경 0.15 m
+# hit이 0.469 → 0.479(잡음 수준)에 그치고 혼동이 0.030 → 0.058로 3배 빨리 는다.
+# 여기서는 **현행 거동과 그 대가**를 고정한다. 코드에 손잡이를 남기지 않았으므로
+# 검사가 그 사실을 들고 있어야 다음 사람이 다시 같은 길을 파지 않는다.
+
+
+def _two_joint_sigmas(
+    *, loud: float, quiet: float
+) -> tuple[list[arm_reference.JointSigma], dict[str, dict[str, float]]]:
+    """σ는 `loud`가 크지만 **문턱 대비로는 `quiet`가 더 벗어난** 두 관절.
+
+    실측이 이 모양이었다 — 생 σ 최대가 LeftHand(0.74×문턱)인데 실제로 범위를
+    벗어난 것은 RightUpperArm(1.00×문턱)이었다. LeftHand는 숙련자 산포가 커서
+    문턱이 높다.
+    """
+    sigmas = [
+        arm_reference.JointSigma("LeftHand", loud, (loud, 0.0, 0.0), (0.3, 0.0, 0.0)),
+        arm_reference.JointSigma("RightUpperArm", quiet, (quiet, 0.0, 0.0), (0.2, 0.0, 0.0)),
+    ]
+    # p97.5가 문턱이 되도록 사다리를 깐다(α=0.15, K=6).
+    ladders = {
+        "LeftHand": {"p97_5": loud * 2.0},        # 생 σ는 크지만 범위 안
+        "RightUpperArm": {"p97_5": quiet * 0.5},  # 작지만 범위 밖
+    }
+    return sigmas, ladders
+
+
+def test_the_ranking_is_raw_sigma_and_a_real_excursion_can_pass_silently() -> None:
+    """**현행 거동이자 그 대가다.** 순위가 생 σ라 문턱을 모르므로, 1등이 아닌 관절의
+    이탈은 조용히 지나간다 — 실측 246패스 기준선에서 12건(이탈 32건의 0.375)이다.
+
+    이것을 고쳐 보고 채택하지 않았다(위 주석). 그러므로 이 성질은 **결함이 아니라
+    측정으로 남긴 선택**이고, 화면이 한 줄로 그 사실을 말한다
+    (`trainer/pose_lab/service.py`의 `_bars_note`).
+
+    깨뜨리는 법: 순위를 σ÷문턱으로 바꾸면 여기서 실패한다 — 그때는 새 측정과 함께
+    이 검사를 갱신해야 한다.
+    """
+    sigmas, ladders = _two_joint_sigmas(loud=3.0, quiet=1.0)
+    assert sigmas[0].sigma > sigmas[1].sigma, "전제가 깨졌다"
+    assert sigmas[0].sigma < arm_reference.sigma_threshold("LeftHand", ladders)
+    assert sigmas[1].sigma >= arm_reference.sigma_threshold("RightUpperArm", ladders)
+
+    assert arm_reference.build_corrections(sigmas, {}, ladders=ladders) == [], (
+        "생 σ 순위인데 교정이 나갔다 — 순위 규칙이 바뀌었다"
+    )
+
+
+def test_the_threshold_still_gates_even_when_a_joint_ranks_first() -> None:
+    """순위 1등이어도 **자기 범위 안이면 침묵한다.** 순위와 발부는 다른 판단이다.
+
+    깨뜨리는 법: 발부 조건을 지우면 여기서 실패한다.
+    """
+    sigmas = [
+        arm_reference.JointSigma("LeftHand", 1.0, (1.0, 0.0, 0.0), (0.1, 0.0, 0.0)),
+        arm_reference.JointSigma("RightUpperArm", 0.5, (0.5, 0.0, 0.0), (0.05, 0.0, 0.0)),
+    ]
+    ladders = {"LeftHand": {"p97_5": 2.0}, "RightUpperArm": {"p97_5": 2.0}}
+    assert arm_reference.build_corrections(sigmas, {}, ladders=ladders) == []
+
+
+def test_with_equal_thresholds_the_biggest_sigma_is_named() -> None:
+    """문턱이 같으면 생 σ 순위와 문턱 대비 순위가 같은 관절을 짚는다 — 상수배일 뿐이다.
+
+    깨뜨리는 법: 순위 키의 부호가 뒤집히면 여기서 갈린다.
+    """
+    sigmas = [
+        arm_reference.JointSigma("LeftHand", 3.0, (3.0, 0.0, 0.0), (0.3, 0.0, 0.0)),
+        arm_reference.JointSigma("RightUpperArm", 4.0, (4.0, 0.0, 0.0), (0.4, 0.0, 0.0)),
+    ]
+    ladders = {"LeftHand": {"p97_5": 2.0}, "RightUpperArm": {"p97_5": 2.0}}
+    out = arm_reference.build_corrections(sigmas, {}, ladders=ladders)
+    assert [item.joint for item in out] == ["RightUpperArm"]

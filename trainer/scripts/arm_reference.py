@@ -653,6 +653,14 @@ def build_corrections(
     이 관절이 지금 점수를 얼마나 깎고 있는지를 같은 자로 잰 것이다.
     """
     _ = support
+    # **순위는 생 σ다. 문턱을 모른다.** 문턱이 관절마다 다르므로(p97.5) 1등이 아닌
+    # 관절이 자기 범위를 벗어나도 후보에 오르지 못한다 — 실측 246패스 기준선에서
+    # 12건(이탈 32건의 0.375)이 그렇게 조용히 지나간다.
+    #
+    # **고쳐 보고 채택하지 않았다.** σ÷문턱으로 줄을 세우면 조용한 이탈은 0이 되지만
+    # 반경 0.15 m hit은 0.469 → 0.479(잡음 수준)에 그치고 혼동이 0.030 → 0.058로
+    # 3배 빨리 는다. 이탈이 큰 관절이 우리가 찾는 관절이 아닐 때가 더 많다.
+    # `docs/measurements/2026-09-30-correction-ranking-result.md`
     ranked = sorted(sigmas, key=lambda item: item.sigma, reverse=True)
     base = similarity_score(sigmas)
     out: list[Correction] = []

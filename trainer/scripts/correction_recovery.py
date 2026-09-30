@@ -124,6 +124,22 @@ def _score(
     return pose_stages.score(frames, aligned, bucket, labels=pose_similarity.JOINT_LABELS)
 
 
+def _silent_over(result: pose_stages.ScoreResult, bucket: Mapping[str, Any]) -> bool:
+    """자기 범위를 벗어난 관절이 있는데 교정이 **안 나간** 경우.
+
+    사전등록 ⑤다. 생 σ 순위에서는 1등이 아닌 관절의 이탈이 조용히 사라진다 —
+    실측 222패스 중 이탈 65건에서 18건(28%)이 그랬다.
+    """
+    if result.corrections:
+        return False
+    ladders = bucket.get("joint_sigma_ladder")
+    ladders = ladders if isinstance(ladders, Mapping) else None
+    return any(
+        item.sigma >= arm_reference.sigma_threshold(item.joint, ladders)
+        for item in result.sigmas
+    )
+
+
 def run(root: Path, reference: Path, passes: int, seed: int) -> dict[str, Any]:
     csv_source, service = _load_pose_lab()
     buckets = json.loads(reference.read_text(encoding="utf-8"))["buckets"]
@@ -152,7 +168,8 @@ def run(root: Path, reference: Path, passes: int, seed: int) -> dict[str, Any]:
 
     # 결과: (direction, magnitude, perturbed_joint) -> {named_joint or None: count}
     tally: dict[tuple[str, float, str], dict[str, int]] = {}
-    baseline = {"total": 0, "corrected": 0, "by_joint": {}, "by_worker": {}}
+    baseline = {"total": 0, "corrected": 0, "silent_over": 0,
+                "by_joint": {}, "by_worker": {}}
     modes = {"phase": 0, "fold": 0, "none": 0}
     used = 0
     used_by_worker: dict[str, int] = {}
@@ -208,6 +225,8 @@ def run(root: Path, reference: Path, passes: int, seed: int) -> dict[str, Any]:
             slot[0] += 1
             if clean.corrections:
                 slot[1] += 1
+            if _silent_over(clean, bucket):
+                baseline["silent_over"] += 1
             if clean.corrections:
                 baseline["corrected"] += 1
                 name = clean.corrections[0].joint
@@ -252,6 +271,12 @@ def summarize(payload: Mapping[str, Any]) -> list[str]:
         f"채점 {payload['scoring_modes']}"
     )
     lines.append(f"기준선(d=0) 위양성률: {fp:.3f}  ({base['corrected']}/{base['total']})")
+    silent = base.get("silent_over", 0)
+    over = silent + base["corrected"]
+    lines.append(
+        f"⑤ 조용한 이탈: {silent}/{over} = "
+        f"{silent / over if over else 0.0:.3f}  (범위를 벗어났는데 교정이 없음)"
+    )
     if base.get("by_worker"):
         lines.append("  작업자별 위양성률 — **합계만 보면 군집이 숨는다**")
         for worker, (n, fired) in sorted(base["by_worker"].items()):
