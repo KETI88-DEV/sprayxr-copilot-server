@@ -20,6 +20,7 @@ from trainer.demo_api import chat_service as chat_service_mod
 from trainer.demo_api.chat_service import ChatService, build_default_live_runner
 from trainer.demo_api.contracts import ChatRequest
 from trainer.demo_api.copilot_router import create_copilot_router, install_copilot_error_handlers
+from trainer.demo_api.telemetry_router import create_telemetry_router
 from trainer.demo_api.monitor import MonitorRecorder
 from trainer.demo_api.monitor_api import create_monitor_router
 from trainer.demo_api.readiness import evaluate_live_readiness
@@ -134,6 +135,8 @@ def create_app(
     app.include_router(
         create_copilot_router((lambda: chat_service_mod._get_or_build_pipeline()) if live else None)
     )
+    # POST /api/v1/telemetry/sequence: 자세는 MCP로 위임하고, 미구현 엔진은 not_available 이다.
+    app.include_router(create_telemetry_router(mcp_base_url=mcp_base_url))
     install_copilot_error_handlers(app)
 
     return app
