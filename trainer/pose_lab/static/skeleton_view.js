@@ -47,7 +47,9 @@ const BONE_COLOR = 0xc8d0dc;
 // 혼동했고("기준 스트로크가 보이지 않음", 궤적을 스트로크로 읽음) 그것이 이 재작업의 출발점이다.
 // 따뜻한 쪽(주황·노랑)으로 몰아 층 색과 겹치지 않게 한다.
 const STROKE_COLOR = { query: 0xff7a1a, reference: 0xffd23f };
-const STROKE_LEGEND = { query: "대상 스트로크", reference: "기준 스트로크" };
+// 벽면 분사 경로(착탄점을 이은 선). 장치 이동 궤적(가는 선)과 다른 것이라 이름부터 가른다(평가자).
+const STROKE_LEGEND = { query: "작업자 분사 경로", reference: "기준 분사 경로" };
+const STROKE_ENDS_LEGEND = "분사 경로: 고리 = 시작 · 뿔 = 끝(진행 방향)";
 
 const SIGMA_OK = 0x2f855a;
 const SIGMA_WARN = 0xb7791f;
@@ -331,10 +333,10 @@ function buildDom(container) {
   const controls = document.createElement("div");
   controls.className = "view3d-controls";
   controls.innerHTML = `
-    <label><input id="view3dLayerQuery" type="checkbox" checked> 대상(파랑)</label>
-    <label><input id="view3dLayerReference" type="checkbox" checked> 기준(보라)</label>
-    <label><input id="view3dLayerLegs" type="checkbox" checked> 다리(IK)</label>
-    <label><input id="view3dLayerCorrected" type="checkbox"> 교정 후(예상)</label>
+    <label><input id="view3dLayerQuery" type="checkbox" checked> 선택한 작업자(파랑)</label>
+    <label><input id="view3dLayerReference" type="checkbox" checked> 기준 작업자(보라)</label>
+    <label><input id="view3dLayerLegs" type="checkbox" checked> 추정 다리 자세</label>
+    <label><input id="view3dLayerCorrected" type="checkbox"> 안내 적용 후(예상)</label>
     <label><input id="view3dLayerWall" type="checkbox" checked> 벽면</label>
     <span class="view3d-controls-sep" aria-hidden="true"></span>
     <button id="view3dPresetFit" type="button">자세 맞춤</button>
@@ -471,6 +473,7 @@ function renderLegend(legend, view) {
     item.dataset.role = `stroke-${layer}`;
     legend.append(item);
   }
+  legend.append(legendItem(null, STROKE_ENDS_LEGEND));
   // 진하기 눈금 문구는 **서버가 통째로** 짓는다(`deviation.legend`). 화면이 이름과 숫자를
   // 조립하면 눈금과 문구가 갈린다 — 이전 판은 "가장 진한 곳 79.9cm"라고 적었는데 그 79.9cm짜리
   // 관절(LeftCalf)은 다리를 숨겨서 화면 어디에도 없었다. 이제 서버가 눈금을 그리는 관절에서만
@@ -1217,6 +1220,34 @@ function mount(THREE, container) {
       if (runGroup.children.length === 0) continue;
       group.add(runGroup);
       drawnRuns += 1;
+    }
+    // 시작과 끝·진행 방향. 다른 평가자: "분사 경로의 시작·끝과 진행 방향이 없다." 글자 없이 모양으로
+    // 말한다 — 시작은 경로가 지나가는 **고리**, 끝은 진행 방향을 가리키는 **뿔**.
+    const drawn = runs
+      .map((run) => (Array.isArray(run) ? run : []).filter(isVec3).map((p) => new THREE.Vector3(...p)))
+      .filter((points) => points.length >= 2);
+    if (drawn.length > 0) {
+      const first = drawn[0];
+      const last = drawn[drawn.length - 1];
+      const startDir = new THREE.Vector3().subVectors(first[1], first[0]);
+      const endDir = new THREE.Vector3().subVectors(last[last.length - 1], last[last.length - 2]);
+      if (startDir.lengthSq() > 1e-12) {
+        const hoop = new THREE.Mesh(
+          new THREE.TorusGeometry(STROKE_RADIUS * 4, STROKE_RADIUS * 0.9, 8, 24), material,
+        );
+        hoop.position.copy(first[0]);
+        hoop.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), startDir.normalize());
+        hoop.userData.kind = "surface-stroke-start";
+        group.add(hoop);
+      }
+      if (endDir.lengthSq() > 1e-12) {
+        const tip = new THREE.Mesh(new THREE.ConeGeometry(STROKE_RADIUS * 3.5, STROKE_RADIUS * 9, 14), material);
+        const along = endDir.normalize();
+        tip.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), along);
+        tip.position.copy(last[last.length - 1]).addScaledVector(along, STROKE_RADIUS * 4.5);
+        tip.userData.kind = "surface-stroke-end";
+        group.add(tip);
+      }
     }
     return { group, runs: drawnRuns, segments };
   }
@@ -2537,7 +2568,7 @@ function mount(THREE, container) {
       reference: ri,
       deviations: {},
       maxDeviation: null,
-      readout: rTime ? `대상 ${qTime} · 기준 ${rTime}` : `대상 ${qTime}`,
+      readout: rTime ? `작업자 ${qTime} · 기준 ${rTime}` : `작업자 ${qTime}`,
     };
   }
 
@@ -3001,7 +3032,7 @@ function mount(THREE, container) {
     }
     if (moreLines.length > 0) {
       const summary = document.createElement("summary");
-      summary.textContent = `고지 ${moreLines.length}건 더 보기`;
+      summary.textContent = `측정·표시의 제한 사항 (${moreLines.length}건)`;
       const list = document.createElement("ul");
       for (const text of moreLines) {
         const item = document.createElement("li");

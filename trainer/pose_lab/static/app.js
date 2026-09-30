@@ -45,10 +45,10 @@ const NORMALIZATION_CLASS = { measured: "measured", provisional: "provisional-fl
 
 // 비교를 만들지 않은 이유. 서버의 reason과 1:1이다.
 const UNAVAILABLE_REASONS = {
-  motion_key_mismatch: "동작 키가 달라 비교하지 않습니다.",
+  motion_key_mismatch: "동작 유형이 달라 비교하지 않습니다.",
   insufficient_frames: "착탄점이 있는 분사 프레임이 모자라 지표를 만들지 못했습니다.",
   no_source: "실데이터 소스가 배선되지 않았습니다.",
-  pass_not_found: "고른 패스를 원본에서 찾지 못했습니다.",
+  pass_not_found: "고른 도장 구간을 원본에서 찾지 못했습니다.",
   no_expert_worker: "이 데이터셋에 전형기 작업자가 없습니다.",
 };
 
@@ -64,7 +64,7 @@ const DEPLOYED_REASONS = {
   phase_reference_missing: "이 밴드에 위상 레퍼런스가 없습니다.",
   quality_insufficient: "채점할 관절이 모자랍니다.",
   insufficient_frames: "프레임이 모자랍니다.",
-  pass_not_found: "패스를 찾지 못했습니다.",
+  pass_not_found: "도장 구간을 찾지 못했습니다.",
   no_source: "데이터 소스가 없습니다.",
 };
 
@@ -132,7 +132,7 @@ function renderMeasuredDetails(root, measured, view) {
   })();
   for (const [term, value] of [
     ["유사도", shown(display.score)],
-    ["교정 후", shown(display.score_after)],
+    ["안내 적용 후", shown(display.score_after)],
     ["개선율(분리)", `${shown(display.improvement_split)}  ${splitNote}`],
     ["개선율(동일)", shown(display.improvement_same)],
     ["REQ-19 게이트", `${gate}${gateWhy}`],
@@ -185,7 +185,7 @@ function renderMeasuredDetails(root, measured, view) {
   const axes = measured.axes ?? [];
   if (axes.length === 0) {
     const row = el("tr");
-    const cell = el("td", null, "발부된 교정 없음");
+    const cell = el("td", null, "나간 안내 없음");
     cell.colSpan = 4;
     row.append(cell);
     axesBody.append(row);
@@ -297,7 +297,7 @@ function renderCorrections(measured) {
   const state = $("correctionsState");
 
   if (axes.length === 0) {
-    setState(state, "empty", "발부할 교정이 없습니다.");
+    setState(state, "empty", "고칠 자세가 없습니다 — 기준과 가깝습니다.");
     return;
   }
   setState(state, "ok");
@@ -351,7 +351,7 @@ function renderImprovement(measured) {
     el("span", "improvement-caption", "유사도"),
     el("span", "improvement-value", shown(display.score)),
     el("span", "improvement-arrow", "→"),
-    el("span", "improvement-caption", "교정 후"),
+    el("span", "improvement-caption", "안내 적용 후"),
     el("span", "improvement-value", shown(display.score_after)),
   );
 
@@ -594,7 +594,7 @@ async function loadQueryPasses() {
   const level = $("queryLevel").value;
   if (level) query.set("level", level);
 
-  setState(status, "loading", "패스 목록을 불러오는 중…");
+  setState(status, "loading", "도장 구간 목록을 불러오는 중…");
   $("run").disabled = true;
   let payload;
   try {
@@ -603,7 +603,7 @@ async function loadQueryPasses() {
   } catch (err) {
     listed.query = [];
     fillQueryPasses();
-    setState(status, "error", `패스 목록을 불러오지 못했습니다 — ${err}`);
+    setState(status, "error", `도장 구간 목록을 불러오지 못했습니다 — ${err}`);
     return;
   }
   if (payload.status !== "ok") {
@@ -625,11 +625,11 @@ async function loadQueryPasses() {
   fillQueryPasses();
 
   if (payload.passes.length === 0) {
-    setState(status, "empty", "이 조건에 맞는 패스가 없습니다.");
+    setState(status, "empty", "이 조건에 맞는 도장 구간이 없습니다.");
   } else {
     const scanned = `세션 ${payload.sessions_scanned}/${payload.sessions_total}`
       + (payload.truncated ? " (잘림 — 한도를 올리면 더 훑는다)" : "");
-    setState(status, "idle", `${scanned} · 패스 ${payload.passes.length}개`);
+    setState(status, "idle", `${scanned} · 도장 구간 ${payload.passes.length}개`);
   }
   await fetchReference();
 }
@@ -664,7 +664,7 @@ function renderReferenceLine() {
 
   if (phase === "idle") {
     line.dataset.tone = "idle";
-    valueEl.textContent = "패스를 고르면 전형기 기준을 자동으로 찾습니다.";
+    valueEl.textContent = "도장 구간을 고르면 기준 작업자(전형기)의 같은 유형 동작을 자동으로 찾습니다.";
     return;
   }
   if (phase === "loading") {
@@ -679,7 +679,7 @@ function renderReferenceLine() {
   }
   if (candidates.length === 0) {
     line.dataset.tone = "empty";
-    valueEl.textContent = message || "이 동작 키와 일치하는 전형기 패스가 없습니다.";
+    valueEl.textContent = message || "기준 작업자(전형기)에게 같은 유형의 동작이 없습니다.";
     return;
   }
   const chosen = candidates[index];
@@ -690,7 +690,7 @@ function renderReferenceLine() {
   // 동작 키를 어디까지 완화해서 찾았는지(S8). 느슨한 일치를 엄밀 일치처럼 보이게 두면 화면이
   // "같은 동작"이라고 거짓을 말한다 — 문구는 서버(`match_label`)가 준다.
   if (typeof match === "string") {
-    matchEl.textContent = relaxed ? `동작 키 완화: ${match}` : `동작 키 ${match}`;
+    matchEl.textContent = relaxed ? `동작 유형 완화: ${match}` : `동작 유형 ${match}`;
     if (relaxed) matchEl.dataset.tone = "relaxed";
   }
   $("run").disabled = false;
@@ -856,6 +856,8 @@ function renderDeployed(payload) {
     const reason = payload === null ? null : payload.reason;
     $("deployedHeadline").textContent = "—";
     $("deployedUnit").textContent = "";
+    $("deployedHint").hidden = true;
+    $("deployedMore").hidden = true;
     $("deployedLine").textContent = "";
     $("deployedNote").hidden = true;
     setState($("deployedState"), "empty", DEPLOYED_REASONS[reason] ?? "배포 채점을 내지 않습니다.");
@@ -866,8 +868,13 @@ function renderDeployed(payload) {
   const view = payload.display;
   $("deployedHeadline").textContent = view.headline;
   $("deployedUnit").textContent = view.headline_unit;
-  $("deployedLine").textContent =
-    `유사도 ${view.score} · 밴드 ${view.band} · 표본 ${view.support} · ${view.quality} · ${view.mode} · ${view.shape}`;
+  // 기본 줄은 쉬운 말 한 줄, 분석 용어(밴드·표본·채점 방식·굽이)는 접힌 상세로. 문장은 서버가 만든다.
+  $("deployedLine").textContent = view.summary;
+  const hint = $("deployedHint");
+  hint.hidden = view.headline_hint === null;
+  hint.textContent = view.headline_hint ?? "";
+  $("deployedMore").hidden = false;
+  $("deployedDetails").textContent = view.details;
 
   const note = $("deployedNote");
   note.hidden = view.headline_note === null;
@@ -909,12 +916,12 @@ async function run() {
   const reference = referenceState.candidates[referenceState.index];
   const requestId = ++runRequestId;
   if (query === null || reference === null || reference === undefined) {
-    showHeroState("empty", "먼저 대상 패스를 고르고, 전형기 기준이 자동으로 잡히길 기다리세요.");
+    showHeroState("empty", "먼저 도장 구간을 고르고, 기준 작업자의 동작이 자동으로 잡히길 기다리세요.");
     return;
   }
 
   $("run").disabled = true;
-  $("run").textContent = "평가 중…";
+  $("run").textContent = "비교 중…";
   showHeroState("loading", "비교를 계산하는 중…");
   setState($("correctionsState"), "loading", "비교를 계산하는 중…");
   $("correctionList").replaceChildren();
@@ -947,14 +954,14 @@ async function run() {
     if (requestId !== runRequestId) return;
     renderDeployed(late);
     $("run").disabled = false;
-    $("run").textContent = "평가";
+    $("run").textContent = "비교";
     return;
   }
   // **늦게 온 응답은 버린다.** 구간을 빠르게 바꾸면 비교가 여럿 나가고, 먼저 보낸 것이
   // 나중에 도착해 최신 결과를 덮을 수 있다.
   if (requestId !== runRequestId) return;
   $("run").disabled = false;
-  $("run").textContent = "평가";
+  $("run").textContent = "비교";
   analyzed = { query: passLabel(query), reference: passLabel(reference) };
   // 비교가 도는 사이에 선택이 또 바뀌었으면 이 결과도 이미 낡았다.
   const current = selectedQuery();

@@ -2930,9 +2930,23 @@ def _diagnose_display(
 ) -> dict[str, object]:
     """화면에 그대로 찍을 문자열들. 숫자는 여기서 **한 번만** 반올림한다."""
     percentile = scored.percentile
+    support = f"{resolved.support:,}" if resolved.support else "—"
+    score = "—" if scored.score is None else f"{scored.score:.2f}"
     return {
         "headline": "—" if percentile is None else f"{percentile}",
         "headline_unit": "" if percentile is None else "백분위",
+        # 백분위가 **어느 방향이 좋은지** 말한다(다른 평가자: "백분위도 어느 방향이 좋은지 설명해야").
+        "headline_hint": (
+            None if percentile is None
+            else f"이 동작의 점수가 숙련자 구간의 {percentile}%보다 높습니다 — 높을수록 숙련자 평균 자세에 가깝습니다."
+        ),
+        # 기본 화면은 한 줄. 밴드·σ·위상 같은 분석 용어는 접힌 상세(`details`)로 내린다.
+        "summary": f"숙련자 도장 구간 {support}개와 견줌 · 유사도 {score}",
+        "details": (
+            f"reach 밴드 {resolved.band or '—'} · 표본 {support} · "
+            f"{QUALITY_TEXT.get(resolved.quality or '', '—')} · {MODE_TEXT.get(scored.mode, scored.mode)} · "
+            f"스트로크 {shape.strokes} · 굽이 {shape.straightness:.2f}"
+        ),
         "score": "—" if scored.score is None else f"{scored.score:.2f}",
         "band": resolved.band or "—",
         "support": f"{resolved.support:,}" if resolved.support else "—",

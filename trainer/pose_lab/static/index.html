@@ -1,33 +1,33 @@
 <!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>자세 비교 실험대</title>
+<title>도장 동작 비교</title>
 <link rel="stylesheet" href="style.css">
 <main>
   <header class="topbar">
-    <h1>자세 비교 실험대</h1>
-    <p class="topbar-sub">스프레이 자세를 전형기 기준과 견주고, 따라야 할 교정을 우선순위로 낸다.</p>
+    <h1>도장 동작 비교</h1>
+    <p class="topbar-sub">작업자의 도장 동작을 기준 작업자(전형기)와 견주고, 먼저 고칠 자세를 알려 줍니다.</p>
   </header>
 
   <!-- ① 고르기 — 기준은 고를 수 없다. 전형기 중 동작 키가 같은 패스를 자동으로 고른다. -->
   <section class="panel picker" aria-label="평가할 시퀀스">
     <div class="picker-row">
-      <span class="section-title picker-title">평가할 시퀀스</span>
+      <span class="section-title picker-title">비교할 작업 동작</span>
       <label class="field">작업자
         <select id="queryWorker"></select>
       </label>
       <label class="field">레벨
         <select id="queryLevel"><option value="">전체</option></select>
       </label>
-      <label class="field wide">패스
+      <label class="field wide">도장 구간
         <select id="queryPass"></select>
       </label>
-      <button id="run" class="btn-primary" disabled>평가</button>
+      <button id="run" class="btn-primary" disabled>비교</button>
     </div>
     <div class="picker-foot">
       <div class="reference-line" id="referenceLine" data-tone="idle">
-        <span class="reference-label">기준</span>
-        <span class="reference-value" id="referenceValue">패스를 고르면 전형기 기준을 자동으로 찾습니다.</span>
+        <span class="reference-label">기준 작업자</span>
+        <span class="reference-value" id="referenceValue">도장 구간을 고르면 기준 작업자(전형기)의 같은 유형 동작을 자동으로 찾습니다.</span>
         <button id="cycleReference" class="btn-ghost" hidden>다른 기준 ▸</button>
         <span class="reference-cycle-note" id="referenceCycleNote"></span>
         <!-- 동작 키를 어느 단까지 완화해서 찾았는지(S8). 엄밀 일치와 느슨한 일치를 구별하지 못하면
@@ -47,11 +47,10 @@
       <!-- ② 얼마나 다른가 — 이 화면의 답. 가장 크게 쓴다. -->
       <section class="panel hero" id="heroSection" aria-label="얼마나 다른가">
         <div class="hero-empty" id="heroEmpty">
-          <p class="hero-empty-title">아직 평가하지 않았습니다</p>
+          <p class="hero-empty-title">아직 비교하지 않았습니다</p>
           <p class="hero-empty-body">
-            위에서 작업자 · 레벨 · 패스를 고르고 <strong>평가</strong>를 누르세요.
-            전형기 중 같은 동작(동작 키)의 패스를 기준으로 자동으로 잡습니다 — 기준은 직접
-            고르지 않습니다.
+            위에서 작업자 · 레벨 · 도장 구간을 고르고 <strong>비교</strong>를 누르세요.
+            기준 작업자(전형기)의 같은 유형 동작을 기준으로 자동으로 잡습니다.
           </p>
         </div>
         <div class="hero-body" id="heroBody" hidden>
@@ -60,12 +59,12 @@
           <p class="analyzed-label" id="analyzedLabel"></p>
           <div class="hero-figure">
             <span class="hero-number" id="heroScore">—</span>
-            <span class="hero-figure-label">유사도<br><span class="hero-figure-hint">1.0 = 기준과 동일</span></span>
+            <span class="hero-figure-label">기준 동작과의 유사도<br><span class="hero-figure-hint">선택한 기준 동작 하나와 비교 · 1.0 = 같음</span></span>
           </div>
           <dl class="hero-meta">
             <!-- 동작 키와 **어느 단에서 맺은 쌍인지**(S8)를 한 칸에. 기준 줄이 "완화"라고 적었는데
                  결과가 그 사실을 말하지 않으면 화면 두 자리가 다른 말을 한다. -->
-            <div><dt>동작 키</dt><dd id="heroMotionKey">—</dd><dd class="hero-meta-sub" id="heroMotionMatch" hidden></dd></div>
+            <div><dt>동작 유형</dt><dd id="heroMotionKey">—</dd><dd class="hero-meta-sub" id="heroMotionMatch" hidden></dd></div>
             <div><dt>표본</dt><dd id="heroSamples">—</dd></div>
             <!-- 바닥 기준 머리 높이(S4). 서 있는 사람의 높이가 아니면 앉거나 쭈그린 자세다.
                  자리표시 다리는 3D에 **그려져 있다**(B) — 이 숫자는 그 다리를 대신하는 것이 아니라
@@ -79,20 +78,23 @@
       </section>
 
       <!-- ③ 무엇을 고치나 — 교정을 사람이 읽는 문장으로, 유사도 바로 아래·3D 바깥에 둔다. -->
-      <section class="panel corrections" id="corrections" aria-label="교정">
-        <h2 class="section-title">교정 <span class="count-badge" id="correctionsCount"></span></h2>
+      <section class="panel corrections" id="corrections" aria-label="자세 개선 안내">
+        <h2 class="section-title">자세 개선 안내 <span class="count-badge" id="correctionsCount"></span></h2>
         <ol class="correction-list" id="correctionList"></ol>
-        <p class="state-note" id="correctionsState" data-tone="idle">패스를 고르고 평가를 누르면 여기에 뜹니다.</p>
+        <p class="state-note" id="correctionsState" data-tone="idle">도장 구간을 고르고 비교를 누르면 여기에 뜹니다.</p>
       </section>
 
       <!-- ④ 지시를 그대로 따랐을 때의 상한. "개선율"이 아니다 — 작업자가 다시 뿌린 적이 없고,
            지시한 점을 지시한 만큼 옮겨 다시 채점한 계산값이다(instructions.IMPROVEMENT_LABELS의
            두 가정, docs/literature_basis.md §4). -->
       <section class="panel improvement" id="improvementSection" aria-label="지시를 그대로 따랐을 때의 상한">
-        <h2 class="section-title">지시를 그대로 따르면</h2>
+        <h2 class="section-title">안내를 적용했을 때의 예상 결과</h2>
         <!-- 위에는 원시 두 숫자만 둔다. 정규화 지표(G)는 천장 가까이에서 오해를 만드므로
              접힌 쪽으로 내린다 — 0.950→0.970과 0.19→0.51이 같은 G를 낼 수 있다. -->
         <div class="improvement-score" id="improvementScore">—</div>
+        <!-- **숫자 옆에 늘** 둔다. 접힌 칸 안에만 있으면 0.160 → 0.958 이 재측정 결과로 읽힌다
+             (다른 평가자가 실제 브라우저에서 지적했다). -->
+        <p class="improvement-flag">계산상 예상값 — 다시 측정한 결과가 아닙니다</p>
         <details class="improvement-detail">
           <summary>자세히</summary>
           <dl class="improvement-rows" id="improvementRows"></dl>
@@ -108,18 +110,23 @@
            **②③ 사이에 끼우지 않는다.** ③ 교정은 ② 유사도의 바로 다음 형제여야 한다는
            계약이 있고(`test_corrections_section_follows_hero_outside_3d_view`), 실제로
            여기에 끼웠다가 그 검사가 실패했다. 비교의 이야기(②③④)를 끊지 않고 뒤에 둔다. -->
-      <section class="panel deployed" id="deployedSection" aria-label="배포 채점" hidden>
-        <h2 class="section-title">숙련자 분포에서</h2>
+      <section class="panel deployed" id="deployedSection" aria-label="숙련자 집단 기준 평가" hidden>
+        <h2 class="section-title">숙련자 집단 기준 평가</h2>
         <div class="deployed-body">
           <div class="deployed-figure">
             <span class="deployed-number" id="deployedHeadline">—</span>
             <span class="deployed-unit" id="deployedUnit"></span>
           </div>
           <p class="deployed-line" id="deployedLine"></p>
+          <p class="deployed-hint" id="deployedHint" hidden></p>
           <!-- σ 막대. **글자는 관절 이름뿐**이고 값은 높이로만 말한다. 점선이 교정 문턱이다. -->
           <ul class="deployed-bars" id="deployedBars" aria-label="관절별 편차"></ul>
         </div>
         <p class="deployed-note" id="deployedNote" hidden></p>
+        <details class="deployed-more" id="deployedMore" hidden>
+          <summary>분석 상세</summary>
+          <p id="deployedDetails"></p>
+        </details>
         <p class="state-note" id="deployedState" hidden></p>
       </section>
 
@@ -153,7 +160,7 @@
         <h2 class="orientation-title" id="orientationTitle">건 각도</h2>
         <p class="orientation-header-note" id="orientationHeaderNote"></p>
         <table class="orientation-table" id="orientationTable">
-          <thead><tr><th scope="col">항목</th><th scope="col">대상</th><th scope="col">기준</th></tr></thead>
+          <thead><tr><th scope="col">항목</th><th scope="col">선택한 작업자</th><th scope="col">기준 작업자</th></tr></thead>
           <tbody></tbody>
         </table>
         <ul class="orientation-notes" id="orientationNotes"></ul>
@@ -168,7 +175,7 @@
           <h3 class="orientation-title" id="jointAnglesTitle">관절 각도</h3>
           <p class="orientation-header-note" id="jointAnglesNote"></p>
           <table class="orientation-table joint-angles-table" id="jointAnglesTable">
-            <thead><tr><th scope="col">관절</th><th scope="col">항목</th><th scope="col">대상</th><th scope="col">기준</th></tr></thead>
+            <thead><tr><th scope="col">관절</th><th scope="col">항목</th><th scope="col">선택한 작업자</th><th scope="col">기준 작업자</th></tr></thead>
             <tbody></tbody>
           </table>
           <p class="orientation-header-note joint-angles-quality-note" id="jointAnglesQualityNote"></p>
@@ -181,7 +188,7 @@
           <h3 class="orientation-title" id="jointAxesTitle">관절 축 평가</h3>
           <p class="orientation-header-note" id="jointAxesNote"></p>
           <table class="orientation-table joint-axes-table" id="jointAxesTable">
-            <thead><tr><th scope="col">관절</th><th scope="col">상태</th><th scope="col">항목</th><th scope="col">대상</th><th scope="col">기준</th></tr></thead>
+            <thead><tr><th scope="col">관절</th><th scope="col">상태</th><th scope="col">항목</th><th scope="col">선택한 작업자</th><th scope="col">기준 작업자</th></tr></thead>
             <tbody></tbody>
           </table>
         </details>

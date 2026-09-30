@@ -2817,3 +2817,46 @@ def test_playback_checks_can_fail():
     assert revived != full and "legs_toggle_revives_the_held_representative" in playback_faults(revived)
     labelled = full.replace("    dom.labelsHost.hidden = true;\n  }", "  }", 1)
     assert labelled != full and "labels_left_on_during_playback" in playback_faults(labelled)
+
+
+# --- 사용자 용어 · 두 점수의 구분 · 분사 경로의 시작과 끝 -------------------------------------
+#
+# 다른 평가자가 실제 브라우저에서 짚은 것들. 문구는 바뀔 수 있으므로 **성질**만 고정한다.
+
+
+def wording_faults(html: str, js: str) -> list[str]:
+    faults: list[str] = []
+    # 예상값 경고는 **숫자 옆에 늘** 있다 — 접힌 칸 안에만 있으면 재측정 결과로 읽힌다.
+    section = html.split('id="improvementSection"', 1)[-1].split("</section>", 1)[0]
+    before_details = section.split("<details", 1)[0]
+    if 'class="improvement-flag"' not in before_details:
+        faults.append("estimate_flag_hidden_in_details")
+    # 두 점수는 이름부터 다르다: 선택한 기준 동작 하나 대 숙련자 집단.
+    hero = re.search(r'class="hero-figure-label">(.*?)</span></span>', html, re.S)
+    if hero is None or "기준 동작" not in hero.group(1):
+        faults.append("hero_score_does_not_say_what_it_compares_to")
+    if '<h2 class="section-title">숙련자 집단' not in html:
+        faults.append("deployed_score_does_not_say_what_it_compares_to")
+    if 'id="deployedHint"' not in html:
+        faults.append("percentile_direction_not_explained")
+    # 분사 경로의 시작과 끝·진행 방향 — 글자 없이 모양으로.
+    code = without_comments(js)
+    stroke = _nested_function_body(code, "buildStrokeGroup")
+    if '"surface-stroke-start"' not in stroke or '"surface-stroke-end"' not in stroke:
+        faults.append("stroke_has_no_start_or_end")
+    if "registerLabel" in stroke:
+        faults.append("stroke_ends_carry_text")
+    return faults
+
+
+def test_the_screen_speaks_the_users_words():
+    assert wording_faults(_read("index.html"), _read("skeleton_view.js")) == []
+
+
+def test_wording_checks_can_fail():
+    html, js = _read("index.html"), _read("skeleton_view.js")
+    hidden = html.replace('        <p class="improvement-flag">계산상 예상값 — 다시 측정한 결과가 아닙니다</p>\n', "", 1)
+    hidden = hidden.replace('<summary>자세히</summary>', '<summary>자세히</summary><p class="improvement-flag">x</p>', 1)
+    assert hidden != html and "estimate_flag_hidden_in_details" in wording_faults(hidden, js)
+    bare = js.replace('"surface-stroke-end"', '"surface-stroke-x"', 1)
+    assert bare != js and "stroke_has_no_start_or_end" in wording_faults(html, bare)

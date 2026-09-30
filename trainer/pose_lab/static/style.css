@@ -935,3 +935,17 @@ body[data-stale="true"] #orientationSection {
   color: var(--text-dim);
   min-width: 14rem;
 }
+
+/* 예상값 표시 — 숫자 바로 아래에 늘 보인다. 강조색이 아니라 흐린 글자로(색은 심각도에만 쓴다). */
+.improvement-flag {
+  margin: var(--sp-1) 0 0;
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+}
+.deployed-hint {
+  margin: var(--sp-1) 0 0;
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+  flex-basis: 100%;
+}
+.deployed-more { margin-top: var(--sp-2); font-size: var(--fs-sm); color: var(--text-faint); }
