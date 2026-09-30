@@ -136,7 +136,8 @@ def create_app(
         create_copilot_router((lambda: chat_service_mod._get_or_build_pipeline()) if live else None)
     )
     # POST /api/v1/telemetry/sequence: 자세는 MCP로 위임하고, 미구현 엔진은 not_available 이다.
-    app.include_router(create_telemetry_router(mcp_base_url=mcp_base_url))
+    # recorder 를 함께 준다 — v2.5 요청·응답이 /api/monitor/{events,stream} 에 보인다.
+    app.include_router(create_telemetry_router(mcp_base_url=mcp_base_url, recorder=recorder))
     install_copilot_error_handlers(app)
 
     return app

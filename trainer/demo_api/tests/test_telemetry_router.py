@@ -294,3 +294,88 @@ def test_unimplemented_engines_say_so_rather_than_inventing_values() -> None:
 
     for key in ("coating_feedback", "sequence_feedback"):
         assert data[key] == {"analysis_status": "not_available", "reason_code": "engine_not_implemented"}
+
+
+# --- 모니터 기록 ----------------------------------------------------------
+
+
+def _monitored() -> tuple[TestClient, Any]:
+    from trainer.demo_api.monitor import MonitorRecorder
+
+    recorder = MonitorRecorder()
+
+    def _ok(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"status": "success", "result": dict(_MCP_RESULT), "error": None})
+
+    app = FastAPI()
+    app.include_router(
+        create_telemetry_router(
+            store=SequenceStore(":memory:"),
+            mcp_base_url="http://mcp.test:8100",
+            transport=httpx.MockTransport(_ok),
+            recorder=recorder,
+        )
+    )
+    install_copilot_error_handlers(app)
+    return TestClient(app), recorder
+
+
+def test_one_input_and_one_output_event_per_call() -> None:
+    """Given a recorder, When a sequence is posted, Then the monitor sees both directions."""
+    client, recorder = _monitored()
+
+    _ = client.post(URL, json=_body())
+    events = recorder.snapshot(cursor=0, limit=50).events
+
+    assert [(e.phase, e.direction) for e in events] == [("runtime", "input"), ("runtime", "output")]
+    assert [e.session_id for e in events] == ["1_1001642_1", "1_1001642_1"]
+
+
+def test_the_output_event_carries_the_response_body() -> None:
+    """Given a recorded call, When the output event is read, Then it is the response data."""
+    client, recorder = _monitored()
+
+    posted = client.post(URL, json=_body()).json()["data"]
+    output = recorder.snapshot(cursor=0, limit=50).events[1]
+
+    assert output.payload["data"] == posted
+
+
+def test_the_input_event_precedes_the_stored_state() -> None:
+    """Given a failing engine, When posted, Then the input is still on the monitor.
+
+    처리 전에 남기므로 이후 단계가 실패해도 무엇이 들어왔는지는 남는다.
+    """
+    from trainer.demo_api.monitor import MonitorRecorder
+
+    recorder = MonitorRecorder()
+    app = FastAPI()
+    app.include_router(
+        create_telemetry_router(
+            store=SequenceStore(":memory:"),
+            mcp_base_url="http://mcp.test:8100",
+            transport=httpx.MockTransport(lambda _r: httpx.Response(500, text="boom")),
+            recorder=recorder,
+        )
+    )
+    _ = TestClient(app).post(URL, json=_body())
+
+    events = recorder.snapshot(cursor=0, limit=50).events
+    assert len(events) == 2
+    assert events[1].payload["data"]["pose_feedback"]["reason_code"] == "engine_unavailable"
+
+
+def test_unattributed_sequence_is_still_visible_on_the_monitor() -> None:
+    """Given no session_id, When posted, Then the monitor still shows the exchange."""
+    client, recorder = _monitored()
+    body = _body()
+    del body["session_id"]
+
+    _ = client.post(URL, json=body)
+
+    assert {e.session_id for e in recorder.snapshot(cursor=0, limit=50).events} == {"(unattributed)"}
+
+
+def test_no_recorder_means_no_recording_and_no_failure() -> None:
+    """Given no recorder, When posted, Then the endpoint works unchanged."""
+    assert _client().post(URL, json=_body()).status_code == 200

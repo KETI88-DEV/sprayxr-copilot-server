@@ -27,6 +27,7 @@ from anyio import to_thread
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
+from trainer.demo_api.monitor import MonitorRecorder
 from trainer.demo_api.sequence_store import SequenceStore
 from trainer.demo_api.telemetry_contracts import (
     EngineFeedback,
@@ -48,6 +49,8 @@ _SUCCESS_MESSAGE: Final[str] = "Sequence evaluated"
 _MCP_TIMEOUT_SEC: Final[float] = 10.0
 _UNKNOWN_FIELD_CAP: Final[int] = 50
 _ENGINE_MISSING: Final[str] = "engine_not_implemented"
+# MonitorEvent.session_id 는 문자열이다. 귀속되지 않은 시퀀스도 모니터에서 보여야 한다.
+_UNATTRIBUTED: Final[str] = "(unattributed)"
 
 
 def _now() -> str:
@@ -131,7 +134,13 @@ def create_telemetry_router(
     store: SequenceStore | None = None,
     mcp_base_url: str | None = None,
     transport: httpx.BaseTransport | None = None,
+    recorder: MonitorRecorder | None = None,
 ) -> APIRouter:
+    """``recorder``를 주면 호출당 입력 1건 + 출력 1건을 `/api/monitor/*`에 남긴다.
+
+    최상위 검증 실패(422)는 Pydantic이 핸들러 전에 거부하므로 기록되지 않는다 —
+    옛 시뮬레이터 라우터는 직접 검증해서 422도 남긴다. 그 차이를 알고 쓴다.
+    """
     router = APIRouter()
     sequences = store if store is not None else SequenceStore()
     base = (mcp_base_url or os.environ.get("MCP_BASE_URL", "http://localhost:8100")).rstrip("/")
@@ -157,6 +166,10 @@ def create_telemetry_router(
 
     async def _handle(query: TelemetrySequenceRequest) -> JSONResponse:
         started = time.monotonic()
+        monitor_session = query.session_id or _UNATTRIBUTED
+        if recorder is not None:
+            # 처리 전에 남긴다 — 이후 단계가 실패해도 무엇이 들어왔는지는 남는다.
+            _ = recorder.record(monitor_session, "runtime", "input", query.model_dump(mode="json"))
         frames_received = len(query.sequence_info)
         ack_record = await to_thread.run_sync(
             lambda: sequences.record(
@@ -213,6 +226,11 @@ def create_telemetry_router(
                 len(unknown),
                 ",".join(unknown[:5]),
             )
+        payload = envelope.model_dump(mode="json")
+        if recorder is not None:
+            # 저장(상태 전이)이 위에서 끝난 뒤에 출력을 발행한다 — 순서를 뒤집으면
+            # 구독자가 갱신 전 상태를 읽고 두 번째 신호를 받지 못한다(AGENTS.md).
+            _ = recorder.record(monitor_session, "runtime", "output", payload)
         logger.info(
             "telemetry sequence session=%s sequence=%s frames=%d stored=%s duplicate=%s"
             " conflict=%s pose=%s degraded=%s",
@@ -225,7 +243,7 @@ def create_telemetry_router(
             pose.analysis_status,
             degraded or ack_record.conflict,
         )
-        return JSONResponse(status_code=200, content=envelope.model_dump(mode="json"))
+        return JSONResponse(status_code=200, content=payload)
 
     router.post(TELEMETRY_SEQUENCE_PATH)(_handle)
     router.post(ANALYZE_SEQUENCE_ALIAS)(_handle)
