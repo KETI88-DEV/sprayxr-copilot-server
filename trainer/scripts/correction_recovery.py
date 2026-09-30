@@ -108,37 +108,12 @@ def perturb(
     return out
 
 
-def _pass_inputs(rows: list[dict[str, str]]) -> tuple[list[dict[str, Vec3]], list[Vec3], list[Vec3]] | None:
-    """패스 하나에서 (프레임별 월드 관절, 착탄점, 건 위치). 못 만들면 `None`."""
-    if len(rows) < 6:
-        return None
-    offsets = pose_fk_csv.bind_offsets(rows[0])
-    if not offsets:
-        return None
-    frames: list[dict[str, Vec3]] = []
-    keep: list[int] = []
-    for index, row in enumerate(rows):
-        try:
-            frames.append(dict(pose_fk_csv.forward_kinematics(row, offsets)))
-        except (KeyError, ValueError):
-            continue
-        keep.append(index)
-    if len(frames) < 6:
-        return None
-    measured = measured_pose.measured_frames(rows)
-    impacts: list[Vec3] = []
-    tools: list[Vec3] = []
-    for index in keep:
-        if index >= len(measured):
-            continue
-        frame = measured[index]
-        if frame.hit is not None:
-            impacts.append(tuple(frame.hit))  # type: ignore[arg-type]
-        if frame.right is not None:
-            tools.append(tuple(frame.right))  # type: ignore[arg-type]
-    if len(impacts) != len(frames) or not tools:
-        return None
-    return frames, impacts, tools
+def _pass_inputs(
+    rows: list[dict[str, str]],
+) -> tuple[list[dict[str, Vec3]], list[Vec3], list[Vec3]] | None:
+    """정본은 `pose_fk_csv.pass_inputs`다 — 실험과 pose_lab이 **같은 재료**를
+    써야 같은 패스가 도구마다 다른 값을 내지 않는다."""
+    return pose_fk_csv.pass_inputs(rows)
 
 
 def _score(

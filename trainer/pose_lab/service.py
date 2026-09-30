@@ -30,6 +30,9 @@ level_mesh = importlib.import_module("level_mesh")
 pose_fk_csv = importlib.import_module("pose_fk_csv")
 simulator_csv = importlib.import_module("simulator_csv")
 world_axes = importlib.import_module("world_axes")
+# 배포된 채점 경로. **랩이 제품과 다른 계산을 하면 랩으로 제품을 못 고친다.**
+arm_reference = importlib.import_module("arm_reference")
+pose_stages = importlib.import_module("pose_stages")
 
 from trainer.pose_lab import body_proportions, composite, instructions, joint_angles, orientation, right_arm, skeleton
 from trainer.pose_lab.spread_reference import Resolved, SpreadReference
@@ -2687,3 +2690,123 @@ def reference_candidates(
         "ladder": ladder,
         "candidates": [] if chosen is None else chosen[2],
     }
+
+
+# --- 배포 경로를 그대로 돌려 보기 --------------------------------------------
+#
+# 위의 `compare`는 **패스 대 패스**다 — 동작 키로 고른 기준 패스 하나에 대고 잰다.
+# 배포된 채점은 그렇지 않다: reach 밴드로 숙련자 **버킷**(패스 수천 개의 분포)을 고르고,
+# 착탄 경로를 프로토타입에 DTW로 맞춘 뒤 위상마다 σ를 낸다. 기준 패스가 없다.
+#
+# 두 논리를 한 화면에서 견주려면 **배포 경로를 그대로 부르는 길**이 있어야 한다.
+# 여기서 새로 계산하면 랩이 제품과 다른 답을 내고, 그러면 랩으로 제품을 못 고친다.
+
+
+# 이 경로가 낼 수 있는 사유의 **닫힌 집합**. 단계의 것에 랩 계층 사유 셋을 더한다.
+DIAGNOSE_REASONS: Final[frozenset[str]] = pose_stages.STAGE_REASONS | {
+    "no_source", "pass_not_found", "insufficient_frames",
+}
+
+
+def diagnose_sequence(
+    source: Any, query: PassRef, buckets: Mapping[str, Any] | None
+) -> dict[str, object]:
+    """패스 하나를 **배포된 채점 경로**(`pose_stages.score_burst`)에 그대로 넣는다.
+
+    MCP `/pose_estimation/sequence`가 런타임 프레임에 대고 하는 일과 같은 계산이다.
+    입력만 CSV 코퍼스에서 온다.
+    """
+    if buckets is None:
+        return {"status": "unavailable", "reason": "reference_data_missing"}
+    try:
+        raw = source.load(query)
+    except LookupError:
+        return {"status": "unavailable", "reason": "pass_not_found"}
+
+    prepared = pose_fk_csv.pass_inputs(raw.rows)
+    if prepared is None:
+        return {"status": "unavailable", "reason": "insufficient_frames"}
+    frames, impacts, tools = prepared
+
+    burst = pose_stages.score_burst(
+        frames, impacts, list(range(len(impacts))), tools, buckets,
+        labels=pose_similarity.JOINT_LABELS,
+    )
+    scored = burst.result
+    first = burst.strokes[0].resolve if burst.strokes else pose_stages.resolve(
+        pose_stages.reach_of(impacts, tools), buckets
+    )
+    if not scored.ok:
+        return {
+            "status": "unavailable",
+            "reason": scored.reason or first.reason or "quality_insufficient",
+            "band": first.band,
+            "reach_m": first.reach_m,
+            "support": first.support,
+            "burst": burst.to_dict(),
+        }
+
+    chosen = burst.strokes[burst.worst_stroke or 0]
+    bucket = buckets[chosen.resolve.band] if chosen.resolve.band in buckets else {}
+    phase_poses, reference = pose_stages._phase_view(
+        frames, chosen.align, bucket.get("phases") or []
+    )
+    return {
+        "status": "ok",
+        # 배포 응답과 **같은 이름**을 쓴다. 랩에서 본 값과 제품이 낸 값을 눈으로 대조한다.
+        "scoring_set_id": arm_reference.SCORING_SET_ID,
+        "scoring_mode": scored.mode,
+        "band": chosen.resolve.band,
+        "reach_m": chosen.resolve.reach_m,
+        "support": chosen.resolve.support,
+        "reference_quality": chosen.resolve.quality,
+        "similarity_score": scored.score,
+        # 합친 점수에는 백분위가 없다 — 사다리가 패스 하나에서 구워졌다.
+        "expert_percentile": scored.percentile,
+        "burst": burst.to_dict(),
+        "joint_sigmas": {item.joint: item.sigma for item in scored.sigmas},
+        "corrections": [
+            pose_stages._correction_dict(item, scored.plans[index] if index < len(scored.plans) else ())
+            for index, item in enumerate(scored.corrections)
+        ],
+        # 그릴 재료. 착탄 경로와 프로토타입은 **같은 평면**에 놓고 봐야 정렬이 보인다.
+        "impact_path": [list(point) for point in impacts],
+        "prototype": [list(point) for point in chosen.resolve.prototype],
+        "phase_of": [list(pair) for pair in chosen.align.phase_of],
+        "phase_n": [
+            int(entry.get("n", 0) or 0) if isinstance(entry, Mapping) else 0
+            for entry in reference
+        ],
+        "measured_layer": _serialize_layer(_world_layer_of(frames)),
+        "expert_layer": _expert_layer(phase_poses, reference),
+    }
+
+
+def _world_layer_of(frames: Sequence[Mapping[str, Vec3]]) -> dict[str, list[Vec3 | None]]:
+    """프레임별 월드 관절을 화면 레이어 모양으로. 채점 관절만 낸다."""
+    names = list(arm_reference.SCORING_JOINTS_ARM) + list(arm_reference.FRAME_JOINTS)
+    return {name: [frame.get(name) for frame in frames] for name in names}
+
+
+def _expert_layer(
+    phase_poses: Sequence[Mapping[str, Vec3] | None], reference: Sequence[Any]
+) -> dict[str, list[list[float] | None]]:
+    """위상마다 숙련자 평균 자세(**몸 기준 정규 좌표**).
+
+    측정 자세는 월드인데 이쪽은 정규 좌표다 — 같은 축에 겹쳐 그리면 안 된다.
+    이름을 다르게 두어 화면이 섞지 못하게 한다.
+    """
+    out: dict[str, list[list[float] | None]] = {}
+    for name in arm_reference.SCORING_JOINTS_ARM:
+        row: list[list[float] | None] = []
+        for entry in reference:
+            point = None
+            if isinstance(entry, Mapping):
+                joints = entry.get("joints")
+                found = joints.get(name) if isinstance(joints, Mapping) else None
+                mean = found.get("mean") if isinstance(found, Mapping) else None
+                if isinstance(mean, Sequence) and len(mean) == 3:
+                    point = [float(mean[0]), float(mean[1]), float(mean[2])]
+            row.append(point)
+        out[name] = row
+    return out

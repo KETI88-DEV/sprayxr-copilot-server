@@ -32,7 +32,7 @@ LeftHand↔플래쉬)의 상대회전각 차이 — 세션 중앙값의 중앙�
 
 from __future__ import annotations
 
-from typing import Final, Mapping
+from typing import Final, Mapping, Sequence
 
 import measured_pose
 import rotation_math
@@ -110,3 +110,45 @@ def forward_kinematics(
     """루트에서 시작해 계층을 따라 내려가며 관절 위치를 만든다."""
     positions, _world = forward_kinematics_with_rotations(row, offsets)
     return positions
+
+
+def pass_inputs(
+    rows: Sequence[dict[str, str]], *, min_frames: int = 6
+) -> tuple[list[dict[str, Vec3]], list[Vec3], list[Vec3]] | None:
+    """패스 하나에서 (프레임별 월드 관절, 착탄점, 건 위치). 못 만들면 `None`.
+
+    **채점 경로에 넣을 재료를 만드는 유일한 곳이다.** 실험 두 개와 pose_lab이 각자
+    베껴 쓰고 있었는데, 한 곳만 고치면 같은 패스가 도구마다 다른 값을 내게 된다.
+
+    FK가 실패한 프레임은 빠지고, 착탄·건은 **남은 프레임에 맞춰** 골라낸다.
+    착탄이 프레임 수와 어긋나면 위상에 엉뚱한 자세가 들어가므로 `None`을 낸다.
+    """
+    if len(rows) < min_frames:
+        return None
+    offsets = bind_offsets(rows[0])
+    if not offsets:
+        return None
+    frames: list[dict[str, Vec3]] = []
+    keep: list[int] = []
+    for index, row in enumerate(rows):
+        try:
+            frames.append(dict(forward_kinematics(row, offsets)))
+        except (KeyError, ValueError):
+            continue
+        keep.append(index)
+    if len(frames) < min_frames:
+        return None
+    measured = measured_pose.measured_frames(list(rows))
+    impacts: list[Vec3] = []
+    tools: list[Vec3] = []
+    for index in keep:
+        if index >= len(measured):
+            continue
+        frame = measured[index]
+        if frame.hit is not None:
+            impacts.append(tuple(frame.hit))  # type: ignore[arg-type]
+        if frame.right is not None:
+            tools.append(tuple(frame.right))  # type: ignore[arg-type]
+    if len(impacts) != len(frames) or not tools:
+        return None
+    return frames, impacts, tools

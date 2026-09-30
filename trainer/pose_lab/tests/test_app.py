@@ -529,3 +529,143 @@ def test_finding_axis_matches_the_basis_score_track_used() -> None:
 
     assert finding["axis"] == expected.axis
     assert math.isclose(finding["magnitude_cm"], expected.magnitude_cm, abs_tol=1e-6)
+
+
+# --- /api/diagnose — 배포 경로를 그대로 돌려 보는 길 --------------------------
+
+
+class FkSource(FakeSource):
+    """FK가 되는 가짜 소스.
+
+    `FakeSource`의 행에는 관절 `Position`/`Rotation` 컬럼이 없어 `bind_offsets`가
+    빈 dict를 낸다 — 그 소스로는 `pass_inputs`가 늘 `None`이라 진단이 `ok`에
+    **한 번도 닿지 않는다.** 실측 바인드 오프셋을 얹어 닿게 한다.
+    """
+
+    def load(self, ref: PassRef) -> RawPass:
+        from trainer.scripts.tests.test_pose_fk_csv import _row as _fk_row
+
+        raw = super().load(ref)
+        return RawPass(rows=[{**_fk_row(), **row} for row in raw.rows])
+
+
+def _arm_reference_file(tmp_path, monkeypatch, *, band: str = "+0.20",
+                        phases: int = 4, n: int = 300) -> None:
+    """랩 검사용 팔 레퍼런스. 실물 `/output` 아티팩트에 기대지 않는다 —
+    `/output`은 마운트된 산출물이지 저장소 데이터가 아니다(AGENTS.md).
+
+    `band`는 `FkSource`가 내는 reach(0.20 m)가 떨어지는 밴드다. 다른 값을 쓰면
+    `resolve`가 `reference_data_missing`을 내고 검사가 조용히 공허해진다.
+    """
+    import json
+
+    from trainer.scripts import arm_reference as ar
+
+    joints = {
+        name: {
+            "mean": [0.1, -0.2, 0.05], "sd": [0.05, 0.05, 0.05], "n": n,
+            "radius": {"mean": 0.2291, "sd": 0.05},
+            "heading": {"mean": [0.436, -0.873, 0.218], "angular_sd": 0.30},
+        }
+        for name in ar.SCORING_JOINTS_ARM
+    }
+    path = tmp_path / "arm_reference.json"
+    path.write_text(json.dumps({
+        "version": 1,
+        "scoring_set_id": ar.SCORING_SET_ID,
+        "reach_band_m": ar.REACH_BAND_M,
+        "buckets": {
+            band: {
+                "n": n, "workers": 6, "joints": joints,
+                "prototype": [[0.0, 0.0, 0.4 * i] for i in range(phases)],
+                "prototype_support": {"to_prototype": 0.05, "between": 0.40, "n": n},
+                "phases": [{"n": 60, "joints": joints} for _ in range(phases)],
+            }
+        },
+    }), encoding="utf-8")
+    monkeypatch.setenv("ARM_REFERENCE_PATH", str(path))
+
+
+def test_diagnose_says_the_reference_is_missing_rather_than_guessing(monkeypatch, tmp_path) -> None:
+    """아티팩트가 없으면 **지어내지 않는다.**
+
+    깨뜨리는 법: `_arm_buckets`가 빈 dict를 내게 하면 `resolve`가 다른 사유를 내
+    여기서 실패한다.
+    """
+    monkeypatch.setenv("ARM_REFERENCE_PATH", str(tmp_path / "없는파일.json"))
+    client = TestClient(create_app(source=FkSource()))
+    body = client.get("/api/diagnose", params=QUERY).json()
+    assert body["status"] == "unavailable"
+    assert body["reason"] == "reference_data_missing"
+    # **아티팩트가 아예 없는 것**과 **있는데 밴드가 없는 것**은 다른 사건이다.
+    # 앞은 패스를 읽을 이유조차 없으므로 `band`가 없어야 한다. 뒤는 밴드를 싣는다
+    # (`test_diagnose_reasons_stay_in_a_closed_set`이 그쪽을 본다).
+    assert "band" not in body, "레퍼런스가 없는데 패스를 읽어 밴드를 냈다"
+    assert "reach_m" not in body
+
+
+def test_diagnose_does_not_take_a_reference_pass(monkeypatch, tmp_path) -> None:
+    """**`/api/compare`와 논리가 다르다.** 저쪽은 동작 키로 고른 **기준 패스 하나**에
+    대고 재고, 이쪽은 reach 밴드로 고른 숙련자 **버킷**에 DTW로 맞춰 잰다. 제품에는
+    기준 패스 입력이 없으므로 랩도 받지 않는다.
+
+    깨뜨리는 법: 라우트에 기준 패스 인자를 더하면 이 검사가 실패한다.
+    """
+    _arm_reference_file(tmp_path, monkeypatch)
+    client = TestClient(create_app(source=FkSource()))
+    body = client.get("/api/diagnose", params=QUERY).json()
+    assert body["status"] == "ok", body
+    assert "reference" not in body, "기준 패스를 응답에 실으면 논리를 섞은 것이다"
+    assert "motion_key" not in body, "동작 키는 이 논리의 것이 아니다"
+
+
+def test_diagnose_reports_the_same_field_names_as_the_deployed_route(
+    monkeypatch, tmp_path
+) -> None:
+    """랩에서 본 값과 제품이 낸 값을 **눈으로 대조**하려면 이름이 같아야 한다.
+
+    깨뜨리는 법: `similarity_score`를 `score`로 줄이면 대조가 끊겨 실패한다.
+    """
+    _arm_reference_file(tmp_path, monkeypatch)
+    client = TestClient(create_app(source=FkSource()))
+    body = client.get("/api/diagnose", params=QUERY).json()
+    assert body["status"] == "ok", body
+    for key in ("scoring_set_id", "scoring_mode", "band", "reach_m", "support",
+                "reference_quality", "similarity_score", "expert_percentile",
+                "burst", "joint_sigmas", "corrections"):
+        assert key in body, f"배포 응답에 있는 {key}가 랩 응답에 없다"
+    assert body["scoring_set_id"] == service.arm_reference.SCORING_SET_ID
+    assert body["band"] == "+0.20", "이 소스의 reach가 떨어지는 밴드가 아니다"
+    assert set(body["joint_sigmas"]) == set(service.arm_reference.SCORING_JOINTS_ARM)
+    assert len(body["prototype"]) == 4
+    assert len(body["impact_path"]) == 30
+
+
+def test_diagnose_reasons_stay_in_a_closed_set(monkeypatch, tmp_path) -> None:
+    """지어낸 문자열이 나가면 소비자가 모르는 값을 받는다.
+
+    깨뜨리는 법: `diagnose_sequence`가 집합 밖 문자열을 내면 실패한다.
+    """
+    _arm_reference_file(tmp_path, monkeypatch, band="+9.00")  # reach가 안 떨어지는 밴드
+    client = TestClient(create_app(source=FkSource()))
+    body = client.get("/api/diagnose", params=QUERY).json()
+    assert body["status"] == "unavailable"
+    assert body["reason"] in service.DIAGNOSE_REASONS, body["reason"]
+    # 밴드를 못 찾아도 **왜인지 보여야** 한다.
+    assert "band" in body
+
+
+def test_diagnose_rereads_the_artifact_on_every_request(monkeypatch, tmp_path) -> None:
+    """레퍼런스를 다시 구워도 랩을 재시작하지 않아야 한다 — 랩은 그걸 보는 도구다.
+
+    깨뜨리는 법: `_arm_buckets`를 `create_app`에서 한 번만 읽게 하면 실패한다.
+    """
+    _arm_reference_file(tmp_path, monkeypatch)
+    client = TestClient(create_app(source=FkSource()))
+    assert client.get("/api/diagnose", params=QUERY).json()["status"] == "ok"
+
+    monkeypatch.setenv("ARM_REFERENCE_PATH", str(tmp_path / "사라짐.json"))
+    after = client.get("/api/diagnose", params=QUERY).json()
+    assert after["reason"] == "reference_data_missing", (
+        "아티팩트를 치웠는데 랩이 옛 값을 계속 낸다"
+    )

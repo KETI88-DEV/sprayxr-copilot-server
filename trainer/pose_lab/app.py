@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 import logging
 import os
 from pathlib import Path
@@ -27,6 +28,11 @@ SPREAD_REFERENCE_ENV: Final = "POSE_LAB_SPREAD_REFERENCE"
 # 한 요청에서 새로 훑을 세션 수의 상한. 세션 하나가 수만 행이라 전수 스캔은 화면을
 # 멈춘다. 자른 사실은 응답의 sessions_total과 truncated로 나간다.
 DEFAULT_SESSION_LIMIT: Final = 8
+# 숙련자 팔 레퍼런스(build_arm_reference의 출력). **MCP와 같은 환경변수 이름을 쓴다** —
+# 랩과 제품이 다른 아티팩트를 보면 눈으로 대조하는 의미가 없다. 없으면 `/api/diagnose`만
+# `reference_data_missing`을 내고 나머지 경로는 지금까지대로 돈다.
+ARM_REFERENCE_ENV: Final = "ARM_REFERENCE_PATH"
+DEFAULT_ARM_REFERENCE: Final = Path("/output/expert_reference/expert_arm_reference.json")
 
 
 class PassRefModel(BaseModel):
@@ -122,6 +128,19 @@ def _reference_spreads_from_env() -> Any | None:
         )
         return None
     return loaded
+
+
+def _arm_buckets() -> dict[str, Any] | None:
+    """팔 레퍼런스의 버킷. 없거나 깨졌으면 `None` — **지어내지 않는다.**"""
+    raw = os.environ.get(ARM_REFERENCE_ENV, "").strip()
+    path = Path(raw) if raw else DEFAULT_ARM_REFERENCE
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        logger.warning("팔 레퍼런스를 읽지 못했다: %s", path)
+        return None
+    buckets = payload.get("buckets")
+    return buckets if isinstance(buckets, dict) else None
 
 
 def create_app(source: Any | None = None) -> FastAPI:
@@ -235,6 +254,32 @@ def create_app(source: Any | None = None) -> FastAPI:
             # 없는 패스를 가리킨 것과 프레임이 모자란 것은 다른 사건이다. 목록이
             # 오래돼 사라진 패스를 "재지 못했다"로 적으면 데이터 탓으로 읽힌다.
             return {"status": "unavailable", "reason": "pass_not_found"}
+
+    @app.get("/api/diagnose")
+    def diagnose(
+        worker: str = Query(min_length=1),
+        date: str = Query(min_length=1),
+        level: str = Query(min_length=1),
+        session: str = Query(min_length=1),
+        pass_index: int = Query(ge=0),
+    ) -> dict[str, object]:
+        """이 패스를 **배포된 채점 경로**에 그대로 넣으면 무엇이 나오나.
+
+        `/api/compare`와 논리가 다르다. 저쪽은 동작 키로 고른 **기준 패스 하나**에
+        대고 재고, 이쪽은 reach 밴드로 고른 숙련자 **버킷**에 DTW로 맞춰 잰다.
+        기준 패스를 받지 않는 이유가 그것이다 — 제품에는 그런 입력이 없다.
+
+        레퍼런스는 **요청마다 읽는다.** 아티팩트를 다시 굽고 랩을 재시작하지 않아도
+        되게 — 랩은 그걸 보는 도구다.
+        """
+        if source is None:
+            return {"status": "unavailable", "reason": "no_source"}
+        return service.diagnose_sequence(
+            source,
+            service.PassRef(worker=worker, date=date, level=level,
+                            session=session, pass_index=pass_index),
+            _arm_buckets(),
+        )
 
     if STATIC_DIR.is_dir():
         app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
