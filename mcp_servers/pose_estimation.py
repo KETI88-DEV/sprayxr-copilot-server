@@ -707,10 +707,16 @@ def analyze_sequence(payload: SequenceRequest) -> MCPResponse:
     reason: str | None
     if gate.status == "reject":
         status, reason = "not_available", gate.reason_codes[0]
-    elif quality == "unavailable" or score is None:
+    elif quality == "unavailable":
         status, reason = "not_available", "reference_data_missing"
-    elif len(used) < arm_reference.MIN_SCORED_JOINTS:
-        status, reason = "not_available", "quality_insufficient"
+    elif score is None or len(used) < arm_reference.MIN_SCORED_JOINTS:
+        # 여기까지 왔다면 **레퍼런스는 붙어 있다** — 같은 응답에 `support`와 `band`가
+        # 실려 나간다. 못 잰 이유는 입력이다(게이트가 관절을 빼서 채점할 것이 남지
+        # 않았다). 이 자리에 `reference_data_missing`을 적으면 운영자를 번들을 확인하러
+        # 보낸다 — 실제로 그렇게 보냈다. 게이트가 사유를 댔으면 **그 사유를 그대로** 낸다.
+        status, reason = "not_available", (
+            gate.reason_codes[0] if gate.reason_codes else "quality_insufficient"
+        )
     elif quality in ("single_worker", "coarse_bucket"):
         # 작업자 1인 산포는 '숙련자 통상 범위'가 아니라 '그 사람의 습관'이다.
         status, reason = "degraded", "reference_single_worker"

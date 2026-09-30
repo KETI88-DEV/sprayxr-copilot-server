@@ -369,6 +369,41 @@ def test_a_joint_frozen_twice_in_one_session_drops_out(client: TestClient) -> No
     assert second["similarity_score"] is None
 
 
+def test_an_input_that_leaves_nothing_to_score_does_not_blame_the_reference(
+    client, monkeypatch, tmp_path
+) -> None:
+    """`reference_data_missing`은 **레퍼런스가 없을 때만** 쓴다.
+
+    Spark에서 이렇게 나갔다: `reason_code: "reference_data_missing"` 인데 같은 응답에
+    `reference_quality: "multi_worker"`, `support: 14245`가 실려 있었다. 운영자는 번들을
+    확인하러 갔다 — 방금 배포한 그 번들을. 실제 원인은 입력이었다(R4c가 관절을 전부 뺐다).
+
+    깨뜨리는 법: 사유 분기에서 `score is None`을 다시 `reference_data_missing` 쪽으로
+    합치면 이 검사가 실패한다.
+    """
+    _write_reference(tmp_path, monkeypatch)
+    body = _synthetic("FROZEN", "SEQ-0", 1.5, 4.5)
+    # 몸도 건도 완전히 정지시킨다 — 실물 SEQ-002가 이 모양이다(골격 11프레임 고유 1개).
+    first_frame = body["sequence_info"][0]
+    for frame in body["sequence_info"]:
+        frame["skeleton_joints"] = json.loads(json.dumps(first_frame["skeleton_joints"]))
+        frame["tool_pos_rot"] = json.loads(json.dumps(first_frame["tool_pos_rot"]))
+
+    first = _post(client, body)
+    assert first["support"] is not None, "레퍼런스가 안 붙으면 이 검사가 증명할 게 없다"
+
+    second = _post(client, {**body, "sequence_id": "SEQ-1"})
+    assert second["analysis_status"] == "not_available"
+    assert second["scored_joints"] == []
+    assert second["support"] == first["support"], "레퍼런스는 그대로 붙어 있다"
+    assert second["reason_code"] != "reference_data_missing", (
+        f"레퍼런스(support={second['support']})가 붙어 있는데 없다고 말한다"
+    )
+    # 원인이 입력이라고 말해야 한다 — 게이트가 댄 사유 그대로.
+    assert second["reason_code"] in second["input_quality"]["reason_codes"]
+    assert second["reason_code"] in pose_estimation.SEQUENCE_REASON_CODES
+
+
 # --- 레퍼런스가 있을 때 -------------------------------------------------------
 
 
