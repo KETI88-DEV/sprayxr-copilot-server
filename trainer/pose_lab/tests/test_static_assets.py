@@ -924,7 +924,7 @@ def test_framing_leg_checks_can_fail():
     assert dropped != full
     assert framing_leg_faults(dropped) == ["query_placeholder_feet_not_framed"]
     reference = full.replace(
-        "      if (!referenceLegsShown()) for (const p of Object.values(placeholderJointsOf(view.reference_fit))) push(p);\n",
+        "      if (!referenceLegsShown()) for (const p of Object.values(placeholderJointsOf(view.reference_fit))) push(shiftReference(p, view));\n",
         "",
         1,
     )
@@ -1668,11 +1668,13 @@ def default_preset_stroke_faults(js: str) -> list[str]:
     points = _nested_function_body(code, "framingPoints")
     if not points:
         return ["no_framing_points"]
-    if "strokePoints(view)" not in points:
+    # 두 줄 다 맞춤 대상이다. 기준 줄은 두 몸 배치(나란히 등)에서 옮긴 자리로 잡는다.
+    calls = ('strokePoints(view, "query")', 'strokePoints(view, "reference")')
+    if not all(call in points for call in calls):
         faults.append("default_framing_ignores_the_strokes")
     else:
         before_mode_gate = points.split('if (mode === "wall")', 1)[0]
-        if "strokePoints(view)" not in before_mode_gate:
+        if not all(call in before_mode_gate for call in calls):
             faults.append("strokes_are_only_in_the_wall_preset")
     runs = _nested_function_body(code, "strokePoints")
     if "reference_stroke" not in runs:
@@ -1690,13 +1692,13 @@ def test_default_preset_stroke_checks_can_fail():
     full = _read("skeleton_view.js")
     assert default_preset_stroke_faults("") == ["no_framing_points"]
     # 이전 판 그대로: 스트로크를 맞춤 대상에서 뺀다.
-    dropped = full.replace("    for (const p of strokePoints(view)) push(p);\n", "", 1)
+    dropped = full.replace('    for (const p of strokePoints(view, "reference")) push(shiftReference(p, view));\n', "", 1)
     assert dropped != full
     assert default_preset_stroke_faults(dropped) == ["default_framing_ignores_the_strokes"]
     # 원본 착탄점 전체(그리지 않는 점 포함)로 카메라를 끌면 잡힌다.
     raw_hits = full.replace(
-        "for (const block of [view?.stroke, view?.reference_stroke]) {",
-        "for (const block of [{ runs: [view?.surface_hits ?? []] }]) {", 1,
+        "      : layer === \"reference\" ? [view?.reference_stroke]\n      : [view?.stroke, view?.reference_stroke];",
+        "      : [{ runs: [view?.surface_hits ?? []] }];", 1,
     )
     assert raw_hits != full
     assert sorted(default_preset_stroke_faults(raw_hits)) == [
@@ -2918,3 +2920,34 @@ def test_reloading_the_list_keeps_the_chosen_pass():
         without_comments(_read("app.js")).split("function fillQueryPasses()", 1)[-1].split("\n}\n", 1)[0]
     assert "const keep = before === null ? null : passLabel(before);" in fill
     assert "if (keep !== null && passLabel(entry) === keep) option.selected = true;" in fill
+
+
+def arrangement_faults(js: str) -> list[str]:
+    """두 몸 배치: 기준 층을 **서버 벡터로** 옮기고, 맞춤 상자도 옮긴 자리로 잡고, 따라오지 않는
+    글자 이름표는 숨긴다. 헤드리스 크로미움으로 확인했다(나란히·몸 맞춰 겹치기·겹쳐 보기 복귀)."""
+    faults: list[str] = []
+    code = without_comments(js)
+    offset = _nested_function_body(code, "arrangementOffset")
+    if "view?.arrangements?.[arrangement]?.offset" not in offset:
+        faults.append("offset_not_from_the_server")
+    apply = _nested_function_body(code, "applyArrangement")
+    if "layerGroups.reference.position.set(offset[0], offset[1], offset[2])" not in apply:
+        faults.append("reference_layer_not_moved")
+    if 'entry.layer === "reference" && offset' not in apply:
+        faults.append("reference_labels_left_behind")
+    points = _nested_function_body(code, "framingPoints")
+    if points.count("shiftReference(") < 4:
+        faults.append("framing_ignores_the_moved_reference")
+    return faults
+
+
+def test_the_reference_moves_as_one_layer_by_the_servers_offset():
+    assert arrangement_faults(_read("skeleton_view.js")) == []
+
+
+def test_arrangement_checks_can_fail():
+    full = _read("skeleton_view.js")
+    stuck = full.replace("    if (offset) layerGroups.reference.position.set(offset[0], offset[1], offset[2]);\n", "", 1)
+    assert stuck != full and "reference_layer_not_moved" in arrangement_faults(stuck)
+    framed = full.replace("push(shiftReference(p, view));", "push(p);")
+    assert framed != full and "framing_ignores_the_moved_reference" in arrangement_faults(framed)

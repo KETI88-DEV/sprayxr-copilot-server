@@ -338,6 +338,11 @@ function buildDom(container) {
     <label><input id="view3dLayerLegs" type="checkbox" checked> 추정 다리 자세</label>
     <label><input id="view3dLayerCorrected" type="checkbox"> 안내 적용 후(예상)</label>
     <label><input id="view3dLayerWall" type="checkbox" checked> 벽면</label>
+    <select id="view3dArrange" aria-label="두 몸 배치">
+      <option value="overlay" selected>겹쳐 보기</option>
+      <option value="side">나란히 보기</option>
+      <option value="aligned">몸 맞춰 겹치기</option>
+    </select>
     <span class="view3d-controls-sep" aria-hidden="true"></span>
     <button id="view3dPresetFit" type="button">자세 맞춤</button>
     <button id="view3dPresetTorso" type="button">상체 확대</button>
@@ -398,6 +403,9 @@ function buildDom(container) {
   note.className = "view3d-note";
   const correctedNote = document.createElement("p");
   correctedNote.className = "view3d-note view3d-corrected-note";
+  // 두 몸 배치를 바꿨을 때 무엇을 옮겼는지(서버 문장). 겹쳐 보기에서는 비어 있다.
+  const arrangeNote = document.createElement("p");
+  arrangeNote.className = "view3d-note view3d-arrange-note";
   // 상체 확대 프리셋이 화면 밖으로 내보낸 맞춤 대상의 이름. 자른 사실을 화면이 스스로 말한다.
   const framingNote = document.createElement("p");
   framingNote.className = "view3d-note view3d-framing-note";
@@ -412,10 +420,11 @@ function buildDom(container) {
   framingMore.append(framingMoreSummary, framingMoreText);
 
   // wallNote는 위에서 host(캔버스 위 겹침)에 넣었다 — 여기서 다시 넣으면 host 밖으로 옮겨진다.
-  container.append(toolbar, host, playback, legend, notes, notesMore, errors, note, correctedNote, framingNote, framingMore);
+  container.append(toolbar, host, playback, arrangeNote, legend, notes, notesMore, errors, note, correctedNote, framingNote, framingMore);
   return {
     canvas, host, labelsHost, legend, notes, notesMore, wallNote, errors, note, correctedNote, framingNote,
-    framingMore, framingMoreText, controls, toolbar, playback,
+    framingMore, framingMoreText, controls, toolbar, playback, arrangeNote,
+    arrange: controls.querySelector("#view3dArrange"),
     play: playback.querySelector("#view3dPlay"),
     playbackMode: playback.querySelector("#view3dPlaybackMode"),
     playbackSpeed: playback.querySelector("#view3dPlaybackSpeed"),
@@ -1850,15 +1859,15 @@ function mount(THREE, container) {
       // 화면 밖으로 잘리면 그림이 성립하지 않는다.
       const referenceJoints = view.layers?.reference?.joints ?? {};
       const referenceExcluded = referenceLegsShown() ? new Set() : legNames;
-      for (const [name, p] of Object.entries(referenceJoints)) if (!referenceExcluded.has(name)) push(p);
+      for (const [name, p] of Object.entries(referenceJoints)) if (!referenceExcluded.has(name)) push(shiftReference(p, view));
       // IK를 끈 층은 **자리표시 다리가 그려진다** — 그 점이 맞춤 대상이다.
       if (!legsShown()) for (const p of Object.values(placeholderJointsOf(view.fit))) push(p);
-      if (!referenceLegsShown()) for (const p of Object.values(placeholderJointsOf(view.reference_fit))) push(p);
+      if (!referenceLegsShown()) for (const p of Object.values(placeholderJointsOf(view.reference_fit))) push(shiftReference(p, view));
       for (const anchor of view.fit?.anchors ?? []) {
         push(anchor.measured_marker);
         push(anchor.predicted_marker);
       }
-      for (const anchor of view.reference_fit?.anchors ?? []) push(anchor.measured_marker);
+      for (const anchor of view.reference_fit?.anchors ?? []) push(shiftReference(anchor.measured_marker, view));
     } else {
       for (const name of ["head", "right", "left"]) for (const p of view.layers?.query?.[name] ?? []) push(p);
     }
@@ -1878,7 +1887,8 @@ function mount(THREE, container) {
     // 스트로크(벽면 착탄점)이 보이지 않음"이었는데, 이전 판은 스트로크를 pose 맞춤에서 빼 두어
     // 사용자가 제일 먼저 보는 화면에서 두 줄이 가장자리에 걸리거나 밖으로 나갔다. 원본 착탄점
     // 전체가 아니라 **서버가 잘라 준 구간의 정점**만 넣는다 — 그리지 않는 점으로 카메라를 끌지 않는다.
-    for (const p of strokePoints(view)) push(p);
+    for (const p of strokePoints(view, "query")) push(p);
+    for (const p of strokePoints(view, "reference")) push(shiftReference(p, view));
     if (mode === "tracks" || mode === "wall") {
       for (const name of ["head", "right", "left"]) for (const p of view.layers?.query?.[name] ?? []) push(p);
     }
@@ -1886,7 +1896,7 @@ function mount(THREE, container) {
       // 원본 착탄점만 — 리샘플 격자는 벽에서 뜰 수 있다. 그려지는 스트로크의 정점이 이 점들이다.
       // 기준 스트로크도 그려지므로 맞춤 대상에 넣는다(S2) — 안 넣으면 기준 줄이 화면 밖으로 나간다.
       for (const p of view.surface_hits ?? []) push(p);
-      for (const p of view.reference_surface_hits ?? []) push(p);
+      for (const p of view.reference_surface_hits ?? []) push(shiftReference(p, view));
       if (view.mesh?.available === true) for (const p of view.mesh.vertices ?? []) push(p);
     }
     return points;
@@ -1895,9 +1905,12 @@ function mount(THREE, container) {
   /** 화면에 **실제로 그려지는** 벽면 스트로크의 정점(대상·기준 둘 다).
    * 서버가 이미 잘라 준 구간(`stroke.runs` / `reference_stroke.runs`)만 본다 — 자르기 판정을
    * 화면이 다시 하지 않고, 잘려 나간 점으로 카메라를 끌지도 않는다. */
-  function strokePoints(view) {
+  function strokePoints(view, layer) {
     const out = [];
-    for (const block of [view?.stroke, view?.reference_stroke]) {
+    const blocks = layer === "query" ? [view?.stroke]
+      : layer === "reference" ? [view?.reference_stroke]
+      : [view?.stroke, view?.reference_stroke];
+    for (const block of blocks) {
       for (const run of block?.runs ?? []) for (const p of run ?? []) if (isVec3(p)) out.push(p);
     }
     return out;
@@ -2445,6 +2458,10 @@ function mount(THREE, container) {
     }
     // 재생 중이면 대표 순간 물체는 숨긴 채로 두고, 이 순간 몸의 다리만 토글을 따른다.
     if (playbackState.held.length > 0) reapplyHold();
+    // 기준 층을 옮긴 동안 기준 이름표는 숨긴다(3D를 따라 움직이지 않는다).
+    if (arrangementOffset(lastView)) {
+      for (const entry of labelRegistry) if (entry.layer === "reference") entry.el.hidden = true;
+    }
   }
   checkboxes.legs.addEventListener("change", () => {
     applyLegsToggle();
@@ -2504,6 +2521,45 @@ function mount(THREE, container) {
     setNote(dom.note, message ?? "비교를 계산하는 중…", "loading");
     dom.host.classList.add("is-loading");
   }
+
+  // ---- 두 몸 배치 -----------------------------------------------------------------------
+  //
+  // 기준 층을 **통째로** 옮긴다(몸·궤적·분사 경로·재생 몸까지). 옮길 벡터는 서버가 준다
+  // (`view.arrangements`) — 화면은 거리를 재지 않는다. 글자 이름표는 3D 층을 따라 움직이지 않으므로
+  // 옮긴 동안 기준 층 이름표는 숨긴다. 맞춤 상자(`framingPoints`)도 옮긴 자리로 잡는다.
+  let arrangement = "overlay";
+
+  function arrangementOffset(view) {
+    if (arrangement === "overlay") return null;
+    const offset = view?.arrangements?.[arrangement]?.offset;
+    return isVec3(offset) ? offset : null;
+  }
+
+  function shiftReference(point, view) {
+    const offset = arrangementOffset(view);
+    if (!offset || !isVec3(point)) return point;
+    return [point[0] + offset[0], point[1] + offset[1], point[2] + offset[2]];
+  }
+
+  function applyArrangement() {
+    const offset = arrangementOffset(lastView);
+    if (offset) layerGroups.reference.position.set(offset[0], offset[1], offset[2]);
+    else layerGroups.reference.position.set(0, 0, 0);
+    dom.arrangeNote.textContent = offset ? (lastView?.arrangements?.[arrangement]?.note ?? "") : "";
+    for (const entry of labelRegistry) {
+      if (entry.layer === "reference" && offset) entry.el.hidden = true;
+    }
+    debugLive.arrangement = { mode: arrangement, offset: offset ? offset.slice() : null };
+  }
+
+  dom.arrange.addEventListener("change", () => {
+    arrangement = ["side", "aligned"].includes(dom.arrange.value) ? dom.arrange.value : "overlay";
+    // 겹쳐 보기로 돌아오면 숨겼던 기준 이름표를 원래 규칙(층 체크·다리 토글)대로 되살린다.
+    applyDeviceLabelVisibility();
+    applyLegsToggle();
+    applyArrangement();
+    if (lastView && framing.auto) frameTo(framing.mode);
+  });
 
   // ---- 재생 ---------------------------------------------------------------------------
   //
@@ -3061,6 +3117,7 @@ function mount(THREE, container) {
       if (child.userData.kind === "bone") boneLengths[child.userData.name] = child.userData.length;
     });
 
+    applyArrangement();
     // 재생. 대표 순간에 묶인 물체를 넘겨 둔다 — 재생 중에 숨기고, 대표 자세로 돌아오면 원래대로 켠다.
     setupPlayback(view, [
       skeletonParts.group, referenceParts.group,

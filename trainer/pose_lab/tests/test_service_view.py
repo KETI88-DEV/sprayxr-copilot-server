@@ -2045,3 +2045,40 @@ def test_pass_labels_round_once_on_the_server() -> None:
         "length_display": "24.5 cm",
         "session_label": "2025-08-31 · 작업 기록 1000389_1",
     }
+
+
+# --- 두 몸 배치 ------------------------------------------------------------------------------
+
+
+def test_aligned_arrangement_removes_the_whole_body_shift() -> None:
+    """몸 맞춰 겹치기는 짝지은 관절 무게중심 차만큼 옮긴다 — 옮긴 뒤 두 무게중심이 같다.
+
+    깨뜨리는 법: 오프셋 부호를 뒤집으면(기준 − 작업자) 옮긴 뒤 두 배로 벌어져 실패한다.
+    """
+    query = {"Chest": [0.0, 1.4, 0.0], "LeftShoulder": [-0.1, 1.5, 0.0], "RightShoulder": [0.1, 1.5, 0.0]}
+    reference = {name: [p[0] + 0.3, p[1] - 0.2, p[2] + 0.5] for name, p in query.items()}
+    block = service.arrangements_block(query, reference, None)
+    assert block is not None
+    offset = block["aligned"]["offset"]
+    moved = {name: [p[a] + offset[a] for a in range(3)] for name, p in reference.items()}
+    for name in query:
+        assert moved[name] == pytest.approx(query[name], abs=1e-4)
+
+
+def test_side_by_side_stands_the_reference_across_the_shoulders() -> None:
+    """나란히 보기는 맞춘 자리에서 **어깨 방향(수평)** 으로 몸 하나 폭만큼 더 옮긴다.
+
+    깨뜨리는 법: 옆 방향에 수직 성분을 섞으면 기준이 공중에 뜨거나 바닥에 묻혀 실패한다.
+    """
+    query = {"Chest": [0.0, 1.4, 0.0], "LeftShoulder": [-0.1, 1.5, 0.0], "RightShoulder": [0.1, 1.6, 0.0]}
+    block = service.arrangements_block(query, dict(query), {"scale": 1.0})
+    assert block is not None
+    side = block["side"]["offset"]
+    assert side[1] == pytest.approx(0.0, abs=1e-6), "옆으로 세우는데 높이가 바뀌었다"
+    assert side[0] == pytest.approx(service.SIDE_BY_SIDE_SPACING_ADULT_M, abs=1e-4)
+    assert "옮겨졌습니다" in block["side"]["note"], "벽·분사 경로도 옮겼다는 사실을 말하지 않는다"
+
+
+def test_arrangements_need_both_bodies() -> None:
+    assert service.arrangements_block(None, {"Chest": [0, 0, 0]}, None) is None
+    assert service.arrangements_block({"Chest": [0, 0, 0]}, {}, None) is None

@@ -2119,6 +2119,12 @@ def view_block(
         "playback": playback_block(
             skeleton_result, reference_skeleton, hidden_joints=hidden_joints(fit, reference_fit)
         ),
+        # 두 몸 배치 — 기준 층을 옮길 벡터(몸 맞춰 겹치기 · 나란히).
+        "arrangements": arrangements_block(
+            query_layer_view.get("joints"),  # type: ignore[arg-type]
+            reference_layer_view.get("joints"),  # type: ignore[arg-type]
+            body_proportions.flesh_block(fit.get("head_diameter_m") if isinstance(fit, Mapping) else None),
+        ),
         # 살(반투명 부피)의 부위·두께. 머리 지름과 같은 분모로 이 리그 크기에 맞춘다 —
         # 화면이 부위 이름으로 규칙을 지어내지 않게 서버가 준다.
         "flesh": body_proportions.flesh_block(
@@ -2785,6 +2791,57 @@ def _by_hit_distance(row: Mapping[str, Any]) -> tuple[tuple[int, float], str, st
         str(row["session"]),
         int(row["pass_index"]),
     )
+
+
+# --- 두 몸 배치(겹쳐 · 나란히 · 몸 맞춰 겹치기) ------------------------------------------------
+#
+# 다른 평가자: "겹쳐 보기 외에 나란히 보기와 기준만 보기도 제공하면 두 몸을 구분하기 쉽다."
+# 기준만/작업자만은 층 체크 상자가 이미 한다. 여기서는 기준 층을 **통째로 옮길** 벡터를 낸다 —
+# 화면은 그 벡터로 층을 옮기기만 하고 거리를 재지 않는다.
+#
+# `aligned`는 두 몸의 짝지은 관절 무게중심을 맞춘다(자세 차이만 남는다 — 재생 막대와 같은 정의).
+# `side`는 그 위에서 작업자의 어깨 방향(수평)으로 몸 하나 폭만큼 더 옮긴다. 기준의 벽·분사 경로도
+# 같이 옮겨지므로 벽 위 위치는 비교하지 않는다는 사실을 문구가 말한다.
+SIDE_BY_SIDE_SPACING_ADULT_M: Final = 0.9
+
+
+def arrangements_block(
+    query_joints: Mapping[str, Sequence[float]] | None,
+    reference_joints: Mapping[str, Sequence[float]] | None,
+    flesh: Mapping[str, object] | None,
+) -> dict[str, object] | None:
+    if not query_joints or not reference_joints:
+        return None
+    names = [
+        name for name in query_joints
+        if name in reference_joints and query_joints[name] is not None and reference_joints[name] is not None
+    ]
+    if not names:
+        return None
+    aligned = [
+        sum(float(query_joints[n][a]) - float(reference_joints[n][a]) for n in names) / len(names)
+        for a in range(3)
+    ]
+    left, right = query_joints.get("LeftShoulder"), query_joints.get("RightShoulder")
+    across = (1.0, 0.0, 0.0)
+    if left is not None and right is not None:
+        flat = world_axes.flatten(tuple(float(r) - float(l) for l, r in zip(left, right)))  # type: ignore[arg-type]
+        length = math.sqrt(sum(value * value for value in flat))
+        if length > 1e-6:
+            across = tuple(value / length for value in flat)  # type: ignore[assignment]
+    scale = flesh.get("scale") if isinstance(flesh, Mapping) else None
+    spacing = SIDE_BY_SIDE_SPACING_ADULT_M * (float(scale) if isinstance(scale, (int, float)) else 1.0)
+    side = [aligned[a] + across[a] * spacing for a in range(3)]
+    return {
+        "aligned": {
+            "offset": [round(value, 4) for value in aligned],
+            "note": "몸 위치를 맞춰 겹쳤습니다 — 자세 차이만 보입니다. 기준의 벽·분사 경로도 같이 옮겨졌습니다.",
+        },
+        "side": {
+            "offset": [round(value, 4) for value in side],
+            "note": "기준 작업자를 옆에 세웠습니다 — 기준의 벽·분사 경로도 같이 옮겨졌습니다.",
+        },
+    }
 
 
 # --- 사람이 읽는 이름 ------------------------------------------------------------------
