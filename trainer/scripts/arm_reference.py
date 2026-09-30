@@ -130,8 +130,19 @@ MIN_BUCKET_N: Final = 20
 MULTI_WORKER_MIN_WORKERS: Final = 3
 MULTI_WORKER_MIN_N: Final = 100
 
-# 교정을 발부할 문턱. 이보다 작은 σ는 "숙련자 통상 범위 안"이다.
+# 교정을 발부할 문턱. 사다리가 없는 버킷에서만 쓰는 **폴백**이다.
+# 이 값을 모든 관절에 쓰면 위양성이 한 관절으로 쏠린다 — 실측 39.6%, 그중 57%가 왼손
+# (`docs/measurements/2026-09-30-correction-recovery-prereg.md`).
 CORRECTION_SIGMA: Final = 1.5
+
+# 시퀀스 수준 위양성 목표. 교정은 **σ가 가장 큰 관절 하나**가 문턱을 넘으면 발부되므로,
+# 관절별로 p90을 쓰면 6관절 독립 가정에서 1 − 0.9⁶ = 0.469가 된다 — 지금보다 나쁘다.
+# 그래서 관절 수로 나눈다(Bonferroni식): 관절별 문턱 = 그 관절 σ 분포의 1 − α/K 분위.
+# α = 0.15, K = 6이면 p97.5다. 관절들이 상관돼 있으면 보수적이므로 실현값은 더 낮다.
+# 사전등록: `docs/measurements/2026-09-30-per-joint-threshold-prereg.md`.
+TARGET_FALSE_POSITIVE: Final = 0.15
+# σ 사다리에 싣는 분위. 문턱으로 쓰는 것은 `sigma_threshold`가 α/K로 고른다.
+SIGMA_PERCENTILES: Final[tuple[float, ...]] = (50.0, 75.0, 90.0, 95.0, 97.5, 99.0)
 MAX_CORRECTIONS: Final = 2
 
 
@@ -629,6 +640,7 @@ def build_corrections(
     *,
     support: int | None = None,
     reference: Mapping[str, object] | None = None,
+    ladders: Mapping[str, Mapping[str, float]] | None = None,
 ) -> list[Correction]:
     """σ가 가장 큰 관절부터 `MAX_CORRECTIONS`개. 문턱 아래면 아무것도 내지 않는다.
 
@@ -645,7 +657,9 @@ def build_corrections(
     base = similarity_score(sigmas)
     out: list[Correction] = []
     for item in ranked[:MAX_CORRECTIONS]:
-        if item.sigma < CORRECTION_SIGMA:
+        # **관절마다 다른 문턱이다.** σ의 숙련자 내 분포가 관절마다 다르므로 같은 문턱을
+        # 쓰면 산포 큰 관절(왼손)에 위양성이 쏠린다 — 실측 99건 중 57건이었다.
+        if item.sigma < sigma_threshold(item.joint, ladders):
             break
         gain = None
         if base is not None:
@@ -749,6 +763,44 @@ def expert_percentile(
             reached = point
     return 0 if reached is None else reached
 
+
+
+
+def sigma_ladder(sigmas: Sequence[float]) -> dict[str, float]:
+    """관절 하나의 숙련자 σ 분포. 표본이 모자라면 빈 사전이다 — 없는 사다리를 지어내지 않는다."""
+    ordered = sorted(sigmas)
+    if len(ordered) < MIN_BUCKET_N:
+        return {}
+    out: dict[str, float] = {"n": float(len(ordered))}
+    for point in SIGMA_PERCENTILES:
+        index = min(len(ordered) - 1, int(round(point / 100.0 * (len(ordered) - 1))))
+        out[f"p{point:g}".replace(".", "_")] = ordered[index]
+    return out
+
+
+def sigma_threshold(
+    joint: str,
+    ladders: Mapping[str, Mapping[str, float]] | None,
+    *,
+    joints: int = len(SCORING_JOINTS_ARM),
+    alpha: float = TARGET_FALSE_POSITIVE,
+) -> float:
+    """이 관절의 교정 문턱. 사다리가 없으면 `CORRECTION_SIGMA`로 내려간다.
+
+    `alpha / joints` 분위를 고른다 — 교정은 관절 하나가 넘으면 발부되므로 보는 개수로
+    나눠야 시퀀스 수준 위양성이 `alpha`에 묶인다.
+    """
+    if not isinstance(ladders, Mapping):
+        return CORRECTION_SIGMA
+    ladder = ladders.get(joint)
+    if not isinstance(ladder, Mapping) or not ladder:
+        return CORRECTION_SIGMA
+    wanted = 100.0 * (1.0 - alpha / max(joints, 1))
+    # 등록한 분위 중 `wanted` 이상인 가장 낮은 것. 없으면 가장 높은 것을 쓴다.
+    candidates = [point for point in SIGMA_PERCENTILES if point >= wanted - 1e-9]
+    point = candidates[0] if candidates else SIGMA_PERCENTILES[-1]
+    value = ladder.get(f"p{point:g}".replace(".", "_"))
+    return float(value) if isinstance(value, (int, float)) else CORRECTION_SIGMA
 
 # --- 위상별 레퍼런스 ---------------------------------------------------------
 

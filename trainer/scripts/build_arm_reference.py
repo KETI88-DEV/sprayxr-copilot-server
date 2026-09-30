@@ -262,6 +262,79 @@ def build(root: Path, levels: set[str] | None = None) -> dict[str, object]:
                 "in_sample": True,
             }
 
+    # 3차 통과: **전량**으로 관절별 σ 사다리를 굽는다.
+    #
+    # 교정 문턱이 이 사다리의 분위이므로, 사다리가 버킷을 대표하지 않으면 위양성이
+    # 명목값을 넘는다 — 위상 표본(밴드당 400개)으로 구웠을 때 목표 0.15에 실측 0.225였고,
+    # 6관절 독립 상한(1 − 0.975⁶ = 0.141)보다도 높았다. 상관은 그 값을 낮추지 올리지
+    # 못하므로 원인은 표본외였다.
+    #
+    # σ는 **스칼라**라 전량을 들고 있어도 메모리가 평평하다. 위상 레퍼런스(평균·SD)는
+    # 프레임이 필요해 400개로 두고, 사다리만 여기서 전량으로 다시 잰다. 그래서 코퍼스를
+    # 한 번 더 읽는다(빌드 시간이 배로 든다 — 오프라인 작업이라 감수한다).
+    joint_sigmas: dict[str, dict[str, list[float]]] = {}
+    ladder_passes = 0
+    for number, item in enumerate(sessions, start=1):
+        try:
+            entries = source.index_of(item)
+        except (OSError, ValueError, KeyError):
+            continue
+        for entry_ref in entries:
+            ref = service.PassRef(
+                worker=item.worker, date=item.date, level=item.level,
+                session=item.session, pass_index=entry_ref.pass_index,
+            )
+            try:
+                raw = source.load(ref)
+            except (LookupError, OSError, ValueError):
+                continue
+            rich = _pass_sample(raw.rows, with_frames=True)
+            if rich is None or len(rich) != 4:
+                continue
+            band = arm_reference.reach_band(rich[1])
+            bucket = payloads.get(band)
+            if bucket is None or "prototype" not in bucket:
+                continue
+            prototype = [tuple(point) for point in bucket["prototype"]]
+            path, _cost = sequence_dtw.align(rich[3], prototype)
+            if not path:
+                continue
+            grouped: dict[int, list[dict]] = {}
+            for query_index, phase in path:
+                if query_index < len(rich[2]):
+                    grouped.setdefault(phase, []).append(rich[2][query_index])
+            per_phase: list[dict | None] = [None] * arm_reference.PHASES
+            for phase, poses_at in grouped.items():
+                names = set(poses_at[0])
+                per_phase[phase] = {
+                    name: tuple(
+                        sum(pose[name][axis] for pose in poses_at) / len(poses_at)
+                        for axis in range(3)
+                    )
+                    for name in names
+                }
+            for item_sigma in arm_reference.phase_sigmas(per_phase, bucket["phases"]):
+                joint_sigmas.setdefault(band, {}).setdefault(item_sigma.joint, []).append(
+                    item_sigma.sigma
+                )
+            ladder_passes += 1
+        if number % 25 == 0:
+            logger.info("사다리 %d/%d sessions · %d passes", number, len(sessions), ladder_passes)
+
+    for band, per_joint in joint_sigmas.items():
+        ladders = {
+            joint: arm_reference.sigma_ladder(values)
+            for joint, values in sorted(per_joint.items())
+        }
+        kept = {joint: lad for joint, lad in ladders.items() if lad}
+        if kept:
+            payloads[band]["joint_sigma_ladder"] = kept
+            logger.info(
+                "%s σ 사다리 · 표본 %d · 문턱 %s", band,
+                int(next(iter(kept.values()))["n"]),
+                {j: round(arm_reference.sigma_threshold(j, kept), 2) for j in kept},
+            )
+
     return {
         "version": 1,
         "scoring_set_id": arm_reference.SCORING_SET_ID,
@@ -270,6 +343,7 @@ def build(root: Path, levels: set[str] | None = None) -> dict[str, object]:
         "sessions": len(sessions),
         "passes": passes,
         "skipped": skipped,
+        "ladder_passes": ladder_passes,
         "workers": sorted(workers),
         "buckets": payloads,
     }

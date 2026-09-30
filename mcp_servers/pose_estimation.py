@@ -690,8 +690,11 @@ def analyze_sequence(payload: SequenceRequest) -> MCPResponse:
         plans = list(phase_result.plans)
     else:
         score = arm_reference.similarity_score(sigmas)
+        ladders = bucket.get("joint_sigma_ladder")
         corrections = arm_reference.build_corrections(
-            sigmas, pose_similarity.JOINT_LABELS, support=support, reference=bucket.get("joints")
+            sigmas, pose_similarity.JOINT_LABELS, support=support,
+            reference=bucket.get("joints"),
+            ladders=ladders if isinstance(ladders, dict) else None,
         )
         # 접기 채점에도 계획을 낸다 — 정렬이 없으면 시퀀스 전체가 대상이다.
         # 비워 두면 시뮬레이터가 적용할 좌표가 없어 교정이 말뿐이 된다.

@@ -383,8 +383,10 @@ def score(
     if value is None:
         return ScoreResult(ok=False, reason="quality_insufficient")
     worst_reference = _worst_phase_reference(sigmas, phase_poses, reference)
+    ladders = bucket.get("joint_sigma_ladder")
     corrections = arm_reference.build_corrections(
-        sigmas, labels or {}, support=aligned.covered_phases, reference=worst_reference
+        sigmas, labels or {}, support=aligned.covered_phases, reference=worst_reference,
+        ladders=ladders if isinstance(ladders, Mapping) else None,
     )
     plans = [tuple(correction_plan(item, frame_poses, aligned)) for item in corrections]
 

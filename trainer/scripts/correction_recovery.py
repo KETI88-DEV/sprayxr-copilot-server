@@ -153,25 +153,47 @@ def run(root: Path, reference: Path, passes: int, seed: int) -> dict[str, Any]:
     csv_source, service = _load_pose_lab()
     buckets = json.loads(reference.read_text(encoding="utf-8"))["buckets"]
     source = csv_source.CsvPassSource(root)
-    sessions = source.sessions()
-    random.Random(seed).shuffle(sessions)
+    # **작업자별로 균형을 맞춘다.** 섞어 뽑기만 하면 위양성 추정치가 어느 작업자가
+    # 뽑혔는지에 좌우된다 — σ가 작업자별로 군집돼 있어 위양성률이 0.015~0.259로
+    # 17배 벌어진다(`docs/measurements/2026-09-30-per-joint-threshold-prereg.md` 결과).
+    # 균형을 안 맞춘 120패스 표본이 0.225를 냈고 전량은 0.095였다.
+    by_worker: dict[str, list[Any]] = {}
+    for item in source.sessions():
+        by_worker.setdefault(item.worker, []).append(item)
+    rng = random.Random(seed)
+    for group in by_worker.values():
+        rng.shuffle(group)
+    sessions = []
+    order = sorted(by_worker)
+    index = 0
+    while any(index < len(by_worker[w]) for w in order):
+        for worker in order:
+            if index < len(by_worker[worker]):
+                sessions.append(by_worker[worker][index])
+        index += 1
+    # 세션 단위 라운드로빈만으로는 부족하다 — 세션 안 패스 수가 제각각이라 한 작업자가
+    # 몰릴 수 있다(실측에서 60패스 중 41개가 한 사람이었다). **패스 수로 상한**을 건다.
+    per_worker_cap = max(1, passes // max(len(order), 1))
 
     # 결과: (direction, magnitude, perturbed_joint) -> {named_joint or None: count}
     tally: dict[tuple[str, float, str], dict[str, int]] = {}
-    baseline = {"total": 0, "corrected": 0, "by_joint": {}}
+    baseline = {"total": 0, "corrected": 0, "by_joint": {}, "by_worker": {}}
     modes = {"phase": 0, "fold": 0, "none": 0}
     used = 0
+    used_by_worker: dict[str, int] = {}
     workers: set[str] = set()
 
     for item in sessions:
         if used >= passes:
             break
+        if used_by_worker.get(item.worker, 0) >= per_worker_cap:
+            continue
         try:
             entries = source.index_of(item)
         except (OSError, ValueError, KeyError):
             continue
         for entry in entries[::5]:
-            if used >= passes:
+            if used >= passes or used_by_worker.get(item.worker, 0) >= per_worker_cap:
                 break
             ref = service.PassRef(
                 worker=item.worker, date=item.date, level=item.level,
@@ -203,9 +225,14 @@ def run(root: Path, reference: Path, passes: int, seed: int) -> dict[str, Any]:
             if not clean.ok:
                 continue
             used += 1
+            used_by_worker[item.worker] = used_by_worker.get(item.worker, 0) + 1
             workers.add(item.worker)
 
             baseline["total"] += 1
+            slot = baseline["by_worker"].setdefault(item.worker, [0, 0])
+            slot[0] += 1
+            if clean.corrections:
+                slot[1] += 1
             if clean.corrections:
                 baseline["corrected"] += 1
                 name = clean.corrections[0].joint
@@ -250,6 +277,10 @@ def summarize(payload: Mapping[str, Any]) -> list[str]:
         f"채점 {payload['scoring_modes']}"
     )
     lines.append(f"기준선(d=0) 위양성률: {fp:.3f}  ({base['corrected']}/{base['total']})")
+    if base.get("by_worker"):
+        lines.append("  작업자별 위양성률 — **합계만 보면 군집이 숨는다**")
+        for worker, (n, fired) in sorted(base["by_worker"].items()):
+            lines.append(f"    {worker:10s} n={n:4d}  {fired/n if n else float('nan'):.3f}")
     if base["by_joint"]:
         lines.append("  교란 없이 지목된 관절: " + ", ".join(
             f"{k} {v}" for k, v in sorted(base["by_joint"].items(), key=lambda x: -x[1])
