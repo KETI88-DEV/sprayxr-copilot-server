@@ -21,6 +21,7 @@ from trainer.demo_api.chat_service import ChatService, build_default_live_runner
 from trainer.demo_api.contracts import ChatRequest
 from trainer.demo_api.copilot_router import create_copilot_router, install_copilot_error_handlers
 from trainer.demo_api.telemetry_router import create_telemetry_router
+from trainer.demo_api.v1_router import create_v1_router
 from trainer.demo_api.monitor import MonitorRecorder
 from trainer.demo_api.monitor_api import create_monitor_router
 from trainer.demo_api.readiness import evaluate_live_readiness
@@ -137,6 +138,8 @@ def create_app(
     app.include_router(
         create_copilot_router((lambda: chat_service_mod._get_or_build_pipeline()) if live else None)
     )
+    # 명세서 15개 중 12개: 세션·사용자·리포트·이상 알림 SSE·테스트.
+    app.include_router(create_v1_router())
     # POST /api/v1/telemetry/sequence: 자세는 MCP로 위임하고, 미구현 엔진은 not_available 이다.
     # recorder 를 함께 준다 — v2.5 요청·응답이 /api/monitor/{events,stream} 에 보인다.
     app.include_router(create_telemetry_router(mcp_base_url=mcp_base_url, recorder=recorder))

@@ -53,11 +53,16 @@ class SequenceStore:
     """단일 워커 전제. 쓰기는 프로세스 내 락으로 직렬화한다."""
 
     def __init__(self, db_path: str | None = None) -> None:
-        raw = db_path if db_path is not None else os.environ.get(DB_PATH_ENV, DEFAULT_DB_PATH)
+        raw = db_path if db_path is not None else self._default_path()
         self._guard = threading.Lock()
         self._conn = self._connect(raw)
         with self._conn:
             self._conn.execute(_SCHEMA)
+
+    @staticmethod
+    def _default_path() -> str:
+        """`SEQUENCE_DB_PATH` 또는 기본값. `V1Store`가 같은 DB를 쓰도록 공개한다."""
+        return os.environ.get(DB_PATH_ENV, DEFAULT_DB_PATH)
 
     @staticmethod
     def _connect(raw: str) -> sqlite3.Connection:
