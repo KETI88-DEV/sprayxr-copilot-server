@@ -1894,3 +1894,123 @@ def test_grid_checks_can_fail(test_mounts) -> None:  # noqa: ANN001
     floored = dict(block.fit, floor_vertical=-0.75)
     assert grid_height_faults(grid, floored, None) == ["grid_is_not_on_the_floor_plane"]
     assert service.grid_block(None, None, None, None) is None
+
+
+# --- 재생(프레임별 두 몸 · 진행률 짝 · 순간별 자세 차이) -----------------------------------
+#
+# 다른 평가자: "시퀀스 비교인데 시간 흐름을 볼 수 없다." 서버가 프레임마다 몸을 세워 싣고, 두 동작을
+# 진행률로 짝지어 순간마다 자세 차이를 낸다.
+
+
+def test_the_playback_track_uses_the_same_path_as_the_representative_body(test_mounts) -> None:  # noqa: ANN001
+    """재생의 대표 프레임 몸은 멈춘 화면의 몸과 **같아야** 한다 — 경로가 둘이면 다른 사람이 된다.
+
+    깨뜨리는 법: `skeleton_track`이 오른팔(`arm_for`)을 빼고 배치 관절만 실으면 실패한다.
+    """
+    block = service.skeleton_block(RawPass(rows=_rows_with_skeleton(0.3)))
+    assert block.track, "스켈레톤이 섰는데 재생 궤적이 없다"
+    flagged = [frame for frame in block.track if frame["representative"]]
+    assert len(flagged) == 1
+    for name, position in block.joints.items():
+        assert flagged[0]["joints"][name] == pytest.approx(position, abs=1e-3), name
+
+
+def test_thinning_the_track_keeps_the_representative_frame(test_mounts, monkeypatch) -> None:  # noqa: ANN001
+    """분사 구간이 길어 솎아도 대표 프레임은 남아야 한다 — 재생을 멈추면 그 자리로 돌아온다.
+
+    깨뜨리는 법: 솎은 뒤 대표 프레임을 다시 넣지 않으면 대표 표시가 0개가 되어 실패한다.
+    """
+    monkeypatch.setattr(service, "TRACK_MAX_FRAMES", 4)
+    block = service.skeleton_block(RawPass(rows=_rows_with_skeleton(0.3)))
+    assert block.track is not None
+    assert len(block.track) <= 5
+    assert sum(1 for frame in block.track if frame["representative"]) == 1
+    times = [frame["t"] for frame in block.track]
+    assert times == sorted(times), "솎은 프레임이 시간 순서가 아니다"
+
+
+def _track_result(frames: list[dict[str, list[float]]], step_s: float = 0.01) -> "service.SkeletonResult":
+    track = [
+        {"t": round(i * step_s, 4), "time_display": "", "representative": i == len(frames) // 2,
+         "joints": joints, "hit": None, "markers": {}}
+        for i, joints in enumerate(frames)
+    ]
+    return service.SkeletonResult(
+        joints=frames[len(frames) // 2], bones=[], fit=None, fit_reason=None, fit_note=None,
+        markers={}, representative=None, track=track,
+    )
+
+
+def _pose(dx: float = 0.0, hand: float = 0.0) -> dict[str, list[float]]:
+    return {
+        "Chest": [0.0 + dx, 1.4, 0.0],
+        "RightUpperArm": [0.2 + dx, 1.4, 0.0],
+        "RightHand": [0.6 + dx + hand, 1.4, 0.0],
+        "LeftCalf": [0.1 + dx, 0.5, 0.0],
+    }
+
+
+def test_playback_needs_a_query_track() -> None:
+    empty = service.SkeletonResult(
+        joints=None, bones=None, fit=None, fit_reason="x", fit_note=None, markers={}, representative=None,
+    )
+    assert service.playback_block(empty, _track_result([_pose()] * 3)) is None
+
+
+def test_a_whole_body_shift_is_not_a_posture_difference() -> None:
+    """두 패스가 벽 위 다른 자리에서 칠해지면 몸 전체가 옮겨 앉는다. 그것은 자세 차이가 아니다.
+
+    처음엔 월드 거리를 그대로 썼고 순간별 막대가 40~45 cm로 평평했다 — 옮겨 앉은 몫이 모든 순간을
+    지배했다.
+
+    깨뜨리는 법: 무게중심 차(`offset`)를 빼지 않으면 모든 간격이 0.5가 되어 실패한다.
+    """
+    query = _track_result([_pose()] * 5)
+    reference = _track_result([_pose(dx=0.5)] * 5)
+    block = service.playback_block(query, reference)
+    assert block is not None
+    for pair in block["pairs"]:
+        assert pair["gap_m"] == pytest.approx(0.0, abs=1e-6)
+        assert pair["shift_m"] == pytest.approx(0.5, abs=1e-6)
+        assert "몸 위치 차" in pair["readout"], "뺀 몫을 화면이 말하지 않는다"
+
+
+def test_the_worst_moment_is_where_the_posture_differs() -> None:
+    """가운데 순간에만 손을 벌리면 그 순간이 가장 다른 순간이어야 한다.
+
+    깨뜨리는 법: `worst`를 첫 눈금으로 고정하면 실패한다.
+    """
+    query = _track_result([_pose()] * 11)
+    reference = _track_result([_pose(hand=0.3 if i == 5 else 0.0) for i in range(11)])
+    block = service.playback_block(query, reference)
+    assert block is not None
+    worst = block["pairs"][block["worst"]]
+    assert worst["reference"] == 5
+    assert worst["progress"] == pytest.approx(0.5, abs=0.05)
+    assert worst["gap_height"] == "100.0%"
+
+
+def test_motions_of_different_length_are_paired_by_progress() -> None:
+    """길이가 다른 두 동작은 진행률로 짝짓는다 — 처음은 처음끼리, 끝은 끝끼리.
+
+    깨뜨리는 법: 인덱스로 짝지으면 짧은 쪽이 끝나 긴 쪽의 끝과 못 만나 실패한다.
+    """
+    query = _track_result([_pose()] * 20)
+    reference = _track_result([_pose()] * 7)
+    block = service.playback_block(query, reference)
+    assert block is not None
+    assert (block["pairs"][0]["query"], block["pairs"][0]["reference"]) == (0, 0)
+    assert (block["pairs"][-1]["query"], block["pairs"][-1]["reference"]) == (19, 6)
+
+
+def test_hidden_joints_do_not_drive_the_posture_gap() -> None:
+    """그리지 않는 관절(숨긴 다리)이 간격을 정하면 보이지 않는 곳이 가장 다르다고 말하게 된다."""
+    query = _track_result([_pose()] * 3)
+    moved = _pose()
+    moved["LeftCalf"] = [0.1, 0.5, 0.9]
+    reference = _track_result([moved] * 3)
+    shown = service.playback_block(query, reference)
+    hidden = service.playback_block(query, reference, hidden_joints=("LeftCalf",))
+    assert shown is not None and hidden is not None
+    assert "LeftCalf" in shown["pairs"][0]["joints"]
+    assert "LeftCalf" not in hidden["pairs"][0]["joints"]

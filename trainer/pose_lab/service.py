@@ -1218,6 +1218,195 @@ def place_frame(sample: skeleton.FrameSample, mounts: skeleton.Mounts) -> skelet
     )
 
 
+# --- 재생 -------------------------------------------------------------------------
+#
+# 다른 평가자가 실제 브라우저에서 확인했다: "시퀀스 비교인데 시간 흐름을 볼 수 없다" — 뷰어가
+# 대표 프레임 자세 하나와 전체 궤적만 보여 언제 자세가 달라지는지 알 수 없었다. 프레임마다 몸을
+# 세워 싣고, 두 동작을 **진행률**로 짝지어 순간마다 벌어짐을 낸다.
+
+# 한 층에 싣는 프레임 수 상한. 분사 구간이 길면 고르게 솎는다(대표 프레임은 늘 남긴다).
+TRACK_MAX_FRAMES: Final = 60
+# 진행률 맞춤 재생의 눈금 수. 두 동작 길이가 달라도 같은 눈금 위에서 짝을 짓는다.
+PLAYBACK_STEPS: Final = 60
+
+
+def _round3(point: Sequence[float] | None) -> list[float] | None:
+    return None if point is None else [round(float(value), 4) for value in point]
+
+
+def skeleton_track(
+    representative: Representative, offsets: Mapping[str, Vec3], mounts: skeleton.Mounts
+) -> list[dict[str, object]]:
+    """분사 구간 프레임마다 몸을 세운다 — 대표 프레임과 **같은** 장착 상수·배치·오른팔 경로다.
+
+    `t`는 분사 첫 프레임에서 잰 초다. 몸을 못 세운 프레임은 빠진다(지어내지 않는다).
+    """
+    spraying = representative.spraying
+    if not spraying:
+        return []
+    count = len(spraying)
+    if count <= TRACK_MAX_FRAMES:
+        picks = list(range(count))
+    else:
+        picks = sorted({round(i * (count - 1) / (TRACK_MAX_FRAMES - 1)) for i in range(TRACK_MAX_FRAMES)})
+    # 대표 프레임은 솎아도 남긴다 — 재생을 멈추면 그 자리로 돌아와야 한다.
+    chosen_index = next(
+        (i for i, (frame, _row) in enumerate(spraying) if frame.index == representative.frame.index), None
+    )
+    if chosen_index is not None and chosen_index not in picks:
+        picks = sorted({*picks, chosen_index})
+
+    start = float(spraying[0][0].time_sec)
+    out: list[dict[str, object]] = []
+    for index in picks:
+        frame, row = spraying[index]
+        sample = skeleton.frame_sample(frame, row, representative.gun, offsets)
+        if sample is None:
+            continue
+        placed = place_frame(sample, mounts)
+        if placed is None:
+            continue
+        arm = right_arm.right_arm(placed.joints, offsets, row, representative.gun, frame.right)
+        joints = displayed_joints(placed, arm)
+        elapsed = float(frame.time_sec) - start
+        out.append({
+            "t": round(elapsed, 4),
+            "time_display": f"{elapsed:.2f} s",
+            "representative": index == chosen_index,
+            "joints": {name: _round3(position) for name, position in joints.items()},
+            "hit": _round3(frame.hit),
+            "markers": {
+                "head": _round3(frame.head),
+                "right": _round3(frame.right),
+                "left": _round3(frame.left),
+            },
+        })
+    return out
+
+
+def _progress(track: Sequence[Mapping[str, object]]) -> list[float]:
+    """프레임마다 동작 진행률(0~1) — 분사 시간을 그 동작 길이로 나눈 것."""
+    last = float(track[-1]["t"]) if track else 0.0  # type: ignore[arg-type]
+    return [float(item["t"]) / last if last > 0 else 0.0 for item in track]  # type: ignore[arg-type]
+
+
+def _nearest(values: Sequence[float], target: float) -> int:
+    return min(range(len(values)), key=lambda i: (abs(values[i] - target), i))
+
+
+def playback_block(
+    query: SkeletonResult | None,
+    reference: SkeletonResult | None,
+    *,
+    hidden_joints: Iterable[str] = (),
+) -> dict[str, object] | None:
+    """재생 재료. 질의 궤적이 없으면 `None`이다.
+
+    **진행률 맞춤**: 두 동작을 같은 0~1 눈금 위에 놓고 눈금마다 가장 가까운 프레임끼리 짝짓는다.
+    길이가 다른 동작을 "같은 순간"으로 비교하는 유일한 방법이고, 그 대가로 속도 차이는 지운다.
+    **원래 시간**은 화면이 각 층의 `t`로 따로 재생한다 — 그때는 두 몸이 같은 순간을 하지 않으므로
+    짝도 벌어짐도 없다.
+
+    벌어짐은 **몸 위치 차를 뺀 자세 차이**다 — 짝지은 관절의 무게중심을 맞춘 뒤 관절 사이 거리
+    (그리지 않는 관절 제외). 처음엔 `deviation_block`과 같은 월드 거리를 썼는데 순간별 막대가
+    40~45 cm로 **평평했다**: 두 패스가 벽 위 다른 자리에서 칠해져 몸 전체가 통째로 옮겨 앉은 몫이
+    모든 순간을 지배했다. `deviation_block`이 `common_shift_m`을 따로 싣는 것도 같은 이유다.
+    뺀 몫(`shift_m`)은 순간마다 함께 싣는다 — 뺐다는 사실을 숨기지 않는다.
+    """
+    q_track = query.track if query is not None else None
+    if not q_track:
+        return None
+    r_track = reference.track if reference is not None and reference.track else []
+    hidden = set(hidden_joints)
+
+    def _layer(track: Sequence[Mapping[str, object]]) -> dict[str, object]:
+        duration = float(track[-1]["t"]) if track else 0.0  # type: ignore[arg-type]
+        return {
+            "frames": list(track),
+            "duration_s": round(duration, 4),
+            "duration_display": f"{duration:.2f} s",
+            "representative_index": next(
+                (i for i, item in enumerate(track) if item.get("representative")), None
+            ),
+        }
+
+    q_progress = _progress(q_track)
+    r_progress = _progress(r_track) if r_track else []
+    pairs: list[dict[str, object]] = []
+    for step in range(PLAYBACK_STEPS):
+        progress = step / (PLAYBACK_STEPS - 1)
+        qi = _nearest(q_progress, progress)
+        ri = _nearest(r_progress, progress) if r_progress else None
+        gaps: dict[str, float] = {}
+        shift: float | None = None
+        if ri is not None:
+            q_joints: Mapping[str, Sequence[float] | None] = q_track[qi]["joints"]  # type: ignore[assignment]
+            r_joints: Mapping[str, Sequence[float] | None] = r_track[ri]["joints"]  # type: ignore[assignment]
+            names = [
+                name for name in q_joints
+                if name in r_joints and name not in hidden
+                and q_joints[name] is not None and r_joints[name] is not None
+            ]
+            if names:
+                offset = [
+                    sum(float(q_joints[n][a]) - float(r_joints[n][a]) for n in names) / len(names)  # type: ignore[index]
+                    for a in range(3)
+                ]
+                shift = round(math.hypot(*offset), 4)
+                gaps = {
+                    name: round(math.dist(
+                        [float(q_joints[name][a]) - offset[a] for a in range(3)],  # type: ignore[index]
+                        [float(r_joints[name][a]) for a in range(3)],  # type: ignore[index]
+                    ), 4)
+                    for name in names
+                }
+        gap = max(gaps.values()) if gaps else None
+        # 단위를 붙인다 — `deviation_display`는 숫자만 낸다(범례가 단위를 따로 적는 자리에서 쓰인다).
+        gap_display = None if gap is None else f"{instructions.deviation_display(gap * 100.0)} cm"
+        shift_display = None if shift is None else f"{instructions.deviation_display(shift * 100.0)} cm"
+        progress_display = f"진행 {round(progress * 100)}%"
+        pairs.append({
+            "progress": round(progress, 4),
+            "progress_display": progress_display,
+            "query": qi,
+            "reference": ri,
+            "joints": gaps,
+            "gap_m": gap,
+            "gap_display": gap_display,
+            "shift_m": shift,
+            "shift_display": shift_display,
+            # 화면이 이 순간 아래에 그대로 적는 한 줄.
+            "readout": (
+                progress_display if gap_display is None
+                else f"{progress_display} · 자세 차이 최대 {gap_display} (몸 위치 차 {shift_display}는 뺌)"
+            ),
+        })
+
+    scale = max((item["gap_m"] for item in pairs if item["gap_m"] is not None), default=None)
+    for item in pairs:
+        gap = item["gap_m"]
+        # 막대 높이도 서버 문자열이다 — 화면이 숫자를 만들지 않게.
+        item["gap_height"] = (
+            None if gap is None or not scale else f"{float(gap) / float(scale) * 100.0:.1f}%"  # type: ignore[arg-type]
+        )
+    worst = None
+    if scale:
+        worst = max(range(len(pairs)), key=lambda i: (pairs[i]["gap_m"] or -1.0, -i))  # type: ignore[operator]
+    return {
+        "steps": PLAYBACK_STEPS,
+        "query": _layer(q_track),
+        "reference": _layer(r_track) if r_track else None,
+        "pairs": pairs,
+        # 색 눈금. 재생 **전체**에서 하나로 잡아야 순간끼리 진하기를 견줄 수 있다.
+        "joint_max_m": scale,
+        "worst": worst,
+        "worst_display": (
+            None if worst is None
+            else f"{pairs[worst]['progress_display']} · {pairs[worst]['gap_display']}"
+        ),
+    }
+
+
 @dataclass(frozen=True, slots=True)
 class SkeletonResult:
     joints: dict[str, list[float]] | None
@@ -1227,6 +1416,9 @@ class SkeletonResult:
     fit_note: str | None
     markers: dict[str, Vec3]
     representative: Representative | None
+    # 분사 구간 프레임마다 같은 장착 상수·같은 배치로 세운 몸(재생용). 대표 프레임 몸과 **같은
+    # 경로**다 — 경로를 둘 두면 재생 중 몸과 멈춘 몸이 다른 사람이 된다.
+    track: list[dict[str, object]] | None = None
 
 
 def _skeleton_failure(reason: str, representative: Representative | None = None) -> SkeletonResult:
@@ -1590,6 +1782,7 @@ def skeleton_block(
         fit_note=None,
         markers={fit.point: fit.measured_marker for fit in placed.anchors},
         representative=representative,
+        track=skeleton_track(representative, offsets, mounts),
     )
 
 
@@ -1921,6 +2114,10 @@ def view_block(
             reference_layer_view.get("joints"),  # type: ignore[arg-type]
             fit,
             reference_fit,
+        ),
+        # 재생 재료(프레임별 두 몸 · 진행률 짝 · 순간별 벌어짐). 눈금에서 빼는 관절은 `deviation`과 같다.
+        "playback": playback_block(
+            skeleton_result, reference_skeleton, hidden_joints=hidden_joints(fit, reference_fit)
         ),
         # 살(반투명 부피)의 부위·두께. 머리 지름과 같은 분모로 이 리그 크기에 맞춘다 —
         # 화면이 부위 이름으로 규칙을 지어내지 않게 서버가 준다.

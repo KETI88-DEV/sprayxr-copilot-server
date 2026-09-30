@@ -357,6 +357,31 @@ function buildDom(container) {
   wallNote.className = "view3d-wall-note";
   host.append(canvas, labelsHost, wallNote);
 
+  // 재생 막대. 다른 평가자: "시퀀스 비교인데 시간 흐름을 볼 수 없다." 두 동작을 한 눈금으로 재생하고,
+  // 순간마다 두 몸이 얼마나 벌어졌는지 막대로 보이고, 가장 벌어진 순간으로 바로 간다.
+  const playback = document.createElement("div");
+  playback.className = "view3d-playback";
+  playback.hidden = true;
+  playback.innerHTML = `
+    <button id="view3dPlay" type="button" class="view3d-play">▶ 재생</button>
+    <select id="view3dPlaybackMode" aria-label="재생 기준">
+      <option value="progress" selected>동작 진행률 맞춤</option>
+      <option value="time">원래 시간</option>
+    </select>
+    <select id="view3dPlaybackSpeed" aria-label="재생 속도">
+      <option value="0.25" selected>0.25×</option>
+      <option value="0.5">0.5×</option>
+      <option value="1">1×</option>
+    </select>
+    <div class="view3d-scrub">
+      <div class="view3d-gapstrip" aria-hidden="true"></div>
+      <input id="view3dScrub" type="range" min="0" max="0" step="1" value="0" aria-label="재생 위치">
+    </div>
+    <button id="view3dWorst" type="button">가장 다른 순간</button>
+    <button id="view3dRepresentative" type="button">대표 자세</button>
+    <span class="view3d-playback-readout" aria-live="polite"></span>
+  `;
+
   const legend = document.createElement("div");
   legend.className = "view3d-legend";
 
@@ -385,10 +410,18 @@ function buildDom(container) {
   framingMore.append(framingMoreSummary, framingMoreText);
 
   // wallNote는 위에서 host(캔버스 위 겹침)에 넣었다 — 여기서 다시 넣으면 host 밖으로 옮겨진다.
-  container.append(toolbar, host, legend, notes, notesMore, errors, note, correctedNote, framingNote, framingMore);
+  container.append(toolbar, host, playback, legend, notes, notesMore, errors, note, correctedNote, framingNote, framingMore);
   return {
     canvas, host, labelsHost, legend, notes, notesMore, wallNote, errors, note, correctedNote, framingNote,
-    framingMore, framingMoreText, controls, toolbar,
+    framingMore, framingMoreText, controls, toolbar, playback,
+    play: playback.querySelector("#view3dPlay"),
+    playbackMode: playback.querySelector("#view3dPlaybackMode"),
+    playbackSpeed: playback.querySelector("#view3dPlaybackSpeed"),
+    scrub: playback.querySelector("#view3dScrub"),
+    gapStrip: playback.querySelector(".view3d-gapstrip"),
+    worst: playback.querySelector("#view3dWorst"),
+    representative: playback.querySelector("#view3dRepresentative"),
+    readout: playback.querySelector(".view3d-playback-readout"),
   };
 }
 
@@ -2379,6 +2412,8 @@ function mount(THREE, container) {
     for (const entry of gapLabels) {
       entry.el.hidden = !(entry.layer === "reference" ? placeholderShown.reference : placeholderShown.query);
     }
+    // 재생 중이면 대표 순간 물체는 숨긴 채로 두고, 이 순간 몸의 다리만 토글을 따른다.
+    if (playbackState.held.length > 0) reapplyHold();
   }
   checkboxes.legs.addEventListener("change", () => {
     applyLegsToggle();
@@ -2438,6 +2473,314 @@ function mount(THREE, container) {
     setNote(dom.note, message ?? "비교를 계산하는 중…", "loading");
     dom.host.classList.add("is-loading");
   }
+
+  // ---- 재생 ---------------------------------------------------------------------------
+  //
+  // 서버가 준 프레임별 두 몸(`view.playback`)을 한 눈금 위에서 넘긴다. 몸은 **대표 순간과 같은
+  // 함수**(`buildSkeletonGroup`)로 그린다 — 두 그리기 경로를 두면 멈춘 몸과 움직이는 몸이 다르다.
+  //
+  // 대표 순간에 묶인 것(실측 장치 모양·교정 화살표·자리표시 다리·이름표)은 재생 중에 숨긴다.
+  // 화살표는 대표 프레임에서 나가는 것이라 다른 순간에 그대로 두면 엉뚱한 곳을 가리킨다.
+  // 그 대신 이 순간의 실측 장치 자리(채운 구 + 자기 궤적을 가로지르는 고리)와 착탄점 고리를 그린다 —
+  // 예전에는 대표 순간 표식만 있어 "궤적 끝의 구를 현재 위치로 오해할 여지"가 있었다(평가자).
+  //
+  // 진행률 맞춤에서는 서버가 짝지은 순간의 벌어짐으로 칠하고, 원래 시간에서는 두 몸이 같은 순간을
+  // 하지 않으므로 칠하지 않는다. 화면은 거리를 재지 않는다.
+  const playbackState = {
+    view: null,
+    mode: "progress",
+    step: null,
+    playing: false,
+    speed: 0.25,
+    lastTick: null,
+    position: 0,
+    held: [],
+    key: null,
+    bound: [],
+  };
+  let momentGroups = { query: null, reference: null };
+  let momentLegs = { query: null, reference: null };
+
+  function frameIndexAtTime(frames, seconds) {
+    let found = 0;
+    for (let i = 0; i < frames.length; i += 1) {
+      if (frames[i].t <= seconds) found = i;
+      else break;
+    }
+    return found;
+  }
+
+  function momentAt(step) {
+    const block = playbackState.view?.playback;
+    if (!block) return null;
+    if (playbackState.mode === "progress") {
+      const pair = block.pairs?.[step];
+      if (!pair) return null;
+      return {
+        query: pair.query,
+        reference: pair.reference,
+        deviations: pair.joints ?? {},
+        maxDeviation: block.joint_max_m ?? null,
+        readout: pair.readout ?? pair.progress_display,
+      };
+    }
+    const q = block.query;
+    const r = block.reference;
+    const longest = Math.max(q?.duration_s ?? 0, r?.duration_s ?? 0);
+    const seconds = block.steps > 1 ? (step / (block.steps - 1)) * longest : 0;
+    const qi = frameIndexAtTime(q?.frames ?? [], seconds);
+    const ri = r ? frameIndexAtTime(r.frames ?? [], seconds) : null;
+    const qTime = q?.frames?.[qi]?.time_display ?? "";
+    const rTime = ri === null ? "" : (r?.frames?.[ri]?.time_display ?? "");
+    return {
+      query: qi,
+      reference: ri,
+      deviations: {},
+      maxDeviation: null,
+      readout: rTime ? `대상 ${qTime} · 기준 ${rTime}` : `대상 ${qTime}`,
+    };
+  }
+
+  function holdRepresentative() {
+    playbackState.held = playbackState.bound.filter(Boolean).map((object) => [object, object.visible]);
+    for (const [object] of playbackState.held) object.visible = false;
+    dom.labelsHost.hidden = true;
+  }
+
+  function reapplyHold() {
+    for (const [object] of playbackState.held) object.visible = false;
+    for (const layer of ["query", "reference"]) {
+      if (momentLegs[layer]) momentLegs[layer].visible = checkboxes.legs.checked && legsAllowed[layer];
+    }
+  }
+
+  function clearMoment() {
+    for (const layer of ["query", "reference"]) {
+      const moment = momentGroups[layer];
+      if (!moment) continue;
+      disposeObject3D(moment);
+      moment.clear();
+    }
+    momentLegs = { query: null, reference: null };
+  }
+
+  function buildMomentMarkers(frame, layer, color, trackLayer) {
+    const group = new THREE.Group();
+    const marker = new THREE.MeshStandardMaterial({ color, roughness: 0.5 });
+    const ring = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: MOMENT_RING_OPACITY });
+    const hitRing = new THREE.MeshBasicMaterial({
+      color: STROKE_COLOR[layer], transparent: true, opacity: MOMENT_RING_OPACITY,
+    });
+    const place = (position, material, points, kind, point) => {
+      const tangent = trackTangentAt(points, position);
+      if (!tangent) return;
+      const loop = new THREE.Mesh(new THREE.TorusGeometry(MOMENT_RING_RADIUS, MOMENT_RING_TUBE, 8, 32), material);
+      loop.position.copy(position);
+      loop.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), tangent.direction);
+      loop.userData.kind = kind;
+      loop.userData.point = point;
+      group.add(loop);
+    };
+    for (const [point, position] of Object.entries(frame.markers ?? {})) {
+      if (!isVec3(position)) continue;
+      const center = new THREE.Vector3(...position);
+      // 실측 장치다 — 범례의 "채운 구 = 실측 장치"와 같은 부호를 쓴다.
+      const sphere = new THREE.Mesh(new THREE.SphereGeometry(MEASURED_MARKER_RADIUS, 20, 14), marker);
+      sphere.position.copy(center);
+      sphere.userData.kind = "moment-marker";
+      sphere.userData.point = point;
+      group.add(sphere);
+      place(center, ring, trackLayer?.[point], "moment-ring", point);
+    }
+    if (isVec3(frame.hit)) {
+      place(new THREE.Vector3(...frame.hit), hitRing, trackLayer?.hit, "moment-hit", "hit");
+    }
+    return group;
+  }
+
+  function buildMoment(view, found) {
+    const block = view.playback;
+    for (const layer of ["query", "reference"]) {
+      const index = found[layer];
+      const frame = index === null || index === undefined ? null : block[layer]?.frames?.[index];
+      if (!frame || !momentGroups[layer]) continue;
+      // 머리 지름·다리 판정은 **그 층의 서버 fit**에서 온다 — 대표 순간과 같다.
+      const fit = layer === "query" ? view.fit : view.reference_fit;
+      const parts = buildSkeletonGroup(
+        frame.joints, view.layers?.[layer]?.bones, fit?.faded === true,
+        fit?.legs?.joints, fit?.head_diameter_m,
+        {
+          layerColor: LAYER_COLOR[layer],
+          deviations: found.deviations,
+          maxDeviation: found.maxDeviation,
+          legsOutOfRange: fit?.legs_within_range === false,
+          flesh: view.flesh,
+        },
+      );
+      parts.legs.visible = checkboxes.legs.checked && legsAllowed[layer];
+      momentLegs[layer] = parts.legs;
+      momentGroups[layer].add(parts.group);
+      momentGroups[layer].add(buildMomentMarkers(frame, layer, LAYER_COLOR[layer], view.layers?.[layer]));
+    }
+  }
+
+  function showMoment(step) {
+    const view = playbackState.view;
+    if (!view?.playback) return;
+    if (step === null) {
+      leaveMoment();
+      return;
+    }
+    const found = momentAt(step);
+    if (!found) return;
+    playbackState.step = step;
+    dom.scrub.value = String(step);
+    dom.readout.textContent = found.readout;
+    const key = `${playbackState.mode}:${found.query}:${found.reference}`;
+    debugLive.moment = { mode: playbackState.mode, step, query: found.query, reference: found.reference };
+    if (key === playbackState.key) return;
+    if (playbackState.held.length === 0) holdRepresentative();
+    clearMoment();
+    buildMoment(view, found);
+    playbackState.key = key;
+  }
+
+  function representativeStep(block) {
+    const target = block?.query?.representative_index;
+    if (typeof target !== "number") return 0;
+    const pairs = block.pairs ?? [];
+    const exact = pairs.findIndex((pair) => pair.query === target);
+    return exact >= 0 ? exact : 0;
+  }
+
+  function leaveMoment() {
+    stopPlaying();
+    clearMoment();
+    for (const [object, visible] of playbackState.held) object.visible = visible;
+    playbackState.held = [];
+    playbackState.key = null;
+    playbackState.step = null;
+    dom.labelsHost.hidden = false;
+    debugLive.moment = null;
+    const block = playbackState.view?.playback;
+    if (block) {
+      dom.scrub.value = String(representativeStep(block));
+      dom.readout.textContent = "대표 자세";
+    }
+    applyLegsToggle();
+  }
+
+  function stopPlaying() {
+    playbackState.playing = false;
+    playbackState.lastTick = null;
+    dom.play.textContent = "▶ 재생";
+  }
+
+  function playbackSeconds(block) {
+    if (playbackState.mode === "time") {
+      return Math.max(block.query?.duration_s ?? 0, block.reference?.duration_s ?? 0);
+    }
+    return block.query?.duration_s ?? 0;
+  }
+
+  function playbackTick(now) {
+    if (!playbackState.playing) return;
+    const block = playbackState.view?.playback;
+    if (!block) {
+      stopPlaying();
+      return;
+    }
+    const dt = playbackState.lastTick === null ? 0 : (now - playbackState.lastTick) / 1000;
+    playbackState.lastTick = now;
+    const seconds = playbackSeconds(block);
+    playbackState.position = Math.min(1, playbackState.position + (seconds > 0 ? (dt * playbackState.speed) / seconds : 1));
+    showMoment(Math.round(playbackState.position * (block.steps - 1)));
+    if (playbackState.position >= 1) {
+      stopPlaying();
+      return;
+    }
+    requestAnimationFrame(playbackTick);
+  }
+
+  function renderGapStrip(block) {
+    dom.gapStrip.replaceChildren();
+    const progress = playbackState.mode === "progress";
+    dom.gapStrip.hidden = !progress;
+    dom.worst.disabled = !progress || typeof block?.worst !== "number";
+    if (!progress) return;
+    for (const pair of block.pairs ?? []) {
+      const bar = document.createElement("span");
+      bar.className = "view3d-gapbar";
+      // 높이는 **서버 문자열**이다 — 화면이 숫자를 만들지 않는다.
+      bar.style.height = pair.gap_height ?? "0%";
+      if (pair === block.pairs[block.worst]) bar.classList.add("is-worst");
+      dom.gapStrip.append(bar);
+    }
+  }
+
+  function setupPlayback(view, bound) {
+    stopPlaying();
+    playbackState.view = view;
+    playbackState.bound = bound;
+    playbackState.held = [];
+    playbackState.key = null;
+    playbackState.step = null;
+    playbackState.position = 0;
+    momentGroups = { query: new THREE.Group(), reference: new THREE.Group() };
+    layerGroups.query.add(momentGroups.query);
+    layerGroups.reference.add(momentGroups.reference);
+    const block = view?.playback;
+    dom.playback.hidden = !block;
+    debugLive.moment = null;
+    debugLive.playbackSteps = block ? block.steps : 0;
+    if (!block) return;
+    dom.scrub.max = String(block.steps - 1);
+    dom.scrub.value = String(representativeStep(block));
+    dom.readout.textContent = "대표 자세";
+    renderGapStrip(block);
+  }
+
+  dom.play.addEventListener("click", () => {
+    const block = playbackState.view?.playback;
+    if (!block) return;
+    if (playbackState.playing) {
+      stopPlaying();
+      return;
+    }
+    // 끝에 있거나 대표 자세에서 누르면 처음부터 돈다.
+    if (playbackState.step === null || playbackState.position >= 1) playbackState.position = 0;
+    playbackState.playing = true;
+    playbackState.lastTick = null;
+    dom.play.textContent = "❚❚ 멈춤";
+    requestAnimationFrame(playbackTick);
+  });
+  dom.scrub.addEventListener("input", () => {
+    const block = playbackState.view?.playback;
+    if (!block) return;
+    stopPlaying();
+    const step = Number(dom.scrub.value);
+    playbackState.position = block.steps > 1 ? step / (block.steps - 1) : 0;
+    showMoment(step);
+  });
+  dom.playbackSpeed.addEventListener("change", () => {
+    playbackState.speed = Number(dom.playbackSpeed.value) || 0.25;
+  });
+  dom.playbackMode.addEventListener("change", () => {
+    playbackState.mode = dom.playbackMode.value === "time" ? "time" : "progress";
+    playbackState.key = null;
+    const block = playbackState.view?.playback;
+    if (!block) return;
+    renderGapStrip(block);
+    if (playbackState.step !== null) showMoment(playbackState.step);
+  });
+  dom.worst.addEventListener("click", () => {
+    const block = playbackState.view?.playback;
+    if (!block || typeof block.worst !== "number") return;
+    stopPlaying();
+    playbackState.position = block.steps > 1 ? block.worst / (block.steps - 1) : 0;
+    showMoment(block.worst);
+  });
+  dom.representative.addEventListener("click", () => showMoment(null));
 
   function resetScene() {
     for (const group of Object.values(layerGroups)) {
@@ -2687,6 +3030,16 @@ function mount(THREE, container) {
       if (child.userData.kind === "bone") boneLengths[child.userData.name] = child.userData.length;
     });
 
+    // 재생. 대표 순간에 묶인 물체를 넘겨 둔다 — 재생 중에 숨기고, 대표 자세로 돌아오면 원래대로 켠다.
+    setupPlayback(view, [
+      skeletonParts.group, referenceParts.group,
+      skeletonPlaceholderLegs, referencePlaceholderLegs,
+      skeletonFloorGaps, referenceFloorGaps,
+      reachGap, referenceReachGap,
+      anchors.group, referenceAnchors.group,
+      correctionsGroup,
+    ]);
+
     container.__view3dDebug = debugLive;
     Object.assign(debugLive, {
       arrowCount: correctionsGroup.children.length,
@@ -2834,6 +3187,12 @@ function mount(THREE, container) {
 
   function clear(message, tone) {
     dom.host.classList.remove("is-loading");
+    stopPlaying();
+    playbackState.view = null;
+    playbackState.held = [];
+    playbackState.bound = [];
+    dom.playback.hidden = true;
+    dom.labelsHost.hidden = false;
     resetScene();
     lastView = null;
     framing.baseRadius = null;

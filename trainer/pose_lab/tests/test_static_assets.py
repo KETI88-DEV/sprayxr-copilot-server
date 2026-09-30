@@ -2725,7 +2725,8 @@ def flesh_faults(js: str) -> list[str]:
     body = code.split("function buildSkeletonGroup(", 1)[-1].split("\n  }\n", 1)[0]
     if "const flesh = style?.flesh;" not in body:
         faults.append("flesh_not_read_from_the_server")
-    if code.count("flesh: view.flesh,") != 2:
+    # 대표 순간의 두 층 + 재생 순간의 몸(같은 함수) — 셋 다 서버 살을 받는다.
+    if code.count("flesh: view.flesh,") != 3:
         faults.append("flesh_not_passed_to_both_layers")
     if re.search(r'"(Left|Right)(Shoulder|UpperArm|ForeArm|Hand|Thigh|Calf|Foot|Toe)"', code):
         faults.append("screen_invents_part_names")
@@ -2754,3 +2755,65 @@ def test_flesh_checks_can_fail():
     assert opaque != full and "flesh_is_not_translucent" in flesh_faults(opaque)
     borrowed = full.replace('group.userData.kind = "flesh";', 'group.userData.kind = "bone";', 1)
     assert borrowed != full and "flesh_borrows_the_bone_kind" in flesh_faults(borrowed)
+
+
+# --- 재생 --------------------------------------------------------------------------------
+#
+# 다른 평가자: "시퀀스 비교인데 시간 흐름을 볼 수 없다 · 궤적 끝의 구를 현재 위치로 오해할 여지."
+# 헤드리스 크로미움으로 확인했다(대표 → 재생 → 가장 다른 순간 → 원래 시간 → 대표 복귀, 오류 없음).
+
+
+def playback_faults(js: str) -> list[str]:
+    faults: list[str] = []
+    code = without_comments(js)
+    render = code.split("function render(payload)", 1)[-1]
+    setup = re.search(r"setupPlayback\(view, \[(.*?)\]\);", render, re.S)
+    if setup is None:
+        faults.append("render_does_not_set_up_playback")
+    else:
+        bound = setup.group(1)
+        # 대표 순간에 묶인 것 — 재생 중에 남기면 엉뚱한 곳을 가리킨다.
+        for name in ("correctionsGroup", "anchors.group", "referenceAnchors.group",
+                     "skeletonParts.group", "referenceParts.group"):
+            if name not in bound:
+                faults.append(f"{name}_not_held_during_playback")
+    moment = _nested_function_body(code, "buildMoment")
+    if "buildSkeletonGroup(" not in moment:
+        faults.append("moment_body_uses_another_drawing_path")
+    if "fit?.head_diameter_m" not in moment:
+        faults.append("moment_head_not_from_the_server")
+    if "dom.labelsHost.hidden = true;" not in _nested_function_body(code, "holdRepresentative"):
+        faults.append("labels_left_on_during_playback")
+    if "dom.labelsHost.hidden = false;" not in _nested_function_body(code, "leaveMoment"):
+        faults.append("labels_not_restored")
+    strip = _nested_function_body(code, "renderGapStrip")
+    if "bar.style.height = pair.gap_height" not in strip:
+        faults.append("gap_bar_height_not_from_the_server")
+    at = _nested_function_body(code, "momentAt")
+    time_branch = at.split('if (playbackState.mode === "progress")', 1)[-1].split("return {", 2)[-1]
+    if "deviations: {}," not in time_branch:
+        faults.append("real_time_mode_paints_unpaired_gaps")
+    if "readout: pair.readout" not in at:
+        faults.append("readout_not_from_the_server")
+    legs = _nested_function_body(code, "applyLegsToggle")
+    if "reapplyHold()" not in legs:
+        faults.append("legs_toggle_revives_the_held_representative")
+    return faults
+
+
+def test_playback_redraws_the_moment_and_holds_the_representative():
+    assert playback_faults(_read("skeleton_view.js")) == []
+
+
+def test_playback_checks_can_fail():
+    full = _read("skeleton_view.js")
+    assert playback_faults("") != []
+    leaky = full.replace("      correctionsGroup,\n    ]);", "    ]);", 1)
+    assert leaky != full and "correctionsGroup_not_held_during_playback" in playback_faults(leaky)
+    painted = full.replace("      deviations: {},\n      maxDeviation: null,\n      readout: rTime",
+                           "      deviations: found?.x ?? {x: 1},\n      maxDeviation: null,\n      readout: rTime", 1)
+    assert painted != full and "real_time_mode_paints_unpaired_gaps" in playback_faults(painted)
+    revived = full.replace("    if (playbackState.held.length > 0) reapplyHold();", "", 1)
+    assert revived != full and "legs_toggle_revives_the_held_representative" in playback_faults(revived)
+    labelled = full.replace("    dom.labelsHost.hidden = true;\n  }", "  }", 1)
+    assert labelled != full and "labels_left_on_during_playback" in playback_faults(labelled)
