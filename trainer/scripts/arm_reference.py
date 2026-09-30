@@ -811,11 +811,20 @@ def sigma_threshold(
     if not isinstance(ladder, Mapping) or not ladder:
         return CORRECTION_SIGMA
     wanted = 100.0 * (1.0 - alpha / max(joints, 1))
-    # 등록한 분위 중 `wanted` 이상인 가장 낮은 것. 없으면 가장 높은 것을 쓴다.
-    candidates = [point for point in SIGMA_PERCENTILES if point >= wanted - 1e-9]
-    point = candidates[0] if candidates else SIGMA_PERCENTILES[-1]
-    value = ladder.get(f"p{point:g}".replace(".", "_"))
-    return float(value) if isinstance(value, (int, float)) else CORRECTION_SIGMA
+    # 등록한 분위 중 `wanted` 이상이면서 **이 사다리에 실제로 있는** 가장 낮은 것.
+    #
+    # 예전에는 등록 목록에서 먼저 고르고 그 키를 찾았다. 목록에 눈금을 더했는데
+    # 아티팩트가 옛것이면 키가 없어 **전역 `CORRECTION_SIGMA`로 조용히 떨어졌다** —
+    # 관절별 문턱을 몰래 되돌리는 셈이다. 코드와 Spark 번들 아티팩트는 따로 움직이므로
+    # 새 코드가 옛 아티팩트를 만나는 일은 실제로 일어난다. 그래서 다음 높은 눈금으로
+    # 넘어가고, 그것도 없을 때만 전역 문턱으로 내려간다.
+    ordered = sorted(SIGMA_PERCENTILES)
+    above = [point for point in ordered if point >= wanted - 1e-9]
+    for point in above or ordered[-1:]:
+        value = ladder.get(f"p{point:g}".replace(".", "_"))
+        if isinstance(value, (int, float)):
+            return float(value)
+    return CORRECTION_SIGMA
 
 # --- 위상별 레퍼런스 ---------------------------------------------------------
 

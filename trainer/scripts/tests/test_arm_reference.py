@@ -810,3 +810,36 @@ def test_a_missing_ladder_falls_back_rather_than_guessing() -> None:
     """사다리가 없는 버킷에서는 공통 문턱으로 내려간다 — 없는 분위를 지어내지 않는다."""
     assert arm_reference.sigma_threshold("RightHand", None) == arm_reference.CORRECTION_SIGMA
     assert arm_reference.sigma_threshold("없는관절", _ladder()) == arm_reference.CORRECTION_SIGMA
+
+
+def test_a_rung_missing_from_an_old_artifact_falls_through_to_the_next_rung() -> None:
+    """등록 목록에 있는데 **아티팩트에 없는** 눈금은 다음 높은 눈금으로 넘어가야 한다.
+
+    예전에는 전역 `CORRECTION_SIGMA`로 조용히 떨어졌다. 관절별 문턱을 도입한 이유가
+    전역 문턱의 편중(왼손 57/99)이었으니, 그 떨어짐은 기능을 몰래 되돌린다. 코드와
+    Spark 번들 아티팩트가 따로 움직여 실제로 일어나는 일이다.
+
+    깨뜨리는 법: 찾은 첫 키가 없을 때 바로 `CORRECTION_SIGMA`를 내면 실패한다.
+    """
+    # p95 가 빠진 옛 아티팩트를 흉내 낸다. K=3 은 p95 를 원한다.
+    old = {"RightHand": {"p50": 1.0, "p75": 1.2, "p90": 1.4, "p97_5": 1.54, "p99": 1.9}}
+    got = arm_reference.sigma_threshold("RightHand", old, joints=3)
+    assert got == pytest.approx(1.54), (
+        f"없는 눈금에서 다음 눈금(p97.5)으로 넘어가지 않고 {got}을 냈다"
+    )
+    assert got != arm_reference.CORRECTION_SIGMA
+
+
+def test_the_fallthrough_does_not_move_the_current_default() -> None:
+    """고침이 **현행 기본(K=6)의 거동을 바꾸지 않아야** 한다 — p97.5 는 옛 아티팩트에도 있다.
+
+    깨뜨리는 법: 넘어가기 순서를 뒤집어 높은 눈금부터 보면 p99 를 골라 실패한다.
+    """
+    assert arm_reference.sigma_threshold("RightHand", _ladder()) == pytest.approx(1.54)
+
+
+def test_only_an_empty_ladder_falls_back_to_the_global_threshold() -> None:
+    """전역 문턱은 **정말로 쓸 눈금이 하나도 없을 때만** 쓴다."""
+    assert arm_reference.sigma_threshold(
+        "RightHand", {"RightHand": {"n": 10}}
+    ) == arm_reference.CORRECTION_SIGMA
