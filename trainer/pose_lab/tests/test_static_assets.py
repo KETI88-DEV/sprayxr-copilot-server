@@ -2560,3 +2560,70 @@ def test_the_hit_distance_never_reaches_the_screen() -> None:
     )
     for name in STATIC_FILES:
         assert "hit_distance" not in _read(name), f"{name}가 착탄 거리를 화면에 그린다"
+
+
+# --- ④b 배포 채점 패널이 실제로 배선됐는가 -------------------------------------
+#
+# 화면에 **다른 논리의 숫자 둘**이 놓인다: ②의 유사도(기준 패스 하나 대비)와 여기의
+# 백분위(숙련자 버킷 대비). 같은 머리말을 쓰면 화면이 거짓을 말한다. 소스로 고정할 수
+# 있는 것만 본다 — 실제 픽셀은 헤드리스 브라우저 몫이다.
+
+
+def deployed_wiring(html: str, js: str) -> dict[str, bool]:
+    body = without_comments(js)
+    return {
+        # 서버 라우트를 실제로 부르는가.
+        "calls_route": "/api/diagnose?" in body,
+        # 비교와 **독립**으로 부르는가 — 비교가 실패해도 이쪽은 그려야 한다.
+        "survives_compare_failure": body.count("renderDeployed(await deployed)") >= 3,
+        # 표시 문자열을 서버에서 받는가(payload.display).
+        "uses_server_strings": "payload.display" in body,
+        # 막대 높이도 서버 문자열인가.
+        "bar_height_from_server": "fill.style.height = bar.height" in body,
+        # ②와 머리말이 다른가.
+        "headline_differs_from_hero": (
+            "백분위" in html and 'id="deployedHeadline"' in html
+        ),
+        # 사유를 지어내지 않고 서버 집합을 받는가.
+        "closed_reason_map": "DEPLOYED_REASONS" in body,
+    }
+
+
+def deployed_headline_collision(html: str) -> list[str]:
+    """②와 ④b가 **같은 말로 머리 수를 부르면** 두 숫자가 한 값으로 읽힌다."""
+    hero = re.search(r'class="hero-figure-label"[^>]*>(.*?)</span>', html, re.S)
+    deployed = re.search(r'<h2 class="section-title">(.*?)</h2>\s*<div class="deployed-body"', html, re.S)
+    if hero is None or deployed is None:
+        return ["머리말을 못 찾았다 — 이 검사가 공허해진다"]
+    hero_text = re.sub(r"<[^>]+>", " ", hero.group(1))
+    return ["두 패널의 머리말이 같다"] if hero_text.strip().startswith(deployed.group(1).strip()) else []
+
+
+def test_the_deployed_panel_is_wired_to_the_shipped_route():
+    assert deployed_wiring(_read("index.html"), _read("app.js")) == {
+        "calls_route": True,
+        "survives_compare_failure": True,
+        "uses_server_strings": True,
+        "bar_height_from_server": True,
+        "headline_differs_from_hero": True,
+        "closed_reason_map": True,
+    }
+
+
+def test_the_two_scores_do_not_share_a_headline():
+    assert deployed_headline_collision(_read("index.html")) == []
+
+
+def test_deployed_wiring_checks_can_fail():
+    """실패할 수 없는 단언 방지 — 합성 입력으로 각 항이 뒤집히는지 본다."""
+    empty = deployed_wiring("", "")
+    assert empty == {key: False for key in empty}
+    assert deployed_wiring("", 'const u = "/api/diagnose?x";')["calls_route"] is True
+    # 주석에만 있으면 배선이 아니다.
+    assert deployed_wiring("", "// fill.style.height = bar.height")["bar_height_from_server"] is False
+    assert deployed_headline_collision("") == ["머리말을 못 찾았다 — 이 검사가 공허해진다"]
+    collided = (
+        '<span class="hero-figure-label">유사도</span>'
+        '<h2 class="section-title">유사도</h2>\n  <div class="deployed-body">'
+    )
+    assert deployed_headline_collision(collided) == ["두 패널의 머리말이 같다"]

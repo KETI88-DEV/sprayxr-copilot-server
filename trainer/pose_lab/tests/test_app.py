@@ -669,3 +669,58 @@ def test_diagnose_rereads_the_artifact_on_every_request(monkeypatch, tmp_path) -
     assert after["reason"] == "reference_data_missing", (
         "아티팩트를 치웠는데 랩이 옛 값을 계속 낸다"
     )
+
+
+def test_diagnose_says_why_the_percentile_is_missing(monkeypatch, tmp_path) -> None:
+    """백분위가 없을 때 **사유가 둘**이다. 하나로 적으면 운영자를 엉뚱한 데로 보낸다 —
+    MCP에서 실제로 그랬다(레퍼런스가 붙어 있는데 `reference_data_missing`이 나갔다).
+
+    여기 레퍼런스에는 `expert_scores_phase`가 없다. 그러면 사다리가 없는 것이지
+    합산 점수여서가 아니다.
+
+    깨뜨리는 법: 두 사유를 한 문구로 합치면 실패한다.
+    """
+    _arm_reference_file(tmp_path, monkeypatch)
+    client = TestClient(create_app(source=FkSource()))
+    body = client.get("/api/diagnose", params=QUERY).json()
+    assert body["status"] == "ok", body
+    assert body["display"]["headline"] == "—", "사다리가 없는데 백분위가 나왔다"
+    note = body["display"]["headline_note"]
+    assert "사다리가 없어" in note, note
+    assert "합쳤습니다" not in note, "합산이 아닌데 합산 때문이라고 말한다"
+
+
+def test_diagnose_admits_when_a_bar_is_over_but_no_cue_fires(monkeypatch, tmp_path) -> None:
+    """`build_corrections`는 **생 σ로 순위를 매긴 뒤** 1등에만 관절별 문턱을 적용한다.
+    문턱이 관절마다 다르므로 1등이 아닌 관절이 자기 범위를 벗어나도 교정이 안 나간다.
+    실측 222패스 중 범위를 벗어난 65건에서 **18건(28%)** 이 그 경우다.
+
+    막대는 빨간데 교정이 없는 상태를 설명 없이 두면 화면이 자기모순한다.
+
+    깨뜨리는 법: `_bars_note`가 늘 `None`을 내면 실패한다.
+    """
+    _arm_reference_file(tmp_path, monkeypatch)
+    client = TestClient(create_app(source=FkSource()))
+    body = client.get("/api/diagnose", params=QUERY).json()
+    assert body["status"] == "ok", body
+
+    over = [bar for bar in body["bars"] if bar["over"]]
+    if body["correction_text"] is None and over:
+        assert body["bars_note"] is not None, "막대는 넘었는데 화면이 아무 말도 안 한다"
+        assert "교정" in body["bars_note"]
+    else:
+        # 이 소스에서 엇갈림이 안 나면 **함수 자체**가 엇갈림을 말하는지 직접 본다 —
+        # 조건부 단언만 두면 검사가 조용히 공허해진다.
+        from types import SimpleNamespace
+
+        from trainer.scripts import arm_reference as ar
+
+        hot = ar.JointSigma(joint="RightUpperArm", sigma=9.0,
+                            axis_sigmas=(9.0, 0.0, 0.0), delta_m=(0.9, 0.0, 0.0))
+        note = service._bars_note(
+            SimpleNamespace(sigmas=[hot], corrections=[]), {"RightUpperArm": 2.0}
+        )
+        assert note is not None and "교정" in note, note
+        assert service._bars_note(
+            SimpleNamespace(sigmas=[hot], corrections=["있음"]), {"RightUpperArm": 2.0}
+        ) is None, "교정이 나갔는데도 엇갈림이라고 말한다"

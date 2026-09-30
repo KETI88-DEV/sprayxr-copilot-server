@@ -93,6 +93,30 @@
           <p class="improvement-caveat">작업자가 지시대로 정확히 움직였다고 보고 계산한 값입니다. 다시 뿌려서 잰 것이 아닙니다.</p>
         </details>
       </section>
+      <!-- ④b 배포 채점 — **② 와 다른 논리다.** ②는 동작 키로 고른 기준 패스 하나에 대고
+           재고, 여기는 reach 밴드로 고른 숙련자 버킷에 DTW로 맞춰 잰다. 두 숫자를 같은
+           이름으로 부르면 화면이 거짓을 말한다 — ②는 "유사도", 여기는 "백분위"를 머리로 쓴다.
+           백분위가 해석 가능한 쪽이라서이기도 하다(점수 절댓값은 축 수·산포 하한이 스케일을
+           건드린다). 요소는 넷뿐이다: 머리 수 · 한 줄 · σ 막대 · 교정 한 문장.
+
+           **②③ 사이에 끼우지 않는다.** ③ 교정은 ② 유사도의 바로 다음 형제여야 한다는
+           계약이 있고(`test_corrections_section_follows_hero_outside_3d_view`), 실제로
+           여기에 끼웠다가 그 검사가 실패했다. 비교의 이야기(②③④)를 끊지 않고 뒤에 둔다. -->
+      <section class="panel deployed" id="deployedSection" aria-label="배포 채점" hidden>
+        <h2 class="section-title">숙련자 분포에서</h2>
+        <div class="deployed-body">
+          <div class="deployed-figure">
+            <span class="deployed-number" id="deployedHeadline">—</span>
+            <span class="deployed-unit" id="deployedUnit"></span>
+          </div>
+          <p class="deployed-line" id="deployedLine"></p>
+          <!-- σ 막대. **글자는 관절 이름뿐**이고 값은 높이로만 말한다. 점선이 교정 문턱이다. -->
+          <ul class="deployed-bars" id="deployedBars" aria-label="관절별 편차"></ul>
+        </div>
+        <p class="deployed-note" id="deployedNote" hidden></p>
+        <p class="state-note" id="deployedState" hidden></p>
+      </section>
+
     </div>
 
     <div class="workspace-right">

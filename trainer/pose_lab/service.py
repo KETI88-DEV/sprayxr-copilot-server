@@ -2708,6 +2708,91 @@ DIAGNOSE_REASONS: Final[frozenset[str]] = pose_stages.STAGE_REASONS | {
 }
 
 
+# 화면은 **서버의 표시 문자열만** 쓴다. JS가 다시 포맷하면 Python과 반올림 동률 처리가
+# 달라 같은 값이 두 숫자로 보인다(`test_static_sources_do_not_reformat_numbers`).
+QUALITY_TEXT: Final[dict[str, str]] = {
+    "multi_worker": "숙련자 여러 명",
+    "single_worker": "숙련자 한 명",
+    "coarse_bucket": "이웃 밴드까지 묶음",
+    "unavailable": "쓸 수 없음",
+}
+MODE_TEXT: Final[dict[str, str]] = {
+    "phase": "위상 정렬", "fold": "시퀀스 접기", "burst": "스트로크 합산",
+}
+
+
+def _diagnose_display(
+    scored: Any, resolved: Any, shape: Any
+) -> dict[str, object]:
+    """화면에 그대로 찍을 문자열들. 숫자는 여기서 **한 번만** 반올림한다."""
+    percentile = scored.percentile
+    return {
+        "headline": "—" if percentile is None else f"{percentile}",
+        "headline_unit": "" if percentile is None else "백분위",
+        "score": "—" if scored.score is None else f"{scored.score:.2f}",
+        "band": resolved.band or "—",
+        "support": f"{resolved.support:,}" if resolved.support else "—",
+        "quality": QUALITY_TEXT.get(resolved.quality or "", "—"),
+        "mode": MODE_TEXT.get(scored.mode, scored.mode),
+        "shape": f"스트로크 {shape.strokes} · 굽이 {shape.straightness:.2f}",
+        # 백분위가 없을 때 **왜 없는지**를 화면이 말해야 한다. 빈칸은 "나쁘다"로 읽힌다.
+        # 사유가 둘인데 하나로 적으면 운영자를 엉뚱한 데로 보낸다 — MCP에서 실제로
+        # 그랬다(`reference_data_missing`이 레퍼런스가 붙어 있는데도 나갔다).
+        "headline_note": (
+            None if percentile is not None
+            else "스트로크마다 잰 값을 합쳤습니다. 숙련자 사다리는 스트로크 하나에서"
+                 " 구웠으므로 합산 점수는 그 위에 올리지 않습니다."
+            if scored.mode == "burst"
+            else "이 밴드에 숙련자 점수 사다리가 없어 위치를 낼 수 없습니다."
+        ),
+    }
+
+
+def _diagnose_bars(
+    sigmas: Sequence[Any], thresholds: Mapping[str, float]
+) -> list[dict[str, object]]:
+    """관절별 σ 막대. **글자 없이** 문턱 대비 높이로만 말한다.
+
+    높이도 서버가 문자열로 낸다 — 화면이 숫자를 만들지 않게.
+    """
+    out: list[dict[str, object]] = []
+    for item in sigmas:
+        limit = thresholds.get(item.joint) or arm_reference.CORRECTION_SIGMA
+        ratio = item.sigma / limit if limit > 0 else 0.0
+        out.append({
+            "joint": item.joint,
+            "label": joint_label(item.joint),
+            # 문턱을 100%로 둔다. 넘치면 잘려 보이지 않도록 상한은 화면 CSS가 맡는다.
+            "height": f"{min(ratio, 2.0) * 50.0:.1f}%",
+            "over": ratio >= 1.0,
+        })
+    return out
+
+
+def _bars_note(scored: Any, thresholds: Mapping[str, float]) -> str | None:
+    """막대와 교정이 **엇갈릴 때** 화면이 그 사실을 말하게 한다.
+
+    `arm_reference.build_corrections`는 **생 σ로 순위를 매긴 뒤** 그 1등에만 관절별
+    문턱을 적용한다. 문턱이 관절마다 다르므로(p97.5), 1등이 아닌 관절이 자기 범위를
+    벗어나도 교정이 나가지 않는다. 실측 222패스에서 범위를 벗어난 65건 중 **18건
+    (28%)** 이 그 경우다 — 생 σ 최대가 LeftHand(0.74×문턱)인데 실제 초과는
+    RightUpperArm(1.00×문턱)이었다.
+
+    **화면에서 감추지 않는다.** 막대는 빨간데 교정은 없는 상태를 설명 없이 두면
+    화면이 자기모순한다. 순위 규칙 자체는 사전등록으로 정해진 것이라 여기서 바꾸지
+    않는다(`docs/measurements/2026-09-30-per-joint-threshold-prereg.md`).
+    """
+    over = [item for item in scored.sigmas
+            if item.sigma >= (thresholds.get(item.joint) or arm_reference.CORRECTION_SIGMA)]
+    if not over or scored.corrections:
+        return None
+    labels = [joint_label(item.joint) for item in over]
+    names = " · ".join(labels)
+    # 조사는 마지막 이름의 받침을 따른다. "이(가)"를 그대로 내보내면 화면이 초고로 읽힌다.
+    return (f"{names}{subject_particle(labels[-1])} 숙련자 통상 범위를 벗어났지만,"
+            " 교정은 편차가 가장 큰 관절 하나에만 나갑니다.")
+
+
 def diagnose_sequence(
     source: Any, query: PassRef, buckets: Mapping[str, Any] | None
 ) -> dict[str, object]:
@@ -2751,6 +2836,13 @@ def diagnose_sequence(
     phase_poses, reference = pose_stages._phase_view(
         frames, chosen.align, bucket.get("phases") or []
     )
+    ladders = bucket.get("joint_sigma_ladder")
+    thresholds = {
+        item.joint: arm_reference.sigma_threshold(
+            item.joint, ladders if isinstance(ladders, Mapping) else None
+        )
+        for item in scored.sigmas
+    }
     return {
         "status": "ok",
         # 배포 응답과 **같은 이름**을 쓴다. 랩에서 본 값과 제품이 낸 값을 눈으로 대조한다.
@@ -2765,6 +2857,8 @@ def diagnose_sequence(
         "expert_percentile": scored.percentile,
         "burst": burst.to_dict(),
         "joint_sigmas": {item.joint: item.sigma for item in scored.sigmas},
+        # 문턱은 관절마다 다르다(p97.5). 같이 내지 않으면 화면이 막대를 그릴 기준이 없다.
+        "joint_thresholds": thresholds,
         "corrections": [
             pose_stages._correction_dict(item, scored.plans[index] if index < len(scored.plans) else ())
             for index, item in enumerate(scored.corrections)
@@ -2779,6 +2873,12 @@ def diagnose_sequence(
         ],
         "measured_layer": _serialize_layer(_world_layer_of(frames)),
         "expert_layer": _expert_layer(phase_poses, reference),
+        "display": _diagnose_display(scored, chosen.resolve, burst.shape),
+        "bars": _diagnose_bars(scored.sigmas, thresholds),
+        "bars_note": _bars_note(scored, thresholds),
+        "correction_text": (
+            scored.corrections[0].text() if scored.corrections else None
+        ),
     }
 
 

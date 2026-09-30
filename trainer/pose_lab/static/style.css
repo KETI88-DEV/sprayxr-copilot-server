@@ -774,3 +774,96 @@ dd { margin: 0; font-family: var(--mono); }
   margin-top: var(--sp-3);
 }
 .joint-axes[open] > summary { margin-bottom: var(--sp-2); }
+
+/* ④b 배포 채점 — ②와 논리가 다르므로 **생김새도 달라야** 한다.
+   ②는 큰 유사도 수 하나, 여기는 백분위와 σ 막대. 같은 모양이면 같은 값으로 읽힌다.
+   색은 이 파일의 규칙대로 **심각도 척도와 층 색에만** 쓴다 — 막대가 문턱을 넘는지가
+   곧 심각도이므로 --ok/--bad를 쓰고, 문턱선은 색이 아니라 테두리로 긋는다.
+   글자는 하한 14px(--fs-xs) 위에 둔다(사용자 피드백 2026-09-15). */
+.deployed-body {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--sp-5, 1.25rem);
+  flex-wrap: wrap;
+}
+.deployed-figure {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-2, 0.5rem);
+}
+.deployed-number {
+  /* ②의 머리 수와 **같은 크기로 두지 않는다**(--fs-hero). 나란히 놓인 두 숫자가 같은
+     무게로 보이면 같은 값으로 읽힌다 — 이 화면의 답은 ②이고 여기는 제품이 뭐라고
+     하는지다. */
+  font-size: var(--fs-xl);
+  font-weight: 600;
+  line-height: 1;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.deployed-unit {
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+}
+.deployed-line {
+  flex: 1 1 20rem;
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+}
+/* 막대: 문턱이 **높이의 절반**이다(서버가 그렇게 정규화한다). 점선이 그 자리를 긋는다. */
+.deployed-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--sp-3, 0.75rem);
+  margin: var(--sp-2, 0.5rem) 0 0;
+  padding: 0;
+  list-style: none;
+}
+.deployed-bar {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--sp-1, 0.25rem);
+}
+.deployed-bar-shaft {
+  position: relative;
+  display: block;
+  width: 2.25rem;
+  height: 4.5rem;
+  background: var(--panel-3);
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.deployed-bar-shaft::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 50%;
+  border-top: 1px dashed var(--border-strong);
+}
+.deployed-bar-fill {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: var(--ok);
+}
+.deployed-bar.over .deployed-bar-fill { background: var(--bad); }
+.deployed-bar-label {
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.deployed-correction {
+  margin: var(--sp-3, 0.75rem) 0 0;
+  font-size: var(--fs-lg);
+  color: var(--text);
+}
+.deployed-note {
+  margin: var(--sp-2, 0.5rem) 0 0;
+  font-size: var(--fs-sm);
+  color: var(--text-faint);
+}

@@ -53,6 +53,21 @@ const UNAVAILABLE_REASONS = {
 };
 
 // "정상적인 없음"(empty 톤)과 "시스템이 못 답했다"(error 톤)를 구별한다.
+// 배포 채점이 안 나오는 사유. **지어내지 않고** 서버의 닫힌 집합을 그대로 받는다.
+const DEPLOYED_REASONS = {
+  reference_data_missing: "숙련자 레퍼런스가 이 밴드에 없습니다.",
+  reference_single_worker: "이 밴드의 숙련자가 한 명뿐입니다.",
+  reach_unavailable: "착탄이 없어 밴드를 고를 수 없습니다.",
+  path_missing: "착탄이 움직이지 않아 정렬할 모양이 없습니다.",
+  prototype_missing: "이 밴드에 프로토타입이 없습니다.",
+  alignment_failed: "착탄 경로를 프로토타입에 맞추지 못했습니다.",
+  phase_reference_missing: "이 밴드에 위상 레퍼런스가 없습니다.",
+  quality_insufficient: "채점할 관절이 모자랍니다.",
+  insufficient_frames: "프레임이 모자랍니다.",
+  pass_not_found: "패스를 찾지 못했습니다.",
+  no_source: "데이터 소스가 없습니다.",
+};
+
 const EMPTY_REASONS = new Set([
   "motion_key_mismatch",
   "insufficient_frames",
@@ -767,6 +782,78 @@ function showHeroBody() {
   setState($("heroState"), "ok");
 }
 
+
+// ---- ②b 배포 채점 --------------------------------------------------------------
+//
+// `/api/compare`와 **논리가 다르다**. 저쪽은 동작 키로 고른 기준 패스 하나에 대고 재고,
+// 이쪽은 reach 밴드로 고른 숙련자 버킷에 DTW로 맞춰 잰다. 같은 화면에 두 숫자가 있으므로
+// 머리 수를 다르게 쓴다 — ②는 유사도, 여기는 백분위.
+//
+// **숫자는 서버 문자열 그대로 찍는다.** 여기서 다시 포맷하면 Python과 반올림이 갈린다.
+
+function clearDeployed() {
+  $("deployedSection").hidden = true;
+  $("deployedBars").replaceChildren();
+  $("deployedNote").hidden = true;
+}
+
+function renderDeployed(payload) {
+  const box = $("deployedSection");
+  box.hidden = false;
+  $("deployedBars").replaceChildren();
+
+  if (payload === null || payload.status !== "ok") {
+    const reason = payload === null ? null : payload.reason;
+    $("deployedHeadline").textContent = "—";
+    $("deployedUnit").textContent = "";
+    $("deployedLine").textContent = "";
+    $("deployedNote").hidden = true;
+    setState($("deployedState"), "empty", DEPLOYED_REASONS[reason] ?? "배포 채점을 내지 않습니다.");
+    return;
+  }
+  setState($("deployedState"), "ok");
+
+  const view = payload.display;
+  $("deployedHeadline").textContent = view.headline;
+  $("deployedUnit").textContent = view.headline_unit;
+  $("deployedLine").textContent =
+    `유사도 ${view.score} · 밴드 ${view.band} · 표본 ${view.support} · ${view.quality} · ${view.mode} · ${view.shape}`;
+
+  const note = $("deployedNote");
+  note.hidden = view.headline_note === null;
+  note.textContent = view.headline_note ?? "";
+
+  for (const bar of payload.bars) {
+    const item = el("li", "deployed-bar");
+    if (bar.over) item.classList.add("over");
+    const shaft = el("span", "deployed-bar-shaft");
+    const fill = el("span", "deployed-bar-fill");
+    // 높이는 **서버 문자열**이다. 문턱이 50%에 오도록 서버가 정규화해 둔다.
+    fill.style.height = bar.height;
+    shaft.append(fill);
+    item.append(shaft, el("span", "deployed-bar-label", bar.label));
+    $("deployedBars").append(item);
+  }
+
+  if (payload.correction_text !== null) {
+    $("deployedBars").after(el("p", "deployed-correction", payload.correction_text));
+  } else if (payload.bars_note !== null) {
+    // 막대는 문턱을 넘었는데 교정이 없는 상태. 설명 없이 두면 화면이 자기모순한다.
+    $("deployedBars").after(el("p", "deployed-note", payload.bars_note));
+  }
+}
+
+async function fetchDeployed(query) {
+  const search = new URLSearchParams(passRef(query)).toString();
+  try {
+    const response = await fetch(`/api/diagnose?${search}`);
+    return await response.json();
+  } catch (err) {
+    console.error("[deployed] 배포 채점 요청이 실패했다 — 비교 패널은 그대로 둔다.", err);
+    return null;
+  }
+}
+
 async function run() {
   const query = selectedQuery();
   const reference = referenceState.candidates[referenceState.index];
@@ -781,7 +868,12 @@ async function run() {
   setState($("correctionsState"), "loading", "비교를 계산하는 중…");
   $("correctionList").replaceChildren();
   clearImprovement();
+  clearDeployed();
   skeletonView.loading();
+
+  // 배포 채점은 기준 패스를 쓰지 않으므로 **비교와 독립**이다. 나란히 띄워 두고
+  // 비교가 실패해도 이쪽은 그린다 — 두 논리가 서로를 끌고 내려가면 안 된다.
+  const deployed = fetchDeployed(query);
 
   let payload;
   try {
@@ -799,6 +891,7 @@ async function run() {
     showHeroState("error", `비교 요청이 실패했습니다 — ${err}`);
     setState($("correctionsState"), "error", "비교 요청이 실패했습니다.");
     skeletonView.clear("비교 요청이 실패했습니다.", "error");
+    renderDeployed(await deployed);
     $("run").disabled = false;
     $("run").textContent = "평가";
     return;
@@ -825,9 +918,11 @@ async function run() {
     renderOrientation(null);
     clearDetails();
     skeletonView.clear(text, isEmptyReason ? "empty" : "error");
+    renderDeployed(await deployed);
     return;
   }
 
+  renderDeployed(await deployed);
   showHeroBody();
   renderHero(payload.measured, payload.query_key, payload.view, payload.key_match);
   renderCorrections(payload.measured);
