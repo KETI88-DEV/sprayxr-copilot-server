@@ -2662,8 +2662,12 @@ def selection_wiring(js: str) -> dict[str, bool]:
             match is not None and "rerunIfStale" in match.group(1)
             for match in handlers.values()
         ),
-        # 늦게 온 비교 응답을 버린다.
-        "drops_late_runs": run_body.count("if (requestId !== runRequestId) return;") >= 4,
+        # 늦게 온 비교 응답을 버린다. **비교 결과를 그리기 직전**의 가드가 핵심이다 —
+        # 개수만 세면(≥4) 그 하나를 지워도 통과했다(변이로 확인).
+        "drops_late_runs": bool(re.search(
+            r"if \(requestId !== runRequestId\) return;\n\s*\$\(\"run\"\)\.disabled = false;",
+            run_body,
+        )) and run_body.count("if (requestId !== runRequestId) return;") == 5,
         # 결과가 자기 구간 이름을 든다.
         "labels_the_result": 'analyzedLabel' in run_body,
         # 기준이 지금 구간의 것일 때만 다시 비교한다.
