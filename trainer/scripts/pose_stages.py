@@ -34,10 +34,11 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Final, Mapping, Sequence
 
 if __package__:
-    from . import arm_reference, joint_names, sequence_dtw, skeleton_gate, world_axes
+    from . import arm_reference, joint_names, pass_segmentation, sequence_dtw, skeleton_gate, world_axes
 else:
     import arm_reference
     import joint_names
+    import pass_segmentation
     import sequence_dtw
     import skeleton_gate
     import world_axes
@@ -269,6 +270,88 @@ def _correction_dict(
     }
 
 
+
+
+# --- ⓪ 분할 — 런타임 단위와 레퍼런스 단위를 맞춘다 --------------------------
+
+
+@dataclass(frozen=True)
+class Stroke:
+    """버스트 안의 스트로크 하나. `frames`는 **원본 프레임 인덱스**다."""
+
+    frames: tuple[int, ...]
+    impacts: tuple[Vec3, ...]
+    straightness: float
+
+
+@dataclass(frozen=True)
+class BurstShape:
+    """시퀀스 전체의 모양. **쪼개면서 버리지 않으려고 싣는다.**
+
+    굽은 버스트와 곧은 버스트는 같은 reach에서도 자세가 다르다(실측 0.44~2.30σ), 전환
+    순간의 오른손이 중간부와 8.6 cm 다르다. 쪼개면 그 정보가 패스 경계로 흩어지므로,
+    **여기에 재서 실어 관측 가능하게 둔다.** 채점 차원으로 넣을지는 별도 측정 뒤에 정한다.
+    """
+
+    strokes: int
+    straightness: float
+    span_m: float
+    length_m: float
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "strokes": self.strokes,
+            "straightness": round(self.straightness, 3),
+            "span_m": round(self.span_m, 4),
+            "length_m": round(self.length_m, 4),
+        }
+
+
+def _straightness(points: Sequence[Vec3]) -> tuple[float, float, float]:
+    """(굽이 비, 도달거리, 경로길이). 직선이면 비가 1이다."""
+    if len(points) < 2:
+        return (1.0, 0.0, 0.0)
+    length = sum(math.dist(points[i], points[i + 1]) for i in range(len(points) - 1))
+    span = max(math.dist(p, points[0]) for p in points)
+    return (length / span if span > 1e-6 else 1.0, span, length)
+
+
+def segment(impacts: Sequence[Vec3], frame_index: Sequence[int]) -> list[Stroke]:
+    """버스트를 스트로크로 쪼갠다.
+
+    **런타임은 버스트(Trigger ON→OFF)를 보내고 레퍼런스는 패스 단위로 구워져 있다.**
+    단위를 맞추지 않으면 왕복이 전부 이탈로 잡힌다 — `pass_segmentation` 독스트링의
+    실측으로 이탈 중앙값이 12.8 mm 대신 63.8 mm가 된다(5배).
+
+    버스트 굽이는 p50 1.01이지만 **p90 2.14 · p99 14.54**다. 중앙값만 보면 직선이라
+    쪼갤 필요가 없어 보이지만 꼬리가 전혀 아니다.
+
+    쪼갤 수 없으면(짧거나 움직이지 않으면) 전체를 하나로 낸다 — 옛 거동과 같다.
+    """
+    if len(impacts) != len(frame_index):
+        return []
+    spans = pass_segmentation.split_pass_spans(list(impacts)) if len(impacts) >= 3 else []
+    if not spans:
+        spans = [(0, len(impacts) - 1)] if impacts else []
+    out: list[Stroke] = []
+    for start, end in spans:
+        piece = list(impacts[start : end + 1])
+        if len(piece) < 2:
+            continue
+        out.append(
+            Stroke(
+                frames=tuple(frame_index[start : end + 1]),
+                impacts=tuple(piece),
+                straightness=_straightness(piece)[0],
+            )
+        )
+    return out
+
+
+def burst_shape(impacts: Sequence[Vec3], strokes: Sequence[Stroke]) -> BurstShape:
+    ratio, span, length = _straightness(impacts)
+    return BurstShape(strokes=len(strokes), straightness=ratio, span_m=span, length_m=length)
+
 # --- ① reference 찾기 --------------------------------------------------------
 
 
@@ -321,12 +404,18 @@ def resolve(
 
 
 def align(
-    impact_points: Sequence[Vec3], resolved: ResolveResult
+    impact_points: Sequence[Vec3],
+    resolved: ResolveResult,
+    frame_index: Sequence[int] | None = None,
 ) -> AlignResult:
     """착탄 경로를 버킷 프로토타입에 맞춘다.
 
     **착탄이 안 움직이면 정렬할 모양이 없다**(`path_missing`). 실물 샘플 SEQ-002가
     그 경우다 — 건을 고정해 `raypoint`가 전 프레임 같다. 억지로 정렬하면 잡음에 맞춘다.
+
+    `frame_index`는 `impact_points[i]`가 **몇 번째 프레임**의 것인지다. `raypoint`가
+    없는 프레임은 착탄 목록에서 빠지므로 두 인덱스가 어긋난다 — 그대로 두면 `score`가
+    엉뚱한 프레임의 자세를 그 위상에 넣는다. 주지 않으면 1:1로 본다(옛 거동).
     """
     if not resolved.ok:
         return AlignResult(ok=False, reason=resolved.reason)
@@ -336,13 +425,16 @@ def align(
     if shape is None:
         return AlignResult(ok=False, reason="path_missing")
 
+    lookup = list(frame_index) if frame_index is not None else list(range(len(shape)))
     indices = sequence_dtw.decimate(shape)
     thinned = [shape[i] for i in indices]
     path, cost = sequence_dtw.align(thinned, resolved.prototype)
     if not path:
         return AlignResult(ok=False, reason="alignment_failed")
 
-    phase_of = tuple((indices[q], p) for q, p in path)
+    phase_of = tuple(
+        (lookup[indices[q]] if indices[q] < len(lookup) else indices[q], p) for q, p in path
+    )
     span = max(math.dist(point, shape[0]) for point in shape)
     return AlignResult(
         ok=True,
@@ -657,4 +749,185 @@ def verify_correction(
         after=after.score,
         expected_gain=correction.expected_gain,
         realized_gain=after.score - before.score,
+    )
+
+
+# --- 버스트 채점 — 스트로크마다 재고 합친다 ----------------------------------
+
+
+@dataclass(frozen=True)
+class StrokeResult:
+    """스트로크 하나의 판정. 어느 프레임이었는지를 같이 들고 있어야 교정이 가리킬 수 있다."""
+
+    index: int
+    frames: tuple[int, ...]
+    straightness: float
+    resolve: ResolveResult
+    align: AlignResult
+    score: ScoreResult
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "index": self.index,
+            "frames": [self.frames[0], self.frames[-1]] if self.frames else [],
+            "straightness": round(self.straightness, 3),
+            "band": self.resolve.band,
+            "reach_m": None if self.resolve.reach_m is None else round(self.resolve.reach_m, 4),
+            "support": self.resolve.support,
+            "ok": self.score.ok,
+            "reason": self.score.reason or self.align.reason or self.resolve.reason,
+            # 스트로크 하나는 레퍼런스가 구워진 단위(패스)와 같다 — **여기서는**
+            # 백분위가 뜻을 갖는다. 합친 점수에는 붙이지 않는다(아래 참조).
+            "similarity_score": None if self.score.score is None else round(self.score.score, 4),
+            "expert_percentile": self.score.percentile,
+            "warp": round(self.align.warp, 4) if self.align.ok else None,
+        }
+
+
+@dataclass(frozen=True)
+class BurstResult:
+    """버스트 하나의 판정. `result`는 경로가 지금까지 쓰던 것과 같은 모양이다."""
+
+    result: ScoreResult
+    strokes: tuple[StrokeResult, ...]
+    shape: BurstShape
+    worst_stroke: int | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            **self.shape.to_dict(),
+            "worst_stroke": self.worst_stroke,
+            "per_stroke": [item.to_dict() for item in self.strokes],
+        }
+
+
+def _merge_sigmas(
+    per_stroke: Sequence[Sequence[arm_reference.JointSigma]],
+) -> list[arm_reference.JointSigma]:
+    """관절 σ를 **스트로크에 걸쳐 RMS**로 합친다.
+
+    위상을 RMS로 합치는 것과 같은 이유다 — 산술평균은 맑은 스트로크 수만큼 희석한다.
+    한 스트로크에서만 틀렸어도 그 관절이 틀린 것이다.
+
+    거리·각도는 **가장 벗어난 스트로크**의 것을 그대로 쓴다. 평균하면 교정이 가리키는
+    크기가 실제보다 작아진다.
+    """
+    collected: dict[str, list[arm_reference.JointSigma]] = {}
+    for items in per_stroke:
+        for item in items:
+            collected.setdefault(item.joint, []).append(item)
+
+    merged: list[arm_reference.JointSigma] = []
+    for name in arm_reference.SCORING_JOINTS_ARM:
+        items = collected.get(name)
+        if not items:
+            continue
+        count = len(items)
+        worst = max(items, key=lambda i: i.sigma)
+        radial = [i.radial_sigma for i in items if i.radial_sigma is not None]
+        angular = [i.angular_sigma for i in items if i.angular_sigma is not None]
+        merged.append(
+            arm_reference.JointSigma(
+                joint=name,
+                sigma=min(
+                    arm_reference.MAX_SIGMA,
+                    math.sqrt(sum(i.sigma ** 2 for i in items) / count),
+                ),
+                axis_sigmas=tuple(  # type: ignore[arg-type]
+                    sum(i.axis_sigmas[axis] for i in items) / count for axis in range(3)
+                ),
+                delta_m=worst.delta_m,
+                radial_sigma=sum(radial) / len(radial) if radial else None,
+                angular_sigma=sum(angular) / len(angular) if angular else None,
+                radius_delta_m=worst.radius_delta_m,
+                angle_from_expert_deg=worst.angle_from_expert_deg,
+                phase_span=worst.phase_span,
+            )
+        )
+    return merged
+
+
+def score_burst(
+    frame_poses: Sequence[Mapping[str, Vec3]],
+    impacts: Sequence[Vec3],
+    frame_index: Sequence[int],
+    tool_points: Sequence[Vec3],
+    buckets: Mapping[str, Any] | None,
+    *,
+    excluded: Sequence[str] = (),
+    labels: Mapping[str, str] | None = None,
+) -> BurstResult:
+    """버스트를 스트로크로 쪼개 각각 재고 합친다.
+
+    **런타임은 버스트(Trigger ON→OFF)를 보내고 레퍼런스는 패스 단위로 구워져 있다.**
+    단위를 맞추지 않으면 왕복이 통째로 한 경로가 되어 이탈이 부풀려진다.
+
+    **스트로크가 하나면 옛 경로 그대로다** — resolve → align → score 한 번. 쪼개지지
+    않는 입력의 거동을 바꾸지 않는다.
+
+    스트로크가 여럿이면 σ를 RMS로 합치고 교정은 **가장 나쁜 스트로크**의 것을 쓴다 —
+    그래야 계획이 가리키는 프레임이 실재한다. **합친 점수에는 백분위를 붙이지 않는다**:
+    숙련자 사다리는 패스 하나에서 구워졌고, RMS로 합친 값이 그 분포 위에 있는지는
+    아직 재지 않았다. 스트로크마다의 백분위는 `per_stroke`에 그대로 싣는다.
+    """
+    strokes = segment(impacts, frame_index)
+    shape = burst_shape(impacts, strokes)
+
+    def _bucket_of(resolved: ResolveResult) -> dict[str, Any]:
+        if resolved.band and isinstance(buckets, Mapping):
+            found = buckets.get(resolved.band)
+            if isinstance(found, Mapping):
+                return dict(found)
+        return {}
+
+    if len(strokes) <= 1:
+        resolved = resolve(reach_of(impacts, tool_points), buckets)
+        aligned = align(impacts, resolved, frame_index)
+        only = score(frame_poses, aligned, _bucket_of(resolved), excluded=excluded, labels=labels)
+        detail = (
+            StrokeResult(0, strokes[0].frames, strokes[0].straightness, resolved, aligned, only),
+        ) if strokes else ()
+        return BurstResult(result=only, strokes=detail, shape=shape,
+                           worst_stroke=0 if strokes else None)
+
+    results: list[StrokeResult] = []
+    for order, stroke in enumerate(strokes):
+        tools = [tool_points[i] for i in stroke.frames if i < len(tool_points)]
+        resolved = resolve(reach_of(stroke.impacts, tools), buckets)
+        aligned = align(stroke.impacts, resolved, stroke.frames)
+        scored = score(frame_poses, aligned, _bucket_of(resolved),
+                       excluded=excluded, labels=labels)
+        results.append(
+            StrokeResult(order, stroke.frames, stroke.straightness, resolved, aligned, scored)
+        )
+
+    ok = [item for item in results if item.score.ok]
+    if not ok:
+        # 하나도 못 쟀다. 첫 실패 사유를 그대로 낸다 — 지어내지 않는다.
+        return BurstResult(result=results[0].score, strokes=tuple(results), shape=shape)
+
+    merged = _merge_sigmas([item.score.sigmas for item in ok])
+    value = arm_reference.similarity_score(merged)
+    if value is None or len(merged) < arm_reference.MIN_SCORED_JOINTS:
+        return BurstResult(
+            result=ScoreResult(ok=False, reason="quality_insufficient", mode="burst"),
+            strokes=tuple(results), shape=shape,
+        )
+
+    worst = min(ok, key=lambda item: item.score.score if item.score.score is not None else 1.0)
+    return BurstResult(
+        result=ScoreResult(
+            ok=True,
+            reason=worst.score.reason,
+            score=value,
+            percentile=None,
+            sigmas=tuple(merged),
+            corrections=worst.score.corrections,
+            plans=worst.score.plans,
+            scored_phases=sum(item.score.scored_phases for item in ok),
+            mode="burst",
+        ),
+        strokes=tuple(results),
+        shape=shape,
+        worst_stroke=worst.index,
     )

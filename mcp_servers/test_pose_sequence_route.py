@@ -55,6 +55,7 @@ CONTRACT_KEYS = {
     "expert_percentile",
     "correction_mode",
     "scoring_mode",
+    "burst",
     "corrections",
     "joint_sigmas",
     "input_quality",

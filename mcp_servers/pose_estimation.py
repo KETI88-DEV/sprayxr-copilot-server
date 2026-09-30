@@ -427,17 +427,28 @@ def _gate_frames(frames: list[SequenceFrame]) -> tuple[list[skeleton_gate.GateFr
     return out, sorted(unknown)
 
 
-def _impact_points(frames: list[SequenceFrame]) -> list[tuple[float, float, float]]:
-    """착탄점들. `raypoint`가 `null`인 프레임은 **빠진다** — 0으로 채우면 바닥을 칠한 게 된다.
+def _impact_track(
+    frames: list[SequenceFrame],
+) -> tuple[list[tuple[float, float, float]], list[int]]:
+    """착탄점들과 **그것이 몇 번째 프레임의 것인지**.
 
-    실물 SEQ-001이 그 경우로, 전 프레임이 `null`이라 착탄 높이가 없다.
+    `raypoint`가 `null`인 프레임은 빠진다 — 0으로 채우면 바닥을 칠한 게 된다(실물
+    SEQ-001이 전 프레임 `null`이다). 그래서 착탄 인덱스와 프레임 인덱스가 어긋나고,
+    그대로 두면 위상에 엉뚱한 프레임의 자세가 들어간다. 둘을 같이 들고 다닌다.
     """
-    found = []
-    for frame in frames:
+    points: list[tuple[float, float, float]] = []
+    index: list[int] = []
+    for position, frame in enumerate(frames):
         point = joint_names.parse_position((frame.gun_metrics or {}).get("raypoint"))
         if point is not None:
-            found.append(point)
-    return found
+            points.append(point)
+            index.append(position)
+    return points, index
+
+
+def _impact_points(frames: list[SequenceFrame]) -> list[tuple[float, float, float]]:
+    """착탄점만. 인덱스가 필요하면 `_impact_track`을 쓴다."""
+    return _impact_track(frames)[0]
 
 
 @dataclass(frozen=True)
@@ -611,7 +622,9 @@ def analyze_sequence(payload: SequenceRequest) -> MCPResponse:
     gate = skeleton_gate.evaluate(frames, frozen_before=frozenset(session.frozen_joints))
 
     prepared_buckets = _arm_buckets()
-    impacts = _impact_points(payload.sequence_info)
+    # 착탄점과 **그 착탄이 난 프레임 번호**를 같이 받는다. `raypoint`가 없는 프레임이
+    # 빠지므로 둘은 길이가 다르다 — 인덱스를 프레임 번호로 쓰면 위상에 엉뚱한 자세가 든다.
+    impacts, impact_index = _impact_track(payload.sequence_info)
     reduced = posture_sequence.summarize(
         [frame.joints["Head"] for frame in frames if "Head" in frame.joints],
         impacts,
@@ -652,18 +665,23 @@ def analyze_sequence(payload: SequenceRequest) -> MCPResponse:
     # 건을 고정한 시퀀스는 정렬할 모양이 없어서 위상 채점 자체가 불가능하다.
     scoring_mode = "fold"
     phase_result: pose_stages.ScoreResult | None = None
+    burst: pose_stages.BurstResult | None = None
     if quality != "unavailable" and band is not None:
-        resolved = pose_stages.resolve(reach, prepared_buckets)
-        aligned = pose_stages.align(impacts, resolved)
-        attempt = pose_stages.score(
+        # **버스트를 스트로크로 쪼개 각각 잰다.** 런타임은 Trigger ON→OFF 한 덩어리를
+        # 보내는데 레퍼런스는 패스 단위로 구워져 있다. 쪼개지지 않는 입력에서는
+        # `score_burst`가 옛 경로 그대로 한 번만 잰다.
+        burst = pose_stages.score_burst(
             [dict(frame.joints) for frame in frames],
-            aligned,
-            bucket,
+            impacts,
+            impact_index,
+            [frame.tool_pos or (0.0, 0.0, 0.0) for frame in frames],
+            prepared_buckets,
             excluded=gate.excluded_joints,
             labels=pose_similarity.JOINT_LABELS,
         )
+        attempt = burst.result
         if attempt.ok:
-            phase_result, scoring_mode = attempt, "phase"
+            phase_result, scoring_mode = attempt, attempt.mode
             sigmas = list(attempt.sigmas)
 
     used = tuple(item.joint for item in sigmas)
@@ -700,8 +718,13 @@ def analyze_sequence(payload: SequenceRequest) -> MCPResponse:
         # 비워 두면 시뮬레이터가 적용할 좌표가 없어 교정이 말뿐이 된다.
         world = [dict(frame.joints) for frame in frames]
         plans = [tuple(pose_stages.correction_plan(item, world, None)) for item in corrections]
+    # **`burst`에는 백분위를 붙이지 않는다.** 숙련자 사다리는 패스 하나에서 구워졌고,
+    # 스트로크 σ를 RMS로 합친 값이 그 분포 위에 있는지는 아직 재지 않았다. 스트로크
+    # 각각의 백분위는 `burst.per_stroke`에 그대로 실린다.
     percentile = (
-        None if score is None else arm_reference.expert_percentile(bucket, score, mode=scoring_mode)
+        None
+        if score is None or scoring_mode == "burst"
+        else arm_reference.expert_percentile(bucket, score, mode=scoring_mode)
     )
 
     reason: str | None
@@ -748,6 +771,9 @@ def analyze_sequence(payload: SequenceRequest) -> MCPResponse:
         # 어느 채점을 썼나. `phase`면 DTW 정렬로 위상마다 쟀고, `fold`면 시퀀스를
         # 한 점으로 접어 쟀다. 두 점수는 **다른 분포**라 나란히 놓으면 안 된다.
         "scoring_mode": scoring_mode,
+        # 시퀀스의 모양. 쪼개면서 버리지 않으려고 싣는다 — 굽은 버스트와 곧은 버스트는
+        # 같은 reach에서도 자세가 다르다(실측 0.44~2.30σ).
+        "burst": None if burst is None else burst.to_dict(),
         "corrections": [
             pose_stages._correction_dict(item, plans[index] if index < len(plans) else ())
             for index, item in enumerate(corrections)

@@ -531,3 +531,131 @@ def test_verify_says_so_when_there_is_nothing_to_correct(client, monkeypatch, tm
     assert result["ok"] is False
     assert result["reason"] == "no_correction"
     assert result["before"] is not None
+
+
+# --- 버스트를 스트로크로 쪼개 재기 -------------------------------------------
+
+
+def _zigzag(
+    body: dict[str, Any], *, legs: int = 2, per_leg: int = 14, span_m: float = 0.60
+) -> dict[str, Any]:
+    """실물 본문을 **왕복 버스트**로 바꾼다.
+
+    `_sweep`은 한 방향으로만 쓸어 스트로크 하나가 된다. 런타임이 보내는 것은
+    Trigger ON→OFF 한 덩어리라 왕복이 그대로 한 본문에 들어온다 — 그 모양이다.
+
+    몸·건·착탄을 같은 만큼 옮기므로(강체) reach는 변하지 않고, 따라서 다리마다
+    같은 밴드에 떨어진다. `per_leg`는 `pass_segmentation.MIN_PASS_FRAMES`보다 커야
+    쪼개진다.
+    """
+    template = copy.deepcopy(body["sequence_info"][0])
+    frames: list[dict[str, Any]] = []
+    for position in range(legs * per_leg):
+        leg, within = divmod(position, per_leg)
+        ratio = within / (per_leg - 1)
+        lift = span_m * (ratio if leg % 2 == 0 else 1.0 - ratio)
+        frame = copy.deepcopy(template)
+        frame["index"] = position + 1
+        frame["time"] = 1000.0 + 0.009 * position
+        for value in frame["skeleton_joints"].values():
+            value[1] += lift
+        frame["tool_pos_rot"]["pos"][1] += lift
+        ray = frame["gun_metrics"]["raypoint"]
+        frame["gun_metrics"] = {**frame["gun_metrics"], "raypoint": [ray[0], ray[1] + lift, ray[2]]}
+        frames.append(frame)
+    out = copy.deepcopy(body)
+    out["sequence_info"] = frames
+    return out
+
+
+def test_a_back_and_forth_burst_is_split_into_straight_strokes() -> None:
+    """왕복은 굽이 2.0인 버스트지만 **각 다리는 직선(1.00)**이다.
+
+    레퍼런스가 패스 단위로 구워져 있으므로 쪼개지 않으면 왕복 전체가 한 경로가 되어
+    프로토타입과 맞지 않는다.
+
+    깨뜨리는 법: `segment`가 늘 통째로 하나를 내게 하면 `strokes`가 1이 되어 실패한다.
+    """
+    from trainer.scripts import pose_stages
+
+    body = _zigzag(_sample_body("SEQ-002"))
+    impacts = [tuple(f["gun_metrics"]["raypoint"]) for f in body["sequence_info"]]
+    strokes = pose_stages.segment(impacts, list(range(len(impacts))))
+    shape = pose_stages.burst_shape(impacts, strokes)
+
+    assert shape.strokes == 2
+    assert shape.straightness == pytest.approx(2.0, abs=0.05), "왕복인데 굽이가 1에 가깝다"
+    assert [round(stroke.straightness, 2) for stroke in strokes] == [1.0, 1.0]
+    # 프레임 번호가 이어져야 교정이 가리키는 구간이 실재한다.
+    assert strokes[0].frames[0] == 0
+    assert strokes[-1].frames[-1] == len(impacts) - 1
+
+
+def test_a_multi_stroke_burst_is_scored_stroke_by_stroke(
+    client, monkeypatch, tmp_path
+) -> None:
+    """레퍼런스는 패스 하나에서 구워졌다. 버스트는 그 단위로 쪼개 재고 합쳐야 한다.
+
+    합친 점수에는 **백분위를 붙이지 않는다** — 사다리가 패스 분포라 RMS로 합친 값이
+    그 위에 있는지 아직 재지 않았다. 스트로크마다의 백분위는 그대로 싣는다.
+
+    깨뜨리는 법: 경로가 `score_burst` 대신 `score`를 다시 부르면 `strokes`가 1이 된다.
+    """
+    single = _sweep(_sample_body("SEQ-002"))
+    _write_phase_reference(tmp_path, monkeypatch, single)
+
+    result = _post(client, "sequence", _zigzag(_sample_body("SEQ-002")))
+    assert result["scoring_mode"] == "burst", result["reason_code"]
+    burst = result["burst"]
+    assert burst["strokes"] == 2
+    assert len(burst["per_stroke"]) == 2
+    assert burst["worst_stroke"] in (0, 1)
+
+    assert result["similarity_score"] is not None
+    assert result["expert_percentile"] is None, "합친 점수를 패스 사다리에 올려 읽었다"
+    for stroke in burst["per_stroke"]:
+        assert stroke["ok"], stroke["reason"]
+        assert stroke["similarity_score"] is not None
+        assert stroke["expert_percentile"] is not None, "스트로크는 패스 단위라 백분위가 있다"
+        assert stroke["frames"][0] <= stroke["frames"][1]
+
+
+def test_a_single_stroke_burst_keeps_the_old_path(client, monkeypatch, tmp_path) -> None:
+    """쪼개지지 않는 입력의 거동은 바뀌지 않는다 — 위상 채점 한 번, 백분위 그대로.
+
+    깨뜨리는 법: `score_burst`가 스트로크 1개에도 합치기 경로를 타게 하면
+    `scoring_mode`가 `burst`가 되고 백분위가 사라져 실패한다.
+    """
+    single = _sweep(_sample_body("SEQ-002"))
+    _write_phase_reference(tmp_path, monkeypatch, single)
+
+    result = _post(client, "sequence", single)
+    assert result["scoring_mode"] == "phase"
+    assert result["burst"]["strokes"] == 1
+    assert result["expert_percentile"] is not None
+    assert result["similarity_score"] is not None
+
+
+def test_merging_strokes_uses_rms_so_one_bad_stroke_is_not_diluted() -> None:
+    """한 스트로크에서만 틀렸어도 그 관절이 틀린 것이다 — 산술평균은 희석한다.
+
+    위상을 합칠 때와 같은 규칙이다. 맑은 스트로크가 늘수록 평균은 0에 가까워지지만
+    RMS는 √n 만큼만 준다.
+
+    깨뜨리는 법: `_merge_sigmas`의 RMS를 산술평균으로 바꾸면 여기서 실패한다.
+    """
+    from trainer.scripts import pose_stages
+
+    def sigma(value: float) -> arm_reference.JointSigma:
+        return arm_reference.JointSigma(
+            joint="RightHand", sigma=value, axis_sigmas=(value, 0.0, 0.0),
+            delta_m=(value * 0.1, 0.0, 0.0),
+        )
+
+    # 한 번 크게 틀리고 세 번 맑다.
+    merged = pose_stages._merge_sigmas([[sigma(4.0)], [sigma(0.0)], [sigma(0.0)], [sigma(0.0)]])
+    assert len(merged) == 1
+    assert merged[0].sigma == pytest.approx(2.0), "RMS면 4/√4 = 2.0 이다"
+    assert merged[0].sigma > 1.0, "산술평균(1.0)으로 희석했다"
+    # 거리는 **가장 벗어난** 스트로크의 것이어야 교정이 가리키는 크기가 줄지 않는다.
+    assert merged[0].delta_m[0] == pytest.approx(0.4)

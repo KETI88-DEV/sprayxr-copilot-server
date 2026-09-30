@@ -39,6 +39,7 @@ COPY trainer/scripts/posture_sequence.py trainer/scripts/posture_sequence.py
 COPY trainer/scripts/measured_score.py trainer/scripts/measured_score.py
 COPY trainer/scripts/arm_reference.py trainer/scripts/arm_reference.py
 COPY trainer/scripts/sequence_dtw.py trainer/scripts/sequence_dtw.py
+COPY trainer/scripts/pass_segmentation.py trainer/scripts/pass_segmentation.py
 COPY trainer/scripts/pose_stages.py trainer/scripts/pose_stages.py
 COPY mcp_servers/ mcp_servers/
 RUN python3 -c "import mcp_servers.main"
