@@ -2575,7 +2575,10 @@ def deployed_wiring(html: str, js: str) -> dict[str, bool]:
         # 서버 라우트를 실제로 부르는가.
         "calls_route": "/api/diagnose?" in body,
         # 비교와 **독립**으로 부르는가 — 비교가 실패해도 이쪽은 그려야 한다.
-        "survives_compare_failure": body.count("renderDeployed(await deployed)") >= 3,
+        # 세 갈래(요청 실패 · 비교 불가 · 성공) 모두 그리고, 늦게 온 응답은 버린다.
+        "survives_compare_failure": (
+            len(re.findall(r"const (\w+) = await deployed;\n\s*if \(requestId !== runRequestId\) return;\n\s*renderDeployed\(\1\);", body)) >= 3
+        ),
         # 표시 문자열을 서버에서 받는가(payload.display).
         "uses_server_strings": "payload.display" in body,
         # 막대 높이도 서버 문자열인가.
@@ -2627,3 +2630,79 @@ def test_deployed_wiring_checks_can_fail():
         '<h2 class="section-title">유사도</h2>\n  <div class="deployed-body">'
     )
     assert deployed_headline_collision(collided) == ["두 패널의 머리말이 같다"]
+
+
+# --- 선택과 결과의 일치 ------------------------------------------------------------
+#
+# 다른 평가자가 실제 브라우저에서 확인했다: 구간을 바꿔도 점수·교정·3D가 이전 구간 것
+# 그대로 남아 서로 다른 구간의 정보가 한 화면에 섞였다. 헤드리스 크로미움으로 고친 뒤
+# 확인했다(바꾼 즉시 흐림 → 자동 재비교 0.160→0.292 → 빠르게 두 번 바꿔도 최종 일치).
+# 여기서는 소스로 고정할 수 있는 배선만 본다.
+
+
+def selection_wiring(js: str) -> dict[str, bool]:
+    body = without_comments(js)
+    handlers = {
+        name: re.search(
+            rf'\$\("{name}"\)\.addEventListener\("(?:change|click)", \(\) => \{{(.*?)\n\}}\);',
+            body, re.S,
+        )
+        for name in ("queryWorker", "queryLevel", "queryPass", "reload")
+    }
+    run = re.search(r"\nasync function run\(\) \{(.*?)\n\}\n", body, re.S)
+    run_body = run.group(1) if run else ""
+    return {
+        # 선택을 바꾸는 모든 손잡이가 **먼저** 결과를 낡았다고 표시한다.
+        "every_selector_marks_stale": all(
+            match is not None and "markStale();" in match.group(1)
+            for match in handlers.values()
+        ),
+        # 새 기준이 잡힌 뒤 다시 비교한다.
+        "every_selector_reruns": all(
+            match is not None and "rerunIfStale" in match.group(1)
+            for match in handlers.values()
+        ),
+        # 늦게 온 비교 응답을 버린다.
+        "drops_late_runs": run_body.count("if (requestId !== runRequestId) return;") >= 4,
+        # 결과가 자기 구간 이름을 든다.
+        "labels_the_result": 'analyzedLabel' in run_body,
+        # 기준이 지금 구간의 것일 때만 다시 비교한다.
+        "reference_is_for_this_pass": "referenceState.for !== passLabel(query)" in body,
+    }
+
+
+def test_results_never_silently_outlive_a_changed_selection():
+    assert selection_wiring(_read("app.js")) == {
+        "every_selector_marks_stale": True,
+        "every_selector_reruns": True,
+        "drops_late_runs": True,
+        "labels_the_result": True,
+        "reference_is_for_this_pass": True,
+    }
+
+
+def test_the_stale_note_and_label_exist_on_the_page():
+    html = _read("index.html")
+    assert 'id="staleNote"' in html
+    assert 'id="analyzedLabel"' in html
+
+
+def test_selection_wiring_checks_can_fail():
+    """실패할 수 없는 단언 방지 — 합성 입력으로 각 항이 뒤집히는지 본다."""
+    assert selection_wiring("") == {
+        "every_selector_marks_stale": False,
+        "every_selector_reruns": False,
+        "drops_late_runs": False,
+        "labels_the_result": False,
+        "reference_is_for_this_pass": False,
+    }
+    # 옛 배선: 구간 변경이 기준만 다시 찾고 결과는 그대로 둔다.
+    old = '\n'.join([
+        '$("queryWorker").addEventListener("change", () => {', '  markStale(); rerunIfStale;', '});',
+        '$("queryLevel").addEventListener("change", () => {', '  markStale(); rerunIfStale;', '});',
+        '$("queryPass").addEventListener("change", () => {', '  void fetchReference();', '});',
+        '$("reload").addEventListener("click", () => {', '  markStale(); rerunIfStale;', '});',
+    ])
+    wired = selection_wiring(old)
+    assert wired["every_selector_marks_stale"] is False, "구간 변경이 흐리지 않는데 통과했다"
+    assert wired["every_selector_reruns"] is False

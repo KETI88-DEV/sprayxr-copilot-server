@@ -528,7 +528,7 @@ function renderJointAxes(block) {
 const listed = { query: [] };
 // 기준(레퍼런스) 후보 상태. 기준은 고를 수 없다 — 이 목록에서 자동으로 고른 것을
 // [다른 기준 ▸]으로 순환할 뿐이다.
-const referenceState = { phase: "idle", candidates: [], index: 0, message: "", match: null, relaxed: false };
+const referenceState = { phase: "idle", for: null, candidates: [], index: 0, message: "", match: null, relaxed: false };
 // `/api/reference`는 대상 패스를 바꿀 때마다 다시 부른다(레벨·작업자를 바꿔도 마찬가지) — 앞
 // 요청이 늦게 돌아오면 화면이 지금 고른 패스가 아니라 이미 지나간 패스의 답으로 덮인다. 실측:
 // 6번에 1번, 기준 줄은 옛 패스의 "동작 키 벽면 8×8 칸까지 일치"를 그대로 두고 비교는 새 패스로
@@ -707,6 +707,7 @@ async function fetchReference() {
     return;
   }
   referenceState.phase = "loading";
+  referenceState.for = null;
   renderReferenceLine();
 
   const q = passRef(query);
@@ -750,6 +751,9 @@ async function fetchReference() {
   }
   Object.assign(referenceState, {
     phase: "ready",
+    // **어느 구간의 기준인지** 적는다. 구간을 빠르게 두 번 바꾸면 이전 구간의 기준이
+    // 아직 남아 있는 틈에 다시 비교가 돌아 "새 구간 + 옛 기준"이 될 수 있다.
+    for: passLabel(query),
     candidates: payload.candidates ?? [],
     index: 0,
     message: "",
@@ -766,6 +770,52 @@ function cycleReference() {
   renderReferenceLine();
   // 표시된 기준이 곧 계산에 쓰일 기준이어야 한다.
   if (!$("heroBody").hidden) void run();
+}
+
+// ---- 선택과 결과의 일치 ---------------------------------------------------------
+//
+// 결과는 **자기가 분석한 구간의 이름**을 들고 있다. 선택이 바뀌면 그 순간 결과를 흐리게
+// 하고 알린다 — 예전에는 구간을 바꿔도 점수·교정·3D가 이전 구간 것 그대로 남아 서로
+// 다른 구간의 정보가 한 화면에 섞였다(다른 평가자가 실제 브라우저에서 확인했다).
+// 새 기준이 잡히면 자동으로 다시 비교한다 — `cycleReference`가 이미 따르던 원칙
+// ("표시된 기준이 곧 계산에 쓰일 기준이어야 한다")을 구간 변경에도 적용한다.
+
+let analyzed = null;   // { query, reference } — 화면의 결과가 분석한 구간
+let runRequestId = 0;  // 늦게 온 비교 응답을 버리기 위한 번호
+
+function passLabel(entry) {
+  return `${entry.date} L${entry.level} ${entry.session} #${entry.pass_index}`;
+}
+
+function sameAnalysis(query, reference) {
+  return analyzed !== null && query !== null && reference !== undefined && reference !== null
+    && analyzed.query === passLabel(query) && analyzed.reference === passLabel(reference);
+}
+
+function markStale() {
+  if (analyzed === null) return;
+  document.body.dataset.stale = "true";
+  const note = $("staleNote");
+  note.hidden = false;
+  note.textContent = `선택이 변경되었습니다 — 아래 결과는 ${analyzed.query}의 것입니다. 새 기준을 찾으면 다시 비교합니다.`;
+}
+
+function clearStale() {
+  delete document.body.dataset.stale;
+  $("staleNote").hidden = true;
+}
+
+function rerunIfStale() {
+  if (document.body.dataset.stale !== "true") return;
+  const query = selectedQuery();
+  if (query === null) return;
+  // 기준이 **지금 고른 구간의 것**일 때만 다시 비교한다. 아니면 더 새 기준 요청이
+  // 돌아오기를 기다린다(그 요청이 끝나면 이 함수가 다시 불린다).
+  if (referenceState.phase !== "ready" || referenceState.for !== passLabel(query)) return;
+  const reference = referenceState.candidates[referenceState.index];
+  if (reference === undefined) return;  // 기준이 없으면 흐린 채로 둔다
+  if (sameAnalysis(query, reference)) { clearStale(); return; }
+  void run();
 }
 
 // ---- ②③④ 비교 실행 --------------------------------------------------------
@@ -857,6 +907,7 @@ async function fetchDeployed(query) {
 async function run() {
   const query = selectedQuery();
   const reference = referenceState.candidates[referenceState.index];
+  const requestId = ++runRequestId;
   if (query === null || reference === null || reference === undefined) {
     showHeroState("empty", "먼저 대상 패스를 고르고, 전형기 기준이 자동으로 잡히길 기다리세요.");
     return;
@@ -888,16 +939,28 @@ async function run() {
     });
     payload = await response.json();
   } catch (err) {
+    if (requestId !== runRequestId) return;  // 더 새 비교가 이미 나갔다
     showHeroState("error", `비교 요청이 실패했습니다 — ${err}`);
     setState($("correctionsState"), "error", "비교 요청이 실패했습니다.");
     skeletonView.clear("비교 요청이 실패했습니다.", "error");
-    renderDeployed(await deployed);
+    const late = await deployed;
+    if (requestId !== runRequestId) return;
+    renderDeployed(late);
     $("run").disabled = false;
     $("run").textContent = "평가";
     return;
   }
+  // **늦게 온 응답은 버린다.** 구간을 빠르게 바꾸면 비교가 여럿 나가고, 먼저 보낸 것이
+  // 나중에 도착해 최신 결과를 덮을 수 있다.
+  if (requestId !== runRequestId) return;
   $("run").disabled = false;
   $("run").textContent = "평가";
+  analyzed = { query: passLabel(query), reference: passLabel(reference) };
+  // 비교가 도는 사이에 선택이 또 바뀌었으면 이 결과도 이미 낡았다.
+  const current = selectedQuery();
+  if (current !== null && passLabel(current) === analyzed.query) clearStale();
+  else markStale();
+  $("analyzedLabel").textContent = `분석한 구간 ${analyzed.query} · 기준 작업자 ${reference.worker} ${analyzed.reference}`;
 
   // 몸 기준 축의 요 출처. 값 자체는 서버가 표시 문자열로 주지 않아 출처만 적는다.
   const yaw = typeof payload.yaw_assumed === "number"
@@ -918,11 +981,15 @@ async function run() {
     renderOrientation(null);
     clearDetails();
     skeletonView.clear(text, isEmptyReason ? "empty" : "error");
-    renderDeployed(await deployed);
+    const lateEmpty = await deployed;
+    if (requestId !== runRequestId) return;
+    renderDeployed(lateEmpty);
     return;
   }
 
-  renderDeployed(await deployed);
+  const lateOk = await deployed;
+  if (requestId !== runRequestId) return;
+  renderDeployed(lateOk);
   showHeroBody();
   renderHero(payload.measured, payload.query_key, payload.view, payload.key_match);
   renderCorrections(payload.measured);
@@ -943,13 +1010,23 @@ async function run() {
 // ---- 배선 -------------------------------------------------------------------
 
 $("queryWorker").addEventListener("change", () => {
+  markStale();
   $("queryLevel").dataset.worker = "";
-  void loadQueryPasses();
+  void loadQueryPasses().then(rerunIfStale);
 });
-$("queryLevel").addEventListener("change", () => void loadQueryPasses());
-$("queryPass").addEventListener("change", () => void fetchReference());
+$("queryLevel").addEventListener("change", () => {
+  markStale();
+  void loadQueryPasses().then(rerunIfStale);
+});
+$("queryPass").addEventListener("change", () => {
+  markStale();
+  void fetchReference().then(rerunIfStale);
+});
 $("cycleReference").addEventListener("click", () => cycleReference());
-$("reload").addEventListener("click", () => void loadQueryPasses());
+$("reload").addEventListener("click", () => {
+  markStale();
+  void loadQueryPasses().then(rerunIfStale);
+});
 $("run").addEventListener("click", () => void run());
 
 void loadWorkers();

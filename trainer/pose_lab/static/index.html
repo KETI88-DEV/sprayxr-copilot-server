@@ -35,6 +35,9 @@
         <span class="reference-match" id="referenceMatch"></span>
       </div>
       <p class="picker-status state-note" id="queryStatus" data-tone="idle" hidden></p>
+      <!-- 선택과 결과가 어긋난 동안만 뜬다. 결과를 그대로 두면 서로 다른 구간의 정보가
+           한 화면에 섞인다(다른 평가자가 실제 브라우저에서 확인했다). -->
+      <p class="stale-note" id="staleNote" role="status" hidden></p>
     </div>
   </section>
 
@@ -52,6 +55,9 @@
           </p>
         </div>
         <div class="hero-body" id="heroBody" hidden>
+          <!-- 이 결과가 **어느 구간**의 것인지. 선택이 바뀌어도 결과가 제 이름을 들고 있어야
+               섞였을 때 알아볼 수 있다. -->
+          <p class="analyzed-label" id="analyzedLabel"></p>
           <div class="hero-figure">
             <span class="hero-number" id="heroScore">—</span>
             <span class="hero-figure-label">유사도<br><span class="hero-figure-hint">1.0 = 기준과 동일</span></span>

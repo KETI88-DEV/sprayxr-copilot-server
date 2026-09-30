@@ -867,3 +867,25 @@ dd { margin: 0; font-family: var(--mono); }
   font-size: var(--fs-sm);
   color: var(--text-faint);
 }
+
+/* 선택과 결과가 어긋난 동안. 결과를 지우지 않고 **흐리게** 둔다 — 무엇이 바뀌는지 보이게.
+   색이 아니라 투명도로 말한다(색은 심각도 척도와 층 색에만 쓴다). */
+body[data-stale="true"] .workspace,
+body[data-stale="true"] #orientationSection {
+  opacity: 0.35;
+  transition: opacity 120ms ease-out;
+}
+.stale-note {
+  margin: var(--sp-2) 0 0;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--panel-2);
+  font-size: var(--fs-sm);
+  color: var(--text);
+}
+.analyzed-label {
+  margin: 0 0 var(--sp-2);
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+}
