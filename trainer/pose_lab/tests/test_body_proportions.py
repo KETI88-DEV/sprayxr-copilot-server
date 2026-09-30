@@ -329,3 +329,72 @@ def test_rescaling_the_lower_torso_leaves_the_fitted_mounts_alone() -> None:
     assert set(table_before) == set(table_after), (sorted(table_before), sorted(table_after))
     for key, mount in table_before.items():
         assert np.allclose(np.asarray(table_after[key].offset), np.asarray(mount.offset), atol=1e-12), key
+
+
+# --- 살(반투명 부피) ----------------------------------------------------------------
+
+
+def test_flesh_is_not_drawn_without_a_head_diameter() -> None:
+    """리그 크기를 모르면 살을 **지어내지 않는다** — 화면은 막대 인형으로 남는다."""
+    assert bp.flesh_block(None) is None
+    assert bp.flesh_block(0.0) is None
+
+
+def test_flesh_scales_with_the_same_denominator_as_the_head() -> None:
+    """머리 표식과 **같은 분모**로 줄여야 머리와 몸이 따로 커지지 않는다.
+
+    깨뜨리는 법: 배율을 고정 상수로 박으면 리그 크기가 바뀌어도 살이 안 따라온다.
+    """
+    adult = bp.flesh_block(bp.ADULT_HEAD_DIAMETER_M)
+    half = bp.flesh_block(bp.ADULT_HEAD_DIAMETER_M / 2)
+    assert adult is not None and half is not None
+    assert adult["scale"] == pytest.approx(1.0)
+    assert half["scale"] == pytest.approx(0.5)
+    for name, (r0, r1) in bp.FLESH_RADIUS_ADULT_M.items():
+        assert adult["segments"][name] == pytest.approx([r0, r1], abs=1e-4)
+        assert half["segments"][name] == pytest.approx([r0 / 2, r1 / 2], abs=1e-4)
+
+
+def _triples(value, path="flesh"):
+    """숫자 3개짜리 배열의 위치. 화면의 좌표 경계가 이런 배열을 좌표로 보고 Z를 뒤집는다."""
+    found = []
+    if isinstance(value, list):
+        if len(value) == 3 and all(isinstance(item, (int, float)) for item in value):
+            found.append(path)
+        for index, item in enumerate(value):
+            found.extend(_triples(item, f"{path}[{index}]"))
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            found.extend(_triples(item, f"{path}.{key}"))
+    return found
+
+
+def test_flesh_never_carries_a_three_number_array() -> None:
+    """3원소 숫자 배열을 실으면 화면 경계(`sceneViewFromUnity`)가 좌표로 알고 뒤집는다 —
+    반지름 셋이 조용히 부호가 바뀐다.
+
+    깨뜨리는 법: 가로 덩어리를 `[from, to, r]`이 아니라 `[r0, r1, r2]`로 실으면 실패한다.
+    """
+    block = bp.flesh_block(0.07)
+    assert block is not None
+    assert _triples(block) == []
+
+
+def test_every_flesh_name_is_a_joint_the_screen_can_draw() -> None:
+    """부위 이름은 **골격에 있는 관절**이어야 한다. 없는 이름을 주면 화면이 조용히 건너뛰어
+    그 부위만 막대로 남는다.
+
+    깨뜨리는 법: `Spine1`을 `Spine2`로 오타 내면 실패한다.
+    """
+    from trainer.scripts import skeleton_gate
+
+    known = {name for pair in skeleton_gate.BONES for name in pair}
+    known |= {joint for joint, *_ in bp.INSERTED_JOINTS}
+    block = bp.flesh_block(0.07)
+    assert block is not None
+    names = set(block["segments"])
+    names |= {item["from"] for item in block["bridges"]} | {item["to"] for item in block["bridges"]}
+    names |= {item["from"] for item in block["palms"]} | {item["to"] for item in block["palms"]}
+    head = block["head"]
+    names |= {head["from"], head["fallback_from"], head["to"]}
+    assert names - known == set(), f"골격에 없는 부위: {sorted(names - known)}"

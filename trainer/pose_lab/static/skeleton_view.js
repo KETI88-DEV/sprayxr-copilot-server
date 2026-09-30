@@ -67,6 +67,11 @@ const HEAD_SPHERE_RADIUS_FALLBACK = 0.036;
 // 뼈는 장면 안에서 읽혀야 한다(2라운드: 1~2px 회색 선이 벽 메시 위에서 가장 약한 요소였다). 실측 마커(층 색
 // 구체 0.035m)와는 채도로 위계를 둔다 — 뼈는 무채색, 실측은 층 색.
 const BONE_RADIUS = 0.009;
+// **살(부피).** 사용자: "스켈레톤도 좀 더 사람처럼 — 최소한 머리·몸통·팔이 구분되게."
+// 뼈(위)는 그대로 두고 그 둘레에 **반투명** 부피를 입힌다 — 뼈·속 빈 관절 표식이 살 너머로
+// 보이고, 채운 구(실측 장치)와 부호가 겹치지 않는다. **부위 이름과 두께는 서버가 준다**
+// (`view.flesh` ← `body_proportions.flesh_block`) — 화면이 부위 이름으로 규칙을 지어내지 않는다.
+const FLESH_OPACITY = 0.45;
 const BONE_OPACITY = 0.9;
 const BONE_OPACITY_FADED = 0.45;
 // IK 다리는 **흐리게** 그린다(S4) — 추적 장치가 없고 시뮬레이터가 지은 자세다. 기본 그림은
@@ -1198,6 +1203,29 @@ function mount(THREE, container) {
     return mesh;
   }
 
+  /** 살 한 마디. 굵기가 변하는 원기둥에 양 끝 구를 붙여 캡슐처럼 만든다(CapsuleGeometry는 굵기가
+   * 하나뿐이라 팔이 원통으로 보인다). `kind`는 "flesh" — 뼈("bone")의 이름·길이 계측을 건드리지 않는다. */
+  function fleshSegment(start, end, r0, r1, material, name) {
+    const dir = new THREE.Vector3().subVectors(end, start);
+    const length = dir.length();
+    if (length < 1e-6) return null;
+    dir.normalize();
+    const group = new THREE.Group();
+    // CylinderGeometry는 +Y가 위(radiusTop)다. 시작에서 끝으로 세우므로 위 = 끝(r1).
+    const body = new THREE.Mesh(new THREE.CylinderGeometry(r1, r0, length, 14, 1, true), material);
+    body.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+    body.position.copy(start).addScaledVector(dir, length / 2);
+    group.add(body);
+    for (const [at, radius] of [[start, r0], [end, r1]]) {
+      const cap = new THREE.Mesh(new THREE.SphereGeometry(radius, 14, 10), material);
+      cap.position.copy(at);
+      group.add(cap);
+    }
+    group.userData.kind = "flesh";
+    group.userData.name = name;
+    return group;
+  }
+
   /** 몸 → 장치 간격 막대. 같은 굵기의 짧은 원기둥을 층 색·흰색으로 번갈아 잇는다(줄무늬). 마디 길이는
    * `DEVICE_STRIPE_M` 안팎으로 맞추되 끝과 끝이 정확히 `start`·`end`에 닿게 개수로 나눈다. */
   function stripedBar(start, end, radius, darkMaterial, lightMaterial, kind, name) {
@@ -1276,6 +1304,75 @@ function mount(THREE, container) {
       bone.userData.deviation = dev.t;
       (isLeg ? legs : group).add(bone);
     }
+    // 살. 뼈 색(서버가 잰 벌어짐)을 그대로 따른다 — 벌어진 부위는 살도 진하게 물든다.
+    // 음영이 있어야 부피로 읽히므로 조명을 받는 재질을 쓴다. 다리는 추정(IK)이라 뼈와 같이 흐리다.
+    // 부위·두께는 **서버가 준 것만** 쓴다(`style.flesh`). 없으면 막대 인형 그대로 둔다.
+    const flesh = style?.flesh;
+    if (flesh && typeof flesh === "object") {
+      const vec = (name) => (isVec3(joints[name]) ? new THREE.Vector3(...joints[name]) : null);
+      const fleshMaterial = (color, opacity) => {
+        const made = new THREE.MeshLambertMaterial({
+          color, transparent: true, opacity, depthWrite: false, side: THREE.DoubleSide,
+        });
+        materials.push(made);
+        return made;
+      };
+      const fleshOpacity = (name, isLeg) => {
+        const dev = devOf(name);
+        let opacity = base * dev.opacity * FLESH_OPACITY;
+        if (isLeg) opacity *= legFactor;
+        return { color: dev.color, opacity };
+      };
+      const segments = flesh.segments && typeof flesh.segments === "object" ? flesh.segments : {};
+      for (const [parent, child] of bones) {
+        const a = vec(parent);
+        const b = vec(child);
+        const radii = segments[child];
+        if (!a || !b || !Array.isArray(radii) || radii.length !== 2) continue;
+        const isLeg = legSet.has(child);
+        const look = fleshOpacity(child, isLeg);
+        const piece = fleshSegment(a, b, radii[0], radii[1], fleshMaterial(look.color, look.opacity), `${parent}>${child}`);
+        if (piece) (isLeg ? legs : group).add(piece);
+      }
+      for (const bridge of Array.isArray(flesh.bridges) ? flesh.bridges : []) {
+        const a = vec(bridge?.from);
+        const b = vec(bridge?.to);
+        if (!a || !b || typeof bridge.radius !== "number") continue;
+        const isLeg = legSet.has(bridge.from) || legSet.has(bridge.to);
+        const look = fleshOpacity(bridge.from, isLeg);
+        const piece = fleshSegment(a, b, bridge.radius, bridge.radius, fleshMaterial(look.color, look.opacity), `${bridge.from}~${bridge.to}`);
+        if (piece) (isLeg ? legs : group).add(piece);
+      }
+      for (const palm of Array.isArray(flesh.palms) ? flesh.palms : []) {
+        const from = vec(palm?.from);
+        const wrist = vec(palm?.to);
+        if (!from || !wrist || typeof palm.length !== "number" || !Array.isArray(palm.radius)) continue;
+        const along = new THREE.Vector3().subVectors(wrist, from);
+        if (along.lengthSq() < 1e-12) continue;
+        const tip = wrist.clone().addScaledVector(along.normalize(), palm.length);
+        const look = fleshOpacity(palm.to, false);
+        const piece = fleshSegment(wrist, tip, palm.radius[0], palm.radius[1], fleshMaterial(look.color, look.opacity), `${palm.to}>palm`);
+        if (piece) group.add(piece);
+      }
+      // 머리 살. 관절은 두개골 바닥이라, 목→머리 방향으로 서버가 준 만큼 올린 자리에 둔다.
+      const skull = flesh.head;
+      const neck = vec(skull?.from) ?? vec(skull?.fallback_from);
+      const crown = vec(skull?.to);
+      if (neck && crown && typeof skull.radius === "number" && typeof skull.lift === "number") {
+        const up = new THREE.Vector3().subVectors(crown, neck);
+        if (up.lengthSq() > 1e-12) {
+          const look = fleshOpacity(skull.to, false);
+          const headFlesh = new THREE.Mesh(
+            new THREE.SphereGeometry(skull.radius, 18, 14),
+            fleshMaterial(look.color, look.opacity),
+          );
+          headFlesh.position.copy(crown).addScaledVector(up.normalize(), skull.lift);
+          headFlesh.userData.kind = "flesh";
+          headFlesh.userData.name = "head";
+          group.add(headFlesh);
+        }
+      }
+    }
     // 관절 표식: 속 빈 구. 벌어진 관절일수록 크고 진하다 — 한눈에 "여기가 다르다"로 읽히게.
     for (const [name, position] of Object.entries(joints)) {
       if (!isVec3(position)) continue;
@@ -1306,7 +1403,7 @@ function mount(THREE, container) {
       const headMaterial = new THREE.MeshBasicMaterial({
         color: dev.color, transparent: true, opacity: base * dev.opacity * 0.6, depthWrite: false, wireframe: true,
       });
-      const head = new THREE.Mesh(new THREE.SphereGeometry(radius, 12, 8), headMaterial);
+      const head = new THREE.Mesh(new THREE.SphereGeometry(radius, 16, 12), headMaterial);
       head.position.set(...joints.Head);
       head.userData.kind = "estimate-head";
       group.add(head);
@@ -2408,6 +2505,7 @@ function mount(THREE, container) {
         deviations,
         maxDeviation,
         legsOutOfRange: fit?.legs_within_range === false,
+        flesh: view.flesh,
       },
     );
     layerGroups.query.add(skeletonParts.group);
@@ -2420,6 +2518,7 @@ function mount(THREE, container) {
         deviations,
         maxDeviation,
         legsOutOfRange: referenceFit?.legs_within_range === false,
+        flesh: view.flesh,
       },
     );
     layerGroups.reference.add(referenceParts.group);

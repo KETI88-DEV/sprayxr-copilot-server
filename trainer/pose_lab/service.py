@@ -757,7 +757,9 @@ FIT_NOTES: Final[dict[str, str]] = {
 # 사용자가 "분사구 0.3m(추정)과 같은 불필요한 텍스트는 넣지 말 것"이라고 했다. 가는 선(궤적)의 이름은
 # **장치** 이름이다: 궤적은 관절이 아니라 HMD·건·플래쉬가 지나간 길이다.
 LEGEND_MEASURED_WORD: Final = "채운 구 = 실측 장치"
-LEGEND_ESTIMATE_WORD: Final = "속 빈 표식 = 추정 관절"
+# 몸(반투명 살)도 추정이다 — 뼈대 위에 입힌 부피라 실측처럼 보일 수 있어 범례가 이름을 댄다.
+# 구분자(` · `)를 쓰지 않는다 — 범례 조각 수가 곧 부호 수다.
+LEGEND_ESTIMATE_WORD: Final = "속 빈 표식 = 추정 관절(반투명 몸 포함)"
 LEGEND_DASHED_WORD: Final = "점선 = 재지 않은 부분"
 LEGEND_GUN_WORD: Final = "줄무늬 = 건"
 LEGEND_SEPARATOR: Final = " · "
@@ -1919,6 +1921,11 @@ def view_block(
             reference_layer_view.get("joints"),  # type: ignore[arg-type]
             fit,
             reference_fit,
+        ),
+        # 살(반투명 부피)의 부위·두께. 머리 지름과 같은 분모로 이 리그 크기에 맞춘다 —
+        # 화면이 부위 이름으로 규칙을 지어내지 않게 서버가 준다.
+        "flesh": body_proportions.flesh_block(
+            fit.get("head_diameter_m") if isinstance(fit, Mapping) else None
         ),
         # 범례는 한 줄이다(사용자: "UI는 간단한 편이 좋음").
         "legend_notes": [legend_line(query_layer)],

@@ -283,3 +283,86 @@ def display_bones(
             continue
         out.append([a, b])
     return out
+
+
+# --- 살(반투명 부피) ----------------------------------------------------------------
+#
+# 사용자: "스켈레톤도 좀 더 사람처럼 — SMPL이나 최소한 머리·몸통·팔이 구분되게."
+# 막대 인형이라 어느 선이 팔이고 어느 선이 몸통인지 한눈에 안 읽혔다. 뼈 위에 **반투명** 부피를
+# 입힌다. SMPL은 쓰지 않는다 — 모델 파일이 라이선스 동의 뒤에만 받을 수 있어 저장소에 넣을 수
+# 없고, 20관절 자료에 맞추려면 별도 피팅이 필요하다.
+#
+# **부위 이름과 두께는 서버가 정한다.** 화면이 부위 이름으로 규칙을 지어내지 않는다는 것이 이
+# 저장소의 원칙이다(다리 목록·뼈 짝·머리 지름이 모두 서버에서 온다).
+#
+# 두께는 **성인 부위 반지름(m)** 을 [시작, 끝]으로 적는다. 키는 뼈의 **자식** 관절 이름이다.
+# 이 리그는 이름이 한 칸 밀려 있다 — `…>ForeArm` 마디가 위팔, `…>Hand` 마디가 아래팔이다.
+FLESH_RADIUS_ADULT_M: Final[dict[str, tuple[float, float]]] = {
+    "Spine": (0.115, 0.105),        # 골반 → 허리
+    "Spine1": (0.105, 0.11),        # 허리 → 명치 (그려 넣은 관절)
+    "Chest": (0.11, 0.125),         # 명치 → 가슴
+    "Neck": (0.05, 0.045),          # 가슴 → 목 (그려 넣은 관절)
+    "Head": (0.045, 0.045),         # 목 → 머리
+    "LeftShoulder": (0.05, 0.05), "RightShoulder": (0.05, 0.05),      # 쇄골(몸통 안)
+    "LeftUpperArm": (0.055, 0.052), "RightUpperArm": (0.055, 0.052),  # 어깨 덩어리
+    "LeftForeArm": (0.048, 0.038), "RightForeArm": (0.048, 0.038),    # 위팔
+    "LeftHand": (0.038, 0.028), "RightHand": (0.038, 0.028),          # 아래팔
+    "LeftThigh": (0.09, 0.085), "RightThigh": (0.09, 0.085),          # 골반 → 고관절
+    "LeftCalf": (0.078, 0.05), "RightCalf": (0.078, 0.05),            # 허벅지
+    "LeftFoot": (0.05, 0.035), "RightFoot": (0.05, 0.035),            # 정강이
+    "LeftToe": (0.035, 0.03), "RightToe": (0.035, 0.03),              # 발
+}
+# 좌우를 잇는 가로 덩어리 — 어깨선과 골반. 이것이 있어야 몸통이 막대가 아니라 몸으로 읽힌다.
+FLESH_BRIDGES_ADULT_M: Final[tuple[tuple[str, str, float], ...]] = (
+    ("LeftUpperArm", "RightUpperArm", 0.06),
+    ("LeftThigh", "RightThigh", 0.085),
+)
+# 손바닥: 아래팔 방향으로 손목 너머 조금 더. (아래팔 시작, 손목, 길이, [시작, 끝] 반지름)
+FLESH_PALMS_ADULT_M: Final[tuple[tuple[str, str, float, tuple[float, float]], ...]] = (
+    ("LeftForeArm", "LeftHand", 0.08, (0.03, 0.024)),
+    ("RightForeArm", "RightHand", 0.08, (0.03, 0.024)),
+)
+# 머리 살: 목→머리 관절 방향으로 `lift`만큼 올린 자리에 반지름 `radius`의 구. 이 리그의 머리
+# 관절은 두개골 **바닥**(목 위)이라, 관절에 구를 그대로 두면 머리가 목에 파묻힌다.
+# 성인 머리 폭 0.155 m · 높이 0.23 m · 깊이 0.19 m의 기하평균 반지름이 약 0.095 m다.
+# `head_diameter_m`(관절 표식 크기)과는 **다른 양**이다 — 그것은 뼈 비례에서 나온 표식 크기다.
+FLESH_HEAD_ADULT_M: Final[tuple[str, str, float, float]] = ("Neck", "Head", 0.09, 0.085)
+# 그려 넣은 `Neck`이 없을 때의 대안 — 가슴에서 머리 방향을 잡는다.
+FLESH_HEAD_FALLBACK_FROM: Final = "Chest"
+# 성인 머리 지름 = BVH 골반→머리 × 머리 몫. 이 리그 머리 지름을 이것으로 나누면 몸 크기 비가 된다.
+# 머리 구체와 **같은 분모**를 써야 머리와 몸이 따로 커지지 않는다.
+ADULT_HEAD_DIAMETER_M: Final = sum(BVH_TORSO_M.values()) * HEAD_DIAMETER_RATIO
+
+
+def flesh_block(head_diameter_m: float | None) -> dict[str, object] | None:
+    """화면이 그릴 살의 부위·두께(m, **이 리그 크기로 줄인 값**). 머리 지름을 못 받으면 `None`.
+
+    3원소 숫자 배열을 쓰지 않는다 — 화면의 좌표 경계(`sceneViewFromUnity`)가 그런 배열을
+    좌표로 보고 Z를 뒤집는다. 두께는 2원소, 가로 덩어리·손바닥은 객체로 싣는다.
+    """
+    if not isinstance(head_diameter_m, (int, float)) or head_diameter_m <= 0.0:
+        return None
+    scale = float(head_diameter_m) / ADULT_HEAD_DIAMETER_M
+
+    def _r(value: float) -> float:
+        return round(value * scale, 4)
+
+    return {
+        "scale": round(scale, 4),
+        "segments": {name: [_r(a), _r(b)] for name, (a, b) in FLESH_RADIUS_ADULT_M.items()},
+        "bridges": [
+            {"from": left, "to": right, "radius": _r(radius)}
+            for left, right, radius in FLESH_BRIDGES_ADULT_M
+        ],
+        "palms": [
+            {"from": start, "to": wrist, "length": _r(length), "radius": [_r(a), _r(b)]}
+            for start, wrist, length, (a, b) in FLESH_PALMS_ADULT_M
+        ],
+        "head": {
+            "from": FLESH_HEAD_ADULT_M[0],
+            "fallback_from": FLESH_HEAD_FALLBACK_FROM,
+            "to": FLESH_HEAD_ADULT_M[1],
+            "radius": _r(FLESH_HEAD_ADULT_M[2]),
+            "lift": _r(FLESH_HEAD_ADULT_M[3]),
+        },
+    }

@@ -2710,3 +2710,47 @@ def test_selection_wiring_checks_can_fail():
     wired = selection_wiring(old)
     assert wired["every_selector_marks_stale"] is False, "구간 변경이 흐리지 않는데 통과했다"
     assert wired["every_selector_reruns"] is False
+
+
+# --- 살(반투명 부피) ------------------------------------------------------------------
+#
+# 사용자: "스켈레톤도 좀 더 사람처럼 — 최소한 머리·몸통·팔이 구분되게." 뼈 위에 반투명 부피를
+# 입혔다. 규칙 셋을 고정한다: 부위 이름·두께는 **서버가** 준다 · 살은 **반투명**이다(채운 구 =
+# 실측 장치와 부호가 겹치지 않게) · 뼈(`kind: "bone"`) 계측은 건드리지 않는다.
+
+
+def flesh_faults(js: str) -> list[str]:
+    faults: list[str] = []
+    code = without_comments(js)
+    body = code.split("function buildSkeletonGroup(", 1)[-1].split("\n  }\n", 1)[0]
+    if "const flesh = style?.flesh;" not in body:
+        faults.append("flesh_not_read_from_the_server")
+    if code.count("flesh: view.flesh,") != 2:
+        faults.append("flesh_not_passed_to_both_layers")
+    if re.search(r'"(Left|Right)(Shoulder|UpperArm|ForeArm|Hand|Thigh|Calf|Foot|Toe)"', code):
+        faults.append("screen_invents_part_names")
+    if re.search(r"FLESH_RADIUS|FLESH_BRIDGES", code):
+        faults.append("screen_keeps_its_own_thickness_table")
+    material = re.search(r"const fleshMaterial = \(color, opacity\) => \{(.*?)\};", body, re.S)
+    if material is None or "transparent: true" not in material.group(1):
+        faults.append("flesh_is_not_translucent")
+    segment = _nested_function_body(code, "fleshSegment")
+    if 'group.userData.kind = "flesh";' not in segment:
+        faults.append("flesh_borrows_the_bone_kind")
+    return faults
+
+
+def test_flesh_follows_the_server_and_stays_translucent():
+    assert flesh_faults(_read("skeleton_view.js")) == []
+
+
+def test_flesh_checks_can_fail():
+    full = _read("skeleton_view.js")
+    assert flesh_faults("") != []
+    local_table = full.replace("const FLESH_OPACITY", "const FLESH_RADIUS = {};\nconst FLESH_OPACITY", 1)
+    assert "screen_keeps_its_own_thickness_table" in flesh_faults(local_table)
+    opaque = full.replace("color, transparent: true, opacity, depthWrite: false, side: THREE.DoubleSide,",
+                          "color, opacity, side: THREE.DoubleSide,", 1)
+    assert opaque != full and "flesh_is_not_translucent" in flesh_faults(opaque)
+    borrowed = full.replace('group.userData.kind = "flesh";', 'group.userData.kind = "bone";', 1)
+    assert borrowed != full and "flesh_borrows_the_bone_kind" in flesh_faults(borrowed)
