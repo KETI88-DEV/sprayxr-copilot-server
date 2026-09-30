@@ -28,13 +28,20 @@
       <div class="reference-line" id="referenceLine" data-tone="idle">
         <span class="reference-label">기준 작업자</span>
         <span class="reference-value" id="referenceValue">도장 구간을 고르면 기준 작업자(전형기)의 같은 유형 동작을 자동으로 찾습니다.</span>
-        <button id="cycleReference" class="btn-ghost" hidden>다른 기준 ▸</button>
-        <span class="reference-cycle-note" id="referenceCycleNote"></span>
+        <!-- 기준은 **목록에서** 고른다(첫 항목이 추천). 예전 "다른 기준 ▸" 순환은 무엇이 다음에 올지
+             보이지 않았다(평가자). 선정 이유는 서버가 한 줄로 준다. -->
+        <select id="referencePick" class="reference-pick" aria-label="기준 동작" hidden></select>
         <!-- 동작 키를 어느 단까지 완화해서 찾았는지(S8). 엄밀 일치와 느슨한 일치를 구별하지 못하면
              화면이 "같은 동작"이라고 거짓을 말하게 된다. -->
         <span class="reference-match" id="referenceMatch"></span>
       </div>
-      <p class="picker-status state-note" id="queryStatus" data-tone="idle" hidden></p>
+      <p class="reference-reason" id="referenceReason" hidden></p>
+      <div class="picker-status-row">
+        <p class="picker-status state-note" id="queryStatus" data-tone="idle" hidden></p>
+        <!-- 전체 기록 중 일부만 읽었다는 사실과 **더 읽는 손잡이**를 같은 자리에 둔다. 예전에는
+             한도 조절이 접힌 상세 설정 안에 있었다(평가자). -->
+        <button id="loadMore" class="btn-ghost" type="button" hidden>더 불러오기</button>
+      </div>
       <!-- 선택과 결과가 어긋난 동안만 뜬다. 결과를 그대로 두면 서로 다른 구간의 정보가
            한 화면에 섞인다(다른 평가자가 실제 브라우저에서 확인했다). -->
       <p class="stale-note" id="staleNote" role="status" hidden></p>

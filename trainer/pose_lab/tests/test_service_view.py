@@ -2014,3 +2014,34 @@ def test_hidden_joints_do_not_drive_the_posture_gap() -> None:
     assert shown is not None and hidden is not None
     assert "LeftCalf" in shown["pairs"][0]["joints"]
     assert "LeftCalf" not in hidden["pairs"][0]["joints"]
+
+
+# --- 사람이 읽는 동작 이름 --------------------------------------------------------------------
+
+
+def test_motion_codes_become_words_without_the_broken_height() -> None:
+    """높이 칸은 쓰지 않는다 — 이 화면 기본 판정에서는 실측 범위 전체가 "high"로 떨어진다.
+
+    깨뜨리는 법: 높이 낱말을 이름에 붙이면 모든 구간이 "높게"가 되어 여기서 실패한다.
+    """
+    assert service.motion_label("m3:horizontal:right:2x2:center-far-high") == "오른쪽으로 수평 도장 · 몸 정면 멀리"
+    assert service.motion_label("m3:vertical_up:none:1x0:left-near-high") == "위로 수직 도장 · 몸 왼쪽 가까이"
+    assert service.motion_label("m3:diag_down:left:na:right-far-low") == "왼쪽으로 아래로 비스듬히 도장 · 몸 오른쪽 멀리"
+    for text in (service.motion_label("m3:horizontal:right:2x2:center-far-high"),
+                 service.motion_label("m3:horizontal:right:2x2:center-far-low")):
+        assert "높" not in text and "낮" not in text
+
+
+def test_an_unknown_motion_code_is_not_guessed() -> None:
+    assert service.motion_label(None) is None
+    assert service.motion_label("m3:sideways:right:2x2:center-far-high") is None
+    assert service.motion_label("garbage") is None
+
+
+def test_pass_labels_round_once_on_the_server() -> None:
+    labels = service.pass_labels("20250831", "1000389_1", 245.26, "m3:horizontal:right:2x2:center-far-high")
+    assert labels == {
+        "motion_label": "오른쪽으로 수평 도장 · 몸 정면 멀리",
+        "length_display": "24.5 cm",
+        "session_label": "2025-08-31 · 작업 기록 1000389_1",
+    }

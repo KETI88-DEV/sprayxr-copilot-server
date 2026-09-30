@@ -2647,7 +2647,7 @@ def selection_wiring(js: str) -> dict[str, bool]:
             rf'\$\("{name}"\)\.addEventListener\("(?:change|click)", \(\) => \{{(.*?)\n\}}\);',
             body, re.S,
         )
-        for name in ("queryWorker", "queryLevel", "queryPass", "reload")
+        for name in ("queryWorker", "queryLevel", "queryPass", "reload", "loadMore", "referencePick")
     }
     run = re.search(r"\nasync function run\(\) \{(.*?)\n\}\n", body, re.S)
     run_body = run.group(1) if run else ""
@@ -2860,3 +2860,61 @@ def test_wording_checks_can_fail():
     assert hidden != html and "estimate_flag_hidden_in_details" in wording_faults(hidden, js)
     bare = js.replace('"surface-stroke-end"', '"surface-stroke-x"', 1)
     assert bare != js and "stroke_has_no_start_or_end" in wording_faults(html, bare)
+
+
+
+# --- 목록과 좁은 화면 -------------------------------------------------------------------------
+#
+# 다른 평가자가 375px에서 가로 468px 넘침·3D 2,548px 아래를 쟀다. 재현한 뒤 고쳤다(넘침 0,
+# 3D 1,781px). 순서는 바꾸지 않았다 — "교정은 유사도 바로 아래·3D 바깥"은 사용자 결정이다.
+
+
+def narrow_layout_faults(css: str) -> list[str]:
+    faults: list[str] = []
+    wide_order = css.split("@media (max-width: 79.99rem) {", 1)[-1].split("\n}", 1)[0]
+    # 순서를 안 주면 0 — 유사도보다 앞에 선다.
+    if "#deployedSection { order:" not in wide_order:
+        faults.append("deployed_panel_jumps_above_the_score")
+    phone = css.split("@media (max-width: 40rem) {", 1)[-1].split("\n}", 1)[0]
+    if "@media (max-width: 40rem) {" not in css:
+        return faults + ["no_phone_layout"]
+    if ".hero-meta { flex-direction: column;" not in phone:
+        faults.append("hero_meta_stays_three_columns")
+    if ".correction-item > .correction-text { grid-column: 2 / -1; }" not in phone:
+        faults.append("correction_sentence_squeezed_by_numbers")
+    if ".improvement { grid-template-columns: minmax(0, 1fr);" not in phone:
+        faults.append("estimate_numbers_pushed_off_screen")
+    return faults
+
+
+def test_the_phone_layout_does_not_overflow():
+    assert narrow_layout_faults(_read("style.css")) == []
+
+
+def test_narrow_layout_checks_can_fail():
+    css = _read("style.css")
+    assert narrow_layout_faults("") == ["deployed_panel_jumps_above_the_score", "no_phone_layout"]
+    squeezed = css.replace("  .correction-item > .correction-text { grid-column: 2 / -1; }\n", "", 1)
+    assert squeezed != css and "correction_sentence_squeezed_by_numbers" in narrow_layout_faults(squeezed)
+    jumped = css.replace("  .workspace-left > #deployedSection { order: 5; }\n", "", 1)
+    assert jumped != css and "deployed_panel_jumps_above_the_score" in narrow_layout_faults(jumped)
+
+
+def test_pass_names_are_the_servers_words():
+    """목록 한 줄은 서버가 만든 사람 말(동작 유형·길이·작업 기록)이다. 영문 코드를 그대로 싣지 않는다."""
+    js = without_comments(_read("app.js"))
+    assert "entry.motion_label" in js and "entry.session_label" in js and "entry.length_display" in js
+    assert 'document.createElement("optgroup")' in js, "작업 기록별로 묶지 않는다"
+    assert "optionLabel(" not in js, "옛 목록 이름(식별자·영문 키 한 줄)이 남았다"
+
+
+def test_reloading_the_list_keeps_the_chosen_pass():
+    """목록을 다시 읽으면(더 불러오기·레벨) 같은 번호가 다른 구간을 가리킬 수 있다 — **정체로** 다시 고른다.
+    헤드리스 크로미움으로 확인했다(더 불러오기 전후 모두 "구간 4", 작업 기록 8→16개).
+
+    깨뜨리는 법: `fillQueryPasses`가 이전 선택을 다시 고르지 않으면 실패한다.
+    """
+    fill = _nested_function_body(without_comments(_read("app.js")), "fillQueryPasses") or \
+        without_comments(_read("app.js")).split("function fillQueryPasses()", 1)[-1].split("\n}\n", 1)[0]
+    assert "const keep = before === null ? null : passLabel(before);" in fill
+    assert "if (keep !== null && passLabel(entry) === keep) option.selected = true;" in fill

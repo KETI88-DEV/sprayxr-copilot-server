@@ -562,20 +562,35 @@ function passRef(entry) {
   };
 }
 
-function optionLabel(entry) {
-  const length = Math.round(entry.length_mm);
-  return `${entry.date} L${entry.level} ${entry.session} #${entry.pass_index}`
-    + `  (${entry.frames}프레임 ${length}mm)  ${entry.motion_key}`;
+function passOptionText(entry) {
+  // 동작 유형·길이는 서버 문자열이다. 서버가 동작 유형을 못 읽었으면 코드를 그대로 둔다.
+  const motion = entry.motion_label ?? entry.motion_key ?? "동작 유형 없음";
+  const length = entry.length_display ?? "";
+  return `구간 ${entry.pass_index + 1} · ${motion}${length ? ` · ${length}` : ""}`;
 }
 
 function fillQueryPasses() {
   const select = $("queryPass");
+  // 다시 읽어도 **고른 구간을 지킨다** — 목록이 바뀌면 같은 번호가 다른 구간을 가리킬 수 있다.
+  const before = selectedQuery();
+  const keep = before === null ? null : passLabel(before);
   select.replaceChildren();
+  // 날짜 → 작업 기록 → 도장 구간. 작업 기록마다 묶는다(평가자: 한 줄에 식별자가 다 들어 있었다).
+  let group = null;
+  let groupLabel = null;
   for (const [index, entry] of listed.query.entries()) {
+    const record = entry.session_label ?? `${entry.date} · 작업 기록 ${entry.session}`;
+    if (record !== groupLabel) {
+      group = document.createElement("optgroup");
+      group.label = record;
+      select.append(group);
+      groupLabel = record;
+    }
     const option = document.createElement("option");
     option.value = String(index);
-    option.textContent = optionLabel(entry);
-    select.append(option);
+    option.textContent = passOptionText(entry);
+    if (keep !== null && passLabel(entry) === keep) option.selected = true;
+    group.append(option);
   }
   select.disabled = listed.query.length === 0;
 }
@@ -623,12 +638,13 @@ async function loadQueryPasses() {
 
   listed.query = payload.passes;
   fillQueryPasses();
+  // 전부 읽지 않았으면 더 읽는 손잡이를 선택 영역에 띄운다.
+  $("loadMore").hidden = payload.truncated !== true;
 
   if (payload.passes.length === 0) {
     setState(status, "empty", "이 조건에 맞는 도장 구간이 없습니다.");
   } else {
-    const scanned = `세션 ${payload.sessions_scanned}/${payload.sessions_total}`
-      + (payload.truncated ? " (잘림 — 한도를 올리면 더 훑는다)" : "");
+    const scanned = `작업 기록 ${payload.sessions_total}개 중 ${payload.sessions_scanned}개를 읽었습니다`;
     setState(status, "idle", `${scanned} · 도장 구간 ${payload.passes.length}개`);
   }
   await fetchReference();
@@ -651,13 +667,13 @@ async function loadWorkers() {
 function renderReferenceLine() {
   const line = $("referenceLine");
   const valueEl = $("referenceValue");
-  const cycleBtn = $("cycleReference");
-  const cycleNote = $("referenceCycleNote");
+  const pick = $("referencePick");
+  const reasonEl = $("referenceReason");
   const matchEl = $("referenceMatch");
-  const { phase, candidates, index, message, match, relaxed } = referenceState;
+  const { phase, candidates, index, message, match, relaxed, reason } = referenceState;
 
-  cycleBtn.hidden = true;
-  cycleNote.textContent = "";
+  pick.hidden = true;
+  reasonEl.hidden = true;
   matchEl.textContent = "";
   matchEl.removeAttribute("data-tone");
   $("run").disabled = true;
@@ -684,9 +700,23 @@ function renderReferenceLine() {
   }
   const chosen = candidates[index];
   line.dataset.tone = "ok";
-  valueEl.textContent = `전형기 · L${chosen.level} · ${chosen.date} ${chosen.session} #${chosen.pass_index} (자동)`;
-  cycleBtn.hidden = candidates.length <= 1;
-  cycleNote.textContent = candidates.length > 1 ? `${candidates.length}개 중 ${index + 1}번째` : "";
+  valueEl.textContent = `${chosen.worker} · 레벨 ${chosen.level}`;
+  // 후보를 **목록으로** 보인다. 첫 항목이 추천(서버가 가까운 순으로 세웠다).
+  pick.replaceChildren();
+  for (const [i, candidate] of candidates.entries()) {
+    const option = document.createElement("option");
+    option.value = String(i);
+    option.textContent = `${passLabel(candidate)} · ${candidate.motion_label ?? candidate.motion_key} · `
+      + `${candidate.length_display ?? ""}${i === 0 ? " (추천)" : ""}`;
+    if (i === index) option.selected = true;
+    pick.append(option);
+  }
+  pick.hidden = false;
+  pick.disabled = candidates.length <= 1;
+  if (typeof reason === "string") {
+    reasonEl.hidden = false;
+    reasonEl.textContent = `선정 이유: ${reason}`;
+  }
   // 동작 키를 어디까지 완화해서 찾았는지(S8). 느슨한 일치를 엄밀 일치처럼 보이게 두면 화면이
   // "같은 동작"이라고 거짓을 말한다 — 문구는 서버(`match_label`)가 준다.
   if (typeof match === "string") {
@@ -759,17 +789,17 @@ async function fetchReference() {
     message: "",
     // `match_label`이 없으면(어느 단에서도 못 찾았으면) 지어내지 않는다.
     match: typeof payload.match_label === "string" ? payload.match_label : null,
+    reason: typeof payload.reason === "string" ? payload.reason : null,
     relaxed: payload.relaxed === true,
   });
   renderReferenceLine();
 }
 
-function cycleReference() {
-  if (referenceState.candidates.length <= 1) return;
-  referenceState.index = (referenceState.index + 1) % referenceState.candidates.length;
+function pickReference() {
+  const index = Number($("referencePick").value);
+  if (!Number.isInteger(index) || index < 0 || index >= referenceState.candidates.length) return;
+  referenceState.index = index;
   renderReferenceLine();
-  // 표시된 기준이 곧 계산에 쓰일 기준이어야 한다.
-  if (!$("heroBody").hidden) void run();
 }
 
 // ---- 선택과 결과의 일치 ---------------------------------------------------------
@@ -784,7 +814,9 @@ let analyzed = null;   // { query, reference } — 화면의 결과가 분석한
 let runRequestId = 0;  // 늦게 온 비교 응답을 버리기 위한 번호
 
 function passLabel(entry) {
-  return `${entry.date} L${entry.level} ${entry.session} #${entry.pass_index}`;
+  // 사람이 읽는 이름이자 식별자다 — 작업 기록(날짜·기록 번호) + 구간 번호는 유일하다.
+  const record = entry.session_label ?? `${entry.date} · 작업 기록 ${entry.session}`;
+  return `${record} · 구간 ${entry.pass_index + 1}`;
 }
 
 function sameAnalysis(query, reference) {
@@ -1029,7 +1061,18 @@ $("queryPass").addEventListener("change", () => {
   markStale();
   void fetchReference().then(rerunIfStale);
 });
-$("cycleReference").addEventListener("click", () => cycleReference());
+$("referencePick").addEventListener("change", () => {
+  // 표시된 기준이 곧 계산에 쓰일 기준이어야 한다 — 결과를 흐리고 다시 비교한다.
+  markStale();
+  pickReference();
+  rerunIfStale();
+});
+$("loadMore").addEventListener("click", () => {
+  const limit = $("sessionLimit");
+  limit.value = String(Math.min(Number(limit.max) || 200, (Number(limit.value) || 8) + 8));
+  markStale();
+  void loadQueryPasses().then(rerunIfStale);
+});
 $("reload").addEventListener("click", () => {
   markStale();
   void loadQueryPasses().then(rerunIfStale);

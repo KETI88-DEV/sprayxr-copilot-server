@@ -198,7 +198,9 @@ def create_app(source: Any | None = None) -> FastAPI:
                     "pass_index": entry.pass_index,
                     "frames": entry.frames,
                     "length_mm": entry.length_m * 1000.0,
-                    "motion_key": source.key_of(entry, params),
+                    "motion_key": (motion := source.key_of(entry, params)),
+                    # 사람이 읽는 이름(동작 유형·길이·작업 기록). 화면은 이것만 쓴다.
+                    **service.pass_labels(item.date, item.session, entry.length_m * 1000.0, motion),
                 }
                 for item, entry in found
             ],

@@ -251,6 +251,34 @@ button { font-family: var(--sans); cursor: pointer; }
   .workspace-left > #corrections { order: 2; }
   .workspace-right > .view3d-panel { order: 3; }
   .workspace-left > #improvementSection { order: 4; }
+  /* 숙련자 집단 기준 평가(④b). 순서를 안 주면 0이라 **유사도보다 앞**에 선다 — 넣을 때 빠뜨렸다. */
+  .workspace-left > #deployedSection { order: 5; }
+}
+
+/* 휴대폰 폭. 다른 평가자가 375px에서 가로 468px 넘침과 3D가 2,548px 아래에 있는 것을 쟀다.
+   넘친 것은 ② 머리말의 3열(동작 유형·표본·바닥 기준 머리)과 예상 결과 숫자 줄이었다.
+   순서는 바꾸지 않는다 — "교정은 유사도 바로 아래·3D 바깥"은 사용자가 정한 것이다(2026-09-15).
+   대신 넘치는 칸을 한 열로 접어 3D를 끌어올린다. */
+@media (max-width: 40rem) {
+  .hero-meta { flex-direction: column; gap: var(--sp-2); }
+  .hero-meta > div { min-width: 0; }
+  .hero-meta dd { overflow-wrap: anywhere; }
+  .hero-meta-sub { max-width: none; }
+  /* 제목(바꾼 용어라 길다)과 숫자를 한 줄에 두면 숫자가 밀려 넘친다 — 쌓는다. */
+  .improvement { grid-template-columns: minmax(0, 1fr); row-gap: var(--sp-2); }
+  .improvement-score { min-width: 0; }
+  .improvement-value { font-size: var(--fs-lg); }
+  .improvement-arrow { margin: 0; }
+  /* 교정 한 줄: 넓은 창의 4열(번호·문장·cm·σ)을 그대로 두면 숫자 열이 폭을 먼저 가져가 문장이
+     60px로 짓눌려 "32.0c / m"처럼 끊겼다(평가자: "교정 문장이 좁은 열에서 잘린다"). 문장을 전폭으로
+     두고 숫자는 그 아래 줄로 내린다. */
+  .correction-item { grid-template-columns: 1.75rem minmax(0, 1fr) auto; }
+  .correction-item > .correction-text { grid-column: 2 / -1; }
+  .correction-item > .correction-cm { grid-column: 2; text-align: left; }
+  .correction-item > .correction-sigma { grid-column: 3; }
+  .picker-row { flex-wrap: wrap; }
+  .picker-row .field.wide { flex: 1 1 100%; min-width: 0; }
+  .picker-row select { max-width: 100%; }
 }
 
 /* ---- ② 얼마나 다른가(이 화면의 답 — 가장 크게) --------------------------- */
@@ -938,6 +966,8 @@ body[data-stale="true"] #orientationSection {
 
 /* 예상값 표시 — 숫자 바로 아래에 늘 보인다. 강조색이 아니라 흐린 글자로(색은 심각도에만 쓴다). */
 .improvement-flag {
+  /* 격자 한 칸에 갇히면 숫자 열을 밀어낸다 — 전폭을 받는다. */
+  grid-column: 1 / -1;
   margin: var(--sp-1) 0 0;
   font-size: var(--fs-sm);
   color: var(--text-dim);
@@ -949,3 +979,20 @@ body[data-stale="true"] #orientationSection {
   flex-basis: 100%;
 }
 .deployed-more { margin-top: var(--sp-2); font-size: var(--fs-sm); color: var(--text-faint); }
+
+/* 기준 후보 목록 · 선정 이유 · 더 불러오기 */
+.reference-pick {
+  max-width: 100%;
+  font-size: var(--fs-sm);
+}
+.reference-reason {
+  margin: var(--sp-1) 0 0;
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+}
+.picker-status-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+}

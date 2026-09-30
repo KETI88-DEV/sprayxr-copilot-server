@@ -2787,6 +2787,63 @@ def _by_hit_distance(row: Mapping[str, Any]) -> tuple[tuple[int, float], str, st
     )
 
 
+# --- 사람이 읽는 이름 ------------------------------------------------------------------
+#
+# 다른 평가자: 목록 한 줄에 날짜·파일 식별자·프레임 수·영문 동작 키(`m3:horizontal:right:…`)가
+# 다 들어 있어 무슨 동작인지 읽히지 않았다. 동작 유형 코드를 사람 말로 옮긴다.
+#
+# 코드 모양: `m3:{기울기}:{진행 방향}:{UV 칸}:{좌우}-{거리}-{높이}`(`motion_key.motion_key`).
+# **높이 칸은 쓰지 않는다** — 이 화면의 기본 판정(`height_relative=False`)은 절대 높이에 Z-up 시절
+# 임계를 대서 실측 범위 전체가 "high"로 떨어진다(`motion_key.KeyParams` 주석). 정보가 없는 말이다.
+# UV 칸은 분석용이라 이름에서 뺀다(상세에는 코드가 그대로 남는다).
+MOTION_HEADING_WORDS: Final[dict[str, str]] = {
+    "right": "오른쪽으로", "left": "왼쪽으로", "forward": "앞으로", "back": "뒤로", "none": "",
+}
+MOTION_BAND_WORDS: Final[dict[str, str]] = {
+    "horizontal": "수평 도장",
+    "diag_up": "위로 비스듬히 도장",
+    "diag_down": "아래로 비스듬히 도장",
+    "vertical_up": "위로 수직 도장",
+    "vertical_down": "아래로 수직 도장",
+}
+MOTION_LATERAL_WORDS: Final[dict[str, str]] = {"left": "몸 왼쪽", "center": "몸 정면", "right": "몸 오른쪽"}
+MOTION_REACH_WORDS: Final[dict[str, str]] = {"near": "가까이", "far": "멀리"}
+
+
+def motion_label(key: object) -> str | None:
+    """`m3:horizontal:right:2x2:center-far-high` → "오른쪽으로 수평 도장 · 몸 정면 멀리".
+
+    모르는 모양이면 `None` — 지어내지 않는다(화면은 코드를 그대로 둔다).
+    """
+    if not isinstance(key, str):
+        return None
+    parts = key.split(":")
+    if len(parts) != 5:
+        return None
+    _prefix, band, heading, _cell, placement = parts
+    band_word = MOTION_BAND_WORDS.get(band)
+    heading_word = MOTION_HEADING_WORDS.get(heading)
+    places = placement.split("-")
+    if band_word is None or heading_word is None or len(places) != 3:
+        return None
+    lateral = MOTION_LATERAL_WORDS.get(places[0])
+    reach = MOTION_REACH_WORDS.get(places[1])
+    if lateral is None or reach is None:
+        return None
+    verb = f"{heading_word} {band_word}".strip()
+    return f"{verb} · {lateral} {reach}"
+
+
+def pass_labels(date: str, session: str, length_mm: float, key: object) -> dict[str, object]:
+    """목록 한 줄에 쓰는 표시 문자열들. 숫자는 여기서 한 번만 반올림한다."""
+    pretty_date = f"{date[:4]}-{date[4:6]}-{date[6:8]}" if len(date) == 8 and date.isdigit() else date
+    return {
+        "motion_label": motion_label(key),
+        "length_display": f"{length_mm / 10.0:.1f} cm",
+        "session_label": f"{pretty_date} · 작업 기록 {session}",
+    }
+
+
 def reference_candidates(
     source: Any,
     query: PassRef,
@@ -2864,6 +2921,7 @@ def reference_candidates(
                     "motion_key": motion,
                     "match_granularity": granularity,
                     "hit_distance_m": distance,
+                    **pass_labels(item.date, item.session, entry.length_m * 1000.0, motion),
                 }
             )
         # 가장 가까운 후보가 먼저 선다(사전등록 2026-09-23 §1.2). 이 한 줄이 구현의 전부이고,
@@ -2893,6 +2951,13 @@ def reference_candidates(
         "relaxed": granularity is not None and granularity != rungs[0][0],
         "ladder": ladder,
         "candidates": [] if chosen is None else chosen[2],
+        # 왜 이 기준인가 — 화면이 후보 목록 옆에 그대로 적는다(평가자: "선정 이유를 설명").
+        # 거리 숫자는 싣지 않는다(`hit_distance_m`은 화면 문구가 아니다 — 사전등록 §7-8).
+        "reason": (
+            None if chosen is None
+            else f"같은 레벨 · 같은 동작 유형({reference_ladder_label(granularity)})인 "
+                 f"{EXPERT_WORKER}의 구간 {len(chosen[2])}개 — 벽 위 분사 위치가 가까운 순"
+        ),
     }
 
 
