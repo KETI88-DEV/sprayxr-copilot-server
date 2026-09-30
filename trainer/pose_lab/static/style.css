@@ -996,3 +996,10 @@ body[data-stale="true"] #orientationSection {
   align-items: center;
   gap: var(--sp-2);
 }
+
+/* 누를 수 있는 안내 — 강조 중인 항목은 테두리로(색은 심각도에만 쓴다). */
+.correction-item[role="button"] { cursor: pointer; }
+.correction-item[role="button"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.correction-item.is-focused { outline: 1px solid var(--text); outline-offset: 2px; border-radius: 4px; }
+.view3d-label-arrow.is-dimmed { opacity: 0.25; }
+.view3d-label-arrow.is-focused { outline: 2px solid var(--text); }

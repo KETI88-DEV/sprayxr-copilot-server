@@ -2951,3 +2951,38 @@ def test_arrangement_checks_can_fail():
     assert stuck != full and "reference_layer_not_moved" in arrangement_faults(stuck)
     framed = full.replace("push(shiftReference(p, view));", "push(p);")
     assert framed != full and "framing_ignores_the_moved_reference" in arrangement_faults(framed)
+
+
+def focus_faults(app_js: str, view_js: str) -> list[str]:
+    """안내를 누르면 3D에서 그 화살표만 밝게 남기고 방향을 풀어 적는다. 헤드리스 크로미움으로 확인했다
+    (재생 중에 눌러도 대표 자세로 돌아와 강조, 다시 누르면 풀림, 콘솔 오류 없음)."""
+    faults: list[str] = []
+    app = without_comments(app_js)
+    if "item.addEventListener(\"click\", press);" not in app or 'item.setAttribute("role", "button");' not in app:
+        faults.append("cue_is_not_pressable")
+    if "skeletonView.highlight(focusedCorrection);" not in app:
+        faults.append("cue_press_does_not_reach_the_3d_view")
+    view = without_comments(view_js)
+    highlight = _nested_function_body(view, "highlight")
+    if "showMoment(null)" not in highlight:
+        faults.append("focus_during_playback_points_at_a_hidden_arrow")
+    apply = _nested_function_body(view, "applyFocus")
+    if "child.material.opacity = on ? 1 : 0.15;" not in apply:
+        faults.append("other_arrows_not_dimmed")
+    if "AXIS_GUIDE[cue.axis]" not in apply:
+        faults.append("direction_not_explained_from_the_server_axis")
+    if "return { render, clear, loading, highlight };" not in view:
+        faults.append("highlight_not_exported")
+    return faults
+
+
+def test_pressing_a_cue_lights_its_arrow_and_explains_the_direction():
+    assert focus_faults(_read("app.js"), _read("skeleton_view.js")) == []
+
+
+def test_focus_checks_can_fail():
+    app, view = _read("app.js"), _read("skeleton_view.js")
+    unplugged = app.replace("  skeletonView.highlight(focusedCorrection);\n", "", 1)
+    assert unplugged != app and "cue_press_does_not_reach_the_3d_view" in focus_faults(unplugged, view)
+    stuck = view.replace("    if (playbackState.held.length > 0) showMoment(null);\n    focused =", "    focused =", 1)
+    assert stuck != view and "focus_during_playback_points_at_a_hidden_arrow" in focus_faults(app, stuck)

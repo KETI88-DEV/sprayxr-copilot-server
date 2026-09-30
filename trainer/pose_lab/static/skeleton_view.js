@@ -406,6 +406,9 @@ function buildDom(container) {
   // 두 몸 배치를 바꿨을 때 무엇을 옮겼는지(서버 문장). 겹쳐 보기에서는 비어 있다.
   const arrangeNote = document.createElement("p");
   arrangeNote.className = "view3d-note view3d-arrange-note";
+  // 강조한 안내가 **어느 쪽으로** 옮기라는 뜻인지. 3D 안에는 글자를 걸지 않으므로 캔버스 아래에 둔다.
+  const focusNote = document.createElement("p");
+  focusNote.className = "view3d-note view3d-focus-note";
   // 상체 확대 프리셋이 화면 밖으로 내보낸 맞춤 대상의 이름. 자른 사실을 화면이 스스로 말한다.
   const framingNote = document.createElement("p");
   framingNote.className = "view3d-note view3d-framing-note";
@@ -420,10 +423,10 @@ function buildDom(container) {
   framingMore.append(framingMoreSummary, framingMoreText);
 
   // wallNote는 위에서 host(캔버스 위 겹침)에 넣었다 — 여기서 다시 넣으면 host 밖으로 옮겨진다.
-  container.append(toolbar, host, playback, arrangeNote, legend, notes, notesMore, errors, note, correctedNote, framingNote, framingMore);
+  container.append(toolbar, host, playback, focusNote, arrangeNote, legend, notes, notesMore, errors, note, correctedNote, framingNote, framingMore);
   return {
     canvas, host, labelsHost, legend, notes, notesMore, wallNote, errors, note, correctedNote, framingNote,
-    framingMore, framingMoreText, controls, toolbar, playback, arrangeNote,
+    framingMore, framingMoreText, controls, toolbar, playback, arrangeNote, focusNote,
     arrange: controls.querySelector("#view3dArrange"),
     play: playback.querySelector("#view3dPlay"),
     playbackMode: playback.querySelector("#view3dPlaybackMode"),
@@ -2522,6 +2525,54 @@ function mount(THREE, container) {
     dom.host.classList.add("is-loading");
   }
 
+  // ---- 안내 강조 ------------------------------------------------------------------------
+  //
+  // 다른 평가자: "'진행 방향 뒤로 32.1cm'만으로는 실제 어느 방향인지 어렵다 — 안내를 누르면 해당
+  // 부위·화살표를 강조하고 진행 방향을 보여야 한다." 누른 안내의 화살표를 밝게 남기고 나머지는
+  // 흐리게 한다. 방향 설명은 서버가 준 축(`axis`)과 경로 문장(`trace`)으로 짓는다 — 3D 안에는 글자를
+  // 걸지 않는다(사용자: 3D 객체에 설명 문구 금지).
+  const AXIS_GUIDE = {
+    lateral: "진행 방향은 분사 경로 끝의 뿔이 가리키는 쪽입니다.",
+    wall: "화살표가 벽을 향하면 벽에 붙이라는, 벽에서 멀어지면 떼라는 뜻입니다.",
+    vertical: "화살표가 위를 향하면 올리라는, 아래를 향하면 내리라는 뜻입니다.",
+  };
+  let focused = null;
+
+  function applyFocus() {
+    for (const arrow of correctionsGroup.children) {
+      const on = focused === null || arrow.userData.n === focused;
+      const lit = focused !== null && arrow.userData.n === focused;
+      arrow.traverse((child) => {
+        if (!child.isMesh) return;
+        child.material.transparent = true;
+        child.material.opacity = on ? 1 : 0.15;
+        // 크기를 바꾸지 않고 **빛나게** 한다 — 스케일은 좌표 반전 금지 규칙(`scale.set`)에 걸리고,
+        // 길이를 바꾸면 화살표가 가리키는 거리가 달라진다.
+        child.material.emissive?.set(lit ? child.material.color : 0x000000);
+        child.material.emissiveIntensity = lit ? 0.9 : 0;
+        child.material.needsUpdate = true;
+      });
+    }
+    for (const entry of labelRegistry) {
+      if (entry.kind !== "badge") continue;
+      entry.el.classList.toggle("is-dimmed", focused !== null && entry.n !== focused);
+      entry.el.classList.toggle("is-focused", focused !== null && entry.n === focused);
+    }
+    const cue = focused === null ? null : (lastView?.corrections ?? []).find((item) => item.n === focused);
+    dom.focusNote.textContent = cue
+      ? `안내 ${cue.n} · ${cue.trace ?? ""} — 밝게 남긴 화살표 쪽으로 옮기라는 뜻입니다. ${AXIS_GUIDE[cue.axis] ?? ""}`.trim()
+      : "";
+    debugLive.focused = focused;
+  }
+
+  function highlight(n) {
+    if (!lastView) return;
+    // 화살표는 **대표 순간**에서 나간다 — 재생 중이면 대표 자세로 돌아와야 보인다.
+    if (playbackState.held.length > 0) showMoment(null);
+    focused = typeof n === "number" ? n : null;
+    applyFocus();
+  }
+
   // ---- 두 몸 배치 -----------------------------------------------------------------------
   //
   // 기준 층을 **통째로** 옮긴다(몸·궤적·분사 경로·재생 몸까지). 옮길 벡터는 서버가 준다
@@ -3118,6 +3169,9 @@ function mount(THREE, container) {
     });
 
     applyArrangement();
+    // 새 비교 결과다 — 이전 강조는 다른 결과의 번호다.
+    focused = null;
+    applyFocus();
     // 재생. 대표 순간에 묶인 물체를 넘겨 둔다 — 재생 중에 숨기고, 대표 자세로 돌아오면 원래대로 켠다.
     setupPlayback(view, [
       skeletonParts.group, referenceParts.group,
@@ -3295,21 +3349,21 @@ function mount(THREE, container) {
     container.__view3dDebug = null;
   }
 
-  return { render, clear, loading };
+  return { render, clear, loading, highlight };
 }
 
 /** 3D 뷰를 `container`에 붙인다. three.js가 없거나 초기화가 실패하면 안내만 남기고 던지지 않는다. */
 export function createSkeletonView(container) {
-  if (!container) return { render() {}, clear() {}, loading() {} };
+  if (!container) return { render() {}, clear() {}, loading() {}, highlight() {} };
   if (typeof THREE === "undefined") {
     showUnavailable(container, "three.js를 불러오지 못해 3D 뷰 없이 숫자 패널만 씁니다(오프라인이거나 CDN 차단).");
-    return { render() {}, clear() {}, loading() {} };
+    return { render() {}, clear() {}, loading() {}, highlight() {} };
   }
   try {
     return mount(THREE, container);
   } catch (err) {
     console.error("[skeleton_view] 3D 뷰 초기화 실패", err);
     showUnavailable(container, "3D 뷰를 초기화하지 못했습니다 — 숫자 패널은 그대로 동작합니다.");
-    return { render() {}, clear() {}, loading() {} };
+    return { render() {}, clear() {}, loading() {}, highlight() {} };
   }
 }

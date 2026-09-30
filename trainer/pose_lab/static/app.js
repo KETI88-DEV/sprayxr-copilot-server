@@ -289,6 +289,7 @@ function renderHero(measured, keys, view, keyMatch) {
 // ---- ③ 교정 문장 -----------------------------------------------------------
 
 function renderCorrections(measured) {
+  focusedCorrection = null;
   const axes = measured?.axes ?? [];
   // 건수의 출처는 measured.axes다 — view.corrections는 원점이 없으면 항목이 빠질 수 있다.
   $("correctionsCount").textContent = `${axes.length}건`;
@@ -337,8 +338,35 @@ function renderCorrections(measured) {
     traceLine.append(barTrack);
 
     item.append(badge, sentence, figure, sigma, traceLine);
+    // 누르면 3D에서 이 안내의 화살표만 밝게 남기고 방향을 풀어 적는다(평가자: "진행 방향 뒤로
+    // 32.1cm"만으로는 어느 쪽인지 모른다). 다시 누르면 푼다. 키보드로도 누를 수 있다.
+    if (typeof entry.n === "number") {
+      item.tabIndex = 0;
+      item.setAttribute("role", "button");
+      item.setAttribute("aria-pressed", "false");
+      const press = () => focusCorrection(entry.n);
+      item.addEventListener("click", press);
+      item.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          press();
+        }
+      });
+    }
     list.append(item);
   }
+}
+
+let focusedCorrection = null;
+
+function focusCorrection(n) {
+  focusedCorrection = focusedCorrection === n ? null : n;
+  for (const item of $("correctionList").children) {
+    const on = focusedCorrection !== null && item.dataset.n === String(focusedCorrection);
+    item.classList.toggle("is-focused", on);
+    item.setAttribute("aria-pressed", on ? "true" : "false");
+  }
+  skeletonView.highlight(focusedCorrection);
 }
 
 // ---- ④ 개선율 --------------------------------------------------------------
