@@ -19,10 +19,11 @@ from trainer.demo_api.telemetry_router import (
 )
 
 URL = TELEMETRY_SEQUENCE_PATH
+# 계약 §7.3 의 12키와 정확히 같아야 한다. 한 개라도 더하거나 빼면 이 시험이 실패한다.
 _DATA_KEYS = {
     "request_id", "session_id", "user_id", "scenario_id", "sequence_id",
-    "generated_at", "latency_ms", "degraded", "sequence_data_ack",
-    "coating_feedback", "sequence_feedback", "pose_feedback", "text_guide", "unknown_fields",
+    "generated_at", "latency_ms", "sequence_data_ack",
+    "coating_feedback", "sequence_feedback", "pose_feedback", "text_guide",
 }
 
 # 실물 샘플의 관절 표기: 소문자 키에 [x,y,z] 배열. 계약 예시의 {pos, rot} 형태도 받는다.
@@ -99,7 +100,6 @@ def test_new_sequence_is_stored_and_acked() -> None:
         "stored": True, "duplicate": False, "frames_received": 1, "frames_accepted": 1,
     }
     assert data["request_id"] == "sequence-SEQ-002"
-    assert data["degraded"] is False
 
 
 def test_same_body_twice_is_a_duplicate_and_counts_no_frames() -> None:
@@ -136,10 +136,11 @@ def test_same_key_with_a_different_body_is_reported_not_overwritten() -> None:
     _ = client.post(URL, json=_body())
     conflict = client.post(URL, json=_body(sequence_info=[_frame(), _frame(2)])).json()["data"]
 
+    # 충돌은 ack 의 stored=false + duplicate=false 조합이 구별해 준다 — 계약에 없는
+    # 필드를 더하지 않는다.
     assert conflict["sequence_data_ack"] == {
         "stored": False, "duplicate": False, "frames_received": 2, "frames_accepted": 0,
     }
-    assert conflict["degraded"] is True
 
 
 # --- 엄격성 정책 ----------------------------------------------------------
@@ -164,16 +165,24 @@ def test_unknown_frame_key_is_accepted_and_reported() -> None:
     data = _client().post(URL, json=_body(sequence_info=[_frame(heatmap_crop={"png": "..."})])).json()["data"]
 
     assert data["sequence_data_ack"]["stored"] is True
-    assert data["unknown_fields"] == ["sequence_info[0].heatmap_crop"]
+    # 미지 키는 응답이 아니라 로그로 보고한다(계약 §7.3 은 12키다).
+    assert set(data) == _DATA_KEYS
 
 
-def test_unknown_fields_are_capped() -> None:
-    """Given a long session, When many frames carry a new key, Then the report is bounded."""
+def test_unknown_frame_fields_are_reported_once_per_request(caplog: pytest.LogCaptureFixture) -> None:
+    """Given many frames with a new key, When posted, Then one warning carries the count.
+
+    120FPS 세션에서 프레임마다 찍으면 실제 경고가 묻힌다.
+    """
     frames = [_frame(i, extra_key=i) for i in range(60)]
 
-    data = _client().post(URL, json=_body(sequence_info=frames)).json()["data"]
+    with caplog.at_level("WARNING", logger="trainer.demo_api.telemetry_router"):
+        data = _client().post(URL, json=_body(sequence_info=frames)).json()["data"]
 
-    assert len(data["unknown_fields"]) == 50
+    warnings = [r for r in caplog.records if "unknown frame fields" in r.getMessage()]
+    assert len(warnings) == 1
+    assert "count=50" in warnings[0].getMessage()
+    assert set(data) == _DATA_KEYS
 
 
 @pytest.mark.parametrize(
@@ -263,8 +272,8 @@ def test_no_frames_is_not_scored() -> None:
     ],
     ids=["http-500", "mcp-error-envelope"],
 )
-def test_engine_failure_is_200_not_available_and_degraded(handler: Any) -> None:
-    """Given an engine fault, When posted, Then ingest still succeeds and says it is degraded.
+def test_engine_failure_is_200_and_not_available(handler: Any) -> None:
+    """Given an engine fault, When posted, Then ingest still succeeds and pose says why.
 
     MCP는 오류도 HTTP 200으로 답하므로 status 필드가 성공을 결정한다.
     """
@@ -274,7 +283,6 @@ def test_engine_failure_is_200_not_available_and_degraded(handler: Any) -> None:
     data = response.json()["data"]
     assert data["sequence_data_ack"]["stored"] is True
     assert data["pose_feedback"]["reason_code"] == "engine_unavailable"
-    assert data["degraded"] is True
 
 
 # --- 미구현 엔진 ----------------------------------------------------------

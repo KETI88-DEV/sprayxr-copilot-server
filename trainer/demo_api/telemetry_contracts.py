@@ -94,6 +94,13 @@ class EngineFeedback(StrictModel):
 
 
 class TelemetrySequenceData(StrictModel):
+    """계약 §7.3의 12키와 정확히 같다. 필드를 더하지 않는다 — SIM이 받는 모양은 계약이 정한다.
+
+    프레임 하위의 미지 키는 응답이 아니라 **요청당 WARNING 로그 1건**으로 보고한다.
+    엔진 장애는 `pose_feedback.reason_code`가, 본문 충돌은 `sequence_data_ack`의
+    `stored=false, duplicate=false` 조합이 이미 구별해 준다.
+    """
+
     request_id: str
     session_id: str | None
     user_id: str | None
@@ -101,13 +108,11 @@ class TelemetrySequenceData(StrictModel):
     sequence_id: str
     generated_at: str
     latency_ms: Annotated[int, Field(ge=0)]
-    degraded: bool
     sequence_data_ack: SequenceDataAck
     coating_feedback: EngineFeedback
     sequence_feedback: EngineFeedback
     pose_feedback: PoseFeedback
     text_guide: str | None
-    unknown_fields: list[str]
 
 
 class TelemetrySequenceResponse(StrictModel):

@@ -192,7 +192,6 @@ def create_telemetry_router(
                 sequence_id=query.sequence_id,
                 generated_at=_now(),
                 latency_ms=int((time.monotonic() - started) * 1000),
-                degraded=degraded or ack_record.conflict,
                 sequence_data_ack=SequenceDataAck(
                     stored=ack_record.stored,
                     duplicate=ack_record.duplicate,
@@ -203,17 +202,28 @@ def create_telemetry_router(
                 sequence_feedback=EngineFeedback(analysis_status="not_available", reason_code=_ENGINE_MISSING),
                 pose_feedback=pose,
                 text_guide=text_guide,
-                unknown_fields=_unknown_fields(query),
             ),
         )
+        unknown = _unknown_fields(query)
+        if unknown:
+            # 응답에는 싣지 않는다(계약 §7.3의 12키). 120FPS 세션이므로 요청당 1건만 남긴다.
+            logger.warning(
+                "telemetry sequence unknown frame fields sequence=%s count=%d sample=%s",
+                query.sequence_id,
+                len(unknown),
+                ",".join(unknown[:5]),
+            )
         logger.info(
-            "telemetry sequence session=%s sequence=%s frames=%d stored=%s duplicate=%s pose=%s",
+            "telemetry sequence session=%s sequence=%s frames=%d stored=%s duplicate=%s"
+            " conflict=%s pose=%s degraded=%s",
             query.session_id,
             query.sequence_id,
             frames_received,
             ack_record.stored,
             ack_record.duplicate,
+            ack_record.conflict,
             pose.analysis_status,
+            degraded or ack_record.conflict,
         )
         return JSONResponse(status_code=200, content=envelope.model_dump(mode="json"))
 

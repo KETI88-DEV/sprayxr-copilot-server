@@ -352,32 +352,26 @@ Trigger ON→OFF 한 번을 하나의 시퀀스로 정의한다. 프레임은 �
 
 판정할 데이터가 부족하면 임의 값을 만들지 않고 `analysis_status="not_available"`과 안정적인 `reason_code`를 반환한다.
 
-### 7.4 구현이 정한 것 (2026-09-30)
+### 7.4 구현 메모 (2026-09-30)
 
-`trainer/demo_api/telemetry_router.py`. 위 예시와 다른 부분은 모두 여기 적는다.
+`trainer/demo_api/telemetry_router.py`. **응답 `data`는 §7.3의 12키와 정확히 같다** — 필드를 더하지 않는다. 시험이 키 집합을 단언하므로 하나라도 늘면 실패한다.
 
-**응답에 추가한 필드.**
+**`analysis_status`·`reason_code`를 세 feedback에 같은 방법으로 넣는다.** §7.3 말미가 "판정할 데이터가 부족하면 임의 값을 만들지 않고 `analysis_status="not_available"`과 안정적인 `reason_code`를 반환한다"고 규정하므로, `pose_feedback`만이 아니라 `coating_feedback`·`sequence_feedback`도 같은 두 필드로 상태를 말한다. 엔진 미구현은 `reason_code: "engine_not_implemented"`다.
 
-| 필드 | 이유 |
-|---|---|
-| `coating_feedback.analysis_status` / `.reason_code` | 예시는 이 두 객체에 상태를 넣지 않았다. §7.3 말미의 규칙을 세 feedback에 같은 방법으로 적용해 SIM이 한 가지로 확인하게 한다. 엔진 미구현은 `reason_code: "engine_not_implemented"` |
-| `sequence_feedback.analysis_status` / `.reason_code` | 위와 같다 |
-| `degraded` | §9의 Query 응답과 같은 의미. 엔진 장애 또는 본문 충돌에 `true` |
-| `unknown_fields` | 프레임 하위에서 받은 미지 키를 JSON path로 최대 50개 보고한다 |
+**엔진 상태.** `pose_analysis`만 실제로 돈다. `coating_analysis`·`sequence_analysis`는 미구현이고, §7.2의 4·7단계(`anomaly_detection` 조합과 SSE 발행)도 아직 없다. 자세는 MCP `/pose_estimation/sequence`로 HTTP 위임한다.
 
-**엄격성.** 최상위는 `forbid`다(오타가 조용히 무시되면 엉뚱한 세션에 쓴다). **프레임 하위는 `allow`**이고 미지 키를 `unknown_fields`로 보고한다 — 현행 정책을 프레임까지 적용하면 실물 샘플의 정상 시퀀스 100%가 422다.
+**엔진 장애는 수신을 실패로 만들지 않는다.** MCP가 HTTP 500이거나 `status != "success"`면 200 + `pose_feedback.reason_code: "engine_unavailable"`이고 시퀀스는 저장된다.
 
-**`skeleton_joints`는 두 표기를 모두 받는다.** 실물은 `{관절: [x,y,z]}`, 위 예시는 `{관절: {pos, rot}}`다. 검증은 통과시키고 해석은 엔진이 한다.
+**`sequence_data_ack`는 관측된 사실이다.** 같은 `(session_id, sequence_id)`에 **같은 본문**이 다시 오면 `duplicate=true`, `frames_accepted=0`이고 다시 채점하지 않는다. **다른 본문**이 오면 `stored=false`, `duplicate=false`다 — 두 조합이 서로 구별되므로 별도 필드가 필요 없다. 조용히 덮어쓰지 않는다.
 
-**`session_id` 부재는 422가 아니다.** 저장은 하고 자세 채점은 하지 않으며 `pose_feedback.reason_code: "session_id_missing"`이다. 없는 세션을 지어내면 자세 누적이 엉뚱한 곳에 쌓인다.
+**요청 쪽 관용 (응답 모양은 바꾸지 않는다).**
 
-**`sequence_data_ack`는 관측된 사실이다.** 같은 `(session_id, sequence_id)`가 **같은 본문으로** 다시 오면 `duplicate=true`, `frames_accepted=0`이고 다시 채점하지 않는다. **다른 본문으로** 오면 `duplicate=false`, `stored=false`, `degraded=true`다 — 조용히 덮어쓰면 어느 쪽이 채점된 것인지 알 수 없다.
+- 최상위는 `forbid`다. 오타가 조용히 무시되면 엉뚱한 세션에 쓴다.
+- **프레임 하위는 `allow`**이고 미지 키는 **요청당 WARNING 로그 1건**으로 보고한다(응답에는 싣지 않는다). 현행 정책을 프레임까지 적용하면 실물 샘플의 정상 시퀀스 100%가 422다.
+- `skeleton_joints`는 실물의 `{관절: [x,y,z]}`와 §7.1 예시의 `{관절: {pos, rot}}`를 모두 받는다. 검증은 통과시키고 해석은 엔진이 한다.
+- `session_id` 부재는 422가 아니다. 저장은 하고 자세 채점은 건너뛴다(`session_id_missing`). 없는 세션을 지어내면 자세 누적이 엉뚱한 곳에 쌓이고, 422로 버리면 텔레메트리가 사라진다.
 
-**`POST /api/v1/copilot/analyze-sequence`를 멱등 별칭으로 받는다.** 계약에 없는 경로인데 벤더 클라이언트가 **같은 본문을 두 경로로** 보낸다(`docs/sprayxr_v25_sample_delta_2026-09-28.md` B18). 404를 주면 현장에서 실패하므로 받되, 두 번째는 저장소가 `duplicate`로 식별한다. **정본은 `telemetry/sequence`이고 이 별칭은 벤더 회신(질의 15)까지의 수용책이다.**
-
-**엔진 상태.** `pose_analysis`만 실제로 돈다. `coating_analysis`·`sequence_analysis`는 미구현이고 `anomaly_detection`과 SSE 발행(§7.2의 4·7단계)도 아직 없다. 자세는 MCP `/pose_estimation/sequence`로 HTTP 위임한다 — 계획 E4는 결국 같은 엔진 모듈을 agent-api 안에서 직접 부르는 형태를 요구하는데, 그 모듈이 `mcp_servers` 아래에 있고 agent-api 이미지가 그것을 복사하지 않는다.
-
-**엔진 장애는 수신을 실패로 만들지 않는다.** MCP가 HTTP 500이거나 `status != "success"`면 200 + `pose_feedback.reason_code: "engine_unavailable"` + `degraded=true`다. 시퀀스는 저장된다.
+**`POST /api/v1/copilot/analyze-sequence`.** 계약에 없는 경로인데 벤더 클라이언트가 **같은 본문을 두 경로로** 보낸다(`docs/sprayxr_v25_sample_delta_2026-09-28.md` B18, 벤더 질의 15). 404를 주면 현장에서 실패하므로 멱등 별칭으로 받고 두 번째는 `duplicate`로 식별한다. **벤더 결함에 대한 수용책이며 계약에 추가하는 것이 아니다.** 회신이 오면 제거한다.
 
 **상태 저장소.** SQLite(계획 E7), 경로는 `SEQUENCE_DB_PATH`. 기본값은 agent-api가 쓸 수 있는 유일한 마운트 아래이며 전용 `STATE_DIR` 볼륨이 제 자리다(후속). 경로를 쓸 수 없으면 메모리로 내려가고 수신은 계속된다.
 
