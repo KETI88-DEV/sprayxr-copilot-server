@@ -1,7 +1,9 @@
-"""시퀀스 수신 기록 (계획 E7: SQLite, 표준 라이브러리, WAL, 단일 워커).
+"""시퀀스 저장소 (계획 E7: SQLite, 표준 라이브러리, WAL, 단일 워커).
 
-`POST /api/v1/telemetry/sequence`의 `sequence_data_ack`가 **관측된 사실**을 말하도록 하는
-최소 저장소다. 같은 `(session_id, sequence_id)`가 같은 본문으로 다시 오면 `duplicate=true`이고
+`POST /api/v1/telemetry/sequence`는 **데이터베이스에 시퀀스를 올리는** 엔드포인트다
+(명세서 p.4). 채점은 나중에 `POST /api/v1/copilot/query`의 `pose_recomm`이 `context`로
+시퀀스를 가리켜 수행한다(p.9). **그래서 본문을 보관한다** — 해시만 남기면 나중에 채점할
+대상이 없다. 같은 `(session_id, sequence_id)`가 같은 본문으로 다시 오면 `duplicate=true`이고
 프레임을 두 번 세지 않는다 — 벤더 클라이언트가 같은 시퀀스를 두 경로로 보내기 때문이다
 (`docs/sprayxr_v25_sample_delta_2026-09-28.md` B18).
 
@@ -11,13 +13,14 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import sqlite3
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final
+from typing import Any, Final
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +34,7 @@ CREATE TABLE IF NOT EXISTS sequences (
     body_sha256 TEXT NOT NULL,
     frames      INTEGER NOT NULL,
     received_at TEXT NOT NULL,
+    body        TEXT,
     PRIMARY KEY (session_key, sequence_id)
 )
 """
@@ -77,7 +81,16 @@ class SequenceStore:
                 logger.warning("sequence store: %s unusable, falling back to memory", raw, exc_info=True)
         return sqlite3.connect(":memory:", check_same_thread=False)
 
-    def record(self, *, session_key: str, sequence_id: str, body_sha256: str, frames: int, received_at: str) -> StoreResult:
+    def record(
+        self,
+        *,
+        session_key: str,
+        sequence_id: str,
+        body_sha256: str,
+        frames: int,
+        received_at: str,
+        body: str | None = None,
+    ) -> StoreResult:
         with self._guard, self._conn:
             row = self._conn.execute(
                 "SELECT body_sha256 FROM sequences WHERE session_key = ? AND sequence_id = ?",
@@ -93,11 +106,36 @@ class SequenceStore:
                     )
                 return StoreResult(stored=False, duplicate=same, conflict=not same)
             self._conn.execute(
-                "INSERT INTO sequences (session_key, sequence_id, body_sha256, frames, received_at)"
-                " VALUES (?, ?, ?, ?, ?)",
-                (session_key, sequence_id, body_sha256, int(frames), received_at),
+                "INSERT INTO sequences (session_key, sequence_id, body_sha256, frames, received_at, body)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                (session_key, sequence_id, body_sha256, int(frames), received_at, body),
             )
             return StoreResult(stored=True, duplicate=False, conflict=False)
+
+    def load_body(self, *, session_key: str, sequence_id: str) -> dict[str, Any] | None:
+        """저장된 시퀀스 본문. `pose_recomm` 질의가 채점 대상을 찾는 경로다."""
+        with self._guard:
+            row = self._conn.execute(
+                "SELECT body FROM sequences WHERE session_key = ? AND sequence_id = ?",
+                (session_key, sequence_id),
+            ).fetchone()
+        if row is None or row[0] is None:
+            return None
+        try:
+            return json.loads(row[0])
+        except json.JSONDecodeError:
+            logger.warning("stored sequence body is not JSON session=%s sequence=%s", session_key, sequence_id)
+            return None
+
+    def latest_sequence_id(self, session_key: str) -> str | None:
+        """`context`가 없을 때 쓸 가장 최근 시퀀스. 없으면 `None` — 지어내지 않는다."""
+        with self._guard:
+            row = self._conn.execute(
+                "SELECT sequence_id FROM sequences WHERE session_key = ?"
+                " ORDER BY received_at DESC, sequence_id DESC LIMIT 1",
+                (session_key,),
+            ).fetchone()
+        return str(row[0]) if row is not None else None
 
     def close(self) -> None:
         with self._guard:

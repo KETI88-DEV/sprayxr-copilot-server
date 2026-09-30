@@ -21,10 +21,11 @@ class CopilotQueryRequest(StrictModel):
     user_id: Annotated[str, Field(min_length=1)]
     scenario_id: str | None = None
     session_id: str | None = None
-    request_id: Annotated[str, Field(min_length=1)]
+    # 명세서 p.9: request_id·use_rag 는 (선택)이고 use_rag 기본값은 Y 다.
+    request_id: str | None = None
     prompt: Annotated[str, Field(min_length=1, max_length=4000)]
     task_type: TaskType
-    use_rag: Literal["Y", "N"]
+    use_rag: Literal["Y", "N"] = "Y"
     context: str | None = None
 
     @field_validator("prompt")
@@ -36,7 +37,8 @@ class CopilotQueryRequest(StrictModel):
 
 
 class CopilotQueryData(StrictModel):
-    request_id: str
+    # 요청의 request_id 가 (선택)이므로 에코도 널이 될 수 있다.
+    request_id: str | None
     session_id: str | None
     user_id: str
     scenario_id: str | None

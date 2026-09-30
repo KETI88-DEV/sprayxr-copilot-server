@@ -36,7 +36,8 @@ _DATA_KEYS = {
     "retrieval_used",
     "citations",
 }
-_PENDING = ["trajectory_recomm", "pose_recomm", "error_analysis"]
+# pose_recomm 은 이제 실제로 채점한다(명세서 p.9). 준비 중 응답은 둘만 남는다.
+_PENDING = ["trajectory_recomm", "error_analysis"]
 _GENERATED_UUID = "3f0c1b2a-9d8e-4c7b-a6f5-0e1d2c3b4a59"
 
 
@@ -212,6 +213,28 @@ def test_citation_outside_the_retrieved_chunks_is_dropped(monkeypatch: pytest.Mo
 
     assert data["answer"] == "SENTINEL_BODY"
     assert data["citations"] == []
+
+
+def test_request_id_is_optional_per_the_spec(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Given no request_id, When queried, Then it is accepted and echoed as null (명세서 p.9)."""
+    body = _body()
+    del body["request_id"]
+
+    data = _client(monkeypatch, _FakePipeline()).post(URL, json=body).json()["data"]
+
+    assert data["request_id"] is None
+
+
+def test_use_rag_defaults_to_Y(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Given no use_rag, When queried, Then retrieval runs — 명세서 p.9 기본값은 Y 다."""
+    pipeline = _FakePipeline()
+    body = _body()
+    del body["use_rag"]
+
+    data = _client(monkeypatch, pipeline).post(URL, json=body).json()["data"]
+
+    assert pipeline.calls[0]["use_rag"] is True
+    assert data["retrieval_used"] is True
 
 
 def test_degraded_is_true_when_no_answer_could_be_produced(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -393,13 +416,20 @@ def test_pending_task_types_answer_not_available_without_pipeline_or_mcp(
 
 
 def test_pending_answers_are_configurable() -> None:
-    router = copilot_router.create_copilot_router(None, pending_answers={"pose_recomm": "사용자 정의 안내"})
+    """pose_recomm 은 이제 실제로 채점하므로 아직 엔진이 없는 task_type 으로 시험한다."""
     from fastapi import FastAPI
 
+    from trainer.demo_api.sequence_store import SequenceStore
+
+    router = copilot_router.create_copilot_router(
+        None,
+        pending_answers={"trajectory_recomm": "사용자 정의 안내"},
+        store=SequenceStore(":memory:"),
+    )
     app = FastAPI()
     app.include_router(router)
 
-    data = TestClient(app).post(URL, json=_body(task_type="pose_recomm")).json()["data"]
+    data = TestClient(app).post(URL, json=_body(task_type="trajectory_recomm")).json()["data"]
 
     assert data["answer"] == "사용자 정의 안내"
 
@@ -424,12 +454,11 @@ def test_knowledge_search_succeeds_while_mcp_is_unreachable(
         _body(use_rag="true"),
         _body(use_rag=True),
         _body(task_type="free_chat"),
-        {k: v for k, v in _body().items() if k != "request_id"},
         {k: v for k, v in _body().items() if k != "user_id"},
         _body(prompt=""),
         _body(prompt="   "),
     ],
-    ids=["extra", "use_rag-string", "use_rag-bool", "task_type", "no-request_id", "no-user_id", "empty", "blank"],
+    ids=["extra", "use_rag-string", "use_rag-bool", "task_type", "no-user_id", "empty", "blank"],
 )
 def test_invalid_requests_get_the_error_envelope(monkeypatch: pytest.MonkeyPatch, body: dict[str, Any]) -> None:
     """(i) Given an invalid body, When posted, Then 422 in the v2.5 ERROR wrapper; run() is not called."""

@@ -80,25 +80,6 @@ class SequenceDataAck(StrictModel):
     frames_accepted: Annotated[int, Field(ge=0)]
 
 
-class PoseCorrection(StrictModel):
-    """계약 §7.3의 교정 항목. MCP 결과의 풍부한 필드는 공개하지 않는다 —
-    `evidence`·`target.per_frame`은 내부 인터페이스의 것이다."""
-
-    joint: str
-    label: str
-    target_validated: bool
-    angle_delta_deg: float | None
-    direction: str | None
-
-
-class PoseFeedback(StrictModel):
-    analysis_status: AnalysisStatus
-    reason_code: str | None
-    similarity_score: float | None
-    correction_mode: str | None
-    corrections: list[PoseCorrection]
-
-
 class EngineFeedback(StrictModel):
     """`coating_feedback`·`sequence_feedback`의 자리.
 
@@ -113,11 +94,15 @@ class EngineFeedback(StrictModel):
 
 
 class TelemetrySequenceData(StrictModel):
-    """계약 §7.3의 12키와 정확히 같다. 필드를 더하지 않는다 — SIM이 받는 모양은 계약이 정한다.
+    """시퀀스를 데이터베이스에 올린 결과.
+
+    **자세는 여기 없다.** 명세서 p.4는 텔레메트리에 "도막 두께 및 궤적 평가"를 걸고
+    자세는 걸지 않는다. 자세 유사도 비교는 `POST /api/v1/copilot/query`의 `pose_recomm`이
+    `context`로 시퀀스를 가리켜 수행한다(p.9). 이 모델의 이전 판이 `pose_feedback`을
+    실은 것은 틀렸다.
 
     프레임 하위의 미지 키는 응답이 아니라 **요청당 WARNING 로그 1건**으로 보고한다.
-    엔진 장애는 `pose_feedback.reason_code`가, 본문 충돌은 `sequence_data_ack`의
-    `stored=false, duplicate=false` 조합이 이미 구별해 준다.
+    본문 충돌은 `sequence_data_ack`의 `stored=false, duplicate=false` 조합이 구별해 준다.
     """
 
     request_id: str
@@ -130,7 +115,6 @@ class TelemetrySequenceData(StrictModel):
     sequence_data_ack: SequenceDataAck
     coating_feedback: EngineFeedback
     sequence_feedback: EngineFeedback
-    pose_feedback: PoseFeedback
     text_guide: str | None
 
 

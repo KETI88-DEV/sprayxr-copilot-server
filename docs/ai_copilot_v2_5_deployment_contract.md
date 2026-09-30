@@ -354,6 +354,31 @@ Trigger ON→OFF 한 번을 하나의 시퀀스로 정의한다. 프레임은 �
 
 ### 7.4 구현 메모 (2026-09-30)
 
+**자세는 텔레메트리에서 채점하지 않는다 (정정).** 대화형 명세서가 두 곳을 나눈다.
+
+| | 명세서 | 우리 구현 |
+|---|---|---|
+| `POST /telemetry/sequence` (p.4) | "수신과 동시에 **도막 두께 및 궤적 평가**가 실행되며, 이상 탐지 시 SSE Push" | 시퀀스를 **데이터베이스에 올린다**. 도막·궤적 엔진은 미구현이므로 `not_available`. SSE 발행도 아직 없다 |
+| `POST /copilot/query` + `pose_recomm` (p.9) | "**전문가 작업 자세 유사도 비교**" | **자세를 여기서 채점한다.** 대상은 `context`(예: `SEQ-012`)가 가리키는 시퀀스, 없으면 그 `session_id`의 가장 최근 시퀀스 |
+
+이 문서의 이전 판이 `telemetry/sequence` 응답에 `pose_feedback`을 실은 것은 틀렸다. 응답에서 제거했고 `data`는 11키다.
+
+**그래서 시퀀스 본문을 보관한다.** 해시만 남기면 나중에 `pose_recomm`이 채점할 대상이 없다. `sequences` 표에 `body` 열을 두고 `context`·최근 시퀀스로 찾는다.
+
+**대상을 찾지 못하면 200 + 안정적인 `reason_code`다** — 점수를 지어내지 않는다.
+
+| `reason_code` | 뜻 |
+|---|---|
+| `session_id_missing` | 어느 세션을 채점할지 알 수 없다 |
+| `no_sequence_for_session` | 그 세션에 올라온 시퀀스가 없다 |
+| `sequence_not_found` | `context`가 가리킨 시퀀스가 없다 |
+| `engine_unavailable` | MCP 자세 엔진 장애. MCP는 오류도 HTTP 200으로 답하므로 `status` 필드가 성공을 결정한다 |
+| 그 외 | 게이트 자신의 이유를 그대로 전달한다(예: `skeleton_joint_frozen`) |
+
+**`/copilot/query`의 선택 필드 (p.9).** `request_id`와 `use_rag`는 **선택**이고 `use_rag` 기본값은 `Y`다. 이전 판은 둘을 필수로 두었다. 응답의 `request_id`도 널이 될 수 있다.
+
+
+
 `trainer/demo_api/telemetry_router.py`. **응답 `data`는 §7.3의 12키와 정확히 같다** — 필드를 더하지 않는다. 시험이 키 집합을 단언하므로 하나라도 늘면 실패한다.
 
 **`analysis_status`·`reason_code`를 세 feedback에 같은 방법으로 넣는다.** §7.3 말미가 "판정할 데이터가 부족하면 임의 값을 만들지 않고 `analysis_status="not_available"`과 안정적인 `reason_code`를 반환한다"고 규정하므로, `pose_feedback`만이 아니라 `coating_feedback`·`sequence_feedback`도 같은 두 필드로 상태를 말한다. 엔진 미구현은 `reason_code: "engine_not_implemented"`다.

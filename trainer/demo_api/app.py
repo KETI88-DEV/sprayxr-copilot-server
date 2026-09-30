@@ -136,13 +136,17 @@ def create_app(
     app.include_router(create_monitor_router(recorder), include_in_schema=False)
     # knowledge_search shares the live pipeline singleton; resolved per call so it is built once, lazily.
     app.include_router(
-        create_copilot_router((lambda: chat_service_mod._get_or_build_pipeline()) if live else None)
+        create_copilot_router(
+            (lambda: chat_service_mod._get_or_build_pipeline()) if live else None,
+            mcp_base_url=mcp_base_url,
+        )
     )
     # 명세서 15개 중 12개: 세션·사용자·리포트·이상 알림 SSE·테스트.
     app.include_router(create_v1_router())
-    # POST /api/v1/telemetry/sequence: 자세는 MCP로 위임하고, 미구현 엔진은 not_available 이다.
+    # POST /api/v1/telemetry/sequence: 시퀀스를 데이터베이스에 올린다. 자세 채점은
+    # copilot/query 의 pose_recomm 이 한다(명세서 p.4 vs p.9).
     # recorder 를 함께 준다 — v2.5 요청·응답이 /api/monitor/{events,stream} 에 보인다.
-    app.include_router(create_telemetry_router(mcp_base_url=mcp_base_url, recorder=recorder))
+    app.include_router(create_telemetry_router(recorder=recorder))
     install_copilot_error_handlers(app)
 
     return app

@@ -20,31 +20,15 @@ from trainer.demo_api.telemetry_router import (
 
 URL = TELEMETRY_SEQUENCE_PATH
 # 계약 §7.3 의 12키와 정확히 같아야 한다. 한 개라도 더하거나 빼면 이 시험이 실패한다.
+# 자세는 여기 없다 — copilot/query 의 pose_recomm 이 채점한다(명세서 p.4 vs p.9).
 _DATA_KEYS = {
     "request_id", "session_id", "user_id", "scenario_id", "sequence_id",
     "generated_at", "latency_ms", "sequence_data_ack",
-    "coating_feedback", "sequence_feedback", "pose_feedback", "text_guide",
+    "coating_feedback", "sequence_feedback", "text_guide",
 }
 
 # 실물 샘플의 관절 표기: 소문자 키에 [x,y,z] 배열. 계약 예시의 {pos, rot} 형태도 받는다.
 _JOINTS = {"pelvis": [0.3716, 3.8185, 0.4379], "lefthand": [0.5772, 3.6674, 0.7986]}
-
-_MCP_RESULT: dict[str, Any] = {
-    "analysis_status": "available",
-    "reason_code": None,
-    "similarity_score": 0.5296,
-    "correction_mode": "joint_only",
-    "summary": "숙련자 팔 자세 대비 유사도 53% — 왼쪽 손목이 31 cm 멀리 있었습니다.",
-    "corrections": [
-        {
-            "joint": "LeftHand", "label": "왼쪽 손목",
-            "correction_text": "왼쪽 손목이 숙련자 평균보다 31 cm 멀리 있었습니다.",
-            "severity": "medium", "angle_delta_deg": None, "direction": None,
-            "evidence": {"sigma": 2.561},
-            "target": {"requires_ik": True, "per_frame": [{"index": 0}]},
-        }
-    ],
-}
 
 
 def _frame(index: int = 1, **extra: Any) -> dict[str, Any]:
@@ -75,17 +59,11 @@ def _body(**over: Any) -> dict[str, Any]:
     return body
 
 
-def _client(mcp: Any = None, *, store: SequenceStore | None = None) -> TestClient:
-    def _ok(_request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"status": "success", "result": dict(_MCP_RESULT), "error": None})
-
+def _client(_unused: Any = None, *, store: SequenceStore | None = None) -> TestClient:
+    """자세는 여기서 채점하지 않으므로 MCP 트랜스포트가 필요 없다(명세서 p.4)."""
     app = FastAPI()
     app.include_router(
-        create_telemetry_router(
-            store=store if store is not None else SequenceStore(":memory:"),
-            mcp_base_url="http://mcp.test:8100",
-            transport=httpx.MockTransport(mcp or _ok),
-        )
+        create_telemetry_router(store=store if store is not None else SequenceStore(":memory:"))
     )
     install_copilot_error_handlers(app)
     return TestClient(app)
@@ -116,7 +94,6 @@ def test_same_body_twice_is_a_duplicate_and_counts_no_frames() -> None:
         "stored": False, "duplicate": True, "frames_received": 1, "frames_accepted": 0,
     }
     # 두 번째는 다시 채점하지 않는다 — 같은 시퀀스를 두 번 누적하면 안 된다.
-    assert second["pose_feedback"]["reason_code"] == "duplicate_sequence"
 
 
 def test_analyze_sequence_is_its_own_endpoint_and_takes_mode_id() -> None:
@@ -221,42 +198,6 @@ def test_both_joint_shapes_are_accepted(joints: dict[str, Any]) -> None:
 # --- 자세 위임 ------------------------------------------------------------
 
 
-def test_pose_feedback_projects_only_the_contract_fields() -> None:
-    """Given an engine result, When projected, Then internal evidence stays internal."""
-    data = _client().post(URL, json=_body()).json()["data"]
-    pose = data["pose_feedback"]
-
-    assert pose["analysis_status"] == "available"
-    assert pose["similarity_score"] == 0.5296
-    assert pose["correction_mode"] == "joint_only"
-    assert pose["corrections"] == [
-        {
-            "joint": "LeftHand",
-            "label": "왼쪽 손목이 숙련자 평균보다 31 cm 멀리 있었습니다.",
-            "target_validated": True,
-            "angle_delta_deg": None,
-            "direction": None,
-        }
-    ]
-    assert "evidence" not in json.dumps(pose)
-    assert "per_frame" not in json.dumps(pose)
-    assert data["text_guide"] == _MCP_RESULT["summary"]
-
-
-def test_empty_per_frame_means_the_target_is_not_validated() -> None:
-    """Given a correction with no coordinates, When projected, Then it is not called validated.
-
-    적용할 좌표가 없으면 교정은 말뿐이다.
-    """
-    result = dict(_MCP_RESULT)
-    result["corrections"] = [{"joint": "LeftHand", "label": "왼쪽 손목", "target": {"per_frame": []}}]
-
-    def _handler(_request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"status": "success", "result": result})
-
-    data = _client(_handler).post(URL, json=_body()).json()["data"]
-
-    assert data["pose_feedback"]["corrections"][0]["target_validated"] is False
 
 
 @pytest.mark.parametrize(
@@ -275,32 +216,6 @@ def test_every_documented_required_field_is_required(missing: str) -> None:
     assert _client().post(URL, json=body).status_code == 422
 
 
-def test_no_frames_is_not_scored() -> None:
-    """Given an empty frame list, When posted, Then nothing is invented."""
-    data = _client().post(URL, json=_body(sequence_info=[])).json()["data"]
-
-    assert data["pose_feedback"]["reason_code"] == "no_frames"
-
-
-@pytest.mark.parametrize(
-    "handler",
-    [
-        lambda _r: httpx.Response(500, text="boom"),
-        lambda _r: httpx.Response(200, json={"status": "error", "error": {"code": "x"}, "result": None}),
-    ],
-    ids=["http-500", "mcp-error-envelope"],
-)
-def test_engine_failure_is_200_and_not_available(handler: Any) -> None:
-    """Given an engine fault, When posted, Then ingest still succeeds and pose says why.
-
-    MCP는 오류도 HTTP 200으로 답하므로 status 필드가 성공을 결정한다.
-    """
-    response = _client(handler).post(URL, json=_body())
-
-    assert response.status_code == 200
-    data = response.json()["data"]
-    assert data["sequence_data_ack"]["stored"] is True
-    assert data["pose_feedback"]["reason_code"] == "engine_unavailable"
 
 
 # --- 미구현 엔진 ----------------------------------------------------------
@@ -321,18 +236,9 @@ def _monitored() -> tuple[TestClient, Any]:
     from trainer.demo_api.monitor import MonitorRecorder
 
     recorder = MonitorRecorder()
-
-    def _ok(_request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"status": "success", "result": dict(_MCP_RESULT), "error": None})
-
     app = FastAPI()
     app.include_router(
-        create_telemetry_router(
-            store=SequenceStore(":memory:"),
-            mcp_base_url="http://mcp.test:8100",
-            transport=httpx.MockTransport(_ok),
-            recorder=recorder,
-        )
+        create_telemetry_router(store=SequenceStore(":memory:"), recorder=recorder)
     )
     install_copilot_error_handlers(app)
     return TestClient(app), recorder
@@ -359,28 +265,19 @@ def test_the_output_event_carries_the_response_body() -> None:
     assert output.payload["data"] == posted
 
 
-def test_the_input_event_precedes_the_stored_state() -> None:
-    """Given a failing engine, When posted, Then the input is still on the monitor.
+def test_a_conflicting_body_is_still_recorded_both_ways() -> None:
+    """Given a body conflict, When posted, Then the monitor shows input and output.
 
-    처리 전에 남기므로 이후 단계가 실패해도 무엇이 들어왔는지는 남는다.
+    처리 전에 입력을 남기므로 이후 단계 결과와 무관하게 무엇이 들어왔는지는 남는다.
     """
-    from trainer.demo_api.monitor import MonitorRecorder
+    client, recorder = _monitored()
+    _ = client.post(URL, json=_body())
 
-    recorder = MonitorRecorder()
-    app = FastAPI()
-    app.include_router(
-        create_telemetry_router(
-            store=SequenceStore(":memory:"),
-            mcp_base_url="http://mcp.test:8100",
-            transport=httpx.MockTransport(lambda _r: httpx.Response(500, text="boom")),
-            recorder=recorder,
-        )
-    )
-    _ = TestClient(app).post(URL, json=_body())
+    _ = client.post(URL, json=_body(sequence_info=[_frame(), _frame(2)]))
 
     events = recorder.snapshot(cursor=0, limit=50).events
-    assert len(events) == 2
-    assert events[1].payload["data"]["pose_feedback"]["reason_code"] == "engine_unavailable"
+    assert [(e.phase, e.direction) for e in events[2:]] == [("runtime", "input"), ("runtime", "output")]
+    assert events[3].payload["data"]["sequence_data_ack"]["stored"] is False
 
 
 def test_the_monitor_groups_by_session_id() -> None:
