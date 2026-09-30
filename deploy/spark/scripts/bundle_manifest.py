@@ -16,7 +16,7 @@
     output/indexes/{faiss.index,metadata.json}      rag_index  -> agent-api /output/indexes
     output/merged/qwen36_27b_shipcoat_v6_1_fp8/     model_fp8  -> vllm /models/shipcoat, agent-api 토크나이저
     output/merged/qwen36_27b_shipcoat_v6_1_bf16/    model_bf16 -> 롤백(선택)
-    output/expert_reference/                        mcp_pose_reference (선택)
+    output/expert_reference/expert_arm_reference.json  mcp_pose_reference -> mcp ARM_REFERENCE_PATH
     data/eval/                                      eval_set   -> FP8 품질 게이트(선택)
     config/                                         배포 때 생성(롤백 설정). 매니페스트 대상이 아니다.
 """
@@ -62,7 +62,9 @@ GROUPS: dict[str, tuple[str, tuple[str, ...]]] = {
     "embedding": ("models/bge-m3", ("config.json", "modules.json", "tokenizer.json", "model.safetensors", "1_Pooling/config.json")),
     "reranker": ("models/bge-reranker-v2-m3", ("config.json", "tokenizer.json", "model.safetensors")),
     "rag_index": ("output/indexes", ("faiss.index", "metadata.json")),
-    "mcp_pose_reference": ("output/expert_reference", ()),
+    # 팔 레퍼런스는 **필수**다. 이 그룹을 실으면서 이 파일을 빼면 MCP는 뜨지만 모든
+    # 시퀀스가 reference_data_missing이 된다 — 조용히 채점이 비는 것을 verify가 잡아야 한다.
+    "mcp_pose_reference": ("output/expert_reference", ("expert_arm_reference.json",)),
     "eval_set": ("data/eval", ()),
 }
 MODEL_GROUPS = {"fp8": "model_fp8", "bf16": "model_bf16"}

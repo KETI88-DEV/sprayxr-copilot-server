@@ -35,6 +35,9 @@ DEFAULT_HUB_CACHE = "/hf-cache/hub"
 DEFAULT_INDEX_DIR = "/output/indexes"
 # mcp_servers/pose_estimation.py DEFAULT_POSE_REFERENCE; compose.yaml POSE_REFERENCE_PATH
 DEFAULT_POSE_REFERENCE = "/output/expert_reference/expert_pose_reference.json"
+# mcp_servers/pose_estimation.py DEFAULT_ARM_REFERENCE; compose.yaml ARM_REFERENCE_PATH.
+# **채점이 실제로 읽는 파일이다** — 빠지면 모든 시퀀스가 reference_data_missing이다.
+DEFAULT_ARM_REFERENCE = "/output/expert_reference/expert_arm_reference.json"
 DEFAULT_EVAL_SET = "/data/eval/eval_set_agentic.jsonl"
 INDEX_FILES = ("faiss.index", "metadata.json")
 
@@ -124,6 +127,25 @@ def plan_dir(group: str, src_dir: Path, *, only: Sequence[str] | None = None) ->
     return items
 
 
+
+
+def plan_arm_reference(root: str, arm: Path) -> CopyItem:
+    """팔 레퍼런스 복사 항목. **없으면 실패한다.**
+
+    위 pose 파일과 달리 이것이 채점 경로의 **유일한 기준**이다. 빠진 채 배포하면
+    MCP는 정상으로 뜨고(헬스체크도 통과한다) 모든 시퀀스가 `reference_data_missing`이
+    된다 — 조용히 채점만 비는 실패다.
+
+    `build_plan` 안에 인라인으로 두면 앞 단계(모델 선택·HF 스냅샷·인덱스)를 모두
+    갖춰야 이 분기에 닿아 검사가 사실상 불가능하다. 그래서 떼어 둔다.
+    """
+    if not arm.is_file():
+        raise PrepareError(
+            f"arm_reference: {arm} not found — 이것이 없으면 모든 시퀀스가 "
+            "reference_data_missing이다. trainer/scripts/build_arm_reference.py로 굽는다."
+        )
+    return CopyItem("mcp_pose_reference", arm, f"{root}/expert_arm_reference.json")
+
 def build_plan(args: argparse.Namespace) -> tuple[list[CopyItem], dict[str, Any], list[str]]:
     items: list[CopyItem] = []
     sources: dict[str, Any] = {}
@@ -151,12 +173,16 @@ def build_plan(args: argparse.Namespace) -> tuple[list[CopyItem], dict[str, Any]
     items += plan_dir("rag_index", args.index_dir, only=INDEX_FILES)
     sources["rag_index"] = {"dir": str(args.index_dir), "files": list(INDEX_FILES)}
 
+    root = bm.GROUPS["mcp_pose_reference"][0]
     pose = args.pose_reference
     if pose.is_file():
-        items.append(CopyItem("mcp_pose_reference", pose, f"{bm.GROUPS['mcp_pose_reference'][0]}/expert_pose_reference.json"))
+        items.append(CopyItem("mcp_pose_reference", pose, f"{root}/expert_pose_reference.json"))
         sources["mcp_pose_reference"] = {"file": str(pose)}
     else:
         absent.append(f"mcp_pose_reference: {pose} not found (pose_estimation answers without a reference)")
+
+    items.append(plan_arm_reference(root, args.arm_reference))
+    sources["mcp_arm_reference"] = {"file": str(args.arm_reference)}
 
     if args.with_eval_set:
         if not args.eval_set.is_file():
@@ -220,6 +246,7 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser.add_argument("--reranker-repo", default="BAAI/bge-reranker-v2-m3")
     parser.add_argument("--index-dir", type=Path, default=Path(DEFAULT_INDEX_DIR))
     parser.add_argument("--pose-reference", type=Path, default=Path(DEFAULT_POSE_REFERENCE))
+    parser.add_argument("--arm-reference", type=Path, default=Path(DEFAULT_ARM_REFERENCE))
     parser.add_argument("--with-eval-set", action="store_true")
     parser.add_argument("--eval-set", type=Path, default=Path(DEFAULT_EVAL_SET))
     parser.add_argument("--link", action="store_true", help="hardlink when on the same filesystem")

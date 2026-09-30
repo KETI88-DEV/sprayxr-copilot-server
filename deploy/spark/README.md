@@ -73,10 +73,26 @@ docker exec -w /workspace ship-paint-trainer nice -n 19 ionice -c3 python3 deplo
   - 2026-09-15에 `HF_HUB_OFFLINE=1`, CPU로 확인했다. 생성된 디렉터리를 `search_index.load_embedder`와 `load_reranker`로 로드하고 encode/predict까지 성공했다.
 - **FP8 모델**: `fp8_manifest.json`의 `files_sha256`(78개)과 번들 해시를 대조한다. 하나라도 다르면 매니페스트를 쓰지 않는다. BF16은 `merge_manifest.json`의 `files`와 대조한다.
 - **RAG 인덱스**: `faiss.index`와 `metadata.json`만 넣는다(`*.bak_prerepair` 등은 제외). 2026-09-15 기준 `ntotal`은 10829다.
-- **MCP 기준 데이터**
-  - `mcp_servers`가 읽는 파일은 `pose_estimation`의 `POSE_REFERENCE_PATH`(기본 `/output/expert_reference/expert_pose_reference.json`) 하나다.
-  - **현재 A40 기본 경로에 이 파일이 없다.** 번들에서도 빠지고 `bundle_sources.json`의 `absent_optional`에 기록된다.
-  - 파일이 없으면 pose 비교는 기준을 추정하지 않고 None을 낸다. knowledge_search와는 무관하다.
+- **MCP 기준 데이터** — 파일이 둘이다.
+  - **`expert_arm_reference.json`(필수)**: `ARM_REFERENCE_PATH`(기본
+    `/output/expert_reference/expert_arm_reference.json`). **자세 채점·교정이 읽는 유일한
+    기준**이다. 없으면 MCP는 정상으로 뜨고 헬스체크도 통과하는데 **모든 시퀀스가
+    `reference_data_missing`** 이 된다 — 조용히 채점만 빈다. 그래서 `bundle_manifest.py
+    create`가 이 파일이 없으면 **매니페스트를 쓰지 않는다**(배포 직전이 아니라 번들 준비
+    시점에 막힌다). 굽는 법:
+
+    ```bash
+    docker exec -w /workspace -e PYTHONPATH=/workspace ship-paint-trainer \
+      python3 trainer/scripts/build_arm_reference.py \
+        --out /output/expert_reference/expert_arm_reference.json
+    ```
+
+    전수(479세션·64,098패스)가 약 30분이다. 파일 형태와 각 값이 만드는 판정은
+    `docs/arm_reference_artifact.md`. 2026-09-29 빌드는 467,325 B다.
+  - `expert_pose_reference.json`(선택): `POSE_REFERENCE_PATH`. 구 `/compare` 경로가 쓴다.
+    **현재 A40 기본 경로에 이 파일이 없고**, 번들에서도 빠지며 `bundle_sources.json`의
+    `absent_optional`에 기록된다. 없으면 그 경로가 기준을 추정하지 않고 None을 낸다.
+  - 둘 다 knowledge_search와는 무관하다.
 - **평가셋**: `--with-eval-set`을 주면 `data/eval/eval_set_agentic.jsonl`이 들어간다. §17 게이트에 필요하다.
 
 2026-09-15 실측 크기(`bundle_manifest.py create`, 101파일):
@@ -611,6 +627,8 @@ FP8로 돌아갈 때는 `.env`와 셸에 export한 `BUNDLE_DIR`를 원래 값으
 7. 통합 메모리 예산: `GPU_MEMORY_UTILIZATION=0.72`와 agent-api의 bge-m3·reranker(cuda), OS 사이의 여유. 헬스체크 `start_period`(vllm 1800s, agent-api 900s)가 충분한지.
 8. 모든 지연·처리량 수치(§7, §13, §15). 계획 D1의 값은 추정치다.
 9. vLLM #37431 이슈 본문(§16).
-10. MCP pose 기준 데이터 `expert_pose_reference.json`: A40 기본 경로에도 없다. 필요한 경우 생성 주체와 경로를 따로 정해야 한다.
+10. MCP 기준 데이터: `expert_arm_reference.json`은 이제 **필수**이고 A40에서 굽는다(§3).
+    구 `expert_pose_reference.json`은 A40 기본 경로에도 없다 — 구 `/compare` 경로만 쓰므로
+    필요한 경우 생성 주체와 경로를 따로 정해야 한다.
 11. arm64 vLLM 이미지 크기와 `docker save` 반입 시간.
 12. 배포 nginx 이미지(`1.29.4-alpine`)에서의 `nginx -t`. 같은 버전의 debian 이미지로만 검사했다.

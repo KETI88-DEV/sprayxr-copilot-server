@@ -182,7 +182,9 @@ def _feasibility(
     """
     parent = _parent_of(item.joint)
     if parent is None or not plan:
-        return {"requires_ik": False, "parent_joint": parent, "bone_break_m": None}
+        # **`None`이다. `False`가 아니다.** 부모가 없거나 계획이 비어 뼈가 깨지는지
+        # 계산하지 못했다는 뜻이고, `False`로 적으면 "확인했고 괜찮다"로 읽힌다.
+        return {"requires_ik": None, "parent_joint": parent, "bone_break_m": None}
     worst = 0.0
     rig = None
     for step in plan:
@@ -493,23 +495,30 @@ def _worst_phase_reference(
 def correction_plan(
     correction: arm_reference.Correction,
     frame_joints: Sequence[Mapping[str, Vec3]],
-    aligned: AlignResult,
+    aligned: AlignResult | None,
 ) -> list[dict[str, Any]]:
     """교정을 **프레임마다 월드 좌표로** 편다. 시뮬레이터가 그대로 쓰는 값이다.
 
-    `phase_span` 안의 위상에 대응하는 프레임만 낸다 — 스트로크 전체를 고치라는 것이
-    아니라 **벗어난 구간**을 고치라는 것이다.
+    정렬이 있으면 `phase_span` 안의 위상에 대응하는 프레임만 낸다 — 스트로크 전체를
+    고치라는 것이 아니라 **벗어난 구간**을 고치라는 것이다.
+
+    **정렬이 없으면(접기 채점) 시퀀스 전체가 대상이다.** 접기는 시퀀스를 한 점으로
+    줄여 재므로 "어느 구간"이라는 정보가 없다. 그때 계획을 비워 두면 시뮬레이터가
+    적용할 좌표가 없어 교정이 말뿐이 된다 — 실물 SEQ-002가 그 경우였다.
     """
     target = correction.target
-    if target is None or not aligned.ok:
+    if target is None:
         return []
-    low, high = correction.phase_span or (0.0, 1.0)
-    phases = max(aligned.phases, 1)
-    wanted = {
-        frame_index
-        for frame_index, phase in aligned.phase_of
-        if low <= phase / phases < high or (high >= 1.0 and phase == phases - 1)
-    }
+    if aligned is None or not aligned.ok:
+        wanted = set(range(len(frame_joints)))
+    else:
+        low, high = correction.phase_span or (0.0, 1.0)
+        phases = max(aligned.phases, 1)
+        wanted = {
+            frame_index
+            for frame_index, phase in aligned.phase_of
+            if low <= phase / phases < high or (high >= 1.0 and phase == phases - 1)
+        }
     out: list[dict[str, Any]] = []
     for frame_index in sorted(wanted):
         if frame_index >= len(frame_joints):

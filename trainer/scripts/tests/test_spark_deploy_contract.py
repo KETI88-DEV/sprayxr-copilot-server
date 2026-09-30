@@ -9,6 +9,7 @@ from __future__ import annotations
 import functools
 import importlib.util
 import json
+import argparse
 import re
 import shutil
 import subprocess
@@ -243,6 +244,66 @@ def test_mcp_pose_reference_path_is_mounted_and_matches_the_code_default() -> No
     path = env[pose_estimation.POSE_REFERENCE_ENV]
     assert path == pose_estimation.DEFAULT_POSE_REFERENCE
     assert any(path.startswith(dst + "/") for _src, dst in _volumes("mcp", _env()))
+
+
+def test_mcp_arm_reference_path_is_mounted_and_matches_the_code_default() -> None:
+    """팔 레퍼런스는 **채점 경로의 유일한 기준**이다.
+
+    경로가 어긋나거나 마운트에 없으면 MCP는 정상으로 뜨고 **모든 시퀀스가
+    `reference_data_missing`** 이 된다 — 서비스가 살아 있으니 헬스체크도 통과한다.
+    조용히 채점만 비는 실패라 계약으로 묶는다.
+    """
+    from mcp_servers import pose_estimation
+
+    env = _service_env("mcp", _env())
+    path = env[pose_estimation.ARM_REFERENCE_ENV]
+    assert path == pose_estimation.DEFAULT_ARM_REFERENCE
+    assert any(path.startswith(dst + "/") for _src, dst in _volumes("mcp", _env()))
+
+
+def test_the_bundle_requires_the_arm_reference_file() -> None:
+    """번들에 이 파일이 없으면 `verify`가 실패해야 한다.
+
+    `mcp_pose_reference` 그룹이 필수 파일 없이 선택이었을 때는, 디렉터리만 있고
+    아티팩트가 없는 번들도 통과했다. 그러면 배포가 조용히 채점 없이 뜬다.
+
+    깨뜨리는 법: `GROUPS["mcp_pose_reference"]`의 필수 파일 목록을 비우면 실패한다.
+    """
+    from mcp_servers import pose_estimation
+
+    manifest = _load_script("bundle_manifest")
+    root, required = manifest.GROUPS["mcp_pose_reference"]
+    assert "expert_arm_reference.json" in required
+    # 번들 상대 경로가 컨테이너 경로와 1:1이어야 마운트가 맞는다.
+    assert pose_estimation.DEFAULT_ARM_REFERENCE.endswith(f"/{root}/expert_arm_reference.json".replace("//", "/")) or \
+        pose_estimation.DEFAULT_ARM_REFERENCE == f"/{root}/expert_arm_reference.json"
+
+
+def test_prepare_bundle_refuses_to_build_without_the_arm_reference(tmp_path: Path) -> None:
+    """빠진 채로 번들을 만들 수 있으면 배포 직전까지 아무도 모른다.
+
+    `prepare_bundle`의 기본 경로가 코드 상수와 같은지도 함께 본다 — 갈리면
+    번들에는 있고 컨테이너는 다른 곳을 보게 된다.
+    """
+    from mcp_servers import pose_estimation
+
+    prepare = _load_script("prepare_bundle")
+    assert prepare.DEFAULT_ARM_REFERENCE == pose_estimation.DEFAULT_ARM_REFERENCE
+
+    # 소스 문자열을 훑지 않고 **실제로 부른다.** 문자열 검사는 `raise`를
+    # `absent.append`로 바꿔도 통과했다(돌연변이가 살아남았다).
+    root = _load_script("bundle_manifest").GROUPS["mcp_pose_reference"][0]
+    with pytest.raises(prepare.PrepareError) as raised:
+        prepare.plan_arm_reference(root, tmp_path / "missing-arm.json")
+    assert "arm_reference" in str(raised.value)
+    assert "reference_data_missing" in str(raised.value), "왜 치명적인지가 메시지에 없다"
+
+    present = tmp_path / "expert_arm_reference.json"
+    present.write_text("{}", encoding="utf-8")
+    item = prepare.plan_arm_reference(root, present)
+    assert item.group == "mcp_pose_reference"
+    # 번들 상대 경로가 컨테이너 경로와 1:1이어야 마운트가 맞는다.
+    assert pose_estimation.DEFAULT_ARM_REFERENCE == f"/{item.dst_rel}"
 
 
 def test_nginx_proxies_api_to_agent_api_without_buffering() -> None:

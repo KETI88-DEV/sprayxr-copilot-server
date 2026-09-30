@@ -556,3 +556,67 @@ def test_the_summary_never_contradicts_the_fields(client, monkeypatch, tmp_path)
     assert quoted[:-1] in summary, (
         f"요약이 교정 문장을 인용하지 않고 따로 적었다\n  교정: {quoted}\n  요약: {summary}"
     )
+
+
+def test_fold_scoring_still_gives_the_simulator_coordinates(
+    client, monkeypatch, tmp_path
+) -> None:
+    """**접기 채점에도 적용할 좌표가 있어야 한다.**
+
+    실물 SEQ-002는 건을 고정해 정렬이 불가능하고 `scoring_mode: "fold"`로 간다.
+    그 경로에서 `target.per_frame`이 비어 있었다 — 시뮬레이터가 적용할 것이 없어
+    교정이 말뿐이었다. 접기는 "어느 구간"을 모르므로 **시퀀스 전체**가 대상이다.
+
+    깨뜨리는 법: 접기 경로에서 `plans`를 빈 튜플로 되돌리면 실패한다.
+    """
+    import importlib
+
+    stages_test = importlib.import_module("mcp_servers.test_pose_stages_route")
+    swept = stages_test._sweep(stages_test._sample_body("SEQ-002"))
+    stages_test._write_phase_reference(tmp_path, monkeypatch, swept)
+
+    frozen = json.loads(json.dumps(swept))
+    for frame in frozen["sequence_info"]:
+        frame["gun_metrics"]["raypoint"] = list(
+            swept["sequence_info"][0]["gun_metrics"]["raypoint"]
+        )
+        frame["tool_pos_rot"]["pos"] = list(swept["sequence_info"][0]["tool_pos_rot"]["pos"])
+        # 오른손을 크게 옮겨 교정이 반드시 나가게 한다.
+        frame["skeleton_joints"]["righthand"][2] += 0.7
+
+    result = _post(client, frozen)
+    assert result["scoring_mode"] == "fold"
+    assert result["corrections"], "교란을 넣었는데 교정이 없다"
+    target = result["corrections"][0]["target"]
+    assert target["per_frame"], "접기 경로에서 적용할 좌표가 비었다"
+    assert len(target["per_frame"]) == len(frozen["sequence_info"]), (
+        "접기는 구간을 모르므로 전 프레임이 대상이어야 한다"
+    )
+    for step in target["per_frame"]:
+        assert step["target"] != step["current"], "옮기라는 좌표가 현재와 같다"
+        assert "parent" in step, "IK를 풀 부모 좌표가 없다"
+
+
+def test_an_uncomputed_feasibility_is_null_not_false(client, monkeypatch, tmp_path) -> None:
+    """**모르는 것을 `False`로 적지 않는다.**
+
+    `requires_ik: false`는 "확인했고 뼈가 안 깨진다"로 읽힌다. 계획이 비어 계산조차
+    못 했을 때 그렇게 적으면 시뮬레이터가 그대로 대입하고 골격이 깨진다.
+
+    깨뜨리는 법: `_feasibility`의 이른 반환을 `False`로 되돌리면 실패한다.
+    """
+    from trainer.scripts import arm_reference, pose_stages
+
+    item = arm_reference.Correction(
+        joint="LeftHand", label="왼쪽 손목", severity="medium", sigma=2.3,
+        distance_m=0.6, axis_sigmas=(0.0, 0.0, 0.0), expected_gain=0.05,
+    )
+    blank = pose_stages._feasibility(item, [])
+    assert blank["requires_ik"] is None, "계산하지 못한 것을 False로 적었다"
+    assert blank["bone_break_m"] is None
+
+    orphan = arm_reference.Correction(
+        joint="Pelvis", label="골반", severity="low", sigma=1.0,
+        distance_m=0.1, axis_sigmas=(0.0, 0.0, 0.0), expected_gain=0.0,
+    )
+    assert pose_stages._feasibility(orphan, [{"index": 0}])["parent_joint"] is None

@@ -693,7 +693,10 @@ def analyze_sequence(payload: SequenceRequest) -> MCPResponse:
         corrections = arm_reference.build_corrections(
             sigmas, pose_similarity.JOINT_LABELS, support=support, reference=bucket.get("joints")
         )
-        plans = [() for _ in corrections]
+        # 접기 채점에도 계획을 낸다 — 정렬이 없으면 시퀀스 전체가 대상이다.
+        # 비워 두면 시뮬레이터가 적용할 좌표가 없어 교정이 말뿐이 된다.
+        world = [dict(frame.joints) for frame in frames]
+        plans = [tuple(pose_stages.correction_plan(item, world, None)) for item in corrections]
     percentile = (
         None if score is None else arm_reference.expert_percentile(bucket, score, mode=scoring_mode)
     )

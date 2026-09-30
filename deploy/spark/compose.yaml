@@ -83,6 +83,10 @@ services:
     environment:
       # 번들에 파일이 없으면 pose_estimation은 추정하지 않고 None을 낸다(현재 A40 기본 경로에도 없음).
       POSE_REFERENCE_PATH: /output/expert_reference/expert_pose_reference.json
+      # 팔 자세 채점·교정이 읽는 파일. **없으면 모든 시퀀스가 reference_data_missing이다** —
+      # 서비스는 뜨고 채점만 조용히 빈다. `bundle_manifest.py`가 이 파일을 필수로 본다.
+      # 형태는 docs/arm_reference_artifact.md.
+      ARM_REFERENCE_PATH: /output/expert_reference/expert_arm_reference.json
     volumes:
       - ${BUNDLE_DIR:?BUNDLE_DIR must point to the verified bundle}/output/expert_reference:/output/expert_reference:ro
     healthcheck:
