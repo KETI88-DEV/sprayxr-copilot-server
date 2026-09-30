@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 from trainer.demo_api.copilot_router import install_copilot_error_handlers
 from trainer.demo_api.sequence_store import SequenceStore
 from trainer.demo_api.telemetry_router import (
-    ANALYZE_SEQUENCE_ALIAS,
+    ANALYZE_SEQUENCE_PATH,
     TELEMETRY_SEQUENCE_PATH,
     create_telemetry_router,
 )
@@ -60,13 +60,16 @@ def _frame(index: int = 1, **extra: Any) -> dict[str, Any]:
 
 
 def _body(**over: Any) -> dict[str, Any]:
+    """명세서 p.5 의 최상위 8키. 전부 필수다."""
     body: dict[str, Any] = {
-        "sequence_id": "SEQ-002",
         "session_id": "1_1001642_1",
         "user_id": "1001642",
         "scenario_id": "1",
         "zone_id": "1",
+        "sequence_id": "SEQ-002",
+        "sequence_setting": {"tool_type": "spray_gun", "pressure": 150, "month": 9},
         "sequence_info": [_frame()],
+        "sequence_result": {"avg_speed_mms": 0.0, "avg_distance_mm": 372.06},
     }
     body.update(over)
     return body
@@ -116,18 +119,33 @@ def test_same_body_twice_is_a_duplicate_and_counts_no_frames() -> None:
     assert second["pose_feedback"]["reason_code"] == "duplicate_sequence"
 
 
-def test_alias_is_the_same_endpoint_and_the_second_send_is_a_duplicate() -> None:
-    """Given the vendor's off-contract path, When it repeats a body, Then the store identifies it.
+def test_analyze_sequence_is_its_own_endpoint_and_takes_mode_id() -> None:
+    """Given the spec's second endpoint, When posted, Then it accepts mode_id.
 
-    벤더 클라이언트는 같은 본문을 telemetry/sequence 와 copilot/analyze-sequence 로 각각 보낸다.
+    명세서 p.6-7: 궤적 비교·원포인트 레슨용 별개 엔드포인트이고 mode_id(1~10)가 더 붙는다.
+    같은 본문을 둘에 보내는 것이 설계이므로 두 번째 도착은 duplicate 다.
     """
     client = _client()
-    canonical = client.post(URL, json=_body()).json()["data"]
-    alias = client.post(ANALYZE_SEQUENCE_ALIAS, json=_body()).json()["data"]
+    first = client.post(URL, json=_body()).json()["data"]
+    second = client.post(ANALYZE_SEQUENCE_PATH, json=_body(mode_id=3)).json()["data"]
 
-    assert canonical["sequence_data_ack"]["stored"] is True
-    assert alias["sequence_data_ack"]["duplicate"] is True
-    assert set(alias) == _DATA_KEYS
+    assert first["sequence_data_ack"]["stored"] is True
+    assert second["sequence_data_ack"]["duplicate"] is True
+    assert set(second) == _DATA_KEYS
+
+
+@pytest.mark.parametrize("mode_id", [0, 11, "x"])
+def test_mode_id_outside_the_documented_range_is_rejected(mode_id: Any) -> None:
+    """Given a mode_id outside 1~10, When posted, Then it is 422."""
+    assert _client().post(ANALYZE_SEQUENCE_PATH, json=_body(mode_id=mode_id)).status_code == 422
+
+
+def test_telemetry_sequence_does_not_take_mode_id() -> None:
+    """Given mode_id on the telemetry path, When posted, Then it is rejected.
+
+    mode_id 는 analyze-sequence 에만 있다(명세서 p.5 vs p.7).
+    """
+    assert _client().post(URL, json=_body(mode_id=1)).status_code == 422
 
 
 def test_same_key_with_a_different_body_is_reported_not_overwritten() -> None:
@@ -241,20 +259,20 @@ def test_empty_per_frame_means_the_target_is_not_validated() -> None:
     assert data["pose_feedback"]["corrections"][0]["target_validated"] is False
 
 
-def test_missing_session_id_stores_but_does_not_score() -> None:
-    """Given no session_id, When posted, Then it is stored and pose says why it was skipped.
+@pytest.mark.parametrize(
+    "missing",
+    ["session_id", "user_id", "scenario_id", "zone_id", "sequence_id",
+     "sequence_setting", "sequence_info", "sequence_result"],
+)
+def test_every_documented_required_field_is_required(missing: str) -> None:
+    """Given a missing required field, When posted, Then it is 422.
 
-    없는 세션을 지어내면 자세 누적이 엉뚱한 곳에 쌓인다.
+    명세서 p.5 가 최상위 8키를 모두 `(필수)`로 적는다.
     """
     body = _body()
-    del body["session_id"]
+    del body[missing]
 
-    data = _client().post(URL, json=body).json()["data"]
-
-    assert data["sequence_data_ack"]["stored"] is True
-    assert data["session_id"] is None
-    assert data["pose_feedback"]["reason_code"] == "session_id_missing"
-    assert data["pose_feedback"]["analysis_status"] == "not_available"
+    assert _client().post(URL, json=body).status_code == 422
 
 
 def test_no_frames_is_not_scored() -> None:
@@ -365,15 +383,13 @@ def test_the_input_event_precedes_the_stored_state() -> None:
     assert events[1].payload["data"]["pose_feedback"]["reason_code"] == "engine_unavailable"
 
 
-def test_unattributed_sequence_is_still_visible_on_the_monitor() -> None:
-    """Given no session_id, When posted, Then the monitor still shows the exchange."""
+def test_the_monitor_groups_by_session_id() -> None:
+    """Given a sequence, When recorded, Then both events carry its session."""
     client, recorder = _monitored()
-    body = _body()
-    del body["session_id"]
 
-    _ = client.post(URL, json=body)
+    _ = client.post(URL, json=_body())
 
-    assert {e.session_id for e in recorder.snapshot(cursor=0, limit=50).events} == {"(unattributed)"}
+    assert {e.session_id for e in recorder.snapshot(cursor=0, limit=50).events} == {"1_1001642_1"}
 
 
 def test_no_recorder_means_no_recording_and_no_failure() -> None:

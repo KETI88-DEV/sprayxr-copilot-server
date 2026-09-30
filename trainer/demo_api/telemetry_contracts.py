@@ -1,8 +1,18 @@
-"""v2.5 `POST /api/v1/telemetry/sequence` 계약 (PDF p.8 "시퀀스 전송", 계약 §7).
+"""v2.5 시퀀스 전송·분석 요청 계약.
 
-정본 경로는 `telemetry/sequence`다. 벤더 클라이언트가 함께 보내는
-`/copilot/analyze-sequence`는 계약에 없고 본문 sha256이 동일한 중복 전송이므로
-(`docs/sprayxr_v25_sample_delta_2026-09-28.md` B18) 멱등 별칭으로만 받는다.
+**정본은 `docs/XR Painting Simulator AI Co-Pilot Service API 정의서 - 대화형 API 명세서.pdf`**
+(76쪽, 엔드포인트 15개)다. `docs/260813 도장 SIM 회의자료(...v2.5).pdf`와 다르면 이쪽을
+따른다 — 260813은 엔드포인트 8개만 싣고 있고 필드 이름도 다르다(`pressure_bar` vs
+`pressure`).
+
+두 엔드포인트는 **별개**다. 같은 본문을 둘에 보내는 것이 설계다.
+
+* `POST /api/v1/telemetry/sequence` (p.4-5): 90 FPS 센서 배치 전송 + 도막·궤적 평가
+* `POST /api/v1/copilot/analyze-sequence` (p.6-7): 1회 패스 3D Ray Point 궤적 비교 +
+  원포인트 레슨. 본문에 `mode_id`(선택, 1~10, 기본 1)가 더 붙는다
+
+이 문서의 이전 판이 `analyze-sequence`를 "계약에 없는 벤더 중복 전송"이라 적고 멱등
+별칭으로 취급한 것은 **틀렸다**. 근거로 삼은 260813에 그 항목이 없었을 뿐이다.
 
 엄격성은 계층으로 나눈다(설계 `2026-09-29-sprayxr-runtime-alignment-design.md` §2.2).
 최상위는 `forbid` — 오타가 조용히 무시되면 엉뚱한 세션에 쓴다. 프레임 하위는 `allow` —
@@ -38,20 +48,29 @@ class SequenceFrameIn(BaseModel):
 
 
 class TelemetrySequenceRequest(StrictModel):
-    """계약 §7.1의 최상위 8키. `level`·`floor_height_m`는 벤더가 보내지 않으므로 받지 않고
-    서버가 `scenario_id`에서 유도한다.
+    """명세서 p.5의 최상위 8키. **여덟 개 모두 필수다.**
 
-    `session_id` 부재를 422로 만들지 않는다(설계 §2.4). 귀속은 `sequence_data_ack`가 보고한다.
+    이 문서의 이전 판은 `sequence_id` 외 전부를 선택으로 두었다. 명세서가 `(필수)`로
+    적고 있으므로 맞춘다 — 빠진 필드는 422다. `level`·`floor_height_m`는 명세서에 없고
+    벤더도 보내지 않으므로 받지 않고 서버가 `scenario_id`에서 유도한다.
     """
 
+    session_id: Annotated[str, Field(min_length=1)]
+    user_id: Annotated[str, Field(min_length=1)]
+    scenario_id: Annotated[str, Field(min_length=1)]
+    # "1"~"39", 미지정·미판정은 "-1" (p.5)
+    zone_id: Annotated[str, Field(min_length=1)]
     sequence_id: Annotated[str, Field(min_length=1)]
-    session_id: str | None = None
-    user_id: str | None = None
-    scenario_id: str | None = None
-    zone_id: str | None = None
-    sequence_setting: dict[str, Any] | None = None
-    sequence_info: list[SequenceFrameIn] = Field(default_factory=list)
-    sequence_result: dict[str, Any] | None = None
+    sequence_setting: dict[str, Any]
+    sequence_info: list[SequenceFrameIn]
+    sequence_result: dict[str, Any]
+
+
+class AnalyzeSequenceRequest(TelemetrySequenceRequest):
+    """명세서 p.7. `telemetry/sequence`와 같은 8키에 `mode_id`가 더 붙는다."""
+
+    # 도장 작업 표준 모드 ID (1~10). 명세서는 기본값 1 이라고 적는다.
+    mode_id: Annotated[int, Field(ge=1, le=10)] = 1
 
 
 class SequenceDataAck(StrictModel):
@@ -102,9 +121,9 @@ class TelemetrySequenceData(StrictModel):
     """
 
     request_id: str
-    session_id: str | None
-    user_id: str | None
-    scenario_id: str | None
+    session_id: str
+    user_id: str
+    scenario_id: str
     sequence_id: str
     generated_at: str
     latency_ms: Annotated[int, Field(ge=0)]

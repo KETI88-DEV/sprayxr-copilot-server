@@ -158,7 +158,8 @@ def build_frame(
             "raypoint": [float(row[column]) for column in RAY_COLUMNS],
             "raytexmapnum": int(float(row["Ray Texture Map Number"])),
             "raytexuv": [float(row["Ray Texture UV X"]), float(row["Ray Texture UV Y"])],
-            "spraytime": round(seconds - span_start_sec, 3),
+            # 명세서 p.5: spraytime 은 누적 분사 시간(ms, integer)이다.
+            "spraytime": int(round((seconds - span_start_sec) * 1000)),
         },
     }
 
@@ -186,14 +187,16 @@ def build_payload(
         frames.append(frame)
         if len(frames) >= max_frames:
             break
+    # 명세서 p.5 의 최상위 8키는 전부 필수다. REPLAY- 접두로 재생분을 실물과 구별한다.
     payload = {
-        # REPLAY- 접두로 재생분을 실물과 구별한다.
         "session_id": session_id,
-        "sequence_id": sequence_id,
         "user_id": session_id.split("_")[0] if "_" in session_id else session_id,
         "scenario_id": "1",
         "zone_id": "1",
+        "sequence_id": sequence_id,
+        "sequence_setting": {"tool_type": "spray_gun", "month": 9},
         "sequence_info": frames,
+        "sequence_result": {},
     }
     return payload, skipped
 

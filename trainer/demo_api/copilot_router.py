@@ -121,7 +121,9 @@ def create_copilot_router(
     """``pipeline_provider`` returns the live pipeline singleton; ``None`` when live mode is off."""
     router = APIRouter()
 
-    @router.post(COPILOT_QUERY_PATH)
+    # response_model: Swagger 가 계약 응답을 그대로 보여주게 한다. JSONResponse 만 두면
+    # 요청 스키마는 나오는데 응답 스키마가 비어 SIM 이 무엇을 받는지 알 수 없다.
+    @router.post(COPILOT_QUERY_PATH, response_model=CopilotResponse)
     async def copilot_query(query: CopilotQueryRequest) -> JSONResponse:
         started = time.monotonic()
         if query.task_type != "knowledge_search":

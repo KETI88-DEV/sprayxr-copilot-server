@@ -82,7 +82,8 @@ def create_app(
         allow_headers=["*"],
     )
 
-    @app.get("/api/health")
+    # 계약 밖. Swagger 는 계약 15개만 보여야 한다 — demo-ui 와 compose 헬스체크가 쓰므로 라우트는 남긴다.
+    @app.get("/api/health", include_in_schema=False)
     def health() -> dict[str, object]:
         return {
             "status": "ok",
@@ -90,7 +91,7 @@ def create_app(
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
-    @app.get("/api/ready")
+    @app.get("/api/ready", include_in_schema=False)
     async def ready() -> JSONResponse:
         body: dict[str, object] = {"ready": True, "mode": "live" if live else "demo", "checks": {}}
         if live:
@@ -103,7 +104,7 @@ def create_app(
         body["timestamp"] = datetime.now(timezone.utc).isoformat()
         return JSONResponse(status_code=200 if body["ready"] else 503, content=body)
 
-    @app.get("/api/sequence/{level_id}")
+    @app.get("/api/sequence/{level_id}", include_in_schema=False)
     def sequence(level_id: str) -> dict[str, object]:
         if _LEVEL_ID_PATTERN.fullmatch(level_id) is None:
             raise HTTPException(status_code=400, detail="invalid level_id")
@@ -112,7 +113,7 @@ def create_app(
             return session_snapshot(state).model_dump(mode="json")
         return default_snapshot(level_id).model_dump(mode="json")
 
-    @app.post("/api/chat")
+    @app.post("/api/chat", include_in_schema=False)
     async def chat(request: ChatRequest) -> StreamingResponse:
         service = cast(ChatService, app.state.chat_service)
 
@@ -129,8 +130,9 @@ def create_app(
 
     app.state.monitor_recorder = recorder
     app.state.sim_session_store = store
-    app.include_router(create_simulator_router(recorder, store, resolver))
-    app.include_router(create_monitor_router(recorder))
+    # v2.5 이전 데모 인터페이스. 계약의 /sessions/*·/telemetry/sequence 가 대응한다.
+    app.include_router(create_simulator_router(recorder, store, resolver), include_in_schema=False)
+    app.include_router(create_monitor_router(recorder), include_in_schema=False)
     # knowledge_search shares the live pipeline singleton; resolved per call so it is built once, lazily.
     app.include_router(
         create_copilot_router((lambda: chat_service_mod._get_or_build_pipeline()) if live else None)

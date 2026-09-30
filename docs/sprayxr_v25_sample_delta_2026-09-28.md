@@ -57,7 +57,7 @@
 | B15 | `worker.handedness` | 없음 | 필수(205행) | 벤더 요청 + null 허용·`mirror_applied` 기록 |
 | B16 | `sessions/end` | `session_id,user_id,scenario_id,ended_at` | + `worker` | 계약에서 `worker` 삭제(start에 이미 있음) |
 | B17 | `sessions/complete` | `session_id` + `telemetry_csv`(gzip) + `height_map_image` | 13개 파트 | 11개 부재. 최소 `request_id`(멱등 키) 요청. `final_score`·`is_pass` 없으면 최종 점수 소유자 재정의 |
-| B18 | `/copilot/analyze-sequence` | 계약에 없음. `telemetry/sequence`와 본문 sha256 동일, 같은 시퀀스 2회 전송 | — | 통합 권고. 유지하려면 멱등 별칭으로 계약에 추가 |
+| B18 | ~~`/copilot/analyze-sequence` 계약에 없음~~ | **판단 철회(2026-09-30).** 대화형 API 명세서 p.6-7에 정식 정의돼 있다 — "1회 패스 3D Ray Point 궤적 비교 및 원포인트 레슨", 본문에 `mode_id`(1~10)가 더 붙는다. 같은 본문을 두 경로로 보내는 것이 **설계**다. 260813 회의자료에 그 항목이 없어서 벤더 결함으로 오독했다 | — | 별개 엔드포인트로 구현. 통합·별칭 권고 철회 |
 | B19 | `/api/v1` prefix | 샘플 경로에 없음 | 12행이 기준 경로로 규정 | 벤더 확인(base URL 포함 여부) |
 | B20 | `scenario_id` | `"1"`(학습모드 01 `[추정]`) | `TR-L01` | 벤더 값을 정본으로, `TR-L01`은 내부 설정 키로 매핑 |
 | B21 | 속도 목표 | notes "이동 시 400~520", 숙련자 CSV 실측 p50 2,111 mm/s | `targets.speed_mms 2800` | 세 값이 다르다. 기준(건 이동 vs 착탄점 이동)을 벤더와 확정 |
@@ -142,7 +142,7 @@
 12. 단위 확인: `pressure 324.0`(bar 추정), `viscosity 1142.23`(cP 추정), `thinning_ratio 8.0`(% 추정), `nozzle_size "519"`(에어리스 팁 코드 추정), `month`의 의미.
 13. `speed` 400~520과 우리 실측 2,111 mm/s의 차이는 건 이동속도와 착탄점 이동속도의 차이인가?
 14. `tool_pos_rot.rot`의 오일러 회전 순서와 손잡이 방향은? Unity `eulerAngles`와 같은가?
-15. `/copilot/analyze-sequence`의 의도는? `telemetry/sequence` 하나로 통합해도 되는가?
+15. ~~`/copilot/analyze-sequence`의 의도는?~~ **철회(2026-09-30)** — 대화형 명세서 p.6-7이 답한다. 궤적 비교·원포인트 레슨용 별개 엔드포인트이고 `mode_id`가 더 붙는다.
 16. `sessions/complete`에 `request_id`·`final_score`·`is_pass`를 추가할 수 있는가? 불가하면 최종 점수는 누가 소유하는가?
 17. SSE와 리포트 조회 2종을 SIM이 소비하는가? 실제 경로에 `/api/v1`이 붙는가?
 18. `scenario_id "1"`은 학습모드 01인가? 실전모드·자격검정의 코드 목록을 받을 수 있는가?

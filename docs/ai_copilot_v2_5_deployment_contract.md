@@ -371,7 +371,24 @@ Trigger ON→OFF 한 번을 하나의 시퀀스로 정의한다. 프레임은 �
 - `skeleton_joints`는 실물의 `{관절: [x,y,z]}`와 §7.1 예시의 `{관절: {pos, rot}}`를 모두 받는다. 검증은 통과시키고 해석은 엔진이 한다.
 - `session_id` 부재는 422가 아니다. 저장은 하고 자세 채점은 건너뛴다(`session_id_missing`). 없는 세션을 지어내면 자세 누적이 엉뚱한 곳에 쌓이고, 422로 버리면 텔레메트리가 사라진다.
 
-**`POST /api/v1/copilot/analyze-sequence`.** 계약에 없는 경로인데 벤더 클라이언트가 **같은 본문을 두 경로로** 보낸다(`docs/sprayxr_v25_sample_delta_2026-09-28.md` B18, 벤더 질의 15). 404를 주면 현장에서 실패하므로 멱등 별칭으로 받고 두 번째는 `duplicate`로 식별한다. **벤더 결함에 대한 수용책이며 계약에 추가하는 것이 아니다.** 회신이 오면 제거한다.
+**정본 문서가 바뀌었다 (2026-09-30).** `docs/XR Painting Simulator AI Co-Pilot Service API 정의서 - 대화형 API 명세서.pdf`(76쪽)가 정본이다. 이 문서와 다르면 그쪽을 따른다.
+
+| | 260813 회의자료 | 대화형 명세서 (정본) |
+|---|---|---|
+| 엔드포인트 수 | 8 | **15** |
+| `/copilot/analyze-sequence` | 없음 | **p.6-7에 정식 정의** |
+| `/users` 3종, `/test/sequence/*` 3종 | 없음 | 있음 |
+| `sequence_setting` 필드명 | `pressure_bar`, `nozzle_size_inch`, `viscosity_sec`, `flow_rate_ml_min` | **`pressure`, `nozzle_size`, `thinning_ratio`, `viscosity`, `flow_rate`, `month`** |
+| `spraytime` | `spraytime_ms` | **`spraytime` (integer ms)** |
+| 최상위 필수 | 명시 없음 | **8키 전부 `(필수)`** |
+
+**`POST /api/v1/copilot/analyze-sequence`는 별개 엔드포인트다.** 명세서 p.6-7: "1회 패스 3D Ray Point 궤적 비교 및 원포인트 레슨"이고 본문에 `mode_id`(선택, 1~10, 기본 1)가 더 붙는다. **이 문서의 이전 판이 "계약에 없는 벤더 중복 전송"이라 적고 멱등 별칭으로 취급한 것은 틀렸다** — 근거로 삼은 260813에 그 항목이 없었을 뿐이고, 같은 본문을 두 경로로 보내는 것이 설계다. 벤더 질의 15번도 철회한다.
+
+두 경로는 같은 시퀀스 기록을 공유한다. 중복 판정은 **시퀀스 내용**의 sha256으로 하며 `mode_id`는 분석 파라미터이므로 해시에서 뺀다 — 한쪽에만 붙는 값 때문에 중복 판정이 깨지면 안 된다. 궤적 비교(`sequence_analysis`)가 구현되면 분석 종류별로 갈라야 한다.
+
+**요청 필수 필드.** 최상위 8키(`session_id`, `user_id`, `scenario_id`, `zone_id`, `sequence_id`, `sequence_setting`, `sequence_info`, `sequence_result`)가 모두 필수다. 빠지면 422다. 이 문서의 이전 판은 `sequence_id` 외 전부를 선택으로 두었는데 명세서에 맞춰 고쳤다.
+
+**Swagger 표면.** 계약 밖 경로(`/api/sim/*`, `/api/chat`, `/api/monitor/*`, `/api/sequence/{level_id}`, `/api/health`, `/api/ready`)는 `include_in_schema=False`로 `/docs`에서 감춘다. 라우트는 demo-ui와 compose 헬스체크가 쓰므로 남긴다. 코드 제거는 계획 E8(제품 UI 신설) 다음이다.
 
 **상태 저장소.** SQLite(계획 E7), 경로는 `SEQUENCE_DB_PATH`. 기본값은 agent-api가 쓸 수 있는 유일한 마운트 아래이며 전용 `STATE_DIR` 볼륨이 제 자리다(후속). 경로를 쓸 수 없으면 메모리로 내려가고 수신은 계속된다.
 

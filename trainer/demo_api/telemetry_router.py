@@ -1,8 +1,16 @@
-"""`POST /api/v1/telemetry/sequence` (v2.5 계약 §7, PDF p.8 "시퀀스 전송").
+"""v2.5 시퀀스 엔드포인트 둘.
 
-정본 경로 하나와 멱등 별칭 하나를 등록한다. 별칭 `/api/v1/copilot/analyze-sequence`는
-계약에 없지만 벤더 클라이언트가 **같은 본문을 두 경로로** 보낸다(델타 B18). 404를 주면
-현장에서 실패하므로 받되, 저장소가 두 번째를 `duplicate`로 식별한다.
+정본은 `docs/XR Painting Simulator AI Co-Pilot Service API 정의서 - 대화형 API 명세서.pdf`다.
+
+* `POST /api/v1/telemetry/sequence` (p.4-5) — 90 FPS 배치 전송 + 도막·궤적 평가
+* `POST /api/v1/copilot/analyze-sequence` (p.6-7) — 1회 패스 궤적 비교 + 원포인트 레슨.
+  본문에 `mode_id`(선택 1~10)가 더 붙는다
+
+**둘은 별개 엔드포인트다.** 이 모듈의 이전 판이 뒤쪽을 "계약에 없는 벤더 중복 전송"으로
+보고 멱등 별칭으로 받은 것은 틀렸다 — 근거로 삼은 260813 PDF에 그 항목이 없었을 뿐이다.
+같은 본문을 둘에 보내는 것이 설계이므로, 저장소는 두 경로를 **서로 다른 시퀀스 기록**으로
+보지 않고 같은 키로 본다. 두 번째 도착은 `duplicate`가 되고 다시 채점하지 않는다 —
+궤적 비교(`sequence_analysis`)가 구현되면 그때 분석 종류별로 갈라야 한다.
 
 엔진 상태(계획 E1·E4·E5):
 * `pose_analysis`는 MCP `/pose_estimation/sequence`로 위임한다. E4는 결국 같은 엔진 모듈을
@@ -30,6 +38,7 @@ from fastapi.responses import JSONResponse
 from trainer.demo_api.monitor import MonitorRecorder
 from trainer.demo_api.sequence_store import SequenceStore
 from trainer.demo_api.telemetry_contracts import (
+    AnalyzeSequenceRequest,
     EngineFeedback,
     PoseCorrection,
     PoseFeedback,
@@ -42,8 +51,7 @@ from trainer.demo_api.telemetry_contracts import (
 logger = logging.getLogger(__name__)
 
 TELEMETRY_SEQUENCE_PATH: Final[str] = "/api/v1/telemetry/sequence"
-# 계약에 없는 벤더 중복 경로. 정본은 위쪽이다.
-ANALYZE_SEQUENCE_ALIAS: Final[str] = "/api/v1/copilot/analyze-sequence"
+ANALYZE_SEQUENCE_PATH: Final[str] = "/api/v1/copilot/analyze-sequence"
 
 _SUCCESS_MESSAGE: Final[str] = "Sequence evaluated"
 _MCP_TIMEOUT_SEC: Final[float] = 10.0
@@ -57,9 +65,19 @@ def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+# 시퀀스 내용이 아니라 분석 파라미터인 필드. 해시에서 뺀다 — 같은 시퀀스를 두 경로로
+# 보낼 때 한쪽에만 붙는 값 때문에 중복 판정이 깨지면 안 된다.
+_NON_CONTENT_FIELDS: Final[frozenset[str]] = frozenset({"mode_id"})
+
+
 def _body_sha256(query: TelemetrySequenceRequest) -> str:
-    """정규화한 본문의 해시. 같은 시퀀스를 두 경로로 보내면 같은 값이 나온다."""
-    canonical = json.dumps(query.model_dump(mode="json"), sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    """시퀀스 **내용**의 해시. 같은 시퀀스를 두 경로로 보내면 같은 값이 나온다."""
+    content = {
+        key: value
+        for key, value in query.model_dump(mode="json").items()
+        if key not in _NON_CONTENT_FIELDS
+    }
+    canonical = json.dumps(content, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
@@ -165,6 +183,7 @@ def create_telemetry_router(
         return _project_pose(result), (str(summary) if summary else None), False
 
     async def _handle(query: TelemetrySequenceRequest) -> JSONResponse:
+        """두 엔드포인트가 같은 처리를 쓴다. 분석 종류별 분기는 엔진이 생기면 넣는다."""
         started = time.monotonic()
         monitor_session = query.session_id or _UNATTRIBUTED
         if recorder is not None:
@@ -181,10 +200,7 @@ def create_telemetry_router(
             )
         )
 
-        if query.session_id is None:
-            # 없는 세션을 지어내면 자세 누적이 엉뚱한 곳에 쌓인다. 저장은 하고 채점은 하지 않는다.
-            pose, text_guide, degraded = _unavailable("session_id_missing"), None, False
-        elif ack_record.duplicate:
+        if ack_record.duplicate:
             pose, text_guide, degraded = _unavailable("duplicate_sequence"), None, False
         elif frames_received == 0:
             pose, text_guide, degraded = _unavailable("no_frames"), None, False
@@ -245,6 +261,13 @@ def create_telemetry_router(
         )
         return JSONResponse(status_code=200, content=payload)
 
-    router.post(TELEMETRY_SEQUENCE_PATH)(_handle)
-    router.post(ANALYZE_SEQUENCE_ALIAS)(_handle)
+    @router.post(TELEMETRY_SEQUENCE_PATH, response_model=TelemetrySequenceResponse)
+    async def telemetry_sequence(query: TelemetrySequenceRequest) -> JSONResponse:
+        return await _handle(query)
+
+    @router.post(ANALYZE_SEQUENCE_PATH, response_model=TelemetrySequenceResponse)
+    async def analyze_sequence(query: AnalyzeSequenceRequest) -> JSONResponse:
+        # mode_id 는 궤적 비교가 구현되면 쓴다. 지금은 저장·에코만 한다.
+        return await _handle(query)
+
     return router
