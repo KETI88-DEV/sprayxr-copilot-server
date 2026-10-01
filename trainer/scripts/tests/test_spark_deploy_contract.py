@@ -397,13 +397,20 @@ def test_mcp_image_copy_list_is_enough_to_import_the_mcp_app(tmp_path: Path) -> 
     assert proc.returncode == 0, proc.stderr[-2000:]
 
 
-# agent-api 이미지의 import 스모크(Dockerfile 마지막 RUN)는 x86_64 개발 서버에서 빌드하지 않으므로
+# 이미지의 import 스모크(Dockerfile의 RUN python3 -c)는 x86_64 개발 서버에서 빌드하지 않으므로
 # lock에 빠진 의존성을 CI가 아니라 Spark 실물 빌드에서야 발견한다. 2026-09-30에 python-multipart가
-# 그렇게 빠졌다(/api/v1/sessions/complete 가 multipart/form-data 다). 여기서는 lock + torch 휠 폐포만
-# 담은 그림자 site-packages를 심볼릭 링크로 만들고 `-S`로 실제 site-packages를 끊어, 이미지에 설치될
-# 배포만 있는 환경에서 같은 import를 돌린다. 설치 여부 탐침(transformers의 find_spec("PIL") 등)이
-# 깨지지 않아야 하므로 meta_path에서 예외를 던지는 방식은 쓰지 않는다 — 모듈이 보이지 않아야 한다.
+# 그렇게 빠졌다(/api/v1/sessions/complete 가 multipart/form-data 다). 여기서는 lock(+ agent-api는
+# Dockerfile이 따로 설치하는 torch 휠 폐포)만 심볼릭 링크한 그림자 site-packages를 만들고 `-S`로
+# 실제 site-packages를 끊어, 이미지에 설치될 배포만 있는 환경에서 같은 import를 돌린다.
+# 차단은 "모듈이 보이지 않게" 해야 한다 — meta_path에서 예외를 던지면 transformers의
+# find_spec("PIL") 같은 설치 여부 탐침이 함께 깨져 없는 실패를 만든다.
 _SMOKE_IMPORT = re.compile(r'RUN python3 -c "((?:import|from) [^"]*)"')
+
+# 스테이지 -> (lock 파일, torch 휠을 따로 설치하는가)
+_IMAGE_STAGES = {
+    "mcp": (MCP_LOCK, False),
+    "agent-api": (AGENT_LOCK, True),
+}
 
 
 def _normalize_dist(name: str) -> str:
@@ -411,7 +418,7 @@ def _normalize_dist(name: str) -> str:
 
 
 def _torch_wheel_closure() -> set[str]:
-    """Dockerfile이 lock과 별도로 설치하는 torch 휠이 끌고 오는 배포 이름."""
+    """agent-api Dockerfile이 lock과 별도로 설치하는 torch 휠이 끌고 오는 배포 이름."""
     closure: set[str] = set()
     pending = ["torch"]
     while pending:
@@ -454,13 +461,24 @@ def _shadow_site_packages(allowed: set[str], root: Path) -> Path:
     return root
 
 
-def _run_agent_smoke(allowed: set[str], shadow_root: Path) -> subprocess.CompletedProcess[str]:
-    stage = AGENT_DOCKERFILE.read_text(encoding="utf-8").split("FROM base AS agent-api", 1)[1]
+def _stage_smoke_statements(stage_name: str) -> str:
+    text = AGENT_DOCKERFILE.read_text(encoding="utf-8")
+    stage = text.split(f"FROM base AS {stage_name}", 1)[1].split("\nFROM ", 1)[0]
     found = _SMOKE_IMPORT.search(stage)
-    assert found is not None, "agent-api 스테이지에서 import 스모크를 찾지 못했다"
+    assert found is not None, f"{stage_name} 스테이지에서 import 스모크를 찾지 못했다"
+    return found.group(1)
+
+
+def _allowed_dists(stage_name: str) -> set[str]:
+    lock_path, installs_torch = _IMAGE_STAGES[stage_name]
+    allowed = {_normalize_dist(name) for name in _lock(lock_path)}
+    return allowed | _torch_wheel_closure() if installs_torch else allowed
+
+
+def _run_image_smoke(stage_name: str, allowed: set[str], shadow_root: Path) -> subprocess.CompletedProcess[str]:
     shadow = _shadow_site_packages(allowed, shadow_root)
     return subprocess.run(
-        [sys.executable, "-S", "-c", found.group(1)],
+        [sys.executable, "-S", "-c", _stage_smoke_statements(stage_name)],
         cwd=REPO,
         env={**os.environ, "PYTHONPATH": f"{shadow}{os.pathsep}{REPO}"},
         capture_output=True,
@@ -470,31 +488,45 @@ def _run_agent_smoke(allowed: set[str], shadow_root: Path) -> subprocess.Complet
     )
 
 
-@pytest.fixture(name="agent_lock_allowed")
-def _agent_lock_allowed() -> set[str]:
-    try:
-        metadata.distribution("fastapi")
-        metadata.distribution("torch")
-    except metadata.PackageNotFoundError:
-        pytest.skip("not running in the provisioned container")
-    return {_normalize_dist(name) for name in _lock(AGENT_LOCK)} | _torch_wheel_closure()
+@pytest.fixture(name="provisioned_container")
+def _provisioned_container() -> None:
+    """그림자 경로는 설치본에서 링크하므로 컨테이너 밖에서는 돌 수 없다.
+
+    이 모듈의 다른 단언은 설치본과 무관하므로 모듈 전체를 건너뛰지는 않는다.
+    """
+    for name in ("fastapi", "torch"):
+        try:
+            metadata.distribution(name)
+        except metadata.PackageNotFoundError:
+            pytest.skip("not running in the provisioned container")
 
 
-def test_agent_lock_covers_every_import_the_image_smoke_performs(
-    agent_lock_allowed: set[str], tmp_path: Path
+@pytest.mark.parametrize("stage_name", sorted(_IMAGE_STAGES))
+def test_image_lock_covers_every_import_its_build_smoke_performs(
+    stage_name: str, tmp_path: Path, provisioned_container: None
 ) -> None:
-    proc = _run_agent_smoke(agent_lock_allowed, tmp_path / "shadow")
+    proc = _run_image_smoke(stage_name, _allowed_dists(stage_name), tmp_path / "shadow")
 
-    assert proc.returncode == 0, f"{proc.stdout[-1500:]}\n{proc.stderr[-3000:]}"
+    assert proc.returncode == 0, f"{stage_name}: {proc.stdout[-1500:]}\n{proc.stderr[-3000:]}"
 
 
-@pytest.mark.parametrize("dropped", ["python-multipart", "httpx", "faiss-cpu"])
-def test_agent_lock_smoke_fails_when_a_pinned_dependency_is_missing(
-    agent_lock_allowed: set[str], tmp_path: Path, dropped: str
+@pytest.mark.parametrize(
+    ("stage_name", "dropped"),
+    [
+        ("agent-api", "python-multipart"),
+        ("agent-api", "faiss-cpu"),
+        ("agent-api", "httpx"),
+        ("mcp", "fastapi"),
+        ("mcp", "pydantic"),
+    ],
+)
+def test_image_lock_smoke_fails_when_a_pinned_dependency_is_missing(
+    stage_name: str, dropped: str, tmp_path: Path, provisioned_container: None
 ) -> None:
     """위 단언이 실패할 수 있음을 보인다 — 그림자 경로가 실제로 차단한다는 대조군."""
-    assert dropped in agent_lock_allowed
+    allowed = _allowed_dists(stage_name)
+    assert dropped in allowed
 
-    proc = _run_agent_smoke(agent_lock_allowed - {dropped}, tmp_path / "shadow")
+    proc = _run_image_smoke(stage_name, allowed - {dropped}, tmp_path / "shadow")
 
-    assert proc.returncode != 0, f"{dropped} 없이도 import가 통과했다 — 그림자 경로가 차단하지 않는다"
+    assert proc.returncode != 0, f"{stage_name}: {dropped} 없이도 import가 통과했다 — 차단되지 않는다"
