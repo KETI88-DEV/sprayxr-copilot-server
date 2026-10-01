@@ -2082,3 +2082,30 @@ def test_side_by_side_stands_the_reference_across_the_shoulders() -> None:
 def test_arrangements_need_both_bodies() -> None:
     assert service.arrangements_block(None, {"Chest": [0, 0, 0]}, None) is None
     assert service.arrangements_block({"Chest": [0, 0, 0]}, {}, None) is None
+
+
+# --- 골반을 맞춘 기준(연두 층) -----------------------------------------------------------------
+
+
+def test_the_pelvis_layer_moves_the_reference_pelvis_onto_the_workers() -> None:
+    """옮긴 뒤 기준 골반이 작업자 골반과 **정확히** 겹친다. 다른 관절은 같은 벡터만큼 옮겨질 뿐이다.
+
+    깨뜨리는 법: 벡터 부호를 뒤집으면(기준 − 작업자) 골반이 두 배로 벌어져 실패한다.
+    """
+    query = {"Pelvis": [0.1, 0.9, 0.2], "RightHand": [0.5, 1.3, 0.6]}
+    reference = {"Pelvis": [0.4, 0.7, -0.1], "RightHand": [0.9, 1.0, 0.1]}
+    block = service.pelvis_alignment_block(query, reference)
+    assert block is not None
+    offset = block["offset"]
+    moved = [reference["Pelvis"][a] + offset[a] for a in range(3)]
+    assert moved == pytest.approx(query["Pelvis"], abs=1e-4)
+    hand = [reference["RightHand"][a] + offset[a] for a in range(3)]
+    # 손의 남은 차이 = 원래 손 차이 − 골반 차이. 골반을 맞춰도 손은 따로 논다.
+    assert hand != pytest.approx(query["RightHand"], abs=1e-3)
+    assert block["shift_display"] == "46.9 cm"  # √(0.3² + 0.2² + 0.3²)
+    assert "골반" in block["note"] and "분사 경로" in block["note"]
+
+
+def test_the_pelvis_layer_is_not_guessed_without_a_pelvis() -> None:
+    assert service.pelvis_alignment_block({"Chest": [0, 0, 0]}, {"Pelvis": [0, 0, 0]}) is None
+    assert service.pelvis_alignment_block(None, {"Pelvis": [0, 0, 0]}) is None

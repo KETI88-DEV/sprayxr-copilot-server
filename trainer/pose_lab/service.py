@@ -2119,6 +2119,11 @@ def view_block(
         "playback": playback_block(
             skeleton_result, reference_skeleton, hidden_joints=hidden_joints(fit, reference_fit)
         ),
+        # 골반을 맞춘 기준(연두 층) — 기준을 옮길 벡터.
+        "pelvis_alignment": pelvis_alignment_block(
+            query_layer_view.get("joints"),  # type: ignore[arg-type]
+            reference_layer_view.get("joints"),  # type: ignore[arg-type]
+        ),
         # 두 몸 배치 — 기준 층을 옮길 벡터(몸 맞춰 겹치기 · 나란히).
         "arrangements": arrangements_block(
             query_layer_view.get("joints"),  # type: ignore[arg-type]
@@ -2841,6 +2846,40 @@ def arrangements_block(
             "offset": [round(value, 4) for value in side],
             "note": "기준 작업자를 옆에 세웠습니다 — 기준의 벽·분사 경로도 같이 옮겨졌습니다.",
         },
+    }
+
+
+# --- 골반을 맞춘 기준 -------------------------------------------------------------------
+#
+# 사용자: "pelvis 위치가 일치한다고 가정하면 어떻게 달라지는지도 다른 색상으로 — 스켈레톤이랑
+# 스트로크 위치까지." 기준 작업자를 **한 번의 평행이동**으로 옮겨 그 골반을 선택한 작업자의 골반에
+# 맞춘다(대표 순간 기준). 몸·분사 경로·재생 몸을 **같은 벡터**로 옮긴다 — 그래서 재생 중에는 골반이
+# 다시 벌어질 수 있고, 그 벌어짐이 곧 "같은 자리에 섰다면 몸이 어떻게 달리 움직였나"다.
+#
+# `arrangements.aligned`(관절 무게중심 맞춤)와 다르다. 저쪽은 몸 전체의 평균 위치를 맞추고, 이쪽은
+# 골반 **한 점**을 맞춘다 — 서 있는 자리를 같게 놓고 상체·팔·분사 위치가 어떻게 다른지를 본다.
+PELVIS_JOINT: Final = "Pelvis"
+
+
+def pelvis_alignment_block(
+    query_joints: Mapping[str, Sequence[float]] | None,
+    reference_joints: Mapping[str, Sequence[float]] | None,
+) -> dict[str, object] | None:
+    """기준을 옮길 벡터(작업자 골반 − 기준 골반). 한쪽이라도 골반이 없으면 `None` — 지어내지 않는다."""
+    query_pelvis = (query_joints or {}).get(PELVIS_JOINT)
+    reference_pelvis = (reference_joints or {}).get(PELVIS_JOINT)
+    if query_pelvis is None or reference_pelvis is None:
+        return None
+    offset = [float(q) - float(r) for q, r in zip(query_pelvis, reference_pelvis)]
+    shift_cm = math.sqrt(sum(value * value for value in offset)) * 100.0
+    return {
+        "offset": [round(value, 4) for value in offset],
+        "shift_display": f"{instructions.deviation_display(shift_cm)} cm",
+        "note": (
+            f"연두 = 기준 작업자를 {instructions.deviation_display(shift_cm)} cm 옮겨 골반을 선택한 작업자의 "
+            "골반에 맞춘 모습입니다. 몸과 분사 경로를 함께 옮겼고(대표 순간 기준 한 번), 재생 중에는 "
+            "골반이 다시 벌어질 수 있습니다."
+        ),
     }
 
 

@@ -37,7 +37,8 @@
 const POINT_LABELS = { right: "건", head: "HMD", left: "플래쉬" };
 
 // 층별 기본색. σ 3단(ok/warn/bad)과 겹치지 않는 색. style.css의 --layer-*와 같은 값.
-const LAYER_COLOR = { query: 0x5b9bff, reference: 0xa684e0, corrected: 0x34c2c2 };
+// pelvis: 골반을 맞춘 기준(연두). 파랑·보라·청록(예상)·주황/노랑(분사 경로)과 겹치지 않는 색이다.
+const LAYER_COLOR = { query: 0x5b9bff, reference: 0xa684e0, corrected: 0x34c2c2, pelvis: 0xa3e635 };
 const MESH_COLOR = 0x9aa5b1;
 // 추정 뼈는 실측 마커(층 색 100%)보다 한 단계 조용해야 한다 — 채도를 뺀 밝은 회청색.
 // 이 색은 이제 **벌어짐 0**의 색이다: 관절이 기준과 멀어질수록 층 색 쪽으로 진해진다.
@@ -335,6 +336,7 @@ function buildDom(container) {
   controls.innerHTML = `
     <label><input id="view3dLayerQuery" type="checkbox" checked> 선택한 작업자(파랑)</label>
     <label><input id="view3dLayerReference" type="checkbox" checked> 기준 작업자(보라)</label>
+    <label><input id="view3dLayerPelvis" type="checkbox" checked> 골반 맞춘 기준(연두)</label>
     <label><input id="view3dLayerLegs" type="checkbox" checked> 추정 다리 자세</label>
     <label><input id="view3dLayerCorrected" type="checkbox"> 안내 적용 후(예상)</label>
     <label><input id="view3dLayerWall" type="checkbox" checked> 벽면</label>
@@ -406,6 +408,9 @@ function buildDom(container) {
   // 두 몸 배치를 바꿨을 때 무엇을 옮겼는지(서버 문장). 겹쳐 보기에서는 비어 있다.
   const arrangeNote = document.createElement("p");
   arrangeNote.className = "view3d-note view3d-arrange-note";
+  // 연두 층(골반을 맞춘 기준)이 무엇을 얼마나 옮긴 것인지 — 서버 문장.
+  const pelvisNote = document.createElement("p");
+  pelvisNote.className = "view3d-note view3d-pelvis-note";
   // 강조한 안내가 **어느 쪽으로** 옮기라는 뜻인지. 3D 안에는 글자를 걸지 않으므로 캔버스 아래에 둔다.
   const focusNote = document.createElement("p");
   focusNote.className = "view3d-note view3d-focus-note";
@@ -423,10 +428,10 @@ function buildDom(container) {
   framingMore.append(framingMoreSummary, framingMoreText);
 
   // wallNote는 위에서 host(캔버스 위 겹침)에 넣었다 — 여기서 다시 넣으면 host 밖으로 옮겨진다.
-  container.append(toolbar, host, playback, focusNote, arrangeNote, legend, notes, notesMore, errors, note, correctedNote, framingNote, framingMore);
+  container.append(toolbar, host, playback, focusNote, pelvisNote, arrangeNote, legend, notes, notesMore, errors, note, correctedNote, framingNote, framingMore);
   return {
     canvas, host, labelsHost, legend, notes, notesMore, wallNote, errors, note, correctedNote, framingNote,
-    framingMore, framingMoreText, controls, toolbar, playback, arrangeNote, focusNote,
+    framingMore, framingMoreText, controls, toolbar, playback, arrangeNote, focusNote, pelvisNote,
     arrange: controls.querySelector("#view3dArrange"),
     play: playback.querySelector("#view3dPlay"),
     playbackMode: playback.querySelector("#view3dPlaybackMode"),
@@ -486,6 +491,11 @@ function renderLegend(legend, view) {
     legend.append(item);
   }
   legend.append(legendItem(null, STROKE_ENDS_LEGEND));
+  if (view?.pelvis_alignment) {
+    const item = legendItem("pelvis", "연두 = 골반을 맞춘 기준(몸·분사 경로)");
+    item.dataset.role = "pelvis";
+    legend.append(item);
+  }
   // 진하기 눈금 문구는 **서버가 통째로** 짓는다(`deviation.legend`). 화면이 이름과 숫자를
   // 조립하면 눈금과 문구가 갈린다 — 이전 판은 "가장 진한 곳 79.9cm"라고 적었는데 그 79.9cm짜리
   // 관절(LeftCalf)은 다리를 숨겨서 화면 어디에도 없었다. 이제 서버가 눈금을 그리는 관절에서만
@@ -536,6 +546,8 @@ function mount(THREE, container) {
     query: new THREE.Group(),
     reference: new THREE.Group(),
     corrected: new THREE.Group(),
+    // 골반을 맞춘 기준. 기준 몸·분사 경로를 서버 벡터만큼 **통째로** 옮겨 그린다(층 위치 = 벡터).
+    pelvis: new THREE.Group(),
   };
   layerGroups.corrected.visible = false;
   for (const group of Object.values(layerGroups)) scene.add(group);
@@ -545,6 +557,8 @@ function mount(THREE, container) {
   let gridObject = null;
   let skeletonLegs = null;
   let referenceLegs = null;
+  let pelvisLegs = null;
+  let pelvisSkeleton = null;
   // 자리표시 다리(B) — 기본으로 보이는 쪽이다. IK 다리와 **한 층에서 동시에** 보이지 않는다.
   let skeletonPlaceholderLegs = null;
   let referencePlaceholderLegs = null;
@@ -1356,7 +1370,11 @@ function mount(THREE, container) {
     const legFactor = style?.legsOutOfRange === true
       ? LEG_OPACITY_FACTOR * LEG_OUT_OF_RANGE_OPACITY_FACTOR
       : LEG_OPACITY_FACTOR;
-    const devOf = (name) => deviationStyle(deviations[name], maxDeviation, layerColor);
+    // `plain`: 한 색으로 칠한다. 연두 층(골반 맞춘 기준)의 몸은 서버가 잰 벌어짐(작업자 ↔ 원래 기준)과
+    // 다른 자리에 있으므로 그 값으로 칠하면 틀린 말을 한다 — 대신 작업자 몸과 직접 겹쳐 보인다.
+    const devOf = (name) => (style?.plain === true
+      ? { t: 1, color: layerColor, opacity: 0.95 }
+      : deviationStyle(deviations[name], maxDeviation, layerColor));
     const materials = [];
     const material = (color, opacity) => {
       const made = new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthWrite: false });
@@ -1892,6 +1910,12 @@ function mount(THREE, container) {
     // 전체가 아니라 **서버가 잘라 준 구간의 정점**만 넣는다 — 그리지 않는 점으로 카메라를 끌지 않는다.
     for (const p of strokePoints(view, "query")) push(p);
     for (const p of strokePoints(view, "reference")) push(shiftReference(p, view));
+    const pelvis = pelvisOffset(view);
+    if (pelvis) {
+      const moved = (p) => (isVec3(p) ? [p[0] + pelvis[0], p[1] + pelvis[1], p[2] + pelvis[2]] : p);
+      for (const p of Object.values(view.layers?.reference?.joints ?? {})) push(moved(p));
+      for (const p of strokePoints(view, "reference")) push(moved(p));
+    }
     if (mode === "tracks" || mode === "wall") {
       for (const name of ["head", "right", "left"]) for (const p of view.layers?.query?.[name] ?? []) push(p);
     }
@@ -2410,7 +2434,12 @@ function mount(THREE, container) {
     corrected: dom.controls.querySelector("#view3dLayerCorrected"),
     wall: dom.controls.querySelector("#view3dLayerWall"),
     legs: dom.controls.querySelector("#view3dLayerLegs"),
+    pelvis: dom.controls.querySelector("#view3dLayerPelvis"),
   };
+  checkboxes.pelvis.addEventListener("change", () => {
+    applyPelvisLayer();
+    if (lastView && framing.auto) frameTo(framing.mode);
+  });
   checkboxes.query.addEventListener("change", () => {
     layerGroups.query.visible = checkboxes.query.checked;
     applyDeviceLabelVisibility();
@@ -2444,6 +2473,7 @@ function mount(THREE, container) {
     const on = checkboxes.legs.checked;
     if (skeletonLegs) skeletonLegs.visible = on && legsAllowed.query;
     if (referenceLegs) referenceLegs.visible = on && legsAllowed.reference;
+    if (pelvisLegs) pelvisLegs.visible = on && legsAllowed.reference;
     // 끄면 자리표시(점선), 켜면 IK — **한 층에서 둘이 겹쳐 보이지 않는다**(B). 겹치면 어느 쪽이
     // 측정인지 읽을 수 없다. IK를 켤 수 없는 층은 자리표시가 그대로 남는다(다리 없는 화면은 없다).
     const placeholderShown = {
@@ -2573,6 +2603,25 @@ function mount(THREE, container) {
     applyFocus();
   }
 
+  // ---- 골반을 맞춘 기준(연두) -----------------------------------------------------------
+  //
+  // 사용자: "pelvis 위치가 일치한다고 가정하면 어떻게 달라지는지 — 다른 색상으로, 스켈레톤이랑
+  // 스트로크 위치까지." 기준의 몸·분사 경로를 서버 벡터(`view.pelvis_alignment.offset`)만큼 통째로
+  // 옮긴다. 화면은 벡터를 층 위치로 쓰기만 한다 — 거리를 재지 않는다.
+  function pelvisOffset(view) {
+    const offset = view?.pelvis_alignment?.offset;
+    return checkboxes.pelvis.checked && isVec3(offset) ? offset : null;
+  }
+
+  function applyPelvisLayer() {
+    const offset = isVec3(lastView?.pelvis_alignment?.offset) ? lastView.pelvis_alignment.offset : null;
+    if (offset) layerGroups.pelvis.position.set(offset[0], offset[1], offset[2]);
+    layerGroups.pelvis.visible = checkboxes.pelvis.checked && offset !== null;
+    checkboxes.pelvis.disabled = offset === null;
+    dom.pelvisNote.textContent = layerGroups.pelvis.visible ? (lastView?.pelvis_alignment?.note ?? "") : "";
+    debugLive.pelvisLayer = { visible: layerGroups.pelvis.visible, offset: offset ? offset.slice() : null };
+  }
+
   // ---- 두 몸 배치 -----------------------------------------------------------------------
   //
   // 기준 층을 **통째로** 옮긴다(몸·궤적·분사 경로·재생 몸까지). 옮길 벡터는 서버가 준다
@@ -2636,8 +2685,8 @@ function mount(THREE, container) {
     key: null,
     bound: [],
   };
-  let momentGroups = { query: null, reference: null };
-  let momentLegs = { query: null, reference: null };
+  let momentGroups = { query: null, reference: null, pelvis: null };
+  let momentLegs = { query: null, reference: null, pelvis: null };
 
   function frameIndexAtTime(frames, seconds) {
     let found = 0;
@@ -2690,16 +2739,17 @@ function mount(THREE, container) {
     for (const layer of ["query", "reference"]) {
       if (momentLegs[layer]) momentLegs[layer].visible = checkboxes.legs.checked && legsAllowed[layer];
     }
+    if (momentLegs.pelvis) momentLegs.pelvis.visible = checkboxes.legs.checked && legsAllowed.reference;
   }
 
   function clearMoment() {
-    for (const layer of ["query", "reference"]) {
+    for (const layer of ["query", "reference", "pelvis"]) {
       const moment = momentGroups[layer];
       if (!moment) continue;
       disposeObject3D(moment);
       moment.clear();
     }
-    momentLegs = { query: null, reference: null };
+    momentLegs = { query: null, reference: null, pelvis: null };
   }
 
   function buildMomentMarkers(frame, layer, color, trackLayer) {
@@ -2759,6 +2809,19 @@ function mount(THREE, container) {
       momentLegs[layer] = parts.legs;
       momentGroups[layer].add(parts.group);
       momentGroups[layer].add(buildMomentMarkers(frame, layer, LAYER_COLOR[layer], view.layers?.[layer]));
+    }
+    // 연두 층: 이 순간의 **기준** 몸을 한 색으로. 층 위치(골반 벡터)가 그대로 옮겨 준다.
+    const referenceFrame = typeof found.reference === "number" ? block.reference?.frames?.[found.reference] : null;
+    if (referenceFrame && momentGroups.pelvis) {
+      const fit = view.reference_fit;
+      const parts = buildSkeletonGroup(
+        referenceFrame.joints, view.layers?.reference?.bones, fit?.faded === true,
+        fit?.legs?.joints, fit?.head_diameter_m,
+        { layerColor: LAYER_COLOR.pelvis, plain: true, legsOutOfRange: fit?.legs_within_range === false, flesh: view.flesh },
+      );
+      parts.legs.visible = checkboxes.legs.checked && legsAllowed.reference;
+      momentLegs.pelvis = parts.legs;
+      momentGroups.pelvis.add(parts.group);
     }
   }
 
@@ -2864,9 +2927,10 @@ function mount(THREE, container) {
     playbackState.key = null;
     playbackState.step = null;
     playbackState.position = 0;
-    momentGroups = { query: new THREE.Group(), reference: new THREE.Group() };
+    momentGroups = { query: new THREE.Group(), reference: new THREE.Group(), pelvis: new THREE.Group() };
     layerGroups.query.add(momentGroups.query);
     layerGroups.reference.add(momentGroups.reference);
+    layerGroups.pelvis.add(momentGroups.pelvis);
     const block = view?.playback;
     dom.playback.hidden = !block;
     debugLive.moment = null;
@@ -3003,6 +3067,21 @@ function mount(THREE, container) {
       },
     );
     layerGroups.reference.add(referenceParts.group);
+    // 골반을 맞춘 기준(연두) — **같은 함수**로 그린 기준 몸 + 기준 분사 경로를 한 층에 담고 층째 옮긴다.
+    const pelvisParts = buildSkeletonGroup(
+      referenceJoints, view.layers?.reference?.bones, referenceFit?.faded === true,
+      referenceFit?.legs?.joints, referenceFit?.head_diameter_m,
+      {
+        layerColor: LAYER_COLOR.pelvis,
+        plain: true,
+        legsOutOfRange: referenceFit?.legs_within_range === false,
+        flesh: view.flesh,
+      },
+    );
+    layerGroups.pelvis.add(pelvisParts.group);
+    pelvisSkeleton = pelvisParts.group;
+    pelvisLegs = pelvisParts.legs;
+    layerGroups.pelvis.add(buildStrokeGroup(view.reference_stroke, LAYER_COLOR.pelvis).group);
     debugLive.headDiameterM = typeof fit?.head_diameter_m === "number" ? fit.head_diameter_m : null;
     skeletonLegs = skeletonParts.legs;
     referenceLegs = referenceParts.legs;
@@ -3169,6 +3248,7 @@ function mount(THREE, container) {
     });
 
     applyArrangement();
+    applyPelvisLayer();
     // 새 비교 결과다 — 이전 강조는 다른 결과의 번호다.
     focused = null;
     applyFocus();
@@ -3180,6 +3260,7 @@ function mount(THREE, container) {
       reachGap, referenceReachGap,
       anchors.group, referenceAnchors.group,
       correctionsGroup,
+      pelvisSkeleton,
     ]);
 
     container.__view3dDebug = debugLive;

@@ -1003,3 +1003,4 @@ body[data-stale="true"] #orientationSection {
 .correction-item.is-focused { outline: 1px solid var(--text); outline-offset: 2px; border-radius: 4px; }
 .view3d-label-arrow.is-dimmed { opacity: 0.25; }
 .view3d-label-arrow.is-focused { outline: 2px solid var(--text); }
+.view3d-legend .swatch.pelvis { background: #a3e635; }

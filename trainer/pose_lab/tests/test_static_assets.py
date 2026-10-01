@@ -1352,7 +1352,8 @@ def two_skeleton_faults(js: str) -> list[str]:
     # (1) 두 층에 각각 스켈레톤을 세우고, 각자 자기 층 그룹에 넣는가.
     if "buildSkeletonGroup(\n      joints," not in js:
         faults.append("query_skeleton_not_built")
-    if "buildSkeletonGroup(\n      referenceJoints," not in js:
+    # 연두 층(골반 맞춘 기준)도 같은 함수에 기준 관절을 넘긴다 — **기준 층 호출**을 짚는다.
+    if "const referenceParts = buildSkeletonGroup(\n      referenceJoints," not in js:
         faults.append("reference_skeleton_not_built")
     if "layerGroups.reference.add(referenceParts.group)" not in js:
         faults.append("reference_skeleton_not_added_to_its_layer")
@@ -1385,15 +1386,16 @@ def test_both_skeletons_are_drawn_and_coloured_by_the_server_gap():
 def test_two_skeleton_checks_can_fail():
     full = _read("skeleton_view.js")
     assert two_skeleton_faults("") == ["no_skeleton_builder"]
-    one_only = full.replace("buildSkeletonGroup(\n      referenceJoints,", "buildSkeletonGroup(\n      joints,", 1)
+    one_only = full.replace("const referenceParts = buildSkeletonGroup(\n      referenceJoints,",
+                            "const referenceParts = buildSkeletonGroup(\n      joints,", 1)
     assert one_only != full
     assert "reference_skeleton_not_built" in two_skeleton_faults(one_only)
     fixed_scale = full.replace("const maxDeviation = deviation?.joint_max_m ?? null;", "const maxDeviation = 1.0;", 1)
     assert fixed_scale != full
     assert two_skeleton_faults(fixed_scale) == ["scale_not_from_the_server"]
     recomputed = full.replace(
-        "    const devOf = (name) => deviationStyle(deviations[name], maxDeviation, layerColor);",
-        "    const devOf = (name) => deviationStyle(Math.hypot(1, 2), maxDeviation, layerColor);",
+        "      : deviationStyle(deviations[name], maxDeviation, layerColor));",
+        "      : deviationStyle(Math.hypot(1, 2), maxDeviation, layerColor));",
         1,
     )
     assert recomputed != full
@@ -1669,7 +1671,8 @@ def default_preset_stroke_faults(js: str) -> list[str]:
     if not points:
         return ["no_framing_points"]
     # 두 줄 다 맞춤 대상이다. 기준 줄은 두 몸 배치(나란히 등)에서 옮긴 자리로 잡는다.
-    calls = ('strokePoints(view, "query")', 'strokePoints(view, "reference")')
+    calls = ('strokePoints(view, "query")) push(p);',
+             'strokePoints(view, "reference")) push(shiftReference(p, view));')
     if not all(call in points for call in calls):
         faults.append("default_framing_ignores_the_strokes")
     else:
@@ -2727,8 +2730,8 @@ def flesh_faults(js: str) -> list[str]:
     body = code.split("function buildSkeletonGroup(", 1)[-1].split("\n  }\n", 1)[0]
     if "const flesh = style?.flesh;" not in body:
         faults.append("flesh_not_read_from_the_server")
-    # 대표 순간의 두 층 + 재생 순간의 몸(같은 함수) — 셋 다 서버 살을 받는다.
-    if code.count("flesh: view.flesh,") != 3:
+    # 대표 순간의 두 층 + 연두 층 + 재생 순간의 몸(같은 함수) — 넷 다 서버 살을 받는다.
+    if code.count("flesh: view.flesh,") != 4:
         faults.append("flesh_not_passed_to_both_layers")
     if re.search(r'"(Left|Right)(Shoulder|UpperArm|ForeArm|Hand|Thigh|Calf|Foot|Toe)"', code):
         faults.append("screen_invents_part_names")
@@ -2810,7 +2813,7 @@ def test_playback_redraws_the_moment_and_holds_the_representative():
 def test_playback_checks_can_fail():
     full = _read("skeleton_view.js")
     assert playback_faults("") != []
-    leaky = full.replace("      correctionsGroup,\n    ]);", "    ]);", 1)
+    leaky = full.replace("      correctionsGroup,\n      pelvisSkeleton,\n", "      pelvisSkeleton,\n", 1)
     assert leaky != full and "correctionsGroup_not_held_during_playback" in playback_faults(leaky)
     painted = full.replace("      deviations: {},\n      maxDeviation: null,\n      readout: rTime",
                            "      deviations: found?.x ?? {x: 1},\n      maxDeviation: null,\n      readout: rTime", 1)
@@ -2986,3 +2989,40 @@ def test_focus_checks_can_fail():
     assert unplugged != app and "cue_press_does_not_reach_the_3d_view" in focus_faults(unplugged, view)
     stuck = view.replace("    if (playbackState.held.length > 0) showMoment(null);\n    focused =", "    focused =", 1)
     assert stuck != view and "focus_during_playback_points_at_a_hidden_arrow" in focus_faults(app, stuck)
+
+
+def pelvis_layer_faults(js: str) -> list[str]:
+    """골반을 맞춘 기준(연두): 기준 몸과 **기준 분사 경로**를 한 층에 담아 서버 벡터로 층째 옮기고,
+    한 색으로 칠하고, 재생 중에도 같은 층에 순간 몸을 그린다."""
+    faults: list[str] = []
+    code = without_comments(js)
+    if "pelvis: 0x" not in code.split("const LAYER_COLOR = {", 1)[-1].split("};", 1)[0]:
+        faults.append("no_pelvis_colour")
+    apply = _nested_function_body(code, "applyPelvisLayer")
+    if "layerGroups.pelvis.position.set(offset[0], offset[1], offset[2])" not in apply:
+        faults.append("layer_not_moved_by_the_server_offset")
+    if "lastView?.pelvis_alignment?.offset" not in apply:
+        faults.append("offset_not_from_the_server")
+    render = code.split("function render(payload)", 1)[-1]
+    if "layerGroups.pelvis.add(buildStrokeGroup(view.reference_stroke, LAYER_COLOR.pelvis).group);" not in render:
+        faults.append("stroke_not_moved_with_the_body")
+    if render.count("layerColor: LAYER_COLOR.pelvis,\n        plain: true,") < 1:
+        faults.append("pelvis_body_painted_with_the_wrong_gap")
+    if "momentGroups.pelvis.add(parts.group);" not in _nested_function_body(code, "buildMoment"):
+        faults.append("pelvis_body_vanishes_during_playback")
+    if 'id="view3dLayerPelvis"' not in js:
+        faults.append("no_toggle")
+    return faults
+
+
+def test_the_pelvis_layer_moves_body_and_stroke_together():
+    assert pelvis_layer_faults(_read("skeleton_view.js")) == []
+
+
+def test_pelvis_layer_checks_can_fail():
+    full = _read("skeleton_view.js")
+    stuck = full.replace("    if (offset) layerGroups.pelvis.position.set(offset[0], offset[1], offset[2]);\n", "", 1)
+    assert stuck != full and "layer_not_moved_by_the_server_offset" in pelvis_layer_faults(stuck)
+    bodyless = full.replace(
+        "    layerGroups.pelvis.add(buildStrokeGroup(view.reference_stroke, LAYER_COLOR.pelvis).group);\n", "", 1)
+    assert bodyless != full and "stroke_not_moved_with_the_body" in pelvis_layer_faults(bodyless)
