@@ -2347,8 +2347,14 @@ def compare(
     reference_spreads: SpreadReference | None = None,
     *,
     include_view: bool = True,
+    correction_policies: Mapping[str, measured_score.CorrectionPolicy] | None = None,
 ) -> dict[str, object]:
     """비교 1건. 동작 키가 다르면 지표를 만들지 않는다.
+
+    `correction_policies`(이름 → 교정 정책)를 주면 같은 쌍·같은 산포로 정책마다 교정 후 점수와
+    개선율을 `measured.policies`에 더 낸다(3차년도 실험, `trainer/year3/`). 정책은 same 쪽에서는
+    전체 산포로, split 쪽에서는 A 산포로 교정을 고르고, 채점은 기존 개선율과 같은 잣대(F / B)로
+    한다. 주지 않으면 응답은 이 인자가 없던 때와 같다.
 
     `include_view=False`면 채점 필드만 낸다(`view`는 None, `measured`에 표시 전용 필드 없음).
     개선율 측정 도구(`improvement_study.py`)는 이 모드로만 부른다 — 표시 코드의 비용이나
@@ -2480,6 +2486,10 @@ def compare(
     before_split_score: float | None = None
     after_split_score: float | None = None
     after_split_all_score: float | None = None
+    # 정책 실험이 split 쪽을 같은 재료로 다시 계산할 수 있게 남긴다: (A 산포, A 이탈, B 산포).
+    split_selection: (
+        tuple[measured_score.AxisSpreads, list[measured_score.PointDelta], measured_score.AxisSpreads] | None
+    ) = None
     split_reason: str | None = "no_split_reference"
     split_dates_a: list[str] = []
     split_dates_b: list[str] = []
@@ -2524,9 +2534,10 @@ def compare(
                     split_reason = "insufficient_dates"
                 else:
                     spreads_b = _scale_spreads(raw_b)
+                    spreads_a = _scale_spreads(raw_a)
                     # A는 교정 후보(deltas)를 고르는 데만 쓴다 — 채점에는 쓰지 않는다.
                     before_a = measured_score.score_track(
-                        query_track, reference_track, _scale_spreads(raw_a), weights, basis
+                        query_track, reference_track, spreads_a, weights, basis
                     )
                     fixed_a = measured_score.apply_measured(
                         query_track, before_a.deltas, basis, limit=measured_score.DELIVERED_CUES
@@ -2545,6 +2556,7 @@ def compare(
                     after_split_all_score = measured_score.score_track(
                         fixed_a_all, reference_track, spreads_b, weights, basis
                     ).score
+                    split_selection = (spreads_a, before_a.deltas, spreads_b)
                     split_reason = None
 
     # 발부 목록은 **한 번만** 구한다. `measured.axes`와 `view.corrections`가 같은 목록을
@@ -2687,6 +2699,32 @@ def compare(
             "gate_reason": "not_wired",
         },
     }
+    if correction_policies is not None:
+        policies: dict[str, object] = {}
+        for name, policy in correction_policies.items():
+            chosen = list(policy(query_track, reference_track, spreads_used, weights, basis, before.deltas))
+            after_policy = measured_score.score_track(
+                measured_score.apply_corrections(query_track, chosen, basis),
+                reference_track, spreads_used, weights, basis,
+            ).score
+            after_policy_split: float | None = None
+            values_split: int | None = None
+            if split_selection is not None:
+                spreads_a_sel, deltas_a_sel, spreads_b_sel = split_selection
+                chosen_a = list(policy(query_track, reference_track, spreads_a_sel, weights, basis, deltas_a_sel))
+                values_split = len(chosen_a)
+                after_policy_split = measured_score.score_track(
+                    measured_score.apply_corrections(query_track, chosen_a, basis),
+                    reference_track, spreads_b_sel, weights, basis,
+                ).score
+            policies[name] = {
+                "values": len(chosen),
+                "values_split": values_split,
+                "points": sorted({c.point for c in chosen}),
+                "score_after": after_policy,
+                "improvement": improvement(before.score, after_policy_split, after_policy, before_split_score),
+            }
+        body["measured"]["policies"] = policies
     if not include_view:
         return body
     _attach_view(

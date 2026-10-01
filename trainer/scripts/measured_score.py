@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Final, Mapping, Protocol, Sequence
+from typing import Callable, Final, Mapping, Protocol, Sequence
 
 # `posture_sequence`와 같은 이유다 — 불린 이름 공간에서 형제를 잡아야
 # `world_axes`가 두 벌로 갈라지지 않는다.
@@ -221,6 +221,15 @@ class AxisCorrection:
     direction: str  # 동사/방향어. 판정할 수 없으면 빈 문자열
     sigma: float  # 그 축의 sigma
     unit: Vec3  # 월드 단위벡터
+
+
+# 교정 정책: (질의 궤적, 목표 궤적, 산포, 가중치, 기저, 이탈) → 적용할 교정 목록.
+# 제품 정책은 `issued_axes`다(이탈과 기저만 쓴다). 3차년도 실험(`trainer/year3/`)은 목표와 산포를
+# 함께 받아 교정 후 점수를 보며 고른다 — 평가 방법이 목표 자세를 입력으로 준다.
+CorrectionPolicy = Callable[
+    [Mapping[str, Track], Mapping[str, Track], AxisSpreads, Mapping[str, float], "AxisFrame", Sequence["PointDelta"]],
+    Sequence["AxisCorrection"],
+]
 
 
 def _mean(points: Sequence[Vec3]) -> Vec3:
@@ -691,8 +700,20 @@ def issued_shifts(
     개선율에 섞이는 경로는 `issued_axes`의 이 분기가 막는다. 한 점의 여러 축은
     월드에서 더한 뒤 기저로 되돌린다.
     """
+    return corrections_shifts(delivered_axes(deltas, frame, limit), frame)
+
+
+def corrections_shifts(
+    corrections: Sequence[AxisCorrection], frame: AxisFrame = WORLD_FRAME
+) -> dict[str, Vec3]:
+    """교정 목록 -> 점별 스트로크 프레임 이동벡터. 목록에 있는 점만 키를 갖는다.
+
+    `issued_shifts`의 몸통을 떼어 낸 것이다 — 어떤 교정을 고를지(`issued_axes`, 또는 3차년도
+    실험의 다른 정책)와 고른 교정을 어떻게 옮길지를 가른다. 한 점의 여러 축은 월드에서 더한
+    뒤 기저로 되돌린다.
+    """
     world: dict[str, list[float]] = {}
-    for correction in delivered_axes(deltas, frame, limit):
+    for correction in corrections:
         metres = correction.magnitude_cm / 100.0
         acc = world.setdefault(correction.point, [0.0, 0.0, 0.0])
         for i in range(3):
@@ -729,7 +750,23 @@ def apply_measured(
     """
     # `limit`: σ 상위 몇 개를 옮기나. `None`이면 발부된 축 전부(옛 정의), `DELIVERED_CUES`면
     # 작업자에게 실제로 전달되는 것만이다.
-    shifts = issued_shifts(deltas, frame, limit)
+    return shift_tracks(query, issued_shifts(deltas, frame, limit), fraction)
+
+
+def apply_corrections(
+    query: Mapping[str, Track],
+    corrections: Sequence[AxisCorrection],
+    frame: AxisFrame = WORLD_FRAME,
+    fraction: float = 1.0,
+) -> dict[str, list[Vec3 | None]]:
+    """주어진 교정 목록을 그대로 따랐을 때의 궤적. 목록에 없는 점은 제자리다."""
+    return shift_tracks(query, corrections_shifts(corrections, frame), fraction)
+
+
+def shift_tracks(
+    query: Mapping[str, Track], shifts: Mapping[str, Vec3], fraction: float = 1.0
+) -> dict[str, list[Vec3 | None]]:
+    """점별 이동벡터를 궤적에 더한다. 못 잰 격자점(None)은 자리를 지킨다."""
     output: dict[str, list[Vec3 | None]] = {}
     for name, points in query.items():
         shift = shifts.get(name)
