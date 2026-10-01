@@ -155,18 +155,67 @@ def test_an_unreachable_hand_stops_short_instead_of_stretching_the_body() -> Non
     out = cd.corrected_body(body, far)
     for parent, child in (("RightShoulder", "RightUpperArm"), ("RightUpperArm", "RightForeArm"), ("RightForeArm", "RightHand")):
         assert math.dist(out[parent], out[child]) == pytest.approx(math.dist(body[parent], body[child]), abs=1e-6)
-    short = cd.hand_shortfall_cm(body, out, far, "right")
+    short = cd.point_shortfall_cm(body, out, far, "right")
     assert short > 10.0
     target = (body["RightHand"][0], body["RightHand"][1], body["RightHand"][2] + 1.2)
     assert math.dist(out["RightHand"], target) * 100.0 == pytest.approx(short)
 
 
-def test_a_hand_without_a_cue_moves_with_the_body() -> None:
-    """안내가 없는 손은 몸이 일어설 때 같이 올라간다(원래 자리로 끌어내리지 않는다)."""
+def test_standing_up_never_lifts_the_feet() -> None:
+    """다리 길이를 넘게 "자세를 높이라"고 해도 발은 바닥에 남는다 — 다리가 다 펴진 데서 멈추고 못 미친 높이를 낸다.
+
+    사용자가 영상에서 양발이 지면에서 떨어지는 것을 찾았다(2026-10-01). 깨뜨리는 법: 높이 제한을 빼면 발이 떠서 실패한다.
+    """
     body = _standing_body()
-    raised = cd.corrected_body(body, [_correction("head", (0.0, 1.0, 0.0), 10.0)])
-    assert raised["LeftHand"][1] == pytest.approx(body["LeftHand"][1] + 0.10)
-    assert raised["RightHand"][1] == pytest.approx(body["RightHand"][1] + 0.10)
+    up = [_correction("head", (0.0, 1.0, 0.0), 60.0)]
+    out = cd.corrected_body(body, up)
+    for foot in ("LeftFoot", "LeftToe", "RightFoot", "RightToe"):
+        assert out[foot] == body[foot]
+    for parent, child in (("LeftThigh", "LeftCalf"), ("LeftCalf", "LeftFoot")):
+        assert math.dist(out[parent], out[child]) == pytest.approx(math.dist(body[parent], body[child]), abs=1e-6)
+    leg = math.dist(body["LeftThigh"], body["LeftCalf"]) + math.dist(body["LeftCalf"], body["LeftFoot"])
+    assert math.dist(out["LeftThigh"], out["LeftFoot"]) <= leg * cd.LEG_REACH_MAX + 1e-6
+    short = cd.point_shortfall_cm(body, out, up, "head")
+    assert 0.0 < short < 60.0
+
+
+@pytest.mark.parametrize("name", REAL)
+def test_shortfall_is_reported_per_cue_not_accumulated(name: str) -> None:
+    """못 미친 거리는 그 안내의 방향으로만 센다 — 앞 안내의 부족분이 뒤 안내에 다시 붙지 않는다.
+
+    옮겨 서기(머리 수평)는 몸 전체가 정확히 옮겨 가므로 부족분이 0이어야 한다.
+    """
+    from trainer.year3 import demo_mode
+
+    demo_mode.register()
+    source, spreads, query, reference = _real(name)
+    demo = cd.build_demo(source, query, reference, spreads, demo_mode.MODE)
+    for cue in demo["cues"]:
+        if cue["point"] == "head" and cue["axis"] != "vertical":
+            assert cue["reach_short_cm"] == pytest.approx(0.0, abs=0.05), cue["text"]
+
+
+@pytest.mark.parametrize("name", REAL)
+def test_feet_stay_on_the_floor_in_every_demo_body(name: str) -> None:
+    """실데이터 시연의 모든 단계·목표 몸에서 발이 원래 높이보다 뜨지 않는다(옮겨 서기의 수평 이동만 있다)."""
+    from trainer.year3 import demo_mode
+
+    demo_mode.register()
+    source, spreads, query, reference = _real(name)
+    for mode in ("issued", demo_mode.MODE):
+        demo = cd.build_demo(source, query, reference, spreads, mode)
+        worker = demo["bodies"]["worker"]
+        for body in [demo["bodies"]["target"], *demo["bodies"]["steps"]]:
+            for foot in ("LeftFoot", "LeftToe", "RightFoot", "RightToe"):
+                assert body[foot][1] == pytest.approx(worker[foot][1], abs=1e-4), (mode, foot)
+
+
+def test_a_hand_without_a_cue_moves_with_the_body() -> None:
+    """안내가 없는 손은 몸이 낮아질 때 같이 내려간다(원래 자리로 끌어올리지 않는다)."""
+    body = _standing_body()
+    lowered = cd.corrected_body(body, [_correction("head", (0.0, -1.0, 0.0), 10.0)])
+    assert lowered["LeftHand"][1] == pytest.approx(body["LeftHand"][1] - 0.10)
+    assert lowered["RightHand"][1] == pytest.approx(body["RightHand"][1] - 0.10)
 
 
 def test_unknown_mode_is_refused() -> None:

@@ -18,8 +18,9 @@ KPI 시험(`docs/year2/`, `docs/year3/`)의 시연 화면(`static/demo.html`)이
   그린다(무릎은 다리 길이를 지켜 다시 푼다).
 - 안내가 없는 손은 몸을 따라간다.
 - 어떤 마디도 늘리지 않는다. 손이 팔 길이로 닿지 않으면 쇄골 길이를 지킨 채 어깨 관절을 손 쪽으로 돌리고(최대 35°),
-  그래도 모자라면 손이 못 미친 채로 두고 그 거리를 `reach_short_cm`·`reach_note`로 낸다. 다리 길이보다 높이 서야 하면
-  발뒤꿈치가 들린다.
+  그래도 모자라면 손이 못 미친 채로 두고 그 거리를 `reach_short_cm`·`reach_note`로 낸다.
+- **발은 뜨지 않는다.** 자세 높이기·낮추기는 두 다리가 다 펴지거나 다 접히는 데서 멈추고(몸이 공중에 뜰 때까지 허리를
+  올리지 않는다, 사용자 2026-10-01), 못 미친 높이를 같은 방식으로 적는다.
 목표 자세의 몸은 작업자 몸에서 채점하는 세 점의 평균 이탈을 **전부** 메운 몸이다(`full_shift_corrections`) —
 채점이 보는 목표와 같은 자리다. 그래서 교정이 메우지 않은 값만큼 교정된 몸과 목표 몸 사이가 남는다.
 """
@@ -154,25 +155,19 @@ def corrected_body(joints: Mapping[str, Sequence[float]], corrections: Sequence[
 
     # 1) 옮겨 서기 — 몸 전체가 수평으로 간다.
     body = {name: _add(p, horizontal) for name, p in original.items()}
-    # 2) 자세 높이기·낮추기 — 발은 디딘 채 골반 위가 오르내리고 무릎을 다시 푼다.
+    # 2) 자세 높이기·낮추기 — 발은 디딘 채 골반 위가 오르내리고 무릎을 다시 푼다. **발은 절대 뜨지 않는다**:
+    #    두 다리가 다 펴지거나(올릴 때) 다 접히는(낮출 때) 데서 멈춘다. 못 미친 높이는 `point_shortfall_cm`이 낸다.
+    vertical = _scale(vertical, _feasible_vertical_fraction(body, original, vertical))
     if _norm(vertical) > 0.0:
         for name in body:
             if name not in PLANTED and name not in KNEES:
                 body[name] = _add(body[name], vertical)
         for hip, knee, ankle in LEG_CHAINS:
             if hip in body and knee in body and ankle in body:
-                planted_ankle = body[ankle]
-                body[knee], reached = solve_two_bone(
-                    body[hip], _add(original[knee], horizontal), planted_ankle,
+                body[knee], _ = solve_two_bone(
+                    body[hip], _add(original[knee], horizontal), body[ankle],
                     _norm(_sub(original[knee], original[hip])), _norm(_sub(original[ankle], original[knee])),
                 )
-                # 다리 길이보다 높이 서야 하면 발뒤꿈치가 들린다 — 마디를 늘리지 않는다.
-                lift = _sub(reached, planted_ankle)
-                if _norm(lift) > 1e-9:
-                    toe = ankle.replace("Foot", "Toe")
-                    body[ankle] = reached
-                    if toe in body:
-                        body[toe] = _add(body[toe], lift)
     # 3) 손 — **안내가 있는 손만** 안내가 말한 곳(원래 손 + 안내 이동)으로 보낸다. 안내가 없는 손은 1·2에서 몸을
     #    따라 옮겨진 그대로다(원래 자리로 되돌리면 팔이 닿지 않아 몸이 늘어난다). 팔 길이로 닿지 않으면 쇄골 길이를
     #    지킨 채 어깨 관절을 손 쪽으로 돌리고, 그래도 모자라면 손을 그만큼 못 미친 채 둔다 — 어떤 마디도 늘리지 않는다.
@@ -190,6 +185,40 @@ def corrected_body(joints: Mapping[str, Sequence[float]], corrections: Sequence[
             body[shoulder], _add(original[elbow], _sub(moved_shoulder, original[shoulder])), target, upper, lower,
         )
     return body
+
+
+# 다리를 끝까지 펴거나 접지 않는다 — 무릎이 완전히 펴진 채 서는 것도, 완전히 포개지는 것도 사람 자세가 아니다.
+LEG_REACH_MAX: Final = 0.995
+LEG_FOLD_MIN: Final = 0.35
+
+
+def _legs_feasible(body: Mapping[str, Vec], original: Mapping[str, Vec], raise_by: Vec) -> bool:
+    for hip, knee, ankle in LEG_CHAINS:
+        if hip not in body or knee not in body or ankle not in body:
+            continue
+        thigh = _norm(_sub(original[knee], original[hip]))
+        shin = _norm(_sub(original[ankle], original[knee]))
+        span = _norm(_sub(_add(body[hip], raise_by), body[ankle]))
+        if span > (thigh + shin) * LEG_REACH_MAX or span < max(abs(thigh - shin), (thigh + shin) * LEG_FOLD_MIN):
+            return False
+    return True
+
+
+def _feasible_vertical_fraction(body: Mapping[str, Vec], original: Mapping[str, Vec], vertical: Vec) -> float:
+    """발을 디딘 채 골반을 `vertical`만큼 옮길 수 있는 비율(0–1). 다 되면 1, 몸이 떠야 하면 그 전에서 멈춘다."""
+    if _norm(vertical) == 0.0 or _legs_feasible(body, original, vertical):
+        return 1.0
+    if not _legs_feasible(body, original, (0.0, 0.0, 0.0)):
+        # 원래 자세부터 다리 범위 밖(추정 다리가 어긋남) — 위아래로 옮기지 않는다.
+        return 0.0
+    low, high = 0.0, 1.0
+    for _ in range(40):
+        middle = (low + high) / 2.0
+        if _legs_feasible(body, original, _scale(vertical, middle)):
+            low = middle
+        else:
+            high = middle
+    return low
 
 
 def _swing_toward(root: Vec, joint: Vec, target: Vec, max_deg: float) -> Vec:
@@ -212,15 +241,17 @@ def _swing_toward(root: Vec, joint: Vec, target: Vec, max_deg: float) -> Vec:
     return _add(root, direction, length)
 
 
-def hand_shortfall_cm(joints: Mapping[str, Sequence[float]], body: Mapping[str, Vec], corrections: Sequence[Any], point: str) -> float:
-    """안내한 손 위치에 몸이 못 미친 거리(cm). 손이 아니거나 닿았으면 0."""
-    if point not in ARM_CHAINS:
+def point_shortfall_cm(joints: Mapping[str, Sequence[float]], body: Mapping[str, Vec], corrections: Sequence[Any], point: str) -> float:
+    """안내한 위치에 몸의 그 부위(손·머리)가 못 미친 거리(cm). 닿았으면 0."""
+    joint = ANCHOR_JOINT.get(point)
+    if joint is None or joint not in joints or joint not in body:
         return 0.0
-    hand = ARM_CHAINS[point][2]
-    if hand not in joints or hand not in body:
-        return 0.0
-    target = _add(joints[hand], point_shifts(corrections).get(point, (0.0, 0.0, 0.0)))
-    return _norm(_sub(body[hand], target)) * 100.0
+    target = _add(joints[joint], point_shifts(corrections).get(point, (0.0, 0.0, 0.0)))
+    return _norm(_sub(body[joint], target)) * 100.0
+
+
+SHORTFALL_NOTE: Final = {"right": "팔 길이로 {cm}cm 못 미칩니다", "left": "팔 길이로 {cm}cm 못 미칩니다",
+                         "head": "발을 디딘 채로는 {cm}cm 못 미칩니다"}
 
 
 def full_shift_corrections(deltas: Sequence[Any], frame: Any) -> list[Any]:
@@ -346,7 +377,11 @@ def build_demo(source: Any, query: Any, reference: Any, reference_spreads: Any, 
         # 화살표는 **안내한 이동 그대로**다(문장의 cm). 몸이 팔 길이로 못 미치면 그 거리를 따로 적는다.
         start = before[anchor]
         end = _add(start, _scale(correction.unit, correction.magnitude_cm / 100.0))
-        short = hand_shortfall_cm(worker, after, chosen[:n], correction.point)
+        # 이 안내가 가리킨 방향으로 몸이 실제로 덜 간 거리. 앞 안내의 부족분을 다시 세지 않는다.
+        # `magnitude_cm`는 부호가 있다 — 실제 이동 방향은 unit × 부호다.
+        heading = _scale(correction.unit, 1.0 if correction.magnitude_cm >= 0 else -1.0)
+        actual = _dot(_sub(after[anchor], before[anchor]), heading) * 100.0
+        short = max(0.0, abs(correction.magnitude_cm) - actual)
         cues.append({
             "n": n,
             "point": correction.point,
@@ -360,7 +395,7 @@ def build_demo(source: Any, query: Any, reference: Any, reference_spreads: Any, 
             "from": [round(v, 4) for v in start],
             "to": [round(v, 4) for v in end],
             "reach_short_cm": round(short, 2),
-            "reach_note": f"팔 길이로 {short:.1f}cm 못 미칩니다" if short >= 1.0 else None,
+            "reach_note": SHORTFALL_NOTE[correction.point].format(cm=f"{short:.1f}") if short >= 1.0 else None,
         })
 
     improvement = result["improvement"]
