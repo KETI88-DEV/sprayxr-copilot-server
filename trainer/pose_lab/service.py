@@ -2045,7 +2045,9 @@ def view_block(
         corrections = measured_score.issued_axes(deltas, basis)
     query_layer = _world_layer(query_frames)
     reference_layer = _world_layer(reference_frames)
-    corrected_layer = _corrected_layer(query_layer, corrections)
+    # "안내 적용 후(예상)" 층은 **작업자에게 전달되는 안내만** 옮긴다 — 예상 점수(`score_after`)와
+    # 같은 이동이어야 그림과 숫자가 같은 것을 말한다. 화살표는 발부된 축을 전부 그린다.
+    corrected_layer = _corrected_layer(query_layer, list(corrections)[: measured_score.DELIVERED_CUES])
 
     query_layer_view: dict[str, object] = dict(_serialize_layer(query_layer))
     weights_view = dict(weights)
@@ -2199,11 +2201,15 @@ def measured_display(measured: Mapping[str, Any]) -> dict[str, object]:
         "display": {
             "score": instructions.score_display(measured.get("score")),
             "score_after": instructions.score_display(measured.get("score_after")),
+            "score_after_all": instructions.score_display(measured.get("score_after_all")),
             "score_delta": instructions.score_delta_display(
                 measured.get("score"), measured.get("score_after")
             ),
             "improvement_same": instructions.score_display(improvement_values.get("same")),
             "improvement_split": instructions.score_display(improvement_values.get("split")),
+            "improvement_split_all": instructions.score_display(
+                (measured.get("improvement_all") or {}).get("split")
+            ),
         },
         "deltas_display": [
             {
@@ -2449,8 +2455,16 @@ def compare(
     # 축 전부와, 자세 문장이 나갔다면 머리의 그 축. 왼손은 어떤 경우에도 제자리다
     # (`measured_score.issued_axes`가 애초에 내지 않는다). 점수는 세 점을 다 보지만
     # 지시하지 않은 점을 옮기면 작업자에게 말한 것과 보고하는 숫자가 달라진다.
-    fixed = measured_score.apply_measured(query_track, before.deltas, basis)
+    #
+    # **작업자에게 실제로 전달되는 안내만** 옮긴다(`DELIVERED_CUES` = σ 상위 1개). 화면은 발부된 축을
+    # 전부 보이지만 작업자가 듣는 것은 하나다 — 말하지 않은 안내까지 적용한 상승을 보고하면 숫자가
+    # 부풀어 보인다(사용자 2026-10-01). 옛 정의(발부된 축 전부)는 비교용으로 `_all`에 남긴다.
+    fixed = measured_score.apply_measured(
+        query_track, before.deltas, basis, limit=measured_score.DELIVERED_CUES
+    )
     after = measured_score.score_track(fixed, reference_track, spreads_used, weights, basis)
+    fixed_all = measured_score.apply_measured(query_track, before.deltas, basis)
+    after_all = measured_score.score_track(fixed_all, reference_track, spreads_used, weights, basis)
 
     # 분리 채점: 교정을 고르는 레퍼런스(A)와 채점하는 레퍼런스(B)가 겹치지 않아야
     # 개선율이 자기충족이 아니다(설계 D4). 날짜를 반으로 갈라 A로 교정 후보(deltas)를
@@ -2465,6 +2479,7 @@ def compare(
     # 응답이 "측정이 아니다"라고 말하는 모순이 생긴다.
     before_split_score: float | None = None
     after_split_score: float | None = None
+    after_split_all_score: float | None = None
     split_reason: str | None = "no_split_reference"
     split_dates_a: list[str] = []
     split_dates_b: list[str] = []
@@ -2513,7 +2528,10 @@ def compare(
                     before_a = measured_score.score_track(
                         query_track, reference_track, _scale_spreads(raw_a), weights, basis
                     )
-                    fixed_a = measured_score.apply_measured(query_track, before_a.deltas, basis)
+                    fixed_a = measured_score.apply_measured(
+                        query_track, before_a.deltas, basis, limit=measured_score.DELIVERED_CUES
+                    )
+                    fixed_a_all = measured_score.apply_measured(query_track, before_a.deltas, basis)
                     # B가 교정 전·후를 둘 다 잰다(`eval_pose_correction.measure_correction`과
                     # 같은 패턴: A로 고르고 B로 앞뒤를 다 잰다).
                     before_split = measured_score.score_track(
@@ -2524,6 +2542,9 @@ def compare(
                     )
                     before_split_score = before_split.score
                     after_split_score = after_split.score
+                    after_split_all_score = measured_score.score_track(
+                        fixed_a_all, reference_track, spreads_b, weights, basis
+                    ).score
                     split_reason = None
 
     # 발부 목록은 **한 번만** 구한다. `measured.axes`와 `view.corrections`가 같은 목록을
@@ -2560,6 +2581,10 @@ def compare(
             "reference_dates": resolved.dates if resolved is not None else [],
             "score": before.score,
             "score_after": after.score,
+            # 비교용 — 발부된 축을 **전부** 적용했을 때(옛 정의). 작업자에게 가는 숫자가 아니다.
+            "score_after_all": after_all.score,
+            # 작업자에게 실제로 전달되는 안내 수와 그 번호(σ 내림차순 1번부터).
+            "delivered_cues": measured_score.DELIVERED_CUES,
             "deltas": [
                 {
                     "point": delta.point,
@@ -2609,6 +2634,10 @@ def compare(
             # 이동은 들어 있지 않다.
             "improvement": improvement(
                 before.score, after_split_score, after.score, before_split_score
+            ),
+            # 비교용 — 발부된 축 전부를 적용한 개선율(옛 정의, 91.58% 계열 수치가 이것이다).
+            "improvement_all": improvement(
+                before.score, after_split_all_score, after_all.score, before_split_score
             ),
             # split이 None이면 왜인지 말한다 — 레퍼런스 객체가 아예 없거나(D3/D4 이전과
             # 같은 잠정/직접-spreads 상태, "no_split_reference"), 있어도 날짜가 모자라

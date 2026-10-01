@@ -644,6 +644,13 @@ def corrections_text(
     return [_finding_phrase(finding)]
 
 
+# 작업자에게 **실제로 전달되는** 안내 수. 화면은 발부된 축을 전부 보이지만 작업자가 듣는 것은
+# σ가 가장 큰 하나다(제품 MCP의 `arm_reference.MAX_CORRECTIONS`도 1). 사용자(2026-10-01):
+# "실제 안내되는 게 1개라면 그 1개를 적용했을 때의 유사도 개선을 적어야 한다." 그래서 개선율은
+# 이 수만큼만 옮겨 잰다 — 말하지 않은 안내를 적용한 상승을 보고하면 숫자가 부풀어 보인다.
+DELIVERED_CUES: Final = 1
+
+
 def issued_axes(
     deltas: Sequence[PointDelta], frame: AxisFrame = WORLD_FRAME
 ) -> list[AxisCorrection]:
@@ -663,8 +670,16 @@ def issued_axes(
     return sorted(issued, key=lambda c: c.sigma, reverse=True)
 
 
+def delivered_axes(
+    deltas: Sequence[PointDelta], frame: AxisFrame = WORLD_FRAME, limit: int | None = DELIVERED_CUES
+) -> list[AxisCorrection]:
+    """작업자에게 전달되는 축 — `issued_axes`(σ 내림차순)의 앞 `limit`개. `None`이면 전부."""
+    issued = issued_axes(deltas, frame)
+    return issued if limit is None else issued[: max(limit, 0)]
+
+
 def issued_shifts(
-    deltas: Sequence[PointDelta], frame: AxisFrame = WORLD_FRAME
+    deltas: Sequence[PointDelta], frame: AxisFrame = WORLD_FRAME, limit: int | None = None
 ) -> dict[str, Vec3]:
     """점 -> 스트로크 프레임 이동벡터. **발부한 점만 키를 갖는다.**
 
@@ -677,7 +692,7 @@ def issued_shifts(
     월드에서 더한 뒤 기저로 되돌린다.
     """
     world: dict[str, list[float]] = {}
-    for correction in issued_axes(deltas, frame):
+    for correction in delivered_axes(deltas, frame, limit):
         metres = correction.magnitude_cm / 100.0
         acc = world.setdefault(correction.point, [0.0, 0.0, 0.0])
         for i in range(3):
@@ -698,6 +713,7 @@ def apply_measured(
     deltas: Sequence[PointDelta],
     frame: AxisFrame = WORLD_FRAME,
     fraction: float = 1.0,
+    limit: int | None = None,
 ) -> dict[str, list[Vec3 | None]]:
     """교정을 따랐을 때의 궤적. **내준 지시 그대로**만 옮긴다.
 
@@ -711,7 +727,9 @@ def apply_measured(
 
     못 잰 격자점은 옮기지 않는다. 자리를 지우면 s 대응이 어긋난다.
     """
-    shifts = issued_shifts(deltas, frame)
+    # `limit`: σ 상위 몇 개를 옮기나. `None`이면 발부된 축 전부(옛 정의), `DELIVERED_CUES`면
+    # 작업자에게 실제로 전달되는 것만이다.
+    shifts = issued_shifts(deltas, frame, limit)
     output: dict[str, list[Vec3 | None]] = {}
     for name, points in query.items():
         shift = shifts.get(name)

@@ -2868,6 +2868,40 @@ def test_wording_checks_can_fail():
 
 
 
+# --- 예상값은 전달되는 안내 한 건을 따른 결과다 (2026-10-01) ----------------------------------
+#
+# 작업자에게 들리는 것은 σ 1위 한 건(`measured.delivered_cues`)이다. 예상 유사도 옆에 **그 문장**이
+# 있어야 "무엇을 하면 이 숫자가 되는가"가 읽힌다. 문장 수를 화면이 정하면 서버의 정의와 어긋난다.
+
+
+def delivered_cue_faults(html: str, js: str) -> list[str]:
+    faults: list[str] = []
+    section = html.split('id="improvementSection"', 1)[-1].split("</section>", 1)[0]
+    if 'id="improvementCue"' not in section.split("<details", 1)[0]:
+        faults.append("cue_not_beside_the_estimate")
+    body = _nested_function_body(without_comments(js), "renderImprovement")
+    if "measured.delivered_cues" not in body:
+        faults.append("cue_count_not_from_server")
+    if '$("improvementCue")' not in body or "entry.text" not in body:
+        faults.append("cue_sentence_not_rendered")
+    return faults
+
+
+def test_the_estimate_names_the_one_delivered_cue():
+    assert delivered_cue_faults(_read("index.html"), _read("app.js")) == []
+
+
+def test_delivered_cue_checks_can_fail():
+    html, js = _read("index.html"), _read("app.js")
+    moved = html.replace('        <div class="improvement-cue" id="improvementCue"></div>\n', "", 1)
+    moved = moved.replace("<summary>자세히</summary>", '<summary>자세히</summary><div id="improvementCue"></div>', 1)
+    assert moved != html and "cue_not_beside_the_estimate" in delivered_cue_faults(moved, js)
+    fixed = js.replace("measured.delivered_cues === \"number\" ? measured.delivered_cues : 0", "1 === 1 ? 1 : 0", 1)
+    assert fixed != js and "cue_count_not_from_server" in delivered_cue_faults(html, fixed)
+    silent = js.replace('const cue = $("improvementCue");', "const cue = document.createElement(\"div\");", 1)
+    assert silent != js and "cue_sentence_not_rendered" in delivered_cue_faults(html, silent)
+
+
 # --- 목록과 좁은 화면 -------------------------------------------------------------------------
 #
 # 다른 평가자가 375px에서 가로 468px 넘침·3D 2,548px 아래를 쟀다. 재현한 뒤 고쳤다(넘침 0,

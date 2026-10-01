@@ -39,8 +39,14 @@ SPREADS = Path("/output/spread_reference_expert_m3.json")
 
 # b5f7341 이후 표시 전용으로 더한 필드. 이것만 빼면 기준선과 같아야 한다.
 NEW_MEASURED_KEYS = frozenset(
-    {"improvement_labels", "display", "deltas_display", "orientation", "joint_axes", "joint_angles"}
+    {"improvement_labels", "display", "deltas_display", "orientation", "joint_axes", "joint_angles",
+     "delivered_cues"}
 )
+# 2026-10-01 — **의도한 정의 변경**: 예상 점수·개선율을 "발부된 축 전부"에서 "작업자에게 전달되는
+# 안내(`DELIVERED_CUES` = 1)만"으로 바꿨다. 기준선을 다시 뜨지 않는다 — 옛 값은 `_all` 필드에 **그대로**
+# 산다. 그래서 기준선의 `score_after`·`improvement`가 새 응답의 `score_after_all`·`improvement_all`과
+# 문자열로 같아야 하고, 나머지 채점 필드는 여전히 한 비트도 움직이면 안 된다.
+DEFINITION_MOVED = {"score_after": "score_after_all", "improvement": "improvement_all"}
 NEW_AXIS_KEYS = frozenset(
     {
         "n",
@@ -101,7 +107,13 @@ def _run(case: dict[str, Any], include_view: bool) -> dict[str, Any]:
 
 
 def legacy_measured(measured: dict[str, Any]) -> dict[str, Any]:
-    out = {key: value for key, value in measured.items() if key not in NEW_MEASURED_KEYS}
+    out = {
+        key: value for key, value in measured.items()
+        if key not in NEW_MEASURED_KEYS and key not in DEFINITION_MOVED.values()
+    }
+    # 옛 정의 값은 `_all` 자리에서 꺼낸다 — 기준선의 옛 이름과 비교한다.
+    for old, moved in DEFINITION_MOVED.items():
+        out[old] = measured[moved]
     out["axes"] = [{k: v for k, v in axis.items() if k not in NEW_AXIS_KEYS} for axis in measured["axes"]]
     return out
 
@@ -113,9 +125,11 @@ LEGACY_LAYER_POINTS = ("head", "right", "left", "hit")
 
 
 def legacy_view(view: dict[str, Any]) -> dict[str, Any]:
+    # `view_corrected`(안내 적용 후 층)는 정의 변경으로 **의도적으로** 움직였다 — 전달되는 1건만 옮긴다.
+    # 그 이동의 정확성은 `test_service_view.test_corrected_layer_shift_equals_the_independently_summed_
+    # issued_axes`가 독립 계산으로 지킨다. 여기서는 비교에서 뺀다.
     return {
         "view_reference": {key: view["layers"]["reference"][key] for key in LEGACY_LAYER_POINTS},
-        "view_corrected": view["layers"]["corrected"],
         "view_corrections_legacy": [
             {key: arrow[key] for key in LEGACY_CORRECTION_KEYS} for arrow in view["corrections"]
         ],
@@ -134,7 +148,7 @@ def test_scoring_bit_identical_without_view(name: str) -> None:
     case = next(c for c in _cases() if c["name"] == name)
     body = _run(case, include_view=False)
     assert body["view"] is None
-    assert _dump(body["measured"]) == _dump(case["measured"])
+    assert _dump(legacy_measured(body["measured"])) == _dump(case["measured"])
     assert _dump(body["joint"]) == _dump(case["joint"])
 
 
@@ -144,7 +158,7 @@ def test_scoring_bit_identical_with_view(name: str) -> None:
     case = next(c for c in _cases() if c["name"] == name)
     body = _run(case, include_view=True)
     assert_scoring_matches_baseline(body, case)
-    expected = {key: case[key] for key in ("view_reference", "view_corrected", "view_corrections_legacy")}
+    expected = {key: case[key] for key in ("view_reference", "view_corrections_legacy")}
     expected["weights"] = {key: case["weights"][key] for key in measured_score.DEFAULT_WEIGHTS}
     assert _dump(legacy_view(body["view"])) == _dump(expected)
     for name_, value in body["view"]["weights"].items():

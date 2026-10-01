@@ -132,7 +132,8 @@ function renderMeasuredDetails(root, measured, view) {
   })();
   for (const [term, value] of [
     ["유사도", shown(display.score)],
-    ["안내 적용 후", shown(display.score_after)],
+    ["안내 1건 적용 후", shown(display.score_after)],
+    ["발부 전부 적용 후", shown(display.score_after_all)],
     ["개선율(분리)", `${shown(display.improvement_split)}  ${splitNote}`],
     ["개선율(동일)", shown(display.improvement_same)],
     ["REQ-19 게이트", `${gate}${gateWhy}`],
@@ -379,9 +380,23 @@ function renderImprovement(measured) {
     el("span", "improvement-caption", "유사도"),
     el("span", "improvement-value", shown(display.score)),
     el("span", "improvement-arrow", "→"),
-    el("span", "improvement-caption", "안내 적용 후"),
+    el("span", "improvement-caption", "이 안내대로 고치면"),
     el("span", "improvement-value", shown(display.score_after)),
   );
+  // 예상값은 작업자에게 **실제로 전달되는** 안내(σ 1위, `delivered_cues`건)만 따랐을 때다.
+  // 어떤 안내를 따른 결과인지 문장으로 숫자 바로 아래에 둔다 — 목록의 나머지 건은 반영되지 않는다.
+  const cue = $("improvementCue");
+  cue.replaceChildren();
+  const deliveredCount = typeof measured.delivered_cues === "number" ? measured.delivered_cues : 0;
+  const delivered = (measured.axes ?? []).filter((entry) => typeof entry.n === "number" && entry.n <= deliveredCount);
+  for (const entry of delivered) {
+    const line = el("p", "improvement-cue-line");
+    line.append(
+      el("span", "num-badge", String(entry.n)),
+      el("span", "improvement-cue-text", typeof entry.text === "string" ? entry.text : shown(entry.trace)),
+    );
+    cue.append(line);
+  }
 
   const rows = $("improvementRows");
   rows.replaceChildren();
@@ -393,6 +408,8 @@ function renderImprovement(measured) {
     ["delta", display.score_delta, "유사도가 오른 폭"],
     ["same", display.improvement_same, labels.same],
     ["split", display.improvement_split, labels.split],
+    ["after_all", display.score_after_all, "참고: 발부된 안내를 모두 따랐다면의 유사도"],
+    ["split_all", display.improvement_split_all, "참고: 그때의 개선율(분리)"],
   ]) {
     const row = el("div", "improvement-row");
     row.dataset.key = key;
@@ -408,6 +425,7 @@ function renderImprovement(measured) {
 
 function clearImprovement() {
   $("improvementScore").textContent = "—";
+  $("improvementCue").replaceChildren();
   $("improvementRows").replaceChildren();
 }
 

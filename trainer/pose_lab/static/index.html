@@ -99,13 +99,15 @@
         <!-- 위에는 원시 두 숫자만 둔다. 정규화 지표(G)는 천장 가까이에서 오해를 만드므로
              접힌 쪽으로 내린다 — 0.950→0.970과 0.19→0.51이 같은 G를 낼 수 있다. -->
         <div class="improvement-score" id="improvementScore">—</div>
+        <!-- 예상값이 **어느 안내 하나**를 따른 결과인지. 작업자에게 전달되는 것은 σ 1위 한 건이다. -->
+        <div class="improvement-cue" id="improvementCue"></div>
         <!-- **숫자 옆에 늘** 둔다. 접힌 칸 안에만 있으면 0.160 → 0.958 이 재측정 결과로 읽힌다
              (다른 평가자가 실제 브라우저에서 지적했다). -->
         <p class="improvement-flag">계산상 예상값 — 다시 측정한 결과가 아닙니다</p>
         <details class="improvement-detail">
           <summary>자세히</summary>
           <dl class="improvement-rows" id="improvementRows"></dl>
-          <p class="improvement-caveat">작업자가 지시대로 정확히 움직였다고 보고 계산한 값입니다. 다시 뿌려서 잰 것이 아닙니다.</p>
+          <p class="improvement-caveat">작업자가 위 안내 한 건을 정확히 따랐다고 보고 계산한 값입니다. 다시 뿌려서 잰 것이 아닙니다.</p>
         </details>
       </section>
       <!-- ④b 배포 채점 — **② 와 다른 논리다.** ②는 동작 키로 고른 기준 패스 하나에 대고

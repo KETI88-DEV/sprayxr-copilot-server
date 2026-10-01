@@ -109,7 +109,9 @@ def test_correction_arrow_delta_matches_its_own_axis_exactly() -> None:
 
 
 def test_corrected_layer_shift_equals_the_independently_summed_issued_axes() -> None:
-    """`corrected` 층의 이동이 `issued_axes` 합과 정확히 같다(요구사항 1, 독립 계산).
+    """`corrected` 층의 이동이 **작업자에게 전달되는** 축(`issued_axes`의 앞 `DELIVERED_CUES`개)의 합과
+    정확히 같다(요구사항 1, 독립 계산). 전달되지 않은 축의 점은 **제자리**다 — 예상 점수(`score_after`)와
+    그림이 같은 이동을 말해야 한다(2026-10-01, 개선율을 전달되는 안내 1건으로).
 
     `service._world_shifts`(구현이 실제로 쓰는 합산 경로)를 재사용하지 않고, 이
     테스트가 직접 `AxisCorrection` 목록을 훑어 점별 이동을 다시 더한다 — 구현이
@@ -137,8 +139,9 @@ def test_corrected_layer_shift_equals_the_independently_summed_issued_axes() -> 
     issued = measured_score.issued_axes(point_deltas, basis)
     assert issued, "이 픽스처는 교정이 발부돼야 한다"
 
+    delivered = issued[: measured_score.DELIVERED_CUES]
     expected_shift: dict[str, list[float]] = {}
-    for correction in issued:
+    for correction in delivered:
         metres = correction.magnitude_cm / 100.0
         acc = expected_shift.setdefault(correction.point, [0.0, 0.0, 0.0])
         for i in range(3):
@@ -146,6 +149,9 @@ def test_corrected_layer_shift_equals_the_independently_summed_issued_axes() -> 
 
     query_layer = view["layers"]["query"]
     corrected_layer = view["layers"]["corrected"]
+    # 발부됐지만 전달되지 않은 점은 옮기지 않는다.
+    for point in {c.point for c in issued} - set(expected_shift):
+        assert corrected_layer[point] == query_layer[point], f"전달하지 않은 {point}을 옮겼다"
     for point, shift in expected_shift.items():
         query_points = query_layer[point]
         corrected_points = corrected_layer[point]
@@ -181,9 +187,11 @@ def test_layer_coordinates_are_the_world_capture_frame_not_stroke_local() -> Non
         assert reference_layer["hit"][i] == list(frame.hit)
 
 
-def test_corrected_layer_sums_every_axis_issued_for_the_same_point() -> None:
-    """오른손처럼 한 점에 축이 둘(wall+vertical) 발부되면, `corrected` 층은 그 둘의
-    합만큼 옮겨야 한다 — 하나만 반영하거나 마지막 것으로 덮어쓰면 안 된다.
+def test_corrected_layer_moves_only_the_delivered_axis_of_a_multi_axis_point() -> None:
+    """오른손처럼 한 점에 축이 둘(wall+vertical) 발부돼도, 작업자에게 전달되는 것은 σ가 큰 하나다
+    (`DELIVERED_CUES` = 1). `corrected` 층은 그 하나만큼 옮긴다 — 둘의 합을 옮기면 말하지 않은 안내를
+    적용한 그림이 된다. 옛 보장(한 점의 축을 다 더한다)은 `_all` 경로가 지킨다
+    (`test_issued_shifts_without_a_limit_still_sums_every_axis`).
 
     `_deltas()`/`test_axes_block_lists_every_issued_axis_with_its_own_sigma`가 이미
     다축 발부를 확인한 그 픽스처를 그대로 쓴다(local_delta=(0.08, 0.0, -0.06),
@@ -216,8 +224,9 @@ def test_corrected_layer_sums_every_axis_issued_for_the_same_point() -> None:
     )
     issued = measured_score.issued_axes([delta], measured_score.WORLD_FRAME)
     assert {c.axis for c in issued} == {"wall", "vertical"}, "픽스처가 다축을 내야 한다"
+    assert issued[0].axis == "wall", "σ가 큰 wall 이 전달돼야 한다"
     expected = [0.0, 0.0, 0.0]
-    for correction in issued:
+    for correction in issued[: measured_score.DELIVERED_CUES]:
         metres = correction.magnitude_cm / 100.0
         for i in range(3):
             expected[i] += correction.unit[i] * metres
@@ -2109,3 +2118,24 @@ def test_the_pelvis_layer_moves_the_reference_pelvis_onto_the_workers() -> None:
 def test_the_pelvis_layer_is_not_guessed_without_a_pelvis() -> None:
     assert service.pelvis_alignment_block({"Chest": [0, 0, 0]}, {"Pelvis": [0, 0, 0]}) is None
     assert service.pelvis_alignment_block(None, {"Pelvis": [0, 0, 0]}) is None
+
+
+def test_issued_shifts_without_a_limit_still_sums_every_axis() -> None:
+    """옛 정의(`_all`: 발부된 축 전부)는 한 점의 여러 축을 **다 더한다** — 하나만 반영하거나 마지막 것으로
+    덮어쓰면 안 된다. 1건 정의로 바꾼 뒤에도 비교용 `score_after_all`이 이 경로로 계산된다.
+
+    깨뜨리는 법: `issued_shifts`가 `limit=None`에서도 앞 하나만 쓰면 vertical 몫이 빠져 실패한다.
+    """
+    delta = measured_score.PointDelta(
+        point="right", sigma=4.0, local_delta=(0.08, 0.0, -0.06), samples=2,
+        axis_sigmas={"wall": 3.5, "vertical": 2.6, "lateral": 0.1},
+    )
+    every = measured_score.issued_shifts([delta], measured_score.WORLD_FRAME, limit=None)
+    first = measured_score.issued_shifts([delta], measured_score.WORLD_FRAME, limit=1)
+    issued = measured_score.issued_axes([delta], measured_score.WORLD_FRAME)
+    world = [sum(c.unit[i] * c.magnitude_cm / 100.0 for c in issued) for i in range(3)]
+    frame = measured_score.WORLD_FRAME
+    # 반환은 스트로크 프레임 성분(normal, tangent, up)이다.
+    total = [sum(world[i] * axis[i] for i in range(3)) for axis in (frame.normal, frame.tangent, frame.up)]
+    assert list(every["right"]) == pytest.approx(total)
+    assert list(first["right"]) != pytest.approx(total), "1건 정의가 두 축을 다 더했다"

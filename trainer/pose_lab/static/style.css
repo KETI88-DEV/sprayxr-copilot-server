@@ -1004,3 +1004,14 @@ body[data-stale="true"] #orientationSection {
 .view3d-label-arrow.is-dimmed { opacity: 0.25; }
 .view3d-label-arrow.is-focused { outline: 2px solid var(--text); }
 .view3d-legend .swatch.pelvis { background: #a3e635; }
+
+/* 예상값이 따른 안내 한 건 — 숫자 바로 아래. */
+.improvement-cue { grid-column: 1 / -1; margin-top: var(--sp-1); }
+.improvement-cue-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+  min-width: 0;
+}
+.improvement-cue-text { overflow-wrap: anywhere; }
