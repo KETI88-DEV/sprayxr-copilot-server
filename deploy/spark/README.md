@@ -347,6 +347,22 @@ curl -sS http://127.0.0.1:58000/api/ready | python3 -m json.tool
 - 컨테이너 상태가 `healthy`다.
 - `rag_vectors`가 10829가 아니면 번들 인덱스가 바뀐 것이므로 §3으로 돌아간다.
 
+## 11-0. v2.5 공개 API 전수 스모크
+
+엔드포인트 15개를 의존 순서대로 두드리고 **계약이 약속한 값**까지 본다(시퀀스 수집이면
+`sequence_data_ack.stored`와 `frames_accepted == frames_received`). 표준 라이브러리만
+쓰므로 Spark 호스트의 python3에서 그대로 돈다. 실패가 하나라도 있으면 종료 코드가 1이다.
+
+```bash
+python3 "$SPARK_DIR/scripts/smoke_v2_5_api.py" --base-url http://127.0.0.1:58000
+python3 "$SPARK_DIR/scripts/smoke_v2_5_api.py" --sequence-file ~/seq-telemetry-valid.json
+python3 "$SPARK_DIR/scripts/smoke_v2_5_api.py" --skip-llm --json   # LLM 왕복 생략
+```
+
+식별자는 매 실행 `--run-id`(기본 타임스탬프)로 새로 만든다 — 같은
+`(session_id, sequence_id)`에 다른 본문을 보내면 계약상 충돌이라 저장되지 않기 때문이다.
+`--sequence-file`을 주면 그 본문의 식별자만 바꿔 쓰므로 실물 트래픽으로 검증할 수 있다.
+
 ## 11. copilot/query (v2.5)
 
 ```bash
