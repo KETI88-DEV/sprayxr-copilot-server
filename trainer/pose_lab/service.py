@@ -2348,6 +2348,7 @@ def compare(
     *,
     include_view: bool = True,
     correction_policies: Mapping[str, measured_score.CorrectionPolicy] | None = None,
+    policy_observer: Callable[[str, str, Mapping[str, Any]], None] | None = None,
 ) -> dict[str, object]:
     """비교 1건. 동작 키가 다르면 지표를 만들지 않는다.
 
@@ -2355,6 +2356,10 @@ def compare(
     개선율을 `measured.policies`에 더 낸다(3차년도 실험, `trainer/year3/`). 정책은 same 쪽에서는
     전체 산포로, split 쪽에서는 A 산포로 교정을 고르고, 채점은 기존 개선율과 같은 잣대(F / B)로
     한다. 주지 않으면 응답은 이 인자가 없던 때와 같다.
+
+    `policy_observer(name, side, inputs)`는 정책마다 same·split 쪽의 채점 재료(`query_track`, `reference_track`,
+    `score_spreads`, `weights`, `frame`, `chosen`, `before_score`)를 받는다 — 교정을 다른 방식으로 실현해(예: 몸 제약)
+    같은 잣대로 다시 채점하는 측정용이다. 응답에는 아무것도 더하지 않는다.
 
     `include_view=False`면 채점 필드만 낸다(`view`는 None, `measured`에 표시 전용 필드 없음).
     개선율 측정 도구(`improvement_study.py`)는 이 모드로만 부른다 — 표시 코드의 비용이나
@@ -2703,6 +2708,11 @@ def compare(
         policies: dict[str, object] = {}
         for name, policy in correction_policies.items():
             chosen = list(policy(query_track, reference_track, spreads_used, weights, basis, before.deltas))
+            if policy_observer is not None:
+                policy_observer(name, "same", {
+                    "query_track": query_track, "reference_track": reference_track, "score_spreads": spreads_used,
+                    "weights": weights, "frame": basis, "chosen": chosen, "before_score": before.score,
+                })
             after_policy = measured_score.score_track(
                 measured_score.apply_corrections(query_track, chosen, basis),
                 reference_track, spreads_used, weights, basis,
@@ -2713,6 +2723,11 @@ def compare(
                 spreads_a_sel, deltas_a_sel, spreads_b_sel = split_selection
                 chosen_a = list(policy(query_track, reference_track, spreads_a_sel, weights, basis, deltas_a_sel))
                 values_split = len(chosen_a)
+                if policy_observer is not None:
+                    policy_observer(name, "split", {
+                        "query_track": query_track, "reference_track": reference_track, "score_spreads": spreads_b_sel,
+                        "weights": weights, "frame": basis, "chosen": chosen_a, "before_score": before_split_score,
+                    })
                 after_policy_split = measured_score.score_track(
                     measured_score.apply_corrections(query_track, chosen_a, basis),
                     reference_track, spreads_b_sel, weights, basis,
