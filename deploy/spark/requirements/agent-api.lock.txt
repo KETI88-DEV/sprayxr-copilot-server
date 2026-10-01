@@ -3,7 +3,10 @@
 # 버전 근거: 평가·라이브 서빙이 돈 개발 컨테이너 ship-paint-trainer(x86_64, Python 3.11.9)의 설치본,
 #   2026-09-15 `importlib.metadata` 로 뽑은 루트 패키지의 의존 폐포(markers: linux/aarch64/3.11, extras 제외).
 #   루트: fastapi uvicorn pydantic httpx anyio PyYAML numpy faiss-cpu sentence-transformers transformers
-#         peft Jinja2 tokenizers safetensors huggingface_hub accelerate
+#         peft Jinja2 tokenizers safetensors huggingface_hub accelerate python-multipart
+#   python-multipart: POST /api/v1/sessions/complete 이 multipart/form-data 다(명세서 p.12).
+#     FastAPI 는 Form/File 을 쓰는 라우트를 정의할 때 이것을 요구하므로 없으면 import 스모크가
+#     깨진다 — 2026-09-30 실물 빌드에서 그렇게 터졌다. py3-none-any 라 aarch64 가용성 문제 없다.
 #   (라이브 경로 import 탐침: trainer.demo_api.app, trainer.scripts.agent_pipeline, search_index)
 # aarch64 가용성: 컴파일 패키지는 PyPI에 cp311/abi3 manylinux aarch64 휠이 있음을 2026-09-15 PyPI JSON으로 확인.
 #   나머지는 py3-none-any.
@@ -40,6 +43,7 @@ psutil==7.2.2
 pydantic==2.12.5
 pydantic-core==2.41.5
 pygments==2.15.1
+python-multipart==0.0.32
 pyyaml==6.0.1
 regex==2026.2.28
 rich==14.3.3

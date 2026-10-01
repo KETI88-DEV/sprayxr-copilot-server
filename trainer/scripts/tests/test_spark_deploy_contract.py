@@ -9,6 +9,7 @@ from __future__ import annotations
 import functools
 import importlib.util
 import json
+import os
 import argparse
 import re
 import shutil
@@ -394,3 +395,106 @@ def test_mcp_image_copy_list_is_enough_to_import_the_mcp_app(tmp_path: Path) -> 
         timeout=120,
     )
     assert proc.returncode == 0, proc.stderr[-2000:]
+
+
+# agent-api 이미지의 import 스모크(Dockerfile 마지막 RUN)는 x86_64 개발 서버에서 빌드하지 않으므로
+# lock에 빠진 의존성을 CI가 아니라 Spark 실물 빌드에서야 발견한다. 2026-09-30에 python-multipart가
+# 그렇게 빠졌다(/api/v1/sessions/complete 가 multipart/form-data 다). 여기서는 lock + torch 휠 폐포만
+# 담은 그림자 site-packages를 심볼릭 링크로 만들고 `-S`로 실제 site-packages를 끊어, 이미지에 설치될
+# 배포만 있는 환경에서 같은 import를 돌린다. 설치 여부 탐침(transformers의 find_spec("PIL") 등)이
+# 깨지지 않아야 하므로 meta_path에서 예외를 던지는 방식은 쓰지 않는다 — 모듈이 보이지 않아야 한다.
+_SMOKE_IMPORT = re.compile(r'RUN python3 -c "((?:import|from) [^"]*)"')
+
+
+def _normalize_dist(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def _torch_wheel_closure() -> set[str]:
+    """Dockerfile이 lock과 별도로 설치하는 torch 휠이 끌고 오는 배포 이름."""
+    closure: set[str] = set()
+    pending = ["torch"]
+    while pending:
+        name = _normalize_dist(pending.pop())
+        if name in closure:
+            continue
+        closure.add(name)
+        try:
+            requires = metadata.distribution(name).requires or []
+        except metadata.PackageNotFoundError:
+            continue
+        for raw in requires:
+            if ";" in raw and "extra" in raw.split(";", 1)[1]:
+                continue
+            dep = re.match(r"[A-Za-z0-9][A-Za-z0-9._-]*", raw)
+            if dep is not None:
+                pending.append(dep.group(0))
+    return closure
+
+
+def _shadow_site_packages(allowed: set[str], root: Path) -> Path:
+    """`allowed` 배포의 top-level 경로와 메타데이터만 링크한 sys.path 항목."""
+    root.mkdir(parents=True, exist_ok=True)
+    for dist in metadata.distributions():
+        name = dist.metadata["Name"]
+        if not name or _normalize_dist(name) not in allowed:
+            continue
+        base = Path(str(dist.locate_file("")))
+        tops = {str(f).split("/")[0] for f in (dist.files or [])}
+        info = getattr(dist, "_path", None)
+        if info is not None:
+            tops.add(Path(str(info)).name)  # importlib.metadata.version()이 찾을 수 있게
+        for top in tops:
+            if top.startswith(".."):
+                continue
+            source = base / top
+            target = root / top
+            if source.exists() and not target.exists():
+                target.symlink_to(source)
+    return root
+
+
+def _run_agent_smoke(allowed: set[str], shadow_root: Path) -> subprocess.CompletedProcess[str]:
+    stage = AGENT_DOCKERFILE.read_text(encoding="utf-8").split("FROM base AS agent-api", 1)[1]
+    found = _SMOKE_IMPORT.search(stage)
+    assert found is not None, "agent-api 스테이지에서 import 스모크를 찾지 못했다"
+    shadow = _shadow_site_packages(allowed, shadow_root)
+    return subprocess.run(
+        [sys.executable, "-S", "-c", found.group(1)],
+        cwd=REPO,
+        env={**os.environ, "PYTHONPATH": f"{shadow}{os.pathsep}{REPO}"},
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=600,
+    )
+
+
+@pytest.fixture(name="agent_lock_allowed")
+def _agent_lock_allowed() -> set[str]:
+    try:
+        metadata.distribution("fastapi")
+        metadata.distribution("torch")
+    except metadata.PackageNotFoundError:
+        pytest.skip("not running in the provisioned container")
+    return {_normalize_dist(name) for name in _lock(AGENT_LOCK)} | _torch_wheel_closure()
+
+
+def test_agent_lock_covers_every_import_the_image_smoke_performs(
+    agent_lock_allowed: set[str], tmp_path: Path
+) -> None:
+    proc = _run_agent_smoke(agent_lock_allowed, tmp_path / "shadow")
+
+    assert proc.returncode == 0, f"{proc.stdout[-1500:]}\n{proc.stderr[-3000:]}"
+
+
+@pytest.mark.parametrize("dropped", ["python-multipart", "httpx", "faiss-cpu"])
+def test_agent_lock_smoke_fails_when_a_pinned_dependency_is_missing(
+    agent_lock_allowed: set[str], tmp_path: Path, dropped: str
+) -> None:
+    """위 단언이 실패할 수 있음을 보인다 — 그림자 경로가 실제로 차단한다는 대조군."""
+    assert dropped in agent_lock_allowed
+
+    proc = _run_agent_smoke(agent_lock_allowed - {dropped}, tmp_path / "shadow")
+
+    assert proc.returncode != 0, f"{dropped} 없이도 import가 통과했다 — 그림자 경로가 차단하지 않는다"
