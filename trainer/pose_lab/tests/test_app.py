@@ -724,3 +724,16 @@ def test_diagnose_admits_when_a_bar_is_over_but_no_cue_fires(monkeypatch, tmp_pa
         assert service._bars_note(
             SimpleNamespace(sigmas=[hot], corrections=["있음"]), {"RightUpperArm": 2.0}
         ) is None, "교정이 나갔는데도 엇갈림이라고 말한다"
+
+
+def test_screen_files_are_revalidated_on_every_load() -> None:
+    """화면 파일에 캐시 헤더가 없으면 브라우저가 옛 `skeleton_view.js`를 계속 쓴다 — 실제로 그랬다.
+
+    깨뜨리는 법: 미들웨어를 빼면 `Cache-Control`이 없어 실패한다.
+    """
+    client = TestClient(create_app())
+    for path in ("/", "/app.js", "/skeleton_view.js", "/style.css"):
+        response = client.get(path)
+        assert response.status_code == 200, path
+        assert response.headers.get("cache-control") == "no-cache", path
+    assert client.get("/api/health").headers.get("cache-control") != "no-cache"

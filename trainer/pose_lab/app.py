@@ -283,6 +283,16 @@ def create_app(source: Any | None = None) -> FastAPI:
             _arm_buckets(),
         )
 
+    # 화면 파일은 **매번 새것인지 확인**하게 한다. 헤더가 없으면 브라우저가 경험적으로 캐시해,
+    # 코드를 고쳐도 옛 `skeleton_view.js`(ES 모듈 import)를 계속 썼다 — 실제로 그랬다(살을 입힌 몸이
+    # 안 보였다). `no-cache`는 "저장하지 말라"가 아니라 "쓰기 전에 ETag로 확인하라"다.
+    @app.middleware("http")
+    async def revalidate_screen_files(request, call_next):  # noqa: ANN001, ANN202
+        response = await call_next(request)
+        if not request.url.path.startswith("/api/"):
+            response.headers["Cache-Control"] = "no-cache"
+        return response
+
     if STATIC_DIR.is_dir():
         app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
     return app
