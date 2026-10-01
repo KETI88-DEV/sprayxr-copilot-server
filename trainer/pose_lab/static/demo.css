@@ -65,3 +65,4 @@
   .demo-body { grid-template-columns: minmax(0, 1fr); }
   .demo-canvas { height: 60vh; }
 }
+.demo-cue-short { color: var(--warn); font-size: var(--fs-sm); }

@@ -64,12 +64,8 @@ def test_hidden_delivered_mode_matches_the_main_screen(name: str) -> None:
 
 
 @pytest.mark.parametrize("name", REAL)
-def test_each_arrow_moves_its_body_part_by_the_spoken_amount(name: str) -> None:
-    """화살표(안내 전후의 손·머리 관절)는 안내한 cm만큼 움직인다 — 그림과 문장이 같은 것을 말한다.
-
-    손이 팔 길이로 닿지 않을 때도 어깨를 내밀어 정확히 닿는다. 깨뜨리는 법: 어깨 내밀기를 빼면 몸이 크게 물러서는
-    쌍에서 손이 모자라 실패한다.
-    """
+def test_each_arrow_is_the_spoken_amount(name: str) -> None:
+    """화살표는 안내 문장의 cm 그대로다. 몸이 팔 길이로 못 미치면 그 거리는 `reach_short_cm`로 따로 나온다."""
     from trainer.year3 import demo_mode
 
     demo_mode.register()
@@ -83,19 +79,26 @@ def test_each_arrow_moves_its_body_part_by_the_spoken_amount(name: str) -> None:
 
 
 @pytest.mark.parametrize("name", REAL)
-def test_corrected_body_keeps_bone_lengths_and_the_last_step_is_the_result(name: str) -> None:
-    """교정된 몸의 팔·다리 마디 길이는 원래 몸과 같고(사람이 늘어나지 않는다), 첫 단계는 원래 몸이다."""
+def test_no_bone_ever_changes_length(name: str) -> None:
+    """**모든** 뼈(가슴-어깨·쇄골·골반-허벅지 포함)의 길이가 모든 단계와 목표 몸에서 원래와 같다 — 사람이 늘어나지 않는다.
+
+    팔 세 마디만 보던 옛 검사는 가슴-왼쪽 어깨가 35.8cm 늘어난 것을 놓쳤다(사용자가 영상에서 찾았다, 2026-10-01).
+    깨뜨리는 법: 안내 없는 손을 원래 자리로 되돌리거나 어깨를 손 쪽으로 밀어 옮기면 실패한다.
+    """
+    from trainer.year3 import demo_mode
+
+    demo_mode.register()
     source, spreads, query, reference = _real(name)
-    demo = cd.build_demo(source, query, reference, spreads)
-    worker = demo["bodies"]["worker"]
-    final = demo["bodies"]["steps"][-1]
-    for parent, child in (("RightUpperArm", "RightForeArm"), ("RightForeArm", "RightHand"),
-                          ("LeftUpperArm", "LeftForeArm"), ("LeftForeArm", "LeftHand"),
-                          ("LeftThigh", "LeftCalf"), ("RightCalf", "RightFoot")):
-        before = math.dist(worker[parent], worker[child])
-        after = math.dist(final[parent], final[child])
-        assert after == pytest.approx(before, abs=2e-3), (parent, child)
-    assert demo["bodies"]["steps"][0] == worker
+    for mode in ("issued", "delivered", demo_mode.MODE):
+        demo = cd.build_demo(source, query, reference, spreads, mode)
+        worker = demo["bodies"]["worker"]
+        bodies = [("target", demo["bodies"]["target"])] + [(f"step{k}", s) for k, s in enumerate(demo["bodies"]["steps"])]
+        for label, body in bodies:
+            for parent, child in demo["bones"]:
+                if parent in worker and child in worker:
+                    before = math.dist(worker[parent], worker[child])
+                    assert math.dist(body[parent], body[child]) == pytest.approx(before, abs=1e-3), (mode, label, parent, child)
+        assert demo["bodies"]["steps"][0] == worker
 
 
 def _correction(point: str, unit: tuple[float, float, float], cm: float) -> Any:
@@ -133,13 +136,37 @@ def test_lowering_the_stance_keeps_the_feet_planted_and_bends_the_knees() -> Non
         math.dist(body["LeftCalf"], body["LeftFoot"]), abs=1e-6)
 
 
-def test_stepping_moves_the_whole_body_but_the_hands_go_where_the_cue_says() -> None:
-    """"옮겨 서세요"(머리 수평)는 몸 전체가 옮겨 간다. 손 안내가 없으면 손은 제자리 — 채점이 손을 따로 보기 때문이다."""
+def test_stepping_moves_the_whole_body_and_a_cued_hand_goes_where_the_cue_says() -> None:
+    """"옮겨 서세요"(머리 수평)는 몸 전체가 옮겨 간다. 안내 없는 손은 몸을 따라가고, 안내 있는 손은 안내한 곳에 간다."""
     body = _standing_body()
     stepped = cd.corrected_body(body, [_correction("head", (1.0, 0.0, 0.0), 20.0)])
     assert stepped["LeftFoot"][0] == pytest.approx(body["LeftFoot"][0] + 0.20)
     assert stepped["Head"][0] == pytest.approx(body["Head"][0] + 0.20)
-    assert stepped["RightHand"] == pytest.approx(body["RightHand"], abs=1e-6)
+    assert stepped["RightHand"][0] == pytest.approx(body["RightHand"][0] + 0.20)
+    cued = cd.corrected_body(body, [_correction("head", (1.0, 0.0, 0.0), 20.0), _correction("right", (0.0, 1.0, 0.0), 5.0)])
+    target = (body["RightHand"][0], body["RightHand"][1] + 0.05, body["RightHand"][2])
+    assert cued["RightHand"] == pytest.approx(target, abs=1e-6)
+
+
+def test_an_unreachable_hand_stops_short_instead_of_stretching_the_body() -> None:
+    """손을 팔 길이 밖으로 보내라는 안내는 어깨를 돌려 최대한 뻗고, 모자란 거리를 숨기지 않는다."""
+    body = _standing_body()
+    far = [_correction("right", (0.0, 0.0, 1.0), 120.0)]
+    out = cd.corrected_body(body, far)
+    for parent, child in (("RightShoulder", "RightUpperArm"), ("RightUpperArm", "RightForeArm"), ("RightForeArm", "RightHand")):
+        assert math.dist(out[parent], out[child]) == pytest.approx(math.dist(body[parent], body[child]), abs=1e-6)
+    short = cd.hand_shortfall_cm(body, out, far, "right")
+    assert short > 10.0
+    target = (body["RightHand"][0], body["RightHand"][1], body["RightHand"][2] + 1.2)
+    assert math.dist(out["RightHand"], target) * 100.0 == pytest.approx(short)
+
+
+def test_a_hand_without_a_cue_moves_with_the_body() -> None:
+    """안내가 없는 손은 몸이 일어설 때 같이 올라간다(원래 자리로 끌어내리지 않는다)."""
+    body = _standing_body()
+    raised = cd.corrected_body(body, [_correction("head", (0.0, 1.0, 0.0), 10.0)])
+    assert raised["LeftHand"][1] == pytest.approx(body["LeftHand"][1] + 0.10)
+    assert raised["RightHand"][1] == pytest.approx(body["RightHand"][1] + 0.10)
 
 
 def test_unknown_mode_is_refused() -> None:

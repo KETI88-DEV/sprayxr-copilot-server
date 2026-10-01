@@ -265,7 +265,10 @@ function render(data) {
   for (const cue of data.cues) {
     const item = html("li");
     item.dataset.n = String(cue.n);
-    item.append(html("span", "num-badge", String(cue.n)), html("span", null, cue.text));
+    const text = html("span", null, cue.text);
+    // 몸이 팔 길이로 안내한 곳에 못 미치면 그 사실을 문장 옆에 적는다(서버 문자열).
+    if (cue.reach_note) text.append(html("small", "demo-cue-short", ` — ${cue.reach_note}`));
+    item.append(html("span", "num-badge", String(cue.n)), text);
     list.append(item);
   }
   $("demoNote").textContent =

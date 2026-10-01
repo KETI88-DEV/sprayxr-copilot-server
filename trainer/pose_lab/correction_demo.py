@@ -16,7 +16,10 @@ KPI 시험(`docs/year2/`, `docs/year3/`)의 시연 화면(`static/demo.html`)이
   길이를 지켜 다시 푼다.
 - 머리(자세) 안내: 수평 성분은 몸 전체가 옮겨 서는 것, 수직 성분은 발을 디딘 채 골반 위가 오르내리는 것으로
   그린다(무릎은 다리 길이를 지켜 다시 푼다).
-- 손이 팔 길이로 닿지 않으면 모자란 만큼 그쪽 어깨를 손 쪽으로 내민다.
+- 안내가 없는 손은 몸을 따라간다.
+- 어떤 마디도 늘리지 않는다. 손이 팔 길이로 닿지 않으면 쇄골 길이를 지킨 채 어깨 관절을 손 쪽으로 돌리고(최대 35°),
+  그래도 모자라면 손이 못 미친 채로 두고 그 거리를 `reach_short_cm`·`reach_note`로 낸다. 다리 길이보다 높이 서야 하면
+  발뒤꿈치가 들린다.
 목표 자세의 몸은 작업자 몸에서 채점하는 세 점의 평균 이탈을 **전부** 메운 몸이다(`full_shift_corrections`) —
 채점이 보는 목표와 같은 자리다. 그래서 교정이 메우지 않은 값만큼 교정된 몸과 목표 몸 사이가 남는다.
 """
@@ -44,8 +47,10 @@ AXIS_LABELS: Final = {"wall": "벽 쪽", "vertical": "위아래", "lateral": "�
 ANCHOR_JOINT: Final = {"right": "RightHand", "left": "LeftHand", "head": "Head"}
 ARM_CHAINS: Final = {"right": ("RightUpperArm", "RightForeArm", "RightHand"),
                      "left": ("LeftUpperArm", "LeftForeArm", "LeftHand")}
-# 팔이 닿지 않을 때 손 쪽으로 내미는 어깨(쇄골 끝과 어깨 관절).
-SHOULDER_GIRDLE: Final = {"right": ("RightShoulder", "RightUpperArm"), "left": ("LeftShoulder", "LeftUpperArm")}
+# 팔이 닿지 않을 때 어깨 관절(UpperArm)을 쇄골 뿌리(Shoulder) 둘레로 손 쪽으로 돌린다 — 어깨를 내미는 동작.
+# 쇄골 길이는 그대로다. 사람 어깨가 움직이는 범위 안에서만 돌린다.
+CLAVICLE_ROOT: Final = {"right": "RightShoulder", "left": "LeftShoulder"}
+MAX_SHOULDER_SWING_DEG: Final = 35.0
 LEG_CHAINS: Final = (("LeftThigh", "LeftCalf", "LeftFoot"), ("RightThigh", "RightCalf", "RightFoot"))
 # 자세를 높이거나 낮출 때 바닥에 남는 관절(발목 아래). 무릎은 다시 푼다.
 PLANTED: Final = frozenset({"LeftFoot", "LeftToe", "RightFoot", "RightToe"})
@@ -156,29 +161,66 @@ def corrected_body(joints: Mapping[str, Sequence[float]], corrections: Sequence[
                 body[name] = _add(body[name], vertical)
         for hip, knee, ankle in LEG_CHAINS:
             if hip in body and knee in body and ankle in body:
-                body[knee], _ = solve_two_bone(
-                    body[hip], _add(original[knee], horizontal), body[ankle],
+                planted_ankle = body[ankle]
+                body[knee], reached = solve_two_bone(
+                    body[hip], _add(original[knee], horizontal), planted_ankle,
                     _norm(_sub(original[knee], original[hip])), _norm(_sub(original[ankle], original[knee])),
                 )
-    # 3) 손 — 어깨는 몸을 따라왔고, 손은 안내가 말한 곳(원래 손 + 안내 이동)으로 간다. 팔 길이로 닿지 않으면
-    #    모자란 만큼 그쪽 어깨를 손 쪽으로 내민다(뻗을 때 어깨가 나가는 것). 머리는 건드리지 않는다.
+                # 다리 길이보다 높이 서야 하면 발뒤꿈치가 들린다 — 마디를 늘리지 않는다.
+                lift = _sub(reached, planted_ankle)
+                if _norm(lift) > 1e-9:
+                    toe = ankle.replace("Foot", "Toe")
+                    body[ankle] = reached
+                    if toe in body:
+                        body[toe] = _add(body[toe], lift)
+    # 3) 손 — **안내가 있는 손만** 안내가 말한 곳(원래 손 + 안내 이동)으로 보낸다. 안내가 없는 손은 1·2에서 몸을
+    #    따라 옮겨진 그대로다(원래 자리로 되돌리면 팔이 닿지 않아 몸이 늘어난다). 팔 길이로 닿지 않으면 쇄골 길이를
+    #    지킨 채 어깨 관절을 손 쪽으로 돌리고, 그래도 모자라면 손을 그만큼 못 미친 채 둔다 — 어떤 마디도 늘리지 않는다.
     for point, (shoulder, elbow, hand) in ARM_CHAINS.items():
-        if not all(name in body for name in (shoulder, elbow, hand)):
+        if point not in shifts or not all(name in body for name in (shoulder, elbow, hand)):
             continue
-        target = _add(original[hand], shifts.get(point, (0.0, 0.0, 0.0)))
+        target = _add(original[hand], shifts[point])
         upper = _norm(_sub(original[elbow], original[shoulder]))
         lower = _norm(_sub(original[hand], original[elbow]))
-        reach = _sub(target, body[shoulder])
-        deficit = _norm(reach) - (upper + lower) * 0.999
-        if deficit > 0.0:
-            push = _scale(reach, deficit / _norm(reach))
-            for name in SHOULDER_GIRDLE[point]:
-                if name in body:
-                    body[name] = _add(body[name], push)
+        moved_shoulder = body[shoulder]
+        root = CLAVICLE_ROOT[point]
+        if _norm(_sub(target, body[shoulder])) > upper + lower and root in body:
+            body[shoulder] = _swing_toward(body[root], body[shoulder], target, MAX_SHOULDER_SWING_DEG)
         body[elbow], body[hand] = solve_two_bone(
-            body[shoulder], _add(original[elbow], _sub(body[shoulder], original[shoulder])), target, upper, lower,
+            body[shoulder], _add(original[elbow], _sub(moved_shoulder, original[shoulder])), target, upper, lower,
         )
     return body
+
+
+def _swing_toward(root: Vec, joint: Vec, target: Vec, max_deg: float) -> Vec:
+    """`joint`를 `root` 둘레로(거리 그대로) `target` 쪽으로 최대 `max_deg`만큼 돌린다."""
+    arm = _sub(joint, root)
+    length = _norm(arm)
+    want = _sub(target, root)
+    if length < 1e-9 or _norm(want) < 1e-9:
+        return joint
+    a = _scale(arm, 1.0 / length)
+    b = _scale(want, 1.0 / _norm(want))
+    angle = math.acos(max(-1.0, min(1.0, _dot(a, b))))
+    if angle < 1e-9:
+        return joint
+    turn = min(angle, math.radians(max_deg))
+    # a에서 b 쪽으로 평면 안에서 `turn`만큼 돈 방향.
+    side = _sub(b, _scale(a, _dot(a, b)))
+    side = _scale(side, 1.0 / _norm(side))
+    direction = _add(_scale(a, math.cos(turn)), side, math.sin(turn))
+    return _add(root, direction, length)
+
+
+def hand_shortfall_cm(joints: Mapping[str, Sequence[float]], body: Mapping[str, Vec], corrections: Sequence[Any], point: str) -> float:
+    """안내한 손 위치에 몸이 못 미친 거리(cm). 손이 아니거나 닿았으면 0."""
+    if point not in ARM_CHAINS:
+        return 0.0
+    hand = ARM_CHAINS[point][2]
+    if hand not in joints or hand not in body:
+        return 0.0
+    target = _add(joints[hand], point_shifts(corrections).get(point, (0.0, 0.0, 0.0)))
+    return _norm(_sub(body[hand], target)) * 100.0
 
 
 def full_shift_corrections(deltas: Sequence[Any], frame: Any) -> list[Any]:
@@ -301,6 +343,10 @@ def build_demo(source: Any, query: Any, reference: Any, reference_spreads: Any, 
         anchor = ANCHOR_JOINT[correction.point]
         before = corrected_body(worker, chosen[: n - 1])
         after = corrected_body(worker, chosen[:n])
+        # 화살표는 **안내한 이동 그대로**다(문장의 cm). 몸이 팔 길이로 못 미치면 그 거리를 따로 적는다.
+        start = before[anchor]
+        end = _add(start, _scale(correction.unit, correction.magnitude_cm / 100.0))
+        short = hand_shortfall_cm(worker, after, chosen[:n], correction.point)
         cues.append({
             "n": n,
             "point": correction.point,
@@ -311,8 +357,10 @@ def build_demo(source: Any, query: Any, reference: Any, reference_spreads: Any, 
             "cm": abs(correction.magnitude_cm),
             "cm_display": f"{abs(correction.magnitude_cm):.1f}cm",
             "anchor": anchor,
-            "from": [round(v, 4) for v in before[anchor]],
-            "to": [round(v, 4) for v in after[anchor]],
+            "from": [round(v, 4) for v in start],
+            "to": [round(v, 4) for v in end],
+            "reach_short_cm": round(short, 2),
+            "reach_note": f"팔 길이로 {short:.1f}cm 못 미칩니다" if short >= 1.0 else None,
         })
 
     improvement = result["improvement"]
