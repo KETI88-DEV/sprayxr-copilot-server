@@ -76,11 +76,15 @@ def policies() -> dict[str, Any]:
 # --- 몸으로 실현하기 (순수) ---------------------------------------------------------
 
 
+# 안내 없는 손의 가정. 등록한 주 측정은 `follow`, `stay`는 결과를 본 뒤 정한 사후 민감도 분석이다.
+UNCUED_HANDS: str = "follow"
+
+
 def realized_shifts(
-    body: Mapping[str, Sequence[float]], chosen: Sequence[Any], frame: Any
+    body: Mapping[str, Sequence[float]], chosen: Sequence[Any], frame: Any, uncued_hands: str | None = None
 ) -> tuple[dict[str, tuple[float, float, float]], dict[str, float]]:
-    """교정을 몸으로 따랐을 때 세 점이 실제로 옮겨 간 양(스트로크 프레임 성분)과, 안내에 못 미친 거리(cm)."""
-    after = cd.corrected_body(body, chosen)
+    """교정을 몸으로 따랐을 때 채점 지점이 실제로 옮겨 간 양(스트로크 프레임 성분)과, 안내에 못 미친 거리(cm)."""
+    after = cd.corrected_body(body, chosen, uncued_hands=uncued_hands or UNCUED_HANDS)
     intended = cd.point_shifts(chosen)
     shifts: dict[str, tuple[float, float, float]] = {}
     short: dict[str, float] = {}
@@ -369,12 +373,16 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--policies", default="issued,delivered", help="집계할 정책(쉼표). 3차년도는 six_values")
     parser.add_argument("--report", type=Path, default=None)
     parser.add_argument("--csv-dir", type=Path, default=None)
+    parser.add_argument("--uncued-hands", choices=("follow", "stay"), default="follow",
+                        help="안내 없는 손: follow(등록한 주 측정) / stay(사후 민감도 분석)")
     parser.add_argument("--log-level", default="WARNING")
     return parser.parse_args(argv)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
+    global UNCUED_HANDS
+    UNCUED_HANDS = args.uncued_hands
     logging.basicConfig(level=getattr(logging, args.log_level), format="%(asctime)s %(levelname)s %(message)s")
     args.out_dir.mkdir(parents=True, exist_ok=True)
     return run_shard(args) if args.mode == "shard" else run_aggregate(args)

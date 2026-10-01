@@ -112,3 +112,16 @@ def test_csv_reports_percent_against_both_targets(tmp_path: Path) -> None:
     body = next(r for r in rows if r["교정 실현"] == "몸 제약" and r["채점 방식"].startswith("교정·채점 기준 분리"))
     assert float(body["정확도 평균(%)"]) == pytest.approx(95.0)
     assert (body["2차년도 70% 달성"], body["3차년도 90% 달성"]) == ("True", "True")
+
+
+def test_stay_keeps_an_uncued_hand_where_it_was_when_the_body_steps() -> None:
+    """사후 민감도 가정 `stay`: 옮겨 서도 안내 없는 손은 벽 기준 원래 자리(닿는 데까지)를 지킨다 — `follow`와 갈린다.
+
+    깨뜨리는 법: `stay`에서도 손을 몸에 붙여 옮기면 이동이 20cm가 되어 실패한다.
+    """
+    chosen = [_cue("head", (1.0, 0.0, 0.0), 10.0)]
+    follow, _ = bcs.realized_shifts(_body(), chosen, FRAME, uncued_hands="follow")
+    stay, short = bcs.realized_shifts(_body(), chosen, FRAME, uncued_hands="stay")
+    assert follow["right"] == pytest.approx((0.10, 0.0, 0.0))
+    assert stay["right"] == pytest.approx((0.0, 0.0, 0.0), abs=1e-6)
+    assert stay["head"] == pytest.approx((0.10, 0.0, 0.0))

@@ -144,8 +144,20 @@ def point_shifts(corrections: Sequence[Any], fraction: float = 1.0) -> dict[str,
     return shifts
 
 
-def corrected_body(joints: Mapping[str, Sequence[float]], corrections: Sequence[Any], fraction: float = 1.0) -> dict[str, Vec]:
-    """교정을 `fraction`만큼 따랐을 때의 몸(월드 좌표, 유니티 Y-up). 원래 몸은 바꾸지 않는다."""
+UNCUED_HANDS: Final = ("follow", "stay")
+
+
+def corrected_body(
+    joints: Mapping[str, Sequence[float]], corrections: Sequence[Any], fraction: float = 1.0, uncued_hands: str = "follow"
+) -> dict[str, Vec]:
+    """교정을 `fraction`만큼 따랐을 때의 몸(월드 좌표, 유니티 Y-up). 원래 몸은 바꾸지 않는다.
+
+    `uncued_hands`: 안내가 없는 손을 어떻게 둘지. `follow`(기본, 시연 화면)는 몸을 따라간다. `stay`는 벽 기준 원래
+    자리를 지키려 하고(건을 같은 곳에 겨눈 채 옮겨 서기), 팔이 닿지 않으면 닿는 데까지만 간다 — 몸 제약 측정의
+    민감도 분석용이다.
+    """
+    if uncued_hands not in UNCUED_HANDS:
+        raise ValueError(f"uncued_hands must be one of {UNCUED_HANDS}, got {uncued_hands!r}")
     original: dict[str, Vec] = {name: (float(p[0]), float(p[1]), float(p[2])) for name, p in joints.items()}
     shifts = point_shifts(corrections, fraction)
     up = tuple(float(v) for v in world_axes.UP)
@@ -172,9 +184,11 @@ def corrected_body(joints: Mapping[str, Sequence[float]], corrections: Sequence[
     #    따라 옮겨진 그대로다(원래 자리로 되돌리면 팔이 닿지 않아 몸이 늘어난다). 팔 길이로 닿지 않으면 쇄골 길이를
     #    지킨 채 어깨 관절을 손 쪽으로 돌리고, 그래도 모자라면 손을 그만큼 못 미친 채 둔다 — 어떤 마디도 늘리지 않는다.
     for point, (shoulder, elbow, hand) in ARM_CHAINS.items():
-        if point not in shifts or not all(name in body for name in (shoulder, elbow, hand)):
+        if not all(name in body for name in (shoulder, elbow, hand)):
             continue
-        target = _add(original[hand], shifts[point])
+        if point not in shifts and uncued_hands == "follow":
+            continue
+        target = _add(original[hand], shifts.get(point, (0.0, 0.0, 0.0)))
         upper = _norm(_sub(original[elbow], original[shoulder]))
         lower = _norm(_sub(original[hand], original[elbow]))
         moved_shoulder = body[shoulder]
