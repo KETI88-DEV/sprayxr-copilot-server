@@ -152,6 +152,8 @@ PYTHONPATH=trainer/scripts:. python3 -m uvicorn trainer.pose_lab.app:create_app 
   - **어떤 뼈도 길이가 바뀌지 않는다**(자동 시험 `test_no_bone_ever_changes_length`, 모든 뼈·모든 단계).
   - "옮겨 서세요"(머리 수평): 몸 전체가 옮겨 간다.
   - "자세를 높여/낮춰 작업하세요"(머리 수직): 발은 디딘 채 골반 위가 오르내리고, 무릎이 다리 길이를 지켜 굽거나 펴진다.
+    **발은 절대 바닥에서 뜨지 않는다** — 다리가 다 펴지는(또는 다 접히는) 데서 멈추고, 못 미친 높이를 안내 옆에
+    "발을 디딘 채로는 n cm 못 미칩니다"로 적는다(자동 시험 `test_feet_stay_on_the_floor_in_every_demo_body`).
   - 화살표의 길이는 안내 문장의 cm와 같다(자동 시험 `test_each_arrow_is_the_spoken_amount`).
 - 예시는 사람이 고르지 않고 규칙으로 뽑았다: 안내 종류(오른손·머리 × 3축)마다 안내 1건 개선율이 그 종류의 중앙값에 가장
   가까운 쌍(`trainer/pose_lab/demo_scenarios.py`). 그래서 예시의 개선율은 전수 평균과 같지 않다.
