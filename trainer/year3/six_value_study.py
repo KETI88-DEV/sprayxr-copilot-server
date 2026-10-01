@@ -162,6 +162,33 @@ def write_csvs(records: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
                                        for p in ("right", "head", "left"))] for name in POLICY_NAMES))
     written.append(path)
 
+    ok = [r for r in records if r.get("status") == "ok"]
+    group_header = ["쌍 수", *(f"{name.split('_')[0]} 정확도 {kind}(%)" for name in POLICY_NAMES for kind in ("split", "same"))]
+
+    def group_row(rows: Sequence[Mapping[str, Any]]) -> list[Any]:
+        out: list[Any] = [len(rows)]
+        for name in POLICY_NAMES:
+            for kind in ("split", "same"):
+                mean = dcs.describe(r.get(f"{name}.{kind}") for r in rows)["mean"]
+                out.append(None if mean is None else mean * 100.0)
+        return out
+
+    by_worker: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+    for r in ok:
+        by_worker[str(r.get("worker"))].append(r)
+    path = out_dir / "작업자별.csv"
+    dcs._write(path, ["작업자", *group_header], ([w, *group_row(rows)] for w, rows in sorted(by_worker.items())))
+    written.append(path)
+
+    by_band: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+    for r in ok:
+        band = dcs._band_of(r.get("score"))
+        if band is not None:
+            by_band[band].append(r)
+    path = out_dir / "교정전_유사도_구간별.csv"
+    dcs._write(path, ["교정 전 유사도 구간", *group_header], ([b, *group_row(rows)] for b, rows in sorted(by_band.items())))
+    written.append(path)
+
     path = out_dir / "쌍별_원자료.csv"
     base = [("query", "질의 패스(작업자|날짜|레벨|세션|패스)"), ("worker", "작업자"), ("level", "레벨"),
             ("reference", "기준 패스"), ("status", "상태"), ("reason", "사유"), ("score", "교정 전 유사도")]

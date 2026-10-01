@@ -160,7 +160,14 @@ def test_accuracy_sheet_refuses_a_verdict_for_more_than_six_values(tmp_path: Pat
     records = [_record(**{"P2_greedy6.split": 0.95, "P3_all_values.split": 0.99,
                           "P3_all_values.values": 9, "P3_all_values.values_split": 9}) for _ in range(12)]
     report = study.aggregate(records)
-    study.write_csvs(records, report, tmp_path)
+    written = study.write_csvs(records, report, tmp_path)
+    assert {p.name for p in written} == {
+        "정확도_평가방법.csv", "조정값수_분포.csv", "조정부위_사용.csv", "작업자별.csv",
+        "교정전_유사도_구간별.csv", "쌍별_원자료.csv",
+    }
+    with (tmp_path / "작업자별.csv").open(encoding="utf-8-sig", newline="") as handle:
+        worker = next(csv.DictReader(handle))
+    assert float(worker["P2 정확도 split(%)"]) == pytest.approx(95.0)
     with (tmp_path / "정확도_평가방법.csv").open(encoding="utf-8-sig", newline="") as handle:
         rows = {(r["교정 정책"], r["채점 방식"]): r for r in csv.DictReader(handle)}
     p2 = rows[(study.POLICY_NAMES["P2_greedy6"], "교정·채점 기준 분리(split)")]
