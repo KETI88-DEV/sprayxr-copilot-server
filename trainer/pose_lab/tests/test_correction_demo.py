@@ -195,6 +195,34 @@ def test_shortfall_is_reported_per_cue_not_accumulated(name: str) -> None:
             assert cue["reach_short_cm"] == pytest.approx(0.0, abs=0.05), cue["text"]
 
 
+def test_a_hand_cue_after_stepping_is_not_reported_short() -> None:
+    """옮겨 서기로 몸을 따라 물러난 손에, 원래 위치 기준의 손 안내가 오면 손은 그 자리로 간다 — 못 미친 것이 아니다.
+
+    "왼손 36.5cm 뒤로" 옆에 "팔 길이로 51.7cm 못 미칩니다"가 붙던 결함(2026-10-01). 깨뜨리는 법: 부족분을 직전 몸에서 잰
+    이동으로 계산하면 실패한다.
+    """
+    body = _standing_body()
+    chosen = [_correction("head", (1.0, 0.0, 0.0), 20.0), _correction("left", (1.0, 0.0, 0.0), 10.0)]
+    after = cd.corrected_body(body, chosen)
+    assert cd.point_shortfall_cm(body, after, chosen, "left") == pytest.approx(0.0, abs=1e-6)
+
+
+@pytest.mark.parametrize("name", REAL)
+def test_arrows_start_on_the_original_body(name: str) -> None:
+    """각 부위의 첫 안내 화살표는 작업자의 원래 몸 위 그 부위에서 시작한다."""
+    from trainer.year3 import demo_mode
+
+    demo_mode.register()
+    source, spreads, query, reference = _real(name)
+    demo = cd.build_demo(source, query, reference, spreads, demo_mode.MODE)
+    seen: set[str] = set()
+    for cue in demo["cues"]:
+        if cue["point"] in seen:
+            continue
+        seen.add(cue["point"])
+        assert cue["from"] == pytest.approx(list(demo["bodies"]["worker"][cue["anchor"]]), abs=1e-4), cue["text"]
+
+
 @pytest.mark.parametrize("name", REAL)
 def test_feet_stay_on_the_floor_in_every_demo_body(name: str) -> None:
     """실데이터 시연의 모든 단계·목표 몸에서 발이 원래 높이보다 뜨지 않는다(옮겨 서기의 수평 이동만 있다)."""

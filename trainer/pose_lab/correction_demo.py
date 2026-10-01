@@ -388,14 +388,16 @@ def build_demo(source: Any, query: Any, reference: Any, reference_spreads: Any, 
         anchor = ANCHOR_JOINT[correction.point]
         before = corrected_body(worker, chosen[: n - 1])
         after = corrected_body(worker, chosen[:n])
-        # 화살표는 **안내한 이동 그대로**다(문장의 cm). 몸이 팔 길이로 못 미치면 그 거리를 따로 적는다.
-        start = before[anchor]
+        # 화살표는 **작업자의 원래 몸** 위 그 부위에서, 그 부위의 앞선 안내 뒤에 이어 그린다 — 안내는 원래 위치를 기준으로
+        # 말하기 때문이다(앞의 "옮겨 서세요"로 몸을 따라 움직인 손에서 그리면 엉뚱한 곳을 가리킨다). 길이는 문장의 cm다.
+        earlier = [c for c in chosen[: n - 1] if c.point == correction.point]
+        start = _add(worker[anchor], point_shifts(earlier).get(correction.point, (0.0, 0.0, 0.0)))
         end = _add(start, _scale(correction.unit, correction.magnitude_cm / 100.0))
-        # 이 안내가 가리킨 방향으로 몸이 실제로 덜 간 거리. 앞 안내의 부족분을 다시 세지 않는다.
-        # `magnitude_cm`는 부호가 있다 — 실제 이동 방향은 unit × 부호다.
-        heading = _scale(correction.unit, 1.0 if correction.magnitude_cm >= 0 else -1.0)
-        actual = _dot(_sub(after[anchor], before[anchor]), heading) * 100.0
-        short = max(0.0, abs(correction.magnitude_cm) - actual)
+        # 몸이 안내한 자리에 못 미친 거리. 같은 부위의 앞선 안내에서 이미 생긴 부족분은 빼서 한 번만 센다.
+        short = point_shortfall_cm(worker, after, chosen[:n], correction.point)
+        if earlier:
+            short -= point_shortfall_cm(worker, before, chosen[: n - 1], correction.point)
+        short = max(0.0, short)
         cues.append({
             "n": n,
             "point": correction.point,
