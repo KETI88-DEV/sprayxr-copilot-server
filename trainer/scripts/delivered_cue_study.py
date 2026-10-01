@@ -213,6 +213,11 @@ POPULATION_NAMES: Final = {
 DEFINITION_NAMES: Final = {"delivered": "전달 안내 1건", "all_issued": "발부 전부"}
 METRIC_NAMES: Final = {"split": "개선율(split)", "same": "개선율(same)", "rise": "유사도 상승폭"}
 BEFORE_BANDS: Final[tuple[float, ...]] = (0.0, 0.2, 0.4, 0.6, 0.8, 1.0)
+# 과제 평가 방법(사용자 제공 2026-10-01): 정확도(%) = (S_corrected − S0)/(1 − S0) × 100 의 **평균**,
+# 10회 이상 적용, 조정하는 주요 관절 값은 6개 이하. 2차년도 70%, 3차년도 90% 이상.
+TARGETS: Final[tuple[tuple[str, float], ...]] = (("2차년도 70%", 0.70), ("3차년도 90%", 0.90))
+MIN_TRIALS: Final = 10
+MAX_ADJUSTED_VALUES: Final = 6
 
 
 def _cell(value: Any) -> Any:
@@ -280,6 +285,29 @@ def write_csvs(records: Sequence[Mapping[str, Any]], report: Mapping[str, Any], 
                 for key, _label in PAIR_COLUMNS]
 
     _write(path, [label for _key, label in PAIR_COLUMNS], (pair_row(r) for r in records))
+    written.append(path)
+
+    path = out_dir / "정확도_평가방법.csv"
+    issued_ok = [r for r in records if r.get("status") == "ok" and (r.get("issued") or 0) > 0]
+    adjusted = {
+        "delivered": [min(int(r.get("issued") or 0), 1) for r in issued_ok],
+        "all_issued": [int(r.get("issued") or 0) for r in issued_ok],
+    }
+    rows = []
+    for definition, def_name in DEFINITION_NAMES.items():
+        counts = adjusted[definition]
+        for metric, metric_name in (("same", "목표 자세로 교정·채점(same)"), ("split", "교정·채점 기준 분리(split)")):
+            stats = report["issued_only"][definition][metric]
+            mean = stats.get("mean")
+            rows.append([
+                def_name, metric_name, max(counts) if counts else None,
+                (max(counts) <= MAX_ADJUSTED_VALUES) if counts else None,
+                stats.get("n"), (stats.get("n") or 0) >= MIN_TRIALS,
+                None if mean is None else mean * 100.0,
+                *[(None if mean is None else mean >= target) for _name, target in TARGETS],
+            ])
+    _write(path, ["적용한 교정", "채점 방식", "조정한 값 최대 개수", "6개 이하",
+                  "적용 횟수", "10회 이상", "정확도 평균(%)", *(f"{name} 달성" for name, _t in TARGETS)], rows)
     written.append(path)
 
     path = out_dir / "요약.csv"

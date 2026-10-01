@@ -102,6 +102,7 @@ def test_csv_files_keep_every_pair_and_leave_missing_values_blank(tmp_path: Path
     written = dcs.write_csvs(records, report, tmp_path)
     assert {p.name for p in written} == {
         "쌍별_원자료.csv", "요약.csv", "전달_안내별.csv", "작업자별.csv", "교정전_유사도_구간별.csv",
+        "정확도_평가방법.csv",
     }
     raw = (tmp_path / "쌍별_원자료.csv").read_bytes()
     assert raw.startswith(b"\xef\xbb\xbf"), "BOM이 없으면 엑셀이 한글을 깨뜨린다"
@@ -114,3 +115,25 @@ def test_csv_files_keep_every_pair_and_leave_missing_values_blank(tmp_path: Path
     with (tmp_path / "전달_안내별.csv").open(encoding="utf-8-sig", newline="") as handle:
         cue = list(csv_module.reader(handle))
     assert cue[1][:2] == ["오른손", "위아래"]
+
+
+def test_accuracy_sheet_reports_the_mean_in_percent_against_both_year_targets(tmp_path: Path) -> None:
+    """평가 방법의 정확도는 개선율의 **평균**×100이다 — 0.70 이상 비율이 아니다.
+
+    쌍 12개: 1건 split 0.5, 전부 split 0.8 → 정확도 50%, 80%. 80%는 2차년도(70%)만 넘는다.
+    깨뜨리는 법: 평균 대신 `at_or_above`(전부 1.0)를 쓰면 100%가 나와 3차년도까지 달성으로 실패한다.
+    """
+    import csv as csv_module
+
+    records = [_ok("A", 0.5, 0.75, 0.9, 0.5, 0.8, issued=4) for _ in range(12)]
+    report = dcs.aggregate(records, expert_worker="E")
+    dcs.write_csvs(records, report, tmp_path)
+    with (tmp_path / "정확도_평가방법.csv").open(encoding="utf-8-sig", newline="") as handle:
+        rows = {(r["적용한 교정"], r["채점 방식"]): r for r in csv_module.DictReader(handle)}
+    split_all = rows[("발부 전부", "교정·채점 기준 분리(split)")]
+    assert float(split_all["정확도 평균(%)"]) == pytest.approx(80.0)
+    assert (split_all["2차년도 70% 달성"], split_all["3차년도 90% 달성"]) == ("True", "False")
+    assert (split_all["조정한 값 최대 개수"], split_all["6개 이하"], split_all["10회 이상"]) == ("4", "True", "True")
+    one = rows[("전달 안내 1건", "교정·채점 기준 분리(split)")]
+    assert float(one["정확도 평균(%)"]) == pytest.approx(50.0)
+    assert one["조정한 값 최대 개수"] == "1"
