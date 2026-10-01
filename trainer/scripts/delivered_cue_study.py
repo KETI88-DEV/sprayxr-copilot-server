@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import hashlib
 import importlib
 import json
@@ -174,6 +175,147 @@ def aggregate(records: Sequence[Mapping[str, Any]], expert_worker: str) -> dict[
     }
 
 
+# --- CSV ------------------------------------------------------------------
+#
+# 엑셀에서 한글이 깨지지 않게 UTF-8 BOM(`utf-8-sig`)으로 쓴다. 숫자는 반올림하지 않는다 —
+# 표시 자릿수는 읽는 쪽이 정한다. 빈 값(None)은 빈 칸이다(0이 아니다).
+
+PAIR_COLUMNS: Final[tuple[tuple[str, str], ...]] = (
+    ("query", "질의 패스(작업자|날짜|레벨|세션|패스)"),
+    ("worker", "작업자"),
+    ("level", "레벨"),
+    ("reference", "기준 패스"),
+    ("status", "상태"),
+    ("reason", "사유"),
+    ("issued", "발부 안내 수"),
+    ("delivered_point", "전달 안내 부위"),
+    ("delivered_axis", "전달 안내 축"),
+    ("score", "교정 전 유사도"),
+    ("score_after", "안내 1건 적용 후 유사도"),
+    ("score_after_all", "발부 전부 적용 후 유사도"),
+    ("split", "1건 개선율(split)"),
+    ("same", "1건 개선율(same)"),
+    ("split_all", "전부 개선율(split)"),
+    ("same_all", "전부 개선율(same)"),
+    ("split_reason", "split 없음 사유"),
+)
+POINT_NAMES: Final = {"right": "오른손", "head": "머리", "left": "왼손"}
+AXIS_NAMES: Final = {"wall": "벽 쪽", "vertical": "위아래", "lateral": "좌우(진행 방향)"}
+STAT_COLUMNS: Final[tuple[tuple[str, str], ...]] = (
+    ("n", "n"), ("mean", "평균"), ("median", "중앙값"), ("q1", "1사분위"), ("q3", "3사분위"),
+    ("at_or_above", "0.70 이상 비율"), ("below_zero", "0 미만 비율"),
+)
+POPULATION_NAMES: Final = {
+    "issued_only": "안내가 나간 쌍(주 판정)",
+    "all_ok": "채점된 쌍 전부",
+    "excluding_expert_self": "안내가 나간 쌍 중 전형기 자신 제외",
+}
+DEFINITION_NAMES: Final = {"delivered": "전달 안내 1건", "all_issued": "발부 전부"}
+METRIC_NAMES: Final = {"split": "개선율(split)", "same": "개선율(same)", "rise": "유사도 상승폭"}
+BEFORE_BANDS: Final[tuple[float, ...]] = (0.0, 0.2, 0.4, 0.6, 0.8, 1.0)
+
+
+def _cell(value: Any) -> Any:
+    return "" if value is None else value
+
+
+def _write(path: Path, header: Sequence[str], rows: Iterable[Sequence[Any]]) -> None:
+    with path.open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(header)
+        for row in rows:
+            writer.writerow([_cell(value) for value in row])
+
+
+def _group_means(records: Sequence[Mapping[str, Any]], key: Any) -> list[tuple[Any, dict[str, Any]]]:
+    groups: dict[Any, list[Mapping[str, Any]]] = defaultdict(list)
+    for r in records:
+        groups[key(r)].append(r)
+    out = []
+    for name, rows in groups.items():
+        out.append((name, {
+            "n": len(rows),
+            "split": describe(r.get("split") for r in rows),
+            "split_all": describe(r.get("split_all") for r in rows),
+            "rise": describe((_rise(r, "score_after") for r in rows), threshold=None),
+            "rise_all": describe((_rise(r, "score_after_all") for r in rows), threshold=None),
+        }))
+    return out
+
+
+GROUP_HEADER: Final = (
+    "쌍 수", "1건 개선율(split) 평균", "1건 개선율(split) 중앙값", "1건 0.70 이상 비율",
+    "전부 개선율(split) 평균", "전부 0.70 이상 비율", "1건 유사도 상승폭 평균", "전부 유사도 상승폭 평균",
+)
+
+
+def _group_row(stats: Mapping[str, Any]) -> list[Any]:
+    return [
+        stats["n"], stats["split"]["mean"], stats["split"]["median"], stats["split"]["at_or_above"],
+        stats["split_all"]["mean"], stats["split_all"]["at_or_above"],
+        stats["rise"]["mean"], stats["rise_all"]["mean"],
+    ]
+
+
+def _band_of(score: Any) -> str | None:
+    if score is None:
+        return None
+    value = float(score)
+    for lo, hi in zip(BEFORE_BANDS, BEFORE_BANDS[1:]):
+        if lo <= value < hi or (hi == BEFORE_BANDS[-1] and value == hi):
+            return f"{lo:.1f}–{hi:.1f}"
+    return None
+
+
+def write_csvs(records: Sequence[Mapping[str, Any]], report: Mapping[str, Any], out_dir: Path) -> list[Path]:
+    """쌍별 원자료 1개와 요약표 4개를 쓴다. 쓴 경로를 돌려준다."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    written: list[Path] = []
+
+    path = out_dir / "쌍별_원자료.csv"
+    korean = {"delivered_point": POINT_NAMES, "delivered_axis": AXIS_NAMES}
+
+    def pair_row(r: Mapping[str, Any]) -> list[Any]:
+        return [korean[key].get(r.get(key), r.get(key)) if key in korean else r.get(key)
+                for key, _label in PAIR_COLUMNS]
+
+    _write(path, [label for _key, label in PAIR_COLUMNS], (pair_row(r) for r in records))
+    written.append(path)
+
+    path = out_dir / "요약.csv"
+    rows = []
+    for population, pop_name in POPULATION_NAMES.items():
+        for definition, def_name in DEFINITION_NAMES.items():
+            for metric, metric_name in METRIC_NAMES.items():
+                stats = report[population][definition][metric]
+                rows.append([pop_name, def_name, metric_name, *(stats.get(key) for key, _ in STAT_COLUMNS)])
+    _write(path, ["모집단", "적용한 안내", "지표", *(label for _key, label in STAT_COLUMNS)], rows)
+    written.append(path)
+
+    issued = [r for r in records if r.get("status") == "ok" and (r.get("issued") or 0) > 0]
+
+    path = out_dir / "전달_안내별.csv"
+    groups = _group_means(issued, lambda r: (r.get("delivered_point"), r.get("delivered_axis")))
+    groups.sort(key=lambda item: -item[1]["n"])
+    _write(path, ["부위", "축", *GROUP_HEADER],
+           ([POINT_NAMES.get(p, p), AXIS_NAMES.get(a, a), *_group_row(st)] for (p, a), st in groups))
+    written.append(path)
+
+    path = out_dir / "작업자별.csv"
+    groups = sorted(_group_means(issued, lambda r: r.get("worker")), key=lambda item: str(item[0]))
+    _write(path, ["작업자", *GROUP_HEADER], ([worker, *_group_row(st)] for worker, st in groups))
+    written.append(path)
+
+    path = out_dir / "교정전_유사도_구간별.csv"
+    groups = sorted(
+        (item for item in _group_means(issued, lambda r: _band_of(r.get("score"))) if item[0] is not None),
+        key=lambda item: str(item[0]),
+    )
+    _write(path, ["교정 전 유사도 구간", *GROUP_HEADER], ([band, *_group_row(st)] for band, st in groups))
+    written.append(path)
+    return written
+
+
 # --- 실행 -------------------------------------------------------------------
 
 
@@ -248,6 +390,9 @@ def run_aggregate(args: argparse.Namespace) -> int:
     text = json.dumps(report, ensure_ascii=False, indent=2)
     if args.report is not None:
         args.report.write_text(text, encoding="utf-8")
+    if args.csv_dir is not None:
+        for path in write_csvs(records, report, args.csv_dir):
+            logger.warning("wrote %s", path)
     print(text)
     return 0
 
@@ -263,6 +408,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--shard", type=int, default=0)
     parser.add_argument("--limit", type=int, default=None, help="샤드당 질의 상한(시간 재기용)")
     parser.add_argument("--report", type=Path, default=None)
+    parser.add_argument("--csv-dir", type=Path, default=None, help="쌍별 원자료·요약표 CSV를 쓸 폴더")
     parser.add_argument("--log-level", default="WARNING")
     return parser.parse_args(argv)
 

@@ -84,3 +84,33 @@ def test_shard_assignment_is_stable_and_covers_every_shard() -> None:
     first = [dcs.shard_of(k, 16) for k in keys]
     assert first == [dcs.shard_of(k, 16) for k in keys]
     assert set(first) == set(range(16))
+
+
+def test_csv_files_keep_every_pair_and_leave_missing_values_blank(tmp_path: Path) -> None:
+    """쌍별 원자료는 쌍을 하나도 빼지 않고(채점 안 된 쌍 포함), None은 0이 아니라 빈 칸이다.
+    엑셀에서 한글이 깨지지 않게 BOM이 붙는다.
+
+    깨뜨리는 법: `_cell`이 None을 0으로 쓰면 빈 칸 단언이 실패한다.
+    """
+    import csv as csv_module
+
+    records = [
+        _ok("A", 0.5, 0.6, 0.9, None, 0.8),
+        {"status": "no_expert_reference", "worker": "C", "query": "C|1|1|s|0"},
+    ]
+    report = dcs.aggregate(records, expert_worker="E")
+    written = dcs.write_csvs(records, report, tmp_path)
+    assert {p.name for p in written} == {
+        "쌍별_원자료.csv", "요약.csv", "전달_안내별.csv", "작업자별.csv", "교정전_유사도_구간별.csv",
+    }
+    raw = (tmp_path / "쌍별_원자료.csv").read_bytes()
+    assert raw.startswith(b"\xef\xbb\xbf"), "BOM이 없으면 엑셀이 한글을 깨뜨린다"
+    with (tmp_path / "쌍별_원자료.csv").open(encoding="utf-8-sig", newline="") as handle:
+        rows = list(csv_module.DictReader(handle))
+    assert len(rows) == 2
+    assert rows[0]["1건 개선율(split)"] == ""
+    assert rows[0]["전부 개선율(split)"] == "0.8"
+    assert (rows[0]["전달 안내 부위"], rows[0]["전달 안내 축"]) == ("오른손", "위아래")
+    with (tmp_path / "전달_안내별.csv").open(encoding="utf-8-sig", newline="") as handle:
+        cue = list(csv_module.reader(handle))
+    assert cue[1][:2] == ["오른손", "위아래"]
