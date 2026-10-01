@@ -80,3 +80,70 @@ def test_unusable_path_falls_back_to_memory(tmp_path: Path) -> None:
     store = SequenceStore(str(blocker / "nested" / "sequences.db"))
 
     assert _rec(store).stored is True
+
+
+def _legacy_db(path: Path) -> None:
+    """`body` 열이 추가되기 전 스키마로 DB를 만든다.
+
+    실물 `/output/eval_results/sequences.db`(2026-09-30)가 이 모양이었고, `/output`은
+    마운트 볼륨이라 이미지를 다시 빌드해도 남는다. 즉 배포는 반드시 이 파일을 만난다.
+    """
+    import sqlite3
+
+    conn = sqlite3.connect(str(path))
+    with conn:
+        conn.execute(
+            """
+            CREATE TABLE sequences (
+                session_key TEXT NOT NULL,
+                sequence_id TEXT NOT NULL,
+                body_sha256 TEXT NOT NULL,
+                frames      INTEGER NOT NULL,
+                received_at TEXT NOT NULL,
+                PRIMARY KEY (session_key, sequence_id)
+            )
+            """
+        )
+    conn.close()
+
+
+def test_legacy_db_without_body_column_is_upgraded(tmp_path: Path) -> None:
+    """Given a pre-`body` DB, When opened, Then recording a body still works.
+
+    이행이 없으면 `sqlite3.OperationalError: table sequences has no column named body`로
+    POST /api/v1/telemetry/sequence 가 500이 된다.
+    """
+    path = tmp_path / "sequences.db"
+    _legacy_db(path)
+    store = SequenceStore(str(path))
+
+    result = store.record(
+        session_key="S1",
+        sequence_id="Q1",
+        body_sha256="h1",
+        frames=11,
+        received_at="t",
+        body='{"a": 1}',
+    )
+
+    assert result.stored is True
+    assert store.load_body(session_key="S1", sequence_id="Q1") == {"a": 1}
+
+
+def test_legacy_db_keeps_rows_written_before_the_upgrade(tmp_path: Path) -> None:
+    """Given legacy rows, When upgraded, Then they survive with an empty body."""
+    import sqlite3
+
+    path = tmp_path / "sequences.db"
+    _legacy_db(path)
+    conn = sqlite3.connect(str(path))
+    with conn:
+        conn.execute(
+            "INSERT INTO sequences VALUES ('S0', 'Q0', 'old-sha', 7, 'then')",
+        )
+    conn.close()
+
+    store = SequenceStore(str(path))
+
+    assert store.load_body(session_key="S0", sequence_id="Q0") is None
+    assert store.latest_sequence_id("S0") == "Q0"

@@ -40,6 +40,21 @@ CREATE TABLE IF NOT EXISTS sequences (
 """
 
 
+# `CREATE TABLE IF NOT EXISTS`는 이미 있는 테이블을 그대로 둔다. `/output`은 마운트
+# 볼륨이라 이미지를 다시 빌드해도 DB 파일이 남으므로, 나중에 추가한 열은 직접 넣어야
+# 한다. 2026-10-01 배포에서 실물 DB(2026-09-30 생성)에 `body`가 없어
+# `POST /api/v1/telemetry/sequence`가 500이 됐다. 열 추가는 되돌릴 필요가 없으므로
+# 버전 표가 아니라 "없으면 넣는다"로 충분하다 — 멱등이고 기존 행을 건드리지 않는다.
+_ADDED_COLUMNS: Final[tuple[tuple[str, str], ...]] = (("body", "TEXT"),)
+
+
+def _add_missing_columns(conn: sqlite3.Connection) -> None:
+    present = {row[1] for row in conn.execute("PRAGMA table_info(sequences)")}
+    for name, ddl in _ADDED_COLUMNS:
+        if name not in present:
+            conn.execute(f"ALTER TABLE sequences ADD COLUMN {name} {ddl}")
+
+
 @dataclass(frozen=True)
 class StoreResult:
     """``duplicate``은 같은 키가 **같은 본문으로** 다시 온 경우만이다.
@@ -62,6 +77,7 @@ class SequenceStore:
         self._conn = self._connect(raw)
         with self._conn:
             self._conn.execute(_SCHEMA)
+            _add_missing_columns(self._conn)
 
     @staticmethod
     def _default_path() -> str:
