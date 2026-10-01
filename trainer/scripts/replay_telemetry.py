@@ -18,24 +18,28 @@
 이어 손잡이 길이만큼 앞**에 둔다. 길이는 실물 SEQ-002가 보인 `hand_tool_gap_m` 0.3585 m를
 쓴다 — 하드웨어 치수 L은 아직 모른다.
 
-**그래서 이 드라이버로는 점수가 나오지 않는다(실측).** 골격 게이트는 통과한다 — 뼈 길이
-일정(전완 0.2430 m, sd 0.00000), 높이 0.9528 m, 손↔건 0.3585 m, 오른손 고유 위치 81/90.
-그런데 `reach_m`이 **4.5286**이 되어(착탄 3.955 장면좌표 − 건 −1.076 FK공간) 레퍼런스에
-해당 버킷이 없고 `reference_quality: "unavailable"`, `support: null`이 된다. 실물 SEQ-002는
-reach −0.0322, band −0.10, support 14245였다.
+**착탄점은 건과 같은 평행이동으로 함께 옮긴다**(`_impact_beside_tool`). `reach = 착탄
+수직 − 건 수직`은 차이라서 평행이동에 불변이고, CSV의 건과 착탄은 **둘 다 장면 좌표**라
+그 차이가 실측값이다. 건만 옮기고 착탄을 두면 두 공간의 차를 빼는 셈이 되어 reach 가
+튄다 — 그것이 이 파일의 이전 판이 "점수가 나오지 않는다"고 적은 이유였고, 원인은 공간이
+아니라 **한쪽만 옮긴 것**이었다.
 
-**원인은 한 필드가 두 규칙에 서로 다른 공간을 요구하는 것이다.** `tool_pos_rot.pos`는
-R5(손↔건 간격)에서 **골격과 같은 공간**이어야 하고, `reach` 버킷 선택에서는 착탄점과
-**같은 장면 공간**이어야 한다. CSV는 관절이 local이라 두 조건을 한 값으로 만족시킬 수
-없다. global 형식(실물 샘플)에서는 전부 한 공간이라 모순이 없다.
+실측(1-A_1000452_1 첫 구간 40프레임):
+
+| 착탄점 처리 | reach_m | band | support | similarity_score |
+|---|---|---|---|---|
+| 장면 좌표 그대로(이전 판) | 4.8542 | — | — | `reference_data_missing` |
+| 건과 같은 평행이동 | 0.167 | +0.10 | 5073 | 0.7237 |
 
 **따라서 이 드라이버가 검증하는 것과 못 하는 것.**
 
-* 검증한다 — 엔드포인트 배선, 모니터 기록, 중복 식별, 골격 게이트(움직임·뼈·높이·간격)
-* 못 한다 — `reach` 버킷 선택, 따라서 **점수 자체**, `tool_not_held`, 분사각
+* 검증한다 — 엔드포인트 배선, 모니터 기록, 중복 식별, 골격 게이트(움직임·뼈·높이·간격),
+  `reach` 버킷 선택, 레퍼런스 조회, **점수 산출과 교정 생성**
+* 못 한다 — `tool_not_held`(건 위치가 손에서 합성되어 간격이 설계상 항상 범위 안이다),
+  수평 방향이 걸리는 규칙(FK 리그와 장면의 정합을 모르므로 수직 성분만 보증한다)
 
-점수 경로를 열려면 **이동하며 분사한 global 캡처**가 필요하다. CSV 코퍼스는 local이고
-FK 공간과 장면 공간의 정합(registration)을 우리가 갖고 있지 않다.
+실물 운용 전에는 여전히 **이동하며 분사한 global 캡처**가 필요하다. 이 드라이버는 그
+전까지 채점 경로를 돌려보는 수단이지, 좌표 정합을 대신하지 않는다.
 
     python3 trainer/scripts/replay_telemetry.py --list
     python3 trainer/scripts/replay_telemetry.py --session 1-A_1000452_1 --spans 2 --dry-run
@@ -82,7 +86,8 @@ HAND_TOOL_GAP_M: Final = 0.3585
 SYNTHESIS_NOTICE: Final = (
     "관절은 pose_fk_csv.forward_kinematics(루트 원점)로 만들었다 — CSV Position 은 local 이다.\n"
     f"  tool_pos_rot.pos 는 전완을 이어 {HAND_TOOL_GAP_M} m 앞에 합성했다(FK 공간과 장면 좌표가 다르다).\n"
-    "  따라서 tool_not_held · reach · 분사각은 이 입력으로 검증되지 않는다."
+    "  gun_metrics.raypoint 는 건과 같은 평행이동으로 옮겨 건→착탄 벡터를 보존했다 — reach 는 실측이다.\n"
+    "  따라서 tool_not_held 와 수평 방향 규칙은 이 입력으로 검증되지 않는다."
 )
 
 
@@ -131,6 +136,41 @@ def spray_spans(rows: Sequence[dict[str, str]]) -> list[tuple[int, int]]:
     return spans
 
 
+
+def _median(values: Sequence[float]) -> float:
+    ordered = sorted(values)
+    return ordered[len(ordered) // 2]
+
+
+def _register_impacts(frames: list[dict[str, Any]]) -> None:
+    """착탄점을 장면 좌표에서 FK 공간으로 **시퀀스당 상수 하나**로 옮긴다(제자리 수정).
+
+    `reach = 착탄 수직 − 건 수직`은 차이라서 평행이동에 불변이다(`arm_reference` 독스트링:
+    "둘 다 월드라 차이에서 바닥 상수가 지워진다"). CSV의 건과 착탄은 **둘 다 장면 좌표**라
+    그 차이가 실측값이다. 건만 FK 공간으로 합성하고 착탄을 장면 좌표로 두면 두 공간의 차를
+    빼는 셈이 되어 reach 가 몇 미터로 튄다(실측 4.8542 → `reference_data_missing`).
+
+    **상수여야 하는 이유.** `pose_stages.reach_of` 는 착탄과 건의 중앙값을 **각각 따로**
+    취한다. 프레임마다 다른 델타로 옮기면 두 중앙값이 독립적으로 움직여 차이가 보존되지
+    않는다 — 실측으로 한 구간의 reach 가 0.1863 대신 0.5421 이 되어 밴드가 `+0.10` 이 아닌
+    `+0.50`(support 202)으로 잘못 잡혔다. 축별 중앙값으로 맞추면 중앙값끼리 정확히 상쇄되어
+    reach 가 CSV 실측과 같아진다.
+
+    **수직 성분만 보증한다.** 두 공간의 정합(registration)을 모르므로 수평 방향이 골격에
+    대해 맞는지는 보증하지 못한다. 지금 채점은 reach 의 수직 성분만 쓴다.
+    """
+    pairs = [(f["tool_pos_rot"]["pos"], f["gun_metrics"].pop("_gun_scene")) for f in frames]
+    if not pairs:
+        return
+    offset = [
+        _median([tool[axis] for tool, _ in pairs]) - _median([gun[axis] for _, gun in pairs])
+        for axis in range(3)
+    ]
+    for frame in frames:
+        raypoint = frame["gun_metrics"]["raypoint"]
+        frame["gun_metrics"]["raypoint"] = [raypoint[axis] + offset[axis] for axis in range(3)]
+
+
 def build_frame(
     row: dict[str, str], index: int, span_start_sec: float, offsets: Mapping[str, Any]
 ) -> dict[str, Any] | None:
@@ -146,16 +186,20 @@ def build_frame(
     forearm = joints.get("rightforearm")
     if hand is None or forearm is None:
         return None
+    tool = _tool_from_hand(hand, forearm)
     return {
         "index": index,
         "time": stamp.strftime("%Y-%m-%dT%H:%M:%S.") + f"{stamp.microsecond // 1000:03d}Z",
         # pos 는 합성(전완 연장), rot 은 CSV 건 오브젝트의 실제 회전이다.
-        "tool_pos_rot": {"pos": _tool_from_hand(hand, forearm), "rot": _vec(row, GUN_COLUMN, "Rotation")},
+        "tool_pos_rot": {"pos": tool, "rot": _vec(row, GUN_COLUMN, "Rotation")},
         "skeleton_joints": joints,
         "gun_metrics": {
             "speed": float(row["Speed (Real)"]),
             "distance": float(row["Distance (Real)"]),
+            # 장면 좌표 그대로 둔다. FK 공간으로의 이동은 시퀀스 단위 상수로
+            # `_register_impacts` 가 한 번에 한다 — 프레임마다 옮기면 reach 가 어긋난다.
             "raypoint": [float(row[column]) for column in RAY_COLUMNS],
+            "_gun_scene": _vec(row, GUN_COLUMN, "Position"),
             "raytexmapnum": int(float(row["Ray Texture Map Number"])),
             "raytexuv": [float(row["Ray Texture UV X"]), float(row["Ray Texture UV Y"])],
             # 명세서 p.5: spraytime 은 누적 분사 시간(ms, integer)이다.
@@ -187,6 +231,7 @@ def build_payload(
         frames.append(frame)
         if len(frames) >= max_frames:
             break
+    _register_impacts(frames)
     # 명세서 p.5 의 최상위 8키는 전부 필수다. REPLAY- 접두로 재생분을 실물과 구별한다.
     payload = {
         "session_id": session_id,
