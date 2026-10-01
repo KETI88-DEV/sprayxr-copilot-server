@@ -1,0 +1,67 @@
+/* 교정 시연 — 녹화해 KPI 문서에 붙이는 화면이라 글자를 크게, 단계를 분명하게. */
+.demo { max-width: 1680px; margin-inline: auto; padding-inline: var(--sp-4); }
+.demo-back { color: var(--text-dim); font-size: var(--fs-sm); }
+.demo-controls {
+  display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--sp-4);
+  margin-block: var(--sp-3);
+}
+.demo-views-buttons { display: flex; gap: var(--sp-2); flex-wrap: wrap; }
+.demo-views-buttons button {
+  font: inherit; color: var(--text); background: var(--panel-2);
+  border: 1px solid var(--border-strong); border-radius: var(--radius);
+  padding: var(--sp-2) var(--sp-4); cursor: pointer;
+}
+.demo-views-buttons button[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-dim); }
+
+.demo-stages {
+  display: flex; gap: var(--sp-3); list-style: none; padding: 0; margin: var(--sp-3) 0;
+  flex-wrap: wrap;
+}
+.demo-stages li {
+  flex: 1 1 12rem; padding: var(--sp-3) var(--sp-4); border-radius: var(--radius);
+  background: var(--panel); border: 1px solid var(--border); color: var(--text-dim);
+  font-size: var(--fs-lg); transition: border-color .3s, color .3s, background .3s;
+}
+.demo-stages li.is-active { color: var(--text); border-color: var(--accent); background: var(--panel-3); }
+.demo-stages li.is-done { color: var(--text); }
+
+.demo-caption { font-size: var(--fs-lg); min-height: 2.6em; margin: 0 0 var(--sp-3); }
+
+.demo-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(18rem, 26rem); gap: var(--sp-4); }
+.demo-stage3d { position: relative; min-width: 0; padding: 0; overflow: hidden; }
+.demo-canvas { width: 100%; height: min(72vh, 760px); min-height: 360px; touch-action: none; cursor: grab; }
+.demo-canvas canvas { display: block; width: 100%; height: 100%; }
+.demo-badges { position: absolute; inset: 0; pointer-events: none; }
+.demo-badge {
+  position: absolute; transform: translate(-50%, -50%);
+  min-width: 1.7rem; height: 1.7rem; padding: 0 .35rem; border-radius: 999px;
+  display: grid; place-items: center; background: #ffd166; color: #0a0d12;
+  font-weight: 700; font-size: var(--fs-base); opacity: 0; transition: opacity .3s;
+}
+.demo-badge.is-shown { opacity: 1; }
+.demo-hint { position: absolute; left: var(--sp-3); bottom: var(--sp-2); margin: 0; color: var(--text-faint); font-size: var(--fs-sm); }
+
+.demo-side { min-width: 0; }
+.demo-score { display: grid; gap: var(--sp-1); margin-bottom: var(--sp-4); }
+.demo-score-label { color: var(--text-dim); font-size: var(--fs-sm); }
+.demo-score-value { font-family: var(--mono); font-size: var(--fs-hero); line-height: 1; }
+.demo-score-sub { font-size: var(--fs-lg); color: var(--text); min-height: 1.4em; }
+.demo-cues { list-style: none; padding: 0; margin: 0 0 var(--sp-4); display: grid; gap: var(--sp-2); }
+.demo-cues li {
+  display: flex; gap: var(--sp-2); align-items: baseline; font-size: var(--fs-lg);
+  opacity: .25; transition: opacity .4s;
+}
+.demo-cues li.is-shown { opacity: 1; }
+.demo-legend { list-style: none; padding: 0; margin: 0; display: grid; gap: var(--sp-1); color: var(--text-dim); font-size: var(--fs-sm); }
+.swatch { display: inline-block; width: 1.1em; height: .7em; margin-right: var(--sp-2); border-radius: 2px; vertical-align: middle; }
+.swatch.target { background: var(--layer-reference); opacity: .6; }
+.swatch.worker { background: var(--layer-query); }
+.swatch.corrected { background: var(--layer-corrected); }
+.swatch.arrow { background: #ffd166; }
+.swatch.wall { background: #9aa5b1; opacity: .5; }
+.demo-note { color: var(--text-dim); font-size: var(--fs-sm); margin-top: var(--sp-4); }
+
+@media (max-width: 1100px) {
+  .demo-body { grid-template-columns: minmax(0, 1fr); }
+  .demo-canvas { height: 60vh; }
+}

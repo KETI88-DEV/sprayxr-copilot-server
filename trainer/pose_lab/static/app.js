@@ -423,7 +423,24 @@ function renderImprovement(measured) {
   }
 }
 
+// 같은 쌍을 교정 시연(demo.html: 입력 → 안내 → 결과)으로 연다. KPI 시험의 시연 절차가 여기서 이어진다.
+function setDemoLink(query, reference) {
+  const link = $("demoLink");
+  const search = new URLSearchParams();
+  for (const [prefix, entry] of [["q", query], ["r", reference]]) {
+    const ref = passRef(entry);
+    search.set(`${prefix}w`, ref.worker);
+    search.set(`${prefix}d`, ref.date);
+    search.set(`${prefix}l`, ref.level);
+    search.set(`${prefix}s`, ref.session);
+    search.set(`${prefix}p`, String(ref.pass_index));
+  }
+  link.href = `demo.html?${search}`;
+  link.hidden = false;
+}
+
 function clearImprovement() {
+  $("demoLink").hidden = true;
   $("improvementScore").textContent = "—";
   $("improvementCue").replaceChildren();
   $("improvementRows").replaceChildren();
@@ -1079,6 +1096,7 @@ async function run() {
   renderHero(payload.measured, payload.query_key, payload.view, payload.key_match);
   renderCorrections(payload.measured);
   renderImprovement(payload.measured);
+  setDemoLink(query, reference);
   renderOrientation(payload.measured.orientation ?? null);
   renderJointAngles(payload.measured.joint_angles ?? null);
   renderJointAxes(payload.measured.joint_axes ?? null);

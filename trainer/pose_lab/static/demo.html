@@ -1,0 +1,64 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>교정 시연</title>
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="demo.css">
+<!-- 교정 시연: ① 잘못된 자세 입력 → ② 교정 안내 → ③ 교정된 결과를 사람 몸으로 한 흐름에 보인다.
+     숫자와 몸은 /api/demo가 /api/compare와 같은 계산으로 낸다(trainer/pose_lab/correction_demo.py).
+     KPI 시험 방법: docs/year2/, docs/year3/ -->
+<main class="demo">
+  <header class="topbar demo-top">
+    <h1>교정 시연</h1>
+    <p class="topbar-sub">잘못된 자세가 들어오면 어떤 안내가 나가고, 안내대로 고치면 몸과 유사도가 어떻게 바뀌는지 보입니다.</p>
+    <a class="demo-back" href="./">← 도장 동작 비교로</a>
+  </header>
+
+  <section class="panel demo-controls" aria-label="시연 고르기">
+    <label class="field wide">예시
+      <select id="demoScenario"></select>
+    </label>
+    <div class="demo-views-buttons" role="group" aria-label="보는 방향">
+      <button type="button" data-view="oblique" aria-pressed="true">비스듬히</button>
+      <button type="button" data-view="side" aria-pressed="false">옆에서</button>
+      <button type="button" data-view="back" aria-pressed="false">뒤에서</button>
+    </div>
+    <button id="demoPlay" class="btn-primary" type="button">처음부터 재생</button>
+  </section>
+
+  <ol class="demo-stages" id="demoStages">
+    <li data-stage="1"><span class="num-badge">1</span> 잘못된 자세 입력</li>
+    <li data-stage="2"><span class="num-badge">2</span> 교정 안내</li>
+    <li data-stage="3"><span class="num-badge">3</span> 교정된 결과</li>
+  </ol>
+
+  <p class="demo-caption" id="demoCaption" aria-live="polite">불러오는 중…</p>
+
+  <div class="demo-body">
+    <div class="panel demo-stage3d">
+      <div class="demo-canvas" id="demoCanvas"></div>
+      <div class="demo-badges" id="demoBadges" aria-hidden="true"></div>
+      <p class="demo-hint">끌어서 돌리고, 휠로 확대합니다.</p>
+    </div>
+
+    <aside class="panel demo-side">
+      <div class="demo-score">
+        <span class="demo-score-label">목표 자세와의 유사도</span>
+        <span class="demo-score-value" id="demoScore">—</span>
+        <span class="demo-score-sub" id="demoScoreSub"></span>
+      </div>
+      <h2 class="section-title">교정 안내 <span id="demoValues"></span></h2>
+      <ol class="demo-cues" id="demoCues"></ol>
+      <ul class="demo-legend">
+        <li><span class="swatch target"></span>목표 자세(숙련 작업자 기준)</li>
+        <li><span class="swatch worker"></span>작업자 입력(잘못된 자세) — 결과 단계에서는 흐린 잔상</li>
+        <li><span class="swatch corrected"></span>안내대로 고친 자세</li>
+        <li><span class="swatch arrow"></span>교정 안내(번호 = 위 목록)</li>
+        <li><span class="swatch wall"></span>도장 벽</li>
+      </ul>
+      <p class="demo-note" id="demoNote"></p>
+    </aside>
+  </div>
+</main>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.1/three.min.js"></script>
+<script type="module" src="demo.js"></script>

@@ -1,0 +1,124 @@
+{
+  "scenarios": [
+    {
+      "label": "오른손 · 위아래 안내 (대표값)",
+      "rule": "안내 종류별 1건 split 개선율 중앙값에 가장 가까운 쌍",
+      "group_n": 8025,
+      "group_median_split": 0.37444421939791084,
+      "query": {
+        "worker": "임채원",
+        "date": "20250902",
+        "level": "10",
+        "session": "1000088_1",
+        "pass_index": 93
+      },
+      "reference": {
+        "worker": "전형기",
+        "date": "20250905",
+        "level": "10",
+        "session": "1000588_1",
+        "pass_index": 33
+      }
+    },
+    {
+      "label": "오른손 · 벽 쪽 안내 (대표값)",
+      "rule": "안내 종류별 1건 split 개선율 중앙값에 가장 가까운 쌍",
+      "group_n": 11467,
+      "group_median_split": 0.4367155810013035,
+      "query": {
+        "worker": "정희록",
+        "date": "20250901",
+        "level": "10",
+        "session": "1000479_1",
+        "pass_index": 153
+      },
+      "reference": {
+        "worker": "전형기",
+        "date": "20250904",
+        "level": "10",
+        "session": "1000573_1",
+        "pass_index": 146
+      }
+    },
+    {
+      "label": "오른손 · 진행 방향 안내 (대표값)",
+      "rule": "안내 종류별 1건 split 개선율 중앙값에 가장 가까운 쌍",
+      "group_n": 11986,
+      "group_median_split": 0.4394812625321375,
+      "query": {
+        "worker": "임채원",
+        "date": "20250902",
+        "level": "7",
+        "session": "1000059_1",
+        "pass_index": 86
+      },
+      "reference": {
+        "worker": "전형기",
+        "date": "20250909",
+        "level": "7",
+        "session": "1000810_1",
+        "pass_index": 19
+      }
+    },
+    {
+      "label": "머리 · 위아래 안내 (대표값)",
+      "rule": "안내 종류별 1건 split 개선율 중앙값에 가장 가까운 쌍",
+      "group_n": 7831,
+      "group_median_split": 0.18800326013112043,
+      "query": {
+        "worker": "임채원",
+        "date": "20250902",
+        "level": "6",
+        "session": "1000071_1",
+        "pass_index": 47
+      },
+      "reference": {
+        "worker": "전형기",
+        "date": "20250909",
+        "level": "6",
+        "session": "1000809_1",
+        "pass_index": 16
+      }
+    },
+    {
+      "label": "머리 · 벽 쪽 안내 (대표값)",
+      "rule": "안내 종류별 1건 split 개선율 중앙값에 가장 가까운 쌍",
+      "group_n": 9752,
+      "group_median_split": 0.1981081606344904,
+      "query": {
+        "worker": "손영석",
+        "date": "20250826",
+        "level": "7",
+        "session": "1000329_1",
+        "pass_index": 23
+      },
+      "reference": {
+        "worker": "전형기",
+        "date": "20250905",
+        "level": "7",
+        "session": "1000585_1",
+        "pass_index": 1
+      }
+    },
+    {
+      "label": "머리 · 진행 방향 안내 (대표값)",
+      "rule": "안내 종류별 1건 split 개선율 중앙값에 가장 가까운 쌍",
+      "group_n": 12416,
+      "group_median_split": 0.2001619113465379,
+      "query": {
+        "worker": "손영석",
+        "date": "20250826",
+        "level": "1",
+        "session": "1000336_1",
+        "pass_index": 21
+      },
+      "reference": {
+        "worker": "전형기",
+        "date": "20250901",
+        "level": "1",
+        "session": "1000442_1",
+        "pass_index": 22
+      }
+    }
+  ]
+}

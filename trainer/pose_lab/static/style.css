@@ -1015,3 +1015,6 @@ body[data-stale="true"] #orientationSection {
   min-width: 0;
 }
 .improvement-cue-text { overflow-wrap: anywhere; }
+
+/* 같은 쌍을 교정 시연 화면(demo.html)으로 연다. */
+.improvement-demo { grid-column: 1 / -1; margin-top: var(--sp-2); color: var(--accent); font-size: var(--fs-sm); }

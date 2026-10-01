@@ -2517,7 +2517,7 @@ function mount(THREE, container) {
   checkboxes.corrected.addEventListener("change", () => {
     layerGroups.corrected.visible = checkboxes.corrected.checked;
     dom.correctedNote.textContent = checkboxes.corrected.checked
-      ? "교정 후 층은 관측이 아니라 발부된 교정을 따랐을 때의 예상입니다 — 끊어 그린 선과 속 빈 표식으로 그립니다."
+      ? "교정 후 층은 관측이 아니라 작업자에게 전달되는 안내 1건을 따랐을 때의 예상입니다 — 끊어 그린 선과 속 빈 표식으로 그립니다."
       : "";
     if (container.__view3dDebug) container.__view3dDebug.correctedLayerIsOutline = computedLayerIsOutline();
   });

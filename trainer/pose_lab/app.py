@@ -14,7 +14,7 @@ from fastapi import FastAPI, Query
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
-from trainer.pose_lab import service
+from trainer.pose_lab import correction_demo, service
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +54,27 @@ class CompareRequest(BaseModel):
     lateral_deg: float = Field(default=30.0, gt=0.0, le=90.0)
     reach_m: float = Field(default=0.8, gt=0.0)
     samples: int = Field(default=20, ge=2, le=200)
+
+
+class DemoRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    query: PassRefModel
+    reference: PassRefModel
+    mode: str = Field(default=correction_demo.DEFAULT_MODE, min_length=1)
+
+
+DEMO_SCENARIOS = Path(__file__).resolve().parent / "demo_scenarios.json"
+
+
+def _register_year3_demo() -> None:
+    """3차년도 교정을 시연 화면에 올린다. 코드는 `trainer/year3`에 있고, 없으면 2차년도만 보인다."""
+    try:
+        from trainer.year3 import demo_mode
+    except ImportError:
+        logger.info("trainer.year3 not available; demo shows year2 only")
+        return
+    demo_mode.register()
 
 
 def _yaw_source(entries: list[Any]) -> str:
@@ -149,6 +170,7 @@ def create_app(source: Any | None = None) -> FastAPI:
     if source is None:
         source = _source_from_env()
     reference_spreads = _reference_spreads_from_env()
+    _register_year3_demo()
 
     @app.get("/api/health")
     def health() -> dict[str, str]:
@@ -255,6 +277,28 @@ def create_app(source: Any | None = None) -> FastAPI:
         except LookupError:
             # 없는 패스를 가리킨 것과 프레임이 모자란 것은 다른 사건이다. 목록이
             # 오래돼 사라진 패스를 "재지 못했다"로 적으면 데이터 탓으로 읽힌다.
+            return {"status": "unavailable", "reason": "pass_not_found"}
+
+    @app.get("/api/demo/scenarios")
+    def demo_scenarios() -> dict[str, object]:
+        """교정 시연 예시(규칙으로 고른 쌍, `demo_scenarios.py`)와 화면에 보이는 교정 방식(숨김 방식은 빠진다)."""
+        scenarios = json.loads(DEMO_SCENARIOS.read_text(encoding="utf-8"))["scenarios"] if DEMO_SCENARIOS.is_file() else []
+        return {"scenarios": scenarios, "modes": correction_demo.visible_modes()}
+
+    @app.post("/api/demo")
+    def demo(request: DemoRequest) -> dict[str, object]:
+        """교정 시연 한 건: 잘못된 자세(입력) → 교정 안내 → 교정된 결과. 숫자는 `/api/compare`와 같은 계산이다."""
+        if source is None:
+            return {"status": "unavailable", "reason": "no_source"}
+        try:
+            return correction_demo.build_demo(
+                source,
+                service.PassRef(**request.query.model_dump()),
+                service.PassRef(**request.reference.model_dump()),
+                reference_spreads,
+                request.mode,
+            )
+        except LookupError:
             return {"status": "unavailable", "reason": "pass_not_found"}
 
     @app.get("/api/diagnose")
