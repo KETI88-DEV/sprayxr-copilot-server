@@ -380,3 +380,36 @@ def test_last_event_id_resumes_after_the_cursor() -> None:
 
     assert b"id: 2" in frames[0]
     assert b"id: 1" not in frames[0]
+
+
+def test_an_anomaly_published_after_subscription_arrives_promptly() -> None:
+    """Given a live subscriber, When an anomaly is published, Then it arrives within seconds.
+
+    명세서 p.4는 "이상 탐지 시 SSE 채널로 실시간 Push"라고 적는다. 폴링 간격이 heartbeat
+    간격(15초)을 겸하면 최대 15초가 밀린다 — 위 시험은 구독 **전에** 발행된 이벤트만 보므로
+    그 지연을 잡지 못했다.
+    """
+    bus = AnomalyBroadcaster()
+
+    async def _drain() -> list[bytes]:
+        frames: list[bytes] = []
+        agen = _sse_body(bus, "S-4", 0)
+        with anyio.move_on_after(3):
+            try:
+                async for frame in agen:
+                    frames.append(frame)
+                    if b"event: anomaly_detection" in frame:
+                        break
+                    # 첫 heartbeat 를 받은 뒤 = 구독이 붙은 뒤에 발행한다.
+                    _ = bus.publish(
+                        session_id="S-4", sequence_id="Q1", anomaly_type="spray_angle", payload={"m": 1}
+                    )
+            finally:
+                await agen.aclose()
+        return frames
+
+    frames = anyio.run(_drain)
+
+    assert any(b"event: anomaly_detection" in frame for frame in frames), (
+        "3초 안에 이벤트가 오지 않았다 — 폴링 간격이 heartbeat 간격에 묶여 있다"
+    )

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from typing import Annotated, Any, Final
@@ -21,7 +22,7 @@ from anyio import to_thread
 from fastapi import APIRouter, File, Form, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from trainer.demo_api.anomaly_stream import HEARTBEAT_SEC, AnomalyBroadcaster
+from trainer.demo_api.anomaly_stream import HEARTBEAT_SEC, POLL_SEC, AnomalyBroadcaster
 from trainer.demo_api.v1_contracts import (
     ApiResponse,
     CoatingReport,
@@ -87,10 +88,13 @@ async def _sse_body(
 ) -> AsyncIterator[bytes]:
     """이상이 있을 때만 이벤트를, 없으면 heartbeat 를 보낸다(p.10).
 
+    `POLL_SEC` 마다 새 이벤트를 확인하고 heartbeat 는 `HEARTBEAT_SEC` 마다 보낸다.
+
     `TestClient`로 이 생성기를 끝까지 돌리면 멈추지 않는다 — 순수 생성기를 anyio 로
     직접 시험한다(AGENTS.md).
     """
     cursor = last_event_id
+    next_beat = 0.0  # 첫 바퀴에 바로 한 번 보낸다 — 구독이 붙었음을 알린다.
     while True:
         for event in broadcaster.since(session_id, last_event_id=cursor):
             cursor = event.id
@@ -105,8 +109,13 @@ async def _sse_body(
             )
             yield f"id: {event.id}\nevent: anomaly_detection\ndata: {body}\n\n".encode("utf-8")
         # comment heartbeat. 데이터 이벤트가 아니므로 클라이언트 상태를 바꾸지 않는다.
-        yield b": keep-alive\n\n"
-        await anyio.sleep(HEARTBEAT_SEC)
+        # 폴링 간격과는 별개다 — 둘을 묶으면 이상이 최대 HEARTBEAT_SEC 만큼 밀려
+        # 명세서 p.4의 "실시간 Push"가 되지 않는다.
+        now = time.monotonic()
+        if now >= next_beat:
+            yield b": keep-alive\n\n"
+            next_beat = now + HEARTBEAT_SEC
+        await anyio.sleep(POLL_SEC)
 
 
 def create_v1_router(

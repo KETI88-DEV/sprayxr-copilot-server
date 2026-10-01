@@ -23,6 +23,9 @@ from typing import Any, Final
 logger = logging.getLogger(__name__)
 
 HEARTBEAT_SEC: Final[float] = 15.0
+# 새 이벤트를 확인하는 주기. heartbeat 와 분리한다 — 묶으면 이상이 최대
+# HEARTBEAT_SEC 만큼 밀려 명세서 p.4의 "실시간 Push"가 되지 않는다.
+POLL_SEC: Final[float] = 0.25
 _BUFFER_PER_SESSION: Final[int] = 200
 
 
