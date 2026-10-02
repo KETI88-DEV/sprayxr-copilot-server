@@ -75,7 +75,7 @@ def create_app(
     )
     speech_to_text = LazySpeechToText(
         lambda: TransformersWhisperSpeechToText(
-            os.environ.get("STT_MODEL_PATH", "/models/whisper"),
+            os.environ.get("STT_MODEL_PATH", "/stt-model"),
             device=os.environ.get("STT_DEVICE", "cuda"),
         )
     )
@@ -97,11 +97,17 @@ def create_app(
 
     @asynccontextmanager
     async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+        pipeline_init_thread: threading.Thread | None = None
         if live and os.environ.get("LIVE_EAGER_INIT") == "1":
-            app.state.eager_init_thread = chat_service_mod.start_eager_pipeline_init()
+            pipeline_init_thread = chat_service_mod.start_eager_pipeline_init()
+            app.state.eager_init_thread = pipeline_init_thread
         if live and os.environ.get("STT_EAGER_INIT", "0") == "1":
             def _preload_stt() -> None:
                 try:
+                    # Both runtimes import transformers. Importing its lazy modules from
+                    # two startup threads can expose a partially initialized module.
+                    if pipeline_init_thread is not None:
+                        pipeline_init_thread.join()
                     speech_to_text.preload()
                 except Exception:
                     logger.error("STT preload failed")

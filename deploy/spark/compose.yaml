@@ -119,7 +119,7 @@ services:
       LIVE_EAGER_INIT: "1"
       STT_EAGER_INIT: "1"
       STT_REQUIRED: "1"
-      STT_MODEL_PATH: /models/whisper
+      STT_MODEL_PATH: /stt-model
       STT_DEVICE: ${STT_DEVICE:-cuda}
       MCP_BASE_URL: http://mcp:8100
       TOOL_ADAPTER_NATIVE_TOOLS: "0"
@@ -143,7 +143,7 @@ services:
       - ${BUNDLE_DIR:?BUNDLE_DIR must point to the verified bundle}/data/eval:/data/eval:ro
       - ${RESULTS_DIR:?RESULTS_DIR must be a directory writable by APP_UID}:/output/eval_results
       - ${EXPERT_REFERENCE_DIR:-/home/keti/shipcoat/data/expert_reference_data}:/expert_reference_data:ro
-      - ${STT_MODEL_DIR:-/home/keti/shipcoat/models/whisper-large-v3-turbo}:/models/whisper:ro
+      - ${STT_MODEL_DIR:-/home/keti/shipcoat/models/whisper-large-v3-turbo}:/stt-model:ro
     ports:
       # v2.5 POST /api/v1/copilot/query 를 KETI 시뮬레이터가 직접 부를 포트. 외부 공개 시 COPILOT_BIND=0.0.0.0.
       - "${COPILOT_BIND:-127.0.0.1}:${COPILOT_PORT:-58000}:8120"
