@@ -71,6 +71,30 @@ class TelemetrySequenceRequest(StrictModel):
 class AnalyzeSequenceRequest(TelemetrySequenceRequest):
     """명세서 p.7. `telemetry/sequence`와 같은 8키에 `mode_id`가 더 붙는다."""
 
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "example": {
+                "session_id": "TSB-DEMO-001",
+                "user_id": "W-017",
+                "scenario_id": "training-mode-3",
+                "zone_id": "3",
+                "sequence_id": "SEQ-001",
+                "mode_id": 3,
+                "sequence_setting": {"target_speed_mms": 500, "target_distance_mm": 250},
+                "sequence_info": [
+                    {
+                        "index": 0,
+                        "time": "2026-10-02T10:00:00Z",
+                        "tool_pos_rot": {"position": [0.0, 1.2, 0.4]},
+                        "gun_metrics": {"speed_mms": 500, "distance_mm": 250},
+                    }
+                ],
+                "sequence_result": {"avg_speed_mms": 500, "avg_distance_mm": 250},
+            }
+        },
+    )
+
     # 도장 작업 표준 모드 ID (1~10). 명세서는 기본값 1 이라고 적는다.
     mode_id: Annotated[int, Field(ge=1, le=10)] = 1
 

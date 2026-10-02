@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import ConfigDict, Field, field_validator, model_validator
 
 from trainer.demo_api.contracts import StrictModel
 
@@ -18,6 +18,22 @@ ContextStatus = Literal["available", "not_available"]
 
 
 class CopilotQueryRequest(StrictModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "example": {
+                "user_id": "W-017",
+                "scenario_id": "training-mode-3",
+                "session_id": "TSB-DEMO-001",
+                "request_id": "REQ-TEXT-001",
+                "prompt": "다음 Zone을 어떤 순서로 칠해야 하나요?",
+                "task_type": "knowledge_search",
+                "use_rag": "Y",
+                "context": "현재 Zone은 3입니다.",
+            }
+        },
+    )
+
     user_id: Annotated[str, Field(min_length=1)]
     scenario_id: str | None = None
     session_id: str | None = None

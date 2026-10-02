@@ -21,13 +21,17 @@
 from __future__ import annotations
 
 import argparse
+import io
 import json
+import math
+import struct
 import sys
 import threading
 import time
 import urllib.error
 import urllib.request
 import uuid
+import wave
 from typing import Any
 
 TIMEOUT = 30.0
@@ -100,6 +104,21 @@ def _multipart(fields: dict[str, str], files: dict[str, tuple[str, bytes, str]])
     return b"".join(parts), f"multipart/form-data; boundary={boundary}"
 
 
+def _voice_probe_wav() -> bytes:
+    stream = io.BytesIO()
+    with wave.open(stream, "wb") as output:
+        output.setnchannels(1)
+        output.setsampwidth(2)
+        output.setframerate(16_000)
+        output.writeframes(
+            b"".join(
+                struct.pack("<h", int(1200 * math.sin(2 * math.pi * 220 * index / 16_000)))
+                for index in range(16_000)
+            )
+        )
+    return stream.getvalue()
+
+
 def _envelope_ok(payload: Any) -> bool:
     return isinstance(payload, dict) and payload.get("status") == "SUCCESS"
 
@@ -159,9 +178,9 @@ def run(args: argparse.Namespace) -> list[Outcome]:
     status, spec, raw = _request(f"{base}/openapi.json")
     paths = sorted(spec["paths"]) if isinstance(spec, dict) and "paths" in spec else []
     step(
-        "openapi 경로 14개",
+        "openapi 경로 15개",
         status,
-        len(paths) == 14,
+        len(paths) == 15,
         f"{len(paths)}개" + ("" if paths else f" / {raw[:120]}"),
     )
 
@@ -238,7 +257,18 @@ def run(args: argparse.Namespace) -> list[Outcome]:
     )
 
     status, payload, raw = _post_json(f"{api}/copilot/analyze-sequence", {**body, "mode_id": 1})
-    step("POST /copilot/analyze-sequence", status, status == 200 and _envelope_ok(payload), raw[:120])
+    guide = _data(payload).get("guide") or {}
+    guide_ok = all(
+        isinstance(guide.get(key), dict)
+        and guide[key].get("status") in ({"slow", "ok", "fast"} if key == "speed" else {"near", "ok", "far"})
+        for key in ("speed", "distance")
+    )
+    step(
+        "POST /copilot/analyze-sequence (speed/distance guide)",
+        status,
+        status == 200 and _envelope_ok(payload) and guide_ok,
+        json.dumps(guide, ensure_ascii=False)[:240] if guide else raw[:120],
+    )
 
     # --- 4. 질의 -------------------------------------------------------
     status, payload, raw = _post_json(
@@ -279,6 +309,48 @@ def run(args: argparse.Namespace) -> list[Outcome]:
             status == 200 and isinstance(answer, str) and bool(answer.strip()),
             (answer or raw)[:200].replace("\n", " "),
         )
+
+    voice_body, voice_type = _multipart(
+        {
+            "user_id": user_id,
+            "session_id": session_id,
+            "language": "ko",
+            "request_id": f"VOICE-{run_id}",
+            "use_rag": "Y",
+        },
+        {"audio": ("question.wav", _voice_probe_wav(), "audio/wav")},
+    )
+    status, payload, raw = _request(
+        f"{api}/copilot/query-voice",
+        method="POST",
+        body=voice_body,
+        content_type=voice_type,
+        timeout=LLM_TIMEOUT,
+    )
+    voice_data = _data(payload)
+    step(
+        "POST /copilot/query-voice",
+        status,
+        status == 200 and bool(voice_data.get("transcript")) and bool(voice_data.get("answer")),
+        json.dumps({"transcript": voice_data.get("transcript"), "answer": voice_data.get("answer")}, ensure_ascii=False)[:240],
+    )
+
+    bad_body, bad_type = _multipart(
+        {"user_id": user_id, "language": "ko"},
+        {"audio": ("bad.wav", b"not-a-wav", "audio/wav")},
+    )
+    status, payload, raw = _request(
+        f"{api}/copilot/query-voice",
+        method="POST",
+        body=bad_body,
+        content_type=bad_type,
+    )
+    step(
+        "POST /copilot/query-voice (잘못된 WAV → 422)",
+        status,
+        status == 422 and isinstance(payload, dict) and payload.get("status") == "ERROR",
+        raw[:160],
+    )
 
     # --- 5. 테스트 라우트와 SSE ------------------------------------------
     events: list[str] = []

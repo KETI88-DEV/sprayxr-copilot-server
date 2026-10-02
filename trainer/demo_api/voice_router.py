@@ -51,16 +51,22 @@ def create_voice_router(
     sequences = store if store is not None else SequenceStore()
     mcp_base = mcp_base_url or os.environ.get("MCP_BASE_URL", "http://localhost:8100")
 
-    @router.post(VOICE_QUERY_PATH, response_model=VoiceCopilotResponse)
+    @router.post(
+        VOICE_QUERY_PATH,
+        response_model=VoiceCopilotResponse,
+        tags=["3. AI Co-Pilot 질의"],
+        summary="3-2. VR 음성 Co-Pilot 질의",
+        description="HMD에서 녹음한 WAV를 STT로 변환한 뒤 기존 Query와 동일한 경로로 답변합니다. WAV PCM16·16kHz·mono·15초 이하만 허용합니다.",
+    )
     async def voice_query(
         audio: Annotated[UploadFile, File(description="WAV, PCM 16-bit, 16 kHz, mono, maximum 15 seconds")],
-        user_id: Annotated[str, Form(min_length=1, description="Training user identifier")],
-        language: Annotated[VoiceLanguage, Form(description="Spoken language")],
+        user_id: Annotated[str, Form(min_length=1, description="Training user identifier", examples=["W-017"])],
+        language: Annotated[VoiceLanguage, Form(description="Spoken language", examples=["ko"])],
         session_id: Annotated[str | None, Form(description="Optional active training session")] = None,
         scenario_id: Annotated[str | None, Form(description="Optional scenario identifier")] = None,
         request_id: Annotated[str | None, Form(description="Optional caller request identifier")] = None,
         task_type: Annotated[TaskType, Form(description="Same task type as the text Query API")] = "knowledge_search",
-        use_rag: Annotated[Literal["Y", "N"], Form(description="Use the knowledge base")]= "Y",
+        use_rag: Annotated[Literal["Y", "N"], Form(description="Use the knowledge base", examples=["Y"])]= "Y",
         context: Annotated[str | None, Form(description="Optional JSON or short context text")] = None,
     ) -> JSONResponse:
         started = time.monotonic()
@@ -91,14 +97,6 @@ def create_voice_router(
         if not transcript:
             return error_response(422, "No speech was recognized")
 
-        parsed_context: dict[str, object] | None = None
-        if context:
-            try:
-                decoded = json.loads(context)
-                parsed_context = decoded if isinstance(decoded, dict) else {"text": context}
-            except json.JSONDecodeError:
-                parsed_context = {"text": context}
-
         query = CopilotQueryRequest(
             request_id=request_id,
             user_id=user_id,
@@ -107,7 +105,7 @@ def create_voice_router(
             task_type=task_type,
             prompt=transcript,
             use_rag=use_rag,
-            context=parsed_context,
+            context=context,
         )
         response = await execute_copilot_query(
             query,

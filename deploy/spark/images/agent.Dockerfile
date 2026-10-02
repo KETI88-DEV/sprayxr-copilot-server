@@ -59,7 +59,7 @@ RUN pip install --no-deps -r /tmp/requirements.lock.txt && pip check
 # /workspace/trainer/configs/{tool_schemas,tool_calling_protocol.json} 등 코드의 /workspace 고정 경로를 WORKDIR로 맞춘다.
 COPY trainer/ trainer/
 COPY deploy/spark/scripts/ deploy/spark/scripts/
-RUN python3 -c "import faiss, peft, sentence_transformers, transformers; import trainer.scripts.agent_pipeline, trainer.scripts.search_index, trainer.demo_api.app" \
+RUN python3 -c "import faiss, peft, sentence_transformers, transformers; from trainer.demo_api.speech_to_text import TransformersWhisperSpeechToText; import trainer.scripts.agent_pipeline, trainer.scripts.search_index, trainer.demo_api.app" \
  && python3 -c "import torch; assert (torch.version.cuda or '').startswith('13'), torch.version.cuda"
 USER 10001:10001
 EXPOSE 8120

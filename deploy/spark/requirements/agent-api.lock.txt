@@ -8,6 +8,10 @@
 #     FastAPI 는 Form/File 을 쓰는 라우트를 정의할 때 이것을 요구하므로 없으면 import 스모크가
 #     깨진다 — 2026-09-30 실물 빌드에서 그렇게 터졌다. py3-none-any 라 aarch64 가용성 문제 없다.
 #   (라이브 경로 import 탐침: trainer.demo_api.app, trainer.scripts.agent_pipeline, search_index)
+# Offline STT uses the already locked torch/transformers/numpy closure. The selected
+# model is openai/whisper-large-v3-turbo@41f01f3fe87f28c78e2fbf8b568835947dd65ed9
+# and is mounted read-only; no Hub access occurs in the running service. Artifact hashes
+# are in deploy/spark/models/whisper-large-v3-turbo.manifest.json.
 # aarch64 가용성: 컴파일 패키지는 PyPI에 cp311/abi3 manylinux aarch64 휠이 있음을 2026-09-15 PyPI JSON으로 확인.
 #   나머지는 py3-none-any.
 # 제외:

@@ -235,7 +235,13 @@ def create_copilot_router(
     sequences = store if store is not None else SequenceStore()
     mcp_base = mcp_base_url or os.environ.get("MCP_BASE_URL", "http://localhost:8100")
 
-    @router.post(COPILOT_QUERY_PATH, response_model=CopilotResponse)
+    @router.post(
+        COPILOT_QUERY_PATH,
+        response_model=CopilotResponse,
+        tags=["3. AI Co-Pilot 질의"],
+        summary="3-1. 텍스트 기반 Co-Pilot 질의",
+        description="Replay 및 일반 UI용 텍스트 질의입니다. 빠른 응답을 위해 27B 모델의 thinking을 끄고 RAG 근거를 함께 반환합니다.",
+    )
     async def copilot_query(query: CopilotQueryRequest) -> JSONResponse:
         return await execute_copilot_query(
             query,

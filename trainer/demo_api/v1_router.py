@@ -123,13 +123,13 @@ def create_v1_router(
     store: V1Store | None = None,
     broadcaster: AnomalyBroadcaster | None = None,
 ) -> APIRouter:
-    router = APIRouter(prefix=_V1, tags=["v2.5"])
+    router = APIRouter(prefix=_V1)
     state = store if store is not None else V1Store()
     anomalies = broadcaster if broadcaster is not None else AnomalyBroadcaster()
 
     # --- 1. 세션 관리 (p.1-3) ---------------------------------------------
 
-    @router.post("/sessions/start", response_model=ApiResponse, summary="훈련 세션 시작")
+    @router.post("/sessions/start", response_model=ApiResponse, tags=["1. 세션 관리"], summary="1-1. 훈련 세션 시작")
     async def sessions_start(body: SessionStartRequest) -> JSONResponse:
         created = await to_thread.run_sync(
             lambda: state.upsert_user(
@@ -158,7 +158,7 @@ def create_v1_router(
             ).model_dump(mode="json")
         )
 
-    @router.post("/sessions/end", response_model=ApiResponse, summary="훈련 세션 마감")
+    @router.post("/sessions/end", response_model=ApiResponse, tags=["1. 세션 관리"], summary="1-2. 훈련 세션 마감")
     async def sessions_end(body: SessionEndRequest) -> JSONResponse:
         if body.worker is not None and body.worker.skill_level and body.worker.handedness:
             _ = await to_thread.run_sync(
@@ -185,7 +185,7 @@ def create_v1_router(
 
     # --- 5. 최종 평가와 리포트 (p.11-16) ----------------------------------
 
-    @router.post("/sessions/complete", response_model=ApiResponse, summary="훈련 최종 종료 및 비동기 분석 요청")
+    @router.post("/sessions/complete", response_model=ApiResponse, tags=["5. 최종 평가·리포트"], summary="5-1. 훈련 최종 종료 및 비동기 분석 요청")
     async def sessions_complete(
         session_id: Annotated[str, Form()],
         user_id: Annotated[str, Form()],
@@ -225,7 +225,8 @@ def create_v1_router(
     @router.get(
         "/sessions/{session_id}/reports/{report_id}",
         response_model=ApiResponse,
-        summary="리포트 생성 상태 폴링 조회",
+        tags=["5. 최종 평가·리포트"],
+        summary="5-2. 리포트 생성 상태 폴링 조회",
     )
     async def report_status(session_id: str, report_id: str) -> JSONResponse:
         row = await to_thread.run_sync(lambda: state.get_completion(report_id))
@@ -239,7 +240,7 @@ def create_v1_router(
             ).model_dump(mode="json")
         )
 
-    @router.get("/reports/{report_id}", response_model=ApiResponse, summary="최종 종합 리포트 상세 조회")
+    @router.get("/reports/{report_id}", response_model=ApiResponse, tags=["5. 최종 평가·리포트"], summary="5-3. 최종 종합 리포트 상세 조회")
     async def report_detail(report_id: str) -> JSONResponse:
         row = await to_thread.run_sync(lambda: state.get_completion(report_id))
         if row is None:
@@ -253,7 +254,7 @@ def create_v1_router(
 
     # --- 6. 사용자 관리 (p.17-20) -----------------------------------------
 
-    @router.get("/users", response_model=ApiResponse, summary="훈련자 전체 목록 조회")
+    @router.get("/users", response_model=ApiResponse, tags=["6. 사용자 관리"], summary="6-1. 훈련자 전체 목록 조회")
     async def users_list(
         skip: Annotated[int, Query(ge=0)] = 0,
         limit: Annotated[int, Query(ge=1, le=1000)] = 100,
@@ -261,7 +262,7 @@ def create_v1_router(
         rows = await to_thread.run_sync(lambda: state.list_users(skip=skip, limit=limit))
         return _ok([UserProfile(**row.__dict__).model_dump(mode="json") for row in rows])
 
-    @router.post("/users", response_model=ApiResponse, summary="신규 훈련자 계정 직접 등록")
+    @router.post("/users", response_model=ApiResponse, tags=["6. 사용자 관리"], summary="6-2. 신규 훈련자 계정 직접 등록")
     async def users_create(body: UserCreateRequest) -> JSONResponse:
         created = await to_thread.run_sync(
             lambda: state.upsert_user(
@@ -281,7 +282,7 @@ def create_v1_router(
             ).model_dump(mode="json"),
         )
 
-    @router.get("/users/{user_id}", response_model=ApiResponse, summary="훈련자 프로필 조회")
+    @router.get("/users/{user_id}", response_model=ApiResponse, tags=["6. 사용자 관리"], summary="6-3. 훈련자 프로필 조회")
     async def users_get(user_id: str) -> JSONResponse:
         row = await to_thread.run_sync(lambda: state.get_user(user_id))
         if row is None:
@@ -290,7 +291,7 @@ def create_v1_router(
 
     # --- 4. 이상 알림 SSE (p.10) ------------------------------------------
 
-    @router.get("/stream/anomalies/{session_id}", summary="실시간 이상 탐지 SSE 이벤트 스트림")
+    @router.get("/stream/anomalies/{session_id}", tags=["4. 실시간 알림"], summary="4-1. 실시간 이상 탐지 SSE 이벤트 스트림")
     async def stream_anomalies(session_id: str, request: Request) -> StreamingResponse:
         raw = request.headers.get("last-event-id", "0")
         try:
@@ -311,7 +312,8 @@ def create_v1_router(
             @router.post(
                 f"/test/sequence/{case}",
                 response_model=ApiResponse,
-                summary=f"[테스트] {case} 시퀀스 시뮬레이션 및 SSE 방송",
+                tags=["0. Swagger 모의 연동"],
+                summary=f"0. [{case}] 시퀀스 시뮬레이션 및 SSE 방송",
                 name=f"test_sequence_{case.replace('-', '_')}",
             )
             async def _handler(session_id: str = "1_1000053_1") -> JSONResponse:

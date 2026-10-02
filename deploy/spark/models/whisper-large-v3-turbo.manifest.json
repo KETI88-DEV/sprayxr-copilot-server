@@ -1,0 +1,8 @@
+{
+  "repository": "openai/whisper-large-v3-turbo",
+  "revision": "41f01f3fe87f28c78e2fbf8b568835947dd65ed9",
+  "primary_file": "model.safetensors",
+  "primary_file_sha256": "542566a422ae4f3fd23f1ba11add198fca01bbf82e66e6a2857b3f608b1eb9d1",
+  "runtime": "transformers==5.3.0, torch==2.9.1+cu130",
+  "languages": ["ko", "vi", "id", "th"]
+}

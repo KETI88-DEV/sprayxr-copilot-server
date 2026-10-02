@@ -5,7 +5,9 @@ from __future__ import annotations
 import io
 import threading
 import wave
+from contextlib import nullcontext
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Callable, Literal, Protocol
 
 
@@ -76,6 +78,7 @@ class LazySpeechToText:
     def __init__(self, factory: Callable[[], SpeechToText] | None = None) -> None:
         self._factory = factory
         self._instance: SpeechToText | None = None
+        self._failed = False
         self._guard = threading.Lock()
 
     def _get(self) -> SpeechToText:
@@ -88,8 +91,83 @@ class LazySpeechToText:
                 try:
                     self._instance = self._factory()
                 except Exception:
+                    self._failed = True
                     raise SpeechToTextUnavailableError() from None
         return self._instance
 
+    @property
+    def ready(self) -> bool:
+        return self._instance is not None
+
+    @property
+    def failed(self) -> bool:
+        return self._failed
+
+    def preload(self) -> None:
+        self._get()
+
     def transcribe(self, audio: bytes, language: VoiceLanguage) -> Transcript:
         return self._get().transcribe(audio, language)
+
+
+class TransformersWhisperSpeechToText:
+    """Offline Whisper runtime backed only by a mounted local model directory."""
+
+    def __init__(self, model_path: str, *, device: str = "cuda") -> None:
+        if not Path(model_path).is_dir():
+            raise SpeechToTextUnavailableError()
+        try:
+            import torch
+            from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor
+
+            dtype = torch.float16 if device.startswith("cuda") else torch.float32
+            self._processor = AutoProcessor.from_pretrained(
+                model_path,
+                local_files_only=True,
+            )
+            self._model = AutoModelForSpeechSeq2Seq.from_pretrained(
+                model_path,
+                local_files_only=True,
+                torch_dtype=dtype,
+                low_cpu_mem_usage=True,
+            ).to(device).eval()
+            self._torch = torch
+            self._device = device
+            self._dtype = dtype
+        except Exception:
+            raise SpeechToTextUnavailableError() from None
+
+    def transcribe(self, audio: bytes, language: VoiceLanguage) -> Transcript:
+        import numpy as np
+
+        try:
+            with wave.open(io.BytesIO(audio), "rb") as source:
+                samples = np.frombuffer(source.readframes(source.getnframes()), dtype=np.int16)
+            normalized = samples.astype(np.float32) / 32768.0
+            if float(np.sqrt(np.mean(np.square(normalized)))) < 0.0015:
+                return Transcript(text="", language=language)
+            inputs = self._processor(
+                normalized,
+                sampling_rate=16_000,
+                return_tensors="pt",
+                return_attention_mask=True,
+            )
+            features = inputs.input_features.to(device=self._device, dtype=self._dtype)
+            attention_mask = inputs.attention_mask.to(device=self._device)
+            inference_mode = getattr(self._torch, "inference_mode", None)
+            context = inference_mode() if inference_mode is not None else nullcontext()
+            with context:
+                tokens = self._model.generate(
+                    features,
+                    attention_mask=attention_mask,
+                    language=language,
+                    task="transcribe",
+                    max_new_tokens=64,
+                    do_sample=False,
+                )
+            text = self._processor.batch_decode(tokens, skip_special_tokens=True)[0].strip()
+            return Transcript(text=text, language=language)
+        except SpeechToTextUnavailableError:
+            raise
+        except Exception:
+            raise SpeechToTextUnavailableError() from None

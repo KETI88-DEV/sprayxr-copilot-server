@@ -209,11 +209,23 @@ def create_telemetry_router(
         )
         return JSONResponse(status_code=200, content=payload)
 
-    @router.post(TELEMETRY_SEQUENCE_PATH, response_model=TelemetrySequenceResponse)
+    @router.post(
+        TELEMETRY_SEQUENCE_PATH,
+        response_model=TelemetrySequenceResponse,
+        tags=["2. 시퀀스 수집·피드백"],
+        summary="2-1. 현재 시퀀스 텔레메트리 저장",
+        description="Trigger ON→OFF 한 번의 현재 시퀀스를 저장합니다. 누적 히트맵은 입력하지 않습니다.",
+    )
     async def telemetry_sequence(query: TelemetrySequenceRequest) -> JSONResponse:
         return await _handle(query, analyze=False)
 
-    @router.post(ANALYZE_SEQUENCE_PATH, response_model=AnalyzeSequenceResponse)
+    @router.post(
+        ANALYZE_SEQUENCE_PATH,
+        response_model=AnalyzeSequenceResponse,
+        tags=["2. 시퀀스 수집·피드백"],
+        summary="2-2. 시퀀스 분석 및 속도·이격거리 가이드",
+        description="전문가 기준과 비교하여 매 시퀀스마다 speed(slow/ok/fast)와 distance(near/ok/far)를 구조화해 반환합니다.",
+    )
     async def analyze_sequence(query: AnalyzeSequenceRequest) -> JSONResponse:
         return await _handle(query, analyze=True)
 
