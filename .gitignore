@@ -96,3 +96,7 @@ dataset.md
 # Task files
 # tasks.json
 # tasks/ 
+
+# Codex isolated implementation workspaces
+.worktrees/
+.superpowers/
