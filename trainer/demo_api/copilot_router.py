@@ -132,6 +132,96 @@ def _success_response(
     return JSONResponse(status_code=200, content=envelope.model_dump(mode="json"))
 
 
+async def execute_copilot_query(
+    query: CopilotQueryRequest,
+    *,
+    pipeline_provider: PipelineProvider | None,
+    pending_answers: Mapping[str, str] = PENDING_TASK_ANSWERS,
+    sequences: SequenceStore,
+    mcp_base_url: str,
+    transport: object | None = None,
+    started: float | None = None,
+) -> JSONResponse:
+    """Execute one normalized query for both text and voice transports."""
+    request_started = time.monotonic() if started is None else started
+
+    if query.task_type == "pose_recomm":
+        pose = await to_thread.run_sync(
+            lambda: score_pose(
+                sequences,
+                session_id=query.session_id,
+                context=query.context,
+                mcp_base_url=mcp_base_url,
+                transport=transport,  # type: ignore[arg-type]
+            )
+        )
+        if pose.analysis_status == "available":
+            answer = pose.summary or "숙련자 자세와 비교했습니다."
+        else:
+            answer = _POSE_REASON_ANSWERS.get(pose.reason_code or "", _POSE_FALLBACK_ANSWER)
+        logger.info(
+            "copilot pose_recomm request_id=%s sequence=%s status=%s reason=%s",
+            query.request_id, pose.sequence_id, pose.analysis_status, pose.reason_code,
+        )
+        return _success_response(
+            query, request_started, answer=answer, retrieval_used=False, citations=[],
+            pose_context=pose.as_context(),
+            context_status="available" if pose.analysis_status == "available" else "not_available",
+        )
+
+    if query.task_type != "knowledge_search":
+        answer = pending_answers.get(query.task_type) or PENDING_TASK_ANSWERS[query.task_type]
+        return _success_response(query, request_started, answer=answer, retrieval_used=False, citations=[])
+
+    if pipeline_provider is None:
+        return error_response(503, "Copilot pipeline is not configured")
+    try:
+        pipeline = await to_thread.run_sync(pipeline_provider)
+    except Exception:  # noqa: BROAD_EXCEPT_OK - construction failures surface as not ready
+        logger.exception("copilot query: pipeline construction failed request_id=%s", query.request_id)
+        return error_response(503, "Copilot pipeline is not ready")
+
+    use_rag = query.use_rag == "Y"
+
+    def _guarded_run() -> Mapping[str, object]:
+        with GENERATION_SLOT:
+            return pipeline.run(
+                instruction=query.prompt,
+                force_route="fast",
+                session_id=query.session_id,
+                enable_thinking=False,
+                use_rag=use_rag,
+                request_id=query.request_id,
+            )
+
+    try:
+        result = await to_thread.run_sync(_guarded_run)
+    except OpenAIBackendUnavailableError:
+        logger.exception("copilot query: model server unavailable request_id=%s", query.request_id)
+        return error_response(503, "Model server unavailable")
+    except Exception:  # noqa: BROAD_EXCEPT_OK - never leak internals past the boundary
+        logger.exception("copilot query: pipeline failed request_id=%s", query.request_id)
+        return error_response(500, "Copilot query failed")
+
+    retrieved = retrieved_chunk_ids(result.get("rag_chunks") or []) if use_rag else []
+    parsed = parse_knowledge_answer(str(result.get("response", "")), retrieved)
+    logger.info(
+        "copilot answer normalized request_id=%s repair_path=%s citations=%d dropped=%d",
+        query.request_id,
+        parsed.repair_path,
+        len(parsed.citations),
+        len(parsed.dropped),
+    )
+    return _success_response(
+        query,
+        request_started,
+        answer=parsed.body,
+        retrieval_used=use_rag,
+        citations=list(parsed.citations),
+        degraded=parsed.repair_path in FAILED_REPAIR_PATHS or bool(result.get("deadline_hit", False)),
+    )
+
+
 def create_copilot_router(
     pipeline_provider: PipelineProvider | None,
     *,
@@ -145,95 +235,15 @@ def create_copilot_router(
     sequences = store if store is not None else SequenceStore()
     mcp_base = mcp_base_url or os.environ.get("MCP_BASE_URL", "http://localhost:8100")
 
-    # response_model: Swagger 가 계약 응답을 그대로 보여주게 한다. JSONResponse 만 두면
-    # 요청 스키마는 나오는데 응답 스키마가 비어 SIM 이 무엇을 받는지 알 수 없다.
     @router.post(COPILOT_QUERY_PATH, response_model=CopilotResponse)
     async def copilot_query(query: CopilotQueryRequest) -> JSONResponse:
-        started = time.monotonic()
-
-        if query.task_type == "pose_recomm":
-            pose = await to_thread.run_sync(
-                lambda: score_pose(
-                    sequences,
-                    session_id=query.session_id,
-                    context=query.context,
-                    mcp_base_url=mcp_base,
-                    transport=transport,  # type: ignore[arg-type]
-                )
-            )
-            if pose.analysis_status == "available":
-                answer = pose.summary or "숙련자 자세와 비교했습니다."
-            else:
-                answer = _POSE_REASON_ANSWERS.get(pose.reason_code or "", _POSE_FALLBACK_ANSWER)
-            logger.info(
-                "copilot pose_recomm request_id=%s sequence=%s status=%s reason=%s",
-                query.request_id, pose.sequence_id, pose.analysis_status, pose.reason_code,
-            )
-            return _success_response(
-                query, started, answer=answer, retrieval_used=False, citations=[],
-                pose_context=pose.as_context(),
-                context_status="available" if pose.analysis_status == "available" else "not_available",
-            )
-
-        if query.task_type != "knowledge_search":
-            answer = pending_answers.get(query.task_type) or PENDING_TASK_ANSWERS[query.task_type]
-            return _success_response(query, started, answer=answer, retrieval_used=False, citations=[])
-
-        if pipeline_provider is None:
-            return error_response(503, "Copilot pipeline is not configured")
-        provider = pipeline_provider
-        try:
-            pipeline = await to_thread.run_sync(provider)
-        except Exception:  # noqa: BROAD_EXCEPT_OK - construction failures surface as not ready
-            logger.exception("copilot query: pipeline construction failed request_id=%s", query.request_id)
-            return error_response(503, "Copilot pipeline is not ready")
-
-        use_rag = query.use_rag == "Y"
-
-        def _guarded_run() -> Mapping[str, object]:
-            with GENERATION_SLOT:
-                return pipeline.run(
-                    instruction=query.prompt,
-                    force_route="fast",
-                    session_id=query.session_id,
-                    enable_thinking=False,
-                    use_rag=use_rag,
-                    request_id=query.request_id,
-                )
-
-        try:
-            result = await to_thread.run_sync(_guarded_run)
-        except OpenAIBackendUnavailableError:
-            logger.exception("copilot query: model server unavailable request_id=%s", query.request_id)
-            return error_response(503, "Model server unavailable")
-        except Exception:  # noqa: BROAD_EXCEPT_OK - never leak internals past the boundary
-            logger.exception("copilot query: pipeline failed request_id=%s", query.request_id)
-            return error_response(500, "Copilot query failed")
-
-        # ``citations`` is what the answer cites, not what search returned: the parser
-        # intersects the model's ids with this request's retrieved chunks and renders the
-        # ``[근거]`` line from the survivors, so text and array cannot disagree.
-        # ``use_rag='N'`` retrieves nothing, so every document id leaves the prose.
-        retrieved = retrieved_chunk_ids(result.get("rag_chunks") or []) if use_rag else []
-        parsed = parse_knowledge_answer(str(result.get("response", "")), retrieved)
-        logger.info(
-            "copilot answer normalized request_id=%s repair_path=%s citations=%d dropped=%d",
-            query.request_id,
-            parsed.repair_path,
-            len(parsed.citations),
-            len(parsed.dropped),
-        )
-        return _success_response(
+        return await execute_copilot_query(
             query,
-            started,
-            # ``body``, not ``answer``: the contract's §9.2 example is marker-free prose and
-            # the ids travel in ``citations``. The ``[답변]``/``[근거]`` scaffold is the
-            # model's training form, not part of the public contract.
-            answer=parsed.body,
-            retrieval_used=use_rag,
-            citations=list(parsed.citations),
-            # No full answer was produced, or generation hit its deadline.
-            degraded=parsed.repair_path in FAILED_REPAIR_PATHS or bool(result.get("deadline_hit", False)),
+            pipeline_provider=pipeline_provider,
+            pending_answers=pending_answers,
+            sequences=sequences,
+            mcp_base_url=mcp_base,
+            transport=transport,
         )
 
     return router

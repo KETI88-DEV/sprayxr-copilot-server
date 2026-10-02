@@ -30,6 +30,8 @@ from trainer.demo_api.readiness import evaluate_live_readiness
 from trainer.demo_api.sequence import default_snapshot, session_snapshot
 from trainer.demo_api.sim_session import SimSessionStore
 from trainer.demo_api.simulator import create_simulator_router
+from trainer.demo_api.speech_to_text import LazySpeechToText
+from trainer.demo_api.voice_router import create_voice_router
 from trainer.demo_api.zone_resolver import McpZoneResolver
 
 logger = logging.getLogger(__name__)
@@ -48,6 +50,7 @@ def create_app(
     expert_guidance = ExpertGuidanceEngine(
         Path(os.environ.get("EXPERT_REFERENCE_ROOT", "/expert_reference_data"))
     )
+    speech_to_text = LazySpeechToText()
 
     if chat_service is not None:
         service = chat_service
@@ -74,6 +77,7 @@ def create_app(
     app.state.chat_service = service
     app.state.eager_init_thread = None
     app.state.expert_guidance = expert_guidance
+    app.state.speech_to_text = speech_to_text
 
     raw_allow_origins = os.environ.get("DEMO_UI_ORIGINS")
     if raw_allow_origins is None:
@@ -144,6 +148,13 @@ def create_app(
     app.include_router(
         create_copilot_router(
             (lambda: chat_service_mod._get_or_build_pipeline()) if live else None,
+            mcp_base_url=mcp_base_url,
+        )
+    )
+    app.include_router(
+        create_voice_router(
+            (lambda: chat_service_mod._get_or_build_pipeline()) if live else None,
+            stt_provider=lambda: speech_to_text,
             mcp_base_url=mcp_base_url,
         )
     )
