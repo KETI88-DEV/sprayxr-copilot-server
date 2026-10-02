@@ -95,16 +95,42 @@ def test_rescaling_touches_only_the_two_lower_torso_bones() -> None:
         assert cosine == pytest.approx(1.0, abs=1e-12), name
 
 
-def test_lower_torso_reaches_the_bvh_derived_target() -> None:
+def test_lower_torso_reaches_the_bvh_derived_target_with_one_factor() -> None:
+    """두 마디의 합이 목표 길이에 닿고, 두 마디에 **같은 배율**이 곱해진다(마디 사이 비는 원본 그대로)."""
     offsets = _csv_like_offsets()
+    offsets["Chest"] = (0.0, 0.0600, 0.0)  # 두 마디 길이가 달라야 배율이 같은지 가려진다
     out = bp.rig_offsets(offsets)
     total = sum(math.hypot(*out[name]) for name in bp.RESCALED_BONES)
     assert total == pytest.approx(bp.target_lower_torso_m(offsets), rel=1e-12)
-    # 마디별 배분도 BVH 몫 그대로다.
-    share_total = sum(bp.LOWER_TORSO_SHARE_M[name] for name in bp.RESCALED_BONES)
-    for name in bp.RESCALED_BONES:
-        want = total * bp.LOWER_TORSO_SHARE_M[name] / share_total
-        assert math.hypot(*out[name]) == pytest.approx(want, rel=1e-12), name
+    factors = [math.hypot(*out[name]) / math.hypot(*offsets[name]) for name in bp.RESCALED_BONES]
+    assert factors[0] == pytest.approx(factors[1], rel=1e-12)
+
+
+def _rot(axis: str, degrees: float) -> np.ndarray:
+    c, s_ = math.cos(math.radians(degrees)), math.sin(math.radians(degrees))
+    if axis == "x":
+        return np.array([[1, 0, 0], [0, c, -s_], [0, s_, c]])
+    return np.array([[c, 0, s_], [0, 1, 0], [-s_, 0, c]])
+
+
+def test_rescaling_preserves_the_posed_torso_direction() -> None:
+    """**자세를 취한** 몸통(두 마디가 서로 다른 회전을 받은 FK)에서 골반→가슴 방향이 보정 전후로 같다.
+
+    마디마다 다른 배율(옛 BVH 몫, 0.89·1.69배)을 곱하면 각 마디 방향은 그대로여도 합 방향이 바뀐다 — 전형기 L8 1000772_1
+    구간 3에서 몸통이 13° 더 누웠다(2026-10-02). 뼈 길이 검사로는 못 잡는 변형이다.
+    깨뜨리는 법: `rig_offsets`가 마디마다 다른 배율을 쓰면 실패한다.
+    """
+    offsets = _csv_like_offsets()
+    out = bp.rig_offsets(offsets)
+    pelvis_rot = _rot("x", 50.0)
+    spine_rot = pelvis_rot @ _rot("x", 35.0) @ _rot("y", 20.0)
+
+    def chest(table: dict[str, bp.Vec3]) -> np.ndarray:
+        return pelvis_rot @ np.array(table["Spine"]) + spine_rot @ np.array(table["Chest"])
+
+    before, after = chest(offsets), chest(out)
+    cosine = float(before @ after) / (np.linalg.norm(before) * np.linalg.norm(after))
+    assert math.degrees(math.acos(min(1.0, cosine))) == pytest.approx(0.0, abs=1e-6)
 
 
 def test_inserted_joints_lie_on_the_segment_at_the_bvh_split() -> None:

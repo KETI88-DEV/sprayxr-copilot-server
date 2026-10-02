@@ -221,13 +221,15 @@ def head_diameter_m(offsets: Mapping[str, Vec3]) -> float:
 
 
 def rig_offsets(offsets: Mapping[str, Vec3]) -> dict[str, Vec3]:
-    """골반→가슴 두 마디만 BVH 비례 길이로 바꾼 바인드 오프셋. 나머지는 그대로다.
+    """골반→가슴 두 마디(`RESCALED_BONES`)를 **같은 배율**로 늘여, 합한 길이를 BVH 비례 목표 길이로 맞춘다.
 
-    **방향은 건드리지 않는다** — 마디 벡터에 스칼라를 곱할 뿐이라 FK 회전·사슬 구조가 그대로이고,
-    `skeleton.bone_length_errors`가 재는 "배치된 뼈 길이 == 오프셋 노름"도 그대로 0이다.
-    `Head`(가슴→머리)는 건드리지 않으므로 세 앵커의 상대 위치가 보존된다 — 앵커 오차가 그대로다.
+    **두 마디에 같은 배율을 곱한다.** FK에서 두 마디는 서로 다른 회전을 받아 다른 방향을 가리키므로, 마디마다 다른
+    배율을 곱하면 각 마디의 방향은 그대로여도 둘을 더한 골반→가슴 방향이 바뀐다. 예전에는 BVH 몫대로 0.89배·1.69배를
+    곱했고, 전형기 L8 1000772_1 구간 3에서 몸통이 약 13° 더 누웠다(2026-10-02 외부 검증). 같은 배율이면 회전된 두 벡터의
+    합도 같은 배율로 커질 뿐이라 방향이 보존된다(`test_rescaling_preserves_the_posed_torso_direction`).
+    마디 사이의 BVH 몫(`LOWER_TORSO_SHARE_M`)은 길이 배분에 쓰지 않는다 — 그려 넣는 관절의 내분비에만 남는다.
 
-    두 마디가 다 있지 않거나 목표 길이를 유도할 수 없으면 **원본을 그대로 돌려준다**.
+    `Head`(가슴→머리)는 건드리지 않는다. 두 마디가 다 있지 않거나 목표 길이를 유도할 수 없으면 원본을 그대로 돌려준다.
     """
     out = dict(offsets)
     if any(name not in offsets for name in RESCALED_BONES):
@@ -235,13 +237,11 @@ def rig_offsets(offsets: Mapping[str, Vec3]) -> dict[str, Vec3]:
     target = target_lower_torso_m(offsets)
     if target is None:
         return out
-    share_total = sum(LOWER_TORSO_SHARE_M[name] for name in RESCALED_BONES)
+    current = sum(math.hypot(*offsets[name]) for name in RESCALED_BONES)
+    if current <= 0.0 or any(math.hypot(*offsets[name]) <= 0.0 for name in RESCALED_BONES):
+        return out
+    factor = target / current
     for name in RESCALED_BONES:
-        current = math.hypot(*offsets[name])
-        if current <= 0.0:
-            return dict(offsets)
-        wanted = target * LOWER_TORSO_SHARE_M[name] / share_total
-        factor = wanted / current
         x, y, z = offsets[name]
         out[name] = (x * factor, y * factor, z * factor)
     return out
