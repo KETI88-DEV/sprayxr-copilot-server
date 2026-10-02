@@ -72,6 +72,26 @@ def test_start_creates_the_user_then_updates_it() -> None:
     assert (profile["skill_level"], profile["dominant_hand"]) == ("expert", "left")
 
 
+def test_user_list_preserves_unknown_handedness_from_legacy_database() -> None:
+    """Migrated records without handedness remain readable, while writes stay strict."""
+    state = V1Store(":memory:")
+    app = FastAPI()
+    app.include_router(create_v1_router(store=state, broadcaster=AnomalyBroadcaster()))
+    client = TestClient(app)
+    state.upsert_user(
+        user_id="legacy-user",
+        skill_level="novice",
+        dominant_hand="unknown",
+        created_at="2025-01-01T00:00:00Z",
+    )
+
+    response = client.get("/api/v1/users")
+
+    assert response.status_code == 200
+    legacy = next(row for row in response.json()["data"] if row["user_id"] == "legacy-user")
+    assert legacy["dominant_hand"] == "unknown"
+
+
 def test_end_marks_the_session_completed_and_keeps_started_at() -> None:
     """Given a started session, When ended, Then it is COMPLETED with both timestamps (p.3)."""
     client, _ = _app()

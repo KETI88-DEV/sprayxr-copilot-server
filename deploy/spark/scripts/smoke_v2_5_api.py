@@ -256,7 +256,13 @@ def run(args: argparse.Namespace) -> list[Outcome]:
         f"stored={ack.get('stored')} duplicate={ack.get('duplicate')}",
     )
 
-    status, payload, raw = _post_json(f"{api}/copilot/analyze-sequence", {**body, "mode_id": 1})
+    # The migrated expert reference for learning mode 1 contains Zone 1:1.
+    # Use that real reference key so this proves guidance is operational rather
+    # than merely proving the endpoint can report missing reference data.
+    status, payload, raw = _post_json(
+        f"{api}/copilot/analyze-sequence",
+        {**body, "mode_id": 1, "zone_id": "1:1"},
+    )
     guide = _data(payload).get("guide") or {}
     guide_ok = all(
         isinstance(guide.get(key), dict)

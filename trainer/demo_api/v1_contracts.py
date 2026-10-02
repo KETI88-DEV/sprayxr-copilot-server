@@ -88,7 +88,10 @@ class UserProfile(StrictModel):
     user_id: str
     name: str | None
     skill_level: SkillLevel
-    dominant_hand: Handedness
+    # Migrated legacy records may not have captured handedness.  Keep the
+    # stricter right/left contract for writes while faithfully exposing that
+    # historical absence on reads.
+    dominant_hand: Handedness | Literal["unknown"]
     age: int | None
     gender: str | None
 
