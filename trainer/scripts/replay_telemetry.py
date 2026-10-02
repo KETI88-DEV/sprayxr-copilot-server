@@ -84,7 +84,7 @@ TIME_BASE: Final = datetime(2026, 9, 21, 0, 0, 0, tzinfo=timezone.utc)
 HAND_TOOL_GAP_M: Final = 0.3585
 
 SYNTHESIS_NOTICE: Final = (
-    "관절은 pose_fk_csv.forward_kinematics(루트 원점)로 만들었다 — CSV Position 은 local 이다.\n"
+    "관절은 pose_fk_csv.forward_kinematics(루트 원점)로 만든 뒤 CSV Pelvis Position 만큼 옮겼다.\n"
     f"  tool_pos_rot.pos 는 전완을 이어 {HAND_TOOL_GAP_M} m 앞에 합성했다(FK 공간과 장면 좌표가 다르다).\n"
     "  gun_metrics.raypoint 는 건과 같은 평행이동으로 옮겨 건→착탄 벡터를 보존했다 — reach 는 실측이다.\n"
     "  따라서 tool_not_held 와 수평 방향 규칙은 이 입력으로 검증되지 않는다."
@@ -137,6 +137,26 @@ def spray_spans(rows: Sequence[dict[str, str]]) -> list[tuple[int, int]]:
 
 
 
+
+def _root_motion(row: Mapping[str, str]) -> list[float]:
+    """CSV가 기록한 Pelvis 이동. FK가 버리는 **실제 움직임**을 되살린다.
+
+    `pose_fk_csv.forward_kinematics` 는 루트를 원점에 두므로 Pelvis 가 모든 프레임에서
+    `(0,0,0)` 이다. 그러면 골격 게이트가 "이 관절은 움직이지 않는다"고 보고 `degrade` 를
+    매긴다(`skeleton_joint_frozen`). 그런데 CSV 의 Pelvis Position 은 실제로 변한다 —
+    1-A_1000452_1 첫 구간 90프레임에서 고유값 81개, X·Y 범위 0.11 m 다.
+
+    **점수는 바뀌지 않는다(실측).** 같은 구간에서 루트 고정 0.7293 / 루트 이동 0.7293 으로
+    동일하고 밴드도 `+0.10` 로 같다. 채점이 Pelvis 를 쓰지 않기 때문이다 — Pelvis 는
+    `excluded_joints` 이고 채점 관절은 팔 6개다. 즉 이 `degrade` 는 작업자의 성질이 아니라
+    우리 합성의 부작용이었고, 되살리면 `available` 이 된다.
+
+    Pelvis Position 자체는 월드 좌표가 아니다(`pose_fk_csv` 독스트링). 쓰는 것은 절대값이
+    아니라 **프레임 간 변화**다.
+    """
+    return [float(row[f"Pelvis Position {axis}"]) for axis in "XYZ"]
+
+
 def _median(values: Sequence[float]) -> float:
     ordered = sorted(values)
     return ordered[len(ordered) // 2]
@@ -181,11 +201,13 @@ def build_frame(
     stamp = TIME_BASE + timedelta(seconds=seconds)
     # FK: 루트 원점 공간. 키는 "RightHand" 형태라 v2.5 소문자 키로 바꾼다.
     fk = pose_fk_csv.forward_kinematics(row, offsets)
-    joints = {name.lower(): list(pos) for name, pos in fk.items()}
+    root = _root_motion(row)
+    joints = {name.lower(): [pos[axis] + root[axis] for axis in range(3)] for name, pos in fk.items()}
     hand = joints.get("righthand")
     forearm = joints.get("rightforearm")
     if hand is None or forearm is None:
         return None
+    # 도구는 **옮긴 뒤의** 손에서 합성한다. 먼저 합성하면 손↔건 간격이 루트 이동만큼 틀어진다.
     tool = _tool_from_hand(hand, forearm)
     return {
         "index": index,
@@ -289,9 +311,11 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     print("[합성 고지]", SYNTHESIS_NOTICE)
     print(
-        "[한계] 이 입력으로는 점수가 나오지 않는다 — reach 가 FK 공간과 장면 좌표를 섞어\n"
-        "  레퍼런스 버킷이 선택되지 않는다(reference_quality: unavailable). 검증되는 것은\n"
-        "  엔드포인트 배선·모니터·중복 식별·골격 게이트까지다."
+        "[한계] 검증되는 것 — 엔드포인트 배선·모니터·중복 식별·골격 게이트, 그리고 reach\n"
+        "  버킷 선택·레퍼런스 조회·점수 산출까지. reach 는 CSV 장면 좌표에서 잰 실측값을\n"
+        "  평행이동으로 옮긴 것이라 보존된다.\n"
+        "  검증되지 않는 것 — tool_not_held(건 위치를 손에서 합성하므로 간격이 설계상 범위\n"
+        "  안이다), 수평 방향이 걸리는 규칙(두 공간의 정합을 모르므로 수직 성분만 보증한다)."
     )
     path = find_session(args.session)
     rows = read_rows(path)
