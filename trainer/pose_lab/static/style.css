@@ -1129,3 +1129,7 @@ details[open] > summary { margin-bottom: var(--sp-3); }
 @media (prefers-reduced-motion: reduce) {
   * { scroll-behavior: auto !important; transition: none !important; }
 }
+
+/* 해부학적으로 맞지 않는 몸의 고지 — 경고색으로 캔버스 바로 아래에 늘 보인다. */
+.view3d-posture-note { color: var(--warn); font-weight: 600; margin: var(--sp-1) 0; }
+.view3d-posture-note:empty { display: none; }

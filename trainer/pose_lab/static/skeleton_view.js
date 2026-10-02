@@ -277,6 +277,11 @@ function isVec3(value) {
 // **장면 좌표만** 본다. 호출부마다 부호를 따로 뒤집지 않는다 — 그렇게 하면 하나만 빠져도 그 요소만
 // 거울상에 남는다. 수 세 개짜리 배열은 **전부** 좌표(점이든 방향이든 Z를 뒤집는 규칙은 같다)로 보고,
 // 예외는 아래 목록(삼각형의 정점 번호)뿐이다: 기본이 "변환"이라 서버에 새 좌표 필드가 생겨도 빠지지 않는다.
+/** 몸을 흐리게 그리나 — 중력 맞춤이 크게 어긋났거나(`faded`) 해부학적으로 맞지 않는 몸("추정 자세", `posture.plausible`). */
+function bodyFaded(fit) {
+  return fit?.faded === true || fit?.posture?.plausible === false;
+}
+
 function sceneFromUnity(p) {
   return [p[0], p[1], -p[2]];
 }
@@ -419,6 +424,10 @@ function buildDom(container) {
   // 연두 층(골반을 맞춘 기준)이 무엇을 얼마나 옮긴 것인지 — 서버 문장.
   const pelvisNote = document.createElement("p");
   pelvisNote.className = "view3d-note view3d-pelvis-note";
+  // 해부학적으로 맞지 않는 몸("추정 자세")의 고지 — 서버 문장(`fit.posture_note`). 접힌 상세가 아니라 캔버스 바로 아래에
+  // 늘 보이게 둔다. 3D 안에는 글자를 걸지 않고, 그 몸은 흐리게 그린다(`fit.faded`).
+  const postureNote = document.createElement("p");
+  postureNote.className = "view3d-note view3d-posture-note";
   // 강조한 안내가 **어느 쪽으로** 옮기라는 뜻인지. 3D 안에는 글자를 걸지 않으므로 캔버스 아래에 둔다.
   const focusNote = document.createElement("p");
   focusNote.className = "view3d-note view3d-focus-note";
@@ -441,10 +450,10 @@ function buildDom(container) {
   const displaySummary = document.createElement("summary");
   displaySummary.textContent = "측정 · 표시 정보";
   displayDetails.append(displaySummary, notes, notesMore, framingMore);
-  container.append(toolbar, host, playback, focusNote, pelvisNote, arrangeNote, legend, errors, note, correctedNote, framingNote, displayDetails);
+  container.append(toolbar, host, postureNote, playback, focusNote, pelvisNote, arrangeNote, legend, errors, note, correctedNote, framingNote, displayDetails);
   return {
     canvas, host, labelsHost, legend, notes, notesMore, wallNote, errors, note, correctedNote, framingNote,
-    framingMore, framingMoreText, controls, toolbar, playback, arrangeNote, focusNote, pelvisNote,
+    framingMore, framingMoreText, controls, toolbar, playback, arrangeNote, focusNote, pelvisNote, postureNote,
     arrange: controls.querySelector("#view3dArrange"),
     play: playback.querySelector("#view3dPlay"),
     playbackMode: playback.querySelector("#view3dPlaybackMode"),
@@ -2819,7 +2828,7 @@ function mount(THREE, container) {
       // 머리 지름·다리 판정은 **그 층의 서버 fit**에서 온다 — 대표 순간과 같다.
       const fit = layer === "query" ? view.fit : view.reference_fit;
       const parts = buildSkeletonGroup(
-        frame.joints, view.layers?.[layer]?.bones, fit?.faded === true,
+        frame.joints, view.layers?.[layer]?.bones, bodyFaded(fit),
         fit?.legs?.joints, fit?.head_diameter_m,
         {
           layerColor: LAYER_COLOR[layer],
@@ -2839,7 +2848,7 @@ function mount(THREE, container) {
     if (referenceFrame && momentGroups.pelvis) {
       const fit = view.reference_fit;
       const parts = buildSkeletonGroup(
-        referenceFrame.joints, view.layers?.reference?.bones, fit?.faded === true,
+        referenceFrame.joints, view.layers?.reference?.bones, bodyFaded(fit),
         fit?.legs?.joints, fit?.head_diameter_m,
         { layerColor: LAYER_COLOR.pelvis, plain: true, legsOutOfRange: fit?.legs_within_range === false, flesh: view.flesh },
       );
@@ -3068,7 +3077,7 @@ function mount(THREE, container) {
     layerGroups.corrected.add(buildLayerGroup(view.layers?.corrected, LAYER_COLOR.corrected, false, false));
 
     const skeletonParts = buildSkeletonGroup(
-      joints, view.layers?.query?.bones, fit?.faded === true, fit?.legs?.joints, fit?.head_diameter_m,
+      joints, view.layers?.query?.bones, bodyFaded(fit), fit?.legs?.joints, fit?.head_diameter_m,
       {
         layerColor: LAYER_COLOR.query,
         deviations,
@@ -3080,7 +3089,7 @@ function mount(THREE, container) {
     layerGroups.query.add(skeletonParts.group);
     // 기준도 **같은 함수**로 그린다 — 두 그리기 경로를 두면 같은 사람이 층에 따라 다른 몸이 된다.
     const referenceParts = buildSkeletonGroup(
-      referenceJoints, view.layers?.reference?.bones, referenceFit?.faded === true,
+      referenceJoints, view.layers?.reference?.bones, bodyFaded(referenceFit),
       referenceFit?.legs?.joints, referenceFit?.head_diameter_m,
       {
         layerColor: LAYER_COLOR.reference,
@@ -3093,7 +3102,7 @@ function mount(THREE, container) {
     layerGroups.reference.add(referenceParts.group);
     // 골반을 맞춘 기준(연두) — **같은 함수**로 그린 기준 몸 + 기준 분사 경로를 한 층에 담고 층째 옮긴다.
     const pelvisParts = buildSkeletonGroup(
-      referenceJoints, view.layers?.reference?.bones, referenceFit?.faded === true,
+      referenceJoints, view.layers?.reference?.bones, bodyFaded(referenceFit),
       referenceFit?.legs?.joints, referenceFit?.head_diameter_m,
       {
         layerColor: LAYER_COLOR.pelvis,
@@ -3110,17 +3119,17 @@ function mount(THREE, container) {
     skeletonLegs = skeletonParts.legs;
     referenceLegs = referenceParts.legs;
     // 자리표시 다리(B) — **기본으로 보이는 쪽**. 층마다 자기 fit의 것을 그린다.
-    skeletonPlaceholderLegs = buildPlaceholderLegGroup(fit, LAYER_COLOR.query, fit?.faded === true);
+    skeletonPlaceholderLegs = buildPlaceholderLegGroup(fit, LAYER_COLOR.query, bodyFaded(fit));
     layerGroups.query.add(skeletonPlaceholderLegs);
     referencePlaceholderLegs = buildPlaceholderLegGroup(
-      referenceFit, LAYER_COLOR.reference, referenceFit?.faded === true,
+      referenceFit, LAYER_COLOR.reference, bodyFaded(referenceFit),
     );
     layerGroups.reference.add(referencePlaceholderLegs);
     // 못 닿은 발의 간격 보조선(점선 + "간격 NNcm"). 서버가 준 층만 그린다 — 닿은 층은 빈 목록이다.
-    skeletonFloorGaps = buildPlaceholderFloorGaps(fit, LAYER_COLOR.query, fit?.faded === true, "query");
+    skeletonFloorGaps = buildPlaceholderFloorGaps(fit, LAYER_COLOR.query, bodyFaded(fit), "query");
     layerGroups.query.add(skeletonFloorGaps);
     referenceFloorGaps = buildPlaceholderFloorGaps(
-      referenceFit, LAYER_COLOR.reference, referenceFit?.faded === true, "reference",
+      referenceFit, LAYER_COLOR.reference, bodyFaded(referenceFit), "reference",
     );
     layerGroups.reference.add(referenceFloorGaps);
     // 토글은 "다리가 있는가"가 아니라 **자리표시를 IK로 바꾸는가**다(B). 다리는 자리표시로 늘
@@ -3143,9 +3152,9 @@ function mount(THREE, container) {
     layerGroups.reference.add(referenceStrokeGroup.group);
 
     // 오른손이 손잡이에 못 닿은 층의 손끝→손잡이 점선. 층과 한 몸으로 켜고 끈다.
-    const reachGap = buildReachGap(fit, LAYER_COLOR.query, fit?.faded === true);
+    const reachGap = buildReachGap(fit, LAYER_COLOR.query, bodyFaded(fit));
     layerGroups.query.add(reachGap);
-    const referenceReachGap = buildReachGap(referenceFit, LAYER_COLOR.reference, referenceFit?.faded === true);
+    const referenceReachGap = buildReachGap(referenceFit, LAYER_COLOR.reference, bodyFaded(referenceFit));
     layerGroups.reference.add(referenceReachGap);
 
     const anchors = buildAnchorGroup(fit, LAYER_COLOR.query, true, "query", view.layers?.query);
@@ -3192,6 +3201,8 @@ function mount(THREE, container) {
     }
 
     renderLegend(dom.legend, view);
+    dom.postureNote.textContent = [fit?.posture_note, view.reference_fit?.posture_note]
+      .filter((text) => typeof text === "string").join(" ");
     dom.notes.replaceChildren();
     dom.notesMore.replaceChildren();
     const moreLines = [];
@@ -3444,6 +3455,7 @@ function mount(THREE, container) {
     lastView = null;
     framing.baseRadius = null;
     setNote(dom.note, message ?? "패스를 고르고 평가를 누르면 여기에 뜹니다.", tone ?? "idle");
+    dom.postureNote.textContent = "";
     dom.notes.replaceChildren();
     dom.notesMore.replaceChildren();
     dom.notesMore.hidden = true;
