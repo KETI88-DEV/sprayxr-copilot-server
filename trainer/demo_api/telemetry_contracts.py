@@ -28,6 +28,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from trainer.demo_api.contracts import StrictModel
 
 AnalysisStatus = Literal["available", "not_available"]
+SpeedGuideStatus = Literal["slow", "ok", "fast"]
+DistanceGuideStatus = Literal["near", "ok", "far"]
 
 
 class SequenceFrameIn(BaseModel):
@@ -93,6 +95,18 @@ class EngineFeedback(StrictModel):
     reason_code: str | None
 
 
+class GuideItem(StrictModel):
+    status: SpeedGuideStatus | DistanceGuideStatus | None
+    message: str | None
+    available: bool
+    reason: str | None
+
+
+class SequenceGuide(StrictModel):
+    speed: GuideItem
+    distance: GuideItem
+
+
 class TelemetrySequenceData(StrictModel):
     """시퀀스를 데이터베이스에 올린 결과.
 
@@ -123,3 +137,14 @@ class TelemetrySequenceResponse(StrictModel):
     code: int
     message: str
     data: TelemetrySequenceData | None
+
+
+class AnalyzeSequenceData(TelemetrySequenceData):
+    guide: SequenceGuide
+
+
+class AnalyzeSequenceResponse(StrictModel):
+    status: Literal["SUCCESS", "ERROR"]
+    code: int
+    message: str
+    data: AnalyzeSequenceData | None

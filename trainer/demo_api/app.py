@@ -8,6 +8,7 @@ import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import cast
 
 import httpx
@@ -20,6 +21,7 @@ from trainer.demo_api import chat_service as chat_service_mod
 from trainer.demo_api.chat_service import ChatService, build_default_live_runner
 from trainer.demo_api.contracts import ChatRequest
 from trainer.demo_api.copilot_router import create_copilot_router, install_copilot_error_handlers
+from trainer.demo_api.expert_guidance import ExpertGuidanceEngine
 from trainer.demo_api.telemetry_router import create_telemetry_router
 from trainer.demo_api.v1_router import create_v1_router
 from trainer.demo_api.monitor import MonitorRecorder
@@ -43,6 +45,9 @@ def create_app(
     store = SimSessionStore()
     mcp_base_url = os.environ.get("MCP_BASE_URL", "http://localhost:8100")
     resolver = McpZoneResolver(mcp_base_url)
+    expert_guidance = ExpertGuidanceEngine(
+        Path(os.environ.get("EXPERT_REFERENCE_ROOT", "/expert_reference_data"))
+    )
 
     if chat_service is not None:
         service = chat_service
@@ -68,6 +73,7 @@ def create_app(
     app = FastAPI(title="Ship Painting Demo API", lifespan=_lifespan)
     app.state.chat_service = service
     app.state.eager_init_thread = None
+    app.state.expert_guidance = expert_guidance
 
     raw_allow_origins = os.environ.get("DEMO_UI_ORIGINS")
     if raw_allow_origins is None:
@@ -146,7 +152,9 @@ def create_app(
     # POST /api/v1/telemetry/sequence: 시퀀스를 데이터베이스에 올린다. 자세 채점은
     # copilot/query 의 pose_recomm 이 한다(명세서 p.4 vs p.9).
     # recorder 를 함께 준다 — v2.5 요청·응답이 /api/monitor/{events,stream} 에 보인다.
-    app.include_router(create_telemetry_router(recorder=recorder))
+    app.include_router(
+        create_telemetry_router(recorder=recorder, guidance_engine=expert_guidance)
+    )
     install_copilot_error_handlers(app)
 
     return app

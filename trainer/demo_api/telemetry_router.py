@@ -29,7 +29,7 @@ import json
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Any, Final
+from typing import Any, Final, Protocol
 
 from anyio import to_thread
 from fastapi import APIRouter
@@ -38,9 +38,13 @@ from fastapi.responses import JSONResponse
 from trainer.demo_api.monitor import MonitorRecorder
 from trainer.demo_api.sequence_store import SequenceStore
 from trainer.demo_api.telemetry_contracts import (
+    AnalyzeSequenceData,
     AnalyzeSequenceRequest,
+    AnalyzeSequenceResponse,
     EngineFeedback,
+    GuideItem,
     SequenceDataAck,
+    SequenceGuide,
     TelemetrySequenceData,
     TelemetrySequenceRequest,
     TelemetrySequenceResponse,
@@ -56,6 +60,20 @@ _UNKNOWN_FIELD_CAP: Final[int] = 50
 _ENGINE_MISSING: Final[str] = "engine_not_implemented"
 # MonitorEvent.session_id 는 문자열이다. 귀속되지 않은 시퀀스도 모니터에서 보여야 한다.
 _UNATTRIBUTED: Final[str] = "(unattributed)"
+
+
+class GuidanceEngine(Protocol):
+    def evaluate(self, request: AnalyzeSequenceRequest) -> SequenceGuide: ...
+
+
+def _unavailable_guide() -> SequenceGuide:
+    item = GuideItem(
+        status=None,
+        message=None,
+        available=False,
+        reason="reference_unavailable",
+    )
+    return SequenceGuide(speed=item, distance=item.model_copy())
 
 
 def _now() -> str:
@@ -96,6 +114,7 @@ def create_telemetry_router(
     *,
     store: SequenceStore | None = None,
     recorder: MonitorRecorder | None = None,
+    guidance_engine: GuidanceEngine | None = None,
 ) -> APIRouter:
     """``recorder``를 주면 호출당 입력 1건 + 출력 1건을 `/api/monitor/*`에 남긴다.
 
@@ -104,8 +123,9 @@ def create_telemetry_router(
     """
     router = APIRouter()
     sequences = store if store is not None else SequenceStore()
+    guidance_cache: dict[tuple[str, str, int, str], SequenceGuide] = {}
 
-    async def _handle(query: TelemetrySequenceRequest) -> JSONResponse:
+    async def _handle(query: TelemetrySequenceRequest, *, analyze: bool) -> JSONResponse:
         """두 엔드포인트가 같은 처리를 쓴다. 분석 종류별 분기는 엔진이 생기면 넣는다."""
         started = time.monotonic()
         monitor_session = query.session_id or _UNATTRIBUTED
@@ -114,22 +134,19 @@ def create_telemetry_router(
             _ = recorder.record(monitor_session, "runtime", "input", query.model_dump(mode="json"))
         frames_received = len(query.sequence_info)
         stored_body = json.dumps(query.model_dump(mode="json"), ensure_ascii=False)
+        body_sha256 = _body_sha256(query)
         ack_record = await to_thread.run_sync(
             lambda: sequences.record(
                 session_key=query.session_id,
                 sequence_id=query.sequence_id,
-                body_sha256=_body_sha256(query),
+                body_sha256=body_sha256,
                 frames=frames_received,
                 received_at=_now(),
                 body=stored_body,
             )
         )
 
-        envelope = TelemetrySequenceResponse(
-            status="SUCCESS",
-            code=200,
-            message=_SUCCESS_MESSAGE,
-            data=TelemetrySequenceData(
+        common_data: dict[str, Any] = dict(
                 request_id=f"sequence-{query.sequence_id}",
                 session_id=query.session_id,
                 user_id=query.user_id,
@@ -146,8 +163,27 @@ def create_telemetry_router(
                 coating_feedback=EngineFeedback(analysis_status="not_available", reason_code=_ENGINE_MISSING),
                 sequence_feedback=EngineFeedback(analysis_status="not_available", reason_code=_ENGINE_MISSING),
                 text_guide=None,
-            ),
         )
+        if analyze:
+            assert isinstance(query, AnalyzeSequenceRequest)
+            cache_key = (query.session_id, query.sequence_id, query.mode_id, body_sha256)
+            guide = guidance_cache.get(cache_key)
+            if guide is None:
+                guide = guidance_engine.evaluate(query) if guidance_engine is not None else _unavailable_guide()
+                guidance_cache[cache_key] = guide
+            envelope = AnalyzeSequenceResponse(
+                status="SUCCESS",
+                code=200,
+                message=_SUCCESS_MESSAGE,
+                data=AnalyzeSequenceData(**common_data, guide=guide),
+            )
+        else:
+            envelope = TelemetrySequenceResponse(
+                status="SUCCESS",
+                code=200,
+                message=_SUCCESS_MESSAGE,
+                data=TelemetrySequenceData(**common_data),
+            )
         unknown = _unknown_fields(query)
         if unknown:
             # 응답에는 싣지 않는다(계약 §7.3의 12키). 120FPS 세션이므로 요청당 1건만 남긴다.
@@ -175,11 +211,10 @@ def create_telemetry_router(
 
     @router.post(TELEMETRY_SEQUENCE_PATH, response_model=TelemetrySequenceResponse)
     async def telemetry_sequence(query: TelemetrySequenceRequest) -> JSONResponse:
-        return await _handle(query)
+        return await _handle(query, analyze=False)
 
-    @router.post(ANALYZE_SEQUENCE_PATH, response_model=TelemetrySequenceResponse)
+    @router.post(ANALYZE_SEQUENCE_PATH, response_model=AnalyzeSequenceResponse)
     async def analyze_sequence(query: AnalyzeSequenceRequest) -> JSONResponse:
-        # mode_id 는 궤적 비교가 구현되면 쓴다. 지금은 저장·에코만 한다.
-        return await _handle(query)
+        return await _handle(query, analyze=True)
 
     return router

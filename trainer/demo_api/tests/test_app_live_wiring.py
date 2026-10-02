@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from trainer.demo_api.app import create_app
@@ -26,3 +28,13 @@ def test_create_app_rejects_invalid_live_mode(monkeypatch: pytest.MonkeyPatch) -
 
     with pytest.raises(RuntimeError, match='DEMO_LIVE_MODE'):
         create_app()
+
+
+def test_create_app_wires_the_expert_reference_root_from_environment(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("EXPERT_REFERENCE_ROOT", str(tmp_path))
+
+    app = create_app()
+
+    assert app.state.expert_guidance.reference_root == tmp_path

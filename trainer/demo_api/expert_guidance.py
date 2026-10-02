@@ -10,24 +10,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-from trainer.demo_api.contracts import StrictModel
-from trainer.demo_api.telemetry_contracts import AnalyzeSequenceRequest
-
-
-SpeedStatus = Literal["slow", "ok", "fast"]
-DistanceStatus = Literal["near", "ok", "far"]
-
-
-class GuideItem(StrictModel):
-    status: SpeedStatus | DistanceStatus | None
-    message: str | None
-    available: bool
-    reason: str | None
-
-
-class SequenceGuide(StrictModel):
-    speed: GuideItem
-    distance: GuideItem
+from trainer.demo_api.telemetry_contracts import (
+    AnalyzeSequenceRequest,
+    GuideItem,
+    SequenceGuide,
+)
 
 
 @dataclass
@@ -58,6 +45,10 @@ class ExpertGuidanceEngine:
         self._profiles: dict[int, _CachedProfile] = {}
         self._states: dict[tuple[str, int, str, str], _StableStatus] = {}
         self._guard = threading.Lock()
+
+    @property
+    def reference_root(self) -> Path:
+        return self._root
 
     def _profile_path(self, mode_id: int) -> Path:
         return (
