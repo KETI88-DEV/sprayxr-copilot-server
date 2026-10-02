@@ -118,6 +118,7 @@ services:
       ADAPTER_PATH: ""
       LIVE_EAGER_INIT: "1"
       STT_EAGER_INIT: "1"
+      STT_REQUIRED: "1"
       STT_MODEL_PATH: /models/whisper
       STT_DEVICE: ${STT_DEVICE:-cuda}
       MCP_BASE_URL: http://mcp:8100

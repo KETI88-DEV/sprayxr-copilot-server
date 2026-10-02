@@ -99,7 +99,7 @@ def create_app(
     async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
         if live and os.environ.get("LIVE_EAGER_INIT") == "1":
             app.state.eager_init_thread = chat_service_mod.start_eager_pipeline_init()
-        if live and os.environ.get("STT_EAGER_INIT", "1") == "1":
+        if live and os.environ.get("STT_EAGER_INIT", "0") == "1":
             def _preload_stt() -> None:
                 try:
                     speech_to_text.preload()
@@ -160,12 +160,13 @@ def create_app(
                 transport=probe_transport,
             )
             body.update(ready=is_ready, checks=checks)
-            stt_state = "ready" if speech_to_text.ready else ("failed" if speech_to_text.failed else "loading")
-            cast(dict[str, object], body["checks"])["speech_to_text"] = {
-                "ok": speech_to_text.ready,
-                "state": stt_state,
-            }
-            body["ready"] = bool(body["ready"]) and speech_to_text.ready
+            if os.environ.get("STT_REQUIRED", "0") == "1":
+                stt_state = "ready" if speech_to_text.ready else ("failed" if speech_to_text.failed else "loading")
+                cast(dict[str, object], body["checks"])["speech_to_text"] = {
+                    "ok": speech_to_text.ready,
+                    "state": stt_state,
+                }
+                body["ready"] = bool(body["ready"]) and speech_to_text.ready
         body["timestamp"] = datetime.now(timezone.utc).isoformat()
         return JSONResponse(status_code=200 if body["ready"] else 503, content=body)
 
