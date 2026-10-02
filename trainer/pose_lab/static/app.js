@@ -84,6 +84,9 @@ function setState(note, tone, text) {
   note.hidden = false;
   note.dataset.tone = tone;
   note.textContent = text ?? "";
+  if (note.id === "queryStatus" && (tone === "error" || tone === "empty")) {
+    note.closest("details").open = true;
+  }
 }
 
 function severityTier(sigma) {
@@ -304,7 +307,6 @@ function renderCorrections(measured) {
   }
   setState(state, "ok");
 
-  const maxSigma = Math.max(1, ...axes.map((c) => (typeof c.sigma === "number" ? c.sigma : 0)));
   for (const entry of axes) {
     const item = el("li", "correction-item");
     item.dataset.n = String(entry.n);
@@ -323,22 +325,9 @@ function renderCorrections(measured) {
       }
     }
 
-    const figure = figureWithUnit("correction-cm", entry.figure, "cm");
-    const sigma = el("span", "correction-sigma", shown(entry.sigma_display));
-
-    const traceLine = el("span", "correction-trace");
-    const traceText = typeof entry.surface_angle_display === "string"
-      ? `${shown(entry.trace)} · ${entry.surface_angle_display}`
-      : shown(entry.trace);
-    traceLine.append(el("span", "correction-trace-text", traceText));
-    const barTrack = el("span", "correction-bar-track");
-    const barFill = el("span", "correction-bar-fill");
-    barFill.dataset.tier = severityTier(entry.sigma);
-    barFill.style.width = `${typeof entry.sigma === "number" ? Math.min(100, (entry.sigma / maxSigma) * 100) : 0}%`;
-    barTrack.append(barFill);
-    traceLine.append(barTrack);
-
-    item.append(badge, sentence, figure, sigma, traceLine);
+    const action = el("span", "correction-action", "방향 보기");
+    action.setAttribute("aria-hidden", "true");
+    item.append(badge, sentence, action);
     // 누르면 3D에서 이 안내의 화살표만 밝게 남기고 방향을 풀어 적는다(평가자: "진행 방향 뒤로
     // 32.1cm"만으로는 어느 쪽인지 모른다). 다시 누르면 푼다. 키보드로도 누를 수 있다.
     if (typeof entry.n === "number") {
@@ -368,6 +357,12 @@ function focusCorrection(n) {
     item.setAttribute("aria-pressed", on ? "true" : "false");
   }
   skeletonView.highlight(focusedCorrection);
+  if (focusedCorrection !== null && window.matchMedia("(max-width: 79.99rem)").matches) {
+    $("view3d").scrollIntoView({
+      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth",
+      block: "start",
+    });
+  }
 }
 
 // ---- ④ 개선율 --------------------------------------------------------------
@@ -380,7 +375,7 @@ function renderImprovement(measured) {
     el("span", "improvement-caption", "유사도"),
     el("span", "improvement-value", shown(display.score)),
     el("span", "improvement-arrow", "→"),
-    el("span", "improvement-caption", "이 안내대로 고치면"),
+    el("span", "improvement-caption", "예상"),
     el("span", "improvement-value", shown(display.score_after)),
   );
   // 예상값은 작업자에게 **실제로 전달되는** 안내(σ 1위, `delivered_cues`건)만 따랐을 때다.
@@ -391,10 +386,11 @@ function renderImprovement(measured) {
   const delivered = (measured.axes ?? []).filter((entry) => typeof entry.n === "number" && entry.n <= deliveredCount);
   for (const entry of delivered) {
     const line = el("p", "improvement-cue-line");
-    line.append(
-      el("span", "num-badge", String(entry.n)),
-      el("span", "improvement-cue-text", typeof entry.text === "string" ? entry.text : shown(entry.trace)),
-    );
+    const link = el("button", "cue-link", `적용한 안내 ${entry.n}번`);
+    link.type = "button";
+    link.title = typeof entry.text === "string" ? entry.text : shown(entry.trace);
+    link.addEventListener("click", () => focusCorrection(entry.n));
+    line.append(link);
     cue.append(line);
   }
 

@@ -330,28 +330,36 @@ function buildDom(container) {
   toolbar.className = "view3d-toolbar";
   const title = document.createElement("h2");
   title.className = "view3d-title";
-  title.textContent = "3D 뷰";
+  title.textContent = "동작 비교";
   const controls = document.createElement("div");
   controls.className = "view3d-controls";
   controls.innerHTML = `
-    <label><input id="view3dLayerQuery" type="checkbox" checked> 선택한 작업자(파랑)</label>
-    <label><input id="view3dLayerReference" type="checkbox" checked> 기준 작업자(보라)</label>
-    <label><input id="view3dLayerPelvis" type="checkbox" checked> 골반 맞춘 기준(연두)</label>
-    <label><input id="view3dLayerLegs" type="checkbox" checked> 추정 다리 자세</label>
-    <label><input id="view3dLayerCorrected" type="checkbox"> 안내 적용 후(예상)</label>
-    <label><input id="view3dLayerWall" type="checkbox" checked> 벽면</label>
+    <label class="layer-toggle layer-query"><input id="view3dLayerQuery" type="checkbox" checked> 작업자</label>
+    <label class="layer-toggle layer-reference"><input id="view3dLayerReference" type="checkbox" checked> 기준</label>
     <select id="view3dArrange" aria-label="두 몸 배치">
       <option value="overlay" selected>겹쳐 보기</option>
       <option value="side">나란히 보기</option>
       <option value="aligned">몸 맞춰 겹치기</option>
     </select>
-    <span class="view3d-controls-sep" aria-hidden="true"></span>
     <button id="view3dPresetFit" type="button">자세 맞춤</button>
-    <button id="view3dPresetTorso" type="button">상체 확대</button>
-    <button id="view3dPresetFront" type="button">벽 정면</button>
-    <button id="view3dPresetSide" type="button">벽 측면</button>
-    <button id="view3dPresetTracks" type="button">궤적 포함</button>
-    <button id="view3dPresetWall" type="button">벽 포함</button>
+    <details class="view-settings">
+      <summary>보기 설정</summary>
+      <div class="view-settings-body">
+        <fieldset><legend>표시할 항목</legend>
+          <label><input id="view3dLayerPelvis" type="checkbox"> 골반 맞춘 기준(연두)</label>
+          <label><input id="view3dLayerLegs" type="checkbox" checked> 추정 다리 자세</label>
+          <label><input id="view3dLayerCorrected" type="checkbox"> 안내 적용 후(예상)</label>
+          <label><input id="view3dLayerWall" type="checkbox" checked> 벽면</label>
+        </fieldset>
+        <fieldset><legend>시점</legend>
+          <button id="view3dPresetTorso" type="button">상체 확대</button>
+          <button id="view3dPresetFront" type="button">벽 정면</button>
+          <button id="view3dPresetSide" type="button">벽 측면</button>
+          <button id="view3dPresetTracks" type="button">궤적 포함</button>
+          <button id="view3dPresetWall" type="button">벽 포함</button>
+        </fieldset>
+      </div>
+    </details>
   `;
   toolbar.append(title, controls);
 
@@ -386,7 +394,7 @@ function buildDom(container) {
       <div class="view3d-gapstrip" aria-hidden="true"></div>
       <input id="view3dScrub" type="range" min="0" max="0" step="1" value="0" aria-label="재생 위치">
     </div>
-    <button id="view3dWorst" type="button">가장 다른 순간</button>
+    <button id="view3dWorst" type="button" title="두 자세의 차이가 가장 큰 순간으로 이동">최대 차이</button>
     <button id="view3dRepresentative" type="button">대표 자세</button>
     <span class="view3d-playback-readout" aria-live="polite"></span>
   `;
@@ -428,7 +436,12 @@ function buildDom(container) {
   framingMore.append(framingMoreSummary, framingMoreText);
 
   // wallNote는 위에서 host(캔버스 위 겹침)에 넣었다 — 여기서 다시 넣으면 host 밖으로 옮겨진다.
-  container.append(toolbar, host, playback, focusNote, pelvisNote, arrangeNote, legend, notes, notesMore, errors, note, correctedNote, framingNote, framingMore);
+  const displayDetails = document.createElement("details");
+  displayDetails.className = "display-details";
+  const displaySummary = document.createElement("summary");
+  displaySummary.textContent = "측정 · 표시 정보";
+  displayDetails.append(displaySummary, notes, notesMore, framingMore);
+  container.append(toolbar, host, playback, focusNote, pelvisNote, arrangeNote, legend, errors, note, correctedNote, framingNote, displayDetails);
   return {
     canvas, host, labelsHost, legend, notes, notesMore, wallNote, errors, note, correctedNote, framingNote,
     framingMore, framingMoreText, controls, toolbar, playback, arrangeNote, focusNote, pelvisNote,
@@ -511,6 +524,17 @@ function renderLegend(legend, view) {
   for (const text of view?.legend_notes ?? []) {
     if (typeof text === "string") legend.append(legendItem(null, text));
   }
+  const symbols = document.createElement("details");
+  symbols.className = "legend-details";
+  const summary = document.createElement("summary");
+  summary.textContent = "색 · 기호 안내";
+  const body = document.createElement("div");
+  body.className = "legend-details-body";
+  for (const item of Array.from(legend.children)) {
+    if (!item.dataset.role?.startsWith("stroke-")) body.append(item);
+  }
+  symbols.append(summary, body);
+  legend.append(symbols);
 }
 
 /** 범례에서 빼 접힌 상세로 보내는 서버 문장: 진하기 눈금의 뒤 문장, 벽면 스트로크를 끊은 사유. */
