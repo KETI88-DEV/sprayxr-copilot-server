@@ -1,0 +1,13 @@
+{
+  "version": "2026-10-06-source-attested-rc1",
+  "terms": [
+    {"id": "DFT", "ko": "건조도막두께", "en": "dry film thickness", "zh": "干膜厚度", "vi": "chiều dày màng sơn khô", "sources": {"ko": "KO1", "en": "EN1:p4", "zh": "ZH1:p4", "vi": "VI1:p2"}},
+    {"id": "SURFACE_PREPARATION", "ko": "표면처리", "en": "surface preparation", "zh": "表面处理", "vi": "chuẩn bị bề mặt", "sources": {"ko": "KO1", "en": "EN1:p1", "zh": "ZH1:p1", "vi": "VI1:p2"}}
+  ],
+  "sources": {
+    "KO1": "https://www.kccworld.co.kr/techdoc/c01/cvt/C01F201510050008636kor.pdf",
+    "EN1": "https://jotundatasheetsprod.blob.core.windows.net/ags/AG%C2%A441048%C2%A4Hardtop%20WF%C2%A4Euk%C2%A4GB.pdf",
+    "ZH1": "https://jotundatasheetsprod.blob.core.windows.net/ags/AG%C2%A441048%C2%A4Hardtop%20WF%C2%A4Zho%C2%A4CN.pdf",
+    "VI1": "https://jotundatasheetsprod.blob.core.windows.net/tds/TDS%C2%A443902%C2%A4SteelMaster%201200HPE%C2%A4vi-VN%C2%A4VN.pdf"
+  }
+}

@@ -1,0 +1,46 @@
+name: shipcoat-multilingual
+services:
+  gateway:
+    image: shipcoat/multilingual:rc1
+    build:
+      context: ../../..
+      dockerfile: deploy/spark/multilingual/Dockerfile
+      args:
+        BASE_IMAGE: ${MULTILINGUAL_BASE_IMAGE:-shipcoat/agent-api:swagger-ux}
+    platform: linux/arm64
+    environment:
+      MULTILINGUAL_MODEL: ${MULTILINGUAL_MODEL:-qwen36-27b-shipcoat-v6-1-bf16}
+      MULTILINGUAL_MODEL_URL: http://vllm:8000/v1
+      MULTILINGUAL_COPILOT_URL: http://agent-api:8120
+      MULTILINGUAL_STT_PATH: /stt-model
+      MULTILINGUAL_STT_DEVICE: cuda
+      VLLM_API_KEY: ${VLLM_API_KEY:-}
+    volumes:
+      - ${MULTILINGUAL_STT_DIR:?Set the local Whisper model directory}:/stt-model:ro
+    ports:
+      - "127.0.0.1:58010:8121"
+    networks:
+      - core
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8121/ready', timeout=25)"]
+      interval: 60s
+      timeout: 30s
+      start_period: 180s
+      retries: 3
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+networks:
+  core:
+    external: true
+    name: shipcoat-spark_default
