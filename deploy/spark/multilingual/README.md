@@ -2,6 +2,8 @@
 
 실제 답변을 확인하려면 [모델 직접 출력 35건·배포 API 출력 3건](../../../docs/local_voice_multilingual_actual_outputs.md)을 참조한다. [기대 답변 35쌍](../../../docs/local_voice_multilingual_qa_examples.md)은 작성된 비교 문안이다.
 
+[세 가지 생성 방식 비교 결과](../../../docs/local_voice_multilingual_method_comparison.md)는 동일 검색 근거를 사용한 별도 통제 실험이다. 배포 프롬프트 전체를 재현한 시험이 아니며, 이 결과로 활성 언어 또는 운영 경로를 변경하지 않았다.
+
 한국어·영어·중국어(간체)의 음성 전사와 지식 질의 번역을 제공한다. 베트남어는 실제 번역 실패, 우즈벡어·미얀마어·네팔어는 용어/품질 근거 미완료로 비활성이다. 모든 활성 언어는 동일 Whisper large-v3-turbo와 동일 Qwen 27B 서버를 사용한다. 국가별 모델은 없다. 전체 단일 모델 Gemma 전환 검토는 [PRD §0](../../../docs/local_voice_multilingual_copilot_prd.md)에 있다.
 
 ## 위치와 사용
