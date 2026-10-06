@@ -6,6 +6,7 @@
 - 배포 대상: DGX Spark, aarch64, Ubuntu 24.04, NVIDIA GB10. 기존 `deploy/spark/` 구성에 선택적으로 추가한다.
 - 범위 구분: **음성 입력과 외국어 텍스트 출력은 필수**, 외국어 음성 출력(TTS)은 별도 후속 범위다.
 - 시연·검수 자료: [7개 언어 질문·답변 예시 35쌍](local_voice_multilingual_qa_examples.md).
+- 실제 호출 결과: [7개 언어 모델 출력 35건과 배포 API 출력 3건](local_voice_multilingual_actual_outputs.md). 작성된 기대 답변과 구분한다.
 
 ## 0. 2026-10-06 1차 배포 결정
 
