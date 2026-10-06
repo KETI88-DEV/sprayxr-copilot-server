@@ -8,7 +8,9 @@ def test_openapi_describes_tsb_workflow_and_db_viewer() -> None:
     schema = client.get("/openapi.json").json()
 
     assert schema["info"]["title"] == "XR Painting Simulator AI Co-Pilot API"
-    assert "/admin" in schema["info"]["description"]
+    assert "http://keti-xr-lab.iptime.org:58000/admin" in schema["info"]["description"]
+    assert "처음 보는 개발자" in schema["info"]["description"]
+    assert "실제 연동 API" in schema["info"]["description"]
     assert "누적 히트맵" in schema["info"]["description"]
     assert [tag["name"] for tag in schema["tags"]][:4] == [
         "0. Swagger 모의 연동",
@@ -17,6 +19,25 @@ def test_openapi_describes_tsb_workflow_and_db_viewer() -> None:
         "3. AI Co-Pilot 질의",
     ]
     assert client.get("/admin").status_code == 200
+
+
+def test_guided_workflow_has_five_input_free_ordered_operations() -> None:
+    schema = TestClient(create_app()).get("/openapi.json").json()
+    expected = [
+        "/api/v1/test/workflow/0-reset",
+        "/api/v1/test/workflow/1-start",
+        "/api/v1/test/workflow/2-sequence",
+        "/api/v1/test/workflow/3-complete",
+        "/api/v1/test/workflow/4-report",
+    ]
+
+    for order, path in enumerate(expected):
+        operation = schema["paths"][path]["post"]
+        assert operation["tags"] == ["0. Swagger 모의 연동"]
+        assert operation["summary"].startswith(f"0-{order}")
+        assert "requestBody" not in operation
+        assert operation.get("parameters", []) == []
+        assert len(operation["description"]) >= 80
 
 
 def test_query_voice_and_sequence_operations_have_examples_and_ordered_tags() -> None:
@@ -42,3 +63,17 @@ def test_query_voice_and_sequence_operations_have_examples_and_ordered_tags() ->
     assert query_example["prompt"]
     analyze_example = schema["components"]["schemas"]["AnalyzeSequenceRequest"]["example"]
     assert analyze_example["sequence_info"]
+
+
+def test_every_public_operation_explains_when_and_how_to_use_it() -> None:
+    schema = TestClient(create_app()).get("/openapi.json").json()
+
+    missing = []
+    for path, path_item in schema["paths"].items():
+        for method, operation in path_item.items():
+            if method not in {"get", "post"}:
+                continue
+            if len(operation.get("description", "").strip()) < 50:
+                missing.append(f"{method.upper()} {path}")
+
+    assert missing == []

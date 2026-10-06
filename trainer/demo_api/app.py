@@ -24,8 +24,10 @@ from trainer.demo_api.contracts import ChatRequest
 from trainer.demo_api.copilot_router import create_copilot_router, install_copilot_error_handlers
 from trainer.demo_api.db_viewer import create_db_viewer_router
 from trainer.demo_api.expert_guidance import ExpertGuidanceEngine
+from trainer.demo_api.guided_workflow import create_guided_workflow_router
 from trainer.demo_api.telemetry_router import create_telemetry_router
 from trainer.demo_api.v1_router import create_v1_router
+from trainer.demo_api.v1_store import V1Store
 from trainer.demo_api.monitor import MonitorRecorder
 from trainer.demo_api.monitor_api import create_monitor_router
 from trainer.demo_api.readiness import evaluate_live_readiness
@@ -49,15 +51,45 @@ OPENAPI_TAGS = [
     {"name": "6. 사용자 관리", "description": "훈련자 등록·조회 API입니다."},
 ]
 
-OPENAPI_DESCRIPTION = """
-### TSB 연동용 AI Co-Pilot
+def _openapi_description() -> str:
+    public_base = os.environ.get(
+        "PUBLIC_BASE_URL", "http://keti-xr-lab.iptime.org:58000"
+    ).rstrip("/")
+    return f"""
+## TSB 연동용 AI Co-Pilot API
 
-- **Swagger 모의 연동:** `0-reset → 1-start → 2-sequence → 3-complete → 4-report` 순서로
-  `Try it out`을 실행할 수 있습니다.
-- **DB 뷰어:** [`/admin`](/admin)
-- **시퀀스 입력:** TSB는 현재 시퀀스의 텍스트 데이터만 전송합니다. **누적 히트맵은 입력하지 않으며**,
-  필요한 누적 상태는 서버에서 관리합니다.
-- 모든 공개 응답은 `status / code / message / data` 공통 래퍼를 사용합니다.
+이 문서는 **이 서버를 처음 보는 개발자**도 VR 시뮬레이터 없이 전체 흐름을 이해하고 시험할 수 있도록 구성했습니다.
+
+### 바로 시작하기
+
+1. 아래 **0. Swagger 모의 연동**을 펼칩니다.
+2. `0-0 → 0-1 → 0-2 → 0-3 → 0-4` 순서로 각 API의 **Try it out → Execute**를 누릅니다.
+3. 입력값은 필요 없습니다. 각 응답의 `what_happened`, `beginner_tip`, `next_endpoint`를 확인합니다.
+4. 저장 결과는 [Co-Pilot DB 뷰어]({public_base}/admin)에서 확인합니다.
+
+> **DB 뷰어 바로가기:** [{public_base}/admin]({public_base}/admin) — 읽기 전용이며 데이터를 수정하지 않습니다.
+
+### 실제 연동 API와 테스트 API의 차이
+
+| 구분 | 용도 | 데이터 |
+|---|---|---|
+| `0. Swagger 모의 연동` | 사람의 기능 확인과 UI 개발 학습 | 서버가 안전한 예제값을 자동 생성 |
+| `1~6. 실제 연동 API` | TSB VR·Replay가 운영 중 호출 | 시뮬레이터가 실제 사용자·시퀀스 값을 전송 |
+
+테스트 API는 호출 방법을 익히기 위한 것이며, 실제 훈련 결과로 사용하지 않습니다.
+
+### 실제 연동 기본 흐름
+
+`세션 시작 → 현재 시퀀스 전송 → 시퀀스 분석/가이드 → 텍스트·음성 질의 → 세션 종료 → 최종 리포트`
+
+- **시퀀스 입력:** TSB는 Trigger ON부터 OFF까지의 **현재 시퀀스 텍스트 데이터**만 전송합니다.
+- **누적 히트맵:** 입력하지 않습니다. 필요한 누적 상태는 Co-Pilot 서버가 관리합니다.
+- **속도 상태:** `slow / ok / fast`, 이격거리 상태: `near / ok / far`입니다.
+- **음성 입력:** WAV PCM16, 16 kHz, mono, 최대 15초입니다. STT 뒤 기존 Query와 같은 답변 경로를 사용합니다.
+- **공통 응답:** `status / code / message / data`이며, 성공은 `status=SUCCESS`, 검증 실패는 주로 HTTP 422입니다.
+- **멱등성:** 동일한 `session_id + sequence_id`와 동일 본문을 재전송하면 중복 저장하지 않습니다.
+
+각 API의 상세 설명에는 **언제 호출하는지, 입력값 의미, 응답 활용법과 주의사항**을 적었습니다.
 """
 
 
@@ -73,6 +105,7 @@ def create_app(
     expert_guidance = ExpertGuidanceEngine(
         Path(os.environ.get("EXPERT_REFERENCE_ROOT", "/expert_reference_data"))
     )
+    v1_store = V1Store()
     speech_to_text = LazySpeechToText(
         lambda: TransformersWhisperSpeechToText(
             os.environ.get("STT_MODEL_PATH", "/stt-model"),
@@ -122,7 +155,7 @@ def create_app(
 
     app = FastAPI(
         title="XR Painting Simulator AI Co-Pilot API",
-        description=OPENAPI_DESCRIPTION,
+        description=_openapi_description(),
         version="2.6.0",
         openapi_tags=OPENAPI_TAGS,
         lifespan=_lifespan,
@@ -131,6 +164,7 @@ def create_app(
     app.state.eager_init_thread = None
     app.state.stt_init_thread = None
     app.state.expert_guidance = expert_guidance
+    app.state.v1_store = v1_store
     app.state.speech_to_text = speech_to_text
 
     raw_allow_origins = os.environ.get("DEMO_UI_ORIGINS")
@@ -221,7 +255,10 @@ def create_app(
         )
     )
     # 명세서 15개 중 12개: 세션·사용자·리포트·이상 알림 SSE·테스트.
-    app.include_router(create_v1_router())
+    guided_router, guided_workflow = create_guided_workflow_router(v1_store, expert_guidance)
+    app.state.guided_workflow = guided_workflow
+    app.include_router(guided_router)
+    app.include_router(create_v1_router(store=v1_store))
     # POST /api/v1/telemetry/sequence: 시퀀스를 데이터베이스에 올린다. 자세 채점은
     # copilot/query 의 pose_recomm 이 한다(명세서 p.4 vs p.9).
     # recorder 를 함께 준다 — v2.5 요청·응답이 /api/monitor/{events,stream} 에 보인다.

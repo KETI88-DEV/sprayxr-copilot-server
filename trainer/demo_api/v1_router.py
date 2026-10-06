@@ -129,7 +129,11 @@ def create_v1_router(
 
     # --- 1. 세션 관리 (p.1-3) ---------------------------------------------
 
-    @router.post("/sessions/start", response_model=ApiResponse, tags=["1. 세션 관리"], summary="1-1. 훈련 세션 시작")
+    @router.post(
+        "/sessions/start", response_model=ApiResponse, tags=["1. 세션 관리"],
+        summary="1-1. 훈련 세션 시작",
+        description="VR 훈련 콘텐츠가 시작될 때 한 번 호출합니다. user_id가 처음이면 사용자를 생성하고, 기존 사용자면 숙련도와 주 사용 손을 갱신한 뒤 세션을 ACTIVE 상태로 저장합니다.",
+    )
     async def sessions_start(body: SessionStartRequest) -> JSONResponse:
         created = await to_thread.run_sync(
             lambda: state.upsert_user(
@@ -158,7 +162,11 @@ def create_v1_router(
             ).model_dump(mode="json")
         )
 
-    @router.post("/sessions/end", response_model=ApiResponse, tags=["1. 세션 관리"], summary="1-2. 훈련 세션 마감")
+    @router.post(
+        "/sessions/end", response_model=ApiResponse, tags=["1. 세션 관리"],
+        summary="1-2. 훈련 세션 마감",
+        description="사용자가 콘텐츠를 정상 종료하거나 중도 종료했을 때 호출합니다. 시작 API에서 사용한 session_id를 그대로 보내며, 서버는 종료 시각과 COMPLETED 상태를 기록합니다.",
+    )
     async def sessions_end(body: SessionEndRequest) -> JSONResponse:
         if body.worker is not None and body.worker.skill_level and body.worker.handedness:
             _ = await to_thread.run_sync(
@@ -227,6 +235,7 @@ def create_v1_router(
         response_model=ApiResponse,
         tags=["5. 최종 평가·리포트"],
         summary="5-2. 리포트 생성 상태 폴링 조회",
+        description="sessions/complete에서 받은 report_id의 처리 상태를 확인합니다. 비동기 분석 중에는 pending이며, 동일 session_id와 report_id 조합을 사용해야 다른 세션의 결과를 잘못 조회하지 않습니다.",
     )
     async def report_status(session_id: str, report_id: str) -> JSONResponse:
         row = await to_thread.run_sync(lambda: state.get_completion(report_id))
@@ -240,7 +249,11 @@ def create_v1_router(
             ).model_dump(mode="json")
         )
 
-    @router.get("/reports/{report_id}", response_model=ApiResponse, tags=["5. 최종 평가·리포트"], summary="5-3. 최종 종합 리포트 상세 조회")
+    @router.get(
+        "/reports/{report_id}", response_model=ApiResponse, tags=["5. 최종 평가·리포트"],
+        summary="5-3. 최종 종합 리포트 상세 조회",
+        description="리포트 상태 확인 후 최종 평가 내용을 조회합니다. 분석 엔진 결과가 준비되지 않은 영역은 수치를 임의 생성하지 않고 unavailable과 사유를 명시해 반환합니다.",
+    )
     async def report_detail(report_id: str) -> JSONResponse:
         row = await to_thread.run_sync(lambda: state.get_completion(report_id))
         if row is None:
@@ -254,7 +267,10 @@ def create_v1_router(
 
     # --- 6. 사용자 관리 (p.17-20) -----------------------------------------
 
-    @router.get("/users", response_model=ApiResponse, tags=["6. 사용자 관리"], summary="6-1. 훈련자 전체 목록 조회")
+    @router.get(
+        "/users", response_model=ApiResponse, tags=["6. 사용자 관리"], summary="6-1. 훈련자 전체 목록 조회",
+        description="등록된 훈련자 프로필을 페이지 단위로 조회합니다. skip은 건너뛸 행 수, limit은 한 번에 받을 최대 행 수이며 운영 UI의 사용자 선택 목록에 사용할 수 있습니다.",
+    )
     async def users_list(
         skip: Annotated[int, Query(ge=0)] = 0,
         limit: Annotated[int, Query(ge=1, le=1000)] = 100,
@@ -262,7 +278,10 @@ def create_v1_router(
         rows = await to_thread.run_sync(lambda: state.list_users(skip=skip, limit=limit))
         return _ok([UserProfile(**row.__dict__).model_dump(mode="json") for row in rows])
 
-    @router.post("/users", response_model=ApiResponse, tags=["6. 사용자 관리"], summary="6-2. 신규 훈련자 계정 직접 등록")
+    @router.post(
+        "/users", response_model=ApiResponse, tags=["6. 사용자 관리"], summary="6-2. 신규 훈련자 계정 직접 등록",
+        description="훈련 시작 전 사용자를 미리 등록할 때 사용합니다. user_id만 필수이고 나머지는 기본값을 사용할 수 있으며, 이미 존재하는 ID면 중복 생성 대신 프로필을 안전하게 갱신합니다.",
+    )
     async def users_create(body: UserCreateRequest) -> JSONResponse:
         created = await to_thread.run_sync(
             lambda: state.upsert_user(
@@ -282,7 +301,10 @@ def create_v1_router(
             ).model_dump(mode="json"),
         )
 
-    @router.get("/users/{user_id}", response_model=ApiResponse, tags=["6. 사용자 관리"], summary="6-3. 훈련자 프로필 조회")
+    @router.get(
+        "/users/{user_id}", response_model=ApiResponse, tags=["6. 사용자 관리"], summary="6-3. 훈련자 프로필 조회",
+        description="한 명의 훈련자 프로필을 user_id로 조회합니다. VR·Replay 화면에서 숙련도와 주 사용 손을 표시하거나 세션 시작 전 등록 여부를 확인할 때 사용합니다.",
+    )
     async def users_get(user_id: str) -> JSONResponse:
         row = await to_thread.run_sync(lambda: state.get_user(user_id))
         if row is None:
@@ -291,7 +313,10 @@ def create_v1_router(
 
     # --- 4. 이상 알림 SSE (p.10) ------------------------------------------
 
-    @router.get("/stream/anomalies/{session_id}", tags=["4. 실시간 알림"], summary="4-1. 실시간 이상 탐지 SSE 이벤트 스트림")
+    @router.get(
+        "/stream/anomalies/{session_id}", tags=["4. 실시간 알림"], summary="4-1. 실시간 이상 탐지 SSE 이벤트 스트림",
+        description="진행 중인 세션의 이상 감지 알림을 Server-Sent Events로 계속 수신합니다. 클라이언트는 한 번 연결한 뒤 anomaly_detection 이벤트를 처리하고, keep-alive 주석은 화면 상태 변경 없이 무시합니다.",
+    )
     async def stream_anomalies(session_id: str, request: Request) -> StreamingResponse:
         raw = request.headers.get("last-event-id", "0")
         try:
@@ -314,6 +339,7 @@ def create_v1_router(
                 response_model=ApiResponse,
                 tags=["0. Swagger 모의 연동"],
                 summary=f"0. [{case}] 시퀀스 시뮬레이션 및 SSE 방송",
+                description="기존 SSE 화면 개발을 위한 단일 사례 발생기입니다. session_id는 기본값 그대로 실행할 수 있고, normal 또는 방향·이격거리 이상 이벤트가 어떻게 전달되는지 빠르게 확인합니다.",
                 name=f"test_sequence_{case.replace('-', '_')}",
             )
             async def _handler(session_id: str = "1_1000053_1") -> JSONResponse:

@@ -177,12 +177,34 @@ def run(args: argparse.Namespace) -> list[Outcome]:
     # --- 0. 배포 확인 ---------------------------------------------------
     status, spec, raw = _request(f"{base}/openapi.json")
     paths = sorted(spec["paths"]) if isinstance(spec, dict) and "paths" in spec else []
+    guided_paths = [
+        f"/api/v1/test/workflow/{step_name}"
+        for step_name in ("0-reset", "1-start", "2-sequence", "3-complete", "4-report")
+    ]
+    required_paths = {
+        "/api/v1/sessions/start",
+        "/api/v1/telemetry/sequence",
+        "/api/v1/copilot/analyze-sequence",
+        "/api/v1/copilot/query",
+        "/api/v1/copilot/query-voice",
+        *guided_paths,
+    }
     step(
-        "openapi 경로 15개",
+        "OpenAPI 필수 경로와 초보자용 5단계 모의연동",
         status,
-        len(paths) == 15,
-        f"{len(paths)}개" + ("" if paths else f" / {raw[:120]}"),
+        status == 200 and required_paths.issubset(paths),
+        f"전체 {len(paths)}개 / 필수 {len(required_paths)}개",
     )
+
+    for order, path in enumerate(guided_paths):
+        status, payload, raw = _post_json(f"{base}{path}", {})
+        data = _data(payload)
+        step(
+            f"POST {path} (무입력 단계 {order})",
+            status,
+            status == 200 and _envelope_ok(payload) and data.get("step") == order,
+            raw[:160],
+        )
 
     # --- 1. 사용자 ------------------------------------------------------
     status, payload, raw = _post_json(
