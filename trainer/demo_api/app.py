@@ -248,6 +248,11 @@ def create_app(
             mcp_base_url=mcp_base_url,
         )
     )
+    # 명세서 15개 중 12개: 세션·사용자·리포트·이상 알림 SSE·테스트.
+    guided_router, guided_workflow = create_guided_workflow_router(v1_store, expert_guidance)
+    app.state.guided_workflow = guided_workflow
+    app.include_router(guided_router)
+    # 모의연동 0-0~0-4 다음에 음성 0-5~0-6이 보이도록 guided 뒤에 등록한다.
     app.include_router(
         create_voice_router(
             (lambda: chat_service_mod._get_or_build_pipeline()) if live else None,
@@ -255,10 +260,6 @@ def create_app(
             mcp_base_url=mcp_base_url,
         )
     )
-    # 명세서 15개 중 12개: 세션·사용자·리포트·이상 알림 SSE·테스트.
-    guided_router, guided_workflow = create_guided_workflow_router(v1_store, expert_guidance)
-    app.state.guided_workflow = guided_workflow
-    app.include_router(guided_router)
     app.include_router(create_v1_router(store=v1_store))
     # POST /api/v1/telemetry/sequence: 시퀀스를 데이터베이스에 올린다. 자세 채점은
     # copilot/query 의 pose_recomm 이 한다(명세서 p.4 vs p.9).

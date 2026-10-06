@@ -77,6 +77,17 @@ def test_voice_demo_is_input_free_and_links_the_downloadable_sample() -> None:
     assert operation.get("parameters", []) == []
     assert "/api/v1/test/assets/query-voice-ko.wav" in operation["description"]
     assert asset["summary"].startswith("0-6")
+    ordered_paths = list(schema["paths"])
+    expected_order = [
+        "/api/v1/test/workflow/0-reset",
+        "/api/v1/test/workflow/1-start",
+        "/api/v1/test/workflow/2-sequence",
+        "/api/v1/test/workflow/3-complete",
+        "/api/v1/test/workflow/4-report",
+        "/api/v1/test/query-voice",
+        "/api/v1/test/assets/query-voice-ko.wav",
+    ]
+    assert sorted(expected_order, key=ordered_paths.index) == expected_order
 
 
 def test_every_json_request_has_a_swagger_sample_and_forms_have_field_examples() -> None:
