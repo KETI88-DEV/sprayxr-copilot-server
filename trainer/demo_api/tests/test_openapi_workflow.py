@@ -38,6 +38,11 @@ def test_guided_workflow_has_five_input_free_ordered_operations() -> None:
         assert "requestBody" not in operation
         assert operation.get("parameters", []) == []
         assert len(operation["description"]) >= 80
+        example = operation["responses"]["200"]["content"]["application/json"]["example"]
+        context = example["data"]["test_context"]
+        assert context["input_used"]
+        assert context["input_summary"]
+        assert context["evaluation_focus"]
 
 
 def test_query_voice_and_sequence_operations_have_examples_and_ordered_tags() -> None:
@@ -76,6 +81,12 @@ def test_voice_demo_is_input_free_and_links_the_downloadable_sample() -> None:
     assert "requestBody" not in operation
     assert operation.get("parameters", []) == []
     assert "/api/v1/test/assets/query-voice-ko.wav" in operation["description"]
+    voice_example = operation["responses"]["200"]["content"]["application/json"]["example"]
+    voice_context = voice_example["data"]["test_context"]
+    assert voice_context["input_used"]["audio"]["spoken_text"]
+    assert voice_context["input_used"]["form_fields"]["language"] == "ko"
+    assert voice_context["input_summary"]
+    assert voice_context["evaluation_focus"]
     assert asset["summary"].startswith("0-6")
     ordered_paths = list(schema["paths"])
     expected_order = [

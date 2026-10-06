@@ -166,6 +166,13 @@ def test_input_free_voice_test_runs_the_real_stt_and_query_path() -> None:
     assert data["session_id"] == "SWAGGER-VOICE-DEMO"
     assert pipeline.calls[0]["instruction"] == data["transcript"]
     assert stt.calls[0][1] == "ko"
+    context = data["test_context"]
+    assert context["input_used"]["audio"]["spoken_text"] == "스프레이 도장 시 적정 이격거리를 알려주세요."
+    assert context["input_used"]["audio"]["sample_rate_hz"] == 16_000
+    assert context["input_used"]["form_fields"]["user_id"] == "TSB-VOICE-DEMO-001"
+    assert context["input_used"]["form_fields"]["task_type"] == "knowledge_search"
+    assert context["input_summary"]
+    assert context["evaluation_focus"]
 
 
 def test_voice_sample_asset_is_downloadable_valid_16khz_mono_pcm16_wav() -> None:

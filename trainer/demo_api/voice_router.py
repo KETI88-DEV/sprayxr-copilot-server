@@ -43,6 +43,73 @@ _TEST_USER_ID = "TSB-VOICE-DEMO-001"
 _TEST_SESSION_ID = "SWAGGER-VOICE-DEMO"
 _TEST_SCENARIO_ID = "training-mode-1"
 _TEST_REQUEST_ID = "REQ-VOICE-TEST-001"
+_TEST_SPOKEN_TEXT = "스프레이 도장 시 적정 이격거리를 알려주세요."
+
+
+def _voice_test_context() -> dict[str, object]:
+    return {
+        "input_used": {
+            "equivalent_real_api": VOICE_QUERY_PATH,
+            "audio": {
+                "filename": "query-voice-ko.wav",
+                "spoken_text": _TEST_SPOKEN_TEXT,
+                "format": "WAV PCM16 mono",
+                "sample_rate_hz": 16_000,
+                "max_duration_seconds": 15,
+                "download_url": TEST_VOICE_ASSET_PATH,
+            },
+            "form_fields": {
+                "user_id": _TEST_USER_ID,
+                "language": "ko",
+                "session_id": _TEST_SESSION_ID,
+                "scenario_id": _TEST_SCENARIO_ID,
+                "request_id": _TEST_REQUEST_ID,
+                "task_type": "knowledge_search",
+                "use_rag": "Y",
+                "context": "Swagger 음성질의 모의연동",
+            },
+        },
+        "input_summary": (
+            f"‘{_TEST_SPOKEN_TEXT}’라고 말한 한국어 WAV를 STT로 변환하고, "
+            "변환 문장을 knowledge_search 질의로 전달합니다."
+        ),
+        "evaluation_focus": (
+            "transcript가 음성 문장과 일치하는지, answer가 적정 이격거리 질문에 답하는지, "
+            "stt_latency_ms와 citations가 반환되는지 확인합니다."
+        ),
+    }
+
+
+_VOICE_TEST_RESPONSE = {
+    200: {
+        "description": (
+            "성공. `data.test_context.input_used`에서 자동 사용된 WAV와 폼 값을 확인하고, "
+            "같은 응답의 `transcript`, `answer`, `citations`와 비교합니다."
+        ),
+        "content": {
+            "application/json": {
+                "example": {
+                    "status": "SUCCESS",
+                    "code": 200,
+                    "message": "Copilot query completed",
+                    "data": {
+                        "test_context": _voice_test_context(),
+                        "request_id": _TEST_REQUEST_ID,
+                        "session_id": _TEST_SESSION_ID,
+                        "user_id": _TEST_USER_ID,
+                        "scenario_id": _TEST_SCENARIO_ID,
+                        "transcript": _TEST_SPOKEN_TEXT,
+                        "language": "ko",
+                        "stt_latency_ms": 650,
+                        "answer": "에어 스프레이 작업에서는 피도면과 약 15~20cm 거리를 유지하세요.",
+                        "retrieval_used": True,
+                        "citations": ["DOC-doc_0001-C0001"],
+                    },
+                }
+            }
+        },
+    }
+}
 
 
 def _sample_wav() -> bytes:
@@ -176,13 +243,20 @@ def create_voice_router(
         tags=["0. Swagger 모의 연동"],
         summary="0-5. 무입력 음성질의 전체 경로 테스트",
         description=(
-            "파라미터나 파일을 입력하지 않고 서버에 포함된 한국어 WAV를 실제 STT와 Query 경로로 처리합니다. "
-            "응답의 transcript가 인식 문장이고 answer가 Co-Pilot 답변입니다. 사용된 음성은 "
-            f"`GET {TEST_VOICE_ASSET_PATH}`에서 내려받아 실제 3-2 API에도 업로드할 수 있습니다."
+            "파라미터나 파일을 입력하지 않고 서버에 포함된 한국어 WAV를 실제 STT와 Query 경로로 처리합니다.\n\n"
+            "### 자동 사용 입력\n"
+            f"음성 문장은 **‘{_TEST_SPOKEN_TEXT}’**이며, PCM16·16 kHz·mono WAV입니다. "
+            f"`user_id={_TEST_USER_ID}`, `language=ko`, `task_type=knowledge_search`, `use_rag=Y`를 사용합니다.\n\n"
+            "### 결과 읽는 법\n"
+            "응답의 `data.test_context.input_used`에서 전체 입력을 먼저 보고, `transcript`에서 STT 결과, "
+            "`answer`에서 Co-Pilot 답변, `citations`에서 검색 근거를 확인하세요.\n\n"
+            "### 같은 입력으로 실제 API 시험\n"
+            f"`GET {TEST_VOICE_ASSET_PATH}`에서 WAV를 내려받아 실제 3-2 API의 `audio` 필드에 업로드할 수 있습니다."
         ),
+        responses=_VOICE_TEST_RESPONSE,
     )
     async def test_voice_query() -> JSONResponse:
-        return await _run_voice_query(
+        response = await _run_voice_query(
             _sample_wav(),
             user_id=_TEST_USER_ID,
             language="ko",
@@ -193,6 +267,11 @@ def create_voice_router(
             use_rag="Y",
             context="Swagger 음성질의 모의연동",
         )
+        if response.status_code != 200:
+            return response
+        body = json.loads(response.body)
+        body["data"] = {"test_context": _voice_test_context(), **body["data"]}
+        return JSONResponse(status_code=200, content=body)
 
     @router.get(
         TEST_VOICE_ASSET_PATH,
