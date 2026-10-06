@@ -53,6 +53,15 @@ class WorkerProfilePartial(StrictModel):
 class SessionStartRequest(StrictModel):
     """p.1. `user_id`가 DB에 없으면 신규 생성, 있으면 숙련도·파지손을 갱신한다."""
 
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={"example": {
+            "session_id": "TSB-DEMO-001", "user_id": "W-017",
+            "scenario_id": "training-mode-3", "started_at": "2026-10-06T10:00:00Z",
+            "worker": {"skill_level": "novice", "handedness": "right"},
+        }},
+    )
+
     session_id: Annotated[str, Field(min_length=1)]
     user_id: Annotated[str, Field(min_length=1)]
     scenario_id: Annotated[str, Field(min_length=1)]
@@ -62,6 +71,15 @@ class SessionStartRequest(StrictModel):
 
 class SessionEndRequest(StrictModel):
     """p.3. 세션을 `COMPLETED`로 전환하고 종료 시각을 기록한다."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={"example": {
+            "session_id": "TSB-DEMO-001", "user_id": "W-017",
+            "scenario_id": "training-mode-3", "ended_at": "2026-10-06T10:15:00Z",
+            "worker": {"skill_level": "novice", "handedness": "right"},
+        }},
+    )
 
     session_id: Annotated[str, Field(min_length=1)]
     user_id: Annotated[str, Field(min_length=1)]
@@ -75,6 +93,14 @@ class SessionEndRequest(StrictModel):
 
 class UserCreateRequest(StrictModel):
     """p.18. `user_id`만 필수다."""
+
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={"example": {
+            "user_id": "W-017", "name": "테스트 훈련자", "skill_level": "novice",
+            "dominant_hand": "right", "age": 35, "gender": "male",
+        }},
+    )
 
     user_id: Annotated[str, Field(min_length=1)]
     name: str | None = None

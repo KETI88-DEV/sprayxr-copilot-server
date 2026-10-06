@@ -65,6 +65,71 @@ def test_query_voice_and_sequence_operations_have_examples_and_ordered_tags() ->
     assert analyze_example["sequence_info"]
 
 
+def test_voice_demo_is_input_free_and_links_the_downloadable_sample() -> None:
+    """Catches a voice demo that still requires manual multipart form entry."""
+    schema = TestClient(create_app()).get("/openapi.json").json()
+    operation = schema["paths"]["/api/v1/test/query-voice"]["post"]
+    asset = schema["paths"]["/api/v1/test/assets/query-voice-ko.wav"]["get"]
+
+    assert operation["tags"] == ["0. Swagger 모의 연동"]
+    assert operation["summary"].startswith("0-5")
+    assert "requestBody" not in operation
+    assert operation.get("parameters", []) == []
+    assert "/api/v1/test/assets/query-voice-ko.wav" in operation["description"]
+    assert asset["summary"].startswith("0-6")
+
+
+def test_every_json_request_has_a_swagger_sample_and_forms_have_field_examples() -> None:
+    """Catches empty Try-it-out editors that leave first-time integrators guessing."""
+    schema = TestClient(create_app()).get("/openapi.json").json()
+    json_paths = [
+        ("/api/v1/sessions/start", "post"),
+        ("/api/v1/sessions/end", "post"),
+        ("/api/v1/telemetry/sequence", "post"),
+        ("/api/v1/copilot/analyze-sequence", "post"),
+        ("/api/v1/copilot/query", "post"),
+        ("/api/v1/users", "post"),
+    ]
+    for path, method in json_paths:
+        body = schema["paths"][path][method]["requestBody"]["content"]["application/json"]["schema"]
+        model_name = body["$ref"].rsplit("/", 1)[-1]
+        assert schema["components"]["schemas"][model_name].get("example"), path
+
+    form_paths = [
+        "/api/v1/copilot/query-voice",
+        "/api/v1/sessions/complete",
+    ]
+    for path in form_paths:
+        body = schema["paths"][path]["post"]["requestBody"]["content"]["multipart/form-data"]["schema"]
+        model_name = body["$ref"].rsplit("/", 1)[-1]
+        properties = schema["components"]["schemas"][model_name]["properties"]
+        for name, prop in properties.items():
+            if name in {"audio", "telemetry_csv", "height_map_image"}:
+                continue
+            assert prop.get("examples") or "default" in prop, f"{path} {name}"
+
+
+def test_every_public_url_parameter_has_an_example_or_default() -> None:
+    """Catches blank path/query fields in Try-it-out for first-time users."""
+    schema = TestClient(create_app()).get("/openapi.json").json()
+    missing = []
+    for path, path_item in schema["paths"].items():
+        for method, operation in path_item.items():
+            if method not in {"get", "post"}:
+                continue
+            for parameter in operation.get("parameters", []):
+                value_schema = parameter["schema"]
+                if (
+                    not parameter.get("examples")
+                    and "example" not in parameter
+                    and not value_schema.get("examples")
+                    and "example" not in value_schema
+                    and "default" not in value_schema
+                ):
+                    missing.append(f"{method.upper()} {path}: {parameter['name']}")
+    assert missing == []
+
+
 def test_every_public_operation_explains_when_and_how_to_use_it() -> None:
     schema = TestClient(create_app()).get("/openapi.json").json()
 

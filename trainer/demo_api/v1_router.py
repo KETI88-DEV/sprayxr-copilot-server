@@ -19,7 +19,7 @@ from typing import Annotated, Any, Final
 
 import anyio
 from anyio import to_thread
-from fastapi import APIRouter, File, Form, Query, Request, UploadFile
+from fastapi import APIRouter, File, Form, Path as ApiPath, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from trainer.demo_api.anomaly_stream import HEARTBEAT_SEC, POLL_SEC, AnomalyBroadcaster
@@ -195,14 +195,14 @@ def create_v1_router(
 
     @router.post("/sessions/complete", response_model=ApiResponse, tags=["5. 최종 평가·리포트"], summary="5-1. 훈련 최종 종료 및 비동기 분석 요청")
     async def sessions_complete(
-        session_id: Annotated[str, Form()],
-        user_id: Annotated[str, Form()],
-        scenario_id: Annotated[str, Form()],
-        vr_score: Annotated[int, Form(ge=0, le=100)],
-        is_pass: Annotated[bool, Form()],
-        avg_thickness_um: Annotated[float, Form(ge=0)],
-        avg_speed_mms: Annotated[float, Form(ge=0)],
-        avg_distance_mm: Annotated[float, Form(ge=0)],
+        session_id: Annotated[str, Form(examples=["TSB-DEMO-001"])],
+        user_id: Annotated[str, Form(examples=["W-017"])],
+        scenario_id: Annotated[str, Form(examples=["training-mode-3"])],
+        vr_score: Annotated[int, Form(ge=0, le=100, examples=[82])],
+        is_pass: Annotated[bool, Form(examples=[True])],
+        avg_thickness_um: Annotated[float, Form(ge=0, examples=[250.0])],
+        avg_speed_mms: Annotated[float, Form(ge=0, examples=[480.0])],
+        avg_distance_mm: Annotated[float, Form(ge=0, examples=[255.0])],
         telemetry_csv: Annotated[UploadFile, File()],
         height_map_image: Annotated[UploadFile | None, File()] = None,
     ) -> JSONResponse:
@@ -237,7 +237,10 @@ def create_v1_router(
         summary="5-2. 리포트 생성 상태 폴링 조회",
         description="sessions/complete에서 받은 report_id의 처리 상태를 확인합니다. 비동기 분석 중에는 pending이며, 동일 session_id와 report_id 조합을 사용해야 다른 세션의 결과를 잘못 조회하지 않습니다.",
     )
-    async def report_status(session_id: str, report_id: str) -> JSONResponse:
+    async def report_status(
+        session_id: Annotated[str, ApiPath(examples=["TSB-DEMO-001"])],
+        report_id: Annotated[str, ApiPath(examples=["RPT-123456789abc"])],
+    ) -> JSONResponse:
         row = await to_thread.run_sync(lambda: state.get_completion(report_id))
         if row is None or row.session_id != session_id:
             return _error(404, "report not found")
@@ -254,7 +257,9 @@ def create_v1_router(
         summary="5-3. 최종 종합 리포트 상세 조회",
         description="리포트 상태 확인 후 최종 평가 내용을 조회합니다. 분석 엔진 결과가 준비되지 않은 영역은 수치를 임의 생성하지 않고 unavailable과 사유를 명시해 반환합니다.",
     )
-    async def report_detail(report_id: str) -> JSONResponse:
+    async def report_detail(
+        report_id: Annotated[str, ApiPath(examples=["RPT-123456789abc"])]
+    ) -> JSONResponse:
         row = await to_thread.run_sync(lambda: state.get_completion(report_id))
         if row is None:
             return _error(404, "report not found")
@@ -305,7 +310,9 @@ def create_v1_router(
         "/users/{user_id}", response_model=ApiResponse, tags=["6. 사용자 관리"], summary="6-3. 훈련자 프로필 조회",
         description="한 명의 훈련자 프로필을 user_id로 조회합니다. VR·Replay 화면에서 숙련도와 주 사용 손을 표시하거나 세션 시작 전 등록 여부를 확인할 때 사용합니다.",
     )
-    async def users_get(user_id: str) -> JSONResponse:
+    async def users_get(
+        user_id: Annotated[str, ApiPath(examples=["W-017"])]
+    ) -> JSONResponse:
         row = await to_thread.run_sync(lambda: state.get_user(user_id))
         if row is None:
             return _error(404, "user not found")
@@ -317,7 +324,10 @@ def create_v1_router(
         "/stream/anomalies/{session_id}", tags=["4. 실시간 알림"], summary="4-1. 실시간 이상 탐지 SSE 이벤트 스트림",
         description="진행 중인 세션의 이상 감지 알림을 Server-Sent Events로 계속 수신합니다. 클라이언트는 한 번 연결한 뒤 anomaly_detection 이벤트를 처리하고, keep-alive 주석은 화면 상태 변경 없이 무시합니다.",
     )
-    async def stream_anomalies(session_id: str, request: Request) -> StreamingResponse:
+    async def stream_anomalies(
+        session_id: Annotated[str, ApiPath(examples=["TSB-DEMO-001"])],
+        request: Request,
+    ) -> StreamingResponse:
         raw = request.headers.get("last-event-id", "0")
         try:
             cursor = int(raw)

@@ -54,6 +54,10 @@ class _Pipeline:
         }
 
 
+TEST_VOICE_QUERY_PATH = "/api/v1/test/query-voice"
+TEST_VOICE_ASSET_PATH = "/api/v1/test/assets/query-voice-ko.wav"
+
+
 def _client(stt: _Stt, pipeline: _Pipeline) -> TestClient:
     app = FastAPI()
     app.include_router(
@@ -145,3 +149,35 @@ def test_transcript_and_internal_stt_exception_are_not_logged(
         failed = _post(_client(_Stt(exc=RuntimeError("private-engine-detail")), _Pipeline()))
     assert failed.status_code == 503
     assert "private-engine-detail" not in caplog.text
+
+
+def test_input_free_voice_test_runs_the_real_stt_and_query_path() -> None:
+    """Catches a demo route that returns canned JSON instead of exercising STT/query."""
+    stt = _Stt(text="스프레이 도장 시 적정 이격거리를 알려주세요")
+    pipeline = _Pipeline()
+    client = _client(stt, pipeline)
+
+    response = client.post(TEST_VOICE_QUERY_PATH)
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["transcript"] == "스프레이 도장 시 적정 이격거리를 알려주세요"
+    assert data["user_id"] == "TSB-VOICE-DEMO-001"
+    assert data["session_id"] == "SWAGGER-VOICE-DEMO"
+    assert pipeline.calls[0]["instruction"] == data["transcript"]
+    assert stt.calls[0][1] == "ko"
+
+
+def test_voice_sample_asset_is_downloadable_valid_16khz_mono_pcm16_wav() -> None:
+    """Catches missing or incompatible sample audio offered to Swagger users."""
+    client = _client(_Stt(), _Pipeline())
+
+    response = client.get(TEST_VOICE_ASSET_PATH)
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("audio/wav")
+    assert "query-voice-ko.wav" in response.headers["content-disposition"]
+    with wave.open(io.BytesIO(response.content), "rb") as wav:
+        assert wav.getnchannels() == 1
+        assert wav.getsampwidth() == 2
+        assert wav.getframerate() == 16_000

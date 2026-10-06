@@ -57,6 +57,23 @@ class TelemetrySequenceRequest(StrictModel):
     벤더도 보내지 않으므로 받지 않고 서버가 `scenario_id`에서 유도한다.
     """
 
+    model_config = ConfigDict(
+        extra="forbid",
+        json_schema_extra={
+            "example": {
+                "session_id": "TSB-DEMO-001", "user_id": "W-017",
+                "scenario_id": "training-mode-3", "zone_id": "3", "sequence_id": "SEQ-001",
+                "sequence_setting": {"target_speed_mms": 500, "target_distance_mm": 250},
+                "sequence_info": [{
+                    "index": 0, "time": "2026-10-06T10:01:00Z",
+                    "tool_pos_rot": {"position": [0.0, 1.2, 0.4]},
+                    "gun_metrics": {"speed_mms": 450, "distance_mm": 260},
+                }],
+                "sequence_result": {"avg_speed_mms": 450, "avg_distance_mm": 260},
+            }
+        },
+    )
+
     session_id: Annotated[str, Field(min_length=1)]
     user_id: Annotated[str, Field(min_length=1)]
     scenario_id: Annotated[str, Field(min_length=1)]
