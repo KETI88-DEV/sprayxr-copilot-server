@@ -102,6 +102,117 @@ UI와 API는 BCP 47 언어 태그를 사용하고 모델별 코드로 명시적�
 
 웹 마이크는 보안 컨텍스트와 사용자 권한이 필요하다. Spark의 일반 HTTP 호스트/IP로 접속해 화면이 보인다고 마이크까지 동작하는 것은 아니다. 원격 사용은 신뢰되는 HTTPS, 개발은 SSH 포워딩을 통한 사용자 PC의 `localhost`를 검증한다. Electron은 기존 샌드박스를 유지하면서 OS·앱 권한을 별도로 검증한다. 브라우저 내장 음성 인식 서비스를 로컬 ASR의 대체로 사용하지 않는다. [MDN getUserMedia](https://developer.mozilla.org/en-US/docs/Web/API/MediaDevices/getUserMedia)
 
+### 4.3 다국어 RAG 아키텍처: 현행 평가 배포
+
+2026-10-08 문서 보강. 저장소 구현과 2026-10-06 Spark 실측을 기준으로 기술한다. 이번 문서 작성에서 Spark를 재배포하거나 운영 상태를 재측정하지 않았다. **현행 B형 경로와 개선 후보 C형 경로를 구분한다.** §4.1의 한국어 정본은 설계 의도이며, 현행 코드가 생성 답변의 한국어를 보장하는 것은 아니다.
+
+```mermaid
+flowchart TD
+    User[사용자: 텍스트 또는 음성 + 입력/출력 언어]
+    ASR[공통 Whisper: 음성 전사]
+    Confirm[전사 원문 확인/수정]
+    Gateway[다국어 Gateway: /query]
+    Input[외국어 입력이면 한국어 번역]
+    Core[기존 Agent API: knowledge_search]
+    Retrieval[BGE-M3 + FAISS + 리랭커]
+    Evidence[검색 청크 + 근거 ID]
+    Model[공통 Qwen 27B: vLLM]
+    Answer[기존 Co-Pilot 응답: answer + citations + 구조화 필드]
+    Output[출력 언어가 ko가 아니면 번역 요청]
+    Validate[번역 검증: 수치/단위/ID/언어/정상 종료]
+    JSON[JSON: copilot + localization + timings]
+    User -->|음성| ASR --> Confirm --> Gateway
+    User -->|텍스트| Gateway
+    Gateway --> Input --> Core
+    Input -. 번역 추론 .-> Model
+    Core --> Retrieval --> Evidence --> Model
+    Model -->|답변 생성| Answer --> Output
+    Output -. 번역 추론 .-> Model
+    Output --> Validate --> JSON
+```
+
+화살표는 논리 처리 순서다. 번역과 RAG 답변 생성은 **같은 vLLM/Qwen 가중치**를 호출하며, 국가별 모델을 올리지 않는다. Whisper는 별도 공통 ASR 모델이다. vLLM에는 완성된 추론용 모델을 배치하며 이 경로에서 학습·LoRA 훈련을 실행하지 않는다. OpenAI 호환 HTTP 형식을 사용하지만 외부 OpenAI 서비스 호출을 뜻하지 않는다.
+
+| 구성 요소 | 책임과 경계 | 구현/연결 |
+|---|---|---|
+| 입력 클라이언트 | 입력·출력 언어 선택, 전사 확인 후 질의 전송 | 기존 8080 UI 통합은 미완료; 평가 API/Swagger 사용 |
+| 다국어 Gateway | 입력 번역, 기존 질의 호출, 본문 번역·검증, 응답 래핑 | `trainer/multilingual/service.py`; Spark 루프백 `58010` → 컨테이너 `8121` |
+| Whisper | 음성을 전사문으로 변환; 질의를 자동 실행하지 않음 | `POST /transcriptions`; 현행 PCM16 WAV·mono·16 kHz·15초 이하·1 MiB 이하 |
+| Agent API | 기존 질의 계약·RAG 실행·근거와 컨텍스트 반환 | 내부 `http://agent-api:8120/api/v1/copilot/query` |
+| 검색 계층 | 질문과 관련된 문서 청크 검색·리랭킹 | BGE-M3, FAISS, BGE 리랭커; 외국어 원문 검색 품질은 별도 평가 |
+| 추론 서버 | RAG 답변 생성과 입출력 번역 | 내부 `http://vllm:8000/v1`; `qwen36-27b-shipcoat-v6-1-bf16` |
+| 용어집·검증 | 확인된 용어 주입, 번역 전후 보호 항목 비교 | `trainer/multilingual/glossary.json`, `protect()`, `language_matches()` |
+
+현행 게이트웨이는 `knowledge_search`만 허용한다. 도막 분포·이상 탐지·자세·순서 분석을 이 경로에서 호출한 것처럼 표시하지 않는다. 예를 들어 “저도막이면 어떻게 해야 하나요?”는 지식 안내이며 실제 시뮬레이터의 저도막 발생을 측정·확정한 결과가 아니다.
+
+**실제 요청 계약**은 아래와 같다. §7.2의 중첩 `localization` 요청 및 `/api/v1/localized/copilot/query`는 확장 제안이고, 현재 평가 배포는 `/query`와 최상위 언어 필드를 사용한다. 자연어의 “영어로 답변” 지시를 언어 필드로 자동 변환하는 기능은 없다.
+
+```json
+{"query":{"user_id":"USER-MULTILINGUAL-EVAL","prompt":"저도막이 일어나면 어떻게 해야 해? 영어로 대답해줘.","task_type":"knowledge_search","use_rag":"Y"},"input_language":"ko","output_language":"en"}
+```
+
+**응답 경계:** `data.copilot`에는 기존 API 응답을 그대로 보존하고, `data.localization.answer`에 표시용 답변을 둔다. 전체 JSON을 번역하지 않으므로 수치 필드·ID·근거 목록은 기존 계약을 유지한다. `data.timings`는 `input_translation_ms`, `copilot_ms`, `output_translation_ms`, `total_ms`다. 현행 응답에는 §7.2의 제안 필드인 `translator_model_id`나 큐 대기 시간이 없다.
+
+번역 검증 실패 시 원본 Co-Pilot 응답은 보존하고 `localization.status=fallback_original`, `answer=null`, `reason_code=OUTPUT_TRANSLATION_FAILED`를 반환한다. 입력 번역 실패 시에는 기존 질의를 실행하지 않는다. 이 검증은 **번역 형식·보호 항목 검사이지 도장 사실의 정답 판정이 아니다.** 원답의 잘못된 조언이 정확하게 번역돼도 통과할 수 있다.
+
+게이트웨이의 ASR·질의는 한 개 실행 슬롯을 공유하며 바쁠 때 429를 반환한다. 기존 Agent API 전체와 공유하는 전역 잠금은 아니므로 두 경로의 혼합 부하는 별도 측정해야 한다. 응답은 완성된 JSON이며 현재 게이트웨이에 토큰 스트리밍이나 TTS 출력은 없다.
+
+### 4.4 실제 영어 요청의 시퀀스와 관측된 예외
+
+2026-10-06 위 요청을 Spark 평가 API에 전송한 결과다. **영어 출력은 확인됐지만, 한국어 답변을 영어로 바꿔서 얻은 결과는 아니었다.** 입력이 한국어이면 게이트웨이가 원문을 그대로 기존 API에 보내므로 “영어로 대답해줘”가 생성 단계까지 전달됐다.
+
+```mermaid
+sequenceDiagram
+    participant Client as 평가 클라이언트
+    participant GW as 다국어 Gateway
+    participant Core as Agent API / RAG
+    participant LLM as 공통 Qwen / vLLM
+    Client->>GW: 한국어 질문 + 영어 답변 지시, ko → en
+    GW->>Core: 원문 그대로 전달 (입력 번역 생략)
+    Core->>Core: 문서 검색
+    Core->>LLM: 검색 근거와 질문으로 답변 생성
+    LLM-->>Core: 영어 답변
+    Core-->>GW: 영어 answer + citations
+    GW->>LLM: 한국어 → 영어 번역 요청 (원답 언어 확인 없이)
+    LLM-->>GW: 동일한 영어 문장
+    GW->>GW: 보호 항목·언어·종료 검사
+    GW-->>Client: translated 상태 + 영어 답변 + timings
+```
+
+실제 표시 답변 원문:
+
+> Low film thickness occurs when the coating is applied too thinly to meet specifications. To address this, you should apply additional coats until the specified dry film thickness is achieved and ensure proper overlap during application.
+
+- 검색 사용: `retrieval_used=true`, 근거 ID `DOC-doc_0047-C0033`.
+- 시간: 입력 번역 0 ms, 기존 질의 10,962 ms, 출력 번역 5,119 ms, 전체 16,082 ms. 첫 토큰 시간이 아니라 전체 JSON 완료 시간이고 단일 실측이다.
+- `copilot.answer`와 `localization.answer`가 동일한 영어였다. `localization.status=translated`는 번역 단계를 실행했다는 상태이지 원답이 한국어였거나 내용이 바뀌었다는 증거가 아니다.
+- 작업별 제품·시방서·재도장 간격·표면처리·보수 후 재측정 안내가 부족하다. 영어 생성 성공을 현장 작업 지침의 완결성 또는 정확도 승인으로 간주하지 않는다.
+
+따라서 현행 `copilot.answer`를 무조건 “한국어 정본”이라고 UI에 표시하면 안 된다. **정확한 의미는 기존 Co-Pilot 원본 답변**이다. 한국어 강제 생성 또는 원답 언어 식별·검증은 추가 구현 과제이며, 이번 문서 변경으로 해결된 것이 아니다.
+
+### 4.5 개선 후보: 검색 근거에서 대상 언어로 직접 생성
+
+아래는 비교 실험의 **C형 구조를 제품 경로로 발전시키는 후보 설계**이며 미구현·미배포다. [3방식 비교](local_voice_multilingual_method_comparison.md)에서 C의 잠정 수용은 14/35로 B의 5/35보다 많았지만, A의 17/35보다 많지는 않았다. 이를 배포 전환 승인으로 사용하지 않는다.
+
+```text
+텍스트 / 음성 전사 확인
+  → 입력 언어·출력 언어 확정
+  → 검색용 질의 한국어 정규화 (필요할 때만 공통 Qwen 호출)
+  → 검색·리랭킹
+  → 근거 관련성·제품/구역/시방서 적용 범위 확인
+  → 원어 질문 + 유효 근거 + 검증된 대상 언어 용어 + 출력 언어 지시
+  → 공통 Qwen으로 대상 언어 답변 직접 생성
+  → 답변 언어·수치 근거·완결성·반복·용어 검증
+  → 기존 구조화 필드와 근거 ID를 보존한 표시용 JSON
+```
+
+- **검색 언어와 답변 언어를 분리한다.** 한국어 근거 문서라고 한국어 답변을 먼저 만들 필요는 없다. 단, 외국어 입력은 검색용 번역이 필요할 수 있어 전체 LLM 호출이 항상 1회인 것은 아니다.
+- **출력 언어는 명시적 메타데이터로 제어한다.** 후보 설계에서는 `output_language`를 우선하고 질문 속 언어 지시와 충돌하면 확인 또는 검증 오류로 처리한다. 검색 질의에서 언어 지시를 분리하더라도 원문은 추적용으로 보존한다. 현재 코드는 이 우선순위를 강제하지 않는다.
+- **언어와 사실 검증은 별개다.** 원어로 자연스럽게 써도 관련 없는 제품 수치를 적용하면 실패다. 적용 시방서가 없으면 합격/불합격·보수 시간·추가 두께를 임의 생성하지 않고 필요한 정보를 요청한다.
+- **중복 번역은 검증 후에만 제거한다.** 목표 언어로 이미 생성된 답변은 언어·내용 검사를 통과한 경우에만 그대로 반환하는 방향이다. 단순 문자권 판별만으로 번역 생략을 승인하지 않는다.
+- **한국어 정본 요구와 충돌을 해결해야 한다.** C는 한국어 원답을 만들지 않는다. 한국어 감사용 답변이 필수라면 역번역 등 별도 생성이 필요하고 지연시간이 다시 증가한다. `copilot.answer`의 의미나 현지화 상태를 조용히 바꾸지 말고 응답 계약을 검토한 뒤 버전/호환 방식을 결정한다.
+- **승인 전 운영 경로는 유지한다.** 실제 API 프롬프트로 고정 평가 세트를 재시험하고, 언어별 전문가 검수·번역/직접 생성의 실패 복구·구조화 필드 불변·지연시간을 검증한 후 전환 여부를 결정한다. Gemma 교체나 7언어 활성화는 별도 비교·승인 대상이다.
+
 ## 5. 로컬 모델 조사와 선정 기준
 
 | 역할 | 후보 | 확인된 근거 | 프로젝트 판단 |
