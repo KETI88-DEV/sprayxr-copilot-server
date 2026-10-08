@@ -75,6 +75,30 @@ def process_from_tool_type(value: Any) -> Literal["spray", "blasting"] | None:
     return _TOOL_TYPE_ALIASES.get(value.strip().lower().replace("-", "_"))  # type: ignore[return-value]
 
 
+class GunMetricsIn(BaseModel):
+    """TSB 프레임의 분사 계측값.
+
+    버전별 추가 키는 허용하되, 연동에 합의된 텍스처 좌표는 실제 전송 위치인
+    ``sequence_info[].gun_metrics.raytexuv``에서 검증한다.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    speed: float | None = None
+    distance: float | None = None
+    raypoint: list[float] | None = None
+    raytexmapnum: int | None = None
+    raytexuv: tuple[TexturePixelCoordinate, TexturePixelCoordinate] | None = Field(
+        default=None,
+        description=(
+            "2048x2048 텍스처의 픽셀 좌표 [X,Y]. 원점은 좌하단이고 "
+            "X는 오른쪽, Y는 위쪽으로 증가합니다. 레이 미충돌은 null입니다."
+        ),
+        examples=[[1024, 768]],
+    )
+    spraytime: float | None = None
+
+
 class SequenceFrameIn(BaseModel):
     """프레임 하나. 모르는 키를 받되 세어서 보고한다.
 
@@ -89,12 +113,14 @@ class SequenceFrameIn(BaseModel):
     time: str | float | None = None
     tool_pos_rot: dict[str, Any] | None = None
     skeleton_joints: dict[str, Any] = Field(default_factory=dict)
-    gun_metrics: dict[str, Any] | None = None
+    gun_metrics: GunMetricsIn | None = None
+    # 2026-10-08 TSB 정본은 gun_metrics 안에 둔다. 이 필드는 구형 전송 호환용이다.
     raytexuv: tuple[TexturePixelCoordinate, TexturePixelCoordinate] | None = Field(
         default=None,
+        deprecated=True,
         description=(
-            "2048x2048 텍스처의 픽셀 좌표 [X,Y]. 원점은 좌하단이고 "
-            "X는 오른쪽, Y는 위쪽으로 증가합니다. 레이 미충돌은 null입니다."
+            "구형 호환 필드입니다. 신규 연동은 gun_metrics.raytexuv를 사용하세요. "
+            "좌표 범위와 원점 규칙은 동일합니다."
         ),
         examples=[[1024, 768]],
     )

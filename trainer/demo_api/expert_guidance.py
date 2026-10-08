@@ -123,7 +123,7 @@ class ExpertGuidanceEngine:
 
         values: list[float] = []
         for frame in request.sequence_info:
-            metrics = frame.gun_metrics or {}
+            metrics = frame.gun_metrics.model_dump() if frame.gun_metrics is not None else {}
             raw = cls._number(metrics.get(frame_key))
             if raw is None:
                 continue

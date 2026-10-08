@@ -123,8 +123,8 @@ def test_analyze_sequence_uses_the_same_eight_keys_as_the_latest_tsb_sample() ->
 def test_raytexuv_uses_tsb_pixel_coordinates_and_accepts_a_miss() -> None:
     body = _body()
     body["sequence_info"] = [
-        _frame(index=1, raytexuv=[2048, 0]),
-        _frame(index=2, raytexuv=None),
+        _frame(index=1, gun_metrics={"raytexuv": [2048, 0]}),
+        _frame(index=2, gun_metrics={"raytexuv": None}),
     ]
 
     response = _client().post(ANALYZE_SEQUENCE_PATH, json=body)
@@ -134,7 +134,7 @@ def test_raytexuv_uses_tsb_pixel_coordinates_and_accepts_a_miss() -> None:
 
 def test_raytexuv_rejects_out_of_range_pixel_coordinates() -> None:
     body = _body()
-    body["sequence_info"] = [_frame(raytexuv=[2048.1, 0])]
+    body["sequence_info"] = [_frame(gun_metrics={"raytexuv": [2048.1, 0]})]
 
     assert _client().post(ANALYZE_SEQUENCE_PATH, json=body).status_code == 422
 
