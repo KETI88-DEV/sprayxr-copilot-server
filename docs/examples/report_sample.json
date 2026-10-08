@@ -1,0 +1,251 @@
+{
+  "status": "SUCCESS",
+  "code": 200,
+  "message": "Session report completed",
+  "data": {
+    "request_id": "req-report-0034",
+    "session_id": "SESSION-001",
+    "user_id": "W-017",
+    "scenario_id": "1-A",
+    "generated_at": "2026-08-07T14:40:18Z",
+    "latency_ms": 18120,
+    "report": {
+      "report_id": "report-SESSION-001",
+      "report_status": "complete",
+      "coating_report": {
+        "analysis_status": "available",
+        "reason_code": null,
+        "algorithm_version": "coating-session-report-1.0",
+        "source_artifact_id": "heightmap-SESSION-001-final",
+        "coating_distribution_index": 72.4,
+        "zone_summary": {
+          "under2": 0.31,
+          "under1": 0.22,
+          "normal": 0.24,
+          "over1": 0.12,
+          "over2": 0.07,
+          "over3": 0.04
+        },
+        "distribution": {
+          "below": 151,
+          "in_band": 17,
+          "above": 5
+        },
+        "reachability": {
+          "reachable": 81,
+          "needs_process": 75
+        },
+        "worst_zones": [
+          {
+            "zone_id": "A-2",
+            "map_num": 2,
+            "uv_bin": [
+              2,
+              3
+            ],
+            "thickness_um": 56,
+            "status": "under_app",
+            "zone_class": "under2",
+            "cause": "이동속도 과다·이격 과다",
+            "action": "increase_dwell",
+            "action_reachable": true
+          }
+        ],
+        "root_cause": {
+          "dominant": "operator_behavior",
+          "behavior_r2": 0.44,
+          "process_r2": 0.12,
+          "note": "저도막의 주원인은 속도·거리·체류 시간이며 일부 구역은 공정 설정 조정이 필요합니다."
+        },
+        "guideline": "A-2 부족 구역의 체류 시간을 늘리고, 작업자 동작만으로 회복하기 어려운 구역은 공정 설정을 함께 조정하세요."
+      },
+      "sequence_report": {
+        "analysis_status": "available",
+        "reason_code": null,
+        "algorithm_version": "sequence-session-report-1.0",
+        "source_artifact_id": "telemetry-SESSION-001.csv",
+        "recommended_flow": [
+          "A-1",
+          "A-2",
+          "A-3"
+        ],
+        "first_visit_flow": [
+          "A-1",
+          "A-3",
+          "A-2"
+        ],
+        "evaluated_visit_count": 37,
+        "on_track_visit_count": 29,
+        "skipped_zone_count": 0,
+        "adherence_rate": 0.784,
+        "deviation_count": 8,
+        "zone_summary": [
+          {
+            "zone_id": "A-1",
+            "visit_count": 14,
+            "revisit_count": 3,
+            "deviation_count": 3
+          },
+          {
+            "zone_id": "A-2",
+            "visit_count": 12,
+            "revisit_count": 2,
+            "deviation_count": 4
+          },
+          {
+            "zone_id": "A-3",
+            "visit_count": 11,
+            "revisit_count": 0,
+            "deviation_count": 1
+          }
+        ],
+        "direction_summary": {
+          "evaluated_sequence_count": 32,
+          "matched_sequence_count": 24,
+          "direction_error_count": 8,
+          "direction_adherence_rate": 0.75,
+          "affected_zone_ids": [
+            "A-2",
+            "A-3"
+          ],
+          "zone_summary": [
+            {
+              "zone_id": "A-1",
+              "expected_direction": "horizontal",
+              "evaluated_sequence_count": 10,
+              "matched_sequence_count": 10,
+              "direction_error_count": 0,
+              "direction_adherence_rate": 1.0
+            },
+            {
+              "zone_id": "A-2",
+              "expected_direction": "horizontal",
+              "evaluated_sequence_count": 12,
+              "matched_sequence_count": 8,
+              "direction_error_count": 4,
+              "direction_adherence_rate": 0.667
+            },
+            {
+              "zone_id": "A-3",
+              "expected_direction": "vertical",
+              "evaluated_sequence_count": 10,
+              "matched_sequence_count": 6,
+              "direction_error_count": 4,
+              "direction_adherence_rate": 0.6
+            }
+          ]
+        },
+        "guideline": "A-1 이후 A-2, A-3 순서로 이동하고, A-2에서는 가로 방향, A-3에서는 세로 방향을 유지하세요."
+      },
+      "pose_report": {
+        "analysis_status": "available",
+        "reason_code": null,
+        "algorithm_version": "pose-session-report-1.0",
+        "source_artifact_id": "telemetry-SESSION-001.csv",
+        "evaluated_sequence_count": 32,
+        "average_similarity_score": 0.789,
+        "zone_summary": [
+          {
+            "zone_id": "A-1",
+            "evaluated_sequence_count": 10,
+            "average_similarity_score": 0.86,
+            "problem_joints": [
+              {
+                "joint": "wrist_r",
+                "occurrence_count": 3,
+                "occurrence_rate": 0.3,
+                "average_distance": 0.041,
+                "angle_issues": [
+                  {
+                    "axis": "yaw",
+                    "average_diff_deg": 4.2,
+                    "direction": "excess"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "zone_id": "A-2",
+            "evaluated_sequence_count": 12,
+            "average_similarity_score": 0.72,
+            "problem_joints": [
+              {
+                "joint": "elbow_r",
+                "occurrence_count": 8,
+                "occurrence_rate": 0.667,
+                "average_distance": 0.084,
+                "angle_issues": [
+                  {
+                    "axis": "pitch",
+                    "average_diff_deg": 5.8,
+                    "direction": "excess"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "zone_id": "A-3",
+            "evaluated_sequence_count": 10,
+            "average_similarity_score": 0.8,
+            "problem_joints": [
+              {
+                "joint": "shoulder_r",
+                "occurrence_count": 5,
+                "occurrence_rate": 0.5,
+                "average_distance": 0.057,
+                "angle_issues": [
+                  {
+                    "axis": "roll",
+                    "average_diff_deg": 4.7,
+                    "direction": "insufficient"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "priority_corrections": [
+          {
+            "priority": 1,
+            "zone_id": "A-2",
+            "joint": "elbow_r",
+            "occurrence_rate": 0.667,
+            "correction_guidance": "오른쪽 팔꿈치 각도가 평균 6도 정도 어긋나 있습니다. 팔꿈치를 살짝 펴주세요."
+          },
+          {
+            "priority": 2,
+            "zone_id": "A-3",
+            "joint": "shoulder_r",
+            "occurrence_rate": 0.5,
+            "correction_guidance": "오른쪽 어깨가 평균 5도 정도 낮아져 있습니다. 오른쪽 어깨를 살짝 들어주세요."
+          }
+        ],
+        "guideline": "A-2에서 오른쪽 팔꿈치 각도를 줄이고, A-3에서 오른쪽 어깨를 들어주세요."
+      },
+      "llm_briefing": "도막 정상 비율은 24%로 낮고 A-2 저도막이 가장 큰 품질 위험입니다. 구역 순서 준수율은 78.4%이며 A-2와 A-3에서 순서 이탈이 발생했습니다. 방향 준수율은 75%로 A-2의 가로 패스와 A-3의 세로 패스를 안정적으로 유지해야 합니다. 자세 평균 유사도는 78.9%이며 A-2의 오른쪽 팔꿈치 교정이 가장 자주 필요했습니다. 다음 훈련에서는 A-2 체류 시간을 먼저 늘린 뒤 A-1→A-2→A-3 순서와 구역별 권장 방향을 유지하고 오른쪽 팔꿈치 각도를 교정하세요."
+    }
+  },
+  "_": "세션 종합 리포트 응답 예시. 설명은 벤더 샘플과 같은 규약으로 _notes 에 JSON 경로로 둔다.",
+  "_notes": {
+    "data.report.coating_report": "1. 도막 context: 최종 CSV/히트맵에서 산출한 도막 분포와 조치",
+    "data.report.coating_report.coating_distribution_index": "표준 도막 분포 지수(70 - 감산 + σ가산)",
+    "data.report.coating_report.distribution": "세그먼트 판정 분포",
+    "data.report.coating_report.guideline": "도막 context만 근거로 작성하는 안내",
+    "data.report.coating_report.reachability": "행동 회복 vs 공정 필요",
+    "data.report.coating_report.zone_summary": "표준 6영역 면적비율",
+    "data.report.llm_briefing": "4. 3개 context의 구조화 결과와 guideline을 모두 반영한 종합 평가",
+    "data.report.pose_report": "3. 자세 context: CSV의 시퀀스별 자세 판정을 zone 단위로 집계",
+    "data.report.pose_report.guideline": "자세 context만 근거로 작성",
+    "data.report.pose_report.priority_corrections": "전체 세션에서 발생률이 높은 교정 항목을 제한된 개수로 제공",
+    "data.report.sequence_report": "2. 순서 context: 구역 순서와 direction 결과를 분리 집계",
+    "data.report.sequence_report.adherence_rate": "순서 준수율",
+    "data.report.sequence_report.deviation_count": "순서 이탈 sequence",
+    "data.report.sequence_report.direction_summary": "순서 점수와 섞지 않는 별도 direction 집계",
+    "data.report.sequence_report.evaluated_visit_count": "연속된 동일 zone 버스트를 하나의 방문으로 압축한 뒤 계산 / 검사한 sequence",
+    "data.report.sequence_report.guideline": "순서와 direction context만 반영",
+    "data.report.sequence_report.on_track_visit_count": "순서 준수 sequence",
+    "data.report.sequence_report.skipped_zone_count": "누락된 zone"
+  }
+}

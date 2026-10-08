@@ -26,6 +26,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from trainer.demo_api.anomaly_stream import HEARTBEAT_SEC, POLL_SEC, AnomalyBroadcaster
 from trainer.demo_api.v1_contracts import (
+    SessionReport,
     ApiResponse,
     CoatingReport,
     PoseReport,
@@ -73,17 +74,43 @@ def _error(code: int, message: str) -> JSONResponse:
     )
 
 
-def _unavailable_report(*, report_id: str, session_id: str, status: str, generated_at: str) -> ReportDetail:
-    """엔진이 없을 때의 리포트. 수치는 `null`이고 상태가 그 사실을 말한다(p.15)."""
+# 영역을 못 내는 이유는 서로 다르다. 한 코드로 뭉치면 운영자가 엉뚱한 데를 찾는다.
+# 도막은 재료(cur_sequence_heatmap)가 오지만 지수의 **정의**가 없고, 순서는 기준
+# (recommended_flow)이 없다.
+_COATING_INDEX_UNDEFINED: Final = "index_definition_missing"
+_FLOW_MISSING: Final = "recommended_flow_missing"
+
+def _unavailable_report(
+    *,
+    report_id: str,
+    session_id: str,
+    status: str,
+    generated_at: str,
+    user_id: str | None = None,
+    scenario_id: str | None = None,
+) -> ReportDetail:
+    """엔진이 없을 때의 리포트. 수치는 `null`이고 상태가 그 사실을 말한다(p.15).
+
+    모양의 정본은 `docs/examples/report_sample.json` — 머리 필드는 다른 v2.5 응답과
+    같은 규약이고 본체는 `report` 아래다.
+    """
     return ReportDetail(
-        report_id=report_id,
         session_id=session_id,
-        report_status=status,  # type: ignore[arg-type]
+        user_id=user_id,
+        scenario_id=scenario_id,
         generated_at=generated_at,
-        llm_briefing=None,
-        coating_report=CoatingReport(analysis_status="unavailable", guideline=_ENGINE_MISSING),
-        sequence_report=SequenceReport(analysis_status="unavailable", guideline=_ENGINE_MISSING),
-        pose_report=PoseReport(analysis_status="unavailable", guideline=_ENGINE_MISSING),
+        report=SessionReport(
+            report_id=report_id,
+            report_status=status,  # type: ignore[arg-type]
+            coating_report=CoatingReport(
+                analysis_status="unavailable", reason_code=_COATING_INDEX_UNDEFINED, guideline=_ENGINE_MISSING
+            ),
+            sequence_report=SequenceReport(
+                analysis_status="unavailable", reason_code=_FLOW_MISSING, guideline=_ENGINE_MISSING
+            ),
+            pose_report=PoseReport(analysis_status="unavailable", guideline=_ENGINE_MISSING),
+            llm_briefing=None,
+        ),
     )
 
 
@@ -124,16 +151,23 @@ async def _sse_body(
 
 def _report(row: Any) -> ReportDetail:
     """저장된 분석이 있으면 `pose_report`에 싣는다. 도막·시퀀스 영역은 엔진이 없으므로 `unavailable`(p.15)."""
-    report = _unavailable_report(
-        report_id=row.report_id, session_id=row.session_id,
-        status=row.report_status, generated_at=row.requested_at,
+    payload = row.payload if isinstance(row.payload, dict) else {}
+    detail = _unavailable_report(
+        report_id=row.report_id,
+        session_id=row.session_id,
+        status=row.report_status,
+        generated_at=row.requested_at,
+        user_id=payload.get("user_id"),
+        scenario_id=payload.get("scenario_id"),
     )
-    analysis = row.payload.get("analysis") if isinstance(row.payload, dict) else None
+    analysis = payload.get("analysis")
     if isinstance(analysis, dict) and isinstance(analysis.get("pose_report"), dict):
-        report.pose_report = PoseReport.model_validate(analysis["pose_report"])
+        detail.report.pose_report = PoseReport.model_validate(analysis["pose_report"])
         if isinstance(analysis.get("generated_at"), str):
-            report.generated_at = analysis["generated_at"]
-    return report
+            detail.generated_at = analysis["generated_at"]
+        if isinstance(analysis.get("latency_ms"), int):
+            detail.latency_ms = analysis["latency_ms"]
+    return detail
 
 
 def create_v1_router(

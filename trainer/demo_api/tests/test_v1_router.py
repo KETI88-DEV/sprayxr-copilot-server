@@ -265,13 +265,17 @@ def test_report_detail_returns_unavailable_areas_without_inventing_numbers() -> 
 
     data = client.get(f"/api/v1/reports/{report_id}").json()["data"]
 
-    assert data["report_status"] == "complete"
-    assert data["llm_briefing"] is None
+    report = data["report"]
+    assert report["report_status"] == "complete"
+    assert report["llm_briefing"] is None
     for area in ("coating_report", "sequence_report", "pose_report"):
-        assert data[area]["analysis_status"] == "unavailable"
-    assert data["coating_report"]["coating_distribution_index"] is None
-    assert data["sequence_report"]["adherence_rate"] is None
-    assert data["pose_report"]["average_similarity_score"] is None
+        assert report[area]["analysis_status"] == "unavailable"
+    assert report["coating_report"]["coating_distribution_index"] is None
+    assert report["sequence_report"]["adherence_rate"] is None
+    assert report["pose_report"]["average_similarity_score"] is None
+    # 못 내는 이유가 영역마다 다르다 — 한 코드로 뭉치면 엉뚱한 데를 찾게 된다.
+    assert report["coating_report"]["reason_code"] == "index_definition_missing"
+    assert report["sequence_report"]["reason_code"] == "recommended_flow_missing"
 
 
 def test_unknown_report_is_404() -> None:

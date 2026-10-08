@@ -238,13 +238,13 @@ def test_complete_runs_the_session_analysis_and_the_report_carries_pose() -> Non
     detail = client.get(f"/api/v1/reports/{report_id}").json()["data"]
 
     assert status["report_status"] == "complete"
-    assert detail["report_status"] == "complete"
-    assert detail["pose_report"]["analysis_status"] == "available"
-    assert detail["pose_report"]["average_similarity_score"] == pytest.approx(0.5)
-    assert detail["pose_report"]["algorithm_version"] == sa.ALGORITHM_VERSION
+    assert detail["report"]["report_status"] == "complete"
+    assert detail["report"]["pose_report"]["analysis_status"] == "available"
+    assert detail["report"]["pose_report"]["average_similarity_score"] == pytest.approx(0.5)
+    assert detail["report"]["pose_report"]["algorithm_version"] == sa.ALGORITHM_VERSION
     # 엔진이 없는 영역은 그대로 unavailable(p.15).
-    assert detail["coating_report"]["analysis_status"] == "unavailable"
-    assert detail["sequence_report"]["analysis_status"] == "unavailable"
+    assert detail["report"]["coating_report"]["analysis_status"] == "unavailable"
+    assert detail["report"]["sequence_report"]["analysis_status"] == "unavailable"
 
 
 def test_an_analysis_crash_marks_the_report_failed(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -258,6 +258,6 @@ def test_an_analysis_crash_marks_the_report_failed(monkeypatch: pytest.MonkeyPat
     report_id = _complete(client, b"index,time\n1,0\n")
 
     detail = client.get(f"/api/v1/reports/{report_id}").json()["data"]
-    assert detail["report_status"] == "failed"
-    assert detail["pose_report"]["analysis_status"] == "unavailable"
-    assert detail["pose_report"]["average_similarity_score"] is None
+    assert detail["report"]["report_status"] == "failed"
+    assert detail["report"]["pose_report"]["analysis_status"] == "unavailable"
+    assert detail["report"]["pose_report"]["average_similarity_score"] is None
