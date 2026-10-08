@@ -5,6 +5,8 @@
 한 줄 요약: **도장 문서 RAG → QLoRA 파인튜닝 모델 → ReAct 도구 호출(MCP) → SSE 스트리밍 콘솔**.
 현재 기본 경로는 Qwen3.6-27B(4-bit NF4) + v6.1 어댑터이며, Qwen3-4B는 RTX 4080 기준선으로 유지한다.
 
+협업 시 [저장소 추적 범위와 개인 도구 정리 안내](docs/repository-hygiene.md)를 따른다. 앱 npm 명령은 `demo-ui/`에서 실행한다.
+
 ---
 
 ## 1. 지금 동작하는 범위

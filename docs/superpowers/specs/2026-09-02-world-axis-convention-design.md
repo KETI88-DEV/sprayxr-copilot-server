@@ -1,7 +1,7 @@
 # 월드 축 규약 설계
 
-작성 2026-09-02. 근거: `.superpowers/spikes/2026-09-02-vertical-axis-blast-radius.md`,
-`.superpowers/spikes/2026-09-02-level-mesh-matching.md` (둘 다 이 스펙과 함께 커밋).
+작성 2026-09-02. 근거: `docs/archive/agent-notes/2026-09-02-vertical-axis-blast-radius.md`,
+`docs/archive/agent-notes/2026-09-02-level-mesh-matching.md` (둘 다 이 스펙과 함께 커밋).
 
 ## 1. 무엇이 틀렸는가
 

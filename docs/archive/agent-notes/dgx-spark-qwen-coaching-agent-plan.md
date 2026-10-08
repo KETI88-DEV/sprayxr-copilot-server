@@ -1,7 +1,7 @@
 ---
 slug: dgx-spark-qwen-coaching-agent
 status: approved-plan
-source-draft: .omo/drafts/dgx-spark-qwen-coaching-agent.md
+source-draft: docs/archive/agent-notes/dgx-spark-qwen-coaching-agent-draft.md
 created: 2026-07-21
 revised: 2026-07-22 (v2 — vLLM+MTP+Qwen3.6-27B 전환, 아키텍처 확정, MCP→Skill 결정 반영. 승인됨)
 revised-v3: 2026-07-22 (v3 — 코칭 기능-시점 매핑 확정: 런타임 이벤트 = RAG 질의·시작 전 순서 안내·이상탐지 한정, 자세 유사도/교정·부족 부위 분포 분석은 세션 완료 후 리뷰로 이동. 0.9 신설, 0.7/T7/T9/T12/T13/R6/R8/QA 반영)

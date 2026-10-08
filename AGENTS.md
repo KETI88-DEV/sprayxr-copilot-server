@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Ship-coating training copilot: a Python 3.11 RAG/agent pipeline, seven FastAPI MCP tool routers, a FastAPI SSE demo API, and a separate React 19 + Electron package in `demo-ui/`. `demo-ui/` is the only real npm package (the root `package.json` is unrelated tooling). Current model path is Qwen3.6-27B 4-bit NF4 + v6.1 LoRA; 4B configs remain for baseline reproduction.
+Ship-coating training copilot: a Python 3.11 RAG/agent pipeline, seven FastAPI MCP tool routers, a FastAPI SSE demo API, and a separate React 19 + Electron package in `demo-ui/`. `demo-ui/` is the only real npm package; root-level personal tooling manifests are intentionally untracked. Current model path is Qwen3.6-27B 4-bit NF4 + v6.1 LoRA; 4B configs remain for baseline reproduction.
 
 `README.md` covers user-facing setup. This file covers what an agent would otherwise get wrong.
 
