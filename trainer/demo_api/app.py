@@ -22,6 +22,7 @@ from trainer.demo_api import chat_service as chat_service_mod
 from trainer.demo_api.chat_service import ChatService, build_default_live_runner
 from trainer.demo_api.contracts import ChatRequest
 from trainer.demo_api.copilot_router import create_copilot_router, install_copilot_error_handlers
+from trainer.demo_api.coating_progress import CoatingProgressEngine
 from trainer.demo_api.db_viewer import create_db_viewer_router
 from trainer.demo_api.expert_guidance import ExpertGuidanceEngine
 from trainer.demo_api.guided_workflow import create_guided_workflow_router
@@ -106,6 +107,7 @@ def create_app(
     expert_guidance = ExpertGuidanceEngine(
         Path(os.environ.get("EXPERT_REFERENCE_ROOT", "/expert_reference_data"))
     )
+    coating_progress = CoatingProgressEngine(expert_guidance.reference_root)
     v1_store = V1Store()
     speech_to_text = LazySpeechToText(
         lambda: TransformersWhisperSpeechToText(
@@ -165,6 +167,7 @@ def create_app(
     app.state.eager_init_thread = None
     app.state.stt_init_thread = None
     app.state.expert_guidance = expert_guidance
+    app.state.coating_progress = coating_progress
     app.state.v1_store = v1_store
     app.state.speech_to_text = speech_to_text
 
@@ -265,7 +268,11 @@ def create_app(
     # copilot/query 의 pose_recomm 이 한다(명세서 p.4 vs p.9).
     # recorder 를 함께 준다 — v2.5 요청·응답이 /api/monitor/{events,stream} 에 보인다.
     app.include_router(
-        create_telemetry_router(recorder=recorder, guidance_engine=expert_guidance)
+        create_telemetry_router(
+            recorder=recorder,
+            guidance_engine=expert_guidance,
+            coating_progress_engine=coating_progress,
+        )
     )
     install_copilot_error_handlers(app)
 

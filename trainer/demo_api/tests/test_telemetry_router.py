@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 
 from trainer.demo_api.copilot_router import install_copilot_error_handlers
 from trainer.demo_api.expert_guidance import GuideItem, SequenceGuide
+from trainer.demo_api.telemetry_contracts import CoatingProgress
 from trainer.demo_api.sequence_store import SequenceStore
 from trainer.demo_api.telemetry_router import (
     ANALYZE_SEQUENCE_PATH,
@@ -27,7 +28,7 @@ _DATA_KEYS = {
     "generated_at", "latency_ms", "sequence_data_ack",
     "coating_feedback", "sequence_feedback", "text_guide",
 }
-_ANALYZE_DATA_KEYS = _DATA_KEYS | {"guide"}
+_ANALYZE_DATA_KEYS = _DATA_KEYS | {"guide", "coating_progress"}
 
 # 실물 샘플의 관절 표기: 소문자 키에 [x,y,z] 배열. 계약 예시의 {pos, rot} 형태도 받는다.
 _JOINTS = {"pelvis": [0.3716, 3.8185, 0.4379], "lefthand": [0.5772, 3.6674, 0.7986]}
@@ -66,6 +67,7 @@ def _client(
     *,
     store: SequenceStore | None = None,
     guidance_engine: Any = None,
+    coating_progress_engine: Any = None,
 ) -> TestClient:
     """자세는 여기서 채점하지 않으므로 MCP 트랜스포트가 필요 없다(명세서 p.4)."""
     app = FastAPI()
@@ -73,6 +75,7 @@ def _client(
         create_telemetry_router(
             store=store if store is not None else SequenceStore(":memory:"),
             guidance_engine=guidance_engine,
+            coating_progress_engine=coating_progress_engine,
         )
     )
     install_copilot_error_handlers(app)
@@ -142,6 +145,22 @@ def _guide(speed: str = "slow", distance: str = "far") -> SequenceGuide:
     )
 
 
+class _ProgressStub:
+    def evaluate(self, request: Any) -> CoatingProgress:
+        return CoatingProgress(
+            zone_id=request.zone_id,
+            available=True,
+            status="needs_more",
+            recommendation="continue_current_zone",
+            completion_percent=62.5,
+            coverage_percent=50.0,
+            overpaint_percent=0.0,
+            next_zone_id=None,
+            message="Zone 1을 추가 도장하세요.",
+            reason=None,
+        )
+
+
 def test_analyze_sequence_always_returns_structured_speed_and_distance_guide() -> None:
     stub = _GuidanceStub(_guide())
 
@@ -156,6 +175,26 @@ def test_analyze_sequence_always_returns_structured_speed_and_distance_guide() -
         "distance": {"status": "far", "message": "distance-message", "available": True, "reason": None},
     }
     assert stub.calls == 1
+
+
+def test_analyze_sequence_returns_current_zone_coating_progress() -> None:
+    data = _client(coating_progress_engine=_ProgressStub()).post(
+        ANALYZE_SEQUENCE_PATH,
+        json=_body(scenario_id="3"),
+    ).json()["data"]
+
+    assert data["coating_progress"] == {
+        "zone_id": "1",
+        "available": True,
+        "status": "needs_more",
+        "recommendation": "continue_current_zone",
+        "completion_percent": 62.5,
+        "coverage_percent": 50.0,
+        "overpaint_percent": 0.0,
+        "next_zone_id": None,
+        "message": "Zone 1을 추가 도장하세요.",
+        "reason": None,
+    }
 
 
 def test_telemetry_sequence_contract_does_not_gain_the_analyze_guide() -> None:

@@ -32,6 +32,10 @@ from trainer.demo_api.contracts import StrictModel
 AnalysisStatus = Literal["available", "not_available"]
 SpeedGuideStatus = Literal["slow", "ok", "fast"]
 DistanceGuideStatus = Literal["near", "ok", "far"]
+CoatingProgressStatus = Literal["needs_more", "complete", "overpaint_risk"]
+CoatingRecommendation = Literal[
+    "continue_current_zone", "move_next_zone", "stop_current_zone"
+]
 
 _TOOL_TYPE_ALIASES = {
     "spray": "spray",
@@ -210,6 +214,21 @@ class SequenceGuide(StrictModel):
     distance: GuideItem
 
 
+class CoatingProgress(StrictModel):
+    """현재 Zone의 세션 누적 도막을 전문가 최종 도막과 비교한 결과."""
+
+    zone_id: str
+    available: bool
+    status: CoatingProgressStatus | None
+    recommendation: CoatingRecommendation | None
+    completion_percent: Annotated[float | None, Field(ge=0, le=100)]
+    coverage_percent: Annotated[float | None, Field(ge=0, le=100)]
+    overpaint_percent: Annotated[float | None, Field(ge=0, le=100)]
+    next_zone_id: str | None
+    message: str | None
+    reason: str | None
+
+
 class TelemetrySequenceData(StrictModel):
     """시퀀스를 데이터베이스에 올린 결과.
 
@@ -244,6 +263,7 @@ class TelemetrySequenceResponse(StrictModel):
 
 class AnalyzeSequenceData(TelemetrySequenceData):
     guide: SequenceGuide
+    coating_progress: CoatingProgress
 
 
 class AnalyzeSequenceResponse(StrictModel):
