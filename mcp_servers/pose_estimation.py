@@ -20,6 +20,7 @@ from trainer.scripts import (
     pose_similarity,
     pose_stages,
     posture_sequence,
+    rig_profile,
     skeleton_gate,
     world_axes,
 )
@@ -359,6 +360,65 @@ class SequenceRequest(BaseModel):
 
 ARM_REFERENCE_ENV: Final = "ARM_REFERENCE_PATH"
 DEFAULT_ARM_REFERENCE: Final = "/output/expert_reference/expert_arm_reference.json"
+# 아바타(리그)마다 숙련자 기준이 따로 있다(2026-10-08 아바타 변경). `ARM_REFERENCE_PATH`에 쉼표로 여러 개를 주거나,
+# 없으면 아래 기본 파일 중 있는 것을 다 읽는다. 시퀀스의 뼈 길이로 맞는 리그의 기준을 고른다(`rig_profile.match`).
+# 2026-10 아바타(몸통이 다른 새 리그)로 옮겨 구운 기준. 리그마다 기준이 하나다 — 시퀀스 골격으로 고른다.
+DEFAULT_AVATAR_ARM_REFERENCE: Final = "/output/expert_reference/expert_arm_reference_avatar_2026-10.json"
+DEFAULT_ARM_REFERENCES: Final[tuple[str, ...]] = (DEFAULT_ARM_REFERENCE, DEFAULT_AVATAR_ARM_REFERENCE)
+
+
+def _arm_reference_paths() -> list[Path]:
+    raw = os.environ.get(ARM_REFERENCE_ENV)
+    names = [part.strip() for part in raw.split(",") if part.strip()] if raw else list(DEFAULT_ARM_REFERENCES)
+    return [Path(name) for name in names]
+
+
+def _rig_lengths(payload: Mapping[str, Any]) -> dict[str, float]:
+    """기준 파일이 적은 리그의 뼈 길이. `rig`가 없는 기준은 예전 리그로 구운 것이다."""
+    rig = payload.get("rig")
+    lengths = rig.get("bone_lengths_m") if isinstance(rig, dict) else None
+    return dict(lengths) if isinstance(lengths, dict) else dict(rig_profile.LEGACY_BONE_LENGTHS)
+
+
+def _arm_references() -> list[tuple[str, dict[str, Any]]]:
+    """(리그 이름, 기준 내용). 파일이 없으면 빠진다."""
+    out: list[tuple[str, dict[str, Any]]] = []
+    for path in _arm_reference_paths():
+        if not path.is_file():
+            continue
+        payload = _read_arm_reference(str(path), path.stat().st_mtime)
+        rig = payload.get("rig")
+        name = str(rig.get("name")) if isinstance(rig, dict) and rig.get("name") else rig_profile.LEGACY_RIG
+        out.append((name, payload))
+    return out
+
+
+def sequence_bone_lengths(frames: Sequence[skeleton_gate.GateFrame]) -> dict[str, float]:
+    """시퀀스 프레임들의 뼈 길이 중앙값(자식 관절 이름 기준)."""
+    samples: dict[str, list[float]] = {}
+    for frame in frames:
+        for child, length in rig_profile.measured_lengths(frame.joints).items():
+            samples.setdefault(child, []).append(length)
+    return {child: statistics.median(values) for child, values in samples.items()}
+
+
+def height_max_for(frames: Sequence[skeleton_gate.GateFrame]) -> float | None:
+    """골격이 맞춰진 리그의 머리↔발끝 상한(뼈 길이 합 × 여유). 리그를 모르면 None — 게이트가 고정 상한을 쓴다."""
+    name = matched_rig(frames)
+    payload = next((p for n, p in _arm_references() if n == name), None)
+    if payload is None:
+        return None
+    chain = rig_profile.chain_height_m(_rig_lengths(payload))
+    return None if chain is None else chain * skeleton_gate.HEIGHT_CHAIN_SLACK
+
+
+def matched_rig(frames: Sequence[skeleton_gate.GateFrame]) -> str | None:
+    """이 시퀀스 골격에 맞는 기준의 리그 이름. 맞는 것이 없으면 None — 다른 몸의 기준에 대고 재지 않는다."""
+    references = _arm_references()
+    if not references:
+        return None
+    lengths = sequence_bone_lengths(frames)
+    return rig_profile.match(lengths, {name: _rig_lengths(payload) for name, payload in references})
 
 
 @lru_cache(maxsize=2)
@@ -367,12 +427,21 @@ def _read_arm_reference(path: str, revision: float) -> dict[str, Any]:
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 
-def _arm_buckets() -> dict[str, Any] | None:
-    """아티팩트의 버킷 사전. 없으면 `None` — 추정하지 않는다."""
-    path = Path(os.environ.get(ARM_REFERENCE_ENV, DEFAULT_ARM_REFERENCE))
-    if not path.is_file():
+def _arm_buckets(frames: Sequence[skeleton_gate.GateFrame] | None = None) -> dict[str, Any] | None:
+    """이 시퀀스 골격의 리그에 맞는 기준의 버킷 사전. 없거나 맞는 리그가 없으면 `None` — 추정하지 않는다.
+
+    `frames`가 없거나(옛 호출자) 기준이 하나뿐이면 그것을 쓴다 — 리그를 고르는 것은 기준이 여럿일 때만이다.
+    """
+    references = _arm_references()
+    if not references:
         return None
-    payload = _read_arm_reference(str(path), path.stat().st_mtime)
+    if frames is None or len(references) == 1:
+        payload = references[0][1]
+    else:
+        name = matched_rig(frames)
+        payload = next((p for n, p in references if n == name), None)
+        if payload is None:
+            return None
     buckets = payload.get("buckets")
     return buckets if isinstance(buckets, dict) else None
 
@@ -381,11 +450,7 @@ def _arm_bucket(reach_m: float | None) -> tuple[str, dict[str, Any]] | None:
     """이 reach에 해당하는 숙련자 버킷. 아티팩트가 없거나 버킷이 없으면 **추정하지 않는다**."""
     if reach_m is None:
         return None
-    path = Path(os.environ.get(ARM_REFERENCE_ENV, DEFAULT_ARM_REFERENCE))
-    if not path.is_file():
-        return None
-    payload = _read_arm_reference(str(path), path.stat().st_mtime)
-    buckets = payload.get("buckets")
+    buckets = _arm_buckets()
     if not isinstance(buckets, dict):
         return None
     band = arm_reference.reach_band(reach_m)
@@ -469,12 +534,12 @@ def _prepare(payload: "SequenceRequest", *, touch_session: bool) -> _Prepared:
     frames, unknown = _gate_frames(payload.sequence_info)
     session = _SESSIONS.get(payload.session_id)
     frozen_before = frozenset(session.frozen_joints) if session else frozenset()
-    gate = skeleton_gate.evaluate(frames, frozen_before=frozen_before)
+    gate = skeleton_gate.evaluate(frames, frozen_before=frozen_before, height_max_m=height_max_for(frames))
     impacts = _impact_points(payload.sequence_info)
     tools = [frame.tool_pos for frame in frames if frame.tool_pos is not None]
     reach = pose_stages.reach_of(impacts, tools)
     _ = touch_session
-    return _Prepared(frames, unknown, gate, impacts, reach, _arm_buckets())
+    return _Prepared(frames, unknown, gate, impacts, reach, _arm_buckets(frames))
 
 
 def _resolved_of(prepared: _Prepared, band: str | None) -> pose_stages.ResolveResult:
@@ -619,9 +684,11 @@ def analyze_sequence(payload: SequenceRequest) -> MCPResponse:
     session = _SESSIONS.get_or_create(payload.session_id)
 
     # `frozen_before`는 **앞선** 시퀀스의 것이어야 한다(R4c). 그래서 쌓기 전에 잰다.
-    gate = skeleton_gate.evaluate(frames, frozen_before=frozenset(session.frozen_joints))
+    gate = skeleton_gate.evaluate(
+        frames, frozen_before=frozenset(session.frozen_joints), height_max_m=height_max_for(frames)
+    )
 
-    prepared_buckets = _arm_buckets()
+    prepared_buckets = _arm_buckets(frames)
     # 착탄점과 **그 착탄이 난 프레임 번호**를 같이 받는다. `raypoint`가 없는 프레임이
     # 빠지므로 둘은 길이가 다르다 — 인덱스를 프레임 번호로 쓰면 위상에 엉뚱한 자세가 든다.
     impacts, impact_index = _impact_track(payload.sequence_info)

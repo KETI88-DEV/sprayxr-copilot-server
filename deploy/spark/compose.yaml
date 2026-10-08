@@ -85,8 +85,9 @@ services:
       POSE_REFERENCE_PATH: /output/expert_reference/expert_pose_reference.json
       # 팔 자세 채점·교정이 읽는 파일. **없으면 모든 시퀀스가 reference_data_missing이다** —
       # 서비스는 뜨고 채점만 조용히 빈다. `bundle_manifest.py`가 이 파일을 필수로 본다.
-      # 형태는 docs/arm_reference_artifact.md.
-      ARM_REFERENCE_PATH: /output/expert_reference/expert_arm_reference.json
+      # 형태는 docs/arm_reference_artifact.md. 쉼표로 리그별 기준 여럿 — 시퀀스 골격에 맞는 것을 쓴다.
+      # 2026-10 아바타 기준이 빠지면 새 아바타 시퀀스는 고정 키 상한에 걸려 대부분 skeleton_height_out_of_range다.
+      ARM_REFERENCE_PATH: /output/expert_reference/expert_arm_reference.json,/output/expert_reference/expert_arm_reference_avatar_2026-10.json
     volumes:
       - ${BUNDLE_DIR:?BUNDLE_DIR must point to the verified bundle}/output/expert_reference:/output/expert_reference:ro
     healthcheck:

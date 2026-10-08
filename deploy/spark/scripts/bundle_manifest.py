@@ -16,7 +16,8 @@
     output/indexes/{faiss.index,metadata.json}      rag_index  -> agent-api /output/indexes
     output/merged/qwen36_27b_shipcoat_v6_1_fp8/     model_fp8  -> vllm /models/shipcoat, agent-api 토크나이저
     output/merged/qwen36_27b_shipcoat_v6_1_bf16/    model_bf16 -> 롤백(선택)
-    output/expert_reference/expert_arm_reference.json  mcp_pose_reference -> mcp ARM_REFERENCE_PATH
+    output/expert_reference/expert_arm_reference.json  mcp_pose_reference -> mcp ARM_REFERENCE_PATH (예전 리그)
+    output/expert_reference/expert_arm_reference_avatar_2026-10.json  mcp_pose_reference -> 같은 변수 (2026-10 아바타)
     data/eval/                                      eval_set   -> FP8 품질 게이트(선택)
     config/                                         배포 때 생성(롤백 설정). 매니페스트 대상이 아니다.
 """
@@ -64,7 +65,10 @@ GROUPS: dict[str, tuple[str, tuple[str, ...]]] = {
     "rag_index": ("output/indexes", ("faiss.index", "metadata.json")),
     # 팔 레퍼런스는 **필수**다. 이 그룹을 실으면서 이 파일을 빼면 MCP는 뜨지만 모든
     # 시퀀스가 reference_data_missing이 된다 — 조용히 채점이 비는 것을 verify가 잡아야 한다.
-    "mcp_pose_reference": ("output/expert_reference", ("expert_arm_reference.json",)),
+    # 리그마다 하나씩 둘 다 필수다 — 2026-10 아바타 기준이 빠지면 새 아바타 시퀀스가 대부분 판정 거절된다.
+    "mcp_pose_reference": (
+        "output/expert_reference", ("expert_arm_reference.json", "expert_arm_reference_avatar_2026-10.json"),
+    ),
     "eval_set": ("data/eval", ()),
 }
 MODEL_GROUPS = {"fp8": "model_fp8", "bf16": "model_bf16"}

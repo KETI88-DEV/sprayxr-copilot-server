@@ -257,9 +257,11 @@ def test_mcp_arm_reference_path_is_mounted_and_matches_the_code_default() -> Non
     from mcp_servers import pose_estimation
 
     env = _service_env("mcp", _env())
-    path = env[pose_estimation.ARM_REFERENCE_ENV]
-    assert path == pose_estimation.DEFAULT_ARM_REFERENCE
-    assert any(path.startswith(dst + "/") for _src, dst in _volumes("mcp", _env()))
+    paths = env[pose_estimation.ARM_REFERENCE_ENV].split(",")
+    # 리그별 기준 전부 — 2026-10 아바타 기준이 빠지면 새 아바타 시퀀스가 대부분 판정 거절된다.
+    assert tuple(paths) == pose_estimation.DEFAULT_ARM_REFERENCES
+    for path in paths:
+        assert any(path.startswith(dst + "/") for _src, dst in _volumes("mcp", _env())), path
 
 
 def test_the_bundle_requires_the_arm_reference_file() -> None:
@@ -274,10 +276,10 @@ def test_the_bundle_requires_the_arm_reference_file() -> None:
 
     manifest = _load_script("bundle_manifest")
     root, required = manifest.GROUPS["mcp_pose_reference"]
-    assert "expert_arm_reference.json" in required
-    # 번들 상대 경로가 컨테이너 경로와 1:1이어야 마운트가 맞는다.
-    assert pose_estimation.DEFAULT_ARM_REFERENCE.endswith(f"/{root}/expert_arm_reference.json".replace("//", "/")) or \
-        pose_estimation.DEFAULT_ARM_REFERENCE == f"/{root}/expert_arm_reference.json"
+    # 번들 상대 경로가 컨테이너 경로와 1:1이어야 마운트가 맞는다. 리그별 기준 모두.
+    for path in pose_estimation.DEFAULT_ARM_REFERENCES:
+        assert Path(path).name in required, path
+        assert path == f"/{root}/{Path(path).name}"
 
 
 def test_prepare_bundle_refuses_to_build_without_the_arm_reference(tmp_path: Path) -> None:
@@ -290,6 +292,7 @@ def test_prepare_bundle_refuses_to_build_without_the_arm_reference(tmp_path: Pat
 
     prepare = _load_script("prepare_bundle")
     assert prepare.DEFAULT_ARM_REFERENCE == pose_estimation.DEFAULT_ARM_REFERENCE
+    assert prepare.DEFAULT_AVATAR_ARM_REFERENCE == pose_estimation.DEFAULT_AVATAR_ARM_REFERENCE
 
     # 소스 문자열을 훑지 않고 **실제로 부른다.** 문자열 검사는 `raise`를
     # `absent.append`로 바꿔도 통과했다(돌연변이가 살아남았다).

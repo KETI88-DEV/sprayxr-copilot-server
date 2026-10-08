@@ -38,6 +38,8 @@ DEFAULT_POSE_REFERENCE = "/output/expert_reference/expert_pose_reference.json"
 # mcp_servers/pose_estimation.py DEFAULT_ARM_REFERENCE; compose.yaml ARM_REFERENCE_PATH.
 # **채점이 실제로 읽는 파일이다** — 빠지면 모든 시퀀스가 reference_data_missing이다.
 DEFAULT_ARM_REFERENCE = "/output/expert_reference/expert_arm_reference.json"
+# mcp_servers/pose_estimation.py DEFAULT_AVATAR_ARM_REFERENCE — 2026-10 아바타로 옮겨 구운 기준. 이것도 필수다.
+DEFAULT_AVATAR_ARM_REFERENCE = "/output/expert_reference/expert_arm_reference_avatar_2026-10.json"
 DEFAULT_EVAL_SET = "/data/eval/eval_set_agentic.jsonl"
 INDEX_FILES = ("faiss.index", "metadata.json")
 
@@ -129,7 +131,7 @@ def plan_dir(group: str, src_dir: Path, *, only: Sequence[str] | None = None) ->
 
 
 
-def plan_arm_reference(root: str, arm: Path) -> CopyItem:
+def plan_arm_reference(root: str, arm: Path, name: str = "expert_arm_reference.json") -> CopyItem:
     """팔 레퍼런스 복사 항목. **없으면 실패한다.**
 
     위 pose 파일과 달리 이것이 채점 경로의 **유일한 기준**이다. 빠진 채 배포하면
@@ -144,7 +146,7 @@ def plan_arm_reference(root: str, arm: Path) -> CopyItem:
             f"arm_reference: {arm} not found — 이것이 없으면 모든 시퀀스가 "
             "reference_data_missing이다. trainer/scripts/build_arm_reference.py로 굽는다."
         )
-    return CopyItem("mcp_pose_reference", arm, f"{root}/expert_arm_reference.json")
+    return CopyItem("mcp_pose_reference", arm, f"{root}/{name}")
 
 def build_plan(args: argparse.Namespace) -> tuple[list[CopyItem], dict[str, Any], list[str]]:
     items: list[CopyItem] = []
@@ -183,6 +185,8 @@ def build_plan(args: argparse.Namespace) -> tuple[list[CopyItem], dict[str, Any]
 
     items.append(plan_arm_reference(root, args.arm_reference))
     sources["mcp_arm_reference"] = {"file": str(args.arm_reference)}
+    items.append(plan_arm_reference(root, args.avatar_arm_reference, Path(DEFAULT_AVATAR_ARM_REFERENCE).name))
+    sources["mcp_avatar_arm_reference"] = {"file": str(args.avatar_arm_reference)}
 
     if args.with_eval_set:
         if not args.eval_set.is_file():
@@ -247,6 +251,7 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser.add_argument("--index-dir", type=Path, default=Path(DEFAULT_INDEX_DIR))
     parser.add_argument("--pose-reference", type=Path, default=Path(DEFAULT_POSE_REFERENCE))
     parser.add_argument("--arm-reference", type=Path, default=Path(DEFAULT_ARM_REFERENCE))
+    parser.add_argument("--avatar-arm-reference", type=Path, default=Path(DEFAULT_AVATAR_ARM_REFERENCE))
     parser.add_argument("--with-eval-set", action="store_true")
     parser.add_argument("--eval-set", type=Path, default=Path(DEFAULT_EVAL_SET))
     parser.add_argument("--link", action="store_true", help="hardlink when on the same filesystem")

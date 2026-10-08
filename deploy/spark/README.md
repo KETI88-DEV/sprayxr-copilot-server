@@ -89,6 +89,24 @@ docker exec -w /workspace ship-paint-trainer nice -n 19 ionice -c3 python3 deplo
 
     전수(479세션·64,098패스)가 약 30분이다. 파일 형태와 각 값이 만드는 판정은
     `docs/arm_reference_artifact.md`. 2026-09-29 빌드는 467,325 B다.
+  - **`expert_arm_reference_avatar_2026-10.json`(필수)**: 2026-10-08 샘플부터 시뮬레이터 아바타가
+    바뀌었다. 팔·다리 길이는 같고 몸통이 다르다(골반→척추 0.105→0.198 m, 가슴→머리 0.137→0.341 m,
+    선 키 약 1.6 m). 같은 숙련자 동작을 새 몸에 옮겨 구운 기준이다. `ARM_REFERENCE_PATH`는 쉼표로
+    두 파일을 모두 가리키고, MCP는 시퀀스 골격의 뼈 길이로 맞는 리그의 기준과 키 상한을 고른다.
+    이 파일이 빠지면 새 아바타 시퀀스가 고정 키 상한(1.50 m)에 걸려 대부분
+    `skeleton_height_out_of_range`이다(샘플 32건 중 20건). 굽는 법(리그는 새 형식 CSV에서 역산):
+
+    ```bash
+    docker exec -w /workspace -e PYTHONPATH=/workspace ship-paint-trainer \
+      python3 trainer/scripts/rig_profile.py /data/sources/new_format/sample_2026-10-08/3_11000346_1.csv.gz \
+        --name avatar_2026-10 --out /output/expert_reference/rig_avatar_2026-10.json
+    docker exec -w /workspace -e PYTHONPATH=/workspace ship-paint-trainer \
+      python3 trainer/scripts/build_arm_reference.py \
+        --rig /output/expert_reference/rig_avatar_2026-10.json \
+        --out /output/expert_reference/expert_arm_reference_avatar_2026-10.json
+    ```
+
+    `prepare_bundle.py --avatar-arm-reference`로 경로를 바꿀 수 있다. 없으면 번들 준비가 실패한다.
   - `expert_pose_reference.json`(선택): `POSE_REFERENCE_PATH`. 구 `/compare` 경로가 쓴다.
     **현재 A40 기본 경로에 이 파일이 없고**, 번들에서도 빠지며 `bundle_sources.json`의
     `absent_optional`에 기록된다. 없으면 그 경로가 기준을 추정하지 않고 None을 낸다.
@@ -643,7 +661,8 @@ FP8로 돌아갈 때는 `.env`와 셸에 export한 `BUNDLE_DIR`를 원래 값으
 7. 통합 메모리 예산: `GPU_MEMORY_UTILIZATION=0.72`와 agent-api의 bge-m3·reranker(cuda), OS 사이의 여유. 헬스체크 `start_period`(vllm 1800s, agent-api 900s)가 충분한지.
 8. 모든 지연·처리량 수치(§7, §13, §15). 계획 D1의 값은 추정치다.
 9. vLLM #37431 이슈 본문(§16).
-10. MCP 기준 데이터: `expert_arm_reference.json`은 이제 **필수**이고 A40에서 굽는다(§3).
+10. MCP 기준 데이터: `expert_arm_reference.json`과 `expert_arm_reference_avatar_2026-10.json`은 이제
+    **필수**이고 A40에서 굽는다(§3).
     구 `expert_pose_reference.json`은 A40 기본 경로에도 없다 — 구 `/compare` 경로만 쓰므로
     필요한 경우 생성 주체와 경로를 따로 정해야 한다.
 11. arm64 vLLM 이미지 크기와 `docker save` 반입 시간.
