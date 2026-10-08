@@ -92,25 +92,28 @@ def _request(*, sequence_id: str, thickness_um: float, tool_type: str = "spray_g
     )
 
 
-def test_current_sequence_maps_accumulate_until_expert_zone_target_is_reached(tmp_path: Path) -> None:
-    """Dropping session accumulation would keep the second pass at 60% instead of complete."""
+def test_cumulative_maps_replace_previous_absolute_thickness_instead_of_adding(tmp_path: Path) -> None:
+    """TSB sends the current absolute surface thickness, not a per-sequence delta."""
     _profile(tmp_path)
     engine = CoatingProgressEngine(tmp_path)
 
     first = engine.evaluate(_request(sequence_id="SEQ-001", thickness_um=50.0))
     second = engine.evaluate(_request(sequence_id="SEQ-002", thickness_um=60.0))
+    third = engine.evaluate(_request(sequence_id="SEQ-003", thickness_um=100.0))
 
     assert first.status == "needs_more"
     assert first.recommendation == "continue_current_zone"
     assert first.completion_percent == pytest.approx(50.0, abs=0.2)
-    assert second.status == "complete"
-    assert second.recommendation == "move_next_zone"
-    assert second.next_zone_id == "2"
-    assert second.completion_percent == 100.0
+    assert second.status == "needs_more"
+    assert second.completion_percent == pytest.approx(60.0, abs=0.2)
+    assert third.status == "complete"
+    assert third.recommendation == "move_next_zone"
+    assert third.next_zone_id == "2"
+    assert third.completion_percent == pytest.approx(100.0, abs=0.2)
 
 
 def test_duplicate_sequence_does_not_double_count_the_same_heatmap(tmp_path: Path) -> None:
-    """A transport retry must not turn one 60um pass into an apparent 120um completion."""
+    """A transport retry returns the original result and does not mutate surface state."""
     _profile(tmp_path)
     engine = CoatingProgressEngine(tmp_path)
     request = _request(sequence_id="SEQ-001", thickness_um=60.0)
@@ -143,7 +146,7 @@ def test_missing_heatmap_and_blasting_return_honest_unavailable_results(tmp_path
 
     assert engine.evaluate(missing).reason == "heatmap_unavailable"
     assert engine.evaluate(
-        _request(sequence_id="SEQ-002", thickness_um=50.0, tool_type="blasting")
+        _request(sequence_id="SEQ-002", thickness_um=50.0, tool_type="blasting_gun")
     ).reason == "coating_not_applicable"
 
 

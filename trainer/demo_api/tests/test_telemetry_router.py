@@ -126,6 +126,34 @@ def test_analyze_sequence_uses_the_same_eight_keys_as_the_latest_tsb_sample() ->
     assert set(second) == _ANALYZE_DATA_KEYS
 
 
+def test_raytexuv_uses_tsb_pixel_coordinates_and_accepts_a_miss() -> None:
+    body = _body()
+    body["sequence_info"] = [
+        _frame(index=1, raytexuv=[2048, 0]),
+        _frame(index=2, raytexuv=None),
+    ]
+
+    response = _client().post(ANALYZE_SEQUENCE_PATH, json=body)
+
+    assert response.status_code == 200
+
+
+def test_raytexuv_rejects_out_of_range_pixel_coordinates() -> None:
+    body = _body()
+    body["sequence_info"] = [_frame(raytexuv=[2048.1, 0])]
+
+    assert _client().post(ANALYZE_SEQUENCE_PATH, json=body).status_code == 422
+
+
+def test_practical_scenario_id_is_not_coerced_to_learning_mode_one() -> None:
+    from trainer.demo_api.telemetry_contracts import AnalyzeSequenceRequest
+
+    request = AnalyzeSequenceRequest.model_validate(_body(scenario_id="1-R-ABC"))
+
+    assert request.resolved_mode_id is None
+    assert request.scenario_id == "1-R-ABC"
+
+
 def test_legacy_mode_id_must_not_conflict_with_scenario_id() -> None:
     assert _client().post(ANALYZE_SEQUENCE_PATH, json=_body(mode_id=2)).status_code == 422
     assert _client().post(

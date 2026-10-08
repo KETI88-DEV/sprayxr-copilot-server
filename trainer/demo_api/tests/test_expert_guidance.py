@@ -93,7 +93,7 @@ def test_tool_type_selects_the_blasting_profile(tmp_path: Path) -> None:
     _write_profile(tmp_path, process="blasting", speed=200.0, distance=600.0)
 
     guide = ExpertGuidanceEngine(tmp_path).evaluate(
-        _request(tool_type="blasting", speed=200.0, distance=600.0)
+        _request(tool_type="blasting_gun", speed=200.0, distance=600.0)
     )
 
     assert guide.speed.status == guide.distance.status == "ok"

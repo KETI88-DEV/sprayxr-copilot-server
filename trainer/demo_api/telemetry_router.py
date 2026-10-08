@@ -279,7 +279,10 @@ def create_telemetry_router(
         response_model=TelemetrySequenceResponse,
         tags=["2. 시퀀스 수집·피드백"],
         summary="2-1. 현재 시퀀스 텔레메트리 저장",
-        description="Trigger ON→OFF 한 번의 현재 시퀀스를 저장합니다. 누적 히트맵은 입력하지 않습니다.",
+        description=(
+            "Trigger ON→OFF 한 번의 현재 시퀀스를 저장합니다. "
+            "cur_sequence_heatmap이 포함된 경우 크롭 내 픽셀은 해당 시점의 전체 누적 두께입니다."
+        ),
     )
     async def telemetry_sequence(query: TelemetrySequenceRequest) -> JSONResponse:
         return await _handle(query, analyze=False)
@@ -294,7 +297,9 @@ def create_telemetry_router(
             "distance(near/ok/far), Zone 작업 순서와 도포 방향 판정을 구조화해 반환합니다. "
             "이상 판정은 같은 세션의 SSE 채널에도 한 번만 발행됩니다. 학습 모드는 scenario_id, "
             "스프레이/블라스팅 구분은 sequence_setting.tool_type에서 자동 선택합니다. "
-            "스프레이의 cur_sequence_heatmap은 서버가 세션·Zone별로 누적 상태를 비교하여 "
+            "스프레이의 cur_sequence_heatmap은 해당 시점 피도면의 전체 누적 두께입니다. "
+            "이미 누적된 값을 더하지 않고, 현재 시퀀스가 도포한 크롭 영역의 최신 절대 두께로 갱신하여 "
+
             "추가 도장/다음 Zone 이동/과도장 중단 여부를 coating_progress로 반환합니다."
         ),
     )

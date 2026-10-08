@@ -47,9 +47,11 @@ _TOOL_TYPE_ALIASES = {
     "blastgun": "blasting",
 }
 
+TexturePixelCoordinate = Annotated[float, Field(ge=0, le=2048)]
+
 
 def learning_mode_from_scenario(scenario_id: str) -> int | None:
-    """Return a 1~10 learning mode without mistaking practical A-1/1-A IDs.
+    """Return a 1~10 learning mode without coercing practical or Unit IDs.
 
     TSB's current sample sends a bare numeric scenario ID.  Named legacy values
     are retained for Swagger/demo compatibility, but practical scenarios are
@@ -88,6 +90,14 @@ class SequenceFrameIn(BaseModel):
     tool_pos_rot: dict[str, Any] | None = None
     skeleton_joints: dict[str, Any] = Field(default_factory=dict)
     gun_metrics: dict[str, Any] | None = None
+    raytexuv: tuple[TexturePixelCoordinate, TexturePixelCoordinate] | None = Field(
+        default=None,
+        description=(
+            "2048x2048 텍스처의 픽셀 좌표 [X,Y]. 원점은 좌하단이고 "
+            "X는 오른쪽, Y는 위쪽으로 증가합니다. 레이 미충돌은 null입니다."
+        ),
+        examples=[[1024, 768]],
+    )
 
 
 class TelemetrySequenceRequest(StrictModel):
@@ -121,11 +131,24 @@ class TelemetrySequenceRequest(StrictModel):
 
     session_id: Annotated[str, Field(min_length=1)]
     user_id: Annotated[str, Field(min_length=1)]
-    scenario_id: Annotated[str, Field(min_length=1)]
+    scenario_id: Annotated[
+        str,
+        Field(
+            min_length=1,
+            description=(
+                "session_id의 첫 `_` 앞 콘텐츠 식별자. 학습은 1~10, "
+                "실전은 1-R-A·1-V-AB·2-ABCDE, Unit은 Unit12 형식입니다."
+            ),
+            examples=["3", "1-R-A", "2-ABCDE", "Unit12"],
+        ),
+    ]
     # "1"~"39", 미지정·미판정은 "-1" (p.5)
     zone_id: Annotated[str, Field(min_length=1)]
     sequence_id: Annotated[str, Field(min_length=1)]
-    sequence_setting: dict[str, Any]
+    sequence_setting: Annotated[
+        dict[str, Any],
+        Field(description="도구 구분은 tool_type에 spray_gun 또는 blasting_gun을 사용합니다."),
+    ]
     sequence_info: list[SequenceFrameIn]
     sequence_result: dict[str, Any]
 
