@@ -115,6 +115,19 @@ def score_pose(
     body = store.load_body(session_key=session_id, sequence_id=sequence_id)
     if body is None:
         return _unavailable("sequence_not_found", sequence_id=sequence_id)
+    return score_body(body, sequence_id=sequence_id, mcp_base_url=mcp_base_url, transport=transport)
+
+
+def score_body(
+    body: dict[str, Any],
+    *,
+    sequence_id: str,
+    mcp_base_url: str,
+    transport: httpx.BaseTransport | None = None,
+) -> PoseQueryResult:
+    """시퀀스 본문 하나를 MCP 자세 엔진으로 채점한다. 질의(`pose_recomm`)와 세션 종합 분석(`sessions/complete`)이
+    같은 함수를 쓴다 — 같은 시퀀스가 두 경로에서 다른 점수를 받지 않게.
+    """
     # `analyze-sequence`가 붙인 분석 파라미터(`mode_id`)는 시퀀스 내용이 아니다. MCP 자세 엔진은 최상위 모르는 필드를
     # 거절하므로(422) 빼고 보낸다 — 빼지 않으면 벤더 경로의 모든 질의가 `engine_unavailable`이 된다(2026-10-08 샘플).
     body = {key: value for key, value in body.items() if key not in NON_CONTENT_FIELDS}

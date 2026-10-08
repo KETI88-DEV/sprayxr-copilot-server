@@ -148,6 +148,15 @@ class SequenceStore:
             logger.warning("stored sequence body is not JSON session=%s sequence=%s", session_key, sequence_id)
             return None
 
+    def sequence_ids(self, session_key: str) -> list[str]:
+        """세션의 저장된 시퀀스 id 전부(이름순). 세션 종합 분석이 쓴다."""
+        with self._guard:
+            rows = self._conn.execute(
+                "SELECT sequence_id FROM sequences WHERE session_key = ? ORDER BY sequence_id",
+                (session_key,),
+            ).fetchall()
+        return [str(row[0]) for row in rows]
+
     def latest_sequence_id(self, session_key: str) -> str | None:
         """`context`가 없을 때 쓸 가장 최근 시퀀스. 없으면 `None` — 지어내지 않는다."""
         with self._guard:
