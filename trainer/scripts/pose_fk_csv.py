@@ -28,6 +28,12 @@ LeftHand↔플래쉬)의 상대회전각 차이 — 세션 중앙값의 중앙�
 다른 리그(mixamo BVH)의 선언을 CSV에 옮긴 것이었다.
 
 채점은 이 경로를 타지 않는다. 실측 3점에서 하므로 FK가 틀려도 지표는 오염되지 않는다.
+
+**새 형식(2026-10-08 샘플부터).** 관절 열이 `{관절} Position X (World)`·`{관절} Rotation X (World)` —
+월드 위치와 월드 회전 — 로 바뀌었다. 예전 바인드 오프셋·로컬 회전 열은 없다. 이 형식에서는 둘을 역산한다:
+오프셋 = W_parent^T (p_child − p_parent), 로컬 회전 = W_parent^T W_child. 샘플 1세션에서 역산 오프셋의 프레임 간
+표준편차가 0이고, 역산값으로 FK를 돌리면 월드 위치가 오차 0으로 재현됐다 — 위 규약(YXZ, 부모 기준 합성)을
+정답 좌표로 확인한 것이다. 형식은 `is_world_format`이 열 이름으로 가린다.
 """
 
 from __future__ import annotations
@@ -45,13 +51,66 @@ IDENTITY: Final[Matrix] = rotation_math.IDENTITY
 ROOT: Final = "Pelvis"
 
 
+WORLD_SUFFIX: Final = " (World)"
+
+
+def is_world_format(row: Mapping[str, str]) -> bool:
+    """새 형식(관절 월드 위치·회전 열)인가. 루트 회전 열 하나로 가린다."""
+    return f"{simulator_csv.JOINT_COLUMNS[0]} Rotation X{WORLD_SUFFIX}" in row
+
+
+def _world(row: Mapping[str, str], column: str, kind: str) -> Vec3:
+    x, y, z = (float(row[f"{column} {kind} {axis}{WORLD_SUFFIX}"]) for axis in "XYZ")
+    return (x, y, z)
+
+
+def world_rotations(row: Mapping[str, str]) -> dict[str, Matrix]:
+    """새 형식의 관절 **월드** 회전. 규약은 로컬 회전과 같은 `measured_pose`의 것이다."""
+    out: dict[str, Matrix] = {}
+    for column in simulator_csv.JOINT_COLUMNS:
+        try:
+            out[simulator_csv.JOINT_KEYS[column]] = euler_matrix(_world(row, column, "Rotation"))
+        except (KeyError, ValueError):
+            continue
+    return out
+
+
+def world_positions(row: Mapping[str, str]) -> dict[str, Vec3]:
+    """새 형식의 관절 **월드** 위치(m)."""
+    out: dict[str, Vec3] = {}
+    for column in simulator_csv.JOINT_COLUMNS:
+        try:
+            out[simulator_csv.JOINT_KEYS[column]] = _world(row, column, "Position")
+        except (KeyError, ValueError):
+            continue
+    return out
+
+
+def derived_offsets(row: Mapping[str, str]) -> dict[str, Vec3]:
+    """새 형식에서 역산한 부모 기준 오프셋 W_parent^T (p_child − p_parent). Pelvis는 싣지 않는다."""
+    rotations = world_rotations(row)
+    positions = world_positions(row)
+    out: dict[str, Vec3] = {}
+    for parent, child in simulator_csv.BONES:
+        if parent in rotations and parent in positions and child in positions:
+            p, c = positions[parent], positions[child]
+            out[child] = rotation_math.matvec(
+                rotation_math.transpose(rotations[parent]), (c[0] - p[0], c[1] - p[1], c[2] - p[2])
+            )
+    return out
+
+
 def bind_offsets(row: dict[str, str]) -> dict[str, Vec3]:
     """부모 기준 바인드 오프셋. **Pelvis는 싣지 않는다.**
 
     Pelvis를 뺀 19관절의 Position은 프레임 불변인 부모 기준 마디 벡터다. Pelvis의
     Position은 프레임마다 움직이고 월드 좌표도 아니라(모듈 독스트링) 오프셋이 아니다 —
     FK는 루트를 원점에 두므로 이 값이 필요 없고, 실어 두면 다음 사람이 상수로 읽는다.
+
+    새 형식(`is_world_format`)이면 월드 위치·회전에서 역산한다(`derived_offsets`).
     """
+    if is_world_format(row):
+        return derived_offsets(row)
     offsets: dict[str, Vec3] = {}
     for column in simulator_csv.JOINT_COLUMNS:
         key = simulator_csv.JOINT_KEYS[column]
@@ -81,7 +140,15 @@ def forward_kinematics_with_rotations(
     회전을 맞춰 루트 방향을 푼다.
     """
     local: dict[str, Matrix] = {}
-    for column in simulator_csv.JOINT_COLUMNS:
+    if is_world_format(row):
+        # 새 형식: 로컬 회전 = W_parent^T W_child, 루트는 월드 회전 그대로.
+        measured = world_rotations(row)
+        if ROOT in measured:
+            local[ROOT] = measured[ROOT]
+        for parent, child in simulator_csv.BONES:
+            if parent in measured and child in measured:
+                local[child] = rotation_math.matmul(rotation_math.transpose(measured[parent]), measured[child])
+    for column in ([] if local else simulator_csv.JOINT_COLUMNS):
         key = simulator_csv.JOINT_KEYS[column]
         try:
             x, y, z = simulator_csv.vec3(row, column, "Rotation")

@@ -50,6 +50,11 @@ SHOULDER_WIDTH_MAX_M: Final = 0.070
 # 1.0 m 하한을 쓰면 47.71%가, 1.5 m 상한을 쓰면 100%가 거부된다.
 HEIGHT_MIN_M: Final = 0.35
 HEIGHT_MAX_M: Final = 1.50
+# 2026-10-08: 아바타가 바뀌어 몸통이 길어졌다(머리↔발끝 선 자세 1.6 m 안팎, 뼈 길이 합 1.73 m). 고정 상한 1.50 m가
+# 새 아바타의 정상 선 자세 20/32 시퀀스를 거절했다. 호출자가 **골격이 맞춰진 리그**의 뼈 길이 합(발끝→…→머리, 그 몸의
+# 물리적 최댓값)을 알면 `height_max_m`으로 넘긴다 — 같은 프레임에서 잰 뼈 길이로 상한을 만들면 삼각부등식 때문에
+# 절대 넘을 수 없어 검사가 무의미해진다. 여유는 `HEIGHT_CHAIN_SLACK`. 모르면 위 상수(예전 리그)를 쓴다.
+HEIGHT_CHAIN_SLACK: Final = 1.02
 
 # R4: 프레임 간 변화 폭이 이보다 작으면 "얼었다"고 본다. 실물 샘플의 `head`가 정확히 0.0이다.
 FROZEN_RANGE_M: Final = 1e-4
@@ -199,6 +204,7 @@ def evaluate(
     *,
     frozen_before: frozenset[str] = frozenset(),
     registered_bone_lengths: Mapping[str, float] | None = None,
+    height_max_m: float | None = None,
 ) -> GateResult:
     """시퀀스 하나의 입력 품질을 판정한다.
 
@@ -298,7 +304,9 @@ def evaluate(
     if heights:
         height = sum(heights) / len(heights)
         measurements["height_m"] = height
-        if not HEIGHT_MIN_M <= height <= HEIGHT_MAX_M:
+        height_max = HEIGHT_MAX_M if height_max_m is None else height_max_m
+        measurements["height_max_m"] = height_max
+        if not HEIGHT_MIN_M <= height <= height_max:
             return GateResult(
                 "reject",
                 tuple(dict.fromkeys([*reasons, "skeleton_height_out_of_range"])),
