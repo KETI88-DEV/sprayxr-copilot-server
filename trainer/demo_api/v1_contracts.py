@@ -56,16 +56,36 @@ class SessionStartRequest(StrictModel):
     model_config = ConfigDict(
         extra="forbid",
         json_schema_extra={"example": {
-            "session_id": "TSB-DEMO-001", "user_id": "W-017",
-            "scenario_id": "training-mode-3", "started_at": "2026-10-06T10:00:00Z",
-            "worker": {"skill_level": "novice", "handedness": "right"},
+            "session_id": "3_11000346_1", "user_id": "1234",
+            "scenario_id": "3", "started_at": "2026-10-08T01:05:44.726Z",
+            "worker": {"skill_level": "novice"},
         }},
     )
 
-    session_id: Annotated[str, Field(min_length=1)]
-    user_id: Annotated[str, Field(min_length=1)]
-    scenario_id: Annotated[str, Field(min_length=1)]
-    started_at: Annotated[str, Field(min_length=1)]
+    session_id: Annotated[
+        str,
+        Field(
+            min_length=1,
+            description=(
+                "TSB 시뮬레이터가 생성한 훈련 세션 식별자입니다. 완료 시 첨부되는 "
+                "CSV 파일명에서 확장자를 뺀 값과 동일하게 사용합니다."
+            ),
+            examples=["3_11000346_1"],
+        ),
+    ]
+    user_id: Annotated[str, Field(min_length=1, description="훈련자 식별자", examples=["1234"])]
+    scenario_id: Annotated[
+        str,
+        Field(
+            min_length=1,
+            description=(
+                "session_id의 첫 '_' 앞 콘텐츠 식별자입니다. 학습은 1~10, 실전1은 "
+                "1-R-A·1-V-AB·1-E-ABC, 실전2는 2-A·2-ABCDE, Unit은 Unit12 형식입니다."
+            ),
+            examples=["3", "1-R-A", "2-ABCDE", "Unit12"],
+        ),
+    ]
+    started_at: Annotated[str, Field(min_length=1, description="세션 시작 시각(ISO 8601 UTC)", examples=["2026-10-08T01:05:44.726Z"])]
     worker: WorkerProfile
 
 
@@ -75,16 +95,15 @@ class SessionEndRequest(StrictModel):
     model_config = ConfigDict(
         extra="forbid",
         json_schema_extra={"example": {
-            "session_id": "TSB-DEMO-001", "user_id": "W-017",
-            "scenario_id": "training-mode-3", "ended_at": "2026-10-06T10:15:00Z",
-            "worker": {"skill_level": "novice", "handedness": "right"},
+            "session_id": "3_11000346_1", "user_id": "1234",
+            "scenario_id": "3", "ended_at": "2026-10-08T01:08:11.671Z",
         }},
     )
 
-    session_id: Annotated[str, Field(min_length=1)]
-    user_id: Annotated[str, Field(min_length=1)]
-    scenario_id: Annotated[str, Field(min_length=1)]
-    ended_at: Annotated[str, Field(min_length=1)]
+    session_id: Annotated[str, Field(min_length=1, description="sessions/start에서 사용한 동일 세션 식별자", examples=["3_11000346_1"])]
+    user_id: Annotated[str, Field(min_length=1, description="sessions/start에서 사용한 동일 훈련자 식별자", examples=["1234"])]
+    scenario_id: Annotated[str, Field(min_length=1, description="sessions/start에서 사용한 동일 콘텐츠 식별자", examples=["3"])]
+    ended_at: Annotated[str, Field(min_length=1, description="세션 종료 시각(ISO 8601 UTC)", examples=["2026-10-08T01:08:11.671Z"])]
     worker: WorkerProfilePartial | None = None
 
 
@@ -97,7 +116,7 @@ class UserCreateRequest(StrictModel):
     model_config = ConfigDict(
         extra="forbid",
         json_schema_extra={"example": {
-            "user_id": "W-017", "name": "테스트 훈련자", "skill_level": "novice",
+            "user_id": "1234", "name": "테스트 훈련자", "skill_level": "novice",
             "dominant_hand": "right", "age": 35, "gender": "male",
         }},
     )
