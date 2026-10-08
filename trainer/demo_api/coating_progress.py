@@ -9,29 +9,42 @@ import json
 import math
 import threading
 from collections import OrderedDict
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 from PIL import Image, UnidentifiedImageError
 
 from trainer.demo_api.telemetry_contracts import AnalyzeSequenceRequest, CoatingProgress
 
-_MAX_SESSIONS = 256
+_MAX_SESSIONS = 16
+
+
+@dataclass(frozen=True)
+class _DecodedCrop:
+    x_indices: np.ndarray
+    y_indices: np.ndarray
+    thickness_um: np.ndarray
+    valid: np.ndarray
 
 
 class CoatingProgressEngine:
-    """Accumulate current-sequence crops and compare them with expert Zone targets.
+    """Merge TSB absolute cumulative crops and compare them with expert targets.
 
-    The input contract supplies one trigger ON→OFF heat map. State is therefore
-    held per session and Zone. Blasting is deliberately excluded because its blue
-    channel represents a different physical quantity than spray coating thickness.
+    ``cur_sequence_heatmap`` is a crop of the area touched by the current
+    sequence, but every encoded pixel is the surface's absolute cumulative
+    thickness at that time. Therefore a later crop overwrites the same atlas
+    pixels; it must never be added to the preceding crop. State is isolated per
+    training session. Blasting is excluded because its blue channel represents a
+    different physical quantity than spray coating thickness.
     """
 
     def __init__(self, reference_root: Path) -> None:
         self._root = Path(reference_root)
         self._profiles: dict[tuple[str, int], tuple[tuple[int, int], dict[str, Any]]] = {}
         self._sessions: OrderedDict[
-            tuple[str, str, int], dict[tuple[int, str], dict[str, float]]
+            tuple[str, str, int], dict[int, np.ndarray]
         ] = OrderedDict()
         self._results: dict[tuple[str, str, int, str], CoatingProgress] = {}
         self._guard = threading.Lock()
@@ -108,14 +121,13 @@ class CoatingProgressEngine:
         return value if math.isfinite(value) and value > 0 else None
 
     @classmethod
-    def _crop_cells(
+    def _decode_crop(
         cls,
         item: dict[str, Any],
         *,
         atlas_width: int,
         atlas_height: int,
-        grid_size: int,
-    ) -> tuple[dict[str, float] | None, str | None]:
+    ) -> tuple[_DecodedCrop | None, str | None]:
         if item.get("encoding") != "png;base64":
             return None, "heatmap_encoding_unsupported"
         scale_um = cls._scale(item.get("format"))
@@ -140,25 +152,28 @@ class CoatingProgressEngine:
         except (KeyError, TypeError, ValueError, binascii.Error, UnidentifiedImageError, OSError):
             return None, "heatmap_invalid"
 
-        cell_area = (atlas_width / grid_size) * (atlas_height / grid_size)
-        pixel_area = (width / img_width) * (height / img_height)
-        sums: dict[str, float] = {}
-        for row in range(img_height):
-            local_y = img_height - 1 - row
-            gy = int((y0 + (local_y + 0.5) * height / img_height) / atlas_height * grid_size)
-            if not 0 <= gy < grid_size:
-                continue
-            for column in range(img_width):
-                # getdata is row-major; obtain the current row pixel directly.
-                red, green, _blue = image.getpixel((column, row))
-                thickness = (red / 255.0 + green / 65025.0) * scale_um
-                if thickness <= 0:
-                    continue
-                gx = int((x0 + (column + 0.5) * width / img_width) / atlas_width * grid_size)
-                if 0 <= gx < grid_size:
-                    key = f"{gx}:{gy}"
-                    sums[key] = sums.get(key, 0.0) + thickness * pixel_area / cell_area
-        return sums, None
+        pixels = np.asarray(image, dtype=np.uint16)
+        thickness = (
+            pixels[:, :, 0].astype(np.float32) / 255.0
+            + pixels[:, :, 1].astype(np.float32) / 65025.0
+        ) * np.float32(scale_um)
+        # TSB's B8 channel is the validity/alpha channel for the packed RG16
+        # thickness. Black pixels outside the painted crop must not erase an
+        # earlier absolute observation.
+        valid = pixels[:, :, 2] > 0
+        x_indices = np.floor(
+            x0 + (np.arange(img_width, dtype=np.float64) + 0.5) * width / img_width
+        ).astype(np.int64)
+        # PNG rows are top-down while the atlas uses a bottom-left origin.
+        y_indices = np.floor(
+            y0
+            + (np.arange(img_height - 1, -1, -1, dtype=np.float64) + 0.5)
+            * height
+            / img_height
+        ).astype(np.int64)
+        valid &= (x_indices[np.newaxis, :] >= 0) & (x_indices[np.newaxis, :] < atlas_width)
+        valid &= (y_indices[:, np.newaxis] >= 0) & (y_indices[:, np.newaxis] < atlas_height)
+        return _DecodedCrop(x_indices, y_indices, thickness, valid), None
 
     @staticmethod
     def _next_zone(profile: dict[str, Any], map_num: int, zone_id: str) -> str | None:
@@ -208,22 +223,20 @@ class CoatingProgressEngine:
             if min(atlas_width, atlas_height, grid_size) <= 0 or not isinstance(target_cells, dict):
                 return self._unavailable(request.zone_id, "coating_reference_invalid")
 
-            delta: dict[str, float] = {}
+            decoded: list[_DecodedCrop] = []
             matching = 0
             for item in heatmaps:
                 if not isinstance(item, dict) or int(item.get("map_num", 1)) != map_num:
                     continue
                 matching += 1
-                cells, decode_reason = self._crop_cells(
+                crop, decode_reason = self._decode_crop(
                     item,
                     atlas_width=atlas_width,
                     atlas_height=atlas_height,
-                    grid_size=grid_size,
                 )
-                if cells is None:
+                if crop is None:
                     return self._unavailable(request.zone_id, decode_reason or "heatmap_invalid")
-                for key, value in cells.items():
-                    delta[key] = delta.get(key, 0.0) + value
+                decoded.append(crop)
             if matching == 0:
                 return self._unavailable(request.zone_id, "heatmap_map_unavailable")
 
@@ -233,9 +246,16 @@ class CoatingProgressEngine:
             while len(self._sessions) > _MAX_SESSIONS:
                 expired, _ = self._sessions.popitem(last=False)
                 self._results = {key: value for key, value in self._results.items() if key[:3] != expired}
-            accumulated = session.setdefault((map_num, request.zone_id), {})
-            for key, value in delta.items():
-                accumulated[key] = accumulated.get(key, 0.0) + value
+            surface = session.get(map_num)
+            if surface is None or surface.shape != (atlas_height, atlas_width):
+                surface = np.zeros((atlas_height, atlas_width), dtype=np.float32)
+                session[map_num] = surface
+            for crop in decoded:
+                rows, columns = np.nonzero(crop.valid)
+                if rows.size:
+                    surface[crop.y_indices[rows], crop.x_indices[columns]] = crop.thickness_um[
+                        rows, columns
+                    ]
 
             completion_values: list[float] = []
             covered = 0
@@ -250,9 +270,23 @@ class CoatingProgressEngine:
                     continue
                 if not math.isfinite(q1) or q1 <= 0 or not math.isfinite(q3):
                     continue
-                actual = accumulated.get(key, 0.0)
+                try:
+                    gx_text, gy_text = key.split(":", 1)
+                    gx, gy = int(gx_text), int(gy_text)
+                except (AttributeError, TypeError, ValueError):
+                    continue
+                left = math.floor(gx * atlas_width / grid_size)
+                right = math.ceil((gx + 1) * atlas_width / grid_size)
+                bottom = math.floor(gy * atlas_height / grid_size)
+                top = math.ceil((gy + 1) * atlas_height / grid_size)
+                if left >= right or bottom >= top:
+                    continue
+                actual = float(surface[bottom:top, left:right].mean())
                 completion_values.append(min(actual / q1, 1.0))
-                covered += int(actual >= q1)
+                # RG16 at scale_um=20000 has about 0.31 um quantization. Allow
+                # a 0.5 um boundary tolerance so an encoded 100 um target does
+                # not become 99.96 um and incorrectly miss coverage.
+                covered += int(actual >= q1 - 0.5)
                 upper = q3 + max(q3 - q1, q3 * 0.1, 5.0)
                 overpainted += int(actual > upper)
             if not completion_values:
