@@ -8,14 +8,20 @@ from trainer.demo_api.expert_guidance import ExpertGuidanceEngine
 from trainer.demo_api.telemetry_contracts import AnalyzeSequenceRequest
 
 
-def _write_profile(root: Path, *, speed: float = 100.0, distance: float = 400.0) -> Path:
-    target = root / "generated" / "profiles" / "spray" / "learning" / "mode_03.json"
+def _write_profile(
+    root: Path,
+    *,
+    process: str = "spray",
+    speed: float = 100.0,
+    distance: float = 400.0,
+) -> Path:
+    target = root / "generated" / "profiles" / process / "learning" / "mode_03.json"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(
         json.dumps(
             {
                 "schema_version": 1,
-                "identity": {"mode_id": 3, "process": "spray", "content_type": "learning"},
+                "identity": {"mode_id": 3, "process": process, "content_type": "learning"},
                 "quality": {"status": "accepted", "session_count": 2},
                 "aggregate": {
                     "zones": {
@@ -46,6 +52,9 @@ def _request(
     zone_id: str = "1",
     speed: float | None = 100.0,
     distance: float | None = 400.0,
+    tool_type: str | None = "spray_gun",
+    scenario_id: str = "3",
+    mode_id: int | None = None,
     result_overrides: dict[str, object] | None = None,
 ) -> AnalyzeSequenceRequest:
     result: dict[str, object] = {}
@@ -54,17 +63,60 @@ def _request(
     if distance is not None:
         result["avg_distance_mm"] = distance
     result.update(result_overrides or {})
+    sequence_setting = {"tool_type": tool_type} if tool_type is not None else {}
     return AnalyzeSequenceRequest(
         session_id=session_id,
         user_id="U-1",
-        scenario_id="3",
+        scenario_id=scenario_id,
         zone_id=zone_id,
         sequence_id=f"Q-{session_id}-{speed}-{distance}",
-        sequence_setting={"tool_type": "spray_gun"},
+        sequence_setting=sequence_setting,
         sequence_info=[],
         sequence_result=result,
-        mode_id=3,
+        mode_id=mode_id,
     )
+
+
+def test_scenario_id_selects_the_learning_profile_without_mode_id(tmp_path: Path) -> None:
+    _write_profile(tmp_path)
+
+    request = _request()
+    guide = ExpertGuidanceEngine(tmp_path).evaluate(request)
+
+    assert request.mode_id is None
+    assert request.resolved_mode_id == 3
+    assert request.process_type == "spray"
+    assert guide.speed.status == guide.distance.status == "ok"
+
+
+def test_tool_type_selects_the_blasting_profile(tmp_path: Path) -> None:
+    _write_profile(tmp_path, process="blasting", speed=200.0, distance=600.0)
+
+    guide = ExpertGuidanceEngine(tmp_path).evaluate(
+        _request(tool_type="blasting", speed=200.0, distance=600.0)
+    )
+
+    assert guide.speed.status == guide.distance.status == "ok"
+
+
+def test_established_tr_learning_id_selects_the_profile(tmp_path: Path) -> None:
+    _write_profile(tmp_path)
+
+    request = _request(scenario_id="TR-L03")
+    guide = ExpertGuidanceEngine(tmp_path).evaluate(request)
+
+    assert request.resolved_mode_id == 3
+    assert guide.speed.status == guide.distance.status == "ok"
+
+
+def test_legacy_explicit_mode_without_tool_type_keeps_the_spray_default(tmp_path: Path) -> None:
+    _write_profile(tmp_path)
+
+    request = _request(scenario_id="legacy-scene", mode_id=3, tool_type=None)
+    guide = ExpertGuidanceEngine(tmp_path).evaluate(request)
+
+    assert request.process_type == "spray"
+    assert guide.speed.status == guide.distance.status == "ok"
 
 
 def test_classifies_speed_and_distance_against_the_zone_profile(tmp_path: Path) -> None:

@@ -197,16 +197,20 @@ def create_v1_router(
     async def sessions_complete(
         session_id: Annotated[str, Form(examples=["TSB-DEMO-001"])],
         user_id: Annotated[str, Form(examples=["W-017"])],
-        scenario_id: Annotated[str, Form(examples=["training-mode-3"])],
+        scenario_id: Annotated[str, Form(examples=["3"])],
         vr_score: Annotated[int, Form(ge=0, le=100, examples=[82])],
         is_pass: Annotated[bool, Form(examples=[True])],
         avg_thickness_um: Annotated[float, Form(ge=0, examples=[250.0])],
-        avg_speed_mms: Annotated[float, Form(ge=0, examples=[480.0])],
-        avg_distance_mm: Annotated[float, Form(ge=0, examples=[255.0])],
         telemetry_csv: Annotated[UploadFile, File()],
+        avg_speed_mms: Annotated[float | None, Form(ge=0, examples=[480.0])] = None,
+        avg_distance_mm: Annotated[float | None, Form(ge=0, examples=[255.0])] = None,
         height_map_image: Annotated[UploadFile | None, File()] = None,
     ) -> JSONResponse:
-        """multipart/form-data (p.12). `report_id`를 부여하고 `pending`으로 시작한다."""
+        """최신 TSB multipart 전송을 받고 `report_id`를 부여해 `pending`으로 시작한다.
+
+        세션 평균 속도·이격거리는 2026-10-08 샘플에 없으므로 선택값이다. 시퀀스별
+        속도·이격거리 평가는 `/copilot/analyze-sequence` 입력을 사용한다.
+        """
         csv_bytes = len(await telemetry_csv.read())
         image_bytes = len(await height_map_image.read()) if height_map_image is not None else None
         completion = await to_thread.run_sync(

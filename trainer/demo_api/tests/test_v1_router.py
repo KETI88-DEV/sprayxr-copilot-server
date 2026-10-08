@@ -180,6 +180,30 @@ def test_complete_assigns_a_report_id_and_starts_pending() -> None:
     assert data["height_map_image_bytes"] is None
 
 
+def test_complete_accepts_the_exact_latest_tsb_form_without_speed_or_distance() -> None:
+    client, _ = _app()
+    form = {
+        "session_id": "3_11000346_1",
+        "user_id": "11000346",
+        "scenario_id": "3",
+        "vr_score": "88",
+        "is_pass": "true",
+        "avg_thickness_um": "125.5",
+    }
+
+    response = client.post(
+        "/api/v1/sessions/complete",
+        data=form,
+        files={
+            "telemetry_csv": ("3_11000346_1.csv.gz", b"gzip-bytes", "application/gzip"),
+            "height_map_image": ("Map01.png", b"png-bytes", "image/png"),
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["report_status"] == "pending"
+
+
 def test_complete_rejects_a_vr_score_outside_the_documented_range() -> None:
     """Given vr_score outside 0~100, When posted, Then it is 422 (p.12)."""
     client, _ = _app()

@@ -42,27 +42,28 @@ _MESSAGES = {
 class ExpertGuidanceEngine:
     def __init__(self, reference_root: Path) -> None:
         self._root = Path(reference_root)
-        self._profiles: dict[int, _CachedProfile] = {}
-        self._states: dict[tuple[str, int, str, str], _StableStatus] = {}
+        self._profiles: dict[tuple[str, int], _CachedProfile] = {}
+        self._states: dict[tuple[str, str, int, str, str], _StableStatus] = {}
         self._guard = threading.Lock()
 
     @property
     def reference_root(self) -> Path:
         return self._root
 
-    def _profile_path(self, mode_id: int) -> Path:
+    def _profile_path(self, process: str, mode_id: int) -> Path:
         return (
             self._root
             / "generated"
             / "profiles"
-            / "spray"
+            / process
             / "learning"
             / f"mode_{mode_id:02d}.json"
         )
 
-    def _load_profile(self, mode_id: int) -> tuple[dict[str, Any] | None, str | None]:
-        path = self._profile_path(mode_id)
-        cached = self._profiles.get(mode_id)
+    def _load_profile(self, process: str, mode_id: int) -> tuple[dict[str, Any] | None, str | None]:
+        key = (process, mode_id)
+        path = self._profile_path(process, mode_id)
+        cached = self._profiles.get(key)
         try:
             stat = path.stat()
             stamp = (stat.st_mtime_ns, stat.st_size)
@@ -72,7 +73,7 @@ class ExpertGuidanceEngine:
             zones = payload["aggregate"]["zones"]
             if not isinstance(zones, dict):
                 raise ValueError("aggregate.zones must be an object")
-            self._profiles[mode_id] = _CachedProfile(stamp=stamp, payload=payload)
+            self._profiles[key] = _CachedProfile(stamp=stamp, payload=payload)
             return payload, None
         except FileNotFoundError:
             return (cached.payload, None) if cached is not None else (None, "reference_unavailable")
@@ -149,7 +150,7 @@ class ExpertGuidanceEngine:
         padding = max((q3 - q1) * 0.25, minimum)
         return max(0.0, q1 - padding), q3 + padding
 
-    def _stabilize(self, key: tuple[str, int, str, str], raw: str) -> str:
+    def _stabilize(self, key: tuple[str, str, int, str, str], raw: str) -> str:
         state = self._states.get(key)
         if state is None:
             self._states[key] = _StableStatus(stable=raw)
@@ -193,12 +194,21 @@ class ExpertGuidanceEngine:
             raw = "slow" if value < lower else "fast" if value > upper else "ok"
         else:
             raw = "near" if value < lower else "far" if value > upper else "ok"
-        stable = self._stabilize((request.session_id, request.mode_id, request.zone_id, metric), raw)
+        mode_id = request.resolved_mode_id
+        process = request.process_type
+        if mode_id is None or process is None:
+            return self._unavailable("reference_context_unavailable")
+        stable = self._stabilize((request.session_id, process, mode_id, request.zone_id, metric), raw)
         return GuideItem(status=stable, message=_MESSAGES[stable], available=True, reason=None)
 
     def evaluate(self, request: AnalyzeSequenceRequest) -> SequenceGuide:
         with self._guard:
-            profile, profile_reason = self._load_profile(request.mode_id)
+            mode_id = request.resolved_mode_id
+            process = request.process_type
+            if mode_id is None or process is None:
+                unavailable = self._unavailable("reference_context_unavailable")
+                return SequenceGuide(speed=unavailable, distance=unavailable.model_copy())
+            profile, profile_reason = self._load_profile(process, mode_id)
             if profile is None:
                 unavailable = self._unavailable(profile_reason or "reference_unavailable")
                 return SequenceGuide(speed=unavailable, distance=unavailable.model_copy())

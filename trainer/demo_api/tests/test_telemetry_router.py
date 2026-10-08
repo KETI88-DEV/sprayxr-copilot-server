@@ -106,19 +106,23 @@ def test_same_body_twice_is_a_duplicate_and_counts_no_frames() -> None:
     # 두 번째는 다시 채점하지 않는다 — 같은 시퀀스를 두 번 누적하면 안 된다.
 
 
-def test_analyze_sequence_is_its_own_endpoint_and_takes_mode_id() -> None:
-    """Given the spec's second endpoint, When posted, Then it accepts mode_id.
-
-    명세서 p.6-7: 궤적 비교·원포인트 레슨용 별개 엔드포인트이고 mode_id(1~10)가 더 붙는다.
-    같은 본문을 둘에 보내는 것이 설계이므로 두 번째 도착은 duplicate 다.
-    """
+def test_analyze_sequence_uses_the_same_eight_keys_as_the_latest_tsb_sample() -> None:
+    """The 2026-10-08 TSB body omits mode_id; scenario_id is the mode source."""
     client = _client()
     first = client.post(URL, json=_body()).json()["data"]
-    second = client.post(ANALYZE_SEQUENCE_PATH, json=_body(mode_id=3)).json()["data"]
+    second = client.post(ANALYZE_SEQUENCE_PATH, json=_body()).json()["data"]
 
     assert first["sequence_data_ack"]["stored"] is True
     assert second["sequence_data_ack"]["duplicate"] is True
     assert set(second) == _ANALYZE_DATA_KEYS
+
+
+def test_legacy_mode_id_must_not_conflict_with_scenario_id() -> None:
+    assert _client().post(ANALYZE_SEQUENCE_PATH, json=_body(mode_id=2)).status_code == 422
+    assert _client().post(
+        ANALYZE_SEQUENCE_PATH,
+        json=_body(scenario_id="TR-L01", mode_id=2),
+    ).status_code == 422
 
 
 class _GuidanceStub:
@@ -143,7 +147,7 @@ def test_analyze_sequence_always_returns_structured_speed_and_distance_guide() -
 
     data = _client(guidance_engine=stub).post(
         ANALYZE_SEQUENCE_PATH,
-        json=_body(mode_id=3),
+        json=_body(scenario_id="3"),
     ).json()["data"]
 
     assert set(data) == _ANALYZE_DATA_KEYS
@@ -162,7 +166,7 @@ def test_telemetry_sequence_contract_does_not_gain_the_analyze_guide() -> None:
 
 
 def test_analyze_without_reference_returns_explicitly_unavailable_guide() -> None:
-    data = _client().post(ANALYZE_SEQUENCE_PATH, json=_body(mode_id=3)).json()["data"]
+    data = _client().post(ANALYZE_SEQUENCE_PATH, json=_body(scenario_id="3")).json()["data"]
 
     assert data["guide"]["speed"] == {
         "status": None,
@@ -177,8 +181,8 @@ def test_duplicate_analyze_returns_cached_guide_without_advancing_smoothing_stat
     stub = _GuidanceStub(_guide(speed="ok", distance="ok"))
     client = _client(guidance_engine=stub)
 
-    first = client.post(ANALYZE_SEQUENCE_PATH, json=_body(mode_id=3)).json()["data"]
-    second = client.post(ANALYZE_SEQUENCE_PATH, json=_body(mode_id=3)).json()["data"]
+    first = client.post(ANALYZE_SEQUENCE_PATH, json=_body(scenario_id="3")).json()["data"]
+    second = client.post(ANALYZE_SEQUENCE_PATH, json=_body(scenario_id="3")).json()["data"]
 
     assert first["guide"] == second["guide"]
     assert second["sequence_data_ack"]["duplicate"] is True

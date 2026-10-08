@@ -62,7 +62,7 @@ _RESET_CONTEXT = _test_context(
         "server_generated": {
             "user_id": "SWAGGER-DEMO-a1b2c3d4",
             "session_id": "SWAGGER-SESSION-a1b2c3d4",
-            "scenario_id": "training-mode-1",
+            "scenario_id": "1",
         },
     },
     "사용자가 입력한 값은 없으며 서버가 모의연동 전용 사용자·세션 식별자를 자동 생성합니다.",
@@ -75,7 +75,7 @@ _START_CONTEXT = _test_context(
         "body": {
             "user_id": "SWAGGER-DEMO-a1b2c3d4",
             "session_id": "SWAGGER-SESSION-a1b2c3d4",
-            "scenario_id": "training-mode-1",
+            "scenario_id": "1",
             "worker": {"skill_level": "novice", "handedness": "right"},
         },
     },
@@ -87,11 +87,14 @@ _SEQUENCE_INPUT = {
     "equivalent_real_api": "POST /api/v1/copilot/analyze-sequence",
     "session_id": "SWAGGER-SESSION-a1b2c3d4",
     "user_id": "SWAGGER-DEMO-a1b2c3d4",
-    "scenario_id": "training-mode-1",
+    "scenario_id": "1",
     "zone_id": "1:1",
     "sequence_id": "SWAGGER-SEQUENCE-a1b2c3d4",
-    "mode_id": 1,
-    "sequence_setting": {"target_speed_mms": 500, "target_distance_mm": 300},
+    "sequence_setting": {
+        "tool_type": "spray_gun",
+        "target_speed_mms": 500,
+        "target_distance_mm": 300,
+    },
     "sequence_info": [
         {
             "index": 0,
@@ -143,7 +146,7 @@ class _DemoRun:
     run_id: str
     user_id: str
     session_id: str
-    scenario_id: str = "training-mode-1"
+    scenario_id: str = "1"
     started: bool = False
     report_id: str | None = None
 
@@ -199,8 +202,11 @@ class GuidedWorkflow:
                 scenario_id=run.scenario_id,
                 zone_id="1:1",
                 sequence_id=f"SWAGGER-SEQUENCE-{run.run_id}",
-                mode_id=1,
-                sequence_setting={"target_speed_mms": 500, "target_distance_mm": 300},
+                sequence_setting={
+                    "tool_type": "spray_gun",
+                    "target_speed_mms": 500,
+                    "target_distance_mm": 300,
+                },
                 sequence_info=[
                     {
                         "index": 0,
@@ -262,7 +268,7 @@ def create_guided_workflow_router(
         summary="0-0. 모의연동 초기화 — 가장 먼저 누르세요",
         description=(
             "입력값 없이 새 모의 훈련자와 세션 식별자를 준비합니다. 실제 훈련 데이터는 삭제하지 않습니다.\n\n"
-            "### 자동 사용 입력\n사용자 입력은 없고 `user_id`, `session_id`, `scenario_id=training-mode-1`을 서버가 생성합니다.\n\n"
+            "### 자동 사용 입력\n사용자 입력은 없고 `user_id`, `session_id`, `scenario_id=1`을 서버가 생성합니다.\n\n"
             "### 결과 읽는 법\n응답의 `data.test_context.input_used`에서 생성값을 확인하고 `next_endpoint`를 따라가세요."
         ),
         responses=_swagger_response({"test_context": _RESET_CONTEXT, "workflow_status": "ready", "step": 0,

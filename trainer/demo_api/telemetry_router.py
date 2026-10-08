@@ -6,8 +6,8 @@
   p.4 는 여기에 "도막 두께 및 궤적 평가"를 걸고 **자세는 걸지 않는다**. 자세 유사도 비교는
   `copilot/query` 의 `pose_recomm` 이 `context` 로 시퀀스를 가리켜 수행한다(p.9) —
   이 모듈의 이전 판이 자세를 여기서 채점한 것은 틀렸다
-* `POST /api/v1/copilot/analyze-sequence` (p.6-7) — 1회 패스 궤적 비교 + 원포인트 레슨.
-  본문에 `mode_id`(선택 1~10)가 더 붙는다
+* `POST /api/v1/copilot/analyze-sequence` — 1회 패스 궤적 비교 + 원포인트 레슨.
+  최신 TSB 전송처럼 `scenario_id`와 `sequence_setting.tool_type`으로 전문가 기준을 선택한다.
 
 **둘은 별개 엔드포인트다.** 이 모듈의 이전 판이 뒤쪽을 "계약에 없는 벤더 중복 전송"으로
 보고 멱등 별칭으로 받은 것은 틀렸다 — 근거로 삼은 260813 PDF에 그 항목이 없었을 뿐이다.
@@ -123,7 +123,7 @@ def create_telemetry_router(
     """
     router = APIRouter()
     sequences = store if store is not None else SequenceStore()
-    guidance_cache: dict[tuple[str, str, int, str], SequenceGuide] = {}
+    guidance_cache: dict[tuple[str, str, int | None, str | None, str], SequenceGuide] = {}
 
     async def _handle(query: TelemetrySequenceRequest, *, analyze: bool) -> JSONResponse:
         """두 엔드포인트가 같은 처리를 쓴다. 분석 종류별 분기는 엔진이 생기면 넣는다."""
@@ -166,7 +166,13 @@ def create_telemetry_router(
         )
         if analyze:
             assert isinstance(query, AnalyzeSequenceRequest)
-            cache_key = (query.session_id, query.sequence_id, query.mode_id, body_sha256)
+            cache_key = (
+                query.session_id,
+                query.sequence_id,
+                query.resolved_mode_id,
+                query.process_type,
+                body_sha256,
+            )
             guide = guidance_cache.get(cache_key)
             if guide is None:
                 guide = guidance_engine.evaluate(query) if guidance_engine is not None else _unavailable_guide()
@@ -224,7 +230,11 @@ def create_telemetry_router(
         response_model=AnalyzeSequenceResponse,
         tags=["2. 시퀀스 수집·피드백"],
         summary="2-2. 시퀀스 분석 및 속도·이격거리 가이드",
-        description="전문가 기준과 비교하여 매 시퀀스마다 speed(slow/ok/fast)와 distance(near/ok/far)를 구조화해 반환합니다.",
+        description=(
+            "전문가 기준과 비교하여 매 시퀀스마다 speed(slow/ok/fast)와 "
+            "distance(near/ok/far)를 구조화해 반환합니다. 학습 모드는 scenario_id, "
+            "스프레이/블라스팅 구분은 sequence_setting.tool_type에서 자동 선택합니다."
+        ),
     )
     async def analyze_sequence(query: AnalyzeSequenceRequest) -> JSONResponse:
         return await _handle(query, analyze=True)

@@ -36,6 +36,7 @@ def test_guided_workflow_runs_end_to_end_without_parameters() -> None:
         "avg_distance_mm": 250,
     }
     assert payloads[2]["test_context"]["input_used"]["sequence_setting"] == {
+        "tool_type": "spray_gun",
         "target_speed_mms": 500,
         "target_distance_mm": 300,
     }

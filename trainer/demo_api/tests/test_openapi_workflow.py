@@ -68,6 +68,21 @@ def test_query_voice_and_sequence_operations_have_examples_and_ordered_tags() ->
     assert query_example["prompt"]
     analyze_example = schema["components"]["schemas"]["AnalyzeSequenceRequest"]["example"]
     assert analyze_example["sequence_info"]
+    assert analyze_example["scenario_id"] == "3"
+    assert "mode_id" not in analyze_example
+
+
+def test_latest_tsb_fields_are_not_required_by_the_public_contract() -> None:
+    schema = TestClient(create_app()).get("/openapi.json").json()
+    analyze = schema["components"]["schemas"]["AnalyzeSequenceRequest"]
+    assert "mode_id" not in analyze.get("required", [])
+
+    complete_ref = schema["paths"]["/api/v1/sessions/complete"]["post"]["requestBody"]["content"][
+        "multipart/form-data"
+    ]["schema"]["$ref"]
+    complete = schema["components"]["schemas"][complete_ref.rsplit("/", 1)[-1]]
+    assert "avg_speed_mms" not in complete["required"]
+    assert "avg_distance_mm" not in complete["required"]
 
 
 def test_voice_demo_is_input_free_and_links_the_downloadable_sample() -> None:

@@ -8,8 +8,9 @@
 두 엔드포인트는 **별개**다. 같은 본문을 둘에 보내는 것이 설계다.
 
 * `POST /api/v1/telemetry/sequence` (p.4-5): 90 FPS 센서 배치 전송 + 도막·궤적 평가
-* `POST /api/v1/copilot/analyze-sequence` (p.6-7): 1회 패스 3D Ray Point 궤적 비교 +
-  원포인트 레슨. 본문에 `mode_id`(선택, 1~10, 기본 1)가 더 붙는다
+* `POST /api/v1/copilot/analyze-sequence`: 1회 패스 3D Ray Point 궤적 비교 +
+  원포인트 레슨. 2026-10-08 TSB 실전송 규격처럼 `scenario_id`로 모드를 선택한다.
+  과거 클라이언트의 `mode_id`는 선택 호환 필드로만 받는다.
 
 이 문서의 이전 판이 `analyze-sequence`를 "계약에 없는 벤더 중복 전송"이라 적고 멱등
 별칭으로 취급한 것은 **틀렸다**. 근거로 삼은 260813에 그 항목이 없었을 뿐이다.
@@ -21,15 +22,51 @@
 
 from __future__ import annotations
 
+import re
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from trainer.demo_api.contracts import StrictModel
 
 AnalysisStatus = Literal["available", "not_available"]
 SpeedGuideStatus = Literal["slow", "ok", "fast"]
 DistanceGuideStatus = Literal["near", "ok", "far"]
+
+_TOOL_TYPE_ALIASES = {
+    "spray": "spray",
+    "spray_gun": "spray",
+    "spraygun": "spray",
+    "blasting": "blasting",
+    "blasting_gun": "blasting",
+    "blast_gun": "blasting",
+    "blastgun": "blasting",
+}
+
+
+def learning_mode_from_scenario(scenario_id: str) -> int | None:
+    """Return a 1~10 learning mode without mistaking practical A-1/1-A IDs.
+
+    TSB's current sample sends a bare numeric scenario ID.  Named legacy values
+    are retained for Swagger/demo compatibility, but practical scenarios are
+    deliberately not coerced to a learning reference.
+    """
+
+    value = scenario_id.strip().lower()
+    if value.isdigit():
+        parsed = int(value)
+        return parsed if 1 <= parsed <= 10 else None
+    tr_learning = re.fullmatch(r"tr-l(0[1-9]|10)", value)
+    if tr_learning is not None:
+        return int(tr_learning.group(1))
+    match = re.fullmatch(r"(?:training|learning)[-_ ]?mode[-_ ]?(10|[1-9])", value)
+    return int(match.group(1)) if match is not None else None
+
+
+def process_from_tool_type(value: Any) -> Literal["spray", "blasting"] | None:
+    if not isinstance(value, str):
+        return None
+    return _TOOL_TYPE_ALIASES.get(value.strip().lower().replace("-", "_"))  # type: ignore[return-value]
 
 
 class SequenceFrameIn(BaseModel):
@@ -62,8 +99,12 @@ class TelemetrySequenceRequest(StrictModel):
         json_schema_extra={
             "example": {
                 "session_id": "TSB-DEMO-001", "user_id": "W-017",
-                "scenario_id": "training-mode-3", "zone_id": "3", "sequence_id": "SEQ-001",
-                "sequence_setting": {"target_speed_mms": 500, "target_distance_mm": 250},
+                "scenario_id": "3", "zone_id": "3", "sequence_id": "SEQ-001",
+                "sequence_setting": {
+                    "tool_type": "spray_gun",
+                    "target_speed_mms": 500,
+                    "target_distance_mm": 250,
+                },
                 "sequence_info": [{
                     "index": 0, "time": "2026-10-06T10:01:00Z",
                     "tool_pos_rot": {"position": [0.0, 1.2, 0.4]},
@@ -86,7 +127,7 @@ class TelemetrySequenceRequest(StrictModel):
 
 
 class AnalyzeSequenceRequest(TelemetrySequenceRequest):
-    """명세서 p.7. `telemetry/sequence`와 같은 8키에 `mode_id`가 더 붙는다."""
+    """최신 TSB 전송 규격의 8키. `mode_id`는 과거 연동 호환용이다."""
 
     model_config = ConfigDict(
         extra="forbid",
@@ -94,11 +135,14 @@ class AnalyzeSequenceRequest(TelemetrySequenceRequest):
             "example": {
                 "session_id": "TSB-DEMO-001",
                 "user_id": "W-017",
-                "scenario_id": "training-mode-3",
+                "scenario_id": "3",
                 "zone_id": "3",
                 "sequence_id": "SEQ-001",
-                "mode_id": 3,
-                "sequence_setting": {"target_speed_mms": 500, "target_distance_mm": 250},
+                "sequence_setting": {
+                    "tool_type": "spray_gun",
+                    "target_speed_mms": 500,
+                    "target_distance_mm": 250,
+                },
                 "sequence_info": [
                     {
                         "index": 0,
@@ -112,8 +156,26 @@ class AnalyzeSequenceRequest(TelemetrySequenceRequest):
         },
     )
 
-    # 도장 작업 표준 모드 ID (1~10). 명세서는 기본값 1 이라고 적는다.
-    mode_id: Annotated[int, Field(ge=1, le=10)] = 1
+    # 2026-10-08 실전송에는 없다. 예전 클라이언트만 선택적으로 보낼 수 있다.
+    mode_id: Annotated[int | None, Field(ge=1, le=10)] = None
+
+    @model_validator(mode="after")
+    def _mode_id_must_match_scenario(self) -> "AnalyzeSequenceRequest":
+        scenario_mode = learning_mode_from_scenario(self.scenario_id)
+        if self.mode_id is not None and scenario_mode is not None and self.mode_id != scenario_mode:
+            raise ValueError("mode_id conflicts with scenario_id")
+        return self
+
+    @property
+    def resolved_mode_id(self) -> int | None:
+        return learning_mode_from_scenario(self.scenario_id) or self.mode_id
+
+    @property
+    def process_type(self) -> Literal["spray", "blasting"] | None:
+        process = process_from_tool_type(self.sequence_setting.get("tool_type"))
+        # Before tool_type was added, analyze-sequence only had spray references.
+        # Preserve that behavior solely for clients that still send legacy mode_id.
+        return process or ("spray" if self.mode_id is not None else None)
 
 
 class SequenceDataAck(StrictModel):
