@@ -9,6 +9,7 @@ def test_openapi_describes_tsb_workflow_and_db_viewer() -> None:
 
     assert schema["info"]["title"] == "XR Painting Simulator AI Co-Pilot API"
     assert "http://keti-xr-lab.iptime.org:58000/admin" in schema["info"]["description"]
+    assert "http://keti-xr-lab.iptime.org:58000/motion-viewer" in schema["info"]["description"]
     assert "처음 보는 개발자" in schema["info"]["description"]
     assert "실제 연동 API" in schema["info"]["description"]
     assert "누적 히트맵" in schema["info"]["description"]
@@ -19,6 +20,7 @@ def test_openapi_describes_tsb_workflow_and_db_viewer() -> None:
         "3. AI Co-Pilot 질의",
     ]
     assert client.get("/admin").status_code == 200
+    assert client.get("/motion-viewer").status_code == 200
 
 
 def test_guided_workflow_has_five_input_free_ordered_operations() -> None:

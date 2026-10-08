@@ -31,6 +31,7 @@ from trainer.demo_api.v1_router import create_v1_router
 from trainer.demo_api.v1_store import V1Store
 from trainer.demo_api.monitor import MonitorRecorder
 from trainer.demo_api.monitor_api import create_monitor_router
+from trainer.demo_api.motion_viewer import create_motion_viewer_router
 from trainer.demo_api.readiness import evaluate_live_readiness
 from trainer.demo_api.sequence import default_snapshot, session_snapshot
 from trainer.demo_api.sim_session import SimSessionStore
@@ -70,6 +71,8 @@ def _openapi_description() -> str:
 5. 음성 기능은 `0-5`를 실행하면 파일 업로드 없이 STT부터 Query 답변까지 확인할 수 있습니다. `0-6`에서는 실제 업로드용 WAV를 내려받을 수 있습니다.
 
 > **DB 뷰어 바로가기:** [{public_base}/admin]({public_base}/admin) — 읽기 전용이며 데이터를 수정하지 않습니다.
+
+> **전문가 3D 모션 뷰어:** [{public_base}/motion-viewer]({public_base}/motion-viewer) — 전형기 반장님의 대표 실측 모션과 반복 수행의 통계 범위를 확인합니다.
 
 ### 실제 연동 API와 테스트 API의 차이
 
@@ -246,6 +249,7 @@ def create_app(
     app.include_router(create_simulator_router(recorder, store, resolver), include_in_schema=False)
     app.include_router(create_monitor_router(recorder), include_in_schema=False)
     app.include_router(create_db_viewer_router())
+    app.include_router(create_motion_viewer_router(expert_guidance.reference_root))
     # knowledge_search shares the live pipeline singleton; resolved per call so it is built once, lazily.
     app.include_router(
         create_copilot_router(
