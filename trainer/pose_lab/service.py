@@ -1525,6 +1525,50 @@ def _body_fit_points(placed: skeleton.Placement) -> set[str]:
     return chosen if len(chosen) >= skeleton.MIN_ANCHORS else present
 
 
+# --- 자세 판정 --------------------------------------------------------------------
+#
+# 머리·손 앵커가 잘 맞아도 몸통이 맞는다는 보장은 없다(2026-10-02 외부 검증: 전형기 L8 1000772_1 구간 3, 앵커 오차
+# 5.8cm인데 몸통 정면이 HMD 방향과 106° 어긋났다). FK 회전·계층 해석은 실측 강체와 상대회전각 0.5°로 맞으므로
+# (6명·18세션·2,700쌍, 관절 회전을 월드로 읽으면 1.7–6.0°) 남는 어긋남은 원본 아바타 IK의 몸통이다 — 데이터로는 고칠 수
+# 없으니 **해부학적으로 맞지 않는 몸을 판정해 흐리게 그리고 "추정 자세"로 알린다.**
+#
+# 기준: 머리(HMD 정면)가 몸통 정면(양어깨를 잇는 선과 위쪽의 외적)에서 수평으로 `POSTURE_NECK_LIMIT_DEG`를 넘게 돌아가
+# 있으면 맞지 않는다. 정상 경추 회전 범위가 한쪽 약 80°다. 표본 500패스에서 중앙값 24°, 이 문턱을 넘는 패스는 5.0%였다.
+POSTURE_NECK_LIMIT_DEG: Final = 80.0
+POSTURE_NOTE: Final = "추정 자세 — {who} 작업자의 몸통 방향이 머리 방향과 {deg:.0f}° 어긋나 몸 자세를 신뢰할 수 없습니다(흐리게 표시)."
+
+
+def _horizontal_unit(vector: Sequence[float]) -> Vec3 | None:
+    up = world_axes.UP
+    along = sum(vector[i] * up[i] for i in range(3))
+    flat = tuple(vector[i] - along * up[i] for i in range(3))
+    length = math.sqrt(sum(value * value for value in flat))
+    if length < 1e-9:
+        return None
+    return (flat[0] / length, flat[1] / length, flat[2] / length)
+
+
+def posture_check(joints: Mapping[str, Sequence[float]], row: Mapping[str, str] | None) -> dict[str, object] | None:
+    """몸통 정면과 HMD 정면의 수평 각(°)과 판정. 재료가 없으면 None(판정하지 않는다 — 맞다고도 하지 않는다)."""
+    if row is None or "RightUpperArm" not in joints or "LeftUpperArm" not in joints:
+        return None
+    rotation = measured_pose._rotation(dict(row), measured_pose.HEAD_GROUP)
+    if rotation is None:
+        return None
+    head = _horizontal_unit(measured_pose.forward_vector(rotation, measured_pose.HEAD_FORWARD))
+    right, left, up = joints["RightUpperArm"], joints["LeftUpperArm"], world_axes.UP
+    across = (right[0] - left[0], right[1] - left[1], right[2] - left[2])
+    # 유니티 축(오른쪽 +X, 위 +Y, 앞 +Z)에서 앞 = 오른쪽 × 위.
+    forward = (across[1] * up[2] - across[2] * up[1], across[2] * up[0] - across[0] * up[2],
+               across[0] * up[1] - across[1] * up[0])
+    torso = _horizontal_unit(forward)
+    if head is None or torso is None:
+        return None
+    cosine = max(-1.0, min(1.0, sum(head[i] * torso[i] for i in range(3))))
+    degrees = math.degrees(math.acos(cosine))
+    return {"head_torso_deg": degrees, "limit_deg": POSTURE_NECK_LIMIT_DEG, "plausible": degrees <= POSTURE_NECK_LIMIT_DEG}
+
+
 def _fit_view(
     placed: skeleton.Placement,
     representative: Representative,
@@ -1763,21 +1807,31 @@ def skeleton_block(
 
     arm = arm_for(placed, offsets, representative)
     joints = displayed_joints(placed, arm)
+    fit = _fit_view(
+        placed,
+        representative,
+        kind,
+        mounts,
+        offsets,
+        table.grip_limit_m,
+        chosen=chosen,
+        floor=composite.floor_vertical(geometry),
+        who=who,
+        arm=arm,
+    )
+    posture = posture_check(joints, getattr(representative, "row", None))
+    fit["posture"] = posture
+    fit["posture_note"] = None
+    if posture is not None and not posture["plausible"]:
+        # 해부학적으로 맞지 않는 몸 — 화면이 흐리게 그리고(`faded`는 중력 맞춤의 뜻 그대로 두고 화면이 둘 중 하나로 판단한다),
+        # 3D 밖의 눈에 띄는 자리에 "추정 자세"를 알린다.
+        fit["posture_note"] = POSTURE_NOTE.format(who=who, deg=posture["head_torso_deg"])
+        fit["notes"] = [*fit["notes"], fit["posture_note"]]
+        fit["note_keys"] = [*fit["note_keys"], "posture"]
     return SkeletonResult(
         joints={name: list(position) for name, position in joints.items()},
         bones=body_proportions.display_bones(simulator_csv.BONES, joints),
-        fit=_fit_view(
-            placed,
-            representative,
-            kind,
-            mounts,
-            offsets,
-            table.grip_limit_m,
-            chosen=chosen,
-            floor=composite.floor_vertical(geometry),
-            who=who,
-            arm=arm,
-        ),
+        fit=fit,
         fit_reason=None,
         fit_note=None,
         markers={fit.point: fit.measured_marker for fit in placed.anchors},

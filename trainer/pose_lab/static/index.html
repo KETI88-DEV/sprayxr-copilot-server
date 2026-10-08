@@ -6,13 +6,13 @@
 <main>
   <header class="topbar">
     <h1>도장 동작 비교</h1>
-    <p class="topbar-sub">작업자의 도장 동작을 기준 작업자(전형기)와 견주고, 먼저 고칠 자세를 알려 줍니다.</p>
+    <p class="topbar-sub">동작을 보고, 차이를 확인하고, 자세를 개선하세요.</p>
   </header>
 
   <!-- ① 고르기 — 기준은 고를 수 없다. 전형기 중 동작 키가 같은 패스를 자동으로 고른다. -->
   <section class="panel picker" aria-label="평가할 시퀀스">
     <div class="picker-row">
-      <span class="section-title picker-title">비교할 작업 동작</span>
+      <span class="section-title picker-title">동작 선택</span>
       <label class="field">작업자
         <select id="queryWorker"></select>
       </label>
@@ -35,6 +35,8 @@
              화면이 "같은 동작"이라고 거짓을 말하게 된다. -->
         <span class="reference-match" id="referenceMatch"></span>
       </div>
+      <details class="selection-details">
+        <summary>기준 선정 · 불러온 기록</summary>
       <p class="reference-reason" id="referenceReason" hidden></p>
       <div class="picker-status-row">
         <p class="picker-status state-note" id="queryStatus" data-tone="idle" hidden></p>
@@ -42,6 +44,7 @@
              한도 조절이 접힌 상세 설정 안에 있었다(평가자). -->
         <button id="loadMore" class="btn-ghost" type="button" hidden>더 불러오기</button>
       </div>
+      </details>
       <!-- 선택과 결과가 어긋난 동안만 뜬다. 결과를 그대로 두면 서로 다른 구간의 정보가
            한 화면에 섞인다(다른 평가자가 실제 브라우저에서 확인했다). -->
       <p class="stale-note" id="staleNote" role="status" hidden></p>
@@ -56,18 +59,19 @@
         <div class="hero-empty" id="heroEmpty">
           <p class="hero-empty-title">아직 비교하지 않았습니다</p>
           <p class="hero-empty-body">
-            위에서 작업자 · 레벨 · 도장 구간을 고르고 <strong>비교</strong>를 누르세요.
-            기준 작업자(전형기)의 같은 유형 동작을 기준으로 자동으로 잡습니다.
+            도장 구간을 선택하고 <strong>비교</strong>를 누르세요.
           </p>
         </div>
         <div class="hero-body" id="heroBody" hidden>
           <!-- 이 결과가 **어느 구간**의 것인지. 선택이 바뀌어도 결과가 제 이름을 들고 있어야
                섞였을 때 알아볼 수 있다. -->
-          <p class="analyzed-label" id="analyzedLabel"></p>
           <div class="hero-figure">
             <span class="hero-number" id="heroScore">—</span>
-            <span class="hero-figure-label">기준 동작과의 유사도<br><span class="hero-figure-hint">선택한 기준 동작 하나와 비교 · 1.0 = 같음</span></span>
+            <span class="hero-figure-label">기준 동작과의 유사도<br><span class="hero-figure-hint">1.0에 가까울수록 비슷함</span></span>
           </div>
+          <details class="result-details">
+            <summary>비교 정보 · 부위별 차이</summary>
+          <p class="analyzed-label" id="analyzedLabel"></p>
           <dl class="hero-meta">
             <!-- 동작 키와 **어느 단에서 맺은 쌍인지**(S8)를 한 칸에. 기준 줄이 "완화"라고 적었는데
                  결과가 그 사실을 말하지 않으면 화면 두 자리가 다른 말을 한다. -->
@@ -80,6 +84,7 @@
             <div><dt>바닥 기준 머리</dt><dd id="heroHeadHeight">—</dd><dd class="hero-meta-sub" id="heroHeadHeightNote" hidden></dd></div>
           </dl>
           <ul class="hero-deviations" id="heroDeviations"></ul>
+          </details>
         </div>
         <p class="state-note" id="heroState" hidden></p>
       </section>
@@ -87,6 +92,7 @@
       <!-- ③ 무엇을 고치나 — 교정을 사람이 읽는 문장으로, 유사도 바로 아래·3D 바깥에 둔다. -->
       <section class="panel corrections" id="corrections" aria-label="자세 개선 안내">
         <h2 class="section-title">자세 개선 안내 <span class="count-badge" id="correctionsCount"></span></h2>
+        <p class="interaction-hint">안내를 누르면 동작 화면에서 방향을 확인할 수 있습니다.</p>
         <ol class="correction-list" id="correctionList"></ol>
         <p class="state-note" id="correctionsState" data-tone="idle">도장 구간을 고르고 비교를 누르면 여기에 뜹니다.</p>
       </section>
@@ -95,16 +101,16 @@
            지시한 점을 지시한 만큼 옮겨 다시 채점한 계산값이다(instructions.IMPROVEMENT_LABELS의
            두 가정, docs/literature_basis.md §4). -->
       <section class="panel improvement" id="improvementSection" aria-label="지시를 그대로 따랐을 때의 상한">
-        <h2 class="section-title">안내를 적용했을 때의 예상 결과</h2>
+        <h2 class="section-title">첫 번째 안내 적용 시</h2>
         <!-- 위에는 원시 두 숫자만 둔다. 정규화 지표(G)는 천장 가까이에서 오해를 만드므로
              접힌 쪽으로 내린다 — 0.950→0.970과 0.19→0.51이 같은 G를 낼 수 있다. -->
         <div class="improvement-score" id="improvementScore">—</div>
-        <!-- 예상값이 **어느 안내 하나**를 따른 결과인지. 작업자에게 전달되는 것은 σ 1위 한 건이다. -->
         <div class="improvement-cue" id="improvementCue"></div>
+        <!-- 예상값이 **어느 안내 하나**를 따른 결과인지. 작업자에게 전달되는 것은 σ 1위 한 건이다. -->
         <!-- **숫자 옆에 늘** 둔다. 접힌 칸 안에만 있으면 0.160 → 0.958 이 재측정 결과로 읽힌다
              (다른 평가자가 실제 브라우저에서 지적했다). -->
         <p class="improvement-flag">계산상 예상값 — 다시 측정한 결과가 아닙니다</p>
-        <a class="improvement-demo" id="demoLink" href="demo.html" target="_blank" rel="noopener" hidden>교정 시연으로 보기 — 입력 → 안내 → 결과</a>
+        <a class="improvement-demo" id="demoLink" href="demo.html" target="_blank" rel="noopener" hidden>개선 동작 시연 ↗</a>
         <details class="improvement-detail">
           <summary>자세히</summary>
           <dl class="improvement-rows" id="improvementRows"></dl>
@@ -121,6 +127,8 @@
            계약이 있고(`test_corrections_section_follows_hero_outside_3d_view`), 실제로
            여기에 끼웠다가 그 검사가 실패했다. 비교의 이야기(②③④)를 끊지 않고 뒤에 둔다. -->
       <section class="panel deployed" id="deployedSection" aria-label="숙련자 집단 기준 평가" hidden>
+        <details class="secondary-assessment">
+        <summary>숙련자 집단과 비교</summary>
         <h2 class="section-title">숙련자 집단 기준 평가</h2>
         <div class="deployed-body">
           <div class="deployed-figure">
@@ -138,6 +146,7 @@
           <p id="deployedDetails"></p>
         </details>
         <p class="state-note" id="deployedState" hidden></p>
+        </details>
       </section>
 
     </div>
@@ -154,6 +163,8 @@
        전폭으로 내리면 요약이 두 줄(58px)에서 한 줄(34px)이 되고, 왼쪽 열은 ④에서 끝나 첫 화면에 든다.
        좁은 창 재배열(style.css의 max-width: 79.99rem)은 .workspace 안만 건드리므로 여기 order 규칙은 없다. -->
       <section class="panel orientation" id="orientationSection" aria-label="건 각도 · 관절 축 평가 참고값">
+        <details class="reference-details">
+          <summary>건 · 관절 각도 <span class="detail-tag">참고값</span></summary>
         <!-- 관절 축 평가 **요약**을 패널 맨 위에 가로로 흘려 쓴다. 전체 표는 그대로 아래에 둔다.
              **"가로로 흘리면 여유가 생긴다"고 쓰지 말 것**(C): 이 패널이 왼쪽 열에 있던 동안
              가로 배치는 접힘선을 넘기는 것을 막지 못했다 — 왼쪽 열 폭(실측 680.9px)에서 이 요약은
@@ -202,11 +213,12 @@
             <tbody></tbody>
           </table>
         </details>
+        </details>
       </section>
 
   <!-- ⑤ 나머지는 접는다: 기존 축 표 · 파라미터 -->
   <details class="panel details-panel">
-    <summary>자세한 수치 (실측/관절 축 표 · 파라미터)</summary>
+    <summary>분석 수치 · 설정</summary>
     <div class="details-body">
       <p class="keys" id="keys"></p>
       <section class="axes">

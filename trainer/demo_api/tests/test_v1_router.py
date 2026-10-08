@@ -8,11 +8,13 @@ from __future__ import annotations
 from typing import Any
 
 import anyio
+import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from trainer.demo_api.anomaly_stream import AnomalyBroadcaster
+from trainer.demo_api.sequence_store import SequenceStore
 from trainer.demo_api.v1_router import _sse_body, create_v1_router
 from trainer.demo_api.v1_store import V1Store
 
@@ -22,7 +24,14 @@ _ENVELOPE = {"status", "code", "message", "data"}
 def _app(*, broadcaster: AnomalyBroadcaster | None = None) -> tuple[TestClient, AnomalyBroadcaster]:
     bus = broadcaster if broadcaster is not None else AnomalyBroadcaster()
     app = FastAPI()
-    app.include_router(create_v1_router(store=V1Store(":memory:"), broadcaster=bus))
+    # 시퀀스 저장소는 메모리, MCP는 닿지 않는 대역 — 세션 종합 분석이 공유 DB나 실제 엔진을 건드리지 않게.
+    offline = httpx.MockTransport(lambda request: httpx.Response(503))
+    app.include_router(
+        create_v1_router(
+            store=V1Store(":memory:"), broadcaster=bus, sequences=SequenceStore(":memory:"),
+            mcp_base_url="http://mcp.test", transport=offline,
+        )
+    )
     return TestClient(app), bus
 
 
@@ -203,6 +212,11 @@ def test_complete_accepts_the_exact_latest_tsb_form_without_speed_or_distance() 
     assert response.status_code == 200
     assert response.json()["data"]["report_status"] == "pending"
 
+    report_id = response.json()["data"]["report_id"]
+    report = client.get(f"/api/v1/sessions/{form['session_id']}/reports/{report_id}")
+    assert report.status_code == 200
+    assert report.json()["data"]["report_status"] == "complete"
+
 
 def test_complete_rejects_a_vr_score_outside_the_documented_range() -> None:
     """Given vr_score outside 0~100, When posted, Then it is 422 (p.12)."""
@@ -234,22 +248,24 @@ def test_report_polling_finds_the_report_and_rejects_a_wrong_session() -> None:
     ok = client.get(f"/api/v1/sessions/1_1000053_1/reports/{report_id}")
     wrong = client.get(f"/api/v1/sessions/other/reports/{report_id}")
 
-    assert ok.json()["data"]["report_status"] == "pending"
+    # complete 응답 뒤 세션 종합 분석이 돌고 끝난다(TestClient는 백그라운드 작업을 응답과 함께 마친다).
+    assert ok.json()["data"]["report_status"] == "complete"
     assert wrong.status_code == 404
     assert wrong.json()["status"] == "ERROR"
 
 
 def test_report_detail_returns_unavailable_areas_without_inventing_numbers() -> None:
-    """Given no analysis engine, When the report is read, Then every area says unavailable.
+    """Given a session with nothing to analyse, When the report is read, Then every area says unavailable.
 
-    p.15: "실제 분석이 아직 없으면 상태는 pending, 각 분석 영역은 unavailable 로 반환됩니다."
+    p.15: 분석 결과가 없는 영역은 unavailable 이고 수치는 null 이다. 자세 분석은 돌았지만 채점할 분사가
+    없었으므로(시험 CSV에는 관절 열이 없다) 리포트는 complete, 자세 영역은 unavailable 이다.
     """
     client, _ = _app()
     report_id = _complete(client).json()["data"]["report_id"]
 
     data = client.get(f"/api/v1/reports/{report_id}").json()["data"]
 
-    assert data["report_status"] == "pending"
+    assert data["report_status"] == "complete"
     assert data["llm_briefing"] is None
     for area in ("coating_report", "sequence_report", "pose_report"):
         assert data[area]["analysis_status"] == "unavailable"

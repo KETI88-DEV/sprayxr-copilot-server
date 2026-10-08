@@ -26,6 +26,8 @@
 .demo-stages li.is-done { color: var(--text); }
 
 .demo-caption { font-size: var(--fs-lg); min-height: 2.6em; margin: 0 0 var(--sp-3); }
+.demo-posture { color: var(--warn); font-weight: 600; margin: 0 0 var(--sp-3); }
+.demo-posture:empty { display: none; }
 
 .demo-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(18rem, 26rem); gap: var(--sp-4); }
 .demo-stage3d { position: relative; min-width: 0; padding: 0; overflow: hidden; }

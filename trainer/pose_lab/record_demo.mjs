@@ -86,7 +86,8 @@ if (mode === "issued") {
   await page.screenshot({ path: join(imgDir, "main_1_비교결과.png") });
   await page.locator("#improvementSection").screenshot({ path: join(imgDir, "main_2_예상결과.png") });
   const corrected = page.locator("#view3dLayerCorrected");
-  if (await corrected.count()) {
+  // 체크박스가 숨겨진 화면 구성이면(다른 작업에서 바뀜) 이 캡처만 건너뛴다.
+  if (await corrected.count() && await corrected.isVisible()) {
     await corrected.check();
     await page.waitForTimeout(800);
     await page.locator("#view3d").screenshot({ path: join(imgDir, "main_3_3D_안내적용후.png") });

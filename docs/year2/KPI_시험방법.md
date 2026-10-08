@@ -59,7 +59,12 @@
 1. **쌍 만들기** — 패스 64,098개 각각을 작업자 자세(교정 전)로 두고, 화면과 같은 규칙으로 목표 자세(전형기의 같은 레벨·같은
    동작 유형 패스 중 첫 후보)를 붙인다. 목표 후보가 없는 1,981쌍은 `no_expert_reference`로 기록하고 분모에서 뺀다.
 2. **교정 전 유사도 S0** — 목표 자세와 교정 전 자세의 유사도.
-3. **교정 적용** — 교정 알고리즘(`issued_axes`, 관절 값 ≤ 4개)이 낸 안내를 그대로 따른 자세를 만든다.
+3. **교정 적용(신체 제약 반영)** — 교정 알고리즘(`issued_axes`, 관절 값 ≤ 4개)이 낸 안내를 작업자의 몸으로 따른 자세를 만든다.
+   팔·쇄골 길이는 바꾸지 않고, 발은 바닥에서 떼지 않는다. 팔 길이로 닿지 않는 손 위치나 발을 디딘 채 닿지 않는 머리 높이는
+   닿는 데까지만 옮긴다(`trainer/pose_lab/correction_demo.corrected_body`, 시연 화면과 같은 규칙). 그 몸에서 중요 조인트가
+   실제로 움직인 만큼 교정 후 자세를 정한다.
+   - 안내가 없는 손의 움직임은 데이터로 정할 수 없어 두 가정으로 잰다: 몸을 따라감 / 작업 위치를 지킴(제자리).
+     **공식 수치는 두 가정 중 낮은 값**으로 한다(2026-10-02 확정).
 4. **교정 후 유사도 S_corrected** — 목표 자세와 교정 후 자세의 유사도.
 5. **정확도** — 쌍마다 (S_corrected − S0)/(1 − S0)를 내고 평균한다. S0 = 1(이미 같음)인 쌍은 정의되지 않아 뺀다.
    0으로 채우지 않는다.
@@ -70,44 +75,49 @@
 실행 명령(컨테이너, 저장소 루트):
 
 ```bash
-# 20개 프로세스로 전수 측정 (약 7분)
-for i in $(seq 0 19); do
-  python3 trainer/scripts/delivered_cue_study.py shard \
-    --root /data/sources/professionals \
-    --reference /output/spread_reference_expert_m3.json \
-    --index-cache /output/samelevel/index_cache_m3.json \
-    --out-dir /output/delivered_cue --shards 20 --shard $i &
-done; wait
-
-# 집계와 CSV
-python3 trainer/scripts/delivered_cue_study.py aggregate \
-  --reference /output/spread_reference_expert_m3.json \
-  --out-dir /output/delivered_cue --report /output/delivered_cue_report.json \
-  --csv-dir /output/delivered_cue/csv
+# 20개 프로세스로 전수 측정 — 가정마다 한 번씩(각 약 30분). HANDS=follow(따라감) / stay(제자리)
+for HANDS in follow stay; do
+  OUT=/output/body_constrained_v2; [ $HANDS = stay ] && OUT=/output/body_constrained_stay_v2
+  for i in $(seq 0 19); do
+    python3 trainer/scripts/body_constrained_study.py shard --uncued-hands $HANDS \
+      --root /data/sources/professionals \
+      --reference /output/spread_reference_expert_m3.json \
+      --index-cache /output/samelevel/index_cache_m3.json \
+      --out-dir $OUT --shards 20 --shard $i &
+  done; wait
+  # 집계와 CSV
+  python3 trainer/scripts/body_constrained_study.py aggregate --policies issued,delivered \
+    --out-dir $OUT --report $OUT/report.json --csv-dir $OUT/csv
+done
 ```
 
 ### 4.3 판정 기준
 
 - 적용 횟수 ≥ 10회.
 - 조정한 관절 값 ≤ 6개.
-- **정확도 평균 ≥ 70% → 2차년도 KPI 달성.** 판정은 엄격한 split으로 하고 same을 함께 싣는다.
+- **정확도 평균 ≥ 70% → 2차년도 KPI 달성.** 판정은 엄격한 split으로, 신체 제약을 반영한 두 가정 중 낮은 값으로 하고,
+  same을 함께 싣는다.
 
 ## 5. 검증 결과
 
-측정 2026-10-01 · 결과 문서 `docs/measurements/2026-10-01-delivered-cue-improvement-result.md` · CSV `/output/delivered_cue/csv/`
+측정 2026-10-02 · 결과 문서 `docs/measurements/2026-10-01-body-constrained-improvement-result.md`(§6 재측정) ·
+CSV `/output/body_constrained_v2/csv/`(따라감), `/output/body_constrained_stay_v2/csv/`(제자리)
 
-| 교정 | 조정한 값 | 적용 횟수 | split 정확도 | same 정확도 | 2차년도 70% |
-|---|---|---|---|---|---|
-| **교정 알고리즘(발부 안내 전부)** | **1–4개** | **61,477회** | **85.9%** | **87.7%** | **달성** |
-| 참고: 작업자에게 한 번에 전달되는 안내 1건만 | 1개 | 61,477회 | 32.1% | 36.0% | — |
+| 교정 알고리즘(발부 안내 전부, 관절 값 1–4개) | 적용 횟수 | split 정확도 | same 정확도 | 2차년도 70% |
+|---|---|---|---|---|
+| **신체 제약 반영 — 공식(두 가정 중 낮은 값, 제자리)** | **61,502회** | **82.6%** | **84.6%** | **달성** |
+| 신체 제약 반영 — 안내 없는 손이 몸을 따라감 | 61,502회 | 83.3% | 85.1% | 달성 |
+| 참고: 신체 제약 없이 지점을 독립으로 옮긴 값 | 61,477회 | 85.9% | 87.7% | 달성 |
 
-- 판정: **split 85.9% ≥ 70% → 2차년도 KPI 달성.** 조건 충족: 적용 61,477회(≥ 10), 조정 값 최대 4개(≤ 6).
-- 개선율 중앙값 0.898(사분위 0.820–0.945). 교정 후 유사도가 오히려 내려간 쌍 0%.
-- 작업자별 split 정확도: 김경호 84.9% · 손영석 85.8% · 임채원 86.9% · 전형기 84.7% · 정희록 86.2% · 최연진 86.1% — 6명 모두 70% 이상.
-- 같은 계산을 3차년도 측정 경로(`service.compare(correction_policies=…)`)로 다시 돌려 62,117쌍 모두에서 같은 값이 나왔다
-  (불일치 0, `docs/year3/2026-10-01-six-value-correction-result.md`).
-- 자동 시험: 시연 화면 숫자가 측정과 같은 계산인지(`trainer/pose_lab/tests/test_correction_demo.py`), 집계가 None을 0으로
-  채우지 않는지(`trainer/scripts/tests/test_delivered_cue_study.py`)를 포함해 전체 시험이 통과한다.
+- 판정: **split 82.6% ≥ 70% → 2차년도 KPI 달성.** 조건 충족: 적용 61,502회(≥ 10), 조정 값 최대 4개(≤ 6).
+- 개선율 중앙값 0.887, 0.70 이상인 쌍 84.6%. 교정 후 유사도가 오히려 내려간 쌍 0.3%.
+- 신체 제약으로 줄어든 몫은 대부분 팔 길이로 손이 안내한 곳까지 닿지 않는 소수 쌍에서 온다(1cm 이상 못 미친 쌍 7.8%).
+- 작업자별 split 정확도(공식): 김경호 79.8% · 손영석 82.4% · 임채원 84.1% · 전형기 82.1% · 정희록 83.4% · 최연진 82.9% —
+  6명 모두 70% 이상.
+- 골격 표시 수정(몸통 비례) 전후로 다시 재도 0.01%p 차이였다.
+- 자동 시험: 신체 제약 실현이 팔이 닿는 경우 점 독립 실현과 같은지(`trainer/scripts/tests/test_body_constrained_study.py`),
+  시연 화면의 몸이 뼈 길이를 바꾸지 않고 발을 띄우지 않는지(`trainer/pose_lab/tests/test_correction_demo.py`)를 포함해
+  전체 시험이 통과한다.
 
 ## 6. 시연 절차 (8130)
 
@@ -123,19 +133,20 @@ PYTHONPATH=trainer/scripts:. python3 -m uvicorn trainer.pose_lab.app:create_app 
 ### 6.1 도장 동작 비교 화면 — 안내 문구가 나오고 예상 결과가 오르는 것을 확인
 
 1. 작업자·레벨·도장 구간을 고르고 **비교**를 누른다. 기준 작업자(전형기)의 같은 유형 동작이 자동으로 잡힌다.
-2. 왼쪽 위 **유사도**(교정 전, S0)와 그 아래 **자세 개선 안내** 문장을 확인한다.
-3. **안내를 적용했을 때의 예상 결과**에서 "유사도 0.524 → 이 안내대로 고치면 0.774"처럼 안내 1건을 따랐을 때의 상승과,
-   그 안내 문장("오른손(건)을 16.9cm 올리세요.")을 확인한다. "자세히"를 펴면 발부된 안내를 모두 따랐을 때의 값(KPI 정의)도 보인다.
-4. 3D 뷰에서 **안내 적용 후(예상)**를 켜면 안내대로 옮긴 위치가 청록 끊은 선으로 겹쳐 보인다.
-5. **교정 시연으로 보기**를 누르면 같은 쌍이 6.2의 시연 화면으로 열린다(알고리즘 안내 전부를 따른 결과를 보인다).
+2. 왼쪽 위 **유사도**(교정 전, S0)와 그 아래 **자세 개선 안내** 문장을 확인한다. 안내의 **방향 보기**를 누르면 3D에서
+   그 안내의 화살표가 강조된다.
+3. **첫 번째 안내 적용 시**에서 "유사도 0.524 → 예상 0.774"처럼 작업자에게 전달되는 안내 1건을 따랐을 때의 상승을 확인한다.
+   "자세히"를 펴면 발부된 안내를 모두 따랐을 때의 값(KPI 정의)도 보인다.
+4. **개선 동작 시연**을 누르면 같은 쌍이 6.2의 시연 화면으로 열린다(알고리즘 안내 전부를 따른 결과를 보인다).
+5. 몸 자세가 해부학적으로 맞지 않으면(머리가 몸통 정면에서 80° 넘게 돌아간 경우) 그 몸을 흐리게 그리고 3D 바로 아래에
+   "추정 자세" 문장을 띄운다.
 
 ![비교 결과](img/main_1_비교결과.png)
 ![예상 결과](img/main_2_예상결과.png)
-![3D 안내 적용 후](img/main_3_3D_안내적용후.png)
 
 ### 6.2 교정 시연 화면 — 잘못된 자세 → 교정 안내 → 교정된 결과
 
-주소: `http://<호스트>:8130/demo.html` (도장 동작 비교 화면의 **교정 시연으로 보기**로 열면 같은 쌍이 열린다)
+주소: `http://<호스트>:8130/demo.html` (도장 동작 비교 화면의 **개선 동작 시연**으로 열면 같은 쌍이 열린다)
 
 화면에는 연차를 적지 않는다. 기본으로 보이는 교정은 **교정 알고리즘이 낸 안내 전부(관절 값 4개 이하)** — KPI 정확도의
 정의와 같다.
@@ -187,15 +198,17 @@ PYTHONPATH=trainer/scripts:. python3 -m uvicorn trainer.pose_lab.app:create_app 
 
 - **계산상 예상값이다.** 작업자가 안내를 정확히 따랐다고 보고 계산했다. 안내를 들은 뒤 다시 뿌려서 잰 값이 아니다.
 - **숙련자 대 숙련자다.** 코퍼스에 훈련생 기록이 없다. 숙련자끼리의 작은 차이를 교정한 결과다.
-- **KPI는 알고리즘 기준, 화면은 작업자 기준이다.** KPI 정확도 85.9%는 알고리즘이 발부한 안내를 모두 따른 값이다.
-  작업자에게 한 번에 전달되는 1건만 따르면 32.1%다.
+- **신체 제약을 반영한 값이다.** 팔·쇄골 길이를 지키고 발을 디딘 채 따를 수 있는 만큼만 옮겼다. 안내가 없는 손의 움직임은
+  두 가정 중 낮은 값을 썼다.
+- **KPI는 알고리즘 기준, 화면은 작업자 기준이다.** KPI 정확도 82.6%는 알고리즘이 발부한 안내를 모두 따른 값이다.
 
 ## 9. 산출물
 
 | 종류 | 위치 |
 |---|---|
-| 사전등록·결과 | `docs/measurements/2026-10-01-delivered-cue-improvement-prereg.md`, `…-result.md` |
-| CSV | `/output/delivered_cue/csv/` — `정확도_평가방법.csv`, `요약.csv`, `전달_안내별.csv`, `작업자별.csv`, `교정전_유사도_구간별.csv`, `쌍별_원자료.csv`(64,098행) |
-| 원자료 | `/output/delivered_cue/shard_*.jsonl` |
+| 사전등록·결과 | `docs/measurements/2026-10-01-body-constrained-improvement-prereg.md`, `…-result.md` |
+| CSV | `/output/body_constrained_stay_v2/csv/`(공식), `/output/body_constrained_v2/csv/` — `정확도_평가방법.csv`, `몸제약_차이.csv`, `못미친거리.csv`, `작업자별.csv`, `쌍별_원자료.csv`(64,098행) |
+| 원자료 | `/output/body_constrained_v2/shard_*.jsonl`, `/output/body_constrained_stay_v2/shard_*.jsonl` |
+| 참고(신체 제약 없음) | `docs/measurements/2026-10-01-delivered-cue-improvement-result.md`, `/output/delivered_cue/csv/` |
 | 그림 | `docs/year2/img/` |
 | 영상 | `/output/year2/demo/` |

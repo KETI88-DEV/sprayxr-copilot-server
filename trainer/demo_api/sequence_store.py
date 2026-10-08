@@ -24,6 +24,11 @@ from typing import Any, Final
 
 logger = logging.getLogger(__name__)
 
+# 시퀀스 **내용**이 아니라 분석 파라미터인 최상위 필드. `copilot/analyze-sequence`만 붙인다(명세서 p.7, `mode_id`).
+# 같은 시퀀스를 두 경로로 보낼 때 해시가 갈리지 않게 빼고(`telemetry_router`), MCP 자세 엔진에 넘길 때도 뺀다
+# (`pose_query` — MCP `SequenceRequest`는 최상위 `extra="forbid"`다).
+NON_CONTENT_FIELDS: Final[frozenset[str]] = frozenset({"mode_id"})
+
 DB_PATH_ENV: Final[str] = "SEQUENCE_DB_PATH"
 DEFAULT_DB_PATH: Final[str] = "/output/eval_results/sequences.db"
 
@@ -142,6 +147,15 @@ class SequenceStore:
         except json.JSONDecodeError:
             logger.warning("stored sequence body is not JSON session=%s sequence=%s", session_key, sequence_id)
             return None
+
+    def sequence_ids(self, session_key: str) -> list[str]:
+        """세션의 저장된 시퀀스 id 전부(이름순). 세션 종합 분석이 쓴다."""
+        with self._guard:
+            rows = self._conn.execute(
+                "SELECT sequence_id FROM sequences WHERE session_key = ? ORDER BY sequence_id",
+                (session_key,),
+            ).fetchall()
+        return [str(row[0]) for row in rows]
 
     def latest_sequence_id(self, session_key: str) -> str | None:
         """`context`가 없을 때 쓸 가장 최근 시퀀스. 없으면 `None` — 지어내지 않는다."""

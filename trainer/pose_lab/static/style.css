@@ -1018,3 +1018,118 @@ body[data-stale="true"] #orientationSection {
 
 /* 같은 쌍을 교정 시연 화면(demo.html)으로 연다. */
 .improvement-demo { grid-column: 1 / -1; margin-top: var(--sp-2); color: var(--accent); font-size: var(--fs-sm); }
+
+/* 동작 중심 작업 화면: 주요 조작은 앞에, 평가 근거는 펼쳐서 읽는다. */
+:root {
+  --radius: 10px;
+  --view3d-chrome: 20rem;
+}
+body { padding-top: var(--sp-5); }
+main { max-width: 110rem; gap: var(--sp-4); }
+.topbar { padding-block: var(--sp-2); justify-content: space-between; }
+.topbar h1 { font-weight: 700; }
+.panel { padding: var(--sp-4); }
+.picker { padding: var(--sp-4); }
+.picker-row { gap: var(--sp-3); }
+.picker-title { flex-basis: 100%; font-size: var(--fs-sm); }
+.picker-row .field { gap: var(--sp-1); }
+.picker-row .field.wide select { font-family: var(--sans); }
+button, select { min-height: 2.5rem; }
+select { min-width: 0; max-width: 100%; }
+.reference-pick { background: var(--panel-2); color: var(--text); border: 1px solid var(--border-strong); border-radius: 6px; padding: var(--sp-2); }
+button, select, summary, a { touch-action: manipulation; }
+button:focus-visible, select:focus-visible, summary:focus-visible, a:focus-visible,
+input:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+summary { cursor: pointer; font-size: var(--fs-sm); color: var(--text-dim); }
+details[open] > summary { margin-bottom: var(--sp-3); }
+.picker-foot { display: block; margin-top: var(--sp-3); }
+.reference-line { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; }
+.reference-value { font-family: var(--sans); font-size: var(--fs-sm); }
+.reference-pick { flex: 1 1 20rem; max-width: 35rem; }
+.selection-details { margin-top: var(--sp-2); }
+.result-details { width: 100%; padding-top: var(--sp-3); border-top: 1px solid var(--border); }
+.hero-body { gap: var(--sp-3); }
+.hero-figure { align-items: center; flex-wrap: wrap; }
+.hero-number { font-weight: 500; }
+.hero-meta { flex-wrap: wrap; margin-bottom: var(--sp-4); }
+.hero-meta > div { flex: 1 1 8rem; min-width: 0; }
+.hero-meta dd { overflow-wrap: anywhere; }
+.hero-meta-sub { font-family: var(--sans); }
+.analyzed-label { overflow-wrap: anywhere; margin-bottom: var(--sp-4); }
+.interaction-hint { margin: 0 0 var(--sp-3); color: var(--text-dim); font-size: var(--fs-xs); word-break: keep-all; }
+.correction-item { grid-template-columns: 1.75rem minmax(0, 1fr) auto; padding: var(--sp-3) var(--sp-2); gap: var(--sp-2); align-items: center; border-radius: 6px; }
+.correction-item:hover { background: var(--panel-2); }
+.correction-item.is-focused { background: var(--accent-dim); outline-color: var(--accent); }
+.correction-text { font-size: var(--fs-base); line-height: 1.6; }
+.correction-action { color: var(--accent); font-size: var(--fs-xs); white-space: nowrap; }
+.improvement { display: block; }
+.improvement-score { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: baseline; margin-top: var(--sp-3); }
+.improvement-score .improvement-value { font-size: var(--fs-xl); }
+.improvement-demo { display: inline-block; padding-block: var(--sp-2); }
+.improvement-detail { margin-top: var(--sp-2); }
+.cue-link { min-height: 2rem; padding: var(--sp-1) 0; background: transparent; color: var(--accent); border: 0; font-size: var(--fs-xs); text-decoration: underline; text-underline-offset: 3px; }
+.secondary-assessment > summary, .reference-details > summary { color: var(--text); font-weight: 500; }
+.detail-tag { color: var(--text-dim); font-size: var(--fs-xs); font-weight: 400; margin-left: var(--sp-2); }
+.view3d-panel { padding: var(--sp-3); }
+.view3d-toolbar { gap: var(--sp-2); align-items: center; }
+.view3d-title { font-weight: 600; }
+.view3d-controls { flex: 1; gap: var(--sp-2); }
+.view3d-controls label { min-height: 2.5rem; display: inline-flex; align-items: center; gap: var(--sp-1); }
+.layer-toggle { padding-inline: var(--sp-2); background: var(--panel-2); border-radius: 6px; }
+.layer-query { color: var(--layer-query); }
+.layer-reference { color: var(--layer-reference); }
+.view3d-controls button, .view3d-controls select,
+.view3d-playback button, .view3d-playback select { padding: var(--sp-2); border-radius: 6px; border: 1px solid var(--border-strong); background: var(--panel-2); color: var(--text); }
+.view-settings { flex-basis: 100%; }
+.view-settings > summary { width: fit-content; padding-block: var(--sp-1); }
+.view-settings-body { display: flex; flex-wrap: wrap; gap: var(--sp-3); padding: var(--sp-3); background: var(--panel-2); border-radius: 6px; }
+.view-settings fieldset { flex: 1 1 15rem; border: 0; padding: 0; margin: 0; min-width: 0; }
+.view-settings legend { font-size: var(--fs-xs); color: var(--text-dim); margin-bottom: var(--sp-2); }
+.view-settings label { display: flex; }
+.view-settings button { margin-bottom: var(--sp-1); }
+.view3d-host { border-radius: 6px; overflow: hidden; }
+.view3d-playback { gap: var(--sp-2); padding-block: var(--sp-3); }
+.view3d-playback .view3d-play { background: var(--accent); border-color: var(--accent); color: #051022; font-weight: 700; }
+.view3d-scrub { min-width: 0; flex-basis: 100%; order: -1; }
+.view3d-scrub input { min-height: 1.75rem; accent-color: var(--accent); }
+.view3d-playback-readout { min-width: 0; flex-basis: 100%; font-size: var(--fs-xs); }
+.view3d-legend { display: flex; flex-wrap: wrap; gap: var(--sp-2) var(--sp-4); padding-block: var(--sp-2); border-top: 1px solid var(--border); }
+.legend-details { flex-basis: 100%; }
+.legend-details-body { display: flex; flex-wrap: wrap; gap: var(--sp-2) var(--sp-3); padding: var(--sp-3); background: var(--panel-2); border-radius: 6px; }
+.display-details { margin-top: var(--sp-2); }
+.view3d-focus-note { padding: var(--sp-3); background: var(--accent-dim); border-radius: 6px; }
+.view3d-focus-note:empty { display: none; }
+@media (min-width: 80rem) {
+  .workspace { grid-template-columns: minmax(20rem, 29fr) minmax(0, 71fr); gap: var(--sp-4); }
+  .workspace-right { top: var(--sp-3); }
+  .view3d-host { height: clamp(340px, calc(100dvh - 34rem), 640px); }
+}
+@media (max-width: 79.99rem) {
+  .workspace-right > .view3d-panel { order: 0; }
+  .workspace-left > #heroSection { order: 1; }
+  .workspace-left > #corrections { order: 2; }
+}
+@media (max-width: 40rem) {
+  body { padding-inline: var(--sp-3); }
+  .topbar-sub { display: none; }
+  .picker-row .field:not(.wide) { flex: 1; }
+  .picker-row .field select { width: 100%; }
+  .picker-row #run { width: 100%; }
+  .reference-line { min-width: 0; }
+  .reference-pick { flex-basis: 100%; width: 100%; }
+  .reference-value, .reference-match { overflow-wrap: anywhere; }
+  .correction-item > .correction-action { grid-column: 2; }
+  .view3d-controls { flex-basis: 100%; }
+  .view3d-controls select { flex: 1; }
+  .view3d-host { height: 22rem; min-height: 0; }
+  .hero-number { font-size: 3rem; }
+  .deployed-bars { flex-wrap: wrap; }
+  .orientation-table { width: 100%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  * { scroll-behavior: auto !important; transition: none !important; }
+}
+
+/* 해부학적으로 맞지 않는 몸의 고지 — 경고색으로 캔버스 바로 아래에 늘 보인다. */
+.view3d-posture-note { color: var(--warn); font-weight: 600; margin: var(--sp-1) 0; }
+.view3d-posture-note:empty { display: none; }

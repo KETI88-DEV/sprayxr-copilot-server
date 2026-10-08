@@ -35,6 +35,7 @@ COPY trainer/scripts/simulator_csv.py trainer/scripts/simulator_csv.py
 COPY trainer/scripts/world_axes.py trainer/scripts/world_axes.py
 COPY trainer/scripts/joint_names.py trainer/scripts/joint_names.py
 COPY trainer/scripts/skeleton_gate.py trainer/scripts/skeleton_gate.py
+COPY trainer/scripts/rig_profile.py trainer/scripts/rig_profile.py
 COPY trainer/scripts/posture_sequence.py trainer/scripts/posture_sequence.py
 COPY trainer/scripts/measured_score.py trainer/scripts/measured_score.py
 COPY trainer/scripts/arm_reference.py trainer/scripts/arm_reference.py

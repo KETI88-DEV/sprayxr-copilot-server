@@ -426,6 +426,9 @@ def build_demo(source: Any, query: Any, reference: Any, reference_spreads: Any, 
         "values": len(chosen),
         "cues": cues,
         "bones": (layers.get("query") or {}).get("bones") or [],
+        # 작업자 몸이 해부학적으로 맞지 않으면(`service.posture_check`) 시연도 "추정 자세"로 알린다 — 목표 몸도 이 몸에서 나온다.
+        "posture": (view.get("fit") or {}).get("posture"),
+        "posture_note": (view.get("fit") or {}).get("posture_note"),
         "flesh": view.get("flesh"),
         "bodies": {"worker": _round(worker), "target": _round(target), "steps": [_round(s) for s in steps]},
         "context": {

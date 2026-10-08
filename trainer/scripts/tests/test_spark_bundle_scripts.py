@@ -108,7 +108,13 @@ def _make_sources(root: Path) -> dict[str, Path]:
     (index / "faiss.index").write_bytes(b"FAISS" * 10)
     (index / "metadata.json").write_text('{"id_map": []}')
     (index / "faiss.index.bak_prerepair").write_bytes(b"OLD")
-    return {"hub": hub, "fp8": fp8, "index": index}
+
+    # 리그별 팔 기준 둘 다 필수다(예전 리그 + 2026-10 아바타). 컨테이너의 /output 에 기대지 않는다.
+    reference = root / "expert_reference"
+    reference.mkdir()
+    (reference / "arm.json").write_text('{"buckets": {}}')
+    (reference / "arm_avatar.json").write_text('{"buckets": {}, "rig": {"name": "avatar_2026-10"}}')
+    return {"hub": hub, "fp8": fp8, "index": index, "arm": reference / "arm.json", "arm_avatar": reference / "arm_avatar.json"}
 
 
 def _prepare_args(sources: dict[str, Path], bundle: Path, *extra: str) -> list[str]:
@@ -118,6 +124,8 @@ def _prepare_args(sources: dict[str, Path], bundle: Path, *extra: str) -> list[s
         "--hf-hub-cache", str(sources["hub"]),
         "--index-dir", str(sources["index"]),
         "--pose-reference", str(bundle.parent / "absent_pose_reference.json"),
+        "--arm-reference", str(sources["arm"]),
+        "--avatar-arm-reference", str(sources["arm_avatar"]),
         *extra,
     ]  # fmt: skip
 

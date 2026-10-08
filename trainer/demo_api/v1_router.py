@@ -12,14 +12,16 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from typing import Annotated, Any, Final
 
 import anyio
+import httpx
 from anyio import to_thread
-from fastapi import APIRouter, File, Form, Path as ApiPath, Query, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, Form, Path as ApiPath, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from trainer.demo_api.anomaly_stream import HEARTBEAT_SEC, POLL_SEC, AnomalyBroadcaster
@@ -37,6 +39,8 @@ from trainer.demo_api.v1_contracts import (
     UserCreateRequest,
     UserProfile,
 )
+from trainer.demo_api.session_analysis import analyze_session
+from trainer.demo_api.sequence_store import SequenceStore
 from trainer.demo_api.v1_store import V1Store
 
 logger = logging.getLogger(__name__)
@@ -118,14 +122,58 @@ async def _sse_body(
         await anyio.sleep(POLL_SEC)
 
 
+def _report(row: Any) -> ReportDetail:
+    """저장된 분석이 있으면 `pose_report`에 싣는다. 도막·시퀀스 영역은 엔진이 없으므로 `unavailable`(p.15)."""
+    report = _unavailable_report(
+        report_id=row.report_id, session_id=row.session_id,
+        status=row.report_status, generated_at=row.requested_at,
+    )
+    analysis = row.payload.get("analysis") if isinstance(row.payload, dict) else None
+    if isinstance(analysis, dict) and isinstance(analysis.get("pose_report"), dict):
+        report.pose_report = PoseReport.model_validate(analysis["pose_report"])
+        if isinstance(analysis.get("generated_at"), str):
+            report.generated_at = analysis["generated_at"]
+    return report
+
+
 def create_v1_router(
     *,
     store: V1Store | None = None,
     broadcaster: AnomalyBroadcaster | None = None,
+    sequences: SequenceStore | None = None,
+    mcp_base_url: str | None = None,
+    transport: httpx.BaseTransport | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix=_V1)
     state = store if store is not None else V1Store()
     anomalies = broadcaster if broadcaster is not None else AnomalyBroadcaster()
+    stored_sequences = sequences if sequences is not None else SequenceStore()
+    mcp_base = mcp_base_url or os.environ.get("MCP_BASE_URL", "http://localhost:8100")
+
+    def _analyze(report_id: str, *, session_id: str, user_id: str, scenario_id: str, csv_bytes: bytes) -> None:
+        """세션 종합 자세 분석(`session_analysis`). 응답을 보낸 뒤 스레드에서 돈다 — 시퀀스마다 엔진을 부른다."""
+        try:
+            result = analyze_session(
+                session_id=session_id, user_id=user_id, scenario_id=scenario_id, csv_bytes=csv_bytes,
+                store=stored_sequences, mcp_base_url=mcp_base, transport=transport,
+            )
+        except Exception:  # noqa: BLE001 - 분석 실패는 리포트 상태로 알린다. 폴링이 pending에 갇히면 안 된다.
+            logger.exception("session analysis failed %s report=%s", session_id, report_id)
+            state.finish_completion(
+                report_id, status="failed",
+                analysis={"generated_at": _now(), "error": "session_analysis_failed"},
+            )
+            return
+        state.finish_completion(
+            report_id, status="complete",
+            analysis={
+                "generated_at": _now(),
+                "pose_report": result.pose_report(),
+                "counts": result.counts,
+                "sequences": result.sequences,
+            },
+        )
+        logger.info("session analysis %s report=%s %s", session_id, report_id, result.counts)
 
     # --- 1. 세션 관리 (p.1-3) ---------------------------------------------
 
@@ -195,6 +243,7 @@ def create_v1_router(
 
     @router.post("/sessions/complete", response_model=ApiResponse, tags=["5. 최종 평가·리포트"], summary="5-1. 훈련 최종 종료 및 비동기 분석 요청")
     async def sessions_complete(
+        background: BackgroundTasks,
         session_id: Annotated[str, Form(examples=["TSB-DEMO-001"])],
         user_id: Annotated[str, Form(examples=["W-017"])],
         scenario_id: Annotated[str, Form(examples=["3"])],
@@ -211,7 +260,8 @@ def create_v1_router(
         세션 평균 속도·이격거리는 2026-10-08 샘플에 없으므로 선택값이다. 시퀀스별
         속도·이격거리 평가는 `/copilot/analyze-sequence` 입력을 사용한다.
         """
-        csv_bytes = len(await telemetry_csv.read())
+        csv_raw = await telemetry_csv.read()
+        csv_bytes = len(csv_raw)
         image_bytes = len(await height_map_image.read()) if height_map_image is not None else None
         completion = await to_thread.run_sync(
             lambda: state.create_completion(
@@ -226,6 +276,14 @@ def create_v1_router(
             )
         )
         logger.info("session complete %s report=%s csv=%dB", session_id, completion.report_id, csv_bytes)
+        # 세션 종합 분석은 응답 뒤에 돈다(p.12 "비동기 분석"). 결과는 리포트 폴링으로 본다.
+        background.add_task(
+            to_thread.run_sync,
+            lambda: _analyze(
+                completion.report_id, session_id=session_id, user_id=user_id,
+                scenario_id=scenario_id, csv_bytes=csv_raw,
+            ),
+        )
         return _ok(
             SessionCompleteData(
                 report_id=completion.report_id, session_id=session_id,
@@ -267,12 +325,7 @@ def create_v1_router(
         row = await to_thread.run_sync(lambda: state.get_completion(report_id))
         if row is None:
             return _error(404, "report not found")
-        return _ok(
-            _unavailable_report(
-                report_id=row.report_id, session_id=row.session_id,
-                status=row.report_status, generated_at=row.requested_at,
-            ).model_dump(mode="json")
-        )
+        return _ok(_report(row).model_dump(mode="json"))
 
     # --- 6. 사용자 관리 (p.17-20) -----------------------------------------
 

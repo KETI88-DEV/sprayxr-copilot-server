@@ -11,6 +11,10 @@
 **머리를 쓰지 않는다.** CSV의 머리는 카메라(HMD) 강체인데 런타임이 보내는 머리는 골격
 `head` 관절이라 같은 점이 아니다. 건은 양쪽 모두 같은 물건이다(`arm_reference` 독스트링).
 
+**다른 리그로 옮겨 굽기(`--rig`).** 아바타가 바뀌면(2026-10-08 샘플부터) 숙련자 동작의 관절 회전을 새 리그의
+뼈 오프셋(`rig_profile`)에 그대로 적용해 굽는다 — 두 리그는 축 규약·팔다리 길이가 같고 몸통 치수만 다르다. 산출
+파일에 `rig`(이름·출처·`retargeted`)를 적고, 다른 파일명으로 쓴다(기존 기준은 그대로 둔다).
+
 **패스 하나가 표본 하나다.** 프레임을 다 넣으면 같은 패스의 120프레임이 독립 표본인 척해
 n이 부풀고 산포가 좁아진다 — 좁은 산포는 모든 σ를 키워 교정을 과발부한다.
 """
@@ -30,6 +34,7 @@ import arm_reference
 import measured_pose
 import sequence_dtw
 import pose_fk_csv
+import rig_profile
 import simulator_csv
 import world_axes
 
@@ -48,6 +53,10 @@ def _load_pose_lab() -> tuple[Any, Any]:
     return csv_source, service
 
 
+# `--rig`로 받은 리그 오프셋. 비어 있으면 패스 자신의 바인드 오프셋(예전 리그)을 쓴다.
+_RIG_OFFSETS: dict[str, tuple[float, float, float]] = {}
+
+
 def _pass_sample(
     rows: list[dict[str, str]], *, with_frames: bool = False
 ) -> tuple[dict[str, Any], float] | tuple[dict[str, Any], float, list, list] | None:
@@ -58,7 +67,7 @@ def _pass_sample(
     """
     if not rows:
         return None
-    offsets = pose_fk_csv.bind_offsets(rows[0])
+    offsets = dict(_RIG_OFFSETS) if _RIG_OFFSETS else pose_fk_csv.bind_offsets(rows[0])
     if not offsets:
         return None
 
@@ -122,7 +131,10 @@ def _pass_sample(
     )
 
 
-def build(root: Path, levels: set[str] | None = None) -> dict[str, object]:
+def build(root: Path, levels: set[str] | None = None, rig: "rig_profile.RigProfile | None" = None) -> dict[str, object]:
+    _RIG_OFFSETS.clear()
+    if rig is not None:
+        _RIG_OFFSETS.update(rig.offsets)
     csv_source, service = _load_pose_lab()
     source = csv_source.CsvPassSource(root)
     buckets: dict[str, arm_reference.BucketAccum] = {}
@@ -345,6 +357,13 @@ def build(root: Path, levels: set[str] | None = None) -> dict[str, object]:
         "skipped": skipped,
         "ladder_passes": ladder_passes,
         "workers": sorted(workers),
+        # 어느 몸(리그)으로 구운 기준인가. MCP가 런타임 시퀀스의 뼈 길이로 맞는 기준을 고른다.
+        "rig": (
+            {"name": rig.name, "source": rig.source, "retargeted": True,
+             "bone_lengths_m": {k: round(v, 6) for k, v in rig.bone_lengths().items()}}
+            if rig is not None
+            else {"name": rig_profile.LEGACY_RIG, "retargeted": False, "bone_lengths_m": dict(rig_profile.LEGACY_BONE_LENGTHS)}
+        ),
         "buckets": payloads,
     }
 
@@ -355,11 +374,16 @@ def main() -> None:
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
     parser.add_argument("--levels", default="", help="쉼표로 구분. 비우면 전부.")
     parser.add_argument("--limit-sessions", type=int, default=0)
+    parser.add_argument("--rig", type=Path, default=None,
+                        help="숙련자 동작을 이 리그(rig_profile JSON)의 몸으로 옮겨 굽는다. --out을 다른 이름으로 줄 것.")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     levels = {part for part in args.levels.split(",") if part} or None
-    payload = build(args.root, levels)
+    rig = rig_profile.load(args.rig) if args.rig is not None else None
+    if rig is not None and args.out == DEFAULT_OUT:
+        parser.error("--rig로 옮겨 구울 때는 --out을 기존 기준과 다른 파일명으로 준다(기존 기준을 덮어쓰지 않는다)")
+    payload = build(args.root, levels, rig)
     if args.limit_sessions:
         logger.info("limit-sessions는 build 안에서 쓰지 않는다 — 전수로 돌았다")
     args.out.parent.mkdir(parents=True, exist_ok=True)

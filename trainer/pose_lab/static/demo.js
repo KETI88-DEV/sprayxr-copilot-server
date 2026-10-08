@@ -247,7 +247,9 @@ function render(data) {
   world.add(buildStage(data));
   live.target = buildBody(data.bodies.target, data, COLORS.target, 0.3);
   world.add(live.target);
-  live.worker = buildBody(data.bodies.worker, data, COLORS.worker, 0.85);
+  // 해부학적으로 맞지 않는 몸은 흐리게 그리고 고지한다(서버 `posture_note`).
+  $("demoPosture").textContent = typeof data.posture_note === "string" ? data.posture_note : "";
+  live.worker = buildBody(data.bodies.worker, data, COLORS.worker, workerOpacity(data));
   world.add(live.worker);
   for (const cue of data.cues) {
     const arrow = arrowFor(cue);
@@ -274,6 +276,10 @@ function render(data) {
   $("demoNote").textContent =
     "계산상 예상값입니다 — 작업자가 안내를 정확히 따랐다고 보고 계산했고, 다시 뿌려서 잰 값이 아닙니다. " +
     "목표 자세는 작업자의 중요 조인트를 숙련 작업자 기준 위치에 맞춘 모습입니다.";
+}
+
+function workerOpacity(data) {
+  return data.posture && data.posture.plausible === false ? 0.45 : 0.85;
 }
 
 function setWorker(joints, color, opacity) {
@@ -363,7 +369,7 @@ async function play(data, runId) {
       const position = t * (steps.length - 1);
       const index = Math.min(steps.length - 2, Math.floor(position));
       const joints = lerpJoints(steps[index], steps[index + 1], position - index);
-      setWorker(joints, COLORS.worker, 0.85);
+      setWorker(joints, COLORS.worker, workerOpacity(data));
       $("demoScore").textContent = scores[Math.round(t * (scores.length - 1))];
       if (t < 1) requestAnimationFrame(frame);
       else resolve();
@@ -371,7 +377,7 @@ async function play(data, runId) {
     requestAnimationFrame(frame);
   });
   if (!alive()) return;
-  setWorker(steps[steps.length - 1], COLORS.corrected, 0.9);
+  setWorker(steps[steps.length - 1], COLORS.corrected, workerOpacity(data) === 0.85 ? 0.9 : 0.45);
   $("demoScore").textContent = data.display.score_after;
   $("demoScoreSub").textContent = `${data.display.score_before} → ${data.display.score_after} · 개선율 ${data.display.improvement}`;
   $("demoCaption").textContent =

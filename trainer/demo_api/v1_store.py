@@ -206,6 +206,22 @@ class V1Store:
             )
         return CompletionRow(report_id, session_id, "pending", requested_at, payload)
 
+    def finish_completion(self, report_id: str, *, status: str, analysis: dict[str, Any]) -> None:
+        """분석이 끝나면 상태(`complete`/`failed`)와 결과를 남긴다. 결과는 payload의 `analysis` 아래에 둔다."""
+        import json
+
+        with self._guard, self._conn:
+            row = self._conn.execute(
+                "SELECT payload FROM completions WHERE report_id = ?", (report_id,)
+            ).fetchone()
+            if row is None:
+                return
+            payload = json.loads(row[0]) | {"analysis": analysis}
+            self._conn.execute(
+                "UPDATE completions SET report_status = ?, payload = ? WHERE report_id = ?",
+                (status, json.dumps(payload, ensure_ascii=False), report_id),
+            )
+
     def get_completion(self, report_id: str) -> CompletionRow | None:
         import json
 
