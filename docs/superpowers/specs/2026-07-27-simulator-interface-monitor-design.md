@@ -25,7 +25,7 @@
 ## 2. 배경 · 재사용 지점
 
 - 전용 시뮬레이터 엔드포인트는 아직 없다. 현재 demo API는 `/api/health`, `/api/sequence/{level_id}`, `/api/chat`(SSE)뿐.
-- 3단계 매핑은 `.omo/plans/dgx-spark-qwen-coaching-agent.md` §0.9에서 확정: 시작=순서 안내, 런타임=RAG+이상탐지, 끝=회고 리뷰.
+- 3단계 매핑은 `docs/archive/agent-notes/dgx-spark-qwen-coaching-agent-plan.md` §0.9에서 확정: 시작=순서 안내, 런타임=RAG+이상탐지, 끝=회고 리뷰.
 - 기존 결정론 자산을 재사용한다:
   - `trainer/scripts/session_coaching.py` — `SessionSummary`, `SessionMetrics`, `compute_risk_flags()`(순수 결정론).
   - `trainer/demo_api/sequence.py` — `default_snapshot(level_id)`(zone 순서 → recommended_flow).

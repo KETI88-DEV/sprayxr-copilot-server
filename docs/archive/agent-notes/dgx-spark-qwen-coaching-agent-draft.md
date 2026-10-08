@@ -3,7 +3,7 @@ slug: dgx-spark-qwen-coaching-agent
 status: awaiting-approval
 intent: clear
 review_required: false
-pending-action: write .omo/plans/dgx-spark-qwen-coaching-agent.md
+pending-action: write docs/archive/agent-notes/dgx-spark-qwen-coaching-agent-plan.md
 approach: Keep training and fine-tuning on the current server, export a merged and validated GGUF artifact, and run inference on DGX Spark through Ollama; use Qwen3.5-9B as the recommended production candidate, retain Qwen3-4B as rollback, and evaluate Gemma 4 E4B as an A/B candidate.
 ---
 
@@ -98,6 +98,6 @@ approach: Keep training and fine-tuning on the current server, export a merged a
 ## Approval gate
 status: awaiting-approval
 approved approach: pending user decision
-next workflow action: write `.omo/plans/dgx-spark-qwen-coaching-agent.md` only after explicit approval; do not implement.
+next workflow action: write `docs/archive/agent-notes/dgx-spark-qwen-coaching-agent-plan.md` only after explicit approval; do not implement.
 <!-- When exploration is exhausted and unknowns are answered, set status: awaiting-approval. -->
 <!-- That durable record is the loop guard: on a later turn read it and resume at the gate instead of re-running exploration. -->

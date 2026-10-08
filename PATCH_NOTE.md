@@ -3561,7 +3561,7 @@ Gradio demo (기존) ─────▶ 공유 scenario_adapter / DEMO_SCENARIOS
 - 결과: rerank recall@8 0.66 → 0.74. `rag_config.yaml` `ef_search=256`, `top_k_retrieve=30`, `top_k_rerank=8`.
 
 #### 18.12 DGX Spark 계획 v3 반영 ✅
-- `.omo/plans/dgx-spark-qwen-coaching-agent.md` (+ `.sisyphus/plans/` 미러) 섹션 0.9 신설: 코칭 기능-시점 매핑.
+- `docs/archive/agent-notes/dgx-spark-qwen-coaching-agent-plan.md` (+ `.sisyphus/plans/` 미러) 섹션 0.9 신설: 코칭 기능-시점 매핑.
 - 훈련 중 이벤트는 RAG/anomaly만, 순서는 세션 시작 시 guide, 자세·분포·순서 회고는 세션 완료 리뷰 전용.
 
 ### 자동 게이트 결과

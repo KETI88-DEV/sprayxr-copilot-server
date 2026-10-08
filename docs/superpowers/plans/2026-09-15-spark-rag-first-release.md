@@ -2,7 +2,7 @@
 
 - 작성: 2026-09-15
 - 근거 조사: 같은 날 병렬 조사 2회(병합 구조·수치, vLLM API 전환 범위, Spark vLLM 호환, 지연 분해, RAG 우선 경로). 수치의 출처는 각 항목에 적는다.
-- 상위 계획: `.omo/plans/dgx-spark-qwen-coaching-agent.md`(7월 v3.1). 이 문서가 그 계획의 T14·T16·T19 전제 가운데 아래 "결정"과 충돌하는 부분을 대체한다.
+- 상위 계획: `docs/archive/agent-notes/dgx-spark-qwen-coaching-agent-plan.md`(7월 v3.1). 이 문서가 그 계획의 T14·T16·T19 전제 가운데 아래 "결정"과 충돌하는 부분을 대체한다.
 
 ## 1. 결정
 

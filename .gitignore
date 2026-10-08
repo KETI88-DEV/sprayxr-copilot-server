@@ -11,6 +11,9 @@ node_modules/
 
 # Environment variables
 .env
+.env.*
+!.env.example
+!.env.*.example
 
 # Python cache
 __pycache__/
@@ -100,3 +103,32 @@ dataset.md
 # Codex isolated implementation workspaces
 .worktrees/
 .superpowers/
+
+# Machine-local AI tooling; shared .agents/skills and skills-lock.json stay tracked.
+/.agent/
+/.codex/
+/.opencode/
+/.omo/
+/.sisyphus/
+/.cache/
+/plugins/cache/
+/package.json
+/package-lock.json
+
+# Local experiments and generated reports, not application fixtures or docs.
+/.tmp_fig/
+/.floor_planes.json
+/trainer/scripts/_curveprobe.py
+/trainer/pose_lab/static/audit/
+/smoke-mtp*.json
+/smoke-off.json
+/smoke-on.json
+/results/
+demo-ui/playwright-report/
+demo-ui/test-results/
+demo-ui/coverage/
+
+# Keep small deployment manifests; actual model weights remain ignored.
+!deploy/spark/models/
+/deploy/spark/models/*
+!deploy/spark/models/*.manifest.json
