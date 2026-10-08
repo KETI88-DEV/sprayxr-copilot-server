@@ -72,8 +72,8 @@ def test_query_voice_and_sequence_operations_have_examples_and_ordered_tags() ->
     assert analyze_example["sequence_info"]
     assert analyze_example["scenario_id"] == "3"
     assert "mode_id" not in analyze_example
-    frame = schema["components"]["schemas"]["SequenceFrameIn"]
-    raytexuv = frame["properties"]["raytexuv"]
+    gun_metrics = schema["components"]["schemas"]["GunMetricsIn"]
+    raytexuv = gun_metrics["properties"]["raytexuv"]
     assert "2048x2048" in raytexuv["description"]
     assert "좌하단" in raytexuv["description"]
     scenario = schema["components"]["schemas"]["AnalyzeSequenceRequest"]["properties"]["scenario_id"]
