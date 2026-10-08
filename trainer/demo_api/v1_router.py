@@ -343,12 +343,13 @@ def create_v1_router(
     @router.post("/sessions/complete", response_model=ApiResponse, tags=["5. 최종 평가·리포트"], summary="5-1. 훈련 최종 종료 및 비동기 분석 요청")
     async def sessions_complete(
         background: BackgroundTasks,
-        session_id: Annotated[str, Form(examples=["TSB-DEMO-001"])],
-        user_id: Annotated[str, Form(examples=["W-017"])],
-        scenario_id: Annotated[str, Form(examples=["3"])],
-        vr_score: Annotated[int, Form(ge=0, le=100, examples=[82])],
-        is_pass: Annotated[bool, Form(examples=[True])],
-        avg_thickness_um: Annotated[float, Form(ge=0, examples=[250.0])],
+        session_id: Annotated[str, Form(description="sessions/start와 동일한 세션 식별자", examples=["3_11000346_1"])],
+        user_id: Annotated[str, Form(description="훈련자 식별자", examples=["1234"])],
+        scenario_id: Annotated[str, Form(description="session_id의 첫 '_' 앞 콘텐츠 식별자", examples=["3"])],
+        vr_score: Annotated[int, Form(ge=0, le=100, examples=[54])],
+        is_pass: Annotated[bool, Form(examples=[False])],
+        avg_thickness_um: Annotated[float, Form(ge=0, examples=[138.91])],
+
         telemetry_csv: Annotated[UploadFile, File()],
         avg_speed_mms: Annotated[float | None, Form(ge=0, examples=[480.0])] = None,
         avg_distance_mm: Annotated[float | None, Form(ge=0, examples=[255.0])] = None,
@@ -399,7 +400,7 @@ def create_v1_router(
         description="sessions/complete에서 받은 report_id의 처리 상태를 확인합니다. 비동기 분석 중에는 pending이며, 동일 session_id와 report_id 조합을 사용해야 다른 세션의 결과를 잘못 조회하지 않습니다.",
     )
     async def report_status(
-        session_id: Annotated[str, ApiPath(examples=["TSB-DEMO-001"])],
+        session_id: Annotated[str, ApiPath(examples=["3_11000346_1"])],
         report_id: Annotated[str, ApiPath(examples=["RPT-123456789abc"])],
     ) -> JSONResponse:
         row = await to_thread.run_sync(lambda: _settled(report_id))
@@ -474,7 +475,7 @@ def create_v1_router(
         description="한 명의 훈련자 프로필을 user_id로 조회합니다. VR·Replay 화면에서 숙련도와 주 사용 손을 표시하거나 세션 시작 전 등록 여부를 확인할 때 사용합니다.",
     )
     async def users_get(
-        user_id: Annotated[str, ApiPath(examples=["W-017"])]
+        user_id: Annotated[str, ApiPath(examples=["1234"])]
     ) -> JSONResponse:
         row = await to_thread.run_sync(lambda: state.get_user(user_id))
         if row is None:
@@ -488,7 +489,7 @@ def create_v1_router(
         description="진행 중인 세션의 이상 감지 알림을 Server-Sent Events로 계속 수신합니다. 클라이언트는 한 번 연결한 뒤 anomaly_detection 이벤트를 처리하고, keep-alive 주석은 화면 상태 변경 없이 무시합니다.",
     )
     async def stream_anomalies(
-        session_id: Annotated[str, ApiPath(examples=["TSB-DEMO-001"])],
+        session_id: Annotated[str, ApiPath(examples=["3_11000346_1"])],
         request: Request,
     ) -> StreamingResponse:
         raw = request.headers.get("last-event-id", "0")

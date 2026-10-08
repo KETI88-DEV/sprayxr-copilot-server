@@ -22,9 +22,9 @@ class CopilotQueryRequest(StrictModel):
         extra="forbid",
         json_schema_extra={
             "example": {
-                "user_id": "W-017",
-                "scenario_id": "training-mode-3",
-                "session_id": "TSB-DEMO-001",
+                "user_id": "1234",
+                "scenario_id": "3",
+                "session_id": "3_11000346_1",
                 "request_id": "REQ-TEXT-001",
                 "prompt": "다음 Zone을 어떤 순서로 칠해야 하나요?",
                 "task_type": "knowledge_search",
@@ -34,9 +34,9 @@ class CopilotQueryRequest(StrictModel):
         },
     )
 
-    user_id: Annotated[str, Field(min_length=1)]
-    scenario_id: str | None = None
-    session_id: str | None = None
+    user_id: Annotated[str, Field(min_length=1, examples=["1234"])]
+    scenario_id: Annotated[str | None, Field(examples=["3"])] = None
+    session_id: Annotated[str | None, Field(examples=["3_11000346_1"])] = None
     # 명세서 p.9: request_id·use_rag 는 (선택)이고 use_rag 기본값은 Y 다.
     request_id: str | None = None
     prompt: Annotated[str, Field(min_length=1, max_length=4000)]

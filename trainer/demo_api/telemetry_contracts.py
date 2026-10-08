@@ -138,25 +138,32 @@ class TelemetrySequenceRequest(StrictModel):
         extra="forbid",
         json_schema_extra={
             "example": {
-                "session_id": "TSB-DEMO-001", "user_id": "W-017",
+                "session_id": "3_11000346_1", "user_id": "1234",
                 "scenario_id": "3", "zone_id": "3", "sequence_id": "SEQ-001",
                 "sequence_setting": {
                     "tool_type": "spray_gun",
-                    "target_speed_mms": 500,
-                    "target_distance_mm": 250,
+                    "pressure": 0.55,
+                    "nozzle_size": 0.021,
+                    "thinning_ratio": 10.0,
+                    "viscosity": 65.0,
+                    "month": 10,
                 },
                 "sequence_info": [{
-                    "index": 0, "time": "2026-10-06T10:01:00Z",
+                    "index": 0, "time": "2026-10-08T01:05:53.000Z",
                     "tool_pos_rot": {"position": [0.0, 1.2, 0.4]},
-                    "gun_metrics": {"speed_mms": 450, "distance_mm": 260},
+                    "gun_metrics": {
+                        "speed": 450.0, "distance": 260.0,
+                        "raypoint": [0.0, 1.0, 0.5], "raytexmapnum": 1,
+                        "raytexuv": [1024, 768], "spraytime": 0.011,
+                    },
                 }],
                 "sequence_result": {"avg_speed_mms": 450, "avg_distance_mm": 260},
             }
         },
     )
 
-    session_id: Annotated[str, Field(min_length=1)]
-    user_id: Annotated[str, Field(min_length=1)]
+    session_id: Annotated[str, Field(min_length=1, description="sessions/start와 동일한 세션 식별자", examples=["3_11000346_1"])]
+    user_id: Annotated[str, Field(min_length=1, description="훈련자 식별자", examples=["1234"])]
     scenario_id: Annotated[
         str,
         Field(
@@ -186,22 +193,29 @@ class AnalyzeSequenceRequest(TelemetrySequenceRequest):
         extra="forbid",
         json_schema_extra={
             "example": {
-                "session_id": "TSB-DEMO-001",
-                "user_id": "W-017",
+                "session_id": "3_11000346_1",
+                "user_id": "1234",
                 "scenario_id": "3",
                 "zone_id": "3",
                 "sequence_id": "SEQ-001",
                 "sequence_setting": {
                     "tool_type": "spray_gun",
-                    "target_speed_mms": 500,
-                    "target_distance_mm": 250,
+                    "pressure": 0.55,
+                    "nozzle_size": 0.021,
+                    "thinning_ratio": 10.0,
+                    "viscosity": 65.0,
+                    "month": 10,
                 },
                 "sequence_info": [
                     {
                         "index": 0,
-                        "time": "2026-10-02T10:00:00Z",
+                        "time": "2026-10-08T01:05:53.000Z",
                         "tool_pos_rot": {"position": [0.0, 1.2, 0.4]},
-                        "gun_metrics": {"speed_mms": 500, "distance_mm": 250},
+                        "gun_metrics": {
+                            "speed": 500.0, "distance": 250.0,
+                            "raypoint": [0.0, 1.0, 0.5], "raytexmapnum": 1,
+                            "raytexuv": [1024, 768], "spraytime": 0.011,
+                        },
                     }
                 ],
                 "sequence_result": {"avg_speed_mms": 500, "avg_distance_mm": 250},
