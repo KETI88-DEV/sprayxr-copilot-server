@@ -21,7 +21,7 @@ from typing import Any, Final
 
 import httpx
 
-from trainer.demo_api.sequence_store import SequenceStore
+from trainer.demo_api.sequence_store import NON_CONTENT_FIELDS, SequenceStore
 
 logger = logging.getLogger(__name__)
 
@@ -115,6 +115,9 @@ def score_pose(
     body = store.load_body(session_key=session_id, sequence_id=sequence_id)
     if body is None:
         return _unavailable("sequence_not_found", sequence_id=sequence_id)
+    # `analyze-sequence`가 붙인 분석 파라미터(`mode_id`)는 시퀀스 내용이 아니다. MCP 자세 엔진은 최상위 모르는 필드를
+    # 거절하므로(422) 빼고 보낸다 — 빼지 않으면 벤더 경로의 모든 질의가 `engine_unavailable`이 된다(2026-10-08 샘플).
+    body = {key: value for key, value in body.items() if key not in NON_CONTENT_FIELDS}
 
     try:
         with httpx.Client(timeout=_MCP_TIMEOUT_SEC, transport=transport) as client:

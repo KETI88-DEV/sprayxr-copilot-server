@@ -24,6 +24,11 @@ from typing import Any, Final
 
 logger = logging.getLogger(__name__)
 
+# 시퀀스 **내용**이 아니라 분석 파라미터인 최상위 필드. `copilot/analyze-sequence`만 붙인다(명세서 p.7, `mode_id`).
+# 같은 시퀀스를 두 경로로 보낼 때 해시가 갈리지 않게 빼고(`telemetry_router`), MCP 자세 엔진에 넘길 때도 뺀다
+# (`pose_query` — MCP `SequenceRequest`는 최상위 `extra="forbid"`다).
+NON_CONTENT_FIELDS: Final[frozenset[str]] = frozenset({"mode_id"})
+
 DB_PATH_ENV: Final[str] = "SEQUENCE_DB_PATH"
 DEFAULT_DB_PATH: Final[str] = "/output/eval_results/sequences.db"
 

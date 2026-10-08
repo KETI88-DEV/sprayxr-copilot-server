@@ -238,3 +238,37 @@ def test_a_duplicate_upload_is_still_scorable() -> None:
 
     assert second["sequence_data_ack"]["duplicate"] is True
     assert pose["analysis_status"] == "available"
+
+
+# --- analyze-sequence 경로 → 실제 MCP 요청 계약 (2026-10-08 샘플 재생에서 발견) -----------------
+
+
+def _contract_checking_mcp(request: httpx.Request) -> httpx.Response:
+    """실제 MCP의 요청 모델(`SequenceRequest`, 최상위 `extra="forbid"`)로 본문을 검증하는 대역.
+
+    검증에 걸리면 실제 MCP처럼 422를 낸다 — 대역이 무엇이든 받아 주면 계약 어긋남을 못 잡는다.
+    """
+    from pydantic import ValidationError
+
+    from mcp_servers.pose_estimation import SequenceRequest
+
+    try:
+        SequenceRequest.model_validate(json.loads(request.content))
+    except ValidationError as error:
+        return httpx.Response(422, json={"detail": error.errors(include_url=False)})
+    return httpx.Response(200, json={"status": "success", "result": dict(_MCP_RESULT), "error": None})
+
+
+def test_a_sequence_received_through_analyze_sequence_is_scorable() -> None:
+    """벤더는 `copilot/analyze-sequence`로만 보낸다(2026-10-08 샘플 노트). 그 경로는 `mode_id`를 붙여 저장하는데
+    MCP 자세 엔진은 모르는 최상위 필드를 거절해, 실제 세션의 pose_recomm 32건이 모두 `engine_unavailable`이었다.
+
+    깨뜨리는 법: `pose_query`가 저장 본문을 그대로 MCP에 넘기면 422 → `engine_unavailable`로 실패한다.
+    """
+    client, _ = _app(_contract_checking_mcp)
+    uploaded = client.post("/api/v1/copilot/analyze-sequence", json=dict(_sequence_body(), mode_id=1))
+    assert uploaded.status_code == 200
+    response = client.post(QUERY, json=_query_body(context="SEQ-012"))
+    context = response.json()["data"]["pose_context"]
+    assert context["analysis_status"] == "available", context
+    assert context["sequence_id"] == "SEQ-012"

@@ -36,7 +36,7 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
 from trainer.demo_api.monitor import MonitorRecorder
-from trainer.demo_api.sequence_store import SequenceStore
+from trainer.demo_api.sequence_store import NON_CONTENT_FIELDS, SequenceStore
 from trainer.demo_api.telemetry_contracts import (
     AnalyzeSequenceRequest,
     EngineFeedback,
@@ -63,8 +63,8 @@ def _now() -> str:
 
 
 # 시퀀스 내용이 아니라 분석 파라미터인 필드. 해시에서 뺀다 — 같은 시퀀스를 두 경로로
-# 보낼 때 한쪽에만 붙는 값 때문에 중복 판정이 깨지면 안 된다.
-_NON_CONTENT_FIELDS: Final[frozenset[str]] = frozenset({"mode_id"})
+# 보낼 때 한쪽에만 붙는 값 때문에 중복 판정이 깨지면 안 된다. 목록은 저장소 모듈이 정본이다.
+_NON_CONTENT_FIELDS: Final[frozenset[str]] = NON_CONTENT_FIELDS
 
 
 def _body_sha256(query: TelemetrySequenceRequest) -> str:
