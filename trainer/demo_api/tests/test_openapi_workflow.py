@@ -92,6 +92,38 @@ def test_latest_tsb_fields_are_not_required_by_the_public_contract() -> None:
     assert "avg_distance_mm" not in complete["required"]
 
 
+def test_public_swagger_examples_use_the_latest_tsb_session_identity() -> None:
+    """All real integration steps should be copyable as one coherent TSB session."""
+    schema = TestClient(create_app()).get("/openapi.json").json()
+    components = schema["components"]["schemas"]
+    expected = {
+        "session_id": "3_11000346_1",
+        "user_id": "1234",
+        "scenario_id": "3",
+    }
+
+    for model_name in (
+        "SessionStartRequest",
+        "SessionEndRequest",
+        "TelemetrySequenceRequest",
+        "AnalyzeSequenceRequest",
+        "CopilotQueryRequest",
+    ):
+        example = components[model_name]["example"]
+        assert {key: example[key] for key in expected} == expected, model_name
+
+    for path in ("/api/v1/sessions/complete", "/api/v1/copilot/query-voice"):
+        body = schema["paths"][path]["post"]["requestBody"]["content"]["multipart/form-data"]["schema"]
+        form = components[body["$ref"].rsplit("/", 1)[-1]]["properties"]
+        assert form["session_id"]["examples"] == [expected["session_id"]]
+        assert form["user_id"]["examples"] == [expected["user_id"]]
+        assert form["scenario_id"]["examples"] == [expected["scenario_id"]]
+
+    session_field = components["SessionStartRequest"]["properties"]["session_id"]
+    assert "CSV" in session_field["description"]
+    assert expected["session_id"] in session_field["examples"]
+
+
 def test_voice_demo_is_input_free_and_links_the_downloadable_sample() -> None:
     """Catches a voice demo that still requires manual multipart form entry."""
     schema = TestClient(create_app()).get("/openapi.json").json()
