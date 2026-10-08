@@ -30,7 +30,7 @@ import httpx
 
 from trainer.demo_api.pose_query import PoseQueryResult, score_body
 from trainer.demo_api.sequence_store import SequenceStore
-from trainer.scripts import simulator_csv
+from trainer.scripts import pose_similarity, simulator_csv
 
 logger = logging.getLogger(__name__)
 
@@ -193,12 +193,13 @@ class SessionPoseAnalysis:
 def _guideline(scored: Sequence[PoseQueryResult], total: int, not_scored: int) -> str:
     average = statistics.mean(r.similarity_score for r in scored if r.similarity_score is not None)
     parts = [f"분사 {total}회 중 {len(scored)}회의 자세를 숙련 작업자와 비교했습니다. 평균 유사도 {average * 100:.0f}%."]
-    labels = Counter(
-        str(c.get("label")) for r in scored for c in r.corrections[:1] if isinstance(c, Mapping) and c.get("label")
+    # 분사마다 첫 교정(전달되는 하나)의 부위를 센다. 문장은 분사마다 각도가 달라 같은 교정도 다른 문장이다.
+    joints = Counter(
+        str(c.get("joint")) for r in scored for c in r.corrections[:1] if isinstance(c, Mapping) and c.get("joint")
     )
-    if labels:
-        label, times = labels.most_common(1)[0]
-        parts.append(f"가장 자주 나온 교정({times}회): {label}")
+    if joints:
+        joint, times = joints.most_common(1)[0]
+        parts.append(f"교정이 가장 자주 나온 부위는 {pose_similarity.JOINT_LABELS.get(joint, joint)}입니다({times}회).")
     else:
         parts.append("비교한 분사 모두 숙련 작업자의 통상 범위 안입니다.")
     if not_scored:

@@ -82,7 +82,7 @@ class _FakeMcp:
                 "analysis_status": "available",
                 "similarity_score": 0.9 if stored else 0.5,
                 "correction_mode": "single",
-                "corrections": [{"joint": "right_hand", "correction_text": "오른손을 낮추세요"}],
+                "corrections": [{"joint": "RightUpperArm", "correction_text": f"{sequence_id} 오른쪽 위팔을 내리세요"}],
             }
         return httpx.Response(200, json={"status": "success", "result": result, "error": None})
 
@@ -156,7 +156,8 @@ def test_query_less_sequences_are_scored_from_the_csv_and_stored_ones_win() -> N
     assert result.average_similarity_score == pytest.approx(expected, abs=1e-4)
     report = result.pose_report()
     assert set(report) == {"analysis_status", "algorithm_version", "guideline", "average_similarity_score"}
-    assert "오른손을 낮추세요" in report["guideline"]
+    # 문장은 분사마다 다르지만 부위는 같다 — 부위로 센다.
+    assert f"오른쪽 위팔입니다({scored}회)" in report["guideline"]
 
 
 def test_unscorable_sequences_leave_the_average_and_are_counted() -> None:
