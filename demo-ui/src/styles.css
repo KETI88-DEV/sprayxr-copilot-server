@@ -533,6 +533,13 @@ ul {
   color: var(--ink-300);
 }
 
+.sequence__empty {
+  margin-top: var(--s-3);
+  font-size: var(--t-small);
+  line-height: 1.6;
+  color: var(--ink-300);
+}
+
 .sequence__list {
   display: grid;
   gap: var(--s-2);
@@ -1032,6 +1039,14 @@ ul {
 
 /* ---------- composer ------------------------------------------------------ */
 
+/* 기능 버튼·질의 설정·입력창은 한 덩어리의 입력 영역이다. 각자 위 테두리를 그으면 세 띠로
+   갈라져 보이므로 맨 위에 오는 것만 긋는다. */
+.chat__presets + .chat__options,
+.chat__presets + .chat__composer,
+.chat__options + .chat__composer {
+  border-top: 0;
+}
+
 /* 입력창 질의 설정. 라벨은 항상 보인다(placeholder 만으로 설명하지 않는다). */
 .chat__options {
   display: flex;
@@ -1043,6 +1058,8 @@ ul {
   border: 0;
   border-top: 1px solid var(--paper-rule);
   background: var(--paper-band);
+  /* 페이지는 color-scheme: dark 다. 종이색 영역 안의 기본 입력 요소가 검게 그려지지 않게 한다. */
+  color-scheme: light;
 }
 
 .chat__options-legend {
@@ -1057,7 +1074,27 @@ ul {
   display: inline-flex;
   align-items: center;
   gap: var(--s-2);
-  min-height: 2rem;
+  min-height: 2.25rem;
+  font-size: var(--t-small);
+  color: var(--paper-label);
+}
+
+/* 기능 버튼(약 39px)과 같은 줄 높이. 웹 최소 대상 24px 를 넘긴다. */
+.chat__option select,
+.chat__option input[type='text'] {
+  min-height: 2.25rem;
+  padding: 0 var(--s-3);
+  font: inherit;
+  color: var(--paper-ink);
+  background: var(--paper-raised);
+  border: 1px solid var(--paper-rule);
+  border-radius: var(--r-2);
+}
+
+.chat__option input[type='checkbox'] {
+  width: 1.125rem;
+  height: 1.125rem;
+  accent-color: var(--signal-ink);
 }
 
 .chat__option--grow {
