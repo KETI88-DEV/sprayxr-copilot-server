@@ -1032,6 +1032,43 @@ ul {
 
 /* ---------- composer ------------------------------------------------------ */
 
+/* 입력창 질의 설정. 라벨은 항상 보인다(placeholder 만으로 설명하지 않는다). */
+.chat__options {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s-2) var(--s-4);
+  margin: 0;
+  padding: var(--s-3) var(--s-6) 0;
+  border: 0;
+  border-top: 1px solid var(--paper-rule);
+  background: var(--paper-band);
+}
+
+.chat__options-legend {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+.chat__option {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-2);
+  min-height: 2rem;
+}
+
+.chat__option--grow {
+  flex: 1 1 14rem;
+}
+
+.chat__option--grow input {
+  flex: 1;
+  min-width: 0;
+}
+
 /* 기능 4개 기본 질문. 좁은 폭에서는 글자를 줄이지 않고 줄을 바꾼다. */
 .chat__presets {
   display: flex;

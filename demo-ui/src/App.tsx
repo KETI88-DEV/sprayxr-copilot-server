@@ -1,14 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
-import { ApiError, fetchHealth, fetchSequenceSnapshot, queryCopilot, streamChat } from './api'
+import { ApiError, fetchHealth, fetchSequenceSnapshot, queryCopilot } from './api'
 import { ChatPanel, type ChatMessage, type ChatProgress } from './components/ChatPanel'
 import { MonitorPanel, type RunState } from './components/MonitorPanel'
 import { SimulatorMonitorPanel } from './components/SimulatorMonitorPanel'
 import { TitleBar } from './components/TitleBar'
 import { ToolLogPanel, type LiveProgress, type ToolLogEntry } from './components/ToolLogPanel'
-import { TASK_PRESETS, sequenceViewFromPayloads } from './contracts'
-import type { CopilotTaskType } from './contracts'
-import type { SequenceSnapshot, SequenceUpdate } from './contracts'
-import { applySequenceUpdate } from './sequenceState'
+import { DEFAULT_QUERY_OPTIONS, TASK_PRESETS, sequenceViewFromPayloads } from './contracts'
+import type { CopilotTaskType, QueryOptions } from './contracts'
+import type { SequenceSnapshot } from './contracts'
 import {
   fetchSimSession,
   sendRuntimeEvent,
@@ -59,14 +58,13 @@ export function App(): ReactElement {
   const [snapshot, setSnapshot] = useState<SequenceSnapshot>(INITIAL_SNAPSHOT)
   const [messages, setMessages] = useState<readonly ChatMessage[]>([])
   const [busy, setBusy] = useState<boolean>(false)
+  const [queryOptions, setQueryOptions] = useState<QueryOptions>(DEFAULT_QUERY_OPTIONS)
   const [runState, setRunState] = useState<RunState>('idle')
   const [live, setLive] = useState<LiveProgress | null>(null)
   const [metrics, setMetrics] = useState<TurnMetrics | null>(null)
   const [logEntries, setLogEntries] = useState<readonly ToolLogEntry[]>([])
   const [logOpen, setLogOpen] = useState<boolean>(true)
   const [online, setOnline] = useState<boolean>(false)
-  const [mode, setMode] = useState<'demo' | 'live'>('demo')
-  const [sessionId, setSessionId] = useState<string>(() => crypto.randomUUID())
   const [turnStartedAt, setTurnStartedAt] = useState<number | null>(null)
   const [elapsedSec, setElapsedSec] = useState<number>(0)
   const [simLifecycle, setSimLifecycle] = useState<SimLifecycle>('idle')
@@ -165,162 +163,68 @@ export function App(): ReactElement {
     }
   }, [monitorEvents.length, appendLog])
 
-  // 기능 버튼: v2.5 질의를 그 task_type 으로 직접 부른다. 대상 세션은 패널이 보고 있는 최근 시퀀스의 세션이다.
-  const onPreset = useCallback(
-    async (taskType: CopilotTaskType): Promise<void> => {
-      const preset = TASK_PRESETS.find((candidate) => candidate.task_type === taskType)
-      if (preset === undefined || busy) {
+  // 채팅은 v2.5 질의 API 를 시험하는 자리다. 자유 질문은 knowledge_search, 기능 버튼은 각자의 task_type 으로
+  // POST /api/v1/copilot/query 를 부른다. 대상 세션은 패널이 보고 있는 최근 시퀀스의 세션이다.
+  const runQuery = useCallback(
+    async (taskType: CopilotTaskType, prompt: string, shown: string): Promise<void> => {
+      if (busy) {
         return
       }
       const assistantIndex = messages.length + 1
-      setMessages((previous) => [
-        ...previous,
-        { role: 'user', text: `[${preset.label}] ${preset.prompt}` },
-        { role: 'assistant', text: '' },
-      ])
+      setMessages((previous) => [...previous, { role: 'user', text: shown }, { role: 'assistant', text: '' }])
+      const controller = new AbortController()
+      abortControllerRef.current = controller
       setBusy(true)
+      setRunState('running')
       try {
-        const answer = await queryCopilot({
-          user_id: sequenceView.user_id ?? 'demo-ui',
-          ...(sequenceView.session_id === null ? {} : { session_id: sequenceView.session_id }),
-          task_type: taskType,
-          prompt: preset.prompt,
-        })
-        setMessages((previous) => updateAssistantMessage(previous, assistantIndex, answer))
-      } catch (error: unknown) {
-        setMessages((previous) =>
-          updateAssistantMessage(previous, assistantIndex, `요청에 실패했습니다: ${getStreamErrorMessage(error)}`),
+        const context = queryOptions.context.trim()
+        const answer = await queryCopilot(
+          {
+            user_id: sequenceView.user_id ?? 'demo-ui',
+            ...(sequenceView.session_id === null ? {} : { session_id: sequenceView.session_id }),
+            ...(sequenceView.level_id === null ? {} : { scenario_id: sequenceView.level_id }),
+            request_id: crypto.randomUUID(),
+            task_type: taskType,
+            prompt,
+            use_rag: queryOptions.use_rag,
+            ...(context === '' ? {} : { context }),
+          },
+          controller.signal,
         )
+        setMessages((previous) => updateAssistantMessage(previous, assistantIndex, answer))
+        setRunState('done')
+      } catch (error: unknown) {
+        const stopped = controller.signal.aborted
+        setMessages((previous) =>
+          updateAssistantMessage(
+            previous,
+            assistantIndex,
+            stopped ? '중단했습니다.' : `요청에 실패했습니다: ${getStreamErrorMessage(error)}`,
+          ),
+        )
+        setRunState(stopped ? 'idle' : 'error')
       } finally {
         setBusy(false)
       }
     },
-    [busy, messages.length, sequenceView.session_id, sequenceView.user_id],
+    [busy, messages.length, queryOptions, sequenceView.level_id, sequenceView.session_id, sequenceView.user_id],
+  )
+
+  const onPreset = useCallback(
+    (taskType: CopilotTaskType): void => {
+      const preset = TASK_PRESETS.find((candidate) => candidate.task_type === taskType)
+      if (preset !== undefined) {
+        void runQuery(taskType, preset.prompt, `[${preset.label}] ${preset.prompt}`)
+      }
+    },
+    [runQuery],
   )
 
   const onSubmit = useCallback(
-    async (message: string): Promise<void> => {
-      const nextAssistantIndex = messages.length + 1
-      setMessages((previous) => [
-        ...previous,
-        { role: 'user', text: message },
-        { role: 'assistant', text: '' },
-      ])
-      loggedStagesRef.current = new Set()
-      setBusy(true)
-      setRunState('running')
-      setLive(null)
-      setMetrics(null)
-      setElapsedSec(0)
-      setTurnStartedAt(Date.now())
-
-      const controller = new AbortController()
-      abortControllerRef.current = controller
-
-      try {
-        for await (const event of streamChat(
-          { message, session_id: sessionId, mode, level_id: snapshot.level_id },
-          controller.signal,
-        )) {
-          switch (event.event) {
-            case 'session':
-              setSessionId(event.data.session_id)
-              setMode(event.data.mode)
-              break
-            case 'status': {
-              const stage = event.data.stage
-              const chunks = event.data.chunks ?? null
-              const elapsed = event.data.elapsed_sec ?? null
-
-              // Repeating progress only mutates the single live row.
-              setLive({ stage, chunks, elapsedSec: elapsed })
-
-              const description = describeStage(stage)
-              if (description.kind === 'milestone' && !loggedStagesRef.current.has(stage)) {
-                loggedStagesRef.current.add(stage)
-                appendLog({ kind: 'stage', at: Date.now(), stage, chunks, elapsedSec: elapsed })
-              }
-              break
-            }
-            case 'message_delta':
-              setMessages((previous) => updateAssistantMessage(previous, nextAssistantIndex, event.data.text))
-              break
-            case 'tool_result':
-              appendLog({
-                kind: 'tool_result',
-                at: Date.now(),
-                name: event.data.name,
-                arguments: event.data.arguments,
-                result: event.data.result,
-              })
-              break
-            case 'sequence_update': {
-              const nextUpdate: SequenceUpdate = event.data
-              setSnapshot((previous) => ({
-                ...previous,
-                level_id: nextUpdate.level_id,
-                current_zone_id: nextUpdate.current_zone_id,
-                next_zone_ids: nextUpdate.next_zone_ids,
-                completed_zone_ids: nextUpdate.completed_zone_ids,
-                zones: applySequenceUpdate(previous.zones, nextUpdate),
-              }))
-              break
-            }
-            case 'complete': {
-              const turnMetrics: TurnMetrics = {
-                ttftMs: event.data.ttft_ms ?? null,
-                totalMs: event.data.total_ms ?? null,
-                synthesisMs: event.data.synthesis_ms ?? null,
-                toolCallCount: event.data.tool_call_count,
-                ragChunkCount: event.data.rag_chunk_count,
-                deadlineHit: event.data.deadline_hit ?? false,
-              }
-              setMetrics(turnMetrics)
-              appendLog({ kind: 'complete', at: Date.now(), metrics: turnMetrics })
-              setLive(null)
-              setRunState('done')
-              setBusy(false)
-              break
-            }
-            case 'error':
-              appendLog({
-                kind: 'error',
-                at: Date.now(),
-                message: event.data.message,
-                retryable: event.data.retryable,
-              })
-              setLive(null)
-              setRunState('error')
-              setBusy(false)
-              break
-            default: {
-              const _exhaustive: never = event
-              return _exhaustive
-            }
-          }
-        }
-      } catch (error: unknown) {
-        if (controller.signal.aborted) {
-          setRunState('idle')
-          return
-        }
-        appendLog({
-          kind: 'error',
-          at: Date.now(),
-          message: error instanceof ApiError ? error.message : getStreamErrorMessage(error),
-          retryable: true,
-        })
-        setRunState('error')
-      } finally {
-        abortControllerRef.current = null
-        setBusy(false)
-        setLive(null)
-        // A stream that ends without a terminal event must not leave the
-        // console claiming it is still running.
-        setRunState((previous) => (previous === 'running' ? 'idle' : previous))
-      }
+    (message: string): void => {
+      void runQuery(queryOptions.task_type, message, message)
     },
-    [appendLog, messages.length, mode, sessionId, snapshot.level_id],
+    [queryOptions.task_type, runQuery],
   )
 
   const onStop = useCallback(() => {
@@ -337,7 +241,6 @@ export function App(): ReactElement {
     setRunState('idle')
     setTurnStartedAt(null)
     setElapsedSec(0)
-    setSessionId(crypto.randomUUID())
   }, [])
 
   const onReconnect = useCallback(() => {
@@ -397,14 +300,12 @@ export function App(): ReactElement {
       <div className="workspace">
         <MonitorPanel
           online={online}
-          mode={mode}
           runState={runState}
           stageLabel={stageLabel}
           elapsedSec={busy ? elapsedSec : null}
           metrics={metrics}
           sequenceView={sequenceView}
           simSession={simSession}
-          onModeChange={setMode}
           onReconnect={onReconnect}
         />
         <ChatPanel
@@ -415,7 +316,9 @@ export function App(): ReactElement {
           onSubmit={onSubmit}
           onStop={onStop}
           onReset={onReset}
-          onPreset={(taskType) => void onPreset(taskType)}
+          onPreset={onPreset}
+          queryOptions={queryOptions}
+          onQueryOptionsChange={setQueryOptions}
         />
       </div>
       <SimulatorMonitorPanel

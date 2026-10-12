@@ -15,14 +15,12 @@ const RUN_STATE_LABEL: Record<RunState, string> = {
 
 type Props = {
   readonly online: boolean
-  readonly mode: 'demo' | 'live'
   readonly runState: RunState
   readonly stageLabel: string | null
   readonly elapsedSec: number | null
   readonly metrics: TurnMetrics | null
   readonly sequenceView: SessionSequenceView
   readonly simSession: SimSession | null
-  readonly onModeChange: (mode: 'demo' | 'live') => void
   readonly onReconnect: () => void
 }
 
@@ -45,14 +43,12 @@ function Readout({
 
 export function MonitorPanel({
   online,
-  mode,
   runState,
   stageLabel,
   elapsedSec,
   metrics,
   sequenceView,
   simSession,
-  onModeChange,
   onReconnect,
 }: Props): ReactElement {
   const running = runState === 'running'
@@ -74,23 +70,7 @@ export function MonitorPanel({
             </button>
           )}
         </div>
-        <div className="monitor__modes" role="group" aria-label="실행 모드">
-          {(['demo', 'live'] as const).map((option) => (
-            <button
-              key={option}
-              type="button"
-              className="monitor__mode"
-              data-active={mode === option}
-              aria-pressed={mode === option}
-              onClick={() => onModeChange(option)}
-            >
-              {option}
-            </button>
-          ))}
-        </div>
-        <p className="monitor__mode-note">
-          {mode === 'demo' ? '고정 시나리오로 응답합니다' : '실제 파이프라인과 MCP 도구를 사용합니다'}
-        </p>
+        <p className="monitor__mode-note">질의는 POST /api/v1/copilot/query 로 보냅니다</p>
       </section>
 
       <section className="panel">

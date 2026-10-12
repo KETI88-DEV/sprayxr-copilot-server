@@ -287,7 +287,32 @@ export const TASK_PRESETS: readonly { readonly task_type: CopilotTaskType; reado
   { task_type: 'error_analysis', label: '오류 분석', prompt: '방금 시퀀스의 오류를 분석해 줘' },
 ]
 
+/** `POST /api/v1/copilot/query` 요청(명세서 p.9, 서버 CopilotQueryRequest 와 같은 필드). */
+export type CopilotQueryInput = {
+  readonly user_id: string
+  readonly prompt: string
+  readonly task_type: CopilotTaskType
+  readonly scenario_id?: string
+  readonly session_id?: string
+  readonly request_id?: string
+  readonly use_rag?: 'Y' | 'N'
+  /** pose_recomm 은 여기서 대상 시퀀스(예 SEQ-012)를 고른다. 비우면 세션의 최근 시퀀스다. */
+  readonly context?: string
+}
+
+/** 화면에서 고르는 질의 설정. 나머지(user·session·scenario·request id)는 자동으로 채운다. */
+export type QueryOptions = {
+  readonly task_type: CopilotTaskType
+  readonly use_rag: 'Y' | 'N'
+  readonly context: string
+}
+
+export const DEFAULT_QUERY_OPTIONS: QueryOptions = { task_type: 'knowledge_search', use_rag: 'Y', context: '' }
+
 export const copilotQueryResponseSchema = z.object({
   message: z.string(),
-  data: z.object({ answer: z.string().nullable().optional() }).passthrough().nullable(),
+  data: z
+    .object({ answer: z.string().nullable().optional(), citations: z.array(z.string()).optional() })
+    .passthrough()
+    .nullable(),
 })

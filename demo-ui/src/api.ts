@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { chatRequestSchema, copilotQueryResponseSchema, sequenceSnapshotSchema, streamEventSchema } from './contracts'
-import type { ChatRequest, CopilotTaskType, SequenceSnapshot, StreamEvent } from './contracts'
+import type { ChatRequest, CopilotQueryInput, SequenceSnapshot, StreamEvent } from './contracts'
 
 export const API_BASE_URL =
   typeof window !== 'undefined' && window.__DEMO_API_BASE_URL__ !== undefined
@@ -186,18 +186,14 @@ export async function* streamChat(
 }
 
 /** v2.5 질의 한 번. 답이 없으면(not_available 등) 서버 message 를 돌려준다. */
-export async function queryCopilot(body: {
-  readonly user_id: string
-  readonly session_id?: string
-  readonly task_type: CopilotTaskType
-  readonly prompt: string
-}): Promise<string> {
+export async function queryCopilot(body: CopilotQueryInput, signal?: AbortSignal): Promise<string> {
   let response: Response
   try {
     response = await fetch(`${API_BASE_URL}/api/v1/copilot/query`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      ...(signal === undefined ? {} : { signal }),
     })
   } catch (error: unknown) {
     throw new ApiError(error instanceof Error ? error.message : 'request failed')
@@ -208,5 +204,8 @@ export async function queryCopilot(body: {
     throw new ApiError(reason.success ? reason.data.message : `request failed: ${response.status}`, response.status)
   }
   const parsed = copilotQueryResponseSchema.parse(await readJsonResponse(response))
-  return parsed.data?.answer ?? parsed.message
+  const answer = parsed.data?.answer ?? parsed.message
+  // 인용은 본문과 따로 온다. 끝줄에 ID 만 두면 답변 렌더러가 칩으로 옮긴다.
+  const citations = parsed.data?.citations ?? []
+  return citations.length > 0 ? `${answer}\n${citations.join(', ')}` : answer
 }

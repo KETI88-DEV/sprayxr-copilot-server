@@ -9,7 +9,7 @@ import {
   type ReactElement,
 } from 'react'
 import { TASK_PRESETS } from '../contracts'
-import type { CopilotTaskType } from '../contracts'
+import type { CopilotTaskType, QueryOptions } from '../contracts'
 import { AnswerBody } from './AnswerBody'
 
 export type ChatMessage = { readonly role: 'user' | 'assistant'; readonly text: string }
@@ -29,6 +29,9 @@ type Props = {
   readonly onReset: () => void
   /** 기능 4개의 기본 질문을 보낸다. 없으면 버튼 줄을 그리지 않는다. */
   readonly onPreset?: (taskType: CopilotTaskType) => void
+  /** 입력창 질문을 어떤 설정으로 보낼지. 없으면 설정 줄을 그리지 않는다. */
+  readonly queryOptions?: QueryOptions
+  readonly onQueryOptionsChange?: (options: QueryOptions) => void
 }
 
 const ROLE_LABEL: Record<ChatMessage['role'], string> = {
@@ -68,6 +71,8 @@ export function ChatPanel({
   onStop,
   onReset,
   onPreset,
+  queryOptions,
+  onQueryOptionsChange,
 }: Props): ReactElement {
   const [draft, setDraft] = useState<string>('')
   const [pinnedToLatest, setPinnedToLatest] = useState<boolean>(true)
@@ -210,6 +215,47 @@ export function ChatPanel({
             </button>
           ))}
         </div>
+      )}
+
+      {queryOptions !== undefined && onQueryOptionsChange !== undefined && (
+        <fieldset className="chat__options" disabled={busy}>
+          <legend className="chat__options-legend">입력창 질의 설정</legend>
+          <label className="chat__option">
+            <span>기능(task_type)</span>
+            <select
+              data-testid="option-task-type"
+              value={queryOptions.task_type}
+              onChange={(event) =>
+                onQueryOptionsChange({ ...queryOptions, task_type: event.target.value as CopilotTaskType })
+              }
+            >
+              {TASK_PRESETS.map((preset) => (
+                <option key={preset.task_type} value={preset.task_type}>
+                  {preset.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="chat__option">
+            <input
+              type="checkbox"
+              data-testid="option-use-rag"
+              checked={queryOptions.use_rag === 'Y'}
+              onChange={(event) => onQueryOptionsChange({ ...queryOptions, use_rag: event.target.checked ? 'Y' : 'N' })}
+            />
+            <span>문서 검색 사용(use_rag)</span>
+          </label>
+          <label className="chat__option chat__option--grow">
+            <span>context</span>
+            <input
+              type="text"
+              data-testid="option-context"
+              value={queryOptions.context}
+              placeholder="예: SEQ-012 — 비우면 최근 시퀀스"
+              onChange={(event) => onQueryOptionsChange({ ...queryOptions, context: event.target.value })}
+            />
+          </label>
+        </fieldset>
       )}
 
       <form className="chat__composer" onSubmit={handleSubmit}>
