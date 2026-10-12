@@ -5,6 +5,7 @@ import { MonitorPanel, type RunState } from './components/MonitorPanel'
 import { SimulatorMonitorPanel } from './components/SimulatorMonitorPanel'
 import { TitleBar } from './components/TitleBar'
 import { ToolLogPanel, type LiveProgress, type ToolLogEntry } from './components/ToolLogPanel'
+import { sequenceViewFromPayloads } from './contracts'
 import type { SequenceSnapshot, SequenceUpdate } from './contracts'
 import { applySequenceUpdate } from './sequenceState'
 import {
@@ -75,6 +76,11 @@ export function App(): ReactElement {
   /** Milestone stages already logged for the current turn, so nothing repeats. */
   const loggedStagesRef = useRef<Set<string>>(new Set())
   const monitorEvents = useMonitorStream()
+  // 시퀀스 본문은 이미 /api/monitor 로 흐른다(telemetry 라우터가 recorder 를 받는다).
+  const sequenceView = useMemo(
+    () => sequenceViewFromPayloads(monitorEvents.filter((e) => e.direction === 'input').map((e) => e.payload)),
+    [monitorEvents],
+  )
 
   // A queued request can wait a minute before its first token; a locally ticked
   // counter is what tells the operator the console is alive between backend
@@ -362,7 +368,7 @@ export function App(): ReactElement {
           stageLabel={stageLabel}
           elapsedSec={busy ? elapsedSec : null}
           metrics={metrics}
-          snapshot={snapshot}
+          sequenceView={sequenceView}
           simSession={simSession}
           onModeChange={setMode}
           onReconnect={onReconnect}

@@ -131,10 +131,10 @@ describe('App', () => {
     fetchSpy.mockRestore()
   })
 
-  it('shows level, sends chat, updates sequence panel', async () => {
+  it('shows level and sends chat', async () => {
     render(<App />)
     await waitFor(() => {
-      expect(screen.getByText('Training Level 01')).toBeInTheDocument()
+      expect(screen.getByText('지나간 구역')).toBeInTheDocument()
     })
 
     await ask('다음에 어떤 구역을 칠해야 해?')
@@ -142,10 +142,6 @@ describe('App', () => {
     await waitFor(() => {
       expect(screen.getByText(/다음 도장 구역: A-2/)).toBeInTheDocument()
     })
-    await waitFor(() => {
-      expect(screen.getByTestId('zone-A-2')).toHaveAttribute('data-status', 'next')
-    })
-
     // The deadline stage reaches the operator as a Korean label, with the raw
     // backend vocabulary and the "RAG" prefix gone.
     const log = activityLog()
@@ -158,7 +154,7 @@ describe('App', () => {
   it('surfaces completion telemetry in the monitoring panel', async () => {
     render(<App />)
     await waitFor(() => {
-      expect(screen.getByText('Training Level 01')).toBeInTheDocument()
+      expect(screen.getByText('지나간 구역')).toBeInTheDocument()
     })
 
     await ask('도막 두께 판정해줘')
@@ -181,7 +177,7 @@ describe('App', () => {
 
     render(<App />)
     await waitFor(() => {
-      expect(screen.getByText('Training Level 01')).toBeInTheDocument()
+      expect(screen.getByText('지나간 구역')).toBeInTheDocument()
     })
 
     await ask('지금 도막 상태 어때?')
@@ -213,7 +209,7 @@ describe('App', () => {
     render(<App />)
 
     await waitFor(() => {
-      expect(screen.getByText('Training Level 01')).toBeInTheDocument()
+      expect(screen.getByText('지나간 구역')).toBeInTheDocument()
     })
 
     await userEvent.click(screen.getByRole('button', { name: /live/i }))

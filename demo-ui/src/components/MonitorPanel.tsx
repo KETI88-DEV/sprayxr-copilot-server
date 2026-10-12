@@ -1,5 +1,5 @@
 import type { ReactElement } from 'react'
-import type { SequenceSnapshot } from '../contracts'
+import type { SessionSequenceView } from '../contracts'
 import type { SimSession } from '../simContracts'
 import { EMPTY_READOUT, formatCount, formatDurationMs, type TurnMetrics } from '../telemetry'
 import { SequencePanel } from './SequencePanel'
@@ -20,7 +20,7 @@ type Props = {
   readonly stageLabel: string | null
   readonly elapsedSec: number | null
   readonly metrics: TurnMetrics | null
-  readonly snapshot: SequenceSnapshot
+  readonly sequenceView: SessionSequenceView
   readonly simSession: SimSession | null
   readonly onModeChange: (mode: 'demo' | 'live') => void
   readonly onReconnect: () => void
@@ -50,7 +50,7 @@ export function MonitorPanel({
   stageLabel,
   elapsedSec,
   metrics,
-  snapshot,
+  sequenceView,
   simSession,
   onModeChange,
   onReconnect,
@@ -118,7 +118,7 @@ export function MonitorPanel({
         </div>
       </section>
 
-      <SequencePanel snapshot={snapshot} session={simSession} />
+      <SequencePanel view={sequenceView} session={simSession} />
     </aside>
   )
 }
