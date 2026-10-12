@@ -1,6 +1,6 @@
 import { z } from 'zod'
-import { chatRequestSchema, sequenceSnapshotSchema, streamEventSchema } from './contracts'
-import type { ChatRequest, SequenceSnapshot, StreamEvent } from './contracts'
+import { chatRequestSchema, copilotQueryResponseSchema, sequenceSnapshotSchema, streamEventSchema } from './contracts'
+import type { ChatRequest, CopilotTaskType, SequenceSnapshot, StreamEvent } from './contracts'
 
 export const API_BASE_URL =
   typeof window !== 'undefined' && window.__DEMO_API_BASE_URL__ !== undefined
@@ -183,4 +183,30 @@ export async function* streamChat(
   } finally {
     reader.releaseLock()
   }
+}
+
+/** v2.5 질의 한 번. 답이 없으면(not_available 등) 서버 message 를 돌려준다. */
+export async function queryCopilot(body: {
+  readonly user_id: string
+  readonly session_id?: string
+  readonly task_type: CopilotTaskType
+  readonly prompt: string
+}): Promise<string> {
+  let response: Response
+  try {
+    response = await fetch(`${API_BASE_URL}/api/v1/copilot/query`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  } catch (error: unknown) {
+    throw new ApiError(error instanceof Error ? error.message : 'request failed')
+  }
+  if (!response.ok) {
+    // v2.5 오류도 {status, code, message} 봉투다. 상태 코드보다 서버가 적은 이유가 운영자에게 쓸모 있다.
+    const reason = copilotQueryResponseSchema.safeParse(await readJsonResponse(response).catch(() => null))
+    throw new ApiError(reason.success ? reason.data.message : `request failed: ${response.status}`, response.status)
+  }
+  const parsed = copilotQueryResponseSchema.parse(await readJsonResponse(response))
+  return parsed.data?.answer ?? parsed.message
 }

@@ -8,6 +8,8 @@ import {
   type KeyboardEvent,
   type ReactElement,
 } from 'react'
+import { TASK_PRESETS } from '../contracts'
+import type { CopilotTaskType } from '../contracts'
 import { AnswerBody } from './AnswerBody'
 
 export type ChatMessage = { readonly role: 'user' | 'assistant'; readonly text: string }
@@ -25,6 +27,8 @@ type Props = {
   readonly onSubmit: (message: string) => void
   readonly onStop: () => void
   readonly onReset: () => void
+  /** 기능 4개의 기본 질문을 보낸다. 없으면 버튼 줄을 그리지 않는다. */
+  readonly onPreset?: (taskType: CopilotTaskType) => void
 }
 
 const ROLE_LABEL: Record<ChatMessage['role'], string> = {
@@ -63,6 +67,7 @@ export function ChatPanel({
   onSubmit,
   onStop,
   onReset,
+  onPreset,
 }: Props): ReactElement {
   const [draft, setDraft] = useState<string>('')
   const [pinnedToLatest, setPinnedToLatest] = useState<boolean>(true)
@@ -185,6 +190,27 @@ export function ChatPanel({
           </button>
         )}
       </div>
+
+      {onPreset !== undefined && (
+        <div className="chat__presets" role="group" aria-label="기능별 기본 질문">
+          {TASK_PRESETS.map((preset) => (
+            <button
+              key={preset.task_type}
+              type="button"
+              className="chat__action"
+              data-testid={`preset-${preset.task_type}`}
+              title={preset.prompt}
+              disabled={busy}
+              onClick={() => {
+                onPreset(preset.task_type)
+                scrollToLatest()
+              }}
+            >
+              {preset.label}
+            </button>
+          ))}
+        </div>
+      )}
 
       <form className="chat__composer" onSubmit={handleSubmit}>
         <textarea

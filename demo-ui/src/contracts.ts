@@ -198,6 +198,7 @@ export const UNASSIGNED_ZONE_ID = '-1'
 
 export const sequenceBodySchema = z.object({
   session_id: z.string().min(1),
+  user_id: z.string().min(1),
   scenario_id: z.string().min(1),
   zone_id: z.string().min(1),
   sequence_id: z.string().min(1),
@@ -210,6 +211,8 @@ export type ZoneProgress = {
 }
 
 export type SessionSequenceView = {
+  readonly session_id: string | null
+  readonly user_id: string | null
   readonly level_id: string | null
   readonly zones: readonly ZoneProgress[]
   readonly sequence_count: number
@@ -217,6 +220,8 @@ export type SessionSequenceView = {
 }
 
 export const EMPTY_SEQUENCE_VIEW: SessionSequenceView = {
+  session_id: null,
+  user_id: null,
   level_id: null,
   zones: [],
   sequence_count: 0,
@@ -253,7 +258,10 @@ export function sequenceViewFromPayloads(payloads: readonly unknown[]): SessionS
     lastZoneId = body.zone_id
   }
 
+  const latest = bodies.at(-1)
   return {
+    session_id: latest?.session_id ?? null,
+    user_id: latest?.user_id ?? null,
     level_id: levelId,
     zones: [...counts].map(([zoneId, count]) => ({
       zone_id: zoneId,
@@ -264,3 +272,22 @@ export function sequenceViewFromPayloads(payloads: readonly unknown[]): SessionS
     unassigned_count: unassigned,
   }
 }
+
+// --- v2.5 질의 기능 4개 ----------------------------------------------------------
+//
+// `POST /api/v1/copilot/query` 의 task_type 마다 기본 질문 하나. 채팅(`/api/chat`)으로 보내면
+// task_type 이 없어 pose_recomm 이 채점기를 타지 않으므로 질의 API 를 직접 부른다.
+
+export type CopilotTaskType = 'knowledge_search' | 'pose_recomm' | 'trajectory_recomm' | 'error_analysis'
+
+export const TASK_PRESETS: readonly { readonly task_type: CopilotTaskType; readonly label: string; readonly prompt: string }[] = [
+  { task_type: 'knowledge_search', label: '지식 검색', prompt: '에폭시 도료의 재도장 간격은?' },
+  { task_type: 'pose_recomm', label: '자세 추천', prompt: '방금 분사한 자세를 평가해 줘' },
+  { task_type: 'trajectory_recomm', label: '궤적 추천', prompt: '다음 분사 궤적을 추천해 줘' },
+  { task_type: 'error_analysis', label: '오류 분석', prompt: '방금 시퀀스의 오류를 분석해 줘' },
+]
+
+export const copilotQueryResponseSchema = z.object({
+  message: z.string(),
+  data: z.object({ answer: z.string().nullable().optional() }).passthrough().nullable(),
+})

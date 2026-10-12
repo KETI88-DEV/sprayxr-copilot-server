@@ -220,12 +220,31 @@ curl -s 'http://127.0.0.1:8120/api/monitor/events?limit=20'
 
 호출 1건마다 input 1건 + output 1건이 기록된다. `--events 3`이면 `(start in/out) (runtime in/out)×3 (session_end in/out)` = 10건이다.
 
-UI 하단 모니터에서는 `세션 시작` → `런타임`(반복 가능) → `세션 끝` 버튼으로 같은 3단계를 단계별로 보낼 수 있다. 시작 전에는 나머지 두 버튼이 비활성이고, 런타임을 누를 때마다 다음 구역으로 `zone_id`를 보내므로 좌측 도장 순서가 실제로 이동한다. 상태만 따로 보려면:
+UI 하단 모니터에서는 `세션 시작` → `런타임`(반복 가능) → `세션 끝` 버튼으로 같은 3단계를 단계별로 보낼 수 있다. 시작 전에는 나머지 두 버튼이 비활성이다. 좌측 도장 순서 패널은 이 옛 스텁이 아니라 **시뮬레이터 시퀀스 본문**(2.4.1)으로 움직인다. 스텁 상태만 따로 보려면:
 
 ```bash
 curl -s http://127.0.0.1:8120/api/sim/session
 curl -s http://127.0.0.1:8120/api/sequence/TR-L01
 ```
+
+### 2.4.1 벤더 세션 샘플로 데모
+
+시뮬레이터가 실제로 보내는 한 세션(2026-10-08 샘플: `sessions/start` → `analyze-sequence` 32건 → `sessions/end` → `sessions/complete`)을 그대로 재생한다. GPU가 없어도 자세 채점·리포트까지 돈다(지식 검색만 LLM이 필요하다).
+
+```bash
+# 컨테이너 안. API(:8120)와 MCP(:8100)가 떠 있어야 한다
+docker exec -w /workspace ship-paint-trainer python3 trainer/scripts/replay_session_sample.py \
+    --api http://127.0.0.1:8120 --sample-dir /data/sources/new_format/sample_2026-10-08 --query
+# 호스트에서 UI
+cd demo-ui && npm run dev:web
+```
+
+UI에서 보이는 것:
+
+* **도장 순서 패널** — 레벨(`scenario_id`)과 지나간 구역, 구역별 분사 횟수. 구역은 레벨 안의 번호(`"1"`, `"2"`, …)이고 `zone_id: "-1"`(도막 미명중)은 요약에만 센다. 가장 최근 세션만 세고 같은 `sequence_id`는 한 번만 센다 — 샘플을 다시 재생해도 쌓이지 않는다.
+* **채팅 아래 기능 버튼 4개** — `지식 검색`·`자세 추천`·`궤적 추천`·`오류 분석`. 각각 그 `task_type`으로 `POST /api/v1/copilot/query`를 보낸다(대상 세션은 패널의 최근 세션). `자세 추천`은 최근 시퀀스를 실제로 채점하고, 궤적·오류 분석은 엔진이 없어 `not_available` 문장을 돌려준다.
+
+재생 스크립트는 요청별 결과와 리포트를 `--out` 아래 CSV·JSON으로 남긴다.
 
 ---
 

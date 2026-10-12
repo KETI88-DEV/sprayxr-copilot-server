@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
-import { ApiError, fetchHealth, fetchSequenceSnapshot, streamChat } from './api'
+import { ApiError, fetchHealth, fetchSequenceSnapshot, queryCopilot, streamChat } from './api'
 import { ChatPanel, type ChatMessage, type ChatProgress } from './components/ChatPanel'
 import { MonitorPanel, type RunState } from './components/MonitorPanel'
 import { SimulatorMonitorPanel } from './components/SimulatorMonitorPanel'
 import { TitleBar } from './components/TitleBar'
 import { ToolLogPanel, type LiveProgress, type ToolLogEntry } from './components/ToolLogPanel'
-import { sequenceViewFromPayloads } from './contracts'
+import { TASK_PRESETS, sequenceViewFromPayloads } from './contracts'
+import type { CopilotTaskType } from './contracts'
 import type { SequenceSnapshot, SequenceUpdate } from './contracts'
 import { applySequenceUpdate } from './sequenceState'
 import {
@@ -163,6 +164,39 @@ export function App(): ReactElement {
       cancelled = true
     }
   }, [monitorEvents.length, appendLog])
+
+  // 기능 버튼: v2.5 질의를 그 task_type 으로 직접 부른다. 대상 세션은 패널이 보고 있는 최근 시퀀스의 세션이다.
+  const onPreset = useCallback(
+    async (taskType: CopilotTaskType): Promise<void> => {
+      const preset = TASK_PRESETS.find((candidate) => candidate.task_type === taskType)
+      if (preset === undefined || busy) {
+        return
+      }
+      const assistantIndex = messages.length + 1
+      setMessages((previous) => [
+        ...previous,
+        { role: 'user', text: `[${preset.label}] ${preset.prompt}` },
+        { role: 'assistant', text: '' },
+      ])
+      setBusy(true)
+      try {
+        const answer = await queryCopilot({
+          user_id: sequenceView.user_id ?? 'demo-ui',
+          ...(sequenceView.session_id === null ? {} : { session_id: sequenceView.session_id }),
+          task_type: taskType,
+          prompt: preset.prompt,
+        })
+        setMessages((previous) => updateAssistantMessage(previous, assistantIndex, answer))
+      } catch (error: unknown) {
+        setMessages((previous) =>
+          updateAssistantMessage(previous, assistantIndex, `요청에 실패했습니다: ${getStreamErrorMessage(error)}`),
+        )
+      } finally {
+        setBusy(false)
+      }
+    },
+    [busy, messages.length, sequenceView.session_id, sequenceView.user_id],
+  )
 
   const onSubmit = useCallback(
     async (message: string): Promise<void> => {
@@ -381,6 +415,7 @@ export function App(): ReactElement {
           onSubmit={onSubmit}
           onStop={onStop}
           onReset={onReset}
+          onPreset={(taskType) => void onPreset(taskType)}
         />
       </div>
       <SimulatorMonitorPanel

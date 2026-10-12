@@ -4,7 +4,7 @@ import { SequencePanel } from '../src/components/SequencePanel'
 import { sequenceViewFromPayloads } from '../src/contracts'
 
 // 시뮬레이터가 보내는 시퀀스 본문 모양(벤더 세션 샘플). 구역은 레벨 안의 번호다.
-const body = (zone: string, seq: string) => ({ session_id: 'S-1', scenario_id: '3', zone_id: zone, sequence_id: seq })
+const body = (zone: string, seq: string) => ({ session_id: 'S-1', user_id: 'W-1', scenario_id: '3', zone_id: zone, sequence_id: seq })
 const view = sequenceViewFromPayloads([
   body('1', 'SEQ-001'),
   body('1', 'SEQ-002'),
@@ -82,8 +82,8 @@ describe('SequencePanel 시뮬레이터 세션 배지', () => {
 
 describe('sequenceViewFromPayloads', () => {
   it('가장 최근 세션의 시퀀스만 센다 — 데모를 다시 돌려도 횟수가 쌓이지 않는다', () => {
-    const old = { session_id: 'S-old', scenario_id: '2', zone_id: '1', sequence_id: 'SEQ-001' }
-    const next = (zone: string, seq: string) => ({ session_id: 'S-new', scenario_id: '3', zone_id: zone, sequence_id: seq })
+    const old = { session_id: 'S-old', user_id: 'W-1', scenario_id: '2', zone_id: '1', sequence_id: 'SEQ-001' }
+    const next = (zone: string, seq: string) => ({ session_id: 'S-new', user_id: 'W-1', scenario_id: '3', zone_id: zone, sequence_id: seq })
     const result = sequenceViewFromPayloads([old, old, next('1', 'SEQ-001'), next('2', 'SEQ-002')])
 
     expect(result.level_id).toBe('3')
@@ -98,7 +98,7 @@ describe('sequenceViewFromPayloads', () => {
 
 describe('sequenceViewFromPayloads 재전송', () => {
   it('같은 sequence_id 를 다시 받아도 한 번만 센다', () => {
-    const seq = { session_id: 'S-1', scenario_id: '3', zone_id: '4', sequence_id: 'SEQ-001' }
+    const seq = { session_id: 'S-1', user_id: 'W-1', scenario_id: '3', zone_id: '4', sequence_id: 'SEQ-001' }
     const result = sequenceViewFromPayloads([seq, seq, seq])
 
     expect(result.sequence_count).toBe(1)

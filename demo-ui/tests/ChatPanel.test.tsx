@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { ChatPanel, type ChatMessage } from '../src/components/ChatPanel'
@@ -54,5 +54,23 @@ describe('ChatPanel', () => {
     await waitFor(() => {
       expect(list.scrollTop).toBe(240)
     })
+  })
+})
+
+describe('ChatPanel 기능 버튼', () => {
+  it('기능 4개 버튼을 그리고 누르면 그 task_type 을 넘긴다', () => {
+    const calls: string[] = []
+    render(
+      <ChatPanel messages={[]} busy={false} onSubmit={() => {}} onStop={() => {}} onReset={() => {}} onPreset={(t) => calls.push(t)} />,
+    )
+    for (const taskType of ['knowledge_search', 'pose_recomm', 'trajectory_recomm', 'error_analysis']) {
+      fireEvent.click(screen.getByTestId(`preset-${taskType}`))
+    }
+    expect(calls).toEqual(['knowledge_search', 'pose_recomm', 'trajectory_recomm', 'error_analysis'])
+  })
+
+  it('응답을 기다리는 동안은 누를 수 없다', () => {
+    render(<ChatPanel messages={[]} busy onSubmit={() => {}} onStop={() => {}} onReset={() => {}} onPreset={() => {}} />)
+    expect(screen.getByTestId('preset-pose_recomm')).toBeDisabled()
   })
 })
