@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { chatRequestSchema, copilotQueryResponseSchema, sequenceSnapshotSchema, streamEventSchema } from './contracts'
 import type { ChatRequest, CopilotQueryInput, SequenceSnapshot, StreamEvent } from './contracts'
+import type { QueryMetrics } from './telemetry'
 
 export const API_BASE_URL =
   typeof window !== 'undefined' && window.__DEMO_API_BASE_URL__ !== undefined
@@ -186,7 +187,11 @@ export async function* streamChat(
 }
 
 /** v2.5 질의 한 번. 답이 없으면(not_available 등) 서버 message 를 돌려준다. */
-export async function queryCopilot(body: CopilotQueryInput, signal?: AbortSignal): Promise<string> {
+export async function queryCopilot(
+  body: CopilotQueryInput,
+  signal?: AbortSignal,
+): Promise<{ readonly text: string; readonly metrics: QueryMetrics }> {
+  const started = performance.now()
   let response: Response
   try {
     response = await fetch(`${API_BASE_URL}/api/v1/copilot/query`, {
@@ -207,5 +212,16 @@ export async function queryCopilot(body: CopilotQueryInput, signal?: AbortSignal
   const answer = parsed.data?.answer ?? parsed.message
   // 인용은 본문과 따로 온다. 끝줄에 ID 만 두면 답변 렌더러가 칩으로 옮긴다.
   const citations = parsed.data?.citations ?? []
-  return citations.length > 0 ? `${answer}\n${citations.join(', ')}` : answer
+  const data = parsed.data
+  return {
+    text: citations.length > 0 ? `${answer}\n${citations.join(', ')}` : answer,
+    metrics: {
+      roundTripMs: Math.round(performance.now() - started),
+      serverMs: data?.latency_ms ?? null,
+      citationCount: citations.length,
+      retrievalUsed: data?.retrieval_used ?? null,
+      degraded: data?.degraded ?? null,
+      contextStatus: data?.context_status ?? null,
+    },
+  }
 }

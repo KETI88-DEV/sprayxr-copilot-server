@@ -312,7 +312,14 @@ export const DEFAULT_QUERY_OPTIONS: QueryOptions = { task_type: 'knowledge_searc
 export const copilotQueryResponseSchema = z.object({
   message: z.string(),
   data: z
-    .object({ answer: z.string().nullable().optional(), citations: z.array(z.string()).optional() })
+    .object({
+      answer: z.string().nullable().optional(),
+      citations: z.array(z.string()).optional(),
+      latency_ms: z.number().optional(),
+      retrieval_used: z.boolean().optional(),
+      degraded: z.boolean().optional(),
+      context_status: z.string().optional(),
+    })
     .passthrough()
     .nullable(),
 })

@@ -12,6 +12,19 @@ export type TurnMetrics = {
   readonly deadlineHit: boolean
 }
 
+/**
+ * v2.5 질의 한 번의 계측. 스트리밍이 아니므로 첫 토큰 시간은 없다 — 화면에서 잰 왕복과
+ * 서버가 적은 처리 시간(latency_ms)만 있다. 둘의 차이가 네트워크·대기다.
+ */
+export type QueryMetrics = {
+  readonly roundTripMs: number
+  readonly serverMs: number | null
+  readonly citationCount: number
+  readonly retrievalUsed: boolean | null
+  readonly degraded: boolean | null
+  readonly contextStatus: string | null
+}
+
 export const EMPTY_READOUT = '—'
 
 const MS_PER_SECOND = 1000

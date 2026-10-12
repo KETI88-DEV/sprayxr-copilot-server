@@ -1,7 +1,7 @@
 import type { ReactElement } from 'react'
 import type { SessionSequenceView } from '../contracts'
 import type { SimSession } from '../simContracts'
-import { EMPTY_READOUT, formatCount, formatDurationMs, type TurnMetrics } from '../telemetry'
+import { EMPTY_READOUT, formatCount, formatDurationMs, type QueryMetrics } from '../telemetry'
 import { SequencePanel } from './SequencePanel'
 
 export type RunState = 'idle' | 'running' | 'done' | 'error'
@@ -18,7 +18,7 @@ type Props = {
   readonly runState: RunState
   readonly stageLabel: string | null
   readonly elapsedSec: number | null
-  readonly metrics: TurnMetrics | null
+  readonly metrics: QueryMetrics | null
   readonly sequenceView: SessionSequenceView
   readonly simSession: SimSession | null
   readonly onReconnect: () => void
@@ -53,8 +53,9 @@ export function MonitorPanel({
 }: Props): ReactElement {
   const running = runState === 'running'
   const activity = running ? (stageLabel ?? RUN_STATE_LABEL.running) : RUN_STATE_LABEL[runState]
-  const deadlineTone = metrics === null ? 'neutral' : metrics.deadlineHit ? 'alert' : 'verify'
-  const deadlineValue = metrics === null ? EMPTY_READOUT : metrics.deadlineHit ? '초과' : '준수'
+  const degradedTone = metrics?.degraded == null ? 'neutral' : metrics.degraded ? 'alert' : 'verify'
+  const degradedValue = metrics?.degraded == null ? EMPTY_READOUT : metrics.degraded ? '예' : '아니오'
+  const retrievalValue = metrics?.retrievalUsed == null ? EMPTY_READOUT : metrics.retrievalUsed ? '사용' : '안 함'
 
   return (
     <aside className="monitor" aria-label="monitoring">
@@ -89,12 +90,13 @@ export function MonitorPanel({
       <section className="panel">
         <p className="panel__eyebrow">응답 계측</p>
         <div className="monitor__readouts">
-          <Readout label="첫 응답" value={formatDurationMs(metrics?.ttftMs ?? null)} />
-          <Readout label="총 소요" value={formatDurationMs(metrics?.totalMs ?? null)} />
-          <Readout label="종합 생성" value={formatDurationMs(metrics?.synthesisMs ?? null)} />
-          <Readout label="도구 호출" value={formatCount(metrics?.toolCallCount ?? null, '회')} />
-          <Readout label="참조 청크" value={formatCount(metrics?.ragChunkCount ?? null, '건')} />
-          <Readout label="응답 시한" value={deadlineValue} tone={deadlineTone} />
+          {/* 질의 API 는 스트리밍이 아니라 첫 토큰 시간이 없다. 왕복 − 서버 처리 = 네트워크·대기. */}
+          <Readout label="왕복 시간" value={formatDurationMs(metrics?.roundTripMs ?? null)} />
+          <Readout label="서버 처리" value={formatDurationMs(metrics?.serverMs ?? null)} />
+          <Readout label="인용" value={formatCount(metrics?.citationCount ?? null, '건')} />
+          <Readout label="문서 검색" value={retrievalValue} />
+          <Readout label="축약 응답" value={degradedValue} tone={degradedTone} />
+          <Readout label="상태" value={metrics?.contextStatus ?? EMPTY_READOUT} />
         </div>
       </section>
 

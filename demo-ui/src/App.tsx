@@ -17,7 +17,7 @@ import {
 import type { SimSession } from './simContracts'
 import type { SimLifecycle } from './components/SimulatorMonitorPanel'
 import { describeStage } from './stageLabels'
-import type { TurnMetrics } from './telemetry'
+import type { QueryMetrics } from './telemetry'
 import { useMonitorStream } from './useMonitorStream'
 import './styles.css'
 
@@ -61,7 +61,7 @@ export function App(): ReactElement {
   const [queryOptions, setQueryOptions] = useState<QueryOptions>(DEFAULT_QUERY_OPTIONS)
   const [runState, setRunState] = useState<RunState>('idle')
   const [live, setLive] = useState<LiveProgress | null>(null)
-  const [metrics, setMetrics] = useState<TurnMetrics | null>(null)
+  const [metrics, setMetrics] = useState<QueryMetrics | null>(null)
   const [logEntries, setLogEntries] = useState<readonly ToolLogEntry[]>([])
   const [logOpen, setLogOpen] = useState<boolean>(true)
   const [online, setOnline] = useState<boolean>(false)
@@ -176,9 +176,10 @@ export function App(): ReactElement {
       abortControllerRef.current = controller
       setBusy(true)
       setRunState('running')
+      setMetrics(null)
       try {
         const context = queryOptions.context.trim()
-        const answer = await queryCopilot(
+        const { text, metrics: measured } = await queryCopilot(
           {
             user_id: sequenceView.user_id ?? 'demo-ui',
             ...(sequenceView.session_id === null ? {} : { session_id: sequenceView.session_id }),
@@ -191,7 +192,8 @@ export function App(): ReactElement {
           },
           controller.signal,
         )
-        setMessages((previous) => updateAssistantMessage(previous, assistantIndex, answer))
+        setMessages((previous) => updateAssistantMessage(previous, assistantIndex, text))
+        setMetrics(measured)
         setRunState('done')
       } catch (error: unknown) {
         const stopped = controller.signal.aborted

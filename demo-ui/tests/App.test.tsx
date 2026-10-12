@@ -22,7 +22,14 @@ const ANSWER = {
   status: 'SUCCESS',
   code: 200,
   message: 'Copilot query completed',
-  data: { answer: '저도막 구역은 체류 시간을 늘려 재도장한다.', citations: ['DOC-doc_0036-C0098'] },
+  data: {
+    answer: '저도막 구역은 체류 시간을 늘려 재도장한다.',
+    citations: ['DOC-doc_0036-C0098'],
+    latency_ms: 31187,
+    retrieval_used: true,
+    degraded: false,
+    context_status: 'available',
+  },
 }
 
 async function ask(question: string): Promise<void> {
@@ -82,6 +89,21 @@ describe('App', () => {
     expect(typeof queries[0]?.['request_id']).toBe('string')
     // 인용은 본문과 따로 와서 칩으로 보인다.
     expect(screen.getByText('DOC-doc_0036-C0098')).toBeInTheDocument()
+  })
+
+  it('fills the measurement panel from the query response', async () => {
+    render(<App />)
+    await waitFor(() => expect(screen.getByText('지나간 구역')).toBeInTheDocument())
+
+    await ask('저도막 구역은 어떻게 해야해?')
+
+    const monitor = screen.getByRole('complementary', { name: 'monitoring' })
+    // 서버가 적은 latency_ms 31187 → 31.2 초. 화면 왕복은 모의 응답이라 거의 0 이다.
+    await waitFor(() => expect(within(monitor).getByText('31.2 초')).toBeInTheDocument())
+    expect(within(monitor).getByText('1건')).toBeInTheDocument()
+    expect(within(monitor).getByText('사용')).toBeInTheDocument()
+    expect(within(monitor).getByText('아니오')).toBeInTheDocument()
+    expect(within(monitor).getByText('available')).toBeInTheDocument()
   })
 
   it('carries the chosen task_type, use_rag and context in the request', async () => {
