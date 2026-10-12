@@ -122,11 +122,16 @@ def _construct_default_pipeline() -> _Pipeline:
         adapter_path,
         mcp_base_url,
     )
-    return AgentPipeline(
+    pipeline = AgentPipeline(
         config_path=config_path,
         adapter_path=adapter_path,
         mcp_base_url=mcp_base_url,
     )
+    # 라이브에서만 막는다. 평가는 AgentPipeline 을 직접 만들므로 생성이 바이트 단위로 그대로다.
+    from trainer.scripts.hanzi_guard import suppress_hanzi
+
+    suppress_hanzi(pipeline)
+    return pipeline
 
 
 def _get_or_build_pipeline() -> _Pipeline:

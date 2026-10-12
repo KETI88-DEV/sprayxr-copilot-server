@@ -37,6 +37,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, Final, Literal, get_args
 
+from trainer.scripts.hanzi_guard import HANZI_CLASS
+
 StructuredOutputMode = Literal["on", "off"]
 
 _MODES: Final[tuple[str, ...]] = get_args(StructuredOutputMode)
@@ -44,7 +46,7 @@ DEFAULT_MODE: Final[StructuredOutputMode] = "off"
 
 # A body line holds at least one character and no ``[`` at all; see the module docstring
 # for why the bracket is banned outright rather than only at a line start.
-_BODY_LINE: Final[str] = r"[^\n\[]+"
+_BODY_LINE: Final[str] = rf"[^\n\[{HANZI_CLASS}]+"  # 한자는 본문에 못 나온다(hanzi_guard)
 _DOC_ID: Final[str] = r"DOC-[A-Za-z0-9_-]+-C[0-9][0-9][0-9][0-9]"
 
 ANSWER_REGEX_NO_EVIDENCE: Final[str] = rf"\[답변\] {_BODY_LINE}(\n{_BODY_LINE})*"
