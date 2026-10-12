@@ -761,6 +761,8 @@ ul {
   gap: var(--s-3);
   font-size: var(--t-body);
   line-height: 1.78;
+  /* 띄어쓰기 없는 긴 문자열(모델 출력 이상, 긴 ID·URL)도 말풍선 안에서 줄을 바꾼다. */
+  overflow-wrap: anywhere;
 }
 
 .answer__paragraph {
