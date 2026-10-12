@@ -41,15 +41,17 @@ class LiveSequenceResult:
     error_retryable: bool | None = None
 
 
+def is_sequence_intent(route: str, instruction: str) -> bool:
+    """순서 질문인가. 이 경로는 모델이 도구를 안 불러도 아래에서 sequence_validation 을 채운다."""
+    normalized = instruction.casefold()
+    return route == "training_realtime" and any(marker in normalized for marker in _SEQUENCE_INTENT_MARKERS)
+
 async def enforce_live_sequence_validation(
     request: LiveSequenceRequest,
     adapter: SequenceToolAdapter | None,
 ) -> LiveSequenceResult:
     tool_calls = list(request.tool_calls)
-    normalized_instruction = request.instruction.casefold()
-    sequence_intent = request.route == "training_realtime" and any(
-        marker in normalized_instruction for marker in _SEQUENCE_INTENT_MARKERS
-    )
+    sequence_intent = is_sequence_intent(request.route, request.instruction)
     sequence_called = any(call.get("name") == "sequence_validation" for call in tool_calls)
     if not sequence_intent or sequence_called:
         return LiveSequenceResult(tool_calls=tool_calls, response=request.response)

@@ -88,10 +88,54 @@ def test_fast_route_answer_drops_unsupported_verdict_cause_and_action() -> None:
     assert "SENTINEL_ACTION" not in answer
 
 
-def test_diagnostic_route_answer_is_streamed_unchanged() -> None:
-    """Given the same scaffold on a diagnostic route, When streamed, Then every section survives."""
-    answer = _stream_answer("training_realtime", "도막 상태 판정해줘")
+def _pipeline_by_route(tool_calls_on_diagnostic: list[dict[str, Any]]) -> tuple[AgentPipeline, list[str]]:
+    """진단 경로에서는 주어진 도구 호출을, fast 경로에서는 지식 답을 낸다. 부른 경로를 기록한다."""
+    pipe = AgentPipeline.__new__(AgentPipeline)
+    pipe.router = SemanticRouter()
+    routes: list[str] = []
 
+    def _fake_run(**kwargs: Any) -> dict[str, Any]:
+        route = kwargs["force_route"]
+        routes.append(route)
+        return {
+            "route": route,
+            "rag_chunks": [{"chunk_id": "DOC-doc_0086-C0001", "text": ""}],
+            "tool_calls": tool_calls_on_diagnostic if route != "fast" else [],
+            "response": _DIAGNOSTIC_SCAFFOLD if route != "fast" else "[분석] KNOWLEDGE_ANSWER\n[근거] DOC-doc_0086-C0001",
+            "synthesis_ms": 0,
+            "deadline_hit": False,
+        }
+
+    pipe.run = _fake_run
+    return pipe, routes
+
+
+def test_toolless_diagnostic_answer_is_re_answered_on_the_fast_route() -> None:
+    """Given a diagnostic route that called no tool, When streamed, Then it is re-answered as knowledge.
+
+    도구 결과가 없으면 [판정]·[원인]은 데이터 없이 채운 틀이다. 2026-10-12 데모에서
+    "측정값 편차 또는 작업 조건 이탈 가능성 있음"·"anomaly_detection 도구로 … 생성합니다"가 그대로 나왔다.
+    """
+    pipe, routes = _pipeline_by_route([])
+
+    events = _collect(pipe.run_streaming(instruction="도막 상태 판정해줘", environment={}))
+    answer = "".join(payload["text"] for kind, payload in events if kind == "delta")
+
+    assert routes == ["training_realtime", "fast"]
+    assert "KNOWLEDGE_ANSWER" in answer
+    assert "SENTINEL_VERDICT" not in answer
+    assert answer.startswith("[답변]")
+
+
+def test_diagnostic_answer_with_tool_results_is_streamed_unchanged() -> None:
+    """Given a diagnostic route whose tools ran, When streamed, Then every section survives — 대조군."""
+    tool = {"name": "anomaly_detection", "arguments": {}, "result": {"status": "success", "result": {}}}
+    pipe, routes = _pipeline_by_route([tool])
+
+    events = _collect(pipe.run_streaming(instruction="도막 상태 판정해줘", environment={}))
+    answer = "".join(payload["text"] for kind, payload in events if kind == "delta")
+
+    assert routes == ["training_realtime"]
     assert answer == _DIAGNOSTIC_SCAFFOLD
 
 

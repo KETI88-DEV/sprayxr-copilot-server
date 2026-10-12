@@ -41,6 +41,7 @@ from trainer.scripts.answer_grammar import (
     structured_output_mode,
 )
 from trainer.scripts.live_response_contract import parse_knowledge_answer, retrieved_chunk_ids
+from trainer.scripts.live_sequence_fallback import is_sequence_intent
 from trainer.scripts.live_sequence_fallback import (
     LiveSequenceRequest,
     enforce_live_sequence_validation,
@@ -957,13 +958,28 @@ class AgentPipeline:
                     raise GenerationCancelledError("consumer left before generation started")
                 # Runs in the worker's copied context, so the scope never leaks to the caller.
                 with generation_cancel_scope(cancel_event):
-                    return self.run(
+                    result = self.run(
                         instruction=instruction,
                         environment=environment,
                         session_id=session_id,
                         enable_thinking=enable_thinking,
                         request_id=request_id,
                         force_route=live_route,
+                    )
+                    route = str(result.get("route", ""))
+                    if route == "fast" or result.get("tool_calls") or is_sequence_intent(route, instruction):
+                        return result
+                    # 도구가 한 번도 돌지 않은 진단 답은 [판정]·[원인]을 데이터 없이 채운 틀이다
+                    # ("측정값 편차 또는 작업 조건 이탈 가능성" 같은 학습 채움 문구). 지식 경로로 다시 답한다.
+                    # 순서 질문은 아래 enforce_live_sequence_validation 이 도구를 채우므로 제외한다.
+                    logger.info("run_streaming: %s route made no tool call; re-answering on fast route", route)
+                    return self.run(
+                        instruction=instruction,
+                        environment=environment,
+                        session_id=session_id,
+                        enable_thinking=enable_thinking,
+                        request_id=request_id,
+                        force_route="fast",
                     )
 
         run_task = asyncio.ensure_future(asyncio.to_thread(_guarded_run))
