@@ -21,7 +21,10 @@ from typing import Final
 
 logger = logging.getLogger(__name__)
 
-_HEADING_RE: Final[re.Pattern[str]] = re.compile(r"^[ \t]*\[(답변|분석|판정|원인|조치|근거)\][ \t]*:?[ \t]*")
+# 【】: 디코딩 정규식이 ``[`` 를 막자 모델이 전각 괄호로 같은 틀을 냈다(use_rag='N', 2026-10-12).
+_HEADING_RE: Final[re.Pattern[str]] = re.compile(
+    r"^[ \t]*[\[【](답변|분석|판정|원인|조치|위험|근거)[\]】][ \t]*:?[ \t]*"
+)
 _ANSWER_LABELS: Final[frozenset[str]] = frozenset({"답변", "분석"})
 _EVIDENCE_LABEL: Final[str] = "근거"
 _ANSWER_HEADING: Final[str] = "[답변]"

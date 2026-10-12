@@ -197,6 +197,35 @@ def test_verdict_only_response_is_refused_rather_than_published() -> None:
     assert "SENTINEL_VERDICT" not in parsed.answer
 
 
+def test_fullwidth_bracket_headings_are_sections_too() -> None:
+    """use_rag='N' 실측(2026-10-12): 문서가 없자 모델이 정규식이 막는 ``[`` 대신 ``【】`` 로 진단 틀을 냈다."""
+    raw = "\n".join(
+        [
+            "저도막은 건도막두께가 50μm 미만인 경우를 말합니다.",
+            "",
+            "【분석】 SENTINEL_ANALYSIS",
+            "",
+            "【판정】 이상 탐지",
+            "",
+            "【원인】 측정값 편차 또는 작업 조건 이탈이 확인되었습니다.",
+            "",
+            "【조치】",
+            "",
+            "1. 현재 상태를 유지하고 정기 점검을 계속하십시오.",
+            "",
+            "【위험】 화재·안전 위험이 높습니다.",
+            "",
+            "【근거】 참조 문서 ID:",
+        ]
+    )
+
+    parsed = parse_knowledge_answer(raw, [])
+
+    assert parsed.body == "저도막은 건도막두께가 50μm 미만인 경우를 말합니다.\nSENTINEL_ANALYSIS"
+    assert parsed.dropped_sections == ("판정", "원인", "조치", "위험")
+    assert is_contract_shaped(parsed.answer)
+
+
 @pytest.mark.parametrize("raw", ["", "   ", "\n\n"])
 def test_blank_response_yields_the_failure_answer(raw: str) -> None:
     """Given an empty generation, When parsed, Then a stated failure replaces silence."""
