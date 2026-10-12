@@ -44,9 +44,10 @@ DEFAULT_MODE: Final[StructuredOutputMode] = "off"
 
 # A body line holds at least one character and no ``[`` at all; see the module docstring
 # for why the bracket is banned outright rather than only at a line start.
-# 한자를 이 문자 클래스에서 빼면 안 된다. 2026-10-12 Spark(vLLM 0.29 structured_outputs)에서 한자 범위를
-# 뺀 클래스로 바꾸자 지식 답의 띄어쓰기가 전부 사라졌다. 파이썬 re 로는 재현되지 않는 vLLM 정규식 엔진 쪽
-# 문제라 여기 시험으로 잡을 수 없다 — 바꾸려면 Spark 실물에서 띄어쓰기를 확인해야 한다.
+# 한자를 이 문자 클래스에서 빼면 안 된다. 2026-10-12 Spark(vLLM 0.29 structured_outputs) 실측: 같은 프롬프트에
+# 정규식만 바꿔 보내자, 옛 클래스는 정상 한국어였고 한자 범위를 뺀 클래스는 답이 **중국어**로 바뀌고 띄어쓰기가
+# 사라졌다 — 엔진이 비ASCII 범위를 넣은 부정 클래스를 거꾸로 해석한다. 파이썬 re 와 로컬 xgrammar 0.2.8 로는
+# 재현되지 않으므로 여기 시험으로 잡을 수 없다. 바꾸려면 Spark vLLM 에 직접 A/B 로 확인해야 한다.
 _BODY_LINE: Final[str] = r"[^\n\[]+"
 _DOC_ID: Final[str] = r"DOC-[A-Za-z0-9_-]+-C[0-9][0-9][0-9][0-9]"
 
