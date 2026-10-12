@@ -129,6 +129,22 @@ describe('formatAnswer', () => {
     expect(plainText(lines[0])).toBe('[1] 첫 번째 근거')
   })
 
+  it('drops a multi-word evidence label left behind by a lifted citation', () => {
+    // 2026-10-12 데모: `[근거] 참조 문서 ID: DOC-…` 에서 ID 를 칩으로 옮긴 뒤 `참조 문서 ID:` 만 남았다.
+    const document = formatAnswer(['[답변] 저도막은 체류 시간을 늘린다.', '[근거] 참조 문서 ID: DOC-doc_0036-C0098'].join('\n'))
+
+    expect(document.citations).toEqual(['DOC-doc_0036-C0098'])
+    expect(document.blocks).toHaveLength(1)
+    expect(sectionAt(document.blocks, 0).label).toBe('답변')
+  })
+
+  it('keeps a real sentence that only mentions a citation', () => {
+    const document = formatAnswer('[답변] 체류 시간은 문서 규정을 따른다: DOC-doc_0036-C0098 참고하여 30초 이상 유지한다.')
+
+    expect(sectionAt(document.blocks, 0).label).toBe('답변')
+    expect(paragraphAt(sectionAt(document.blocks, 0).body, 0).map(plainText).join(' ')).toContain('30초')
+  })
+
   it('lifts repeated citation ids into one de-duplicated list', () => {
     const document = formatAnswer(
       ['[판정] 합격 (DOC-doc_0039-C0239)', '[근거] DOC-doc_0039-C0239, DOC-doc_0041-C0101, DOC-doc_0039-C0239'].join(

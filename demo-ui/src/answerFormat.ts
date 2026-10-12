@@ -82,7 +82,8 @@ function isCitationResidue(text: string): boolean {
   if (/^[\p{P}\p{S}\s]+$/u.test(trimmed)) {
     return true
   }
-  return /^[^\s:：]{1,12}[ \t]*[:：]$/u.test(trimmed)
+  // `참조 문서 ID:` 처럼 띄어 쓴 이름표도 남는다. 인용 ID 를 뺀 줄에만 쓰이므로 짧은 이름표로 한정한다.
+  return /^[^:：\n]{1,16}[:：]$/u.test(trimmed)
 }
 
 function stripCitationLines(lines: readonly string[]): string[] {
