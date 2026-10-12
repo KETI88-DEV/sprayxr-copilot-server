@@ -197,6 +197,7 @@ export type StreamEvent = z.infer<typeof streamEventSchema>
 export const UNASSIGNED_ZONE_ID = '-1'
 
 export const sequenceBodySchema = z.object({
+  session_id: z.string().min(1),
   scenario_id: z.string().min(1),
   zone_id: z.string().min(1),
   sequence_id: z.string().min(1),
@@ -222,7 +223,10 @@ export const EMPTY_SEQUENCE_VIEW: SessionSequenceView = {
   unassigned_count: 0,
 }
 
-/** 레벨에 구역 목록(카탈로그)이 없어 아직 안 간 구역은 알 수 없다 — 지나간 구역만 처음 간 순서로 낸다. */
+/**
+ * 레벨에 구역 목록(카탈로그)이 없어 아직 안 간 구역은 알 수 없다 — 지나간 구역만 처음 간 순서로 낸다.
+ * 모니터에는 지난 세션도 남아 있으므로 가장 최근 세션의 시퀀스만 센다. 안 그러면 데모를 다시 돌릴 때마다 횟수가 쌓인다.
+ */
 export function sequenceViewFromPayloads(payloads: readonly unknown[]): SessionSequenceView {
   const counts = new Map<string, number>()
   let levelId: string | null = null
@@ -230,17 +234,23 @@ export function sequenceViewFromPayloads(payloads: readonly unknown[]): SessionS
   let unassigned = 0
   let lastZoneId: string | null = null
 
-  for (const payload of payloads) {
+  const bodies = payloads.flatMap((payload) => {
     const parsed = sequenceBodySchema.safeParse(payload)
-    if (!parsed.success) continue
+    return parsed.success ? [parsed.data] : []
+  })
+  const latestSession = bodies.at(-1)?.session_id
+  // 같은 sequence_id 를 다시 받으면 같은 시퀀스다(서버도 duplicate 로 본다). 한 번만 센다.
+  const unique = new Map(bodies.filter((b) => b.session_id === latestSession).map((b) => [b.sequence_id, b]))
+
+  for (const body of unique.values()) {
     total += 1
-    levelId = parsed.data.scenario_id
-    if (parsed.data.zone_id === UNASSIGNED_ZONE_ID) {
+    levelId = body.scenario_id
+    if (body.zone_id === UNASSIGNED_ZONE_ID) {
       unassigned += 1
       continue
     }
-    counts.set(parsed.data.zone_id, (counts.get(parsed.data.zone_id) ?? 0) + 1)
-    lastZoneId = parsed.data.zone_id
+    counts.set(body.zone_id, (counts.get(body.zone_id) ?? 0) + 1)
+    lastZoneId = body.zone_id
   }
 
   return {
