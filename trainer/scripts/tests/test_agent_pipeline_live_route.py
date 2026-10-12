@@ -152,3 +152,44 @@ def test_live_stream_keeps_sequence_question_on_realtime_route_with_same_environ
     _ = _collect(pipe.run_streaming(instruction="다음 순서가 어떻게 돼?", environment=ambient))
 
     assert captured["force_route"] == "training_realtime"
+
+
+# --- 라이브 분류: 방법을 묻는 지식 질문은 도장 용어가 있어도 fast ------------------------------
+#
+# 2026-10-12 데모: "저도막 구역은 어떻게 해야해?"가 "저도막"(realtime 키워드) 때문에 도구 경로로 가서
+# location_tracking·sequence_validation 이 돌고 "다음 도장 순서는 A-2 → A-3" 이라는 엉뚱한 답이 나왔다.
+
+
+import pytest  # noqa: E402
+
+
+@pytest.mark.parametrize(
+    ("question", "route"),
+    [
+        ("저도막 구역은 어떻게 해야해?", "fast"),
+        ("과도막은 왜 생겨?", "fast"),
+        ("DFT 측정 기준이 뭐야?", "fast"),
+        # 대조군: 지금 이 작업의 상태를 묻거나 순서를 묻는 말은 도구 경로에 남는다
+        ("지금 저도막이야?", "training_realtime"),
+        ("현재 구역 저도막인데 어떻게 해야해?", "training_realtime"),
+        ("이 구역 두께 판정해줘", "training_realtime"),
+        ("다음 순서가 어떻게 돼?", "training_realtime"),
+    ],
+)
+def test_live_classifier_separates_how_to_questions_from_state_checks(question: str, route: str) -> None:
+    assert SemanticRouter().classify_live(question) == route
+
+
+def test_live_stream_sends_the_reported_how_to_question_to_the_fast_route() -> None:
+    """run_streaming 이 실제로 라이브 분류를 쓴다 — 도구 경로로 run() 을 부르지 않는다."""
+    pipe, captured = _pipeline_capturing_route("fast", [])
+    ambient = dict(default_tool_environment("TR-L01"))
+
+    _ = _collect(pipe.run_streaming(instruction="저도막 구역은 어떻게 해야해?", environment=ambient))
+
+    assert captured["force_route"] == "fast"
+
+
+def test_evaluation_classifier_is_unchanged() -> None:
+    """평가는 run() → classify() 를 쓴다. 라이브 분류를 넣어도 그 결과는 그대로여야 한다."""
+    assert SemanticRouter().classify("저도막 구역은 어떻게 해야해?", None) == "training_realtime"

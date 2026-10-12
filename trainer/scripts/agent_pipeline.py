@@ -107,6 +107,16 @@ class TraineeProfile:
 # ---------------------------------------------------------------------------
 
 # Training-realtime keywords: sequence, anomaly, DFT judgment — must respond < 60s
+# 라이브 분류(classify_live)만 쓴다. 방법·정의·이유를 묻는 말.
+_KNOWLEDGE_MARKERS: tuple[str, ...] = (
+    "어떻게 해야", "어떻게 하면", "어떻게 하나", "어떻게 하지", "방법", "대처", "해결", "조치 방법",
+    "왜 ", "이유", "원인이 뭐", "뭐야", "무엇", "이란", "란?", "정의", "기준", "규격", "간격", "주의",
+)
+# 지금 이 작업의 상태를 묻는 말 — 이게 있으면 도구로 실제 값을 봐야 한다.
+_CURRENT_STATE_MARKERS: tuple[str, ...] = (
+    "지금", "현재", "방금", "이번", "여기", "이 구역", "내 ", "제 ", "판정해", "측정해", "확인해",
+)
+
 _TRAINING_REALTIME_KEYWORDS: set[str] = {
     "순서", "다음", "칠하", "깎아", "순번",
     "이상", "탐지", "anomaly", "과도막", "저도막",
@@ -195,6 +205,25 @@ class SemanticRouter:
         if deep_score > 0:
             return "training_review"  # general deep → review (lenient timing)
         return "fast"
+
+
+    def classify_live(self, instruction: str) -> str:
+        """라이브 채팅 전용 분류. 평가가 쓰는 classify() 는 그대로 둔다.
+
+        도장 용어("저도막"·"판정"·"dft")만 있어도 classify() 는 도구 경로로 보낸다. 시뮬레이터에서
+        "지금 저도막이야?"를 확인하려는 설계라 그 자체는 맞지만, "저도막 구역은 어떻게 해야해?"처럼
+        **방법을 묻는** 질문까지 도구 경로로 가서 위치·순서 도구가 돌고 엉뚱한 순서 답이 나왔다
+        (2026-10-12 데모). 지식 표지가 있고 현재 상태를 가리키지 않으며 순서 질문이 아니면 fast 다.
+        """
+        route = self.classify(instruction, None)
+        if route == "fast":
+            return route
+        text = instruction.casefold()
+        asks_how = any(marker in text for marker in _KNOWLEDGE_MARKERS)
+        about_now = any(marker in text for marker in _CURRENT_STATE_MARKERS)
+        if asks_how and not about_now and not is_sequence_intent(route, instruction):
+            return "fast"
+        return route
 
 
 # ---------------------------------------------------------------------------
@@ -949,7 +978,7 @@ class AgentPipeline:
 
         # Ambient context rides on every live turn, so passing it here would make
         # classify() read tool intent from state; run() keeps its rule for evaluation.
-        live_route = self.router.classify(instruction, None)
+        live_route = self.router.classify_live(instruction)
         cancel_event = threading.Event()
 
         def _guarded_run() -> dict[str, Any]:
