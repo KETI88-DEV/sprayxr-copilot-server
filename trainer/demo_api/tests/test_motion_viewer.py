@@ -130,6 +130,9 @@ def test_motion_viewer_page_explains_representative_and_statistical_motion(tmp_p
     assert "function referencePointCloud" in response.text
     assert "function directionField" in response.text
     assert "전문가 전체 Ray Point" in response.text
+    assert 'id="pointSize"' in response.text
+    assert "흰색 포인트 크기" in response.text
+    assert "pointSizeValue" in response.text
     assert "trackedStats[marker]" not in response.text
     assert "function interpolatedFrame" in response.text
     assert "function alignSkeleton" in response.text
