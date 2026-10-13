@@ -164,7 +164,7 @@ def test_motion_viewer_page_explains_representative_and_statistical_motion(tmp_p
     assert "function updateZonePanel" in response.text
     assert "Zone 작업 순서" in response.text
     assert "현재 작업 Zone" in response.text
-    assert "grid-template-columns:275px minmax(420px,1fr) 420px" in response.text
+    assert "grid-template-columns:275px minmax(420px,1fr) 360px" in response.text
     assert "allButton.textContent='전체'" in response.text
     assert "expertDirectionMix" in response.text
     assert "현재 양손 위치 편차" not in response.text
