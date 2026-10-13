@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -218,11 +219,14 @@ def test_cli_dry_run_and_merge(tmp_path: Path) -> None:
     # 기본 기대값(Qwen3.6-27B)은 합성 체크포인트에서 실패해야 한다
     strict = subprocess.run([*common, "--dry-run"], capture_output=True, text=True, check=False)
     assert strict.returncode == 1 and "기대값 불일치" in strict.stderr
+    # env 를 명시한다: 앞서 numpy 가 불러온 mkl 이 C 수준 환경에 MKL_THREADING_LAYER=INTEL 을 심고,
+    # env=None 이면 자식이 그것을 물려받아 torch(libgomp) 와 충돌한다. os.environ 에는 그 값이 없다.
     run = subprocess.run(
         [*common, "--expect", "none", "--threads", "2", "--skip-transformers-check"],
         capture_output=True,
         text=True,
         check=False,
+        env=dict(os.environ),
     )
     assert run.returncode == 0, run.stderr
     assert json.loads((out / mls.MANIFEST_NAME).read_text())["verification"]["passed"] is True
