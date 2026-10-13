@@ -15,7 +15,7 @@ import logging
 import os
 import time
 from collections.abc import AsyncIterator
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any, Final
 
 import anyio
@@ -80,6 +80,13 @@ def _error(code: int, message: str) -> JSONResponse:
 # (recommended_flow)이 없다.
 _COATING_INDEX_UNDEFINED: Final = "coating_engine_pending_integration"
 _FLOW_MISSING: Final = "recommended_flow_missing"
+
+# 분석은 메모리 안 스레드라 서버가 재시작되면 그 리포트는 pending 에 영원히 남는다(TSB 2026-10-12).
+# 기한을 넘긴 pending 은 조회할 때 failed 로 닫는다.
+# shortcut: 10분은 실측 없이 넉넉히 잡은 값이다. 긴 세션의 분석 시간을 재면 그에 맞춘다.
+_ANALYSIS_DEADLINE: Final = timedelta(minutes=10)
+_ANALYSIS_FAILED: Final = "analysis_failed"
+_ANALYSIS_FAILED_GUIDE: Final = "분석을 마치지 못했습니다. 같은 자료로 sessions/complete 를 다시 요청해 주세요."
 
 def _unavailable_report(
     *,
@@ -162,13 +169,18 @@ def _report(row: Any) -> ReportDetail:
         scenario_id=payload.get("scenario_id"),
     )
     analysis = payload.get("analysis")
-    if isinstance(analysis, dict):
+    if row.report_status == "failed":
+        detail.report.pose_report = PoseReport(
+            analysis_status="unavailable", reason_code=_ANALYSIS_FAILED, guideline=_ANALYSIS_FAILED_GUIDE
+        )
+    elif isinstance(analysis, dict):
         if isinstance(analysis.get("pose_report"), dict):
             detail.report.pose_report = PoseReport.model_validate(analysis["pose_report"])
         if isinstance(analysis.get("sequence_report"), dict):
             detail.report.sequence_report = SequenceReport.model_validate(analysis["sequence_report"])
         if isinstance(analysis.get("llm_briefing"), str):
             detail.report.llm_briefing = analysis["llm_briefing"]
+    if isinstance(analysis, dict):
         if isinstance(analysis.get("generated_at"), str):
             detail.generated_at = analysis["generated_at"]
         if isinstance(analysis.get("latency_ms"), int):
@@ -240,6 +252,20 @@ def create_v1_router(
     anomalies = broadcaster if broadcaster is not None else AnomalyBroadcaster()
     stored_sequences = sequences if sequences is not None else SequenceStore()
     mcp_base = mcp_base_url or os.environ.get("MCP_BASE_URL", "http://localhost:8100")
+
+    def _settled(report_id: str) -> Any:
+        """조회용 행. 기한을 넘긴 pending 은 failed 로 닫고 돌려준다."""
+        row = state.get_completion(report_id)
+        if row is None or row.report_status != "pending":
+            return row
+        requested = datetime.strptime(row.requested_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        if datetime.now(timezone.utc) - requested < _ANALYSIS_DEADLINE:
+            return row
+        logger.warning("report %s pending past deadline; closing as failed", report_id)
+        state.finish_completion(
+            report_id, status="failed", analysis={"generated_at": _now(), "error": "analysis_interrupted"}
+        )
+        return state.get_completion(report_id)
 
     def _analyze(report_id: str, *, session_id: str, user_id: str, scenario_id: str, csv_bytes: bytes) -> None:
         """세션 종합 자세 분석(`session_analysis`). 응답을 보낸 뒤 스레드에서 돈다 — 시퀀스마다 엔진을 부른다."""
@@ -402,7 +428,7 @@ def create_v1_router(
         session_id: Annotated[str, ApiPath(examples=["TSB-DEMO-001"])],
         report_id: Annotated[str, ApiPath(examples=["RPT-123456789abc"])],
     ) -> JSONResponse:
-        row = await to_thread.run_sync(lambda: state.get_completion(report_id))
+        row = await to_thread.run_sync(lambda: _settled(report_id))
         if row is None or row.session_id != session_id:
             return _error(404, "report not found")
         return _ok(
@@ -422,7 +448,7 @@ def create_v1_router(
     async def report_detail(
         report_id: Annotated[str, ApiPath(examples=["RPT-123456789abc"])]
     ) -> JSONResponse:
-        row = await to_thread.run_sync(lambda: state.get_completion(report_id))
+        row = await to_thread.run_sync(lambda: _settled(report_id))
         if row is None:
             return _error(404, "report not found")
         return _ok(_report(row).model_dump(mode="json"))
