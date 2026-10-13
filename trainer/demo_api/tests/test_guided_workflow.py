@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 
 from trainer.demo_api.app import create_app
+from trainer.demo_api.v1_contracts import ReportDetail
 
 
 def test_guided_workflow_runs_end_to_end_without_parameters() -> None:
@@ -42,7 +43,13 @@ def test_guided_workflow_runs_end_to_end_without_parameters() -> None:
     }
     assert payloads[3]["report_id"].startswith("RPT-")
     assert payloads[4]["report_id"] == payloads[3]["report_id"]
-    assert len(payloads[4]["narrative_evaluation"]) >= 40
+    # 모의 리포트는 정식 리포트(GET /reports/{id})와 같은 모양이다 — 안내용 키만 덧붙는다.
+    guide_keys = {"test_context", "workflow_status", "step", "what_happened", "beginner_tip", "next_endpoint", "report_id"}
+    detail = ReportDetail.model_validate({k: v for k, v in payloads[4].items() if k not in guide_keys})
+    assert detail.report.report_id == payloads[3]["report_id"]
+    assert detail.session_id == payloads[3]["session_id"]
+    assert detail.report.llm_briefing
+    assert "narrative_evaluation" not in payloads[4]
 
 
 def test_each_later_step_recovers_prerequisites_for_a_beginner() -> None:

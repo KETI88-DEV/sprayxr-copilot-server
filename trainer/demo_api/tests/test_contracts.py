@@ -40,10 +40,10 @@ def test_zone_status_enumerates_allowed_values() -> None:
 
 # --- 세션 종합 리포트: 모양의 정본은 예시 파일이다 -----------------------------
 #
-# `docs/examples/report_sample.json` 이 `GET /api/v1/reports/{report_id}` 의 모양을
+# `trainer/demo_api/report_sample.json` 이 `GET /api/v1/reports/{report_id}` 의 모양을
 # 정한다. 계약과 예시가 갈리면 어느 쪽이 맞는지 알 수 없어지므로 여기서 묶는다.
 
-_REPORT_SAMPLE = Path(__file__).resolve().parents[3] / "docs" / "examples" / "report_sample.json"
+_REPORT_SAMPLE = Path(__file__).resolve().parents[1] / "report_sample.json"
 
 
 def _sample() -> dict[str, Any]:

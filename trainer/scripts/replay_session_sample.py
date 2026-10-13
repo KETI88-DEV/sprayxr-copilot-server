@@ -213,7 +213,7 @@ def summarize(rows: Sequence[Mapping[str, Any]], report: Mapping[str, Any] | Non
     if report is None:
         lines.append("리포트: 없음 (complete가 접수되지 않았다)")
     else:
-        # /reports/{id} 의 data 는 머리 필드 + report 본체다(docs/examples/report_sample.json).
+        # /reports/{id} 의 data 는 머리 필드 + report 본체다(trainer/demo_api/report_sample.json).
         body = report.get("report") if isinstance(report.get("report"), Mapping) else {}
         lines.append(
             f"리포트: {body.get('report_status')} · pose_report="

@@ -39,6 +39,7 @@ from trainer.demo_api.v1_contracts import (
     SessionStateData,
     UserCreateRequest,
     UserProfile,
+    report_example,
 )
 from trainer.demo_api.session_analysis import analyze_session
 from trainer.demo_api.sequence_store import SequenceStore
@@ -98,7 +99,7 @@ def _unavailable_report(
 ) -> ReportDetail:
     """엔진이 없을 때의 리포트. 수치는 `null`이고 상태가 그 사실을 말한다(p.15).
 
-    모양의 정본은 `docs/examples/report_sample.json` — 머리 필드는 다른 v2.5 응답과
+    모양의 정본은 `trainer/demo_api/report_sample.json` — 머리 필드는 다른 v2.5 응답과
     같은 규약이고 본체는 `report` 아래다.
     """
     return ReportDetail(
@@ -376,7 +377,14 @@ def create_v1_router(
     @router.get(
         "/reports/{report_id}", response_model=ApiResponse, tags=["5. 최종 평가·리포트"],
         summary="5-3. 최종 종합 리포트 상세 조회",
-        description="리포트 상태 확인 후 최종 평가 내용을 조회합니다. 분석 엔진 결과가 준비되지 않은 영역은 수치를 임의 생성하지 않고 unavailable과 사유를 명시해 반환합니다.",
+        description=(
+            "리포트 상태 확인 후 최종 평가 내용을 조회합니다. 분석 엔진 결과가 준비되지 않은 영역은 수치를 임의 생성하지 않고 unavailable과 사유를 명시해 반환합니다.\n\n"
+            "아래 응답 예시는 세 영역(`coating_report`·`sequence_report`·`pose_report`)과 `llm_briefing`이 모두 채워진 **최종 형식**입니다. "
+            "값은 UI 설계용 예시이며, 실제 응답에서 아직 분석하지 못한 영역은 `analysis_status=unavailable`이고 수치는 `null`입니다."
+        ),
+        responses={200: {"description": "완성된 리포트 예시", "content": {"application/json": {
+            "example": ApiResponse(message="Session report completed", data=report_example()).model_dump(mode="json")
+        }}}},
     )
     async def report_detail(
         report_id: Annotated[str, ApiPath(examples=["RPT-123456789abc"])]

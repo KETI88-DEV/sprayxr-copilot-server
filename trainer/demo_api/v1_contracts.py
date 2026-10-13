@@ -10,6 +10,8 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -262,7 +264,7 @@ class SequenceReport(ReportArea):
     """작업 순서 및 방향 준수.
 
     `direction_adherence_rate`가 두 곳에 있다. 명세서 p.16은 이 영역의 **최상위**
-    필드로 적고, 예시(`docs/examples/report_sample.json`)는 `direction_summary`
+    필드로 적고, 예시(`trainer/demo_api/report_sample.json`)는 `direction_summary`
     안에 둔다. 둘 다 싣되 **한 번 계산해 같은 값을 쓴다** — 따로 계산하면 갈린다.
     """
 
@@ -344,7 +346,7 @@ class SessionReport(StrictModel):
 class ReportDetail(StrictModel):
     """`GET /api/v1/reports/{report_id}`의 `data`.
 
-    모양의 정본은 `docs/examples/report_sample.json`이다 — 머리 필드는 이 API의 다른
+    모양의 정본은 `trainer/demo_api/report_sample.json`이다 — 머리 필드는 이 API의 다른
     v2.5 응답(`copilot/query` 등)과 같은 규약이고 리포트 본체는 `report` 아래 둔다.
     """
 
@@ -355,6 +357,15 @@ class ReportDetail(StrictModel):
     generated_at: str
     latency_ms: int | None = None
     report: SessionReport
+
+
+def report_example() -> dict[str, Any]:
+    """완성 리포트 한 건(`report_sample.json`의 `data`). Swagger 와 모의 연동이 같은 것을 보인다.
+
+    값은 UI 설계용 예시다. 부를 때마다 새 dict 를 돌려준다 — 받는 쪽이 식별자를 바꿔 쓴다.
+    """
+    raw = json.loads(Path(__file__).with_name("report_sample.json").read_text(encoding="utf-8"))
+    return ReportDetail.model_validate(raw["data"]).model_dump(mode="json")
 
 
 class ReportStatusData(StrictModel):

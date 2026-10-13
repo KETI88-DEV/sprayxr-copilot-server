@@ -220,3 +220,18 @@ def test_every_public_operation_explains_when_and_how_to_use_it() -> None:
                 missing.append(f"{method.upper()} {path}")
 
     assert missing == []
+
+
+def test_report_detail_swagger_shows_one_complete_final_report() -> None:
+    """TSB 2026-10-12: 리포트 응답 예시가 없어 Replay 리포트 UI 를 설계할 수 없었다."""
+    schema = TestClient(create_app()).get("/openapi.json").json()
+    operation = schema["paths"]["/api/v1/reports/{report_id}"]["get"]
+
+    example = operation["responses"]["200"]["content"]["application/json"]["example"]
+
+    report = example["data"]["report"]
+    assert report["report_status"] == "complete"
+    for area in ("coating_report", "sequence_report", "pose_report"):
+        assert report[area]["analysis_status"] == "available"
+    assert report["llm_briefing"]
+    assert example["data"]["session_id"] == "3_11000346_1"
