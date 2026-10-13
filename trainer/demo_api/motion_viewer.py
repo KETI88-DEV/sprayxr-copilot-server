@@ -402,6 +402,159 @@ def _reference_paint_statistics(paths: list[Path], *, cell_size: float = 0.01) -
     }
 
 
+def _sample_polyline(points: list[list[float]], limit: int = 36) -> list[list[float]]:
+    if len(points) <= limit:
+        return [[round(value, 6) for value in point] for point in points]
+    indexes = sorted({round(index * (len(points) - 1) / (limit - 1)) for index in range(limit)})
+    return [[round(value, 6) for value in points[index]] for index in indexes]
+
+
+@lru_cache(maxsize=64)
+def _zone_strokes(path_text: str, stamp: tuple[int, int]) -> tuple[dict[str, Any], ...]:
+    del stamp
+    strokes: list[dict[str, Any]] = []
+    points: list[list[float]] = []
+    identity: tuple[str, str] | None = None
+    zone_orders: dict[tuple[str, str], int] = {}
+
+    def flush() -> None:
+        nonlocal points, identity
+        if identity is None or len(points) < 2:
+            points = []
+            identity = None
+            return
+        path_length = sum(math.dist(left, right) for left, right in zip(points, points[1:]))
+        if path_length >= 0.03:
+            zone_orders[identity] = zone_orders.get(identity, 0) + 1
+            centroid = [statistics.fmean(point[axis] for point in points) for axis in range(3)]
+            vector = [points[-1][axis] - points[0][axis] for axis in range(3)]
+            magnitude = math.sqrt(sum(value * value for value in vector))
+            direction = [value / magnitude for value in vector] if magnitude > 1e-9 else [1.0, 0.0, 0.0]
+            strokes.append({
+                "map_num": identity[0], "zone_id": identity[1],
+                "order": zone_orders[identity], "points": _sample_polyline(points),
+                "centroid": centroid, "direction": direction, "path_length": path_length,
+            })
+        points = []
+        identity = None
+
+    with _open_csv(Path(path_text)) as handle:
+        for row in csv.DictReader(handle):
+            point = _ray_point(row)
+            map_zone = _map_zone_uv(row)
+            current = (map_zone[0], map_zone[1]) if map_zone else None
+            if not _spraying(row.get("분사")) or point is None or current is None:
+                flush()
+                continue
+            if identity is not None and current != identity:
+                flush()
+            identity = current
+            if not points or math.dist(points[-1], point) >= 0.005:
+                points.append(point)
+            else:
+                points[-1] = point
+    flush()
+    return tuple(strokes)
+
+
+def _zone_flow_guides(paths: list[Path], *, max_strokes: int = 8) -> list[dict[str, Any]]:
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    sessions_by_zone: dict[tuple[str, str], set[int]] = {}
+    for session_index, path in enumerate(paths):
+        stat = path.stat()
+        for stroke in _zone_strokes(str(path), (stat.st_mtime_ns, stat.st_size)):
+            key = (stroke["map_num"], stroke["zone_id"])
+            item = dict(stroke)
+            item["session_index"] = session_index
+            grouped.setdefault(key, []).append(item)
+            sessions_by_zone.setdefault(key, set()).add(session_index)
+
+    guides: list[dict[str, Any]] = []
+    for key, strokes in grouped.items():
+        extent = math.sqrt(sum(
+            (max(stroke["centroid"][axis] for stroke in strokes) - min(stroke["centroid"][axis] for stroke in strokes)) ** 2
+            for axis in range(3)
+        ))
+        threshold = max(0.12, extent * 0.12)
+        clusters: list[dict[str, Any]] = []
+        for stroke in sorted(strokes, key=lambda item: item["path_length"], reverse=True):
+            matches = []
+            for cluster in clusters:
+                distance = math.dist(stroke["centroid"], cluster["centroid"])
+                alignment = abs(sum(stroke["direction"][axis] * cluster["direction"][axis] for axis in range(3)))
+                if distance <= threshold and alignment >= 0.55:
+                    matches.append((distance + (1 - alignment) * threshold, cluster))
+            if matches:
+                cluster = min(matches, key=lambda item: item[0])[1]
+                direction = list(stroke["direction"])
+                if sum(direction[axis] * cluster["direction"][axis] for axis in range(3)) < 0:
+                    direction = [-value for value in direction]
+                cluster["items"].append(stroke)
+                size = len(cluster["items"])
+                cluster["centroid"] = [
+                    ((size - 1) * cluster["centroid"][axis] + stroke["centroid"][axis]) / size
+                    for axis in range(3)
+                ]
+                cluster["direction"] = [
+                    ((size - 1) * cluster["direction"][axis] + direction[axis]) / size
+                    for axis in range(3)
+                ]
+            else:
+                clusters.append({"items": [stroke], "centroid": list(stroke["centroid"]), "direction": list(stroke["direction"])})
+
+        session_total = len(sessions_by_zone[key])
+        minimum_sessions = 1 if session_total == 1 else max(2, math.ceil(session_total * 0.34))
+        recurring = [
+            cluster for cluster in clusters
+            if len({item["session_index"] for item in cluster["items"]}) >= minimum_sessions
+        ]
+        if not recurring:
+            recurring = sorted(
+                clusters,
+                key=lambda cluster: len({item["session_index"] for item in cluster["items"]}),
+                reverse=True,
+            )[:1]
+        recurring.sort(
+            key=lambda cluster: (
+                -len({item["session_index"] for item in cluster["items"]}),
+                -sum(item["path_length"] for item in cluster["items"]),
+            )
+        )
+        chosen = recurring[:max_strokes]
+        chosen.sort(key=lambda cluster: statistics.median(item["order"] for item in cluster["items"]))
+        rendered = []
+        for order, cluster in enumerate(chosen, 1):
+            items = cluster["items"]
+            representative = min(
+                items,
+                key=lambda candidate: sum(
+                    math.dist(candidate["centroid"], other["centroid"])
+                    + abs(candidate["path_length"] - other["path_length"]) * 0.2
+                    for other in items
+                ),
+            )
+            session_count = len({item["session_index"] for item in items})
+            rendered.append({
+                "order": order,
+                "points": representative["points"],
+                "session_count": session_count,
+                "confidence": round(session_count / max(1, session_total), 4),
+                "median_sequence_order": round(statistics.median(item["order"] for item in items), 2),
+            })
+        guides.append({
+            "map_num": key[0], "zone_id": key[1],
+            "session_count": session_total, "stroke_count": len(rendered), "strokes": rendered,
+        })
+    return sorted(
+        guides,
+        key=lambda item: (
+            item["map_num"],
+            0 if item["zone_id"].replace('.', '', 1).isdigit() else 1,
+            float(item["zone_id"]) if item["zone_id"].replace('.', '', 1).isdigit() else item["zone_id"],
+        ),
+    )
+
+
 def _triangle_area(a: list[float], b: list[float], c: list[float]) -> float:
     ab = [b[axis] - a[axis] for axis in range(3)]
     ac = [c[axis] - a[axis] for axis in range(3)]
@@ -872,7 +1025,7 @@ button{cursor:pointer;font-weight:700}.primary{background:#3157d5;border-color:#
 <div id="status" class="status">데이터를 불러오는 중입니다.</div>
 <p class="help">좌클릭 드래그는 회전, 휠 클릭 드래그는 화면 이동, 휠 스크롤은 확대·축소입니다. 첫 프레임 카메라를 화면 중심으로 설정합니다.</p>
 </aside>
-<section class="stage"><canvas id="canvas"></canvas><div class="overlay"><strong id="overlayTitle">학습모드</strong><span id="overlayFrame">프레임 준비 중</span><div id="viewerLegend" class="viewer-legend"><div><i class="dot" style="background:#f5f8ff"></i>전문가 전체 Ray Point 점군</div><div><i class="dot" style="background:#a78bfa"></i>Map·Zone별 관측 영역</div><div><i class="dot" style="background:var(--green)"></i>위치별 주 방향·통과 빈도</div><div><i class="dot" style="background:#ff8a3d"></i>선택 기록의 페인트 누적 궤적</div><div><i class="dot" style="background:var(--cyan)"></i>전형기 반장의 머리·양손 실측 위치</div></div></div><div id="loading" class="loading"><div class="spinner"></div><span>전문가 기록을 불러오는 중입니다.</span></div></section>
+<section class="stage"><canvas id="canvas"></canvas><div class="overlay"><strong id="overlayTitle">학습모드</strong><span id="overlayFrame">프레임 준비 중</span><div id="viewerLegend" class="viewer-legend"><div><i class="dot" style="background:#f5f8ff"></i>전문가 전체 Ray Point 점군</div><div><i class="dot" style="background:#a78bfa"></i>Map·Zone별 관측 영역</div><div><i class="dot" style="background:var(--green)"></i>Zone별 전문가 표준 도장 패턴</div><div><i class="dot" style="background:#ff8a3d"></i>선택 기록의 페인트 누적 궤적</div><div><i class="dot" style="background:var(--cyan)"></i>전형기 반장의 머리·양손 실측 위치</div></div></div><div id="loading" class="loading"><div class="spinner"></div><span>전문가 기록을 불러오는 중입니다.</span></div></section>
 <aside class="side right"><div class="card"><span>현재 작업 Zone</span><strong id="currentZone">대기 중</strong></div><div class="card"><span>Zone 작업 순서</span><div id="zoneOrder" class="zone-order"></div></div><div id="zoneDetail" class="card"><span class="zone-detail-title">전체 Zone 통계</span><span>데이터를 불러오는 중입니다.</span></div><div class="card"><span>통계에 포함된 수행</span><strong id="sessionCount">-</strong></div><div class="card"><span>현재 기록 길이</span><strong id="duration">-</strong></div>
 <details class="card skeleton-card" open><summary>참고용 스켈레톤 · 별도 화면</summary><div class="skeleton-screen"><canvas id="skeletonCanvas" aria-label="자동 직립 참고용 스켈레톤"></canvas><span id="skeletonAngle" class="skeleton-angle">정면 · 0°</span></div><div class="skeleton-controls"><button id="skeletonTurnLeft" class="skeleton-turn" aria-label="스켈레톤 왼쪽 회전" title="왼쪽으로 15도 회전">↶</button><button id="skeletonReset" class="skeleton-reset">정면 복귀</button><button id="skeletonTurnRight" class="skeleton-turn" aria-label="스켈레톤 오른쪽 회전" title="오른쪽으로 15도 회전">↷</button></div><div class="skeleton-note">골반에서 머리 방향을 위로 자동 정렬합니다. 좌우 회전은 원본 축이 뒤집혀 보일 때 시점을 보정하는 용도이며, 중앙 화면의 정확한 머리·양손 실측 위치에는 영향을 주지 않습니다.</div></details>
 <p class="help">Zone 면은 같은 Map·Zone의 UV 인접점만 작은 3차원 패치로 연결하므로 움푹 파인 부분과 곡면을 평면으로 뭉개지 않습니다. 데이터가 관측되지 않은 빈 공간은 임의로 채우지 않습니다.</p></aside>
@@ -906,7 +1059,7 @@ function arrow(a,b,color,center,w,h){const p=project(a,center,w,h),q=project(b,c
 function referencePointCloud(surface,center,w,h){const baseSize=Number($('pointSize').value);for(const sample of surface.points){const q=project(sample.point,center,w,h),alpha=.16+sample.frequency*.48,size=baseSize*(.8+sample.frequency*.5);ctx.fillStyle=`rgba(245,248,255,${alpha})`;ctx.fillRect(q[0]-size/2,q[1]-size/2,size,size)}}
 function zoneHue(mapNum,zoneId){const zone=Number(zoneId),map=Number(mapNum);if(Number.isFinite(zone)&&Number.isFinite(map))return(zone*137.508+map*43)%360;let hash=17;for(const char of `${mapNum}:${zoneId}`)hash=(hash*31+char.charCodeAt(0))%360;return hash}
 function drawZoneSurfaces(surfaces,center,w,h){const projected=[];for(const surface of surfaces){const hue=zoneHue(surface.map_num,surface.zone_id);for(const triangle of surface.triangles){const points=triangle.map(i=>project(surface.vertices[i],center,w,h));projected.push({points,hue,depth:points.reduce((sum,p)=>sum+p[2],0)/3})}}projected.sort((a,b)=>a.depth-b.depth);for(const item of projected){ctx.fillStyle=`hsla(${item.hue},82%,58%,.16)`;ctx.strokeStyle=`hsla(${item.hue},90%,72%,.24)`;ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(item.points[0][0],item.points[0][1]);for(const p of item.points.slice(1))ctx.lineTo(p[0],p[1]);ctx.closePath();ctx.fill();ctx.stroke()}for(const surface of surfaces){const hue=zoneHue(surface.map_num,surface.zone_id);ctx.strokeStyle=`hsla(${hue},95%,74%,.82)`;ctx.lineWidth=2;for(const edge of surface.boundary_edges){const a=project(surface.vertices[edge[0]],center,w,h),b=project(surface.vertices[edge[1]],center,w,h);ctx.beginPath();ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);ctx.stroke()}if(surface.centroid&&surface.triangles.length){const p=project(surface.centroid,center,w,h),label=`Zone ${surface.zone_id}`;ctx.font='700 11px system-ui';const width=ctx.measureText(label).width+12;ctx.fillStyle='rgba(7,16,31,.78)';ctx.fillRect(p[0]-width/2,p[1]-10,width,18);ctx.fillStyle=`hsl(${hue},95%,78%)`;ctx.textAlign='center';ctx.fillText(label,p[0],p[1]+3);ctx.textAlign='start'}}}
-function directionField(samples,center,w,h){for(const sample of samples){const half=.055+sample.frequency*.06,a=sub(sample.point,mul(sample.direction,half)),b=add(sample.point,mul(sample.direction,half)),alpha=.3+sample.frequency*.65,color=`rgba(52,211,153,${alpha})`;line(a,b,color,1.5+sample.frequency*2.5,center,w,h);if(sample.frequency>.38){arrow(a,b,color,center,w,h);arrow(b,a,color,center,w,h)}}}
+function drawZoneFlowGuides(guides,center,w,h){for(const guide of guides||[]){const key=zoneKey(guide.map_num,guide.zone_id),focused=selectedDetailKey!=='all'&&selectedDetailKey===key,alpha=selectedDetailKey==='all'?.38:focused?.94:.055;for(const stroke of guide.strokes||[]){if(!stroke.points||stroke.points.length<2)continue;const projected=stroke.points.map(point=>project(point,center,w,h));ctx.strokeStyle=`rgba(52,211,153,${alpha})`;ctx.lineWidth=3.5+stroke.confidence*5;ctx.lineCap='round';ctx.lineJoin='round';ctx.shadowColor=`rgba(52,211,153,${Math.min(.7,alpha)})`;ctx.shadowBlur=focused?10:5;ctx.beginPath();ctx.moveTo(projected[0][0],projected[0][1]);for(const point of projected.slice(1))ctx.lineTo(point[0],point[1]);ctx.stroke();ctx.shadowBlur=0;const start=projected[0];ctx.fillStyle=`rgba(167,243,208,${Math.min(1,alpha+.18)})`;ctx.beginPath();ctx.arc(start[0],start[1],focused?5:3,0,Math.PI*2);ctx.fill();if(focused){ctx.font='800 10px system-ui';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillStyle='#052e2b';ctx.beginPath();ctx.arc(start[0],start[1],8,0,Math.PI*2);ctx.fillStyle='#6ee7b7';ctx.fill();ctx.fillStyle='#052e2b';ctx.fillText(String(stroke.order),start[0],start[1]+.5)}}}ctx.textAlign='start';ctx.textBaseline='alphabetic'}
 function add(a,b){return a.map((value,axis)=>value+b[axis])}function sub(a,b){return a.map((value,axis)=>value-b[axis])}function mul(a,value){return a.map(axis=>axis*value)}function dot(a,b){return a.reduce((sum,value,axis)=>sum+value*b[axis],0)}function cross(a,b){return[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]]}function length(a){return Math.sqrt(dot(a,a))}function unit(a,fallback=[1,0,0]){const size=length(a);return size>.00001?mul(a,1/size):fallback}
 function mixPoint(a,b,ratio){if(!a)return b||null;if(!b)return a;return a.map((value,axis)=>value+(b[axis]-value)*ratio)}
 function uprightSkeleton(joints,angleDegrees=skeletonYaw){const origin=joints.Pelvis||joints.Spine,head=joints.Head;if(!origin||!head)return{};const up=unit(sub(head,origin),[0,1,0]),left=joints['Left Shoulder']||joints['Left Upper Arm']||joints['Left Hand'],right=joints['Right Shoulder']||joints['Right Upper Arm']||joints['Right Hand'];let across=left&&right?sub(right,left):[1,0,0];across=unit(sub(across,mul(up,dot(across,up))),[1,0,0]);const forward=unit(cross(across,up),[0,0,1]),angle=angleDegrees*Math.PI/180,cos=Math.cos(angle),sin=Math.sin(angle),oriented={};for(const [name,point] of Object.entries(joints)){const relative=sub(point,origin),x=dot(relative,across),y=dot(relative,up),z=dot(relative,forward);oriented[name]=[x*cos-z*sin,y,x*sin+z*cos]}return oriented}
@@ -915,7 +1068,7 @@ function setSkeletonYaw(value){skeletonYaw=((value+180)%360+360)%360-180;$('skel
 function interpolatedFrame(seconds){let current=Math.max(0,Math.min(index,data.frames.length-1));while(current+1<data.frames.length&&data.frames[current+1].t<=seconds)current++;while(current>0&&data.frames[current].t>seconds)current--;const a=data.frames[current],b=data.frames[Math.min(current+1,data.frames.length-1)],span=Math.max(.000001,b.t-a.t),ratio=Math.max(0,Math.min(1,(seconds-a.t)/span));const tracked={},joints={};for(const key of new Set([...Object.keys(a.tracked||{}),...Object.keys(b.tracked||{})]))tracked[key]=mixPoint((a.tracked||{})[key],(b.tracked||{})[key],ratio);for(const key of new Set([...Object.keys(a.joints||{}),...Object.keys(b.joints||{})]))joints[key]=mixPoint((a.joints||{})[key],(b.joints||{})[key],ratio);const continuousPaint=a.spraying&&b.spraying&&a.ray_point&&b.ray_point&&a.zone_id===b.zone_id&&a.map_num===b.map_num;return{index:current,frame:{...a,t:seconds,tracked,joints,ray_point:continuousPaint?mixPoint(a.ray_point,b.ray_point,ratio):a.ray_point}}}
 function draw(){const rect=canvas.getBoundingClientRect(),w=rect.width,h=rect.height;ctx.clearRect(0,0,w,h);ctx.strokeStyle='rgba(100,130,165,.16)';ctx.lineWidth=1;for(let i=-5;i<=5;i++){ctx.beginPath();ctx.moveTo(w/2+i*55,h*.78);ctx.lineTo(w/2+i*90,h*.95);ctx.stroke()}
 if(!data||!data.frames.length)return;const rendered=interpolatedFrame(playheadSeconds),frame=rendered.frame,sourceIndex=rendered.index,stats=data.statistics[sourceIndex],center=viewCenter||((frame.tracked||{}).head||(frame.joints||{}).Pelvis||[0,0,0]);
-if($('zoneSurface').checked)drawZoneSurfaces(data.zone_surfaces||[],center,w,h);referencePointCloud(data.reference_surface,center,w,h);directionField(data.direction_field,center,w,h);
+if($('zoneSurface').checked)drawZoneSurfaces(data.zone_surfaces||[],center,w,h);referencePointCloud(data.reference_surface,center,w,h);drawZoneFlowGuides(data.zone_flow_guides,center,w,h);
 let previous=null,previousSegment=null,paintCount=0;for(const sample of data.paint_trace){if(sample.t>playheadSeconds)break;if(previousSegment!==sample.segment)previous=null;const color=`hsla(${24+sample.progress*28},100%,62%,${.35+sample.progress*.5})`;point(sample.point,2.8,color,center,w,h);if(previous){line(previous,sample.point,color,5,center,w,h);if(paintCount%45===0)arrow(previous,sample.point,'rgba(255,232,190,.9)',center,w,h)}previous=sample.point;previousSegment=sample.segment;paintCount++}if(previous&&frame.spraying&&frame.ray_point){line(previous,frame.ray_point,'rgba(255,184,92,.78)',5,center,w,h);point(frame.ray_point,3.5,'rgba(255,205,125,.9)',center,w,h)}
 const tracked=frame.tracked||{};
 if(tracked.head&&tracked.left_hand)line(tracked.head,tracked.left_hand,'rgba(34,211,238,.65)',3,center,w,h);if(tracked.head&&tracked.right_hand)line(tracked.head,tracked.right_hand,'rgba(34,211,238,.65)',3,center,w,h);if(tracked.right_hand&&frame.ray_point&&frame.spraying)line(tracked.right_hand,frame.ray_point,'rgba(255,244,200,.45)',2,center,w,h);
@@ -993,6 +1146,7 @@ def create_motion_viewer_router(
         duration = float(selected_frames[-1]["t"]) if selected_frames else 0.0
         paint_trace = _dense_paint_trace(selected_path)
         paint_statistics = _reference_paint_statistics(session_paths)
+        zone_flow_guides = _zone_flow_guides(session_paths)
         zone_surfaces = _zone_surface_statistics(session_paths)
         direction_summary = _direction_summary(paint_trace)
         zone_order, zone_statistics = _zone_playback_statistics(
@@ -1015,6 +1169,7 @@ def create_motion_viewer_router(
             "frames": selected_frames,
             "statistics": _spread(selected_frames, sampled_sessions),
             "paint_trace": paint_trace,
+            "zone_flow_guides": zone_flow_guides,
             "direction_summary": direction_summary,
             "zone_surfaces": zone_surfaces,
             "zone_order": zone_order,

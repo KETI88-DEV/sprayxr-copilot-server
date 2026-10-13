@@ -138,7 +138,9 @@ def test_motion_viewer_page_explains_representative_and_statistical_motion(tmp_p
     assert "참고용 스켈레톤" in response.text
     assert "전형기 ·" in response.text
     assert "function referencePointCloud" in response.text
-    assert "function directionField" in response.text
+    assert "function drawZoneFlowGuides" in response.text
+    assert "function directionField" not in response.text
+    assert "Zone별 전문가 표준 도장 패턴" in response.text
     assert "전문가 전체 Ray Point" in response.text
     assert 'id="pointSize"' in response.text
     assert "흰색 포인트 크기" in response.text
@@ -248,6 +250,15 @@ def test_motion_returns_trusted_trackers_paint_trace_and_direction_statistics(tm
     assert data["direction_field"]
     assert data["direction_distribution"]["horizontal"] == 1.0
     assert data["direction_distribution"]["vertical"] == 0.0
+    assert len(data["zone_flow_guides"]) == 1
+    guide = data["zone_flow_guides"][0]
+    assert guide["map_num"] == "1"
+    assert guide["zone_id"] == "1"
+    assert guide["stroke_count"] == 1
+    assert guide["strokes"][0]["order"] == 1
+    assert guide["strokes"][0]["session_count"] == 2
+    assert guide["strokes"][0]["confidence"] == 1.0
+    assert len(guide["strokes"][0]["points"]) >= 2
     assert data["zone_surfaces"][0]["map_num"] == "1"
     assert data["zone_surfaces"][0]["zone_id"] == "1"
     assert data["zone_surfaces"][0]["vertices"]
