@@ -22,6 +22,7 @@ def _write_csv(path: Path, *, offset: float) -> None:
         "한길숏건 Position X", "한길숏건 Position Y", "한길숏건 Position Z",
         "플래쉬 Position X", "플래쉬 Position Y", "플래쉬 Position Z",
         "카메라 Position X", "카메라 Position Y", "카메라 Position Z",
+        "카메라 Rotation X", "카메라 Rotation Y", "카메라 Rotation Z",
         "Ray point X", " Ray Point Y", " Ray Point Z",
         "Ray Texture Map Number", "Ray Texture UV X", "Ray Texture UV Y",
         "Zone ID",
@@ -48,6 +49,9 @@ def _write_csv(path: Path, *, offset: float) -> None:
                     "카메라 Position X": index * 0.01,
                     "카메라 Position Y": 1.7,
                     "카메라 Position Z": 0,
+                    "카메라 Rotation X": 0,
+                    "카메라 Rotation Y": 0,
+                    "카메라 Rotation Z": 0,
                     "Ray point X": offset + index * 0.2,
                     " Ray Point Y": 1.4,
                     " Ray Point Z": 2.0,
@@ -148,8 +152,8 @@ def test_motion_viewer_page_explains_representative_and_statistical_motion(tmp_p
     assert 'id="zoneSurface"' in response.text
     assert "Zone 영역 표시" in response.text
     assert "function drawZoneSurfaces" in response.text
-    assert "137.508" in response.text
-    assert "`Zone ${surface.zone_id}`" in response.text
+    assert "137.508" not in response.text
+    assert "`Zone ${zoneLabel(surface.zone_id)}`" in response.text
     assert 'id="loading"' in response.text
     assert "불러오는 중" in response.text
     assert "function setLoading" in response.text
@@ -190,6 +194,17 @@ def test_motion_viewer_page_explains_representative_and_statistical_motion(tmp_p
     assert "const fps=(data.frames.length-1)" not in response.text
     assert "<canvas" in response.text
     assert "function tick(now)" in response.text
+    assert 'id="speed" type="range" min="0.25" max="3" step="0.25" value="1"' in response.text
+    assert 'id="speedValue">1배' in response.text
+    assert "function updateSpeedLabel" in response.text
+    assert "const ZONE_COLORS=[" in response.text
+    assert "'#FF0000'" in response.text
+    assert "'#BFBF40'" in response.text
+    assert "function zoneColor(zoneId)" in response.text
+    assert "function zoneLabel(zoneId)" in response.text
+    assert "function averageCameraForward(payload)" in response.text
+    assert "Math.atan2(forward[0],forward[2])" in response.text
+    assert "function zoneHue" not in response.text
     assert "let referencePreview=false" in response.text
     assert "function showReferencePreview(key)" in response.text
     assert "function startPlayback()" in response.text
@@ -224,6 +239,7 @@ def test_motion_returns_real_representative_frames_and_cross_session_spread(tmp_
     assert len(data["frames"]) == 5
     assert data["frames"][0]["joints"]["Pelvis"] == [0.0, 1.0, 0.0]
     assert data["frames"][0]["joints"]["Spine"] == [0.0, 1.3, 0.0]
+    assert data["frames"][0]["camera_forward"] == [0.0, 0.0, 1.0]
     assert data["statistics"][0]["spread"]["Pelvis"] > 0
 
 
