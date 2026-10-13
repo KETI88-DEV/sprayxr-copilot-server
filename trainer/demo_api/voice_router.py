@@ -215,10 +215,10 @@ def create_voice_router(
     )
     async def voice_query(
         audio: Annotated[UploadFile, File(description="WAV, PCM 16-bit, 16 kHz, mono, maximum 15 seconds")],
-        user_id: Annotated[str, Form(min_length=1, description="훈련자 식별자", examples=["W-017"])],
+        user_id: Annotated[str, Form(min_length=1, description="훈련자 식별자", examples=["1234"])],
         language: Annotated[VoiceLanguage, Form(description="음성 언어", examples=["ko"])],
-        session_id: Annotated[str | None, Form(description="진행 중인 세션 식별자", examples=["TSB-DEMO-001"])] = None,
-        scenario_id: Annotated[str | None, Form(description="콘텐츠 식별자", examples=["training-mode-3"])] = None,
+        session_id: Annotated[str | None, Form(description="진행 중인 세션 식별자(CSV 파일명에서 확장자 제외)", examples=["3_11000346_1"])] = None,
+        scenario_id: Annotated[str | None, Form(description="session_id의 첫 '_' 앞 콘텐츠 식별자", examples=["3"])] = None,
         request_id: Annotated[str | None, Form(description="호출 추적용 식별자", examples=["REQ-VOICE-001"])] = None,
         task_type: Annotated[TaskType, Form(description="텍스트 Query API와 동일한 작업 유형", examples=["knowledge_search"])] = "knowledge_search",
         use_rag: Annotated[Literal["Y", "N"], Form(description="Use the knowledge base", examples=["Y"])]= "Y",

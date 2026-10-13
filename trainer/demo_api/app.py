@@ -22,6 +22,7 @@ from trainer.demo_api import chat_service as chat_service_mod
 from trainer.demo_api.chat_service import ChatService, build_default_live_runner
 from trainer.demo_api.contracts import ChatRequest
 from trainer.demo_api.copilot_router import create_copilot_router, install_copilot_error_handlers
+from trainer.demo_api.coating_progress import CoatingProgressEngine
 from trainer.demo_api.db_viewer import create_db_viewer_router
 from trainer.demo_api.expert_guidance import ExpertGuidanceEngine
 from trainer.demo_api.guided_workflow import create_guided_workflow_router
@@ -30,6 +31,7 @@ from trainer.demo_api.v1_router import create_v1_router
 from trainer.demo_api.v1_store import V1Store
 from trainer.demo_api.monitor import MonitorRecorder
 from trainer.demo_api.monitor_api import create_monitor_router
+from trainer.demo_api.motion_viewer import create_motion_viewer_router
 from trainer.demo_api.readiness import evaluate_live_readiness
 from trainer.demo_api.sequence import default_snapshot, session_snapshot
 from trainer.demo_api.sim_session import SimSessionStore
@@ -70,6 +72,8 @@ def _openapi_description() -> str:
 
 > **DB 뷰어 바로가기:** [{public_base}/admin]({public_base}/admin) — 읽기 전용이며 데이터를 수정하지 않습니다.
 
+> **전문가 3D 모션 뷰어:** [{public_base}/motion-viewer]({public_base}/motion-viewer) — 전형기 반장님의 대표 실측 모션과 반복 수행의 통계 범위를 확인합니다.
+
 ### 실제 연동 API와 테스트 API의 차이
 
 | 구분 | 용도 | 데이터 |
@@ -83,8 +87,10 @@ def _openapi_description() -> str:
 
 `세션 시작 → 현재 시퀀스 전송 → 시퀀스 분석/가이드 → 텍스트·음성 질의 → 세션 종료 → 최종 리포트`
 
-- **시퀀스 입력:** TSB는 Trigger ON부터 OFF까지의 **현재 시퀀스 텍스트 데이터**만 전송합니다.
-- **누적 히트맵:** 입력하지 않습니다. 필요한 누적 상태는 Co-Pilot 서버가 관리합니다.
+- **예시 세션:** 최신 TSB 전체 세션 샘플과 동일한 `session_id=3_11000346_1`, `user_id=1234`, `scenario_id=3`을 사용합니다.
+- **세션 식별자:** `session_id`는 TSB가 생성하며 완료 시 첨부할 CSV 파일명에서 확장자를 뺀 값과 같습니다. `scenario_id`는 `session_id`의 첫 `_` 앞 콘텐츠 식별자입니다.
+- **시퀀스 입력:** TSB는 Trigger ON부터 OFF까지의 **현재 시퀀스 텍스트 데이터**와 해당 시퀀스가 도포한 영역의 히트맵 크롭을 전송합니다.
+- **누적 히트맵:** `cur_sequence_heatmap`의 크롭 내 픽셀값은 해당 시점 피도면의 **전체 누적 두께**입니다. 서버는 이전 값에 더하지 않고 최신 절대값으로 갱신합니다.
 - **속도 상태:** `slow / ok / fast`, 이격거리 상태: `near / ok / far`입니다.
 - **음성 입력:** WAV PCM16, 16 kHz, mono, 최대 15초입니다. STT 뒤 기존 Query와 같은 답변 경로를 사용합니다.
 - **공통 응답:** `status / code / message / data`이며, 성공은 `status=SUCCESS`, 검증 실패는 주로 HTTP 422입니다.
@@ -106,6 +112,7 @@ def create_app(
     expert_guidance = ExpertGuidanceEngine(
         Path(os.environ.get("EXPERT_REFERENCE_ROOT", "/expert_reference_data"))
     )
+    coating_progress = CoatingProgressEngine(expert_guidance.reference_root)
     v1_store = V1Store()
     speech_to_text = LazySpeechToText(
         lambda: TransformersWhisperSpeechToText(
@@ -165,6 +172,7 @@ def create_app(
     app.state.eager_init_thread = None
     app.state.stt_init_thread = None
     app.state.expert_guidance = expert_guidance
+    app.state.coating_progress = coating_progress
     app.state.v1_store = v1_store
     app.state.speech_to_text = speech_to_text
 
@@ -241,6 +249,7 @@ def create_app(
     app.include_router(create_simulator_router(recorder, store, resolver), include_in_schema=False)
     app.include_router(create_monitor_router(recorder), include_in_schema=False)
     app.include_router(create_db_viewer_router())
+    app.include_router(create_motion_viewer_router(expert_guidance.reference_root))
     # knowledge_search shares the live pipeline singleton; resolved per call so it is built once, lazily.
     app.include_router(
         create_copilot_router(
@@ -265,7 +274,11 @@ def create_app(
     # copilot/query 의 pose_recomm 이 한다(명세서 p.4 vs p.9).
     # recorder 를 함께 준다 — v2.5 요청·응답이 /api/monitor/{events,stream} 에 보인다.
     app.include_router(
-        create_telemetry_router(recorder=recorder, guidance_engine=expert_guidance)
+        create_telemetry_router(
+            recorder=recorder,
+            guidance_engine=expert_guidance,
+            coating_progress_engine=coating_progress,
+        )
     )
     install_copilot_error_handlers(app)
 

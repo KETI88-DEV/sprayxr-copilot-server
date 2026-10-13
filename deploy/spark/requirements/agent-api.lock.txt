@@ -2,7 +2,7 @@
 #
 # 버전 근거: 평가·라이브 서빙이 돈 개발 컨테이너 ship-paint-trainer(x86_64, Python 3.11.9)의 설치본,
 #   2026-09-15 `importlib.metadata` 로 뽑은 루트 패키지의 의존 폐포(markers: linux/aarch64/3.11, extras 제외).
-#   루트: fastapi uvicorn pydantic httpx anyio PyYAML numpy faiss-cpu sentence-transformers transformers
+#   루트: fastapi uvicorn pydantic httpx anyio PyYAML numpy Pillow faiss-cpu sentence-transformers transformers
 #         peft Jinja2 tokenizers safetensors huggingface_hub accelerate python-multipart
 #   python-multipart: POST /api/v1/sessions/complete 이 multipart/form-data 다(명세서 p.12).
 #     FastAPI 는 Form/File 을 쓰는 라우트를 정의할 때 이것을 요구하므로 없으면 import 스모크가
@@ -43,6 +43,7 @@ mdurl==0.1.2
 numpy==1.26.4
 packaging==24.1
 peft==0.18.1
+pillow==12.3.0
 psutil==7.2.2
 pydantic==2.12.5
 pydantic-core==2.41.5

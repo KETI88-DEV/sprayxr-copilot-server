@@ -41,6 +41,7 @@ from trainer.demo_api.telemetry_contracts import (
     AnalyzeSequenceData,
     AnalyzeSequenceRequest,
     AnalyzeSequenceResponse,
+    CoatingProgress,
     EngineFeedback,
     GuideItem,
     SequenceDataAck,
@@ -66,6 +67,10 @@ class GuidanceEngine(Protocol):
     def evaluate(self, request: AnalyzeSequenceRequest) -> SequenceGuide: ...
 
 
+class CoatingProgressEvaluator(Protocol):
+    def evaluate(self, request: AnalyzeSequenceRequest) -> CoatingProgress: ...
+
+
 def _unavailable_guide() -> SequenceGuide:
     item = GuideItem(
         status=None,
@@ -74,6 +79,21 @@ def _unavailable_guide() -> SequenceGuide:
         reason="reference_unavailable",
     )
     return SequenceGuide(speed=item, distance=item.model_copy())
+
+
+def _unavailable_progress(zone_id: str) -> CoatingProgress:
+    return CoatingProgress(
+        zone_id=zone_id,
+        available=False,
+        status=None,
+        recommendation=None,
+        completion_percent=None,
+        coverage_percent=None,
+        overpaint_percent=None,
+        next_zone_id=None,
+        message=None,
+        reason="coating_reference_unavailable",
+    )
 
 
 def _now() -> str:
@@ -115,6 +135,7 @@ def create_telemetry_router(
     store: SequenceStore | None = None,
     recorder: MonitorRecorder | None = None,
     guidance_engine: GuidanceEngine | None = None,
+    coating_progress_engine: CoatingProgressEvaluator | None = None,
 ) -> APIRouter:
     """``recorder``를 주면 호출당 입력 1건 + 출력 1건을 `/api/monitor/*`에 남긴다.
 
@@ -124,6 +145,9 @@ def create_telemetry_router(
     router = APIRouter()
     sequences = store if store is not None else SequenceStore()
     guidance_cache: dict[tuple[str, str, int | None, str | None, str], SequenceGuide] = {}
+    coating_progress_cache: dict[
+        tuple[str, str, int | None, str | None, str], CoatingProgress
+    ] = {}
 
     async def _handle(query: TelemetrySequenceRequest, *, analyze: bool) -> JSONResponse:
         """두 엔드포인트가 같은 처리를 쓴다. 분석 종류별 분기는 엔진이 생기면 넣는다."""
@@ -177,11 +201,23 @@ def create_telemetry_router(
             if guide is None:
                 guide = guidance_engine.evaluate(query) if guidance_engine is not None else _unavailable_guide()
                 guidance_cache[cache_key] = guide
+            coating_progress = coating_progress_cache.get(cache_key)
+            if coating_progress is None:
+                coating_progress = (
+                    coating_progress_engine.evaluate(query)
+                    if coating_progress_engine is not None
+                    else _unavailable_progress(query.zone_id)
+                )
+                coating_progress_cache[cache_key] = coating_progress
             envelope = AnalyzeSequenceResponse(
                 status="SUCCESS",
                 code=200,
                 message=_SUCCESS_MESSAGE,
-                data=AnalyzeSequenceData(**common_data, guide=guide),
+                data=AnalyzeSequenceData(
+                    **common_data,
+                    guide=guide,
+                    coating_progress=coating_progress,
+                ),
             )
         else:
             envelope = TelemetrySequenceResponse(
@@ -220,7 +256,10 @@ def create_telemetry_router(
         response_model=TelemetrySequenceResponse,
         tags=["2. 시퀀스 수집·피드백"],
         summary="2-1. 현재 시퀀스 텔레메트리 저장",
-        description="Trigger ON→OFF 한 번의 현재 시퀀스를 저장합니다. 누적 히트맵은 입력하지 않습니다.",
+        description=(
+            "Trigger ON→OFF 한 번의 현재 시퀀스를 저장합니다. "
+            "cur_sequence_heatmap이 포함된 경우 크롭 내 픽셀은 해당 시점의 전체 누적 두께입니다."
+        ),
     )
     async def telemetry_sequence(query: TelemetrySequenceRequest) -> JSONResponse:
         return await _handle(query, analyze=False)
@@ -229,11 +268,14 @@ def create_telemetry_router(
         ANALYZE_SEQUENCE_PATH,
         response_model=AnalyzeSequenceResponse,
         tags=["2. 시퀀스 수집·피드백"],
-        summary="2-2. 시퀀스 분석 및 속도·이격거리 가이드",
+        summary="2-2. 시퀀스 분석 및 속도·이격거리·현재 Zone 도막 가이드",
         description=(
             "전문가 기준과 비교하여 매 시퀀스마다 speed(slow/ok/fast)와 "
             "distance(near/ok/far)를 구조화해 반환합니다. 학습 모드는 scenario_id, "
-            "스프레이/블라스팅 구분은 sequence_setting.tool_type에서 자동 선택합니다."
+            "스프레이/블라스팅 구분은 sequence_setting.tool_type에서 자동 선택합니다. "
+            "스프레이의 cur_sequence_heatmap은 해당 시점 피도면의 전체 누적 두께입니다. "
+            "이미 누적된 값을 더하지 않고, 현재 시퀀스가 도포한 크롭 영역의 최신 절대 두께로 갱신하여 "
+            "추가 도장/다음 Zone 이동/과도장 중단 여부를 coating_progress로 반환합니다."
         ),
     )
     async def analyze_sequence(query: AnalyzeSequenceRequest) -> JSONResponse:

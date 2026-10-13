@@ -32,6 +32,10 @@ from trainer.demo_api.contracts import StrictModel
 AnalysisStatus = Literal["available", "not_available"]
 SpeedGuideStatus = Literal["slow", "ok", "fast"]
 DistanceGuideStatus = Literal["near", "ok", "far"]
+CoatingProgressStatus = Literal["needs_more", "complete", "overpaint_risk"]
+CoatingRecommendation = Literal[
+    "continue_current_zone", "move_next_zone", "stop_current_zone"
+]
 
 _TOOL_TYPE_ALIASES = {
     "spray": "spray",
@@ -43,9 +47,11 @@ _TOOL_TYPE_ALIASES = {
     "blastgun": "blasting",
 }
 
+TexturePixelCoordinate = Annotated[float, Field(ge=0, le=2048)]
+
 
 def learning_mode_from_scenario(scenario_id: str) -> int | None:
-    """Return a 1~10 learning mode without mistaking practical A-1/1-A IDs.
+    """Return a 1~10 learning mode without coercing practical or Unit IDs.
 
     TSB's current sample sends a bare numeric scenario ID.  Named legacy values
     are retained for Swagger/demo compatibility, but practical scenarios are
@@ -69,6 +75,30 @@ def process_from_tool_type(value: Any) -> Literal["spray", "blasting"] | None:
     return _TOOL_TYPE_ALIASES.get(value.strip().lower().replace("-", "_"))  # type: ignore[return-value]
 
 
+class GunMetricsIn(BaseModel):
+    """TSB 프레임의 분사 계측값.
+
+    버전별 추가 키는 허용하되, 연동에 합의된 텍스처 좌표는 실제 전송 위치인
+    ``sequence_info[].gun_metrics.raytexuv``에서 검증한다.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    speed: float | None = None
+    distance: float | None = None
+    raypoint: list[float] | None = None
+    raytexmapnum: int | None = None
+    raytexuv: tuple[TexturePixelCoordinate, TexturePixelCoordinate] | None = Field(
+        default=None,
+        description=(
+            "2048x2048 텍스처의 픽셀 좌표 [X,Y]. 원점은 좌하단이고 "
+            "X는 오른쪽, Y는 위쪽으로 증가합니다. 레이 미충돌은 null입니다."
+        ),
+        examples=[[1024, 768]],
+    )
+    spraytime: float | None = None
+
+
 class SequenceFrameIn(BaseModel):
     """프레임 하나. 모르는 키를 받되 세어서 보고한다.
 
@@ -83,7 +113,17 @@ class SequenceFrameIn(BaseModel):
     time: str | float | None = None
     tool_pos_rot: dict[str, Any] | None = None
     skeleton_joints: dict[str, Any] = Field(default_factory=dict)
-    gun_metrics: dict[str, Any] | None = None
+    gun_metrics: GunMetricsIn | None = None
+    # 2026-10-08 TSB 정본은 gun_metrics 안에 둔다. 이 필드는 구형 전송 호환용이다.
+    raytexuv: tuple[TexturePixelCoordinate, TexturePixelCoordinate] | None = Field(
+        default=None,
+        deprecated=True,
+        description=(
+            "구형 호환 필드입니다. 신규 연동은 gun_metrics.raytexuv를 사용하세요. "
+            "좌표 범위와 원점 규칙은 동일합니다."
+        ),
+        examples=[[1024, 768]],
+    )
 
 
 class TelemetrySequenceRequest(StrictModel):
@@ -98,30 +138,50 @@ class TelemetrySequenceRequest(StrictModel):
         extra="forbid",
         json_schema_extra={
             "example": {
-                "session_id": "TSB-DEMO-001", "user_id": "W-017",
+                "session_id": "3_11000346_1", "user_id": "1234",
                 "scenario_id": "3", "zone_id": "3", "sequence_id": "SEQ-001",
                 "sequence_setting": {
                     "tool_type": "spray_gun",
-                    "target_speed_mms": 500,
-                    "target_distance_mm": 250,
+                    "pressure": 0.55,
+                    "nozzle_size": 0.021,
+                    "thinning_ratio": 10.0,
+                    "viscosity": 65.0,
+                    "month": 10,
                 },
                 "sequence_info": [{
-                    "index": 0, "time": "2026-10-06T10:01:00Z",
+                    "index": 0, "time": "2026-10-08T01:05:53.000Z",
                     "tool_pos_rot": {"position": [0.0, 1.2, 0.4]},
-                    "gun_metrics": {"speed_mms": 450, "distance_mm": 260},
+                    "gun_metrics": {
+                        "speed": 450.0, "distance": 260.0,
+                        "raypoint": [0.0, 1.0, 0.5], "raytexmapnum": 1,
+                        "raytexuv": [1024, 768], "spraytime": 0.011,
+                    },
                 }],
                 "sequence_result": {"avg_speed_mms": 450, "avg_distance_mm": 260},
             }
         },
     )
 
-    session_id: Annotated[str, Field(min_length=1)]
-    user_id: Annotated[str, Field(min_length=1)]
-    scenario_id: Annotated[str, Field(min_length=1)]
+    session_id: Annotated[str, Field(min_length=1, description="sessions/start와 동일한 세션 식별자", examples=["3_11000346_1"])]
+    user_id: Annotated[str, Field(min_length=1, description="훈련자 식별자", examples=["1234"])]
+    scenario_id: Annotated[
+        str,
+        Field(
+            min_length=1,
+            description=(
+                "session_id의 첫 `_` 앞 콘텐츠 식별자. 학습은 1~10, "
+                "실전은 1-R-A·1-V-AB·2-ABCDE, Unit은 Unit12 형식입니다."
+            ),
+            examples=["3", "1-R-A", "2-ABCDE", "Unit12"],
+        ),
+    ]
     # "1"~"39", 미지정·미판정은 "-1" (p.5)
     zone_id: Annotated[str, Field(min_length=1)]
     sequence_id: Annotated[str, Field(min_length=1)]
-    sequence_setting: dict[str, Any]
+    sequence_setting: Annotated[
+        dict[str, Any],
+        Field(description="도구 구분은 tool_type에 spray_gun 또는 blasting_gun을 사용합니다."),
+    ]
     sequence_info: list[SequenceFrameIn]
     sequence_result: dict[str, Any]
 
@@ -133,22 +193,29 @@ class AnalyzeSequenceRequest(TelemetrySequenceRequest):
         extra="forbid",
         json_schema_extra={
             "example": {
-                "session_id": "TSB-DEMO-001",
-                "user_id": "W-017",
+                "session_id": "3_11000346_1",
+                "user_id": "1234",
                 "scenario_id": "3",
                 "zone_id": "3",
                 "sequence_id": "SEQ-001",
                 "sequence_setting": {
                     "tool_type": "spray_gun",
-                    "target_speed_mms": 500,
-                    "target_distance_mm": 250,
+                    "pressure": 0.55,
+                    "nozzle_size": 0.021,
+                    "thinning_ratio": 10.0,
+                    "viscosity": 65.0,
+                    "month": 10,
                 },
                 "sequence_info": [
                     {
                         "index": 0,
-                        "time": "2026-10-02T10:00:00Z",
+                        "time": "2026-10-08T01:05:53.000Z",
                         "tool_pos_rot": {"position": [0.0, 1.2, 0.4]},
-                        "gun_metrics": {"speed_mms": 500, "distance_mm": 250},
+                        "gun_metrics": {
+                            "speed": 500.0, "distance": 250.0,
+                            "raypoint": [0.0, 1.0, 0.5], "raytexmapnum": 1,
+                            "raytexuv": [1024, 768], "spraytime": 0.011,
+                        },
                     }
                 ],
                 "sequence_result": {"avg_speed_mms": 500, "avg_distance_mm": 250},
@@ -210,6 +277,21 @@ class SequenceGuide(StrictModel):
     distance: GuideItem
 
 
+class CoatingProgress(StrictModel):
+    """현재 Zone의 세션 누적 도막을 전문가 최종 도막과 비교한 결과."""
+
+    zone_id: str
+    available: bool
+    status: CoatingProgressStatus | None
+    recommendation: CoatingRecommendation | None
+    completion_percent: Annotated[float | None, Field(ge=0, le=100)]
+    coverage_percent: Annotated[float | None, Field(ge=0, le=100)]
+    overpaint_percent: Annotated[float | None, Field(ge=0, le=100)]
+    next_zone_id: str | None
+    message: str | None
+    reason: str | None
+
+
 class TelemetrySequenceData(StrictModel):
     """시퀀스를 데이터베이스에 올린 결과.
 
@@ -244,6 +326,7 @@ class TelemetrySequenceResponse(StrictModel):
 
 class AnalyzeSequenceData(TelemetrySequenceData):
     guide: SequenceGuide
+    coating_progress: CoatingProgress
 
 
 class AnalyzeSequenceResponse(StrictModel):

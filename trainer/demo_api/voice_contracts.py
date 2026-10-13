@@ -27,9 +27,9 @@ class VoiceCopilotResponse(StrictModel):
                 "message": "Copilot query completed",
                 "data": {
                     "request_id": "REQ-VOICE-001",
-                    "session_id": "TSB-DEMO-001",
-                    "user_id": "W-017",
-                    "scenario_id": "training-mode-3",
+                    "session_id": "3_11000346_1",
+                    "user_id": "1234",
+                    "scenario_id": "3",
                     "generated_at": "2026-10-02T10:00:00Z",
                     "latency_ms": 1850,
                     "degraded": False,

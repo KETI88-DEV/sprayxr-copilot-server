@@ -9,6 +9,7 @@ def test_openapi_describes_tsb_workflow_and_db_viewer() -> None:
 
     assert schema["info"]["title"] == "XR Painting Simulator AI Co-Pilot API"
     assert "http://keti-xr-lab.iptime.org:58000/admin" in schema["info"]["description"]
+    assert "http://keti-xr-lab.iptime.org:58000/motion-viewer" in schema["info"]["description"]
     assert "처음 보는 개발자" in schema["info"]["description"]
     assert "실제 연동 API" in schema["info"]["description"]
     assert "누적 히트맵" in schema["info"]["description"]
@@ -19,6 +20,7 @@ def test_openapi_describes_tsb_workflow_and_db_viewer() -> None:
         "3. AI Co-Pilot 질의",
     ]
     assert client.get("/admin").status_code == 200
+    assert client.get("/motion-viewer").status_code == 200
 
 
 def test_guided_workflow_has_five_input_free_ordered_operations() -> None:
@@ -70,6 +72,13 @@ def test_query_voice_and_sequence_operations_have_examples_and_ordered_tags() ->
     assert analyze_example["sequence_info"]
     assert analyze_example["scenario_id"] == "3"
     assert "mode_id" not in analyze_example
+    gun_metrics = schema["components"]["schemas"]["GunMetricsIn"]
+    raytexuv = gun_metrics["properties"]["raytexuv"]
+    assert "2048x2048" in raytexuv["description"]
+    assert "좌하단" in raytexuv["description"]
+    scenario = schema["components"]["schemas"]["AnalyzeSequenceRequest"]["properties"]["scenario_id"]
+    assert {"3", "1-R-A", "2-ABCDE", "Unit12"}.issubset(scenario["examples"])
+    assert "전체 누적 두께" in analyze["description"]
 
 
 def test_latest_tsb_fields_are_not_required_by_the_public_contract() -> None:
@@ -83,6 +92,38 @@ def test_latest_tsb_fields_are_not_required_by_the_public_contract() -> None:
     complete = schema["components"]["schemas"][complete_ref.rsplit("/", 1)[-1]]
     assert "avg_speed_mms" not in complete["required"]
     assert "avg_distance_mm" not in complete["required"]
+
+
+def test_public_swagger_examples_use_the_latest_tsb_session_identity() -> None:
+    """All real integration steps should be copyable as one coherent TSB session."""
+    schema = TestClient(create_app()).get("/openapi.json").json()
+    components = schema["components"]["schemas"]
+    expected = {
+        "session_id": "3_11000346_1",
+        "user_id": "1234",
+        "scenario_id": "3",
+    }
+
+    for model_name in (
+        "SessionStartRequest",
+        "SessionEndRequest",
+        "TelemetrySequenceRequest",
+        "AnalyzeSequenceRequest",
+        "CopilotQueryRequest",
+    ):
+        example = components[model_name]["example"]
+        assert {key: example[key] for key in expected} == expected, model_name
+
+    for path in ("/api/v1/sessions/complete", "/api/v1/copilot/query-voice"):
+        body = schema["paths"][path]["post"]["requestBody"]["content"]["multipart/form-data"]["schema"]
+        form = components[body["$ref"].rsplit("/", 1)[-1]]["properties"]
+        assert form["session_id"]["examples"] == [expected["session_id"]]
+        assert form["user_id"]["examples"] == [expected["user_id"]]
+        assert form["scenario_id"]["examples"] == [expected["scenario_id"]]
+
+    session_field = components["SessionStartRequest"]["properties"]["session_id"]
+    assert "CSV" in session_field["description"]
+    assert expected["session_id"] in session_field["examples"]
 
 
 def test_voice_demo_is_input_free_and_links_the_downloadable_sample() -> None:

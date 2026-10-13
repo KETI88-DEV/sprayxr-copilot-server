@@ -9,10 +9,16 @@ import hashlib
 import json
 import math
 import os
+import re
 import statistics
 from collections import Counter
 from pathlib import Path
 from typing import Any
+
+from PIL import Image, UnidentifiedImageError
+
+_HEIGHTMAP_NUMBER = re.compile(r"Map(\d+)", re.IGNORECASE)
+_COATING_SCALE_UM = 20000.0
 
 
 def _number(value: Any) -> float | None:
@@ -58,7 +64,92 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _load_session(csv_path: Path, mode_root: Path) -> dict[str, Any] | None:
+def _heightmap_number(path: Path) -> int:
+    match = _HEIGHTMAP_NUMBER.search(path.name)
+    return int(match.group(1)) if match is not None else 1
+
+
+def _cell_mean_um(image: Image.Image, gx: int, gy: int, grid_size: int) -> float:
+    """Return full-cell mean thickness; UV Y is bottom-up, PNG rows are top-down."""
+    width, height = image.size
+    left = math.floor(gx * width / grid_size)
+    right = math.ceil((gx + 1) * width / grid_size)
+    top = math.floor((grid_size - gy - 1) * height / grid_size)
+    bottom = math.ceil((grid_size - gy) * height / grid_size)
+    pixels = image.crop((left, top, right, bottom)).convert("RGB")
+    pixel_values = (
+        pixels.get_flattened_data()
+        if hasattr(pixels, "get_flattened_data")
+        else pixels.getdata()
+    )
+    values = [
+        (red / 255.0 + green / 65025.0) * _COATING_SCALE_UM
+        for red, green, _blue in pixel_values
+    ]
+    return statistics.fmean(values) if values else 0.0
+
+
+def _session_coating_cells(
+    zones: dict[str, dict[str, Any]],
+    heightmap_paths: list[Path],
+    *,
+    grid_size: int,
+) -> dict[str, dict[str, Any]]:
+    images: dict[int, Image.Image] = {}
+    try:
+        for path in heightmap_paths:
+            images[_heightmap_number(path)] = Image.open(path).convert("RGB")
+        output: dict[str, dict[str, Any]] = {}
+        for key, zone in zones.items():
+            map_num = int(zone["map_num"])
+            image = images.get(map_num)
+            if image is None:
+                continue
+            width, height = image.size
+            visited: set[tuple[int, int]] = set()
+            for x, y in zone["uv_points"]:
+                if 0 <= x < width and 0 <= y < height:
+                    visited.add(
+                        (
+                            min(grid_size - 1, int(x / width * grid_size)),
+                            min(grid_size - 1, int(y / height * grid_size)),
+                        )
+                    )
+            # One neighboring grid cell captures the expert spray footprint around
+            # the ray centreline. Empty cells are removed using the final height map.
+            candidates = {
+                (nx, ny)
+                for gx, gy in visited
+                for nx in range(max(0, gx - 1), min(grid_size, gx + 2))
+                for ny in range(max(0, gy - 1), min(grid_size, gy + 2))
+            }
+            cells = {}
+            for gx, gy in sorted(candidates):
+                mean_um = _cell_mean_um(image, gx, gy, grid_size)
+                if mean_um > 0:
+                    cells[f"{gx}:{gy}"] = mean_um
+            if cells:
+                output[key] = {
+                    "atlas_width": width,
+                    "atlas_height": height,
+                    "grid_size": grid_size,
+                    "cells": cells,
+                }
+        return output
+    except (OSError, UnidentifiedImageError, ValueError):
+        return {}
+    finally:
+        for image in images.values():
+            image.close()
+
+
+def _load_session(
+    csv_path: Path,
+    mode_root: Path,
+    *,
+    process: str,
+    coating_grid_size: int,
+) -> dict[str, Any] | None:
     with csv_path.open(encoding="utf-8-sig", newline="") as stream:
         reader = csv.DictReader(stream)
         fields = list(reader.fieldnames or [])
@@ -67,6 +158,8 @@ def _load_session(csv_path: Path, mode_root: Path) -> dict[str, Any] | None:
         distance_col = _column(fields, "Distance (Real)") or _column(fields, "Distance (Input)")
         zone_col = _column(fields, "Zone ID")
         map_col = _column(fields, "Ray Texture Map Number")
+        uv_x_col = _column(fields, "Ray Texture UV X")
+        uv_y_col = _column(fields, "Ray Texture UV Y")
         if not all((spray_col, speed_col, distance_col, zone_col)):
             return None
 
@@ -87,12 +180,22 @@ def _load_session(csv_path: Path, mode_root: Path) -> dict[str, Any] | None:
             distance = _number(row.get(distance_col))
             zone = zones.setdefault(
                 key,
-                {"map_num": map_num, "zone_id": zone_id, "speed": [], "distance": []},
+                {
+                    "map_num": map_num,
+                    "zone_id": zone_id,
+                    "speed": [],
+                    "distance": [],
+                    "uv_points": [],
+                },
             )
             if speed is not None:
                 zone["speed"].append(speed)
             if distance is not None:
                 zone["distance"].append(distance)
+            uv_x = _number(row.get(uv_x_col)) if uv_x_col is not None else None
+            uv_y = _number(row.get(uv_y_col)) if uv_y_col is not None else None
+            if uv_x is not None and uv_y is not None:
+                zone["uv_points"].append((uv_x, uv_y))
             if key not in seen:
                 seen.add(key)
                 order.append({"map_num": map_num, "zone_id": zone_id})
@@ -111,6 +214,11 @@ def _load_session(csv_path: Path, mode_root: Path) -> dict[str, Any] | None:
         return None
     session_dir = csv_path.parent
     heightmap_paths = sorted(set(session_dir.glob("*_Height.png")) | set(session_dir.glob("Map*.png")))
+    coating_cells = (
+        _session_coating_cells(zones, heightmap_paths, grid_size=coating_grid_size)
+        if process == "spray"
+        else {}
+    )
     heightmaps = [
         {
             "source_path": path.relative_to(mode_root).as_posix(),
@@ -126,7 +234,11 @@ def _load_session(csv_path: Path, mode_root: Path) -> dict[str, Any] | None:
             "csv_sha256": _sha256(csv_path),
         },
         "heightmaps": heightmaps,
-        "analysis": {"macro_order": order, "zones": usable},
+        "analysis": {
+            "macro_order": order,
+            "zones": usable,
+            "coating_cells": coating_cells,
+        },
     }
 
 
@@ -135,6 +247,7 @@ def _profile(process: str, mode_id: int, mode_root: Path, sessions: list[dict[st
     orders: Counter[str] = Counter()
     order_values: dict[str, list[dict[str, Any]]] = {}
     transitions: Counter[tuple[str, str]] = Counter()
+    coating_samples: dict[str, dict[str, Any]] = {}
     for session in sessions:
         order = session["analysis"]["macro_order"]
         serialized = json.dumps(order, ensure_ascii=False, sort_keys=True)
@@ -151,17 +264,70 @@ def _profile(process: str, mode_id: int, mode_root: Path, sessions: list[dict[st
                 aggregate["speed"].append(zone["speed_mms"])
             if zone["distance_mm"] is not None:
                 aggregate["distance"].append(zone["distance_mm"])
+        for key, coating in session["analysis"].get("coating_cells", {}).items():
+            aggregate = coating_samples.setdefault(
+                key,
+                {
+                    "atlas_width": coating["atlas_width"],
+                    "atlas_height": coating["atlas_height"],
+                    "grid_size": coating["grid_size"],
+                    "session_count": 0,
+                    "cells": {},
+                },
+            )
+            if (
+                aggregate["atlas_width"] != coating["atlas_width"]
+                or aggregate["atlas_height"] != coating["atlas_height"]
+                or aggregate["grid_size"] != coating["grid_size"]
+            ):
+                continue
+            aggregate["session_count"] += 1
+            for cell, value in coating["cells"].items():
+                aggregate["cells"].setdefault(cell, []).append(value)
 
-    zones = {
-        key: {
+    zones = {}
+    for key, value in sorted(zone_samples.items()):
+        coating_source = coating_samples.get(key)
+        if process != "spray":
+            coating = {
+                "analysis_status": "not_applicable",
+                "reason": "coating_not_applicable",
+            }
+        elif coating_source is None:
+            coating = {
+                "analysis_status": "not_available",
+                "reason": "heightmap_or_uv_unavailable",
+            }
+        else:
+            minimum_samples = max(1, math.ceil(coating_source["session_count"] * 0.4))
+            cells = {
+                cell: {
+                    "sample_count": len(samples),
+                    "q1_um": _quantile(samples, 0.25),
+                    "median_um": statistics.median(samples),
+                    "q3_um": _quantile(samples, 0.75),
+                }
+                for cell, samples in sorted(coating_source["cells"].items())
+                if len(samples) >= minimum_samples
+            }
+            coating = {
+                "analysis_status": "available" if cells else "not_available",
+                "atlas_width": coating_source["atlas_width"],
+                "atlas_height": coating_source["atlas_height"],
+                "grid_size": coating_source["grid_size"],
+                "session_count": coating_source["session_count"],
+                "cells": cells,
+            }
+            if not cells:
+                coating["reason"] = "insufficient_consensus"
+        zones[key] = {
             "map_num": value["map_num"],
             "zone_id": value["zone_id"],
             "session_count": max(len(value["speed"]), len(value["distance"])),
             "speed_mms": _distribution(value["speed"]) if value["speed"] else {},
             "distance_mm": _distribution(value["distance"]) if value["distance"] else {},
+            "coating": coating,
         }
-        for key, value in sorted(zone_samples.items())
-    }
     total = len(sessions)
     macro_orders = [
         {"order": order_values[key], "session_count": count, "fraction": count / total}
@@ -190,14 +356,23 @@ def _profile(process: str, mode_id: int, mode_root: Path, sessions: list[dict[st
         "quality": {
             "status": "multi_session" if total >= 2 else "single_session",
             "session_count": total,
-            "heightmap_scale_status": "not_evaluated",
+            "heightmap_scale_status": (
+                "rg16_scale_20000"
+                if process == "spray" and coating_samples
+                else "not_applicable" if process != "spray" else "not_available"
+            ),
         },
         "aggregate": {"zones": zones, "macro_orders": macro_orders, "transitions": transition_items},
         "sessions": sessions,
     }
 
 
-def build_profiles(reference_root: Path, *, process: str) -> list[Path]:
+def build_profiles(
+    reference_root: Path,
+    *,
+    process: str,
+    coating_grid_size: int = 64,
+) -> list[Path]:
     root = Path(reference_root)
     raw = root / "raw" / process / "learning"
     output_root = root / "generated" / "profiles" / process / "learning"
@@ -211,7 +386,14 @@ def build_profiles(reference_root: Path, *, process: str) -> list[Path]:
         sessions = [
             session
             for path in sorted(mode_root.rglob("*.csv"))
-            if (session := _load_session(path, mode_root))
+            if (
+                session := _load_session(
+                    path,
+                    mode_root,
+                    process=process,
+                    coating_grid_size=coating_grid_size,
+                )
+            )
         ]
         if not sessions:
             continue
@@ -250,8 +432,13 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--reference-root", type=Path, required=True)
     parser.add_argument("--process", choices=("spray", "blasting"), required=True)
+    parser.add_argument("--coating-grid-size", type=int, default=64)
     args = parser.parse_args()
-    outputs = build_profiles(args.reference_root, process=args.process)
+    outputs = build_profiles(
+        args.reference_root,
+        process=args.process,
+        coating_grid_size=args.coating_grid_size,
+    )
     print(json.dumps({"process": args.process, "profiles": len(outputs)}, ensure_ascii=False))
     return 0 if outputs else 1
 
