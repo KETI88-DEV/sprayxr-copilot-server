@@ -103,6 +103,7 @@ def test_motion_viewer_page_explains_representative_and_statistical_motion(tmp_p
     assert "대표 실측 모션" in response.text
     assert "통계 범위" in response.text
     assert "<canvas" in response.text
+    assert ":'자료 없음'}\nfunction tick" in response.text
 
 
 def test_catalog_lists_modes_and_individual_expert_sessions(tmp_path: Path) -> None:
@@ -141,4 +142,3 @@ def test_motion_rejects_unknown_session_without_reading_arbitrary_paths(tmp_path
     )
 
     assert response.status_code == 404
-
