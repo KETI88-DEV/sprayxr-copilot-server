@@ -190,6 +190,12 @@ def test_motion_viewer_page_explains_representative_and_statistical_motion(tmp_p
     assert "const fps=(data.frames.length-1)" not in response.text
     assert "<canvas" in response.text
     assert "function tick(now)" in response.text
+    assert "let referencePreview=false" in response.text
+    assert "function showReferencePreview(key)" in response.text
+    assert "function startPlayback()" in response.text
+    assert "button.onclick=()=>showReferencePreview(key)" in response.text
+    assert "allButton.onclick=()=>showReferencePreview('all')" in response.text
+    assert "if(!referencePreview){" in response.text
 
 
 def test_catalog_lists_modes_and_individual_expert_sessions(tmp_path: Path) -> None:
