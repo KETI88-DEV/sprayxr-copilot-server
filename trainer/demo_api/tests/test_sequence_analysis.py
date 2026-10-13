@@ -70,6 +70,10 @@ def test_repaint_in_the_current_zone_is_normal_but_skipping_a_zone_is_anomaly(tm
     assert decision.anomaly_type == "sequence_order_deviation"
     assert "2번" in decision.text_guide
 
+    retried_first = engine.evaluate(AnalyzeSequenceRequest.model_validate(first), store)
+    assert retried_first.feedback.reason_code is None
+    assert retried_first.anomaly_type is None
+
 
 def test_report_keeps_order_and_direction_scores_separate(tmp_path: Path) -> None:
     _profile(tmp_path)
@@ -99,3 +103,20 @@ def test_missing_direction_reference_does_not_invent_a_direction_score(tmp_path:
     assert report["analysis_status"] == "available"
     assert report["direction_adherence_rate"] is None
     assert report["direction_summary"] is None
+
+
+def test_unresolved_zone_is_not_scored_as_zero_or_guided_as_normal(tmp_path: Path) -> None:
+    _profile(tmp_path)
+    engine = SequenceAnalysisEngine(tmp_path)
+    store = SequenceStore(":memory:")
+    body = _body("SEQ-001", "-1")
+    _record(store, body)
+
+    decision = engine.evaluate(AnalyzeSequenceRequest.model_validate(body), store)
+    report = engine.report_bodies([body], scenario_id="3")
+
+    assert decision.feedback.reason_code == "zone_unresolved"
+    assert decision.text_guide is None
+    assert report["analysis_status"] == "unavailable"
+    assert report["reason_code"] == "sequence_data_unavailable"
+    assert "adherence_rate" not in report

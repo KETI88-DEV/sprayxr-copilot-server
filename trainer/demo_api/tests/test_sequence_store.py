@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from trainer.demo_api.sequence_store import SequenceStore
@@ -147,3 +148,16 @@ def test_legacy_db_keeps_rows_written_before_the_upgrade(tmp_path: Path) -> None
 
     assert store.load_body(session_key="S0", sequence_id="Q0") is None
     assert store.latest_sequence_id("S0") == "Q0"
+
+
+def test_session_bodies_keep_receive_order_even_when_ids_do_not_sort() -> None:
+    store = SequenceStore(":memory:")
+    for sequence_id in ("SEQ-10", "SEQ-2"):
+        store.record(
+            session_key="S1", sequence_id=sequence_id, body_sha256=sequence_id,
+            frames=1, received_at="2026-10-13T00:00:00Z",
+            body=json.dumps({"sequence_id": sequence_id}),
+        )
+
+    assert [body["sequence_id"] for body in store.session_bodies("S1")] == ["SEQ-10", "SEQ-2"]
+    assert [body["sequence_id"] for body in store.session_bodies_through("S1", "SEQ-10")] == ["SEQ-10"]

@@ -248,30 +248,30 @@ def create_v1_router(
                 session_id=session_id, user_id=user_id, scenario_id=scenario_id, csv_bytes=csv_bytes,
                 store=stored_sequences, mcp_base_url=mcp_base, transport=transport,
             )
-        except Exception:  # noqa: BLE001 - 분석 실패는 리포트 상태로 알린다. 폴링이 pending에 갇히면 안 된다.
+            sequence_report = (
+                sequence_engine.report_bodies(result.source_bodies, scenario_id=scenario_id)
+                if sequence_engine is not None else
+                SequenceReport(analysis_status="unavailable", reason_code=_FLOW_MISSING, guideline=_ENGINE_MISSING).model_dump(mode="json")
+            )
+            pose_report = result.pose_report()
+            state.finish_completion(
+                report_id, status="complete",
+                analysis={
+                    "generated_at": _now(),
+                    "pose_report": pose_report,
+                    "sequence_report": sequence_report,
+                    "llm_briefing": _briefing(pose_report=pose_report, sequence_report=sequence_report),
+                    "counts": result.counts,
+                    "sequences": result.sequences,
+                },
+            )
+        except Exception:  # noqa: BLE001 - 어떤 분석 영역 실패도 pending에 갇히지 않아야 한다.
             logger.exception("session analysis failed %s report=%s", session_id, report_id)
             state.finish_completion(
                 report_id, status="failed",
                 analysis={"generated_at": _now(), "error": "session_analysis_failed"},
             )
             return
-        sequence_report = (
-            sequence_engine.report_bodies(result.source_bodies, scenario_id=scenario_id)
-            if sequence_engine is not None else
-            SequenceReport(analysis_status="unavailable", reason_code=_FLOW_MISSING, guideline=_ENGINE_MISSING).model_dump(mode="json")
-        )
-        pose_report = result.pose_report()
-        state.finish_completion(
-            report_id, status="complete",
-            analysis={
-                "generated_at": _now(),
-                "pose_report": pose_report,
-                "sequence_report": sequence_report,
-                "llm_briefing": _briefing(pose_report=pose_report, sequence_report=sequence_report),
-                "counts": result.counts,
-                "sequences": result.sequences,
-            },
-        )
         logger.info("session analysis %s report=%s %s", session_id, report_id, result.counts)
 
     # --- 1. 세션 관리 (p.1-3) ---------------------------------------------

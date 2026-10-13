@@ -162,9 +162,29 @@ class SequenceStore:
         with self._guard:
             rows = self._conn.execute(
                 "SELECT body FROM sequences WHERE session_key = ? AND body IS NOT NULL"
-                " ORDER BY received_at, sequence_id",
+                " ORDER BY rowid",
                 (session_key,),
             ).fetchall()
+        return self._decode_bodies(rows, session_key=session_key)
+
+    def session_bodies_through(self, session_key: str, sequence_id: str) -> list[dict[str, Any]]:
+        """Return the receive-order prefix ending at ``sequence_id`` for retry-safe feedback."""
+        with self._guard:
+            target = self._conn.execute(
+                "SELECT rowid FROM sequences WHERE session_key = ? AND sequence_id = ?",
+                (session_key, sequence_id),
+            ).fetchone()
+            if target is None:
+                return []
+            rows = self._conn.execute(
+                "SELECT body FROM sequences WHERE session_key = ? AND rowid <= ? AND body IS NOT NULL"
+                " ORDER BY rowid",
+                (session_key, int(target[0])),
+            ).fetchall()
+        return self._decode_bodies(rows, session_key=session_key)
+
+    @staticmethod
+    def _decode_bodies(rows: list[tuple[Any, ...]], *, session_key: str) -> list[dict[str, Any]]:
         bodies: list[dict[str, Any]] = []
         for row in rows:
             try:
@@ -180,7 +200,7 @@ class SequenceStore:
         with self._guard:
             row = self._conn.execute(
                 "SELECT sequence_id FROM sequences WHERE session_key = ?"
-                " ORDER BY received_at DESC, sequence_id DESC LIMIT 1",
+                " ORDER BY rowid DESC LIMIT 1",
                 (session_key,),
             ).fetchone()
         return str(row[0]) if row is not None else None

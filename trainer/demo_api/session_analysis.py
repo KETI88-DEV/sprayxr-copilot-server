@@ -224,10 +224,14 @@ def analyze_session(
         body["sequence_id"]: body
         for body in csv_sequences(rows, session_id=session_id, user_id=user_id, scenario_id=scenario_id)
     }
-    stored_ids = set(store.sequence_ids(session_id))
+    stored_bodies = store.session_bodies(session_id)
+    stored_by_id = {str(body.get("sequence_id")): body for body in stored_bodies if body.get("sequence_id")}
+    ordered_ids = list(from_csv) if from_csv else list(stored_by_id)
+    if from_csv:
+        ordered_ids.extend(sequence_id for sequence_id in stored_by_id if sequence_id not in from_csv)
     targets: list[tuple[str, str, dict[str, Any]]] = []
-    for sequence_id in sorted(set(from_csv) | stored_ids):
-        stored = store.load_body(session_key=session_id, sequence_id=sequence_id) if sequence_id in stored_ids else None
+    for sequence_id in ordered_ids:
+        stored = stored_by_id.get(sequence_id)
         if stored is not None:
             targets.append((sequence_id, SOURCE_STORED, stored))
         elif sequence_id in from_csv:

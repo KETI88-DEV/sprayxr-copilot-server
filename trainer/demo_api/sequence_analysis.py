@@ -83,10 +83,12 @@ class SequenceAnalysisEngine:
         path = self._root / "generated" / "profiles" / process / "learning" / f"mode_{mode_id:02d}.json"
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                return None
             if not isinstance(payload.get("aggregate", {}).get("zones"), dict):
                 return None
             return payload
-        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        except (OSError, AttributeError, ValueError, TypeError, json.JSONDecodeError):
             return None
 
     @staticmethod
@@ -139,7 +141,9 @@ class SequenceAnalysisEngine:
         return decisions
 
     def evaluate(self, request: AnalyzeSequenceRequest, store: SequenceStore) -> SequenceDecision:
-        bodies = store.session_bodies(request.session_id)
+        if _zone_id(request.model_dump(mode="json")) is None:
+            return SequenceDecision(EngineFeedback(analysis_status="not_available", reason_code="zone_unresolved"), None)
+        bodies = store.session_bodies_through(request.session_id, request.sequence_id)
         context = self._context(request.model_dump(mode="json"))
         if context is None:
             return SequenceDecision(EngineFeedback(analysis_status="not_available", reason_code="sequence_reference_context_unavailable"), None)
@@ -198,6 +202,12 @@ class SequenceAnalysisEngine:
                 if zone not in first_visits:
                     first_visits.append(zone)
         decisions = self._visit_decisions(visits, flow)
+        if not visits:
+            return {
+                "analysis_status": "unavailable", "reason_code": "sequence_data_unavailable",
+                "algorithm_version": ALGORITHM_VERSION,
+                "guideline": "Zone이 판정된 시퀀스가 없어 순서와 방향을 평가할 수 없습니다.",
+            }
         deviations: Counter[str] = Counter(zone for zone, reason in zip(visits, decisions) if reason is not None)
         evaluated = len(visits)
         on_track = sum(reason is None for reason in decisions)

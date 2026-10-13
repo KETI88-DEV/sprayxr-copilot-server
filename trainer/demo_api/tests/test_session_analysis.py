@@ -261,3 +261,21 @@ def test_an_analysis_crash_marks_the_report_failed(monkeypatch: pytest.MonkeyPat
     assert detail["report"]["report_status"] == "failed"
     assert detail["report"]["pose_report"]["analysis_status"] == "unavailable"
     assert detail["report"]["pose_report"]["average_similarity_score"] is None
+
+
+def test_a_sequence_report_crash_also_marks_the_report_failed() -> None:
+    class BrokenSequenceEngine:
+        def report_bodies(self, *_: Any, **__: Any) -> dict[str, Any]:
+            raise RuntimeError("sequence boom")
+
+    app = FastAPI()
+    app.include_router(create_v1_router(
+        store=V1Store(":memory:"), sequences=SequenceStore(":memory:"),
+        mcp_base_url=MCP, transport=httpx.MockTransport(_FakeMcp()),
+        sequence_engine=BrokenSequenceEngine(),  # type: ignore[arg-type]
+    ))
+    client = TestClient(app)
+    report_id = _complete(client, b"index,time\n1,0\n")
+
+    detail = client.get(f"/api/v1/reports/{report_id}").json()["data"]
+    assert detail["report"]["report_status"] == "failed"
