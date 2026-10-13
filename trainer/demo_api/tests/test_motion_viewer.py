@@ -164,6 +164,15 @@ def test_motion_viewer_page_explains_representative_and_statistical_motion(tmp_p
     assert "현재 양손 위치 편차" not in response.text
     assert "trackedStats[marker]" not in response.text
     assert "function interpolatedFrame" in response.text
+    assert "function resetViewToCamera" in response.text
+    assert "viewCenter" in response.text
+    assert "e.button===1" in response.text
+    assert "drag.mode==='pan'" in response.text
+    assert "canvas.onauxclick" in response.text
+    assert 'id="viewerLegend"' in response.text
+    assert response.text.count('id="viewerLegend"') == 1
+    assert response.text.index('id="viewerLegend"') < response.text.index('id="loading"')
+    assert "첫 프레임 카메라를 화면 중심으로 설정" in response.text
     assert 'id="skeletonCanvas"' in response.text
     assert 'id="skeletonTurnLeft"' in response.text
     assert 'id="skeletonTurnRight"' in response.text
