@@ -269,6 +269,121 @@ def _frames(path: Path, frame_count: int) -> list[dict[str, Any]]:
     return [dict(frame) for frame in _sample_csv(str(path), (stat.st_mtime_ns, stat.st_size), frame_count)]
 
 
+@lru_cache(maxsize=64)
+def _paint_cells(
+    path_text: str, stamp: tuple[int, int], cell_size: float
+) -> tuple[tuple[Any, ...], ...]:
+    del stamp
+    cells: dict[tuple[int, int, int], dict[str, Any]] = {}
+    previous: list[float] | None = None
+    previous_zone: str | None = None
+    with _open_csv(Path(path_text)) as handle:
+        for row in csv.DictReader(handle):
+            point = _ray_point(row)
+            if not _spraying(row.get("분사")) or point is None:
+                previous = None
+                previous_zone = None
+                continue
+            zone = str(row.get("Zone ID", "")).strip() or None
+            key = tuple(round(value / cell_size) for value in point)
+            cell = cells.setdefault(key, {
+                "sum": [0.0, 0.0, 0.0], "count": 0, "direction": [0.0, 0.0, 0.0],
+                "moves": 0, "horizontal": 0, "vertical": 0, "diagonal": 0,
+            })
+            for axis in range(3):
+                cell["sum"][axis] += point[axis]
+            cell["count"] += 1
+            if previous is not None and zone == previous_zone:
+                delta = [point[axis] - previous[axis] for axis in range(3)]
+                distance = math.sqrt(sum(value * value for value in delta))
+                if 0.0005 <= distance <= 0.25:
+                    direction = [value / distance for value in delta]
+                    dominant = max(range(3), key=lambda axis: abs(direction[axis]))
+                    if direction[dominant] < 0:
+                        direction = [-value for value in direction]
+                    for axis in range(3):
+                        cell["direction"][axis] += direction[axis]
+                    horizontal = math.sqrt(delta[0] ** 2 + delta[2] ** 2)
+                    vertical = abs(delta[1])
+                    ratio = vertical / max(distance, 1e-9)
+                    category = "vertical" if ratio >= 0.7 else "horizontal" if ratio <= 0.3 else "diagonal"
+                    cell[category] += 1
+                    cell["moves"] += 1
+            previous, previous_zone = point, zone
+    return tuple(
+        (
+            key,
+            tuple(round(value, 6) for value in value["sum"]), value["count"],
+            tuple(round(item, 6) for item in value["direction"]), value["moves"],
+            value["horizontal"], value["vertical"], value["diagonal"],
+        )
+        for key, value in cells.items()
+    )
+
+
+def _reference_paint_statistics(paths: list[Path], *, cell_size: float = 0.01) -> dict[str, Any]:
+    combined: dict[tuple[int, int, int], dict[str, Any]] = {}
+    totals = {"horizontal": 0, "vertical": 0, "diagonal": 0}
+    raw_point_count = 0
+    for path in paths:
+        stat = path.stat()
+        for key, point_sum, count, direction_sum, moves, horizontal, vertical, diagonal in _paint_cells(
+            str(path), (stat.st_mtime_ns, stat.st_size), cell_size
+        ):
+            cell = combined.setdefault(key, {"sum": [0.0] * 3, "count": 0, "direction": [0.0] * 3, "moves": 0})
+            for axis in range(3):
+                cell["sum"][axis] += point_sum[axis]
+                cell["direction"][axis] += direction_sum[axis]
+            cell["count"] += count
+            cell["moves"] += moves
+            raw_point_count += count
+            totals["horizontal"] += horizontal
+            totals["vertical"] += vertical
+            totals["diagonal"] += diagonal
+    entries = sorted(combined.items())
+    if len(entries) > 4000:
+        dense = sorted(entries, key=lambda pair: pair[1]["count"], reverse=True)[:2000]
+        dense_keys = {key for key, _ in dense}
+        remaining = [pair for pair in entries if pair[0] not in dense_keys]
+        step = max(1, math.ceil(len(remaining) / 2000))
+        visible = [item for _, item in dense] + [item for _, item in remaining[::step]][:2000]
+    else:
+        visible = [item for _, item in entries]
+    max_count = max((item["count"] for item in visible), default=1)
+    points = [{
+        "point": [round(value / item["count"], 6) for value in item["sum"]],
+        "frequency": round(item["count"] / max_count, 4),
+    } for item in visible]
+    direction_candidates = sorted(
+        (item for item in combined.values() if item["moves"] >= 1),
+        key=lambda item: item["moves"], reverse=True,
+    )[:160]
+    max_moves = max((item["moves"] for item in direction_candidates), default=1)
+    field = []
+    for item in direction_candidates:
+        magnitude = math.sqrt(sum(value * value for value in item["direction"]))
+        if magnitude <= 1e-9:
+            continue
+        field.append({
+            "point": [round(value / item["count"], 6) for value in item["sum"]],
+            "direction": [round(value / magnitude, 6) for value in item["direction"]],
+            "frequency": round(item["moves"] / max_moves, 4),
+        })
+    move_total = sum(totals.values())
+    distribution = {
+        key: round(value / move_total, 4) if move_total else 0.0
+        for key, value in totals.items()
+    }
+    return {
+        "reference_surface": {
+            "points": points, "raw_point_count": raw_point_count,
+            "cell_size_m": cell_size,
+        },
+        "direction_field": field,
+        "direction_distribution": distribution,
+    }
+
+
 def _spread(
     selected_frames: list[dict[str, Any]], all_frames: list[list[dict[str, Any]]]
 ) -> list[dict[str, Any]]:
@@ -397,9 +512,9 @@ button{cursor:pointer;font-weight:700}.primary{background:#3157d5;border-color:#
 <p class="help">마우스로 드래그하면 시점을 돌리고, 휠로 확대·축소할 수 있습니다. 페인트 누적 궤적과 머리·양손의 실측 위치가 기본 표시됩니다.</p>
 </aside>
 <section class="stage"><canvas id="canvas"></canvas><div class="overlay"><strong id="overlayTitle">학습모드</strong><span id="overlayFrame">프레임 준비 중</span></div></section>
-<aside class="side right"><div class="card"><span>통계에 포함된 수행</span><strong id="sessionCount">-</strong></div><div class="card"><span>현재 기록 길이</span><strong id="duration">-</strong></div><div class="card"><span>주요 도장 방향</span><strong id="direction">-</strong></div><div class="card"><span>현재 양손 위치 편차</span><strong id="handSpread">-</strong></div>
-<div class="legend"><div><i class="dot" style="background:#ff8a3d"></i>선택 기록의 페인트 누적 궤적</div><div><i class="dot" style="background:var(--green)"></i>반복 수행 75% 통계 범위</div><div><i class="dot" style="background:var(--cyan)"></i>전형기 반장의 머리·양손 실측 위치</div></div>
-<p class="help">밝은 중심 경로와 반투명 범위는 같은 학습모드의 반복 수행을 진행률 0~100%로 맞춘 통계입니다. 페인트 표현은 실제 도막 두께가 아니라 Ray Point가 기록한 착탄 위치와 진행 방향입니다.</p></aside>
+<aside class="side right"><div class="card"><span>통계에 포함된 수행</span><strong id="sessionCount">-</strong></div><div class="card"><span>현재 기록 길이</span><strong id="duration">-</strong></div><div class="card"><span>선택 기록의 주요 도장 방향</span><strong id="direction">-</strong></div><div class="card"><span>전문가 전체 방향 비중</span><strong id="directionMix" style="font-size:14px;line-height:1.65">-</strong></div><div class="card"><span>현재 양손 위치 편차</span><strong id="handSpread">-</strong></div>
+<div class="legend"><div><i class="dot" style="background:#f5f8ff"></i>전문가 전체 Ray Point 점군</div><div><i class="dot" style="background:var(--green)"></i>위치별 주 방향·통과 빈도</div><div><i class="dot" style="background:#ff8a3d"></i>선택 기록의 페인트 누적 궤적</div><div><i class="dot" style="background:var(--cyan)"></i>전형기 반장의 머리·양손 실측 위치</div></div>
+<p class="help">흰색 점군은 반복 수행의 분사 중 Ray Point를 공간 단위로 정리한 것으로 피도면의 작업 형상을 간접적으로 보여줍니다. 녹색 양방향 선은 위치별 왕복 방향이며, 밝기와 굵기가 통과 빈도를 나타냅니다.</p></aside>
 </main></div><script>
 const $=id=>document.getElementById(id); const canvas=$('canvas'),ctx=canvas.getContext('2d');
 let catalog=null,data=null,index=0,playheadSeconds=0,playing=false,last=0,yaw=-0.55,pitch=0.1,zoom=175,drag=null;
@@ -409,14 +524,15 @@ function currentProcess(){return catalog.processes.find(p=>p.process===$('proces
 function currentMode(){return currentProcess().modes.find(m=>String(m.mode_id)===$('mode').value)}
 function fillModes(){const p=currentProcess();$('mode').replaceChildren(...p.modes.map(m=>option(m.mode_id,`학습모드 ${m.mode_id} · ${m.session_count}회`)));const four=p.modes.find(m=>m.mode_id===4);if(four)$('mode').value='4';fillSessions()}
 function fillSessions(){const m=currentMode();$('session').replaceChildren(option('representative',`전형기 대표 실측 모션 · ${m.representative_session_id}`),...m.sessions.map(s=>option(s,`전형기 · ${s}`)));loadMotion()}
-async function loadMotion(){playing=false;last=0;$('play').textContent='재생';$('status').textContent='모션과 통계 범위를 계산하는 중입니다.';try{const q=new URLSearchParams({process:$('process').value,mode_id:$('mode').value,session_id:$('session').value});data=await json('/motion-viewer/api/motion?'+q);index=0;playheadSeconds=0;$('timeline').max=Math.max(0,data.frames.length-1);$('timeline').value=0;$('sessionCount').textContent=`${data.sampled_session_count}회`;$('duration').textContent=`${data.duration_seconds.toFixed(1)}초`;$('direction').textContent=data.direction_summary.label;$('overlayTitle').textContent=`전형기 반장 · ${data.process_label} · 학습모드 ${data.mode_id}`;$('status').textContent=`${data.selected_session_id} 준비 완료`;draw()}catch(e){data=null;$('status').textContent=e.message;draw()}}
+async function loadMotion(){playing=false;last=0;$('play').textContent='재생';$('status').textContent='모션과 통계 범위를 계산하는 중입니다.';try{const q=new URLSearchParams({process:$('process').value,mode_id:$('mode').value,session_id:$('session').value});data=await json('/motion-viewer/api/motion?'+q);index=0;playheadSeconds=0;$('timeline').max=Math.max(0,data.frames.length-1);$('timeline').value=0;$('sessionCount').textContent=`${data.sampled_session_count}회`;$('duration').textContent=`${data.duration_seconds.toFixed(1)}초`;$('direction').textContent=data.direction_summary.label;const mix=data.direction_distribution;$('directionMix').textContent=`수평 ${(mix.horizontal*100).toFixed(0)}% · 수직 ${(mix.vertical*100).toFixed(0)}% · 대각 ${(mix.diagonal*100).toFixed(0)}%`;$('overlayTitle').textContent=`전형기 반장 · ${data.process_label} · 학습모드 ${data.mode_id}`;$('status').textContent=`${data.selected_session_id} 준비 완료`;draw()}catch(e){data=null;$('status').textContent=e.message;draw()}}
 function resize(){const dpr=devicePixelRatio||1,rect=canvas.getBoundingClientRect();canvas.width=Math.round(rect.width*dpr);canvas.height=Math.round(rect.height*dpr);ctx.setTransform(dpr,0,0,dpr,0,0);draw()}
 function transform(point,center){let x=point[0]-center[0],y=point[1]-center[1],z=point[2]-center[2];let cy=Math.cos(yaw),sy=Math.sin(yaw),x1=x*cy-z*sy,z1=x*sy+z*cy;let cp=Math.cos(pitch),sp=Math.sin(pitch),y1=y*cp-z1*sp,z2=y*sp+z1*cp;return [x1,y1,z2]}
 function project(point,center,w,h){const [x,y,z]=transform(point,center),pers=4.5/(4.5-z);return [w/2+x*zoom*pers,h*.59-y*zoom*pers,pers]}
 function line(a,b,color,width,center,w,h){const p=project(a,center,w,h),q=project(b,center,w,h);ctx.strokeStyle=color;ctx.lineWidth=width;ctx.lineCap='round';ctx.beginPath();ctx.moveTo(p[0],p[1]);ctx.lineTo(q[0],q[1]);ctx.stroke()}
 function point(p,r,color,center,w,h){const q=project(p,center,w,h);ctx.fillStyle=color;ctx.beginPath();ctx.arc(q[0],q[1],r*q[2],0,Math.PI*2);ctx.fill()}
 function arrow(a,b,color,center,w,h){const p=project(a,center,w,h),q=project(b,center,w,h),angle=Math.atan2(q[1]-p[1],q[0]-p[0]);ctx.strokeStyle=color;ctx.fillStyle=color;ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(p[0],p[1]);ctx.lineTo(q[0],q[1]);ctx.stroke();ctx.beginPath();ctx.moveTo(q[0],q[1]);ctx.lineTo(q[0]-10*Math.cos(angle-.48),q[1]-10*Math.sin(angle-.48));ctx.lineTo(q[0]-10*Math.cos(angle+.48),q[1]-10*Math.sin(angle+.48));ctx.closePath();ctx.fill()}
-function statisticalBand(samples,center,w,h){let previous=null,previousSpread=0;for(const sample of samples){if(!sample.ray_mean){previous=null;previousSpread=0;continue}if(previous){const width=Math.max(8,Math.min(36,((previousSpread+(sample.ray_spread||0))/2)*zoom));line(previous,sample.ray_mean,'rgba(52,211,153,.12)',width,center,w,h);line(previous,sample.ray_mean,'rgba(52,211,153,.48)',2,center,w,h)}previous=sample.ray_mean;previousSpread=sample.ray_spread||0}}
+function referencePointCloud(surface,center,w,h){for(const sample of surface.points){const q=project(sample.point,center,w,h),alpha=.16+sample.frequency*.48,size=1.2+sample.frequency*1.5;ctx.fillStyle=`rgba(245,248,255,${alpha})`;ctx.fillRect(q[0]-size/2,q[1]-size/2,size,size)}}
+function directionField(samples,center,w,h){for(const sample of samples){const half=.055+sample.frequency*.06,a=sub(sample.point,mul(sample.direction,half)),b=add(sample.point,mul(sample.direction,half)),alpha=.3+sample.frequency*.65,color=`rgba(52,211,153,${alpha})`;line(a,b,color,1.5+sample.frequency*2.5,center,w,h);if(sample.frequency>.38){arrow(a,b,color,center,w,h);arrow(b,a,color,center,w,h)}}}
 function add(a,b){return a.map((value,axis)=>value+b[axis])}function sub(a,b){return a.map((value,axis)=>value-b[axis])}function mul(a,value){return a.map(axis=>axis*value)}function dot(a,b){return a.reduce((sum,value,axis)=>sum+value*b[axis],0)}function cross(a,b){return[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]]}function length(a){return Math.sqrt(dot(a,a))}function unit(a,fallback=[1,0,0]){const size=length(a);return size>.00001?mul(a,1/size):fallback}
 function mixPoint(a,b,ratio){if(!a)return b||null;if(!b)return a;return a.map((value,axis)=>value+(b[axis]-value)*ratio)}
 function anchorBasis(head,left,right){if(!head||!left||!right)return null;const origin=mul(add(add(head,left),right),1/3),x=unit(sub(right,left)),up=sub(head,mul(add(left,right),.5)),y=unit(sub(up,mul(x,dot(up,x))),[0,1,0]),z=unit(cross(x,y),[0,0,1]);return{origin,x,y:unit(cross(z,x),y),z}}
@@ -425,10 +541,10 @@ function solveArm(joints,side,target){const root=joints[`${side} Upper Arm`],gui
 function alignSkeleton(joints,tracked){const source=anchorBasis(joints.Head,joints['Left Hand'],joints['Right Hand']),target=anchorBasis(tracked.head,tracked.left_hand,tracked.right_hand);if(!source||!target)return joints;const sourceSpan=(length(sub(joints.Head,joints['Left Hand']))+length(sub(joints.Head,joints['Right Hand'])))/2,targetSpan=(length(sub(tracked.head,tracked.left_hand))+length(sub(tracked.head,tracked.right_hand)))/2,scale=Math.max(.55,Math.min(1.8,targetSpan/Math.max(.001,sourceSpan))),aligned={};for(const [name,point] of Object.entries(joints))aligned[name]=basisPoint(point,source,target,scale);aligned.Head=tracked.head;solveArm(aligned,'Left',tracked.left_hand);solveArm(aligned,'Right',tracked.right_hand);return aligned}
 function interpolatedFrame(seconds){let current=Math.max(0,Math.min(index,data.frames.length-1));while(current+1<data.frames.length&&data.frames[current+1].t<=seconds)current++;while(current>0&&data.frames[current].t>seconds)current--;const a=data.frames[current],b=data.frames[Math.min(current+1,data.frames.length-1)],span=Math.max(.000001,b.t-a.t),ratio=Math.max(0,Math.min(1,(seconds-a.t)/span));const tracked={},joints={};for(const key of new Set([...Object.keys(a.tracked||{}),...Object.keys(b.tracked||{})]))tracked[key]=mixPoint((a.tracked||{})[key],(b.tracked||{})[key],ratio);for(const key of new Set([...Object.keys(a.joints||{}),...Object.keys(b.joints||{})]))joints[key]=mixPoint((a.joints||{})[key],(b.joints||{})[key],ratio);const continuousPaint=a.spraying&&b.spraying&&a.ray_point&&b.ray_point&&a.zone_id===b.zone_id;return{index:current,frame:{...a,t:seconds,tracked,joints,ray_point:continuousPaint?mixPoint(a.ray_point,b.ray_point,ratio):a.ray_point}}}
 function draw(){const rect=canvas.getBoundingClientRect(),w=rect.width,h=rect.height;ctx.clearRect(0,0,w,h);ctx.strokeStyle='rgba(100,130,165,.16)';ctx.lineWidth=1;for(let i=-5;i<=5;i++){ctx.beginPath();ctx.moveTo(w/2+i*55,h*.78);ctx.lineTo(w/2+i*90,h*.95);ctx.stroke()}
-if(!data||!data.frames.length)return;const rendered=interpolatedFrame(playheadSeconds),frame=rendered.frame,sourceIndex=rendered.index,stats=data.statistics[sourceIndex];const allPaint=data.frames.map(f=>f.ray_point).filter(Boolean),center=allPaint.length?allPaint[Math.floor(allPaint.length/2)]:((frame.tracked||{}).head||(frame.joints||{}).Pelvis||[0,0,0]);
-statisticalBand(data.statistics,center,w,h);
+if(!data||!data.frames.length)return;const rendered=interpolatedFrame(playheadSeconds),frame=rendered.frame,sourceIndex=rendered.index,stats=data.statistics[sourceIndex];const allPaint=data.reference_surface.points.map(item=>item.point),center=allPaint.length?allPaint.reduce((sum,p)=>add(sum,p),[0,0,0]).map(value=>value/allPaint.length):((frame.tracked||{}).head||(frame.joints||{}).Pelvis||[0,0,0]);
+referencePointCloud(data.reference_surface,center,w,h);directionField(data.direction_field,center,w,h);
 let previous=null,paintCount=0;for(let i=0;i<=sourceIndex;i++){const f=data.frames[i];if(!f.spraying||!f.ray_point){previous=null;continue}const progress=i/Math.max(1,data.frames.length-1),color=`hsla(${24+progress*28},100%,62%,${.35+progress*.5})`;point(f.ray_point,3.5,color,center,w,h);if(previous){line(previous,f.ray_point,color,7,center,w,h);if(paintCount%12===0)arrow(previous,f.ray_point,'rgba(255,232,190,.9)',center,w,h)}previous=f.ray_point;paintCount++}if(previous&&frame.spraying&&frame.ray_point){line(previous,frame.ray_point,'rgba(255,184,92,.78)',7,center,w,h);point(frame.ray_point,3.5,'rgba(255,205,125,.9)',center,w,h)}
-const tracked=frame.tracked||{},trackedStats=stats.tracked_spread||{};for(const marker of ['head','right_hand','left_hand']){const p=tracked[marker],radius=trackedStats[marker]||0;if(p&&radius>0){const q=project(p,center,w,h);ctx.fillStyle='rgba(52,211,153,.12)';ctx.beginPath();ctx.arc(q[0],q[1],Math.max(3,radius*zoom*q[2]),0,Math.PI*2);ctx.fill()}}
+const tracked=frame.tracked||{},trackedStats=stats.tracked_spread||{};
 if(tracked.head&&tracked.left_hand)line(tracked.head,tracked.left_hand,'rgba(34,211,238,.65)',3,center,w,h);if(tracked.head&&tracked.right_hand)line(tracked.head,tracked.right_hand,'rgba(34,211,238,.65)',3,center,w,h);if(tracked.right_hand&&frame.ray_point&&frame.spraying)line(tracked.right_hand,frame.ray_point,'rgba(255,244,200,.45)',2,center,w,h);
 if(tracked.head)point(tracked.head,13,'#f5f8ff',center,w,h);if(tracked.right_hand)point(tracked.right_hand,7,'#22d3ee',center,w,h);if(tracked.left_hand)point(tracked.left_hand,6,'#8be9fd',center,w,h);
 if($('skeleton').checked){const aligned=alignSkeleton(frame.joints,tracked);for(const [a,b] of data.bones){if(aligned[a]&&aligned[b]){const lowerBody=/Thigh|Calf|Foot|Toe/.test(a+b),arm=/Arm|Hand|Shoulder/.test(a+b);line(aligned[a],aligned[b],lowerBody?'rgba(245,248,255,.18)':arm?'rgba(34,211,238,.58)':'rgba(245,248,255,.42)',arm?4:3,center,w,h)}}for(const [name,p] of Object.entries(aligned)){const anchor=name==='Head'||name.endsWith(' Hand');point(p,anchor?5:3,anchor?'rgba(34,211,238,.82)':'rgba(245,248,255,.48)',center,w,h)}}
@@ -486,18 +602,22 @@ def create_motion_viewer_router(
         if not selected_frames:
             raise HTTPException(status_code=422, detail="expert session has no usable skeleton frames")
         sampled_sessions: list[list[dict[str, Any]]] = []
+        session_paths: list[Path] = []
         for session in profile["sessions"]:
             current_id = str(session.get("session_id", ""))
             if not current_id:
                 continue
             try:
-                sampled = _frames(_session_path(root, process, mode_id, profile, current_id), frame_count)
+                current_path = _session_path(root, process, mode_id, profile, current_id)
+                sampled = _frames(current_path, frame_count)
             except HTTPException:
                 continue
             if sampled:
                 sampled_sessions.append(sampled)
+                session_paths.append(current_path)
         duration = float(selected_frames[-1]["t"]) if selected_frames else 0.0
         paint_trace = _paint_trace(selected_frames)
+        paint_statistics = _reference_paint_statistics(session_paths)
         return {
             "expert_name": _EXPERT_NAME,
             "process": process,
@@ -512,6 +632,7 @@ def create_motion_viewer_router(
             "statistics": _spread(selected_frames, sampled_sessions),
             "paint_trace": paint_trace,
             "direction_summary": _direction_summary(paint_trace),
+            **paint_statistics,
         }
 
     return router

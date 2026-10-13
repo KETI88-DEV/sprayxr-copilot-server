@@ -127,8 +127,10 @@ def test_motion_viewer_page_explains_representative_and_statistical_motion(tmp_p
     assert "주요 도장 방향" in response.text
     assert "참고용 스켈레톤" in response.text
     assert "전형기 ·" in response.text
-    assert "function statisticalBand" in response.text
-    assert "Math.min(36" in response.text
+    assert "function referencePointCloud" in response.text
+    assert "function directionField" in response.text
+    assert "전문가 전체 Ray Point" in response.text
+    assert "trackedStats[marker]" not in response.text
     assert "function interpolatedFrame" in response.text
     assert "function alignSkeleton" in response.text
     assert "function solveArm" in response.text
@@ -192,6 +194,11 @@ def test_motion_returns_trusted_trackers_paint_trace_and_direction_statistics(tm
     assert data["statistics"][0]["tracked_mean"]["head"] == [0.0, 1.7, 0.0]
     assert data["statistics"][0]["ray_mean"] == [0.05, 1.4, 2.0]
     assert data["statistics"][0]["ray_spread"] > 0
+    assert data["reference_surface"]["raw_point_count"] == 10
+    assert len(data["reference_surface"]["points"]) == 10
+    assert data["direction_field"]
+    assert data["direction_distribution"]["horizontal"] == 1.0
+    assert data["direction_distribution"]["vertical"] == 0.0
 
 
 def test_back_and_forth_paint_stroke_is_classified_by_dominant_axis() -> None:
