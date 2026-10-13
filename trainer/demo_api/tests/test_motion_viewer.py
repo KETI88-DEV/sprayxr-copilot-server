@@ -144,6 +144,7 @@ def test_motion_viewer_page_explains_representative_and_statistical_motion(tmp_p
     assert 'id="zoneSurface"' in response.text
     assert "Zone 영역 표시" in response.text
     assert "function drawZoneSurfaces" in response.text
+    assert "137.508" in response.text
     assert "trackedStats[marker]" not in response.text
     assert "function interpolatedFrame" in response.text
     assert "function alignSkeleton" in response.text
