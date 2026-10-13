@@ -3,20 +3,20 @@
   "code": 200,
   "message": "Session report completed",
   "data": {
-    "request_id": "req-report-0034",
-    "session_id": "SESSION-001",
-    "user_id": "W-017",
-    "scenario_id": "1-A",
+    "request_id": "req-report-0001",
+    "session_id": "3_11000346_1",
+    "user_id": "1234",
+    "scenario_id": "3",
     "generated_at": "2026-08-07T14:40:18Z",
     "latency_ms": 18120,
     "report": {
-      "report_id": "report-SESSION-001",
+      "report_id": "RPT-123456789abc",
       "report_status": "complete",
       "coating_report": {
         "analysis_status": "available",
         "reason_code": null,
         "algorithm_version": "coating-session-report-1.0",
-        "source_artifact_id": "heightmap-SESSION-001-final",
+        "source_artifact_id": "Map01_11000346_1_1_Height.png",
         "coating_distribution_index": 72.4,
         "zone_summary": {
           "under2": 0.31,
@@ -63,7 +63,7 @@
         "analysis_status": "available",
         "reason_code": null,
         "algorithm_version": "sequence-session-report-1.0",
-        "source_artifact_id": "telemetry-SESSION-001.csv",
+        "source_artifact_id": "3_11000346_1.csv.gz",
         "recommended_flow": [
           "1",
           "2",
@@ -141,7 +141,7 @@
         "analysis_status": "available",
         "reason_code": null,
         "algorithm_version": "pose-session-report-1.0",
-        "source_artifact_id": "telemetry-SESSION-001.csv",
+        "source_artifact_id": "3_11000346_1.csv.gz",
         "evaluated_sequence_count": 32,
         "average_similarity_score": 0.789,
         "zone_summary": [

@@ -39,6 +39,7 @@ from trainer.demo_api.v1_contracts import (
     SessionStateData,
     UserCreateRequest,
     UserProfile,
+    report_example,
 )
 from trainer.demo_api.session_analysis import analyze_session
 from trainer.demo_api.sequence_store import SequenceStore
@@ -99,7 +100,7 @@ def _unavailable_report(
 ) -> ReportDetail:
     """엔진이 없을 때의 리포트. 수치는 `null`이고 상태가 그 사실을 말한다(p.15).
 
-    모양의 정본은 `docs/examples/report_sample.json` — 머리 필드는 다른 v2.5 응답과
+    모양의 정본은 `trainer/demo_api/report_sample.json` — 머리 필드는 다른 v2.5 응답과
     같은 규약이고 본체는 `report` 아래다.
     """
     return ReportDetail(
@@ -209,33 +210,6 @@ def _briefing(*, pose_report: dict[str, Any], sequence_report: dict[str, Any] | 
         return None
     parts.append("도막 평가는 외부 도막 분석 엔진 연동 후 같은 리포트의 coating_report에 추가됩니다.")
     return " ".join(parts)
-
-
-def _report_swagger_example() -> dict[str, Any]:
-    detail = ReportDetail(
-        request_id="req-report-example", session_id="3_11000346_1", user_id="1234",
-        scenario_id="3", generated_at="2026-10-13T09:00:00Z", latency_ms=1250,
-        report=SessionReport(
-            report_id="RPT-example", report_status="complete",
-            coating_report=CoatingReport(
-                analysis_status="unavailable", reason_code=_COATING_INDEX_UNDEFINED,
-                guideline="외부 도막 분석 엔진 연동 후 제공됩니다.",
-            ),
-            sequence_report=SequenceReport(
-                analysis_status="available", algorithm_version="sequence-reference-1.0",
-                guideline="전문가 권장 순서 7→4→8을 유지하세요.",
-                recommended_flow=["7", "4", "8"], first_visit_flow=["7", "4", "8"],
-                evaluated_visit_count=3, on_track_visit_count=3, skipped_zone_count=0,
-                adherence_rate=1.0, deviation_count=0,
-            ),
-            pose_report=PoseReport(
-                analysis_status="available", algorithm_version="pose-session-report-1.0",
-                average_similarity_score=0.82, guideline="오른팔 높이를 일정하게 유지하세요.",
-            ),
-            llm_briefing="Zone 순서는 전문가 기준과 일치하며 자세 평균 유사도는 82%입니다. 도막 평가는 외부 엔진 연동 후 추가됩니다.",
-        ),
-    )
-    return ApiResponse(message="Session report completed", data=detail).model_dump(mode="json")
 
 
 def create_v1_router(
@@ -442,8 +416,14 @@ def create_v1_router(
     @router.get(
         "/reports/{report_id}", response_model=ApiResponse, tags=["5. 최종 평가·리포트"],
         summary="5-3. 최종 종합 리포트 상세 조회",
-        description="리포트 상태 확인 후 최종 평가 내용을 조회합니다. 분석 엔진 결과가 준비되지 않은 영역은 수치를 임의 생성하지 않고 unavailable과 사유를 명시해 반환합니다.",
-        responses={200: {"description": "최종 리포트", "content": {"application/json": {"example": _report_swagger_example()}}}},
+        description=(
+            "리포트 상태 확인 후 최종 평가 내용을 조회합니다. 분석 엔진 결과가 준비되지 않은 영역은 수치를 임의 생성하지 않고 unavailable과 사유를 명시해 반환합니다.\n\n"
+            "아래 응답 예시는 세 영역(`coating_report`·`sequence_report`·`pose_report`)과 `llm_briefing`이 모두 채워진 **최종 형식**입니다. "
+            "값은 UI 설계용 예시이며, 실제 응답에서 아직 분석하지 못한 영역은 `analysis_status=unavailable`이고 수치는 `null`입니다."
+        ),
+        responses={200: {"description": "완성된 리포트 예시", "content": {"application/json": {
+            "example": ApiResponse(message="Session report completed", data=report_example()).model_dump(mode="json")
+        }}}},
     )
     async def report_detail(
         report_id: Annotated[str, ApiPath(examples=["RPT-123456789abc"])]

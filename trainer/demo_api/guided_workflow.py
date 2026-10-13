@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse
 
 from trainer.demo_api.expert_guidance import ExpertGuidanceEngine
 from trainer.demo_api.telemetry_contracts import AnalyzeSequenceRequest, GuideItem, SequenceGuide
-from trainer.demo_api.v1_contracts import ApiResponse
+from trainer.demo_api.v1_contracts import ApiResponse, report_example
 from trainer.demo_api.v1_store import V1Store
 
 _PREFIX = "/api/v1/test/workflow"
@@ -130,62 +130,19 @@ _REPORT_CONTEXT = _test_context(
     {
         "equivalent_real_api": "GET /api/v1/reports/{report_id}",
         "report_id": "RPT-example",
-        "source_metrics": {
-            "vr_score": 82,
-            "avg_speed_mms": 300,
-            "avg_distance_mm": 250,
-        },
     },
-    "0-3에서 생성한 report_id를 사용해 느린 속도와 가까운 이격거리의 종합평가를 조회합니다.",
-    "report 아래 coating_report, sequence_report, pose_report, llm_briefing 구조를 확인합니다.",
+    "0-3에서 생성한 report_id로 정식 리포트(GET /api/v1/reports/{report_id})와 같은 모양의 완성 리포트를 받습니다.",
+    "report 아래 coating_report·sequence_report·pose_report·llm_briefing 네 항목의 구조를 확인합니다. 값은 UI 설계용 예시입니다.",
 )
 
 
-def _example_report(report_id: str) -> dict[str, Any]:
-    return {
-        "report_id": report_id,
-        "report_status": "complete",
-        "coating_report": {
-            "analysis_status": "unavailable",
-            "reason_code": "coating_engine_pending_integration",
-            "algorithm_version": None,
-            "source_artifact_id": None,
-            "guideline": "외부 도막 분석 엔진 연동 후 제공됩니다.",
-            "coating_distribution_index": None,
-            "zone_summary": None,
-            "distribution": None,
-            "reachability": None,
-            "worst_zones": [],
-            "root_cause": None,
-        },
-        "sequence_report": {
-            "analysis_status": "available", "reason_code": None,
-            "algorithm_version": "sequence-reference-1.0", "source_artifact_id": None,
-            "guideline": "전문가 권장 순서 1→2→3을 유지하세요.",
-            "recommended_flow": ["1", "2", "3"], "first_visit_flow": ["1", "2", "3"],
-            "evaluated_visit_count": 3, "on_track_visit_count": 3,
-            "skipped_zone_count": 0, "adherence_rate": 1.0, "deviation_count": 0,
-            "direction_adherence_rate": 1.0,
-            "zone_summary": [{"zone_id": "1", "visit_count": 1, "revisit_count": 0, "deviation_count": 0}],
-            "direction_summary": {
-                "evaluated_sequence_count": 1, "matched_sequence_count": 1,
-                "direction_error_count": 0, "direction_adherence_rate": 1.0,
-                "affected_zone_ids": [], "zone_summary": [],
-            },
-        },
-        "pose_report": {
-            "analysis_status": "available", "reason_code": None,
-            "algorithm_version": "pose-session-report-1.0", "source_artifact_id": None,
-            "guideline": "오른팔 높이를 일정하게 유지하세요.",
-            "evaluated_sequence_count": 1, "average_similarity_score": 0.82,
-            "zone_summary": [], "priority_corrections": [],
-        },
-        "llm_briefing": (
-            "전문가 기준 Zone 순서와 도포 방향은 모두 적정하며 자세 유사도는 82%입니다. "
-            "다음 훈련에서는 현재 순서를 유지하면서 오른팔 높이를 일정하게 유지하세요. "
-            "도막 평가는 외부 분석 엔진 연동 후 함께 제공됩니다."
-        ),
-    }
+def _mock_report(run: _DemoRun | None = None) -> dict[str, Any]:
+    """정식 리포트와 같은 모양. 모의 세션의 식별자만 바꿔 넣는다."""
+    detail = report_example()
+    if run is not None:
+        detail.update(session_id=run.session_id, user_id=run.user_id, scenario_id=run.scenario_id)
+        detail["report"]["report_id"] = run.report_id
+    return detail
 
 
 @dataclass
@@ -406,23 +363,24 @@ def create_guided_workflow_router(
     @router.post(
         "/4-report", response_model=ApiResponse, tags=[_TAG], summary="0-4. 모의 최종 리포트 확인",
         description=(
-            "모의연동의 마지막 단계로 실제 최종 API와 같은 중첩 리포트 구조를 반환합니다.\n\n"
-            "### 자동 사용 입력\n0-3에서 생성한 report_id와 점수 82점, 속도 300 mm/s, 이격거리 250 mm를 사용합니다.\n\n"
-            "### 결과 읽는 법\n`report` 아래의 도막·순서·자세 분석과 `llm_briefing`을 확인하세요. 이전 단계는 필요 시 자동 실행됩니다."
+            "모의연동의 마지막 단계로 정식 리포트(`GET /api/v1/reports/{report_id}`)와 **같은 모양**의 완성 리포트를 반환합니다.\n\n"
+            "### 자동 사용 입력\n0-3에서 생성한 report_id를 사용합니다. 파라미터 입력은 필요 없습니다.\n\n"
+            "### 결과 읽는 법\n`report` 아래 `coating_report`(도막)·`sequence_report`(작업 순서·방향)·`pose_report`(자세)·`llm_briefing`(종합 서술)이 최종 리포트 구조입니다. "
+            "값은 UI 설계용 예시입니다. `test_context`·`workflow_status` 등은 모의연동 안내용으로만 덧붙습니다. 이전 단계는 필요 시 자동 실행됩니다."
         ),
         responses=_swagger_response({"test_context": _REPORT_CONTEXT, "workflow_status": "complete", "step": 4,
-                                     "report": _example_report("RPT-example"),
-                                     "what_happened": "서술형 평가를 반환했습니다.",
-                                     "beginner_tip": "입력 지표와 평가를 비교하세요.", "next_endpoint": f"{_PREFIX}/0-reset"}),
+                                     **_mock_report(), "report_id": "RPT-example",
+                                     "what_happened": "정식 리포트와 같은 모양의 완성 리포트를 반환했습니다.",
+                                     "beginner_tip": "report 아래 네 항목을 확인하세요.", "next_endpoint": f"{_PREFIX}/0-reset"}),
     )
     def report() -> JSONResponse:
         run = workflow.complete()
         input_used = dict(_REPORT_CONTEXT["input_used"])
         input_used["report_id"] = run.report_id
         return _ok({"test_context":_test_context(input_used, _REPORT_CONTEXT["input_summary"], _REPORT_CONTEXT["evaluation_focus"]),
-                    "workflow_status":"complete","step":4,"session_id":run.session_id,"report_id":run.report_id,
-                    "report":_example_report(run.report_id),
-                    "what_happened":"모의연동 전 과정을 완료하고 UI에 표시할 서술형 평가를 반환했습니다.",
+                    "workflow_status":"complete","step":4,
+                    **_mock_report(run), "report_id":run.report_id,
+                    "what_happened":"모의연동 전 과정을 완료하고 정식 리포트와 같은 모양의 완성 리포트를 반환했습니다.",
                     "beginner_tip":"다시 시험하려면 0-0 초기화부터 반복하세요.","next_endpoint":f"{_PREFIX}/0-reset"})
 
     return router, workflow
