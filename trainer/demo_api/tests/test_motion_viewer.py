@@ -129,6 +129,9 @@ def test_motion_viewer_page_explains_representative_and_statistical_motion(tmp_p
     assert "전형기 ·" in response.text
     assert "function statisticalBand" in response.text
     assert "Math.min(36" in response.text
+    assert "function interpolatedFrame" in response.text
+    assert "playheadSeconds" in response.text
+    assert "const fps=(data.frames.length-1)" not in response.text
     assert "<canvas" in response.text
     assert ":'자료 없음'}\nfunction tick" in response.text
 
