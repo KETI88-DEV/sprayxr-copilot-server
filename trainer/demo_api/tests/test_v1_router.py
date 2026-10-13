@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 import anyio
@@ -276,6 +277,39 @@ def test_report_detail_returns_unavailable_areas_without_inventing_numbers() -> 
     # 못 내는 이유가 영역마다 다르다 — 한 코드로 뭉치면 엉뚱한 데를 찾게 된다.
     assert report["coating_report"]["reason_code"] == "index_definition_missing"
     assert report["sequence_report"]["reason_code"] == "recommended_flow_missing"
+
+
+def test_a_report_left_pending_past_the_deadline_is_closed_as_failed() -> None:
+    """분석은 메모리 안 스레드다. 서버가 재시작되면 그 리포트는 영원히 pending 이다.
+
+    2026-10-12 TSB 실측: RPT-e84db05503d8 이 나흘째 pending. 폴링하는 쪽이 끝을 알 수 있어야 한다.
+    """
+    store = V1Store(":memory:")
+    app = FastAPI()
+    app.include_router(create_v1_router(store=store, sequences=SequenceStore(":memory:")))
+    client = TestClient(app)
+    stale = store.create_completion(session_id="S1", requested_at="2026-10-08T00:00:00Z", payload={})
+
+    status = client.get(f"/api/v1/sessions/S1/reports/{stale.report_id}").json()["data"]
+    detail = client.get(f"/api/v1/reports/{stale.report_id}").json()["data"]
+
+    assert status["report_status"] == "failed"
+    assert detail["report"]["report_status"] == "failed"
+    assert detail["report"]["pose_report"]["reason_code"] == "analysis_failed"
+
+
+def test_a_fresh_pending_report_stays_pending() -> None:
+    """기한 안의 pending 은 건드리지 않는다 — 돌고 있는 분석을 실패로 덮으면 안 된다."""
+    store = V1Store(":memory:")
+    app = FastAPI()
+    app.include_router(create_v1_router(store=store, sequences=SequenceStore(":memory:")))
+    client = TestClient(app)
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    fresh = store.create_completion(session_id="S1", requested_at=now, payload={})
+
+    status = client.get(f"/api/v1/sessions/S1/reports/{fresh.report_id}").json()["data"]
+
+    assert status["report_status"] == "pending"
 
 
 def test_unknown_report_is_404() -> None:
