@@ -592,14 +592,110 @@ def _paint_trace(frames: list[dict[str, Any]]) -> list[dict[str, Any]]:
     ]
 
 
+@lru_cache(maxsize=64)
+def _dense_paint_trace_cached(
+    path_text: str,
+    stamp: tuple[int, int],
+    target_hz: float,
+    max_points: int,
+) -> tuple[tuple[Any, ...], ...]:
+    del stamp
+    interval = 1.0 / max(1.0, target_hz)
+    output: list[tuple[Any, ...]] = []
+    origin_time: float | None = None
+    last_kept_time: float | None = None
+    previous_identity: tuple[str | None, str | None] | None = None
+    pending: tuple[Any, ...] | None = None
+    segment = -1
+
+    def flush_pending() -> None:
+        nonlocal pending
+        if pending is not None:
+            output.append(pending)
+            pending = None
+
+    with _open_csv(Path(path_text)) as handle:
+        for frame_index, row in enumerate(csv.DictReader(handle)):
+            raw_time = _number(row.get("시간(초)"))
+            if origin_time is None:
+                origin_time = raw_time if raw_time is not None else frame_index / 120.0
+            current_time = (raw_time if raw_time is not None else frame_index / 120.0) - origin_time
+            point = _ray_point(row)
+            if not _spraying(row.get("분사")) or point is None:
+                flush_pending()
+                previous_identity = None
+                last_kept_time = None
+                continue
+            map_zone = _map_zone_uv(row)
+            normalized = _normalized_row(row)
+            map_num = map_zone[0] if map_zone else None
+            zone_id = map_zone[1] if map_zone else str(normalized.get("zone id", "")).strip() or None
+            identity = (map_num, zone_id)
+            if previous_identity != identity:
+                flush_pending()
+                segment += 1
+                last_kept_time = None
+            item = (
+                frame_index,
+                round(max(0.0, current_time), 6),
+                tuple(point),
+                map_num,
+                zone_id,
+                segment,
+            )
+            if last_kept_time is None or current_time - last_kept_time >= interval - 1e-9:
+                output.append(item)
+                last_kept_time = current_time
+                pending = None
+            else:
+                pending = item
+            previous_identity = identity
+    flush_pending()
+    if len(output) > max_points:
+        indexes = {
+            round(index * (len(output) - 1) / max(1, max_points - 1))
+            for index in range(max_points)
+        }
+        output = [item for index, item in enumerate(output) if index in indexes]
+    return tuple(output)
+
+
+def _dense_paint_trace(
+    path: Path, *, target_hz: float = 30.0, max_points: int = 12_000
+) -> list[dict[str, Any]]:
+    stat = path.stat()
+    raw = _dense_paint_trace_cached(
+        str(path), (stat.st_mtime_ns, stat.st_size), target_hz, max_points
+    )
+    return [
+        {
+            "frame_index": frame_index,
+            "t": time,
+            "point": list(point),
+            "map_num": map_num,
+            "zone_id": zone_id,
+            "segment": segment,
+            "progress": round(index / max(1, len(raw) - 1), 6),
+        }
+        for index, (frame_index, time, point, map_num, zone_id, segment) in enumerate(raw)
+    ]
+
+
 def _direction_summary(trace: list[dict[str, Any]]) -> dict[str, Any]:
     points = [item["point"] for item in trace]
     if len(points) < 2:
         return {"classification": "unavailable", "label": _DIRECTION_LABELS["unavailable"], "arrow_count": 0}
-    deltas = [[b[axis] - a[axis] for axis in range(3)] for a, b in zip(points, points[1:])]
+    pairs = [
+        (left["point"], right["point"])
+        for left, right in zip(trace, trace[1:])
+        if left.get("segment", 0) == right.get("segment", 0)
+    ]
+    if not pairs:
+        return {"classification": "unavailable", "label": _DIRECTION_LABELS["unavailable"], "arrow_count": 0}
+    deltas = [[b[axis] - a[axis] for axis in range(3)] for a, b in pairs]
     movement = [sum(abs(delta[axis]) for delta in deltas) for axis in range(3)]
     total = sum(movement)
-    path_length = sum(math.dist(a, b) for a, b in zip(points, points[1:]))
+    path_length = sum(math.dist(a, b) for a, b in pairs)
     vertical_ratio = movement[1] / total if total else 0.0
     if total == 0:
         classification = "unavailable"
@@ -632,6 +728,7 @@ _VIEWER_HTML = r"""<!doctype html>
 label{display:block;color:var(--muted);font-size:12px;margin:16px 0 7px}.select,button,input[type=range]{width:100%}.select,button{border:1px solid var(--line);border-radius:8px;background:var(--panel2);color:var(--ink);padding:10px 11px}
 button{cursor:pointer;font-weight:700}.primary{background:#3157d5;border-color:#3157d5}.controls{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:16px}.stage{position:relative;min-height:590px;background:radial-gradient(circle at 50% 42%,#132845 0,#07101f 65%)}canvas{width:100%;height:100%;display:block;min-height:590px}
 .overlay{position:absolute;left:18px;top:16px;background:rgba(7,16,31,.72);border:1px solid rgba(89,116,150,.45);border-radius:10px;padding:10px 12px;font-size:12px;color:var(--muted);pointer-events:none}.overlay strong{display:block;color:var(--ink);font-size:14px;margin-bottom:4px}
+.loading{position:absolute;inset:0;display:grid;place-content:center;justify-items:center;gap:13px;background:rgba(5,12,24,.72);backdrop-filter:blur(3px);z-index:5;color:#dce8ff;font-size:13px;font-weight:700}.loading[hidden]{display:none}.spinner{width:34px;height:34px;border:3px solid rgba(125,211,252,.2);border-top-color:#22d3ee;border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:14px;margin-bottom:11px}.card span{display:block;color:var(--muted);font-size:11px}.card strong{display:block;font-size:20px;margin-top:5px}.legend{font-size:12px;color:var(--muted);line-height:2}.dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:7px}.help{font-size:12px;color:var(--muted);line-height:1.65;margin-top:18px}.status{min-height:18px;color:var(--cyan);font-size:12px;margin-top:12px}
 .toggle{display:flex;align-items:center;gap:8px;margin-top:14px;color:var(--muted);font-size:12px}.toggle input{width:auto}.badge{display:inline-flex;padding:5px 9px;border:1px solid #3157d5;border-radius:999px;color:#b9caff;font-size:11px;margin-top:12px}
 @media(max-width:1000px){.workspace{grid-template-columns:240px 1fr}.right{display:none}}@media(max-width:720px){.workspace{display:block}.side{border:0}.stage,canvas{min-height:480px}}
@@ -651,20 +748,21 @@ button{cursor:pointer;font-weight:700}.primary{background:#3157d5;border-color:#
 <div id="status" class="status">데이터를 불러오는 중입니다.</div>
 <p class="help">마우스로 드래그하면 시점을 돌리고, 휠로 확대·축소할 수 있습니다. 페인트 누적 궤적과 머리·양손의 실측 위치가 기본 표시됩니다.</p>
 </aside>
-<section class="stage"><canvas id="canvas"></canvas><div class="overlay"><strong id="overlayTitle">학습모드</strong><span id="overlayFrame">프레임 준비 중</span></div></section>
+<section class="stage"><canvas id="canvas"></canvas><div class="overlay"><strong id="overlayTitle">학습모드</strong><span id="overlayFrame">프레임 준비 중</span></div><div id="loading" class="loading"><div class="spinner"></div><span>전문가 기록을 불러오는 중입니다.</span></div></section>
 <aside class="side right"><div class="card"><span>통계에 포함된 수행</span><strong id="sessionCount">-</strong></div><div class="card"><span>현재 기록 길이</span><strong id="duration">-</strong></div><div class="card"><span>선택 기록의 주요 도장 방향</span><strong id="direction">-</strong></div><div class="card"><span>전문가 전체 방향 비중</span><strong id="directionMix" style="font-size:14px;line-height:1.65">-</strong></div><div class="card"><span>현재 양손 위치 편차</span><strong id="handSpread">-</strong></div>
 <div class="legend"><div><i class="dot" style="background:#f5f8ff"></i>전문가 전체 Ray Point 점군</div><div><i class="dot" style="background:#a78bfa"></i>Map·Zone별 관측 영역</div><div><i class="dot" style="background:var(--green)"></i>위치별 주 방향·통과 빈도</div><div><i class="dot" style="background:#ff8a3d"></i>선택 기록의 페인트 누적 궤적</div><div><i class="dot" style="background:var(--cyan)"></i>전형기 반장의 머리·양손 실측 위치</div></div>
 <p class="help">Zone 면은 같은 Map·Zone의 UV 인접점만 작은 3차원 패치로 연결하므로 움푹 파인 부분과 곡면을 평면으로 뭉개지 않습니다. 데이터가 관측되지 않은 빈 공간은 임의로 채우지 않습니다.</p></aside>
 </main></div><script>
 const $=id=>document.getElementById(id); const canvas=$('canvas'),ctx=canvas.getContext('2d');
-let catalog=null,data=null,index=0,playheadSeconds=0,playing=false,last=0,yaw=-0.55,pitch=0.1,zoom=175,drag=null;
+let catalog=null,data=null,index=0,playheadSeconds=0,playing=false,last=0,yaw=-0.55,pitch=0.1,zoom=175,drag=null,loadGeneration=0;
 async function json(url){const r=await fetch(url);if(!r.ok)throw new Error((await r.json()).detail||'데이터를 읽을 수 없습니다.');return r.json()}
 function option(value,text){const o=document.createElement('option');o.value=value;o.textContent=text;return o}
 function currentProcess(){return catalog.processes.find(p=>p.process===$('process').value)}
 function currentMode(){return currentProcess().modes.find(m=>String(m.mode_id)===$('mode').value)}
 function fillModes(){const p=currentProcess();$('mode').replaceChildren(...p.modes.map(m=>option(m.mode_id,`학습모드 ${m.mode_id} · ${m.session_count}회`)));const four=p.modes.find(m=>m.mode_id===4);if(four)$('mode').value='4';fillSessions()}
 function fillSessions(){const m=currentMode();$('session').replaceChildren(option('representative',`전형기 대표 실측 모션 · ${m.representative_session_id}`),...m.sessions.map(s=>option(s,`전형기 · ${s}`)));loadMotion()}
-async function loadMotion(){playing=false;last=0;$('play').textContent='재생';$('status').textContent='모션과 통계 범위를 계산하는 중입니다.';try{const q=new URLSearchParams({process:$('process').value,mode_id:$('mode').value,session_id:$('session').value});data=await json('/motion-viewer/api/motion?'+q);index=0;playheadSeconds=0;$('timeline').max=Math.max(0,data.frames.length-1);$('timeline').value=0;$('sessionCount').textContent=`${data.sampled_session_count}회`;$('duration').textContent=`${data.duration_seconds.toFixed(1)}초`;$('direction').textContent=data.direction_summary.label;const mix=data.direction_distribution;$('directionMix').textContent=`수평 ${(mix.horizontal*100).toFixed(0)}% · 수직 ${(mix.vertical*100).toFixed(0)}% · 대각 ${(mix.diagonal*100).toFixed(0)}%`;$('overlayTitle').textContent=`전형기 반장 · ${data.process_label} · 학습모드 ${data.mode_id}`;$('status').textContent=`${data.selected_session_id} 준비 완료`;draw()}catch(e){data=null;$('status').textContent=e.message;draw()}}
+function setLoading(active){$('loading').hidden=!active;canvas.setAttribute('aria-busy',active?'true':'false');for(const id of ['process','mode','session'])$(id).disabled=active}
+async function loadMotion(){const generation=++loadGeneration;playing=false;last=0;$('play').textContent='재생';$('status').textContent='모션과 통계 범위를 계산하는 중입니다.';setLoading(true);try{const q=new URLSearchParams({process:$('process').value,mode_id:$('mode').value,session_id:$('session').value});const incoming=await json('/motion-viewer/api/motion?'+q);if(generation!==loadGeneration)return;data=incoming;index=0;playheadSeconds=0;$('timeline').max=Math.max(0,data.frames.length-1);$('timeline').value=0;$('sessionCount').textContent=`${data.sampled_session_count}회`;$('duration').textContent=`${data.duration_seconds.toFixed(1)}초`;$('direction').textContent=data.direction_summary.label;const mix=data.direction_distribution;$('directionMix').textContent=`수평 ${(mix.horizontal*100).toFixed(0)}% · 수직 ${(mix.vertical*100).toFixed(0)}% · 대각 ${(mix.diagonal*100).toFixed(0)}%`;$('overlayTitle').textContent=`전형기 반장 · ${data.process_label} · 학습모드 ${data.mode_id}`;$('status').textContent=`${data.selected_session_id} 준비 완료`;draw()}catch(e){if(generation!==loadGeneration)return;data=null;$('status').textContent=e.message;draw()}finally{if(generation===loadGeneration)setLoading(false)}}
 function resize(){const dpr=devicePixelRatio||1,rect=canvas.getBoundingClientRect();canvas.width=Math.round(rect.width*dpr);canvas.height=Math.round(rect.height*dpr);ctx.setTransform(dpr,0,0,dpr,0,0);draw()}
 function transform(point,center){let x=point[0]-center[0],y=point[1]-center[1],z=point[2]-center[2];let cy=Math.cos(yaw),sy=Math.sin(yaw),x1=x*cy-z*sy,z1=x*sy+z*cy;let cp=Math.cos(pitch),sp=Math.sin(pitch),y1=y*cp-z1*sp,z2=y*sp+z1*cp;return [x1,y1,z2]}
 function project(point,center,w,h){const [x,y,z]=transform(point,center),pers=4.5/(4.5-z);return [w/2+x*zoom*pers,h*.59-y*zoom*pers,pers]}
@@ -673,7 +771,7 @@ function point(p,r,color,center,w,h){const q=project(p,center,w,h);ctx.fillStyle
 function arrow(a,b,color,center,w,h){const p=project(a,center,w,h),q=project(b,center,w,h),angle=Math.atan2(q[1]-p[1],q[0]-p[0]);ctx.strokeStyle=color;ctx.fillStyle=color;ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(p[0],p[1]);ctx.lineTo(q[0],q[1]);ctx.stroke();ctx.beginPath();ctx.moveTo(q[0],q[1]);ctx.lineTo(q[0]-10*Math.cos(angle-.48),q[1]-10*Math.sin(angle-.48));ctx.lineTo(q[0]-10*Math.cos(angle+.48),q[1]-10*Math.sin(angle+.48));ctx.closePath();ctx.fill()}
 function referencePointCloud(surface,center,w,h){const baseSize=Number($('pointSize').value);for(const sample of surface.points){const q=project(sample.point,center,w,h),alpha=.16+sample.frequency*.48,size=baseSize*(.8+sample.frequency*.5);ctx.fillStyle=`rgba(245,248,255,${alpha})`;ctx.fillRect(q[0]-size/2,q[1]-size/2,size,size)}}
 function zoneHue(mapNum,zoneId){const zone=Number(zoneId),map=Number(mapNum);if(Number.isFinite(zone)&&Number.isFinite(map))return(zone*137.508+map*43)%360;let hash=17;for(const char of `${mapNum}:${zoneId}`)hash=(hash*31+char.charCodeAt(0))%360;return hash}
-function drawZoneSurfaces(surfaces,center,w,h){const projected=[];for(const surface of surfaces){const hue=zoneHue(surface.map_num,surface.zone_id);for(const triangle of surface.triangles){const points=triangle.map(i=>project(surface.vertices[i],center,w,h));projected.push({points,hue,depth:points.reduce((sum,p)=>sum+p[2],0)/3})}}projected.sort((a,b)=>a.depth-b.depth);for(const item of projected){ctx.fillStyle=`hsla(${item.hue},82%,58%,.16)`;ctx.strokeStyle=`hsla(${item.hue},90%,72%,.24)`;ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(item.points[0][0],item.points[0][1]);for(const p of item.points.slice(1))ctx.lineTo(p[0],p[1]);ctx.closePath();ctx.fill();ctx.stroke()}for(const surface of surfaces){const hue=zoneHue(surface.map_num,surface.zone_id);ctx.strokeStyle=`hsla(${hue},95%,74%,.82)`;ctx.lineWidth=2;for(const edge of surface.boundary_edges){const a=project(surface.vertices[edge[0]],center,w,h),b=project(surface.vertices[edge[1]],center,w,h);ctx.beginPath();ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);ctx.stroke()}if(surface.centroid&&surface.triangles.length){const p=project(surface.centroid,center,w,h),label=`M${surface.map_num} · Z${surface.zone_id}`;ctx.font='700 11px system-ui';const width=ctx.measureText(label).width+12;ctx.fillStyle='rgba(7,16,31,.78)';ctx.fillRect(p[0]-width/2,p[1]-10,width,18);ctx.fillStyle=`hsl(${hue},95%,78%)`;ctx.textAlign='center';ctx.fillText(label,p[0],p[1]+3);ctx.textAlign='start'}}}
+function drawZoneSurfaces(surfaces,center,w,h){const projected=[];for(const surface of surfaces){const hue=zoneHue(surface.map_num,surface.zone_id);for(const triangle of surface.triangles){const points=triangle.map(i=>project(surface.vertices[i],center,w,h));projected.push({points,hue,depth:points.reduce((sum,p)=>sum+p[2],0)/3})}}projected.sort((a,b)=>a.depth-b.depth);for(const item of projected){ctx.fillStyle=`hsla(${item.hue},82%,58%,.16)`;ctx.strokeStyle=`hsla(${item.hue},90%,72%,.24)`;ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(item.points[0][0],item.points[0][1]);for(const p of item.points.slice(1))ctx.lineTo(p[0],p[1]);ctx.closePath();ctx.fill();ctx.stroke()}for(const surface of surfaces){const hue=zoneHue(surface.map_num,surface.zone_id);ctx.strokeStyle=`hsla(${hue},95%,74%,.82)`;ctx.lineWidth=2;for(const edge of surface.boundary_edges){const a=project(surface.vertices[edge[0]],center,w,h),b=project(surface.vertices[edge[1]],center,w,h);ctx.beginPath();ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);ctx.stroke()}if(surface.centroid&&surface.triangles.length){const p=project(surface.centroid,center,w,h),label=`Zone ${surface.zone_id}`;ctx.font='700 11px system-ui';const width=ctx.measureText(label).width+12;ctx.fillStyle='rgba(7,16,31,.78)';ctx.fillRect(p[0]-width/2,p[1]-10,width,18);ctx.fillStyle=`hsl(${hue},95%,78%)`;ctx.textAlign='center';ctx.fillText(label,p[0],p[1]+3);ctx.textAlign='start'}}}
 function directionField(samples,center,w,h){for(const sample of samples){const half=.055+sample.frequency*.06,a=sub(sample.point,mul(sample.direction,half)),b=add(sample.point,mul(sample.direction,half)),alpha=.3+sample.frequency*.65,color=`rgba(52,211,153,${alpha})`;line(a,b,color,1.5+sample.frequency*2.5,center,w,h);if(sample.frequency>.38){arrow(a,b,color,center,w,h);arrow(b,a,color,center,w,h)}}}
 function add(a,b){return a.map((value,axis)=>value+b[axis])}function sub(a,b){return a.map((value,axis)=>value-b[axis])}function mul(a,value){return a.map(axis=>axis*value)}function dot(a,b){return a.reduce((sum,value,axis)=>sum+value*b[axis],0)}function cross(a,b){return[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]]}function length(a){return Math.sqrt(dot(a,a))}function unit(a,fallback=[1,0,0]){const size=length(a);return size>.00001?mul(a,1/size):fallback}
 function mixPoint(a,b,ratio){if(!a)return b||null;if(!b)return a;return a.map((value,axis)=>value+(b[axis]-value)*ratio)}
@@ -685,7 +783,7 @@ function interpolatedFrame(seconds){let current=Math.max(0,Math.min(index,data.f
 function draw(){const rect=canvas.getBoundingClientRect(),w=rect.width,h=rect.height;ctx.clearRect(0,0,w,h);ctx.strokeStyle='rgba(100,130,165,.16)';ctx.lineWidth=1;for(let i=-5;i<=5;i++){ctx.beginPath();ctx.moveTo(w/2+i*55,h*.78);ctx.lineTo(w/2+i*90,h*.95);ctx.stroke()}
 if(!data||!data.frames.length)return;const rendered=interpolatedFrame(playheadSeconds),frame=rendered.frame,sourceIndex=rendered.index,stats=data.statistics[sourceIndex];const allPaint=data.reference_surface.points.map(item=>item.point),center=allPaint.length?allPaint.reduce((sum,p)=>add(sum,p),[0,0,0]).map(value=>value/allPaint.length):((frame.tracked||{}).head||(frame.joints||{}).Pelvis||[0,0,0]);
 if($('zoneSurface').checked)drawZoneSurfaces(data.zone_surfaces||[],center,w,h);referencePointCloud(data.reference_surface,center,w,h);directionField(data.direction_field,center,w,h);
-let previous=null,paintCount=0;for(let i=0;i<=sourceIndex;i++){const f=data.frames[i];if(!f.spraying||!f.ray_point){previous=null;continue}const progress=i/Math.max(1,data.frames.length-1),color=`hsla(${24+progress*28},100%,62%,${.35+progress*.5})`;point(f.ray_point,3.5,color,center,w,h);if(previous){line(previous,f.ray_point,color,7,center,w,h);if(paintCount%12===0)arrow(previous,f.ray_point,'rgba(255,232,190,.9)',center,w,h)}previous=f.ray_point;paintCount++}if(previous&&frame.spraying&&frame.ray_point){line(previous,frame.ray_point,'rgba(255,184,92,.78)',7,center,w,h);point(frame.ray_point,3.5,'rgba(255,205,125,.9)',center,w,h)}
+let previous=null,previousSegment=null,paintCount=0;for(const sample of data.paint_trace){if(sample.t>playheadSeconds)break;if(previousSegment!==sample.segment)previous=null;const color=`hsla(${24+sample.progress*28},100%,62%,${.35+sample.progress*.5})`;point(sample.point,2.8,color,center,w,h);if(previous){line(previous,sample.point,color,5,center,w,h);if(paintCount%45===0)arrow(previous,sample.point,'rgba(255,232,190,.9)',center,w,h)}previous=sample.point;previousSegment=sample.segment;paintCount++}if(previous&&frame.spraying&&frame.ray_point){line(previous,frame.ray_point,'rgba(255,184,92,.78)',5,center,w,h);point(frame.ray_point,3.5,'rgba(255,205,125,.9)',center,w,h)}
 const tracked=frame.tracked||{},trackedStats=stats.tracked_spread||{};
 if(tracked.head&&tracked.left_hand)line(tracked.head,tracked.left_hand,'rgba(34,211,238,.65)',3,center,w,h);if(tracked.head&&tracked.right_hand)line(tracked.head,tracked.right_hand,'rgba(34,211,238,.65)',3,center,w,h);if(tracked.right_hand&&frame.ray_point&&frame.spraying)line(tracked.right_hand,frame.ray_point,'rgba(255,244,200,.45)',2,center,w,h);
 if(tracked.head)point(tracked.head,13,'#f5f8ff',center,w,h);if(tracked.right_hand)point(tracked.right_hand,7,'#22d3ee',center,w,h);if(tracked.left_hand)point(tracked.left_hand,6,'#8be9fd',center,w,h);
@@ -740,7 +838,8 @@ def create_motion_viewer_router(
         profile = _read_profile(root, process, mode_id)
         representative = _representative_session(profile)
         selected = representative if session_id == "representative" else session_id
-        selected_frames = _frames(_session_path(root, process, mode_id, profile, selected), frame_count)
+        selected_path = _session_path(root, process, mode_id, profile, selected)
+        selected_frames = _frames(selected_path, frame_count)
         if not selected_frames:
             raise HTTPException(status_code=422, detail="expert session has no usable skeleton frames")
         sampled_sessions: list[list[dict[str, Any]]] = []
@@ -758,7 +857,7 @@ def create_motion_viewer_router(
                 sampled_sessions.append(sampled)
                 session_paths.append(current_path)
         duration = float(selected_frames[-1]["t"]) if selected_frames else 0.0
-        paint_trace = _paint_trace(selected_frames)
+        paint_trace = _dense_paint_trace(selected_path)
         paint_statistics = _reference_paint_statistics(session_paths)
         zone_surfaces = _zone_surface_statistics(session_paths)
         return {

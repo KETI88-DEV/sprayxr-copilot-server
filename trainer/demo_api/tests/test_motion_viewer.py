@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from trainer.demo_api.motion_viewer import (
     _build_zone_surface,
+    _dense_paint_trace,
     _direction_summary,
     create_motion_viewer_router,
 )
@@ -145,6 +146,11 @@ def test_motion_viewer_page_explains_representative_and_statistical_motion(tmp_p
     assert "Zone 영역 표시" in response.text
     assert "function drawZoneSurfaces" in response.text
     assert "137.508" in response.text
+    assert "`Zone ${surface.zone_id}`" in response.text
+    assert 'id="loading"' in response.text
+    assert "불러오는 중" in response.text
+    assert "function setLoading" in response.text
+    assert "data.paint_trace" in response.text
     assert "trackedStats[marker]" not in response.text
     assert "function interpolatedFrame" in response.text
     assert "function alignSkeleton" in response.text
@@ -202,7 +208,7 @@ def test_motion_returns_trusted_trackers_paint_trace_and_direction_statistics(tm
     assert first["ray_point"] == [0.0, 1.4, 2.0]
     assert first["spraying"] is True
     assert first["zone_id"] == "1"
-    assert len(data["paint_trace"]) == 5
+    assert len(data["paint_trace"]) == 3
     assert data["direction_summary"]["classification"] == "horizontal"
     assert data["direction_summary"]["label"] == "수평 중심"
     assert data["direction_summary"]["arrow_count"] > 0
@@ -239,6 +245,36 @@ def test_zone_surface_keeps_non_planar_three_dimensional_vertices() -> None:
     ]
     assert surface["triangles"] == [[0, 2, 1], [2, 3, 1]]
     assert sorted(surface["boundary_edges"]) == [[0, 1], [0, 2], [1, 3], [2, 3]]
+
+
+def test_dense_paint_trace_keeps_long_sequences_above_motion_frame_limit(tmp_path: Path) -> None:
+    path = tmp_path / "long.csv"
+    fields = [
+        "시간(초)", "분사", "Ray point X", "Ray Point Y", "Ray Point Z",
+        "Ray Texture Map Number", "Ray Texture UV X", "Ray Texture UV Y", "Zone ID",
+    ]
+    with path.open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        for index in range(1200):
+            writer.writerow({
+                "시간(초)": index / 120,
+                "분사": "On",
+                "Ray point X": index / 1000,
+                "Ray Point Y": 1.0,
+                "Ray Point Z": 2.0,
+                "Ray Texture Map Number": 1,
+                "Ray Texture UV X": index % 2048,
+                "Ray Texture UV Y": 100,
+                "Zone ID": 3,
+            })
+
+    trace = _dense_paint_trace(path, target_hz=30.0)
+
+    assert 290 <= len(trace) <= 310
+    assert len(trace) > 240
+    assert trace[0]["segment"] == 0
+    assert trace[-1]["t"] > 9.9
 
 
 def test_back_and_forth_paint_stroke_is_classified_by_dominant_axis() -> None:
