@@ -86,6 +86,7 @@ def _client(tmp_path: Path) -> TestClient:
                     "zone_id": "1",
                     "speed_mms": {"median": 300},
                     "distance_mm": {"median": 250},
+                    "expected_direction": "horizontal",
                 }
             },
             "macro_orders": [
@@ -103,7 +104,7 @@ def _client(tmp_path: Path) -> TestClient:
                 "sources": {"csv_path": "4_1001_1.csv"},
                 "analysis": {
                     "macro_order": [{"map_num": 1, "zone_id": "1"}],
-                    "zones": {"1:1": {"speed_mms": 300, "distance_mm": 250}},
+                    "zones": {"1:1": {"speed_mms": 300, "distance_mm": 250, "expected_direction": "horizontal"}},
                 },
             },
             {
@@ -111,7 +112,7 @@ def _client(tmp_path: Path) -> TestClient:
                 "sources": {"csv_path": "4_1002_1.csv"},
                 "analysis": {
                     "macro_order": [{"map_num": 1, "zone_id": "1"}],
-                    "zones": {"1:1": {"speed_mms": 360, "distance_mm": 280}},
+                    "zones": {"1:1": {"speed_mms": 360, "distance_mm": 280, "expected_direction": "horizontal"}},
                 },
             },
         ],
@@ -157,6 +158,10 @@ def test_motion_viewer_page_explains_representative_and_statistical_motion(tmp_p
     assert "function updateZonePanel" in response.text
     assert "Zone 작업 순서" in response.text
     assert "현재 작업 Zone" in response.text
+    assert "grid-template-columns:275px minmax(420px,1fr) 420px" in response.text
+    assert "allButton.textContent='전체'" in response.text
+    assert "expertDirectionMix" in response.text
+    assert "현재 양손 위치 편차" not in response.text
     assert "trackedStats[marker]" not in response.text
     assert "function interpolatedFrame" in response.text
     assert "function alignSkeleton" in response.text
@@ -165,7 +170,7 @@ def test_motion_viewer_page_explains_representative_and_statistical_motion(tmp_p
     assert "playheadSeconds" in response.text
     assert "const fps=(data.frames.length-1)" not in response.text
     assert "<canvas" in response.text
-    assert ":'자료 없음'}\nfunction tick" in response.text
+    assert "function tick(now)" in response.text
 
 
 def test_catalog_lists_modes_and_individual_expert_sessions(tmp_path: Path) -> None:
@@ -236,8 +241,19 @@ def test_motion_returns_trusted_trackers_paint_trace_and_direction_statistics(tm
     assert zone["median_distance_mm"] == 250
     assert zone["selected_speed_mms"] == 300
     assert zone["selected_distance_mm"] == 250
+    assert zone["selected_major_direction"] == "horizontal"
+    assert zone["expert_direction_distribution"] == {
+        "horizontal": 1.0,
+        "vertical": 0.0,
+        "diagonal": 0.0,
+    }
     assert zone["observed_path_length_m"] > 0
     assert zone["observed_duration_seconds"] > 0
+    overall = data["zone_statistics"]["all"]
+    assert overall["zone_count"] == 1
+    assert overall["expert_session_count"] == 2
+    assert overall["selected_major_direction"] == "horizontal"
+    assert overall["expert_direction_distribution"]["horizontal"] == 1.0
 
 
 def test_zone_surface_keeps_non_planar_three_dimensional_vertices() -> None:

@@ -529,7 +529,11 @@ def _metric_value(value: Any) -> float | None:
 
 
 def _zone_playback_statistics(
-    profile: dict[str, Any], selected_session_id: str, trace: list[dict[str, Any]]
+    profile: dict[str, Any],
+    selected_session_id: str,
+    trace: list[dict[str, Any]],
+    selected_direction_summary: dict[str, Any],
+    expert_direction_distribution: dict[str, float],
 ) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
     session = next(
         (item for item in profile.get("sessions", []) if str(item.get("session_id")) == selected_session_id),
@@ -595,11 +599,25 @@ def _zone_playback_statistics(
                 key in (item.get("analysis", {}).get("zones", {}))
                 for item in profile.get("sessions", [])
             )
+        direction_counts = {"horizontal": 0, "vertical": 0, "diagonal": 0}
+        for item in profile.get("sessions", []):
+            direction = (
+                item.get("analysis", {}).get("zones", {}).get(key, {}).get("expected_direction")
+            )
+            if direction in direction_counts:
+                direction_counts[direction] += 1
+        direction_total = sum(direction_counts.values())
+        direction_distribution = {
+            direction: round(count / direction_total, 4) if direction_total else 0.0
+            for direction, count in direction_counts.items()
+        }
         statistics_output[key] = {
             "map_num": str(aggregate.get("map_num", selected.get("map_num", map_num))),
             "zone_id": str(aggregate.get("zone_id", selected.get("zone_id", zone_id))),
             "expert_session_count": int(session_count or 0),
             "expected_direction": aggregate.get("expected_direction") or selected.get("expected_direction"),
+            "selected_major_direction": selected.get("expected_direction"),
+            "expert_direction_distribution": direction_distribution,
             "median_speed_mms": _metric_value(aggregate.get("speed_mms")),
             "median_distance_mm": _metric_value(aggregate.get("distance_mm")),
             "selected_speed_mms": _metric_value(selected.get("speed_mms")),
@@ -609,6 +627,22 @@ def _zone_playback_statistics(
             "observed_point_count": int(measured.get("points", 0)),
             "observed_sequence_count": len(measured.get("segments", set())),
         }
+    statistics_output["all"] = {
+        "map_num": None,
+        "zone_id": None,
+        "zone_count": len(all_keys),
+        "expert_session_count": len(profile.get("sessions", [])),
+        "selected_major_direction": selected_direction_summary.get("classification"),
+        "expert_direction_distribution": expert_direction_distribution,
+        "observed_path_length_m": round(
+            sum(float(item.get("path_length", 0.0)) for item in observed.values()), 3
+        ),
+        "observed_duration_seconds": round(
+            sum(float(item.get("duration", 0.0)) for item in observed.values()), 2
+        ),
+        "observed_point_count": sum(int(item.get("points", 0)) for item in observed.values()),
+        "observed_sequence_count": sum(len(item.get("segments", set())) for item in observed.values()),
+    }
     return zone_order, statistics_output
 
 
@@ -814,15 +848,15 @@ _VIEWER_HTML = r"""<!doctype html>
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font-family:Inter,Pretendard,"Noto Sans KR",system-ui,sans-serif}
 .shell{min-height:100vh;display:grid;grid-template-rows:auto 1fr}.top{display:flex;justify-content:space-between;align-items:center;padding:16px 22px;border-bottom:1px solid var(--line);background:#0a1424}
 .title{font-weight:800;font-size:18px}.title small{display:block;color:var(--muted);font-size:11px;font-weight:500;margin-top:4px}.top a{color:#dce8ff;text-decoration:none;font-size:13px;margin-left:14px}
-.workspace{display:grid;grid-template-columns:275px minmax(420px,1fr) 280px;min-height:0}.side{padding:19px;border-right:1px solid var(--line);background:#0c1728;overflow:auto}.right{border-right:0;border-left:1px solid var(--line)}
+.workspace{display:grid;grid-template-columns:275px minmax(420px,1fr) 420px;min-height:0}.side{padding:19px;border-right:1px solid var(--line);background:#0c1728;overflow:auto}.right{border-right:0;border-left:1px solid var(--line)}
 label{display:block;color:var(--muted);font-size:12px;margin:16px 0 7px}.select,button,input[type=range]{width:100%}.select,button{border:1px solid var(--line);border-radius:8px;background:var(--panel2);color:var(--ink);padding:10px 11px}
 button{cursor:pointer;font-weight:700}.primary{background:#3157d5;border-color:#3157d5}.controls{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:16px}.stage{position:relative;min-height:590px;background:radial-gradient(circle at 50% 42%,#132845 0,#07101f 65%)}canvas{width:100%;height:100%;display:block;min-height:590px}
 .overlay{position:absolute;left:18px;top:16px;background:rgba(7,16,31,.72);border:1px solid rgba(89,116,150,.45);border-radius:10px;padding:10px 12px;font-size:12px;color:var(--muted);pointer-events:none}.overlay strong{display:block;color:var(--ink);font-size:14px;margin-bottom:4px}
 .loading{position:absolute;inset:0;display:grid;place-content:center;justify-items:center;gap:13px;background:rgba(5,12,24,.72);backdrop-filter:blur(3px);z-index:5;color:#dce8ff;font-size:13px;font-weight:700}.loading[hidden]{display:none}.spinner{width:34px;height:34px;border:3px solid rgba(125,211,252,.2);border-top-color:#22d3ee;border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:14px;margin-bottom:11px}.card span{display:block;color:var(--muted);font-size:11px}.card strong{display:block;font-size:20px;margin-top:5px}.legend{font-size:12px;color:var(--muted);line-height:2}.dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:7px}.help{font-size:12px;color:var(--muted);line-height:1.65;margin-top:18px}.status{min-height:18px;color:var(--cyan);font-size:12px;margin-top:12px}
-.zone-order{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}.zone-chip{width:auto;padding:6px 9px;border-radius:999px;font-size:11px;color:#b9caff;background:#111f35}.zone-chip.active{color:#07101f;background:#67e8f9;border-color:#67e8f9}.zone-detail-title{font-size:15px!important;color:var(--ink)!important;font-weight:800;margin-bottom:9px}.zone-metric{display:flex!important;justify-content:space-between;gap:10px;padding:6px 0;border-top:1px solid rgba(89,116,150,.2);font-size:11px!important}.zone-metric b{color:#e8f1ff;font-weight:700;text-align:right}.zone-note{margin-top:9px;color:#7890ad;font-size:10px;line-height:1.5}
+.zone-order{display:flex;flex-wrap:wrap;gap:7px;margin-top:10px}.zone-chip{width:auto;padding:6px 10px;border:2px solid var(--zone-color);border-radius:999px;font-size:11px;color:var(--zone-color);background:#111f35}.zone-chip.active{box-shadow:0 0 0 2px #f5f8ff,0 0 14px var(--zone-color)}.zone-chip.selected{background:var(--zone-color);color:#07101f}.zone-detail-title{font-size:15px!important;color:var(--ink)!important;font-weight:800;margin-bottom:9px}.zone-metric{display:flex!important;justify-content:space-between;gap:10px;padding:7px 0;border-top:1px solid rgba(89,116,150,.2);font-size:11px!important}.zone-metric b{color:#e8f1ff;font-weight:700;text-align:right}.zone-note{margin-top:9px;color:#7890ad;font-size:10px;line-height:1.5}
 .toggle{display:flex;align-items:center;gap:8px;margin-top:14px;color:var(--muted);font-size:12px}.toggle input{width:auto}.badge{display:inline-flex;padding:5px 9px;border:1px solid #3157d5;border-radius:999px;color:#b9caff;font-size:11px;margin-top:12px}
-@media(max-width:1000px){.workspace{grid-template-columns:240px 1fr}.right{display:none}}@media(max-width:720px){.workspace{display:block}.side{border:0}.stage,canvas{min-height:480px}}
+@media(max-width:1200px){.workspace{grid-template-columns:240px 1fr}.right{display:none}}@media(max-width:720px){.workspace{display:block}.side{border:0}.stage,canvas{min-height:480px}}
 </style></head><body><div class="shell">
 <header class="top"><div class="title">전문가 모션 뷰어<small>기준 전문가: 전형기 반장 · 반복 수행 기반</small></div><nav><a href="/docs">Swagger</a><a href="/admin">DB 뷰어</a></nav></header>
 <main class="workspace"><aside class="side">
@@ -840,7 +874,7 @@ button{cursor:pointer;font-weight:700}.primary{background:#3157d5;border-color:#
 <p class="help">마우스로 드래그하면 시점을 돌리고, 휠로 확대·축소할 수 있습니다. 페인트 누적 궤적과 머리·양손의 실측 위치가 기본 표시됩니다.</p>
 </aside>
 <section class="stage"><canvas id="canvas"></canvas><div class="overlay"><strong id="overlayTitle">학습모드</strong><span id="overlayFrame">프레임 준비 중</span></div><div id="loading" class="loading"><div class="spinner"></div><span>전문가 기록을 불러오는 중입니다.</span></div></section>
-<aside class="side right"><div class="card"><span>현재 작업 Zone</span><strong id="currentZone">대기 중</strong></div><div class="card"><span>Zone 작업 순서</span><div id="zoneOrder" class="zone-order"></div></div><div id="zoneDetail" class="card"><span class="zone-detail-title">Zone 통계</span><span>재생을 시작하거나 위의 Zone을 선택하세요.</span></div><div class="card"><span>통계에 포함된 수행</span><strong id="sessionCount">-</strong></div><div class="card"><span>현재 기록 길이</span><strong id="duration">-</strong></div><div class="card"><span>선택 기록의 주요 도장 방향</span><strong id="direction">-</strong></div><div class="card"><span>전문가 전체 방향 비중</span><strong id="directionMix" style="font-size:14px;line-height:1.65">-</strong></div><div class="card"><span>현재 양손 위치 편차</span><strong id="handSpread">-</strong></div>
+<aside class="side right"><div class="card"><span>현재 작업 Zone</span><strong id="currentZone">대기 중</strong></div><div class="card"><span>Zone 작업 순서</span><div id="zoneOrder" class="zone-order"></div></div><div id="zoneDetail" class="card"><span class="zone-detail-title">전체 Zone 통계</span><span>데이터를 불러오는 중입니다.</span></div><div class="card"><span>통계에 포함된 수행</span><strong id="sessionCount">-</strong></div><div class="card"><span>현재 기록 길이</span><strong id="duration">-</strong></div>
 <div class="legend"><div><i class="dot" style="background:#f5f8ff"></i>전문가 전체 Ray Point 점군</div><div><i class="dot" style="background:#a78bfa"></i>Map·Zone별 관측 영역</div><div><i class="dot" style="background:var(--green)"></i>위치별 주 방향·통과 빈도</div><div><i class="dot" style="background:#ff8a3d"></i>선택 기록의 페인트 누적 궤적</div><div><i class="dot" style="background:var(--cyan)"></i>전형기 반장의 머리·양손 실측 위치</div></div>
 <p class="help">Zone 면은 같은 Map·Zone의 UV 인접점만 작은 3차원 패치로 연결하므로 움푹 파인 부분과 곡면을 평면으로 뭉개지 않습니다. 데이터가 관측되지 않은 빈 공간은 임의로 채우지 않습니다.</p></aside>
 </main></div><script>
@@ -855,12 +889,14 @@ function fillSessions(){const m=currentMode();$('session').replaceChildren(optio
 function zoneKey(mapNum,zoneId){return mapNum!=null&&zoneId!=null?`${mapNum}:${zoneId}`:null}
 function metricRow(label,value){const row=document.createElement('span');row.className='zone-metric';const name=document.createElement('span'),metric=document.createElement('b');name.textContent=label;metric.textContent=value;row.append(name,metric);return row}
 function directionName(value){return({horizontal:'수평',vertical:'수직',diagonal:'대각',curved_irregular:'곡선·불규칙'})[value]||'자료 없음'}
-function showZoneDetail(key){const detail=$('zoneDetail'),stats=(data&&data.zone_statistics||{})[key];detail.replaceChildren();const title=document.createElement('span');title.className='zone-detail-title';title.textContent=stats?`Zone ${stats.zone_id} 기준 통계`:'Zone 통계';detail.append(title);if(!stats){const empty=document.createElement('span');empty.textContent='해당 Zone의 통계가 없습니다.';detail.append(empty);return}const speed=stats.median_speed_mms!=null?`${(stats.median_speed_mms/1000).toFixed(2)} m/s`:'자료 없음',distance=stats.median_distance_mm!=null?`${Math.round(stats.median_distance_mm)} mm`:'자료 없음';detail.append(metricRow('전문가 중앙 속도',speed),metricRow('전문가 중앙 이격거리',distance),metricRow('기준 도장 방향',directionName(stats.expected_direction)),metricRow('선택 기록 분사 시간',`${stats.observed_duration_seconds.toFixed(1)}초`),metricRow('선택 기록 도포 경로',`${stats.observed_path_length_m.toFixed(2)} m`),metricRow('선택 기록 시퀀스',`${stats.observed_sequence_count}회`),metricRow('전문가 관측 수행',`${stats.expert_session_count}회`));const note=document.createElement('div');note.className='zone-note';note.textContent='속도·이격거리는 전문가 반복 수행의 중앙값이며, 시간·경로·시퀀스는 현재 선택 기록 기준입니다.';detail.append(note)}
-function renderZoneOrder(){const host=$('zoneOrder');host.replaceChildren();for(const item of data.zone_order||[]){const button=document.createElement('button');button.className='zone-chip';button.dataset.zoneKey=zoneKey(item.map_num,item.zone_id);button.textContent=`${item.order}. Zone ${item.zone_id}`;button.onclick=()=>showZoneDetail(button.dataset.zoneKey);host.append(button)}if(data.zone_order&&data.zone_order.length)showZoneDetail(zoneKey(data.zone_order[0].map_num,data.zone_order[0].zone_id))}
-let displayedZoneKey=null;
-function updateZonePanel(frame){const key=zoneKey(frame.map_num,frame.zone_id);$('currentZone').textContent=key?`Zone ${frame.zone_id}${frame.spraying?' · 분사 중':' · 조준/이동'}`:'이동/대기';for(const chip of $('zoneOrder').querySelectorAll('.zone-chip'))chip.classList.toggle('active',chip.dataset.zoneKey===key);if(key&&key!==displayedZoneKey){showZoneDetail(key);displayedZoneKey=key}}
+function expertDirectionMix(stats){const mix=stats.expert_direction_distribution||{};return`수평 ${((mix.horizontal||0)*100).toFixed(0)}% · 수직 ${((mix.vertical||0)*100).toFixed(0)}% · 대각 ${((mix.diagonal||0)*100).toFixed(0)}%`}
+function zoneVisualColor(key){if(key==='all')return'#67e8f9';const [mapNum,zoneId]=key.split(':');return`hsl(${zoneHue(mapNum,zoneId)},95%,74%)`}
+let displayedZoneKey=null,selectedDetailKey='all',zoneDetailMode='auto';
+function showZoneDetail(key,manual=false){const detail=$('zoneDetail'),stats=(data&&data.zone_statistics||{})[key],isAll=key==='all',color=zoneVisualColor(key);if(manual)zoneDetailMode='manual';selectedDetailKey=key;detail.style.borderColor=color;detail.replaceChildren();for(const chip of $('zoneOrder').querySelectorAll('.zone-chip'))chip.classList.toggle('selected',chip.dataset.zoneKey===key);const title=document.createElement('span');title.className='zone-detail-title';title.textContent=isAll?'전체 Zone 통계':stats?`Zone ${stats.zone_id} 기준 통계`:'Zone 통계';detail.append(title);if(!stats){const empty=document.createElement('span');empty.textContent='해당 Zone의 통계가 없습니다.';detail.append(empty);return}const speed=stats.median_speed_mms!=null?`${(stats.median_speed_mms/1000).toFixed(2)} m/s`:'자료 없음',distance=stats.median_distance_mm!=null?`${Math.round(stats.median_distance_mm)} mm`:'자료 없음';if(isAll)detail.append(metricRow('포함 Zone',`${stats.zone_count}개`));else detail.append(metricRow('전문가 중앙 속도',speed),metricRow('전문가 중앙 이격거리',distance),metricRow('전문가 기준 방향',directionName(stats.expected_direction)));detail.append(metricRow('선택 기록의 주요 도장 방향',directionName(stats.selected_major_direction)),metricRow('전문가 방향 비중',expertDirectionMix(stats)),metricRow('선택 기록 분사 시간',`${stats.observed_duration_seconds.toFixed(1)}초`),metricRow('선택 기록 도포 경로',`${stats.observed_path_length_m.toFixed(2)} m`),metricRow('선택 기록 시퀀스',`${stats.observed_sequence_count}회`),metricRow('전문가 관측 수행',`${stats.expert_session_count}회`));const note=document.createElement('div');note.className='zone-note';note.textContent=isAll?'모든 Zone의 선택 기록 합계와 전문가 전체 방향 비중입니다.':'속도·이격거리는 전문가 반복 수행의 중앙값이며, 시간·경로·시퀀스는 현재 선택 기록 기준입니다.';detail.append(note)}
+function renderZoneOrder(){const host=$('zoneOrder');host.replaceChildren();const allButton=document.createElement('button');allButton.className='zone-chip';allButton.dataset.zoneKey='all';allButton.textContent='전체';allButton.style.setProperty('--zone-color',zoneVisualColor('all'));allButton.onclick=()=>showZoneDetail('all',true);host.append(allButton);for(const item of data.zone_order||[]){const button=document.createElement('button'),key=zoneKey(item.map_num,item.zone_id);button.className='zone-chip';button.dataset.zoneKey=key;button.textContent=`${item.order}. Zone ${item.zone_id}`;button.style.setProperty('--zone-color',zoneVisualColor(key));button.onclick=()=>showZoneDetail(key,true);host.append(button)}showZoneDetail('all')}
+function updateZonePanel(frame){const key=zoneKey(frame.map_num,frame.zone_id);$('currentZone').textContent=key?`Zone ${frame.zone_id}${frame.spraying?' · 분사 중':' · 조준/이동'}`:'이동/대기';for(const chip of $('zoneOrder').querySelectorAll('.zone-chip'))chip.classList.toggle('active',chip.dataset.zoneKey===key);if(zoneDetailMode==='auto'&&key&&key!==displayedZoneKey){showZoneDetail(key);displayedZoneKey=key}}
 function setLoading(active){$('loading').hidden=!active;canvas.setAttribute('aria-busy',active?'true':'false');for(const id of ['process','mode','session'])$(id).disabled=active}
-async function loadMotion(){const generation=++loadGeneration;playing=false;last=0;displayedZoneKey=null;$('play').textContent='재생';$('status').textContent='모션과 통계 범위를 계산하는 중입니다.';setLoading(true);try{const q=new URLSearchParams({process:$('process').value,mode_id:$('mode').value,session_id:$('session').value});const incoming=await json('/motion-viewer/api/motion?'+q);if(generation!==loadGeneration)return;data=incoming;index=0;playheadSeconds=0;$('timeline').max=Math.max(0,data.frames.length-1);$('timeline').value=0;$('sessionCount').textContent=`${data.sampled_session_count}회`;$('duration').textContent=`${data.duration_seconds.toFixed(1)}초`;$('direction').textContent=data.direction_summary.label;const mix=data.direction_distribution;$('directionMix').textContent=`수평 ${(mix.horizontal*100).toFixed(0)}% · 수직 ${(mix.vertical*100).toFixed(0)}% · 대각 ${(mix.diagonal*100).toFixed(0)}%`;$('overlayTitle').textContent=`전형기 반장 · ${data.process_label} · 학습모드 ${data.mode_id}`;renderZoneOrder();$('status').textContent=`${data.selected_session_id} 준비 완료`;draw()}catch(e){if(generation!==loadGeneration)return;data=null;$('status').textContent=e.message;draw()}finally{if(generation===loadGeneration)setLoading(false)}}
+async function loadMotion(){const generation=++loadGeneration;playing=false;last=0;displayedZoneKey=null;selectedDetailKey='all';zoneDetailMode='auto';$('play').textContent='재생';$('status').textContent='모션과 통계 범위를 계산하는 중입니다.';setLoading(true);try{const q=new URLSearchParams({process:$('process').value,mode_id:$('mode').value,session_id:$('session').value});const incoming=await json('/motion-viewer/api/motion?'+q);if(generation!==loadGeneration)return;data=incoming;index=0;playheadSeconds=0;$('timeline').max=Math.max(0,data.frames.length-1);$('timeline').value=0;$('sessionCount').textContent=`${data.sampled_session_count}회`;$('duration').textContent=`${data.duration_seconds.toFixed(1)}초`;$('overlayTitle').textContent=`전형기 반장 · ${data.process_label} · 학습모드 ${data.mode_id}`;renderZoneOrder();$('status').textContent=`${data.selected_session_id} 준비 완료`;draw()}catch(e){if(generation!==loadGeneration)return;data=null;$('status').textContent=e.message;draw()}finally{if(generation===loadGeneration)setLoading(false)}}
 function resize(){const dpr=devicePixelRatio||1,rect=canvas.getBoundingClientRect();canvas.width=Math.round(rect.width*dpr);canvas.height=Math.round(rect.height*dpr);ctx.setTransform(dpr,0,0,dpr,0,0);draw()}
 function transform(point,center){let x=point[0]-center[0],y=point[1]-center[1],z=point[2]-center[2];let cy=Math.cos(yaw),sy=Math.sin(yaw),x1=x*cy-z*sy,z1=x*sy+z*cy;let cp=Math.cos(pitch),sp=Math.sin(pitch),y1=y*cp-z1*sp,z2=y*sp+z1*cp;return [x1,y1,z2]}
 function project(point,center,w,h){const [x,y,z]=transform(point,center),pers=4.5/(4.5-z);return [w/2+x*zoom*pers,h*.59-y*zoom*pers,pers]}
@@ -882,13 +918,13 @@ function draw(){const rect=canvas.getBoundingClientRect(),w=rect.width,h=rect.he
 if(!data||!data.frames.length)return;const rendered=interpolatedFrame(playheadSeconds),frame=rendered.frame,sourceIndex=rendered.index,stats=data.statistics[sourceIndex];const allPaint=data.reference_surface.points.map(item=>item.point),center=allPaint.length?allPaint.reduce((sum,p)=>add(sum,p),[0,0,0]).map(value=>value/allPaint.length):((frame.tracked||{}).head||(frame.joints||{}).Pelvis||[0,0,0]);
 if($('zoneSurface').checked)drawZoneSurfaces(data.zone_surfaces||[],center,w,h);referencePointCloud(data.reference_surface,center,w,h);directionField(data.direction_field,center,w,h);
 let previous=null,previousSegment=null,paintCount=0;for(const sample of data.paint_trace){if(sample.t>playheadSeconds)break;if(previousSegment!==sample.segment)previous=null;const color=`hsla(${24+sample.progress*28},100%,62%,${.35+sample.progress*.5})`;point(sample.point,2.8,color,center,w,h);if(previous){line(previous,sample.point,color,5,center,w,h);if(paintCount%45===0)arrow(previous,sample.point,'rgba(255,232,190,.9)',center,w,h)}previous=sample.point;previousSegment=sample.segment;paintCount++}if(previous&&frame.spraying&&frame.ray_point){line(previous,frame.ray_point,'rgba(255,184,92,.78)',5,center,w,h);point(frame.ray_point,3.5,'rgba(255,205,125,.9)',center,w,h)}
-const tracked=frame.tracked||{},trackedStats=stats.tracked_spread||{};
+const tracked=frame.tracked||{};
 if(tracked.head&&tracked.left_hand)line(tracked.head,tracked.left_hand,'rgba(34,211,238,.65)',3,center,w,h);if(tracked.head&&tracked.right_hand)line(tracked.head,tracked.right_hand,'rgba(34,211,238,.65)',3,center,w,h);if(tracked.right_hand&&frame.ray_point&&frame.spraying)line(tracked.right_hand,frame.ray_point,'rgba(255,244,200,.45)',2,center,w,h);
 if(tracked.head)point(tracked.head,13,'#f5f8ff',center,w,h);if(tracked.right_hand)point(tracked.right_hand,7,'#22d3ee',center,w,h);if(tracked.left_hand)point(tracked.left_hand,6,'#8be9fd',center,w,h);
 if($('skeleton').checked){const aligned=alignSkeleton(frame.joints,tracked);for(const [a,b] of data.bones){if(aligned[a]&&aligned[b]){const lowerBody=/Thigh|Calf|Foot|Toe/.test(a+b),arm=/Arm|Hand|Shoulder/.test(a+b);line(aligned[a],aligned[b],lowerBody?'rgba(245,248,255,.18)':arm?'rgba(34,211,238,.58)':'rgba(245,248,255,.42)',arm?4:3,center,w,h)}}for(const [name,p] of Object.entries(aligned)){const anchor=name==='Head'||name.endsWith(' Hand');point(p,anchor?5:3,anchor?'rgba(34,211,238,.82)':'rgba(245,248,255,.48)',center,w,h)}}
 updateZonePanel(frame);
 $('overlayFrame').textContent=`${sourceIndex+1} / ${data.frames.length} · ${frame.t.toFixed(2)}초`;
-const spreads=['left_hand','right_hand'].map(j=>trackedStats[j]).filter(v=>v!==undefined);$('handSpread').textContent=spreads.length?`${(spreads.reduce((a,b)=>a+b,0)/spreads.length*100).toFixed(1)} cm`:'자료 없음'}
+}
 function tick(now){if(playing&&data&&data.frames.length){if(!last)last=now;const elapsed=Math.min(.1,(now-last)/1000)*Number($('speed').value);last=now;playheadSeconds+=elapsed;if(playheadSeconds>=data.duration_seconds){playheadSeconds=0;index=0}else index=interpolatedFrame(playheadSeconds).index;$('timeline').value=index;draw()}requestAnimationFrame(tick)}
 $('process').onchange=fillModes;$('mode').onchange=fillSessions;$('session').onchange=loadMotion;$('timeline').oninput=e=>{index=Number(e.target.value);playheadSeconds=data.frames[index].t;last=0;draw()};$('pointSize').oninput=e=>{$('pointSizeValue').textContent=`${Number(e.target.value).toFixed(2).replace(/0+$/,'').replace(/\.$/,'')} px`;draw()};$('zoneSurface').onchange=draw;$('skeleton').onchange=draw;$('play').onclick=()=>{playing=!playing;last=0;$('play').textContent=playing?'일시정지':'재생'};$('restart').onclick=()=>{index=0;playheadSeconds=0;last=0;$('timeline').value=0;draw()};
 canvas.onpointerdown=e=>drag=[e.clientX,e.clientY,yaw,pitch];canvas.onpointermove=e=>{if(!drag)return;yaw=drag[2]+(e.clientX-drag[0])*.01;pitch=Math.max(-1.2,Math.min(1.2,drag[3]+(e.clientY-drag[1])*.01));draw()};canvas.onpointerup=()=>drag=null;canvas.onpointerleave=()=>drag=null;canvas.onwheel=e=>{e.preventDefault();zoom=Math.max(70,Math.min(420,zoom*(e.deltaY>0?.9:1.1)));draw()};
@@ -959,7 +995,14 @@ def create_motion_viewer_router(
         paint_trace = _dense_paint_trace(selected_path)
         paint_statistics = _reference_paint_statistics(session_paths)
         zone_surfaces = _zone_surface_statistics(session_paths)
-        zone_order, zone_statistics = _zone_playback_statistics(profile, selected, paint_trace)
+        direction_summary = _direction_summary(paint_trace)
+        zone_order, zone_statistics = _zone_playback_statistics(
+            profile,
+            selected,
+            paint_trace,
+            direction_summary,
+            paint_statistics["direction_distribution"],
+        )
         return {
             "expert_name": _EXPERT_NAME,
             "process": process,
@@ -973,7 +1016,7 @@ def create_motion_viewer_router(
             "frames": selected_frames,
             "statistics": _spread(selected_frames, sampled_sessions),
             "paint_trace": paint_trace,
-            "direction_summary": _direction_summary(paint_trace),
+            "direction_summary": direction_summary,
             "zone_surfaces": zone_surfaces,
             "zone_order": zone_order,
             "zone_statistics": zone_statistics,
