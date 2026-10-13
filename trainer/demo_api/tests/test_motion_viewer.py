@@ -127,6 +127,8 @@ def test_motion_viewer_page_explains_representative_and_statistical_motion(tmp_p
     assert "주요 도장 방향" in response.text
     assert "참고용 스켈레톤" in response.text
     assert "전형기 ·" in response.text
+    assert "function statisticalBand" in response.text
+    assert "Math.min(36" in response.text
     assert "<canvas" in response.text
     assert ":'자료 없음'}\nfunction tick" in response.text
 
