@@ -5,7 +5,11 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from trainer.demo_api.motion_viewer import _direction_summary, create_motion_viewer_router
+from trainer.demo_api.motion_viewer import (
+    _build_zone_surface,
+    _direction_summary,
+    create_motion_viewer_router,
+)
 
 
 def _write_csv(path: Path, *, offset: float) -> None:
@@ -18,6 +22,7 @@ def _write_csv(path: Path, *, offset: float) -> None:
         "플래쉬 Position X", "플래쉬 Position Y", "플래쉬 Position Z",
         "카메라 Position X", "카메라 Position Y", "카메라 Position Z",
         "Ray point X", " Ray Point Y", " Ray Point Z",
+        "Ray Texture Map Number", "Ray Texture UV X", "Ray Texture UV Y",
         "Zone ID",
         "Pelvis Position X", "Pelvis Position Y", "Pelvis Position Z",
         "Pelvis Rotation X", "Pelvis Rotation Y", "Pelvis Rotation Z",
@@ -45,6 +50,9 @@ def _write_csv(path: Path, *, offset: float) -> None:
                     "Ray point X": offset + index * 0.2,
                     " Ray Point Y": 1.4,
                     " Ray Point Z": 2.0,
+                    "Ray Texture Map Number": 1,
+                    "Ray Texture UV X": (index % 2) * 32,
+                    "Ray Texture UV Y": (index // 2) * 32,
                     "Zone ID": "1",
                     "Pelvis Position X": offset + index * 0.01,
                     "Pelvis Position Y": 1,
@@ -133,6 +141,9 @@ def test_motion_viewer_page_explains_representative_and_statistical_motion(tmp_p
     assert 'id="pointSize"' in response.text
     assert "흰색 포인트 크기" in response.text
     assert "pointSizeValue" in response.text
+    assert 'id="zoneSurface"' in response.text
+    assert "Zone 영역 표시" in response.text
+    assert "function drawZoneSurfaces" in response.text
     assert "trackedStats[marker]" not in response.text
     assert "function interpolatedFrame" in response.text
     assert "function alignSkeleton" in response.text
@@ -202,6 +213,31 @@ def test_motion_returns_trusted_trackers_paint_trace_and_direction_statistics(tm
     assert data["direction_field"]
     assert data["direction_distribution"]["horizontal"] == 1.0
     assert data["direction_distribution"]["vertical"] == 0.0
+    assert data["zone_surfaces"][0]["map_num"] == "1"
+    assert data["zone_surfaces"][0]["zone_id"] == "1"
+    assert data["zone_surfaces"][0]["vertices"]
+
+
+def test_zone_surface_keeps_non_planar_three_dimensional_vertices() -> None:
+    samples = {
+        (0, 0): {"sum": [0.0, 0.0, 0.0], "count": 1},
+        (1, 0): {"sum": [1.0, 0.0, 0.0], "count": 1},
+        (0, 1): {"sum": [0.0, -0.4, 1.0], "count": 1},
+        (1, 1): {"sum": [1.0, -0.7, 1.0], "count": 1},
+    }
+
+    surface = _build_zone_surface("2", "7", samples)
+
+    assert surface["map_num"] == "2"
+    assert surface["zone_id"] == "7"
+    assert surface["vertices"] == [
+        [0.0, 0.0, 0.0],
+        [0.0, -0.4, 1.0],
+        [1.0, 0.0, 0.0],
+        [1.0, -0.7, 1.0],
+    ]
+    assert surface["triangles"] == [[0, 2, 1], [2, 3, 1]]
+    assert sorted(surface["boundary_edges"]) == [[0, 1], [0, 2], [1, 3], [2, 3]]
 
 
 def test_back_and_forth_paint_stroke_is_classified_by_dominant_axis() -> None:

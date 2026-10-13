@@ -77,6 +77,23 @@ def _ray_point(row: dict[str, str]) -> list[float] | None:
     return [round(float(value), 6) for value in values]
 
 
+def _map_zone_uv(row: dict[str, str]) -> tuple[str, str, float, float] | None:
+    normalized = _normalized_row(row)
+    map_value = _number(normalized.get("ray texture map number"))
+    zone_value = str(normalized.get("zone id", "")).strip()
+    u = _number(normalized.get("ray texture uv x"))
+    v = _number(normalized.get("ray texture uv y"))
+    if map_value is None or not zone_value or zone_value == "-1" or u is None or v is None:
+        return None
+    map_num = str(int(map_value)) if map_value.is_integer() else str(map_value)
+    try:
+        zone_number = float(zone_value)
+        zone_id = str(int(zone_number)) if zone_number.is_integer() else zone_value
+    except ValueError:
+        zone_id = zone_value
+    return map_num, zone_id, u, v
+
+
 def _spraying(value: Any) -> bool:
     return str(value).strip().casefold() in {"on", "true", "1", "yes"}
 
@@ -200,6 +217,7 @@ def _sample_csv(
                 "ray_point": ray_point,
                 "spraying": _spraying(row.get("분사")),
                 "zone_id": str(row.get("Zone ID", "")).strip() or None,
+                "map_num": (_map_zone_uv(row) or (None,))[0],
             })
     if frames:
         origin = float(frames[0]["t"])
@@ -384,6 +402,126 @@ def _reference_paint_statistics(paths: list[Path], *, cell_size: float = 0.01) -
     }
 
 
+def _triangle_area(a: list[float], b: list[float], c: list[float]) -> float:
+    ab = [b[axis] - a[axis] for axis in range(3)]
+    ac = [c[axis] - a[axis] for axis in range(3)]
+    cross = [
+        ab[1] * ac[2] - ab[2] * ac[1],
+        ab[2] * ac[0] - ab[0] * ac[2],
+        ab[0] * ac[1] - ab[1] * ac[0],
+    ]
+    return math.sqrt(sum(value * value for value in cross)) / 2
+
+
+def _build_zone_surface(
+    map_num: str, zone_id: str, samples: dict[tuple[int, int], dict[str, Any]]
+) -> dict[str, Any]:
+    """Build a UV-local mesh while preserving each sample's real 3-D position."""
+    keys = sorted(samples)
+    index_by_key = {key: index for index, key in enumerate(keys)}
+    vertices = [
+        [round(value / samples[key]["count"], 6) for value in samples[key]["sum"]]
+        for key in keys
+    ]
+    candidate_triangles: list[list[int]] = []
+    for u, v in keys:
+        a = index_by_key[(u, v)]
+        b = index_by_key.get((u + 1, v))
+        c = index_by_key.get((u, v + 1))
+        d = index_by_key.get((u + 1, v + 1))
+        if b is not None and c is not None:
+            candidate_triangles.append([a, b, c])
+        if b is not None and c is not None and d is not None:
+            candidate_triangles.append([b, d, c])
+
+    edge_lengths = [
+        math.dist(vertices[left], vertices[right])
+        for left, right in {
+            tuple(sorted((triangle[0], triangle[1])))
+            for triangle in candidate_triangles
+        } | {
+            tuple(sorted((triangle[1], triangle[2])))
+            for triangle in candidate_triangles
+        } | {
+            tuple(sorted((triangle[2], triangle[0])))
+            for triangle in candidate_triangles
+        }
+    ]
+    typical_edge = statistics.median(edge_lengths) if edge_lengths else 0.0
+    max_edge = max(0.04, typical_edge * 2.5)
+    triangles = [
+        triangle for triangle in candidate_triangles
+        if _triangle_area(*(vertices[index] for index in triangle)) > 1e-8
+        and all(
+            math.dist(vertices[triangle[start]], vertices[triangle[(start + 1) % 3]]) <= max_edge
+            for start in range(3)
+        )
+    ]
+    edge_counts: dict[tuple[int, int], int] = {}
+    for triangle in triangles:
+        for start in range(3):
+            edge = tuple(sorted((triangle[start], triangle[(start + 1) % 3])))
+            edge_counts[edge] = edge_counts.get(edge, 0) + 1
+    boundary_edges = [list(edge) for edge, count in sorted(edge_counts.items()) if count == 1]
+    centroid = [
+        round(statistics.fmean(point[axis] for point in vertices), 6)
+        for axis in range(3)
+    ] if vertices else None
+    return {
+        "map_num": map_num,
+        "zone_id": zone_id,
+        "vertices": vertices,
+        "triangles": triangles,
+        "boundary_edges": boundary_edges,
+        "centroid": centroid,
+        "observed_point_count": sum(sample["count"] for sample in samples.values()),
+    }
+
+
+@lru_cache(maxsize=64)
+def _zone_cells(
+    path_text: str, stamp: tuple[int, int], uv_cell_size: float
+) -> tuple[tuple[Any, ...], ...]:
+    del stamp
+    cells: dict[tuple[str, str, int, int], dict[str, Any]] = {}
+    with _open_csv(Path(path_text)) as handle:
+        for row in csv.DictReader(handle):
+            point = _ray_point(row)
+            identity = _map_zone_uv(row)
+            if not _spraying(row.get("분사")) or point is None or identity is None:
+                continue
+            map_num, zone_id, u, v = identity
+            key = (map_num, zone_id, round(u / uv_cell_size), round(v / uv_cell_size))
+            cell = cells.setdefault(key, {"sum": [0.0, 0.0, 0.0], "count": 0})
+            for axis in range(3):
+                cell["sum"][axis] += point[axis]
+            cell["count"] += 1
+    return tuple(
+        (key, tuple(round(value, 6) for value in cell["sum"]), cell["count"])
+        for key, cell in cells.items()
+    )
+
+
+def _zone_surface_statistics(paths: list[Path], *, uv_cell_size: float = 32.0) -> list[dict[str, Any]]:
+    grouped: dict[tuple[str, str], dict[tuple[int, int], dict[str, Any]]] = {}
+    for path in paths:
+        stat = path.stat()
+        for key, point_sum, count in _zone_cells(
+            str(path), (stat.st_mtime_ns, stat.st_size), uv_cell_size
+        ):
+            map_num, zone_id, u_cell, v_cell = key
+            cell = grouped.setdefault((map_num, zone_id), {}).setdefault(
+                (u_cell, v_cell), {"sum": [0.0, 0.0, 0.0], "count": 0}
+            )
+            for axis in range(3):
+                cell["sum"][axis] += point_sum[axis]
+            cell["count"] += count
+    return [
+        _build_zone_surface(map_num, zone_id, samples)
+        for (map_num, zone_id), samples in sorted(grouped.items())
+    ]
+
+
 def _spread(
     selected_frames: list[dict[str, Any]], all_frames: list[list[dict[str, Any]]]
 ) -> list[dict[str, Any]]:
@@ -507,6 +645,7 @@ button{cursor:pointer;font-weight:700}.primary{background:#3157d5;border-color:#
 <label for="timeline">진행 위치</label><input id="timeline" type="range" min="0" max="0" value="0">
 <label for="speed">재생 속도</label><select id="speed" class="select"><option value="0.25">0.25배</option><option value="0.5">0.5배</option><option value="1" selected>1배</option><option value="1.5">1.5배</option><option value="2">2배</option></select>
 <label for="pointSize">흰색 포인트 크기 · <span id="pointSizeValue">1.5 px</span></label><input id="pointSize" type="range" min="0.5" max="5" step="0.25" value="1.5">
+<label class="toggle"><input id="zoneSurface" type="checkbox" checked>Zone 영역 표시 (곡면·파임 반영)</label>
 <label class="toggle"><input id="skeleton" type="checkbox">참고용 스켈레톤 표시 (실측 위치 정합)</label>
 <div class="badge">머리·양손 실측 정합 · 나머지 관절은 참고용</div>
 <div id="status" class="status">데이터를 불러오는 중입니다.</div>
@@ -514,8 +653,8 @@ button{cursor:pointer;font-weight:700}.primary{background:#3157d5;border-color:#
 </aside>
 <section class="stage"><canvas id="canvas"></canvas><div class="overlay"><strong id="overlayTitle">학습모드</strong><span id="overlayFrame">프레임 준비 중</span></div></section>
 <aside class="side right"><div class="card"><span>통계에 포함된 수행</span><strong id="sessionCount">-</strong></div><div class="card"><span>현재 기록 길이</span><strong id="duration">-</strong></div><div class="card"><span>선택 기록의 주요 도장 방향</span><strong id="direction">-</strong></div><div class="card"><span>전문가 전체 방향 비중</span><strong id="directionMix" style="font-size:14px;line-height:1.65">-</strong></div><div class="card"><span>현재 양손 위치 편차</span><strong id="handSpread">-</strong></div>
-<div class="legend"><div><i class="dot" style="background:#f5f8ff"></i>전문가 전체 Ray Point 점군</div><div><i class="dot" style="background:var(--green)"></i>위치별 주 방향·통과 빈도</div><div><i class="dot" style="background:#ff8a3d"></i>선택 기록의 페인트 누적 궤적</div><div><i class="dot" style="background:var(--cyan)"></i>전형기 반장의 머리·양손 실측 위치</div></div>
-<p class="help">흰색 점군은 반복 수행의 분사 중 Ray Point를 공간 단위로 정리한 것으로 피도면의 작업 형상을 간접적으로 보여줍니다. 녹색 양방향 선은 위치별 왕복 방향이며, 밝기와 굵기가 통과 빈도를 나타냅니다.</p></aside>
+<div class="legend"><div><i class="dot" style="background:#f5f8ff"></i>전문가 전체 Ray Point 점군</div><div><i class="dot" style="background:#a78bfa"></i>Map·Zone별 관측 영역</div><div><i class="dot" style="background:var(--green)"></i>위치별 주 방향·통과 빈도</div><div><i class="dot" style="background:#ff8a3d"></i>선택 기록의 페인트 누적 궤적</div><div><i class="dot" style="background:var(--cyan)"></i>전형기 반장의 머리·양손 실측 위치</div></div>
+<p class="help">Zone 면은 같은 Map·Zone의 UV 인접점만 작은 3차원 패치로 연결하므로 움푹 파인 부분과 곡면을 평면으로 뭉개지 않습니다. 데이터가 관측되지 않은 빈 공간은 임의로 채우지 않습니다.</p></aside>
 </main></div><script>
 const $=id=>document.getElementById(id); const canvas=$('canvas'),ctx=canvas.getContext('2d');
 let catalog=null,data=null,index=0,playheadSeconds=0,playing=false,last=0,yaw=-0.55,pitch=0.1,zoom=175,drag=null;
@@ -533,6 +672,8 @@ function line(a,b,color,width,center,w,h){const p=project(a,center,w,h),q=projec
 function point(p,r,color,center,w,h){const q=project(p,center,w,h);ctx.fillStyle=color;ctx.beginPath();ctx.arc(q[0],q[1],r*q[2],0,Math.PI*2);ctx.fill()}
 function arrow(a,b,color,center,w,h){const p=project(a,center,w,h),q=project(b,center,w,h),angle=Math.atan2(q[1]-p[1],q[0]-p[0]);ctx.strokeStyle=color;ctx.fillStyle=color;ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(p[0],p[1]);ctx.lineTo(q[0],q[1]);ctx.stroke();ctx.beginPath();ctx.moveTo(q[0],q[1]);ctx.lineTo(q[0]-10*Math.cos(angle-.48),q[1]-10*Math.sin(angle-.48));ctx.lineTo(q[0]-10*Math.cos(angle+.48),q[1]-10*Math.sin(angle+.48));ctx.closePath();ctx.fill()}
 function referencePointCloud(surface,center,w,h){const baseSize=Number($('pointSize').value);for(const sample of surface.points){const q=project(sample.point,center,w,h),alpha=.16+sample.frequency*.48,size=baseSize*(.8+sample.frequency*.5);ctx.fillStyle=`rgba(245,248,255,${alpha})`;ctx.fillRect(q[0]-size/2,q[1]-size/2,size,size)}}
+function zoneHue(mapNum,zoneId){let hash=17;for(const char of `${mapNum}:${zoneId}`)hash=(hash*31+char.charCodeAt(0))%360;return(hash+215)%360}
+function drawZoneSurfaces(surfaces,center,w,h){const projected=[];for(const surface of surfaces){const hue=zoneHue(surface.map_num,surface.zone_id);for(const triangle of surface.triangles){const points=triangle.map(i=>project(surface.vertices[i],center,w,h));projected.push({points,hue,depth:points.reduce((sum,p)=>sum+p[2],0)/3})}}projected.sort((a,b)=>a.depth-b.depth);for(const item of projected){ctx.fillStyle=`hsla(${item.hue},82%,58%,.16)`;ctx.strokeStyle=`hsla(${item.hue},90%,72%,.24)`;ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(item.points[0][0],item.points[0][1]);for(const p of item.points.slice(1))ctx.lineTo(p[0],p[1]);ctx.closePath();ctx.fill();ctx.stroke()}for(const surface of surfaces){const hue=zoneHue(surface.map_num,surface.zone_id);ctx.strokeStyle=`hsla(${hue},95%,74%,.82)`;ctx.lineWidth=2;for(const edge of surface.boundary_edges){const a=project(surface.vertices[edge[0]],center,w,h),b=project(surface.vertices[edge[1]],center,w,h);ctx.beginPath();ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);ctx.stroke()}if(surface.centroid&&surface.triangles.length){const p=project(surface.centroid,center,w,h),label=`M${surface.map_num} · Z${surface.zone_id}`;ctx.font='700 11px system-ui';const width=ctx.measureText(label).width+12;ctx.fillStyle='rgba(7,16,31,.78)';ctx.fillRect(p[0]-width/2,p[1]-10,width,18);ctx.fillStyle=`hsl(${hue},95%,78%)`;ctx.textAlign='center';ctx.fillText(label,p[0],p[1]+3);ctx.textAlign='start'}}}
 function directionField(samples,center,w,h){for(const sample of samples){const half=.055+sample.frequency*.06,a=sub(sample.point,mul(sample.direction,half)),b=add(sample.point,mul(sample.direction,half)),alpha=.3+sample.frequency*.65,color=`rgba(52,211,153,${alpha})`;line(a,b,color,1.5+sample.frequency*2.5,center,w,h);if(sample.frequency>.38){arrow(a,b,color,center,w,h);arrow(b,a,color,center,w,h)}}}
 function add(a,b){return a.map((value,axis)=>value+b[axis])}function sub(a,b){return a.map((value,axis)=>value-b[axis])}function mul(a,value){return a.map(axis=>axis*value)}function dot(a,b){return a.reduce((sum,value,axis)=>sum+value*b[axis],0)}function cross(a,b){return[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]]}function length(a){return Math.sqrt(dot(a,a))}function unit(a,fallback=[1,0,0]){const size=length(a);return size>.00001?mul(a,1/size):fallback}
 function mixPoint(a,b,ratio){if(!a)return b||null;if(!b)return a;return a.map((value,axis)=>value+(b[axis]-value)*ratio)}
@@ -540,10 +681,10 @@ function anchorBasis(head,left,right){if(!head||!left||!right)return null;const 
 function basisPoint(point,source,target,scale){const local=sub(point,source.origin);return add(target.origin,add(add(mul(target.x,dot(local,source.x)*scale),mul(target.y,dot(local,source.y)*scale)),mul(target.z,dot(local,source.z)*scale)))}
 function solveArm(joints,side,target){const root=joints[`${side} Upper Arm`],guide=joints[`${side} Fore Arm`],oldHand=joints[`${side} Hand`];if(!root||!guide||!oldHand||!target)return;const upper=Math.max(.12,length(sub(guide,root))),lower=Math.max(.12,length(sub(oldHand,guide))),toward=sub(target,root),distance=Math.max(.001,length(toward)),direction=unit(toward),reach=Math.min(distance,(upper+lower)*.98),along=(upper*upper-lower*lower+reach*reach)/(2*reach),height=Math.sqrt(Math.max(0,upper*upper-along*along)),guideOffset=sub(sub(guide,root),mul(direction,dot(sub(guide,root),direction))),bend=unit(guideOffset,[0,0,side==='Left'?-1:1]);joints[`${side} Fore Arm`]=add(root,add(mul(direction,along),mul(bend,height)));joints[`${side} Hand`]=target}
 function alignSkeleton(joints,tracked){const source=anchorBasis(joints.Head,joints['Left Hand'],joints['Right Hand']),target=anchorBasis(tracked.head,tracked.left_hand,tracked.right_hand);if(!source||!target)return joints;const sourceSpan=(length(sub(joints.Head,joints['Left Hand']))+length(sub(joints.Head,joints['Right Hand'])))/2,targetSpan=(length(sub(tracked.head,tracked.left_hand))+length(sub(tracked.head,tracked.right_hand)))/2,scale=Math.max(.55,Math.min(1.8,targetSpan/Math.max(.001,sourceSpan))),aligned={};for(const [name,point] of Object.entries(joints))aligned[name]=basisPoint(point,source,target,scale);aligned.Head=tracked.head;solveArm(aligned,'Left',tracked.left_hand);solveArm(aligned,'Right',tracked.right_hand);return aligned}
-function interpolatedFrame(seconds){let current=Math.max(0,Math.min(index,data.frames.length-1));while(current+1<data.frames.length&&data.frames[current+1].t<=seconds)current++;while(current>0&&data.frames[current].t>seconds)current--;const a=data.frames[current],b=data.frames[Math.min(current+1,data.frames.length-1)],span=Math.max(.000001,b.t-a.t),ratio=Math.max(0,Math.min(1,(seconds-a.t)/span));const tracked={},joints={};for(const key of new Set([...Object.keys(a.tracked||{}),...Object.keys(b.tracked||{})]))tracked[key]=mixPoint((a.tracked||{})[key],(b.tracked||{})[key],ratio);for(const key of new Set([...Object.keys(a.joints||{}),...Object.keys(b.joints||{})]))joints[key]=mixPoint((a.joints||{})[key],(b.joints||{})[key],ratio);const continuousPaint=a.spraying&&b.spraying&&a.ray_point&&b.ray_point&&a.zone_id===b.zone_id;return{index:current,frame:{...a,t:seconds,tracked,joints,ray_point:continuousPaint?mixPoint(a.ray_point,b.ray_point,ratio):a.ray_point}}}
+function interpolatedFrame(seconds){let current=Math.max(0,Math.min(index,data.frames.length-1));while(current+1<data.frames.length&&data.frames[current+1].t<=seconds)current++;while(current>0&&data.frames[current].t>seconds)current--;const a=data.frames[current],b=data.frames[Math.min(current+1,data.frames.length-1)],span=Math.max(.000001,b.t-a.t),ratio=Math.max(0,Math.min(1,(seconds-a.t)/span));const tracked={},joints={};for(const key of new Set([...Object.keys(a.tracked||{}),...Object.keys(b.tracked||{})]))tracked[key]=mixPoint((a.tracked||{})[key],(b.tracked||{})[key],ratio);for(const key of new Set([...Object.keys(a.joints||{}),...Object.keys(b.joints||{})]))joints[key]=mixPoint((a.joints||{})[key],(b.joints||{})[key],ratio);const continuousPaint=a.spraying&&b.spraying&&a.ray_point&&b.ray_point&&a.zone_id===b.zone_id&&a.map_num===b.map_num;return{index:current,frame:{...a,t:seconds,tracked,joints,ray_point:continuousPaint?mixPoint(a.ray_point,b.ray_point,ratio):a.ray_point}}}
 function draw(){const rect=canvas.getBoundingClientRect(),w=rect.width,h=rect.height;ctx.clearRect(0,0,w,h);ctx.strokeStyle='rgba(100,130,165,.16)';ctx.lineWidth=1;for(let i=-5;i<=5;i++){ctx.beginPath();ctx.moveTo(w/2+i*55,h*.78);ctx.lineTo(w/2+i*90,h*.95);ctx.stroke()}
 if(!data||!data.frames.length)return;const rendered=interpolatedFrame(playheadSeconds),frame=rendered.frame,sourceIndex=rendered.index,stats=data.statistics[sourceIndex];const allPaint=data.reference_surface.points.map(item=>item.point),center=allPaint.length?allPaint.reduce((sum,p)=>add(sum,p),[0,0,0]).map(value=>value/allPaint.length):((frame.tracked||{}).head||(frame.joints||{}).Pelvis||[0,0,0]);
-referencePointCloud(data.reference_surface,center,w,h);directionField(data.direction_field,center,w,h);
+if($('zoneSurface').checked)drawZoneSurfaces(data.zone_surfaces||[],center,w,h);referencePointCloud(data.reference_surface,center,w,h);directionField(data.direction_field,center,w,h);
 let previous=null,paintCount=0;for(let i=0;i<=sourceIndex;i++){const f=data.frames[i];if(!f.spraying||!f.ray_point){previous=null;continue}const progress=i/Math.max(1,data.frames.length-1),color=`hsla(${24+progress*28},100%,62%,${.35+progress*.5})`;point(f.ray_point,3.5,color,center,w,h);if(previous){line(previous,f.ray_point,color,7,center,w,h);if(paintCount%12===0)arrow(previous,f.ray_point,'rgba(255,232,190,.9)',center,w,h)}previous=f.ray_point;paintCount++}if(previous&&frame.spraying&&frame.ray_point){line(previous,frame.ray_point,'rgba(255,184,92,.78)',7,center,w,h);point(frame.ray_point,3.5,'rgba(255,205,125,.9)',center,w,h)}
 const tracked=frame.tracked||{},trackedStats=stats.tracked_spread||{};
 if(tracked.head&&tracked.left_hand)line(tracked.head,tracked.left_hand,'rgba(34,211,238,.65)',3,center,w,h);if(tracked.head&&tracked.right_hand)line(tracked.head,tracked.right_hand,'rgba(34,211,238,.65)',3,center,w,h);if(tracked.right_hand&&frame.ray_point&&frame.spraying)line(tracked.right_hand,frame.ray_point,'rgba(255,244,200,.45)',2,center,w,h);
@@ -552,7 +693,7 @@ if($('skeleton').checked){const aligned=alignSkeleton(frame.joints,tracked);for(
 $('overlayFrame').textContent=`${sourceIndex+1} / ${data.frames.length} · ${frame.t.toFixed(2)}초`;
 const spreads=['left_hand','right_hand'].map(j=>trackedStats[j]).filter(v=>v!==undefined);$('handSpread').textContent=spreads.length?`${(spreads.reduce((a,b)=>a+b,0)/spreads.length*100).toFixed(1)} cm`:'자료 없음'}
 function tick(now){if(playing&&data&&data.frames.length){if(!last)last=now;const elapsed=Math.min(.1,(now-last)/1000)*Number($('speed').value);last=now;playheadSeconds+=elapsed;if(playheadSeconds>=data.duration_seconds){playheadSeconds=0;index=0}else index=interpolatedFrame(playheadSeconds).index;$('timeline').value=index;draw()}requestAnimationFrame(tick)}
-$('process').onchange=fillModes;$('mode').onchange=fillSessions;$('session').onchange=loadMotion;$('timeline').oninput=e=>{index=Number(e.target.value);playheadSeconds=data.frames[index].t;last=0;draw()};$('pointSize').oninput=e=>{$('pointSizeValue').textContent=`${Number(e.target.value).toFixed(2).replace(/0+$/,'').replace(/\.$/,'')} px`;draw()};$('skeleton').onchange=draw;$('play').onclick=()=>{playing=!playing;last=0;$('play').textContent=playing?'일시정지':'재생'};$('restart').onclick=()=>{index=0;playheadSeconds=0;last=0;$('timeline').value=0;draw()};
+$('process').onchange=fillModes;$('mode').onchange=fillSessions;$('session').onchange=loadMotion;$('timeline').oninput=e=>{index=Number(e.target.value);playheadSeconds=data.frames[index].t;last=0;draw()};$('pointSize').oninput=e=>{$('pointSizeValue').textContent=`${Number(e.target.value).toFixed(2).replace(/0+$/,'').replace(/\.$/,'')} px`;draw()};$('zoneSurface').onchange=draw;$('skeleton').onchange=draw;$('play').onclick=()=>{playing=!playing;last=0;$('play').textContent=playing?'일시정지':'재생'};$('restart').onclick=()=>{index=0;playheadSeconds=0;last=0;$('timeline').value=0;draw()};
 canvas.onpointerdown=e=>drag=[e.clientX,e.clientY,yaw,pitch];canvas.onpointermove=e=>{if(!drag)return;yaw=drag[2]+(e.clientX-drag[0])*.01;pitch=Math.max(-1.2,Math.min(1.2,drag[3]+(e.clientY-drag[1])*.01));draw()};canvas.onpointerup=()=>drag=null;canvas.onpointerleave=()=>drag=null;canvas.onwheel=e=>{e.preventDefault();zoom=Math.max(70,Math.min(420,zoom*(e.deltaY>0?.9:1.1)));draw()};
 addEventListener('resize',resize);(async()=>{try{catalog=await json('/motion-viewer/api/catalog');$('process').replaceChildren(...catalog.processes.map(p=>option(p.process,p.label)));fillModes();resize();requestAnimationFrame(tick)}catch(e){$('status').textContent=e.message}})();
 </script></body></html>"""
@@ -619,6 +760,7 @@ def create_motion_viewer_router(
         duration = float(selected_frames[-1]["t"]) if selected_frames else 0.0
         paint_trace = _paint_trace(selected_frames)
         paint_statistics = _reference_paint_statistics(session_paths)
+        zone_surfaces = _zone_surface_statistics(session_paths)
         return {
             "expert_name": _EXPERT_NAME,
             "process": process,
@@ -633,6 +775,7 @@ def create_motion_viewer_router(
             "statistics": _spread(selected_frames, sampled_sessions),
             "paint_trace": paint_trace,
             "direction_summary": _direction_summary(paint_trace),
+            "zone_surfaces": zone_surfaces,
             **paint_statistics,
         }
 
