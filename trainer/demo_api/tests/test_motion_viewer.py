@@ -164,9 +164,17 @@ def test_motion_viewer_page_explains_representative_and_statistical_motion(tmp_p
     assert "현재 양손 위치 편차" not in response.text
     assert "trackedStats[marker]" not in response.text
     assert "function interpolatedFrame" in response.text
-    assert "function alignSkeleton" in response.text
-    assert "function solveArm" in response.text
-    assert "실측 위치 정합" in response.text
+    assert 'id="skeletonCanvas"' in response.text
+    assert 'id="skeletonTurnLeft"' in response.text
+    assert 'id="skeletonTurnRight"' in response.text
+    assert 'id="skeletonReset"' in response.text
+    assert 'aria-label="스켈레톤 왼쪽 회전"' in response.text
+    assert "function uprightSkeleton" in response.text
+    assert "function drawSkeletonView" in response.text
+    assert "골반에서 머리 방향을 위로 자동 정렬" in response.text
+    assert 'id="skeleton"' not in response.text
+    assert "function alignSkeleton" not in response.text
+    assert "function solveArm" not in response.text
     assert "playheadSeconds" in response.text
     assert "const fps=(data.frames.length-1)" not in response.text
     assert "<canvas" in response.text
