@@ -14,6 +14,8 @@ from typing import Any, TextIO
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import HTMLResponse
 
+from trainer.expert_zone_mapping import canonical_expert_zone_id
+
 _JOINT_PARENTS: tuple[tuple[str, str | None], ...] = (
     ("Pelvis", None),
     ("Spine", "Pelvis"),
@@ -295,6 +297,17 @@ def _session_path(
 def _frames(path: Path, frame_count: int) -> list[dict[str, Any]]:
     stat = path.stat()
     return [dict(frame) for frame in _sample_csv(str(path), (stat.st_mtime_ns, stat.st_size), frame_count)]
+
+
+def _canonicalize_zone_items(
+    items: list[dict[str, Any]], *, process: str, mode_id: int
+) -> list[dict[str, Any]]:
+    for item in items:
+        if "zone_id" in item:
+            item["zone_id"] = canonical_expert_zone_id(
+                process, "learning", mode_id, item.get("zone_id")
+            )
+    return items
 
 
 @lru_cache(maxsize=64)
@@ -1072,12 +1085,12 @@ function resetViewToCamera(payload=data){const first=payload&&payload.frames&&pa
 async function loadMotion(){const generation=++loadGeneration;playing=false;last=0;displayedZoneKey=null;selectedDetailKey='all';zoneDetailMode='auto';referencePreview=false;$('play').textContent='재생';$('status').textContent='모션과 통계 범위를 계산하는 중입니다.';setLoading(true);try{const q=new URLSearchParams({process:$('process').value,mode_id:$('mode').value,session_id:$('session').value});const incoming=await json('/motion-viewer/api/motion?'+q);if(generation!==loadGeneration)return;data=incoming;index=0;playheadSeconds=0;resetViewToCamera(incoming);$('timeline').max=Math.max(0,data.frames.length-1);$('timeline').value=0;$('sessionCount').textContent=`${data.sampled_session_count}회`;$('duration').textContent=`${data.duration_seconds.toFixed(1)}초`;$('overlayTitle').textContent=`전형기 반장 · ${data.process_label} · 학습모드 ${data.mode_id}`;renderZoneOrder();$('status').textContent=`${data.selected_session_id} 준비 완료`;draw()}catch(e){if(generation!==loadGeneration)return;data=null;$('status').textContent=e.message;draw()}finally{if(generation===loadGeneration)setLoading(false)}}
 function resize(){const dpr=devicePixelRatio||1,rect=canvas.getBoundingClientRect(),skeletonRect=skeletonCanvas.getBoundingClientRect();canvas.width=Math.round(rect.width*dpr);canvas.height=Math.round(rect.height*dpr);ctx.setTransform(dpr,0,0,dpr,0,0);if(skeletonRect.width){skeletonCanvas.width=Math.round(skeletonRect.width*dpr);skeletonCanvas.height=Math.round(skeletonRect.height*dpr);skeletonCtx.setTransform(dpr,0,0,dpr,0,0)}draw()}
 function transform(point,center){let x=point[0]-center[0],y=point[1]-center[1],z=point[2]-center[2];let cy=Math.cos(yaw),sy=Math.sin(yaw),x1=x*cy-z*sy,z1=x*sy+z*cy;let cp=Math.cos(pitch),sp=Math.sin(pitch),y1=y*cp-z1*sp,z2=y*sp+z1*cp;return [x1,y1,z2]}
-function project(point,center,w,h){const [x,y,z]=transform(point,center),pers=4.5/(4.5-z);return [w/2+panX+x*zoom*pers,h/2+panY-y*zoom*pers,pers]}
+function project(point,center,w,h){const [x,y,z]=transform(point,center),pers=4.5/(4.5+z);return [w/2+panX+x*zoom*pers,h/2+panY-y*zoom*pers,pers]}
 function line(a,b,color,width,center,w,h){const p=project(a,center,w,h),q=project(b,center,w,h);ctx.strokeStyle=color;ctx.lineWidth=width;ctx.lineCap='round';ctx.beginPath();ctx.moveTo(p[0],p[1]);ctx.lineTo(q[0],q[1]);ctx.stroke()}
 function point(p,r,color,center,w,h){const q=project(p,center,w,h);ctx.fillStyle=color;ctx.beginPath();ctx.arc(q[0],q[1],r*q[2],0,Math.PI*2);ctx.fill()}
 function arrow(a,b,color,center,w,h){const p=project(a,center,w,h),q=project(b,center,w,h),angle=Math.atan2(q[1]-p[1],q[0]-p[0]);ctx.strokeStyle=color;ctx.fillStyle=color;ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(p[0],p[1]);ctx.lineTo(q[0],q[1]);ctx.stroke();ctx.beginPath();ctx.moveTo(q[0],q[1]);ctx.lineTo(q[0]-10*Math.cos(angle-.48),q[1]-10*Math.sin(angle-.48));ctx.lineTo(q[0]-10*Math.cos(angle+.48),q[1]-10*Math.sin(angle+.48));ctx.closePath();ctx.fill()}
 function referencePointCloud(surface,center,w,h){const baseSize=Number($('pointSize').value);for(const sample of surface.points){const q=project(sample.point,center,w,h),alpha=.16+sample.frequency*.48,size=baseSize*(.8+sample.frequency*.5);ctx.fillStyle=`rgba(245,248,255,${alpha})`;ctx.fillRect(q[0]-size/2,q[1]-size/2,size,size)}}
-function drawZoneSurfaces(surfaces,center,w,h){const projected=[];for(const surface of surfaces){const color=zoneColor(surface.zone_id);for(const triangle of surface.triangles){const points=triangle.map(i=>project(surface.vertices[i],center,w,h));projected.push({points,color,depth:points.reduce((sum,p)=>sum+p[2],0)/3})}}projected.sort((a,b)=>a.depth-b.depth);for(const item of projected){ctx.fillStyle=colorWithAlpha(item.color,.16);ctx.strokeStyle=colorWithAlpha(item.color,.24);ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(item.points[0][0],item.points[0][1]);for(const p of item.points.slice(1))ctx.lineTo(p[0],p[1]);ctx.closePath();ctx.fill();ctx.stroke()}for(const surface of surfaces){const color=zoneColor(surface.zone_id);ctx.strokeStyle=colorWithAlpha(color,.82);ctx.lineWidth=2;for(const edge of surface.boundary_edges){const a=project(surface.vertices[edge[0]],center,w,h),b=project(surface.vertices[edge[1]],center,w,h);ctx.beginPath();ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);ctx.stroke()}if(surface.centroid&&surface.triangles.length){const p=project(surface.centroid,center,w,h),label=`Zone ${zoneLabel(surface.zone_id)}`;ctx.font='700 11px system-ui';const width=ctx.measureText(label).width+12;ctx.fillStyle='rgba(7,16,31,.78)';ctx.fillRect(p[0]-width/2,p[1]-10,width,18);ctx.fillStyle=color;ctx.textAlign='center';ctx.fillText(label,p[0],p[1]+3);ctx.textAlign='start'}}}
+function drawZoneSurfaces(surfaces,center,w,h){const projected=[];for(const surface of surfaces){const color=zoneColor(surface.zone_id);for(const triangle of surface.triangles){const points=triangle.map(i=>project(surface.vertices[i],center,w,h));projected.push({points,color,depth:points.reduce((sum,p)=>sum+p[2],0)/3})}}projected.sort((a,b)=>b.depth-a.depth);for(const item of projected){ctx.fillStyle=colorWithAlpha(item.color,.16);ctx.strokeStyle=colorWithAlpha(item.color,.24);ctx.lineWidth=1;ctx.beginPath();ctx.moveTo(item.points[0][0],item.points[0][1]);for(const p of item.points.slice(1))ctx.lineTo(p[0],p[1]);ctx.closePath();ctx.fill();ctx.stroke()}for(const surface of surfaces){const color=zoneColor(surface.zone_id);ctx.strokeStyle=colorWithAlpha(color,.82);ctx.lineWidth=2;for(const edge of surface.boundary_edges){const a=project(surface.vertices[edge[0]],center,w,h),b=project(surface.vertices[edge[1]],center,w,h);ctx.beginPath();ctx.moveTo(a[0],a[1]);ctx.lineTo(b[0],b[1]);ctx.stroke()}if(surface.centroid&&surface.triangles.length){const p=project(surface.centroid,center,w,h),label=`Zone ${zoneLabel(surface.zone_id)}`;ctx.font='700 11px system-ui';const width=ctx.measureText(label).width+12;ctx.fillStyle='rgba(7,16,31,.78)';ctx.fillRect(p[0]-width/2,p[1]-10,width,18);ctx.fillStyle=color;ctx.textAlign='center';ctx.fillText(label,p[0],p[1]+3);ctx.textAlign='start'}}}
 function drawZoneFlowGuides(guides,center,w,h){for(const guide of guides||[]){const key=zoneKey(guide.map_num,guide.zone_id),focused=selectedDetailKey!=='all'&&selectedDetailKey===key,alpha=selectedDetailKey==='all'?.38:focused?.94:.055;for(const stroke of guide.strokes||[]){if(!stroke.points||stroke.points.length<2)continue;const projected=stroke.points.map(point=>project(point,center,w,h));ctx.strokeStyle=`rgba(52,211,153,${alpha})`;ctx.lineWidth=3.5+stroke.confidence*5;ctx.lineCap='round';ctx.lineJoin='round';ctx.shadowColor=`rgba(52,211,153,${Math.min(.7,alpha)})`;ctx.shadowBlur=focused?10:5;ctx.beginPath();ctx.moveTo(projected[0][0],projected[0][1]);for(const point of projected.slice(1))ctx.lineTo(point[0],point[1]);ctx.stroke();ctx.shadowBlur=0;const start=projected[0];ctx.fillStyle=`rgba(167,243,208,${Math.min(1,alpha+.18)})`;ctx.beginPath();ctx.arc(start[0],start[1],focused?5:3,0,Math.PI*2);ctx.fill();if(focused){ctx.font='800 10px system-ui';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillStyle='#052e2b';ctx.beginPath();ctx.arc(start[0],start[1],8,0,Math.PI*2);ctx.fillStyle='#6ee7b7';ctx.fill();ctx.fillStyle='#052e2b';ctx.fillText(String(stroke.order),start[0],start[1]+.5)}}}ctx.textAlign='start';ctx.textBaseline='alphabetic'}
 function add(a,b){return a.map((value,axis)=>value+b[axis])}function sub(a,b){return a.map((value,axis)=>value-b[axis])}function mul(a,value){return a.map(axis=>axis*value)}function dot(a,b){return a.reduce((sum,value,axis)=>sum+value*b[axis],0)}function cross(a,b){return[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]]}function length(a){return Math.sqrt(dot(a,a))}function unit(a,fallback=[1,0,0]){const size=length(a);return size>.00001?mul(a,1/size):fallback}
 function mixPoint(a,b,ratio){if(!a)return b||null;if(!b)return a;return a.map((value,axis)=>value+(b[axis]-value)*ratio)}
@@ -1145,7 +1158,9 @@ def create_motion_viewer_router(
         representative = _representative_session(profile)
         selected = representative if session_id == "representative" else session_id
         selected_path = _session_path(root, process, mode_id, profile, selected)
-        selected_frames = _frames(selected_path, frame_count)
+        selected_frames = _canonicalize_zone_items(
+            _frames(selected_path, frame_count), process=process, mode_id=mode_id
+        )
         if not selected_frames:
             raise HTTPException(status_code=422, detail="expert session has no usable skeleton frames")
         sampled_sessions: list[list[dict[str, Any]]] = []
@@ -1156,17 +1171,25 @@ def create_motion_viewer_router(
                 continue
             try:
                 current_path = _session_path(root, process, mode_id, profile, current_id)
-                sampled = _frames(current_path, frame_count)
+                sampled = _canonicalize_zone_items(
+                    _frames(current_path, frame_count), process=process, mode_id=mode_id
+                )
             except HTTPException:
                 continue
             if sampled:
                 sampled_sessions.append(sampled)
                 session_paths.append(current_path)
         duration = float(selected_frames[-1]["t"]) if selected_frames else 0.0
-        paint_trace = _dense_paint_trace(selected_path)
+        paint_trace = _canonicalize_zone_items(
+            _dense_paint_trace(selected_path), process=process, mode_id=mode_id
+        )
         paint_statistics = _reference_paint_statistics(session_paths)
-        zone_flow_guides = _zone_flow_guides(session_paths)
-        zone_surfaces = _zone_surface_statistics(session_paths)
+        zone_flow_guides = _canonicalize_zone_items(
+            _zone_flow_guides(session_paths), process=process, mode_id=mode_id
+        )
+        zone_surfaces = _canonicalize_zone_items(
+            _zone_surface_statistics(session_paths), process=process, mode_id=mode_id
+        )
         direction_summary = _direction_summary(paint_trace)
         zone_order, zone_statistics = _zone_playback_statistics(
             profile,

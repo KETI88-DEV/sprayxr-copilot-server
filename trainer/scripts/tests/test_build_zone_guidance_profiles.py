@@ -65,3 +65,29 @@ def test_builds_blasting_zone_profiles_from_nested_expert_csvs(tmp_path: Path) -
     build_profiles(tmp_path, process="blasting")
     assert outputs[0].read_bytes() == first_profile
     assert (tmp_path / "generated" / "audits" / "blasting_learning.json").read_bytes() == first_audit
+
+
+def test_spray_mode_two_canonicalizes_reversed_expert_zone_ids(tmp_path: Path) -> None:
+    target = tmp_path / "raw" / "spray" / "learning" / "mode_02" / "2_1001_1"
+    target.mkdir(parents=True)
+    with (target / "2_1001_1.csv").open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.writer(stream)
+        writer.writerow(
+            ["시간(초)", "분사", "Speed (Real)", "Distance (Real)", "Ray Texture Map Number", "Zone ID"]
+        )
+        writer.writerows(
+            [
+                [0.1, "On", 100, 300, 1, "1"],
+                [0.2, "On", 200, 400, 1, "3"],
+            ]
+        )
+
+    [output] = build_profiles(tmp_path, process="spray")
+    profile = json.loads(output.read_text(encoding="utf-8"))
+
+    assert profile["aggregate"]["zones"]["1:3"]["speed_mms"]["median"] == 100
+    assert profile["aggregate"]["zones"]["1:1"]["speed_mms"]["median"] == 200
+    assert profile["aggregate"]["macro_orders"][0]["order"] == [
+        {"map_num": 1, "zone_id": "3"},
+        {"map_num": 1, "zone_id": "1"},
+    ]

@@ -11,9 +11,10 @@ from trainer.demo_api.motion_viewer import (
     _direction_summary,
     create_motion_viewer_router,
 )
+from trainer.scripts.build_zone_guidance_profiles import build_profiles
 
 
-def _write_csv(path: Path, *, offset: float) -> None:
+def _write_csv(path: Path, *, offset: float, zone_ids: list[str] | None = None) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fields = [
         "인덱스",
@@ -26,6 +27,7 @@ def _write_csv(path: Path, *, offset: float) -> None:
         "Ray point X", " Ray Point Y", " Ray Point Z",
         "Ray Texture Map Number", "Ray Texture UV X", "Ray Texture UV Y",
         "Zone ID",
+        "Speed (Real)", "Distance (Real)",
         "Pelvis Position X", "Pelvis Position Y", "Pelvis Position Z",
         "Pelvis Rotation X", "Pelvis Rotation Y", "Pelvis Rotation Z",
         "Spine Position X", "Spine Position Y", "Spine Position Z",
@@ -58,7 +60,9 @@ def _write_csv(path: Path, *, offset: float) -> None:
                     "Ray Texture Map Number": 1,
                     "Ray Texture UV X": (index % 2) * 32,
                     "Ray Texture UV Y": (index // 2) * 32,
-                    "Zone ID": "1",
+                    "Zone ID": zone_ids[index] if zone_ids is not None else "1",
+                    "Speed (Real)": 300,
+                    "Distance (Real)": 250,
                     "Pelvis Position X": offset + index * 0.01,
                     "Pelvis Position Y": 1,
                     "Pelvis Position Z": 0,
@@ -204,6 +208,9 @@ def test_motion_viewer_page_explains_representative_and_statistical_motion(tmp_p
     assert "function zoneLabel(zoneId)" in response.text
     assert "function averageCameraForward(payload)" in response.text
     assert "Math.atan2(forward[0],forward[2])" in response.text
+    assert "4.5/(4.5+z)" in response.text
+    assert "4.5/(4.5-z)" not in response.text
+    assert "projected.sort((a,b)=>b.depth-a.depth)" in response.text
     assert "function zoneHue" not in response.text
     assert "let referencePreview=false" in response.text
     assert "function showReferencePreview(key)" in response.text
@@ -211,6 +218,27 @@ def test_motion_viewer_page_explains_representative_and_statistical_motion(tmp_p
     assert "button.onclick=()=>showReferencePreview(key)" in response.text
     assert "allButton.onclick=()=>showReferencePreview('all')" in response.text
     assert "if(!referencePreview){" in response.text
+
+
+def test_mode_two_uses_corrected_expert_zone_ids_without_changing_raw_csv(tmp_path: Path) -> None:
+    mode_root = tmp_path / "raw" / "spray" / "learning" / "mode_02"
+    raw_zone_ids = ["1", "1", "2", "3", "3"]
+    _write_csv(mode_root / "2_1001_1.csv", offset=0.0, zone_ids=raw_zone_ids)
+    build_profiles(tmp_path, process="spray")
+    app = FastAPI()
+    app.include_router(create_motion_viewer_router(tmp_path, frame_count=5))
+
+    response = TestClient(app).get(
+        "/motion-viewer/api/motion",
+        params={"process": "spray", "mode_id": 2, "session_id": "representative"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert [frame["zone_id"] for frame in data["frames"]] == ["3", "3", "2", "1", "1"]
+    assert [item["zone_id"] for item in data["paint_trace"]] == ["3", "3", "2", "1", "1"]
+    with mode_root.joinpath("2_1001_1.csv").open(encoding="utf-8-sig", newline="") as stream:
+        assert [row["Zone ID"] for row in csv.DictReader(stream)] == raw_zone_ids
 
 
 def test_catalog_lists_modes_and_individual_expert_sessions(tmp_path: Path) -> None:

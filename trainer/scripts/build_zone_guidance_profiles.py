@@ -14,6 +14,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from trainer.expert_zone_mapping import canonical_expert_zone_id
+
 
 def _number(value: Any) -> float | None:
     try:
@@ -74,7 +76,9 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _load_session(csv_path: Path, mode_root: Path) -> dict[str, Any] | None:
+def _load_session(
+    csv_path: Path, mode_root: Path, *, process: str, mode_id: int
+) -> dict[str, Any] | None:
     with csv_path.open(encoding="utf-8-sig", newline="") as stream:
         reader = csv.DictReader(stream)
         fields = list(reader.fieldnames or [])
@@ -108,7 +112,9 @@ def _load_session(csv_path: Path, mode_root: Path) -> dict[str, Any] | None:
             if spray not in {"on", "1", "true"}:
                 finish_stroke()
                 continue
-            zone_id = str(row.get(zone_col, "")).strip()
+            zone_id = canonical_expert_zone_id(
+                process, "learning", mode_id, row.get(zone_col, "")
+            )
             if not zone_id or zone_id in {"-1", "0", "none", "nan"}:
                 continue
             map_value = _number(row.get(map_col)) if map_col is not None else None
@@ -254,7 +260,7 @@ def build_profiles(reference_root: Path, *, process: str) -> list[Path]:
         sessions = [
             session
             for path in sorted(mode_root.rglob("*.csv"))
-            if (session := _load_session(path, mode_root))
+            if (session := _load_session(path, mode_root, process=process, mode_id=mode_id))
         ]
         if not sessions:
             continue
