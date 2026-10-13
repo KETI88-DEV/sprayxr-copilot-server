@@ -179,6 +179,7 @@ class SessionPoseAnalysis:
     guideline: str
     sequences: list[dict[str, Any]] = field(default_factory=list)
     counts: dict[str, int] = field(default_factory=dict)
+    source_bodies: list[dict[str, Any]] = field(default_factory=list, repr=False)
 
     def pose_report(self) -> dict[str, Any]:
         """명세서 p.15-16 `pose_report`의 키만."""
@@ -258,7 +259,7 @@ def analyze_session(
             "분석할 분사 기록이 없습니다." if not targets
             else f"분사 {len(targets)}회 중 자세를 판정할 수 있는 분사가 없습니다."
         )
-        return SessionPoseAnalysis("unavailable", None, guideline, details, count_map)
+        return SessionPoseAnalysis("unavailable", None, guideline, details, count_map, [body for _, _, body in targets])
     average = statistics.mean(r.similarity_score for r in scored if r.similarity_score is not None)
     guideline = _guideline(scored, len(targets) - counts["no_zone"], counts["not_scored"])
-    return SessionPoseAnalysis("available", round(average, 4), guideline, details, count_map)
+    return SessionPoseAnalysis("available", round(average, 4), guideline, details, count_map, [body for _, _, body in targets])

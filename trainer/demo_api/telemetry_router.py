@@ -36,6 +36,8 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
 from trainer.demo_api.monitor import MonitorRecorder
+from trainer.demo_api.anomaly_stream import AnomalyBroadcaster
+from trainer.demo_api.sequence_analysis import SequenceDecision
 from trainer.demo_api.sequence_store import NON_CONTENT_FIELDS, SequenceStore
 from trainer.demo_api.telemetry_contracts import (
     AnalyzeSequenceData,
@@ -57,13 +59,18 @@ ANALYZE_SEQUENCE_PATH: Final[str] = "/api/v1/copilot/analyze-sequence"
 
 _SUCCESS_MESSAGE: Final[str] = "Sequence evaluated"
 _UNKNOWN_FIELD_CAP: Final[int] = 50
-_ENGINE_MISSING: Final[str] = "engine_not_implemented"
+_COATING_PENDING: Final[str] = "coating_engine_pending_integration"
+_SEQUENCE_UNAVAILABLE: Final[str] = "sequence_reference_unavailable"
 # MonitorEvent.session_id 는 문자열이다. 귀속되지 않은 시퀀스도 모니터에서 보여야 한다.
 _UNATTRIBUTED: Final[str] = "(unattributed)"
 
 
 class GuidanceEngine(Protocol):
     def evaluate(self, request: AnalyzeSequenceRequest) -> SequenceGuide: ...
+
+
+class SequenceEngine(Protocol):
+    def evaluate(self, request: AnalyzeSequenceRequest, store: SequenceStore) -> SequenceDecision: ...
 
 
 def _unavailable_guide() -> SequenceGuide:
@@ -115,6 +122,8 @@ def create_telemetry_router(
     store: SequenceStore | None = None,
     recorder: MonitorRecorder | None = None,
     guidance_engine: GuidanceEngine | None = None,
+    sequence_engine: SequenceEngine | None = None,
+    broadcaster: AnomalyBroadcaster | None = None,
 ) -> APIRouter:
     """``recorder``를 주면 호출당 입력 1건 + 출력 1건을 `/api/monitor/*`에 남긴다.
 
@@ -160,8 +169,8 @@ def create_telemetry_router(
                     frames_received=frames_received,
                     frames_accepted=frames_received if ack_record.stored else 0,
                 ),
-                coating_feedback=EngineFeedback(analysis_status="not_available", reason_code=_ENGINE_MISSING),
-                sequence_feedback=EngineFeedback(analysis_status="not_available", reason_code=_ENGINE_MISSING),
+                coating_feedback=EngineFeedback(analysis_status="not_available", reason_code=_COATING_PENDING),
+                sequence_feedback=EngineFeedback(analysis_status="not_available", reason_code=_SEQUENCE_UNAVAILABLE),
                 text_guide=None,
         )
         if analyze:
@@ -177,6 +186,20 @@ def create_telemetry_router(
             if guide is None:
                 guide = guidance_engine.evaluate(query) if guidance_engine is not None else _unavailable_guide()
                 guidance_cache[cache_key] = guide
+            if sequence_engine is not None:
+                decision = sequence_engine.evaluate(query, sequences)
+                common_data["sequence_feedback"] = decision.feedback
+                common_data["text_guide"] = decision.text_guide
+                if decision.anomaly_type is not None and broadcaster is not None:
+                    broadcaster.publish(
+                        session_id=query.session_id,
+                        sequence_id=query.sequence_id,
+                        anomaly_type=decision.anomaly_type,
+                        payload={
+                            "reason_code": decision.feedback.reason_code,
+                            "message": decision.text_guide,
+                        },
+                    )
             envelope = AnalyzeSequenceResponse(
                 status="SUCCESS",
                 code=200,
@@ -232,7 +255,8 @@ def create_telemetry_router(
         summary="2-2. 시퀀스 분석 및 속도·이격거리 가이드",
         description=(
             "전문가 기준과 비교하여 매 시퀀스마다 speed(slow/ok/fast)와 "
-            "distance(near/ok/far)를 구조화해 반환합니다. 학습 모드는 scenario_id, "
+            "distance(near/ok/far), Zone 작업 순서와 도포 방향 판정을 구조화해 반환합니다. "
+            "이상 판정은 같은 세션의 SSE 채널에도 한 번만 발행됩니다. 학습 모드는 scenario_id, "
             "스프레이/블라스팅 구분은 sequence_setting.tool_type에서 자동 선택합니다."
         ),
     )

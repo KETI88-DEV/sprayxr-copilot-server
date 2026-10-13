@@ -88,7 +88,7 @@ _SEQUENCE_INPUT = {
     "session_id": "SWAGGER-SESSION-a1b2c3d4",
     "user_id": "SWAGGER-DEMO-a1b2c3d4",
     "scenario_id": "1",
-    "zone_id": "1:1",
+    "zone_id": "1",
     "sequence_id": "SWAGGER-SEQUENCE-a1b2c3d4",
     "sequence_setting": {
         "tool_type": "spray_gun",
@@ -137,8 +137,55 @@ _REPORT_CONTEXT = _test_context(
         },
     },
     "0-3에서 생성한 report_id를 사용해 느린 속도와 가까운 이격거리의 종합평가를 조회합니다.",
-    "narrative_evaluation, strengths, improvements가 입력 지표와 일치하는지 확인합니다.",
+    "report 아래 coating_report, sequence_report, pose_report, llm_briefing 구조를 확인합니다.",
 )
+
+
+def _example_report(report_id: str) -> dict[str, Any]:
+    return {
+        "report_id": report_id,
+        "report_status": "complete",
+        "coating_report": {
+            "analysis_status": "unavailable",
+            "reason_code": "coating_engine_pending_integration",
+            "algorithm_version": None,
+            "source_artifact_id": None,
+            "guideline": "외부 도막 분석 엔진 연동 후 제공됩니다.",
+            "coating_distribution_index": None,
+            "zone_summary": None,
+            "distribution": None,
+            "reachability": None,
+            "worst_zones": [],
+            "root_cause": None,
+        },
+        "sequence_report": {
+            "analysis_status": "available", "reason_code": None,
+            "algorithm_version": "sequence-reference-1.0", "source_artifact_id": None,
+            "guideline": "전문가 권장 순서 1→2→3을 유지하세요.",
+            "recommended_flow": ["1", "2", "3"], "first_visit_flow": ["1", "2", "3"],
+            "evaluated_visit_count": 3, "on_track_visit_count": 3,
+            "skipped_zone_count": 0, "adherence_rate": 1.0, "deviation_count": 0,
+            "direction_adherence_rate": 1.0,
+            "zone_summary": [{"zone_id": "1", "visit_count": 1, "revisit_count": 0, "deviation_count": 0}],
+            "direction_summary": {
+                "evaluated_sequence_count": 1, "matched_sequence_count": 1,
+                "direction_error_count": 0, "direction_adherence_rate": 1.0,
+                "affected_zone_ids": [], "zone_summary": [],
+            },
+        },
+        "pose_report": {
+            "analysis_status": "available", "reason_code": None,
+            "algorithm_version": "pose-session-report-1.0", "source_artifact_id": None,
+            "guideline": "오른팔 높이를 일정하게 유지하세요.",
+            "evaluated_sequence_count": 1, "average_similarity_score": 0.82,
+            "zone_summary": [], "priority_corrections": [],
+        },
+        "llm_briefing": (
+            "전문가 기준 Zone 순서와 도포 방향은 모두 적정하며 자세 유사도는 82%입니다. "
+            "다음 훈련에서는 현재 순서를 유지하면서 오른팔 높이를 일정하게 유지하세요. "
+            "도막 평가는 외부 분석 엔진 연동 후 함께 제공됩니다."
+        ),
+    }
 
 
 @dataclass
@@ -359,15 +406,12 @@ def create_guided_workflow_router(
     @router.post(
         "/4-report", response_model=ApiResponse, tags=[_TAG], summary="0-4. 모의 최종 리포트 확인",
         description=(
-            "모의연동의 마지막 단계로 서술형 종합평가와 개선 행동을 반환합니다.\n\n"
+            "모의연동의 마지막 단계로 실제 최종 API와 같은 중첩 리포트 구조를 반환합니다.\n\n"
             "### 자동 사용 입력\n0-3에서 생성한 report_id와 점수 82점, 속도 300 mm/s, 이격거리 250 mm를 사용합니다.\n\n"
-            "### 결과 읽는 법\n`source_metrics`가 `narrative_evaluation`과 `improvements`에 어떻게 반영됐는지 비교하세요. 이전 단계는 필요 시 자동 실행됩니다."
+            "### 결과 읽는 법\n`report` 아래의 도막·순서·자세 분석과 `llm_briefing`을 확인하세요. 이전 단계는 필요 시 자동 실행됩니다."
         ),
         responses=_swagger_response({"test_context": _REPORT_CONTEXT, "workflow_status": "complete", "step": 4,
-                                     "overall_score": 82,
-                                     "narrative_evaluation": "기준보다 속도가 느리고 피도면에 다소 가깝습니다.",
-                                     "strengths": ["세션 절차를 완료했습니다."],
-                                     "improvements": ["이동 속도를 높이세요.", "피도면에서 멀어지세요."],
+                                     "report": _example_report("RPT-example"),
                                      "what_happened": "서술형 평가를 반환했습니다.",
                                      "beginner_tip": "입력 지표와 평가를 비교하세요.", "next_endpoint": f"{_PREFIX}/0-reset"}),
     )
@@ -377,10 +421,7 @@ def create_guided_workflow_router(
         input_used["report_id"] = run.report_id
         return _ok({"test_context":_test_context(input_used, _REPORT_CONTEXT["input_summary"], _REPORT_CONTEXT["evaluation_focus"]),
                     "workflow_status":"complete","step":4,"session_id":run.session_id,"report_id":run.report_id,
-                    "overall_score":82,
-                    "narrative_evaluation":"전체 도장 흐름은 안정적이지만 기준보다 이동 속도가 느리고 피도면에 다소 가깝습니다. 다음 훈련에서는 손목 각도를 유지한 채 일정한 속도로 이동하고, 권장 이격거리를 먼저 확보한 뒤 겹침 폭을 일정하게 유지해 보세요.",
-                    "strengths":["세션 절차를 끝까지 완료했습니다.","분사 방향이 예제 경로와 일치합니다."],
-                    "improvements":["이동 속도를 조금 높이세요.","피도면에서 조금 멀리 이동하세요."],
+                    "report":_example_report(run.report_id),
                     "what_happened":"모의연동 전 과정을 완료하고 UI에 표시할 서술형 평가를 반환했습니다.",
                     "beginner_tip":"다시 시험하려면 0-0 초기화부터 반복하세요.","next_endpoint":f"{_PREFIX}/0-reset"})
 

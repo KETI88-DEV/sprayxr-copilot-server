@@ -169,6 +169,17 @@ def test_every_public_url_parameter_has_an_example_or_default() -> None:
     assert missing == []
 
 
+def test_final_report_operation_shows_the_actual_nested_contract() -> None:
+    schema = TestClient(create_app()).get("/openapi.json").json()
+    example = schema["paths"]["/api/v1/reports/{report_id}"]["get"]["responses"]["200"]["content"]["application/json"]["example"]
+
+    assert set(example["data"]["report"]) == {
+        "report_id", "report_status", "coating_report", "sequence_report",
+        "pose_report", "llm_briefing",
+    }
+    assert example["data"]["report"]["sequence_report"]["analysis_status"] == "available"
+
+
 def test_every_public_operation_explains_when_and_how_to_use_it() -> None:
     schema = TestClient(create_app()).get("/openapi.json").json()
 

@@ -42,6 +42,7 @@ from trainer.demo_api.v1_contracts import (
 )
 from trainer.demo_api.session_analysis import analyze_session
 from trainer.demo_api.sequence_store import SequenceStore
+from trainer.demo_api.sequence_analysis import SequenceAnalysisEngine
 from trainer.demo_api.v1_store import V1Store
 
 logger = logging.getLogger(__name__)
@@ -77,7 +78,7 @@ def _error(code: int, message: str) -> JSONResponse:
 # 영역을 못 내는 이유는 서로 다르다. 한 코드로 뭉치면 운영자가 엉뚱한 데를 찾는다.
 # 도막은 재료(cur_sequence_heatmap)가 오지만 지수의 **정의**가 없고, 순서는 기준
 # (recommended_flow)이 없다.
-_COATING_INDEX_UNDEFINED: Final = "index_definition_missing"
+_COATING_INDEX_UNDEFINED: Final = "coating_engine_pending_integration"
 _FLOW_MISSING: Final = "recommended_flow_missing"
 
 def _unavailable_report(
@@ -150,7 +151,7 @@ async def _sse_body(
 
 
 def _report(row: Any) -> ReportDetail:
-    """저장된 분석이 있으면 `pose_report`에 싣는다. 도막·시퀀스 영역은 엔진이 없으므로 `unavailable`(p.15)."""
+    """Overlay every completed analysis area without inventing unavailable values."""
     payload = row.payload if isinstance(row.payload, dict) else {}
     detail = _unavailable_report(
         report_id=row.report_id,
@@ -161,13 +162,68 @@ def _report(row: Any) -> ReportDetail:
         scenario_id=payload.get("scenario_id"),
     )
     analysis = payload.get("analysis")
-    if isinstance(analysis, dict) and isinstance(analysis.get("pose_report"), dict):
-        detail.report.pose_report = PoseReport.model_validate(analysis["pose_report"])
+    if isinstance(analysis, dict):
+        if isinstance(analysis.get("pose_report"), dict):
+            detail.report.pose_report = PoseReport.model_validate(analysis["pose_report"])
+        if isinstance(analysis.get("sequence_report"), dict):
+            detail.report.sequence_report = SequenceReport.model_validate(analysis["sequence_report"])
+        if isinstance(analysis.get("llm_briefing"), str):
+            detail.report.llm_briefing = analysis["llm_briefing"]
         if isinstance(analysis.get("generated_at"), str):
             detail.generated_at = analysis["generated_at"]
         if isinstance(analysis.get("latency_ms"), int):
             detail.latency_ms = analysis["latency_ms"]
     return detail
+
+
+def _briefing(*, pose_report: dict[str, Any], sequence_report: dict[str, Any] | None) -> str | None:
+    """Create a fast, deterministic narrative from available structured evidence."""
+    parts: list[str] = []
+    if sequence_report and sequence_report.get("analysis_status") == "available":
+        adherence = sequence_report.get("adherence_rate")
+        deviations = sequence_report.get("deviation_count")
+        if isinstance(adherence, (int, float)):
+            parts.append(f"전문가 기준 Zone 순서 준수율은 {adherence * 100:.1f}%이며 순서 이탈은 {deviations or 0}회입니다.")
+        direction = sequence_report.get("direction_adherence_rate")
+        if isinstance(direction, (int, float)):
+            parts.append(f"도포 방향 준수율은 {direction * 100:.1f}%입니다.")
+    if pose_report.get("analysis_status") == "available":
+        similarity = pose_report.get("average_similarity_score")
+        if isinstance(similarity, (int, float)):
+            parts.append(f"숙련 작업자 대비 자세 평균 유사도는 {similarity * 100:.1f}%입니다.")
+        if pose_report.get("guideline"):
+            parts.append(str(pose_report["guideline"]))
+    if not parts:
+        return None
+    parts.append("도막 평가는 외부 도막 분석 엔진 연동 후 같은 리포트의 coating_report에 추가됩니다.")
+    return " ".join(parts)
+
+
+def _report_swagger_example() -> dict[str, Any]:
+    detail = ReportDetail(
+        request_id="req-report-example", session_id="3_11000346_1", user_id="1234",
+        scenario_id="3", generated_at="2026-10-13T09:00:00Z", latency_ms=1250,
+        report=SessionReport(
+            report_id="RPT-example", report_status="complete",
+            coating_report=CoatingReport(
+                analysis_status="unavailable", reason_code=_COATING_INDEX_UNDEFINED,
+                guideline="외부 도막 분석 엔진 연동 후 제공됩니다.",
+            ),
+            sequence_report=SequenceReport(
+                analysis_status="available", algorithm_version="sequence-reference-1.0",
+                guideline="전문가 권장 순서 7→4→8을 유지하세요.",
+                recommended_flow=["7", "4", "8"], first_visit_flow=["7", "4", "8"],
+                evaluated_visit_count=3, on_track_visit_count=3, skipped_zone_count=0,
+                adherence_rate=1.0, deviation_count=0,
+            ),
+            pose_report=PoseReport(
+                analysis_status="available", algorithm_version="pose-session-report-1.0",
+                average_similarity_score=0.82, guideline="오른팔 높이를 일정하게 유지하세요.",
+            ),
+            llm_briefing="Zone 순서는 전문가 기준과 일치하며 자세 평균 유사도는 82%입니다. 도막 평가는 외부 엔진 연동 후 추가됩니다.",
+        ),
+    )
+    return ApiResponse(message="Session report completed", data=detail).model_dump(mode="json")
 
 
 def create_v1_router(
@@ -177,6 +233,7 @@ def create_v1_router(
     sequences: SequenceStore | None = None,
     mcp_base_url: str | None = None,
     transport: httpx.BaseTransport | None = None,
+    sequence_engine: SequenceAnalysisEngine | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix=_V1)
     state = store if store is not None else V1Store()
@@ -198,11 +255,19 @@ def create_v1_router(
                 analysis={"generated_at": _now(), "error": "session_analysis_failed"},
             )
             return
+        sequence_report = (
+            sequence_engine.report_bodies(result.source_bodies, scenario_id=scenario_id)
+            if sequence_engine is not None else
+            SequenceReport(analysis_status="unavailable", reason_code=_FLOW_MISSING, guideline=_ENGINE_MISSING).model_dump(mode="json")
+        )
+        pose_report = result.pose_report()
         state.finish_completion(
             report_id, status="complete",
             analysis={
                 "generated_at": _now(),
-                "pose_report": result.pose_report(),
+                "pose_report": pose_report,
+                "sequence_report": sequence_report,
+                "llm_briefing": _briefing(pose_report=pose_report, sequence_report=sequence_report),
                 "counts": result.counts,
                 "sequences": result.sequences,
             },
@@ -352,6 +417,7 @@ def create_v1_router(
         "/reports/{report_id}", response_model=ApiResponse, tags=["5. 최종 평가·리포트"],
         summary="5-3. 최종 종합 리포트 상세 조회",
         description="리포트 상태 확인 후 최종 평가 내용을 조회합니다. 분석 엔진 결과가 준비되지 않은 영역은 수치를 임의 생성하지 않고 unavailable과 사유를 명시해 반환합니다.",
+        responses={200: {"description": "최종 리포트", "content": {"application/json": {"example": _report_swagger_example()}}}},
     )
     async def report_detail(
         report_id: Annotated[str, ApiPath(examples=["RPT-123456789abc"])]

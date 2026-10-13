@@ -26,6 +26,9 @@ from trainer.demo_api.db_viewer import create_db_viewer_router
 from trainer.demo_api.expert_guidance import ExpertGuidanceEngine
 from trainer.demo_api.guided_workflow import create_guided_workflow_router
 from trainer.demo_api.telemetry_router import create_telemetry_router
+from trainer.demo_api.anomaly_stream import AnomalyBroadcaster
+from trainer.demo_api.sequence_analysis import SequenceAnalysisEngine
+from trainer.demo_api.sequence_store import SequenceStore
 from trainer.demo_api.v1_router import create_v1_router
 from trainer.demo_api.v1_store import V1Store
 from trainer.demo_api.monitor import MonitorRecorder
@@ -110,6 +113,9 @@ def create_app(
         Path(os.environ.get("EXPERT_REFERENCE_ROOT", "/expert_reference_data"))
     )
     v1_store = V1Store()
+    sequence_store = SequenceStore()
+    anomaly_broadcaster = AnomalyBroadcaster()
+    sequence_analysis = SequenceAnalysisEngine(expert_guidance.reference_root)
     speech_to_text = LazySpeechToText(
         lambda: TransformersWhisperSpeechToText(
             os.environ.get("STT_MODEL_PATH", "/stt-model"),
@@ -250,6 +256,7 @@ def create_app(
         create_copilot_router(
             (lambda: chat_service_mod._get_or_build_pipeline()) if live else None,
             mcp_base_url=mcp_base_url,
+            store=sequence_store,
         )
     )
     # 명세서 15개 중 12개: 세션·사용자·리포트·이상 알림 SSE·테스트.
@@ -262,14 +269,27 @@ def create_app(
             (lambda: chat_service_mod._get_or_build_pipeline()) if live else None,
             stt_provider=lambda: speech_to_text,
             mcp_base_url=mcp_base_url,
+            store=sequence_store,
         )
     )
-    app.include_router(create_v1_router(store=v1_store, mcp_base_url=mcp_base_url))
+    app.include_router(create_v1_router(
+        store=v1_store,
+        broadcaster=anomaly_broadcaster,
+        sequences=sequence_store,
+        sequence_engine=sequence_analysis,
+        mcp_base_url=mcp_base_url,
+    ))
     # POST /api/v1/telemetry/sequence: 시퀀스를 데이터베이스에 올린다. 자세 채점은
     # copilot/query 의 pose_recomm 이 한다(명세서 p.4 vs p.9).
     # recorder 를 함께 준다 — v2.5 요청·응답이 /api/monitor/{events,stream} 에 보인다.
     app.include_router(
-        create_telemetry_router(recorder=recorder, guidance_engine=expert_guidance)
+        create_telemetry_router(
+            store=sequence_store,
+            recorder=recorder,
+            guidance_engine=expert_guidance,
+            sequence_engine=sequence_analysis,
+            broadcaster=anomaly_broadcaster,
+        )
     )
     install_copilot_error_handlers(app)
 

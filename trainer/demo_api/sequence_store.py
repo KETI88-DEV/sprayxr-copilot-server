@@ -157,6 +157,24 @@ class SequenceStore:
             ).fetchall()
         return [str(row[0]) for row in rows]
 
+    def session_bodies(self, session_key: str) -> list[dict[str, Any]]:
+        """Return valid bodies in receive order for deterministic session analysis."""
+        with self._guard:
+            rows = self._conn.execute(
+                "SELECT body FROM sequences WHERE session_key = ? AND body IS NOT NULL"
+                " ORDER BY received_at, sequence_id",
+                (session_key,),
+            ).fetchall()
+        bodies: list[dict[str, Any]] = []
+        for row in rows:
+            try:
+                body = json.loads(row[0])
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if isinstance(body, dict):
+                bodies.append(body)
+        return bodies
+
     def latest_sequence_id(self, session_key: str) -> str | None:
         """`context`가 없을 때 쓸 가장 최근 시퀀스. 없으면 `None` — 지어내지 않는다."""
         with self._guard:

@@ -274,7 +274,7 @@ def test_report_detail_returns_unavailable_areas_without_inventing_numbers() -> 
     assert report["sequence_report"]["adherence_rate"] is None
     assert report["pose_report"]["average_similarity_score"] is None
     # 못 내는 이유가 영역마다 다르다 — 한 코드로 뭉치면 엉뚱한 데를 찾게 된다.
-    assert report["coating_report"]["reason_code"] == "index_definition_missing"
+    assert report["coating_report"]["reason_code"] == "coating_engine_pending_integration"
     assert report["sequence_report"]["reason_code"] == "recommended_flow_missing"
 
 

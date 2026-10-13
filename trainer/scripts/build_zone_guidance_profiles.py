@@ -45,6 +45,22 @@ def _distribution(values: list[float]) -> dict[str, float | int]:
     }
 
 
+def _stroke_direction(points: list[tuple[float, float]]) -> str | None:
+    if len(points) < 2:
+        return None
+    x_travel = sum(abs(b[0] - a[0]) for a, b in zip(points, points[1:]))
+    y_travel = sum(abs(b[1] - a[1]) for a, b in zip(points, points[1:]))
+    if x_travel + y_travel < 5.0:
+        return "stationary"
+    displacement = math.dist(points[0], points[-1])
+    path_length = sum(math.dist(a, b) for a, b in zip(points, points[1:]))
+    if x_travel >= y_travel * 1.5:
+        return "horizontal"
+    if y_travel >= x_travel * 1.5:
+        return "vertical"
+    return "diagonal" if path_length and displacement / path_length >= 0.5 else "curved_irregular"
+
+
 def _column(fieldnames: list[str], name: str) -> str | None:
     normalized = {field.strip().lower(): field for field in fieldnames}
     return normalized.get(name.strip().lower())
@@ -67,15 +83,30 @@ def _load_session(csv_path: Path, mode_root: Path) -> dict[str, Any] | None:
         distance_col = _column(fields, "Distance (Real)") or _column(fields, "Distance (Input)")
         zone_col = _column(fields, "Zone ID")
         map_col = _column(fields, "Ray Texture Map Number")
+        uv_x_col = _column(fields, "Ray Texture UV X")
+        uv_y_col = _column(fields, "Ray Texture UV Y")
         if not all((spray_col, speed_col, distance_col, zone_col)):
             return None
 
         zones: dict[str, dict[str, Any]] = {}
         order: list[dict[str, Any]] = []
         seen: set[str] = set()
+        active_key: str | None = None
+        active_points: list[tuple[float, float]] = []
+        directions: dict[str, list[str]] = {}
+
+        def finish_stroke() -> None:
+            nonlocal active_key, active_points
+            direction = _stroke_direction(active_points)
+            if active_key is not None and direction is not None:
+                directions.setdefault(active_key, []).append(direction)
+            active_key = None
+            active_points = []
+
         for row in reader:
             spray = str(row.get(spray_col, "")).strip().lower()
             if spray not in {"on", "1", "true"}:
+                finish_stroke()
                 continue
             zone_id = str(row.get(zone_col, "")).strip()
             if not zone_id or zone_id in {"-1", "0", "none", "nan"}:
@@ -83,6 +114,13 @@ def _load_session(csv_path: Path, mode_root: Path) -> dict[str, Any] | None:
             map_value = _number(row.get(map_col)) if map_col is not None else None
             map_num = int(map_value) if map_value is not None and map_value >= 1 else 1
             key = f"{map_num}:{zone_id}"
+            if active_key != key:
+                finish_stroke()
+                active_key = key
+            x = _number(row.get(uv_x_col)) if uv_x_col is not None else None
+            y = _number(row.get(uv_y_col)) if uv_y_col is not None else None
+            if x is not None and y is not None:
+                active_points.append((x, y))
             speed = _number(row.get(speed_col))
             distance = _number(row.get(distance_col))
             zone = zones.setdefault(
@@ -96,6 +134,7 @@ def _load_session(csv_path: Path, mode_root: Path) -> dict[str, Any] | None:
             if key not in seen:
                 seen.add(key)
                 order.append({"map_num": map_num, "zone_id": zone_id})
+        finish_stroke()
 
     usable = {
         key: {
@@ -103,6 +142,7 @@ def _load_session(csv_path: Path, mode_root: Path) -> dict[str, Any] | None:
             "zone_id": value["zone_id"],
             "speed_mms": statistics.median(value["speed"]) if value["speed"] else None,
             "distance_mm": statistics.median(value["distance"]) if value["distance"] else None,
+            "expected_direction": Counter(directions.get(key, [])).most_common(1)[0][0] if directions.get(key) else None,
         }
         for key, value in zones.items()
         if value["speed"] or value["distance"]
@@ -145,12 +185,14 @@ def _profile(process: str, mode_id: int, mode_root: Path, sessions: list[dict[st
         for key, zone in session["analysis"]["zones"].items():
             aggregate = zone_samples.setdefault(
                 key,
-                {"map_num": zone["map_num"], "zone_id": zone["zone_id"], "speed": [], "distance": []},
+                {"map_num": zone["map_num"], "zone_id": zone["zone_id"], "speed": [], "distance": [], "directions": []},
             )
             if zone["speed_mms"] is not None:
                 aggregate["speed"].append(zone["speed_mms"])
             if zone["distance_mm"] is not None:
                 aggregate["distance"].append(zone["distance_mm"])
+            if zone.get("expected_direction") is not None:
+                aggregate["directions"].append(zone["expected_direction"])
 
     zones = {
         key: {
@@ -159,6 +201,7 @@ def _profile(process: str, mode_id: int, mode_root: Path, sessions: list[dict[st
             "session_count": max(len(value["speed"]), len(value["distance"])),
             "speed_mms": _distribution(value["speed"]) if value["speed"] else {},
             "distance_mm": _distribution(value["distance"]) if value["distance"] else {},
+            "expected_direction": Counter(value["directions"]).most_common(1)[0][0] if value["directions"] else None,
         }
         for key, value in sorted(zone_samples.items())
     }

@@ -13,6 +13,8 @@ from fastapi.testclient import TestClient
 from trainer.demo_api.copilot_router import install_copilot_error_handlers
 from trainer.demo_api.expert_guidance import GuideItem, SequenceGuide
 from trainer.demo_api.sequence_store import SequenceStore
+from trainer.demo_api.anomaly_stream import AnomalyBroadcaster
+from trainer.demo_api.telemetry_contracts import EngineFeedback
 from trainer.demo_api.telemetry_router import (
     ANALYZE_SEQUENCE_PATH,
     TELEMETRY_SEQUENCE_PATH,
@@ -66,6 +68,8 @@ def _client(
     *,
     store: SequenceStore | None = None,
     guidance_engine: Any = None,
+    sequence_engine: Any = None,
+    broadcaster: AnomalyBroadcaster | None = None,
 ) -> TestClient:
     """자세는 여기서 채점하지 않으므로 MCP 트랜스포트가 필요 없다(명세서 p.4)."""
     app = FastAPI()
@@ -73,6 +77,8 @@ def _client(
         create_telemetry_router(
             store=store if store is not None else SequenceStore(":memory:"),
             guidance_engine=guidance_engine,
+            sequence_engine=sequence_engine,
+            broadcaster=broadcaster,
         )
     )
     install_copilot_error_handlers(app)
@@ -299,12 +305,39 @@ def test_every_documented_required_field_is_required(missing: str) -> None:
 # --- 미구현 엔진 ----------------------------------------------------------
 
 
-def test_unimplemented_engines_say_so_rather_than_inventing_values() -> None:
-    """Given no coating or sequence engine, When posted, Then both report not_available."""
+def test_unconnected_engines_report_distinct_stable_reasons() -> None:
     data = _client().post(URL, json=_body()).json()["data"]
 
-    for key in ("coating_feedback", "sequence_feedback"):
-        assert data[key] == {"analysis_status": "not_available", "reason_code": "engine_not_implemented"}
+    assert data["coating_feedback"] == {
+        "analysis_status": "not_available", "reason_code": "coating_engine_pending_integration",
+    }
+    assert data["sequence_feedback"] == {
+        "analysis_status": "not_available", "reason_code": "sequence_reference_unavailable",
+    }
+
+
+class _SequenceDecision:
+    feedback = EngineFeedback(analysis_status="available", reason_code="zone_skipped")
+    text_guide = "2번 구역을 먼저 도장하세요."
+    anomaly_type = "sequence_order_deviation"
+
+
+class _SequenceStub:
+    def evaluate(self, _request: Any, _store: SequenceStore) -> _SequenceDecision:
+        return _SequenceDecision()
+
+
+def test_analyze_sequence_returns_feedback_and_publishes_the_same_anomaly() -> None:
+    bus = AnomalyBroadcaster()
+    data = _client(sequence_engine=_SequenceStub(), broadcaster=bus).post(
+        ANALYZE_SEQUENCE_PATH, json=_body(scenario_id="3"),
+    ).json()["data"]
+
+    assert data["sequence_feedback"] == {"analysis_status": "available", "reason_code": "zone_skipped"}
+    assert data["text_guide"] == "2번 구역을 먼저 도장하세요."
+    events = bus.since("1_1001642_1", last_event_id=0)
+    assert len(events) == 1
+    assert events[0].anomaly_type == "sequence_order_deviation"
 
 
 # --- 모니터 기록 ----------------------------------------------------------

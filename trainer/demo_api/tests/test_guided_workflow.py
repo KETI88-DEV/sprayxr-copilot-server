@@ -42,7 +42,14 @@ def test_guided_workflow_runs_end_to_end_without_parameters() -> None:
     }
     assert payloads[3]["report_id"].startswith("RPT-")
     assert payloads[4]["report_id"] == payloads[3]["report_id"]
-    assert len(payloads[4]["narrative_evaluation"]) >= 40
+    report = payloads[4]["report"]
+    assert set(report) == {
+        "report_id", "report_status", "coating_report", "sequence_report",
+        "pose_report", "llm_briefing",
+    }
+    assert report["report_status"] == "complete"
+    assert len(report["llm_briefing"]) >= 40
+    assert "narrative_evaluation" not in payloads[4]
 
 
 def test_each_later_step_recovers_prerequisites_for_a_beginner() -> None:
