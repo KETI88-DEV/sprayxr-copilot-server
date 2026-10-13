@@ -522,6 +522,96 @@ def _zone_surface_statistics(paths: list[Path], *, uv_cell_size: float = 32.0) -
     ]
 
 
+def _metric_value(value: Any) -> float | None:
+    if isinstance(value, dict):
+        value = value.get("median")
+    return _number(value)
+
+
+def _zone_playback_statistics(
+    profile: dict[str, Any], selected_session_id: str, trace: list[dict[str, Any]]
+) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
+    session = next(
+        (item for item in profile.get("sessions", []) if str(item.get("session_id")) == selected_session_id),
+        {},
+    )
+    analysis = session.get("analysis", {}) if isinstance(session, dict) else {}
+    raw_order = analysis.get("macro_order", []) if isinstance(analysis, dict) else []
+    if not raw_order:
+        seen: set[tuple[str, str]] = set()
+        raw_order = []
+        for item in trace:
+            identity = (str(item.get("map_num") or ""), str(item.get("zone_id") or ""))
+            if not all(identity) or identity in seen:
+                continue
+            seen.add(identity)
+            raw_order.append({"map_num": identity[0], "zone_id": identity[1]})
+    zone_order = [
+        {
+            "map_num": str(item.get("map_num")),
+            "zone_id": str(item.get("zone_id")),
+            "order": index + 1,
+        }
+        for index, item in enumerate(raw_order)
+        if item.get("map_num") is not None and item.get("zone_id") is not None
+    ]
+
+    observed: dict[str, dict[str, Any]] = {}
+    previous: dict[str, Any] | None = None
+    for item in trace:
+        map_num, zone_id = item.get("map_num"), item.get("zone_id")
+        if map_num is None or zone_id is None:
+            previous = item
+            continue
+        key = f"{map_num}:{zone_id}"
+        current = observed.setdefault(
+            key,
+            {"path_length": 0.0, "duration": 0.0, "points": 0, "segments": set()},
+        )
+        current["points"] += 1
+        current["segments"].add(item.get("segment"))
+        if (
+            previous is not None
+            and previous.get("segment") == item.get("segment")
+            and previous.get("map_num") == map_num
+            and previous.get("zone_id") == zone_id
+        ):
+            current["path_length"] += math.dist(previous["point"], item["point"])
+            current["duration"] += max(0.0, float(item["t"]) - float(previous["t"]))
+        previous = item
+
+    aggregate_zones = profile.get("aggregate", {}).get("zones", {})
+    selected_zones = analysis.get("zones", {}) if isinstance(analysis, dict) else {}
+    all_keys = set(aggregate_zones) | set(selected_zones) | set(observed)
+    statistics_output: dict[str, dict[str, Any]] = {}
+    for key in sorted(all_keys):
+        aggregate = aggregate_zones.get(key, {})
+        selected = selected_zones.get(key, {})
+        measured = observed.get(key, {})
+        map_num, _, zone_id = key.partition(":")
+        session_count = aggregate.get("session_count")
+        if session_count is None:
+            session_count = sum(
+                key in (item.get("analysis", {}).get("zones", {}))
+                for item in profile.get("sessions", [])
+            )
+        statistics_output[key] = {
+            "map_num": str(aggregate.get("map_num", selected.get("map_num", map_num))),
+            "zone_id": str(aggregate.get("zone_id", selected.get("zone_id", zone_id))),
+            "expert_session_count": int(session_count or 0),
+            "expected_direction": aggregate.get("expected_direction") or selected.get("expected_direction"),
+            "median_speed_mms": _metric_value(aggregate.get("speed_mms")),
+            "median_distance_mm": _metric_value(aggregate.get("distance_mm")),
+            "selected_speed_mms": _metric_value(selected.get("speed_mms")),
+            "selected_distance_mm": _metric_value(selected.get("distance_mm")),
+            "observed_path_length_m": round(float(measured.get("path_length", 0.0)), 3),
+            "observed_duration_seconds": round(float(measured.get("duration", 0.0)), 2),
+            "observed_point_count": int(measured.get("points", 0)),
+            "observed_sequence_count": len(measured.get("segments", set())),
+        }
+    return zone_order, statistics_output
+
+
 def _spread(
     selected_frames: list[dict[str, Any]], all_frames: list[list[dict[str, Any]]]
 ) -> list[dict[str, Any]]:
@@ -730,6 +820,7 @@ button{cursor:pointer;font-weight:700}.primary{background:#3157d5;border-color:#
 .overlay{position:absolute;left:18px;top:16px;background:rgba(7,16,31,.72);border:1px solid rgba(89,116,150,.45);border-radius:10px;padding:10px 12px;font-size:12px;color:var(--muted);pointer-events:none}.overlay strong{display:block;color:var(--ink);font-size:14px;margin-bottom:4px}
 .loading{position:absolute;inset:0;display:grid;place-content:center;justify-items:center;gap:13px;background:rgba(5,12,24,.72);backdrop-filter:blur(3px);z-index:5;color:#dce8ff;font-size:13px;font-weight:700}.loading[hidden]{display:none}.spinner{width:34px;height:34px;border:3px solid rgba(125,211,252,.2);border-top-color:#22d3ee;border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:14px;margin-bottom:11px}.card span{display:block;color:var(--muted);font-size:11px}.card strong{display:block;font-size:20px;margin-top:5px}.legend{font-size:12px;color:var(--muted);line-height:2}.dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:7px}.help{font-size:12px;color:var(--muted);line-height:1.65;margin-top:18px}.status{min-height:18px;color:var(--cyan);font-size:12px;margin-top:12px}
+.zone-order{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}.zone-chip{width:auto;padding:6px 9px;border-radius:999px;font-size:11px;color:#b9caff;background:#111f35}.zone-chip.active{color:#07101f;background:#67e8f9;border-color:#67e8f9}.zone-detail-title{font-size:15px!important;color:var(--ink)!important;font-weight:800;margin-bottom:9px}.zone-metric{display:flex!important;justify-content:space-between;gap:10px;padding:6px 0;border-top:1px solid rgba(89,116,150,.2);font-size:11px!important}.zone-metric b{color:#e8f1ff;font-weight:700;text-align:right}.zone-note{margin-top:9px;color:#7890ad;font-size:10px;line-height:1.5}
 .toggle{display:flex;align-items:center;gap:8px;margin-top:14px;color:var(--muted);font-size:12px}.toggle input{width:auto}.badge{display:inline-flex;padding:5px 9px;border:1px solid #3157d5;border-radius:999px;color:#b9caff;font-size:11px;margin-top:12px}
 @media(max-width:1000px){.workspace{grid-template-columns:240px 1fr}.right{display:none}}@media(max-width:720px){.workspace{display:block}.side{border:0}.stage,canvas{min-height:480px}}
 </style></head><body><div class="shell">
@@ -749,7 +840,7 @@ button{cursor:pointer;font-weight:700}.primary{background:#3157d5;border-color:#
 <p class="help">마우스로 드래그하면 시점을 돌리고, 휠로 확대·축소할 수 있습니다. 페인트 누적 궤적과 머리·양손의 실측 위치가 기본 표시됩니다.</p>
 </aside>
 <section class="stage"><canvas id="canvas"></canvas><div class="overlay"><strong id="overlayTitle">학습모드</strong><span id="overlayFrame">프레임 준비 중</span></div><div id="loading" class="loading"><div class="spinner"></div><span>전문가 기록을 불러오는 중입니다.</span></div></section>
-<aside class="side right"><div class="card"><span>통계에 포함된 수행</span><strong id="sessionCount">-</strong></div><div class="card"><span>현재 기록 길이</span><strong id="duration">-</strong></div><div class="card"><span>선택 기록의 주요 도장 방향</span><strong id="direction">-</strong></div><div class="card"><span>전문가 전체 방향 비중</span><strong id="directionMix" style="font-size:14px;line-height:1.65">-</strong></div><div class="card"><span>현재 양손 위치 편차</span><strong id="handSpread">-</strong></div>
+<aside class="side right"><div class="card"><span>현재 작업 Zone</span><strong id="currentZone">대기 중</strong></div><div class="card"><span>Zone 작업 순서</span><div id="zoneOrder" class="zone-order"></div></div><div id="zoneDetail" class="card"><span class="zone-detail-title">Zone 통계</span><span>재생을 시작하거나 위의 Zone을 선택하세요.</span></div><div class="card"><span>통계에 포함된 수행</span><strong id="sessionCount">-</strong></div><div class="card"><span>현재 기록 길이</span><strong id="duration">-</strong></div><div class="card"><span>선택 기록의 주요 도장 방향</span><strong id="direction">-</strong></div><div class="card"><span>전문가 전체 방향 비중</span><strong id="directionMix" style="font-size:14px;line-height:1.65">-</strong></div><div class="card"><span>현재 양손 위치 편차</span><strong id="handSpread">-</strong></div>
 <div class="legend"><div><i class="dot" style="background:#f5f8ff"></i>전문가 전체 Ray Point 점군</div><div><i class="dot" style="background:#a78bfa"></i>Map·Zone별 관측 영역</div><div><i class="dot" style="background:var(--green)"></i>위치별 주 방향·통과 빈도</div><div><i class="dot" style="background:#ff8a3d"></i>선택 기록의 페인트 누적 궤적</div><div><i class="dot" style="background:var(--cyan)"></i>전형기 반장의 머리·양손 실측 위치</div></div>
 <p class="help">Zone 면은 같은 Map·Zone의 UV 인접점만 작은 3차원 패치로 연결하므로 움푹 파인 부분과 곡면을 평면으로 뭉개지 않습니다. 데이터가 관측되지 않은 빈 공간은 임의로 채우지 않습니다.</p></aside>
 </main></div><script>
@@ -761,8 +852,15 @@ function currentProcess(){return catalog.processes.find(p=>p.process===$('proces
 function currentMode(){return currentProcess().modes.find(m=>String(m.mode_id)===$('mode').value)}
 function fillModes(){const p=currentProcess();$('mode').replaceChildren(...p.modes.map(m=>option(m.mode_id,`학습모드 ${m.mode_id} · ${m.session_count}회`)));const four=p.modes.find(m=>m.mode_id===4);if(four)$('mode').value='4';fillSessions()}
 function fillSessions(){const m=currentMode();$('session').replaceChildren(option('representative',`전형기 대표 실측 모션 · ${m.representative_session_id}`),...m.sessions.map(s=>option(s,`전형기 · ${s}`)));loadMotion()}
+function zoneKey(mapNum,zoneId){return mapNum!=null&&zoneId!=null?`${mapNum}:${zoneId}`:null}
+function metricRow(label,value){const row=document.createElement('span');row.className='zone-metric';const name=document.createElement('span'),metric=document.createElement('b');name.textContent=label;metric.textContent=value;row.append(name,metric);return row}
+function directionName(value){return({horizontal:'수평',vertical:'수직',diagonal:'대각',curved_irregular:'곡선·불규칙'})[value]||'자료 없음'}
+function showZoneDetail(key){const detail=$('zoneDetail'),stats=(data&&data.zone_statistics||{})[key];detail.replaceChildren();const title=document.createElement('span');title.className='zone-detail-title';title.textContent=stats?`Zone ${stats.zone_id} 기준 통계`:'Zone 통계';detail.append(title);if(!stats){const empty=document.createElement('span');empty.textContent='해당 Zone의 통계가 없습니다.';detail.append(empty);return}const speed=stats.median_speed_mms!=null?`${(stats.median_speed_mms/1000).toFixed(2)} m/s`:'자료 없음',distance=stats.median_distance_mm!=null?`${Math.round(stats.median_distance_mm)} mm`:'자료 없음';detail.append(metricRow('전문가 중앙 속도',speed),metricRow('전문가 중앙 이격거리',distance),metricRow('기준 도장 방향',directionName(stats.expected_direction)),metricRow('선택 기록 분사 시간',`${stats.observed_duration_seconds.toFixed(1)}초`),metricRow('선택 기록 도포 경로',`${stats.observed_path_length_m.toFixed(2)} m`),metricRow('선택 기록 시퀀스',`${stats.observed_sequence_count}회`),metricRow('전문가 관측 수행',`${stats.expert_session_count}회`));const note=document.createElement('div');note.className='zone-note';note.textContent='속도·이격거리는 전문가 반복 수행의 중앙값이며, 시간·경로·시퀀스는 현재 선택 기록 기준입니다.';detail.append(note)}
+function renderZoneOrder(){const host=$('zoneOrder');host.replaceChildren();for(const item of data.zone_order||[]){const button=document.createElement('button');button.className='zone-chip';button.dataset.zoneKey=zoneKey(item.map_num,item.zone_id);button.textContent=`${item.order}. Zone ${item.zone_id}`;button.onclick=()=>showZoneDetail(button.dataset.zoneKey);host.append(button)}if(data.zone_order&&data.zone_order.length)showZoneDetail(zoneKey(data.zone_order[0].map_num,data.zone_order[0].zone_id))}
+let displayedZoneKey=null;
+function updateZonePanel(frame){const key=zoneKey(frame.map_num,frame.zone_id);$('currentZone').textContent=key?`Zone ${frame.zone_id}${frame.spraying?' · 분사 중':' · 조준/이동'}`:'이동/대기';for(const chip of $('zoneOrder').querySelectorAll('.zone-chip'))chip.classList.toggle('active',chip.dataset.zoneKey===key);if(key&&key!==displayedZoneKey){showZoneDetail(key);displayedZoneKey=key}}
 function setLoading(active){$('loading').hidden=!active;canvas.setAttribute('aria-busy',active?'true':'false');for(const id of ['process','mode','session'])$(id).disabled=active}
-async function loadMotion(){const generation=++loadGeneration;playing=false;last=0;$('play').textContent='재생';$('status').textContent='모션과 통계 범위를 계산하는 중입니다.';setLoading(true);try{const q=new URLSearchParams({process:$('process').value,mode_id:$('mode').value,session_id:$('session').value});const incoming=await json('/motion-viewer/api/motion?'+q);if(generation!==loadGeneration)return;data=incoming;index=0;playheadSeconds=0;$('timeline').max=Math.max(0,data.frames.length-1);$('timeline').value=0;$('sessionCount').textContent=`${data.sampled_session_count}회`;$('duration').textContent=`${data.duration_seconds.toFixed(1)}초`;$('direction').textContent=data.direction_summary.label;const mix=data.direction_distribution;$('directionMix').textContent=`수평 ${(mix.horizontal*100).toFixed(0)}% · 수직 ${(mix.vertical*100).toFixed(0)}% · 대각 ${(mix.diagonal*100).toFixed(0)}%`;$('overlayTitle').textContent=`전형기 반장 · ${data.process_label} · 학습모드 ${data.mode_id}`;$('status').textContent=`${data.selected_session_id} 준비 완료`;draw()}catch(e){if(generation!==loadGeneration)return;data=null;$('status').textContent=e.message;draw()}finally{if(generation===loadGeneration)setLoading(false)}}
+async function loadMotion(){const generation=++loadGeneration;playing=false;last=0;displayedZoneKey=null;$('play').textContent='재생';$('status').textContent='모션과 통계 범위를 계산하는 중입니다.';setLoading(true);try{const q=new URLSearchParams({process:$('process').value,mode_id:$('mode').value,session_id:$('session').value});const incoming=await json('/motion-viewer/api/motion?'+q);if(generation!==loadGeneration)return;data=incoming;index=0;playheadSeconds=0;$('timeline').max=Math.max(0,data.frames.length-1);$('timeline').value=0;$('sessionCount').textContent=`${data.sampled_session_count}회`;$('duration').textContent=`${data.duration_seconds.toFixed(1)}초`;$('direction').textContent=data.direction_summary.label;const mix=data.direction_distribution;$('directionMix').textContent=`수평 ${(mix.horizontal*100).toFixed(0)}% · 수직 ${(mix.vertical*100).toFixed(0)}% · 대각 ${(mix.diagonal*100).toFixed(0)}%`;$('overlayTitle').textContent=`전형기 반장 · ${data.process_label} · 학습모드 ${data.mode_id}`;renderZoneOrder();$('status').textContent=`${data.selected_session_id} 준비 완료`;draw()}catch(e){if(generation!==loadGeneration)return;data=null;$('status').textContent=e.message;draw()}finally{if(generation===loadGeneration)setLoading(false)}}
 function resize(){const dpr=devicePixelRatio||1,rect=canvas.getBoundingClientRect();canvas.width=Math.round(rect.width*dpr);canvas.height=Math.round(rect.height*dpr);ctx.setTransform(dpr,0,0,dpr,0,0);draw()}
 function transform(point,center){let x=point[0]-center[0],y=point[1]-center[1],z=point[2]-center[2];let cy=Math.cos(yaw),sy=Math.sin(yaw),x1=x*cy-z*sy,z1=x*sy+z*cy;let cp=Math.cos(pitch),sp=Math.sin(pitch),y1=y*cp-z1*sp,z2=y*sp+z1*cp;return [x1,y1,z2]}
 function project(point,center,w,h){const [x,y,z]=transform(point,center),pers=4.5/(4.5-z);return [w/2+x*zoom*pers,h*.59-y*zoom*pers,pers]}
@@ -788,6 +886,7 @@ const tracked=frame.tracked||{},trackedStats=stats.tracked_spread||{};
 if(tracked.head&&tracked.left_hand)line(tracked.head,tracked.left_hand,'rgba(34,211,238,.65)',3,center,w,h);if(tracked.head&&tracked.right_hand)line(tracked.head,tracked.right_hand,'rgba(34,211,238,.65)',3,center,w,h);if(tracked.right_hand&&frame.ray_point&&frame.spraying)line(tracked.right_hand,frame.ray_point,'rgba(255,244,200,.45)',2,center,w,h);
 if(tracked.head)point(tracked.head,13,'#f5f8ff',center,w,h);if(tracked.right_hand)point(tracked.right_hand,7,'#22d3ee',center,w,h);if(tracked.left_hand)point(tracked.left_hand,6,'#8be9fd',center,w,h);
 if($('skeleton').checked){const aligned=alignSkeleton(frame.joints,tracked);for(const [a,b] of data.bones){if(aligned[a]&&aligned[b]){const lowerBody=/Thigh|Calf|Foot|Toe/.test(a+b),arm=/Arm|Hand|Shoulder/.test(a+b);line(aligned[a],aligned[b],lowerBody?'rgba(245,248,255,.18)':arm?'rgba(34,211,238,.58)':'rgba(245,248,255,.42)',arm?4:3,center,w,h)}}for(const [name,p] of Object.entries(aligned)){const anchor=name==='Head'||name.endsWith(' Hand');point(p,anchor?5:3,anchor?'rgba(34,211,238,.82)':'rgba(245,248,255,.48)',center,w,h)}}
+updateZonePanel(frame);
 $('overlayFrame').textContent=`${sourceIndex+1} / ${data.frames.length} · ${frame.t.toFixed(2)}초`;
 const spreads=['left_hand','right_hand'].map(j=>trackedStats[j]).filter(v=>v!==undefined);$('handSpread').textContent=spreads.length?`${(spreads.reduce((a,b)=>a+b,0)/spreads.length*100).toFixed(1)} cm`:'자료 없음'}
 function tick(now){if(playing&&data&&data.frames.length){if(!last)last=now;const elapsed=Math.min(.1,(now-last)/1000)*Number($('speed').value);last=now;playheadSeconds+=elapsed;if(playheadSeconds>=data.duration_seconds){playheadSeconds=0;index=0}else index=interpolatedFrame(playheadSeconds).index;$('timeline').value=index;draw()}requestAnimationFrame(tick)}
@@ -860,6 +959,7 @@ def create_motion_viewer_router(
         paint_trace = _dense_paint_trace(selected_path)
         paint_statistics = _reference_paint_statistics(session_paths)
         zone_surfaces = _zone_surface_statistics(session_paths)
+        zone_order, zone_statistics = _zone_playback_statistics(profile, selected, paint_trace)
         return {
             "expert_name": _EXPERT_NAME,
             "process": process,
@@ -875,6 +975,8 @@ def create_motion_viewer_router(
             "paint_trace": paint_trace,
             "direction_summary": _direction_summary(paint_trace),
             "zone_surfaces": zone_surfaces,
+            "zone_order": zone_order,
+            "zone_statistics": zone_statistics,
             **paint_statistics,
         }
 

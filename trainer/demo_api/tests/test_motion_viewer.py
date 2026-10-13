@@ -151,6 +151,12 @@ def test_motion_viewer_page_explains_representative_and_statistical_motion(tmp_p
     assert "불러오는 중" in response.text
     assert "function setLoading" in response.text
     assert "data.paint_trace" in response.text
+    assert 'id="currentZone"' in response.text
+    assert 'id="zoneOrder"' in response.text
+    assert 'id="zoneDetail"' in response.text
+    assert "function updateZonePanel" in response.text
+    assert "Zone 작업 순서" in response.text
+    assert "현재 작업 Zone" in response.text
     assert "trackedStats[marker]" not in response.text
     assert "function interpolatedFrame" in response.text
     assert "function alignSkeleton" in response.text
@@ -223,6 +229,15 @@ def test_motion_returns_trusted_trackers_paint_trace_and_direction_statistics(tm
     assert data["zone_surfaces"][0]["map_num"] == "1"
     assert data["zone_surfaces"][0]["zone_id"] == "1"
     assert data["zone_surfaces"][0]["vertices"]
+    assert data["zone_order"] == [{"map_num": "1", "zone_id": "1", "order": 1}]
+    zone = data["zone_statistics"]["1:1"]
+    assert zone["expert_session_count"] == 2
+    assert zone["median_speed_mms"] == 300
+    assert zone["median_distance_mm"] == 250
+    assert zone["selected_speed_mms"] == 300
+    assert zone["selected_distance_mm"] == 250
+    assert zone["observed_path_length_m"] > 0
+    assert zone["observed_duration_seconds"] > 0
 
 
 def test_zone_surface_keeps_non_planar_three_dimensional_vertices() -> None:
