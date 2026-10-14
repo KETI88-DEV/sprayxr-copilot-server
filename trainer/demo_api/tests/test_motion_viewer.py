@@ -216,7 +216,8 @@ def test_motion_viewer_page_explains_representative_and_statistical_motion(tmp_p
     assert 'id="viewerLegend"' in response.text
     assert response.text.count('id="viewerLegend"') == 1
     assert response.text.index('id="viewerLegend"') < response.text.index('id="loading"')
-    assert "첫 프레임 카메라를 화면 중심으로 설정" in response.text
+    assert "객체 중심 회전" in response.text
+    assert 'id="cameraHome"' in response.text
     assert 'id="skeletonCanvas"' in response.text
     assert 'id="skeletonTurnLeft"' in response.text
     assert 'id="skeletonTurnRight"' in response.text
@@ -532,8 +533,7 @@ def test_motion_viewer_page_exposes_pose_comparison_contract(tmp_path: Path) -> 
     assert response.status_code == 200
     for text in (
         "작업 자세 비교 평가",
-        "자세 비교",
-        "도장 경로·Zone",
+        "도장 경로·자세 통합 화면",
         "TSB 세션",
         "시퀀스",
         "판정",
@@ -545,18 +545,27 @@ def test_motion_viewer_page_exposes_pose_comparison_contract(tmp_path: Path) -> 
     ):
         assert text in response.text
     assert response.text.count('id="timeline"') == 1
-    assert 'data-default-tab="pose"' in response.text
+    assert 'id="canvas"' in response.text
+    assert 'id="poseCanvas"' not in response.text
+    assert 'class="viewer-tab"' not in response.text
+    assert 'id="cameraHome"' in response.text
+    assert 'id="cameraAxisX"' in response.text
+    assert 'id="cameraAxisY"' in response.text
+    assert 'id="cameraAxisZ"' in response.text
     assert '/motion-viewer/assets/motion_viewer_pose.css' in response.text
     assert '/motion-viewer/assets/motion_viewer_pose.js' in response.text
+    assert '/motion-viewer/assets/motion_viewer_camera.js' in response.text
 
 
 def test_pose_assets_define_layers_and_interaction_states(tmp_path: Path) -> None:
     client = _client(tmp_path)
     script = client.get("/motion-viewer/assets/motion_viewer_pose.js")
     style = client.get("/motion-viewer/assets/motion_viewer_pose.css")
+    camera = client.get("/motion-viewer/assets/motion_viewer_camera.js")
 
     assert script.status_code == 200
     assert style.status_code == 200
+    assert camera.status_code == 200
     assert script.headers["cache-control"] == "no-cache"
     assert style.headers["cache-control"] == "no-cache"
     for text in (
@@ -565,7 +574,7 @@ def test_pose_assets_define_layers_and_interaction_states(tmp_path: Path) -> Non
         "교정 목표",
         "별도 기준 좌표",
         "evaluationLoadGeneration",
-        "setViewerTab",
+        "drawPoseOverlay",
         "loading",
         "empty",
         "error",
@@ -574,6 +583,10 @@ def test_pose_assets_define_layers_and_interaction_states(tmp_path: Path) -> Non
     ):
         assert text in script.text
     assert "pairwise" not in script.text.lower()
+    assert "viewer-tab" not in script.text
+    for text in ("fit", "orbit", "pan", "dolly", "look", "fly", "focus", "axisView", "home"):
+        assert text in camera.text
     assert "#38BDF8" in style.text
     assert "#22C55E" in style.text
     assert "#FACC15" in style.text
+    assert "display:none" not in style.text.replace(" ", "").split("@media(max-width:1200px)", 1)[-1]

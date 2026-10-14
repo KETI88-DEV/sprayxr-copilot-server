@@ -1037,13 +1037,12 @@ button{cursor:pointer;font-weight:700}.primary{background:#3157d5;border-color:#
 .skeleton-card{padding:0;overflow:hidden}.skeleton-card summary{cursor:pointer;padding:14px;font-weight:800;font-size:13px;list-style:none}.skeleton-card summary::-webkit-details-marker{display:none}.skeleton-card summary:after{content:'▾';float:right;color:var(--cyan)}.skeleton-card:not([open]) summary:after{content:'▸'}.skeleton-screen{position:relative;height:300px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);background:radial-gradient(circle at 50% 42%,#17304e 0,#07101f 72%)}#skeletonCanvas{display:block;width:100%;height:300px}.skeleton-angle{position:absolute;right:10px;top:9px;padding:4px 7px;border-radius:999px;background:rgba(7,16,31,.78);color:#a9c2df;font-size:10px}.skeleton-controls{display:grid;grid-template-columns:1fr 1fr 1fr;gap:7px;padding:10px}.skeleton-turn{font-size:20px;padding:7px;text-shadow:0 2px 5px rgba(34,211,238,.45)}.skeleton-reset{font-size:11px}.skeleton-note{padding:0 12px 12px;color:#7890ad;font-size:10px;line-height:1.5}
 .toggle{display:flex;align-items:center;gap:8px;margin-top:14px;color:var(--muted);font-size:12px}.toggle input{width:auto}.badge{display:inline-flex;padding:5px 9px;border:1px solid #3157d5;border-radius:999px;color:#b9caff;font-size:11px;margin-top:12px}
 .range-scale{position:relative;height:18px;color:#7186a3;font-size:10px}.range-scale span{position:absolute;top:1px;transform:translateX(-50%)}.range-scale span:first-child{left:0;transform:none}.range-scale .normal{left:27.27%;color:#dce8ff;font-weight:800}.range-scale span:last-child{right:0;transform:none}
-@media(max-width:1200px){.workspace{grid-template-columns:240px 1fr}.right{display:none}}@media(max-width:720px){.workspace{display:block}.side{border:0}.stage,.stage>canvas{min-height:480px}}
+@media(max-width:1200px){.workspace{grid-template-columns:240px minmax(0,1fr)}.right{display:block;grid-column:1/-1;border-left:0;border-top:1px solid var(--line)}}@media(max-width:720px){.workspace{display:block}.side{border:0}.right{display:block}.stage,.stage>canvas{min-height:480px}}
 </style></head><body><div class="shell">
-<header class="top"><div class="title">작업 자세 비교 평가<small>기존 전문가 모션 뷰어 통합 · 기준 전문가: 전형기 반장 · 제품 자세 엔진 연동</small></div><nav><a href="/docs">Swagger</a><a href="/admin">DB 뷰어</a></nav></header>
+<header class="top"><div class="title">작업 자세 비교 평가<small>전문가 모션 뷰어 기반 · 도장 경로·자세 통합 화면 · 기준 전문가: 전형기 반장 · 제품 자세 엔진 연동</small></div><nav><a href="/docs">Swagger</a><a href="/admin">DB 뷰어</a></nav></header>
 <template id="poseUiTemplate">
-<div data-pose-slot="source" class="pose-source-block"><label for="evaluationSession">TSB 세션</label><select id="evaluationSession" class="select"></select><label for="evaluationSequence">시퀀스</label><select id="evaluationSequence" class="select"></select><button id="loadEvaluation" class="primary">선택 시퀀스 자세 평가</button></div>
-<div data-pose-slot="tabs" class="viewer-tabs" data-default-tab="pose"><button class="viewer-tab" data-tab="pose" aria-selected="true">자세 비교</button><button class="viewer-tab" data-tab="path" aria-selected="false">도장 경로·Zone</button></div>
-<div data-pose-slot="stage" id="poseStage" class="pose-stage"><canvas id="poseCanvas"></canvas><div class="pose-legend"><div><i style="background:#38BDF8"></i>측정 작업자</div><div><i style="background:#22C55E"></i>전문가 기준</div><div><i style="background:#FACC15"></i>교정 목표</div><div><i style="background:#FB923C"></i>도구 이동 경로</div><div class="pose-coordinate-badge">전문가 골격은 별도 기준 좌표</div></div><div id="poseViewState" class="pose-view-state" data-state="loading">자세 평가를 준비하는 중입니다.</div></div>
+<div data-pose-slot="source" class="pose-source-block"><strong>작업자 자세 비교</strong><label for="evaluationSession">작업자 / TSB 세션</label><select id="evaluationSession" class="select"></select><label for="evaluationSequence">시퀀스</label><select id="evaluationSequence" class="select"></select><button id="loadEvaluation" class="primary">선택 시퀀스 자세 평가</button><div class="pose-layer-toggles"><label><input id="poseLayerMeasured" type="checkbox" checked>작업자 자세</label><label><input id="poseLayerExpert" type="checkbox" checked>전문가 기준</label><label><input id="poseLayerCorrection" type="checkbox" checked>교정 표시</label></div></div>
+<div data-pose-slot="gizmo" class="camera-gizmo" aria-label="3D 카메라 기즈모"><button id="cameraHome" title="초기 시점">⌂</button><button id="cameraAxisX" title="X축 시점">X</button><button id="cameraAxisY" title="Y축 시점">Y</button><button id="cameraAxisZ" title="Z축 시점">Z</button></div>
 <div data-pose-slot="summary" id="poseSummary" class="pose-summary"><div class="card headline"><span>판정</span><strong id="poseVerdict">대기 중</strong><div class="pose-meta"><span>신뢰도 <b id="poseConfidence">—</b></span><span id="poseZoneSummary">Zone 요약</span></div></div><div class="pose-summary-grid"><div class="metric"><span>유사도 / 숙련자 백분위</span><b id="poseScore">—</b></div><div class="metric"><span>가장 큰 편차</span><b id="poseDeviation">—</b></div></div><div class="card pose-action"><span>지금 고칠 한 가지</span><strong id="poseAction">시퀀스를 선택하세요.</strong></div><details class="card pose-advanced"><summary>고급 분석 정보</summary><pre id="poseAdvancedJson"></pre></details></div>
 </template>
 <main class="workspace"><aside class="side">
@@ -1056,7 +1055,7 @@ button{cursor:pointer;font-weight:700}.primary{background:#3157d5;border-color:#
 <label for="pointSize">흰색 포인트 크기 · <span id="pointSizeValue">1.5 px</span></label><input id="pointSize" type="range" min="0.5" max="5" step="0.25" value="1.5">
 <label class="toggle"><input id="zoneSurface" type="checkbox" checked>Zone 영역 표시 (곡면·파임 반영)</label>
 <div id="status" class="status">데이터를 불러오는 중입니다.</div>
-<p class="help">좌클릭 드래그는 회전, 휠 클릭 드래그는 화면 이동, 휠 스크롤은 확대·축소입니다. 첫 프레임 카메라를 화면 중심으로 설정합니다.</p>
+<p class="help">좌클릭은 객체 중심 회전, 휠 클릭은 3D 평행이동, 휠은 확대·축소입니다. 우클릭을 누른 채 WASD/QE로 자유 이동하고 F로 현재 객체에 초점을 맞춥니다.</p>
 </aside>
 <section class="stage"><canvas id="canvas"></canvas><div class="overlay"><strong id="overlayTitle">학습모드</strong><span id="overlayFrame">프레임 준비 중</span><div id="viewerLegend" class="viewer-legend"><div><i class="dot" style="background:#f5f8ff"></i>전문가 전체 Ray Point 점군</div><div><i class="dot" style="background:#a78bfa"></i>Map·Zone별 관측 영역</div><div><i class="dot" style="background:var(--green)"></i>Zone별 전문가 표준 도장 패턴</div><div><i class="dot" style="background:#ff8a3d"></i>선택 기록의 페인트 누적 궤적</div><div><i class="dot" style="background:var(--cyan)"></i>전형기 반장의 머리·양손 실측 위치</div></div></div><div id="loading" class="loading"><div class="spinner"></div><span>전문가 기록을 불러오는 중입니다.</span></div></section>
 <aside class="side right"><div class="card"><span>현재 작업 Zone</span><strong id="currentZone">대기 중</strong></div><div class="card"><span>Zone 작업 순서</span><div id="zoneOrder" class="zone-order"></div></div><div id="zoneDetail" class="card"><span class="zone-detail-title">전체 Zone 통계</span><span>데이터를 불러오는 중입니다.</span></div><div class="card"><span>통계에 포함된 수행</span><strong id="sessionCount">-</strong></div><div class="card"><span>현재 기록 길이</span><strong id="duration">-</strong></div>
@@ -1117,12 +1116,13 @@ if(tracked.head)point(tracked.head,13,'#f5f8ff',center,w,h);if(tracked.right_han
 drawSkeletonView(frame);
 if(!referencePreview)updateZonePanel(frame);
 $('overlayFrame').textContent=`${sourceIndex+1} / ${data.frames.length} · ${frame.t.toFixed(2)}초`;
+if(window.motionViewerPoseOverlay)window.motionViewerPoseOverlay.draw({frame,sourceIndex,playheadSeconds,durationSeconds:data.duration_seconds,center,w,h});
 }
 function tick(now){if(playing&&data&&data.frames.length){if(!last)last=now;const elapsed=Math.min(.1,(now-last)/1000)*Number($('speed').value);last=now;playheadSeconds+=elapsed;if(playheadSeconds>=data.duration_seconds){playheadSeconds=0;index=0}else index=interpolatedFrame(playheadSeconds).index;$('timeline').value=index;draw()}requestAnimationFrame(tick)}
 $('process').onchange=fillModes;$('mode').onchange=fillSessions;$('session').onchange=loadMotion;$('timeline').oninput=e=>{referencePreview=false;index=Number(e.target.value);playheadSeconds=data.frames[index].t;last=0;draw()};$('speed').oninput=updateSpeedLabel;$('pointSize').oninput=e=>{$('pointSizeValue').textContent=`${Number(e.target.value).toFixed(2).replace(/0+$/,'').replace(/\.$/,'')} px`;draw()};$('zoneSurface').onchange=draw;$('skeletonTurnLeft').onclick=()=>setSkeletonYaw(skeletonYaw-15);$('skeletonTurnRight').onclick=()=>setSkeletonYaw(skeletonYaw+15);$('skeletonReset').onclick=()=>setSkeletonYaw(0);document.querySelector('.skeleton-card').ontoggle=()=>{if(document.querySelector('.skeleton-card').open)resize()};$('play').onclick=()=>{if(playing){playing=false;last=0;$('play').textContent='재생'}else startPlayback()};$('restart').onclick=()=>{playing=false;referencePreview=false;index=0;playheadSeconds=0;last=0;$('play').textContent='재생';$('timeline').value=0;draw()};
 canvas.onpointerdown=e=>{if(e.button!==0&&e.button!==1)return;e.preventDefault();canvas.setPointerCapture(e.pointerId);drag=e.button===1?{mode:'pan',x:e.clientX,y:e.clientY,panX,panY}:{mode:'rotate',x:e.clientX,y:e.clientY,yaw,pitch};canvas.style.cursor=drag.mode==='pan'?'move':'grabbing'};canvas.onpointermove=e=>{if(!drag)return;if(drag.mode==='pan'){panX=drag.panX+e.clientX-drag.x;panY=drag.panY+e.clientY-drag.y}else{yaw=drag.yaw+(e.clientX-drag.x)*.01;pitch=Math.max(-1.2,Math.min(1.2,drag.pitch+(e.clientY-drag.y)*.01))}draw()};canvas.onpointerup=e=>{if(canvas.hasPointerCapture(e.pointerId))canvas.releasePointerCapture(e.pointerId);drag=null;canvas.style.cursor='grab'};canvas.onpointercancel=()=>{drag=null;canvas.style.cursor='grab'};canvas.onauxclick=e=>e.preventDefault();canvas.onwheel=e=>{e.preventDefault();zoom=Math.max(70,Math.min(420,zoom*(e.deltaY>0?.9:1.1)));draw()};
 addEventListener('resize',resize);(async()=>{try{catalog=await json('/motion-viewer/api/catalog');$('process').replaceChildren(...catalog.processes.map(p=>option(p.process,p.label)));fillModes();resize();requestAnimationFrame(tick)}catch(e){$('status').textContent=e.message}})();
-</script><script defer src="/motion-viewer/assets/motion_viewer_pose.js"></script></body></html>"""
+</script><script defer src="/motion-viewer/assets/motion_viewer_camera.js"></script><script defer src="/motion-viewer/assets/motion_viewer_pose.js"></script></body></html>"""
 
 
 def create_motion_viewer_router(
@@ -1155,6 +1155,13 @@ def create_motion_viewer_router(
     def pose_style() -> FileResponse:
         return FileResponse(
             static_root / "motion_viewer_pose.css", media_type="text/css",
+            headers={"Cache-Control": "no-cache"},
+        )
+
+    @router.get("/motion-viewer/assets/motion_viewer_camera.js", include_in_schema=False)
+    def camera_script() -> FileResponse:
+        return FileResponse(
+            static_root / "motion_viewer_camera.js", media_type="text/javascript",
             headers={"Cache-Control": "no-cache"},
         )
 
