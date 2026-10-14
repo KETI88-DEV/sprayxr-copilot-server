@@ -105,6 +105,15 @@ def test_build_pose_view_labels_strokes_as_secondary_units() -> None:
     assert all(stroke["secondary"] is True for stroke in view["strokes"])
 
 
+def test_build_pose_view_accepts_engine_stroke_count_without_detail_rows() -> None:
+    raw = _raw()
+    raw.result["burst"] = {"strokes": 1}
+
+    view = build_pose_view(_body(), raw, mesh_provider=_verified_mesh)
+
+    assert view["strokes"] == []
+
+
 def test_build_pose_view_downsamples_tracks_but_keeps_first_last_and_correction_frames() -> None:
     raw = _raw()
     raw.result["corrections"][0]["target"]["per_frame"] = [

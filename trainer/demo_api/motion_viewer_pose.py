@@ -149,6 +149,8 @@ def _strokes(result: Mapping[str, Any]) -> list[dict[str, Any]]:
     if not isinstance(burst, Mapping):
         return []
     source = burst.get("strokes") or burst.get("per_stroke") or []
+    if not isinstance(source, Sequence) or isinstance(source, (str, bytes)):
+        return []
     strokes = [item for item in source if isinstance(item, Mapping)]
     total = len(strokes)
     return [
