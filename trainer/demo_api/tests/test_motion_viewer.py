@@ -590,3 +590,5 @@ def test_pose_assets_define_layers_and_interaction_states(tmp_path: Path) -> Non
     assert "#22C55E" in style.text
     assert "#FACC15" in style.text
     assert "display:none" not in style.text.replace(" ", "").split("@media(max-width:1200px)", 1)[-1]
+    assert "resize();" in script.text
+    assert "data?.frames?.length) resetViewToCamera(data)" in script.text

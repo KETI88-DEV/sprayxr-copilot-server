@@ -259,6 +259,8 @@
   sessionSelect.onchange = () => { ++evaluationLoadGeneration; fillSequences(); };
   byId('loadEvaluation').onclick = loadEvaluation;
   for (const id of ['poseLayerMeasured', 'poseLayerExpert', 'poseLayerCorrection']) byId(id).onchange = draw;
+  resize();
+  if (typeof data !== 'undefined' && data?.frames?.length) resetViewToCamera(data);
   loadEvaluationCatalog();
   requestAnimationFrame(flyTick);
 })();
