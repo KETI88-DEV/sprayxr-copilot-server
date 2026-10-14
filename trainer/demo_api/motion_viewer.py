@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, TextIO
 
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 
 from trainer.demo_api.motion_viewer_pose import _default_mesh_provider, build_pose_view
 from trainer.demo_api.pose_query import score_body_raw
@@ -1022,7 +1022,7 @@ def _direction_summary(trace: list[dict[str, Any]]) -> dict[str, Any]:
 
 _VIEWER_HTML = r"""<!doctype html>
 <html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>전문가 모션 뷰어</title><style>
+<title>작업 자세 비교 평가</title><link rel="stylesheet" href="/motion-viewer/assets/motion_viewer_pose.css"><style>
 :root{--bg:#07101f;--panel:#101b2e;--panel2:#16243a;--ink:#eef5ff;--muted:#91a0b8;--line:#293b56;--cyan:#22d3ee;--green:#34d399}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font-family:Inter,Pretendard,"Noto Sans KR",system-ui,sans-serif}
 .shell{min-height:100vh;display:grid;grid-template-rows:auto 1fr}.top{display:flex;justify-content:space-between;align-items:center;padding:16px 22px;border-bottom:1px solid var(--line);background:#0a1424}
@@ -1039,7 +1039,13 @@ button{cursor:pointer;font-weight:700}.primary{background:#3157d5;border-color:#
 .range-scale{position:relative;height:18px;color:#7186a3;font-size:10px}.range-scale span{position:absolute;top:1px;transform:translateX(-50%)}.range-scale span:first-child{left:0;transform:none}.range-scale .normal{left:27.27%;color:#dce8ff;font-weight:800}.range-scale span:last-child{right:0;transform:none}
 @media(max-width:1200px){.workspace{grid-template-columns:240px 1fr}.right{display:none}}@media(max-width:720px){.workspace{display:block}.side{border:0}.stage,.stage>canvas{min-height:480px}}
 </style></head><body><div class="shell">
-<header class="top"><div class="title">전문가 모션 뷰어<small>기준 전문가: 전형기 반장 · 반복 수행 기반</small></div><nav><a href="/docs">Swagger</a><a href="/admin">DB 뷰어</a></nav></header>
+<header class="top"><div class="title">작업 자세 비교 평가<small>기존 전문가 모션 뷰어 통합 · 기준 전문가: 전형기 반장 · 제품 자세 엔진 연동</small></div><nav><a href="/docs">Swagger</a><a href="/admin">DB 뷰어</a></nav></header>
+<template id="poseUiTemplate">
+<div data-pose-slot="source" class="pose-source-block"><label for="evaluationSession">TSB 세션</label><select id="evaluationSession" class="select"></select><label for="evaluationSequence">시퀀스</label><select id="evaluationSequence" class="select"></select><button id="loadEvaluation" class="primary">선택 시퀀스 자세 평가</button></div>
+<div data-pose-slot="tabs" class="viewer-tabs" data-default-tab="pose"><button class="viewer-tab" data-tab="pose" aria-selected="true">자세 비교</button><button class="viewer-tab" data-tab="path" aria-selected="false">도장 경로·Zone</button></div>
+<div data-pose-slot="stage" id="poseStage" class="pose-stage"><canvas id="poseCanvas"></canvas><div class="pose-legend"><div><i style="background:#38BDF8"></i>측정 작업자</div><div><i style="background:#22C55E"></i>전문가 기준</div><div><i style="background:#FACC15"></i>교정 목표</div><div><i style="background:#FB923C"></i>도구 이동 경로</div><div class="pose-coordinate-badge">전문가 골격은 별도 기준 좌표</div></div><div id="poseViewState" class="pose-view-state" data-state="loading">자세 평가를 준비하는 중입니다.</div></div>
+<div data-pose-slot="summary" id="poseSummary" class="pose-summary"><div class="card headline"><span>판정</span><strong id="poseVerdict">대기 중</strong><div class="pose-meta"><span>신뢰도 <b id="poseConfidence">—</b></span><span id="poseZoneSummary">Zone 요약</span></div></div><div class="pose-summary-grid"><div class="metric"><span>유사도 / 숙련자 백분위</span><b id="poseScore">—</b></div><div class="metric"><span>가장 큰 편차</span><b id="poseDeviation">—</b></div></div><div class="card pose-action"><span>지금 고칠 한 가지</span><strong id="poseAction">시퀀스를 선택하세요.</strong></div><details class="card pose-advanced"><summary>고급 분석 정보</summary><pre id="poseAdvancedJson"></pre></details></div>
+</template>
 <main class="workspace"><aside class="side">
 <label for="process">훈련 종류</label><select id="process" class="select"></select>
 <label for="mode">학습모드</label><select id="mode" class="select"></select>
@@ -1116,7 +1122,7 @@ function tick(now){if(playing&&data&&data.frames.length){if(!last)last=now;const
 $('process').onchange=fillModes;$('mode').onchange=fillSessions;$('session').onchange=loadMotion;$('timeline').oninput=e=>{referencePreview=false;index=Number(e.target.value);playheadSeconds=data.frames[index].t;last=0;draw()};$('speed').oninput=updateSpeedLabel;$('pointSize').oninput=e=>{$('pointSizeValue').textContent=`${Number(e.target.value).toFixed(2).replace(/0+$/,'').replace(/\.$/,'')} px`;draw()};$('zoneSurface').onchange=draw;$('skeletonTurnLeft').onclick=()=>setSkeletonYaw(skeletonYaw-15);$('skeletonTurnRight').onclick=()=>setSkeletonYaw(skeletonYaw+15);$('skeletonReset').onclick=()=>setSkeletonYaw(0);document.querySelector('.skeleton-card').ontoggle=()=>{if(document.querySelector('.skeleton-card').open)resize()};$('play').onclick=()=>{if(playing){playing=false;last=0;$('play').textContent='재생'}else startPlayback()};$('restart').onclick=()=>{playing=false;referencePreview=false;index=0;playheadSeconds=0;last=0;$('play').textContent='재생';$('timeline').value=0;draw()};
 canvas.onpointerdown=e=>{if(e.button!==0&&e.button!==1)return;e.preventDefault();canvas.setPointerCapture(e.pointerId);drag=e.button===1?{mode:'pan',x:e.clientX,y:e.clientY,panX,panY}:{mode:'rotate',x:e.clientX,y:e.clientY,yaw,pitch};canvas.style.cursor=drag.mode==='pan'?'move':'grabbing'};canvas.onpointermove=e=>{if(!drag)return;if(drag.mode==='pan'){panX=drag.panX+e.clientX-drag.x;panY=drag.panY+e.clientY-drag.y}else{yaw=drag.yaw+(e.clientX-drag.x)*.01;pitch=Math.max(-1.2,Math.min(1.2,drag.pitch+(e.clientY-drag.y)*.01))}draw()};canvas.onpointerup=e=>{if(canvas.hasPointerCapture(e.pointerId))canvas.releasePointerCapture(e.pointerId);drag=null;canvas.style.cursor='grab'};canvas.onpointercancel=()=>{drag=null;canvas.style.cursor='grab'};canvas.onauxclick=e=>e.preventDefault();canvas.onwheel=e=>{e.preventDefault();zoom=Math.max(70,Math.min(420,zoom*(e.deltaY>0?.9:1.1)));draw()};
 addEventListener('resize',resize);(async()=>{try{catalog=await json('/motion-viewer/api/catalog');$('process').replaceChildren(...catalog.processes.map(p=>option(p.process,p.label)));fillModes();resize();requestAnimationFrame(tick)}catch(e){$('status').textContent=e.message}})();
-</script></body></html>"""
+</script><script defer src="/motion-viewer/assets/motion_viewer_pose.js"></script></body></html>"""
 
 
 def create_motion_viewer_router(
@@ -1135,6 +1141,22 @@ def create_motion_viewer_router(
     @router.get("/motion-viewer", include_in_schema=False, response_class=HTMLResponse)
     def motion_viewer() -> HTMLResponse:
         return HTMLResponse(_VIEWER_HTML)
+
+    static_root = Path(__file__).with_name("static")
+
+    @router.get("/motion-viewer/assets/motion_viewer_pose.js", include_in_schema=False)
+    def pose_script() -> FileResponse:
+        return FileResponse(
+            static_root / "motion_viewer_pose.js", media_type="text/javascript",
+            headers={"Cache-Control": "no-cache"},
+        )
+
+    @router.get("/motion-viewer/assets/motion_viewer_pose.css", include_in_schema=False)
+    def pose_style() -> FileResponse:
+        return FileResponse(
+            static_root / "motion_viewer_pose.css", media_type="text/css",
+            headers={"Cache-Control": "no-cache"},
+        )
 
     @router.get("/motion-viewer/api/catalog", include_in_schema=False)
     def motion_catalog() -> dict[str, Any]:

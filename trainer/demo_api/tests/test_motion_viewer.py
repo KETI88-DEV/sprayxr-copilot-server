@@ -524,3 +524,56 @@ def test_motion_endpoint_adds_verified_object_mesh_and_preserves_existing_fields
     assert payload["zone_surfaces"]
     assert payload["object_mesh"]["triangles"] == [[0, 1, 2]]
     assert payload["object_mesh_status"] == "verified"
+
+
+def test_motion_viewer_page_exposes_pose_comparison_contract(tmp_path: Path) -> None:
+    response = _client(tmp_path).get("/motion-viewer")
+
+    assert response.status_code == 200
+    for text in (
+        "작업 자세 비교 평가",
+        "자세 비교",
+        "도장 경로·Zone",
+        "TSB 세션",
+        "시퀀스",
+        "판정",
+        "유사도 / 숙련자 백분위",
+        "가장 큰 편차",
+        "지금 고칠 한 가지",
+        "신뢰도",
+        "Zone 요약",
+    ):
+        assert text in response.text
+    assert response.text.count('id="timeline"') == 1
+    assert 'data-default-tab="pose"' in response.text
+    assert '/motion-viewer/assets/motion_viewer_pose.css' in response.text
+    assert '/motion-viewer/assets/motion_viewer_pose.js' in response.text
+
+
+def test_pose_assets_define_layers_and_interaction_states(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    script = client.get("/motion-viewer/assets/motion_viewer_pose.js")
+    style = client.get("/motion-viewer/assets/motion_viewer_pose.css")
+
+    assert script.status_code == 200
+    assert style.status_code == 200
+    assert script.headers["cache-control"] == "no-cache"
+    assert style.headers["cache-control"] == "no-cache"
+    for text in (
+        "측정 작업자",
+        "전문가 기준",
+        "교정 목표",
+        "별도 기준 좌표",
+        "evaluationLoadGeneration",
+        "setViewerTab",
+        "loading",
+        "empty",
+        "error",
+        "timeline",
+        "play",
+    ):
+        assert text in script.text
+    assert "pairwise" not in script.text.lower()
+    assert "#38BDF8" in style.text
+    assert "#22C55E" in style.text
+    assert "#FACC15" in style.text
