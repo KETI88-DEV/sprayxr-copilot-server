@@ -205,6 +205,56 @@ class SequenceStore:
             ).fetchone()
         return str(row[0]) if row is not None else None
 
+    def recent_sequence_catalog(
+        self, *, session_limit: int = 50, sequence_limit: int = 200
+    ) -> list[dict[str, Any]]:
+        """최근 수신 세션과 시퀀스의 제한된 뷰어용 목록.
+
+        원문 ``body``는 목록 응답에 싣지 않는다. 세션은 마지막 수신 순서의
+        역순이고, 각 세션 안의 시퀀스는 실제 수신 순서를 유지한다.
+        """
+        bounded_sessions = max(1, min(int(session_limit), 200))
+        bounded_sequences = max(1, min(int(sequence_limit), 1000))
+        with self._guard:
+            session_rows = self._conn.execute(
+                "SELECT session_key, MAX(rowid), MAX(received_at)"
+                " FROM sequences GROUP BY session_key"
+                " ORDER BY MAX(rowid) DESC LIMIT ?",
+                (bounded_sessions,),
+            ).fetchall()
+            if not session_rows:
+                return []
+            session_ids = [str(row[0]) for row in session_rows]
+            placeholders = ",".join("?" for _ in session_ids)
+            priority = " ".join(
+                f"WHEN ? THEN {index}" for index, _ in enumerate(session_ids)
+            )
+            sequence_rows = self._conn.execute(
+                "SELECT session_key, sequence_id, received_at, frames"
+                f" FROM sequences WHERE session_key IN ({placeholders})"
+                f" ORDER BY CASE session_key {priority} END, rowid ASC LIMIT ?",
+                (*session_ids, *session_ids, bounded_sequences),
+            ).fetchall()
+
+        catalog = [
+            {
+                "session_id": str(session_id),
+                "received_at": str(received_at),
+                "sequences": [],
+            }
+            for session_id, _rowid, received_at in session_rows
+        ]
+        by_session = {item["session_id"]: item for item in catalog}
+        for session_id, sequence_id, received_at, frames in sequence_rows:
+            by_session[str(session_id)]["sequences"].append(
+                {
+                    "sequence_id": str(sequence_id),
+                    "received_at": str(received_at),
+                    "frames": int(frames),
+                }
+            )
+        return catalog
+
     def close(self) -> None:
         with self._guard:
             self._conn.close()

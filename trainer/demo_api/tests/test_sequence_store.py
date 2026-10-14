@@ -161,3 +161,66 @@ def test_session_bodies_keep_receive_order_even_when_ids_do_not_sort() -> None:
 
     assert [body["sequence_id"] for body in store.session_bodies("S1")] == ["SEQ-10", "SEQ-2"]
     assert [body["sequence_id"] for body in store.session_bodies_through("S1", "SEQ-10")] == ["SEQ-10"]
+
+
+def _catalog_record(
+    store: SequenceStore,
+    *,
+    session_key: str,
+    sequence_id: str,
+    received_at: str,
+    frames: int = 1,
+) -> None:
+    store.record(
+        session_key=session_key,
+        sequence_id=sequence_id,
+        body_sha256=f"{session_key}:{sequence_id}",
+        frames=frames,
+        received_at=received_at,
+        body=json.dumps({"sequence_id": sequence_id}),
+    )
+
+
+def test_recent_sequence_catalog_orders_sessions_and_sequences_by_receive_time() -> None:
+    store = SequenceStore(":memory:")
+    _catalog_record(
+        store, session_key="older", sequence_id="SEQ-10",
+        received_at="2026-10-14T01:00:00Z", frames=10,
+    )
+    _catalog_record(
+        store, session_key="older", sequence_id="SEQ-2",
+        received_at="2026-10-14T01:01:00Z", frames=20,
+    )
+    _catalog_record(
+        store, session_key="newer", sequence_id="SEQ-1",
+        received_at="2026-10-14T02:00:00Z", frames=30,
+    )
+
+    result = store.recent_sequence_catalog()
+
+    assert [item["session_id"] for item in result] == ["newer", "older"]
+    assert result[0]["sequences"] == [
+        {"sequence_id": "SEQ-1", "received_at": "2026-10-14T02:00:00Z", "frames": 30}
+    ]
+    assert [item["sequence_id"] for item in result[1]["sequences"]] == [
+        "SEQ-10", "SEQ-2",
+    ]
+    assert all("body" not in sequence for item in result for sequence in item["sequences"])
+
+
+def test_recent_sequence_catalog_respects_session_and_sequence_limits() -> None:
+    store = SequenceStore(":memory:")
+    for session_index in range(3):
+        for sequence_index in range(4):
+            _catalog_record(
+                store,
+                session_key=f"S{session_index}",
+                sequence_id=f"SEQ-{sequence_index}",
+                received_at=f"2026-10-14T0{session_index}:0{sequence_index}:00Z",
+            )
+
+    result = store.recent_sequence_catalog(session_limit=2, sequence_limit=3)
+
+    assert len(result) == 2
+    assert sum(len(item["sequences"]) for item in result) == 3
+    assert [item["session_id"] for item in result] == ["S2", "S1"]
