@@ -11,6 +11,10 @@
   document.querySelector('.workspace > .side:not(.right)').prepend(sourceControls);
   document.querySelector('.workspace > .stage').prepend(tabs, poseStage);
   document.querySelector('.workspace > .right').prepend(summary);
+  const poseZoneNav = document.createElement('div');
+  poseZoneNav.id = 'poseZoneNav';
+  poseZoneNav.className = 'zone-order';
+  summary.prepend(poseZoneNav);
   const poseCanvas = byId('poseCanvas');
   if (!poseCanvas) return;
   const layerLabels = ['측정 작업자', '전문가 기준', '교정 목표', '별도 기준 좌표'];
@@ -38,6 +42,7 @@
   let posePanX = 0;
   let posePanY = 0;
   let poseDrag = null;
+  let selectedPoseZone = 'auto';
 
   const setState = (state, message = '') => {
     const panel = byId('poseViewState');
@@ -105,6 +110,7 @@
       const incoming = await response.json();
       if (generation !== evaluationLoadGeneration) return;
       evaluationData = incoming;
+      selectedPoseZone = 'auto';
       timelineInput.min = 0;
       timelineInput.max = Math.max(0, incoming.layers.measured.frames.length - 1);
       timelineInput.value = 0;
@@ -129,6 +135,23 @@
     byId('poseAction').textContent = correction?.message || e.message;
     byId('poseConfidence').textContent = e.confidence;
     byId('poseZoneSummary').textContent = `Zone ${identity.zone_id || '—'} · ${identity.sequence_id} · ${view.strokes.length || 1} 스트로크`;
+    const zoneColor = Number(identity.zone_id) === 1 ? '#FF0000' : '#22D3EE';
+    poseZoneNav.replaceChildren();
+    for (const [key, label, color] of [['all', '전체', '#67E8F9'], [identity.zone_id || 'unknown', `Zone ${identity.zone_id || '—'}`, zoneColor]]) {
+      const button = document.createElement('button');
+      button.className = 'zone-chip';
+      button.textContent = label;
+      button.style.setProperty('--zone-color', color);
+      button.onclick = () => {
+        posePlaying = false;
+        playButton.textContent = '재생';
+        selectedPoseZone = key;
+        poseZoneNav.querySelectorAll('.zone-chip').forEach(item => item.classList.toggle('selected', item === button));
+        byId('poseZoneSummary').textContent = key === 'all' ? `전체 · ${identity.sequence_id}` : `${label} · ${identity.sequence_id}`;
+        drawPose();
+      };
+      poseZoneNav.append(button);
+    }
     byId('poseAdvancedJson').textContent = JSON.stringify({
       analysis_status: e.analysis_status,
       reason_code: e.reason_code,
@@ -169,6 +192,7 @@
 
   function togglePosePlayback() {
     if (!evaluationData) return;
+    selectedPoseZone = 'auto';
     posePlaying = !posePlaying;
     poseLast = 0;
     playButton.textContent = posePlaying ? '일시정지' : '재생';
@@ -267,6 +291,10 @@
     drawSkeleton(frame?.joints || {}, '#38BDF8');
     drawCorrections(evaluationData.layers.corrected, frame);
     drawExpertInset(evaluationData.layers.expert);
+    const strokes = evaluationData.strokes || [];
+    const strokeNumber = strokes.length ? Math.min(strokes.length, Math.floor((poseCursor / Math.max(1, frames.length)) * strokes.length) + 1) : 1;
+    const zone = evaluationData.identity.zone_id || '—';
+    if (selectedPoseZone === 'auto') byId('poseZoneSummary').textContent = `현재 Zone ${zone} · ${evaluationData.identity.sequence_id} · 스트로크 ${strokeNumber}/${Math.max(1, strokes.length)}`;
   }
 
   function resizePose() {

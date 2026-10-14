@@ -4,7 +4,7 @@ from typing import Any
 
 import pytest
 
-from trainer.demo_api.motion_viewer_pose import build_pose_view
+from trainer.demo_api.motion_viewer_pose import aggregate_zone_results, build_pose_view
 from trainer.demo_api.pose_query import PoseEngineResult
 
 
@@ -190,3 +190,63 @@ def test_build_pose_view_keeps_verified_mesh_triangles() -> None:
     assert view["object_mesh"]["available"] is True
     assert view["object_mesh"]["triangles"] == [[0, 1, 2]]
     assert view["object_mesh"]["fallback"] is None
+
+
+def _sequence_result(
+    sequence_id: str,
+    zone_id: str,
+    *,
+    score: float | None,
+    confidence: str = "높음",
+    correction: str | None = None,
+) -> dict[str, Any]:
+    available = score is not None
+    return {
+        "identity": {"sequence_id": sequence_id, "zone_id": zone_id},
+        "evaluation": {
+            "analysis_status": "available" if available else "not_available",
+            "similarity_score": score,
+            "confidence": confidence if available else "낮음",
+            "top_correction": (
+                {"joint": correction, "message": f"{correction} 교정"}
+                if correction else None
+            ),
+        },
+    }
+
+
+def test_zone_summary_aggregates_completed_sequences_without_rescoring_zone() -> None:
+    calls = [
+        _sequence_result("SEQ-001", "1", score=0.9),
+        _sequence_result("SEQ-002", "1", score=0.5, correction="RightHand"),
+        _sequence_result("SEQ-003", "2", score=0.8, confidence="보통"),
+    ]
+
+    summary = aggregate_zone_results(calls)
+
+    assert summary["all"]["sequence_count"] == 3
+    assert summary["all"]["available_count"] == 3
+    assert summary["all"]["available_ratio"] == 1.0
+    assert summary["all"]["median_score"] == 0.8
+    assert summary["all"]["worst_correction"]["joint"] == "RightHand"
+    assert summary["all"]["confidence"] == "보통"
+    assert summary["1"]["sequence_count"] == 2
+    assert summary["1"]["median_score"] == 0.7
+    assert summary["2"]["sequence_ids"] == ["SEQ-003"]
+
+
+def test_zone_summary_does_not_mix_unavailable_results_into_score() -> None:
+    calls = [
+        _sequence_result("SEQ-001", "1", score=0.9),
+        _sequence_result("SEQ-002", "1", score=None),
+        _sequence_result("SEQ-003", "1", score=None),
+    ]
+
+    summary = aggregate_zone_results(calls)
+
+    assert summary["1"]["sequence_count"] == 3
+    assert summary["1"]["available_count"] == 1
+    assert summary["1"]["unavailable_count"] == 2
+    assert summary["1"]["available_ratio"] == pytest.approx(1 / 3)
+    assert summary["1"]["median_score"] == 0.9
+    assert summary["1"]["confidence"] == "낮음"

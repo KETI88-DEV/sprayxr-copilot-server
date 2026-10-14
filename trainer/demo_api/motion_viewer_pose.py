@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+import statistics
 from typing import Any
 
 from trainer.demo_api.pose_query import PoseEngineResult
@@ -214,6 +215,64 @@ def _mesh(mode: int | None, provider: MeshProvider) -> dict[str, Any]:
         "triangles": triangles,
         "fallback": None if vertices and triangles else "ray_point_surface",
     }
+
+
+def aggregate_zone_results(results: Sequence[Mapping[str, Any]]) -> dict[str, dict[str, Any]]:
+    """이미 완료된 시퀀스 결과를 Zone별로 집계한다.
+
+    Zone을 하나의 가상 시퀀스로 다시 채점하지 않는다. 사용할 수 없는 결과도
+    분모와 개수에는 남기되 점수 중앙값에는 섞지 않는다.
+    """
+    grouped: dict[str, list[Mapping[str, Any]]] = {"all": list(results)}
+    for item in results:
+        identity = item.get("identity")
+        zone_id = str(identity.get("zone_id") or "unknown") if isinstance(identity, Mapping) else "unknown"
+        grouped.setdefault(zone_id, []).append(item)
+
+    output: dict[str, dict[str, Any]] = {}
+    confidence_rank = {"낮음": 0, "보통": 1, "높음": 2}
+    for zone_id, items in grouped.items():
+        available: list[Mapping[str, Any]] = []
+        scores: list[float] = []
+        for item in items:
+            evaluation = item.get("evaluation")
+            if not isinstance(evaluation, Mapping):
+                continue
+            score = evaluation.get("similarity_score")
+            if evaluation.get("analysis_status") == "available" and isinstance(score, (int, float)):
+                available.append(item)
+                scores.append(float(score))
+        ratio = len(available) / len(items) if items else 0.0
+        correction_candidates: list[tuple[float, Mapping[str, Any]]] = []
+        for item in available:
+            evaluation = item["evaluation"]
+            correction = evaluation.get("top_correction")
+            score = evaluation.get("similarity_score")
+            if isinstance(correction, Mapping) and isinstance(score, (int, float)):
+                correction_candidates.append((float(score), correction))
+        worst = min(correction_candidates, key=lambda pair: pair[0])[1] if correction_candidates else None
+        if ratio < 0.5 or not available:
+            confidence = "낮음"
+        else:
+            confidence = min(
+                (str(item["evaluation"].get("confidence") or "낮음") for item in available),
+                key=lambda value: confidence_rank.get(value, 0),
+            )
+        output[zone_id] = {
+            "zone_id": zone_id,
+            "sequence_count": len(items),
+            "available_count": len(available),
+            "unavailable_count": len(items) - len(available),
+            "available_ratio": ratio,
+            "median_score": statistics.median(scores) if scores else None,
+            "worst_correction": dict(worst) if worst is not None else None,
+            "confidence": confidence,
+            "sequence_ids": [
+                str(item.get("identity", {}).get("sequence_id") or "")
+                for item in items
+            ],
+        }
+    return output
 
 
 def build_pose_view(
