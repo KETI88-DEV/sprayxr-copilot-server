@@ -47,7 +47,7 @@ logger = logging.getLogger(__name__)
 _LEVEL_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9\-_.]{0,63}$")
 
 OPENAPI_TAGS = [
-    {"name": "0. Swagger 모의 연동", "description": "시뮬레이터 없이 0-reset부터 4-report까지 순서대로 시험합니다."},
+    {"name": "0. 모의 연동", "description": "시뮬레이터 없이 0-reset부터 4-report까지 순서대로 시험합니다."},
     {"name": "1. 세션 관리", "description": "훈련 세션 시작·종료 API입니다."},
     {"name": "2. 시퀀스 수집·피드백", "description": "현재 시퀀스 전송과 속도·이격거리 가이드를 제공합니다."},
     {"name": "3. AI Co-Pilot 질의", "description": "텍스트 질의와 VR용 음성 질의 API입니다."},
@@ -67,7 +67,7 @@ def _openapi_description() -> str:
 
 ### 바로 시작하기
 
-1. 아래 **0. Swagger 모의 연동**을 펼칩니다.
+1. 아래 **0. 모의 연동**을 펼칩니다.
 2. `0-0 → 0-1 → 0-2 → 0-3 → 0-4` 순서로 각 API의 **Try it out → Execute**를 누릅니다.
 3. 입력값은 필요 없습니다. 각 응답의 `what_happened`, `beginner_tip`, `next_endpoint`를 확인합니다.
 4. 저장 결과는 [Co-Pilot DB 뷰어]({public_base}/admin)에서 확인합니다.
@@ -81,7 +81,7 @@ def _openapi_description() -> str:
 
 | 구분 | 용도 | 데이터 |
 |---|---|---|
-| `0. Swagger 모의 연동` | 사람의 기능 확인과 UI 개발 학습 | 서버가 안전한 예제값을 자동 생성 |
+| `0. 모의 연동` | 사람의 기능 확인과 UI 개발 학습 | 서버가 안전한 예제값을 자동 생성 |
 | `1~6. 실제 연동 API` | TSB VR·Replay가 운영 중 호출 | 시뮬레이터가 실제 사용자·시퀀스 값을 전송 |
 
 테스트 API는 호출 방법을 익히기 위한 것이며, 실제 훈련 결과로 사용하지 않습니다.

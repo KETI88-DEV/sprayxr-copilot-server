@@ -240,7 +240,7 @@ def create_voice_router(
     @router.post(
         TEST_VOICE_QUERY_PATH,
         response_model=VoiceCopilotResponse,
-        tags=["0. Swagger 모의 연동"],
+        tags=["0. 모의 연동"],
         summary="0-5. 무입력 음성질의 전체 경로 테스트",
         description=(
             "파라미터나 파일을 입력하지 않고 서버에 포함된 한국어 WAV를 실제 STT와 Query 경로로 처리합니다.\n\n"
@@ -275,7 +275,7 @@ def create_voice_router(
 
     @router.get(
         TEST_VOICE_ASSET_PATH,
-        tags=["0. Swagger 모의 연동"],
+        tags=["0. 모의 연동"],
         summary="0-6. query-voice 테스트용 한국어 WAV 다운로드",
         description=(
             "실제 3-2 query-voice의 audio 필드에 업로드할 수 있는 WAV 파일을 내려받습니다. "

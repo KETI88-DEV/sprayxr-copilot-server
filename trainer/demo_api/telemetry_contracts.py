@@ -126,6 +126,106 @@ class SequenceFrameIn(BaseModel):
     )
 
 
+class SequenceHeatmapCropIn(BaseModel):
+    """TSB 누적 도막 높이맵의 영역별 PNG 크롭."""
+
+    model_config = ConfigDict(extra="allow")
+
+    map_num: Annotated[int, Field(ge=1, description="크롭이 속한 Texture Map 번호입니다.", examples=[1])]
+    x0: Annotated[int, Field(ge=0, description="2048×2048 전체 텍스처의 좌하단 원점 기준 시작 X 픽셀입니다.", examples=[612])]
+    y0: Annotated[int, Field(ge=0, description="2048×2048 전체 텍스처의 좌하단 원점 기준 시작 Y 픽셀입니다.", examples=[388])]
+    width: Annotated[int, Field(gt=0, description="전체 텍스처 좌표계에서 크롭이 차지하는 폭(픽셀)입니다.", examples=[1])]
+    height: Annotated[int, Field(gt=0, description="전체 텍스처 좌표계에서 크롭이 차지하는 높이(픽셀)입니다.", examples=[1])]
+    img_width: Annotated[int, Field(gt=0, description="data로 전달한 PNG 자체의 폭(픽셀)입니다.", examples=[1])]
+    img_height: Annotated[int, Field(gt=0, description="data로 전달한 PNG 자체의 높이(픽셀)입니다.", examples=[1])]
+    format: Annotated[str, Field(
+        min_length=1,
+        description=(
+            "픽셀 해석 규격입니다. v2에서는 R+G가 16비트 두께, B가 alpha이며 "
+            "두께(µm)=(R/255+G/65025)×20000 입니다."
+        ),
+        examples=["v2;thickness=RG16;alpha=B8;scale_um=20000"],
+    )]
+    encoding: Annotated[str, Field(
+        min_length=1,
+        description="data의 직렬화 형식입니다. 현재 TSB 규격은 png;base64입니다.",
+        examples=["png;base64"],
+    )]
+    data: Annotated[str, Field(
+        description=(
+            "PNG 바이트를 Base64 문자열로 인코딩한 값입니다. PNG 첫 행은 최대 Y이며 "
+            "픽셀 행 변환은 row=img_height-1-y 규칙을 사용합니다."
+        ),
+        examples=["iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="],
+    )]
+
+
+class SequenceResultIn(BaseModel):
+    """시퀀스 요약과 요청 시점 피도면의 누적 도막 입력."""
+
+    model_config = ConfigDict(extra="allow")
+
+    avg_speed_mms: Annotated[float | None, Field(default=None, ge=0, description="해당 시퀀스 평균 이동 속도(mm/s)입니다.", examples=[450.0])]
+    avg_distance_mm: Annotated[float | None, Field(default=None, ge=0, description="해당 시퀀스 평균 이격거리(mm)입니다.", examples=[260.0])]
+    avg_thickness_um: Annotated[float | None, Field(default=None, ge=0, description="TSB가 산출한 해당 시퀀스 평균 도막 두께(µm)입니다.", examples=[138.91])]
+    cur_sequence_heatmap: Annotated[list[SequenceHeatmapCropIn] | None, Field(
+        default=None,
+        description=(
+            "이름과 달리 현재 시퀀스의 증분만이 아니라 요청 시점 피도면의 전체 누적 도막 두께입니다. "
+            "이전 회차의 도막도 포함하며, 배열 원소는 현재 시퀀스가 도포한 영역만 자른 Texture Map PNG입니다. "
+            "서버는 같은 위치의 직전 절대 두께와 비교해 현재 시퀀스의 증분을 계산합니다. "
+            "피도면에 맞지 않은 시퀀스는 생략하거나 빈 배열로 보낼 수 있습니다."
+        ),
+    )]
+
+
+_SEQUENCE_REQUEST_EXAMPLE = {
+    "session_id": "3_11000346_1",
+    "user_id": "1234",
+    "scenario_id": "3",
+    "zone_id": "3",
+    "sequence_id": "SEQ-001",
+    "sequence_setting": {
+        "tool_type": "spray_gun",
+        "pressure": 0.55,
+        "nozzle_size": 0.021,
+        "thinning_ratio": 10.0,
+        "viscosity": 65.0,
+        "month": 10,
+    },
+    "sequence_info": [{
+        "index": 0,
+        "time": "2026-10-08T01:05:53.000Z",
+        "tool_pos_rot": {"position": [0.0, 1.2, 0.4]},
+        "gun_metrics": {
+            "speed": 450.0,
+            "distance": 260.0,
+            "raypoint": [0.0, 1.0, 0.5],
+            "raytexmapnum": 1,
+            "raytexuv": [1024, 768],
+            "spraytime": 0.011,
+        },
+    }],
+    "sequence_result": {
+        "avg_speed_mms": 450.0,
+        "avg_distance_mm": 260.0,
+        "avg_thickness_um": 138.91,
+        "cur_sequence_heatmap": [{
+            "map_num": 1,
+            "x0": 612,
+            "y0": 388,
+            "width": 1,
+            "height": 1,
+            "img_width": 1,
+            "img_height": 1,
+            "format": "v2;thickness=RG16;alpha=B8;scale_um=20000",
+            "encoding": "png;base64",
+            "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+        }],
+    },
+}
+
+
 class TelemetrySequenceRequest(StrictModel):
     """명세서 p.5의 최상위 8키. **여덟 개 모두 필수다.**
 
@@ -136,30 +236,7 @@ class TelemetrySequenceRequest(StrictModel):
 
     model_config = ConfigDict(
         extra="forbid",
-        json_schema_extra={
-            "example": {
-                "session_id": "3_11000346_1", "user_id": "1234",
-                "scenario_id": "3", "zone_id": "3", "sequence_id": "SEQ-001",
-                "sequence_setting": {
-                    "tool_type": "spray_gun",
-                    "pressure": 0.55,
-                    "nozzle_size": 0.021,
-                    "thinning_ratio": 10.0,
-                    "viscosity": 65.0,
-                    "month": 10,
-                },
-                "sequence_info": [{
-                    "index": 0, "time": "2026-10-08T01:05:53.000Z",
-                    "tool_pos_rot": {"position": [0.0, 1.2, 0.4]},
-                    "gun_metrics": {
-                        "speed": 450.0, "distance": 260.0,
-                        "raypoint": [0.0, 1.0, 0.5], "raytexmapnum": 1,
-                        "raytexuv": [1024, 768], "spraytime": 0.011,
-                    },
-                }],
-                "sequence_result": {"avg_speed_mms": 450, "avg_distance_mm": 260},
-            }
-        },
+        json_schema_extra={"example": _SEQUENCE_REQUEST_EXAMPLE},
     )
 
     session_id: Annotated[str, Field(min_length=1, description="sessions/start와 동일한 세션 식별자", examples=["3_11000346_1"])]
@@ -183,7 +260,9 @@ class TelemetrySequenceRequest(StrictModel):
         Field(description="도구 구분은 tool_type에 spray_gun 또는 blasting_gun을 사용합니다."),
     ]
     sequence_info: list[SequenceFrameIn]
-    sequence_result: dict[str, Any]
+    sequence_result: Annotated[SequenceResultIn, Field(
+        description="시퀀스 요약값과 TSB 누적 도막 크롭입니다. 아래 필드를 펼쳐 상세 규격을 확인하세요."
+    )]
 
 
 class AnalyzeSequenceRequest(TelemetrySequenceRequest):
@@ -191,36 +270,7 @@ class AnalyzeSequenceRequest(TelemetrySequenceRequest):
 
     model_config = ConfigDict(
         extra="forbid",
-        json_schema_extra={
-            "example": {
-                "session_id": "3_11000346_1",
-                "user_id": "1234",
-                "scenario_id": "3",
-                "zone_id": "3",
-                "sequence_id": "SEQ-001",
-                "sequence_setting": {
-                    "tool_type": "spray_gun",
-                    "pressure": 0.55,
-                    "nozzle_size": 0.021,
-                    "thinning_ratio": 10.0,
-                    "viscosity": 65.0,
-                    "month": 10,
-                },
-                "sequence_info": [
-                    {
-                        "index": 0,
-                        "time": "2026-10-08T01:05:53.000Z",
-                        "tool_pos_rot": {"position": [0.0, 1.2, 0.4]},
-                        "gun_metrics": {
-                            "speed": 500.0, "distance": 250.0,
-                            "raypoint": [0.0, 1.0, 0.5], "raytexmapnum": 1,
-                            "raytexuv": [1024, 768], "spraytime": 0.011,
-                        },
-                    }
-                ],
-                "sequence_result": {"avg_speed_mms": 500, "avg_distance_mm": 250},
-            }
-        },
+        json_schema_extra={"example": _SEQUENCE_REQUEST_EXAMPLE},
     )
 
     # 2026-10-08 실전송에는 없다. 예전 클라이언트만 선택적으로 보낼 수 있다.

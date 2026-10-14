@@ -17,7 +17,7 @@ from trainer.demo_api.v1_contracts import ApiResponse, report_example
 from trainer.demo_api.v1_store import V1Store
 
 _PREFIX = "/api/v1/test/workflow"
-_TAG = "0. Swagger 모의 연동"
+_TAG = "0. 모의 연동"
 
 
 def _now() -> str:
@@ -83,6 +83,14 @@ _START_CONTEXT = _test_context(
     "session_status가 ACTIVE로 바뀌고 동일한 session_id가 유지되는지 확인합니다.",
 )
 
+_HEATMAP_EXAMPLE = {
+    "map_num": 1, "x0": 612, "y0": 388,
+    "width": 1, "height": 1, "img_width": 1, "img_height": 1,
+    "format": "v2;thickness=RG16;alpha=B8;scale_um=20000",
+    "encoding": "png;base64",
+    "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+}
+
 _SEQUENCE_INPUT = {
     "equivalent_real_api": "POST /api/v1/copilot/analyze-sequence",
     "session_id": "SWAGGER-SESSION-a1b2c3d4",
@@ -91,9 +99,8 @@ _SEQUENCE_INPUT = {
     "zone_id": "1",
     "sequence_id": "SWAGGER-SEQUENCE-a1b2c3d4",
     "sequence_setting": {
-        "tool_type": "spray_gun",
-        "target_speed_mms": 500,
-        "target_distance_mm": 300,
+        "tool_type": "spray_gun", "pressure": 0.55, "nozzle_size": 0.021,
+        "thinning_ratio": 10.0, "viscosity": 65.0, "month": 10,
     },
     "sequence_info": [
         {
@@ -102,7 +109,10 @@ _SEQUENCE_INPUT = {
             "gun_metrics": {"speed": 300, "distance": 250},
         }
     ],
-    "sequence_result": {"avg_speed_mms": 300, "avg_distance_mm": 250},
+    "sequence_result": {
+        "avg_speed_mms": 300, "avg_distance_mm": 250, "avg_thickness_um": 138.91,
+        "cur_sequence_heatmap": [_HEATMAP_EXAMPLE],
+    },
 }
 _SEQUENCE_CONTEXT = _test_context(
     _SEQUENCE_INPUT,
@@ -207,9 +217,8 @@ class GuidedWorkflow:
                 zone_id="1:1",
                 sequence_id=f"SWAGGER-SEQUENCE-{run.run_id}",
                 sequence_setting={
-                    "tool_type": "spray_gun",
-                    "target_speed_mms": 500,
-                    "target_distance_mm": 300,
+                    "tool_type": "spray_gun", "pressure": 0.55, "nozzle_size": 0.021,
+                    "thinning_ratio": 10.0, "viscosity": 65.0, "month": 10,
                 },
                 sequence_info=[
                     {
@@ -219,7 +228,11 @@ class GuidedWorkflow:
                         "gun_metrics": {"speed": 300, "distance": 250},
                     }
                 ],
-                sequence_result={"avg_speed_mms": 300, "avg_distance_mm": 250},
+                sequence_result={
+                    "avg_speed_mms": 300, "avg_distance_mm": 250,
+                    "avg_thickness_um": 138.91,
+                    "cur_sequence_heatmap": [_HEATMAP_EXAMPLE],
+                },
             )
             guide = self._guidance.evaluate(request)
             if not guide.speed.available or not guide.distance.available:

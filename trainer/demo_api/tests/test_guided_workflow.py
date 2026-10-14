@@ -32,14 +32,18 @@ def test_guided_workflow_runs_end_to_end_without_parameters() -> None:
     assert payloads[1]["session_status"] == "ACTIVE"
     assert payloads[2]["guide"]["speed"]["status"] in {"slow", "ok", "fast"}
     assert payloads[2]["guide"]["distance"]["status"] in {"near", "ok", "far"}
-    assert payloads[2]["test_context"]["input_used"]["sequence_result"] == {
-        "avg_speed_mms": 300,
-        "avg_distance_mm": 250,
-    }
+    sequence_result = payloads[2]["test_context"]["input_used"]["sequence_result"]
+    assert sequence_result["avg_speed_mms"] == 300
+    assert sequence_result["avg_distance_mm"] == 250
+    assert sequence_result["avg_thickness_um"] == 138.91
+    assert sequence_result["cur_sequence_heatmap"][0]["encoding"] == "png;base64"
     assert payloads[2]["test_context"]["input_used"]["sequence_setting"] == {
         "tool_type": "spray_gun",
-        "target_speed_mms": 500,
-        "target_distance_mm": 300,
+        "pressure": 0.55,
+        "nozzle_size": 0.021,
+        "thinning_ratio": 10.0,
+        "viscosity": 65.0,
+        "month": 10,
     }
     assert payloads[3]["report_id"].startswith("RPT-")
     assert payloads[4]["report_id"] == payloads[3]["report_id"]

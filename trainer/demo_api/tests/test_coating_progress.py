@@ -153,7 +153,7 @@ def test_missing_heatmap_and_blasting_return_honest_unavailable_results(tmp_path
 def test_invalid_height_encoding_is_not_silently_scored(tmp_path: Path) -> None:
     _profile(tmp_path)
     request = _request(sequence_id="SEQ-001", thickness_um=50.0)
-    request.sequence_result["cur_sequence_heatmap"][0]["format"] = "unknown"
+    request.sequence_result.cur_sequence_heatmap[0].format = "unknown"
 
     result = CoatingProgressEngine(tmp_path).evaluate(request)
 

@@ -14,7 +14,7 @@ def test_openapi_describes_tsb_workflow_and_db_viewer() -> None:
     assert "실제 연동 API" in schema["info"]["description"]
     assert "누적 히트맵" in schema["info"]["description"]
     assert [tag["name"] for tag in schema["tags"]][:4] == [
-        "0. Swagger 모의 연동",
+        "0. 모의 연동",
         "1. 세션 관리",
         "2. 시퀀스 수집·피드백",
         "3. AI Co-Pilot 질의",
@@ -35,7 +35,7 @@ def test_guided_workflow_has_five_input_free_ordered_operations() -> None:
 
     for order, path in enumerate(expected):
         operation = schema["paths"][path]["post"]
-        assert operation["tags"] == ["0. Swagger 모의 연동"]
+        assert operation["tags"] == ["0. 모의 연동"]
         assert operation["summary"].startswith(f"0-{order}")
         assert "requestBody" not in operation
         assert operation.get("parameters", []) == []
@@ -132,7 +132,7 @@ def test_voice_demo_is_input_free_and_links_the_downloadable_sample() -> None:
     operation = schema["paths"]["/api/v1/test/query-voice"]["post"]
     asset = schema["paths"]["/api/v1/test/assets/query-voice-ko.wav"]["get"]
 
-    assert operation["tags"] == ["0. Swagger 모의 연동"]
+    assert operation["tags"] == ["0. 모의 연동"]
     assert operation["summary"].startswith("0-5")
     assert "requestBody" not in operation
     assert operation.get("parameters", []) == []
@@ -246,3 +246,35 @@ def test_report_detail_swagger_shows_one_complete_final_report() -> None:
         assert report[area]["analysis_status"] == "available"
     assert report["llm_briefing"]
     assert example["data"]["session_id"] == "3_11000346_1"
+
+
+def test_sequence_result_schema_exposes_tsb_cumulative_coating_input() -> None:
+    client = TestClient(create_app())
+    schema = client.get("/openapi.json").json()
+    components = schema["components"]["schemas"]
+
+    for request_name in ("TelemetrySequenceRequest", "AnalyzeSequenceRequest"):
+        request_schema = components[request_name]
+        result_ref = request_schema["properties"]["sequence_result"]["$ref"]
+        result_schema = components[result_ref.rsplit("/", 1)[-1]]
+        assert {
+            "avg_speed_mms", "avg_distance_mm", "avg_thickness_um", "cur_sequence_heatmap",
+        }.issubset(result_schema["properties"])
+        assert "전체 누적 도막" in result_schema["properties"]["cur_sequence_heatmap"]["description"]
+
+        heatmap = result_schema["properties"]["cur_sequence_heatmap"]["anyOf"][0]["items"]
+        crop_schema = components[heatmap["$ref"].rsplit("/", 1)[-1]]
+        assert {
+            "map_num", "x0", "y0", "width", "height",
+            "img_width", "img_height", "format", "encoding", "data",
+        } == set(crop_schema["required"])
+
+        example = request_schema["example"]["sequence_result"]
+        assert example["avg_thickness_um"] == 138.91
+        assert example["cur_sequence_heatmap"][0]["encoding"] == "png;base64"
+
+    start = components["SessionStartRequest"]["example"]
+    assert client.post("/api/v1/sessions/start", json=start).status_code == 200
+    example = components["AnalyzeSequenceRequest"]["example"]
+    response = client.post("/api/v1/copilot/analyze-sequence", json=example)
+    assert response.status_code == 200, response.text

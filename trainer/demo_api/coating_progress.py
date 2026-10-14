@@ -212,7 +212,13 @@ class CoatingProgressEngine:
             if not isinstance(coating, dict) or coating.get("analysis_status") != "available":
                 return self._unavailable(request.zone_id, "coating_reference_unavailable")
 
-            heatmaps = request.sequence_result.get("cur_sequence_heatmap")
+            sequence_result = request.sequence_result
+            result_payload = (
+                sequence_result.model_dump(exclude_none=True)
+                if hasattr(sequence_result, "model_dump")
+                else sequence_result
+            )
+            heatmaps = result_payload.get("cur_sequence_heatmap")
             if not isinstance(heatmaps, list) or not heatmaps:
                 return self._unavailable(request.zone_id, "heatmap_unavailable")
             map_num = int(zone.get("map_num", 1))

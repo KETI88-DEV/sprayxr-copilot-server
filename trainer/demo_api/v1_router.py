@@ -511,7 +511,7 @@ def create_v1_router(
             @router.post(
                 f"/test/sequence/{case}",
                 response_model=ApiResponse,
-                tags=["0. Swagger 모의 연동"],
+                tags=["0. 모의 연동"],
                 summary=f"0. [{case}] 시퀀스 시뮬레이션 및 SSE 방송",
                 description="기존 SSE 화면 개발을 위한 단일 사례 발생기입니다. session_id는 기본값 그대로 실행할 수 있고, normal 또는 방향·이격거리 이상 이벤트가 어떻게 전달되는지 빠르게 확인합니다.",
                 name=f"test_sequence_{case.replace('-', '_')}",

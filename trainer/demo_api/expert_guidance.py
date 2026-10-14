@@ -109,7 +109,7 @@ class ExpertGuidanceEngine:
         frame_key: str,
         unit_key: str,
     ) -> tuple[float | None, str | None]:
-        result = request.sequence_result
+        result = request.sequence_result.model_dump(exclude_none=True)
         has_mm = millimetre_key in result
         has_m = metre_key in result
         if has_mm and has_m:
