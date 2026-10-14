@@ -16,6 +16,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from trainer.demo_api.copilot_router import create_copilot_router, install_copilot_error_handlers
+from trainer.demo_api import pose_query
 from trainer.demo_api.sequence_store import SequenceStore
 from trainer.demo_api.telemetry_router import create_telemetry_router
 
@@ -87,6 +88,77 @@ def _app(mcp: Any = None, *, store: SequenceStore | None = None) -> tuple[TestCl
     )
     install_copilot_error_handlers(app)
     return TestClient(app), sequences
+
+
+def test_score_body_raw_and_projected_result_share_same_engine_payload() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"status": "success", "result": dict(_MCP_RESULT), "error": None}
+        )
+
+    transport = httpx.MockTransport(handler)
+    raw = pose_query.score_body_raw(
+        _sequence_body(),
+        sequence_id="SEQ-012",
+        mcp_base_url="http://mcp.test:8100",
+        transport=transport,
+    )
+    projected = pose_query.score_body(
+        _sequence_body(),
+        sequence_id="SEQ-012",
+        mcp_base_url="http://mcp.test:8100",
+        transport=transport,
+    )
+
+    assert raw.analysis_status == "available"
+    assert raw.reason_code is None
+    assert raw.sequence_id == "SEQ-012"
+    assert raw.result == _MCP_RESULT
+    assert projected.sequence_id == raw.sequence_id
+    assert projected.similarity_score == raw.result["similarity_score"]
+    assert projected.summary == raw.result["summary"]
+    assert projected.corrections[0]["joint"] == raw.result["corrections"][0]["joint"]
+
+
+@pytest.mark.parametrize(
+    ("handler", "expected_reason"),
+    [
+        (
+            lambda _request: (_ for _ in ()).throw(httpx.ConnectTimeout("timeout")),
+            "engine_unavailable",
+        ),
+        (lambda _request: httpx.Response(503, text="busy"), "engine_unavailable"),
+        (
+            lambda _request: httpx.Response(
+                200,
+                json={
+                    "status": "success",
+                    "result": {
+                        "analysis_status": "not_available",
+                        "reason_code": "skeleton_joint_frozen",
+                        "similarity_score": 0.99,
+                    },
+                },
+            ),
+            "skeleton_joint_frozen",
+        ),
+    ],
+    ids=["timeout", "non-200", "analysis-unavailable"],
+)
+def test_score_body_raw_preserves_engine_unavailable_reason_without_fake_values(
+    handler: Any, expected_reason: str
+) -> None:
+    raw = pose_query.score_body_raw(
+        _sequence_body(),
+        sequence_id="SEQ-012",
+        mcp_base_url="http://mcp.test:8100",
+        transport=httpx.MockTransport(handler),
+    )
+
+    assert raw.analysis_status == "not_available"
+    assert raw.reason_code == expected_reason
+    assert raw.sequence_id == "SEQ-012"
+    assert raw.result == {}
 
 
 # --- 저장 → 채점 ----------------------------------------------------------

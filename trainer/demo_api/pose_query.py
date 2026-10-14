@@ -54,6 +54,25 @@ class PoseQueryResult:
         }
 
 
+@dataclass(frozen=True)
+class PoseEngineResult:
+    """검증된 MCP 자세 엔진 원문과 안정적인 가용성 상태."""
+
+    analysis_status: str
+    reason_code: str | None
+    sequence_id: str
+    result: dict[str, Any]
+
+
+def _raw_unavailable(reason: str, *, sequence_id: str) -> PoseEngineResult:
+    return PoseEngineResult(
+        analysis_status="not_available",
+        reason_code=reason,
+        sequence_id=sequence_id,
+        result={},
+    )
+
+
 def _unavailable(reason: str, *, sequence_id: str | None = None) -> PoseQueryResult:
     return PoseQueryResult(
         analysis_status="not_available", reason_code=reason, sequence_id=sequence_id,
@@ -125,9 +144,33 @@ def score_body(
     mcp_base_url: str,
     transport: httpx.BaseTransport | None = None,
 ) -> PoseQueryResult:
-    """시퀀스 본문 하나를 MCP 자세 엔진으로 채점한다. 질의(`pose_recomm`)와 세션 종합 분석(`sessions/complete`)이
-    같은 함수를 쓴다 — 같은 시퀀스가 두 경로에서 다른 점수를 받지 않게.
-    """
+    """원문 자세 엔진 결과를 Query API 계약으로 투영한다."""
+    raw = score_body_raw(
+        body, sequence_id=sequence_id, mcp_base_url=mcp_base_url, transport=transport
+    )
+    if raw.analysis_status != "available":
+        return _unavailable(raw.reason_code or "analysis_unavailable", sequence_id=sequence_id)
+    result = raw.result
+    summary = result.get("summary")
+    return PoseQueryResult(
+        analysis_status="available",
+        reason_code=None,
+        sequence_id=sequence_id,
+        similarity_score=result.get("similarity_score"),
+        correction_mode=result.get("correction_mode"),
+        corrections=_project_corrections(result),
+        summary=str(summary) if summary else None,
+    )
+
+
+def score_body_raw(
+    body: dict[str, Any],
+    *,
+    sequence_id: str,
+    mcp_base_url: str,
+    transport: httpx.BaseTransport | None = None,
+) -> PoseEngineResult:
+    """시퀀스 하나를 MCP에 한 번 보내고 검증된 제품 엔진 원문을 돌려준다."""
     # `analyze-sequence`가 붙인 분석 파라미터(`mode_id`)는 시퀀스 내용이 아니다. MCP 자세 엔진은 최상위 모르는 필드를
     # 거절하므로(422) 빼고 보낸다 — 빼지 않으면 벤더 경로의 모든 질의가 `engine_unavailable`이 된다(2026-10-08 샘플).
     body = {key: value for key, value in body.items() if key not in NON_CONTENT_FIELDS}
@@ -139,28 +182,26 @@ def score_body(
             )
         if response.status_code != 200:
             logger.warning("pose engine HTTP %d sequence=%s", response.status_code, sequence_id)
-            return _unavailable("engine_unavailable", sequence_id=sequence_id)
+            return _raw_unavailable("engine_unavailable", sequence_id=sequence_id)
         payload = response.json()
     except Exception:  # noqa: BLE001 - 엔진 장애는 200 + not_available 이다
         logger.exception("pose engine call failed sequence=%s", sequence_id)
-        return _unavailable("engine_unavailable", sequence_id=sequence_id)
+        return _raw_unavailable("engine_unavailable", sequence_id=sequence_id)
 
     # MCP는 오류도 HTTP 200으로 답하므로 status 필드가 성공을 결정한다.
     if not isinstance(payload, dict) or payload.get("status") != "success":
-        return _unavailable("engine_unavailable", sequence_id=sequence_id)
+        return _raw_unavailable("engine_unavailable", sequence_id=sequence_id)
 
     result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
     status = result.get("analysis_status")
     if status != "available":
-        return _unavailable(str(result.get("reason_code") or "analysis_unavailable"), sequence_id=sequence_id)
-
-    summary = result.get("summary")
-    return PoseQueryResult(
+        return _raw_unavailable(
+            str(result.get("reason_code") or "analysis_unavailable"),
+            sequence_id=sequence_id,
+        )
+    return PoseEngineResult(
         analysis_status="available",
         reason_code=None,
         sequence_id=sequence_id,
-        similarity_score=result.get("similarity_score"),
-        correction_mode=result.get("correction_mode"),
-        corrections=_project_corrections(result),
-        summary=str(summary) if summary else None,
+        result=dict(result),
     )
