@@ -211,6 +211,18 @@ def test_agent_api_reaches_vllm_and_mcp_by_service_name_and_port() -> None:
     assert any(f":{_command_port('agent-api')}" in port for port in _service("agent-api")["ports"])
 
 
+def test_agent_api_mounts_pose_modelings_read_only() -> None:
+    env = _env()
+    service_env = _service_env("agent-api", env)
+    assert service_env["POSE_MODELINGS_ROOT"] == "/data/sources/modelings"
+    assert (
+        "/home/keti/shipcoat/data/modelings",
+        "/data/sources/modelings",
+    ) in _volumes("agent-api", env)
+    rendered = [_interpolate(spec, env) for spec in _service("agent-api")["volumes"]]
+    assert "/home/keti/shipcoat/data/modelings:/data/sources/modelings:ro" in rendered
+
+
 def test_agent_config_paths_are_mounted_from_the_bundle_layout() -> None:
     bm = _load_script("bundle_manifest")
     rag = _rag()

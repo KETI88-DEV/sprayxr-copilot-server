@@ -24,6 +24,22 @@ from trainer.pose_lab import body_proportions, composite, service, skeleton  # n
 from trainer.pose_lab.tests import test_scoring_isolation as isolation  # noqa: E402
 
 
+def test_mesh_source_path_honors_deployment_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("POSE_MODELINGS_ROOT", str(tmp_path))
+
+    source = service._mesh_source_path(3)
+
+    assert source is not None
+    assert source.parent == tmp_path
+    assert source.name.endswith(".fbx")
+
+
+def test_missing_deployment_models_report_fallback_without_raising(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("POSE_MODELINGS_ROOT", str(tmp_path))
+    result = service.placed_mesh("3")
+    assert result is not None and result.mesh is None and result.reason == "fbx_missing"
+
+
 def test_nearest_matches_the_scalar_reference_on_a_real_level_mesh() -> None:
     """벡터화 최근접 거리가 `level_mesh.closest_distance`(표준 라이브러리 구현)와 같다."""
     placed = service.placed_mesh("3")

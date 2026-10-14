@@ -13,6 +13,7 @@ import importlib
 import json
 import logging
 import math
+import os
 import sys
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
@@ -1851,7 +1852,8 @@ def _mesh_source_path(level: int) -> Path | None:
     for entry in entries:
         if int(entry.get("level", -1)) == level:
             source = entry.get("source_fbx")
-            return None if not source else level_mesh.DEFAULT_MODELINGS_ROOT / str(source)
+            root = Path(os.environ.get("POSE_MODELINGS_ROOT", str(level_mesh.DEFAULT_MODELINGS_ROOT)))
+            return None if not source else root / str(source)
     return None
 
 

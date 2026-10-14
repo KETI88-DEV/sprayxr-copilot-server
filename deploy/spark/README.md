@@ -667,3 +667,31 @@ FP8로 돌아갈 때는 `.env`와 셸에 export한 `BUNDLE_DIR`를 원래 값으
     필요한 경우 생성 주체와 경로를 따로 정해야 한다.
 11. arm64 vLLM 이미지 크기와 `docker save` 반입 시간.
 12. 배포 nginx 이미지(`1.29.4-alpine`)에서의 `nginx -t`. 같은 버전의 debian 이미지로만 검사했다.
+
+## 20. 학습모드 모델링(FBX) 자산
+
+`agent-api`는 호스트의 `POSE_MODELINGS_DIR`(기본 `/home/keti/shipcoat/data/modelings`)를
+컨테이너 `/data/sources/modelings`에 읽기 전용으로 마운트한다. 파일이 없거나
+검증되지 않은 모드에서도 `/api/ready`는 정상이며, 모션 뷰어는
+`ray_point_fallback`으로 표시한다.
+
+`trainer/data/level_alignment.json`이 요구하는 파일은 다음과 같다.
+
+- `learning_mode_lv.1_rev.1.1.fbx`
+- `learning_mode_lv.2_rev.1.2.fbx` (정렬 미검증으로 현재 fallback)
+- `learning_mode_lv.3_rev.1.1.fbx`
+- `learning_mode_lv.4_rev.3.fbx`
+- `learning_mode_lv.5_rev.4.fbx`
+- `learning_mode_lv.6_rev.3.13.fbx`
+- `learning_mode_lv.7_rev.2.1.fbx`
+- `learning_mode_lv.8_rev.1.1.fbx`
+- `learning_mode_lv.9_rev.4.fbx`
+- `learning_mode_lv.10_rev.1.2.fbx`
+
+모드 1과 3–10은 정렬 검증됨, 모드 2는 자산이 있어도 fallback을 사용한다.
+배포 전 호스트에서 소유권·읽기 권한과 해시를 확인한다.
+
+```bash
+find "${POSE_MODELINGS_DIR:-/home/keti/shipcoat/data/modelings}" -maxdepth 1 -type f -printf '%f\n' | sort
+sha256sum "${POSE_MODELINGS_DIR:-/home/keti/shipcoat/data/modelings}"/*.fbx
+```

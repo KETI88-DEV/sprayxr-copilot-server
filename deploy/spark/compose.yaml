@@ -133,6 +133,7 @@ services:
       # 빈 값 = CORS 헤더 없음(web은 same-origin 프록시, KETI는 서버 간 호출).
       DEMO_UI_ORIGINS: ${DEMO_UI_ORIGINS:-}
       EXPERT_REFERENCE_ROOT: /expert_reference_data
+      POSE_MODELINGS_ROOT: /data/sources/modelings
     volumes:
       - ${BUNDLE_DIR:?BUNDLE_DIR must point to the verified bundle}/models:/models:ro
       - ${BUNDLE_DIR:?BUNDLE_DIR must point to the verified bundle}/output/indexes:/output/indexes:ro
@@ -145,6 +146,7 @@ services:
       - ${RESULTS_DIR:?RESULTS_DIR must be a directory writable by APP_UID}:/output/eval_results
       - ${EXPERT_REFERENCE_DIR:-/home/keti/shipcoat/data/expert_reference_data}:/expert_reference_data:ro
       - ${STT_MODEL_DIR:-/home/keti/shipcoat/models/whisper-large-v3-turbo}:/stt-model:ro
+      - ${POSE_MODELINGS_DIR:-/home/keti/shipcoat/data/modelings}:/data/sources/modelings:ro
     ports:
       # v2.5 POST /api/v1/copilot/query 를 KETI 시뮬레이터가 직접 부를 포트. 외부 공개 시 COPILOT_BIND=0.0.0.0.
       - "${COPILOT_BIND:-127.0.0.1}:${COPILOT_PORT:-58000}:8120"
