@@ -180,6 +180,7 @@ def create_app(
     app.state.expert_guidance = expert_guidance
     app.state.coating_progress = coating_progress
     app.state.v1_store = v1_store
+    app.state.sequence_store = sequence_store
     app.state.speech_to_text = speech_to_text
 
     raw_allow_origins = os.environ.get("DEMO_UI_ORIGINS")
@@ -255,7 +256,13 @@ def create_app(
     app.include_router(create_simulator_router(recorder, store, resolver), include_in_schema=False)
     app.include_router(create_monitor_router(recorder), include_in_schema=False)
     app.include_router(create_db_viewer_router())
-    app.include_router(create_motion_viewer_router(expert_guidance.reference_root))
+    app.include_router(
+        create_motion_viewer_router(
+            expert_guidance.reference_root,
+            sequence_store=sequence_store,
+            mcp_base_url=mcp_base_url,
+        )
+    )
     # knowledge_search shares the live pipeline singleton; resolved per call so it is built once, lazily.
     app.include_router(
         create_copilot_router(

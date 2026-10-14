@@ -14,6 +14,9 @@ from typing import Any, TextIO
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import HTMLResponse
 
+from trainer.demo_api.motion_viewer_pose import _default_mesh_provider, build_pose_view
+from trainer.demo_api.pose_query import score_body_raw
+from trainer.demo_api.sequence_store import SequenceStore
 from trainer.expert_zone_mapping import canonical_expert_zone_id
 
 _JOINT_PARENTS: tuple[tuple[str, str | None], ...] = (
@@ -1117,7 +1120,14 @@ addEventListener('resize',resize);(async()=>{try{catalog=await json('/motion-vie
 
 
 def create_motion_viewer_router(
-    reference_root: Path, *, frame_count: int = 240
+    reference_root: Path,
+    *,
+    frame_count: int = 240,
+    sequence_store: SequenceStore | None = None,
+    mcp_base_url: str = "http://localhost:8100",
+    transport: Any = None,
+    pose_scorer: Any = score_body_raw,
+    mesh_provider: Any = _default_mesh_provider,
 ) -> APIRouter:
     root = Path(reference_root)
     router = APIRouter()
@@ -1147,6 +1157,40 @@ def create_motion_viewer_router(
             if modes:
                 processes.append({"process": process, "label": label, "modes": modes})
         return {"processes": processes}
+
+    @router.get("/motion-viewer/api/evaluations", include_in_schema=False)
+    def evaluation_catalog() -> dict[str, Any]:
+        sessions = (
+            sequence_store.recent_sequence_catalog()
+            if sequence_store is not None
+            else []
+        )
+        return {"sessions": sessions}
+
+    @router.get("/motion-viewer/api/evaluation", include_in_schema=False)
+    def evaluation_data(
+        session_id: str = Query(min_length=1, max_length=160),
+        sequence_id: str = Query(min_length=1, max_length=160),
+    ) -> dict[str, Any]:
+        if sequence_store is None:
+            raise HTTPException(status_code=503, detail="sequence store is unavailable")
+        body = sequence_store.load_body(
+            session_key=session_id, sequence_id=sequence_id
+        )
+        if body is None:
+            raise HTTPException(status_code=404, detail="stored sequence not found")
+        raw = pose_scorer(
+            body,
+            sequence_id=sequence_id,
+            mcp_base_url=mcp_base_url,
+            transport=transport,
+        )
+        return build_pose_view(
+            body,
+            raw,
+            mesh_provider=mesh_provider,
+            max_frames=frame_count,
+        )
 
     @router.get("/motion-viewer/api/motion", include_in_schema=False)
     def motion_data(
@@ -1198,6 +1242,22 @@ def create_motion_viewer_router(
             direction_summary,
             paint_statistics["direction_distribution"],
         )
+        try:
+            supplied_mesh = mesh_provider(str(mode_id)) or {}
+        except (FileNotFoundError, LookupError, ValueError):
+            supplied_mesh = {"available": False, "reason": "display_error"}
+        mesh_available = bool(
+            supplied_mesh.get("available")
+            and supplied_mesh.get("vertices")
+            and supplied_mesh.get("triangles")
+        )
+        object_mesh = {
+            **dict(supplied_mesh),
+            "available": mesh_available,
+            "vertices": supplied_mesh.get("vertices", []) if mesh_available else [],
+            "triangles": supplied_mesh.get("triangles", []) if mesh_available else [],
+            "fallback": None if mesh_available else "ray_point_surface",
+        }
         return {
             "expert_name": _EXPERT_NAME,
             "process": process,
@@ -1216,6 +1276,8 @@ def create_motion_viewer_router(
             "zone_surfaces": zone_surfaces,
             "zone_order": zone_order,
             "zone_statistics": zone_statistics,
+            "object_mesh": object_mesh,
+            "object_mesh_status": "verified" if mesh_available else "ray_point_fallback",
             **paint_statistics,
         }
 

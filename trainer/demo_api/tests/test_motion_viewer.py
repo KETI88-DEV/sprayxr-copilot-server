@@ -1,6 +1,7 @@
 import csv
 import json
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -11,6 +12,8 @@ from trainer.demo_api.motion_viewer import (
     _direction_summary,
     create_motion_viewer_router,
 )
+from trainer.demo_api.pose_query import PoseEngineResult
+from trainer.demo_api.sequence_store import SequenceStore
 from trainer.scripts.build_zone_guidance_profiles import build_profiles
 
 
@@ -79,7 +82,13 @@ def _write_csv(path: Path, *, offset: float, zone_ids: list[str] | None = None) 
             )
 
 
-def _client(tmp_path: Path) -> TestClient:
+def _client(
+    tmp_path: Path,
+    *,
+    store: SequenceStore | None = None,
+    pose_scorer: Any = None,
+    mesh_provider: Any = None,
+) -> TestClient:
     mode_root = tmp_path / "raw" / "spray" / "learning" / "mode_04"
     _write_csv(mode_root / "4_1001_1.csv", offset=0.0)
     _write_csv(mode_root / "4_1002_1.csv", offset=0.1)
@@ -129,8 +138,33 @@ def _client(tmp_path: Path) -> TestClient:
     profile_path.parent.mkdir(parents=True)
     profile_path.write_text(json.dumps(profile), encoding="utf-8")
     app = FastAPI()
-    app.include_router(create_motion_viewer_router(tmp_path, frame_count=5))
+    kwargs: dict[str, Any] = {"frame_count": 5}
+    if store is not None:
+        kwargs["sequence_store"] = store
+    if pose_scorer is not None:
+        kwargs["pose_scorer"] = pose_scorer
+    if mesh_provider is not None:
+        kwargs["mesh_provider"] = mesh_provider
+    app.include_router(create_motion_viewer_router(tmp_path, **kwargs))
     return TestClient(app)
+
+
+def _store_sequence(store: SequenceStore, *, sequence_id: str = "SEQ-020") -> dict[str, Any]:
+    body = {
+        "session_id": "3_11000346_1",
+        "sequence_id": sequence_id,
+        "scenario_id": "3",
+        "zone_id": "7",
+        "sequence_info": [
+            {"index": 0, "skeleton_joints": {"Head": [0.0, 1.7, 0.0]}}
+        ],
+    }
+    store.record(
+        session_key=body["session_id"], sequence_id=sequence_id,
+        body_sha256=sequence_id, frames=1, received_at="2026-10-14T00:00:00Z",
+        body=json.dumps(body),
+    )
+    return body
 
 
 def test_motion_viewer_page_explains_representative_and_statistical_motion(tmp_path: Path) -> None:
@@ -405,3 +439,88 @@ def test_motion_rejects_unknown_session_without_reading_arbitrary_paths(tmp_path
     )
 
     assert response.status_code == 404
+
+
+def test_evaluation_catalog_lists_stored_tsb_sequences_without_bodies(tmp_path: Path) -> None:
+    store = SequenceStore(":memory:")
+    _store_sequence(store)
+
+    response = _client(tmp_path, store=store).get("/motion-viewer/api/evaluations")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["sessions"][0]["session_id"] == "3_11000346_1"
+    assert payload["sessions"][0]["sequences"][0]["sequence_id"] == "SEQ-020"
+    assert "sequence_info" not in json.dumps(payload)
+
+
+def test_evaluation_endpoint_uses_injected_store_and_product_scorer(tmp_path: Path) -> None:
+    store = SequenceStore(":memory:")
+    expected_body = _store_sequence(store)
+    calls: list[tuple[dict[str, Any], str]] = []
+
+    def scorer(body: dict[str, Any], *, sequence_id: str, **_kwargs: Any) -> PoseEngineResult:
+        calls.append((body, sequence_id))
+        return PoseEngineResult(
+            "available", None, sequence_id,
+            {
+                "analysis_status": "available", "similarity_score": 0.91,
+                "expert_percentile": 90, "reference_quality": "multi_worker",
+                "support": 200, "corrections": [],
+            },
+        )
+
+    response = _client(tmp_path, store=store, pose_scorer=scorer).get(
+        "/motion-viewer/api/evaluation",
+        params={"session_id": "3_11000346_1", "sequence_id": "SEQ-020"},
+    )
+
+    assert response.status_code == 200
+    assert calls == [(expected_body, "SEQ-020")]
+    assert response.json()["evaluation"]["similarity_score"] == 0.91
+
+
+def test_evaluation_endpoint_returns_404_for_unknown_sequence_and_200_unavailable_for_engine_failure(
+    tmp_path: Path,
+) -> None:
+    store = SequenceStore(":memory:")
+    _store_sequence(store)
+
+    def unavailable(_body: dict[str, Any], *, sequence_id: str, **_kwargs: Any) -> PoseEngineResult:
+        return PoseEngineResult("not_available", "engine_unavailable", sequence_id, {})
+
+    client = _client(tmp_path, store=store, pose_scorer=unavailable)
+    missing = client.get(
+        "/motion-viewer/api/evaluation",
+        params={"session_id": "3_11000346_1", "sequence_id": "SEQ-999"},
+    )
+    unavailable_response = client.get(
+        "/motion-viewer/api/evaluation",
+        params={"session_id": "3_11000346_1", "sequence_id": "SEQ-020"},
+    )
+
+    assert missing.status_code == 404
+    assert unavailable_response.status_code == 200
+    assert unavailable_response.json()["evaluation"]["reason_code"] == "engine_unavailable"
+    assert unavailable_response.json()["evaluation"]["similarity_score"] is None
+
+
+def test_motion_endpoint_adds_verified_object_mesh_and_preserves_existing_fields(tmp_path: Path) -> None:
+    def mesh(_mode: str) -> dict[str, Any]:
+        return {
+            "available": True,
+            "vertices": [[0, 0, 0], [1, 0, 0], [0, 1, 0]],
+            "triangles": [[0, 1, 2]],
+        }
+
+    response = _client(tmp_path, mesh_provider=mesh).get(
+        "/motion-viewer/api/motion",
+        params={"process": "spray", "mode_id": 4, "session_id": "representative"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["frames"]
+    assert payload["zone_surfaces"]
+    assert payload["object_mesh"]["triangles"] == [[0, 1, 2]]
+    assert payload["object_mesh_status"] == "verified"
