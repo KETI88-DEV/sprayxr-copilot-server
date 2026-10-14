@@ -136,6 +136,8 @@ docker exec ship-paint-trainer curl -s http://127.0.0.1:8130/api/workers
 
 ```bash
 docker exec ship-paint-trainer bash -c "pkill -f '^python3 -m uvicorn trainer.pose_lab.app' ; sleep 1"
+# 보통은 `deploy/start_pose_lab.sh` 하나로 된다(설정 고정, 옛 키 산포면 거부, 로그는 /logs/pose_lab_8130.log).
+# 아래는 그 스크립트가 하는 일과 같은 수동 명령이다.
 # 산포는 현행 동작 키(m3)로 지은 파일이어야 한다. 옛 키 파일(`_yup`=m1)을 주면 서버가 버리고
 # 임시 산포(5 cm)로 돌아 유사도가 거의 0이 된다(2026-10-14). 설정은 docs/year2/KPI_시험방법.md §6과 같다.
 docker exec -d -w /workspace -e POSE_LAB_DATA_ROOT=/data/sources/professionals \
