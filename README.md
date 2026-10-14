@@ -136,8 +136,12 @@ docker exec ship-paint-trainer curl -s http://127.0.0.1:8130/api/workers
 
 ```bash
 docker exec ship-paint-trainer bash -c "pkill -f '^python3 -m uvicorn trainer.pose_lab.app' ; sleep 1"
+# 산포는 현행 동작 키(m3)로 지은 파일이어야 한다. 옛 키 파일(`_yup`=m1)을 주면 서버가 버리고
+# 임시 산포(5 cm)로 돌아 유사도가 거의 0이 된다(2026-10-14). 설정은 docs/year2/KPI_시험방법.md §6과 같다.
 docker exec -d -w /workspace -e POSE_LAB_DATA_ROOT=/data/sources/professionals \
-  -e POSE_LAB_SPREAD_REFERENCE=/output/spread_reference_expert_yup.json \
+  -e POSE_LAB_SPREAD_REFERENCE=/output/spread_reference_expert_m3.json \
+  -e ARM_REFERENCE_PATH=/output/expert_reference/expert_arm_reference.json \
+  -e PYTHONPATH=trainer/scripts:. \
   ship-paint-trainer python3 -m uvicorn trainer.pose_lab.app:create_app --factory --host 0.0.0.0 --port 8130
 docker exec ship-paint-trainer bash -c "pgrep -af '^python3 -m uvicorn'"  # 확인
 ```
