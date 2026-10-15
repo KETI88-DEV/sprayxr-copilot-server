@@ -971,6 +971,59 @@ def _zone_playback_statistics(
     return zone_order, statistics_output
 
 
+def _coating_reference(profile: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Return compact, precomputed Zone height cells for browser rendering."""
+    output: dict[str, dict[str, Any]] = {}
+    zones = profile.get("aggregate", {}).get("zones", {})
+    if not isinstance(zones, dict):
+        return output
+    for key, zone in zones.items():
+        if not isinstance(zone, dict):
+            continue
+        coating = zone.get("coating")
+        if not isinstance(coating, dict) or coating.get("analysis_status") != "available":
+            continue
+        raw_cells = coating.get("cells")
+        if not isinstance(raw_cells, dict):
+            continue
+        cells: list[list[float | int]] = []
+        for cell_key, sample in raw_cells.items():
+            if not isinstance(cell_key, str) or not isinstance(sample, dict):
+                continue
+            try:
+                x_text, y_text = cell_key.split(":", 1)
+                x, y = int(x_text), int(y_text)
+            except (TypeError, ValueError):
+                continue
+            height = _number(sample.get("median_um"))
+            if height is None or height <= 0:
+                continue
+            cells.append([x, y, round(height, 4)])
+        if not cells:
+            continue
+        cells.sort(key=lambda item: (item[1], item[0]))
+        xs = [int(item[0]) for item in cells]
+        ys = [int(item[1]) for item in cells]
+        fallback_map, _, fallback_zone = str(key).partition(":")
+        output[str(key)] = {
+            "map_num": int(zone.get("map_num", fallback_map)),
+            "zone_id": str(zone.get("zone_id", fallback_zone)),
+            "source": "expert_final_heightmap",
+            "display_semantics": "relative_height",
+            "analysis_status": "available",
+            "atlas_width": int(coating.get("atlas_width", 2048)),
+            "atlas_height": int(coating.get("atlas_height", 2048)),
+            "grid_size": int(coating.get("grid_size", 64)),
+            "session_count": int(coating.get("session_count", 0)),
+            "bounds": {
+                "min_x": min(xs), "max_x": max(xs),
+                "min_y": min(ys), "max_y": max(ys),
+            },
+            "cells": cells,
+        }
+    return output
+
+
 def _spread(
     selected_frames: list[dict[str, Any]], all_frames: list[list[dict[str, Any]]]
 ) -> list[dict[str, Any]]:
@@ -1238,26 +1291,55 @@ button{cursor:pointer;font-weight:700}.primary{background:#3157d5;border-color:#
 .toggle{display:flex;align-items:center;gap:8px;margin-top:14px;color:var(--muted);font-size:12px}.toggle input{width:auto}.badge{display:inline-flex;padding:5px 9px;border:1px solid #3157d5;border-radius:999px;color:#b9caff;font-size:11px;margin-top:12px}
 .range-scale{position:relative;height:18px;color:#7186a3;font-size:10px}.range-scale span{position:absolute;top:1px;transform:translateX(-50%)}.range-scale span:first-child{left:0;transform:none}.range-scale .normal{left:27.27%;color:#dce8ff;font-weight:800}.range-scale span:last-child{right:0;transform:none}
 @media(max-width:1200px){.shell{height:auto;min-height:100dvh;overflow:visible}.workspace{grid-template-columns:240px minmax(0,1fr);overflow:visible}.stage{height:calc(100dvh - 67px);min-height:360px}.right{display:block;grid-column:1/-1;border-left:0;border-top:1px solid var(--line)}}@media(max-width:720px){.top{height:86px;min-height:86px;padding:12px 16px;overflow:hidden}.workspace{display:flex;flex-direction:column}.stage{order:-1;height:calc(100dvh - 86px);min-height:360px}.side{border:0}.right{display:block}.playback-controls{grid-template-columns:1fr 1fr}.speed-control{grid-column:1/-1}}
+</style><style>
+.shell{grid-template-rows:auto auto minmax(0,1fr)}
+.selection-panel{padding:10px 18px 12px;border-bottom:1px solid var(--line);background:#0c1728}
+.selection-panel h2{margin:0 0 7px;color:#91a0b8;font-size:11px}
+.selection-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.selection-grid label{margin:0 0 5px}.selection-grid .select{min-width:0}
+.workspace{grid-template-columns:245px minmax(420px,1fr) 300px}
+.evaluation-side{min-height:0;padding:14px;border-right:1px solid var(--line);background:#0c1728;overflow:auto}
+.evaluation-side .pose-summary{display:grid;grid-template-columns:1fr;gap:9px}
+.evaluation-side .pose-summary .card{margin:0}
+.evaluation-side .pose-summary .card:nth-child(2){order:-1}
+.evaluation-side #poseScore{font-size:46px;line-height:1.05;letter-spacing:-1px}
+.viewer-tools{margin-top:12px;padding-top:10px;border-top:1px solid var(--line)}
+.viewer-tools label{margin:8px 0 6px}
+.right{padding:12px;display:grid;grid-template-rows:minmax(245px,1fr) minmax(245px,1fr);gap:10px;overflow:hidden}
+.right .card{margin:0}.skeleton-card{height:100%;display:flex;flex-direction:column}.skeleton-card summary{flex:0 0 auto}
+.skeleton-screen{height:auto;min-height:150px;flex:1}#skeletonCanvas{height:100%}
+.coating-card{height:100%;display:flex;flex-direction:column;padding:0;overflow:hidden}
+.coating-header{display:flex;justify-content:space-between;align-items:center;padding:11px 12px;border-bottom:1px solid var(--line)}
+.coating-header strong{font-size:13px}.coating-header span{font-size:10px;color:#91a0b8}
+.coating-switch{display:flex;gap:5px;padding:8px 10px}.coating-switch button{padding:6px 8px;font-size:10px}.coating-switch button.active{background:#3157d5;border-color:#3157d5}
+.coating-screen{position:relative;min-height:150px;flex:1;background:#07101f}#coatingCanvas{display:block;width:100%;height:100%}
+.coating-status{position:absolute;left:9px;top:8px;padding:4px 7px;border-radius:999px;background:rgba(7,16,31,.8);color:#dff7ff;font-size:10px}
+.coating-legend{display:flex;justify-content:space-between;padding:7px 11px;background:linear-gradient(90deg,#1946a0,#20c997,#ffe066,#ff7849);color:#fff;font-size:9px;text-shadow:0 1px 3px #000}
+.coating-note{padding:7px 10px;color:#7890ad;font-size:9px;line-height:1.45}
+.hidden-data-hooks{display:none}
+@media(max-width:1200px){.shell{grid-template-rows:auto auto auto}.workspace{grid-template-columns:230px minmax(0,1fr)}.right{grid-column:1/-1;grid-template-columns:1fr 1fr;grid-template-rows:360px;border-top:1px solid var(--line)}}
+@media(max-width:760px){.selection-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.workspace{display:flex;flex-direction:column}.evaluation-side{order:1}.stage{order:0}.right{order:2;display:grid;grid-template-columns:1fr;grid-template-rows:330px 330px}.selection-panel{padding:9px 12px}}
 </style></head><body><div class="shell">
 <header class="top"><div class="title">작업 자세 비교 평가<small>전문가 모션 뷰어 기반 · 도장 경로·자세 통합 화면 · 기준 전문가: 전형기 반장 · 제품 자세 엔진 연동</small></div><nav><a href="/docs">Swagger</a><a href="/admin">DB 뷰어</a></nav></header>
 <template id="poseUiTemplate">
 <div data-pose-slot="gizmo" class="camera-gizmo" aria-label="3D 카메라 기즈모"><button id="cameraHome" title="초기 시점">⌂</button><button id="cameraAxisX" title="X축 시점">X</button><button id="cameraAxisY" title="Y축 시점">Y</button><button id="cameraAxisZ" title="Z축 시점">Z</button></div>
 <div data-pose-slot="summary" id="poseSummary" class="pose-summary"><div class="card headline"><span>현재 자세 상태</span><strong id="posePosture">기록 준비 중</strong><div class="pose-meta"><span id="poseEstimateNote">CSV 조인트 기반 자세 추정</span><span id="poseZoneSummary">Zone 대기 중</span></div></div><div class="card"><span>전문가 동작 유사도</span><strong id="poseScore">—</strong><small id="poseScoreNote">선택된 작업 구간을 전문가 기준과 비교합니다.</small></div><div class="card pose-action"><span>자세 개선 안내</span><strong id="poseAction">기록을 선택하세요.</strong></div><div class="card"><span>안내 반영 시 계산상 예상</span><strong id="posePredicted">—</strong><small>실제 재측정 결과가 아닌 좌표 보정 시뮬레이션입니다.</small></div></div>
 </template>
-<main class="workspace"><aside class="side">
-<label for="worker">작업자</label><select id="worker" class="select"></select>
-<label for="process">훈련 종류</label><select id="process" class="select"></select>
-<label for="mode">학습모드</label><select id="mode" class="select"></select>
-<label for="session">재생할 기록</label><select id="session" class="select"></select>
+<section class="selection-panel"><h2>재생 데이터 선택</h2><div class="selection-grid">
+<div><label for="worker">작업자</label><select id="worker" class="select"></select></div>
+<div><label for="process">훈련 종류</label><select id="process" class="select"></select></div>
+<div><label for="mode">학습모드</label><select id="mode" class="select"></select></div>
+<div><label for="session">재생할 기록</label><select id="session" class="select"></select></div>
+</div></section>
+<main class="workspace"><aside class="evaluation-side"><div class="viewer-tools">
 <label for="pointSize">흰색 포인트 크기 · <span id="pointSizeValue">1.5 px</span></label><input id="pointSize" type="range" min="0.5" max="5" step="0.25" value="1.5">
-<label class="toggle"><input id="zoneSurface" type="checkbox" checked>Zone 영역 표시 (곡면·파임 반영)</label>
+<label class="toggle"><input id="zoneSurface" type="checkbox" checked>Zone 영역 표시</label>
 <div id="status" class="status">데이터를 불러오는 중입니다.</div>
-<p class="help">좌클릭은 객체 중심 회전, 휠 클릭은 3D 평행이동, 휠은 확대·축소입니다. 우클릭을 누른 채 WASD/QE로 자유 이동하고 F로 현재 객체에 초점을 맞춥니다.</p>
-</aside>
+</div></aside>
 <section class="stage"><div class="stage-viewport"><canvas id="canvas"></canvas><div class="overlay"><strong id="overlayTitle">학습모드</strong><span id="overlayFrame">프레임 준비 중</span><div id="viewerLegend" class="viewer-legend"><div><i class="dot" style="background:#f5f8ff"></i>전문가 전체 Ray Point 점군</div><div><i class="dot" style="background:#a78bfa"></i>Map·Zone별 관측 영역</div><div><i class="dot" style="background:var(--green)"></i>Zone별 전문가 표준 도장 패턴</div><div><i class="dot" style="background:#ff8a3d"></i>선택 기록의 페인트 누적 궤적</div><div><i class="dot" style="background:var(--cyan)"></i>머리·양손 실측 위치와 추정 상체</div></div></div><div id="loading" class="loading"><div class="spinner"></div><span>전문가 기록을 불러오는 중입니다.</span></div></div><div class="playback-dock"><div class="playback-status"><strong id="playbackZone">현재 Zone 대기 중</strong><span id="playbackTime">0.00 / 0.00초</span></div><div id="zoneTimeline" class="zone-timeline" aria-label="Zone 진행 구간"></div><input id="timeline" type="range" min="0" max="0" value="0" aria-label="진행 위치"><div class="playback-controls"><button id="play" class="primary">재생</button><button id="restart">처음으로</button><div class="speed-control"><label for="speed">재생 속도</label><select id="speed" aria-label="재생 속도"><option value="0.25">0.25배</option><option value="0.5">0.5배</option><option value="1" selected>1.0배</option><option value="1.5">1.5배</option><option value="2">2.0배</option><option value="3">3.0배</option></select></div></div></div></section>
-<aside class="side right"><div class="card"><span>현재 작업 Zone</span><strong id="currentZone">대기 중</strong></div><div class="card"><span>Zone 작업 순서</span><div id="zoneOrder" class="zone-order"></div></div><div id="zoneDetail" class="card"><span class="zone-detail-title">전체 Zone 통계</span><span>데이터를 불러오는 중입니다.</span></div><div class="card"><span>통계에 포함된 수행</span><strong id="sessionCount">-</strong></div><div class="card"><span>현재 기록 길이</span><strong id="duration">-</strong></div>
+<aside class="side right"><div class="hidden-data-hooks"><strong id="currentZone">대기 중</strong><div id="zoneOrder"></div><div id="zoneDetail"></div><strong id="sessionCount">-</strong><strong id="duration">-</strong></div>
 <details class="card skeleton-card" open><summary>CSV 조인트 기반 전신 스켈레톤</summary><div class="skeleton-screen"><canvas id="skeletonCanvas" aria-label="CSV 조인트 기반 전신 스켈레톤"></canvas><span id="skeletonPosture" class="skeleton-posture">자세 판정 대기</span><span id="skeletonAngle" class="skeleton-angle">정면 · 0°</span></div><div class="skeleton-controls"><button id="skeletonTurnLeft" class="skeleton-turn" aria-label="스켈레톤 왼쪽 회전" title="왼쪽으로 15도 회전">↶</button><button id="skeletonReset" class="skeleton-reset">정면 복귀</button><button id="skeletonTurnRight" class="skeleton-turn" aria-label="스켈레톤 오른쪽 회전" title="오른쪽으로 15도 회전">↷</button></div><div class="skeleton-note">CSV의 Pelvis·몸통·팔·다리 조인트를 그대로 연결한 전신 표현입니다. 자세 유형은 양쪽 무릎 굽힘과 몸통 기울기로 추정하며, 시뮬레이터 IK 관절이므로 실측 점수와 분리합니다.</div></details>
-<p class="help">Zone 면은 같은 Map·Zone의 UV 인접점만 작은 3차원 패치로 연결하므로 움푹 파인 부분과 곡면을 평면으로 뭉개지 않습니다. 데이터가 관측되지 않은 빈 공간은 임의로 채우지 않습니다.</p></aside>
+<section class="card coating-card"><div class="coating-header"><strong>현재 Zone 도막 분포</strong><span id="coatingZone">Zone 대기 중</span></div><div class="coating-switch"><button id="coatingView2d" class="active" type="button">2D 분포</button><button id="coatingView3d" type="button">3D 높이</button></div><div class="coating-screen"><canvas id="coatingCanvas" aria-label="전문가 최종 높이맵 기반 현재 Zone 도막 분포"></canvas><span id="coatingStatus" class="coating-status">도막 기준 준비 중</span></div><div class="coating-legend"><span>얇음</span><span>중간</span><span>두꺼움</span></div><div class="coating-note">전문가 최종 높이맵과 Zone별 raytexuv를 최초 전처리한 상대 높이입니다. 실제 두께 단위가 아닌 시각적 강조 표현입니다.</div></section></aside>
 </main></div><script>
 const $=id=>document.getElementById(id); const canvas=$('canvas'),ctx=canvas.getContext('2d'),skeletonCanvas=$('skeletonCanvas'),skeletonCtx=skeletonCanvas.getContext('2d');
 const ZONE_COLORS=[null,'#FF0000','#00FF00','#0000FF','#00FFFF','#FF00FF','#FFFF00','#FF8000','#FF0080','#00FF80','#80FF00','#0080FF','#8000FF','#FF8080','#80FF80','#8080FF','#800000','#008000','#000080','#80FFFF','#FF80FF','#FFFF80','#008080','#800080','#808000','#FFBF80','#FF80BF','#BFFF80','#80FFBF','#BF80FF','#80BFFF','#FF40BF','#FFBF40','#40FFBF','#BFFF40','#40BFFF','#BF40FF','#40BFBF','#BF40BF','#BFBF40'];
@@ -1313,12 +1395,13 @@ drawSkeletonView(frame);
 if(!referencePreview)updateZonePanel(frame);
 $('overlayFrame').textContent=`${sourceIndex+1} / ${data.frames.length} · ${frame.t.toFixed(2)}초`;
 if(window.motionViewerPoseOverlay)window.motionViewerPoseOverlay.draw({frame,sourceIndex,playheadSeconds,durationSeconds:data.duration_seconds,center,w,h});
+dispatchEvent(new CustomEvent('motion-viewer-frame',{detail:{frame,sourceIndex,playheadSeconds}}));
 }
 function tick(now){if(playing&&data&&data.frames.length){if(!last)last=now;const elapsed=Math.min(.1,(now-last)/1000)*Number($('speed').value);last=now;playheadSeconds+=elapsed;if(playheadSeconds>=data.duration_seconds){playheadSeconds=0;index=0}else index=interpolatedFrame(playheadSeconds).index;$('timeline').value=index;draw()}requestAnimationFrame(tick)}
 $('worker').onchange=fillProcesses;$('process').onchange=fillModes;$('mode').onchange=fillSessions;$('session').onchange=loadMotion;$('timeline').oninput=e=>{referencePreview=false;index=Number(e.target.value);playheadSeconds=data.frames[index].t;last=0;draw()};$('pointSize').oninput=e=>{$('pointSizeValue').textContent=`${Number(e.target.value).toFixed(2).replace(/0+$/,'').replace(/\.$/,'')} px`;draw()};$('zoneSurface').onchange=draw;$('skeletonTurnLeft').onclick=()=>setSkeletonYaw(skeletonYaw-15);$('skeletonTurnRight').onclick=()=>setSkeletonYaw(skeletonYaw+15);$('skeletonReset').onclick=()=>setSkeletonYaw(0);document.querySelector('.skeleton-card').ontoggle=()=>{if(document.querySelector('.skeleton-card').open)resize()};$('play').onclick=()=>{if(playing){playing=false;last=0;$('play').textContent='재생'}else startPlayback()};$('restart').onclick=()=>{playing=false;referencePreview=false;index=0;playheadSeconds=0;last=0;$('play').textContent='재생';$('timeline').value=0;draw()};
 canvas.onpointerdown=e=>{if(e.button!==0&&e.button!==1)return;e.preventDefault();canvas.setPointerCapture(e.pointerId);drag=e.button===1?{mode:'pan',x:e.clientX,y:e.clientY,panX,panY}:{mode:'rotate',x:e.clientX,y:e.clientY,yaw,pitch};canvas.style.cursor=drag.mode==='pan'?'move':'grabbing'};canvas.onpointermove=e=>{if(!drag)return;if(drag.mode==='pan'){panX=drag.panX+e.clientX-drag.x;panY=drag.panY+e.clientY-drag.y}else{yaw=drag.yaw+(e.clientX-drag.x)*.01;pitch=Math.max(-1.2,Math.min(1.2,drag.pitch+(e.clientY-drag.y)*.01))}draw()};canvas.onpointerup=e=>{if(canvas.hasPointerCapture(e.pointerId))canvas.releasePointerCapture(e.pointerId);drag=null;canvas.style.cursor='grab'};canvas.onpointercancel=()=>{drag=null;canvas.style.cursor='grab'};canvas.onauxclick=e=>e.preventDefault();canvas.onwheel=e=>{e.preventDefault();zoom=Math.max(70,Math.min(420,zoom*(e.deltaY>0?.9:1.1)));draw()};
 addEventListener('resize',resize);(async()=>{try{catalog=await json('/motion-viewer/api/catalog');$('worker').replaceChildren(...catalog.workers.map(worker=>option(worker.worker_id,`${worker.display_name}${worker.role==='expert'?' · 전문가 기준':''}`)));fillProcesses();resize();requestAnimationFrame(tick)}catch(e){$('status').textContent=e.message}})();
-</script><script defer src="/motion-viewer/assets/motion_viewer_camera.js"></script><script defer src="/motion-viewer/assets/motion_viewer_pose.js"></script></body></html>"""
+</script><script defer src="/motion-viewer/assets/motion_viewer_camera.js"></script><script defer src="/motion-viewer/assets/motion_viewer_pose.js"></script><script defer src="/motion-viewer/assets/motion_viewer_coating.js"></script></body></html>"""
 
 
 def create_motion_viewer_router(
@@ -1358,6 +1441,13 @@ def create_motion_viewer_router(
     def camera_script() -> FileResponse:
         return FileResponse(
             static_root / "motion_viewer_camera.js", media_type="text/javascript",
+            headers={"Cache-Control": "no-cache"},
+        )
+
+    @router.get("/motion-viewer/assets/motion_viewer_coating.js", include_in_schema=False)
+    def coating_script() -> FileResponse:
+        return FileResponse(
+            static_root / "motion_viewer_coating.js", media_type="text/javascript",
             headers={"Cache-Control": "no-cache"},
         )
 
@@ -1543,6 +1633,7 @@ def create_motion_viewer_router(
             "zone_surfaces": zone_surfaces,
             "zone_order": zone_order,
             "zone_statistics": zone_statistics,
+            "coating_reference": _coating_reference(profile),
             "object_mesh": object_mesh,
             "object_mesh_status": "verified" if mesh_available else "ray_point_fallback",
             **paint_statistics,

@@ -126,6 +126,17 @@ def _client(
                     "speed_mms": {"median": 300},
                     "distance_mm": {"median": 250},
                     "expected_direction": "horizontal",
+                    "coating": {
+                        "analysis_status": "available",
+                        "atlas_width": 2048,
+                        "atlas_height": 2048,
+                        "grid_size": 64,
+                        "session_count": 2,
+                        "cells": {
+                            "10:20": {"sample_count": 2, "q1_um": 120, "median_um": 140, "q3_um": 160},
+                            "11:20": {"sample_count": 2, "q1_um": 150, "median_um": 180, "q3_um": 210},
+                        },
+                    },
                 }
             },
             "macro_orders": [
@@ -222,9 +233,9 @@ def test_motion_viewer_page_explains_representative_and_statistical_motion(tmp_p
     assert 'id="zoneOrder"' in response.text
     assert 'id="zoneDetail"' in response.text
     assert "function updateZonePanel" in response.text
-    assert "Zone 작업 순서" in response.text
-    assert "현재 작업 Zone" in response.text
-    assert "grid-template-columns:275px minmax(420px,1fr) 360px" in response.text
+    assert "Zone 작업 순서" not in response.text
+    assert "현재 작업 Zone" not in response.text
+    assert "grid-template-columns:repeat(4,minmax(0,1fr))" in response.text
     assert "allButton.textContent='전체'" in response.text
     assert "expertDirectionMix" in response.text
     assert "현재 양손 위치 편차" not in response.text
@@ -238,7 +249,6 @@ def test_motion_viewer_page_explains_representative_and_statistical_motion(tmp_p
     assert 'id="viewerLegend"' in response.text
     assert response.text.count('id="viewerLegend"') == 1
     assert response.text.index('id="viewerLegend"') < response.text.index('id="loading"')
-    assert "객체 중심 회전" in response.text
     assert 'id="cameraHome"' in response.text
     assert 'id="skeletonCanvas"' in response.text
     assert 'id="skeletonTurnLeft"' in response.text
@@ -483,6 +493,12 @@ def test_motion_returns_trusted_trackers_paint_trace_and_direction_statistics(tm
     assert overall["expert_session_count"] == 2
     assert overall["selected_major_direction"] == "horizontal"
     assert overall["expert_direction_distribution"]["horizontal"] == 1.0
+    coating = data["coating_reference"]["1:1"]
+    assert coating["source"] == "expert_final_heightmap"
+    assert coating["display_semantics"] == "relative_height"
+    assert coating["grid_size"] == 64
+    assert coating["bounds"] == {"min_x": 10, "max_x": 11, "min_y": 20, "max_y": 20}
+    assert coating["cells"] == [[10, 20, 140.0], [11, 20, 180.0]]
 
 
 def test_representative_expert_motion_reports_similarity_guidance_and_prediction(
@@ -677,6 +693,9 @@ def test_motion_viewer_page_exposes_pose_comparison_contract(tmp_path: Path) -> 
         "Zone 진행 구간",
         "CSV 조인트 기반 전신 스켈레톤",
         "CSV 조인트 기반 자세 추정",
+        "현재 Zone 도막 분포",
+        "2D 분포",
+        "3D 높이",
     ):
         assert text in response.text
     for removed in (
@@ -702,6 +721,12 @@ def test_motion_viewer_page_exposes_pose_comparison_contract(tmp_path: Path) -> 
     assert '/motion-viewer/assets/motion_viewer_pose.css' in response.text
     assert '/motion-viewer/assets/motion_viewer_pose.js' in response.text
     assert '/motion-viewer/assets/motion_viewer_camera.js' in response.text
+    assert '/motion-viewer/assets/motion_viewer_coating.js' in response.text
+    assert 'class="selection-panel"' in response.text
+    assert 'class="selection-grid"' in response.text
+    assert 'id="coatingCanvas"' in response.text
+    assert 'id="coatingView2d"' in response.text
+    assert 'id="coatingView3d"' in response.text
     assert "Number(zoneId)>0" in response.text
 
 
@@ -710,10 +735,12 @@ def test_pose_assets_define_layers_and_interaction_states(tmp_path: Path) -> Non
     script = client.get("/motion-viewer/assets/motion_viewer_pose.js")
     style = client.get("/motion-viewer/assets/motion_viewer_pose.css")
     camera = client.get("/motion-viewer/assets/motion_viewer_camera.js")
+    coating = client.get("/motion-viewer/assets/motion_viewer_coating.js")
 
     assert script.status_code == 200
     assert style.status_code == 200
     assert camera.status_code == 200
+    assert coating.status_code == 200
     assert script.headers["cache-control"] == "no-cache"
     assert style.headers["cache-control"] == "no-cache"
     for text in (
@@ -743,3 +770,11 @@ def test_pose_assets_define_layers_and_interaction_states(tmp_path: Path) -> Non
     assert "display:none" not in style.text.replace(" ", "").split("@media(max-width:1200px)", 1)[-1]
     assert "resize();" in script.text
     assert "data?.frames?.length) { resetViewToCamera(data); renderZoneTimeline(data); }" in script.text
+    for text in (
+        "coating_reference",
+        "motion-viewer-frame",
+        "renderCoatingZone",
+        "drawTerrain",
+        "expert_final_heightmap",
+    ):
+        assert text in coating.text

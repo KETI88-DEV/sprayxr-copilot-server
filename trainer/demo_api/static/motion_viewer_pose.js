@@ -9,7 +9,7 @@
   const gizmo = fragment.querySelector('[data-pose-slot="gizmo"]');
   const summary = fragment.querySelector('[data-pose-slot="summary"]');
   document.querySelector('.stage-viewport').append(gizmo);
-  document.querySelector('.workspace > .side:not(.right)').append(summary);
+  document.querySelector('.evaluation-side').prepend(summary);
 
   let camera = window.MotionViewerCamera.create({target: [0, 0, 0], yaw: -.55, pitch: .1, distance: 175});
   let cameraDrag = null;
