@@ -135,3 +135,26 @@ class ZoneReferenceCatalog:
         if size is None or mask.size == size:
             return mask.copy()
         return mask.resize(size, Image.Resampling.NEAREST)
+
+    @lru_cache(maxsize=32)
+    def _label_ids(self, model_key: str, map_num: int) -> np.ndarray:
+        """라벨맵 화소마다 구역 번호(정수, 구역 아님 = 0). 좌상단 원점."""
+        pixels = np.asarray(self._label_map(model_key, map_num), dtype=np.int64)
+        codes = pixels[..., 0] << 16 | pixels[..., 1] << 8 | pixels[..., 2]
+        ids = np.zeros(codes.shape, dtype=np.int16)
+        for zone_id, (_, (r, g, b)) in self._palette.items():
+            ids[codes == (r << 16 | g << 8 | b)] = int(zone_id)
+        return ids
+
+    def zone_at(self, model_key: str, map_num: int | str, u: float, v: float) -> str | None:
+        """착탄 UV(텍스처 픽셀, 좌하단 원점 — TSB CSV `Ray Texture UV X/Y`)가 든 구역. 구역 밖·라벨맵 없음은 None."""
+        try:
+            ids = self._label_ids(str(model_key), int(map_num))
+        except (OSError, ValueError):
+            return None
+        height, width = ids.shape
+        x, y = int(u), height - 1 - int(v)
+        if not (0 <= x < width and 0 <= y < height):
+            return None
+        zone = int(ids[y, x])
+        return str(zone) if zone else None
