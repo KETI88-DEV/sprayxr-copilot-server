@@ -792,8 +792,11 @@ def test_motion_viewer_keeps_the_last_spraying_zone_and_gives_skeleton_more_heig
     assert coating.status_code == 200
     assert (
         ".right{padding:12px;display:grid;"
-        "grid-template-rows:minmax(300px,1.25fr) minmax(210px,.75fr)"
+        "grid-template-rows:auto minmax(245px,1fr)"
     ) in page.text
+    assert ".skeleton-card{height:auto;display:block}" in page.text
+    assert ".skeleton-screen{height:380px;min-height:380px;flex:none}" in page.text
+    assert ".skeleton-screen{height:340px;min-height:340px}" in page.text
     assert "frame && frame.spraying && Number(frame.zone_id) > 0" in coating.text
     assert "if (!next || next === zoneKey) return;" in coating.text
     assert "zoneKey = next;" in coating.text

@@ -1315,9 +1315,9 @@ button{cursor:pointer;font-weight:700}.primary{background:#3157d5;border-color:#
 .evaluation-side #poseScore{font-size:46px;line-height:1.05;letter-spacing:-1px}
 .viewer-tools{margin-top:12px;padding-top:10px;border-top:1px solid var(--line)}
 .viewer-tools label{margin:8px 0 6px}
-.right{padding:12px;display:grid;grid-template-rows:minmax(300px,1.25fr) minmax(210px,.75fr);gap:10px;overflow:hidden}
-.right .card{margin:0}.skeleton-card{height:100%;display:flex;flex-direction:column}.skeleton-card summary{flex:0 0 auto}
-.skeleton-screen{height:auto;min-height:150px;flex:1}#skeletonCanvas{height:100%}
+.right{padding:12px;display:grid;grid-template-rows:auto minmax(245px,1fr);gap:10px;overflow:auto}
+.right .card{margin:0}.skeleton-card{height:auto;display:block}
+.skeleton-screen{height:380px;min-height:380px;flex:none}#skeletonCanvas{height:100%}
 .coating-card{height:100%;display:flex;flex-direction:column;padding:0;overflow:hidden}
 .coating-header{display:flex;justify-content:space-between;align-items:center;padding:11px 12px;border-bottom:1px solid var(--line)}
 .coating-header strong{font-size:13px}.coating-header span{font-size:10px;color:#91a0b8}
@@ -1327,8 +1327,8 @@ button{cursor:pointer;font-weight:700}.primary{background:#3157d5;border-color:#
 .coating-legend{display:flex;justify-content:space-between;padding:7px 11px;background:linear-gradient(90deg,#1946a0,#20c997,#ffe066,#ff7849);color:#fff;font-size:9px;text-shadow:0 1px 3px #000}
 .coating-note{padding:7px 10px;color:#7890ad;font-size:9px;line-height:1.45}
 .hidden-data-hooks{display:none}
-@media(max-width:1200px){.shell{grid-template-rows:auto auto auto}.workspace{grid-template-columns:230px minmax(0,1fr)}.right{grid-column:1/-1;grid-template-columns:1fr 1fr;grid-template-rows:360px;border-top:1px solid var(--line)}}
-@media(max-width:760px){.selection-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.workspace{display:flex;flex-direction:column}.evaluation-side{order:1}.stage{order:0}.right{order:2;display:grid;grid-template-columns:1fr;grid-template-rows:330px 330px}.selection-panel{padding:9px 12px}}
+@media(max-width:1200px){.shell{grid-template-rows:auto auto auto}.workspace{grid-template-columns:230px minmax(0,1fr)}.right{grid-column:1/-1;grid-template-columns:1fr 1fr;grid-template-rows:auto;border-top:1px solid var(--line)}}
+@media(max-width:760px){.selection-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.workspace{display:flex;flex-direction:column}.evaluation-side{order:1}.stage{order:0}.right{order:2;display:grid;grid-template-columns:1fr;grid-template-rows:auto auto}.skeleton-screen{height:340px;min-height:340px}.coating-card{min-height:330px}.selection-panel{padding:9px 12px}}
 </style></head><body><div class="shell">
 <header class="top"><div class="title">작업 자세 비교 평가<small>전문가 모션 뷰어 기반 · 도장 경로·자세 통합 화면 · 기준 전문가: 전형기 반장 · 제품 자세 엔진 연동</small></div><nav><a href="/docs">Swagger</a><a href="/admin">DB 뷰어</a></nav></header>
 <template id="poseUiTemplate">
