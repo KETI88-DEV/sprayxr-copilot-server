@@ -187,15 +187,15 @@ def _joint_posture_state(joints: dict[str, list[float]]) -> dict[str, Any]:
     scoring.  Joint angles are invariant to the CSV rig's changing global axis.
     """
 
-    knees: list[float] = []
+    knees: dict[str, float] = {}
     for side in ("Left", "Right"):
         names = (f"{side} Thigh", f"{side} Calf", f"{side} Foot")
         if all(name in joints for name in names):
             angle = _joint_angle(*(joints[name] for name in names))
             if angle is not None and math.isfinite(angle):
-                knees.append(angle)
+                knees[side] = angle
     required = ("Pelvis", "Head", "Left Foot", "Right Foot")
-    if not knees or not all(name in joints for name in required):
+    if len(knees) != 2 or not all(name in joints for name in required):
         return {
             "key": "unavailable",
             "label": "자세 판정 보류",
@@ -203,7 +203,10 @@ def _joint_posture_state(joints: dict[str, list[float]]) -> dict[str, Any]:
             "source": "csv_skeleton_joints",
         }
 
-    knee_angle = min(knees)
+    left_knee = knees["Left"]
+    right_knee = knees["Right"]
+    knee_angle = (left_knee + right_knee) / 2.0
+    knee_disparity = abs(left_knee - right_knee)
     pelvis = joints["Pelvis"]
     head = joints["Head"]
     feet_midpoint = [
@@ -213,9 +216,9 @@ def _joint_posture_state(joints: dict[str, list[float]]) -> dict[str, Any]:
     torso_lean = _joint_angle(head, pelvis, feet_midpoint)
     torso_lean = 0.0 if torso_lean is None else 180.0 - torso_lean
 
-    if knee_angle < 105.0:
+    if knee_angle < 75.0:
         key, label = "deep_bend", "깊게 굽힌 자세"
-    elif knee_angle < 145.0:
+    elif knee_angle < 115.0:
         key, label = "lowered", "낮춘 자세"
     elif torso_lean > 35.0:
         key, label = "torso_lean", "상체를 기울인 자세"
@@ -226,7 +229,10 @@ def _joint_posture_state(joints: dict[str, list[float]]) -> dict[str, Any]:
         "label": label,
         "estimated": True,
         "source": "csv_skeleton_joints",
+        "left_knee_angle_deg": round(left_knee, 1),
+        "right_knee_angle_deg": round(right_knee, 1),
         "knee_angle_deg": round(knee_angle, 1),
+        "confidence": "low" if knee_disparity > 45.0 else "normal",
         "torso_lean_deg": round(torso_lean, 1),
     }
 
@@ -1017,6 +1023,60 @@ def _spread(
     return output
 
 
+def _normalized_joint_pose(frame: dict[str, Any]) -> dict[str, list[float]]:
+    joints = frame.get("joints") or {}
+    pelvis = joints.get("Pelvis")
+    head = joints.get("Head")
+    if not pelvis or not head:
+        return {}
+    scale = math.dist(pelvis, head)
+    if scale <= 1e-6:
+        return {}
+    return {
+        name: [(float(point[axis]) - float(pelvis[axis])) / scale for axis in range(3)]
+        for name, point in joints.items()
+        if isinstance(point, list) and len(point) == 3
+    }
+
+
+def _expert_pose_evaluation(
+    selected_frames: list[dict[str, Any]],
+    reference_frames: list[dict[str, Any]],
+    *,
+    selected_session_id: str,
+    reference_session_id: str,
+) -> dict[str, Any]:
+    """Compare an expert replay with the representative normalized joint motion."""
+
+    distances: list[float] = []
+    for index, selected_frame in enumerate(selected_frames):
+        progress = index / max(1, len(selected_frames) - 1)
+        reference_frame = reference_frames[round(progress * (len(reference_frames) - 1))]
+        selected_pose = _normalized_joint_pose(selected_frame)
+        reference_pose = _normalized_joint_pose(reference_frame)
+        for joint in selected_pose.keys() & reference_pose.keys():
+            distances.append(math.dist(selected_pose[joint], reference_pose[joint]))
+    mean_distance = statistics.fmean(distances) if distances else 1.0
+    score = round(math.exp(-2.5 * mean_distance), 3)
+    if selected_session_id == reference_session_id:
+        score = 1.0
+    if score >= 0.9:
+        message = "전문가 대표 동작과 일치합니다. 현재 자세를 유지하세요."
+        predicted = score
+    else:
+        message = "대표 전문가 동작과 비교해 전신 관절의 위치 차이를 줄여 보세요."
+        predicted = round(min(1.0, score + max(0.03, (1.0 - score) * 0.35)), 3)
+    return {
+        "status": "available",
+        "message": message,
+        "similarity_score": score,
+        "predicted_score": predicted,
+        "reference_session_id": reference_session_id,
+        "comparison_basis": "pelvis_centered_height_normalized_skeleton",
+        "corrections": [{"message": message}],
+    }
+
+
 def _paint_trace(frames: list[dict[str, Any]]) -> list[dict[str, Any]]:
     points = [
         (frame_index, frame)
@@ -1169,7 +1229,7 @@ _VIEWER_HTML = r"""<!doctype html>
 .title{font-weight:800;font-size:18px}.title small{display:block;color:var(--muted);font-size:11px;font-weight:500;margin-top:4px}.top a{color:#dce8ff;text-decoration:none;font-size:13px;margin-left:14px}
 .workspace{display:grid;grid-template-columns:275px minmax(420px,1fr) 360px;min-height:0;overflow:hidden}.side{min-height:0;padding:19px;border-right:1px solid var(--line);background:#0c1728;overflow:auto}.right{min-width:0;border-right:0;border-left:1px solid var(--line)}
 label{display:block;color:var(--muted);font-size:12px;margin:16px 0 7px}.select,button,input[type=range]{width:100%}.select,button{border:1px solid var(--line);border-radius:8px;background:var(--panel2);color:var(--ink);padding:10px 11px}
-button{cursor:pointer;font-weight:700}.primary{background:#3157d5;border-color:#3157d5}.controls{display:grid;grid-template-columns:1fr 1fr;gap:8px}.stage{position:relative;height:100%;min-height:0;display:grid;grid-template-rows:minmax(120px,1fr) minmax(132px,auto);overflow:hidden;background:#07101f}.stage-viewport{position:relative;min-height:0;overflow:hidden;background:radial-gradient(circle at 50% 42%,#132845 0,#07101f 65%)}.stage-viewport>canvas{width:100%;height:100%;display:block;min-height:0;cursor:grab;touch-action:none}.playback-dock{position:relative;z-index:14;min-height:132px;padding:11px 16px 14px;border-top:1px solid var(--line);background:#0a1424}.playback-status{display:flex;justify-content:space-between;gap:12px;margin-bottom:7px;color:#cfe1f5;font-size:12px}.zone-timeline{position:relative;height:22px;margin-bottom:5px;border:1px solid #344862;border-radius:6px;overflow:hidden;background:#172033}.zone-timeline-segment{position:absolute;inset-block:0;border-right:1px solid rgba(7,16,31,.5);display:grid;place-items:center;color:#07101f;font-size:9px;font-weight:900;overflow:hidden}.playback-dock input[type=range]{margin:0}.playback-controls{display:grid;grid-template-columns:105px 105px minmax(170px,1fr);gap:8px;align-items:center;margin-top:8px}.speed-control{display:grid;grid-template-columns:auto minmax(90px,1fr) auto;gap:8px;align-items:center;color:var(--muted);font-size:11px}.speed-control label{margin:0;color:var(--muted)}
+button{cursor:pointer;font-weight:700}.primary{background:#3157d5;border-color:#3157d5}.controls{display:grid;grid-template-columns:1fr 1fr;gap:8px}.stage{position:relative;height:100%;min-height:0;display:grid;grid-template-rows:minmax(120px,1fr) minmax(132px,auto);overflow:hidden;background:#07101f}.stage-viewport{position:relative;min-height:0;overflow:hidden;background:radial-gradient(circle at 50% 42%,#132845 0,#07101f 65%)}.stage-viewport>canvas{width:100%;height:100%;display:block;min-height:0;cursor:grab;touch-action:none}.playback-dock{position:relative;z-index:14;min-height:132px;padding:11px 16px 14px;border-top:1px solid var(--line);background:#0a1424}.playback-status{display:flex;justify-content:space-between;gap:12px;margin-bottom:7px;color:#cfe1f5;font-size:12px}.zone-timeline{position:relative;height:22px;margin-bottom:5px;border:1px solid #344862;border-radius:6px;overflow:hidden;background:#172033}.zone-timeline-segment{position:absolute;inset-block:0;border-right:1px solid rgba(7,16,31,.5);display:grid;place-items:center;color:#07101f;font-size:9px;font-weight:900;overflow:hidden}.playback-dock input[type=range]{margin:0}.playback-controls{display:grid;grid-template-columns:105px 105px minmax(170px,1fr);gap:8px;align-items:center;margin-top:8px}.speed-control{display:grid;grid-template-columns:auto minmax(90px,150px);gap:8px;align-items:center;color:var(--muted);font-size:11px}.speed-control label{margin:0;color:var(--muted)}.speed-control select{width:100%;font-weight:800;color:#e5f1ff}
 .overlay{position:absolute;left:18px;top:16px;max-width:340px;background:rgba(7,16,31,.78);border:1px solid rgba(89,116,150,.45);border-radius:10px;padding:10px 12px;font-size:12px;color:var(--muted);pointer-events:none}.overlay strong{display:block;color:var(--ink);font-size:14px;margin-bottom:4px}.viewer-legend{display:grid;grid-template-columns:1fr;gap:3px;margin-top:9px;padding-top:8px;border-top:1px solid rgba(89,116,150,.35);font-size:10px;line-height:1.45}.viewer-legend div{white-space:nowrap}.viewer-legend .dot{width:7px;height:7px;margin-right:6px}
 .loading{position:absolute;inset:0;display:grid;place-content:center;justify-items:center;gap:13px;background:rgba(5,12,24,.72);backdrop-filter:blur(3px);z-index:5;color:#dce8ff;font-size:13px;font-weight:700}.loading[hidden]{display:none}.spinner{width:34px;height:34px;border:3px solid rgba(125,211,252,.2);border-top-color:#22d3ee;border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:14px;margin-bottom:11px}.card span{display:block;color:var(--muted);font-size:11px}.card strong{display:block;font-size:20px;margin-top:5px}.legend{font-size:12px;color:var(--muted);line-height:2}.dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:7px}.help{font-size:12px;color:var(--muted);line-height:1.65;margin-top:18px}.status{min-height:18px;color:var(--cyan);font-size:12px;margin-top:12px}
@@ -1194,7 +1254,7 @@ button{cursor:pointer;font-weight:700}.primary{background:#3157d5;border-color:#
 <div id="status" class="status">데이터를 불러오는 중입니다.</div>
 <p class="help">좌클릭은 객체 중심 회전, 휠 클릭은 3D 평행이동, 휠은 확대·축소입니다. 우클릭을 누른 채 WASD/QE로 자유 이동하고 F로 현재 객체에 초점을 맞춥니다.</p>
 </aside>
-<section class="stage"><div class="stage-viewport"><canvas id="canvas"></canvas><div class="overlay"><strong id="overlayTitle">학습모드</strong><span id="overlayFrame">프레임 준비 중</span><div id="viewerLegend" class="viewer-legend"><div><i class="dot" style="background:#f5f8ff"></i>전문가 전체 Ray Point 점군</div><div><i class="dot" style="background:#a78bfa"></i>Map·Zone별 관측 영역</div><div><i class="dot" style="background:var(--green)"></i>Zone별 전문가 표준 도장 패턴</div><div><i class="dot" style="background:#ff8a3d"></i>선택 기록의 페인트 누적 궤적</div><div><i class="dot" style="background:var(--cyan)"></i>머리·양손 실측 위치와 추정 상체</div></div></div><div id="loading" class="loading"><div class="spinner"></div><span>전문가 기록을 불러오는 중입니다.</span></div></div><div class="playback-dock"><div class="playback-status"><strong id="playbackZone">현재 Zone 대기 중</strong><span id="playbackTime">0.00 / 0.00초</span></div><div id="zoneTimeline" class="zone-timeline" aria-label="Zone 진행 구간"></div><input id="timeline" type="range" min="0" max="0" value="0" aria-label="진행 위치"><div class="playback-controls"><button id="play" class="primary">재생</button><button id="restart">처음으로</button><div class="speed-control"><label for="speed">재생 속도</label><input id="speed" type="range" min="0.25" max="3" step="0.25" value="1"><b id="speedValue">1배</b></div></div></div></section>
+<section class="stage"><div class="stage-viewport"><canvas id="canvas"></canvas><div class="overlay"><strong id="overlayTitle">학습모드</strong><span id="overlayFrame">프레임 준비 중</span><div id="viewerLegend" class="viewer-legend"><div><i class="dot" style="background:#f5f8ff"></i>전문가 전체 Ray Point 점군</div><div><i class="dot" style="background:#a78bfa"></i>Map·Zone별 관측 영역</div><div><i class="dot" style="background:var(--green)"></i>Zone별 전문가 표준 도장 패턴</div><div><i class="dot" style="background:#ff8a3d"></i>선택 기록의 페인트 누적 궤적</div><div><i class="dot" style="background:var(--cyan)"></i>머리·양손 실측 위치와 추정 상체</div></div></div><div id="loading" class="loading"><div class="spinner"></div><span>전문가 기록을 불러오는 중입니다.</span></div></div><div class="playback-dock"><div class="playback-status"><strong id="playbackZone">현재 Zone 대기 중</strong><span id="playbackTime">0.00 / 0.00초</span></div><div id="zoneTimeline" class="zone-timeline" aria-label="Zone 진행 구간"></div><input id="timeline" type="range" min="0" max="0" value="0" aria-label="진행 위치"><div class="playback-controls"><button id="play" class="primary">재생</button><button id="restart">처음으로</button><div class="speed-control"><label for="speed">재생 속도</label><select id="speed" aria-label="재생 속도"><option value="0.25">0.25배</option><option value="0.5">0.5배</option><option value="1" selected>1.0배</option><option value="1.5">1.5배</option><option value="2">2.0배</option><option value="3">3.0배</option></select></div></div></div></section>
 <aside class="side right"><div class="card"><span>현재 작업 Zone</span><strong id="currentZone">대기 중</strong></div><div class="card"><span>Zone 작업 순서</span><div id="zoneOrder" class="zone-order"></div></div><div id="zoneDetail" class="card"><span class="zone-detail-title">전체 Zone 통계</span><span>데이터를 불러오는 중입니다.</span></div><div class="card"><span>통계에 포함된 수행</span><strong id="sessionCount">-</strong></div><div class="card"><span>현재 기록 길이</span><strong id="duration">-</strong></div>
 <details class="card skeleton-card" open><summary>CSV 조인트 기반 전신 스켈레톤</summary><div class="skeleton-screen"><canvas id="skeletonCanvas" aria-label="CSV 조인트 기반 전신 스켈레톤"></canvas><span id="skeletonPosture" class="skeleton-posture">자세 판정 대기</span><span id="skeletonAngle" class="skeleton-angle">정면 · 0°</span></div><div class="skeleton-controls"><button id="skeletonTurnLeft" class="skeleton-turn" aria-label="스켈레톤 왼쪽 회전" title="왼쪽으로 15도 회전">↶</button><button id="skeletonReset" class="skeleton-reset">정면 복귀</button><button id="skeletonTurnRight" class="skeleton-turn" aria-label="스켈레톤 오른쪽 회전" title="오른쪽으로 15도 회전">↷</button></div><div class="skeleton-note">CSV의 Pelvis·몸통·팔·다리 조인트를 그대로 연결한 전신 표현입니다. 자세 유형은 양쪽 무릎 굽힘과 몸통 기울기로 추정하며, 시뮬레이터 IK 관절이므로 실측 점수와 분리합니다.</div></details>
 <p class="help">Zone 면은 같은 Map·Zone의 UV 인접점만 작은 3차원 패치로 연결하므로 움푹 파인 부분과 곡면을 평면으로 뭉개지 않습니다. 데이터가 관측되지 않은 빈 공간은 임의로 채우지 않습니다.</p></aside>
@@ -1223,7 +1283,6 @@ let referencePreview=false;
 function showZoneDetail(key,manual=false){const detail=$('zoneDetail'),stats=(data&&data.zone_statistics||{})[key],isAll=key==='all',color=zoneVisualColor(key);if(manual)zoneDetailMode='manual';selectedDetailKey=key;detail.style.borderColor=color;detail.replaceChildren();for(const chip of $('zoneOrder').querySelectorAll('.zone-chip'))chip.classList.toggle('selected',chip.dataset.zoneKey===key);const title=document.createElement('span');title.className='zone-detail-title';title.textContent=isAll?'전체 Zone 통계':stats?`Zone ${zoneLabel(stats.zone_id)} 기준 통계`:'Zone 통계';detail.append(title);if(!stats){const empty=document.createElement('span');empty.textContent='해당 Zone의 통계가 없습니다.';detail.append(empty);return}const speed=stats.median_speed_mms!=null?`${(stats.median_speed_mms/1000).toFixed(2)} m/s`:'자료 없음',distance=stats.median_distance_mm!=null?`${Math.round(stats.median_distance_mm)} mm`:'자료 없음';if(isAll)detail.append(metricRow('포함 Zone',`${stats.zone_count}개`));else detail.append(metricRow('전문가 중앙 속도',speed),metricRow('전문가 중앙 이격거리',distance),metricRow('전문가 기준 방향',directionName(stats.expected_direction)));detail.append(metricRow('선택 기록의 주요 도장 방향',directionName(stats.selected_major_direction)),metricRow('전문가 방향 비중',expertDirectionMix(stats)),metricRow('선택 기록 분사 시간',`${stats.observed_duration_seconds.toFixed(1)}초`),metricRow('선택 기록 도포 경로',`${stats.observed_path_length_m.toFixed(2)} m`),metricRow('선택 기록 시퀀스',`${stats.observed_sequence_count}회`),metricRow('전문가 관측 수행',`${stats.expert_session_count}회`));const note=document.createElement('div');note.className='zone-note';note.textContent=isAll?'모든 Zone의 선택 기록 합계와 전문가 전체 방향 비중입니다.':'속도·이격거리는 전문가 반복 수행의 중앙값이며, 시간·경로·시퀀스는 현재 선택 기록 기준입니다.';detail.append(note)}
 function showReferencePreview(key){playing=false;last=0;index=0;playheadSeconds=0;referencePreview=true;$('timeline').value=0;$('play').textContent='재생';showZoneDetail(key,true);$('currentZone').textContent=key==='all'?'전체 전문가 표준 패턴':`Zone ${zoneLabel(key.split(':')[1])} 전문가 표준 패턴`;draw()}
 function startPlayback(){const fromPreview=referencePreview;referencePreview=false;selectedDetailKey='all';zoneDetailMode='auto';displayedZoneKey=null;if(fromPreview){index=0;playheadSeconds=0;$('timeline').value=0}showZoneDetail('all');playing=true;last=0;$('play').textContent='일시정지';draw()}
-function updateSpeedLabel(){const value=Number($('speed').value);$('speedValue').textContent=`${Number.isInteger(value)?value:value.toFixed(2).replace(/0$/,'')}배`}
 function renderZoneOrder(){const host=$('zoneOrder');host.replaceChildren();const allButton=document.createElement('button');allButton.className='zone-chip';allButton.dataset.zoneKey='all';allButton.textContent='전체';allButton.style.setProperty('--zone-color',zoneVisualColor('all'));allButton.onclick=()=>showReferencePreview('all');host.append(allButton);for(const item of data.zone_order||[]){const button=document.createElement('button'),key=zoneKey(item.map_num,item.zone_id);button.className='zone-chip';button.dataset.zoneKey=key;button.textContent=`${item.order}. Zone ${zoneLabel(item.zone_id)}`;button.style.setProperty('--zone-color',zoneVisualColor(key));button.onclick=()=>showReferencePreview(key);host.append(button)}showZoneDetail('all')}
 function updateZonePanel(frame){const key=zoneKey(frame.map_num,frame.zone_id);$('currentZone').textContent=key?`Zone ${zoneLabel(frame.zone_id)}${frame.spraying?' · 분사 중':' · 조준/이동'}`:'이동/대기';for(const chip of $('zoneOrder').querySelectorAll('.zone-chip'))chip.classList.toggle('active',chip.dataset.zoneKey===key);if(zoneDetailMode==='auto'&&key&&key!==displayedZoneKey){showZoneDetail(key);displayedZoneKey=key}}
 function setLoading(active){$('loading').hidden=!active;canvas.setAttribute('aria-busy',active?'true':'false');for(const id of ['process','mode','session'])$(id).disabled=active}
@@ -1256,7 +1315,7 @@ $('overlayFrame').textContent=`${sourceIndex+1} / ${data.frames.length} · ${fra
 if(window.motionViewerPoseOverlay)window.motionViewerPoseOverlay.draw({frame,sourceIndex,playheadSeconds,durationSeconds:data.duration_seconds,center,w,h});
 }
 function tick(now){if(playing&&data&&data.frames.length){if(!last)last=now;const elapsed=Math.min(.1,(now-last)/1000)*Number($('speed').value);last=now;playheadSeconds+=elapsed;if(playheadSeconds>=data.duration_seconds){playheadSeconds=0;index=0}else index=interpolatedFrame(playheadSeconds).index;$('timeline').value=index;draw()}requestAnimationFrame(tick)}
-$('worker').onchange=fillProcesses;$('process').onchange=fillModes;$('mode').onchange=fillSessions;$('session').onchange=loadMotion;$('timeline').oninput=e=>{referencePreview=false;index=Number(e.target.value);playheadSeconds=data.frames[index].t;last=0;draw()};$('speed').oninput=updateSpeedLabel;$('pointSize').oninput=e=>{$('pointSizeValue').textContent=`${Number(e.target.value).toFixed(2).replace(/0+$/,'').replace(/\.$/,'')} px`;draw()};$('zoneSurface').onchange=draw;$('skeletonTurnLeft').onclick=()=>setSkeletonYaw(skeletonYaw-15);$('skeletonTurnRight').onclick=()=>setSkeletonYaw(skeletonYaw+15);$('skeletonReset').onclick=()=>setSkeletonYaw(0);document.querySelector('.skeleton-card').ontoggle=()=>{if(document.querySelector('.skeleton-card').open)resize()};$('play').onclick=()=>{if(playing){playing=false;last=0;$('play').textContent='재생'}else startPlayback()};$('restart').onclick=()=>{playing=false;referencePreview=false;index=0;playheadSeconds=0;last=0;$('play').textContent='재생';$('timeline').value=0;draw()};
+$('worker').onchange=fillProcesses;$('process').onchange=fillModes;$('mode').onchange=fillSessions;$('session').onchange=loadMotion;$('timeline').oninput=e=>{referencePreview=false;index=Number(e.target.value);playheadSeconds=data.frames[index].t;last=0;draw()};$('pointSize').oninput=e=>{$('pointSizeValue').textContent=`${Number(e.target.value).toFixed(2).replace(/0+$/,'').replace(/\.$/,'')} px`;draw()};$('zoneSurface').onchange=draw;$('skeletonTurnLeft').onclick=()=>setSkeletonYaw(skeletonYaw-15);$('skeletonTurnRight').onclick=()=>setSkeletonYaw(skeletonYaw+15);$('skeletonReset').onclick=()=>setSkeletonYaw(0);document.querySelector('.skeleton-card').ontoggle=()=>{if(document.querySelector('.skeleton-card').open)resize()};$('play').onclick=()=>{if(playing){playing=false;last=0;$('play').textContent='재생'}else startPlayback()};$('restart').onclick=()=>{playing=false;referencePreview=false;index=0;playheadSeconds=0;last=0;$('play').textContent='재생';$('timeline').value=0;draw()};
 canvas.onpointerdown=e=>{if(e.button!==0&&e.button!==1)return;e.preventDefault();canvas.setPointerCapture(e.pointerId);drag=e.button===1?{mode:'pan',x:e.clientX,y:e.clientY,panX,panY}:{mode:'rotate',x:e.clientX,y:e.clientY,yaw,pitch};canvas.style.cursor=drag.mode==='pan'?'move':'grabbing'};canvas.onpointermove=e=>{if(!drag)return;if(drag.mode==='pan'){panX=drag.panX+e.clientX-drag.x;panY=drag.panY+e.clientY-drag.y}else{yaw=drag.yaw+(e.clientX-drag.x)*.01;pitch=Math.max(-1.2,Math.min(1.2,drag.pitch+(e.clientY-drag.y)*.01))}draw()};canvas.onpointerup=e=>{if(canvas.hasPointerCapture(e.pointerId))canvas.releasePointerCapture(e.pointerId);drag=null;canvas.style.cursor='grab'};canvas.onpointercancel=()=>{drag=null;canvas.style.cursor='grab'};canvas.onauxclick=e=>e.preventDefault();canvas.onwheel=e=>{e.preventDefault();zoom=Math.max(70,Math.min(420,zoom*(e.deltaY>0?.9:1.1)));draw()};
 addEventListener('resize',resize);(async()=>{try{catalog=await json('/motion-viewer/api/catalog');$('worker').replaceChildren(...catalog.workers.map(worker=>option(worker.worker_id,`${worker.display_name}${worker.role==='expert'?' · 전문가 기준':''}`)));fillProcesses();resize();requestAnimationFrame(tick)}catch(e){$('status').textContent=e.message}})();
 </script><script defer src="/motion-viewer/assets/motion_viewer_camera.js"></script><script defer src="/motion-viewer/assets/motion_viewer_pose.js"></script></body></html>"""
@@ -1393,6 +1452,7 @@ def create_motion_viewer_router(
             raise HTTPException(status_code=422, detail="expert session has no usable skeleton frames")
         sampled_sessions: list[list[dict[str, Any]]] = []
         session_paths: list[Path] = []
+        representative_frames: list[dict[str, Any]] = []
         for session in profile["sessions"]:
             current_id = str(session.get("session_id", ""))
             if not current_id:
@@ -1407,6 +1467,8 @@ def create_motion_viewer_router(
             if sampled:
                 sampled_sessions.append(sampled)
                 session_paths.append(current_path)
+                if current_id == representative:
+                    representative_frames = sampled
         duration = float(selected_frames[-1]["t"]) if selected_frames else 0.0
         paint_trace = _canonicalize_zone_items(
             _dense_paint_trace(selected_path), process=process, mode_id=mode_id
@@ -1449,17 +1511,22 @@ def create_motion_viewer_router(
                 "display_name": worker["display_name"],
                 "role": worker["role"],
             },
-            "pose_evaluation": {
-                "status": "reference" if worker["role"] == "expert" else "pending",
-                "message": (
-                    "전문가 기준 데이터입니다. 자기 자신에 대한 유사도 평가는 표시하지 않습니다."
-                    if worker["role"] == "expert"
-                    else "동일 공정·모드·Zone의 전문가 기준과 비교할 준비가 되었습니다."
-                ),
-                "similarity_score": None,
-                "predicted_score": None,
-                "corrections": [],
-            },
+            "pose_evaluation": (
+                _expert_pose_evaluation(
+                    selected_frames,
+                    representative_frames or selected_frames,
+                    selected_session_id=selected,
+                    reference_session_id=representative,
+                )
+                if worker["role"] == "expert"
+                else {
+                    "status": "pending",
+                    "message": "동일 공정·모드·Zone의 전문가 기준과 비교할 준비가 되었습니다.",
+                    "similarity_score": None,
+                    "predicted_score": None,
+                    "corrections": [],
+                }
+            ),
             "process": process,
             "process_label": _PROCESS_LABELS[process],
             "mode_id": mode_id,

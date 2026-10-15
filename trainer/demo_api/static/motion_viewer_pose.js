@@ -94,17 +94,14 @@
     const zone = Number(frame?.zone_id) > 0 ? `Zone ${zoneLabel(frame.zone_id)}` : '이동 구간';
     byId('poseZoneSummary').textContent = zone;
     byId('poseEstimateNote').textContent = 'CSV 조인트 기반 자세 추정 · 채점 분리';
-    if (evaluation.status === 'reference') {
-      byId('poseScore').textContent = '전문가 기준 데이터';
-      byId('poseScoreNote').textContent = '자기 자신과 비교한 점수는 표시하지 않습니다.';
-      byId('poseAction').textContent = evaluation.message;
-      byId('posePredicted').textContent = '해당 없음';
-      return;
-    }
     byId('poseScore').textContent = evaluation.similarity_score == null ? '분석 대기' : evaluation.similarity_score.toFixed(3);
-    byId('poseScoreNote').textContent = '현재 Zone·분사 구간을 같은 조건의 전문가 기록과 비교합니다.';
+    byId('poseScoreNote').textContent = evaluation.reference_session_id
+      ? `대표 전문가 기록 ${evaluation.reference_session_id}과 정규화된 전신 관절 동작을 비교합니다.`
+      : '현재 Zone·분사 구간을 같은 조건의 전문가 기록과 비교합니다.';
     byId('poseAction').textContent = evaluation.corrections?.[0]?.message || evaluation.message || '분석 결과가 없습니다.';
-    byId('posePredicted').textContent = evaluation.predicted_score == null ? '—' : `${evaluation.similarity_score.toFixed(3)} → ${evaluation.predicted_score.toFixed(3)}`;
+    byId('posePredicted').textContent = evaluation.predicted_score == null || evaluation.similarity_score == null
+      ? '—'
+      : `${evaluation.similarity_score.toFixed(3)} → ${evaluation.predicted_score.toFixed(3)}`;
   }
 
   function renderZoneTimeline(payload) {

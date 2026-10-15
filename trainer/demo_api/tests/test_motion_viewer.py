@@ -256,9 +256,11 @@ def test_motion_viewer_page_explains_representative_and_statistical_motion(tmp_p
     assert "const fps=(data.frames.length-1)" not in response.text
     assert "<canvas" in response.text
     assert "function tick(now)" in response.text
-    assert 'id="speed" type="range" min="0.25" max="3" step="0.25" value="1"' in response.text
-    assert 'id="speedValue">1배' in response.text
-    assert "function updateSpeedLabel" in response.text
+    assert '<select id="speed"' in response.text
+    for value in ("0.25", "0.5", "1", "1.5", "2", "3"):
+        assert f'<option value="{value}"' in response.text
+    assert 'id="speedValue"' not in response.text
+    assert "function updateSpeedLabel" not in response.text
     assert "const ZONE_COLORS=[" in response.text
     assert "'#FF0000'" in response.text
     assert "'#BFBF40'" in response.text
@@ -377,8 +379,8 @@ def test_joint_posture_state_uses_leg_and_torso_geometry_instead_of_camera_heigh
     }
     deeply_bent = {
         **standing,
-        "Left Calf": [-0.45, 0.55, 0.0], "Left Foot": [-0.1, 0.2, 0.0],
-        "Right Calf": [0.45, 0.55, 0.0], "Right Foot": [0.1, 0.2, 0.0],
+        "Left Calf": [-0.5, 0.55, 0.0], "Left Foot": [-0.1, 0.45, 0.0],
+        "Right Calf": [0.5, 0.55, 0.0], "Right Foot": [0.1, 0.45, 0.0],
     }
 
     upright = _joint_posture_state(standing)
@@ -387,9 +389,26 @@ def test_joint_posture_state_uses_leg_and_torso_geometry_instead_of_camera_heigh
     assert upright["key"] == "standing"
     assert upright["source"] == "csv_skeleton_joints"
     assert upright["knee_angle_deg"] == 180.0
+    assert upright["left_knee_angle_deg"] == 180.0
+    assert upright["right_knee_angle_deg"] == 180.0
     assert bent["key"] == "deep_bend"
-    assert 85.0 <= bent["knee_angle_deg"] <= 95.0
+    assert 45.0 <= bent["knee_angle_deg"] <= 75.0
     assert _joint_posture_state({"Head": [0.0, 1.7, 0.0]})["key"] == "unavailable"
+
+
+def test_joint_posture_state_does_not_let_one_bad_ik_leg_force_a_deep_bend() -> None:
+    joints = {
+        "Pelvis": [0.0, 1.0, 0.0], "Head": [0.0, 1.7, 0.0],
+        "Left Thigh": [-0.1, 0.9, 0.0], "Left Calf": [-0.5, 0.65, 0.0], "Left Foot": [-0.1, 0.4, 0.0],
+        "Right Thigh": [0.1, 0.9, 0.0], "Right Calf": [0.1, 0.5, 0.0], "Right Foot": [0.1, 0.1, 0.0],
+    }
+
+    posture = _joint_posture_state(joints)
+
+    assert posture["left_knee_angle_deg"] < 75.0
+    assert posture["right_knee_angle_deg"] == 180.0
+    assert posture["key"] == "standing"
+    assert posture["confidence"] == "low"
 
 
 def test_posture_smoothing_removes_a_single_frame_joint_flicker() -> None:
@@ -464,6 +483,25 @@ def test_motion_returns_trusted_trackers_paint_trace_and_direction_statistics(tm
     assert overall["expert_session_count"] == 2
     assert overall["selected_major_direction"] == "horizontal"
     assert overall["expert_direction_distribution"]["horizontal"] == 1.0
+
+
+def test_representative_expert_motion_reports_similarity_guidance_and_prediction(
+    tmp_path: Path,
+) -> None:
+    response = _client(tmp_path).get(
+        "/motion-viewer/api/motion",
+        params={"process": "spray", "mode_id": 4, "session_id": "representative"},
+    )
+
+    assert response.status_code == 200
+    evaluation = response.json()["pose_evaluation"]
+    assert evaluation["status"] == "available"
+    assert evaluation["similarity_score"] == 1.0
+    assert evaluation["predicted_score"] == 1.0
+    assert evaluation["reference_session_id"] == "4_1001_1"
+    assert evaluation["corrections"] == [
+        {"message": "전문가 대표 동작과 일치합니다. 현재 자세를 유지하세요."}
+    ]
 
 
 def test_zone_surface_keeps_non_planar_three_dimensional_vertices() -> None:
