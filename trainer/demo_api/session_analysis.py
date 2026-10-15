@@ -11,6 +11,13 @@ complete는 **세션 종합 분석**이다. 훈련생이 시퀀스마다 `pose_r
 4. CSV가 예전 형식(관절 월드 열 없음)이거나 읽을 수 없으면 올라온 시퀀스만 쓴다.
 5. 도막에 명중하지 않은 분사(`zone_id` = -1)는 평균에서 뺀다 — 자세를 판정할 작업이 아니다. 개수는 남긴다.
 
+구역별 집계(`zone_summary`·`priority_corrections`): 시퀀스는 **착탄이 가장 많이 난 (면, 구역)**을 칠한 것으로 본다.
+CSV의 프레임별 `Zone ID`로 정한다 — 시뮬레이터 본문에는 프레임별 구역이 없다(2026-10-08 샘플 32건은 본문 `zone_id`와
+CSV 다수결이 모두 같았다). Zone 번호는 레벨 안에서 유일하고 레벨은 리포트 머리(`scenario_id`)에 있다. 어긋난 관절은
+엔진이 교정을 낸 관절 중 그 구역에서 **가장 자주 나온 하나**다 — LLM 브리핑이 여러 관절에 흩어지지 않게. 거리는 엔진
+evidence의 숙련자와의 거리다. `angle_issues`는 비운다 — 엔진이 축별 각도·방향을 아직 내지 않는다
+(오일러 회전순서 미확정, `pose_stages._correction_dict`). 값을 지어내지 않는다.
+
 채점은 질의와 **같은 함수**(`pose_query.score_body`, MCP 자세 엔진)다. 판정할 수 없는 시퀀스(엔진의 reason_code)는
 평균에서 빼고 사유별로 센다. 0으로 채우지 않는다. 채점된 시퀀스가 하나도 없으면 `unavailable`이다.
 """
@@ -34,7 +41,7 @@ from trainer.scripts import pose_similarity, simulator_csv
 
 logger = logging.getLogger(__name__)
 
-ALGORITHM_VERSION: Final = "pose-session-v1"
+ALGORITHM_VERSION: Final = "pose-session-v2"
 SPRAY_COLUMN: Final = "분사"
 SPRAY_ON: Final = "On"
 WORLD_SUFFIX: Final = " (World)"
@@ -43,6 +50,9 @@ NO_ZONE: Final = "-1"
 # 분석 자료의 출처. 리포트 본문에는 싣지 않고(계약 키가 아니다) 완료 레코드에 남긴다.
 SOURCE_STORED: Final = "stored"
 SOURCE_CSV: Final = "csv"
+ZONE_COLUMN: Final = "Zone ID"
+# 리포트에 싣는 교정 항목 수. 명세서는 "제한된 개수"라고만 한다.
+PRIORITY_LIMIT: Final = 3
 
 
 def read_csv(raw: bytes) -> list[dict[str, str]]:
@@ -140,9 +150,9 @@ def _frame(row: Mapping[str, str], gun: str, index: int) -> dict[str, Any]:
     }
 
 
-def _zone(rows: Sequence[Mapping[str, str]]) -> str:
-    """구간에서 가장 많이 나온 구역(미판정 -1 제외). 전부 -1이면 -1."""
-    hits = [str(row.get("Zone ID", "")).strip() for row in rows]
+def painted_zone(rows: Sequence[Mapping[str, str]]) -> str:
+    """구간에서 착탄이 가장 많이 난 구역. 미판정 -1은 세지 않고, 전부 -1이면 -1."""
+    hits = [str(row.get(ZONE_COLUMN, "")).strip() for row in rows]
     hits = [zone for zone in hits if zone and zone != NO_ZONE]
     return Counter(hits).most_common(1)[0][0] if hits else NO_ZONE
 
@@ -163,7 +173,7 @@ def csv_sequences(
             "session_id": session_id,
             "user_id": user_id,
             "scenario_id": scenario_id,
-            "zone_id": _zone(window),
+            "zone_id": painted_zone(window),
             "sequence_id": f"SEQ-{number:03d}",
             "sequence_setting": {"tool_type": "spray_gun"},
             "sequence_info": [_frame(row, gun, i) for i, row in enumerate(window, start=1)],
@@ -180,6 +190,8 @@ class SessionPoseAnalysis:
     sequences: list[dict[str, Any]] = field(default_factory=list)
     counts: dict[str, int] = field(default_factory=dict)
     source_bodies: list[dict[str, Any]] = field(default_factory=list, repr=False)
+    zone_summary: list[dict[str, Any]] = field(default_factory=list)
+    priority_corrections: list[dict[str, Any]] = field(default_factory=list)
 
     def pose_report(self) -> dict[str, Any]:
         """명세서 p.15-16 `pose_report`의 키만."""
@@ -187,8 +199,77 @@ class SessionPoseAnalysis:
             "analysis_status": self.analysis_status,
             "algorithm_version": ALGORITHM_VERSION,
             "guideline": self.guideline,
+            "evaluated_sequence_count": self.counts.get("scored", 0),
             "average_similarity_score": self.average_similarity_score,
+            "zone_summary": self.zone_summary,
+            "priority_corrections": self.priority_corrections,
         }
+
+
+def _zone_order(zone: str) -> tuple[int, str]:
+    return (int(zone) if zone.isdigit() else 1_000_000, zone)
+
+
+def zone_summary(scored: Sequence[tuple[str, PoseQueryResult]]) -> list[dict[str, Any]]:
+    """구역마다 채점된 시퀀스 수·평균 유사도·가장 자주 어긋난 관절 하나(교정이 난 시퀀스 수 / 그 구역 시퀀스 수)."""
+    by_zone: dict[str, list[PoseQueryResult]] = {}
+    for key, result in scored:
+        by_zone.setdefault(key, []).append(result)
+    out: list[dict[str, Any]] = []
+    for key in sorted(by_zone, key=_zone_order):
+        results = by_zone[key]
+        distances: dict[str, list[float]] = {}
+        counts: Counter[str] = Counter()
+        for result in results:
+            # 한 시퀀스에서 같은 관절은 한 번만 센다.
+            for joint in dict.fromkeys(str(c.get("joint")) for c in result.corrections if c.get("joint")):
+                counts[joint] += 1
+                if joint in result.joint_distances:
+                    distances.setdefault(joint, []).append(result.joint_distances[joint])
+        problem_joints = [
+            {
+                "joint": joint,
+                "occurrence_count": count,
+                "occurrence_rate": round(count / len(results), 3),
+                "average_distance": round(statistics.mean(distances[joint]), 3) if distances.get(joint) else None,
+                "angle_issues": [],
+            }
+            for joint, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:1]
+        ]
+        out.append({
+            "zone_id": key,
+            "evaluated_sequence_count": len(results),
+            "average_similarity_score": round(
+                statistics.mean(r.similarity_score for r in results if r.similarity_score is not None), 3
+            ),
+            "problem_joints": problem_joints,
+        })
+    return out
+
+
+def priority_corrections(zones: Sequence[Mapping[str, Any]], limit: int = PRIORITY_LIMIT) -> list[dict[str, Any]]:
+    """발생률이 높은 (구역, 관절) 순. 같으면 횟수가 많은 쪽."""
+    pairs = sorted(
+        ((zone, joint) for zone in zones for joint in zone["problem_joints"]),
+        key=lambda pair: (-pair[1]["occurrence_rate"], -pair[1]["occurrence_count"]),
+    )
+    out: list[dict[str, Any]] = []
+    for priority, (zone, joint) in enumerate(pairs[:limit], start=1):
+        label = pose_similarity.JOINT_LABELS.get(joint["joint"], joint["joint"])
+        distance = joint["average_distance"]
+        guidance = (
+            f"{zone['zone_id']}번 구역 분사 {zone['evaluated_sequence_count']}회 중 {joint['occurrence_count']}회에서 "
+            f"{label} 위치가 숙련자 범위를 벗어났습니다"
+            + (f"(평균 {distance * 100:.0f}cm)." if distance is not None else ".")
+        )
+        out.append({
+            "priority": priority,
+            "zone_id": zone["zone_id"],
+            "joint": joint["joint"],
+            "occurrence_rate": joint["occurrence_rate"],
+            "correction_guidance": guidance,
+        })
+    return out
 
 
 def _guideline(scored: Sequence[PoseQueryResult], total: int, not_scored: int) -> str:
@@ -229,6 +310,11 @@ def analyze_session(
     ordered_ids = list(from_csv) if from_csv else list(stored_by_id)
     if from_csv:
         ordered_ids.extend(sequence_id for sequence_id in stored_by_id if sequence_id not in from_csv)
+    # 시퀀스 번호 → CSV에서 착탄이 가장 많이 난 구역. `Zone ID` 열이 없는 CSV는 본문 `zone_id`를 쓴다.
+    painted = (
+        {f"SEQ-{n:03d}": painted_zone(rows[s:e + 1]) for n, (s, e) in enumerate(spray_runs(rows), start=1)}
+        if rows and ZONE_COLUMN in rows[0] else {}
+    )
     targets: list[tuple[str, str, dict[str, Any]]] = []
     for sequence_id in ordered_ids:
         stored = stored_by_id.get(sequence_id)
@@ -241,17 +327,24 @@ def analyze_session(
     counts["total"] = len(targets)
     reasons: Counter[str] = Counter()
     scored: list[PoseQueryResult] = []
+    zoned: list[tuple[str, PoseQueryResult]] = []
     details: list[dict[str, Any]] = []
     for sequence_id, source, body in targets:
         counts[f"from_{source}"] += 1
-        if str(body.get("zone_id", "")).strip() == NO_ZONE:
+        zone = painted.get(sequence_id) or str(body.get("zone_id", "")).strip()
+        where = {"zone_id": zone}
+        if zone in {NO_ZONE, ""}:
             counts["no_zone"] += 1
-            details.append({"sequence_id": sequence_id, "source": source, "analysis_status": "skipped", "reason_code": "no_zone"})
+            details.append({
+                "sequence_id": sequence_id, "source": source, **where,
+                "analysis_status": "skipped", "reason_code": "no_zone",
+            })
             continue
         result = score_body(body, sequence_id=sequence_id, mcp_base_url=mcp_base_url, transport=transport)
-        details.append({"source": source, **result.as_context()})
+        details.append({"source": source, **where, **result.as_context()})
         if result.analysis_status == "available" and result.similarity_score is not None:
             scored.append(result)
+            zoned.append((zone, result))
         else:
             reasons[str(result.reason_code)] += 1
             counts["not_scored"] += 1
@@ -266,4 +359,8 @@ def analyze_session(
         return SessionPoseAnalysis("unavailable", None, guideline, details, count_map, [body for _, _, body in targets])
     average = statistics.mean(r.similarity_score for r in scored if r.similarity_score is not None)
     guideline = _guideline(scored, len(targets) - counts["no_zone"], counts["not_scored"])
-    return SessionPoseAnalysis("available", round(average, 4), guideline, details, count_map, [body for _, _, body in targets])
+    zones = zone_summary(zoned)
+    return SessionPoseAnalysis(
+        "available", round(average, 4), guideline, details, count_map, [body for _, _, body in targets],
+        zone_summary=zones, priority_corrections=priority_corrections(zones),
+    )

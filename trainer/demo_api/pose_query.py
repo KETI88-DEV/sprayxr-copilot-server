@@ -16,7 +16,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Final
 
 import httpx
@@ -42,6 +42,8 @@ class PoseQueryResult:
     correction_mode: str | None
     corrections: list[dict[str, Any]]
     summary: str | None
+    # 교정된 관절 → 숙련자와의 거리(m). 엔진 evidence 라 `pose_context`에는 싣지 않고 세션 리포트 집계만 쓴다.
+    joint_distances: dict[str, float] = field(default_factory=dict)
 
     def as_context(self) -> dict[str, Any]:
         return {
@@ -160,6 +162,12 @@ def score_body(
         correction_mode=result.get("correction_mode"),
         corrections=_project_corrections(result),
         summary=str(summary) if summary else None,
+        joint_distances={
+            str(item["joint"]): float(item["evidence"]["distance_m"])
+            for item in result.get("corrections") or []
+            if isinstance(item, dict) and isinstance(item.get("evidence"), dict)
+            and isinstance(item["evidence"].get("distance_m"), (int, float)) and item.get("joint")
+        },
     )
 
 

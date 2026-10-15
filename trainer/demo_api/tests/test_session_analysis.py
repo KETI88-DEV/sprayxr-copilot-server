@@ -10,6 +10,7 @@ import glob
 import gzip
 import json
 import math
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from trainer.demo_api import session_analysis as sa
+from trainer.demo_api.pose_query import PoseQueryResult
 from trainer.demo_api import v1_router
 from trainer.demo_api.sequence_store import SequenceStore
 from trainer.demo_api.v1_router import create_v1_router
@@ -82,7 +84,10 @@ class _FakeMcp:
                 "analysis_status": "available",
                 "similarity_score": 0.9 if stored else 0.5,
                 "correction_mode": "single",
-                "corrections": [{"joint": "RightUpperArm", "correction_text": f"{sequence_id} 오른쪽 위팔을 내리세요"}],
+                "corrections": [{
+                    "joint": "RightUpperArm", "correction_text": f"{sequence_id} 오른쪽 위팔을 내리세요",
+                    "evidence": {"distance_m": 0.08},
+                }],
             }
         return httpx.Response(200, json={"status": "success", "result": result, "error": None})
 
@@ -155,7 +160,20 @@ def test_query_less_sequences_are_scored_from_the_csv_and_stored_ones_win() -> N
     assert result.analysis_status == "available"
     assert result.average_similarity_score == pytest.approx(expected, abs=1e-4)
     report = result.pose_report()
-    assert set(report) == {"analysis_status", "algorithm_version", "guideline", "average_similarity_score"}
+    assert set(report) == {
+        "analysis_status", "algorithm_version", "guideline", "evaluated_sequence_count",
+        "average_similarity_score", "zone_summary", "priority_corrections",
+    }
+    assert report["evaluated_sequence_count"] == scored
+    # 구역 = CSV에서 착탄이 가장 많이 난 구역(샘플에서는 시뮬레이터 본문 zone_id와 같다).
+    expected_zones = Counter(str(b["zone_id"]) for b in vendor.values() if str(b["zone_id"]) != sa.NO_ZONE)
+    assert {z["zone_id"]: z["evaluated_sequence_count"] for z in report["zone_summary"]} == expected_zones
+    zone2 = next(z for z in report["zone_summary"] if z["zone_id"] == "2")
+    assert zone2["problem_joints"] == [{
+        "joint": "RightUpperArm", "occurrence_count": expected_zones["2"], "occurrence_rate": 1.0,
+        "average_distance": 0.08, "angle_issues": [],
+    }]
+    assert len(report["priority_corrections"]) == sa.PRIORITY_LIMIT
     # 문장은 분사마다 다르지만 부위는 같다 — 부위로 센다.
     assert f"오른쪽 위팔입니다({scored}회)" in report["guideline"]
 
@@ -192,6 +210,50 @@ def test_no_data_is_unavailable_without_a_number() -> None:
     assert result.analysis_status == "unavailable"
     assert result.average_similarity_score is None
     assert result.counts["total"] == 0
+
+
+def _scored(score: float, joints: dict[str, float]) -> PoseQueryResult:
+    corrections = [{"joint": j} for j in joints] + [{"joint": j} for j in joints]  # 같은 관절이 두 번 와도 한 번
+    return PoseQueryResult("available", None, None, score, "joint_only", corrections, None, joint_distances=joints)
+
+
+def test_zone_summary_keeps_only_the_most_frequent_joint_per_zone() -> None:
+    """발생률 = 그 관절 교정이 난 시퀀스 / 구역의 채점 시퀀스. 구역마다 가장 자주 나온 관절 하나만 싣는다
+    — LLM 브리핑이 여러 관절에 흩어지지 않게.
+
+    깨뜨리는 법: 교정 항목 단위로 세면 rate가 1을 넘고, 한정을 빼면 3번 구역에 LeftHand가 따라 나온다.
+    """
+    scored = [
+        ("3", _scored(0.6, {"RightForeArm": 0.10})),
+        ("3", _scored(0.8, {"RightForeArm": 0.06, "LeftHand": 0.02})),
+        ("3", _scored(1.0, {})),
+        ("12", _scored(0.4, {"LeftHand": 0.05})),
+        ("10", _scored(0.9, {})),
+    ]
+
+    zones = sa.zone_summary(scored)
+
+    assert [z["zone_id"] for z in zones] == ["3", "10", "12"]
+    first = zones[0]
+    assert first["evaluated_sequence_count"] == 3 and first["average_similarity_score"] == 0.8
+    assert first["problem_joints"] == [{
+        "joint": "RightForeArm", "occurrence_count": 2, "occurrence_rate": 0.667,
+        "average_distance": 0.08, "angle_issues": [],
+    }]
+    assert zones[1]["problem_joints"] == []
+
+    priority = sa.priority_corrections(zones)
+
+    assert [(p["zone_id"], p["joint"]) for p in priority] == [("12", "LeftHand"), ("3", "RightForeArm")]
+    assert priority[1]["correction_guidance"].startswith("3번 구역 분사 3회 중 2회에서")
+    assert "(평균 8cm)" in priority[1]["correction_guidance"]
+
+
+def test_the_painted_zone_is_the_most_hit_one_not_the_first() -> None:
+    rows = [{"Zone ID": "2"}] + [{"Zone ID": "5"}] * 2 + [{"Zone ID": "-1"}] * 5
+
+    assert sa.painted_zone(rows) == "5"
+    assert sa.painted_zone([{"Zone ID": "-1"}]) == sa.NO_ZONE
 
 
 def test_a_plain_csv_reads_the_same_as_gzip() -> None:
