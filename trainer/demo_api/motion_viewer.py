@@ -166,21 +166,97 @@ def _camera_forward(row: dict[str, str]) -> list[float] | None:
     return _rotation_forward(row, "카메라")
 
 
-def _posture_state(head_height: float | None) -> dict[str, Any]:
-    """A conservative display-only posture estimate from the trusted Camera height.
+def _joint_angle(
+    first: list[float], vertex: list[float], third: list[float]
+) -> float | None:
+    left = [first[index] - vertex[index] for index in range(3)]
+    right = [third[index] - vertex[index] for index in range(3)]
+    left_length = math.sqrt(sum(value * value for value in left))
+    right_length = math.sqrt(sum(value * value for value in right))
+    if left_length <= 1e-9 or right_length <= 1e-9:
+        return None
+    cosine = sum(a * b for a, b in zip(left, right)) / (left_length * right_length)
+    return math.degrees(math.acos(max(-1.0, min(1.0, cosine))))
 
-    Legs and pelvis in the exported simulator skeleton are IK output, not tracked
-    devices.  The viewer therefore labels the result as an estimate and never
-    feeds it into similarity scoring.
+
+def _joint_posture_state(joints: dict[str, list[float]]) -> dict[str, Any]:
+    """Classify display posture from the CSV skeleton, independent of trackers.
+
+    The skeleton joints are simulator IK output rather than tracked devices, so
+    the result remains an explicit estimate and is not fed into similarity
+    scoring.  Joint angles are invariant to the CSV rig's changing global axis.
     """
 
-    if head_height is None or not math.isfinite(head_height):
-        return {"key": "unavailable", "label": "자세 판정 보류", "estimated": True}
-    if head_height >= 1.35:
-        return {"key": "standing", "label": "서 있는 자세", "estimated": True}
-    if head_height >= 0.9:
-        return {"key": "lowered", "label": "낮춘 자세", "estimated": True}
-    return {"key": "seated_estimate", "label": "앉은 자세 추정", "estimated": True}
+    knees: list[float] = []
+    for side in ("Left", "Right"):
+        names = (f"{side} Thigh", f"{side} Calf", f"{side} Foot")
+        if all(name in joints for name in names):
+            angle = _joint_angle(*(joints[name] for name in names))
+            if angle is not None and math.isfinite(angle):
+                knees.append(angle)
+    required = ("Pelvis", "Head", "Left Foot", "Right Foot")
+    if not knees or not all(name in joints for name in required):
+        return {
+            "key": "unavailable",
+            "label": "자세 판정 보류",
+            "estimated": True,
+            "source": "csv_skeleton_joints",
+        }
+
+    knee_angle = min(knees)
+    pelvis = joints["Pelvis"]
+    head = joints["Head"]
+    feet_midpoint = [
+        (joints["Left Foot"][index] + joints["Right Foot"][index]) / 2.0
+        for index in range(3)
+    ]
+    torso_lean = _joint_angle(head, pelvis, feet_midpoint)
+    torso_lean = 0.0 if torso_lean is None else 180.0 - torso_lean
+
+    if knee_angle < 105.0:
+        key, label = "deep_bend", "깊게 굽힌 자세"
+    elif knee_angle < 145.0:
+        key, label = "lowered", "낮춘 자세"
+    elif torso_lean > 35.0:
+        key, label = "torso_lean", "상체를 기울인 자세"
+    else:
+        key, label = "standing", "서 있는 자세"
+    return {
+        "key": key,
+        "label": label,
+        "estimated": True,
+        "source": "csv_skeleton_joints",
+        "knee_angle_deg": round(knee_angle, 1),
+        "torso_lean_deg": round(torso_lean, 1),
+    }
+
+
+def _smooth_posture_states(frames: list[dict[str, Any]], *, radius: int = 2) -> None:
+    """Suppress isolated IK-joint posture flicker without changing motion data."""
+
+    states = [dict(frame.get("posture") or {}) for frame in frames]
+    for index, frame in enumerate(frames):
+        start = max(0, index - radius)
+        stop = min(len(states), index + radius + 1)
+        window = [state for state in states[start:stop] if state.get("key") != "unavailable"]
+        if not window:
+            frame["posture"] = {**states[index], "smoothed": True}
+            continue
+        counts: dict[str, int] = {}
+        for state in window:
+            key = str(state.get("key"))
+            counts[key] = counts.get(key, 0) + 1
+        current_key = str(states[index].get("key"))
+        winner = max(counts, key=lambda key: (counts[key], key == current_key))
+        selected = min(
+            (
+                (abs((start + offset) - index), state)
+                for offset, state in enumerate(window)
+                if state.get("key") == winner
+            ),
+            key=lambda item: item[0],
+        )[1]
+        frame["posture"] = {**selected, "smoothed": True}
 
 
 def _world_joints(row: dict[str, str]) -> dict[str, list[float]]:
@@ -242,7 +318,6 @@ def _sample_csv(
                 "left_hand": _vector(row, "플래쉬"),
             }
             tracked = {key: value for key, value in tracked.items() if value is not None}
-            head = tracked.get("head")
             ray_point = _ray_point(row)
             if not joints and not tracked and ray_point is None:
                 continue
@@ -253,13 +328,14 @@ def _sample_csv(
                 "tracked": tracked,
                 "camera_forward": _camera_forward(row),
                 "tool_forward": _rotation_forward(row, tool_prefix),
-                "posture": _posture_state(head[1] if head is not None else None),
+                "posture": _joint_posture_state(joints),
                 "ray_point": ray_point,
                 "spraying": _spraying(row.get("분사")),
                 "zone_id": str(row.get("Zone ID", "")).strip() or None,
                 "map_num": (_map_zone_uv(row) or (None,))[0],
             })
     if frames:
+        _smooth_posture_states(frames)
         origin = float(frames[0]["t"])
         for frame in frames:
             frame["t"] = round(float(frame["t"]) - origin, 6)
@@ -1089,24 +1165,24 @@ _VIEWER_HTML = r"""<!doctype html>
 <title>작업 자세 비교 평가</title><link rel="stylesheet" href="/motion-viewer/assets/motion_viewer_pose.css"><style>
 :root{--bg:#07101f;--panel:#101b2e;--panel2:#16243a;--ink:#eef5ff;--muted:#91a0b8;--line:#293b56;--cyan:#22d3ee;--green:#34d399}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font-family:Inter,Pretendard,"Noto Sans KR",system-ui,sans-serif}
-.shell{min-height:100vh;display:grid;grid-template-rows:auto 1fr}.top{display:flex;justify-content:space-between;align-items:center;padding:16px 22px;border-bottom:1px solid var(--line);background:#0a1424}
+.shell{height:100dvh;display:grid;grid-template-rows:auto minmax(0,1fr);overflow:hidden}.top{display:flex;justify-content:space-between;align-items:center;padding:16px 22px;border-bottom:1px solid var(--line);background:#0a1424}
 .title{font-weight:800;font-size:18px}.title small{display:block;color:var(--muted);font-size:11px;font-weight:500;margin-top:4px}.top a{color:#dce8ff;text-decoration:none;font-size:13px;margin-left:14px}
-.workspace{display:grid;grid-template-columns:275px minmax(420px,1fr) 360px;min-height:0}.side{padding:19px;border-right:1px solid var(--line);background:#0c1728;overflow:auto}.right{min-width:0;border-right:0;border-left:1px solid var(--line)}
+.workspace{display:grid;grid-template-columns:275px minmax(420px,1fr) 360px;min-height:0;overflow:hidden}.side{min-height:0;padding:19px;border-right:1px solid var(--line);background:#0c1728;overflow:auto}.right{min-width:0;border-right:0;border-left:1px solid var(--line)}
 label{display:block;color:var(--muted);font-size:12px;margin:16px 0 7px}.select,button,input[type=range]{width:100%}.select,button{border:1px solid var(--line);border-radius:8px;background:var(--panel2);color:var(--ink);padding:10px 11px}
-button{cursor:pointer;font-weight:700}.primary{background:#3157d5;border-color:#3157d5}.controls{display:grid;grid-template-columns:1fr 1fr;gap:8px}.stage{position:relative;min-height:590px;display:grid;grid-template-rows:minmax(500px,1fr) auto;background:#07101f}.stage-viewport{position:relative;min-height:500px;background:radial-gradient(circle at 50% 42%,#132845 0,#07101f 65%)}.stage-viewport>canvas{width:100%;height:100%;display:block;min-height:500px;cursor:grab;touch-action:none}.playback-dock{padding:11px 16px 14px;border-top:1px solid var(--line);background:#0a1424}.playback-status{display:flex;justify-content:space-between;gap:12px;margin-bottom:7px;color:#cfe1f5;font-size:12px}.zone-timeline{position:relative;height:22px;margin-bottom:5px;border:1px solid #344862;border-radius:6px;overflow:hidden;background:#172033}.zone-timeline-segment{position:absolute;inset-block:0;border-right:1px solid rgba(7,16,31,.5);display:grid;place-items:center;color:#07101f;font-size:9px;font-weight:900;overflow:hidden}.playback-dock input[type=range]{margin:0}.playback-controls{display:grid;grid-template-columns:105px 105px minmax(170px,1fr);gap:8px;align-items:center;margin-top:8px}.speed-control{display:grid;grid-template-columns:auto minmax(90px,1fr) auto;gap:8px;align-items:center;color:var(--muted);font-size:11px}.speed-control label{margin:0;color:var(--muted)}
+button{cursor:pointer;font-weight:700}.primary{background:#3157d5;border-color:#3157d5}.controls{display:grid;grid-template-columns:1fr 1fr;gap:8px}.stage{position:relative;height:100%;min-height:0;display:grid;grid-template-rows:minmax(120px,1fr) minmax(132px,auto);overflow:hidden;background:#07101f}.stage-viewport{position:relative;min-height:0;overflow:hidden;background:radial-gradient(circle at 50% 42%,#132845 0,#07101f 65%)}.stage-viewport>canvas{width:100%;height:100%;display:block;min-height:0;cursor:grab;touch-action:none}.playback-dock{position:relative;z-index:14;min-height:132px;padding:11px 16px 14px;border-top:1px solid var(--line);background:#0a1424}.playback-status{display:flex;justify-content:space-between;gap:12px;margin-bottom:7px;color:#cfe1f5;font-size:12px}.zone-timeline{position:relative;height:22px;margin-bottom:5px;border:1px solid #344862;border-radius:6px;overflow:hidden;background:#172033}.zone-timeline-segment{position:absolute;inset-block:0;border-right:1px solid rgba(7,16,31,.5);display:grid;place-items:center;color:#07101f;font-size:9px;font-weight:900;overflow:hidden}.playback-dock input[type=range]{margin:0}.playback-controls{display:grid;grid-template-columns:105px 105px minmax(170px,1fr);gap:8px;align-items:center;margin-top:8px}.speed-control{display:grid;grid-template-columns:auto minmax(90px,1fr) auto;gap:8px;align-items:center;color:var(--muted);font-size:11px}.speed-control label{margin:0;color:var(--muted)}
 .overlay{position:absolute;left:18px;top:16px;max-width:340px;background:rgba(7,16,31,.78);border:1px solid rgba(89,116,150,.45);border-radius:10px;padding:10px 12px;font-size:12px;color:var(--muted);pointer-events:none}.overlay strong{display:block;color:var(--ink);font-size:14px;margin-bottom:4px}.viewer-legend{display:grid;grid-template-columns:1fr;gap:3px;margin-top:9px;padding-top:8px;border-top:1px solid rgba(89,116,150,.35);font-size:10px;line-height:1.45}.viewer-legend div{white-space:nowrap}.viewer-legend .dot{width:7px;height:7px;margin-right:6px}
 .loading{position:absolute;inset:0;display:grid;place-content:center;justify-items:center;gap:13px;background:rgba(5,12,24,.72);backdrop-filter:blur(3px);z-index:5;color:#dce8ff;font-size:13px;font-weight:700}.loading[hidden]{display:none}.spinner{width:34px;height:34px;border:3px solid rgba(125,211,252,.2);border-top-color:#22d3ee;border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:14px;margin-bottom:11px}.card span{display:block;color:var(--muted);font-size:11px}.card strong{display:block;font-size:20px;margin-top:5px}.legend{font-size:12px;color:var(--muted);line-height:2}.dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:7px}.help{font-size:12px;color:var(--muted);line-height:1.65;margin-top:18px}.status{min-height:18px;color:var(--cyan);font-size:12px;margin-top:12px}
 .zone-order{display:flex;flex-wrap:wrap;gap:7px;margin-top:10px}.zone-chip{width:auto;padding:6px 10px;border:2px solid var(--zone-color);border-radius:999px;font-size:11px;color:var(--zone-color);background:#111f35}.zone-chip.active{box-shadow:0 0 0 2px #f5f8ff,0 0 14px var(--zone-color)}.zone-chip.selected{background:var(--zone-color);color:#07101f}.zone-detail-title{font-size:15px!important;color:var(--ink)!important;font-weight:800;margin-bottom:9px}.zone-metric{display:flex!important;justify-content:space-between;gap:10px;padding:7px 0;border-top:1px solid rgba(89,116,150,.2);font-size:11px!important}.zone-metric b{color:#e8f1ff;font-weight:700;text-align:right}.zone-note{margin-top:9px;color:#7890ad;font-size:10px;line-height:1.5}
-.skeleton-card{padding:0;overflow:hidden}.skeleton-card summary{cursor:pointer;padding:14px;font-weight:800;font-size:13px;list-style:none}.skeleton-card summary::-webkit-details-marker{display:none}.skeleton-card summary:after{content:'▾';float:right;color:var(--cyan)}.skeleton-card:not([open]) summary:after{content:'▸'}.skeleton-screen{position:relative;height:300px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);background:radial-gradient(circle at 50% 42%,#17304e 0,#07101f 72%)}#skeletonCanvas{display:block;width:100%;height:300px}.skeleton-angle{position:absolute;right:10px;top:9px;padding:4px 7px;border-radius:999px;background:rgba(7,16,31,.78);color:#a9c2df;font-size:10px}.skeleton-controls{display:grid;grid-template-columns:1fr 1fr 1fr;gap:7px;padding:10px}.skeleton-turn{font-size:20px;padding:7px;text-shadow:0 2px 5px rgba(34,211,238,.45)}.skeleton-reset{font-size:11px}.skeleton-note{padding:0 12px 12px;color:#7890ad;font-size:10px;line-height:1.5}
+.skeleton-card{padding:0;overflow:hidden}.skeleton-card summary{cursor:pointer;padding:14px;font-weight:800;font-size:13px;list-style:none}.skeleton-card summary::-webkit-details-marker{display:none}.skeleton-card summary:after{content:'▾';float:right;color:var(--cyan)}.skeleton-card:not([open]) summary:after{content:'▸'}.skeleton-screen{position:relative;height:300px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);background:radial-gradient(circle at 50% 42%,#17304e 0,#07101f 72%)}#skeletonCanvas{display:block;width:100%;height:300px}.skeleton-posture,.skeleton-angle{position:absolute;top:9px;padding:4px 7px;border-radius:999px;background:rgba(7,16,31,.78);color:#a9c2df;font-size:10px}.skeleton-posture{left:10px;color:#dff7ff;font-weight:800}.skeleton-angle{right:10px}.skeleton-controls{display:grid;grid-template-columns:1fr 1fr 1fr;gap:7px;padding:10px}.skeleton-turn{font-size:20px;padding:7px;text-shadow:0 2px 5px rgba(34,211,238,.45)}.skeleton-reset{font-size:11px}.skeleton-note{padding:0 12px 12px;color:#7890ad;font-size:10px;line-height:1.5}
 .toggle{display:flex;align-items:center;gap:8px;margin-top:14px;color:var(--muted);font-size:12px}.toggle input{width:auto}.badge{display:inline-flex;padding:5px 9px;border:1px solid #3157d5;border-radius:999px;color:#b9caff;font-size:11px;margin-top:12px}
 .range-scale{position:relative;height:18px;color:#7186a3;font-size:10px}.range-scale span{position:absolute;top:1px;transform:translateX(-50%)}.range-scale span:first-child{left:0;transform:none}.range-scale .normal{left:27.27%;color:#dce8ff;font-weight:800}.range-scale span:last-child{right:0;transform:none}
-@media(max-width:1200px){.workspace{grid-template-columns:240px minmax(0,1fr)}.right{display:block;grid-column:1/-1;border-left:0;border-top:1px solid var(--line)}}@media(max-width:720px){.workspace{display:block}.side{border:0}.right{display:block}.stage,.stage-viewport,.stage-viewport>canvas{min-height:480px}.playback-controls{grid-template-columns:1fr 1fr}.speed-control{grid-column:1/-1}}
+@media(max-width:1200px){.shell{height:auto;min-height:100dvh;overflow:visible}.workspace{grid-template-columns:240px minmax(0,1fr);overflow:visible}.stage{height:calc(100dvh - 67px);min-height:360px}.right{display:block;grid-column:1/-1;border-left:0;border-top:1px solid var(--line)}}@media(max-width:720px){.top{height:86px;min-height:86px;padding:12px 16px;overflow:hidden}.workspace{display:flex;flex-direction:column}.stage{order:-1;height:calc(100dvh - 86px);min-height:360px}.side{border:0}.right{display:block}.playback-controls{grid-template-columns:1fr 1fr}.speed-control{grid-column:1/-1}}
 </style></head><body><div class="shell">
 <header class="top"><div class="title">작업 자세 비교 평가<small>전문가 모션 뷰어 기반 · 도장 경로·자세 통합 화면 · 기준 전문가: 전형기 반장 · 제품 자세 엔진 연동</small></div><nav><a href="/docs">Swagger</a><a href="/admin">DB 뷰어</a></nav></header>
 <template id="poseUiTemplate">
 <div data-pose-slot="gizmo" class="camera-gizmo" aria-label="3D 카메라 기즈모"><button id="cameraHome" title="초기 시점">⌂</button><button id="cameraAxisX" title="X축 시점">X</button><button id="cameraAxisY" title="Y축 시점">Y</button><button id="cameraAxisZ" title="Z축 시점">Z</button></div>
-<div data-pose-slot="summary" id="poseSummary" class="pose-summary"><div class="card headline"><span>현재 자세 상태</span><strong id="posePosture">기록 준비 중</strong><div class="pose-meta"><span id="poseEstimateNote">Camera 높이 기반 추정</span><span id="poseZoneSummary">Zone 대기 중</span></div></div><div class="card"><span>전문가 동작 유사도</span><strong id="poseScore">—</strong><small id="poseScoreNote">선택된 작업 구간을 전문가 기준과 비교합니다.</small></div><div class="card pose-action"><span>자세 개선 안내</span><strong id="poseAction">기록을 선택하세요.</strong></div><div class="card"><span>안내 반영 시 계산상 예상</span><strong id="posePredicted">—</strong><small>실제 재측정 결과가 아닌 좌표 보정 시뮬레이션입니다.</small></div></div>
+<div data-pose-slot="summary" id="poseSummary" class="pose-summary"><div class="card headline"><span>현재 자세 상태</span><strong id="posePosture">기록 준비 중</strong><div class="pose-meta"><span id="poseEstimateNote">CSV 조인트 기반 자세 추정</span><span id="poseZoneSummary">Zone 대기 중</span></div></div><div class="card"><span>전문가 동작 유사도</span><strong id="poseScore">—</strong><small id="poseScoreNote">선택된 작업 구간을 전문가 기준과 비교합니다.</small></div><div class="card pose-action"><span>자세 개선 안내</span><strong id="poseAction">기록을 선택하세요.</strong></div><div class="card"><span>안내 반영 시 계산상 예상</span><strong id="posePredicted">—</strong><small>실제 재측정 결과가 아닌 좌표 보정 시뮬레이션입니다.</small></div></div>
 </template>
 <main class="workspace"><aside class="side">
 <label for="worker">작업자</label><select id="worker" class="select"></select>
@@ -1120,7 +1196,7 @@ button{cursor:pointer;font-weight:700}.primary{background:#3157d5;border-color:#
 </aside>
 <section class="stage"><div class="stage-viewport"><canvas id="canvas"></canvas><div class="overlay"><strong id="overlayTitle">학습모드</strong><span id="overlayFrame">프레임 준비 중</span><div id="viewerLegend" class="viewer-legend"><div><i class="dot" style="background:#f5f8ff"></i>전문가 전체 Ray Point 점군</div><div><i class="dot" style="background:#a78bfa"></i>Map·Zone별 관측 영역</div><div><i class="dot" style="background:var(--green)"></i>Zone별 전문가 표준 도장 패턴</div><div><i class="dot" style="background:#ff8a3d"></i>선택 기록의 페인트 누적 궤적</div><div><i class="dot" style="background:var(--cyan)"></i>머리·양손 실측 위치와 추정 상체</div></div></div><div id="loading" class="loading"><div class="spinner"></div><span>전문가 기록을 불러오는 중입니다.</span></div></div><div class="playback-dock"><div class="playback-status"><strong id="playbackZone">현재 Zone 대기 중</strong><span id="playbackTime">0.00 / 0.00초</span></div><div id="zoneTimeline" class="zone-timeline" aria-label="Zone 진행 구간"></div><input id="timeline" type="range" min="0" max="0" value="0" aria-label="진행 위치"><div class="playback-controls"><button id="play" class="primary">재생</button><button id="restart">처음으로</button><div class="speed-control"><label for="speed">재생 속도</label><input id="speed" type="range" min="0.25" max="3" step="0.25" value="1"><b id="speedValue">1배</b></div></div></div></section>
 <aside class="side right"><div class="card"><span>현재 작업 Zone</span><strong id="currentZone">대기 중</strong></div><div class="card"><span>Zone 작업 순서</span><div id="zoneOrder" class="zone-order"></div></div><div id="zoneDetail" class="card"><span class="zone-detail-title">전체 Zone 통계</span><span>데이터를 불러오는 중입니다.</span></div><div class="card"><span>통계에 포함된 수행</span><strong id="sessionCount">-</strong></div><div class="card"><span>현재 기록 길이</span><strong id="duration">-</strong></div>
-<details class="card skeleton-card" open><summary>머리·양손 기반 추정 상체 · 별도 화면</summary><div class="skeleton-screen"><canvas id="skeletonCanvas" aria-label="머리와 양손 실측 기반 추정 상체"></canvas><span id="skeletonAngle" class="skeleton-angle">정면 · 0°</span></div><div class="skeleton-controls"><button id="skeletonTurnLeft" class="skeleton-turn" aria-label="스켈레톤 왼쪽 회전" title="왼쪽으로 15도 회전">↶</button><button id="skeletonReset" class="skeleton-reset">정면 복귀</button><button id="skeletonTurnRight" class="skeleton-turn" aria-label="스켈레톤 오른쪽 회전" title="오른쪽으로 15도 회전">↷</button></div><div class="skeleton-note">머리(Camera)와 양손은 실측 위치이며 목·가슴·어깨만 화면 이해를 위해 추정합니다. 자세 상태는 Camera 높이 기반 추정값으로 채점에는 사용하지 않습니다.</div></details>
+<details class="card skeleton-card" open><summary>CSV 조인트 기반 전신 스켈레톤</summary><div class="skeleton-screen"><canvas id="skeletonCanvas" aria-label="CSV 조인트 기반 전신 스켈레톤"></canvas><span id="skeletonPosture" class="skeleton-posture">자세 판정 대기</span><span id="skeletonAngle" class="skeleton-angle">정면 · 0°</span></div><div class="skeleton-controls"><button id="skeletonTurnLeft" class="skeleton-turn" aria-label="스켈레톤 왼쪽 회전" title="왼쪽으로 15도 회전">↶</button><button id="skeletonReset" class="skeleton-reset">정면 복귀</button><button id="skeletonTurnRight" class="skeleton-turn" aria-label="스켈레톤 오른쪽 회전" title="오른쪽으로 15도 회전">↷</button></div><div class="skeleton-note">CSV의 Pelvis·몸통·팔·다리 조인트를 그대로 연결한 전신 표현입니다. 자세 유형은 양쪽 무릎 굽힘과 몸통 기울기로 추정하며, 시뮬레이터 IK 관절이므로 실측 점수와 분리합니다.</div></details>
 <p class="help">Zone 면은 같은 Map·Zone의 UV 인접점만 작은 3차원 패치로 연결하므로 움푹 파인 부분과 곡면을 평면으로 뭉개지 않습니다. 데이터가 관측되지 않은 빈 공간은 임의로 채우지 않습니다.</p></aside>
 </main></div><script>
 const $=id=>document.getElementById(id); const canvas=$('canvas'),ctx=canvas.getContext('2d'),skeletonCanvas=$('skeletonCanvas'),skeletonCtx=skeletonCanvas.getContext('2d');
@@ -1166,7 +1242,7 @@ function drawZoneFlowGuides(guides,center,w,h){for(const guide of guides||[]){co
 function add(a,b){return a.map((value,axis)=>value+b[axis])}function sub(a,b){return a.map((value,axis)=>value-b[axis])}function mul(a,value){return a.map(axis=>axis*value)}function dot(a,b){return a.reduce((sum,value,axis)=>sum+value*b[axis],0)}function cross(a,b){return[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]]}function length(a){return Math.sqrt(dot(a,a))}function unit(a,fallback=[1,0,0]){const size=length(a);return size>.00001?mul(a,1/size):fallback}
 function mixPoint(a,b,ratio){if(!a)return b||null;if(!b)return a;return a.map((value,axis)=>value+(b[axis]-value)*ratio)}
 function uprightSkeleton(joints,angleDegrees=skeletonYaw){const origin=joints.Pelvis||joints.Spine,head=joints.Head;if(!origin||!head)return{};const up=unit(sub(head,origin),[0,1,0]),left=joints['Left Shoulder']||joints['Left Upper Arm']||joints['Left Hand'],right=joints['Right Shoulder']||joints['Right Upper Arm']||joints['Right Hand'];let across=left&&right?sub(right,left):[1,0,0];across=unit(sub(across,mul(up,dot(across,up))),[1,0,0]);const forward=unit(cross(across,up),[0,0,1]),angle=angleDegrees*Math.PI/180,cos=Math.cos(angle),sin=Math.sin(angle),oriented={};for(const [name,point] of Object.entries(joints)){const relative=sub(point,origin),x=dot(relative,across),y=dot(relative,up),z=dot(relative,forward);oriented[name]=[x*cos-z*sin,y,x*sin+z*cos]}return oriented}
-function drawSkeletonView(frame){const rect=skeletonCanvas.getBoundingClientRect(),w=rect.width,h=rect.height;if(!w||!h)return;skeletonCtx.clearRect(0,0,w,h);skeletonCtx.strokeStyle='rgba(100,130,165,.18)';skeletonCtx.lineWidth=1;for(let i=1;i<5;i++){const y=h*i/5;skeletonCtx.beginPath();skeletonCtx.moveTo(0,y);skeletonCtx.lineTo(w,y);skeletonCtx.stroke()}const joints=uprightSkeleton(frame&&frame.joints||{}),points=Object.values(joints);if(!points.length){skeletonCtx.fillStyle='#91a0b8';skeletonCtx.font='12px system-ui';skeletonCtx.textAlign='center';skeletonCtx.fillText('스켈레톤 데이터 없음',w/2,h/2);return}const xs=points.map(p=>p[0]),ys=points.map(p=>p[1]),minX=Math.min(...xs),maxX=Math.max(...xs),minY=Math.min(...ys),maxY=Math.max(...ys),span=Math.max(.25,maxX-minX,maxY-minY),scale=Math.min(w*.72,h*.78)/span,centerX=(minX+maxX)/2,centerY=(minY+maxY)/2;const projectSkeleton=p=>{const depth=1+Math.max(-.25,Math.min(.25,p[2]/span*.22));return[w/2+(p[0]-centerX)*scale*depth,h*.88-(p[1]-minY)*scale*depth,depth]};skeletonCtx.lineCap='round';for(const [a,b] of data.bones){if(!joints[a]||!joints[b])continue;const p=projectSkeleton(joints[a]),q=projectSkeleton(joints[b]),arm=/Arm|Hand|Shoulder/.test(a+b);skeletonCtx.strokeStyle=arm?'rgba(34,211,238,.88)':'rgba(225,235,250,.7)';skeletonCtx.lineWidth=arm?4:3;skeletonCtx.beginPath();skeletonCtx.moveTo(p[0],p[1]);skeletonCtx.lineTo(q[0],q[1]);skeletonCtx.stroke()}for(const [name,p] of Object.entries(joints)){const q=projectSkeleton(p),isHead=name==='Head',isHand=name.endsWith(' Hand');skeletonCtx.fillStyle=isHead?'#f5f8ff':isHand?'#22d3ee':'rgba(190,210,235,.82)';skeletonCtx.beginPath();skeletonCtx.arc(q[0],q[1],(isHead?9:isHand?5:3)*q[2],0,Math.PI*2);skeletonCtx.fill()}skeletonCtx.textAlign='start'}
+function drawSkeletonView(frame){const rect=skeletonCanvas.getBoundingClientRect(),w=rect.width,h=rect.height;if(!w||!h)return;$('skeletonPosture').textContent=frame&&frame.posture&&frame.posture.label||'자세 판정 보류';skeletonCtx.clearRect(0,0,w,h);skeletonCtx.strokeStyle='rgba(100,130,165,.18)';skeletonCtx.lineWidth=1;for(let i=1;i<5;i++){const y=h*i/5;skeletonCtx.beginPath();skeletonCtx.moveTo(0,y);skeletonCtx.lineTo(w,y);skeletonCtx.stroke()}const joints=uprightSkeleton(frame&&frame.joints||{}),points=Object.values(joints);if(!points.length){skeletonCtx.fillStyle='#91a0b8';skeletonCtx.font='12px system-ui';skeletonCtx.textAlign='center';skeletonCtx.fillText('스켈레톤 데이터 없음',w/2,h/2);return}const xs=points.map(p=>p[0]),ys=points.map(p=>p[1]),minX=Math.min(...xs),maxX=Math.max(...xs),minY=Math.min(...ys),maxY=Math.max(...ys),span=Math.max(.25,maxX-minX,maxY-minY),scale=Math.min(w*.72,h*.78)/span,centerX=(minX+maxX)/2,centerY=(minY+maxY)/2;const projectSkeleton=p=>{const depth=1+Math.max(-.25,Math.min(.25,p[2]/span*.22));return[w/2+(p[0]-centerX)*scale*depth,h*.88-(p[1]-minY)*scale*depth,depth]};skeletonCtx.lineCap='round';for(const [a,b] of data.bones){if(!joints[a]||!joints[b])continue;const p=projectSkeleton(joints[a]),q=projectSkeleton(joints[b]),arm=/Arm|Hand|Shoulder/.test(a+b);skeletonCtx.strokeStyle=arm?'rgba(34,211,238,.88)':'rgba(225,235,250,.7)';skeletonCtx.lineWidth=arm?4:3;skeletonCtx.beginPath();skeletonCtx.moveTo(p[0],p[1]);skeletonCtx.lineTo(q[0],q[1]);skeletonCtx.stroke()}for(const [name,p] of Object.entries(joints)){const q=projectSkeleton(p),isHead=name==='Head',isHand=name.endsWith(' Hand');skeletonCtx.fillStyle=isHead?'#f5f8ff':isHand?'#22d3ee':'rgba(190,210,235,.82)';skeletonCtx.beginPath();skeletonCtx.arc(q[0],q[1],(isHead?9:isHand?5:3)*q[2],0,Math.PI*2);skeletonCtx.fill()}skeletonCtx.textAlign='start'}
 function setSkeletonYaw(value){skeletonYaw=((value+180)%360+360)%360-180;$('skeletonAngle').textContent=skeletonYaw===0?'정면 · 0°':`${skeletonYaw<0?'좌':'우'} · ${Math.abs(skeletonYaw)}°`;if(data&&data.frames.length)draw()}
 function interpolatedFrame(seconds){let current=Math.max(0,Math.min(index,data.frames.length-1));while(current+1<data.frames.length&&data.frames[current+1].t<=seconds)current++;while(current>0&&data.frames[current].t>seconds)current--;const a=data.frames[current],b=data.frames[Math.min(current+1,data.frames.length-1)],span=Math.max(.000001,b.t-a.t),ratio=Math.max(0,Math.min(1,(seconds-a.t)/span));const tracked={},joints={};for(const key of new Set([...Object.keys(a.tracked||{}),...Object.keys(b.tracked||{})]))tracked[key]=mixPoint((a.tracked||{})[key],(b.tracked||{})[key],ratio);for(const key of new Set([...Object.keys(a.joints||{}),...Object.keys(b.joints||{})]))joints[key]=mixPoint((a.joints||{})[key],(b.joints||{})[key],ratio);const continuousPaint=a.spraying&&b.spraying&&a.ray_point&&b.ray_point&&a.zone_id===b.zone_id&&a.map_num===b.map_num;return{index:current,frame:{...a,t:seconds,tracked,joints,ray_point:continuousPaint?mixPoint(a.ray_point,b.ray_point,ratio):a.ray_point}}}
 function draw(){const rect=canvas.getBoundingClientRect(),w=rect.width,h=rect.height;ctx.clearRect(0,0,w,h);ctx.strokeStyle='rgba(100,130,165,.16)';ctx.lineWidth=1;for(let i=-5;i<=5;i++){ctx.beginPath();ctx.moveTo(w/2+i*55,h*.78);ctx.lineTo(w/2+i*90,h*.95);ctx.stroke()}

@@ -10,7 +10,8 @@ from trainer.demo_api.motion_viewer import (
     _build_zone_surface,
     _dense_paint_trace,
     _direction_summary,
-    _posture_state,
+    _joint_posture_state,
+    _smooth_posture_states,
     create_motion_viewer_router,
 )
 from trainer.demo_api.pose_query import PoseEngineResult
@@ -38,12 +39,24 @@ def _write_csv(path: Path, *, offset: float, zone_ids: list[str] | None = None) 
         "Spine Position X", "Spine Position Y", "Spine Position Z",
         "Spine Rotation X", "Spine Rotation Y", "Spine Rotation Z",
     ]
+    joint_offsets = {
+        "Chest": (0.0, 0.2, 0.0), "Head": (0.0, 0.2, 0.0),
+        "Left Shoulder": (-0.2, 0.15, 0.0), "Left Upper Arm": (-0.2, 0.0, 0.0),
+        "Left Fore Arm": (-0.25, 0.0, 0.0), "Left Hand": (-0.15, 0.0, 0.0),
+        "Right Shoulder": (0.2, 0.15, 0.0), "Right Upper Arm": (0.2, 0.0, 0.0),
+        "Right Fore Arm": (0.25, 0.0, 0.0), "Right Hand": (0.15, 0.0, 0.0),
+        "Left Thigh": (-0.1, -0.1, 0.0), "Left Calf": (0.0, -0.4, 0.0),
+        "Left Foot": (0.0, -0.4, 0.0), "Left Toe": (0.0, 0.0, 0.15),
+        "Right Thigh": (0.1, -0.1, 0.0), "Right Calf": (0.0, -0.4, 0.0),
+        "Right Foot": (0.0, -0.4, 0.0), "Right Toe": (0.0, 0.0, 0.15),
+    }
+    for joint in joint_offsets:
+        fields.extend(f"{joint} {kind} {axis}" for kind in ("Position", "Rotation") for axis in "XYZ")
     with path.open("w", encoding="utf-8-sig", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
         for index in range(5):
-            writer.writerow(
-                {
+            row = {
                     "인덱스": index,
                     "시간(초)": index / 90,
                     "분사": "True",
@@ -83,8 +96,12 @@ def _write_csv(path: Path, *, offset: float, zone_ids: list[str] | None = None) 
                     "Spine Rotation X": 0,
                     "Spine Rotation Y": 0,
                     "Spine Rotation Z": 0,
-                }
-            )
+            }
+            for joint, position in joint_offsets.items():
+                for axis, value in zip("XYZ", position):
+                    row[f"{joint} Position {axis}"] = value
+                    row[f"{joint} Rotation {axis}"] = 0
+            writer.writerow(row)
 
 
 def _client(
@@ -182,7 +199,7 @@ def test_motion_viewer_page_explains_representative_and_statistical_motion(tmp_p
     assert "기준 전문가: 전형기 반장" in response.text
     assert "페인트 누적 궤적" in response.text
     assert "주요 도장 방향" in response.text
-    assert "머리·양손 기반 추정 상체" in response.text
+    assert "머리·양손 실측 위치와 추정 상체" in response.text
     assert "worker.display_name" in response.text
     assert "function referencePointCloud" in response.text
     assert "function drawZoneFlowGuides" in response.text
@@ -227,10 +244,11 @@ def test_motion_viewer_page_explains_representative_and_statistical_motion(tmp_p
     assert 'id="skeletonTurnLeft"' in response.text
     assert 'id="skeletonTurnRight"' in response.text
     assert 'id="skeletonReset"' in response.text
+    assert 'id="skeletonPosture"' in response.text
     assert 'aria-label="스켈레톤 왼쪽 회전"' in response.text
     assert "function uprightSkeleton" in response.text
     assert "function drawSkeletonView" in response.text
-    assert "목·가슴·어깨만 화면 이해를 위해 추정" in response.text
+    assert "CSV의 Pelvis·몸통·팔·다리 조인트" in response.text
     assert 'id="skeleton"' not in response.text
     assert "function alignSkeleton" not in response.text
     assert "function solveArm" not in response.text
@@ -342,6 +360,7 @@ def test_motion_returns_real_representative_frames_and_cross_session_spread(tmp_
     assert data["frames"][0]["tool_forward"] == [0.0, 0.0, 1.0]
     assert data["frames"][0]["posture"]["key"] == "standing"
     assert data["frames"][0]["posture"]["estimated"] is True
+    assert data["frames"][0]["posture"]["source"] == "csv_skeleton_joints"
     assert data["worker"] == {
         "worker_id": "jeon_hyeonggi",
         "display_name": "전형기 반장",
@@ -350,13 +369,38 @@ def test_motion_returns_real_representative_frames_and_cross_session_spread(tmp_
     assert data["statistics"][0]["spread"]["Pelvis"] > 0
 
 
-def test_camera_height_posture_state_is_explicitly_an_estimate() -> None:
-    assert _posture_state(1.7) == {
-        "key": "standing", "label": "서 있는 자세", "estimated": True,
+def test_joint_posture_state_uses_leg_and_torso_geometry_instead_of_camera_height() -> None:
+    standing = {
+        "Pelvis": [0.0, 1.0, 0.0], "Head": [0.0, 1.7, 0.0],
+        "Left Thigh": [-0.1, 0.9, 0.0], "Left Calf": [-0.1, 0.5, 0.0], "Left Foot": [-0.1, 0.1, 0.0],
+        "Right Thigh": [0.1, 0.9, 0.0], "Right Calf": [0.1, 0.5, 0.0], "Right Foot": [0.1, 0.1, 0.0],
     }
-    assert _posture_state(1.15)["key"] == "lowered"
-    assert _posture_state(0.75)["key"] == "seated_estimate"
-    assert _posture_state(None)["key"] == "unavailable"
+    deeply_bent = {
+        **standing,
+        "Left Calf": [-0.45, 0.55, 0.0], "Left Foot": [-0.1, 0.2, 0.0],
+        "Right Calf": [0.45, 0.55, 0.0], "Right Foot": [0.1, 0.2, 0.0],
+    }
+
+    upright = _joint_posture_state(standing)
+    bent = _joint_posture_state(deeply_bent)
+
+    assert upright["key"] == "standing"
+    assert upright["source"] == "csv_skeleton_joints"
+    assert upright["knee_angle_deg"] == 180.0
+    assert bent["key"] == "deep_bend"
+    assert 85.0 <= bent["knee_angle_deg"] <= 95.0
+    assert _joint_posture_state({"Head": [0.0, 1.7, 0.0]})["key"] == "unavailable"
+
+
+def test_posture_smoothing_removes_a_single_frame_joint_flicker() -> None:
+    standing = {"key": "standing", "label": "서 있는 자세", "source": "csv_skeleton_joints"}
+    bent = {"key": "deep_bend", "label": "깊게 굽힌 자세", "source": "csv_skeleton_joints"}
+    frames = [{"posture": dict(state)} for state in (standing, standing, bent, standing, standing)]
+
+    _smooth_posture_states(frames, radius=2)
+
+    assert [frame["posture"]["key"] for frame in frames] == ["standing"] * 5
+    assert all(frame["posture"]["smoothed"] is True for frame in frames)
 
 
 def test_motion_returns_trusted_trackers_paint_trace_and_direction_statistics(tmp_path: Path) -> None:
@@ -593,9 +637,15 @@ def test_motion_viewer_page_exposes_pose_comparison_contract(tmp_path: Path) -> 
         "안내 반영 시 계산상 예상",
         "현재 자세 상태",
         "Zone 진행 구간",
+        "CSV 조인트 기반 전신 스켈레톤",
+        "CSV 조인트 기반 자세 추정",
     ):
         assert text in response.text
-    for removed in ("작업자 / TSB 세션", "선택 시퀀스 자세 평가", 'id="evaluationSession"', 'id="evaluationSequence"'):
+    for removed in (
+        "작업자 / TSB 세션", "선택 시퀀스 자세 평가",
+        "머리·양손 기반 추정 상체 · 별도 화면",
+        'id="evaluationSession"', 'id="evaluationSequence"',
+    ):
         assert removed not in response.text
     assert 'id="worker"' in response.text
     assert response.text.index('id="worker"') < response.text.index('id="process"')

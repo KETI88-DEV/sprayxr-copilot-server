@@ -93,7 +93,7 @@
     byId('posePosture').textContent = frame?.posture?.label || '자세 판정 보류';
     const zone = Number(frame?.zone_id) > 0 ? `Zone ${zoneLabel(frame.zone_id)}` : '이동 구간';
     byId('poseZoneSummary').textContent = zone;
-    byId('poseEstimateNote').textContent = 'Camera 높이 기반 추정 · 채점 제외';
+    byId('poseEstimateNote').textContent = 'CSV 조인트 기반 자세 추정 · 채점 분리';
     if (evaluation.status === 'reference') {
       byId('poseScore').textContent = '전문가 기준 데이터';
       byId('poseScoreNote').textContent = '자기 자신과 비교한 점수는 표시하지 않습니다.';
@@ -144,49 +144,6 @@
       return element;
     }));
   }
-
-  function drawTrustedSkeletonPanel(frame) {
-    const rect = skeletonCanvas.getBoundingClientRect(), width = rect.width, height = rect.height;
-    if (!width || !height) return;
-    skeletonCtx.clearRect(0, 0, width, height);
-    const body = trustedUpperBody(frame);
-    if (!body) {
-      skeletonCtx.fillStyle = '#91a0b8'; skeletonCtx.font = '12px system-ui'; skeletonCtx.textAlign = 'center';
-      skeletonCtx.fillText('머리·양손 실측 데이터 없음', width / 2, height / 2);
-      return;
-    }
-    const angle = skeletonYaw * Math.PI / 180, cosine = Math.cos(angle), sine = Math.sin(angle);
-    const origin = body.chest;
-    const projected = value => {
-      const relative = subtract(value, origin);
-      const x = relative[0] * cosine - relative[2] * sine;
-      return [width / 2 + x * 230, height * .50 - relative[1] * 230];
-    };
-    const drawBone = (a, b, color, lineWidth) => {
-      if (!a || !b) return;
-      const start = projected(a), end = projected(b);
-      skeletonCtx.strokeStyle = color; skeletonCtx.lineWidth = lineWidth; skeletonCtx.lineCap = 'round';
-      skeletonCtx.beginPath(); skeletonCtx.moveTo(start[0], start[1]); skeletonCtx.lineTo(end[0], end[1]); skeletonCtx.stroke();
-    };
-    skeletonCtx.strokeStyle = 'rgba(100,130,165,.18)'; skeletonCtx.lineWidth = 1;
-    for (let index = 1; index < 5; index += 1) {
-      const y = height * index / 5; skeletonCtx.beginPath(); skeletonCtx.moveTo(0, y); skeletonCtx.lineTo(width, y); skeletonCtx.stroke();
-    }
-    drawBone(body.head, body.neck, 'rgba(210,230,245,.72)', 6);
-    drawBone(body.neck, body.chest, 'rgba(210,230,245,.72)', 7);
-    drawBone(body.leftShoulder, body.rightShoulder, 'rgba(210,230,245,.72)', 7);
-    drawBone(body.leftShoulder, body.leftHand, '#8be9fd', 5);
-    drawBone(body.rightShoulder, body.rightHand, '#22d3ee', 5);
-    for (const [name, value] of Object.entries(body)) {
-      if (!value) continue;
-      const spot = projected(value), radius = name === 'head' ? 14 : name.endsWith('Hand') ? 7 : 5;
-      skeletonCtx.fillStyle = name === 'head' ? '#f5f8ff' : name.endsWith('Hand') ? '#22d3ee' : 'rgba(190,220,238,.86)';
-      skeletonCtx.beginPath(); skeletonCtx.arc(spot[0], spot[1], radius, 0, Math.PI * 2); skeletonCtx.fill();
-    }
-    skeletonCtx.fillStyle = '#a9c2df'; skeletonCtx.font = '700 11px system-ui'; skeletonCtx.textAlign = 'left';
-    skeletonCtx.fillText(`${frame?.posture?.label || '자세 판정 보류'} · 추정 상체`, 12, 20);
-  }
-  drawSkeletonView = drawTrustedSkeletonPanel;
 
   function drawPoseOverlay({frame, center, w, h, playheadSeconds, durationSeconds}) {
     drawTrustedUpperBody(frame, center, w, h);
