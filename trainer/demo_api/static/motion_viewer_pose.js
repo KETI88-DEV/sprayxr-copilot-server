@@ -4,223 +4,227 @@
   const template = byId('poseUiTemplate');
   const pathCanvas = byId('canvas');
   if (!template || !pathCanvas || !window.MotionViewerCamera) return;
-  const layerLabels = ['측정 작업자', '전문가 기준', '교정 목표', '별도 기준 좌표'];
-  const sharedControls = {timeline: byId('timeline'), play: byId('play')};
-  pathCanvas.setAttribute('aria-description', layerLabels.join(' · '));
 
   const fragment = template.content.cloneNode(true);
-  const sourceControls = fragment.querySelector('[data-pose-slot="source"]');
   const gizmo = fragment.querySelector('[data-pose-slot="gizmo"]');
   const summary = fragment.querySelector('[data-pose-slot="summary"]');
-  document.querySelector('.workspace > .side:not(.right)').prepend(sourceControls);
-  document.querySelector('.workspace > .stage').append(gizmo);
-  document.querySelector('.workspace > .right').prepend(summary);
+  document.querySelector('.stage-viewport').append(gizmo);
+  document.querySelector('.workspace > .side:not(.right)').append(summary);
 
-  const poseZoneNav = document.createElement('div');
-  poseZoneNav.id = 'poseZoneNav';
-  poseZoneNav.className = 'zone-order';
-  summary.prepend(poseZoneNav);
-
-  let evaluationLoadGeneration = 0;
-  let evaluationData = null;
-  let evaluationCatalog = null;
-  let selectedPoseZone = 'auto';
   let camera = window.MotionViewerCamera.create({target: [0, 0, 0], yaw: -.55, pitch: .1, distance: 175});
   let cameraDrag = null;
   const pressedKeys = new Set();
-  const sessionSelect = byId('evaluationSession');
-  const sequenceSelect = byId('evaluationSequence');
-
-  const syncCameraGlobals = state => {
-    viewCenter = [...state.target];
-    yaw = state.yaw;
-    pitch = state.pitch;
-    zoom = state.distance;
-    panX = 0;
-    panY = 0;
+  const subtract = (a, b) => a.map((value, axis) => value - b[axis]);
+  const addVector = (a, b) => a.map((value, axis) => value + b[axis]);
+  const scaleVector = (a, scalar) => a.map(value => value * scalar);
+  const vectorLength = a => Math.hypot(...a);
+  const normalize = (a, fallback = [0, 0, 1]) => {
+    const size = vectorLength(a);
+    return size > 1e-6 ? scaleVector(a, 1 / size) : fallback;
+  };
+  const crossVector = (a, b) => [
+    a[1] * b[2] - a[2] * b[1],
+    a[2] * b[0] - a[0] * b[2],
+    a[0] * b[1] - a[1] * b[0],
+  ];
+  const angleDegrees = (a, b) => {
+    const left = normalize(a), right = normalize(b);
+    const cosine = Math.max(-1, Math.min(1, left.reduce((sum, value, axis) => sum + value * right[axis], 0)));
+    return Math.acos(cosine) * 180 / Math.PI;
   };
 
+  function trustedUpperBody(frame) {
+    const tracked = frame?.tracked || {};
+    const head = tracked.head;
+    if (!Array.isArray(head)) return null;
+    const forward = normalize(frame.camera_forward || [0, 0, 1]);
+    const horizontalForward = normalize([forward[0], 0, forward[2]]);
+    const right = normalize(crossVector([0, 1, 0], horizontalForward), [1, 0, 0]);
+    const neck = addVector(head, [0, -0.17, 0]);
+    const chest = addVector(head, [0, -0.36, 0]);
+    return {
+      head, neck, chest,
+      leftShoulder: addVector(chest, scaleVector(right, -0.19)),
+      rightShoulder: addVector(chest, scaleVector(right, 0.19)),
+      leftHand: tracked.left_hand || null,
+      rightHand: tracked.right_hand || null,
+    };
+  }
+
+  function drawTrustedUpperBody(frame, center, width, height) {
+    const body = trustedUpperBody(frame);
+    if (!body) return;
+    const inferred = 'rgba(148,210,230,.52)';
+    line(body.head, body.neck, inferred, 4, center, width, height);
+    line(body.neck, body.chest, inferred, 5, center, width, height);
+    line(body.leftShoulder, body.rightShoulder, inferred, 5, center, width, height);
+    if (body.leftHand) line(body.leftShoulder, body.leftHand, 'rgba(34,211,238,.60)', 3, center, width, height);
+    if (body.rightHand) line(body.rightShoulder, body.rightHand, 'rgba(34,211,238,.70)', 3, center, width, height);
+    point(body.head, 13, '#f5f8ff', center, width, height);
+    point(body.neck, 4, 'rgba(186,230,245,.72)', center, width, height);
+    point(body.chest, 6, 'rgba(186,230,245,.72)', center, width, height);
+    point(body.leftShoulder, 5, inferred, center, width, height);
+    point(body.rightShoulder, 5, inferred, center, width, height);
+    if (body.rightHand) point(body.rightHand, 7, '#22d3ee', center, width, height);
+    if (body.leftHand) point(body.leftHand, 6, '#8be9fd', center, width, height);
+  }
+
+  function drawOrientationGuides(frame, center, width, height) {
+    const tracked = frame?.tracked || {};
+    if (tracked.head && frame.camera_forward) {
+      arrow(tracked.head, addVector(tracked.head, scaleVector(normalize(frame.camera_forward), .42)), '#22d3ee', center, width, height);
+    }
+    if (tracked.right_hand && frame.tool_forward) {
+      const end = addVector(tracked.right_hand, scaleVector(normalize(frame.tool_forward), .42));
+      arrow(tracked.right_hand, end, '#fb923c', center, width, height);
+      if (frame.ray_point) {
+        const hitDirection = subtract(frame.ray_point, tracked.right_hand);
+        arrow(tracked.right_hand, frame.ray_point, 'rgba(250,204,21,.82)', center, width, height);
+        const shown = project(end, center, width, height);
+        ctx.fillStyle = '#fde68a';
+        ctx.font = '700 10px system-ui';
+        ctx.fillText(`분사축 편차 ${angleDegrees(frame.tool_forward, hitDirection).toFixed(0)}°`, shown[0] + 7, shown[1] - 6);
+      }
+    }
+  }
+
+  function renderPoseSummary(frame) {
+    const evaluation = data?.pose_evaluation || {};
+    byId('posePosture').textContent = frame?.posture?.label || '자세 판정 보류';
+    const zone = Number(frame?.zone_id) > 0 ? `Zone ${zoneLabel(frame.zone_id)}` : '이동 구간';
+    byId('poseZoneSummary').textContent = zone;
+    byId('poseEstimateNote').textContent = 'Camera 높이 기반 추정 · 채점 제외';
+    if (evaluation.status === 'reference') {
+      byId('poseScore').textContent = '전문가 기준 데이터';
+      byId('poseScoreNote').textContent = '자기 자신과 비교한 점수는 표시하지 않습니다.';
+      byId('poseAction').textContent = evaluation.message;
+      byId('posePredicted').textContent = '해당 없음';
+      return;
+    }
+    byId('poseScore').textContent = evaluation.similarity_score == null ? '분석 대기' : evaluation.similarity_score.toFixed(3);
+    byId('poseScoreNote').textContent = '현재 Zone·분사 구간을 같은 조건의 전문가 기록과 비교합니다.';
+    byId('poseAction').textContent = evaluation.corrections?.[0]?.message || evaluation.message || '분석 결과가 없습니다.';
+    byId('posePredicted').textContent = evaluation.predicted_score == null ? '—' : `${evaluation.similarity_score.toFixed(3)} → ${evaluation.predicted_score.toFixed(3)}`;
+  }
+
+  function renderZoneTimeline(payload) {
+    const host = byId('zoneTimeline');
+    const duration = Math.max(.001, Number(payload?.duration_seconds) || 0);
+    const timelineBucketSeconds = .5;
+    const buckets = new Map();
+    for (const sample of payload?.paint_trace || []) {
+      if (!(Number(sample.zone_id) > 0)) continue;
+      const bucketIndex = Math.floor(Number(sample.t || 0) / timelineBucketSeconds);
+      const key = `${sample.map_num ?? ''}:${sample.zone_id ?? ''}`;
+      if (!buckets.has(bucketIndex)) buckets.set(bucketIndex, {index: bucketIndex, zoneCounts: new Map()});
+      const bucket = buckets.get(bucketIndex);
+      const current = bucket.zoneCounts.get(key) || {count: 0, zone: sample.zone_id};
+      current.count += 1;
+      bucket.zoneCounts.set(key, current);
+    }
+    const segments = [];
+    for (const bucket of [...buckets.values()].sort((left, right) => left.index - right.index)) {
+      const [key, winner] = [...bucket.zoneCounts.entries()].sort((left, right) => right[1].count - left[1].count)[0];
+      const start = bucket.index * timelineBucketSeconds;
+      const end = Math.min(duration, start + timelineBucketSeconds);
+      const last = segments[segments.length - 1];
+      if (!last || last.key !== key || start - last.end > timelineBucketSeconds * 1.1) {
+        segments.push({key, start, end, zone: winner.zone});
+      }
+      else last.end = end;
+    }
+    host.replaceChildren(...segments.map(segment => {
+      const element = document.createElement('span');
+      element.className = 'zone-timeline-segment';
+      element.style.left = `${Math.max(0, segment.start / duration * 100)}%`;
+      element.style.width = `${Math.max(.7, (segment.end - segment.start) / duration * 100)}%`;
+      element.style.background = zoneColor(segment.zone);
+      element.textContent = `Z${zoneLabel(segment.zone)}`;
+      element.title = `Zone ${zoneLabel(segment.zone)} · ${segment.start.toFixed(2)}~${segment.end.toFixed(2)}초`;
+      return element;
+    }));
+  }
+
+  function drawTrustedSkeletonPanel(frame) {
+    const rect = skeletonCanvas.getBoundingClientRect(), width = rect.width, height = rect.height;
+    if (!width || !height) return;
+    skeletonCtx.clearRect(0, 0, width, height);
+    const body = trustedUpperBody(frame);
+    if (!body) {
+      skeletonCtx.fillStyle = '#91a0b8'; skeletonCtx.font = '12px system-ui'; skeletonCtx.textAlign = 'center';
+      skeletonCtx.fillText('머리·양손 실측 데이터 없음', width / 2, height / 2);
+      return;
+    }
+    const angle = skeletonYaw * Math.PI / 180, cosine = Math.cos(angle), sine = Math.sin(angle);
+    const origin = body.chest;
+    const projected = value => {
+      const relative = subtract(value, origin);
+      const x = relative[0] * cosine - relative[2] * sine;
+      return [width / 2 + x * 230, height * .50 - relative[1] * 230];
+    };
+    const drawBone = (a, b, color, lineWidth) => {
+      if (!a || !b) return;
+      const start = projected(a), end = projected(b);
+      skeletonCtx.strokeStyle = color; skeletonCtx.lineWidth = lineWidth; skeletonCtx.lineCap = 'round';
+      skeletonCtx.beginPath(); skeletonCtx.moveTo(start[0], start[1]); skeletonCtx.lineTo(end[0], end[1]); skeletonCtx.stroke();
+    };
+    skeletonCtx.strokeStyle = 'rgba(100,130,165,.18)'; skeletonCtx.lineWidth = 1;
+    for (let index = 1; index < 5; index += 1) {
+      const y = height * index / 5; skeletonCtx.beginPath(); skeletonCtx.moveTo(0, y); skeletonCtx.lineTo(width, y); skeletonCtx.stroke();
+    }
+    drawBone(body.head, body.neck, 'rgba(210,230,245,.72)', 6);
+    drawBone(body.neck, body.chest, 'rgba(210,230,245,.72)', 7);
+    drawBone(body.leftShoulder, body.rightShoulder, 'rgba(210,230,245,.72)', 7);
+    drawBone(body.leftShoulder, body.leftHand, '#8be9fd', 5);
+    drawBone(body.rightShoulder, body.rightHand, '#22d3ee', 5);
+    for (const [name, value] of Object.entries(body)) {
+      if (!value) continue;
+      const spot = projected(value), radius = name === 'head' ? 14 : name.endsWith('Hand') ? 7 : 5;
+      skeletonCtx.fillStyle = name === 'head' ? '#f5f8ff' : name.endsWith('Hand') ? '#22d3ee' : 'rgba(190,220,238,.86)';
+      skeletonCtx.beginPath(); skeletonCtx.arc(spot[0], spot[1], radius, 0, Math.PI * 2); skeletonCtx.fill();
+    }
+    skeletonCtx.fillStyle = '#a9c2df'; skeletonCtx.font = '700 11px system-ui'; skeletonCtx.textAlign = 'left';
+    skeletonCtx.fillText(`${frame?.posture?.label || '자세 판정 보류'} · 추정 상체`, 12, 20);
+  }
+  drawSkeletonView = drawTrustedSkeletonPanel;
+
+  function drawPoseOverlay({frame, center, w, h, playheadSeconds, durationSeconds}) {
+    drawTrustedUpperBody(frame, center, w, h);
+    drawOrientationGuides(frame, center, w, h);
+    renderPoseSummary(frame);
+    const zone = Number(frame?.zone_id) > 0 ? `현재 Zone ${zoneLabel(frame.zone_id)}` : '이동 구간';
+    byId('playbackZone').textContent = `${zone} · ${frame?.posture?.label || '자세 판정 보류'}`;
+    byId('playbackTime').textContent = `${Number(playheadSeconds || 0).toFixed(2)} / ${Number(durationSeconds || 0).toFixed(2)}초`;
+  }
+  window.motionViewerPoseOverlay = {draw: drawPoseOverlay};
+  window.renderZoneTimeline = renderZoneTimeline;
+  addEventListener('motion-viewer-data', event => renderZoneTimeline(event.detail));
+
+  const syncCameraGlobals = state => {
+    viewCenter = [...state.target]; yaw = state.yaw; pitch = state.pitch; zoom = state.distance; panX = 0; panY = 0;
+  };
   const visiblePoints = payload => {
     const points = [];
     for (const item of payload?.reference_surface?.points || []) if (Array.isArray(item.point)) points.push(item.point);
     for (const surface of payload?.zone_surfaces || []) points.push(...(surface.vertices || []));
-    for (const frame of payload?.frames || []) {
-      for (const item of Object.values(frame.tracked || {})) if (Array.isArray(item)) points.push(item);
-    }
+    for (const frame of payload?.frames || []) for (const item of Object.values(frame.tracked || {})) if (Array.isArray(item)) points.push(item);
     return points;
   };
-
   const originalResetView = resetViewToCamera;
   resetViewToCamera = payload => {
     originalResetView(payload);
     camera = window.MotionViewerCamera.create({target: viewCenter || [0, 0, 0], yaw, pitch, distance: zoom});
     syncCameraGlobals(camera.fit(visiblePoints(payload)));
   };
-
-  const setState = (state, message = '') => {
-    sourceControls.dataset.state = state;
-    if (state !== 'ready' && message) byId('status').textContent = message;
-  };
-
-  function fillSequences() {
-    const session = (evaluationCatalog?.sessions || []).find(item => item.session_id === sessionSelect.value);
-    sequenceSelect.replaceChildren(...(session?.sequences || []).map(item => {
-      const option = document.createElement('option');
-      option.value = item.sequence_id;
-      option.textContent = `${item.sequence_id} · ${item.frames}프레임`;
-      return option;
-    }));
-  }
-
-  async function loadEvaluationCatalog() {
-    try {
-      const response = await fetch('/motion-viewer/api/evaluations');
-      if (!response.ok) throw new Error('평가 목록을 읽을 수 없습니다.');
-      evaluationCatalog = await response.json();
-      const sessions = evaluationCatalog.sessions || [];
-      sessionSelect.replaceChildren(...sessions.map(item => {
-        const option = document.createElement('option');
-        option.value = item.session_id;
-        option.textContent = `${item.session_id} · ${item.sequences.length}개 시퀀스`;
-        return option;
-      }));
-      fillSequences();
-      if (sessions.length) await loadEvaluation();
-      else setState('empty', '저장된 TSB 시퀀스가 없어 전문가 CSV 경로만 표시합니다.');
-    } catch (error) {
-      setState('error', error.message || '평가 목록을 불러오지 못했습니다.');
-    }
-  }
-
-  async function loadEvaluation() {
-    const generation = ++evaluationLoadGeneration;
-    const sessionId = sessionSelect.value;
-    const sequenceId = sequenceSelect.value;
-    if (!sessionId || !sequenceId) {
-      evaluationData = null;
-      setState('empty', '평가할 세션과 시퀀스를 선택하세요.');
-      draw();
-      return;
-    }
-    setState('loading', '제품 자세 분석 엔진의 결과를 불러오는 중입니다.');
-    try {
-      const query = new URLSearchParams({session_id: sessionId, sequence_id: sequenceId});
-      const response = await fetch(`/motion-viewer/api/evaluation?${query}`);
-      if (!response.ok) {
-        const body = await response.json().catch(() => ({}));
-        throw new Error(body.detail || '자세 평가를 불러오지 못했습니다.');
-      }
-      const incoming = await response.json();
-      if (generation !== evaluationLoadGeneration) return;
-      evaluationData = incoming;
-      selectedPoseZone = 'auto';
-      renderSummary(incoming);
-      setState('ready');
-      draw();
-    } catch (error) {
-      if (generation !== evaluationLoadGeneration) return;
-      evaluationData = null;
-      setState('error', error.message || '자세 평가를 불러오지 못했습니다.');
-      draw();
-    }
-  }
-
-  function renderSummary(view) {
-    const evaluation = view.evaluation;
-    const identity = view.identity;
-    const correction = evaluation.top_correction;
-    byId('poseVerdict').textContent = evaluation.verdict;
-    byId('poseScore').textContent = evaluation.similarity_score == null ? '측정 불가' : `${Math.round(evaluation.similarity_score * 100)}% / ${evaluation.expert_percentile ?? '—'}백분위`;
-    byId('poseDeviation').textContent = correction?.joint || '통상 범위';
-    byId('poseAction').textContent = correction?.message || evaluation.message;
-    byId('poseConfidence').textContent = evaluation.confidence;
-    byId('poseZoneSummary').textContent = `Zone ${identity.zone_id || '—'} · ${identity.sequence_id} · ${view.strokes.length} 스트로크`;
-    poseZoneNav.replaceChildren();
-    for (const [key, label, color] of [['all', '전체', '#67E8F9'], [identity.zone_id || 'unknown', `Zone ${identity.zone_id || '—'}`, '#22D3EE']]) {
-      const button = document.createElement('button');
-      button.className = 'zone-chip';
-      button.textContent = label;
-      button.style.setProperty('--zone-color', color);
-      button.onclick = () => {
-        playing = false;
-        sharedControls.play.textContent = '재생';
-        selectedPoseZone = key;
-        poseZoneNav.querySelectorAll('.zone-chip').forEach(item => item.classList.toggle('selected', item === button));
-        byId('poseZoneSummary').textContent = key === 'all' ? `전체 · ${identity.sequence_id}` : `${label} · ${identity.sequence_id}`;
-        draw();
-      };
-      poseZoneNav.append(button);
-    }
-    byId('poseAdvancedJson').textContent = JSON.stringify({
-      score_source: '운영 pose_recomm 엔진',
-      expert_layer_source: view.layers.expert.available ? '엔진 제공 전문가 기준' : '제공되지 않음',
-      analysis_status: evaluation.analysis_status,
-      reason_code: evaluation.reason_code,
-      strokes: view.strokes,
-    }, null, 2);
-  }
-
-  const bonePairs = [
-    ['Pelvis','Spine'],['Spine','Chest'],['Chest','Head'],
-    ['Chest','Left Shoulder'],['Left Shoulder','Left Upper Arm'],['Left Upper Arm','Left Fore Arm'],['Left Fore Arm','Left Hand'],
-    ['Chest','Right Shoulder'],['Right Shoulder','Right Upper Arm'],['Right Upper Arm','Right Fore Arm'],['Right Fore Arm','Right Hand'],
-  ];
-  const jointOf = (joints, name) => {
-    const normalized = name.replaceAll(' ', '').toLowerCase();
-    const key = Object.keys(joints || {}).find(item => item.replaceAll(' ', '').toLowerCase() === normalized);
-    return key ? joints[key] : null;
-  };
-  const drawSkeleton = (joints, color, dashed = false) => {
-    ctx.save();
-    if (dashed) ctx.setLineDash([7, 5]);
-    for (const [a, b] of bonePairs) {
-      const start = jointOf(joints, a), end = jointOf(joints, b);
-      if (start && end) line(start, end, color, 2.4, viewCenter, canvas.clientWidth, canvas.clientHeight);
-    }
-    for (const item of Object.values(joints || {})) point(item, 3.2, color, viewCenter, canvas.clientWidth, canvas.clientHeight);
-    ctx.restore();
-  };
-  const frameForProgress = (frames, progress) => frames[Math.max(0, Math.min(frames.length - 1, Math.round(progress * (frames.length - 1))))];
-
-  function drawPoseOverlay({durationSeconds}) {
-    if (!evaluationData) return;
-    const progress = Math.max(0, Math.min(1, playheadSeconds / Math.max(.001, durationSeconds || 1)));
-    const measured = evaluationData.layers.measured;
-    const expert = evaluationData.layers.expert;
-    const corrected = evaluationData.layers.corrected;
-    const measuredFrame = frameForProgress(measured.frames || [], progress);
-    if (byId('poseLayerMeasured').checked && measuredFrame?.joints) drawSkeleton(measuredFrame.joints, '#38BDF8');
-    if (byId('poseLayerExpert').checked && expert?.available) {
-      const joints = Object.fromEntries(Object.entries(expert.tracks || {}).map(([name, track]) => [name, frameForProgress(track, progress)]));
-      drawSkeleton(joints, '#22C55E', true);
-    }
-    if (byId('poseLayerCorrection').checked && measuredFrame) {
-      for (const target of corrected?.targets || []) {
-        if (Number(target.index) !== Number(measuredFrame.index)) continue;
-        const start = jointOf(measuredFrame.joints, String(target.joint || ''));
-        const end = target.point || target.position || target.target;
-        if (start && end) arrow(start, end, '#FACC15', viewCenter, canvas.clientWidth, canvas.clientHeight);
-      }
-    }
-    if (selectedPoseZone === 'auto') {
-      const strokes = evaluationData.strokes || [];
-      const strokeNumber = strokes.length ? Math.min(strokes.length, Math.floor(progress * strokes.length) + 1) : 0;
-      byId('poseZoneSummary').textContent = `현재 Zone ${evaluationData.identity.zone_id || '—'} · ${evaluationData.identity.sequence_id} · 스트로크 ${strokeNumber}/${strokes.length}`;
-    }
-  }
-  window.motionViewerPoseOverlay = {draw: drawPoseOverlay};
-
   const applyCamera = state => { syncCameraGlobals(state); draw(); };
   const refit = () => applyCamera(camera.focus(visiblePoints(data)));
   byId('cameraHome').onclick = () => applyCamera(camera.home());
   byId('cameraAxisX').onclick = () => applyCamera(camera.axisView('x'));
   byId('cameraAxisY').onclick = () => applyCamera(camera.axisView('y'));
   byId('cameraAxisZ').onclick = () => applyCamera(camera.axisView('z'));
-
   pathCanvas.onpointerdown = event => {
     if (![0, 1, 2].includes(event.button)) return;
-    event.preventDefault();
-    pathCanvas.setPointerCapture(event.pointerId);
+    event.preventDefault(); pathCanvas.setPointerCapture(event.pointerId);
     cameraDrag = {mode: event.button === 1 ? 'pan' : event.button === 2 ? 'look' : 'orbit', x: event.clientX, y: event.clientY};
     pathCanvas.style.cursor = cameraDrag.mode === 'pan' ? 'move' : 'grabbing';
   };
@@ -255,12 +259,7 @@
     }
     requestAnimationFrame(flyTick);
   }
-
-  sessionSelect.onchange = () => { ++evaluationLoadGeneration; fillSequences(); };
-  byId('loadEvaluation').onclick = loadEvaluation;
-  for (const id of ['poseLayerMeasured', 'poseLayerExpert', 'poseLayerCorrection']) byId(id).onchange = draw;
   resize();
-  if (typeof data !== 'undefined' && data?.frames?.length) resetViewToCamera(data);
-  loadEvaluationCatalog();
+  if (typeof data !== 'undefined' && data?.frames?.length) { resetViewToCamera(data); renderZoneTimeline(data); }
   requestAnimationFrame(flyTick);
 })();

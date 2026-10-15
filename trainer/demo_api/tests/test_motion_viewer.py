@@ -10,6 +10,7 @@ from trainer.demo_api.motion_viewer import (
     _build_zone_surface,
     _dense_paint_trace,
     _direction_summary,
+    _posture_state,
     create_motion_viewer_router,
 )
 from trainer.demo_api.pose_query import PoseEngineResult
@@ -24,6 +25,7 @@ def _write_csv(path: Path, *, offset: float, zone_ids: list[str] | None = None) 
         "시간(초)",
         "분사",
         "한길숏건 Position X", "한길숏건 Position Y", "한길숏건 Position Z",
+        "한길숏건 Rotation X", "한길숏건 Rotation Y", "한길숏건 Rotation Z",
         "플래쉬 Position X", "플래쉬 Position Y", "플래쉬 Position Z",
         "카메라 Position X", "카메라 Position Y", "카메라 Position Z",
         "카메라 Rotation X", "카메라 Rotation Y", "카메라 Rotation Z",
@@ -48,6 +50,9 @@ def _write_csv(path: Path, *, offset: float, zone_ids: list[str] | None = None) 
                     "한길숏건 Position X": 0.3 + index * 0.01,
                     "한길숏건 Position Y": 1.2,
                     "한길숏건 Position Z": 0.2,
+                    "한길숏건 Rotation X": 0,
+                    "한길숏건 Rotation Y": 0,
+                    "한길숏건 Rotation Z": 0,
                     "플래쉬 Position X": -0.3 + index * 0.01,
                     "플래쉬 Position Y": 1.1,
                     "플래쉬 Position Z": 0.1,
@@ -177,8 +182,8 @@ def test_motion_viewer_page_explains_representative_and_statistical_motion(tmp_p
     assert "기준 전문가: 전형기 반장" in response.text
     assert "페인트 누적 궤적" in response.text
     assert "주요 도장 방향" in response.text
-    assert "참고용 스켈레톤" in response.text
-    assert "전형기 ·" in response.text
+    assert "머리·양손 기반 추정 상체" in response.text
+    assert "worker.display_name" in response.text
     assert "function referencePointCloud" in response.text
     assert "function drawZoneFlowGuides" in response.text
     assert "function directionField" not in response.text
@@ -225,7 +230,7 @@ def test_motion_viewer_page_explains_representative_and_statistical_motion(tmp_p
     assert 'aria-label="스켈레톤 왼쪽 회전"' in response.text
     assert "function uprightSkeleton" in response.text
     assert "function drawSkeletonView" in response.text
-    assert "골반에서 머리 방향을 위로 자동 정렬" in response.text
+    assert "목·가슴·어깨만 화면 이해를 위해 추정" in response.text
     assert 'id="skeleton"' not in response.text
     assert "function alignSkeleton" not in response.text
     assert "function solveArm" not in response.text
@@ -279,13 +284,44 @@ def test_mode_two_uses_corrected_expert_zone_ids_without_changing_raw_csv(tmp_pa
 def test_catalog_lists_modes_and_individual_expert_sessions(tmp_path: Path) -> None:
     data = _client(tmp_path).get("/motion-viewer/api/catalog").json()
 
-    mode = data["processes"][0]["modes"][0]
+    assert data["workers"] == [
+        {
+            "worker_id": "jeon_hyeonggi",
+            "display_name": "전형기 반장",
+            "role": "expert",
+            "processes": data["workers"][0]["processes"],
+        }
+    ]
+    mode = data["workers"][0]["processes"][0]["modes"][0]
     assert mode == {
         "mode_id": 4,
         "session_count": 2,
         "representative_session_id": "4_1001_1",
         "sessions": ["4_1001_1", "4_1002_1"],
     }
+
+
+def test_catalog_discovers_future_worker_directory_without_code_change(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    worker_root = tmp_path / "workers" / "kim_gyeongho"
+    (worker_root / "worker.json").parent.mkdir(parents=True, exist_ok=True)
+    (worker_root / "worker.json").write_text(
+        json.dumps({"display_name": "김경호", "role": "trainee"}), encoding="utf-8"
+    )
+    source_profile = tmp_path / "generated" / "profiles" / "spray" / "learning" / "mode_04.json"
+    target_profile = worker_root / "generated" / "profiles" / "spray" / "learning" / "mode_04.json"
+    target_profile.parent.mkdir(parents=True, exist_ok=True)
+    target_profile.write_text(source_profile.read_text(encoding="utf-8"), encoding="utf-8")
+    source_raw = tmp_path / "raw" / "spray" / "learning" / "mode_04"
+    target_raw = worker_root / "raw" / "spray" / "learning" / "mode_04"
+    target_raw.mkdir(parents=True, exist_ok=True)
+    for source in source_raw.glob("*.csv"):
+        target_raw.joinpath(source.name).write_bytes(source.read_bytes())
+
+    payload = client.get("/motion-viewer/api/catalog").json()
+
+    assert [worker["display_name"] for worker in payload["workers"]] == ["전형기 반장", "김경호"]
+    assert payload["workers"][1]["worker_id"] == "kim_gyeongho"
 
 
 def test_motion_returns_real_representative_frames_and_cross_session_spread(tmp_path: Path) -> None:
@@ -303,7 +339,24 @@ def test_motion_returns_real_representative_frames_and_cross_session_spread(tmp_
     assert data["frames"][0]["joints"]["Pelvis"] == [0.0, 1.0, 0.0]
     assert data["frames"][0]["joints"]["Spine"] == [0.0, 1.3, 0.0]
     assert data["frames"][0]["camera_forward"] == [0.0, 0.0, 1.0]
+    assert data["frames"][0]["tool_forward"] == [0.0, 0.0, 1.0]
+    assert data["frames"][0]["posture"]["key"] == "standing"
+    assert data["frames"][0]["posture"]["estimated"] is True
+    assert data["worker"] == {
+        "worker_id": "jeon_hyeonggi",
+        "display_name": "전형기 반장",
+        "role": "expert",
+    }
     assert data["statistics"][0]["spread"]["Pelvis"] > 0
+
+
+def test_camera_height_posture_state_is_explicitly_an_estimate() -> None:
+    assert _posture_state(1.7) == {
+        "key": "standing", "label": "서 있는 자세", "estimated": True,
+    }
+    assert _posture_state(1.15)["key"] == "lowered"
+    assert _posture_state(0.75)["key"] == "seated_estimate"
+    assert _posture_state(None)["key"] == "unavailable"
 
 
 def test_motion_returns_trusted_trackers_paint_trace_and_direction_statistics(tmp_path: Path) -> None:
@@ -534,17 +587,23 @@ def test_motion_viewer_page_exposes_pose_comparison_contract(tmp_path: Path) -> 
     for text in (
         "작업 자세 비교 평가",
         "도장 경로·자세 통합 화면",
-        "TSB 세션",
-        "시퀀스",
-        "판정",
-        "유사도 / 숙련자 백분위",
-        "가장 큰 편차",
-        "지금 고칠 한 가지",
-        "신뢰도",
-        "Zone 요약",
+        "작업자",
+        "전문가 동작 유사도",
+        "자세 개선 안내",
+        "안내 반영 시 계산상 예상",
+        "현재 자세 상태",
+        "Zone 진행 구간",
     ):
         assert text in response.text
+    for removed in ("작업자 / TSB 세션", "선택 시퀀스 자세 평가", 'id="evaluationSession"', 'id="evaluationSequence"'):
+        assert removed not in response.text
+    assert 'id="worker"' in response.text
+    assert response.text.index('id="worker"') < response.text.index('id="process"')
     assert response.text.count('id="timeline"') == 1
+    assert 'id="zoneTimeline"' in response.text
+    assert response.text.index('id="zoneTimeline"') < response.text.index('id="timeline"')
+    assert response.text.index('id="timeline"') < response.text.index('id="play"')
+    assert response.text.index('id="play"') < response.text.index('id="speed"')
     assert 'id="canvas"' in response.text
     assert 'id="poseCanvas"' not in response.text
     assert 'class="viewer-tab"' not in response.text
@@ -555,6 +614,7 @@ def test_motion_viewer_page_exposes_pose_comparison_contract(tmp_path: Path) -> 
     assert '/motion-viewer/assets/motion_viewer_pose.css' in response.text
     assert '/motion-viewer/assets/motion_viewer_pose.js' in response.text
     assert '/motion-viewer/assets/motion_viewer_camera.js' in response.text
+    assert "Number(zoneId)>0" in response.text
 
 
 def test_pose_assets_define_layers_and_interaction_states(tmp_path: Path) -> None:
@@ -569,19 +629,22 @@ def test_pose_assets_define_layers_and_interaction_states(tmp_path: Path) -> Non
     assert script.headers["cache-control"] == "no-cache"
     assert style.headers["cache-control"] == "no-cache"
     for text in (
-        "측정 작업자",
-        "전문가 기준",
-        "교정 목표",
-        "별도 기준 좌표",
-        "evaluationLoadGeneration",
-        "drawPoseOverlay",
-        "loading",
-        "empty",
-        "error",
+        "drawTrustedUpperBody",
+        "drawOrientationGuides",
+        "renderPoseSummary",
+        "renderZoneTimeline",
+        "camera_forward",
+        "tool_forward",
+        "ray_point",
         "timeline",
         "play",
     ):
         assert text in script.text
+    for removed in ("evaluationLoadGeneration", "evaluationSession", "evaluationSequence", "loadEvaluation"):
+        assert removed not in script.text
+    assert "timelineBucketSeconds" in script.text
+    assert "zoneCounts" in script.text
+    assert "sample.segment" not in script.text
     assert "pairwise" not in script.text.lower()
     assert "viewer-tab" not in script.text
     for text in ("fit", "orbit", "pan", "dolly", "look", "fly", "focus", "axisView", "home"):
@@ -591,4 +654,4 @@ def test_pose_assets_define_layers_and_interaction_states(tmp_path: Path) -> Non
     assert "#FACC15" in style.text
     assert "display:none" not in style.text.replace(" ", "").split("@media(max-width:1200px)", 1)[-1]
     assert "resize();" in script.text
-    assert "data?.frames?.length) resetViewToCamera(data)" in script.text
+    assert "data?.frames?.length) { resetViewToCamera(data); renderZoneTimeline(data); }" in script.text

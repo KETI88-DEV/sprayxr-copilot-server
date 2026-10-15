@@ -45,6 +45,7 @@ _JOINT_PARENTS: tuple[tuple[str, str | None], ...] = (
 _BONES = [[parent, joint] for joint, parent in _JOINT_PARENTS if parent is not None]
 _PROCESS_LABELS = {"spray": "스프레이", "blasting": "블라스팅"}
 _EXPERT_NAME = "전형기 반장"
+_EXPERT_WORKER_ID = "jeon_hyeonggi"
 _DIRECTION_LABELS = {
     "horizontal": "수평 중심",
     "vertical": "수직 중심",
@@ -152,13 +153,34 @@ def _rotate(
     )
 
 
-def _camera_forward(row: dict[str, str]) -> list[float] | None:
+def _rotation_forward(row: dict[str, str], prefix: str) -> list[float] | None:
     normalized = _normalized_row(row)
-    values = [_number(normalized.get(f"카메라 rotation {axis}".casefold())) for axis in "XYZ"]
+    values = [_number(normalized.get(f"{prefix} rotation {axis}".casefold())) for axis in "XYZ"]
     if any(value is None for value in values):
         return None
     quaternion = _unity_euler_quaternion(*values)  # type: ignore[arg-type]
     return [round(value, 6) for value in _rotate(quaternion, (0.0, 0.0, 1.0))]
+
+
+def _camera_forward(row: dict[str, str]) -> list[float] | None:
+    return _rotation_forward(row, "카메라")
+
+
+def _posture_state(head_height: float | None) -> dict[str, Any]:
+    """A conservative display-only posture estimate from the trusted Camera height.
+
+    Legs and pelvis in the exported simulator skeleton are IK output, not tracked
+    devices.  The viewer therefore labels the result as an estimate and never
+    feeds it into similarity scoring.
+    """
+
+    if head_height is None or not math.isfinite(head_height):
+        return {"key": "unavailable", "label": "자세 판정 보류", "estimated": True}
+    if head_height >= 1.35:
+        return {"key": "standing", "label": "서 있는 자세", "estimated": True}
+    if head_height >= 0.9:
+        return {"key": "lowered", "label": "낮춘 자세", "estimated": True}
+    return {"key": "seated_estimate", "label": "앉은 자세 추정", "estimated": True}
 
 
 def _world_joints(row: dict[str, str]) -> dict[str, list[float]]:
@@ -220,6 +242,7 @@ def _sample_csv(
                 "left_hand": _vector(row, "플래쉬"),
             }
             tracked = {key: value for key, value in tracked.items() if value is not None}
+            head = tracked.get("head")
             ray_point = _ray_point(row)
             if not joints and not tracked and ray_point is None:
                 continue
@@ -229,6 +252,8 @@ def _sample_csv(
                 "joints": joints,
                 "tracked": tracked,
                 "camera_forward": _camera_forward(row),
+                "tool_forward": _rotation_forward(row, tool_prefix),
+                "posture": _posture_state(head[1] if head is not None else None),
                 "ray_point": ray_point,
                 "spraying": _spraying(row.get("분사")),
                 "zone_id": str(row.get("Zone ID", "")).strip() or None,
@@ -252,6 +277,45 @@ def _read_profile(root: Path, process: str, mode_id: int) -> dict[str, Any]:
     if not isinstance(payload.get("sessions"), list):
         raise HTTPException(status_code=422, detail="motion profile is invalid")
     return payload
+
+
+def _worker_sources(root: Path) -> list[dict[str, Any]]:
+    sources = [{
+        "worker_id": _EXPERT_WORKER_ID,
+        "display_name": _EXPERT_NAME,
+        "role": "expert",
+        "root": root,
+    }]
+    workers_root = root / "workers"
+    if not workers_root.is_dir():
+        return sources
+    for directory in sorted(path for path in workers_root.iterdir() if path.is_dir()):
+        if not (directory / "generated" / "profiles").is_dir():
+            continue
+        metadata: dict[str, Any] = {}
+        try:
+            candidate = json.loads((directory / "worker.json").read_text(encoding="utf-8"))
+            if isinstance(candidate, dict):
+                metadata = candidate
+        except (FileNotFoundError, OSError, json.JSONDecodeError):
+            pass
+        sources.append({
+            "worker_id": directory.name,
+            "display_name": str(metadata.get("display_name") or directory.name),
+            "role": str(metadata.get("role") or "trainee"),
+            "root": directory,
+        })
+    return sources
+
+
+def _worker_source(root: Path, worker_id: str) -> dict[str, Any]:
+    source = next(
+        (item for item in _worker_sources(root) if item["worker_id"] == worker_id),
+        None,
+    )
+    if source is None:
+        raise HTTPException(status_code=404, detail="worker data not found")
+    return source
 
 
 def _representative_session(profile: dict[str, Any]) -> str:
@@ -1029,7 +1093,7 @@ _VIEWER_HTML = r"""<!doctype html>
 .title{font-weight:800;font-size:18px}.title small{display:block;color:var(--muted);font-size:11px;font-weight:500;margin-top:4px}.top a{color:#dce8ff;text-decoration:none;font-size:13px;margin-left:14px}
 .workspace{display:grid;grid-template-columns:275px minmax(420px,1fr) 360px;min-height:0}.side{padding:19px;border-right:1px solid var(--line);background:#0c1728;overflow:auto}.right{min-width:0;border-right:0;border-left:1px solid var(--line)}
 label{display:block;color:var(--muted);font-size:12px;margin:16px 0 7px}.select,button,input[type=range]{width:100%}.select,button{border:1px solid var(--line);border-radius:8px;background:var(--panel2);color:var(--ink);padding:10px 11px}
-button{cursor:pointer;font-weight:700}.primary{background:#3157d5;border-color:#3157d5}.controls{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:16px}.stage{position:relative;min-height:590px;background:radial-gradient(circle at 50% 42%,#132845 0,#07101f 65%)}.stage>canvas{width:100%;height:100%;display:block;min-height:590px;cursor:grab;touch-action:none}
+button{cursor:pointer;font-weight:700}.primary{background:#3157d5;border-color:#3157d5}.controls{display:grid;grid-template-columns:1fr 1fr;gap:8px}.stage{position:relative;min-height:590px;display:grid;grid-template-rows:minmax(500px,1fr) auto;background:#07101f}.stage-viewport{position:relative;min-height:500px;background:radial-gradient(circle at 50% 42%,#132845 0,#07101f 65%)}.stage-viewport>canvas{width:100%;height:100%;display:block;min-height:500px;cursor:grab;touch-action:none}.playback-dock{padding:11px 16px 14px;border-top:1px solid var(--line);background:#0a1424}.playback-status{display:flex;justify-content:space-between;gap:12px;margin-bottom:7px;color:#cfe1f5;font-size:12px}.zone-timeline{position:relative;height:22px;margin-bottom:5px;border:1px solid #344862;border-radius:6px;overflow:hidden;background:#172033}.zone-timeline-segment{position:absolute;inset-block:0;border-right:1px solid rgba(7,16,31,.5);display:grid;place-items:center;color:#07101f;font-size:9px;font-weight:900;overflow:hidden}.playback-dock input[type=range]{margin:0}.playback-controls{display:grid;grid-template-columns:105px 105px minmax(170px,1fr);gap:8px;align-items:center;margin-top:8px}.speed-control{display:grid;grid-template-columns:auto minmax(90px,1fr) auto;gap:8px;align-items:center;color:var(--muted);font-size:11px}.speed-control label{margin:0;color:var(--muted)}
 .overlay{position:absolute;left:18px;top:16px;max-width:340px;background:rgba(7,16,31,.78);border:1px solid rgba(89,116,150,.45);border-radius:10px;padding:10px 12px;font-size:12px;color:var(--muted);pointer-events:none}.overlay strong{display:block;color:var(--ink);font-size:14px;margin-bottom:4px}.viewer-legend{display:grid;grid-template-columns:1fr;gap:3px;margin-top:9px;padding-top:8px;border-top:1px solid rgba(89,116,150,.35);font-size:10px;line-height:1.45}.viewer-legend div{white-space:nowrap}.viewer-legend .dot{width:7px;height:7px;margin-right:6px}
 .loading{position:absolute;inset:0;display:grid;place-content:center;justify-items:center;gap:13px;background:rgba(5,12,24,.72);backdrop-filter:blur(3px);z-index:5;color:#dce8ff;font-size:13px;font-weight:700}.loading[hidden]{display:none}.spinner{width:34px;height:34px;border:3px solid rgba(125,211,252,.2);border-top-color:#22d3ee;border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:14px;margin-bottom:11px}.card span{display:block;color:var(--muted);font-size:11px}.card strong{display:block;font-size:20px;margin-top:5px}.legend{font-size:12px;color:var(--muted);line-height:2}.dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:7px}.help{font-size:12px;color:var(--muted);line-height:1.65;margin-top:18px}.status{min-height:18px;color:var(--cyan);font-size:12px;margin-top:12px}
@@ -1037,29 +1101,26 @@ button{cursor:pointer;font-weight:700}.primary{background:#3157d5;border-color:#
 .skeleton-card{padding:0;overflow:hidden}.skeleton-card summary{cursor:pointer;padding:14px;font-weight:800;font-size:13px;list-style:none}.skeleton-card summary::-webkit-details-marker{display:none}.skeleton-card summary:after{content:'▾';float:right;color:var(--cyan)}.skeleton-card:not([open]) summary:after{content:'▸'}.skeleton-screen{position:relative;height:300px;border-top:1px solid var(--line);border-bottom:1px solid var(--line);background:radial-gradient(circle at 50% 42%,#17304e 0,#07101f 72%)}#skeletonCanvas{display:block;width:100%;height:300px}.skeleton-angle{position:absolute;right:10px;top:9px;padding:4px 7px;border-radius:999px;background:rgba(7,16,31,.78);color:#a9c2df;font-size:10px}.skeleton-controls{display:grid;grid-template-columns:1fr 1fr 1fr;gap:7px;padding:10px}.skeleton-turn{font-size:20px;padding:7px;text-shadow:0 2px 5px rgba(34,211,238,.45)}.skeleton-reset{font-size:11px}.skeleton-note{padding:0 12px 12px;color:#7890ad;font-size:10px;line-height:1.5}
 .toggle{display:flex;align-items:center;gap:8px;margin-top:14px;color:var(--muted);font-size:12px}.toggle input{width:auto}.badge{display:inline-flex;padding:5px 9px;border:1px solid #3157d5;border-radius:999px;color:#b9caff;font-size:11px;margin-top:12px}
 .range-scale{position:relative;height:18px;color:#7186a3;font-size:10px}.range-scale span{position:absolute;top:1px;transform:translateX(-50%)}.range-scale span:first-child{left:0;transform:none}.range-scale .normal{left:27.27%;color:#dce8ff;font-weight:800}.range-scale span:last-child{right:0;transform:none}
-@media(max-width:1200px){.workspace{grid-template-columns:240px minmax(0,1fr)}.right{display:block;grid-column:1/-1;border-left:0;border-top:1px solid var(--line)}}@media(max-width:720px){.workspace{display:block}.side{border:0}.right{display:block}.stage,.stage>canvas{min-height:480px}}
+@media(max-width:1200px){.workspace{grid-template-columns:240px minmax(0,1fr)}.right{display:block;grid-column:1/-1;border-left:0;border-top:1px solid var(--line)}}@media(max-width:720px){.workspace{display:block}.side{border:0}.right{display:block}.stage,.stage-viewport,.stage-viewport>canvas{min-height:480px}.playback-controls{grid-template-columns:1fr 1fr}.speed-control{grid-column:1/-1}}
 </style></head><body><div class="shell">
 <header class="top"><div class="title">작업 자세 비교 평가<small>전문가 모션 뷰어 기반 · 도장 경로·자세 통합 화면 · 기준 전문가: 전형기 반장 · 제품 자세 엔진 연동</small></div><nav><a href="/docs">Swagger</a><a href="/admin">DB 뷰어</a></nav></header>
 <template id="poseUiTemplate">
-<div data-pose-slot="source" class="pose-source-block"><strong>작업자 자세 비교</strong><label for="evaluationSession">작업자 / TSB 세션</label><select id="evaluationSession" class="select"></select><label for="evaluationSequence">시퀀스</label><select id="evaluationSequence" class="select"></select><button id="loadEvaluation" class="primary">선택 시퀀스 자세 평가</button><div class="pose-layer-toggles"><label><input id="poseLayerMeasured" type="checkbox" checked>작업자 자세</label><label><input id="poseLayerExpert" type="checkbox" checked>전문가 기준</label><label><input id="poseLayerCorrection" type="checkbox" checked>교정 표시</label></div></div>
 <div data-pose-slot="gizmo" class="camera-gizmo" aria-label="3D 카메라 기즈모"><button id="cameraHome" title="초기 시점">⌂</button><button id="cameraAxisX" title="X축 시점">X</button><button id="cameraAxisY" title="Y축 시점">Y</button><button id="cameraAxisZ" title="Z축 시점">Z</button></div>
-<div data-pose-slot="summary" id="poseSummary" class="pose-summary"><div class="card headline"><span>판정</span><strong id="poseVerdict">대기 중</strong><div class="pose-meta"><span>신뢰도 <b id="poseConfidence">—</b></span><span id="poseZoneSummary">Zone 요약</span></div></div><div class="pose-summary-grid"><div class="metric"><span>유사도 / 숙련자 백분위</span><b id="poseScore">—</b></div><div class="metric"><span>가장 큰 편차</span><b id="poseDeviation">—</b></div></div><div class="card pose-action"><span>지금 고칠 한 가지</span><strong id="poseAction">시퀀스를 선택하세요.</strong></div><details class="card pose-advanced"><summary>고급 분석 정보</summary><pre id="poseAdvancedJson"></pre></details></div>
+<div data-pose-slot="summary" id="poseSummary" class="pose-summary"><div class="card headline"><span>현재 자세 상태</span><strong id="posePosture">기록 준비 중</strong><div class="pose-meta"><span id="poseEstimateNote">Camera 높이 기반 추정</span><span id="poseZoneSummary">Zone 대기 중</span></div></div><div class="card"><span>전문가 동작 유사도</span><strong id="poseScore">—</strong><small id="poseScoreNote">선택된 작업 구간을 전문가 기준과 비교합니다.</small></div><div class="card pose-action"><span>자세 개선 안내</span><strong id="poseAction">기록을 선택하세요.</strong></div><div class="card"><span>안내 반영 시 계산상 예상</span><strong id="posePredicted">—</strong><small>실제 재측정 결과가 아닌 좌표 보정 시뮬레이션입니다.</small></div></div>
 </template>
 <main class="workspace"><aside class="side">
+<label for="worker">작업자</label><select id="worker" class="select"></select>
 <label for="process">훈련 종류</label><select id="process" class="select"></select>
 <label for="mode">학습모드</label><select id="mode" class="select"></select>
 <label for="session">재생할 기록</label><select id="session" class="select"></select>
-<div class="controls"><button id="play" class="primary">재생</button><button id="restart">처음으로</button></div>
-<label for="timeline">진행 위치</label><input id="timeline" type="range" min="0" max="0" value="0">
-<label for="speed">재생 속도 · <span id="speedValue">1배</span></label><input id="speed" type="range" min="0.25" max="3" step="0.25" value="1"><div class="range-scale"><span>0.25배</span><span class="normal">1배</span><span>3배</span></div>
 <label for="pointSize">흰색 포인트 크기 · <span id="pointSizeValue">1.5 px</span></label><input id="pointSize" type="range" min="0.5" max="5" step="0.25" value="1.5">
 <label class="toggle"><input id="zoneSurface" type="checkbox" checked>Zone 영역 표시 (곡면·파임 반영)</label>
 <div id="status" class="status">데이터를 불러오는 중입니다.</div>
 <p class="help">좌클릭은 객체 중심 회전, 휠 클릭은 3D 평행이동, 휠은 확대·축소입니다. 우클릭을 누른 채 WASD/QE로 자유 이동하고 F로 현재 객체에 초점을 맞춥니다.</p>
 </aside>
-<section class="stage"><canvas id="canvas"></canvas><div class="overlay"><strong id="overlayTitle">학습모드</strong><span id="overlayFrame">프레임 준비 중</span><div id="viewerLegend" class="viewer-legend"><div><i class="dot" style="background:#f5f8ff"></i>전문가 전체 Ray Point 점군</div><div><i class="dot" style="background:#a78bfa"></i>Map·Zone별 관측 영역</div><div><i class="dot" style="background:var(--green)"></i>Zone별 전문가 표준 도장 패턴</div><div><i class="dot" style="background:#ff8a3d"></i>선택 기록의 페인트 누적 궤적</div><div><i class="dot" style="background:var(--cyan)"></i>전형기 반장의 머리·양손 실측 위치</div></div></div><div id="loading" class="loading"><div class="spinner"></div><span>전문가 기록을 불러오는 중입니다.</span></div></section>
+<section class="stage"><div class="stage-viewport"><canvas id="canvas"></canvas><div class="overlay"><strong id="overlayTitle">학습모드</strong><span id="overlayFrame">프레임 준비 중</span><div id="viewerLegend" class="viewer-legend"><div><i class="dot" style="background:#f5f8ff"></i>전문가 전체 Ray Point 점군</div><div><i class="dot" style="background:#a78bfa"></i>Map·Zone별 관측 영역</div><div><i class="dot" style="background:var(--green)"></i>Zone별 전문가 표준 도장 패턴</div><div><i class="dot" style="background:#ff8a3d"></i>선택 기록의 페인트 누적 궤적</div><div><i class="dot" style="background:var(--cyan)"></i>머리·양손 실측 위치와 추정 상체</div></div></div><div id="loading" class="loading"><div class="spinner"></div><span>전문가 기록을 불러오는 중입니다.</span></div></div><div class="playback-dock"><div class="playback-status"><strong id="playbackZone">현재 Zone 대기 중</strong><span id="playbackTime">0.00 / 0.00초</span></div><div id="zoneTimeline" class="zone-timeline" aria-label="Zone 진행 구간"></div><input id="timeline" type="range" min="0" max="0" value="0" aria-label="진행 위치"><div class="playback-controls"><button id="play" class="primary">재생</button><button id="restart">처음으로</button><div class="speed-control"><label for="speed">재생 속도</label><input id="speed" type="range" min="0.25" max="3" step="0.25" value="1"><b id="speedValue">1배</b></div></div></div></section>
 <aside class="side right"><div class="card"><span>현재 작업 Zone</span><strong id="currentZone">대기 중</strong></div><div class="card"><span>Zone 작업 순서</span><div id="zoneOrder" class="zone-order"></div></div><div id="zoneDetail" class="card"><span class="zone-detail-title">전체 Zone 통계</span><span>데이터를 불러오는 중입니다.</span></div><div class="card"><span>통계에 포함된 수행</span><strong id="sessionCount">-</strong></div><div class="card"><span>현재 기록 길이</span><strong id="duration">-</strong></div>
-<details class="card skeleton-card" open><summary>참고용 스켈레톤 · 별도 화면</summary><div class="skeleton-screen"><canvas id="skeletonCanvas" aria-label="자동 직립 참고용 스켈레톤"></canvas><span id="skeletonAngle" class="skeleton-angle">정면 · 0°</span></div><div class="skeleton-controls"><button id="skeletonTurnLeft" class="skeleton-turn" aria-label="스켈레톤 왼쪽 회전" title="왼쪽으로 15도 회전">↶</button><button id="skeletonReset" class="skeleton-reset">정면 복귀</button><button id="skeletonTurnRight" class="skeleton-turn" aria-label="스켈레톤 오른쪽 회전" title="오른쪽으로 15도 회전">↷</button></div><div class="skeleton-note">골반에서 머리 방향을 위로 자동 정렬합니다. 좌우 회전은 원본 축이 뒤집혀 보일 때 시점을 보정하는 용도이며, 중앙 화면의 정확한 머리·양손 실측 위치에는 영향을 주지 않습니다.</div></details>
+<details class="card skeleton-card" open><summary>머리·양손 기반 추정 상체 · 별도 화면</summary><div class="skeleton-screen"><canvas id="skeletonCanvas" aria-label="머리와 양손 실측 기반 추정 상체"></canvas><span id="skeletonAngle" class="skeleton-angle">정면 · 0°</span></div><div class="skeleton-controls"><button id="skeletonTurnLeft" class="skeleton-turn" aria-label="스켈레톤 왼쪽 회전" title="왼쪽으로 15도 회전">↶</button><button id="skeletonReset" class="skeleton-reset">정면 복귀</button><button id="skeletonTurnRight" class="skeleton-turn" aria-label="스켈레톤 오른쪽 회전" title="오른쪽으로 15도 회전">↷</button></div><div class="skeleton-note">머리(Camera)와 양손은 실측 위치이며 목·가슴·어깨만 화면 이해를 위해 추정합니다. 자세 상태는 Camera 높이 기반 추정값으로 채점에는 사용하지 않습니다.</div></details>
 <p class="help">Zone 면은 같은 Map·Zone의 UV 인접점만 작은 3차원 패치로 연결하므로 움푹 파인 부분과 곡면을 평면으로 뭉개지 않습니다. 데이터가 관측되지 않은 빈 공간은 임의로 채우지 않습니다.</p></aside>
 </main></div><script>
 const $=id=>document.getElementById(id); const canvas=$('canvas'),ctx=canvas.getContext('2d'),skeletonCanvas=$('skeletonCanvas'),skeletonCtx=skeletonCanvas.getContext('2d');
@@ -1067,11 +1128,13 @@ const ZONE_COLORS=[null,'#FF0000','#00FF00','#0000FF','#00FFFF','#FF00FF','#FFFF
 let catalog=null,data=null,index=0,playheadSeconds=0,playing=false,last=0,yaw=-0.55,pitch=0.1,zoom=175,panX=0,panY=0,viewCenter=null,drag=null,loadGeneration=0,skeletonYaw=0;
 async function json(url){const r=await fetch(url);if(!r.ok)throw new Error((await r.json()).detail||'데이터를 읽을 수 없습니다.');return r.json()}
 function option(value,text){const o=document.createElement('option');o.value=value;o.textContent=text;return o}
-function currentProcess(){return catalog.processes.find(p=>p.process===$('process').value)}
+function currentWorker(){return catalog.workers.find(worker=>worker.worker_id===$('worker').value)}
+function currentProcess(){return currentWorker().processes.find(p=>p.process===$('process').value)}
 function currentMode(){return currentProcess().modes.find(m=>String(m.mode_id)===$('mode').value)}
+function fillProcesses(){const worker=currentWorker();$('process').replaceChildren(...worker.processes.map(p=>option(p.process,p.label)));fillModes()}
 function fillModes(){const p=currentProcess();$('mode').replaceChildren(...p.modes.map(m=>option(m.mode_id,`학습모드 ${m.mode_id} · ${m.session_count}회`)));const four=p.modes.find(m=>m.mode_id===4);if(four)$('mode').value='4';fillSessions()}
-function fillSessions(){const m=currentMode();$('session').replaceChildren(option('representative',`전형기 대표 실측 모션 · ${m.representative_session_id}`),...m.sessions.map(s=>option(s,`전형기 · ${s}`)));loadMotion()}
-function zoneKey(mapNum,zoneId){return mapNum!=null&&zoneId!=null?`${mapNum}:${zoneId}`:null}
+function fillSessions(){const worker=currentWorker(),m=currentMode();$('session').replaceChildren(option('representative',`${worker.display_name} 대표 실측 모션 · ${m.representative_session_id}`),...m.sessions.map(s=>option(s,`${worker.display_name} · ${s}`)));loadMotion()}
+function zoneKey(mapNum,zoneId){return mapNum!=null&&Number(zoneId)>0?`${mapNum}:${zoneId}`:null}
 function metricRow(label,value){const row=document.createElement('span');row.className='zone-metric';const name=document.createElement('span'),metric=document.createElement('b');name.textContent=label;metric.textContent=value;row.append(name,metric);return row}
 function directionName(value){return({horizontal:'수평',vertical:'수직',diagonal:'대각',curved_irregular:'곡선·불규칙'})[value]||'자료 없음'}
 function expertDirectionMix(stats){const mix=stats.expert_direction_distribution||{};return`수평 ${((mix.horizontal||0)*100).toFixed(0)}% · 수직 ${((mix.vertical||0)*100).toFixed(0)}% · 대각 ${((mix.diagonal||0)*100).toFixed(0)}%`}
@@ -1090,7 +1153,7 @@ function updateZonePanel(frame){const key=zoneKey(frame.map_num,frame.zone_id);$
 function setLoading(active){$('loading').hidden=!active;canvas.setAttribute('aria-busy',active?'true':'false');for(const id of ['process','mode','session'])$(id).disabled=active}
 function averageCameraForward(payload){const vectors=(payload&&payload.frames||[]).map(frame=>frame.camera_forward).filter(vector=>Array.isArray(vector)&&vector.length===3);if(!vectors.length)return null;return unit(vectors.reduce((sum,vector)=>add(sum,vector),[0,0,0]),[0,0,1])}
 function resetViewToCamera(payload=data){const first=payload&&payload.frames&&payload.frames[0],points=payload&&payload.reference_surface&&payload.reference_surface.points||[],fallback=points.length?points.reduce((sum,item)=>add(sum,item.point),[0,0,0]).map(value=>value/points.length):[0,0,0],forward=averageCameraForward(payload);viewCenter=first&&((first.tracked||{}).head||(first.joints||{}).Head||(first.joints||{}).Pelvis)||fallback;panX=0;panY=0;if(forward){yaw=Math.atan2(forward[0],forward[2]);pitch=Math.asin(Math.max(-.95,Math.min(.95,forward[1])))}else{yaw=-.55;pitch=.1}zoom=175}
-async function loadMotion(){const generation=++loadGeneration;playing=false;last=0;displayedZoneKey=null;selectedDetailKey='all';zoneDetailMode='auto';referencePreview=false;$('play').textContent='재생';$('status').textContent='모션과 통계 범위를 계산하는 중입니다.';setLoading(true);try{const q=new URLSearchParams({process:$('process').value,mode_id:$('mode').value,session_id:$('session').value});const incoming=await json('/motion-viewer/api/motion?'+q);if(generation!==loadGeneration)return;data=incoming;index=0;playheadSeconds=0;resetViewToCamera(incoming);$('timeline').max=Math.max(0,data.frames.length-1);$('timeline').value=0;$('sessionCount').textContent=`${data.sampled_session_count}회`;$('duration').textContent=`${data.duration_seconds.toFixed(1)}초`;$('overlayTitle').textContent=`전형기 반장 · ${data.process_label} · 학습모드 ${data.mode_id}`;renderZoneOrder();$('status').textContent=`${data.selected_session_id} 준비 완료`;draw()}catch(e){if(generation!==loadGeneration)return;data=null;$('status').textContent=e.message;draw()}finally{if(generation===loadGeneration)setLoading(false)}}
+async function loadMotion(){const generation=++loadGeneration;playing=false;last=0;displayedZoneKey=null;selectedDetailKey='all';zoneDetailMode='auto';referencePreview=false;$('play').textContent='재생';$('status').textContent='모션과 통계 범위를 계산하는 중입니다.';setLoading(true);try{const q=new URLSearchParams({worker_id:$('worker').value,process:$('process').value,mode_id:$('mode').value,session_id:$('session').value});const incoming=await json('/motion-viewer/api/motion?'+q);if(generation!==loadGeneration)return;data=incoming;index=0;playheadSeconds=0;resetViewToCamera(incoming);$('timeline').max=Math.max(0,data.frames.length-1);$('timeline').value=0;$('sessionCount').textContent=`${data.sampled_session_count}회`;$('duration').textContent=`${data.duration_seconds.toFixed(1)}초`;$('overlayTitle').textContent=`${data.worker.display_name} · ${data.process_label} · 학습모드 ${data.mode_id}`;renderZoneOrder();dispatchEvent(new CustomEvent('motion-viewer-data',{detail:incoming}));$('status').textContent=`${data.selected_session_id} 준비 완료`;draw()}catch(e){if(generation!==loadGeneration)return;data=null;$('status').textContent=e.message;draw()}finally{if(generation===loadGeneration)setLoading(false)}}
 function resize(){const dpr=devicePixelRatio||1,rect=canvas.getBoundingClientRect(),skeletonRect=skeletonCanvas.getBoundingClientRect();canvas.width=Math.round(rect.width*dpr);canvas.height=Math.round(rect.height*dpr);ctx.setTransform(dpr,0,0,dpr,0,0);if(skeletonRect.width){skeletonCanvas.width=Math.round(skeletonRect.width*dpr);skeletonCanvas.height=Math.round(skeletonRect.height*dpr);skeletonCtx.setTransform(dpr,0,0,dpr,0,0)}draw()}
 function transform(point,center){let x=point[0]-center[0],y=point[1]-center[1],z=point[2]-center[2];let cy=Math.cos(yaw),sy=Math.sin(yaw),x1=x*cy-z*sy,z1=x*sy+z*cy;let cp=Math.cos(pitch),sp=Math.sin(pitch),y1=y*cp-z1*sp,z2=y*sp+z1*cp;return [x1,y1,z2]}
 function project(point,center,w,h){const [x,y,z]=transform(point,center),pers=4.5/(4.5+z);return [w/2+panX+x*zoom*pers,h/2+panY-y*zoom*pers,pers]}
@@ -1110,18 +1173,16 @@ function draw(){const rect=canvas.getBoundingClientRect(),w=rect.width,h=rect.he
 if(!data||!data.frames.length)return;const rendered=interpolatedFrame(playheadSeconds),frame=rendered.frame,sourceIndex=rendered.index,stats=data.statistics[sourceIndex],center=viewCenter||((frame.tracked||{}).head||(frame.joints||{}).Pelvis||[0,0,0]);
 if($('zoneSurface').checked)drawZoneSurfaces(data.zone_surfaces||[],center,w,h);referencePointCloud(data.reference_surface,center,w,h);drawZoneFlowGuides(data.zone_flow_guides,center,w,h);
 if(!referencePreview){let previous=null,previousSegment=null,paintCount=0;for(const sample of data.paint_trace){if(sample.t>playheadSeconds)break;if(previousSegment!==sample.segment)previous=null;const color=`hsla(${24+sample.progress*28},100%,62%,${.35+sample.progress*.5})`;point(sample.point,2.8,color,center,w,h);if(previous){line(previous,sample.point,color,5,center,w,h);if(paintCount%45===0)arrow(previous,sample.point,'rgba(255,232,190,.9)',center,w,h)}previous=sample.point;previousSegment=sample.segment;paintCount++}if(previous&&frame.spraying&&frame.ray_point){line(previous,frame.ray_point,'rgba(255,184,92,.78)',5,center,w,h);point(frame.ray_point,3.5,'rgba(255,205,125,.9)',center,w,h)}
-const tracked=frame.tracked||{};
-if(tracked.head&&tracked.left_hand)line(tracked.head,tracked.left_hand,'rgba(34,211,238,.65)',3,center,w,h);if(tracked.head&&tracked.right_hand)line(tracked.head,tracked.right_hand,'rgba(34,211,238,.65)',3,center,w,h);if(tracked.right_hand&&frame.ray_point&&frame.spraying)line(tracked.right_hand,frame.ray_point,'rgba(255,244,200,.45)',2,center,w,h);
-if(tracked.head)point(tracked.head,13,'#f5f8ff',center,w,h);if(tracked.right_hand)point(tracked.right_hand,7,'#22d3ee',center,w,h);if(tracked.left_hand)point(tracked.left_hand,6,'#8be9fd',center,w,h)}
+}
 drawSkeletonView(frame);
 if(!referencePreview)updateZonePanel(frame);
 $('overlayFrame').textContent=`${sourceIndex+1} / ${data.frames.length} · ${frame.t.toFixed(2)}초`;
 if(window.motionViewerPoseOverlay)window.motionViewerPoseOverlay.draw({frame,sourceIndex,playheadSeconds,durationSeconds:data.duration_seconds,center,w,h});
 }
 function tick(now){if(playing&&data&&data.frames.length){if(!last)last=now;const elapsed=Math.min(.1,(now-last)/1000)*Number($('speed').value);last=now;playheadSeconds+=elapsed;if(playheadSeconds>=data.duration_seconds){playheadSeconds=0;index=0}else index=interpolatedFrame(playheadSeconds).index;$('timeline').value=index;draw()}requestAnimationFrame(tick)}
-$('process').onchange=fillModes;$('mode').onchange=fillSessions;$('session').onchange=loadMotion;$('timeline').oninput=e=>{referencePreview=false;index=Number(e.target.value);playheadSeconds=data.frames[index].t;last=0;draw()};$('speed').oninput=updateSpeedLabel;$('pointSize').oninput=e=>{$('pointSizeValue').textContent=`${Number(e.target.value).toFixed(2).replace(/0+$/,'').replace(/\.$/,'')} px`;draw()};$('zoneSurface').onchange=draw;$('skeletonTurnLeft').onclick=()=>setSkeletonYaw(skeletonYaw-15);$('skeletonTurnRight').onclick=()=>setSkeletonYaw(skeletonYaw+15);$('skeletonReset').onclick=()=>setSkeletonYaw(0);document.querySelector('.skeleton-card').ontoggle=()=>{if(document.querySelector('.skeleton-card').open)resize()};$('play').onclick=()=>{if(playing){playing=false;last=0;$('play').textContent='재생'}else startPlayback()};$('restart').onclick=()=>{playing=false;referencePreview=false;index=0;playheadSeconds=0;last=0;$('play').textContent='재생';$('timeline').value=0;draw()};
+$('worker').onchange=fillProcesses;$('process').onchange=fillModes;$('mode').onchange=fillSessions;$('session').onchange=loadMotion;$('timeline').oninput=e=>{referencePreview=false;index=Number(e.target.value);playheadSeconds=data.frames[index].t;last=0;draw()};$('speed').oninput=updateSpeedLabel;$('pointSize').oninput=e=>{$('pointSizeValue').textContent=`${Number(e.target.value).toFixed(2).replace(/0+$/,'').replace(/\.$/,'')} px`;draw()};$('zoneSurface').onchange=draw;$('skeletonTurnLeft').onclick=()=>setSkeletonYaw(skeletonYaw-15);$('skeletonTurnRight').onclick=()=>setSkeletonYaw(skeletonYaw+15);$('skeletonReset').onclick=()=>setSkeletonYaw(0);document.querySelector('.skeleton-card').ontoggle=()=>{if(document.querySelector('.skeleton-card').open)resize()};$('play').onclick=()=>{if(playing){playing=false;last=0;$('play').textContent='재생'}else startPlayback()};$('restart').onclick=()=>{playing=false;referencePreview=false;index=0;playheadSeconds=0;last=0;$('play').textContent='재생';$('timeline').value=0;draw()};
 canvas.onpointerdown=e=>{if(e.button!==0&&e.button!==1)return;e.preventDefault();canvas.setPointerCapture(e.pointerId);drag=e.button===1?{mode:'pan',x:e.clientX,y:e.clientY,panX,panY}:{mode:'rotate',x:e.clientX,y:e.clientY,yaw,pitch};canvas.style.cursor=drag.mode==='pan'?'move':'grabbing'};canvas.onpointermove=e=>{if(!drag)return;if(drag.mode==='pan'){panX=drag.panX+e.clientX-drag.x;panY=drag.panY+e.clientY-drag.y}else{yaw=drag.yaw+(e.clientX-drag.x)*.01;pitch=Math.max(-1.2,Math.min(1.2,drag.pitch+(e.clientY-drag.y)*.01))}draw()};canvas.onpointerup=e=>{if(canvas.hasPointerCapture(e.pointerId))canvas.releasePointerCapture(e.pointerId);drag=null;canvas.style.cursor='grab'};canvas.onpointercancel=()=>{drag=null;canvas.style.cursor='grab'};canvas.onauxclick=e=>e.preventDefault();canvas.onwheel=e=>{e.preventDefault();zoom=Math.max(70,Math.min(420,zoom*(e.deltaY>0?.9:1.1)));draw()};
-addEventListener('resize',resize);(async()=>{try{catalog=await json('/motion-viewer/api/catalog');$('process').replaceChildren(...catalog.processes.map(p=>option(p.process,p.label)));fillModes();resize();requestAnimationFrame(tick)}catch(e){$('status').textContent=e.message}})();
+addEventListener('resize',resize);(async()=>{try{catalog=await json('/motion-viewer/api/catalog');$('worker').replaceChildren(...catalog.workers.map(worker=>option(worker.worker_id,`${worker.display_name}${worker.role==='expert'?' · 전문가 기준':''}`)));fillProcesses();resize();requestAnimationFrame(tick)}catch(e){$('status').textContent=e.message}})();
 </script><script defer src="/motion-viewer/assets/motion_viewer_camera.js"></script><script defer src="/motion-viewer/assets/motion_viewer_pose.js"></script></body></html>"""
 
 
@@ -1167,25 +1228,40 @@ def create_motion_viewer_router(
 
     @router.get("/motion-viewer/api/catalog", include_in_schema=False)
     def motion_catalog() -> dict[str, Any]:
-        processes: list[dict[str, Any]] = []
-        for process, label in _PROCESS_LABELS.items():
-            modes: list[dict[str, Any]] = []
-            for mode_id in range(1, 11):
-                try:
-                    profile = _read_profile(root, process, mode_id)
-                    representative = _representative_session(profile)
-                except HTTPException:
-                    continue
-                sessions = sorted(str(item.get("session_id")) for item in profile["sessions"] if item.get("session_id"))
-                modes.append({
-                    "mode_id": mode_id,
-                    "session_count": len(sessions),
-                    "representative_session_id": representative,
-                    "sessions": sessions,
+        workers: list[dict[str, Any]] = []
+        for worker in _worker_sources(root):
+            processes: list[dict[str, Any]] = []
+            worker_root = Path(worker["root"])
+            for process, label in _PROCESS_LABELS.items():
+                modes: list[dict[str, Any]] = []
+                for mode_id in range(1, 11):
+                    try:
+                        profile = _read_profile(worker_root, process, mode_id)
+                        representative = _representative_session(profile)
+                    except HTTPException:
+                        continue
+                    sessions = sorted(
+                        str(item.get("session_id"))
+                        for item in profile["sessions"]
+                        if item.get("session_id")
+                    )
+                    modes.append({
+                        "mode_id": mode_id,
+                        "session_count": len(sessions),
+                        "representative_session_id": representative,
+                        "sessions": sessions,
+                    })
+                if modes:
+                    processes.append({"process": process, "label": label, "modes": modes})
+            if processes:
+                workers.append({
+                    "worker_id": worker["worker_id"],
+                    "display_name": worker["display_name"],
+                    "role": worker["role"],
+                    "processes": processes,
                 })
-            if modes:
-                processes.append({"process": process, "label": label, "modes": modes})
-        return {"processes": processes}
+        legacy_processes = workers[0]["processes"] if workers else []
+        return {"workers": workers, "processes": legacy_processes}
 
     @router.get("/motion-viewer/api/evaluations", include_in_schema=False)
     def evaluation_catalog() -> dict[str, Any]:
@@ -1223,14 +1299,17 @@ def create_motion_viewer_router(
 
     @router.get("/motion-viewer/api/motion", include_in_schema=False)
     def motion_data(
+        worker_id: str = Query(default=_EXPERT_WORKER_ID, pattern="^[A-Za-z0-9_-]+$"),
         process: str = Query(pattern="^(spray|blasting)$"),
         mode_id: int = Query(ge=1, le=10),
         session_id: str = Query(min_length=1, max_length=100),
     ) -> dict[str, Any]:
-        profile = _read_profile(root, process, mode_id)
+        worker = _worker_source(root, worker_id)
+        worker_root = Path(worker["root"])
+        profile = _read_profile(worker_root, process, mode_id)
         representative = _representative_session(profile)
         selected = representative if session_id == "representative" else session_id
-        selected_path = _session_path(root, process, mode_id, profile, selected)
+        selected_path = _session_path(worker_root, process, mode_id, profile, selected)
         selected_frames = _canonicalize_zone_items(
             _frames(selected_path, frame_count), process=process, mode_id=mode_id
         )
@@ -1243,7 +1322,7 @@ def create_motion_viewer_router(
             if not current_id:
                 continue
             try:
-                current_path = _session_path(root, process, mode_id, profile, current_id)
+                current_path = _session_path(worker_root, process, mode_id, profile, current_id)
                 sampled = _canonicalize_zone_items(
                     _frames(current_path, frame_count), process=process, mode_id=mode_id
                 )
@@ -1289,6 +1368,22 @@ def create_motion_viewer_router(
         }
         return {
             "expert_name": _EXPERT_NAME,
+            "worker": {
+                "worker_id": worker["worker_id"],
+                "display_name": worker["display_name"],
+                "role": worker["role"],
+            },
+            "pose_evaluation": {
+                "status": "reference" if worker["role"] == "expert" else "pending",
+                "message": (
+                    "전문가 기준 데이터입니다. 자기 자신에 대한 유사도 평가는 표시하지 않습니다."
+                    if worker["role"] == "expert"
+                    else "동일 공정·모드·Zone의 전문가 기준과 비교할 준비가 되었습니다."
+                ),
+                "similarity_score": None,
+                "predicted_score": None,
+                "corrections": [],
+            },
             "process": process,
             "process_label": _PROCESS_LABELS[process],
             "mode_id": mode_id,
