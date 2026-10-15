@@ -11,7 +11,7 @@ import threading
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 from PIL import Image, UnidentifiedImageError
@@ -20,6 +20,11 @@ from trainer.demo_api.telemetry_contracts import AnalyzeSequenceRequest, Coating
 from trainer.zone_reference import ZoneReferenceCatalog
 
 _MAX_SESSIONS = 16
+# 구역 판정 기준. 시퀀스 안내(`evaluate`)와 세션 리포트(`judge_zones`)가 같은 값을 쓴다 — 갈리면 훈련 중
+# "충족"이던 구역이 리포트에서 "부족"이 된다.
+_OVERPAINT_RISK_PERCENT = 25.0
+_COMPLETE_PERCENT = 90.0
+_COVERAGE_PERCENT = 85.0
 
 
 @dataclass(frozen=True)
@@ -28,6 +33,99 @@ class _DecodedCrop:
     y_indices: np.ndarray
     thickness_um: np.ndarray
     valid: np.ndarray
+
+
+@dataclass(frozen=True)
+class ZoneCoverage:
+    """전문가 셀(q1·q3)에 대고 잰 한 구역의 도막. 셀 수는 판정에 쓴 셀만이다."""
+
+    cells: int
+    below: int  # q1 미달 셀
+    above: int  # 과도장 셀
+    completion_percent: float
+    coverage_percent: float
+    overpaint_percent: float
+    mean_um: float
+
+    @property
+    def status(self) -> Literal["overpaint_risk", "complete", "needs_more"]:
+        if self.overpaint_percent >= _OVERPAINT_RISK_PERCENT:
+            return "overpaint_risk"
+        if self.completion_percent >= _COMPLETE_PERCENT and self.coverage_percent >= _COVERAGE_PERCENT:
+            return "complete"
+        return "needs_more"
+
+
+@dataclass(frozen=True)
+class ZoneJudgment:
+    map_num: int
+    zone_id: str
+    coverage: ZoneCoverage
+
+
+def measure_zone(
+    surface: np.ndarray,
+    target_cells: dict[str, Any],
+    *,
+    atlas_width: int,
+    atlas_height: int,
+    grid_size: int,
+    zone_mask: np.ndarray | None,
+) -> ZoneCoverage | None:
+    """좌하단 원점 두께 표면을 전문가 셀에 대고 잰다. 잴 셀이 하나도 없으면 None."""
+    completion_values: list[float] = []
+    actual_values: list[float] = []
+    covered = 0
+    overpainted = 0
+    for key, target in target_cells.items():
+        if not isinstance(target, dict):
+            continue
+        try:
+            q1 = float(target["q1_um"])
+            q3 = float(target["q3_um"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not math.isfinite(q1) or q1 <= 0 or not math.isfinite(q3):
+            continue
+        try:
+            gx_text, gy_text = key.split(":", 1)
+            gx, gy = int(gx_text), int(gy_text)
+        except (AttributeError, TypeError, ValueError):
+            continue
+        left = math.floor(gx * atlas_width / grid_size)
+        right = math.ceil((gx + 1) * atlas_width / grid_size)
+        bottom = math.floor(gy * atlas_height / grid_size)
+        top = math.ceil((gy + 1) * atlas_height / grid_size)
+        if left >= right or bottom >= top:
+            continue
+        actual_region = surface[bottom:top, left:right]
+        if zone_mask is not None:
+            mask_region = zone_mask[bottom:top, left:right]
+            if not np.any(mask_region):
+                continue
+            actual = float(actual_region[mask_region].mean())
+        else:
+            actual = float(actual_region.mean())
+        completion_values.append(min(actual / q1, 1.0))
+        actual_values.append(actual)
+        # RG16 at scale_um=20000 has about 0.31 um quantization. Allow
+        # a 0.5 um boundary tolerance so an encoded 100 um target does
+        # not become 99.96 um and incorrectly miss coverage.
+        covered += int(actual >= q1 - 0.5)
+        upper = q3 + max(q3 - q1, q3 * 0.1, 5.0)
+        overpainted += int(actual > upper)
+    if not completion_values:
+        return None
+    total = len(completion_values)
+    return ZoneCoverage(
+        cells=total,
+        below=total - covered,
+        above=overpainted,
+        completion_percent=round(sum(completion_values) / total * 100.0, 1),
+        coverage_percent=round(covered / total * 100.0, 1),
+        overpaint_percent=round(overpainted / total * 100.0, 1),
+        mean_um=float(np.mean(actual_values)),
+    )
 
 
 class CoatingProgressEngine:
@@ -189,6 +287,104 @@ class CoatingProgressEngine:
         valid &= (y_indices[:, np.newaxis] >= 0) & (y_indices[:, np.newaxis] < atlas_height)
         return _DecodedCrop(x_indices, y_indices, thickness, valid), None
 
+    def _atlas_zone_mask(
+        self,
+        coating: dict[str, Any],
+        *,
+        scenario_id: str,
+        map_num: int,
+        zone_id: str,
+        atlas_width: int,
+        atlas_height: int,
+    ) -> tuple[np.ndarray | None, str | None]:
+        """TSB 라벨맵 기준 프로필이면 그 구역 마스크(좌하단 원점). 옛 프로필은 마스크 없이 (None, None)."""
+        if coating.get("mask_source") != "tsb_color_label_map":
+            return None, None
+        model_key = (
+            self._zone_catalog.resolve_model(scenario_id)
+            if self._zone_catalog is not None
+            else None
+        )
+        mask_image = (
+            self._zone_catalog.zone_mask(
+                model_key,
+                map_num,
+                zone_id,
+                size=(atlas_width, atlas_height),
+            )
+            if self._zone_catalog is not None and model_key is not None
+            else None
+        )
+        if mask_image is None:
+            return None, "zone_reference_unavailable"
+        # Runtime atlas rows use bottom-left coordinates; vendor label
+        # maps and height-map PNG files store the top row as v=1.
+        return np.flipud(np.asarray(mask_image, dtype=np.uint8) > 0), None
+
+    def judge_zones(
+        self,
+        *,
+        scenario_id: str,
+        process: str,
+        mode_id: int,
+        surfaces: dict[int, np.ndarray],
+    ) -> tuple[list[ZoneJudgment], str | None]:
+        """세션 끝 두께(면 번호 → 좌하단 원점 표면)를 프로필의 모든 구역에 대고 판정한다.
+
+        표면이 없는 면의 구역은 판정하지 않는다 — 높이맵이 한 면만 오면 다른 면을 칠했는지 모른다.
+        """
+        with self._guard:
+            profile, reason = self._load_profile(process, mode_id)
+        if profile is None:
+            return [], reason or "reference_unavailable"
+        judgments: list[ZoneJudgment] = []
+        for key, zone in profile["aggregate"]["zones"].items():
+            if not isinstance(zone, dict):
+                continue
+            coating = zone.get("coating")
+            if not isinstance(coating, dict) or coating.get("analysis_status") != "available":
+                continue
+            map_num = int(zone.get("map_num", 1))
+            zone_id = str(zone.get("zone_id") or str(key).partition(":")[2])
+            atlas_width = int(coating.get("atlas_width", 0))
+            atlas_height = int(coating.get("atlas_height", 0))
+            grid_size = int(coating.get("grid_size", 0))
+            target_cells = coating.get("cells")
+            surface = surfaces.get(map_num)
+            if surface is None or min(atlas_width, atlas_height, grid_size) <= 0 or not isinstance(target_cells, dict):
+                continue
+            if surface.shape != (atlas_height, atlas_width):
+                # TSB 안내: 해상도가 다르면 최근접으로 맞춘다.
+                surface = np.asarray(
+                    Image.fromarray(surface.astype(np.float32)).resize(
+                        (atlas_width, atlas_height), Image.Resampling.NEAREST
+                    )
+                )
+            zone_mask, mask_reason = self._atlas_zone_mask(
+                coating,
+                scenario_id=scenario_id,
+                map_num=map_num,
+                zone_id=zone_id,
+                atlas_width=atlas_width,
+                atlas_height=atlas_height,
+            )
+            if mask_reason is not None:
+                continue
+            coverage = measure_zone(
+                surface,
+                target_cells,
+                atlas_width=atlas_width,
+                atlas_height=atlas_height,
+                grid_size=grid_size,
+                zone_mask=zone_mask,
+            )
+            if coverage is not None:
+                judgments.append(ZoneJudgment(map_num, zone_id, coverage))
+        judgments.sort(
+            key=lambda item: (item.map_num, int(item.zone_id) if item.zone_id.isdigit() else 1_000_000, item.zone_id)
+        )
+        return judgments, (None if judgments else "coating_reference_invalid")
+
     @staticmethod
     def _next_zone(profile: dict[str, Any], map_num: int, zone_id: str) -> str | None:
         for candidate in profile["aggregate"].get("macro_orders", []):
@@ -242,28 +438,16 @@ class CoatingProgressEngine:
             target_cells = coating.get("cells")
             if min(atlas_width, atlas_height, grid_size) <= 0 or not isinstance(target_cells, dict):
                 return self._unavailable(request.zone_id, "coating_reference_invalid")
-            zone_mask: np.ndarray | None = None
-            if coating.get("mask_source") == "tsb_color_label_map":
-                model_key = (
-                    self._zone_catalog.resolve_model(request.scenario_id)
-                    if self._zone_catalog is not None
-                    else None
-                )
-                mask_image = (
-                    self._zone_catalog.zone_mask(
-                        model_key,
-                        map_num,
-                        request.zone_id,
-                        size=(atlas_width, atlas_height),
-                    )
-                    if self._zone_catalog is not None and model_key is not None
-                    else None
-                )
-                if mask_image is None:
-                    return self._unavailable(request.zone_id, "zone_reference_unavailable")
-                # Runtime atlas rows use bottom-left coordinates; vendor label
-                # maps and height-map PNG files store the top row as v=1.
-                zone_mask = np.flipud(np.asarray(mask_image, dtype=np.uint8) > 0)
+            zone_mask, mask_reason = self._atlas_zone_mask(
+                coating,
+                scenario_id=request.scenario_id,
+                map_num=map_num,
+                zone_id=request.zone_id,
+                atlas_width=atlas_width,
+                atlas_height=atlas_height,
+            )
+            if mask_reason is not None:
+                return self._unavailable(request.zone_id, mask_reason)
 
             decoded: list[_DecodedCrop] = []
             matching = 0
@@ -299,66 +483,32 @@ class CoatingProgressEngine:
                         rows, columns
                     ]
 
-            completion_values: list[float] = []
-            covered = 0
-            overpainted = 0
-            for key, target in target_cells.items():
-                if not isinstance(target, dict):
-                    continue
-                try:
-                    q1 = float(target["q1_um"])
-                    q3 = float(target["q3_um"])
-                except (KeyError, TypeError, ValueError):
-                    continue
-                if not math.isfinite(q1) or q1 <= 0 or not math.isfinite(q3):
-                    continue
-                try:
-                    gx_text, gy_text = key.split(":", 1)
-                    gx, gy = int(gx_text), int(gy_text)
-                except (AttributeError, TypeError, ValueError):
-                    continue
-                left = math.floor(gx * atlas_width / grid_size)
-                right = math.ceil((gx + 1) * atlas_width / grid_size)
-                bottom = math.floor(gy * atlas_height / grid_size)
-                top = math.ceil((gy + 1) * atlas_height / grid_size)
-                if left >= right or bottom >= top:
-                    continue
-                actual_region = surface[bottom:top, left:right]
-                if zone_mask is not None:
-                    mask_region = zone_mask[bottom:top, left:right]
-                    if not np.any(mask_region):
-                        continue
-                    actual = float(actual_region[mask_region].mean())
-                else:
-                    actual = float(actual_region.mean())
-                completion_values.append(min(actual / q1, 1.0))
-                # RG16 at scale_um=20000 has about 0.31 um quantization. Allow
-                # a 0.5 um boundary tolerance so an encoded 100 um target does
-                # not become 99.96 um and incorrectly miss coverage.
-                covered += int(actual >= q1 - 0.5)
-                upper = q3 + max(q3 - q1, q3 * 0.1, 5.0)
-                overpainted += int(actual > upper)
-            if not completion_values:
+            coverage = measure_zone(
+                surface,
+                target_cells,
+                atlas_width=atlas_width,
+                atlas_height=atlas_height,
+                grid_size=grid_size,
+                zone_mask=zone_mask,
+            )
+            if coverage is None:
                 return self._unavailable(request.zone_id, "coating_reference_invalid")
 
-            total = len(completion_values)
-            completion_percent = round(sum(completion_values) / total * 100.0, 1)
-            coverage_percent = round(covered / total * 100.0, 1)
-            overpaint_percent = round(overpainted / total * 100.0, 1)
-            if overpaint_percent >= 25.0:
-                status = "overpaint_risk"
+            completion_percent = coverage.completion_percent
+            coverage_percent = coverage.coverage_percent
+            overpaint_percent = coverage.overpaint_percent
+            status = coverage.status
+            if status == "overpaint_risk":
                 recommendation = "stop_current_zone"
                 next_zone_id = None
                 message = f"Zone {request.zone_id}의 과도장 위험이 높습니다. 현재 Zone 분사를 중단하세요."
-            elif completion_percent >= 90.0 and coverage_percent >= 85.0:
-                status = "complete"
+            elif status == "complete":
                 recommendation = "move_next_zone"
                 next_zone_id = self._next_zone(profile, map_num, request.zone_id)
                 message = f"Zone {request.zone_id}의 전문가 기준 도막이 충족되었습니다."
                 if next_zone_id is not None:
                     message += f" 다음 Zone {next_zone_id}로 이동하세요."
             else:
-                status = "needs_more"
                 recommendation = "continue_current_zone"
                 next_zone_id = None
                 message = f"Zone {request.zone_id}의 도막이 아직 부족합니다. 현재 Zone을 추가 도장하세요."

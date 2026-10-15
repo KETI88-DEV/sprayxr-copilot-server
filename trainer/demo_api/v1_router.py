@@ -41,7 +41,9 @@ from trainer.demo_api.v1_contracts import (
     UserProfile,
     report_example,
 )
+from trainer.demo_api.coating_progress import CoatingProgressEngine
 from trainer.demo_api.session_analysis import analyze_session
+from trainer.demo_api.session_coating import SessionCoating, analyze_session_coating
 from trainer.demo_api.sequence_store import SequenceStore
 from trainer.demo_api.sequence_analysis import SequenceAnalysisEngine
 from trainer.demo_api.v1_store import V1Store
@@ -179,6 +181,8 @@ def _report(row: Any) -> ReportDetail:
             detail.report.pose_report = PoseReport.model_validate(analysis["pose_report"])
         if isinstance(analysis.get("sequence_report"), dict):
             detail.report.sequence_report = SequenceReport.model_validate(analysis["sequence_report"])
+        if isinstance(analysis.get("coating_report"), dict):
+            detail.report.coating_report = CoatingReport.model_validate(analysis["coating_report"])
         if isinstance(analysis.get("llm_briefing"), str):
             detail.report.llm_briefing = analysis["llm_briefing"]
     if isinstance(analysis, dict):
@@ -189,7 +193,12 @@ def _report(row: Any) -> ReportDetail:
     return detail
 
 
-def _briefing(*, pose_report: dict[str, Any], sequence_report: dict[str, Any] | None) -> str | None:
+def _briefing(
+    *,
+    pose_report: dict[str, Any],
+    sequence_report: dict[str, Any] | None,
+    coating_report: dict[str, Any] | None = None,
+) -> str | None:
     """Create a fast, deterministic narrative from available structured evidence."""
     parts: list[str] = []
     if sequence_report and sequence_report.get("analysis_status") == "available":
@@ -208,7 +217,13 @@ def _briefing(*, pose_report: dict[str, Any], sequence_report: dict[str, Any] | 
             parts.append(str(pose_report["guideline"]))
     if not parts:
         return None
-    parts.append("도막 평가는 외부 도막 분석 엔진 연동 후 같은 리포트의 coating_report에 추가됩니다.")
+    if coating_report and coating_report.get("analysis_status") == "available" and coating_report.get("guideline"):
+        parts.append(str(coating_report["guideline"]))
+    elif coating_report and coating_report.get("guideline"):
+        # 분석은 돌았지만 판정하지 못했다 — 그 사유를 그대로 말한다.
+        parts.append(f"도막은 분석하지 못했습니다: {coating_report['guideline']}")
+    else:
+        parts.append("도막 평가는 외부 도막 분석 엔진 연동 후 같은 리포트의 coating_report에 추가됩니다.")
     return " ".join(parts)
 
 
@@ -220,6 +235,7 @@ def create_v1_router(
     mcp_base_url: str | None = None,
     transport: httpx.BaseTransport | None = None,
     sequence_engine: SequenceAnalysisEngine | None = None,
+    coating_engine: CoatingProgressEngine | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix=_V1)
     state = store if store is not None else V1Store()
@@ -241,8 +257,35 @@ def create_v1_router(
         )
         return state.get_completion(report_id)
 
-    def _analyze(report_id: str, *, session_id: str, user_id: str, scenario_id: str, csv_bytes: bytes) -> None:
-        """세션 종합 자세 분석(`session_analysis`). 응답을 보낸 뒤 스레드에서 돈다 — 시퀀스마다 엔진을 부른다."""
+    def _coating(
+        bodies: list[dict[str, Any]], *, scenario_id: str, height_map: bytes | None, height_map_name: str | None
+    ) -> SessionCoating | None:
+        """세션 끝 도막(`session_coating`). 여기서 터져도 자세·순서 결과는 남긴다 — 리포트를 failed로 만들지 않는다."""
+        if coating_engine is None:
+            return None
+        try:
+            return analyze_session_coating(
+                scenario_id=scenario_id, bodies=bodies, engine=coating_engine,
+                height_map=height_map, height_map_name=height_map_name,
+            )
+        except Exception:  # noqa: BLE001 - 도막만 unavailable 로 낸다.
+            logger.exception("session coating analysis failed scenario=%s", scenario_id)
+            return SessionCoating({
+                "analysis_status": "unavailable", "reason_code": "coating_analysis_failed",
+                "guideline": "도막 분석 중 오류가 나서 결과를 내지 못했습니다.",
+            })
+
+    def _analyze(
+        report_id: str,
+        *,
+        session_id: str,
+        user_id: str,
+        scenario_id: str,
+        csv_bytes: bytes,
+        height_map: bytes | None = None,
+        height_map_name: str | None = None,
+    ) -> None:
+        """세션 종합 분석 — 자세(`session_analysis`)·순서·도막(`session_coating`). 응답을 보낸 뒤 스레드에서 돈다."""
         try:
             result = analyze_session(
                 session_id=session_id, user_id=user_id, scenario_id=scenario_id, csv_bytes=csv_bytes,
@@ -254,13 +297,23 @@ def create_v1_router(
                 SequenceReport(analysis_status="unavailable", reason_code=_FLOW_MISSING, guideline=_ENGINE_MISSING).model_dump(mode="json")
             )
             pose_report = result.pose_report()
+            coating = _coating(
+                result.source_bodies, scenario_id=scenario_id,
+                height_map=height_map, height_map_name=height_map_name,
+            )
+            coating_report = coating.report if coating is not None else None
             state.finish_completion(
                 report_id, status="complete",
                 analysis={
                     "generated_at": _now(),
                     "pose_report": pose_report,
                     "sequence_report": sequence_report,
-                    "llm_briefing": _briefing(pose_report=pose_report, sequence_report=sequence_report),
+                    **({"coating_report": coating_report} if coating_report is not None else {}),
+                    # 질의(pose_recomm)가 구역 답에 쓰는 구역별 도막 판정. 리포트 본문에는 싣지 않는다.
+                    "coating_zones": coating.zones if coating is not None else [],
+                    "llm_briefing": _briefing(
+                        pose_report=pose_report, sequence_report=sequence_report, coating_report=coating_report
+                    ),
                     "counts": result.counts,
                     "sequences": result.sequences,
                 },
@@ -362,7 +415,9 @@ def create_v1_router(
         """
         csv_raw = await telemetry_csv.read()
         csv_bytes = len(csv_raw)
-        image_bytes = len(await height_map_image.read()) if height_map_image is not None else None
+        image_raw = await height_map_image.read() if height_map_image is not None else None
+        image_bytes = len(image_raw) if image_raw is not None else None
+        image_name = height_map_image.filename if height_map_image is not None else None
         completion = await to_thread.run_sync(
             lambda: state.create_completion(
                 session_id=session_id,
@@ -382,6 +437,7 @@ def create_v1_router(
             lambda: _analyze(
                 completion.report_id, session_id=session_id, user_id=user_id,
                 scenario_id=scenario_id, csv_bytes=csv_raw,
+                height_map=image_raw, height_map_name=image_name,
             ),
         )
         return _ok(

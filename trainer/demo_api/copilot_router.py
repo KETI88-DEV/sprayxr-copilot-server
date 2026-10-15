@@ -39,8 +39,9 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from trainer.demo_api.copilot_contracts import CopilotQueryData, CopilotQueryRequest, CopilotResponse
-from trainer.demo_api.pose_query import score_pose
+from trainer.demo_api.pose_query import answer_zone_question, asks_about_zones, score_pose, zone_unavailable
 from trainer.demo_api.sequence_store import SequenceStore
+from trainer.demo_api.v1_store import V1Store
 from trainer.scripts.generation_slot import GENERATION_SLOT
 from trainer.scripts.live_response_contract import (
     FAILED_REPAIR_PATHS,
@@ -141,9 +142,31 @@ async def execute_copilot_query(
     mcp_base_url: str,
     transport: object | None = None,
     started: float | None = None,
+    reports: V1Store | None = None,
 ) -> JSONResponse:
     """Execute one normalized query for both text and voice transports."""
     request_started = time.monotonic() if started is None else started
+
+    if query.task_type == "pose_recomm" and reports is not None and asks_about_zones(query.prompt, query.context):
+        # 구역 질문("가장 문제 있는 구역이 어디야?")은 complete 가 남긴 구역별 결과로 답한다(pose_query 참고).
+        session_id = query.session_id
+        zone = (
+            answer_zone_question(
+                await to_thread.run_sync(lambda: reports.latest_complete_analysis(session_id)),
+                context=query.context,
+            )
+            if session_id
+            else zone_unavailable("session_id_missing")
+        )
+        logger.info(
+            "copilot pose_recomm zone request_id=%s zone=%s status=%s reason=%s",
+            query.request_id, zone.context.get("zone_id"), zone.analysis_status, zone.reason_code,
+        )
+        return _success_response(
+            query, request_started, answer=zone.answer, retrieval_used=False, citations=[],
+            pose_context=zone.context,
+            context_status="available" if zone.analysis_status == "available" else "not_available",
+        )
 
     if query.task_type == "pose_recomm":
         pose = await to_thread.run_sync(
@@ -229,8 +252,12 @@ def create_copilot_router(
     store: SequenceStore | None = None,
     mcp_base_url: str | None = None,
     transport: object | None = None,
+    reports: V1Store | None = None,
 ) -> APIRouter:
-    """``pipeline_provider`` returns the live pipeline singleton; ``None`` when live mode is off."""
+    """``pipeline_provider`` returns the live pipeline singleton; ``None`` when live mode is off.
+
+    ``reports`` is the complete-report store; without it zone questions fall back to scoring one sequence.
+    """
     router = APIRouter()
     sequences = store if store is not None else SequenceStore()
     mcp_base = mcp_base_url or os.environ.get("MCP_BASE_URL", "http://localhost:8100")
@@ -250,6 +277,7 @@ def create_copilot_router(
             sequences=sequences,
             mcp_base_url=mcp_base,
             transport=transport,
+            reports=reports,
         )
 
     return router

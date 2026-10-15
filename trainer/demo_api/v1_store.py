@@ -235,6 +235,21 @@ class V1Store:
             return None
         return CompletionRow(row[0], row[1], row[2], row[3], json.loads(row[4]))
 
+    def latest_complete_analysis(self, session_id: str) -> tuple[str, dict[str, Any]] | None:
+        """세션의 가장 최근 `complete` 리포트의 (report_id, analysis). 없으면 None."""
+        import json
+
+        with self._guard:
+            row = self._conn.execute(
+                "SELECT report_id, payload FROM completions WHERE session_id = ? AND report_status = 'complete'"
+                " ORDER BY requested_at DESC, rowid DESC LIMIT 1",
+                (session_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        analysis = json.loads(row[1]).get("analysis")
+        return (row[0], analysis) if isinstance(analysis, dict) else None
+
     def close(self) -> None:
         with self._guard:
             self._conn.close()

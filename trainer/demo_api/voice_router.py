@@ -22,6 +22,7 @@ from trainer.demo_api.copilot_router import (
     execute_copilot_query,
 )
 from trainer.demo_api.sequence_store import SequenceStore
+from trainer.demo_api.v1_store import V1Store
 from trainer.demo_api.speech_to_text import (
     InvalidAudioError,
     SpeechToText,
@@ -124,6 +125,7 @@ def create_voice_router(
     store: SequenceStore | None = None,
     mcp_base_url: str | None = None,
     transport: object | None = None,
+    reports: V1Store | None = None,
 ) -> APIRouter:
     """Create the independent WAV-to-query endpoint used by VR clients."""
     router = APIRouter()
@@ -187,6 +189,7 @@ def create_voice_router(
             mcp_base_url=mcp_base,
             transport=transport,
             started=started,
+            reports=reports,
         )
         if response.status_code != 200:
             return response

@@ -269,6 +269,7 @@ def create_app(
             (lambda: chat_service_mod._get_or_build_pipeline()) if live else None,
             mcp_base_url=mcp_base_url,
             store=sequence_store,
+            reports=v1_store,
         )
     )
     # 명세서 15개 중 12개: 세션·사용자·리포트·이상 알림 SSE·테스트.
@@ -282,6 +283,7 @@ def create_app(
             stt_provider=lambda: speech_to_text,
             mcp_base_url=mcp_base_url,
             store=sequence_store,
+            reports=v1_store,
         )
     )
     app.include_router(create_v1_router(
@@ -289,6 +291,7 @@ def create_app(
         broadcaster=anomaly_broadcaster,
         sequences=sequence_store,
         sequence_engine=sequence_analysis,
+        coating_engine=coating_progress,
         mcp_base_url=mcp_base_url,
     ))
     # POST /api/v1/telemetry/sequence: 시퀀스를 데이터베이스에 올린다. 자세 채점은
