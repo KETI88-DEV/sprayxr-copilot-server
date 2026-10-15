@@ -714,6 +714,8 @@ def test_motion_endpoint_scores_selected_record_against_other_expert_zone_record
     assert metrics["tool_angle"]["actual"] is not None
     assert metrics["tool_angle"]["reference"] is not None
     assert metrics["tool_angle"]["unit"] == "deg"
+    assert metrics["posture"]["actual_label"] == "서 있는 자세"
+    assert metrics["posture"]["reference_label"] == "서 있는 자세"
     assert metrics["paint_pattern"]["actual_label"] == "수평형"
     assert metrics["coating_thickness"]["actual"] == 170
     assert metrics["coating_thickness"]["reference"] == 160
@@ -838,16 +840,19 @@ def test_pose_summary_uses_wide_zone_metric_rows_with_centered_label_and_progres
     assert 'id="poseZoneMetrics"' in page.text
     assert 'id="poseActionList"' in page.text
     assert "grid-template-columns:368px minmax(420px,1fr) 300px" in page.text
+    assert "overflow-y:auto;overflow-x:hidden" in page.text
     assert "renderZoneEvaluation" in script.text
     assert "similarity_percent" in script.text
     assert "predicted_similarity_percent" in script.text
     assert "pose-zone-metric-values" in script.text
     assert "pose-zone-progress" in script.text
-    assert "실제" in script.text
+    assert "현재 :" in script.text
+    assert "실제" not in script.text
     assert "전문가" in script.text
     assert ".pose-zone-metric" in style.text
     assert "align-items: center" in style.text
-    assert "grid-template-columns: 84px minmax(116px, 1fr) 112px" in style.text
+    assert "grid-template-columns: 68px minmax(92px, 1fr) 92px" in style.text
+    assert ".evaluation-side { overflow-x:hidden; }" in style.text
 
 
 def test_pose_assets_define_layers_and_interaction_states(tmp_path: Path) -> None:
