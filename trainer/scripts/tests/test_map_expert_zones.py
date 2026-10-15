@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 
-from trainer.scripts.map_expert_zones import first_visit_flow, learning_scenario
+from trainer.scripts.map_expert_zones import first_visit_flow, learning_scenario, recommended_flow
 from trainer.zone_reference import ZoneReferenceCatalog
 
 
@@ -32,3 +32,16 @@ def test_only_learning_levels_one_to_ten_are_mapped() -> None:
     assert learning_scenario(Path("10_1000001_1.csv")) == "10"
     assert learning_scenario(Path("1-A_1000063_1.csv")) is None
     assert learning_scenario(Path("11_1_1.csv")) is None
+
+
+def test_recommended_flow_is_the_most_common_complete_order_with_the_lead_breaking_ties() -> None:
+    """가장 많이 나온 순서. 구역이 빠진 순서는 후보가 아니다. 같으면 전형기 반장의 순서.
+
+    깨뜨리는 법: 빠진 순서를 후보로 두면 [1,2](3회)가 뽑히고, 동률을 먼저 나온 순서로 풀면 [2,1,3]이 뽑힌다.
+    """
+    partial = [("김경호", ["1", "2"])] * 3
+    tied = [("김경호", ["2", "1", "3"]), ("손영석", ["2", "1", "3"]), ("전형기", ["1", "2", "3"]), ("임채원", ["1", "2", "3"])]
+
+    assert recommended_flow(partial + tied, 3) == (["1", "2", "3"], 2, "동률 2개 → 전형기 반장")
+    assert recommended_flow(partial + tied[:2], 3) == (["2", "1", "3"], 2, "최빈")
+    assert recommended_flow(partial, 3) == (["1", "2"], 3, "최빈(전 구역 순서 없음)")
