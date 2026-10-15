@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from trainer.expert_zone_mapping import canonical_expert_zone_id
+from trainer.zone_reference import ZoneReferenceCatalog
 from PIL import Image, UnidentifiedImageError
 
 _HEIGHTMAP_NUMBER = re.compile(r"Map(\d+)", re.IGNORECASE)
@@ -86,23 +87,46 @@ def _heightmap_number(path: Path) -> int:
     return int(match.group(1)) if match is not None else 1
 
 
-def _cell_mean_um(image: Image.Image, gx: int, gy: int, grid_size: int) -> float:
-    """Return full-cell mean thickness; UV Y is bottom-up, PNG rows are top-down."""
+def _uses_blue_validity(image: Image.Image) -> bool:
+    """Whether this file follows the current TSB B8 validity convention."""
+    return image.convert("RGB").getchannel("B").getbbox() is not None
+
+
+def _cell_mean_um(
+    image: Image.Image,
+    gx: int,
+    gy: int,
+    grid_size: int,
+    *,
+    zone_mask: Image.Image | None = None,
+    blue_is_validity: bool = True,
+) -> float:
+    """Return painted mean thickness; UV Y is bottom-up, PNG rows are top-down."""
     width, height = image.size
     left = math.floor(gx * width / grid_size)
     right = math.ceil((gx + 1) * width / grid_size)
     top = math.floor((grid_size - gy - 1) * height / grid_size)
     bottom = math.ceil((grid_size - gy) * height / grid_size)
     pixels = image.crop((left, top, right, bottom)).convert("RGB")
+    mask_values = None
+    if zone_mask is not None:
+        cropped_mask = zone_mask.crop((left, top, right, bottom))
+        mask_values = list(
+            cropped_mask.get_flattened_data()
+            if hasattr(cropped_mask, "get_flattened_data")
+            else cropped_mask.getdata()
+        )
     pixel_values = (
         pixels.get_flattened_data()
         if hasattr(pixels, "get_flattened_data")
         else pixels.getdata()
     )
-    values = [
-        (red / 255.0 + green / 65025.0) * _COATING_SCALE_UM
-        for red, green, _blue in pixel_values
-    ]
+    values = []
+    for index, (red, green, blue) in enumerate(pixel_values):
+        painted = blue > 0 if blue_is_validity else red > 0 or green > 0
+        if not painted or (mask_values is not None and mask_values[index] <= 0):
+            continue
+        values.append((red / 255.0 + green / 65025.0) * _COATING_SCALE_UM)
     return statistics.fmean(values) if values else 0.0
 
 
@@ -111,11 +135,16 @@ def _session_coating_cells(
     heightmap_paths: list[Path],
     *,
     grid_size: int,
+    mode_id: int,
+    zone_catalog: ZoneReferenceCatalog | None,
 ) -> dict[str, dict[str, Any]]:
     images: dict[int, Image.Image] = {}
+    blue_validity: dict[int, bool] = {}
     try:
         for path in heightmap_paths:
-            images[_heightmap_number(path)] = Image.open(path).convert("RGB")
+            map_num = _heightmap_number(path)
+            images[map_num] = Image.open(path).convert("RGB")
+            blue_validity[map_num] = _uses_blue_validity(images[map_num])
         output: dict[str, dict[str, Any]] = {}
         for key, zone in zones.items():
             map_num = int(zone["map_num"])
@@ -123,26 +152,51 @@ def _session_coating_cells(
             if image is None:
                 continue
             width, height = image.size
-            visited: set[tuple[int, int]] = set()
-            for x, y in zone["uv_points"]:
-                if 0 <= x < width and 0 <= y < height:
-                    visited.add(
-                        (
-                            min(grid_size - 1, int(x / width * grid_size)),
-                            min(grid_size - 1, int(y / height * grid_size)),
+            zone_mask = None
+            model_key = zone_catalog.resolve_model(str(mode_id)) if zone_catalog else None
+            if model_key:
+                zone_mask = zone_catalog.zone_mask(
+                    model_key, map_num, str(zone["zone_id"]), size=(width, height)
+                )
+            if zone_mask is not None and zone_mask.getbbox() is not None:
+                left, top, right, bottom = zone_mask.getbbox()
+                gx_start = max(0, math.floor(left * grid_size / width))
+                gx_stop = min(grid_size, math.ceil(right * grid_size / width))
+                gy_start = max(0, math.floor((height - bottom) * grid_size / height))
+                gy_stop = min(grid_size, math.ceil((height - top) * grid_size / height))
+                candidates = {
+                    (gx, gy)
+                    for gx in range(gx_start, gx_stop)
+                    for gy in range(gy_start, gy_stop)
+                }
+                mask_source = "tsb_color_label_map"
+            else:
+                visited: set[tuple[int, int]] = set()
+                for x, y in zone["uv_points"]:
+                    if 0 <= x < width and 0 <= y < height:
+                        visited.add(
+                            (
+                                min(grid_size - 1, int(x / width * grid_size)),
+                                min(grid_size - 1, int(y / height * grid_size)),
+                            )
                         )
-                    )
-            # One neighboring grid cell captures the expert spray footprint around
-            # the ray centreline. Empty cells are removed using the final height map.
-            candidates = {
-                (nx, ny)
-                for gx, gy in visited
-                for nx in range(max(0, gx - 1), min(grid_size, gx + 2))
-                for ny in range(max(0, gy - 1), min(grid_size, gy + 2))
-            }
+                candidates = {
+                    (nx, ny)
+                    for gx, gy in visited
+                    for nx in range(max(0, gx - 1), min(grid_size, gx + 2))
+                    for ny in range(max(0, gy - 1), min(grid_size, gy + 2))
+                }
+                mask_source = "expert_raytexuv_fallback"
             cells = {}
             for gx, gy in sorted(candidates):
-                mean_um = _cell_mean_um(image, gx, gy, grid_size)
+                mean_um = _cell_mean_um(
+                    image,
+                    gx,
+                    gy,
+                    grid_size,
+                    zone_mask=zone_mask,
+                    blue_is_validity=blue_validity.get(map_num, True),
+                )
                 if mean_um > 0:
                     cells[f"{gx}:{gy}"] = mean_um
             if cells:
@@ -150,6 +204,8 @@ def _session_coating_cells(
                     "atlas_width": width,
                     "atlas_height": height,
                     "grid_size": grid_size,
+                    "mask_source": mask_source,
+                    "display_semantics": "physical_thickness_um",
                     "cells": cells,
                 }
         return output
@@ -167,6 +223,7 @@ def _load_session(
     process: str,
     mode_id: int,
     coating_grid_size: int,
+    zone_catalog: ZoneReferenceCatalog | None,
 ) -> dict[str, Any] | None:
     with csv_path.open(encoding="utf-8-sig", newline="") as stream:
         reader = csv.DictReader(stream)
@@ -257,7 +314,13 @@ def _load_session(
     session_dir = csv_path.parent
     heightmap_paths = sorted(set(session_dir.glob("*_Height.png")) | set(session_dir.glob("Map*.png")))
     coating_cells = (
-        _session_coating_cells(zones, heightmap_paths, grid_size=coating_grid_size)
+        _session_coating_cells(
+            zones,
+            heightmap_paths,
+            grid_size=coating_grid_size,
+            mode_id=mode_id,
+            zone_catalog=zone_catalog,
+        )
         if process == "spray"
         else {}
     )
@@ -315,6 +378,10 @@ def _profile(process: str, mode_id: int, mode_root: Path, sessions: list[dict[st
                     "atlas_width": coating["atlas_width"],
                     "atlas_height": coating["atlas_height"],
                     "grid_size": coating["grid_size"],
+                    "mask_source": coating.get("mask_source", "expert_raytexuv_fallback"),
+                    "display_semantics": coating.get(
+                        "display_semantics", "physical_thickness_um"
+                    ),
                     "session_count": 0,
                     "cells": {},
                 },
@@ -359,6 +426,8 @@ def _profile(process: str, mode_id: int, mode_root: Path, sessions: list[dict[st
                 "atlas_width": coating_source["atlas_width"],
                 "atlas_height": coating_source["atlas_height"],
                 "grid_size": coating_source["grid_size"],
+                "mask_source": coating_source["mask_source"],
+                "display_semantics": coating_source["display_semantics"],
                 "session_count": coating_source["session_count"],
                 "cells": cells,
             }
@@ -417,11 +486,23 @@ def build_profiles(
     *,
     process: str,
     coating_grid_size: int = 64,
+    zone_reference_root: Path | None = None,
 ) -> list[Path]:
     root = Path(reference_root)
     raw = root / "raw" / process / "learning"
     output_root = root / "generated" / "profiles" / process / "learning"
     output_root.mkdir(parents=True, exist_ok=True)
+    zone_catalog: ZoneReferenceCatalog | None = None
+    if process == "spray":
+        reference_path = (
+            Path(zone_reference_root)
+            if zone_reference_root is not None
+            else ZoneReferenceCatalog.default().root
+        )
+        try:
+            zone_catalog = ZoneReferenceCatalog(reference_path)
+        except (OSError, KeyError, TypeError, ValueError):
+            zone_catalog = None
     outputs: list[Path] = []
     for mode_root in sorted(raw.glob("mode_*")):
         try:
@@ -438,6 +519,7 @@ def build_profiles(
                     process=process,
                     mode_id=mode_id,
                     coating_grid_size=coating_grid_size,
+                    zone_catalog=zone_catalog,
                 )
             )
         ]
@@ -479,11 +561,13 @@ def main() -> int:
     parser.add_argument("--reference-root", type=Path, required=True)
     parser.add_argument("--process", choices=("spray", "blasting"), required=True)
     parser.add_argument("--coating-grid-size", type=int, default=64)
+    parser.add_argument("--zone-reference-root", type=Path)
     args = parser.parse_args()
     outputs = build_profiles(
         args.reference_root,
         process=args.process,
         coating_grid_size=args.coating_grid_size,
+        zone_reference_root=args.zone_reference_root,
     )
     print(json.dumps({"process": args.process, "profiles": len(outputs)}, ensure_ascii=False))
     return 0 if outputs else 1

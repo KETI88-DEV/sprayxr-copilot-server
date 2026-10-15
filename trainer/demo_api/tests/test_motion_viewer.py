@@ -495,7 +495,8 @@ def test_motion_returns_trusted_trackers_paint_trace_and_direction_statistics(tm
     assert overall["expert_direction_distribution"]["horizontal"] == 1.0
     coating = data["coating_reference"]["1:1"]
     assert coating["source"] == "expert_final_heightmap"
-    assert coating["display_semantics"] == "relative_height"
+    assert coating["display_semantics"] == "physical_thickness_um"
+    assert coating["unit"] == "um"
     assert coating["grid_size"] == 64
     assert coating["bounds"] == {"min_x": 10, "max_x": 11, "min_y": 20, "max_y": 20}
     assert coating["cells"] == [[10, 20, 140.0], [11, 20, 180.0]]

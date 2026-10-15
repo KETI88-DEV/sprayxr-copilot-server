@@ -17,6 +17,7 @@ import numpy as np
 from PIL import Image, UnidentifiedImageError
 
 from trainer.demo_api.telemetry_contracts import AnalyzeSequenceRequest, CoatingProgress
+from trainer.zone_reference import ZoneReferenceCatalog
 
 _MAX_SESSIONS = 16
 
@@ -40,8 +41,21 @@ class CoatingProgressEngine:
     different physical quantity than spray coating thickness.
     """
 
-    def __init__(self, reference_root: Path) -> None:
+    def __init__(
+        self,
+        reference_root: Path,
+        *,
+        zone_reference_root: Path | None = None,
+    ) -> None:
         self._root = Path(reference_root)
+        try:
+            self._zone_catalog = (
+                ZoneReferenceCatalog(Path(zone_reference_root))
+                if zone_reference_root is not None
+                else ZoneReferenceCatalog.default()
+            )
+        except (OSError, KeyError, TypeError, ValueError):
+            self._zone_catalog = None
         self._profiles: dict[tuple[str, int], tuple[tuple[int, int], dict[str, Any]]] = {}
         self._sessions: OrderedDict[
             tuple[str, str, int], dict[int, np.ndarray]
@@ -228,6 +242,28 @@ class CoatingProgressEngine:
             target_cells = coating.get("cells")
             if min(atlas_width, atlas_height, grid_size) <= 0 or not isinstance(target_cells, dict):
                 return self._unavailable(request.zone_id, "coating_reference_invalid")
+            zone_mask: np.ndarray | None = None
+            if coating.get("mask_source") == "tsb_color_label_map":
+                model_key = (
+                    self._zone_catalog.resolve_model(request.scenario_id)
+                    if self._zone_catalog is not None
+                    else None
+                )
+                mask_image = (
+                    self._zone_catalog.zone_mask(
+                        model_key,
+                        map_num,
+                        request.zone_id,
+                        size=(atlas_width, atlas_height),
+                    )
+                    if self._zone_catalog is not None and model_key is not None
+                    else None
+                )
+                if mask_image is None:
+                    return self._unavailable(request.zone_id, "zone_reference_unavailable")
+                # Runtime atlas rows use bottom-left coordinates; vendor label
+                # maps and height-map PNG files store the top row as v=1.
+                zone_mask = np.flipud(np.asarray(mask_image, dtype=np.uint8) > 0)
 
             decoded: list[_DecodedCrop] = []
             matching = 0
@@ -287,7 +323,14 @@ class CoatingProgressEngine:
                 top = math.ceil((gy + 1) * atlas_height / grid_size)
                 if left >= right or bottom >= top:
                     continue
-                actual = float(surface[bottom:top, left:right].mean())
+                actual_region = surface[bottom:top, left:right]
+                if zone_mask is not None:
+                    mask_region = zone_mask[bottom:top, left:right]
+                    if not np.any(mask_region):
+                        continue
+                    actual = float(actual_region[mask_region].mean())
+                else:
+                    actual = float(actual_region.mean())
                 completion_values.append(min(actual / q1, 1.0))
                 # RG16 at scale_um=20000 has about 0.31 um quantization. Allow
                 # a 0.5 um boundary tolerance so an encoded 100 um target does

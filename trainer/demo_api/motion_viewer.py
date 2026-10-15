@@ -1004,12 +1004,17 @@ def _coating_reference(profile: dict[str, Any]) -> dict[str, dict[str, Any]]:
         cells.sort(key=lambda item: (item[1], item[0]))
         xs = [int(item[0]) for item in cells]
         ys = [int(item[1]) for item in cells]
+        thicknesses = [float(item[2]) for item in cells]
         fallback_map, _, fallback_zone = str(key).partition(":")
         output[str(key)] = {
             "map_num": int(zone.get("map_num", fallback_map)),
             "zone_id": str(zone.get("zone_id", fallback_zone)),
             "source": "expert_final_heightmap",
-            "display_semantics": "relative_height",
+            "mask_source": coating.get("mask_source", "expert_raytexuv_fallback"),
+            "display_semantics": coating.get(
+                "display_semantics", "physical_thickness_um"
+            ),
+            "unit": "um",
             "analysis_status": "available",
             "atlas_width": int(coating.get("atlas_width", 2048)),
             "atlas_height": int(coating.get("atlas_height", 2048)),
@@ -1018,6 +1023,11 @@ def _coating_reference(profile: dict[str, Any]) -> dict[str, dict[str, Any]]:
             "bounds": {
                 "min_x": min(xs), "max_x": max(xs),
                 "min_y": min(ys), "max_y": max(ys),
+            },
+            "thickness_um": {
+                "minimum": round(min(thicknesses), 2),
+                "median": round(statistics.median(thicknesses), 2),
+                "maximum": round(max(thicknesses), 2),
             },
             "cells": cells,
         }

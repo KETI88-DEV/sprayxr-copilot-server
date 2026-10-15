@@ -1,0 +1,39 @@
+﻿scenario_id,model_key,note
+1,Learn01,학습
+2,Learn02,학습
+3,Learn03,학습
+4,Learn04,학습
+5,Learn05,학습
+6,Learn06,학습
+7,Learn07,학습
+8,Learn08,학습
+9,Learn09,학습
+10,Learn10,학습
+Unit1,Unit1-1,Unit
+Unit2,Learn01,Unit
+Unit3,Learn02,Unit
+Unit4,Learn02,Unit
+Unit5,Learn02,Unit
+Unit6,Learn02,Unit
+Unit7,Unit1-7,Unit
+Unit8,,Unit (Zone 없음)
+Unit9,Unit2-1,Unit
+Unit10,Unit2-2,Unit
+Unit11,Unit2-3,Unit
+Unit12,Unit2-4,Unit
+Unit13,Unit2-5,Unit
+Unit14,Unit2-6,Unit
+Unit15,Unit2-7,Unit
+Unit16,Exam2,Unit
+Unit17,Unit2-1,Unit
+Unit18,Unit2-2,Unit
+Unit19,Unit2-3,Unit
+Unit20,Unit2-4,Unit
+Unit21,Unit2-5,Unit
+Unit22,Unit2-6,Unit
+Unit23,Unit2-7,Unit
+Unit24,Exam2,Unit
+Unit25,,Unit (Zone 없음)
+Unit26,,Unit (Zone 없음)
+Unit27,,Unit (Zone 없음)
+Unit28,,Unit (Zone 없음)

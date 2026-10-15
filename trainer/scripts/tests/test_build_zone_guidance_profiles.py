@@ -7,7 +7,11 @@ from pathlib import Path
 from PIL import Image
 import pytest
 
-from trainer.scripts.build_zone_guidance_profiles import build_profiles
+from trainer.scripts.build_zone_guidance_profiles import (
+    _cell_mean_um,
+    _uses_blue_validity,
+    build_profiles,
+)
 
 
 def _session(root: Path, name: str, rows: list[list[object]]) -> None:
@@ -122,10 +126,15 @@ def test_spray_profile_learns_zone_coating_targets_from_csv_uv_and_final_heightm
         )
     # PNG top row is high V. Both visited corners carry the same 100um target.
     raw = round(100.0 / 20000.0 * 65025.0)
-    image = Image.new("RGBA", (4, 4), (raw // 255, raw % 255, 0, 255))
+    image = Image.new("RGBA", (4, 4), (raw // 255, raw % 255, 255, 255))
     image.save(target / "Map01_3_A_1_1_Height.png")
 
-    outputs = build_profiles(tmp_path, process="spray", coating_grid_size=2)
+    outputs = build_profiles(
+        tmp_path,
+        process="spray",
+        coating_grid_size=2,
+        zone_reference_root=tmp_path / "no-zone-reference",
+    )
 
     profile = json.loads(outputs[0].read_text(encoding="utf-8"))
     coating = profile["aggregate"]["zones"]["1:1"]["coating"]
@@ -135,9 +144,68 @@ def test_spray_profile_learns_zone_coating_targets_from_csv_uv_and_final_heightm
     assert coating["grid_size"] == 2
     assert coating["cells"]["0:0"]["sample_count"] == 1
     assert coating["cells"]["0:0"]["q1_um"] == pytest.approx(99.961553)
-    assert coating["cells"]["0:0"]["median_um"] == pytest.approx(99.961553)
+    assert coating["cells"]["1:0"]["median_um"] == pytest.approx(99.961553)
     assert coating["cells"]["0:0"]["q3_um"] == pytest.approx(99.961553)
     assert profile["quality"]["heightmap_scale_status"] == "rg16_scale_20000"
+
+
+def test_spray_profile_uses_official_zone_mask_and_blue_validity_channel(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "raw" / "spray" / "learning" / "mode_04" / "4_A_1"
+    target.mkdir(parents=True)
+    with (target / "4_A_1.csv").open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.writer(stream)
+        writer.writerow(
+            [
+                "시간(초)", "분사", "Speed (Real)", "Distance (Real)",
+                "Ray Texture Map Number", "Ray Texture UV X", "Ray Texture UV Y", "Zone ID",
+            ]
+        )
+        writer.writerow([0.1, "On", 100, 300, 1, 0, 0, "1"])
+
+    raw_100 = round(100.0 / 20000.0 * 65025.0)
+    raw_500 = round(500.0 / 20000.0 * 65025.0)
+    image = Image.new("RGB", (4, 4), (raw_500 // 255, raw_500 % 255, 255))
+    for index in range(4):
+        image.putpixel((index, index), (raw_100 // 255, raw_100 % 255, 255))
+    image.putpixel((0, 0), (raw_500 // 255, raw_500 % 255, 0))
+    image.save(target / "Map01_4_A_1_1_Height.png")
+
+    reference = tmp_path / "zone_reference"
+    (reference / "color").mkdir(parents=True)
+    (reference / "palette.csv").write_text(
+        "zone_id,hex,r,g,b\n1,#FF0000,255,0,0\n2,#00FF00,0,255,0\n",
+        encoding="utf-8",
+    )
+    (reference / "scenario_map.csv").write_text(
+        "scenario_id,model_key,note\n4,Learn04,학습\n",
+        encoding="utf-8",
+    )
+    (reference / "zone_rects.csv").write_text(
+        "model_key,map_num,zone_id,rect_x,rect_y,rect_w,rect_h,px_x,px_y,px_w,px_h,u_min,v_min,u_max,v_max,area_percent\n"
+        "Learn04,01,1,0,0,1,1,0,0,4,4,0,0,1,1,25\n",
+        encoding="utf-8",
+    )
+    label = Image.new("RGB", (4, 4), (0, 255, 0))
+    for index in range(4):
+        label.putpixel((index, index), (255, 0, 0))
+    label.save(reference / "color" / "Learn04_01.png")
+
+    [output] = build_profiles(
+        tmp_path,
+        process="spray",
+        coating_grid_size=2,
+        zone_reference_root=reference,
+    )
+
+    profile = json.loads(output.read_text(encoding="utf-8"))
+    coating = profile["aggregate"]["zones"]["1:1"]["coating"]
+    assert coating["mask_source"] == "tsb_color_label_map"
+    assert coating["display_semantics"] == "physical_thickness_um"
+    assert set(coating["cells"]) == {"0:1", "1:0"}
+    assert coating["cells"]["0:1"]["median_um"] == pytest.approx(99.961553)
+    assert coating["cells"]["1:0"]["median_um"] == pytest.approx(99.961553)
 
 
 def test_blasting_profile_does_not_invent_a_coating_thickness_model(tmp_path: Path) -> None:
@@ -150,3 +218,18 @@ def test_blasting_profile_does_not_invent_a_coating_thickness_model(tmp_path: Pa
         "analysis_status": "not_applicable",
         "reason": "coating_not_applicable",
     }
+
+
+def test_legacy_expert_heightmap_without_blue_channel_uses_nonblack_pixels() -> None:
+    image = Image.new("RGB", (2, 2), (0, 200, 0))
+    mask = Image.new("L", (2, 2), 255)
+
+    assert _uses_blue_validity(image) is False
+    assert _cell_mean_um(
+        image,
+        0,
+        0,
+        1,
+        zone_mask=mask,
+        blue_is_validity=False,
+    ) > 0

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import csv
 import io
 import json
 from pathlib import Path
@@ -159,3 +160,56 @@ def test_invalid_height_encoding_is_not_silently_scored(tmp_path: Path) -> None:
 
     assert result.available is False
     assert result.reason == "heatmap_format_unsupported"
+
+
+def test_official_zone_mask_excludes_neighbor_zone_thickness(tmp_path: Path) -> None:
+    _profile(tmp_path)
+    profile_path = tmp_path / "generated" / "profiles" / "spray" / "learning" / "mode_03.json"
+    profile = json.loads(profile_path.read_text(encoding="utf-8"))
+    coating = profile["aggregate"]["zones"]["1:1"]["coating"]
+    coating["grid_size"] = 1
+    coating["mask_source"] = "tsb_color_label_map"
+    coating["cells"] = {
+        "0:0": {"q1_um": 100.0, "median_um": 110.0, "q3_um": 120.0}
+    }
+    profile_path.write_text(json.dumps(profile), encoding="utf-8")
+
+    reference = tmp_path / "zone_reference"
+    (reference / "color").mkdir(parents=True)
+    with (reference / "palette.csv").open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.writer(stream)
+        writer.writerow(["zone_id", "hex", "r", "g", "b"])
+        writer.writerow([1, "#FF0000", 255, 0, 0])
+        writer.writerow([2, "#00FF00", 0, 255, 0])
+    (reference / "scenario_map.csv").write_text(
+        "scenario_id,model_key,note\n3,Learn03,학습\n", encoding="utf-8"
+    )
+    (reference / "zone_rects.csv").write_text(
+        "model_key,map_num,zone_id,rect_x,rect_y,rect_w,rect_h,px_x,px_y,px_w,px_h,u_min,v_min,u_max,v_max,area_percent\n"
+        "Learn03,01,1,0,0,1,1,0,0,4,4,0,0,1,1,25\n",
+        encoding="utf-8",
+    )
+    label = Image.new("RGB", (4, 4), (0, 255, 0))
+    for index in range(4):
+        label.putpixel((index, index), (255, 0, 0))
+    label.save(reference / "color" / "Learn03_01.png")
+
+    heatmap = _heatmap(500.0)
+    encoded = base64.b64decode(str(heatmap["data"]))
+    image = Image.open(io.BytesIO(encoded)).convert("RGBA")
+    for index in range(4):
+        image.putpixel((index, index), _rg_for_um(100.0))
+    stream = io.BytesIO()
+    image.save(stream, format="PNG")
+    request = _request(sequence_id="SEQ-001", thickness_um=500.0)
+    request.sequence_result.cur_sequence_heatmap[0].data = base64.b64encode(
+        stream.getvalue()
+    ).decode("ascii")
+
+    result = CoatingProgressEngine(
+        tmp_path, zone_reference_root=reference
+    ).evaluate(request)
+
+    assert result.status == "complete"
+    assert result.completion_percent == pytest.approx(100.0, abs=0.2)
+    assert result.overpaint_percent == 0.0

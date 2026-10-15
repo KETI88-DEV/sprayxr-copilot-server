@@ -147,7 +147,12 @@
       drawEmpty(width, height, '이 Zone의 최종 높이맵 기준이 없습니다.');
       return;
     }
-    status.textContent = `전문가 최종 높이맵 · ${reference.session_count}회 기준`;
+    const thickness = reference.thickness_um;
+    const summary = thickness
+      ? ` · 중앙 ${Number(thickness.median).toFixed(1)} µm · 범위 ${Number(thickness.minimum).toFixed(1)}–${Number(thickness.maximum).toFixed(1)} µm`
+      : '';
+    const mask = reference.mask_source === 'tsb_color_label_map' ? ' · TSB 공식 Zone' : '';
+    status.textContent = `전문가 최종 높이맵 · ${reference.session_count}회 기준${mask}${summary}`;
     if (mode === '3d') drawTerrain(reference, width, height);
     else drawDistribution(reference, width, height);
   }
