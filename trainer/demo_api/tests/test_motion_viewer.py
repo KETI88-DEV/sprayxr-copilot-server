@@ -155,6 +155,12 @@ def _client(
                 "analysis": {
                     "macro_order": [{"map_num": 1, "zone_id": "1"}],
                     "zones": {"1:1": {"speed_mms": 300, "distance_mm": 250, "expected_direction": "horizontal"}},
+                    "coating_cells": {
+                        "1:1": {
+                            "cells": {"10:20": 140, "11:20": 180},
+                            "atlas_width": 2048, "atlas_height": 2048, "grid_size": 64,
+                        }
+                    },
                 },
             },
             {
@@ -163,6 +169,12 @@ def _client(
                 "analysis": {
                     "macro_order": [{"map_num": 1, "zone_id": "1"}],
                     "zones": {"1:1": {"speed_mms": 360, "distance_mm": 280, "expected_direction": "horizontal"}},
+                    "coating_cells": {
+                        "1:1": {
+                            "cells": {"10:20": 150, "11:20": 190},
+                            "atlas_width": 2048, "atlas_height": 2048, "grid_size": 64,
+                        }
+                    },
                 },
             },
         ],
@@ -502,7 +514,7 @@ def test_motion_returns_trusted_trackers_paint_trace_and_direction_statistics(tm
     assert coating["cells"] == [[10, 20, 140.0], [11, 20, 180.0]]
 
 
-def test_representative_expert_motion_reports_similarity_guidance_and_prediction(
+def test_representative_expert_motion_uses_other_sessions_as_the_reference_set(
     tmp_path: Path,
 ) -> None:
     response = _client(tmp_path).get(
@@ -513,12 +525,9 @@ def test_representative_expert_motion_reports_similarity_guidance_and_prediction
     assert response.status_code == 200
     evaluation = response.json()["pose_evaluation"]
     assert evaluation["status"] == "available"
-    assert evaluation["similarity_score"] == 1.0
-    assert evaluation["predicted_score"] == 1.0
-    assert evaluation["reference_session_id"] == "4_1001_1"
-    assert evaluation["corrections"] == [
-        {"message": "전문가 대표 동작과 일치합니다. 현재 자세를 유지하세요."}
-    ]
+    assert evaluation["reference_session_count"] == 1
+    assert evaluation["similarity_percent"] >= 60
+    assert evaluation["reference_session_id"] == "multi_session_expert_profile"
 
 
 def test_zone_surface_keeps_non_planar_three_dimensional_vertices() -> None:
@@ -679,6 +688,90 @@ def test_motion_endpoint_adds_verified_object_mesh_and_preserves_existing_fields
     assert payload["object_mesh_status"] == "verified"
 
 
+def test_motion_endpoint_scores_selected_record_against_other_expert_zone_records(
+    tmp_path: Path,
+) -> None:
+    response = _client(tmp_path).get(
+        "/motion-viewer/api/motion",
+        params={"process": "spray", "mode_id": 4, "session_id": "4_1002_1"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    evaluation = payload["pose_evaluation"]
+    assert 60 <= evaluation["similarity_percent"] <= 100
+    assert 60 <= evaluation["order_similarity_percent"] <= 100
+    assert evaluation["reference_session_count"] == 1
+    assert evaluation["comparison_basis"] == "multi_session_zone_normalized"
+    assert "duration" not in json.dumps(evaluation).casefold()
+
+    zone = evaluation["zones"]["1:1"]
+    assert zone["zone_id"] == "1"
+    assert zone["reference_session_count"] == 1
+    assert 60 <= zone["similarity_percent"] <= 100
+    metrics = {item["key"]: item for item in zone["metrics"]}
+    assert set(metrics) == {"tool_angle", "posture", "paint_pattern", "coating_thickness", "distance"}
+    assert metrics["tool_angle"]["actual"] is not None
+    assert metrics["tool_angle"]["reference"] is not None
+    assert metrics["tool_angle"]["unit"] == "deg"
+    assert metrics["paint_pattern"]["actual_label"] == "수평형"
+    assert metrics["coating_thickness"]["actual"] == 170
+    assert metrics["coating_thickness"]["reference"] == 160
+    assert metrics["distance"]["actual"] == 280
+    assert metrics["distance"]["reference"] == 250
+    assert all(0 <= item["similarity_percent"] <= 100 for item in metrics.values())
+    assert zone["corrections"]
+    assert zone["predicted_similarity_percent"] >= zone["similarity_percent"]
+
+
+def test_motion_endpoint_uses_percentages_for_self_replay_without_self_reference_leakage(
+    tmp_path: Path,
+) -> None:
+    payload = _client(tmp_path).get(
+        "/motion-viewer/api/motion",
+        params={"process": "spray", "mode_id": 4, "session_id": "4_1001_1"},
+    ).json()
+
+    assert payload["pose_evaluation"]["reference_session_count"] == 1
+    assert payload["pose_evaluation"]["similarity_percent"] >= 60
+    assert payload["pose_evaluation"]["similarity_score"] == (
+        payload["pose_evaluation"]["similarity_percent"] / 100
+    )
+
+
+def test_trainee_motion_uses_all_expert_sessions_instead_of_trainee_repetitions(
+    tmp_path: Path,
+) -> None:
+    client = _client(tmp_path)
+    worker_root = tmp_path / "workers" / "kim_gyeongho"
+    (worker_root / "worker.json").parent.mkdir(parents=True, exist_ok=True)
+    (worker_root / "worker.json").write_text(
+        json.dumps({"display_name": "김경호", "role": "trainee"}), encoding="utf-8"
+    )
+    expert_profile_path = tmp_path / "generated" / "profiles" / "spray" / "learning" / "mode_04.json"
+    trainee_profile = json.loads(expert_profile_path.read_text(encoding="utf-8"))
+    trainee_profile["sessions"] = [dict(trainee_profile["sessions"][0])]
+    trainee_profile["sessions"][0]["session_id"] = "4_TRAINEE_1"
+    trainee_profile["sessions"][0]["sources"] = {"csv_path": "4_TRAINEE_1.csv"}
+    trainee_profile_path = worker_root / "generated" / "profiles" / "spray" / "learning" / "mode_04.json"
+    trainee_profile_path.parent.mkdir(parents=True, exist_ok=True)
+    trainee_profile_path.write_text(json.dumps(trainee_profile), encoding="utf-8")
+    trainee_csv = worker_root / "raw" / "spray" / "learning" / "mode_04" / "4_TRAINEE_1.csv"
+    _write_csv(trainee_csv, offset=0.05)
+
+    payload = client.get(
+        "/motion-viewer/api/motion",
+        params={
+            "worker_id": "kim_gyeongho", "process": "spray", "mode_id": 4,
+            "session_id": "4_TRAINEE_1",
+        },
+    ).json()
+
+    assert payload["pose_evaluation"]["reference_session_count"] == 2
+    assert payload["pose_evaluation"]["comparison_basis"] == "multi_session_zone_normalized"
+    assert payload["pose_evaluation"]["similarity_percent"] >= 60
+
+
 def test_motion_viewer_page_exposes_pose_comparison_contract(tmp_path: Path) -> None:
     response = _client(tmp_path).get("/motion-viewer")
 
@@ -689,7 +782,8 @@ def test_motion_viewer_page_exposes_pose_comparison_contract(tmp_path: Path) -> 
         "작업자",
         "전문가 동작 유사도",
         "자세 개선 안내",
-        "안내 반영 시 계산상 예상",
+        "안내 적용 시 예상",
+        "현재 Zone 유사도",
         "현재 자세 상태",
         "Zone 진행 구간",
         "CSV 조인트 기반 전신 스켈레톤",
@@ -729,6 +823,31 @@ def test_motion_viewer_page_exposes_pose_comparison_contract(tmp_path: Path) -> 
     assert 'id="coatingView2d"' in response.text
     assert 'id="coatingView3d"' in response.text
     assert "Number(zoneId)>0" in response.text
+
+
+def test_pose_summary_uses_wide_zone_metric_rows_with_centered_label_and_progress(
+    tmp_path: Path,
+) -> None:
+    client = _client(tmp_path)
+    page = client.get("/motion-viewer")
+    script = client.get("/motion-viewer/assets/motion_viewer_pose.js")
+    style = client.get("/motion-viewer/assets/motion_viewer_pose.css")
+
+    assert page.status_code == 200
+    assert 'id="poseZoneCard"' in page.text
+    assert 'id="poseZoneMetrics"' in page.text
+    assert 'id="poseActionList"' in page.text
+    assert "grid-template-columns:368px minmax(420px,1fr) 300px" in page.text
+    assert "renderZoneEvaluation" in script.text
+    assert "similarity_percent" in script.text
+    assert "predicted_similarity_percent" in script.text
+    assert "pose-zone-metric-values" in script.text
+    assert "pose-zone-progress" in script.text
+    assert "실제" in script.text
+    assert "전문가" in script.text
+    assert ".pose-zone-metric" in style.text
+    assert "align-items: center" in style.text
+    assert "grid-template-columns: 84px minmax(116px, 1fr) 112px" in style.text
 
 
 def test_pose_assets_define_layers_and_interaction_states(tmp_path: Path) -> None:

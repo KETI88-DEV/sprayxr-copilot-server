@@ -337,6 +337,8 @@ def _sample_csv(
                 "posture": _joint_posture_state(joints),
                 "ray_point": ray_point,
                 "spraying": _spraying(row.get("분사")),
+                "speed_mms": _number(row.get("Speed (Real)")),
+                "distance_mm": _number(row.get("Distance (Real)")),
                 "zone_id": str(row.get("Zone ID", "")).strip() or None,
                 "map_num": (_map_zone_uv(row) or (None,))[0],
             })
@@ -1140,6 +1142,362 @@ def _expert_pose_evaluation(
     }
 
 
+_ZONE_METRIC_WEIGHTS = {
+    "tool_angle": 0.20,
+    "posture": 0.25,
+    "paint_pattern": 0.20,
+    "coating_thickness": 0.20,
+    "distance": 0.15,
+}
+
+
+def _median_numbers(values: list[Any]) -> float | None:
+    parsed = [number for value in values if (number := _number(value)) is not None]
+    return statistics.median(parsed) if parsed else None
+
+
+def _vector_angle_degrees(left: list[float], right: list[float]) -> float | None:
+    left_size = math.sqrt(sum(value * value for value in left))
+    right_size = math.sqrt(sum(value * value for value in right))
+    if left_size <= 1e-9 or right_size <= 1e-9:
+        return None
+    cosine = sum(a * b for a, b in zip(left, right)) / (left_size * right_size)
+    return math.degrees(math.acos(max(-1.0, min(1.0, cosine))))
+
+
+def _zone_frame_profiles(frames: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    grouped: dict[str, dict[str, Any]] = {}
+    previous: dict[str, list[float]] = {}
+    for frame in frames:
+        if not frame.get("spraying") or not frame.get("zone_id") or frame.get("map_num") is None:
+            continue
+        key = f"{frame['map_num']}:{frame['zone_id']}"
+        group = grouped.setdefault(
+            key,
+            {
+                "tool_angles": [], "postures": [], "distances": [],
+                "directions": {"horizontal": 0, "vertical": 0, "diagonal": 0},
+            },
+        )
+        tool = frame.get("tool_forward")
+        hand = frame.get("tracked", {}).get("right_hand")
+        hit = frame.get("ray_point")
+        if tool and hand and hit:
+            angle = _vector_angle_degrees(tool, [hit[axis] - hand[axis] for axis in range(3)])
+            if angle is not None:
+                group["tool_angles"].append(angle)
+        posture = _number(frame.get("posture", {}).get("torso_lean_deg"))
+        if posture is not None:
+            group["postures"].append(posture)
+        distance = _number(frame.get("distance_mm"))
+        if distance is not None:
+            group["distances"].append(distance)
+        if hit and key in previous:
+            delta = [hit[axis] - previous[key][axis] for axis in range(3)]
+            size = math.sqrt(sum(value * value for value in delta))
+            if size > 1e-6:
+                vertical_ratio = abs(delta[1]) / size
+                direction = (
+                    "vertical" if vertical_ratio >= 0.7
+                    else "horizontal" if vertical_ratio <= 0.3
+                    else "diagonal"
+                )
+                group["directions"][direction] += 1
+        if hit:
+            previous[key] = hit
+
+    output: dict[str, dict[str, Any]] = {}
+    for key, values in grouped.items():
+        directions = values["directions"]
+        direction = max(directions, key=directions.get) if sum(directions.values()) else None
+        output[key] = {
+            "tool_angle_deg": _median_numbers(values["tool_angles"]),
+            "posture_deg": _median_numbers(values["postures"]),
+            "distance_mm": _median_numbers(values["distances"]),
+            "paint_pattern": direction,
+        }
+    return output
+
+
+def _session_record(profile: dict[str, Any], session_id: str) -> dict[str, Any]:
+    return next(
+        (item for item in profile.get("sessions", []) if str(item.get("session_id")) == session_id),
+        {},
+    )
+
+
+def _zone_analysis_value(session: dict[str, Any], key: str, metric: str) -> Any:
+    zone = session.get("analysis", {}).get("zones", {}).get(key, {})
+    value = zone.get(metric) if isinstance(zone, dict) else None
+    if isinstance(value, dict):
+        return value.get("median")
+    return value
+
+
+def _session_coating_median(session: dict[str, Any], key: str) -> float | None:
+    coating = session.get("analysis", {}).get("coating_cells", {}).get(key, {})
+    cells = coating.get("cells", {}) if isinstance(coating, dict) else {}
+    values: list[Any] = []
+    for sample in cells.values() if isinstance(cells, dict) else []:
+        values.append(sample.get("median_um") if isinstance(sample, dict) else sample)
+    return _median_numbers(values)
+
+
+def _numeric_similarity(actual: float, references: list[float], *, minimum_tolerance: float) -> tuple[int, float]:
+    center = statistics.median(references)
+    deviations = [abs(value - center) for value in references]
+    tolerance = max(minimum_tolerance, statistics.median(deviations) * 3 if deviations else 0.0)
+    normalized = abs(actual - center) / max(tolerance, 1e-9)
+    score = 20.0 + 80.0 * math.exp(-0.2 * normalized * normalized)
+    return round(max(0.0, min(100.0, score))), center
+
+
+def _metric_item(
+    key: str,
+    label: str,
+    actual: float | None,
+    references: list[float],
+    *,
+    unit: str,
+    tolerance: float,
+) -> dict[str, Any]:
+    if actual is None or not references:
+        return {
+            "key": key, "label": label, "actual": actual, "reference": None,
+            "unit": unit, "similarity_percent": None, "available": False,
+        }
+    score, center = _numeric_similarity(actual, references, minimum_tolerance=tolerance)
+    return {
+        "key": key, "label": label,
+        "actual": round(actual, 1), "reference": round(center, 1),
+        "unit": unit, "similarity_percent": score, "available": True,
+    }
+
+
+def _pattern_metric(actual: str | None, references: list[str]) -> dict[str, Any]:
+    labels = {
+        "horizontal": "수평형", "vertical": "수직형", "diagonal": "대각선형",
+        "curved_irregular": "비정형", None: "평가 불가",
+    }
+    if actual is None or not references:
+        return {
+            "key": "paint_pattern", "label": "칠하는 방식",
+            "actual": None, "reference": None, "actual_label": labels.get(actual, str(actual)),
+            "reference_label": "평가 불가", "unit": "", "similarity_percent": None,
+            "available": False,
+        }
+    counts = {value: references.count(value) for value in set(references)}
+    reference = max(counts, key=lambda value: (counts[value], value))
+    if actual in counts:
+        score = round(85 + 15 * counts[actual] / max(counts.values()))
+    else:
+        score = 60
+    return {
+        "key": "paint_pattern", "label": "칠하는 방식",
+        "actual": actual, "reference": reference,
+        "actual_label": labels.get(actual, str(actual)),
+        "reference_label": labels.get(reference, str(reference)),
+        "unit": "", "similarity_percent": score, "available": True,
+    }
+
+
+def _macro_order(session: dict[str, Any]) -> list[str]:
+    return [
+        f"{item.get('map_num')}:{item.get('zone_id')}"
+        for item in session.get("analysis", {}).get("macro_order", [])
+        if item.get("map_num") is not None and item.get("zone_id") is not None
+    ]
+
+
+def _lcs_ratio(left: list[str], right: list[str]) -> float:
+    if not left or not right:
+        return 0.0
+    row = [0] * (len(right) + 1)
+    for left_item in left:
+        previous = 0
+        for index, right_item in enumerate(right, 1):
+            saved = row[index]
+            row[index] = previous + 1 if left_item == right_item else max(row[index], row[index - 1])
+            previous = saved
+    return 2.0 * row[-1] / (len(left) + len(right))
+
+
+def _order_similarity(selected: list[str], references: list[list[str]]) -> int:
+    usable = [order for order in references if order]
+    if not selected or not usable:
+        return 60
+    shape_score = 60.0 + 40.0 * max(_lcs_ratio(selected, order) for order in usable)
+    support: list[float] = []
+    for index, zone in enumerate(selected):
+        values = [order[index] for order in usable if index < len(order)]
+        if not values:
+            continue
+        counts = {value: values.count(value) for value in set(values)}
+        support.append(counts.get(zone, 0) / max(counts.values()))
+    statistical_score = 60.0 + 40.0 * (statistics.fmean(support) if support else 0.0)
+    return round(shape_score * 0.7 + statistical_score * 0.3)
+
+
+def _weighted_score(metrics: list[dict[str, Any]], replacements: set[str] | None = None) -> int | None:
+    replacements = replacements or set()
+    weighted = 0.0
+    total = 0.0
+    for metric in metrics:
+        score = metric.get("similarity_percent")
+        weight = _ZONE_METRIC_WEIGHTS.get(str(metric.get("key")), 0.0)
+        if score is None or weight <= 0:
+            continue
+        weighted += (100 if metric.get("key") in replacements else float(score)) * weight
+        total += weight
+    return round(weighted / total) if total else None
+
+
+def _correction_message(metric: dict[str, Any]) -> str | None:
+    actual = _number(metric.get("actual"))
+    reference = _number(metric.get("reference"))
+    if metric.get("key") == "paint_pattern":
+        if metric.get("actual") == metric.get("reference"):
+            return None
+        return f"칠하는 방향을 전문가의 {metric.get('reference_label')} 패턴에 맞추세요."
+    if actual is None or reference is None:
+        return None
+    difference = abs(actual - reference)
+    if metric.get("key") == "tool_angle":
+        action = "줄이세요" if actual > reference else "늘리세요"
+        return f"도구 각도를 약 {difference:.1f}° {action}."
+    if metric.get("key") == "posture":
+        action = "세우세요" if actual > reference else "기울이세요"
+        return f"몸통 기울기를 약 {difference:.1f}° 더 {action}."
+    if metric.get("key") == "distance":
+        action = "가까이 이동하세요" if actual > reference else "멀리 이동하세요"
+        return f"도구를 피도면에서 약 {difference / 10:.1f}cm {action}."
+    return None
+
+
+def _multi_session_zone_evaluation(
+    selected_frames: list[dict[str, Any]],
+    selected_profile: dict[str, Any],
+    selected_session_id: str,
+    reference_records: list[dict[str, Any]],
+) -> dict[str, Any]:
+    selected_session = _session_record(selected_profile, selected_session_id)
+    selected_frame_zones = _zone_frame_profiles(selected_frames)
+    reference_frame_zones = [
+        _zone_frame_profiles(record["frames"]) for record in reference_records
+    ]
+    selected_order = _macro_order(selected_session)
+    reference_orders = [_macro_order(record["session"]) for record in reference_records]
+    order_score = _order_similarity(selected_order, reference_orders)
+    zone_keys = set(selected_frame_zones) | set(selected_session.get("analysis", {}).get("zones", {}))
+    zone_output: dict[str, dict[str, Any]] = {}
+    for zone_key in sorted(zone_keys):
+        selected_frame = selected_frame_zones.get(zone_key, {})
+        reference_frames = [profile.get(zone_key, {}) for profile in reference_frame_zones]
+        selected_pattern = (
+            _zone_analysis_value(selected_session, zone_key, "expected_direction")
+            or selected_frame.get("paint_pattern")
+        )
+        reference_patterns = [
+            _zone_analysis_value(record["session"], zone_key, "expected_direction")
+            or reference_frames[index].get("paint_pattern")
+            for index, record in enumerate(reference_records)
+        ]
+        reference_patterns = [str(value) for value in reference_patterns if value]
+        distance_actual = _number(_zone_analysis_value(selected_session, zone_key, "distance_mm"))
+        if distance_actual is None:
+            distance_actual = _number(selected_frame.get("distance_mm"))
+        distance_references = [
+            _number(_zone_analysis_value(record["session"], zone_key, "distance_mm"))
+            or _number(reference_frames[index].get("distance_mm"))
+            for index, record in enumerate(reference_records)
+        ]
+        distance_references = [value for value in distance_references if value is not None]
+        coating_actual = _session_coating_median(selected_session, zone_key)
+        coating_references = [
+            value for record in reference_records
+            if (value := _session_coating_median(record["session"], zone_key)) is not None
+        ]
+        metrics = [
+            _metric_item(
+                "tool_angle", "도구 각도", _number(selected_frame.get("tool_angle_deg")),
+                [value for frame in reference_frames if (value := _number(frame.get("tool_angle_deg"))) is not None],
+                unit="deg", tolerance=12.0,
+            ),
+            _metric_item(
+                "posture", "자세", _number(selected_frame.get("posture_deg")),
+                [value for frame in reference_frames if (value := _number(frame.get("posture_deg"))) is not None],
+                unit="deg", tolerance=15.0,
+            ),
+            _pattern_metric(str(selected_pattern) if selected_pattern else None, reference_patterns),
+            _metric_item(
+                "coating_thickness", "도막 두께", coating_actual, coating_references,
+                unit="um", tolerance=30.0,
+            ),
+            _metric_item(
+                "distance", "이격거리", distance_actual, distance_references,
+                unit="mm", tolerance=max(30.0, statistics.median(distance_references) * 0.12) if distance_references else 30.0,
+            ),
+        ]
+        zone_score = _weighted_score(metrics)
+        correctable = sorted(
+            (
+                metric for metric in metrics
+                if metric.get("key") != "coating_thickness"
+                and metric.get("similarity_percent") is not None
+                and int(metric["similarity_percent"]) < 95
+            ),
+            key=lambda metric: metric["similarity_percent"],
+        )[:3]
+        correction_messages = [
+            message for metric in correctable
+            if (message := _correction_message(metric)) is not None
+        ]
+        predicted = _weighted_score(metrics, {str(metric["key"]) for metric in correctable})
+        map_num, _, zone_id = zone_key.partition(":")
+        zone_output[zone_key] = {
+            "map_num": map_num, "zone_id": zone_id,
+            "similarity_percent": zone_score,
+            "predicted_similarity_percent": predicted,
+            "reference_session_count": len(reference_records),
+            "metrics": metrics,
+            "corrections": correction_messages,
+        }
+    zone_scores = [
+        int(zone["similarity_percent"])
+        for zone in zone_output.values() if zone.get("similarity_percent") is not None
+    ]
+    zone_average = round(statistics.fmean(zone_scores)) if zone_scores else 60
+    overall = round(zone_average * 0.8 + order_score * 0.2)
+    all_corrections = [
+        {"message": message}
+        for zone in sorted(zone_output.values(), key=lambda item: item.get("similarity_percent") or 0)
+        for message in zone.get("corrections", [])
+    ][:3]
+    if not all_corrections:
+        all_corrections = [{"message": "전문가 정상 범위입니다. 현재 동작을 유지하세요."}]
+    predicted_values = [
+        int(zone["predicted_similarity_percent"])
+        for zone in zone_output.values() if zone.get("predicted_similarity_percent") is not None
+    ]
+    predicted_zone_average = round(statistics.fmean(predicted_values)) if predicted_values else zone_average
+    predicted_overall = max(overall, round(predicted_zone_average * 0.8 + order_score * 0.2))
+    return {
+        "status": "available",
+        "message": all_corrections[0]["message"],
+        "similarity_percent": overall,
+        "similarity_score": round(overall / 100, 2),
+        "zone_similarity_percent": zone_average,
+        "order_similarity_percent": order_score,
+        "predicted_similarity_percent": predicted_overall,
+        "predicted_score": round(predicted_overall / 100, 2),
+        "reference_session_id": "multi_session_expert_profile",
+        "reference_session_count": len(reference_records),
+        "comparison_basis": "multi_session_zone_normalized",
+        "zones": zone_output,
+        "corrections": all_corrections,
+    }
+
+
 def _paint_trace(frames: list[dict[str, Any]]) -> list[dict[str, Any]]:
     points = [
         (frame_index, frame)
@@ -1307,11 +1665,10 @@ button{cursor:pointer;font-weight:700}.primary{background:#3157d5;border-color:#
 .selection-panel h2{margin:0 0 7px;color:#91a0b8;font-size:11px}
 .selection-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
 .selection-grid label{margin:0 0 5px}.selection-grid .select{min-width:0}
-.workspace{grid-template-columns:245px minmax(420px,1fr) 300px}
+.workspace{grid-template-columns:368px minmax(420px,1fr) 300px}
 .evaluation-side{min-height:0;padding:14px;border-right:1px solid var(--line);background:#0c1728;overflow:auto}
 .evaluation-side .pose-summary{display:grid;grid-template-columns:1fr;gap:9px}
 .evaluation-side .pose-summary .card{margin:0}
-.evaluation-side .pose-summary .card:nth-child(2){order:-1}
 .evaluation-side #poseScore{font-size:46px;line-height:1.05;letter-spacing:-1px}
 .viewer-tools{margin-top:12px;padding-top:10px;border-top:1px solid var(--line)}
 .viewer-tools label{margin:8px 0 6px}
@@ -1327,13 +1684,13 @@ button{cursor:pointer;font-weight:700}.primary{background:#3157d5;border-color:#
 .coating-legend{display:flex;justify-content:space-between;padding:7px 11px;background:linear-gradient(90deg,#1946a0,#20c997,#ffe066,#ff7849);color:#fff;font-size:9px;text-shadow:0 1px 3px #000}
 .coating-note{padding:7px 10px;color:#7890ad;font-size:9px;line-height:1.45}
 .hidden-data-hooks{display:none}
-@media(max-width:1200px){.shell{grid-template-rows:auto auto auto}.workspace{grid-template-columns:230px minmax(0,1fr)}.right{grid-column:1/-1;grid-template-columns:1fr 1fr;grid-template-rows:auto;border-top:1px solid var(--line)}}
+@media(max-width:1200px){.shell{grid-template-rows:auto auto auto}.workspace{grid-template-columns:320px minmax(0,1fr)}.right{grid-column:1/-1;grid-template-columns:1fr 1fr;grid-template-rows:auto;border-top:1px solid var(--line)}}
 @media(max-width:760px){.selection-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.workspace{display:flex;flex-direction:column}.evaluation-side{order:1}.stage{order:0}.right{order:2;display:grid;grid-template-columns:1fr;grid-template-rows:auto auto}.skeleton-screen{height:340px;min-height:340px}.coating-card{min-height:330px}.selection-panel{padding:9px 12px}}
 </style></head><body><div class="shell">
 <header class="top"><div class="title">작업 자세 비교 평가<small>전문가 모션 뷰어 기반 · 도장 경로·자세 통합 화면 · 기준 전문가: 전형기 반장 · 제품 자세 엔진 연동</small></div><nav><a href="/docs">Swagger</a><a href="/admin">DB 뷰어</a></nav></header>
 <template id="poseUiTemplate">
 <div data-pose-slot="gizmo" class="camera-gizmo" aria-label="3D 카메라 기즈모"><button id="cameraHome" title="초기 시점">⌂</button><button id="cameraAxisX" title="X축 시점">X</button><button id="cameraAxisY" title="Y축 시점">Y</button><button id="cameraAxisZ" title="Z축 시점">Z</button></div>
-<div data-pose-slot="summary" id="poseSummary" class="pose-summary"><div class="card headline"><span>현재 자세 상태</span><strong id="posePosture">기록 준비 중</strong><div class="pose-meta"><span id="poseEstimateNote">CSV 조인트 기반 자세 추정</span><span id="poseZoneSummary">Zone 대기 중</span></div></div><div class="card"><span>전문가 동작 유사도</span><strong id="poseScore">—</strong><small id="poseScoreNote">선택된 작업 구간을 전문가 기준과 비교합니다.</small></div><div class="card pose-action"><span>자세 개선 안내</span><strong id="poseAction">기록을 선택하세요.</strong></div><div class="card"><span>안내 반영 시 계산상 예상</span><strong id="posePredicted">—</strong><small>실제 재측정 결과가 아닌 좌표 보정 시뮬레이션입니다.</small></div></div>
+<div data-pose-slot="summary" id="poseSummary" class="pose-summary"><div class="card pose-overall"><span>전문가 동작 유사도</span><strong id="poseScore">—%</strong><small id="poseScoreNote">Zone 순서와 Zone별 유사도를 전문가 반복 수행 기준으로 비교합니다.</small></div><div id="poseZoneCard" class="card pose-zone-card"><div class="pose-zone-header"><span id="poseZoneTitle">현재 Zone 유사도</span><strong id="poseZoneScore">—%</strong></div><div class="pose-meta"><span>현재 자세 상태 · <b id="posePosture">기록 준비 중</b></span><span id="poseZoneSummary">Zone 대기 중</span><span id="poseEstimateNote">CSV 조인트 기반 자세 추정</span></div><div id="poseZoneMetrics" class="pose-zone-metrics"><small>재생을 시작하면 현재 Zone의 측정값과 전문가 기준을 표시합니다.</small></div></div><div class="card pose-action"><span>자세 개선 안내</span><ol id="poseActionList"><li id="poseAction">기록을 선택하세요.</li></ol></div><div class="card pose-predicted"><span>안내 적용 시 예상</span><strong id="posePredicted">—</strong><small>실제 재측정 결과가 아닌 가상 좌표 보정 결과입니다.</small></div></div>
 </template>
 <section class="selection-panel"><h2>재생 데이터 선택</h2><div class="selection-grid">
 <div><label for="worker">작업자</label><select id="worker" class="select"></select></div>
@@ -1551,6 +1908,7 @@ def create_motion_viewer_router(
         if not selected_frames:
             raise HTTPException(status_code=422, detail="expert session has no usable skeleton frames")
         sampled_sessions: list[list[dict[str, Any]]] = []
+        sampled_session_records: list[dict[str, Any]] = []
         session_paths: list[Path] = []
         representative_frames: list[dict[str, Any]] = []
         for session in profile["sessions"]:
@@ -1566,9 +1924,39 @@ def create_motion_viewer_router(
                 continue
             if sampled:
                 sampled_sessions.append(sampled)
+                sampled_session_records.append({
+                    "session_id": current_id,
+                    "session": session,
+                    "frames": sampled,
+                })
                 session_paths.append(current_path)
                 if current_id == representative:
                     representative_frames = sampled
+        if worker["role"] == "expert":
+            evaluation_references = [
+                record for record in sampled_session_records
+                if record["session_id"] != selected
+            ]
+        else:
+            expert_profile = _read_profile(root, process, mode_id)
+            evaluation_references = []
+            for expert_session in expert_profile["sessions"]:
+                expert_id = str(expert_session.get("session_id", ""))
+                if not expert_id:
+                    continue
+                try:
+                    expert_path = _session_path(root, process, mode_id, expert_profile, expert_id)
+                    expert_frames = _canonicalize_zone_items(
+                        _frames(expert_path, frame_count), process=process, mode_id=mode_id
+                    )
+                except HTTPException:
+                    continue
+                if expert_frames:
+                    evaluation_references.append({
+                        "session_id": expert_id,
+                        "session": expert_session,
+                        "frames": expert_frames,
+                    })
         duration = float(selected_frames[-1]["t"]) if selected_frames else 0.0
         paint_trace = _canonicalize_zone_items(
             _dense_paint_trace(selected_path), process=process, mode_id=mode_id
@@ -1611,21 +1999,11 @@ def create_motion_viewer_router(
                 "display_name": worker["display_name"],
                 "role": worker["role"],
             },
-            "pose_evaluation": (
-                _expert_pose_evaluation(
-                    selected_frames,
-                    representative_frames or selected_frames,
-                    selected_session_id=selected,
-                    reference_session_id=representative,
-                )
-                if worker["role"] == "expert"
-                else {
-                    "status": "pending",
-                    "message": "동일 공정·모드·Zone의 전문가 기준과 비교할 준비가 되었습니다.",
-                    "similarity_score": None,
-                    "predicted_score": None,
-                    "corrections": [],
-                }
+            "pose_evaluation": _multi_session_zone_evaluation(
+                selected_frames,
+                profile,
+                selected,
+                evaluation_references,
             ),
             "process": process,
             "process_label": _PROCESS_LABELS[process],

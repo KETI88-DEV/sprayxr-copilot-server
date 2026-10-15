@@ -32,6 +32,7 @@
     const cosine = Math.max(-1, Math.min(1, left.reduce((sum, value, axis) => sum + value * right[axis], 0)));
     return Math.acos(cosine) * 180 / Math.PI;
   };
+  let lastZoneEvaluationKey = null;
 
   function trustedUpperBody(frame) {
     const tracked = frame?.tracked || {};
@@ -88,20 +89,97 @@
     }
   }
 
+  function metricValue(metric, side) {
+    const label = metric?.[`${side}_label`];
+    if (label) return label;
+    const value = metric?.[side];
+    if (value == null) return '평가 불가';
+    const unit = metric?.unit === 'deg' ? '°' : metric?.unit === 'um' ? ' µm' : metric?.unit || '';
+    return `${Number(value).toFixed(1)}${unit}`;
+  }
+
+  function renderZoneMetric(metric) {
+    const row = document.createElement('div');
+    row.className = 'pose-zone-metric';
+    const name = document.createElement('span');
+    name.className = 'pose-zone-metric-name';
+    name.textContent = metric.label;
+    const values = document.createElement('div');
+    values.className = 'pose-zone-metric-values';
+    for (const [key, label] of [['actual', '실제'], ['reference', '전문가']]) {
+      const line = document.createElement('span');
+      line.className = 'pose-zone-value';
+      const caption = document.createElement('span');
+      caption.textContent = label;
+      const value = document.createElement('b');
+      value.textContent = metricValue(metric, key);
+      line.append(caption, value);
+      values.append(line);
+    }
+    const progress = document.createElement('div');
+    progress.className = 'pose-zone-progress';
+    const track = document.createElement('div');
+    track.className = 'pose-zone-progress-track';
+    const fill = document.createElement('div');
+    fill.className = 'pose-zone-progress-fill';
+    const score = metric.similarity_percent;
+    fill.style.width = `${score == null ? 0 : Math.max(0, Math.min(100, score))}%`;
+    track.append(fill);
+    const value = document.createElement('span');
+    value.textContent = score == null ? '—' : `${score}%`;
+    progress.append(track, value);
+    row.append(name, values, progress);
+    return row;
+  }
+
+  function renderCorrections(corrections) {
+    const list = byId('poseActionList');
+    const messages = (corrections || []).map(item => typeof item === 'string' ? item : item?.message).filter(Boolean).slice(0, 3);
+    if (!messages.length) messages.push('전문가 정상 범위입니다. 현재 동작을 유지하세요.');
+    list.replaceChildren(...messages.map((message, index) => {
+      const item = document.createElement('li');
+      if (index === 0) item.id = 'poseAction';
+      item.textContent = message;
+      return item;
+    }));
+  }
+
+  function renderZoneEvaluation(frame, evaluation) {
+    const currentKey = frame?.spraying && Number(frame?.zone_id) > 0 && frame?.map_num != null
+      ? `${frame.map_num}:${frame.zone_id}` : null;
+    if (currentKey && evaluation?.zones?.[currentKey]) lastZoneEvaluationKey = currentKey;
+    const zoneEvaluation = lastZoneEvaluationKey ? evaluation?.zones?.[lastZoneEvaluationKey] : null;
+    const card = byId('poseZoneCard');
+    const metrics = byId('poseZoneMetrics');
+    if (!zoneEvaluation) {
+      byId('poseZoneTitle').textContent = '현재 Zone 유사도';
+      byId('poseZoneScore').textContent = '—%';
+      metrics.replaceChildren(Object.assign(document.createElement('small'), {textContent: '현재 Zone 평가 자료가 없습니다.'}));
+      renderCorrections(evaluation?.corrections);
+      return null;
+    }
+    byId('poseZoneTitle').textContent = `Zone ${zoneLabel(zoneEvaluation.zone_id)} 유사도`;
+    byId('poseZoneScore').textContent = zoneEvaluation.similarity_percent == null ? '—%' : `${zoneEvaluation.similarity_percent}%`;
+    card.style.borderColor = zoneColor(zoneEvaluation.zone_id);
+    metrics.replaceChildren(...(zoneEvaluation.metrics || []).map(renderZoneMetric));
+    renderCorrections(zoneEvaluation.corrections?.length ? zoneEvaluation.corrections : evaluation?.corrections);
+    return zoneEvaluation;
+  }
+
   function renderPoseSummary(frame) {
     const evaluation = data?.pose_evaluation || {};
     byId('posePosture').textContent = frame?.posture?.label || '자세 판정 보류';
     const zone = Number(frame?.zone_id) > 0 ? `Zone ${zoneLabel(frame.zone_id)}` : '이동 구간';
     byId('poseZoneSummary').textContent = zone;
-    byId('poseEstimateNote').textContent = 'CSV 조인트 기반 자세 추정 · 채점 분리';
-    byId('poseScore').textContent = evaluation.similarity_score == null ? '분석 대기' : evaluation.similarity_score.toFixed(3);
-    byId('poseScoreNote').textContent = evaluation.reference_session_id
-      ? `대표 전문가 기록 ${evaluation.reference_session_id}과 정규화된 전신 관절 동작을 비교합니다.`
-      : '현재 Zone·분사 구간을 같은 조건의 전문가 기록과 비교합니다.';
-    byId('poseAction').textContent = evaluation.corrections?.[0]?.message || evaluation.message || '분석 결과가 없습니다.';
-    byId('posePredicted').textContent = evaluation.predicted_score == null || evaluation.similarity_score == null
-      ? '—'
-      : `${evaluation.similarity_score.toFixed(3)} → ${evaluation.predicted_score.toFixed(3)}`;
+    byId('poseEstimateNote').textContent = '시간 제외 · 동일 Zone 전문가 기준';
+    byId('poseScore').textContent = evaluation.similarity_percent == null ? '분석 대기' : `${evaluation.similarity_percent}%`;
+    byId('poseScoreNote').textContent = evaluation.similarity_percent == null
+      ? '현재 Zone·분사 구간을 같은 조건의 전문가 기록과 비교합니다.'
+      : `Zone 평균 ${evaluation.zone_similarity_percent}% · 순서 ${evaluation.order_similarity_percent}% · 전문가 ${evaluation.reference_session_count}회 기준`;
+    const zoneEvaluation = renderZoneEvaluation(frame, evaluation);
+    const current = zoneEvaluation?.similarity_percent ?? evaluation.similarity_percent;
+    const predicted = zoneEvaluation?.predicted_similarity_percent ?? evaluation.predicted_similarity_percent;
+    byId('posePredicted').textContent = current == null || predicted == null ? '—' : `${current}% → ${predicted}%`;
   }
 
   function renderZoneTimeline(payload) {
@@ -152,7 +230,10 @@
   }
   window.motionViewerPoseOverlay = {draw: drawPoseOverlay};
   window.renderZoneTimeline = renderZoneTimeline;
-  addEventListener('motion-viewer-data', event => renderZoneTimeline(event.detail));
+  addEventListener('motion-viewer-data', event => {
+    lastZoneEvaluationKey = null;
+    renderZoneTimeline(event.detail);
+  });
 
   const syncCameraGlobals = state => {
     viewCenter = [...state.target]; yaw = state.yaw; pitch = state.pitch; zoom = state.distance; panX = 0; panY = 0;
