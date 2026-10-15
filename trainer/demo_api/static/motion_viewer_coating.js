@@ -194,8 +194,9 @@
   });
   addEventListener('motion-viewer-frame', event => {
     const frame = event.detail?.frame;
-    const next = frame && Number(frame.zone_id) > 0 && frame.map_num != null ? `${frame.map_num}:${frame.zone_id}` : null;
-    if (next === zoneKey) return;
+    const next = frame && frame.spraying && Number(frame.zone_id) > 0 && frame.map_num != null
+      ? `${frame.map_num}:${frame.zone_id}` : null;
+    if (!next || next === zoneKey) return;
     zoneKey = next;
     renderCoatingZone();
   });

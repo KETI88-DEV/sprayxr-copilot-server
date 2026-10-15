@@ -779,3 +779,21 @@ def test_pose_assets_define_layers_and_interaction_states(tmp_path: Path) -> Non
         "expert_final_heightmap",
     ):
         assert text in coating.text
+
+
+def test_motion_viewer_keeps_the_last_spraying_zone_and_gives_skeleton_more_height(
+    tmp_path: Path,
+) -> None:
+    client = _client(tmp_path)
+    page = client.get("/motion-viewer")
+    coating = client.get("/motion-viewer/assets/motion_viewer_coating.js")
+
+    assert page.status_code == 200
+    assert coating.status_code == 200
+    assert (
+        ".right{padding:12px;display:grid;"
+        "grid-template-rows:minmax(300px,1.25fr) minmax(210px,.75fr)"
+    ) in page.text
+    assert "frame && frame.spraying && Number(frame.zone_id) > 0" in coating.text
+    assert "if (!next || next === zoneKey) return;" in coating.text
+    assert "zoneKey = next;" in coating.text

@@ -1315,7 +1315,7 @@ button{cursor:pointer;font-weight:700}.primary{background:#3157d5;border-color:#
 .evaluation-side #poseScore{font-size:46px;line-height:1.05;letter-spacing:-1px}
 .viewer-tools{margin-top:12px;padding-top:10px;border-top:1px solid var(--line)}
 .viewer-tools label{margin:8px 0 6px}
-.right{padding:12px;display:grid;grid-template-rows:minmax(245px,1fr) minmax(245px,1fr);gap:10px;overflow:hidden}
+.right{padding:12px;display:grid;grid-template-rows:minmax(300px,1.25fr) minmax(210px,.75fr);gap:10px;overflow:hidden}
 .right .card{margin:0}.skeleton-card{height:100%;display:flex;flex-direction:column}.skeleton-card summary{flex:0 0 auto}
 .skeleton-screen{height:auto;min-height:150px;flex:1}#skeletonCanvas{height:100%}
 .coating-card{height:100%;display:flex;flex-direction:column;padding:0;overflow:hidden}
