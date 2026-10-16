@@ -66,7 +66,7 @@ def recommended_flow(flows: Sequence[tuple[str, list[str]]], zone_count: int) ->
 
     가장 많이 나온 순서다. 후보는 **모든 구역을 칠한 순서만** — 빠진 구역이 있는 순서를 권장하면 그 구역을 칠한
     훈련생이 '순서에 없는 구역'이 된다. 그런 순서가 없으면 전체에서 고른다. 같은 횟수면 전형기 반장이 가장 많이 쓴
-    순서, 그래도 같으면 먼저 나온 순서다.
+    순서, 반장이 그중 어느 것도 안 썼으면 반장이 가장 많이 쓴 순서다.
     """
     complete = [(worker, flow) for worker, flow in flows if len(flow) == zone_count]
     pool = complete or list(flows)
@@ -78,8 +78,40 @@ def recommended_flow(flows: Sequence[tuple[str, list[str]]], zone_count: int) ->
         lead = Counter(tuple(flow) for worker, flow in pool if worker == LEAD_WORKER and tuple(flow) in tied)
         if lead:
             return list(lead.most_common(1)[0][0]), top, f"동률 {len(tied)}개 → 전형기 반장"
+        # 반장이 동률 순서를 하나도 안 썼으면 반장이 가장 많이 쓴 순서(2026-10-16 결정, 3번 레벨).
+        own = Counter(tuple(flow) for worker, flow in pool if worker == LEAD_WORKER)
+        if own:
+            flow, count = own.most_common(1)[0]
+            return list(flow), count, f"동률 {len(tied)}개, 반장 순서 없음 → 전형기 반장 최빈"
         reason = f"동률 {len(tied)}개 → 먼저 나온 순서"
     return list(tied[0]), top, reason
+
+
+START = "시작"
+
+
+def transition_counts(flows: Sequence[list[str]]) -> Counter[tuple[str, str]]:
+    """처음 칠한 순서들에서 (현재 구역 → 다음 구역) 횟수. 첫 구역은 (시작 → 구역)."""
+    counts: Counter[tuple[str, str]] = Counter()
+    for flow in flows:
+        counts.update(zip([START, *flow], flow))
+    return counts
+
+
+def recommend_next(
+    current: str | None, visited: set[str], counts: Counter[tuple[str, str]], flow: Sequence[str]
+) -> str | None:
+    """다음에 칠할 구역. 훈련생이 권장 순서를 벗어났어도 **지금 구역에서** 전문가가 가장 많이 간 안 칠한 구역을 고른다.
+
+    그런 전이가 없으면 권장 순서에서 아직 안 칠한 첫 구역이다(2026-10-16 결정: 순서 판정은 권장 순서, 다음 구역
+    추천은 전이 확률).
+    """
+    candidates = [(count, -flow.index(to) if to in flow else -len(flow), to)
+                  for (source, to), count in counts.items()
+                  if source == (current or START) and to not in visited]
+    if candidates:
+        return max(candidates)[2]
+    return next((zone for zone in flow if zone not in visited), None)
 
 
 def _write(path: Path, header: list[str], rows: list[list[object]]) -> None:
@@ -126,6 +158,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         flow_rows.append([folder, path.name, scenario, len(zones), " → ".join(flow)])
 
     order_rows: list[list[object]] = []
+    transition_rows: list[list[object]] = []
     for scenario in sorted(flows, key=int):
         model_key = catalog.resolve_model(scenario) or ""
         total = len(catalog.zones(model_key, 1))
@@ -136,6 +169,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             for rank, zone in enumerate(flow, start=1):
                 ranks[zone].append(rank)
         by_rank = sorted(ranks, key=lambda zone: (statistics.mean(ranks[zone]), int(zone)))
+        counts = transition_counts([flow for _, flow in files])
+        totals = Counter(source for source, _ in counts.elements())
+        for (source, target), count in sorted(counts.items(), key=lambda item: (item[0][0] != START, item[0][0], -item[1])):
+            transition_rows.append([scenario, source, target, count, round(count / totals[source] * 100, 1)])
         order_rows.append([
             scenario, model_key, len(files), total,
             sum(1 for _, flow in files if len(flow) == total),
@@ -153,6 +190,7 @@ def main(argv: Sequence[str] | None = None) -> int:
            ["시나리오", "모델", "파일수", "구역수", "전구역방문파일수", "권장순서", "권장순서파일수", "결정",
             "평균순위순서", "구역별평균순위(방문파일수)"],
            order_rows)
+    _write(args.out / "다음구역_전이확률.csv", ["시나리오", "현재구역", "다음구역", "횟수", "확률%"], transition_rows)
     print(f"파일 {len(flow_rows)}개, 시퀀스 {len(sequence_rows)}개, 제외 {skipped}개 → {args.out}")
     return 0
 

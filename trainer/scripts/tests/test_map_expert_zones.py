@@ -6,7 +6,13 @@ from pathlib import Path
 
 import numpy as np
 
-from trainer.scripts.map_expert_zones import first_visit_flow, learning_scenario, recommended_flow
+from trainer.scripts.map_expert_zones import (
+    first_visit_flow,
+    learning_scenario,
+    recommend_next,
+    recommended_flow,
+    transition_counts,
+)
 from trainer.zone_reference import ZoneReferenceCatalog
 
 
@@ -45,3 +51,25 @@ def test_recommended_flow_is_the_most_common_complete_order_with_the_lead_breaki
     assert recommended_flow(partial + tied, 3) == (["1", "2", "3"], 2, "동률 2개 → 전형기 반장")
     assert recommended_flow(partial + tied[:2], 3) == (["2", "1", "3"], 2, "최빈")
     assert recommended_flow(partial, 3) == (["1", "2"], 3, "최빈(전 구역 순서 없음)")
+
+
+def test_a_tie_the_lead_never_used_falls_to_the_leads_own_most_common_order() -> None:
+    """3번 레벨: 동률 순서를 반장이 하나도 안 썼다 → 반장이 가장 많이 쓴 순서(2026-10-16 결정)."""
+    flows = [("임채원", ["1", "2", "3"])] * 3 + [("정희록", ["2", "1", "3"])] * 3 + [("전형기", ["3", "1", "2"])] * 2
+
+    assert recommended_flow(flows, 3) == (["3", "1", "2"], 2, "동률 2개, 반장 순서 없음 → 전형기 반장 최빈")
+
+
+def test_next_zone_follows_expert_transitions_from_where_the_trainee_actually_is() -> None:
+    """권장 순서를 벗어난 훈련생도 지금 구역 기준 전문가 전이로 다음을 받는다. 칠한 구역은 다시 권하지 않는다.
+
+    깨뜨리는 법: 권장 순서만 쓰면 3번에 있는 훈련생에게 아직 안 칠한 1번(순서상 첫 미방문)을 권한다.
+    """
+    flow = ["1", "2", "3", "4"]
+    counts = transition_counts([["1", "2", "3", "4"], ["1", "3", "4", "2"], ["2", "3", "4", "1"]])
+
+    assert recommend_next(None, set(), counts, flow) == "1"  # 시작: 1(2회) > 2(1회)
+    assert recommend_next("3", {"2", "3"}, counts, flow) == "4"  # 순서를 벗어나 3에 있다 → 3→4(3회)
+    assert recommend_next("4", {"1", "3", "4"}, counts, flow) == "2"  # 4→1 은 칠했으니 4→2
+    assert recommend_next("2", {"1", "2", "3", "4"}, counts, flow) is None
+    assert recommend_next("9", {"1"}, counts, flow) == "2"  # 전이가 없으면 권장 순서의 첫 미방문
