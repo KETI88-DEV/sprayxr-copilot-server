@@ -39,7 +39,13 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from trainer.demo_api.copilot_contracts import CopilotQueryData, CopilotQueryRequest, CopilotResponse
-from trainer.demo_api.pose_query import answer_zone_question, asks_about_zones, score_pose, zone_unavailable
+from trainer.demo_api.pose_query import (
+    answer_order_question,
+    answer_zone_question,
+    asks_about_zones,
+    score_pose,
+    zone_unavailable,
+)
 from trainer.demo_api.sequence_store import SequenceStore
 from trainer.demo_api.v1_store import V1Store
 from trainer.scripts.generation_slot import GENERATION_SLOT
@@ -95,6 +101,7 @@ def _success_response(
     citations: list[str],
     degraded: bool = False,
     pose_context: dict[str, object] | None = None,
+    sequence_context: dict[str, object] | None = None,
     context_status: str = "not_available",
 ) -> JSONResponse:
     generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -115,7 +122,7 @@ def _success_response(
             answer=answer,
             resolved_intents=[query.task_type],
             context_status=context_status,  # type: ignore[arg-type]
-            sequence_context=None,
+            sequence_context=sequence_context,
             coating_context=None,
             pose_context=pose_context,
             retrieval_used=retrieval_used,
@@ -147,14 +154,33 @@ async def execute_copilot_query(
     """Execute one normalized query for both text and voice transports."""
     request_started = time.monotonic() if started is None else started
 
-    if query.task_type == "pose_recomm" and reports is not None and asks_about_zones(query.prompt, query.context):
-        # 구역 질문("가장 문제 있는 구역이 어디야?")은 complete 가 남긴 구역별 결과로 답한다(pose_query 참고).
-        session_id = query.session_id
+    context = (query.context or "").strip()
+    # 시퀀스(`SEQ-012`)를 가리키지 않은 자세·순서 질문은 complete 가 남긴 세션 결과로 답한다(pose_query 참고).
+    # complete 뒤에는 질문에 "구역"이 없어도 그렇다 — 뷰어 채팅은 칩으로 유형만 고른다.
+    session_id = query.session_id
+    found = (
+        await to_thread.run_sync(lambda: reports.latest_complete_analysis(session_id))
+        if reports is not None and session_id and query.task_type in ("pose_recomm", "trajectory_recomm")
+        and (not context or context.isdigit())
+        else None
+    )
+    if query.task_type == "trajectory_recomm" and reports is not None and session_id:
+        order = answer_order_question(found)
+        logger.info(
+            "copilot trajectory_recomm request_id=%s status=%s reason=%s",
+            query.request_id, order.analysis_status, order.reason_code,
+        )
+        return _success_response(
+            query, request_started, answer=order.answer, retrieval_used=False, citations=[],
+            sequence_context=order.context,
+            context_status="available" if order.analysis_status == "available" else "not_available",
+        )
+
+    if query.task_type == "pose_recomm" and reports is not None and (
+        found is not None or asks_about_zones(query.prompt, query.context)
+    ):
         zone = (
-            answer_zone_question(
-                await to_thread.run_sync(lambda: reports.latest_complete_analysis(session_id)),
-                context=query.context,
-            )
+            answer_zone_question(found, context=query.context)
             if session_id
             else zone_unavailable("session_id_missing")
         )

@@ -261,6 +261,7 @@ def create_app(
             expert_guidance.reference_root,
             sequence_store=sequence_store,
             mcp_base_url=mcp_base_url,
+            reports=v1_store,
         )
     )
     # knowledge_search shares the live pipeline singleton; resolved per call so it is built once, lazily.

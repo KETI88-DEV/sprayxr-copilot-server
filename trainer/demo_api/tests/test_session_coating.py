@@ -196,8 +196,9 @@ def _fake_mcp(request: httpx.Request) -> httpx.Response:
     return httpx.Response(200, json={"status": "success", "result": result})
 
 
-def _client(engine: CoatingProgressEngine) -> TestClient:
-    sequences, reports = SequenceStore(":memory:"), V1Store(":memory:")
+def _client(engine: CoatingProgressEngine, reports: V1Store | None = None) -> TestClient:
+    sequences = SequenceStore(":memory:")
+    reports = reports if reports is not None else V1Store(":memory:")
     for number, zone_id in ((1, "1"), (2, "3"), (3, "3")):
         body = {
             **SPRAY, "session_id": SESSION, "user_id": "u", "scenario_id": "3", "zone_id": zone_id,
@@ -340,3 +341,65 @@ def test_without_an_expert_reference_the_briefing_says_why_coating_is_missing(tm
     assert report["coating_report"]["reason_code"] == "reference_unavailable"
     assert "도막은 분석하지 못했습니다: 이 콘텐츠의 전문가 도막 기준이 없습니다." in report["llm_briefing"]
     assert report["pose_report"]["analysis_status"] == "available"
+
+
+def _complete_session(client: TestClient, height_map: bytes) -> str:
+    response = client.post(
+        "/api/v1/sessions/complete",
+        data={"session_id": SESSION, "user_id": "u", "scenario_id": "3", "vr_score": "60", "is_pass": "true",
+              "avg_thickness_um": "120"},
+        files={
+            "telemetry_csv": ("t.csv", b"index,time\n1,0\n", "text/csv"),
+            "height_map_image": ("Map01_x_Height.png", height_map, "image/png"),
+        },
+    )
+    assert response.status_code == 200, response.text
+    return str(response.json()["data"]["report_id"])
+
+
+def test_after_complete_chip_questions_use_the_session_report(engine: CoatingProgressEngine, height_map: bytes) -> None:
+    """뷰어 채팅은 칩으로 유형만 고른다. complete 뒤에는 '구역' 없는 자세 질문도 세션 결과로 답하고, 순서 칩은 순서 리포트로 답한다.
+
+    깨뜨리는 법: 키워드가 있어야만 구역 답을 내면 '자세 어땠어?'가 마지막 시퀀스 채점으로 간다.
+    """
+    reports = V1Store(":memory:")
+    client = _client(engine, reports)
+    report_id = _complete_session(client, height_map)
+
+    pose = _ask(client, "자세 어땠어?")
+    assert pose["answer"].startswith("가장 문제가 큰 구역은 3번 구역입니다.")
+
+    body = {"user_id": "u", "session_id": SESSION, "scenario_id": "3", "task_type": "trajectory_recomm", "prompt": "순서 잘 지켰어?"}
+    order = client.post("/api/v1/copilot/query", json=body).json()["data"]
+    # 이 시험 라우터에는 순서 엔진이 없다 → 순서 리포트가 unavailable 이고 그 사유로 답한다.
+    assert order["answer"].startswith("이 세션은 순서를 분석하지 못했습니다.")
+    assert order["sequence_context"]["report_id"] == report_id
+
+    from trainer.demo_api.motion_viewer import create_motion_viewer_router
+
+    viewer = FastAPI()
+    viewer.include_router(create_motion_viewer_router(Path("/nonexistent"), reports=reports))
+    listed = TestClient(viewer).get("/motion-viewer/api/completed").json()["sessions"]
+    assert [(item["session_id"], item["report_id"], item["scenario_id"]) for item in listed] == [(SESSION, report_id, "3")]
+    script = TestClient(viewer).get("/motion-viewer/assets/motion_viewer_chat.js")
+    assert script.status_code == 200 and "trajectory_recomm" in script.text
+
+
+def test_order_answer_reads_the_sequence_report() -> None:
+    from trainer.demo_api.pose_query import answer_order_question
+
+    analysis = {"sequence_report": {
+        "analysis_status": "available", "recommended_flow": ["7", "4", "8", "9"], "first_visit_flow": ["9", "7", "4"],
+        "evaluated_visit_count": 5, "on_track_visit_count": 3, "adherence_rate": 0.6, "deviation_count": 2,
+        "direction_adherence_rate": 0.75,
+        "zone_summary": [{"zone_id": "9", "deviation_count": 1}, {"zone_id": "4", "deviation_count": 2}],
+    }}
+
+    result = answer_order_question(("RPT-1", analysis))
+
+    assert result.answer == (
+        "권장 순서는 7 → 4 → 8 → 9입니다. 이번 세션에서 처음 칠한 순서는 9 → 7 → 4입니다. "
+        "구역 방문 5회 중 3회가 순서에 맞아 순서 준수율은 60%입니다. 칠하지 않은 구역은 8번입니다. "
+        "순서 이탈이 가장 많은 구역은 4번(2회)입니다. 도포 방향 준수율은 75%입니다."
+    )
+    assert answer_order_question(None).reason_code == "session_report_unavailable"

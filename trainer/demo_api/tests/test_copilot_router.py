@@ -37,7 +37,8 @@ _DATA_KEYS = {
     "citations",
 }
 # pose_recomm 은 이제 실제로 채점한다(명세서 p.9). 준비 중 응답은 둘만 남는다.
-_PENDING = ["trajectory_recomm", "error_analysis"]
+# trajectory_recomm 은 세션이 있으면 complete 리포트로 답한다(아래 별도 시험). 엔진이 없는 것은 error_analysis 뿐이다.
+_PENDING = ["error_analysis"]
 _GENERATED_UUID = "3f0c1b2a-9d8e-4c7b-a6f5-0e1d2c3b4a59"
 
 
@@ -532,3 +533,17 @@ def test_concurrent_queries_run_one_at_a_time(monkeypatch: pytest.MonkeyPatch) -
     assert len(pipeline.calls) == 2
     assert pipeline.peak == 1
     assert min(r.json()["data"]["latency_ms"] for r in responses) >= 200
+
+
+def test_order_question_before_complete_says_the_report_comes_after_complete(
+    monkeypatch: pytest.MonkeyPatch, network_calls: list[str]
+) -> None:
+    """순서 질문은 complete 리포트로 답한다. 아직 없으면 '준비 중'이 아니라 언제 생기는지를 말한다. 파이프라인·MCP 없음."""
+    app = _app(monkeypatch, None)
+
+    data = TestClient(app).post(URL, json=_body(task_type="trajectory_recomm", session_id="SESSION-NONE")).json()["data"]
+
+    assert data["answer"].startswith("구역별 자세·순서 분석은 훈련 종료(sessions/complete) 뒤에")
+    assert data["context_status"] == "not_available"
+    assert data["sequence_context"]["reason_code"] == "session_report_unavailable"
+    assert network_calls == []

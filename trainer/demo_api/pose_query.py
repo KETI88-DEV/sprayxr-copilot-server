@@ -229,7 +229,7 @@ _ZONE_QUESTION: Final = re.compile(r"구역|zone|어디|어느", re.IGNORECASE)
 
 _ZONE_REASON_ANSWERS: Final[dict[str, str]] = {
     "session_id_missing": "어느 세션인지 알 수 없어 구역별 자세를 찾지 못했습니다. session_id를 함께 보내 주세요.",
-    "session_report_unavailable": "구역별 자세 분석은 훈련 종료(sessions/complete) 뒤에 만들어집니다. 종료 후 다시 물어봐 주세요.",
+    "session_report_unavailable": "구역별 자세·순서 분석은 훈련 종료(sessions/complete) 뒤에 만들어집니다. 종료 후 다시 물어봐 주세요.",
     "zone_analysis_unavailable": "이 세션에는 자세를 채점한 구역이 없습니다.",
     "zone_not_evaluated": "{zone}번 구역은 이 세션에서 자세를 채점한 분사가 없습니다.",
 }
@@ -355,3 +355,42 @@ def answer_zone_question(found: tuple[str, Mapping[str, Any]] | None, *, context
             }} if coating is not None else {}),
         },
     )
+
+
+def answer_order_question(found: tuple[str, Mapping[str, Any]] | None) -> ZoneAnswer:
+    """complete 의 순서 리포트(`sequence_report`)로 "순서 잘 지켰어?"에 답한다. 계산 결과를 문장으로 옮길 뿐이다."""
+    if found is None:
+        return zone_unavailable("session_report_unavailable")
+    report_id, analysis = found
+    report = analysis.get("sequence_report") if isinstance(analysis.get("sequence_report"), Mapping) else {}
+    if report.get("analysis_status") != "available":
+        reason = str(report.get("reason_code") or "sequence_report_unavailable")
+        guideline = str(report.get("guideline") or "순서 기준이 없습니다.")
+        return ZoneAnswer(
+            "not_available", reason, f"이 세션은 순서를 분석하지 못했습니다. {guideline}",
+            {"analysis_status": "not_available", "reason_code": reason, "scope": "session", "report_id": report_id},
+        )
+    flow = [str(zone) for zone in report.get("recommended_flow") or []]
+    first = [str(zone) for zone in report.get("first_visit_flow") or []]
+    evaluated = int(report.get("evaluated_visit_count") or 0)
+    on_track = int(report.get("on_track_visit_count") or 0)
+    rate = float(report.get("adherence_rate") or 0.0)
+    answer = (
+        f"권장 순서는 {' → '.join(flow)}입니다. 이번 세션에서 처음 칠한 순서는 {' → '.join(first) or '없음'}입니다. "
+        f"구역 방문 {evaluated}회 중 {on_track}회가 순서에 맞아 순서 준수율은 {rate * 100:.0f}%입니다."
+    )
+    missing = [zone for zone in flow if zone not in first]
+    if missing:
+        answer += f" 칠하지 않은 구역은 {'·'.join(missing)}번입니다."
+    zones = [zone for zone in report.get("zone_summary") or [] if isinstance(zone, Mapping)]
+    worst = max(zones, key=lambda zone: int(zone.get("deviation_count") or 0), default=None)
+    if worst is not None and int(worst.get("deviation_count") or 0) > 0:
+        answer += f" 순서 이탈이 가장 많은 구역은 {worst['zone_id']}번({worst['deviation_count']}회)입니다."
+    direction = report.get("direction_adherence_rate")
+    if isinstance(direction, (int, float)):
+        answer += f" 도포 방향 준수율은 {direction * 100:.0f}%입니다."
+    return ZoneAnswer("available", None, answer, {
+        "analysis_status": "available", "reason_code": None, "scope": "session", "report_id": report_id,
+        "recommended_flow": flow, "first_visit_flow": first, "adherence_rate": rate,
+        "deviation_count": report.get("deviation_count"), "direction_adherence_rate": direction,
+    })

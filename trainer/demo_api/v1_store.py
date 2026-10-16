@@ -235,6 +235,28 @@ class V1Store:
             return None
         return CompletionRow(row[0], row[1], row[2], row[3], json.loads(row[4]))
 
+    def complete_sessions(self, *, limit: int = 50) -> list[dict[str, Any]]:
+        """`complete` 리포트가 있는 세션, 최근 것부터(세션마다 최신 리포트 하나)."""
+        import json
+
+        with self._guard:
+            rows = self._conn.execute(
+                "SELECT report_id, session_id, requested_at, payload FROM completions WHERE report_status = 'complete'"
+                " ORDER BY requested_at DESC, rowid DESC"
+            ).fetchall()
+        sessions: dict[str, dict[str, Any]] = {}
+        for report_id, session_id, requested_at, payload in rows:
+            if session_id in sessions:
+                continue
+            data = json.loads(payload)
+            sessions[session_id] = {
+                "session_id": session_id, "report_id": report_id, "requested_at": requested_at,
+                "user_id": data.get("user_id"), "scenario_id": data.get("scenario_id"),
+            }
+            if len(sessions) >= limit:
+                break
+        return list(sessions.values())
+
     def latest_complete_analysis(self, session_id: str) -> tuple[str, dict[str, Any]] | None:
         """세션의 가장 최근 `complete` 리포트의 (report_id, analysis). 없으면 None."""
         import json

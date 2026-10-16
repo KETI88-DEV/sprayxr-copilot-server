@@ -17,6 +17,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from trainer.demo_api.motion_viewer_pose import _default_mesh_provider, build_pose_view
 from trainer.demo_api.pose_query import score_body_raw
 from trainer.demo_api.sequence_store import SequenceStore
+from trainer.demo_api.v1_store import V1Store
 from trainer.expert_zone_mapping import canonical_expert_zone_id
 
 _JOINT_PARENTS: tuple[tuple[str, str | None], ...] = (
@@ -1789,7 +1790,7 @@ function tick(now){if(playing&&data&&data.frames.length){if(!last)last=now;const
 $('worker').onchange=fillProcesses;$('process').onchange=fillModes;$('mode').onchange=fillSessions;$('session').onchange=loadMotion;$('timeline').oninput=e=>{referencePreview=false;index=Number(e.target.value);playheadSeconds=data.frames[index].t;last=0;draw()};$('pointSize').oninput=e=>{$('pointSizeValue').textContent=`${Number(e.target.value).toFixed(2).replace(/0+$/,'').replace(/\.$/,'')} px`;draw()};$('zoneSurface').onchange=draw;$('skeletonTurnLeft').onclick=()=>setSkeletonYaw(skeletonYaw-15);$('skeletonTurnRight').onclick=()=>setSkeletonYaw(skeletonYaw+15);$('skeletonReset').onclick=()=>setSkeletonYaw(0);document.querySelector('.skeleton-card').ontoggle=()=>{if(document.querySelector('.skeleton-card').open)resize()};$('play').onclick=()=>{if(playing){playing=false;last=0;$('play').textContent='재생'}else startPlayback()};$('restart').onclick=()=>{playing=false;referencePreview=false;index=0;playheadSeconds=0;last=0;$('play').textContent='재생';$('timeline').value=0;draw()};
 canvas.onpointerdown=e=>{if(e.button!==0&&e.button!==1)return;e.preventDefault();canvas.setPointerCapture(e.pointerId);drag=e.button===1?{mode:'pan',x:e.clientX,y:e.clientY,panX,panY}:{mode:'rotate',x:e.clientX,y:e.clientY,yaw,pitch};canvas.style.cursor=drag.mode==='pan'?'move':'grabbing'};canvas.onpointermove=e=>{if(!drag)return;if(drag.mode==='pan'){panX=drag.panX+e.clientX-drag.x;panY=drag.panY+e.clientY-drag.y}else{yaw=drag.yaw+(e.clientX-drag.x)*.01;pitch=Math.max(-1.2,Math.min(1.2,drag.pitch+(e.clientY-drag.y)*.01))}draw()};canvas.onpointerup=e=>{if(canvas.hasPointerCapture(e.pointerId))canvas.releasePointerCapture(e.pointerId);drag=null;canvas.style.cursor='grab'};canvas.onpointercancel=()=>{drag=null;canvas.style.cursor='grab'};canvas.onauxclick=e=>e.preventDefault();canvas.onwheel=e=>{e.preventDefault();zoom=Math.max(70,Math.min(420,zoom*(e.deltaY>0?.9:1.1)));draw()};
 addEventListener('resize',resize);(async()=>{try{catalog=await json('/motion-viewer/api/catalog');$('worker').replaceChildren(...catalog.workers.map(worker=>option(worker.worker_id,`${worker.display_name}${worker.role==='expert'?' · 전문가 기준':''}`)));fillProcesses();resize();requestAnimationFrame(tick)}catch(e){$('status').textContent=e.message}})();
-</script><script defer src="/motion-viewer/assets/motion_viewer_camera.js"></script><script defer src="/motion-viewer/assets/motion_viewer_pose.js"></script><script defer src="/motion-viewer/assets/motion_viewer_coating.js"></script></body></html>"""
+</script><script defer src="/motion-viewer/assets/motion_viewer_camera.js"></script><script defer src="/motion-viewer/assets/motion_viewer_pose.js"></script><script defer src="/motion-viewer/assets/motion_viewer_coating.js"></script><script defer src="/motion-viewer/assets/motion_viewer_chat.js"></script></body></html>"""
 
 
 def create_motion_viewer_router(
@@ -1801,6 +1802,7 @@ def create_motion_viewer_router(
     transport: Any = None,
     pose_scorer: Any = score_body_raw,
     mesh_provider: Any = _default_mesh_provider,
+    reports: V1Store | None = None,
 ) -> APIRouter:
     root = Path(reference_root)
     router = APIRouter()
@@ -1838,6 +1840,18 @@ def create_motion_viewer_router(
             static_root / "motion_viewer_coating.js", media_type="text/javascript",
             headers={"Cache-Control": "no-cache"},
         )
+
+    @router.get("/motion-viewer/assets/motion_viewer_chat.js", include_in_schema=False)
+    def chat_script() -> FileResponse:
+        return FileResponse(
+            static_root / "motion_viewer_chat.js", media_type="text/javascript",
+            headers={"Cache-Control": "no-cache"},
+        )
+
+    @router.get("/motion-viewer/api/completed", include_in_schema=False)
+    def completed_sessions() -> dict[str, Any]:
+        """채팅이 고를 수 있는 세션 — complete 리포트가 있는 것만(질의가 그 리포트로 답한다)."""
+        return {"sessions": reports.complete_sessions() if reports is not None else []}
 
     @router.get("/motion-viewer/api/catalog", include_in_schema=False)
     def motion_catalog() -> dict[str, Any]:
