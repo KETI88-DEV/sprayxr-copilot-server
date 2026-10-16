@@ -233,3 +233,40 @@ def test_legacy_expert_heightmap_without_blue_channel_uses_nonblack_pixels() -> 
         zone_mask=mask,
         blue_is_validity=False,
     ) > 0
+
+
+def test_expert_orders_put_the_decided_flow_first_and_replace_transitions(tmp_path: Path) -> None:
+    """반장 한 사람의 raw 세션 순서가 아니라, 전문가 전체에서 정한 권장 순서가 `macro_orders[0]`이 된다(엔진은 [0]을 쓴다).
+
+    깨뜨리는 법: 기준 JSON 을 무시하면 [0]이 raw 순서(3 → 1)로 남는다.
+    """
+    target = tmp_path / "raw" / "spray" / "learning" / "mode_02" / "2_1001_1"
+    target.mkdir(parents=True)
+    with (target / "2_1001_1.csv").open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.writer(stream)
+        writer.writerow(["시간(초)", "분사", "Speed (Real)", "Distance (Real)", "Ray Texture Map Number", "Zone ID"])
+        writer.writerows([[0.1, "On", 100, 300, 1, "1"], [0.2, "On", 200, 400, 1, "3"]])
+    orders = tmp_path / "orders.json"
+    orders.write_text(json.dumps({"scenarios": {"2": {
+        "file_count": 48, "recommended_flow": ["1", "2", "3"], "flow_file_count": 18, "decision": "최빈",
+        "transitions": [{"from": "1", "to": "2", "count": 30}, {"from": "2", "to": "3", "count": 25}],
+    }}}), encoding="utf-8")
+
+    [output] = build_profiles(tmp_path, process="spray", expert_orders_path=orders)
+    aggregate = json.loads(output.read_text(encoding="utf-8"))["aggregate"]
+
+    assert [item["zone_id"] for item in aggregate["macro_orders"][0]["order"]] == ["1", "2", "3"]
+    assert aggregate["macro_orders"][0]["source"] == "expert_zone_orders"
+    assert [item["zone_id"] for item in aggregate["macro_orders"][1]["order"]] == ["3", "1"]  # raw 순서는 뒤에 남는다
+    assert [(t["from"]["zone_id"], t["to"]["zone_id"], t["session_count"]) for t in aggregate["transitions"]] == [
+        ("1", "2", 30), ("2", "3", 25),
+    ]
+
+
+def test_the_shipped_expert_orders_cover_learning_levels_one_to_ten() -> None:
+    from trainer.scripts.build_zone_guidance_profiles import EXPERT_ZONE_ORDERS, _expert_orders
+
+    orders = _expert_orders(EXPERT_ZONE_ORDERS)
+
+    assert sorted(orders, key=int) == [str(level) for level in range(1, 11)]
+    assert orders["3"]["recommended_flow"] == ["7", "4", "8", "5", "6", "3", "2", "1", "9"]  # 2026-10-16 반장 순서

@@ -6,7 +6,9 @@
 (`session_analysis.painted_zone`) — 으로 정한다. 구간도 런타임과 같은 `spray_runs`로 자른다.
 
 학습 레벨 1~10(파일명 앞 번호 = scenario_id → Learn01~10)만 쓴다. 1-A·1-B·1-C는 라벨맵과 맞지 않아(착탄의 3~7%만
-구역 안, 2026-10-15) 무엇인지 확인될 때까지 뺀다. 원본은 고치지 않고 `--out` 아래에 표 세 개를 쓴다.
+구역 안, 2026-10-15) 무엇인지 확인될 때까지 뺀다. 원본은 고치지 않고 `--out` 아래에 표와 `expert_zone_orders.json`(레벨별 권장 순서·구역 전이)을 쓴다.
+그 JSON 은 `trainer/demo_api/assets/zone_reference/`에 복사해 두고, Spark 프로필 생성기
+(`build_zone_guidance_profiles`)가 권장 순서(`macro_orders[0]`)와 전이(`transitions`)로 쓴다.
 
     python3 -m trainer.scripts.map_expert_zones --source /data/sources/professionals --out /output/zone_data/professionals
 """
@@ -15,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import statistics
 from collections import Counter, defaultdict
 from collections.abc import Sequence
@@ -98,22 +101,6 @@ def transition_counts(flows: Sequence[list[str]]) -> Counter[tuple[str, str]]:
     return counts
 
 
-def recommend_next(
-    current: str | None, visited: set[str], counts: Counter[tuple[str, str]], flow: Sequence[str]
-) -> str | None:
-    """다음에 칠할 구역. 훈련생이 권장 순서를 벗어났어도 **지금 구역에서** 전문가가 가장 많이 간 안 칠한 구역을 고른다.
-
-    그런 전이가 없으면 권장 순서에서 아직 안 칠한 첫 구역이다(2026-10-16 결정: 순서 판정은 권장 순서, 다음 구역
-    추천은 전이 확률).
-    """
-    candidates = [(count, -flow.index(to) if to in flow else -len(flow), to)
-                  for (source, to), count in counts.items()
-                  if source == (current or START) and to not in visited]
-    if candidates:
-        return max(candidates)[2]
-    return next((zone for zone in flow if zone not in visited), None)
-
-
 def _write(path: Path, header: list[str], rows: list[list[object]]) -> None:
     with path.open("w", encoding="utf-8-sig", newline="") as stream:
         writer = csv.writer(stream)
@@ -159,6 +146,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     order_rows: list[list[object]] = []
     transition_rows: list[list[object]] = []
+    orders_json: dict[str, dict[str, object]] = {}
     for scenario in sorted(flows, key=int):
         model_key = catalog.resolve_model(scenario) or ""
         total = len(catalog.zones(model_key, 1))
@@ -170,6 +158,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ranks[zone].append(rank)
         by_rank = sorted(ranks, key=lambda zone: (statistics.mean(ranks[zone]), int(zone)))
         counts = transition_counts([flow for _, flow in files])
+        orders_json[scenario] = {
+            "model_key": model_key, "file_count": len(files), "recommended_flow": chosen,
+            "flow_file_count": chosen_count, "decision": reason,
+            "transitions": [
+                {"from": source, "to": target, "count": count}
+                for (source, target), count in sorted(counts.items()) if source != START
+            ],
+        }
         totals = Counter(source for source, _ in counts.elements())
         for (source, target), count in sorted(counts.items(), key=lambda item: (item[0][0] != START, item[0][0], -item[1])):
             transition_rows.append([scenario, source, target, count, round(count / totals[source] * 100, 1)])
@@ -190,6 +186,10 @@ def main(argv: Sequence[str] | None = None) -> int:
            ["시나리오", "모델", "파일수", "구역수", "전구역방문파일수", "권장순서", "권장순서파일수", "결정",
             "평균순위순서", "구역별평균순위(방문파일수)"],
            order_rows)
+    (args.out / "expert_zone_orders.json").write_text(
+        json.dumps({"schema_version": 1, "source": "professionals", "scenarios": orders_json}, ensure_ascii=False, indent=1),
+        encoding="utf-8",
+    )
     _write(args.out / "다음구역_전이확률.csv", ["시나리오", "현재구역", "다음구역", "횟수", "확률%"], transition_rows)
     print(f"파일 {len(flow_rows)}개, 시퀀스 {len(sequence_rows)}개, 제외 {skipped}개 → {args.out}")
     return 0

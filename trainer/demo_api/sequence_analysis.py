@@ -21,6 +21,24 @@ ALGORITHM_VERSION = "sequence-reference-1.0"
 _NO_ZONE = {"", "-1", "0", "none", "null", "nan"}
 
 
+def recommend_next(
+    current: str | None, visited: set[str], transitions: dict[tuple[str, str], int], flow: list[str]
+) -> str | None:
+    """다음에 칠할 구역. 지금 구역에서 전문가가 가장 많이 간, 아직 안 칠한 구역(같으면 권장 순서에서 앞선 쪽).
+
+    그런 전이가 없으면 권장 순서의 첫 미방문 구역. 순서 **판정**은 권장 순서로 하되, 훈련생이 다른 순서로 갔을 때의
+    **추천**은 이 확률로 한다(2026-10-16 결정).
+    """
+    candidates = [
+        (count, -flow.index(target) if target in flow else -len(flow), target)
+        for (source, target), count in transitions.items()
+        if source == current and target not in visited
+    ]
+    if candidates:
+        return max(candidates)[2]
+    return next((zone for zone in flow if zone not in visited), None)
+
+
 @dataclass(frozen=True)
 class SequenceDecision:
     feedback: EngineFeedback
@@ -99,6 +117,17 @@ class SequenceAnalysisEngine:
         return [str(item["zone_id"]) for item in orders[0].get("order", []) if isinstance(item, dict) and item.get("zone_id") is not None]
 
     @staticmethod
+    def _transitions(profile: dict[str, Any]) -> dict[tuple[str, str], int]:
+        """프로필의 구역 전이 → {(현재, 다음): 횟수}."""
+        output: dict[tuple[str, str], int] = {}
+        for item in profile.get("aggregate", {}).get("transitions") or []:
+            try:
+                output[(str(item["from"]["zone_id"]), str(item["to"]["zone_id"]))] = int(item.get("session_count", 0))
+            except (KeyError, TypeError, ValueError):
+                continue
+        return output
+
+    @staticmethod
     def _expected(profile: dict[str, Any], zone_id: str, map_num: int = 1) -> str | None:
         zones = profile["aggregate"]["zones"]
         direct = zones.get(f"{map_num}:{zone_id}") or zones.get(zone_id)
@@ -161,10 +190,11 @@ class SequenceAnalysisEngine:
         actual = observed_direction(request.model_dump(mode="json"))
         direction_error = expected is not None and actual is not None and expected != actual
         if order_reason is not None:
-            missed = flow[max(0, flow.index(request.zone_id) - 1)] if request.zone_id in flow else None
+            # 판정은 권장 순서, 추천은 지금 위치에서의 전문가 전이(recommend_next).
+            next_zone = recommend_next(request.zone_id, set(visits), self._transitions(profile), flow)
             text = (
-                f"권장 순서에서 이탈했습니다. {missed}번 구역을 먼저 확인하세요."
-                if missed else "전문가 권장 Zone 순서를 확인하세요."
+                f"권장 순서에서 이탈했습니다. 지금 위치에서는 다음으로 {next_zone}번 구역을 권합니다."
+                if next_zone else "전문가 권장 Zone 순서를 확인하세요."
             )
             return SequenceDecision(
                 EngineFeedback(analysis_status="available", reason_code=order_reason),

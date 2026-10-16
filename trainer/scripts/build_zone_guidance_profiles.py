@@ -20,6 +20,9 @@ from trainer.zone_reference import ZoneReferenceCatalog
 from PIL import Image, UnidentifiedImageError
 
 _HEIGHTMAP_NUMBER = re.compile(r"Map(\d+)", re.IGNORECASE)
+# 전문가 7명·479파일로 정한 레벨별 권장 순서와 구역 전이(`trainer.scripts.map_expert_zones`, 2026-10-16 결정).
+# Spark 의 raw 전문가 자료는 반장 한 사람의 녹화라 "가장 많이 나온 순서"를 거기서 낼 수 없다.
+EXPERT_ZONE_ORDERS = Path(__file__).resolve().parents[1] / "demo_api" / "assets" / "zone_reference" / "expert_zone_orders.json"
 _COATING_SCALE_UM = 20000.0
 
 
@@ -347,7 +350,49 @@ def _load_session(
     }
 
 
-def _profile(process: str, mode_id: int, mode_root: Path, sessions: list[dict[str, Any]]) -> dict[str, Any]:
+def _expert_orders(path: Path | None) -> dict[str, Any]:
+    """레벨(scenario_id) → 권장 순서·전이. 파일이 없거나 깨졌으면 빈 dict(그때는 raw 세션에서 낸다)."""
+    if path is None:
+        return {}
+    try:
+        scenarios = json.loads(Path(path).read_text(encoding="utf-8"))["scenarios"]
+        return scenarios if isinstance(scenarios, dict) else {}
+    except (OSError, KeyError, TypeError, ValueError):
+        return {}
+
+
+def _apply_expert_orders(
+    chosen: dict[str, Any], macro_orders: list[dict[str, Any]]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """권장 순서를 맨 앞에 두고(엔진은 `macro_orders[0]`을 쓴다) 전이를 기준 자료의 것으로 바꾼다."""
+    files = max(int(chosen["file_count"]), 1)
+    order = {
+        "order": [{"map_num": 1, "zone_id": str(zone)} for zone in chosen["recommended_flow"]],
+        "session_count": int(chosen["flow_file_count"]),
+        "fraction": int(chosen["flow_file_count"]) / files,
+        "source": "expert_zone_orders",
+        "decision": chosen.get("decision"),
+    }
+    transitions = [
+        {
+            "from": {"map_num": 1, "zone_id": str(item["from"])},
+            "to": {"map_num": 1, "zone_id": str(item["to"])},
+            "session_count": int(item["count"]),
+            "fraction": int(item["count"]) / files,
+            "source": "expert_zone_orders",
+        }
+        for item in chosen["transitions"]
+    ]
+    return [order, *macro_orders], transitions
+
+
+def _profile(
+    process: str,
+    mode_id: int,
+    mode_root: Path,
+    sessions: list[dict[str, Any]],
+    expert_orders: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     zone_samples: dict[str, dict[str, Any]] = {}
     orders: Counter[str] = Counter()
     order_values: dict[str, list[dict[str, Any]]] = {}
@@ -459,6 +504,9 @@ def _profile(process: str, mode_id: int, mode_root: Path, sessions: list[dict[st
                 "fraction": count / total,
             }
         )
+    chosen = (expert_orders or {}).get(str(mode_id)) if process == "spray" else None
+    if chosen:
+        macro_orders, transition_items = _apply_expert_orders(chosen, macro_orders)
     return {
         "schema_version": 1,
         "identity": {
@@ -487,6 +535,7 @@ def build_profiles(
     process: str,
     coating_grid_size: int = 64,
     zone_reference_root: Path | None = None,
+    expert_orders_path: Path | None = None,
 ) -> list[Path]:
     root = Path(reference_root)
     raw = root / "raw" / process / "learning"
@@ -503,6 +552,7 @@ def build_profiles(
             zone_catalog = ZoneReferenceCatalog(reference_path)
         except (OSError, KeyError, TypeError, ValueError):
             zone_catalog = None
+    expert_orders = _expert_orders(expert_orders_path)
     outputs: list[Path] = []
     for mode_root in sorted(raw.glob("mode_*")):
         try:
@@ -529,7 +579,7 @@ def build_profiles(
         temporary = target.with_suffix(f".json.tmp-{os.getpid()}")
         temporary.write_text(
             json.dumps(
-                _profile(process, mode_id, mode_root, sessions),
+                _profile(process, mode_id, mode_root, sessions, expert_orders),
                 ensure_ascii=False,
                 indent=2,
                 sort_keys=True,
@@ -562,12 +612,17 @@ def main() -> int:
     parser.add_argument("--process", choices=("spray", "blasting"), required=True)
     parser.add_argument("--coating-grid-size", type=int, default=64)
     parser.add_argument("--zone-reference-root", type=Path)
+    parser.add_argument(
+        "--expert-orders", default=str(EXPERT_ZONE_ORDERS),
+        help="레벨별 권장 순서·전이 JSON. 빈 문자열이면 raw 세션에서만 낸다.",
+    )
     args = parser.parse_args()
     outputs = build_profiles(
         args.reference_root,
         process=args.process,
         coating_grid_size=args.coating_grid_size,
         zone_reference_root=args.zone_reference_root,
+        expert_orders_path=Path(args.expert_orders) if args.expert_orders else None,
     )
     print(json.dumps({"process": args.process, "profiles": len(outputs)}, ensure_ascii=False))
     return 0 if outputs else 1

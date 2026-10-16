@@ -120,3 +120,27 @@ def test_unresolved_zone_is_not_scored_as_zero_or_guided_as_normal(tmp_path: Pat
     assert report["analysis_status"] == "unavailable"
     assert report["reason_code"] == "sequence_data_unavailable"
     assert "adherence_rate" not in report
+
+
+def test_off_order_trainee_gets_the_next_zone_by_expert_transitions(tmp_path: Path) -> None:
+    """순서 판정은 권장 순서(1→2→3)로 하되, 3부터 칠한 훈련생의 다음 추천은 3에서 전문가가 가장 많이 간 안 칠한 구역.
+
+    깨뜨리는 법: 권장 순서만 쓰면 '2번 먼저'(이미 지나온 순서의 앞)를 권하고 전이(3→1, 5회)를 무시한다.
+    """
+    _profile(tmp_path)
+    path = tmp_path / "generated" / "profiles" / "spray" / "learning" / "mode_03.json"
+    profile = json.loads(path.read_text(encoding="utf-8"))
+    profile["aggregate"]["transitions"] = [
+        {"from": {"map_num": 1, "zone_id": "3"}, "to": {"map_num": 1, "zone_id": "1"}, "session_count": 5},
+        {"from": {"map_num": 1, "zone_id": "3"}, "to": {"map_num": 1, "zone_id": "2"}, "session_count": 2},
+    ]
+    path.write_text(json.dumps(profile), encoding="utf-8")
+    engine = SequenceAnalysisEngine(tmp_path)
+    store = SequenceStore(":memory:")
+    first = _body("SEQ-001", "3")
+    _record(store, first)
+
+    decision = engine.evaluate(AnalyzeSequenceRequest.model_validate(first), store)
+
+    assert decision.feedback.reason_code is not None  # 판정은 여전히 권장 순서 이탈
+    assert decision.text_guide == "권장 순서에서 이탈했습니다. 지금 위치에서는 다음으로 1번 구역을 권합니다."

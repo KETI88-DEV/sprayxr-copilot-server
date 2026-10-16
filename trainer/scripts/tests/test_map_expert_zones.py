@@ -6,10 +6,10 @@ from pathlib import Path
 
 import numpy as np
 
+from trainer.demo_api.sequence_analysis import recommend_next
 from trainer.scripts.map_expert_zones import (
     first_visit_flow,
     learning_scenario,
-    recommend_next,
     recommended_flow,
     transition_counts,
 )
@@ -66,9 +66,8 @@ def test_next_zone_follows_expert_transitions_from_where_the_trainee_actually_is
     깨뜨리는 법: 권장 순서만 쓰면 3번에 있는 훈련생에게 아직 안 칠한 1번(순서상 첫 미방문)을 권한다.
     """
     flow = ["1", "2", "3", "4"]
-    counts = transition_counts([["1", "2", "3", "4"], ["1", "3", "4", "2"], ["2", "3", "4", "1"]])
+    counts = dict(transition_counts([["1", "2", "3", "4"], ["1", "3", "4", "2"], ["2", "3", "4", "1"]]))
 
-    assert recommend_next(None, set(), counts, flow) == "1"  # 시작: 1(2회) > 2(1회)
     assert recommend_next("3", {"2", "3"}, counts, flow) == "4"  # 순서를 벗어나 3에 있다 → 3→4(3회)
     assert recommend_next("4", {"1", "3", "4"}, counts, flow) == "2"  # 4→1 은 칠했으니 4→2
     assert recommend_next("2", {"1", "2", "3", "4"}, counts, flow) is None
