@@ -106,7 +106,7 @@
     name.textContent = metric.label;
     const values = document.createElement('div');
     values.className = 'pose-zone-metric-values';
-    for (const [key, label] of [['actual', '실제'], ['reference', '전문가']]) {
+    for (const [key, label] of [['actual', '현재 :'], ['reference', '전문가 :']]) {
       const line = document.createElement('span');
       line.className = 'pose-zone-value';
       const caption = document.createElement('span');

@@ -1175,7 +1175,7 @@ def _zone_frame_profiles(frames: list[dict[str, Any]]) -> dict[str, dict[str, An
         group = grouped.setdefault(
             key,
             {
-                "tool_angles": [], "postures": [], "distances": [],
+                "tool_angles": [], "postures": [], "posture_labels": [], "distances": [],
                 "directions": {"horizontal": 0, "vertical": 0, "diagonal": 0},
             },
         )
@@ -1189,6 +1189,9 @@ def _zone_frame_profiles(frames: list[dict[str, Any]]) -> dict[str, dict[str, An
         posture = _number(frame.get("posture", {}).get("torso_lean_deg"))
         if posture is not None:
             group["postures"].append(posture)
+        posture_label = str(frame.get("posture", {}).get("label") or "").strip()
+        if posture_label and posture_label != "자세 판정 보류":
+            group["posture_labels"].append(posture_label)
         distance = _number(frame.get("distance_mm"))
         if distance is not None:
             group["distances"].append(distance)
@@ -1210,9 +1213,15 @@ def _zone_frame_profiles(frames: list[dict[str, Any]]) -> dict[str, dict[str, An
     for key, values in grouped.items():
         directions = values["directions"]
         direction = max(directions, key=directions.get) if sum(directions.values()) else None
+        posture_labels = values["posture_labels"]
+        posture_label = (
+            max(set(posture_labels), key=lambda label: (posture_labels.count(label), label))
+            if posture_labels else None
+        )
         output[key] = {
             "tool_angle_deg": _median_numbers(values["tool_angles"]),
             "posture_deg": _median_numbers(values["postures"]),
+            "posture_label": posture_label,
             "distance_mm": _median_numbers(values["distances"]),
             "paint_pattern": direction,
         }
@@ -1417,17 +1426,29 @@ def _multi_session_zone_evaluation(
             value for record in reference_records
             if (value := _session_coating_median(record["session"], zone_key)) is not None
         ]
+        posture_metric = _metric_item(
+            "posture", "자세", _number(selected_frame.get("posture_deg")),
+            [value for frame in reference_frames if (value := _number(frame.get("posture_deg"))) is not None],
+            unit="deg", tolerance=15.0,
+        )
+        reference_posture_labels = [
+            str(frame.get("posture_label")) for frame in reference_frames if frame.get("posture_label")
+        ]
+        posture_metric["actual_label"] = selected_frame.get("posture_label") or "평가 불가"
+        posture_metric["reference_label"] = (
+            max(
+                set(reference_posture_labels),
+                key=lambda label: (reference_posture_labels.count(label), label),
+            )
+            if reference_posture_labels else "평가 불가"
+        )
         metrics = [
             _metric_item(
                 "tool_angle", "도구 각도", _number(selected_frame.get("tool_angle_deg")),
                 [value for frame in reference_frames if (value := _number(frame.get("tool_angle_deg"))) is not None],
                 unit="deg", tolerance=12.0,
             ),
-            _metric_item(
-                "posture", "자세", _number(selected_frame.get("posture_deg")),
-                [value for frame in reference_frames if (value := _number(frame.get("posture_deg"))) is not None],
-                unit="deg", tolerance=15.0,
-            ),
+            posture_metric,
             _pattern_metric(str(selected_pattern) if selected_pattern else None, reference_patterns),
             _metric_item(
                 "coating_thickness", "도막 두께", coating_actual, coating_references,
@@ -1666,7 +1687,7 @@ button{cursor:pointer;font-weight:700}.primary{background:#3157d5;border-color:#
 .selection-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
 .selection-grid label{margin:0 0 5px}.selection-grid .select{min-width:0}
 .workspace{grid-template-columns:368px minmax(420px,1fr) 300px}
-.evaluation-side{min-height:0;padding:14px;border-right:1px solid var(--line);background:#0c1728;overflow:auto}
+.evaluation-side{min-height:0;padding:14px;border-right:1px solid var(--line);background:#0c1728;overflow-y:auto;overflow-x:hidden}
 .evaluation-side .pose-summary{display:grid;grid-template-columns:1fr;gap:9px}
 .evaluation-side .pose-summary .card{margin:0}
 .evaluation-side #poseScore{font-size:46px;line-height:1.05;letter-spacing:-1px}
