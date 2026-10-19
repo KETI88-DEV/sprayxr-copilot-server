@@ -260,6 +260,12 @@ class DirectionSummary(StrictModel):
     zone_summary: list[DirectionZoneSummary] = Field(default_factory=list)
 
 
+class OrderPositionChoice(StrictModel):
+    zone_id: str
+    count: int
+    probability: float
+
+
 class SequenceReport(ReportArea):
     """작업 순서 및 방향 준수.
 
@@ -270,6 +276,11 @@ class SequenceReport(ReportArea):
 
     recommended_flow: list[str] = Field(default_factory=list)
     first_visit_flow: list[str] = Field(default_factory=list)
+    reference_session_count: int | None = None
+    reference_flows: list[list[str]] = Field(default_factory=list)
+    position_distribution: list[list[OrderPositionChoice]] = Field(default_factory=list)
+    best_reference_similarity: float | None = None
+    position_similarity: float | None = None
     evaluated_visit_count: int | None = None
     on_track_visit_count: int | None = None
     skipped_zone_count: int | None = None

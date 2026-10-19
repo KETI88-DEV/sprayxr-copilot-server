@@ -39,6 +39,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from trainer.demo_api.copilot_contracts import CopilotQueryData, CopilotQueryRequest, CopilotResponse
+from trainer.demo_api.copilot_intent import classify_question_intent
 from trainer.demo_api.pose_query import (
     answer_order_question,
     answer_pose_question,
@@ -47,6 +48,7 @@ from trainer.demo_api.pose_query import (
     zone_unavailable,
 )
 from trainer.demo_api.sequence_store import SequenceStore
+from trainer.demo_api.sequence_analysis import SequenceAnalysisEngine
 from trainer.demo_api.v1_store import V1Store
 from trainer.scripts.generation_slot import GENERATION_SLOT
 from trainer.scripts.live_response_contract import (
@@ -150,9 +152,32 @@ async def execute_copilot_query(
     transport: object | None = None,
     started: float | None = None,
     reports: V1Store | None = None,
+    sequence_engine: SequenceAnalysisEngine | None = None,
 ) -> JSONResponse:
     """Execute one normalized query for both text and voice transports."""
     request_started = time.monotonic() if started is None else started
+
+    intent: str | None = None
+    intent_pipeline: object | None = None
+    if query.task_type in ("pose_recomm", "trajectory_recomm"):
+        classifier = None
+        if pipeline_provider is not None:
+            try:
+                intent_pipeline = await to_thread.run_sync(pipeline_provider)
+                method = getattr(intent_pipeline, "classify_copilot_intent", None)
+                if callable(method):
+                    def classifier(task_type: str, prompt: str) -> str:
+                        with GENERATION_SLOT:
+                            return str(method(task_type, prompt))
+            except Exception:  # noqa: BROAD_EXCEPT_OK - keyword fallback keeps structured answers available
+                logger.exception("copilot intent pipeline unavailable request_id=%s", query.request_id)
+        intent = await to_thread.run_sync(
+            lambda: classify_question_intent(query.task_type, query.prompt, classifier)
+        )
+        logger.info("copilot intent request_id=%s task=%s intent=%s", query.request_id, query.task_type, intent)
+    # If the model is unavailable, keep the selected structured tab operational;
+    # only a successful semantic-model classification may cross-route to RAG.
+    knowledge_routed = intent == "knowledge" and classifier is not None
 
     context = (query.context or "").strip()
     # 시퀀스(`SEQ-012`)를 가리키지 않은 자세·순서 질문은 complete 가 남긴 세션 결과로 답한다(pose_query 참고).
@@ -164,8 +189,17 @@ async def execute_copilot_query(
         and (not context or context.isdigit())
         else None
     )
-    if query.task_type == "trajectory_recomm" and reports is not None and session_id:
-        order = answer_order_question(found, prompt=query.prompt)
+    if query.task_type == "trajectory_recomm" and not knowledge_routed and reports is not None and session_id:
+        if found is not None and sequence_engine is not None and query.scenario_id:
+            report_id, analysis = found
+            refreshed = dict(analysis)
+            stored_report = refreshed.get("sequence_report")
+            if isinstance(stored_report, dict):
+                refreshed["sequence_report"] = sequence_engine.rescore_report(
+                    stored_report, scenario_id=query.scenario_id
+                )
+                found = (report_id, refreshed)
+        order = answer_order_question(found, prompt=query.prompt, intent=intent)
         logger.info(
             "copilot trajectory_recomm request_id=%s status=%s reason=%s",
             query.request_id, order.analysis_status, order.reason_code,
@@ -176,11 +210,11 @@ async def execute_copilot_query(
             context_status="available" if order.analysis_status == "available" else "not_available",
         )
 
-    if query.task_type == "pose_recomm" and reports is not None and (
+    if query.task_type == "pose_recomm" and not knowledge_routed and reports is not None and (
         found is not None or asks_about_zones(query.prompt, query.context)
     ):
         zone = (
-            answer_pose_question(found, prompt=query.prompt, context=query.context)
+            answer_pose_question(found, prompt=query.prompt, context=query.context, intent=intent)
             if session_id
             else zone_unavailable("session_id_missing")
         )
@@ -194,7 +228,7 @@ async def execute_copilot_query(
             context_status="available" if zone.analysis_status == "available" else "not_available",
         )
 
-    if query.task_type == "pose_recomm":
+    if query.task_type == "pose_recomm" and not knowledge_routed:
         pose = await to_thread.run_sync(
             lambda: score_pose(
                 sequences,
@@ -218,14 +252,14 @@ async def execute_copilot_query(
             context_status="available" if pose.analysis_status == "available" else "not_available",
         )
 
-    if query.task_type != "knowledge_search":
+    if query.task_type != "knowledge_search" and not knowledge_routed:
         answer = pending_answers.get(query.task_type) or PENDING_TASK_ANSWERS[query.task_type]
         return _success_response(query, request_started, answer=answer, retrieval_used=False, citations=[])
 
     if pipeline_provider is None:
         return error_response(503, "Copilot pipeline is not configured")
     try:
-        pipeline = await to_thread.run_sync(pipeline_provider)
+        pipeline = intent_pipeline or await to_thread.run_sync(pipeline_provider)
     except Exception:  # noqa: BROAD_EXCEPT_OK - construction failures surface as not ready
         logger.exception("copilot query: pipeline construction failed request_id=%s", query.request_id)
         return error_response(503, "Copilot pipeline is not ready")
@@ -279,6 +313,7 @@ def create_copilot_router(
     mcp_base_url: str | None = None,
     transport: object | None = None,
     reports: V1Store | None = None,
+    sequence_engine: SequenceAnalysisEngine | None = None,
 ) -> APIRouter:
     """``pipeline_provider`` returns the live pipeline singleton; ``None`` when live mode is off.
 
@@ -304,6 +339,7 @@ def create_copilot_router(
             mcp_base_url=mcp_base,
             transport=transport,
             reports=reports,
+            sequence_engine=sequence_engine,
         )
 
     return router

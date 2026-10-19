@@ -410,6 +410,33 @@ class AgentPipeline:
         self.tool_adapter = self._load_tool_adapter(mcp_base_url)
         self.index, self.id_map, self.embedder, self.reranker = self._load_rag_components()
 
+    def classify_copilot_intent(self, task_type: str, prompt: str) -> str:
+        """Classify a pose/order-tab question with a tiny constrained LLM call."""
+        labels = (
+            ["pose_overall", "pose_worst_zone", "pose_zone", "pose_right", "pose_left", "knowledge"]
+            if task_type == "pose_recomm"
+            else ["order_reference", "order_actual", "order_missing", "order_adherence", "order_direction", "knowledge"]
+        )
+        descriptions = (
+            "pose_overall=전체 자세/점수, pose_worst_zone=가장 나쁜 구역, pose_zone=특정 구역 자세, "
+            "pose_right=오른손 교정, pose_left=왼손 교정, knowledge=도장 지식이나 그 밖의 설명"
+            if task_type == "pose_recomm"
+            else "order_reference=전문가 권장 순서, order_actual=내 실제 순서, order_missing=누락 구역, "
+            "order_adherence=순서 유사도/준수율, order_direction=도포 방향, knowledge=도장 지식이나 그 밖의 설명"
+        )
+        messages = [
+            {"role": "system", "content": f"질문 의도를 하나만 고르세요. {descriptions}. 라벨만 출력하세요."},
+            {"role": "user", "content": prompt},
+        ]
+        if isinstance(self.model, OpenAIChatBackend):
+            return self.model.complete_chat(
+                messages,
+                max_tokens=24,
+                enable_thinking=False,
+                answer_regex="(?:" + "|".join(labels) + ")",
+            ).strip()
+        return self._generate_direct(messages, enable_thinking=False).strip().split()[0]
+
     @staticmethod
     def _load_yaml(path: Path) -> dict[str, Any]:
         with path.open("r", encoding="utf-8") as fh:

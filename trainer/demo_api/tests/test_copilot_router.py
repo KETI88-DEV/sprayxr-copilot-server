@@ -88,6 +88,17 @@ class _FakePipeline:
                 self.active -= 1
 
 
+class _IntentPipeline(_FakePipeline):
+    def __init__(self, intent: str, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.intent = intent
+        self.intent_calls: list[tuple[str, str]] = []
+
+    def classify_copilot_intent(self, task_type: str, prompt: str) -> str:
+        self.intent_calls.append((task_type, prompt))
+        return self.intent
+
+
 def _body(**overrides: Any) -> dict[str, Any]:
     body: dict[str, Any] = {
         "user_id": "W-017",
@@ -133,6 +144,21 @@ def test_knowledge_search_runs_the_pipeline_on_the_fast_route(monkeypatch: pytes
             "request_id": "req-query-0044",
         }
     ]
+
+
+def test_pose_tab_knowledge_question_is_semantically_routed_to_rag(monkeypatch: pytest.MonkeyPatch) -> None:
+    pipeline = _IntentPipeline("knowledge")
+
+    data = _client(monkeypatch, pipeline).post(
+        URL,
+        json=_body(task_type="pose_recomm", prompt="저도막이 무엇인지 알려줘"),
+    ).json()["data"]
+
+    assert pipeline.intent_calls == [("pose_recomm", "저도막이 무엇인지 알려줘")]
+    assert len(pipeline.calls) == 1
+    assert pipeline.calls[0]["instruction"] == "저도막이 무엇인지 알려줘"
+    assert data["answer"] == "저도막은 규정 최소 두께보다 얇은 도막이다."
+    assert data["retrieval_used"] is True
 
 
 def test_success_envelope_has_every_v25_field(monkeypatch: pytest.MonkeyPatch) -> None:

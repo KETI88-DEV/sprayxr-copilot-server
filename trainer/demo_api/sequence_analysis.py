@@ -17,8 +17,89 @@ from trainer.demo_api.telemetry_contracts import (
     process_from_tool_type,
 )
 
-ALGORITHM_VERSION = "sequence-reference-1.0"
+ALGORITHM_VERSION = "sequence-reference-2.0"
 _NO_ZONE = {"", "-1", "0", "none", "null", "nan"}
+
+
+def expert_reference_flows(profile: dict[str, Any]) -> list[list[str]]:
+    """Expand the foreman's measured macro orders into one flow per recorded run.
+
+    Older generated profiles prepend an ``expert_zone_orders`` entry aggregated
+    from every worker.  It is deliberately excluded: evaluation must use only
+    the measured expert runs retained in the remaining macro-order rows.
+    """
+    flows: list[list[str]] = []
+    for row in profile.get("aggregate", {}).get("macro_orders") or []:
+        if not isinstance(row, dict) or row.get("source") == "expert_zone_orders":
+            continue
+        flow = [
+            str(item["zone_id"])
+            for item in row.get("order") or []
+            if isinstance(item, dict) and item.get("zone_id") is not None
+        ]
+        if not flow:
+            continue
+        try:
+            count = max(1, int(row.get("session_count", 1)))
+        except (TypeError, ValueError):
+            count = 1
+        flows.extend([flow] * count)
+    return flows
+
+
+def _lcs_length(left: list[str], right: list[str]) -> int:
+    previous = [0] * (len(right) + 1)
+    for left_item in left:
+        current = [0]
+        for index, right_item in enumerate(right, start=1):
+            current.append(previous[index - 1] + 1 if left_item == right_item else max(previous[index], current[-1]))
+        previous = current
+    return previous[-1]
+
+
+def _position_distribution(references: list[list[str]]) -> list[list[dict[str, Any]]]:
+    rows: list[list[dict[str, Any]]] = []
+    total = len(references)
+    for index in range(max((len(flow) for flow in references), default=0)):
+        counts = Counter(flow[index] for flow in references if index < len(flow))
+        rows.append([
+            {"zone_id": zone, "count": count, "probability": round(count / total, 3)}
+            for zone, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+        ])
+    return rows
+
+
+def score_visit_flow(actual: list[str], references: list[list[str]]) -> dict[str, Any]:
+    """Score duration-independent first visits against all valid expert runs.
+
+    Seventy percent rewards similarity to the closest real expert performance;
+    thirty percent rewards statistically common Zone choices at each rank.
+    """
+    distributions = _position_distribution(references)
+    if not actual or not references:
+        return {
+            "best_reference_similarity": 0.0,
+            "position_similarity": 0.0,
+            "adherence_rate": 0.0,
+            "position_distribution": distributions,
+        }
+    best = max(
+        _lcs_length(actual, reference) / max(len(actual), len(reference), 1)
+        for reference in references
+    )
+    position_scores: list[float] = []
+    for index, zone in enumerate(actual):
+        row = distributions[index] if index < len(distributions) else []
+        maximum = max((int(item["count"]) for item in row), default=0)
+        count = next((int(item["count"]) for item in row if item["zone_id"] == zone), 0)
+        position_scores.append(count / maximum if maximum else 0.0)
+    position = sum(position_scores) / len(position_scores)
+    return {
+        "best_reference_similarity": round(best, 3),
+        "position_similarity": round(position, 3),
+        "adherence_rate": round(best * 0.7 + position * 0.3, 3),
+        "position_distribution": distributions,
+    }
 
 
 def recommend_next(
@@ -109,23 +190,45 @@ class SequenceAnalysisEngine:
         except (OSError, AttributeError, ValueError, TypeError, json.JSONDecodeError):
             return None
 
+    def rescore_report(
+        self, report: dict[str, Any], *, scenario_id: str, process: str = "spray"
+    ) -> dict[str, Any]:
+        """Refresh a stored report with today's multi-run expert reference."""
+        mode = learning_mode_from_scenario(scenario_id)
+        profile = self._profile(process, mode) if mode is not None else None
+        references = expert_reference_flows(profile) if profile is not None else []
+        actual = [str(zone) for zone in report.get("first_visit_flow") or []]
+        if not references or not actual:
+            return report
+        score = score_visit_flow(actual, references)
+        updated = dict(report)
+        updated.update({
+            "algorithm_version": ALGORITHM_VERSION,
+            "recommended_flow": self._flow(profile),
+            "reference_session_count": len(references),
+            "reference_flows": references,
+            "position_distribution": score["position_distribution"],
+            "best_reference_similarity": score["best_reference_similarity"],
+            "position_similarity": score["position_similarity"],
+            "adherence_rate": score["adherence_rate"],
+        })
+        return updated
+
     @staticmethod
     def _flow(profile: dict[str, Any]) -> list[str]:
-        orders = profile.get("aggregate", {}).get("macro_orders") or []
-        if not orders or not isinstance(orders[0], dict):
+        flows = expert_reference_flows(profile)
+        if not flows:
             return []
-        return [str(item["zone_id"]) for item in orders[0].get("order", []) if isinstance(item, dict) and item.get("zone_id") is not None]
+        counts = Counter(tuple(flow) for flow in flows)
+        return list(max(counts, key=lambda flow: (counts[flow], -flows.index(list(flow)))))
 
     @staticmethod
     def _transitions(profile: dict[str, Any]) -> dict[tuple[str, str], int]:
-        """프로필의 구역 전이 → {(현재, 다음): 횟수}."""
-        output: dict[tuple[str, str], int] = {}
-        for item in profile.get("aggregate", {}).get("transitions") or []:
-            try:
-                output[(str(item["from"]["zone_id"]), str(item["to"]["zone_id"]))] = int(item.get("session_count", 0))
-            except (KeyError, TypeError, ValueError):
-                continue
-        return output
+        """Foreman-only transition counts derived from the measured runs."""
+        output: Counter[tuple[str, str]] = Counter()
+        for flow in expert_reference_flows(profile):
+            output.update(zip(flow, flow[1:]))
+        return dict(output)
 
     @staticmethod
     def _expected(profile: dict[str, Any], zone_id: str, map_num: int = 1) -> str | None:
@@ -147,8 +250,22 @@ class SequenceAnalysisEngine:
         return (process, mode) if process is not None and mode is not None else None
 
     @staticmethod
-    def _visit_decisions(zones: list[str], flow: list[str]) -> list[str | None]:
+    def _visit_decisions(zones: list[str], flow: list[str], references: list[list[str]] | None = None) -> list[str | None]:
         decisions: list[str | None] = []
+        if references:
+            seen: set[str] = set()
+            distributions = _position_distribution(references)
+            first_index = 0
+            for zone in zones:
+                if zone in seen:
+                    decisions.append("zone_revisit")
+                    continue
+                valid = {str(item["zone_id"]) for item in distributions[first_index]} if first_index < len(distributions) else set()
+                appears_later = any(zone in reference[first_index + 1:] for reference in references)
+                decisions.append(None if zone in valid else ("zone_skipped" if appears_later else "zone_out_of_order"))
+                seen.add(zone)
+                first_index += 1
+            return decisions
         progress = -1
         seen: set[str] = set()
         for zone in zones:
@@ -185,7 +302,8 @@ class SequenceAnalysisEngine:
             if zone is not None and (not visits or visits[-1] != zone):
                 visits.append(zone)
         flow = self._flow(profile)
-        order_reason = self._visit_decisions(visits, flow)[-1] if visits else None
+        references = expert_reference_flows(profile)
+        order_reason = self._visit_decisions(visits, flow, references)[-1] if visits else None
         expected = self._expected(profile, request.zone_id, _map_num(request.model_dump(mode="json")))
         actual = observed_direction(request.model_dump(mode="json"))
         direction_error = expected is not None and actual is not None and expected != actual
@@ -231,7 +349,8 @@ class SequenceAnalysisEngine:
                 visit_counts[zone] += 1
                 if zone not in first_visits:
                     first_visits.append(zone)
-        decisions = self._visit_decisions(visits, flow)
+        references = expert_reference_flows(profile)
+        decisions = self._visit_decisions(visits, flow, references)
         if not visits:
             return {
                 "analysis_status": "unavailable", "reason_code": "sequence_data_unavailable",
@@ -276,14 +395,23 @@ class SequenceAnalysisEngine:
             "affected_zone_ids": [row["zone_id"] for row in direction_zone_summary if row["direction_error_count"]],
             "zone_summary": direction_zone_summary,
         }
-        adherence = round(on_track / evaluated, 3) if evaluated else 0.0
-        guideline = f"전문가 권장 순서 {'→'.join(flow)}를 기준으로 방문 순서 준수율은 {adherence * 100:.1f}%입니다."
+        flow_score = score_visit_flow(first_visits, references)
+        adherence = flow_score["adherence_rate"]
+        guideline = (
+            f"전형기 반장 {len(references)}회 실측 순서를 기준으로 순서 유사도는 {adherence * 100:.1f}%입니다. "
+            f"대표 흐름은 {'→'.join(flow)}입니다."
+        )
         if direction_rate is not None:
             guideline += f" 방향 준수율은 {direction_rate * 100:.1f}%입니다."
         return {
             "analysis_status": "available", "reason_code": None,
             "algorithm_version": ALGORITHM_VERSION, "guideline": guideline,
             "recommended_flow": flow, "first_visit_flow": first_visits,
+            "reference_session_count": len(references),
+            "reference_flows": references,
+            "position_distribution": flow_score["position_distribution"],
+            "best_reference_similarity": flow_score["best_reference_similarity"],
+            "position_similarity": flow_score["position_similarity"],
             "evaluated_visit_count": evaluated, "on_track_visit_count": on_track,
             "skipped_zone_count": len([zone for zone in flow if zone not in first_visits]),
             "adherence_rate": adherence, "deviation_count": evaluated - on_track,

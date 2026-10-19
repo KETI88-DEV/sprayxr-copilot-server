@@ -271,6 +271,7 @@ def create_app(
             mcp_base_url=mcp_base_url,
             store=sequence_store,
             reports=v1_store,
+            sequence_engine=sequence_analysis,
         )
     )
     # 명세서 15개 중 12개: 세션·사용자·리포트·이상 알림 SSE·테스트.

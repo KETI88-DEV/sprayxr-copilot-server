@@ -444,20 +444,20 @@ def _body_part_answer(
 
 
 def answer_pose_question(
-    found: tuple[str, Mapping[str, Any]] | None, *, prompt: str, context: str | None,
+    found: tuple[str, Mapping[str, Any]] | None, *, prompt: str, context: str | None, intent: str | None = None,
 ) -> ZoneAnswer:
     """완료 세션의 구조화된 자세 결과를 질문 의도에 맞게 설명한다."""
     target = context.strip() if context and context.strip().isdigit() else _zone_from_prompt(prompt)
     if target is not None:
         return answer_zone_question(found, context=target)
     lowered = prompt.lower()
-    if "오른" in lowered or "right" in lowered:
+    if intent == "pose_right" or "오른" in lowered or "right" in lowered:
         return _body_part_answer(found, side="right")
-    if "왼쪽" in lowered or "left" in lowered:
+    if intent == "pose_left" or "왼쪽" in lowered or "left" in lowered:
         return _body_part_answer(found, side="left")
-    if any(token in lowered for token in ("문제", "안 좋", "낮", "어디", "어느", "최악")):
+    if intent == "pose_worst_zone" or any(token in lowered for token in ("문제", "안 좋", "낮", "어디", "어느", "최악")):
         return answer_zone_question(found, context=None)
-    if any(token in lowered for token in ("전체", "평균", "유사도", "점수", "퍼센트", "자세")):
+    if intent == "pose_overall" or any(token in lowered for token in ("전체", "평균", "유사도", "점수", "퍼센트", "자세")):
         return _pose_overview(found)
     report_id = found[0] if found is not None else None
     return ZoneAnswer("available", None, (
@@ -471,7 +471,7 @@ def answer_pose_question(
 
 
 def answer_order_question(
-    found: tuple[str, Mapping[str, Any]] | None, *, prompt: str | None = None,
+    found: tuple[str, Mapping[str, Any]] | None, *, prompt: str | None = None, intent: str | None = None,
 ) -> ZoneAnswer:
     """complete 의 순서 리포트(`sequence_report`)로 "순서 잘 지켰어?"에 답한다. 계산 결과를 문장으로 옮길 뿐이다."""
     if found is None:
@@ -504,7 +504,7 @@ def answer_order_question(
     direction = report.get("direction_adherence_rate")
     question = (prompt or "").lower()
     if question:
-        if any(token in question for token in ("누락", "안 칠", "빠진", "미수행")):
+        if intent == "order_missing" or any(token in question for token in ("누락", "안 칠", "빠진", "미수행")):
             focused = (
                 f"권장 순서 중 칠하지 않은 구역은 {'·'.join(missing)}번입니다."
                 if missing else "권장 순서의 모든 구역을 칠했습니다."
@@ -514,7 +514,7 @@ def answer_order_question(
                 "recommended_flow": flow, "first_visit_flow": first, "adherence_rate": rate,
                 "deviation_count": report.get("deviation_count"), "direction_adherence_rate": direction,
             })
-        if "방향" in question:
+        if intent == "order_direction" or "방향" in question:
             focused = (
                 f"전문가 기준 도포 방향 준수율은 {float(direction) * 100:.0f}%입니다."
                 if isinstance(direction, (int, float)) else "이 세션은 도포 방향을 평가할 수 없습니다."
@@ -524,25 +524,60 @@ def answer_order_question(
                 "recommended_flow": flow, "first_visit_flow": first, "adherence_rate": rate,
                 "deviation_count": report.get("deviation_count"), "direction_adherence_rate": direction,
             })
-        if any(token in question for token in ("실제", "수행 순서", "칠한 순서")):
+        if intent == "order_actual" or any(token in question for token in ("실제", "수행 순서", "칠한 순서")):
             focused = f"이번 세션에서 처음 칠한 순서는 {' → '.join(first) or '없음'}입니다."
             return ZoneAnswer("available", None, focused, {
                 "analysis_status": "available", "reason_code": None, "scope": "session", "report_id": report_id,
                 "recommended_flow": flow, "first_visit_flow": first, "adherence_rate": rate,
                 "deviation_count": report.get("deviation_count"), "direction_adherence_rate": direction,
             })
-        if any(token in question for token in ("권장", "추천", "정석")):
-            focused = f"권장 순서는 {' → '.join(flow)}입니다."
+        if intent == "order_reference" or any(token in question for token in ("권장", "추천", "정석")):
+            reference_count = int(report.get("reference_session_count") or 0)
+            distributions = report.get("position_distribution") or []
+            if len(flow) == 1 and reference_count:
+                focused = (
+                    f"학습모드 1은 Zone {flow[0]} 한 곳으로 구성되어 있으며, "
+                    f"전형기 반장 {reference_count}회 모두 Zone {flow[0]}부터 작업했습니다."
+                )
+            else:
+                details: list[str] = []
+                for index, row in enumerate(distributions, start=1):
+                    if not isinstance(row, list):
+                        continue
+                    choices = [
+                        f"Z{item.get('zone_id')} {float(item.get('probability') or 0) * 100:.0f}%"
+                        for item in row[:2] if isinstance(item, Mapping)
+                    ]
+                    if choices:
+                        details.append(f"{index}순위 {'·'.join(choices)}")
+                focused = (
+                    f"전형기 반장 {reference_count}회 기준 대표 흐름은 {' → '.join(flow)}입니다."
+                    if reference_count
+                    else f"권장 순서는 {' → '.join(flow)}입니다."
+                )
+                if details:
+                    focused += f" 순번별 주요 분포는 {', '.join(details)}입니다."
             return ZoneAnswer("available", None, focused, {
                 "analysis_status": "available", "reason_code": None, "scope": "session", "report_id": report_id,
                 "recommended_flow": flow, "first_visit_flow": first, "adherence_rate": rate,
                 "deviation_count": report.get("deviation_count"), "direction_adherence_rate": direction,
             })
-        if any(token in question for token in ("준수", "몇 퍼센트", "점수")):
+        if intent == "order_adherence" or any(token in question for token in ("준수", "유사", "몇 퍼센트", "점수")):
+            closest = report.get("best_reference_similarity")
+            positional = report.get("position_similarity")
             focused = (
-                f"순서 준수율은 {rate * 100:.0f}%입니다. "
-                f"구역 방문 {evaluated}회 중 {on_track}회가 권장 순서에 맞았습니다."
+                f"전문가 순서 유사도는 {rate * 100:.0f}%입니다."
             )
+            if isinstance(closest, (int, float)) and isinstance(positional, (int, float)):
+                focused += (
+                    f" 가장 가까운 전문가 수행과 {float(closest) * 100:.0f}%, "
+                    f"순번별 통계와 {float(positional) * 100:.0f}% 유사합니다."
+                )
+            else:
+                focused = (
+                    f"순서 준수율은 {rate * 100:.0f}%입니다. "
+                    f"구역 방문 {evaluated}회 중 {on_track}회가 권장 순서에 맞았습니다."
+                )
             return ZoneAnswer("available", None, focused, {
                 "analysis_status": "available", "reason_code": None, "scope": "session", "report_id": report_id,
                 "recommended_flow": flow, "first_visit_flow": first, "adherence_rate": rate,

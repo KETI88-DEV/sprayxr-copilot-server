@@ -4,7 +4,11 @@ import json
 from pathlib import Path
 from typing import Any
 
-from trainer.demo_api.sequence_analysis import SequenceAnalysisEngine
+from trainer.demo_api.sequence_analysis import (
+    SequenceAnalysisEngine,
+    expert_reference_flows,
+    score_visit_flow,
+)
 from trainer.demo_api.sequence_store import SequenceStore
 from trainer.demo_api.telemetry_contracts import AnalyzeSequenceRequest
 
@@ -144,3 +148,59 @@ def test_off_order_trainee_gets_the_next_zone_by_expert_transitions(tmp_path: Pa
 
     assert decision.feedback.reason_code is not None  # 판정은 여전히 권장 순서 이탈
     assert decision.text_guide == "권장 순서에서 이탈했습니다. 지금 위치에서는 다음으로 1번 구역을 권합니다."
+
+
+def test_reference_flows_ignore_legacy_all_worker_override_and_expand_sessions() -> None:
+    profile = {
+        "aggregate": {
+            "macro_orders": [
+                {"source": "expert_zone_orders", "order": [{"zone_id": "9"}, {"zone_id": "8"}], "session_count": 99},
+                {"order": [{"zone_id": "1"}, {"zone_id": "2"}, {"zone_id": "3"}], "session_count": 3},
+                {"order": [{"zone_id": "1"}, {"zone_id": "3"}, {"zone_id": "2"}], "session_count": 2},
+                {"order": [{"zone_id": "3"}, {"zone_id": "1"}, {"zone_id": "2"}], "session_count": 1},
+            ]
+        }
+    }
+
+    flows = expert_reference_flows(profile)
+
+    assert len(flows) == 6
+    assert flows.count(["1", "2", "3"]) == 3
+    assert flows.count(["1", "3", "2"]) == 2
+    assert flows.count(["3", "1", "2"]) == 1
+    assert ["9", "8"] not in flows
+
+
+def test_exact_minority_expert_run_remains_a_high_similarity_reference() -> None:
+    references = [["1", "2", "3"]] * 3 + [["1", "3", "2"]] * 2 + [["3", "1", "2"]]
+
+    score = score_visit_flow(["3", "1", "2"], references)
+
+    assert score["best_reference_similarity"] == 1.0
+    assert score["position_similarity"] == 0.511
+    assert score["adherence_rate"] == 0.853
+    assert score["position_distribution"][0] == [
+        {"zone_id": "1", "count": 5, "probability": 0.833},
+        {"zone_id": "3", "count": 1, "probability": 0.167},
+    ]
+
+
+def test_report_scores_an_alternate_expert_order_instead_of_one_rigid_flow(tmp_path: Path) -> None:
+    _profile(tmp_path)
+    path = tmp_path / "generated" / "profiles" / "spray" / "learning" / "mode_03.json"
+    profile = json.loads(path.read_text(encoding="utf-8"))
+    profile["aggregate"]["macro_orders"] = [
+        {"order": [{"zone_id": "1"}, {"zone_id": "2"}, {"zone_id": "3"}], "session_count": 3},
+        {"order": [{"zone_id": "1"}, {"zone_id": "3"}, {"zone_id": "2"}], "session_count": 3},
+    ]
+    path.write_text(json.dumps(profile), encoding="utf-8")
+
+    report = SequenceAnalysisEngine(tmp_path).report_bodies(
+        [_body("SEQ-001", "1"), _body("SEQ-002", "3"), _body("SEQ-003", "2")],
+        scenario_id="3",
+    )
+
+    assert report["reference_session_count"] == 6
+    assert report["best_reference_similarity"] == 1.0
+    assert report["adherence_rate"] == 1.0
+    assert "6회" in report["guideline"]
