@@ -367,7 +367,8 @@ def test_after_complete_chip_questions_use_the_session_report(engine: CoatingPro
     report_id = _complete_session(client, height_map)
 
     pose = _ask(client, "자세 어땠어?")
-    assert pose["answer"].startswith("가장 문제가 큰 구역은 3번 구역입니다.")
+    assert pose["answer"].startswith("세션 전체 자세 유사도는 57%입니다.")
+    assert "가장 낮은 구역은 3번(40%)" in pose["answer"]
 
     body = {"user_id": "u", "session_id": SESSION, "scenario_id": "3", "task_type": "trajectory_recomm", "prompt": "순서 잘 지켰어?"}
     order = client.post("/api/v1/copilot/query", json=body).json()["data"]
@@ -403,3 +404,75 @@ def test_order_answer_reads_the_sequence_report() -> None:
         "순서 이탈이 가장 많은 구역은 4번(2회)입니다. 도포 방향 준수율은 75%입니다."
     )
     assert answer_order_question(None).reason_code == "session_report_unavailable"
+
+
+def test_pose_answers_follow_the_question_instead_of_repeating_the_worst_zone() -> None:
+    """깨뜨리는 법: prompt를 무시하고 항상 최악 Zone만 답하면 전체 점수와 오른손 질문이 같은 문장이 된다.
+    """
+    from trainer.demo_api.pose_query import answer_pose_question
+
+    found = (
+        "RPT-POSE",
+        {
+            "pose_report": {
+                "analysis_status": "available",
+                "average_similarity_score": 0.74,
+                "evaluated_sequence_count": 12,
+                "zone_summary": [
+                    _zone("1", 0.82),
+                    {
+                        **_zone("3", 0.51),
+                        "problem_joints": [
+                            {"joint": "RightHand", "occurrence_count": 2, "occurrence_rate": 0.5, "average_distance": 0.11},
+                            {"joint": "LeftHand", "occurrence_count": 1, "occurrence_rate": 0.25, "average_distance": 0.07},
+                        ],
+                    },
+                ],
+            }
+        },
+    )
+
+    overall = answer_pose_question(found, prompt="전체 자세 유사도는 몇 퍼센트야?", context=None)
+    right = answer_pose_question(found, prompt="오른손을 어떻게 고쳐야 해?", context=None)
+
+    assert "전체 자세 유사도는 74%" in overall.answer
+    assert "오른쪽 손목" in right.answer and "11cm" in right.answer
+    assert overall.answer != right.answer
+
+
+def test_pose_question_can_select_a_zone_from_natural_language() -> None:
+    from trainer.demo_api.pose_query import answer_pose_question
+
+    result = answer_pose_question(
+        _analysis(_zone("1", 0.81), _zone("3", 0.52)),
+        prompt="3번 Zone 자세는 어떠어?",
+        context=None,
+    )
+
+    assert result.context["zone_id"] == "3"
+    assert result.answer.startswith("3번 구역 결과입니다.")
+
+
+def test_order_answers_follow_recommended_actual_missing_and_direction_questions() -> None:
+    """깨뜨리는 법: 질문을 무시하고 전체 순서 요약을 매번 반환하면 네 답변이 동일해진다.
+    """
+    from trainer.demo_api.pose_query import answer_order_question
+
+    found = ("RPT-ORDER", {"sequence_report": {
+        "analysis_status": "available", "recommended_flow": ["7", "4", "8", "9"],
+        "first_visit_flow": ["9", "7", "4"], "evaluated_visit_count": 5,
+        "on_track_visit_count": 3, "adherence_rate": 0.6, "deviation_count": 2,
+        "direction_adherence_rate": 0.75,
+        "zone_summary": [{"zone_id": "9", "deviation_count": 1}, {"zone_id": "4", "deviation_count": 2}],
+    }})
+
+    recommended = answer_order_question(found, prompt="권장 순서를 알려줘")
+    actual = answer_order_question(found, prompt="실제로 어떤 순서로 칠했어?")
+    missing = answer_order_question(found, prompt="누락한 Zone이 있어?")
+    direction = answer_order_question(found, prompt="도포 방향은 잘 지켰어?")
+
+    assert recommended.answer == "권장 순서는 7 → 4 → 8 → 9입니다."
+    assert actual.answer == "이번 세션에서 처음 칠한 순서는 9 → 7 → 4입니다."
+    assert missing.answer == "권장 순서 중 칠하지 않은 구역은 8번입니다."
+    assert direction.answer == "전문가 기준 도포 방향 준수율은 75%입니다."
+    assert len({recommended.answer, actual.answer, missing.answer, direction.answer}) == 4

@@ -212,12 +212,13 @@ def _store_sequence(store: SequenceStore, *, sequence_id: str = "SEQ-020") -> di
     return body
 
 
-def test_motion_viewer_page_explains_representative_and_statistical_motion(tmp_path: Path) -> None:
+def test_motion_viewer_page_explains_the_aggregated_expert_reference(tmp_path: Path) -> None:
     response = _client(tmp_path).get("/motion-viewer")
 
     assert response.status_code == 200
     assert "전문가 모션 뷰어" in response.text
-    assert "대표 실측 모션" in response.text
+    assert "전체 기록 종합 기준" in response.text
+    assert "대표 실측 모션" not in response.text
     assert "통계 범위" in response.text
     assert "기준 전문가: 전형기 반장" in response.text
     assert "페인트 누적 궤적" in response.text

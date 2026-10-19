@@ -1740,7 +1740,7 @@ function currentProcess(){return currentWorker().processes.find(p=>p.process===$
 function currentMode(){return currentProcess().modes.find(m=>String(m.mode_id)===$('mode').value)}
 function fillProcesses(){const worker=currentWorker();$('process').replaceChildren(...worker.processes.map(p=>option(p.process,p.label)));fillModes()}
 function fillModes(){const p=currentProcess();$('mode').replaceChildren(...p.modes.map(m=>option(m.mode_id,`학습모드 ${m.mode_id} · ${m.session_count}회`)));const four=p.modes.find(m=>m.mode_id===4);if(four)$('mode').value='4';fillSessions()}
-function fillSessions(){const worker=currentWorker(),m=currentMode();$('session').replaceChildren(option('representative',`${worker.display_name} 대표 실측 모션 · ${m.representative_session_id}`),...m.sessions.map(s=>option(s,`${worker.display_name} · ${s}`)));loadMotion()}
+function fillSessions(){const worker=currentWorker(),m=currentMode();$('session').replaceChildren(option('representative',`${worker.display_name} · 전체 기록 종합 기준`),...m.sessions.map(s=>option(s,`${worker.display_name} · ${s}`)));loadMotion()}
 function zoneKey(mapNum,zoneId){return mapNum!=null&&Number(zoneId)>0?`${mapNum}:${zoneId}`:null}
 function metricRow(label,value){const row=document.createElement('span');row.className='zone-metric';const name=document.createElement('span'),metric=document.createElement('b');name.textContent=label;metric.textContent=value;row.append(name,metric);return row}
 function directionName(value){return({horizontal:'수평',vertical:'수직',diagonal:'대각',curved_irregular:'곡선·불규칙'})[value]||'자료 없음'}

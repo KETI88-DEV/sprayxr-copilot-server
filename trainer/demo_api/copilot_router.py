@@ -41,7 +41,7 @@ from fastapi.responses import JSONResponse
 from trainer.demo_api.copilot_contracts import CopilotQueryData, CopilotQueryRequest, CopilotResponse
 from trainer.demo_api.pose_query import (
     answer_order_question,
-    answer_zone_question,
+    answer_pose_question,
     asks_about_zones,
     score_pose,
     zone_unavailable,
@@ -165,7 +165,7 @@ async def execute_copilot_query(
         else None
     )
     if query.task_type == "trajectory_recomm" and reports is not None and session_id:
-        order = answer_order_question(found)
+        order = answer_order_question(found, prompt=query.prompt)
         logger.info(
             "copilot trajectory_recomm request_id=%s status=%s reason=%s",
             query.request_id, order.analysis_status, order.reason_code,
@@ -180,7 +180,7 @@ async def execute_copilot_query(
         found is not None or asks_about_zones(query.prompt, query.context)
     ):
         zone = (
-            answer_zone_question(found, context=query.context)
+            answer_pose_question(found, prompt=query.prompt, context=query.context)
             if session_id
             else zone_unavailable("session_id_missing")
         )

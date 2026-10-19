@@ -226,6 +226,10 @@ def score_body_raw(
 
 # "존"은 넣지 않는다 — "기존", "존재"에 걸린다.
 _ZONE_QUESTION: Final = re.compile(r"구역|zone|어디|어느", re.IGNORECASE)
+_ZONE_NUMBER: Final = re.compile(
+    r"(?:zone|구역)\s*(\d+)|(?:\b(\d+)\s*번?\s*(?:zone|구역))",
+    re.IGNORECASE,
+)
 
 _ZONE_REASON_ANSWERS: Final[dict[str, str]] = {
     "session_id_missing": "어느 세션인지 알 수 없어 구역별 자세를 찾지 못했습니다. session_id를 함께 보내 주세요.",
@@ -248,6 +252,11 @@ def asks_about_zones(prompt: str, context: str | None) -> bool:
     if context and context.strip():
         return context.strip().isdigit()
     return bool(_ZONE_QUESTION.search(prompt))
+
+
+def _zone_from_prompt(prompt: str) -> str | None:
+    match = _ZONE_NUMBER.search(prompt)
+    return next((group for group in match.groups() if group), None) if match else None
 
 
 def zone_unavailable(reason: str, *, zone_id: str | None = None) -> ZoneAnswer:
@@ -357,7 +366,103 @@ def answer_zone_question(found: tuple[str, Mapping[str, Any]] | None, *, context
     )
 
 
-def answer_order_question(found: tuple[str, Mapping[str, Any]] | None) -> ZoneAnswer:
+def _pose_overview(found: tuple[str, Mapping[str, Any]] | None) -> ZoneAnswer:
+    if found is None:
+        return zone_unavailable("session_report_unavailable")
+    report_id, analysis = found
+    pose = analysis.get("pose_report") if isinstance(analysis.get("pose_report"), Mapping) else {}
+    score = pose.get("average_similarity_score")
+    zones = [
+        zone for zone in pose.get("zone_summary") or []
+        if isinstance(zone, Mapping) and isinstance(zone.get("average_similarity_score"), (int, float))
+    ]
+    if not isinstance(score, (int, float)) or not zones:
+        return zone_unavailable("zone_analysis_unavailable")
+    worst = min(zones, key=_zone_order)
+    count = pose.get("evaluated_sequence_count")
+    count_text = f" 분사 {int(count)}회를 평가했으며," if isinstance(count, (int, float)) else ""
+    answer = (
+        f"세션 전체 자세 유사도는 {float(score) * 100:.0f}%입니다."
+        f"{count_text} 가장 낮은 구역은 {worst['zone_id']}번"
+        f"({float(worst['average_similarity_score']) * 100:.0f}%)입니다."
+    )
+    return ZoneAnswer("available", None, answer, {
+        "analysis_status": "available", "reason_code": None, "scope": "session",
+        "report_id": report_id, "zone_id": None, "sequence_id": None,
+        "similarity_score": float(score), "corrections": [],
+    })
+
+
+def _body_part_answer(
+    found: tuple[str, Mapping[str, Any]] | None, *, side: str,
+) -> ZoneAnswer:
+    if found is None:
+        return zone_unavailable("session_report_unavailable")
+    report_id, analysis = found
+    pose = analysis.get("pose_report") if isinstance(analysis.get("pose_report"), Mapping) else {}
+    prefix = "Right" if side == "right" else "Left"
+    candidates: list[tuple[float, float, Mapping[str, Any], Mapping[str, Any]]] = []
+    for zone in pose.get("zone_summary") or []:
+        if not isinstance(zone, Mapping):
+            continue
+        for joint in zone.get("problem_joints") or []:
+            if not isinstance(joint, Mapping) or not str(joint.get("joint", "")).startswith(prefix):
+                continue
+            candidates.append((
+                float(joint.get("occurrence_rate") or 0.0),
+                float(joint.get("average_distance") or 0.0),
+                zone,
+                joint,
+            ))
+    side_label = "오른쪽" if side == "right" else "왼쪽"
+    if not candidates:
+        answer = f"{side_label} 팔·손은 전문가 기준을 벗어난 반복 문제가 발견되지 않았습니다."
+        return ZoneAnswer("available", None, answer, {
+            "analysis_status": "available", "reason_code": None, "scope": "body_part",
+            "report_id": report_id, "zone_id": None, "sequence_id": None,
+            "similarity_score": pose.get("average_similarity_score"), "corrections": [],
+        })
+    _, distance, zone, joint = max(candidates, key=lambda item: (item[0], item[1]))
+    joint_id = str(joint.get("joint"))
+    label = pose_similarity.JOINT_LABELS.get(joint_id, joint_id)
+    occurrences = int(joint.get("occurrence_count") or 0)
+    answer = (
+        f"{label}이(가) 가장 큰 개선 대상입니다. "
+        f"{zone.get('zone_id')}번 구역에서 전문가 범위를 벗어난 분사가 {occurrences}회였고, "
+        f"평균 위치 차이는 {distance * 100:.0f}cm입니다. "
+        f"{label} 위치를 전문가 기준 궤적에 가깝게 유지하세요."
+    )
+    correction = {
+        "joint": joint_id, "label": label, "occurrence_count": occurrences,
+        "occurrence_rate": joint.get("occurrence_rate"), "average_distance": joint.get("average_distance"),
+    }
+    return ZoneAnswer("available", None, answer, {
+        "analysis_status": "available", "reason_code": None, "scope": "body_part",
+        "report_id": report_id, "zone_id": str(zone.get("zone_id")), "sequence_id": None,
+        "similarity_score": zone.get("average_similarity_score"), "corrections": [correction],
+    })
+
+
+def answer_pose_question(
+    found: tuple[str, Mapping[str, Any]] | None, *, prompt: str, context: str | None,
+) -> ZoneAnswer:
+    """완료 세션의 구조화된 자세 결과를 질문 의도에 맞게 설명한다."""
+    target = context.strip() if context and context.strip().isdigit() else _zone_from_prompt(prompt)
+    if target is not None:
+        return answer_zone_question(found, context=target)
+    lowered = prompt.lower()
+    if "오른" in lowered or "right" in lowered:
+        return _body_part_answer(found, side="right")
+    if "왼쪽" in lowered or "left" in lowered:
+        return _body_part_answer(found, side="left")
+    if any(token in lowered for token in ("문제", "안 좋", "낮", "어디", "어느", "최악")):
+        return answer_zone_question(found, context=None)
+    return _pose_overview(found)
+
+
+def answer_order_question(
+    found: tuple[str, Mapping[str, Any]] | None, *, prompt: str | None = None,
+) -> ZoneAnswer:
     """complete 의 순서 리포트(`sequence_report`)로 "순서 잘 지켰어?"에 답한다. 계산 결과를 문장으로 옮길 뿐이다."""
     if found is None:
         return zone_unavailable("session_report_unavailable")
@@ -387,6 +492,42 @@ def answer_order_question(found: tuple[str, Mapping[str, Any]] | None) -> ZoneAn
     if worst is not None and int(worst.get("deviation_count") or 0) > 0:
         answer += f" 순서 이탈이 가장 많은 구역은 {worst['zone_id']}번({worst['deviation_count']}회)입니다."
     direction = report.get("direction_adherence_rate")
+    question = (prompt or "").lower()
+    if question:
+        if any(token in question for token in ("누락", "안 칠", "빠진", "미수행")):
+            focused = (
+                f"권장 순서 중 칠하지 않은 구역은 {'·'.join(missing)}번입니다."
+                if missing else "권장 순서의 모든 구역을 칠했습니다."
+            )
+            return ZoneAnswer("available", None, focused, {
+                "analysis_status": "available", "reason_code": None, "scope": "session", "report_id": report_id,
+                "recommended_flow": flow, "first_visit_flow": first, "adherence_rate": rate,
+                "deviation_count": report.get("deviation_count"), "direction_adherence_rate": direction,
+            })
+        if "방향" in question:
+            focused = (
+                f"전문가 기준 도포 방향 준수율은 {float(direction) * 100:.0f}%입니다."
+                if isinstance(direction, (int, float)) else "이 세션은 도포 방향을 평가할 수 없습니다."
+            )
+            return ZoneAnswer("available", None, focused, {
+                "analysis_status": "available", "reason_code": None, "scope": "session", "report_id": report_id,
+                "recommended_flow": flow, "first_visit_flow": first, "adherence_rate": rate,
+                "deviation_count": report.get("deviation_count"), "direction_adherence_rate": direction,
+            })
+        if any(token in question for token in ("실제", "수행 순서", "칠한 순서")):
+            focused = f"이번 세션에서 처음 칠한 순서는 {' → '.join(first) or '없음'}입니다."
+            return ZoneAnswer("available", None, focused, {
+                "analysis_status": "available", "reason_code": None, "scope": "session", "report_id": report_id,
+                "recommended_flow": flow, "first_visit_flow": first, "adherence_rate": rate,
+                "deviation_count": report.get("deviation_count"), "direction_adherence_rate": direction,
+            })
+        if any(token in question for token in ("권장", "추천", "정석")):
+            focused = f"권장 순서는 {' → '.join(flow)}입니다."
+            return ZoneAnswer("available", None, focused, {
+                "analysis_status": "available", "reason_code": None, "scope": "session", "report_id": report_id,
+                "recommended_flow": flow, "first_visit_flow": first, "adherence_rate": rate,
+                "deviation_count": report.get("deviation_count"), "direction_adherence_rate": direction,
+            })
     if isinstance(direction, (int, float)):
         answer += f" 도포 방향 준수율은 {direction * 100:.0f}%입니다."
     return ZoneAnswer("available", None, answer, {
