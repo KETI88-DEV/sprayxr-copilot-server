@@ -476,3 +476,37 @@ def test_order_answers_follow_recommended_actual_missing_and_direction_questions
     assert missing.answer == "권장 순서 중 칠하지 않은 구역은 8번입니다."
     assert direction.answer == "전문가 기준 도포 방향 준수율은 75%입니다."
     assert len({recommended.answer, actual.answer, missing.answer, direction.answer}) == 4
+
+
+def test_pose_unknown_question_guides_the_user_instead_of_repeating_overview() -> None:
+    """깨뜨리는 법: 알 수 없는 질문을 전체 자세 요약으로 처리하면 사용자는 계속 같은 답을 받는다."""
+    from trainer.demo_api.pose_query import answer_pose_question
+
+    found = _analysis(_zone("1", 0.81), _zone("3", 0.52))
+
+    result = answer_pose_question(found, prompt="오늘 훈련 어땠어?", context=None)
+
+    assert "자세 탭에서는" in result.answer
+    assert "전체 자세 유사도" in result.answer
+    assert result.context["scope"] == "help"
+
+
+def test_order_adherence_and_unknown_questions_return_distinct_focused_answers() -> None:
+    """깨뜨리는 법: 준수율이나 미분류 질문을 모두 종합 순서 문장으로 반환하면 같은 답처럼 보인다."""
+    from trainer.demo_api.pose_query import answer_order_question
+
+    found = ("RPT-ORDER", {"sequence_report": {
+        "analysis_status": "available", "recommended_flow": ["7", "4", "8", "9"],
+        "first_visit_flow": ["9", "7", "4"], "evaluated_visit_count": 5,
+        "on_track_visit_count": 3, "adherence_rate": 0.6, "deviation_count": 2,
+        "direction_adherence_rate": 0.75,
+        "zone_summary": [{"zone_id": "9", "deviation_count": 1}, {"zone_id": "4", "deviation_count": 2}],
+    }})
+
+    adherence = answer_order_question(found, prompt="순서 준수율은 몇 퍼센트야?")
+    unknown = answer_order_question(found, prompt="오늘 훈련 어땠어?")
+
+    assert adherence.answer == "순서 준수율은 60%입니다. 구역 방문 5회 중 3회가 권장 순서에 맞았습니다."
+    assert "순서 탭에서는" in unknown.answer
+    assert unknown.context["scope"] == "help"
+    assert adherence.answer != unknown.answer

@@ -3,9 +3,18 @@
 // 자세·순서는 complete 리포트로 바로 답한다(LLM 없음). 답은 textContent 로만 넣는다.
 (() => {
   const TASKS = [
-    { id: 'knowledge_search', label: '일반', hint: '예: 저도막이 뭐야?' },
-    { id: 'pose_recomm', label: '자세', hint: '예: 가장 문제 있는 구역이 어디야?' },
-    { id: 'trajectory_recomm', label: '순서', hint: '예: 순서는 잘 지켰어?' },
+    {
+      id: 'knowledge_search', label: '일반', hint: '예: 저도막이 뭐야?',
+      presets: ['저도막이 뭐야?', '적정 이격거리는?', '적정 분사 속도는?', '과도막의 원인은?'],
+    },
+    {
+      id: 'pose_recomm', label: '자세', hint: '예: 가장 문제가 큰 Zone은?',
+      presets: ['전체 자세 유사도는?', '가장 문제가 큰 Zone은?', '오른손을 어떻게 고쳐?', '왼손을 어떻게 고쳐?'],
+    },
+    {
+      id: 'trajectory_recomm', label: '순서', hint: '예: 권장 Zone 순서는?',
+      presets: ['권장 Zone 순서는?', '실제 수행 순서는?', '누락한 Zone은?', '순서 준수율은?', '도포 방향은?'],
+    },
   ];
   const style = document.createElement('style');
   style.textContent = `
@@ -20,6 +29,10 @@
 .mvc-chips{display:flex;gap:6px}
 .mvc-chip{flex:1;padding:6px 0;border:1px solid #4b5563;border-radius:16px;background:#1f2937;color:#e5e7eb;cursor:pointer}
 .mvc-chip[aria-pressed=true]{background:#2563eb;border-color:#2563eb;color:#fff;font-weight:700}
+.mvc-presets{display:flex;gap:6px;flex-wrap:wrap}
+.mvc-preset{width:auto;flex:none;padding:5px 9px;border:1px solid #475569;border-radius:14px;background:#0f172a;color:#cbd5e1;
+  font-size:12px;cursor:pointer}
+.mvc-preset:hover,.mvc-preset:focus-visible{border-color:#60a5fa;background:#1e3a5f;color:#fff;outline:none}
 .mvc-log{flex:1;overflow-y:auto;padding:10px 12px;display:flex;flex-direction:column;gap:8px}
 .mvc-msg{padding:8px 10px;border-radius:8px;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.45}
 .mvc-me{align-self:flex-end;background:#1d4ed8;color:#fff;max-width:85%}
@@ -45,6 +58,8 @@
   const sessionSelect = el('select');
   sessionSelect.setAttribute('aria-label', '완료된 세션');
   const chips = el('div', 'mvc-chips');
+  const presets = el('div', 'mvc-presets');
+  presets.setAttribute('aria-label', '질문 프리셋');
   const log = el('div', 'mvc-log');
   log.setAttribute('aria-live', 'polite');
   const form = el('form', 'mvc-form');
@@ -53,12 +68,24 @@
   const send = el('button', null, '보내기');
   send.type = 'submit';
   form.append(input, send);
-  head.append(sessionSelect, chips);
+  head.append(sessionSelect, chips, presets);
   panel.append(head, log, form);
   document.body.append(toggle, panel);
 
   let task = TASKS[1];
   let sessions = [];
+  const renderPresets = (item) => {
+    presets.replaceChildren();
+    for (const question of item.presets) {
+      const button = el('button', 'mvc-preset', question);
+      button.type = 'button';
+      button.addEventListener('click', () => {
+        input.value = question;
+        input.focus();
+      });
+      presets.append(button);
+    }
+  };
   for (const item of TASKS) {
     const chip = el('button', 'mvc-chip', item.label);
     chip.type = 'button';
@@ -67,11 +94,13 @@
       task = item;
       for (const other of chips.children) other.setAttribute('aria-pressed', String(other === chip));
       input.placeholder = item.hint;
+      renderPresets(item);
       input.focus();
     });
     chips.append(chip);
   }
   input.placeholder = task.hint;
+  renderPresets(task);
 
   const say = (text, cls, meta) => {
     const bubble = el('div', `mvc-msg ${cls}`, text);

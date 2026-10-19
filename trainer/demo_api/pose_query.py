@@ -457,7 +457,17 @@ def answer_pose_question(
         return _body_part_answer(found, side="left")
     if any(token in lowered for token in ("문제", "안 좋", "낮", "어디", "어느", "최악")):
         return answer_zone_question(found, context=None)
-    return _pose_overview(found)
+    if any(token in lowered for token in ("전체", "평균", "유사도", "점수", "퍼센트", "자세")):
+        return _pose_overview(found)
+    report_id = found[0] if found is not None else None
+    return ZoneAnswer("available", None, (
+        "자세 탭에서는 ‘전체 자세 유사도’, ‘가장 문제가 큰 Zone’, "
+        "‘오른손을 어떻게 고쳐?’, ‘왼손을 어떻게 고쳐?’처럼 질문할 수 있습니다."
+    ), {
+        "analysis_status": "available", "reason_code": None, "scope": "help",
+        "report_id": report_id, "zone_id": None, "sequence_id": None,
+        "similarity_score": None, "corrections": [],
+    })
 
 
 def answer_order_question(
@@ -528,6 +538,24 @@ def answer_order_question(
                 "recommended_flow": flow, "first_visit_flow": first, "adherence_rate": rate,
                 "deviation_count": report.get("deviation_count"), "direction_adherence_rate": direction,
             })
+        if any(token in question for token in ("준수", "몇 퍼센트", "점수")):
+            focused = (
+                f"순서 준수율은 {rate * 100:.0f}%입니다. "
+                f"구역 방문 {evaluated}회 중 {on_track}회가 권장 순서에 맞았습니다."
+            )
+            return ZoneAnswer("available", None, focused, {
+                "analysis_status": "available", "reason_code": None, "scope": "session", "report_id": report_id,
+                "recommended_flow": flow, "first_visit_flow": first, "adherence_rate": rate,
+                "deviation_count": report.get("deviation_count"), "direction_adherence_rate": direction,
+            })
+        return ZoneAnswer("available", None, (
+            "순서 탭에서는 ‘권장 Zone 순서’, ‘실제 수행 순서’, ‘누락한 Zone’, "
+            "‘순서 준수율’, ‘도포 방향’처럼 질문할 수 있습니다."
+        ), {
+            "analysis_status": "available", "reason_code": None, "scope": "help", "report_id": report_id,
+            "recommended_flow": flow, "first_visit_flow": first, "adherence_rate": rate,
+            "deviation_count": report.get("deviation_count"), "direction_adherence_rate": direction,
+        })
     if isinstance(direction, (int, float)):
         answer += f" 도포 방향 준수율은 {direction * 100:.0f}%입니다."
     return ZoneAnswer("available", None, answer, {
