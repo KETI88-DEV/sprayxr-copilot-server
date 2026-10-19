@@ -871,6 +871,19 @@ def test_pose_guidance_is_scoped_to_current_zone_and_speed_select_is_readable(
     assert ".speed-control select option{color:#e5f1ff;background:#14243a}" in page.text
 
 
+def test_playback_status_exposes_a_persistent_colored_zone_badge(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    page = client.get("/motion-viewer")
+    script = client.get("/motion-viewer/assets/motion_viewer_pose.js")
+
+    assert page.status_code == 200
+    assert 'id="playbackZoneBadge"' in page.text
+    assert 'class="playback-zone-badge"' in page.text
+    assert "let lastPlaybackZone = null;" in script.text
+    assert "lastPlaybackZone = currentZone" in script.text
+    assert "lastPlaybackZone = null" in script.text
+
+
 def test_pose_assets_define_layers_and_interaction_states(tmp_path: Path) -> None:
     client = _client(tmp_path)
     script = client.get("/motion-viewer/assets/motion_viewer_pose.js")

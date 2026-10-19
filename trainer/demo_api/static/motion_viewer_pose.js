@@ -33,6 +33,16 @@
     return Math.acos(cosine) * 180 / Math.PI;
   };
   let lastZoneEvaluationKey = null;
+  let lastPlaybackZone = null;
+
+  function currentZoneFromFrame(frame) {
+    if (!(frame?.spraying && Number(frame?.zone_id) > 0 && frame?.map_num != null)) return null;
+    return {
+      key: `${frame.map_num}:${frame.zone_id}`,
+      mapNum: frame.map_num,
+      zoneId: frame.zone_id,
+    };
+  }
 
   function trustedUpperBody(frame) {
     const tracked = frame?.tracked || {};
@@ -145,8 +155,7 @@
   }
 
   function renderZoneEvaluation(frame, evaluation) {
-    const currentKey = frame?.spraying && Number(frame?.zone_id) > 0 && frame?.map_num != null
-      ? `${frame.map_num}:${frame.zone_id}` : null;
+    const currentKey = currentZoneFromFrame(frame)?.key || null;
     if (currentKey && evaluation?.zones?.[currentKey]) lastZoneEvaluationKey = currentKey;
     const zoneEvaluation = lastZoneEvaluationKey ? evaluation?.zones?.[lastZoneEvaluationKey] : null;
     const card = byId('poseZoneCard');
@@ -171,14 +180,15 @@
   function renderPoseSummary(frame) {
     const evaluation = data?.pose_evaluation || {};
     byId('posePosture').textContent = frame?.posture?.label || '자세 판정 보류';
-    const zone = Number(frame?.zone_id) > 0 ? `Zone ${zoneLabel(frame.zone_id)}` : '이동 구간';
-    byId('poseZoneSummary').textContent = zone;
     byId('poseEstimateNote').textContent = '시간 제외 · 동일 Zone 전문가 기준';
     byId('poseScore').textContent = evaluation.similarity_percent == null ? '분석 대기' : `${evaluation.similarity_percent}%`;
     byId('poseScoreNote').textContent = evaluation.similarity_percent == null
       ? '현재 Zone·분사 구간을 같은 조건의 전문가 기록과 비교합니다.'
       : `Zone 평균 ${evaluation.zone_similarity_percent}% · 순서 ${evaluation.order_similarity_percent}% · 전문가 ${evaluation.reference_session_count}회 기준`;
     const zoneEvaluation = renderZoneEvaluation(frame, evaluation);
+    byId('poseZoneSummary').textContent = zoneEvaluation
+      ? `Zone ${zoneLabel(zoneEvaluation.zone_id)}`
+      : 'Zone 대기 중';
     const current = zoneEvaluation?.similarity_percent ?? evaluation.similarity_percent;
     const predicted = zoneEvaluation?.predicted_similarity_percent ?? evaluation.predicted_similarity_percent;
     byId('posePredicted').textContent = current == null || predicted == null ? '—' : `${current}% → ${predicted}%`;
@@ -226,14 +236,30 @@
     drawTrustedUpperBody(frame, center, w, h);
     drawOrientationGuides(frame, center, w, h);
     renderPoseSummary(frame);
-    const zone = Number(frame?.zone_id) > 0 ? `현재 Zone ${zoneLabel(frame.zone_id)}` : '이동 구간';
-    byId('playbackZone').textContent = `${zone} · ${frame?.posture?.label || '자세 판정 보류'}`;
+    const currentZone = currentZoneFromFrame(frame);
+    if (currentZone) lastPlaybackZone = currentZone;
+    const activity = currentZone ? `현재 Zone ${zoneLabel(currentZone.zoneId)}` : '이동 구간';
+    byId('playbackZone').textContent = `${activity} · ${frame?.posture?.label || '자세 판정 보류'}`;
+    const badge = byId('playbackZoneBadge');
+    if (lastPlaybackZone) {
+      const color = zoneColor(lastPlaybackZone.zoneId);
+      badge.hidden = false;
+      badge.textContent = `Zone ${zoneLabel(lastPlaybackZone.zoneId)}`;
+      badge.style.color = color;
+      badge.style.borderColor = color;
+      badge.style.background = colorWithAlpha(color, .16);
+    } else {
+      badge.hidden = true;
+    }
     byId('playbackTime').textContent = `${Number(playheadSeconds || 0).toFixed(2)} / ${Number(durationSeconds || 0).toFixed(2)}초`;
   }
   window.motionViewerPoseOverlay = {draw: drawPoseOverlay};
   window.renderZoneTimeline = renderZoneTimeline;
   addEventListener('motion-viewer-data', event => {
     lastZoneEvaluationKey = null;
+    lastPlaybackZone = null;
+    const badge = byId('playbackZoneBadge');
+    if (badge) badge.hidden = true;
     renderZoneTimeline(event.detail);
   });
 
