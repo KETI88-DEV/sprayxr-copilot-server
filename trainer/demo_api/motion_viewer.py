@@ -17,6 +17,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from trainer.demo_api.motion_viewer_pose import _default_mesh_provider, build_pose_view
 from trainer.demo_api.pose_query import score_body_raw
 from trainer.demo_api.sequence_store import SequenceStore
+from trainer.demo_api.sequence_analysis import SequenceAnalysisEngine, expert_reference_flows, score_visit_flow
 from trainer.demo_api.v1_store import V1Store
 from trainer.expert_zone_mapping import canonical_expert_zone_id
 
@@ -2011,6 +2012,15 @@ def create_motion_viewer_router(
             direction_summary,
             paint_statistics["direction_distribution"],
         )
+        reference_flows = expert_reference_flows(profile)
+        selected_flow = [str(item["zone_id"]) for item in zone_order]
+        order_score = score_visit_flow(selected_flow, reference_flows)
+        reference_order_evaluation = {
+            "recommended_flow": SequenceAnalysisEngine._flow(profile),
+            "selected_flow": selected_flow,
+            "reference_session_count": len(reference_flows),
+            **order_score,
+        }
         try:
             supplied_mesh = mesh_provider(str(mode_id)) or {}
         except (FileNotFoundError, LookupError, ValueError):
@@ -2055,6 +2065,7 @@ def create_motion_viewer_router(
             "direction_summary": direction_summary,
             "zone_surfaces": zone_surfaces,
             "zone_order": zone_order,
+            "reference_order_evaluation": reference_order_evaluation,
             "zone_statistics": zone_statistics,
             "coating_reference": _coating_reference(profile),
             "object_mesh": object_mesh,

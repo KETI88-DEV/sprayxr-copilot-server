@@ -392,6 +392,31 @@ def test_motion_returns_real_representative_frames_and_cross_session_spread(tmp_
         "role": "expert",
     }
     assert data["statistics"][0]["spread"]["Pelvis"] > 0
+    assert data["reference_order_evaluation"] == {
+        "recommended_flow": ["1"],
+        "selected_flow": ["1"],
+        "reference_session_count": 2,
+        "best_reference_similarity": 1.0,
+        "position_similarity": 1.0,
+        "adherence_rate": 1.0,
+        "position_distribution": [[{"zone_id": "1", "count": 2, "probability": 1.0}]],
+    }
+
+
+def test_chat_is_bound_to_the_current_motion_record_instead_of_an_unrelated_complete_session(
+    tmp_path: Path,
+) -> None:
+    script = _client(tmp_path).get("/motion-viewer/assets/motion_viewer_chat.js")
+
+    assert script.status_code == 200
+    assert "motion-viewer-data" in script.text
+    assert "data.pose_evaluation" in script.text
+    assert "data.reference_order_evaluation" in script.text
+    assert "structuredAnswer(task.id, prompt, viewerData)" in script.text
+    assert "viewerData?.selected_session_id" in script.text
+    assert "viewerData?.mode_id" in script.text
+    assert "/motion-viewer/api/completed" not in script.text
+    assert "loadSessions" not in script.text
 
 
 def test_joint_posture_state_uses_leg_and_torso_geometry_instead_of_camera_height() -> None:
