@@ -855,6 +855,22 @@ def test_pose_summary_uses_wide_zone_metric_rows_with_centered_label_and_progres
     assert ".evaluation-side { overflow-x:hidden; }" in style.text
 
 
+def test_pose_guidance_is_scoped_to_current_zone_and_speed_select_is_readable(
+    tmp_path: Path,
+) -> None:
+    client = _client(tmp_path)
+    page = client.get("/motion-viewer")
+    script = client.get("/motion-viewer/assets/motion_viewer_pose.js")
+
+    assert page.status_code == 200
+    assert 'id="poseActionTitle"' in page.text
+    assert "Zone ${zoneLabel(zoneEvaluation.zone_id)} 자세 개선 안내" in script.text
+    assert "renderCorrections(zoneEvaluation.corrections);" in script.text
+    assert "zoneEvaluation.corrections?.length ? zoneEvaluation.corrections : evaluation?.corrections" not in script.text
+    assert ".speed-control select{width:100%;font-weight:800;color:#e5f1ff;background:#14243a" in page.text
+    assert ".speed-control select option{color:#e5f1ff;background:#14243a}" in page.text
+
+
 def test_pose_assets_define_layers_and_interaction_states(tmp_path: Path) -> None:
     client = _client(tmp_path)
     script = client.get("/motion-viewer/assets/motion_viewer_pose.js")

@@ -132,10 +132,10 @@
     return row;
   }
 
-  function renderCorrections(corrections) {
+  function renderCorrections(corrections, emptyMessage = '전문가 정상 범위입니다. 현재 동작을 유지하세요.') {
     const list = byId('poseActionList');
     const messages = (corrections || []).map(item => typeof item === 'string' ? item : item?.message).filter(Boolean).slice(0, 3);
-    if (!messages.length) messages.push('전문가 정상 범위입니다. 현재 동작을 유지하세요.');
+    if (!messages.length) messages.push(emptyMessage);
     list.replaceChildren(...messages.map((message, index) => {
       const item = document.createElement('li');
       if (index === 0) item.id = 'poseAction';
@@ -154,15 +154,17 @@
     if (!zoneEvaluation) {
       byId('poseZoneTitle').textContent = '현재 Zone 유사도';
       byId('poseZoneScore').textContent = '—%';
+      byId('poseActionTitle').textContent = '현재 Zone 자세 개선 안내';
       metrics.replaceChildren(Object.assign(document.createElement('small'), {textContent: '현재 Zone 평가 자료가 없습니다.'}));
-      renderCorrections(evaluation?.corrections);
+      renderCorrections([], '분사 Zone에 진입하면 해당 Zone의 자세 개선 안내를 표시합니다.');
       return null;
     }
     byId('poseZoneTitle').textContent = `Zone ${zoneLabel(zoneEvaluation.zone_id)} 유사도`;
     byId('poseZoneScore').textContent = zoneEvaluation.similarity_percent == null ? '—%' : `${zoneEvaluation.similarity_percent}%`;
+    byId('poseActionTitle').textContent = `Zone ${zoneLabel(zoneEvaluation.zone_id)} 자세 개선 안내`;
     card.style.borderColor = zoneColor(zoneEvaluation.zone_id);
     metrics.replaceChildren(...(zoneEvaluation.metrics || []).map(renderZoneMetric));
-    renderCorrections(zoneEvaluation.corrections?.length ? zoneEvaluation.corrections : evaluation?.corrections);
+    renderCorrections(zoneEvaluation.corrections);
     return zoneEvaluation;
   }
 
