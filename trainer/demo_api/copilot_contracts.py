@@ -34,15 +34,45 @@ class CopilotQueryRequest(StrictModel):
         },
     )
 
-    user_id: Annotated[str, Field(min_length=1, examples=["1234"])]
-    scenario_id: Annotated[str | None, Field(examples=["3"])] = None
-    session_id: Annotated[str | None, Field(examples=["3_11000346_1"])] = None
+    user_id: Annotated[str, Field(
+        min_length=1,
+        description="질문한 훈련자의 고유 식별자입니다. 세션 시작 시 사용한 user_id와 동일하게 보냅니다.",
+        examples=["1234"],
+    )]
+    scenario_id: Annotated[str | None, Field(
+        description="질문이 속한 콘텐츠 식별자입니다. 현재 훈련 맥락이 필요할 때 세션의 scenario_id를 보냅니다.",
+        examples=["3"],
+    )] = None
+    session_id: Annotated[str | None, Field(
+        description="질문이 속한 훈련 세션 식별자입니다. 세션 데이터·자세·순서 문맥을 사용할 때 입력합니다.",
+        examples=["3_11000346_1"],
+    )] = None
     # 명세서 p.9: request_id·use_rag 는 (선택)이고 use_rag 기본값은 Y 다.
-    request_id: str | None = None
-    prompt: Annotated[str, Field(min_length=1, max_length=4000)]
-    task_type: TaskType
-    use_rag: Literal["Y", "N"] = "Y"
-    context: str | None = None
+    request_id: Annotated[str | None, Field(
+        description="클라이언트가 생성하는 호출 추적용 식별자입니다. 생략하면 서버가 응답 추적값을 별도로 처리합니다.",
+        examples=["REQ-TEXT-001"],
+    )] = None
+    prompt: Annotated[str, Field(
+        min_length=1,
+        max_length=4000,
+        description="사용자가 입력하거나 음성에서 변환된 질문 문장입니다. 공백만 있는 문자열은 허용하지 않습니다.",
+        examples=["다음 Zone을 어떤 순서로 칠해야 하나요?"],
+    )]
+    task_type: Annotated[TaskType, Field(
+        description=(
+            "질문 처리 유형입니다. trajectory_recomm은 경로, pose_recomm은 자세, "
+            "error_analysis는 오류 분석, knowledge_search는 일반 지식 검색에 사용합니다."
+        ),
+        examples=["knowledge_search"],
+    )]
+    use_rag: Annotated[Literal["Y", "N"], Field(
+        description="지식 검색(RAG) 사용 여부입니다. Y는 검색 사용, N은 검색 없이 현재 문맥만 사용합니다.",
+        examples=["Y"],
+    )] = "Y"
+    context: Annotated[str | None, Field(
+        description="현재 Zone·시퀀스 ID·관찰 상황 등 질문에 추가할 짧은 문맥입니다. 불필요하면 생략합니다.",
+        examples=["현재 Zone은 3입니다."],
+    )] = None
 
     @field_validator("prompt")
     @classmethod

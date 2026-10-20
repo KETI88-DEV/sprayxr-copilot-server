@@ -84,10 +84,22 @@ class GunMetricsIn(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    speed: float | None = None
-    distance: float | None = None
-    raypoint: list[float] | None = None
-    raytexmapnum: int | None = None
+    speed: Annotated[float | None, Field(
+        description="해당 프레임의 도구 이동 속도(mm/s)입니다. 시뮬레이터에서 산출하지 못하면 null입니다.",
+        examples=[450.0],
+    )] = None
+    distance: Annotated[float | None, Field(
+        description="도구 노즐과 피도면 충돌점 사이 이격거리(mm)입니다. 레이 미충돌 시 null입니다.",
+        examples=[260.0],
+    )] = None
+    raypoint: Annotated[list[float] | None, Field(
+        description="피도면에 충돌한 Ray의 월드 좌표 [X,Y,Z]입니다. 레이 미충돌 시 null입니다.",
+        examples=[[0.0, 1.0, 0.5]],
+    )] = None
+    raytexmapnum: Annotated[int | None, Field(
+        description="Ray가 충돌한 Texture Map 번호입니다. 레이 미충돌 시 null입니다.",
+        examples=[1],
+    )] = None
     raytexuv: tuple[TexturePixelCoordinate, TexturePixelCoordinate] | None = Field(
         default=None,
         description=(
@@ -96,7 +108,10 @@ class GunMetricsIn(BaseModel):
         ),
         examples=[[1024, 768]],
     )
-    spraytime: float | None = None
+    spraytime: Annotated[float | None, Field(
+        description="해당 프레임까지의 분사 누적 시간 또는 시뮬레이터가 기록한 분사 시간(초)입니다.",
+        examples=[0.011],
+    )] = None
 
 
 class SequenceFrameIn(BaseModel):
@@ -109,11 +124,24 @@ class SequenceFrameIn(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    index: int | None = None
-    time: str | float | None = None
-    tool_pos_rot: dict[str, Any] | None = None
-    skeleton_joints: dict[str, Any] = Field(default_factory=dict)
-    gun_metrics: GunMetricsIn | None = None
+    index: Annotated[int | None, Field(
+        description="현재 시퀀스 안에서 0부터 증가하는 프레임 번호입니다.", examples=[0]
+    )] = None
+    time: Annotated[str | float | None, Field(
+        description="프레임 기록 시각입니다. ISO 8601 문자열 또는 시퀀스 시작 이후 경과 초를 사용할 수 있습니다.",
+        examples=["2026-10-08T01:05:53.000Z"],
+    )] = None
+    tool_pos_rot: Annotated[dict[str, Any] | None, Field(
+        description="HMD·스프레이건·플래시 등 도구의 위치와 회전 Transform 묶음입니다.",
+        examples=[{"position": [0.0, 1.2, 0.4], "rotation": [0.0, 0.0, 0.0, 1.0]}],
+    )] = None
+    skeleton_joints: Annotated[dict[str, Any], Field(
+        default_factory=dict,
+        description="프레임의 관절별 위치·회전 정보입니다. 관절 이름을 키로 하는 객체이며 없는 경우 빈 객체를 보냅니다.",
+    )]
+    gun_metrics: Annotated[GunMetricsIn | None, Field(
+        description="해당 프레임에서 측정된 속도·이격거리·Ray 충돌 좌표·분사 시간 정보입니다."
+    )] = None
     # 2026-10-08 TSB 정본은 gun_metrics 안에 둔다. 이 필드는 구형 전송 호환용이다.
     raytexuv: tuple[TexturePixelCoordinate, TexturePixelCoordinate] | None = Field(
         default=None,
@@ -239,8 +267,8 @@ class TelemetrySequenceRequest(StrictModel):
         json_schema_extra={"example": _SEQUENCE_REQUEST_EXAMPLE},
     )
 
-    session_id: Annotated[str, Field(min_length=1, description="sessions/start와 동일한 세션 식별자", examples=["3_11000346_1"])]
-    user_id: Annotated[str, Field(min_length=1, description="훈련자 식별자", examples=["1234"])]
+    session_id: Annotated[str, Field(min_length=1, description="sessions/start에서 생성한 동일 세션 식별자입니다.", examples=["3_11000346_1"])]
+    user_id: Annotated[str, Field(min_length=1, description="sessions/start에서 사용한 동일 훈련자 식별자입니다.", examples=["1234"])]
     scenario_id: Annotated[
         str,
         Field(
@@ -253,13 +281,23 @@ class TelemetrySequenceRequest(StrictModel):
         ),
     ]
     # "1"~"39", 미지정·미판정은 "-1" (p.5)
-    zone_id: Annotated[str, Field(min_length=1)]
-    sequence_id: Annotated[str, Field(min_length=1)]
+    zone_id: Annotated[str, Field(
+        min_length=1,
+        description="현재 시퀀스의 Zone 번호 문자열입니다. 피도면에 충돌하지 않았거나 판정할 수 없으면 -1을 사용합니다.",
+        examples=["3"],
+    )]
+    sequence_id: Annotated[str, Field(
+        min_length=1,
+        description="세션 안에서 분사 도구를 연속으로 켠 한 구간의 식별자입니다. 호출 순서대로 고유하게 부여합니다.",
+        examples=["SEQ-001"],
+    )]
     sequence_setting: Annotated[
         dict[str, Any],
         Field(description="도구 구분은 tool_type에 spray_gun 또는 blasting_gun을 사용합니다."),
     ]
-    sequence_info: list[SequenceFrameIn]
+    sequence_info: Annotated[list[SequenceFrameIn], Field(
+        description="현재 시퀀스 동안 수집한 시간순 프레임 배열입니다. 각 프레임에는 도구·관절·Ray 계측값이 포함됩니다."
+    )]
     sequence_result: Annotated[SequenceResultIn, Field(
         description="시퀀스 요약값과 TSB 누적 도막 크롭입니다. 아래 필드를 펼쳐 상세 규격을 확인하세요."
     )]
@@ -274,7 +312,12 @@ class AnalyzeSequenceRequest(TelemetrySequenceRequest):
     )
 
     # 2026-10-08 실전송에는 없다. 예전 클라이언트만 선택적으로 보낼 수 있다.
-    mode_id: Annotated[int | None, Field(ge=1, le=10)] = None
+    mode_id: Annotated[int | None, Field(
+        ge=1,
+        le=10,
+        description="구형 클라이언트 호환용 학습모드 번호입니다. 신규 연동은 scenario_id를 사용하며 보통 생략합니다.",
+        examples=[3],
+    )] = None
 
     @model_validator(mode="after")
     def _mode_id_must_match_scenario(self) -> "AnalyzeSequenceRequest":

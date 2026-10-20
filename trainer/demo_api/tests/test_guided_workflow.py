@@ -30,6 +30,7 @@ def test_guided_workflow_runs_end_to_end_without_parameters() -> None:
 
     assert payloads[0]["next_endpoint"].endswith("/1-start")
     assert payloads[1]["session_status"] == "ACTIVE"
+    assert payloads[1]["test_context"]["input_used"]["body"]["target_thickness_um"] == 150.0
     assert payloads[2]["guide"]["speed"]["status"] in {"slow", "ok", "fast"}
     assert payloads[2]["guide"]["distance"]["status"] in {"near", "ok", "far"}
     sequence_result = payloads[2]["test_context"]["input_used"]["sequence_result"]

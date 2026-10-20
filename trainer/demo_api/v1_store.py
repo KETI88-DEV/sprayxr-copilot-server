@@ -42,7 +42,8 @@ _SCHEMA: Final[tuple[str, ...]] = (
         scenario_id    TEXT NOT NULL,
         session_status TEXT NOT NULL,
         started_at     TEXT,
-        ended_at       TEXT
+        ended_at       TEXT,
+        target_thickness_um REAL
     )
     """,
     """
@@ -75,6 +76,7 @@ class SessionRow:
     session_status: str
     started_at: str | None
     ended_at: str | None
+    target_thickness_um: float | None
 
 
 @dataclass(frozen=True)
@@ -98,6 +100,13 @@ class V1Store:
         with self._conn:
             for statement in _SCHEMA:
                 self._conn.execute(statement)
+            session_columns = {
+                str(row[1]) for row in self._conn.execute("PRAGMA table_info(sessions)")
+            }
+            if "target_thickness_um" not in session_columns:
+                self._conn.execute(
+                    "ALTER TABLE sessions ADD COLUMN target_thickness_um REAL"
+                )
 
     # --- 사용자 -----------------------------------------------------------
 
@@ -150,18 +159,23 @@ class V1Store:
     # --- 세션 -------------------------------------------------------------
 
     def start_session(
-        self, *, session_id: str, user_id: str, scenario_id: str, started_at: str
+        self, *, session_id: str, user_id: str, scenario_id: str, started_at: str,
+        target_thickness_um: float | None = None,
     ) -> SessionRow:
         with self._guard, self._conn:
             self._conn.execute(
-                "INSERT INTO sessions (session_id, user_id, scenario_id, session_status, started_at, ended_at)"
-                " VALUES (?, ?, ?, 'ACTIVE', ?, NULL)"
+                "INSERT INTO sessions (session_id, user_id, scenario_id, session_status, started_at, ended_at, target_thickness_um)"
+                " VALUES (?, ?, ?, 'ACTIVE', ?, NULL, ?)"
                 " ON CONFLICT(session_id) DO UPDATE SET"
                 "   user_id = excluded.user_id, scenario_id = excluded.scenario_id,"
-                "   session_status = 'ACTIVE', started_at = excluded.started_at, ended_at = NULL",
-                (session_id, user_id, scenario_id, started_at),
+                "   session_status = 'ACTIVE', started_at = excluded.started_at, ended_at = NULL,"
+                "   target_thickness_um = excluded.target_thickness_um",
+                (session_id, user_id, scenario_id, started_at, target_thickness_um),
             )
-        return SessionRow(session_id, user_id, scenario_id, "ACTIVE", started_at, None)
+        return SessionRow(
+            session_id, user_id, scenario_id, "ACTIVE", started_at, None,
+            target_thickness_um,
+        )
 
     def end_session(
         self, *, session_id: str, user_id: str, scenario_id: str, ended_at: str
@@ -169,14 +183,14 @@ class V1Store:
         """세션이 없어도 기록한다 — 종료 통지를 잃지 않는다. 시작 시각은 모르는 채 남는다."""
         with self._guard, self._conn:
             self._conn.execute(
-                "INSERT INTO sessions (session_id, user_id, scenario_id, session_status, started_at, ended_at)"
-                " VALUES (?, ?, ?, 'COMPLETED', NULL, ?)"
+                "INSERT INTO sessions (session_id, user_id, scenario_id, session_status, started_at, ended_at, target_thickness_um)"
+                " VALUES (?, ?, ?, 'COMPLETED', NULL, ?, NULL)"
                 " ON CONFLICT(session_id) DO UPDATE SET"
                 "   session_status = 'COMPLETED', ended_at = excluded.ended_at",
                 (session_id, user_id, scenario_id, ended_at),
             )
             row = self._conn.execute(
-                "SELECT session_id, user_id, scenario_id, session_status, started_at, ended_at"
+                "SELECT session_id, user_id, scenario_id, session_status, started_at, ended_at, target_thickness_um"
                 " FROM sessions WHERE session_id = ?",
                 (session_id,),
             ).fetchone()
@@ -185,7 +199,7 @@ class V1Store:
     def get_session(self, session_id: str) -> SessionRow | None:
         with self._guard:
             row = self._conn.execute(
-                "SELECT session_id, user_id, scenario_id, session_status, started_at, ended_at"
+                "SELECT session_id, user_id, scenario_id, session_status, started_at, ended_at, target_thickness_um"
                 " FROM sessions WHERE session_id = ?",
                 (session_id,),
             ).fetchone()

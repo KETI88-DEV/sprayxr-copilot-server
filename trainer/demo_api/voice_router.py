@@ -218,11 +218,11 @@ def create_voice_router(
     )
     async def voice_query(
         audio: Annotated[UploadFile, File(description="WAV, PCM 16-bit, 16 kHz, mono, maximum 15 seconds")],
-        user_id: Annotated[str, Form(min_length=1, description="훈련자 식별자", examples=["1234"])],
-        language: Annotated[VoiceLanguage, Form(description="음성 언어", examples=["ko"])],
+        user_id: Annotated[str, Form(min_length=1, description="음성 질문을 요청한 훈련자의 고유 식별자입니다.", examples=["1234"])],
+        language: Annotated[VoiceLanguage, Form(description="업로드한 음성의 언어 코드입니다. 현재 ko·vi·id·th 등을 사용할 수 있습니다.", examples=["ko"])],
         session_id: Annotated[str | None, Form(description="진행 중인 세션 식별자(CSV 파일명에서 확장자 제외)", examples=["3_11000346_1"])] = None,
         scenario_id: Annotated[str | None, Form(description="session_id의 첫 '_' 앞 콘텐츠 식별자", examples=["3"])] = None,
-        request_id: Annotated[str | None, Form(description="호출 추적용 식별자", examples=["REQ-VOICE-001"])] = None,
+        request_id: Annotated[str | None, Form(description="클라이언트 로그와 서버 응답을 연결하기 위한 호출 추적용 식별자입니다.", examples=["REQ-VOICE-001"])] = None,
         task_type: Annotated[TaskType, Form(description="텍스트 Query API와 동일한 작업 유형", examples=["knowledge_search"])] = "knowledge_search",
         use_rag: Annotated[Literal["Y", "N"], Form(description="Use the knowledge base", examples=["Y"])]= "Y",
         context: Annotated[str | None, Form(description="선택 JSON 또는 짧은 상황 설명", examples=["현재 훈련모드 3의 Zone 3을 도장 중입니다."])] = None,

@@ -82,6 +82,41 @@ def test_start_creates_the_user_then_updates_it() -> None:
     assert (profile["skill_level"], profile["dominant_hand"]) == ("expert", "left")
 
 
+def test_start_accepts_and_returns_target_coating_thickness() -> None:
+    """The session target is persisted in micrometres for downstream coating analysis."""
+    client, _ = _app()
+
+    response = client.post(
+        "/api/v1/sessions/start",
+        json=_start_body(target_thickness_um=150.0),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["target_thickness_um"] == 150.0
+
+
+def test_start_remains_backward_compatible_without_target_thickness() -> None:
+    """Existing TSB payloads that predate the target field remain valid."""
+    client, _ = _app()
+
+    response = client.post("/api/v1/sessions/start", json=_start_body())
+
+    assert response.status_code == 200
+    assert response.json()["data"]["target_thickness_um"] is None
+
+
+@pytest.mark.parametrize("invalid", [0, -1, 20000.1])
+def test_start_rejects_invalid_target_coating_thickness(invalid: float) -> None:
+    client, _ = _app()
+
+    response = client.post(
+        "/api/v1/sessions/start",
+        json=_start_body(target_thickness_um=invalid),
+    )
+
+    assert response.status_code == 422
+
+
 def test_user_list_preserves_unknown_handedness_from_legacy_database() -> None:
     """Migrated records without handedness remain readable, while writes stay strict."""
     state = V1Store(":memory:")

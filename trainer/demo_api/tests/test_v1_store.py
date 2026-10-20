@@ -42,6 +42,23 @@ def test_restarting_a_session_clears_the_end_time() -> None:
     assert (row.session_status, row.started_at, row.ended_at) == ("ACTIVE", "t2", None)
 
 
+def test_session_target_thickness_round_trips_and_updates() -> None:
+    store = _store()
+
+    first = store.start_session(
+        session_id="S1", user_id="W-1", scenario_id="3", started_at="t0",
+        target_thickness_um=150.0,
+    )
+    second = store.start_session(
+        session_id="S1", user_id="W-1", scenario_id="3", started_at="t1",
+        target_thickness_um=175.5,
+    )
+
+    assert first.target_thickness_um == 150.0
+    assert second.target_thickness_um == 175.5
+    assert store.get_session("S1").target_thickness_um == 175.5  # type: ignore[union-attr]
+
+
 def test_report_ids_are_unique_per_request() -> None:
     """Given two completions of one session, When requested, Then each gets its own report_id."""
     store = _store()

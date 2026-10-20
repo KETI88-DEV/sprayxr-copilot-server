@@ -76,6 +76,7 @@ _START_CONTEXT = _test_context(
             "user_id": "SWAGGER-DEMO-a1b2c3d4",
             "session_id": "SWAGGER-SESSION-a1b2c3d4",
             "scenario_id": "1",
+            "target_thickness_um": 150.0,
             "worker": {"skill_level": "novice", "handedness": "right"},
         },
     },
@@ -203,6 +204,7 @@ class GuidedWorkflow:
                 user_id=run.user_id,
                 scenario_id=run.scenario_id,
                 started_at=_now(),
+                target_thickness_um=150.0,
             )
             run.started = True
             return run
@@ -319,6 +321,7 @@ def create_guided_workflow_router(
         input_used = dict(_START_CONTEXT["input_used"])
         input_used["body"] = {"user_id": run.user_id, "session_id": run.session_id,
                               "scenario_id": run.scenario_id,
+                              "target_thickness_um": 150.0,
                               "worker": {"skill_level": "novice", "handedness": "right"}}
         return _ok({"test_context":_test_context(input_used, _START_CONTEXT["input_summary"], _START_CONTEXT["evaluation_focus"]),
                     "workflow_status":"running","step":1,"user_id":run.user_id,"session_id":run.session_id,

@@ -332,7 +332,12 @@ def create_v1_router(
     @router.post(
         "/sessions/start", response_model=ApiResponse, tags=["1. 세션 관리"],
         summary="1-1. 훈련 세션 시작",
-        description="VR 훈련 콘텐츠가 시작될 때 한 번 호출합니다. user_id가 처음이면 사용자를 생성하고, 기존 사용자면 숙련도와 주 사용 손을 갱신한 뒤 세션을 ACTIVE 상태로 저장합니다.",
+        description=(
+            "VR 훈련 콘텐츠가 시작될 때 한 번 호출합니다. user_id가 처음이면 사용자를 생성하고, "
+            "기존 사용자면 숙련도와 주 사용 손을 갱신한 뒤 세션을 ACTIVE 상태로 저장합니다. "
+            "스프레이 훈련은 target_thickness_um에 이번 훈련의 목표 도막 두께(µm)를 입력할 수 있으며, "
+            "기존 연동처럼 생략해도 세션 시작은 정상 처리됩니다."
+        ),
     )
     async def sessions_start(body: SessionStartRequest) -> JSONResponse:
         created = await to_thread.run_sync(
@@ -349,6 +354,7 @@ def create_v1_router(
                 user_id=body.user_id,
                 scenario_id=body.scenario_id,
                 started_at=body.started_at,
+                target_thickness_um=body.target_thickness_um,
             )
         )
         # 같은 세션 id 를 다시 시작하면 이전 이상 발행 이력을 지운다.
@@ -359,6 +365,7 @@ def create_v1_router(
                 session_id=row.session_id, user_id=row.user_id, scenario_id=row.scenario_id,
                 session_status="ACTIVE", started_at=row.started_at, ended_at=row.ended_at,
                 user_created=created,
+                target_thickness_um=row.target_thickness_um,
             ).model_dump(mode="json")
         )
 
@@ -388,6 +395,7 @@ def create_v1_router(
                 session_id=row.session_id, user_id=row.user_id, scenario_id=row.scenario_id,
                 session_status="COMPLETED", started_at=row.started_at, ended_at=row.ended_at,
                 user_created=False,
+                target_thickness_um=row.target_thickness_um,
             ).model_dump(mode="json")
         )
 
@@ -397,16 +405,16 @@ def create_v1_router(
     async def sessions_complete(
         background: BackgroundTasks,
         session_id: Annotated[str, Form(description="sessions/start와 동일한 세션 식별자", examples=["3_11000346_1"])],
-        user_id: Annotated[str, Form(description="훈련자 식별자", examples=["1234"])],
+        user_id: Annotated[str, Form(description="sessions/start에서 사용한 동일 훈련자 식별자입니다.", examples=["1234"])],
         scenario_id: Annotated[str, Form(description="session_id의 첫 '_' 앞 콘텐츠 식별자", examples=["3"])],
-        vr_score: Annotated[int, Form(ge=0, le=100, examples=[54])],
-        is_pass: Annotated[bool, Form(examples=[False])],
-        avg_thickness_um: Annotated[float, Form(ge=0, examples=[138.91])],
+        vr_score: Annotated[int, Form(ge=0, le=100, description="시뮬레이터가 산출한 최종 VR 수행 점수(0~100점)입니다.", examples=[54])],
+        is_pass: Annotated[bool, Form(description="시뮬레이터 기준 훈련 통과 여부입니다. 통과는 true, 미통과는 false입니다.", examples=[False])],
+        avg_thickness_um: Annotated[float, Form(ge=0, description="세션 전체 피도면의 평균 도막 두께(µm)입니다.", examples=[138.91])],
 
-        telemetry_csv: Annotated[UploadFile, File()],
-        avg_speed_mms: Annotated[float | None, Form(ge=0, examples=[480.0])] = None,
-        avg_distance_mm: Annotated[float | None, Form(ge=0, examples=[255.0])] = None,
-        height_map_image: Annotated[UploadFile | None, File()] = None,
+        telemetry_csv: Annotated[UploadFile, File(description="훈련 세션 전체 프레임과 Zone ID를 담은 CSV 또는 CSV.GZ 원본 파일입니다.")],
+        avg_speed_mms: Annotated[float | None, Form(ge=0, description="세션 전체 도구 이동 속도 평균(mm/s)입니다. 산출하지 않으면 생략합니다.", examples=[480.0])] = None,
+        avg_distance_mm: Annotated[float | None, Form(ge=0, description="세션 전체 노즐-피도면 이격거리 평균(mm)입니다. 산출하지 않으면 생략합니다.", examples=[255.0])] = None,
+        height_map_image: Annotated[UploadFile | None, File(description="세션 종료 시점의 전체 누적 도막 높이맵 PNG입니다. 도막 분석을 사용하지 않으면 생략합니다.")] = None,
     ) -> JSONResponse:
         """최신 TSB multipart 전송을 받고 `report_id`를 부여해 `pending`으로 시작한다.
 
@@ -456,8 +464,8 @@ def create_v1_router(
         description="sessions/complete에서 받은 report_id의 처리 상태를 확인합니다. 비동기 분석 중에는 pending이며, 동일 session_id와 report_id 조합을 사용해야 다른 세션의 결과를 잘못 조회하지 않습니다.",
     )
     async def report_status(
-        session_id: Annotated[str, ApiPath(examples=["3_11000346_1"])],
-        report_id: Annotated[str, ApiPath(examples=["RPT-123456789abc"])],
+        session_id: Annotated[str, ApiPath(description="조회할 리포트가 속한 훈련 세션 식별자입니다.", examples=["3_11000346_1"])],
+        report_id: Annotated[str, ApiPath(description="sessions/complete 응답으로 발급받은 리포트 식별자입니다.", examples=["RPT-123456789abc"])],
     ) -> JSONResponse:
         row = await to_thread.run_sync(lambda: _settled(report_id))
         if row is None or row.session_id != session_id:
@@ -483,7 +491,7 @@ def create_v1_router(
         }}}},
     )
     async def report_detail(
-        report_id: Annotated[str, ApiPath(examples=["RPT-123456789abc"])]
+        report_id: Annotated[str, ApiPath(description="sessions/complete 응답으로 발급받은 최종 리포트 식별자입니다.", examples=["RPT-123456789abc"])]
     ) -> JSONResponse:
         row = await to_thread.run_sync(lambda: _settled(report_id))
         if row is None:
@@ -497,8 +505,8 @@ def create_v1_router(
         description="등록된 훈련자 프로필을 페이지 단위로 조회합니다. skip은 건너뛸 행 수, limit은 한 번에 받을 최대 행 수이며 운영 UI의 사용자 선택 목록에 사용할 수 있습니다.",
     )
     async def users_list(
-        skip: Annotated[int, Query(ge=0)] = 0,
-        limit: Annotated[int, Query(ge=1, le=1000)] = 100,
+        skip: Annotated[int, Query(ge=0, description="정렬된 사용자 목록에서 건너뛸 레코드 수입니다.")] = 0,
+        limit: Annotated[int, Query(ge=1, le=1000, description="한 번에 반환할 최대 사용자 수입니다(1~1000).")] = 100,
     ) -> JSONResponse:
         rows = await to_thread.run_sync(lambda: state.list_users(skip=skip, limit=limit))
         return _ok([UserProfile(**row.__dict__).model_dump(mode="json") for row in rows])
@@ -531,7 +539,7 @@ def create_v1_router(
         description="한 명의 훈련자 프로필을 user_id로 조회합니다. VR·Replay 화면에서 숙련도와 주 사용 손을 표시하거나 세션 시작 전 등록 여부를 확인할 때 사용합니다.",
     )
     async def users_get(
-        user_id: Annotated[str, ApiPath(examples=["1234"])]
+        user_id: Annotated[str, ApiPath(description="조회할 훈련자의 고유 식별자입니다.", examples=["1234"])]
     ) -> JSONResponse:
         row = await to_thread.run_sync(lambda: state.get_user(user_id))
         if row is None:
@@ -545,7 +553,7 @@ def create_v1_router(
         description="진행 중인 세션의 이상 감지 알림을 Server-Sent Events로 계속 수신합니다. 클라이언트는 한 번 연결한 뒤 anomaly_detection 이벤트를 처리하고, keep-alive 주석은 화면 상태 변경 없이 무시합니다.",
     )
     async def stream_anomalies(
-        session_id: Annotated[str, ApiPath(examples=["3_11000346_1"])],
+        session_id: Annotated[str, ApiPath(description="실시간 이상 알림을 구독할 훈련 세션 식별자입니다.", examples=["3_11000346_1"])],
         request: Request,
     ) -> StreamingResponse:
         raw = request.headers.get("last-event-id", "0")
@@ -572,7 +580,12 @@ def create_v1_router(
                 description="기존 SSE 화면 개발을 위한 단일 사례 발생기입니다. session_id는 기본값 그대로 실행할 수 있고, normal 또는 방향·이격거리 이상 이벤트가 어떻게 전달되는지 빠르게 확인합니다.",
                 name=f"test_sequence_{case.replace('-', '_')}",
             )
-            async def _handler(session_id: str = "1_1000053_1") -> JSONResponse:
+            async def _handler(
+                session_id: Annotated[str, Query(
+                    description="모의 이상 알림을 귀속시킬 테스트 세션 식별자입니다.",
+                    examples=["3_11000346_1"],
+                )] = "3_11000346_1",
+            ) -> JSONResponse:
                 sequence_id = f"TEST-{case}"
                 published = None
                 if anomaly_type != "none":

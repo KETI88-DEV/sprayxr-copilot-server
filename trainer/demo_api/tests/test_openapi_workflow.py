@@ -1,3 +1,5 @@
+from typing import Any
+
 from fastapi.testclient import TestClient
 
 from trainer.demo_api.app import create_app
@@ -124,6 +126,61 @@ def test_public_swagger_examples_use_the_latest_tsb_session_identity() -> None:
     session_field = components["SessionStartRequest"]["properties"]["session_id"]
     assert "CSV" in session_field["description"]
     assert expected["session_id"] in session_field["examples"]
+
+
+def test_session_start_documents_target_coating_thickness() -> None:
+    schema = TestClient(create_app()).get("/openapi.json").json()
+    start = schema["components"]["schemas"]["SessionStartRequest"]
+    target = start["properties"]["target_thickness_um"]
+
+    assert "target_thickness_um" not in start["required"]
+    assert target["anyOf"][0]["exclusiveMinimum"] == 0
+    assert target["anyOf"][0]["maximum"] == 20000
+    assert target["examples"] == [150.0]
+    assert "µm" in target["description"]
+    assert start["example"]["target_thickness_um"] == 150.0
+
+
+def test_every_public_input_parameter_has_a_detailed_description() -> None:
+    """Swagger should explain every editable request, form, path and query field."""
+    schema = TestClient(create_app()).get("/openapi.json").json()
+    components = schema["components"]["schemas"]
+    missing: list[str] = []
+    visited: set[str] = set()
+
+    def inspect_schema(node: dict[str, Any], location: str) -> None:
+        ref = node.get("$ref")
+        if ref:
+            name = ref.rsplit("/", 1)[-1]
+            if name in visited:
+                return
+            visited.add(name)
+            inspect_schema(components[name], name)
+            return
+        for branch in node.get("anyOf", []):
+            if isinstance(branch, dict):
+                inspect_schema(branch, location)
+        items = node.get("items")
+        if isinstance(items, dict):
+            inspect_schema(items, f"{location}[]")
+        for name, prop in node.get("properties", {}).items():
+            field = f"{location}.{name}"
+            if len(prop.get("description", "").strip()) < 12:
+                missing.append(field)
+            inspect_schema(prop, field)
+
+    for path, path_item in schema["paths"].items():
+        for method, operation in path_item.items():
+            if method not in {"get", "post"}:
+                continue
+            for parameter in operation.get("parameters", []):
+                if len(parameter.get("description", "").strip()) < 12:
+                    missing.append(f"{method.upper()} {path}.{parameter['name']}")
+            request_body = operation.get("requestBody", {})
+            for media in request_body.get("content", {}).values():
+                inspect_schema(media.get("schema", {}), f"{method.upper()} {path}")
+
+    assert missing == []
 
 
 def test_voice_demo_is_input_free_and_links_the_downloadable_sample() -> None:

@@ -41,15 +41,27 @@ class ApiResponse(BaseModel):
 class WorkerProfile(StrictModel):
     """p.1: `skill_level`·`handedness` 모두 필수. `handedness` 기본값은 `right`다."""
 
-    skill_level: SkillLevel
-    handedness: Handedness = "right"
+    skill_level: Annotated[SkillLevel, Field(
+        description="훈련 시작 시점의 작업자 숙련도입니다. expert는 전문가, novice는 일반 훈련자를 뜻합니다.",
+        examples=["novice"],
+    )]
+    handedness: Annotated[Handedness, Field(
+        description="스프레이건 또는 블라스팅건을 주로 잡는 손입니다. right 또는 left를 사용합니다.",
+        examples=["right"],
+    )] = "right"
 
 
 class WorkerProfilePartial(StrictModel):
     """p.3: `/sessions/end`의 `worker`는 선택이고 하위도 선택이다."""
 
-    skill_level: SkillLevel | None = None
-    handedness: Handedness | None = None
+    skill_level: Annotated[SkillLevel | None, Field(
+        description="종료 시 갱신할 작업자 숙련도입니다. 변경하지 않을 경우 생략합니다.",
+        examples=["novice"],
+    )] = None
+    handedness: Annotated[Handedness | None, Field(
+        description="종료 시 갱신할 주 사용 손입니다. 변경하지 않을 경우 생략합니다.",
+        examples=["right"],
+    )] = None
 
 
 class SessionStartRequest(StrictModel):
@@ -60,6 +72,7 @@ class SessionStartRequest(StrictModel):
         json_schema_extra={"example": {
             "session_id": "3_11000346_1", "user_id": "1234",
             "scenario_id": "3", "started_at": "2026-10-08T01:05:44.726Z",
+            "target_thickness_um": 150.0,
             "worker": {"skill_level": "novice"},
         }},
     )
@@ -75,7 +88,11 @@ class SessionStartRequest(StrictModel):
             examples=["3_11000346_1"],
         ),
     ]
-    user_id: Annotated[str, Field(min_length=1, description="훈련자 식별자", examples=["1234"])]
+    user_id: Annotated[str, Field(
+        min_length=1,
+        description="훈련자를 구분하는 고유 식별자입니다. 같은 사람이 다시 훈련할 때 동일한 값을 사용합니다.",
+        examples=["1234"],
+    )]
     scenario_id: Annotated[
         str,
         Field(
@@ -88,7 +105,19 @@ class SessionStartRequest(StrictModel):
         ),
     ]
     started_at: Annotated[str, Field(min_length=1, description="세션 시작 시각(ISO 8601 UTC)", examples=["2026-10-08T01:05:44.726Z"])]
-    worker: WorkerProfile
+    target_thickness_um: Annotated[float | None, Field(
+        default=None,
+        gt=0,
+        le=20000,
+        description=(
+            "이번 세션의 목표 도막 두께(µm)입니다. 스프레이 도막 판정 기준으로 저장되며, "
+            "기존 클라이언트는 이 필드를 생략할 수 있습니다. 블라스팅 세션에서는 생략합니다."
+        ),
+        examples=[150.0],
+    )]
+    worker: Annotated[WorkerProfile, Field(
+        description="훈련자의 숙련도와 주 사용 손 정보입니다. 사용자 프로필 생성 또는 갱신에 사용합니다."
+    )]
 
 
 class SessionEndRequest(StrictModel):
@@ -106,7 +135,9 @@ class SessionEndRequest(StrictModel):
     user_id: Annotated[str, Field(min_length=1, description="sessions/start에서 사용한 동일 훈련자 식별자", examples=["1234"])]
     scenario_id: Annotated[str, Field(min_length=1, description="sessions/start에서 사용한 동일 콘텐츠 식별자", examples=["3"])]
     ended_at: Annotated[str, Field(min_length=1, description="세션 종료 시각(ISO 8601 UTC)", examples=["2026-10-08T01:08:11.671Z"])]
-    worker: WorkerProfilePartial | None = None
+    worker: Annotated[WorkerProfilePartial | None, Field(
+        description="종료 시 사용자 프로필을 갱신할 때만 보냅니다. 갱신하지 않으면 필드 전체를 생략합니다."
+    )] = None
 
 
 # --- 6. 사용자 관리 (p.17-20) ---------------------------------------------
@@ -123,12 +154,26 @@ class UserCreateRequest(StrictModel):
         }},
     )
 
-    user_id: Annotated[str, Field(min_length=1)]
-    name: str | None = None
-    skill_level: SkillLevel = "novice"
-    dominant_hand: Handedness = "right"
-    age: int | None = None
-    gender: str | None = None
+    user_id: Annotated[str, Field(
+        min_length=1, description="신규 등록할 훈련자의 고유 식별자입니다.", examples=["1234"]
+    )]
+    name: Annotated[str | None, Field(
+        description="화면과 리포트에 표시할 훈련자 이름입니다. 개인정보 정책에 따라 생략할 수 있습니다.",
+        examples=["테스트 훈련자"],
+    )] = None
+    skill_level: Annotated[SkillLevel, Field(
+        description="훈련자의 숙련도 분류입니다. expert 또는 novice를 사용합니다.", examples=["novice"]
+    )] = "novice"
+    dominant_hand: Annotated[Handedness, Field(
+        description="훈련자가 도장 도구를 주로 잡는 손입니다. right 또는 left를 사용합니다.", examples=["right"]
+    )] = "right"
+    age: Annotated[int | None, Field(
+        ge=0, le=120, description="훈련자 나이(만 나이)입니다. 수집하지 않으면 생략합니다.", examples=[35]
+    )] = None
+    gender: Annotated[str | None, Field(
+        description="훈련자 성별 또는 시스템에서 사용하는 성별 코드입니다. 수집하지 않으면 생략합니다.",
+        examples=["male"],
+    )] = None
 
 
 class UserProfile(StrictModel):
@@ -413,3 +458,6 @@ class SessionStateData(StrictModel):
     started_at: str | None
     ended_at: str | None
     user_created: bool
+    target_thickness_um: Annotated[float | None, Field(
+        description="세션 시작 시 저장된 목표 도막 두께(µm)입니다. 입력하지 않은 기존 세션은 null입니다."
+    )]
