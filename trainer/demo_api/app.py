@@ -10,7 +10,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import httpx
 import uvicorn
@@ -45,6 +45,7 @@ from trainer.demo_api.zone_resolver import McpZoneResolver
 
 logger = logging.getLogger(__name__)
 _LEVEL_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9\-_.]{0,63}$")
+_OPENAPI_METHODS = {"get", "post", "put", "patch", "delete", "options", "head"}
 
 OPENAPI_TAGS = [
     {"name": "0. 모의 연동", "description": "시뮬레이터 없이 0-reset부터 4-report까지 순서대로 시험합니다."},
@@ -101,6 +102,111 @@ def _openapi_description() -> str:
 
 각 API의 상세 설명에는 **언제 호출하는지, 입력값 의미, 응답 활용법과 주의사항**을 적었습니다.
 """
+
+
+def _resolve_openapi_schema(
+    node: dict[str, Any], components: dict[str, Any]
+) -> dict[str, Any]:
+    ref = node.get("$ref")
+    if isinstance(ref, str):
+        return cast(dict[str, Any], components.get(ref.rsplit("/", 1)[-1], node))
+    return node
+
+
+def _openapi_type_label(node: dict[str, Any], components: dict[str, Any]) -> str:
+    node = _resolve_openapi_schema(node, components)
+    if node.get("format") == "binary" or node.get("contentMediaType"):
+        return "file"
+    branches = [
+        cast(dict[str, Any], branch)
+        for branch in node.get("anyOf", [])
+        if isinstance(branch, dict) and branch.get("type") != "null"
+    ]
+    if branches:
+        labels = list(dict.fromkeys(_openapi_type_label(branch, components) for branch in branches))
+        return " | ".join(labels)
+    value_type = node.get("type")
+    if value_type == "array":
+        items = node.get("items")
+        item_type = _openapi_type_label(items, components) if isinstance(items, dict) else "value"
+        return f"array<{item_type}>"
+    if value_type == "object" or "properties" in node:
+        return "object"
+    return str(value_type or "value")
+
+
+def _clean_openapi_description(value: object, fallback_name: str) -> str:
+    description = " ".join(str(value or "").split())
+    return description or f"{fallback_name} 입력값입니다."
+
+
+def _operation_input_lines(
+    operation: dict[str, Any], components: dict[str, Any]
+) -> list[str]:
+    lines: list[str] = []
+    seen: set[str] = set()
+
+    for parameter in operation.get("parameters", []):
+        if not isinstance(parameter, dict):
+            continue
+        parameter = _resolve_openapi_schema(parameter, components)
+        name = str(parameter.get("name", "parameter"))
+        value_schema = parameter.get("schema", {})
+        if not isinstance(value_schema, dict):
+            value_schema = {}
+        required = bool(parameter.get("required"))
+        marker = "필수" if required else "선택"
+        description = _clean_openapi_description(parameter.get("description"), name)
+        lines.append(
+            f"- `{name}({_openapi_type_label(value_schema, components)})` : {description} **[{marker}]**"
+        )
+        seen.add(name)
+
+    request_body = operation.get("requestBody", {})
+    if isinstance(request_body, dict):
+        content = request_body.get("content", {})
+        if isinstance(content, dict) and content:
+            preferred = next(
+                (content[key] for key in ("application/json", "multipart/form-data") if key in content),
+                next(iter(content.values())),
+            )
+            body_schema = preferred.get("schema", {}) if isinstance(preferred, dict) else {}
+            if isinstance(body_schema, dict):
+                body_schema = _resolve_openapi_schema(body_schema, components)
+                required_names = set(body_schema.get("required", []))
+                properties = body_schema.get("properties", {})
+                if isinstance(properties, dict) and properties:
+                    for name, prop in properties.items():
+                        if name in seen or not isinstance(prop, dict):
+                            continue
+                        marker = "필수" if name in required_names else "선택"
+                        description = _clean_openapi_description(prop.get("description"), name)
+                        lines.append(
+                            f"- `{name}({_openapi_type_label(prop, components)})` : {description} **[{marker}]**"
+                        )
+                elif body_schema:
+                    marker = "필수" if request_body.get("required") else "선택"
+                    description = _clean_openapi_description(body_schema.get("description"), "body")
+                    lines.append(
+                        f"- `body({_openapi_type_label(body_schema, components)})` : {description} **[{marker}]**"
+                    )
+    return lines
+
+
+def _add_openapi_input_overviews(schema: dict[str, Any]) -> None:
+    components = cast(dict[str, Any], schema.get("components", {}).get("schemas", {}))
+    for path_item in schema.get("paths", {}).values():
+        if not isinstance(path_item, dict):
+            continue
+        for method, operation in path_item.items():
+            if method not in _OPENAPI_METHODS or not isinstance(operation, dict):
+                continue
+            description = str(operation.get("description", "")).rstrip()
+            if "### 입력 파라미터" in description:
+                continue
+            lines = _operation_input_lines(operation, components)
+            overview = "\n".join(lines) if lines else "- 없음"
+            operation["description"] = f"{description}\n\n### 입력 파라미터\n\n{overview}".strip()
 
 
 def create_app(
@@ -310,6 +416,15 @@ def create_app(
         )
     )
     install_copilot_error_handlers(app)
+
+    default_openapi = app.openapi
+
+    def _openapi_with_input_overviews() -> dict[str, Any]:
+        schema = default_openapi()
+        _add_openapi_input_overviews(schema)
+        return schema
+
+    app.openapi = _openapi_with_input_overviews
 
     return app
 

@@ -290,6 +290,37 @@ def test_every_public_operation_explains_when_and_how_to_use_it() -> None:
     assert missing == []
 
 
+def test_every_public_operation_shows_a_bulleted_input_parameter_overview() -> None:
+    """Each Swagger operation should summarize editable inputs without opening Models."""
+    schema = TestClient(create_app()).get("/openapi.json").json()
+
+    missing: list[str] = []
+    for path, path_item in schema["paths"].items():
+        for method, operation in path_item.items():
+            if method not in {"get", "post"}:
+                continue
+            if "### 입력 파라미터" not in operation.get("description", ""):
+                missing.append(f"{method.upper()} {path}")
+    assert missing == []
+
+    start = schema["paths"]["/api/v1/sessions/start"]["post"]["description"]
+    assert "- `scenario_id(string)` :" in start
+    assert "- `session_id(string)` :" in start
+    assert "- `target_thickness_um(number)` :" in start
+    assert "[필수]" in start
+    assert "[선택]" in start
+
+    voice = schema["paths"]["/api/v1/copilot/query-voice"]["post"]["description"]
+    assert "- `audio(file)` :" in voice
+    assert "- `language(string)` :" in voice
+
+    report = schema["paths"]["/api/v1/reports/{report_id}"]["get"]["description"]
+    assert "- `report_id(string)` :" in report
+
+    no_input = schema["paths"]["/api/v1/test/workflow/0-reset"]["post"]["description"]
+    assert "### 입력 파라미터\n\n- 없음" in no_input
+
+
 def test_report_detail_swagger_shows_one_complete_final_report() -> None:
     """TSB 2026-10-12: 리포트 응답 예시가 없어 Replay 리포트 UI 를 설계할 수 없었다."""
     schema = TestClient(create_app()).get("/openapi.json").json()
