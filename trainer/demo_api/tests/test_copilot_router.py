@@ -146,6 +146,79 @@ def test_knowledge_search_runs_the_pipeline_on_the_fast_route(monkeypatch: pytes
     ]
 
 
+def test_session_query_injects_accumulated_sequences_and_recent_dialogue() -> None:
+    """A follow-up question must be grounded in every prior sequence and turn of that session."""
+    import json
+    from fastapi import FastAPI
+    from trainer.demo_api.sequence_store import SequenceStore
+
+    store = SequenceStore(":memory:")
+    for sequence_id, zone_id, speed in (("SEQ-001", "1", 420.0), ("SEQ-002", "3", 480.0)):
+        body = {
+            "session_id": "SESSION-CONTEXT",
+            "scenario_id": "3",
+            "sequence_id": sequence_id,
+            "zone_id": zone_id,
+            "sequence_setting": {"tool_type": "spray_gun"},
+            "sequence_info": [],
+            "sequence_result": {"avg_speed_mms": speed, "avg_distance_mm": 250.0},
+        }
+        store.record(
+            session_key="SESSION-CONTEXT",
+            sequence_id=sequence_id,
+            body_sha256=sequence_id,
+            frames=0,
+            received_at="2026-10-23T00:00:00Z",
+            body=json.dumps(body),
+        )
+    store.record_query_turn(
+        session_key="SESSION-CONTEXT",
+        user_id="W-017",
+        prompt="방금 속도가 어땠어?",
+        answer="두 번째 시퀀스에서 빨라졌습니다.",
+        task_type="knowledge_search",
+        created_at="2026-10-23T00:00:01Z",
+    )
+    pipeline = _FakePipeline(response="[답변] 앞선 맥락을 반영한 답변")
+    app = FastAPI()
+    app.include_router(copilot_router.create_copilot_router(lambda: pipeline, store=store))
+
+    data = TestClient(app).post(
+        URL,
+        json=_body(session_id="SESSION-CONTEXT", prompt="그럼 지금은?", use_rag="N"),
+    ).json()["data"]
+
+    instruction = pipeline.calls[0]["instruction"]
+    assert "그럼 지금은?" in instruction
+    assert '"sequence_count":2' in instruction
+    assert '"zone_visit_order":["1","3"]' in instruction
+    assert "avg_speed_mms의 단위는 mm/s" in instruction
+    assert "방금 속도가 어땠어?" in instruction
+    assert "두 번째 시퀀스에서 빨라졌습니다." in instruction
+    assert data["answer"] == "앞선 맥락을 반영한 답변"
+
+
+def test_successful_session_query_is_available_to_the_next_follow_up() -> None:
+    """The server persists completed turns so a later request can resolve pronouns naturally."""
+    from fastapi import FastAPI
+    from trainer.demo_api.sequence_store import SequenceStore
+
+    store = SequenceStore(":memory:")
+    pipeline = _FakePipeline(response="[답변] 첫 답변")
+    app = FastAPI()
+    app.include_router(copilot_router.create_copilot_router(lambda: pipeline, store=store))
+    client = TestClient(app)
+
+    first = client.post(URL, json=_body(session_id="S-TURNS", prompt="권장 자세는?", use_rag="N"))
+    assert first.status_code == 200
+    pipeline.response = "[답변] 문맥을 이은 두 번째 답변"
+    second = client.post(URL, json=_body(session_id="S-TURNS", prompt="왜 그래?", use_rag="N"))
+
+    assert second.status_code == 200
+    assert "권장 자세는?" in pipeline.calls[1]["instruction"]
+    assert "첫 답변" in pipeline.calls[1]["instruction"]
+
+
 def test_pose_tab_knowledge_question_is_semantically_routed_to_rag(monkeypatch: pytest.MonkeyPatch) -> None:
     pipeline = _IntentPipeline("knowledge")
 

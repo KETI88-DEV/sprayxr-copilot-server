@@ -40,6 +40,7 @@ from fastapi.responses import JSONResponse
 
 from trainer.demo_api.copilot_contracts import CopilotQueryData, CopilotQueryRequest, CopilotResponse
 from trainer.demo_api.copilot_intent import classify_question_intent
+from trainer.demo_api.copilot_session_context import build_query_instruction, summarize_session
 from trainer.demo_api.pose_query import (
     answer_order_question,
     answer_pose_question,
@@ -105,6 +106,7 @@ def _success_response(
     pose_context: dict[str, object] | None = None,
     sequence_context: dict[str, object] | None = None,
     context_status: str = "not_available",
+    store: SequenceStore | None = None,
 ) -> JSONResponse:
     generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     # Wall clock from handler entry to just before serialization, slot wait included.
@@ -139,6 +141,18 @@ def _success_response(
         retrieval_used,
         len(citations),
     )
+    if store is not None and query.session_id:
+        try:
+            store.record_query_turn(
+                session_key=query.session_id,
+                user_id=query.user_id,
+                prompt=query.prompt,
+                answer=answer,
+                task_type=query.task_type,
+                created_at=generated_at,
+            )
+        except Exception:  # noqa: BROAD_EXCEPT_OK - chat memory must not break the API response
+            logger.exception("copilot query: failed to store dialogue request_id=%s", query.request_id)
     return JSONResponse(status_code=200, content=envelope.model_dump(mode="json"))
 
 
@@ -208,6 +222,7 @@ async def execute_copilot_query(
             query, request_started, answer=order.answer, retrieval_used=False, citations=[],
             sequence_context=order.context,
             context_status="available" if order.analysis_status == "available" else "not_available",
+            store=sequences,
         )
 
     if query.task_type == "pose_recomm" and not knowledge_routed and reports is not None and (
@@ -226,6 +241,7 @@ async def execute_copilot_query(
             query, request_started, answer=zone.answer, retrieval_used=False, citations=[],
             pose_context=zone.context,
             context_status="available" if zone.analysis_status == "available" else "not_available",
+            store=sequences,
         )
 
     if query.task_type == "pose_recomm" and not knowledge_routed:
@@ -250,11 +266,14 @@ async def execute_copilot_query(
             query, request_started, answer=answer, retrieval_used=False, citations=[],
             pose_context=pose.as_context(),
             context_status="available" if pose.analysis_status == "available" else "not_available",
+            store=sequences,
         )
 
     if query.task_type != "knowledge_search" and not knowledge_routed:
         answer = pending_answers.get(query.task_type) or PENDING_TASK_ANSWERS[query.task_type]
-        return _success_response(query, request_started, answer=answer, retrieval_used=False, citations=[])
+        return _success_response(
+            query, request_started, answer=answer, retrieval_used=False, citations=[], store=sequences
+        )
 
     if pipeline_provider is None:
         return error_response(503, "Copilot pipeline is not configured")
@@ -265,11 +284,26 @@ async def execute_copilot_query(
         return error_response(503, "Copilot pipeline is not ready")
 
     use_rag = query.use_rag == "Y"
+    session_summary = ""
+    recent_turns: list[dict[str, str]] = []
+    if query.session_id:
+        session_summary, recent_turns = await to_thread.run_sync(
+            lambda: (
+                summarize_session(sequences.session_bodies(query.session_id)),
+                sequences.recent_query_turns(query.session_id, limit=4),
+            )
+        )
+    instruction = build_query_instruction(
+        query.prompt,
+        client_context=query.context,
+        session_summary=session_summary,
+        recent_turns=recent_turns,
+    )
 
     def _guarded_run() -> Mapping[str, object]:
         with GENERATION_SLOT:
             return pipeline.run(
-                instruction=query.prompt,
+                instruction=instruction,
                 force_route="fast",
                 session_id=query.session_id,
                 enable_thinking=False,
@@ -302,6 +336,8 @@ async def execute_copilot_query(
         retrieval_used=use_rag,
         citations=list(parsed.citations),
         degraded=parsed.repair_path in FAILED_REPAIR_PATHS or bool(result.get("deadline_hit", False)),
+        context_status="available" if session_summary else "not_available",
+        store=sequences,
     )
 
 

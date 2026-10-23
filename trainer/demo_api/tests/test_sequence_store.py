@@ -224,3 +224,35 @@ def test_recent_sequence_catalog_respects_session_and_sequence_limits() -> None:
     assert len(result) == 2
     assert sum(len(item["sequences"]) for item in result) == 3
     assert [item["session_id"] for item in result] == ["S2", "S1"]
+
+
+def test_recent_query_turns_are_isolated_by_session_and_bounded() -> None:
+    """A follow-up must see only the newest turns from its own training session."""
+    store = SequenceStore(":memory:")
+    for index in range(5):
+        store.record_query_turn(
+            session_key="S1",
+            user_id="worker-1",
+            prompt=f"question-{index}",
+            answer=f"answer-{index}",
+            task_type="knowledge_search",
+            created_at=f"2026-10-23T00:00:0{index}Z",
+        )
+    store.record_query_turn(
+        session_key="S2",
+        user_id="worker-2",
+        prompt="other-session",
+        answer="must-not-leak",
+        task_type="knowledge_search",
+        created_at="2026-10-23T00:01:00Z",
+    )
+
+    turns = store.recent_query_turns("S1", limit=3)
+
+    assert [(turn["prompt"], turn["answer"]) for turn in turns] == [
+        ("question-2", "answer-2"),
+        ("question-3", "answer-3"),
+        ("question-4", "answer-4"),
+    ]
+    assert all(turn["user_id"] == "worker-1" for turn in turns)
+    assert all("must-not-leak" not in turn["answer"] for turn in turns)

@@ -44,6 +44,23 @@ CREATE TABLE IF NOT EXISTS sequences (
 )
 """
 
+_QUERY_TURNS_SCHEMA: Final[str] = """
+CREATE TABLE IF NOT EXISTS query_turns (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_key TEXT NOT NULL,
+    user_id     TEXT NOT NULL,
+    prompt      TEXT NOT NULL,
+    answer      TEXT NOT NULL,
+    task_type   TEXT NOT NULL,
+    created_at  TEXT NOT NULL
+)
+"""
+
+_QUERY_TURNS_INDEX: Final[str] = """
+CREATE INDEX IF NOT EXISTS idx_query_turns_session_id
+ON query_turns (session_key, id)
+"""
+
 
 # `CREATE TABLE IF NOT EXISTS`는 이미 있는 테이블을 그대로 둔다. `/output`은 마운트
 # 볼륨이라 이미지를 다시 빌드해도 DB 파일이 남으므로, 나중에 추가한 열은 직접 넣어야
@@ -82,6 +99,8 @@ class SequenceStore:
         self._conn = self._connect(raw)
         with self._conn:
             self._conn.execute(_SCHEMA)
+            self._conn.execute(_QUERY_TURNS_SCHEMA)
+            self._conn.execute(_QUERY_TURNS_INDEX)
             _add_missing_columns(self._conn)
 
     @staticmethod
@@ -204,6 +223,46 @@ class SequenceStore:
                 (session_key,),
             ).fetchone()
         return str(row[0]) if row is not None else None
+
+    def record_query_turn(
+        self,
+        *,
+        session_key: str,
+        user_id: str,
+        prompt: str,
+        answer: str,
+        task_type: str,
+        created_at: str,
+    ) -> None:
+        """Persist one completed exchange for contextual follow-up questions."""
+        if not session_key:
+            return
+        with self._guard, self._conn:
+            self._conn.execute(
+                "INSERT INTO query_turns (session_key, user_id, prompt, answer, task_type, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                (session_key, user_id, prompt, answer, task_type, created_at),
+            )
+
+    def recent_query_turns(self, session_key: str, *, limit: int = 4) -> list[dict[str, str]]:
+        """Return a bounded chronological window without leaking another session."""
+        bounded = max(1, min(int(limit), 12))
+        with self._guard:
+            rows = self._conn.execute(
+                "SELECT user_id, prompt, answer, task_type, created_at"
+                " FROM query_turns WHERE session_key = ? ORDER BY id DESC LIMIT ?",
+                (session_key, bounded),
+            ).fetchall()
+        return [
+            {
+                "user_id": str(user_id),
+                "prompt": str(prompt),
+                "answer": str(answer),
+                "task_type": str(task_type),
+                "created_at": str(created_at),
+            }
+            for user_id, prompt, answer, task_type, created_at in reversed(rows)
+        ]
 
     def recent_sequence_catalog(
         self, *, session_limit: int = 50, sequence_limit: int = 200

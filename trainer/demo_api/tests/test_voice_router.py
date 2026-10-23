@@ -164,7 +164,9 @@ def test_input_free_voice_test_runs_the_real_stt_and_query_path() -> None:
     assert data["transcript"] == "스프레이 도장 시 적정 이격거리를 알려주세요"
     assert data["user_id"] == "TSB-VOICE-DEMO-001"
     assert data["session_id"] == "SWAGGER-VOICE-DEMO"
-    assert pipeline.calls[0]["instruction"] == data["transcript"]
+    instruction = pipeline.calls[0]["instruction"]
+    assert data["transcript"] in instruction
+    assert "Swagger 음성질의 모의연동" in instruction
     assert stt.calls[0][1] == "ko"
     context = data["test_context"]
     assert context["input_used"]["audio"]["spoken_text"] == "스프레이 도장 시 적정 이격거리를 알려주세요."
