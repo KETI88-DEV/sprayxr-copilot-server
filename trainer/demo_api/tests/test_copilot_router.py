@@ -221,6 +221,52 @@ def test_detailed_order_mode_synthesizes_the_structured_report_instead_of_repeat
     assert pipeline.calls[0]["max_tokens"] == 256
 
 
+def test_motion_viewer_analysis_context_supports_quick_and_detailed_without_a_complete_report() -> None:
+    import json
+    from fastapi import FastAPI
+
+    from trainer.demo_api.sequence_store import SequenceStore
+
+    class _ReportsWithoutSession:
+        def latest_complete_analysis(self, _session_id: str) -> None:
+            return None
+
+    pipeline = _IntentPipeline(
+        "order_reference",
+        response="[답변] 상세 분석 결과, Zone 1 다음에는 Zone 3을 진행하는 것이 권장됩니다.",
+    )
+    app = FastAPI()
+    app.include_router(copilot_router.create_copilot_router(
+        lambda: pipeline,
+        store=SequenceStore(":memory:"),
+        reports=_ReportsWithoutSession(),  # type: ignore[arg-type]
+    ))
+    client = TestClient(app)
+    viewer_context = "motion_viewer_analysis:" + json.dumps({
+        "verified_answer": "전문가 대표 흐름은 1 → 3 → 2입니다.",
+        "analysis_context": {
+            "recommended_flow": ["1", "3", "2"],
+            "selected_flow": ["1", "2", "3"],
+            "adherence_rate": 0.67,
+        },
+    }, ensure_ascii=False)
+
+    quick = client.post(URL, json=_body(
+        task_type="trajectory_recomm", session_id="3_1000793_1",
+        prompt="권장 Zone 순서는?", response_mode="quick", context=viewer_context,
+    )).json()["data"]
+    detailed = client.post(URL, json=_body(
+        task_type="trajectory_recomm", session_id="3_1000793_1",
+        prompt="권장 Zone 순서는?", response_mode="detailed", context=viewer_context,
+    )).json()["data"]
+
+    assert quick["answer"] == "전문가 대표 흐름은 1 → 3 → 2입니다."
+    assert quick["context_status"] == "available"
+    assert detailed["answer"].startswith("상세 분석 결과")
+    assert detailed["answer"] != quick["answer"]
+    assert detailed["sequence_context"]["recommended_flow"] == ["1", "3", "2"]
+
+
 def test_response_mode_defaults_to_quick_and_rejects_unknown_values(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -414,6 +414,8 @@ def test_chat_is_bound_to_the_current_motion_record_instead_of_an_unrelated_comp
     assert "data.reference_order_evaluation" in script.text
     assert "const answer = data.answer;" in script.text
     assert "? data.answer\n        : structuredAnswer(task.id, prompt, viewerData)" not in script.text
+    assert "const buildViewerQueryContext" in script.text
+    assert "context: buildViewerQueryContext(task.id, prompt, viewerData)" in script.text
     assert "viewerData?.selected_session_id" in script.text
     assert "viewerData?.mode_id" in script.text
     assert "/motion-viewer/api/completed" not in script.text

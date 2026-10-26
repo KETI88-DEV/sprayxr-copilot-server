@@ -69,6 +69,7 @@ logger = logging.getLogger(__name__)
 COPILOT_QUERY_PATH: Final[str] = "/api/v1/copilot/query"
 _API_V1_PREFIX: Final[str] = "/api/v1/"
 _SUCCESS_MESSAGE: Final[str] = "Copilot query completed"
+_MOTION_VIEWER_CONTEXT_PREFIX: Final[str] = "motion_viewer_analysis:"
 
 # Answers for task types whose MCP tools are not finished (plan D2).
 PENDING_TASK_ANSWERS: Final[Mapping[str, str]] = MappingProxyType(
@@ -90,6 +91,25 @@ _POSE_REASON_ANSWERS: Final[Mapping[str, str]] = MappingProxyType(
 _POSE_FALLBACK_ANSWER: Final[str] = "이 시퀀스로는 자세를 판정할 수 없습니다."
 
 PipelineProvider = Callable[[], "_Pipeline"]
+
+
+def _parse_motion_viewer_context(value: str | None) -> tuple[str, dict[str, object]] | None:
+    """Read the compact, already-verified analysis attached by the motion viewer."""
+    if not value or not value.startswith(_MOTION_VIEWER_CONTEXT_PREFIX):
+        return None
+    try:
+        payload = json.loads(value[len(_MOTION_VIEWER_CONTEXT_PREFIX):])
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    verified_answer = payload.get("verified_answer")
+    analysis_context = payload.get("analysis_context")
+    if not isinstance(verified_answer, str) or not verified_answer.strip():
+        return None
+    if not isinstance(analysis_context, dict):
+        return None
+    return verified_answer.strip(), analysis_context
 
 
 def error_response(code: int, message: str) -> JSONResponse:
@@ -194,6 +214,7 @@ async def execute_copilot_query(
     # If the model is unavailable, keep the selected structured tab operational;
     # only a successful semantic-model classification may cross-route to RAG.
     knowledge_routed = intent == "knowledge" and classifier is not None
+    viewer_analysis = _parse_motion_viewer_context(query.context)
 
     async def _synthesize_structured_detail(
         base_answer: str,
@@ -217,7 +238,9 @@ async def execute_copilot_query(
                 )
             instruction = build_query_instruction(
                 query.prompt,
-                client_context=query.context,
+                # The verified viewer summary is appended below in a strict JSON block.
+                # Repeating its transport envelope as free-form context wastes tokens.
+                client_context=None if viewer_analysis is not None else query.context,
                 session_summary=session_summary,
                 recent_turns=recent_turns,
                 response_mode="detailed",
@@ -258,6 +281,33 @@ async def execute_copilot_query(
                 query.task_type,
             )
         return base_answer, True
+
+    # Expert CSV records shown by the motion viewer do not necessarily have a
+    # sessions/complete report.  The viewer therefore attaches the compact
+    # structured analysis it is already rendering.  Keep the server response as
+    # the single source of truth: quick returns it verbatim, detailed lets the
+    # LLM explain the same verified facts without inventing new measurements.
+    if (
+        viewer_analysis is not None
+        and query.task_type in ("pose_recomm", "trajectory_recomm")
+        and not knowledge_routed
+    ):
+        verified_answer, analysis_context = viewer_analysis
+        answer, detail_degraded = await _synthesize_structured_detail(
+            verified_answer, analysis_context, available=True
+        )
+        return _success_response(
+            query,
+            request_started,
+            answer=answer,
+            retrieval_used=False,
+            citations=[],
+            degraded=detail_degraded,
+            pose_context=analysis_context if query.task_type == "pose_recomm" else None,
+            sequence_context=analysis_context if query.task_type == "trajectory_recomm" else None,
+            context_status="available",
+            store=sequences,
+        )
 
     context = (query.context or "").strip()
     # 시퀀스(`SEQ-012`)를 가리키지 않은 자세·순서 질문은 complete 가 남긴 세션 결과로 답한다(pose_query 참고).

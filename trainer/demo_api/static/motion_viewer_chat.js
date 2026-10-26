@@ -160,6 +160,36 @@
   const structuredAnswer = (taskId, prompt, data) => taskId === 'pose_recomm'
     ? poseAnswer(prompt, data)
     : orderAnswer(prompt, data);
+  const buildViewerQueryContext = (taskId, prompt, data) => {
+    if (!data || taskId === 'knowledge_search') return null;
+    let analysisContext;
+    if (taskId === 'pose_recomm') {
+      const evaluation = data.pose_evaluation || {};
+      analysisContext = {
+        record: currentRecordLabel(data),
+        status: evaluation.status,
+        similarity_percent: evaluation.similarity_percent,
+        zones: evaluation.zones,
+        corrections: evaluation.corrections,
+      };
+    } else {
+      const evaluation = data.reference_order_evaluation || {};
+      analysisContext = {
+        record: currentRecordLabel(data),
+        recommended_flow: evaluation.recommended_flow,
+        selected_flow: evaluation.selected_flow,
+        adherence_rate: evaluation.adherence_rate,
+        best_reference_similarity: evaluation.best_reference_similarity,
+        position_similarity: evaluation.position_similarity,
+        position_distribution: evaluation.position_distribution,
+        direction_summary: data.direction_summary || null,
+      };
+    }
+    return `motion_viewer_analysis:${JSON.stringify({
+      verified_answer: structuredAnswer(taskId, prompt, data),
+      analysis_context: analysisContext,
+    })}`;
+  };
   const renderPresets = (item) => {
     presets.replaceChildren();
     for (const question of item.presets) {
@@ -235,6 +265,7 @@
           prompt,
           response_mode: responseMode,
           use_rag: responseMode === 'detailed' ? 'Y' : 'N',
+          context: buildViewerQueryContext(task.id, prompt, viewerData),
         }),
       });
       const payload = await response.json();
