@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import time
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
@@ -324,6 +325,9 @@ async def execute_copilot_query(
 
     retrieved = retrieved_chunk_ids(result.get("rag_chunks") or []) if use_rag else []
     parsed = parse_knowledge_answer(str(result.get("response", "")), retrieved)
+    answer = parsed.body
+    if query.response_mode == "quick":
+        answer = re.sub(r"\n+\s*\[?근거\]?\s*:?\s*$", "", answer).rstrip()
     logger.info(
         "copilot answer normalized request_id=%s repair_path=%s citations=%d dropped=%d",
         query.request_id,
@@ -334,7 +338,7 @@ async def execute_copilot_query(
     return _success_response(
         query,
         request_started,
-        answer=parsed.body,
+        answer=answer,
         retrieval_used=use_rag,
         citations=list(parsed.citations),
         degraded=parsed.repair_path in FAILED_REPAIR_PATHS or bool(result.get("deadline_hit", False)),

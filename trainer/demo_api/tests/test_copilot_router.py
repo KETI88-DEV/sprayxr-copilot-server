@@ -183,6 +183,16 @@ def test_response_mode_defaults_to_quick_and_rejects_unknown_values(
     assert invalid.json() == _error(422, "Invalid request")
 
 
+def test_quick_mode_removes_an_unfinished_evidence_heading(monkeypatch: pytest.MonkeyPatch) -> None:
+    pipeline = _FakePipeline(response="[답변] 표면 상태를 확인하고 해당 부위를 재도장하세요.\n근거:")
+
+    data = _client(monkeypatch, pipeline).post(
+        URL, json=_body(response_mode="quick", use_rag="N")
+    ).json()["data"]
+
+    assert data["answer"] == "표면 상태를 확인하고 해당 부위를 재도장하세요."
+
+
 def test_session_query_injects_accumulated_sequences_and_recent_dialogue() -> None:
     """A follow-up question must be grounded in every prior sequence and turn of that session."""
     import json
