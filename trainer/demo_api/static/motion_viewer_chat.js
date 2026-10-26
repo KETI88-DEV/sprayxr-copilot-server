@@ -245,9 +245,7 @@
       }
       const data = payload.data;
       const seconds = ((performance.now() - started) / 1000).toFixed(1);
-      const answer = task.id === 'knowledge_search' || data.retrieval_used
-        ? data.answer
-        : structuredAnswer(task.id, prompt, viewerData);
+      const answer = data.answer;
       const modeLabel = responseMode === 'detailed' ? '상세 분석' : '빠른 안내';
       say(answer, 'mvc-bot', `${task.label} · ${modeLabel} · ${seconds}초${data.citations?.length ? ` · 인용 ${data.citations.length}` : ''}`);
     } catch {

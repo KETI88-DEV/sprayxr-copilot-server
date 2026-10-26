@@ -24,6 +24,7 @@ Every response uses the v2.5 wrapper. Request validation failures under
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -194,6 +195,70 @@ async def execute_copilot_query(
     # only a successful semantic-model classification may cross-route to RAG.
     knowledge_routed = intent == "knowledge" and classifier is not None
 
+    async def _synthesize_structured_detail(
+        base_answer: str,
+        analysis_context: dict[str, object],
+        *,
+        available: bool,
+    ) -> tuple[str, bool]:
+        """Turn verified engine output into prose only for the requested detailed mode."""
+        if query.response_mode != "detailed" or not available or pipeline_provider is None:
+            return base_answer, False
+        try:
+            pipeline = intent_pipeline or await to_thread.run_sync(pipeline_provider)
+            session_summary = ""
+            recent_turns: list[dict[str, str]] = []
+            if query.session_id:
+                session_summary, recent_turns = await to_thread.run_sync(
+                    lambda: (
+                        summarize_session(sequences.session_bodies(query.session_id)),
+                        sequences.recent_query_turns(query.session_id, limit=4),
+                    )
+                )
+            instruction = build_query_instruction(
+                query.prompt,
+                client_context=query.context,
+                session_summary=session_summary,
+                recent_turns=recent_turns,
+                response_mode="detailed",
+            )
+            verified = {
+                "task_type": query.task_type,
+                "verified_answer": base_answer,
+                "analysis_context": analysis_context,
+            }
+            instruction += "\n[서버 구조화 분석 결과]\n" + json.dumps(
+                verified, ensure_ascii=False, separators=(",", ":")
+            )
+            instruction += (
+                "\n위 분석 결과에 있는 사실만 사용해 질문에 자연스럽게 답하세요. "
+                "수치와 Zone 순서는 바꾸거나 새로 만들지 마세요."
+            )
+
+            def _guarded_detail_run() -> Mapping[str, object]:
+                with GENERATION_SLOT:
+                    return pipeline.run(
+                        instruction=instruction,
+                        force_route="fast",
+                        session_id=query.session_id,
+                        enable_thinking=False,
+                        use_rag=False,
+                        max_tokens=256,
+                        request_id=query.request_id,
+                    )
+
+            result = await to_thread.run_sync(_guarded_detail_run)
+            parsed = parse_knowledge_answer(str(result.get("response", "")), [])
+            if parsed.body.strip():
+                return parsed.body.strip(), bool(result.get("deadline_hit", False))
+        except Exception:  # noqa: BROAD_EXCEPT_OK - verified deterministic answer remains available
+            logger.exception(
+                "copilot structured detail synthesis failed request_id=%s task_type=%s",
+                query.request_id,
+                query.task_type,
+            )
+        return base_answer, True
+
     context = (query.context or "").strip()
     # 시퀀스(`SEQ-012`)를 가리키지 않은 자세·순서 질문은 complete 가 남긴 세션 결과로 답한다(pose_query 참고).
     # complete 뒤에는 질문에 "구역"이 없어도 그렇다 — 뷰어 채팅은 칩으로 유형만 고른다.
@@ -219,8 +284,12 @@ async def execute_copilot_query(
             "copilot trajectory_recomm request_id=%s status=%s reason=%s",
             query.request_id, order.analysis_status, order.reason_code,
         )
+        answer, detail_degraded = await _synthesize_structured_detail(
+            order.answer, order.context, available=order.analysis_status == "available"
+        )
         return _success_response(
-            query, request_started, answer=order.answer, retrieval_used=False, citations=[],
+            query, request_started, answer=answer, retrieval_used=False, citations=[],
+            degraded=detail_degraded,
             sequence_context=order.context,
             context_status="available" if order.analysis_status == "available" else "not_available",
             store=sequences,
@@ -238,8 +307,12 @@ async def execute_copilot_query(
             "copilot pose_recomm zone request_id=%s zone=%s status=%s reason=%s",
             query.request_id, zone.context.get("zone_id"), zone.analysis_status, zone.reason_code,
         )
+        answer, detail_degraded = await _synthesize_structured_detail(
+            zone.answer, zone.context, available=zone.analysis_status == "available"
+        )
         return _success_response(
-            query, request_started, answer=zone.answer, retrieval_used=False, citations=[],
+            query, request_started, answer=answer, retrieval_used=False, citations=[],
+            degraded=detail_degraded,
             pose_context=zone.context,
             context_status="available" if zone.analysis_status == "available" else "not_available",
             store=sequences,
@@ -263,8 +336,12 @@ async def execute_copilot_query(
             "copilot pose_recomm request_id=%s sequence=%s status=%s reason=%s",
             query.request_id, pose.sequence_id, pose.analysis_status, pose.reason_code,
         )
+        answer, detail_degraded = await _synthesize_structured_detail(
+            answer, pose.as_context(), available=pose.analysis_status == "available"
+        )
         return _success_response(
             query, request_started, answer=answer, retrieval_used=False, citations=[],
+            degraded=detail_degraded,
             pose_context=pose.as_context(),
             context_status="available" if pose.analysis_status == "available" else "not_available",
             store=sequences,

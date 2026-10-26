@@ -170,6 +170,57 @@ def test_detailed_mode_requests_evidence_and_action_from_the_model(monkeypatch: 
     assert pipeline.calls[0]["max_tokens"] == 256
 
 
+def test_detailed_order_mode_synthesizes_the_structured_report_instead_of_repeating_quick_answer() -> None:
+    from fastapi import FastAPI
+
+    from trainer.demo_api.sequence_store import SequenceStore
+
+    class _Reports:
+        def latest_complete_analysis(self, _session_id: str) -> tuple[str, dict[str, object]]:
+            return "RPT-ORDER", {"sequence_report": {
+                "analysis_status": "available",
+                "recommended_flow": ["1", "3", "2"],
+                "first_visit_flow": ["1", "2", "3"],
+                "evaluated_visit_count": 3,
+                "on_track_visit_count": 2,
+                "adherence_rate": 0.67,
+                "reference_session_count": 6,
+                "position_distribution": [],
+            }}
+
+    pipeline = _IntentPipeline(
+        "order_reference",
+        response=(
+            "[답변] 전문가 6회 기준으로 1번 구역에서 시작한 뒤 3번과 2번 구역 순서가 권장됩니다. "
+            "현재 수행은 두 번째 단계가 달라 다음에는 3번 구역을 먼저 진행하세요."
+        ),
+    )
+    app = FastAPI()
+    app.include_router(copilot_router.create_copilot_router(
+        lambda: pipeline,
+        store=SequenceStore(":memory:"),
+        reports=_Reports(),  # type: ignore[arg-type]
+    ))
+    client = TestClient(app)
+
+    quick = client.post(URL, json=_body(
+        task_type="trajectory_recomm", session_id="SESSION-ORDER",
+        prompt="권장 Zone 순서는?", response_mode="quick",
+    )).json()["data"]
+    detailed = client.post(URL, json=_body(
+        task_type="trajectory_recomm", session_id="SESSION-ORDER",
+        prompt="권장 Zone 순서는?", response_mode="detailed",
+    )).json()["data"]
+
+    assert quick["answer"].startswith("전형기 반장 6회 기준 대표 흐름은")
+    assert detailed["answer"].startswith("전문가 6회 기준으로")
+    assert detailed["answer"] != quick["answer"]
+    assert len(pipeline.calls) == 1
+    assert "[서버 구조화 분석 결과]" in pipeline.calls[0]["instruction"]
+    assert pipeline.calls[0]["use_rag"] is False
+    assert pipeline.calls[0]["max_tokens"] == 256
+
+
 def test_response_mode_defaults_to_quick_and_rejects_unknown_values(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
