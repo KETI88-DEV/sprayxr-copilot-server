@@ -837,13 +837,18 @@ class AgentPipeline:
         messages: list[dict[str, str]],
         enable_thinking: bool = False,
         answer_regex: str | None = None,
+        max_tokens: int | None = None,
     ) -> str:
         if isinstance(self.model, VLLMWrapper):
             return self.model.generate_response(messages=messages, tools=None)
 
         gen_cfg = self.config.get("generation", {})
+        token_limit = min(
+            int(gen_cfg.get("max_new_tokens", 768)),
+            ROUTE_MAX_TOKENS["fast"],
+            max_tokens if max_tokens is not None else ROUTE_MAX_TOKENS["fast"],
+        )
         if isinstance(self.model, OpenAIChatBackend):
-            max_tokens = min(int(gen_cfg.get("max_new_tokens", 768)), ROUTE_MAX_TOKENS["fast"])
             effective = None if getattr(self, "_structured_output_disabled", False) else answer_regex
             if effective is not None and enable_thinking:
                 # With enable_thinking=False the chat template pre-closes an empty think
@@ -855,7 +860,7 @@ class AgentPipeline:
             try:
                 return self.model.complete_chat(
                     messages,
-                    max_tokens=max_tokens,
+                    max_tokens=token_limit,
                     enable_thinking=enable_thinking,
                     answer_regex=effective,
                 )
@@ -871,7 +876,7 @@ class AgentPipeline:
                 )
                 return self.model.complete_chat(
                     messages,
-                    max_tokens=max_tokens,
+                    max_tokens=token_limit,
                     enable_thinking=enable_thinking,
                     answer_regex=None,
                 )
@@ -889,7 +894,7 @@ class AgentPipeline:
         with torch.no_grad():
             outputs = self.model.generate(
                 **inputs,
-                max_new_tokens=min(int(gen_cfg.get("max_new_tokens", 768)), ROUTE_MAX_TOKENS["fast"]),
+                max_new_tokens=token_limit,
                 do_sample=bool(gen_cfg.get("do_sample", True)),
                 temperature=float(gen_cfg.get("temperature", 0.7)),
                 top_p=float(gen_cfg.get("top_p", 0.8)),
@@ -1148,6 +1153,7 @@ class AgentPipeline:
         trainee: dict[str, Any] | None = None,
         request_id: str | None = None,
         use_rag: bool = True,
+        max_tokens: int | None = None,
     ) -> dict[str, Any]:
         """``use_rag=False`` skips retrieval: no RAG context, no chunk citations. The default is unchanged."""
         t0 = time.monotonic()
@@ -1206,7 +1212,9 @@ class AgentPipeline:
             )
             fast_prompt_tokens = counter.count_messages(messages)
             fast_max_tokens = min(
-                int(self.config.get("generation", {}).get("max_new_tokens", 768)), ROUTE_MAX_TOKENS["fast"]
+                int(self.config.get("generation", {}).get("max_new_tokens", 768)),
+                ROUTE_MAX_TOKENS["fast"],
+                max_tokens if max_tokens is not None else ROUTE_MAX_TOKENS["fast"],
             )
             max_model_len = context_window(self.config)
             context_report: dict[str, Any] | None = {
@@ -1221,6 +1229,7 @@ class AgentPipeline:
                 messages,
                 enable_thinking=False,
                 answer_regex=self._answer_regex(has_evidence=bool(evidence)),
+                max_tokens=fast_max_tokens,
             )
             final_no_think, thinking = self._strip_think_blocks(raw_response)
             response_text = final_no_think.strip()

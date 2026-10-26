@@ -309,6 +309,7 @@ async def execute_copilot_query(
                 session_id=query.session_id,
                 enable_thinking=False,
                 use_rag=use_rag,
+                max_tokens=96 if query.response_mode == "quick" else 256,
                 request_id=query.request_id,
             )
 

@@ -61,3 +61,24 @@ def test_generate_direct_caps_fast_response_to_route_budget() -> None:
     )
 
     assert len(response) == 256
+
+
+def test_generate_direct_honors_a_smaller_per_request_token_budget() -> None:
+    pipeline = AgentPipeline.__new__(AgentPipeline)
+    pipeline.model = _Model()
+    pipeline.tokenizer = _Tokenizer()
+    pipeline.config = {
+        "generation": {
+            "max_new_tokens": 1024,
+            "do_sample": False,
+            "repetition_penalty": 1.15,
+        },
+    }
+
+    response = pipeline._generate_direct(
+        [{"role": "user", "content": "핵심 조치만 알려줘"}],
+        enable_thinking=False,
+        max_tokens=96,
+    )
+
+    assert len(response) == 96

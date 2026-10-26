@@ -145,6 +145,7 @@ def test_knowledge_search_runs_the_pipeline_on_the_fast_route(monkeypatch: pytes
             "session_id": None,
             "enable_thinking": False,
             "use_rag": True,
+            "max_tokens": 96,
             "request_id": "req-query-0044",
         }
     ]
@@ -166,6 +167,7 @@ def test_detailed_mode_requests_evidence_and_action_from_the_model(monkeypatch: 
     assert "권장 조치" in instruction
     assert pipeline.calls[0]["force_route"] == "fast"
     assert pipeline.calls[0]["enable_thinking"] is False
+    assert pipeline.calls[0]["max_tokens"] == 256
 
 
 def test_response_mode_defaults_to_quick_and_rejects_unknown_values(

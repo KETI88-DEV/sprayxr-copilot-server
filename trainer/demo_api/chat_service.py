@@ -45,6 +45,7 @@ class _Pipeline(Protocol):
         session_id: str | None,
         enable_thinking: bool,
         use_rag: bool,
+        max_tokens: int,
         request_id: str,
     ) -> Mapping[str, object]:
         ...
