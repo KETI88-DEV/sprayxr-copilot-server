@@ -419,6 +419,18 @@ def test_chat_is_bound_to_the_current_motion_record_instead_of_an_unrelated_comp
     assert "loadSessions" not in script.text
 
 
+def test_chat_offers_response_depth_and_sends_it_to_the_query_api(tmp_path: Path) -> None:
+    script = _client(tmp_path).get("/motion-viewer/assets/motion_viewer_chat.js")
+
+    assert script.status_code == 200
+    assert "빠른 안내" in script.text
+    assert "상세 분석" in script.text
+    assert "response_mode: responseMode" in script.text
+    assert "responseMode === 'detailed' ? 'Y' : 'N'" in script.text
+    assert "width:min(480px" in script.text
+    assert "height:min(640px" in script.text
+
+
 def test_joint_posture_state_uses_leg_and_torso_geometry_instead_of_camera_height() -> None:
     standing = {
         "Pelvis": [0.0, 1.0, 0.0], "Head": [0.0, 1.7, 0.0],

@@ -1,6 +1,6 @@
 // 모션 뷰어 위에 뜨는 Co-Pilot 질문 창. 현재 재생 중인 기록을 기준으로 질의한다.
 // 유형은 칩으로 고른다: 일반 = knowledge_search, 자세 = pose_recomm, 순서 = trajectory_recomm.
-// 자세·순서는 complete 리포트로 바로 답한다(LLM 없음). 답은 textContent 로만 넣는다.
+// 자세·순서는 complete 리포트의 구조화 결과를 사용한다. 답은 textContent 로만 넣는다.
 (() => {
   const TASKS = [
     {
@@ -20,7 +20,7 @@
   style.textContent = `
 .mvc-toggle{position:fixed;right:20px;bottom:20px;left:auto;width:auto;margin:0;z-index:50;border:0;border-radius:24px;padding:12px 18px;
   background:#2563eb;color:#fff;font-weight:700;box-shadow:0 6px 20px rgba(0,0,0,.35);cursor:pointer}
-.mvc-panel{position:fixed;right:20px;bottom:76px;z-index:50;width:min(380px,calc(100vw - 40px));height:min(520px,70vh);
+.mvc-panel{position:fixed;right:20px;bottom:76px;z-index:50;width:min(480px,calc(100vw - 40px));height:min(640px,78vh);
   display:none;flex-direction:column;background:#111827;color:#e5e7eb;border:1px solid #374151;border-radius:12px;
   box-shadow:0 10px 30px rgba(0,0,0,.45);font-size:14px}
 .mvc-panel.open{display:flex}
@@ -29,6 +29,10 @@
 .mvc-chips{display:flex;gap:6px}
 .mvc-chip{flex:1;padding:6px 0;border:1px solid #4b5563;border-radius:16px;background:#1f2937;color:#e5e7eb;cursor:pointer}
 .mvc-chip[aria-pressed=true]{background:#2563eb;border-color:#2563eb;color:#fff;font-weight:700}
+.mvc-mode-row{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:4px;background:#0f172a;border:1px solid #374151;border-radius:9px}
+.mvc-mode{padding:8px;border:0;border-radius:6px;background:transparent;color:#94a3b8;cursor:pointer;text-align:left}
+.mvc-mode strong,.mvc-mode small{display:block}.mvc-mode small{margin-top:2px;font-size:11px;font-weight:400}
+.mvc-mode[aria-pressed=true]{background:#1d4ed8;color:#fff}
 .mvc-presets{display:flex;gap:6px;flex-wrap:wrap}
 .mvc-preset{width:auto;flex:none;padding:5px 9px;border:1px solid #475569;border-radius:14px;background:#0f172a;color:#cbd5e1;
   font-size:12px;cursor:pointer}
@@ -39,8 +43,8 @@
 .mvc-bot{align-self:flex-start;background:#1f2937;max-width:95%}
 .mvc-meta{font-size:11px;color:#9ca3af;margin-top:4px}
 .mvc-form{display:flex;gap:6px;padding:10px 12px;border-top:1px solid #374151}
-.mvc-form input{flex:1;padding:8px;background:#1f2937;color:#e5e7eb;border:1px solid #4b5563;border-radius:6px}
-.mvc-form button{width:auto;flex:none;padding:8px 12px;border:0;border-radius:6px;background:#2563eb;color:#fff;cursor:pointer}
+.mvc-form input{flex:1;padding:11px 12px;background:#1f2937;color:#e5e7eb;border:1px solid #4b5563;border-radius:7px;font-size:14px}
+.mvc-form button{width:auto;flex:none;padding:10px 16px;border:0;border-radius:7px;background:#2563eb;color:#fff;cursor:pointer}
 .mvc-form button:disabled{opacity:.5;cursor:wait}`;
   document.head.append(style);
 
@@ -58,6 +62,8 @@
   const sessionSelect = el('select');
   sessionSelect.setAttribute('aria-label', '완료된 세션');
   const chips = el('div', 'mvc-chips');
+  const modes = el('div', 'mvc-mode-row');
+  modes.setAttribute('aria-label', '답변 수준');
   const presets = el('div', 'mvc-presets');
   presets.setAttribute('aria-label', '질문 프리셋');
   const log = el('div', 'mvc-log');
@@ -68,12 +74,29 @@
   const send = el('button', null, '보내기');
   send.type = 'submit';
   form.append(input, send);
-  head.append(sessionSelect, chips, presets);
+  head.append(sessionSelect, chips, modes, presets);
   panel.append(head, log, form);
   document.body.append(toggle, panel);
 
   let task = TASKS[1];
+  let responseMode = 'detailed';
   let viewerData = null;
+
+  const MODE_OPTIONS = [
+    { id: 'quick', label: '빠른 안내', help: '핵심 판단과 조치만 간결하게' },
+    { id: 'detailed', label: '상세 분석', help: '현재 상황·근거·원인까지 자세히' },
+  ];
+  for (const item of MODE_OPTIONS) {
+    const button = el('button', 'mvc-mode');
+    button.type = 'button';
+    button.append(el('strong', null, item.label), el('small', null, item.help));
+    button.setAttribute('aria-pressed', String(item.id === responseMode));
+    button.addEventListener('click', () => {
+      responseMode = item.id;
+      for (const other of modes.children) other.setAttribute('aria-pressed', String(other === button));
+    });
+    modes.append(button);
+  }
 
   const percent = (value) => `${Math.round(Number(value) || 0)}%`;
   const zoneNumber = (prompt) => prompt.match(/(?:zone|구역)\s*([0-9]+)/i)?.[1] || null;
@@ -210,7 +233,8 @@
           scenario_id: viewerData?.mode_id != null ? String(viewerData.mode_id) : null,
           task_type: task.id,
           prompt,
-          use_rag: 'Y',
+          response_mode: responseMode,
+          use_rag: responseMode === 'detailed' ? 'Y' : 'N',
         }),
       });
       const payload = await response.json();
@@ -224,7 +248,8 @@
       const answer = task.id === 'knowledge_search' || data.retrieval_used
         ? data.answer
         : structuredAnswer(task.id, prompt, viewerData);
-      say(answer, 'mvc-bot', `${task.label} · ${seconds}초${data.citations?.length ? ` · 인용 ${data.citations.length}` : ''}`);
+      const modeLabel = responseMode === 'detailed' ? '상세 분석' : '빠른 안내';
+      say(answer, 'mvc-bot', `${task.label} · ${modeLabel} · ${seconds}초${data.citations?.length ? ` · 인용 ${data.citations.length}` : ''}`);
     } catch {
       pending.remove();
       say('서버에 연결하지 못했습니다.', 'mvc-bot');

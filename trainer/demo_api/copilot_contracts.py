@@ -14,6 +14,7 @@ from pydantic import ConfigDict, Field, field_validator, model_validator
 from trainer.demo_api.contracts import StrictModel
 
 TaskType = Literal["trajectory_recomm", "pose_recomm", "error_analysis", "knowledge_search"]
+ResponseMode = Literal["quick", "detailed"]
 ContextStatus = Literal["available", "not_available"]
 
 
@@ -28,6 +29,7 @@ class CopilotQueryRequest(StrictModel):
                 "request_id": "REQ-TEXT-001",
                 "prompt": "다음 Zone을 어떤 순서로 칠해야 하나요?",
                 "task_type": "knowledge_search",
+                "response_mode": "quick",
                 "use_rag": "Y",
                 "context": "현재 Zone은 3입니다.",
             }
@@ -65,6 +67,14 @@ class CopilotQueryRequest(StrictModel):
         ),
         examples=["knowledge_search"],
     )]
+    response_mode: Annotated[ResponseMode, Field(
+        description=(
+            "답변 수준입니다. quick은 훈련 중 즉시 확인할 핵심 판단·조치를 짧게 답하고, "
+            "detailed는 현재 상황·근거·원인·권장 조치를 순서대로 자세히 설명합니다. "
+            "생략하면 기존 연동과 같은 quick으로 처리합니다."
+        ),
+        examples=["quick"],
+    )] = "quick"
     use_rag: Annotated[Literal["Y", "N"], Field(
         description="지식 검색(RAG) 사용 여부입니다. Y는 검색 사용, N은 검색 없이 현재 문맥만 사용합니다.",
         examples=["Y"],

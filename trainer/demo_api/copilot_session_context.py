@@ -94,15 +94,23 @@ def build_query_instruction(
     client_context: str | None,
     session_summary: str,
     recent_turns: list[dict[str, str]],
+    response_mode: str = "quick",
 ) -> str:
     """Add server-owned context without changing the external query contract."""
     context = (client_context or "").strip()
-    if not context and not session_summary and not recent_turns:
-        return prompt
-
     parts = [
         "[사용자 질문]",
         prompt,
+        "[응답 수준]",
+        (
+            "상세 분석: 현재 상황을 먼저 요약하고, 확인된 근거와 측정값, 원인, 권장 조치를 "
+            "구분해 설명하세요. 현재 데이터에 없는 값은 추측하지 마세요."
+            if response_mode == "detailed"
+            else "빠른 안내: 핵심 판단과 바로 실행할 조치를 1~3문장으로 먼저 답하세요. 불필요한 배경 설명은 생략하세요."
+        ),
+    ]
+    if context or session_summary or recent_turns:
+        parts.extend([
         "[답변 지침]",
         (
             "비정형 표현과 대명사는 아래 세션 및 최근 대화 문맥으로 해석하세요. "
@@ -110,7 +118,7 @@ def build_query_instruction(
             "avg_speed_mms의 단위는 mm/s, avg_distance_mm의 단위는 mm, "
             "avg_thickness_um의 단위는 µm입니다. 한국어로 자연스럽고 간결하게 답하세요."
         ),
-    ]
+        ])
     if context:
         parts.extend(("[클라이언트 현재 문맥]", context))
     if session_summary:

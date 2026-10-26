@@ -298,6 +298,7 @@ async def execute_copilot_query(
         client_context=query.context,
         session_summary=session_summary,
         recent_turns=recent_turns,
+        response_mode=query.response_mode,
     )
 
     def _guarded_run() -> Mapping[str, object]:

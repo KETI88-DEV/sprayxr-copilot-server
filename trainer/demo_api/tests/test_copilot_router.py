@@ -136,7 +136,11 @@ def test_knowledge_search_runs_the_pipeline_on_the_fast_route(monkeypatch: pytes
     assert response.status_code == 200
     assert pipeline.calls == [
         {
-            "instruction": "저도막이 무엇인지 설명해줘.",
+            "instruction": (
+                "[사용자 질문]\n저도막이 무엇인지 설명해줘.\n"
+                "[응답 수준]\n빠른 안내: 핵심 판단과 바로 실행할 조치를 1~3문장으로 먼저 답하세요. "
+                "불필요한 배경 설명은 생략하세요."
+            ),
             "force_route": "fast",
             "session_id": None,
             "enable_thinking": False,
@@ -144,6 +148,37 @@ def test_knowledge_search_runs_the_pipeline_on_the_fast_route(monkeypatch: pytes
             "request_id": "req-query-0044",
         }
     ]
+
+
+def test_detailed_mode_requests_evidence_and_action_from_the_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    """상세 분석은 같은 빠른 생성 경로를 쓰되 더 깊고 구조적인 답변을 지시한다."""
+    pipeline = _FakePipeline()
+
+    response = _client(monkeypatch, pipeline).post(
+        URL, json=_body(response_mode="detailed", context="현재 Zone은 3입니다.")
+    )
+
+    assert response.status_code == 200
+    instruction = pipeline.calls[0]["instruction"]
+    assert "상세 분석" in instruction
+    assert "현재 상황" in instruction
+    assert "근거" in instruction
+    assert "권장 조치" in instruction
+    assert pipeline.calls[0]["force_route"] == "fast"
+    assert pipeline.calls[0]["enable_thinking"] is False
+
+
+def test_response_mode_defaults_to_quick_and_rejects_unknown_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    quick = _client(monkeypatch, _FakePipeline()).post(URL, json=_body())
+    invalid = _client(monkeypatch, _FakePipeline()).post(
+        URL, json=_body(response_mode="slow")
+    )
+
+    assert quick.status_code == 200
+    assert invalid.status_code == 422
+    assert invalid.json() == _error(422, "Invalid request")
 
 
 def test_session_query_injects_accumulated_sequences_and_recent_dialogue() -> None:
@@ -229,7 +264,9 @@ def test_pose_tab_knowledge_question_is_semantically_routed_to_rag(monkeypatch: 
 
     assert pipeline.intent_calls == [("pose_recomm", "저도막이 무엇인지 알려줘")]
     assert len(pipeline.calls) == 1
-    assert pipeline.calls[0]["instruction"] == "저도막이 무엇인지 알려줘"
+    assert pipeline.calls[0]["instruction"].startswith(
+        "[사용자 질문]\n저도막이 무엇인지 알려줘\n[응답 수준]\n빠른 안내:"
+    )
     assert data["answer"] == "저도막은 규정 최소 두께보다 얇은 도막이다."
     assert data["retrieval_used"] is True
 
