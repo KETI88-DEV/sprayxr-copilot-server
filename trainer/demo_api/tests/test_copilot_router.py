@@ -138,8 +138,8 @@ def test_knowledge_search_runs_the_pipeline_on_the_fast_route(monkeypatch: pytes
         {
             "instruction": (
                 "[사용자 질문]\n저도막이 무엇인지 설명해줘.\n"
-                "[응답 수준]\n빠른 안내: 핵심 판단과 바로 실행할 조치를 1~3문장으로 먼저 답하세요. "
-                "불필요한 배경 설명은 생략하세요."
+                "[응답 수준]\n빠른 안내: 반드시 완결된 한국어 문장 2개 이내로 답하세요. "
+                "표·목록·제목·배경 설명은 쓰지 말고, 첫 문장은 핵심 판단, 두 번째 문장은 즉시 조치로 구성하세요."
             ),
             "force_route": "fast",
             "session_id": None,
@@ -269,6 +269,7 @@ def test_pose_tab_knowledge_question_is_semantically_routed_to_rag(monkeypatch: 
     assert pipeline.calls[0]["instruction"].startswith(
         "[사용자 질문]\n저도막이 무엇인지 알려줘\n[응답 수준]\n빠른 안내:"
     )
+    assert "표·목록·제목" in pipeline.calls[0]["instruction"]
     assert data["answer"] == "저도막은 규정 최소 두께보다 얇은 도막이다."
     assert data["retrieval_used"] is True
 
