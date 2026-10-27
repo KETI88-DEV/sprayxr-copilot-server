@@ -509,12 +509,18 @@ def test_omitted_use_rag_is_automatic_and_knowledge_search_uses_retrieval(
     del body["use_rag"]
 
     parsed = CopilotQueryRequest(**body)
-    assert parsed.use_rag is None
+    assert parsed.use_rag == "auto"
 
     data = _client(monkeypatch, pipeline).post(URL, json=body).json()["data"]
 
     assert pipeline.calls[0]["use_rag"] is True
     assert data["retrieval_used"] is True
+
+    automatic = _client(monkeypatch, pipeline).post(
+        URL, json=_body(use_rag="auto")
+    )
+    assert automatic.status_code == 200
+    assert pipeline.calls[1]["use_rag"] is True
 
 
 def test_degraded_is_true_when_no_answer_could_be_produced(monkeypatch: pytest.MonkeyPatch) -> None:

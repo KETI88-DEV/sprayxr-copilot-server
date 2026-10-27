@@ -216,7 +216,7 @@ def create_voice_router(
         scenario_id: str | None,
         request_id: str | None,
         task_type: TaskType,
-        use_rag: Literal["Y", "N"] | None,
+        use_rag: Literal["auto", "Y", "N"],
         context: str | None,
     ) -> JSONResponse:
         started = time.monotonic()
@@ -299,10 +299,10 @@ def create_voice_router(
         scenario_id: Annotated[str | None, Form(description="session_id의 첫 '_' 앞 콘텐츠 식별자", examples=["3"])] = None,
         request_id: Annotated[str | None, Form(description="클라이언트 로그와 서버 응답을 연결하기 위한 호출 추적용 식별자입니다.", examples=["REQ-VOICE-001"])] = None,
         task_type: Annotated[TaskType, Form(description="텍스트 Query API와 동일한 작업 유형", examples=["knowledge_search"])] = "knowledge_search",
-        use_rag: Annotated[Literal["Y", "N"] | None, Form(
-            description="생략하면 서버가 자동 결정합니다. Y 또는 N은 강제 설정이 필요할 때만 사용합니다.",
-            examples=["Y"],
-        )] = None,
+        use_rag: Annotated[Literal["auto", "Y", "N"], Form(
+            description="auto는 서버 자동 판단이며 Y 또는 N은 강제 설정이 필요할 때만 사용합니다.",
+            examples=["auto"],
+        )] = "auto",
         context: Annotated[str | None, Form(description="선택 JSON 또는 짧은 상황 설명", examples=["현재 훈련모드 3의 Zone 3을 도장 중입니다."])] = None,
     ) -> JSONResponse:
         payload = await audio.read(MAX_UPLOAD_BYTES + 1)
@@ -361,7 +361,7 @@ def create_voice_router(
             prompt=prompt,
             task_type=task_type,
             response_mode=response_mode,
-            use_rag=None if use_rag == "auto" else use_rag,
+            use_rag=use_rag,
             context="Swagger 텍스트 Query 모의연동",
         )
         response = await execute_copilot_query(
@@ -411,7 +411,7 @@ def create_voice_router(
             scenario_id=_TEST_SCENARIO_ID,
             request_id=_TEST_REQUEST_ID,
             task_type="knowledge_search",
-            use_rag=None,
+            use_rag="auto",
             context="Swagger 음성질의 모의연동",
         )
         if response.status_code != 200:

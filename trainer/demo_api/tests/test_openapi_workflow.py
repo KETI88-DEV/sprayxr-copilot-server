@@ -337,7 +337,7 @@ def test_every_public_operation_shows_a_bulleted_input_parameter_overview() -> N
     assert "    - `Y`: 관련 지식과 현재 세션 문맥을 검색해 답변에 활용합니다." in query
 
     use_rag_schema = schema["components"]["schemas"]["CopilotQueryRequest"]["properties"]["use_rag"]
-    assert "default" not in use_rag_schema
+    assert use_rag_schema["default"] == "auto"
 
     assert "    - `worker.skill_level(string)` :" in start
     assert "    - `worker.handedness(string)` :" in start

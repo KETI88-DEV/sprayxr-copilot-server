@@ -604,7 +604,7 @@ async def execute_copilot_query(
     # Explicit Y/N remains a backwards-compatible override.  When omitted, any
     # question that reaches this knowledge-generation branch needs retrieval;
     # structured pose/order/report questions have already returned above.
-    use_rag = query.use_rag == "Y" if query.use_rag is not None else True
+    use_rag = query.use_rag != "N"
     session_summary = ""
     recent_turns: list[dict[str, str]] = []
     if query.session_id:

@@ -2,7 +2,7 @@
 
 Request fields follow p.16; the response is the common wrapper of p.18 with the
 query body of p.19-22. Where ``docs/ai_copilot_response_contract.md`` differs
-(``use_rag`` boolean there), v2.5 wins: ``use_rag`` is the string ``'Y'``/``'N'``.
+(``use_rag`` boolean there), the public API uses ``'auto'``/``'Y'``/``'N'`` strings.
 """
 
 from __future__ import annotations
@@ -74,13 +74,13 @@ class CopilotQueryRequest(StrictModel):
         ),
         examples=["quick"],
     )] = "quick"
-    use_rag: Annotated[Literal["Y", "N"] | None, Field(
+    use_rag: Annotated[Literal["auto", "Y", "N"], Field(
         description=(
             "지식 검색(RAG) 강제 설정입니다. 생략하면 서버가 질문 유형과 처리 경로에 따라 자동 결정합니다. "
             "Y는 검색을 강제로 사용하고 N은 검색 없이 현재 문맥만 사용합니다."
         ),
         examples=["Y"],
-    )] = None
+    )] = "auto"
     context: Annotated[str | None, Field(
         description="현재 Zone·시퀀스 ID·관찰 상황 등 질문에 추가할 짧은 문맥입니다. 불필요하면 생략합니다.",
         examples=["현재 Zone은 3입니다."],
