@@ -184,9 +184,12 @@ def _structured_detail_fallback(
     return "\n".join(lines)
 
 
+def _trim_dangling_detail_label(candidate: str) -> str:
+    return re.sub(r"(?:\n|\s)*(?:근거|분석|상세)\s*:\s*$", "", candidate).strip()
+
+
 def _is_substantive_detail(base_answer: str, candidate: str) -> bool:
-    cleaned = re.sub(r"(?:\n|\s)*(?:근거|분석|상세)\s*:\s*$", "", candidate).strip()
-    return cleaned != base_answer.strip() and len(cleaned) >= len(base_answer.strip()) + 30
+    return candidate != base_answer.strip() and len(candidate) >= len(base_answer.strip()) + 30
 
 
 def error_response(code: int, message: str) -> JSONResponse:
@@ -349,7 +352,7 @@ async def execute_copilot_query(
 
             result = await to_thread.run_sync(_guarded_detail_run)
             parsed = parse_knowledge_answer(str(result.get("response", "")), [])
-            candidate = parsed.body.strip()
+            candidate = _trim_dangling_detail_label(parsed.body)
             if candidate and _is_substantive_detail(base_answer, candidate):
                 return candidate, bool(result.get("deadline_hit", False))
             return _structured_detail_fallback(

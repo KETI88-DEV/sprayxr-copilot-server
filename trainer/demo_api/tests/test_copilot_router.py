@@ -192,7 +192,7 @@ def test_detailed_order_mode_synthesizes_the_structured_report_instead_of_repeat
         "order_reference",
         response=(
             "[답변] 전문가 6회 기준으로 1번 구역에서 시작한 뒤 3번과 2번 구역 순서가 권장됩니다. "
-            "현재 수행은 두 번째 단계가 달라 다음에는 3번 구역을 먼저 진행하세요."
+            "현재 수행은 두 번째 단계가 달라 다음에는 3번 구역을 먼저 진행하세요.\n근거:"
         ),
     )
     app = FastAPI()
@@ -215,6 +215,7 @@ def test_detailed_order_mode_synthesizes_the_structured_report_instead_of_repeat
     assert quick["answer"].startswith("전형기 반장 6회 기준 대표 흐름은")
     assert detailed["answer"].startswith("전문가 6회 기준으로")
     assert detailed["answer"] != quick["answer"]
+    assert not detailed["answer"].rstrip().endswith("근거:")
     assert len(pipeline.calls) == 1
     assert "[서버 구조화 분석 결과]" in pipeline.calls[0]["instruction"]
     assert pipeline.calls[0]["use_rag"] is False
