@@ -33,7 +33,7 @@ def _write_csv(path: Path, *, offset: float, zone_ids: list[str] | None = None) 
         "Ray point X", " Ray Point Y", " Ray Point Z",
         "Ray Texture Map Number", "Ray Texture UV X", "Ray Texture UV Y",
         "Zone ID",
-        "Speed (Real)", "Distance (Real)",
+        "Speed (Real)", "Distance (Real)", "Distance (Input)",
         "Pelvis Position X", "Pelvis Position Y", "Pelvis Position Z",
         "Pelvis Rotation X", "Pelvis Rotation Y", "Pelvis Rotation Z",
         "Spine Position X", "Spine Position Y", "Spine Position Z",
@@ -84,6 +84,7 @@ def _write_csv(path: Path, *, offset: float, zone_ids: list[str] | None = None) 
                     "Zone ID": zone_ids[index] if zone_ids is not None else "1",
                     "Speed (Real)": 300,
                     "Distance (Real)": 250,
+                    "Distance (Input)": 300,
                     "Pelvis Position X": offset + index * 0.01,
                     "Pelvis Position Y": 1,
                     "Pelvis Position Z": 0,
@@ -504,6 +505,7 @@ def test_motion_returns_trusted_trackers_paint_trace_and_direction_statistics(tm
     assert first["ray_point"] == [0.0, 1.4, 2.0]
     assert first["spraying"] is True
     assert first["zone_id"] == "1"
+    assert first["distance_mm"] == 300
     assert len(data["paint_trace"]) == 3
     assert data["direction_summary"]["classification"] == "horizontal"
     assert data["direction_summary"]["label"] == "수평 중심"
@@ -532,9 +534,9 @@ def test_motion_returns_trusted_trackers_paint_trace_and_direction_statistics(tm
     zone = data["zone_statistics"]["1:1"]
     assert zone["expert_session_count"] == 2
     assert zone["median_speed_mms"] == 300
-    assert zone["median_distance_mm"] == 250
+    assert zone["median_distance_mm"] == 300
     assert zone["selected_speed_mms"] == 300
-    assert zone["selected_distance_mm"] == 250
+    assert zone["selected_distance_mm"] == 300
     assert zone["selected_major_direction"] == "horizontal"
     assert zone["expert_direction_distribution"] == {
         "horizontal": 1.0,
@@ -762,11 +764,11 @@ def test_motion_endpoint_scores_selected_record_against_other_expert_zone_record
     assert metrics["paint_pattern"]["actual_label"] == "수평형"
     assert metrics["coating_thickness"]["actual"] == 170
     assert metrics["coating_thickness"]["reference"] == 160
-    assert metrics["distance"]["actual"] == 280
-    assert metrics["distance"]["reference"] == 250
+    assert metrics["distance"]["actual"] == 300
+    assert metrics["distance"]["reference"] == 300
     assert all(0 <= item["similarity_percent"] <= 100 for item in metrics.values())
-    assert zone["corrections"]
-    assert zone["predicted_similarity_percent"] >= zone["similarity_percent"]
+    assert zone["corrections"] == []
+    assert zone["predicted_similarity_percent"] == zone["similarity_percent"]
 
 
 def test_motion_endpoint_uses_percentages_for_self_replay_without_self_reference_leakage(
@@ -1017,8 +1019,9 @@ def test_motion_viewer_keeps_the_last_spraying_zone_and_gives_skeleton_more_heig
         "grid-template-rows:auto minmax(245px,1fr)"
     ) in page.text
     assert ".skeleton-card{height:auto;display:block}" in page.text
-    assert ".skeleton-screen{height:380px;min-height:380px;flex:none}" in page.text
-    assert ".skeleton-screen{height:340px;min-height:340px}" in page.text
+    assert ".skeleton-screen{height:310px;min-height:310px;flex:none}" in page.text
+    assert ".coating-screen{position:relative;min-height:220px;flex:1" in page.text
+    assert ".skeleton-screen{height:300px;min-height:300px}" in page.text
     assert "frame && frame.spraying && Number(frame.zone_id) > 0" in coating.text
     assert "if (!next || next === zoneKey) return;" in coating.text
     assert "zoneKey = next;" in coating.text

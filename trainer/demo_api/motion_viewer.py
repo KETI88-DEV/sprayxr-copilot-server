@@ -344,7 +344,11 @@ def _sample_csv(
                 "ray_point": ray_point,
                 "spraying": _spraying(row.get("분사")),
                 "speed_mms": _number(row.get("Speed (Real)")),
-                "distance_mm": _number(row.get("Distance (Real)")),
+                "distance_mm": (
+                    _number(row.get("Distance (Input)"))
+                    if _number(row.get("Distance (Input)")) is not None
+                    else _number(row.get("Distance (Real)"))
+                ),
                 "zone_id": str(row.get("Zone ID", "")).strip() or None,
                 "map_num": (_map_zone_uv(row) or (None,))[0],
             })
@@ -1418,14 +1422,17 @@ def _multi_session_zone_evaluation(
             for index, record in enumerate(reference_records)
         ]
         reference_patterns = [str(value) for value in reference_patterns if value]
-        distance_actual = _number(_zone_analysis_value(selected_session, zone_key, "distance_mm"))
+        distance_actual = _number(selected_frame.get("distance_mm"))
         if distance_actual is None:
-            distance_actual = _number(selected_frame.get("distance_mm"))
-        distance_references = [
-            _number(_zone_analysis_value(record["session"], zone_key, "distance_mm"))
-            or _number(reference_frames[index].get("distance_mm"))
-            for index, record in enumerate(reference_records)
-        ]
+            distance_actual = _number(_zone_analysis_value(selected_session, zone_key, "distance_mm"))
+        distance_references = []
+        for index, record in enumerate(reference_records):
+            reference_distance = _number(reference_frames[index].get("distance_mm"))
+            if reference_distance is None:
+                reference_distance = _number(
+                    _zone_analysis_value(record["session"], zone_key, "distance_mm")
+                )
+            distance_references.append(reference_distance)
         distance_references = [value for value in distance_references if value is not None]
         coating_actual = _session_coating_median(selected_session, zone_key)
         coating_references = [
@@ -1702,18 +1709,18 @@ button{cursor:pointer;font-weight:700}.primary{background:#3157d5;border-color:#
 .viewer-tools label{margin:8px 0 6px}
 .right{padding:12px;display:grid;grid-template-rows:auto minmax(245px,1fr);gap:10px;overflow:auto}
 .right .card{margin:0}.skeleton-card{height:auto;display:block}
-.skeleton-screen{height:380px;min-height:380px;flex:none}#skeletonCanvas{height:100%}
+.skeleton-screen{height:310px;min-height:310px;flex:none}#skeletonCanvas{height:100%}
 .coating-card{height:100%;display:flex;flex-direction:column;padding:0;overflow:hidden}
 .coating-header{display:flex;justify-content:space-between;align-items:center;padding:11px 12px;border-bottom:1px solid var(--line)}
 .coating-header strong{font-size:13px}.coating-header span{font-size:10px;color:#91a0b8}
 .coating-switch{display:flex;gap:5px;padding:8px 10px}.coating-switch button{padding:6px 8px;font-size:10px}.coating-switch button.active{background:#3157d5;border-color:#3157d5}
-.coating-screen{position:relative;min-height:150px;flex:1;background:#07101f}#coatingCanvas{display:block;width:100%;height:100%}
+.coating-screen{position:relative;min-height:220px;flex:1;background:#07101f}#coatingCanvas{display:block;width:100%;height:100%}
 .coating-status{position:absolute;left:9px;top:8px;padding:4px 7px;border-radius:999px;background:rgba(7,16,31,.8);color:#dff7ff;font-size:10px}
 .coating-legend{display:flex;justify-content:space-between;padding:7px 11px;background:linear-gradient(90deg,#1946a0,#20c997,#ffe066,#ff7849);color:#fff;font-size:9px;text-shadow:0 1px 3px #000}
 .coating-note{padding:7px 10px;color:#7890ad;font-size:9px;line-height:1.45}
 .hidden-data-hooks{display:none}
 @media(max-width:1200px){.shell{grid-template-rows:auto auto auto}.workspace{grid-template-columns:320px minmax(0,1fr)}.right{grid-column:1/-1;grid-template-columns:1fr 1fr;grid-template-rows:auto;border-top:1px solid var(--line)}}
-@media(max-width:760px){.selection-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.workspace{display:flex;flex-direction:column}.evaluation-side{order:1}.stage{order:0}.right{order:2;display:grid;grid-template-columns:1fr;grid-template-rows:auto auto}.skeleton-screen{height:340px;min-height:340px}.coating-card{min-height:330px}.selection-panel{padding:9px 12px}}
+@media(max-width:760px){.selection-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.workspace{display:flex;flex-direction:column}.evaluation-side{order:1}.stage{order:0}.right{order:2;display:grid;grid-template-columns:1fr;grid-template-rows:auto auto}.skeleton-screen{height:300px;min-height:300px}.coating-card{min-height:400px}.selection-panel{padding:9px 12px}}
 </style></head><body><div class="shell">
 <header class="top"><div class="title">작업 자세 비교 평가<small>전문가 모션 뷰어 기반 · 도장 경로·자세 통합 화면 · 기준 전문가: 전형기 반장 · 제품 자세 엔진 연동</small></div><nav><a href="/docs">Swagger</a><a href="/admin">DB 뷰어</a></nav></header>
 <template id="poseUiTemplate">
@@ -2017,6 +2024,28 @@ def create_motion_viewer_router(
             direction_summary,
             paint_statistics["direction_distribution"],
         )
+        selected_frame_zones = _zone_frame_profiles(selected_frames)
+        sampled_frame_zones = [_zone_frame_profiles(frames) for frames in sampled_sessions]
+        for zone_key, statistics_item in zone_statistics.items():
+            if zone_key == "all":
+                continue
+            input_distances = [
+                distance
+                for frame_profile in sampled_frame_zones
+                if (distance := _number(frame_profile.get(zone_key, {}).get("distance_mm")))
+                is not None
+            ]
+            if input_distances:
+                statistics_item["median_distance_mm"] = round(
+                    statistics.median(input_distances), 3
+                )
+            selected_input_distance = _number(
+                selected_frame_zones.get(zone_key, {}).get("distance_mm")
+            )
+            if selected_input_distance is not None:
+                statistics_item["selected_distance_mm"] = round(
+                    selected_input_distance, 3
+                )
         reference_flows = expert_reference_flows(profile)
         selected_flow = [str(item["zone_id"]) for item in zone_order]
         order_score = score_visit_flow(selected_flow, reference_flows)
