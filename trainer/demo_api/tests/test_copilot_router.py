@@ -212,10 +212,13 @@ def test_detailed_order_mode_synthesizes_the_structured_report_instead_of_repeat
         prompt="권장 Zone 순서는?", response_mode="detailed",
     )).json()["data"]
 
-    assert quick["answer"].startswith("전형기 반장 6회 기준 대표 흐름은")
-    assert detailed["answer"].startswith("[상세 분석]")
+    assert quick["answer"].startswith("권장 작업 순서는 Zone 1 → 3 → 2입니다.")
+    assert detailed["answer"].startswith("[권장 Zone 순서]")
     assert detailed["answer"] != quick["answer"]
-    assert not detailed["answer"].startswith(f"[상세 분석]\n{quick['answer']}")
+    assert "[전문가 작업 경향]" in detailed["answer"]
+    assert "[구간별 판단]" in detailed["answer"]
+    assert "[권장 조치]" in detailed["answer"]
+    assert not detailed["answer"].startswith(f"[권장 Zone 순서]\n{quick['answer']}")
     assert not detailed["answer"].rstrip().endswith("근거:")
     assert len(pipeline.calls) == 1
     assert "[서버 구조화 분석 결과]" in pipeline.calls[0]["instruction"]
@@ -252,6 +255,11 @@ def test_motion_viewer_analysis_context_supports_quick_and_detailed_without_a_co
             "adherence_rate": 0.67,
                 "best_reference_similarity": 0.81,
                 "position_similarity": 0.74,
+                "position_distribution": [
+                    [{"zone_id": "1", "probability": 0.83}],
+                    [{"zone_id": "3", "probability": 0.67}],
+                    [{"zone_id": "2", "probability": 0.33}],
+                ],
         },
     }, ensure_ascii=False)
 
@@ -266,12 +274,15 @@ def test_motion_viewer_analysis_context_supports_quick_and_detailed_without_a_co
 
     assert quick["answer"] == "전문가 대표 흐름은 1 → 3 → 2입니다."
     assert quick["context_status"] == "available"
-    assert detailed["answer"].startswith("[상세 분석]\n[종합 판단]")
-    assert not detailed["answer"].startswith(f"[상세 분석]\n{quick['answer']}")
-    assert "[정량 비교]" in detailed["answer"]
+    assert detailed["answer"].startswith("[권장 Zone 순서]")
+    assert not detailed["answer"].startswith(f"[권장 Zone 순서]\n{quick['answer']}")
+    assert "[전문가 작업 경향]" in detailed["answer"]
+    assert "전문가 작업의 약 67%가 이 시작 흐름을 따랐습니다." in detailed["answer"]
+    assert "- 우선 적용 구간: Zone 1 → 3 (67%)" in detailed["answer"]
+    assert "- 유동 구간: Zone 2" in detailed["answer"]
     assert "실제 수행: 1 → 2 → 3" in detailed["answer"]
     assert "순서 준수율은 67%" in detailed["answer"]
-    assert "[해석]" in detailed["answer"]
+    assert "[구간별 판단]" in detailed["answer"]
     assert "[권장 조치]" in detailed["answer"]
     assert not detailed["answer"].rstrip().endswith("근거:")
     assert detailed["answer"] != quick["answer"]

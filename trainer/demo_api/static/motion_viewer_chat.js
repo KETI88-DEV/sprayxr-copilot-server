@@ -149,12 +149,16 @@
       const direction = data.direction_summary?.classification;
       return direction ? `현재 기록의 주요 도포 방향은 ${direction}입니다.` : '현재 기록에서는 주요 도포 방향을 계산할 수 없습니다.';
     }
-    const distributions = (evaluation.position_distribution || []).map((row, index) => {
-      const choices = row.slice(0, 2).map((item) => `Z${item.zone_id} ${percent(Number(item.probability) * 100)}`);
-      return `${index + 1}순위 ${choices.join('·')}`;
-    });
     if (recommended.length === 1) return `현재 학습모드는 Zone ${recommended[0]} 한 곳으로 구성되어 있습니다.`;
-    return `현재 학습모드의 전문가 대표 흐름은 ${recommended.join(' → ')}입니다.${distributions.length ? ` 순번별 주요 분포는 ${distributions.join(', ')}입니다.` : ''}`;
+    const top = (evaluation.position_distribution || []).slice(0, 2).map((row) => row?.[0]);
+    const stableStart = top.length === 2
+      && String(top[0]?.zone_id) === String(recommended[0])
+      && String(top[1]?.zone_id) === String(recommended[1])
+      && Math.min(Number(top[0]?.probability), Number(top[1]?.probability)) >= 0.6;
+    const guidance = stableStart
+      ? `우선 Zone ${recommended[0]}에서 시작한 뒤 Zone ${recommended[1]}로 이동하세요. 이 시작 순서는 전문가 작업의 약 ${Math.round(Math.min(Number(top[0].probability), Number(top[1].probability)) * 100)}%에서 동일하게 나타났습니다.`
+      : `우선 Zone ${recommended[0]}에서 시작하세요.`;
+    return `권장 작업 순서는 Zone ${recommended.join(' → ')}입니다.\n\n${guidance}`;
   }
 
   const structuredAnswer = (taskId, prompt, data) => taskId === 'pose_recomm'

@@ -418,6 +418,8 @@ def test_chat_is_bound_to_the_current_motion_record_instead_of_an_unrelated_comp
     assert "context: buildViewerQueryContext(task.id, prompt, viewerData)" in script.text
     assert "viewerData?.selected_session_id" in script.text
     assert "viewerData?.mode_id" in script.text
+    assert "순번별 주요 분포" not in script.text
+    assert "이 시작 순서는 전문가 작업의 약" in script.text
     assert "/motion-viewer/api/completed" not in script.text
     assert "loadSessions" not in script.text
 

@@ -540,27 +540,33 @@ def answer_order_question(
                     f"전형기 반장 {reference_count}회 모두 Zone {flow[0]}부터 작업했습니다."
                 )
             else:
-                details: list[str] = []
-                for index, row in enumerate(distributions, start=1):
-                    if not isinstance(row, list):
-                        continue
-                    choices = [
-                        f"Z{item.get('zone_id')} {float(item.get('probability') or 0) * 100:.0f}%"
-                        for item in row[:2] if isinstance(item, Mapping)
-                    ]
-                    if choices:
-                        details.append(f"{index}순위 {'·'.join(choices)}")
-                focused = (
-                    f"전형기 반장 {reference_count}회 기준 대표 흐름은 {' → '.join(flow)}입니다."
-                    if reference_count
-                    else f"권장 순서는 {' → '.join(flow)}입니다."
-                )
-                if details:
-                    focused += f" 순번별 주요 분포는 {', '.join(details)}입니다."
+                focused = f"권장 작업 순서는 Zone {' → '.join(flow)}입니다."
+                top_choices: list[tuple[str, float]] = []
+                for row in distributions[:2]:
+                    if isinstance(row, list) and row and isinstance(row[0], Mapping):
+                        top_choices.append((
+                            str(row[0].get("zone_id")), float(row[0].get("probability") or 0),
+                        ))
+                if (
+                    len(flow) >= 2 and len(top_choices) == 2
+                    and top_choices[0][0] == flow[0] and top_choices[1][0] == flow[1]
+                    and min(top_choices[0][1], top_choices[1][1]) >= 0.6
+                ):
+                    confidence = min(top_choices[0][1], top_choices[1][1]) * 100
+                    focused += (
+                        f"\n\n우선 Zone {flow[0]}에서 시작한 뒤 Zone {flow[1]}로 이동하세요. "
+                        f"이 시작 순서는 전문가 작업의 약 {confidence:.0f}%에서 동일하게 나타났습니다."
+                    )
+                elif flow:
+                    focused += f"\n\n우선 Zone {flow[0]}에서 시작하세요."
             return ZoneAnswer("available", None, focused, {
                 "analysis_status": "available", "reason_code": None, "scope": "session", "report_id": report_id,
                 "recommended_flow": flow, "first_visit_flow": first, "adherence_rate": rate,
                 "deviation_count": report.get("deviation_count"), "direction_adherence_rate": direction,
+                "reference_session_count": reference_count,
+                "best_reference_similarity": report.get("best_reference_similarity"),
+                "position_similarity": report.get("position_similarity"),
+                "position_distribution": distributions,
             })
         if intent == "order_adherence" or any(token in question for token in ("준수", "유사", "몇 퍼센트", "점수")):
             closest = report.get("best_reference_similarity")

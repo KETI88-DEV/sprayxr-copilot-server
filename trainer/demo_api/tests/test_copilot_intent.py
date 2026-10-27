@@ -24,7 +24,7 @@ def test_classifier_failure_falls_back_to_structured_order_intent() -> None:
     assert classify_question_intent("trajectory_recomm", "권장 Zone 순서는?", broken) == "order_reference"
 
 
-def test_recommended_order_answer_explains_rank_probabilities() -> None:
+def test_recommended_order_answer_prioritizes_action_over_raw_rank_probabilities() -> None:
     report = {
         "analysis_status": "available",
         "recommended_flow": ["7", "4", "8"],
@@ -49,9 +49,11 @@ def test_recommended_order_answer_explains_rank_probabilities() -> None:
 
     result = answer_order_question(found, prompt="권장 Zone 순서는?", intent="order_reference")
 
-    assert "전형기 반장 6회" in result.answer
-    assert "대표 흐름은 7 → 4 → 8" in result.answer
-    assert "2순위 Z4 83%·Z8 17%" in result.answer
+    assert result.answer.startswith("권장 작업 순서는 Zone 7 → 4 → 8입니다.")
+    assert "우선 Zone 7에서 시작한 뒤 Zone 4로 이동하세요." in result.answer
+    assert "이 시작 순서는 전문가 작업의 약 83%에서 동일하게 나타났습니다." in result.answer
+    assert "순번별 주요 분포" not in result.answer
+    assert result.context["position_distribution"] == report["position_distribution"]
 
 
 def test_single_zone_reference_is_not_described_as_a_broken_one_item_order() -> None:

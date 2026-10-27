@@ -128,6 +128,28 @@ def _flow_text(value: object) -> str | None:
     return " → ".join(str(item) for item in value)
 
 
+def _stable_order_prefix(
+    recommended_value: object, distribution_value: object, *, threshold: float = 0.6
+) -> tuple[list[str], float | None]:
+    if not isinstance(recommended_value, list) or not isinstance(distribution_value, list):
+        return [], None
+    stable: list[str] = []
+    probabilities: list[float] = []
+    for expected, row in zip(recommended_value, distribution_value):
+        if not isinstance(row, list) or not row or not isinstance(row[0], dict):
+            break
+        top = row[0]
+        try:
+            probability = float(top.get("probability", 0))
+        except (TypeError, ValueError):
+            break
+        if str(top.get("zone_id")) != str(expected) or probability < threshold:
+            break
+        stable.append(str(expected))
+        probabilities.append(probability)
+    return stable, min(probabilities) if probabilities else None
+
+
 def _structured_detail_fallback(
     task_type: str,
     base_answer: str,
@@ -137,9 +159,13 @@ def _structured_detail_fallback(
 ) -> str:
     """Build a standalone analysis, not a quick answer with text appended."""
     if task_type == "trajectory_recomm":
-        recommended = _flow_text(analysis_context.get("recommended_flow"))
+        recommended_value = analysis_context.get("recommended_flow")
+        recommended = _flow_text(recommended_value)
         selected = _flow_text(
             analysis_context.get("selected_flow") or analysis_context.get("first_visit_flow")
+        )
+        stable_prefix, stable_confidence = _stable_order_prefix(
+            recommended_value, analysis_context.get("position_distribution")
         )
         adherence_value = analysis_context.get("adherence_rate")
         adherence = _percent_text(adherence_value)
@@ -149,15 +175,26 @@ def _structured_detail_fallback(
                 adherence_number *= 100
         except (TypeError, ValueError):
             adherence_number = -1
-        if adherence_number >= 90:
-            verdict = "전문가 기준 흐름과 거의 일치하며 Zone 전환 순서가 안정적입니다."
-        elif adherence_number >= 70:
-            verdict = "전체 흐름은 대체로 맞지만 일부 Zone 전환 순서를 조정할 필요가 있습니다."
-        else:
-            verdict = "전문가 기준과 순서 차이가 있어 Zone 전환 순서를 우선 교정해야 합니다."
-        comparison = []
-        if recommended:
-            comparison.append(f"권장 순서: {recommended}")
+        tendencies: list[str] = []
+        if len(stable_prefix) >= 2 and stable_confidence is not None:
+            tendencies.append(
+                f"전문가 데이터에서는 Zone {' → '.join(stable_prefix)} 구간이 가장 뚜렷했습니다. "
+                f"전문가 작업의 약 {stable_confidence * 100:.0f}%가 이 시작 흐름을 따랐습니다."
+            )
+        elif stable_prefix and stable_confidence is not None:
+            tendencies.append(
+                f"Zone {stable_prefix[0]}에서 시작하는 경향이 약 {stable_confidence * 100:.0f}%로 가장 높았습니다."
+            )
+        if isinstance(recommended_value, list) and len(stable_prefix) < len(recommended_value):
+            start_at = len(stable_prefix) + 1
+            tendencies.append(
+                f"{start_at}번째 Zone 이후에는 작업 회차에 따라 순서 차이가 나타납니다. "
+                "이 구간은 하나의 순서만 정답으로 판단하지 않고 대표 경로와의 연결성을 함께 평가합니다."
+            )
+        if interpretation:
+            tendencies.append(interpretation)
+
+        comparison: list[str] = []
         if selected:
             comparison.append(f"실제 수행: {selected}")
         if adherence:
@@ -179,20 +216,29 @@ def _structured_detail_fallback(
                 "irregular": "비정형",
             }.get(str(direction["classification"]), str(direction["classification"]))
             comparison.append(f"주요 도포 방향은 {direction_label}입니다.")
-        if not interpretation:
-            if recommended and selected and recommended == selected:
-                interpretation = "현재 수행은 권장 Zone 방문 흐름과 일치합니다. 순서보다 각 Zone 내부의 도포 품질을 유지하는 데 집중하면 됩니다."
-            else:
-                interpretation = "권장 흐름과 실제 수행을 순번별로 비교하면 다른 지점이 있으므로, 다음 작업에서는 최초로 달라지는 전환 구간부터 교정하는 것이 효과적입니다."
+        segment_lines: list[str] = []
+        if stable_prefix:
+            confidence_text = f" ({stable_confidence * 100:.0f}%)" if stable_confidence is not None else ""
+            segment_lines.append(f"- 우선 적용 구간: Zone {' → '.join(stable_prefix)}{confidence_text}")
+        if isinstance(recommended_value, list) and len(stable_prefix) < len(recommended_value):
+            flexible = " → ".join(str(zone) for zone in recommended_value[len(stable_prefix):])
+            segment_lines.append(f"- 유동 구간: Zone {flexible}\n  작업 회차별 차이를 허용하는 대표 경로입니다.")
+        if comparison:
+            segment_lines.append("- 현재 기록 비교\n  " + "\n  ".join(comparison))
         action = (
-            "현재 Zone 순서를 유지하면서 속도·이격거리와 Zone 내부 도포 패턴을 함께 점검하세요."
+            "현재 순서를 유지하되 각 Zone 내부의 속도·이격거리와 도포 패턴을 함께 점검하세요."
             if recommended and selected and recommended == selected
-            else f"다음 수행에서는 {recommended or '표시된 권장 순서'}를 화면에 두고 Zone 전환 직전에 다음 Zone을 확인하세요."
+            else (
+                f"Zone {stable_prefix[0]}에서 시작한 뒤 Zone {stable_prefix[1]}로 이동하세요. "
+                "이후에는 대표 경로를 참고하되 현재 위치와 완료한 Zone을 고려해 다음 Zone을 선택하세요."
+                if len(stable_prefix) >= 2 else
+                f"{recommended or '표시된 권장 순서'}를 참고하고 Zone 전환 직전에 다음 Zone을 확인하세요."
+            )
         )
         return (
-            "[상세 분석]\n[종합 판단]\n" + verdict
-            + "\n\n[정량 비교]\n" + ("\n".join(comparison) or "비교 가능한 순서 지표가 없습니다.")
-            + "\n\n[해석]\n" + interpretation
+            "[권장 Zone 순서]\n" + (f"Zone {recommended}" if recommended else "권장 순서를 계산할 수 없습니다.")
+            + "\n\n[전문가 작업 경향]\n" + ("\n\n".join(tendencies) or "전문가 작업 경향을 계산할 수 없습니다.")
+            + "\n\n[구간별 판단]\n" + ("\n".join(segment_lines) or "구간별 판단 자료가 없습니다.")
             + "\n\n[권장 조치]\n" + action
         )
     elif task_type == "pose_recomm":
