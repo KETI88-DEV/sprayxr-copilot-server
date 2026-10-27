@@ -12,7 +12,11 @@ from fastapi.testclient import TestClient
 from trainer.demo_api.copilot_router import install_copilot_error_handlers
 from trainer.demo_api.sequence_store import SequenceStore
 from trainer.demo_api.speech_to_text import SpeechToTextUnavailableError, Transcript
-from trainer.demo_api.voice_router import VOICE_QUERY_PATH, create_voice_router
+from trainer.demo_api.voice_router import (
+    TEST_TEXT_QUERY_PATH,
+    VOICE_QUERY_PATH,
+    create_voice_router,
+)
 from trainer.scripts.openai_backend import OpenAIBackendUnavailableError
 
 
@@ -175,6 +179,31 @@ def test_input_free_voice_test_runs_the_real_stt_and_query_path() -> None:
     assert context["input_used"]["form_fields"]["task_type"] == "knowledge_search"
     assert context["input_summary"]
     assert context["evaluation_focus"]
+
+
+def test_text_query_demo_uses_editable_defaults_and_the_real_query_path() -> None:
+    pipeline = _Pipeline()
+    client = _client(_Stt(), pipeline)
+
+    response = client.post(TEST_TEXT_QUERY_PATH)
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["answer"] == "기준보다 얇은 도막입니다."
+    assert "스프레이 도장 시 적정 이격거리를 알려주세요." in pipeline.calls[0]["instruction"]
+    context = data["test_context"]
+    assert context["input_used"]["equivalent_real_api"] == "/api/v1/copilot/query"
+    assert context["input_used"]["query_parameters"]["response_mode"] == "quick"
+    assert context["input_summary"]
+    assert context["evaluation_focus"]
+
+    custom = client.post(
+        TEST_TEXT_QUERY_PATH,
+        params={"prompt": "저도막이 무엇인가요?", "response_mode": "detailed"},
+    )
+    assert custom.status_code == 200
+    assert "저도막이 무엇인가요?" in pipeline.calls[1]["instruction"]
+    assert "상세 분석" in pipeline.calls[1]["instruction"]
 
 
 def test_voice_sample_asset_is_downloadable_valid_16khz_mono_pcm16_wav() -> None:

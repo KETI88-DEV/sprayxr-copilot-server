@@ -72,7 +72,7 @@ def _openapi_description() -> str:
 2. `0-0 → 0-1 → 0-2 → 0-3 → 0-4` 순서로 각 API의 **Try it out → Execute**를 누릅니다.
 3. 입력값은 필요 없습니다. 각 응답의 `what_happened`, `beginner_tip`, `next_endpoint`를 확인합니다.
 4. 저장 결과는 [Co-Pilot DB 뷰어]({public_base}/admin)에서 확인합니다.
-5. 음성 기능은 `0-5`를 실행하면 파일 업로드 없이 STT부터 Query 답변까지 확인할 수 있습니다. `0-6`에서는 실제 업로드용 WAV를 내려받을 수 있습니다.
+5. 텍스트 질의는 `0-5`, 음성 질의는 `0-6`에서 시험합니다. `0-7`에서는 실제 업로드용 WAV를 내려받을 수 있습니다.
 
 > **DB 뷰어 바로가기:** [{public_base}/admin]({public_base}/admin) — 읽기 전용이며 데이터를 수정하지 않습니다.
 
@@ -540,7 +540,7 @@ def create_app(
     guided_router, guided_workflow = create_guided_workflow_router(v1_store, expert_guidance)
     app.state.guided_workflow = guided_workflow
     app.include_router(guided_router)
-    # 모의연동 0-0~0-4 다음에 음성 0-5~0-6이 보이도록 guided 뒤에 등록한다.
+    # 모의연동 0-0~0-4 다음에 텍스트·음성 Query 0-5~0-7이 보이도록 guided 뒤에 등록한다.
     app.include_router(
         create_voice_router(
             (lambda: chat_service_mod._get_or_build_pipeline()) if live else None,

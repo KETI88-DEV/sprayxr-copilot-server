@@ -11,10 +11,10 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 from anyio import to_thread
-from fastapi import APIRouter, File, Form, UploadFile
+from fastapi import APIRouter, File, Form, Query, UploadFile
 from fastapi.responses import JSONResponse, Response
 
-from trainer.demo_api.copilot_contracts import CopilotQueryRequest, TaskType
+from trainer.demo_api.copilot_contracts import CopilotQueryRequest, ResponseMode, TaskType
 from trainer.demo_api.copilot_router import (
     PENDING_TASK_ANSWERS,
     PipelineProvider,
@@ -35,6 +35,7 @@ from trainer.demo_api.voice_contracts import VoiceCopilotResponse, VoiceQueryDat
 logger = logging.getLogger(__name__)
 
 VOICE_QUERY_PATH = "/api/v1/copilot/query-voice"
+TEST_TEXT_QUERY_PATH = "/api/v1/test/query"
 TEST_VOICE_QUERY_PATH = "/api/v1/test/query-voice"
 TEST_VOICE_ASSET_PATH = "/api/v1/test/assets/query-voice-ko.wav"
 MAX_UPLOAD_BYTES = 1_048_576
@@ -45,6 +46,80 @@ _TEST_SESSION_ID = "SWAGGER-VOICE-DEMO"
 _TEST_SCENARIO_ID = "training-mode-1"
 _TEST_REQUEST_ID = "REQ-VOICE-TEST-001"
 _TEST_SPOKEN_TEXT = "스프레이 도장 시 적정 이격거리를 알려주세요."
+_TEST_TEXT_USER_ID = "TSB-TEXT-DEMO-001"
+_TEST_TEXT_SESSION_ID = "SWAGGER-TEXT-DEMO"
+_TEST_TEXT_SCENARIO_ID = "training-mode-1"
+_TEST_TEXT_REQUEST_ID = "REQ-TEXT-TEST-001"
+_TEST_TEXT_PROMPT = "스프레이 도장 시 적정 이격거리를 알려주세요."
+
+
+def _text_query_test_context(
+    prompt: str,
+    task_type: TaskType,
+    response_mode: ResponseMode,
+    use_rag: Literal["Y", "N"],
+) -> dict[str, object]:
+    return {
+        "input_used": {
+            "equivalent_real_api": "/api/v1/copilot/query",
+            "query_parameters": {
+                "prompt": prompt,
+                "task_type": task_type,
+                "response_mode": response_mode,
+                "use_rag": use_rag,
+            },
+            "fixed_context": {
+                "user_id": _TEST_TEXT_USER_ID,
+                "session_id": _TEST_TEXT_SESSION_ID,
+                "scenario_id": _TEST_TEXT_SCENARIO_ID,
+                "request_id": _TEST_TEXT_REQUEST_ID,
+            },
+        },
+        "input_summary": (
+            f"‘{prompt}’ 질문을 실제 텍스트 Query 처리 경로에 전달하며, "
+            f"답변 수준은 {response_mode}, RAG 사용 여부는 {use_rag}입니다."
+        ),
+        "evaluation_focus": (
+            "answer가 질문에 직접 답하는지 확인하고, response_mode를 quick과 detailed로 바꾸어 "
+            "답변 구조와 분량 차이를 비교하세요."
+        ),
+    }
+
+
+_TEXT_QUERY_TEST_RESPONSE = {
+    200: {
+        "description": "성공. 실제 Query 처리 결과와 테스트에 사용된 입력값을 함께 반환합니다.",
+        "content": {
+            "application/json": {
+                "example": {
+                    "status": "SUCCESS",
+                    "code": 200,
+                    "message": "Copilot query completed",
+                    "data": {
+                        "test_context": _text_query_test_context(
+                            _TEST_TEXT_PROMPT, "knowledge_search", "quick", "Y"
+                        ),
+                        "request_id": _TEST_TEXT_REQUEST_ID,
+                        "session_id": _TEST_TEXT_SESSION_ID,
+                        "user_id": _TEST_TEXT_USER_ID,
+                        "scenario_id": _TEST_TEXT_SCENARIO_ID,
+                        "generated_at": "2026-10-27T05:30:00Z",
+                        "latency_ms": 850,
+                        "degraded": False,
+                        "answer": "스프레이건과 피도면 사이의 권장 이격거리를 일정하게 유지하세요.",
+                        "resolved_intents": ["knowledge"],
+                        "context_status": "not_available",
+                        "sequence_context": None,
+                        "coating_context": None,
+                        "pose_context": None,
+                        "retrieval_used": True,
+                        "citations": ["DOC-doc_0001-C0001"],
+                    },
+                }
+            }
+        },
+    }
+}
 
 
 def _voice_test_context() -> dict[str, object]:
@@ -241,10 +316,76 @@ def create_voice_router(
         )
 
     @router.post(
+        TEST_TEXT_QUERY_PATH,
+        tags=["0. 모의 연동"],
+        summary="0-5. 기본값이 채워진 텍스트 Query 테스트",
+        description=(
+            "실제 `POST /api/v1/copilot/query`와 동일한 처리 경로를 Swagger에서 간단히 시험합니다. "
+            "모든 입력에는 기본값이 있어 수정하지 않고 바로 Execute할 수 있습니다.\n\n"
+            "### 기본 입력\n"
+            f"질문은 **‘{_TEST_TEXT_PROMPT}’**, `task_type=knowledge_search`, "
+            "`response_mode=quick`, `use_rag=Y`입니다.\n\n"
+            "### 사용 방법\n"
+            "먼저 기본값으로 실행한 뒤 `prompt`를 자유롭게 바꿔 보세요. "
+            "`response_mode`를 `detailed`로 바꾸면 상세 분석 형식을 비교할 수 있습니다.\n\n"
+            "### 결과 읽는 법\n"
+            "`data.test_context.input_used`에서 실제 사용된 값을 확인하고, "
+            "`answer`, `retrieval_used`, `citations`를 함께 확인하세요."
+        ),
+        responses=_TEXT_QUERY_TEST_RESPONSE,
+    )
+    async def test_text_query(
+        prompt: Annotated[str, Query(
+            min_length=1,
+            max_length=4000,
+            description="시험할 질문입니다. 기본 질문을 그대로 실행하거나 원하는 문장으로 바꿀 수 있습니다.",
+        )] = _TEST_TEXT_PROMPT,
+        task_type: Annotated[TaskType, Query(
+            description="실제 Query API와 동일한 작업 유형입니다.",
+        )] = "knowledge_search",
+        response_mode: Annotated[ResponseMode, Query(
+            description="quick은 짧은 안내, detailed는 근거와 조치를 포함한 상세 분석입니다.",
+        )] = "quick",
+        use_rag: Annotated[Literal["Y", "N"], Query(
+            description="Y는 지식 검색을 사용하고 N은 전달된 문맥을 중심으로 답합니다.",
+        )] = "Y",
+    ) -> JSONResponse:
+        query = CopilotQueryRequest(
+            user_id=_TEST_TEXT_USER_ID,
+            session_id=_TEST_TEXT_SESSION_ID,
+            scenario_id=_TEST_TEXT_SCENARIO_ID,
+            request_id=_TEST_TEXT_REQUEST_ID,
+            prompt=prompt,
+            task_type=task_type,
+            response_mode=response_mode,
+            use_rag=use_rag,
+            context="Swagger 텍스트 Query 모의연동",
+        )
+        response = await execute_copilot_query(
+            query,
+            pipeline_provider=pipeline_provider,
+            pending_answers=pending_answers,
+            sequences=sequences,
+            mcp_base_url=mcp_base,
+            transport=transport,
+            reports=reports,
+        )
+        if response.status_code != 200:
+            return response
+        body = json.loads(response.body)
+        body["data"] = {
+            "test_context": _text_query_test_context(
+                prompt, task_type, response_mode, use_rag
+            ),
+            **body["data"],
+        }
+        return JSONResponse(status_code=200, content=body)
+
+    @router.post(
         TEST_VOICE_QUERY_PATH,
         response_model=VoiceCopilotResponse,
         tags=["0. 모의 연동"],
-        summary="0-5. 무입력 음성질의 전체 경로 테스트",
+        summary="0-6. 무입력 음성질의 전체 경로 테스트",
         description=(
             "파라미터나 파일을 입력하지 않고 서버에 포함된 한국어 WAV를 실제 STT와 Query 경로로 처리합니다.\n\n"
             "### 자동 사용 입력\n"
@@ -279,7 +420,7 @@ def create_voice_router(
     @router.get(
         TEST_VOICE_ASSET_PATH,
         tags=["0. 모의 연동"],
-        summary="0-6. query-voice 테스트용 한국어 WAV 다운로드",
+        summary="0-7. query-voice 테스트용 한국어 WAV 다운로드",
         description=(
             "실제 3-2 query-voice의 audio 필드에 업로드할 수 있는 WAV 파일을 내려받습니다. "
             "형식은 PCM16·16 kHz·mono이며 문장은 ‘스프레이 도장 시 적정 이격거리를 알려주세요.’입니다."

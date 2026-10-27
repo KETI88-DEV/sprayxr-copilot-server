@@ -187,10 +187,22 @@ def test_voice_demo_is_input_free_and_links_the_downloadable_sample() -> None:
     """Catches a voice demo that still requires manual multipart form entry."""
     schema = TestClient(create_app()).get("/openapi.json").json()
     operation = schema["paths"]["/api/v1/test/query-voice"]["post"]
+    text_operation = schema["paths"]["/api/v1/test/query"]["post"]
     asset = schema["paths"]["/api/v1/test/assets/query-voice-ko.wav"]["get"]
 
+    assert text_operation["tags"] == ["0. 모의 연동"]
+    assert text_operation["summary"].startswith("0-5")
+    assert "requestBody" not in text_operation
+    text_parameters = {item["name"]: item for item in text_operation["parameters"]}
+    assert text_parameters["prompt"]["schema"]["default"]
+    assert text_parameters["response_mode"]["schema"]["default"] == "quick"
+    assert text_parameters["use_rag"]["schema"]["default"] == "Y"
+    text_example = text_operation["responses"]["200"]["content"]["application/json"]["example"]
+    assert text_example["data"]["test_context"]["input_used"]["query_parameters"]["prompt"]
+    assert text_example["data"]["answer"]
+
     assert operation["tags"] == ["0. 모의 연동"]
-    assert operation["summary"].startswith("0-5")
+    assert operation["summary"].startswith("0-6")
     assert "requestBody" not in operation
     assert operation.get("parameters", []) == []
     assert "/api/v1/test/assets/query-voice-ko.wav" in operation["description"]
@@ -200,7 +212,7 @@ def test_voice_demo_is_input_free_and_links_the_downloadable_sample() -> None:
     assert voice_context["input_used"]["form_fields"]["language"] == "ko"
     assert voice_context["input_summary"]
     assert voice_context["evaluation_focus"]
-    assert asset["summary"].startswith("0-6")
+    assert asset["summary"].startswith("0-7")
     ordered_paths = list(schema["paths"])
     expected_order = [
         "/api/v1/test/workflow/0-reset",
@@ -208,6 +220,7 @@ def test_voice_demo_is_input_free_and_links_the_downloadable_sample() -> None:
         "/api/v1/test/workflow/2-sequence",
         "/api/v1/test/workflow/3-complete",
         "/api/v1/test/workflow/4-report",
+        "/api/v1/test/query",
         "/api/v1/test/query-voice",
         "/api/v1/test/assets/query-voice-ko.wav",
     ]
