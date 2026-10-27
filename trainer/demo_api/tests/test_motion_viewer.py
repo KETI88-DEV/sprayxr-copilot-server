@@ -927,6 +927,32 @@ def test_playback_status_exposes_a_persistent_colored_zone_badge(tmp_path: Path)
     assert "lastPlaybackZone = null" in script.text
 
 
+def test_viewer_overlay_contains_a_matching_translucent_realtime_hud(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    page = client.get("/motion-viewer")
+    script = client.get("/motion-viewer/assets/motion_viewer_pose.js")
+
+    assert page.status_code == 200
+    assert 'id="realtimeHud"' in page.text
+    assert page.text.index('id="viewerLegend"') < page.text.index('id="realtimeHud"')
+    for element_id in (
+        "realtimeHudZone",
+        "realtimeHudActivity",
+        "realtimeHudSpeed",
+        "realtimeHudDistance",
+        "realtimeHudAxis",
+    ):
+        assert f'id="{element_id}"' in page.text
+    assert ".realtime-hud" in page.text
+    assert "background:rgba(7,16,31,.42)" in page.text
+    assert "updateRealtimeHud" in script.text
+    assert "HUD_WINDOW_SECONDS = .5" in script.text
+    assert "speed_mms" in script.text
+    assert "distance_mm" in script.text
+    assert "lastRealtimeZone" in script.text
+    assert "value == null || value === ''" in script.text
+
+
 def test_pose_assets_define_layers_and_interaction_states(tmp_path: Path) -> None:
     client = _client(tmp_path)
     script = client.get("/motion-viewer/assets/motion_viewer_pose.js")

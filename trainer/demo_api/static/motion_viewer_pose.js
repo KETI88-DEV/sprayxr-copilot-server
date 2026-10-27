@@ -34,6 +34,11 @@
   };
   let lastZoneEvaluationKey = null;
   let lastPlaybackZone = null;
+  let lastRealtimeZone = null;
+  let lastRealtimeTelemetry = null;
+  let lastTelemetryTime = null;
+  let telemetrySamples = [];
+  const HUD_WINDOW_SECONDS = .5;
 
   function currentZoneFromFrame(frame) {
     if (!(frame?.spraying && Number(frame?.zone_id) > 0 && frame?.map_num != null)) return null;
@@ -97,6 +102,107 @@
         ctx.fillText(`분사축 편차 ${angleDegrees(frame.tool_forward, hitDirection).toFixed(0)}°`, shown[0] + 7, shown[1] - 6);
       }
     }
+  }
+
+  function finiteNumber(value) {
+    if (value == null || value === '') return null;
+    const number = Number(value);
+    return Number.isFinite(number) ? number : null;
+  }
+
+  function mean(samples, key) {
+    const values = samples.map(sample => sample[key]).filter(value => value != null);
+    return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
+  }
+
+  function telemetryForFrame(frame) {
+    const time = finiteNumber(frame?.t);
+    if (frame?.spraying && time != null && time !== lastTelemetryTime) {
+      if (lastTelemetryTime != null && time < lastTelemetryTime) telemetrySamples = [];
+      const tracked = frame?.tracked || {};
+      const hitDirection = tracked.right_hand && frame.ray_point
+        ? subtract(frame.ray_point, tracked.right_hand)
+        : null;
+      telemetrySamples.push({
+        t: time,
+        speed: finiteNumber(frame.speed_mms),
+        distance: finiteNumber(frame.distance_mm),
+        axis: frame.tool_forward && hitDirection ? angleDegrees(frame.tool_forward, hitDirection) : null,
+      });
+      telemetrySamples = telemetrySamples.filter(sample => sample.t >= time - HUD_WINDOW_SECONDS);
+      lastTelemetryTime = time;
+      lastRealtimeTelemetry = {
+        speed: mean(telemetrySamples, 'speed'),
+        distance: mean(telemetrySamples, 'distance'),
+        axis: mean(telemetrySamples, 'axis'),
+      };
+    }
+    return lastRealtimeTelemetry;
+  }
+
+  function comparisonState(actual, reference, lowLabel, highLabel) {
+    if (actual == null) return {tone: 'idle', label: '대기'};
+    if (!(reference > 0)) return {tone: 'ok', label: '측정'};
+    const ratio = actual / reference;
+    if (ratio < .8) return {tone: 'warn', label: lowLabel};
+    if (ratio > 1.2) return {tone: 'warn', label: highLabel};
+    return {tone: 'ok', label: '적정'};
+  }
+
+  function axisState(value) {
+    if (value == null) return {tone: 'idle', label: '대기'};
+    if (value <= 10) return {tone: 'ok', label: '적정'};
+    if (value <= 20) return {tone: 'warn', label: '주의'};
+    return {tone: 'alert', label: '교정'};
+  }
+
+  function setHudMetric(valueId, stateId, value, state, formatter, reference = null) {
+    const valueNode = byId(valueId);
+    const stateNode = byId(stateId);
+    valueNode.textContent = value == null ? '—' : formatter(value);
+    valueNode.title = reference > 0 ? `전문가 중앙값 ${formatter(reference)}` : '';
+    stateNode.textContent = state.label;
+    stateNode.className = `realtime-hud-state ${state.tone}`;
+  }
+
+  function updateRealtimeHud(frame) {
+    const currentZone = currentZoneFromFrame(frame);
+    if (currentZone) lastRealtimeZone = currentZone;
+    const zone = lastRealtimeZone;
+    const telemetry = telemetryForFrame(frame) || {};
+    const reference = zone ? data?.zone_statistics?.[zone.key] || {} : {};
+    const hud = byId('realtimeHud');
+    const zoneNode = byId('realtimeHudZone');
+    const activityNode = byId('realtimeHudActivity');
+    if (zone) {
+      const color = zoneColor(zone.zoneId);
+      zoneNode.textContent = `Zone ${zoneLabel(zone.zoneId)}`;
+      zoneNode.style.color = color;
+      hud.style.borderLeft = `3px solid ${color}`;
+    } else {
+      zoneNode.textContent = 'Zone 대기';
+      zoneNode.style.color = '';
+      hud.style.borderLeft = '';
+    }
+    activityNode.textContent = currentZone ? '분사 중' : '이동 중';
+    activityNode.style.color = currentZone ? '#22c55e' : '#94a3b8';
+    hud.style.opacity = currentZone ? '1' : '.72';
+    const speedReference = finiteNumber(reference.median_speed_mms);
+    const distanceReference = finiteNumber(reference.median_distance_mm);
+    setHudMetric(
+      'realtimeHudSpeed', 'realtimeHudSpeedState', telemetry.speed,
+      comparisonState(telemetry.speed, speedReference, '느림', '빠름'),
+      value => `${(value / 1000).toFixed(2)} m/s`, speedReference,
+    );
+    setHudMetric(
+      'realtimeHudDistance', 'realtimeHudDistanceState', telemetry.distance,
+      comparisonState(telemetry.distance, distanceReference, '가까움', '멂'),
+      value => `${Math.round(value)} mm`, distanceReference,
+    );
+    setHudMetric(
+      'realtimeHudAxis', 'realtimeHudAxisState', telemetry.axis,
+      axisState(telemetry.axis), value => `${value.toFixed(1)}°`,
+    );
   }
 
   function metricValue(metric, side) {
@@ -235,6 +341,7 @@
   function drawPoseOverlay({frame, center, w, h, playheadSeconds, durationSeconds}) {
     drawTrustedUpperBody(frame, center, w, h);
     drawOrientationGuides(frame, center, w, h);
+    updateRealtimeHud(frame);
     renderPoseSummary(frame);
     const currentZone = currentZoneFromFrame(frame);
     if (currentZone) lastPlaybackZone = currentZone;
@@ -258,6 +365,10 @@
   addEventListener('motion-viewer-data', event => {
     lastZoneEvaluationKey = null;
     lastPlaybackZone = null;
+    lastRealtimeZone = null;
+    lastRealtimeTelemetry = null;
+    lastTelemetryTime = null;
+    telemetrySamples = [];
     const badge = byId('playbackZoneBadge');
     if (badge) badge.hidden = true;
     renderZoneTimeline(event.detail);
