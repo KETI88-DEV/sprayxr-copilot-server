@@ -112,6 +112,77 @@ def _parse_motion_viewer_context(value: str | None) -> tuple[str, dict[str, obje
     return verified_answer.strip(), analysis_context
 
 
+def _percent_text(value: object) -> str | None:
+    try:
+        number = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    if 0 <= number <= 1:
+        number *= 100
+    return f"{round(number)}%"
+
+
+def _flow_text(value: object) -> str | None:
+    if not isinstance(value, list) or not value:
+        return None
+    return " → ".join(str(item) for item in value)
+
+
+def _structured_detail_fallback(
+    task_type: str, base_answer: str, analysis_context: dict[str, object]
+) -> str:
+    """Guarantee useful detail when the LLM merely echoes the short answer."""
+    lines = [base_answer.rstrip()]
+    if task_type == "trajectory_recomm":
+        selected = _flow_text(analysis_context.get("selected_flow"))
+        if selected:
+            lines.append(f"실제 수행 순서는 {selected}입니다.")
+        metrics = (
+            ("순서 준수율", "adherence_rate"),
+            ("가장 가까운 전문가 수행과의 유사도", "best_reference_similarity"),
+            ("순번별 통계 유사도", "position_similarity"),
+        )
+        for label, key in metrics:
+            value = _percent_text(analysis_context.get(key))
+            if value is not None:
+                lines.append(f"{label}은 {value}입니다.")
+        direction = analysis_context.get("direction_summary")
+        if isinstance(direction, dict) and direction.get("classification"):
+            lines.append(f"주요 도포 방향은 {direction['classification']}입니다.")
+    elif task_type == "pose_recomm":
+        similarity = _percent_text(analysis_context.get("similarity_percent"))
+        if similarity is not None:
+            lines.append(f"전체 자세 유사도는 {similarity}입니다.")
+        zones = analysis_context.get("zones")
+        zone_rows = list(zones.values()) if isinstance(zones, dict) else zones
+        if isinstance(zone_rows, list):
+            candidates = [row for row in zone_rows if isinstance(row, dict)]
+            scored = [
+                (float(row.get("similarity_percent", 100)), row)
+                for row in candidates
+                if isinstance(row.get("similarity_percent"), (int, float))
+            ]
+            if scored:
+                _, worst = min(scored, key=lambda item: item[0])
+                score = _percent_text(worst.get("similarity_percent"))
+                lines.append(f"가장 낮은 구역은 Zone {worst.get('zone_id')}({score})입니다.")
+        corrections = analysis_context.get("corrections")
+        if isinstance(corrections, list):
+            messages = [
+                str(item.get("message")) if isinstance(item, dict) and item.get("message") else str(item)
+                for item in corrections[:3]
+            ]
+            messages = [message for message in messages if message and message != "None"]
+            if messages:
+                lines.append("우선 개선할 내용은 " + " ".join(messages))
+    return "\n".join(lines)
+
+
+def _is_substantive_detail(base_answer: str, candidate: str) -> bool:
+    cleaned = re.sub(r"(?:\n|\s)*(?:근거|분석|상세)\s*:\s*$", "", candidate).strip()
+    return cleaned != base_answer.strip() and len(cleaned) >= len(base_answer.strip()) + 30
+
+
 def error_response(code: int, message: str) -> JSONResponse:
     envelope = CopilotResponse(status="ERROR", code=code, message=message, data=None)
     return JSONResponse(status_code=code, content=envelope.model_dump(mode="json"))
@@ -272,15 +343,19 @@ async def execute_copilot_query(
 
             result = await to_thread.run_sync(_guarded_detail_run)
             parsed = parse_knowledge_answer(str(result.get("response", "")), [])
-            if parsed.body.strip():
-                return parsed.body.strip(), bool(result.get("deadline_hit", False))
+            candidate = parsed.body.strip()
+            if candidate and _is_substantive_detail(base_answer, candidate):
+                return candidate, bool(result.get("deadline_hit", False))
+            return _structured_detail_fallback(
+                query.task_type, base_answer, analysis_context
+            ), bool(result.get("deadline_hit", False))
         except Exception:  # noqa: BROAD_EXCEPT_OK - verified deterministic answer remains available
             logger.exception(
                 "copilot structured detail synthesis failed request_id=%s task_type=%s",
                 query.request_id,
                 query.task_type,
             )
-        return base_answer, True
+        return _structured_detail_fallback(query.task_type, base_answer, analysis_context), True
 
     # Expert CSV records shown by the motion viewer do not necessarily have a
     # sessions/complete report.  The viewer therefore attaches the compact

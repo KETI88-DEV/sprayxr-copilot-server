@@ -233,7 +233,7 @@ def test_motion_viewer_analysis_context_supports_quick_and_detailed_without_a_co
 
     pipeline = _IntentPipeline(
         "order_reference",
-        response="[답변] 상세 분석 결과, Zone 1 다음에는 Zone 3을 진행하는 것이 권장됩니다.",
+        response="[답변] 전문가 대표 흐름은 1 → 3 → 2입니다.\n근거:",
     )
     app = FastAPI()
     app.include_router(copilot_router.create_copilot_router(
@@ -248,6 +248,8 @@ def test_motion_viewer_analysis_context_supports_quick_and_detailed_without_a_co
             "recommended_flow": ["1", "3", "2"],
             "selected_flow": ["1", "2", "3"],
             "adherence_rate": 0.67,
+                "best_reference_similarity": 0.81,
+                "position_similarity": 0.74,
         },
     }, ensure_ascii=False)
 
@@ -262,7 +264,9 @@ def test_motion_viewer_analysis_context_supports_quick_and_detailed_without_a_co
 
     assert quick["answer"] == "전문가 대표 흐름은 1 → 3 → 2입니다."
     assert quick["context_status"] == "available"
-    assert detailed["answer"].startswith("상세 분석 결과")
+    assert "실제 수행 순서는 1 → 2 → 3" in detailed["answer"]
+    assert "순서 준수율은 67%" in detailed["answer"]
+    assert not detailed["answer"].rstrip().endswith("근거:")
     assert detailed["answer"] != quick["answer"]
     assert detailed["sequence_context"]["recommended_flow"] == ["1", "3", "2"]
 
