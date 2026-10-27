@@ -238,7 +238,10 @@ def test_motion_viewer_analysis_context_supports_quick_and_detailed_without_a_co
 
     pipeline = _IntentPipeline(
         "order_reference",
-        response="[답변] 전문가 대표 흐름은 1 → 3 → 2입니다.\n근거:",
+        response=(
+            "[답변] 권장 작업 순서는 Zone 1 → 3 → 2입니다. "
+            "우선 Zone 1에서 시작한 뒤 Zone 3으로 이동하세요.\n근거:"
+        ),
     )
     app = FastAPI()
     app.include_router(copilot_router.create_copilot_router(
@@ -277,6 +280,7 @@ def test_motion_viewer_analysis_context_supports_quick_and_detailed_without_a_co
     assert detailed["answer"].startswith("[권장 Zone 순서]")
     assert not detailed["answer"].startswith(f"[권장 Zone 순서]\n{quick['answer']}")
     assert "[전문가 작업 경향]" in detailed["answer"]
+    assert "권장 작업 순서는 Zone" not in detailed["answer"]
     assert "전문가 작업의 약 67%가 이 시작 흐름을 따랐습니다." in detailed["answer"]
     assert "- 우선 적용 구간: Zone 1 → 3 (67%)" in detailed["answer"]
     assert "- 유동 구간: Zone 2" in detailed["answer"]

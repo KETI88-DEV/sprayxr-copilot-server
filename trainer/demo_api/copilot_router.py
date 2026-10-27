@@ -191,8 +191,10 @@ def _structured_detail_fallback(
                 f"{start_at}번째 Zone 이후에는 작업 회차에 따라 순서 차이가 나타납니다. "
                 "이 구간은 하나의 순서만 정답으로 판단하지 않고 대표 경로와의 연결성을 함께 평가합니다."
             )
-        if interpretation:
-            tendencies.append(interpretation)
+        # The deterministic sections below already contain every verified
+        # order statistic.  An LLM paraphrase here often repeats the quick
+        # answer verbatim, making detailed mode feel like quick mode with an
+        # extra paragraph.  Keep trajectory detail concise and non-duplicated.
 
         comparison: list[str] = []
         if selected:
