@@ -601,7 +601,10 @@ async def execute_copilot_query(
         logger.exception("copilot query: pipeline construction failed request_id=%s", query.request_id)
         return error_response(503, "Copilot pipeline is not ready")
 
-    use_rag = query.use_rag == "Y"
+    # Explicit Y/N remains a backwards-compatible override.  When omitted, any
+    # question that reaches this knowledge-generation branch needs retrieval;
+    # structured pose/order/report questions have already returned above.
+    use_rag = query.use_rag == "Y" if query.use_rag is not None else True
     session_summary = ""
     recent_turns: list[dict[str, str]] = []
     if query.session_id:

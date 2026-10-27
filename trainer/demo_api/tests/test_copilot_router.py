@@ -498,11 +498,18 @@ def test_request_id_is_optional_per_the_spec(monkeypatch: pytest.MonkeyPatch) ->
     assert data["request_id"] is None
 
 
-def test_use_rag_defaults_to_Y(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Given no use_rag, When queried, Then retrieval runs — 명세서 p.9 기본값은 Y 다."""
+def test_omitted_use_rag_is_automatic_and_knowledge_search_uses_retrieval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Clients may omit use_rag; the server chooses retrieval from the resolved route."""
+    from trainer.demo_api.copilot_contracts import CopilotQueryRequest
+
     pipeline = _FakePipeline()
     body = _body()
     del body["use_rag"]
+
+    parsed = CopilotQueryRequest(**body)
+    assert parsed.use_rag is None
 
     data = _client(monkeypatch, pipeline).post(URL, json=body).json()["data"]
 

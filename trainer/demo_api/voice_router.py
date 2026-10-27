@@ -57,7 +57,7 @@ def _text_query_test_context(
     prompt: str,
     task_type: TaskType,
     response_mode: ResponseMode,
-    use_rag: Literal["Y", "N"],
+    use_rag: Literal["auto", "Y", "N"],
 ) -> dict[str, object]:
     return {
         "input_used": {
@@ -97,7 +97,7 @@ _TEXT_QUERY_TEST_RESPONSE = {
                     "message": "Copilot query completed",
                     "data": {
                         "test_context": _text_query_test_context(
-                            _TEST_TEXT_PROMPT, "knowledge_search", "quick", "Y"
+                            _TEST_TEXT_PROMPT, "knowledge_search", "quick", "auto"
                         ),
                         "request_id": _TEST_TEXT_REQUEST_ID,
                         "session_id": _TEST_TEXT_SESSION_ID,
@@ -141,7 +141,7 @@ def _voice_test_context() -> dict[str, object]:
                 "scenario_id": _TEST_SCENARIO_ID,
                 "request_id": _TEST_REQUEST_ID,
                 "task_type": "knowledge_search",
-                "use_rag": "Y",
+                "use_rag": "auto (서버 자동 결정)",
                 "context": "Swagger 음성질의 모의연동",
             },
         },
@@ -216,7 +216,7 @@ def create_voice_router(
         scenario_id: str | None,
         request_id: str | None,
         task_type: TaskType,
-        use_rag: Literal["Y", "N"],
+        use_rag: Literal["Y", "N"] | None,
         context: str | None,
     ) -> JSONResponse:
         started = time.monotonic()
@@ -299,7 +299,10 @@ def create_voice_router(
         scenario_id: Annotated[str | None, Form(description="session_id의 첫 '_' 앞 콘텐츠 식별자", examples=["3"])] = None,
         request_id: Annotated[str | None, Form(description="클라이언트 로그와 서버 응답을 연결하기 위한 호출 추적용 식별자입니다.", examples=["REQ-VOICE-001"])] = None,
         task_type: Annotated[TaskType, Form(description="텍스트 Query API와 동일한 작업 유형", examples=["knowledge_search"])] = "knowledge_search",
-        use_rag: Annotated[Literal["Y", "N"], Form(description="Use the knowledge base", examples=["Y"])]= "Y",
+        use_rag: Annotated[Literal["Y", "N"] | None, Form(
+            description="생략하면 서버가 자동 결정합니다. Y 또는 N은 강제 설정이 필요할 때만 사용합니다.",
+            examples=["Y"],
+        )] = None,
         context: Annotated[str | None, Form(description="선택 JSON 또는 짧은 상황 설명", examples=["현재 훈련모드 3의 Zone 3을 도장 중입니다."])] = None,
     ) -> JSONResponse:
         payload = await audio.read(MAX_UPLOAD_BYTES + 1)
@@ -324,7 +327,7 @@ def create_voice_router(
             "모든 입력에는 기본값이 있어 수정하지 않고 바로 Execute할 수 있습니다.\n\n"
             "### 기본 입력\n"
             f"질문은 **‘{_TEST_TEXT_PROMPT}’**, `task_type=knowledge_search`, "
-            "`response_mode=quick`, `use_rag=Y`입니다.\n\n"
+            "`response_mode=quick`이며 RAG 사용 여부는 서버가 자동 결정합니다.\n\n"
             "### 사용 방법\n"
             "먼저 기본값으로 실행한 뒤 `prompt`를 자유롭게 바꿔 보세요. "
             "`response_mode`를 `detailed`로 바꾸면 상세 분석 형식을 비교할 수 있습니다.\n\n"
@@ -346,9 +349,9 @@ def create_voice_router(
         response_mode: Annotated[ResponseMode, Query(
             description="quick은 짧은 안내, detailed는 근거와 조치를 포함한 상세 분석입니다.",
         )] = "quick",
-        use_rag: Annotated[Literal["Y", "N"], Query(
-            description="Y는 지식 검색을 사용하고 N은 전달된 문맥을 중심으로 답합니다.",
-        )] = "Y",
+        use_rag: Annotated[Literal["auto", "Y", "N"], Query(
+            description="auto는 서버 자동 판단, Y/N은 강제 설정입니다.",
+        )] = "auto",
     ) -> JSONResponse:
         query = CopilotQueryRequest(
             user_id=_TEST_TEXT_USER_ID,
@@ -358,7 +361,7 @@ def create_voice_router(
             prompt=prompt,
             task_type=task_type,
             response_mode=response_mode,
-            use_rag=use_rag,
+            use_rag=None if use_rag == "auto" else use_rag,
             context="Swagger 텍스트 Query 모의연동",
         )
         response = await execute_copilot_query(
@@ -390,7 +393,7 @@ def create_voice_router(
             "파라미터나 파일을 입력하지 않고 서버에 포함된 한국어 WAV를 실제 STT와 Query 경로로 처리합니다.\n\n"
             "### 자동 사용 입력\n"
             f"음성 문장은 **‘{_TEST_SPOKEN_TEXT}’**이며, PCM16·16 kHz·mono WAV입니다. "
-            f"`user_id={_TEST_USER_ID}`, `language=ko`, `task_type=knowledge_search`, `use_rag=Y`를 사용합니다.\n\n"
+            f"`user_id={_TEST_USER_ID}`, `language=ko`, `task_type=knowledge_search`를 사용하며 RAG는 서버가 자동 결정합니다.\n\n"
             "### 결과 읽는 법\n"
             "응답의 `data.test_context.input_used`에서 전체 입력을 먼저 보고, `transcript`에서 STT 결과, "
             "`answer`에서 Co-Pilot 답변, `citations`에서 검색 근거를 확인하세요.\n\n"
@@ -408,7 +411,7 @@ def create_voice_router(
             scenario_id=_TEST_SCENARIO_ID,
             request_id=_TEST_REQUEST_ID,
             task_type="knowledge_search",
-            use_rag="Y",
+            use_rag=None,
             context="Swagger 음성질의 모의연동",
         )
         if response.status_code != 200:

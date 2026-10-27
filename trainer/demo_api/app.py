@@ -161,9 +161,14 @@ _OPENAPI_VALUE_GUIDANCE: dict[str, dict[str, str]] = {
         "knowledge_search": "도장·블라스팅 관련 일반 질문에 답변합니다.",
     },
     "use_rag": {
+        "auto": "서버가 질문 유형과 처리 경로에 따라 RAG 사용 여부를 자동 결정합니다.",
         "Y": "관련 지식과 현재 세션 문맥을 검색해 답변에 활용합니다.",
         "N": "별도 지식 검색 없이 전달된 현재 문맥을 중심으로 답변합니다.",
     },
+}
+
+_OPENAPI_OMISSION_GUIDANCE = {
+    "use_rag": "서버가 질문 유형과 처리 경로에 따라 RAG 사용 여부를 자동 결정합니다.",
 }
 
 _OPENAPI_DYNAMIC_OBJECT_FIELDS: dict[str, tuple[tuple[str, str, str], ...]] = {
@@ -208,6 +213,9 @@ def _openapi_parameter_details(
     details: list[str] = []
     if "default" in node and node["default"] is not None:
         details.append(f"    - 기본값: `{node['default']}`")
+    omission = _OPENAPI_OMISSION_GUIDANCE.get(name)
+    if omission:
+        details.append(f"    - 생략 시: {omission}")
 
     values = _openapi_enum_values(node, components)
     guidance = _OPENAPI_VALUE_GUIDANCE.get(name, {})

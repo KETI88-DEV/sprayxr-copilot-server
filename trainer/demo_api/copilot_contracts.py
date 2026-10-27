@@ -30,7 +30,6 @@ class CopilotQueryRequest(StrictModel):
                 "prompt": "다음 Zone을 어떤 순서로 칠해야 하나요?",
                 "task_type": "knowledge_search",
                 "response_mode": "quick",
-                "use_rag": "Y",
                 "context": "현재 Zone은 3입니다.",
             }
         },
@@ -49,7 +48,7 @@ class CopilotQueryRequest(StrictModel):
         description="질문이 속한 훈련 세션 식별자입니다. 세션 데이터·자세·순서 문맥을 사용할 때 입력합니다.",
         examples=["3_11000346_1"],
     )] = None
-    # 명세서 p.9: request_id·use_rag 는 (선택)이고 use_rag 기본값은 Y 다.
+    # request_id·use_rag 는 선택이다. use_rag 생략 시 서버가 처리 경로에 맞춰 자동 결정한다.
     request_id: Annotated[str | None, Field(
         description="클라이언트가 생성하는 호출 추적용 식별자입니다. 생략하면 서버가 응답 추적값을 별도로 처리합니다.",
         examples=["REQ-TEXT-001"],
@@ -75,10 +74,13 @@ class CopilotQueryRequest(StrictModel):
         ),
         examples=["quick"],
     )] = "quick"
-    use_rag: Annotated[Literal["Y", "N"], Field(
-        description="지식 검색(RAG) 사용 여부입니다. Y는 검색 사용, N은 검색 없이 현재 문맥만 사용합니다.",
+    use_rag: Annotated[Literal["Y", "N"] | None, Field(
+        description=(
+            "지식 검색(RAG) 강제 설정입니다. 생략하면 서버가 질문 유형과 처리 경로에 따라 자동 결정합니다. "
+            "Y는 검색을 강제로 사용하고 N은 검색 없이 현재 문맥만 사용합니다."
+        ),
         examples=["Y"],
-    )] = "Y"
+    )] = None
     context: Annotated[str | None, Field(
         description="현재 Zone·시퀀스 ID·관찰 상황 등 질문에 추가할 짧은 문맥입니다. 불필요하면 생략합니다.",
         examples=["현재 Zone은 3입니다."],

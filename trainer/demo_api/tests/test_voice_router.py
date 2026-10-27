@@ -194,6 +194,7 @@ def test_text_query_demo_uses_editable_defaults_and_the_real_query_path() -> Non
     context = data["test_context"]
     assert context["input_used"]["equivalent_real_api"] == "/api/v1/copilot/query"
     assert context["input_used"]["query_parameters"]["response_mode"] == "quick"
+    assert context["input_used"]["query_parameters"]["use_rag"] == "auto"
     assert context["input_summary"]
     assert context["evaluation_focus"]
 
