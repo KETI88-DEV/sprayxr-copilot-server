@@ -138,17 +138,23 @@ def _structured_detail_fallback(
         if selected:
             lines.append(f"실제 수행 순서는 {selected}입니다.")
         metrics = (
-            ("순서 준수율", "adherence_rate"),
-            ("가장 가까운 전문가 수행과의 유사도", "best_reference_similarity"),
-            ("순번별 통계 유사도", "position_similarity"),
+            ("순서 준수율", "은", "adherence_rate"),
+            ("가장 가까운 전문가 수행과의 유사도", "는", "best_reference_similarity"),
+            ("순번별 통계 유사도", "는", "position_similarity"),
         )
-        for label, key in metrics:
+        for label, particle, key in metrics:
             value = _percent_text(analysis_context.get(key))
             if value is not None:
-                lines.append(f"{label}은 {value}입니다.")
+                lines.append(f"{label}{particle} {value}입니다.")
         direction = analysis_context.get("direction_summary")
         if isinstance(direction, dict) and direction.get("classification"):
-            lines.append(f"주요 도포 방향은 {direction['classification']}입니다.")
+            direction_label = {
+                "horizontal": "수평",
+                "vertical": "수직",
+                "diagonal": "대각선",
+                "irregular": "비정형",
+            }.get(str(direction["classification"]), str(direction["classification"]))
+            lines.append(f"주요 도포 방향은 {direction_label}입니다.")
     elif task_type == "pose_recomm":
         similarity = _percent_text(analysis_context.get("similarity_percent"))
         if similarity is not None:
