@@ -382,7 +382,7 @@ def test_motion_returns_real_representative_frames_and_cross_session_spread(tmp_
     assert data["frames"][0]["joints"]["Pelvis"] == [0.0, 1.0, 0.0]
     assert data["frames"][0]["joints"]["Spine"] == [0.0, 1.3, 0.0]
     assert data["frames"][0]["camera_forward"] == [0.0, 0.0, 1.0]
-    assert data["frames"][0]["tool_forward"] == [0.0, 0.0, 1.0]
+    assert data["frames"][0]["tool_forward"] == [0.0, 1.0, 0.0]
     assert data["frames"][0]["posture"]["key"] == "standing"
     assert data["frames"][0]["posture"]["estimated"] is True
     assert data["frames"][0]["posture"]["source"] == "csv_skeleton_joints"

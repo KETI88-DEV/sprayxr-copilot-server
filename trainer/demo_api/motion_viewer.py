@@ -155,13 +155,17 @@ def _rotate(
     )
 
 
-def _rotation_forward(row: dict[str, str], prefix: str) -> list[float] | None:
+def _rotation_forward(
+    row: dict[str, str],
+    prefix: str,
+    local_forward: tuple[float, float, float] = (0.0, 0.0, 1.0),
+) -> list[float] | None:
     normalized = _normalized_row(row)
     values = [_number(normalized.get(f"{prefix} rotation {axis}".casefold())) for axis in "XYZ"]
     if any(value is None for value in values):
         return None
     quaternion = _unity_euler_quaternion(*values)  # type: ignore[arg-type]
-    return [round(value, 6) for value in _rotate(quaternion, (0.0, 0.0, 1.0))]
+    return [round(value, 6) for value in _rotate(quaternion, local_forward)]
 
 
 def _camera_forward(row: dict[str, str]) -> list[float] | None:
@@ -335,7 +339,7 @@ def _sample_csv(
                 "joints": joints,
                 "tracked": tracked,
                 "camera_forward": _camera_forward(row),
-                "tool_forward": _rotation_forward(row, tool_prefix),
+                "tool_forward": _rotation_forward(row, tool_prefix, (0.0, 1.0, 0.0)),
                 "posture": _joint_posture_state(joints),
                 "ray_point": ray_point,
                 "spraying": _spraying(row.get("분사")),
