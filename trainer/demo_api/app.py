@@ -140,6 +140,61 @@ def _clean_openapi_description(value: object, fallback_name: str) -> str:
     return description or f"{fallback_name} 입력값입니다."
 
 
+_OPENAPI_VALUE_GUIDANCE: dict[str, dict[str, str]] = {
+    "response_mode": {
+        "quick": "훈련 중 바로 확인할 핵심 판단과 권장 조치를 짧게 반환합니다.",
+        "detailed": "현재 상황, 판단 근거, 원인과 권장 조치를 구조화해 자세히 반환합니다.",
+    },
+    "task_type": {
+        "trajectory_recomm": "Zone 순서와 도장 경로를 안내합니다.",
+        "pose_recomm": "현재 자세와 전문가 자세의 차이 및 개선 방향을 안내합니다.",
+        "error_analysis": "현재 세션에서 감지된 이상 상태와 원인을 분석합니다.",
+        "knowledge_search": "도장·블라스팅 관련 일반 질문에 답변합니다.",
+    },
+    "use_rag": {
+        "Y": "관련 지식과 현재 세션 문맥을 검색해 답변에 활용합니다.",
+        "N": "별도 지식 검색 없이 전달된 현재 문맥을 중심으로 답변합니다.",
+    },
+}
+
+
+def _openapi_enum_values(node: dict[str, Any], components: dict[str, Any]) -> list[object]:
+    node = _resolve_openapi_schema(node, components)
+    values = node.get("enum")
+    if isinstance(values, list):
+        return values
+    collected: list[object] = []
+    for branch in node.get("anyOf", []):
+        if not isinstance(branch, dict):
+            continue
+        resolved = _resolve_openapi_schema(branch, components)
+        branch_values = resolved.get("enum")
+        if isinstance(branch_values, list):
+            collected.extend(branch_values)
+    return list(dict.fromkeys(collected))
+
+
+def _openapi_parameter_details(
+    name: str, node: dict[str, Any], components: dict[str, Any]
+) -> list[str]:
+    node = _resolve_openapi_schema(node, components)
+    details: list[str] = []
+    if "default" in node and node["default"] is not None:
+        details.append(f"    - 기본값: `{node['default']}`")
+
+    values = _openapi_enum_values(node, components)
+    guidance = _OPENAPI_VALUE_GUIDANCE.get(name, {})
+    if guidance:
+        for value in values:
+            explanation = guidance.get(str(value))
+            if explanation:
+                details.append(f"    - `{value}`: {explanation}")
+    elif values:
+        allowed = ", ".join(f"`{value}`" for value in values)
+        details.append(f"    - 허용값: {allowed}")
+    return details
+
+
 def _operation_input_lines(
     operation: dict[str, Any], components: dict[str, Any]
 ) -> list[str]:
@@ -160,6 +215,7 @@ def _operation_input_lines(
         lines.append(
             f"- `{name}({_openapi_type_label(value_schema, components)})` : {description} **[{marker}]**"
         )
+        lines.extend(_openapi_parameter_details(name, value_schema, components))
         seen.add(name)
 
     request_body = operation.get("requestBody", {})
@@ -184,6 +240,7 @@ def _operation_input_lines(
                         lines.append(
                             f"- `{name}({_openapi_type_label(prop, components)})` : {description} **[{marker}]**"
                         )
+                        lines.extend(_openapi_parameter_details(name, prop, components))
                 elif body_schema:
                     marker = "필수" if request_body.get("required") else "선택"
                     description = _clean_openapi_description(body_schema.get("description"), "body")

@@ -314,6 +314,14 @@ def test_every_public_operation_shows_a_bulleted_input_parameter_overview() -> N
     assert "- `audio(file)` :" in voice
     assert "- `language(string)` :" in voice
 
+    query = schema["paths"]["/api/v1/copilot/query"]["post"]["description"]
+    assert "- `response_mode(string)` :" in query
+    assert "    - 기본값: `quick`" in query
+    assert "    - `quick`: 훈련 중 바로 확인할 핵심 판단과 권장 조치를 짧게 반환합니다." in query
+    assert "    - `detailed`: 현재 상황, 판단 근거, 원인과 권장 조치를 구조화해 자세히 반환합니다." in query
+    assert "    - `trajectory_recomm`: Zone 순서와 도장 경로를 안내합니다." in query
+    assert "    - `Y`: 관련 지식과 현재 세션 문맥을 검색해 답변에 활용합니다." in query
+
     report = schema["paths"]["/api/v1/reports/{report_id}"]["get"]["description"]
     assert "- `report_id(string)` :" in report
 
