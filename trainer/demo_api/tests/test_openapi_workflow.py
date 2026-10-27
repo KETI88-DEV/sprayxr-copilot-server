@@ -322,6 +322,17 @@ def test_every_public_operation_shows_a_bulleted_input_parameter_overview() -> N
     assert "    - `trajectory_recomm`: Zone 순서와 도장 경로를 안내합니다." in query
     assert "    - `Y`: 관련 지식과 현재 세션 문맥을 검색해 답변에 활용합니다." in query
 
+    assert "    - `worker.skill_level(string)` :" in start
+    assert "    - `worker.handedness(string)` :" in start
+
+    analyze = schema["paths"]["/api/v1/copilot/analyze-sequence"]["post"]["description"]
+    assert "    - `sequence_setting.tool_type(string)` :" in analyze
+    assert "    - `sequence_info[].gun_metrics.speed(number)` :" in analyze
+    assert "    - `sequence_info[].gun_metrics.raytexuv(array<number>)` :" in analyze
+    assert "    - `sequence_result.avg_speed_mms(number)` :" in analyze
+    assert "    - `sequence_result.cur_sequence_heatmap[].map_num(integer)` :" in analyze
+    assert "    - `sequence_result.cur_sequence_heatmap[].data(string)` :" in analyze
+
     report = schema["paths"]["/api/v1/reports/{report_id}"]["get"]["description"]
     assert "- `report_id(string)` :" in report
 

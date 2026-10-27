@@ -128,7 +128,16 @@ def _openapi_type_label(node: dict[str, Any], components: dict[str, Any]) -> str
     value_type = node.get("type")
     if value_type == "array":
         items = node.get("items")
-        item_type = _openapi_type_label(items, components) if isinstance(items, dict) else "value"
+        if isinstance(items, dict):
+            item_type = _openapi_type_label(items, components)
+        else:
+            prefix_items = [
+                item for item in node.get("prefixItems", []) if isinstance(item, dict)
+            ]
+            prefix_types = list(
+                dict.fromkeys(_openapi_type_label(item, components) for item in prefix_items)
+            )
+            item_type = " | ".join(prefix_types) if prefix_types else "value"
         return f"array<{item_type}>"
     if value_type == "object" or "properties" in node:
         return "object"
@@ -155,6 +164,24 @@ _OPENAPI_VALUE_GUIDANCE: dict[str, dict[str, str]] = {
         "Y": "관련 지식과 현재 세션 문맥을 검색해 답변에 활용합니다.",
         "N": "별도 지식 검색 없이 전달된 현재 문맥을 중심으로 답변합니다.",
     },
+}
+
+_OPENAPI_DYNAMIC_OBJECT_FIELDS: dict[str, tuple[tuple[str, str, str], ...]] = {
+    "sequence_setting": (
+        ("tool_type", "string", "사용 도구입니다. 스프레이는 spray_gun, 블라스팅은 blasting_gun을 사용합니다."),
+        ("month", "integer", "시뮬레이터가 기록한 훈련 월입니다."),
+        ("nozzle_size", "number", "시뮬레이터에 설정된 노즐 크기입니다."),
+        ("thinning_ratio", "number", "시뮬레이터에 설정된 도료 희석 비율입니다."),
+        ("pressure", "number", "시뮬레이터에 설정된 분사 압력입니다."),
+        ("viscosity", "number", "시뮬레이터에 설정된 도료 점도입니다."),
+    ),
+    "tool_pos_rot": (
+        ("position", "array<number>", "도구 또는 HMD의 월드 위치 [X,Y,Z]입니다."),
+        ("rotation", "array<number>", "도구 또는 HMD의 회전값입니다."),
+    ),
+    "skeleton_joints": (
+        ("{joint_name}", "array<number> | object", "관절 이름별 위치 또는 위치·회전 정보입니다."),
+    ),
 }
 
 
@@ -195,6 +222,76 @@ def _openapi_parameter_details(
     return details
 
 
+def _openapi_structured_schema(
+    node: dict[str, Any], components: dict[str, Any]
+) -> dict[str, Any]:
+    resolved = _resolve_openapi_schema(node, components)
+    if "properties" in resolved or resolved.get("type") == "array":
+        return resolved
+    for branch in resolved.get("anyOf", []):
+        if not isinstance(branch, dict) or branch.get("type") == "null":
+            continue
+        candidate = _resolve_openapi_schema(branch, components)
+        if "properties" in candidate or candidate.get("type") in {"array", "object"}:
+            return candidate
+    return resolved
+
+
+def _openapi_nested_parameter_lines(
+    name: str,
+    node: dict[str, Any],
+    components: dict[str, Any],
+    *,
+    depth: int = 0,
+) -> list[str]:
+    if depth > 4:
+        return []
+    schema = _openapi_structured_schema(node, components)
+    if schema.get("type") == "array":
+        items = schema.get("items")
+        if isinstance(items, dict):
+            return _openapi_nested_parameter_lines(
+                f"{name}[]", items, components, depth=depth + 1
+            )
+        return []
+
+    properties = schema.get("properties")
+    if not isinstance(properties, dict) or not properties:
+        dynamic = _OPENAPI_DYNAMIC_OBJECT_FIELDS.get(name.rsplit(".", 1)[-1], ())
+        return [
+            f"    - `{name}.{field_name}({field_type})` : {description} **[선택]**"
+            for field_name, field_type, description in dynamic
+        ]
+
+    required_names = set(schema.get("required", []))
+    lines: list[str] = []
+    for child_name, child in properties.items():
+        if not isinstance(child, dict):
+            continue
+        child_path = f"{name}.{child_name}"
+        marker = "필수" if child_name in required_names else "선택"
+        description = _clean_openapi_description(child.get("description"), child_path)
+        constraints: list[str] = []
+        resolved_child = _resolve_openapi_schema(child, components)
+        if "default" in resolved_child and resolved_child["default"] is not None:
+            constraints.append(f"기본값 `{resolved_child['default']}`")
+        values = _openapi_enum_values(child, components)
+        if values:
+            constraints.append("허용값 " + ", ".join(f"`{value}`" for value in values))
+        if constraints:
+            description += " (" + "; ".join(constraints) + ")"
+        lines.append(
+            f"    - `{child_path}({_openapi_type_label(child, components)})` : "
+            f"{description} **[{marker}]**"
+        )
+        lines.extend(
+            _openapi_nested_parameter_lines(
+                child_path, child, components, depth=depth + 1
+            )
+        )
+    return lines
+
+
 def _operation_input_lines(
     operation: dict[str, Any], components: dict[str, Any]
 ) -> list[str]:
@@ -216,6 +313,7 @@ def _operation_input_lines(
             f"- `{name}({_openapi_type_label(value_schema, components)})` : {description} **[{marker}]**"
         )
         lines.extend(_openapi_parameter_details(name, value_schema, components))
+        lines.extend(_openapi_nested_parameter_lines(name, value_schema, components))
         seen.add(name)
 
     request_body = operation.get("requestBody", {})
@@ -241,6 +339,7 @@ def _operation_input_lines(
                             f"- `{name}({_openapi_type_label(prop, components)})` : {description} **[{marker}]**"
                         )
                         lines.extend(_openapi_parameter_details(name, prop, components))
+                        lines.extend(_openapi_nested_parameter_lines(name, prop, components))
                 elif body_schema:
                     marker = "필수" if request_body.get("required") else "선택"
                     description = _clean_openapi_description(body_schema.get("description"), "body")
