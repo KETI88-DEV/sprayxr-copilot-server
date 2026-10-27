@@ -129,23 +129,47 @@ def _flow_text(value: object) -> str | None:
 
 
 def _structured_detail_fallback(
-    task_type: str, base_answer: str, analysis_context: dict[str, object]
+    task_type: str,
+    base_answer: str,
+    analysis_context: dict[str, object],
+    *,
+    interpretation: str | None = None,
 ) -> str:
-    """Guarantee useful detail when the LLM merely echoes the short answer."""
-    lines = [base_answer.rstrip()]
+    """Build a standalone analysis, not a quick answer with text appended."""
     if task_type == "trajectory_recomm":
-        selected = _flow_text(analysis_context.get("selected_flow"))
+        recommended = _flow_text(analysis_context.get("recommended_flow"))
+        selected = _flow_text(
+            analysis_context.get("selected_flow") or analysis_context.get("first_visit_flow")
+        )
+        adherence_value = analysis_context.get("adherence_rate")
+        adherence = _percent_text(adherence_value)
+        try:
+            adherence_number = float(adherence_value)  # type: ignore[arg-type]
+            if adherence_number <= 1:
+                adherence_number *= 100
+        except (TypeError, ValueError):
+            adherence_number = -1
+        if adherence_number >= 90:
+            verdict = "전문가 기준 흐름과 거의 일치하며 Zone 전환 순서가 안정적입니다."
+        elif adherence_number >= 70:
+            verdict = "전체 흐름은 대체로 맞지만 일부 Zone 전환 순서를 조정할 필요가 있습니다."
+        else:
+            verdict = "전문가 기준과 순서 차이가 있어 Zone 전환 순서를 우선 교정해야 합니다."
+        comparison = []
+        if recommended:
+            comparison.append(f"권장 순서: {recommended}")
         if selected:
-            lines.append(f"실제 수행 순서는 {selected}입니다.")
+            comparison.append(f"실제 수행: {selected}")
+        if adherence:
+            comparison.append(f"순서 준수율은 {adherence}입니다.")
         metrics = (
-            ("순서 준수율", "은", "adherence_rate"),
             ("가장 가까운 전문가 수행과의 유사도", "는", "best_reference_similarity"),
             ("순번별 통계 유사도", "는", "position_similarity"),
         )
         for label, particle, key in metrics:
             value = _percent_text(analysis_context.get(key))
             if value is not None:
-                lines.append(f"{label}{particle} {value}입니다.")
+                comparison.append(f"{label}{particle} {value}입니다.")
         direction = analysis_context.get("direction_summary")
         if isinstance(direction, dict) and direction.get("classification"):
             direction_label = {
@@ -154,13 +178,29 @@ def _structured_detail_fallback(
                 "diagonal": "대각선",
                 "irregular": "비정형",
             }.get(str(direction["classification"]), str(direction["classification"]))
-            lines.append(f"주요 도포 방향은 {direction_label}입니다.")
+            comparison.append(f"주요 도포 방향은 {direction_label}입니다.")
+        if not interpretation:
+            if recommended and selected and recommended == selected:
+                interpretation = "현재 수행은 권장 Zone 방문 흐름과 일치합니다. 순서보다 각 Zone 내부의 도포 품질을 유지하는 데 집중하면 됩니다."
+            else:
+                interpretation = "권장 흐름과 실제 수행을 순번별로 비교하면 다른 지점이 있으므로, 다음 작업에서는 최초로 달라지는 전환 구간부터 교정하는 것이 효과적입니다."
+        action = (
+            "현재 Zone 순서를 유지하면서 속도·이격거리와 Zone 내부 도포 패턴을 함께 점검하세요."
+            if recommended and selected and recommended == selected
+            else f"다음 수행에서는 {recommended or '표시된 권장 순서'}를 화면에 두고 Zone 전환 직전에 다음 Zone을 확인하세요."
+        )
+        return (
+            "[상세 분석]\n[종합 판단]\n" + verdict
+            + "\n\n[정량 비교]\n" + ("\n".join(comparison) or "비교 가능한 순서 지표가 없습니다.")
+            + "\n\n[해석]\n" + interpretation
+            + "\n\n[권장 조치]\n" + action
+        )
     elif task_type == "pose_recomm":
         similarity = _percent_text(analysis_context.get("similarity_percent"))
-        if similarity is not None:
-            lines.append(f"전체 자세 유사도는 {similarity}입니다.")
+        comparison = [f"전체 자세 유사도는 {similarity}입니다."] if similarity else []
         zones = analysis_context.get("zones")
         zone_rows = list(zones.values()) if isinstance(zones, dict) else zones
+        worst_text = None
         if isinstance(zone_rows, list):
             candidates = [row for row in zone_rows if isinstance(row, dict)]
             scored = [
@@ -171,25 +211,41 @@ def _structured_detail_fallback(
             if scored:
                 _, worst = min(scored, key=lambda item: item[0])
                 score = _percent_text(worst.get("similarity_percent"))
-                lines.append(f"가장 낮은 구역은 Zone {worst.get('zone_id')}({score})입니다.")
+                worst_text = f"가장 낮은 구역은 Zone {worst.get('zone_id')}({score})입니다."
+                comparison.append(worst_text)
         corrections = analysis_context.get("corrections")
+        messages: list[str] = []
         if isinstance(corrections, list):
             messages = [
                 str(item.get("message")) if isinstance(item, dict) and item.get("message") else str(item)
                 for item in corrections[:3]
             ]
             messages = [message for message in messages if message and message != "None"]
-            if messages:
-                lines.append("우선 개선할 내용은 " + " ".join(messages))
-    return "\n".join(lines)
+        verdict = "전문가 자세와의 차이를 Zone별로 확인했습니다."
+        if interpretation is None:
+            interpretation = worst_text or base_answer
+        action = " ".join(messages) if messages else "현재 자세를 유지하되 몸통 기울기와 양손 위치를 다음 Zone에서도 일정하게 유지하세요."
+        return (
+            "[상세 분석]\n[종합 판단]\n" + verdict
+            + "\n\n[정량 비교]\n" + ("\n".join(comparison) or "비교 가능한 자세 지표가 없습니다.")
+            + "\n\n[해석]\n" + interpretation
+            + "\n\n[권장 조치]\n" + action
+        )
+    return "[상세 분석]\n" + (interpretation or base_answer)
 
 
 def _trim_dangling_detail_label(candidate: str) -> str:
     return re.sub(r"(?:\n|\s)*(?:근거|분석|상세)\s*:\s*$", "", candidate).strip()
 
 
-def _is_substantive_detail(base_answer: str, candidate: str) -> bool:
-    return candidate != base_answer.strip() and len(candidate) >= len(base_answer.strip()) + 30
+def _detail_interpretation(base_answer: str, candidate: str) -> str | None:
+    """Keep useful LLM interpretation, but reject a copied quick answer."""
+    if candidate.startswith(base_answer.strip()):
+        candidate = candidate[len(base_answer.strip()):].strip()
+        # A response built by appending statistics to the quick answer is exactly
+        # what detailed mode must avoid; the structured formatter handles it better.
+        return None
+    return candidate if len(candidate) >= 30 else None
 
 
 def error_response(code: int, message: str) -> JSONResponse:
@@ -353,10 +409,12 @@ async def execute_copilot_query(
             result = await to_thread.run_sync(_guarded_detail_run)
             parsed = parse_knowledge_answer(str(result.get("response", "")), [])
             candidate = _trim_dangling_detail_label(parsed.body)
-            if candidate and _is_substantive_detail(base_answer, candidate):
-                return candidate, bool(result.get("deadline_hit", False))
+            interpretation = _detail_interpretation(base_answer, candidate) if candidate else None
             return _structured_detail_fallback(
-                query.task_type, base_answer, analysis_context
+                query.task_type,
+                base_answer,
+                analysis_context,
+                interpretation=interpretation,
             ), bool(result.get("deadline_hit", False))
         except Exception:  # noqa: BROAD_EXCEPT_OK - verified deterministic answer remains available
             logger.exception(

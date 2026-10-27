@@ -213,8 +213,9 @@ def test_detailed_order_mode_synthesizes_the_structured_report_instead_of_repeat
     )).json()["data"]
 
     assert quick["answer"].startswith("전형기 반장 6회 기준 대표 흐름은")
-    assert detailed["answer"].startswith("전문가 6회 기준으로")
+    assert detailed["answer"].startswith("[상세 분석]")
     assert detailed["answer"] != quick["answer"]
+    assert not detailed["answer"].startswith(f"[상세 분석]\n{quick['answer']}")
     assert not detailed["answer"].rstrip().endswith("근거:")
     assert len(pipeline.calls) == 1
     assert "[서버 구조화 분석 결과]" in pipeline.calls[0]["instruction"]
@@ -265,8 +266,13 @@ def test_motion_viewer_analysis_context_supports_quick_and_detailed_without_a_co
 
     assert quick["answer"] == "전문가 대표 흐름은 1 → 3 → 2입니다."
     assert quick["context_status"] == "available"
-    assert "실제 수행 순서는 1 → 2 → 3" in detailed["answer"]
+    assert detailed["answer"].startswith("[상세 분석]\n[종합 판단]")
+    assert not detailed["answer"].startswith(f"[상세 분석]\n{quick['answer']}")
+    assert "[정량 비교]" in detailed["answer"]
+    assert "실제 수행: 1 → 2 → 3" in detailed["answer"]
     assert "순서 준수율은 67%" in detailed["answer"]
+    assert "[해석]" in detailed["answer"]
+    assert "[권장 조치]" in detailed["answer"]
     assert not detailed["answer"].rstrip().endswith("근거:")
     assert detailed["answer"] != quick["answer"]
     assert detailed["sequence_context"]["recommended_flow"] == ["1", "3", "2"]
