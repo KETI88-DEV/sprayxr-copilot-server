@@ -1021,6 +1021,12 @@ def test_motion_viewer_keeps_the_last_spraying_zone_and_gives_skeleton_more_heig
     assert ".skeleton-card{height:auto;display:block}" in page.text
     assert ".skeleton-screen{height:310px;min-height:310px;flex:none}" in page.text
     assert ".coating-screen{position:relative;min-height:220px;flex:1" in page.text
+    assert (
+        '<div id="coatingStatus" class="coating-status">도막 기준 준비 중</div>'
+        '<div class="coating-screen"><canvas id="coatingCanvas"'
+    ) in page.text
+    assert ".coating-status{flex:none;margin:0 10px 8px" in page.text
+    assert ".coating-status{position:absolute" not in page.text
     assert ".skeleton-screen{height:300px;min-height:300px}" in page.text
     assert "frame && frame.spraying && Number(frame.zone_id) > 0" in coating.text
     assert "if (!next || next === zoneKey) return;" in coating.text
