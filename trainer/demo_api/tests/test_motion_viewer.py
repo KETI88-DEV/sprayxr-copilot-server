@@ -1030,6 +1030,19 @@ def test_skeleton_viewer_can_toggle_display_only_lower_body_correction(tmp_path:
     assert "$('skeletonCorrection').onchange=draw" in page.text
 
 
+def test_crouched_skeleton_correction_tracks_joint_bend_and_keeps_torso_above_pelvis(
+    tmp_path: Path,
+) -> None:
+    script = _client(tmp_path).get("/motion-viewer/assets/motion_viewer_pose.js")
+
+    assert script.status_code == 200
+    assert "function stabilizeCrouchedTorso" in script.text
+    assert "frame?.posture?.knee_angle_deg" in script.text
+    assert "const rawFootOffset" in script.text
+    assert "corrected.Spine[1]" in script.text
+    assert "corrected.Chest[1]" in script.text
+
+
 def test_motion_viewer_keeps_the_last_spraying_zone_and_gives_skeleton_more_height(
     tmp_path: Path,
 ) -> None:
