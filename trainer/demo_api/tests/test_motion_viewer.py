@@ -1014,33 +1014,19 @@ def test_pose_assets_define_layers_and_interaction_states(tmp_path: Path) -> Non
         assert text in coating.text
 
 
-def test_skeleton_viewer_can_toggle_display_only_lower_body_correction(tmp_path: Path) -> None:
+def test_skeleton_viewer_uses_raw_csv_joints_without_pose_correction(tmp_path: Path) -> None:
     client = _client(tmp_path)
     page = client.get("/motion-viewer")
     script = client.get("/motion-viewer/assets/motion_viewer_pose.js")
 
     assert page.status_code == 200
     assert script.status_code == 200
-    assert 'id="skeletonCorrection" type="checkbox" checked' in page.text
-    assert "하반신 자세 보정" in page.text
-    assert "평가에는 원본 관절값을 유지" in page.text
-    assert "function correctLowerBody" in script.text
-    assert "function solveTwoBoneLeg" in script.text
-    assert "if (byId('skeletonCorrection')?.checked)" in script.text
-    assert "$('skeletonCorrection').onchange=draw" in page.text
-
-
-def test_crouched_skeleton_correction_tracks_joint_bend_and_keeps_torso_above_pelvis(
-    tmp_path: Path,
-) -> None:
-    script = _client(tmp_path).get("/motion-viewer/assets/motion_viewer_pose.js")
-
-    assert script.status_code == 200
-    assert "function stabilizeCrouchedTorso" in script.text
-    assert "frame?.posture?.knee_angle_deg" in script.text
-    assert "const rawFootOffset" in script.text
-    assert "corrected.Spine[1]" in script.text
-    assert "corrected.Chest[1]" in script.text
+    assert 'id="skeletonCorrection"' not in page.text
+    assert "하반신 자세 보정" not in page.text
+    assert "function correctLowerBody" not in script.text
+    assert "function solveTwoBoneLeg" not in script.text
+    assert "motionViewerCorrectLowerBody" not in page.text
+    assert "const joints=uprightSkeleton(frame&&frame.joints||{})" in page.text
 
 
 def test_motion_viewer_keeps_the_last_spraying_zone_and_gives_skeleton_more_height(
