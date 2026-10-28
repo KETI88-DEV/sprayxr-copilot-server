@@ -393,6 +393,8 @@ def test_motion_returns_real_representative_frames_and_cross_session_spread(tmp_
         "role": "expert",
     }
     assert data["statistics"][0]["spread"]["Pelvis"] > 0
+    assert data["paint_trace"][0]["uv"] == [0.0, 0.0]
+    assert data["zone_surfaces"][0]["reference_uv_cell_count"] == 5
     assert data["reference_order_evaluation"] == {
         "recommended_flow": ["1"],
         "selected_flow": ["1"],
@@ -943,6 +945,8 @@ def test_viewer_overlay_contains_a_matching_translucent_realtime_hud(tmp_path: P
         "realtimeHudSpeed",
         "realtimeHudDistance",
         "realtimeHudAxis",
+        "realtimeHudDirection",
+        "realtimeHudCoverage",
     ):
         assert f'id="{element_id}"' in page.text
     assert ".realtime-hud" in page.text
@@ -953,6 +957,11 @@ def test_viewer_overlay_contains_a_matching_translucent_realtime_hud(tmp_path: P
     assert "distance_mm" in script.text
     assert "lastRealtimeZone" in script.text
     assert "value == null || value === ''" in script.text
+    assert "buildRealtimeGuidance" in script.text
+    assert "reference_uv_cell_count" in script.text
+    assert "sample.uv" in script.text
+    assert "도장 방향" in page.text
+    assert "도포 범위" in page.text
 
 
 def test_pose_assets_define_layers_and_interaction_states(tmp_path: Path) -> None:

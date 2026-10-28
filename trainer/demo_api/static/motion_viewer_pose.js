@@ -36,9 +36,12 @@
   let lastPlaybackZone = null;
   let lastRealtimeZone = null;
   let lastRealtimeTelemetry = null;
+  let lastRealtimeGuidance = null;
   let lastTelemetryTime = null;
   let telemetrySamples = [];
+  let realtimeGuidance = [];
   const HUD_WINDOW_SECONDS = .5;
+  const HUD_UV_CELL_SIZE = 32;
 
   function currentZoneFromFrame(frame) {
     if (!(frame?.spraying && Number(frame?.zone_id) > 0 && frame?.map_num != null)) return null;
@@ -156,6 +159,78 @@
     return {tone: 'alert', label: '교정'};
   }
 
+  function paintDirection(delta) {
+    const length = Math.hypot(delta[0], delta[1]);
+    if (length <= 1e-6) return null;
+    const verticalRatio = Math.abs(delta[1]) / length;
+    if (verticalRatio >= .7) return 'vertical';
+    if (verticalRatio <= .3) return 'horizontal';
+    return 'diagonal';
+  }
+
+  function directionLabel(value) {
+    return ({horizontal: '수평', vertical: '수직', diagonal: '대각선', irregular: '비정형'})[value] || '분석 중';
+  }
+
+  function buildRealtimeGuidance(payload) {
+    const referenceCells = new Map((payload?.zone_surfaces || []).map(surface => [
+      `${surface.map_num}:${surface.zone_id}`,
+      Number(surface.reference_uv_cell_count) || 0,
+    ]));
+    const states = new Map();
+    const trace = payload?.paint_trace || [];
+    let traceIndex = 0;
+    let latest = null;
+    return (payload?.frames || []).map(frame => {
+      while (traceIndex < trace.length && Number(trace[traceIndex].t || 0) <= Number(frame.t || 0) + 1e-6) {
+        const sample = trace[traceIndex++];
+        const key = `${sample.map_num}:${sample.zone_id}`;
+        const uv = sample.uv;
+        const {segment} = sample;
+        if (!(Number(sample.zone_id) > 0) || !Array.isArray(uv)) continue;
+        const state = states.get(key) || {cells: new Set(), recent: [], previousUv: null, segment: null};
+        if (state.segment !== segment) {
+          state.previousUv = null;
+          state.recent = [];
+        }
+        state.segment = segment;
+        state.cells.add(`${Math.round(Number(uv[0]) / HUD_UV_CELL_SIZE)}:${Math.round(Number(uv[1]) / HUD_UV_CELL_SIZE)}`);
+        if (state.previousUv) {
+          const direction = paintDirection([Number(uv[0]) - state.previousUv[0], Number(uv[1]) - state.previousUv[1]]);
+          if (direction) state.recent.push(direction);
+          if (state.recent.length > 18) state.recent.shift();
+        }
+        state.previousUv = [Number(uv[0]), Number(uv[1])];
+        states.set(key, state);
+        const counts = state.recent.reduce((result, direction) => ({...result, [direction]: (result[direction] || 0) + 1}), {});
+        const ranked = Object.entries(counts).sort((left, right) => right[1] - left[1]);
+        const dominant = ranked[0]?.[0] || null;
+        const confidence = dominant ? ranked[0][1] / state.recent.length : 0;
+        const denominator = referenceCells.get(key) || 0;
+        latest = {
+          key,
+          direction: confidence >= .55 ? dominant : state.recent.length ? 'irregular' : null,
+          coverage: denominator ? Math.min(100, state.cells.size / denominator * 100) : null,
+        };
+      }
+      return latest ? {...latest} : null;
+    });
+  }
+
+  function directionState(actual, expected) {
+    if (!actual) return {tone: 'idle', label: '분석 중'};
+    if (!expected) return {tone: 'ok', label: '측정'};
+    return actual === expected
+      ? {tone: 'ok', label: '일치'}
+      : {tone: actual === 'irregular' ? 'alert' : 'warn', label: '교정'};
+  }
+
+  function coverageState(value) {
+    if (value == null) return {tone: 'idle', label: '대기'};
+    if (value >= 80) return {tone: 'ok', label: '충분'};
+    return {tone: 'warn', label: value < 20 ? '시작' : '진행 중'};
+  }
+
   function setHudMetric(valueId, stateId, value, state, formatter, reference = null) {
     const valueNode = byId(valueId);
     const stateNode = byId(stateId);
@@ -165,11 +240,22 @@
     stateNode.className = `realtime-hud-state ${state.tone}`;
   }
 
-  function updateRealtimeHud(frame) {
+  function setHudTextMetric(valueId, stateId, value, state) {
+    const valueNode = byId(valueId);
+    const stateNode = byId(stateId);
+    valueNode.textContent = value || '—';
+    stateNode.textContent = state.label;
+    stateNode.className = `realtime-hud-state ${state.tone}`;
+  }
+
+  function updateRealtimeHud(frame, sourceIndex) {
     const currentZone = currentZoneFromFrame(frame);
     if (currentZone) lastRealtimeZone = currentZone;
     const zone = lastRealtimeZone;
     const telemetry = telemetryForFrame(frame) || {};
+    const preparedGuidance = realtimeGuidance[sourceIndex] || null;
+    if (preparedGuidance) lastRealtimeGuidance = preparedGuidance;
+    const guidance = lastRealtimeGuidance || {};
     const reference = zone ? data?.zone_statistics?.[zone.key] || {} : {};
     const hud = byId('realtimeHud');
     const zoneNode = byId('realtimeHudZone');
@@ -202,6 +288,15 @@
     setHudMetric(
       'realtimeHudAxis', 'realtimeHudAxisState', telemetry.axis,
       axisState(telemetry.axis), value => `${value.toFixed(1)}°`,
+    );
+    const expectedDirection = reference.expected_direction || null;
+    setHudTextMetric(
+      'realtimeHudDirection', 'realtimeHudDirectionState', directionLabel(guidance.direction),
+      directionState(guidance.direction, expectedDirection),
+    );
+    setHudMetric(
+      'realtimeHudCoverage', 'realtimeHudCoverageState', guidance.coverage,
+      coverageState(guidance.coverage), value => `${Math.round(value)}%`,
     );
   }
 
@@ -338,10 +433,10 @@
     }));
   }
 
-  function drawPoseOverlay({frame, center, w, h, playheadSeconds, durationSeconds}) {
+  function drawPoseOverlay({frame, sourceIndex, center, w, h, playheadSeconds, durationSeconds}) {
     drawTrustedUpperBody(frame, center, w, h);
     drawOrientationGuides(frame, center, w, h);
-    updateRealtimeHud(frame);
+    updateRealtimeHud(frame, sourceIndex);
     renderPoseSummary(frame);
     const currentZone = currentZoneFromFrame(frame);
     if (currentZone) lastPlaybackZone = currentZone;
@@ -367,8 +462,10 @@
     lastPlaybackZone = null;
     lastRealtimeZone = null;
     lastRealtimeTelemetry = null;
+    lastRealtimeGuidance = null;
     lastTelemetryTime = null;
     telemetrySamples = [];
+    realtimeGuidance = buildRealtimeGuidance(event.detail);
     const badge = byId('playbackZoneBadge');
     if (badge) badge.hidden = true;
     renderZoneTimeline(event.detail);

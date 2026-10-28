@@ -812,6 +812,7 @@ def _build_zone_surface(
         "boundary_edges": boundary_edges,
         "centroid": centroid,
         "observed_point_count": sum(sample["count"] for sample in samples.values()),
+        "reference_uv_cell_count": len(samples),
     }
 
 
@@ -1588,6 +1589,8 @@ def _dense_paint_trace_cached(
             normalized = _normalized_row(row)
             map_num = map_zone[0] if map_zone else None
             zone_id = map_zone[1] if map_zone else str(normalized.get("zone id", "")).strip() or None
+            u = map_zone[2] if map_zone else None
+            v = map_zone[3] if map_zone else None
             identity = (map_num, zone_id)
             if previous_identity != identity:
                 flush_pending()
@@ -1599,6 +1602,8 @@ def _dense_paint_trace_cached(
                 tuple(point),
                 map_num,
                 zone_id,
+                u,
+                v,
                 segment,
             )
             if last_kept_time is None or current_time - last_kept_time >= interval - 1e-9:
@@ -1632,10 +1637,11 @@ def _dense_paint_trace(
             "point": list(point),
             "map_num": map_num,
             "zone_id": zone_id,
+            "uv": [u, v] if u is not None and v is not None else None,
             "segment": segment,
             "progress": round(index / max(1, len(raw) - 1), 6),
         }
-        for index, (frame_index, time, point, map_num, zone_id, segment) in enumerate(raw)
+        for index, (frame_index, time, point, map_num, zone_id, u, v, segment) in enumerate(raw)
     ]
 
 
@@ -1738,7 +1744,7 @@ button{cursor:pointer;font-weight:700}.primary{background:#3157d5;border-color:#
 <label class="toggle"><input id="zoneSurface" type="checkbox" checked>Zone 영역 표시</label>
 <div id="status" class="status">데이터를 불러오는 중입니다.</div>
 </div></aside>
-<section class="stage"><div class="stage-viewport"><canvas id="canvas"></canvas><div class="overlay"><strong id="overlayTitle">학습모드</strong><span id="overlayFrame">프레임 준비 중</span><div id="viewerLegend" class="viewer-legend"><div><i class="dot" style="background:#f5f8ff"></i>전문가 전체 Ray Point 점군</div><div><i class="dot" style="background:#a78bfa"></i>Map·Zone별 관측 영역</div><div><i class="dot" style="background:var(--green)"></i>Zone별 전문가 표준 도장 패턴</div><div><i class="dot" style="background:#ff8a3d"></i>선택 기록의 페인트 누적 궤적</div><div><i class="dot" style="background:var(--cyan)"></i>머리·양손 실측 위치와 추정 상체</div></div><div id="realtimeHud" class="realtime-hud"><div class="realtime-hud-head"><strong id="realtimeHudZone">Zone 대기</strong><span id="realtimeHudActivity" class="realtime-hud-activity">이동 중</span></div><div class="realtime-hud-grid"><div class="realtime-hud-row"><span class="realtime-hud-label">속도</span><span id="realtimeHudSpeed" class="realtime-hud-value">—</span><span id="realtimeHudSpeedState" class="realtime-hud-state idle">대기</span></div><div class="realtime-hud-row"><span class="realtime-hud-label">이격거리</span><span id="realtimeHudDistance" class="realtime-hud-value">—</span><span id="realtimeHudDistanceState" class="realtime-hud-state idle">대기</span></div><div class="realtime-hud-row"><span class="realtime-hud-label">분사축 편차</span><span id="realtimeHudAxis" class="realtime-hud-value">—</span><span id="realtimeHudAxisState" class="realtime-hud-state idle">대기</span></div></div></div></div><div id="loading" class="loading"><div class="spinner"></div><span>전문가 기록을 불러오는 중입니다.</span></div></div><div class="playback-dock"><div class="playback-status"><div class="playback-live"><strong id="playbackZone">현재 Zone 대기 중</strong><span id="playbackZoneBadge" class="playback-zone-badge" hidden>Zone 대기</span></div><span id="playbackTime">0.00 / 0.00초</span></div><div id="zoneTimeline" class="zone-timeline" aria-label="Zone 진행 구간"></div><input id="timeline" type="range" min="0" max="0" value="0" aria-label="진행 위치"><div class="playback-controls"><button id="play" class="primary">재생</button><button id="restart">처음으로</button><div class="speed-control"><label for="speed">재생 속도</label><select id="speed" aria-label="재생 속도"><option value="0.25">0.25배</option><option value="0.5">0.5배</option><option value="1" selected>1.0배</option><option value="1.5">1.5배</option><option value="2">2.0배</option><option value="3">3.0배</option></select></div></div></div></section>
+<section class="stage"><div class="stage-viewport"><canvas id="canvas"></canvas><div class="overlay"><strong id="overlayTitle">학습모드</strong><span id="overlayFrame">프레임 준비 중</span><div id="viewerLegend" class="viewer-legend"><div><i class="dot" style="background:#f5f8ff"></i>전문가 전체 Ray Point 점군</div><div><i class="dot" style="background:#a78bfa"></i>Map·Zone별 관측 영역</div><div><i class="dot" style="background:var(--green)"></i>Zone별 전문가 표준 도장 패턴</div><div><i class="dot" style="background:#ff8a3d"></i>선택 기록의 페인트 누적 궤적</div><div><i class="dot" style="background:var(--cyan)"></i>머리·양손 실측 위치와 추정 상체</div></div><div id="realtimeHud" class="realtime-hud"><div class="realtime-hud-head"><strong id="realtimeHudZone">Zone 대기</strong><span id="realtimeHudActivity" class="realtime-hud-activity">이동 중</span></div><div class="realtime-hud-grid"><div class="realtime-hud-row"><span class="realtime-hud-label">속도</span><span id="realtimeHudSpeed" class="realtime-hud-value">—</span><span id="realtimeHudSpeedState" class="realtime-hud-state idle">대기</span></div><div class="realtime-hud-row"><span class="realtime-hud-label">이격거리</span><span id="realtimeHudDistance" class="realtime-hud-value">—</span><span id="realtimeHudDistanceState" class="realtime-hud-state idle">대기</span></div><div class="realtime-hud-row"><span class="realtime-hud-label">분사축 편차</span><span id="realtimeHudAxis" class="realtime-hud-value">—</span><span id="realtimeHudAxisState" class="realtime-hud-state idle">대기</span></div><div class="realtime-hud-row"><span class="realtime-hud-label">도장 방향</span><span id="realtimeHudDirection" class="realtime-hud-value">—</span><span id="realtimeHudDirectionState" class="realtime-hud-state idle">대기</span></div><div class="realtime-hud-row"><span class="realtime-hud-label">도포 범위</span><span id="realtimeHudCoverage" class="realtime-hud-value">—</span><span id="realtimeHudCoverageState" class="realtime-hud-state idle">대기</span></div></div></div></div><div id="loading" class="loading"><div class="spinner"></div><span>전문가 기록을 불러오는 중입니다.</span></div></div><div class="playback-dock"><div class="playback-status"><div class="playback-live"><strong id="playbackZone">현재 Zone 대기 중</strong><span id="playbackZoneBadge" class="playback-zone-badge" hidden>Zone 대기</span></div><span id="playbackTime">0.00 / 0.00초</span></div><div id="zoneTimeline" class="zone-timeline" aria-label="Zone 진행 구간"></div><input id="timeline" type="range" min="0" max="0" value="0" aria-label="진행 위치"><div class="playback-controls"><button id="play" class="primary">재생</button><button id="restart">처음으로</button><div class="speed-control"><label for="speed">재생 속도</label><select id="speed" aria-label="재생 속도"><option value="0.25">0.25배</option><option value="0.5">0.5배</option><option value="1" selected>1.0배</option><option value="1.5">1.5배</option><option value="2">2.0배</option><option value="3">3.0배</option></select></div></div></div></section>
 <aside class="side right"><div class="hidden-data-hooks"><strong id="currentZone">대기 중</strong><div id="zoneOrder"></div><div id="zoneDetail"></div><strong id="sessionCount">-</strong><strong id="duration">-</strong></div>
 <details class="card skeleton-card" open><summary>CSV 조인트 기반 전신 스켈레톤</summary><div class="skeleton-screen"><canvas id="skeletonCanvas" aria-label="CSV 조인트 기반 전신 스켈레톤"></canvas><span id="skeletonPosture" class="skeleton-posture">자세 판정 대기</span><span id="skeletonAngle" class="skeleton-angle">정면 · 0°</span></div><div class="skeleton-controls"><button id="skeletonTurnLeft" class="skeleton-turn" aria-label="스켈레톤 왼쪽 회전" title="왼쪽으로 15도 회전">↶</button><button id="skeletonReset" class="skeleton-reset">정면 복귀</button><button id="skeletonTurnRight" class="skeleton-turn" aria-label="스켈레톤 오른쪽 회전" title="오른쪽으로 15도 회전">↷</button></div><div class="skeleton-note">CSV의 Pelvis·몸통·팔·다리 조인트를 그대로 연결한 전신 표현입니다. 자세 유형은 양쪽 무릎 굽힘과 몸통 기울기로 추정하며, 시뮬레이터 IK 관절이므로 실측 점수와 분리합니다.</div></details>
 <section class="card coating-card"><div class="coating-header"><strong>현재 Zone 도막 분포</strong><span id="coatingZone">Zone 대기 중</span></div><div class="coating-switch"><button id="coatingView2d" class="active" type="button">2D 분포</button><button id="coatingView3d" type="button">3D 높이</button></div><div id="coatingStatus" class="coating-status">도막 기준 준비 중</div><div class="coating-screen"><canvas id="coatingCanvas" aria-label="전문가 최종 높이맵 기반 현재 Zone 도막 분포"></canvas></div><div class="coating-legend"><span>얇음</span><span>중간</span><span>두꺼움</span></div><div class="coating-note">전문가 최종 높이맵과 Zone별 raytexuv를 최초 전처리한 상대 높이입니다. 실제 두께 단위가 아닌 시각적 강조 표현입니다.</div></section></aside>
