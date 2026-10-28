@@ -18,6 +18,8 @@
   const addVector = (a, b) => a.map((value, axis) => value + b[axis]);
   const scaleVector = (a, scalar) => a.map(value => value * scalar);
   const vectorLength = a => Math.hypot(...a);
+  const dotVector = (a, b) => a.reduce((sum, value, axis) => sum + value * b[axis], 0);
+  const clamp = (value, minimum, maximum) => Math.max(minimum, Math.min(maximum, value));
   const normalize = (a, fallback = [0, 0, 1]) => {
     const size = vectorLength(a);
     return size > 1e-6 ? scaleVector(a, 1 / size) : fallback;
@@ -87,6 +89,59 @@
     if (body.rightHand) point(body.rightHand, 7, '#22d3ee', center, width, height);
     if (body.leftHand) point(body.leftHand, 6, '#8be9fd', center, width, height);
   }
+
+  function solveTwoBoneLeg(hip, desiredFoot, upperLength, lowerLength, pole) {
+    const targetVector = subtract(desiredFoot, hip);
+    const targetDistance = vectorLength(targetVector);
+    if (targetDistance <= 1e-6) return {knee: addVector(hip, [0, -upperLength, 0]), foot: desiredFoot};
+    const direction = normalize(targetVector, [0, -1, 0]);
+    const minimumReach = Math.abs(upperLength - lowerLength) + 1e-4;
+    const maximumReach = upperLength + lowerLength - 1e-4;
+    const distance = clamp(targetDistance, minimumReach, maximumReach);
+    const foot = addVector(hip, scaleVector(direction, distance));
+    const along = (upperLength ** 2 - lowerLength ** 2 + distance ** 2) / (2 * distance);
+    const height = Math.sqrt(Math.max(0, upperLength ** 2 - along ** 2));
+    const polePerpendicular = subtract(pole, scaleVector(direction, dotVector(pole, direction)));
+    const bendDirection = normalize(polePerpendicular, [0, 0, 1]);
+    const knee = addVector(addVector(hip, scaleVector(direction, along)), scaleVector(bendDirection, height));
+    return {knee, foot};
+  }
+
+  function correctLowerBody(joints, frame) {
+    if (byId('skeletonCorrection')?.checked) {
+      // Display-only correction continues below; evaluation keeps the raw CSV joints.
+    } else return joints;
+    const posture = frame?.posture?.key;
+    if (!['lowered', 'deep_bend'].includes(posture) || !joints?.Pelvis) return joints;
+    const corrected = Object.fromEntries(Object.entries(joints).map(([name, point]) => [name, [...point]]));
+    const pelvis = corrected.Pelvis;
+    const rawHipWidth = corrected['Left Thigh'] && corrected['Right Thigh']
+      ? vectorLength(subtract(corrected['Right Thigh'], corrected['Left Thigh'])) / 2
+      : .12;
+    const hipHalfWidth = clamp(rawHipWidth, .09, .15);
+    const depth = posture === 'deep_bend' ? .48 : .70;
+    const stance = hipHalfWidth * (posture === 'deep_bend' ? 1.45 : 1.25);
+    for (const [side, sign] of [['Left', -1], ['Right', 1]]) {
+      const rawThigh = corrected[`${side} Thigh`];
+      const rawKnee = corrected[`${side} Calf`];
+      const rawFoot = corrected[`${side} Foot`];
+      if (!rawThigh || !rawKnee || !rawFoot) continue;
+      const upperLength = clamp(vectorLength(subtract(rawKnee, rawThigh)), .22, .62);
+      const lowerLength = clamp(vectorLength(subtract(rawFoot, rawKnee)), .22, .62);
+      const hip = addVector(pelvis, [sign * hipHalfWidth, -.02, 0]);
+      const desiredFoot = addVector(pelvis, [sign * stance, -(upperLength + lowerLength) * depth, .02]);
+      const solved = solveTwoBoneLeg(hip, desiredFoot, upperLength, lowerLength, [sign * .08, .08, 1]);
+      const toeLength = corrected[`${side} Toe`]
+        ? clamp(vectorLength(subtract(corrected[`${side} Toe`], rawFoot)), .08, .24)
+        : .14;
+      corrected[`${side} Thigh`] = hip;
+      corrected[`${side} Calf`] = solved.knee;
+      corrected[`${side} Foot`] = solved.foot;
+      corrected[`${side} Toe`] = addVector(solved.foot, [0, 0, toeLength]);
+    }
+    return corrected;
+  }
+  window.motionViewerCorrectLowerBody = correctLowerBody;
 
   function drawOrientationGuides(frame, center, width, height) {
     const tracked = frame?.tracked || {};
