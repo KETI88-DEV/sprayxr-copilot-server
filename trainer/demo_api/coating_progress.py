@@ -9,6 +9,7 @@ import json
 import math
 import threading
 from collections import OrderedDict
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -71,6 +72,7 @@ def measure_zone(
     atlas_height: int,
     grid_size: int,
     zone_mask: np.ndarray | None,
+    target_thickness_um: float | None = None,
 ) -> ZoneCoverage | None:
     """좌하단 원점 두께 표면을 전문가 셀에 대고 잰다. 잴 셀이 하나도 없으면 None."""
     completion_values: list[float] = []
@@ -81,8 +83,8 @@ def measure_zone(
         if not isinstance(target, dict):
             continue
         try:
-            q1 = float(target["q1_um"])
-            q3 = float(target["q3_um"])
+            q1 = float(target["q1_um"]) if target_thickness_um is None else target_thickness_um * .9
+            q3 = float(target["q3_um"]) if target_thickness_um is None else target_thickness_um * 1.1
         except (KeyError, TypeError, ValueError):
             continue
         if not math.isfinite(q1) or q1 <= 0 or not math.isfinite(q3):
@@ -112,8 +114,8 @@ def measure_zone(
         # a 0.5 um boundary tolerance so an encoded 100 um target does
         # not become 99.96 um and incorrectly miss coverage.
         covered += int(actual >= q1 - 0.5)
-        upper = q3 + max(q3 - q1, q3 * 0.1, 5.0)
-        overpainted += int(actual > upper)
+        upper = q3 if target_thickness_um is not None else q3 + max(q3 - q1, q3 * 0.1, 5.0)
+        overpainted += int(actual > upper + .5)
     if not completion_values:
         return None
     total = len(completion_values)
@@ -158,8 +160,9 @@ class CoatingProgressEngine:
         self._sessions: OrderedDict[
             tuple[str, str, int], dict[int, np.ndarray]
         ] = OrderedDict()
-        self._results: dict[tuple[str, str, int, str], CoatingProgress] = {}
-        self._guard = threading.Lock()
+        self._applied: dict[tuple[str, str, int], set[str]] = {}
+        self._results: dict[tuple[str, str, int, str, float | None], CoatingProgress] = {}
+        self._guard = threading.RLock()
 
     @property
     def reference_root(self) -> Path:
@@ -328,6 +331,7 @@ class CoatingProgressEngine:
         process: str,
         mode_id: int,
         surfaces: dict[int, np.ndarray],
+        target_thickness_um: float | None = None,
     ) -> tuple[list[ZoneJudgment], str | None]:
         """세션 끝 두께(면 번호 → 좌하단 원점 표면)를 프로필의 모든 구역에 대고 판정한다.
 
@@ -377,6 +381,7 @@ class CoatingProgressEngine:
                 atlas_height=atlas_height,
                 grid_size=grid_size,
                 zone_mask=zone_mask,
+                target_thickness_um=target_thickness_um,
             )
             if coverage is not None:
                 judgments.append(ZoneJudgment(map_num, zone_id, coverage))
@@ -396,7 +401,58 @@ class CoatingProgressEngine:
                     return str(order[index + 1].get("zone_id"))
         return None
 
-    def evaluate(self, request: AnalyzeSequenceRequest) -> CoatingProgress:
+    def evaluate_replay(
+        self,
+        request: AnalyzeSequenceRequest,
+        prior_requests: Iterable[AnalyzeSequenceRequest],
+        *,
+        target_thickness_um: float | None = None,
+    ) -> CoatingProgress:
+        """Restore missing crops, including telemetry-only records, without reapplying older pixels."""
+        with self._guard:
+            key = (request.session_id, request.process_type, request.resolved_mode_id)
+            if request.process_type == "spray" and request.resolved_mode_id is not None:
+                profile, _ = self._load_profile("spray", request.resolved_mode_id)
+                if profile is not None:
+                    surfaces = self._sessions.setdefault(key, {})
+                    applied = self._applied.setdefault(key, set())
+                    dimensions = {
+                        int(zone.get("map_num", 1)): (
+                            int(zone.get("coating", {}).get("atlas_width", 2048)),
+                            int(zone.get("coating", {}).get("atlas_height", 2048)),
+                        )
+                        for zone in profile["aggregate"]["zones"].values()
+                        if isinstance(zone, dict) and isinstance(zone.get("coating"), dict)
+                    }
+                    for previous in prior_requests:
+                        if (previous.session_id, previous.process_type, previous.resolved_mode_id) != key:
+                            continue
+                        if previous.sequence_id in applied:
+                            continue
+                        result = previous.sequence_result
+                        payload = result.model_dump(exclude_none=True) if hasattr(result, "model_dump") else result
+                        for item in payload.get("cur_sequence_heatmap") or []:
+                            map_num = int(item.get("map_num", 1))
+                            width, height = dimensions.get(map_num, (2048, 2048))
+                            if not (0 < width <= 4096 and 0 < height <= 4096):
+                                continue
+                            crop, _ = self._decode_crop(item, atlas_width=width, atlas_height=height)
+                            if crop is None:
+                                continue
+                            surface = surfaces.setdefault(map_num, np.zeros((height, width), dtype=np.float32))
+                            rows, columns = np.nonzero(crop.valid)
+                            surface[crop.y_indices[rows], crop.x_indices[columns]] = crop.thickness_um[rows, columns]
+                        applied.add(previous.sequence_id)
+                    self._sessions[key] = surfaces
+                    while len(self._sessions) > _MAX_SESSIONS:
+                        expired, _ = self._sessions.popitem(last=False)
+                        self._applied.pop(expired, None)
+                        self._results = {item: value for item, value in self._results.items() if item[:3] != expired}
+            return self.evaluate(request, target_thickness_um=target_thickness_um)
+
+    def evaluate(
+        self, request: AnalyzeSequenceRequest, *, target_thickness_um: float | None = None,
+    ) -> CoatingProgress:
         with self._guard:
             process = request.process_type
             mode_id = request.resolved_mode_id
@@ -407,7 +463,7 @@ class CoatingProgressEngine:
             if request.zone_id in {"-1", "0"}:
                 return self._unavailable(request.zone_id, "zone_unavailable")
 
-            result_key = (request.session_id, process, mode_id, request.sequence_id)
+            result_key = (request.session_id, process, mode_id, request.sequence_id, target_thickness_um)
             cached = self._results.get(result_key)
             if cached is not None:
                 return cached.model_copy(deep=True)
@@ -471,6 +527,7 @@ class CoatingProgressEngine:
             self._sessions.move_to_end(session_key)
             while len(self._sessions) > _MAX_SESSIONS:
                 expired, _ = self._sessions.popitem(last=False)
+                self._applied.pop(expired, None)
                 self._results = {key: value for key, value in self._results.items() if key[:3] != expired}
             surface = session.get(map_num)
             if surface is None or surface.shape != (atlas_height, atlas_width):
@@ -482,6 +539,7 @@ class CoatingProgressEngine:
                     surface[crop.y_indices[rows], crop.x_indices[columns]] = crop.thickness_um[
                         rows, columns
                     ]
+            self._applied.setdefault(session_key, set()).add(request.sequence_id)
 
             coverage = measure_zone(
                 surface,
@@ -490,9 +548,15 @@ class CoatingProgressEngine:
                 atlas_height=atlas_height,
                 grid_size=grid_size,
                 zone_mask=zone_mask,
+                target_thickness_um=target_thickness_um,
             )
             if coverage is None:
                 return self._unavailable(request.zone_id, "coating_reference_invalid")
+
+            expert_coverage = measure_zone(
+                surface, target_cells, atlas_width=atlas_width, atlas_height=atlas_height,
+                grid_size=grid_size, zone_mask=zone_mask,
+            ) if target_thickness_um is not None else coverage
 
             completion_percent = coverage.completion_percent
             coverage_percent = coverage.coverage_percent
@@ -513,7 +577,13 @@ class CoatingProgressEngine:
                 next_zone_id = None
                 message = f"Zone {request.zone_id}의 도막이 아직 부족합니다. 현재 Zone을 추가 도장하세요."
 
+            if target_thickness_um is not None:
+                message = f"세션 목표 {target_thickness_um:g}µm 기준: " + message.replace("전문가 기준 도막", "목표 도막")
+
             result = CoatingProgress(
+                comparison_basis="session_target" if target_thickness_um is not None else "expert_reference",
+                target_thickness_um=target_thickness_um,
+                expert_completion_percent=expert_coverage.completion_percent if expert_coverage is not None else None,
                 zone_id=request.zone_id,
                 available=True,
                 status=status,
@@ -526,4 +596,6 @@ class CoatingProgressEngine:
                 reason=None,
             )
             self._results[result_key] = result
+            while len(self._results) > 8192:
+                self._results.pop(next(iter(self._results)))
             return result.model_copy(deep=True)

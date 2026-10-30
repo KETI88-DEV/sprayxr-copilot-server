@@ -41,13 +41,15 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from trainer.demo_api.copilot_contracts import CopilotQueryData, CopilotQueryRequest, CopilotResponse
-from trainer.demo_api.copilot_intent import classify_question_intent
+from trainer.demo_api.copilot_intent import classify_question_intent, fallback_intent, preset_intent
+from trainer.demo_api.copilot_live_analysis import live_analysis
 from trainer.demo_api.copilot_session_context import build_query_instruction, summarize_session
 from trainer.demo_api.pose_query import (
     answer_order_question,
     answer_pose_question,
     asks_about_zones,
     score_pose,
+    requested_zone,
     zone_unavailable,
 )
 from trainer.demo_api.sequence_store import SequenceStore
@@ -93,8 +95,8 @@ _POSE_FALLBACK_ANSWER: Final[str] = "이 시퀀스로는 자세를 판정할 수
 PipelineProvider = Callable[[], "_Pipeline"]
 
 
-def _parse_motion_viewer_context(value: str | None) -> tuple[str, dict[str, object]] | None:
-    """Read the compact, already-verified analysis attached by the motion viewer."""
+def _parse_motion_viewer_context(value: str | None, *, task_type: str) -> dict[str, object] | None:
+    """Accept viewer measurements only when signed by the analysis server."""
     if not value or not value.startswith(_MOTION_VIEWER_CONTEXT_PREFIX):
         return None
     try:
@@ -103,21 +105,82 @@ def _parse_motion_viewer_context(value: str | None) -> tuple[str, dict[str, obje
         return None
     if not isinstance(payload, dict):
         return None
-    verified_answer = payload.get("verified_answer")
     analysis_context = payload.get("analysis_context")
-    if not isinstance(verified_answer, str) or not verified_answer.strip():
-        return None
     if not isinstance(analysis_context, dict):
         return None
-    return verified_answer.strip(), analysis_context
+    signature = payload.get("signature")
+    if not isinstance(signature, str):
+        return None
+    # Transport-only record objects are not part of the signed analysis.
+    analysis_context = {key: item for key, item in analysis_context.items() if key != "record"}
+    from trainer.demo_api.viewer_context import verify_context
+    if not verify_context(task_type, analysis_context, signature):
+        return None
+    return analysis_context
 
 
-def _percent_text(value: object) -> str | None:
+def _viewer_answer(task_type: str, prompt: str, context: Mapping[str, object], intent: str | None) -> str:
+    """Build the factual answer from signed measures, never client prose."""
+    selected_intent = intent if intent and intent != "knowledge" else fallback_intent(task_type, prompt)
+    if task_type == "trajectory_recomm":
+        flow = context.get("recommended_flow")
+        flow = flow if isinstance(flow, list) else []
+        if not flow:
+            return "현재 재생 기록에서는 전문가 Zone 순서 기준을 계산할 수 없습니다."
+        if selected_intent == "order_direction":
+            direction = context.get("direction_summary")
+            classification = direction.get("classification") if isinstance(direction, Mapping) else None
+            return f"현재 기록의 주요 도포 방향은 {classification}입니다." if classification else "현재 기록에서는 주요 도포 방향을 계산할 수 없습니다."
+        if selected_intent == "order_adherence":
+            adherence = _percent_text(context.get("adherence_rate"))
+            if adherence is None:
+                return "현재 기록의 전문가 순서 유사도를 계산할 수 없습니다."
+            answer = f"현재 기록의 전문가 순서 유사도는 {adherence}입니다."
+            closest = _percent_text(context.get("best_reference_similarity"))
+            positional = _percent_text(context.get("position_similarity"))
+            if closest is not None and positional is not None:
+                answer += f" 가장 가까운 전문가 수행과 {closest}, 순번별 통계와 {positional} 유사합니다."
+            return answer
+        # No visit-count or on-track-count is inferred from a blended score.
+        report = dict(context)
+        report.update({"analysis_status": "available", "first_visit_flow": context.get("selected_flow") or []})
+        return answer_order_question((None, {"sequence_report": report}), prompt=prompt, intent=selected_intent).answer
+
+    zones = context.get("zones")
+    rows = list(zones.values()) if isinstance(zones, Mapping) else zones if isinstance(zones, list) else []
+    rows = [row for row in rows if isinstance(row, Mapping) and isinstance(row.get("similarity_percent"), (int, float))]
+    if context.get("status") != "available" or not rows:
+        return "현재 재생 기록에서는 자세 비교값을 계산할 수 없습니다."
+    target = requested_zone(prompt, None)
+    if target is not None:
+        zone = next((row for row in rows if str(row.get("zone_id")) == target), None)
+        if zone is None:
+            return f"현재 재생 기록에는 Zone {target}의 자세 비교값이 없습니다."
+        corrections = zone.get("corrections")
+        guidance = " ".join(str(item) for item in corrections if isinstance(item, str)) if isinstance(corrections, list) else ""
+        return f"Zone {target} 자세 유사도는 {_percent_text(zone.get('similarity_percent'), already_percent=True)}입니다." + (f" {guidance}" if guidance else " 별도의 자세 개선 항목은 없습니다.")
+    if selected_intent in {"pose_right", "pose_left"}:
+        side = "오른손" if selected_intent == "pose_right" else "왼손"
+        corrections = context.get("corrections")
+        messages = [str(item.get("message") or item.get("label") or "") if isinstance(item, Mapping) else str(item)
+                    for item in corrections] if isinstance(corrections, list) else []
+        matching = [message for message in messages if side in message or ("오른" if side == "오른손" else "왼") in message]
+        return f"{side} 개선 안내: {' '.join(matching)}" if matching else f"현재 기록에서 {side}에 특정된 개선 항목은 없습니다. 전체 자세 유사도는 {_percent_text(context.get('similarity_percent'), already_percent=True)}입니다."
+    worst = min(rows, key=lambda row: float(row["similarity_percent"]))
+    if selected_intent == "pose_worst_zone" or any(word in prompt for word in ("문제", "최악", "낮", "어느", "어디")):
+        corrections = worst.get("corrections")
+        guidance = " ".join(str(item) for item in corrections if isinstance(item, str)) if isinstance(corrections, list) else ""
+        return f"현재 기록에서 자세 유사도가 가장 낮은 구역은 Zone {worst.get('zone_id')}({_percent_text(worst.get('similarity_percent'), already_percent=True)})입니다." + (f" {guidance}" if guidance else "")
+    return (f"현재 재생 기록의 전체 자세 유사도는 {_percent_text(context.get('similarity_percent'), already_percent=True)}입니다. "
+            f"가장 낮은 구역은 Zone {worst.get('zone_id')}({_percent_text(worst.get('similarity_percent'), already_percent=True)})입니다.")
+
+
+def _percent_text(value: object, *, already_percent: bool = False) -> str | None:
     try:
         number = float(value)  # type: ignore[arg-type]
     except (TypeError, ValueError):
         return None
-    if 0 <= number <= 1:
+    if 0 <= number <= 1 and not already_percent:
         number *= 100
     return f"{round(number)}%"
 
@@ -241,10 +304,11 @@ def _structured_detail_fallback(
             "[권장 Zone 순서]\n" + (f"Zone {recommended}" if recommended else "권장 순서를 계산할 수 없습니다.")
             + "\n\n[전문가 작업 경향]\n" + ("\n\n".join(tendencies) or "전문가 작업 경향을 계산할 수 없습니다.")
             + "\n\n[구간별 판단]\n" + ("\n".join(segment_lines) or "구간별 판단 자료가 없습니다.")
+            + ("\n\n[상황 해석]\n" + interpretation if interpretation else "")
             + "\n\n[권장 조치]\n" + action
         )
     elif task_type == "pose_recomm":
-        similarity = _percent_text(analysis_context.get("similarity_percent"))
+        similarity = _percent_text(analysis_context.get("similarity_score", analysis_context.get("similarity_percent")), already_percent="similarity_score" not in analysis_context)
         comparison = [f"전체 자세 유사도는 {similarity}입니다."] if similarity else []
         zones = analysis_context.get("zones")
         zone_rows = list(zones.values()) if isinstance(zones, dict) else zones
@@ -258,21 +322,21 @@ def _structured_detail_fallback(
             ]
             if scored:
                 _, worst = min(scored, key=lambda item: item[0])
-                score = _percent_text(worst.get("similarity_percent"))
+                score = _percent_text(worst.get("similarity_percent"), already_percent=True)
                 worst_text = f"가장 낮은 구역은 Zone {worst.get('zone_id')}({score})입니다."
                 comparison.append(worst_text)
         corrections = analysis_context.get("corrections")
         messages: list[str] = []
         if isinstance(corrections, list):
             messages = [
-                str(item.get("message")) if isinstance(item, dict) and item.get("message") else str(item)
+                str(item.get("message") or item.get("label") or item.get("joint") or "") if isinstance(item, dict) else str(item)
                 for item in corrections[:3]
             ]
             messages = [message for message in messages if message and message != "None"]
         verdict = "전문가 자세와의 차이를 Zone별로 확인했습니다."
         if interpretation is None:
             interpretation = worst_text or base_answer
-        action = " ".join(messages) if messages else "현재 자세를 유지하되 몸통 기울기와 양손 위치를 다음 Zone에서도 일정하게 유지하세요."
+        action = " ".join(messages) if messages else "다음 분사에서도 같은 조건으로 자세를 비교하고, 관절별 교정이 제시되면 해당 위치를 우선 확인하세요."
         return (
             "[상세 분석]\n[종합 판단]\n" + verdict
             + "\n\n[정량 비교]\n" + ("\n".join(comparison) or "비교 가능한 자세 지표가 없습니다.")
@@ -294,6 +358,46 @@ def _detail_interpretation(base_answer: str, candidate: str) -> str | None:
         # what detailed mode must avoid; the structured formatter handles it better.
         return None
     return candidate if len(candidate) >= 30 else None
+
+
+def _grounded_detail(candidate: str, base_answer: str, context: Mapping[str, object]) -> bool:
+    """Reject novel numbers and reordered Zone paths before prose reaches clients."""
+    allowed = set(re.findall(r"\d+(?:\.\d+)?", base_answer))
+    flows: list[list[str]] = []
+    recommended: list[list[str]] = []
+
+    def collect(value: object, key: str = "") -> None:
+        if isinstance(value, Mapping):
+            for child_key, child in value.items():
+                collect(child, str(child_key))
+        elif isinstance(value, list):
+            if key.endswith("flow") or key == "recommended_flow":
+                flows.append([str(item) for item in value])
+                if key == "recommended_flow":
+                    recommended.append([str(item) for item in value])
+            for child in value:
+                collect(child, key)
+        elif isinstance(value, (int, float)) and not isinstance(value, bool):
+            allowed.add(str(value))
+            allowed.add(f"{value:.0f}")
+            if 0 <= value <= 1:
+                allowed.add(f"{value * 100:.0f}")
+        elif isinstance(value, str):
+            allowed.update(re.findall(r"\d+(?:\.\d+)?", value))
+
+    collect(context)
+    if any(number not in allowed for number in re.findall(r"\d+(?:\.\d+)?", candidate)):
+        return False
+    for match in re.finditer(r"\d+(?:\s*(?:→|->)\s*\d+)+", candidate):
+        sequence = re.findall(r"\d+", match.group())
+        prefix = candidate[max(0, match.start() - 40):match.start()]
+        recommendation_at = max(prefix.rfind(word) for word in ("권장", "추천", "대표"))
+        actual_at = max(prefix.rfind(word) for word in ("실제", "수행", "현재"))
+        allowed_flows = recommended if recommended and recommendation_at > actual_at else flows
+        if not any(any(flow[start:start + len(sequence)] == sequence
+                       for start in range(len(flow))) for flow in allowed_flows):
+            return False
+    return True
 
 
 def error_response(code: int, message: str) -> JSONResponse:
@@ -381,7 +485,8 @@ async def execute_copilot_query(
     intent_pipeline: object | None = None
     if query.task_type in ("pose_recomm", "trajectory_recomm"):
         classifier = None
-        if pipeline_provider is not None:
+        intent = preset_intent(query.task_type, query.prompt) if query.response_mode == "quick" else None
+        if pipeline_provider is not None and intent is None:
             try:
                 intent_pipeline = await to_thread.run_sync(pipeline_provider)
                 method = getattr(intent_pipeline, "classify_copilot_intent", None)
@@ -391,14 +496,16 @@ async def execute_copilot_query(
                             return str(method(task_type, prompt))
             except Exception:  # noqa: BROAD_EXCEPT_OK - keyword fallback keeps structured answers available
                 logger.exception("copilot intent pipeline unavailable request_id=%s", query.request_id)
-        intent = await to_thread.run_sync(
-            lambda: classify_question_intent(query.task_type, query.prompt, classifier)
-        )
+        if intent is None:
+            intent = await to_thread.run_sync(
+                lambda: classify_question_intent(query.task_type, query.prompt, classifier)
+            )
         logger.info("copilot intent request_id=%s task=%s intent=%s", query.request_id, query.task_type, intent)
     # If the model is unavailable, keep the selected structured tab operational;
     # only a successful semantic-model classification may cross-route to RAG.
     knowledge_routed = intent == "knowledge" and classifier is not None
-    viewer_analysis = _parse_motion_viewer_context(query.context)
+    viewer_context_requested = bool(query.context and query.context.startswith(_MOTION_VIEWER_CONTEXT_PREFIX))
+    viewer_analysis = _parse_motion_viewer_context(query.context, task_type=query.task_type)
 
     async def _synthesize_structured_detail(
         base_answer: str,
@@ -457,13 +564,14 @@ async def execute_copilot_query(
             result = await to_thread.run_sync(_guarded_detail_run)
             parsed = parse_knowledge_answer(str(result.get("response", "")), [])
             candidate = _trim_dangling_detail_label(parsed.body)
-            interpretation = _detail_interpretation(base_answer, candidate) if candidate else None
+            grounded = _grounded_detail(candidate, base_answer, analysis_context)
+            interpretation = _detail_interpretation(base_answer, candidate) if candidate and grounded else None
             return _structured_detail_fallback(
                 query.task_type,
                 base_answer,
                 analysis_context,
                 interpretation=interpretation,
-            ), bool(result.get("deadline_hit", False))
+            ), bool(result.get("deadline_hit", False)) or not grounded
         except Exception:  # noqa: BROAD_EXCEPT_OK - verified deterministic answer remains available
             logger.exception(
                 "copilot structured detail synthesis failed request_id=%s task_type=%s",
@@ -472,44 +580,68 @@ async def execute_copilot_query(
             )
         return _structured_detail_fallback(query.task_type, base_answer, analysis_context), True
 
-    # Expert CSV records shown by the motion viewer do not necessarily have a
-    # sessions/complete report.  The viewer therefore attaches the compact
-    # structured analysis it is already rendering.  Keep the server response as
-    # the single source of truth: quick returns it verbatim, detailed lets the
-    # LLM explain the same verified facts without inventing new measurements.
-    if (
-        viewer_analysis is not None
-        and query.task_type in ("pose_recomm", "trajectory_recomm")
-        and not knowledge_routed
-    ):
-        verified_answer, analysis_context = viewer_analysis
+    if viewer_analysis is not None and query.task_type in ("pose_recomm", "trajectory_recomm") and not knowledge_routed:
+        analysis_context = viewer_analysis
+        verified_answer = _viewer_answer(query.task_type, query.prompt, analysis_context, intent)
         answer, detail_degraded = await _synthesize_structured_detail(
             verified_answer, analysis_context, available=True
         )
         return _success_response(
-            query,
-            request_started,
-            answer=answer,
-            retrieval_used=False,
-            citations=[],
+            query, request_started, answer=answer, retrieval_used=False, citations=[],
             degraded=detail_degraded,
             pose_context=analysis_context if query.task_type == "pose_recomm" else None,
             sequence_context=analysis_context if query.task_type == "trajectory_recomm" else None,
-            context_status="available",
-            store=sequences,
+            context_status="available", store=sequences,
         )
+    # Unsigned/forged viewer claims can still resolve against saved server data.
+    if viewer_context_requested:
+        query = query.model_copy(update={"context": None})
 
     context = (query.context or "").strip()
     # 시퀀스(`SEQ-012`)를 가리키지 않은 자세·순서 질문은 complete 가 남긴 세션 결과로 답한다(pose_query 참고).
     # complete 뒤에는 질문에 "구역"이 없어도 그렇다 — 뷰어 채팅은 칩으로 유형만 고른다.
     session_id = query.session_id
+    if not query.scenario_id and session_id:
+        def _saved_scenario() -> str | None:
+            latest = sequences.latest_sequence_id(session_id)
+            body = sequences.load_body(session_key=session_id, sequence_id=latest) if latest else None
+            if body and body.get("scenario_id"):
+                return str(body["scenario_id"])
+            get_session = getattr(reports, "get_session", None)
+            session = get_session(session_id) if callable(get_session) else None
+            return session.scenario_id if session is not None else None
+        scenario = await to_thread.run_sync(_saved_scenario)
+        if scenario:
+            query = query.model_copy(update={"scenario_id": scenario})
     found = (
         await to_thread.run_sync(lambda: reports.latest_complete_analysis(session_id))
         if reports is not None and session_id and query.task_type in ("pose_recomm", "trajectory_recomm")
         and (not context or context.isdigit())
         else None
     )
-    if query.task_type == "trajectory_recomm" and not knowledge_routed and reports is not None and session_id:
+    if found is not None and session_id:
+        captured = found[1].get("sequences")
+        captured_ids = {str(item["sequence_id"]) for item in captured
+                        if isinstance(item, Mapping) and item.get("sequence_id")} if isinstance(captured, list) else set()
+        if captured_ids:
+            latest = await to_thread.run_sync(lambda: sequences.latest_sequence_id(session_id))
+            if latest is not None and latest not in captured_ids:
+                found = None
+    if found is None and session_id and not context and query.task_type in ("pose_recomm", "trajectory_recomm") and not knowledge_routed and (reports is not None or query.task_type == "trajectory_recomm" or asks_about_zones(query.prompt, query.context)):
+        # Keep explicit-sequence pose queries on their original scoring path.
+        found = await to_thread.run_sync(lambda: live_analysis(
+            sequences, session_id=session_id, scenario_id=query.scenario_id,
+            task_type=query.task_type, sequence_engine=sequence_engine,
+            mcp_base_url=mcp_base_url, transport=transport,
+            zone_id=requested_zone(query.prompt, query.context) if query.task_type == "pose_recomm" else None,
+        ))
+    elif found is None and session_id and context.isdigit() and query.task_type == "pose_recomm" and not knowledge_routed:
+        found = await to_thread.run_sync(lambda: live_analysis(
+            sequences, session_id=session_id, scenario_id=query.scenario_id,
+            task_type=query.task_type, sequence_engine=sequence_engine,
+            mcp_base_url=mcp_base_url, transport=transport, zone_id=context,
+        ))
+    if query.task_type == "trajectory_recomm" and not knowledge_routed and session_id:
         if found is not None and sequence_engine is not None and query.scenario_id:
             report_id, analysis = found
             refreshed = dict(analysis)
@@ -535,7 +667,7 @@ async def execute_copilot_query(
             store=sequences,
         )
 
-    if query.task_type == "pose_recomm" and not knowledge_routed and reports is not None and (
+    if query.task_type == "pose_recomm" and not knowledge_routed and (
         found is not None or asks_about_zones(query.prompt, query.context)
     ):
         zone = (
@@ -547,12 +679,25 @@ async def execute_copilot_query(
             "copilot pose_recomm zone request_id=%s zone=%s status=%s reason=%s",
             query.request_id, zone.context.get("zone_id"), zone.analysis_status, zone.reason_code,
         )
+        live_context = found[1].get("live_pose_context") if found is not None else None
+        report_pose = found[1].get("pose_report") if found is not None else None
+        limited_confidence = isinstance(report_pose, Mapping) and report_pose.get("confidence") == "limited"
+        if isinstance(report_pose, Mapping):
+            for key in ("confidence", "limited_sequence_count", "reason_codes"):
+                if key in report_pose:
+                    zone.context[key] = report_pose[key]
+        base_answer = zone.answer
+        if isinstance(live_context, dict):
+            zone.context.update(live_context)
+            base_answer = "최근 저장된 분사 중 최대 3회 표본을 분석한 중간 결과입니다. " + base_answer
         answer, detail_degraded = await _synthesize_structured_detail(
-            zone.answer, zone.context, available=zone.analysis_status == "available"
+            base_answer, zone.context, available=zone.analysis_status == "available"
         )
+        if isinstance(live_context, dict) and query.response_mode == "detailed":
+            answer = "최근 저장된 분사 중 최대 3회 표본을 분석한 중간 결과입니다.\n" + answer
         return _success_response(
             query, request_started, answer=answer, retrieval_used=False, citations=[],
-            degraded=detail_degraded,
+            degraded=detail_degraded or limited_confidence or bool(isinstance(live_context, dict) and live_context.get("reason_codes")),
             pose_context=zone.context,
             context_status="available" if zone.analysis_status == "available" else "not_available",
             store=sequences,
@@ -581,7 +726,7 @@ async def execute_copilot_query(
         )
         return _success_response(
             query, request_started, answer=answer, retrieval_used=False, citations=[],
-            degraded=detail_degraded,
+            degraded=detail_degraded or bool(pose.reason_code and pose.analysis_status == "available"),
             pose_context=pose.as_context(),
             context_status="available" if pose.analysis_status == "available" else "not_available",
             store=sequences,
@@ -616,7 +761,7 @@ async def execute_copilot_query(
         )
     instruction = build_query_instruction(
         query.prompt,
-        client_context=query.context,
+        client_context=None if viewer_analysis is not None else query.context,
         session_summary=session_summary,
         recent_turns=recent_turns,
         response_mode=query.response_mode,
@@ -630,7 +775,7 @@ async def execute_copilot_query(
                 session_id=query.session_id,
                 enable_thinking=False,
                 use_rag=use_rag,
-                max_tokens=96 if query.response_mode == "quick" else 256,
+                max_tokens=128 if query.response_mode == "quick" else 512,
                 request_id=query.request_id,
             )
 
@@ -718,7 +863,24 @@ def install_copilot_error_handlers(app: FastAPI) -> None:
                 request.url.path,
                 [(error.get("loc"), error.get("type")) for error in exc.errors()],
             )
-            return error_response(422, "Invalid request")
+            # Only stable metadata crosses the boundary; errors.input/ctx can
+            # contain transcripts, credentials, or custom exception contents.
+            first = exc.errors()[0] if exc.errors() else {}
+            path = ".".join(re.sub(r"[^A-Za-z0-9_\-]", "_", str(item))[:40]
+                            for item in first.get("loc", ())[:5])[:120]
+            reasons = {
+                "missing": "Field required", "extra_forbidden": "Extra field is not permitted",
+                "literal_error": "Unsupported value", "enum": "Unsupported value",
+                "string_too_short": "Value is too short", "string_too_long": "Value is too long",
+                "int_parsing": "Integer required", "float_parsing": "Number required",
+                "json_invalid": "Malformed JSON", "model_attributes_type": "Object required",
+                "greater_than": "Value is below the allowed range",
+                "greater_than_equal": "Value is below the allowed range",
+                "less_than": "Value is above the allowed range",
+                "less_than_equal": "Value is above the allowed range",
+            }
+            reason = reasons.get(str(first.get("type")), "Invalid value")
+            return error_response(422, f"Invalid request: {path or 'request'} ({reason})")
         return await request_validation_exception_handler(request, exc)
 
     app.add_exception_handler(RequestValidationError, _on_validation_error)

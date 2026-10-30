@@ -3,12 +3,32 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
 POSE_INTENTS = {"pose_overall", "pose_worst_zone", "pose_zone", "pose_right", "pose_left", "knowledge"}
 ORDER_INTENTS = {"order_reference", "order_actual", "order_missing", "order_adherence", "order_direction", "knowledge"}
+
+
+def preset_intent(task_type: str, prompt: str) -> str | None:
+    """Skip model classification only for exact, unambiguous UI questions."""
+    normalized = re.sub(r"[\s?!.]", "", prompt).lower()
+    presets = {
+        "pose_recomm": {
+            "전체자세유사도": "pose_overall", "전체자세유사도는": "pose_overall",
+            "가장문제가큰zone": "pose_worst_zone", "가장문제가큰zone은": "pose_worst_zone",
+            "오른손을어떻게고쳐": "pose_right", "왼손을어떻게고쳐": "pose_left",
+        },
+        "trajectory_recomm": {
+            "권장zone순서": "order_reference", "권장zone순서는": "order_reference",
+            "권장순서는": "order_reference", "실제수행순서는": "order_actual",
+            "누락한zone은": "order_missing", "순서준수율은": "order_adherence",
+            "도포방향은": "order_direction",
+        },
+    }
+    return presets.get(task_type, {}).get(normalized)
 
 
 def fallback_intent(task_type: str, prompt: str) -> str:

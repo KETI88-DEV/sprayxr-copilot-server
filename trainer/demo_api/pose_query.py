@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -47,9 +48,11 @@ class PoseQueryResult:
     summary: str | None
     # 교정된 관절 → 숙련자와의 거리(m). 엔진 evidence 라 `pose_context`에는 싣지 않고 세션 리포트 집계만 쓴다.
     joint_distances: dict[str, float] = field(default_factory=dict)
+    confidence: str | None = None
+    input_quality: dict[str, Any] = field(default_factory=dict)
 
     def as_context(self) -> dict[str, Any]:
-        return {
+        context = {
             "analysis_status": self.analysis_status,
             "reason_code": self.reason_code,
             "sequence_id": self.sequence_id,
@@ -57,6 +60,11 @@ class PoseQueryResult:
             "correction_mode": self.correction_mode,
             "corrections": self.corrections,
         }
+        if self.confidence is not None:
+            context["confidence"] = self.confidence
+        if self.input_quality:
+            context["input_quality"] = self.input_quality
+        return context
 
 
 @dataclass(frozen=True)
@@ -148,10 +156,12 @@ def score_body(
     sequence_id: str,
     mcp_base_url: str,
     transport: httpx.BaseTransport | None = None,
+    timeout_sec: float = _MCP_TIMEOUT_SEC,
 ) -> PoseQueryResult:
     """원문 자세 엔진 결과를 Query API 계약으로 투영한다."""
     raw = score_body_raw(
-        body, sequence_id=sequence_id, mcp_base_url=mcp_base_url, transport=transport
+        body, sequence_id=sequence_id, mcp_base_url=mcp_base_url, transport=transport,
+        timeout_sec=timeout_sec,
     )
     if raw.analysis_status != "available":
         return _unavailable(raw.reason_code or "analysis_unavailable", sequence_id=sequence_id)
@@ -159,12 +169,14 @@ def score_body(
     summary = result.get("summary")
     return PoseQueryResult(
         analysis_status="available",
-        reason_code=None,
+        reason_code=raw.reason_code,
         sequence_id=sequence_id,
         similarity_score=result.get("similarity_score"),
         correction_mode=result.get("correction_mode"),
         corrections=_project_corrections(result),
         summary=str(summary) if summary else None,
+        confidence="limited" if raw.reason_code else None,
+        input_quality=dict(result["input_quality"]) if isinstance(result.get("input_quality"), dict) else {},
         joint_distances={
             str(item["joint"]): float(item["evidence"]["distance_m"])
             for item in result.get("corrections") or []
@@ -180,6 +192,7 @@ def score_body_raw(
     sequence_id: str,
     mcp_base_url: str,
     transport: httpx.BaseTransport | None = None,
+    timeout_sec: float = _MCP_TIMEOUT_SEC,
 ) -> PoseEngineResult:
     """시퀀스 하나를 MCP에 한 번 보내고 검증된 제품 엔진 원문을 돌려준다."""
     # `analyze-sequence`가 붙인 분석 파라미터(`mode_id`)는 시퀀스 내용이 아니다. MCP 자세 엔진은 최상위 모르는 필드를
@@ -187,7 +200,7 @@ def score_body_raw(
     body = {key: value for key, value in body.items() if key not in NON_CONTENT_FIELDS}
 
     try:
-        with httpx.Client(timeout=_MCP_TIMEOUT_SEC, transport=transport) as client:
+        with httpx.Client(timeout=timeout_sec, transport=transport) as client:
             response = client.post(
                 f"{mcp_base_url.rstrip('/')}/pose_estimation/sequence", json=body
             )
@@ -205,14 +218,20 @@ def score_body_raw(
 
     result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
     status = result.get("analysis_status")
-    if status != "available":
+    score = result.get("similarity_score")
+    quality = result.get("input_quality")
+    rejected = isinstance(quality, dict) and quality.get("status") == "reject"
+    usable = isinstance(score, (int, float)) and not isinstance(score, bool) and math.isfinite(score) and 0 <= score <= 1
+    if status not in {"available", "degraded"} or not usable or rejected:
         return _raw_unavailable(
             str(result.get("reason_code") or "analysis_unavailable"),
             sequence_id=sequence_id,
         )
     return PoseEngineResult(
         analysis_status="available",
-        reason_code=None,
+        # Public availability means usable measurements, not unrestricted confidence.
+        # Retain the quality reason rather than silently promoting degraded evidence.
+        reason_code=str(result.get("reason_code") or "analysis_degraded") if status == "degraded" else None,
         sequence_id=sequence_id,
         result=dict(result),
     )
@@ -233,7 +252,7 @@ _ZONE_NUMBER: Final = re.compile(
 
 _ZONE_REASON_ANSWERS: Final[dict[str, str]] = {
     "session_id_missing": "어느 세션인지 알 수 없어 구역별 자세를 찾지 못했습니다. session_id를 함께 보내 주세요.",
-    "session_report_unavailable": "구역별 자세·순서 분석은 훈련 종료(sessions/complete) 뒤에 만들어집니다. 종료 후 다시 물어봐 주세요.",
+    "session_report_unavailable": "이 세션에 분석할 분사 시퀀스나 완료 리포트가 없습니다. 먼저 훈련 데이터를 전송해 주세요.",
     "zone_analysis_unavailable": "이 세션에는 자세를 채점한 구역이 없습니다.",
     "zone_not_evaluated": "{zone}번 구역은 이 세션에서 자세를 채점한 분사가 없습니다.",
 }
@@ -257,6 +276,10 @@ def asks_about_zones(prompt: str, context: str | None) -> bool:
 def _zone_from_prompt(prompt: str) -> str | None:
     match = _ZONE_NUMBER.search(prompt)
     return next((group for group in match.groups() if group), None) if match else None
+
+
+def requested_zone(prompt: str, context: str | None) -> str | None:
+    return context.strip() if context and context.strip().isdigit() else _zone_from_prompt(prompt)
 
 
 def zone_unavailable(reason: str, *, zone_id: str | None = None) -> ZoneAnswer:
@@ -447,7 +470,7 @@ def answer_pose_question(
     found: tuple[str, Mapping[str, Any]] | None, *, prompt: str, context: str | None, intent: str | None = None,
 ) -> ZoneAnswer:
     """완료 세션의 구조화된 자세 결과를 질문 의도에 맞게 설명한다."""
-    target = context.strip() if context and context.strip().isdigit() else _zone_from_prompt(prompt)
+    target = requested_zone(prompt, context)
     if target is not None:
         return answer_zone_question(found, context=target)
     lowered = prompt.lower()

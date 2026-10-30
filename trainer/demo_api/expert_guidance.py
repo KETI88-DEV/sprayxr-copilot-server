@@ -153,6 +153,8 @@ class ExpertGuidanceEngine:
     def _stabilize(self, key: tuple[str, str, int, str, str], raw: str) -> str:
         state = self._states.get(key)
         if state is None:
+            while len(self._states) >= 4096:
+                self._states.pop(next(iter(self._states)))
             self._states[key] = _StableStatus(stable=raw)
             return raw
         if raw == state.stable:

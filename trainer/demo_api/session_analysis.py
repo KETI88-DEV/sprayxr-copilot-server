@@ -29,6 +29,7 @@ import gzip
 import io
 import logging
 import statistics
+import zlib
 from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any, Final, Mapping, Sequence
@@ -37,6 +38,7 @@ import httpx
 
 from trainer.demo_api.pose_query import PoseQueryResult, score_body
 from trainer.demo_api.sequence_store import SequenceStore
+from trainer.demo_api.report_jobs import CSV_INFLATED_LIMIT, InputTooLarge
 from trainer.scripts import pose_similarity, simulator_csv
 
 logger = logging.getLogger(__name__)
@@ -55,13 +57,22 @@ ZONE_COLUMN: Final = "Zone ID"
 PRIORITY_LIMIT: Final = 3
 
 
+def inflate_csv(raw: bytes, *, limit: int | None = None) -> bytes:
+    limit = CSV_INFLATED_LIMIT if limit is None else limit
+    if raw[:2] == b"\x1f\x8b":
+        with gzip.GzipFile(fileobj=io.BytesIO(raw)) as handle:
+            raw = handle.read(limit + 1)
+    if len(raw) > limit:
+        raise InputTooLarge("telemetry CSV exceeds inflated size limit")
+    return raw
+
+
 def read_csv(raw: bytes) -> list[dict[str, str]]:
     """원시 CSV(또는 `.csv.gz`) 바이트를 행으로. 압축 여부는 매직 바이트로 가린다. 못 읽으면 빈 목록."""
     try:
-        if raw[:2] == b"\x1f\x8b":
-            raw = gzip.decompress(raw)
+        raw = inflate_csv(raw)
         return list(csv.DictReader(io.StringIO(raw.decode("utf-8-sig"))))
-    except (OSError, UnicodeDecodeError, csv.Error, EOFError):
+    except (OSError, UnicodeDecodeError, csv.Error, EOFError, InputTooLarge, zlib.error):
         logger.warning("telemetry csv unreadable (%d bytes)", len(raw))
         return []
 
@@ -195,7 +206,7 @@ class SessionPoseAnalysis:
 
     def pose_report(self) -> dict[str, Any]:
         """명세서 p.15-16 `pose_report`의 키만."""
-        return {
+        report = {
             "analysis_status": self.analysis_status,
             "algorithm_version": ALGORITHM_VERSION,
             "guideline": self.guideline,
@@ -204,6 +215,13 @@ class SessionPoseAnalysis:
             "zone_summary": self.zone_summary,
             "priority_corrections": self.priority_corrections,
         }
+        limited = [item for item in self.sequences if item.get("analysis_status") == "available" and item.get("confidence") == "limited"]
+        if limited:
+            report.update({
+                "confidence": "limited", "limited_sequence_count": len(limited),
+                "reason_codes": sorted({str(item["reason_code"]) for item in limited if item.get("reason_code")}),
+            })
+        return report
 
 
 def _zone_order(zone: str) -> tuple[int, str]:
@@ -282,8 +300,11 @@ def _guideline(scored: Sequence[PoseQueryResult], total: int, not_scored: int) -
     if joints:
         joint, times = joints.most_common(1)[0]
         parts.append(f"교정이 가장 자주 나온 부위는 {pose_similarity.JOINT_LABELS.get(joint, joint)}입니다({times}회).")
-    else:
+    elif not any(result.confidence == "limited" for result in scored):
         parts.append("비교한 분사 모두 숙련 작업자의 통상 범위 안입니다.")
+    limited = sum(result.confidence == "limited" for result in scored)
+    if limited:
+        parts.append(f"이 중 {limited}회는 입력 품질 또는 비교 범위의 제한이 있어 참고용 유사도입니다. 교정 항목이 없더라도 정상 자세를 확정하지 않습니다.")
     if not_scored:
         parts.append(f"자세를 판정할 수 없는 분사 {not_scored}회는 평균에서 뺐습니다.")
     return " ".join(parts)

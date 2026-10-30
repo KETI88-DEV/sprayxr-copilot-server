@@ -70,6 +70,26 @@ def test_records_survive_reopen(tmp_path: Path) -> None:
     assert result.duplicate is True
 
 
+def test_simultaneous_connections_record_one_body_without_sqlite_lock_errors(tmp_path: Path) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+    path = str(tmp_path / "concurrent.db")
+    stores = [SequenceStore(path), SequenceStore(path)]
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(_rec, stores))
+    assert sum(result.stored for result in results) == 1
+    assert sum(result.duplicate for result in results) == 1
+
+
+def test_analysis_result_survives_database_reopen(tmp_path: Path) -> None:
+    path = str(tmp_path / "analysis.db")
+    store = SequenceStore(path)
+    store.save_analysis(session_key="S1", sequence_id="SEQ-1", analysis_key="spray", result={"guide": "saved"})
+    store.close()
+    reopened = SequenceStore(path)
+    assert reopened.load_analysis(session_key="S1", sequence_id="SEQ-1", analysis_key="spray") == {"guide": "saved"}
+    assert reopened.load_analysis(session_key="S2", sequence_id="SEQ-1", analysis_key="spray") is None
+
+
 def test_unusable_path_falls_back_to_memory(tmp_path: Path) -> None:
     """Given an unwritable path, When constructed, Then ingest still works.
 
@@ -150,7 +170,7 @@ def test_legacy_db_keeps_rows_written_before_the_upgrade(tmp_path: Path) -> None
     assert store.latest_sequence_id("S0") == "Q0"
 
 
-def test_session_bodies_keep_receive_order_even_when_ids_do_not_sort() -> None:
+def test_session_bodies_use_natural_sequence_order_independent_of_arrival() -> None:
     store = SequenceStore(":memory:")
     for sequence_id in ("SEQ-10", "SEQ-2"):
         store.record(
@@ -159,8 +179,9 @@ def test_session_bodies_keep_receive_order_even_when_ids_do_not_sort() -> None:
             body=json.dumps({"sequence_id": sequence_id}),
         )
 
-    assert [body["sequence_id"] for body in store.session_bodies("S1")] == ["SEQ-10", "SEQ-2"]
-    assert [body["sequence_id"] for body in store.session_bodies_through("S1", "SEQ-10")] == ["SEQ-10"]
+    assert [body["sequence_id"] for body in store.session_bodies("S1")] == ["SEQ-2", "SEQ-10"]
+    assert [body["sequence_id"] for body in store.session_bodies_through("S1", "SEQ-2")] == ["SEQ-2"]
+    assert store.latest_sequence_id("S1") == "SEQ-10"
 
 
 def _catalog_record(

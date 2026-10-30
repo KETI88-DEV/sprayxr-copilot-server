@@ -2077,7 +2077,7 @@ def create_motion_viewer_router(
             "triangles": supplied_mesh.get("triangles", []) if mesh_available else [],
             "fallback": None if mesh_available else "ray_point_surface",
         }
-        return {
+        payload = {
             "expert_name": _EXPERT_NAME,
             "worker": {
                 "worker_id": worker["worker_id"],
@@ -2112,5 +2112,8 @@ def create_motion_viewer_router(
             "object_mesh_status": "verified" if mesh_available else "ray_point_fallback",
             **paint_statistics,
         }
+        from trainer.demo_api.viewer_context import viewer_signatures
+        payload["query_context_signatures"] = viewer_signatures(payload)
+        return payload
 
     return router

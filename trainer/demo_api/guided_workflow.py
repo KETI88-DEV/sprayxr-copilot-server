@@ -76,8 +76,13 @@ _START_CONTEXT = _test_context(
             "user_id": "SWAGGER-DEMO-a1b2c3d4",
             "session_id": "SWAGGER-SESSION-a1b2c3d4",
             "scenario_id": "1",
+            "started_at": "2026-10-30T00:00:00Z",
             "target_thickness_um": 150.0,
             "worker": {"skill_level": "novice", "handedness": "right"},
+        },
+        "user_registration": {
+            "user_id": "SWAGGER-DEMO-a1b2c3d4", "name": "Swagger 초보자 모의 훈련자",
+            "skill_level": "novice", "dominant_hand": "right", "created_at": "2026-10-30T00:00:00Z",
         },
     },
     "초보자 작업자가 훈련모드 1을 시작하는 것과 같은 입력을 서버가 자동 구성합니다.",
@@ -106,6 +111,7 @@ _SEQUENCE_INPUT = {
     "sequence_info": [
         {
             "index": 0,
+            "time": "2026-10-30T00:00:01Z",
             "tool_pos_rot": {"position": [0.0, 1.2, 0.4]},
             "gun_metrics": {"speed": 300, "distance": 250},
         }
@@ -115,16 +121,26 @@ _SEQUENCE_INPUT = {
         "cur_sequence_heatmap": [_HEATMAP_EXAMPLE],
     },
 }
+_SEQUENCE_INPUT = {
+    "equivalent_real_api": _SEQUENCE_INPUT["equivalent_real_api"],
+    **AnalyzeSequenceRequest.model_validate({
+        key: value for key, value in _SEQUENCE_INPUT.items() if key != "equivalent_real_api"
+    }).model_dump(mode="json"),
+}
 _SEQUENCE_CONTEXT = _test_context(
     _SEQUENCE_INPUT,
-    "목표 속도 500 mm/s보다 느린 300 mm/s, 목표 이격거리 300 mm보다 가까운 250 mm의 예제입니다.",
-    "guide.speed.status가 slow이고 guide.distance.status가 near인지 확인합니다.",
+    "속도 300 mm/s, 이격거리 250 mm의 예제입니다. 이 단계는 속도·이격거리 안내만 확인합니다. 전문가 기준을 사용할 수 없으면 slow/near 모의 가이드를 반환하며 실제 엔진 판정이 아닙니다.",
+    "guide의 상태와 test_context.evaluation_mode(expert_reference 또는 mock_fallback)를 함께 확인합니다.",
 )
 
 _COMPLETE_CONTEXT = _test_context(
     {
         "equivalent_real_api": "POST /api/v1/sessions/complete",
         "session_id": "SWAGGER-SESSION-a1b2c3d4",
+        "user_id": "SWAGGER-DEMO-a1b2c3d4",
+        "scenario_id": "1",
+        "ended_at": "2026-10-30T00:00:02Z",
+        "requested_at": "2026-10-30T00:00:02Z",
         "completion_payload": {
             "source": "swagger-guided-test",
             "vr_score": 82,
@@ -133,7 +149,7 @@ _COMPLETE_CONTEXT = _test_context(
             "avg_distance_mm": 250,
         },
     },
-    "앞 단계의 모의 세션을 종료하고 예제 훈련 결과로 최종 리포트 생성을 요청합니다.",
+    "모의 세션을 종료하고 예제 완료 레코드를 저장합니다. CSV 업로드나 실제 종합 분석은 수행하지 않으며 0-4는 UI 설계용 모의 리포트를 반환합니다.",
     "session_status가 COMPLETED인지와 발급된 report_id를 확인합니다.",
 )
 
@@ -164,6 +180,12 @@ class _DemoRun:
     scenario_id: str = "1"
     started: bool = False
     report_id: str | None = None
+    started_at: str | None = None
+    user_created_at: str | None = None
+    ended_at: str | None = None
+    requested_at: str | None = None
+    sequence_input: dict[str, Any] | None = None
+    evaluation_mode: str = "not_evaluated"
 
 
 class GuidedWorkflow:
@@ -192,18 +214,22 @@ class GuidedWorkflow:
     def start(self) -> _DemoRun:
         with self._guard:
             run = self.current()
+            if run.started:
+                return run
+            run.started_at = _now()
+            run.user_created_at = _now()
             self._store.upsert_user(
                 user_id=run.user_id,
                 name="Swagger 초보자 모의 훈련자",
                 skill_level="novice",
                 dominant_hand="right",
-                created_at=_now(),
+                created_at=run.user_created_at,
             )
             self._store.start_session(
                 session_id=run.session_id,
                 user_id=run.user_id,
                 scenario_id=run.scenario_id,
-                started_at=_now(),
+                started_at=run.started_at,
                 target_thickness_um=150.0,
             )
             run.started = True
@@ -216,7 +242,7 @@ class GuidedWorkflow:
                 session_id=run.session_id,
                 user_id=run.user_id,
                 scenario_id=run.scenario_id,
-                zone_id="1:1",
+                zone_id="1",
                 sequence_id=f"SWAGGER-SEQUENCE-{run.run_id}",
                 sequence_setting={
                     "tool_type": "spray_gun", "pressure": 0.55, "nozzle_size": 0.021,
@@ -236,8 +262,11 @@ class GuidedWorkflow:
                     "cur_sequence_heatmap": [_HEATMAP_EXAMPLE],
                 },
             )
+            run.sequence_input = request.model_dump(mode="json")
             guide = self._guidance.evaluate(request)
+            run.evaluation_mode = "expert_reference"
             if not guide.speed.available or not guide.distance.available:
+                run.evaluation_mode = "mock_fallback"
                 guide = SequenceGuide(
                     speed=GuideItem(
                         status="slow", message="이동 속도를 조금 높이세요.", available=True, reason=None
@@ -254,16 +283,19 @@ class GuidedWorkflow:
     def complete(self) -> _DemoRun:
         with self._guard:
             run = self.start()
+            if run.ended_at is None:
+                run.ended_at = _now()
             self._store.end_session(
                 session_id=run.session_id,
                 user_id=run.user_id,
                 scenario_id=run.scenario_id,
-                ended_at=_now(),
+                ended_at=run.ended_at,
             )
             if run.report_id is None:
+                run.requested_at = _now()
                 completion = self._store.create_completion(
                     session_id=run.session_id,
-                    requested_at=_now(),
+                    requested_at=run.requested_at,
                     payload={
                         "source": "swagger-guided-test",
                         "vr_score": 82,
@@ -321,8 +353,13 @@ def create_guided_workflow_router(
         input_used = dict(_START_CONTEXT["input_used"])
         input_used["body"] = {"user_id": run.user_id, "session_id": run.session_id,
                               "scenario_id": run.scenario_id,
+                              "started_at": run.started_at,
                               "target_thickness_um": 150.0,
                               "worker": {"skill_level": "novice", "handedness": "right"}}
+        input_used["user_registration"] = {
+            "user_id": run.user_id, "name": "Swagger 초보자 모의 훈련자",
+            "skill_level": "novice", "dominant_hand": "right", "created_at": run.user_created_at,
+        }
         return _ok({"test_context":_test_context(input_used, _START_CONTEXT["input_summary"], _START_CONTEXT["evaluation_focus"]),
                     "workflow_status":"running","step":1,"user_id":run.user_id,"session_id":run.session_id,
                     "session_status":"ACTIVE","what_happened":"실제 sessions/start와 같은 상태 전이를 수행해 ACTIVE 세션을 만들었습니다.",
@@ -331,10 +368,10 @@ def create_guided_workflow_router(
     @router.post(
         "/2-sequence", response_model=ApiResponse, tags=[_TAG], summary="0-2. 예제 시퀀스 분석 및 코칭 확인",
         description=(
-            "훈련모드 1의 Zone 1:1 시퀀스를 전문가 기준과 비교합니다.\n\n"
-            "### 자동 사용 입력\n목표/실제 속도는 `500/300 mm/s`, 목표/실제 이격거리는 `300/250 mm`입니다. "
+            "훈련모드 1의 Zone 1 예제 시퀀스입니다. 전문가 기준이 없으면 모의 가이드를 반환합니다.\n\n"
+            "### 자동 사용 입력\n예제 속도는 `300 mm/s`, 이격거리는 `250 mm`입니다. "
             "전체 본문은 응답의 `test_context.input_used`에 표시됩니다.\n\n"
-            "### 예상 결과\n실제 속도가 목표보다 낮아 `slow`, 실제 거리가 목표보다 짧아 `near`가 되는 과정을 확인하세요."
+            "### 예상 결과\n전문가 기준이 있으면 그 기준에 따른 상태를 반환합니다. 기준이 없으면 `mock_fallback`으로 표시된 `slow/near` 예시를 반환합니다."
         ),
         responses=_swagger_response({"test_context": _SEQUENCE_CONTEXT, "workflow_status": "running", "step": 2,
                                      "guide": {"speed": {"status": "slow", "message": "이동 속도를 조금 높이세요."},
@@ -344,11 +381,10 @@ def create_guided_workflow_router(
     )
     def sequence() -> JSONResponse:
         run, guide = workflow.guide()
-        input_used = dict(_SEQUENCE_INPUT)
-        input_used.update({"session_id": run.session_id, "user_id": run.user_id,
-                           "scenario_id": run.scenario_id,
-                           "sequence_id": f"SWAGGER-SEQUENCE-{run.run_id}"})
-        return _ok({"test_context":_test_context(input_used, _SEQUENCE_CONTEXT["input_summary"], _SEQUENCE_CONTEXT["evaluation_focus"]),
+        input_used = {"equivalent_real_api": _SEQUENCE_INPUT["equivalent_real_api"], **(run.sequence_input or {})}
+        context = _test_context(input_used, _SEQUENCE_CONTEXT["input_summary"], _SEQUENCE_CONTEXT["evaluation_focus"])
+        context["evaluation_mode"] = run.evaluation_mode
+        return _ok({"test_context":context,
                     "workflow_status":"running","step":2,"session_id":run.session_id,
                     "sequence_id":f"SWAGGER-SEQUENCE-{run.run_id}","guide":guide.model_dump(mode="json"),
                     "what_happened":"예제 속도와 이격거리를 비교하여 VR에서 바로 사용할 코칭 상태를 만들었습니다.",
@@ -370,6 +406,10 @@ def create_guided_workflow_router(
         run = workflow.complete()
         input_used = dict(_COMPLETE_CONTEXT["input_used"])
         input_used["session_id"] = run.session_id
+        input_used["user_id"] = run.user_id
+        input_used["scenario_id"] = run.scenario_id
+        input_used["ended_at"] = run.ended_at
+        input_used["requested_at"] = run.requested_at
         return _ok({"test_context":_test_context(input_used, _COMPLETE_CONTEXT["input_summary"], _COMPLETE_CONTEXT["evaluation_focus"]),
                     "workflow_status":"report_ready","step":3,"session_id":run.session_id,
                     "session_status":"COMPLETED","report_id":run.report_id,

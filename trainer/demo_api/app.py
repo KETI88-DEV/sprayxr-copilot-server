@@ -14,11 +14,13 @@ from typing import Any, cast
 
 import httpx
 import uvicorn
+from anyio import to_thread
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from trainer.demo_api import chat_service as chat_service_mod
+from trainer.demo_api.access_control import AccessControlMiddleware, OperatorCredentials
 from trainer.demo_api.chat_service import ChatService, build_default_live_runner
 from trainer.demo_api.contracts import ChatRequest
 from trainer.demo_api.copilot_router import create_copilot_router, install_copilot_error_handlers
@@ -27,6 +29,7 @@ from trainer.demo_api.db_viewer import create_db_viewer_router
 from trainer.demo_api.expert_guidance import ExpertGuidanceEngine
 from trainer.demo_api.guided_workflow import create_guided_workflow_router
 from trainer.demo_api.telemetry_router import create_telemetry_router
+from trainer.demo_api.test_api_docs import add_test_input_overviews
 from trainer.demo_api.anomaly_stream import AnomalyBroadcaster
 from trainer.demo_api.sequence_analysis import SequenceAnalysisEngine
 from trainer.demo_api.sequence_store import SequenceStore
@@ -74,7 +77,7 @@ def _openapi_description() -> str:
 4. 저장 결과는 [Co-Pilot DB 뷰어]({public_base}/admin)에서 확인합니다.
 5. 텍스트 질의는 `0-5`, 음성 질의는 `0-6`에서 시험합니다. `0-7`에서는 실제 업로드용 WAV를 내려받을 수 있습니다.
 
-> **DB 뷰어 바로가기:** [{public_base}/admin]({public_base}/admin) — 읽기 전용이며 데이터를 수정하지 않습니다.
+> **DB 뷰어 바로가기:** [{public_base}/admin]({public_base}/admin) — 운영자 로그인 후 읽기 전용으로 조회합니다.
 
 > **전문가 3D 모션 뷰어:** [{public_base}/motion-viewer]({public_base}/motion-viewer) — 전형기 반장님의 대표 실측 모션과 반복 수행의 통계 범위를 확인합니다.
 
@@ -89,7 +92,7 @@ def _openapi_description() -> str:
 
 ### 실제 연동 기본 흐름
 
-`세션 시작 → 현재 시퀀스 전송 → 시퀀스 분석/가이드 → 텍스트·음성 질의 → 세션 종료 → 최종 리포트`
+`세션 시작 → 현재 시퀀스 저장 또는 분석/가이드 → 텍스트·음성 질의 → 세션 종료 → 최종 리포트`
 
 - **예시 세션:** 최신 TSB 전체 세션 샘플과 동일한 `session_id=3_11000346_1`, `user_id=1234`, `scenario_id=3`을 사용합니다.
 - **세션 식별자:** `session_id`는 TSB가 생성하며 완료 시 첨부할 CSV 파일명에서 확장자를 뺀 값과 같습니다. `scenario_id`는 `session_id`의 첫 `_` 앞 콘텐츠 식별자입니다.
@@ -99,6 +102,13 @@ def _openapi_description() -> str:
 - **음성 입력:** WAV PCM16, 16 kHz, mono, 최대 15초입니다. STT 뒤 기존 Query와 같은 답변 경로를 사용합니다.
 - **공통 응답:** `status / code / message / data`이며, 성공은 `status=SUCCESS`, 검증 실패는 주로 HTTP 422입니다.
 - **멱등성:** 동일한 `session_id + sequence_id`와 동일 본문을 재전송하면 중복 저장하지 않습니다.
+- **충돌 처리:** 같은 ID의 내용이 다르거나 새 시퀀스가 이미 처리한 시퀀스보다 이전 순서이면 HTTP 409를 반환합니다. 같은 내용의 정상 재시도는 기존 결과를 반환합니다.
+- **리포트 재시도·복구:** 동일 완료 요청은 같은 report_id를 반환합니다. 원본 CSV와 높이맵을 보관하고 서버 재시작 후 중단된 분석을 다시 수행합니다.
+- **목표 도막:** 세션 시작의 target_thickness_um을 입력하면 목표의 90~110% 두께 범위로 판정합니다. 생략하면 전문가 최종 도막 기준을 사용합니다. comparison_basis로 어느 기준인지 구분합니다.
+- **훈련 중 질의:** 자세 중간 평가는 최근 분사 최대 3회의 표본임을 표시하고, Zone 순서는 현재까지 저장된 시퀀스를 사용합니다. 완료 리포트는 전체 세션을 평가합니다.
+- **지원 범위:** 실시간 전문가 기준 안내는 학습모드 1~10을 대상으로 합니다. 실전·Unit은 데이터를 수신·보관하되 기준이 없는 분석은 not_available과 사유를 반환합니다. 블라스팅에는 도막 두께 판정을 적용하지 않습니다.
+- **업로드 제한:** CSV/CSV.GZ 64MiB, 압축 해제 CSV 256MiB, 최종 높이맵 PNG 16MiB입니다.
+- **접근 제어:** DB 뷰어·운영 로그는 운영자 인증이 필요합니다. TSB API키는 활성화한 서버에서만 X-API-Key 헤더로 전송하며 JSON 본문은 동일합니다.
 
 각 API의 상세 설명에는 **언제 호출하는지, 입력값 의미, 응답 활용법과 주의사항**을 적었습니다.
 """
@@ -411,9 +421,18 @@ def create_app(
         else:
             service = ChatService()
     live = service.live_runner is not None
+    protect_admin = os.environ.get("COPILOT_PROTECT_ADMIN", "1" if live else "0") == "1"
+    api_key = os.environ.get("COPILOT_API_KEY") or None
+    credentials = OperatorCredentials(Path(os.environ.get(
+        "COPILOT_OPERATOR_CREDENTIALS_PATH",
+        str(Path(SequenceStore._default_path()).parent / "operator_credentials.json"),
+    )))
 
     @asynccontextmanager
     async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+        if protect_admin:
+            await to_thread.run_sync(credentials.ensure)
+        await to_thread.run_sync(app.state.report_job_recovery)
         pipeline_init_thread: threading.Thread | None = None
         if live and os.environ.get("LIVE_EAGER_INIT") == "1":
             pipeline_init_thread = chat_service_mod.start_eager_pipeline_init()
@@ -452,6 +471,8 @@ def create_app(
     app.state.v1_store = v1_store
     app.state.sequence_store = sequence_store
     app.state.speech_to_text = speech_to_text
+    app.state.access_control = {"admin_protected": protect_admin, "api_key_required": bool(api_key)}
+    app.add_middleware(AccessControlMiddleware, credentials=credentials, protect_admin=protect_admin, api_key=api_key)
 
     raw_allow_origins = os.environ.get("DEMO_UI_ORIGINS")
     if raw_allow_origins is None:
@@ -556,16 +577,19 @@ def create_app(
             mcp_base_url=mcp_base_url,
             store=sequence_store,
             reports=v1_store,
+            sequence_engine=sequence_analysis,
         )
     )
-    app.include_router(create_v1_router(
+    v1_router = create_v1_router(
         store=v1_store,
         broadcaster=anomaly_broadcaster,
         sequences=sequence_store,
         sequence_engine=sequence_analysis,
         coating_engine=coating_progress,
         mcp_base_url=mcp_base_url,
-    ))
+    )
+    app.state.report_job_recovery = v1_router.recover_report_jobs
+    app.include_router(v1_router)
     # POST /api/v1/telemetry/sequence: 시퀀스를 데이터베이스에 올린다. 자세 채점은
     # copilot/query 의 pose_recomm 이 한다(명세서 p.4 vs p.9).
     # recorder 를 함께 준다 — v2.5 요청·응답이 /api/monitor/{events,stream} 에 보인다.
@@ -577,6 +601,7 @@ def create_app(
             sequence_engine=sequence_analysis,
             broadcaster=anomaly_broadcaster,
             coating_progress_engine=coating_progress,
+            session_store=v1_store,
         )
     )
     install_copilot_error_handlers(app)
@@ -586,6 +611,17 @@ def create_app(
     def _openapi_with_input_overviews() -> dict[str, Any]:
         schema = default_openapi()
         _add_openapi_input_overviews(schema)
+        add_test_input_overviews(schema)
+        schema.setdefault("components", {}).setdefault("securitySchemes", {})["TSBApiKey"] = {
+            "type": "apiKey", "in": "header", "name": "X-API-Key",
+            "description": "서버에서 API 키를 활성화한 경우 사용합니다. JSON 본문은 변경하지 않습니다.",
+        }
+        if api_key:
+            for path, operations in schema.get("paths", {}).items():
+                if path.startswith("/api/v1/"):
+                    for method, operation in operations.items():
+                        if method in _OPENAPI_METHODS:
+                            operation["security"] = [{"TSBApiKey": []}]
         return schema
 
     app.openapi = _openapi_with_input_overviews

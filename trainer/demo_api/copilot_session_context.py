@@ -9,6 +9,7 @@ training duration.
 from __future__ import annotations
 
 import json
+import math
 from collections import Counter
 from typing import Any
 
@@ -28,7 +29,7 @@ def _number(value: Any) -> float | None:
         parsed = float(value)
     except (TypeError, ValueError):
         return None
-    return round(parsed, 3)
+    return round(parsed, 3) if math.isfinite(parsed) else None
 
 
 def _sequence_fact(body: dict[str, Any]) -> dict[str, Any]:
@@ -124,12 +125,12 @@ def build_query_instruction(
         ),
         ])
     if context:
-        parts.extend(("[클라이언트 현재 문맥]", context))
+        parts.extend(("[클라이언트 현재 문맥 — 관찰 참고이며 검증된 점수·분석이 아님]", context[:2000]))
     if session_summary:
         parts.extend(("[현재 세션 누적 요약]", session_summary))
     if recent_turns:
         parts.append("[최근 대화]")
         for turn in recent_turns:
-            parts.append(f"사용자: {turn['prompt']}")
-            parts.append(f"Co-Pilot: {turn['answer']}")
+            parts.append(f"사용자: {turn['prompt'][:500]}")
+            parts.append(f"Co-Pilot: {turn['answer'][:1000]}")
     return "\n".join(parts)

@@ -145,7 +145,7 @@ def test_knowledge_search_runs_the_pipeline_on_the_fast_route(monkeypatch: pytes
             "session_id": None,
             "enable_thinking": False,
             "use_rag": True,
-            "max_tokens": 96,
+            "max_tokens": 128,
             "request_id": "req-query-0044",
         }
     ]
@@ -167,7 +167,7 @@ def test_detailed_mode_requests_evidence_and_action_from_the_model(monkeypatch: 
     assert "권장 조치" in instruction
     assert pipeline.calls[0]["force_route"] == "fast"
     assert pipeline.calls[0]["enable_thinking"] is False
-    assert pipeline.calls[0]["max_tokens"] == 256
+    assert pipeline.calls[0]["max_tokens"] == 512
 
 
 def test_detailed_order_mode_synthesizes_the_structured_report_instead_of_repeating_quick_answer() -> None:
@@ -226,7 +226,7 @@ def test_detailed_order_mode_synthesizes_the_structured_report_instead_of_repeat
     assert pipeline.calls[0]["max_tokens"] == 256
 
 
-def test_motion_viewer_analysis_context_supports_quick_and_detailed_without_a_complete_report() -> None:
+def test_motion_viewer_client_claims_are_not_used_as_verified_analysis() -> None:
     import json
     from fastapi import FastAPI
 
@@ -275,22 +275,11 @@ def test_motion_viewer_analysis_context_supports_quick_and_detailed_without_a_co
         prompt="권장 Zone 순서는?", response_mode="detailed", context=viewer_context,
     )).json()["data"]
 
-    assert quick["answer"] == "전문가 대표 흐름은 1 → 3 → 2입니다."
-    assert quick["context_status"] == "available"
-    assert detailed["answer"].startswith("[권장 Zone 순서]")
-    assert not detailed["answer"].startswith(f"[권장 Zone 순서]\n{quick['answer']}")
-    assert "[전문가 작업 경향]" in detailed["answer"]
-    assert "권장 작업 순서는 Zone" not in detailed["answer"]
-    assert "전문가 작업의 약 67%가 이 시작 흐름을 따랐습니다." in detailed["answer"]
-    assert "- 우선 적용 구간: Zone 1 → 3 (67%)" in detailed["answer"]
-    assert "- 유동 구간: Zone 2" in detailed["answer"]
-    assert "실제 수행: 1 → 2 → 3" in detailed["answer"]
-    assert "순서 준수율은 67%" in detailed["answer"]
-    assert "[구간별 판단]" in detailed["answer"]
-    assert "[권장 조치]" in detailed["answer"]
-    assert not detailed["answer"].rstrip().endswith("근거:")
-    assert detailed["answer"] != quick["answer"]
-    assert detailed["sequence_context"]["recommended_flow"] == ["1", "3", "2"]
+    assert quick["context_status"] == "not_available"
+    assert detailed["context_status"] == "not_available"
+    assert "1 → 3 → 2" not in quick["answer"]
+    assert "recommended_flow" not in detailed["sequence_context"]
+    assert pipeline.calls == []
 
 
 def test_response_mode_defaults_to_quick_and_rejects_unknown_values(
@@ -303,7 +292,7 @@ def test_response_mode_defaults_to_quick_and_rejects_unknown_values(
 
     assert quick.status_code == 200
     assert invalid.status_code == 422
-    assert invalid.json() == _error(422, "Invalid request")
+    assert invalid.json() == _error(422, "Invalid request: body.response_mode (Unsupported value)")
 
 
 def test_quick_mode_removes_an_unfinished_evidence_heading(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -753,7 +742,9 @@ def test_invalid_requests_get_the_error_envelope(monkeypatch: pytest.MonkeyPatch
     response = _client(monkeypatch, pipeline).post(URL, json=body)
 
     assert response.status_code == 422
-    assert response.json() == _error(422, "Invalid request")
+    assert response.json()["status"] == "ERROR"
+    assert response.json()["data"] is None
+    assert response.json()["message"].startswith("Invalid request: body.")
     assert pipeline.calls == []
 
 
@@ -763,7 +754,9 @@ def test_malformed_json_gets_the_error_envelope(monkeypatch: pytest.MonkeyPatch)
     )
 
     assert response.status_code == 422
-    assert response.json() == _error(422, "Invalid request")
+    assert response.json()["status"] == "ERROR"
+    assert response.json()["data"] is None
+    assert response.json()["message"].startswith("Invalid request: body.")
 
 
 def test_legacy_routes_keep_fastapi_validation_format(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -820,7 +813,7 @@ def test_concurrent_queries_run_one_at_a_time(monkeypatch: pytest.MonkeyPatch) -
     assert min(r.json()["data"]["latency_ms"] for r in responses) >= 200
 
 
-def test_order_question_before_complete_says_the_report_comes_after_complete(
+def test_order_question_without_sequences_explains_missing_data(
     monkeypatch: pytest.MonkeyPatch, network_calls: list[str]
 ) -> None:
     """순서 질문은 complete 리포트로 답한다. 아직 없으면 '준비 중'이 아니라 언제 생기는지를 말한다. 파이프라인·MCP 없음."""
@@ -828,7 +821,7 @@ def test_order_question_before_complete_says_the_report_comes_after_complete(
 
     data = TestClient(app).post(URL, json=_body(task_type="trajectory_recomm", session_id="SESSION-NONE")).json()["data"]
 
-    assert data["answer"].startswith("구역별 자세·순서 분석은 훈련 종료(sessions/complete) 뒤에")
+    assert "분사 시퀀스나 완료 리포트가 없습니다" in data["answer"]
     assert data["context_status"] == "not_available"
     assert data["sequence_context"]["reason_code"] == "session_report_unavailable"
     assert network_calls == []

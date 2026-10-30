@@ -383,6 +383,9 @@ class CoatingProgress(StrictModel):
     next_zone_id: str | None
     message: str | None
     reason: str | None
+    comparison_basis: Literal["expert_reference", "session_target"] = "expert_reference"
+    target_thickness_um: float | None = None
+    expert_completion_percent: Annotated[float | None, Field(ge=0, le=100)] = None
 
 
 class TelemetrySequenceData(StrictModel):

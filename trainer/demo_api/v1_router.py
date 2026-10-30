@@ -11,9 +11,12 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import os
+import re
 import time
+import zlib
 from collections.abc import AsyncIterator
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any, Final
@@ -42,11 +45,14 @@ from trainer.demo_api.v1_contracts import (
     report_example,
 )
 from trainer.demo_api.coating_progress import CoatingProgressEngine
-from trainer.demo_api.session_analysis import analyze_session
+from trainer.demo_api.session_analysis import analyze_session, inflate_csv
+from trainer.demo_api.report_jobs import (
+    CSV_UPLOAD_LIMIT, PNG_UPLOAD_LIMIT, InputTooLarge, ReportJobs, save_artifact,
+)
 from trainer.demo_api.session_coating import SessionCoating, analyze_session_coating
 from trainer.demo_api.sequence_store import SequenceStore
 from trainer.demo_api.sequence_analysis import SequenceAnalysisEngine
-from trainer.demo_api.v1_store import V1Store
+from trainer.demo_api.v1_store import SessionConflict, V1Store
 
 logger = logging.getLogger(__name__)
 
@@ -84,12 +90,10 @@ def _error(code: int, message: str) -> JSONResponse:
 _COATING_INDEX_UNDEFINED: Final = "coating_engine_pending_integration"
 _FLOW_MISSING: Final = "recommended_flow_missing"
 
-# 분석은 메모리 안 스레드라 서버가 재시작되면 그 리포트는 pending 에 영원히 남는다(TSB 2026-10-12).
-# 기한을 넘긴 pending 은 조회할 때 failed 로 닫는다.
-# shortcut: 10분은 실측 없이 넉넉히 잡은 값이다. 긴 세션의 분석 시간을 재면 그에 맞춘다.
+# Only legacy jobs without durable input can expire; recoverable/running work has no arbitrary deadline.
 _ANALYSIS_DEADLINE: Final = timedelta(minutes=10)
 _ANALYSIS_FAILED: Final = "analysis_failed"
-_ANALYSIS_FAILED_GUIDE: Final = "분석을 마치지 못했습니다. 같은 자료로 sessions/complete 를 다시 요청해 주세요."
+_ANALYSIS_FAILED_GUIDE: Final = "분석을 마치지 못했습니다. 입력 자료와 분석 서비스 상태를 확인해 주세요."
 
 def _unavailable_report(
     *,
@@ -244,11 +248,18 @@ def create_v1_router(
     mcp_base = mcp_base_url or os.environ.get("MCP_BASE_URL", "http://localhost:8100")
 
     def _settled(report_id: str) -> Any:
-        """조회용 행. 기한을 넘긴 pending 은 failed 로 닫고 돌려준다."""
+        """Expire only legacy rows whose input was never persisted."""
         row = state.get_completion(report_id)
         if row is None or row.report_status != "pending":
             return row
-        requested = datetime.strptime(row.requested_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        if row.payload.get("artifacts"):
+            return row
+        try:
+            requested = datetime.fromisoformat(row.requested_at.replace("Z", "+00:00"))
+            if requested.tzinfo is None:
+                requested = requested.replace(tzinfo=timezone.utc)
+        except ValueError:
+            return row
         if datetime.now(timezone.utc) - requested < _ANALYSIS_DEADLINE:
             return row
         logger.warning("report %s pending past deadline; closing as failed", report_id)
@@ -258,7 +269,8 @@ def create_v1_router(
         return state.get_completion(report_id)
 
     def _coating(
-        bodies: list[dict[str, Any]], *, scenario_id: str, height_map: bytes | None, height_map_name: str | None
+        bodies: list[dict[str, Any]], *, scenario_id: str, height_map: bytes | None, height_map_name: str | None,
+        target_thickness_um: float | None = None,
     ) -> SessionCoating | None:
         """세션 끝 도막(`session_coating`). 여기서 터져도 자세·순서 결과는 남긴다 — 리포트를 failed로 만들지 않는다."""
         if coating_engine is None:
@@ -267,6 +279,7 @@ def create_v1_router(
             return analyze_session_coating(
                 scenario_id=scenario_id, bodies=bodies, engine=coating_engine,
                 height_map=height_map, height_map_name=height_map_name,
+                target_thickness_um=target_thickness_um,
             )
         except Exception:  # noqa: BLE001 - 도막만 unavailable 로 낸다.
             logger.exception("session coating analysis failed scenario=%s", scenario_id)
@@ -284,6 +297,7 @@ def create_v1_router(
         csv_bytes: bytes,
         height_map: bytes | None = None,
         height_map_name: str | None = None,
+        target_thickness_um: float | None = None,
     ) -> None:
         """세션 종합 분석 — 자세(`session_analysis`)·순서·도막(`session_coating`). 응답을 보낸 뒤 스레드에서 돈다."""
         try:
@@ -300,6 +314,7 @@ def create_v1_router(
             coating = _coating(
                 result.source_bodies, scenario_id=scenario_id,
                 height_map=height_map, height_map_name=height_map_name,
+                target_thickness_um=target_thickness_um,
             )
             coating_report = coating.report if coating is not None else None
             state.finish_completion(
@@ -327,6 +342,9 @@ def create_v1_router(
             return
         logger.info("session analysis %s report=%s %s", session_id, report_id, result.counts)
 
+    jobs = ReportJobs(state, _analyze)
+    router.recover_report_jobs = jobs.recover_pending  # type: ignore[attr-defined]
+
     # --- 1. 세션 관리 (p.1-3) ---------------------------------------------
 
     @router.post(
@@ -340,6 +358,15 @@ def create_v1_router(
         ),
     )
     async def sessions_start(body: SessionStartRequest) -> JSONResponse:
+        try:
+            row, session_created = await to_thread.run_sync(
+                lambda: state.start_session_with_created(
+                    session_id=body.session_id, user_id=body.user_id, scenario_id=body.scenario_id,
+                    started_at=body.started_at, target_thickness_um=body.target_thickness_um,
+                )
+            )
+        except SessionConflict as exc:
+            return _error(409, str(exc))
         created = await to_thread.run_sync(
             lambda: state.upsert_user(
                 user_id=body.user_id,
@@ -348,22 +375,13 @@ def create_v1_router(
                 created_at=_now(),
             )
         )
-        row = await to_thread.run_sync(
-            lambda: state.start_session(
-                session_id=body.session_id,
-                user_id=body.user_id,
-                scenario_id=body.scenario_id,
-                started_at=body.started_at,
-                target_thickness_um=body.target_thickness_um,
-            )
-        )
-        # 같은 세션 id 를 다시 시작하면 이전 이상 발행 이력을 지운다.
-        anomalies.reset(body.session_id)
+        if session_created:
+            anomalies.reset(body.session_id)
         logger.info("session start %s user=%s created=%s", body.session_id, body.user_id, created)
         return _ok(
             SessionStateData(
                 session_id=row.session_id, user_id=row.user_id, scenario_id=row.scenario_id,
-                session_status="ACTIVE", started_at=row.started_at, ended_at=row.ended_at,
+                session_status=row.session_status, started_at=row.started_at, ended_at=row.ended_at,
                 user_created=created,
                 target_thickness_um=row.target_thickness_um,
             ).model_dump(mode="json")
@@ -375,6 +393,15 @@ def create_v1_router(
         description="사용자가 콘텐츠를 정상 종료하거나 중도 종료했을 때 호출합니다. 시작 API에서 사용한 session_id를 그대로 보내며, 서버는 종료 시각과 COMPLETED 상태를 기록합니다.",
     )
     async def sessions_end(body: SessionEndRequest) -> JSONResponse:
+        try:
+            row = await to_thread.run_sync(
+                lambda: state.end_session(
+                    session_id=body.session_id, user_id=body.user_id,
+                    scenario_id=body.scenario_id, ended_at=body.ended_at,
+                )
+            )
+        except SessionConflict as exc:
+            return _error(409, str(exc))
         if body.worker is not None and body.worker.skill_level and body.worker.handedness:
             _ = await to_thread.run_sync(
                 lambda: state.upsert_user(
@@ -384,12 +411,6 @@ def create_v1_router(
                     created_at=_now(),
                 )
             )
-        row = await to_thread.run_sync(
-            lambda: state.end_session(
-                session_id=body.session_id, user_id=body.user_id,
-                scenario_id=body.scenario_id, ended_at=body.ended_at,
-            )
-        )
         return _ok(
             SessionStateData(
                 session_id=row.session_id, user_id=row.user_id, scenario_id=row.scenario_id,
@@ -409,11 +430,11 @@ def create_v1_router(
         scenario_id: Annotated[str, Form(description="session_id의 첫 '_' 앞 콘텐츠 식별자", examples=["3"])],
         vr_score: Annotated[int, Form(ge=0, le=100, description="시뮬레이터가 산출한 최종 VR 수행 점수(0~100점)입니다.", examples=[54])],
         is_pass: Annotated[bool, Form(description="시뮬레이터 기준 훈련 통과 여부입니다. 통과는 true, 미통과는 false입니다.", examples=[False])],
-        avg_thickness_um: Annotated[float, Form(ge=0, description="세션 전체 피도면의 평균 도막 두께(µm)입니다.", examples=[138.91])],
+        avg_thickness_um: Annotated[float, Form(ge=0, allow_inf_nan=False, description="세션 전체 피도면의 평균 도막 두께(µm)입니다.", examples=[138.91])],
 
         telemetry_csv: Annotated[UploadFile, File(description="훈련 세션 전체 프레임과 Zone ID를 담은 CSV 또는 CSV.GZ 원본 파일입니다.")],
-        avg_speed_mms: Annotated[float | None, Form(ge=0, description="세션 전체 도구 이동 속도 평균(mm/s)입니다. 산출하지 않으면 생략합니다.", examples=[480.0])] = None,
-        avg_distance_mm: Annotated[float | None, Form(ge=0, description="세션 전체 노즐-피도면 이격거리 평균(mm)입니다. 산출하지 않으면 생략합니다.", examples=[255.0])] = None,
+        avg_speed_mms: Annotated[float | None, Form(ge=0, allow_inf_nan=False, description="세션 전체 도구 이동 속도 평균(mm/s)입니다. 산출하지 않으면 생략합니다.", examples=[480.0])] = None,
+        avg_distance_mm: Annotated[float | None, Form(ge=0, allow_inf_nan=False, description="세션 전체 노즐-피도면 이격거리 평균(mm)입니다. 산출하지 않으면 생략합니다.", examples=[255.0])] = None,
         height_map_image: Annotated[UploadFile | None, File(description="세션 종료 시점의 전체 누적 도막 높이맵 PNG입니다. 도막 분석을 사용하지 않으면 생략합니다.")] = None,
     ) -> JSONResponse:
         """최신 TSB multipart 전송을 받고 `report_id`를 부여해 `pending`으로 시작한다.
@@ -421,37 +442,67 @@ def create_v1_router(
         세션 평균 속도·이격거리는 2026-10-08 샘플에 없으므로 선택값이다. 시퀀스별
         속도·이격거리 평가는 `/copilot/analyze-sequence` 입력을 사용한다.
         """
-        csv_raw = await telemetry_csv.read()
+        if not state.report_storage_available:
+            return _error(503, "report storage is unavailable; retry the request")
+        session = await to_thread.run_sync(lambda: state.get_session(session_id))
+        if session is not None and (session.user_id, session.scenario_id) != (user_id, scenario_id):
+            return _error(409, "session user_id or scenario_id does not match")
+        csv_raw = await telemetry_csv.read(CSV_UPLOAD_LIMIT + 1)
+        if len(csv_raw) > CSV_UPLOAD_LIMIT:
+            return _error(413, "telemetry CSV exceeds upload size limit")
+        try:
+            # Validate the inflated size before accepting a gzip bomb. Invalid legacy CSV
+            # remains compatible: stored sequences can still supply analysis input.
+            await to_thread.run_sync(lambda: inflate_csv(csv_raw))
+        except InputTooLarge as exc:
+            return _error(413, str(exc))
+        except (OSError, EOFError, zlib.error):
+            pass
         csv_bytes = len(csv_raw)
-        image_raw = await height_map_image.read() if height_map_image is not None else None
+        image_raw = await height_map_image.read(PNG_UPLOAD_LIMIT + 1) if height_map_image is not None else None
+        if image_raw is not None and len(image_raw) > PNG_UPLOAD_LIMIT:
+            return _error(413, "height map exceeds upload size limit")
         image_bytes = len(image_raw) if image_raw is not None else None
-        image_name = height_map_image.filename if height_map_image is not None else None
+        image_name = None
+        if height_map_image is not None:
+            # MapNN in this metadata chooses the painted surface. Retain it across
+            # recovery, while never using any client filename as a filesystem path.
+            basename = (height_map_image.filename or "height_map.png").replace("\\", "/").rsplit("/", 1)[-1]
+            image_name = re.sub(r"[^\w.\- ]", "_", basename)[-255:] or "height_map.png"
+        payload = {
+            "user_id": user_id, "scenario_id": scenario_id, "vr_score": vr_score,
+            "is_pass": is_pass, "avg_thickness_um": avg_thickness_um,
+            "avg_speed_mms": avg_speed_mms, "avg_distance_mm": avg_distance_mm,
+            "telemetry_csv_bytes": csv_bytes, "height_map_image_bytes": image_bytes,
+            "target_thickness_um": session.target_thickness_um if session else None,
+            "height_map_name": image_name,
+        }
+        try:
+            refs = {"telemetry": await to_thread.run_sync(lambda: save_artifact(state.artifact_dir, csv_raw))}
+            if image_raw is not None:
+                refs["height_map"] = await to_thread.run_sync(lambda: save_artifact(state.artifact_dir, image_raw))
+        except OSError:
+            logger.exception("report input persistence failed session=%s", session_id)
+            return _error(503, "report input could not be persisted; retry the request")
+        payload["artifacts"] = refs
+        fingerprint = hashlib.sha256(json.dumps(
+            {"session_id": session_id, **payload}, sort_keys=True, ensure_ascii=False, allow_nan=False,
+        ).encode("utf-8")).hexdigest()
         completion = await to_thread.run_sync(
             lambda: state.create_completion(
                 session_id=session_id,
                 requested_at=_now(),
-                payload={
-                    "user_id": user_id, "scenario_id": scenario_id, "vr_score": vr_score,
-                    "is_pass": is_pass, "avg_thickness_um": avg_thickness_um,
-                    "avg_speed_mms": avg_speed_mms, "avg_distance_mm": avg_distance_mm,
-                    "telemetry_csv_bytes": csv_bytes, "height_map_image_bytes": image_bytes,
-                },
+                payload=payload, fingerprint=fingerprint,
             )
         )
         logger.info("session complete %s report=%s csv=%dB", session_id, completion.report_id, csv_bytes)
         # 세션 종합 분석은 응답 뒤에 돈다(p.12 "비동기 분석"). 결과는 리포트 폴링으로 본다.
-        background.add_task(
-            to_thread.run_sync,
-            lambda: _analyze(
-                completion.report_id, session_id=session_id, user_id=user_id,
-                scenario_id=scenario_id, csv_bytes=csv_raw,
-                height_map=image_raw, height_map_name=image_name,
-            ),
-        )
+        if completion.report_status == "pending":
+            background.add_task(to_thread.run_sync, lambda: jobs.run(completion.report_id))
         return _ok(
             SessionCompleteData(
                 report_id=completion.report_id, session_id=session_id,
-                report_status="pending", telemetry_csv_bytes=csv_bytes,
+                report_status=completion.report_status, telemetry_csv_bytes=csv_bytes,
                 height_map_image_bytes=image_bytes,
             ).model_dump(mode="json")
         )
@@ -572,12 +623,35 @@ def create_v1_router(
     for case, (anomaly_type, message) in _TEST_CASES.items():
 
         def _make(case: str = case, anomaly_type: str = anomaly_type, message: str = message):
+            def test_context(session_id: str) -> dict[str, Any]:
+                return {
+                    "input_used": {
+                        "query_parameters": {"session_id": session_id},
+                        "case": case, "sequence_id": f"TEST-{case}",
+                        "anomaly_type": None if anomaly_type == "none" else anomaly_type,
+                        "payload": {"message": message},
+                        "publish_anomaly": anomaly_type != "none",
+                    },
+                    "input_summary": "시뮬레이터 입력이나 분석 엔진 없이 정해진 예제 상태와 SSE 이벤트를 만듭니다.",
+                    "evaluation_focus": "normal은 이상 이벤트를 발행하지 않습니다. 이상 사례는 같은 세션·시퀀스·종류를 한 번만 발행합니다.",
+                    "evaluation_mode": "synthetic_event",
+                }
+
             @router.post(
                 f"/test/sequence/{case}",
                 response_model=ApiResponse,
                 tags=["0. 모의 연동"],
                 summary=f"0. [{case}] 시퀀스 시뮬레이션 및 SSE 방송",
                 description="기존 SSE 화면 개발을 위한 단일 사례 발생기입니다. session_id는 기본값 그대로 실행할 수 있고, normal 또는 방향·이격거리 이상 이벤트가 어떻게 전달되는지 빠르게 확인합니다.",
+                responses={200: {"description": "모의 상태와 실제 사용된 자동 입력을 반환합니다. 실제 자세·도막 분석은 수행하지 않습니다.",
+                    "content": {"application/json": {"example": {
+                        "status": "SUCCESS", "code": 200, "message": "OK", "data": {
+                            "test_context": test_context("3_11000346_1"),
+                            "session_id": "3_11000346_1", "sequence_id": f"TEST-{case}", "case": case,
+                            "anomaly_type": None if anomaly_type == "none" else anomaly_type,
+                            "anomaly_published": anomaly_type != "none", "coach_message": message,
+                        },
+                    }}}}},
                 name=f"test_sequence_{case.replace('-', '_')}",
             )
             async def _handler(
@@ -595,6 +669,7 @@ def create_v1_router(
                     )
                 return _ok(
                     {
+                        "test_context": test_context(session_id),
                         "session_id": session_id,
                         "sequence_id": sequence_id,
                         "case": case,

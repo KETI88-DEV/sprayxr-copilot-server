@@ -1,25 +1,9 @@
-"""v2.5 시퀀스 엔드포인트 둘.
+"""v2.5 telemetry storage and sequence analysis, sharing one immutable sequence key.
 
-정본은 `docs/XR Painting Simulator AI Co-Pilot Service API 정의서 - 대화형 API 명세서.pdf`다.
-
-* `POST /api/v1/telemetry/sequence` (p.4-5) — 90 FPS 배치를 **데이터베이스에 올린다**.
-  p.4 는 여기에 "도막 두께 및 궤적 평가"를 걸고 **자세는 걸지 않는다**. 자세 유사도 비교는
-  `copilot/query` 의 `pose_recomm` 이 `context` 로 시퀀스를 가리켜 수행한다(p.9) —
-  이 모듈의 이전 판이 자세를 여기서 채점한 것은 틀렸다
-* `POST /api/v1/copilot/analyze-sequence` — 1회 패스 궤적 비교 + 원포인트 레슨.
-  최신 TSB 전송처럼 `scenario_id`와 `sequence_setting.tool_type`으로 전문가 기준을 선택한다.
-
-**둘은 별개 엔드포인트다.** 이 모듈의 이전 판이 뒤쪽을 "계약에 없는 벤더 중복 전송"으로
-보고 멱등 별칭으로 받은 것은 틀렸다 — 근거로 삼은 260813 PDF에 그 항목이 없었을 뿐이다.
-같은 본문을 둘에 보내는 것이 설계이므로, 저장소는 두 경로를 **서로 다른 시퀀스 기록**으로
-보지 않고 같은 키로 본다. 두 번째 도착은 `duplicate`가 되고 다시 채점하지 않는다 —
-궤적 비교(`sequence_analysis`)가 구현되면 그때 분석 종류별로 갈라야 한다.
-
-엔진 상태: `coating_analysis`·`sequence_analysis` 둘 다 구현되지 않았다. 임의 값을 만들지
-않고 `analysis_status="not_available"`과 안정적인 `reason_code`를 낸다. 이상 탐지와 SSE
-발행(p.4의 "이상 탐지 시 SSE 채널로 Push")도 아직 없다.
-
-**본문을 저장한다.** 나중에 `pose_recomm` 질의가 채점할 대상이므로 해시만으로는 부족하다.
+Telemetry stores the TSB body; analyze-sequence additionally evaluates guidance,
+order/direction and coating progress. The same body may be sent to both paths.
+Conflicting content and late new sequence IDs return 409 before engine mutations.
+Analysis outcomes persist so retries never advance smoothing or coating twice.
 """
 
 from __future__ import annotations
@@ -27,9 +11,10 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import threading
 import time
 from datetime import datetime, timezone
-from typing import Any, Final, Protocol
+from typing import Any, Final, Iterator, Protocol
 
 from anyio import to_thread
 from fastapi import APIRouter
@@ -145,6 +130,7 @@ def create_telemetry_router(
     sequence_engine: SequenceEngine | None = None,
     broadcaster: AnomalyBroadcaster | None = None,
     coating_progress_engine: CoatingProgressEvaluator | None = None,
+    session_store: Any = None,
 ) -> APIRouter:
     """``recorder``를 주면 호출당 입력 1건 + 출력 1건을 `/api/monitor/*`에 남긴다.
 
@@ -153,13 +139,10 @@ def create_telemetry_router(
     """
     router = APIRouter()
     sequences = store if store is not None else SequenceStore()
-    guidance_cache: dict[tuple[str, str, int | None, str | None, str], SequenceGuide] = {}
-    coating_progress_cache: dict[
-        tuple[str, str, int | None, str | None, str], CoatingProgress
-    ] = {}
+    # Fixed stripes bound memory while serializing same-session state transitions.
+    session_locks = [threading.Lock() for _ in range(64)]
 
-    async def _handle(query: TelemetrySequenceRequest, *, analyze: bool) -> JSONResponse:
-        """두 엔드포인트가 같은 처리를 쓴다. 분석 종류별 분기는 엔진이 생기면 넣는다."""
+    def _handle_sync(query: TelemetrySequenceRequest, *, analyze: bool) -> JSONResponse:
         started = time.monotonic()
         monitor_session = query.session_id or _UNATTRIBUTED
         if recorder is not None:
@@ -168,16 +151,26 @@ def create_telemetry_router(
         frames_received = len(query.sequence_info)
         stored_body = json.dumps(query.model_dump(mode="json"), ensure_ascii=False)
         body_sha256 = _body_sha256(query)
-        ack_record = await to_thread.run_sync(
-            lambda: sequences.record(
+        ack_record = sequences.record(
                 session_key=query.session_id,
                 sequence_id=query.sequence_id,
                 body_sha256=body_sha256,
                 frames=frames_received,
                 received_at=_now(),
                 body=stored_body,
+                enforce_order=True,
             )
-        )
+
+        def reject(reason: str) -> JSONResponse:
+            payload = {"status": "ERROR", "code": 409, "message": reason, "data": None}
+            if recorder is not None:
+                recorder.record(monitor_session, "runtime", "output", payload)
+            return JSONResponse(status_code=409, content=payload)
+
+        if ack_record.conflict:
+            return reject("sequence_body_conflict: sequence_id already has different content")
+        if ack_record.out_of_order:
+            return reject("sequence_out_of_order: submit new sequences in increasing sequence_id order")
 
         common_data: dict[str, Any] = dict(
                 request_id=f"sequence-{query.sequence_id}",
@@ -199,22 +192,44 @@ def create_telemetry_router(
         )
         if analyze:
             assert isinstance(query, AnalyzeSequenceRequest)
-            cache_key = (
-                query.session_id,
-                query.sequence_id,
-                query.resolved_mode_id,
-                query.process_type,
-                body_sha256,
+            analysis_key = json.dumps([query.resolved_mode_id, query.process_type, body_sha256])
+            cached = sequences.load_analysis(
+                session_key=query.session_id, sequence_id=query.sequence_id, analysis_key=analysis_key,
             )
-            guide = guidance_cache.get(cache_key)
-            if guide is None:
+            if cached is None and sequences.latest_sequence_id(query.session_id) != query.sequence_id:
+                return reject("sequence_analysis_out_of_order: analyze each sequence before submitting a later sequence")
+            if cached is None:
                 guide = guidance_engine.evaluate(query) if guidance_engine is not None else _unavailable_guide()
-                guidance_cache[cache_key] = guide
-            if sequence_engine is not None:
-                decision = sequence_engine.evaluate(query, sequences)
-                common_data["sequence_feedback"] = decision.feedback
-                common_data["text_guide"] = decision.text_guide
-                if decision.anomaly_type is not None and broadcaster is not None:
+                decision = sequence_engine.evaluate(query, sequences) if sequence_engine is not None else None
+                target = None
+                if session_store is not None:
+                    session = session_store.get_session(query.session_id)
+                    target = session.target_thickness_um if session is not None else None
+                if coating_progress_engine is None:
+                    coating_progress = _unavailable_progress(query.zone_id)
+                elif callable(getattr(coating_progress_engine, "evaluate_replay", None)):
+                    def prior_requests() -> Iterator[AnalyzeSequenceRequest]:
+                        # The engine consumes this only after restart/LRU eviction.
+                        for body in sequences.session_bodies_through(query.session_id, query.sequence_id):
+                            if body.get("sequence_id") != query.sequence_id:
+                                yield AnalyzeSequenceRequest.model_validate(body)
+                    coating_progress = coating_progress_engine.evaluate_replay(
+                        query, prior_requests(), target_thickness_um=target,
+                    )
+                else:
+                    coating_progress = coating_progress_engine.evaluate(query)
+                cached = {
+                    "guide": guide.model_dump(mode="json"),
+                    "coating_progress": coating_progress.model_dump(mode="json"),
+                    "sequence_feedback": (decision.feedback.model_dump(mode="json") if decision else
+                                          common_data["sequence_feedback"].model_dump(mode="json")),
+                    "text_guide": decision.text_guide if decision else None,
+                }
+                sequences.save_analysis(
+                    session_key=query.session_id, sequence_id=query.sequence_id,
+                    analysis_key=analysis_key, result=cached,
+                )
+                if decision is not None and decision.anomaly_type is not None and broadcaster is not None:
                     broadcaster.publish(
                         session_id=query.session_id,
                         sequence_id=query.sequence_id,
@@ -224,22 +239,16 @@ def create_telemetry_router(
                             "message": decision.text_guide,
                         },
                     )
-            coating_progress = coating_progress_cache.get(cache_key)
-            if coating_progress is None:
-                coating_progress = (
-                    coating_progress_engine.evaluate(query)
-                    if coating_progress_engine is not None
-                    else _unavailable_progress(query.zone_id)
-                )
-                coating_progress_cache[cache_key] = coating_progress
+            common_data["sequence_feedback"] = cached["sequence_feedback"]
+            common_data["text_guide"] = cached["text_guide"]
             envelope = AnalyzeSequenceResponse(
                 status="SUCCESS",
                 code=200,
                 message=_SUCCESS_MESSAGE,
                 data=AnalyzeSequenceData(
                     **common_data,
-                    guide=guide,
-                    coating_progress=coating_progress,
+                    guide=cached["guide"],
+                    coating_progress=cached["coating_progress"],
                 ),
             )
         else:
@@ -258,6 +267,8 @@ def create_telemetry_router(
                 len(unknown),
                 ",".join(unknown[:5]),
             )
+        assert envelope.data is not None
+        envelope.data.latency_ms = int((time.monotonic() - started) * 1000)
         payload = envelope.model_dump(mode="json")
         if recorder is not None:
             # 저장(상태 전이)이 위에서 끝난 뒤에 출력을 발행한다 — 순서를 뒤집으면
@@ -273,6 +284,12 @@ def create_telemetry_router(
             ack_record.conflict,
         )
         return JSONResponse(status_code=200, content=payload)
+
+    async def _handle(query: TelemetrySequenceRequest, *, analyze: bool) -> JSONResponse:
+        def work() -> JSONResponse:
+            with session_locks[hash(query.session_id) % len(session_locks)]:
+                return _handle_sync(query, analyze=analyze)
+        return await to_thread.run_sync(work)
 
     @router.post(
         TELEMETRY_SEQUENCE_PATH,

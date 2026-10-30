@@ -139,6 +139,67 @@ def test_overpainted_zone_tells_the_worker_to_stop(tmp_path: Path) -> None:
     assert result.overpaint_percent == 100.0
 
 
+def test_session_target_changes_compliance_without_changing_expert_reference(tmp_path: Path) -> None:
+    _profile(tmp_path)
+    request = _request(sequence_id="SEQ-001", thickness_um=110.0)
+    expert = CoatingProgressEngine(tmp_path).evaluate(request)
+    target = CoatingProgressEngine(tmp_path).evaluate(request, target_thickness_um=200.0)
+    assert expert.status == "complete"
+    assert target.status == "needs_more"
+    assert target.comparison_basis == "session_target"
+    assert target.target_thickness_um == 200.0
+    assert target.expert_completion_percent == 100.0
+    assert target.completion_percent < expert.completion_percent
+
+
+def test_replay_restores_other_crop_pixels_after_engine_restart(tmp_path: Path) -> None:
+    _profile(tmp_path)
+    first = _request(sequence_id="SEQ-001", thickness_um=100.0)
+    second = _request(sequence_id="SEQ-002", thickness_um=100.0)
+    for request, x0 in ((first, 0), (second, 2)):
+        crop = request.sequence_result.cur_sequence_heatmap[0]
+        crop.x0 = x0
+        crop.width = 2
+    result = CoatingProgressEngine(tmp_path).evaluate_replay(second, [first])
+    assert result.status == "complete"
+    assert result.coverage_percent == 100.0
+
+
+def test_replay_cannot_leak_thickness_from_a_different_session(tmp_path: Path) -> None:
+    _profile(tmp_path)
+    first = _request(sequence_id="SEQ-001", thickness_um=200.0)
+    second = _request(sequence_id="SEQ-002", thickness_um=10.0)
+    first.session_id = "OTHER-SESSION"
+    crop = second.sequence_result.cur_sequence_heatmap[0]
+    crop.width = 2
+    result = CoatingProgressEngine(tmp_path).evaluate_replay(second, [first])
+    assert result.status == "needs_more"
+    assert result.overpaint_percent == 0.0
+
+
+def test_warm_replay_applies_telemetry_only_crops_between_analyzed_sequences(tmp_path: Path) -> None:
+    _profile(tmp_path)
+    engine = CoatingProgressEngine(tmp_path)
+    first = _request(sequence_id="SEQ-001", thickness_um=10.0)
+    second = _request(sequence_id="SEQ-002", thickness_um=100.0)
+    third = _request(sequence_id="SEQ-003", thickness_um=100.0)
+    first.sequence_result.cur_sequence_heatmap[0].width = 2
+    second.sequence_result.cur_sequence_heatmap[0].width = 2
+    third.sequence_result.cur_sequence_heatmap[0].x0 = 2
+    third.sequence_result.cur_sequence_heatmap[0].width = 2
+    engine.evaluate_replay(first, [])
+    assert engine.evaluate_replay(third, [first, second]).status == "complete"
+
+
+def test_target_upper_boundary_allows_rg16_quantization(tmp_path: Path) -> None:
+    _profile(tmp_path)
+    result = CoatingProgressEngine(tmp_path).evaluate(
+        _request(sequence_id="SEQ-001", thickness_um=110.0), target_thickness_um=100.0,
+    )
+    assert result.overpaint_percent == 0.0
+    assert result.status == "complete"
+
+
 def test_missing_heatmap_and_blasting_return_honest_unavailable_results(tmp_path: Path) -> None:
     _profile(tmp_path)
     engine = CoatingProgressEngine(tmp_path)

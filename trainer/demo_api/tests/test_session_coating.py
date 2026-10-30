@@ -235,8 +235,10 @@ def test_after_complete_pose_recomm_names_the_most_problematic_zone(engine: Coat
     """
     client = _client(engine)
     before = _ask(client, "가장 문제 있는 구역이 어디야?")
-    assert before["context_status"] == "not_available"
-    assert before["pose_context"]["reason_code"] == "session_report_unavailable"
+    assert before["context_status"] == "available"
+    assert before["pose_context"]["source"] == "live_sequences"
+    assert before["pose_context"]["scope"] == "recent_sequences"
+    assert "표본" in before["answer"]
 
     response = client.post(
         "/api/v1/sessions/complete",
@@ -471,7 +473,8 @@ def test_order_answers_follow_recommended_actual_missing_and_direction_questions
     missing = answer_order_question(found, prompt="누락한 Zone이 있어?")
     direction = answer_order_question(found, prompt="도포 방향은 잘 지켰어?")
 
-    assert recommended.answer == "권장 순서는 7 → 4 → 8 → 9입니다."
+    assert "7 → 4 → 8 → 9" in recommended.answer
+    assert "Zone 7에서 시작" in recommended.answer
     assert actual.answer == "이번 세션에서 처음 칠한 순서는 9 → 7 → 4입니다."
     assert missing.answer == "권장 순서 중 칠하지 않은 구역은 8번입니다."
     assert direction.answer == "전문가 기준 도포 방향 준수율은 75%입니다."

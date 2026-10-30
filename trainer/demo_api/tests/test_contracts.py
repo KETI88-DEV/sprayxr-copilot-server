@@ -94,4 +94,16 @@ def test_the_contract_covers_every_field_the_example_uses() -> None:
     assert _paths(data) - _paths(produced) == set(), "예시에 있는데 우리가 안 내는 필드"
     # 명세서 p.16 은 `direction_adherence_rate` 를 sequence_report 의 최상위 필드로
     # 적고 예시는 direction_summary 안에 둔다. 둘 다 싣되 한 번 계산해 같은 값을 쓴다.
-    assert _paths(produced) - _paths(data) == {"report.sequence_report.direction_adherence_rate"}
+    assert _paths(produced) - _paths(data) == {
+        "report.sequence_report.direction_adherence_rate",
+        "report.sequence_report.reference_session_count",
+        "report.sequence_report.reference_flows",
+        "report.sequence_report.position_distribution",
+        "report.sequence_report.best_reference_similarity",
+        "report.sequence_report.position_similarity",
+        "report.coating_report.comparison_basis",
+        "report.coating_report.target_thickness_um",
+        "report.pose_report.confidence",
+        "report.pose_report.limited_sequence_count",
+        "report.pose_report.reason_codes",
+    }

@@ -341,3 +341,22 @@ def test_a_sequence_report_crash_also_marks_the_report_failed() -> None:
 
     detail = client.get(f"/api/v1/reports/{report_id}").json()["data"]
     assert detail["report"]["report_status"] == "failed"
+
+
+def test_limited_confidence_is_preserved_in_session_report_without_claiming_normality(monkeypatch) -> None:
+    def limited(body, *, sequence_id, **kwargs):
+        return PoseQueryResult(
+            analysis_status="available", reason_code="comparison_scope_limited",
+            sequence_id=sequence_id, similarity_score=0.8, correction_mode="none",
+            corrections=[], summary=None, confidence="limited",
+        )
+    monkeypatch.setattr(sa, "score_body", limited)
+    client = _client(_FakeMcp(), SequenceStore(":memory:"))
+    report_id = _complete(client, _csv_bytes())
+    report = client.get(f"/api/v1/reports/{report_id}").json()["data"]["report"]["pose_report"]
+    assert report["analysis_status"] == "available"
+    assert report["confidence"] == "limited"
+    assert report["limited_sequence_count"] == report["evaluated_sequence_count"] > 0
+    assert report["reason_codes"] == ["comparison_scope_limited"]
+    assert "참고용" in report["guideline"]
+    assert "모두 숙련 작업자의 통상 범위 안" not in report["guideline"]

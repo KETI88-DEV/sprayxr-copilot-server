@@ -228,6 +228,9 @@ def test_analyze_sequence_returns_current_zone_coating_progress() -> None:
         "next_zone_id": None,
         "message": "Zone 1을 추가 도장하세요.",
         "reason": None,
+        "comparison_basis": "expert_reference",
+        "target_thickness_um": None,
+        "expert_completion_percent": None,
     }
 
 
@@ -262,6 +265,112 @@ def test_duplicate_analyze_returns_cached_guide_without_advancing_smoothing_stat
     assert stub.calls == 1
 
 
+def test_conflict_is_rejected_before_any_engine_or_anomaly_changes() -> None:
+    stub = _GuidanceStub(_guide())
+    bus = AnomalyBroadcaster()
+    client = _client(guidance_engine=stub, sequence_engine=_SequenceStub(), broadcaster=bus)
+    assert client.post(URL, json=_body()).status_code == 200
+    response = client.post(ANALYZE_SEQUENCE_PATH, json=_body(zone_id="2"))
+    assert response.status_code == 409
+    assert stub.calls == 0
+    assert bus.since(_body()["session_id"], last_event_id=0) == []
+
+
+def test_late_new_sequence_is_rejected_before_storage_or_analysis() -> None:
+    store = SequenceStore(":memory:")
+    stub = _GuidanceStub(_guide())
+    client = _client(store=store, guidance_engine=stub)
+    assert client.post(URL, json=_body(sequence_id="SEQ-002")).status_code == 200
+    response = client.post(ANALYZE_SEQUENCE_PATH, json=_body(sequence_id="SEQ-001"))
+    assert response.status_code == 409
+    assert "sequence_out_of_order" in response.json()["message"]
+    assert store.load_body(session_key=_body()["session_id"], sequence_id="SEQ-001") is None
+    assert stub.calls == 0
+
+
+def test_duplicate_analysis_survives_router_restart_without_reapplying_engines() -> None:
+    store = SequenceStore(":memory:")
+    first_stub = _GuidanceStub(_guide())
+    first = _client(store=store, guidance_engine=first_stub).post(ANALYZE_SEQUENCE_PATH, json=_body())
+    second_stub = _GuidanceStub(_guide(speed="fast"))
+    second = _client(store=store, guidance_engine=second_stub).post(ANALYZE_SEQUENCE_PATH, json=_body())
+    assert second.status_code == 200
+    assert second.json()["data"]["guide"] == first.json()["data"]["guide"]
+    assert second_stub.calls == 0
+
+
+def test_historical_first_analysis_does_not_rewind_guidance_smoothing() -> None:
+    store = SequenceStore(":memory:")
+    stub = _GuidanceStub(_guide())
+    client = _client(store=store, guidance_engine=stub)
+    client.post(URL, json=_body(sequence_id="SEQ-001"))
+    client.post(ANALYZE_SEQUENCE_PATH, json=_body(sequence_id="SEQ-002"))
+    response = client.post(ANALYZE_SEQUENCE_PATH, json=_body(sequence_id="SEQ-001"))
+    assert response.status_code == 409
+    assert stub.calls == 1
+
+
+def test_concurrent_duplicate_analysis_has_one_engine_evaluation() -> None:
+    from concurrent.futures import ThreadPoolExecutor
+    stub = _GuidanceStub(_guide())
+    client = _client(guidance_engine=stub)
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        responses = list(pool.map(lambda _: client.post(ANALYZE_SEQUENCE_PATH, json=_body()), range(8)))
+    assert all(response.status_code == 200 for response in responses)
+    assert sum(response.json()["data"]["sequence_data_ack"]["stored"] for response in responses) == 1
+    assert stub.calls == 1
+
+
+def test_synchronous_engines_execute_off_the_asgi_event_loop() -> None:
+    import threading
+    import anyio
+
+    class ThreadGuide(_GuidanceStub):
+        thread_id: int | None = None
+        def evaluate(self, request: Any) -> SequenceGuide:
+            self.thread_id = threading.get_ident()
+            return super().evaluate(request)
+
+    async def run() -> None:
+        stub = ThreadGuide(_guide())
+        app = FastAPI()
+        app.include_router(create_telemetry_router(store=SequenceStore(":memory:"), guidance_engine=stub))
+        event_loop_thread = threading.get_ident()
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.post(ANALYZE_SEQUENCE_PATH, json=_body())
+        assert response.status_code == 200
+        assert stub.thread_id != event_loop_thread
+
+    anyio.run(run)
+
+
+def test_coating_replay_receives_prior_telemetry_and_session_target() -> None:
+    from types import SimpleNamespace
+
+    class ReplayCoating:
+        def evaluate_replay(self, request: Any, prior: Any, *, target_thickness_um: Any) -> CoatingProgress:
+            assert request.sequence_id == "SEQ-002"
+            assert [item.sequence_id for item in prior] == ["SEQ-001"]
+            assert target_thickness_um == 175
+            return CoatingProgress(
+                zone_id="1", available=False, status=None, recommendation=None,
+                completion_percent=None, coverage_percent=None, overpaint_percent=None,
+                next_zone_id=None, message=None, reason="test",
+            )
+
+    class Sessions:
+        def get_session(self, _session_id: str) -> Any:
+            return SimpleNamespace(target_thickness_um=175)
+
+    app = FastAPI()
+    app.include_router(create_telemetry_router(
+        store=SequenceStore(":memory:"), coating_progress_engine=ReplayCoating(), session_store=Sessions(),
+    ))
+    client = TestClient(app)
+    assert client.post(URL, json=_body(sequence_id="SEQ-001")).status_code == 200
+    assert client.post(ANALYZE_SEQUENCE_PATH, json=_body()).status_code == 200
+
+
 @pytest.mark.parametrize("mode_id", [0, 11, "x"])
 def test_mode_id_outside_the_documented_range_is_rejected(mode_id: Any) -> None:
     """Given a mode_id outside 1~10, When posted, Then it is 422."""
@@ -277,15 +386,14 @@ def test_telemetry_sequence_does_not_take_mode_id() -> None:
 
 
 def test_same_key_with_a_different_body_is_reported_not_overwritten() -> None:
-    """Given a conflicting body under one key, When posted, Then it is degraded, not silently kept."""
+    """A conflicting payload cannot be acknowledged as successfully evaluated."""
     client = _client()
     _ = client.post(URL, json=_body())
-    conflict = client.post(URL, json=_body(sequence_info=[_frame(), _frame(2)])).json()["data"]
-
-    # 충돌은 ack 의 stored=false + duplicate=false 조합이 구별해 준다 — 계약에 없는
-    # 필드를 더하지 않는다.
-    assert conflict["sequence_data_ack"] == {
-        "stored": False, "duplicate": False, "frames_received": 2, "frames_accepted": 0,
+    conflict = client.post(URL, json=_body(sequence_info=[_frame(), _frame(2)]))
+    assert conflict.status_code == 409
+    assert conflict.json() == {
+        "status": "ERROR", "code": 409,
+        "message": "sequence_body_conflict: sequence_id already has different content", "data": None,
     }
 
 
@@ -300,7 +408,10 @@ def test_top_level_typo_is_rejected_with_the_v25_error_envelope() -> None:
     response = _client().post(URL, json=body)
 
     assert response.status_code == 422
-    assert response.json() == {"status": "ERROR", "code": 422, "message": "Invalid request", "data": None}
+    assert response.json() == {
+        "status": "ERROR", "code": 422,
+        "message": "Invalid request: body.session_id (Field required)", "data": None,
+    }
 
 
 def test_unknown_frame_key_is_accepted_and_reported() -> None:
@@ -455,7 +566,8 @@ def test_a_conflicting_body_is_still_recorded_both_ways() -> None:
 
     events = recorder.snapshot(cursor=0, limit=50).events
     assert [(e.phase, e.direction) for e in events[2:]] == [("runtime", "input"), ("runtime", "output")]
-    assert events[3].payload["data"]["sequence_data_ack"]["stored"] is False
+    assert events[3].payload["status"] == "ERROR"
+    assert events[3].payload["code"] == 409
 
 
 def test_the_monitor_groups_by_session_id() -> None:

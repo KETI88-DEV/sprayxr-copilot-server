@@ -16,12 +16,18 @@ import logging
 import sqlite3
 import threading
 import uuid
+import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Final
 
 from trainer.demo_api.sequence_store import SequenceStore
 
 logger = logging.getLogger(__name__)
+
+
+class SessionConflict(ValueError):
+    """An existing session identifier belongs to different immutable input."""
 
 _SCHEMA: Final[tuple[str, ...]] = (
     """
@@ -93,9 +99,10 @@ class V1Store:
 
     def __init__(self, db_path: str | None = None) -> None:
         self._guard = threading.Lock()
+        configured_path = db_path if db_path is not None else SequenceStore._default_path()
         # 연결 규칙(경로 불가 시 메모리로 내려감, WAL)을 SequenceStore 와 공유한다.
         self._conn = SequenceStore._connect(  # noqa: SLF001 - 같은 DB, 같은 연결 규칙
-            db_path if db_path is not None else SequenceStore._default_path()
+            configured_path
         )
         with self._conn:
             for statement in _SCHEMA:
@@ -107,6 +114,21 @@ class V1Store:
                 self._conn.execute(
                     "ALTER TABLE sessions ADD COLUMN target_thickness_um REAL"
                 )
+            columns = {str(row[1]) for row in self._conn.execute("PRAGMA table_info(completions)")}
+            if "fingerprint" not in columns:
+                self._conn.execute("ALTER TABLE completions ADD COLUMN fingerprint TEXT")
+            self._conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS completions_fingerprint ON completions(fingerprint) WHERE fingerprint IS NOT NULL"
+            )
+        actual_path = self._conn.execute("PRAGMA database_list").fetchone()[2]
+        # Explicit in-memory stores are for isolated callers/tests. A failed production
+        # database must not acknowledge a report as durable after silently falling back.
+        self.report_storage_available = bool(actual_path) or configured_path == ":memory:"
+        self._artifact_tmp = tempfile.TemporaryDirectory(prefix="sprayxr-reports-") if not actual_path else None
+        self.artifact_dir = (
+            Path(actual_path).resolve().parent / (Path(actual_path).name + ".reports")
+            if actual_path else Path(self._artifact_tmp.name)
+        )
 
     # --- 사용자 -----------------------------------------------------------
 
@@ -162,26 +184,53 @@ class V1Store:
         self, *, session_id: str, user_id: str, scenario_id: str, started_at: str,
         target_thickness_um: float | None = None,
     ) -> SessionRow:
+        return self.start_session_with_created(
+            session_id=session_id, user_id=user_id, scenario_id=scenario_id,
+            started_at=started_at, target_thickness_um=target_thickness_um,
+        )[0]
+
+    def start_session_with_created(
+        self, *, session_id: str, user_id: str, scenario_id: str, started_at: str,
+        target_thickness_um: float | None = None,
+    ) -> tuple[SessionRow, bool]:
+        """Return creation ownership atomically so retries cannot reset event history."""
         with self._guard, self._conn:
+            self._conn.execute("BEGIN IMMEDIATE")
+            existing = self._conn.execute(
+                "SELECT session_id, user_id, scenario_id, session_status, started_at, ended_at, target_thickness_um FROM sessions WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            if existing is not None:
+                row = SessionRow(*existing)
+                if (row.user_id, row.scenario_id, row.started_at, row.target_thickness_um) != (user_id, scenario_id, started_at, target_thickness_um):
+                    raise SessionConflict("session_id already exists with different start parameters")
+                return row, False
             self._conn.execute(
                 "INSERT INTO sessions (session_id, user_id, scenario_id, session_status, started_at, ended_at, target_thickness_um)"
-                " VALUES (?, ?, ?, 'ACTIVE', ?, NULL, ?)"
-                " ON CONFLICT(session_id) DO UPDATE SET"
-                "   user_id = excluded.user_id, scenario_id = excluded.scenario_id,"
-                "   session_status = 'ACTIVE', started_at = excluded.started_at, ended_at = NULL,"
-                "   target_thickness_um = excluded.target_thickness_um",
+                " VALUES (?, ?, ?, 'ACTIVE', ?, NULL, ?)",
                 (session_id, user_id, scenario_id, started_at, target_thickness_um),
             )
         return SessionRow(
             session_id, user_id, scenario_id, "ACTIVE", started_at, None,
             target_thickness_um,
-        )
+        ), True
 
     def end_session(
         self, *, session_id: str, user_id: str, scenario_id: str, ended_at: str
     ) -> SessionRow:
         """세션이 없어도 기록한다 — 종료 통지를 잃지 않는다. 시작 시각은 모르는 채 남는다."""
         with self._guard, self._conn:
+            self._conn.execute("BEGIN IMMEDIATE")
+            existing = self._conn.execute(
+                "SELECT session_id, user_id, scenario_id, session_status, started_at, ended_at, target_thickness_um FROM sessions WHERE session_id = ?",
+                (session_id,),
+            ).fetchone()
+            if existing is not None:
+                row = SessionRow(*existing)
+                if (row.user_id, row.scenario_id) != (user_id, scenario_id):
+                    raise SessionConflict("session user_id or scenario_id does not match")
+                if row.session_status == "COMPLETED":
+                    return row
             self._conn.execute(
                 "INSERT INTO sessions (session_id, user_id, scenario_id, session_status, started_at, ended_at, target_thickness_um)"
                 " VALUES (?, ?, ?, 'COMPLETED', NULL, ?, NULL)"
@@ -207,16 +256,24 @@ class V1Store:
 
     # --- 리포트 -----------------------------------------------------------
 
-    def create_completion(self, *, session_id: str, requested_at: str, payload: dict[str, Any]) -> CompletionRow:
+    def create_completion(self, *, session_id: str, requested_at: str, payload: dict[str, Any], fingerprint: str | None = None) -> CompletionRow:
         """`report_id`를 부여하고 `pending`으로 저장한다(p.12)."""
         import json
 
         report_id = f"RPT-{uuid.uuid4().hex[:12]}"
         with self._guard, self._conn:
+            self._conn.execute("BEGIN IMMEDIATE")
+            if fingerprint is not None:
+                old = self._conn.execute(
+                    "SELECT report_id, session_id, report_status, requested_at, payload FROM completions WHERE fingerprint = ?",
+                    (fingerprint,),
+                ).fetchone()
+                if old is not None:
+                    return CompletionRow(*old[:4], json.loads(old[4]))
             self._conn.execute(
-                "INSERT INTO completions (report_id, session_id, report_status, requested_at, payload)"
-                " VALUES (?, ?, 'pending', ?, ?)",
-                (report_id, session_id, requested_at, json.dumps(payload, ensure_ascii=False)),
+                "INSERT INTO completions (report_id, session_id, report_status, requested_at, payload, fingerprint)"
+                " VALUES (?, ?, 'pending', ?, ?, ?)",
+                (report_id, session_id, requested_at, json.dumps(payload, ensure_ascii=False), fingerprint),
             )
         return CompletionRow(report_id, session_id, "pending", requested_at, payload)
 
@@ -232,9 +289,18 @@ class V1Store:
                 return
             payload = json.loads(row[0]) | {"analysis": analysis}
             self._conn.execute(
-                "UPDATE completions SET report_status = ?, payload = ? WHERE report_id = ?",
+                "UPDATE completions SET report_status = ?, payload = ? WHERE report_id = ? AND report_status = 'pending'",
                 (status, json.dumps(payload, ensure_ascii=False), report_id),
             )
+
+    def pending_completions(self) -> list[CompletionRow]:
+        import json
+
+        with self._guard:
+            rows = self._conn.execute(
+                "SELECT report_id, session_id, report_status, requested_at, payload FROM completions WHERE report_status = 'pending' ORDER BY rowid"
+            ).fetchall()
+        return [CompletionRow(*row[:4], json.loads(row[4])) for row in rows]
 
     def get_completion(self, report_id: str) -> CompletionRow | None:
         import json

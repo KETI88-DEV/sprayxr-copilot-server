@@ -22,6 +22,7 @@ from trainer.demo_api.copilot_router import (
     execute_copilot_query,
 )
 from trainer.demo_api.sequence_store import SequenceStore
+from trainer.demo_api.sequence_analysis import SequenceAnalysisEngine
 from trainer.demo_api.v1_store import V1Store
 from trainer.demo_api.speech_to_text import (
     InvalidAudioError,
@@ -73,6 +74,7 @@ def _text_query_test_context(
                 "session_id": _TEST_TEXT_SESSION_ID,
                 "scenario_id": _TEST_TEXT_SCENARIO_ID,
                 "request_id": _TEST_TEXT_REQUEST_ID,
+                "context": "Swagger 텍스트 Query 모의연동",
             },
         },
         "input_summary": (
@@ -141,7 +143,8 @@ def _voice_test_context() -> dict[str, object]:
                 "scenario_id": _TEST_SCENARIO_ID,
                 "request_id": _TEST_REQUEST_ID,
                 "task_type": "knowledge_search",
-                "use_rag": "auto (서버 자동 결정)",
+                "response_mode": "quick",
+                "use_rag": "auto",
                 "context": "Swagger 음성질의 모의연동",
             },
         },
@@ -201,6 +204,7 @@ def create_voice_router(
     mcp_base_url: str | None = None,
     transport: object | None = None,
     reports: V1Store | None = None,
+    sequence_engine: SequenceAnalysisEngine | None = None,
 ) -> APIRouter:
     """Create the independent WAV-to-query endpoint used by VR clients."""
     router = APIRouter()
@@ -218,6 +222,7 @@ def create_voice_router(
         task_type: TaskType,
         use_rag: Literal["auto", "Y", "N"],
         context: str | None,
+        response_mode: ResponseMode = "quick",
     ) -> JSONResponse:
         started = time.monotonic()
         if len(payload) > MAX_UPLOAD_BYTES:
@@ -255,6 +260,7 @@ def create_voice_router(
             prompt=transcript,
             use_rag=use_rag,
             context=context,
+            response_mode=response_mode,
         )
         response = await execute_copilot_query(
             query,
@@ -265,6 +271,7 @@ def create_voice_router(
             transport=transport,
             started=started,
             reports=reports,
+            sequence_engine=sequence_engine,
         )
         if response.status_code != 200:
             return response
@@ -299,6 +306,7 @@ def create_voice_router(
         scenario_id: Annotated[str | None, Form(description="session_id의 첫 '_' 앞 콘텐츠 식별자", examples=["3"])] = None,
         request_id: Annotated[str | None, Form(description="클라이언트 로그와 서버 응답을 연결하기 위한 호출 추적용 식별자입니다.", examples=["REQ-VOICE-001"])] = None,
         task_type: Annotated[TaskType, Form(description="텍스트 Query API와 동일한 작업 유형", examples=["knowledge_search"])] = "knowledge_search",
+        response_mode: Annotated[ResponseMode, Form(description="quick은 짧은 안내, detailed는 상세 분석입니다.")] = "quick",
         use_rag: Annotated[Literal["auto", "Y", "N"], Form(
             description="auto는 서버 자동 판단이며 Y 또는 N은 강제 설정이 필요할 때만 사용합니다.",
             examples=["auto"],
@@ -316,6 +324,7 @@ def create_voice_router(
             task_type=task_type,
             use_rag=use_rag,
             context=context,
+            response_mode=response_mode,
         )
 
     @router.post(
@@ -372,6 +381,7 @@ def create_voice_router(
             mcp_base_url=mcp_base,
             transport=transport,
             reports=reports,
+            sequence_engine=sequence_engine,
         )
         if response.status_code != 200:
             return response

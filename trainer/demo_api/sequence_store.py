@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import sqlite3
 import threading
 from dataclasses import dataclass
@@ -88,6 +89,13 @@ class StoreResult:
     stored: bool
     duplicate: bool
     conflict: bool
+    out_of_order: bool = False
+
+
+def sequence_order_key(sequence_id: str) -> tuple[tuple[int, Any], ...]:
+    """Natural identifier order, including unpadded SEQ-2 before SEQ-10."""
+    return tuple((1, int(part)) if part.isdigit() else (0, part)
+                 for part in re.split(r"(\d+)", sequence_id))
 
 
 class SequenceStore:
@@ -101,6 +109,11 @@ class SequenceStore:
             self._conn.execute(_SCHEMA)
             self._conn.execute(_QUERY_TURNS_SCHEMA)
             self._conn.execute(_QUERY_TURNS_INDEX)
+            self._conn.execute("""CREATE TABLE IF NOT EXISTS sequence_analysis_results (
+                session_key TEXT NOT NULL, sequence_id TEXT NOT NULL,
+                analysis_key TEXT NOT NULL, result TEXT NOT NULL,
+                PRIMARY KEY (session_key, sequence_id, analysis_key)
+            )""")
             _add_missing_columns(self._conn)
 
     @staticmethod
@@ -114,7 +127,7 @@ class SequenceStore:
         if raw != ":memory:":
             try:
                 Path(raw).parent.mkdir(parents=True, exist_ok=True)
-                conn = sqlite3.connect(raw, check_same_thread=False)
+                conn = sqlite3.connect(raw, check_same_thread=False, timeout=30)
                 conn.execute("PRAGMA journal_mode=WAL")
                 return conn
             except (OSError, sqlite3.Error):
@@ -130,8 +143,12 @@ class SequenceStore:
         frames: int,
         received_at: str,
         body: str | None = None,
+        enforce_order: bool = False,
     ) -> StoreResult:
         with self._guard, self._conn:
+            # Lock before reading: separate store connections must not both observe
+            # a missing key and then race while upgrading a deferred transaction.
+            self._conn.execute("BEGIN IMMEDIATE")
             row = self._conn.execute(
                 "SELECT body_sha256 FROM sequences WHERE session_key = ? AND sequence_id = ?",
                 (session_key, sequence_id),
@@ -145,6 +162,12 @@ class SequenceStore:
                         sequence_id,
                     )
                 return StoreResult(stored=False, duplicate=same, conflict=not same)
+            if enforce_order:
+                ids = self._conn.execute(
+                    "SELECT sequence_id FROM sequences WHERE session_key = ?", (session_key,),
+                ).fetchall()
+                if any(sequence_order_key(str(item[0])) >= sequence_order_key(sequence_id) for item in ids):
+                    return StoreResult(False, False, False, out_of_order=True)
             self._conn.execute(
                 "INSERT INTO sequences (session_key, sequence_id, body_sha256, frames, received_at, body)"
                 " VALUES (?, ?, ?, ?, ?, ?)",
@@ -174,33 +197,25 @@ class SequenceStore:
                 "SELECT sequence_id FROM sequences WHERE session_key = ? ORDER BY sequence_id",
                 (session_key,),
             ).fetchall()
-        return [str(row[0]) for row in rows]
+        return sorted((str(row[0]) for row in rows), key=sequence_order_key)
 
     def session_bodies(self, session_key: str) -> list[dict[str, Any]]:
-        """Return valid bodies in receive order for deterministic session analysis."""
+        """Return valid bodies in natural sequence order, independent of arrival."""
         with self._guard:
             rows = self._conn.execute(
-                "SELECT body FROM sequences WHERE session_key = ? AND body IS NOT NULL"
-                " ORDER BY rowid",
+                "SELECT sequence_id, body FROM sequences WHERE session_key = ? AND body IS NOT NULL",
                 (session_key,),
             ).fetchall()
-        return self._decode_bodies(rows, session_key=session_key)
+        rows.sort(key=lambda row: sequence_order_key(str(row[0])))
+        return self._decode_bodies([(row[1],) for row in rows], session_key=session_key)
 
     def session_bodies_through(self, session_key: str, sequence_id: str) -> list[dict[str, Any]]:
-        """Return the receive-order prefix ending at ``sequence_id`` for retry-safe feedback."""
-        with self._guard:
-            target = self._conn.execute(
-                "SELECT rowid FROM sequences WHERE session_key = ? AND sequence_id = ?",
-                (session_key, sequence_id),
-            ).fetchone()
-            if target is None:
-                return []
-            rows = self._conn.execute(
-                "SELECT body FROM sequences WHERE session_key = ? AND rowid <= ? AND body IS NOT NULL"
-                " ORDER BY rowid",
-                (session_key, int(target[0])),
-            ).fetchall()
-        return self._decode_bodies(rows, session_key=session_key)
+        """Return the natural-order prefix ending at an existing sequence."""
+        bodies = self.session_bodies(session_key)
+        if not any(body.get("sequence_id") == sequence_id for body in bodies):
+            return []
+        target = sequence_order_key(sequence_id)
+        return [body for body in bodies if sequence_order_key(str(body.get("sequence_id", ""))) <= target]
 
     @staticmethod
     def _decode_bodies(rows: list[tuple[Any, ...]], *, session_key: str) -> list[dict[str, Any]]:
@@ -216,13 +231,24 @@ class SequenceStore:
 
     def latest_sequence_id(self, session_key: str) -> str | None:
         """`context`가 없을 때 쓸 가장 최근 시퀀스. 없으면 `None` — 지어내지 않는다."""
+        ids = self.sequence_ids(session_key)
+        return ids[-1] if ids else None
+
+    def load_analysis(self, *, session_key: str, sequence_id: str, analysis_key: str) -> dict[str, Any] | None:
+        """Persisted feedback makes retries harmless after restart or cache eviction."""
         with self._guard:
             row = self._conn.execute(
-                "SELECT sequence_id FROM sequences WHERE session_key = ?"
-                " ORDER BY rowid DESC LIMIT 1",
-                (session_key,),
+                "SELECT result FROM sequence_analysis_results WHERE session_key=? AND sequence_id=? AND analysis_key=?",
+                (session_key, sequence_id, analysis_key),
             ).fetchone()
-        return str(row[0]) if row is not None else None
+        return json.loads(row[0]) if row else None
+
+    def save_analysis(self, *, session_key: str, sequence_id: str, analysis_key: str, result: dict[str, Any]) -> None:
+        with self._guard, self._conn:
+            self._conn.execute(
+                "INSERT OR IGNORE INTO sequence_analysis_results VALUES (?, ?, ?, ?)",
+                (session_key, sequence_id, analysis_key, json.dumps(result, ensure_ascii=False)),
+            )
 
     def record_query_turn(
         self,

@@ -143,6 +143,7 @@ def analyze_session_coating(
     engine: CoatingProgressEngine,
     height_map: bytes | None = None,
     height_map_name: str | None = None,
+    target_thickness_um: float | None = None,
 ) -> SessionCoating:
     """세션 끝 도막을 구역별로 판정한다(모듈 독스트링의 순서). `bodies`는 시간 순서여야 한다."""
     mode_id = learning_mode_from_scenario(scenario_id)
@@ -165,7 +166,8 @@ def analyze_session_coating(
         return _unavailable("heatmap_unavailable", "세션 끝 도막 두께(높이맵·시퀀스 히트맵)가 없습니다.")
 
     judgments, reason = engine.judge_zones(
-        scenario_id=scenario_id, process=process, mode_id=mode_id, surfaces=surfaces
+        scenario_id=scenario_id, process=process, mode_id=mode_id, surfaces=surfaces,
+        target_thickness_um=target_thickness_um,
     )
     if not judgments:
         return _unavailable(reason or "coating_reference_unavailable", "이 콘텐츠의 전문가 도막 기준이 없습니다.")
@@ -179,6 +181,8 @@ def analyze_session_coating(
     above = sum(judgment.coverage.above for judgment in judgments)
     cells = sum(judgment.coverage.cells for judgment in judgments)
     report = {
+        "comparison_basis": "session_target" if target_thickness_um is not None else "expert_reference",
+        "target_thickness_um": target_thickness_um,
         "analysis_status": "available",
         "reason_code": None,
         "algorithm_version": ALGORITHM_VERSION,
@@ -195,4 +199,9 @@ def analyze_session_coating(
             for zone in worst
         ],
     }
+    if target_thickness_um is not None:
+        report["guideline"] = (
+            f"세션 목표 두께 {target_thickness_um:g}µm의 90~110% 범위를 기준으로 평가했습니다. "
+            + report["guideline"].replace("전문가 최종 도막과 비교한", "목표 도막과 비교한")
+        )
     return SessionCoating(report, zones)

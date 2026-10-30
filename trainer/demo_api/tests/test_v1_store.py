@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 
-from trainer.demo_api.v1_store import V1Store
+import pytest
+
+from trainer.demo_api.v1_store import SessionConflict, V1Store
 
 
 def _store() -> V1Store:
@@ -31,32 +35,85 @@ def test_upsert_creates_then_updates_only_the_documented_fields() -> None:
     assert (row.name, row.age, row.gender) == ("이름", 40, "M")
 
 
-def test_restarting_a_session_clears_the_end_time() -> None:
-    """Given an ended session, When started again, Then it is ACTIVE with no ended_at."""
+def test_start_retry_does_not_reopen_an_ended_session() -> None:
     store = _store()
     _ = store.start_session(session_id="S1", user_id="W-1", scenario_id="1-A", started_at="t0")
     _ = store.end_session(session_id="S1", user_id="W-1", scenario_id="1-A", ended_at="t1")
 
-    row = store.start_session(session_id="S1", user_id="W-1", scenario_id="1-A", started_at="t2")
+    row = store.start_session(session_id="S1", user_id="W-1", scenario_id="1-A", started_at="t0")
 
-    assert (row.session_status, row.started_at, row.ended_at) == ("ACTIVE", "t2", None)
+    assert (row.session_status, row.started_at, row.ended_at) == ("COMPLETED", "t0", "t1")
 
 
-def test_session_target_thickness_round_trips_and_updates() -> None:
+def test_session_target_thickness_is_immutable_for_a_session_id() -> None:
     store = _store()
 
     first = store.start_session(
         session_id="S1", user_id="W-1", scenario_id="3", started_at="t0",
         target_thickness_um=150.0,
     )
-    second = store.start_session(
-        session_id="S1", user_id="W-1", scenario_id="3", started_at="t1",
-        target_thickness_um=175.5,
-    )
+    with pytest.raises(SessionConflict):
+        store.start_session(
+            session_id="S1", user_id="W-1", scenario_id="3", started_at="t0",
+            target_thickness_um=175.5,
+        )
 
     assert first.target_thickness_um == 150.0
-    assert second.target_thickness_um == 175.5
-    assert store.get_session("S1").target_thickness_um == 175.5  # type: ignore[union-attr]
+    assert store.get_session("S1").target_thickness_um == 150.0  # type: ignore[union-attr]
+
+
+@pytest.mark.parametrize("field,value", [("user_id", "other"), ("scenario_id", "other"), ("started_at", "t1")])
+def test_start_conflict_preserves_the_original_session(field: str, value: str) -> None:
+    store = _store()
+    args = dict(session_id="S1", user_id="W-1", scenario_id="3", started_at="t0")
+    original = store.start_session(**args)
+    with pytest.raises(SessionConflict):
+        store.start_session(**(args | {field: value}))
+    assert store.get_session("S1") == original
+
+
+def test_end_retries_keep_the_first_timestamp_and_reject_wrong_owner() -> None:
+    store = _store()
+    store.start_session(session_id="S1", user_id="W-1", scenario_id="3", started_at="t0")
+    first = store.end_session(session_id="S1", user_id="W-1", scenario_id="3", ended_at="t1")
+    assert store.end_session(session_id="S1", user_id="W-1", scenario_id="3", ended_at="t2") == first
+    with pytest.raises(SessionConflict):
+        store.end_session(session_id="S1", user_id="other", scenario_id="3", ended_at="t3")
+    assert store.get_session("S1") == first
+
+
+def test_completion_fingerprint_is_atomic_across_store_connections(tmp_path: Path) -> None:
+    stores = [V1Store(str(tmp_path / "state.db")) for _ in range(2)]
+    def create(index: int):
+        return stores[index].create_completion(session_id="S1", requested_at="t", payload={"x": 1}, fingerprint="same")
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        rows = list(pool.map(create, range(2)))
+    assert rows[0].report_id == rows[1].report_id
+    stores[0].finish_completion(rows[0].report_id, status="complete", analysis={"evidence": 1})
+    stores[1].finish_completion(rows[0].report_id, status="failed", analysis={"error": "late"})
+    assert stores[0].get_completion(rows[0].report_id).report_status == "complete"
+
+
+def test_concurrent_starts_have_only_one_creation_owner(tmp_path: Path) -> None:
+    stores = [V1Store(str(tmp_path / "state.db")) for _ in range(2)]
+    def start(index: int):
+        return stores[index].start_session_with_created(
+            session_id="S1", user_id="W1", scenario_id="3", started_at="t0",
+        )
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        rows = list(pool.map(start, range(2)))
+    assert rows[0][0] == rows[1][0]
+    assert sorted(row[1] for row in rows) == [False, True]
+
+
+def test_legacy_completion_migration_preserves_existing_rows(tmp_path: Path) -> None:
+    path = tmp_path / "legacy.db"
+    with sqlite3.connect(path) as conn:
+        conn.execute("CREATE TABLE completions (report_id TEXT PRIMARY KEY, session_id TEXT, report_status TEXT, requested_at TEXT, payload TEXT)")
+        conn.execute("INSERT INTO completions VALUES ('RPT-old', 'S1', 'complete', 'old', '{\"value\":42}')")
+    store = V1Store(str(path))
+    assert store.get_completion("RPT-old").payload == {"value": 42}
+    assert store.create_completion(session_id="S2", requested_at="t", payload={}, fingerprint="new")
 
 
 def test_report_ids_are_unique_per_request() -> None:

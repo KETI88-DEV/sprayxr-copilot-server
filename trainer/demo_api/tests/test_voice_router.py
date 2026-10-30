@@ -98,7 +98,8 @@ def test_voice_query_returns_transcript_and_the_existing_query_answer_fields() -
     assert isinstance(data["stt_latency_ms"], int) and data["stt_latency_ms"] >= 0
     assert data["answer"] == "기준보다 얇은 도막입니다."
     assert data["citations"] == ["DOC-doc_0001-C0001"]
-    assert pipeline.calls[0]["instruction"] == data["transcript"]
+    assert data["transcript"] in pipeline.calls[0]["instruction"]
+    assert "빠른 안내" in pipeline.calls[0]["instruction"]
     assert pipeline.calls[0]["force_route"] == "fast"
     assert pipeline.calls[0]["enable_thinking"] is False
 
@@ -111,6 +112,18 @@ def test_blank_transcript_is_rejected_without_calling_the_model() -> None:
     assert response.status_code == 422
     assert response.json()["data"] is None
     assert pipeline.calls == []
+
+
+def test_voice_detailed_mode_matches_text_and_invalid_mode_is_rejected() -> None:
+    pipeline = _Pipeline()
+    client = _client(_Stt(), pipeline)
+    detailed = _post(client, response_mode="detailed")
+    assert detailed.status_code == 200
+    assert "상세 분석" in pipeline.calls[0]["instruction"]
+    assert pipeline.calls[0]["max_tokens"] == 512
+    invalid = _post(client, response_mode="slow")
+    assert invalid.status_code == 422
+    assert len(pipeline.calls) == 1
 
 
 def test_stt_unavailable_and_model_unavailable_are_reported_as_503() -> None:

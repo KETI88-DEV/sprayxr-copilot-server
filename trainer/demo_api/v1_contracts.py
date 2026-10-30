@@ -272,6 +272,8 @@ class CoatingReport(ReportArea):
     reachability: CoatingReachability | None = None
     worst_zones: list[CoatingWorstZone] = Field(default_factory=list)
     root_cause: CoatingRootCause | None = None
+    comparison_basis: Literal["expert_reference", "session_target"] = "expert_reference"
+    target_thickness_um: float | None = None
 
 
 # --- 5.2 순서·방향 ----------------------------------------------------------
@@ -374,6 +376,10 @@ class PoseReport(ReportArea):
     `average_similarity_score`의 분모는 **채점된 시퀀스만**이다. 판정할 수 없었던
     시퀀스를 0점으로 세면 '자세를 못 잰 것'과 '못한 것'이 섞인다.
     """
+
+    confidence: Literal["limited"] | None = None
+    limited_sequence_count: int | None = None
+    reason_codes: list[str] | None = None
 
     evaluated_sequence_count: int | None = None
     average_similarity_score: float | None = None

@@ -153,6 +153,13 @@ ROUTE_MAX_TOKENS: dict[str, int] = {
     "fast": 256,
 }
 
+
+def fast_response_budget(config: dict[str, Any], requested: int | None) -> int:
+    """Preserve default fast limits while honoring explicit quick/detail API budgets."""
+    configured = int(config.get("generation", {}).get("max_new_tokens", 768))
+    limit = ROUTE_MAX_TOKENS["fast"] if requested is None else max(1, min(int(requested), 1024))
+    return max(1, min(configured, limit))
+
 _PROGRESS_INTERVAL_SEC: Final[float] = 3.0
 
 # Acquired inside the worker thread, so async cancellation cannot free the slot
@@ -843,11 +850,7 @@ class AgentPipeline:
             return self.model.generate_response(messages=messages, tools=None)
 
         gen_cfg = self.config.get("generation", {})
-        token_limit = min(
-            int(gen_cfg.get("max_new_tokens", 768)),
-            ROUTE_MAX_TOKENS["fast"],
-            max_tokens if max_tokens is not None else ROUTE_MAX_TOKENS["fast"],
-        )
+        token_limit = fast_response_budget(self.config, max_tokens)
         if isinstance(self.model, OpenAIChatBackend):
             effective = None if getattr(self, "_structured_output_disabled", False) else answer_regex
             if effective is not None and enable_thinking:
@@ -1211,11 +1214,7 @@ class AgentPipeline:
                 system_prompt=str(self.config.get("prompt", {}).get("fast_system", "")).strip() or None,
             )
             fast_prompt_tokens = counter.count_messages(messages)
-            fast_max_tokens = min(
-                int(self.config.get("generation", {}).get("max_new_tokens", 768)),
-                ROUTE_MAX_TOKENS["fast"],
-                max_tokens if max_tokens is not None else ROUTE_MAX_TOKENS["fast"],
-            )
+            fast_max_tokens = fast_response_budget(self.config, max_tokens)
             max_model_len = context_window(self.config)
             context_report: dict[str, Any] | None = {
                 "max_model_len": max_model_len,
