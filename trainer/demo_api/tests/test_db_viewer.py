@@ -4,6 +4,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from trainer.demo_api.db_viewer import create_db_viewer_router
+from trainer.demo_api.access_control import AccessControlMiddleware, OperatorCredentials
 
 
 def _client(monkeypatch, tmp_path) -> TestClient:
@@ -19,6 +20,7 @@ def _client(monkeypatch, tmp_path) -> TestClient:
     conn.close()
     monkeypatch.setenv("SEQUENCE_DB_PATH", str(path))
     app = FastAPI()
+    app.add_middleware(AccessControlMiddleware, credentials=OperatorCredentials(tmp_path / "operator.json"), protect_admin=True)
     app.include_router(create_db_viewer_router())
     return TestClient(app)
 
@@ -48,3 +50,12 @@ def test_db_viewer_searches_values_and_escapes_query(monkeypatch, tmp_path) -> N
     assert "S-08" not in filtered.text
     assert "<script>" not in escaped.text
     assert "&lt;script&gt;" in escaped.text
+
+
+def test_public_viewer_rejects_mutating_methods_and_keeps_database_unchanged(monkeypatch, tmp_path) -> None:
+    client = _client(monkeypatch, tmp_path)
+    for method in ("POST", "PUT", "PATCH", "DELETE"):
+        assert client.request(method, "/admin", json={"session_id": "S-00", "session_status": "CHANGED"}).status_code == 405
+    with sqlite3.connect(tmp_path / "viewer.db") as conn:
+        assert conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 23
+        assert conn.execute("SELECT session_status FROM sessions WHERE session_id='S-00'").fetchone()[0] == "ACTIVE"

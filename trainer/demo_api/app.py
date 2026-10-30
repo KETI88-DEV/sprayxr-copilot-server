@@ -108,7 +108,7 @@ def _openapi_description() -> str:
 - **훈련 중 질의:** 자세 중간 평가는 최근 분사 최대 3회의 표본임을 표시하고, Zone 순서는 현재까지 저장된 시퀀스를 사용합니다. 완료 리포트는 전체 세션을 평가합니다.
 - **지원 범위:** 실시간 전문가 기준 안내는 학습모드 1~10을 대상으로 합니다. 실전·Unit은 데이터를 수신·보관하되 기준이 없는 분석은 not_available과 사유를 반환합니다. 블라스팅에는 도막 두께 판정을 적용하지 않습니다.
 - **업로드 제한:** CSV/CSV.GZ 64MiB, 압축 해제 CSV 256MiB, 최종 높이맵 PNG 16MiB입니다.
-- **접근 제어:** DB 뷰어·운영 로그는 운영자 인증이 필요합니다. TSB API키는 활성화한 서버에서만 X-API-Key 헤더로 전송하며 JSON 본문은 동일합니다.
+- **접근 제어:** DB 뷰어는 로그인 없이 읽기 전용으로 조회합니다. 운영 로그는 운영자 인증이 필요합니다. TSB API키는 활성화한 서버에서만 X-API-Key 헤더로 전송하며 JSON 본문은 동일합니다.
 
 각 API의 상세 설명에는 **언제 호출하는지, 입력값 의미, 응답 활용법과 주의사항**을 적었습니다.
 """
@@ -471,7 +471,7 @@ def create_app(
     app.state.v1_store = v1_store
     app.state.sequence_store = sequence_store
     app.state.speech_to_text = speech_to_text
-    app.state.access_control = {"admin_protected": protect_admin, "api_key_required": bool(api_key)}
+    app.state.access_control = {"admin_protected": False, "monitor_protected": protect_admin, "api_key_required": bool(api_key)}
     app.add_middleware(AccessControlMiddleware, credentials=credentials, protect_admin=protect_admin, api_key=api_key)
 
     raw_allow_origins = os.environ.get("DEMO_UI_ORIGINS")

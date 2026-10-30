@@ -1,4 +1,4 @@
-"""Operator-only database access and opt-in TSB API-key enforcement."""
+"""Operator-only monitor access and opt-in TSB API-key enforcement."""
 from __future__ import annotations
 
 import base64
@@ -66,7 +66,7 @@ class AccessControlMiddleware:
         path = scope.get("path", "")
         headers = dict(scope.get("headers", []))
         authorization = headers.get(b"authorization", b"").decode("latin-1")
-        operator_path = path == "/admin" or path.startswith("/admin/") or path.startswith("/api/monitor/")
+        operator_path = path.startswith("/api/monitor/")
         if self.protect_admin and operator_path and not self.credentials.valid(authorization):
             await JSONResponse(
                 {"status": "ERROR", "code": 401, "message": "Operator authentication required", "data": None},
