@@ -14,6 +14,7 @@ from fastapi import APIRouter, Query
 from fastapi.responses import HTMLResponse
 
 from trainer.demo_api.sequence_store import DEFAULT_DB_PATH
+from trainer.demo_api.db_dashboard import DASHBOARD_CSS, render_dashboard
 
 _CSS = """
 :root{color-scheme:light;--bg:#f4f7fb;--panel:#fff;--ink:#152033;--muted:#68758a;--line:#dde4ee;
@@ -51,7 +52,7 @@ def _page(content: str, sidebar: str = "") -> HTMLResponse:
     return HTMLResponse(
         "<!doctype html><html lang='ko'><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-        f"<title>Co-Pilot DB Viewer</title><style>{_CSS}</style></head>"
+        f"<title>Co-Pilot DB Viewer</title><style>{_CSS}{DASHBOARD_CSS}</style></head>"
         f'<body><div class="app-shell"><aside class="sidebar">{sidebar}</aside>'
         f'<main class="main">{content}</main></div></body></html>'
     )
@@ -73,12 +74,17 @@ def _cell(value: object) -> str:
 
 
 def _sidebar(tables: list[tuple[str, int]], selected: str | None) -> str:
+    labels = {"sessions":"훈련 세션","users":"작업자","sequences":"시퀀스 기록",
+              "query_turns":"질문·답변","completions":"최종 리포트",
+              "sequence_analysis_results":"시퀀스 분석 결과","legacy_import_records":"이전 데이터 이관 기록"}
     links = "".join(
         f'<a class="table-link{" active" if name == selected else ""}" href="/admin?table={quote(name)}">'
-        f"<span>{html.escape(name)}</span><span class='count'>{count:,}</span></a>"
+        f"<span class='table-name'>{html.escape(labels.get(name,name))}<small>{html.escape(name)}</small></span><span class='count'>{count:,}</span></a>"
         for name, count in tables
     )
-    return '<div class="brand">AI Co-Pilot<small>SQLite 데이터베이스 뷰어</small></div><div class="side-title">Tables</div>' + links
+    current_attr = ' aria-current="page"' if selected is None else ""
+    home = f'<a class="table-link home-nav{" active" if selected is None else ""}"{current_attr} href="/admin"><span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m3 10 9-7 9 7v10H3Z"/><path d="M9 20v-7h6v7"/></svg>Home</span></a>'
+    return '<div class="brand">AI Co-Pilot<small>훈련 데이터 대시보드</small></div><div class="side-title">Overview</div>' + home + '<div class="side-title">데이터 조회</div>' + links
 
 
 def create_db_viewer_router() -> APIRouter:
@@ -90,23 +96,26 @@ def create_db_viewer_router() -> APIRouter:
         limit: int = Query(default=50, ge=10, le=200),
         page: int = Query(default=1, ge=1),
         q: str = Query(default="", max_length=100),
+        days: int = Query(default=30, ge=7, le=90),
+        metric: str = Query(default="sessions", pattern="^(sessions|sequences|queries)$"),
     ) -> HTMLResponse:
         path = Path(os.environ.get("SEQUENCE_DB_PATH", DEFAULT_DB_PATH))
         if not path.is_file():
-            return _page('<div class="topbar"><div><h1>Co-Pilot 데이터베이스</h1><p class="sub">DB 파일이 아직 생성되지 않았습니다.</p></div></div>')
+            return _page(render_dashboard(None, {}, days=days, metric=metric), _sidebar([], None))
         conn: sqlite3.Connection | None = None
         try:
             conn = sqlite3.connect(f"file:{path.resolve()}?mode=ro", uri=True)
             conn.row_factory = sqlite3.Row
+            conn.execute("BEGIN")
             names = [str(row[0]) for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")]
-            selected = table if table in names else (names[0] if names else None)
+            selected = table if table in names else None
             table_counts: list[tuple[str, int]] = []
             for name in names:
                 quoted_name = '"' + name.replace('"', '""') + '"'
                 table_counts.append((name, int(conn.execute(f"SELECT COUNT(*) FROM {quoted_name}").fetchone()[0])))
             side = _sidebar(table_counts, selected)
             if selected is None:
-                return _page('<h1>Co-Pilot 데이터베이스</h1><p class="empty">표시할 테이블이 없습니다.</p>', side)
+                return _page(render_dashboard(conn, dict(table_counts), days=days, metric=metric), side)
             quoted = '"' + selected.replace('"', '""') + '"'
             columns = [str(item[1]) for item in conn.execute(f"PRAGMA table_info({quoted})")]
             where = ""
