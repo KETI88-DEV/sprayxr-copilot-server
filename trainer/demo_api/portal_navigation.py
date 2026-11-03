@@ -24,7 +24,16 @@ html{scroll-padding-top:calc(var(--copilot-nav-height) + 12px)}
 body[data-portal-page=database] .app-shell{min-height:calc(100vh - var(--copilot-nav-height))}
 body[data-portal-page=database] .sidebar{top:var(--copilot-nav-height);height:calc(100vh - var(--copilot-nav-height))}
 body[data-portal-page=motion] .shell{height:calc(100dvh - var(--copilot-nav-height))}
+body[data-portal-page=motion] .top{padding:14px 22px}
+body[data-portal-page=motion] .top .title{font-size:22px;line-height:1.3;letter-spacing:-.025em}
+body[data-portal-page=motion] .top .title small{font-size:12px;line-height:1.5;margin-top:5px;letter-spacing:0}
+body[data-portal-page=database] .topbar h1{font-size:26px;line-height:1.3;letter-spacing:-.025em}
+body[data-portal-page=database] .topbar .sub{line-height:1.6}
 body[data-portal-page=docs]{margin:0}
+body[data-portal-page=docs] .swagger-ui .info{margin:28px 0 24px}
+body[data-portal-page=docs] .swagger-ui .info .title{font-size:26px;line-height:1.35;letter-spacing:-.025em;margin:0 0 14px}
+body[data-portal-page=docs] .swagger-ui .info .description{font-size:14px;line-height:1.7}
+body[data-portal-page=docs] .swagger-ui .info .title small{vertical-align:middle;letter-spacing:0}
 body[data-portal-page=docs] .swagger-ui .opblock,body[data-portal-page=docs] .swagger-ui .opblock-tag{scroll-margin-top:calc(var(--copilot-nav-height) + 12px)}
 @media(max-width:1200px){body[data-portal-page=motion] .shell{height:auto;min-height:calc(100dvh - var(--copilot-nav-height))}body[data-portal-page=motion] .stage{height:calc(100dvh - var(--copilot-nav-height) - 67px)}}
 @media(max-width:850px){body[data-portal-page=database] .sidebar{top:auto;height:auto}}

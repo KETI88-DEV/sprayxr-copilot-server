@@ -182,7 +182,7 @@ def render_dashboard(conn: sqlite3.Connection | None, tables: dict[str, int], *,
         rows = '<tr><td colspan="6" class="home-empty">아직 등록된 세션이 없습니다.</td></tr>'
     empty_notice = '<p class="home-footnote">DB 파일이 아직 생성되지 않았습니다. 훈련 데이터가 저장되면 통계가 표시됩니다.</p>' if conn is None else ""
     return f"""
-    <div class="topbar"><div><div class="eyebrow">CO-PILOT · DATA OVERVIEW</div><h1>Home</h1><div class="sub">전체 훈련 데이터와 처리 현황을 한눈에 확인하세요.</div>
+    <div class="topbar"><div><div class="eyebrow">HOME · DATA OVERVIEW</div><h1>훈련 데이터 대시보드</h1><div class="sub">전체 훈련 데이터와 처리 현황을 한눈에 확인하세요.</div>
     <div class="home-meta"><span class="scope-pill">전체 누적 데이터</span><span class="readonly"><i class="dot"></i>읽기 전용</span><span>조회 시각 {now:%Y.%m.%d %H:%M:%S} KST</span></div></div>
     <div class="actions home-actions"><a class="secondary" href="/admin?days={days}&amp;metric={metric}">새로고침</a></div></div>
     {empty_notice}<div class="cards home-kpis">{cards}</div>

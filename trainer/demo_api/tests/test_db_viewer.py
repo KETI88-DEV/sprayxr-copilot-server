@@ -92,7 +92,7 @@ def test_home_is_default_and_table_navigation_returns_home(monkeypatch, tmp_path
     client = _client(monkeypatch, tmp_path)
     response = client.get("/admin")
     assert response.status_code == 200
-    assert '<h1>Home</h1>' in response.text
+    assert '<h1>훈련 데이터 대시보드</h1>' in response.text
     assert 'aria-current="page" href="/admin"' in response.text
     assert 'data-stat="sessions">23' in response.text
     assert 'href="/admin?table=sessions"' in response.text
@@ -174,7 +174,7 @@ def test_home_without_database_is_useful_and_does_not_create_database(monkeypatc
     app.include_router(create_db_viewer_router())
     response = TestClient(app).get("/admin")
     assert response.status_code == 200
-    assert '<h1>Home</h1>' in response.text
+    assert '<h1>훈련 데이터 대시보드</h1>' in response.text
     assert 'data-stat="sessions">0' in response.text
     assert "아직" in response.text
     assert not path.exists()

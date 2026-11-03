@@ -10,8 +10,9 @@ def test_openapi_describes_tsb_workflow_and_db_viewer() -> None:
     schema = client.get("/openapi.json").json()
 
     assert schema["info"]["title"] == "XR Painting Simulator AI Co-Pilot API"
-    assert "http://keti-xr-lab.iptime.org:58000/admin" in schema["info"]["description"]
-    assert "http://keti-xr-lab.iptime.org:58000/motion-viewer" in schema["info"]["description"]
+    assert "상단 **DB 뷰어** 메뉴" in schema["info"]["description"]
+    assert "DB 뷰어 바로가기" not in schema["info"]["description"]
+    assert "전문가 3D 모션 뷰어" not in schema["info"]["description"]
     assert "처음 보는 개발자" in schema["info"]["description"]
     assert "실제 연동 API" in schema["info"]["description"]
     assert "누적 히트맵" in schema["info"]["description"]

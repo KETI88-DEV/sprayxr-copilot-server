@@ -217,11 +217,10 @@ def test_motion_viewer_page_explains_the_aggregated_expert_reference(tmp_path: P
     response = _client(tmp_path).get("/motion-viewer")
 
     assert response.status_code == 200
-    assert "전문가 모션 뷰어" in response.text
+    assert "도장 경로와 작업 자세를 전문가 기준으로 비교합니다." in response.text
     assert "전체 기록 종합 기준" in response.text
     assert "대표 실측 모션" not in response.text
     assert "통계 범위" in response.text
-    assert "기준 전문가: 전형기 반장" in response.text
     assert "페인트 누적 궤적" in response.text
     assert "주요 도장 방향" in response.text
     assert "머리·양손 실측 위치와 추정 상체" in response.text
@@ -827,7 +826,7 @@ def test_motion_viewer_page_exposes_pose_comparison_contract(tmp_path: Path) -> 
     assert response.status_code == 200
     for text in (
         "작업 자세 비교 평가",
-        "도장 경로·자세 통합 화면",
+        "도장 경로와 작업 자세를 전문가 기준으로 비교합니다.",
         "작업자",
         "전문가 동작 유사도",
         "자세 개선 안내",

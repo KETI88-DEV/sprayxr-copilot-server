@@ -64,25 +64,17 @@ OPENAPI_TAGS = [
 ]
 
 def _openapi_description() -> str:
-    public_base = os.environ.get(
-        "PUBLIC_BASE_URL", "http://keti-xr-lab.iptime.org:58000"
-    ).rstrip("/")
-    return f"""
-## TSB 연동용 AI Co-Pilot API
-
-이 문서는 **이 서버를 처음 보는 개발자**도 VR 시뮬레이터 없이 전체 흐름을 이해하고 시험할 수 있도록 구성했습니다.
+    return """
+VR·Replay 시뮬레이터의 **연동 규격과 API 호출·응답**을 확인하고 테스트하는 문서입니다.
+**이 서버를 처음 보는 개발자**도 시뮬레이터 없이 아래 예제로 전체 흐름을 시험할 수 있습니다.
 
 ### 바로 시작하기
 
 1. 아래 **0. 모의 연동**을 펼칩니다.
 2. `0-0 → 0-1 → 0-2 → 0-3 → 0-4` 순서로 각 API의 **Try it out → Execute**를 누릅니다.
 3. 입력값은 필요 없습니다. 각 응답의 `what_happened`, `beginner_tip`, `next_endpoint`를 확인합니다.
-4. 저장 결과는 [Co-Pilot DB 뷰어]({public_base}/admin)에서 확인합니다.
+4. 저장 결과는 상단 **DB 뷰어** 메뉴에서 확인합니다.
 5. 텍스트 질의는 `0-5`, 음성 질의는 `0-6`에서 시험합니다. `0-7`에서는 실제 업로드용 WAV를 내려받을 수 있습니다.
-
-> **DB 뷰어 바로가기:** [{public_base}/admin]({public_base}/admin) — 운영자 로그인 후 읽기 전용으로 조회합니다.
-
-> **전문가 3D 모션 뷰어:** [{public_base}/motion-viewer]({public_base}/motion-viewer) — 전형기 반장님의 대표 실측 모션과 반복 수행의 통계 범위를 확인합니다.
 
 ### 실제 연동 API와 테스트 API의 차이
 

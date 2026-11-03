@@ -33,7 +33,8 @@ def test_all_three_pages_share_navigation_and_select_the_current_page(monkeypatc
         assert nav.count==1
         assert [url for url,current in nav.links]==expected
         assert [url for url,current in nav.links if current=='page']==[selected]
-        assert response.text.index('id="copilot-navigation"')<response.text.index('Home</h1>') if path=='/admin' else True
+        if path == '/admin':
+            assert response.text.index('id="copilot-navigation"') < response.text.index('<h1>훈련 데이터 대시보드</h1>')
     docs=client.get('/docs').text
     assert 'SwaggerUIBundle' in docs and '/openapi.json' in docs
     assert client.get('/openapi.json').status_code==200
