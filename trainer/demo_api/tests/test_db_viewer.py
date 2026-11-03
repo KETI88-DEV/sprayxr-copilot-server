@@ -53,6 +53,32 @@ def test_db_viewer_searches_values_and_escapes_query(monkeypatch, tmp_path) -> N
     assert "&lt;script&gt;" in escaped.text
 
 
+def test_table_record_popup_returns_nested_parameters_without_mutating_data(monkeypatch, tmp_path) -> None:
+    client = _client(monkeypatch, tmp_path)
+    assert 'data-detail-url=' in client.get('/admin?table=sessions').text
+    response = client.get('/admin/api/record', params={'table':'sessions','rowid':1})
+    assert response.status_code == 200
+    data = response.json()['sections'][0]['data']
+    assert data == {'session_id':'S-00','session_status':'ACTIVE','payload':{'score':88}}
+    assert client.post('/admin/api/record?table=sessions&rowid=1').status_code == 405
+    assert client.get('/admin/api/record?table=sessions&rowid=999').status_code == 404
+    assert client.get('/admin/api/record',params={'table':'sessions"; DROP TABLE sessions;--','rowid':1}).status_code == 404
+    assert client.get('/admin?table=sessions').status_code == 200
+
+
+def test_record_details_preserve_nested_literal_strings_and_handle_legacy_nonfinite_values(monkeypatch, tmp_path) -> None:
+    import json
+    client = _client(monkeypatch, tmp_path)
+    literal='{"question":1}'
+    with sqlite3.connect(tmp_path/'viewer.db') as conn:
+        conn.execute('UPDATE sessions SET payload=? WHERE rowid=1',(json.dumps({'prompt':literal,'old_value':float('nan')}),))
+    response=client.get('/admin/api/record?table=sessions&rowid=1')
+    assert response.status_code==200
+    data=response.json()['sections'][0]['data']['payload']
+    assert data['prompt']==literal
+    assert data['old_value']=='NaN'
+
+
 def test_public_viewer_rejects_mutating_methods_and_keeps_database_unchanged(monkeypatch, tmp_path) -> None:
     client = _client(monkeypatch, tmp_path)
     for method in ("POST", "PUT", "PATCH", "DELETE"):

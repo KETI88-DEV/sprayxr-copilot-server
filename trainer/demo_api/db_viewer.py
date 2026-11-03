@@ -7,14 +7,17 @@ import json
 import math
 import os
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
-from fastapi import APIRouter, Query
-from fastapi.responses import HTMLResponse
+from fastapi import APIRouter, Query, HTTPException
+from fastapi.responses import HTMLResponse, FileResponse
 
 from trainer.demo_api.sequence_store import DEFAULT_DB_PATH
 from trainer.demo_api.db_dashboard import DASHBOARD_CSS, render_dashboard
+from trainer.demo_api.db_record_detail import DETAIL_CSS, DETAIL_HTML, record_detail, json_safe
+from trainer.demo_api.db_sessions import SESSION_CSS, render_session_list, render_session_detail, session_event_detail
 
 _CSS = """
 :root{color-scheme:light;--bg:#f4f7fb;--panel:#fff;--ink:#152033;--muted:#68758a;--line:#dde4ee;
@@ -52,9 +55,9 @@ def _page(content: str, sidebar: str = "") -> HTMLResponse:
     return HTMLResponse(
         "<!doctype html><html lang='ko'><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-        f"<title>Co-Pilot DB Viewer</title><style>{_CSS}{DASHBOARD_CSS}</style></head>"
+        f"<title>Co-Pilot DB Viewer</title><style>{_CSS}{DASHBOARD_CSS}{SESSION_CSS}{DETAIL_CSS}</style></head>"
         f'<body><div class="app-shell"><aside class="sidebar">{sidebar}</aside>'
-        f'<main class="main">{content}</main></div></body></html>'
+        f'<main class="main">{content}</main></div>{DETAIL_HTML}</body></html>'
     )
 
 
@@ -65,6 +68,8 @@ def _cell(value: object) -> str:
     if text.upper() in {"ACTIVE", "COMPLETED", "SUCCESS", "PENDING"}:
         return f'<span class="status">{html.escape(text)}</span>'
     if text.lstrip().startswith(("{", "[")):
+        if len(text) > 2000:
+            return f'<span>JSON · {len(text):,}자</span><br><small>상세 버튼으로 전체 파라미터 보기</small>'
         try:
             pretty = json.dumps(json.loads(text), ensure_ascii=False, indent=2)
             return f"<details><summary>JSON 보기</summary><pre>{html.escape(pretty)}</pre></details>"
@@ -73,22 +78,81 @@ def _cell(value: object) -> str:
     return html.escape(text)
 
 
-def _sidebar(tables: list[tuple[str, int]], selected: str | None) -> str:
+def _sidebar(tables: list[tuple[str, int]], selected: str | None, overview: str = "home") -> str:
     labels = {"sessions":"훈련 세션","users":"작업자","sequences":"시퀀스 기록",
               "query_turns":"질문·답변","completions":"최종 리포트",
-              "sequence_analysis_results":"시퀀스 분석 결과","legacy_import_records":"이전 데이터 이관 기록"}
+              "sequence_analysis_results":"시퀀스 분석 결과","legacy_import_records":"이전 데이터 이관 기록","api_calls":"API 호출 이력"}
     links = "".join(
         f'<a class="table-link{" active" if name == selected else ""}" href="/admin?table={quote(name)}">'
         f"<span class='table-name'>{html.escape(labels.get(name,name))}<small>{html.escape(name)}</small></span><span class='count'>{count:,}</span></a>"
         for name, count in tables
     )
-    current_attr = ' aria-current="page"' if selected is None else ""
-    home = f'<a class="table-link home-nav{" active" if selected is None else ""}"{current_attr} href="/admin"><span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m3 10 9-7 9 7v10H3Z"/><path d="M9 20v-7h6v7"/></svg>Home</span></a>'
-    return '<div class="brand">AI Co-Pilot<small>훈련 데이터 대시보드</small></div><div class="side-title">Overview</div>' + home + '<div class="side-title">데이터 조회</div>' + links
+    is_home = selected is None and overview == "home"
+    current_attr = ' aria-current="page"' if is_home else ""
+    home = f'<a class="table-link home-nav{" active" if is_home else ""}"{current_attr} href="/admin"><span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m3 10 9-7 9 7v10H3Z"/><path d="M9 20v-7h6v7"/></svg>Home</span></a>'
+    sessions = f'<a class="table-link home-nav{" active" if overview == "sessions" else ""}" href="/admin/sessions"><span>▤ 훈련세션</span></a>'
+    return '<div class="brand">AI Co-Pilot<small>훈련 데이터 대시보드</small></div><div class="side-title">Overview</div>' + home + sessions + '<div class="side-title">데이터 조회</div>' + links
+
+
+@contextmanager
+def _read_database():
+    path = Path(os.environ.get("SEQUENCE_DB_PATH", DEFAULT_DB_PATH))
+    if not path.is_file():
+        yield None
+        return
+    conn = sqlite3.connect(f"file:{path.resolve()}?mode=ro", uri=True, timeout=3)
+    try:
+        conn.row_factory = sqlite3.Row
+        conn.execute("BEGIN")
+        yield conn
+    finally:
+        conn.close()
+
+
+def _table_counts(conn):
+    if conn is None:
+        return []
+    names = [str(r[0]) for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")]
+    return [(name, int(conn.execute('SELECT COUNT(*) FROM "' + name.replace('"','""') + '"').fetchone()[0])) for name in names]
 
 
 def create_db_viewer_router() -> APIRouter:
     router = APIRouter()
+
+    @router.get("/admin/assets/db_viewer.js", include_in_schema=False)
+    def detail_script():
+        return FileResponse(Path(__file__).parent / "static" / "db_viewer.js", media_type="text/javascript", headers={"Cache-Control":"no-cache"})
+
+    @router.get("/admin/api/record", include_in_schema=False)
+    def raw_record(table: str = Query(max_length=200), rowid: int = Query(ge=-(2**63), le=2**63-1)):
+        with _read_database() as conn:
+            data = record_detail(conn, table, rowid) if conn is not None else None
+        if data is None:
+            raise HTTPException(404, "record not found")
+        return data
+
+    @router.get("/admin/sessions", include_in_schema=False, response_class=HTMLResponse)
+    def sessions(q: str = Query(default="", max_length=100), state: str = Query(default="all", pattern="^(all|unfinished|ended)$"), page: int = Query(default=1, ge=1), limit: int = Query(default=25, ge=10, le=100)):
+        with _read_database() as conn:
+            side = _sidebar(_table_counts(conn), None, "sessions")
+            content = render_session_list(conn, q=q, state=state, page=page, limit=limit) if conn is not None else '<h1>훈련세션</h1><p class="empty">아직 저장된 훈련세션이 없습니다.</p>'
+            return _page(content, side)
+
+    @router.get("/admin/sessions/view", include_in_schema=False, response_class=HTMLResponse)
+    def session_view(session_id: str = Query(min_length=1, max_length=256), kind: str = Query(default="all", pattern="^(all|start|end|complete|sequence|query|report|other)$"), call_page: int = Query(default=1,ge=1)):
+        with _read_database() as conn:
+            content = render_session_detail(conn, session_id, kind=kind, call_page=call_page) if conn is not None else None
+            if content is None:
+                raise HTTPException(404, "session not found")
+            return _page(content, _sidebar(_table_counts(conn), None, "sessions"))
+
+    @router.get("/admin/api/session-event", include_in_schema=False)
+    def event_view(session_id: str = Query(min_length=1,max_length=256), event_key: str = Query(min_length=1,max_length=400)):
+        with _read_database() as conn:
+            result = session_event_detail(conn, session_id, event_key) if conn is not None else None
+        if result is None:
+            raise HTTPException(404, "event not found")
+        return json_safe(result)
 
     @router.get("/admin", include_in_schema=False, response_class=HTMLResponse)
     def database_viewer(
@@ -127,11 +191,14 @@ def create_db_viewer_router() -> APIRouter:
             total = int(conn.execute(f"SELECT COUNT(*) FROM {quoted}{where}", params).fetchone()[0])
             pages = max(1, math.ceil(total / limit))
             current_page = min(page, pages)
-            rows = conn.execute(f"SELECT * FROM {quoted}{where} ORDER BY rowid DESC LIMIT ? OFFSET ?", [*params, limit, (current_page - 1) * limit]).fetchall()
-            heading = "".join(f"<th>{html.escape(column)}</th>" for column in columns)
-            rendered = "".join("<tr>" + "".join(f"<td>{_cell(row[column])}</td>" for column in columns) + "</tr>" for row in rows)
+            rows = conn.execute(f"SELECT rowid AS __viewer_rowid, * FROM {quoted}{where} ORDER BY rowid DESC LIMIT ? OFFSET ?", [*params, limit, (current_page - 1) * limit]).fetchall()
+            heading = '<th>상세</th>' + "".join(f"<th>{html.escape(column)}</th>" for column in columns)
+            def record_row(row):
+                url = html.escape('/admin/api/record?' + urlencode({'table':selected,'rowid':row['__viewer_rowid']}))
+                return f'<tr data-detail-url="{url}" tabindex="0" aria-label="레코드 {row["__viewer_rowid"]} 상세"><td><button type="button" class="record-button" data-detail-url="{url}">상세</button></td>' + ''.join(f'<td>{_cell(row[column])}</td>' for column in columns) + '</tr>'
+            rendered = ''.join(record_row(row) for row in rows)
             if not rendered:
-                rendered = f'<tr><td class="empty" colspan="{max(1, len(columns))}">조건에 맞는 데이터가 없습니다.</td></tr>'
+                rendered = f'<tr><td class="empty" colspan="{len(columns)+1}">조건에 맞는 데이터가 없습니다.</td></tr>'
             query = html.escape(q)
             base = f"/admin?table={quote(selected)}&limit={limit}&q={quote(q)}"
             previous = f'<a href="{base}&page={current_page - 1}">← 이전</a>' if current_page > 1 else "<span></span>"

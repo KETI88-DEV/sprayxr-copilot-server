@@ -46,6 +46,8 @@ def _escape(value: object) -> str:
 
 
 def _link(table: str, **params: object) -> str:
+    if table == "sessions":
+        return _escape("/admin/sessions/view?" + urlencode({"session_id":params["q"]})) if params.get("q") else "/admin/sessions"
     return _escape("/admin?" + urlencode({"table": table, **params}))
 
 
@@ -191,6 +193,6 @@ def render_dashboard(conn: sqlite3.Connection | None, tables: dict[str, int], *,
     <div class="dashboard-grid"><section class="dashboard-panel"><div class="panel-head"><div><h2>훈련 진행 상태</h2><p>현재 저장된 세션의 진행 단계</p></div></div><div class="status-grid">{stage_cards}</div><p class="panel-footer">진행 중은 미종료 상태를 뜻합니다. 현재 접속 여부를 의미하지 않으며, 마지막 수신 시각은 아래 세션 목록에서 확인합니다.</p></section>
     <section class="dashboard-panel"><div class="panel-head"><div><h2>리포트 처리 현황</h2><p>누적 리포트 {tables.get('completions',0):,}건</p></div><a class="text-link" href="{_link('completions')}">기록 보기 →</a></div><div class="report-list">{report_rows}</div><p class="panel-footer">훈련 종료와 리포트 처리는 별개입니다. 처리 완료라도 영역별 분석 가능 여부는 리포트에서 확인해야 합니다.</p></section></div>
     <section class="dashboard-panel recent-panel"><div class="panel-head"><div><h2>최근 활동 세션</h2><p>마지막 시퀀스·질문 수신 또는 훈련 시작·종료 시각 기준 · 최근 8개</p></div><a class="text-link" href="{_link('sessions')}">전체 세션 보기 →</a></div>
-    <div class="recent-scroll"><table class="recent-table"><thead><tr><th>세션 ID · 원본 조회</th><th>작업자</th><th>훈련 콘텐츠</th><th>훈련 상태</th><th>시퀀스 / 질문</th><th>마지막 활동 (KST)</th></tr></thead><tbody>{rows}</tbody></table></div></section>
+    <div class="recent-scroll"><table class="recent-table"><thead><tr><th>세션 ID · 대시보드</th><th>작업자</th><th>훈련 콘텐츠</th><th>훈련 상태</th><th>시퀀스 / 질문</th><th>마지막 활동 (KST)</th></tr></thead><tbody>{rows}</tbody></table></div></section>
     <p class="home-footnote"><strong>통계 기준 안내</strong><br>전체 수치는 현재 DB에 저장된 데이터 기준이며 실제 훈련과 테스트 데이터를 모두 포함합니다. 저장 건수는 API 호출 횟수와 다릅니다. 중복 재전송과 저장되지 않은 호출·실패는 포함되지 않습니다. 질문 통계는 저장된 대화 기록 기준이며 세션 없이 처리한 질문은 포함되지 않을 수 있습니다. 날짜가 없거나 형식이 잘못된 기록은 전체 건수에는 포함하고 일별 그래프에서는 제외합니다.</p>
     """

@@ -49,7 +49,8 @@ _SCHEMA: Final[tuple[str, ...]] = (
         session_status TEXT NOT NULL,
         started_at     TEXT,
         ended_at       TEXT,
-        target_thickness_um REAL
+        target_thickness_um REAL,
+        created_at TEXT
     )
     """,
     """
@@ -114,6 +115,8 @@ class V1Store:
                 self._conn.execute(
                     "ALTER TABLE sessions ADD COLUMN target_thickness_um REAL"
                 )
+            if "created_at" not in session_columns:
+                self._conn.execute("ALTER TABLE sessions ADD COLUMN created_at TEXT")
             columns = {str(row[1]) for row in self._conn.execute("PRAGMA table_info(completions)")}
             if "fingerprint" not in columns:
                 self._conn.execute("ALTER TABLE completions ADD COLUMN fingerprint TEXT")
@@ -206,8 +209,8 @@ class V1Store:
                     raise SessionConflict("session_id already exists with different start parameters")
                 return row, False
             self._conn.execute(
-                "INSERT INTO sessions (session_id, user_id, scenario_id, session_status, started_at, ended_at, target_thickness_um)"
-                " VALUES (?, ?, ?, 'ACTIVE', ?, NULL, ?)",
+                "INSERT INTO sessions (session_id, user_id, scenario_id, session_status, started_at, ended_at, target_thickness_um, created_at)"
+                " VALUES (?, ?, ?, 'ACTIVE', ?, NULL, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
                 (session_id, user_id, scenario_id, started_at, target_thickness_um),
             )
         return SessionRow(
@@ -232,8 +235,8 @@ class V1Store:
                 if row.session_status == "COMPLETED":
                     return row
             self._conn.execute(
-                "INSERT INTO sessions (session_id, user_id, scenario_id, session_status, started_at, ended_at, target_thickness_um)"
-                " VALUES (?, ?, ?, 'COMPLETED', NULL, ?, NULL)"
+                "INSERT INTO sessions (session_id, user_id, scenario_id, session_status, started_at, ended_at, target_thickness_um, created_at)"
+                " VALUES (?, ?, ?, 'COMPLETED', NULL, ?, NULL, strftime('%Y-%m-%dT%H:%M:%fZ','now'))"
                 " ON CONFLICT(session_id) DO UPDATE SET"
                 "   session_status = 'COMPLETED', ended_at = excluded.ended_at",
                 (session_id, user_id, scenario_id, ended_at),

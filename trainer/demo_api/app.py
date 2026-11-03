@@ -21,6 +21,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from trainer.demo_api import chat_service as chat_service_mod
 from trainer.demo_api.access_control import AccessControlMiddleware, OperatorCredentials
+from trainer.demo_api.api_call_log import ApiCallStore, ApiCallLoggingMiddleware
 from trainer.demo_api.chat_service import ChatService, build_default_live_runner
 from trainer.demo_api.contracts import ChatRequest
 from trainer.demo_api.copilot_router import create_copilot_router, install_copilot_error_handlers
@@ -398,6 +399,7 @@ def create_app(
     coating_progress = CoatingProgressEngine(expert_guidance.reference_root)
     v1_store = V1Store()
     sequence_store = SequenceStore()
+    api_call_store = ApiCallStore(SequenceStore._default_path())
     anomaly_broadcaster = AnomalyBroadcaster()
     sequence_analysis = SequenceAnalysisEngine(expert_guidance.reference_root)
     speech_to_text = LazySpeechToText(
@@ -470,6 +472,7 @@ def create_app(
     app.state.coating_progress = coating_progress
     app.state.v1_store = v1_store
     app.state.sequence_store = sequence_store
+    app.state.api_call_store = api_call_store
     app.state.speech_to_text = speech_to_text
     app.state.access_control = {"admin_protected": False, "monitor_protected": protect_admin, "api_key_required": bool(api_key)}
     app.add_middleware(AccessControlMiddleware, credentials=credentials, protect_admin=protect_admin, api_key=api_key)
@@ -487,6 +490,7 @@ def create_app(
         allow_methods=["GET", "POST"],
         allow_headers=["*"],
     )
+    app.add_middleware(ApiCallLoggingMiddleware, store=api_call_store)
 
     # 계약 밖. Swagger 는 계약 15개만 보여야 한다 — demo-ui 와 compose 헬스체크가 쓰므로 라우트는 남긴다.
     @app.get("/api/health", include_in_schema=False)

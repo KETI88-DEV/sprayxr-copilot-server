@@ -15,6 +15,22 @@ def _store() -> V1Store:
     return V1Store(":memory:")
 
 
+def test_server_creation_timestamp_is_recorded_once_without_inventing_legacy_times(tmp_path) -> None:
+    path = tmp_path / "created.db"
+    with sqlite3.connect(path) as conn:
+        conn.execute("CREATE TABLE sessions (session_id TEXT PRIMARY KEY,user_id TEXT,scenario_id TEXT,session_status TEXT,started_at TEXT,ended_at TEXT)")
+        conn.execute("INSERT INTO sessions VALUES ('OLD','W','3','ACTIVE','2026-10-01T00:00:00Z',NULL)")
+    store = V1Store(str(path))
+    store.start_session(session_id="NEW",user_id="W",scenario_id="3",started_at="2026-11-03T00:00:00Z")
+    with sqlite3.connect(path) as conn:
+        stamp = conn.execute("SELECT created_at FROM sessions WHERE session_id='NEW'").fetchone()[0]
+        assert stamp and stamp.endswith("Z")
+        assert conn.execute("SELECT created_at FROM sessions WHERE session_id='OLD'").fetchone()[0] is None
+    store.start_session(session_id="NEW",user_id="W",scenario_id="3",started_at="2026-11-03T00:00:00Z")
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT created_at FROM sessions WHERE session_id='NEW'").fetchone()[0] == stamp
+
+
 def test_upsert_creates_then_updates_only_the_documented_fields() -> None:
     """Given an existing user, When upserted, Then only skill_level and hand change (p.1)."""
     store = _store()
