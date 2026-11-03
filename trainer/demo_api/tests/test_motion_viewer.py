@@ -129,6 +129,7 @@ def _client(
                     "expected_direction": "horizontal",
                     "coating": {
                         "analysis_status": "available",
+                        "display_semantics": "physical_thickness_um",
                         "atlas_width": 2048,
                         "atlas_height": 2048,
                         "grid_size": 64,
@@ -417,9 +418,9 @@ def test_chat_is_bound_to_the_current_motion_record_instead_of_an_unrelated_comp
     assert "const answer = data.answer;" in script.text
     assert "? data.answer\n        : structuredAnswer(task.id, prompt, viewerData)" not in script.text
     assert "const buildViewerQueryContext" in script.text
-    assert "context: buildViewerQueryContext(task.id, prompt, viewerData)" in script.text
+    assert "context: sentContext" in script.text
     assert "viewerData?.selected_session_id" in script.text
-    assert "viewerData?.mode_id" in script.text
+    assert "sentData?.mode_id" in script.text
     assert "순번별 주요 분포" not in script.text
     assert "이 시작 순서는 전문가 작업의 약" in script.text
     assert "/motion-viewer/api/completed" not in script.text
@@ -432,8 +433,8 @@ def test_chat_offers_response_depth_and_sends_it_to_the_query_api(tmp_path: Path
     assert script.status_code == 200
     assert "빠른 안내" in script.text
     assert "상세 분석" in script.text
-    assert "response_mode: responseMode" in script.text
-    assert "responseMode === 'detailed' ? 'Y' : 'N'" in script.text
+    assert "response_mode: sentMode" in script.text
+    assert "use_rag: 'auto'" in script.text
     assert "width:min(480px" in script.text
     assert "height:min(640px" in script.text
 

@@ -38,4 +38,5 @@ def viewer_signatures(payload: dict[str, Any]) -> dict[str, str]:
         "position_similarity", "position_distribution", "reference_session_count",
     )}
     order_context["direction_summary"] = payload.get("direction_summary")
+    order_context["zone_keys"] = sorted((pose.get("zones") or {}).keys())
     return {"pose_recomm": sign_context("pose_recomm", pose_context), "trajectory_recomm": sign_context("trajectory_recomm", order_context)}

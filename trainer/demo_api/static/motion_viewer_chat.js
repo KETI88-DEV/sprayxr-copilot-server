@@ -8,8 +8,8 @@
       presets: ['저도막이 뭐야?', '적정 이격거리는?', '적정 분사 속도는?', '과도막의 원인은?'],
     },
     {
-      id: 'pose_recomm', label: '자세', hint: '예: 가장 문제가 큰 Zone은?',
-      presets: ['전체 자세 유사도는?', '가장 문제가 큰 Zone은?', '오른손을 어떻게 고쳐?', '왼손을 어떻게 고쳐?'],
+      id: 'pose_recomm', label: '자세', hint: '예: 지금 자세는 어때?',
+      presets: ['지금 자세는 어때?', '이 Zone에서 어떻게 고쳐?', '전체 자세 유사도는?', '가장 문제가 큰 Zone은?', '오른손을 어떻게 고쳐?', '왼손을 어떻게 고쳐?'],
     },
     {
       id: 'trajectory_recomm', label: '순서', hint: '예: 권장 Zone 순서는?',
@@ -42,6 +42,7 @@
 .mvc-me{align-self:flex-end;background:#1d4ed8;color:#fff;max-width:85%}
 .mvc-bot{align-self:flex-start;background:#1f2937;max-width:95%}
 .mvc-meta{font-size:11px;color:#9ca3af;margin-top:4px}
+.mvc-context{font-size:12px;color:#bfdbfe;line-height:1.5}
 .mvc-form{display:flex;gap:6px;padding:10px 12px;border-top:1px solid #374151}
 .mvc-form input{flex:1;padding:11px 12px;background:#1f2937;color:#e5e7eb;border:1px solid #4b5563;border-radius:7px;font-size:14px}
 .mvc-form button{width:auto;flex:none;padding:10px 16px;border:0;border-radius:7px;background:#2563eb;color:#fff;cursor:pointer}
@@ -66,6 +67,8 @@
   modes.setAttribute('aria-label', '답변 수준');
   const presets = el('div', 'mvc-presets');
   presets.setAttribute('aria-label', '질문 프리셋');
+  const contextIndicator = el('div', 'mvc-context');
+  contextIndicator.setAttribute('aria-label', '질문 기준');
   const log = el('div', 'mvc-log');
   log.setAttribute('aria-live', 'polite');
   const form = el('form', 'mvc-form');
@@ -74,13 +77,14 @@
   const send = el('button', null, '보내기');
   send.type = 'submit';
   form.append(input, send);
-  head.append(sessionSelect, chips, modes, presets);
+  head.append(sessionSelect, contextIndicator, chips, modes, presets);
   panel.append(head, log, form);
   document.body.append(toggle, panel);
 
   let task = TASKS[1];
   let responseMode = 'detailed';
   let viewerData = null;
+  let playback = { map_num: null, zone_id: null, source_index: 0, playhead_seconds: 0 };
 
   const MODE_OPTIONS = [
     { id: 'quick', label: '빠른 안내', help: '핵심 판단과 조치만 간결하게' },
@@ -103,8 +107,20 @@
   const currentRecordLabel = (data) => data
     ? `${data.worker?.display_name || '작업자'} · ${data.process_label || data.process} · 학습모드 ${data.mode_id} · ${data.selected_session_id}`
     : '현재 재생 기록을 불러오는 중입니다';
+  const recordKey = (data) => data
+    ? JSON.stringify([data.worker?.worker_id, data.process, data.mode_id, data.selected_session_id]) : null;
+  const knownZone = (frame) => {
+    if (frame?.map_num == null || !Number.isInteger(Number(frame.zone_id)) || Number(frame.zone_id) <= 0) return null;
+    const map = String(frame.map_num), zone = String(frame.zone_id);
+    return viewerData?.pose_evaluation?.zones?.[`${map}:${zone}`] ? { map_num: map, zone_id: zone } : null;
+  };
+  const playbackLabel = (state) => `${state.map_num != null ? `Map ${state.map_num} · Zone ${state.zone_id}` : 'Zone 확인 전'} · ${state.playhead_seconds.toFixed(2)}초`;
+  const syncPlaybackContext = () => {
+    contextIndicator.textContent = `질문 기준: ${playbackLabel(playback)} · 지금/이 Zone 질문은 해당 구간 평가, 전체 질문은 전체 기록`;
+  };
   const syncViewerContext = () => {
     sessionSelect.replaceChildren(new Option(currentRecordLabel(viewerData), viewerData?.selected_session_id || ''));
+    syncPlaybackContext();
   };
 
   function poseAnswer(prompt, data) {
@@ -164,8 +180,9 @@
   const structuredAnswer = (taskId, prompt, data) => taskId === 'pose_recomm'
     ? poseAnswer(prompt, data)
     : orderAnswer(prompt, data);
-  const buildViewerQueryContext = (taskId, prompt, data) => {
-    if (!data || taskId === 'knowledge_search') return null;
+  const buildViewerQueryContext = (taskId, prompt, data, state) => {
+    if (!data) return null;
+    if (taskId === 'knowledge_search') return `motion_viewer_playback:${JSON.stringify({ record: currentRecordLabel(data), playback_context: state })}`;
     let analysisContext;
     if (taskId === 'pose_recomm') {
       const evaluation = data.pose_evaluation || {};
@@ -188,12 +205,14 @@
         position_distribution: evaluation.position_distribution ?? null,
         reference_session_count: evaluation.reference_session_count ?? null,
         direction_summary: data.direction_summary || null,
+        zone_keys: Object.keys(data.pose_evaluation?.zones || {}).sort(),
       };
     }
     return `motion_viewer_analysis:${JSON.stringify({
       verified_answer: structuredAnswer(taskId, prompt, data),
       analysis_context: analysisContext,
       signature: data.query_context_signatures?.[taskId],
+      playback_context: state,
     })}`;
   };
   const renderPresets = (item) => {
@@ -233,8 +252,33 @@
   };
 
   addEventListener('motion-viewer-data', (event) => {
+    if (recordKey(viewerData) !== recordKey(event.detail)) {
+      playback = { map_num: null, zone_id: null, source_index: 0, playhead_seconds: 0 };
+    }
     viewerData = event.detail;
+    if (playback.map_num != null && !knownZone(playback)) playback = { ...playback, map_num: null, zone_id: null };
     syncViewerContext();
+  });
+  addEventListener('motion-viewer-frame', (event) => {
+    if (!viewerData) return;
+    const { frame, sourceIndex, playheadSeconds } = event.detail;
+    const seconds = Number(playheadSeconds);
+    const nextIndex = Number.isInteger(sourceIndex) && sourceIndex >= 0 ? sourceIndex : playback.source_index;
+    let zone = knownZone(frame);
+    if (!zone && frame?.spraying) {
+      zone = { map_num: null, zone_id: null };
+    } else if (!zone && (nextIndex < playback.source_index || nextIndex > playback.source_index + 1 || playback.map_num == null)) {
+      // Seeking into a transition resolves the latest Zone before that position.
+      zone = { map_num: null, zone_id: null };
+      for (let index = Math.min(nextIndex, (viewerData.frames?.length || 0) - 1); index >= 0; index--) {
+        const previous = knownZone(viewerData.frames[index]);
+        if (previous) { zone = previous; break; }
+        if (viewerData.frames[index]?.spraying) break;
+      }
+    }
+    playback = { ...playback, ...(zone || {}), source_index: nextIndex,
+      playhead_seconds: Number.isFinite(seconds) && seconds >= 0 ? seconds : playback.playhead_seconds };
+    syncPlaybackContext();
   });
   syncViewerContext();
 
@@ -249,12 +293,18 @@
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
     const prompt = input.value.trim();
-    if (!prompt) return;
+    if (!prompt || send.disabled) return;
     if (!viewerData && task.id !== 'knowledge_search') {
       say('재생할 기록을 먼저 불러와 주세요.', 'mvc-bot');
       return;
     }
-    say(prompt, 'mvc-me', task.label);
+    const sentTask = task;
+    const sentMode = responseMode;
+    const sentData = viewerData;
+    const sentPlayback = { ...playback };
+    const sentLabel = `${currentRecordLabel(sentData)} · ${playbackLabel(sentPlayback)}`;
+    const sentContext = buildViewerQueryContext(sentTask.id, prompt, sentData, sentPlayback);
+    say(prompt, 'mvc-me', `${sentTask.label} · ${sentLabel}`);
     input.value = '';
     send.disabled = true;
     const pending = say('답을 찾는 중입니다…', 'mvc-bot');
@@ -264,14 +314,14 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          user_id: viewerData?.worker?.worker_id || 'viewer',
-          session_id: viewerData?.selected_session_id ?? null,
-          scenario_id: viewerData?.mode_id != null ? String(viewerData.mode_id) : null,
-          task_type: task.id,
+          user_id: sentData?.worker?.worker_id || 'viewer',
+          session_id: sentData?.selected_session_id ?? null,
+          scenario_id: sentData?.mode_id != null ? String(sentData.mode_id) : null,
+          task_type: sentTask.id,
           prompt,
-          response_mode: responseMode,
-          use_rag: responseMode === 'detailed' ? 'Y' : 'N',
-          context: buildViewerQueryContext(task.id, prompt, viewerData),
+          response_mode: sentMode,
+          use_rag: 'auto',
+          context: sentContext,
         }),
       });
       const payload = await response.json();
@@ -283,8 +333,8 @@
       const data = payload.data;
       const seconds = ((performance.now() - started) / 1000).toFixed(1);
       const answer = data.answer;
-      const modeLabel = responseMode === 'detailed' ? '상세 분석' : '빠른 안내';
-      say(answer, 'mvc-bot', `${task.label} · ${modeLabel} · ${seconds}초${data.citations?.length ? ` · 인용 ${data.citations.length}` : ''}`);
+      const modeLabel = sentMode === 'detailed' ? '상세 분석' : '빠른 안내';
+      say(answer, 'mvc-bot', `${sentTask.label} · ${modeLabel} · ${sentLabel} · 응답 ${seconds}초${data.citations?.length ? ` · 인용 ${data.citations.length}` : ''}`);
     } catch {
       pending.remove();
       say('서버에 연결하지 못했습니다.', 'mvc-bot');

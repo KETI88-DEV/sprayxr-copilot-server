@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 import time
@@ -95,6 +96,55 @@ _POSE_FALLBACK_ANSWER: Final[str] = "이 시퀀스로는 자세를 판정할 수
 PipelineProvider = Callable[[], "_Pipeline"]
 
 
+class _InvalidViewerPlayback(ValueError):
+    """A signed evaluation was accompanied by an invalid playback selector."""
+
+
+def _validated_viewer_playback(value: object, analysis: Mapping[str, object], *, task_type: str) -> dict[str, object]:
+    # Playback is client state, not a measurement. Only allow it to select a
+    # map/Zone already authenticated by the server's evaluation signature.
+    allowed = {"playhead_seconds", "source_index", "map_num", "zone_id"}
+    if not isinstance(value, dict) or set(value) - allowed:
+        raise _InvalidViewerPlayback
+    seconds = value.get("playhead_seconds")
+    if isinstance(seconds, bool) or not isinstance(seconds, (int, float)):
+        raise _InvalidViewerPlayback
+    try:
+        finite_seconds = math.isfinite(seconds)
+    except OverflowError:
+        raise _InvalidViewerPlayback from None
+    if not finite_seconds or seconds < 0:
+        raise _InvalidViewerPlayback
+    source_index = value.get("source_index")
+    if source_index is not None and (isinstance(source_index, bool) or not isinstance(source_index, int) or source_index < 0):
+        raise _InvalidViewerPlayback
+    map_num, zone_id = value.get("map_num"), value.get("zone_id")
+    result: dict[str, object] = {"playhead_seconds": seconds, "map_num": None, "zone_id": None}
+    if source_index is not None:
+        result["source_index"] = source_index
+    if map_num is None and zone_id is None:
+        return result
+    if any(isinstance(item, bool) or not isinstance(item, (str, int)) for item in (map_num, zone_id)):
+        raise _InvalidViewerPlayback
+    map_text, zone_text = str(map_num), str(zone_id)
+    if not map_text.isdigit() or not zone_text.isdigit() or int(zone_text) <= 0:
+        raise _InvalidViewerPlayback
+    key = f"{map_text}:{zone_text}"
+    if task_type == "pose_recomm":
+        zones = analysis.get("zones")
+        row = zones.get(key) if isinstance(zones, Mapping) else None
+        if not isinstance(row, Mapping) or str(row.get("zone_id")) != zone_text or str(row.get("map_num", map_text)) != map_text:
+            raise _InvalidViewerPlayback
+    elif task_type == "trajectory_recomm":
+        keys = analysis.get("zone_keys")
+        if not isinstance(keys, list) or key not in keys:
+            raise _InvalidViewerPlayback
+    else:
+        raise _InvalidViewerPlayback
+    result.update(map_num=map_text, zone_id=zone_text)
+    return result
+
+
 def _parse_motion_viewer_context(value: str | None, *, task_type: str) -> dict[str, object] | None:
     """Accept viewer measurements only when signed by the analysis server."""
     if not value or not value.startswith(_MOTION_VIEWER_CONTEXT_PREFIX):
@@ -116,7 +166,40 @@ def _parse_motion_viewer_context(value: str | None, *, task_type: str) -> dict[s
     from trainer.demo_api.viewer_context import verify_context
     if not verify_context(task_type, analysis_context, signature):
         return None
+    if "playback_context" in payload:
+        analysis_context["playback_context"] = _validated_viewer_playback(
+            payload["playback_context"], analysis_context, task_type=task_type
+        )
     return analysis_context
+
+
+def _asks_current_viewer_pose(prompt: str) -> bool:
+    # A current playback selection must not change an explicitly global query.
+    if re.search(r"전체|전반|종합|평균|모든|최악|가장.*(?:zone|구역)|(?:zone|구역).*가장", prompt, re.I):
+        return False
+    return bool(re.search(r"지금|현재\s*(?:자세|동작|zone|구역)|이\s*(?:zone|구역)|current\s+(?:pose|zone)|this\s+zone", prompt, re.I))
+
+
+def _current_viewer_pose_context(prompt: str, context: dict[str, object]) -> dict[str, object]:
+    if "playback_context" not in context or not _asks_current_viewer_pose(prompt):
+        return context
+    playback = context["playback_context"]
+    assert isinstance(playback, dict)  # normalized only after verifying the evaluation
+    explicit_zone = requested_zone(prompt, None)
+    if explicit_zone is not None and explicit_zone != playback.get("zone_id"):
+        return context
+    zones = context.get("zones")
+    key = f"{playback.get('map_num')}:{playback.get('zone_id')}"
+    row = zones.get(key) if isinstance(zones, Mapping) else None
+    scored = isinstance(row, Mapping) and isinstance(row.get("similarity_percent"), (int, float))
+    return {
+        "status": "available" if context.get("status") == "available" and scored else "not_available",
+        "scope": "current_zone", "playback_context": playback,
+        "map_num": playback.get("map_num"), "zone_id": playback.get("zone_id"),
+        "similarity_percent": row.get("similarity_percent") if scored else None,
+        "zones": {key: row} if scored else {},
+        "corrections": (row.get("corrections") or []) if scored else [],
+    }
 
 
 def _viewer_answer(task_type: str, prompt: str, context: Mapping[str, object], intent: str | None) -> str:
@@ -149,6 +232,19 @@ def _viewer_answer(task_type: str, prompt: str, context: Mapping[str, object], i
     zones = context.get("zones")
     rows = list(zones.values()) if isinstance(zones, Mapping) else zones if isinstance(zones, list) else []
     rows = [row for row in rows if isinstance(row, Mapping) and isinstance(row.get("similarity_percent"), (int, float))]
+    if context.get("scope") == "current_zone":
+        if context.get("status") != "available" or not rows:
+            return "질문 시점의 Zone 자세 비교값이 없습니다. 재생 위치를 확인한 뒤 다시 질문해 주세요."
+        zone = rows[0]
+        corrections = zone.get("corrections")
+        guidance = " ".join(item for item in corrections if isinstance(item, str)) if isinstance(corrections, list) else ""
+        if re.search(r"오른|right|왼|left", prompt, re.I):
+            side = "오른" if re.search(r"오른|right", prompt, re.I) else "왼"
+            matching = [item for item in corrections if isinstance(item, str) and side in item] if isinstance(corrections, list) else []
+            guidance = " ".join(matching) if matching else f"이 Zone에는 {side}손에 특정된 교정 항목이 없습니다."
+        return (f"현재 재생 구간(Map {context.get('map_num')} · Zone {zone.get('zone_id')})의 자세 유사도는 "
+                f"{_percent_text(zone.get('similarity_percent'), already_percent=True)}입니다. "
+                + (guidance or "별도의 자세 개선 항목은 없습니다."))
     if context.get("status") != "available" or not rows:
         return "현재 재생 기록에서는 자세 비교값을 계산할 수 없습니다."
     target = requested_zone(prompt, None)
@@ -309,11 +405,13 @@ def _structured_detail_fallback(
         )
     elif task_type == "pose_recomm":
         similarity = _percent_text(analysis_context.get("similarity_score", analysis_context.get("similarity_percent")), already_percent="similarity_score" not in analysis_context)
-        comparison = [f"전체 자세 유사도는 {similarity}입니다."] if similarity else []
+        current_zone = analysis_context.get("scope") == "current_zone"
+        scope_label = f"현재 재생 구간(Map {analysis_context.get('map_num')} · Zone {analysis_context.get('zone_id')})"
+        comparison = [f"{scope_label if current_zone else '전체'} 자세 유사도는 {similarity}입니다."] if similarity else []
         zones = analysis_context.get("zones")
         zone_rows = list(zones.values()) if isinstance(zones, dict) else zones
         worst_text = None
-        if isinstance(zone_rows, list):
+        if isinstance(zone_rows, list) and not current_zone:
             candidates = [row for row in zone_rows if isinstance(row, dict)]
             scored = [
                 (float(row.get("similarity_percent", 100)), row)
@@ -333,7 +431,8 @@ def _structured_detail_fallback(
                 for item in corrections[:3]
             ]
             messages = [message for message in messages if message and message != "None"]
-        verdict = "전문가 자세와의 차이를 Zone별로 확인했습니다."
+        verdict = (f"{scope_label}의 전문가 자세 평가를 기준으로 확인했습니다."
+                   if current_zone else "전문가 자세와의 차이를 Zone별로 확인했습니다.")
         if interpretation is None:
             interpretation = worst_text or base_answer
         action = " ".join(messages) if messages else "다음 분사에서도 같은 조건으로 자세를 비교하고, 관절별 교정이 제시되면 해당 위치를 우선 확인하세요."
@@ -505,7 +604,12 @@ async def execute_copilot_query(
     # only a successful semantic-model classification may cross-route to RAG.
     knowledge_routed = intent == "knowledge" and classifier is not None
     viewer_context_requested = bool(query.context and query.context.startswith(_MOTION_VIEWER_CONTEXT_PREFIX))
-    viewer_analysis = _parse_motion_viewer_context(query.context, task_type=query.task_type)
+    try:
+        viewer_analysis = _parse_motion_viewer_context(query.context, task_type=query.task_type)
+    except _InvalidViewerPlayback:
+        return error_response(422, "Invalid motion viewer playback context")
+    if viewer_analysis is not None and query.task_type == "pose_recomm" and "playback_context" in viewer_analysis and _asks_current_viewer_pose(query.prompt):
+        knowledge_routed = False
 
     async def _synthesize_structured_detail(
         base_answer: str,
@@ -581,17 +685,19 @@ async def execute_copilot_query(
         return _structured_detail_fallback(query.task_type, base_answer, analysis_context), True
 
     if viewer_analysis is not None and query.task_type in ("pose_recomm", "trajectory_recomm") and not knowledge_routed:
-        analysis_context = viewer_analysis
+        analysis_context = (_current_viewer_pose_context(query.prompt, viewer_analysis)
+                            if query.task_type == "pose_recomm" else viewer_analysis)
+        available = analysis_context.get("scope") != "current_zone" or analysis_context.get("status") == "available"
         verified_answer = _viewer_answer(query.task_type, query.prompt, analysis_context, intent)
         answer, detail_degraded = await _synthesize_structured_detail(
-            verified_answer, analysis_context, available=True
+            verified_answer, analysis_context, available=available
         )
         return _success_response(
             query, request_started, answer=answer, retrieval_used=False, citations=[],
             degraded=detail_degraded,
             pose_context=analysis_context if query.task_type == "pose_recomm" else None,
             sequence_context=analysis_context if query.task_type == "trajectory_recomm" else None,
-            context_status="available", store=sequences,
+            context_status="available" if available else "not_available", store=sequences,
         )
     # Unsigned/forged viewer claims can still resolve against saved server data.
     if viewer_context_requested:

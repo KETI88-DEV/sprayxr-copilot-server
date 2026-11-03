@@ -986,9 +986,16 @@ def _zone_playback_statistics(
 
 
 def _coating_reference(profile: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    """Return compact, precomputed Zone height cells for browser rendering."""
+    """Return existing cells plus a shared physical scale for the loaded profile.
+
+    The profile builder already decodes RG16 into median_um. Do not decode or
+    normalize those values again; legacy values without calibration stay relative.
+    """
     output: dict[str, dict[str, Any]] = {}
-    zones = profile.get("aggregate", {}).get("zones", {})
+    aggregate = profile.get("aggregate")
+    zones = aggregate.get("zones", {}) if isinstance(aggregate, dict) else {}
+    quality = profile.get("quality")
+    scale_status = quality.get("heightmap_scale_status") if isinstance(quality, dict) else None
     if not isinstance(zones, dict):
         return output
     for key, zone in zones.items():
@@ -1015,6 +1022,11 @@ def _coating_reference(profile: dict[str, Any]) -> dict[str, dict[str, Any]]:
             cells.append([x, y, round(height, 4)])
         if not cells:
             continue
+        semantics = coating.get("display_semantics")
+        calibrated = semantics == "physical_thickness_um" or (
+            semantics is None
+            and scale_status == "rg16_scale_20000"
+        )
         cells.sort(key=lambda item: (item[1], item[0]))
         xs = [int(item[0]) for item in cells]
         ys = [int(item[1]) for item in cells]
@@ -1025,10 +1037,13 @@ def _coating_reference(profile: dict[str, Any]) -> dict[str, dict[str, Any]]:
             "zone_id": str(zone.get("zone_id", fallback_zone)),
             "source": "expert_final_heightmap",
             "mask_source": coating.get("mask_source", "expert_raytexuv_fallback"),
-            "display_semantics": coating.get(
-                "display_semantics", "physical_thickness_um"
+            "display_semantics": semantics or (
+                "physical_thickness_um" if calibrated else "relative_height"
             ),
-            "unit": "um",
+            "unit": "um" if calibrated else None,
+            "cell_unit": "um" if calibrated else None,
+            "physical_calibration": "available" if calibrated else "unavailable",
+            "color_scale_um": None,
             "analysis_status": "available",
             "atlas_width": int(coating.get("atlas_width", 2048)),
             "atlas_height": int(coating.get("atlas_height", 2048)),
@@ -1042,9 +1057,25 @@ def _coating_reference(profile: dict[str, Any]) -> dict[str, dict[str, Any]]:
                 "minimum": round(min(thicknesses), 2),
                 "median": round(statistics.median(thicknesses), 2),
                 "maximum": round(max(thicknesses), 2),
-            },
+            } if calibrated else None,
             "cells": cells,
         }
+    physical_values = [
+        float(cell[2])
+        for reference in output.values() if reference["cell_unit"] == "um"
+        for cell in reference["cells"]
+    ]
+    if physical_values and max(physical_values) > 0:
+        # Zero has a stable physical meaning. The maximum is data-derived, not
+        # a target thickness; all calibrated zones therefore use identical colors.
+        scale = {
+            "minimum": 0.0, "maximum": max(physical_values), "unit": "um",
+            "scope": "loaded_profile", "basis": "maximum_cell_thickness",
+            "clamp": True, "clipped_cell_count": 0,
+        }
+        for reference in output.values():
+            if reference["cell_unit"] == "um":
+                reference["color_scale_um"] = scale
     return output
 
 
@@ -1720,10 +1751,10 @@ button{cursor:pointer;font-weight:700}.primary{background:#3157d5;border-color:#
 .coating-card{height:100%;display:flex;flex-direction:column;padding:0;overflow:hidden}
 .coating-header{display:flex;justify-content:space-between;align-items:center;padding:11px 12px;border-bottom:1px solid var(--line)}
 .coating-header strong{font-size:13px}.coating-header span{font-size:10px;color:#91a0b8}
-.coating-switch{display:flex;gap:5px;padding:8px 10px}.coating-switch button{padding:6px 8px;font-size:10px}.coating-switch button.active{background:#3157d5;border-color:#3157d5}
+.coating-switch{display:flex;gap:5px;padding:8px 10px}.coating-switch button{padding:6px 8px;font-size:10px}.coating-switch button.active{background:#3157d5;border-color:#3157d5}.coating-switch button:disabled{opacity:.45;cursor:default}
 .coating-screen{position:relative;min-height:220px;flex:1;background:#07101f}#coatingCanvas{display:block;width:100%;height:100%}
 .coating-status{flex:none;margin:0 10px 8px;padding:6px 8px;border:1px solid rgba(90,126,171,.24);border-radius:7px;background:#0a1527;color:#dff7ff;font-size:10px;line-height:1.4}
-.coating-legend{display:flex;justify-content:space-between;padding:7px 11px;background:linear-gradient(90deg,#1946a0,#20c997,#ffe066,#ff7849);color:#fff;font-size:9px;text-shadow:0 1px 3px #000}
+.coating-legend{display:flex;justify-content:space-between;white-space:pre-wrap;padding:7px 11px;background:linear-gradient(90deg,#1946a0,#1cb2c1,#31cb7a,#ffda5c,#ff6848);color:#fff;font-size:9px;text-shadow:0 1px 3px #000}
 .coating-note{padding:7px 10px;color:#7890ad;font-size:9px;line-height:1.45}
 .hidden-data-hooks{display:none}
 @media(max-width:1200px){.shell{grid-template-rows:auto auto auto}.workspace{grid-template-columns:320px minmax(0,1fr)}.right{grid-column:1/-1;grid-template-columns:1fr 1fr;grid-template-rows:auto;border-top:1px solid var(--line)}}
@@ -1748,7 +1779,7 @@ button{cursor:pointer;font-weight:700}.primary{background:#3157d5;border-color:#
 <section class="stage"><div class="stage-viewport"><canvas id="canvas"></canvas><div class="overlay"><strong id="overlayTitle">학습모드</strong><span id="overlayFrame">프레임 준비 중</span><div id="viewerLegend" class="viewer-legend"><div><i class="dot" style="background:#f5f8ff"></i>전문가 전체 Ray Point 점군</div><div><i class="dot" style="background:#a78bfa"></i>Map·Zone별 관측 영역</div><div><i class="dot" style="background:var(--green)"></i>Zone별 전문가 표준 도장 패턴</div><div><i class="dot" style="background:#ff8a3d"></i>선택 기록의 페인트 누적 궤적</div><div><i class="dot" style="background:var(--cyan)"></i>머리·양손 실측 위치와 추정 상체</div></div><div id="realtimeHud" class="realtime-hud"><div class="realtime-hud-head"><strong id="realtimeHudZone">Zone 대기</strong><span id="realtimeHudActivity" class="realtime-hud-activity">이동 중</span></div><div class="realtime-hud-grid"><div class="realtime-hud-row"><span class="realtime-hud-label">속도</span><span id="realtimeHudSpeed" class="realtime-hud-value">—</span><span id="realtimeHudSpeedState" class="realtime-hud-state idle">대기</span></div><div class="realtime-hud-row"><span class="realtime-hud-label">이격거리</span><span id="realtimeHudDistance" class="realtime-hud-value">—</span><span id="realtimeHudDistanceState" class="realtime-hud-state idle">대기</span></div><div class="realtime-hud-row"><span class="realtime-hud-label">분사축 편차</span><span id="realtimeHudAxis" class="realtime-hud-value">—</span><span id="realtimeHudAxisState" class="realtime-hud-state idle">대기</span></div><div class="realtime-hud-row"><span class="realtime-hud-label">도장 방향</span><span id="realtimeHudDirection" class="realtime-hud-value">—</span><span id="realtimeHudDirectionState" class="realtime-hud-state idle">대기</span></div><div class="realtime-hud-row"><span class="realtime-hud-label">도포 범위</span><span id="realtimeHudCoverage" class="realtime-hud-value">—</span><span id="realtimeHudCoverageState" class="realtime-hud-state idle">대기</span></div></div></div></div><div id="loading" class="loading"><div class="spinner"></div><span>전문가 기록을 불러오는 중입니다.</span></div></div><div class="playback-dock"><div class="playback-status"><div class="playback-live"><strong id="playbackZone">현재 Zone 대기 중</strong><span id="playbackZoneBadge" class="playback-zone-badge" hidden>Zone 대기</span></div><span id="playbackTime">0.00 / 0.00초</span></div><div id="zoneTimeline" class="zone-timeline" aria-label="Zone 진행 구간"></div><input id="timeline" type="range" min="0" max="0" value="0" aria-label="진행 위치"><div class="playback-controls"><button id="play" class="primary">재생</button><button id="restart">처음으로</button><div class="speed-control"><label for="speed">재생 속도</label><select id="speed" aria-label="재생 속도"><option value="0.25">0.25배</option><option value="0.5">0.5배</option><option value="1" selected>1.0배</option><option value="1.5">1.5배</option><option value="2">2.0배</option><option value="3">3.0배</option></select></div></div></div></section>
 <aside class="side right"><div class="hidden-data-hooks"><strong id="currentZone">대기 중</strong><div id="zoneOrder"></div><div id="zoneDetail"></div><strong id="sessionCount">-</strong><strong id="duration">-</strong></div>
 <details class="card skeleton-card" open><summary>CSV 조인트 기반 전신 스켈레톤</summary><div class="skeleton-screen"><canvas id="skeletonCanvas" aria-label="CSV 조인트 기반 전신 스켈레톤"></canvas><span id="skeletonPosture" class="skeleton-posture">자세 판정 대기</span><span id="skeletonAngle" class="skeleton-angle">정면 · 0°</span></div><div class="skeleton-controls"><button id="skeletonTurnLeft" class="skeleton-turn" aria-label="스켈레톤 왼쪽 회전" title="왼쪽으로 15도 회전">↶</button><button id="skeletonReset" class="skeleton-reset">정면 복귀</button><button id="skeletonTurnRight" class="skeleton-turn" aria-label="스켈레톤 오른쪽 회전" title="오른쪽으로 15도 회전">↷</button></div><div class="skeleton-note">CSV의 Pelvis·몸통·팔·다리 조인트를 별도 보정 없이 그대로 연결해 표시합니다. 시뮬레이터 IK 관절 데이터의 특성상 일부 자세가 부자연스럽게 보일 수 있습니다.</div></details>
-<section class="card coating-card"><div class="coating-header"><strong>현재 Zone 도막 분포</strong><span id="coatingZone">Zone 대기 중</span></div><div class="coating-switch"><button id="coatingView2d" class="active" type="button">2D 분포</button><button id="coatingView3d" type="button">3D 높이</button></div><div id="coatingStatus" class="coating-status">도막 기준 준비 중</div><div class="coating-screen"><canvas id="coatingCanvas" aria-label="전문가 최종 높이맵 기반 현재 Zone 도막 분포"></canvas></div><div class="coating-legend"><span>얇음</span><span>중간</span><span>두꺼움</span></div><div class="coating-note">전문가 최종 높이맵과 Zone별 raytexuv를 최초 전처리한 상대 높이입니다. 실제 두께 단위가 아닌 시각적 강조 표현입니다.</div></section></aside>
+<section class="card coating-card"><div class="coating-header"><strong>전문가 최종 도막 기준</strong><span id="coatingZone">Zone 대기 중</span></div><div class="coating-switch" role="group" aria-label="도막 보기와 색상 척도"><button id="coatingView2d" class="active" type="button" title="2D 분포 보기">2D</button><button id="coatingView3d" type="button" title="3D 높이 강조 보기">3D</button><button id="coatingScaleRelative" class="active" type="button" aria-pressed="true">상대 분포</button><button id="coatingScaleAbsolute" type="button" aria-pressed="false" disabled>절대 두께 (µm)</button></div><div id="coatingStatus" class="coating-status">도막 기준 준비 중</div><div class="coating-screen"><canvas id="coatingCanvas" aria-label="전문가 최종 높이맵 기반 현재 Zone 도막 분포"></canvas></div><div id="coatingLegend" class="coating-legend" aria-label="도막 색상 범례">0%　25%　50%　75%　100%</div><div id="coatingScaleNote" class="coating-note">Zone별 상대 분포 · 물리 두께 보정 확인 중</div><div id="coatingGeometryNote" class="coating-note">전문가 최종 도막 기준이며 훈련자의 진행 도막이 아닙니다.</div></section></aside>
 </main></div><script>
 const $=id=>document.getElementById(id); const canvas=$('canvas'),ctx=canvas.getContext('2d'),skeletonCanvas=$('skeletonCanvas'),skeletonCtx=skeletonCanvas.getContext('2d');
 const ZONE_COLORS=[null,'#FF0000','#00FF00','#0000FF','#00FFFF','#FF00FF','#FFFF00','#FF8000','#FF0080','#00FF80','#80FF00','#0080FF','#8000FF','#FF8080','#80FF80','#8080FF','#800000','#008000','#000080','#80FFFF','#FF80FF','#FFFF80','#008080','#800080','#808000','#FFBF80','#FF80BF','#BFFF80','#80FFBF','#BF80FF','#80BFFF','#FF40BF','#FFBF40','#40FFBF','#BFFF40','#40BFFF','#BF40FF','#40BFBF','#BF40BF','#BFBF40'];
