@@ -73,6 +73,10 @@ def test_current_pose_uses_only_the_playback_maps_signed_zone(pose_context: dict
 def test_explicit_global_questions_ignore_the_playback_selection(pose_context: dict, prompt: str, expected: str, mode: str) -> None:
     data = _query(_client(), pose_context, prompt=prompt, mode=mode).json()["data"]
     assert expected in data["answer"]
+    # 뷰어 점수는 작업 유사도다. "자세 유사도"는 전문가 자세(팔 관절 엔진)와의 유사도에만 쓴다.
+    assert "자세 유사도" not in data["answer"]
+    if "유사도" in data["answer"]:
+        assert "작업 유사도" in data["answer"]
     assert len(data["pose_context"]["zones"]) == 3
     assert data["pose_context"].get("scope") != "current_zone"
 

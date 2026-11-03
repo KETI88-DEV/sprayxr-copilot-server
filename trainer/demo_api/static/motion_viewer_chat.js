@@ -9,7 +9,7 @@
     },
     {
       id: 'pose_recomm', label: '자세', hint: '예: 지금 자세는 어때?',
-      presets: ['지금 자세는 어때?', '이 Zone에서 어떻게 고쳐?', '전체 자세 유사도는?', '가장 문제가 큰 Zone은?', '오른손을 어떻게 고쳐?', '왼손을 어떻게 고쳐?'],
+      presets: ['지금 자세는 어때?', '이 Zone에서 어떻게 고쳐?', '전체 작업 유사도는?', '가장 문제가 큰 Zone은?', '오른손을 어떻게 고쳐?', '왼손을 어떻게 고쳐?'],
     },
     {
       id: 'trajectory_recomm', label: '순서', hint: '예: 권장 Zone 순서는?',
@@ -127,26 +127,26 @@
   function poseAnswer(prompt, data) {
     const evaluation = data.pose_evaluation || {};
     const zones = Object.values(evaluation.zones || {});
-    if (evaluation.status !== 'available' || !zones.length) return '현재 재생 기록에서는 자세 비교값을 계산할 수 없습니다.';
+    if (evaluation.status !== 'available' || !zones.length) return '현재 재생 기록에서는 작업 비교값을 계산할 수 없습니다.';
     const requested = zoneNumber(prompt);
     const target = requested && zones.find((zone) => String(zone.zone_id) === requested);
     if (target) {
-      const guidance = target.corrections?.length ? ` ${target.corrections.join(' ')}` : ' 별도의 자세 개선 항목은 없습니다.';
-      return `Zone ${target.zone_id} 자세 유사도는 ${percent(target.similarity_percent)}입니다.${guidance}`;
+      const guidance = target.corrections?.length ? ` ${target.corrections.join(' ')}` : ' 별도의 작업 개선 항목은 없습니다.';
+      return `Zone ${target.zone_id} 작업 유사도는 ${percent(target.similarity_percent)}입니다.${guidance}`;
     }
     if (/오른|right/i.test(prompt) || /왼|left/i.test(prompt)) {
       const side = /오른|right/i.test(prompt) ? '오른손' : '왼손';
       const matching = (evaluation.corrections || []).map((item) => item.message || item).filter((item) => String(item).includes(side));
       return matching.length
         ? `${side} 개선 안내: ${matching.join(' ')}`
-        : `현재 기록에서 ${side}에 특정된 개선 항목은 없습니다. 전체 자세 유사도는 ${percent(evaluation.similarity_percent)}입니다.`;
+        : `현재 기록에서 ${side}에 특정된 개선 항목은 없습니다. 전체 작업 유사도는 ${percent(evaluation.similarity_percent)}입니다.`;
     }
     const worst = zones.reduce((left, right) => Number(left.similarity_percent) <= Number(right.similarity_percent) ? left : right);
     if (/문제|최악|낮|어느|어디/i.test(prompt)) {
       const guidance = worst.corrections?.length ? ` ${worst.corrections.join(' ')}` : '';
-      return `현재 기록에서 자세 유사도가 가장 낮은 구역은 Zone ${worst.zone_id}(${percent(worst.similarity_percent)})입니다.${guidance}`;
+      return `현재 기록에서 작업 유사도가 가장 낮은 구역은 Zone ${worst.zone_id}(${percent(worst.similarity_percent)})입니다.${guidance}`;
     }
-    return `현재 재생 기록의 전체 자세 유사도는 ${percent(evaluation.similarity_percent)}입니다. 가장 낮은 구역은 Zone ${worst.zone_id}(${percent(worst.similarity_percent)})입니다.`;
+    return `현재 재생 기록의 전체 작업 유사도는 ${percent(evaluation.similarity_percent)}입니다. 가장 낮은 구역은 Zone ${worst.zone_id}(${percent(worst.similarity_percent)})입니다.`;
   }
 
   function orderAnswer(prompt, data) {

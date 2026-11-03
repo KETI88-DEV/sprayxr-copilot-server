@@ -829,10 +829,10 @@ def test_motion_viewer_page_exposes_pose_comparison_contract(tmp_path: Path) -> 
         "작업 자세 비교 평가",
         "도장 경로와 작업 자세를 전문가 기준으로 비교합니다.",
         "작업자",
-        "전문가 동작 유사도",
-        "자세 개선 안내",
+        "전문가 작업 유사도",
+        "작업 개선 안내",
         "안내 적용 시 예상",
-        "현재 Zone 유사도",
+        "현재 Zone 작업 유사도",
         "현재 자세 상태",
         "Zone 진행 구간",
         "CSV 조인트 기반 전신 스켈레톤",
@@ -911,7 +911,7 @@ def test_pose_guidance_is_scoped_to_current_zone_and_speed_select_is_readable(
 
     assert page.status_code == 200
     assert 'id="poseActionTitle"' in page.text
-    assert "Zone ${zoneLabel(zoneEvaluation.zone_id)} 자세 개선 안내" in script.text
+    assert "Zone ${zoneLabel(zoneEvaluation.zone_id)} 작업 개선 안내" in script.text
     assert "renderCorrections(zoneEvaluation.corrections);" in script.text
     assert "zoneEvaluation.corrections?.length ? zoneEvaluation.corrections : evaluation?.corrections" not in script.text
     assert ".speed-control select{width:100%;font-weight:800;color:#e5f1ff;background:#14243a" in page.text
