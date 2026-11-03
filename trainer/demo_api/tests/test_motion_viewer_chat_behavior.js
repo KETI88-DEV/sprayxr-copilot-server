@@ -102,5 +102,36 @@ async function submit(app, question = '지금 자세는 어때?') {
     assert.equal(decode(sent.request).playback_context.zone_id, null);
     sent.request.finish(); await sent.completion;
   }
-  console.log('motion viewer chat behavior: 2 scenarios passed');
+  {
+    const app = setup(), data = record();
+    data.frames = [
+      { t: 0, map_num: '1', zone_id: '3', spraying: false },
+      { t: 1, map_num: '1', zone_id: '2', spraying: true },
+      { t: 2, map_num: '1', zone_id: '3', spraying: false },
+      { t: 3, map_num: null, zone_id: null, spraying: false },
+      { t: 4, map_num: '1', zone_id: '3', spraying: true },
+    ];
+    app.emit('motion-viewer-data', data);
+    frame(app, data.frames[1], 1);
+    // A valid ray hit while moving is not a new sprayed Zone.
+    frame(app, data.frames[2], 2);
+    let sent = await submit(app);
+    assert.equal(decode(sent.request).playback_context.zone_id, '2');
+    sent.request.finish(); await sent.completion;
+    // Revalidating the held selector does not require a spraying property.
+    app.emit('motion-viewer-data', data);
+    sent = await submit(app);
+    assert.equal(decode(sent.request).playback_context.zone_id, '2');
+    sent.request.finish(); await sent.completion;
+    frame(app, data.frames[4], 4);
+    frame(app, data.frames[3], 3);
+    sent = await submit(app);
+    assert.equal(decode(sent.request).playback_context.zone_id, '2');
+    sent.request.finish(); await sent.completion;
+    frame(app, data.frames[0], 0);
+    sent = await submit(app);
+    assert.equal(decode(sent.request).playback_context.zone_id, null);
+    sent.request.finish(); await sent.completion;
+  }
+  console.log('motion viewer chat behavior: 3 scenarios passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

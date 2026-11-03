@@ -1040,11 +1040,11 @@ def test_motion_viewer_keeps_the_last_spraying_zone_and_gives_skeleton_more_heig
     assert coating.status_code == 200
     assert (
         ".right{padding:12px;display:grid;"
-        "grid-template-rows:auto minmax(245px,1fr)"
+        "grid-template-rows:auto minmax(360px,1fr)"
     ) in page.text
     assert ".skeleton-card{height:auto;display:block}" in page.text
-    assert ".skeleton-screen{height:310px;min-height:310px;flex:none}" in page.text
-    assert ".coating-screen{position:relative;min-height:220px;flex:1" in page.text
+    assert ".skeleton-screen{height:var(--skeleton-view-height,310px);min-height:var(--skeleton-view-height,310px);flex:none}" in page.text
+    assert ".coating-screen{position:relative;min-height:100px;flex:1" in page.text
     assert (
         '<div id="coatingStatus" class="coating-status">도막 기준 준비 중</div>'
         '<div class="coating-screen"><canvas id="coatingCanvas"'

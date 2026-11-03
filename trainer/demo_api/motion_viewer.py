@@ -1745,14 +1745,15 @@ button{cursor:pointer;font-weight:700}.primary{background:#3157d5;border-color:#
 .evaluation-side #poseScore{font-size:46px;line-height:1.05;letter-spacing:-1px}
 .viewer-tools{margin-top:12px;padding-top:10px;border-top:1px solid var(--line)}
 .viewer-tools label{margin:8px 0 6px}
-.right{padding:12px;display:grid;grid-template-rows:auto minmax(245px,1fr);gap:10px;overflow:auto}
+.right{padding:12px;display:grid;grid-template-rows:auto minmax(360px,1fr);gap:10px;overflow:auto}
 .right .card{margin:0}.skeleton-card{height:auto;display:block}
-.skeleton-screen{height:310px;min-height:310px;flex:none}#skeletonCanvas{height:100%}
+.skeleton-screen{height:var(--skeleton-view-height,310px);min-height:var(--skeleton-view-height,310px);flex:none}#skeletonCanvas{height:100%}
 .coating-card{height:100%;display:flex;flex-direction:column;padding:0;overflow:hidden}
 .coating-header{display:flex;justify-content:space-between;align-items:center;padding:11px 12px;border-bottom:1px solid var(--line)}
+.coating-header,.coating-switch,.coating-legend,.coating-note{flex:none}
 .coating-header strong{font-size:13px}.coating-header span{font-size:10px;color:#91a0b8}
 .coating-switch{display:flex;gap:5px;padding:8px 10px}.coating-switch button{padding:6px 8px;font-size:10px}.coating-switch button.active{background:#3157d5;border-color:#3157d5}.coating-switch button:disabled{opacity:.45;cursor:default}
-.coating-screen{position:relative;min-height:220px;flex:1;background:#07101f}#coatingCanvas{display:block;width:100%;height:100%}
+.coating-screen{position:relative;min-height:100px;flex:1;background:#07101f}#coatingCanvas{display:block;width:100%;height:100%}
 .coating-status{flex:none;margin:0 10px 8px;padding:6px 8px;border:1px solid rgba(90,126,171,.24);border-radius:7px;background:#0a1527;color:#dff7ff;font-size:10px;line-height:1.4}
 .coating-legend{display:flex;justify-content:space-between;white-space:pre-wrap;padding:7px 11px;background:linear-gradient(90deg,#1946a0,#1cb2c1,#31cb7a,#ffda5c,#ff6848);color:#fff;font-size:9px;text-shadow:0 1px 3px #000}
 .coating-note{padding:7px 10px;color:#7890ad;font-size:9px;line-height:1.45}

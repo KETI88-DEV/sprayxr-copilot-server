@@ -289,5 +289,40 @@
     renderCoatingZone();
   });
   new ResizeObserver(renderCoatingZone).observe(canvas.parentElement);
+  const rightPane = document.querySelector('.right');
+  const skeletonCard = document.querySelector('.skeleton-card');
+  const skeletonScreen = document.querySelector('.skeleton-screen');
+  if (rightPane && skeletonCard && skeletonScreen) {
+    let resizeQueued = false;
+    const fitRightPane = () => {
+      let next = '';
+      // Narrow layouts have content-driven height; measuring them here would
+      // create feedback between the canvas height and the pane height.
+      if (window.matchMedia('(min-width: 1201px)').matches && skeletonCard.open) {
+        const style = getComputedStyle(rightPane);
+        const available = rightPane.clientHeight - (parseFloat(style.paddingTop) || 0)
+          - (parseFloat(style.paddingBottom) || 0) - (parseFloat(style.rowGap) || 0);
+        const chrome = skeletonCard.getBoundingClientRect().height - skeletonScreen.getBoundingClientRect().height;
+        next = `${Math.max(160, Math.min(310, Math.floor(available - 360 - chrome)))}px`;
+      }
+      if (rightPane.style.getPropertyValue('--skeleton-view-height') === next) return;
+      if (next) rightPane.style.setProperty('--skeleton-view-height', next);
+      else rightPane.style.removeProperty('--skeleton-view-height');
+      if (!resizeQueued) {
+        resizeQueued = true;
+        requestAnimationFrame(() => {
+          resizeQueued = false;
+          // Reuse the main viewer's canvas resize and redraw path.
+          window.dispatchEvent(new Event('resize'));
+        });
+      }
+    };
+    const layoutObserver = new ResizeObserver(fitRightPane);
+    layoutObserver.observe(rightPane);
+    layoutObserver.observe(skeletonCard);
+    skeletonCard.addEventListener('toggle', fitRightPane);
+    addEventListener('resize', fitRightPane);
+    fitRightPane();
+  }
   renderCoatingZone();
 })();

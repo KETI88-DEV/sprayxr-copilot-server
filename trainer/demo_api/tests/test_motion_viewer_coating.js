@@ -5,8 +5,24 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-function viewer() {
+function viewer(layout = null) {
   const events = {}, fills = [];
+  const frames = [], resizeEvents = [], properties = new Map(), layoutEvents = {};
+  const right = layout && {
+    clientHeight: layout.height,
+    style: {
+      setProperty: (key, value) => properties.set(key, value),
+      getPropertyValue: key => properties.get(key) || '',
+      removeProperty: key => properties.delete(key),
+    },
+  };
+  const screenHeight = () => Number.parseFloat(properties.get('--skeleton-view-height') || '310');
+  const screen = layout && {getBoundingClientRect: () => ({height: screenHeight()})};
+  const skeleton = layout && {
+    open: true,
+    getBoundingClientRect: () => ({height: screenHeight() + layout.chrome}),
+    addEventListener: (name, callback) => { layoutEvents[name] = callback; },
+  };
   const context = {
     setTransform() {}, fillText() {}, strokeRect() {}, beginPath() {}, moveTo() {},
     lineTo() {}, closePath() {}, stroke() {},
@@ -27,13 +43,26 @@ function viewer() {
     getBoundingClientRect: () => ({width: 400, height: 250}), parentElement: {},
   });
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../static/motion_viewer_coating.js'), 'utf8'), {
-    document: {getElementById: id => nodes[id], createElement: () => ({textContent: ''})},
-    window: {devicePixelRatio: 1},
+    document: {
+      getElementById: id => nodes[id], createElement: () => ({textContent: ''}),
+      querySelector: selector => ({'.right': right, '.skeleton-card': skeleton, '.skeleton-screen': screen})[selector] || null,
+    },
+    window: {
+      devicePixelRatio: 1,
+      matchMedia: () => ({matches: layout.width > 1200}),
+      dispatchEvent: event => { resizeEvents.push(event.type); events[event.type]?.(event); },
+    },
+    getComputedStyle: () => ({paddingTop: '12px', paddingBottom: '12px', rowGap: '10px'}),
+    requestAnimationFrame: callback => frames.push(callback),
+    Event: class { constructor(type) { this.type = type; } },
     addEventListener: (event, callback) => { events[event] = callback; },
     ResizeObserver: class { observe() {} },
   });
   return {
     nodes,
+    right, skeleton, properties, resizeEvents,
+    flushFrames: () => { while (frames.length) frames.shift()(); },
+    resize: () => events.resize?.(),
     data: data => events['motion-viewer-data']({detail: data}),
     frame: (zone, spraying = true) => events['motion-viewer-frame']({detail: {frame: {
       map_num: '1', zone_id: zone, spraying,
@@ -71,6 +100,42 @@ test('absolute colors compare the same thickness across zones in 2D and 3D', () 
   view.frame('1');
   assert.equal(view.colors()[0], second3d[1]);
   assert.match(view.nodes.coatingGeometryNote.textContent, /높이.*강조/);
+});
+
+test('desktop gives the coating card space and enlarges the skeleton when height allows', () => {
+  const layout = {width: 1440, height: 768, chrome: 162};
+  const view = viewer(layout);
+  assert.equal(view.properties.get('--skeleton-view-height'), '212px');
+  view.flushFrames();
+  assert.deepEqual(view.resizeEvents, ['resize']);
+  view.resize();
+  view.flushFrames();
+  assert.equal(view.resizeEvents.length, 1); // No resize recursion at a stable size.
+  view.right.clientHeight = 848;
+  view.resize();
+  assert.equal(view.properties.get('--skeleton-view-height'), '292px');
+  view.right.clientHeight = 1000;
+  view.resize();
+  assert.equal(view.properties.get('--skeleton-view-height'), '310px');
+  view.right.clientHeight = 500;
+  view.resize();
+  assert.equal(view.properties.get('--skeleton-view-height'), '160px');
+});
+
+test('auto-height narrow layouts and collapsed skeletons remove the desktop override', () => {
+  const layout = {width: 1440, height: 768, chrome: 162};
+  const view = viewer(layout);
+  view.skeleton.open = false;
+  view.resize();
+  assert.equal(view.properties.has('--skeleton-view-height'), false);
+  view.skeleton.open = true;
+  view.resize();
+  assert.equal(view.properties.get('--skeleton-view-height'), '212px');
+  layout.width = 1200;
+  view.resize();
+  assert.equal(view.properties.has('--skeleton-view-height'), false);
+  view.flushFrames();
+  assert.equal(view.resizeEvents.length, 1); // Changes coalesce into one redraw.
 });
 
 test('relative mode remains selectable and identifies its per-zone normalization', () => {

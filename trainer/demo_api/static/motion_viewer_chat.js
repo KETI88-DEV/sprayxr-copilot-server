@@ -114,6 +114,7 @@
     const map = String(frame.map_num), zone = String(frame.zone_id);
     return viewerData?.pose_evaluation?.zones?.[`${map}:${zone}`] ? { map_num: map, zone_id: zone } : null;
   };
+  const sprayedZone = (frame) => frame?.spraying ? knownZone(frame) : null;
   const playbackLabel = (state) => `${state.map_num != null ? `Map ${state.map_num} · Zone ${state.zone_id}` : 'Zone 확인 전'} · ${state.playhead_seconds.toFixed(2)}초`;
   const syncPlaybackContext = () => {
     contextIndicator.textContent = `질문 기준: ${playbackLabel(playback)} · 지금/이 Zone 질문은 해당 구간 평가, 전체 질문은 전체 기록`;
@@ -264,14 +265,14 @@
     const { frame, sourceIndex, playheadSeconds } = event.detail;
     const seconds = Number(playheadSeconds);
     const nextIndex = Number.isInteger(sourceIndex) && sourceIndex >= 0 ? sourceIndex : playback.source_index;
-    let zone = knownZone(frame);
+    let zone = sprayedZone(frame);
     if (!zone && frame?.spraying) {
       zone = { map_num: null, zone_id: null };
     } else if (!zone && (nextIndex < playback.source_index || nextIndex > playback.source_index + 1 || playback.map_num == null)) {
       // Seeking into a transition resolves the latest Zone before that position.
       zone = { map_num: null, zone_id: null };
       for (let index = Math.min(nextIndex, (viewerData.frames?.length || 0) - 1); index >= 0; index--) {
-        const previous = knownZone(viewerData.frames[index]);
+        const previous = sprayedZone(viewerData.frames[index]);
         if (previous) { zone = previous; break; }
         if (viewerData.frames[index]?.spraying) break;
       }
