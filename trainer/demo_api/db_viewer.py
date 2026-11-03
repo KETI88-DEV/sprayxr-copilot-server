@@ -57,7 +57,8 @@ def _page(content: str, sidebar: str = "") -> HTMLResponse:
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
         f"<title>Co-Pilot DB Viewer</title><style>{_CSS}{DASHBOARD_CSS}{SESSION_CSS}{DETAIL_CSS}</style></head>"
         f'<body><div class="app-shell"><aside class="sidebar">{sidebar}</aside>'
-        f'<main class="main">{content}</main></div>{DETAIL_HTML}</body></html>'
+        f'<main class="main">{content}</main></div>{DETAIL_HTML}</body></html>',
+        headers={"Cache-Control":"no-store"},
     )
 
 
@@ -132,16 +133,16 @@ def create_db_viewer_router() -> APIRouter:
         return data
 
     @router.get("/admin/sessions", include_in_schema=False, response_class=HTMLResponse)
-    def sessions(q: str = Query(default="", max_length=100), state: str = Query(default="all", pattern="^(all|unfinished|ended)$"), page: int = Query(default=1, ge=1), limit: int = Query(default=25, ge=10, le=100)):
+    def sessions(q: str = Query(default="", max_length=100), state: str = Query(default="all", pattern="^(all|unfinished|ended)$"), page: int = Query(default=1, ge=1), limit: int = Query(default=25, ge=10, le=200)):
         with _read_database() as conn:
             side = _sidebar(_table_counts(conn), None, "sessions")
             content = render_session_list(conn, q=q, state=state, page=page, limit=limit) if conn is not None else '<h1>훈련세션</h1><p class="empty">아직 저장된 훈련세션이 없습니다.</p>'
             return _page(content, side)
 
     @router.get("/admin/sessions/view", include_in_schema=False, response_class=HTMLResponse)
-    def session_view(session_id: str = Query(min_length=1, max_length=256), kind: str = Query(default="all", pattern="^(all|start|end|complete|sequence|query|report|other)$"), call_page: int = Query(default=1,ge=1)):
+    def session_view(session_id: str = Query(min_length=1, max_length=256), kind: str = Query(default="all", pattern="^(all|start|end|complete|sequence|query|report|other)$"), call_page: int = Query(default=1,ge=1), q: str = Query(default="",max_length=100), outcome: str = Query(default="all",pattern="^(all|errors)$"), order: str = Query(default="newest",pattern="^(newest|oldest)$")):
         with _read_database() as conn:
-            content = render_session_detail(conn, session_id, kind=kind, call_page=call_page) if conn is not None else None
+            content = render_session_detail(conn, session_id, kind=kind, call_page=call_page, q=q, outcome=outcome, order=order) if conn is not None else None
             if content is None:
                 raise HTTPException(404, "session not found")
             return _page(content, _sidebar(_table_counts(conn), None, "sessions"))

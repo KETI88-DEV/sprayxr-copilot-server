@@ -67,7 +67,8 @@ def add_call(conn, number, session="S2", category="sequence", sequence="SEQ-1", 
 
 def event_keys(body):
     urls = re.findall(r'data-detail-url="([^"]+)"', body)
-    return [parse_qs(urlsplit(html.unescape(url)).query)["event_key"][0] for url in urls]
+    queries = [parse_qs(urlsplit(html.unescape(url)).query) for url in urls]
+    return [query["event_key"][0] for query in queries if "event_key" in query]
 
 
 def test_list_totals_gray_unfinished_rows_and_ended_timestamp(conn):
@@ -324,3 +325,154 @@ def test_legacy_event_pagination_and_rowid_fallback_do_not_require_new_schema():
         assert len(event_keys(second))==5
         detail=session_event_detail(db,"old","query:1")
         assert detail is not None and detail["sections"][0]["data"]["prompt"]=="0"
+
+
+@pytest.mark.parametrize("query",["학습모드 3","학습모드3"])
+def test_learning_mode_label_search_matches_the_exact_numeric_scenario(conn,query):
+    conn.execute("INSERT INTO sessions VALUES ('S13','U1','13','ACTIVE',NULL,NULL,NULL,100)")
+    conn.execute("INSERT INTO sessions VALUES ('S1A','U1','1-A','ACTIVE',NULL,NULL,NULL,100)")
+    body=render_session_list(conn,q=query)
+    assert "검색 결과 전체 2건" in body
+    assert 'session_id=S1"' in body and 'session_id=S4"' in body
+    assert 'session_id=S13"' not in body and 'session_id=S1A"' not in body
+    literal=render_session_list(conn,q="1-A")
+    assert "검색 결과 전체 1건" in literal and 'session_id=S1A"' in literal
+    assert "조건에 맞는" in render_session_list(conn,q="학습모드1-A")
+
+
+def test_detail_search_errors_and_sorting_filter_only_matching_captured_calls(conn):
+    add_call(conn,1,request_id="needle-success",received_at="2026-10-30T00:03:00Z")
+    add_call(conn,2,request_id="needle-error",status_code=422,received_at="2026-10-30T00:01:00Z")
+    add_call(conn,3,request_id="needle-unknown",status_code=None,received_at="2026-10-30T00:02:00Z")
+    add_call(conn,4,request_id="invalid-status",status_code="unrecorded")
+    errors=render_session_detail(conn,"S2",q="needle",outcome="errors",order="oldest")
+    assert event_keys(errors)==["call:2"]
+    assert not event_keys(render_session_detail(conn,"S2",q="invalid-status",outcome="errors"))
+    assert "필터 결과 1건" in errors and "세션 전체" in errors
+    assert "HTTP 상태가 없어 오류 필터에서 제외" in errors
+    oldest=event_keys(render_session_detail(conn,"S2",q="needle",order="oldest"))
+    newest=event_keys(render_session_detail(conn,"S2",q="needle",order="newest"))
+    assert oldest==["call:2","call:3","call:1"]
+    assert newest==["call:1","call:3","call:2"]
+    assert 'data-stat="api_calls">4<' in errors
+
+
+def test_detail_search_matches_light_columns_and_legacy_prompt_with_literal_wildcards(conn):
+    add_call(conn,1,category="query",sequence=None,request_id="REQ-special",path="/query/100%")
+    assert "call:1" in event_keys(render_session_detail(conn,"S2",q="REQ-special"))
+    assert "call:1" in event_keys(render_session_detail(conn,"S2",q="100%"))
+    assert "query:1" in event_keys(render_session_detail(conn,"S2",q="도장 자세"))
+    assert "call:1" not in event_keys(render_session_detail(conn,"S2",q="_"))
+    conn.execute("ALTER TABLE api_calls ADD COLUMN prompt TEXT")
+    conn.execute("UPDATE api_calls SET prompt='가벼운 질문 열' WHERE id=1")
+    assert "call:1" in event_keys(render_session_detail(conn,"S2",q="가벼운 질문"))
+
+
+def test_detail_filter_form_and_navigation_preserve_escaped_query_and_paging(conn):
+    for number in range(1,206):
+        add_call(conn,number,category="query",sequence=None,status_code=500,path='/query/<img>')
+    body=render_session_detail(conn,"S2",kind="query",q='<img>',outcome="errors",order="oldest")
+    assert '<img>' not in body and '&lt;img&gt;' in body
+    assert 'method="get"' in body and 'name="q"' in body and 'name="order"' in body
+    hrefs=re.findall(r'href="([^"]+)"',body)
+    query_links=[parse_qs(urlsplit(html.unescape(href)).query) for href in hrefs if '/admin/sessions/view?' in href]
+    assert query_links
+    preserved=[link for link in query_links if link.get("kind")==["sequence"] or "call_page" in link]
+    assert preserved
+    assert all(link["q"]==['<img>'] and link["outcome"]==["errors"] and link["order"]==["oldest"] for link in preserved)
+    assert any(link.get("call_page")==["2"] for link in query_links)
+    page2=render_session_detail(conn,"S2",kind="query",q='<img>',outcome="errors",order="oldest",call_page=2)
+    assert len(event_keys(page2))==5
+
+
+def test_call_health_counts_known_errors_and_averages_only_recorded_durations(conn):
+    add_call(conn,1,status_code=200,duration_ms=10)
+    add_call(conn,2,status_code=500,duration_ms=30)
+    add_call(conn,3,status_code=None,duration_ms=None)
+    add_call(conn,4,status_code=422,duration_ms=-5)
+    body=render_session_detail(conn,"S2",q="no-matches")
+    assert 'data-stat="api_errors">2<' in body
+    assert 'data-stat="api_avg_duration">20.0 ms<' in body
+    assert "상태 기록 3건 기준" in body and "소요 시간 기록 2건 기준" in body
+    assert "필터 결과 0건" in body
+    conn.execute("UPDATE api_calls SET duration_ms=NULL,status_code=NULL")
+    unknown=render_session_detail(conn,"S2")
+    assert 'data-stat="api_avg_duration">0' not in unknown
+    assert 'data-stat="api_errors">0' not in unknown
+    assert "소요 시간 미기록" in unknown and "응답 상태 미기록" in unknown
+
+
+def test_training_duration_is_measured_from_valid_start_and_end_only(conn):
+    assert "11시간 00분 00초" in render_session_detail(conn,"S3")
+    assert re.search(r"훈련 소요 시간</dt><dd>미종료</dd>",render_session_detail(conn,"S2"))
+    assert re.search(r"훈련 소요 시간</dt><dd>미기록</dd>",render_session_detail(conn,"S4"))
+    conn.execute("UPDATE sessions SET ended_at='2026-10-28T17:00:00Z' WHERE session_id='S3'")
+    assert "시각 확인 필요" in render_session_detail(conn,"S3")
+    conn.execute("UPDATE sessions SET ended_at='invalid' WHERE session_id='S3'")
+    assert "시각 확인 필요" in render_session_detail(conn,"S3")
+    conn.execute("UPDATE sessions SET ended_at=started_at WHERE session_id='S3'")
+    assert re.search(r"훈련 소요 시간</dt><dd>0초</dd>",render_session_detail(conn,"S3"))
+
+
+def test_report_summary_tracks_current_status_and_opens_stored_record_modal(conn):
+    conn.execute("INSERT INTO completions VALUES ('R2','S3','pending','2026-10-29T05:20:00Z','{}')")
+    conn.execute("INSERT INTO completions VALUES ('R3','S3','failed','2026-10-29T05:30:00Z','{}')")
+    rowid=conn.execute("SELECT rowid FROM completions WHERE report_id='R3'").fetchone()[0]
+    body=render_session_detail(conn,"S3")
+    for key in ("reports_complete","reports_pending","reports_failed"):
+        assert f'data-stat="{key}">1<' in body
+    assert "최근 리포트" in body and "처리 실패" in body
+    assert f'/admin/api/record?table=completions&amp;rowid={rowid}' in body
+    assert 'data-detail-url="/api/v1' not in body
+    assert "분석 엔진의 이용 가능 여부" in body
+    listing=render_session_list(conn,q="S3")
+    assert "session-report-badge failed" in listing and "리포트 처리 실패" in listing
+    conn.execute("UPDATE completions SET report_status='complete' WHERE report_id='R3'")
+    assert 'data-stat="reports_complete">2<' in render_session_detail(conn,"S3")
+
+
+def test_refined_views_keep_large_payloads_out_of_summary_queries(conn):
+    add_call(conn,1,category="query",sequence=None)
+    blocked={"body","payload","answer","request_json","response_json"}
+    def authorizer(action,table,column,_db,_trigger):
+        if action==sqlite3.SQLITE_READ and column in blocked:
+            return sqlite3.SQLITE_DENY
+        return sqlite3.SQLITE_OK
+    conn.set_authorizer(authorizer)
+    assert "S3" in render_session_list(conn)
+    assert "query:1" in event_keys(render_session_detail(conn,"S2",kind="query",q="도장"))
+
+
+def test_both_session_views_offer_refresh_contract_and_kst_render_time(conn):
+    for body in (render_session_list(conn),render_session_detail(conn,"S2")):
+        assert 'class="session-refresh"' in body
+        assert 'type="button" data-session-refresh-now' in body
+        assert 'type="checkbox" data-session-auto-refresh' in body
+        assert 'data-session-refresh-state aria-live="polite"' in body
+        assert "10초 자동갱신" in body
+        assert re.search(r"조회 시각 \d{4}\.\d{2}\.\d{2} \d{2}:\d{2}:\d{2} KST",body)
+
+
+def test_legacy_order_uses_recorded_event_times_and_keeps_missing_times_last(conn):
+    conn.execute("UPDATE query_turns SET created_at='2026-10-30T00:05:00+09:00' WHERE id=1")
+    conn.execute("INSERT INTO query_turns VALUES (3,'S2','U1','늦은 질문','답변','pose_recomm','2026-10-29T15:10:00Z')")
+    conn.execute("INSERT INTO query_turns VALUES (4,'S2','U1','시각 없는 질문','답변','pose_recomm',NULL)")
+    assert event_keys(render_session_detail(conn,"S2",kind="query",order="oldest"))==["query:1","query:3","query:4"]
+    assert event_keys(render_session_detail(conn,"S2",kind="query",order="newest"))==["query:3","query:1","query:4"]
+
+
+def test_refined_filters_and_report_statuses_work_with_partial_legacy_schema():
+    with sqlite3.connect(":memory:") as db:
+        db.row_factory=sqlite3.Row
+        db.executescript("""
+            CREATE TABLE sessions (session_id TEXT,session_status TEXT);
+            INSERT INTO sessions VALUES ('old','COMPLETED');
+            CREATE TABLE completions (session_id TEXT,report_id TEXT);
+            INSERT INTO completions VALUES ('old','legacy-report');
+            CREATE TABLE api_calls (id INTEGER,session_id TEXT);
+            INSERT INTO api_calls VALUES (1,'old');
+        """)
+        body=render_session_detail(db,"old",outcome="errors",order="oldest",q="no-match")
+        assert "필터 결과 0건" in body and "상태 미기록" in body
+        assert "소요 시간 미기록" in body and "응답 상태 미기록" in body
+        assert '/admin/api/record?table=completions&amp;rowid=1' in body

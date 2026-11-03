@@ -18,8 +18,13 @@ def test_real_http_calls_link_to_session_dashboard_and_parameter_modal(monkeypat
         ended={'session_id':'3-INTEGRATION','user_id':'W','scenario_id':'3','ended_at':'2026-11-03T00:05:00Z'}
         assert client.post('/api/v1/sessions/end',json=ended).status_code==200
         assert client.get('/admin/sessions').status_code==200
+        assert client.get('/admin/sessions?limit=200').status_code==200
         page=client.get('/admin/sessions/view',params={'session_id':'3-INTEGRATION'})
         assert page.status_code==200 and 'data-detail-url=' in page.text
+        assert page.headers['cache-control']=='no-store'
+        errors=client.get('/admin/sessions/view',params={'session_id':'3-INTEGRATION','q':'SEQ-1','outcome':'errors','order':'oldest'})
+        assert errors.status_code==200 and 'HTTP 422' in errors.text
+        assert '/api/v1/sessions/end' not in errors.text
         with sqlite3.connect(path) as conn:
             rows=conn.execute('SELECT id,status_code,category FROM api_calls WHERE session_id=? ORDER BY id',('3-INTEGRATION',)).fetchall()
         assert len(rows)==4

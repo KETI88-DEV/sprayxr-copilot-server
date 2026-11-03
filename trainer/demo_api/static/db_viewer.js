@@ -6,6 +6,82 @@
   const content = document.getElementById('db-detail-content');
   const copy = document.getElementById('db-detail-copy');
   let controller, payload;
+  // Updates are opt-in and never replace an open parameter dialog or edited form.
+  let refreshing = false, autoRefresh = false, lastRefreshText = '';
+  const refreshKey = 'copilot.db.autoRefresh';
+  try { autoRefresh = localStorage.getItem(refreshKey) === '1'; } catch {}
+  function refreshState(message = '') {
+    const state = document.querySelector('[data-session-refresh-state]');
+    if(state) state.textContent = lastRefreshText + (message ? ` · ${message}` : '');
+  }
+  function restoreSessionControls() {
+    const state = document.querySelector('[data-session-refresh-state]');
+    if(state) lastRefreshText = state.textContent;
+    document.querySelectorAll('[data-session-auto-refresh]').forEach(input => { input.checked=autoRefresh; });
+    try {
+      if(location.pathname === '/admin/sessions') sessionStorage.setItem('copilot.db.sessionList',location.pathname+location.search);
+      const back=document.querySelector('.session-back');
+      const remembered=sessionStorage.getItem('copilot.db.sessionList');
+      if(back && remembered){const url=new URL(remembered,location.origin);if(url.origin===location.origin && url.pathname==='/admin/sessions')back.href=url.pathname+url.search;}
+    } catch {}
+    if(autoRefresh) refreshState('10초 자동갱신');
+  }
+  function editedForm() {
+    return Array.from(document.querySelectorAll('main form input,main form textarea,main form select')).some(field=>{
+      if(field.matches('[data-session-auto-refresh]'))return false;
+      if(field.tagName==='SELECT'){
+        const options=Array.from(field.options), explicit=options.some(option=>option.defaultSelected);
+        return options.some((option,index)=>option.selected!==(option.defaultSelected||(!explicit&&index===0)));
+      }
+      if(field.type==='checkbox'||field.type==='radio')return field.checked!==field.defaultChecked;
+      return field.value!==field.defaultValue;
+    });
+  }
+  function pauseReason() {
+    if(document.visibilityState!=='visible') return '다른 화면 확인 중 · 갱신 대기';
+    if(dialog.open) return '상세 파라미터 확인 중 · 갱신 대기';
+    const params=new URL(location.href).searchParams;
+    if(Number(params.get('call_page')||params.get('page')||1)>1)return '이전 페이지 확인 중 · 갱신 대기';
+    if(editedForm())return '변경한 검색 조건이 있습니다 · 검색 후 갱신';
+    const active=document.activeElement;
+    if(active?.closest('form,input,select,textarea') && !active.matches('[data-session-auto-refresh]')) return '검색 조건 입력 중 · 갱신 대기';
+    if(window.getSelection()?.isCollapsed===false) return '텍스트 선택 중 · 갱신 대기';
+    if(Array.from(document.querySelectorAll('.session-events')).some(node=>node.scrollTop>10))return '이전 기록 확인 중 · 갱신 대기';
+    return '';
+  }
+  async function refreshSession(automatic=false){
+    if(refreshing || !document.querySelector('[data-session-refresh-now]'))return;
+    const reason=pauseReason();
+    if(reason && (automatic || dialog.open || editedForm())){refreshState(reason);return;}
+    refreshing=true;
+    const buttons=Array.from(document.querySelectorAll('[data-session-refresh-now]'));
+    buttons.forEach(button=>{button.disabled=true;button.textContent='갱신 중…';});
+    refreshState('갱신 중…');
+    const abort=new AbortController();const timeout=setTimeout(()=>abort.abort(),10000);
+    try{
+      const response=await fetch(location.href,{cache:'no-store',signal:abort.signal,headers:{Accept:'text/html'}});
+      if(!response.ok)throw new Error('refresh failed');
+      const parsed=new DOMParser().parseFromString(await response.text(),'text/html');
+      const next=parsed.querySelector('main.main');
+      if(!next)throw new Error('invalid page');
+      // A dialog/form may have opened while the request was in flight.
+      const afterReason=pauseReason();
+      if(dialog.open || editedForm() || (automatic && (afterReason || !autoRefresh)) || document.activeElement?.closest('form,textarea,select,input:not([data-session-auto-refresh])')){refreshState(afterReason||'자동갱신 대기');return;}
+      const scroll={x:window.scrollX,y:window.scrollY,side:document.querySelector('.sidebar')?.scrollTop||0,events:Array.from(document.querySelectorAll('.session-events')).map(node=>node.scrollTop)};
+      const main=document.querySelector('main.main');main.replaceChildren(...Array.from(next.childNodes));
+      const side=parsed.querySelector('.sidebar'),currentSide=document.querySelector('.sidebar');
+      if(side&&currentSide){currentSide.replaceChildren(...Array.from(side.childNodes));currentSide.scrollTop=scroll.side;}
+      restoreSessionControls();document.querySelectorAll('.session-events').forEach((node,index)=>{node.scrollTop=scroll.events[index]||0;});window.scrollTo(scroll.x,scroll.y);
+    }catch(error){refreshState(error.name==='AbortError'?'갱신 지연 · 기존 화면 유지':'갱신 실패 · 기존 화면 유지');}
+    finally{clearTimeout(timeout);refreshing=false;document.querySelectorAll('[data-session-refresh-now]').forEach(button=>{button.disabled=false;button.textContent='새로고침';});}
+  }
+  restoreSessionControls();
+  document.addEventListener('click',event=>{if(event.target.closest('[data-session-refresh-now]')){event.preventDefault();refreshSession();}});
+  document.addEventListener('change',event=>{if(event.target.matches('[data-session-auto-refresh]')){
+    autoRefresh=event.target.checked;try{localStorage.setItem(refreshKey,autoRefresh?'1':'0');}catch{}
+    refreshState(autoRefresh?'10초 자동갱신':'자동갱신 꺼짐');
+  }});
+  setInterval(()=>{if(autoRefresh)refreshSession(true);},10000);
   const el = (tag, cls, text) => {
     const node = document.createElement(tag);
     if (cls) node.className = cls;
