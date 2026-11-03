@@ -15,9 +15,11 @@ from typing import Any, cast
 import httpx
 import uvicorn
 from anyio import to_thread
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.openapi.docs import get_swagger_ui_html, get_swagger_ui_oauth2_redirect_html
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse
+from trainer.demo_api.portal_navigation import portal_document
 
 from trainer.demo_api import chat_service as chat_service_mod
 from trainer.demo_api.access_control import AccessControlMiddleware, OperatorCredentials
@@ -464,7 +466,24 @@ def create_app(
         version="2.6.0",
         openapi_tags=OPENAPI_TAGS,
         lifespan=_lifespan,
+        docs_url=None,
     )
+
+    @app.get("/docs", include_in_schema=False)
+    async def swagger_docs(request: Request) -> HTMLResponse:
+        prefix=request.scope.get("root_path","").rstrip("/")
+        redirect=app.swagger_ui_oauth2_redirect_url
+        page=get_swagger_ui_html(
+            openapi_url=prefix+(app.openapi_url or "/openapi.json"),
+            title=app.title+" - Swagger UI",
+            oauth2_redirect_url=prefix+redirect if redirect else None,
+            init_oauth=app.swagger_ui_init_oauth,
+            swagger_ui_parameters=app.swagger_ui_parameters,
+        )
+        return HTMLResponse(portal_document(page.body.decode("utf-8"),"docs"),headers={"Cache-Control":"no-store"})
+
+    if app.swagger_ui_oauth2_redirect_url:
+        app.add_api_route(app.swagger_ui_oauth2_redirect_url,get_swagger_ui_oauth2_redirect_html,include_in_schema=False)
     app.state.chat_service = service
     app.state.eager_init_thread = None
     app.state.stt_init_thread = None

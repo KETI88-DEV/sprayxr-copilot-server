@@ -184,7 +184,7 @@ def render_dashboard(conn: sqlite3.Connection | None, tables: dict[str, int], *,
     return f"""
     <div class="topbar"><div><div class="eyebrow">CO-PILOT · DATA OVERVIEW</div><h1>Home</h1><div class="sub">전체 훈련 데이터와 처리 현황을 한눈에 확인하세요.</div>
     <div class="home-meta"><span class="scope-pill">전체 누적 데이터</span><span class="readonly"><i class="dot"></i>읽기 전용</span><span>조회 시각 {now:%Y.%m.%d %H:%M:%S} KST</span></div></div>
-    <div class="actions home-actions"><a class="secondary" href="/admin?days={days}&amp;metric={metric}">새로고침</a><a href="/docs">Swagger로 이동 ↗</a></div></div>
+    <div class="actions home-actions"><a class="secondary" href="/admin?days={days}&amp;metric={metric}">새로고침</a></div></div>
     {empty_notice}<div class="cards home-kpis">{cards}</div>
     <div class="dashboard-grid"><section class="dashboard-panel"><div class="panel-head"><div><h2>일별 데이터 추이</h2><p>최근 {days}일 · 한국 시간 · {date_basis} 기준</p></div>
     <form class="period-form" action="/admin"><input type="hidden" name="metric" value="{metric}"><label for="days" class="sub" style="font-size:12px">기간</label><select id="days" name="days">{options}</select><button>조회</button></form></div>

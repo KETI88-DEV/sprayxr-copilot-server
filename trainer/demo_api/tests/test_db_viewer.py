@@ -38,7 +38,7 @@ def test_db_viewer_has_readable_dashboard_and_navigation(monkeypatch, tmp_path) 
     assert "2 / 3 페이지" in body
     assert "S-12" in body
     assert "JSON 보기" in body
-    assert "Swagger로 돌아가기" in body
+    assert 'href="/docs"' in body and "API 문서" in body
 
 
 def test_db_viewer_searches_values_and_escapes_query(monkeypatch, tmp_path) -> None:

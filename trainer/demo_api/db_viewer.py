@@ -18,6 +18,7 @@ from trainer.demo_api.sequence_store import DEFAULT_DB_PATH
 from trainer.demo_api.db_dashboard import DASHBOARD_CSS, render_dashboard
 from trainer.demo_api.db_record_detail import DETAIL_CSS, DETAIL_HTML, record_detail, json_safe
 from trainer.demo_api.db_sessions import SESSION_CSS, render_session_list, render_session_detail, session_event_detail
+from trainer.demo_api.portal_navigation import portal_document
 
 _CSS = """
 :root{color-scheme:light;--bg:#f4f7fb;--panel:#fff;--ink:#152033;--muted:#68758a;--line:#dde4ee;
@@ -52,14 +53,14 @@ border-top:0;border-radius:0 0 13px 13px;padding:13px 15px;font-size:13px;color:
 
 
 def _page(content: str, sidebar: str = "") -> HTMLResponse:
-    return HTMLResponse(
+    document = (
         "<!doctype html><html lang='ko'><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
         f"<title>Co-Pilot DB Viewer</title><style>{_CSS}{DASHBOARD_CSS}{SESSION_CSS}{DETAIL_CSS}</style></head>"
         f'<body><div class="app-shell"><aside class="sidebar">{sidebar}</aside>'
-        f'<main class="main">{content}</main></div>{DETAIL_HTML}</body></html>',
-        headers={"Cache-Control":"no-store"},
+        f'<main class="main">{content}</main></div>{DETAIL_HTML}</body></html>'
     )
+    return HTMLResponse(portal_document(document,"database"), headers={"Cache-Control":"no-store"})
 
 
 def _cell(value: object) -> str:
@@ -207,7 +208,7 @@ def create_db_viewer_router() -> APIRouter:
             options = ''.join(f'<option value="{size}"{" selected" if size == limit else ""}>{size}개씩</option>' for size in (10,25,50,100,200))
             content = f"""
             <div class="topbar"><div><div class="eyebrow">DATABASE EXPLORER</div><h1>Co-Pilot 데이터베이스</h1>
-            <div class="sub">운영 데이터의 최신 상태를 안전하게 조회합니다.</div></div><div class="actions"><a href="/docs">Swagger로 돌아가기</a></div></div>
+            <div class="sub">운영 데이터의 최신 상태를 안전하게 조회합니다.</div></div><div class="actions"><a href="/admin">Home 대시보드</a></div></div>
             <div class="cards"><div class="card"><span>선택 테이블</span><strong>{html.escape(selected)}</strong></div>
             <div class="card"><span>검색 결과</span><strong>전체 {total:,}건</strong></div><div class="card"><span>접근 모드</span>
             <strong class="readonly"><i class="dot"></i>읽기 전용</strong></div></div>
