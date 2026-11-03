@@ -98,7 +98,8 @@ class ReportJobs:
                 return
             refs = row.payload.get("artifacts")
             if not isinstance(refs, dict) or not refs.get("telemetry"):
-                return  # Legacy rows have no recoverable input; polling handles those.
+                return  # Legacy input/progress is unknown; never infer a failure.
+            self.store.mark_completion_processing(report_id)
             raw = read_artifact(self.store.artifact_dir, refs["telemetry"], CSV_UPLOAD_LIMIT)
             image = read_artifact(self.store.artifact_dir, refs["height_map"], PNG_UPLOAD_LIMIT) if refs.get("height_map") else None
             self.analyze(

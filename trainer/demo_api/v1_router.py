@@ -18,7 +18,7 @@ import re
 import time
 import zlib
 from collections.abc import AsyncIterator
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Annotated, Any, Final
 
 import anyio
@@ -90,8 +90,6 @@ def _error(code: int, message: str) -> JSONResponse:
 _COATING_INDEX_UNDEFINED: Final = "coating_engine_pending_integration"
 _FLOW_MISSING: Final = "recommended_flow_missing"
 
-# Only legacy jobs without durable input can expire; recoverable/running work has no arbitrary deadline.
-_ANALYSIS_DEADLINE: Final = timedelta(minutes=10)
 _ANALYSIS_FAILED: Final = "analysis_failed"
 _ANALYSIS_FAILED_GUIDE: Final = "분석을 마치지 못했습니다. 입력 자료와 분석 서비스 상태를 확인해 주세요."
 
@@ -104,11 +102,13 @@ def _unavailable_report(
     user_id: str | None = None,
     scenario_id: str | None = None,
 ) -> ReportDetail:
-    """엔진이 없을 때의 리포트. 수치는 `null`이고 상태가 그 사실을 말한다(p.15).
+    """분석 결과가 아직 없을 때의 리포트. 대기만으로 엔진 장애를 추정하지 않는다.
 
     모양의 정본은 `trainer/demo_api/report_sample.json` — 머리 필드는 다른 v2.5 응답과
     같은 규약이고 본체는 `report` 아래다.
     """
+    pending = status == "pending"
+    guide = "분석 결과가 아직 저장되지 않았습니다. 현재 진행 여부와 지연 사유는 확인되지 않았습니다." if pending else _ENGINE_MISSING
     return ReportDetail(
         session_id=session_id,
         user_id=user_id,
@@ -118,12 +118,12 @@ def _unavailable_report(
             report_id=report_id,
             report_status=status,  # type: ignore[arg-type]
             coating_report=CoatingReport(
-                analysis_status="unavailable", reason_code=_COATING_INDEX_UNDEFINED, guideline=_ENGINE_MISSING
+                analysis_status="unavailable", reason_code="report_pending" if pending else _COATING_INDEX_UNDEFINED, guideline=guide
             ),
             sequence_report=SequenceReport(
-                analysis_status="unavailable", reason_code=_FLOW_MISSING, guideline=_ENGINE_MISSING
+                analysis_status="unavailable", reason_code="report_pending" if pending else _FLOW_MISSING, guideline=guide
             ),
-            pose_report=PoseReport(analysis_status="unavailable", guideline=_ENGINE_MISSING),
+            pose_report=PoseReport(analysis_status="unavailable", reason_code="report_pending" if pending else None, guideline=guide),
             llm_briefing=None,
         ),
     )
@@ -248,24 +248,7 @@ def create_v1_router(
     mcp_base = mcp_base_url or os.environ.get("MCP_BASE_URL", "http://localhost:8100")
 
     def _settled(report_id: str) -> Any:
-        """Expire only legacy rows whose input was never persisted."""
-        row = state.get_completion(report_id)
-        if row is None or row.report_status != "pending":
-            return row
-        if row.payload.get("artifacts"):
-            return row
-        try:
-            requested = datetime.fromisoformat(row.requested_at.replace("Z", "+00:00"))
-            if requested.tzinfo is None:
-                requested = requested.replace(tzinfo=timezone.utc)
-        except ValueError:
-            return row
-        if datetime.now(timezone.utc) - requested < _ANALYSIS_DEADLINE:
-            return row
-        logger.warning("report %s pending past deadline; closing as failed", report_id)
-        state.finish_completion(
-            report_id, status="failed", analysis={"generated_at": _now(), "error": "analysis_interrupted"}
-        )
+        """Polling observes state. Age alone is not evidence of a failed worker."""
         return state.get_completion(report_id)
 
     def _coating(
@@ -363,6 +346,7 @@ def create_v1_router(
                 lambda: state.start_session_with_created(
                     session_id=body.session_id, user_id=body.user_id, scenario_id=body.scenario_id,
                     started_at=body.started_at, target_thickness_um=body.target_thickness_um,
+                    creation_origin="real", creation_path="/api/v1/sessions/start",
                 )
             )
         except SessionConflict as exc:

@@ -314,11 +314,8 @@ def test_report_detail_returns_unavailable_areas_without_inventing_numbers() -> 
     assert report["sequence_report"]["reason_code"] == "recommended_flow_missing"
 
 
-def test_a_report_left_pending_past_the_deadline_is_closed_as_failed() -> None:
-    """분석은 메모리 안 스레드다. 서버가 재시작되면 그 리포트는 영원히 pending 이다.
-
-    2026-10-12 TSB 실측: RPT-e84db05503d8 이 나흘째 pending. 폴링하는 쪽이 끝을 알 수 있어야 한다.
-    """
+def test_historical_pending_without_processing_evidence_is_not_failed_by_polling() -> None:
+    """Age alone cannot prove that a historical job failed or ever started."""
     store = V1Store(":memory:")
     app = FastAPI()
     app.include_router(create_v1_router(store=store, sequences=SequenceStore(":memory:")))
@@ -328,9 +325,12 @@ def test_a_report_left_pending_past_the_deadline_is_closed_as_failed() -> None:
     status = client.get(f"/api/v1/sessions/S1/reports/{stale.report_id}").json()["data"]
     detail = client.get(f"/api/v1/reports/{stale.report_id}").json()["data"]
 
-    assert status["report_status"] == "failed"
-    assert detail["report"]["report_status"] == "failed"
-    assert detail["report"]["pose_report"]["reason_code"] == "analysis_failed"
+    assert status["report_status"] == "pending"
+    assert detail["report"]["report_status"] == "pending"
+    for area in ('coating_report','sequence_report','pose_report'):
+        assert detail['report'][area]['reason_code'] == 'report_pending'
+        assert '엔진이 연결되지' not in detail['report'][area]['guideline']
+    assert store.get_completion(stale.report_id).report_status == "pending"
 
 
 def test_a_fresh_pending_report_stays_pending() -> None:

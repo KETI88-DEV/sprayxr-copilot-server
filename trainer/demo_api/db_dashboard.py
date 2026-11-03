@@ -8,6 +8,9 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlencode
 
+from trainer.demo_api.db_origin import ORIGINS, normalize_origin, origin_control, preserve_origin_links, scope_condition
+from trainer.demo_api.db_report_status import PROCESSING_FIELDS, report_progress
+
 KST = timezone(timedelta(hours=9))
 METRICS = {
     "sessions": ("훈련 세션", "sessions", "started_at", "훈련 시작일"),
@@ -57,7 +60,7 @@ def _columns(conn: sqlite3.Connection, name: str, tables: dict[str, int]) -> set
     return {str(row[1]) for row in conn.execute(f'PRAGMA table_info("{name}")')}
 
 
-def _session_summary(conn: sqlite3.Connection, tables: dict[str, int]) -> tuple[dict[str, int], list[sqlite3.Row]]:
+def _session_summary(conn: sqlite3.Connection, tables: dict[str, int], origin: str = "all") -> tuple[dict[str, int], list[sqlite3.Row]]:
     columns = {name: _columns(conn, name, tables) for name in ("sessions", "users", "sequences", "query_turns")}
     if "session_id" not in columns["sessions"]:
         return {"started": 0, "progress": 0, "ended": 0}, []
@@ -85,7 +88,7 @@ def _session_summary(conn: sqlite3.Connection, tables: dict[str, int]) -> tuple[
             MAX(COALESCE(datetime({field('started_at')}),''),COALESCE(datetime({field('ended_at')}),''),
                 COALESCE(seq.last_at,''),COALESCE(qry.last_at,'')) AS last_at
         FROM sessions s LEFT JOIN seq ON seq.session_key=s.session_id
-        LEFT JOIN qry ON qry.session_key=s.session_id {join_user}) """
+        LEFT JOIN qry ON qry.session_key=s.session_id {join_user} WHERE {scope_condition(conn,'sessions',origin,'s')}) """
     counts = {"started": 0, "progress": 0, "ended": 0}
     counts.update({row[0]: row[1] for row in conn.execute(sql + "SELECT stage,COUNT(*) FROM summary GROUP BY stage")})
     recent = conn.execute(sql + "SELECT * FROM summary ORDER BY last_at DESC, session_id DESC LIMIT 8").fetchall()
@@ -129,7 +132,10 @@ def _chart(points: list[tuple[str, int]], label: str) -> str:
     return "".join(pieces)
 
 
-def render_dashboard(conn: sqlite3.Connection | None, tables: dict[str, int], *, days: int = 30, metric: str = "sessions") -> str:
+def render_dashboard(conn: sqlite3.Connection | None, tables: dict[str, int], *, days: int = 30, metric: str = "sessions", origin: str = "all") -> str:
+    origin = normalize_origin(origin)
+    if conn is not None and origin != "all":
+        tables = {name:conn.execute('SELECT COUNT(*) FROM "' + name.replace('"','""') + '" WHERE ' + scope_condition(conn,name,origin)).fetchone()[0] for name in tables}
     now = datetime.now(timezone.utc).astimezone(KST)
     dates = [(now.date() - timedelta(days=offset)).isoformat() for offset in reversed(range(days))]
     counts = {key: tables.get(table, 0) for key, table in (("users","users"),("sessions","sessions"),("sequences","sequences"),("queries","query_turns"))}
@@ -138,17 +144,24 @@ def render_dashboard(conn: sqlite3.Connection | None, tables: dict[str, int], *,
     recent: list[sqlite3.Row] = []
     scenarios: list[Any] = []
     daily: dict[str, int] = {}
+    pending_stale, pending_unknown = 0, 0
     label, table, time_col, date_basis = METRICS[metric]
     if conn is not None:
-        stages, recent = _session_summary(conn, tables)
+        stages, recent = _session_summary(conn, tables, origin)
         if "scenario_id" in _columns(conn, "sessions", tables):
-            scenarios = conn.execute("SELECT COALESCE(NULLIF(scenario_id,''),'미지정'), COUNT(*) AS n FROM sessions GROUP BY 1 ORDER BY n DESC,1").fetchall()
+            scenarios = conn.execute("SELECT COALESCE(NULLIF(scenario_id,''),'미지정'), COUNT(*) AS n FROM sessions WHERE " + scope_condition(conn,'sessions',origin) + " GROUP BY 1 ORDER BY n DESC,1").fetchall()
         if "report_status" in _columns(conn, "completions", tables):
-            for status, amount in conn.execute("SELECT LOWER(TRIM(report_status)), COUNT(*) FROM completions GROUP BY 1"):
-                kind = "complete" if status in {"complete","completed","success"} else status if status in {"pending","failed"} else "other"
+            for status, amount in conn.execute("SELECT LOWER(TRIM(report_status)), COUNT(*) FROM completions WHERE " + scope_condition(conn,'completions',origin) + " GROUP BY 1"):
+                kind = "complete" if status in {"complete","completed","success"} else "pending" if status in {"pending","processing","running"} else "failed" if status in {"failed","failure","error"} else "other"
                 reports[kind] += amount
+            cols = _columns(conn,'completions',tables)
+            fields = ','.join('"'+name+'"' if name in cols else 'NULL AS "'+name+'"' for name in ('report_status','requested_at',*PROCESSING_FIELDS))
+            for row in conn.execute(f"SELECT {fields} FROM completions WHERE " + scope_condition(conn,'completions',origin) + " AND LOWER(TRIM(report_status)) IN ('pending','processing','running')"):
+                progress = report_progress(row,now=now)
+                pending_stale += int(progress['stale'])
+                pending_unknown += int(progress['latest_at'] is None)
         if time_col in _columns(conn, table, tables):
-            daily = dict(conn.execute(f'SELECT date("{time_col}",\'+9 hours\') AS day, COUNT(*) FROM "{table}" WHERE date("{time_col}",\'+9 hours\') BETWEEN ? AND ? GROUP BY day', (dates[0],dates[-1])).fetchall())
+            daily = dict(conn.execute(f'SELECT date("{time_col}",\'+9 hours\') AS day, COUNT(*) FROM "{table}" WHERE {scope_condition(conn,table,origin)} AND date("{time_col}",\'+9 hours\') BETWEEN ? AND ? GROUP BY day', (dates[0],dates[-1])).fetchall())
     cards = "".join(
         f'<a class="card kpi" href="{_link(table_name)}"><div class="kpi-top">{title}<i class="kpi-icon" aria-hidden="true">{icon}</i></div><strong data-stat="{key}">{counts[key]:,}</strong><p>{note}</p></a>'
         for key, table_name, title, icon, note in (
@@ -181,18 +194,18 @@ def render_dashboard(conn: sqlite3.Connection | None, tables: dict[str, int], *,
     if not rows:
         rows = '<tr><td colspan="6" class="home-empty">아직 등록된 세션이 없습니다.</td></tr>'
     empty_notice = '<p class="home-footnote">DB 파일이 아직 생성되지 않았습니다. 훈련 데이터가 저장되면 통계가 표시됩니다.</p>' if conn is None else ""
-    return f"""
+    return preserve_origin_links(f"""
     <div class="topbar"><div><div class="eyebrow">HOME · DATA OVERVIEW</div><h1>훈련 데이터 대시보드</h1><div class="sub">전체 훈련 데이터와 처리 현황을 한눈에 확인하세요.</div>
-    <div class="home-meta"><span class="scope-pill">전체 누적 데이터</span><span class="readonly"><i class="dot"></i>읽기 전용</span><span>조회 시각 {now:%Y.%m.%d %H:%M:%S} KST</span></div></div>
+    <div class="home-meta"><span class="scope-pill">{ORIGINS[origin]} 누적 데이터</span><span class="readonly"><i class="dot"></i>읽기 전용</span><span>조회 시각 {now:%Y.%m.%d %H:%M:%S} KST</span></div></div>
     <div class="actions home-actions"><a class="secondary" href="/admin?days={days}&amp;metric={metric}">새로고침</a></div></div>
-    {empty_notice}<div class="cards home-kpis">{cards}</div>
+    {origin_control(conn,origin,days=days,metric=metric)}{empty_notice}<div class="cards home-kpis">{cards}</div>
     <div class="dashboard-grid"><section class="dashboard-panel"><div class="panel-head"><div><h2>일별 데이터 추이</h2><p>최근 {days}일 · 한국 시간 · {date_basis} 기준</p></div>
     <form class="period-form" action="/admin"><input type="hidden" name="metric" value="{metric}"><label for="days" class="sub" style="font-size:12px">기간</label><select id="days" name="days">{options}</select><button>조회</button></form></div>
     <nav class="metric-tabs" aria-label="추이 지표">{tabs}</nav><div class="trend-meta"><strong>{sum(daily.values()):,}<small style="font-size:13px;font-weight:500"> 건</small></strong><span>선택 기간 {label}</span></div>{chart}</section>
-    <section class="dashboard-panel"><div class="panel-head"><div><h2>훈련 콘텐츠별 이용 현황</h2><p>전체 세션 기준 · 상위 8개 콘텐츠</p></div></div><div class="rank-list">{ranking}</div></section></div>
+    <section class="dashboard-panel"><div class="panel-head"><div><h2>훈련 콘텐츠별 이용 현황</h2><p>선택 출처의 세션 기준 · 상위 8개 콘텐츠</p></div></div><div class="rank-list">{ranking}</div></section></div>
     <div class="dashboard-grid"><section class="dashboard-panel"><div class="panel-head"><div><h2>훈련 진행 상태</h2><p>현재 저장된 세션의 진행 단계</p></div></div><div class="status-grid">{stage_cards}</div><p class="panel-footer">진행 중은 미종료 상태를 뜻합니다. 현재 접속 여부를 의미하지 않으며, 마지막 수신 시각은 아래 세션 목록에서 확인합니다.</p></section>
-    <section class="dashboard-panel"><div class="panel-head"><div><h2>리포트 처리 현황</h2><p>누적 리포트 {tables.get('completions',0):,}건</p></div><a class="text-link" href="{_link('completions')}">기록 보기 →</a></div><div class="report-list">{report_rows}</div><p class="panel-footer">훈련 종료와 리포트 처리는 별개입니다. 처리 완료라도 영역별 분석 가능 여부는 리포트에서 확인해야 합니다.</p></section></div>
+    <section class="dashboard-panel"><div class="panel-head"><div><h2>리포트 처리 현황</h2><p>누적 리포트 {tables.get('completions',0):,}건</p></div><a class="text-link" href="{_link('completions')}">기록 보기 →</a></div><div class="report-list">{report_rows}</div><p class="panel-footer">대기 중 요청 후 24시간 이상 <strong data-stat="reports_stale">{pending_stale:,}</strong>건 · 최근 처리 시각 미기록 <strong data-stat="reports_progress_unknown">{pending_unknown:,}</strong>건. 장기 대기는 실패 확정이 아니며 현재 진행 여부를 알 수 없습니다. 훈련 종료와 리포트 처리는 별개입니다. 처리 완료라도 영역별 분석 가능 여부는 리포트에서 확인해야 합니다.</p></section></div>
     <section class="dashboard-panel recent-panel"><div class="panel-head"><div><h2>최근 활동 세션</h2><p>마지막 시퀀스·질문 수신 또는 훈련 시작·종료 시각 기준 · 최근 8개</p></div><a class="text-link" href="{_link('sessions')}">전체 세션 보기 →</a></div>
     <div class="recent-scroll"><table class="recent-table"><thead><tr><th>세션 ID · 대시보드</th><th>작업자</th><th>훈련 콘텐츠</th><th>훈련 상태</th><th>시퀀스 / 질문</th><th>마지막 활동 (KST)</th></tr></thead><tbody>{rows}</tbody></table></div></section>
-    <p class="home-footnote"><strong>통계 기준 안내</strong><br>전체 수치는 현재 DB에 저장된 데이터 기준이며 실제 훈련과 테스트 데이터를 모두 포함합니다. 저장 건수는 API 호출 횟수와 다릅니다. 중복 재전송과 저장되지 않은 호출·실패는 포함되지 않습니다. 질문 통계는 저장된 대화 기록 기준이며 세션 없이 처리한 질문은 포함되지 않을 수 있습니다. 날짜가 없거나 형식이 잘못된 기록은 전체 건수에는 포함하고 일별 그래프에서는 제외합니다.</p>
-    """
+    <p class="home-footnote"><strong>통계 기준 안내</strong><br>선택한 데이터 출처를 모든 수치·추이·목록에 동일하게 적용합니다. 전체는 실제 훈련·모의 테스트·미분류를 모두 포함합니다. 출처 필터의 작업자는 해당 세션과 연결된 작업자이며, 여러 출처에 걸칠 수 있습니다. 연결 세션이 없는 저장 기록은 미분류에 포함합니다. 저장 건수는 API 호출 횟수와 다릅니다. 중복 재전송과 저장되지 않은 호출·실패는 포함되지 않습니다. 질문 통계는 저장된 대화 기록 기준이며 세션 없이 처리한 질문은 포함되지 않을 수 있습니다. 날짜가 없거나 형식이 잘못된 기록은 전체 건수에는 포함하고 일별 그래프에서는 제외합니다.</p>
+    """,origin)

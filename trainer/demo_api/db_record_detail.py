@@ -6,6 +6,8 @@ import math
 import sqlite3
 from typing import Any
 
+from trainer.demo_api.db_report_status import report_progress
+
 DETAIL_CSS = """
 [data-detail-url]{cursor:pointer}tr[data-detail-url]:focus{outline:2px solid #6688ef;outline-offset:-2px}
 .record-button{padding:5px 9px;background:#eef2fd;color:#3157d5;font-size:11px;white-space:nowrap}
@@ -52,6 +54,10 @@ def record_detail(conn: sqlite3.Connection, table: str, rowid: int) -> dict[str,
     row = conn.execute(f"SELECT * FROM {quoted} WHERE rowid=?", (rowid,)).fetchone()
     if row is None:
         return None
+    meta = [{"label":"테이블","value":table},{"label":"레코드 번호","value":rowid}]
+    if table == "completions":
+        progress = report_progress(row)
+        meta.extend({"label":label,"value":value} for label,value in (("처리 상태",progress['label']),("대기 경과",progress['elapsed']),("최근 처리 시각",progress['latest_at'] or '미기록'),("상태 사유",progress['reason'])))
     return {"title": f"레코드 상세 · {table}",
-            "meta": [{"label":"테이블","value":table},{"label":"레코드 번호","value":rowid}],
+            "meta": meta,
             "sections": [{"title":"레코드 파라미터","data":{key:decoded(row[key]) for key in row.keys()}}]}

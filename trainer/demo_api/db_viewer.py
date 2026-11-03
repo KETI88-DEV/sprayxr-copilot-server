@@ -19,6 +19,8 @@ from trainer.demo_api.db_dashboard import DASHBOARD_CSS, render_dashboard
 from trainer.demo_api.db_record_detail import DETAIL_CSS, DETAIL_HTML, record_detail, json_safe
 from trainer.demo_api.db_sessions import SESSION_CSS, render_session_list, render_session_detail, session_event_detail
 from trainer.demo_api.portal_navigation import portal_document
+from trainer.demo_api.db_origin import origin_control, preserve_origin_links, scope_condition
+from trainer.demo_api.db_report_status import report_progress
 
 _CSS = """
 :root{color-scheme:light;--bg:#f4f7fb;--panel:#fff;--ink:#152033;--muted:#68758a;--line:#dde4ee;
@@ -52,7 +54,8 @@ border-top:0;border-radius:0 0 13px 13px;padding:13px 15px;font-size:13px;color:
 """
 
 
-def _page(content: str, sidebar: str = "") -> HTMLResponse:
+def _page(content: str, sidebar: str = "", origin: str = "all") -> HTMLResponse:
+    content, sidebar = preserve_origin_links(content,origin), preserve_origin_links(sidebar,origin)
     document = (
         "<!doctype html><html lang='ko'><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
@@ -60,7 +63,7 @@ def _page(content: str, sidebar: str = "") -> HTMLResponse:
         f'<body><div class="app-shell"><aside class="sidebar">{sidebar}</aside>'
         f'<main class="main">{content}</main></div>{DETAIL_HTML}</body></html>'
     )
-    return HTMLResponse(portal_document(document,"database"), headers={"Cache-Control":"no-store"})
+    return HTMLResponse(preserve_origin_links(portal_document(document,"database"),origin), headers={"Cache-Control":"no-store"})
 
 
 def _cell(value: object) -> str:
@@ -111,11 +114,11 @@ def _read_database():
         conn.close()
 
 
-def _table_counts(conn):
+def _table_counts(conn, origin: str = "all"):
     if conn is None:
         return []
     names = [str(r[0]) for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")]
-    return [(name, int(conn.execute('SELECT COUNT(*) FROM "' + name.replace('"','""') + '"').fetchone()[0])) for name in names]
+    return [(name, int(conn.execute('SELECT COUNT(*) FROM "' + name.replace('"','""') + '" WHERE ' + scope_condition(conn,name,origin)).fetchone()[0])) for name in names]
 
 
 def create_db_viewer_router() -> APIRouter:
@@ -134,19 +137,19 @@ def create_db_viewer_router() -> APIRouter:
         return data
 
     @router.get("/admin/sessions", include_in_schema=False, response_class=HTMLResponse)
-    def sessions(q: str = Query(default="", max_length=100), state: str = Query(default="all", pattern="^(all|unfinished|ended)$"), page: int = Query(default=1, ge=1), limit: int = Query(default=25, ge=10, le=200)):
+    def sessions(q: str = Query(default="", max_length=100), state: str = Query(default="all", pattern="^(all|unfinished|ended)$"), page: int = Query(default=1, ge=1), limit: int = Query(default=25, ge=10, le=200), origin: str = Query(default="all",pattern="^(all|real|test|unknown)$")):
         with _read_database() as conn:
-            side = _sidebar(_table_counts(conn), None, "sessions")
-            content = render_session_list(conn, q=q, state=state, page=page, limit=limit) if conn is not None else '<h1>훈련세션</h1><p class="empty">아직 저장된 훈련세션이 없습니다.</p>'
-            return _page(content, side)
+            side = _sidebar(_table_counts(conn,origin), None, "sessions")
+            content = render_session_list(conn, q=q, state=state, page=page, limit=limit, origin=origin) if conn is not None else '<h1>훈련세션</h1>'+origin_control(None,origin)+'<p class="empty">아직 저장된 훈련세션이 없습니다.</p>'
+            return _page(content, side, origin)
 
     @router.get("/admin/sessions/view", include_in_schema=False, response_class=HTMLResponse)
-    def session_view(session_id: str = Query(min_length=1, max_length=256), kind: str = Query(default="all", pattern="^(all|start|end|complete|sequence|query|report|other)$"), call_page: int = Query(default=1,ge=1), q: str = Query(default="",max_length=100), outcome: str = Query(default="all",pattern="^(all|errors)$"), order: str = Query(default="newest",pattern="^(newest|oldest)$")):
+    def session_view(session_id: str = Query(min_length=1, max_length=256), kind: str = Query(default="all", pattern="^(all|start|end|complete|sequence|query|report|other)$"), call_page: int = Query(default=1,ge=1), q: str = Query(default="",max_length=100), outcome: str = Query(default="all",pattern="^(all|errors)$"), order: str = Query(default="newest",pattern="^(newest|oldest)$"), origin: str = Query(default="all",pattern="^(all|real|test|unknown)$")):
         with _read_database() as conn:
-            content = render_session_detail(conn, session_id, kind=kind, call_page=call_page, q=q, outcome=outcome, order=order) if conn is not None else None
+            content = render_session_detail(conn, session_id, kind=kind, call_page=call_page, q=q, outcome=outcome, order=order, origin=origin) if conn is not None else None
             if content is None:
                 raise HTTPException(404, "session not found")
-            return _page(content, _sidebar(_table_counts(conn), None, "sessions"))
+            return _page(content, _sidebar(_table_counts(conn,origin), None, "sessions"), origin)
 
     @router.get("/admin/api/session-event", include_in_schema=False)
     def event_view(session_id: str = Query(min_length=1,max_length=256), event_key: str = Query(min_length=1,max_length=400)):
@@ -164,10 +167,11 @@ def create_db_viewer_router() -> APIRouter:
         q: str = Query(default="", max_length=100),
         days: int = Query(default=30, ge=7, le=90),
         metric: str = Query(default="sessions", pattern="^(sessions|sequences|queries)$"),
+        origin: str = Query(default="all",pattern="^(all|real|test|unknown)$"),
     ) -> HTMLResponse:
         path = Path(os.environ.get("SEQUENCE_DB_PATH", DEFAULT_DB_PATH))
         if not path.is_file():
-            return _page(render_dashboard(None, {}, days=days, metric=metric), _sidebar([], None))
+            return _page(render_dashboard(None, {}, days=days, metric=metric,origin=origin), _sidebar([], None), origin)
         conn: sqlite3.Connection | None = None
         try:
             conn = sqlite3.connect(f"file:{path.resolve()}?mode=ro", uri=True)
@@ -178,29 +182,35 @@ def create_db_viewer_router() -> APIRouter:
             table_counts: list[tuple[str, int]] = []
             for name in names:
                 quoted_name = '"' + name.replace('"', '""') + '"'
-                table_counts.append((name, int(conn.execute(f"SELECT COUNT(*) FROM {quoted_name}").fetchone()[0])))
+                table_counts.append((name, int(conn.execute(f"SELECT COUNT(*) FROM {quoted_name} WHERE " + scope_condition(conn,name,origin)).fetchone()[0])))
             side = _sidebar(table_counts, selected)
             if selected is None:
-                return _page(render_dashboard(conn, dict(table_counts), days=days, metric=metric), side)
+                return _page(render_dashboard(conn, dict(table_counts), days=days, metric=metric,origin=origin), side, origin)
             quoted = '"' + selected.replace('"', '""') + '"'
             columns = [str(item[1]) for item in conn.execute(f"PRAGMA table_info({quoted})")]
-            where = ""
+            where = " WHERE " + scope_condition(conn,selected,origin)
             params: list[object] = []
             if q and columns:
                 safe_columns = [column.replace('"', '""') for column in columns]
-                where = " WHERE " + " OR ".join(f'CAST("{column}" AS TEXT) LIKE ?' for column in safe_columns)
+                where += " AND (" + " OR ".join(f'CAST("{column}" AS TEXT) LIKE ?' for column in safe_columns) + ")"
                 params = [f"%{q}%"] * len(columns)
             total = int(conn.execute(f"SELECT COUNT(*) FROM {quoted}{where}", params).fetchone()[0])
             pages = max(1, math.ceil(total / limit))
             current_page = min(page, pages)
             rows = conn.execute(f"SELECT rowid AS __viewer_rowid, * FROM {quoted}{where} ORDER BY rowid DESC LIMIT ? OFFSET ?", [*params, limit, (current_page - 1) * limit]).fetchall()
             heading = '<th>상세</th>' + "".join(f"<th>{html.escape(column)}</th>" for column in columns)
+            if selected == 'completions':
+                heading = '<th>처리 현황 · 서버 기록 기준</th>' + heading
             def record_row(row):
                 url = html.escape('/admin/api/record?' + urlencode({'table':selected,'rowid':row['__viewer_rowid']}))
-                return f'<tr data-detail-url="{url}" tabindex="0" aria-label="레코드 {row["__viewer_rowid"]} 상세"><td><button type="button" class="record-button" data-detail-url="{url}">상세</button></td>' + ''.join(f'<td>{_cell(row[column])}</td>' for column in columns) + '</tr>'
+                progress_cell = ''
+                if selected == 'completions':
+                    progress = report_progress(row)
+                    progress_cell = '<td>' + html.escape(progress['label']) + '<small style="display:block;line-height:1.7">대기 경과 '+html.escape(progress['elapsed'])+'<br>최근 처리 '+html.escape(progress['latest_at'] or '미기록')+'<br>상태 사유 '+html.escape(progress['reason'])+'</small></td>'
+                return f'<tr data-detail-url="{url}" tabindex="0" aria-label="레코드 {row["__viewer_rowid"]} 상세">'+progress_cell+f'<td><button type="button" class="record-button" data-detail-url="{url}">상세</button></td>' + ''.join(f'<td>{_cell(row[column])}</td>' for column in columns) + '</tr>'
             rendered = ''.join(record_row(row) for row in rows)
             if not rendered:
-                rendered = f'<tr><td class="empty" colspan="{len(columns)+1}">조건에 맞는 데이터가 없습니다.</td></tr>'
+                rendered = f'<tr><td class="empty" colspan="{len(columns)+1+int(selected == "completions")}">조건에 맞는 데이터가 없습니다.</td></tr>'
             query = html.escape(q)
             base = f"/admin?table={quote(selected)}&limit={limit}&q={quote(q)}"
             previous = f'<a href="{base}&page={current_page - 1}">← 이전</a>' if current_page > 1 else "<span></span>"
@@ -209,6 +219,7 @@ def create_db_viewer_router() -> APIRouter:
             content = f"""
             <div class="topbar"><div><div class="eyebrow">DATABASE EXPLORER</div><h1>Co-Pilot 데이터베이스</h1>
             <div class="sub">운영 데이터의 최신 상태를 안전하게 조회합니다.</div></div><div class="actions"><a href="/admin">Home 대시보드</a></div></div>
+            {origin_control(conn,origin,table=selected,q=q,limit=limit)}
             <div class="cards"><div class="card"><span>선택 테이블</span><strong>{html.escape(selected)}</strong></div>
             <div class="card"><span>검색 결과</span><strong>전체 {total:,}건</strong></div><div class="card"><span>접근 모드</span>
             <strong class="readonly"><i class="dot"></i>읽기 전용</strong></div></div>
@@ -217,7 +228,7 @@ def create_db_viewer_router() -> APIRouter:
             <a class="reset" href="/admin?table={quote(selected)}">초기화</a></div><div class="table-wrap"><table><thead><tr>{heading}</tr></thead>
             <tbody>{rendered}</tbody></table></div><div class="pagination">{previous}<span>{current_page} / {pages} 페이지</span>{following}</div>
             """
-            return _page(content, side)
+            return _page(content, side, origin)
         except sqlite3.Error:
             return _page('<h1>Co-Pilot 데이터베이스</h1><p class="empty">DB를 읽을 수 없습니다.</p>')
         finally:

@@ -231,6 +231,7 @@ class GuidedWorkflow:
                 scenario_id=run.scenario_id,
                 started_at=run.started_at,
                 target_thickness_um=150.0,
+                creation_origin="test", creation_path="/api/v1/test/workflow/1-start",
             )
             run.started = True
             return run

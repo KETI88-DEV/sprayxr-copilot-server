@@ -117,9 +117,16 @@ class V1Store:
                 )
             if "created_at" not in session_columns:
                 self._conn.execute("ALTER TABLE sessions ADD COLUMN created_at TEXT")
+            # Nullable metadata: migration cannot establish the origin of old rows.
+            for name in ("creation_origin", "creation_path"):
+                if name not in session_columns:
+                    self._conn.execute(f"ALTER TABLE sessions ADD COLUMN {name} TEXT")
             columns = {str(row[1]) for row in self._conn.execute("PRAGMA table_info(completions)")}
             if "fingerprint" not in columns:
                 self._conn.execute("ALTER TABLE completions ADD COLUMN fingerprint TEXT")
+            for name in ("processing_started_at", "processing_updated_at", "processing_finished_at", "processing_reason"):
+                if name not in columns:
+                    self._conn.execute(f"ALTER TABLE completions ADD COLUMN {name} TEXT")
             self._conn.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS completions_fingerprint ON completions(fingerprint) WHERE fingerprint IS NOT NULL"
             )
@@ -186,17 +193,22 @@ class V1Store:
     def start_session(
         self, *, session_id: str, user_id: str, scenario_id: str, started_at: str,
         target_thickness_um: float | None = None,
+        creation_origin: str | None = None, creation_path: str | None = None,
     ) -> SessionRow:
         return self.start_session_with_created(
             session_id=session_id, user_id=user_id, scenario_id=scenario_id,
             started_at=started_at, target_thickness_um=target_thickness_um,
+            creation_origin=creation_origin, creation_path=creation_path,
         )[0]
 
     def start_session_with_created(
         self, *, session_id: str, user_id: str, scenario_id: str, started_at: str,
         target_thickness_um: float | None = None,
+        creation_origin: str | None = None, creation_path: str | None = None,
     ) -> tuple[SessionRow, bool]:
         """Return creation ownership atomically so retries cannot reset event history."""
+        if creation_origin not in {None, "real", "test"}:
+            raise ValueError("unknown session creation origin")
         with self._guard, self._conn:
             self._conn.execute("BEGIN IMMEDIATE")
             existing = self._conn.execute(
@@ -209,9 +221,9 @@ class V1Store:
                     raise SessionConflict("session_id already exists with different start parameters")
                 return row, False
             self._conn.execute(
-                "INSERT INTO sessions (session_id, user_id, scenario_id, session_status, started_at, ended_at, target_thickness_um, created_at)"
-                " VALUES (?, ?, ?, 'ACTIVE', ?, NULL, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'))",
-                (session_id, user_id, scenario_id, started_at, target_thickness_um),
+                "INSERT INTO sessions (session_id, user_id, scenario_id, session_status, started_at, ended_at, target_thickness_um, created_at, creation_origin, creation_path)"
+                " VALUES (?, ?, ?, 'ACTIVE', ?, NULL, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'), ?, ?)",
+                (session_id, user_id, scenario_id, started_at, target_thickness_um, creation_origin, creation_path),
             )
         return SessionRow(
             session_id, user_id, scenario_id, "ACTIVE", started_at, None,
@@ -274,11 +286,20 @@ class V1Store:
                 if old is not None:
                     return CompletionRow(*old[:4], json.loads(old[4]))
             self._conn.execute(
-                "INSERT INTO completions (report_id, session_id, report_status, requested_at, payload, fingerprint)"
-                " VALUES (?, ?, 'pending', ?, ?, ?)",
+                "INSERT INTO completions (report_id, session_id, report_status, requested_at, payload, fingerprint, processing_updated_at, processing_reason)"
+                " VALUES (?, ?, 'pending', ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'), 'queued')",
                 (report_id, session_id, requested_at, json.dumps(payload, ensure_ascii=False), fingerprint),
             )
         return CompletionRow(report_id, session_id, "pending", requested_at, payload)
+
+    def mark_completion_processing(self, report_id: str) -> None:
+        """Record an observed worker start; never called by migration or DB reads."""
+        with self._guard, self._conn:
+            self._conn.execute(
+                "UPDATE completions SET processing_started_at=COALESCE(processing_started_at,strftime('%Y-%m-%dT%H:%M:%fZ','now')),"
+                " processing_updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),processing_reason='processing'"
+                " WHERE report_id=? AND report_status='pending'", (report_id,),
+            )
 
     def finish_completion(self, report_id: str, *, status: str, analysis: dict[str, Any]) -> None:
         """분석이 끝나면 상태(`complete`/`failed`)와 결과를 남긴다. 결과는 payload의 `analysis` 아래에 둔다."""
@@ -292,8 +313,11 @@ class V1Store:
                 return
             payload = json.loads(row[0]) | {"analysis": analysis}
             self._conn.execute(
-                "UPDATE completions SET report_status = ?, payload = ? WHERE report_id = ? AND report_status = 'pending'",
-                (status, json.dumps(payload, ensure_ascii=False), report_id),
+                "UPDATE completions SET report_status = ?, payload = ?,"
+                " processing_updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),"
+                " processing_finished_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),processing_reason=?"
+                " WHERE report_id = ? AND report_status = 'pending'",
+                (status, json.dumps(payload, ensure_ascii=False), str(analysis.get('error') or status), report_id),
             )
 
     def pending_completions(self) -> list[CompletionRow]:

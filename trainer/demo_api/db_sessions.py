@@ -10,6 +10,9 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 
+from trainer.demo_api.db_origin import ORIGINS, normalize_origin, origin_control, origin_expression, preserve_origin_links
+from trainer.demo_api.db_report_status import PROCESSING_FIELDS, report_progress
+
 
 SESSION_CSS = """
 .session-kpis{grid-template-columns:repeat(3,minmax(0,1fr))}.session-kpis.detail-kpis{grid-template-columns:repeat(4,minmax(0,1fr))}
@@ -96,12 +99,14 @@ def _field(columns: set[str], name: str, alias: str = "s", default: str = "NULL"
 def _reports_cte(schema: dict[str, set[str]]) -> str:
     columns = schema["completions"]
     if "session_id" not in columns:
-        return "reports AS (SELECT NULL AS owner,0 AS n,NULL AS last_at,0 AS complete_n,0 AS pending_n,0 AS failed_n,NULL AS latest_status,NULL AS latest_rowid,NULL AS latest_id,NULL AS latest_at WHERE 0)"
+        return "reports AS (SELECT NULL AS owner,0 AS n,NULL AS last_at,0 AS complete_n,0 AS pending_n,0 AS failed_n,NULL AS latest_status,NULL AS latest_rowid,NULL AS latest_id,NULL AS latest_at," + ','.join('NULL AS latest_'+name for name in PROCESSING_FIELDS) + " WHERE 0)"
     status = _field(columns, "report_status", "r")
     at = _field(columns, "requested_at", "r")
     report_id = _field(columns, "report_id", "r")
+    processing = ','.join(f'{_field(columns,name,"r")} AS {name}' for name in PROCESSING_FIELDS)
+    latest_processing = ','.join(f'MAX(CASE WHEN position=1 THEN {name} END) AS latest_{name}' for name in PROCESSING_FIELDS)
     return f"""report_rows AS (SELECT r.session_id AS owner,r.rowid AS record_rowid,
-        LOWER(TRIM({status})) AS status,{at} AS at,{report_id} AS report_id,
+        LOWER(TRIM({status})) AS status,{at} AS at,{report_id} AS report_id,{processing},
         ROW_NUMBER() OVER (PARTITION BY r.session_id ORDER BY julianday({at}) IS NULL,julianday({at}) DESC,r.rowid DESC) AS position
         FROM completions r), reports AS (SELECT owner,COUNT(*) AS n,MAX(datetime(at)) AS last_at,
         SUM(status IN ('complete','completed','success')) AS complete_n,
@@ -110,7 +115,7 @@ def _reports_cte(schema: dict[str, set[str]]) -> str:
         MAX(CASE WHEN position=1 THEN status END) AS latest_status,
         MAX(CASE WHEN position=1 THEN record_rowid END) AS latest_rowid,
         MAX(CASE WHEN position=1 THEN report_id END) AS latest_id,
-        MAX(CASE WHEN position=1 THEN at END) AS latest_at FROM report_rows GROUP BY owner)"""
+        MAX(CASE WHEN position=1 THEN at END) AS latest_at,{latest_processing} FROM report_rows GROUP BY owner)"""
 
 
 def _report_state(value: object) -> tuple[str, str]:
@@ -150,11 +155,13 @@ def _summary_sql(schema: dict[str, set[str]]) -> str:
     ended = f"(UPPER(COALESCE({field('session_status')},'')) IN ('ENDED','COMPLETED') OR NULLIF({field('ended_at')},'') IS NOT NULL)"
     last_times = [f"COALESCE(datetime({field(name)}),'')" for name in ("created_at", "started_at", "ended_at")]
     last_times += [f"COALESCE({name}.last_at,'')" for name in ("seq", "qry", "calls", "reports")]
+    report_processing = ','.join('reports.latest_'+name for name in PROCESSING_FIELDS)
     return f"""WITH seq AS ({aggregate('sequences','session_key','received_at',seq_count)}),
         qry AS ({aggregate('query_turns','session_key','created_at')}),
         calls AS ({call_summary}),
         {_reports_cte(schema)}, summary AS (
         SELECT s.session_id, {field('user_id')} AS user_id, {worker} AS worker,
+            {origin_expression(sessions)} AS creation_origin, {field('creation_path')} AS creation_path,
             {field('scenario_id')} AS scenario_id, {field('session_status')} AS session_status,
             {field('created_at')} AS created_at, {field('started_at')} AS started_at,
             {field('ended_at')} AS ended_at, {field('target_thickness_um')} AS target_thickness_um,
@@ -163,6 +170,7 @@ def _summary_sql(schema: dict[str, set[str]]) -> str:
             COALESCE(reports.complete_n,0) AS report_complete_count,COALESCE(reports.pending_n,0) AS report_pending_count,
             COALESCE(reports.failed_n,0) AS report_failed_count,reports.latest_status AS latest_report_status,
             reports.latest_rowid AS latest_report_rowid,reports.latest_id AS latest_report_id,reports.latest_at AS latest_report_at,
+            {report_processing},
             COALESCE(calls.sequence_n,0) AS call_sequence_count, COALESCE(calls.query_n,0) AS call_query_count,
             CASE WHEN {ended} THEN 'ended' WHEN COALESCE(seq.n,0)+COALESCE(qry.n,0)+COALESCE(calls.accepted_n,0)>0 THEN 'progress' ELSE 'started' END AS stage,
             MAX({','.join(last_times)}) AS last_at
@@ -180,9 +188,10 @@ def _kpi(key: str, label: str, value: int, note: str = "") -> str:
     return f'<div class="card"><span>{label}</span><strong data-stat="{key}">{value:,}</strong><p class="session-note">{note}</p></div>'
 
 
-def render_session_list(conn: sqlite3.Connection, *, q: str = "", state: str = "all", page: int = 1, limit: int = 25) -> str:
+def render_session_list(conn: sqlite3.Connection, *, q: str = "", state: str = "all", page: int = 1, limit: int = 25, origin: str = "all") -> str:
     """Render safe, paginated summaries without selecting stored request bodies."""
     schema = _schema(conn)
+    origin = normalize_origin(origin)
     state = state if state in {"all", "unfinished", "ended"} else "all"
     limit, page = max(1, min(200, int(limit))), max(1, int(page))
     counts = {"sessions": 0, "unfinished": 0, "ended": 0}
@@ -190,9 +199,13 @@ def render_session_list(conn: sqlite3.Connection, *, q: str = "", state: str = "
     pages = 1
     if "session_id" in schema["sessions"]:
         sql = _summary_sql(schema)
-        counts["sessions"], counts["ended"] = conn.execute(sql + "SELECT COUNT(*),COALESCE(SUM(stage='ended'),0) FROM summary").fetchone()
+        scope = " WHERE creation_origin='"+origin+"'" if origin != "all" else ""
+        counts["sessions"], counts["ended"] = conn.execute(sql + "SELECT COUNT(*),COALESCE(SUM(stage='ended'),0) FROM summary" + scope).fetchone()
         counts["unfinished"] = counts["sessions"] - counts["ended"]
         conditions, params = [], []
+        if origin != "all":
+            conditions.append("creation_origin=?")
+            params.append(origin)
         if state != "all":
             conditions.append("stage='ended'" if state == "ended" else "stage<>'ended'")
         if q:
@@ -216,10 +229,12 @@ def render_session_list(conn: sqlite3.Connection, *, q: str = "", state: str = "
         ended = row["stage"] == "ended"
         stamp = f'<span class="session-ended-at">{_time(row["ended_at"])}</span>' if ended else '<small>현재 접속 여부와 무관한 저장 상태</small>'
         report_kind, report_label = _report_state(row["latest_report_status"])
+        if row['report_count']:
+            report_label = _latest_report_progress(row)['label']
         report_badge = f'<span class="session-report-badge {report_kind}">리포트 {_e(report_label)}</span>' if row["report_count"] else '<small>리포트 기록 없음</small>'
         items.append(f'''<a class="session-item {"ended" if ended else "unfinished"}" href="{_url("/admin/sessions/view",session_id=row["session_id"])}">
             <div><strong>{_e(row['session_id'])}</strong><div class="session-counts">저장 시퀀스 {row['sequence_count']:,} · 질문 {row['query_count']:,}</div><small>시퀀스 호출 {row['call_sequence_count']:,} · 쿼리 호출 {row['call_query_count']:,} (수집 이후)</small><small>전체 실제 호출 {row['call_count']:,}건 · 수집 이후</small></div>
-            <div><strong>{_e(row['worker'])}</strong><small>{_e(row['user_id'] or '작업자 ID 미기록')}</small><small>{_e(_mode(row['scenario_id']))}</small></div>
+            <div><strong>{_e(row['worker'])}</strong><small>{_e(row['user_id'] or '작업자 ID 미기록')}</small><small>{_e(_mode(row['scenario_id']))} · {ORIGINS[row['creation_origin']]}</small></div>
             <div><span class="session-state">{_STAGES[row['stage']]}</span>{stamp}{report_badge}</div>
             <div><small>훈련 시작 {_time(row['started_at'])}</small><small>마지막 활동 {_time(row['last_at'])}</small></div></a>''')
     empty = "조건에 맞는 세션이 없습니다." if q or state != "all" else "아직 등록된 훈련 세션이 없습니다."
@@ -229,11 +244,11 @@ def render_session_list(conn: sqlite3.Connection, *, q: str = "", state: str = "
     previous = page_link(page-1, "← 이전") if page > 1 else "<span></span>"
     following = page_link(page+1, "다음 →") if page < pages else "<span></span>"
     options = "".join(f'<option value="{size}"{" selected" if size == limit else ""}>{size}개씩</option>' for size in sorted({10,25,50,100,200,limit}))
-    return f'''<div class="topbar"><div><div class="eyebrow">TRAINING SESSIONS</div><h1>훈련 세션</h1><div class="sub">세션별 진행 상태와 저장 기록을 확인하세요.</div></div><span class="readonly"><i class="dot"></i>읽기 전용</span></div>
-        {_refresh()}<div class="cards session-kpis">{cards}</div><nav class="session-filters" aria-label="훈련 상태 필터">{tabs}</nav>
+    return preserve_origin_links(f'''<div class="topbar"><div><div class="eyebrow">TRAINING SESSIONS</div><h1>훈련 세션</h1><div class="sub">세션별 진행 상태와 저장 기록을 확인하세요.</div></div><span class="readonly"><i class="dot"></i>읽기 전용</span></div>
+        {origin_control(conn,origin,q=q,state=state,limit=limit)}{_refresh()}<div class="cards session-kpis">{cards}</div><nav class="session-filters" aria-label="훈련 상태 필터">{tabs}</nav>
         <div class="toolbar session-list-toolbar"><form action="/admin/sessions" method="get"><input type="hidden" name="state" value="{state}"><label for="session-search">세션 검색</label><input id="session-search" name="q" value="{_e(q)}" placeholder="세션 ID · 작업자 이름/ID · 학습모드"><select name="limit" aria-label="페이지당 세션">{options}</select><button type="submit">검색</button></form><a class="reset" href="/admin/sessions">초기화</a></div>
         <p class="session-search-result">검색 결과 전체 {total:,}건 · 모든 시각은 한국 시간 (KST)</p><div class="session-list">{rendered}</div><div class="pagination session-list-page">{previous}<span>{page} / {pages} 페이지</span>{following}</div>
-        <p class="session-note">회색 배경은 미종료 세션입니다. 저장 시퀀스는 세션 내 고유 시퀀스 수이며, 실제 API 호출 수는 호출 수집 이후의 재시도·실패를 포함합니다.</p>'''
+        <p class="session-note">회색 배경은 미종료 세션입니다. 저장 시퀀스는 세션 내 고유 시퀀스 수이며, 실제 API 호출 수는 호출 수집 이후의 재시도·실패를 포함합니다.</p>''',origin)
 
 
 def _call_match(schema: dict[str, set[str]], category: str, extra: str = "") -> str:
@@ -323,6 +338,10 @@ def _call_health(conn: sqlite3.Connection, schema: dict[str, set[str]], session_
     return f'<div class="session-health"><div><span>HTTP 오류 · 세션 전체</span>{error_value}</div><div><span>평균 처리 시간 · 세션 전체</span>{duration_value}</div></div>'
 
 
+def _latest_report_progress(row: sqlite3.Row) -> dict:
+    return report_progress({'report_status':row['latest_report_status'],'requested_at':row['latest_report_at'],**{name:row['latest_'+name] for name in PROCESSING_FIELDS}})
+
+
 def _report_panel(row: sqlite3.Row) -> str:
     counts = "".join(f'<span>{label}<strong data-stat="reports_{key}">{row[column]:,}</strong></span>' for key, column, label in (
         ("complete", "report_complete_count", "처리 완료"), ("pending", "report_pending_count", "분석 대기·진행"), ("failed", "report_failed_count", "처리 실패")))
@@ -330,14 +349,15 @@ def _report_panel(row: sqlite3.Row) -> str:
     if other:
         counts += f'<span>기타·미기록<strong>{other:,}</strong></span>'
     state, label = _report_state(row["latest_report_status"])
+    progress = _latest_report_progress(row)
     if row["latest_report_rowid"] is not None:
-        latest = f'''<button type="button" class="session-report-link" data-detail-url="{_url('/admin/api/record',table='completions',rowid=row['latest_report_rowid'])}"><span><strong>최근 리포트 · {_e(row['latest_report_id'] or 'ID 미기록')}</strong><small>요청 시각 {_time(row['latest_report_at'])} · 저장 기록 상세 보기 ↗</small></span><span class="session-report-badge {state}">{_e(label)}</span></button>'''
+        latest = f'''<button type="button" class="session-report-link" data-detail-url="{_url('/admin/api/record',table='completions',rowid=row['latest_report_rowid'])}"><span><strong>최근 리포트 · {_e(row['latest_report_id'] or 'ID 미기록')}</strong><small>요청 시각 {_time(row['latest_report_at'])} · 저장 기록 상세 보기 ↗</small><small>대기 경과 {_e(progress['elapsed'])} · 최근 처리 {_time(progress['latest_at'])}<br>상태 사유 {_e(progress['reason'])}</small></span><span class="session-report-badge {state}">{_e(progress['label'])}</span></button>'''
     else:
         latest = '<p class="session-report-latest">아직 저장된 리포트가 없습니다.</p>'
-    return f'<section class="session-panel"><h2>리포트 처리 상태</h2><p class="session-note">이 세션에 저장된 리포트의 현재 상태 · 세션 전체 {row["report_count"]:,}건</p><div class="session-report-counts">{counts}</div>{latest}<p class="session-note">리포트 처리 상태와 분석 엔진의 이용 가능 여부는 별개입니다. 상세 보기는 저장된 DB 기록을 읽습니다.</p></section>'
+    return f'<section class="session-panel"><h2>리포트 처리 상태</h2><p class="session-note">이 세션에 저장된 리포트의 현재 상태 · 세션 전체 {row["report_count"]:,}건</p><div class="session-report-counts">{counts}</div>{latest}<p class="session-note">요청 후 24시간 이상은 장기 대기로 표시하며, 실패나 현재 실행 여부를 확정하지 않습니다. 최근 처리는 서버가 기록한 작업 시각만 표시합니다. 리포트 처리 상태와 분석 엔진의 이용 가능 여부는 별개입니다. 상세 보기는 저장된 DB 기록을 읽습니다.</p></section>'
 
 
-def render_session_detail(conn: sqlite3.Connection, session_id: str, *, kind: str = "all", call_page: int = 1, q: str = "", outcome: str = "all", order: str = "newest") -> str | None:
+def render_session_detail(conn: sqlite3.Connection, session_id: str, *, kind: str = "all", call_page: int = 1, q: str = "", outcome: str = "all", order: str = "newest", origin: str = "all") -> str | None:
     """Render one session with independently bounded captured and legacy lists."""
     schema = _schema(conn)
     row = _summary(conn, schema, session_id)
@@ -405,6 +425,7 @@ def render_session_detail(conn: sqlite3.Connection, session_id: str, *, kind: st
         ("api_calls", "실제 API 호출", row["call_count"], "수집 이후 · 재시도·실패 포함"),
         ("reports", "저장 리포트", row["report_count"], "리포트 요청·처리 상태 기록")))
     metadata = (("작업자", f"{row['worker']} ({row['user_id'] or 'ID 미기록'})"), ("훈련 콘텐츠", _mode(row["scenario_id"])),
+                ("생성 출처", ORIGINS[row['creation_origin']]), ("생성 경로", row['creation_path'] or '미기록'),
                 ("훈련 상태", _STAGES[row["stage"]]), ("생성 시각", _time(row["created_at"])), ("훈련 시작", _time(row["started_at"])),
                 ("훈련 종료", _time(row["ended_at"])), ("훈련 소요 시간", _duration(row["started_at"], row["ended_at"], row["stage"])), ("마지막 활동", _time(row["last_at"])),
                 ("목표 도막 두께", f"{row['target_thickness_um']:g} μm" if isinstance(row["target_thickness_um"], (int, float)) else "미기록"))
@@ -417,10 +438,10 @@ def render_session_detail(conn: sqlite3.Connection, session_id: str, *, kind: st
     def nav(number: int, label: str) -> str:
         return f'<a href="{_url("/admin/sessions/view",session_id=session_id,kind=kind,call_page=number,q=q,outcome=outcome,order=order)}">{label}</a>'
     pagination = f'<div class="session-event-page">{nav(call_page-1,"← 이전 기록") if call_page>1 else "<span></span>"}<span>{call_page} / {pages} 페이지 · 목록별 최대 200건</span>{nav(call_page+1,"다음 기록 →") if call_page<pages else "<span></span>"}</div>'
-    return f'''<a class="session-back" href="/admin/sessions">← 훈련 세션 목록</a><div class="topbar"><div><div class="eyebrow">SESSION DASHBOARD</div><h1>{_e(session_id)}</h1><div class="sub">세션 요약과 API 기록 · 모든 시각은 한국 시간 (KST)</div></div><span class="readonly"><i class="dot"></i>읽기 전용</span></div>
+    return preserve_origin_links(f'''<a class="session-back" href="/admin/sessions">← 훈련 세션 목록</a><div class="topbar"><div><div class="eyebrow">SESSION DASHBOARD</div><h1>{_e(session_id)}</h1><div class="sub">세션 요약과 API 기록 · 모든 시각은 한국 시간 (KST)</div></div><span class="readonly"><i class="dot"></i>읽기 전용</span></div>
         {_refresh()}<div class="cards session-kpis detail-kpis">{cards}</div><section class="session-panel"><h2>세션 정보</h2><dl class="session-meta">{meta_html}</dl><p class="session-note">생성 시각은 서버에서 새로 생성한 세션부터 기록됩니다. 훈련 소요 시간은 저장된 훈련 시작·종료 시각의 차이이며, 미종료 세션은 계산하지 않습니다.</p></section>
         {_report_panel(row)}<nav class="session-filters" aria-label="API 기록 종류">{tabs}</nav>{search_form}<nav class="session-filters session-outcomes" aria-label="응답 결과 필터">{outcome_tabs}</nav><section class="session-panel"><h2>실제 호출 <small>· 수집 이후 세션 전체 {row['call_count']:,}건</small></h2><p class="session-note">수집 이후 실제로 처리한 요청·응답입니다. 수집 시작 전의 호출은 포함되지 않습니다. 아래 목록의 필터 결과 {call_total:,}건.</p>{_call_health(conn,schema,session_id)}<p class="session-note">종류별 호출 수 · 세션 전체 · 수집 이후</p><div class="session-call-counts">{breakdown}</div><div class="session-events">{''.join(call_items)}</div></section>
-        <section class="session-panel"><h2>기존 저장 기록 <small>· 필터 결과 {legacy_total:,}건</small></h2><p class="session-note">DB에 남은 훈련 시작·종료, 시퀀스, 질문·답변, 리포트 기록입니다. 당시 HTTP 응답과 호출 성공 여부는 알 수 없습니다. 실제 호출과 명확히 연결되는 저장 기록은 중복 표시하지 않습니다.</p><div class="session-events">{''.join(legacy_items)}</div>{pagination}</section>'''
+        <section class="session-panel"><h2>기존 저장 기록 <small>· 필터 결과 {legacy_total:,}건</small></h2><p class="session-note">DB에 남은 훈련 시작·종료, 시퀀스, 질문·답변, 리포트 기록입니다. 당시 HTTP 응답과 호출 성공 여부는 알 수 없습니다. 실제 호출과 명확히 연결되는 저장 기록은 중복 표시하지 않습니다.</p><div class="session-events">{''.join(legacy_items)}</div>{pagination}</section>''',origin)
 
 
 def _json(value: object) -> object:
