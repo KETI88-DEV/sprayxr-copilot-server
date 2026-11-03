@@ -24,6 +24,7 @@ from trainer.demo_api.portal_navigation import portal_document
 from trainer.demo_api import chat_service as chat_service_mod
 from trainer.demo_api.access_control import AccessControlMiddleware, OperatorCredentials
 from trainer.demo_api.api_call_log import ApiCallStore, ApiCallLoggingMiddleware
+from trainer.demo_api.api_docs import api_docs_document, create_api_docs_router
 from trainer.demo_api.chat_service import ChatService, build_default_live_runner
 from trainer.demo_api.contracts import ChatRequest
 from trainer.demo_api.copilot_router import create_copilot_router, install_copilot_error_handlers
@@ -76,6 +77,9 @@ VR·Replay 시뮬레이터의 **연동 규격과 API 호출·응답**을 확인�
 4. 저장 결과는 상단 **DB 뷰어** 메뉴에서 확인합니다.
 5. 텍스트 질의는 `0-5`, 음성 질의는 `0-6`에서 시험합니다. `0-7`에서는 실제 업로드용 WAV를 내려받을 수 있습니다.
 
+<details>
+<summary>실제 연동 규칙·데이터 형식·주의사항 보기</summary>
+
 ### 실제 연동 API와 테스트 API의 차이
 
 | 구분 | 용도 | 데이터 |
@@ -106,6 +110,8 @@ VR·Replay 시뮬레이터의 **연동 규격과 API 호출·응답**을 확인�
 - **접근 제어:** DB 뷰어는 로그인 없이 읽기 전용으로 조회합니다. 운영 로그는 운영자 인증이 필요합니다. TSB API키는 활성화한 서버에서만 X-API-Key 헤더로 전송하며 JSON 본문은 동일합니다.
 
 각 API의 상세 설명에는 **언제 호출하는지, 입력값 의미, 응답 활용법과 주의사항**을 적었습니다.
+
+</details>
 """
 
 
@@ -460,6 +466,7 @@ def create_app(
         lifespan=_lifespan,
         docs_url=None,
     )
+    app.include_router(create_api_docs_router())
 
     @app.get("/docs", include_in_schema=False)
     async def swagger_docs(request: Request) -> HTMLResponse:
@@ -472,7 +479,8 @@ def create_app(
             init_oauth=app.swagger_ui_init_oauth,
             swagger_ui_parameters=app.swagger_ui_parameters,
         )
-        return HTMLResponse(portal_document(page.body.decode("utf-8"),"docs"),headers={"Cache-Control":"no-store"})
+        document = api_docs_document(page.body.decode("utf-8"), app.openapi(), root_path=prefix)
+        return HTMLResponse(portal_document(document,"docs"),headers={"Cache-Control":"no-store"})
 
     if app.swagger_ui_oauth2_redirect_url:
         app.add_api_route(app.swagger_ui_oauth2_redirect_url,get_swagger_ui_oauth2_redirect_html,include_in_schema=False)
