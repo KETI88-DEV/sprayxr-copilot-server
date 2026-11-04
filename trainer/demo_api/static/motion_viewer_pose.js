@@ -362,16 +362,16 @@
     const card = byId('poseZoneCard');
     const metrics = byId('poseZoneMetrics');
     if (!zoneEvaluation) {
-      byId('poseZoneTitle').textContent = '현재 Zone 유사도';
+      byId('poseZoneTitle').textContent = '현재 Zone 작업 유사도';
       byId('poseZoneScore').textContent = '—%';
-      byId('poseActionTitle').textContent = '현재 Zone 자세 개선 안내';
+      byId('poseActionTitle').textContent = '현재 Zone 작업 개선 안내';
       metrics.replaceChildren(Object.assign(document.createElement('small'), {textContent: '현재 Zone 평가 자료가 없습니다.'}));
-      renderCorrections([], '분사 Zone에 진입하면 해당 Zone의 자세 개선 안내를 표시합니다.');
+      renderCorrections([], '분사 Zone에 진입하면 해당 Zone의 작업 개선 안내를 표시합니다.');
       return null;
     }
-    byId('poseZoneTitle').textContent = `Zone ${zoneLabel(zoneEvaluation.zone_id)} 유사도`;
+    byId('poseZoneTitle').textContent = `Zone ${zoneLabel(zoneEvaluation.zone_id)} 작업 유사도`;
     byId('poseZoneScore').textContent = zoneEvaluation.similarity_percent == null ? '—%' : `${zoneEvaluation.similarity_percent}%`;
-    byId('poseActionTitle').textContent = `Zone ${zoneLabel(zoneEvaluation.zone_id)} 자세 개선 안내`;
+    byId('poseActionTitle').textContent = `Zone ${zoneLabel(zoneEvaluation.zone_id)} 작업 개선 안내`;
     card.style.borderColor = zoneColor(zoneEvaluation.zone_id);
     metrics.replaceChildren(...(zoneEvaluation.metrics || []).map(renderZoneMetric));
     renderCorrections(zoneEvaluation.corrections);

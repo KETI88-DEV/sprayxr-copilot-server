@@ -182,9 +182,9 @@ def test_completed_pose_confidence_and_quality_reasons_reach_query_clients() -> 
 
 
 @pytest.mark.parametrize("prompt,expected", [
-    ("전체 자세 유사도는?", "전체 자세 유사도는 72%"),
+    ("전체 자세 유사도는?", "전체 작업 유사도는 72%"),
     ("가장 문제가 큰 Zone은?", "Zone 3(60%)"),
-    ("Zone 1 자세는?", "Zone 1 자세 유사도는 80%"),
+    ("Zone 1 자세는?", "Zone 1 작업 유사도는 80%"),
     ("오른손을 어떻게 고쳐?", "오른손 개선 안내: 오른손 위치를 확인하세요."),
     ("왼손을 어떻게 고쳐?", "왼손 개선 안내: 왼손을 조정하세요."),
 ])
