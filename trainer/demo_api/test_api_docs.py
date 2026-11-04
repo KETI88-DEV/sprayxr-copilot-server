@@ -72,7 +72,7 @@ def add_test_input_overviews(schema: dict[str, Any]) -> None:
             if context.get("evaluation_focus"):
                 lines.append("확인할 결과: " + str(context["evaluation_focus"]))
             lines.extend(["", "자동 입력 항목(하위 키 포함):", ""])
-            dynamic_fields = {"user_id", "session_id", "sequence_id", "report_id", "started_at", "ended_at", "requested_at", "created_at", "time"}
+            dynamic_fields = {"session_id", "sequence_id", "report_id", "started_at", "ended_at", "requested_at", "created_at", "time"}
             for name, value, kind in _values(used):
                 leaf = name.rsplit(".", 1)[-1]
                 note = "런타임 생성값의 예시" if "/workflow/" in path and leaf in dynamic_fields else "고정 기본값"

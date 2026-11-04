@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from trainer.demo_api.copilot_router import install_copilot_error_handlers
 from trainer.demo_api.sequence_store import SequenceStore
 from trainer.demo_api.speech_to_text import SpeechToTextUnavailableError, Transcript
+from trainer.demo_api.v1_store import V1Store
 from trainer.demo_api.voice_router import (
     TEST_TEXT_QUERY_PATH,
     VOICE_QUERY_PATH,
@@ -62,7 +63,7 @@ TEST_VOICE_QUERY_PATH = "/api/v1/test/query-voice"
 TEST_VOICE_ASSET_PATH = "/api/v1/test/assets/query-voice-ko.wav"
 
 
-def _client(stt: _Stt, pipeline: _Pipeline) -> TestClient:
+def _client(stt: _Stt, pipeline: _Pipeline, reports: V1Store | None = None) -> TestClient:
     app = FastAPI()
     app.include_router(
         create_voice_router(
@@ -70,6 +71,7 @@ def _client(stt: _Stt, pipeline: _Pipeline) -> TestClient:
             stt_provider=lambda: stt,
             store=SequenceStore(":memory:"),
             mcp_base_url="http://127.0.0.1:9",
+            reports=reports,
         )
     )
     install_copilot_error_handlers(app)
@@ -211,7 +213,7 @@ def test_input_free_voice_test_runs_the_real_stt_and_query_path() -> None:
     assert response.status_code == 200
     data = response.json()["data"]
     assert data["transcript"] == "스프레이 도장 시 적정 이격거리를 알려주세요"
-    assert data["user_id"] == "TSB-VOICE-DEMO-001"
+    assert data["user_id"] == "COPILOT-DEMO-USER"
     assert data["session_id"] == "SWAGGER-VOICE-DEMO"
     instruction = pipeline.calls[0]["instruction"]
     assert data["transcript"] in instruction
@@ -220,7 +222,7 @@ def test_input_free_voice_test_runs_the_real_stt_and_query_path() -> None:
     context = data["test_context"]
     assert context["input_used"]["audio"]["spoken_text"] == "스프레이 도장 시 적정 이격거리를 알려주세요."
     assert context["input_used"]["audio"]["sample_rate_hz"] == 16_000
-    assert context["input_used"]["form_fields"]["user_id"] == "TSB-VOICE-DEMO-001"
+    assert context["input_used"]["form_fields"]["user_id"] == "COPILOT-DEMO-USER"
     assert context["input_used"]["form_fields"]["task_type"] == "knowledge_search"
     assert context["input_summary"]
     assert context["evaluation_focus"]
@@ -265,3 +267,40 @@ def test_voice_sample_asset_is_downloadable_valid_16khz_mono_pcm16_wav() -> None
         assert wav.getnchannels() == 1
         assert wav.getsampwidth() == 2
         assert wav.getframerate() == 16_000
+
+
+@pytest.mark.parametrize("path", [TEST_TEXT_QUERY_PATH, TEST_VOICE_QUERY_PATH])
+def test_query_demos_register_the_shared_trainee_without_creating_sessions(path: str) -> None:
+    """A standalone query demo must be visible as the same account without fake training runs."""
+    reports = V1Store(":memory:")
+    client = _client(_Stt(), _Pipeline(), reports)
+
+    first = client.post(path)
+    second = client.post(path)
+
+    assert first.status_code == second.status_code == 200
+    assert first.json()["data"]["user_id"] == second.json()["data"]["user_id"] == "COPILOT-DEMO-USER"
+    users = reports.list_users(skip=0, limit=10)
+    assert len(users) == 1
+    assert users[0].user_id == "COPILOT-DEMO-USER"
+    assert users[0].name == "모의훈련자"
+    assert reports._conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0] == 0
+
+
+def test_text_and_voice_demos_reuse_an_existing_account_without_changing_creation_time() -> None:
+    reports = V1Store(":memory:")
+    reports.upsert_user(
+        user_id="COPILOT-DEMO-USER", name="모의훈련자", skill_level="novice",
+        dominant_hand="right", created_at="2000-01-01T00:00:00Z",
+    )
+    client = _client(_Stt(), _Pipeline(), reports)
+
+    text = client.post(TEST_TEXT_QUERY_PATH)
+    voice = client.post(TEST_VOICE_QUERY_PATH)
+
+    assert text.status_code == voice.status_code == 200
+    assert text.json()["data"]["user_id"] == voice.json()["data"]["user_id"] == "COPILOT-DEMO-USER"
+    assert len(reports.list_users(skip=0, limit=10)) == 1
+    assert reports._conn.execute(
+        "SELECT created_at FROM users WHERE user_id = 'COPILOT-DEMO-USER'"
+    ).fetchone()[0] == "2000-01-01T00:00:00Z"

@@ -50,6 +50,33 @@ def test_guided_workflow_has_five_input_free_ordered_operations() -> None:
         assert context["evaluation_focus"]
 
 
+def test_all_demo_swagger_examples_use_the_same_trainee() -> None:
+    """Copying any demo example must preserve the same account across the walkthrough."""
+    schema = TestClient(create_app()).get("/openapi.json").json()
+    paths = [
+        "/api/v1/test/workflow/0-reset", "/api/v1/test/workflow/1-start",
+        "/api/v1/test/workflow/2-sequence", "/api/v1/test/workflow/3-complete",
+        "/api/v1/test/workflow/4-report", "/api/v1/test/query", "/api/v1/test/query-voice",
+    ]
+
+    def user_ids(value: Any) -> list[str]:
+        if isinstance(value, dict):
+            return [child for key, child in value.items() if key == "user_id"] + [
+                found for child in value.values() for found in user_ids(child)
+            ]
+        if isinstance(value, list):
+            return [found for child in value for found in user_ids(child)]
+        return []
+
+    for path in paths:
+        operation = schema["paths"][path]["post"]
+        example = operation["responses"]["200"]["content"]["application/json"]["example"]
+        assert set(user_ids(example)) == {"COPILOT-DEMO-USER"}, path
+    start = schema["paths"]["/api/v1/test/workflow/1-start"]["post"]
+    registration = start["responses"]["200"]["content"]["application/json"]["example"]["data"]["test_context"]["input_used"]["user_registration"]
+    assert registration["name"] == "모의훈련자"
+
+
 def test_query_voice_and_sequence_operations_have_examples_and_ordered_tags() -> None:
     schema = TestClient(create_app()).get("/openapi.json").json()
     paths = schema["paths"]

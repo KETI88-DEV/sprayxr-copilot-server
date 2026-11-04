@@ -21,6 +21,7 @@ from trainer.demo_api.copilot_router import (
     error_response,
     execute_copilot_query,
 )
+from trainer.demo_api.guided_workflow import DEMO_USER_ID, ensure_demo_user
 from trainer.demo_api.sequence_store import SequenceStore
 from trainer.demo_api.sequence_analysis import SequenceAnalysisEngine
 from trainer.demo_api.v1_store import V1Store
@@ -42,12 +43,12 @@ TEST_VOICE_ASSET_PATH = "/api/v1/test/assets/query-voice-ko.wav"
 MAX_UPLOAD_BYTES = 1_048_576
 SpeechToTextProvider = Callable[[], SpeechToText]
 
-_TEST_USER_ID = "TSB-VOICE-DEMO-001"
+_TEST_USER_ID = DEMO_USER_ID
 _TEST_SESSION_ID = "SWAGGER-VOICE-DEMO"
 _TEST_SCENARIO_ID = "training-mode-1"
 _TEST_REQUEST_ID = "REQ-VOICE-TEST-001"
 _TEST_SPOKEN_TEXT = "스프레이 도장 시 적정 이격거리를 알려주세요."
-_TEST_TEXT_USER_ID = "TSB-TEXT-DEMO-001"
+_TEST_TEXT_USER_ID = DEMO_USER_ID
 _TEST_TEXT_SESSION_ID = "SWAGGER-TEXT-DEMO"
 _TEST_TEXT_SCENARIO_ID = "training-mode-1"
 _TEST_TEXT_REQUEST_ID = "REQ-TEXT-TEST-001"
@@ -79,7 +80,8 @@ def _text_query_test_context(
         },
         "input_summary": (
             f"‘{prompt}’ 질문을 실제 텍스트 Query 처리 경로에 전달하며, "
-            f"답변 수준은 {response_mode}, RAG 사용 여부는 {use_rag}입니다."
+            f"답변 수준은 {response_mode}, RAG 사용 여부는 {use_rag}입니다. "
+            "모의훈련자 계정을 재사용하며 훈련 세션은 생성하지 않습니다."
         ),
         "evaluation_focus": (
             "answer가 질문에 직접 답하는지 확인하고, response_mode를 quick과 detailed로 바꾸어 "
@@ -150,7 +152,8 @@ def _voice_test_context() -> dict[str, object]:
         },
         "input_summary": (
             f"‘{_TEST_SPOKEN_TEXT}’라고 말한 한국어 WAV를 STT로 변환하고, "
-            "변환 문장을 knowledge_search 질의로 전달합니다."
+            "변환 문장을 knowledge_search 질의로 전달합니다. "
+            "모의훈련자 계정을 재사용하며 훈련 세션은 생성하지 않습니다."
         ),
         "evaluation_focus": (
             "transcript가 음성 문장과 일치하는지, answer가 적정 이격거리 질문에 답하는지, "
@@ -334,6 +337,7 @@ def create_voice_router(
         description=(
             "실제 `POST /api/v1/copilot/query`와 동일한 처리 경로를 Swagger에서 간단히 시험합니다. "
             "모든 입력에는 기본값이 있어 수정하지 않고 바로 Execute할 수 있습니다.\n\n"
+            f"모의훈련자(`{DEMO_USER_ID}`) 계정을 공통으로 사용하며 계정이 없으면 등록합니다. 훈련 세션은 생성하지 않습니다.\n\n"
             "### 기본 입력\n"
             f"질문은 **‘{_TEST_TEXT_PROMPT}’**, `task_type=knowledge_search`, "
             "`response_mode=quick`이며 RAG 기본값은 Y(지식 검색 사용)입니다.\n\n"
@@ -362,6 +366,8 @@ def create_voice_router(
             description="Y는 지식 검색 사용, N은 미사용입니다. 소문자 y/n도 허용하며 생략 시 Y입니다.",
         )] = "Y",
     ) -> JSONResponse:
+        if reports is not None:
+            ensure_demo_user(reports)
         query = CopilotQueryRequest(
             user_id=_TEST_TEXT_USER_ID,
             session_id=_TEST_TEXT_SESSION_ID,
@@ -403,7 +409,8 @@ def create_voice_router(
             "파라미터나 파일을 입력하지 않고 서버에 포함된 한국어 WAV를 실제 STT와 Query 경로로 처리합니다.\n\n"
             "### 자동 사용 입력\n"
             f"음성 문장은 **‘{_TEST_SPOKEN_TEXT}’**이며, PCM16·16 kHz·mono WAV입니다. "
-            f"`user_id={_TEST_USER_ID}`, `language=ko`, `task_type=knowledge_search`를 사용하며 RAG는 Y(지식 검색 사용)로 처리합니다.\n\n"
+            f"모의훈련자 계정 `user_id={_TEST_USER_ID}`, `language=ko`, `task_type=knowledge_search`를 사용하며 RAG는 Y(지식 검색 사용)로 처리합니다. "
+            "계정이 없으면 최초 등록하며 훈련 세션은 생성하지 않습니다.\n\n"
             "### 결과 읽는 법\n"
             "응답의 `data.test_context.input_used`에서 전체 입력을 먼저 보고, `transcript`에서 STT 결과, "
             "`answer`에서 Co-Pilot 답변, `citations`에서 검색 근거를 확인하세요.\n\n"
@@ -413,6 +420,8 @@ def create_voice_router(
         responses=_VOICE_TEST_RESPONSE,
     )
     async def test_voice_query() -> JSONResponse:
+        if reports is not None:
+            ensure_demo_user(reports)
         response = await _run_voice_query(
             _sample_wav(),
             user_id=_TEST_USER_ID,

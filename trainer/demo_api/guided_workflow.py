@@ -18,10 +18,27 @@ from trainer.demo_api.v1_store import V1Store
 
 _PREFIX = "/api/v1/test/workflow"
 _TAG = "0. 모의 연동"
+DEMO_USER_ID = "COPILOT-DEMO-USER"
+DEMO_USER_NAME = "모의훈련자"
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def ensure_demo_user(store: V1Store) -> str | None:
+    """Register the shared demo account once, preserving an existing account."""
+    if store.get_user(DEMO_USER_ID) is not None:
+        return None
+    created_at = _now()
+    created = store.upsert_user(
+        user_id=DEMO_USER_ID,
+        name=DEMO_USER_NAME,
+        skill_level="novice",
+        dominant_hand="right",
+        created_at=created_at,
+    )
+    return created_at if created else None
 
 
 def _ok(data: dict[str, Any]) -> JSONResponse:
@@ -60,20 +77,20 @@ _RESET_CONTEXT = _test_context(
     {
         "request_parameters": "없음",
         "server_generated": {
-            "user_id": "SWAGGER-DEMO-a1b2c3d4",
+            "user_id": DEMO_USER_ID,
             "session_id": "SWAGGER-SESSION-a1b2c3d4",
             "scenario_id": "1",
         },
     },
-    "사용자가 입력한 값은 없으며 서버가 모의연동 전용 사용자·세션 식별자를 자동 생성합니다.",
-    "workflow_status가 ready인지, 생성된 user_id와 session_id가 무엇인지 확인합니다.",
+    "사용자 입력 없이 고정 계정 모의훈련자(COPILOT-DEMO-USER)를 재사용하고 새 세션 식별자만 준비합니다.",
+    "workflow_status가 ready인지, user_id는 유지되고 session_id만 새로 발급되는지 확인합니다.",
 )
 
 _START_CONTEXT = _test_context(
     {
         "equivalent_real_api": "POST /api/v1/sessions/start",
         "body": {
-            "user_id": "SWAGGER-DEMO-a1b2c3d4",
+            "user_id": DEMO_USER_ID,
             "session_id": "SWAGGER-SESSION-a1b2c3d4",
             "scenario_id": "1",
             "started_at": "2026-10-30T00:00:00Z",
@@ -81,11 +98,11 @@ _START_CONTEXT = _test_context(
             "worker": {"skill_level": "novice", "handedness": "right"},
         },
         "user_registration": {
-            "user_id": "SWAGGER-DEMO-a1b2c3d4", "name": "Swagger 초보자 모의 훈련자",
+            "user_id": DEMO_USER_ID, "name": DEMO_USER_NAME,
             "skill_level": "novice", "dominant_hand": "right", "created_at": "2026-10-30T00:00:00Z",
         },
     },
-    "초보자 작업자가 훈련모드 1을 시작하는 것과 같은 입력을 서버가 자동 구성합니다.",
+    "고정 계정 모의훈련자가 훈련모드 1을 시작하는 입력입니다. 계정은 최초 실행에만 등록하며 기존 등록 시각은 유지합니다.",
     "session_status가 ACTIVE로 바뀌고 동일한 session_id가 유지되는지 확인합니다.",
 )
 
@@ -100,7 +117,7 @@ _HEATMAP_EXAMPLE = {
 _SEQUENCE_INPUT = {
     "equivalent_real_api": "POST /api/v1/copilot/analyze-sequence",
     "session_id": "SWAGGER-SESSION-a1b2c3d4",
-    "user_id": "SWAGGER-DEMO-a1b2c3d4",
+    "user_id": DEMO_USER_ID,
     "scenario_id": "1",
     "zone_id": "1",
     "sequence_id": "SWAGGER-SEQUENCE-a1b2c3d4",
@@ -137,7 +154,7 @@ _COMPLETE_CONTEXT = _test_context(
     {
         "equivalent_real_api": "POST /api/v1/sessions/complete",
         "session_id": "SWAGGER-SESSION-a1b2c3d4",
-        "user_id": "SWAGGER-DEMO-a1b2c3d4",
+        "user_id": DEMO_USER_ID,
         "scenario_id": "1",
         "ended_at": "2026-10-30T00:00:02Z",
         "requested_at": "2026-10-30T00:00:02Z",
@@ -166,6 +183,7 @@ _REPORT_CONTEXT = _test_context(
 def _mock_report(run: _DemoRun | None = None) -> dict[str, Any]:
     """정식 리포트와 같은 모양. 모의 세션의 식별자만 바꿔 넣는다."""
     detail = report_example()
+    detail.update(user_id=DEMO_USER_ID, session_id="SWAGGER-SESSION-a1b2c3d4", scenario_id="1")
     if run is not None:
         detail.update(session_id=run.session_id, user_id=run.user_id, scenario_id=run.scenario_id)
         detail["report"]["report_id"] = run.report_id
@@ -202,7 +220,7 @@ class GuidedWorkflow:
             suffix = uuid.uuid4().hex[:8]
             self._run = _DemoRun(
                 run_id=suffix,
-                user_id=f"SWAGGER-DEMO-{suffix}",
+                user_id=DEMO_USER_ID,
                 session_id=f"SWAGGER-SESSION-{suffix}",
             )
             return self._run
@@ -217,14 +235,7 @@ class GuidedWorkflow:
             if run.started:
                 return run
             run.started_at = _now()
-            run.user_created_at = _now()
-            self._store.upsert_user(
-                user_id=run.user_id,
-                name="Swagger 초보자 모의 훈련자",
-                skill_level="novice",
-                dominant_hand="right",
-                created_at=run.user_created_at,
-            )
+            run.user_created_at = ensure_demo_user(self._store)
             self._store.start_session(
                 session_id=run.session_id,
                 user_id=run.user_id,
@@ -319,13 +330,13 @@ def create_guided_workflow_router(
         "/0-reset", response_model=ApiResponse, tags=[_TAG],
         summary="0-0. 모의연동 초기화 — 가장 먼저 누르세요",
         description=(
-            "입력값 없이 새 모의 훈련자와 세션 식별자를 준비합니다. 실제 훈련 데이터는 삭제하지 않습니다.\n\n"
-            "### 자동 사용 입력\n사용자 입력은 없고 `user_id`, `session_id`, `scenario_id=1`을 서버가 생성합니다.\n\n"
+            "입력값 없이 고정 계정 모의훈련자를 재사용하고 새 세션 식별자를 준비합니다. 실제 훈련 데이터는 삭제하지 않습니다.\n\n"
+            f"### 자동 사용 입력\n`user_id={DEMO_USER_ID}`는 항상 같고 `session_id`만 새로 생성합니다. `scenario_id=1`을 사용합니다.\n\n"
             "### 결과 읽는 법\n응답의 `data.test_context.input_used`에서 생성값을 확인하고 `next_endpoint`를 따라가세요."
         ),
         responses=_swagger_response({"test_context": _RESET_CONTEXT, "workflow_status": "ready", "step": 0,
-                                     "user_id": "SWAGGER-DEMO-a1b2c3d4", "session_id": "SWAGGER-SESSION-a1b2c3d4",
-                                     "what_happened": "모의연동 전용 식별자를 새로 만들었습니다.",
+                                     "user_id": DEMO_USER_ID, "session_id": "SWAGGER-SESSION-a1b2c3d4",
+                                     "what_happened": "모의훈련자 계정을 유지하고 새 세션 식별자를 준비했습니다.",
                                      "beginner_tip": "다음으로 0-1을 실행하세요.", "next_endpoint": f"{_PREFIX}/1-start"}),
     )
     def reset() -> JSONResponse:
@@ -335,13 +346,13 @@ def create_guided_workflow_router(
                 "user_id": run.user_id, "session_id": run.session_id, "scenario_id": run.scenario_id}},
             _RESET_CONTEXT["input_summary"], _RESET_CONTEXT["evaluation_focus"])
         return _ok({"test_context":context,"workflow_status":"ready","step":0,"user_id":run.user_id,"session_id":run.session_id,
-                    "what_happened":"모의연동 전용 식별자를 새로 만들었습니다. 실제 사용자 기록은 지우지 않았습니다.",
+                    "what_happened":"모의훈련자 계정을 유지하고 새 세션 식별자를 준비했습니다. 실제 사용자 기록은 지우지 않았습니다.",
                     "beginner_tip":"다음으로 0-1 세션 시작의 Try it out과 Execute를 누르세요.","next_endpoint":f"{_PREFIX}/1-start"})
 
     @router.post(
         "/1-start", response_model=ApiResponse, tags=[_TAG], summary="0-1. 모의 훈련 세션 시작",
         description=(
-            "파라미터 없이 초보자 계정과 ACTIVE 세션을 DB에 생성합니다.\n\n"
+            f"파라미터 없이 모의훈련자 계정(`{DEMO_USER_ID}`)으로 ACTIVE 세션을 DB에 생성합니다. 계정이 없을 때만 최초 등록합니다.\n\n"
             "### 자동 사용 입력\n실제 `POST /api/v1/sessions/start`에 대응하는 사용자·세션·훈련모드·작업자 정보를 구성합니다.\n\n"
             "### 결과 읽는 법\n`input_used.body`와 `session_status=ACTIVE`를 나란히 비교하세요. 초기화를 건너뛰어도 전제값을 자동 준비합니다."
         ),
@@ -358,9 +369,11 @@ def create_guided_workflow_router(
                               "target_thickness_um": 150.0,
                               "worker": {"skill_level": "novice", "handedness": "right"}}
         input_used["user_registration"] = {
-            "user_id": run.user_id, "name": "Swagger 초보자 모의 훈련자",
-            "skill_level": "novice", "dominant_hand": "right", "created_at": run.user_created_at,
+            "user_id": run.user_id, "name": DEMO_USER_NAME,
+            "skill_level": "novice", "dominant_hand": "right",
         }
+        if run.user_created_at is not None:
+            input_used["user_registration"]["created_at"] = run.user_created_at
         return _ok({"test_context":_test_context(input_used, _START_CONTEXT["input_summary"], _START_CONTEXT["evaluation_focus"]),
                     "workflow_status":"running","step":1,"user_id":run.user_id,"session_id":run.session_id,
                     "session_status":"ACTIVE","what_happened":"실제 sessions/start와 같은 상태 전이를 수행해 ACTIVE 세션을 만들었습니다.",
