@@ -16,7 +16,7 @@ from fastapi.responses import HTMLResponse, FileResponse
 
 from trainer.demo_api.sequence_store import DEFAULT_DB_PATH
 from trainer.demo_api.db_dashboard import DASHBOARD_CSS, render_dashboard
-from trainer.demo_api.db_record_detail import DETAIL_CSS, DETAIL_HTML, record_detail, json_safe
+from trainer.demo_api.db_record_detail import DETAIL_CSS, DETAIL_HTML, PRIVATE_TABLES, record_detail, json_safe
 from trainer.demo_api.db_sessions import SESSION_CSS, render_session_list, render_session_detail, session_event_detail
 from trainer.demo_api.portal_navigation import portal_document
 from trainer.demo_api.db_origin import origin_control, preserve_origin_links, scope_condition
@@ -51,6 +51,13 @@ padding:54px;color:var(--muted)}.pagination{display:flex;justify-content:space-b
 border-top:0;border-radius:0 0 13px 13px;padding:13px 15px;font-size:13px;color:var(--muted)}.pagination a{color:var(--brand);text-decoration:none;font-weight:700}
 .readonly{display:inline-flex!important;align-items:center;gap:6px;color:var(--good)!important;font-weight:700;font-size:14px!important}.dot{width:8px;height:8px;border-radius:50%;background:#20c997}
 @media(max-width:850px){.app-shell{grid-template-columns:1fr}.sidebar{position:relative;height:auto}.main{padding:20px}.cards{grid-template-columns:1fr}.topbar{display:block}.actions{margin-top:14px}}
+"""
+
+_CSS += """
+.sidebar{display:flex;flex-direction:column}.sidebar>.brand,.sidebar>.side-title,.sidebar>.table-link{flex-shrink:0}
+.sidebar-admin{margin-top:auto;padding-top:28px;flex-shrink:0}.sidebar-admin a{display:flex;align-items:center;gap:9px;border-top:1px solid #ffffff15;padding:16px 10px 3px;color:#91a5c6;text-decoration:none;font-size:12px;font-weight:500;transition:color .15s}
+.sidebar-admin svg{width:16px;height:16px}.sidebar-admin a:hover,.sidebar-admin a.active{color:#e1eaff}.sidebar-admin a:focus-visible{outline:2px solid #9cb7f2;outline-offset:3px}
+@media(max-width:850px){.sidebar-admin{margin-top:12px;padding-top:8px}}
 """
 
 
@@ -96,7 +103,8 @@ def _sidebar(tables: list[tuple[str, int]], selected: str | None, overview: str 
     current_attr = ' aria-current="page"' if is_home else ""
     home = f'<a class="table-link home-nav{" active" if is_home else ""}"{current_attr} href="/admin"><span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m3 10 9-7 9 7v10H3Z"/><path d="M9 20v-7h6v7"/></svg>Home</span></a>'
     sessions = f'<a class="table-link home-nav{" active" if overview == "sessions" else ""}" href="/admin/sessions"><span>▤ 훈련세션</span></a>'
-    return '<div class="brand">AI Co-Pilot<small>훈련 데이터 대시보드</small></div><div class="side-title">Overview</div>' + home + sessions + '<div class="side-title">데이터 조회</div>' + links
+    admin = '<div class="sidebar-admin"><a href="/admin/manage"' + (' class="active" aria-current="page"' if overview == "manage" else '') + '><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="m9 3-.6 2.2-2 .9-2-.7-2 3.4 1.5 1.6v2.3l-1.5 1.6 2 3.4 2-.6 2 .9L9 20h4l.6-2.1 2-.9 2 .6 2-3.4-1.5-1.6v-2.3l1.5-1.6-2-3.4-2 .7-2-.9L13 3Z"/><circle cx="11" cy="11.5" r="3"/></svg><span>관리자 모드</span></a></div>'
+    return '<div class="brand">AI Co-Pilot<small>훈련 데이터 대시보드</small></div><div class="side-title">Overview</div>' + home + sessions + '<div class="side-title">데이터 조회</div>' + links + admin
 
 
 @contextmanager
@@ -117,12 +125,14 @@ def _read_database():
 def _table_counts(conn, origin: str = "all"):
     if conn is None:
         return []
-    names = [str(r[0]) for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")]
+    names = [str(r[0]) for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name") if str(r[0]) not in PRIVATE_TABLES]
     return [(name, int(conn.execute('SELECT COUNT(*) FROM "' + name.replace('"','""') + '" WHERE ' + scope_condition(conn,name,origin)).fetchone()[0])) for name in names]
 
 
 def create_db_viewer_router() -> APIRouter:
     router = APIRouter()
+    from trainer.demo_api.db_admin_router import create_db_admin_router
+    router.include_router(create_db_admin_router())
 
     @router.get("/admin/assets/db_viewer.js", include_in_schema=False)
     def detail_script():
@@ -177,7 +187,7 @@ def create_db_viewer_router() -> APIRouter:
             conn = sqlite3.connect(f"file:{path.resolve()}?mode=ro", uri=True)
             conn.row_factory = sqlite3.Row
             conn.execute("BEGIN")
-            names = [str(row[0]) for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")]
+            names = [str(row[0]) for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name") if str(row[0]) not in PRIVATE_TABLES]
             selected = table if table in names else None
             table_counts: list[tuple[str, int]] = []
             for name in names:

@@ -6,6 +6,7 @@ import os
 import re
 import threading
 import uuid
+from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Callable
@@ -18,6 +19,17 @@ PNG_UPLOAD_LIMIT = 16 * 1024 * 1024
 _POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="session-report")
 _GUARD = threading.Lock()
 _ACTIVE: set[str] = set()
+
+
+@contextmanager
+def hold_idle_reports(artifact_dir: Path, report_ids: list[str]):
+    """Exclude new report jobs while an administrator removes their DB records."""
+    from fastapi import HTTPException
+
+    with _GUARD:
+        if any(str(artifact_dir / report_id) in _ACTIVE for report_id in report_ids):
+            raise HTTPException(409, "리포트 분석 중입니다. 분석 완료 후 다시 삭제하세요.")
+        yield
 
 
 class InputTooLarge(ValueError):

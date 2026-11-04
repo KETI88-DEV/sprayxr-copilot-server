@@ -8,6 +8,8 @@ from typing import Any
 
 from trainer.demo_api.db_report_status import report_progress
 
+PRIVATE_TABLES = frozenset({"admin_change_log"})
+
 DETAIL_CSS = """
 [data-detail-url]{cursor:pointer}tr[data-detail-url]:focus{outline:2px solid #6688ef;outline-offset:-2px}
 .record-button{padding:5px 9px;background:#eef2fd;color:#3157d5;font-size:11px;white-space:nowrap}
@@ -47,6 +49,8 @@ def decoded(value: Any) -> Any:
 
 
 def record_detail(conn: sqlite3.Connection, table: str, rowid: int) -> dict[str, Any] | None:
+    if table in PRIVATE_TABLES:
+        return None
     names = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")}
     if table not in names:
         return None
