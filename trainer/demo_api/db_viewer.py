@@ -21,6 +21,8 @@ from trainer.demo_api.db_sessions import SESSION_CSS, render_session_list, rende
 from trainer.demo_api.portal_navigation import portal_document
 from trainer.demo_api.db_origin import origin_control, preserve_origin_links, scope_condition
 from trainer.demo_api.db_report_status import report_progress
+from trainer.demo_api.training_data_catalog import TrainingDataCatalog, create_training_data_router
+from trainer.demo_api.training_data_ui import TRAINING_DATA_CSS, render_training_data
 
 _CSS = """
 :root{color-scheme:light;--bg:#f4f7fb;--panel:#fff;--ink:#152033;--muted:#68758a;--line:#dde4ee;
@@ -66,7 +68,7 @@ def _page(content: str, sidebar: str = "", origin: str = "all") -> HTMLResponse:
     document = (
         "<!doctype html><html lang='ko'><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-        f"<title>Co-Pilot DB Viewer</title><style>{_CSS}{DASHBOARD_CSS}{SESSION_CSS}{DETAIL_CSS}</style></head>"
+        f"<title>Co-Pilot DB Viewer</title><style>{_CSS}{DASHBOARD_CSS}{SESSION_CSS}{DETAIL_CSS}{TRAINING_DATA_CSS}</style></head>"
         f'<body><div class="app-shell"><aside class="sidebar">{sidebar}</aside>'
         f'<main class="main">{content}</main></div>{DETAIL_HTML}</body></html>'
     )
@@ -103,8 +105,9 @@ def _sidebar(tables: list[tuple[str, int]], selected: str | None, overview: str 
     current_attr = ' aria-current="page"' if is_home else ""
     home = f'<a class="table-link home-nav{" active" if is_home else ""}"{current_attr} href="/admin"><span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m3 10 9-7 9 7v10H3Z"/><path d="M9 20v-7h6v7"/></svg>Home</span></a>'
     sessions = f'<a class="table-link home-nav{" active" if overview == "sessions" else ""}" href="/admin/sessions"><span>▤ 훈련세션</span></a>'
+    training = f'<a class="table-link home-nav{" active" if overview == "training" else ""}"' + (' aria-current="page"' if overview == 'training' else '') + ' href="/admin/training-data"><span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v7c0 4 16 4 16 0V5M4 12v7c0 4 16 4 16 0v-7"/></svg>학습 데이터</span></a>'
     admin = '<div class="sidebar-admin"><a href="/admin/manage"' + (' class="active" aria-current="page"' if overview == "manage" else '') + '><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="m9 3-.6 2.2-2 .9-2-.7-2 3.4 1.5 1.6v2.3l-1.5 1.6 2 3.4 2-.6 2 .9L9 20h4l.6-2.1 2-.9 2 .6 2-3.4-1.5-1.6v-2.3l1.5-1.6-2-3.4-2 .7-2-.9L13 3Z"/><circle cx="11" cy="11.5" r="3"/></svg><span>관리자 모드</span></a></div>'
-    return '<div class="brand">AI Co-Pilot<small>훈련 데이터 대시보드</small></div><div class="side-title">Overview</div>' + home + sessions + '<div class="side-title">데이터 조회</div>' + links + admin
+    return '<div class="brand">AI Co-Pilot<small>훈련 데이터 대시보드</small></div><div class="side-title">Overview</div>' + home + sessions + training + '<div class="side-title">데이터 조회</div>' + links + admin
 
 
 @contextmanager
@@ -133,6 +136,16 @@ def create_db_viewer_router() -> APIRouter:
     router = APIRouter()
     from trainer.demo_api.db_admin_router import create_db_admin_router
     router.include_router(create_db_admin_router())
+    router.include_router(create_training_data_router(TrainingDataCatalog()))
+
+    @router.get('/admin/training-data', include_in_schema=False, response_class=HTMLResponse)
+    def training_data_page():
+        with _read_database() as conn:
+            return _page(render_training_data(), _sidebar(_table_counts(conn), None, 'training'))
+
+    @router.get('/admin/assets/training_data.js', include_in_schema=False)
+    def training_data_script():
+        return FileResponse(Path(__file__).parent / 'static' / 'training_data.js', media_type='text/javascript', headers={'Cache-Control': 'no-cache'})
 
     @router.get("/admin/assets/db_viewer.js", include_in_schema=False)
     def detail_script():

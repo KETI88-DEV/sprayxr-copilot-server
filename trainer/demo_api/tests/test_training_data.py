@@ -1,0 +1,160 @@
+import csv
+import json
+from pathlib import Path
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from PIL import Image
+
+from trainer.demo_api.training_data_build import build_training_datasets
+from trainer.demo_api.training_data_catalog import TrainingDataCatalog, create_training_data_router
+
+
+def record(root: Path, name='3_1234_1', *, worker=None, zone='1'):
+    base = root / 'workers' / worker if worker else root
+    if worker:
+        base.mkdir(parents=True, exist_ok=True)
+        (base / 'worker.json').write_text(json.dumps({'display_name': '새 작업자', 'role': 'trainee'}), encoding='utf-8')
+    folder = base / 'raw/spray/learning/mode_03' / name
+    folder.mkdir(parents=True, exist_ok=True)
+    with (folder / f'{name}.csv').open('w', newline='', encoding='utf-8-sig') as stream:
+        writer = csv.writer(stream)
+        writer.writerow(['시간(초)', '분사', 'Zone ID', 'Ray Texture Map Number', 'Distance (Input)', 'Speed (Input)', 'Ray point X', 'Ray Point Y', 'Ray Point Z'])
+        writer.writerows([[0, 'Off', '-1', 1, 200, 400, 0, 0, 0], [1, 'On', zone, 1, 250, 500, 1, 2, 3], [2, 'On', zone, 1, 350, 700, 2, 3, 4]])
+    Image.new('RGB', (4, 4), (1, 0, 255)).save(folder / 'Map01_1234_1_1_Height.png')
+    return folder
+
+
+def test_real_json_artifacts_and_rebuild_count_do_not_duplicate(tmp_path):
+    root, output = tmp_path / 'source', tmp_path / 'built'
+    record(root)
+    first = build_training_datasets(root, output)
+    assert first['record_count'] == 1
+    catalog = TrainingDataCatalog(output, root)
+    listing = catalog.list()
+    item = listing['items'][0]
+    data = catalog.detail(item['dataset_id'])
+    assert data['features']['frame_count'] == 3
+    assert data['features']['sequence_count'] == 1
+    assert data['features']['zones'][0]['distance_mm']['median'] == 300
+    assert data['metadata']['acquired_at'] is None
+    assert data['metadata']['worker_name'] == '전형기 반장'
+    assert data['coating']['maps'][0]['image_url'].startswith('/admin/api/training-data/')
+    assert json.loads(catalog.artifact(item['dataset_id']).read_text(encoding='utf-8')) == data
+    build_training_datasets(root, output)
+    assert TrainingDataCatalog(output, root).list()['total'] == 1
+    assert len(list((output / 'records').glob('*.json'))) == 1
+
+
+def test_workers_filters_and_quality_are_separate_from_expert_profiles(tmp_path):
+    root, output = tmp_path / 'source', tmp_path / 'built'
+    record(root)
+    record(root, '3_5678_1', worker='trainee-2', zone='-1')
+    build_training_datasets(root, output)
+    catalog = TrainingDataCatalog(output, root)
+    selected = catalog.list(worker_id='trainee-2')
+    assert selected['total'] == 2 and selected['filtered_count'] == 1
+    assert selected['summary']['worker_count'] == 1
+    assert selected['items'][0]['quality_status'] == 'needs_review'
+    assert {option['id'] for option in selected['options']['workers']} == {'jeon_hyeonggi', 'trainee-2'}
+    assert catalog.list(q='새 작업자')['filtered_count'] == 1
+    assert catalog.list(scenario_id='10')['filtered_count'] == 0
+    import io
+    exported = list(csv.DictReader(io.StringIO(catalog.csv_export(worker_id='trainee-2').decode('utf-8-sig'))))
+    assert exported[0]['zone_count'] == '0'
+
+
+def test_download_export_and_images_are_read_only_and_allowlisted(tmp_path):
+    root, output = tmp_path / 'source', tmp_path / 'built'
+    record(root)
+    build_training_datasets(root, output)
+    app = FastAPI()
+    app.include_router(create_training_data_router(TrainingDataCatalog(output, root)))
+    with TestClient(app) as client:
+        listing = client.get('/admin/api/training-data').json()
+        dataset_id = listing['items'][0]['dataset_id']
+        detail = client.get('/admin/api/training-data/' + dataset_id)
+        assert detail.status_code == 200
+        assert client.get(detail.json()['coating']['maps'][0]['image_url']).headers['content-type'] == 'image/png'
+        assert client.get('/admin/api/training-data/' + dataset_id + '/download').status_code == 200
+        assert client.get('/admin/api/training-data/export.csv').content.startswith(b'\xef\xbb\xbf')
+        archive = client.get('/admin/api/training-data/export.zip')
+        assert archive.status_code == 200 and archive.content.startswith(b'PK')
+        assert client.get('/admin/api/training-data/not-a-dataset').status_code == 404
+        assert client.get('/admin/api/training-data/' + dataset_id + '/images/999').status_code == 404
+        assert client.post('/admin/api/training-data').status_code == 405
+
+
+def test_missing_catalog_and_bad_record_do_not_claim_completed_data(tmp_path):
+    assert TrainingDataCatalog(tmp_path / 'built', tmp_path / 'source').list()['available'] is False
+    root, output = tmp_path / 'source', tmp_path / 'built'
+    folder = record(root)
+    (folder / '3_1234_1.csv').write_text('broken\nvalue\n', encoding='utf-8')
+    report = build_training_datasets(root, output)
+    assert report['failed_count'] == 1
+    assert TrainingDataCatalog(output, root).list()['total'] == 0
+
+
+def test_same_record_copy_is_deduplicated(tmp_path):
+    import shutil
+    root, output = tmp_path / 'source', tmp_path / 'built'
+    folder = record(root)
+    copy = folder.parent / 'duplicate'
+    shutil.copytree(folder, copy)
+    report = build_training_datasets(root, output)
+    assert report['record_count'] == 1 and report['duplicate_count'] == 1
+
+
+def test_independent_recordings_and_expert_bands_are_retained(tmp_path):
+    root, output = tmp_path / 'source', tmp_path / 'built'
+    record(root, '3_1234_1')
+    record(root, '3_5678_1')
+    build_training_datasets(root, output)
+    catalog = TrainingDataCatalog(output, root)
+    assert catalog.list()['total'] == 2
+    detail = catalog.detail(catalog.list()['items'][0]['dataset_id'])
+    assert detail['coating']['maps'][0]['reference']['record_count'] == 2
+    assert detail['coating']['maps'][0]['reference']['median_um'] > 0
+
+
+def test_legacy_zone_correction_does_not_remap_new_workers(tmp_path):
+    root, output = tmp_path / 'source', tmp_path / 'built'
+    record(root, '2_1234_1', zone='1')
+    record(root, '2_5678_1', worker='new-worker', zone='1')
+    build_training_datasets(root, output)
+    catalog = TrainingDataCatalog(output, root)
+    legacy = catalog.list(worker_id='jeon_hyeonggi')['items'][0]
+    current = catalog.list(worker_id='new-worker')['items'][0]
+    assert catalog.detail(legacy['dataset_id'])['features']['zones'][0]['zone_id'] == '3'
+    assert catalog.detail(current['dataset_id'])['features']['zones'][0]['zone_id'] == '1'
+
+
+def test_catalog_rejects_escaped_paths(tmp_path):
+    root, output = tmp_path / 'source', tmp_path / 'built'
+    record(root)
+    build_training_datasets(root, output)
+    catalog = TrainingDataCatalog(output, root)
+    item = catalog.list()['items'][0]
+    p = catalog.artifact(item['dataset_id'])
+    data = json.loads(p.read_text(encoding='utf-8'))
+    data['provenance']['heightmaps'][0]['relative_path'] = '../secret.png'
+    p.write_text(json.dumps(data), encoding='utf-8')
+    with pytest.raises((ValueError, FileNotFoundError)):
+        TrainingDataCatalog(output, root).image(item['dataset_id'], 0)
+
+
+def test_training_data_overview_is_public_without_operational_database(tmp_path, monkeypatch):
+    from trainer.demo_api.db_viewer import create_db_viewer_router
+    monkeypatch.setenv('SEQUENCE_DB_PATH', str(tmp_path / 'missing.db'))
+    monkeypatch.setenv('TRAINING_DATA_ROOT', str(tmp_path / 'built'))
+    app = FastAPI()
+    app.include_router(create_db_viewer_router())
+    with TestClient(app) as client:
+        home = client.get('/admin')
+        assert '학습 데이터' in home.text
+        response = client.get('/admin/training-data')
+        assert response.status_code == 200
+        assert '학습 데이터' in response.text and '/admin/assets/training_data.js' in response.text
+        assert client.get('/admin/assets/training_data.js').status_code == 200
+        assert client.get('/admin/api/training-data').json()['available'] is False
