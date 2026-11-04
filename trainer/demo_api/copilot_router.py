@@ -203,7 +203,11 @@ def _current_viewer_pose_context(prompt: str, context: dict[str, object]) -> dic
 
 
 def _viewer_answer(task_type: str, prompt: str, context: Mapping[str, object], intent: str | None) -> str:
-    """Build the factual answer from signed measures, never client prose."""
+    """Build the factual answer from signed measures, never client prose.
+
+    뷰어의 `similarity_percent`는 도구 각도·몸통 기울기·칠하는 방식·도막 두께·이격거리를 묶은 **작업 유사도**다.
+    "자세 유사도"는 전문가 자세(팔 관절 엔진)와의 유사도에만 쓴다 — 같은 말로 다른 숫자를 내지 않는다.
+    """
     selected_intent = intent if intent and intent != "knowledge" else fallback_intent(task_type, prompt)
     if task_type == "trajectory_recomm":
         flow = context.get("recommended_flow")
@@ -234,7 +238,7 @@ def _viewer_answer(task_type: str, prompt: str, context: Mapping[str, object], i
     rows = [row for row in rows if isinstance(row, Mapping) and isinstance(row.get("similarity_percent"), (int, float))]
     if context.get("scope") == "current_zone":
         if context.get("status") != "available" or not rows:
-            return "질문 시점의 Zone 자세 비교값이 없습니다. 재생 위치를 확인한 뒤 다시 질문해 주세요."
+            return "질문 시점의 Zone 작업 비교값이 없습니다. 재생 위치를 확인한 뒤 다시 질문해 주세요."
         zone = rows[0]
         corrections = zone.get("corrections")
         guidance = " ".join(item for item in corrections if isinstance(item, str)) if isinstance(corrections, list) else ""
@@ -242,32 +246,32 @@ def _viewer_answer(task_type: str, prompt: str, context: Mapping[str, object], i
             side = "오른" if re.search(r"오른|right", prompt, re.I) else "왼"
             matching = [item for item in corrections if isinstance(item, str) and side in item] if isinstance(corrections, list) else []
             guidance = " ".join(matching) if matching else f"이 Zone에는 {side}손에 특정된 교정 항목이 없습니다."
-        return (f"현재 재생 구간(Map {context.get('map_num')} · Zone {zone.get('zone_id')})의 자세 유사도는 "
+        return (f"현재 재생 구간(Map {context.get('map_num')} · Zone {zone.get('zone_id')})의 작업 유사도는 "
                 f"{_percent_text(zone.get('similarity_percent'), already_percent=True)}입니다. "
-                + (guidance or "별도의 자세 개선 항목은 없습니다."))
+                + (guidance or "별도의 작업 개선 항목은 없습니다."))
     if context.get("status") != "available" or not rows:
-        return "현재 재생 기록에서는 자세 비교값을 계산할 수 없습니다."
+        return "현재 재생 기록에서는 작업 비교값을 계산할 수 없습니다."
     target = requested_zone(prompt, None)
     if target is not None:
         zone = next((row for row in rows if str(row.get("zone_id")) == target), None)
         if zone is None:
-            return f"현재 재생 기록에는 Zone {target}의 자세 비교값이 없습니다."
+            return f"현재 재생 기록에는 Zone {target}의 작업 비교값이 없습니다."
         corrections = zone.get("corrections")
         guidance = " ".join(str(item) for item in corrections if isinstance(item, str)) if isinstance(corrections, list) else ""
-        return f"Zone {target} 자세 유사도는 {_percent_text(zone.get('similarity_percent'), already_percent=True)}입니다." + (f" {guidance}" if guidance else " 별도의 자세 개선 항목은 없습니다.")
+        return f"Zone {target} 작업 유사도는 {_percent_text(zone.get('similarity_percent'), already_percent=True)}입니다." + (f" {guidance}" if guidance else " 별도의 작업 개선 항목은 없습니다.")
     if selected_intent in {"pose_right", "pose_left"}:
         side = "오른손" if selected_intent == "pose_right" else "왼손"
         corrections = context.get("corrections")
         messages = [str(item.get("message") or item.get("label") or "") if isinstance(item, Mapping) else str(item)
                     for item in corrections] if isinstance(corrections, list) else []
         matching = [message for message in messages if side in message or ("오른" if side == "오른손" else "왼") in message]
-        return f"{side} 개선 안내: {' '.join(matching)}" if matching else f"현재 기록에서 {side}에 특정된 개선 항목은 없습니다. 전체 자세 유사도는 {_percent_text(context.get('similarity_percent'), already_percent=True)}입니다."
+        return f"{side} 개선 안내: {' '.join(matching)}" if matching else f"현재 기록에서 {side}에 특정된 개선 항목은 없습니다. 전체 작업 유사도는 {_percent_text(context.get('similarity_percent'), already_percent=True)}입니다."
     worst = min(rows, key=lambda row: float(row["similarity_percent"]))
     if selected_intent == "pose_worst_zone" or any(word in prompt for word in ("문제", "최악", "낮", "어느", "어디")):
         corrections = worst.get("corrections")
         guidance = " ".join(str(item) for item in corrections if isinstance(item, str)) if isinstance(corrections, list) else ""
-        return f"현재 기록에서 자세 유사도가 가장 낮은 구역은 Zone {worst.get('zone_id')}({_percent_text(worst.get('similarity_percent'), already_percent=True)})입니다." + (f" {guidance}" if guidance else "")
-    return (f"현재 재생 기록의 전체 자세 유사도는 {_percent_text(context.get('similarity_percent'), already_percent=True)}입니다. "
+        return f"현재 기록에서 작업 유사도가 가장 낮은 구역은 Zone {worst.get('zone_id')}({_percent_text(worst.get('similarity_percent'), already_percent=True)})입니다." + (f" {guidance}" if guidance else "")
+    return (f"현재 재생 기록의 전체 작업 유사도는 {_percent_text(context.get('similarity_percent'), already_percent=True)}입니다. "
             f"가장 낮은 구역은 Zone {worst.get('zone_id')}({_percent_text(worst.get('similarity_percent'), already_percent=True)})입니다.")
 
 
@@ -407,7 +411,10 @@ def _structured_detail_fallback(
         similarity = _percent_text(analysis_context.get("similarity_score", analysis_context.get("similarity_percent")), already_percent="similarity_score" not in analysis_context)
         current_zone = analysis_context.get("scope") == "current_zone"
         scope_label = f"현재 재생 구간(Map {analysis_context.get('map_num')} · Zone {analysis_context.get('zone_id')})"
-        comparison = [f"{scope_label if current_zone else '전체'} 자세 유사도는 {similarity}입니다."] if similarity else []
+        # 엔진(팔 관절) 점수 `similarity_score`만 자세 유사도다. 뷰어의 `similarity_percent`는 작업 유사도.
+        engine = "similarity_score" in analysis_context
+        measure = "자세" if engine else "작업"
+        comparison = [f"{scope_label if current_zone else '전체'} {measure} 유사도는 {similarity}입니다."] if similarity else []
         zones = analysis_context.get("zones")
         zone_rows = list(zones.values()) if isinstance(zones, dict) else zones
         worst_text = None
@@ -431,14 +438,17 @@ def _structured_detail_fallback(
                 for item in corrections[:3]
             ]
             messages = [message for message in messages if message and message != "None"]
-        verdict = (f"{scope_label}의 전문가 자세 평가를 기준으로 확인했습니다."
-                   if current_zone else "전문가 자세와의 차이를 Zone별로 확인했습니다.")
+        verdict = (f"{scope_label}의 전문가 {measure} 평가를 기준으로 확인했습니다."
+                   if current_zone else f"전문가 {'자세와의' if engine else '작업과의'} 차이를 Zone별로 확인했습니다.")
         if interpretation is None:
             interpretation = worst_text or base_answer
-        action = " ".join(messages) if messages else "다음 분사에서도 같은 조건으로 자세를 비교하고, 관절별 교정이 제시되면 해당 위치를 우선 확인하세요."
+        action = " ".join(messages) if messages else (
+            "다음 분사에서도 같은 조건으로 자세를 비교하고, 관절별 교정이 제시되면 해당 위치를 우선 확인하세요."
+            if engine else "다음 분사에서도 같은 조건으로 작업을 비교하고, 항목별 교정이 제시되면 해당 항목을 우선 확인하세요."
+        )
         return (
             "[상세 분석]\n[종합 판단]\n" + verdict
-            + "\n\n[정량 비교]\n" + ("\n".join(comparison) or "비교 가능한 자세 지표가 없습니다.")
+            + "\n\n[정량 비교]\n" + ("\n".join(comparison) or f"비교 가능한 {measure} 지표가 없습니다.")
             + "\n\n[해석]\n" + interpretation
             + "\n\n[권장 조치]\n" + action
         )

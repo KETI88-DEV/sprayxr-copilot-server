@@ -190,8 +190,10 @@ def _joint_posture_state(joints: dict[str, list[float]]) -> dict[str, Any]:
     """Classify display posture from the CSV skeleton, independent of trackers.
 
     The skeleton joints are simulator IK output rather than tracked devices, so
-    the result remains an explicit estimate and is not fed into similarity
-    scoring.  Joint angles are invariant to the CSV rig's changing global axis.
+    the result remains an explicit estimate.  Only ``torso_lean_deg`` feeds the
+    viewer's *work* similarity (the "몸통 기울기" item); it never feeds the expert
+    posture similarity, which is the arm-joint engine's alone.  Joint angles are
+    invariant to the CSV rig's changing global axis.
     """
 
     knees: dict[str, float] = {}
@@ -1473,7 +1475,7 @@ def _multi_session_zone_evaluation(
             if (value := _session_coating_median(record["session"], zone_key)) is not None
         ]
         posture_metric = _metric_item(
-            "posture", "자세", _number(selected_frame.get("posture_deg")),
+            "posture", "몸통 기울기", _number(selected_frame.get("posture_deg")),
             [value for frame in reference_frames if (value := _number(frame.get("posture_deg"))) is not None],
             unit="deg", tolerance=15.0,
         )
@@ -1764,7 +1766,7 @@ button{cursor:pointer;font-weight:700}.primary{background:#3157d5;border-color:#
 <header class="top"><div class="title">작업 자세 비교 평가<small>도장 경로와 작업 자세를 전문가 기준으로 비교합니다.</small></div></header>
 <template id="poseUiTemplate">
 <div data-pose-slot="gizmo" class="camera-gizmo" aria-label="3D 카메라 기즈모"><button id="cameraHome" title="초기 시점">⌂</button><button id="cameraAxisX" title="X축 시점">X</button><button id="cameraAxisY" title="Y축 시점">Y</button><button id="cameraAxisZ" title="Z축 시점">Z</button></div>
-<div data-pose-slot="summary" id="poseSummary" class="pose-summary"><div class="card pose-overall"><span>전문가 동작 유사도</span><strong id="poseScore">—%</strong><small id="poseScoreNote">Zone 순서와 Zone별 유사도를 전문가 반복 수행 기준으로 비교합니다.</small></div><div id="poseZoneCard" class="card pose-zone-card"><div class="pose-zone-header"><span id="poseZoneTitle">현재 Zone 유사도</span><strong id="poseZoneScore">—%</strong></div><div class="pose-meta"><span>현재 자세 상태 · <b id="posePosture">기록 준비 중</b></span><span id="poseZoneSummary">Zone 대기 중</span><span id="poseEstimateNote">CSV 조인트 기반 자세 추정</span></div><div id="poseZoneMetrics" class="pose-zone-metrics"><small>재생을 시작하면 현재 Zone의 측정값과 전문가 기준을 표시합니다.</small></div></div><div class="card pose-action"><span id="poseActionTitle">현재 Zone 자세 개선 안내</span><ol id="poseActionList"><li id="poseAction">기록을 선택하세요.</li></ol></div><div class="card pose-predicted"><span>안내 적용 시 예상</span><strong id="posePredicted">—</strong><small>실제 재측정 결과가 아닌 가상 좌표 보정 결과입니다.</small></div></div>
+<div data-pose-slot="summary" id="poseSummary" class="pose-summary"><div class="card pose-overall"><span>전문가 작업 유사도</span><strong id="poseScore">—%</strong><small id="poseScoreNote">Zone 순서와 Zone별 작업 유사도를 전문가 반복 수행 기준으로 비교합니다.</small></div><div id="poseZoneCard" class="card pose-zone-card"><div class="pose-zone-header"><span id="poseZoneTitle">현재 Zone 작업 유사도</span><strong id="poseZoneScore">—%</strong></div><div class="pose-meta"><span>현재 자세 상태 · <b id="posePosture">기록 준비 중</b></span><span id="poseZoneSummary">Zone 대기 중</span><span id="poseEstimateNote">CSV 조인트 기반 자세 추정</span></div><div id="poseZoneMetrics" class="pose-zone-metrics"><small>재생을 시작하면 현재 Zone의 측정값과 전문가 기준을 표시합니다.</small></div></div><div class="card pose-action"><span id="poseActionTitle">현재 Zone 작업 개선 안내</span><ol id="poseActionList"><li id="poseAction">기록을 선택하세요.</li></ol></div><div class="card pose-predicted"><span>안내 적용 시 예상</span><strong id="posePredicted">—</strong><small>실제 재측정 결과가 아닌 가상 좌표 보정 결과입니다.</small></div></div>
 </template>
 <section class="selection-panel"><h2>재생 데이터 선택</h2><div class="selection-grid">
 <div><label for="worker">작업자</label><select id="worker" class="select"></select></div>
