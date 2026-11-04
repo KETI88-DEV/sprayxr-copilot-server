@@ -130,6 +130,13 @@
       for(const item of data.meta){const cell=el('div');cell.append(el('dt','',item.label),el('dd','',item.value??'미기록'));meta.append(cell);}
       content.append(meta);
     }
+    if(data.heatmaps_url){
+      const heatmap=el('section');content.append(heatmap);
+      try{
+        if(!window.CopilotSequenceHeatmap)throw new Error('heatmap viewer unavailable');
+        window.CopilotSequenceHeatmap.render(heatmap,data.heatmaps_url,{signal:controller?.signal});
+      }catch{heatmap.replaceChildren(el('p','detail-notice','히트맵 화면을 불러오지 못했습니다. 원본 파라미터는 아래에서 확인할 수 있습니다.'));}
+    }
     for (const section of data.sections||[]) {
       const box=el('details','detail-section');box.open=true;box.append(el('summary','',section.title||'파라미터'));
       const body=el('div','detail-parameters');body.append(tree('data',section.data));box.append(body);content.append(box);

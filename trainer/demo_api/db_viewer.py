@@ -23,6 +23,8 @@ from trainer.demo_api.db_origin import origin_control, preserve_origin_links, sc
 from trainer.demo_api.db_report_status import report_progress
 from trainer.demo_api.training_data_catalog import TrainingDataCatalog, create_training_data_router
 from trainer.demo_api.training_data_ui import TRAINING_DATA_CSS, render_training_data
+from trainer.demo_api.db_sequence_heatmap import attach_heatmap_link, create_sequence_heatmap_router
+from trainer.demo_api.db_sequence_heatmap_ui import SEQUENCE_HEATMAP_CSS
 
 _CSS = """
 :root{color-scheme:light;--bg:#f4f7fb;--panel:#fff;--ink:#152033;--muted:#68758a;--line:#dde4ee;
@@ -68,7 +70,7 @@ def _page(content: str, sidebar: str = "", origin: str = "all") -> HTMLResponse:
     document = (
         "<!doctype html><html lang='ko'><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-        f"<title>Co-Pilot DB Viewer</title><style>{_CSS}{DASHBOARD_CSS}{SESSION_CSS}{DETAIL_CSS}{TRAINING_DATA_CSS}</style></head>"
+        f"<title>Co-Pilot DB Viewer</title><style>{_CSS}{DASHBOARD_CSS}{SESSION_CSS}{DETAIL_CSS}{TRAINING_DATA_CSS}{SEQUENCE_HEATMAP_CSS}</style></head>"
         f'<body><div class="app-shell"><aside class="sidebar">{sidebar}</aside>'
         f'<main class="main">{content}</main></div>{DETAIL_HTML}</body></html>'
     )
@@ -137,6 +139,11 @@ def create_db_viewer_router() -> APIRouter:
     from trainer.demo_api.db_admin_router import create_db_admin_router
     router.include_router(create_db_admin_router())
     router.include_router(create_training_data_router(TrainingDataCatalog()))
+    router.include_router(create_sequence_heatmap_router(_read_database))
+
+    @router.get('/admin/assets/db_sequence_heatmap.js', include_in_schema=False)
+    def sequence_heatmap_script():
+        return FileResponse(Path(__file__).parent / 'static' / 'db_sequence_heatmap.js', media_type='text/javascript', headers={'Cache-Control': 'no-cache'})
 
     @router.get('/admin/training-data', include_in_schema=False, response_class=HTMLResponse)
     def training_data_page():
@@ -155,6 +162,8 @@ def create_db_viewer_router() -> APIRouter:
     def raw_record(table: str = Query(max_length=200), rowid: int = Query(ge=-(2**63), le=2**63-1)):
         with _read_database() as conn:
             data = record_detail(conn, table, rowid) if conn is not None else None
+            if data is not None:
+                attach_heatmap_link(conn, data, table=table, rowid=rowid)
         if data is None:
             raise HTTPException(404, "record not found")
         return data
@@ -178,6 +187,8 @@ def create_db_viewer_router() -> APIRouter:
     def event_view(session_id: str = Query(min_length=1,max_length=256), event_key: str = Query(min_length=1,max_length=400)):
         with _read_database() as conn:
             result = session_event_detail(conn, session_id, event_key) if conn is not None else None
+            if result is not None:
+                attach_heatmap_link(conn, result, session_id=session_id, event_key=event_key)
         if result is None:
             raise HTTPException(404, "event not found")
         return json_safe(result)

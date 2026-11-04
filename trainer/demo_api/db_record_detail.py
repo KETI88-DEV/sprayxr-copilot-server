@@ -24,7 +24,7 @@ DETAIL_CSS = """
 
 DETAIL_HTML = """<dialog id="db-detail-modal" class="detail-modal" aria-labelledby="db-detail-title">
 <div class="detail-header"><div><h2 id="db-detail-title">상세 파라미터</h2><p>읽기 전용 · Esc 키로 닫기</p></div><div><button type="button" class="detail-copy" id="db-detail-copy">JSON 복사</button><button type="button" class="detail-close" aria-label="상세 창 닫기">×</button></div></div>
-<div class="detail-body" id="db-detail-content"></div></dialog><script defer src="/admin/assets/db_viewer.js"></script>"""
+<div class="detail-body" id="db-detail-content"></div></dialog><script defer src="/admin/assets/db_sequence_heatmap.js"></script><script defer src="/admin/assets/db_viewer.js"></script>"""
 
 
 def json_safe(value: Any) -> Any:
