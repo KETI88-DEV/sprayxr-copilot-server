@@ -1,5 +1,6 @@
 import csv
 import json
+import pytest
 from pathlib import Path
 from typing import Any
 
@@ -343,6 +344,31 @@ def test_catalog_lists_modes_and_individual_expert_sessions(tmp_path: Path) -> N
         "representative_session_id": "4_1001_1",
         "sessions": ["4_1001_1", "4_1002_1"],
     }
+
+
+@pytest.mark.parametrize("legacy_worker", [False, True])
+def test_worker_mode_two_keeps_source_zones_while_reference_expert_is_remapped(tmp_path: Path, legacy_worker: bool) -> None:
+    expert_root = tmp_path / "raw/spray/learning/mode_02"
+    worker_root = tmp_path / "workers/kim_kyungho"
+    _write_csv(expert_root / "2_1001_1.csv", offset=0.0, zone_ids=["3", "3", "2", "1", "1"])
+    _write_csv(expert_root / "2_1002_1.csv", offset=0.0, zone_ids=["3", "3", "2", "1", "1"])
+    worker_zone_ids = ["3", "3", "2", "1", "1"] if legacy_worker else ["1", "1", "2", "3", "3"]
+    _write_csv(worker_root / "raw/spray/learning/mode_02/2_2001_1.csv", offset=0.0, zone_ids=worker_zone_ids)
+    (worker_root / "worker.json").write_text(json.dumps({"display_name": "김경호", "role": "worker"}), encoding="utf-8")
+    build_profiles(tmp_path, process="spray")
+    build_profiles(worker_root, process="spray", legacy_expert_zone_ids=legacy_worker)
+    app = FastAPI()
+    app.include_router(create_motion_viewer_router(tmp_path, frame_count=5))
+    response = TestClient(app).get("/motion-viewer/api/motion", params={
+        "worker_id": "kim_kyungho", "process": "spray", "mode_id": 2, "session_id": "2_2001_1",
+    })
+    assert response.status_code == 200
+    data = response.json()
+    assert [frame["zone_id"] for frame in data["frames"]] == ["1", "1", "2", "3", "3"]
+    assert [item["zone_id"] for item in data["paint_trace"]] == ["1", "1", "2", "3", "3"]
+    assert {item["zone_id"] for item in data["zone_surfaces"]} == {"1", "2", "3"}
+    assert data["pose_evaluation"]["reference_session_count"] == 2
+    assert data["reference_order_evaluation"]["reference_session_count"] == 2
 
 
 def test_catalog_discovers_future_worker_directory_without_code_change(tmp_path: Path) -> None:

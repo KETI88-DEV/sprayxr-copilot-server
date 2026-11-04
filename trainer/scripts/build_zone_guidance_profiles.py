@@ -227,6 +227,7 @@ def _load_session(
     mode_id: int,
     coating_grid_size: int,
     zone_catalog: ZoneReferenceCatalog | None,
+    legacy_expert_zone_ids: bool = True,
 ) -> dict[str, Any] | None:
     with csv_path.open(encoding="utf-8-sig", newline="") as stream:
         reader = csv.DictReader(stream)
@@ -262,7 +263,7 @@ def _load_session(
                 finish_stroke()
                 continue
             zone_id = canonical_expert_zone_id(
-                process, "learning", mode_id, row.get(zone_col, "")
+                process, "learning" if legacy_expert_zone_ids else "source", mode_id, row.get(zone_col, "")
             )
             if not zone_id or zone_id in {"-1", "0", "none", "nan"}:
                 continue
@@ -536,6 +537,7 @@ def build_profiles(
     coating_grid_size: int = 64,
     zone_reference_root: Path | None = None,
     expert_orders_path: Path | None = None,
+    legacy_expert_zone_ids: bool = True,
 ) -> list[Path]:
     root = Path(reference_root)
     raw = root / "raw" / process / "learning"
@@ -570,6 +572,7 @@ def build_profiles(
                     mode_id=mode_id,
                     coating_grid_size=coating_grid_size,
                     zone_catalog=zone_catalog,
+                    legacy_expert_zone_ids=legacy_expert_zone_ids,
                 )
             )
         ]
@@ -577,9 +580,11 @@ def build_profiles(
             continue
         target = output_root / f"mode_{mode_id:02d}.json"
         temporary = target.with_suffix(f".json.tmp-{os.getpid()}")
+        profile = _profile(process, mode_id, mode_root, sessions, expert_orders)
+        profile["identity"]["zone_id_policy"] = "legacy_expert" if legacy_expert_zone_ids else "source"
         temporary.write_text(
             json.dumps(
-                _profile(process, mode_id, mode_root, sessions, expert_orders),
+                profile,
                 ensure_ascii=False,
                 indent=2,
                 sort_keys=True,
@@ -613,6 +618,10 @@ def main() -> int:
     parser.add_argument("--coating-grid-size", type=int, default=64)
     parser.add_argument("--zone-reference-root", type=Path)
     parser.add_argument(
+        "--source-zone-ids", action="store_true",
+        help="공식 라벨맵과 일치하는 신규 작업자 Zone ID를 원본 그대로 유지합니다.",
+    )
+    parser.add_argument(
         "--expert-orders", default=str(EXPERT_ZONE_ORDERS),
         help="레벨별 권장 순서·전이 JSON. 빈 문자열이면 raw 세션에서만 낸다.",
     )
@@ -623,6 +632,7 @@ def main() -> int:
         coating_grid_size=args.coating_grid_size,
         zone_reference_root=args.zone_reference_root,
         expert_orders_path=Path(args.expert_orders) if args.expert_orders else None,
+        legacy_expert_zone_ids=not args.source_zone_ids,
     )
     print(json.dumps({"process": args.process, "profiles": len(outputs)}, ensure_ascii=False))
     return 0 if outputs else 1

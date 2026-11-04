@@ -464,12 +464,13 @@ def _frames(path: Path, frame_count: int) -> list[dict[str, Any]]:
 
 
 def _canonicalize_zone_items(
-    items: list[dict[str, Any]], *, process: str, mode_id: int
+    items: list[dict[str, Any]], *, process: str, mode_id: int,
+    legacy_expert_zone_ids: bool = True,
 ) -> list[dict[str, Any]]:
     for item in items:
         if "zone_id" in item:
             item["zone_id"] = canonical_expert_zone_id(
-                process, "learning", mode_id, item.get("zone_id")
+                process, "learning" if legacy_expert_zone_ids else "source", mode_id, item.get("zone_id")
             )
     return items
 
@@ -1988,11 +1989,18 @@ def create_motion_viewer_router(
         worker = _worker_source(root, worker_id)
         worker_root = Path(worker["root"])
         profile = _read_profile(worker_root, process, mode_id)
+        zone_id_policy = profile.get("identity", {}).get("zone_id_policy")
+        legacy_zone_ids = (
+            zone_id_policy == "legacy_expert"
+            if zone_id_policy in {"source", "legacy_expert"}
+            else worker_root == root
+        )
         representative = _representative_session(profile)
         selected = representative if session_id == "representative" else session_id
         selected_path = _session_path(worker_root, process, mode_id, profile, selected)
         selected_frames = _canonicalize_zone_items(
-            _frames(selected_path, frame_count), process=process, mode_id=mode_id
+            _frames(selected_path, frame_count), process=process, mode_id=mode_id,
+            legacy_expert_zone_ids=legacy_zone_ids,
         )
         if not selected_frames:
             raise HTTPException(status_code=422, detail="expert session has no usable skeleton frames")
@@ -2000,6 +2008,7 @@ def create_motion_viewer_router(
         sampled_session_records: list[dict[str, Any]] = []
         session_paths: list[Path] = []
         representative_frames: list[dict[str, Any]] = []
+        reference_profile = profile
         for session in profile["sessions"]:
             current_id = str(session.get("session_id", ""))
             if not current_id:
@@ -2007,7 +2016,8 @@ def create_motion_viewer_router(
             try:
                 current_path = _session_path(worker_root, process, mode_id, profile, current_id)
                 sampled = _canonicalize_zone_items(
-                    _frames(current_path, frame_count), process=process, mode_id=mode_id
+                    _frames(current_path, frame_count), process=process, mode_id=mode_id,
+                    legacy_expert_zone_ids=legacy_zone_ids,
                 )
             except HTTPException:
                 continue
@@ -2028,6 +2038,7 @@ def create_motion_viewer_router(
             ]
         else:
             expert_profile = _read_profile(root, process, mode_id)
+            reference_profile = expert_profile
             evaluation_references = []
             for expert_session in expert_profile["sessions"]:
                 expert_id = str(expert_session.get("session_id", ""))
@@ -2036,7 +2047,8 @@ def create_motion_viewer_router(
                 try:
                     expert_path = _session_path(root, process, mode_id, expert_profile, expert_id)
                     expert_frames = _canonicalize_zone_items(
-                        _frames(expert_path, frame_count), process=process, mode_id=mode_id
+                        _frames(expert_path, frame_count), process=process, mode_id=mode_id,
+                        legacy_expert_zone_ids=expert_profile.get("identity", {}).get("zone_id_policy") != "source",
                     )
                 except HTTPException:
                     continue
@@ -2048,14 +2060,17 @@ def create_motion_viewer_router(
                     })
         duration = float(selected_frames[-1]["t"]) if selected_frames else 0.0
         paint_trace = _canonicalize_zone_items(
-            _dense_paint_trace(selected_path), process=process, mode_id=mode_id
+            _dense_paint_trace(selected_path), process=process, mode_id=mode_id,
+            legacy_expert_zone_ids=legacy_zone_ids,
         )
         paint_statistics = _reference_paint_statistics(session_paths)
         zone_flow_guides = _canonicalize_zone_items(
-            _zone_flow_guides(session_paths), process=process, mode_id=mode_id
+            _zone_flow_guides(session_paths), process=process, mode_id=mode_id,
+            legacy_expert_zone_ids=legacy_zone_ids,
         )
         zone_surfaces = _canonicalize_zone_items(
-            _zone_surface_statistics(session_paths), process=process, mode_id=mode_id
+            _zone_surface_statistics(session_paths), process=process, mode_id=mode_id,
+            legacy_expert_zone_ids=legacy_zone_ids,
         )
         direction_summary = _direction_summary(paint_trace)
         zone_order, zone_statistics = _zone_playback_statistics(
@@ -2087,11 +2102,11 @@ def create_motion_viewer_router(
                 statistics_item["selected_distance_mm"] = round(
                     selected_input_distance, 3
                 )
-        reference_flows = expert_reference_flows(profile)
+        reference_flows = expert_reference_flows(reference_profile)
         selected_flow = [str(item["zone_id"]) for item in zone_order]
         order_score = score_visit_flow(selected_flow, reference_flows)
         reference_order_evaluation = {
-            "recommended_flow": SequenceAnalysisEngine._flow(profile),
+            "recommended_flow": SequenceAnalysisEngine._flow(reference_profile),
             "selected_flow": selected_flow,
             "reference_session_count": len(reference_flows),
             **order_score,
@@ -2142,7 +2157,7 @@ def create_motion_viewer_router(
             "zone_order": zone_order,
             "reference_order_evaluation": reference_order_evaluation,
             "zone_statistics": zone_statistics,
-            "coating_reference": _coating_reference(profile),
+            "coating_reference": _coating_reference(reference_profile),
             "object_mesh": object_mesh,
             "object_mesh_status": "verified" if mesh_available else "ray_point_fallback",
             **paint_statistics,

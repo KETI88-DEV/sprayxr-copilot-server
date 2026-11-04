@@ -247,7 +247,7 @@
     const source = data.provenance?.source_csv || {};
     const details = el('details', 'td-source'); details.append(el('summary', '', '원본 출처와 추적 정보'));
     const sourceGrid = el('dl');
-    [['취득일 근거', data.provenance?.acquisition_date_source?.folder], ['원본 CSV', source.filename], ['상대 경로', source.relative_path], ['SHA-256', source.sha256], ['원본 크기', bytesText(source.bytes)], ['연결 맵', `${count(data.provenance?.heightmaps?.length ?? meta.heightmap_count)}개`], ['데이터 ID', data.dataset_id || meta.dataset_id], ['JSON 스키마', data.schema_version]].forEach(([label, value]) => sourceGrid.append(el('dt', '', label), el('dd', '', value || '미기록')));
+    [['취득일 근거', data.provenance?.acquisition_date_source?.folder || data.provenance?.acquisition_date_source?.label], ['원본 CSV', source.filename], ['상대 경로', source.relative_path], ['SHA-256', source.sha256], ['원본 크기', bytesText(source.bytes)], ['연결 맵', `${count(data.provenance?.heightmaps?.length ?? meta.heightmap_count)}개`], ['데이터 ID', data.dataset_id || meta.dataset_id], ['JSON 스키마', data.schema_version]].forEach(([label, value]) => sourceGrid.append(el('dt', '', label), el('dd', '', value || '미기록')));
     details.append(sourceGrid); section.append(details);
     return section;
   }

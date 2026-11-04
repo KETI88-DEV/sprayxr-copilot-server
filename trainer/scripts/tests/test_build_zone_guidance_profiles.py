@@ -56,6 +56,7 @@ def test_builds_blasting_zone_profiles_from_nested_expert_csvs(tmp_path: Path) -
         "content_type": "learning",
         "mode_id": 3,
         "process": "blasting",
+        "zone_id_policy": "legacy_expert",
     }
     assert profile["quality"]["session_count"] == 2
     assert profile["aggregate"]["zones"]["1:1"]["speed_mms"]["median"] == 125.0
@@ -98,6 +99,20 @@ def test_spray_mode_two_canonicalizes_reversed_expert_zone_ids(tmp_path: Path) -
         {"map_num": 1, "zone_id": "3"},
         {"map_num": 1, "zone_id": "1"},
     ]
+
+
+def test_new_worker_preserves_official_source_zone_ids(tmp_path: Path) -> None:
+    target = tmp_path / "raw/spray/learning/mode_02/2_2001_1"
+    target.mkdir(parents=True)
+    with (target / "2_2001_1.csv").open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.writer(stream)
+        writer.writerow(["시간(초)", "분사", "Speed (Real)", "Distance (Real)", "Ray Texture Map Number", "Zone ID"])
+        writer.writerows([[0.1, "On", 100, 300, 1, "1"], [0.2, "On", 200, 400, 1, "3"]])
+    [output] = build_profiles(tmp_path, process="spray", legacy_expert_zone_ids=False)
+    profile = json.loads(output.read_text(encoding="utf-8"))
+    assert profile["identity"]["zone_id_policy"] == "source"
+    assert profile["aggregate"]["zones"]["1:1"]["speed_mms"]["median"] == 100
+    assert profile["aggregate"]["zones"]["1:3"]["speed_mms"]["median"] == 200
 
 def test_spray_profile_learns_zone_coating_targets_from_csv_uv_and_final_heightmap(
     tmp_path: Path,
