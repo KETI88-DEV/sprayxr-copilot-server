@@ -67,7 +67,8 @@ class TrainingDataCatalog:
         def grouped(field, label_field=None, labels=None):
             counts = Counter(r[field] for r in selected)
             names = {r[field]: r.get(label_field, r[field]) for r in selected}
-            return [{'id': k, 'label': (labels or {}).get(k, names[k]), 'count': v} for k, v in sorted(counts.items())]
+            ordered = sorted(counts.items(), key=lambda item: (not item[0].isdigit(), int(item[0]) if item[0].isdigit() else 0, item[0]))
+            return [{'id': k, 'label': (labels or {}).get(k, names[k]), 'count': v} for k, v in ordered]
         def options(field, label_field=None, labels=None):
             values = {r[field]: (labels or {}).get(r[field], r.get(label_field, r[field])) for r in rows}
             return [{'id': k, 'label': v} for k, v in sorted(values.items(), key=lambda x: x[0].zfill(8))]
