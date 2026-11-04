@@ -49,7 +49,7 @@ def _query(client: TestClient, context: dict, *, prompt: str = "지금 자세는
             "playhead_seconds": 5.25, "source_index": 42, "map_num": "1", "zone_id": "2"}
     return client.post("/api/v1/copilot/query", json={"user_id": "U", "session_id": "CSV-ONLY",
         "task_type": "pose_recomm", "prompt": prompt, "response_mode": mode,
-        "use_rag": "auto", "context": "motion_viewer_analysis:" + json.dumps(payload)})
+        "use_rag": "Y", "context": "motion_viewer_analysis:" + json.dumps(payload)})
 
 
 @pytest.mark.parametrize("mode", ["quick", "detailed"])

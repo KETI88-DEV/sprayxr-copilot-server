@@ -114,6 +114,38 @@ def test_blank_transcript_is_rejected_without_calling_the_model() -> None:
     assert pipeline.calls == []
 
 
+@pytest.mark.parametrize("value,enabled", [(None, True), ("Y", True), ("N", False), ("y", True), ("n", False)])
+def test_rag_switch_applies_to_voice_and_text_test(value: str | None, enabled: bool) -> None:
+    """Both transports normalize Y/N and enable retrieval when omitted."""
+    pipeline = _Pipeline()
+    client = _client(_Stt(), pipeline)
+    fields = {} if value is None else {"use_rag": value}
+    response = client.post(VOICE_QUERY_PATH, data={"user_id": "W-017", "language": "ko", **fields},
+                           files={"audio": ("question.wav", _wav(), "audio/wav")})
+    assert response.status_code == 200
+    assert response.json()["data"]["retrieval_used"] is enabled
+    assert pipeline.calls[-1]["use_rag"] is enabled
+    response = client.post(TEST_TEXT_QUERY_PATH, params=fields)
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["retrieval_used"] is enabled
+    assert data["test_context"]["input_used"]["query_parameters"]["use_rag"] == ("Y" if enabled else "N")
+
+
+@pytest.mark.parametrize("value", ["auto", "Auto", "true", "yes"])
+def test_invalid_rag_switch_does_not_reach_stt_or_pipeline(value: str) -> None:
+    stt, pipeline = _Stt(), _Pipeline()
+    client = _client(stt, pipeline)
+    response = _post(client, use_rag=value)
+    assert response.status_code == 422
+    assert response.json()["status"] == "ERROR"
+    response = client.post(TEST_TEXT_QUERY_PATH, params={"use_rag": value})
+    assert response.status_code == 422
+    assert response.json()["status"] == "ERROR"
+    assert stt.calls == []
+    assert pipeline.calls == []
+
+
 def test_voice_detailed_mode_matches_text_and_invalid_mode_is_rejected() -> None:
     pipeline = _Pipeline()
     client = _client(_Stt(), pipeline)
@@ -207,7 +239,7 @@ def test_text_query_demo_uses_editable_defaults_and_the_real_query_path() -> Non
     context = data["test_context"]
     assert context["input_used"]["equivalent_real_api"] == "/api/v1/copilot/query"
     assert context["input_used"]["query_parameters"]["response_mode"] == "quick"
-    assert context["input_used"]["query_parameters"]["use_rag"] == "auto"
+    assert context["input_used"]["query_parameters"]["use_rag"] == "Y"
     assert context["input_summary"]
     assert context["evaluation_focus"]
 

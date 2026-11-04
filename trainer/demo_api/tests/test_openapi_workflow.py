@@ -197,7 +197,7 @@ def test_voice_demo_is_input_free_and_links_the_downloadable_sample() -> None:
     text_parameters = {item["name"]: item for item in text_operation["parameters"]}
     assert text_parameters["prompt"]["schema"]["default"]
     assert text_parameters["response_mode"]["schema"]["default"] == "quick"
-    assert text_parameters["use_rag"]["schema"]["default"] == "auto"
+    assert text_parameters["use_rag"]["schema"]["default"] == "Y"
     text_example = text_operation["responses"]["200"]["content"]["application/json"]["example"]
     assert text_example["data"]["test_context"]["input_used"]["query_parameters"]["prompt"]
     assert text_example["data"]["answer"]
@@ -334,11 +334,11 @@ def test_every_public_operation_shows_a_bulleted_input_parameter_overview() -> N
     assert "    - `quick`: 훈련 중 바로 확인할 핵심 판단과 권장 조치를 짧게 반환합니다." in query
     assert "    - `detailed`: 현재 상황, 판단 근거, 원인과 권장 조치를 구조화해 자세히 반환합니다." in query
     assert "    - `trajectory_recomm`: Zone 순서와 도장 경로를 안내합니다." in query
-    assert "    - 생략 시: 서버가 질문 유형과 처리 경로에 따라 RAG 사용 여부를 자동 결정합니다." in query
+    assert "    - 생략 시: Y로 처리하여 관련 지식 검색(RAG)을 사용합니다." in query
     assert "    - `Y`: 관련 지식과 현재 세션 문맥을 검색해 답변에 활용합니다." in query
 
     use_rag_schema = schema["components"]["schemas"]["CopilotQueryRequest"]["properties"]["use_rag"]
-    assert use_rag_schema["default"] == "auto"
+    assert use_rag_schema["default"] == "Y"
 
     assert "    - `worker.skill_level(string)` :" in start
     assert "    - `worker.handedness(string)` :" in start

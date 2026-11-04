@@ -441,6 +441,8 @@ def test_answer_gets_the_fast_knowledge_normalization(monkeypatch: pytest.Monkey
         # one, not the retrieval set.
         ("Y", True, True, ["DOC-doc_0001-C0001"]),
         ("N", False, False, []),
+        ("y", True, True, ["DOC-doc_0001-C0001"]),
+        ("n", False, False, []),
     ],
 )
 def test_use_rag_controls_retrieval_and_citations(
@@ -487,10 +489,10 @@ def test_request_id_is_optional_per_the_spec(monkeypatch: pytest.MonkeyPatch) ->
     assert data["request_id"] is None
 
 
-def test_omitted_use_rag_is_automatic_and_knowledge_search_uses_retrieval(
+def test_omitted_use_rag_defaults_to_y_and_uses_retrieval(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Clients may omit use_rag; the server chooses retrieval from the resolved route."""
+    """Omission enables RAG, matching an explicit Y request."""
     from trainer.demo_api.copilot_contracts import CopilotQueryRequest
 
     pipeline = _FakePipeline()
@@ -498,7 +500,7 @@ def test_omitted_use_rag_is_automatic_and_knowledge_search_uses_retrieval(
     del body["use_rag"]
 
     parsed = CopilotQueryRequest(**body)
-    assert parsed.use_rag == "auto"
+    assert parsed.use_rag == "Y"
 
     data = _client(monkeypatch, pipeline).post(URL, json=body).json()["data"]
 
@@ -508,8 +510,9 @@ def test_omitted_use_rag_is_automatic_and_knowledge_search_uses_retrieval(
     automatic = _client(monkeypatch, pipeline).post(
         URL, json=_body(use_rag="auto")
     )
-    assert automatic.status_code == 200
-    assert pipeline.calls[1]["use_rag"] is True
+    assert automatic.status_code == 422
+    assert automatic.json()["status"] == "ERROR"
+    assert len(pipeline.calls) == 1
 
 
 def test_degraded_is_true_when_no_answer_could_be_produced(monkeypatch: pytest.MonkeyPatch) -> None:

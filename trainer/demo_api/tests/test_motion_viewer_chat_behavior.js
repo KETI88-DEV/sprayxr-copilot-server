@@ -58,7 +58,7 @@ async function submit(app, question = '지금 자세는 어때?') {
     frame(app, data.frames[1], 1, 1.25);
     frame(app, data.frames[2], 2, 2.5);
     const { request, completion } = await submit(app);
-    assert.equal(request.body.use_rag, 'auto');
+    assert.equal(request.body.use_rag, 'Y');
     assert.equal(request.body.response_mode, 'detailed');
     assert.deepEqual(decode(request).playback_context, { map_num: '1', zone_id: '2', source_index: 2, playhead_seconds: 2.5 });
     assert.match(app.find('mvc-context').textContent, /Map 1.*Zone 2.*2\.50/);
@@ -72,7 +72,7 @@ async function submit(app, question = '지금 자세는 어때?') {
     assert.match(answer, /자세.*상세 분석.*RECORD-A.*Map 1.*Zone 2.*2\.50/);
     assert.doesNotMatch(answer, /RECORD-B|빠른 안내|순서/);
     const next = await submit(app, '권장 Zone 순서는?');
-    assert.equal(next.request.body.use_rag, 'auto');
+    assert.equal(next.request.body.use_rag, 'Y');
     assert.equal(next.request.body.response_mode, 'quick');
     assert.deepEqual(decode(next.request).analysis_context.zone_keys, ['1:2', '1:3']);
     next.request.finish(); await next.completion;

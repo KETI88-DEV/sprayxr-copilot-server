@@ -434,7 +434,7 @@ def test_chat_offers_response_depth_and_sends_it_to_the_query_api(tmp_path: Path
     assert "빠른 안내" in script.text
     assert "상세 분석" in script.text
     assert "response_mode: sentMode" in script.text
-    assert "use_rag: 'auto'" in script.text
+    assert "use_rag: 'Y'" in script.text
     assert "width:min(480px" in script.text
     assert "height:min(640px" in script.text
 

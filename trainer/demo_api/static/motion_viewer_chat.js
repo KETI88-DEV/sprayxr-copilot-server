@@ -321,7 +321,7 @@
           task_type: sentTask.id,
           prompt,
           response_mode: sentMode,
-          use_rag: 'auto',
+          use_rag: 'Y',
           context: sentContext,
         }),
       });
