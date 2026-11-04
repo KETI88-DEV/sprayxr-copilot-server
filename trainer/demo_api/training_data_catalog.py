@@ -13,6 +13,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse, Response
+from trainer.demo_api.training_data_dates import acquisition_date
 
 
 class TrainingDataCatalog:
@@ -75,6 +76,7 @@ class TrainingDataCatalog:
         labels = {'spray': '스프레이', 'blasting': '블라스팅'}
         pages = max(1, math.ceil(len(selected) / limit))
         page = min(max(1, page), pages)
+        dates = [day for row in selected if (day := acquisition_date(row.get('acquired_at'))) is not None]
         return {'available': bool(index), 'total': len(rows), 'filtered_count': len(selected), 'page': page, 'limit': limit, 'pages': pages,
                 'build': {k: v for k, v in index.items() if k != 'records'},
                 'summary': {'total': len(selected), 'worker_count': len({r['worker_id'] for r in selected}),
@@ -82,6 +84,8 @@ class TrainingDataCatalog:
                             'needs_review': sum(r['quality_status'] == 'needs_review' for r in selected),
                             'failed': index.get('failed_count', 0) if len(selected) == len(rows) else 0,
                             'heightmap_count': sum(r['heightmap_count'] for r in selected),
+                            'dated_count': len(dates), 'acquisition_date_min': min(dates) if dates else None,
+                            'acquisition_date_max': max(dates) if dates else None,
                             'by_worker': grouped('worker_id', 'worker_name'), 'by_mode': grouped('scenario_id', 'mode_label'),
                             'by_process': grouped('process', labels=labels)},
                 'options': {'workers': options('worker_id', 'worker_name'), 'processes': options('process', labels=labels),
@@ -119,10 +123,10 @@ class TrainingDataCatalog:
         out = io.StringIO(newline='')
         writer = csv.writer(out)
         fields = ['dataset_id', 'dataset_name', 'worker_name', 'role', 'process', 'scenario_id', 'mode_label',
-                  'acquired_at', 'converted_at', 'quality_status', 'frame_count', 'zone_count', 'heightmap_count', 'json_bytes']
+                  'acquired_at', 'quality_status', 'frame_count', 'zone_count', 'heightmap_count', 'json_bytes']
         writer.writerow(fields)
         for row in rows:
-            values = ['' if row.get(k) is None else str(row[k]) for k in fields]
+            values = [(acquisition_date(row.get(k)) or '') if k == 'acquired_at' else '' if row.get(k) is None else str(row[k]) for k in fields]
             writer.writerow(["'" + v if v.startswith(('=', '+', '-', '@')) else v for v in values])
         return ('\ufeff' + out.getvalue()).encode('utf-8')
 

@@ -158,3 +158,61 @@ def test_training_data_overview_is_public_without_operational_database(tmp_path,
         assert '학습 데이터' in response.text and '/admin/assets/training_data.js' in response.text
         assert client.get('/admin/assets/training_data.js').status_code == 200
         assert client.get('/admin/api/training-data').json()['available'] is False
+
+
+def test_acquisition_dates_survive_rebuild_and_exports_without_clock_time(tmp_path):
+    from trainer.demo_api.training_data_dates import apply_acquisition_dates
+    root, output = tmp_path / 'source', tmp_path / 'built'
+    folder = record(root)
+    (folder / 'metadata.json').write_text(json.dumps({'target_thickness_um': 150}), encoding='utf-8')
+    build_training_datasets(root, output)
+    original = TrainingDataCatalog(output, root).list()['items'][0]
+    index = json.loads((output / 'catalog.json').read_text(encoding='utf-8'))
+    artifact = TrainingDataCatalog(output, root).detail(original['dataset_id'])
+    manifest = {'records': [{**{k: original[k] for k in ('dataset_id', 'dataset_name', 'process', 'worker_id')},
+                            'expected_artifact_sha256': index['records'][0]['artifact_sha256'], 'acquired_at': '2025-09-01',
+                            'date_source': {'kind': 'original_date_folder', 'precision': 'day', 'folder': '전형기_20250901', 'source_csv': '3_1234_1.csv'}}]}
+    report = apply_acquisition_dates(root, output, manifest)
+    assert report['updated_count'] == 1 and Path(report['backup_path']).is_dir()
+    catalog = TrainingDataCatalog(output, root)
+    updated = catalog.detail(original['dataset_id'])
+    assert updated['metadata']['acquired_at'] == '2025-09-01'
+    assert 'converted_at' not in updated['metadata']
+    assert updated['features'] == artifact['features'] and updated['coating'] == artifact['coating']
+    metadata = json.loads((folder / 'metadata.json').read_text(encoding='utf-8'))
+    assert metadata['target_thickness_um'] == 150 and metadata['acquired_at'] == '2025-09-01'
+    assert catalog.list()['summary']['acquisition_date_min'] == '2025-09-01'
+    assert catalog.list()['summary']['dated_count'] == 1
+    import io
+    csv_rows = list(csv.DictReader(io.StringIO(catalog.csv_export().decode('utf-8-sig'))))
+    assert csv_rows[0]['acquired_at'] == '2025-09-01' and 'converted_at' not in csv_rows[0]
+    assert apply_acquisition_dates(root, output, manifest)['updated_count'] == 0
+    build_training_datasets(root, output)
+    rebuilt = TrainingDataCatalog(output, root).detail(original['dataset_id'])
+    assert rebuilt['metadata']['acquired_at'] == '2025-09-01'
+    assert 'converted_at' not in rebuilt['metadata']
+    assert rebuilt['provenance']['acquisition_date_source']['precision'] == 'day'
+
+
+def test_bad_date_mapping_leaves_existing_files_unchanged(tmp_path):
+    from trainer.demo_api.training_data_dates import apply_acquisition_dates
+    root, output = tmp_path / 'source', tmp_path / 'built'
+    folder = record(root)
+    build_training_datasets(root, output)
+    before = (output / 'catalog.json').read_bytes()
+    row = TrainingDataCatalog(output, root).list()['items'][0]
+    for date_value, name in [('2025-02-30', row['dataset_name']), ('2025-09-01', 'wrong-record')]:
+        manifest = {'records': [{**row, 'dataset_name': name, 'acquired_at': date_value,
+                                'date_source': {'kind': 'original_date_folder', 'precision': 'day', 'folder': 'original', 'source_csv': 'record.csv'}}]}
+        with pytest.raises(ValueError):
+            apply_acquisition_dates(root, output, manifest)
+        assert (output / 'catalog.json').read_bytes() == before
+        assert not (folder / 'metadata.json').exists()
+
+
+def test_date_normalization_keeps_calendar_date_without_guessing_missing_values():
+    from trainer.demo_api.training_data_dates import acquisition_date
+    assert acquisition_date('2026-08-21') == '2026-08-21'
+    assert acquisition_date('2026-08-21T16:00:00Z') == '2026-08-22'
+    assert acquisition_date('2026-08-21T10:20:30') == '2026-08-21'
+    assert acquisition_date('2025-02-30') is None and acquisition_date(None) is None

@@ -165,7 +165,7 @@ def render_training_data() -> str:
     <div><div class="td-eyebrow">TRAINING DATASET</div><h1 id="td-page-title">학습 데이터</h1>
       <p class="td-description">훈련 기록 CSV와 연결된 높이맵 텍스처를 세션별 JSON으로 변환한 데이터입니다.<br>작업자와 학습모드별 구성을 살펴보고, 각 데이터의 맵 분석과 생성 JSON을 확인합니다.</p>
     </div>
-    <div class="td-header-meta">최근 변환<strong id="td-build-time">불러오는 중</strong><span id="td-build-note">생성된 데이터 기준</span></div>
+    <div class="td-header-meta">취득 기간<strong id="td-acquisition-range">불러오는 중</strong><span id="td-acquisition-note">현재 조회 데이터 기준</span></div>
   </header>
 
   <div class="td-kpis" aria-label="학습 데이터 현황">
@@ -199,10 +199,10 @@ def render_training_data() -> str:
       <div class="td-exports"><a id="td-export-csv" class="td-export" href="/admin/api/training-data/export.csv">목록 CSV ↓</a><a id="td-export-zip" class="td-export" href="/admin/api/training-data/export.zip">JSON 묶음 ZIP ↓</a></div>
     </div>
     <div id="td-list-panel" class="td-panel td-list-panel" aria-busy="true">
-      <div class="td-table-scroll"><table aria-label="생성된 학습 데이터 목록"><thead><tr><th scope="col">데이터명</th><th scope="col">작업자</th><th scope="col">공정</th><th scope="col">학습모드</th><th scope="col">취득 시각</th><th scope="col">변환 시각</th><th scope="col">품질</th></tr></thead><tbody id="td-items"><tr><td colspan="7" class="td-table-message">학습 데이터를 불러오는 중입니다.</td></tr></tbody></table></div>
+      <div class="td-table-scroll"><table aria-label="생성된 학습 데이터 목록"><thead><tr><th scope="col">데이터명</th><th scope="col">작업자</th><th scope="col">공정</th><th scope="col">학습모드</th><th scope="col">취득일</th><th scope="col">품질</th></tr></thead><tbody id="td-items"><tr><td colspan="6" class="td-table-message">학습 데이터를 불러오는 중입니다.</td></tr></tbody></table></div>
       <div class="td-pagination"><span id="td-range">—</span><div class="td-page-controls"><button type="button" id="td-prev" disabled aria-label="이전 페이지">← 이전</button><span id="td-page">1 / 1</span><button type="button" id="td-next" disabled aria-label="다음 페이지">다음 →</button></div><label class="td-page-size" for="td-limit">표시<select id="td-limit"><option value="10">10건</option><option value="25" selected>25건</option><option value="50">50건</option><option value="100">100건</option></select></label></div>
     </div>
-    <p class="td-footer-note">취득 시각이 원본에 없으면 ‘미기록’으로 표시합니다. 변환 시각은 JSON을 생성한 시각입니다.<br>이 화면은 학습용 데이터의 생성·검증 결과이며, 모델 학습 완료 여부를 의미하지 않습니다.</p>
+    <p class="td-footer-note">취득일은 원본 자료의 날짜 근거를 기준으로 연월일만 표시합니다. 근거가 없는 기록은 ‘미기록’으로 표시합니다.<br>이 화면은 학습용 데이터의 생성·검증 결과이며, 모델 학습 완료 여부를 의미하지 않습니다.</p>
   </section>
 
   <dialog id="td-detail" class="td-modal" aria-labelledby="td-detail-title" aria-describedby="td-detail-description">

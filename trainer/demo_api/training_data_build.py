@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from trainer.demo_api.training_data_coating import analyze_heightmap, render_thickness_preview
+from trainer.demo_api.training_data_dates import acquisition_date
 from trainer.expert_zone_mapping import canonical_expert_zone_id
 from trainer.zone_reference import ZoneReferenceCatalog
 
@@ -251,7 +252,7 @@ def build_training_datasets(source_root: Path, output_root: Path, *, catalog=Non
                             'worker_name': worker['worker_name'], 'role': worker['role'], 'process': process,
                             'scenario_id': scenario, 'content_type': content_type,
                             'mode_label': f'학습모드 {scenario}' if content_type == 'learning' else f'실전 {scenario}',
-                            'acquired_at': meta.get('acquired_at') or None, 'converted_at': converted_at,
+                            'acquired_at': acquisition_date(meta.get('acquired_at')),
                             'quality_status': status, 'frame_count': features['frame_count'],
                             'zone_count': len(features['zones']), 'heightmap_count': len(maps)}
                 artifact = {'schema_version': VERSION, 'dataset_id': dataset_id,
@@ -259,7 +260,8 @@ def build_training_datasets(source_root: Path, output_root: Path, *, catalog=Non
                             'provenance': {'source_csv': {'filename': csv_path.name, 'relative_path': csv_path.relative_to(source_root).as_posix(),
                                                           'sha256': csv_hash, 'bytes': csv_path.stat().st_size},
                                            'heightmaps': image_sources, 'converter_version': VERSION,
-                                           'date_note': '취득일은 metadata.json에 명시된 값만 사용하며 파일 수정일로 추정하지 않습니다.'},
+                                           'acquisition_date_source': meta.get('acquisition_date_source'),
+                                           'date_note': '취득일은 원본 근거의 연월일만 기록하며 파일 수정일로 추정하지 않습니다.'},
                             'quality': {'status': status, 'issues': issues}, 'features': features,
                             'coating': {'status': 'available' if maps and process == 'spray' else 'not_applicable',
                                         'semantics': '기록의 최종 도막 상태. 시퀀스별 증분이나 해당 회차만의 기여량은 아닙니다.', 'maps': maps},

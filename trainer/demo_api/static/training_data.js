@@ -7,7 +7,6 @@
   const API = '/admin/api/training-data';
   const NS = 'http://www.w3.org/2000/svg';
   const numberFormat = new Intl.NumberFormat('ko-KR', {maximumFractionDigits: 1});
-  const dateFormat = new Intl.DateTimeFormat('ko-KR', {timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false});
   const query = new URLSearchParams(window.location.search);
   const state = {
     worker: query.get('worker_id') || 'all', process: query.get('process') || 'all', mode: query.get('scenario_id') || 'all',
@@ -40,11 +39,8 @@
   }
   function dateText(value) {
     if (!value) return '미기록';
-    const text = String(value);
-    // A timestamp without an offset cannot safely be converted to another timezone.
-    if (!/(Z|[+-]\d{2}:?\d{2})$/i.test(text)) return text.replace('T', ' ');
-    const date = new Date(text);
-    return Number.isNaN(date.getTime()) ? text : `${dateFormat.format(date)} KST`;
+    const text = String(value), match = text.match(/^(\d{4}-\d{2}-\d{2})(?:$|T|\s)/);
+    return match ? match[1] : '미기록';
   }
   function bytesText(value) {
     const n = finite(value);
@@ -100,7 +96,7 @@
   }
   function listMessage(title, note, retry = false) {
     const cell = el('td', 'td-table-message');
-    cell.colSpan = 7;
+    cell.colSpan = 6;
     cell.append(el('strong', '', title));
     if (note) cell.append(el('div', '', note));
     if (retry) {
@@ -141,7 +137,7 @@
       name.addEventListener('click', () => openDetail(item, name));
       nameCell.append(name, el('small', 'td-row-note', `${count(item.frame_count)} 프레임 · ${count(item.zone_count)} 구역 · 맵 ${count(item.heightmap_count)}개`));
       row.append(nameCell, el('td', '', item.worker_name || item.worker_id || '미지정'), el('td', 'td-muted', processLabel(item.process)), el('td', '', item.mode_label || item.scenario_id || '미지정'));
-      row.append(el('td', 'td-date', dateText(item.acquired_at)), el('td', 'td-date', dateText(item.converted_at)));
+      row.append(el('td', 'td-date', dateText(item.acquired_at)));
       const qualityCell = el('td'); qualityCell.append(badge(item.quality_status)); row.append(qualityCell);
       row.addEventListener('click', event => { if (!event.target.closest('button, a')) name.click(); });
       return row;
@@ -162,8 +158,9 @@
     $('td-kpi-review').textContent = count((finite(summary.needs_review) || 0) + (finite(summary.failed) || 0));
     $('td-kpi-review-note').textContent = summary.failed ? `품질 검토 · 변환 실패 ${count(summary.failed)}건 포함` : '품질 검토 대상';
     $('td-kpi-maps').textContent = count(summary.heightmap_count);
-    $('td-build-time').textContent = dateText(data.build?.converted_at);
-    $('td-build-note').textContent = data.build?.schema_version ? `JSON 스키마 ${data.build.schema_version}` : '생성된 데이터 기준';
+    const firstDate = dateText(summary.acquisition_date_min), lastDate = dateText(summary.acquisition_date_max);
+    $('td-acquisition-range').textContent = firstDate === lastDate ? firstDate : `${firstDate} ~ ${lastDate}`;
+    $('td-acquisition-note').textContent = `취득일 확인 ${count(summary.dated_count)} / ${count(filtered)}건 · 현재 조회 기준`;
     const options = data.options || {};
     setOptions('td-worker', options.workers, state.worker, '전체 작업자');
     setOptions('td-process', options.processes, state.process, '전체 공정');
@@ -235,8 +232,7 @@
     addMeta(grid, '공정', processLabel(meta.process));
     addMeta(grid, '시나리오 / 학습모드', meta.mode_label || meta.scenario_id || '미지정');
     addMeta(grid, '품질', badge(data.quality?.status || meta.quality_status));
-    addMeta(grid, '취득 시각', dateText(meta.acquired_at));
-    addMeta(grid, 'JSON 변환 시각', dateText(meta.converted_at));
+    addMeta(grid, '취득일', dateText(meta.acquired_at));
     addMeta(grid, '프레임 / 구역', `${count(data.features?.frame_count ?? meta.frame_count)} / ${count(meta.zone_count ?? data.features?.zones?.length)}`);
     addMeta(grid, '높이맵 / JSON 크기', `${count(meta.heightmap_count ?? data.coating?.maps?.length)}개 / ${bytesText(meta.json_bytes)}`);
     section.append(grid);
@@ -251,7 +247,7 @@
     const source = data.provenance?.source_csv || {};
     const details = el('details', 'td-source'); details.append(el('summary', '', '원본 출처와 추적 정보'));
     const sourceGrid = el('dl');
-    [['원본 CSV', source.filename], ['상대 경로', source.relative_path], ['SHA-256', source.sha256], ['원본 크기', bytesText(source.bytes)], ['연결 맵', `${count(data.provenance?.heightmaps?.length ?? meta.heightmap_count)}개`], ['데이터 ID', data.dataset_id || meta.dataset_id], ['JSON 스키마', data.schema_version]].forEach(([label, value]) => sourceGrid.append(el('dt', '', label), el('dd', '', value || '미기록')));
+    [['취득일 근거', data.provenance?.acquisition_date_source?.folder], ['원본 CSV', source.filename], ['상대 경로', source.relative_path], ['SHA-256', source.sha256], ['원본 크기', bytesText(source.bytes)], ['연결 맵', `${count(data.provenance?.heightmaps?.length ?? meta.heightmap_count)}개`], ['데이터 ID', data.dataset_id || meta.dataset_id], ['JSON 스키마', data.schema_version]].forEach(([label, value]) => sourceGrid.append(el('dt', '', label), el('dd', '', value || '미기록')));
     details.append(sourceGrid); section.append(details);
     return section;
   }
