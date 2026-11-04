@@ -353,7 +353,7 @@ def test_worker_mode_two_keeps_source_zones_while_reference_expert_is_remapped(t
     _write_csv(expert_root / "2_1001_1.csv", offset=0.0, zone_ids=["3", "3", "2", "1", "1"])
     _write_csv(expert_root / "2_1002_1.csv", offset=0.0, zone_ids=["3", "3", "2", "1", "1"])
     worker_zone_ids = ["3", "3", "2", "1", "1"] if legacy_worker else ["1", "1", "2", "3", "3"]
-    _write_csv(worker_root / "raw/spray/learning/mode_02/2_2001_1.csv", offset=0.0, zone_ids=worker_zone_ids)
+    _write_csv(worker_root / "raw/spray/learning/mode_02/2_2001_1.csv", offset=10.0, zone_ids=worker_zone_ids)
     (worker_root / "worker.json").write_text(json.dumps({"display_name": "김경호", "role": "worker"}), encoding="utf-8")
     build_profiles(tmp_path, process="spray")
     build_profiles(worker_root, process="spray", legacy_expert_zone_ids=legacy_worker)
@@ -369,6 +369,10 @@ def test_worker_mode_two_keeps_source_zones_while_reference_expert_is_remapped(t
     assert {item["zone_id"] for item in data["zone_surfaces"]} == {"1", "2", "3"}
     assert data["pose_evaluation"]["reference_session_count"] == 2
     assert data["reference_order_evaluation"]["reference_session_count"] == 2
+    assert data["zone_statistics"]["all"]["expert_session_count"] == 2
+    assert all(item["point"][0] < 1 for item in data["reference_surface"]["points"])
+    assert all(item["point"][0] >= 10 for item in data["paint_trace"])
+    assert all(point[0] < 1 for zone in data["zone_surfaces"] for point in zone["vertices"])
 
 
 def test_catalog_discovers_future_worker_directory_without_code_change(tmp_path: Path) -> None:

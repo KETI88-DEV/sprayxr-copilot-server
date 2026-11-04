@@ -876,6 +876,8 @@ def _zone_playback_statistics(
     trace: list[dict[str, Any]],
     selected_direction_summary: dict[str, Any],
     expert_direction_distribution: dict[str, float],
+    *,
+    reference_profile: dict[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, dict[str, Any]]]:
     session = next(
         (item for item in profile.get("sessions", []) if str(item.get("session_id")) == selected_session_id),
@@ -926,7 +928,8 @@ def _zone_playback_statistics(
             current["duration"] += max(0.0, float(item["t"]) - float(previous["t"]))
         previous = item
 
-    aggregate_zones = profile.get("aggregate", {}).get("zones", {})
+    reference_profile = reference_profile if reference_profile is not None else profile
+    aggregate_zones = reference_profile.get("aggregate", {}).get("zones", {})
     selected_zones = analysis.get("zones", {}) if isinstance(analysis, dict) else {}
     all_keys = set(aggregate_zones) | set(selected_zones) | set(observed)
     statistics_output: dict[str, dict[str, Any]] = {}
@@ -939,10 +942,10 @@ def _zone_playback_statistics(
         if session_count is None:
             session_count = sum(
                 key in (item.get("analysis", {}).get("zones", {}))
-                for item in profile.get("sessions", [])
+                for item in reference_profile.get("sessions", [])
             )
         direction_counts = {"horizontal": 0, "vertical": 0, "diagonal": 0}
-        for item in profile.get("sessions", []):
+        for item in reference_profile.get("sessions", []):
             direction = (
                 item.get("analysis", {}).get("zones", {}).get(key, {}).get("expected_direction")
             )
@@ -957,7 +960,7 @@ def _zone_playback_statistics(
             "map_num": str(aggregate.get("map_num", selected.get("map_num", map_num))),
             "zone_id": str(aggregate.get("zone_id", selected.get("zone_id", zone_id))),
             "expert_session_count": int(session_count or 0),
-            "expected_direction": aggregate.get("expected_direction") or selected.get("expected_direction"),
+            "expected_direction": aggregate.get("expected_direction"),
             "selected_major_direction": selected.get("expected_direction"),
             "expert_direction_distribution": direction_distribution,
             "median_speed_mms": _metric_value(aggregate.get("speed_mms")),
@@ -973,7 +976,7 @@ def _zone_playback_statistics(
         "map_num": None,
         "zone_id": None,
         "zone_count": len(all_keys),
-        "expert_session_count": len(profile.get("sessions", [])),
+        "expert_session_count": len(reference_profile.get("sessions", [])),
         "selected_major_direction": selected_direction_summary.get("classification"),
         "expert_direction_distribution": expert_direction_distribution,
         "observed_path_length_m": round(
@@ -2009,6 +2012,7 @@ def create_motion_viewer_router(
         session_paths: list[Path] = []
         representative_frames: list[dict[str, Any]] = []
         reference_profile = profile
+        expert_session_paths: list[Path] = []
         for session in profile["sessions"]:
             current_id = str(session.get("session_id", ""))
             if not current_id:
@@ -2053,6 +2057,7 @@ def create_motion_viewer_router(
                 except HTTPException:
                     continue
                 if expert_frames:
+                    expert_session_paths.append(expert_path)
                     evaluation_references.append({
                         "session_id": expert_id,
                         "session": expert_session,
@@ -2063,14 +2068,19 @@ def create_motion_viewer_router(
             _dense_paint_trace(selected_path), process=process, mode_id=mode_id,
             legacy_expert_zone_ids=legacy_zone_ids,
         )
-        paint_statistics = _reference_paint_statistics(session_paths)
+        reference_paths = session_paths if worker["role"] == "expert" else expert_session_paths
+        reference_legacy_zone_ids = (
+            legacy_zone_ids if worker["role"] == "expert"
+            else reference_profile.get("identity", {}).get("zone_id_policy") != "source"
+        )
+        paint_statistics = _reference_paint_statistics(reference_paths)
         zone_flow_guides = _canonicalize_zone_items(
-            _zone_flow_guides(session_paths), process=process, mode_id=mode_id,
-            legacy_expert_zone_ids=legacy_zone_ids,
+            _zone_flow_guides(reference_paths), process=process, mode_id=mode_id,
+            legacy_expert_zone_ids=reference_legacy_zone_ids,
         )
         zone_surfaces = _canonicalize_zone_items(
-            _zone_surface_statistics(session_paths), process=process, mode_id=mode_id,
-            legacy_expert_zone_ids=legacy_zone_ids,
+            _zone_surface_statistics(reference_paths), process=process, mode_id=mode_id,
+            legacy_expert_zone_ids=reference_legacy_zone_ids,
         )
         direction_summary = _direction_summary(paint_trace)
         zone_order, zone_statistics = _zone_playback_statistics(
@@ -2079,9 +2089,11 @@ def create_motion_viewer_router(
             paint_trace,
             direction_summary,
             paint_statistics["direction_distribution"],
+            reference_profile=reference_profile,
         )
         selected_frame_zones = _zone_frame_profiles(selected_frames)
-        sampled_frame_zones = [_zone_frame_profiles(frames) for frames in sampled_sessions]
+        reference_frames = sampled_sessions if worker["role"] == "expert" else [record["frames"] for record in evaluation_references]
+        sampled_frame_zones = [_zone_frame_profiles(frames) for frames in reference_frames]
         for zone_key, statistics_item in zone_statistics.items():
             if zone_key == "all":
                 continue
