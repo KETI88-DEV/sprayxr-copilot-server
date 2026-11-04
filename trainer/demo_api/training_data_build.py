@@ -61,7 +61,7 @@ def _read_json(path: Path) -> dict:
 
 def worker_sources(root: Path) -> list[dict]:
     meta = _read_json(root / 'worker.json')
-    sources = [{'root': root, 'worker_id': 'jeon_hyeonggi', 'worker_name': meta.get('display_name') or '전형기 반장',
+    sources = [{'root': root, 'worker_id': 'jeon_hyeonggi', 'worker_name': meta.get('display_name') or '전형기',
                 'role': meta.get('role') or 'expert'}]
     for folder in sorted((root / 'workers').glob('*')):
         if folder.is_dir() and (folder / 'raw').is_dir() and folder.resolve().is_relative_to(root.resolve()):

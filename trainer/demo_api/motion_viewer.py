@@ -47,7 +47,7 @@ _JOINT_PARENTS: tuple[tuple[str, str | None], ...] = (
 
 _BONES = [[parent, joint] for joint, parent in _JOINT_PARENTS if parent is not None]
 _PROCESS_LABELS = {"spray": "스프레이", "blasting": "블라스팅"}
-_EXPERT_NAME = "전형기 반장"
+_EXPERT_NAME = "전형기"
 _EXPERT_WORKER_ID = "jeon_hyeonggi"
 _DIRECTION_LABELS = {
     "horizontal": "수평 중심",

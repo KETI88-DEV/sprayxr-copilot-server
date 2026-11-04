@@ -332,7 +332,7 @@ def test_catalog_lists_modes_and_individual_expert_sessions(tmp_path: Path) -> N
     assert data["workers"] == [
         {
             "worker_id": "jeon_hyeonggi",
-            "display_name": "전형기 반장",
+            "display_name": "전형기",
             "role": "expert",
             "processes": data["workers"][0]["processes"],
         }
@@ -394,7 +394,7 @@ def test_catalog_discovers_future_worker_directory_without_code_change(tmp_path:
 
     payload = client.get("/motion-viewer/api/catalog").json()
 
-    assert [worker["display_name"] for worker in payload["workers"]] == ["전형기 반장", "김경호"]
+    assert [worker["display_name"] for worker in payload["workers"]] == ["전형기", "김경호"]
     assert payload["workers"][1]["worker_id"] == "kim_gyeongho"
 
 
@@ -419,7 +419,7 @@ def test_motion_returns_real_representative_frames_and_cross_session_spread(tmp_
     assert data["frames"][0]["posture"]["source"] == "csv_skeleton_joints"
     assert data["worker"] == {
         "worker_id": "jeon_hyeonggi",
-        "display_name": "전형기 반장",
+        "display_name": "전형기",
         "role": "expert",
     }
     assert data["statistics"][0]["spread"]["Pelvis"] > 0

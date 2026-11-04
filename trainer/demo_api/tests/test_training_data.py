@@ -39,7 +39,7 @@ def test_real_json_artifacts_and_rebuild_count_do_not_duplicate(tmp_path):
     assert data['features']['sequence_count'] == 1
     assert data['features']['zones'][0]['distance_mm']['median'] == 300
     assert data['metadata']['acquired_at'] is None
-    assert data['metadata']['worker_name'] == '전형기 반장'
+    assert data['metadata']['worker_name'] == '전형기'
     assert data['coating']['maps'][0]['image_url'].startswith('/admin/api/training-data/')
     assert json.loads(catalog.artifact(item['dataset_id']).read_text(encoding='utf-8')) == data
     build_training_datasets(root, output)
@@ -63,6 +63,41 @@ def test_workers_filters_and_quality_are_separate_from_expert_profiles(tmp_path)
     import io
     exported = list(csv.DictReader(io.StringIO(catalog.csv_export(worker_id='trainee-2').decode('utf-8-sig'))))
     assert exported[0]['zone_count'] == '0'
+
+
+def test_training_date_filters_summary_and_all_exports_together(tmp_path):
+    import io
+    import zipfile
+    root, output = tmp_path / 'source', tmp_path / 'built'
+    for name, worker, day in [('3_A_1', None, '2025-08-31'), ('3_B_1', 'other', '2025-09-01'),
+                              ('3_C_1', 'other', '2025-08-31'), ('3_D_1', None, None)]:
+        folder = record(root, name, worker=worker)
+        if day:
+            (folder / 'metadata.json').write_text(json.dumps({'acquired_at': day}), encoding='utf-8')
+    build_training_datasets(root, output)
+    catalog = TrainingDataCatalog(output, root)
+    selected = catalog.list(acquired_at='2025-08-31')
+    assert selected['total'] == 4 and selected['filtered_count'] == 2
+    assert selected['summary']['dated_count'] == 2
+    assert selected['options']['dates'] == [
+        {'id': '2025-09-01', 'label': '2025-09-01'}, {'id': '2025-08-31', 'label': '2025-08-31'},
+        {'id': 'unknown', 'label': '미기록'},
+    ]
+    assert catalog.list(acquired_at='unknown')['filtered_count'] == 1
+    app = FastAPI()
+    app.include_router(create_training_data_router(catalog))
+    params = {'acquired_at': '2025-08-31', 'worker_id': 'other', 'process': 'spray', 'scenario_id': '3'}
+    with TestClient(app) as client:
+        listing = client.get('/admin/api/training-data', params=params).json()
+        assert listing['filtered_count'] == 1 and listing['items'][0]['dataset_name'] == '3_C_1'
+        csv_rows = list(csv.DictReader(io.StringIO(client.get('/admin/api/training-data/export.csv', params=params).content.decode('utf-8-sig'))))
+        assert len(csv_rows) == 1 and csv_rows[0]['acquired_at'] == '2025-08-31'
+        zipped = client.get('/admin/api/training-data/export.zip', params=params)
+        with zipfile.ZipFile(io.BytesIO(zipped.content)) as archive:
+            manifest = json.loads(archive.read('manifest.json'))
+            assert manifest['count'] == 1 and manifest['records'][0]['dataset_name'] == '3_C_1'
+        for endpoint in ['', '/export.csv', '/export.zip']:
+            assert client.get('/admin/api/training-data' + endpoint, params={'acquired_at': '2025-02-30'}).status_code == 422
 
 
 def test_download_export_and_images_are_read_only_and_allowlisted(tmp_path):

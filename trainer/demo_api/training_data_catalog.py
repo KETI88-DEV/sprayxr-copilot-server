@@ -52,13 +52,15 @@ class TrainingDataCatalog:
                 continue
         return result
 
-    def _selected(self, *, worker_id='all', process='all', scenario_id='all', q='', **_) -> tuple[dict, list[dict], list[dict]]:
+    def _selected(self, *, worker_id='all', process='all', scenario_id='all', acquired_at='all', q='', **_) -> tuple[dict, list[dict], list[dict]]:
         index = self._index()
         rows = self._rows(index)
         needle = q.strip().casefold()
         selected = [r for r in rows if (worker_id == 'all' or r['worker_id'] == worker_id)
                     and (process == 'all' or r['process'] == process)
                     and (scenario_id == 'all' or r['scenario_id'] == scenario_id)
+                    and (acquired_at == 'all' or (acquisition_date(r.get('acquired_at')) is None if acquired_at == 'unknown'
+                                                  else acquisition_date(r.get('acquired_at')) == acquired_at))
                     and (not needle or needle in ' '.join(str(r.get(k, '')) for k in ('dataset_name', 'worker_name', 'mode_label', 'scenario_id')).casefold())]
         selected.sort(key=lambda r: (r['worker_name'], r['process'], r['scenario_id'].zfill(8), r['dataset_name']))
         return index, rows, selected
@@ -77,6 +79,10 @@ class TrainingDataCatalog:
         pages = max(1, math.ceil(len(selected) / limit))
         page = min(max(1, page), pages)
         dates = [day for row in selected if (day := acquisition_date(row.get('acquired_at'))) is not None]
+        all_dates = {acquisition_date(row.get('acquired_at')) for row in rows}
+        date_options = [{'id': day, 'label': day} for day in sorted(all_dates - {None}, reverse=True)]
+        if None in all_dates:
+            date_options.append({'id': 'unknown', 'label': '미기록'})
         return {'available': bool(index), 'total': len(rows), 'filtered_count': len(selected), 'page': page, 'limit': limit, 'pages': pages,
                 'build': {k: v for k, v in index.items() if k != 'records'},
                 'summary': {'total': len(selected), 'worker_count': len({r['worker_id'] for r in selected}),
@@ -89,7 +95,7 @@ class TrainingDataCatalog:
                             'by_worker': grouped('worker_id', 'worker_name'), 'by_mode': grouped('scenario_id', 'mode_label'),
                             'by_process': grouped('process', labels=labels)},
                 'options': {'workers': options('worker_id', 'worker_name'), 'processes': options('process', labels=labels),
-                            'modes': options('scenario_id', 'mode_label')},
+                            'modes': options('scenario_id', 'mode_label'), 'dates': date_options},
                 'items': [{k: v for k, v in r.items() if k != 'artifact_sha256'} for r in selected[(page - 1) * limit:page * limit]]}
 
     def artifact(self, dataset_id: str) -> Path:
@@ -147,26 +153,28 @@ def create_training_data_router(catalog: TrainingDataCatalog | None = None) -> A
     store = catalog or TrainingDataCatalog()
     router = APIRouter(prefix='/admin/api/training-data', include_in_schema=False)
 
-    def filters(worker_id: str, process: str, scenario_id: str, q: str) -> dict:
-        return dict(worker_id=worker_id, process=process, scenario_id=scenario_id, q=q)
+    def filters(worker_id: str, process: str, scenario_id: str, acquired_at: str, q: str) -> dict:
+        if acquired_at not in {'all', 'unknown'} and acquisition_date(acquired_at) != acquired_at:
+            raise HTTPException(422, '훈련날짜는 YYYY-MM-DD 형식의 유효한 날짜여야 합니다.')
+        return dict(worker_id=worker_id, process=process, scenario_id=scenario_id, acquired_at=acquired_at, q=q)
 
     @router.get('')
     def listing(worker_id: str = Query('all', max_length=120), process: str = Query('all', pattern='^(all|spray|blasting)$'),
-                scenario_id: str = Query('all', max_length=120), q: str = Query('', max_length=100),
+                scenario_id: str = Query('all', max_length=120), acquired_at: str = Query('all', max_length=10), q: str = Query('', max_length=100),
                 page: int = Query(1, ge=1), limit: int = Query(25, ge=1, le=200)):
-        return store.list(page=page, limit=limit, **filters(worker_id, process, scenario_id, q))
+        return store.list(page=page, limit=limit, **filters(worker_id, process, scenario_id, acquired_at, q))
 
     @router.get('/export.csv')
     def export_csv(worker_id: str = Query('all', max_length=120), process: str = Query('all', pattern='^(all|spray|blasting)$'),
-                   scenario_id: str = Query('all', max_length=120), q: str = Query('', max_length=100)):
-        return Response(store.csv_export(**filters(worker_id, process, scenario_id, q)), media_type='text/csv; charset=utf-8',
+                   scenario_id: str = Query('all', max_length=120), acquired_at: str = Query('all', max_length=10), q: str = Query('', max_length=100)):
+        return Response(store.csv_export(**filters(worker_id, process, scenario_id, acquired_at, q)), media_type='text/csv; charset=utf-8',
                         headers={'Content-Disposition': 'attachment; filename="training-datasets.csv"'})
 
     @router.get('/export.zip')
     def export_zip(worker_id: str = Query('all', max_length=120), process: str = Query('all', pattern='^(all|spray|blasting)$'),
-                   scenario_id: str = Query('all', max_length=120), q: str = Query('', max_length=100)):
+                   scenario_id: str = Query('all', max_length=120), acquired_at: str = Query('all', max_length=10), q: str = Query('', max_length=100)):
         try:
-            content = store.zip_export(**filters(worker_id, process, scenario_id, q))
+            content = store.zip_export(**filters(worker_id, process, scenario_id, acquired_at, q))
         except (OSError, ValueError) as error:
             raise HTTPException(409, str(error)) from error
         return Response(content, media_type='application/zip', headers={'Content-Disposition': 'attachment; filename="training-datasets.zip"'})

@@ -398,7 +398,7 @@ class SequenceAnalysisEngine:
         flow_score = score_visit_flow(first_visits, references)
         adherence = flow_score["adherence_rate"]
         guideline = (
-            f"전형기 반장 {len(references)}회 실측 순서를 기준으로 순서 유사도는 {adherence * 100:.1f}%입니다. "
+            f"전형기 {len(references)}회 실측 순서를 기준으로 순서 유사도는 {adherence * 100:.1f}%입니다. "
             f"대표 흐름은 {'→'.join(flow)}입니다."
         )
         if direction_rate is not None:

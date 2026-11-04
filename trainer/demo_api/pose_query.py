@@ -560,7 +560,7 @@ def answer_order_question(
             if len(flow) == 1 and reference_count:
                 focused = (
                     f"학습모드 1은 Zone {flow[0]} 한 곳으로 구성되어 있으며, "
-                    f"전형기 반장 {reference_count}회 모두 Zone {flow[0]}부터 작업했습니다."
+                    f"전형기 {reference_count}회 모두 Zone {flow[0]}부터 작업했습니다."
                 )
             else:
                 focused = f"권장 작업 순서는 Zone {' → '.join(flow)}입니다."

@@ -73,4 +73,4 @@ def test_single_zone_reference_is_not_described_as_a_broken_one_item_order() -> 
 
     result = answer_order_question(("RPT-mode1", {"sequence_report": report}), prompt="권장 순서는?", intent="order_reference")
 
-    assert result.answer == "학습모드 1은 Zone 1 한 곳으로 구성되어 있으며, 전형기 반장 5회 모두 Zone 1부터 작업했습니다."
+    assert result.answer == "학습모드 1은 Zone 1 한 곳으로 구성되어 있으며, 전형기 5회 모두 Zone 1부터 작업했습니다."

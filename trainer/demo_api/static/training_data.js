@@ -10,6 +10,7 @@
   const query = new URLSearchParams(window.location.search);
   const state = {
     worker: query.get('worker_id') || 'all', process: query.get('process') || 'all', mode: query.get('scenario_id') || 'all',
+    date: query.get('acquired_at') || 'all',
     q: (query.get('q') || '').slice(0, 100), page: Number.isSafeInteger(Number(query.get('page'))) && Number(query.get('page')) > 0 ? Number(query.get('page')) : 1,
     limit: [10, 25, 50, 100].includes(Number(query.get('limit'))) ? Number(query.get('limit')) : 25,
     pages: 1, listAbort: null, detailAbort: null, returnFocus: null, mapView: 'decoded', data: null,
@@ -71,7 +72,7 @@
     } catch (_) { return null; }
   }
   function params(paginated = true) {
-    const result = new URLSearchParams({worker_id: state.worker, process: state.process, scenario_id: state.mode, q: state.q});
+    const result = new URLSearchParams({worker_id: state.worker, process: state.process, scenario_id: state.mode, acquired_at: state.date, q: state.q});
     if (paginated) { result.set('page', String(state.page)); result.set('limit', String(state.limit)); }
     return result;
   }
@@ -164,7 +165,8 @@
     const options = data.options || {};
     setOptions('td-worker', options.workers, state.worker, '전체 작업자');
     setOptions('td-process', options.processes, state.process, '전체 공정');
-    setOptions('td-mode', options.modes, state.mode, '전체 학습모드');
+    setOptions('td-mode', options.modes, state.mode, '전체 시나리오');
+    setOptions('td-date', options.dates, state.date, '전체 훈련날짜');
     renderBars('td-worker-chart', summary.by_worker, '현재 조회 결과의 작업자별 데이터 수', '#5275d9');
     renderBars('td-mode-chart', summary.by_mode, '현재 조회 결과의 학습모드별 데이터 수', '#42a69b');
     renderBars('td-process-chart', summary.by_process, '현재 조회 결과의 공정별 데이터 수', '#8d7ac9');
@@ -538,12 +540,12 @@
 
   $('td-search').value = state.q; $('td-limit').value = String(state.limit);
   $('td-filter-form').addEventListener('submit', event => {
-    event.preventDefault(); state.worker = $('td-worker').value; state.process = $('td-process').value; state.mode = $('td-mode').value; state.q = $('td-search').value.trim(); state.page = 1; loadList();
+    event.preventDefault(); state.worker = $('td-worker').value; state.process = $('td-process').value; state.mode = $('td-mode').value; state.date = $('td-date').value; state.q = $('td-search').value.trim(); state.page = 1; loadList();
   });
-  ['td-worker', 'td-process', 'td-mode'].forEach(id => $(id).addEventListener('change', () => $('td-filter-form').requestSubmit()));
+  ['td-worker', 'td-process', 'td-mode', 'td-date'].forEach(id => $(id).addEventListener('change', () => $('td-filter-form').requestSubmit()));
   $('td-reset').addEventListener('click', () => {
-    state.worker = state.process = state.mode = 'all'; state.q = ''; state.page = 1;
-    $('td-worker').value = $('td-process').value = $('td-mode').value = 'all'; $('td-search').value = ''; loadList();
+    state.worker = state.process = state.mode = state.date = 'all'; state.q = ''; state.page = 1;
+    $('td-worker').value = $('td-process').value = $('td-mode').value = $('td-date').value = 'all'; $('td-search').value = ''; loadList();
   });
   $('td-refresh').addEventListener('click', loadList);
   $('td-limit').addEventListener('change', () => { state.limit = Number($('td-limit').value); state.page = 1; loadList(); });
