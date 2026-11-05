@@ -177,7 +177,7 @@ def test_invalid_audio_and_unsupported_language_use_the_v25_error_envelope() -> 
         data={"user_id": "W-017", "language": "ko"},
         files={"audio": ("bad.wav", b"bad", "audio/wav")},
     )
-    unsupported = _post(client, language="en")
+    unsupported = _post(client, language="xx")
 
     assert invalid_audio.status_code == 422
     assert invalid_audio.json() == {"status": "ERROR", "code": 422, "message": "Invalid audio", "data": None}

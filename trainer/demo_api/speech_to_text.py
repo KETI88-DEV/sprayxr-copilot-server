@@ -8,10 +8,12 @@ import wave
 from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Literal, Protocol
+from typing import Callable, Protocol
+
+from trainer.demo_api.query_language import QueryLanguage
 
 
-VoiceLanguage = Literal["ko", "vi", "id", "th"]
+VoiceLanguage = QueryLanguage
 
 
 class InvalidAudioError(ValueError):

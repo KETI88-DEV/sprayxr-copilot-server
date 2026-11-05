@@ -22,6 +22,7 @@ from trainer.demo_api.copilot_router import (
     execute_copilot_query,
 )
 from trainer.demo_api.guided_workflow import DEMO_USER_ID, ensure_demo_user
+from trainer.demo_api.query_language import LANGUAGE_DESCRIPTION, QueryLanguage
 from trainer.demo_api.sequence_store import SequenceStore
 from trainer.demo_api.sequence_analysis import SequenceAnalysisEngine
 from trainer.demo_api.v1_store import V1Store
@@ -60,6 +61,8 @@ def _text_query_test_context(
     task_type: TaskType,
     response_mode: ResponseMode,
     use_rag: RagUsage,
+    language: QueryLanguage = "ko",
+    response_language: QueryLanguage | None = None,
 ) -> dict[str, object]:
     return {
         "input_used": {
@@ -69,6 +72,8 @@ def _text_query_test_context(
                 "task_type": task_type,
                 "response_mode": response_mode,
                 "use_rag": use_rag,
+                "language": language,
+                "response_language": response_language,
             },
             "fixed_context": {
                 "user_id": _TEST_TEXT_USER_ID,
@@ -126,7 +131,7 @@ _TEXT_QUERY_TEST_RESPONSE = {
 }
 
 
-def _voice_test_context() -> dict[str, object]:
+def _voice_test_context(response_language: QueryLanguage | None = None) -> dict[str, object]:
     return {
         "input_used": {
             "equivalent_real_api": VOICE_QUERY_PATH,
@@ -141,6 +146,7 @@ def _voice_test_context() -> dict[str, object]:
             "form_fields": {
                 "user_id": _TEST_USER_ID,
                 "language": "ko",
+                "response_language": response_language,
                 "session_id": _TEST_SESSION_ID,
                 "scenario_id": _TEST_SCENARIO_ID,
                 "request_id": _TEST_REQUEST_ID,
@@ -226,6 +232,7 @@ def create_voice_router(
         use_rag: RagUsage,
         context: str | None,
         response_mode: ResponseMode = "quick",
+        response_language: QueryLanguage | None = None,
     ) -> JSONResponse:
         started = time.monotonic()
         if len(payload) > MAX_UPLOAD_BYTES:
@@ -261,6 +268,8 @@ def create_voice_router(
             scenario_id=scenario_id,
             task_type=task_type,
             prompt=transcript,
+            language=language,
+            response_language=response_language,
             use_rag=use_rag,
             context=context,
             response_mode=response_mode,
@@ -280,12 +289,12 @@ def create_voice_router(
             return response
 
         body = json.loads(response.body)
-        body["data"] = VoiceQueryData(
-            **body["data"],
-            transcript=transcript,
-            language=language,
-            stt_latency_ms=stt_latency_ms,
-        ).model_dump(mode="json")
+        body["data"] = VoiceQueryData(**{
+            **body["data"], "transcript": transcript, "language": language,
+            "stt_latency_ms": stt_latency_ms,
+        }).model_dump(mode="json")
+        if language == "ko" and response_language is None:
+            body["data"].pop("response_language", None)
         logger.info(
             "voice query done request_id=%s language=%s stt_latency_ms=%d",
             query.request_id,
@@ -299,12 +308,12 @@ def create_voice_router(
         response_model=VoiceCopilotResponse,
         tags=["3. AI Co-Pilot 질의"],
         summary="3-2. VR 음성 Co-Pilot 질의",
-        description="HMD에서 녹음한 WAV를 STT로 변환한 뒤 기존 Query와 동일한 경로로 답변합니다. WAV PCM16·16kHz·mono·15초 이하만 허용합니다.",
+        description="HMD에서 녹음한 WAV를 STT로 변환한 뒤 기존 Query와 동일한 경로로 답변합니다. WAV PCM16·16kHz·mono·15초 이하만 허용합니다. language는 음성 인식 언어이며, response_language를 생략하면 같은 언어로 답합니다. 답변은 텍스트이고 TTS 음성 생성은 포함하지 않습니다.",
     )
     async def voice_query(
         audio: Annotated[UploadFile, File(description="WAV, PCM 16-bit, 16 kHz, mono, maximum 15 seconds")],
         user_id: Annotated[str, Form(min_length=1, description="음성 질문을 요청한 훈련자의 고유 식별자입니다.", examples=["1234"])],
-        language: Annotated[VoiceLanguage, Form(description="업로드한 음성의 언어 코드입니다. 현재 ko·vi·id·th 등을 사용할 수 있습니다.", examples=["ko"])],
+        language: Annotated[VoiceLanguage, Form(description="업로드한 음성의 언어 코드(STT)입니다. " + LANGUAGE_DESCRIPTION, examples=["ko"])],
         session_id: Annotated[str | None, Form(description="진행 중인 세션 식별자(CSV 파일명에서 확장자 제외)", examples=["3_11000346_1"])] = None,
         scenario_id: Annotated[str | None, Form(description="session_id의 첫 '_' 앞 콘텐츠 식별자", examples=["3"])] = None,
         request_id: Annotated[str | None, Form(description="클라이언트 로그와 서버 응답을 연결하기 위한 호출 추적용 식별자입니다.", examples=["REQ-VOICE-001"])] = None,
@@ -314,6 +323,10 @@ def create_voice_router(
             description="Y는 지식 검색 사용, N은 미사용입니다. 소문자 y/n도 허용하며 생략 시 Y입니다.",
             examples=["Y"],
         )] = "Y",
+        response_language: Annotated[QueryLanguage | None, Form(
+            description="답변 언어입니다. 생략 시 음성 language와 같은 언어로 답합니다. " + LANGUAGE_DESCRIPTION,
+            examples=["ko"],
+        )] = None,
         context: Annotated[str | None, Form(description="선택 JSON 또는 짧은 상황 설명", examples=["현재 훈련모드 3의 Zone 3을 도장 중입니다."])] = None,
     ) -> JSONResponse:
         payload = await audio.read(MAX_UPLOAD_BYTES + 1)
@@ -328,6 +341,7 @@ def create_voice_router(
             use_rag=use_rag,
             context=context,
             response_mode=response_mode,
+            response_language=response_language,
         )
 
     @router.post(
@@ -362,6 +376,13 @@ def create_voice_router(
         response_mode: Annotated[ResponseMode, Query(
             description="quick은 짧은 안내, detailed는 근거와 조치를 포함한 상세 분석입니다.",
         )] = "quick",
+        language: Annotated[QueryLanguage, Query(
+            description="질문 언어입니다. 생략 시 ko입니다. " + LANGUAGE_DESCRIPTION,
+        )] = "ko",
+        response_language: Annotated[QueryLanguage | None, Query(
+            description="답변 언어입니다. 생략 시 질문 언어와 같습니다. " + LANGUAGE_DESCRIPTION,
+            examples=["ko"],
+        )] = None,
         use_rag: Annotated[RagUsage, Query(
             description="Y는 지식 검색 사용, N은 미사용입니다. 소문자 y/n도 허용하며 생략 시 Y입니다.",
         )] = "Y",
@@ -374,6 +395,8 @@ def create_voice_router(
             scenario_id=_TEST_TEXT_SCENARIO_ID,
             request_id=_TEST_TEXT_REQUEST_ID,
             prompt=prompt,
+            language=language,
+            response_language=response_language,
             task_type=task_type,
             response_mode=response_mode,
             use_rag=use_rag,
@@ -394,7 +417,7 @@ def create_voice_router(
         body = json.loads(response.body)
         body["data"] = {
             "test_context": _text_query_test_context(
-                prompt, task_type, response_mode, use_rag
+                prompt, task_type, response_mode, use_rag, language, response_language
             ),
             **body["data"],
         }
@@ -419,7 +442,12 @@ def create_voice_router(
         ),
         responses=_VOICE_TEST_RESPONSE,
     )
-    async def test_voice_query() -> JSONResponse:
+    async def test_voice_query(
+        response_language: Annotated[QueryLanguage | None, Query(
+            description="한국어 예제 음성에 대한 답변 언어입니다. 생략 시 한국어입니다. " + LANGUAGE_DESCRIPTION,
+            examples=["ko"],
+        )] = None,
+    ) -> JSONResponse:
         if reports is not None:
             ensure_demo_user(reports)
         response = await _run_voice_query(
@@ -432,11 +460,12 @@ def create_voice_router(
             task_type="knowledge_search",
             use_rag="Y",
             context="Swagger 음성질의 모의연동",
+            response_language=response_language,
         )
         if response.status_code != 200:
             return response
         body = json.loads(response.body)
-        body["data"] = {"test_context": _voice_test_context(), **body["data"]}
+        body["data"] = {"test_context": _voice_test_context(response_language), **body["data"]}
         return JSONResponse(status_code=200, content=body)
 
     @router.get(

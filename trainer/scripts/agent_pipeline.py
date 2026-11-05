@@ -24,7 +24,7 @@ os.environ.setdefault("VLLM_WORKER_MULTIPROC_METHOD", "spawn")
 os.environ.setdefault("HF_DEACTIVATE_ASYNC_LOAD", "1")
 
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, replace, field
 
 import torch
 import yaml
@@ -443,6 +443,39 @@ class AgentPipeline:
                 answer_regex="(?:" + "|".join(labels) + ")",
             ).strip()
         return self._generate_direct(messages, enable_thinking=False).strip().split()[0]
+
+    def translate_copilot_text(self, text: str, *, source_language: str, target_language: str) -> str:
+        """Translate without retrieval, agent tools, or conversation side effects."""
+        from trainer.demo_api.query_language import (
+            TranslationUnavailableError, parse_translation, protect_translation,
+            restore_translation, translation_messages, translation_regex,
+        )
+        masked, prefix, tokens = protect_translation(text)
+        messages = translation_messages(masked, source_language=source_language, target_language=target_language)
+        if isinstance(self.model, OpenAIChatBackend):
+            prompt_tokens = self._prompt_token_counter().count_messages(messages)
+            available = context_window(self.config) - prompt_tokens - 32
+            if available < 128:
+                raise TranslationUnavailableError("Translation input exceeds model context")
+            # Some scripts need more tokens than Korean. Keep the budget bounded,
+            # independent of the quick-answer budget, and inside the real context window.
+            token_limit = min(4096, available, max(256, len(masked) * 4))
+            # A translation-specific HTTP client keeps deterministic sampling local
+            # to this operation; the shared QA backend settings remain unchanged.
+            settings = replace(self.model.settings, sampling=replace(
+                self.model.settings.sampling, temperature=0.0, top_p=1.0,
+            ))
+            translator = OpenAIChatBackend(settings)
+            try:
+                raw = translator.complete_chat(
+                    messages, max_tokens=token_limit, enable_thinking=False,
+                    answer_regex=translation_regex(prefix, tokens),
+                )
+            finally:
+                translator.close()
+        else:
+            raw = self._generate_direct(messages, enable_thinking=False, max_tokens=1024)
+        return restore_translation(parse_translation(raw), prefix, tokens)
 
     @staticmethod
     def _load_yaml(path: Path) -> dict[str, Any]:

@@ -26,6 +26,7 @@
 .mvc-panel.open{display:flex}
 .mvc-head{padding:10px 12px;border-bottom:1px solid #374151;display:flex;flex-direction:column;gap:8px}
 .mvc-head select{width:100%;padding:6px;background:#1f2937;color:#e5e7eb;border:1px solid #4b5563;border-radius:6px}
+.mvc-language{display:flex;align-items:center;gap:12px;color:#cbd5e1}.mvc-language span{white-space:nowrap}.mvc-language select{flex:1}
 .mvc-chips{display:flex;gap:6px}
 .mvc-chip{flex:1;padding:6px 0;border:1px solid #4b5563;border-radius:16px;background:#1f2937;color:#e5e7eb;cursor:pointer}
 .mvc-chip[aria-pressed=true]{background:#2563eb;border-color:#2563eb;color:#fff;font-weight:700}
@@ -62,6 +63,17 @@
   const head = el('div', 'mvc-head');
   const sessionSelect = el('select');
   sessionSelect.setAttribute('aria-label', '완료된 세션');
+  const languageRow = el('label', 'mvc-language');
+  languageRow.append(el('span', null, '질문·답변 언어'));
+  const languageSelect = el('select');
+  languageSelect.setAttribute('aria-label', '질문·답변 언어');
+  for (const [code, label] of [
+    ['ko', '한국어'], ['en', 'English'], ['vi', 'Tiếng Việt'], ['id', 'Bahasa Indonesia'],
+    ['th', 'ไทย'], ['ne', 'नेपाली'], ['my', 'မြန်မာ'], ['uz', 'O‘zbekcha'],
+    ['si', 'සිංහල'], ['ru', 'Русский'], ['zh', '中文'], ['km', 'ខ្មែរ'],
+  ]) languageSelect.append(new Option(label, code));
+  languageSelect.value = 'ko';
+  languageRow.append(languageSelect);
   const chips = el('div', 'mvc-chips');
   const modes = el('div', 'mvc-mode-row');
   modes.setAttribute('aria-label', '답변 수준');
@@ -77,7 +89,7 @@
   const send = el('button', null, '보내기');
   send.type = 'submit';
   form.append(input, send);
-  head.append(sessionSelect, contextIndicator, chips, modes, presets);
+  head.append(sessionSelect, contextIndicator, languageRow, chips, modes, presets);
   panel.append(head, log, form);
   document.body.append(toggle, panel);
 
@@ -301,6 +313,7 @@
     }
     const sentTask = task;
     const sentMode = responseMode;
+    const sentLanguage = languageSelect.value;
     const sentData = viewerData;
     const sentPlayback = { ...playback };
     const sentLabel = `${currentRecordLabel(sentData)} · ${playbackLabel(sentPlayback)}`;
@@ -321,6 +334,8 @@
           task_type: sentTask.id,
           prompt,
           response_mode: sentMode,
+          language: sentLanguage,
+          response_language: sentLanguage,
           use_rag: 'Y',
           context: sentContext,
         }),

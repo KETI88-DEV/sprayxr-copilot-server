@@ -171,6 +171,16 @@ _OPENAPI_VALUE_GUIDANCE: dict[str, dict[str, str]] = {
         "error_analysis": "현재 세션에서 감지된 이상 상태와 원인을 분석합니다.",
         "knowledge_search": "도장·블라스팅 관련 일반 질문에 답변합니다.",
     },
+    "language": {
+        "ko": "한국어", "en": "영어", "vi": "베트남어", "id": "인도네시아어",
+        "th": "태국어", "ne": "네팔어", "my": "미얀마어", "uz": "우즈베크어",
+        "si": "싱할라어", "ru": "러시아어", "zh": "중국어", "km": "크메르어",
+    },
+    "response_language": {
+        "ko": "한국어", "en": "영어", "vi": "베트남어", "id": "인도네시아어",
+        "th": "태국어", "ne": "네팔어", "my": "미얀마어", "uz": "우즈베크어",
+        "si": "싱할라어", "ru": "러시아어", "zh": "중국어", "km": "크메르어",
+    },
     "use_rag": {
         "Y": "관련 지식과 현재 세션 문맥을 검색해 답변에 활용합니다.",
         "N": "별도 지식 검색 없이 전달된 현재 문맥을 중심으로 답변합니다.",
@@ -179,6 +189,7 @@ _OPENAPI_VALUE_GUIDANCE: dict[str, dict[str, str]] = {
 
 _OPENAPI_OMISSION_GUIDANCE = {
     "use_rag": "Y로 처리하여 관련 지식 검색(RAG)을 사용합니다.",
+    "response_language": "질문 language와 같은 언어로 답합니다. 질문 언어도 생략하면 한국어(ko)입니다.",
 }
 
 _OPENAPI_DYNAMIC_OBJECT_FIELDS: dict[str, tuple[tuple[str, str, str], ...]] = {

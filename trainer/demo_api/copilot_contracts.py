@@ -12,6 +12,7 @@ from typing import Annotated, Literal
 from pydantic import BeforeValidator, ConfigDict, Field, field_validator, model_validator
 
 from trainer.demo_api.contracts import StrictModel
+from trainer.demo_api.query_language import LANGUAGE_DESCRIPTION, QueryLanguage
 
 TaskType = Literal["trajectory_recomm", "pose_recomm", "error_analysis", "knowledge_search"]
 ResponseMode = Literal["quick", "detailed"]
@@ -37,6 +38,8 @@ class CopilotQueryRequest(StrictModel):
                 "prompt": "다음 Zone을 어떤 순서로 칠해야 하나요?",
                 "task_type": "knowledge_search",
                 "response_mode": "quick",
+                "language": "ko",
+                "response_language": "ko",
                 "use_rag": "Y",
                 "context": "현재 Zone은 3입니다.",
             }
@@ -82,6 +85,15 @@ class CopilotQueryRequest(StrictModel):
         ),
         examples=["quick"],
     )] = "quick"
+    language: Annotated[QueryLanguage, Field(
+        description="질문 언어 코드입니다. 생략 시 ko(한국어)입니다. " + LANGUAGE_DESCRIPTION,
+        examples=["ko", "vi"],
+    )] = "ko"
+    response_language: Annotated[QueryLanguage | None, Field(
+        description=("답변 언어 코드입니다. 생략하거나 null이면 language와 같은 언어로 답합니다. "
+                     "질문과 다른 언어를 지정할 수도 있습니다. " + LANGUAGE_DESCRIPTION),
+        examples=["vi", "en"],
+    )] = None
     use_rag: Annotated[RagUsage, Field(
         description=(
             "지식 검색(RAG) 사용 여부입니다. Y는 관련 지식 검색을 사용하고 N은 검색 없이 현재 문맥만 사용합니다. "
@@ -114,6 +126,8 @@ class CopilotQueryData(StrictModel):
     # 끝나지 않아 축약 응답을 낼 때 true다.
     degraded: bool
     answer: str
+    language: QueryLanguage = "ko"
+    response_language: QueryLanguage = "ko"
     resolved_intents: list[str]
     context_status: ContextStatus
     sequence_context: dict[str, object] | None

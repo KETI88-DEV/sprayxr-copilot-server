@@ -244,7 +244,7 @@ def create_app(settings: Settings | None = None, *, transport: httpx.AsyncBaseTr
             started = time.monotonic()
             try:
                 canonical_prompt = await translate(body.query.prompt, body.input_language, "ko")
-                canonical_query = CopilotQueryRequest.model_validate({**body.query.model_dump(), "prompt": canonical_prompt})
+                canonical_query = CopilotQueryRequest.model_validate({**body.query.model_dump(), "prompt": canonical_prompt, "language": "ko", "response_language": "ko"})
             except (httpx.HTTPError, ValueError, KeyError, TypeError, IndexError):
                 return error(502, "INPUT_TRANSLATION_FAILED")
             translated_at = time.monotonic()
@@ -268,7 +268,7 @@ def create_app(settings: Settings | None = None, *, transport: httpx.AsyncBaseTr
                 reason = "OUTPUT_TRANSLATION_FAILED"
             completed = time.monotonic()
             return {"status": "SUCCESS", "code": 200, "message": "Localized query completed", "data": {
-                "copilot": core.data.model_dump(mode="json"),
+                "copilot": core.data.model_dump(mode="json", exclude_unset=True),
                 "localization": {"input_language": body.input_language, "output_language": body.output_language, "status": state, "answer": localized, "reason_code": reason, "glossary_version": GLOSSARY["version"]},
                 "timings": {"input_translation_ms": round((translated_at-started)*1000), "copilot_ms": round((answered_at-translated_at)*1000), "output_translation_ms": round((completed-answered_at)*1000), "total_ms": round((completed-started)*1000)},
             }}

@@ -232,7 +232,7 @@ def test_voice_demo_is_input_free_and_links_the_downloadable_sample() -> None:
     assert operation["tags"] == ["0. 모의 연동"]
     assert operation["summary"].startswith("0-6")
     assert "requestBody" not in operation
-    assert operation.get("parameters", []) == []
+    assert all(not parameter.get("required", False) for parameter in operation.get("parameters", []))
     assert "/api/v1/test/assets/query-voice-ko.wav" in operation["description"]
     voice_example = operation["responses"]["200"]["content"]["application/json"]["example"]
     voice_context = voice_example["data"]["test_context"]

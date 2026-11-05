@@ -33,10 +33,10 @@ import time
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Annotated, Final
 
 from anyio import to_thread
-from fastapi import APIRouter, FastAPI, Request
+from fastapi import APIRouter, Body, FastAPI, Request
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -53,6 +53,7 @@ from trainer.demo_api.pose_query import (
     requested_zone,
     zone_unavailable,
 )
+from trainer.demo_api.query_language import TranslationUnavailableError, translate_text
 from trainer.demo_api.sequence_store import SequenceStore
 from trainer.demo_api.sequence_analysis import SequenceAnalysisEngine
 from trainer.demo_api.v1_store import V1Store
@@ -525,7 +526,6 @@ def _success_response(
     pose_context: dict[str, object] | None = None,
     sequence_context: dict[str, object] | None = None,
     context_status: str = "not_available",
-    store: SequenceStore | None = None,
 ) -> JSONResponse:
     generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     # Wall clock from handler entry to just before serialization, slot wait included.
@@ -560,22 +560,10 @@ def _success_response(
         retrieval_used,
         len(citations),
     )
-    if store is not None and query.session_id:
-        try:
-            store.record_query_turn(
-                session_key=query.session_id,
-                user_id=query.user_id,
-                prompt=query.prompt,
-                answer=answer,
-                task_type=query.task_type,
-                created_at=generated_at,
-            )
-        except Exception:  # noqa: BROAD_EXCEPT_OK - chat memory must not break the API response
-            logger.exception("copilot query: failed to store dialogue request_id=%s", query.request_id)
     return JSONResponse(status_code=200, content=envelope.model_dump(mode="json"))
 
 
-async def execute_copilot_query(
+async def _execute_copilot_query(
     query: CopilotQueryRequest,
     *,
     pipeline_provider: PipelineProvider | None,
@@ -707,7 +695,7 @@ async def execute_copilot_query(
             degraded=detail_degraded,
             pose_context=analysis_context if query.task_type == "pose_recomm" else None,
             sequence_context=analysis_context if query.task_type == "trajectory_recomm" else None,
-            context_status="available" if available else "not_available", store=sequences,
+            context_status="available" if available else "not_available",
         )
     # Unsigned/forged viewer claims can still resolve against saved server data.
     if viewer_context_requested:
@@ -780,7 +768,7 @@ async def execute_copilot_query(
             degraded=detail_degraded,
             sequence_context=order.context,
             context_status="available" if order.analysis_status == "available" else "not_available",
-            store=sequences,
+
         )
 
     if query.task_type == "pose_recomm" and not knowledge_routed and (
@@ -816,7 +804,7 @@ async def execute_copilot_query(
             degraded=detail_degraded or limited_confidence or bool(isinstance(live_context, dict) and live_context.get("reason_codes")),
             pose_context=zone.context,
             context_status="available" if zone.analysis_status == "available" else "not_available",
-            store=sequences,
+
         )
 
     if query.task_type == "pose_recomm" and not knowledge_routed:
@@ -845,13 +833,13 @@ async def execute_copilot_query(
             degraded=detail_degraded or bool(pose.reason_code and pose.analysis_status == "available"),
             pose_context=pose.as_context(),
             context_status="available" if pose.analysis_status == "available" else "not_available",
-            store=sequences,
+
         )
 
     if query.task_type != "knowledge_search" and not knowledge_routed:
         answer = pending_answers.get(query.task_type) or PENDING_TASK_ANSWERS[query.task_type]
         return _success_response(
-            query, request_started, answer=answer, retrieval_used=False, citations=[], store=sequences
+            query, request_started, answer=answer, retrieval_used=False, citations=[]
         )
 
     if pipeline_provider is None:
@@ -924,8 +912,79 @@ async def execute_copilot_query(
         citations=list(parsed.citations),
         degraded=parsed.repair_path in FAILED_REPAIR_PATHS or bool(result.get("deadline_hit", False)),
         context_status="available" if session_summary else "not_available",
-        store=sequences,
+
     )
+
+
+async def execute_copilot_query(
+    query: CopilotQueryRequest,
+    *,
+    pipeline_provider: PipelineProvider | None,
+    pending_answers: Mapping[str, str] = PENDING_TASK_ANSWERS,
+    sequences: SequenceStore,
+    mcp_base_url: str,
+    transport: object | None = None,
+    started: float | None = None,
+    reports: V1Store | None = None,
+    sequence_engine: SequenceAnalysisEngine | None = None,
+) -> JSONResponse:
+    """Normalize foreign questions, keep Korean analysis, then localize only prose."""
+    request_started = time.monotonic() if started is None else started
+    response_language = query.response_language or query.language
+    pipeline: object | None = None
+
+    async def _translate(text: str, source: str, target: str) -> str:
+        nonlocal pipeline
+        if source == target:
+            return text
+        if pipeline_provider is None:
+            raise TranslationUnavailableError("Translation engine unavailable")
+        if pipeline is None:
+            pipeline = await to_thread.run_sync(pipeline_provider)
+        def guarded() -> str:
+            with GENERATION_SLOT:
+                return translate_text(pipeline, text, source_language=source, target_language=target)
+        return await to_thread.run_sync(guarded)
+
+    try:
+        normalized = await _translate(query.prompt, query.language, "ko")
+        if len(normalized) > 8000:
+            raise TranslationUnavailableError("Translated question exceeds analysis limit")
+        analysis_query = query.model_copy(update={"prompt": normalized})
+        response = await _execute_copilot_query(
+            analysis_query, pipeline_provider=pipeline_provider, pending_answers=pending_answers,
+            sequences=sequences, mcp_base_url=mcp_base_url, transport=transport,
+            started=request_started, reports=reports, sequence_engine=sequence_engine,
+        )
+        if response.status_code != 200:
+            return response
+        body = json.loads(response.body)
+        data = body["data"]
+        data["answer"] = await _translate(data["answer"], "ko", response_language)
+    except Exception:  # Translation failures never masquerade as a requested-language answer.
+        logger.exception("copilot translation failed request_id=%s", query.request_id)
+        return error_response(503, "Query translation unavailable; retry or use Korean")
+
+    if {"language", "response_language"} & query.model_fields_set:
+        data["language"] = query.language
+        data["response_language"] = response_language
+    else:
+        # Legacy clients (including the separate rc1 gateway) validate the old
+        # response strictly. Only opt-in multilingual calls add language metadata.
+        data.pop("language", None)
+        data.pop("response_language", None)
+    data["latency_ms"] = max(0, int((time.monotonic() - request_started) * 1000))
+    data["generated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    if query.session_id:
+        try:
+            sequences.record_query_turn(
+                session_key=query.session_id, user_id=query.user_id,
+                prompt=query.prompt, answer=data["answer"], task_type=query.task_type,
+                created_at=data["generated_at"],
+            )
+        except Exception:
+            logger.exception("copilot query: failed to store dialogue request_id=%s", query.request_id)
+    return JSONResponse(status_code=200, content=body)
 
 
 def create_copilot_router(
@@ -951,9 +1010,34 @@ def create_copilot_router(
         response_model=CopilotResponse,
         tags=["3. AI Co-Pilot 질의"],
         summary="3-1. 텍스트 기반 Co-Pilot 질의",
-        description="Replay 및 일반 UI용 텍스트 질의입니다. 빠른 응답을 위해 27B 모델의 thinking을 끄고 RAG 근거를 함께 반환합니다.",
+        description=(
+            "Replay 및 일반 UI용 텍스트 질의입니다. 기존 27B 모델과 RAG를 사용합니다.\n\n"
+            "- **질문 언어**: `language`로 지정합니다. 생략 시 `ko`입니다.\n"
+            "- **답변 언어**: `response_language`로 지정하며, 생략/null이면 질문 언어를 따릅니다.\n"
+            "- 외국어 질문을 한국어 분석·검색으로 연결하고 최종 `answer`를 요청 언어로 번역합니다.\n"
+            "- 점수·단위·Zone 순서·구조화 context·citations는 유지합니다. 번역 처리 시간이 추가됩니다.\n"
+            "- 번역에 실패하거나 수치가 달라지면 한국어를 외국어 응답으로 표시하지 않고 503을 반환합니다."
+        ),
     )
-    async def copilot_query(query: CopilotQueryRequest) -> JSONResponse:
+    async def copilot_query(query: Annotated[CopilotQueryRequest, Body(openapi_examples={
+        "korean": {"summary": "한국어 질문·답변 (기존 호출 호환)", "value": {
+            "user_id": "1234", "scenario_id": "3", "session_id": "3_11000346_1",
+            "prompt": "스프레이 도장 시 적정 이격거리를 알려주세요.",
+            "task_type": "knowledge_search", "response_mode": "quick", "use_rag": "Y",
+            "language": "ko", "response_language": "ko",
+        }},
+        "vietnamese": {"summary": "베트남어 질문 → 베트남어 답변", "value": {
+            "user_id": "1234", "scenario_id": "3", "session_id": "3_11000346_1",
+            "prompt": "Khoảng cách phun phù hợp là bao nhiêu?",
+            "task_type": "knowledge_search", "response_mode": "quick", "use_rag": "Y",
+            "language": "vi", "response_language": "vi",
+        }},
+        "english_to_korean": {"summary": "영어 질문 → 한국어 답변", "value": {
+            "user_id": "1234", "prompt": "How can I keep a consistent spray distance?",
+            "task_type": "knowledge_search", "response_mode": "detailed", "use_rag": "Y",
+            "language": "en", "response_language": "ko",
+        }},
+    })]) -> JSONResponse:
         return await execute_copilot_query(
             query,
             pipeline_provider=pipeline_provider,
