@@ -84,6 +84,36 @@ def test_cross_language_response_keeps_original_question_and_final_answer_in_mem
     assert turns[0]["answer"] == ENGLISH
 
 
+def test_translation_request_carries_glossary_hints_only_when_a_term_is_used() -> None:
+    from trainer.demo_api.query_language import translation_messages
+
+    def messages(text: str) -> list[dict[str, str]]:
+        return translation_messages(text, source_language="ko", target_language="en")
+
+    with_term, without_term = messages("건도막 두께를 확인하세요."), messages("거리를 유지하세요.")
+    assert json.loads(with_term[-1]["content"])["glossary"] == [{"source": "건도막 두께", "target": "dry film thickness"}]
+    assert with_term[0]["content"].endswith("Required terminology, use exactly: 건도막 두께 -> dry film thickness.")
+    assert "glossary" not in json.loads(without_term[-1]["content"])
+    assert "Required terminology" not in without_term[0]["content"]
+
+
+def test_translation_that_drops_a_glossary_term_is_not_returned() -> None:
+    from trainer.demo_api.query_language import TranslationUnavailableError, translate_text
+
+    class Translator:
+        def __init__(self, answer: str) -> None:
+            self.answer = answer
+
+        def translate_copilot_text(self, text: str, **kwargs: str) -> str:
+            return self.answer
+
+    with pytest.raises(TranslationUnavailableError):
+        translate_text(Translator("Check the film thickness."), "건도막 두께를 확인하세요.",
+                       source_language="ko", target_language="en")
+    assert translate_text(Translator("Check the dry film thickness."), "건도막 두께를 확인하세요.",
+                          source_language="ko", target_language="en") == "Check the dry film thickness."
+
+
 def test_legacy_korean_request_does_not_add_translation_calls() -> None:
     pipeline = Pipeline()
     data = client(pipeline).post(URL, json=body(prompt=KOREAN_QUESTION)).json()["data"]

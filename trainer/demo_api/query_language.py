@@ -8,6 +8,7 @@ from collections import Counter
 from typing import Annotated, Literal
 
 from pydantic import BeforeValidator
+from trainer.multilingual.glossary import missing_terms, term_pairs
 from trainer.scripts.quick_answer import TextCache, inference_key
 
 
@@ -132,10 +133,17 @@ def restore_translation(text: str, prefix: str, tokens: list[str]) -> str:
     return marker.sub(lambda match: tokens[int(match.group(1))], text)
 
 def translation_messages(text: str, *, source_language: str, target_language: str) -> list[dict[str, str]]:
-    def request(source_text: str) -> str:
+    glossary = term_pairs(text, source_language, target_language)
+    # Repeating the terms in the system prompt, not only in the request data, made the 27B
+    # model follow them more often (live A/B 2026-11-06: Vietnamese 표면 처리 -> chuẩn bị bề mặt).
+    required = (" Required terminology, use exactly: "
+                + "; ".join(f"{pair['source']} -> {pair['target']}" for pair in glossary) + ".") if glossary else ""
+
+    def request(source_text: str, glossary: list[dict[str, str]] | None = None) -> str:
         return json.dumps({
             "source_language": LANGUAGE_NAMES[source_language],
             "target_language": LANGUAGE_NAMES[target_language],
+            **({"glossary": glossary} if glossary else {}),
             "source_text": source_text,
         }, ensure_ascii=False)
 
@@ -149,12 +157,13 @@ def translation_messages(text: str, *, source_language: str, target_language: st
             "Never add facts, measurements, recommendations, explanations or an extra answer. "
             "Copy every CP_KEEP placeholder verbatim, exactly once, in its original order. "
             "Do not replace, expand or translate placeholders. "
+            "If the request has a glossary, write each glossary target term exactly as given. "
             "Return ONLY a complete JSON object with one string field: {\"text\":\"translation\"}. "
-            + _TARGET_INSTRUCTIONS[target_language]
+            + _TARGET_INSTRUCTIONS[target_language] + required
         )},
         {"role": "user", "content": request(_TRANSLATION_EXAMPLES[source_language])},
         {"role": "assistant", "content": json.dumps({"text": _TRANSLATION_EXAMPLES[target_language]}, ensure_ascii=False)},
-        {"role": "user", "content": request(text)},
+        {"role": "user", "content": request(text, glossary)},
     ]
 
 
@@ -201,6 +210,8 @@ def translate_text(pipeline: object, text: str, *, source_language: str, target_
     for pattern in (_IDENTIFIERS, _UNITS):
         if Counter(pattern.findall(source)) != Counter(pattern.findall(target)):
             raise TranslationUnavailableError("Translation changed identifiers or units")
+    if missing_terms(text, translated, source_language, target_language):
+        raise TranslationUnavailableError("Translation dropped a glossary term")
     if isinstance(cache, TextCache):
         cache.put(key, translated)
     return translated

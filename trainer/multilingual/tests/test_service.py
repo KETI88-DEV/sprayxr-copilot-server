@@ -64,7 +64,7 @@ def test_translation_preserves_canonical_data() -> None:
     assert result["localization"]["answer"].startswith("Dry film")
 
 
-@pytest.mark.parametrize("translation", ["Dry film thickness is 90 µm. Check A-1.", "Dry film thickness is 80 mm. Check A-1.", "", None, "건조도막두께는 80 µm입니다. A-1을 확인하세요."])
+@pytest.mark.parametrize("translation", ["Dry film thickness is 90 µm. Check A-1.", "Dry film thickness is 80 mm. Check A-1.", "", None, "건조도막두께는 80 µm입니다. A-1을 확인하세요.", "The film is 80 µm thick. Check A-1."])
 def test_invalid_translation_falls_back_without_losing_analysis(translation: str | None) -> None:
     with client_for(translation=translation) as client:
         response = client.post("/query", json=query())
