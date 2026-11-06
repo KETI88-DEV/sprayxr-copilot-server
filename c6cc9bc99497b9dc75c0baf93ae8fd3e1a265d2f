@@ -1,0 +1,34 @@
+[
+  {
+    "key": "detailed-frame-direction-20261106",
+    "number": 6,
+    "url": "https://github.com/KETI88-DEV/sprayxr-copilot-server/issues/6",
+    "state": "open",
+    "updated_at": "2026-11-06T09:26:39Z",
+    "source_sha256": "d4f681a8cde155040c38305d26a1b580f84d663750ee61d99c33d19d7749123c"
+  },
+  {
+    "key": "dialogue-provenance-20261106",
+    "number": 5,
+    "url": "https://github.com/KETI88-DEV/sprayxr-copilot-server/issues/5",
+    "state": "closed",
+    "updated_at": "2026-11-06T08:50:52Z",
+    "source_sha256": "d649b092a40d2ef4315d3f2813b890a4f314835b60fd53974246b9129af5ff7c"
+  },
+  {
+    "key": "query-intent-20261106",
+    "number": 4,
+    "url": "https://github.com/KETI88-DEV/sprayxr-copilot-server/issues/4",
+    "state": "closed",
+    "updated_at": "2026-11-06T07:48:00Z",
+    "source_sha256": "5ce31a063ded95624a66e6fb81117b1911d8b7642502f738e42fe37c10ec0edc"
+  },
+  {
+    "key": "query-multilingual-20261106",
+    "number": 3,
+    "url": "https://github.com/KETI88-DEV/sprayxr-copilot-server/issues/3",
+    "state": "closed",
+    "updated_at": "2026-11-06T07:09:12Z",
+    "source_sha256": "8b18452f2c0ab5d6310e4559305cdccf8ee6f8cec84fa4f467881794457b73b8"
+  }
+]
