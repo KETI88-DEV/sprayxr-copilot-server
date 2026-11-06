@@ -1194,6 +1194,9 @@ class AgentPipeline:
         use_rag: bool = True,
         max_tokens: int | None = None,
         quick_cache_scope: str | None = None,
+        concise_answer: bool = False,
+        use_pipeline_history: bool = True,
+        generation_instruction: str | None = None,
     ) -> dict[str, Any]:
         """``use_rag=False`` skips retrieval: no RAG context, no chunk citations. The default is unchanged."""
         t0 = time.monotonic()
@@ -1228,7 +1231,7 @@ class AgentPipeline:
             for r in rag_results
         ]
 
-        summary = self.session_context.summarize_previous(active_session_id)
+        summary = self.session_context.summarize_previous(active_session_id) if use_pipeline_history else ""
 
         # Adaptive compression: only compress when the chunk text alone exceeds the prompt budget
         counter = self._prompt_token_counter()
@@ -1244,12 +1247,20 @@ class AgentPipeline:
         synthesis_ms = 0
         quick_cache_hit = False
         if route == "fast":
+            fast_system = str(self.config.get("prompt", {}).get("fast_system", "")).strip()
+            if concise_answer:
+                fast_system = (fast_system or str(self.config.get("prompt", {}).get("system", ""))) + (
+                    "\n[이번 요청: 빠른 안내]\n질문에 직접 답하는 핵심 한 문장을 우선하세요. "
+                    "정의 질문은 뜻만 한 문장으로 설명하세요. 질문하지 않은 원인·보완 방법·배경은 덧붙이지 마세요. "
+                    "필수 안전 조건이나 요청한 조치만 필요하면 짧은 두 번째 문장으로 설명하세요. "
+                    "문서 근거와 측정값·단위·적용 조건은 그대로 유지하고, 기존 [답변]/[근거] 형식을 지키세요."
+                )
             messages = self._build_messages(
-                instruction=instruction,
+                instruction=generation_instruction or instruction,
                 environment=None,
                 rag_chunks=evidence,
                 session_context_summary=summary,
-                system_prompt=str(self.config.get("prompt", {}).get("fast_system", "")).strip() or None,
+                system_prompt=fast_system or None,
             )
             fast_prompt_tokens = counter.count_messages(messages)
             fast_max_tokens = fast_response_budget(self.config, max_tokens)

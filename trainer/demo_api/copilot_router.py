@@ -44,7 +44,7 @@ from fastapi.responses import JSONResponse
 from trainer.demo_api.copilot_contracts import CopilotQueryData, CopilotQueryRequest, CopilotResponse
 from trainer.demo_api.copilot_intent import classify_question_intent, fallback_intent, preset_intent
 from trainer.demo_api.copilot_live_analysis import live_analysis
-from trainer.demo_api.copilot_session_context import build_query_instruction, summarize_session
+from trainer.demo_api.copilot_session_context import build_query_instruction, summarize_session, viewer_definition_context
 from trainer.demo_api.pose_query import (
     answer_order_question,
     answer_pose_question,
@@ -863,13 +863,23 @@ async def _execute_copilot_query(
                 sequences.recent_query_turns(query.session_id, limit=4),
             )
         )
+    definition_context = (viewer_definition_context(query.prompt, query.context)
+                          if query.response_mode == "quick" and query.task_type == "knowledge_search" else None)
     instruction = build_query_instruction(
         query.prompt,
-        client_context=None if viewer_analysis is not None else query.context,
+        client_context=None if viewer_analysis is not None else (definition_context or query.context),
         session_summary=session_summary,
-        recent_turns=recent_turns,
+        recent_turns=[] if definition_context is not None else recent_turns,
         response_mode=query.response_mode,
     )
+    generation_instruction = (build_query_instruction(
+        query.prompt,
+        client_context=None if viewer_analysis is not None else (definition_context or query.context),
+        session_summary=session_summary,
+        recent_turns=[] if definition_context is not None else recent_turns,
+        response_mode=query.response_mode,
+        concise=True,
+    ) if query.response_mode == "quick" else None)
 
     def _guarded_run() -> Mapping[str, object]:
         with GENERATION_SLOT:
@@ -883,6 +893,11 @@ async def _execute_copilot_query(
                 request_id=query.request_id,
                 **({
                     "quick_cache_scope": json.dumps([query.user_id, query.scenario_id, query.task_type]),
+                    "concise_answer": True,
+                    "generation_instruction": generation_instruction,
+                    # Persistent dialogue is already in instruction. Do not add
+                    # the pipeline's second, recursively summarized copy.
+                    "use_pipeline_history": False,
                 } if query.response_mode == "quick" else {}),
             )
 

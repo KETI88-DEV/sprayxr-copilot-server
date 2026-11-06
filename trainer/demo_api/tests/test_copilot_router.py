@@ -134,7 +134,8 @@ def test_knowledge_search_runs_the_pipeline_on_the_fast_route(monkeypatch: pytes
     response = _client(monkeypatch, pipeline).post(URL, json=_body())
 
     assert response.status_code == 200
-    assert pipeline.calls == [
+    assert "정의 질문은 뜻만 한 문장" in pipeline.calls[0]["generation_instruction"]
+    assert [{key: value for key, value in call.items() if key != "generation_instruction"} for call in pipeline.calls] == [
         {
             "instruction": (
                 "[사용자 질문]\n저도막이 무엇인지 설명해줘.\n"
@@ -148,6 +149,8 @@ def test_knowledge_search_runs_the_pipeline_on_the_fast_route(monkeypatch: pytes
             "max_tokens": 128,
             "request_id": "req-query-0044",
             "quick_cache_scope": '["W-017", null, "knowledge_search"]',
+            "concise_answer": True,
+            "use_pipeline_history": False,
         }
     ]
 
