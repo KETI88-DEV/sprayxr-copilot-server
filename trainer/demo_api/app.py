@@ -21,7 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse
 from trainer.demo_api.portal_navigation import portal_document
 
-from trainer.demo_api import chat_service as chat_service_mod
+from trainer.demo_api import __version__, chat_service as chat_service_mod
 from trainer.demo_api.access_control import AccessControlMiddleware, OperatorCredentials
 from trainer.demo_api.api_call_log import ApiCallStore, ApiCallLoggingMiddleware
 from trainer.demo_api.api_docs import api_docs_document, create_api_docs_router
@@ -471,7 +471,7 @@ def create_app(
     app = FastAPI(
         title="XR Painting Simulator AI Co-Pilot API",
         description=_openapi_description(),
-        version="2.6.0",
+        version=__version__,
         openapi_tags=OPENAPI_TAGS,
         lifespan=_lifespan,
         docs_url=None,

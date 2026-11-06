@@ -1,0 +1,56 @@
+name: Publish release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '게시할 기존 버전 태그 (예: v2.7.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: Validate version tag
+        run: |
+          python3 - <<'PY'
+          import os, re
+          tag = os.environ['RELEASE_TAG']
+          if not re.fullmatch(r'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', tag):
+              raise SystemExit('Expected vMAJOR.MINOR.PATCH')
+          PY
+
+      - name: Check out the tagged source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ github.event.inputs.tag || github.ref_name }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate source version and prepare release notes
+        run: python3 -m trainer.scripts.release_notes --tag "$RELEASE_TAG" --output "$RUNNER_TEMP/release.md"
+
+      - name: Publish feature notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "$RELEASE_TAG" > /dev/null 2>&1; then
+            gh release edit "$RELEASE_TAG" --title "$RELEASE_TAG · SprayXR AI Co-Pilot" --notes-file "$RUNNER_TEMP/release.md"
+          else
+            latest=false
+            if [ "$GITHUB_EVENT_NAME" = push ]; then latest=true; fi
+            gh release create "$RELEASE_TAG" --verify-tag --title "$RELEASE_TAG · SprayXR AI Co-Pilot" --notes-file "$RUNNER_TEMP/release.md" --latest="$latest"
+          fi

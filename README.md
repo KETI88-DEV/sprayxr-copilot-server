@@ -5,6 +5,8 @@
 선박 도장·블라스팅 훈련 시뮬레이터와 연동해 작업자에게 피드백과 훈련 결과를 제공하는 AI Co-Pilot 서버입니다.
 전문가 기준 데이터와 훈련 기록을 비교하고, 작업 자세와 도장 경로를 시각화하며, 훈련 중 발생하는 질문에 답변합니다.
 
+현재 버전은 **v2.7.0**입니다. [버전별 변경 이력](CHANGELOG.md)과 [GitHub 릴리스](https://github.com/KETI88-DEV/sprayxr-copilot-server/releases)에서 추가 기능을 확인할 수 있습니다.
+
 ## 주요 기능
 
 | 기능 | 설명 |
@@ -106,6 +108,24 @@ npm ci
 npm run build:web
 npm test
 ```
+
+## 릴리스 관리
+
+기능 추가는 `MINOR`, 호환되는 오류 수정은 `PATCH`, 호환되지 않는 변경은 `MAJOR`를 올립니다. API 경로의 `/api/v1`과 소스 릴리스 버전은 별도로 관리합니다.
+
+1. `trainer/demo_api/__init__.py`의 `__version__`을 변경하고 `CHANGELOG.md`에 같은 버전의 변경 내용을 기록합니다.
+2. 관련 검사를 실행하고, 아래 명령으로 태그와 변경 이력의 일치를 확인한 뒤 커밋합니다.
+3. 해당 커밋에 버전 태그를 만들고 `main`과 태그를 올립니다. GitHub Actions가 변경 이력의 해당 버전 항목으로 릴리스를 게시합니다.
+
+```bash
+# 예시: 다음 수정 버전이 2.7.1인 경우
+python3 -m trainer.scripts.release_notes --tag v2.7.1 --output /tmp/release-notes.md
+git tag -a v2.7.1 -m "v2.7.1: 변경 내용 요약"
+git push --atomic origin main refs/tags/v2.7.1
+```
+
+게시 상태는 저장소의 **Actions → Publish release**, 게시된 내용은 **Releases**에서 확인합니다. 자동 게시와 재게시 대상은 이 절차가 포함된 **v2.7.0 이후**의 태그입니다. 필요하면 Actions의 **Run workflow**에서 해당 태그를 지정해 다시 게시할 수 있습니다. `v2.6.0`은 소스 비교용 기준 태그이며 자동 게시 대상이 아닙니다. 태그는 이동하거나 덮어쓰지 않습니다.
+소스 릴리스 게시와 운영 서버 배포는 별도 절차입니다. 태그를 올려도 운영 서버가 자동으로 재시작되지는 않습니다.
 
 ## 관련 문서
 
