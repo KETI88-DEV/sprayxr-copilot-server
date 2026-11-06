@@ -465,8 +465,17 @@ def test_chat_offers_response_depth_and_sends_it_to_the_query_api(tmp_path: Path
     assert "상세 분석" in script.text
     assert "response_mode: sentMode" in script.text
     assert "use_rag: 'Y'" in script.text
-    assert "width:min(480px" in script.text
-    assert "height:min(640px" in script.text
+    assert "let responseMode = 'quick'" in script.text
+
+
+def test_chat_flag_assets_are_local_svg_images_with_a_fixed_allowlist(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    for country in ("kr", "us", "vn", "id", "th", "np", "mm", "uz", "lk", "ru", "cn", "kh"):
+        flag = client.get(f"/motion-viewer/assets/flags/{country}.svg")
+        assert flag.status_code == 200
+        assert flag.headers["content-type"].startswith("image/svg+xml")
+        assert "<svg" in flag.text
+    assert client.get("/motion-viewer/assets/flags/xx.svg").status_code == 404
 
 
 def test_joint_posture_state_uses_leg_and_torso_geometry_instead_of_camera_height() -> None:

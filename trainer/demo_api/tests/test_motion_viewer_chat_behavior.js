@@ -55,6 +55,33 @@ async function submit(app, question = '지금 자세는 어때?') {
   {
     const app = setup(), data = record();
     app.emit('motion-viewer-data', data);
+    const flags = app.find('mvc-language-flags');
+    assert.ok(flags, 'Answer languages must use a flag strip above the composer');
+    assert.equal(flags.children.length, 12);
+    assert.equal(flags.children[0].attributes['aria-pressed'], 'true');
+    assert.match(app.find('mvc-mode-row').children[0].textContent, /8B/);
+    assert.match(app.find('mvc-mode-row').children[1].textContent, /27B/);
+    assert.equal(app.find('mvc-mode-row').children[0].attributes['aria-pressed'], 'true');
+    // Vietnamese output never changes the Korean input contract.
+    await flags.children[2].fire('click');
+    const sent = await submit(app);
+    assert.equal(sent.request.body.language, 'ko');
+    assert.equal(sent.request.body.response_language, 'vi');
+    assert.equal(sent.request.body.response_mode, 'quick');
+    await flags.children[0].fire('click');
+    sent.request.finish(); await sent.completion;
+    assert.match(app.find('mvc-log').children.at(-1).textContent, /Tiếng Việt/);
+    const next = await submit(app);
+    assert.equal(next.request.body.language, 'ko');
+    assert.equal(next.request.body.response_language, 'ko');
+    next.request.finish(); await next.completion;
+    assert.equal(flags.parent.parent.children.at(-1), app.form);
+  }
+  {
+    const app = setup(), data = record();
+    // Explicitly choose detailed mode to verify in-flight request snapshots.
+    await app.find('mvc-mode-row').children[1].fire('click');
+    app.emit('motion-viewer-data', data);
     frame(app, data.frames[1], 1, 1.25);
     frame(app, data.frames[2], 2, 2.5);
     const { request, completion } = await submit(app);
@@ -133,5 +160,5 @@ async function submit(app, question = '지금 자세는 어때?') {
     assert.equal(decode(sent.request).playback_context.zone_id, null);
     sent.request.finish(); await sent.completion;
   }
-  console.log('motion viewer chat behavior: 3 scenarios passed');
+  console.log('motion viewer chat behavior: 4 scenarios passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

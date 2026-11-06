@@ -1906,6 +1906,15 @@ def create_motion_viewer_router(
             headers={"Cache-Control": "no-cache"},
         )
 
+    @router.get("/motion-viewer/assets/flags/{country_code}.svg", include_in_schema=False)
+    def answer_language_flag(country_code: str) -> FileResponse:
+        if country_code not in {"kr", "us", "vn", "id", "th", "np", "mm", "uz", "lk", "ru", "cn", "kh"}:
+            raise HTTPException(status_code=404, detail="Flag not found")
+        return FileResponse(
+            static_root / "flags" / f"{country_code}.svg", media_type="image/svg+xml",
+            headers={"Cache-Control": "public, max-age=604800"},
+        )
+
     @router.get("/motion-viewer/api/completed", include_in_schema=False)
     def completed_sessions() -> dict[str, Any]:
         """채팅이 고를 수 있는 세션 — complete 리포트가 있는 것만(질의가 그 리포트로 답한다)."""

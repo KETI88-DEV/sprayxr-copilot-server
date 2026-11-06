@@ -18,36 +18,47 @@
   ];
   const style = document.createElement('style');
   style.textContent = `
-.mvc-toggle{position:fixed;right:20px;bottom:20px;left:auto;width:auto;margin:0;z-index:50;border:0;border-radius:24px;padding:12px 18px;
+.mvc-toggle{position:fixed;right:20px;bottom:20px;left:auto;width:auto;margin:0;z-index:10020;border:0;border-radius:24px;padding:12px 18px;
   background:#2563eb;color:#fff;font-weight:700;box-shadow:0 6px 20px rgba(0,0,0,.35);cursor:pointer}
-.mvc-panel{position:fixed;right:20px;bottom:76px;z-index:50;width:min(480px,calc(100vw - 40px));height:min(640px,78vh);
+.mvc-panel{position:fixed;right:16px;bottom:76px;z-index:10020;width:min(760px,calc(100vw - 32px));height:min(900px,calc(100vh - 96px));height:min(900px,calc(100dvh - 96px));
   display:none;flex-direction:column;background:#111827;color:#e5e7eb;border:1px solid #374151;border-radius:12px;
   box-shadow:0 10px 30px rgba(0,0,0,.45);font-size:14px}
 .mvc-panel.open{display:flex}
-.mvc-head{padding:10px 12px;border-bottom:1px solid #374151;display:flex;flex-direction:column;gap:8px}
+.mvc-head{padding:12px 16px;border-bottom:1px solid #374151;display:flex;flex:0 0 auto;flex-direction:column;gap:8px;max-height:38%;overflow-y:auto}
 .mvc-head select{width:100%;padding:6px;background:#1f2937;color:#e5e7eb;border:1px solid #4b5563;border-radius:6px}
-.mvc-language{display:flex;align-items:center;gap:12px;color:#cbd5e1}.mvc-language span{white-space:nowrap}.mvc-language select{flex:1}
+.mvc-language-picker{flex:0 0 auto;min-width:0;padding:10px 16px 0;border-top:1px solid #374151}
+.mvc-language-label{display:flex;justify-content:space-between;gap:12px;margin-bottom:6px;font-size:12px;color:#cbd5e1}
+.mvc-language-label small{font-size:11px;color:#94a3b8}
+.mvc-language-flags{display:flex;gap:7px;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:thin;scrollbar-color:#475569 transparent;padding:2px 0 5px}
+.mvc-language-flag{width:42px;height:34px;flex:0 0 42px;display:grid;place-items:center;padding:5px;border:1px solid #475569;
+  border-radius:7px;background:#1f2937;cursor:pointer}
+.mvc-language-flag img{display:block;width:26px;height:20px;object-fit:contain}
+.mvc-language-flag[aria-pressed=true]{border-color:#60a5fa;background:#1e3a5f;box-shadow:inset 0 0 0 1px #60a5fa}
+.mvc-language-flag:hover,.mvc-language-flag:focus-visible{outline:2px solid #93c5fd;outline-offset:-2px}
 .mvc-chips{display:flex;gap:6px}
 .mvc-chip{flex:1;padding:6px 0;border:1px solid #4b5563;border-radius:16px;background:#1f2937;color:#e5e7eb;cursor:pointer}
 .mvc-chip[aria-pressed=true]{background:#2563eb;border-color:#2563eb;color:#fff;font-weight:700}
 .mvc-mode-row{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:4px;background:#0f172a;border:1px solid #374151;border-radius:9px}
 .mvc-mode{padding:8px;border:0;border-radius:6px;background:transparent;color:#94a3b8;cursor:pointer;text-align:left}
-.mvc-mode strong,.mvc-mode small{display:block}.mvc-mode small{margin-top:2px;font-size:11px;font-weight:400}
+.mvc-mode strong{display:flex;align-items:center;gap:8px}.mvc-mode small{display:block;margin-top:2px;font-size:11px;font-weight:400}
+.mvc-model{padding:1px 6px;border:1px solid currentColor;border-radius:5px;font-size:11px;line-height:1.5;opacity:.9}
 .mvc-mode[aria-pressed=true]{background:#1d4ed8;color:#fff}
 .mvc-presets{display:flex;gap:6px;flex-wrap:wrap}
 .mvc-preset{width:auto;flex:none;padding:5px 9px;border:1px solid #475569;border-radius:14px;background:#0f172a;color:#cbd5e1;
   font-size:12px;cursor:pointer}
 .mvc-preset:hover,.mvc-preset:focus-visible{border-color:#60a5fa;background:#1e3a5f;color:#fff;outline:none}
-.mvc-log{flex:1;overflow-y:auto;padding:10px 12px;display:flex;flex-direction:column;gap:8px}
-.mvc-msg{padding:8px 10px;border-radius:8px;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.45}
+.mvc-log{flex:1;min-height:0;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:12px;scrollbar-width:thin;scrollbar-color:#475569 transparent}
+.mvc-msg{padding:11px 14px;border-radius:9px;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.65;font-size:15px}
 .mvc-me{align-self:flex-end;background:#1d4ed8;color:#fff;max-width:85%}
 .mvc-bot{align-self:flex-start;background:#1f2937;max-width:95%}
 .mvc-meta{font-size:11px;color:#9ca3af;margin-top:4px}
 .mvc-context{font-size:12px;color:#bfdbfe;line-height:1.5}
-.mvc-form{display:flex;gap:6px;padding:10px 12px;border-top:1px solid #374151}
-.mvc-form input{flex:1;padding:11px 12px;background:#1f2937;color:#e5e7eb;border:1px solid #4b5563;border-radius:7px;font-size:14px}
+.mvc-form{display:flex;flex:0 0 auto;gap:8px;padding:10px 16px 14px}
+.mvc-form input{flex:1;min-width:0;padding:13px 12px;background:#1f2937;color:#e5e7eb;border:1px solid #4b5563;border-radius:7px;font-size:15px}
 .mvc-form button{width:auto;flex:none;padding:10px 16px;border:0;border-radius:7px;background:#2563eb;color:#fff;cursor:pointer}
-.mvc-form button:disabled{opacity:.5;cursor:wait}`;
+.mvc-form button:disabled{opacity:.5;cursor:wait}
+@media(max-height:650px){.mvc-head{padding:8px 12px;gap:6px}.mvc-presets{flex-wrap:nowrap;overflow-x:auto}.mvc-preset{white-space:nowrap}.mvc-mode small{display:none}}
+@media(max-width:480px){.mvc-panel{right:8px;width:calc(100vw - 16px)}.mvc-head,.mvc-log{padding:10px 12px}.mvc-language-picker{padding:8px 12px 0}.mvc-form{padding:8px 12px 12px}.mvc-msg{padding:9px 11px}.mvc-language-label{gap:6px}}`;
   document.head.append(style);
 
   const el = (tag, cls, text) => {
@@ -63,17 +74,56 @@
   const head = el('div', 'mvc-head');
   const sessionSelect = el('select');
   sessionSelect.setAttribute('aria-label', '완료된 세션');
-  const languageRow = el('label', 'mvc-language');
-  languageRow.append(el('span', null, '질문·답변 언어'));
-  const languageSelect = el('select');
-  languageSelect.setAttribute('aria-label', '질문·답변 언어');
-  for (const [code, label] of [
-    ['ko', '한국어'], ['en', 'English'], ['vi', 'Tiếng Việt'], ['id', 'Bahasa Indonesia'],
-    ['th', 'ไทย'], ['ne', 'नेपाली'], ['my', 'မြန်မာ'], ['uz', 'O‘zbekcha'],
-    ['si', 'සිංහල'], ['ru', 'Русский'], ['zh', '中文'], ['km', 'ខ្មែរ'],
-  ]) languageSelect.append(new Option(label, code));
-  languageSelect.value = 'ko';
-  languageRow.append(languageSelect);
+  const LANGUAGES = [
+    ['ko', 'kr', '한국어'], ['en', 'us', 'English'], ['vi', 'vn', 'Tiếng Việt'], ['id', 'id', 'Bahasa Indonesia'],
+    ['th', 'th', 'ไทย'], ['ne', 'np', 'नेपाली'], ['my', 'mm', 'မြန်မာ'], ['uz', 'uz', 'O‘zbekcha'],
+    ['si', 'lk', 'සිංහල'], ['ru', 'ru', 'Русский'], ['zh', 'cn', '中文'], ['km', 'kh', 'ខ្មែរ'],
+  ];
+  let outputLanguage = 'ko';
+  const languagePicker = el('div', 'mvc-language-picker');
+  const languageLabel = el('div', 'mvc-language-label');
+  const selectedLanguage = el('span', null, '답변 언어 · 한국어');
+  languageLabel.append(selectedLanguage, el('small', null, '질문은 한국어'));
+  const languageFlags = el('div', 'mvc-language-flags');
+  languageFlags.setAttribute('role', 'group');
+  languageFlags.setAttribute('aria-label', '답변 언어');
+  const chooseLanguage = (index) => {
+    outputLanguage = LANGUAGES[index][0];
+    selectedLanguage.textContent = `답변 언어 · ${LANGUAGES[index][2]}`;
+    for (let i = 0; i < languageFlags.children.length; i++) {
+      languageFlags.children[i].setAttribute('aria-pressed', String(i === index));
+    }
+  };
+  LANGUAGES.forEach(([code, country, label], index) => {
+    const button = el('button', 'mvc-language-flag');
+    button.type = 'button';
+    button.title = `${label}로 답변`;
+    button.setAttribute('aria-label', `${label} 답변`);
+    button.setAttribute('aria-pressed', String(code === outputLanguage));
+    const flag = el('img');
+    flag.src = `/motion-viewer/assets/flags/${country}.svg`;
+    flag.alt = '';
+    button.append(flag);
+    button.addEventListener('click', () => chooseLanguage(index));
+    button.addEventListener('keydown', (event) => {
+      const next = event.key === 'ArrowRight' ? (index + 1) % LANGUAGES.length
+        : event.key === 'ArrowLeft' ? (index + LANGUAGES.length - 1) % LANGUAGES.length
+        : event.key === 'Home' ? 0 : event.key === 'End' ? LANGUAGES.length - 1 : null;
+      if (next == null) return;
+      event.preventDefault();
+      chooseLanguage(next);
+      languageFlags.children[next].focus();
+      languageFlags.children[next].scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
+    });
+    languageFlags.append(button);
+  });
+  languageFlags.addEventListener('wheel', (event) => {
+    if (event.deltaX || languageFlags.scrollWidth <= languageFlags.clientWidth) return;
+    const previous = languageFlags.scrollLeft;
+    languageFlags.scrollLeft += event.deltaY;
+    if (languageFlags.scrollLeft !== previous) event.preventDefault();
+  }, { passive: false });
+  languagePicker.append(languageLabel, languageFlags);
   const chips = el('div', 'mvc-chips');
   const modes = el('div', 'mvc-mode-row');
   modes.setAttribute('aria-label', '답변 수준');
@@ -89,23 +139,25 @@
   const send = el('button', null, '보내기');
   send.type = 'submit';
   form.append(input, send);
-  head.append(sessionSelect, contextIndicator, languageRow, chips, modes, presets);
-  panel.append(head, log, form);
+  head.append(sessionSelect, contextIndicator, chips, modes, presets);
+  panel.append(head, log, languagePicker, form);
   document.body.append(toggle, panel);
 
   let task = TASKS[1];
-  let responseMode = 'detailed';
+  let responseMode = 'quick';
   let viewerData = null;
   let playback = { map_num: null, zone_id: null, source_index: 0, playhead_seconds: 0 };
 
   const MODE_OPTIONS = [
-    { id: 'quick', label: '빠른 안내', help: '핵심 판단과 조치만 간결하게' },
-    { id: 'detailed', label: '상세 분석', help: '현재 상황·근거·원인까지 자세히' },
+    { id: 'quick', label: '빠른 안내', model: '8B', help: '핵심 판단과 조치만 간결하게' },
+    { id: 'detailed', label: '상세 분석', model: '27B', help: '현재 상황·근거·원인까지 자세히' },
   ];
   for (const item of MODE_OPTIONS) {
     const button = el('button', 'mvc-mode');
     button.type = 'button';
-    button.append(el('strong', null, item.label), el('small', null, item.help));
+    const title = el('strong');
+    title.append(el('span', null, item.label), el('span', 'mvc-model', item.model));
+    button.append(title, el('small', null, item.help));
     button.setAttribute('aria-pressed', String(item.id === responseMode));
     button.addEventListener('click', () => {
       responseMode = item.id;
@@ -313,7 +365,8 @@
     }
     const sentTask = task;
     const sentMode = responseMode;
-    const sentLanguage = languageSelect.value;
+    const sentLanguage = outputLanguage;
+    const sentLanguageLabel = LANGUAGES.find(([code]) => code === sentLanguage)[2];
     const sentData = viewerData;
     const sentPlayback = { ...playback };
     const sentLabel = `${currentRecordLabel(sentData)} · ${playbackLabel(sentPlayback)}`;
@@ -334,7 +387,7 @@
           task_type: sentTask.id,
           prompt,
           response_mode: sentMode,
-          language: sentLanguage,
+          language: 'ko',
           response_language: sentLanguage,
           use_rag: 'Y',
           context: sentContext,
@@ -349,8 +402,8 @@
       const data = payload.data;
       const seconds = ((performance.now() - started) / 1000).toFixed(1);
       const answer = data.answer;
-      const modeLabel = sentMode === 'detailed' ? '상세 분석' : '빠른 안내';
-      say(answer, 'mvc-bot', `${sentTask.label} · ${modeLabel} · ${sentLabel} · 응답 ${seconds}초${data.citations?.length ? ` · 인용 ${data.citations.length}` : ''}`);
+      const modeLabel = sentMode === 'detailed' ? '상세 분석 · 27B' : '빠른 안내 · 8B';
+      say(answer, 'mvc-bot', `${sentTask.label} · ${modeLabel} · ${sentLanguageLabel} · ${sentLabel} · 응답 ${seconds}초${data.citations?.length ? ` · 인용 ${data.citations.length}` : ''}`);
     } catch {
       pending.remove();
       say('서버에 연결하지 못했습니다.', 'mvc-bot');
