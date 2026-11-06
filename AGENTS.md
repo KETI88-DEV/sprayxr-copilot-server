@@ -109,6 +109,13 @@ npm run start:electron
 - This worktree is shared with the user and other agents. Stage explicit paths — never `git add -A`. Unfamiliar modified files are someone else's in-progress work; do not revert them.
 - `main` is far ahead of `origin/main` and pushes need repaired GitHub credentials. Local verification and commits do not prove remote delivery.
 
+## Issue tracking
+
+- 관련 기능 수정 요청과 재현한 오류를 의미 있는 작업 단위로 모아 GitHub Issues에 기록한다. 매 질문마다 별도 Issue를 만들지는 않는다.
+- 현상, 재현 절차, 기대 동작, 영향과 완료 기준을 기록하고 실제 확인 사실에 맞춰 작성한다.
+- `.github/issue-batches/`의 JSON을 `main`에 반영하면 Issue가 등록·갱신된다. 같은 `key`는 기존 Issue를 재사용한다.
+- 운영 검증을 마치면 결과와 릴리스 버전을 기록하고 해당 배치의 `state`를 `closed`로 바꾼다.
+
 ## Naming conventions
 
 - Level ID: **`TR-L01`** (Training Level 01). `SP0035`, `SP0035-L01`, `SP0035 Level 01`은 합의되지 않은 자산 경로 기반 식별자다. 코드·문서·응답 어디에도 쓰지 않는다.

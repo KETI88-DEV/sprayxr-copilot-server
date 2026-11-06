@@ -1,0 +1,112 @@
+name: Sync issue batches
+
+on:
+  push:
+    branches: ['main']
+    paths: ['.github/issue-batches/*.json']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-issue-batches
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Register changed batches and verify their issue state
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, re, subprocess
+          from pathlib import Path
+
+          def git(*args):
+              return subprocess.check_output(['git', *args], text=True).strip()
+
+          def gh(*args):
+              return json.loads(subprocess.check_output(['gh', *args], text=True))
+
+          # Reconcile the full current batch set: GitHub can replace a pending run
+          # with a newer push, so processing only that push's diff loses requests.
+          files = git('ls-files', '.github/issue-batches/*.json').splitlines()
+          batches = []
+          for name in files:
+              if not re.fullmatch(r'\.github/issue-batches/[A-Za-z0-9_-]+\.json', name):
+                  raise SystemExit('Invalid batch path')
+              batch = json.loads(Path(name).read_text())
+              if set(batch) != {'key', 'title', 'body', 'state'}:
+                  raise SystemExit('Unexpected batch fields')
+              if not re.fullmatch(r'[a-z0-9-]{1,80}', batch['key']):
+                  raise SystemExit('Invalid batch key')
+              if not isinstance(batch['title'], str) or not 1 <= len(batch['title']) <= 256:
+                  raise SystemExit('Invalid issue title')
+              if not isinstance(batch['body'], str) or not 1 <= len(batch['body']) <= 60000:
+                  raise SystemExit('Invalid issue body')
+              if batch['state'] not in ('open', 'closed'):
+                  raise SystemExit('Invalid issue state')
+              batch['_source_hash'] = hashlib.sha256(json.dumps(batch, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+              batches.append(batch)
+          if len({b['key'] for b in batches}) != len(batches):
+              raise SystemExit('Duplicate batch key')
+
+          endpoint = f"repos/{os.environ['GH_REPO']}/issues"
+          pages = gh('api', '--paginate', '--slurp', endpoint + '?state=all&per_page=100')
+          existing = [issue for page in pages for issue in page if 'pull_request' not in issue]
+          receipts = []
+          for batch in batches:
+              marker = f"<!-- sprayxr-batch:{batch['key']} -->"
+              matches = [issue for issue in existing if marker in (issue.get('body') or '')]
+              if len(matches) > 1:
+                  raise SystemExit('Multiple issues have the same batch key')
+              source_marker = f"<!-- sprayxr-source:{batch['_source_hash']} -->"
+              unchanged = bool(matches and source_marker in (matches[0].get('body') or ''))
+              desired_state = batch['state']
+              if matches and matches[0]['state'] == 'closed':
+                  desired_state = 'closed'  # Do not reopen an issue closed by a maintainer.
+              if unchanged:
+                  issue = matches[0]  # Preserve human investigation notes and manual state changes.
+              else:
+                  payload = {'title': batch['title'], 'body': batch['body'].rstrip() + '\n\n' + marker + '\n' + source_marker}
+                  if matches:
+                      payload['state'] = desired_state
+                      if desired_state == 'closed':
+                          payload['state_reason'] = 'completed'
+                  path = Path(os.environ['RUNNER_TEMP']) / 'issue-payload.json'
+                  path.write_text(json.dumps(payload))
+                  issue = gh('api', '--method', 'PATCH' if matches else 'POST',
+                             endpoint + (f"/{matches[0]['number']}" if matches else ''), '--input', str(path))
+                  if not matches and desired_state == 'closed':
+                      issue = gh('api', '--method', 'PATCH', endpoint + f"/{issue['number']}",
+                                 '-f', 'state=closed', '-f', 'state_reason=completed')
+              verified = gh('api', endpoint + f"/{issue['number']}")
+              if (not unchanged and verified['state'] != desired_state) or marker not in (verified.get('body') or ''):
+                  raise SystemExit('Issue state verification failed')
+              existing = [i for i in existing if i['number'] != verified['number']] + [verified]
+              receipt = {'key': batch['key'], 'number': verified['number'], 'url': verified['html_url'],
+                         'state': verified['state'], 'updated_at': verified['updated_at'], 'source_sha256': batch['_source_hash']}
+              receipts.append(receipt)
+              with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as out:
+                  out.write(f"[{batch['key']}]({receipt['url']}): {receipt['state']}\n")
+          path = Path(os.environ['RUNNER_TEMP']) / 'issue-receipts.json'
+          path.write_text(json.dumps(receipts, indent=2) + '\n')
+          PY
+          note_ref=refs/notes/issue-batches
+          if git ls-remote --exit-code origin "$note_ref" > /dev/null 2>&1; then
+            git fetch origin "$note_ref:$note_ref"
+          fi
+          git config user.name "SprayXR issue automation"
+          git config user.email "issue-automation@users.noreply.github.com"
+          git notes --ref="$note_ref" add -f -F "$RUNNER_TEMP/issue-receipts.json" HEAD
+          git push origin "$note_ref:$note_ref"
