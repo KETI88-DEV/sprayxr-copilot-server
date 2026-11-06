@@ -1,0 +1,18 @@
+[
+  {
+    "key": "query-intent-20261106",
+    "number": 4,
+    "url": "https://github.com/KETI88-DEV/sprayxr-copilot-server/issues/4",
+    "state": "open",
+    "updated_at": "2026-11-06T07:35:25Z",
+    "source_sha256": "b83cb0907c7b0d3a53ea3bd1f1b0c39854fde79133e71c0e9984d474ef269ccd"
+  },
+  {
+    "key": "query-multilingual-20261106",
+    "number": 3,
+    "url": "https://github.com/KETI88-DEV/sprayxr-copilot-server/issues/3",
+    "state": "closed",
+    "updated_at": "2026-11-06T07:09:12Z",
+    "source_sha256": "8b18452f2c0ab5d6310e4559305cdccf8ee6f8cec84fa4f467881794457b73b8"
+  }
+]
