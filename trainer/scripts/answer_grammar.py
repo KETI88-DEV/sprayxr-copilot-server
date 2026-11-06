@@ -65,6 +65,12 @@ def answer_regex(*, has_evidence: bool) -> str:
     return ANSWER_REGEX_WITH_EVIDENCE if has_evidence else ANSWER_REGEX_NO_EVIDENCE
 
 
+def quick_answer_regex(*, has_evidence: bool) -> str:
+    """A short live paragraph and one canonical citation; no transport/control tags."""
+    body = r"\[답변\] [^\n\[<>]+"
+    return body + rf"(\n\[근거\] {_DOC_ID})?" if has_evidence else body
+
+
 def structured_output_mode(config: Mapping[str, Any]) -> StructuredOutputMode:
     """``llm.structured_output``; an unknown value fails loudly rather than degrading silently."""
     raw = config.get("llm", {}).get("structured_output", DEFAULT_MODE)

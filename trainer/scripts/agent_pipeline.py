@@ -47,7 +47,7 @@ from trainer.scripts.live_sequence_fallback import (
     LiveSequenceRequest,
     enforce_live_sequence_validation,
 )
-from trainer.scripts.generation_slot import GENERATION_SLOT
+from trainer.scripts.generation_slot import GENERATION_SLOT, RAG_SLOT
 from trainer.scripts.openai_backend import (
     ContextLengthExceededError,
     GenerationCancelledError,
@@ -328,16 +328,19 @@ class SessionContext:
     def __init__(self, max_turns: int = 3):
         self.max_turns = max_turns
         self.sessions: dict[str, list[dict[str, Any]]] = {}
+        self._lock = threading.Lock()
 
     def get_context(self, session_id: str) -> list[dict[str, Any]]:
-        turns = self.sessions.get(session_id, [])
-        return turns[-self.max_turns :]
+        with self._lock:
+            turns = self.sessions.get(session_id, [])
+            return turns[-self.max_turns :]
 
     def update(self, session_id: str, turn_data: dict[str, Any]) -> None:
-        turns = self.sessions.setdefault(session_id, [])
-        turns.append(turn_data)
-        if len(turns) > self.max_turns:
-            self.sessions[session_id] = turns[-self.max_turns :]
+        with self._lock:
+            turns = self.sessions.setdefault(session_id, [])
+            turns.append(turn_data)
+            if len(turns) > self.max_turns:
+                self.sessions[session_id] = turns[-self.max_turns :]
 
     def summarize_previous(self, session_id: str) -> str:
         turns = self.get_context(session_id)
@@ -420,7 +423,8 @@ class AgentPipeline:
         self.tool_adapter = self._load_tool_adapter(mcp_base_url)
         self.index, self.id_map, self.embedder, self.reranker = self._load_rag_components()
 
-    def classify_copilot_intent(self, task_type: str, prompt: str) -> str:
+    def classify_copilot_intent(self, task_type: str, prompt: str, *, inference_backend: Any = None,
+                                inference_counter: Any = None, inference_context_limit: int | None = None) -> str:
         """Classify a pose/order-tab question with a tiny constrained LLM call."""
         labels = (
             ["pose_overall", "pose_worst_zone", "pose_zone", "pose_right", "pose_left", "knowledge"]
@@ -438,8 +442,9 @@ class AgentPipeline:
             {"role": "system", "content": f"질문 의도를 하나만 고르세요. {descriptions}. 라벨만 출력하세요."},
             {"role": "user", "content": prompt},
         ]
-        if isinstance(self.model, OpenAIChatBackend):
-            return self.model.complete_chat(
+        model = inference_backend if inference_backend is not None else self.model
+        if isinstance(model, OpenAIChatBackend):
+            return model.complete_chat(
                 messages,
                 max_tokens=24,
                 enable_thinking=False,
@@ -447,7 +452,9 @@ class AgentPipeline:
             ).strip()
         return self._generate_direct(messages, enable_thinking=False).strip().split()[0]
 
-    def translate_copilot_text(self, text: str, *, source_language: str, target_language: str) -> str:
+    def translate_copilot_text(self, text: str, *, source_language: str, target_language: str,
+                               inference_backend: Any = None, inference_counter: Any = None,
+                               inference_context_limit: int | None = None) -> str:
         """Translate without retrieval, agent tools, or conversation side effects."""
         from trainer.demo_api.query_language import (
             TranslationUnavailableError, parse_translation, protect_translation,
@@ -455,9 +462,10 @@ class AgentPipeline:
         )
         masked, prefix, tokens = protect_translation(text)
         messages = translation_messages(masked, source_language=source_language, target_language=target_language)
-        if isinstance(self.model, OpenAIChatBackend):
-            prompt_tokens = self._prompt_token_counter().count_messages(messages)
-            available = context_window(self.config) - prompt_tokens - 32
+        model = inference_backend if inference_backend is not None else self.model
+        if isinstance(model, OpenAIChatBackend):
+            prompt_tokens = (inference_counter or self._prompt_token_counter()).count_messages(messages)
+            available = (inference_context_limit or context_window(self.config)) - prompt_tokens - 32
             if available < 128:
                 raise TranslationUnavailableError("Translation input exceeds model context")
             # Some scripts need more tokens than Korean. Keep the budget bounded,
@@ -465,8 +473,8 @@ class AgentPipeline:
             token_limit = min(4096, available, max(256, len(masked) * 4))
             # A translation-specific HTTP client keeps deterministic sampling local
             # to this operation; the shared QA backend settings remain unchanged.
-            settings = replace(self.model.settings, sampling=replace(
-                self.model.settings.sampling, temperature=0.0, top_p=1.0,
+            settings = replace(model.settings, sampling=replace(
+                model.settings.sampling, temperature=0.0, top_p=1.0,
             ))
             translator = OpenAIChatBackend(settings)
             try:
@@ -789,6 +797,9 @@ class AgentPipeline:
         *,
         system_prompt: str | None = None,
         tools: list[dict[str, Any]] | None = None,
+        inference_counter: Any = None,
+        inference_prompt_budget: int | None = None,
+        visible_evidence: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, str]]:
         if system_prompt is None:
             system_prompt = str(self.config.get("prompt", {}).get("system", ""))
@@ -801,8 +812,8 @@ class AgentPipeline:
 
         # The rendered prompt must leave generation.max_new_tokens inside
         # llm.max_model_len; the count covers the chat template, not just text.
-        counter = self._prompt_token_counter()
-        prompt_budget = prompt_token_budget(self.config)
+        counter = inference_counter or self._prompt_token_counter()
+        prompt_budget = inference_prompt_budget if inference_prompt_budget is not None else prompt_token_budget(self.config)
 
         context_lines: list[str] = []
         for chunk in rag_chunks:
@@ -846,6 +857,8 @@ class AgentPipeline:
                 counter.exact,
             )
 
+        if visible_evidence is not None:
+            visible_evidence.extend(rag_chunks[:len(context_lines)])
         return messages
 
     def _prompt_token_counter(self) -> PromptTokenCounter:
@@ -881,14 +894,18 @@ class AgentPipeline:
         enable_thinking: bool = False,
         answer_regex: str | None = None,
         max_tokens: int | None = None,
+        inference_backend: Any = None,
     ) -> str:
-        if isinstance(self.model, VLLMWrapper):
-            return self.model.generate_response(messages=messages, tools=None)
+        model = inference_backend if inference_backend is not None else self.model
+        if isinstance(model, VLLMWrapper):
+            return model.generate_response(messages=messages, tools=None)
 
         gen_cfg = self.config.get("generation", {})
         token_limit = fast_response_budget(self.config, max_tokens)
-        if isinstance(self.model, OpenAIChatBackend):
-            effective = None if getattr(self, "_structured_output_disabled", False) else answer_regex
+        if isinstance(model, OpenAIChatBackend):
+            disabled = (getattr(self, "_structured_output_disabled", False) if inference_backend is None
+                        else getattr(model, "_structured_output_disabled", False))
+            effective = None if disabled else answer_regex
             if effective is not None and enable_thinking:
                 # With enable_thinking=False the chat template pre-closes an empty think
                 # block, so generation starts at the answer and the pattern matches from the
@@ -897,7 +914,7 @@ class AgentPipeline:
                 logger.warning("answer constraint dropped: it is only valid with enable_thinking=false")
                 effective = None
             try:
-                return self.model.complete_chat(
+                return model.complete_chat(
                     messages,
                     max_tokens=token_limit,
                     enable_thinking=enable_thinking,
@@ -908,12 +925,15 @@ class AgentPipeline:
                     raise
                 # The deployed vLLM build is chosen outside this repo, so a server that
                 # rejects the constraint must degrade to post-hoc repair, not fail the request.
-                self._structured_output_disabled = True
+                if inference_backend is None:
+                    self._structured_output_disabled = True
+                else:
+                    model._structured_output_disabled = True
                 logger.error(
                     "model server rejected the decoding constraint; structured output is off "
                     "for this process and the answer contract falls back to post-hoc repair"
                 )
-                return self.model.complete_chat(
+                return model.complete_chat(
                     messages,
                     max_tokens=token_limit,
                     enable_thinking=enable_thinking,
@@ -1197,6 +1217,10 @@ class AgentPipeline:
         concise_answer: bool = False,
         use_pipeline_history: bool = True,
         generation_instruction: str | None = None,
+        retrieval_instruction: str | None = None,
+        inference_backend: Any = None,
+        inference_counter: Any = None,
+        inference_context_limit: int | None = None,
     ) -> dict[str, Any]:
         """``use_rag=False`` skips retrieval: no RAG context, no chunk citations. The default is unchanged."""
         t0 = time.monotonic()
@@ -1212,14 +1236,15 @@ class AgentPipeline:
         logger.info("Router: %s → %s", instruction[:60], route)
 
         if use_rag:
-            rag_results, rag_timing = search_mod.search_and_rerank(
-                instruction,
-                self.index,
-                self.id_map,
-                self.embedder,
-                self.reranker,
-                self.config,
-            )
+            with RAG_SLOT:
+                rag_results, rag_timing = search_mod.search_and_rerank(
+                    retrieval_instruction or instruction,
+                    self.index,
+                    self.id_map,
+                    self.embedder,
+                    self.reranker,
+                    self.config,
+                )
         else:
             rag_results, rag_timing = [], {"total_ms": 0.0}
         rag_chunks = [
@@ -1234,8 +1259,9 @@ class AgentPipeline:
         summary = self.session_context.summarize_previous(active_session_id) if use_pipeline_history else ""
 
         # Adaptive compression: only compress when the chunk text alone exceeds the prompt budget
-        counter = self._prompt_token_counter()
-        token_budget = prompt_token_budget(self.config)
+        counter = inference_counter or self._prompt_token_counter()
+        token_budget = ((inference_context_limit - fast_response_budget(self.config, max_tokens) - 32)
+                        if inference_context_limit is not None else prompt_token_budget(self.config))
         evidence_tokens = sum(counter.count_text(str(c.get("text", ""))) for c in rag_chunks)
         if evidence_tokens > token_budget:
             evidence = compress_evidence(instruction, rag_chunks)
@@ -1243,11 +1269,35 @@ class AgentPipeline:
         else:
             evidence = rag_chunks
 
+        if inference_backend is not None and concise_answer:
+            # A short live answer uses the four highest-ranked passages. Keep the
+            # full retrieval/reranking step and the default evaluation path intact.
+            evidence = evidence[:4]
+
         deadline_hit = False
         synthesis_ms = 0
         quick_cache_hit = False
         if route == "fast":
             fast_system = str(self.config.get("prompt", {}).get("fast_system", "")).strip()
+            if inference_backend is not None and concise_answer:
+                fast_system = (
+                    "당신은 선박 도장 훈련 코치입니다. 제공된 문서와 환경 데이터로 질문에 직접 답하세요. "
+                    "현재 측정값과 일반 권장값을 구별하세요. 근거에 없는 수치나 사실은 만들지 말고 "
+                    "확인할 수 없으면 그 한계를 명확히 말하세요. 거리와 속도를 혼동하지 말고, "
+                    "문서의 수치·범위·단위를 정확히 복사하세요. 한국어 한두 문장으로 답하세요. "
+                    "용어 구별: 저도막은 규정 두께에 미달한 도막, 과도막은 규정 두께를 초과한 도막이며 "
+                    "도료의 일반적인 정의와 다릅니다. 문서에 적정 분사 거리가 없으면 "
+                    "도막 두께나 이동 속도를 거리의 정답으로 사용하지 마세요. "
+                    "이유를 물으면 지시를 반복하지 말고 원인을 설명하세요. "
+                    "형식: [답변] 답변 문장. 한 문단으로 완결하고 다른 제목이나 제어 태그는 쓰지 마세요. "
+                )
+                fast_system += (
+                    "다음 줄 [근거] 뒤에는 실제 사용한 문서의 chunk_id 하나만 쓰세요. "
+                    "문서가 질문에 답하지 못하면 근거를 억지로 붙이지 마세요."
+                    if evidence else
+                    "외부 참고 문서는 제공되지 않았습니다. 문서 번호·인용·근거 줄을 만들지 마세요. "
+                    "사용자가 준 수치는 계산에 사용할 수 있으며, 외부 기준값을 추측하지 마세요."
+                )
             if concise_answer:
                 fast_system = (fast_system or str(self.config.get("prompt", {}).get("system", ""))) + (
                     "\n[이번 요청: 빠른 안내]\n질문에 직접 답하는 핵심 한 문장을 우선하세요. "
@@ -1255,16 +1305,22 @@ class AgentPipeline:
                     "필수 안전 조건이나 요청한 조치만 필요하면 짧은 두 번째 문장으로 설명하세요. "
                     "문서 근거와 측정값·단위·적용 조건은 그대로 유지하고, 기존 [답변]/[근거] 형식을 지키세요."
                 )
+            visible_evidence: list[dict[str, Any]] = []
             messages = self._build_messages(
                 instruction=generation_instruction or instruction,
                 environment=None,
                 rag_chunks=evidence,
                 session_context_summary=summary,
                 system_prompt=fast_system or None,
+                **({"inference_counter": counter, "inference_prompt_budget": token_budget,
+                    "visible_evidence": visible_evidence} if inference_backend is not None else {}),
             )
+            if inference_backend is not None:
+                evidence = visible_evidence
+                rag_chunks = visible_evidence
             fast_prompt_tokens = counter.count_messages(messages)
             fast_max_tokens = fast_response_budget(self.config, max_tokens)
-            max_model_len = context_window(self.config)
+            max_model_len = inference_context_limit or context_window(self.config)
             context_report: dict[str, Any] | None = {
                 "max_model_len": max_model_len,
                 "exact": counter.exact,
@@ -1278,16 +1334,21 @@ class AgentPipeline:
             cache = getattr(self, "_quick_answer_cache", None)
             if quick_cache_scope is not None and cache is None:
                 self._quick_answer_cache = cache = TextCache(capacity=128, ttl=120)
-            cache_key = (inference_key(quick_cache_scope, session_id, id(getattr(self, "model", None)),
+            cache_key = (inference_key(quick_cache_scope, session_id, id(inference_backend if inference_backend is not None else getattr(self, "model", None)),
                                        messages, fast_max_tokens, rag_chunks)
                          if quick_cache_scope is not None else None)
             cached = cache.get(cache_key) if cache_key is not None else None
             quick_cache_hit = cached is not None
+            constraint = self._answer_regex(has_evidence=bool(evidence))
+            if inference_backend is not None and concise_answer and constraint is not None:
+                from trainer.scripts.answer_grammar import quick_answer_regex
+                constraint = quick_answer_regex(has_evidence=bool(evidence))
             raw_response = cached if cached is not None else self._generate_direct(
                 messages,
                 enable_thinking=False,
-                answer_regex=self._answer_regex(has_evidence=bool(evidence)),
+                answer_regex=constraint,
                 max_tokens=fast_max_tokens,
+                **({"inference_backend": inference_backend} if inference_backend is not None else {}),
             )
             if cache_key is not None and cached is None:
                 parsed = parse_knowledge_answer(raw_response, retrieved_chunk_ids(evidence))

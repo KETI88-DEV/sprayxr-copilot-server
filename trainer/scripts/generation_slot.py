@@ -15,3 +15,7 @@ import threading
 from typing import Final
 
 GENERATION_SLOT: Final[threading.Semaphore] = threading.Semaphore(1)
+
+# Resident quick and detailed servers schedule independently. RAG modules remain shared.
+QUICK_GENERATION_SLOT: Final[threading.Semaphore] = threading.Semaphore(2)
+RAG_SLOT: Final[threading.Semaphore] = threading.Semaphore(1)

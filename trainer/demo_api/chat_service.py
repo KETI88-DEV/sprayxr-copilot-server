@@ -132,6 +132,9 @@ def _construct_default_pipeline() -> _Pipeline:
     from trainer.scripts.hanzi_guard import suppress_hanzi
 
     suppress_hanzi(pipeline)
+    from trainer.demo_api.query_runtime import install_quick_runtime
+
+    install_quick_runtime(pipeline)
     return pipeline
 
 

@@ -57,7 +57,8 @@ from trainer.demo_api.query_language import TranslationUnavailableError, transla
 from trainer.demo_api.sequence_store import SequenceStore
 from trainer.demo_api.sequence_analysis import SequenceAnalysisEngine
 from trainer.demo_api.v1_store import V1Store
-from trainer.scripts.generation_slot import GENERATION_SLOT
+from trainer.demo_api.query_runtime import generation_slot_for, select_query_pipeline, translation_pipeline_for
+from trainer.scripts.generation_slot import GENERATION_SLOT  # Legacy slot identity for unconfigured clients.
 from trainer.scripts.live_response_contract import (
     FAILED_REPAIR_PATHS,
     parse_knowledge_answer,
@@ -589,7 +590,7 @@ async def _execute_copilot_query(
                 method = getattr(intent_pipeline, "classify_copilot_intent", None)
                 if callable(method):
                     def classifier(task_type: str, prompt: str) -> str:
-                        with GENERATION_SLOT:
+                        with generation_slot_for(intent_pipeline):
                             return str(method(task_type, prompt))
             except Exception:  # noqa: BROAD_EXCEPT_OK - keyword fallback keeps structured answers available
                 logger.exception("copilot intent pipeline unavailable request_id=%s", query.request_id)
@@ -652,7 +653,7 @@ async def _execute_copilot_query(
             )
 
             def _guarded_detail_run() -> Mapping[str, object]:
-                with GENERATION_SLOT:
+                with generation_slot_for(pipeline):
                     return pipeline.run(
                         instruction=instruction,
                         force_route="fast",
@@ -882,7 +883,7 @@ async def _execute_copilot_query(
     ) if query.response_mode == "quick" else None)
 
     def _guarded_run() -> Mapping[str, object]:
-        with GENERATION_SLOT:
+        with generation_slot_for(pipeline):
             return pipeline.run(
                 instruction=instruction,
                 force_route="fast",
@@ -895,6 +896,8 @@ async def _execute_copilot_query(
                     "quick_cache_scope": json.dumps([query.user_id, query.scenario_id, query.task_type]),
                     "concise_answer": True,
                     "generation_instruction": generation_instruction,
+                    **({"retrieval_instruction": query.prompt}
+                       if getattr(pipeline, "quick_query_runtime", None) is not None else {}),
                     # Persistent dialogue is already in instruction. Do not add
                     # the pipeline's second, recursively summarized copy.
                     "use_pipeline_history": False,
@@ -949,6 +952,10 @@ async def execute_copilot_query(
     """Normalize foreign questions, keep Korean analysis, then localize only prose."""
     request_started = time.monotonic() if started is None else started
     response_language = query.response_language or query.language
+    original_provider = pipeline_provider
+    if original_provider is not None:
+        # A per-request binding switches only the HTTP generator, never the shared model.
+        pipeline_provider = lambda: select_query_pipeline(original_provider(), query.response_mode)
     pipeline: object | None = None
 
     async def _translate(text: str, source: str, target: str) -> str:
@@ -959,9 +966,10 @@ async def execute_copilot_query(
             raise TranslationUnavailableError("Translation engine unavailable")
         if pipeline is None:
             pipeline = await to_thread.run_sync(pipeline_provider)
+        translator = translation_pipeline_for(pipeline, source, target)
         def guarded() -> str:
-            with GENERATION_SLOT:
-                return translate_text(pipeline, text, source_language=source, target_language=target)
+            with generation_slot_for(translator):
+                return translate_text(translator, text, source_language=source, target_language=target)
         return await to_thread.run_sync(guarded)
 
     try:

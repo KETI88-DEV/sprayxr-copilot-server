@@ -103,5 +103,11 @@ async def evaluate_live_readiness(
         "llm": await _llm_check(config, pipeline_check["loaded"], transport),
         "mcp": await _mcp_check(mcp_base_url or "http://localhost:8100", transport),
     }
+    quick = getattr(pipeline, "quick_query_runtime", None)
+    if quick is not None:
+        probe = await probe_openai_server(quick.backend.settings, transport=transport)
+        checks["quick_llm"] = {"ok": probe.health_ok and probe.model_served,
+                               "backend": "openai", "health": probe.health_ok,
+                               "model_served": probe.model_served}
     ready = all(check["ok"] for check in checks.values() if check.get("required", True))
     return ready, checks

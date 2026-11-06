@@ -115,3 +115,11 @@ def test_translation_reuse_is_language_specific_and_only_keeps_validated_text():
         with pytest.raises(TranslationUnavailableError):
             translate_text(pipeline, "거리를 300 mm로 유지하세요.", source_language="ko", target_language="vi")
     assert len(calls) == 3  # A mislabeled/invalid translation never enters the cache.
+
+
+def test_clean_api_search_does_not_discard_generation_context(monkeypatch):
+    pipeline, generated, searched, chunks = _pipeline(monkeypatch)
+    pipeline.run(instruction="질문+이전 대화+화면 상태", retrieval_instruction="적정 이격거리는?",
+                 generation_instruction="현재 값500 mm와 대화가 포함된 질문", force_route="fast")
+    assert searched == ["적정 이격거리는?"]
+    assert "현재 값500 mm와 대화가 포함된 질문" in generated[-1][0][-1]["content"]
