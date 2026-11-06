@@ -232,3 +232,27 @@ def test_low_resource_translations_keep_the_existing_backend_and_its_own_slot():
     for language in ("ne", "my", "si", "km"):
         selected = translation_pipeline_for(quick, "ko", language)
         assert selected is parent and generation_slot_for(selected) is GENERATION_SLOT
+
+
+@pytest.mark.parametrize("language", ["en", "vi", "id", "th", "uz", "ru", "zh"])
+def test_detailed_analysis_keeps_27b_but_translation_uses_the_multilingual_backend(language):
+    from trainer.demo_api.query_runtime import translation_pipeline_for
+    from trainer.scripts.generation_slot import QUICK_GENERATION_SLOT
+    parent, backend, counter = configured_parent()
+    detailed = select_query_pipeline(parent, "detailed")
+    translator = translation_pipeline_for(detailed, "ko", language)
+    assert translator.model is backend
+    assert generation_slot_for(translator) is QUICK_GENERATION_SLOT
+    text, kwargs = translator.translate_copilot_text("300 mm를 유지하세요.", source_language="ko", target_language=language)
+    assert kwargs["inference_backend"] is backend and kwargs["inference_counter"] is counter
+    assert detailed is parent and detailed.model.name == "27B"
+    assert "inference_backend" not in detailed.run(instruction="상세 분석")
+
+
+def test_translation_preserves_the_legacy_and_low_resource_backends():
+    from trainer.demo_api.query_runtime import translation_pipeline_for
+    parent, _, _ = configured_parent()
+    legacy = Parent()
+    assert translation_pipeline_for(legacy, "ko", "vi") is legacy
+    for language in ("ne", "my", "si", "km"):
+        assert translation_pipeline_for(parent, "ko", language) is parent

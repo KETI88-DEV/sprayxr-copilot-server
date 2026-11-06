@@ -286,3 +286,41 @@ def test_constrained_translation_requires_all_protected_values_once_in_order() -
     assert re.fullmatch(pattern, json.dumps({"text": "Thickness __CP_KEEP_0__, distance __CP_KEEP_1__."}))
     for text in ["Missing __CP_KEEP_0__.", "Reordered __CP_KEEP_1__ __CP_KEEP_0__", "Duplicate __CP_KEEP_0__ __CP_KEEP_0__ __CP_KEEP_1__"]:
         assert re.fullmatch(pattern, json.dumps({"text": text})) is None
+
+
+
+def test_translation_without_measurements_still_requires_one_complete_json_result():
+    import re
+    from trainer.demo_api.query_language import protect_translation, translation_regex, parse_translation
+    _, prefix, tokens = protect_translation("도막이 얇습니다.")
+    pattern = translation_regex(prefix, tokens)
+    assert pattern is not None
+    raw = json.dumps({"text": "Lớp sơn quá mỏng."}, ensure_ascii=False)
+    assert re.fullmatch(pattern, raw)
+    assert parse_translation(raw) == "Lớp sơn quá mỏng."
+    for invalid in ("[답변] Lớp sơn quá mỏng.", raw[:-1], raw + " 설명", '{"text":"invented 999 mm"}'):
+        assert re.fullmatch(pattern, invalid) is None
+
+
+
+@pytest.mark.parametrize("language,localized", [
+    ("ne", "दूरी 300 mm राख्नुहोस्।"),
+    ("my", "အကွာအဝေးကို 300 mm ထားပါ။"),
+    ("si", "දුර 300 mm තබා ගන්න."),
+    ("km", "រក្សាចម្ងាយ 300 mm ។"),
+])
+def test_low_resource_detailed_answers_translate_through_english(language, localized):
+    class EnglishBridge(Pipeline):
+        def translate_copilot_text(self, text, *, source_language, target_language):
+            self.translations.append((text, source_language, target_language))
+            if source_language == "ko" and target_language == "en":
+                return ENGLISH
+            if source_language == "en" and target_language == language:
+                return localized
+            return ANSWER  # Measured direct Korean translation fails target-language validation.
+    pipeline = EnglishBridge()
+    response = client(pipeline).post(URL, json=body(prompt=KOREAN_QUESTION,
+        response_mode="detailed", language="ko", response_language=language))
+    assert response.status_code == 200
+    assert response.json()["data"]["answer"] == localized
+    assert [(source, target) for _, source, target in pipeline.translations] == [("ko", "en"), ("en", language)]

@@ -116,10 +116,8 @@ def protect_translation(text: str) -> tuple[str, str, list[str]]:
 
 
 
-def translation_regex(prefix: str, tokens: list[str]) -> str | None:
+def translation_regex(prefix: str, tokens: list[str]) -> str:
     """Constrain JSON and placeholder order using the existing vLLM decoder."""
-    if not tokens:
-        return None
     # Plain prose cannot invent digits/underscores; all source numbers and
     # underscores are represented by the literal placeholders below.
     prose = r'(?:[^"\\_0-9\x00-\x1f]|\\["\\/bfnrt])*'

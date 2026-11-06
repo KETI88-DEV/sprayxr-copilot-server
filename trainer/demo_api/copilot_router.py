@@ -964,6 +964,12 @@ async def execute_copilot_query(
         nonlocal pipeline
         if source == target:
             return text
+        # These language pairs are more reliable from English than from Korean
+        # on the existing 27B translator. Validate values and language on BOTH
+        # legs; the Korean analysis and public response language stay unchanged.
+        if source == "ko" and target in {"ne", "my", "si", "km"}:
+            english = await _translate(text, "ko", "en")
+            return await _translate(english, "en", target)
         if pipeline_provider is None:
             raise TranslationUnavailableError("Translation engine unavailable")
         if pipeline is None:

@@ -92,11 +92,13 @@ def generation_slot_for(pipeline: Any) -> Any:
 
 
 def translation_pipeline_for(pipeline: Any, source: str, target: str) -> Any:
-    # Small-model validation showed mixed scripts/incorrect prose for these
-    # languages. Retain their existing translator instead of trading away quality.
-    if isinstance(pipeline, _QuickPipeline) and {source, target} & {"ne", "my", "si", "km"}:
-        return pipeline._parent
-    return pipeline
+    # Translation is independent of analysis mode: the tuned 27B analysis model
+    # can emit Korean instead of the requested language for detailed answers.
+    # Use the validated multilingual backend without switching the analysis model.
+    parent = pipeline._parent if isinstance(pipeline, _QuickPipeline) else pipeline
+    if {source, target} & {"ne", "my", "si", "km"}:
+        return parent
+    return pipeline if isinstance(pipeline, _QuickPipeline) else select_query_pipeline(parent, "quick")
 
 
 def retrieval_question(question: str, *, context: str = "") -> str:
