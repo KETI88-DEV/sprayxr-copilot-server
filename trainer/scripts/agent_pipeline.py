@@ -40,7 +40,8 @@ from trainer.scripts.answer_grammar import (
     structured_output_fallback,
     structured_output_mode,
 )
-from trainer.scripts.live_response_contract import parse_knowledge_answer, retrieved_chunk_ids
+from trainer.scripts.live_response_contract import FAILED_REPAIR_PATHS, parse_knowledge_answer, retrieved_chunk_ids
+from trainer.scripts.quick_answer import TextCache, inference_key
 from trainer.scripts.live_sequence_fallback import is_sequence_intent
 from trainer.scripts.live_sequence_fallback import (
     LiveSequenceRequest,
@@ -411,6 +412,8 @@ class AgentPipeline:
         self.config = self._load_yaml(self.config_path)
         self.session_context = SessionContext(max_turns=3)
         self.router = SemanticRouter()
+        self._quick_answer_cache = TextCache(capacity=128, ttl=120)
+        self._translation_cache = TextCache(capacity=256, ttl=600)
         self.backend = str(self.config.get("llm", {}).get("backend", "hf"))
 
         self.model, self.tokenizer = self._load_model_and_tokenizer(adapter_path)
@@ -1190,6 +1193,7 @@ class AgentPipeline:
         request_id: str | None = None,
         use_rag: bool = True,
         max_tokens: int | None = None,
+        quick_cache_scope: str | None = None,
     ) -> dict[str, Any]:
         """``use_rag=False`` skips retrieval: no RAG context, no chunk citations. The default is unchanged."""
         t0 = time.monotonic()
@@ -1238,6 +1242,7 @@ class AgentPipeline:
 
         deadline_hit = False
         synthesis_ms = 0
+        quick_cache_hit = False
         if route == "fast":
             messages = self._build_messages(
                 instruction=instruction,
@@ -1257,12 +1262,29 @@ class AgentPipeline:
                 ],
                 "overflow": fast_prompt_tokens + fast_max_tokens > max_model_len,
             }
-            raw_response = self._generate_direct(
+            # Only the live quick API opts in. Retrieval always runs again;
+            # rendered evidence/dialogue and user/session scope must all match.
+            cache = getattr(self, "_quick_answer_cache", None)
+            if quick_cache_scope is not None and cache is None:
+                self._quick_answer_cache = cache = TextCache(capacity=128, ttl=120)
+            cache_key = (inference_key(quick_cache_scope, session_id, id(getattr(self, "model", None)),
+                                       messages, fast_max_tokens, rag_chunks)
+                         if quick_cache_scope is not None else None)
+            cached = cache.get(cache_key) if cache_key is not None else None
+            quick_cache_hit = cached is not None
+            raw_response = cached if cached is not None else self._generate_direct(
                 messages,
                 enable_thinking=False,
                 answer_regex=self._answer_regex(has_evidence=bool(evidence)),
                 max_tokens=fast_max_tokens,
             )
+            if cache_key is not None and cached is None:
+                parsed = parse_knowledge_answer(raw_response, retrieved_chunk_ids(evidence))
+                # Never retain failed, incomplete or invalidly cited generations.
+                shape_ok = re.fullmatch(knowledge_answer_regex(has_evidence=bool(evidence)), raw_response.strip()) is not None
+                if (shape_ok and parsed.repair_path not in FAILED_REPAIR_PATHS and not parsed.dropped
+                        and parsed.body.endswith((".", "?", "!", "。"))):
+                    cache.put(cache_key, raw_response)
             final_no_think, thinking = self._strip_think_blocks(raw_response)
             response_text = final_no_think.strip()
             tool_calls: list[dict[str, Any]] = []
@@ -1367,6 +1389,9 @@ class AgentPipeline:
                 "xr_content",
             ],
         }
+
+        if quick_cache_scope is not None:
+            result["metadata"]["quick_cache_hit"] = quick_cache_hit
 
         self.session_context.update(
             active_session_id,

@@ -881,6 +881,9 @@ async def _execute_copilot_query(
                 use_rag=use_rag,
                 max_tokens=128 if query.response_mode == "quick" else 512,
                 request_id=query.request_id,
+                **({
+                    "quick_cache_scope": json.dumps([query.user_id, query.scenario_id, query.task_type]),
+                } if query.response_mode == "quick" else {}),
             )
 
     try:
@@ -1012,6 +1015,10 @@ def create_copilot_router(
         summary="3-1. 텍스트 기반 Co-Pilot 질의",
         description=(
             "Replay 및 일반 UI용 텍스트 질의입니다. 기존 27B 모델과 RAG를 사용합니다.\n\n"
+            "- **빠른 안내 (`quick`, 기본값)**: 질문의 핵심부터 짧게 답합니다. 필수 안전 조건은 함께 안내합니다.\n"
+            "  - 사용자·세션 맥락·검색 근거가 모두 같은 반복 질문은 최대 2분간 생성 결과를 재사용합니다.\n"
+            "  - 새 시퀀스·대화·문맥·근거가 반영되면 다시 생성합니다. 새 질문의 처리 시간은 모델 부하에 따라 달라집니다.\n"
+            "- **상세 분석 (`detailed`)**: 근거·원인·권장 조치를 확장해 설명합니다.\n"
             "- **질문 언어**: `language`로 지정합니다. 생략 시 `ko`입니다.\n"
             "- **답변 언어**: `response_language`로 지정하며, 생략/null이면 질문 언어를 따릅니다.\n"
             "- 외국어 질문을 한국어 분석·검색으로 연결하고 최종 `answer`를 요청 언어로 번역합니다.\n"

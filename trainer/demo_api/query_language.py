@@ -8,6 +8,7 @@ from collections import Counter
 from typing import Annotated, Literal
 
 from pydantic import BeforeValidator
+from trainer.scripts.quick_answer import TextCache, inference_key
 
 
 def _normalize_language(value: object) -> object:
@@ -178,6 +179,12 @@ def translate_text(pipeline: object, text: str, *, source_language: str, target_
     method = getattr(pipeline, "translate_copilot_text", None)
     if not callable(method):
         raise TranslationUnavailableError("Translation engine unavailable")
+    cache = getattr(pipeline, "_translation_cache", None)
+    key = inference_key(source_language, target_language, text, id(getattr(pipeline, "model", None)))
+    if isinstance(cache, TextCache):
+        cached = cache.get(key)
+        if cached is not None:
+            return cached
     translated = method(text, source_language=source_language, target_language=target_language)
     if not isinstance(translated, str) or not translated.strip() or len(translated) > 24000:
         raise TranslationUnavailableError("Empty or oversized translation")
@@ -196,4 +203,6 @@ def translate_text(pipeline: object, text: str, *, source_language: str, target_
     for pattern in (_IDENTIFIERS, _UNITS):
         if Counter(pattern.findall(source)) != Counter(pattern.findall(target)):
             raise TranslationUnavailableError("Translation changed identifiers or units")
+    if isinstance(cache, TextCache):
+        cache.put(key, translated)
     return translated

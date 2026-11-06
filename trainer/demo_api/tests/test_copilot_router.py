@@ -147,6 +147,7 @@ def test_knowledge_search_runs_the_pipeline_on_the_fast_route(monkeypatch: pytes
             "use_rag": True,
             "max_tokens": 128,
             "request_id": "req-query-0044",
+            "quick_cache_scope": '["W-017", null, "knowledge_search"]',
         }
     ]
 
