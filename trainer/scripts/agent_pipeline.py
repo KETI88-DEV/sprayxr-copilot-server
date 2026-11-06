@@ -506,8 +506,10 @@ class AgentPipeline:
             token_limit = min(4096, available, max(256, len(masked) * 4))
             # A translation-specific HTTP client keeps deterministic sampling local
             # to this operation; the shared QA backend settings remain unchanged.
+            # A repetition penalty also counts prompt tokens, so it would punish
+            # copying the source's numbers and the glossary's target terms.
             settings = replace(model.settings, sampling=replace(
-                model.settings.sampling, temperature=0.0, top_p=1.0,
+                model.settings.sampling, temperature=0.0, top_p=1.0, repetition_penalty=1.0,
             ))
             translator = OpenAIChatBackend(settings)
             try:
@@ -518,7 +520,7 @@ class AgentPipeline:
             finally:
                 translator.close()
         else:
-            raw = self._generate_direct(messages, enable_thinking=False, max_tokens=1024)
+            raw = self._generate_direct(messages, enable_thinking=False, max_tokens=1024, deterministic=True)
         return restore_translation(parse_translation(raw), prefix, tokens)
 
     @staticmethod
@@ -928,6 +930,7 @@ class AgentPipeline:
         answer_regex: str | None = None,
         max_tokens: int | None = None,
         inference_backend: Any = None,
+        deterministic: bool = False,
     ) -> str:
         model = inference_backend if inference_backend is not None else self.model
         if isinstance(model, VLLMWrapper):
@@ -983,16 +986,21 @@ class AgentPipeline:
         if hasattr(inputs, "to") and hasattr(self.model, "device"):
             inputs = inputs.to(self.model.device)
 
+        sampling: dict[str, Any] = (
+            # Translation copies its input: greedy, no repetition penalty, and no
+            # live Hanzi guard (suppress_tokens), which would make Chinese impossible.
+            {"do_sample": False, "temperature": None, "top_p": None, "top_k": None,
+             "repetition_penalty": 1.0, "suppress_tokens": None}
+            if deterministic else {
+                "do_sample": bool(gen_cfg.get("do_sample", True)),
+                "temperature": float(gen_cfg.get("temperature", 0.7)),
+                "top_p": float(gen_cfg.get("top_p", 0.8)),
+                "top_k": int(gen_cfg.get("top_k", 20)),
+                "repetition_penalty": float(gen_cfg.get("repetition_penalty", 1.15)),
+            }
+        )
         with torch.no_grad():
-            outputs = self.model.generate(
-                **inputs,
-                max_new_tokens=token_limit,
-                do_sample=bool(gen_cfg.get("do_sample", True)),
-                temperature=float(gen_cfg.get("temperature", 0.7)),
-                top_p=float(gen_cfg.get("top_p", 0.8)),
-                top_k=int(gen_cfg.get("top_k", 20)),
-                repetition_penalty=float(gen_cfg.get("repetition_penalty", 1.15)),
-            )
+            outputs = self.model.generate(**inputs, max_new_tokens=token_limit, **sampling)
 
         new_tokens = outputs[0][inputs["input_ids"].shape[1]:]
         return self.tokenizer.decode(new_tokens, skip_special_tokens=True)
