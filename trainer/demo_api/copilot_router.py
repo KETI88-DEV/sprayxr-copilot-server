@@ -239,6 +239,8 @@ def _viewer_answer(task_type: str, prompt: str, context: Mapping[str, object], i
     rows = list(zones.values()) if isinstance(zones, Mapping) else zones if isinstance(zones, list) else []
     rows = [row for row in rows if isinstance(row, Mapping) and isinstance(row.get("similarity_percent"), (int, float))]
     if context.get("scope") == "current_zone":
+        if context.get("zone_id") is None:
+            return "현재 재생 위치는 Zone ID가 없는 구간이어서 Zone 기준 작업 비교값을 표시할 수 없습니다."
         if context.get("status") != "available" or not rows:
             return "질문 시점의 Zone 작업 비교값이 없습니다. 재생 위치를 확인한 뒤 다시 질문해 주세요."
         zone = rows[0]

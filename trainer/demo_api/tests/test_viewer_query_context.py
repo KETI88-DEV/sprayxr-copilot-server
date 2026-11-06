@@ -95,11 +95,12 @@ def test_current_zone_number_uses_the_playback_map_when_zone_numbers_repeat(pose
     assert set(data["pose_context"]["zones"]) == {"2:2"}
 
 
-def test_current_pose_without_a_zone_does_not_fall_back_to_global_worst(pose_context: dict) -> None:
-    data = _query(_client(), pose_context, playback={"playhead_seconds": 0, "source_index": 0,
+@pytest.mark.parametrize("mode", ["quick", "detailed"])
+def test_current_pose_without_a_zone_does_not_fall_back_to_global_worst(pose_context: dict, mode: str) -> None:
+    data = _query(_client(), pose_context, mode=mode, playback={"playhead_seconds": 0, "source_index": 0,
         "map_num": None, "zone_id": None}).json()["data"]
     assert data["context_status"] == "not_available"
-    assert "Zone" in data["answer"]
+    assert "Zone ID가 없는 구간" in data["answer"]
     assert "70%" not in data["answer"] and "40%" not in data["answer"]
 
 
