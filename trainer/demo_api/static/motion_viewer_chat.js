@@ -247,7 +247,8 @@
     : orderAnswer(prompt, data);
   const buildViewerQueryContext = (taskId, prompt, data, state) => {
     if (!data) return null;
-    if (taskId === 'knowledge_search') return `motion_viewer_playback:${JSON.stringify({ record: currentRecordLabel(data), playback_context: state })}`;
+    const coating = { coating_context: data.coating_evaluation ?? null, coating_signature: data.query_context_signatures?.coating_status };
+    if (taskId === 'knowledge_search') return `motion_viewer_playback:${JSON.stringify({ record: currentRecordLabel(data), playback_context: state, ...coating })}`;
     let analysisContext;
     if (taskId === 'pose_recomm') {
       const evaluation = data.pose_evaluation || {};
@@ -274,6 +275,7 @@
       };
     }
     return `motion_viewer_analysis:${JSON.stringify({
+      ...coating,
       verified_answer: structuredAnswer(taskId, prompt, data),
       analysis_context: analysisContext,
       signature: data.query_context_signatures?.[taskId],

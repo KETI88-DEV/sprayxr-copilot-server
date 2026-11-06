@@ -73,7 +73,7 @@ class CopilotQueryRequest(StrictModel):
     task_type: Annotated[TaskType, Field(
         description=(
             "질문 처리 유형입니다. trajectory_recomm은 경로, pose_recomm은 자세, "
-            "error_analysis는 오류 분석, knowledge_search는 일반 지식 검색에 사용합니다."
+            "error_analysis는 오류 분석, knowledge_search는 일반 지식 검색에 사용합니다. 도막의 실제 상태 질문은 서버가 확인할 수 있는 도막 자료로 답하며, 원인·방법 질문은 지식 설명으로 처리합니다."
         ),
         examples=["knowledge_search"],
     )]

@@ -42,7 +42,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from trainer.demo_api.copilot_contracts import CopilotQueryData, CopilotQueryRequest, CopilotResponse
-from trainer.demo_api.copilot_intent import classify_question_intent, fallback_intent, preset_intent
+from trainer.demo_api.coating_query import answer_coating_question, parse_viewer_coating_context, report_coating_context
+from trainer.demo_api.copilot_intent import classify_question_intent, fallback_intent, preset_intent, is_coating_status_question, is_coating_advice_question
 from trainer.demo_api.copilot_live_analysis import live_analysis
 from trainer.demo_api.copilot_session_context import build_query_instruction, summarize_session, viewer_definition_context
 from trainer.demo_api.pose_query import (
@@ -323,8 +324,21 @@ def _structured_detail_fallback(
     analysis_context: dict[str, object],
     *,
     interpretation: str | None = None,
+    intent: str | None = None,
 ) -> str:
     """Build a standalone analysis, not a quick answer with text appended."""
+    if task_type == "trajectory_recomm" and intent not in (None, "order_reference"):
+        title = {"order_actual": "실제 수행 순서", "order_missing": "누락 Zone 확인",
+                 "order_adherence": "순서 유사도", "order_direction": "도포 방향"}.get(intent, "질문 분석")
+        evidence = ""
+        if intent == "order_missing":
+            expected = {str(z) for z in analysis_context.get("recommended_flow", [])}
+            visited = {str(z) for z in analysis_context.get("selected_flow", analysis_context.get("first_visit_flow", []))}
+            if expected:
+                evidence = f"\n\n[확인 근거]\n전문가 기준 {len(expected)}개 Zone 중 방문 {len(expected & visited)}개, 누락 {len(expected - visited)}개입니다. Zone 방문 여부와 Zone 내부 도막 충족 여부는 별도로 평가합니다."
+        elif intent == "order_adherence":
+            evidence = "\n\n[판단 범위]\n전문가 작업 흐름과 순번별 분포를 비교한 순서 유사도입니다. 도막 두께와 자세 평가는 포함하지 않습니다."
+        return f"[{title}]\n{base_answer}" + evidence
     if task_type == "trajectory_recomm":
         recommended_value = analysis_context.get("recommended_flow")
         recommended = _flow_text(recommended_value)
@@ -528,6 +542,7 @@ def _success_response(
     degraded: bool = False,
     pose_context: dict[str, object] | None = None,
     sequence_context: dict[str, object] | None = None,
+    coating_context: dict[str, object] | None = None,
     context_status: str = "not_available",
 ) -> JSONResponse:
     generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -549,7 +564,7 @@ def _success_response(
             resolved_intents=[query.task_type],
             context_status=context_status,  # type: ignore[arg-type]
             sequence_context=sequence_context,
-            coating_context=None,
+            coating_context=coating_context,
             pose_context=pose_context,
             retrieval_used=retrieval_used,
             citations=citations,
@@ -581,11 +596,25 @@ async def _execute_copilot_query(
     """Execute one normalized query for both text and voice transports."""
     request_started = time.monotonic() if started is None else started
 
+    trusted_coating = parse_viewer_coating_context(query.context, query.task_type)
+    coating_advice_context = (trusted_coating if is_coating_advice_question(query.prompt) and trusted_coating and trusted_coating.get("analysis_status") == "available" else None)
+    if is_coating_status_question(query.prompt):
+        coating = trusted_coating
+        if coating is None:
+            found_coating = (await to_thread.run_sync(lambda: reports.latest_complete_analysis(query.session_id))
+                             if reports is not None and query.session_id else None)
+            coating = report_coating_context(found_coating)
+        available = coating.get("analysis_status") == "available"
+        return _success_response(query, request_started,
+            answer=answer_coating_question(coating, query.prompt, detailed=query.response_mode == "detailed"),
+            retrieval_used=False, citations=[], coating_context=coating,
+            context_status="available" if available else "not_available")
+
     intent: str | None = None
     intent_pipeline: object | None = None
     if query.task_type in ("pose_recomm", "trajectory_recomm"):
         classifier = None
-        intent = preset_intent(query.task_type, query.prompt) if query.response_mode == "quick" else None
+        intent = preset_intent(query.task_type, query.prompt)
         if pipeline_provider is not None and intent is None:
             try:
                 intent_pipeline = await to_thread.run_sync(pipeline_provider)
@@ -609,7 +638,7 @@ async def _execute_copilot_query(
         viewer_analysis = _parse_motion_viewer_context(query.context, task_type=query.task_type)
     except _InvalidViewerPlayback:
         return error_response(422, "Invalid motion viewer playback context")
-    if viewer_analysis is not None and query.task_type == "pose_recomm" and "playback_context" in viewer_analysis and _asks_current_viewer_pose(query.prompt):
+    if viewer_analysis is not None and query.task_type == "pose_recomm" and "playback_context" in viewer_analysis and _asks_current_viewer_pose(query.prompt) and not is_coating_advice_question(query.prompt):
         knowledge_routed = False
 
     async def _synthesize_structured_detail(
@@ -621,6 +650,8 @@ async def _execute_copilot_query(
         """Turn verified engine output into prose only for the requested detailed mode."""
         if query.response_mode != "detailed" or not available or pipeline_provider is None:
             return base_answer, False
+        if query.task_type == "trajectory_recomm" and intent in {"order_actual", "order_missing", "order_adherence", "order_direction"}:
+            return _structured_detail_fallback(query.task_type, base_answer, analysis_context, intent=intent), False
         try:
             pipeline = intent_pipeline or await to_thread.run_sync(pipeline_provider)
             session_summary = ""
@@ -675,7 +706,7 @@ async def _execute_copilot_query(
                 query.task_type,
                 base_answer,
                 analysis_context,
-                interpretation=interpretation,
+                interpretation=interpretation, intent=intent,
             ), bool(result.get("deadline_hit", False)) or not grounded
         except Exception:  # noqa: BROAD_EXCEPT_OK - verified deterministic answer remains available
             logger.exception(
@@ -683,7 +714,7 @@ async def _execute_copilot_query(
                 query.request_id,
                 query.task_type,
             )
-        return _structured_detail_fallback(query.task_type, base_answer, analysis_context), True
+        return _structured_detail_fallback(query.task_type, base_answer, analysis_context, intent=intent), True
 
     if viewer_analysis is not None and query.task_type in ("pose_recomm", "trajectory_recomm") and not knowledge_routed:
         analysis_context = (_current_viewer_pose_context(query.prompt, viewer_analysis)
@@ -868,16 +899,20 @@ async def _execute_copilot_query(
         )
     definition_context = (viewer_definition_context(query.prompt, query.context)
                           if query.response_mode == "quick" and query.task_type == "knowledge_search" else None)
+    knowledge_client_context = None if viewer_analysis is not None else (definition_context or query.context)
+    if coating_advice_context is not None:
+        knowledge_client_context = "[검증된 최종 도막 비교 자료]\n" + json.dumps(coating_advice_context, ensure_ascii=False, separators=(",", ":"))
+        knowledge_client_context += "\n최종 기록의 전문가 대비 대표 두께 비교이며 재생 시점의 현재 도막 판정이 아닙니다. 질문의 원인·방법·관계를 직접 설명하고 확인된 측정 사실과 일반적인 가능한 원인을 구분하세요. 권장 Zone 순서를 대신 답하지 마세요."
     instruction = build_query_instruction(
         query.prompt,
-        client_context=None if viewer_analysis is not None else (definition_context or query.context),
+        client_context=knowledge_client_context,
         session_summary=session_summary,
         recent_turns=[] if definition_context is not None else recent_turns,
         response_mode=query.response_mode,
     )
     generation_instruction = (build_query_instruction(
         query.prompt,
-        client_context=None if viewer_analysis is not None else (definition_context or query.context),
+        client_context=knowledge_client_context,
         session_summary=session_summary,
         recent_turns=[] if definition_context is not None else recent_turns,
         response_mode=query.response_mode,
@@ -934,7 +969,8 @@ async def _execute_copilot_query(
         retrieval_used=use_rag,
         citations=list(parsed.citations),
         degraded=parsed.repair_path in FAILED_REPAIR_PATHS or bool(result.get("deadline_hit", False)),
-        context_status="available" if session_summary else "not_available",
+        coating_context=coating_advice_context,
+        context_status="available" if session_summary or coating_advice_context else "not_available",
 
     )
 

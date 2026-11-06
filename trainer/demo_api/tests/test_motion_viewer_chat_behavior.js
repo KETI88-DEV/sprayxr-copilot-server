@@ -37,7 +37,8 @@ const record = (id = 'RECORD-A') => ({ worker: { worker_id: 'W', display_name: '
   process_label: '도장', mode_id: 3, selected_session_id: id, pose_evaluation: { status: 'available', similarity_percent: 70,
     zones: { '1:2': { map_num: '1', zone_id: '2', similarity_percent: 88, corrections: [] },
              '1:3': { map_num: '1', zone_id: '3', similarity_percent: 40, corrections: [] } }, corrections: [] },
-  reference_order_evaluation: { recommended_flow: ['2', '3'] }, query_context_signatures: { pose_recomm: 'signed', trajectory_recomm: 'signed-order' },
+  coating_evaluation: { analysis_status: 'available', scope: 'final_record', zones: [{ zone_id: '2', actual_um: 180, reference_um: 120 }] },
+  reference_order_evaluation: { recommended_flow: ['2', '3'] }, query_context_signatures: { pose_recomm: 'signed', trajectory_recomm: 'signed-order', coating_status: 'signed-coating' },
   frames: [{ t: 0, map_num: null, zone_id: null }, { t: 1, map_num: '1', zone_id: '2', spraying: true },
            { t: 2, map_num: null, zone_id: null, spraying: false }, { t: 3, map_num: '1', zone_id: '3', spraying: true },
            { t: 4, map_num: null, zone_id: null, spraying: false }] });
@@ -52,6 +53,16 @@ async function submit(app, question = '지금 자세는 어때?') {
 }
 
 (async () => {
+  for (const index of [0, 1, 2]) {
+    const app = setup(), data = record();
+    app.emit('motion-viewer-data', data);
+    await app.find('mvc-chips').children[index].fire('click');
+    const { request, completion } = await submit(app, '도막이 과하거나 모자란 영역이 있어?');
+    const value = JSON.parse(request.body.context.slice(request.body.context.indexOf(':') + 1));
+    assert.equal(value.coating_signature, 'signed-coating');
+    assert.equal(value.coating_context.zones[0].actual_um, 180);
+    request.finish(); await completion;
+  }
   {
     const app = setup(), data = record();
     app.emit('motion-viewer-data', data);

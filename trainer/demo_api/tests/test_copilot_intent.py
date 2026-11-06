@@ -74,3 +74,20 @@ def test_single_zone_reference_is_not_described_as_a_broken_one_item_order() -> 
     result = answer_order_question(("RPT-mode1", {"sequence_report": report}), prompt="권장 순서는?", intent="order_reference")
 
     assert result.answer == "학습모드 1은 Zone 1 한 곳으로 구성되어 있으며, 전형기 5회 모두 Zone 1부터 작업했습니다."
+
+
+
+def test_domain_knowledge_is_not_forced_into_order_by_a_wrong_classifier_label():
+    for question in ("저도막이 뭐야?", "적정 이격거리는?", "과도막의 원인은?"):
+        assert classify_question_intent("trajectory_recomm", question, lambda *_: "order_reference") == "knowledge"
+
+
+
+def test_coating_advice_keeps_its_question_meaning_even_when_a_zone_is_mentioned():
+    from trainer.demo_api.copilot_intent import is_coating_status_question
+    for question in ("Zone별 도막을 균일하게 만드는 방법은?", "이 구역에서 과도막이 생기는 원인은 뭐야?",
+                     "도막 두께와 이격거리 중 어느 것이 더 중요해?", "지금 도막이 두꺼운데 어떻게 고쳐?"):
+        assert not is_coating_status_question(question)
+        for task in ("pose_recomm", "trajectory_recomm"):
+            bad = "pose_zone" if task == "pose_recomm" else "order_reference"
+            assert classify_question_intent(task, question, lambda *_: bad) == "knowledge"

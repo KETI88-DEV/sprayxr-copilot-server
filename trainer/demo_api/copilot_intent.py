@@ -12,6 +12,20 @@ POSE_INTENTS = {"pose_overall", "pose_worst_zone", "pose_zone", "pose_right", "p
 ORDER_INTENTS = {"order_reference", "order_actual", "order_missing", "order_adherence", "order_direction", "knowledge"}
 
 
+def is_coating_advice_question(prompt: str) -> bool:
+    return bool(re.search(r"도막|두께|과도막|저도막|coating|thickness", prompt, re.I)
+                and re.search(r"뭐|무엇|뜻|의미|정의|원인|이유|왜|방법|어떻게|예방|방지|원리|관계|영향|중요|하려면|개선|해야|고치|맞추|조절", prompt))
+
+
+def is_coating_status_question(prompt: str) -> bool:
+    subject = re.search(r"도막|두께|과도막|저도막|coating|thickness", prompt, re.I)
+    if not subject or is_coating_advice_question(prompt):
+        return False
+    specific = re.search(r"영역|구역|zone|존|부위|현재|지금|이번|내[ 가]|어디|어느", prompt, re.I)
+    definition = re.search(r"뭐|무엇|뜻|의미|정의|원인|예방|방지", prompt)
+    return bool(specific or (not definition and re.search(r"과하|모자|부족|이상|상태|어때|분석|평가|얇|두껍|과다|괜찮|충분|양호|균일|불량|칠했|잘됐", prompt)))
+
+
 def preset_intent(task_type: str, prompt: str) -> str | None:
     """Skip model classification only for exact, unambiguous UI questions."""
     normalized = re.sub(r"[\s?!.]", "", prompt).lower()
@@ -32,6 +46,8 @@ def preset_intent(task_type: str, prompt: str) -> str | None:
 
 
 def fallback_intent(task_type: str, prompt: str) -> str:
+    if is_coating_advice_question(prompt):
+        return "knowledge"
     lowered = prompt.lower()
     if task_type == "pose_recomm":
         if "오른" in lowered or "right" in lowered:
@@ -66,6 +82,11 @@ def classify_question_intent(
         try:
             result = str(llm_classifier(task_type, prompt)).strip().lower()
             if result in allowed:
+                # A tab is a UI preference. A confidently different industrial
+                # subject must not become a Zone-order answer on a bad label.
+                if (is_coating_advice_question(prompt) or (result != "knowledge" and fallback_intent(task_type, prompt) == "knowledge"
+                        and re.search(r"도막|두께|이격|속도|노즐|압력|안전|보호구|오버랩", prompt))):
+                    return "knowledge"
                 return result
             logger.warning("copilot intent classifier returned invalid label task=%s label=%s", task_type, result)
         except Exception:  # noqa: BROAD_EXCEPT_OK - deterministic fallback keeps chat available

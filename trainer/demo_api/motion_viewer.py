@@ -2183,6 +2183,8 @@ def create_motion_viewer_router(
             "object_mesh_status": "verified" if mesh_available else "ray_point_fallback",
             **paint_statistics,
         }
+        from trainer.demo_api.coating_query import viewer_coating_context
+        payload["coating_evaluation"] = viewer_coating_context(payload)
         from trainer.demo_api.viewer_context import viewer_signatures
         payload["query_context_signatures"] = viewer_signatures(payload)
         return payload
