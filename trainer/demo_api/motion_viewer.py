@@ -2185,6 +2185,8 @@ def create_motion_viewer_router(
         }
         from trainer.demo_api.coating_query import viewer_coating_context
         payload["coating_evaluation"] = viewer_coating_context(payload)
+        from trainer.demo_api.dialogue import viewer_dialogue_context
+        payload["dialogue_evaluation"] = viewer_dialogue_context(payload)
         from trainer.demo_api.viewer_context import viewer_signatures
         payload["query_context_signatures"] = viewer_signatures(payload)
         return payload

@@ -40,4 +40,5 @@ def viewer_signatures(payload: dict[str, Any]) -> dict[str, str]:
     order_context["direction_summary"] = payload.get("direction_summary")
     order_context["zone_keys"] = sorted((pose.get("zones") or {}).keys())
     return {"pose_recomm": sign_context("pose_recomm", pose_context), "trajectory_recomm": sign_context("trajectory_recomm", order_context),
+            "dialogue": sign_context("dialogue", payload.get("dialogue_evaluation") or {}),
             "coating_status": sign_context("coating_status", payload.get("coating_evaluation") or {})}

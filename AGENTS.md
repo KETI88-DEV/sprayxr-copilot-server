@@ -107,7 +107,7 @@ npm run start:electron
 - Before committing, inspect status, diff, and recent history. Stage only files belonging to the current update; never include unrelated concurrent changes, local artifacts, secrets, or generated outputs.
 - Use Conventional Commits: `<type>(<scope>): <concise Korean summary>`. Scope is optional; keep one purpose per commit. Allowed types: `feat`, `fix`, `docs`, `test`, `refactor`, `chore`, `build`, `ci`.
 - This worktree is shared with the user and other agents. Stage explicit paths — never `git add -A`. Unfamiliar modified files are someone else's in-progress work; do not revert them.
-- `main` is far ahead of `origin/main` and pushes need repaired GitHub credentials. Local verification and commits do not prove remote delivery.
+- Verify remote branch heads and SSH credentials before pushing. Local verification and commits do not prove remote delivery.
 
 ## Issue tracking
 
@@ -135,3 +135,12 @@ npm run start:electron
 2. Run baseline RAG evaluation before SFT generation; `generate_sft.py` consumes its raw response artifact.
 3. Generate document QA SFT, merge function-calling SFT, then run `train_qlora.py` with the intended QLoRA config.
 4. Start MCP before live agentic generation; score the generated JSONL separately with `run_agentic_eval.py`.
+
+## Query dialogue and operator provenance
+
+- Operational QA reuses `COPILOT-DEMO-USER` (`모의훈련자`) and sends `X-Copilot-Source: assistant-test`. Do not create a trainee per test run; use request/conversation IDs for isolation.
+- Motion viewer requests keep the selected worker ID and send `X-Copilot-Source: motion-viewer`. Caller channel (`3D VIEWER`, `TEST`, `TEST API`) is separate from the trainee identity.
+- Do not rename historical worker `1234` or attribute its old calls to a person without evidence. Missing historical IPs stay unknown; file imports have no HTTP caller.
+- IP comes from ASGI client scope. Never trust arbitrary forwarded headers or widen trusted proxies to `*` merely to populate the UI.
+- Query dialogue uses persisted history scoped by user, training session and optional `X-Copilot-Conversation`. All Query `AgentPipeline.run` calls disable pipeline history; its unscoped memory is not a second source of conversation context.
+- Viewer dialogue facts require the server signature. Selected Zone representative statistics are not instantaneous measurements.

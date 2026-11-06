@@ -7,6 +7,7 @@ import sqlite3
 from typing import Any
 
 from trainer.demo_api.db_report_status import report_progress
+from trainer.demo_api.db_provenance import record_provenance, provenance_meta
 
 PRIVATE_TABLES = frozenset({"admin_change_log"})
 
@@ -59,6 +60,7 @@ def record_detail(conn: sqlite3.Connection, table: str, rowid: int) -> dict[str,
     if row is None:
         return None
     meta = [{"label":"테이블","value":table},{"label":"레코드 번호","value":rowid}]
+    meta.extend(provenance_meta(record_provenance(conn, table, row)))
     if table == "completions":
         progress = report_progress(row)
         meta.extend({"label":label,"value":value} for label,value in (("처리 상태",progress['label']),("대기 경과",progress['elapsed']),("최근 처리 시각",progress['latest_at'] or '미기록'),("상태 사유",progress['reason'])))

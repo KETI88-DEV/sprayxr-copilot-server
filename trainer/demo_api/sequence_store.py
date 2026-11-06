@@ -108,6 +108,10 @@ class SequenceStore:
         with self._conn:
             self._conn.execute(_SCHEMA)
             self._conn.execute(_QUERY_TURNS_SCHEMA)
+            columns = {row[1] for row in self._conn.execute("PRAGMA table_info(query_turns)")}
+            if "conversation_key" not in columns:
+                self._conn.execute("ALTER TABLE query_turns ADD COLUMN conversation_key TEXT")
+            self._conn.execute("CREATE INDEX IF NOT EXISTS idx_query_dialogue ON query_turns (session_key, user_id, conversation_key, id)")
             self._conn.execute(_QUERY_TURNS_INDEX)
             self._conn.execute("""CREATE TABLE IF NOT EXISTS sequence_analysis_results (
                 session_key TEXT NOT NULL, sequence_id TEXT NOT NULL,
@@ -259,25 +263,29 @@ class SequenceStore:
         answer: str,
         task_type: str,
         created_at: str,
+        conversation_key: str | None = None,
     ) -> None:
         """Persist one completed exchange for contextual follow-up questions."""
         if not session_key:
             return
         with self._guard, self._conn:
             self._conn.execute(
-                "INSERT INTO query_turns (session_key, user_id, prompt, answer, task_type, created_at)"
-                " VALUES (?, ?, ?, ?, ?, ?)",
-                (session_key, user_id, prompt, answer, task_type, created_at),
+                "INSERT INTO query_turns (session_key, user_id, prompt, answer, task_type, created_at, conversation_key)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (session_key, user_id, prompt, answer, task_type, created_at, conversation_key),
             )
 
-    def recent_query_turns(self, session_key: str, *, limit: int = 4) -> list[dict[str, str]]:
+    def recent_query_turns(self, session_key: str, *, limit: int = 4, user_id: str | None = None, conversation_key: str | None = None) -> list[dict[str, str]]:
         """Return a bounded chronological window without leaking another session."""
         bounded = max(1, min(int(limit), 12))
+        where, params = "session_key = ?", [session_key]
+        if user_id is not None:
+            where += " AND user_id = ? AND conversation_key IS ?"
+            params.extend([user_id, conversation_key])
         with self._guard:
             rows = self._conn.execute(
-                "SELECT user_id, prompt, answer, task_type, created_at"
-                " FROM query_turns WHERE session_key = ? ORDER BY id DESC LIMIT ?",
-                (session_key, bounded),
+                "SELECT user_id, prompt, answer, task_type, created_at FROM query_turns WHERE " + where + " ORDER BY id DESC LIMIT ?",
+                [*params, bounded],
             ).fetchall()
         return [
             {

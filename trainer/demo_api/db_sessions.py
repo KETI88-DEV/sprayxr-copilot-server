@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 
 from trainer.demo_api.db_origin import ORIGINS, normalize_origin, origin_control, origin_expression, preserve_origin_links
+from trainer.demo_api.db_provenance import record_provenance, provenance_meta
 from trainer.demo_api.db_report_status import PROCESSING_FIELDS, report_progress
 
 
@@ -226,6 +227,7 @@ def render_session_list(conn: sqlite3.Connection, *, q: str = "", state: str = "
     tabs = "".join(f'<a class="{"active" if key == state else ""}" href="{_url("/admin/sessions",q=q,state=key,limit=limit)}">{label}</a>' for key, label in (("all", "전체"), ("unfinished", "미종료"), ("ended", "훈련 종료")))
     items = []
     for row in rows:
+        provenance = record_provenance(conn, "sessions", row)
         ended = row["stage"] == "ended"
         stamp = f'<span class="session-ended-at">{_time(row["ended_at"])}</span>' if ended else '<small>현재 접속 여부와 무관한 저장 상태</small>'
         report_kind, report_label = _report_state(row["latest_report_status"])
@@ -234,7 +236,7 @@ def render_session_list(conn: sqlite3.Connection, *, q: str = "", state: str = "
         report_badge = f'<span class="session-report-badge {report_kind}">리포트 {_e(report_label)}</span>' if row["report_count"] else '<small>리포트 기록 없음</small>'
         items.append(f'''<a class="session-item {"ended" if ended else "unfinished"}" href="{_url("/admin/sessions/view",session_id=row["session_id"])}">
             <div><strong>{_e(row['session_id'])}</strong><div class="session-counts">저장 시퀀스 {row['sequence_count']:,} · 질문 {row['query_count']:,}</div><small>시퀀스 호출 {row['call_sequence_count']:,} · 쿼리 호출 {row['call_query_count']:,} (수집 이후)</small><small>전체 실제 호출 {row['call_count']:,}건 · 수집 이후</small></div>
-            <div><strong>{_e(row['worker'])}</strong><small>{_e(row['user_id'] or '작업자 ID 미기록')}</small><small>{_e(_mode(row['scenario_id']))} · {ORIGINS[row['creation_origin']]}</small></div>
+            <div><strong>{_e(row['worker'])}</strong><small>{_e(row['user_id'] or '작업자 ID 미기록')}</small><small>{_e(_mode(row['scenario_id']))} · {ORIGINS[row['creation_origin']]}</small><small>생성 호출 {_e(provenance['caller_label'])} · IP {_e(provenance['client_ip'])}</small></div>
             <div><span class="session-state">{_STAGES[row['stage']]}</span>{stamp}{report_badge}</div>
             <div><small>훈련 시작 {_time(row['started_at'])}</small><small>마지막 활동 {_time(row['last_at'])}</small></div></a>''')
     empty = "조건에 맞는 세션이 없습니다." if q or state != "all" else "아직 등록된 훈련 세션이 없습니다."
@@ -396,13 +398,14 @@ def render_session_detail(conn: sqlite3.Connection, session_id: str, *, kind: st
     call_page = min(call_page, pages)
     offset = (call_page - 1) * _CALL_PAGE_SIZE
     if {"id", "session_id"} <= call_cols:
-        names = ("id", "method", "path", "category", "source", "received_at", "status_code", "duration_ms", "sequence_id", "request_id")
+        names = ("id", "method", "path", "category", "source", "received_at", "status_code", "duration_ms", "sequence_id", "request_id", "client_ip", "caller_source")
         projection = ",".join(f'"{name}"' if name in call_cols else f'NULL AS "{name}"' for name in names)
         ordering = f'julianday(received_at) IS NULL,julianday(received_at) {direction},id {direction}' if "received_at" in call_cols else f"id {direction}"
         calls = conn.execute(f"SELECT {projection} FROM api_calls" + call_where + f" ORDER BY {ordering} LIMIT ? OFFSET ?", [*call_params, _CALL_PAGE_SIZE, offset]).fetchall()
     legacy = conn.execute("SELECT * FROM (" + legacy_sql + ")" + legacy_where + f" ORDER BY julianday(at) IS NULL,julianday(at) {direction},event_key {direction} LIMIT ? OFFSET ?", [*legacy_params, _CALL_PAGE_SIZE, offset]).fetchall()
     call_items = []
     for call in calls:
+        provenance = record_provenance(conn, "api_calls", call)
         elapsed = f" · {call['duration_ms']:g} ms" if isinstance(call["duration_ms"], (int, float)) else ""
         summary = _KINDS.get(call["category"], "기타") + elapsed
         if call["sequence_id"]:
@@ -411,6 +414,7 @@ def render_session_detail(conn: sqlite3.Connection, session_id: str, *, kind: st
             summary += " · 요청 " + str(call["request_id"])
         if call["source"] == "test":
             summary += " · 테스트"
+        summary += " · " + provenance['caller_label'] + " · IP " + provenance['client_ip']
         call_items.append(_event_button(session_id, f"call:{call['id']}", call["received_at"], f"{call['method'] or ''} {call['path'] or '경로 미기록'}", summary, "실제 호출", call["status_code"]))
     legacy_items = [_event_button(session_id, event["event_key"], event["at"], _KINDS.get(event["category"], "저장 기록"), event["summary"], "기존 저장 기록") for event in legacy]
     if not call_items:
@@ -429,6 +433,8 @@ def render_session_detail(conn: sqlite3.Connection, session_id: str, *, kind: st
                 ("훈련 상태", _STAGES[row["stage"]]), ("생성 시각", _time(row["created_at"])), ("훈련 시작", _time(row["started_at"])),
                 ("훈련 종료", _time(row["ended_at"])), ("훈련 소요 시간", _duration(row["started_at"], row["ended_at"], row["stage"])), ("마지막 활동", _time(row["last_at"])),
                 ("목표 도막 두께", f"{row['target_thickness_um']:g} μm" if isinstance(row["target_thickness_um"], (int, float)) else "미기록"))
+    provenance = record_provenance(conn, "sessions", row)
+    metadata += (("생성 호출 채널", provenance['caller_label']), ("생성 호출 IP", provenance['client_ip']))
     meta_html = "".join(f'<div><dt>{label}</dt><dd>{_e(value)}</dd></div>' for label, value in metadata)
     tabs = "".join(f'<a class="{"active" if key == kind else ""}" href="{_url("/admin/sessions/view",session_id=session_id,kind=key,q=q,outcome=outcome,order=order)}">{label}</a>' for key, label in _KINDS.items())
     outcome_tabs = "".join(f'<a class="{"active" if key == outcome else ""}" href="{_url("/admin/sessions/view",session_id=session_id,kind=kind,q=q,outcome=key,order=order)}">{label}</a>' for key, label in (("all", "모든 응답"), ("errors", "HTTP 오류만")))
@@ -475,6 +481,7 @@ def session_event_detail(conn: sqlite3.Connection, session_id: str, event_key: s
         meta = _metadata(data, (("session_id", "세션 ID"), ("request_id", "요청 ID"), ("user_id", "작업자 ID"), ("scenario_id", "학습모드"),
             ("category", "종류"), ("source", "수집 출처"), ("sequence_id", "시퀀스 ID"), ("received_at", "요청 수신"), ("finished_at", "처리 종료"),
             ("status_code", "HTTP 상태"), ("duration_ms", "처리 시간 (ms)"), ("request_bytes", "요청 크기 (bytes)"), ("response_bytes", "응답 크기 (bytes)"), ("content_type", "Content-Type")))
+        meta.extend(provenance_meta(record_provenance(conn, "api_calls", data)))
         sections = [{"title": label, "data": _json(data.get(key))} for key, label in (("request_json", "요청 데이터"), ("response_json", "응답 데이터"))]
         notice = "실제 호출 · 수집 이후 기록"
         if data.get("request_truncated") or data.get("response_truncated"):
@@ -486,7 +493,9 @@ def session_event_detail(conn: sqlite3.Connection, session_id: str, event_key: s
         if (is_start and not row["started_at"]) or (not is_start and row["stage"] != "ended"):
             return None
         data = {key: row[key] for key in ("session_id", "user_id", "scenario_id", "session_status", "created_at", "started_at", "ended_at", "target_thickness_um")}
-        return {"title": "훈련 시작 저장 기록" if is_start else "훈련 종료 저장 기록", "meta": [{"label": "세션 ID", "value": session_id}], "sections": [{"title": "세션 저장 데이터", "data": data}], "notice": notice}
+        # End events are not the session's creation call.
+        provenance = record_provenance(conn, "sessions", row) if is_start else record_provenance(conn, "unknown", {})
+        return {"title": "훈련 시작 저장 기록" if is_start else "훈련 종료 저장 기록", "meta": [{"label": "세션 ID", "value": session_id}] + provenance_meta(provenance), "sections": [{"title": "세션 저장 데이터", "data": data}], "notice": notice}
     prefix, separator, identifier = event_key.partition(":")
     if not separator or not identifier:
         return None
@@ -504,9 +513,10 @@ def session_event_detail(conn: sqlite3.Connection, session_id: str, event_key: s
     if stored is None:
         return None
     data = dict(stored)
+    provenance = record_provenance(conn, table, data)
     sections = []
     payload_key = "body" if prefix == "sequence" else "payload" if prefix == "completion" else None
     if payload_key in data:
         sections.append({"title": "저장된 시퀀스 데이터" if prefix == "sequence" else "저장된 리포트 데이터", "data": _json(data.pop(payload_key))})
     sections.insert(0, {"title": "저장 기록", "data": data})
-    return {"title": title, "meta": [{"label": "세션 ID", "value": session_id}], "sections": sections, "notice": notice}
+    return {"title": title, "meta": [{"label": "세션 ID", "value": session_id}] + provenance_meta(provenance), "sections": sections, "notice": notice}

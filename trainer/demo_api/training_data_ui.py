@@ -163,7 +163,7 @@ def render_training_data() -> str:
 <section id="training-data-root" aria-labelledby="td-page-title">
   <header class="td-header">
     <div><div class="td-eyebrow">TRAINING DATASET</div><h1 id="td-page-title">학습 데이터</h1>
-      <p class="td-description">훈련 기록 CSV와 연결된 높이맵 텍스처를 세션별 JSON으로 변환한 데이터입니다.<br>작업자와 학습모드별 구성을 살펴보고, 각 데이터의 맵 분석과 생성 JSON을 확인합니다.</p>
+      <p class="td-description">훈련 기록 CSV와 연결된 높이맵 텍스처를 세션별 JSON으로 변환한 데이터입니다.<br>작업자와 학습모드별 구성을 살펴보고, 각 데이터의 맵 분석과 생성 JSON을 확인합니다.<br>호출 채널: 파일 수집 · 호출 IP: 해당 없음</p>
     </div>
     <div class="td-header-meta">취득 기간<strong id="td-acquisition-range">불러오는 중</strong><span id="td-acquisition-note">현재 조회 데이터 기준</span></div>
   </header>
@@ -207,7 +207,7 @@ def render_training_data() -> str:
   </section>
 
   <dialog id="td-detail" class="td-modal" aria-labelledby="td-detail-title" aria-describedby="td-detail-description">
-    <header class="td-modal-head"><div><div class="td-eyebrow">DATASET DETAIL</div><h2 id="td-detail-title">학습 데이터 상세</h2><p id="td-detail-description" class="td-help">원본 출처, 연결 맵과 생성된 JSON을 확인합니다.</p></div><button type="button" id="td-detail-close" class="td-close" aria-label="상세 창 닫기">×</button></header>
+    <header class="td-modal-head"><div><div class="td-eyebrow">DATASET DETAIL</div><h2 id="td-detail-title">학습 데이터 상세</h2><p id="td-detail-description" class="td-help">원본 출처, 연결 맵과 생성된 JSON을 확인합니다.</p><p class="td-help">호출 채널: 파일 수집 · 호출 IP: 해당 없음</p></div><button type="button" id="td-detail-close" class="td-close" aria-label="상세 창 닫기">×</button></header>
     <div id="td-detail-content" class="td-modal-body"><p class="td-detail-loading">상세 데이터를 불러오는 중입니다.</p></div>
   </dialog>
 </section>

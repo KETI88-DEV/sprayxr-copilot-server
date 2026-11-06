@@ -452,6 +452,39 @@ class AgentPipeline:
             ).strip()
         return self._generate_direct(messages, enable_thinking=False).strip().split()[0]
 
+    def _dialogue_completion(self, messages, *, max_tokens, answer_regex=None,
+                             inference_backend=None, inference_counter=None, inference_context_limit=None):
+        model = inference_backend if inference_backend is not None else self.model
+        counter = inference_counter or self._prompt_token_counter()
+        limit = inference_context_limit or context_window(self.config)
+        # Trim complete oldest exchanges, preserving the current question and system facts.
+        while counter.count_messages(messages) + max_tokens + 32 > limit and len(messages) > 2:
+            del messages[1:3]
+        if counter.count_messages(messages) + max_tokens + 32 > limit:
+            raise ValueError("Conversation exceeds model context")
+        raw = self._generate_direct(messages, enable_thinking=False, max_tokens=max_tokens,
+                                    answer_regex=answer_regex, inference_backend=model)
+        clean, _ = self._strip_think_blocks(raw)
+        if not clean.strip():
+            raise ValueError("Empty conversation response")
+        return clean.strip()
+
+    def plan_copilot_dialogue(self, prompt, *, task_type, recent_turns, facts, **options):
+        from trainer.demo_api.dialogue import planning_messages, parse_plan, plan_regex
+        messages = planning_messages(prompt, task_type=task_type, recent_turns=recent_turns, facts=facts)
+        # Keep planner inputs small independently of the answer budget.
+        counter = options.get("inference_counter") or self._prompt_token_counter()
+        limit = options.get("inference_context_limit") or context_window(self.config)
+        while counter.count_messages(messages) + 128 > limit and recent_turns:
+            recent_turns = recent_turns[1:]
+            messages = planning_messages(prompt, task_type=task_type, recent_turns=recent_turns, facts=facts)
+        return parse_plan(self._dialogue_completion(messages, max_tokens=96, answer_regex=plan_regex(), **options))
+
+    def converse_copilot(self, prompt, *, recent_turns, facts, response_mode, **options):
+        from trainer.demo_api.dialogue import conversation_messages
+        messages = conversation_messages(prompt, recent_turns=recent_turns, facts=facts, response_mode=response_mode)
+        return self._dialogue_completion(messages, max_tokens=192 if response_mode == "quick" else 640, **options)
+
     def translate_copilot_text(self, text: str, *, source_language: str, target_language: str,
                                inference_backend: Any = None, inference_counter: Any = None,
                                inference_context_limit: int | None = None) -> str:
@@ -1465,14 +1498,15 @@ class AgentPipeline:
         if quick_cache_scope is not None:
             result["metadata"]["quick_cache_hit"] = quick_cache_hit
 
-        self.session_context.update(
-            active_session_id,
-            {
-                "instruction": instruction,
-                "response": response_text,
-                "tool_calls": tool_calls,
-            },
-        )
+        if use_pipeline_history:
+            self.session_context.update(
+                active_session_id,
+                {
+                    "instruction": instruction,
+                    "response": response_text,
+                    "tool_calls": tool_calls,
+                },
+            )
         return result
 
 

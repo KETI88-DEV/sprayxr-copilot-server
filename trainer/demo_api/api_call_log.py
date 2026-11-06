@@ -18,6 +18,8 @@ from urllib.parse import parse_qs, unquote
 
 from anyio import CancelScope, to_thread
 
+from trainer.demo_api.request_provenance import PROVENANCE_COLUMNS, capture_provenance
+
 logger = logging.getLogger(__name__)
 
 REQUEST_CAPTURE_LIMIT = 8 * 1024 * 1024
@@ -27,6 +29,7 @@ _COLUMNS = (
     *_IDENTIFIERS, "method", "path", "category", "source", "received_at", "finished_at",
     "status_code", "duration_ms", "request_json", "response_json", "request_bytes",
     "response_bytes", "request_truncated", "response_truncated", "content_type",
+    *PROVENANCE_COLUMNS,
 )
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS api_calls (
@@ -56,6 +59,11 @@ class ApiCallStore:
             with conn:
                 conn.execute("PRAGMA journal_mode=WAL")
                 conn.execute(_SCHEMA)
+                # Nullable, idempotent migration: history has no recoverable IP.
+                present = {row[1] for row in conn.execute("PRAGMA table_info(api_calls)")}
+                for name in PROVENANCE_COLUMNS:
+                    if name not in present:
+                        conn.execute(f"ALTER TABLE api_calls ADD COLUMN {name} TEXT")
                 conn.execute("CREATE INDEX IF NOT EXISTS api_calls_session_id ON api_calls(session_id, id)")
         except Exception:
             logger.warning("API call storage is unavailable", exc_info=True)
@@ -333,6 +341,8 @@ class _BodyCapture:
 
 def _category(path: str) -> str:
     endpoint = path.rstrip("/").rsplit("/", 1)[-1]
+    if path.startswith("/api/v1/test/workflow/"):
+        return {"1-start": "start", "2-sequence": "sequence", "3-complete": "complete", "4-report": "report"}.get(endpoint, "other")
     if path.startswith("/api/v1/sessions/") and endpoint in {"start", "end", "complete"}:
         return endpoint
     if "sequence" in path:
@@ -383,6 +393,7 @@ class ApiCallLoggingMiddleware:
             return
         received_at, started = _now(), time.perf_counter()
         headers = scope.get("headers", [])
+        provenance = capture_provenance(scope)
         content_type = _header(headers, b"content-type")
         request = _BodyCapture(content_type, REQUEST_CAPTURE_LIMIT)
         response = _BodyCapture("", RESPONSE_CAPTURE_LIMIT)
@@ -416,6 +427,7 @@ class ApiCallLoggingMiddleware:
                 request_json, request_limited = _bounded_payload(request_json, REQUEST_CAPTURE_LIMIT)
                 response_json, response_limited = _bounded_payload(response_json, RESPONSE_CAPTURE_LIMIT)
                 self.store.record({
+                    **provenance,
                     **identifiers, "method": scope.get("method", ""), "path": path,
                     "category": _category(path),
                     "source": "test" if path.startswith("/api/v1/test/") else "http",

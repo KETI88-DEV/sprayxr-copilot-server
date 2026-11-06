@@ -24,7 +24,7 @@ function setup() {
   const requests = [];
   const context = vm.createContext({ document, Option: class extends Element { constructor(text, value) { super('option', text); this.value = value; } },
     addEventListener: (name, handler) => (events[name] ||= []).push(handler), performance: { now: () => 1000 },
-    fetch: (url, options) => new Promise(resolve => requests.push({ url, body: JSON.parse(options.body),
+    fetch: (url, options) => new Promise(resolve => requests.push({ url, headers: options.headers, body: JSON.parse(options.body),
       finish: () => resolve({ ok: true, json: async () => ({ status: 'SUCCESS', data: { answer: '서버 평가 답변', citations: [] } }) }) })) });
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../static/motion_viewer_chat.js'), 'utf8'), context);
   function all(node = document.body) { return [node, ...node.children.flatMap(all)]; }
@@ -171,5 +171,22 @@ async function submit(app, question = '지금 자세는 어때?') {
     assert.equal(decode(sent.request).playback_context.zone_id, null);
     sent.request.finish(); await sent.completion;
   }
-  console.log('motion viewer chat behavior: 4 scenarios passed');
+  {
+    const app=setup(), data=record(); app.emit('motion-viewer-data', data);
+    const first=await submit(app, '안녕');
+    assert.equal(first.request.headers['X-Copilot-Source'], 'motion-viewer');
+    assert.ok(first.request.headers['X-Copilot-Conversation'].startsWith('mv-'));
+    assert.equal(first.request.body.user_id, 'W');
+    first.request.finish(); await first.completion;
+    await app.find('mvc-chips').children[2].fire('click');
+    const second=await submit(app, '야');
+    assert.equal(second.request.headers['X-Copilot-Conversation'], first.request.headers['X-Copilot-Conversation']);
+    second.request.finish(); await second.completion;
+    const another=setup(); another.emit('motion-viewer-data', {...record(), worker: {}});
+    const third=await submit(another, '안녕');
+    assert.notEqual(third.request.headers['X-Copilot-Conversation'], first.request.headers['X-Copilot-Conversation']);
+    assert.equal(third.request.body.user_id, 'COPILOT-DEMO-USER');
+    third.request.finish(); await third.completion;
+  }
+  console.log('motion viewer chat behavior: 5 scenarios passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

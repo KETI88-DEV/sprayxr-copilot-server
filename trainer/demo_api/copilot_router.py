@@ -44,6 +44,7 @@ from fastapi.responses import JSONResponse
 from trainer.demo_api.copilot_contracts import CopilotQueryData, CopilotQueryRequest, CopilotResponse
 from trainer.demo_api.coating_query import answer_coating_question, parse_viewer_coating_context, report_coating_context
 from trainer.demo_api.copilot_intent import classify_question_intent, fallback_intent, preset_intent, is_coating_status_question, is_coating_advice_question
+from trainer.demo_api.dialogue import authenticated_facts, conversation_key, parse_plan, selected_direction_answer
 from trainer.demo_api.copilot_live_analysis import live_analysis
 from trainer.demo_api.copilot_session_context import build_query_instruction, summarize_session, viewer_definition_context
 from trainer.demo_api.pose_query import (
@@ -592,13 +593,65 @@ async def _execute_copilot_query(
     started: float | None = None,
     reports: V1Store | None = None,
     sequence_engine: SequenceAnalysisEngine | None = None,
+    conversation_id: str | None = None,
 ) -> JSONResponse:
     """Execute one normalized query for both text and voice transports."""
     request_started = time.monotonic() if started is None else started
 
+    dialogue_turns = await to_thread.run_sync(lambda: sequences.recent_query_turns(
+        query.session_id or "CHAT:" + query.user_id, limit=6,
+        user_id=query.user_id, conversation_key=conversation_id,
+    ))
+    facts = authenticated_facts(query.context)
+    decision = None
+    planned_pipeline = None
+    if query.task_type != "error_analysis" and pipeline_provider is not None and preset_intent(query.task_type, query.prompt) is None and not is_coating_status_question(query.prompt):
+        try:
+            planned_pipeline = await to_thread.run_sync(pipeline_provider)
+        except Exception:
+            # Preserve engine-only responses when the optional generator is offline.
+            planned_pipeline = None
+        planner = select_query_pipeline(planned_pipeline, "quick") if planned_pipeline else None
+        if getattr(planner, "supports_copilot_dialogue", callable(getattr(planner, "plan_copilot_dialogue", None))):
+            try:
+                def plan():
+                    with generation_slot_for(planner):
+                        return parse_plan(planner.plan_copilot_dialogue(query.prompt, task_type=query.task_type,
+                                          recent_turns=dialogue_turns, facts=facts))
+                decision = await to_thread.run_sync(plan)
+            except Exception:
+                logger.exception("copilot dialogue planning failed request_id=%s", query.request_id)
+                decision = {"kind": "clarify", "intent": "knowledge", "scope": "unspecified"}
+
+    if decision is not None:
+        intent = decision["intent"]
+        cross_tab = ((intent.startswith("pose_") and query.task_type != "pose_recomm")
+                     or (intent.startswith("order_") and query.task_type != "trajectory_recomm"))
+        if intent == "order_direction" and (decision["kind"] == "correction" or decision["scope"] in {"zone", "playback"}):
+            measured_direction = selected_direction_answer(facts)
+            if measured_direction:
+                return _success_response(query, request_started, answer=measured_direction,
+                                         retrieval_used=False, citations=[], context_status="available")
+        zone_lookup = (intent == "order_direction" or intent.startswith("pose_")) and decision["scope"] in {"zone", "playback"}
+        if decision["kind"] in {"chat", "clarify", "correction"} or cross_tab or zone_lookup:
+            try:
+                if query.session_id:
+                    facts["training_summary"] = await to_thread.run_sync(
+                        lambda: summarize_session(sequences.session_bodies(query.session_id)))
+                def converse():
+                    with generation_slot_for(planned_pipeline):
+                        return planned_pipeline.converse_copilot(query.prompt, recent_turns=dialogue_turns,
+                                                                 facts=facts, response_mode=query.response_mode)
+                answer = await to_thread.run_sync(converse)
+                return _success_response(query, request_started, answer=answer, retrieval_used=False,
+                                         citations=[], context_status="available" if facts else "not_available")
+            except Exception:
+                logger.exception("copilot conversation unavailable request_id=%s", query.request_id)
+                return error_response(503, "Conversation engine temporarily unavailable; retry")
+
     trusted_coating = parse_viewer_coating_context(query.context, query.task_type)
     coating_advice_context = (trusted_coating if is_coating_advice_question(query.prompt) and trusted_coating and trusted_coating.get("analysis_status") == "available" else None)
-    if is_coating_status_question(query.prompt):
+    if is_coating_status_question(query.prompt) or (decision and decision["intent"] == "coating_status" and decision["kind"] == "lookup"):
         coating = trusted_coating
         if coating is None:
             found_coating = (await to_thread.run_sync(lambda: reports.latest_complete_analysis(query.session_id))
@@ -610,11 +663,12 @@ async def _execute_copilot_query(
             retrieval_used=False, citations=[], coating_context=coating,
             context_status="available" if available else "not_available")
 
-    intent: str | None = None
-    intent_pipeline: object | None = None
+    intent: str | None = decision["intent"] if decision else None
+    intent_pipeline: object | None = planned_pipeline
+    classifier = None
     if query.task_type in ("pose_recomm", "trajectory_recomm"):
         classifier = None
-        intent = preset_intent(query.task_type, query.prompt)
+        intent = intent or preset_intent(query.task_type, query.prompt)
         if pipeline_provider is not None and intent is None:
             try:
                 intent_pipeline = await to_thread.run_sync(pipeline_provider)
@@ -632,7 +686,7 @@ async def _execute_copilot_query(
         logger.info("copilot intent request_id=%s task=%s intent=%s", query.request_id, query.task_type, intent)
     # If the model is unavailable, keep the selected structured tab operational;
     # only a successful semantic-model classification may cross-route to RAG.
-    knowledge_routed = intent == "knowledge" and classifier is not None
+    knowledge_routed = intent == "knowledge" and (classifier is not None or decision is not None)
     viewer_context_requested = bool(query.context and query.context.startswith(_MOTION_VIEWER_CONTEXT_PREFIX))
     try:
         viewer_analysis = _parse_motion_viewer_context(query.context, task_type=query.task_type)
@@ -655,12 +709,12 @@ async def _execute_copilot_query(
         try:
             pipeline = intent_pipeline or await to_thread.run_sync(pipeline_provider)
             session_summary = ""
-            recent_turns: list[dict[str, str]] = []
+            recent_turns: list[dict[str, str]] = dialogue_turns
             if query.session_id:
                 session_summary, recent_turns = await to_thread.run_sync(
                     lambda: (
                         summarize_session(sequences.session_bodies(query.session_id)),
-                        sequences.recent_query_turns(query.session_id, limit=4),
+                        dialogue_turns,
                     )
                 )
             instruction = build_query_instruction(
@@ -690,6 +744,7 @@ async def _execute_copilot_query(
                     return pipeline.run(
                         instruction=instruction,
                         force_route="fast",
+                        use_pipeline_history=False,
                         session_id=query.session_id,
                         enable_thinking=False,
                         use_rag=False,
@@ -889,12 +944,12 @@ async def _execute_copilot_query(
     # structured pose/order/report questions have already returned above.
     use_rag = query.use_rag != "N"
     session_summary = ""
-    recent_turns: list[dict[str, str]] = []
+    recent_turns: list[dict[str, str]] = dialogue_turns
     if query.session_id:
         session_summary, recent_turns = await to_thread.run_sync(
             lambda: (
                 summarize_session(sequences.session_bodies(query.session_id)),
-                sequences.recent_query_turns(query.session_id, limit=4),
+                dialogue_turns,
             )
         )
     definition_context = (viewer_definition_context(query.prompt, query.context)
@@ -924,6 +979,7 @@ async def _execute_copilot_query(
             return pipeline.run(
                 instruction=instruction,
                 force_route="fast",
+                use_pipeline_history=False,
                 session_id=query.session_id,
                 enable_thinking=False,
                 use_rag=use_rag,
@@ -935,9 +991,6 @@ async def _execute_copilot_query(
                     "generation_instruction": generation_instruction,
                     **({"retrieval_instruction": query.prompt}
                        if getattr(pipeline, "quick_query_runtime", None) is not None else {}),
-                    # Persistent dialogue is already in instruction. Do not add
-                    # the pipeline's second, recursively summarized copy.
-                    "use_pipeline_history": False,
                 } if query.response_mode == "quick" else {}),
             )
 
@@ -986,6 +1039,7 @@ async def execute_copilot_query(
     started: float | None = None,
     reports: V1Store | None = None,
     sequence_engine: SequenceAnalysisEngine | None = None,
+    conversation_id: str | None = None,
 ) -> JSONResponse:
     """Normalize foreign questions, keep Korean analysis, then localize only prose."""
     request_started = time.monotonic() if started is None else started
@@ -1024,7 +1078,7 @@ async def execute_copilot_query(
         response = await _execute_copilot_query(
             analysis_query, pipeline_provider=pipeline_provider, pending_answers=pending_answers,
             sequences=sequences, mcp_base_url=mcp_base_url, transport=transport,
-            started=request_started, reports=reports, sequence_engine=sequence_engine,
+            started=request_started, reports=reports, sequence_engine=sequence_engine, conversation_id=conversation_id,
         )
         if response.status_code != 200:
             return response
@@ -1045,15 +1099,14 @@ async def execute_copilot_query(
         data.pop("response_language", None)
     data["latency_ms"] = max(0, int((time.monotonic() - request_started) * 1000))
     data["generated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    if query.session_id:
-        try:
-            sequences.record_query_turn(
-                session_key=query.session_id, user_id=query.user_id,
-                prompt=query.prompt, answer=data["answer"], task_type=query.task_type,
-                created_at=data["generated_at"],
-            )
-        except Exception:
-            logger.exception("copilot query: failed to store dialogue request_id=%s", query.request_id)
+    try:
+        sequences.record_query_turn(
+            session_key=query.session_id or "CHAT:" + query.user_id, user_id=query.user_id,
+            prompt=query.prompt, answer=data["answer"], task_type=query.task_type,
+            created_at=data["generated_at"], conversation_key=conversation_id,
+        )
+    except Exception:
+        logger.exception("copilot query: failed to store dialogue request_id=%s", query.request_id)
     return JSONResponse(status_code=200, content=body)
 
 
@@ -1086,6 +1139,9 @@ def create_copilot_router(
             "  - 사용자·세션 맥락·검색 근거가 모두 같은 반복 질문은 최대 2분간 생성 결과를 재사용합니다.\n"
             "  - 새 시퀀스·대화·문맥·근거가 반영되면 다시 생성합니다. 새 질문의 처리 시간은 모델 부하에 따라 달라집니다.\n"
             "- **상세 분석 (`detailed`) · Qwen3.6-27B 모델**: 근거·원인·권장 조치를 확장해 설명합니다.\n"
+            "- **대화 맥락**: 일반 지식·일상 대화·계산·후속 질문도 처리합니다. 탭 선택이 질문 의도를 강제하지 않습니다. 도장 지식이 필요한 경우에 RAG를 사용합니다.\n"
+            "  - 선택 헤더 `X-Copilot-Conversation`: 채팅 창 식별자(영문·숫자·`._:-`, 최대 128자). 사용자·훈련 세션과 함께 대화 이력을 분리합니다. 생략하면 기본 대화를 사용합니다. 인증 수단은 아닙니다.\n"
+            "  - 선택 헤더 `X-Copilot-Source`: `motion-viewer`(3D VIEWER), `assistant-test`(TEST). DB 표시용 출처 힌트이며 훈련 대상 작업자 ID와 별개입니다.\n"
             "- **질문 언어**: `language`로 지정합니다. 생략 시 `ko`입니다.\n"
             "- **답변 언어**: `response_language`로 지정하며, 생략/null이면 질문 언어를 따릅니다.\n"
             "- 외국어 질문을 한국어 분석·검색으로 연결하고 최종 `answer`를 요청 언어로 번역합니다.\n"
@@ -1094,7 +1150,7 @@ def create_copilot_router(
             "- 번역에 실패하거나 수치가 달라지면 한국어를 외국어 응답으로 표시하지 않고 503을 반환합니다."
         ),
     )
-    async def copilot_query(query: Annotated[CopilotQueryRequest, Body(openapi_examples={
+    async def copilot_query(request: Request, query: Annotated[CopilotQueryRequest, Body(openapi_examples={
         "korean": {"summary": "한국어 질문·답변 (기존 호출 호환)", "value": {
             "user_id": "1234", "scenario_id": "3", "session_id": "3_11000346_1",
             "prompt": "스프레이 도장 시 적정 이격거리를 알려주세요.",
@@ -1115,6 +1171,7 @@ def create_copilot_router(
     })]) -> JSONResponse:
         return await execute_copilot_query(
             query,
+            conversation_id=conversation_key(request.headers.get("x-copilot-conversation")),
             pipeline_provider=pipeline_provider,
             pending_answers=pending_answers,
             sequences=sequences,

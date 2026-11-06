@@ -2,6 +2,7 @@
 // 유형은 칩으로 고른다: 일반 = knowledge_search, 자세 = pose_recomm, 순서 = trajectory_recomm.
 // 자세·순서는 complete 리포트의 구조화 결과를 사용한다. 답은 textContent 로만 넣는다.
 (() => {
+  const conversationId = `mv-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 14)}`;
   const TASKS = [
     {
       id: 'knowledge_search', label: '일반', hint: '예: 저도막이 뭐야?',
@@ -247,7 +248,7 @@
     : orderAnswer(prompt, data);
   const buildViewerQueryContext = (taskId, prompt, data, state) => {
     if (!data) return null;
-    const coating = { coating_context: data.coating_evaluation ?? null, coating_signature: data.query_context_signatures?.coating_status };
+    const coating = { dialogue_context: data.dialogue_evaluation ?? null, dialogue_signature: data.query_context_signatures?.dialogue, coating_context: data.coating_evaluation ?? null, coating_signature: data.query_context_signatures?.coating_status };
     if (taskId === 'knowledge_search') return `motion_viewer_playback:${JSON.stringify({ record: currentRecordLabel(data), playback_context: state, ...coating })}`;
     let analysisContext;
     if (taskId === 'pose_recomm') {
@@ -381,9 +382,9 @@
     try {
       const response = await fetch('/api/v1/copilot/query', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-Copilot-Source': 'motion-viewer', 'X-Copilot-Conversation': conversationId },
         body: JSON.stringify({
-          user_id: sentData?.worker?.worker_id || 'viewer',
+          user_id: sentData?.worker?.worker_id || 'COPILOT-DEMO-USER',
           session_id: sentData?.selected_session_id ?? null,
           scenario_id: sentData?.mode_id != null ? String(sentData.mode_id) : null,
           task_type: sentTask.id,

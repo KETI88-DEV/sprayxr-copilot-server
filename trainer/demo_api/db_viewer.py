@@ -21,6 +21,7 @@ from trainer.demo_api.db_sessions import SESSION_CSS, render_session_list, rende
 from trainer.demo_api.portal_navigation import portal_document
 from trainer.demo_api.db_origin import origin_control, preserve_origin_links, scope_condition
 from trainer.demo_api.db_report_status import report_progress
+from trainer.demo_api.db_provenance import record_provenance
 from trainer.demo_api.training_data_catalog import TrainingDataCatalog, create_training_data_router
 from trainer.demo_api.training_data_ui import TRAINING_DATA_CSS, render_training_data
 from trainer.demo_api.db_sequence_heatmap import attach_heatmap_link, create_sequence_heatmap_router
@@ -232,19 +233,21 @@ def create_db_viewer_router() -> APIRouter:
             pages = max(1, math.ceil(total / limit))
             current_page = min(page, pages)
             rows = conn.execute(f"SELECT rowid AS __viewer_rowid, * FROM {quoted}{where} ORDER BY rowid DESC LIMIT ? OFFSET ?", [*params, limit, (current_page - 1) * limit]).fetchall()
-            heading = '<th>상세</th>' + "".join(f"<th>{html.escape(column)}</th>" for column in columns)
+            heading = '<th>상세</th><th>호출 채널</th><th>호출 IP</th>' + "".join(f"<th>{html.escape(column)}</th>" for column in columns)
             if selected == 'completions':
                 heading = '<th>처리 현황 · 서버 기록 기준</th>' + heading
             def record_row(row):
                 url = html.escape('/admin/api/record?' + urlencode({'table':selected,'rowid':row['__viewer_rowid']}))
+                provenance = record_provenance(conn, selected, row)
+                caller_cells = '<td>' + html.escape(provenance['caller_label']) + '</td><td>' + html.escape(provenance['client_ip']) + '</td>'
                 progress_cell = ''
                 if selected == 'completions':
                     progress = report_progress(row)
                     progress_cell = '<td>' + html.escape(progress['label']) + '<small style="display:block;line-height:1.7">대기 경과 '+html.escape(progress['elapsed'])+'<br>최근 처리 '+html.escape(progress['latest_at'] or '미기록')+'<br>상태 사유 '+html.escape(progress['reason'])+'</small></td>'
-                return f'<tr data-detail-url="{url}" tabindex="0" aria-label="레코드 {row["__viewer_rowid"]} 상세">'+progress_cell+f'<td><button type="button" class="record-button" data-detail-url="{url}">상세</button></td>' + ''.join(f'<td>{_cell(row[column])}</td>' for column in columns) + '</tr>'
+                return f'<tr data-detail-url="{url}" tabindex="0" aria-label="레코드 {row["__viewer_rowid"]} 상세">'+progress_cell+f'<td><button type="button" class="record-button" data-detail-url="{url}">상세</button></td>' + caller_cells + ''.join(f'<td>{_cell(row[column])}</td>' for column in columns) + '</tr>'
             rendered = ''.join(record_row(row) for row in rows)
             if not rendered:
-                rendered = f'<tr><td class="empty" colspan="{len(columns)+1+int(selected == "completions")}">조건에 맞는 데이터가 없습니다.</td></tr>'
+                rendered = f'<tr><td class="empty" colspan="{len(columns)+3+int(selected == "completions")}">조건에 맞는 데이터가 없습니다.</td></tr>'
             query = html.escape(q)
             base = f"/admin?table={quote(selected)}&limit={limit}&q={quote(q)}"
             previous = f'<a href="{base}&page={current_page - 1}">← 이전</a>' if current_page > 1 else "<span></span>"
@@ -254,6 +257,7 @@ def create_db_viewer_router() -> APIRouter:
             <div class="topbar"><div><div class="eyebrow">DATABASE EXPLORER</div><h1>Co-Pilot 데이터베이스</h1>
             <div class="sub">운영 데이터의 최신 상태를 안전하게 조회합니다.</div></div><div class="actions"><a href="/admin">Home 대시보드</a></div></div>
             {origin_control(conn,origin,table=selected,q=q,limit=limit)}
+            <p class="session-note">호출 채널은 요청의 화면·테스트 표식이며 작업자 신원과 별개입니다. 저장 기록은 생성 호출과 명확히 연결될 때만 IP를 표시하며, 과거 IP는 미기록입니다.</p>
             <div class="cards"><div class="card"><span>선택 테이블</span><strong>{html.escape(selected)}</strong></div>
             <div class="card"><span>검색 결과</span><strong>전체 {total:,}건</strong></div><div class="card"><span>접근 모드</span>
             <strong class="readonly"><i class="dot"></i>읽기 전용</strong></div></div>

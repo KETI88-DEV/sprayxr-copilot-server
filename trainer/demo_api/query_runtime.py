@@ -81,8 +81,20 @@ class _QuickPipeline:
     def classify_copilot_intent(self, task: str, prompt: str) -> str:
         return self._parent.classify_copilot_intent(task, prompt, **self._options())
 
+    @property
+    def supports_copilot_dialogue(self) -> bool:
+        return callable(getattr(self._parent, "plan_copilot_dialogue", None))
+
+    def plan_copilot_dialogue(self, prompt: str, **kwargs: Any) -> Any:
+        return self._parent.plan_copilot_dialogue(prompt, **kwargs, **self._options())
+
+    def converse_copilot(self, prompt: str, **kwargs: Any) -> str:
+        return self._parent.converse_copilot(prompt, **kwargs, **self._options())
+
 
 def select_query_pipeline(pipeline: Any, response_mode: str) -> Any:
+    if isinstance(pipeline, _QuickPipeline):
+        return pipeline
     runtime = getattr(pipeline, "quick_query_runtime", None)
     return _QuickPipeline(pipeline, runtime) if response_mode == "quick" and isinstance(runtime, QuickQueryRuntime) else pipeline
 
