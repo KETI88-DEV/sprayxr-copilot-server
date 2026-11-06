@@ -3,25 +3,31 @@ name: Publish release
 on:
   push:
     tags: ['v*']
+    branches: ['main']
+    paths: ['.github/workflows/release.yml']
   workflow_dispatch:
     inputs:
       tag:
         description: '게시할 기존 버전 태그 (예: v2.7.0)'
         required: true
         type: string
+      make_latest:
+        description: '이 태그를 최신 릴리스로 지정'
+        default: false
+        type: boolean
 
 permissions:
   contents: write
 
 concurrency:
-  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  group: publish-release
   cancel-in-progress: false
 
 jobs:
   publish:
     runs-on: ubuntu-latest
     env:
-      RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+      RELEASE_TAG: ${{ github.event.inputs.tag || (github.ref_type == 'tag' && github.ref_name) || '' }}
       GH_REPO: ${{ github.repository }}
     steps:
       - name: Validate version tag
@@ -29,16 +35,49 @@ jobs:
           python3 - <<'PY'
           import os, re
           tag = os.environ['RELEASE_TAG']
-          if not re.fullmatch(r'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', tag):
+          if tag and not re.fullmatch(r'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', tag):
               raise SystemExit('Expected vMAJOR.MINOR.PATCH')
           PY
 
       - name: Check out the tagged source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: refs/tags/${{ github.event.inputs.tag || github.ref_name }}
+          ref: ${{ github.event.inputs.tag && format('refs/tags/{0}', github.event.inputs.tag) || github.ref }}
           fetch-depth: 0
-          persist-credentials: false
+          persist-credentials: true
+
+      - name: Resolve the existing release tag
+        env:
+          REQUEST_LATEST: ${{ inputs.make_latest && 'true' || 'false' }}
+        run: |
+          python3 - <<'PY'
+          import ast, os, re, subprocess
+          from pathlib import Path
+          pattern = r'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)'
+          tag = os.environ['RELEASE_TAG']
+          if not tag:
+              tree = ast.parse(Path('trainer/demo_api/__init__.py').read_text())
+              versions = [node.value.value for node in tree.body
+                          if isinstance(node, ast.Assign)
+                          and any(isinstance(t, ast.Name) and t.id == '__version__' for t in node.targets)
+                          and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str)]
+              if len(versions) != 1:
+                  raise SystemExit('Expected one literal package version')
+              tag = 'v' + versions[0]
+          if not re.fullmatch(pattern, tag):
+              raise SystemExit('Expected vMAJOR.MINOR.PATCH')
+          subprocess.run(['git', 'rev-parse', '--verify', f'refs/tags/{tag}^{{commit}}'], check=True)
+          tags = subprocess.check_output(['git', 'tag', '--list'], text=True).splitlines()
+          latest = max((t for t in tags if re.fullmatch(pattern, t)),
+                       key=lambda t: tuple(map(int, t[1:].split('.'))))
+          make_latest = tag == latest and (os.environ['GITHUB_EVENT_NAME'] == 'push'
+                                          or os.environ['REQUEST_LATEST'] == 'true')
+          if os.environ['REQUEST_LATEST'] == 'true' and tag != latest:
+              raise SystemExit('An older tag cannot replace the newest version as latest')
+          with open(os.environ['GITHUB_ENV'], 'a') as out:
+              out.write(f'RELEASE_TAG={tag}\nMAKE_LATEST={str(make_latest).lower()}\n')
+          subprocess.run(['git', 'checkout', '--detach', f'refs/tags/{tag}'], check=True)
+          PY
 
       - name: Validate source version and prepare release notes
         run: python3 -m trainer.scripts.release_notes --tag "$RELEASE_TAG" --output "$RUNNER_TEMP/release.md"
@@ -47,10 +86,42 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          latest_args=()
+          if [ "$MAKE_LATEST" = true ]; then latest_args=(--latest); fi
           if gh release view "$RELEASE_TAG" > /dev/null 2>&1; then
-            gh release edit "$RELEASE_TAG" --title "$RELEASE_TAG · SprayXR AI Co-Pilot" --notes-file "$RUNNER_TEMP/release.md"
+            gh release edit "$RELEASE_TAG" --draft=false --prerelease=false --title "$RELEASE_TAG · SprayXR AI Co-Pilot" --notes-file "$RUNNER_TEMP/release.md" "${latest_args[@]}"
           else
-            latest=false
-            if [ "$GITHUB_EVENT_NAME" = push ]; then latest=true; fi
-            gh release create "$RELEASE_TAG" --verify-tag --title "$RELEASE_TAG · SprayXR AI Co-Pilot" --notes-file "$RUNNER_TEMP/release.md" --latest="$latest"
+            gh release create "$RELEASE_TAG" --verify-tag --title "$RELEASE_TAG · SprayXR AI Co-Pilot" --notes-file "$RUNNER_TEMP/release.md" --latest="$MAKE_LATEST"
           fi
+
+      - name: Verify publication and record its receipt
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api "repos/$GH_REPO/releases/tags/$RELEASE_TAG" > "$RUNNER_TEMP/published-release.json"
+          gh api "repos/$GH_REPO/releases/latest" > "$RUNNER_TEMP/latest-release.json"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          temp = Path(os.environ['RUNNER_TEMP'])
+          release = json.loads((temp / 'published-release.json').read_text())
+          latest = json.loads((temp / 'latest-release.json').read_text())
+          tag = os.environ['RELEASE_TAG']
+          if release['tag_name'] != tag or release['draft'] or release['prerelease'] or not release['published_at']:
+              raise SystemExit('Expected a published stable release')
+          if os.environ['MAKE_LATEST'] == 'true' and latest['id'] != release['id']:
+              raise SystemExit('Release is not marked latest')
+          receipt = {key: release[key] for key in ('id', 'tag_name', 'html_url', 'published_at')}
+          receipt.update(is_latest=latest['id'] == release['id'], run_url=f"https://github.com/{os.environ['GH_REPO']}/actions/runs/{os.environ['GITHUB_RUN_ID']}")
+          (temp / 'release-receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as out:
+              out.write(f"Published [{tag}]({release['html_url']}); latest={receipt['is_latest']}\n")
+          PY
+          note_ref="refs/notes/releases/$RELEASE_TAG"
+          if git ls-remote --exit-code origin "$note_ref" > /dev/null 2>&1; then
+            git fetch origin "$note_ref:$note_ref"
+          fi
+          git config user.name "SprayXR release automation"
+          git config user.email "release-automation@users.noreply.github.com"
+          git notes --ref="$note_ref" add -f -F "$RUNNER_TEMP/release-receipt.json" HEAD
+          git push origin "$note_ref:$note_ref"
