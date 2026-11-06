@@ -40,8 +40,8 @@
 .mvc-chip[aria-pressed=true]{background:#2563eb;border-color:#2563eb;color:#fff;font-weight:700}
 .mvc-mode-row{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:4px;background:#0f172a;border:1px solid #374151;border-radius:9px}
 .mvc-mode{padding:8px;border:0;border-radius:6px;background:transparent;color:#94a3b8;cursor:pointer;text-align:left}
-.mvc-mode strong{display:flex;align-items:center;gap:8px}.mvc-mode small{display:block;margin-top:2px;font-size:11px;font-weight:400}
-.mvc-model{padding:1px 6px;border:1px solid currentColor;border-radius:5px;font-size:11px;line-height:1.5;opacity:.9}
+.mvc-mode strong{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.mvc-mode small{display:block;margin-top:2px;font-size:11px;font-weight:400}
+.mvc-model{white-space:nowrap;padding:1px 6px;border:1px solid currentColor;border-radius:5px;font-size:11px;line-height:1.5;opacity:.9}
 .mvc-mode[aria-pressed=true]{background:#1d4ed8;color:#fff}
 .mvc-presets{display:flex;gap:6px;flex-wrap:wrap}
 .mvc-preset{width:auto;flex:none;padding:5px 9px;border:1px solid #475569;border-radius:14px;background:#0f172a;color:#cbd5e1;
@@ -149,8 +149,8 @@
   let playback = { map_num: null, zone_id: null, source_index: 0, playhead_seconds: 0 };
 
   const MODE_OPTIONS = [
-    { id: 'quick', label: '빠른 안내', model: '8B', help: '핵심 판단과 조치만 간결하게' },
-    { id: 'detailed', label: '상세 분석', model: '27B', help: '현재 상황·근거·원인까지 자세히' },
+    { id: 'quick', label: '빠른 안내', model: 'Qwen3-8B', help: '핵심 판단과 조치만 간결하게' },
+    { id: 'detailed', label: '상세 분석', model: 'Qwen3.6-27B', help: '현재 상황·근거·원인까지 자세히' },
   ];
   for (const item of MODE_OPTIONS) {
     const button = el('button', 'mvc-mode');
@@ -402,7 +402,7 @@
       const data = payload.data;
       const seconds = ((performance.now() - started) / 1000).toFixed(1);
       const answer = data.answer;
-      const modeLabel = sentMode === 'detailed' ? '상세 분석 · 27B' : '빠른 안내 · 8B';
+      const modeLabel = sentMode === 'detailed' ? '상세 분석 · Qwen3.6-27B' : '빠른 안내 · Qwen3-8B';
       say(answer, 'mvc-bot', `${sentTask.label} · ${modeLabel} · ${sentLanguageLabel} · ${sentLabel} · 응답 ${seconds}초${data.citations?.length ? ` · 인용 ${data.citations.length}` : ''}`);
     } catch {
       pending.remove();

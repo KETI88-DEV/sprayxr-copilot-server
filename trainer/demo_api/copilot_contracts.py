@@ -80,12 +80,12 @@ class CopilotQueryRequest(StrictModel):
     response_mode: Annotated[ResponseMode, Field(
         description=(
             "답변 수준입니다. 생략하면 `quick`(빠른 안내)으로 처리합니다.\n\n"
-            "- `quick`: **빠른 안내 · 8B 모델**\n"
+            "- `quick`: **빠른 안내 · Qwen3-8B 모델**\n"
             "  - 훈련 중 즉시 확인할 핵심 판단·조치를 짧게 답합니다.\n"
-            "- `detailed`: **상세 분석 · 27B 모델**\n"
+            "- `detailed`: **상세 분석 · Qwen3.6-27B 모델**\n"
             "  - 현재 상황·근거·원인·권장 조치를 순서대로 자세히 설명합니다.\n\n"
             "서버에서 확인한 자세·순서 평가 결과는 그대로 사용합니다. "
-            "일부 언어의 번역은 기존 27B 모델을 사용하므로 추가 시간이 걸릴 수 있습니다."
+            "일부 언어의 번역은 기존 Qwen3.6-27B 모델을 사용하므로 추가 시간이 걸릴 수 있습니다."
         ),
         examples=["quick"],
     )] = "quick"
