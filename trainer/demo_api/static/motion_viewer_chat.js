@@ -28,7 +28,7 @@
 .mvc-head select{width:100%;padding:6px;background:#1f2937;color:#e5e7eb;border:1px solid #4b5563;border-radius:6px}
 .mvc-language-picker{flex:0 0 auto;min-width:0;padding:10px 16px 0;border-top:1px solid #374151}
 .mvc-language-label{display:flex;justify-content:space-between;gap:12px;margin-bottom:6px;font-size:12px;color:#cbd5e1}
-.mvc-language-label small{font-size:11px;color:#94a3b8}
+.mvc-language-label small{font-size:11px;color:#94a3b8;white-space:nowrap;align-self:center}
 .mvc-language-flags{display:flex;gap:7px;overflow-x:auto;overscroll-behavior-x:contain;scrollbar-width:thin;scrollbar-color:#475569 transparent;padding:2px 0 5px}
 .mvc-language-flag{width:42px;height:34px;flex:0 0 42px;display:grid;place-items:center;padding:5px;border:1px solid #475569;
   border-radius:7px;background:#1f2937;cursor:pointer}
@@ -75,9 +75,9 @@
   const sessionSelect = el('select');
   sessionSelect.setAttribute('aria-label', '완료된 세션');
   const LANGUAGES = [
-    ['ko', 'kr', '한국어'], ['en', 'us', 'English'], ['vi', 'vn', 'Tiếng Việt'], ['id', 'id', 'Bahasa Indonesia'],
-    ['th', 'th', 'ไทย'], ['ne', 'np', 'नेपाली'], ['my', 'mm', 'မြန်မာ'], ['uz', 'uz', 'O‘zbekcha'],
-    ['si', 'lk', 'සිංහල'], ['ru', 'ru', 'Русский'], ['zh', 'cn', '中文'], ['km', 'kh', 'ខ្មែរ'],
+    ['ko', 'kr', '한국어'], ['en', 'us', 'English (영어)'], ['vi', 'vn', 'Tiếng Việt (베트남어)'], ['id', 'id', 'Bahasa Indonesia (인도네시아어)'],
+    ['th', 'th', 'ไทย (태국어)'], ['ne', 'np', 'नेपाली (네팔어)'], ['my', 'mm', 'မြန်မာ (미얀마어)'], ['uz', 'uz', 'O‘zbekcha (우즈베크어)'],
+    ['si', 'lk', 'සිංහල (싱할라어)'], ['ru', 'ru', 'Русский (러시아어)'], ['zh', 'cn', '中文 (중국어)'], ['km', 'kh', 'ខ្មែរ (크메르어)'],
   ];
   let outputLanguage = 'ko';
   const languagePicker = el('div', 'mvc-language-picker');
