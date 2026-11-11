@@ -44,7 +44,8 @@ from fastapi.responses import JSONResponse
 from trainer.demo_api.copilot_contracts import CopilotQueryData, CopilotQueryRequest, CopilotResponse
 from trainer.demo_api.coating_query import answer_coating_question, parse_viewer_coating_context, report_coating_context
 from trainer.demo_api.copilot_intent import classify_question_intent, fallback_intent, preset_intent, is_coating_status_question, is_coating_advice_question
-from trainer.demo_api.dialogue import authenticated_facts, conversation_key, parse_plan, selected_direction_answer
+from trainer.demo_api.dialogue import authenticated_facts, conversation_key, parse_plan, selected_direction_answer, viewer_metadata_context
+from trainer.demo_api.playback_direction import playback_direction_from_context, playback_direction_answer, simple_direction_question, requested_direction_scope, aggregate_direction, LABELS as DIRECTION_LABELS
 from trainer.demo_api.copilot_live_analysis import live_analysis
 from trainer.demo_api.copilot_session_context import build_query_instruction, summarize_session, viewer_definition_context
 from trainer.demo_api.pose_query import (
@@ -58,6 +59,7 @@ from trainer.demo_api.pose_query import (
 from trainer.demo_api.query_language import TranslationUnavailableError, translate_text
 from trainer.demo_api.sequence_store import SequenceStore
 from trainer.demo_api.sequence_analysis import SequenceAnalysisEngine
+from trainer.demo_api.reference_order_query import actual_order_intent, current_next_answer, is_current_next_question, is_reference_order_question, resolve_reference_target, reference_order_answer
 from trainer.demo_api.v1_store import V1Store
 from trainer.demo_api.query_runtime import generation_slot_for, select_query_pipeline, translation_pipeline_for
 from trainer.scripts.generation_slot import GENERATION_SLOT  # Legacy slot identity for unconfigured clients.
@@ -221,7 +223,7 @@ def _viewer_answer(task_type: str, prompt: str, context: Mapping[str, object], i
         if selected_intent == "order_direction":
             direction = context.get("direction_summary")
             classification = direction.get("classification") if isinstance(direction, Mapping) else None
-            return f"현재 기록의 주요 도포 방향은 {classification}입니다." if classification else "현재 기록에서는 주요 도포 방향을 계산할 수 없습니다."
+            return f"전체 기록의 주요 도포 방향은 {DIRECTION_LABELS.get(classification, '비정형')}입니다." if classification and classification != "unavailable" else "현재 기록에서는 주요 도포 방향을 계산할 수 없습니다."
         if selected_intent == "order_adherence":
             adherence = _percent_text(context.get("adherence_rate"))
             if adherence is None:
@@ -593,6 +595,7 @@ async def _execute_copilot_query(
     started: float | None = None,
     reports: V1Store | None = None,
     sequence_engine: SequenceAnalysisEngine | None = None,
+    coating_engine: object | None = None,
     conversation_id: str | None = None,
 ) -> JSONResponse:
     """Execute one normalized query for both text and voice transports."""
@@ -603,6 +606,56 @@ async def _execute_copilot_query(
         user_id=query.user_id, conversation_key=conversation_id,
     ))
     facts = authenticated_facts(query.context)
+    try:
+        # Pose/order playback validation applies only when consuming that
+        # signed evaluation. Coating has its own independently signed claims.
+        viewer_analysis = (_parse_motion_viewer_context(query.context, task_type=query.task_type)
+                           if query.task_type in ("pose_recomm", "trajectory_recomm") else None)
+    except _InvalidViewerPlayback:
+        return error_response(422, "Invalid motion viewer playback context")
+    relevant_viewer = viewer_analysis is not None and query.task_type in ("pose_recomm", "trajectory_recomm")
+    if is_current_next_question(query.prompt):
+        answer, scope, progress = await to_thread.run_sync(lambda: current_next_answer(
+            query, sequences, reports, sequence_engine=sequence_engine, coating_engine=coating_engine,
+        ))
+        return _success_response(query, request_started, answer=answer, retrieval_used=False,
+            citations=[], sequence_context=scope, coating_context=progress,
+            context_status="available" if scope["analysis_status"] == "available" else "not_available")
+    has_reference_plan = callable(getattr(sequence_engine, "reference_plan", None))
+    explicit_actual_order = actual_order_intent(query.prompt)
+    async def reference_answer():
+        scenario, process = await to_thread.run_sync(
+            lambda: resolve_reference_target(query, sequences, reports, facts=facts)
+        )
+        reference_query = query.model_copy(update={"scenario_id": scenario})
+        answer, scope = await to_thread.run_sync(lambda: reference_order_answer(
+            sequence_engine, scenario_id=scenario, process=process,
+            detailed=query.response_mode == "detailed",
+        ))
+        return _success_response(
+            reference_query, request_started, answer=answer, retrieval_used=False,
+            citations=[], sequence_context=scope,
+            context_status="available" if scope["analysis_status"] == "available" else "not_available",
+        )
+    # A full reference plan is available before any trainee sequence or complete
+    # report. It never authorizes realtime movement or supplies actual visits.
+    if (has_reference_plan and not relevant_viewer and query.task_type != "error_analysis"
+            and is_reference_order_question(query.prompt)):
+        return await reference_answer()
+    frame_direction = playback_direction_from_context(query.context)
+    viewer_requested = bool(query.context and query.context.startswith(("motion_viewer_analysis:", "motion_viewer_playback:")))
+    def frame_answer():
+        if requested_direction_scope(query.prompt) != "frame":
+            answer, scope = aggregate_direction(query.context, query.prompt)
+            return _success_response(query, request_started, answer=answer, retrieval_used=False,
+                                     citations=[], sequence_context=scope,
+                                     context_status="available" if scope.get("analysis_status") == "available" else "not_available")
+        available = frame_direction is not None and frame_direction.get("analysis_status") == "available"
+        return _success_response(query, request_started, answer=playback_direction_answer(frame_direction),
+                                 retrieval_used=False, citations=[], sequence_context=frame_direction or {"scope": "current_frame", "analysis_status": "unavailable"},
+                                 context_status="available" if available else "not_available")
+    if viewer_requested and (simple_direction_question(query.prompt) or preset_intent("trajectory_recomm", query.prompt) == "order_direction"):
+        return frame_answer()
     decision = None
     planned_pipeline = None
     if query.task_type != "error_analysis" and pipeline_provider is not None and preset_intent(query.task_type, query.prompt) is None and not is_coating_status_question(query.prompt):
@@ -625,13 +678,15 @@ async def _execute_copilot_query(
 
     if decision is not None:
         intent = decision["intent"]
+        if intent == "order_reference" and explicit_actual_order:
+            intent = explicit_actual_order
+            decision = {**decision, "intent": intent}
+        if has_reference_plan and not relevant_viewer and intent == "order_reference" and decision["kind"] == "lookup":
+            return await reference_answer()
         cross_tab = ((intent.startswith("pose_") and query.task_type != "pose_recomm")
                      or (intent.startswith("order_") and query.task_type != "trajectory_recomm"))
-        if intent == "order_direction" and (decision["kind"] == "correction" or decision["scope"] in {"zone", "playback"}):
-            measured_direction = selected_direction_answer(facts)
-            if measured_direction:
-                return _success_response(query, request_started, answer=measured_direction,
-                                         retrieval_used=False, citations=[], context_status="available")
+        if viewer_requested and intent == "order_direction" and decision["kind"] in {"lookup", "correction"}:
+            return frame_answer()
         zone_lookup = (intent == "order_direction" or intent.startswith("pose_")) and decision["scope"] in {"zone", "playback"}
         if decision["kind"] in {"chat", "clarify", "correction"} or cross_tab or zone_lookup:
             try:
@@ -684,14 +739,16 @@ async def _execute_copilot_query(
                 lambda: classify_question_intent(query.task_type, query.prompt, classifier)
             )
         logger.info("copilot intent request_id=%s task=%s intent=%s", query.request_id, query.task_type, intent)
+    if intent == "order_reference" and explicit_actual_order:
+        intent = explicit_actual_order
+    if has_reference_plan and not relevant_viewer and intent == "order_reference":
+        return await reference_answer()
     # If the model is unavailable, keep the selected structured tab operational;
     # only a successful semantic-model classification may cross-route to RAG.
     knowledge_routed = intent == "knowledge" and (classifier is not None or decision is not None)
+    if viewer_requested and intent == "order_direction" and not knowledge_routed:
+        return frame_answer()
     viewer_context_requested = bool(query.context and query.context.startswith(_MOTION_VIEWER_CONTEXT_PREFIX))
-    try:
-        viewer_analysis = _parse_motion_viewer_context(query.context, task_type=query.task_type)
-    except _InvalidViewerPlayback:
-        return error_response(422, "Invalid motion viewer playback context")
     if viewer_analysis is not None and query.task_type == "pose_recomm" and "playback_context" in viewer_analysis and _asks_current_viewer_pose(query.prompt) and not is_coating_advice_question(query.prompt):
         knowledge_routed = False
 
@@ -701,75 +758,10 @@ async def _execute_copilot_query(
         *,
         available: bool,
     ) -> tuple[str, bool]:
-        """Turn verified engine output into prose only for the requested detailed mode."""
-        if query.response_mode != "detailed" or not available or pipeline_provider is None:
+        """Explain computed results directly without a second generation pass."""
+        if query.response_mode != "detailed" or not available:
             return base_answer, False
-        if query.task_type == "trajectory_recomm" and intent in {"order_actual", "order_missing", "order_adherence", "order_direction"}:
-            return _structured_detail_fallback(query.task_type, base_answer, analysis_context, intent=intent), False
-        try:
-            pipeline = intent_pipeline or await to_thread.run_sync(pipeline_provider)
-            session_summary = ""
-            recent_turns: list[dict[str, str]] = dialogue_turns
-            if query.session_id:
-                session_summary, recent_turns = await to_thread.run_sync(
-                    lambda: (
-                        summarize_session(sequences.session_bodies(query.session_id)),
-                        dialogue_turns,
-                    )
-                )
-            instruction = build_query_instruction(
-                query.prompt,
-                # The verified viewer summary is appended below in a strict JSON block.
-                # Repeating its transport envelope as free-form context wastes tokens.
-                client_context=None if viewer_analysis is not None else query.context,
-                session_summary=session_summary,
-                recent_turns=recent_turns,
-                response_mode="detailed",
-            )
-            verified = {
-                "task_type": query.task_type,
-                "verified_answer": base_answer,
-                "analysis_context": analysis_context,
-            }
-            instruction += "\n[서버 구조화 분석 결과]\n" + json.dumps(
-                verified, ensure_ascii=False, separators=(",", ":")
-            )
-            instruction += (
-                "\n위 분석 결과에 있는 사실만 사용해 질문에 자연스럽게 답하세요. "
-                "수치와 Zone 순서는 바꾸거나 새로 만들지 마세요."
-            )
-
-            def _guarded_detail_run() -> Mapping[str, object]:
-                with generation_slot_for(pipeline):
-                    return pipeline.run(
-                        instruction=instruction,
-                        force_route="fast",
-                        use_pipeline_history=False,
-                        session_id=query.session_id,
-                        enable_thinking=False,
-                        use_rag=False,
-                        max_tokens=256,
-                        request_id=query.request_id,
-                    )
-
-            result = await to_thread.run_sync(_guarded_detail_run)
-            parsed = parse_knowledge_answer(str(result.get("response", "")), [])
-            candidate = _trim_dangling_detail_label(parsed.body)
-            grounded = _grounded_detail(candidate, base_answer, analysis_context)
-            interpretation = _detail_interpretation(base_answer, candidate) if candidate and grounded else None
-            return _structured_detail_fallback(
-                query.task_type,
-                base_answer,
-                analysis_context,
-                interpretation=interpretation, intent=intent,
-            ), bool(result.get("deadline_hit", False)) or not grounded
-        except Exception:  # noqa: BROAD_EXCEPT_OK - verified deterministic answer remains available
-            logger.exception(
-                "copilot structured detail synthesis failed request_id=%s task_type=%s",
-                query.request_id,
-                query.task_type,
-            )
-        return _structured_detail_fallback(query.task_type, base_answer, analysis_context, intent=intent), True
+        return _structured_detail_fallback(query.task_type, base_answer, analysis_context, intent=intent), False
 
     if viewer_analysis is not None and query.task_type in ("pose_recomm", "trajectory_recomm") and not knowledge_routed:
         analysis_context = (_current_viewer_pose_context(query.prompt, viewer_analysis)
@@ -954,7 +946,7 @@ async def _execute_copilot_query(
         )
     definition_context = (viewer_definition_context(query.prompt, query.context)
                           if query.response_mode == "quick" and query.task_type == "knowledge_search" else None)
-    knowledge_client_context = None if viewer_analysis is not None else (definition_context or query.context)
+    knowledge_client_context = (definition_context or (json.dumps(facts, ensure_ascii=False, separators=(",", ":")) if facts else viewer_metadata_context(query.context))) if viewer_requested else (definition_context or query.context)
     if coating_advice_context is not None:
         knowledge_client_context = "[검증된 최종 도막 비교 자료]\n" + json.dumps(coating_advice_context, ensure_ascii=False, separators=(",", ":"))
         knowledge_client_context += "\n최종 기록의 전문가 대비 대표 두께 비교이며 재생 시점의 현재 도막 판정이 아닙니다. 질문의 원인·방법·관계를 직접 설명하고 확인된 측정 사실과 일반적인 가능한 원인을 구분하세요. 권장 Zone 순서를 대신 답하지 마세요."
@@ -964,6 +956,7 @@ async def _execute_copilot_query(
         session_summary=session_summary,
         recent_turns=[] if definition_context is not None else recent_turns,
         response_mode=query.response_mode,
+        concise=query.response_mode == "detailed",
     )
     generation_instruction = (build_query_instruction(
         query.prompt,
@@ -972,7 +965,7 @@ async def _execute_copilot_query(
         recent_turns=[] if definition_context is not None else recent_turns,
         response_mode=query.response_mode,
         concise=True,
-    ) if query.response_mode == "quick" else None)
+    ) if query.response_mode == "quick" else instruction)
 
     def _guarded_run() -> Mapping[str, object]:
         with generation_slot_for(pipeline):
@@ -983,7 +976,8 @@ async def _execute_copilot_query(
                 session_id=query.session_id,
                 enable_thinking=False,
                 use_rag=use_rag,
-                max_tokens=128 if query.response_mode == "quick" else 512,
+                max_tokens=128,
+                **({"compact_analysis": True} if query.response_mode == "detailed" else {}),
                 request_id=query.request_id,
                 **({
                     "quick_cache_scope": json.dumps([query.user_id, query.scenario_id, query.task_type]),
@@ -1023,7 +1017,7 @@ async def _execute_copilot_query(
         citations=list(parsed.citations),
         degraded=parsed.repair_path in FAILED_REPAIR_PATHS or bool(result.get("deadline_hit", False)),
         coating_context=coating_advice_context,
-        context_status="available" if session_summary or coating_advice_context else "not_available",
+        context_status="available" if session_summary or coating_advice_context or facts else "not_available",
 
     )
 
@@ -1039,6 +1033,7 @@ async def execute_copilot_query(
     started: float | None = None,
     reports: V1Store | None = None,
     sequence_engine: SequenceAnalysisEngine | None = None,
+    coating_engine: object | None = None,
     conversation_id: str | None = None,
 ) -> JSONResponse:
     """Normalize foreign questions, keep Korean analysis, then localize only prose."""
@@ -1078,7 +1073,8 @@ async def execute_copilot_query(
         response = await _execute_copilot_query(
             analysis_query, pipeline_provider=pipeline_provider, pending_answers=pending_answers,
             sequences=sequences, mcp_base_url=mcp_base_url, transport=transport,
-            started=request_started, reports=reports, sequence_engine=sequence_engine, conversation_id=conversation_id,
+            started=request_started, reports=reports, sequence_engine=sequence_engine,
+            coating_engine=coating_engine, conversation_id=conversation_id,
         )
         if response.status_code != 200:
             return response
@@ -1119,6 +1115,7 @@ def create_copilot_router(
     transport: object | None = None,
     reports: V1Store | None = None,
     sequence_engine: SequenceAnalysisEngine | None = None,
+    coating_engine: object | None = None,
 ) -> APIRouter:
     """``pipeline_provider`` returns the live pipeline singleton; ``None`` when live mode is off.
 
@@ -1138,10 +1135,12 @@ def create_copilot_router(
             "- **빠른 안내 (`quick`, 기본값) · Qwen3-8B 모델**: 질문의 핵심부터 짧게 답합니다. 필수 안전 조건은 함께 안내합니다.\n"
             "  - 사용자·세션 맥락·검색 근거가 모두 같은 반복 질문은 최대 2분간 생성 결과를 재사용합니다.\n"
             "  - 새 시퀀스·대화·문맥·근거가 반영되면 다시 생성합니다. 새 질문의 처리 시간은 모델 부하에 따라 달라집니다.\n"
-            "- **상세 분석 (`detailed`) · Qwen3.6-27B 모델**: 근거·원인·권장 조치를 확장해 설명합니다.\n"
+            "- **상세 분석 (`detailed`) · Qwen3.6-27B 모델**: 기존 27B 빠른 답변 수준으로 결론·근거·조치를 간결하게 분석합니다(2문장 또는 최대 2개 짧은 항목).\n"
             "- **대화 맥락**: 일반 지식·일상 대화·계산·후속 질문도 처리합니다. 탭 선택이 질문 의도를 강제하지 않습니다. 도장 지식이 필요한 경우에 RAG를 사용합니다.\n"
             "  - 선택 헤더 `X-Copilot-Conversation`: 채팅 창 식별자(영문·숫자·`._:-`, 최대 128자). 사용자·훈련 세션과 함께 대화 이력을 분리합니다. 생략하면 기본 대화를 사용합니다. 인증 수단은 아닙니다.\n"
             "  - 선택 헤더 `X-Copilot-Source`: `motion-viewer`(3D VIEWER), `assistant-test`(TEST). DB 표시용 출처 힌트이며 훈련 대상 작업자 ID와 별개입니다.\n"
+            "- **훈련 전 기준 순서**: `scenario_id`가 확인되고 등록된 기준이 있으면 시퀀스·리포트 없이도 Zone 작업 순서를 안내합니다. 공정이 불명확하면 등록된 스프레이·블라스팅 기준을 구분합니다.\n"
+            "  - 기준 순서 조회는 실제 방문·준수율·도막 완료 판정이 아닙니다. 현재 다음 Zone 이동 질문은 저장된 시퀀스와 도막 완료 상태로 판단합니다.\n"
             "- **질문 언어**: `language`로 지정합니다. 생략 시 `ko`입니다.\n"
             "- **답변 언어**: `response_language`로 지정하며, 생략/null이면 질문 언어를 따릅니다.\n"
             "- 외국어 질문을 한국어 분석·검색으로 연결하고 최종 `answer`를 요청 언어로 번역합니다.\n"
@@ -1179,6 +1178,7 @@ def create_copilot_router(
             transport=transport,
             reports=reports,
             sequence_engine=sequence_engine,
+            coating_engine=coating_engine,
         )
 
     return router

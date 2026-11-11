@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Ship-coating training copilot: a Python 3.11 RAG/agent pipeline, seven FastAPI MCP tool routers, a FastAPI SSE demo API, and a separate React 19 + Electron package in `demo-ui/`. `demo-ui/` is the only real npm package; root-level personal tooling manifests are intentionally untracked. Current model path is Qwen3.6-27B 4-bit NF4 + v6.1 LoRA; 4B configs remain for baseline reproduction.
+Ship-coating training copilot: a Python 3.11 RAG/agent pipeline, seven FastAPI MCP tool routers, a FastAPI SSE demo API, and a separate React 19 + Electron package in `demo-ui/`. `demo-ui/` is the only real npm package; root-level personal tooling manifests are intentionally untracked. Production uses the Qwen3.6-27B v6.1 LoRA-merged BF16 model through vLLM and a separate Qwen3-8B-AWQ quick model. HF NF4 remains the training/evaluation backend; 4B configs remain for baseline reproduction.
 
 `README.md` covers user-facing setup. This file covers what an agent would otherwise get wrong.
 
@@ -144,3 +144,10 @@ npm run start:electron
 - IP comes from ASGI client scope. Never trust arbitrary forwarded headers or widen trusted proxies to `*` merely to populate the UI.
 - Query dialogue uses persisted history scoped by user, training session and optional `X-Copilot-Conversation`. All Query `AgentPipeline.run` calls disable pipeline history; its unscoped memory is not a second source of conversation context.
 - Viewer dialogue facts require the server signature. Selected Zone representative statistics are not instantaneous measurements.
+
+## Zone completion and reference planning
+
+- Spray advancement requires95% of official Zone pixels meeting the session target(default160µm). Crop-only mean/expert-cell coverage is not proof of whole-Zone completion. Reuse the same gate for sequence feedback, SSE, current-next queries and explicit-target reports.
+- Registered reference-order planning does not require trainee sequences. Keep `reference_only` separate from actual visits/scores/current progress and preserve signed viewer comparisons.
+- Public feedback submissions create only feedback records; processing-state writes use the existing administrator session and CSRF checks.
+- The new 1TB training data and spray261020.sql are explicitly deferred. Do not inspect/ingest/retrain them during the current server update.

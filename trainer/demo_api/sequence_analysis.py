@@ -13,6 +13,7 @@ from trainer.demo_api.sequence_store import SequenceStore
 from trainer.demo_api.telemetry_contracts import (
     AnalyzeSequenceRequest,
     EngineFeedback,
+    CoatingProgress,
     learning_mode_from_scenario,
     process_from_tool_type,
 )
@@ -125,6 +126,31 @@ class SequenceDecision:
     feedback: EngineFeedback
     text_guide: str | None
     anomaly_type: str | None = None
+    direction_guide: str | None = None
+
+
+def gate_sequence_decision(
+    request: AnalyzeSequenceRequest, decision: SequenceDecision,
+    progress: CoatingProgress | None,
+) -> SequenceDecision:
+    """Apply the same physical completion gate to HTTP and anomaly SSE text."""
+    if request.process_type != "spray" or _zone_id(request.model_dump(mode="json")) is None:
+        return decision
+    direction = (getattr(decision, "direction_guide", None) or decision.text_guide
+                 if decision.feedback.reason_code == "direction_deviation" else None)
+    if (progress is not None and progress.available and progress.zone_id == request.zone_id
+            and progress.status == "complete" and progress.recommendation == "move_next_zone"):
+        text = progress.message
+        if direction:
+            text = f"{direction} {text}"
+        return SequenceDecision(decision.feedback, text, decision.anomaly_type, direction)
+    if progress is not None and progress.available:
+        text = progress.message
+    else:
+        text = f"현재 Zone {request.zone_id}의 목표 도막 충족 여부를 확인할 수 없습니다. 구역 이동 전 도막과 공식 구역 데이터를 확인하세요."
+    if direction:
+        text = f"{direction} {text}"
+    return SequenceDecision(decision.feedback, text, decision.anomaly_type, direction)
 
 
 def _zone_id(body: dict[str, Any]) -> str | None:
@@ -286,7 +312,27 @@ class SequenceAnalysisEngine:
             seen.add(zone)
         return decisions
 
+    def planned_flow(self, *, scenario_id: str, process: str = "spray") -> list[str]:
+        """Reference work plan, independent of a trainee's realtime completion."""
+        plan = self.reference_plan(scenario_id=scenario_id, process=process)
+        return list(plan["flow"]) if plan is not None else []
+
+    def reference_plan(self, *, scenario_id: str, process: str = "spray") -> dict[str, Any] | None:
+        """Measured expert plan; this does not authorize realtime Zone movement."""
+        mode = learning_mode_from_scenario(scenario_id)
+        profile = self._profile(process, mode) if mode is not None else None
+        flow = self._flow(profile) if profile is not None else []
+        if not flow:
+            return None
+        references = expert_reference_flows(profile)
+        return {"analysis_status": "available", "reference_basis": "measured_expert_runs",
+                "scenario_id": scenario_id, "process": process, "flow": flow,
+                "reference_session_count": len(references)}
+
     def evaluate(self, request: AnalyzeSequenceRequest, store: SequenceStore) -> SequenceDecision:
+        return gate_sequence_decision(request, self._evaluate(request, store), None)
+
+    def _evaluate(self, request: AnalyzeSequenceRequest, store: SequenceStore) -> SequenceDecision:
         if _zone_id(request.model_dump(mode="json")) is None:
             return SequenceDecision(EngineFeedback(analysis_status="not_available", reason_code="zone_unresolved"), None)
         bodies = store.session_bodies_through(request.session_id, request.sequence_id)

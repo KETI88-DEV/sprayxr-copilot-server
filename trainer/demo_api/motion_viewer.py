@@ -339,6 +339,7 @@ def _sample_csv(
             raw_time = _number(row.get("시간(초)"))
             frames.append({
                 "t": raw_time if raw_time is not None else float(index),
+                "csv_time_seconds": raw_time,
                 "joints": joints,
                 "tracked": tracked,
                 "camera_forward": _camera_forward(row),
@@ -2187,6 +2188,16 @@ def create_motion_viewer_router(
         payload["coating_evaluation"] = viewer_coating_context(payload)
         from trainer.demo_api.dialogue import viewer_dialogue_context
         payload["dialogue_evaluation"] = viewer_dialogue_context(payload)
+        from trainer.demo_api.playback_direction import build_playback_snapshot
+        snapshot_key = f"{frame_count}:{selected_path}:{selected_path.stat().st_mtime_ns}:{selected_path.stat().st_size}:{process}:{mode_id}:{legacy_zone_ids}"
+        with _open_csv(selected_path) as clock_handle:
+            csv_origin = _number(next(csv.DictReader(clock_handle), {}).get("시간(초)"))
+        clock_valid = csv_origin is not None and bool(selected_frames) and all(_number(frame.get("csv_time_seconds")) is not None for frame in selected_frames)
+        offset = float(selected_frames[0]["csv_time_seconds"]) - csv_origin if clock_valid else 0.0
+        payload["frame_direction_context"], payload["frame_direction_signature"] = build_playback_snapshot(
+            paint_trace, record_id=selected, duration_seconds=duration, cache_key=snapshot_key,
+            time_offset_seconds=offset, clock_valid=clock_valid)
+
         from trainer.demo_api.viewer_context import viewer_signatures
         payload["query_context_signatures"] = viewer_signatures(payload)
         return payload

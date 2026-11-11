@@ -164,9 +164,9 @@ def test_session_start_documents_target_coating_thickness() -> None:
     assert "target_thickness_um" not in start["required"]
     assert target["anyOf"][0]["exclusiveMinimum"] == 0
     assert target["anyOf"][0]["maximum"] == 20000
-    assert target["examples"] == [150.0]
+    assert target["examples"] == [160.0]
     assert "µm" in target["description"]
-    assert start["example"]["target_thickness_um"] == 150.0
+    assert start["example"]["target_thickness_um"] == 160.0
 
 
 def test_every_public_input_parameter_has_a_detailed_description() -> None:

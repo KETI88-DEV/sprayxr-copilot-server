@@ -37,6 +37,7 @@ const record = (id = 'RECORD-A') => ({ worker: { worker_id: 'W', display_name: '
   process_label: '도장', mode_id: 3, selected_session_id: id, pose_evaluation: { status: 'available', similarity_percent: 70,
     zones: { '1:2': { map_num: '1', zone_id: '2', similarity_percent: 88, corrections: [] },
              '1:3': { map_num: '1', zone_id: '3', similarity_percent: 40, corrections: [] } }, corrections: [] },
+  frame_direction_context: { snapshot_id: 'frame-snapshot', record_id: id, duration_seconds: 4 }, frame_direction_signature: 'signed-frame',
   coating_evaluation: { analysis_status: 'available', scope: 'final_record', zones: [{ zone_id: '2', actual_um: 180, reference_um: 120 }] },
   reference_order_evaluation: { recommended_flow: ['2', '3'] }, query_context_signatures: { pose_recomm: 'signed', trajectory_recomm: 'signed-order', coating_status: 'signed-coating' },
   frames: [{ t: 0, map_num: null, zone_id: null }, { t: 1, map_num: '1', zone_id: '2', spraying: true },
@@ -175,6 +176,8 @@ async function submit(app, question = '지금 자세는 어때?') {
     const app=setup(), data=record(); app.emit('motion-viewer-data', data);
     const first=await submit(app, '안녕');
     assert.equal(first.request.headers['X-Copilot-Source'], 'motion-viewer');
+    assert.equal(decode(first.request).frame_direction_signature, 'signed-frame');
+    assert.equal(decode(first.request).frame_direction_context.record_id, data.selected_session_id);
     assert.ok(first.request.headers['X-Copilot-Conversation'].startsWith('mv-'));
     assert.equal(first.request.body.user_id, 'W');
     first.request.finish(); await first.completion;

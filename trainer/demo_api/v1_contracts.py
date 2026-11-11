@@ -72,7 +72,7 @@ class SessionStartRequest(StrictModel):
         json_schema_extra={"example": {
             "session_id": "3_11000346_1", "user_id": "1234",
             "scenario_id": "3", "started_at": "2026-10-08T01:05:44.726Z",
-            "target_thickness_um": 150.0,
+            "target_thickness_um": 160.0,
             "worker": {"skill_level": "novice"},
         }},
     )
@@ -106,14 +106,14 @@ class SessionStartRequest(StrictModel):
     ]
     started_at: Annotated[str, Field(min_length=1, description="세션 시작 시각(ISO 8601 UTC)", examples=["2026-10-08T01:05:44.726Z"])]
     target_thickness_um: Annotated[float | None, Field(
-        default=None,
+        default=160.0,
         gt=0,
         le=20000,
         description=(
             "이번 세션의 목표 도막 두께(µm)입니다. 스프레이 도막 판정 기준으로 저장되며, "
-            "기존 클라이언트는 이 필드를 생략할 수 있습니다. 블라스팅 세션에서는 생략합니다."
+            "생략 시 스프레이 기본 목표는 160µm입니다. 블라스팅 세션에서는 사용하지 않습니다."
         ),
-        examples=[150.0],
+        examples=[160.0],
     )]
     worker: Annotated[WorkerProfile, Field(
         description="훈련자의 숙련도와 주 사용 손 정보입니다. 사용자 프로필 생성 또는 갱신에 사용합니다."

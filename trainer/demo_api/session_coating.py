@@ -201,7 +201,8 @@ def analyze_session_coating(
     }
     if target_thickness_um is not None:
         report["guideline"] = (
-            f"세션 목표 두께 {target_thickness_um:g}µm의 90~110% 범위를 기준으로 평가했습니다. "
+            f"공식 Zone 면적의 95% 이상이 세션 목표 두께 {target_thickness_um:g}µm를 충족하는지 평가했습니다. "
+            "목표의 110%를 넘는 두께는 과도장 여부를 별도로 확인합니다. "
             + report["guideline"].replace("전문가 최종 도막과 비교한", "목표 도막과 비교한")
         )
     return SessionCoating(report, zones)

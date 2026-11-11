@@ -36,6 +36,8 @@ def create_db_admin_router() -> APIRouter:
     path = Path(os.environ.get("SEQUENCE_DB_PATH", DEFAULT_DB_PATH))
     auth = DBAdminAuth(Path(os.environ.get("DB_ADMIN_CREDENTIALS_PATH", str(path.parent / "db_admin_credentials.json"))))
     store = DBAdminStore(path, auth)
+    from trainer.demo_api.feedback import create_feedback_admin_router
+    router.include_router(create_feedback_admin_router(auth, str(path)))
 
     def response(data: dict):
         return JSONResponse(data, headers={"Cache-Control": "no-store"})

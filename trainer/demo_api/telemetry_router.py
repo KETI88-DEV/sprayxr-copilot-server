@@ -22,7 +22,7 @@ from fastapi.responses import JSONResponse
 
 from trainer.demo_api.monitor import MonitorRecorder
 from trainer.demo_api.anomaly_stream import AnomalyBroadcaster
-from trainer.demo_api.sequence_analysis import SequenceDecision
+from trainer.demo_api.sequence_analysis import SequenceDecision, gate_sequence_decision
 from trainer.demo_api.sequence_store import NON_CONTENT_FIELDS, SequenceStore
 from trainer.demo_api.telemetry_contracts import (
     AnalyzeSequenceData,
@@ -192,7 +192,7 @@ def create_telemetry_router(
         )
         if analyze:
             assert isinstance(query, AnalyzeSequenceRequest)
-            analysis_key = json.dumps([query.resolved_mode_id, query.process_type, body_sha256])
+            analysis_key = json.dumps(["official-zone-target-95-v1", query.resolved_mode_id, query.process_type, body_sha256])
             cached = sequences.load_analysis(
                 session_key=query.session_id, sequence_id=query.sequence_id, analysis_key=analysis_key,
             )
@@ -218,6 +218,8 @@ def create_telemetry_router(
                     )
                 else:
                     coating_progress = coating_progress_engine.evaluate(query)
+                if decision is not None:
+                    decision = gate_sequence_decision(query, decision, coating_progress)
                 cached = {
                     "guide": guide.model_dump(mode="json"),
                     "coating_progress": coating_progress.model_dump(mode="json"),

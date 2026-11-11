@@ -52,6 +52,14 @@ body[data-portal-page=docs] .swagger-ui .opblock,body[data-portal-page=docs] .sw
 @media(max-width:520px){:root{--copilot-nav-height:84px}#copilot-navigation .portal-links{grid-template-columns:repeat(2,minmax(0,1fr))}#copilot-navigation .portal-links a{height:32px}}
 """
 
+_FEEDBACK_HTML = '''<dialog id="copilot-feedback-dialog" aria-labelledby="copilot-feedback-title" aria-describedby="copilot-feedback-note">
+<form id="copilot-feedback-form"><div class="feedback-heading"><h2 id="copilot-feedback-title">의견 보내기</h2><button type="button" id="copilot-feedback-close" aria-label="의견 창 닫기">×</button></div>
+<p id="copilot-feedback-note">개선할 점이나 오류를 알려주세요. 의견과 현재 페이지·서버 버전·접수 시각·접속 IP가 이 서버에 저장됩니다.</p>
+<label for="copilot-feedback-kind">유형</label><select id="copilot-feedback-kind" name="kind"><option value="improvement">개선</option><option value="bug">오류</option><option value="question">질문</option></select>
+<label for="copilot-feedback-name">이름 <span>(선택)</span></label><input id="copilot-feedback-name" name="name" type="text" maxlength="80" autocomplete="name">
+<label for="copilot-feedback-message">의견 <span>(필수 · 최대 4,000자)</span></label><textarea id="copilot-feedback-message" name="message" rows="6" maxlength="4000" required placeholder="어떤 상황에서 무엇을 개선하면 좋을지 알려주세요."></textarea>
+<p id="copilot-feedback-state" role="status" aria-live="polite"></p><div class="feedback-actions"><button type="button" id="copilot-feedback-reset">입력 지우기</button><button type="submit" id="copilot-feedback-submit">보내기</button></div></form></dialog><script defer src="/assets/copilot_feedback.js"></script>'''
+
 
 def portal_document(document: str, active: str) -> str:
     """Insert a header without changing scripts, canvases, API URLs, or body attributes."""
@@ -68,7 +76,9 @@ def portal_document(document: str, active: str) -> str:
     )
     bar = ('<header id="copilot-navigation"><div class="portal-brand">'
            '<span class="portal-logo" aria-hidden="true">XR</span><span class="portal-brand-name">AI Co-Pilot</span>'
-           '</div><nav class="portal-links" aria-label="페이지 이동">' + links + '</nav></header>')
-    document = document.replace('</head>', f'<style id="copilot-navigation-style">{_CSS}</style></head>', 1)
-    return re.sub(r'<body\b[^>]*>', lambda match: match.group(0)[:-1] + f' data-portal-page="{active}">' + bar,
-                  document, count=1, flags=re.IGNORECASE)
+           '</div><nav class="portal-links" aria-label="페이지 이동">' + links + '</nav>'
+           '<button id="copilot-feedback-open" type="button" aria-haspopup="dialog" aria-controls="copilot-feedback-dialog">의견 보내기</button></header>')
+    document = document.replace('</head>', f'<style id="copilot-navigation-style">{_CSS}</style><link rel="stylesheet" href="/assets/copilot_feedback.css"></head>', 1)
+    document = re.sub(r'<body\b[^>]*>', lambda match: match.group(0)[:-1] + f' data-portal-page="{active}">' + bar,
+                      document, count=1, flags=re.IGNORECASE)
+    return document.replace('</body>', _FEEDBACK_HTML + '</body>', 1)
