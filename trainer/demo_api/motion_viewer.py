@@ -2187,6 +2187,9 @@ def create_motion_viewer_router(
         payload["coating_evaluation"] = viewer_coating_context(payload)
         from trainer.demo_api.dialogue import viewer_dialogue_context
         payload["dialogue_evaluation"] = viewer_dialogue_context(payload)
+        from trainer.demo_api.viewer_arm_pose import build_arm_pose_evaluation
+        payload["arm_pose_evaluation"] = build_arm_pose_evaluation(
+            selected_path, record_id=selected, mode_id=mode_id, mcp_base_url=mcp_base_url, transport=transport)
         from trainer.demo_api.viewer_context import viewer_signatures
         payload["query_context_signatures"] = viewer_signatures(payload)
         return payload

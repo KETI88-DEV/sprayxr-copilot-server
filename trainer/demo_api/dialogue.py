@@ -116,6 +116,11 @@ def authenticated_facts(value: str | None) -> dict[str, Any]:
             seconds = playback.get("playhead_seconds")
             if not isinstance(seconds, bool) and isinstance(seconds, (int, float)) and math.isfinite(seconds) and seconds >= 0:
                 facts["playhead_seconds"] = seconds
+        from trainer.demo_api.viewer_arm_pose import parse_viewer_arm_pose
+        arm = parse_viewer_arm_pose(value)
+        if arm is not None:
+            # 자유 대화가 자세 수치를 지어내지 않도록 채점 요약을 같이 준다.
+            facts["arm_pose_similarity"] = {key: arm.get(key) for key in ("status", "average_similarity_percent", "guideline", "priority_corrections")}
         facts["measurement_scope"] = "전체 기록 및 Zone의 대표 통계. 현재 재생 순간의 방향·자세를 실측한 값이 아님."
         return facts
     except (ValueError, TypeError, AttributeError):

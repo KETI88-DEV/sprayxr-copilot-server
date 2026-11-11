@@ -248,7 +248,8 @@
     : orderAnswer(prompt, data);
   const buildViewerQueryContext = (taskId, prompt, data, state) => {
     if (!data) return null;
-    const coating = { dialogue_context: data.dialogue_evaluation ?? null, dialogue_signature: data.query_context_signatures?.dialogue, coating_context: data.coating_evaluation ?? null, coating_signature: data.query_context_signatures?.coating_status };
+    const coating = { dialogue_context: data.dialogue_evaluation ?? null, dialogue_signature: data.query_context_signatures?.dialogue, coating_context: data.coating_evaluation ?? null, coating_signature: data.query_context_signatures?.coating_status,
+      arm_pose_context: data.arm_pose_evaluation ?? null, arm_pose_signature: data.query_context_signatures?.arm_pose };
     if (taskId === 'knowledge_search') return `motion_viewer_playback:${JSON.stringify({ record: currentRecordLabel(data), playback_context: state, ...coating })}`;
     let analysisContext;
     if (taskId === 'pose_recomm') {
