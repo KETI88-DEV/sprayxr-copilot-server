@@ -1770,7 +1770,7 @@ button{cursor:pointer;font-weight:700}.primary{background:#3157d5;border-color:#
 <header class="top"><div class="title">작업 자세 비교 평가<small>도장 경로와 작업 자세를 전문가 기준으로 비교합니다.</small></div></header>
 <template id="poseUiTemplate">
 <div data-pose-slot="gizmo" class="camera-gizmo" aria-label="3D 카메라 기즈모"><button id="cameraHome" title="초기 시점">⌂</button><button id="cameraAxisX" title="X축 시점">X</button><button id="cameraAxisY" title="Y축 시점">Y</button><button id="cameraAxisZ" title="Z축 시점">Z</button></div>
-<div data-pose-slot="summary" id="poseSummary" class="pose-summary"><div class="card pose-overall"><span>전문가 작업 유사도</span><strong id="poseScore">—%</strong><small id="poseScoreNote">Zone 순서와 Zone별 작업 유사도를 전문가 반복 수행 기준으로 비교합니다.</small></div><div id="poseZoneCard" class="card pose-zone-card"><div class="pose-zone-header"><span id="poseZoneTitle">현재 Zone 작업 유사도</span><strong id="poseZoneScore">—%</strong></div><div class="pose-meta"><span>현재 자세 상태 · <b id="posePosture">기록 준비 중</b></span><span id="poseZoneSummary">Zone 대기 중</span><span id="poseEstimateNote">CSV 조인트 기반 자세 추정</span></div><div id="poseZoneMetrics" class="pose-zone-metrics"><small>재생을 시작하면 현재 Zone의 측정값과 전문가 기준을 표시합니다.</small></div></div><div class="card pose-action"><span id="poseActionTitle">현재 Zone 작업 개선 안내</span><ol id="poseActionList"><li id="poseAction">기록을 선택하세요.</li></ol></div><div class="card pose-predicted"><span>안내 적용 시 예상</span><strong id="posePredicted">—</strong><small>실제 재측정 결과가 아닌 가상 좌표 보정 결과입니다.</small></div></div>
+<div data-pose-slot="summary" id="poseSummary" class="pose-summary"><div class="card pose-overall"><span>전문가 작업 유사도</span><strong id="poseScore">—%</strong><small id="poseScoreNote">Zone 순서와 Zone별 작업 유사도를 전문가 반복 수행 기준으로 비교합니다.</small></div><div id="armPoseCard" class="card"><div class="pose-zone-header"><span>전문가 자세 유사도</span><strong id="armPoseScore">—%</strong></div><small id="armPoseNote">분사마다 팔 관절 자세를 숙련자 기준과 비교합니다.</small><div id="armPoseCurrent" class="pose-arm-current" hidden><div><span id="armPoseSequence"></span><b id="armPoseSequenceScore"></b></div><p id="armPoseCorrection"></p></div></div><div id="poseZoneCard" class="card pose-zone-card"><div class="pose-zone-header"><span id="poseZoneTitle">현재 Zone 작업 유사도</span><strong id="poseZoneScore">—%</strong></div><div class="pose-meta"><span>현재 자세 상태 · <b id="posePosture">기록 준비 중</b></span><span id="poseZoneSummary">Zone 대기 중</span><span id="poseEstimateNote">CSV 조인트 기반 자세 추정</span></div><div id="poseZoneMetrics" class="pose-zone-metrics"><small>재생을 시작하면 현재 Zone의 측정값과 전문가 기준을 표시합니다.</small></div></div><div class="card pose-action"><span id="poseActionTitle">현재 Zone 작업 개선 안내</span><ol id="poseActionList"><li id="poseAction">기록을 선택하세요.</li></ol></div><div class="card pose-predicted"><span>안내 적용 시 예상</span><strong id="posePredicted">—</strong><small>실제 재측정 결과가 아닌 가상 좌표 보정 결과입니다.</small></div></div>
 </template>
 <section class="selection-panel"><h2>재생 데이터 선택</h2><div class="selection-grid">
 <div><label for="worker">작업자</label><select id="worker" class="select"></select></div>
@@ -1991,6 +1991,26 @@ def create_motion_viewer_router(
             max_frames=frame_count,
         )
 
+    @router.get("/motion-viewer/api/arm-pose", include_in_schema=False)
+    def arm_pose_data(
+        worker_id: str = Query(default=_EXPERT_WORKER_ID, pattern="^[A-Za-z0-9_-]+$"),
+        process: str = Query(pattern="^(spray|blasting)$"),
+        mode_id: int = Query(ge=1, le=10),
+        session_id: str = Query(min_length=1, max_length=100),
+    ) -> dict[str, Any]:
+        """재생 기록의 자세 유사도(분사마다 팔 관절 엔진). 채점에 수 초 걸려 모션과 따로 받는다."""
+        from trainer.demo_api.viewer_arm_pose import build_arm_pose_evaluation
+        from trainer.demo_api.viewer_context import sign_context
+        worker_root = Path(_worker_source(root, worker_id)["root"])
+        profile = _read_profile(worker_root, process, mode_id)
+        selected = _representative_session(profile) if session_id == "representative" else session_id
+        evaluation = build_arm_pose_evaluation(
+            _session_path(worker_root, process, mode_id, profile, selected), record_id=selected,
+            process=process, mode_id=mode_id, mcp_base_url=mcp_base_url, transport=transport,
+        )
+        return {"selected_session_id": selected, "arm_pose_evaluation": evaluation,
+                "signature": sign_context("arm_pose", evaluation)}
+
     @router.get("/motion-viewer/api/motion", include_in_schema=False)
     def motion_data(
         worker_id: str = Query(default=_EXPERT_WORKER_ID, pattern="^[A-Za-z0-9_-]+$"),
@@ -2187,9 +2207,6 @@ def create_motion_viewer_router(
         payload["coating_evaluation"] = viewer_coating_context(payload)
         from trainer.demo_api.dialogue import viewer_dialogue_context
         payload["dialogue_evaluation"] = viewer_dialogue_context(payload)
-        from trainer.demo_api.viewer_arm_pose import build_arm_pose_evaluation
-        payload["arm_pose_evaluation"] = build_arm_pose_evaluation(
-            selected_path, record_id=selected, mode_id=mode_id, mcp_base_url=mcp_base_url, transport=transport)
         from trainer.demo_api.viewer_context import viewer_signatures
         payload["query_context_signatures"] = viewer_signatures(payload)
         return payload

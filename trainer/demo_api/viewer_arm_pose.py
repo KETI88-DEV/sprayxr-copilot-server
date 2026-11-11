@@ -2,27 +2,54 @@
 
 뷰어의 `pose_evaluation`은 전문가 기록 대비 **작업 유사도**(도구 각도·도막·이격거리 등)다. 여기는 **자세 유사도**다:
 세션 종합 분석(`session_analysis.analyze_session`)과 같은 함수로 기록 CSV를 분사 구간으로 나눠 채점하고,
-시퀀스·구역별 유사도와 교정을 낸다. 관절 월드 열이 없는 예전 형식 CSV는 `unavailable`이다 — 값을 만들지 않는다.
+시퀀스·구역별 유사도와 교정을 낸다.
+
+관절은 CSV 형식에 따라 둘 중 하나다. 새 형식(2026-10 아바타)은 관절 월드 열을 그대로 쓴다. Spark 뷰어 기록 같은
+예전 형식은 월드 열이 없고 로컬 회전만 있어, 숙련자 기준을 구울 때와 같은 FK로 관절을 만든다(`replay_telemetry`).
+이때 건 위치는 손에서 합성하므로 `tool_not_held` 판정은 검증되지 않는다(그 모듈 독스트링).
+팔 자세 기준은 스프레이 숙련자 기록으로만 구웠으므로 블라스팅 기록은 채점하지 않는다.
 """
 from __future__ import annotations
 
 import json
 import logging
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Mapping
 
-from trainer.demo_api.session_analysis import analyze_session, read_csv, spray_runs
+from trainer.demo_api.session_analysis import (
+    analyze_session, csv_sequences, has_world_joints, painted_zone, read_csv, spray_runs,
+)
+from trainer.scripts import replay_telemetry
 
 logger = logging.getLogger(__name__)
-_CACHE: dict[tuple[Any, ...], dict[str, Any]] = {}
-_CACHE_LIMIT = 32
+_USER = "motion-viewer"
 
 
-class _NoStoredSequences:
-    """뷰어 기록 이름은 DB 세션 ID가 아니다. 저장 시퀀스와 섞지 않고 CSV만 채점한다."""
+class _Bodies:
+    """`analyze_session`에 넘길 시퀀스 본문. 뷰어 기록은 DB 세션이 아니므로 저장 시퀀스와 섞지 않는다."""
+
+    def __init__(self, bodies: list[dict[str, Any]]) -> None:
+        self._bodies = bodies
 
     def session_bodies(self, session_id: str) -> list[dict[str, Any]]:
-        return []
+        return self._bodies
+
+
+def _engine_bodies(rows: list[dict[str, str]], *, session_id: str, scenario_id: str) -> list[dict[str, Any]]:
+    """분사 구간마다 자세 엔진 본문(`SEQ-001`…, 구간 순서). 구역은 착탄이 가장 많이 난 구역이다."""
+    if has_world_joints(rows):
+        return csv_sequences(rows, session_id=session_id, user_id=_USER, scenario_id=scenario_id)
+    bodies: list[dict[str, Any]] = []
+    for number, (start, end) in enumerate(spray_runs(rows), start=1):
+        try:
+            body, _skipped = replay_telemetry.build_payload(
+                rows, (start, end), session_id=session_id, sequence_id=f"SEQ-{number:03d}", max_frames=end - start + 1)
+        except (KeyError, ValueError):  # 관절·건·착탄 열이 비거나 빠진 구간은 채점 대상이 아니다
+            continue
+        body.update(user_id=_USER, scenario_id=scenario_id, zone_id=painted_zone(rows[start:end + 1]))
+        bodies.append(body)
+    return bodies
 
 
 def _percent(score: object) -> int | None:
@@ -37,26 +64,36 @@ def _seconds(row: Mapping[str, str], origin: float) -> float | None:
 
 
 def build_arm_pose_evaluation(
-    csv_path: Path, *, record_id: str, mode_id: int, mcp_base_url: str, transport: Any = None
+    csv_path: Path, *, record_id: str, process: str, mode_id: int, mcp_base_url: str, transport: Any = None
 ) -> dict[str, Any]:
-    stat = csv_path.stat()
-    key = (str(csv_path), stat.st_mtime_ns, stat.st_size, mcp_base_url, id(transport))
-    if key in _CACHE:
-        return _CACHE[key]
+    if process != "spray":
+        return {"status": "unavailable", "reason_code": "process_not_supported"}
     try:
-        raw = csv_path.read_bytes()
-        analysis = analyze_session(
-            session_id=record_id, user_id="motion-viewer", scenario_id=str(mode_id), csv_bytes=raw,
-            store=_NoStoredSequences(), mcp_base_url=mcp_base_url, transport=transport,  # type: ignore[arg-type]
-        )
-        rows = read_csv(raw)
-    except Exception:  # noqa: BLE001 - 뷰어 재생은 자세 엔진 장애와 무관하게 열려야 한다
+        stat = csv_path.stat()
+        return _evaluate(str(csv_path), (stat.st_mtime_ns, stat.st_size), record_id, mode_id, mcp_base_url, transport)
+    except Exception:  # noqa: BLE001 - 뷰어 재생은 자세 엔진 장애와 무관하게 열려야 한다. 실패는 캐시하지 않는다.
         logger.exception("viewer arm pose evaluation failed record=%s", record_id)
         return {"status": "unavailable", "reason_code": "engine_error"}
+
+
+@lru_cache(maxsize=32)
+def _evaluate(
+    path_text: str, stamp: tuple[int, int], record_id: str, mode_id: int, mcp_base_url: str, transport: Any
+) -> dict[str, Any]:
+    del stamp  # 파일이 바뀌면 다시 채점하도록 캐시 키에만 쓴다
+    # 자세 엔진은 세션 ID별로 상태를 쌓는다. 실제 훈련 세션과 섞이지 않게 뷰어 전용 이름을 쓴다.
+    session_id = f"{_USER}:{record_id}"
+    rows = [{(name or "").strip(): value for name, value in row.items()} for row in read_csv(Path(path_text).read_bytes())]
+    bodies = _engine_bodies(rows, session_id=session_id, scenario_id=str(mode_id))
+    analysis = analyze_session(
+        session_id=session_id, user_id=_USER, scenario_id=str(mode_id), csv_bytes=None,
+        store=_Bodies(bodies), mcp_base_url=mcp_base_url, transport=transport,  # type: ignore[arg-type]
+    )
+    joint_source = "world" if has_world_joints(rows) else "fk"
     if analysis.analysis_status != "available":
         result: dict[str, Any] = {
             "status": "unavailable",
-            "reason_code": "no_scored_sequence" if analysis.sequences else "no_world_joint_sequences",
+            "reason_code": "no_scored_sequence" if bodies else "no_joint_sequences",
             "guideline": analysis.guideline,
         }
     else:
@@ -79,6 +116,7 @@ def build_arm_pose_evaluation(
         guidance = {str(c["zone_id"]): c["correction_guidance"] for c in reversed(analysis.priority_corrections)}
         result = {
             "status": "available",
+            "joint_source": joint_source,
             "average_similarity_percent": _percent(analysis.average_similarity_score),
             "evaluated_sequence_count": analysis.counts.get("scored", 0),
             "sequence_count": analysis.counts.get("total", 0),
@@ -94,9 +132,6 @@ def build_arm_pose_evaluation(
             "priority_corrections": [c["correction_guidance"] for c in analysis.priority_corrections],
             "sequences": sequences,
         }
-    if len(_CACHE) >= _CACHE_LIMIT:
-        _CACHE.pop(next(iter(_CACHE)))
-    _CACHE[key] = result
     return result
 
 
@@ -115,6 +150,12 @@ def parse_viewer_arm_pose(value: str | None) -> dict[str, Any] | None:
     return None
 
 
+_UNAVAILABLE = {
+    "process_not_supported": "블라스팅 기록은 숙련자 팔 자세 기준이 없어 자세 유사도를 채점하지 않습니다.",
+    "no_joint_sequences": "이 기록에는 자세를 채점할 분사 구간이 없습니다.",
+}
+
+
 def _sequence_at(arm: Mapping[str, Any], seconds: object) -> Mapping[str, Any] | None:
     """재생 시점의 분사 시퀀스. 이동 구간이면 직전에 끝난 분사."""
     if isinstance(seconds, bool) or not isinstance(seconds, (int, float)):
@@ -127,13 +168,14 @@ def _sequence_at(arm: Mapping[str, Any], seconds: object) -> Mapping[str, Any] |
 def arm_pose_answer(arm: Mapping[str, Any], *, current: bool, playback: Mapping[str, Any] | None, zone_id: str | None) -> str:
     """서명된 채점 결과로만 문장을 만든다. `current`는 "지금·이 Zone" 질문이다."""
     if arm.get("status") != "available":
-        if arm.get("reason_code") == "no_world_joint_sequences":
-            return "이 기록에는 관절 좌표가 없어 숙련자 대비 자세 유사도를 채점할 수 없습니다."
-        return "이 기록에서는 숙련자 대비 자세 유사도를 채점할 수 없습니다."
+        return _UNAVAILABLE.get(str(arm.get("reason_code")), "이 기록에서는 숙련자 대비 자세 유사도를 채점할 수 없습니다.")
     if current and zone_id is None:
         sequence = _sequence_at(arm, (playback or {}).get("playhead_seconds"))
         if sequence is not None:
-            return (f"재생 시점의 분사({sequence['sequence_id']}, Zone {sequence['zone_id']})는 숙련자 팔 자세 대비 "
+            seconds, end = (playback or {}).get("playhead_seconds"), sequence.get("end_seconds")
+            when = "직전 분사" if isinstance(end, (int, float)) and isinstance(seconds, (int, float)) and seconds > end else "재생 시점의 분사"
+            # 분사 하나가 여러 Zone에 걸칠 수 있어 Zone은 적지 않는다(뷰어 Zone 카드와 어긋나 보인다).
+            return (f"{when}({sequence['sequence_id']})는 숙련자 팔 자세 대비 "
                     f"자세 유사도 {sequence['similarity_percent']}%입니다. "
                     + (sequence.get("correction") or ("" if sequence.get("confidence") == "limited" else "교정할 관절은 없습니다."))
                     # 엔진이 제한을 건 채점은 정상 자세로 확정하지 않는다.
