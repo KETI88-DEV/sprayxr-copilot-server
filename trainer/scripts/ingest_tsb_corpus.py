@@ -24,13 +24,18 @@ def emit(event, **fields):
     print(json.dumps({'time': utc_now(), 'event': event, **fields}, ensure_ascii=False), flush=True)
 
 
-def safe_file(root: Path, relative: str) -> Path:
+def relative_parts(relative: str) -> list[str]:
     if (not isinstance(relative, str) or not relative or '\x00' in relative
             or PureWindowsPath(relative).drive or relative.startswith(('/', '\\'))):
         raise ValueError('unsafe relative path')
     parts = relative.replace('\\', '/').split('/')
     if any(part in {'', '.', '..'} for part in parts):
         raise ValueError('unsafe relative path')
+    return parts
+
+
+def safe_file(root: Path, relative: str) -> Path:
+    parts = relative_parts(relative)
     root = root.resolve()
     path = root.joinpath(*parts).resolve()
     if not path.is_relative_to(root):
@@ -88,7 +93,15 @@ def read_receipt(source_root: Path, relative: str) -> dict:
     if hashlib.sha256(encoded).hexdigest() != value.get('manifest_sha256'):
         raise ValueError('invalid transfer manifest checksum')
     base = receipt.parent.parent / 'archive' / ('raw' if value['kind'] == 'raw' else 'converted')
-    return {safe_file(base, path).relative_to(source_root.resolve()).as_posix(): size for path, size in manifest}
+    prefix = base.relative_to(source_root.resolve()).as_posix() + '/'
+    entries = {}
+    for path, size in manifest:
+        relative = prefix + '/'.join(relative_parts(path))
+        if (not isinstance(size, int) or isinstance(size, bool) or size < 0
+                or relative in entries):
+            raise ValueError('invalid transfer manifest entry')
+        entries[relative] = size
+    return entries
 
 
 class ReceiptCache:
@@ -96,6 +109,10 @@ class ReceiptCache:
         self.root, self.items, self.checked = source_root, {}, {}
 
     def get(self, relative):
+        # Completed receipts are immutable: batch IDs bind the source snapshot,
+        # and transport publishes them only after checksum and extraction checks.
+        if relative in self.items:
+            return self.items[relative]
         now = time.monotonic()
         if now - self.checked.get(relative, -100) >= 5:
             self.checked[relative] = now

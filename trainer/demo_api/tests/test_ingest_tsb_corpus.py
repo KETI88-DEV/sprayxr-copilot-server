@@ -148,3 +148,31 @@ def test_resume_recovers_only_own_committed_catalog_after_receipt_crash(tmp_path
         m.recover_publication(tmp_path, {'catalog_sha256': 'stale'}, [item], 'another-run')
     with pytest.raises(RuntimeError, match='concurrent'):
         m.recover_publication(tmp_path, {'catalog_sha256': 'stale'}, [], 'owned-run')
+
+
+def test_completed_transfer_receipts_are_reused_without_full_manifest_rescans(tmp_path, monkeypatch):
+    m = driver()
+    calls = []
+    monkeypatch.setattr(m, 'read_receipt', lambda root, relative: calls.append(relative) or {'file.csv': 3})
+    clock = [0]
+    monkeypatch.setattr(m.time, 'monotonic', lambda: clock[0])
+    cache = m.ReceiptCache(tmp_path)
+    for instant in [0, 6, 12, 120]:
+        clock[0] = instant
+        assert cache.get('complete.receipt.json') == {'file.csv': 3}
+    assert calls == ['complete.receipt.json']
+
+
+def test_missing_receipt_is_retried_when_transfer_finishes(tmp_path, monkeypatch):
+    m = driver()
+    finished, clock = [False], [0]
+    def read(root, relative):
+        if not finished[0]:
+            raise FileNotFoundError(relative)
+        return {'file.csv': 3}
+    monkeypatch.setattr(m, 'read_receipt', read)
+    monkeypatch.setattr(m.time, 'monotonic', lambda: clock[0])
+    cache = m.ReceiptCache(tmp_path)
+    assert cache.get('pending.receipt.json') is None
+    finished[0], clock[0] = True, 6
+    assert cache.get('pending.receipt.json') == {'file.csv': 3}
