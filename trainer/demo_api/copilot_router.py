@@ -59,7 +59,7 @@ from trainer.demo_api.query_language import TranslationUnavailableError, transla
 from trainer.demo_api.sequence_store import SequenceStore
 from trainer.demo_api.sequence_analysis import SequenceAnalysisEngine
 from trainer.demo_api.v1_store import V1Store
-from trainer.demo_api.query_runtime import generation_slot_for, select_query_pipeline, translation_pipeline_for
+from trainer.demo_api.query_runtime import generation_slot_for, retrieval_question, select_query_pipeline, translation_pipeline_for
 from trainer.scripts.generation_slot import GENERATION_SLOT  # Legacy slot identity for unconfigured clients.
 from trainer.scripts.live_response_contract import (
     FAILED_REPAIR_PATHS,
@@ -991,7 +991,10 @@ async def _execute_copilot_query(
                     "generation_instruction": generation_instruction,
                     **({"retrieval_instruction": query.prompt}
                        if getattr(pipeline, "quick_query_runtime", None) is not None else {}),
-                } if query.response_mode == "quick" else {}),
+                } if query.response_mode == "quick" else {
+                    # 응답 수준 지시문이 검색어에 섞이면 무관한 문단이 잡힌다(Issue #9).
+                    "retrieval_instruction": retrieval_question(query.prompt, context=instruction),
+                }),
             )
 
     try:

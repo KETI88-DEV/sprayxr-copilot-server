@@ -174,6 +174,24 @@ def test_detailed_mode_requests_evidence_and_action_from_the_model(monkeypatch: 
     assert pipeline.calls[0]["max_tokens"] == 512
 
 
+def test_detailed_mode_searches_documents_with_the_question_not_the_answer_directive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """응답 수준 지시문이 검색어에 섞이면 질문과 무관한 문단이 잡힌다(2026-11-11 재현, Issue #9)."""
+    pipeline = _FakePipeline()
+
+    response = _client(monkeypatch, pipeline).post(
+        URL, json=_body(prompt="적정 이격거리는?", response_mode="detailed")
+    )
+
+    assert response.status_code == 200
+    retrieval = pipeline.calls[0]["retrieval_instruction"]
+    assert "응답 수준" not in retrieval
+    assert "상세 분석" not in retrieval
+    assert "분사 거리" in retrieval  # 빠른 안내와 같은 매뉴얼 용어 확장
+    assert "상세 분석" in pipeline.calls[0]["instruction"]  # 생성 지시는 그대로
+
+
 def test_detailed_order_mode_synthesizes_the_structured_report_instead_of_repeating_quick_answer() -> None:
     from fastapi import FastAPI
 
