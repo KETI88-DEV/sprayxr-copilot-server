@@ -102,6 +102,9 @@ def viewer_dialogue_context(payload: Mapping[str, Any]) -> dict[str, Any]:
 _MEASUREMENT: Final = re.compile(r"(\d+(?:\.\d+)?)(?:\s*[~∼-]\s*(\d+(?:\.\d+)?))?\s*(mm/s|cm/s|m/s|mm|cm|µm|μm|um|%|°)")
 _UNIT_ALIASES: Final = {"μm": "µm", "um": "µm"}
 _SENTENCE_END: Final = re.compile(r"(?<=[.!?])\s+|\n+")
+_SPEED_UNIT: Final = re.compile(r"(?<![A-Za-zµμ])(mm/s|cm/s|m/s)(?![A-Za-z])")
+_REFERENCE_WORD: Final = re.compile(r"표준|기준")
+_LEGACY_LABEL: Final = re.compile(r"\[(?:분석|판정|원인|조치|근거|답변)\]\s*")
 
 
 def _grounded_values(facts: Any, prompt: str) -> dict[str, set[float]]:
@@ -155,11 +158,18 @@ def ungrounded_measurements(answer: str, *, facts: Any, prompt: str) -> list[str
     """답에 나온 측정값(수 + 단위) 가운데 자료·질문에 없는 것. 단위 없는 수(날짜·셈)는 보지 않는다."""
     pool = _grounded_values(facts, prompt)
     invented: list[str] = []
+    answer = re.sub(r"(?<=\d),(?=\d{3})", "", answer)  # 1,814.76 → 1814.76
     for match in _MEASUREMENT.finditer(answer):
         unit = _UNIT_ALIASES.get(match[3], match[3])
         values = pool.get(unit, set()) | (pool.get("", set()) if unit not in ("%", "°") and unit in pool else set())
         if not all(_matches(float(number), values) for number in match.groups()[:2] if number):
             invented.append(match[0])
+    # 값과 떨어져 적힌 속도 단위("평균 속도(m/s)가 896")도 자료의 단위여야 한다.
+    invented += [unit for unit in dict.fromkeys(_SPEED_UNIT.findall(answer))
+                 if unit not in pool and not any(unit in token for token in invented)]
+    # 자료에 기준값이 없으면 "표준 대비", "기준 범위" 같은 비교는 근거가 없다.
+    if not _REFERENCE_WORD.search(json.dumps(facts, ensure_ascii=False) + prompt):
+        invented += list(dict.fromkeys(_REFERENCE_WORD.findall(answer)))
     return invented
 
 
@@ -168,6 +178,7 @@ def drop_ungrounded(answer: str, *, facts: Any, prompt: str) -> str:
     def invented(part: str) -> bool:
         return bool(ungrounded_measurements(part, facts=facts, prompt=prompt))
 
+    answer = _LEGACY_LABEL.sub("", answer)
     answer = re.sub(r"\s*\([^()]*\)", lambda match: "" if invented(match[0]) else match[0], answer)
     kept = [part.strip() for part in _SENTENCE_END.split(answer) if part.strip() and not invented(part)]
     return " ".join(kept) or "세션 기록으로는 확인할 수 없습니다."

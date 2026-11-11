@@ -38,23 +38,26 @@ FACTS = {"training_summary": summarize_session(BODIES, selected_sequence_id="SEQ
     "평균 속도는 약 712 mm/s입니다.",  # 반올림은 같은 값이다
     "한국전쟁은 1950년 6월 25일에 시작됐습니다.",  # 측정 단위가 없는 수는 검사하지 않는다
     "1과 3을 더하면 4입니다.",
+    "이 시퀀스의 분사 속도는 약 1,291.84 mm/s였습니다.",  # 자릿수 쉼표
 ])
 def test_measurements_from_the_facts_or_plain_numbers_pass(answer: str) -> None:
     assert dialogue.ungrounded_measurements(answer, facts=FACTS, prompt="") == []
 
 
 @pytest.mark.parametrize(("answer", "invented"), [
-    ("평균 속도: 905 mm/s (표준 대비 +4%)", ["4%"]),
+    ("평균 속도: 905 mm/s (표준 대비 +4%)", ["4%", "표준"]),
     ("속도를 5~10% 낮추어 작업해 보세요.", ["5~10%"]),
     ("팔꿈치 각도 28°는 과도한 굴곡 상태입니다.", ["28°"]),
     ("평균 속도는 896 m/s입니다.", ["896 m/s"]),
+    ("평균 속도(m/s)가 905이고 평균 거리가 753.15 mm입니다.", ["m/s"]),
+    ("평균 속도: 712.4 mm/s (표준 범위)", ["표준"]),
 ])
 def test_measurements_missing_from_the_facts_are_flagged(answer: str, invented: list[str]) -> None:
     assert dialogue.ungrounded_measurements(answer, facts=FACTS, prompt="") == invented
 
 
 def test_a_number_the_user_gave_is_not_invented() -> None:
-    assert dialogue.ungrounded_measurements("300 mm면 기준보다 가깝습니다.", facts=FACTS, prompt="거리 300 mm는 어때?") == []
+    assert dialogue.ungrounded_measurements("300 mm는 이 시퀀스의 753.15 mm보다 가깝습니다.", facts=FACTS, prompt="거리 300 mm는 어때?") == []
 
 
 def test_dropping_keeps_the_grounded_part_of_the_answer() -> None:
@@ -62,6 +65,8 @@ def test_dropping_keeps_the_grounded_part_of_the_answer() -> None:
 
     assert cleaned == "평균 속도: 905 mm/s."
     assert dialogue.drop_ungrounded("속도를 5~10% 낮추세요.", facts=FACTS, prompt="") == "세션 기록으로는 확인할 수 없습니다."
+    labelled = "[분석] 평균 속도: 905 mm/s (표준 범위)\n평균 거리: 753.15 mm (표준 범위)\n\n속도는 표준 범위 내입니다."
+    assert dialogue.drop_ungrounded(labelled, facts=FACTS, prompt="") == "평균 속도: 905 mm/s 평균 거리: 753.15 mm"
 
 
 class _Pipeline:
