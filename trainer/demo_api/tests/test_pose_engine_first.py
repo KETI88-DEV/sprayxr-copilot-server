@@ -125,6 +125,10 @@ def test_arm_pose_answer_follows_the_playhead_the_zone_and_the_record() -> None:
     assert "직전 분사(SEQ-001)" in at(25.0)  # 이동 구간은 직전에 끝난 분사
     assert "Zone 9" not in at(15.0)  # 분사 하나가 여러 Zone에 걸칠 수 있어 분사 문장에는 Zone을 적지 않는다
     assert "SEQ-002" in at(35.0) and "교정할 관절은 없습니다" in at(35.0)
+    limited = {**ARM, "sequences": [{**ARM["sequences"][1], "confidence": "limited"}]}
+    reference_only = viewer_arm_pose.arm_pose_answer(
+        limited, current=True, playback={"playhead_seconds": 35.0}, zone_id=None)
+    assert "참고용" in reference_only and "교정할 관절은 없습니다" not in reference_only and "  " not in reference_only
     assert "Zone 8의 자세 유사도는 평균 80%" in at(5.0)  # 첫 분사 전에는 선택 Zone
     zone = viewer_arm_pose.arm_pose_answer(ARM, current=False, playback=None, zone_id="9")
     assert "Zone 9의 자세 유사도는 평균 60%" in zone and "오른쪽 위팔" in zone
