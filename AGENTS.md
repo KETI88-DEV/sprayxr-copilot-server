@@ -138,7 +138,8 @@ npm run start:electron
 
 ## Query dialogue and operator provenance
 
-- Operational QA reuses `COPILOT-DEMO-USER` (`모의훈련자`) and sends `X-Copilot-Source: assistant-test`. Do not create a trainee per test run; use request/conversation IDs for isolation.
+- Assistant operational QA always reuses `COPILOT-AI-TEST`, with display name `AI 개발 테스트 (Codex)`, and sends `X-Copilot-Source: assistant-test`. Do not use `1234` or the shared `COPILOT-DEMO-USER` for assistant QA. Do not create or rename a trainee per test run; use request/conversation IDs for isolation. This fixed identity was requested by the user on 2026-11-11 so TSB calls remain distinguishable.
+- The public simulation/test workflow keeps `COPILOT-DEMO-USER` (`모의훈련자`). Do not rename that shared account or historical users to claim their traffic as assistant testing.
 - Motion viewer requests keep the selected worker ID and send `X-Copilot-Source: motion-viewer`. Caller channel (`3D VIEWER`, `TEST`, `TEST API`) is separate from the trainee identity.
 - Do not rename historical worker `1234` or attribute its old calls to a person without evidence. Missing historical IPs stay unknown; file imports have no HTTP caller.
 - IP comes from ASGI client scope. Never trust arbitrary forwarded headers or widen trusted proxies to `*` merely to populate the UI.
