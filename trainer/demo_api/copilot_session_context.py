@@ -18,7 +18,7 @@ from typing import Any
 from trainer.demo_api.telemetry_contracts import process_from_tool_type
 
 _NO_ZONE = {"", "-1", "0", "none", "null", "nan"}
-_METRICS = ("avg_speed_mms", "avg_distance_mm", "avg_thickness_um")
+_METRICS = {"avg_speed_mms": "mm/s", "avg_distance_mm": "mm", "avg_thickness_um": "µm"}
 
 
 def viewer_definition_context(prompt: str, context: str | None) -> str | None:
@@ -77,6 +77,11 @@ def _sequence_fact(body: dict[str, Any]) -> dict[str, Any]:
     return fact
 
 
+def _with_units(values: dict[str, Any]) -> dict[str, Any]:
+    """모델이 키 이름에서 단위를 추측하지 않도록 값에 단위를 붙인다."""
+    return {key: f"{value:g} {_METRICS[key]}" if key in _METRICS else value for key, value in values.items()}
+
+
 def summarize_session(bodies: list[dict[str, Any]], *, recent_limit: int = 3) -> str:
     """Return deterministic compact JSON for every received sequence in a session."""
     if not bodies:
@@ -114,8 +119,8 @@ def summarize_session(bodies: list[dict[str, Any]], *, recent_limit: int = 3) ->
         "current_zone": current_zone,
         "zone_visit_order": visits,
         "zone_sequence_counts": dict(counts),
-        "session_averages": averages,
-        "recent_sequences": facts[-max(1, min(int(recent_limit), 10)):],
+        "session_averages": _with_units(averages),
+        "recent_sequences": [_with_units(fact) for fact in facts[-max(1, min(int(recent_limit), 10)):]],
     }
     return json.dumps(summary, ensure_ascii=False, separators=(",", ":"))
 

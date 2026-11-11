@@ -44,15 +44,16 @@ def test_session_summary_keeps_accumulated_order_metrics_without_raw_frames() ->
         "zone_visit_order": ["1", "3"],
         "zone_sequence_counts": {"1": 1, "3": 2},
         "session_averages": {
-            "avg_speed_mms": 465.0,
-            "avg_distance_mm": 256.25,
-            "avg_thickness_um": 142.5,
+            "avg_speed_mms": "465 mm/s",
+            "avg_distance_mm": "256.25 mm",
+            "avg_thickness_um": "142.5 µm",
         },
         "recent_sequences": [
-            {"sequence_id": "SEQ-002", "zone_id": None, "avg_speed_mms": 460.0, "avg_distance_mm": 255.0, "avg_thickness_um": 142.5},
-            {"sequence_id": "SEQ-003", "zone_id": "3", "avg_speed_mms": 500.0, "avg_distance_mm": 265.0, "avg_thickness_um": 142.5},
-            {"sequence_id": "SEQ-004", "zone_id": "3", "avg_speed_mms": 480.0, "avg_distance_mm": 260.0, "avg_thickness_um": 142.5},
+            {"sequence_id": "SEQ-002", "zone_id": None, "avg_speed_mms": "460 mm/s", "avg_distance_mm": "255 mm", "avg_thickness_um": "142.5 µm"},
+            {"sequence_id": "SEQ-003", "zone_id": "3", "avg_speed_mms": "500 mm/s", "avg_distance_mm": "265 mm", "avg_thickness_um": "142.5 µm"},
+            {"sequence_id": "SEQ-004", "zone_id": "3", "avg_speed_mms": "480 mm/s", "avg_distance_mm": "260 mm", "avg_thickness_um": "142.5 µm"},
         ],
     }
+    # 단위를 값에 붙여 넘긴다 — 키 이름에서 단위를 추측하게 두면 모델이 mm/s를 m/s로 쓴다(2026-11-11 Spark 27B 8건 중 7건).
     assert "sequence_info" not in summary
     assert "very-large-base64-payload" not in summary
