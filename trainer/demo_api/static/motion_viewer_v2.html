@@ -14,9 +14,9 @@
   </div>
   <div class="scores" role="group" aria-label="이 기록의 결과">
     <span class="score" title="작업 유사도: 도구 각도·이격거리·칠하는 방향·도막 두께·몸통 자세와 순서를 전문가 기록과 견준 값"><i data-icon="gauge"></i><span>작업</span><strong id="v2ScoreWork">—</strong></span>
-    <span class="score" title="자세 유사도: 분사마다 팔 관절 위치를 채점 엔진으로 숙련자와 견준 평균"><i data-icon="person-standing"></i><span>자세</span><strong id="v2ScorePose">—</strong></span>
+    <button id="v2Worst" class="jump" type="button" hidden><i data-icon="trending-down"></i><span id="v2WorstZone" class="zone-tag"></span><span id="v2WorstScore" class="figure"></span></button>
+    <span class="score" title="자세 유사도: 분사마다 자세 채점 엔진이 숙련자와 견준 값의 평균"><i data-icon="person-standing"></i><span>자세</span><strong id="v2ScorePose">—</strong></span>
     <span class="score" title="순서 준수율: 전문가의 Zone 순서와 얼마나 같은지"><i data-icon="route"></i><span>순서</span><strong id="v2ScoreOrder">—</strong></span>
-    <button id="v2Worst" class="jump" type="button" hidden><i data-icon="crosshair"></i><span id="v2WorstZone" class="zone-tag"></span></button>
   </div>
 </header>
 
@@ -38,7 +38,6 @@
         <div class="layers-body">
           <ul id="viewerLegend" class="legend">
             <li><i class="dot" style="background:#f5f8ff"></i>전문가 착탄점</li>
-            <li><i class="dot dot-zone"></i>Zone 영역</li>
             <li><i class="dot" style="background:#34d399"></i>전문가 경로</li>
             <li><i class="dot" style="background:#ff8a3d"></i>이 기록의 경로</li>
             <li><i class="dot" style="background:#22d3ee"></i>머리와 손</li>
@@ -52,7 +51,7 @@
     </div>
     <div class="zone-note">
       <span id="v2ZoneTag" class="zone-tag zone-tag-idle">이동 중</span>
-      <strong id="v2ZoneScore" class="figure"></strong>
+      <span class="zone-score" title="이 Zone의 작업 유사도" hidden><i data-icon="gauge"></i><strong id="v2ZoneScore" class="figure"></strong></span>
       <span id="v2ZoneAdvice" class="advice"></span>
       <button id="v2ZoneMore" class="icon-btn" type="button" aria-expanded="false" aria-controls="v2ZoneDetail" aria-label="이 Zone의 항목별 비교" hidden><i data-icon="sliders-horizontal"></i></button>
     </div>
@@ -77,18 +76,18 @@
     <article class="feature" data-feature="pose" aria-labelledby="v2PoseTitle">
       <header>
         <h2 id="v2PoseTitle"><i data-icon="person-standing"></i>자세</h2>
-        <strong id="v2PoseAvg" class="figure" title="분사별 자세 유사도의 평균">—</strong>
+        <strong id="v2PoseScore" class="figure" title="지금 분사의 자세 유사도">—</strong>
+        <div class="seg" role="group" aria-label="스켈레톤 돌려 보기">
+          <button id="skeletonTurnLeft" type="button" aria-label="왼쪽으로 돌리기"><i data-icon="rotate-ccw"></i></button>
+          <button id="skeletonReset" type="button" aria-label="정면으로"><i data-icon="locate-fixed"></i></button>
+          <button id="skeletonTurnRight" type="button" aria-label="오른쪽으로 돌리기"><i data-icon="rotate-cw"></i></button>
+        </div>
         <button class="icon-btn ask-link" type="button" data-ask-tab="pose" aria-label="자세 질문하기"><i data-icon="message-circle"></i></button>
       </header>
       <div class="pose-body">
         <div class="skeleton-card skeleton-screen">
           <canvas id="skeletonCanvas" aria-label="재생 시점의 스켈레톤"></canvas>
           <span id="skeletonPosture" class="posture"></span>
-          <div class="skeleton-controls" role="group" aria-label="스켈레톤 돌려 보기">
-            <button id="skeletonTurnLeft" class="icon-btn" type="button" aria-label="왼쪽으로 돌리기"><i data-icon="rotate-ccw"></i></button>
-            <button id="skeletonReset" class="icon-btn" type="button" aria-label="정면으로"><i data-icon="locate-fixed"></i></button>
-            <button id="skeletonTurnRight" class="icon-btn" type="button" aria-label="오른쪽으로 돌리기"><i data-icon="rotate-cw"></i></button>
-          </div>
         </div>
         <div class="pose-chart">
           <div id="v2PoseBars" class="pose-bars" role="img" aria-label="분사별 자세 유사도"></div>
@@ -100,7 +99,6 @@
     <article class="feature" data-feature="order" aria-labelledby="v2OrderTitle">
       <header>
         <h2 id="v2OrderTitle"><i data-icon="route"></i>순서</h2>
-        <strong id="v2OrderRate" class="figure" title="전문가 순서 준수율">—</strong>
         <button class="icon-btn ask-link" type="button" data-ask-tab="order" aria-label="순서 질문하기"><i data-icon="message-circle"></i></button>
       </header>
       <div id="v2Order" class="order-chart" role="img" aria-label="전문가 권장 순서와 이 기록의 순서"></div>
