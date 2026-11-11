@@ -88,7 +88,9 @@ def live_analysis(store: SequenceStore, *, session_id: str, scenario_id: str | N
             reasons[str(body.get("sequence_id"))] = result.reason_code
     analysis["pose_report"] = {
         "analysis_status": "available" if scored else "unavailable",
-        "average_similarity_score": sum(result.similarity_score for _, result in scored) / len(scored) if scored else None,
+        # 구역만 채점했을 때의 평균은 세션 평균이 아니다 — 답이 "세션 평균"이라고 부르지 않게 비워 둔다.
+        "average_similarity_score": (sum(result.similarity_score for _, result in scored) / len(scored)
+                                     if scored and zone_id is None else None),
         "evaluated_sequence_count": len(scored), "zone_summary": zone_summary(scored),
     }
     analysis["live_pose_context"] = {

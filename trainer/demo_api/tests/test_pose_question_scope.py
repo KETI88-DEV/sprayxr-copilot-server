@@ -132,6 +132,8 @@ def test_live_zone_analysis_scores_every_spray_of_that_zone(monkeypatch: pytest.
     assert found is not None
     assert found[1]["live_pose_context"]["scope"] == "zone"
     assert found[1]["live_pose_context"]["evaluated_sequence_count"] == 5
+    answer = pose_query.answer_pose_question(found, prompt="지금 자세는 어때?", context="9").answer
+    assert "9번 구역" in answer and "세션 평균" not in answer  # 구역만 채점한 값을 세션 평균이라 부르지 않는다
     assert copilot_live_analysis.current_zone(store, "S-LIVE") == "9"
 
 
