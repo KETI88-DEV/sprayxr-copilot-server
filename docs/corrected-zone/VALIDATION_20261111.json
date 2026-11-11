@@ -1,0 +1,85 @@
+{
+  "date": "2026-11-11",
+  "base_commit": "c6cc9bc99497b9dc75c0baf93ae8fd3e1a265d2f",
+  "original_integration_commit": "abb6944f131232912f41ec839438048f6779d547",
+  "final_cpu_test": {
+    "passed": 355,
+    "failed": 0,
+    "skipped": 0,
+    "duration_s": 20.64,
+    "groups": {
+      "integration_and_security": 68,
+      "legacy_api_openapi_viewer_admin": 287
+    },
+    "command_in_container": [
+      "python3",
+      "-m",
+      "pytest",
+      "-q",
+      "trainer/zone_engine/tests",
+      "trainer/coating_explanation_service/tests",
+      "trainer/demo_api/tests/test_corrected_access_control.py",
+      "trainer/demo_api/tests/test_corrected_app_wiring.py",
+      "trainer/demo_api/tests/test_corrected_contracts.py",
+      "trainer/demo_api/tests/test_corrected_flow.py",
+      "trainer/demo_api/tests/test_corrected_store.py",
+      "trainer/demo_api/tests/test_coating_progress.py",
+      "trainer/demo_api/tests/test_session_coating.py",
+      "trainer/demo_api/tests/test_telemetry_router.py",
+      "trainer/demo_api/tests/test_v1_router.py",
+      "trainer/demo_api/tests/test_v1_store.py",
+      "trainer/demo_api/tests/test_sequence_store.py",
+      "trainer/demo_api/tests/test_expert_guidance.py",
+      "trainer/demo_api/tests/test_zone_reference.py",
+      "trainer/demo_api/tests/test_access_control.py",
+      "trainer/demo_api/tests/test_report_jobs.py",
+      "trainer/demo_api/tests/test_session_analysis.py",
+      "trainer/demo_api/tests/test_openapi_workflow.py",
+      "-p",
+      "no:cacheprovider",
+      "trainer/demo_api/tests/test_db_viewer.py",
+      "trainer/demo_api/tests/test_db_sessions.py",
+      "trainer/demo_api/tests/test_db_sequence_heatmap.py",
+      "trainer/demo_api/tests/test_db_admin.py",
+      "trainer/demo_api/tests/test_db_origin_reports.py",
+      "--junitxml=pytest-final.xml"
+    ],
+    "runtime": {
+      "python": "3.11.9",
+      "fastapi": "0.135.1",
+      "pydantic": "2.12.5",
+      "numpy": "1.26.4",
+      "Pillow": "12.3.0",
+      "httpx": "0.28.1",
+      "pytest": "8.3.5"
+    },
+    "uses_real_qwen": false,
+    "uses_gpu": false,
+    "uses_synthetic_assets_and_mock_http": true
+  },
+  "full_python_suite": {
+    "status": "collection_blocked",
+    "collection_error_modules": 16,
+    "missing_packages": [
+      "torch",
+      "matplotlib"
+    ],
+    "same_error_modules_on_unmodified_base": true
+  },
+  "historical_full_integration_20261106": {
+    "new_unit_passed": 54,
+    "legacy_regression_passed": 195,
+    "http_checks_passed": 275,
+    "actual_qwen_outputs": 27,
+    "fallback_outputs": 0,
+    "scope": "original independent integration; not a re-execution of this PR"
+  },
+  "not_verified_here": [
+    "TSB installation and server architecture",
+    "Unity v2 request integration",
+    "existing 27B/vLLM with Ollama 4B concurrency",
+    "39-Zone load and explanation coverage",
+    "coaching causal effect",
+    "proxy authentication and pre-parse request-size enforcement on target server"
+  ]
+}

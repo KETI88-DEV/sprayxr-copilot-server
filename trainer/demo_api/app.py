@@ -28,6 +28,7 @@ from trainer.demo_api.api_docs import api_docs_document, create_api_docs_router
 from trainer.demo_api.chat_service import ChatService, build_default_live_runner
 from trainer.demo_api.contracts import ChatRequest
 from trainer.demo_api.copilot_router import create_copilot_router, install_copilot_error_handlers
+from trainer.demo_api.corrected_router import create_corrected_router
 from trainer.demo_api.coating_progress import CoatingProgressEngine
 from trainer.demo_api.db_viewer import create_db_viewer_router
 from trainer.demo_api.expert_guidance import ExpertGuidanceEngine
@@ -37,6 +38,10 @@ from trainer.demo_api.test_api_docs import add_test_input_overviews
 from trainer.demo_api.anomaly_stream import AnomalyBroadcaster
 from trainer.demo_api.sequence_analysis import SequenceAnalysisEngine
 from trainer.demo_api.sequence_store import SequenceStore
+from trainer.demo_api.engine_gateway import EngineGateway, ExplanationGateway
+from trainer.demo_api.engine_store import CorrectedStore
+from trainer.demo_api.engine_worker import CorrectedOutboxWorker
+from trainer.demo_api.engine_contracts import SOURCE_INSTANCE_ENV
 from trainer.demo_api.v1_router import create_v1_router
 from trainer.demo_api.v1_store import V1Store
 from trainer.demo_api.monitor import MonitorRecorder
@@ -398,6 +403,8 @@ def create_app(
     chat_service: ChatService | None = None,
     *,
     probe_transport: httpx.AsyncBaseTransport | None = None,
+    corrected_engine_transport: httpx.AsyncBaseTransport | None = None,
+    corrected_explanation_transport: httpx.AsyncBaseTransport | None = None,
 ) -> FastAPI:
     recorder = MonitorRecorder()
     store = SimSessionStore()
@@ -412,6 +419,57 @@ def create_app(
     api_call_store = ApiCallStore(SequenceStore._default_path())
     anomaly_broadcaster = AnomalyBroadcaster()
     sequence_analysis = SequenceAnalysisEngine(expert_guidance.reference_root)
+    corrected_engine_url = os.environ.get("CORRECTED_ENGINE_URL")
+    corrected_store: CorrectedStore | None = None
+    corrected_worker: CorrectedOutboxWorker | None = None
+    corrected_source_instance_id: str | None = None
+    if corrected_engine_url:
+        explanation_url = os.environ.get("CORRECTED_EXPLANATION_URL")
+        if not explanation_url:
+            raise RuntimeError(
+                "CORRECTED_EXPLANATION_URL is required when CORRECTED_ENGINE_URL is set"
+            )
+        try:
+            engine_timeout = float(os.environ.get("CORRECTED_ENGINE_TIMEOUT_S", "5"))
+            explanation_timeout = float(
+                os.environ.get("CORRECTED_EXPLANATION_TIMEOUT_S", "120")
+            )
+        except ValueError as exc:
+            raise RuntimeError("corrected HTTP timeout values must be numeric") from exc
+        corrected_db_raw = os.environ.get("CORRECTED_DB_PATH")
+        if not corrected_db_raw:
+            raise RuntimeError(
+                "CORRECTED_DB_PATH is required when CORRECTED_ENGINE_URL is set"
+            )
+        corrected_db_path = Path(corrected_db_raw).resolve()
+        legacy_db_path = Path(SequenceStore._default_path()).resolve()
+        if corrected_db_path == legacy_db_path or (
+            corrected_db_path.exists()
+            and legacy_db_path.exists()
+            and corrected_db_path.samefile(legacy_db_path)
+        ):
+            raise RuntimeError("CORRECTED_DB_PATH must be separate from SEQUENCE_DB_PATH")
+        # The legacy read-only viewer enumerates its DB tables. Keep corrected
+        # request bodies and its internal sequence mirror in a dedicated file.
+        corrected_source_instance_id = os.environ.get(SOURCE_INSTANCE_ENV)
+        if not corrected_source_instance_id or not corrected_source_instance_id.strip():
+            raise RuntimeError(
+                f"{SOURCE_INSTANCE_ENV} is required when CORRECTED_ENGINE_URL is set"
+            )
+        corrected_store = CorrectedStore(str(corrected_db_path))
+        corrected_worker = CorrectedOutboxWorker(
+            corrected_store,
+            EngineGateway(
+                corrected_engine_url,
+                timeout_s=engine_timeout,
+                transport=corrected_engine_transport,
+            ),
+            ExplanationGateway(
+                explanation_url,
+                timeout_s=explanation_timeout,
+                transport=corrected_explanation_transport,
+            ),
+        )
     speech_to_text = LazySpeechToText(
         lambda: TransformersWhisperSpeechToText(
             os.environ.get("STT_MODEL_PATH", "/stt-model"),
@@ -445,6 +503,8 @@ def create_app(
         if protect_admin:
             await to_thread.run_sync(credentials.ensure)
         await to_thread.run_sync(app.state.report_job_recovery)
+        if corrected_worker is not None:
+            corrected_worker.start()
         pipeline_init_thread: threading.Thread | None = None
         if live and os.environ.get("LIVE_EAGER_INIT") == "1":
             pipeline_init_thread = chat_service_mod.start_eager_pipeline_init()
@@ -466,7 +526,13 @@ def create_app(
                 daemon=True,
             )
             app.state.stt_init_thread.start()
-        yield
+        try:
+            yield
+        finally:
+            if corrected_worker is not None:
+                await corrected_worker.stop()
+            if corrected_store is not None:
+                await to_thread.run_sync(corrected_store.close)
 
     app = FastAPI(
         title="XR Painting Simulator AI Co-Pilot API",
@@ -501,6 +567,8 @@ def create_app(
     app.state.coating_progress = coating_progress
     app.state.v1_store = v1_store
     app.state.sequence_store = sequence_store
+    app.state.corrected_store = corrected_store
+    app.state.corrected_worker = corrected_worker
     app.state.api_call_store = api_call_store
     app.state.speech_to_text = speech_to_text
     app.state.access_control = {"admin_protected": False, "monitor_protected": protect_admin, "api_key_required": bool(api_key)}
@@ -637,6 +705,18 @@ def create_app(
             session_store=v1_store,
         )
     )
+    if (
+        corrected_store is not None
+        and corrected_worker is not None
+        and corrected_source_instance_id is not None
+    ):
+        app.include_router(
+            create_corrected_router(
+                store=corrected_store,
+                worker=corrected_worker,
+                source_instance_id=corrected_source_instance_id,
+            )
+        )
     install_copilot_error_handlers(app)
 
     default_openapi = app.openapi
@@ -651,7 +731,7 @@ def create_app(
         }
         if api_key:
             for path, operations in schema.get("paths", {}).items():
-                if path.startswith("/api/v1/"):
+                if path.startswith(("/api/v1/", "/api/v2/")):
                     for method, operation in operations.items():
                         if method in _OPENAPI_METHODS:
                             operation["security"] = [{"TSBApiKey": []}]

@@ -138,3 +138,8 @@ git push --atomic origin main refs/tags/v2.7.3
 - [전문가 자세 기준 데이터](docs/arm_reference_artifact.md)
 - [Zone 단위 비교 평가 설계](docs/zone_similarity_copilot_prd.md)
 - [모델·RAG·학습 설정](trainer/configs/)
+
+
+## 보정 도막 평가·Zone 코칭 통합
+
+선택적 v2 경로의 설치 준비, 변경 위치, API 연결, 시험 범위는 [통합 안내](docs/corrected-zone/README_KR.md)를 참고하세요. 기존 v1 요청은 새 엔진으로 자동 전환되지 않습니다.
