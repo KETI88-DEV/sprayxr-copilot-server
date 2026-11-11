@@ -312,11 +312,11 @@ def _coating_sentence(coating: Mapping[str, Any]) -> str:
     status = coating.get("status")
     thickness = coating.get("thickness_um")
     if status == "normal":
-        return " 도막은 전문가 기준을 충족했습니다."
+        return " 이 구역 도막은 전문가 기준을 충족했습니다."
     if status == "under_app":
-        return f" 도막은 전문가 기준보다 부족합니다(평균 {thickness:.0f}µm, 기준 도포율 {coating.get('coverage_percent', 0):.0f}%)."
+        return f" 이 구역 도막은 전문가 기준보다 부족합니다(평균 {thickness:.0f}µm, 기준 도포율 {coating.get('coverage_percent', 0):.0f}%)."
     if status == "over_app":
-        return f" 도막은 과도장입니다(평균 {thickness:.0f}µm, 과도장 셀 {coating.get('overpaint_percent', 0):.0f}%)."
+        return f" 이 구역 도막은 과도장입니다(평균 {thickness:.0f}µm, 과도장 셀 {coating.get('overpaint_percent', 0):.0f}%)."
     return ""
 
 

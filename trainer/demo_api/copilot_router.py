@@ -185,14 +185,19 @@ def _parse_motion_viewer_context(value: str | None, *, task_type: str) -> dict[s
     return analysis_context
 
 
-def _session_findings(found: tuple[str, Mapping[str, Any]] | None) -> dict[str, str]:
-    """완료 분석이 남긴 판정(자세가 가장 낮은 구역, 도막 과다·부족 구역). 대화 답이 평가를 말할 수 있는 유일한 근거다."""
+_EVALUATION_QUESTION: Final = re.compile(r"잘한|못한|고쳐야|고칠|개선할|개선점|문제점|부족한 점")
+
+
+def _session_findings(found: tuple[str, Mapping[str, Any]] | None) -> str:
+    """평가를 묻는 자유 질문의 답: 완료 분석의 판정(자세 최저 구역, 도막 과다·부족 구역)을 그대로 전한다.
+
+    모델에 판정을 넘겨 풀어 쓰게 하면 8B가 없는 판정을 만든다(2026-11-11 Spark: 도막이 정상인 9번 구역을 "도막 부족").
+    """
     pose, coating = answer_zone_question(found, context=None), report_coating_context(found)
-    findings = {"pose": pose.answer} if pose.analysis_status == "available" else {}
+    parts = [pose.answer] if pose.analysis_status == "available" else []
     if coating["analysis_status"] == "available":
-        # 첫 줄("…기준으로 확인했습니다")은 뺀다. '기준'이라는 낱말이 자료에 있으면 기준 비교 검사가 꺼진다.
-        findings["coating"] = answer_coating_question(coating, "", detailed=False).split("\n", 1)[1]
-    return findings
+        parts.append(answer_coating_question(coating, "", detailed=False))
+    return "\n".join(parts) or "이 세션은 완료 분석 결과가 없어 잘한 점이나 고칠 점을 판정할 수 없습니다."
 
 
 def _selected_sequence(context: str | None) -> str | None:
@@ -684,9 +689,12 @@ async def _execute_copilot_query(
                     facts["training_summary"] = await to_thread.run_sync(
                         lambda: summarize_session(sequences.session_bodies(query.session_id),
                                                   selected_sequence_id=_selected_sequence(query.context)))
-                    if reports is not None and (findings := _session_findings(await to_thread.run_sync(
-                            lambda: reports.latest_complete_analysis(query.session_id)))):
-                        facts["session_findings"] = findings
+                    if _EVALUATION_QUESTION.search(query.prompt):
+                        found_report = (await to_thread.run_sync(lambda: reports.latest_complete_analysis(query.session_id))
+                                        if reports is not None else None)
+                        return _success_response(query, request_started, answer=_session_findings(found_report),
+                                                 retrieval_used=False, citations=[],
+                                                 context_status="available" if found_report else "not_available")
                 def converse():
                     with generation_slot_for(planned_pipeline):
                         return planned_pipeline.converse_copilot(query.prompt, recent_turns=dialogue_turns,

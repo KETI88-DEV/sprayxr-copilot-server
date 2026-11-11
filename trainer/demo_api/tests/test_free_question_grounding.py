@@ -129,7 +129,7 @@ def test_query_answers_never_carry_hanzi_the_user_did_not_write() -> None:
     assert _ask(pipeline, context="SEQ-001")["answer"] == "평균 속도는 712.4 mm/s입니다."
 
 
-def test_evaluations_come_only_from_the_completed_session_report() -> None:
+def test_evaluation_questions_quote_the_completed_session_report_without_the_model() -> None:
     from trainer.demo_api.copilot_router import _session_findings
 
     report = ("RPT-1", {"pose_report": {"average_similarity_score": 0.66, "evaluated_sequence_count": 8, "zone_summary": [
@@ -139,7 +139,10 @@ def test_evaluations_come_only_from_the_completed_session_report() -> None:
 
     findings = _session_findings(report)
 
-    assert "9번 구역" in findings["pose"] and "19%" in findings["pose"]
-    assert findings["coating"] == "도막 부족: Map 1 · Zone 3\n도막 과다: 판정된 영역 없음"
-    assert _session_findings(None) == {} and _session_findings(("RPT-2", {})) == {}
-    assert dialogue.ungrounded_measurements("평균 속도: 712.4 mm/s (기준 범위)", facts={**FACTS, "session_findings": findings}, prompt="") == ["기준"]
+    assert "9번 구역" in findings and "19%" in findings
+    assert "도막 부족: Map 1 · Zone 3\n도막 과다: 판정된 영역 없음" in findings
+    assert "판정할 수 없습니다" in _session_findings(None) and "판정할 수 없습니다" in _session_findings(("RPT-2", {}))
+
+    pipeline = _Pipeline(["속도 편차가 큽니다."])  # 모델을 부르면 이 지어낸 평가가 나간다
+    data = _ask(pipeline, prompt="이번 세션에서 가장 먼저 고쳐야 할 점 하나만 알려줘.")
+    assert "판정할 수 없습니다" in data["answer"] and pipeline.facts == []
