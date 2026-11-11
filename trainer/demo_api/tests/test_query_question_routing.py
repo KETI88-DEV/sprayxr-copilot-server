@@ -72,7 +72,7 @@ def test_missing_or_forged_coating_values_do_not_become_order_or_normal_answers(
     assert "권장" not in data["answer"] and "9999" not in data["answer"]
 
 
-@pytest.mark.parametrize("question,expected", [("누락한 Zone은?", "누락"), ("실제 수행 순서는?", "실제"),
+@pytest.mark.parametrize("question,expected", [("누락한 Zone은?", "누락"), ("실제 수행 순서는?", "칠한 순서"),
                                                ("순서 준수율은?", "유사도"), ("도포 방향은?", "방향")])
 def test_detailed_order_answer_preserves_the_specific_question(question, expected):
     data = client(Pipeline()).post("/api/v1/copilot/query", json={

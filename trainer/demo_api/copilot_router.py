@@ -337,25 +337,24 @@ def _structured_detail_fallback(
     base_answer: str,
     analysis_context: dict[str, object],
     *,
-    interpretation: str | None = None,
     intent: str | None = None,
 ) -> str:
-    """Build a standalone analysis, not a quick answer with text appended."""
+    """검증된 수치만 덧붙인 문장으로 답한다 — 제목 틀과 고정 문장은 쓰지 않는다(2026-11-11 지시)."""
     if task_type == "trajectory_recomm" and intent not in (None, "order_reference"):
-        title = {"order_actual": "실제 수행 순서", "order_missing": "누락 Zone 확인",
-                 "order_adherence": "순서 유사도", "order_direction": "도포 방향"}.get(intent, "질문 분석")
         evidence = ""
         if intent == "order_missing":
             expected = {str(z) for z in analysis_context.get("recommended_flow", [])}
             visited = {str(z) for z in analysis_context.get("selected_flow", analysis_context.get("first_visit_flow", []))}
             if expected:
-                evidence = f"\n\n[확인 근거]\n전문가 기준 {len(expected)}개 Zone 중 방문 {len(expected & visited)}개, 누락 {len(expected - visited)}개입니다. Zone 방문 여부와 Zone 내부 도막 충족 여부는 별도로 평가합니다."
+                evidence = f"\n전문가 기준 {len(expected)}개 Zone 중 방문 {len(expected & visited)}개, 누락 {len(expected - visited)}개입니다. Zone 방문 여부와 Zone 내부 도막 충족 여부는 별도로 평가합니다."
         elif intent == "order_adherence":
-            evidence = "\n\n[판단 범위]\n전문가 작업 흐름과 순번별 분포를 비교한 순서 유사도입니다. 도막 두께와 자세 평가는 포함하지 않습니다."
-        return f"[{title}]\n{base_answer}" + evidence
+            evidence = "\n전문가 작업 흐름과 순번별 분포를 비교한 순서 유사도입니다. 도막 두께와 자세 평가는 포함하지 않습니다."
+        return base_answer + evidence
     if task_type == "trajectory_recomm":
         recommended_value = analysis_context.get("recommended_flow")
         recommended = _flow_text(recommended_value)
+        if not recommended:
+            return base_answer
         selected = _flow_text(
             analysis_context.get("selected_flow") or analysis_context.get("first_visit_flow")
         )
@@ -422,69 +421,28 @@ def _structured_detail_fallback(
             segment_lines.append(f"- 유동 구간: Zone {flexible}\n  작업 회차별 차이를 허용하는 대표 경로입니다.")
         if comparison:
             segment_lines.append("- 현재 기록 비교\n  " + "\n  ".join(comparison))
+        # 자료에서 나온 안내만 쓴다 — 어느 기록에나 붙는 일반 권고 문장은 넣지 않는다.
         action = (
-            "현재 순서를 유지하되 각 Zone 내부의 속도·이격거리와 도포 패턴을 함께 점검하세요."
-            if recommended and selected and recommended == selected
-            else (
-                f"Zone {stable_prefix[0]}에서 시작한 뒤 Zone {stable_prefix[1]}로 이동하세요. "
-                "이후에는 대표 경로를 참고하되 현재 위치와 완료한 Zone을 고려해 다음 Zone을 선택하세요."
-                if len(stable_prefix) >= 2 else
-                f"{recommended or '표시된 권장 순서'}를 참고하고 Zone 전환 직전에 다음 Zone을 확인하세요."
-            )
+            ["실제 수행 순서가 권장 순서와 같습니다."] if selected and recommended == selected
+            else [f"Zone {stable_prefix[0]}에서 시작한 뒤 Zone {stable_prefix[1]}로 이동하세요."] if len(stable_prefix) >= 2
+            else []
         )
-        return (
-            "[권장 Zone 순서]\n" + (f"Zone {recommended}" if recommended else "권장 순서를 계산할 수 없습니다.")
-            + "\n\n[전문가 작업 경향]\n" + ("\n\n".join(tendencies) or "전문가 작업 경향을 계산할 수 없습니다.")
-            + "\n\n[구간별 판단]\n" + ("\n".join(segment_lines) or "구간별 판단 자료가 없습니다.")
-            + ("\n\n[상황 해석]\n" + interpretation if interpretation else "")
-            + "\n\n[권장 조치]\n" + action
-        )
-    elif task_type == "pose_recomm":
-        similarity = _percent_text(analysis_context.get("similarity_score", analysis_context.get("similarity_percent")), already_percent="similarity_score" not in analysis_context)
-        current_zone = analysis_context.get("scope") == "current_zone"
-        scope_label = f"현재 재생 구간(Map {analysis_context.get('map_num')} · Zone {analysis_context.get('zone_id')})"
-        # 엔진(팔 관절) 점수 `similarity_score`만 자세 유사도다. 뷰어의 `similarity_percent`는 작업 유사도.
-        engine = "similarity_score" in analysis_context
-        measure = "자세" if engine else "작업"
-        comparison = [f"{scope_label if current_zone else '전체'} {measure} 유사도는 {similarity}입니다."] if similarity else []
+        return "\n".join([f"전문가 기준 권장 순서는 Zone {recommended}입니다.", *tendencies, *segment_lines, *action])
+    elif task_type == "pose_recomm" and analysis_context.get("scope") != "current_zone":
         zones = analysis_context.get("zones")
         zone_rows = list(zones.values()) if isinstance(zones, dict) else zones
-        worst_text = None
-        if isinstance(zone_rows, list) and not current_zone:
-            candidates = [row for row in zone_rows if isinstance(row, dict)]
-            scored = [
-                (float(row.get("similarity_percent", 100)), row)
-                for row in candidates
-                if isinstance(row.get("similarity_percent"), (int, float))
-            ]
-            if scored:
-                _, worst = min(scored, key=lambda item: item[0])
-                score = _percent_text(worst.get("similarity_percent"), already_percent=True)
-                worst_text = f"가장 낮은 구역은 Zone {worst.get('zone_id')}({score})입니다."
-                comparison.append(worst_text)
-        corrections = analysis_context.get("corrections")
-        messages: list[str] = []
-        if isinstance(corrections, list):
-            messages = [
-                str(item.get("message") or item.get("label") or item.get("joint") or "") if isinstance(item, dict) else str(item)
-                for item in corrections[:3]
-            ]
-            messages = [message for message in messages if message and message != "None"]
-        verdict = (f"{scope_label}의 전문가 {measure} 평가를 기준으로 확인했습니다."
-                   if current_zone else f"전문가 {'자세와의' if engine else '작업과의'} 차이를 Zone별로 확인했습니다.")
-        if interpretation is None:
-            interpretation = worst_text or base_answer
-        action = " ".join(messages) if messages else (
-            "다음 분사에서도 같은 조건으로 자세를 비교하고, 관절별 교정이 제시되면 해당 위치를 우선 확인하세요."
-            if engine else "다음 분사에서도 같은 조건으로 작업을 비교하고, 항목별 교정이 제시되면 해당 항목을 우선 확인하세요."
-        )
-        return (
-            "[상세 분석]\n[종합 판단]\n" + verdict
-            + "\n\n[정량 비교]\n" + ("\n".join(comparison) or f"비교 가능한 {measure} 지표가 없습니다.")
-            + "\n\n[해석]\n" + interpretation
-            + "\n\n[권장 조치]\n" + action
-        )
-    return "[상세 분석]\n" + (interpretation or base_answer)
+        scored = [
+            (float(row["similarity_percent"]), row)
+            for row in (zone_rows if isinstance(zone_rows, list) else [])
+            if isinstance(row, dict) and isinstance(row.get("similarity_percent"), (int, float))
+        ]
+        if scored:
+            _, worst = min(scored, key=lambda item: item[0])
+            score = _percent_text(worst.get("similarity_percent"), already_percent=True)
+            worst_text = f"가장 낮은 구역은 Zone {worst.get('zone_id')}({score})입니다."
+            if worst_text not in base_answer:
+                return base_answer + "\n" + worst_text
+    return base_answer
 
 
 def _trim_dangling_detail_label(candidate: str) -> str:

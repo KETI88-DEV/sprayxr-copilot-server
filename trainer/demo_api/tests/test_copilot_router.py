@@ -236,15 +236,43 @@ def test_detailed_order_mode_explains_verified_report_without_extra_generation()
     )).json()["data"]
 
     assert quick["answer"].startswith("권장 작업 순서는 Zone 1 → 3 → 2입니다.")
-    assert detailed["answer"].startswith("[권장 Zone 순서]")
     assert detailed["answer"] != quick["answer"]
-    assert "[전문가 작업 경향]" in detailed["answer"]
-    assert "[구간별 판단]" in detailed["answer"]
-    assert "[권장 조치]" in detailed["answer"]
-    assert not detailed["answer"].startswith(f"[권장 Zone 순서]\n{quick['answer']}")
+    assert "[" not in detailed["answer"]  # 제목 틀 없이 문장으로 낸다(2026-11-11 지시)
+    assert "Zone 1 → 3 → 2" in detailed["answer"]
+    assert "유동 구간" in detailed["answer"]
+    assert "순서 준수율은 67%입니다." in detailed["answer"]
+    assert not detailed["answer"].startswith(quick["answer"])
     assert not detailed["answer"].rstrip().endswith("근거:")
     assert pipeline.calls == []
     assert detailed["degraded"] is False
+
+
+@pytest.mark.parametrize(
+    ("task_type", "intent", "context"),
+    [
+        ("pose_recomm", None, {"similarity_score": 0.8, "corrections": []}),
+        ("trajectory_recomm", "order_missing", {"recommended_flow": ["1", "2"], "selected_flow": ["1"]}),
+        ("trajectory_recomm", "order_adherence", {"adherence_rate": 0.67}),
+        ("trajectory_recomm", "order_reference", {"recommended_flow": ["1", "3", "2"], "selected_flow": ["1", "2", "3"],
+                                                  "adherence_rate": 0.67, "position_distribution": []}),
+        ("trajectory_recomm", "order_reference", {}),
+        ("knowledge_search", None, {}),
+    ],
+)
+def test_detailed_engine_answers_have_no_section_labels_or_canned_sentences(
+    task_type: str, intent: str | None, context: dict[str, object],
+) -> None:
+    """상세 분석도 채점·조회 결과를 제목 틀과 고정 문장 없이 낸다(2026-11-11 지시)."""
+    base = "숙련자 팔 자세 대비 유사도 80% — 숙련자 75백분위."
+
+    answer = copilot_router._structured_detail_fallback(task_type, base, context, intent=intent)
+
+    assert "[" not in answer
+    assert "다음 분사에서도 같은 조건으로" not in answer
+    assert "Zone별로 확인했습니다" not in answer
+    assert "계산할 수 없습니다" not in answer
+    if task_type != "trajectory_recomm" or not context:
+        assert answer == base
 
 
 def test_motion_viewer_client_claims_are_not_used_as_verified_analysis() -> None:
