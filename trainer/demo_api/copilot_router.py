@@ -187,7 +187,7 @@ def _pose_engine_question(query: CopilotQueryRequest) -> bool:
     """
     return (query.task_type == "pose_recomm" and not is_coating_status_question(query.prompt)
             and not is_coating_advice_question(query.prompt)
-            and bool(re.search(r"자세|동작|교정|고쳐|고치|pose|posture", query.prompt, re.I)))
+            and bool(re.search(r"자세(?!히|하게|한)|동작|교정|고쳐|고치|pose|posture", query.prompt, re.I)))
 
 
 def _asks_current_viewer_pose(prompt: str) -> bool:
