@@ -63,6 +63,31 @@ def test_generate_direct_caps_fast_response_to_route_budget() -> None:
     assert len(response) == 256
 
 
+class _RecordingModel(_Model):
+    def __init__(self) -> None:
+        self.kwargs: dict[str, object] = {}
+
+    def generate(self, **kwargs: _InputIds | int | float | bool) -> list[list[int]]:
+        self.kwargs = kwargs
+        return super().generate(**kwargs)
+
+
+def test_deterministic_generation_is_greedy_without_penalty_or_hanzi_guard() -> None:
+    pipeline = AgentPipeline.__new__(AgentPipeline)
+    pipeline.model = _RecordingModel()
+    pipeline.tokenizer = _Tokenizer()
+    pipeline.config = {"generation": {"max_new_tokens": 1024, "do_sample": True, "repetition_penalty": 1.15}}
+
+    pipeline._generate_direct([{"role": "user", "content": "번역"}], max_tokens=64, deterministic=True)
+    assert {key: pipeline.model.kwargs[key] for key in ("do_sample", "repetition_penalty", "suppress_tokens")} == {
+        "do_sample": False, "repetition_penalty": 1.0, "suppress_tokens": None}
+
+    pipeline._generate_direct([{"role": "user", "content": "답변"}], max_tokens=64)
+    assert pipeline.model.kwargs["do_sample"] is True
+    assert pipeline.model.kwargs["repetition_penalty"] == 1.15
+    assert "suppress_tokens" not in pipeline.model.kwargs
+
+
 def test_generate_direct_honors_a_smaller_per_request_token_budget() -> None:
     pipeline = AgentPipeline.__new__(AgentPipeline)
     pipeline.model = _Model()

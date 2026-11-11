@@ -8,6 +8,7 @@ from collections import Counter
 from typing import Annotated, Literal
 
 from pydantic import BeforeValidator
+from trainer.multilingual.glossary import missing_terms, term_pairs
 from trainer.scripts.quick_answer import TextCache, inference_key
 
 
@@ -71,6 +72,9 @@ _UNITS = re.compile(r"(?<![A-Za-z])(?:mm/s|m/s|mm|cm|µm|μm|um)(?![A-Za-z])|[%�
 _MEASUREMENTS = re.compile(r"([-+−]?\d+(?:\.\d+)?)\s*(mm/s|m/s|mm|cm|μm|µm|um|%|°C|°)(?![A-Za-z])")
 _ZONE_FLOW = re.compile(r"(?<![A-Za-z0-9_])(?:Zone\s*|Z)?\d+(?:\s*→\s*(?:Zone\s*|Z)?\d+)+", re.I)
 _RELATIONS = re.compile(r"<=|>=|[<>≤≥=→←↔↑↓]")
+# Agglutinative targets glue case endings to a unit ("125 µmdir", "20 °Cda" in Uzbek).
+# Bare "um" is left out: "3 umbrellas" must not turn into a unit.
+_UNIT_ENDING = re.compile(r"(\d\s*(?>mm/s|m/s|mm|cm|µm|μm|°C|°|%))[^\W\d_]+")
 _TARGET_SCRIPTS = {
     "ko": r"[가-힣]", "en": r"[A-Za-z]", "vi": r"[ăâđêôơưĂÂĐÊÔƠƯÀ-ÖØ-öø-ÿ\u1ea0-\u1ef9]",
     "id": r"[A-Za-z]", "uz": r"[A-Za-z]", "th": r"[\u0e01-\u0e3a]",
@@ -132,10 +136,15 @@ def restore_translation(text: str, prefix: str, tokens: list[str]) -> str:
     return marker.sub(lambda match: tokens[int(match.group(1))], text)
 
 def translation_messages(text: str, *, source_language: str, target_language: str) -> list[dict[str, str]]:
-    def request(source_text: str) -> str:
+    # The terms go only in the request data. Repeating them at the end of the system prompt
+    # made the quick 8B copy an English question back untranslated (Spark A/B 2026-11-09).
+    glossary = term_pairs(text, source_language, target_language)
+
+    def request(source_text: str, glossary: list[dict[str, str]] | None = None) -> str:
         return json.dumps({
             "source_language": LANGUAGE_NAMES[source_language],
             "target_language": LANGUAGE_NAMES[target_language],
+            **({"glossary": glossary} if glossary else {}),
             "source_text": source_text,
         }, ensure_ascii=False)
 
@@ -149,12 +158,13 @@ def translation_messages(text: str, *, source_language: str, target_language: st
             "Never add facts, measurements, recommendations, explanations or an extra answer. "
             "Copy every CP_KEEP placeholder verbatim, exactly once, in its original order. "
             "Do not replace, expand or translate placeholders. "
+            "If the request has a glossary, write each glossary target term exactly as given. "
             "Return ONLY a complete JSON object with one string field: {\"text\":\"translation\"}. "
             + _TARGET_INSTRUCTIONS[target_language]
         )},
         {"role": "user", "content": request(_TRANSLATION_EXAMPLES[source_language])},
         {"role": "assistant", "content": json.dumps({"text": _TRANSLATION_EXAMPLES[target_language]}, ensure_ascii=False)},
-        {"role": "user", "content": request(text)},
+        {"role": "user", "content": request(text, glossary)},
     ]
 
 
@@ -189,8 +199,8 @@ def translate_text(pipeline: object, text: str, *, source_language: str, target_
     translated = translated.strip()
     if not _has_target_language(translated, target_language):
         raise TranslationUnavailableError("Translation does not contain the target language")
-    source = unicodedata.normalize("NFKC", text)
-    target = unicodedata.normalize("NFKC", translated)
+    source = _UNIT_ENDING.sub(r"\1", unicodedata.normalize("NFKC", text))
+    target = _UNIT_ENDING.sub(r"\1", unicodedata.normalize("NFKC", translated))
     # Preserve ordered numeric values and number-unit pairs, not just unit totals.
     if _NUMBERS.findall(source) != _NUMBERS.findall(target):
         raise TranslationUnavailableError("Translation changed numeric values or order")
@@ -201,6 +211,8 @@ def translate_text(pipeline: object, text: str, *, source_language: str, target_
     for pattern in (_IDENTIFIERS, _UNITS):
         if Counter(pattern.findall(source)) != Counter(pattern.findall(target)):
             raise TranslationUnavailableError("Translation changed identifiers or units")
+    if missing_terms(text, translated, source_language, target_language):
+        raise TranslationUnavailableError("Translation dropped a glossary term")
     if isinstance(cache, TextCache):
         cache.put(key, translated)
     return translated
