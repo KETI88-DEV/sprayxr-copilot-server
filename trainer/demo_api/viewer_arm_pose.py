@@ -27,6 +27,14 @@ logger = logging.getLogger(__name__)
 _USER = "motion-viewer"
 
 
+class _RetryableEvaluation(Exception):
+    """Return an evaluation without retaining a transient engine failure in the LRU."""
+
+    def __init__(self, result: dict[str, Any]) -> None:
+        super().__init__("Pose engine temporarily unavailable")
+        self.result = result
+
+
 class _Bodies:
     """`analyze_session`에 넘길 시퀀스 본문. 뷰어 기록은 DB 세션이 아니므로 저장 시퀀스와 섞지 않는다."""
 
@@ -72,6 +80,8 @@ def build_arm_pose_evaluation(
     try:
         stat = csv_path.stat()
         return _evaluate(str(csv_path), (stat.st_mtime_ns, stat.st_size), record_id, mode_id, mcp_base_url, transport)
+    except _RetryableEvaluation as exc:
+        return exc.result
     except Exception:  # noqa: BLE001 - 뷰어 재생은 자세 엔진 장애와 무관하게 열려야 한다. 실패는 캐시하지 않는다.
         logger.exception("viewer arm pose evaluation failed record=%s", record_id)
         return {"status": "unavailable", "reason_code": "engine_error"}
@@ -135,6 +145,12 @@ def _evaluate(
             "priority_corrections": [c["correction_guidance"] for c in analysis.priority_corrections],
             "sequences": sequences,
         }
+    if analysis.counts.get("reason:engine_unavailable", 0):
+        # analyze_session projects HTTP failures into normal results. An exception keeps
+        # the LRU from retaining either a failed result or an incomplete partial score.
+        if result["status"] == "unavailable":
+            result["reason_code"] = "engine_error"
+        raise _RetryableEvaluation(result)
     return result
 
 

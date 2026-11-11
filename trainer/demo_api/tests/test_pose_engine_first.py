@@ -257,3 +257,50 @@ def test_viewer_route_returns_a_signed_arm_pose_evaluation(tmp_path: Path) -> No
     assert data["selected_session_id"] == "3_1000391_1"
     assert data["arm_pose_evaluation"]["status"] == "available"
     assert verify_context("arm_pose", data["arm_pose_evaluation"], data["signature"])
+
+
+@pytest.mark.parametrize("prompt", [
+    "적정 이격거리를 자세히 알려줘",
+    "적정 이격거리를 자세하게 설명해 줘",
+    "적정 이격거리에 대한 자세한 설명을 해 줘",
+])
+def test_detailed_knowledge_word_is_not_a_pose_question(prompt: str) -> None:
+    pipeline = _HijackingPipeline()
+    response = _client(pipeline, SequenceStore(":memory:")).post(QUERY, json={
+        "user_id": "COPILOT-AI-TEST", "task_type": "pose_recomm", "prompt": prompt,
+    })
+    assert response.status_code == 200
+    assert pipeline.plans == [prompt]
+    assert not response.json()["data"].get("pose_context")
+
+
+@pytest.mark.parametrize("partial_failure", [False, True])
+def test_viewer_retries_transient_engine_failures_without_caching_them(partial_failure: bool) -> None:
+    viewer_arm_pose._evaluate.cache_clear()
+    failing, calls = True, 0
+
+    def mcp(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if failing and (not partial_failure or calls == 1):
+            return httpx.Response(503)
+        return _mcp(request)
+
+    transport = httpx.MockTransport(mcp)
+    def evaluate() -> dict[str, Any]:
+        return viewer_arm_pose.build_arm_pose_evaluation(
+            SAMPLE_CSV, record_id="3_11000346_1", process="spray", mode_id=3,
+            mcp_base_url="http://mcp.test:8100", transport=transport)
+
+    first = evaluate()
+    failed_calls = calls
+    assert failed_calls > 0
+    failing = False
+    recovered = evaluate()
+    assert calls > failed_calls, "Recovered engine must be called again for the unchanged CSV"
+    assert recovered["status"] == "available"
+    if partial_failure:
+        assert recovered["evaluated_sequence_count"] > first["evaluated_sequence_count"]
+    successful_calls = calls
+    assert evaluate() == recovered
+    assert calls == successful_calls, "Successful evaluations should remain cached"
