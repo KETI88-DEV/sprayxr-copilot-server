@@ -44,8 +44,8 @@ from fastapi.responses import JSONResponse
 from trainer.demo_api.copilot_contracts import CopilotQueryData, CopilotQueryRequest, CopilotResponse
 from trainer.demo_api.coating_query import answer_coating_question, parse_viewer_coating_context, report_coating_context
 from trainer.demo_api.copilot_intent import classify_question_intent, fallback_intent, preset_intent, is_coating_status_question, is_coating_advice_question
-from trainer.demo_api.dialogue import (authenticated_facts, conversation_key, drop_ungrounded, parse_plan,
-                                       selected_direction_answer, ungrounded_measurements, viewer_metadata_context)
+from trainer.demo_api.dialogue import (authenticated_facts, conversation_key, drop_ungrounded, parse_plan, plain_answer,
+                                       selected_direction_answer, ungrounded_measurements, viewer_metadata_context, without_hanzi)
 from trainer.demo_api.playback_direction import playback_direction_from_context, playback_direction_answer, simple_direction_question, requested_direction_scope, aggregate_direction, LABELS as DIRECTION_LABELS
 from trainer.demo_api.copilot_live_analysis import current_zone, live_analysis
 from trainer.demo_api.copilot_session_context import build_query_instruction, summarize_session, viewer_definition_context
@@ -677,7 +677,7 @@ async def _execute_copilot_query(
                     with generation_slot_for(planned_pipeline):
                         return planned_pipeline.converse_copilot(query.prompt, recent_turns=dialogue_turns,
                                                                  facts=facts, response_mode=query.response_mode)
-                answer = await to_thread.run_sync(converse)
+                answer = plain_answer(await to_thread.run_sync(converse))
                 if ungrounded_measurements(answer, facts=facts, prompt=query.prompt):
                     # 자료에 없는 측정값은 내보내지 않는다. 한 번 다시 생성하고, 그래도 남으면 그 부분을 뺀다.
                     answer = drop_ungrounded(await to_thread.run_sync(converse), facts=facts, prompt=query.prompt)
@@ -1092,7 +1092,8 @@ async def execute_copilot_query(
             return response
         body = json.loads(response.body)
         data = body["data"]
-        data["answer"] = await _translate(data["answer"], "ko", response_language)
+        # 분석 답은 항상 한국어다. 모델이 섞어 낸 한자는 번역 전에 뺀다.
+        data["answer"] = await _translate(without_hanzi(data["answer"], prompt=normalized), "ko", response_language)
     except Exception:  # Translation failures never masquerade as a requested-language answer.
         logger.exception("copilot translation failed request_id=%s", query.request_id)
         return error_response(503, "Query translation unavailable; retry or use Korean")

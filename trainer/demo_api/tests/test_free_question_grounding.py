@@ -101,7 +101,29 @@ def test_the_model_gets_the_pointed_sequence_and_an_invented_figure_is_regenerat
     assert json.loads(pipeline.facts[0]["training_summary"])["selected_sequence"]["sequence_id"] == "SEQ-001"
 
 
+def test_legacy_section_labels_never_reach_the_client() -> None:
+    pipeline = _Pipeline(["[분석] 평균 속도: 712.4 mm/s, 평균 거리: 753.15 mm (Zone 9). [원인] [조치]"])
+
+    assert _ask(pipeline, context="SEQ-001")["answer"] == "평균 속도: 712.4 mm/s, 평균 거리: 753.15 mm (Zone 9)."
+
+
 def test_a_figure_invented_twice_is_removed_from_the_answer() -> None:
     pipeline = _Pipeline(["평균 속도: 712.4 mm/s (표준 대비 +4%)", "평균 속도: 712.4 mm/s (기준 대비 -6%)."])
 
     assert _ask(pipeline, context="SEQ-001")["answer"] == "평균 속도: 712.4 mm/s."
+
+
+@pytest.mark.parametrize(("answer", "prompt", "expected"), [
+    ("저도막은 도막이 얇은 상태입니다.", "", "저도막은 도막이 얇은 상태입니다."),
+    ("도막이 얇은 상태(膜厚不足)입니다. 원인은 过快的 이동 속도입니다. 속도를 확인하세요.", "", "도막이 얇은 상태입니다. 속도를 확인하세요."),
+    ("防腐는 부식을 막는다는 뜻입니다.", "防腐 뜻이 뭐야?", "防腐는 부식을 막는다는 뜻입니다."),  # 사용자가 쓴 한자는 둔다
+    ("涂层过厚会导致流挂。", "", "답변을 한국어로 만들지 못했습니다. 다시 질문해 주세요."),
+])
+def test_hanzi_mixed_into_a_korean_answer_is_removed(answer: str, prompt: str, expected: str) -> None:
+    assert dialogue.without_hanzi(answer, prompt=prompt) == expected
+
+
+def test_query_answers_never_carry_hanzi_the_user_did_not_write() -> None:
+    pipeline = _Pipeline(["평균 속도는 712.4 mm/s입니다. 速度는 적정합니다."])
+
+    assert _ask(pipeline, context="SEQ-001")["answer"] == "평균 속도는 712.4 mm/s입니다."
