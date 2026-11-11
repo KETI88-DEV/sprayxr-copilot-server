@@ -53,6 +53,7 @@ from trainer.demo_api.pose_query import (
     answer_order_question,
     answer_pose_question,
     answer_sequence_question,
+    answer_zone_question,
     asks_about_zones,
     asks_whole_session,
     score_pose,
@@ -182,6 +183,16 @@ def _parse_motion_viewer_context(value: str | None, *, task_type: str) -> dict[s
             payload["playback_context"], analysis_context, task_type=task_type
         )
     return analysis_context
+
+
+def _session_findings(found: tuple[str, Mapping[str, Any]] | None) -> dict[str, str]:
+    """완료 분석이 남긴 판정(자세가 가장 낮은 구역, 도막 과다·부족 구역). 대화 답이 평가를 말할 수 있는 유일한 근거다."""
+    pose, coating = answer_zone_question(found, context=None), report_coating_context(found)
+    findings = {"pose": pose.answer} if pose.analysis_status == "available" else {}
+    if coating["analysis_status"] == "available":
+        # 첫 줄("…기준으로 확인했습니다")은 뺀다. '기준'이라는 낱말이 자료에 있으면 기준 비교 검사가 꺼진다.
+        findings["coating"] = answer_coating_question(coating, "", detailed=False).split("\n", 1)[1]
+    return findings
 
 
 def _selected_sequence(context: str | None) -> str | None:
@@ -673,6 +684,9 @@ async def _execute_copilot_query(
                     facts["training_summary"] = await to_thread.run_sync(
                         lambda: summarize_session(sequences.session_bodies(query.session_id),
                                                   selected_sequence_id=_selected_sequence(query.context)))
+                    if reports is not None and (findings := _session_findings(await to_thread.run_sync(
+                            lambda: reports.latest_complete_analysis(query.session_id)))):
+                        facts["session_findings"] = findings
                 def converse():
                     with generation_slot_for(planned_pipeline):
                         return planned_pipeline.converse_copilot(query.prompt, recent_turns=dialogue_turns,

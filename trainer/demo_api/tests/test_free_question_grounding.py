@@ -127,3 +127,19 @@ def test_query_answers_never_carry_hanzi_the_user_did_not_write() -> None:
     pipeline = _Pipeline(["평균 속도는 712.4 mm/s입니다. 速度는 적정합니다."])
 
     assert _ask(pipeline, context="SEQ-001")["answer"] == "평균 속도는 712.4 mm/s입니다."
+
+
+def test_evaluations_come_only_from_the_completed_session_report() -> None:
+    from trainer.demo_api.copilot_router import _session_findings
+
+    report = ("RPT-1", {"pose_report": {"average_similarity_score": 0.66, "evaluated_sequence_count": 8, "zone_summary": [
+        {"zone_id": "5", "average_similarity_score": 0.79, "evaluated_sequence_count": 5, "problem_joints": []},
+        {"zone_id": "9", "average_similarity_score": 0.19, "evaluated_sequence_count": 3, "problem_joints": []}]},
+        "coating_zones": [{"map_num": 1, "zone_id": "3", "status": "under_app"}, {"map_num": 1, "zone_id": "5", "status": "normal"}]})
+
+    findings = _session_findings(report)
+
+    assert "9번 구역" in findings["pose"] and "19%" in findings["pose"]
+    assert findings["coating"] == "도막 부족: Map 1 · Zone 3\n도막 과다: 판정된 영역 없음"
+    assert _session_findings(None) == {} and _session_findings(("RPT-2", {})) == {}
+    assert dialogue.ungrounded_measurements("평균 속도: 712.4 mm/s (기준 범위)", facts={**FACTS, "session_findings": findings}, prompt="") == ["기준"]
