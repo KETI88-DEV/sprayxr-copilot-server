@@ -14,8 +14,8 @@ def _normalized(value: Any) -> Any:
     if isinstance(value, list):
         return [_normalized(item) for item in value]
     if isinstance(value, (int, float)) and not isinstance(value, bool):
-        # JSON.parse/stringify does not preserve 1.0 versus 1 representation.
-        return format(value, ".12g")
+        # JSON.parse/stringify does not preserve 1.0 versus 1 representation, and turns -0.0 into 0.
+        return format(value + 0, ".12g")
     return value
 
 

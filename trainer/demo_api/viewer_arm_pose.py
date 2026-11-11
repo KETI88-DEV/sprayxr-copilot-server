@@ -124,6 +124,8 @@ def _evaluate(
                 "end_seconds": _seconds(rows[end], origin) if end is not None else None,
                 "similarity_percent": _percent(item.get("similarity_score")),
                 "correction": next((str(c["label"]) for c in corrections if isinstance(c, Mapping) and c.get("label")), None),
+                # 팔 방향 질문은 분사의 교정 전부에서 찾는다(첫 교정만 보면 다른 팔의 교정을 놓친다).
+                "corrections": [str(c["label"]) for c in corrections if isinstance(c, Mapping) and c.get("label")],
                 "confidence": item.get("confidence"),
             })
         guidance = {str(c["zone_id"]): c["correction_guidance"] for c in reversed(analysis.priority_corrections)}
@@ -184,10 +186,33 @@ def _sequence_at(arm: Mapping[str, Any], seconds: object) -> Mapping[str, Any] |
     return max(started, key=lambda s: s["start_seconds"]) if started else None
 
 
-def arm_pose_answer(arm: Mapping[str, Any], *, current: bool, playback: Mapping[str, Any] | None, zone_id: str | None) -> str:
-    """서명된 채점 결과로만 문장을 만든다. `current`는 "지금·이 Zone" 질문이다."""
+def _side_answer(arm: Mapping[str, Any], side: str, *, current: bool, playback: Mapping[str, Any] | None, zone_id: str | None) -> str:
+    """오른팔·왼팔 질문의 답: 엔진이 그 팔에 낸 교정이 있는 분사를 센다. 교정 문장은 엔진의 것을 그대로 옮긴다."""
+    word, name = ("오른쪽", "오른팔") if side == "right" else ("왼쪽", "왼팔")
+    scored = [s for s in arm.get("sequences", []) if isinstance(s, Mapping)]
+    scope = f"채점한 분사 {len(scored)}회"
+    sequence = _sequence_at(arm, (playback or {}).get("playhead_seconds")) if current and zone_id is None else None
+    if sequence is not None:
+        scored, scope = [sequence], f"재생 시점의 분사({sequence['sequence_id']})"
+    elif zone_id is not None:
+        scored = [s for s in scored if str(s.get("zone_id")) == zone_id]
+        scope = f"Zone {zone_id}의 분사 {len(scored)}회"
+    hits = [(s, label) for s in scored for label in s.get("corrections") or [s.get("correction")] if label and word in str(label)]
+    limited = sum(s.get("confidence") == "limited" for s in scored)
+    note = f" 이 가운데 {limited}회는 입력 품질 제한이 있어 참고용 채점입니다." if limited else ""
+    if not hits:
+        return f"{scope}에서 {name} 교정은 나오지 않았습니다.{note}"
+    count = len({s.get("sequence_id") for s, _ in hits})
+    return f"{scope} 중 {count}회에서 {name} 교정이 나왔습니다. 예({hits[0][0].get('sequence_id')}): {hits[0][1]}{note}"
+
+
+def arm_pose_answer(arm: Mapping[str, Any], *, current: bool, playback: Mapping[str, Any] | None, zone_id: str | None,
+                    side: str | None = None) -> str:
+    """서명된 채점 결과로만 문장을 만든다. `current`는 "지금·이 Zone" 질문, `side`는 오른팔·왼팔 질문이다."""
     if arm.get("status") != "available":
         return _UNAVAILABLE.get(str(arm.get("reason_code")), "이 기록에서는 숙련자 대비 자세 유사도를 채점할 수 없습니다.")
+    if side is not None:
+        return _side_answer(arm, side, current=current, playback=playback, zone_id=zone_id)
     if current and zone_id is None:
         sequence = _sequence_at(arm, (playback or {}).get("playhead_seconds"))
         if sequence is not None:
@@ -208,4 +233,4 @@ def arm_pose_answer(arm: Mapping[str, Any], *, current: bool, playback: Mapping[
         return (f"Zone {zone_id}의 자세 유사도는 평균 {zone['similarity_percent']}%입니다(분사 {zone['evaluated_sequence_count']}회). "
                 + (zone.get("guidance") or "이 Zone에서 반복해 어긋난 관절은 없습니다."))
     priority = arm.get("priority_corrections") or []
-    return str(arm.get("guideline") or "") + (f" 우선 교정: {priority[0]}" if priority else "")
+    return str(arm.get("guideline") or "").replace("평균 유사도", "평균 자세 유사도") + (f" 우선 교정: {priority[0]}" if priority else "")

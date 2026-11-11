@@ -87,11 +87,13 @@ def viewer_dialogue_context(payload: Mapping[str, Any]) -> dict[str, Any]:
     for key, row in (pose.get("zones") or {}).items():
         metrics = {m.get("key"): m for m in row.get("metrics", []) if m.get("available") is True}
         pattern = metrics.get("paint_pattern") or {}
+        stats = (payload.get("zone_statistics") or {}).get(key) or {}
         zones[key] = {"map_num": str(row.get("map_num")), "zone_id": str(row.get("zone_id")),
                       "direction": pattern.get("actual"), "reference_direction": pattern.get("reference"),
                       "work_similarity_percent": row.get("similarity_percent"),
                       "posture_label": (metrics.get("posture") or {}).get("actual_label"),
                       "distance_mm": (metrics.get("distance") or {}).get("actual"),
+                      **{name: stats[source] for name, source in _ZONE_MEASURES.items() if isinstance(stats.get(source), (int, float))},
                       "metrics": [{k: m[k] for k in ("key", "label", "actual", "reference", "actual_label", "reference_label", "unit", "similarity_percent") if k in m}
                                   for m in metrics.values()],
                       "corrections": row.get("corrections") or []}
@@ -103,6 +105,9 @@ def viewer_dialogue_context(payload: Mapping[str, Any]) -> dict[str, Any]:
             "worker_name": (payload.get("worker") or {}).get("display_name"), "process": payload.get("process")}
 
 
+# 뷰어 Zone 통계(zone_statistics)에서 대화 사실로 옮기는 값: 이 기록의 대표값과 전문가 기록의 중앙값.
+_ZONE_MEASURES: Final = {"speed_mms": "selected_speed_mms", "reference_speed_mms": "median_speed_mms",
+                         "reference_distance_mm": "median_distance_mm"}
 _MEASUREMENT: Final = re.compile(r"(\d+(?:\.\d+)?)(?:\s*[~∼-]\s*(\d+(?:\.\d+)?))?\s*(mm/s|cm/s|m/s|mm|cm|µm|μm|um|%|°)")
 _UNIT_ALIASES: Final = {"μm": "µm", "um": "µm"}
 _SENTENCE_END: Final = re.compile(r"(?<=[.!?])\s+|\n+")
@@ -211,15 +216,86 @@ def drop_ungrounded(answer: str, *, facts: Any, prompt: str) -> str:
     return " ".join(kept) or "세션 기록으로는 확인할 수 없습니다."
 
 
-def authenticated_facts(value: str | None) -> dict[str, Any]:
+def _viewer_claims(value: str | None) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    """뷰어 문맥의 (payload, 서명이 맞는 대화 사실). 서명이 없거나 틀리면 None."""
     if not value or not value.startswith(("motion_viewer_analysis:", "motion_viewer_playback:")):
-        return {}
+        return None
     try:
         payload = json.loads(value.split(":", 1)[1])
-        claims = payload.get("dialogue_context")
-        from trainer.demo_api.viewer_context import verify_context
-        if not isinstance(claims, dict) or not verify_context("dialogue", claims, payload.get("dialogue_signature")):
-            return {}
+    except ValueError:
+        return None
+    claims = payload.get("dialogue_context") if isinstance(payload, dict) else None
+    from trainer.demo_api.viewer_context import verify_context
+    return (payload, claims) if isinstance(claims, dict) and verify_context("dialogue", claims, payload.get("dialogue_signature")) else None
+
+
+_RECORD_SCOPE: Final = re.compile(r"지금|현재|방금|이번|이\s*(?:zone|존|구역|시퀀스|분사|기록)|(?:zone|존|구역)\s*\d+|\d+\s*번\s*(?:zone|존|구역)", re.I)
+_ASKED_ZONE: Final = re.compile(r"(?:zone|존|구역)\s*(\d+)|(\d+)\s*번\s*(?:zone|존|구역)", re.I)
+
+
+def _viewer_zone(payload: Mapping[str, Any], claims: Mapping[str, Any], prompt: str) -> tuple[str, Mapping[str, Any] | None]:
+    """질문이 가리키는 Zone(번호를 말하면 그 Zone, 아니면 재생 위치의 Zone)과 그 서명된 사실."""
+    zones = claims.get("zones") if isinstance(claims.get("zones"), Mapping) else {}
+    asked = _ASKED_ZONE.search(prompt)
+    if asked:
+        number = asked[1] or asked[2]
+        return f"Zone {number}", next((zone for zone in zones.values() if isinstance(zone, Mapping) and str(zone.get("zone_id")) == number), None)
+    playback = payload.get("playback_context") if isinstance(payload.get("playback_context"), Mapping) else {}
+    if playback.get("zone_id") is None:
+        return "현재 재생 위치", None
+    zone = zones.get(f"{playback.get('map_num')}:{playback.get('zone_id')}")
+    return f"Map {playback.get('map_num')} · Zone {playback.get('zone_id')}", zone if isinstance(zone, Mapping) else None
+
+
+def viewer_measurement_answer(value: str | None, prompt: str) -> str | None:
+    """뷰어 기록의 속도·이격거리를 묻는 질문은 서명된 Zone 대표값으로만 답한다.
+
+    모델에 맡기면 단위와 값을 섞는다(2026-11-11 Spark: 속도·거리 질문에 "268.6 mm와 78.8 µm"). 일반 지식 질문("적정 이격거리는?")은 건드리지 않는다.
+    """
+    asked = [name for name, word in (("speed", "속도"), ("distance", "거리|이격")) if re.search(word, prompt)]
+    found = _viewer_claims(value)
+    if not asked or found is None or not _RECORD_SCOPE.search(prompt):
+        return None
+    label, zone = _viewer_zone(*found, prompt)
+    if zone is None:
+        return f"{label}에는 속도·이격거리를 비교할 Zone 기록이 없습니다. 분사 구간으로 이동한 뒤 다시 질문해 주세요."
+    parts = []
+    for name, title, unit, own, reference in (("speed", "속도", "mm/s", "speed_mms", "reference_speed_mms"),
+                                               ("distance", "이격거리", "mm", "distance_mm", "reference_distance_mm")):
+        mine, expert = zone.get(own), zone.get(reference)
+        if name not in asked:
+            continue
+        if not isinstance(mine, (int, float)) or isinstance(mine, bool):
+            parts.append(f"{title}는 이 Zone 기록에 없습니다.")
+        elif isinstance(expert, (int, float)) and not isinstance(expert, bool) and expert > 0:
+            parts.append(f"{title} 대표값은 {mine:,.0f} {unit}이고 전문가 기록은 {expert:,.0f} {unit}입니다(전문가 대비 {(mine / expert - 1) * 100:+.0f}%).")
+        else:
+            parts.append(f"{title} 대표값은 {mine:,.0f} {unit}입니다.")
+    return f"{label} 기준입니다. " + " ".join(parts) + " Zone 전체의 대표 통계이며 재생 시점의 순간 측정값이 아닙니다."
+
+
+def viewer_findings_answer(value: str | None) -> str | None:
+    """뷰어 기록에서 잘한 점·고칠 점을 묻는 질문의 답: 서명된 작업 유사도가 가장 낮은 Zone과 그 개선 안내를 그대로 전한다."""
+    found = _viewer_claims(value)
+    zones = [zone for zone in ((found[1].get("zones") or {}).values() if found else [])
+             if isinstance(zone, Mapping) and isinstance(zone.get("work_similarity_percent"), (int, float))]
+    if not zones:
+        return None
+    worst = min(zones, key=lambda zone: zone["work_similarity_percent"])
+    corrections = " ".join(str(item) for item in worst.get("corrections") or [])
+    answer = (f"먼저 볼 곳은 Zone {worst.get('zone_id')}입니다. 이 기록에서 작업 유사도가 {worst['work_similarity_percent']:.0f}%로 가장 낮습니다. "
+              + (corrections or "이 Zone에서 계산된 개선 안내는 없습니다."))
+    from trainer.demo_api.viewer_arm_pose import parse_viewer_arm_pose
+    priority = (parse_viewer_arm_pose(value) or {}).get("priority_corrections") or []
+    return answer + (f"\n팔 자세 우선 교정: {priority[0]}" if priority else "")
+
+
+def authenticated_facts(value: str | None) -> dict[str, Any]:
+    found = _viewer_claims(value)
+    if found is None:
+        return {}
+    payload, claims = found
+    try:
         facts = {key: val for key, val in claims.items() if key != "zones"}
         playback = payload.get("playback_context")
         if isinstance(playback, dict):

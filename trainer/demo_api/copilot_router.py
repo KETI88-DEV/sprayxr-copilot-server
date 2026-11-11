@@ -45,7 +45,8 @@ from trainer.demo_api.copilot_contracts import CopilotQueryData, CopilotQueryReq
 from trainer.demo_api.coating_query import answer_coating_question, parse_viewer_coating_context, report_coating_context
 from trainer.demo_api.copilot_intent import classify_question_intent, fallback_intent, preset_intent, is_coating_status_question, is_coating_advice_question
 from trainer.demo_api.dialogue import (authenticated_facts, conversation_key, drop_ungrounded, parse_plan, plain_answer,
-                                       selected_direction_answer, ungrounded_measurements, viewer_metadata_context, without_hanzi)
+                                       selected_direction_answer, ungrounded_measurements, viewer_findings_answer,
+                                       viewer_measurement_answer, viewer_metadata_context, without_hanzi)
 from trainer.demo_api.playback_direction import playback_direction_from_context, playback_direction_answer, simple_direction_question, requested_direction_scope, aggregate_direction, LABELS as DIRECTION_LABELS
 from trainer.demo_api.copilot_live_analysis import current_zone, live_analysis
 from trainer.demo_api.copilot_session_context import build_query_instruction, summarize_session, viewer_definition_context
@@ -54,6 +55,7 @@ from trainer.demo_api.pose_query import (
     answer_pose_question,
     answer_sequence_question,
     answer_zone_question,
+    asked_arm,
     asks_about_zones,
     asks_whole_session,
     score_pose,
@@ -186,6 +188,8 @@ def _parse_motion_viewer_context(value: str | None, *, task_type: str) -> dict[s
 
 
 _EVALUATION_QUESTION: Final = re.compile(r"잘한|못한|고쳐야|고칠|개선할|개선점|문제점|부족한 점")
+# 대화 계획 모델이 속도·Zone 질문을 도포 방향으로 분류한다(2026-11-11 Spark: "지금 속도는 적당해?"에 방향을 답함).
+_DIRECTION_WORD: Final = re.compile(r"방향|수평|수직|대각|가로|세로|패턴|direction", re.I)
 
 
 def _session_findings(found: tuple[str, Mapping[str, Any]] | None) -> str:
@@ -213,7 +217,8 @@ def _pose_engine_question(query: CopilotQueryRequest) -> bool:
     """
     return (query.task_type == "pose_recomm" and not is_coating_status_question(query.prompt)
             and not is_coating_advice_question(query.prompt)
-            and bool(re.search(r"자세(?!히|하게|한)|동작|교정|고쳐|고치|pose|posture|팔꿈치|어깨|무릎|허리|elbow|shoulder|knee", query.prompt, re.I)))
+            and bool(re.search(r"자세(?!히|하게|한)|동작|교정|고쳐|고치|pose|posture|팔꿈치|어깨|무릎|허리|elbow|shoulder|knee|(?:zone|존|구역)\s*\d+",
+                               query.prompt, re.I)))
 
 
 def _asks_current_viewer_pose(prompt: str) -> bool:
@@ -651,6 +656,12 @@ async def _execute_copilot_query(
                                  context_status="available" if available else "not_available")
     if viewer_requested and (simple_direction_question(query.prompt) or preset_intent("trajectory_recomm", query.prompt) == "order_direction"):
         return frame_answer()
+    if viewer_requested and preset_intent(query.task_type, query.prompt) is None:
+        signed_answer = viewer_measurement_answer(query.context, query.prompt) or (
+            viewer_findings_answer(query.context) if _EVALUATION_QUESTION.search(query.prompt) else None)
+        if signed_answer is not None:
+            return _success_response(query, request_started, answer=signed_answer, retrieval_used=False, citations=[],
+                                     context_status="available")
     decision = None
     planned_pipeline = None
     if query.task_type != "error_analysis" and pipeline_provider is not None and preset_intent(query.task_type, query.prompt) is None and not is_coating_status_question(query.prompt) and not _pose_engine_question(query):
@@ -680,7 +691,7 @@ async def _execute_copilot_query(
             return await reference_answer()
         cross_tab = ((intent.startswith("pose_") and query.task_type != "pose_recomm")
                      or (intent.startswith("order_") and query.task_type != "trajectory_recomm"))
-        if viewer_requested and intent == "order_direction" and decision["kind"] in {"lookup", "correction"}:
+        if viewer_requested and intent == "order_direction" and decision["kind"] in {"lookup", "correction"} and _DIRECTION_WORD.search(query.prompt):
             return frame_answer()
         zone_lookup = (intent == "order_direction" or intent.startswith("pose_")) and decision["scope"] in {"zone", "playback"}
         if decision["kind"] in {"chat", "clarify", "correction"} or cross_tab or zone_lookup:
@@ -753,7 +764,8 @@ async def _execute_copilot_query(
     # If the model is unavailable, keep the selected structured tab operational;
     # only a successful semantic-model classification may cross-route to RAG.
     knowledge_routed = intent == "knowledge" and (classifier is not None or decision is not None)
-    if viewer_requested and intent == "order_direction" and not knowledge_routed:
+    if viewer_requested and intent == "order_direction" and not knowledge_routed and (
+            query.task_type == "trajectory_recomm" or _DIRECTION_WORD.search(query.prompt)):
         return frame_answer()
     viewer_context_requested = bool(query.context and query.context.startswith(_MOTION_VIEWER_CONTEXT_PREFIX))
     if viewer_analysis is not None and query.task_type == "pose_recomm" and "playback_context" in viewer_analysis and _asks_current_viewer_pose(query.prompt) and not is_coating_advice_question(query.prompt):
@@ -771,20 +783,30 @@ async def _execute_copilot_query(
         return _structured_detail_fallback(query.task_type, base_answer, analysis_context, intent=intent), False
 
     if viewer_analysis is not None and query.task_type in ("pose_recomm", "trajectory_recomm") and not knowledge_routed:
+        declined = unsupported_pose_part(query.prompt) if query.task_type == "pose_recomm" else None
+        if declined is not None:
+            return _success_response(query, request_started, answer=declined, retrieval_used=False, citations=[],
+                                     context_status="not_available")
         analysis_context = (_current_viewer_pose_context(query.prompt, viewer_analysis)
                             if query.task_type == "pose_recomm" else viewer_analysis)
         available = analysis_context.get("scope") != "current_zone" or analysis_context.get("status") == "available"
         verified_answer = _viewer_answer(query.task_type, query.prompt, analysis_context, intent)
         arm_pose = parse_viewer_arm_pose(query.context) if query.task_type == "pose_recomm" else None
+        side = asked_arm(query.prompt, intent) if query.task_type == "pose_recomm" else None
         if arm_pose is not None:
-            # 자세 유사도(시퀀스별 팔 관절 채점)를 먼저, 전문가 기록 대비 작업 유사도를 이어서 답한다.
-            verified_answer = arm_pose_answer(
+            arm_answer = arm_pose_answer(
                 arm_pose, current=analysis_context.get("scope") == "current_zone",
                 playback=viewer_analysis.get("playback_context"),  # type: ignore[arg-type]
-                zone_id=requested_zone(query.prompt, None),
-            ) + "\n" + verified_answer
+                zone_id=requested_zone(query.prompt, None), side=side,
+            )
+            # 자세 유사도(시퀀스별 팔 관절 채점)를 먼저, 전문가 기록 대비 작업 유사도를 이어서 답한다.
+            # 팔 방향을 물으면 팔 채점 결과만 답한다 — 작업 유사도의 개선 안내에는 팔 방향 항목이 없다.
+            verified_answer = arm_answer if side is not None else arm_answer + "\n" + verified_answer
             analysis_context = {**analysis_context, "arm_pose": {key: item for key, item in arm_pose.items() if key != "sequences"}}
             available = available or arm_pose.get("status") == "available"
+        elif side is not None:
+            # 팔 채점이 없으면 작업 개선 안내만 남는다. 거기에 팔별 항목이 없다는 말이 "팔에 문제가 없다"로 읽히지 않게 밝힌다.
+            verified_answer += "\n팔 자세 채점 결과를 받지 못해 팔별 교정 여부는 이 답에 없습니다. 자세 채점이 끝난 뒤 다시 질문해 주세요."
         answer, detail_degraded = await _synthesize_structured_detail(
             verified_answer, analysis_context, available=available
         )

@@ -1411,6 +1411,9 @@ def _weighted_score(metrics: list[dict[str, Any]], replacements: set[str] | None
     return round(weighted / total) if total else None
 
 
+_POSTURE_ADVICE_LIMIT_DEG = 45.0
+
+
 def _correction_message(metric: dict[str, Any]) -> str | None:
     actual = _number(metric.get("actual"))
     reference = _number(metric.get("reference"))
@@ -1425,6 +1428,13 @@ def _correction_message(metric: dict[str, Any]) -> str | None:
         action = "줄이세요" if actual > reference else "늘리세요"
         return f"도구 각도를 약 {difference:.1f}° {action}."
     if metric.get("key") == "posture":
+        # 몸통은 추적 장비가 아니라 시뮬레이터 IK의 추정이다. 자세 구분이 다르면 구분으로 알리고, 큰 각도 차이는 수치로 안내하지 않는다
+        # (2026-11-11 Spark: "몸통 기울기를 약 125.7° 더 세우세요").
+        own, expert = metric.get("actual_label"), metric.get("reference_label")
+        if own and expert and own != expert and "평가 불가" not in (own, expert):
+            return f"전문가는 이 Zone에서 주로 {expert}였습니다(이 기록은 {own})."
+        if difference > _POSTURE_ADVICE_LIMIT_DEG:
+            return None
         action = "세우세요" if actual > reference else "기울이세요"
         return f"몸통 기울기를 약 {difference:.1f}° 더 {action}."
     if metric.get("key") == "distance":

@@ -134,7 +134,7 @@ def test_arm_pose_answer_follows_the_playhead_the_zone_and_the_record() -> None:
     zone = viewer_arm_pose.arm_pose_answer(ARM, current=False, playback=None, zone_id="9")
     assert "Zone 9의 자세 유사도는 평균 60%" in zone and "오른쪽 위팔" in zone
     whole = viewer_arm_pose.arm_pose_answer(ARM, current=False, playback=None, zone_id=None)
-    assert "평균 유사도 70%" in whole and "우선 교정" in whole
+    assert "평균 자세 유사도 70%" in whole and "우선 교정" in whole  # 작업 유사도와 나란히 나오므로 이름을 붙인다
     missing = viewer_arm_pose.arm_pose_answer(
         {"status": "unavailable", "reason_code": "no_joint_sequences"}, current=True, playback=None, zone_id=None)
     assert "채점할 분사 구간이 없습니다" in missing and "%" not in missing

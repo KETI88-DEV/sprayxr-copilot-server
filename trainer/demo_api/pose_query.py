@@ -308,13 +308,16 @@ def _zone_order(zone: Mapping[str, Any]) -> tuple[float, float, int, str]:
     return (float(zone["average_similarity_score"]), -rate, int(zone_id) if zone_id.isdigit() else 1_000_000, zone_id)
 
 
-def _coating_sentence(coating: Mapping[str, Any]) -> str:
+def _coating_sentence(coating: Mapping[str, Any], target_um: object = None) -> str:
+    """구역 도막 문장. 세션 목표 두께로 판정한 리포트는 전문가 기준이 아니라 그 목표를 말한다."""
     status = coating.get("status")
     thickness = coating.get("thickness_um")
+    targeted = isinstance(target_um, (int, float)) and not isinstance(target_um, bool)
     if status == "normal":
-        return " 이 구역 도막은 전문가 기준을 충족했습니다."
+        return f" 이 구역 도막은 세션 목표 두께 {target_um:g}µm를 충족했습니다." if targeted else " 이 구역 도막은 전문가 기준을 충족했습니다."
     if status == "under_app":
-        return f" 이 구역 도막은 전문가 기준보다 부족합니다(평균 {thickness:.0f}µm, 기준 도포율 {coating.get('coverage_percent', 0):.0f}%)."
+        basis = f"세션 목표 두께 {target_um:g}µm" if targeted else "전문가 기준"
+        return f" 이 구역 도막은 {basis}보다 부족합니다(평균 {thickness:.0f}µm, 기준 도포율 {coating.get('coverage_percent', 0):.0f}%)."
     if status == "over_app":
         return f" 이 구역 도막은 과도장입니다(평균 {thickness:.0f}µm, 과도장 셀 {coating.get('overpaint_percent', 0):.0f}%)."
     return ""
@@ -347,7 +350,9 @@ def answer_zone_question(found: tuple[str, Mapping[str, Any]] | None, *, context
     answer = f"가장 문제가 큰 구역은 {zone_id}번 구역입니다. " if target is None else f"{zone_id}번 구역 결과입니다. "
     answer += f"이 구역 분사 {count}회의 평균 자세 유사도는 {score * 100:.0f}%"
     if isinstance(session, (int, float)):
-        relation = "낮습니다" if score < session else "높습니다" if score > session else "같습니다"
+        # 답에 보이는 정수 %로 견준다. 51%가 51%보다 "높다"고 하지 않는다.
+        shown, average = round(score * 100), round(session * 100)
+        relation = "낮습니다" if shown < average else "높습니다" if shown > average else "같습니다"
         answer += f"로 세션 평균 {session * 100:.0f}%보다 {relation}." if relation != "같습니다" else f"로 세션 평균과 같습니다."
     else:
         answer += "입니다."
@@ -374,7 +379,8 @@ def answer_zone_question(found: tuple[str, Mapping[str, Any]] | None, *, context
         None,
     )
     if coating is not None:
-        answer += _coating_sentence(coating)
+        report = analysis.get("coating_report") if isinstance(analysis.get("coating_report"), Mapping) else {}
+        answer += _coating_sentence(coating, report.get("target_thickness_um") if report.get("comparison_basis") == "session_target" else None)
 
     return ZoneAnswer(
         analysis_status="available",
