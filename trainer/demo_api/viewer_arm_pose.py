@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import secrets
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Mapping
@@ -81,8 +82,10 @@ def _evaluate(
     path_text: str, stamp: tuple[int, int], record_id: str, mode_id: int, mcp_base_url: str, transport: Any
 ) -> dict[str, Any]:
     del stamp  # 파일이 바뀌면 다시 채점하도록 캐시 키에만 쓴다
-    # 자세 엔진은 세션 ID별로 상태를 쌓는다. 실제 훈련 세션과 섞이지 않게 뷰어 전용 이름을 쓴다.
-    session_id = f"{_USER}:{record_id}"
+    # 자세 엔진은 세션 ID별로 상태(굳은 관절 등)를 쌓고 지우는 경로가 없다. 같은 이름을 다시 쓰면 앞선 채점이
+    # 다음 채점을 바꾼다(Spark에서 같은 기록이 17회 65% → 16회 66%). 채점마다 새 이름을 쓴다.
+    # 엔진은 세션을 최대 64개까지 오래 안 쓴 것부터 버리므로 쌓이지 않는다.
+    session_id = f"{_USER}:{record_id}:{secrets.token_hex(4)}"
     rows = [{(name or "").strip(): value for name, value in row.items()} for row in read_csv(Path(path_text).read_bytes())]
     bodies = _engine_bodies(rows, session_id=session_id, scenario_id=str(mode_id))
     analysis = analyze_session(

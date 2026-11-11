@@ -219,7 +219,15 @@ def test_old_format_record_is_scored_with_the_fk_the_expert_reference_was_built_
     assert result["status"] == "available" and result["joint_source"] == "fk"
     assert len(seen) == result["sequence_count"] == len(runs) > 0
     body = seen[0]
-    assert body["session_id"] == "motion-viewer:3_1000391_1"  # 엔진의 세션 상태를 실제 훈련 세션과 섞지 않는다
+    # 엔진의 세션 상태를 실제 훈련 세션과 섞지 않고, 한 번 채점 안에서는 분사 순서대로 같은 세션을 쓴다.
+    assert body["session_id"].startswith("motion-viewer:3_1000391_1:")
+    assert {item["session_id"] for item in seen} == {body["session_id"]}
+    # 다시 채점하면 새 세션이다. 같은 이름이면 엔진에 남은 굳은 관절이 결과를 바꾼다.
+    viewer_arm_pose._evaluate.cache_clear()
+    again = viewer_arm_pose.build_arm_pose_evaluation(
+        path, record_id="3_1000391_1", process="spray", mode_id=3, mcp_base_url="http://mcp.test:8100",
+        transport=httpx.MockTransport(mcp))
+    assert again == result and seen[-1]["session_id"] != body["session_id"]
     frame = body["sequence_info"][0]
     assert len(frame["skeleton_joints"]) == 20
     gap = math.dist(frame["skeleton_joints"]["righthand"], frame["tool_pos_rot"]["pos"])
