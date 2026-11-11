@@ -44,7 +44,8 @@ from fastapi.responses import JSONResponse
 from trainer.demo_api.copilot_contracts import CopilotQueryData, CopilotQueryRequest, CopilotResponse
 from trainer.demo_api.coating_query import answer_coating_question, parse_viewer_coating_context, report_coating_context
 from trainer.demo_api.copilot_intent import classify_question_intent, fallback_intent, preset_intent, is_coating_status_question, is_coating_advice_question
-from trainer.demo_api.dialogue import authenticated_facts, conversation_key, parse_plan, selected_direction_answer, viewer_metadata_context
+from trainer.demo_api.dialogue import (authenticated_facts, conversation_key, drop_ungrounded, parse_plan,
+                                       selected_direction_answer, ungrounded_measurements, viewer_metadata_context)
 from trainer.demo_api.playback_direction import playback_direction_from_context, playback_direction_answer, simple_direction_question, requested_direction_scope, aggregate_direction, LABELS as DIRECTION_LABELS
 from trainer.demo_api.copilot_live_analysis import current_zone, live_analysis
 from trainer.demo_api.copilot_session_context import build_query_instruction, summarize_session, viewer_definition_context
@@ -181,6 +182,12 @@ def _parse_motion_viewer_context(value: str | None, *, task_type: str) -> dict[s
             payload["playback_context"], analysis_context, task_type=task_type
         )
     return analysis_context
+
+
+def _selected_sequence(context: str | None) -> str | None:
+    """`context`가 시퀀스 ID(`SEQ-012`)면 그것. 구역 번호나 뷰어 문맥은 시퀀스가 아니다."""
+    value = (context or "").strip()
+    return value if value and not value.isdigit() and ":" not in value and len(value) <= 64 else None
 
 
 def _pose_engine_question(query: CopilotQueryRequest) -> bool:
@@ -664,12 +671,16 @@ async def _execute_copilot_query(
             try:
                 if query.session_id:
                     facts["training_summary"] = await to_thread.run_sync(
-                        lambda: summarize_session(sequences.session_bodies(query.session_id)))
+                        lambda: summarize_session(sequences.session_bodies(query.session_id),
+                                                  selected_sequence_id=_selected_sequence(query.context)))
                 def converse():
                     with generation_slot_for(planned_pipeline):
                         return planned_pipeline.converse_copilot(query.prompt, recent_turns=dialogue_turns,
                                                                  facts=facts, response_mode=query.response_mode)
                 answer = await to_thread.run_sync(converse)
+                if ungrounded_measurements(answer, facts=facts, prompt=query.prompt):
+                    # 자료에 없는 측정값은 내보내지 않는다. 한 번 다시 생성하고, 그래도 남으면 그 부분을 뺀다.
+                    answer = drop_ungrounded(await to_thread.run_sync(converse), facts=facts, prompt=query.prompt)
                 return _success_response(query, request_started, answer=answer, retrieval_used=False,
                                          citations=[], context_status="available" if facts else "not_available")
             except Exception:
@@ -937,7 +948,8 @@ async def _execute_copilot_query(
     if query.session_id:
         session_summary, recent_turns = await to_thread.run_sync(
             lambda: (
-                summarize_session(sequences.session_bodies(query.session_id)),
+                summarize_session(sequences.session_bodies(query.session_id),
+                                  selected_sequence_id=_selected_sequence(query.context)),
                 dialogue_turns,
             )
         )

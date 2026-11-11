@@ -82,7 +82,7 @@ def _with_units(values: dict[str, Any]) -> dict[str, Any]:
     return {key: f"{value:g} {_METRICS[key]}" if key in _METRICS else value for key, value in values.items()}
 
 
-def summarize_session(bodies: list[dict[str, Any]], *, recent_limit: int = 3) -> str:
+def summarize_session(bodies: list[dict[str, Any]], *, recent_limit: int = 3, selected_sequence_id: str | None = None) -> str:
     """Return deterministic compact JSON for every received sequence in a session."""
     if not bodies:
         return ""
@@ -122,6 +122,10 @@ def summarize_session(bodies: list[dict[str, Any]], *, recent_limit: int = 3) ->
         "session_averages": _with_units(averages),
         "recent_sequences": [_with_units(fact) for fact in facts[-max(1, min(int(recent_limit), 10)):]],
     }
+    # 질문이 가리키는 분사의 값 — 없으면 모델이 최근 분사나 세션 평균을 그 분사의 값처럼 답한다.
+    selected = next((fact for fact in facts if selected_sequence_id and fact["sequence_id"] == selected_sequence_id), None)
+    if selected is not None:
+        summary["selected_sequence"] = _with_units(selected)
     return json.dumps(summary, ensure_ascii=False, separators=(",", ":"))
 
 

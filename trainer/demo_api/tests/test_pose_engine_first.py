@@ -100,7 +100,8 @@ def test_unrelated_talk_in_the_pose_tab_still_reaches_the_dialogue_planner() -> 
     pipeline = _HijackingPipeline()
     data = _client(pipeline, SequenceStore(":memory:")).post(QUERY, json={
         "user_id": "W-017", "task_type": "pose_recomm", "prompt": "야"}).json()["data"]
-    assert pipeline.plans == ["야"] and data["answer"] == "속도 845 m/s, 기준 범위 내입니다."
+    # 대화 경로까지 간다. 모델이 지어낸 측정값(자료에 없는 845 m/s)은 답에 실리지 않는다.
+    assert pipeline.plans == ["야"] and "845" not in data["answer"]
 
 
 ARM = {
