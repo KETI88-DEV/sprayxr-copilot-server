@@ -166,12 +166,13 @@ def test_detailed_mode_requests_evidence_and_action_from_the_model(monkeypatch: 
     assert response.status_code == 200
     instruction = pipeline.calls[0]["instruction"]
     assert "상세 분석" in instruction
-    assert "현재 상황" in instruction
+    assert "2문장" in instruction
     assert "근거" in instruction
     assert "권장 조치" in instruction
     assert pipeline.calls[0]["force_route"] == "fast"
     assert pipeline.calls[0]["enable_thinking"] is False
-    assert pipeline.calls[0]["max_tokens"] == 512
+    assert pipeline.calls[0]["max_tokens"] == 128
+    assert pipeline.calls[0]["compact_analysis"] is True
 
 
 def test_detailed_mode_searches_documents_with_the_question_not_the_answer_directive(
@@ -192,7 +193,7 @@ def test_detailed_mode_searches_documents_with_the_question_not_the_answer_direc
     assert "상세 분석" in pipeline.calls[0]["instruction"]  # 생성 지시는 그대로
 
 
-def test_detailed_order_mode_synthesizes_the_structured_report_instead_of_repeating_quick_answer() -> None:
+def test_detailed_order_mode_explains_verified_report_without_extra_generation() -> None:
     from fastapi import FastAPI
 
     from trainer.demo_api.sequence_store import SequenceStore
@@ -242,10 +243,8 @@ def test_detailed_order_mode_synthesizes_the_structured_report_instead_of_repeat
     assert "[권장 조치]" in detailed["answer"]
     assert not detailed["answer"].startswith(f"[권장 Zone 순서]\n{quick['answer']}")
     assert not detailed["answer"].rstrip().endswith("근거:")
-    assert len(pipeline.calls) == 1
-    assert "[서버 구조화 분석 결과]" in pipeline.calls[0]["instruction"]
-    assert pipeline.calls[0]["use_rag"] is False
-    assert pipeline.calls[0]["max_tokens"] == 256
+    assert pipeline.calls == []
+    assert detailed["degraded"] is False
 
 
 def test_motion_viewer_client_claims_are_not_used_as_verified_analysis() -> None:

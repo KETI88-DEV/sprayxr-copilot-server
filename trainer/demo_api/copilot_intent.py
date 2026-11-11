@@ -31,6 +31,7 @@ def preset_intent(task_type: str, prompt: str) -> str | None:
     normalized = re.sub(r"[\s?!.]", "", prompt).lower()
     presets = {
         "pose_recomm": {
+            "전체작업유사도": "pose_overall", "전체작업유사도는": "pose_overall",
             "전체자세유사도": "pose_overall", "전체자세유사도는": "pose_overall",
             "가장문제가큰zone": "pose_worst_zone", "가장문제가큰zone은": "pose_worst_zone",
             "오른손을어떻게고쳐": "pose_right", "왼손을어떻게고쳐": "pose_left",

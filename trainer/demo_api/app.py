@@ -35,6 +35,7 @@ from trainer.demo_api.guided_workflow import create_guided_workflow_router
 from trainer.demo_api.telemetry_router import create_telemetry_router
 from trainer.demo_api.test_api_docs import add_test_input_overviews
 from trainer.demo_api.anomaly_stream import AnomalyBroadcaster
+from trainer.demo_api.feedback import create_feedback_router
 from trainer.demo_api.sequence_analysis import SequenceAnalysisEngine
 from trainer.demo_api.sequence_store import SequenceStore
 from trainer.demo_api.v1_router import create_v1_router
@@ -103,8 +104,8 @@ VR·Replay 시뮬레이터의 **연동 규격과 API 호출·응답**을 확인�
 - **멱등성:** 동일한 `session_id + sequence_id`와 동일 본문을 재전송하면 중복 저장하지 않습니다.
 - **충돌 처리:** 같은 ID의 내용이 다르거나 새 시퀀스가 이미 처리한 시퀀스보다 이전 순서이면 HTTP 409를 반환합니다. 같은 내용의 정상 재시도는 기존 결과를 반환합니다.
 - **리포트 재시도·복구:** 동일 완료 요청은 같은 report_id를 반환합니다. 원본 CSV와 높이맵을 보관하고 서버 재시작 후 중단된 분석을 다시 수행합니다.
-- **목표 도막:** 세션 시작의 target_thickness_um을 입력하면 목표의 90~110% 두께 범위로 판정합니다. 생략하면 전문가 최종 도막 기준을 사용합니다. comparison_basis로 어느 기준인지 구분합니다.
-- **훈련 중 질의:** 자세 중간 평가는 최근 분사 최대 3회의 표본임을 표시하고, Zone 순서는 현재까지 저장된 시퀀스를 사용합니다. 완료 리포트는 전체 세션을 평가합니다.
+- **목표 도막:** 새 스프레이 세션의 기본 목표는 160µm이며 target_thickness_um에 입력한 값이 있으면 우선합니다. 공식 Zone 면적의 95% 이상이 목표 두께를 충족해야 다음 Zone을 안내합니다. 도막 자료가 없거나 부족하면 현재 Zone을 유지합니다. comparison_basis로 목표 기준과 과거 전문가 비교를 구분합니다.
+- **훈련 중 질의:** 모드가 확인되고 등록된 기준이 있으면 시퀀스 없이도 기준 Zone 작업순서를 안내합니다. 실제 수행·준수율·다음 Zone 이동 가능 여부는 저장된 훈련 자료와 도막 충족 상태로 판단합니다. 완료 리포트는 전체 세션을 평가합니다.
 - **지원 범위:** 실시간 전문가 기준 안내는 학습모드 1~10을 대상으로 합니다. 실전·Unit은 데이터를 수신·보관하되 기준이 없는 분석은 not_available과 사유를 반환합니다. 블라스팅에는 도막 두께 판정을 적용하지 않습니다.
 - **업로드 제한:** CSV/CSV.GZ 64MiB, 압축 해제 CSV 256MiB, 최종 높이맵 PNG 16MiB입니다.
 - **접근 제어:** DB 뷰어는 로그인 없이 읽기 전용으로 조회합니다. 운영 로그는 운영자 인증이 필요합니다. TSB API키는 활성화한 서버에서만 X-API-Key 헤더로 전송하며 JSON 본문은 동일합니다.
@@ -580,6 +581,7 @@ def create_app(
     app.include_router(create_simulator_router(recorder, store, resolver), include_in_schema=False)
     app.include_router(create_monitor_router(recorder), include_in_schema=False)
     app.include_router(create_db_viewer_router())
+    app.include_router(create_feedback_router())
     app.include_router(
         create_motion_viewer_router(
             expert_guidance.reference_root,
@@ -596,6 +598,7 @@ def create_app(
             store=sequence_store,
             reports=v1_store,
             sequence_engine=sequence_analysis,
+            coating_engine=coating_progress,
         )
     )
     # 명세서 15개 중 12개: 세션·사용자·리포트·이상 알림 SSE·테스트.
@@ -611,6 +614,7 @@ def create_app(
             store=sequence_store,
             reports=v1_store,
             sequence_engine=sequence_analysis,
+            coating_engine=coating_progress,
         )
     )
     v1_router = create_v1_router(

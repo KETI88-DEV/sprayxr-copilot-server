@@ -483,7 +483,7 @@ class AgentPipeline:
     def converse_copilot(self, prompt, *, recent_turns, facts, response_mode, **options):
         from trainer.demo_api.dialogue import conversation_messages
         messages = conversation_messages(prompt, recent_turns=recent_turns, facts=facts, response_mode=response_mode)
-        return self._dialogue_completion(messages, max_tokens=192 if response_mode == "quick" else 640, **options)
+        return self._dialogue_completion(messages, max_tokens=192 if response_mode == "quick" else 128, **options)
 
     def translate_copilot_text(self, text: str, *, source_language: str, target_language: str,
                                inference_backend: Any = None, inference_counter: Any = None,
@@ -1254,8 +1254,12 @@ class AgentPipeline:
         inference_backend: Any = None,
         inference_counter: Any = None,
         inference_context_limit: int | None = None,
+        compact_analysis: bool = False,
     ) -> dict[str, Any]:
-        """``use_rag=False`` skips retrieval: no RAG context, no chunk citations. The default is unchanged."""
+        """Skip retrieval with ``use_rag=False``; opt into brief live analysis with ``compact_analysis``.
+
+        Default evaluation prompts, evidence and response budgets remain unchanged.
+        """
         t0 = time.monotonic()
         if not instruction.strip():
             raise ValueError("instruction must not be empty")
@@ -1295,12 +1299,15 @@ class AgentPipeline:
         counter = inference_counter or self._prompt_token_counter()
         token_budget = ((inference_context_limit - fast_response_budget(self.config, max_tokens) - 32)
                         if inference_context_limit is not None else prompt_token_budget(self.config))
-        evidence_tokens = sum(counter.count_text(str(c.get("text", ""))) for c in rag_chunks)
+        # Limit only the visible live analysis evidence, after full retrieval/reranking.
+        # Keep the highest-ranked passages even when later prompt fitting is needed.
+        analysis_chunks = rag_chunks[:4] if compact_analysis else rag_chunks
+        evidence_tokens = sum(counter.count_text(str(c.get("text", ""))) for c in analysis_chunks)
         if evidence_tokens > token_budget:
-            evidence = compress_evidence(instruction, rag_chunks)
+            evidence = compress_evidence(instruction, analysis_chunks)
             logger.info("Compressed evidence: %d chunks, budget=%d", len(evidence), token_budget)
         else:
-            evidence = rag_chunks
+            evidence = analysis_chunks
 
         if inference_backend is not None and concise_answer:
             # A short live answer uses the four highest-ranked passages. Keep the
@@ -1312,7 +1319,20 @@ class AgentPipeline:
         quick_cache_hit = False
         if route == "fast":
             fast_system = str(self.config.get("prompt", {}).get("fast_system", "")).strip()
-            if inference_backend is not None and concise_answer:
+            if compact_analysis:
+                fast_system = (
+                    "당신은 선박 도장 훈련 코치입니다. 제공된 문서와 확인된 현재 정보로 질문에 먼저 직접 답하세요. "
+                    "핵심 답변 뒤에 필요한 근거와 조치를 짧게 설명하되 전체 2문장 또는 최대 2개 짧은 항목으로 답하세요. "
+                    "현재 측정값과 일반 권장값을 구별하고 수치·범위·단위·적용 조건을 정확히 유지하세요. "
+                    "근거 없는 수치나 원인은 추측하지 말고 확인할 수 없는 내용은 그 한계를 말하세요. "
+                    "한국어로 완결된 답변을 쓰고 [답변]/[근거] 외의 제목·표·장황한 배경은 생략하세요. "
+                )
+                fast_system += (
+                    "[근거]에는 실제 사용한 문서의 chunk_id만 쓰고, 질문에 답하지 못하는 문서를 억지로 인용하지 마세요."
+                    if evidence else
+                    "외부 참고 문서는 제공되지 않았습니다. 문서 번호·인용·근거 줄을 만들지 마세요."
+                )
+            elif inference_backend is not None and concise_answer:
                 fast_system = (
                     "당신은 선박 도장 훈련 코치입니다. 제공된 문서와 환경 데이터로 질문에 직접 답하세요. "
                     "현재 측정값과 일반 권장값을 구별하세요. 근거에 없는 수치나 사실은 만들지 말고 "
@@ -1331,7 +1351,7 @@ class AgentPipeline:
                     "외부 참고 문서는 제공되지 않았습니다. 문서 번호·인용·근거 줄을 만들지 마세요. "
                     "사용자가 준 수치는 계산에 사용할 수 있으며, 외부 기준값을 추측하지 마세요."
                 )
-            if concise_answer:
+            if concise_answer and not compact_analysis:
                 fast_system = (fast_system or str(self.config.get("prompt", {}).get("system", ""))) + (
                     "\n[이번 요청: 빠른 안내]\n질문에 직접 답하는 핵심 한 문장을 우선하세요. "
                     "정의 질문은 뜻만 한 문장으로 설명하세요. 질문하지 않은 원인·보완 방법·배경은 덧붙이지 마세요. "
@@ -1346,9 +1366,9 @@ class AgentPipeline:
                 session_context_summary=summary,
                 system_prompt=fast_system or None,
                 **({"inference_counter": counter, "inference_prompt_budget": token_budget,
-                    "visible_evidence": visible_evidence} if inference_backend is not None else {}),
+                    "visible_evidence": visible_evidence} if inference_backend is not None or compact_analysis else {}),
             )
-            if inference_backend is not None:
+            if inference_backend is not None or compact_analysis:
                 evidence = visible_evidence
                 rag_chunks = visible_evidence
             fast_prompt_tokens = counter.count_messages(messages)
@@ -1373,7 +1393,7 @@ class AgentPipeline:
             cached = cache.get(cache_key) if cache_key is not None else None
             quick_cache_hit = cached is not None
             constraint = self._answer_regex(has_evidence=bool(evidence))
-            if inference_backend is not None and concise_answer and constraint is not None:
+            if inference_backend is not None and concise_answer and not compact_analysis and constraint is not None:
                 from trainer.scripts.answer_grammar import quick_answer_regex
                 constraint = quick_answer_regex(has_evidence=bool(evidence))
             raw_response = cached if cached is not None else self._generate_direct(

@@ -72,7 +72,8 @@ def test_repaint_in_the_current_zone_is_normal_but_skipping_a_zone_is_anomaly(tm
     assert decision.feedback.analysis_status == "available"
     assert decision.feedback.reason_code == "zone_skipped"
     assert decision.anomaly_type == "sequence_order_deviation"
-    assert "2번" in decision.text_guide
+    assert "다음" not in decision.text_guide
+    assert "현재 Zone 3" in decision.text_guide
 
     retried_first = engine.evaluate(AnalyzeSequenceRequest.model_validate(first), store)
     assert retried_first.feedback.reason_code is None
@@ -147,7 +148,8 @@ def test_off_order_trainee_gets_the_next_zone_by_expert_transitions(tmp_path: Pa
     decision = engine.evaluate(AnalyzeSequenceRequest.model_validate(first), store)
 
     assert decision.feedback.reason_code is not None  # 판정은 여전히 권장 순서 이탈
-    assert decision.text_guide == "권장 순서에서 이탈했습니다. 지금 위치에서는 다음으로 1번 구역을 권합니다."
+    assert "다음" not in decision.text_guide
+    assert "현재 Zone 3" in decision.text_guide
 
 
 def test_reference_flows_ignore_legacy_all_worker_override_and_expand_sessions() -> None:

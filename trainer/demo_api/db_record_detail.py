@@ -8,6 +8,7 @@ from typing import Any
 
 from trainer.demo_api.db_report_status import report_progress
 from trainer.demo_api.db_provenance import record_provenance, provenance_meta
+from trainer.demo_api.request_provenance import valid_ip
 
 PRIVATE_TABLES = frozenset({"admin_change_log"})
 
@@ -60,10 +61,14 @@ def record_detail(conn: sqlite3.Connection, table: str, rowid: int) -> dict[str,
     if row is None:
         return None
     meta = [{"label":"테이블","value":table},{"label":"레코드 번호","value":rowid}]
-    meta.extend(provenance_meta(record_provenance(conn, table, row)))
+    if table == 'user_feedback':
+        meta.extend([{'label':'접수 페이지','value':row['page']}, {'label':'접속 IP','value':valid_ip(row['client_ip']) or '미기록'},
+                     {'label':'서버 버전','value':row['server_version']}, {'label':'접수 시각 (UTC)','value':row['created_at']}])
+    else:
+        meta.extend(provenance_meta(record_provenance(conn, table, row)))
     if table == "completions":
         progress = report_progress(row)
         meta.extend({"label":label,"value":value} for label,value in (("처리 상태",progress['label']),("대기 경과",progress['elapsed']),("최근 처리 시각",progress['latest_at'] or '미기록'),("상태 사유",progress['reason'])))
     return {"title": f"레코드 상세 · {table}",
             "meta": meta,
-            "sections": [{"title":"레코드 파라미터","data":{key:decoded(row[key]) for key in row.keys()}}]}
+            "sections": [{"title":"레코드 파라미터","data":{key:json_safe(row[key]) if table == 'user_feedback' else decoded(row[key]) for key in row.keys()}}]}

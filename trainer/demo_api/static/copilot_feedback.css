@@ -1,0 +1,24 @@
+#copilot-feedback-dialog :focus-visible{outline:2px solid #57b9ee;outline-offset:3px}
+#copilot-feedback-dialog,#copilot-feedback-dialog *{box-sizing:border-box}
+#copilot-feedback-dialog{width:min(520px,calc(100vw - 24px));max-width:520px;max-height:calc(100dvh - 24px);margin:auto;padding:24px;border:1px solid #cbd6e8;border-radius:14px;background:#fff;color:#17243b;box-shadow:0 24px 80px #10264d55;font:14px/1.6 Inter,Pretendard,"Noto Sans KR",system-ui,sans-serif;overflow:auto;color-scheme:light}
+#copilot-feedback-dialog::backdrop{background:#111f3e99}
+#copilot-feedback-dialog .feedback-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}
+#copilot-feedback-dialog h2{margin:0;font-size:20px;line-height:1.4;color:#17243b}
+#copilot-feedback-dialog #copilot-feedback-note{font-size:12px;color:#68758a;margin:12px 0 18px}
+#copilot-feedback-dialog label{display:block;margin:12px 0 5px;font-size:13px;font-weight:650;color:#243651}
+#copilot-feedback-dialog label span{font-weight:400;color:#68758a}
+#copilot-feedback-dialog input,#copilot-feedback-dialog select,#copilot-feedback-dialog textarea{display:block;width:100%;height:auto;min-height:38px;margin:0;border:1px solid #b8c5d8;border-radius:7px;padding:9px 10px;background:#fff;color:#17243b;font:inherit;box-shadow:none}
+#copilot-feedback-dialog textarea{resize:vertical;min-height:140px;max-height:45vh}
+#copilot-feedback-dialog button{width:auto;height:auto;min-width:0;max-width:none;margin:0;flex:0 0 auto;font-family:inherit;font-size:13px;font-weight:650;line-height:20px;border:0;border-radius:7px;padding:9px 14px;cursor:pointer;background:#3157d5;color:#fff}
+#copilot-feedback-dialog #copilot-feedback-close{padding:4px 10px;font:24px/28px system-ui;background:#eef2f9;color:#40516c}
+#copilot-feedback-dialog .feedback-actions{display:flex;justify-content:flex-end;gap:8px}
+#copilot-feedback-dialog #copilot-feedback-reset{background:#eef2f9;color:#40516c}
+#copilot-feedback-dialog button:disabled{opacity:.55;cursor:wait}
+#copilot-feedback-dialog #copilot-feedback-state{min-height:22px;margin:14px 0;font-size:13px;color:#415b85;white-space:pre-wrap}
+#copilot-feedback-dialog #copilot-feedback-state[data-state=error]{color:#a12a2a}
+#copilot-feedback-dialog #copilot-feedback-state[data-state=success]{color:#087f5b}
+.feedback-message{white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto;min-width:180px}
+.feedback-status-label{display:block;font-size:12px;white-space:nowrap}
+[data-feedback-status]{display:block;margin:5px 0;padding:6px;border:1px solid #b8c5d8;border-radius:6px;background:#fff;color:#17243b}
+[data-feedback-result]{display:block;margin-top:6px;max-width:180px;color:#68758a}
+@media(max-width:600px){#copilot-feedback-dialog{padding:18px}}

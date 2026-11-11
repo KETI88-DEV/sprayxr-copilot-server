@@ -512,7 +512,8 @@ def test_analyze_sequence_returns_feedback_and_publishes_the_same_anomaly() -> N
     ).json()["data"]
 
     assert data["sequence_feedback"] == {"analysis_status": "available", "reason_code": "zone_skipped"}
-    assert data["text_guide"] == "2번 구역을 먼저 도장하세요."
+    assert "현재 Zone 1" in data["text_guide"]
+    assert "2번" not in data["text_guide"]
     events = bus.since("1_1001642_1", last_event_id=0)
     assert len(events) == 1
     assert events[0].anomaly_type == "sequence_order_deviation"

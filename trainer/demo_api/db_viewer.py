@@ -26,6 +26,7 @@ from trainer.demo_api.training_data_catalog import TrainingDataCatalog, create_t
 from trainer.demo_api.training_data_ui import TRAINING_DATA_CSS, render_training_data
 from trainer.demo_api.db_sequence_heatmap import attach_heatmap_link, create_sequence_heatmap_router
 from trainer.demo_api.db_sequence_heatmap_ui import SEQUENCE_HEATMAP_CSS
+from trainer.demo_api.feedback import render_feedback_list
 
 _CSS = """
 :root{color-scheme:light;--bg:#f4f7fb;--panel:#fff;--ink:#152033;--muted:#68758a;--line:#dde4ee;
@@ -98,7 +99,7 @@ def _cell(value: object) -> str:
 def _sidebar(tables: list[tuple[str, int]], selected: str | None, overview: str = "home") -> str:
     labels = {"sessions":"훈련 세션","users":"작업자","sequences":"시퀀스 기록",
               "query_turns":"질문·답변","completions":"최종 리포트",
-              "sequence_analysis_results":"시퀀스 분석 결과","legacy_import_records":"이전 데이터 이관 기록","api_calls":"API 호출 이력"}
+              "sequence_analysis_results":"시퀀스 분석 결과","legacy_import_records":"이전 데이터 이관 기록","api_calls":"API 호출 이력","user_feedback":"사용자 의견 원본"}
     links = "".join(
         f'<a class="table-link{" active" if name == selected else ""}" href="/admin?table={quote(name)}">'
         f"<span class='table-name'>{html.escape(labels.get(name,name))}<small>{html.escape(name)}</small></span><span class='count'>{count:,}</span></a>"
@@ -110,7 +111,8 @@ def _sidebar(tables: list[tuple[str, int]], selected: str | None, overview: str 
     sessions = f'<a class="table-link home-nav{" active" if overview == "sessions" else ""}" href="/admin/sessions"><span>▤ 훈련세션</span></a>'
     training = f'<a class="table-link home-nav{" active" if overview == "training" else ""}"' + (' aria-current="page"' if overview == 'training' else '') + ' href="/admin/training-data"><span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v7c0 4 16 4 16 0V5M4 12v7c0 4 16 4 16 0v-7"/></svg>학습 데이터</span></a>'
     admin = '<div class="sidebar-admin"><a href="/admin/manage"' + (' class="active" aria-current="page"' if overview == "manage" else '') + '><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="m9 3-.6 2.2-2 .9-2-.7-2 3.4 1.5 1.6v2.3l-1.5 1.6 2 3.4 2-.6 2 .9L9 20h4l.6-2.1 2-.9 2 .6 2-3.4-1.5-1.6v-2.3l1.5-1.6-2-3.4-2 .7-2-.9L13 3Z"/><circle cx="11" cy="11.5" r="3"/></svg><span>관리자 모드</span></a></div>'
-    return '<div class="brand">AI Co-Pilot<small>훈련 데이터 대시보드</small></div><div class="side-title">Overview</div>' + home + sessions + training + '<div class="side-title">데이터 조회</div>' + links + admin
+    feedback = '<a class="table-link' + (' active' if overview == 'feedback' else '') + '" href="/admin/feedback"><span>사용자 의견</span></a>'
+    return '<div class="brand">AI Co-Pilot<small>훈련 데이터 대시보드</small></div><div class="side-title">Overview</div>' + home + sessions + training + feedback + '<div class="side-title">데이터 조회</div>' + links + admin
 
 
 @contextmanager
@@ -141,6 +143,11 @@ def create_db_viewer_router() -> APIRouter:
     router.include_router(create_db_admin_router())
     router.include_router(create_training_data_router(TrainingDataCatalog()))
     router.include_router(create_sequence_heatmap_router(_read_database))
+
+    @router.get('/admin/feedback', include_in_schema=False, response_class=HTMLResponse)
+    def feedback_page(status: str = Query(default='all', pattern='^(all|new|reviewing|done)$'), page: int = Query(default=1, ge=1)):
+        with _read_database() as conn:
+            return _page(render_feedback_list(conn, status=status, page=page), _sidebar(_table_counts(conn), None, 'feedback'))
 
     @router.get('/admin/assets/db_sequence_heatmap.js', include_in_schema=False)
     def sequence_heatmap_script():

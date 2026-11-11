@@ -102,7 +102,7 @@ def test_start_remains_backward_compatible_without_target_thickness() -> None:
     response = client.post("/api/v1/sessions/start", json=_start_body())
 
     assert response.status_code == 200
-    assert response.json()["data"]["target_thickness_um"] is None
+    assert response.json()["data"]["target_thickness_um"] == 160.0
 
 
 @pytest.mark.parametrize("invalid", [0, -1, 20000.1])

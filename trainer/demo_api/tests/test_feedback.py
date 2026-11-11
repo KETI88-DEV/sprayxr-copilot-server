@@ -1,0 +1,217 @@
+"""Public feedback is bounded data; only the existing DB admin can review it."""
+import importlib
+import importlib.util
+import sqlite3
+from html.parser import HTMLParser
+from uuid import uuid4
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+
+def feedback_module():
+    assert importlib.util.find_spec('trainer.demo_api.feedback') is not None, 'The feedback submission boundary is missing'
+    return importlib.import_module('trainer.demo_api.feedback')
+
+
+def payload(**changes):
+    return {'submission_id': str(uuid4()), 'message': '구역 선택 후 안내를 더 쉽게 보고 싶습니다.',
+            'name': '테스트 담당자', 'kind': 'improvement', 'page': 'motion', **changes}
+
+
+@pytest.fixture
+def feedback_client(monkeypatch, tmp_path):
+    from trainer.demo_api.access_control import AccessControlMiddleware, OperatorCredentials
+    from trainer.demo_api.db_viewer import create_db_viewer_router
+    from trainer.demo_api.db_admin_auth import configure_credentials
+    module = feedback_module()
+    path = tmp_path / 'feedback.db'
+    with sqlite3.connect(path) as conn:
+        conn.execute('CREATE TABLE users(user_id TEXT, name TEXT)')
+        conn.execute('INSERT INTO users VALUES(?,?)', ('COPILOT-DEMO-USER', '모의훈련자'))
+    monkeypatch.setenv('SEQUENCE_DB_PATH', str(path))
+    credentials = tmp_path / 'admin.json'
+    configure_credentials(credentials, 'reviewer', 'test-feedback-password')
+    monkeypatch.setenv('DB_ADMIN_CREDENTIALS_PATH', str(credentials))
+    app = FastAPI()
+    app.add_middleware(AccessControlMiddleware, credentials=OperatorCredentials(tmp_path/'operator.json'), protect_admin=True, api_key='private-api-key')
+    app.include_router(module.create_feedback_router())
+    app.include_router(create_db_viewer_router())
+    return TestClient(app, client=('192.0.2.42', 12345)), path
+
+
+def test_feedback_persists_in_the_existing_database_without_creating_a_trainee(feedback_client):
+    client, path = feedback_client
+    body = payload(message="  안내 문구를 개선해주세요.  ", name='  담당자  ')
+    response = client.post('/api/feedback', json=body)
+    assert response.status_code == 201, response.text
+    receipt = response.json()
+    assert receipt['feedback_id'] == body['submission_id'] and receipt['duplicate'] is False
+    with sqlite3.connect(path) as conn:
+        conn.row_factory = sqlite3.Row
+        row = dict(conn.execute('SELECT * FROM user_feedback').fetchone())
+        assert row['message'] == '안내 문구를 개선해주세요.' and row['name'] == '담당자'
+        assert row['page'] == 'motion' and row['kind'] == 'improvement' and row['status'] == 'new'
+        assert row['client_ip'] == '192.0.2.42' and row['server_version']
+        assert row['created_at'].endswith('+00:00')
+        assert conn.execute('SELECT COUNT(*) FROM users').fetchone()[0] == 1
+
+
+@pytest.mark.parametrize('changes', [
+    {'message': ''}, {'message': '   \n'}, {'message': '가' * 4001}, {'message': 42},
+    {'name': '가' * 81}, {'kind': 'delete'}, {'page': 'https://evil.test'},
+    {'submission_id': 'not-a-uuid'}, {'status': 'done'}, {'client_ip': '203.0.113.1'}, {'user_id': 'NEW-USER'},
+])
+def test_invalid_feedback_never_enters_storage(feedback_client, changes):
+    client, path = feedback_client
+    response = client.post('/api/feedback', json=payload(**changes))
+    assert response.status_code == 422, response.text
+    assert 'input' not in response.text
+    with sqlite3.connect(path) as conn:
+        exists = conn.execute("SELECT 1 FROM sqlite_master WHERE name='user_feedback'").fetchone()
+        assert not exists or conn.execute('SELECT COUNT(*) FROM user_feedback').fetchone()[0] == 0
+
+
+def test_limit_accepts_four_thousand_korean_characters_and_optional_name(feedback_client):
+    client, _ = feedback_client
+    body = payload(message='가' * 4000)
+    body.pop('name')
+    assert client.post('/api/feedback', json=body).status_code == 201
+
+
+def test_feedback_bounds_raw_body_and_requires_json_and_same_site(feedback_client):
+    client, _ = feedback_client
+    assert client.post('/api/feedback', content=' ' * 32769, headers={'Content-Type': 'application/json'}).status_code == 413
+    assert client.post('/api/feedback', content='message=hello').status_code == 415
+    assert client.post('/api/feedback', content='{', headers={'Content-Type': 'application/json'}).status_code == 422
+    assert client.post('/api/feedback', json=payload(), headers={'Origin': 'https://unrelated.test'}).status_code == 403
+
+
+def test_retries_are_idempotent_but_other_people_on_same_ip_can_submit(feedback_client):
+    client, path = feedback_client
+    body = payload()
+    first = client.post('/api/feedback', json=body)
+    retry = client.post('/api/feedback', json=body)
+    assert first.status_code == 201 and retry.status_code == 200
+    assert retry.json()['duplicate'] is True and retry.json()['feedback_id'] == first.json()['feedback_id']
+    assert client.post('/api/feedback', json={**body, 'message': '다른 내용'}).status_code == 409
+    assert client.post('/api/feedback', json=payload()).status_code == 201
+    with sqlite3.connect(path) as conn:
+        assert conn.execute('SELECT COUNT(*) FROM user_feedback').fetchone()[0] == 2
+
+
+def test_forwarded_ip_and_client_version_never_override_server_provenance(feedback_client):
+    client, path = feedback_client
+    assert client.post('/api/feedback', json=payload(), headers={'X-Forwarded-For': '203.0.113.9', 'X-Real-IP': '203.0.113.8'}).status_code == 201
+    with sqlite3.connect(path) as conn:
+        assert conn.execute('SELECT client_ip FROM user_feedback').fetchone()[0] == '192.0.2.42'
+    assert client.post('/api/feedback', json=payload(server_version='fake')).status_code == 422
+
+
+def test_invalid_asgi_peer_stays_unknown(monkeypatch, tmp_path):
+    module = feedback_module()
+    path = tmp_path / 'unknown-ip.db'
+    monkeypatch.setenv('SEQUENCE_DB_PATH', str(path))
+    app = FastAPI(); app.include_router(module.create_feedback_router())
+    client = TestClient(app)
+    assert client.post('/api/feedback', json=payload(), headers={'X-Forwarded-For': '203.0.113.1'}).status_code == 201
+    with sqlite3.connect(path) as conn:
+        assert conn.execute('SELECT client_ip FROM user_feedback').fetchone()[0] is None
+
+
+def test_stored_feedback_is_escaped_in_public_list_and_read_as_literal_data(feedback_client):
+    client, path = feedback_client
+    message = '<img src=x onerror=alert(1)>\n\'; DROP TABLE users; --'
+    result = client.post('/api/feedback', json=payload(message=message, name='<script>bad</script>'))
+    assert result.status_code == 201
+    listing = client.get('/admin/feedback')
+    assert listing.status_code == 200 and '&lt;img src=x onerror=alert(1)&gt;' in listing.text
+    assert '<img src=x onerror=alert(1)>' not in listing.text and '<script>bad</script>' not in listing.text
+    assert client.get('/admin?table=user_feedback').status_code == 200
+    detail = client.get('/admin/api/record', params={'table': 'user_feedback', 'rowid': 1})
+    assert detail.json()['sections'][0]['data']['message'] == message
+    with sqlite3.connect(path) as conn:
+        assert conn.execute('SELECT COUNT(*) FROM users').fetchone()[0] == 1
+
+
+def test_only_existing_admin_session_with_csrf_can_change_feedback_status(feedback_client):
+    client, path = feedback_client
+    receipt = client.post('/api/feedback', json=payload()).json()
+    target = {'feedback_id': receipt['feedback_id'], 'status': 'reviewing'}
+    route = '/admin/api/manage/feedback-status'
+    assert client.post(route, json=target, headers={'Origin': 'http://testserver'}).status_code == 401
+    assert client.get('/admin/api/manage/status').json()['authenticated'] is False
+    login = client.post('/admin/api/manage/login', json={'username': 'reviewer', 'password': 'test-feedback-password'}, headers={'Origin': 'http://testserver'})
+    assert login.status_code == 200
+    headers = {'Origin': 'http://testserver', 'X-DB-CSRF': login.json()['csrf_token']}
+    assert client.post(route, json=target).status_code == 403
+    assert client.post(route, json=target, headers={**headers, 'Origin': 'https://elsewhere.test'}).status_code == 403
+    assert client.post(route, json={**target, 'status': 'arbitrary'}, headers=headers).status_code == 422
+    assert client.post(route, json={**target, 'message': 'overwritten'}, headers=headers).status_code == 422
+    assert client.post(route, json=target, headers=headers).status_code == 200
+    assert client.post(route, json={**target, 'feedback_id': str(uuid4())}, headers=headers).status_code == 404
+    with sqlite3.connect(path) as conn:
+        row = conn.execute('SELECT status,status_updated_by,status_updated_at,message FROM user_feedback').fetchone()
+        assert row[:2] == ('reviewing', 'reviewer') and row[2]
+        assert row[3] == '구역 선택 후 안내를 더 쉽게 보고 싶습니다.'
+        assert conn.execute('SELECT COUNT(*) FROM users').fetchone()[0] == 1
+
+
+def test_feedback_api_and_assets_do_not_expand_public_copilot_openapi(feedback_client):
+    client, _ = feedback_client
+    assert not any('feedback' in path for path in client.get('/openapi.json').json()['paths'])
+    for path in ('/assets/copilot_feedback.js', '/assets/copilot_feedback.css', '/assets/copilot_feedback_admin.js'):
+        assert client.get(path).status_code == 200
+
+
+def test_asset_routes_cannot_be_used_to_read_other_server_files(feedback_client):
+    client, _ = feedback_client
+    original = client.get('/assets/copilot_feedback.js')
+    substituted = client.get('/assets/copilot_feedback.js', params={'filename':'../db_admin_auth.py', 'content_type':'text/plain'})
+    assert substituted.status_code == 200
+    assert substituted.content == original.content
+    assert substituted.headers['content-type'].startswith('text/javascript')
+
+
+def test_json_looking_feedback_remains_literal_text_in_record_details(feedback_client):
+    client, _ = feedback_client
+    literal = '{"message":"literal user text"}'
+    assert client.post('/api/feedback', json=payload(message=literal)).status_code == 201
+    detail = client.get('/admin/api/record', params={'table':'user_feedback', 'rowid':1}).json()
+    assert detail['sections'][0]['data']['message'] == literal
+
+
+def test_unwritable_database_returns_a_failure_without_a_false_receipt(monkeypatch, tmp_path):
+    module = feedback_module()
+    blocker = tmp_path/'file'; blocker.write_text('not a directory')
+    app = FastAPI(); app.include_router(module.create_feedback_router(module.FeedbackStore(str(blocker/'feedback.db'))))
+    result = TestClient(app).post('/api/feedback', json=payload())
+    assert result.status_code == 503
+    assert 'feedback_id' not in result.json()
+
+
+class Elements(HTMLParser):
+    def __init__(self, markup):
+        super().__init__(); self.by_id = {}; self.feed(markup)
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        if 'id' in attrs:
+            assert attrs['id'] not in self.by_id, 'Duplicate element ID'
+            self.by_id[attrs['id']] = (tag, attrs)
+
+
+@pytest.mark.parametrize('page', ['docs', 'database', 'motion'])
+def test_shared_navigation_renders_an_accessible_bounded_feedback_form(page):
+    from trainer.demo_api.portal_navigation import portal_document
+    document = portal_document('<html><head></head><body><main>page</main></body></html>', page)
+    nodes = Elements(document).by_id
+    assert 'copilot-feedback-open' in nodes, 'Shared navigation is missing feedback access'
+    assert nodes['copilot-feedback-open'][1]['aria-controls'] == 'copilot-feedback-dialog'
+    assert nodes['copilot-feedback-dialog'][0] == 'dialog'
+    assert nodes['copilot-feedback-dialog'][1]['aria-labelledby'] == 'copilot-feedback-title'
+    assert nodes['copilot-feedback-message'][1]['maxlength'] == '4000'
+    assert 'required' in nodes['copilot-feedback-message'][1]
+    assert nodes['copilot-feedback-name'][1]['maxlength'] == '80'
+    assert nodes['copilot-feedback-state'][1]['aria-live'] == 'polite'
+    assert portal_document(document, page) == document

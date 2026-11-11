@@ -94,7 +94,7 @@ _START_CONTEXT = _test_context(
             "session_id": "SWAGGER-SESSION-a1b2c3d4",
             "scenario_id": "1",
             "started_at": "2026-10-30T00:00:00Z",
-            "target_thickness_um": 150.0,
+            "target_thickness_um": 160.0,
             "worker": {"skill_level": "novice", "handedness": "right"},
         },
         "user_registration": {
@@ -241,7 +241,7 @@ class GuidedWorkflow:
                 user_id=run.user_id,
                 scenario_id=run.scenario_id,
                 started_at=run.started_at,
-                target_thickness_um=150.0,
+                target_thickness_um=160.0,
                 creation_origin="test", creation_path="/api/v1/test/workflow/1-start",
             )
             run.started = True
@@ -366,7 +366,7 @@ def create_guided_workflow_router(
         input_used["body"] = {"user_id": run.user_id, "session_id": run.session_id,
                               "scenario_id": run.scenario_id,
                               "started_at": run.started_at,
-                              "target_thickness_um": 150.0,
+                              "target_thickness_um": 160.0,
                               "worker": {"skill_level": "novice", "handedness": "right"}}
         input_used["user_registration"] = {
             "user_id": run.user_id, "name": DEMO_USER_NAME,

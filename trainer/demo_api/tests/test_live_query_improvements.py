@@ -154,7 +154,8 @@ def test_server_signed_viewer_analysis_works_without_a_saved_session() -> None:
     assert "record" not in quick["sequence_context"]
     detailed = query(context, signature, mode="detailed")
     assert detailed["context_status"] == "available"
-    assert "[상황 해석]" in detailed["answer"]
+    assert "[구간별 판단]" in detailed["answer"]
+    assert detailed["degraded"] is False
     assert detailed["answer"] != quick["answer"]
     assert query(dict(context, adherence_rate=0.99), signature)["context_status"] == "not_available"
     assert query(context, "forged-signature")["context_status"] == "not_available"
@@ -200,7 +201,7 @@ def test_viewer_pose_answers_are_derived_from_signed_measurements(prompt: str, e
     ("실제 수행 순서는?", "2 → 1"),
     ("누락한 Zone은?", "3번"),
     ("순서 준수율은?", "67%"),
-    ("도포 방향은?", "horizontal"),
+    ("도포 방향은?", "수평"),
 ])
 def test_viewer_order_answers_preserve_each_question_type(prompt: str, expected: str) -> None:
     context = {"recommended_flow": ["1", "3", "2"], "selected_flow": ["2", "1"],

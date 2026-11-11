@@ -395,6 +395,55 @@
     byId('posePredicted').textContent = current == null || predicted == null ? '—' : `${current}% → ${predicted}%`;
   }
 
+  // 자세 유사도는 분사마다 팔 관절 엔진으로 채점해 수 초 걸린다. 모션과 따로 받고, 채팅도 같은 객체에서 읽는다.
+  const ARM_POSE_UNAVAILABLE = {
+    process_not_supported: '블라스팅 기록은 자세 유사도를 채점하지 않습니다.',
+    no_joint_sequences: '이 기록에는 채점할 분사 구간이 없습니다.',
+    request_failed: '자세 채점 결과를 불러오지 못했습니다.',
+  };
+  function loadArmPose(payload) {
+    const query = new URLSearchParams({worker_id: payload.worker?.worker_id, process: payload.process,
+      mode_id: payload.mode_id, session_id: payload.selected_session_id});
+    fetch('/motion-viewer/api/arm-pose?' + query)
+      .then(response => response.ok ? response.json() : Promise.reject(new Error(String(response.status))))
+      .then(result => {
+        payload.arm_pose_evaluation = result.arm_pose_evaluation;
+        (payload.query_context_signatures ||= {}).arm_pose = result.signature;
+      })
+      .catch(() => { payload.arm_pose_evaluation = {status: 'unavailable', reason_code: 'request_failed'}; })
+      .finally(() => { if (data === payload) draw(); });
+  }
+
+  function renderArmPose(seconds) {
+    const evaluation = data?.arm_pose_evaluation;
+    const current = byId('armPoseCurrent');
+    if (evaluation?.status !== 'available') {
+      byId('armPoseScore').textContent = '—%';
+      byId('armPoseNote').textContent = evaluation
+        ? ARM_POSE_UNAVAILABLE[evaluation.reason_code] || '이 기록은 자세 유사도를 채점할 수 없습니다.'
+        : '분사마다 팔 관절 자세를 채점하는 중입니다.';
+      current.hidden = true;
+      return;
+    }
+    byId('armPoseScore').textContent = `${evaluation.average_similarity_percent}%`;
+    byId('armPoseNote').textContent = `분사 ${evaluation.evaluated_sequence_count}회 평균 · 숙련자 팔 관절 기준`;
+    current.hidden = false;
+    // 재생 위치 직전에 시작한 분사. 분사가 끝난 이동 구간에서는 그 분사를 '직전'으로 보인다.
+    const sequence = (evaluation.sequences || []).filter(item => item.start_seconds != null && item.start_seconds <= seconds).at(-1);
+    if (!sequence) {
+      byId('armPoseSequence').textContent = '분사 전';
+      byId('armPoseSequenceScore').textContent = '';
+      byId('armPoseCorrection').textContent = '분사가 시작되면 그 분사의 자세 유사도를 표시합니다.';
+      return;
+    }
+    const live = sequence.end_seconds == null || seconds <= sequence.end_seconds;
+    const limited = sequence.confidence === 'limited';
+    byId('armPoseSequence').textContent = `${live ? '현재' : '직전'} 분사 ${sequence.sequence_id}`;
+    byId('armPoseSequenceScore').textContent = `${sequence.similarity_percent}%`;
+    byId('armPoseCorrection').textContent = [sequence.correction || (limited ? '' : '교정할 관절이 없습니다.'),
+      limited ? '입력 품질 제한이 있어 참고용입니다.' : ''].filter(Boolean).join(' ');
+  }
+
   function renderZoneTimeline(payload) {
     const host = byId('zoneTimeline');
     const duration = Math.max(.001, Number(payload?.duration_seconds) || 0);
@@ -438,6 +487,7 @@
     drawOrientationGuides(frame, center, w, h);
     updateRealtimeHud(frame, sourceIndex);
     renderPoseSummary(frame);
+    renderArmPose(Number(playheadSeconds) || 0);
     const currentZone = currentZoneFromFrame(frame);
     if (currentZone) lastPlaybackZone = currentZone;
     const activity = currentZone ? `현재 Zone ${zoneLabel(currentZone.zoneId)}` : '이동 구간';
@@ -469,6 +519,7 @@
     const badge = byId('playbackZoneBadge');
     if (badge) badge.hidden = true;
     renderZoneTimeline(event.detail);
+    loadArmPose(event.detail);
   });
 
   const syncCameraGlobals = state => {

@@ -36,7 +36,19 @@ def _heatmap(value: float) -> dict[str, object]:
     }
 
 
+def _engine(root: Path) -> CoatingProgressEngine:
+    return CoatingProgressEngine(root, zone_reference_root=root / "fixture_official")
+
+
 def _profile(root: Path) -> None:
+    official = root / "fixture_official"
+    (official / "color").mkdir(parents=True)
+    (official / "palette.csv").write_text("zone_id,hex,r,g,b\n1,#FF0000,255,0,0\n", encoding="utf-8")
+    (official / "scenario_map.csv").write_text("scenario_id,model_key,note\n3,Learn03,test\n", encoding="utf-8")
+    (official / "zone_rects.csv").write_text(
+        "model_key,map_num,zone_id,rect_x,rect_y,rect_w,rect_h,px_x,px_y,px_w,px_h,u_min,v_min,u_max,v_max,area_percent\n"
+        "Learn03,01,1,0,0,1,1,0,0,4,4,0,0,1,1,100\n", encoding="utf-8")
+    Image.new("RGB", (4, 4), (255, 0, 0)).save(official / "color/Learn03_01.png")
     target = root / "generated" / "profiles" / "spray" / "learning"
     target.mkdir(parents=True)
     (target / "mode_03.json").write_text(
@@ -96,11 +108,11 @@ def _request(*, sequence_id: str, thickness_um: float, tool_type: str = "spray_g
 def test_cumulative_maps_replace_previous_absolute_thickness_instead_of_adding(tmp_path: Path) -> None:
     """TSB sends the current absolute surface thickness, not a per-sequence delta."""
     _profile(tmp_path)
-    engine = CoatingProgressEngine(tmp_path)
+    engine = _engine(tmp_path)
 
-    first = engine.evaluate(_request(sequence_id="SEQ-001", thickness_um=50.0))
-    second = engine.evaluate(_request(sequence_id="SEQ-002", thickness_um=60.0))
-    third = engine.evaluate(_request(sequence_id="SEQ-003", thickness_um=100.0))
+    first = engine.evaluate(_request(sequence_id="SEQ-001", thickness_um=80.0))
+    second = engine.evaluate(_request(sequence_id="SEQ-002", thickness_um=96.0))
+    third = engine.evaluate(_request(sequence_id="SEQ-003", thickness_um=160.0))
 
     assert first.status == "needs_more"
     assert first.recommendation == "continue_current_zone"
@@ -116,8 +128,8 @@ def test_cumulative_maps_replace_previous_absolute_thickness_instead_of_adding(t
 def test_duplicate_sequence_does_not_double_count_the_same_heatmap(tmp_path: Path) -> None:
     """A transport retry returns the original result and does not mutate surface state."""
     _profile(tmp_path)
-    engine = CoatingProgressEngine(tmp_path)
-    request = _request(sequence_id="SEQ-001", thickness_um=60.0)
+    engine = _engine(tmp_path)
+    request = _request(sequence_id="SEQ-001", thickness_um=96.0)
 
     first = engine.evaluate(request)
     duplicate = engine.evaluate(request)
@@ -130,7 +142,7 @@ def test_duplicate_sequence_does_not_double_count_the_same_heatmap(tmp_path: Pat
 def test_overpainted_zone_tells_the_worker_to_stop(tmp_path: Path) -> None:
     _profile(tmp_path)
 
-    result = CoatingProgressEngine(tmp_path).evaluate(
+    result = _engine(tmp_path).evaluate(
         _request(sequence_id="SEQ-001", thickness_um=200.0)
     )
 
@@ -142,9 +154,11 @@ def test_overpainted_zone_tells_the_worker_to_stop(tmp_path: Path) -> None:
 def test_session_target_changes_compliance_without_changing_expert_reference(tmp_path: Path) -> None:
     _profile(tmp_path)
     request = _request(sequence_id="SEQ-001", thickness_um=110.0)
-    expert = CoatingProgressEngine(tmp_path).evaluate(request)
-    target = CoatingProgressEngine(tmp_path).evaluate(request, target_thickness_um=200.0)
-    assert expert.status == "complete"
+    expert = _engine(tmp_path).evaluate(request)
+    target = _engine(tmp_path).evaluate(request, target_thickness_um=200.0)
+    assert expert.status == "needs_more"
+    assert expert.target_thickness_um == 160.0
+    assert expert.expert_completion_percent == 100.0
     assert target.status == "needs_more"
     assert target.comparison_basis == "session_target"
     assert target.target_thickness_um == 200.0
@@ -154,13 +168,13 @@ def test_session_target_changes_compliance_without_changing_expert_reference(tmp
 
 def test_replay_restores_other_crop_pixels_after_engine_restart(tmp_path: Path) -> None:
     _profile(tmp_path)
-    first = _request(sequence_id="SEQ-001", thickness_um=100.0)
-    second = _request(sequence_id="SEQ-002", thickness_um=100.0)
+    first = _request(sequence_id="SEQ-001", thickness_um=160.0)
+    second = _request(sequence_id="SEQ-002", thickness_um=160.0)
     for request, x0 in ((first, 0), (second, 2)):
         crop = request.sequence_result.cur_sequence_heatmap[0]
         crop.x0 = x0
         crop.width = 2
-    result = CoatingProgressEngine(tmp_path).evaluate_replay(second, [first])
+    result = _engine(tmp_path).evaluate_replay(second, [first])
     assert result.status == "complete"
     assert result.coverage_percent == 100.0
 
@@ -172,17 +186,17 @@ def test_replay_cannot_leak_thickness_from_a_different_session(tmp_path: Path) -
     first.session_id = "OTHER-SESSION"
     crop = second.sequence_result.cur_sequence_heatmap[0]
     crop.width = 2
-    result = CoatingProgressEngine(tmp_path).evaluate_replay(second, [first])
+    result = _engine(tmp_path).evaluate_replay(second, [first])
     assert result.status == "needs_more"
     assert result.overpaint_percent == 0.0
 
 
 def test_warm_replay_applies_telemetry_only_crops_between_analyzed_sequences(tmp_path: Path) -> None:
     _profile(tmp_path)
-    engine = CoatingProgressEngine(tmp_path)
+    engine = _engine(tmp_path)
     first = _request(sequence_id="SEQ-001", thickness_um=10.0)
-    second = _request(sequence_id="SEQ-002", thickness_um=100.0)
-    third = _request(sequence_id="SEQ-003", thickness_um=100.0)
+    second = _request(sequence_id="SEQ-002", thickness_um=160.0)
+    third = _request(sequence_id="SEQ-003", thickness_um=160.0)
     first.sequence_result.cur_sequence_heatmap[0].width = 2
     second.sequence_result.cur_sequence_heatmap[0].width = 2
     third.sequence_result.cur_sequence_heatmap[0].x0 = 2
@@ -193,7 +207,7 @@ def test_warm_replay_applies_telemetry_only_crops_between_analyzed_sequences(tmp
 
 def test_target_upper_boundary_allows_rg16_quantization(tmp_path: Path) -> None:
     _profile(tmp_path)
-    result = CoatingProgressEngine(tmp_path).evaluate(
+    result = _engine(tmp_path).evaluate(
         _request(sequence_id="SEQ-001", thickness_um=110.0), target_thickness_um=100.0,
     )
     assert result.overpaint_percent == 0.0
@@ -202,22 +216,22 @@ def test_target_upper_boundary_allows_rg16_quantization(tmp_path: Path) -> None:
 
 def test_missing_heatmap_and_blasting_return_honest_unavailable_results(tmp_path: Path) -> None:
     _profile(tmp_path)
-    engine = CoatingProgressEngine(tmp_path)
-    missing = _request(sequence_id="SEQ-001", thickness_um=50.0)
+    engine = _engine(tmp_path)
+    missing = _request(sequence_id="SEQ-001", thickness_um=80.0)
     missing.sequence_result = {}
 
     assert engine.evaluate(missing).reason == "heatmap_unavailable"
     assert engine.evaluate(
-        _request(sequence_id="SEQ-002", thickness_um=50.0, tool_type="blasting_gun")
+        _request(sequence_id="SEQ-002", thickness_um=80.0, tool_type="blasting_gun")
     ).reason == "coating_not_applicable"
 
 
 def test_invalid_height_encoding_is_not_silently_scored(tmp_path: Path) -> None:
     _profile(tmp_path)
-    request = _request(sequence_id="SEQ-001", thickness_um=50.0)
+    request = _request(sequence_id="SEQ-001", thickness_um=80.0)
     request.sequence_result.cur_sequence_heatmap[0].format = "unknown"
 
-    result = CoatingProgressEngine(tmp_path).evaluate(request)
+    result = _engine(tmp_path).evaluate(request)
 
     assert result.available is False
     assert result.reason == "heatmap_format_unsupported"
@@ -269,7 +283,7 @@ def test_official_zone_mask_excludes_neighbor_zone_thickness(tmp_path: Path) -> 
 
     result = CoatingProgressEngine(
         tmp_path, zone_reference_root=reference
-    ).evaluate(request)
+    ).evaluate(request, target_thickness_um=100.0)
 
     assert result.status == "complete"
     assert result.completion_percent == pytest.approx(100.0, abs=0.2)

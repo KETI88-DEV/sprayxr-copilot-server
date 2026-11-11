@@ -15,6 +15,12 @@
 .pose-zone-header { display:flex; align-items:center; justify-content:space-between; gap:12px; }
 .pose-zone-header strong { color:#f7fbff; font-size:25px; }
 .pose-zone-metrics { display:grid; gap:7px; margin-top:11px; }
+.pose-arm-current { display:grid; gap:4px; margin-top:10px; padding-top:9px; border-top:1px solid rgba(65,91,124,.45); }
+.pose-arm-current[hidden] { display:none; }
+.pose-arm-current > div { display:flex; align-items:baseline; justify-content:space-between; gap:10px; min-width:0; }
+.pose-arm-current span { min-width:0; color:#dceafa; font-size:12px; font-weight:750; }
+.pose-arm-current b { flex:none; color:#f7fbff; font-size:16px; font-variant-numeric:tabular-nums; }
+.pose-arm-current p { margin:0; color:#e8f3ff; font-size:12px; line-height:1.45; }
 .pose-zone-metric { display:grid; grid-template-columns: 68px minmax(92px, 1fr) 92px; align-items: center; gap:6px; min-width:0; padding:7px 0; border-top:1px solid rgba(65,91,124,.45); }
 .pose-zone-metric-name { align-self:center; color:#dceafa; font-size:12px; font-weight:750; }
 .pose-zone-metric-values { display:grid; grid-template-rows:auto auto; gap:3px; min-width:0; }

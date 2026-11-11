@@ -91,3 +91,8 @@ def test_coating_advice_keeps_its_question_meaning_even_when_a_zone_is_mentioned
         for task in ("pose_recomm", "trajectory_recomm"):
             bad = "pose_zone" if task == "pose_recomm" else "order_reference"
             assert classify_question_intent(task, question, lambda *_: bad) == "knowledge"
+
+
+def test_ui_overall_work_similarity_preset_uses_pose_overall_without_model():
+    from trainer.demo_api.copilot_intent import preset_intent
+    assert preset_intent("pose_recomm", "전체 작업 유사도는?")=="pose_overall"

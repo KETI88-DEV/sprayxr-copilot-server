@@ -77,11 +77,15 @@ def test_same_training_session_does_not_mix_other_users_or_conversation_windows(
 def test_direction_correction_receives_current_zone_and_record_facts():
     pipeline=DialoguePipeline(); c=client(pipeline, SequenceStore(":memory:"))
     facts={"record_direction":"diagonal", "zones":{"1:10":{"map_num":"1","zone_id":"10","direction":"horizontal"}}}
+    from trainer.demo_api.playback_direction import build_playback_snapshot
+    from trainer.demo_api.tests.test_playback_direction import trace
+    claims,signature=build_playback_snapshot(trace([[0,1,0],[0,1.01,0],[0,1.02,0]]),record_id="REC",duration_seconds=1)
     context="motion_viewer_analysis:"+json.dumps({"dialogue_context":facts,"dialogue_signature":sign_context("dialogue", facts),
-        "playback_context":{"map_num":"1","zone_id":"10","playhead_seconds":8.5}})
+        "frame_direction_context":claims,"frame_direction_signature":signature,
+        "playback_context":{"map_num":"1","zone_id":"10","playhead_seconds":.1}})
     result=c.post("/api/v1/copilot/query", json=body("지금은 수평방향일텐데?", context=context)).json()["data"]
-    assert "Zone 10의 대표 도포 방향은 수평형" in result["answer"] and "전체 기록" in result["answer"]
-    assert "현재 재생 순간 한 프레임의 방향을 측정한 값은 아닙니다" in result["answer"]
+    assert "수직" in result["answer"] and "대표" not in result["answer"]
+    assert "수평" not in result["answer"] and result["sequence_context"]["scope"] == "current_frame"
     assert pipeline.plans[-1]["facts"]["record_direction"] == "diagonal"
     assert pipeline.plans[-1]["facts"]["selected_zone"]["direction"] == "horizontal"
     assert pipeline.rag_calls == []
@@ -90,8 +94,9 @@ def test_direction_correction_receives_current_zone_and_record_facts():
 def test_unsigned_viewer_facts_are_not_used_as_current_measurements():
     pipeline=DialoguePipeline(); c=client(pipeline, SequenceStore(":memory:"))
     context="motion_viewer_analysis:"+json.dumps({"dialogue_context":{"record_direction":"forged"}, "dialogue_signature":"0"*64})
-    c.post("/api/v1/copilot/query", json=body("지금은 수평방향일텐데?", context=context))
-    assert "forged" not in json.dumps(pipeline.conversations[-1]["facts"])
+    response=c.post("/api/v1/copilot/query", json=body("지금은 수평방향일텐데?", context=context)).json()
+    assert "forged" not in json.dumps(response)
+    assert "현재 프레임" in response["data"]["answer"] and pipeline.conversations == []
 
 
 def test_pose_followup_uses_selected_zone_corrections_instead_of_global_corrections():

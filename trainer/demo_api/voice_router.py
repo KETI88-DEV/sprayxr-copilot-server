@@ -214,6 +214,7 @@ def create_voice_router(
     transport: object | None = None,
     reports: V1Store | None = None,
     sequence_engine: SequenceAnalysisEngine | None = None,
+    coating_engine: object | None = None,
 ) -> APIRouter:
     """Create the independent WAV-to-query endpoint used by VR clients."""
     router = APIRouter()
@@ -284,6 +285,7 @@ def create_voice_router(
             started=started,
             reports=reports,
             sequence_engine=sequence_engine,
+            coating_engine=coating_engine,
         )
         if response.status_code != 200:
             return response
@@ -411,6 +413,7 @@ def create_voice_router(
             transport=transport,
             reports=reports,
             sequence_engine=sequence_engine,
+            coating_engine=coating_engine,
         )
         if response.status_code != 200:
             return response
