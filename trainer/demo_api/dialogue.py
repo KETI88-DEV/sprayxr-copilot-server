@@ -120,6 +120,11 @@ def authenticated_facts(value: str | None) -> dict[str, Any]:
         frame_direction = playback_direction_from_context(value)
         if frame_direction is not None:
             facts["playback_direction"] = frame_direction
+        from trainer.demo_api.viewer_arm_pose import parse_viewer_arm_pose
+        arm = parse_viewer_arm_pose(value)
+        if arm is not None:
+            # 자유 대화가 자세 수치를 지어내지 않도록 채점 요약을 같이 준다.
+            facts["arm_pose_similarity"] = {key: arm.get(key) for key in ("status", "average_similarity_percent", "guideline", "priority_corrections")}
         facts["measurement_scope"] = "record/selected_zone은 대표 통계이며, playback_direction만 선택 재생 시점 주변 Ray Point 궤적 기반 방향 추정값입니다."
         return facts
     except (ValueError, TypeError, AttributeError):

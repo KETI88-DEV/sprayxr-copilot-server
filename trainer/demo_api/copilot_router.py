@@ -58,6 +58,7 @@ from trainer.demo_api.pose_query import (
 )
 from trainer.demo_api.query_language import TranslationUnavailableError, translate_text
 from trainer.demo_api.sequence_store import SequenceStore
+from trainer.demo_api.viewer_arm_pose import arm_pose_answer, parse_viewer_arm_pose
 from trainer.demo_api.sequence_analysis import SequenceAnalysisEngine
 from trainer.demo_api.reference_order_query import actual_order_intent, current_next_answer, is_current_next_question, is_reference_order_question, resolve_reference_target, reference_order_answer
 from trainer.demo_api.v1_store import V1Store
@@ -177,6 +178,16 @@ def _parse_motion_viewer_context(value: str | None, *, task_type: str) -> dict[s
             payload["playback_context"], analysis_context, task_type=task_type
         )
     return analysis_context
+
+
+def _pose_engine_question(query: CopilotQueryRequest) -> bool:
+    """자세 탭의 자세 질문은 대화 계획·모델 분류를 거치지 않고 채점 엔진으로 간다.
+
+    분류가 빗나가면 자유 대화가 채점 없이 수치와 판정을 지어낸다(2026-11-11 재현).
+    """
+    return (query.task_type == "pose_recomm" and not is_coating_status_question(query.prompt)
+            and not is_coating_advice_question(query.prompt)
+            and bool(re.search(r"자세|동작|교정|고쳐|고치|pose|posture", query.prompt, re.I)))
 
 
 def _asks_current_viewer_pose(prompt: str) -> bool:
@@ -658,7 +669,7 @@ async def _execute_copilot_query(
         return frame_answer()
     decision = None
     planned_pipeline = None
-    if query.task_type != "error_analysis" and pipeline_provider is not None and preset_intent(query.task_type, query.prompt) is None and not is_coating_status_question(query.prompt):
+    if query.task_type != "error_analysis" and pipeline_provider is not None and preset_intent(query.task_type, query.prompt) is None and not is_coating_status_question(query.prompt) and not _pose_engine_question(query):
         try:
             planned_pipeline = await to_thread.run_sync(pipeline_provider)
         except Exception:
@@ -724,6 +735,8 @@ async def _execute_copilot_query(
     if query.task_type in ("pose_recomm", "trajectory_recomm"):
         classifier = None
         intent = intent or preset_intent(query.task_type, query.prompt)
+        if intent is None and _pose_engine_question(query):
+            intent = fallback_intent(query.task_type, query.prompt)
         if pipeline_provider is not None and intent is None:
             try:
                 intent_pipeline = await to_thread.run_sync(pipeline_provider)
@@ -768,6 +781,16 @@ async def _execute_copilot_query(
                             if query.task_type == "pose_recomm" else viewer_analysis)
         available = analysis_context.get("scope") != "current_zone" or analysis_context.get("status") == "available"
         verified_answer = _viewer_answer(query.task_type, query.prompt, analysis_context, intent)
+        arm_pose = parse_viewer_arm_pose(query.context) if query.task_type == "pose_recomm" else None
+        if arm_pose is not None:
+            # 자세 유사도(시퀀스별 팔 관절 채점)를 먼저, 전문가 기록 대비 작업 유사도를 이어서 답한다.
+            verified_answer = arm_pose_answer(
+                arm_pose, current=analysis_context.get("scope") == "current_zone",
+                playback=viewer_analysis.get("playback_context"),  # type: ignore[arg-type]
+                zone_id=requested_zone(query.prompt, None),
+            ) + "\n" + verified_answer
+            analysis_context = {**analysis_context, "arm_pose": {key: item for key, item in arm_pose.items() if key != "sequences"}}
+            available = available or arm_pose.get("status") == "available"
         answer, detail_degraded = await _synthesize_structured_detail(
             verified_answer, analysis_context, available=available
         )
