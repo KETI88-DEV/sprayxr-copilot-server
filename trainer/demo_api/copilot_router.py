@@ -187,6 +187,8 @@ def _parse_motion_viewer_context(value: str | None, *, task_type: str) -> dict[s
     return analysis_context
 
 
+# analysis(채점·분석 결과를 옮긴 답, 모델 미사용) · documents(문서 검색 + 모델) · conversation(모델 대화)
+ANSWER_SOURCE_HEADER: Final = "X-Copilot-Answer-Source"
 _EVALUATION_QUESTION: Final = re.compile(r"잘한|못한|고쳐야|고칠|개선할|개선점|문제점|부족한 점")
 # 대화 계획 모델이 속도·Zone 질문을 도포 방향으로 분류한다(2026-11-11 Spark: "지금 속도는 적당해?"에 방향을 답함).
 _DIRECTION_WORD: Final = re.compile(r"방향|수평|수직|대각|가로|세로|패턴|direction", re.I)
@@ -547,7 +549,13 @@ def _success_response(
     sequence_context: dict[str, object] | None = None,
     coating_context: dict[str, object] | None = None,
     context_status: str = "not_available",
+    generated: bool = False,
 ) -> JSONResponse:
+    """`generated`는 모델이 문장을 만든 답에만 준다. 나머지는 채점·분석 결과를 그대로 옮긴 답이다.
+
+    답을 만든 곳은 응답 헤더로만 알린다 — 본문 키를 엄격히 검사하는 기존 클라이언트가 있어 본문은 바꾸지 않는다.
+    화면이 요청한 답변 수준만 보고 모델 이름을 붙이면 채점 결과에도 모델 이름이 붙는다(2026-11-11 뷰어 점검).
+    """
     generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     # Wall clock from handler entry to just before serialization, slot wait included.
     latency_ms = int((time.monotonic() - started) * 1000)
@@ -581,7 +589,8 @@ def _success_response(
         retrieval_used,
         len(citations),
     )
-    return JSONResponse(status_code=200, content=envelope.model_dump(mode="json"))
+    source = "documents" if retrieval_used else "conversation" if generated else "analysis"
+    return JSONResponse(status_code=200, content=envelope.model_dump(mode="json"), headers={ANSWER_SOURCE_HEADER: source})
 
 
 async def _execute_copilot_query(
@@ -714,7 +723,7 @@ async def _execute_copilot_query(
                 if ungrounded_measurements(answer, facts=facts, prompt=query.prompt):
                     # 자료에 없는 측정값은 내보내지 않는다. 한 번 다시 생성하고, 그래도 남으면 그 부분을 뺀다.
                     answer = drop_ungrounded(await to_thread.run_sync(converse), facts=facts, prompt=query.prompt)
-                return _success_response(query, request_started, answer=answer, retrieval_used=False,
+                return _success_response(query, request_started, answer=answer, retrieval_used=False, generated=True,
                                          citations=[], context_status="available" if facts else "not_available")
             except Exception:
                 logger.exception("copilot conversation unavailable request_id=%s", query.request_id)
@@ -1074,7 +1083,7 @@ async def _execute_copilot_query(
         degraded=parsed.repair_path in FAILED_REPAIR_PATHS or bool(result.get("deadline_hit", False)),
         coating_context=coating_advice_context,
         context_status="available" if session_summary or coating_advice_context or facts else "not_available",
-
+        generated=True,
     )
 
 
@@ -1160,7 +1169,8 @@ async def execute_copilot_query(
         )
     except Exception:
         logger.exception("copilot query: failed to store dialogue request_id=%s", query.request_id)
-    return JSONResponse(status_code=200, content=body)
+    return JSONResponse(status_code=200, content=body,
+                        headers={ANSWER_SOURCE_HEADER: response.headers.get(ANSWER_SOURCE_HEADER, "analysis")})
 
 
 def create_copilot_router(

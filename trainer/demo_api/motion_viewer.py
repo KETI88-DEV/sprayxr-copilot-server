@@ -1862,6 +1862,13 @@ addEventListener('resize',resize);(async()=>{try{catalog=await json('/motion-vie
 </script><script defer src="/motion-viewer/assets/motion_viewer_camera.js"></script><script defer src="/motion-viewer/assets/motion_viewer_pose.js"></script><script defer src="/motion-viewer/assets/motion_viewer_coating.js"></script><script defer src="/motion-viewer/assets/motion_viewer_chat.js"></script></body></html>"""
 
 
+def viewer_v2_document() -> str:
+    """v2 화면 틀에 기존 재생 스크립트를 그대로 끼운다. 두 화면이 같은 요소 ID와 같은 자료 경로를 쓴다."""
+    shell = (Path(__file__).with_name("static") / "motion_viewer_v2.html").read_text(encoding="utf-8")
+    start = _VIEWER_HTML.index("<script>") + len("<script>")
+    return shell.replace("/*CORE_SCRIPT*/", _VIEWER_HTML[start:_VIEWER_HTML.index("</script>", start)], 1)
+
+
 def create_motion_viewer_router(
     reference_root: Path,
     *,
@@ -1881,6 +1888,17 @@ def create_motion_viewer_router(
         return HTMLResponse(portal_document(_VIEWER_HTML,"motion"), headers={"Cache-Control":"no-cache"})
 
     static_root = Path(__file__).with_name("static")
+
+    @router.get("/motion-viewer/v2", include_in_schema=False, response_class=HTMLResponse)
+    def motion_viewer_v2() -> HTMLResponse:
+        return HTMLResponse(portal_document(viewer_v2_document(), "motion"), headers={"Cache-Control": "no-cache"})
+
+    @router.get("/motion-viewer/assets/motion_viewer_v2.{kind}", include_in_schema=False)
+    def v2_asset(kind: str) -> FileResponse:
+        if kind not in {"css", "js"}:
+            raise HTTPException(status_code=404, detail="Asset not found")
+        return FileResponse(static_root / f"motion_viewer_v2.{kind}", media_type="text/css" if kind == "css" else "text/javascript",
+                            headers={"Cache-Control": "no-cache"})
 
     @router.get("/motion-viewer/assets/motion_viewer_pose.js", include_in_schema=False)
     def pose_script() -> FileResponse:

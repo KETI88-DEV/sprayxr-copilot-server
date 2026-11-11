@@ -74,7 +74,7 @@ def _ask(pipeline: _Pipeline, prompt: str, *, context: str, task: str = "knowled
     response = TestClient(app).post("/api/v1/copilot/query", json={
         "user_id": "u", "session_id": "4_1", "scenario_id": "4", "task_type": task, "prompt": prompt, "context": context})
     assert response.status_code == 200, response.text
-    return response.json()["data"]
+    return {**response.json()["data"], "answer_source": response.headers["x-copilot-answer-source"]}
 
 
 def test_signature_survives_the_browser_turning_negative_zero_into_zero() -> None:
@@ -122,11 +122,13 @@ def test_record_speed_question_in_the_viewer_never_reaches_the_model() -> None:
     data = _ask(pipeline, "지금 속도는 적당해?", context=_playback_context())
     assert pipeline.plans == [] and data["retrieval_used"] is False
     assert "2,020 mm/s" in data["answer"] and "방향" not in data["answer"]
+    assert data["answer_source"] == "analysis"  # 화면이 채점 결과에 모델 이름을 붙이지 않게 한다
 
 
 def test_only_a_question_about_direction_gets_the_direction_answer() -> None:
     pipeline = _Pipeline()
-    assert "방향" not in _ask(pipeline, "여기는 어때 보여?", context=_playback_context())["answer"]
+    talk = _ask(pipeline, "여기는 어때 보여?", context=_playback_context())
+    assert "방향" not in talk["answer"] and talk["answer_source"] == "conversation"
     assert "방향" in _ask(pipeline, "여기 칠하는 방향이 맞는 거야?", context=_playback_context())["answer"]
     assert pipeline.plans == ["여기는 어때 보여?", "여기 칠하는 방향이 맞는 거야?"]
 
@@ -179,3 +181,12 @@ def test_zone_answer_names_the_basis_it_was_judged_against_and_compares_what_it_
     assert "세션 목표 두께 160µm보다 부족합니다" in answer and "전문가 기준" not in answer
     analysis["coating_report"] = {"comparison_basis": "expert_reference", "target_thickness_um": None}
     assert "전문가 기준보다 부족합니다" in pose_query.answer_zone_question(("RPT-1", analysis), context=None).answer
+
+
+def test_v2_page_keeps_every_element_the_playback_scripts_use() -> None:
+    document = motion_viewer.viewer_v2_document()
+    ids = set(__import__("re").findall(r'id="([A-Za-z0-9_]+)"', document))
+    scripts = motion_viewer._VIEWER_HTML[motion_viewer._VIEWER_HTML.index("<script>"):]
+    needed = set(__import__("re").findall(r"\$\('([A-Za-z0-9_]+)'\)", scripts))
+    assert needed and needed <= ids and "function loadMotion" in document and "/*CORE_SCRIPT*/" not in document
+    assert {"poseUiTemplate", "zoneTimeline", "realtimeHudSpeed", "coatingCanvas", "v2Ask"} <= ids

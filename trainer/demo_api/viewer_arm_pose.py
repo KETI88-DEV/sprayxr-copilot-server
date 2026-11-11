@@ -126,6 +126,8 @@ def _evaluate(
                 "correction": next((str(c["label"]) for c in corrections if isinstance(c, Mapping) and c.get("label")), None),
                 # 팔 방향 질문은 분사의 교정 전부에서 찾는다(첫 교정만 보면 다른 팔의 교정을 놓친다).
                 "corrections": [str(c["label"]) for c in corrections if isinstance(c, Mapping) and c.get("label")],
+                # 화면이 교정이 난 관절을 스켈레톤 위에 표시한다.
+                "joints": [str(c["joint"]) for c in corrections if isinstance(c, Mapping) and c.get("joint")],
                 "confidence": item.get("confidence"),
             })
         guidance = {str(c["zone_id"]): c["correction_guidance"] for c in reversed(analysis.priority_corrections)}
