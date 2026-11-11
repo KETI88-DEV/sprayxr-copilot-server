@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import math
+import secrets
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -147,7 +148,8 @@ def score_pose(
     body = store.load_body(session_key=session_id, sequence_id=sequence_id)
     if body is None:
         return _unavailable("sequence_not_found", sequence_id=sequence_id)
-    return score_body(body, sequence_id=sequence_id, mcp_base_url=mcp_base_url, transport=transport)
+    # 질문에 답하려고 다시 채점할 때는 엔진의 세션 기록에 쌓지 않는다.
+    return score_body(body, sequence_id=sequence_id, mcp_base_url=mcp_base_url, transport=transport, isolated=True)
 
 
 def score_body(
@@ -157,11 +159,12 @@ def score_body(
     mcp_base_url: str,
     transport: httpx.BaseTransport | None = None,
     timeout_sec: float = _MCP_TIMEOUT_SEC,
+    isolated: bool = False,
 ) -> PoseQueryResult:
     """원문 자세 엔진 결과를 Query API 계약으로 투영한다."""
     raw = score_body_raw(
         body, sequence_id=sequence_id, mcp_base_url=mcp_base_url, transport=transport,
-        timeout_sec=timeout_sec,
+        timeout_sec=timeout_sec, isolated=isolated,
     )
     if raw.analysis_status != "available":
         return _unavailable(raw.reason_code or "analysis_unavailable", sequence_id=sequence_id)
@@ -193,11 +196,18 @@ def score_body_raw(
     mcp_base_url: str,
     transport: httpx.BaseTransport | None = None,
     timeout_sec: float = _MCP_TIMEOUT_SEC,
+    isolated: bool = False,
 ) -> PoseEngineResult:
-    """시퀀스 하나를 MCP에 한 번 보내고 검증된 제품 엔진 원문을 돌려준다."""
+    """시퀀스 하나를 MCP에 한 번 보내고 검증된 제품 엔진 원문을 돌려준다.
+
+    `isolated`면 일회용 엔진 세션으로 보낸다 — 엔진은 받은 시퀀스를 세션 기록에 쌓으므로,
+    같은 분사를 질문마다 다시 보내면 실제 세션의 누적 기록이 부풀었다(2026-11-11 Spark).
+    """
     # `analyze-sequence`가 붙인 분석 파라미터(`mode_id`)는 시퀀스 내용이 아니다. MCP 자세 엔진은 최상위 모르는 필드를
     # 거절하므로(422) 빼고 보낸다 — 빼지 않으면 벤더 경로의 모든 질의가 `engine_unavailable`이 된다(2026-10-08 샘플).
     body = {key: value for key, value in body.items() if key not in NON_CONTENT_FIELDS}
+    if isolated:
+        body["session_id"] = f"query:{secrets.token_hex(8)}"
 
     try:
         with httpx.Client(timeout=timeout_sec, transport=transport) as client:
@@ -322,7 +332,7 @@ def answer_zone_question(found: tuple[str, Mapping[str, Any]] | None, *, context
         if isinstance(zone, Mapping) and isinstance(zone.get("average_similarity_score"), (int, float))
     ]
     if not zones:
-        return zone_unavailable("zone_analysis_unavailable", zone_id=target)
+        return zone_unavailable("zone_not_evaluated" if target is not None else "zone_analysis_unavailable", zone_id=target)
     if target is not None:
         zone = next((item for item in zones if str(item.get("zone_id")) == target), None)
         if zone is None:
@@ -389,6 +399,51 @@ def answer_zone_question(found: tuple[str, Mapping[str, Any]] | None, *, context
     )
 
 
+_TRACKING_SENTENCE: Final = re.compile(r"\s*착탄을 몸이 따라간 기울기 [+-]?\d+(?:\.\d+)?\(시퀀스 \d+개\)\.?")
+_UNSCORED_PART: Final = re.compile(r"팔꿈치|어깨|무릎|허리|(?:손목|손|팔)\s*각도|elbow|shoulder|knee", re.I)
+_WHOLE_SESSION: Final = re.compile(r"전체|세션|가장|어느|어디|최악")
+_ARM_WORDS: Final = {"right": ("Right", "오른팔"), "left": ("Left", "왼팔")}
+
+
+def asked_arm(prompt: str, intent: str | None = None) -> str | None:
+    lowered = prompt.lower()
+    if intent == "pose_right" or "오른" in lowered or "right" in lowered:
+        return "right"
+    if intent == "pose_left" or "왼" in lowered or "left" in lowered:
+        return "left"
+    return None
+
+
+def asks_whole_session(prompt: str, intent: str | None = None) -> bool:
+    """구역이나 분사 하나가 아니라 세션 전체를 묻는 질문인가."""
+    return intent == "pose_worst_zone" or bool(_WHOLE_SESSION.search(prompt))
+
+
+def unsupported_pose_part(prompt: str) -> str | None:
+    """채점 엔진이 재지 않는 부위·각도를 물으면 지어내지 않고 잴 수 없다고 답한다."""
+    match = _UNSCORED_PART.search(prompt)
+    if match is None:
+        return None
+    return (f"질문하신 내용({match.group(0)})은 채점 결과로는 확인할 수 없습니다. "
+            "채점 엔진은 양팔의 위팔·아래팔·손 위치만 숙련자와 비교합니다.")
+
+
+def answer_sequence_question(pose: PoseQueryResult, *, prompt: str, intent: str | None = None) -> str:
+    """분사 하나의 엔진 결과에서 질문이 묻는 것만 답한다."""
+    side = asked_arm(prompt, intent)
+    if side is None:
+        return _TRACKING_SENTENCE.sub("", pose.summary or "").strip() or "숙련자 자세와 비교했습니다."
+    prefix, arm = _ARM_WORDS[side]
+    mine = [str(item["label"]) for item in pose.corrections if str(item.get("joint", "")).startswith(prefix) and item.get("label")]
+    if mine:
+        return " ".join(mine)
+    others = [str(item["joint"]) for item in pose.corrections if item.get("joint")]
+    if others:
+        label = pose_similarity.JOINT_LABELS.get(others[0], others[0])
+        return f"이 분사에서 {arm}은 교정 대상이 아닙니다. 채점 엔진이 짚은 관절은 {label}입니다."
+    return f"이 분사에서 {arm}은 숙련자 통상 범위 안입니다."
+
+
 def _pose_overview(found: tuple[str, Mapping[str, Any]] | None) -> ZoneAnswer:
     if found is None:
         return zone_unavailable("session_report_unavailable")
@@ -417,17 +472,20 @@ def _pose_overview(found: tuple[str, Mapping[str, Any]] | None) -> ZoneAnswer:
 
 
 def _body_part_answer(
-    found: tuple[str, Mapping[str, Any]] | None, *, side: str,
+    found: tuple[str, Mapping[str, Any]] | None, *, side: str, zone_id: str | None = None,
 ) -> ZoneAnswer:
+    """세션 전체, 또는 `zone_id` 구역 안에서 그쪽 팔의 반복 문제를 답한다."""
     if found is None:
-        return zone_unavailable("session_report_unavailable")
+        return zone_unavailable("session_report_unavailable", zone_id=zone_id)
     report_id, analysis = found
     pose = analysis.get("pose_report") if isinstance(analysis.get("pose_report"), Mapping) else {}
     prefix = "Right" if side == "right" else "Left"
+    zones = [zone for zone in pose.get("zone_summary") or []
+             if isinstance(zone, Mapping) and (zone_id is None or str(zone.get("zone_id")) == zone_id)]
+    if zone_id is not None and not zones:
+        return zone_unavailable("zone_not_evaluated", zone_id=zone_id)
     candidates: list[tuple[float, float, Mapping[str, Any], Mapping[str, Any]]] = []
-    for zone in pose.get("zone_summary") or []:
-        if not isinstance(zone, Mapping):
-            continue
+    for zone in zones:
         for joint in zone.get("problem_joints") or []:
             if not isinstance(joint, Mapping) or not str(joint.get("joint", "")).startswith(prefix):
                 continue
@@ -439,10 +497,11 @@ def _body_part_answer(
             ))
     side_label = "오른쪽" if side == "right" else "왼쪽"
     if not candidates:
-        answer = f"{side_label} 팔·손은 전문가 기준을 벗어난 반복 문제가 발견되지 않았습니다."
+        where = f"{zone_id}번 구역에서 " if zone_id is not None else ""
+        answer = f"{where}{side_label} 팔·손은 전문가 기준을 벗어난 반복 문제가 발견되지 않았습니다."
         return ZoneAnswer("available", None, answer, {
             "analysis_status": "available", "reason_code": None, "scope": "body_part",
-            "report_id": report_id, "zone_id": None, "sequence_id": None,
+            "report_id": report_id, "zone_id": zone_id, "sequence_id": None,
             "similarity_score": pose.get("average_similarity_score"), "corrections": [],
         })
     _, distance, zone, joint = max(candidates, key=lambda item: (item[0], item[1]))
@@ -471,13 +530,13 @@ def answer_pose_question(
 ) -> ZoneAnswer:
     """완료 세션의 구조화된 자세 결과를 질문 의도에 맞게 설명한다."""
     target = requested_zone(prompt, context)
+    side = asked_arm(prompt, intent)
     if target is not None:
-        return answer_zone_question(found, context=target)
+        # 구역은 어디를 볼지만 정한다. 무엇을 답할지는 질문이 정한다.
+        return _body_part_answer(found, side=side, zone_id=target) if side else answer_zone_question(found, context=target)
     lowered = prompt.lower()
-    if intent == "pose_right" or "오른" in lowered or "right" in lowered:
-        return _body_part_answer(found, side="right")
-    if intent == "pose_left" or "왼쪽" in lowered or "left" in lowered:
-        return _body_part_answer(found, side="left")
+    if side:
+        return _body_part_answer(found, side=side)
     if intent == "pose_worst_zone" or any(token in lowered for token in ("문제", "안 좋", "낮", "어디", "어느", "최악")):
         return answer_zone_question(found, context=None)
     if intent == "pose_overall" or any(token in lowered for token in ("전체", "평균", "유사도", "점수", "퍼센트", "자세")):

@@ -46,13 +46,16 @@ from trainer.demo_api.coating_query import answer_coating_question, parse_viewer
 from trainer.demo_api.copilot_intent import classify_question_intent, fallback_intent, preset_intent, is_coating_status_question, is_coating_advice_question
 from trainer.demo_api.dialogue import authenticated_facts, conversation_key, parse_plan, selected_direction_answer, viewer_metadata_context
 from trainer.demo_api.playback_direction import playback_direction_from_context, playback_direction_answer, simple_direction_question, requested_direction_scope, aggregate_direction, LABELS as DIRECTION_LABELS
-from trainer.demo_api.copilot_live_analysis import live_analysis
+from trainer.demo_api.copilot_live_analysis import current_zone, live_analysis
 from trainer.demo_api.copilot_session_context import build_query_instruction, summarize_session, viewer_definition_context
 from trainer.demo_api.pose_query import (
     answer_order_question,
     answer_pose_question,
+    answer_sequence_question,
     asks_about_zones,
+    asks_whole_session,
     score_pose,
+    unsupported_pose_part,
     requested_zone,
     zone_unavailable,
 )
@@ -187,7 +190,7 @@ def _pose_engine_question(query: CopilotQueryRequest) -> bool:
     """
     return (query.task_type == "pose_recomm" and not is_coating_status_question(query.prompt)
             and not is_coating_advice_question(query.prompt)
-            and bool(re.search(r"자세(?!히|하게|한)|동작|교정|고쳐|고치|pose|posture", query.prompt, re.I)))
+            and bool(re.search(r"자세(?!히|하게|한)|동작|교정|고쳐|고치|pose|posture|팔꿈치|어깨|무릎|허리|elbow|shoulder|knee", query.prompt, re.I)))
 
 
 def _asks_current_viewer_pose(prompt: str) -> bool:
@@ -779,10 +782,18 @@ async def _execute_copilot_query(
         scenario = await to_thread.run_sync(_saved_scenario)
         if scenario:
             query = query.model_copy(update={"scenario_id": scenario})
+    if query.task_type == "pose_recomm" and not knowledge_routed and viewer_analysis is None:
+        declined = unsupported_pose_part(query.prompt)
+        if declined is not None:
+            return _success_response(query, request_started, answer=declined, retrieval_used=False, citations=[],
+                                     context_status="not_available")
+        if context and not context.isdigit() and asks_whole_session(query.prompt, intent):
+            context = ""  # 세션 전체를 묻는 질문은 붙인 시퀀스 대신 세션 결과로 답한다
     found = (
         await to_thread.run_sync(lambda: reports.latest_complete_analysis(session_id))
         if reports is not None and session_id and query.task_type in ("pose_recomm", "trajectory_recomm")
-        and (not context or context.isdigit())
+        # 순서 답은 세션 단위라 붙인 시퀀스와 무관하다. 자세는 시퀀스를 붙이면 그 분사를 채점한다.
+        and (query.task_type == "trajectory_recomm" or not context or context.isdigit())
         else None
     )
     if found is not None and session_id:
@@ -793,13 +804,19 @@ async def _execute_copilot_query(
             latest = await to_thread.run_sync(lambda: sequences.latest_sequence_id(session_id))
             if latest is not None and latest not in captured_ids:
                 found = None
-    if found is None and session_id and not context and query.task_type in ("pose_recomm", "trajectory_recomm") and not knowledge_routed and (reports is not None or query.task_type == "trajectory_recomm" or asks_about_zones(query.prompt, query.context)):
+    working_zone = live_zone = None
+    if found is None and session_id and not context and query.task_type == "pose_recomm" and not knowledge_routed:
+        # 훈련 중에는 지금 작업하는 구역으로 답한다. 세션 전체를 묻는 질문만 올라온 분사 전체를 본다.
+        working_zone = await to_thread.run_sync(lambda: current_zone(sequences, session_id))
+        live_zone = requested_zone(query.prompt, query.context) or (
+            None if asks_whole_session(query.prompt, intent) else working_zone)
+    if found is None and session_id and (not context or query.task_type == "trajectory_recomm") and query.task_type in ("pose_recomm", "trajectory_recomm") and not knowledge_routed and (reports is not None or query.task_type == "trajectory_recomm" or asks_about_zones(query.prompt, query.context)):
         # Keep explicit-sequence pose queries on their original scoring path.
         found = await to_thread.run_sync(lambda: live_analysis(
             sequences, session_id=session_id, scenario_id=query.scenario_id,
             task_type=query.task_type, sequence_engine=sequence_engine,
             mcp_base_url=mcp_base_url, transport=transport,
-            zone_id=requested_zone(query.prompt, query.context) if query.task_type == "pose_recomm" else None,
+            zone_id=live_zone,
         ))
     elif found is None and session_id and context.isdigit() and query.task_type == "pose_recomm" and not knowledge_routed:
         found = await to_thread.run_sync(lambda: live_analysis(
@@ -837,7 +854,7 @@ async def _execute_copilot_query(
         found is not None or asks_about_zones(query.prompt, query.context)
     ):
         zone = (
-            answer_pose_question(found, prompt=query.prompt, context=query.context, intent=intent)
+            answer_pose_question(found, prompt=query.prompt, context=live_zone or query.context, intent=intent)
             if session_id
             else zone_unavailable("session_id_missing")
         )
@@ -855,12 +872,11 @@ async def _execute_copilot_query(
         base_answer = zone.answer
         if isinstance(live_context, dict):
             zone.context.update(live_context)
-            base_answer = "최근 저장된 분사 중 최대 3회 표본을 분석한 중간 결과입니다. " + base_answer
+            base_answer = ("지금 작업 중인 구역 기준입니다. " if live_zone and live_zone == working_zone
+                           else "" if live_zone else "지금까지 올라온 분사 기준입니다. ") + base_answer
         answer, detail_degraded = await _synthesize_structured_detail(
             base_answer, zone.context, available=zone.analysis_status == "available"
         )
-        if isinstance(live_context, dict) and query.response_mode == "detailed":
-            answer = "최근 저장된 분사 중 최대 3회 표본을 분석한 중간 결과입니다.\n" + answer
         return _success_response(
             query, request_started, answer=answer, retrieval_used=False, citations=[],
             degraded=detail_degraded or limited_confidence or bool(isinstance(live_context, dict) and live_context.get("reason_codes")),
@@ -880,7 +896,7 @@ async def _execute_copilot_query(
             )
         )
         if pose.analysis_status == "available":
-            answer = pose.summary or "숙련자 자세와 비교했습니다."
+            answer = answer_sequence_question(pose, prompt=query.prompt, intent=intent)
         else:
             answer = _POSE_REASON_ANSWERS.get(pose.reason_code or "", _POSE_FALLBACK_ANSWER)
         logger.info(

@@ -12,9 +12,19 @@ from trainer.demo_api.pose_query import PoseQueryResult, score_body
 from trainer.demo_api.sequence_analysis import SequenceAnalysisEngine
 from trainer.demo_api.sequence_store import SequenceStore
 
-# Never rescore the whole session on a live question. Completion remains the
-# authoritative full-session evaluation; a live posture summary is a labeled sample.
-LIVE_POSE_SAMPLE = 3
+# 훈련 중 질문은 지금 작업하는 구역(또는 지정한 구역)의 분사를 모두 채점한다(2026-11-11 지시).
+# 완료 분석이 세션 전체의 정본이고, 여기 결과는 범위와 채점 수를 함께 밝힌다.
+_INVALID_ZONES = {"", "-1", "0", "none", "null", "nan"}
+
+
+def current_zone(store: SequenceStore, session_id: str) -> str | None:
+    """가장 최근에 올라온 분사의 구역 — 지금 작업 중인 구역."""
+    for body in reversed(store.session_bodies(session_id)):
+        zone = str(body.get("zone_id", "")).strip()
+        if zone.lower() not in _INVALID_ZONES:
+            return zone
+    return None
+
 _CACHE_LIMIT = 128
 _CACHE_TTL = 300.0
 _GUARD = threading.Lock()
@@ -32,7 +42,7 @@ def _score_cached(store: SequenceStore, body: dict[str, Any], *, session_id: str
             cache.move_to_end(key)
             return cached[1]
     result = score_body(body, sequence_id=sequence_id, mcp_base_url=mcp_base_url,
-                        transport=transport, timeout_sec=timeout_sec)
+                        transport=transport, timeout_sec=timeout_sec, isolated=True)
     # Retry engine outages next time; immutable stored sequences make successful
     # measurements safe to reuse within this short reference refresh window.
     if result.analysis_status == "available":
@@ -61,9 +71,8 @@ def live_analysis(store: SequenceStore, *, session_id: str, scenario_id: str | N
 
     from trainer.demo_api.session_analysis import zone_summary
 
-    candidates = [body for body in bodies if str(body.get("zone_id", "")).strip().lower()
-                  not in {"", "-1", "0", "none", "null", "nan"}
-                  and (zone_id is None or str(body.get("zone_id")) == zone_id)][-LIVE_POSE_SAMPLE:]
+    candidates = [body for body in bodies if str(body.get("zone_id", "")).strip().lower() not in _INVALID_ZONES
+                  and (zone_id is None or str(body.get("zone_id")) == zone_id)]
     scored: list[tuple[str, PoseQueryResult]] = []
     reasons: dict[str, str] = {}
     deadline = time.monotonic() + 6.0
@@ -83,9 +92,8 @@ def live_analysis(store: SequenceStore, *, session_id: str, scenario_id: str | N
         "evaluated_sequence_count": len(scored), "zone_summary": zone_summary(scored),
     }
     analysis["live_pose_context"] = {
-        "source": "live_sequences", "scope": "recent_sequences",
+        "source": "live_sequences", "scope": "zone" if zone_id is not None else "session", "zone_id": zone_id,
         "total_sequence_count": len(bodies), "sampled_sequence_count": len(candidates),
         "evaluated_sequence_count": len(scored), "reason_codes": reasons,
-        "sample_limit": LIVE_POSE_SAMPLE,
     }
     return None, analysis

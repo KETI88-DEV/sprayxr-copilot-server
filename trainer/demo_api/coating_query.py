@@ -80,7 +80,7 @@ def answer_coating_question(context: dict[str, Any], prompt: str, *, detailed: b
     if context.get("comparison_basis") == "saved_coating_report":
         groups = [(label, [row for row in rows if row.get("status") == status])
                   for label, status in (("도막 부족", "under_app"), ("도막 과다", "over_app"))]
-        text = ["[세션 도막 분석]", "분석 가능한 Zone의 저장된 최종 도막 결과를 기준으로 확인했습니다."]
+        text = ["분석 가능한 Zone의 저장된 최종 도막 결과를 기준으로 확인했습니다."]
         for label, group in groups:
             text.append(f"{label}: " + (", ".join(f"Map {r.get('map_num', '?')} · Zone {r.get('zone_id')}" for r in group) or "판정된 영역 없음"))
         return "\n".join(text)
@@ -92,7 +92,7 @@ def answer_coating_question(context: dict[str, Any], prompt: str, *, detailed: b
             valid.append({**row, "delta": actual - reference, "delta_percent": (actual / reference - 1) * 100})
     if not valid:
         return "Zone별 도막 두께 비교값이 없어 과다·부족 영역을 판단할 수 없습니다."
-    text = ["[최종 도막 두께 비교]" if detailed else "최종 높이맵의 Zone별 대표 두께를 전문가 기준과 비교했습니다."]
+    text = ["최종 높이맵의 Zone별 대표 두께를 전문가 기준과 비교했습니다."]
     for label, group in (("전문가 기준보다 두꺼운 영역", sorted((r for r in valid if r["delta"] > 1e-6), key=lambda r: -r["delta_percent"])),
                          ("전문가 기준보다 얇은 영역", sorted((r for r in valid if r["delta"] < -1e-6), key=lambda r: r["delta_percent"]))):
         text.append(f"{label}: {len(group)}개" + (" (차이가 큰 3곳)" if not detailed and len(group) > 3 else ""))

@@ -48,7 +48,7 @@ def test_unusable_pose_never_becomes_a_measurement(score: object, quality: str) 
     assert pose.similarity_score is None
 
 
-def test_live_pose_is_bounded_cached_and_labels_its_sample(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_live_pose_scores_every_spray_once_and_labels_its_scope(monkeypatch: pytest.MonkeyPatch) -> None:
     store = _store(20)
     calls: list[str] = []
 
@@ -61,11 +61,11 @@ def test_live_pose_is_bounded_cached_and_labels_its_sample(monkeypatch: pytest.M
     arguments = dict(session_id="S-LIVE", scenario_id=None, task_type="pose_recomm", sequence_engine=None, mcp_base_url="http://mcp")
     first = copilot_live_analysis.live_analysis(store, **arguments)
     second = copilot_live_analysis.live_analysis(store, **arguments)
-    assert len(calls) == 3
+    assert len(calls) == 20  # 범위 안의 분사를 모두 채점하고, 두 번째 질문은 캐시를 쓴다
     assert first == second
     assert first[1]["pose_report"]["average_similarity_score"] == pytest.approx(0.8)
     assert first[1]["live_pose_context"]["total_sequence_count"] == 20
-    assert first[1]["live_pose_context"]["scope"] == "recent_sequences"
+    assert first[1]["live_pose_context"]["scope"] == "session"
 
 
 def test_active_order_query_uses_saved_sequences_and_infers_scenario() -> None:

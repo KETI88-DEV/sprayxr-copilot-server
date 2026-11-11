@@ -237,8 +237,8 @@ def test_after_complete_pose_recomm_names_the_most_problematic_zone(engine: Coat
     before = _ask(client, "가장 문제 있는 구역이 어디야?")
     assert before["context_status"] == "available"
     assert before["pose_context"]["source"] == "live_sequences"
-    assert before["pose_context"]["scope"] == "recent_sequences"
-    assert "표본" in before["answer"]
+    assert before["pose_context"]["scope"] == "session"  # 세션 전체를 묻는 질문은 올라온 분사 전체를 본다
+    assert before["answer"].startswith("지금까지 올라온 분사 기준입니다.")
 
     response = client.post(
         "/api/v1/sessions/complete",
