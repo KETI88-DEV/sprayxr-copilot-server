@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import csv
 import gzip
 import hashlib
@@ -9,6 +11,7 @@ import json
 import math
 import re
 import statistics
+import struct
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,6 +23,13 @@ from trainer.expert_zone_mapping import canonical_expert_zone_id
 from trainer.zone_reference import ZoneReferenceCatalog
 
 VERSION = 'record-features-1.1'
+
+# Sparse PNG cells exceed csv's 128 KiB default. Keep both parsing and binary
+# decoding bounded, independently of the (usually much smaller) row width.
+_CSV_FIELD_LIMIT = 64 * 1024 * 1024
+_HEATMAP_PNG_LIMIT = 16 * 1024 * 1024
+_HEATMAP_BASE64_LIMIT = ((_HEATMAP_PNG_LIMIT + 2) // 3) * 4
+_HEATMAP_FORMAT = 'v2;thickness=RG16;alpha=B8;scale_um=20000'
 
 
 def _sha(path: Path) -> str:
@@ -71,76 +81,198 @@ def worker_sources(root: Path) -> list[dict]:
     return sources
 
 
+def _reject_json_constant(value: str) -> None:
+    raise ValueError(f'JSON의 유한하지 않은 숫자: {value}')
+
+
+def _sequence_heatmap_maps(cell: str) -> list[dict] | None:
+    """Validate sparse payloads without resizing PNGs or loading any sidecar."""
+    if len(cell) > _CSV_FIELD_LIMIT:
+        return None
+    try:
+        maps = json.loads(cell, parse_constant=_reject_json_constant)
+        if not isinstance(maps, list) or len(maps) > 256:
+            return None
+        for image in maps:
+            if not isinstance(image, dict) or image.get('encoding') != 'png;base64' or image.get('format') != _HEATMAP_FORMAT:
+                return None
+            if image.get('map_num') is None:
+                return None
+            # Crop coordinates refer to the full source texture; img_* refer
+            # to the smaller encoded PNG and must never replace width/height.
+            sizes = [_number(image.get(name)) for name in ('x0', 'y0', 'width', 'height', 'img_width', 'img_height')]
+            if any(value is None or not value.is_integer() for value in sizes):
+                return None
+            if any(value < 0 for value in sizes[:2]) or any(value <= 0 for value in sizes[2:]):
+                return None
+            encoded = image.get('data')
+            if not isinstance(encoded, str) or len(encoded) > _HEATMAP_BASE64_LIMIT:
+                return None
+            png = base64.b64decode(encoded, validate=True)
+            if len(png) > _HEATMAP_PNG_LIMIT or len(png) < 33 or png[:16] != b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR':
+                return None
+            if struct.unpack('>II', png[16:24]) != (int(sizes[4]), int(sizes[5])):
+                return None
+        return maps
+    except (ValueError, TypeError, OverflowError, binascii.Error, RecursionError):
+        return None
+
+
+def _map_identity(value: str) -> tuple[int | None, str | None]:
+    label = value.strip()
+    number = _number(label)
+    if number is not None:
+        return (int(number), None) if number >= 1 and number.is_integer() else (None, None)
+    return None, label if label.casefold() not in {'', 'none', 'nan', 'null'} else None
+
+
 def _features(path: Path, process: str, scenario: str, *, legacy_expert=False, content_type='learning') -> dict:
     opener = gzip.open if path.name.endswith('.gz') else open
-    zones: dict[tuple[int, str], dict] = {}
+    zones: dict[tuple[int | None, str | None, str], dict] = {}
     order: list[dict] = []
     sequences, frames, spraying, unmapped = 0, 0, 0, 0
-    active = False
+    active = zone_available = False
     first_time = last_time = None
     metric_names = {'distance_mm': 'distance (input)', 'speed_mms': 'speed (input)',
                     'distance_real_mm': 'distance (real)', 'speed_real_mms': 'speed (real)'}
+    global_values = {name: [] for name in metric_names}
+    global_ray_min, global_ray_max, global_ray_count = [math.inf] * 3, [-math.inf] * 3, 0
+    heatmaps, invalid_heatmaps = [], 0
+    zone_cache: dict[str, str | None] = {}
+    map_cache: dict[str, tuple[int | None, str | None]] = {}
+    map_order: list[dict] = []
+    seen_maps: set[tuple[int | None, str | None]] = set()
+    remap_type = content_type if legacy_expert else 'source'
+    mode_id = int(scenario) if scenario.isdigit() else 0
+    if csv.field_size_limit() < _CSV_FIELD_LIMIT:
+        csv.field_size_limit(_CSV_FIELD_LIMIT)
     with opener(path, 'rt', encoding='utf-8-sig', newline='') as stream:
-        reader = csv.DictReader(stream)
-        columns = [str(c).strip() for c in reader.fieldnames or []]
-        lower = {c.casefold() for c in columns}
-        if not {'분사', 'zone id'}.issubset(lower):
-            raise ValueError('필수 열(분사, Zone ID)이 없습니다.')
-        for original in reader:
-            row = {str(k).strip().casefold(): v for k, v in original.items() if k is not None}
+        reader = csv.reader(stream)
+        columns = [column.strip() for column in next(reader, [])]
+        indices = {column.casefold(): index for index, column in enumerate(columns)}
+        if '분사' not in indices:
+            raise ValueError('필수 열(분사)이 없습니다.')
+        spray_index = indices['분사']
+        time_index = indices.get('시간(초)', indices.get('time'))
+        zone_index = indices.get('zone id')
+        map_index = indices.get('ray texture map number')
+        heatmap_index = indices.get('cur_sequence_heatmap')
+        metric_indices = [(name, indices[column]) for name, column in metric_names.items() if column in indices]
+        ray_indices = [indices.get(f'ray point {axis}') for axis in 'xyz']
+        # csv.reader performs the expensive wide-row split in C. Only selected
+        # columns are touched here; no 173-key dictionary is built per frame.
+        for row in reader:
+            if not row:  # DictReader previously skipped empty physical lines.
+                continue
+            frame_index = frames
             frames += 1
-            t = _number(row.get('시간(초)', row.get('time')))
+            width = len(row)
+            t = _number(row[time_index]) if time_index is not None and time_index < width else None
             if t is not None:
                 if first_time is None:
                     first_time = t
                 last_time = t
-            on = str(row.get('분사', '')).strip().casefold() in {'on', '1', 'true'}
+            on = spray_index < width and row[spray_index].strip().casefold() in {'on', '1', 'true'}
             if on and not active:
                 sequences += 1
             active = on
+            if heatmap_index is not None and heatmap_index < width:
+                cell = row[heatmap_index].strip()
+                if cell and cell != '[]':
+                    maps = _sequence_heatmap_maps(cell)
+                    if maps is None:
+                        invalid_heatmaps += 1
+                    elif maps:
+                        heatmaps.append({'frame_index': frame_index, 'time_seconds': t,
+                                         'spray_run_index': sequences or None, 'maps': maps})
+            zone = None
+            if zone_index is not None and zone_index < width:
+                raw_zone = row[zone_index].strip()
+                if raw_zone not in zone_cache:
+                    number = _number(raw_zone)
+                    value = str(int(number)) if number is not None and number > 0 and number.is_integer() else None
+                    if value and process in {'spray', 'blasting'}:
+                        value = canonical_expert_zone_id(process, remap_type, mode_id, value)
+                    zone_cache[raw_zone] = value
+                zone = zone_cache[raw_zone]
+                if zone:
+                    zone_available = True
             if not on:
                 continue
             spraying += 1
-            zone = str(row.get('zone id', '')).strip()
-            if process in {'spray', 'blasting'}:
-                zone = canonical_expert_zone_id(process, content_type if legacy_expert else 'source',
-                                                int(scenario) if scenario.isdigit() else 0, zone) or ''
-            if zone.casefold() in {'', '-1', '0', 'none', 'nan', 'null'}:
+            raw_map = row[map_index] if map_index is not None and map_index < width else ''
+            if raw_map not in map_cache:
+                map_cache[raw_map] = _map_identity(raw_map)
+            map_num, map_label = map_cache[raw_map]
+            map_key = (map_num, map_label)
+            if (map_num is not None or map_label is not None) and map_key not in seen_maps:
+                seen_maps.add(map_key)
+                identity = {'map_num': map_num}
+                if map_label is not None:
+                    identity['map_label'] = map_label
+                map_order.append(identity)
+            metrics = []
+            for name, index in metric_indices:
+                value = _number(row[index]) if index < width else None
+                if value is not None and value >= 0:
+                    global_values[name].append(value)
+                    metrics.append((name, value))
+            ray = [_number(row[index]) if index is not None and index < width else None for index in ray_indices]
+            has_ray = all(value is not None for value in ray)
+            if has_ray:
+                global_ray_count += 1
+                for axis, value in enumerate(ray):
+                    global_ray_min[axis] = min(global_ray_min[axis], value)
+                    global_ray_max[axis] = max(global_ray_max[axis], value)
+            if not zone:
                 unmapped += 1
                 continue
-            map_value = _number(row.get('ray texture map number'))
-            map_num = int(map_value) if map_value is not None and map_value >= 1 else 1
-            key = (map_num, zone)
+            key = (map_num, map_label, zone)
             if key not in zones:
-                zones[key] = {'map_num': map_num, 'zone_id': zone, 'frame_count': 0,
-                              'metrics': {k: [] for k in metric_names}, 'ray_count': 0,
+                identity = {'map_num': map_num, 'zone_id': zone}
+                if map_label is not None:
+                    identity['map_label'] = map_label
+                zones[key] = {**identity, 'frame_count': 0,
+                              'metrics': {name: [] for name in metric_names}, 'ray_count': 0,
                               'ray_min': [math.inf] * 3, 'ray_max': [-math.inf] * 3}
-                order.append({'map_num': map_num, 'zone_id': zone})
+                order.append(identity)
             z = zones[key]
             z['frame_count'] += 1
-            for name, column in metric_names.items():
-                value = _number(row.get(column))
-                if value is not None and value >= 0:
-                    z['metrics'][name].append(value)
-            ray = [_number(row.get(f'ray point {a}')) for a in 'xyz']
-            if all(v is not None for v in ray):
+            for name, value in metrics:
+                z['metrics'][name].append(value)
+            if has_ray:
                 z['ray_count'] += 1
-                z['ray_min'] = [min(a, b) for a, b in zip(z['ray_min'], ray)]
-                z['ray_max'] = [max(a, b) for a, b in zip(z['ray_max'], ray)]
+                for axis, value in enumerate(ray):
+                    z['ray_min'][axis] = min(z['ray_min'][axis], value)
+                    z['ray_max'][axis] = max(z['ray_max'][axis], value)
     if not frames:
         raise ValueError('CSV에 프레임이 없습니다.')
     output_zones = []
     for z in zones.values():
-        output_zones.append({'map_num': z['map_num'], 'zone_id': z['zone_id'], 'frame_count': z['frame_count'],
-                             **{k: _distribution(v) for k, v in z['metrics'].items()},
-                             'ray_point_bounds_m': {'min': z['ray_min'], 'max': z['ray_max']} if z['ray_count'] else None})
+        output = {'map_num': z['map_num'], 'zone_id': z['zone_id'], 'frame_count': z['frame_count'],
+                  **{name: _distribution(values) for name, values in z['metrics'].items()},
+                  'ray_point_bounds_m': {'min': z['ray_min'], 'max': z['ray_max']} if z['ray_count'] else None}
+        if 'map_label' in z:
+            output['map_label'] = z['map_label']
+        output_zones.append(output)
     return {'frame_count': frames, 'spraying_frame_count': spraying, 'unmapped_spraying_frames': unmapped,
+            'mapped_spraying_frame_count': spraying - unmapped,
+            'zone_id_column_present': zone_index is not None, 'zone_id_available': zone_available,
+            'zone_id_status': 'present' if zone_available else 'absent',
             'sequence_count': sequences, 'duration_seconds': round(max(0, last_time - first_time), 6) if first_time is not None else None,
             'source_columns': columns, 'zone_order': order, 'zones': output_zones,
+            'map_order': map_order, 'map_labels': [identity['map_label'] for identity in map_order if 'map_label' in identity],
+            'global_metrics': {**{name: _distribution(values) for name, values in global_values.items()},
+                               'ray_point_bounds_m': {'min': global_ray_min, 'max': global_ray_max} if global_ray_count else None},
+            'sequence_heatmap_count': len(heatmaps), 'sequence_heatmaps': heatmaps,
+            'sequence_heatmap_invalid_count': invalid_heatmaps,
             'definitions': {'sequence_count': '분사 Off에서 On으로 전환된 연속 분사 구간 수',
                             'zone_order': '면 번호와 Zone별 최초 방문 순서. 여러 회차의 순서 통계는 별도 전문가 프로필에서 계산합니다.',
+                            'map_order': '분사 프레임에서 면의 최초 등장 순서. 정수 번호 또는 원본 면 이름을 보존하며 미기록 면을 만들지 않습니다.',
                             'distance_mm': 'Distance (Input)의 유효한 분사 프레임 분포',
-                            'speed_mms': 'Speed (Input)의 유효한 분사 프레임 분포'}}
+                            'speed_mms': 'Speed (Input)의 유효한 분사 프레임 분포',
+                            'global_metrics': 'Zone 유무와 무관한 전체 유효 분사 프레임의 분포. 거리 mm, 속도 mm/s, 착탄 좌표 m.',
+                            'sequence_heatmaps': '원본 sparse 행별 PNG 페이로드. frame_index는 0부터, spray_run_index는 On 전환으로 추정한 최근 분사 구간(1부터)이며 공식 sequence_id가 아닙니다.'}}
 
 
 def _write_json(path: Path, payload: dict) -> None:

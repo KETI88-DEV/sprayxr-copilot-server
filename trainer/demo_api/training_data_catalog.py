@@ -47,18 +47,23 @@ class TrainingDataCatalog:
             try:
                 p = self._safe(self.root, f'records/{dataset_id}.json')
                 if p.stat().st_size == row.get('json_bytes'):
-                    result.append(row)
+                    available = row.get('zone_id_available')
+                    if not isinstance(available, bool):
+                        available = row.get('zone_count', 0) > 0
+                    result.append({**row, 'zone_id_available': available,
+                                   'zone_id_status': 'present' if available else 'absent'})
             except OSError:
                 continue
         return result
 
-    def _selected(self, *, worker_id='all', process='all', scenario_id='all', acquired_at='all', q='', **_) -> tuple[dict, list[dict], list[dict]]:
+    def _selected(self, *, worker_id='all', process='all', scenario_id='all', acquired_at='all', zone_mapping='all', q='', **_) -> tuple[dict, list[dict], list[dict]]:
         index = self._index()
         rows = self._rows(index)
         needle = q.strip().casefold()
         selected = [r for r in rows if (worker_id == 'all' or r['worker_id'] == worker_id)
                     and (process == 'all' or r['process'] == process)
                     and (scenario_id == 'all' or r['scenario_id'] == scenario_id)
+                    and (zone_mapping == 'all' or r['zone_id_status'] == zone_mapping)
                     and (acquired_at == 'all' or (acquisition_date(r.get('acquired_at')) is None if acquired_at == 'unknown'
                                                   else acquisition_date(r.get('acquired_at')) == acquired_at))
                     and (not needle or needle in ' '.join(str(r.get(k, '')) for k in ('dataset_name', 'worker_name', 'mode_label', 'scenario_id')).casefold())]
@@ -75,7 +80,7 @@ class TrainingDataCatalog:
         def options(field, label_field=None, labels=None):
             values = {r[field]: (labels or {}).get(r[field], r.get(label_field, r[field])) for r in rows}
             return [{'id': k, 'label': v} for k, v in sorted(values.items(), key=lambda x: x[0].zfill(8))]
-        labels = {'spray': '스프레이', 'blasting': '블라스팅'}
+        labels = {'spray': '스프레이', 'blasting': '블라스팅', 'grinding': '그라인딩'}
         pages = max(1, math.ceil(len(selected) / limit))
         page = min(max(1, page), pages)
         dates = [day for row in selected if (day := acquisition_date(row.get('acquired_at'))) is not None]
@@ -90,12 +95,15 @@ class TrainingDataCatalog:
                             'needs_review': sum(r['quality_status'] == 'needs_review' for r in selected),
                             'failed': index.get('failed_count', 0) if len(selected) == len(rows) else 0,
                             'heightmap_count': sum(r['heightmap_count'] for r in selected),
+                            'with_zone_id': sum(r['zone_id_available'] for r in selected),
+                            'without_zone_id': sum(not r['zone_id_available'] for r in selected),
                             'dated_count': len(dates), 'acquisition_date_min': min(dates) if dates else None,
                             'acquisition_date_max': max(dates) if dates else None,
                             'by_worker': grouped('worker_id', 'worker_name'), 'by_mode': grouped('scenario_id', 'mode_label'),
                             'by_process': grouped('process', labels=labels)},
                 'options': {'workers': options('worker_id', 'worker_name'), 'processes': options('process', labels=labels),
-                            'modes': options('scenario_id', 'mode_label'), 'dates': date_options},
+                            'modes': options('scenario_id', 'mode_label'), 'dates': date_options,
+                            'zone_mappings': [{'id': 'present', 'label': '있음'}, {'id': 'absent', 'label': '없음'}]},
                 'items': [{k: v for k, v in r.items() if k != 'artifact_sha256'} for r in selected[(page - 1) * limit:page * limit]]}
 
     def artifact(self, dataset_id: str) -> Path:
@@ -129,7 +137,8 @@ class TrainingDataCatalog:
         out = io.StringIO(newline='')
         writer = csv.writer(out)
         fields = ['dataset_id', 'dataset_name', 'worker_name', 'role', 'process', 'scenario_id', 'mode_label',
-                  'acquired_at', 'quality_status', 'frame_count', 'zone_count', 'heightmap_count', 'json_bytes']
+                  'acquired_at', 'quality_status', 'frame_count', 'zone_count', 'zone_id_available', 'zone_id_status',
+                  'source_kind', 'sequence_heatmap_count', 'heightmap_count', 'json_bytes']
         writer.writerow(fields)
         for row in rows:
             values = [(acquisition_date(row.get(k)) or '') if k == 'acquired_at' else '' if row.get(k) is None else str(row[k]) for k in fields]
@@ -153,28 +162,32 @@ def create_training_data_router(catalog: TrainingDataCatalog | None = None) -> A
     store = catalog or TrainingDataCatalog()
     router = APIRouter(prefix='/admin/api/training-data', include_in_schema=False)
 
-    def filters(worker_id: str, process: str, scenario_id: str, acquired_at: str, q: str) -> dict:
+    def filters(worker_id: str, process: str, scenario_id: str, acquired_at: str, q: str, zone_mapping: str) -> dict:
         if acquired_at not in {'all', 'unknown'} and acquisition_date(acquired_at) != acquired_at:
             raise HTTPException(422, '훈련날짜는 YYYY-MM-DD 형식의 유효한 날짜여야 합니다.')
-        return dict(worker_id=worker_id, process=process, scenario_id=scenario_id, acquired_at=acquired_at, q=q)
+        return dict(worker_id=worker_id, process=process, scenario_id=scenario_id, acquired_at=acquired_at, q=q,
+                    zone_mapping=zone_mapping)
 
     @router.get('')
-    def listing(worker_id: str = Query('all', max_length=120), process: str = Query('all', pattern='^(all|spray|blasting)$'),
+    def listing(worker_id: str = Query('all', max_length=120), process: str = Query('all', pattern='^(all|spray|blasting|grinding)$'),
                 scenario_id: str = Query('all', max_length=120), acquired_at: str = Query('all', max_length=10), q: str = Query('', max_length=100),
+                zone_mapping: str = Query('all', pattern='^(all|present|absent)$'),
                 page: int = Query(1, ge=1), limit: int = Query(25, ge=1, le=200)):
-        return store.list(page=page, limit=limit, **filters(worker_id, process, scenario_id, acquired_at, q))
+        return store.list(page=page, limit=limit, **filters(worker_id, process, scenario_id, acquired_at, q, zone_mapping))
 
     @router.get('/export.csv')
-    def export_csv(worker_id: str = Query('all', max_length=120), process: str = Query('all', pattern='^(all|spray|blasting)$'),
-                   scenario_id: str = Query('all', max_length=120), acquired_at: str = Query('all', max_length=10), q: str = Query('', max_length=100)):
-        return Response(store.csv_export(**filters(worker_id, process, scenario_id, acquired_at, q)), media_type='text/csv; charset=utf-8',
+    def export_csv(worker_id: str = Query('all', max_length=120), process: str = Query('all', pattern='^(all|spray|blasting|grinding)$'),
+                   scenario_id: str = Query('all', max_length=120), acquired_at: str = Query('all', max_length=10), q: str = Query('', max_length=100),
+                   zone_mapping: str = Query('all', pattern='^(all|present|absent)$')):
+        return Response(store.csv_export(**filters(worker_id, process, scenario_id, acquired_at, q, zone_mapping)), media_type='text/csv; charset=utf-8',
                         headers={'Content-Disposition': 'attachment; filename="training-datasets.csv"'})
 
     @router.get('/export.zip')
-    def export_zip(worker_id: str = Query('all', max_length=120), process: str = Query('all', pattern='^(all|spray|blasting)$'),
-                   scenario_id: str = Query('all', max_length=120), acquired_at: str = Query('all', max_length=10), q: str = Query('', max_length=100)):
+    def export_zip(worker_id: str = Query('all', max_length=120), process: str = Query('all', pattern='^(all|spray|blasting|grinding)$'),
+                   scenario_id: str = Query('all', max_length=120), acquired_at: str = Query('all', max_length=10), q: str = Query('', max_length=100),
+                   zone_mapping: str = Query('all', pattern='^(all|present|absent)$')):
         try:
-            content = store.zip_export(**filters(worker_id, process, scenario_id, acquired_at, q))
+            content = store.zip_export(**filters(worker_id, process, scenario_id, acquired_at, q, zone_mapping))
         except (OSError, ValueError) as error:
             raise HTTPException(409, str(error)) from error
         return Response(content, media_type='application/zip', headers={'Content-Disposition': 'attachment; filename="training-datasets.zip"'})

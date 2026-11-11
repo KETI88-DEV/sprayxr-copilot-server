@@ -38,6 +38,9 @@ TRAINING_DATA_CSS = r"""
 #training-data-root .td-button-secondary{background:#fff;border-color:var(--line,#dde4ee);color:#51617a}
 #training-data-root .td-filter-actions{display:flex;gap:7px}
 #training-data-root .td-filter-foot{display:flex;gap:12px;justify-content:space-between;align-items:center;margin-top:14px;padding-top:12px;border-top:1px solid #edf1f6;flex-wrap:wrap}
+#training-data-root .td-zone-filter{display:flex;align-items:center;gap:9px;flex-wrap:wrap}
+#training-data-root .td-zone-filter label{font-size:11px;font-weight:700;color:#506079}
+#training-data-root .td-zone-filter select{width:auto;min-height:30px;padding:5px 9px;font-size:11px}
 #training-data-root .td-help{font-size:11px;color:var(--muted,#68758a);line-height:1.8;margin:0}
 #training-data-root .td-link{border:0;background:transparent;padding:0;color:var(--td-blue);font-size:11px;font-weight:650;cursor:pointer;text-decoration:none}
 #training-data-root .td-chart-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin-bottom:20px}
@@ -186,7 +189,7 @@ def render_training_data() -> str:
       <div class="td-field td-search-field"><label for="td-search">검색어</label><input id="td-search" name="q" type="search" maxlength="100" autocomplete="off" placeholder="데이터명, 작업자, 원본 파일 검색"></div>
       <div class="td-filter-actions"><button type="submit">조회</button><button type="button" id="td-reset" class="td-button-secondary">초기화</button></div>
     </form>
-    <div class="td-filter-foot"><p class="td-help">CSV 훈련 기록 1개(1세션) = 학습 데이터 1건 · 높이맵은 해당 세션에 연결됩니다.</p><button type="button" id="td-refresh" class="td-link">새로고침 ↻</button></div>
+    <div class="td-filter-foot"><div class="td-zone-filter"><label for="td-zone-mapping">Zone ID</label><select id="td-zone-mapping" name="zone_mapping" form="td-filter-form"><option value="all">전체</option><option value="present">있음</option><option value="absent">없음</option></select><span id="td-zone-counts" class="td-help" role="status">있음 —건 · 없음 —건</span></div><p class="td-help">CSV 훈련 기록 1개(1세션) = 학습 데이터 1건 · 높이맵은 해당 세션에 연결됩니다.</p><button type="button" id="td-refresh" class="td-link">새로고침 ↻</button></div>
   </section>
 
   <div class="td-chart-grid" aria-label="조회 결과 분포">
@@ -200,7 +203,7 @@ def render_training_data() -> str:
       <div class="td-exports"><a id="td-export-csv" class="td-export" href="/admin/api/training-data/export.csv">목록 CSV ↓</a><a id="td-export-zip" class="td-export" href="/admin/api/training-data/export.zip">JSON 묶음 ZIP ↓</a></div>
     </div>
     <div id="td-list-panel" class="td-panel td-list-panel" aria-busy="true">
-      <div class="td-table-scroll"><table aria-label="생성된 학습 데이터 목록"><thead><tr><th scope="col">데이터명</th><th scope="col">작업자</th><th scope="col">공정</th><th scope="col">학습모드</th><th scope="col">취득일</th><th scope="col">품질</th></tr></thead><tbody id="td-items"><tr><td colspan="6" class="td-table-message">학습 데이터를 불러오는 중입니다.</td></tr></tbody></table></div>
+      <div class="td-table-scroll"><table aria-label="생성된 학습 데이터 목록"><thead><tr><th scope="col">데이터명</th><th scope="col">작업자</th><th scope="col">공정</th><th scope="col">학습모드</th><th scope="col">취득일</th><th scope="col">Zone ID</th><th scope="col">품질</th></tr></thead><tbody id="td-items"><tr><td colspan="7" class="td-table-message">학습 데이터를 불러오는 중입니다.</td></tr></tbody></table></div>
       <div class="td-pagination"><span id="td-range">—</span><div class="td-page-controls"><button type="button" id="td-prev" disabled aria-label="이전 페이지">← 이전</button><span id="td-page">1 / 1</span><button type="button" id="td-next" disabled aria-label="다음 페이지">다음 →</button></div><label class="td-page-size" for="td-limit">표시<select id="td-limit"><option value="10">10건</option><option value="25" selected>25건</option><option value="50">50건</option><option value="100">100건</option></select></label></div>
     </div>
     <p class="td-footer-note">취득일은 원본 자료의 날짜 근거를 기준으로 연월일만 표시합니다. 근거가 없는 기록은 ‘미기록’으로 표시합니다.<br>이 화면은 학습용 데이터의 생성·검증 결과이며, 모델 학습 완료 여부를 의미하지 않습니다.</p>
