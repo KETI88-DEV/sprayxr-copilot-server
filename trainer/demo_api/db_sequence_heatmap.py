@@ -111,7 +111,9 @@ def _context(conn, detail, source):
         if session is not None:
             if scenario is None and 'scenario_id' in columns:
                 scenario = session['scenario_id']
-            if 'target_thickness_um' in columns:
+            # A default stored by the session is not a target the session chose.
+            if 'target_thickness_um' in columns and not (
+                    'target_basis' in columns and session['target_basis'] == 'default_target'):
                 value = session['target_thickness_um']
                 if isinstance(value, (int, float)) and math.isfinite(value) and value > 0:
                     target = float(value)

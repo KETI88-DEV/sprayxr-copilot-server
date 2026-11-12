@@ -20,12 +20,13 @@ import numpy as np
 from PIL import Image, UnidentifiedImageError
 
 if __package__:
+    from . import coating_assessment
     from .training_data_coating import PREVIEW_BACKGROUND, PREVIEW_COLORS, _histogram, _summary
 else:
+    import coating_assessment
     from training_data_coating import PREVIEW_BACKGROUND, PREVIEW_COLORS, _histogram, _summary
 
 
-TARGET_TOLERANCE_PERCENT = 10.0  # R4b-2에서 지운다
 ATLAS_SIZE = 2048
 MAX_IMAGE_DIMENSION = 2048
 MAX_IMAGE_PIXELS = 2048 * 2048
@@ -71,37 +72,33 @@ def _integer(value: Any) -> int | None:
 
 def _physical_summary(
     values: np.ndarray | None, *, target_pixels: int | None,
-    target_thickness_um: float | None,
+    target_thickness_um: float, target_basis: str,
 ) -> dict[str, Any]:
-    # Reuse the shared statistics; avoid target*10 overflowing before /100.
-    result = _summary(values, target_pixels=target_pixels, target_um=1.0, target_basis="default_target")
-    # R4b-2에서 보정 두께 기준으로 바꾼다. 그 전에는 보정 전 값에 6구간을 붙이지 않는다.
-    for key in ("target_basis", "normal_band_um", "six_band_counts"):
-        del result[key]
-    result["target_thickness_um"] = target_thickness_um
-    result["target_tolerance_percent"] = None
-    result["within_target_percent"] = None
-    if target_thickness_um is not None:
-        result["target_tolerance_percent"] = TARGET_TOLERANCE_PERCENT
-        if values is not None and values.size:
-            tolerance = target_thickness_um * (TARGET_TOLERANCE_PERCENT / 100.0)
-            within = (values >= target_thickness_um - tolerance) & (values <= target_thickness_um + tolerance)
-            result["within_target_percent"] = float(np.count_nonzero(within) / values.size * 100.0)
-    return result
+    """Corrected-thickness statistics plus the six bands. A crop never gets a grade."""
+    return _summary(
+        values, target_pixels=target_pixels, target_um=target_thickness_um,
+        target_basis=target_basis)
 
 
 def _initial_payload(target_thickness_um: Any) -> dict[str, Any]:
-    target = _finite_positive(target_thickness_um)
+    candidate = _finite_positive(target_thickness_um)
     warnings = []
-    if target_thickness_um is not None and target is None:
+    if target_thickness_um is not None and candidate is None:
         warnings.append("invalid_target_thickness_ignored")
+    target, basis = coating_assessment.resolve_target(candidate)
     return {
         "status": "unavailable",
         "reason": None,
-        "summary": _physical_summary(None, target_pixels=None, target_thickness_um=target),
+        "summary": _physical_summary(
+            None, target_pixels=None, target_thickness_um=target, target_basis=basis),
         "histogram": [],
         "zones": [],
         "statistics_basis": "painted_pixels",
+        "thickness_basis": "corrected",
+        "grade_scope": "not_graded_partial_crop",
+        "criterion_version": coating_assessment.CRITERION_VERSION,
+        "band_labels": list(coating_assessment.BAND_LABELS),
+        "basis_label": coating_assessment.basis_label(target, basis),
         "coverage_domain": "unknown",
         "distribution_domain": "unknown",
         "coverage_scope": "sampled_target_pixels_within_crop",
@@ -204,6 +201,7 @@ def _project_official_masks(
 ) -> tuple[np.ndarray | None, str | None]:
     """Return a complete projected union, or None when coverage is unknown."""
     target = payload["summary"]["target_thickness_um"]
+    basis = payload["summary"]["target_basis"]
     warnings = payload["warnings"]
     map_num = _integer(item.get("map_num"))
     if map_num is None or map_num < 0:
@@ -242,10 +240,13 @@ def _project_official_masks(
             "zone_id": zone_id,
             "hex_color": definition.hex_color,
             "coverage_scope": "sampled_target_pixels_within_crop",
-            "summary": _physical_summary(
-                thickness[painted & mask], target_pixels=target_pixels,
-                target_thickness_um=target,
-            ),
+            "summary": {
+                **_physical_summary(
+                    thickness[painted & mask], target_pixels=target_pixels,
+                    target_thickness_um=target, target_basis=basis),
+                # Unpainted share of this zone's pixels sampled by the crop.
+                "sampled_unpainted_fraction": 1.0 - int(np.count_nonzero(painted & mask)) / target_pixels,
+            },
         })
     return (domain, None) if complete else (None, "official_zone_mask_unavailable")
 
@@ -286,8 +287,12 @@ def prepare_heatmap(
     histogram use painted pixels inside the complete official crop mask union.
     When geometry or any official mask is unavailable, distribution statistics
     use painted PNG pixels and coverage is null. Known zone summaries describe
-    only their target pixels sampled by this crop. A finite positive explicit
-    target enables a +/-10% band; no nominal target is inferred.
+    only their target pixels sampled by this crop. Thickness is the PR #8
+    corrected value (raw - 10 um) and a pixel is painted when B>0 and the
+    corrected value is at least 1 um. A crop sees only part of a zone, so no
+    grade is given: summaries carry the six-band counts and the unpainted share
+    of sampled pixels. A missing or invalid target is judged at the default
+    target and reported as ``target_basis="default_target"``.
 
     The derived PNG retains source dimensions/orientation. Its color cap is
     p99 of all valid PNG pixels and affects display only. No-paint numeric
@@ -335,7 +340,8 @@ def prepare_heatmap(
     if not np.all(np.isfinite(thickness)):
         payload["reason"] = "unsupported_thickness_scale"
         return PreparedHeatmap(payload, original, None)
-    painted = pixels[..., 2] > 0
+    # PR #8 corrected thickness; painted = B>0 and corrected >= 1 um.
+    thickness, painted = coating_assessment.corrected_painted(thickness, pixels[..., 2] > 0)
     payload["validity_convention"] = "tsb_b_channel"
     payload["scale_um"] = scale
     preview_values = thickness[painted]
@@ -371,6 +377,7 @@ def prepare_heatmap(
     payload["summary"] = _physical_summary(
         selected, target_pixels=target_pixels,
         target_thickness_um=payload["summary"]["target_thickness_um"],
+        target_basis=payload["summary"]["target_basis"],
     )
     payload["histogram"] = _histogram(selected)
     return PreparedHeatmap(payload, original, preview)

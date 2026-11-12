@@ -130,3 +130,16 @@ def test_all_stored_crop_indices_can_be_viewed(tmp_path, monkeypatch):
     response = client.get('/admin/api/sequence-heatmaps?table=sequences&rowid=1&map_index=64')
     assert response.status_code == 200
     assert response.json()['selected_index'] == 64
+
+
+def test_default_target_session_is_shown_as_default(tmp_path, monkeypatch):
+    client, path, body = _client(tmp_path, monkeypatch)
+    url = client.get('/admin/api/record?table=sequences&rowid=1').json()['heatmaps_url']
+    assert client.get(url).json()['analysis']['summary']['target_basis'] == 'session_target'
+    with sqlite3.connect(path) as c:
+        c.execute('ALTER TABLE sessions ADD COLUMN target_basis TEXT')
+        c.execute("UPDATE sessions SET target_thickness_um=160, target_basis='default_target'")
+    analysis = client.get(url).json()['analysis']
+    assert analysis['summary']['target_basis'] == 'default_target'
+    assert analysis['summary']['target_thickness_um'] == 160
+    assert analysis['basis_label'] == '기본 목표 160µm 기준'

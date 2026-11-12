@@ -476,3 +476,12 @@ def test_refined_filters_and_report_statuses_work_with_partial_legacy_schema():
         assert "필터 결과 0건" in body and "상태 미기록" in body
         assert "소요 시간 미기록" in body and "응답 상태 미기록" in body
         assert '/admin/api/record?table=completions&amp;rowid=1' in body
+
+
+def test_session_detail_marks_the_default_target(conn):
+    assert "(기본값)" not in render_session_detail(conn, "S1")
+    conn.execute("ALTER TABLE sessions ADD COLUMN target_basis TEXT")
+    conn.execute("UPDATE sessions SET target_thickness_um=160, target_basis='default_target' WHERE session_id='S1'")
+    conn.execute("UPDATE sessions SET target_basis='session_target' WHERE session_id='S2'")
+    assert "160 μm (기본값)" in render_session_detail(conn, "S1")
+    assert "(기본값)" not in render_session_detail(conn, "S2")

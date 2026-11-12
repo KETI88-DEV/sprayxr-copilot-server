@@ -165,7 +165,7 @@ def _summary_sql(schema: dict[str, set[str]]) -> str:
             {origin_expression(sessions)} AS creation_origin, {field('creation_path')} AS creation_path,
             {field('scenario_id')} AS scenario_id, {field('session_status')} AS session_status,
             {field('created_at')} AS created_at, {field('started_at')} AS started_at,
-            {field('ended_at')} AS ended_at, {field('target_thickness_um')} AS target_thickness_um,
+            {field('ended_at')} AS ended_at, {field('target_thickness_um')} AS target_thickness_um, {field('target_basis')} AS target_basis,
             COALESCE(seq.n,0) AS sequence_count, COALESCE(qry.n,0) AS query_count,
             COALESCE(calls.n,0) AS call_count, COALESCE(reports.n,0) AS report_count,
             COALESCE(reports.complete_n,0) AS report_complete_count,COALESCE(reports.pending_n,0) AS report_pending_count,
@@ -432,7 +432,7 @@ def render_session_detail(conn: sqlite3.Connection, session_id: str, *, kind: st
                 ("생성 출처", ORIGINS[row['creation_origin']]), ("생성 경로", row['creation_path'] or '미기록'),
                 ("훈련 상태", _STAGES[row["stage"]]), ("생성 시각", _time(row["created_at"])), ("훈련 시작", _time(row["started_at"])),
                 ("훈련 종료", _time(row["ended_at"])), ("훈련 소요 시간", _duration(row["started_at"], row["ended_at"], row["stage"])), ("마지막 활동", _time(row["last_at"])),
-                ("목표 도막 두께", f"{row['target_thickness_um']:g} μm" if isinstance(row["target_thickness_um"], (int, float)) else "미기록"))
+                ("목표 도막 두께", f"{row['target_thickness_um']:g} μm{' (기본값)' if row['target_basis'] == 'default_target' else ''}" if isinstance(row["target_thickness_um"], (int, float)) else "미기록"))
     provenance = record_provenance(conn, "sessions", row)
     metadata += (("생성 호출 채널", provenance['caller_label']), ("생성 호출 IP", provenance['client_ip']))
     meta_html = "".join(f'<div><dt>{label}</dt><dd>{_e(value)}</dd></div>' for label, value in metadata)
@@ -492,7 +492,7 @@ def session_event_detail(conn: sqlite3.Connection, session_id: str, event_key: s
         is_start = event_key == "start"
         if (is_start and not row["started_at"]) or (not is_start and row["stage"] != "ended"):
             return None
-        data = {key: row[key] for key in ("session_id", "user_id", "scenario_id", "session_status", "created_at", "started_at", "ended_at", "target_thickness_um")}
+        data = {key: row[key] for key in ("session_id", "user_id", "scenario_id", "session_status", "created_at", "started_at", "ended_at", "target_thickness_um", "target_basis")}
         # End events are not the session's creation call.
         provenance = record_provenance(conn, "sessions", row) if is_start else record_provenance(conn, "unknown", {})
         return {"title": "훈련 시작 저장 기록" if is_start else "훈련 종료 저장 기록", "meta": [{"label": "세션 ID", "value": session_id}] + provenance_meta(provenance), "sections": [{"title": "세션 저장 데이터", "data": data}], "notice": notice}

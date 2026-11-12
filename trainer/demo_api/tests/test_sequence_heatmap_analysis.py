@@ -89,7 +89,8 @@ class SequenceHeatmapAnalysisTest(unittest.TestCase):
         summary = prepared.payload["summary"]
         self.assertEqual(prepared.payload["status"], "available")
         self.assertEqual(summary["painted_pixels"], 2)
-        self.assertAlmostEqual(summary["mean_um"], 78.43137254901961)
+        # Both valid pixels are raw 78.43 um; the corrected value is 10 um lower.
+        self.assertAlmostEqual(summary["mean_um"], 68.43137254901961)
         self.assertAlmostEqual(summary["coverage_percent"], 200 / 3)
         self.assertEqual(prepared.original_png, base64.b64decode(item["data"]))
 
@@ -103,12 +104,13 @@ class SequenceHeatmapAnalysisTest(unittest.TestCase):
         self.assertEqual(result["histogram"], [])
         self.assertFalse(any("legacy" in warning for warning in result["warnings"]))
 
-    def test_zero_thickness_with_nonzero_blue_remains_a_valid_observation(self):
+    def test_zero_thickness_with_nonzero_blue_is_unpainted_after_correction(self):
+        # PR #8: painted needs corrected >= 1 um, so B>0 with raw 0 is not painted.
         result = self.prepare(item_for([[(0, 0, 1), (255, 255, 0)]])).payload
-        self.assertEqual(result["summary"]["painted_pixels"], 1)
-        self.assertEqual(result["summary"]["mean_um"], 0)
-        self.assertIsNone(result["summary"]["cv_percent"])
-        self.assertEqual(sum(entry["count"] for entry in result["histogram"]), 1)
+        self.assertEqual(result["summary"]["painted_pixels"], 0)
+        self.assertEqual(result["summary"]["coverage_percent"], 0)
+        self.assertIsNone(result["summary"]["mean_um"])
+        self.assertEqual(result["histogram"], [])
         json.dumps(result, allow_nan=False)
 
     def test_crop_uses_bottom_left_atlas_origin_but_keeps_png_top_left(self):
@@ -125,7 +127,7 @@ class SequenceHeatmapAnalysisTest(unittest.TestCase):
         self.assertEqual(result["summary"]["target_pixels"], 2)
         self.assertEqual(result["summary"]["painted_pixels"], 1)
         self.assertEqual(result["summary"]["coverage_percent"], 50)
-        self.assertAlmostEqual(result["summary"]["mean_um"], 78.43137254901961)
+        self.assertAlmostEqual(result["summary"]["mean_um"], 68.43137254901961)
         self.assertEqual([zone["zone_id"] for zone in result["zones"]], ["1"])
         self.assertEqual(result["coverage_domain"], "official_zone_masks_in_crop")
         self.assertEqual(result["distribution_domain"], "official_zone_masks_in_crop")
@@ -140,7 +142,7 @@ class SequenceHeatmapAnalysisTest(unittest.TestCase):
         result = self.prepare(item, catalog=catalog).payload
         self.assertEqual(result["summary"]["target_pixels"], 2)
         self.assertEqual(result["summary"]["painted_pixels"], 2)
-        self.assertAlmostEqual(result["summary"]["mean_um"], 196.07843137254903)
+        self.assertAlmostEqual(result["summary"]["mean_um"], 186.07843137254903)
         self.assertEqual(result["zones"][0]["summary"]["coverage_percent"], 100)
 
     def test_exact_mask_hole_does_not_become_target_area(self):
@@ -149,7 +151,7 @@ class SequenceHeatmapAnalysisTest(unittest.TestCase):
         result = self.prepare(item, catalog=catalog).payload
         self.assertEqual(result["summary"]["target_pixels"], 2)
         self.assertEqual(result["summary"]["coverage_percent"], 50)
-        self.assertAlmostEqual(result["summary"]["mean_um"], 78.43137254901961)
+        self.assertAlmostEqual(result["summary"]["mean_um"], 68.43137254901961)
 
     def test_incomplete_masks_use_image_paint_and_never_claim_global_coverage(self):
         item = item_for([[(1, 0, 255), (0, 0, 0), (3, 0, 255)]])
@@ -162,7 +164,7 @@ class SequenceHeatmapAnalysisTest(unittest.TestCase):
         self.assertIsNone(result["summary"]["target_pixels"])
         self.assertIsNone(result["summary"]["coverage_percent"])
         self.assertEqual(result["summary"]["painted_pixels"], 2)
-        self.assertAlmostEqual(result["summary"]["mean_um"], 156.86274509803923)
+        self.assertAlmostEqual(result["summary"]["mean_um"], 146.86274509803923)
         self.assertEqual(result["coverage_domain"], "unknown")
         self.assertEqual(result["distribution_domain"], "painted_image_pixels")
         self.assertTrue(any("coverage_unknown" in warning for warning in result["warnings"]))
@@ -183,44 +185,68 @@ class SequenceHeatmapAnalysisTest(unittest.TestCase):
                 result = self.prepare(item_for([[(1, 0, 255)]], **changes)).payload
                 self.assertEqual(result["status"], "partial")
                 self.assertIsNone(result["summary"]["coverage_percent"])
-                self.assertAlmostEqual(result["summary"]["mean_um"], 78.43137254901961)
+                self.assertAlmostEqual(result["summary"]["mean_um"], 68.43137254901961)
                 self.assertEqual(result["reason"], "invalid_crop_geometry")
 
-    def test_no_target_does_not_invent_nominal_thickness_or_pass_rate(self):
+    def test_no_target_is_judged_at_the_default_and_says_so(self):
         result = self.prepare(item_for([[(1, 0, 255)]])).payload
         for summary in (result["summary"], result["zones"][0]["summary"]):
-            self.assertIsNone(summary["target_thickness_um"])
-            self.assertIsNone(summary["target_tolerance_percent"])
-            self.assertIsNone(summary["within_target_percent"])
+            self.assertEqual(summary["target_thickness_um"], 160.0)
+            self.assertEqual(summary["target_basis"], "default_target")
+            self.assertNotIn("target_tolerance_percent", summary)
+            self.assertNotIn("within_target_percent", summary)
+        self.assertEqual(result["basis_label"], "기본 목표 160µm 기준")
+        self.assertEqual(result["thickness_basis"], "corrected")
 
-    def test_target_band_is_explicit_plus_or_minus_ten_percent(self):
+    def test_explicit_target_is_a_session_target(self):
         result = self.prepare(item_for([[(1, 0, 255), (2, 0, 255)]]), target_thickness_um=80).payload
-        self.assertEqual(result["summary"]["target_tolerance_percent"], 10)
-        self.assertEqual(result["summary"]["within_target_percent"], 50)
+        self.assertEqual(result["summary"]["target_thickness_um"], 80.0)
+        self.assertEqual(result["summary"]["target_basis"], "session_target")
+        self.assertEqual(result["basis_label"], "세션 목표 80µm 기준")
+        # corrected 68.43 and 146.86 against edges 72, 80, 120, 160, 200
+        self.assertEqual(list(result["summary"]["six_band_counts"].values()), [1, 0, 0, 1, 0, 0])
 
-    def test_invalid_targets_are_ignored_without_nonfinite_json(self):
+    def test_invalid_targets_fall_back_to_the_default_without_nonfinite_json(self):
         for target in (0, -1, float("nan"), float("inf"), "bad"):
             with self.subTest(target=target):
                 result = self.prepare(item_for([[(1, 0, 255)]]), target_thickness_um=target).payload
-                self.assertIsNone(result["summary"]["target_thickness_um"])
-                self.assertTrue(result["warnings"])
+                self.assertEqual(result["summary"]["target_thickness_um"], 160.0)
+                self.assertEqual(result["summary"]["target_basis"], "default_target")
+                self.assertIn("invalid_target_thickness_ignored", result["warnings"])
                 json.dumps(result, allow_nan=False)
+
+    def test_crop_zone_summaries_carry_no_grade(self):
+        result = self.prepare(item_for([[(1, 0, 255), (0, 0, 0)]])).payload
+        self.assertEqual(result["grade_scope"], "not_graded_partial_crop")
+        self.assertTrue(result["zones"])
+        for summary in [result["summary"], *(zone["summary"] for zone in result["zones"])]:
+            self.assertNotIn("grade", summary)
+        self.assertEqual(result["zones"][0]["summary"]["sampled_unpainted_fraction"], 0.5)
+
+    def test_crop_bands_match_the_engine_rule(self):
+        # R=1,2,3 -> raw 78.4, 156.9, 235.3 -> corrected 68.4, 146.9, 225.3.
+        # Edges for target 160: 144, 160, 240, 320, 400 -> bands 0, 1, 2.
+        result = self.prepare(item_for([[(1, 0, 255), (2, 0, 255), (3, 0, 255)]])).payload
+        counts = result["summary"]["six_band_counts"]
+        self.assertEqual(list(counts.values()), [1, 1, 1, 0, 0, 0])
+        corrected = np.asarray([68.43137254901961, 146.86274509803923, 225.29411764705884])
+        self.assertEqual(counts, analysis.coating_assessment.band_counts(corrected, 160.0))
 
     def test_quantiles_histogram_and_p99_preview_do_not_clip_statistics(self):
         item = item_for([[(0, 255, 255), (1, 255, 255), (2, 255, 255), (0, 0, 0)]])
         prepared = self.prepare(item)
         result = prepared.payload
-        self.assertAlmostEqual(result["summary"]["p10_um"], 94.11764705882354)
-        self.assertAlmostEqual(result["summary"]["p25_um"], 117.64705882352942)
-        self.assertAlmostEqual(result["summary"]["median_um"], 156.86274509803923)
-        self.assertAlmostEqual(result["summary"]["p75_um"], 196.07843137254903)
-        self.assertAlmostEqual(result["summary"]["p90_um"], 219.60784313725492)
+        self.assertAlmostEqual(result["summary"]["p10_um"], 84.11764705882354)
+        self.assertAlmostEqual(result["summary"]["p25_um"], 107.64705882352942)
+        self.assertAlmostEqual(result["summary"]["median_um"], 146.86274509803923)
+        self.assertAlmostEqual(result["summary"]["p75_um"], 186.07843137254903)
+        self.assertAlmostEqual(result["summary"]["p90_um"], 209.60784313725492)
         self.assertAlmostEqual(result["summary"]["std_um"], 64.03894752374435)
-        self.assertAlmostEqual(result["summary"]["cv_percent"], 40.8248290463863)
+        self.assertAlmostEqual(result["summary"]["cv_percent"], 43.6046238145648)
         self.assertEqual(len(result["histogram"]), 24)
         self.assertEqual(sum(entry["count"] for entry in result["histogram"]), 3)
         self.assertAlmostEqual(sum(entry["percent"] for entry in result["histogram"]), 100)
-        self.assertAlmostEqual(result["preview_max_um"], 233.72549019607843)
+        self.assertAlmostEqual(result["preview_max_um"], 223.72549019607843)
         self.assertGreater(result["histogram"][-1]["high_um"], result["preview_max_um"])
         self.assertEqual(result["preview_cap_basis"], "painted_pixels_p99")
         self.assertFalse(result["preview_cap_affects_statistics"])
@@ -252,7 +278,7 @@ class SequenceHeatmapAnalysisTest(unittest.TestCase):
     def test_exact_format_supports_an_explicit_finite_positive_scale(self):
         item = item_for([[(1, 0, 255)]], format=FORMAT.replace("20000", "10000.0"))
         result = self.prepare(item).payload
-        self.assertAlmostEqual(result["summary"]["mean_um"], 39.21568627450981)
+        self.assertAlmostEqual(result["summary"]["mean_um"], 29.21568627450981)
         self.assertEqual(result["scale_um"], 10000)
 
     def test_nonfinite_and_nonpositive_scales_are_not_physical_thickness(self):
@@ -292,9 +318,9 @@ class SequenceHeatmapAnalysisTest(unittest.TestCase):
         prepared = self.prepare(item)
         json.dumps(prepared.payload, allow_nan=False)
 
-    def test_extreme_finite_target_does_not_turn_tolerance_into_infinity(self):
+    def test_extreme_finite_target_keeps_json_finite(self):
         prepared = self.prepare(item_for([[(1, 0, 255)]]), target_thickness_um=1e308)
-        self.assertEqual(prepared.payload["summary"]["within_target_percent"], 0)
+        self.assertEqual(prepared.payload["summary"]["six_band_counts"]["lt_0_9t"], 1)
         json.dumps(prepared.payload, allow_nan=False)
 
     def test_missing_or_tampered_base64_is_unavailable(self):

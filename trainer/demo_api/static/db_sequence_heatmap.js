@@ -40,7 +40,7 @@
     invalid_heatmap_item: '저장된 히트맵 항목이 올바른 형식이 아닙니다.', physical_thickness_not_applicable: '이 공정의 원본 이미지는 도막 두께로 해석하지 않습니다.',
     unsupported_heatmap_format: '저장된 맵이 지원하는 v2B8 도막 형식이 아니므로 원본 이미지만 표시합니다.', unsupported_physical_png_mode: '이 PNG 색상 형식은 도막 두께로 해석할 수 없습니다.',
     unsupported_thickness_scale: '저장된 두께 환산 배율을 해석할 수 없습니다.', official_target_domain_empty_in_crop: '크롭과 공식 도장 대상 영역이 겹치지 않습니다.',
-    invalid_target_thickness_ignored: '세션 목표 두께가 올바르지 않아 목표 범위 비율을 계산하지 않았습니다.',
+    invalid_target_thickness_ignored: '세션 목표 두께가 올바르지 않아 기본 목표로 계산했습니다.',
   };
   function reasonText(reason) {
     if (!reason) return '';
@@ -65,6 +65,14 @@
     head.append(heading); table.append(head, body);
     rows.forEach(values => { const row = el('tr'); values.forEach(text => row.append(el('td', '', text))); body.append(row); });
     wrap.append(table); details.append(wrap); return details;
+  }
+  // 6구간 개수는 서버가 순서대로 준다. 정상 구간은 셋째 칸이다.
+  const bandCounts = summary => { const values = Object.values(summary.six_band_counts || {}).map(value => finite(value) ?? 0); return values.length === 6 ? values : [0, 0, 0, 0, 0, 0]; };
+  function renderBands(host, summary, labels) {
+    const counts = bandCounts(summary), total = counts.reduce((sum, count) => sum + count, 0), names = Array.isArray(labels) && labels.length === 6 ? labels : counts.map((_, index) => `${index + 1}구간`);
+    if (!total) { host.replaceChildren(el('p', 'sh-empty', '이 크롭에 도포 표본이 없어 6구간을 계산하지 않았습니다.')); return; }
+    host.replaceChildren(tableDetails(['목표 대비 두께', '픽셀 수', '비율'], counts.map((count, index) => [names[index], countText(count), valueText(count / total * 100, '%')])));
+    host.firstChild.open = true;
   }
   function renderHistogram(host, histogram) {
     const bins = (Array.isArray(histogram) ? histogram : []).filter(bin => bin && finite(bin.low_um) !== null && finite(bin.high_um) !== null && bin.high_um >= bin.low_um && (finite(bin.count) !== null || finite(bin.percent) !== null));
@@ -119,7 +127,7 @@
       const dot = svgEl('circle', {cx: scale(summary.median_um), cy: y, r: 4.5, fill: zone.color, stroke: '#fff', 'stroke-width': 1.5});
       dot.append(svgEl('title', {}, `${zone.label} · 중앙값 ${valueText(summary.median_um)} µm · IQR ${valueText(q1)}–${valueText(q3)} µm`)); svg.append(dot);
     });
-    host.replaceChildren(svg, el('p', 'sh-help', `● 중앙값 · 가로 범위: 도포 픽셀의 25–75 백분위수 (IQR)${finite(target) !== null ? ' · 점선: 세션 목표 두께' : ''} · 단위 µm`), tableDetails(['구역', '중앙값 (µm)', '25–75% (µm)', '크롭 내 도포율'], entries.map(zone => [zone.label, valueText(zone.summary.median_um), `${valueText(zone.summary.p25_um)}–${valueText(zone.summary.p75_um)}`, valueText(zone.summary.coverage_percent, '%')])));
+    host.replaceChildren(svg, el('p', 'sh-help', `● 중앙값 · 가로 범위: 도포 픽셀의 25–75 백분위수 (IQR)${finite(target) !== null ? ' · 점선: 세션 목표 두께' : ''} · 단위 µm`), tableDetails(['구역', '중앙값 (µm)', '25–75% (µm)', '크롭 내 도포율', '크롭 내 미도장'], entries.map(zone => [zone.label, valueText(zone.summary.median_um), `${valueText(zone.summary.p25_um)}–${valueText(zone.summary.p75_um)}`, valueText(zone.summary.coverage_percent, '%'), finite(zone.summary.sampled_unpainted_fraction) === null ? '미기록' : valueText(zone.summary.sampled_unpainted_fraction * 100, '%')])));
   }
   function mapLabel(map, offset) {
     const number = map.map_num ?? offset + 1;
@@ -146,9 +154,9 @@
     const figure = el('figure'), stage = el('div', 'sh-stage'), imageMessage = el('p', 'sh-image-message'), scale = el('div', 'sh-scale'), caption = el('figcaption');
     stage.append(imageMessage); figure.append(stage, scale, caption);
     const notes = el('div', 'sh-notes'), metrics = el('div', 'sh-metrics'), graphs = el('div', 'sh-graphs');
-    const histCard = el('div', 'sh-chart-card'), histogram = el('div', 'sh-chart-scroll'), zoneCard = el('div', 'sh-chart-card'), zones = el('div', 'sh-chart-scroll');
+    const histCard = el('div', 'sh-chart-card'), histogram = el('div', 'sh-chart-scroll'), zoneCard = el('div', 'sh-chart-card'), zones = el('div', 'sh-chart-scroll'), bandCard = el('div', 'sh-chart-card'), bandHost = el('div', 'sh-chart-scroll');
     histCard.append(el('h4', '', '도막 두께 히스토그램'), el('p', 'sh-help', '크롭 내 도포 픽셀 기준 · 두께 구간별 픽셀 수와 비율'), histogram);
-    zoneCard.append(el('h4', '', '구역별 중앙값 · IQR'), el('p', 'sh-help', '크롭에 포함된 구역의 도포 픽셀 기준'), zones); graphs.append(histCard, zoneCard);
+    zoneCard.append(el('h4', '', '구역별 중앙값 · IQR'), el('p', 'sh-help', '크롭에 포함된 구역의 도포 픽셀 기준'), zones); bandCard.append(el('h4', '', '목표 대비 6구간'), el('p', 'sh-help', '크롭 안 도포 표본 기준 · 보정 두께를 목표에 대한 비율로 나눈 구간'), bandHost); graphs.append(histCard, zoneCard, bandCard);
     const footnote = el('p', 'sh-help sh-footnote'); body.append(figure, notes, metrics, graphs, footnote); host.replaceChildren(heading, semantics, sourceNote, controls, status, body);
     let request, requestVersion = 0, imageVersion = 0, stopped = false, data = null, view = 'decoded', image = null, selectedIndex = 0;
     function alive(version) { return !stopped && !signal?.aborted && version === requestVersion; }
@@ -216,20 +224,18 @@
         notes.append(el('p', '', knownCoverage ? '크롭 내 도포율: 크롭과 공식 도장 대상 영역이 겹치는 부분의 전체 픽셀 대비 도포 픽셀 비율입니다. 전체 구역 도포율을 뜻하지 않습니다.' : '크롭 내 도포율: 공식 도장 대상 영역을 확정하지 못해 미기록으로 표시합니다. 전체 구역의 도포율로 추정하지 않습니다.'));
         notes.append(el('p', '', analysis.distribution_domain === 'painted_image_pixels' ? '두께 분포·평균·중앙값·IQR은 크롭 이미지 전체의 도포 픽셀 기준입니다. 공식 대상 영역이 확인된 구역별 수치는 해당 구역의 도포 픽셀 기준입니다.' : analysis.distribution_domain === 'official_zone_masks_in_crop' ? '두께 분포·평균·중앙값·IQR은 크롭과 공식 도장 대상 영역이 겹치는 부분의 도포 픽셀 기준입니다.' : '이 크롭의 도막 두께 통계를 계산하지 못했습니다. 사유와 원본 파라미터를 확인할 수 있습니다.'));
         notes.append(el('p', '', '두께 환산에는 저장된 v2B8 유효 픽셀만 사용하며 이전 인코딩으로 대체 해석하지 않습니다.'));
-        if (finite(summary.target_thickness_um) === null) notes.append(el('p', '', '세션 목표 두께: 미기록 · 목표 범위 비율을 계산하지 않습니다.'));
-        else if (finite(summary.target_tolerance_percent) === null) notes.append(el('p', '', `세션 목표 두께 ${valueText(summary.target_thickness_um)} µm · 허용 범위: 미기록`));
-        else notes.append(el('p', '', `세션 목표 두께 ${valueText(summary.target_thickness_um)} µm · 목표 ±${valueText(summary.target_tolerance_percent)}% 범위에 포함되는 도포 픽셀 비율을 표시합니다.`));
+        notes.append(el('p', '', `${analysis.basis_label || `목표 ${valueText(summary.target_thickness_um)} µm 기준`} · 두께는 보정값(측정값 − 10 µm)입니다. 크롭 안 표본 기준이며 Zone 전체 등급이 아닙니다.`));
       }
       const reasons = [...new Set([analysis.reason, result.reason, ...(Array.isArray(analysis.warnings) ? analysis.warnings : [])].map(reasonText).filter(Boolean))];
       if (reasons.length) { const list = el('ul'); reasons.forEach(reason => list.append(el('li', '', reason))); notes.append(list); }
       if (blasting && !reasons.length) notes.append(el('p', '', reasonLabels.not_applicable));
       metrics.hidden = graphs.hidden = footnote.hidden = !physical;
-      const tolerance = finite(summary.target_tolerance_percent), hasTarget = finite(summary.target_thickness_um) !== null;
+      const bands = bandCounts(summary), bandTotal = bands.reduce((sum, count) => sum + count, 0);
       metrics.replaceChildren(...[
         ['크롭 내 도포율', knownCoverage ? valueText(summary.coverage_percent, '%') : '미기록'], ['평균 두께', valueText(summary.mean_um, ' µm')], ['중앙값', valueText(summary.median_um, ' µm')],
-        ['세션 목표 두께', valueText(summary.target_thickness_um, ' µm')], [tolerance === null ? '목표 범위 비율 · 허용 범위 미기록' : `목표 ±${valueText(tolerance)}% 비율`, hasTarget && tolerance !== null ? valueText(summary.within_target_percent, '%') : '미기록'], ['두께 변동계수', valueText(summary.cv_percent, '%')],
+        ['목표 두께', valueText(summary.target_thickness_um, ' µm')], ['정상 구간 비율', bandTotal ? valueText(bands[2] / bandTotal * 100, '%') : '미기록'], ['두께 변동계수', valueText(summary.cv_percent, '%')],
       ].map(([name, value]) => { const card = el('div', 'sh-metric'); card.append(el('span', '', name), el('strong', '', value)); return card; }));
-      if (physical) { renderHistogram(histogram, analysis.histogram); renderZones(zones, analysis.zones, summary.target_thickness_um); }
+      if (physical) { renderHistogram(histogram, analysis.histogram); renderZones(zones, analysis.zones, summary.target_thickness_um); renderBands(bandHost, summary, analysis.band_labels); }
       footnote.textContent = `크롭 내 공식 대상 ${countText(summary.target_pixels)} 픽셀 · 도포 ${countText(summary.painted_pixels)} 픽셀 · 도포 픽셀의 10–90 백분위 두께 ${valueText(summary.p10_um)}–${valueText(summary.p90_um)} µm · 표준편차 ${valueText(summary.std_um, ' µm')}`;
       showImage(); body.hidden = false;
       setStatus(result.available === false ? '이 시퀀스의 히트맵을 표시할 수 없습니다. 저장 상태와 사유를 아래에서 확인할 수 있습니다.' : '');
