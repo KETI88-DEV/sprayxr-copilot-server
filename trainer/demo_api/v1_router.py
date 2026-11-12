@@ -44,6 +44,7 @@ from trainer.demo_api.v1_contracts import (
     UserProfile,
     report_example,
 )
+from trainer.demo_api import coating_assessment
 from trainer.demo_api.coating_progress import CoatingProgressEngine
 from trainer.demo_api.session_analysis import analyze_session, inflate_csv
 from trainer.demo_api.report_jobs import (
@@ -85,8 +86,8 @@ def _error(code: int, message: str) -> JSONResponse:
 
 
 # 영역을 못 내는 이유는 서로 다르다. 한 코드로 뭉치면 운영자가 엉뚱한 데를 찾는다.
-# 도막은 재료(cur_sequence_heatmap)가 오지만 지수의 **정의**가 없고, 순서는 기준
-# (recommended_flow)이 없다.
+# 도막 코드는 이제 도막 분석 결과가 저장되지 않은 리포트(도막 엔진 없이 뜬 서버, 분석 실패)에만 나온다.
+# 값은 공개 사유 코드라 바꾸지 않는다. 순서는 기준(recommended_flow)이 없다.
 _COATING_INDEX_UNDEFINED: Final = "coating_engine_pending_integration"
 _FLOW_MISSING: Final = "recommended_flow_missing"
 
@@ -227,7 +228,7 @@ def _briefing(
         # 분석은 돌았지만 판정하지 못했다 — 그 사유를 그대로 말한다.
         parts.append(f"도막은 분석하지 못했습니다: {coating_report['guideline']}")
     else:
-        parts.append("도막 평가는 외부 도막 분석 엔진 연동 후 같은 리포트의 coating_report에 추가됩니다.")
+        parts.append("이 서버에는 도막 판정에 필요한 Zone 기준 자료가 설정되지 않아 도막 평가를 내지 못했습니다.")
     return " ".join(parts)
 
 
@@ -465,7 +466,8 @@ def create_v1_router(
             "is_pass": is_pass, "avg_thickness_um": avg_thickness_um,
             "avg_speed_mms": avg_speed_mms, "avg_distance_mm": avg_distance_mm,
             "telemetry_csv_bytes": csv_bytes, "height_map_image_bytes": image_bytes,
-            "target_thickness_um": session.target_thickness_um if session else None,
+            # 시작 때 목표를 생략한 세션은 None으로 남겨 리포트가 기본 목표 판정임을 밝히게 한다.
+            "target_thickness_um": coating_assessment.session_target(session),
             "height_map_name": image_name,
         }
         try:

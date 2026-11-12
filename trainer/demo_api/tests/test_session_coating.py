@@ -1,7 +1,8 @@
 """complete 의 세션 도막 분석과, 그 결과로 답하는 pose_recomm 구역 질문.
 
-구역 경계는 저장소에 있는 **실제 TSB 라벨맵**(Learn03 = scenario 3)이다. 두께와 전문가 기준은 합성한다 —
+구역 경계는 저장소에 있는 **실제 TSB 라벨맵**(Learn03 = scenario 3)이다. 두께와 프로필은 합성한다 —
 Spark 의 전문가 프로필은 이 저장소에 없고, 정답을 아는 입력이어야 판정이 맞는지 볼 수 있다.
+두께는 원시 값이다. 판정은 10µm를 뺀 보정 두께로 한다(원시 180 = 보정 170).
 """
 
 from __future__ import annotations
@@ -29,8 +30,8 @@ from trainer.zone_reference import ZoneReferenceCatalog
 
 SIZE = 2048
 GRID = 64
-# 정답: 1번 구역은 기준 안, 2번은 안 칠함(부족), 3번은 과도장.
-THICKNESS = {"1": 100.0, "2": 0.0, "3": 400.0}
+# 정답(기본 목표 160µm): 1번 구역은 정상(보정 170), 2번은 안 칠함(등급 없음), 3번은 과도막(보정 390).
+THICKNESS = {"1": 180.0, "2": 0.0, "3": 400.0}
 SPRAY = {"sequence_setting": {"tool_type": "spray_gun"}}
 
 
@@ -112,8 +113,8 @@ def engine(tmp_path: Path) -> CoatingProgressEngine:
     return CoatingProgressEngine(tmp_path)
 
 
-def test_height_map_zones_are_judged_against_the_expert_cells(engine: CoatingProgressEngine, height_map: bytes) -> None:
-    """정상·부족·과도장이 라벨맵 구역별로 갈린다. 셀 수 합이 분포와 맞는다.
+def test_height_map_zones_are_graded_against_the_target(engine: CoatingProgressEngine, height_map: bytes) -> None:
+    """정상·칠한 곳 없음·과도막이 라벨맵 구역별로 갈린다. 분포는 칠한 화소 수다.
 
     깨뜨리는 법: 높이맵을 뒤집지 않으면(좌상단↔좌하단) 마스크와 두께가 어긋나 1번이 정상이 아니게 된다.
     """
@@ -121,28 +122,84 @@ def test_height_map_zones_are_judged_against_the_expert_cells(engine: CoatingPro
         scenario_id="3", bodies=[SPRAY], engine=engine, height_map=height_map, height_map_name="Map01_x_Height.png"
     )
 
-    statuses = {zone["zone_id"]: zone["status"] for zone in result.zones}
-    assert statuses == {"1": "normal", "2": "under_app", "3": "over_app"}
+    zones = {zone["zone_id"]: zone for zone in result.zones}
+    assert {zone_id: zone["status"] for zone_id, zone in zones.items()} == {"1": "normal", "2": None, "3": "over_app"}
+    assert zones["1"]["thickness_um"] == pytest.approx(170.0, abs=0.5)
+    assert zones["3"]["thickness_um"] == pytest.approx(390.0, abs=0.5)
     report = result.report
     assert report["analysis_status"] == "available"
     assert report["source_artifact_id"] == "Map01_x_Height.png"
-    cells = {zone_id: len(_cells(zone_id)) for zone_id in THICKNESS}
-    assert report["distribution"] == {"below": cells["2"], "in_band": cells["1"], "above": cells["3"]}
-    # 둘 다 셀 100%가 벗어났다 — 같으면 구역 순서.
-    assert [zone["zone_id"] for zone in report["worst_zones"]] == ["2", "3"]
-    assert report["worst_zones"][1]["thickness_um"] == pytest.approx(400.0, abs=0.5)
-    assert "부족 1개(2번)" in report["guideline"] and "과도장 1개(3번)" in report["guideline"]
+    assert report["comparison_basis"] == "session_target"
+    assert (report["target_thickness_um"], report["target_basis"]) == (160.0, "default_target")
+    assert report["algorithm_version"].startswith("coating-session-v2/")
+    pixels = {zone_id: int(_mask(zone_id).sum()) for zone_id in THICKNESS}
+    assert report["distribution"] == {"below": 0, "in_band": pixels["1"], "above": pixels["3"]}
+    # 보정 390µm는 목표의 2.0~2.5배 구간이다.
+    assert report["zone_summary"]["over2"] > 0
+    assert sum(report["zone_summary"].values()) == pytest.approx(1.0)
+    assert [zone["zone_id"] for zone in report["worst_zones"]] == ["3"]
+    assert report["worst_zones"][0]["thickness_um"] == pytest.approx(390.0, abs=0.5)
+    for phrase in ("기본 목표 160µm 기준", "과도막 1개(3번)", "칠한 곳 없음 1개(2번)"):
+        assert phrase in report["guideline"]
+
+
+def test_explicit_session_target_changes_the_grade_and_the_basis(engine: CoatingProgressEngine, height_map: bytes) -> None:
+    result = analyze_session_coating(
+        scenario_id="3", bodies=[SPRAY], engine=engine, height_map=height_map, target_thickness_um=400.0
+    )
+
+    zone3 = next(zone for zone in result.zones if zone["zone_id"] == "3")
+    assert zone3["status"] == "under_app"
+    assert result.report["target_basis"] == "session_target"
+    assert "세션 목표 400µm 기준" in result.report["guideline"]
+
+
+def test_zone_rows_carry_the_area_gate_next_to_the_grade(engine: CoatingProgressEngine, height_map: bytes) -> None:
+    result = analyze_session_coating(scenario_id="3", bodies=[SPRAY], engine=engine, height_map=height_map)
+
+    zone1 = next(zone for zone in result.zones if zone["zone_id"] == "1")
+    assert (zone1["coverage_percent"], zone1["gate_status"], zone1["grade"]) == (100.0, "complete", "normal")
+
+
+def test_height_map_pixels_without_blue_support_are_unpainted(engine: CoatingProgressEngine) -> None:
+    """높이맵의 B 채널이 0인 화소는 RG에 값이 있어도 칠한 자리가 아니다.
+
+    깨뜨리는 법: B를 보지 않고 RG만 읽으면 3번이 과도막으로 나온다.
+    """
+    height_map = _png(_thickness(THICKNESS), valid=_mask("1"))
+
+    result = analyze_session_coating(scenario_id="3", bodies=[SPRAY], engine=engine, height_map=height_map)
+
+    zones = {zone["zone_id"]: zone for zone in result.zones}
+    assert zones["1"]["status"] == "normal"
+    for zone_id in ("2", "3"):
+        assert zones[zone_id]["status"] is None and zones[zone_id]["unpainted_fraction"] == 1.0
+
+
+def test_worst_zone_carries_adjustment_candidates_without_claiming_a_cause(
+    engine: CoatingProgressEngine, height_map: bytes
+) -> None:
+    bodies = [{**SPRAY, "zone_id": "3", "sequence_result": {"avg_speed_mms": 400}}]
+
+    result = analyze_session_coating(scenario_id="3", bodies=bodies, engine=engine, height_map=height_map)
+
+    worst = result.report["worst_zones"][0]
+    assert worst["zone_id"] == "3"
+    assert "이동 속도를 높이는 쪽" in worst["action"] and "확정된 것은 아닙니다" in worst["action"]
+    assert worst["cause"] == "원인 후보: 이동 속도 (확정 아님)"
+    zone3 = next(zone for zone in result.zones if zone["zone_id"] == "3")
+    assert zone3["adjustments"][0]["evidence_kind"] == "quality_rule_candidate"
 
 
 def test_without_a_height_map_later_crops_overwrite_earlier_ones(engine: CoatingProgressEngine, height_map: bytes) -> None:
     """높이맵이 없으면 시퀀스 크롭을 순서대로 덮어쓴다. 크롭 값은 누적 두께라 더하지 않는다.
 
-    깨뜨리는 법: 더하면 3번 구역이 400+100=500µm 로 여전히 과도장이다.
+    깨뜨리는 법: 더하면 3번 구역이 400+180=580µm 로 여전히 과도막이다.
     """
     zone3 = _mask("3")
     rows, columns = np.nonzero(zone3)
     top, bottom, left, right = rows.min(), rows.max() + 1, columns.min(), columns.max() + 1
-    fix = _png(np.full((bottom - top, right - left), 100.0), valid=zone3[top:bottom, left:right])
+    fix = _png(np.full((bottom - top, right - left), 180.0), valid=zone3[top:bottom, left:right])
     bodies = [
         {**SPRAY, "sequence_result": {"cur_sequence_heatmap": [_crop(height_map, x0=0, y0=0, width=SIZE, height=SIZE)]}},
         {**SPRAY, "sequence_result": {"cur_sequence_heatmap": [
@@ -153,7 +210,7 @@ def test_without_a_height_map_later_crops_overwrite_earlier_ones(engine: Coating
 
     result = analyze_session_coating(scenario_id="3", bodies=bodies, engine=engine)
 
-    assert {zone["zone_id"]: zone["status"] for zone in result.zones} == {"1": "normal", "2": "under_app", "3": "normal"}
+    assert {zone["zone_id"]: zone["status"] for zone in result.zones} == {"1": "normal", "2": None, "3": "normal"}
     assert result.report["source_artifact_id"] == "cur_sequence_heatmap"
 
 
@@ -262,13 +319,13 @@ def test_after_complete_pose_recomm_names_the_most_problematic_zone(engine: Coat
     assert worst["answer"].startswith("가장 문제가 큰 구역은 3번 구역입니다.")
     assert "평균 자세 유사도는 40%로 세션 평균 57%보다 낮습니다" in worst["answer"]
     assert "오른쪽 위팔 위치가 숙련자 범위를 벗어난 분사가 2회 중 2회였습니다(평균 12cm)" in worst["answer"]
-    assert "도막은 과도장입니다" in worst["answer"]
+    assert "이 구역 도막은 기본 목표 160µm 기준으로 과도막(칠한 곳 평균 390µm, 미도장 0%)입니다." in worst["answer"]
     assert worst["pose_context"]["scope"] == "zone" and worst["pose_context"]["report_id"] == report_id
 
     zone1 = _ask(client, "이 구역 자세 어땠어?", context="1")
     assert zone1["answer"].startswith("1번 구역 결과입니다.")
     assert "숙련자 범위를 벗어난 관절은 없었습니다" in zone1["answer"]
-    assert "도막은 전문가 기준을 충족했습니다" in zone1["answer"]
+    assert "정상(칠한 곳 평균" in zone1["answer"]
 
     # 시퀀스를 가리키면 예전처럼 그 시퀀스를 채점한다.
     sequence = _ask(client, "이 분사 어땠어?", context="SEQ-002")
@@ -326,7 +383,7 @@ def test_a_zone_without_scored_sequences_is_not_answered_with_numbers() -> None:
 
 
 def test_without_an_expert_reference_the_briefing_says_why_coating_is_missing(tmp_path: Path, height_map: bytes) -> None:
-    """도막 엔진은 있는데 기준이 없으면 '외부 엔진 연동 후'가 아니라 실제 사유를 말한다. 자세 결과는 그대로 남는다."""
+    """도막 엔진은 있는데 Zone 기준 자료가 없으면 '외부 엔진 연동 후'가 아니라 실제 사유를 말한다. 자세 결과는 그대로 남는다."""
     client = _client(CoatingProgressEngine(tmp_path))
 
     response = client.post(
@@ -341,7 +398,7 @@ def test_without_an_expert_reference_the_briefing_says_why_coating_is_missing(tm
     report = client.get(f"/api/v1/reports/{response.json()['data']['report_id']}").json()["data"]["report"]
 
     assert report["coating_report"]["reason_code"] == "reference_unavailable"
-    assert "도막은 분석하지 못했습니다: 이 콘텐츠의 전문가 도막 기준이 없습니다." in report["llm_briefing"]
+    assert "도막은 분석하지 못했습니다: 이 콘텐츠의 Zone 기준 자료가 없어 도막을 판정하지 못했습니다." in report["llm_briefing"]
     assert report["pose_report"]["analysis_status"] == "available"
 
 
@@ -357,6 +414,31 @@ def _complete_session(client: TestClient, height_map: bytes) -> str:
     )
     assert response.status_code == 200, response.text
     return str(response.json()["data"]["report_id"])
+
+
+@pytest.mark.parametrize(
+    ("target", "basis", "phrase"),
+    [({}, "default_target", "기본 목표 160µm 기준"), ({"target_thickness_um": 160.0}, "session_target", "세션 목표 160µm 기준")],
+)
+def test_session_started_without_a_target_is_reported_as_the_default_target(
+    engine: CoatingProgressEngine, height_map: bytes, target: dict[str, float], basis: str, phrase: str
+) -> None:
+    """시작 때 목표를 생략해도 160.0이 저장된다. 리포트는 세션이 목표를 명시했는지를 구분해 말한다.
+
+    깨뜨리는 법: complete가 저장된 목표를 그대로 넘기면 생략한 세션도 "세션 목표"로 나온다.
+    """
+    client = _client(engine)
+    started = client.post("/api/v1/sessions/start", json={
+        "session_id": SESSION, "user_id": "u", "scenario_id": "3", "started_at": "2026-10-15T00:00:00Z",
+        "worker": {"skill_level": "novice", "handedness": "right"}, **target,
+    })
+    assert started.status_code == 200, started.text
+
+    report_id = _complete_session(client, height_map)
+
+    coating = client.get(f"/api/v1/reports/{report_id}").json()["data"]["report"]["coating_report"]
+    assert (coating["target_basis"], coating["target_thickness_um"]) == (basis, 160.0)
+    assert phrase in coating["guideline"]
 
 
 def test_after_complete_chip_questions_use_the_session_report(engine: CoatingProgressEngine, height_map: bytes) -> None:

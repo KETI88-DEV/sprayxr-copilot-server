@@ -214,7 +214,7 @@ class ReportArea(StrictModel):
 
 
 class CoatingZoneRatio(StrictModel):
-    """표준 6영역 면적비율. 합이 1에 가깝다."""
+    """표준 6영역 면적비율 — 칠한 면적 대비 비율이다(칠하지 않은 면적은 분모에 없다). 합이 1에 가깝다."""
 
     under2: float
     under1: float
@@ -225,7 +225,7 @@ class CoatingZoneRatio(StrictModel):
 
 
 class CoatingDistribution(StrictModel):
-    """세그먼트 판정 분포(개수)."""
+    """목표 미만 / 정상 구간 / 과도막 경계 이상으로 나눈 분포. 단위는 칠한 화소 수다."""
 
     below: int
     in_band: int
@@ -259,11 +259,13 @@ class CoatingRootCause(StrictModel):
 
 
 class CoatingReport(ReportArea):
-    """도막 분포 진단.
+    """도막 분포 진단. 구역 등급·분포·가장 벗어난 구역은 목표 두께 기준으로 낸다.
 
-    `coating_distribution_index`의 **계산식은 아직 받지 못했다.** 예시의 주석이
-    "70 - 감산 + σ가산"이라 0~100 눈금인 것까지만 안다. 정의가 오기 전에는 이 값을
-    내지 않는다 — `analysis_status="unavailable"`.
+    `target_basis`는 세션이 목표를 명시했으면 `session_target`, 생략해 기본 목표로 판정했으면
+    `default_target`이다.
+
+    `coating_distribution_index`만은 **계산식을 아직 받지 못했다.** 예시의 주석이
+    "70 - 감산 + σ가산"이라 0~100 눈금인 것까지만 안다. 정의가 오기 전에는 이 값만 null로 둔다.
     """
 
     coating_distribution_index: float | None = None
@@ -274,6 +276,7 @@ class CoatingReport(ReportArea):
     root_cause: CoatingRootCause | None = None
     comparison_basis: Literal["expert_reference", "session_target"] = "expert_reference"
     target_thickness_um: float | None = None
+    target_basis: Literal["session_target", "default_target"] | None = None
 
 
 # --- 5.2 순서·방향 ----------------------------------------------------------

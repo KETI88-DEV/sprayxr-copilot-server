@@ -323,11 +323,13 @@ def test_report_session_target_uses_same_strict_zone_gate_as_live(tmp_path: Path
     judgments, reason = progress.judge_zones(scenario_id="3", process="spray", mode_id=3,
         surfaces={1: surface}, target_thickness_um=160)
     assert reason is None
-    assert live.status == judgments[0].coverage.status == "needs_more"
-    assert judgments[0].coverage.coverage_percent == live.coverage_percent == 0
-    historical, _ = progress.judge_zones(scenario_id="3", process="spray", mode_id=3,
+    assert live.status == judgments[0].assessment["gate_status"] == "needs_more"
+    assert judgments[0].assessment["coverage_percent"] == live.coverage_percent == 0
+    # 목표 없이 불러도 전문가 칸이 아니라 기본 목표 160µm로 같은 게이트를 쓴다.
+    unset, _ = progress.judge_zones(scenario_id="3", process="spray", mode_id=3,
         surfaces={1: surface})
-    assert historical[0].coverage.status == "complete"
+    assert unset[0].assessment["target_basis"] == "default_target"
+    assert unset[0].assessment["gate_status"] == "needs_more"
 
 
 def test_report_session_target_cannot_complete_without_official_mask(tmp_path: Path) -> None:

@@ -103,6 +103,7 @@ def test_the_contract_covers_every_field_the_example_uses() -> None:
         "report.sequence_report.position_similarity",
         "report.coating_report.comparison_basis",
         "report.coating_report.target_thickness_um",
+        "report.coating_report.target_basis",
         "report.pose_report.confidence",
         "report.pose_report.limited_sequence_count",
         "report.pose_report.reason_codes",

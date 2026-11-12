@@ -25,6 +25,7 @@ from typing import Any, Final
 
 import httpx
 
+from trainer.demo_api.coating_assessment import basis_label, grade_phrase
 from trainer.demo_api.sequence_store import NON_CONTENT_FIELDS, SequenceStore
 from trainer.scripts import pose_similarity
 
@@ -310,6 +311,10 @@ def _zone_order(zone: Mapping[str, Any]) -> tuple[float, float, int, str]:
 
 def _coating_sentence(coating: Mapping[str, Any], target_um: object = None) -> str:
     """구역 도막 문장. 세션 목표 두께로 판정한 리포트는 전문가 기준이 아니라 그 목표를 말한다."""
+    if "grade" in coating:
+        basis = basis_label(coating["target_thickness_um"], coating["target_basis"])
+        return f" 이 구역 도막은 {basis}으로 {grade_phrase(coating)}입니다."
+    # `grade`가 없으면 2026-11 이전에 저장된 리포트의 행이다. 그때 판정한 기준 그대로 말한다.
     status = coating.get("status")
     thickness = coating.get("thickness_um")
     targeted = isinstance(target_um, (int, float)) and not isinstance(target_um, bool)
@@ -399,7 +404,10 @@ def answer_zone_question(found: tuple[str, Mapping[str, Any]] | None, *, context
             "corrections": corrections,
             **({"coating": {
                 key: coating.get(key)
-                for key in ("status", "thickness_um", "completion_percent", "coverage_percent", "overpaint_percent")
+                for key in (
+                    "status", "thickness_um", "completion_percent", "coverage_percent", "overpaint_percent",
+                    "grade", "unpainted_fraction", "target_thickness_um", "target_basis", "gate_status",
+                )
             }} if coating is not None else {}),
         },
     )

@@ -1,21 +1,23 @@
 """`POST /api/v1/sessions/complete`의 세션 종합 도막 분석 — 리포트의 `coating_report`.
 
-세션이 끝났을 때의 두께를 구역마다 전문가 최종 도막과 비교한다. 판정은 시퀀스마다 도막을 안내하는
-`CoatingProgressEngine`과 **같은 기준·같은 코드**다(`measure_zone`) — 훈련 중 "충족"이던 구역이 리포트에서
-"부족"으로 갈리지 않게. 구역 경계는 TSB 라벨맵이다(프로필이 `tsb_color_label_map`일 때).
+세션이 끝났을 때의 두께를 구역마다 목표 두께에 대고 판정한다. 기준은 PR #8 도막 기준이고 계산은
+`coating_assessment` 어댑터가 한다: 보정 두께로 재고, 칠한 곳의 평균으로 저도막·정상·과도막을 가른다(경계 값은
+어댑터에만 있다). 세션이 목표를 명시하지 않았으면 기본 목표로 판정하고 `target_basis="default_target"`으로 밝힌다.
+구역 경계는 TSB 라벨맵이고, 판정할 구역 목록은 프로필에서 얻는다.
 
 두께를 얻는 순서:
-1. complete의 `height_map_image` — 세션 끝 두께 그대로다. 파일명의 `MapNN`이 면 번호(없으면 1).
+1. complete의 `height_map_image` — 세션 끝 누적 두께로 읽는다(회차 합산 없음). 파일명의 `MapNN`이 면 번호(없으면 1).
 2. 없거나 읽을 수 없으면 저장된 시퀀스의 `cur_sequence_heatmap` 크롭을 시간 순으로 덮어쓴다. 크롭 값이 그 시점의
    **누적** 두께라 더하지 않는다.
 
-내지 않는 것: 6구간 면적비율(`zone_summary`)과 `coating_distribution_index`는 구간 경계·계산식을 받지 못했다.
-`reachability`·`root_cause`도 근거가 없다. 전부 null로 둔다 — 값을 지어내지 않는다.
+내는 것: 구역별 등급·칠한 곳 평균·미도장률, 칠한 면적의 6구간 비율(`zone_summary`), 3분류 화소 수(`distribution`),
+가장 벗어난 구역과 조절 후보. 조절 후보는 규칙에 따른 후보이고 확정된 원인이 아니다.
+내지 않는 것: `coating_distribution_index`(계산식을 받지 못했다), `reachability`·`root_cause`(근거가 없다), 세션 등급
+(PR #8에도 없다). 전부 null로 둔다 — 값을 지어내지 않는다.
 """
 
 from __future__ import annotations
 
-import io
 import logging
 import re
 from collections.abc import Iterable, Mapping
@@ -23,23 +25,22 @@ from dataclasses import dataclass, field
 from typing import Any, Final
 
 import numpy as np
-from PIL import Image, UnidentifiedImageError
 
-from trainer.demo_api.coating_progress import CoatingProgressEngine, ZoneJudgment
+from trainer.demo_api import coating_assessment
+from trainer.demo_api.coating_progress import CoatingProgressEngine
 from trainer.demo_api.telemetry_contracts import learning_mode_from_scenario, process_from_tool_type
+from trainer.zone_engine.numerical import SIX_BAND_KEYS
 
 logger = logging.getLogger(__name__)
 
-ALGORITHM_VERSION: Final = "coating-session-v1"
-# TSB 높이맵의 RG16 눈금(2026-10-08 샘플 notes: um = (R/255 + G/65025) * 20000).
-HEIGHTMAP_SCALE_UM: Final = 20000.0
+ALGORITHM_VERSION: Final = f"coating-session-v2/{coating_assessment.CRITERION_VERSION}"
 ATLAS_SIZE: Final = 2048
 WORST_ZONE_LIMIT: Final = 3
 SOURCE_CROPS: Final = "cur_sequence_heatmap"
 _MAP_NUMBER: Final = re.compile(r"Map(\d+)", re.IGNORECASE)
-# `CoatingProgressEngine` 구역 상태 → 계약의 도막 상태(응답 계약 §3.7).
-_STATUS: Final = {"complete": "normal", "needs_more": "under_app", "overpaint_risk": "over_app"}
-_STATUS_LABEL: Final = {"under_app": "부족", "over_app": "과도장"}
+# 계약의 6영역 이름(`CoatingZoneRatio`) — PR #8 6구간과 같은 순서다.
+_RATIO_KEYS: Final = ("under2", "under1", "normal", "over1", "over2", "over3")
+_CAUSE_WORDS: Final = {"speed_mm_s": "이동 속도", "distance_mm": "이격거리"}
 
 
 @dataclass
@@ -55,20 +56,23 @@ def _unavailable(reason: str, guideline: str) -> SessionCoating:
 
 
 def surfaces_from_height_map(raw: bytes, *, filename: str | None) -> dict[int, np.ndarray]:
-    """높이맵 PNG → {면 번호: 좌하단 원점 두께(µm)}. 읽을 수 없으면 빈 dict."""
+    """높이맵 PNG → {면 번호: 좌하단 원점 원시 두께(µm), 칠한 자리가 아니면 0}. 읽을 수 없으면 빈 dict."""
     try:
-        pixels = np.asarray(Image.open(io.BytesIO(raw)).convert("RGB"), dtype=np.float32)
-    except (UnidentifiedImageError, OSError, ValueError):
+        thickness = coating_assessment.painted_surface_from_png(raw)
+    except ValueError:
         logger.warning("height map unreadable (%d bytes)", len(raw))
         return {}
-    thickness = (pixels[:, :, 0] / 255.0 + pixels[:, :, 1] / 65025.0) * HEIGHTMAP_SCALE_UM
     match = _MAP_NUMBER.search(filename or "")
     # PNG은 맨 윗행이 v=1이고 판정 표면은 좌하단 원점이다.
     return {int(match.group(1)) if match else 1: np.ascontiguousarray(np.flipud(thickness))}
 
 
 def surfaces_from_crops(bodies: Iterable[Mapping[str, Any]]) -> dict[int, np.ndarray]:
-    """시퀀스 크롭을 주어진 순서대로 덮어쓴 세션 끝 두께. 나중 크롭이 같은 화소의 앞 값을 대신한다."""
+    """시퀀스 크롭을 주어진 순서대로 덮어쓴 세션 끝 두께. 나중 크롭이 같은 화소의 앞 값을 대신한다.
+
+    PR #8 `cumulative_crop` 교체 규칙의 main 쪽 사본이다. 다른 점은 크롭 안의 B=0 화소가 앞선 값을 지우지 않는 것
+    (`coating_assessment` 독스트링 4번).
+    """
     surfaces: dict[int, np.ndarray] = {}
     for body in bodies:
         result = body.get("sequence_result")
@@ -101,39 +105,42 @@ def _process(bodies: Iterable[Mapping[str, Any]]) -> str | None:
     return None
 
 
-def _zone_row(judgment: ZoneJudgment) -> dict[str, Any]:
-    coverage = judgment.coverage
-    return {
-        "zone_id": judgment.zone_id,
-        "map_num": judgment.map_num,
-        "status": _STATUS[coverage.status],
-        "thickness_um": round(coverage.mean_um, 1),
-        "completion_percent": coverage.completion_percent,
-        "coverage_percent": coverage.coverage_percent,
-        "overpaint_percent": coverage.overpaint_percent,
-        # 판정 셀 중 기준을 벗어난(부족 + 과도장) 비율. 구역끼리 심한 정도를 견준다.
-        "out_of_band_percent": round((coverage.below + coverage.above) / coverage.cells * 100.0, 1),
-    }
+def _guideline(zones: list[dict[str, Any]], worst: list[dict[str, Any]], summary: Mapping[str, Any]) -> str:
+    def ids(grade: str | None) -> list[str]:
+        return [zone["zone_id"] for zone in zones if zone["grade"] == grade]
 
-
-def _guideline(zones: list[dict[str, Any]], worst: list[dict[str, Any]]) -> str:
-    def ids(status: str) -> list[str]:
-        return [zone["zone_id"] for zone in zones if zone["status"] == status]
-
-    under, over = ids("under_app"), ids("over_app")
-    parts = [f"전문가 최종 도막과 비교한 {len(zones)}개 구역 중 기준 충족 {len(zones) - len(under) - len(over)}개"]
-    if under:
-        parts.append(f"부족 {len(under)}개({'·'.join(under)}번)")
-    if over:
-        parts.append(f"과도장 {len(over)}개({'·'.join(over)}번)")
-    text = ", ".join(parts) + "입니다."
+    parts = [f"정상 {len(ids('normal'))}개"]
+    for label, grade in (("저도막", "below"), ("과도막", "above"), ("칠한 곳 없음", None)):
+        found = ids(grade)
+        if found:
+            parts.append(f"{label} {len(found)}개({'·'.join(found)}번)")
+    basis = coating_assessment.basis_label(summary["target_thickness_um"], summary["target_basis"])
+    text = f"{basis}으로 {len(zones)}개 구역을 판정했습니다: {', '.join(parts)}입니다. {coating_assessment.RULE_NOTE}"
     if worst:
         top = worst[0]
         text += (
-            f" 가장 벗어난 곳은 {top['zone_id']}번 구역({_STATUS_LABEL[top['status']]}, "
-            f"평균 {top['thickness_um']:.0f}µm)입니다."
+            f" 가장 벗어난 곳은 {top['zone_id']}번 구역({'저도막' if top['status'] == 'under_app' else '과도막'}, "
+            f"칠한 곳 평균 {top['thickness_um']:.0f}µm)입니다."
+        )
+    if summary["painted_mean_um"] is not None:
+        # 손대지 않은 구역도 미도장으로 들어간 값이라 범위를 "판정한 구역 전체"라고 밝힌다.
+        text += (
+            f" 판정한 구역 전체의 칠한 곳 평균은 {summary['painted_mean_um']:.0f}µm, "
+            f"칠하지 않은 면적은 {summary['unpainted_fraction'] * 100:.0f}%입니다."
         )
     return text
+
+
+def _worst_zone(zone: Mapping[str, Any]) -> dict[str, Any]:
+    variables = [_CAUSE_WORDS[item["variable"]] for item in zone["adjustments"]]
+    return {
+        "zone_id": zone["zone_id"],
+        "map_num": zone["map_num"],
+        "thickness_um": zone["thickness_um"],
+        "status": zone["status"],
+        "action": coating_assessment.adjustment_sentence(zone["adjustments"]),
+        "cause": f"원인 후보: {', '.join(variables)} (확정 아님)" if variables else None,
+    }
 
 
 def analyze_session_coating(
@@ -148,7 +155,7 @@ def analyze_session_coating(
     """세션 끝 도막을 구역별로 판정한다(모듈 독스트링의 순서). `bodies`는 시간 순서여야 한다."""
     mode_id = learning_mode_from_scenario(scenario_id)
     if mode_id is None:
-        return _unavailable("reference_context_unavailable", "학습 콘텐츠가 아니어서 전문가 도막 기준이 없습니다.")
+        return _unavailable("reference_context_unavailable", "학습 콘텐츠가 아니어서 도막을 판정할 Zone 기준 자료가 없습니다.")
     process = _process(bodies)
     if process == "blasting":
         return _unavailable("coating_not_applicable", "블라스팅 세션은 도막 두께를 판정하지 않습니다.")
@@ -167,42 +174,36 @@ def analyze_session_coating(
 
     judgments, reason = engine.judge_zones(
         scenario_id=scenario_id, process=process, mode_id=mode_id, surfaces=surfaces,
-        target_thickness_um=target_thickness_um,
+        target_thickness_um=target_thickness_um, behavior=coating_assessment.behavior_by_zone(bodies),
     )
     if not judgments:
-        return _unavailable(reason or "coating_reference_unavailable", "이 콘텐츠의 전문가 도막 기준이 없습니다.")
+        return _unavailable(
+            reason or "coating_reference_unavailable", "이 콘텐츠의 Zone 기준 자료가 없어 도막을 판정하지 못했습니다."
+        )
 
-    zones = [_zone_row(judgment) for judgment in judgments]
-    # 안정 정렬이라 같은 비율이면 구역 순서를 지킨다.
+    zones = [
+        coating_assessment.zone_row(judgment.map_num, judgment.zone_id, judgment.assessment) for judgment in judgments
+    ]
+    summary = coating_assessment.session_summary(judgment.assessment for judgment in judgments)
+    # 안정 정렬이라 벗어난 정도가 같으면 구역 순서를 지킨다.
     worst = sorted(
-        (zone for zone in zones if zone["status"] != "normal"), key=lambda zone: -zone["out_of_band_percent"]
+        (zone for zone in zones if zone["status"] in {"under_app", "over_app"}),
+        key=lambda zone: -abs(zone["thickness_um"] - zone["target_thickness_um"]) / zone["target_thickness_um"],
     )[:WORST_ZONE_LIMIT]
-    below = sum(judgment.coverage.below for judgment in judgments)
-    above = sum(judgment.coverage.above for judgment in judgments)
-    cells = sum(judgment.coverage.cells for judgment in judgments)
+    bands = [summary["six_band_counts"][key] for key in SIX_BAND_KEYS]
+    painted = summary["painted_pixel_count"]
     report = {
-        "comparison_basis": "session_target" if target_thickness_um is not None else "expert_reference",
-        "target_thickness_um": target_thickness_um,
+        "comparison_basis": "session_target",
+        "target_thickness_um": summary["target_thickness_um"],
+        "target_basis": summary["target_basis"],
         "analysis_status": "available",
         "reason_code": None,
         "algorithm_version": ALGORITHM_VERSION,
         "source_artifact_id": source,
-        "guideline": _guideline(zones, worst),
-        "distribution": {"below": below, "in_band": cells - below - above, "above": above},
-        "worst_zones": [
-            {
-                "zone_id": zone["zone_id"],
-                "map_num": zone["map_num"],
-                "thickness_um": zone["thickness_um"],
-                "status": zone["status"],
-            }
-            for zone in worst
-        ],
+        "guideline": _guideline(zones, worst, summary),
+        # 단위는 칠한 화소 수다. 6구간을 목표 미만 / 정상 구간 / 과도막 경계 이상으로 묶는다.
+        "distribution": {"below": sum(bands[:2]), "in_band": bands[2], "above": sum(bands[3:])},
+        "zone_summary": dict(zip(_RATIO_KEYS, (count / painted for count in bands))) if painted else None,
+        "worst_zones": [_worst_zone(zone) for zone in worst],
     }
-    if target_thickness_um is not None:
-        report["guideline"] = (
-            f"공식 Zone 면적의 95% 이상이 세션 목표 두께 {target_thickness_um:g}µm를 충족하는지 평가했습니다. "
-            "목표의 110%를 넘는 두께는 과도장 여부를 별도로 확인합니다. "
-            + report["guideline"].replace("전문가 최종 도막과 비교한", "목표 도막과 비교한")
-        )
     return SessionCoating(report, zones)

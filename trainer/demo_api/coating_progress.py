@@ -9,7 +9,7 @@ import json
 import math
 import threading
 from collections import OrderedDict
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -17,12 +17,12 @@ from typing import Any, Literal
 import numpy as np
 from PIL import Image, UnidentifiedImageError
 
+from trainer.demo_api import coating_assessment
 from trainer.demo_api.telemetry_contracts import AnalyzeSequenceRequest, CoatingProgress
 from trainer.zone_reference import ZoneReferenceCatalog
 
 _MAX_SESSIONS = 16
-# 구역 판정 기준. 시퀀스 안내(`evaluate`)와 세션 리포트(`judge_zones`)가 같은 값을 쓴다 — 갈리면 훈련 중
-# "충족"이던 구역이 리포트에서 "부족"이 된다.
+# 시퀀스 안내(`evaluate`)의 구역 판정 기준. 세션 리포트(`judge_zones`)는 `coating_assessment`로 판정한다.
 _OVERPAINT_RISK_PERCENT = 25.0
 _COMPLETE_PERCENT = 90.0
 _COVERAGE_PERCENT = 85.0
@@ -64,7 +64,7 @@ class ZoneCoverage:
 class ZoneJudgment:
     map_num: int
     zone_id: str
-    coverage: ZoneCoverage
+    assessment: dict[str, Any]  # `coating_assessment.assess_zone`의 반올림하지 않은 값
 
 
 def measure_zone(
@@ -403,10 +403,13 @@ class CoatingProgressEngine:
         mode_id: int,
         surfaces: dict[int, np.ndarray],
         target_thickness_um: float | None = None,
+        behavior: Mapping[str, Mapping[str, Sequence[float]]] | None = None,
     ) -> tuple[list[ZoneJudgment], str | None]:
-        """세션 끝 두께(면 번호 → 좌하단 원점 표면)를 프로필의 모든 구역에 대고 판정한다.
+        """세션 끝 두께(면 번호 → 좌하단 원점 표면)를 프로필의 모든 구역에서 목표 두께에 대고 판정한다.
 
+        표면은 칠한 자리의 원시 두께이고 그 밖은 0이어야 한다. 목표가 없으면 기본 목표 160µm다.
         표면이 없는 면의 구역은 판정하지 않는다 — 높이맵이 한 면만 오면 다른 면을 칠했는지 모른다.
+        `behavior`는 구역별 속도·거리 표본(`coating_assessment.behavior_by_zone`)이고 조절 후보에만 쓴다.
         """
         with self._guard:
             profile, reason = self._load_profile(process, mode_id)
@@ -426,10 +429,12 @@ class CoatingProgressEngine:
             grid_size = int(coating.get("grid_size", 0))
             target_cells = coating.get("cells")
             surface = surfaces.get(map_num)
+            # 등급은 전문가 칸을 쓰지 않지만 실시간 `evaluate`와 같은 Zone 집합을 판정하려고 이 조건을 남긴다.
+            # 전문가 칸이 없는 Zone은 등급·구역 수·세션 평균에서 빠진다.
             if surface is None or min(atlas_width, atlas_height, grid_size) <= 0 or not isinstance(target_cells, dict):
                 continue
             if surface.shape != (atlas_height, atlas_width):
-                # TSB 안내: 해상도가 다르면 최근접으로 맞춘다.
+                # TSB 안내: 해상도가 다르면 최근접으로 맞춘다. PR #8 엔진은 크기가 다른 아틀라스를 거부한다(기존 동작 유지).
                 surface = np.asarray(
                     Image.fromarray(surface.astype(np.float32)).resize(
                         (atlas_width, atlas_height), Image.Resampling.NEAREST
@@ -442,23 +447,15 @@ class CoatingProgressEngine:
                 zone_id=zone_id,
                 atlas_width=atlas_width,
                 atlas_height=atlas_height,
-                require_official=target_thickness_um is not None,
+                require_official=True,
             )
             if mask_reason is not None:
                 continue
-            coverage = measure_target_zone(
-                surface, zone_mask, target_thickness_um=target_thickness_um,
-            ) if target_thickness_um is not None else measure_zone(
-                surface,
-                target_cells,
-                atlas_width=atlas_width,
-                atlas_height=atlas_height,
-                grid_size=grid_size,
-                zone_mask=zone_mask,
-                target_thickness_um=target_thickness_um,
+            assessment = coating_assessment.assess_zone(
+                surface, zone_mask, target_thickness_um, **(behavior or {}).get(zone_id, {}),
             )
-            if coverage is not None:
-                judgments.append(ZoneJudgment(map_num, zone_id, coverage))
+            if assessment is not None:
+                judgments.append(ZoneJudgment(map_num, zone_id, assessment))
         judgments.sort(
             key=lambda item: (item.map_num, int(item.zone_id) if item.zone_id.isdigit() else 1_000_000, item.zone_id)
         )
