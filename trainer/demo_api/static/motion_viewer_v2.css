@@ -109,6 +109,14 @@ select:hover { background: var(--raised-hover); }
 .hud-zone { display: inline-flex; align-items: center; gap: 8px; }
 .hud-zone b { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; -webkit-text-fill-color: var(--ink); }
 .hud-zone b::before { content: ""; width: 8px; height: 8px; border-radius: 2px; background: currentColor; }
+/* 재생 중 값이 바뀌어도 칸 폭이 그대로이도록 칸마다 가장 긴 값(data-max)을 높이 0 줄로 깔아 둔다. 같은 글꼴로 재므로 글꼴이 늦게 실려도 맞다 */
+.hud [data-max] { display: inline-flex; flex-direction: column; align-items: flex-end; }
+.hud [data-max]::after { content: attr(data-max); height: 0; overflow: hidden; visibility: hidden; }
+/* Zone 칸은 앞의 색 네모가 ::before 라 격자로 둔다: 1행 = 네모·글, 높이 0 인 2행 = 가장 긴 글 */
+.hud-zone b[data-max] { display: inline-grid; grid-template-columns: 8px auto; grid-template-rows: auto 0; gap: 0 6px; }
+.hud-zone b[data-max]::before { grid-area: 1 / 1; }
+.hud-zone b[data-max]::after { grid-area: 2 / 2; }
+.realtime-hud-activity[data-max] { align-items: flex-start; }
 .realtime-hud-activity { color: var(--ink-3); font-size: 12px; }
 .hud-item { display: inline-flex; align-items: center; gap: 6px; color: var(--ink); }
 .hud-item .lucide { color: var(--ink-3); }
@@ -414,7 +422,7 @@ button.chip:hover { background: var(--raised-hover); color: var(--ink); }
   .v2-grid { grid-template-columns: minmax(0, 1fr); }
   .v2-main { overflow: visible; grid-template-rows: auto auto; }
   .stage-viewport { height: 56vh; min-height: 280px; }
-  .hud { max-width: calc(100% - 24px); top: 52px; }
+  .hud { max-width: calc(100% - 24px); top: 52px; column-gap: 12px; }   /* 칸 폭을 고정해도 400px 에서 두 줄에 들어가게 */
   .features { grid-template-columns: minmax(0, 1fr); }
   .feature + .feature { border-left: 0; border-top: 1px solid var(--line); }
   .zone-detail { grid-template-columns: repeat(2, minmax(0, 1fr)); }
