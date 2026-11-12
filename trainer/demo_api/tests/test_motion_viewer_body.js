@@ -92,12 +92,12 @@ test('팔·몸통 색은 패널과 같고, 실측 추적기는 따로 고리로 
   const colorOf = (a, b) => drawn.lines.find((item) => distance(item.a, a) < 1e-9 && distance(item.b, b) < 1e-9)?.color;
   assert.equal(colorOf(body.rightShoulder, body.rightArm.elbow), '#22d3ee');
   assert.equal(colorOf(body.rightArm.elbow, body.rightArm.hand), '#22d3ee');
-  assert.equal(colorOf(body.leftShoulder, body.leftArm.elbow), '#ff9f7a');
-  assert.equal(colorOf(body.leftArm.elbow, body.leftArm.hand), '#ff9f7a');
+  assert.equal(colorOf(body.leftShoulder, body.leftArm.elbow), '#9aa3ad');
+  assert.equal(colorOf(body.leftArm.elbow, body.leftArm.hand), '#9aa3ad');
   assert.equal(colorOf(body.head, body.neck), '#e6edf7');
   assert.equal(colorOf(body.neck, body.chest), '#e6edf7');
   // 고리 = 건(오른쪽 색)과 왼손 추적기(왼쪽 색). 건 고리는 IK 손(손잡이)과 떨어져 있다.
-  assert.deepEqual(drawn.rings.map((ring) => ring.color).sort(), ['#22d3ee', '#ff9f7a']);
+  assert.deepEqual(drawn.rings.map((ring) => ring.color).sort(), ['#22d3ee', '#9aa3ad']);
   assert.ok(drawn.rings.some((ring) => distance(ring.p, [1.3, 1.3]) < 1e-9));
   assert.ok(drawn.rings.some((ring) => distance(ring.p, [0.7, 1.25]) < 1e-9));
 });
@@ -114,7 +114,7 @@ test('건·왼손 자료가 없으면 그 팔을 그리지 않고, 분사 축이
 test('패널과 큰 장면은 같은 표·IK·색 상수를 쓰고 값을 따로 적지 않는다', () => {
   const code = CORE.split('\n').filter((line) => !line.startsWith('//'));
   const table = code.find((line) => line.startsWith('const BODY='));
-  for (const literal of ['.2106', '.1368', '.416', '.243', '#ff9f7a', '#e6edf7', '#22d3ee']) {
+  for (const literal of ['.2106', '.1368', '.416', '.243', '#9aa3ad', '#e6edf7', '#22d3ee']) {
     assert.ok(table.includes(literal), `표에 ${literal} 이 있다`);
     assert.equal(code.filter((line) => line !== table && line.includes(literal)).length, 0, `코어에서 ${literal} 은 표 한 곳에만 있다`);
     if (literal !== '#22d3ee') assert.ok(!POSE.includes(literal), `포즈 스크립트에 ${literal} 을 다시 적지 않는다`);
