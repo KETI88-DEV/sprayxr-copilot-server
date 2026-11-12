@@ -53,3 +53,11 @@ test('data-max 글을 보이지 않는 높이 0 줄로 깔아 칸 폭을 고정�
   assert.ok(/\.hud[^{]*\{[^}]*font-variant-numeric:\s*tabular-nums/.test(v2Css), 'v2 상태 막대 숫자 폭 고정');
   assert.ok(/\.realtime-hud-value\{[^}]*font-variant-numeric:tabular-nums/.test(legacy), '기존 화면 숫자 폭 고정');
 });
+
+test('Zone 칸의 색 네모는 글자와 세로 가운데로 맞춘다(격자 칸이 flex 의 flex-end 를 물려받지 않는다)', () => {
+  const css = fs.readFileSync(path.join(root, 'static/motion_viewer_v2.css'), 'utf8');
+  const rule = css.match(/\.hud-zone b\[data-max\]\s*\{([^}]*)\}/);
+  assert.ok(rule, 'Zone 칸 규칙이 있어야 한다');
+  assert.match(rule[1], /display:\s*inline-grid/);
+  assert.match(rule[1], /align-items:\s*center/);
+});

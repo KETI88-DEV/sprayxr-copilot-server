@@ -100,7 +100,7 @@
     $('v2ZoneScore').parentElement.hidden = !zone;
     const corrections = zone?.corrections || [];
     const advice = $('v2ZoneAdvice');
-    advice.textContent = !zone ? '' : corrections.length ? corrections[0] + (corrections.length > 1 ? ` 외 ${corrections.length - 1}건` : '') : '전문가 기록과 차이가 작습니다';
+    advice.textContent = !zone ? '' : corrections.length ? corrections[0].replace(/[.。]\s*$/, '') + (corrections.length > 1 ? ` 외 ${corrections.length - 1}건` : '') : '전문가 기록과 차이가 작습니다';
     advice.title = corrections.join('\n');
     const more = $('v2ZoneMore');
     const metrics = (zone?.metrics || []).filter((metric) => metric.available !== false && metric.similarity_percent != null);
@@ -529,7 +529,7 @@
     head.append(anchorBox, fresh);
 
     const tabs = el('div', 'tabs');
-    tabs.setAttribute('role', 'tablist');
+    tabs.setAttribute('role', 'radiogroup');
     tabs.setAttribute('aria-label', '질문 종류');
     const log = el('div', 'ask-log');
     log.setAttribute('role', 'log');
@@ -631,7 +631,7 @@
       tab = next;
       for (const button of tabs.children) {
         const selected = button.dataset.tab === tab.id;
-        button.setAttribute('aria-selected', String(selected));
+        button.setAttribute('aria-checked', String(selected));
         button.tabIndex = selected ? 0 : -1;
       }
       for (const feature of document.querySelectorAll('.feature')) feature.classList.toggle('is-asked', feature.dataset.feature === tab.id);
@@ -647,7 +647,7 @@
     TABS.forEach((item, index) => {
       const button = el('button');
       button.type = 'button';
-      button.setAttribute('role', 'tab');
+      button.setAttribute('role', 'radio');
       button.dataset.tab = item.id;
       button.innerHTML = svg(item.icon);
       button.append(item.label);
@@ -712,7 +712,7 @@
       const pin = el('button', 'chip');
       pin.type = 'button';
       pin.innerHTML = svg('map-pin');
-      pin.append(`${sent.state.zone_id == null ? 'Zone 없음' : zoneText(sent.state.zone_id)} · ${sent.state.playhead_seconds.toFixed(1)}초`);
+      pin.append(`${sent.state.zone_id == null ? 'Zone 없음' : zoneText(sent.state.zone_id)} · ${sent.state.playhead_seconds.toFixed(2)}초`);
       pin.title = '질문한 재생 위치로 이동';
       pin.addEventListener('click', () => seekToSeconds(sent.state.playhead_seconds));
       meta.append(pin);
@@ -836,7 +836,7 @@
       },
       setAnchor(state) {
         tagZone(anchorZone, state.zone_id, state.zone_id != null && !state.spraying ? ' · 이동 중' : '');
-        anchorTime.textContent = `${state.playhead_seconds.toFixed(1)}초`;
+        anchorTime.textContent = `${state.playhead_seconds.toFixed(2)}초`;
       },
     };
   })();
