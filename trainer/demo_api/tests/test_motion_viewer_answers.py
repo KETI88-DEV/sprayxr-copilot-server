@@ -269,7 +269,9 @@ def test_v2_coating_list_follows_the_current_zone_only_when_asked_and_not_while_
     script = _v2_static("motion_viewer_v2.js")
     assert "function markCurrentZone(follow = false)" in script
     assert "!follow" in script and "coatScrolledByUser" in script
-    assert script.count("markCurrentZone(true)") == 1   # 재생·탐색으로 Zone 이 바뀔 때 한 곳뿐
+    assert script.count("markCurrentZone(true)") == 2   # Zone·맵이 바뀔 때 한 곳 + 사용자 스크롤 뒤 따라잡기
+    assert "previous.zone_id !== anchor.zone_id || previous.map_num !== anchor.map_num) markCurrentZone(true)" in script   # 분사만 바뀔 때는 아님
+    assert "'scroll'" in script and "coatCatchUp" in script
     assert script.count("markCurrentZone();") >= 3      # 목록·순서를 그릴 때는 강조만
 
 
@@ -283,5 +285,5 @@ def test_v2_zone_line_does_not_say_small_difference_for_a_zone_the_coating_panel
 def test_v2_coating_axis_hides_a_tick_label_that_would_touch_the_previous_one() -> None:
     script = _v2_static("motion_viewer_v2.js")
     axis = script[script.index("axis.append(el('span'), ticks"):script.index("host.replaceChildren(axis")]
-    assert "new ResizeObserver" in axis and "getBoundingClientRect" in axis and "visibility = 'hidden'" in axis
+    assert "tickObserver?.disconnect()" in axis and "document.fonts" in axis and "new ResizeObserver" in axis and "getBoundingClientRect" in axis and "visibility = 'hidden'" in axis
     assert "label.style.left = at(value)" in script   # 눈금 위치 계산은 그대로

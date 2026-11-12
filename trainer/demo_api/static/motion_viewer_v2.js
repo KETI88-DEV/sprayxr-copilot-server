@@ -296,6 +296,7 @@
     if (expert) renderExpertCoating(); else renderTargetCoating();
   }
 
+  let tickObserver = null;
   function renderTargetCoating() {
     const host = $('v2CoatBars');
     const count = $('v2CoatCount');
@@ -341,7 +342,8 @@
     }
     axis.append(el('span'), ticks, el('span', null, 'µm'));
     // 좁은 폭에서 눈금 글자가 붙으면(160·240 → 160240) 앞 눈금과 겹치는 것을 숨긴다. 위치 계산은 그대로.
-    new ResizeObserver(() => {
+    tickObserver?.disconnect();   // 그릴 때마다 하나만 둔다
+    const hideTouching = () => {
       let edge = -Infinity;
       for (const tickLabel of ticks.children) {
         tickLabel.style.visibility = '';
@@ -349,7 +351,10 @@
         if (!box.width) continue;
         if (box.left < edge + 4) tickLabel.style.visibility = 'hidden'; else edge = box.right;
       }
-    }).observe(ticks);
+    };
+    tickObserver = new ResizeObserver(hideTouching);
+    tickObserver.observe(ticks);
+    document.fonts?.ready.then(hideTouching);   // 웹폰트가 늦게 오면 글자 폭이 바뀐다
     host.replaceChildren(axis, ...rows.map((row) => {
       const grade = row.grade ?? 'none';
       const button = el('button', 'coat-row is-target');
@@ -442,19 +447,29 @@
   }).observe($('coatingZone'), { childList: true, characterData: true, subtree: true });
 
   // 목록은 이상 행이 맨 위인 순서다. 불러올 때 그려 다시 칠하는 호출은 강조만 하고, 재생·탐색으로 Zone 이 바뀔 때(follow)만 따라간다.
-  let coatScrolledByUser = 0;
+  let coatScrolledByUser = 0, coatAutoTop = null, coatCatchUp = 0;
   for (const type of ['wheel', 'touchstart', 'pointerdown', 'keydown']) $('v2CoatBars').addEventListener(type, () => { coatScrolledByUser = performance.now(); }, { passive: true });
+  $('v2CoatBars').addEventListener('scroll', (event) => {   // 스크롤바 끌기 등 우리가 한 것이 아닌 스크롤
+    if (event.target.scrollTop !== coatAutoTop) coatScrolledByUser = performance.now();
+  }, { passive: true });
   function markCurrentZone(follow = false) {
     for (const node of document.querySelectorAll('.order-chip, .coat-row')) {
       node.classList.toggle('is-current', anchor.zone_id != null && node.dataset.zone === String(anchor.zone_id) && !node.classList.contains('is-missing'));
     }
     const row = document.querySelector('.coat-row.is-current');
     const box = row?.parentElement;
-    if (!follow || !box || box.scrollHeight <= box.clientHeight || performance.now() - coatScrolledByUser < 4000) return;
+    if (!follow || !box || box.scrollHeight <= box.clientHeight) return;
+    const wait = 4000 - (performance.now() - coatScrolledByUser);
+    if (wait > 0) {   // 사용자 스크롤이 끝나면 한 번 따라잡는다
+      clearTimeout(coatCatchUp);
+      coatCatchUp = setTimeout(() => markCurrentZone(true), wait + 50);
+      return;
+    }
     const inner = row.getBoundingClientRect();
     const outer = box.getBoundingClientRect();
     if (inner.top < outer.top) box.scrollTop -= outer.top - inner.top;
     else if (inner.bottom > outer.bottom) box.scrollTop += inner.bottom - outer.bottom;
+    coatAutoTop = box.scrollTop;
   }
 
   // ── 장면 크기와 측정값 표기 ───────────────────────────────
@@ -1016,8 +1031,8 @@
     }
     if (previous.zone_id !== anchor.zone_id || previous.map_num !== anchor.map_num || previous.spraying !== anchor.spraying) {
       renderZoneNote();
-      markCurrentZone(true);
     }
+    if (previous.zone_id !== anchor.zone_id || previous.map_num !== anchor.map_num) markCurrentZone(true);   // 분사만 바뀔 때는 따라가지 않는다
     renderPoseNow();
     markFlaggedJoints(event.detail.frame);
     chat.setAnchor(anchor);
