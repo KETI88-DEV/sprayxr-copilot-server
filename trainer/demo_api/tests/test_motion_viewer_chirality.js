@@ -24,39 +24,51 @@ function viewer(patch = (line) => line) {
     assert.ok(line, `화면 코드에서 ${marker} 를 찾지 못했다`);
     return patch(line);
   };
-  // arcs: 관절마다 [화면 x, 화면 y, 반지름, 채움 여부]. strokes: 선마다 그을 때의 점선 무늬(실선이면 빈 배열).
-  const arcs = [], strokes = [];
-  let dash = [], shape = null;
+  // arcs: 원마다 {x, y, r, filled, style}. paths: 그은 선마다 {points, style, dash}. 그린 순서 그대로다.
+  const arcs = [], paths = [];
+  let points = [], shape = null;
   const context2d = {
-    clearRect() {}, beginPath() {}, lineTo() {}, fillText() {},
-    setLineDash(pattern) { dash = pattern; },
-    moveTo() { shape = 'line'; },
-    arc(x, y, r) { shape = 'arc'; arcs.push([x, y, r, null]); },
-    fill() { arcs.at(-1)[3] = true; },
-    stroke() { if (shape === 'arc') arcs.at(-1)[3] = false; else strokes.push([...dash]); },
+    clearRect() {}, fillText() {}, globalAlpha: 1, lineWidth: 1, strokeStyle: '', fillStyle: '', dash: [],
+    setLineDash(pattern) { this.dash = [...pattern]; },
+    beginPath() { points = []; shape = null; },
+    moveTo(x, y) { shape = 'line'; points.push([x, y]); },
+    lineTo(x, y) { points.push([x, y]); },
+    arc(x, y, r) { shape = 'arc'; arcs.push({ x, y, r, filled: null, style: null }); },
+    fill() { if (shape === 'arc') Object.assign(arcs.at(-1), { filled: true, style: this.fillStyle }); },
+    stroke() {
+      if (shape === 'arc') Object.assign(arcs.at(-1), { filled: false, style: this.strokeStyle });
+      else paths.push({ points: [...points], style: this.strokeStyle, dash: [...this.dash] });
+    },
   };
-  const sandbox = vm.createContext({
-    skeletonCanvas: { getBoundingClientRect: () => ({ width: 300, height: 300 }) },
-    skeletonCtx: context2d,
-    $: () => ({ textContent: '' }),
-  });
+  const skeletonCanvas = { getBoundingClientRect: () => ({ width: 300, height: 300 }), getContext: () => context2d };
+  const sandbox = vm.createContext({ skeletonCanvas, skeletonCtx: context2d, $: () => ({ textContent: '' }) });
   vm.runInContext([
     'var yaw=0,pitch=0,zoom=175,panX=0,panY=0,skeletonYaw=0,data={bones:[]};',
     pick('function add(a,b)'), pick('function transform('), pick('function project('),
-    pick('function uprightSkeleton('), pick('function panelSkeleton('), pick('function drawSkeletonView('),
+    pick('function uprightSkeleton('), pick('function panelSkeleton('), pick('function skeletonProjection('), pick('function drawSkeletonView('),
   ].join('\n'), sandbox);
+  /** 관절 이름 → 그 관절이 찍힌 원. 그리기 순서는 깊이 순이라 순서가 아니라 같은 투영 함수가 낸 자리로 찾는다. */
+  const byName = (frame) => {
+    const { joints } = sandbox.panelSkeleton(frame);
+    const view = sandbox.skeletonProjection(joints, 300, 300);
+    return Object.fromEntries(Object.keys(frame.joints).map((name) => {
+      const [x, y] = view.project(joints[name]);
+      const arc = arcs.find((item) => Math.abs(item.x - x) < 1e-9 && Math.abs(item.y - y) < 1e-9);
+      assert.ok(arc, `${name} 관절 원이 그려지지 않았다`);
+      return [name, [arc.x, arc.y, arc.r, arc.filled, arc.style]];
+    }));
+  };
   return {
-    sandbox,
-    /** 스켈레톤 패널이 관절마다 찍은 [화면 x, 화면 y, 반지름]. 관절 순서 = 넣은 순서. */
+    sandbox, skeletonCanvas, arcs, paths,
+    /** 스켈레톤 패널이 관절마다 찍은 [화면 x, 화면 y, 반지름, 채움 여부, 색]. */
     panel(joints, angle = 0, frame = { joints }) {
       sandbox.skeletonYaw = angle;
-      arcs.length = 0; strokes.length = 0;
+      arcs.length = 0; paths.length = 0;
       sandbox.drawSkeletonView(frame);
-      return Object.fromEntries(Object.keys(joints).map((name, index) => [name, arcs[index]]));
+      return byName(frame);
     },
-    /** 마지막 그리기에서 뼈마다 쓴 점선 무늬. 앞의 넷은 배경 가로줄이다. */
-    boneDashes: () => strokes.slice(4),
-    gridDashes: () => strokes.slice(0, 4),
+    /** 마지막 그리기에서 그은 선(바닥 격자·앞 표시·뼈)의 점선 무늬. */
+    dashes: () => paths.map((path) => path.dash),
   };
 }
 
@@ -123,7 +135,7 @@ test('스켈레톤 패널 0°는 정면에서 본 그림이고 "우" 회전은 �
 test('이 시험은 틀린 식을 거른다: 처음 식(거울상), 등 뒤 그림, 깊이 부호만 뒤집기', () => {
   const mirror = (line) => line.replace('x=-dot(relative,across)', 'x=dot(relative,across)');
   const back = (line) => mirror(line).replace('cross(across,up)', 'cross(up,across)');
-  const depthOnly = (line) => back(line).replace('p[2]/span*.22', '-p[2]/span*.22');
+  const depthOnly = (line) => back(line).replace('d/span*.22', '-d/span*.22');
   assert.ok(panelViolations(viewer(mirror)).includes('거울상'));
   assert.ok(panelViolations(viewer(back)).includes('오른손이 화면 오른쪽'));
   assert.ok(panelViolations(viewer(depthOnly)).includes('오른손이 화면 오른쪽'));
@@ -154,7 +166,7 @@ test('패널은 오른쪽 전완·손만 실측 건 쪽으로 다시 세우고 �
   assert.equal(JSON.stringify(frame), before, '프레임 자료(frame.joints)는 그대로다');
   // 점선 팔은 끊긴 팔로 읽혔다(2026-11-12). 다시 세운 팔도 채운 원과 실선으로 그린다.
   for (const [name, arc] of Object.entries(drawn)) assert.equal(arc[3], true, name);
-  assert.ok(view.boneDashes().every((pattern) => pattern.length === 0));
+  assert.ok(view.dashes().every((pattern) => pattern.length === 0));
 });
 
 test('다시 세운 팔은 마디 길이를 지키고 나머지 관절은 CSV 그대로다', () => {
@@ -198,7 +210,7 @@ test('건 자료가 없으면 CSV 관절을 그대로 실선으로 그린다', (
     for (const name of Object.keys(frame.joints)) assert.deepEqual([...joints[name]], [...csv[name]], name);
     const drawn = view.panel(frame.joints, 0, frame);
     assert.ok(Object.values(drawn).every((arc) => arc[3] === true));
-    assert.ok(view.boneDashes().every((pattern) => pattern.length === 0));
+    assert.ok(view.dashes().every((pattern) => pattern.length === 0));
   }
   assert.ok(view.panel(whole.joints, 0, { joints: whole.joints })['Right Hand'][0] > 150, 'CSV 오른손 관절은 몸 왼쪽(정면 그림의 화면 오른쪽)에 그려진다');
 });
@@ -207,4 +219,88 @@ test('v2 교정 고리도 같은 함수로 관절 위치를 구한다', () => {
   const script = fs.readFileSync(path.join(__dirname, '../static/motion_viewer_v2.js'), 'utf8');
   assert.ok(script.includes('panelSkeleton(frame).joints'));
   assert.ok(!script.includes('uprightSkeleton('));
+});
+
+// ── 시인성: 좌우 색, 바닥 격자, 교정 고리 ───────────────────────
+// 서 있는 사람(+Z 를 봄, 몸 오른쪽 = +X)의 전신. 뼈 목록은 서버 _BONES 와 같은 부모→자식 순서다.
+const BODY = {
+  Pelvis: [0, 1.0, 0], Spine: [0, 1.15, 0], Chest: [0, 1.4, 0], Head: [0, 1.65, 0],
+  'Left Shoulder': [-0.08, 1.45, 0], 'Left Upper Arm': [-0.2, 1.45, 0], 'Left Fore Arm': [-0.22, 1.2, 0], 'Left Hand': [-0.22, 0.95, 0],
+  'Right Shoulder': [0.08, 1.45, 0], 'Right Upper Arm': [0.2, 1.45, 0], 'Right Fore Arm': [0.25, 1.3, 0.25], 'Right Hand': [0.3, 1.3, 0.5],
+  'Left Thigh': [-0.1, 0.95, 0], 'Left Calf': [-0.1, 0.5, 0], 'Left Foot': [-0.1, 0.08, 0], 'Left Toe': [-0.1, 0.02, 0.15],
+  'Right Thigh': [0.1, 0.95, 0], 'Right Calf': [0.1, 0.5, 0], 'Right Foot': [0.1, 0.08, 0], 'Right Toe': [0.1, 0.02, 0.15],
+};
+const BODY_BONES = [['Pelvis', 'Spine'], ['Spine', 'Chest'], ['Chest', 'Head'], ['Chest', 'Left Shoulder'], ['Left Shoulder', 'Left Upper Arm'],
+  ['Left Upper Arm', 'Left Fore Arm'], ['Left Fore Arm', 'Left Hand'], ['Chest', 'Right Shoulder'], ['Right Shoulder', 'Right Upper Arm'],
+  ['Right Upper Arm', 'Right Fore Arm'], ['Right Fore Arm', 'Right Hand'], ['Pelvis', 'Left Thigh'], ['Left Thigh', 'Left Calf'],
+  ['Left Calf', 'Left Foot'], ['Left Foot', 'Left Toe'], ['Pelvis', 'Right Thigh'], ['Right Thigh', 'Right Calf'], ['Right Calf', 'Right Foot'], ['Right Foot', 'Right Toe']];
+
+/** 뼈 [a, b] 를 그은 선의 색. 끝점이 두 관절 원의 중심과 같은 선을 찾는다. */
+function boneStyle(view, drawn, a, b) {
+  const same = (point, joint) => Math.abs(point[0] - drawn[joint][0]) < 1e-9 && Math.abs(point[1] - drawn[joint][1]) < 1e-9;
+  const path = view.paths.find((item) => item.points.length === 2 && same(item.points[0], a) && same(item.points[1], b));
+  assert.ok(path, `${a}–${b} 뼈가 그려지지 않았다`);
+  return path.style;
+}
+
+test('왼쪽 팔다리와 오른쪽 팔다리는 다른 색이고 몸통은 둘 다와 다르다', () => {
+  const view = viewer();
+  view.sandbox.data.bones = BODY_BONES;
+  for (const angle of [0, 90, 180]) {
+    const drawn = view.panel(BODY, angle);
+    const left = boneStyle(view, drawn, 'Left Fore Arm', 'Left Hand'), right = boneStyle(view, drawn, 'Right Fore Arm', 'Right Hand');
+    const core = boneStyle(view, drawn, 'Spine', 'Chest');
+    assert.notEqual(left, right, `${angle}°`);
+    assert.ok(core !== left && core !== right, `${angle}° 몸통 색`);
+    assert.equal(boneStyle(view, drawn, 'Left Calf', 'Left Foot'), left, '다리도 같은 쪽 팔과 같은 색');
+    assert.equal(boneStyle(view, drawn, 'Right Calf', 'Right Foot'), right);
+    assert.notEqual(drawn['Left Hand'][4], drawn['Right Hand'][4], '손 관절 원도 좌우 색이 다르다');
+  }
+});
+
+test('바닥 격자는 가장 낮은 발 밑에 그려지고 몸과 함께 돈다', () => {
+  const view = viewer();
+  view.sandbox.data.bones = BODY_BONES;
+  const grid = (angle) => {
+    const drawn = view.panel(BODY, angle);
+    const joints = new Set(Object.values(drawn).map(([x, y]) => `${x},${y}`));
+    const floor = view.paths.filter((path) => path.points.every(([x, y]) => !joints.has(`${x},${y}`)));
+    return { drawn, lines: floor.filter((path) => path.points.length === 2), mark: floor.find((path) => path.points.length === 3) };
+  };
+  const front = grid(0);
+  assert.ok(front.lines.length >= 10, `격자 선 ${front.lines.length}개`);
+  // 격자는 발보다 아래(화면에서 더 아래쪽)까지 깔린다.
+  const lowest = Math.max(...front.lines.flatMap((path) => path.points.map(([, y]) => y)));
+  assert.ok(lowest > Math.max(front.drawn['Left Foot'][1], front.drawn['Right Foot'][1]));
+  // 첫 선(몸 좌우 방향 선)은 0°에서 화면 가로, 우 90°에서는 세로 쪽으로 눕는다.
+  const slope = ({ points: [[x1, y1], [x2, y2]] }) => Math.abs(y2 - y1) / Math.max(1e-9, Math.abs(x2 - x1));
+  const side = grid(90);
+  assert.ok(slope(front.lines[0]) < 0.05, `0° 기울기 ${slope(front.lines[0])}`);
+  assert.ok(slope(side.lines[0]) > 1, `90° 기울기 ${slope(side.lines[0])}`);
+  // 몸 앞 표시: 0°에는 보는 사람 쪽(골반 아래보다 화면 아래), 우 90°에는 화면 왼쪽.
+  const tip = (mark) => mark.points[1];
+  assert.ok(front.mark && tip(front.mark)[1] > front.drawn.Pelvis[1] && Math.abs(tip(front.mark)[0] - front.drawn.Pelvis[0]) < 1e-6);
+  assert.ok(side.mark && tip(side.mark)[0] < side.drawn.Pelvis[0] - 20);
+  assert.ok(view.dashes().every((pattern) => pattern.length === 0));
+});
+
+test('v2 교정 고리는 같은 투영 함수로 관절 원과 같은 중심에 그린다', () => {
+  const view = viewer();
+  view.sandbox.data.bones = BODY_BONES;
+  const script = fs.readFileSync(path.join(__dirname, '../static/motion_viewer_v2.js'), 'utf8');
+  const start = script.indexOf('  function markFlaggedJoints(frame) {');
+  const body = script.slice(start, script.indexOf('\n  }\n', start) + 4);
+  const mark = vm.runInContext(`(function ($, sequenceAt, anchor) {\n${body}\nreturn markFlaggedJoints; })`, view.sandbox)(
+    () => view.skeletonCanvas, () => ({ joints: ['RightHand', 'LeftForeArm'] }), { playhead_seconds: 0 });
+  for (const angle of [0, 45, 135]) {
+    const drawn = view.panel(BODY, angle);
+    const before = view.arcs.length;
+    mark({ joints: BODY });
+    const rings = view.arcs.slice(before);
+    assert.equal(rings.length, 2);
+    assert.ok(rings.every((ring) => ring.filled === false));
+    for (const [ring, name] of [[rings[0], 'Right Hand'], [rings[1], 'Left Fore Arm']]) {
+      assert.ok(Math.abs(ring.x - drawn[name][0]) < 1e-9 && Math.abs(ring.y - drawn[name][1]) < 1e-9, `${angle}° ${name}`);
+    }
+  }
 });

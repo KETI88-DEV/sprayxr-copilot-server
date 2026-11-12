@@ -2,6 +2,8 @@
 :root {
   --bg: #07101f;
   --scene: #050b17;
+  --stage: #172a44;   /* 3D 그림의 공간. 상단 바·카드(#0c1728)와 질문 열보다 한 단 밝다 */
+  --stage-edge: rgba(150, 182, 224, .28);
   --surface: #0c1728;
   --raised: #142238;
   --raised-hover: #1b2c47;
@@ -228,7 +230,7 @@ select:hover { background: var(--raised-hover); }
 .feature.is-asked h2 .lucide { color: var(--accent-ink); }
 
 .pose-body { display: grid; grid-template-columns: clamp(132px, 32%, 172px) minmax(0, 1fr); gap: 16px; min-height: 0; }
-.skeleton-screen { position: relative; min-height: 0; overflow: hidden; border-radius: 8px; background: var(--scene); }
+.skeleton-screen { position: relative; min-height: 0; overflow: hidden; border: 1px solid var(--stage-edge); border-radius: 8px; background: var(--stage); }
 #skeletonCanvas { display: block; width: 100%; height: 100%; }
 .posture { position: absolute; top: 6px; left: 8px; color: var(--ink-2); font-size: 12px; }
 .pose-chart { display: grid; grid-template-rows: minmax(0, 1fr) auto; gap: 8px; min-width: 0; }

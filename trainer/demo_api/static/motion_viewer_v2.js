@@ -181,27 +181,24 @@
     now.replaceChildren(head, ` ${current.correction || (limited ? '' : '교정할 관절이 없습니다')}${limited ? ' (입력 품질 제한으로 참고용)' : ''}`);
   }
 
-  // 채점 엔진이 교정을 낸 관절을 스켈레톤 위에 고리로 표시한다(기존 스켈레톤 그림과 같은 투영).
+  // 채점 엔진이 교정을 낸 관절을 스켈레톤 위에 고리로 표시한다(기존 스켈레톤 그림과 같은 투영 함수).
   function markFlaggedJoints(frame) {
     const flagged = (sequenceAt(anchor.playhead_seconds)?.joints || []).map((name) => String(name).replace(/([a-z])([A-Z])/g, '$1 $2'));
-    if (!flagged.length || typeof panelSkeleton !== 'function') return;
+    if (!flagged.length || typeof skeletonProjection !== 'function') return;
     const canvas = $('skeletonCanvas');
     const box = canvas.getBoundingClientRect();
     const joints = panelSkeleton(frame).joints;
-    const points = Object.values(joints);
-    if (!points.length || !box.width) return;
-    const xs = points.map((point) => point[0]), ys = points.map((point) => point[1]);
-    const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
-    const span = Math.max(.25, maxX - minX, maxY - minY), scale = Math.min(box.width * .72, box.height * .78) / span;
+    const view = skeletonProjection(joints, box.width, box.height);
+    if (!view) return;
     const context = canvas.getContext('2d');
     context.strokeStyle = '#f2b84b';
     context.lineWidth = 2;
     for (const name of flagged) {
       const point = joints[name];
       if (!point) continue;
-      const depth = 1 + Math.max(-.25, Math.min(.25, point[2] / span * .22));
+      const [x, y] = view.project(point);
       context.beginPath();
-      context.arc(box.width / 2 + (point[0] - (minX + maxX) / 2) * scale * depth, box.height * .88 - (point[1] - minY) * scale * depth, 10, 0, Math.PI * 2);
+      context.arc(x, y, 10, 0, Math.PI * 2);
       context.stroke();
     }
   }
