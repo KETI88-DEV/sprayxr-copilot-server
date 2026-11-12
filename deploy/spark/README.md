@@ -406,7 +406,8 @@ curl -sS -w '  [%{http_code}]\n' $Q -H 'Content-Type: application/json' -d '{"us
 |---|---|
 | knowledge_search `Y` | HTTP 200, `status: "SUCCESS"`, `code: 200`, `data.request_id`와 `session_id`가 요청값 그대로, `resolved_intents: ["knowledge_search"]`, `retrieval_used: true`, `citations`가 비어 있지 않음(`DOC-…-C…`), `context_status: "not_available"`, `answer`가 비어 있지 않음, `latency_ms`가 curl `time_total`×1000과 비슷함(차이는 네트워크·직렬화 수준) |
 | knowledge_search `N` | 위와 같되 `retrieval_used: false`, `citations: []` |
-| trajectory_recomm / pose_recomm / error_analysis | HTTP 200, `SUCCESS`, `answer`는 "…기능은 준비 중입니다…" 고정 문구, `retrieval_used: false`, `citations: []`, 응답이 즉시 옴(생성 없음). 같은 시각 `docker compose logs mcp`에 요청 로그 없음 |
+| error_analysis | HTTP 200, `SUCCESS`, `retrieval_used: false`, `citations: []`, 응답이 즉시 옴(생성 없음). 같은 시각 `docker compose logs mcp`에 요청 로그 없음. 완료 리포트가 있는 세션이면 `answer`가 도막 분포와 저도막·과도막 Zone의 조절 후보, `context_status: "available"`. 없으면 "이 세션에는 완료 분석의 도막 결과가 없어 …" 안내 |
+| trajectory_recomm / pose_recomm | HTTP 200, `SUCCESS`, `answer`는 "…기능은 준비 중입니다…" 고정 문구, `retrieval_used: false`, `citations: []`, 응답이 즉시 옴(생성 없음). 같은 시각 `docker compose logs mcp`에 요청 로그 없음 |
 | `use_rag: true`(boolean) | HTTP 422, `status: "ERROR"`, `code: 422`, `data: null` |
 
 MCP 장애 회귀(T7) 절차:

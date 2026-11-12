@@ -152,24 +152,31 @@ POST /sessions/end
 
 ### 3.4 `coating_feedback`
 
+`POST /api/v1/copilot/analyze-sequence`가 현재 Zone의 도막 평가로 채운다. 값은 `trainer/demo_api/coating_assessment.py`(PR #8 도막 기준 어댑터)의 Zone 행을 그대로 옮긴 것이다. 저장 전용 `POST /api/v1/telemetry/sequence`는 판정하지 않고 `analysis_status="not_available"`, `reason_code="coating_engine_pending_integration"`만 낸다.
+
 | 필드 | 타입 | 필수 | 설명 |
 |---|---|:---:|---|
-| `analysis_status` | String | Y | `available`, `not_available` |
-| `reason_code` | String 또는 Null | Y | 분석 불가 사유. 분석 가능 시 `null` |
-| `zone_id` | String | 조건부 | 대표 판정 구역 ID |
+| `analysis_status` | String | Y | `available`, `not_available`. Zone에 칠한 곳이 없으면 `not_available` |
+| `reason_code` | String 또는 Null | Y | 분석 불가 사유. 분석 가능 시 `null`. 칠한 곳이 없으면 `no_valid_painted_pixels` |
+| `zone_id` | String | 조건부 | 판정한 Zone ID(`"1"`~`"39"`) |
 | `map_num` | Integer | 조건부 | Height map 번호 |
-| `uv_bin` | Array[Integer] | 조건부 | `[x_bin, y_bin]` 형식의 세그먼트 좌표 |
-| `thickness_um` | Number | 조건부 | 해당 세그먼트의 현재 누적 두께(µm) |
-| `target_thickness_um` | Number | 조건부 | 목표 도막 두께(µm) |
-| `normal_band_um` | Array[Number] | 조건부 | `[최솟값, 최댓값]` 정상 두께 범위(µm) |
-| `status` | String | 조건부 | `under_app`, `normal`, `over_app` |
-| `zone_class` | String | 조건부 | `under2`, `under1`, `normal`, `over1`, `over2`, `over3` |
-| `under_frac` | Number | 조건부 | 이번 버스트 경로 중 규격 미달 비율, 0~1 |
-| `action` | String 또는 Null | 조건부 | 권장 처방 코드. 정상은 `null` |
-| `action_reachable` | Boolean 또는 Null | 조건부 | 행동 조정만으로 회복 가능한지 여부. 정상은 `null` |
-| `message` | String | Y | LLM이 생성한 설명 문장 |
-| `provisional` | Boolean | 조건부 | 추정값 여부. 누적 히트맵 실측은 `false` |
-| `algorithm_version` | String | Y | 도막 판정 알고리즘 버전 |
+| `status` | String | 조건부 | `under_app`, `normal`, `over_app`. `grade`의 다른 이름 |
+| `grade` | String | 조건부 | PR #8 등급 `below`(평균 < 목표), `normal`(목표 ≤ 평균 < 목표의 1.5배), `above`(평균 ≥ 목표의 1.5배) |
+| `thickness_um` | Number | 조건부 | Zone의 칠한 곳 평균 두께(보정 후, µm, 소수 한 자리) |
+| `target_thickness_um` | Number | 조건부 | 판정에 쓴 목표 두께(µm) |
+| `target_basis` | String | 조건부 | `session_target`(세션이 목표를 명시), `default_target`(생략 → 160µm) |
+| `normal_band_um` | Array[Number] | 조건부 | `[목표, 목표의 1.5배]` 정상 범위(µm). 표시용 |
+| `unpainted_fraction` | Number | 조건부 | Zone 면적 가운데 칠하지 않은 비율, 0~1 |
+| `six_band_counts` | Object | 조건부 | 칠한 화소를 목표 대비 6구간으로 센 수. 열쇠는 `lt_0_9t`, `from_0_9t_to_lt_1_0t`, `from_1_0t_to_lt_1_5t`, `from_1_5t_to_lt_2_0t`, `from_2_0t_to_lt_2_5t`, `gte_2_5t` |
+| `adjustments` | Array[Object] | Y | 조절 후보. 항목은 `variable`(`speed_mm_s`·`distance_mm`), `direction`(`decrease`·`increase`), `priority`(1·2), `evidence_kind`(`quality_rule_candidate`). **규칙에 따른 후보이고 확정된 원인·처방이 아니다.** 등급이 정상이거나 시퀀스에 평균 속도·거리가 없으면 빈 배열 |
+| `message` | String 또는 Null | Y | 훈련생에게 보일 등급 문장. 모델이 만들지 않는다 |
+| `algorithm_version` | String 또는 Null | Y | `coating-v1-adapter/tsb-round-thickness-20261021+painted-zone-mean/1` |
+
+두께는 PR #8 보정값이다: 받은 값에서 10 µm를 한 번 빼고 1600 µm에서 자르며, 1 µm 미만은 미도장으로 본다. 크롭이 닿지 않은 화소는 "칠하지 않음"으로 본다(PR #8 엔진은 "모름"으로 두고 등급을 보류한다). 칠한 곳이 없으면 `zone_id`·`map_num`·`target_*`·`unpainted_fraction` 등은 채우고 `status`·`grade`·`thickness_um`만 `null`이다. 도막을 재지 못했으면(기준 자료 없음 등) 판정 필드가 전부 `null`이다.
+
+`grade`·`status`는 다음 Zone 안내(`coating_progress.status`, 공식 Zone 면적 95% 게이트)와 다른 값이다. 면적 95%를 채웠어도 평균이 목표 미만이면 `below`일 수 있다.
+
+이전 판이 정의한 `uv_bin`, `zone_class`, `under_frac`, `action`, `action_reachable`, `provisional`은 아직 내지 않는다.
 
 ### 3.5 `sequence_feedback`
 
@@ -234,6 +241,8 @@ POST /sessions/end
 
 `status`와 `zone_class`의 조합이 위 표와 다르면 서버는 계약 오류로 처리한다.
 
+지금 서버는 `zone_class`를 내지 않는다. 완료 리포트의 `zone_summary`는 같은 여섯 이름(`under2`, `under1`, `normal`, `over1`, `over2`, `over3`)을 PR #8의 6구간(목표의 90% 미만, 90~100%, 100~150%, 150~200%, 200~250%, 250% 이상)에 차례대로 붙여 칠한 면적 대비 비율을 낸다. 이 이름 대응은 [추정]이고 TSB 확인 전이다. Zone의 `status`는 6구간이 아니라 칠한 곳 평균으로 정하므로(§3.4 `grade`) 위 표처럼 구간 하나와 맞물리지 않는다.
+
 ### 3.8 도막 처방 코드
 
 | 코드 | 설명 |
@@ -282,20 +291,29 @@ POST /sessions/end
     "coating_feedback": {
         "analysis_status": "available",
         "reason_code": null,
-        "zone_id": "A-2",
+        "zone_id": "2",
         "map_num": 2,
-        "uv_bin": [3, 1],
-        "thickness_um": 118,
-        "target_thickness_um": 160,
-        "normal_band_um": [160, 240],
         "status": "under_app",
-        "zone_class": "under1",
-        "under_frac": 0.8,
-        "action": "increase_dwell",
-        "action_reachable": true,
-        "message": "하단 좌측 구역이 저도막입니다. 이 구역을 조금 더 오래 또는 반복 분사하세요.",
-        "provisional": false,
-        "algorithm_version": "coating-feedback-1.0"
+        "grade": "below",
+        "thickness_um": 118.0,
+        "target_thickness_um": 160.0,
+        "target_basis": "default_target",
+        "normal_band_um": [160.0, 240.0],
+        "unpainted_fraction": 0.5,
+        "six_band_counts": {
+            "lt_0_9t": 50,
+            "from_0_9t_to_lt_1_0t": 0,
+            "from_1_0t_to_lt_1_5t": 0,
+            "from_1_5t_to_lt_2_0t": 0,
+            "from_2_0t_to_lt_2_5t": 0,
+            "gte_2_5t": 0
+        },
+        "adjustments": [
+            {"variable": "speed_mm_s", "direction": "decrease", "priority": 1, "evidence_kind": "quality_rule_candidate"},
+            {"variable": "distance_mm", "direction": "decrease", "priority": 2, "evidence_kind": "quality_rule_candidate"}
+        ],
+        "message": "Zone 2: 저도막(칠한 곳 평균 118µm, 미도장 50%) 조절 후보: 이동 속도를 낮추는 쪽, 이격거리를 줄이는 쪽. 원인으로 확정된 것은 아닙니다.",
+        "algorithm_version": "coating-v1-adapter/tsb-round-thickness-20261021+painted-zone-mean/1"
     },
     "sequence_feedback": {
         "analysis_status": "available",
@@ -317,6 +335,8 @@ POST /sessions/end
   }
 }
 ```
+
+`coating_feedback`은 10×10 합성 표면(절반을 보정 후 118 µm로 칠함, 목표 생략)을 어댑터에 넣어 얻은 실제 모양이다. 화소 수는 그 합성 자료의 값이다. 이 샘플의 `anomaly` 객체와 `pose_feedback`은 이전 판의 설계안이고, 실제 응답 `data`에는 `anomaly`가 없다(§3.11).
 
 ### 3.10 자세 판정 가능 샘플
 
@@ -352,6 +372,35 @@ POST /sessions/end
 **통상 범위의 패스는 `corrections`가 빈 배열이다.** 숙련자 자신의 held-out 패스도 89.6%가 교정 0개로 나온다. 교정이 매번 채워져 나온다면 임계가 잘못된 것이다.
 
 ### 3.11 `anomaly_detection` SSE
+
+#### 현재 구현 (`GET /api/v1/stream/anomalies/{session_id}`)
+
+실제 본문은 아래 설계안의 `anomaly.items` 형식이 아니라 평평한 객체 하나다. `anomaly.items`·`event_id`·`text_guide`·`sequence_data_ack` 형식은 구현돼 있지 않다. SSE `id:`는 서버가 매기는 증가 정수다.
+
+- 공통 열쇠: `session_id`, `sequence_id`, `anomaly_type`, `reason_code`, `message`.
+- `anomaly_type`은 넷이다.
+
+| `anomaly_type` | `reason_code` | 언제 |
+|---|---|---|
+| `sequence_order_deviation` | 순서 판정의 사유 코드 | 권장 순서를 벗어난 시퀀스 |
+| `direction_deviation` | 방향 판정의 사유 코드 | 권장 방향을 벗어난 시퀀스 |
+| `coating_over_app` | `zone_grade_above` | 분석한 시퀀스에서 지금 Zone의 칠한 곳 평균이 목표의 1.5배 이상일 때 |
+| `coating_under_app` | `zone_grade_below` | 다른 Zone으로 넘어간 시퀀스에서 방금 떠난 Zone의 칠한 곳 평균이 목표 미만일 때 |
+
+- 도막 알림은 `POST /api/v1/copilot/analyze-sequence`에서만 나오고, 세션마다 Zone당 종류별 1회다(세션 시작 때 이력을 지운다). 순서·방향 알림은 같은 시퀀스의 같은 이상을 한 번만 보낸다. 한 시퀀스에서 알림이 둘 이상 나올 수 있다.
+- 도막 알림에 더해지는 열쇠: `zone_id`, `map_num`, `status`(`over_app`·`under_app`), `grade`(`above`·`below`), `thickness_um`(칠한 곳 평균, 보정 후), `target_thickness_um`, `target_basis`. 값은 §3.4의 Zone 행과 같다.
+- `coating_under_app`의 `zone_id`는 방금 떠난 Zone이라 같은 시퀀스 HTTP 응답의 `coating_feedback.zone_id`(지금 Zone)와 다르다. 서버가 재시작된 직후 첫 Zone 이동에서는 떠난 Zone을 몰라 저도막 알림이 나오지 않을 수 있다.
+- 모의 발행 경로(`/api/v1/test/sequence/*`)는 도막 알림을 내지 않는다. 그 경로는 화면 개발용으로 `direction_deviation`과 `distance_deviation`을 낸다.
+
+```text
+id: 7
+event: anomaly_detection
+data: {"session_id":"3_11000346_1","sequence_id":"SEQ-0012","anomaly_type":"coating_over_app","reason_code":"zone_grade_above","message":"기본 목표 160µm 기준: Zone 3의 칠한 곳 평균 두께가 251µm로 목표의 1.5배 이상입니다(과도막). 이 Zone의 분사를 멈추세요.","zone_id":"3","map_num":1,"status":"over_app","grade":"above","thickness_um":251.0,"target_thickness_um":160.0,"target_basis":"default_target"}
+```
+
+숫자는 모양을 보이려는 예시 값이다.
+
+#### 설계안 (미구현)
 
 시퀀스 HTTP 응답과 별개로 도막 또는 경로 이상을 집계한 `anomaly.detected`가 `true`일 때만 Push한다. SSE `id:`는 본문의 `event_id`와 동일하다.
 
@@ -743,19 +792,23 @@ Query 예시는 다음 네 종류로 구분한다.
 
 ### 4.6 `error_analysis` 예시
 
+`error_analysis`는 완료 리포트에 저장된 Zone별 도막 평가로 답한다. 모델과 MCP를 부르지 않는다. 답은 칠한 면적의 6구간 분포와 저도막·과도막 Zone의 조절 후보다. 조절 후보는 등급에 따른 규칙의 후보이고 원인으로 확정된 것이 아니다. 완료 리포트가 없으면 "이 세션에는 완료 분석의 도막 결과가 없어 …" 안내를 낸다. 2026-11 이전 기준으로 저장된 리포트만 있으면 "이전 기준으로 저장되어 있어 도막 분포와 조절 후보를 낼 수 없습니다"라고 답한다.
+
 #### 요청
 
 ```json
 {
   "session_id": "SESSION-001",
   "user_id": "W-017",
-  "prompt": "A-2 구역의 저도막 원인과 조치 방법을 알려줘.",
+  "prompt": "도막 분포 이상 원인은?",
   "task_type": "error_analysis",
-  "use_rag": false
+  "use_rag": "N"
 }
 ```
 
 #### 응답
+
+아래 `answer`와 `coating_context`는 §3.9와 같은 합성 표면 Zone 하나로 만든 실제 모양이다. 실제 리포트에는 판정한 Zone마다 행이 있다.
 
 ```json
 {
@@ -766,20 +819,43 @@ Query 예시는 다음 네 종류로 구분한다.
     "request_id": "req-query-0043",
     "session_id": "SESSION-001",
     "user_id": "W-017",
-    "scenario_id": "1-A",
-    "generated_at": "2026-08-06T14:33:40Z",
-    "latency_ms": 195,
-    "answer": "A-2 구역은 이동 속도가 빠르고 체류 시간이 부족해 저도막이 발생했습니다. 해당 구역의 체류 시간을 늘리세요.",
-    "resolved_intents": ["coating_error_analysis"],
+    "scenario_id": "3",
+    "generated_at": "2026-11-12T14:33:40Z",
+    "latency_ms": 12,
+    "degraded": false,
+    "language": "ko",
+    "response_language": "ko",
+    "answer": "기본 목표 160µm 기준으로 본 도막 분포입니다. 칠한 면적의 두께 분포: 목표의 90% 미만 100%, 90~100% 0%, 100~150% 0%, 150~200% 0%, 200~250% 0%, 250% 이상 0%.\n저도막 Zone 2(칠한 곳 평균 118µm): 조절 후보: 이동 속도를 낮추는 쪽, 이격거리를 줄이는 쪽.\n조절 후보는 등급에 따른 일반적인 방향이며 원인으로 확정된 것은 아닙니다.",
+    "resolved_intents": ["error_analysis"],
     "context_status": "available",
     "sequence_context": null,
     "coating_context": {
-      "sequence_id": 12,
-      "zone_id": "A-2",
-      "status": "under_app",
-      "thickness_um": 118,
-      "target_thickness_um": 160,
-      "action": "increase_dwell"
+      "analysis_status": "available",
+      "scope": "completed_session",
+      "comparison_basis": "saved_coating_report",
+      "zones": [
+        {
+          "zone_id": "2",
+          "map_num": 1,
+          "status": "under_app",
+          "grade": "below",
+          "thickness_um": 118.0,
+          "target_thickness_um": 160.0,
+          "target_basis": "default_target",
+          "normal_band_um": [160.0, 240.0],
+          "unpainted_fraction": 0.5,
+          "six_band_counts": {"lt_0_9t": 50, "from_0_9t_to_lt_1_0t": 0, "from_1_0t_to_lt_1_5t": 0, "from_1_5t_to_lt_2_0t": 0, "from_2_0t_to_lt_2_5t": 0, "gte_2_5t": 0},
+          "coverage_percent": 0.0,
+          "overpaint_percent": 0.0,
+          "completion_percent": 36.9,
+          "gate_status": "needs_more",
+          "adjustments": [
+            {"variable": "speed_mm_s", "direction": "decrease", "priority": 1, "evidence_kind": "quality_rule_candidate"},
+            {"variable": "distance_mm", "direction": "decrease", "priority": 2, "evidence_kind": "quality_rule_candidate"}
+          ],
+          "adjustment_reason": null
+        }
+      ]
     },
     "pose_context": null,
     "retrieval_used": false,
@@ -787,6 +863,8 @@ Query 예시는 다음 네 종류로 구분한다.
   }
 }
 ```
+
+`action`(처방 코드)은 내지 않는다. 조절 후보는 `adjustments`에 있다.
 
 ### 4.7 `knowledge_search` 예시
 
@@ -1340,7 +1418,7 @@ pose_report.average_similarity_score
 다음 항목은 API 구현 전에 담당 기관과 값 또는 공식을 확정해야 한다.
 
 1. `coating_distribution_index`의 정확한 산출 공식과 유효 범위
-2. `zone_class` 6영역별 두께 경계값
+2. `zone_class` 6영역의 이름 대응 — 경계는 PR #8 도막 기준(목표의 0.9·1.0·1.5·2.0·2.5배)으로 정해졌다. 여섯 이름(`under2`~`over3`)을 이 6구간에 차례대로 붙인 것은 [추정]이고 미확정이다(§3.7)
 3. `action` 선택 규칙과 우선순위
 4. `action_reachable` 판정 기준
 5. `under_frac`의 공간 집계 기준과 분모

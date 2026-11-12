@@ -295,6 +295,8 @@ Trigger ON→OFF 한 번을 하나의 시퀀스로 정의한다. 프레임은 �
 
 상태 전이는 HTTP/SSE 발행 전에 확정한다. HTTP와 SSE가 서로 다른 판정을 만들어서는 안 된다.
 
+> **지금 구현과 다른 점.** 3~4번처럼 `coating_analysis`·`anomaly_detection`을 조합하지 않는다. 도막은 서버 안에서 `trainer/demo_api/coating_assessment.py`(PR #8 도막 기준 어댑터)가 판정하고, 도막 등급 알림(`coating_over_app`·`coating_under_app`)은 순서·방향 알림과 따로 발행된다(§8.2). 도막 알림의 값은 같은 판정 결과의 Zone 행에서 옮기므로 HTTP와 다르지 않다. 다만 저도막 알림은 "방금 떠난 Zone"을 말하므로 같은 시퀀스 HTTP `coating_feedback`(지금 Zone)과 `zone_id`가 다르다.
+
 ### 7.3 응답
 
 ```json
@@ -358,7 +360,7 @@ Trigger ON→OFF 한 번을 하나의 시퀀스로 정의한다. 프레임은 �
 
 | | 명세서 | 우리 구현 |
 |---|---|---|
-| `POST /telemetry/sequence` (p.4) | "수신과 동시에 **도막 두께 및 궤적 평가**가 실행되며, 이상 탐지 시 SSE Push" | 시퀀스를 **데이터베이스에 올린다**. 도막·궤적 엔진은 미구현이므로 `not_available`. SSE 발행도 아직 없다 |
+| `POST /telemetry/sequence` (p.4) | "수신과 동시에 **도막 두께 및 궤적 평가**가 실행되며, 이상 탐지 시 SSE Push" | 시퀀스를 **데이터베이스에 올린다**. 판정은 하지 않아 `coating_feedback`은 `not_available`(`coating_engine_pending_integration`)이다. 도막 판정과 SSE 발행은 `/copilot/analyze-sequence`가 한다(아래 엔진 상태) |
 | `POST /copilot/query` + `pose_recomm` (p.9) | "**전문가 작업 자세 유사도 비교**" | **자세를 여기서 채점한다.** 대상은 `context`(예: `SEQ-012`)가 가리키는 시퀀스, 없으면 그 `session_id`의 가장 최근 시퀀스 |
 
 이 문서의 이전 판이 `telemetry/sequence` 응답에 `pose_feedback`을 실은 것은 틀렸다. 응답에서 제거했고 `data`는 11키다.
@@ -383,7 +385,7 @@ Trigger ON→OFF 한 번을 하나의 시퀀스로 정의한다. 프레임은 �
 
 **`analysis_status`·`reason_code`를 세 feedback에 같은 방법으로 넣는다.** §7.3 말미가 "판정할 데이터가 부족하면 임의 값을 만들지 않고 `analysis_status="not_available"`과 안정적인 `reason_code`를 반환한다"고 규정하므로, `pose_feedback`만이 아니라 `coating_feedback`·`sequence_feedback`도 같은 두 필드로 상태를 말한다. 엔진 미구현은 `reason_code: "engine_not_implemented"`다.
 
-**엔진 상태.** `pose_analysis`만 실제로 돈다. `coating_analysis`·`sequence_analysis`는 미구현이고, §7.2의 4·7단계(`anomaly_detection` 조합과 SSE 발행)도 아직 없다. 자세는 MCP `/pose_estimation/sequence`로 HTTP 위임한다.
+**엔진 상태 (2026-11-12 갱신).** 자세는 텔레메트리에서 채점하지 않는다(`/copilot/query`의 `pose_recomm`이 MCP `/pose_estimation/sequence`로 위임한다). `/copilot/analyze-sequence`는 도막을 판정해 `coating_progress`(95% 면적 게이트)와 `coating_feedback`(PR #8 기준 등급·분포·조절 후보)을 채우고, 순서·방향 판정으로 `sequence_feedback`을 채운다. SSE는 순서·방향 이탈과 도막 등급(과도막·저도막)을 발행한다(§8.2). §7.2의 `anomaly_detection` 조합 단계는 없다.
 
 **엔진 장애는 수신을 실패로 만들지 않는다.** MCP가 HTTP 500이거나 `status != "success"`면 200 + `pose_feedback.reason_code: "engine_unavailable"`이고 시퀀스는 저장된다.
 
@@ -428,18 +430,25 @@ Trigger ON→OFF 한 번을 하나의 시퀀스로 정의한다. 프레임은 �
 - 연결 유지용 comment heartbeat를 최대 15초 간격으로 보낸다.
 - 모든 이벤트에 증가하는 `id`를 포함한다.
 - 클라이언트는 `Last-Event-ID`로 재연결할 수 있다.
-- 같은 `sequence_id`의 동일 이상을 중복 발행하지 않는다.
+- 같은 `sequence_id`의 동일 이상을 중복 발행하지 않는다. 도막 등급 알림은 Zone 단위로 막는다(세션마다 Zone당 종류별 1회).
 
 ### 8.2 이벤트
+
+실제 본문은 평평한 객체 하나다. 이 문서의 이전 판이 보인 `anomaly.items`·`event_id`·`text_guide`·`sequence_data_ack` 형식은 구현돼 있지 않다. 필드와 예시는 응답 계약 문서(`docs/ai_copilot_response_contract.md`) §3.11 "현재 구현"이 정본이다.
+
+- 공통 열쇠: `session_id`, `sequence_id`, `anomaly_type`, `reason_code`, `message`.
+- `anomaly_type`: `sequence_order_deviation`, `direction_deviation`, `coating_over_app`(`zone_grade_above`), `coating_under_app`(`zone_grade_below`). 모의 발행 경로(`/api/v1/test/sequence/*`)는 `direction_deviation`·`distance_deviation`만 내고 도막 알림은 내지 않는다.
+- 도막 알림의 추가 열쇠: `zone_id`, `map_num`, `status`, `grade`, `thickness_um`(칠한 곳 평균, 보정 후), `target_thickness_um`, `target_basis`.
+- 과도막은 지금 Zone의 칠한 곳 평균이 목표의 1.5배 이상이 된 시퀀스에서, 저도막은 다른 Zone으로 넘어간 시퀀스에서 방금 떠난 Zone의 평균이 목표 미만일 때 나온다. 둘 다 세션마다 Zone당 1회다. 서버 재시작 직후 첫 Zone 이동에서는 저도막 알림이 빠질 수 있다.
 
 ```text
 id: 42
 event: anomaly_detection
-data: {"event_id":"anomaly-SESSION-001-SEQ-0001","session_id":"SESSION-001","user_id":"USER-017","scenario_id":"TR-L01","sequence_id":"SEQ-0001","generated_at":"2026-09-16T08:01:01Z","text_guide":"이격거리를 줄이고 체류 시간을 늘리세요.","anomaly":{"detected":true,"anomaly_type":["coating"],"items":[{"axis":"thickness","type":"under_app","zone_id":"A-1","action":"increase_dwell"}]},"sequence_data_ack":{"stored":true,"duplicate":false,"frames_received":1,"frames_accepted":1}}
+data: {"session_id":"3_11000346_1","sequence_id":"SEQ-0013","anomaly_type":"coating_under_app","reason_code":"zone_grade_below","message":"기본 목표 160µm 기준: 방금 떠난 Zone 2의 칠한 곳 평균 두께가 118µm로 목표 미만입니다(저도막). 돌아가 얇은 곳을 보완하세요.","zone_id":"2","map_num":1,"status":"under_app","grade":"below","thickness_um":118.0,"target_thickness_um":160.0,"target_basis":"default_target"}
 
 ```
 
-SSE의 판정 값은 같은 시퀀스 HTTP 응답의 값과 일치해야 한다.
+숫자는 모양을 보이려는 예시 값이다. SSE의 판정 값은 같은 시퀀스 HTTP 응답의 Zone 행과 같다. 저도막 알림의 `zone_id`만 HTTP `coating_feedback.zone_id`(지금 Zone)와 다르다.
 
 ## 9. Co-Pilot 질의
 
@@ -791,6 +800,15 @@ LLM 응답 시간은 모델 정밀도와 서빙 백엔드에 따라 달라질 �
 
 이 표의 모든 목표 상태가 구현되고 §16을 통과한 뒤 새 Spark 릴리스를 생성한다.
 
+**2026-11-12 도막 기준 변경.** 이상탐지와 도막 분포에 관한 판정은 PR #8 도막 기준을 따른다(책임자 결정).
+
+- `/copilot/analyze-sequence`의 `coating_feedback`이 현재 Zone의 등급(`below`·`normal`·`above`, 칠한 곳 평균 기준)·미도장률·6구간 화소 수·조절 후보를 싣는다. 두께는 보정값(10 µm 한 번 차감, 1600 µm 상한, 1 µm 미만 미도장)이다.
+- `coating_progress`의 95% 면적 게이트는 그대로이고 두께만 보정값으로 잰다. `overpaint_risk`는 등급 `above`일 때다. 목표를 생략한 세션은 160 µm로 판정하고 `target_basis="default_target"`을 싣는다.
+- 이상 알림 SSE에 `coating_over_app`·`coating_under_app`이 더해졌다(§8.2).
+- 완료 리포트 `coating_report`는 항상 목표 기준(`comparison_basis="session_target"`)이고 Zone 행에 등급·분포·조절 후보를 싣는다.
+- `error_analysis`는 더 이상 "준비 중" 고정 응답이 아니다. 완료 리포트의 도막 분포와 저도막·과도막 Zone의 조절 후보로 답하고, 리포트가 없으면 자료가 없다고 안내한다. 도막·순서·자세를 조합한 원인 설명(§9.1)은 아직 아니다.
+- 저장 전용 `/telemetry/sequence`는 판정하지 않는다(`coating_engine_pending_integration`).
+
 ## 18. 필수 분석 인터페이스 계약
 
 ### 18.1 구성 원칙
@@ -870,6 +888,8 @@ LLM 응답 시간은 모델 정밀도와 서빙 백엔드에 따라 달라질 �
 - 모든 입력 모델은 `extra="forbid"`와 동등하게 알 수 없는 필드를 거부한다.
 
 ### 18.4 `coating_analysis`
+
+> **메모 (2026-11-12).** 이 절은 내부 MCP의 DFT 규격 판정 인터페이스다. v1 공개 응답의 목표 대비 등급(정상 범위 = 목표~목표의 1.5배, `trainer/demo_api/coating_assessment.py`)과는 다른 기준이다. 이 절의 내용은 고치지 않았다.
 
 내부 경로는 `POST /coating_analysis/analyze`다. 이 인터페이스가 도막 분포와 90/10 규격 판정의 유일한 소유자다.
 
