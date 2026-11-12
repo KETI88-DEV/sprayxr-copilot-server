@@ -28,6 +28,7 @@ from gradio import ChatMessage
 if __package__ in {None, ""} and str(Path(__file__).resolve().parents[2]) not in sys.path:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from trainer.demo_api import coating_assessment
 from trainer.demo_api.scenario_adapter import get_demo_scenario
 
 logger = logging.getLogger(__name__)
@@ -230,7 +231,7 @@ footer { display: none !important; }
 EXAMPLE_QUESTIONS: list[dict[str, str]] = [
     {
         "text": "현재 구역 도막 두께 합부 판정해줘",
-        "display_text": "DFT 합부 판정",
+        "display_text": "도막 두께 판정",
     },
     {
         "text": "현재 구역에서 도막 이상 패턴이 감지됐어. 원인 분석해줘",
@@ -257,8 +258,8 @@ EXAMPLE_QUESTIONS: list[dict[str, str]] = [
 ChatHistory = list[ChatMessage]
 
 _TOOL_DISPLAY: dict[str, str] = {
-    "dft_judge": "DFT 합부 판정",
-    "anomaly_detection": "도막 분포 이상 탐지",
+    "dft_judge": "도막 두께 판정",
+    "anomaly_detection": "도막 등급·분포",
     "sequence_validation": "도장 순서 안내",
     "pose_estimation": "숙련자 자세 비교",
     "location_tracking": "위치 추적",
@@ -294,59 +295,52 @@ def _classify_question(text: str) -> str:
 DEMO_SCENARIOS: dict[str, dict[str, Any]] = {
     "dft_judge": {
         "rag_chunks": [
-            {"chunk_id": "SPEC-DFT-001", "text": "SSPC-PA2 기준 DFT 합부 판정: nominal +/-20% 이내, 개별 측정값 중 90% 이상이 규격 이내이며 최소값은 nominal의 80% 이상이어야 합격.", "rerank_score": 0.94},
+            {"chunk_id": "TRAINING-COATING-CRITERION", "text": coating_assessment.RULE_NOTE, "rerank_score": 0.94},
             {"chunk_id": "QC-PROC-012", "text": "건조 도막 두께(DFT) 측정 시 게이지 교정 확인 필수. 각 구역 당 최소 5회 측정, 평균 및 개별 편차 기록.", "rerank_score": 0.87},
         ],
         "tool_calls": [
-            {"name": "dft_judge", "args": {"measurements": [95, 102, 88, 105, 99], "nominal": 100, "tolerance_pct": 20}, "result": {"verdict": "PASS", "mean": 97.8, "std": 6.14, "min": 88, "max": 105, "out_of_spec_count": 0, "details": "전 측정값이 80~120um 범위 이내. 평균 97.8um (nominal 대비 -2.2%). 합격."}},
+            {"name": "dft_judge", "args": {"measurements": [165, 172, 158, 180, 169], "spec": {"nominal": 160}}, "result": {"pass_": True, "verdict": "pass", "grade": "normal", "status": "normal", "violations": [], "mean": 168.8, "nominal": 160.0, "target_basis": "session_target", "normal_band_um": [160.0, 240.0], "six_band_counts": {"lt_0_9t": 0, "from_0_9t_to_lt_1_0t": 1, "from_1_0t_to_lt_1_5t": 4, "from_1_5t_to_lt_2_0t": 0, "from_2_0t_to_lt_2_5t": 0, "gte_2_5t": 0}, "coverage_pct": 80.0, "out_of_spec_count": 1, "measurements": [165.0, 172.0, 158.0, 180.0, 169.0], "rule": "coating-v1-adapter/tsb-round-thickness-20261021+painted-zone-mean/1"}},
         ],
         "xr_commands": [
-            {"action": "mark_zone", "zone_id": "B-3", "status": "pass", "color": "#16a34a", "label": "DFT PASS (97.8um)"},
+            {"action": "mark_zone", "zone_id": "3", "status": "pass", "color": "#16a34a", "label": "정상 (평균 168.8µm)"},
         ],
         "response": (
-            "## DFT 합부 판정 결과\n\n"
-            "**판정: PASS (합격)**\n\n"
+            "## 도막 두께 판정 결과\n\n"
+            "**판정: 정상**\n\n"
             "| 항목 | 값 |\n|---|---|\n"
-            "| 측정값 | [95, 102, 88, 105, 99] um |\n"
-            "| 평균 DFT | 97.8 um |\n"
-            "| 표준편차 | 6.14 um |\n"
-            "| 최소/최대 | 88 / 105 um |\n"
-            "| 규격 범위 | 80 ~ 120 um (nominal 100 +/- 20%) |\n"
-            "| 규격 이탈 | 0건 |\n\n"
-            "SSPC-PA2 기준에 따라 모든 측정값이 허용 범위(80~120um) 이내이며, "
-            "평균값 97.8um은 nominal 100um 대비 -2.2%로 양호합니다.\n\n"
-            "**권고사항:** 현재 도막 상태 양호하나, 88um 측정 지점은 하한에 가까우므로 "
-            "해당 구역 재측정 후 필요 시 보수 도장을 고려하세요."
+            "| 측정값 | [165, 172, 158, 180, 169] µm |\n"
+            "| 평균 | 168.8 µm |\n"
+            "| 정상 구간 | 160~240µm (목표 160µm, 1.5배 미만) |\n"
+            "| 목표의 90~100% 구간 | 1개 |\n"
+            "| 목표의 100~150% 구간 | 4개 |\n\n"
+            "칠한 곳의 평균 168.8µm가 정상 구간 안에 있어 정상입니다.\n\n"
+            "**참고:** 158µm 측정점은 목표 160µm에 약간 못 미칩니다. 등급은 평균으로 정하므로 판정에는 영향이 없습니다."
         ),
     },
     "anomaly": {
         "rag_chunks": [
+            {"chunk_id": "TRAINING-COATING-CRITERION", "text": coating_assessment.RULE_NOTE, "rerank_score": 0.93},
             {"chunk_id": "DEFECT-ANALYSIS-003", "text": "저도막 패턴 원인 분류: (1) 스프레이 건 이동속도 과다, (2) 도료 점도 부족, (3) 노즐 마모에 의한 패턴 편향, (4) 도장 거리 부적합.", "rerank_score": 0.91},
-            {"chunk_id": "ENV-GUIDE-007", "text": "고온 시 도료 건조가 빨라져 도막 두께 불균일 위험 증가. 수성 도료는 습도 60% 초과 시 주의.", "rerank_score": 0.85},
         ],
         "tool_calls": [
-            {"name": "anomaly_detection", "args": {"dft_measurements": [{"value_um": 85, "zone_id": "B-3", "position": "middle"}, {"value_um": 92, "zone_id": "B-3", "position": "upper"}, {"value_um": 78, "zone_id": "B-3", "position": "lower"}, {"value_um": 72, "zone_id": "B-3", "position": "lower"}], "timeseries": {"gun_speed_m_per_s": [0.4, 0.45, 0.58, 0.65], "standoff_distance_mm": [300, 310, 340, 370], "spray_angle_deg": [72, 70, 60, 52]}, "zone_id": "B-3", "spec": {"nominal_um": 100, "tolerance_rule": "90/10"}}, "result": {"anomaly_detected": True, "anomaly_count": 2, "distribution_pattern": "하부 영역에 저도막 집중 (2건)", "root_causes": [{"cause": "후반부 이동속도 증가 (0.43 -> 0.62 m/s)", "confidence": 0.85}, {"cause": "분사각도 부족 구간 2건 (52도~)", "confidence": 0.70}], "stats": {"mean_um": 81.8, "nominal_um": 100}}},
+            {"name": "anomaly_detection", "args": {"dft_measurements": [{"value_um": 150, "zone_id": "3", "position": "middle"}, {"value_um": 158, "zone_id": "3", "position": "upper"}, {"value_um": 128, "zone_id": "3", "position": "lower"}, {"value_um": 120, "zone_id": "3", "position": "lower"}], "timeseries": {"gun_speed_m_per_s": [0.4, 0.45, 0.58, 0.65], "standoff_distance_mm": [300, 310, 340, 370], "spray_angle_deg": [72, 70, 60, 52]}, "zone_id": "3", "spec": {"nominal_um": 160}}, "result": {"anomaly_detected": True, "anomaly_count": 4, "anomalies": [{"zone_id": "3", "position": "middle", "value_um": 150.0, "type": "저도막", "deviation_pct": -6.2}, {"zone_id": "3", "position": "upper", "value_um": 158.0, "type": "저도막", "deviation_pct": -1.2}, {"zone_id": "3", "position": "lower", "value_um": 128.0, "type": "저도막", "deviation_pct": -20.0}, {"zone_id": "3", "position": "lower", "value_um": 120.0, "type": "저도막", "deviation_pct": -25.0}], "distribution_pattern": "하부 영역에 저도막 측정점 집중 (2건)", "root_causes": [{"cause": "이동 속도를 낮추는 쪽", "factor": "gun_speed", "evidence_kind": "quality_rule_candidate"}, {"cause": "이격거리를 줄이는 쪽", "factor": "standoff_distance", "evidence_kind": "quality_rule_candidate"}], "anomaly_type": "저도막", "zone": "3", "cause": "조절 후보: 이동 속도를 낮추는 쪽, 이격거리를 줄이는 쪽. 원인으로 확정된 것은 아닙니다.", "grade": "below", "status": "under_app", "target_thickness_um": 160.0, "target_basis": "session_target", "normal_band_um": [160.0, 240.0], "six_band_counts": {"lt_0_9t": 2, "from_0_9t_to_lt_1_0t": 2, "from_1_0t_to_lt_1_5t": 0, "from_1_5t_to_lt_2_0t": 0, "from_2_0t_to_lt_2_5t": 0, "gte_2_5t": 0}, "criterion_version": "coating-v1-adapter/tsb-round-thickness-20261021+painted-zone-mean/1", "stats": {"mean_um": 139.0, "stdev_um": 17.9, "min_um": 120.0, "max_um": 158.0, "nominal_um": 160.0}, "zone_id": "3", "image_context": ""}},
         ],
-        "xr_commands": {"mode": "training_review", "anomaly": {"detected": True, "type": "저도막", "zone": "B-3", "positions": ["lower"], "severity": "warning", "distribution": "하부 영역 집중"}, "text_guide": {"summary": "하부 저도막 집중 - 보수 도장 필요", "body": "이동속도 감속 및 분사각도 교정 후 하부 보수 도장"}, "steps": [{"step": 1, "action": "B-3 하부 구역 보수 도장 (목표 100um)"}, {"step": 2, "action": "이동속도 0.4 m/s 이하 유지"}, {"step": 3, "action": "분사각도 65도 이상 유지"}]},
+        "xr_commands": {"mode": "training_review", "anomaly": {"detected": True, "type": "저도막", "zone": "3", "positions": ["lower"], "severity": "warning", "distribution": "하부 영역에 저도막 측정점 집중 (2건)"}, "text_guide": {"summary": "Zone 3 저도막 - 하부에 집중", "body": "조절 후보: 이동 속도를 낮추는 쪽, 이격거리를 줄이는 쪽. 원인으로 확정된 것은 아닙니다."}, "steps": [{"step": 1, "action": "Zone 3 하부 보수 도장"}, {"step": 2, "action": "이동 속도를 낮추는 쪽으로 조절"}, {"step": 3, "action": "이격거리를 줄이는 쪽으로 조절"}]},
         "response": (
-            "## 도막 분포 이상 탐지 결과\n\n"
-            "**상태: WARNING — 하부 저도막 집중**\n\n"
+            "## 도막 등급·분포 결과\n\n"
+            "**상태: 저도막 — Zone 3 하부에 집중**\n\n"
             "### 분포 분석\n"
             "| 항목 | 값 |\n|---|---|\n"
-            "| 측정값 | [85, 92, 78, 72] um |\n"
-            "| 평균 DFT | 81.8 um (nominal 100um 대비 -18.2%) |\n"
-            "| 이상 건수 | 2건 (하부 집중) |\n"
-            "| 분포 패턴 | 하부 영역에 저도막 집중 |\n\n"
-            "### 근본 원인 분석\n"
-            "시계열 데이터 상관관계 분석 결과:\n\n"
-            "1. **이동속도 증가** (신뢰도 85%) — 후반부(하부) 작업 시 이동속도가 "
-            "0.43 m/s에서 0.62 m/s로 증가하여 도막이 충분히 형성되지 않음\n"
-            "2. **분사각도 부족** (신뢰도 70%) — 하부 구역에서 분사각도가 52도까지 감소, "
-            "적정 범위(65~75도) 미달\n\n"
-            "### 조치 권고\n"
-            "- 하부 구역 보수 도장 실시 (목표 DFT: 100um 이상)\n"
-            "- 하부 작업 시 이동속도 0.4 m/s 이하 유지\n"
-            "- 분사각도 65도 이상 유지 (팔 높이 조정)"
+            "| 측정값 | [150, 158, 128, 120] µm |\n"
+            "| 평균 | 139.0 µm (목표 160µm) |\n"
+            "| 등급 | 저도막 (목표 미만) |\n"
+            "| 목표의 90% 미만 구간 | 2개 |\n"
+            "| 목표의 90~100% 구간 | 2개 |\n"
+            "| 분포 | 하부 영역에 저도막 측정점 집중 (2건) |\n\n"
+            "### 조절 후보 (확정 아님)\n"
+            "- 이동 속도를 낮추는 쪽\n"
+            "- 이격거리를 줄이는 쪽\n\n"
+            "원인으로 확정된 것은 아니므로 하부를 보수 도장하면서 위 두 가지를 조절해 보세요."
         ),
     },
     "sequence": {
