@@ -101,7 +101,9 @@ def test_parse_dft_question(question: str, parsed: tuple[list[float], float | No
 @pytest.mark.parametrize("row", _CORPUS, ids=[f"{i + 1}" for i in range(len(_CORPUS))])
 def test_question_corpus(row: dict[str, Any]) -> None:
     expected = None if row["expected"] == "none" else (row["values"], row["target"])
-    assert parse_dft_question(row["question"]) == expected, row["reason"]
+    # run_streaming 과 같은 조건: 판정 경로가 아닌 질문은 판정 의도나 목표가 있어야 한다
+    require_intent = SemanticRouter().classify_live(row["question"]) != "training_realtime"
+    assert parse_dft_question(row["question"], require_intent) == expected, row["reason"]
 
 
 @pytest.mark.parametrize("question", ["3번 Zone 도막 150, 158, 171 괜찮아?", "도막 두께 150, 158 정상이야?"])
@@ -111,6 +113,30 @@ def test_b2_questions_routed_fast_are_still_judged(question: str) -> None:
     assert SemanticRouter().classify_live(question) == "fast"
     answer, _events = _stream(question, adapter)
     assert [name for name, _ in adapter.calls] == ["dft_judge"] and "저도막" in answer
+
+
+@pytest.mark.parametrize("question", ["도막 두께 200µm 를 내려면 몇 회 칠해?", "도막 300µm 이면 페인트 몇 리터 필요해?"])
+def test_fast_route_knowledge_questions_with_a_thickness_go_to_the_model(question: str) -> None:
+    """검토 지적: 경로 조건을 뺀 뒤 fast 지식 질문이 µm 수 하나로 판정 답을 받았다. 판정 의도·목표가 없으면 모델로 간다."""
+    adapter = _McpAdapter()
+    assert SemanticRouter().classify_live(question) == "fast"
+    pipe = AgentPipeline.__new__(AgentPipeline)
+    pipe.router = SemanticRouter()
+    pipe.tool_adapter = adapter
+    asked: list[str] = []
+
+    def _model(**kwargs: Any) -> dict[str, Any]:
+        asked.append(kwargs["instruction"])
+        return {"route": "fast", "response": "[답변] 모델 답", "tool_calls": [], "rag_chunks": []}
+
+    pipe.run = _model
+
+    async def _drain(stream: AsyncIterator[PipelineEvent]) -> list[PipelineEvent]:
+        return [event async for event in stream]
+
+    anyio.run(_drain, pipe.run_streaming(instruction=question, environment={}))
+    assert asked == [question] and adapter.calls == []
+
 
 class _McpAdapter:
     """실제 dft_judge 라우터 함수로 답하는 어댑터 — 판정 규칙을 시험에 다시 쓰지 않는다."""

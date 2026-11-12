@@ -1124,9 +1124,11 @@ class AgentPipeline:
             # 측정값이 적힌 도막 질문은 모델 대신 dft_judge 로 답한다. 27B 는 도구를 부르지 않고
             # fast 재답이 문서의 옛 90% 규칙을 옮겼다(2026-11-12 카나리 B1). 모델을 쓰지 않으니 슬롯도 잡지 않는다.
             # 라우터가 처음부터 fast 로 보낸 측정값 질문도 있어(B2 "3번 Zone 도막 150, 158, 171 괜찮아?") 경로가 아니라 파서가 거른다.
+            # 다만 판정 경로가 아닌 질문("도막 200µm 내려면 몇 회 칠해?")은 판정 의도나 목표가 있어야 판정한다.
             judged = None
             if not is_sequence_intent(live_route, instruction):
-                judged = judge_dft_question(instruction, getattr(self, "tool_adapter", None), session_id, _run_coro_sync)
+                judged = judge_dft_question(instruction, getattr(self, "tool_adapter", None), session_id, _run_coro_sync,
+                                            require_intent=live_route != "training_realtime")
             if judged is not None:
                 text, calls = judged
                 if session_id and hasattr(self, "session_context"):
