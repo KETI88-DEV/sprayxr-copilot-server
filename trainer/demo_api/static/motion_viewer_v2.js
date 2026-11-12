@@ -100,7 +100,7 @@
     $('v2ZoneScore').parentElement.hidden = !zone;
     const corrections = zone?.corrections || [];
     const advice = $('v2ZoneAdvice');
-    // 자세 교정이 없어도 목표 대비 도막이 미만·1.5배 이상이면 '차이가 작습니다'는 도막 패널과 반대로 읽힌다. 서버가 낸 등급을 그대로 말한다.
+    // 자세 교정이 없어도 도막 등급이 below·above 면 '차이가 작습니다'는 도막 패널과 반대로 읽힌다. 서버가 낸 등급 글자를 그대로 말한다.
     const coat = (targetOf()?.zones || []).find((row) => String(row.zone_id) === String(anchor.zone_id) && (row.map_num == null || String(row.map_num) === String(anchor.map_num)));
     const coatNote = coat && (coat.grade === 'below' || coat.grade === 'above') && coat.thickness_um != null
       ? `도막 ${targetOf().grade_labels?.[coat.grade] ?? coat.grade} · ${Math.round(Number(coat.thickness_um))} µm` : '';
