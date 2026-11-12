@@ -167,5 +167,19 @@
   {"question": "DFT 150 158 mm 판정해줘", "expected": "none", "values": null, "target": null, "reason": "2026-11-12 4차 결정: 공백 목록 허용으로 생길 수 있는 오탐(다른 단위)"},
   {"question": "습막 두께 300 320 판정해줘", "expected": "none", "values": null, "target": null, "reason": "2026-11-12 4차 결정: 공백 목록 허용으로 생길 수 있는 오탐(습막 공백 목록)"},
   {"question": "측정값 150 158 171 판정해줘", "expected": "none", "values": null, "target": null, "reason": "2026-11-12 4차 결정: 공백 목록 허용으로 생길 수 있는 오탐(공백 목록은 도막 머리말 뒤에서만 받는다)"},
-  {"question": "도막 11월 12일 측정값 판정해줘", "expected": "none", "values": null, "target": null, "reason": "2026-11-12 4차 결정: 공백 목록 허용으로 생길 수 있는 오탐(날짜)"}
+  {"question": "도막 11월 12일 측정값 판정해줘", "expected": "none", "values": null, "target": null, "reason": "2026-11-12 4차 결정: 공백 목록 허용으로 생길 수 있는 오탐(날짜)"},
+  {"question": "산화막 두께 50, 60 µm 판정해줘", "expected": "none", "values": null, "target": null, "reason": "2026-11-12 5차 검토: 머리말 확대 오탐(산화막)"},
+  {"question": "산화막 두께 30 40 50 µm 판정해줘", "expected": "none", "values": null, "target": null, "reason": "2026-11-12 5차 검토: 머리말 확대 오탐(산화막 공백 목록)"},
+  {"question": "유막 두께 100 120 µm 괜찮아?", "expected": "none", "values": null, "target": null, "reason": "2026-11-12 5차 검토: 머리말 확대 오탐(유막)"},
+  {"question": "보호막 두께 150 158 판정해줘", "expected": "none", "values": null, "target": null, "reason": "2026-11-12 5차 검토: 머리말 확대 오탐(보호막)"},
+  {"question": "DFT 150 158 171 2026 년 측정 판정해줘", "expected": "none", "values": null, "target": null, "reason": "2026-11-12 5차 검토: 한글 단위가 띄어 붙은 꼬릿말(년)"},
+  {"question": "DFT 150 158 171 50 개 지점 평균 판정", "expected": "none", "values": null, "target": null, "reason": "2026-11-12 5차 검토: 한글 단위가 띄어 붙은 꼬릿말(개)"},
+  {"question": "건조막 두께 120 130 140 초 건조 후 괜찮아?", "expected": "none", "values": null, "target": null, "reason": "2026-11-12 5차 검토: 한글 단위가 띄어 붙은 꼬릿말(초)"},
+  {"question": "DFT 60 90 120 분 경과 괜찮아?", "expected": "none", "values": null, "target": null, "reason": "2026-11-12 5차 검토: 한글 단위가 띄어 붙은 꼬릿말(분)"},
+  {"question": "DFT 3 5 150µm 판정", "expected": "none", "values": null, "target": null, "reason": "2026-11-12 5차 검토: 1~39 수가 섞인 공백 목록은 마지막 수에 µm가 있어도 모델로"},
+  {"question": "막두께 3 코트 판정", "expected": "none", "values": null, "target": null, "reason": "2026-11-12 5차 검토: 수 하나 뒤 코트"},
+  {"question": "도막 두께 100 200 300 중 어느 게 정상이야?", "expected": "none", "values": null, "target": null, "reason": "2026-11-12 5차 검토: 고르기 질문"},
+  {"question": "건조막 두께 150 158 171 µm 중 어느 게 맞아?", "expected": "none", "values": null, "target": null, "reason": "2026-11-12 5차 검토: 고르기 질문(µm)"},
+  {"question": "DFT 150 160 둘 중 목표로 뭐가 맞아?", "expected": "none", "values": null, "target": null, "reason": "2026-11-12 5차 검토: 고르기 질문(둘 중)"},
+  {"question": "DFT 150 158 몇 회 더 칠해야 판정 통과해?", "expected": "none", "values": null, "target": null, "reason": "2026-11-12 5차 검토: 횟수 질문"}
 ]

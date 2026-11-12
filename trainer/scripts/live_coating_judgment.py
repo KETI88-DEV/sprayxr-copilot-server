@@ -38,22 +38,24 @@ _THOUSANDS_RE: Final = re.compile(r"(?<![\d.,])\d{1,2},\d{3}(?!\d)|,000(?!\d)")
 # 문장 첫머리·구두점·지금/현재/방금/이번·Zone 표기(@) 뒤의 "측정(값)"이다. "이격 300, 250 인데 도막"처럼
 # 다른 낱말 뒤의 수는 그 낱말의 값이라 받지 않는다.
 # 맨 "두께"는 첫머리·Zone 표기 뒤에서만 머리말이다("철판 두께 10, 12"는 소지 두께). 쉼표 뒤 "측정값"은 앞 구절이 다른 양일 수 있어 따로 본다.
-# "건조막 두께"·"막두께"도 도막 낱말이다(4차 카나리 B2″). 공백 목록("DFT 150 158 171")은 도막 낱말 뒤에서만 받는다.
+# "건조막 두께"·"막두께"도 도막 낱말이다(4차 카나리 B2″). "산화막·유막·보호막 두께"는 다른 막이라 앞에 한글이 붙은 "막"은 뺀다. 공백 목록("DFT 150 158 171")은 도막 낱말·맨 "두께" 머리말 뒤에서만 받는다.
 _VALUES_RE: Final = re.compile(
-    rf"(?:(?P<coat>(?:(?:dft|도막|막\s*두께)(?:{_PARTICLE}\s*두께)?|(?:^|(?<=@))\s*두께){_PARTICLE}\s*(?:{_MARKER}\s*)?)"
+    rf"(?:(?P<coat>(?:(?:dft|도막|(?<![가-힣])(?:건조)?막\s*두께)(?:{_PARTICLE}\s*두께)?|(?:^|(?<=@))\s*두께){_PARTICLE}\s*(?:{_MARKER}\s*)?)"
     rf"|(?P<mark>(?:^|(?P<comma>,)|[.;@]|지금|현재|방금|이번)\s*{_PARTICLE}\s*{_MARKER}\s*))"
     rf"(?P<values>(?<![\d.]){_VALUE}(?:(?:{_SEP}|\s+){_VALUE})*)(?![\d.])")
 _SPACED_RE: Final = re.compile(r"(?<![,、\s])\s+(?=\d)")  # 쉼표 없이 띄어쓰기로만 나눈 자리
 # Zone ID 는 "1"~"39"(AGENTS.md). 단위 없는 공백 목록에 이 범위 수가 있으면 Zone 번호·횟수·날짜일 수 있어 모델로 보낸다.
 _MAX_ZONE_NUMBER: Final = 39
 # 단위 없는 마지막 수에 바로 붙은 말("2, 3코트"·"11, 12일")이나 띄운 영문 단위("80, 90 ku")는 다른 양이다. "171이야"·"150 이면"은 받는다.
-_FOREIGN_TAIL_RE: Final = re.compile(r"(?![이인])[가-힣a-z°%/]|\s+[a-z°%/]")
+_FOREIGN_TAIL_RE: Final = re.compile(
+    r"(?![이인])[가-힣a-z°%/]|\s+[a-z°%/]|\s+(?:년|월|일|개|분|초|시간|코트|번|겹|층|회)")
 # 길이·각도·횟수·층 단위가 붙은 수는 두께가 아니다. "도막"의 "도"는 제외한다.
 _OTHER_UNIT_RE: Final = re.compile(rf"{_NUMBER}\s*(?:mm|cm|m/s|%|도(?!막)|회|층|차)")
 # shortcut: 두께가 아닌 양·습막(WFT)·규격·다음 Zone 진행을 가리키는 낱말은 직접 정한 목록이다. 다른 말투는 모델로 간다.
 _NOT_MEASUREMENT: Final = (
     # 습막 계열. "도장 직후·건조 전"은 WFT 정의(.taskmaster/docs/ship_painting_optimal_prd_final.md 용어집)다.
     "wft", "wet", "웻", "웨트", "습막", "습도막", "습윤", "습식", "젖은", "미건조", "건조 전", "건조전", "도장 직후",
+    "어느", "어떤", "둘 중", "뭐가", "몇",  # 고르기·횟수 질문은 측정값 판정이 아니다
     "자세", "각도", "거리", "속도", "규정", "권장", "사이", "최소", "최대", "범위", "다음")
 _COATING_WORDS: Final = ("dft", "도막", "두께", "μm")  # "막두께"·"건조막 두께"는 "두께"로 잡힌다
 # shortcut: 판정 의도 낱말은 직접 정한 목록이다. 다른 말투는 모델로 간다.
@@ -75,7 +77,7 @@ def parse_dft_question(instruction: str, require_intent: bool = False) -> tuple[
     4) 도막 낱말 머리말이면 µm·"측정" 표지·판정 의도 중 하나가, "측정값" 머리말만 있으면 도막 낱말 또는
        판정 의도와 수 2개 이상이 있어야 한다(내부 채팅의 기본 문맥은 도막, 명세 R4a-2 (라)).
     require_intent: 라우터가 판정 경로가 아닌 곳으로 보낸 질문("200µm 내려면 몇 회 칠해?")은 판정 의도나 목표가 있어야 한다.
-    공백 목록은 도막 낱말 머리말 뒤에서만, 단위가 없으면 수가 모두 Zone 번호 범위(1~39)보다 클 때만 받는다.
+    공백 목록은 머리말 뒤에서만, 수가 모두 Zone 번호 범위(1~39)보다 클 때만 받는다(µm가 붙어도 같다).
     shortcut: "150과 158"·머리말 없는 수("150, 158 µm 판정")·"150/158" 은 모델로 보낸다.
     """
     text = _ID_RE.sub(" ", unicodedata.normalize("NFKC", instruction).casefold().strip())
@@ -99,8 +101,7 @@ def parse_dft_question(instruction: str, require_intent: bool = False) -> tuple[
     picked = found.group("values")
     values = [float(v) for v in re.findall(_NUMBER, picked)]
     has_unit = bool(re.search(rf"{_UNIT}$", picked))
-    if _SPACED_RE.search(picked) and (found.group("coat") is None
-                                      or not has_unit and min(values) <= _MAX_ZONE_NUMBER):
+    if _SPACED_RE.search(picked) and (found.group("coat") is None or min(values) <= _MAX_ZONE_NUMBER):
         return None
     if not has_unit and _FOREIGN_TAIL_RE.match(rest, found.end()):
         return None
