@@ -9,6 +9,7 @@ from typing import Any
 
 from trainer.demo_api.coating_assessment import (
     RULE_NOTE, adjustment_sentence, basis_label, distribution_sentence, grade_phrase, mean_text)
+from trainer.demo_api.session_coating import EXPERT_WORDS
 
 _ZONE_NUMBER = re.compile(r"(?:zone|존|구역)\s*(\d+)", re.I)
 _EXPERT = re.compile(r"전문가|expert", re.I)
@@ -118,13 +119,25 @@ def _sum_bands(rows: list[dict[str, Any]]) -> dict[str, int]:
     return total
 
 
+def _expert_line(rows: list[dict[str, Any]], *, detailed: bool) -> str:
+    """목표 대비 줄 뒤에 붙는 참고 한 줄. 전문가 대비 낱말은 목표 대비 등급 낱말과 섞지 않는다."""
+    parts = []
+    for key, word in EXPERT_WORDS.items():
+        found = [str(row["zone_id"]) for row in rows if (row.get("expert") or {}).get("status") == key]
+        shown = found if detailed else found[:3]
+        parts.append(f"{word} {len(found)}개" + (f"(Zone {'·'.join(shown)}{' 외' if len(found) > len(shown) else ''})" if key != "normal" and found else ""))
+    return "참고(전문가 대비, 보정 전 두께): " + ", ".join(parts) + "."
+
+
 def _grade_answer(rows: list[dict[str, Any]], prompt: str, *, detailed: bool, viewer: bool = False,
-                  expert_rows: bool = False) -> str:
+                  expert_rows: bool = False, report_expert: bool = False) -> str:
     """저장된 행의 등급을 읽어 옮긴다. 등급을 다시 계산하지 않는다."""
     basis = basis_label(rows[0]["target_thickness_um"], rows[0]["target_basis"])
     text = [f"{basis}으로 Zone별 도막을 판정했습니다. {RULE_NOTE}"]
     if _ZONE_NUMBER.search(prompt):
-        text += [f"{_zone_label(row)}: {grade_phrase(row)}" for row in rows]
+        text += [f"{_zone_label(row)}: {grade_phrase(row)}"
+                 + (f" · 전문가 대비 {EXPERT_WORDS[row['expert']['status']]}" if report_expert and row.get("expert") else "")
+                 for row in rows]
     else:
         for word, grade in (("저도막", "below"), ("과도막", "above")):
             # grade_phrase의 "저도막(칠한 곳 평균 …)"에서 괄호 부분만 Zone 이름 뒤에 붙인다.
@@ -143,6 +156,8 @@ def _grade_answer(rows: list[dict[str, Any]], prompt: str, *, detailed: bool, vi
         # 미도장 비율에는 합격 기준이 없다. 있다/없다로 판정하지 않고 숫자만 옮긴다.
         text.append(("미도장 비율이 큰 곳: " + ", ".join(largest) + "." if largest else "판정한 Zone의 미도장 비율은 모두 1% 미만입니다.")
                     + " 미도장 비율에는 합격 기준이 없어 숫자만 알려 드립니다.")
+    if report_expert and any(row.get("expert") for row in rows):
+        text.append(_expert_line(rows, detailed=detailed))
     if viewer:
         text.append(_VIEWER_NOTE + (_VIEWER_EXPERT_NOTE if expert_rows else ""))
     return "\n".join(line for line in text if line)
@@ -229,7 +244,7 @@ def answer_coating_question(context: dict[str, Any], prompt: str, *, detailed: b
                 "뷰어의 기록을 다시 불러오거나 세션 완료 후 도막 분석 결과를 확인해 주세요.")
     if context.get("comparison_basis") == "saved_coating_report":
         if all("grade" in row for row in rows):
-            return _grade_answer(rows, prompt, detailed=detailed)
+            return _grade_answer(rows, prompt, detailed=detailed, report_expert=True)
         # 2026-11 이전에 저장된 리포트 행에는 grade가 없다.
         groups = [(label, [row for row in rows if row.get("status") == status])
                   for label, status in (("도막 부족", "under_app"), ("도막 과다", "over_app"))]

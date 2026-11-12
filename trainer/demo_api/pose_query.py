@@ -309,11 +309,16 @@ def _zone_order(zone: Mapping[str, Any]) -> tuple[float, float, int, str]:
     return (float(zone["average_similarity_score"]), -rate, int(zone_id) if zone_id.isdigit() else 1_000_000, zone_id)
 
 
+_EXPERT_SENTENCE: Final = {"normal": "전문가 기준을 충족합니다", "under_app": "전문가보다 얇습니다", "over_app": "전문가보다 두껍습니다"}
+
+
 def _coating_sentence(coating: Mapping[str, Any], target_um: object = None) -> str:
     """구역 도막 문장. 세션 목표 두께로 판정한 리포트는 전문가 기준이 아니라 그 목표를 말한다."""
     if "grade" in coating:
         basis = basis_label(coating["target_thickness_um"], coating["target_basis"])
-        return f" 이 구역 도막은 {basis}으로 {grade_phrase(coating)}입니다."
+        expert = coating.get("expert")
+        compare = f" 전문가 최종 도막과 견주면 {_EXPERT_SENTENCE[expert['status']]}." if isinstance(expert, Mapping) else ""
+        return f" 이 구역 도막은 {basis}으로 {grade_phrase(coating)}입니다.{compare}"
     # `grade`가 없으면 2026-11 이전에 저장된 리포트의 행이다. 그때 판정한 기준 그대로 말한다.
     status = coating.get("status")
     thickness = coating.get("thickness_um")

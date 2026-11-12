@@ -807,7 +807,7 @@ LLM 응답 시간은 모델 정밀도와 서빙 백엔드에 따라 달라질 �
 - `/copilot/analyze-sequence`의 `coating_feedback`이 현재 Zone의 등급(`below`·`normal`·`above`, 칠한 곳 평균 기준)·미도장률·6구간 화소 수·조절 후보를 싣는다. 두께는 보정값(10 µm 한 번 차감, 1600 µm 상한, 1 µm 미만 미도장)이다.
 - `coating_progress`의 다음 Zone 게이트는 면적 95% 충족에 더해 등급이 `below`가 아니어야 한다(2026-11-12 책임자 결정: 저도막이면 보완 안내가 나오도록). 두께는 보정값으로 잰다. 면적은 채웠지만 저도막이면 `needs_more`·`next_zone_id=null`이고 얇은 곳을 보완하라는 문구가 나간다. 그래서 "다음 Zone으로 이동"과 같은 Zone의 저도막 알림이 함께 나가지 않는다. `overpaint_risk`는 등급 `above`일 때다. 목표를 생략한 세션은 160 µm로 판정하고 `target_basis="default_target"`을 싣는다.
 - 이상 알림 SSE에 `coating_over_app`·`coating_under_app`이 더해졌다(§8.2).
-- 완료 리포트 `coating_report`는 판정한 경우 목표 기준(`comparison_basis="session_target"`)이고 Zone 행에 등급·분포·조절 후보를 싣는다.
+- 완료 리포트 `coating_report`는 판정한 경우 목표 기준(`comparison_basis="session_target"`)이고 Zone 행에 등급·분포·조절 후보를 싣는다. 참고로 전문가 대비 판정(`expert_comparison`)을 함께 싣는다.
 - `error_analysis`는 더 이상 "준비 중" 고정 응답이 아니다. 완료 리포트의 도막 분포와 저도막·과도막 Zone의 조절 후보로 답하고, 리포트가 없으면 자료가 없다고 안내한다. 도막·순서·자세를 조합한 원인 설명(§9.1)은 아직 아니다.
 - 저장 전용 `/telemetry/sequence`는 판정하지 않는다(`coating_engine_pending_integration`).
 

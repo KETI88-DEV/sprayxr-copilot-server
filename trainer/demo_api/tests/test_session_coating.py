@@ -689,3 +689,45 @@ def test_zone_without_expert_cells_in_its_mask_has_no_expert_row(tmp_path: Path)
     assert (comparison["analysis_status"], comparison["reason_code"]) == ("unavailable", "expert_cells_unavailable")
     assert comparison["zone_count"] == 0
     assert "참고로 전문가" not in result.report["guideline"]
+
+
+def test_coating_status_answer_after_complete_adds_the_expert_line(engine: CoatingProgressEngine, height_map: bytes) -> None:
+    client = _client(engine)
+    _complete_session(client, height_map)
+
+    answer = _ask_knowledge(client, "도막 상태 어때?")["answer"]
+
+    assert "참고(전문가 대비, 보정 전 두께):" in answer
+    assert answer.index("저도막:") < answer.index("참고(전문가 대비, 보정 전 두께)")
+
+
+def test_zone_question_appends_the_expert_word(engine: CoatingProgressEngine, height_map: bytes) -> None:
+    client = _client(engine)
+    _complete_session(client, height_map)
+
+    answer = _ask_knowledge(client, "Zone 3 도막은?")["answer"]
+
+    assert "· 전문가 대비 전문가보다 두꺼운 구역" in answer
+
+
+def test_rows_saved_before_round_two_keep_the_old_answer() -> None:
+    from trainer.demo_api.coating_query import answer_coating_question
+
+    row = {"map_num": 1, "zone_id": "3", "grade": "above", "thickness_um": 390.0, "target_thickness_um": 160.0,
+           "target_basis": "default_target", "unpainted_fraction": 0.0, "adjustments": [], "six_band_counts": {}}
+    context = {"analysis_status": "available", "comparison_basis": "saved_coating_report", "zones": [row]}
+
+    assert "전문가 대비" not in answer_coating_question(context, "도막 상태 어때?", detailed=False)
+    assert "전문가 대비" not in answer_coating_question(context, "Zone 3 도막은?", detailed=False)
+
+
+def test_zone_answer_sentence_names_the_expert_comparison(engine: CoatingProgressEngine, height_map: bytes) -> None:
+    client = _client(engine)
+    _complete_session(client, height_map)
+
+    assert "전문가 최종 도막과 견주면" in _ask(client, "가장 문제 있는 구역이 어디야?")["answer"]
+
+
+def _ask_knowledge(client: TestClient, prompt: str) -> dict[str, Any]:
+    body = {"user_id": "u", "session_id": SESSION, "scenario_id": "3", "task_type": "knowledge_search", "prompt": prompt}
+    return client.post("/api/v1/copilot/query", json=body).json()["data"]

@@ -979,6 +979,8 @@ Query 예시는 다음 네 종류로 구분한다.
 - `sequence_report`: `source_artifact_id`, `recommended_flow`, `first_visit_flow`, 순서 집계, `direction_summary`, `guideline`
 - `pose_report`: `source_artifact_id`, 시퀀스 수, 평균 유사도, zone별 문제 관절, `priority_corrections`, `guideline`
 
+현재 구현: `coating_report`는 목표 대비 등급이 주 판정이다(`comparison_basis="session_target"`). 참고로 `expert_comparison`(전문가 최종 도막 칸 q1·q3, 보정 전 두께, 상태 `normal`·`under_app`·`over_app`)을 함께 싣는다. 진행 게이트·등급·`worst_zones`에는 쓰지 않는다.
+
 ### 5.4 최종 리포트 수치 규칙
 
 - `coating_report.zone_summary`는 면적 비율이며 여섯 값의 합은 허용 오차 내에서 1.0이어야 한다.
@@ -1150,7 +1152,42 @@ pose_report.average_similarity_score
           "process_r2": 0.12,
           "note": "저도막의 주원인은 속도·거리·체류 시간이며 일부 구역은 공정 설정 조정이 필요합니다."
         },
-        "guideline": "A-2 부족 구역의 체류 시간을 늘리고, 작업자 동작만으로 회복하기 어려운 구역은 공정 설정을 함께 조정하세요."
+        "guideline": "A-2 부족 구역의 체류 시간을 늘리고, 작업자 동작만으로 회복하기 어려운 구역은 공정 설정을 함께 조정하세요.",
+        "expert_comparison": {
+          "comparison_basis": "expert_reference",
+          "analysis_status": "available",
+          "reason_code": null,
+          "zone_count": 3,
+          "normal": 1,
+          "under_app": 1,
+          "over_app": 1,
+          "zones": [
+            {
+              "zone_id": "1",
+              "map_num": 1,
+              "status": "normal",
+              "coverage_percent": 100.0,
+              "completion_percent": 100.0,
+              "overpaint_percent": 0.0
+            },
+            {
+              "zone_id": "2",
+              "map_num": 1,
+              "status": "under_app",
+              "coverage_percent": 0.0,
+              "completion_percent": 0.0,
+              "overpaint_percent": 0.0
+            },
+            {
+              "zone_id": "3",
+              "map_num": 1,
+              "status": "over_app",
+              "coverage_percent": 100.0,
+              "completion_percent": 100.0,
+              "overpaint_percent": 100.0
+            }
+          ]
+        }
       },
       "sequence_report": {
         "analysis_status": "available",
