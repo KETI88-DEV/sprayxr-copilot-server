@@ -26,12 +26,12 @@
     <div class="stage-viewport">
       <canvas id="canvas" aria-label="3D 재생 장면"></canvas>
       <div id="realtimeHud" class="hud" role="group" aria-label="재생 시점의 측정값">
-        <span class="hud-zone"><b id="realtimeHudZone">Zone 대기</b><span id="realtimeHudActivity" class="realtime-hud-activity">이동 중</span></span>
-        <span class="hud-item" title="속도"><i data-icon="gauge"></i><span id="realtimeHudSpeed">—</span><span id="realtimeHudSpeedState" class="realtime-hud-state idle">대기</span></span>
-        <span class="hud-item" title="이격거리"><i data-icon="ruler"></i><span id="realtimeHudDistance">—</span><span id="realtimeHudDistanceState" class="realtime-hud-state idle">대기</span></span>
-        <span class="hud-item" title="분사축 편차"><i data-icon="axis-3d"></i><span id="realtimeHudAxis">—</span><span id="realtimeHudAxisState" class="realtime-hud-state idle">대기</span></span>
-        <span class="hud-item" title="도장 방향"><i data-icon="arrow-right-left"></i><span id="realtimeHudDirection">—</span><span id="realtimeHudDirectionState" class="realtime-hud-state idle">대기</span></span>
-        <span class="hud-item" title="도포 범위"><i data-icon="scan"></i><span id="realtimeHudCoverage">—</span><span id="realtimeHudCoverageState" class="realtime-hud-state idle">대기</span></span>
+        <span class="hud-zone"><b id="realtimeHudZone" data-max="Zone 대기">Zone 대기</b><span id="realtimeHudActivity" class="realtime-hud-activity" data-max="이동 중">이동 중</span></span>
+        <span class="hud-item" title="속도"><i data-icon="gauge"></i><span id="realtimeHudSpeed" data-max="9,999 mm/s">—</span><span id="realtimeHudSpeedState" class="realtime-hud-state idle">대기</span></span>
+        <span class="hud-item" title="이격거리"><i data-icon="ruler"></i><span id="realtimeHudDistance" data-max="9999 mm">—</span><span id="realtimeHudDistanceState" class="realtime-hud-state idle">대기</span></span>
+        <span class="hud-item" title="분사축 편차"><i data-icon="axis-3d"></i><span id="realtimeHudAxis" data-max="99.9°">—</span><span id="realtimeHudAxisState" class="realtime-hud-state idle">대기</span></span>
+        <span class="hud-item" title="도장 방향"><i data-icon="arrow-right-left"></i><span id="realtimeHudDirection" data-max="분석 중">—</span><span id="realtimeHudDirectionState" class="realtime-hud-state idle">대기</span></span>
+        <span class="hud-item" title="도포 범위"><i data-icon="scan"></i><span id="realtimeHudCoverage" data-max="100%">—</span><span id="realtimeHudCoverageState" class="realtime-hud-state idle">대기</span></span>
       </div>
       <details class="layers">
         <summary aria-label="표시 항목"><i data-icon="layers"></i></summary>
