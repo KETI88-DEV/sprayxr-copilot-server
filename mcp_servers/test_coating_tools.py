@@ -84,6 +84,12 @@ def test_anomaly_under_thickness() -> None:
     assert result["anomaly_type"] == "저도막" and result["zone"] == "3"
 
 
+def test_anomaly_distribution_uses_the_zone_grade_not_the_first_point() -> None:
+    _, result = _anomaly([(300, "upper"), (50, "lower"), (50, "lower")], nominal=160.0)
+    assert result["grade"] == "below" and result["anomaly_type"] == "저도막"
+    assert result["distribution_pattern"] == "하부 영역에 저도막 측정점 집중 (2건)"
+
+
 def test_anomaly_with_motion_series_names_adjustment_candidates() -> None:
     _, result = _anomaly(
         [(100, "center"), (60, "lower"), (100, "upper")],

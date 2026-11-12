@@ -59,3 +59,5 @@ def test_synthesis_example_matches_the_mcp_output() -> None:
     r = coating_assessment.assess_readings([150, 158, 171], 160)
     assert f"{r['painted_mean_um']:.1f}μm" in adapter.SYNTHESIS_INSTRUCTION
     assert f"목표 {r['target_thickness_um']:.0f}μm" in adapter.SYNTHESIS_INSTRUCTION
+    # 예시 입력은 속도·거리 표본이 없어 조절 후보가 없다. 예시에 후보 문장이 있으면 안 된다.
+    assert r["adjustments"] == [] and "조절 후보는" not in adapter.SYNTHESIS_INSTRUCTION

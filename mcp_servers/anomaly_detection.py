@@ -60,17 +60,19 @@ def _list_anomalies(measurements: list[DftPoint], assessed: dict) -> list[dict]:
     ]
 
 
-def _analyze_distribution(anomalies: list[dict]) -> str:
+def _analyze_distribution(anomalies: list[dict], grade: str) -> str:
     if not anomalies:
         return "이상 없음"
+    word = coating_assessment.GRADE_WORDS[grade]
+    # Zone 등급과 같은 점만 센다. 다른 등급 점은 anomalies 목록에만 남는다.
+    anomalies = [a for a in anomalies if a["type"] == word] or anomalies
     position_counts: dict[str, int] = {}
     for a in anomalies:
         pos = a.get("position", "unknown")
         position_counts[pos] = position_counts.get(pos, 0) + 1
     dominant = max(position_counts, key=lambda k: position_counts[k])
     pos_label = {"upper": "상부", "middle": "중간부", "lower": "하부", "left": "좌측", "right": "우측", "center": "중앙부"}.get(dominant, dominant)
-    # 점마다 등급 낱말이 같다(Zone 등급이 below면 저도막만, above면 과도막만 나올 수 있다).
-    return f"{pos_label} 영역에 {anomalies[0]['type']} 측정점 집중 ({position_counts[dominant]}건)"
+    return f"{pos_label} 영역에 {word} 측정점 집중 ({position_counts[dominant]}건)"
 
 
 _FACTOR = {"speed_mm_s": "gun_speed", "distance_mm": "standoff_distance"}
@@ -108,7 +110,7 @@ def detect_anomaly(payload: AnomalyRequest) -> MCPResponse:
         "anomaly_detected": grade in ("below", "above"),
         "anomaly_count": len(anomalies),
         "anomalies": anomalies,
-        "distribution_pattern": _analyze_distribution(anomalies),
+        "distribution_pattern": _analyze_distribution(anomalies, grade),
         "root_causes": root_causes,
         "anomaly_type": coating_assessment.GRADE_WORDS[grade] if grade in ("below", "above") else "",
         "zone": payload.zone_id,
