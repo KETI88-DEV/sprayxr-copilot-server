@@ -47,7 +47,7 @@ from trainer.demo_api.copilot_contracts import CopilotQueryData, CopilotQueryReq
 from trainer.demo_api.coating_query import (
     answer_coating_question, answer_distribution_cause, parse_viewer_coating_context, report_coating_context,
     target_advice_facts)
-from trainer.demo_api.copilot_intent import classify_question_intent, fallback_intent, preset_intent, is_coating_status_question, is_coating_advice_question
+from trainer.demo_api.copilot_intent import classify_question_intent, fallback_intent, preset_intent, is_coating_status_question, is_coating_advice_question, is_general_painting_knowledge
 from trainer.demo_api.dialogue import (authenticated_facts, conversation_key, drop_ungrounded, parse_plan, plain_answer,
                                        selected_direction_answer, ungrounded_measurements, viewer_findings_answer,
                                        viewer_measurement_answer, viewer_metadata_context, without_hanzi)
@@ -684,7 +684,11 @@ async def _execute_copilot_query(
             # Preserve engine-only responses when the optional generator is offline.
             planned_pipeline = None
         planner = select_query_pipeline(planned_pipeline, "quick") if planned_pipeline else None
-        if getattr(planner, "supports_copilot_dialogue", callable(getattr(planner, "plan_copilot_dialogue", None))):
+        supports_dialogue = getattr(planner, "supports_copilot_dialogue", callable(getattr(planner, "plan_copilot_dialogue", None)))
+        if supports_dialogue and query.task_type == "knowledge_search" and is_general_painting_knowledge(query.prompt):
+            # 계획 모델은 직전 자세·순서 대화에 끌려 일반 지식 질문을 기록 후속 대화로 분류한다(2026-11-12 재현). 부르지 않는다.
+            decision = {"kind": "coating_knowledge", "intent": "knowledge", "scope": "unspecified"}
+        elif supports_dialogue:
             try:
                 def plan():
                     with generation_slot_for(planner):

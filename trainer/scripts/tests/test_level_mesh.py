@@ -32,6 +32,25 @@ def test_reader_parses_a_known_level_exactly() -> None:
     assert mesh.triangles
 
 
+def test_reader_reuses_a_parsed_file_until_it_changes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """뷰어가 요청마다 읽으므로 같은 파일은 한 번만 파싱한다. 파일이 바뀌면(수정 시각) 다시 읽는다."""
+    import os
+    import shutil
+
+    copy = tmp_path / "level.fbx"
+    shutil.copyfile(LEVEL1_FBX, copy)
+    parsed: list[Path] = []
+    real_parse = level_mesh._parse_fbx
+    monkeypatch.setattr(level_mesh, "_parse_fbx", lambda path: (parsed.append(path), real_parse(path))[1])
+    first = level_mesh.read_fbx(copy)
+    assert level_mesh.read_fbx(copy) is first
+    assert len(parsed) == 1
+    stat = copy.stat()
+    os.utime(copy, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
+    assert level_mesh.read_fbx(copy).vertices == first.vertices
+    assert len(parsed) == 2
+
+
 def test_declared_up_axis_agrees_with_the_world_convention() -> None:
     """FBX가 선언한 위 축이 world_axes의 규약과 같다. 세 번째 독립 확인이다."""
     mesh = level_mesh.read_fbx(LEVEL1_FBX)

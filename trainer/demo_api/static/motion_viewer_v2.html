@@ -26,12 +26,12 @@
     <div class="stage-viewport">
       <canvas id="canvas" aria-label="3D 재생 장면"></canvas>
       <div id="realtimeHud" class="hud" role="group" aria-label="재생 시점의 측정값">
-        <span class="hud-zone"><b id="realtimeHudZone">Zone 대기</b><span id="realtimeHudActivity" class="realtime-hud-activity">이동 중</span></span>
-        <span class="hud-item" title="속도"><i data-icon="gauge"></i><span id="realtimeHudSpeed">—</span><span id="realtimeHudSpeedState" class="realtime-hud-state idle">대기</span></span>
-        <span class="hud-item" title="이격거리"><i data-icon="ruler"></i><span id="realtimeHudDistance">—</span><span id="realtimeHudDistanceState" class="realtime-hud-state idle">대기</span></span>
-        <span class="hud-item" title="분사축 편차"><i data-icon="axis-3d"></i><span id="realtimeHudAxis">—</span><span id="realtimeHudAxisState" class="realtime-hud-state idle">대기</span></span>
-        <span class="hud-item" title="도장 방향"><i data-icon="arrow-right-left"></i><span id="realtimeHudDirection">—</span><span id="realtimeHudDirectionState" class="realtime-hud-state idle">대기</span></span>
-        <span class="hud-item" title="도포 범위"><i data-icon="scan"></i><span id="realtimeHudCoverage">—</span><span id="realtimeHudCoverageState" class="realtime-hud-state idle">대기</span></span>
+        <span class="hud-zone"><b id="realtimeHudZone" data-max="Zone 대기">Zone 대기</b><span id="realtimeHudActivity" class="realtime-hud-activity" data-max="이동 중">이동 중</span></span>
+        <span class="hud-item" title="속도"><i data-icon="gauge"></i><span id="realtimeHudSpeed" data-max="99,999 mm/s">—</span><span id="realtimeHudSpeedState" class="realtime-hud-state idle">대기</span></span>
+        <span class="hud-item" title="이격거리"><i data-icon="ruler"></i><span id="realtimeHudDistance" data-max="9999 mm">—</span><span id="realtimeHudDistanceState" class="realtime-hud-state idle">대기</span></span>
+        <span class="hud-item" title="분사축 편차"><i data-icon="axis-3d"></i><span id="realtimeHudAxis" data-max="99.9°">—</span><span id="realtimeHudAxisState" class="realtime-hud-state idle">대기</span></span>
+        <span class="hud-item" title="도장 방향"><i data-icon="arrow-right-left"></i><span id="realtimeHudDirection" data-max="분석 중">—</span><span id="realtimeHudDirectionState" class="realtime-hud-state idle">대기</span></span>
+        <span class="hud-item" title="도포 범위"><i data-icon="scan"></i><span id="realtimeHudCoverage" data-max="100%">—</span><span id="realtimeHudCoverageState" class="realtime-hud-state idle">대기</span></span>
       </div>
       <details class="layers">
         <summary aria-label="표시 항목"><i data-icon="layers"></i></summary>
@@ -43,6 +43,7 @@
             <li><i class="dot" style="background:#22d3ee"></i>머리와 손</li>
           </ul>
           <label class="check"><input id="zoneSurface" type="checkbox" checked>Zone 영역</label>
+          <label class="check" title="대상 구조물"><input id="objectMesh" type="checkbox" checked><i data-icon="box"></i>구조물</label>
           <label class="range"><span>점 크기 <span id="pointSizeValue">1.5 px</span></span><input id="pointSize" type="range" min="0.5" max="5" step="0.25" value="1.5"></label>
         </div>
       </details>
@@ -149,7 +150,7 @@
 
 <template id="poseUiTemplate">
 <div data-pose-slot="gizmo" class="gizmo" role="group" aria-label="보는 방향">
-  <button id="cameraHome" type="button" aria-label="처음 시점"><i data-icon="house"></i></button>
+  <button id="cameraHome" type="button" aria-label="전체 보기" title="전체 보기"><i data-icon="focus"></i></button>
   <button id="cameraAxisX" type="button" aria-label="X축에서 보기">X</button>
   <button id="cameraAxisY" type="button" aria-label="Y축에서 보기">Y</button>
   <button id="cameraAxisZ" type="button" aria-label="Z축에서 보기">Z</button>

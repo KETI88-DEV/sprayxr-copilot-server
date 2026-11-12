@@ -10,6 +10,8 @@ logger = logging.getLogger(__name__)
 
 POSE_INTENTS = {"pose_overall", "pose_worst_zone", "pose_zone", "pose_right", "pose_left", "knowledge"}
 ORDER_INTENTS = {"order_reference", "order_actual", "order_missing", "order_adherence", "order_direction", "knowledge"}
+_PAINTING_SUBJECT = re.compile(r"도막|두께|이격|속도|노즐|압력|안전|보호구|오버랩")
+_RECORD_REFERENCE = re.compile(r"영역|구역|zone|존|부위|현재|지금|이번|내[ 가]|어디|어느", re.I)
 
 
 def is_coating_advice_question(prompt: str) -> bool:
@@ -24,7 +26,7 @@ _COATING_STATE = r"과하|모자|부족|이상|상태|어때|분석|평가|얇|�
 def _asks_coating_state(prompt: str, subject: str, state: str) -> bool:
     if not re.search(subject, prompt, re.I):
         return False
-    specific = re.search(r"영역|구역|zone|존|부위|현재|지금|이번|내[ 가]|어디|어느", prompt, re.I)
+    specific = _RECORD_REFERENCE.search(prompt)
     definition = re.search(r"뭐|무엇|뜻|의미|정의|원인|예방|방지", prompt)
     return bool(specific or (not definition and re.search(state, prompt)))
 
@@ -37,6 +39,18 @@ def is_coating_status_question(prompt: str) -> bool:
     # 넓힌 낱말(미도장·분포·등급)로만 걸리는 질문은 규정·절차를 묻는 지식 질문일 수 있어 문서 검색에 남긴다.
     return (_asks_coating_state(prompt, _COATING_SUBJECT + "|미도장", _COATING_STATE + "|분포|미도장|등급")
             and not re.search(r"규정|규격|절차|종류|기준|ISO|SSPC", prompt, re.I))
+
+
+def is_general_painting_knowledge(prompt: str) -> bool:
+    """기록·Zone·재생 위치를 가리키지 않는 도장 기술 질문(적정값·정의·원인·방법).
+
+    일반 지식 표지가 있어야 하고, 평가형 어미·1인칭·지시어가 있으면 기록 후속 질문으로 본다
+    ("속도는 괜찮았어?", "제 이격거리는 적당했나요?", "그럼 속도는?").
+    """
+    return bool((is_coating_advice_question(prompt) or _PAINTING_SUBJECT.search(prompt))
+                and re.search(r"적정|기준|권장|표준|원인|이유|왜|뭐|무엇|뜻|의미|정의|방법|어떻게|예방|방지|원리|얼마", prompt)
+                and not _RECORD_REFERENCE.search(prompt)
+                and not re.search(r"시퀀스|기록|재생|아까|방금|이\s*분사|었|았|했|어땠|괜찮|제\s|저의|나의|그럼|그\s", prompt))
 
 
 def preset_intent(task_type: str, prompt: str) -> str | None:
@@ -99,7 +113,7 @@ def classify_question_intent(
                 # A tab is a UI preference. A confidently different industrial
                 # subject must not become a Zone-order answer on a bad label.
                 if (is_coating_advice_question(prompt) or (result != "knowledge" and fallback_intent(task_type, prompt) == "knowledge"
-                        and re.search(r"도막|두께|이격|속도|노즐|압력|안전|보호구|오버랩", prompt))):
+                        and _PAINTING_SUBJECT.search(prompt))):
                     return "knowledge"
                 return result
             logger.warning("copilot intent classifier returned invalid label task=%s label=%s", task_type, result)

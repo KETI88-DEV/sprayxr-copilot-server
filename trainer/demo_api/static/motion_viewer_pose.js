@@ -22,11 +22,6 @@
     const size = vectorLength(a);
     return size > 1e-6 ? scaleVector(a, 1 / size) : fallback;
   };
-  const crossVector = (a, b) => [
-    a[1] * b[2] - a[2] * b[1],
-    a[2] * b[0] - a[0] * b[2],
-    a[0] * b[1] - a[1] * b[0],
-  ];
   const angleDegrees = (a, b) => {
     const left = normalize(a), right = normalize(b);
     const cosine = Math.max(-1, Math.min(1, left.reduce((sum, value, axis) => sum + value * right[axis], 0)));
@@ -52,40 +47,59 @@
     };
   }
 
+  // 큰 장면 상체: 머리는 실측 HMD, 어깨·가슴은 패널과 같은 몸 비율 표(BODY)로 놓는다. 팔은 패널과 같은 두 마디 IK 로
+  // 오른팔은 건 손잡이, 왼팔은 왼손 추적기까지 뻗는다(팔꿈치 아래·바깥).
   function trustedUpperBody(frame) {
     const tracked = frame?.tracked || {};
     const head = tracked.head;
     if (!Array.isArray(head)) return null;
-    const forward = normalize(frame.camera_forward || [0, 0, 1]);
-    const horizontalForward = normalize([forward[0], 0, forward[2]]);
-    const right = normalize(crossVector([0, 1, 0], horizontalForward), [1, 0, 0]);
-    const neck = addVector(head, [0, -0.17, 0]);
-    const chest = addVector(head, [0, -0.36, 0]);
+    const forward = unit(frame.camera_forward || [0, 0, 1], [0, 0, 1]);
+    const right = unit(cross([0, 1, 0], unit([forward[0], 0, forward[2]], [0, 0, 1])), [1, 0, 0]);
+    const neck = add(head, [0, -BODY.headAboveShoulders, 0]);
+    const leftShoulder = add(neck, mul(right, -BODY.shoulderWidth / 2));
+    const rightShoulder = add(neck, mul(right, BODY.shoulderWidth / 2));
+    const gun = tracked.right_hand || null;
+    const leftHand = tracked.left_hand || null;
+    const tool = frame.tool_forward;
+    const grip = gun && tool && length(tool) > 1e-5 ? gunGrip(gun, tool) : gun;
+    const arm = (shoulder, target, outward) => target
+      ? twoBoneIK(shoulder, target, BODY.upperArm, BODY.foreArm, add([0, -1, 0], mul(right, outward)))
+      : null;
     return {
-      head, neck, chest,
-      leftShoulder: addVector(chest, scaleVector(right, -0.19)),
-      rightShoulder: addVector(chest, scaleVector(right, 0.19)),
-      leftHand: tracked.left_hand || null,
-      rightHand: tracked.right_hand || null,
+      head, neck, chest: add(neck, [0, -BODY.upperChest, 0]), leftShoulder, rightShoulder, gun, leftHand,
+      leftArm: arm(leftShoulder, leftHand, -.5),
+      rightArm: arm(rightShoulder, grip, .5),
     };
   }
 
   function drawTrustedUpperBody(frame, center, width, height) {
     const body = trustedUpperBody(frame);
     if (!body) return;
-    const inferred = 'rgba(148,210,230,.52)';
-    line(body.head, body.neck, inferred, 4, center, width, height);
-    line(body.neck, body.chest, inferred, 5, center, width, height);
-    line(body.leftShoulder, body.rightShoulder, inferred, 5, center, width, height);
-    if (body.leftHand) line(body.leftShoulder, body.leftHand, 'rgba(34,211,238,.60)', 3, center, width, height);
-    if (body.rightHand) line(body.rightShoulder, body.rightHand, 'rgba(34,211,238,.70)', 3, center, width, height);
+    const {arm: armColor, core: middle} = LIMB_COLORS;
+    line(body.head, body.neck, middle, 4, center, width, height);
+    line(body.neck, body.chest, middle, 4, center, width, height);
+    for (const [shoulder, arm, color] of [[body.leftShoulder, body.leftArm, armColor], [body.rightShoulder, body.rightArm, armColor]]) {
+      line(body.neck, shoulder, color, 4, center, width, height);
+      point(shoulder, 4, color, center, width, height);
+      if (!arm) continue;
+      line(shoulder, arm.elbow, color, 3.5, center, width, height);
+      line(arm.elbow, arm.hand, color, 3.5, center, width, height);
+      point(arm.elbow, 4, color, center, width, height);
+      point(arm.hand, 5, color, center, width, height);
+    }
     point(body.head, 13, '#f5f8ff', center, width, height);
-    point(body.neck, 4, 'rgba(186,230,245,.72)', center, width, height);
-    point(body.chest, 6, 'rgba(186,230,245,.72)', center, width, height);
-    point(body.leftShoulder, 5, inferred, center, width, height);
-    point(body.rightShoulder, 5, inferred, center, width, height);
-    if (body.rightHand) point(body.rightHand, 7, '#22d3ee', center, width, height);
-    if (body.leftHand) point(body.leftHand, 6, '#8be9fd', center, width, height);
+    point(body.neck, 4, middle, center, width, height);
+    point(body.chest, 5, middle, center, width, height);
+    // 실측 추적기(건·왼손)는 고리로 따로 그려 IK 손과의 차이가 보이게 둔다.
+    for (const [tracker, color] of [[body.gun, armColor], [body.leftHand, armColor]]) {
+      if (!tracker) continue;
+      const shown = project(tracker, center, width, height);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(shown[0], shown[1], 8 * shown[2], 0, Math.PI * 2);
+      ctx.stroke();
+    }
   }
 
   function drawOrientationGuides(frame, center, width, height) {
@@ -482,9 +496,25 @@
     }));
   }
 
+  // 오른쪽 아래 모서리의 작은 좌표축. 장면의 transform 을 그대로 써서 카메라 회전과 함께 돈다
+  function drawAxisGizmo(width, height) {
+    // 좁은 화면에서는 우하단에 뜨는 질문하기 버튼 위로 올린다
+    const ox = width - 40, oy = height - (width < 520 ? 96 : 40), length = 22;
+    ctx.save();
+    ctx.lineWidth = 2; ctx.lineCap = 'round'; ctx.font = '700 11px system-ui'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    for (const {axis, dx, dy, color} of window.MotionViewerCamera.axisGizmo(transform)) {
+      ctx.strokeStyle = color; ctx.fillStyle = color;
+      ctx.beginPath(); ctx.moveTo(ox, oy); ctx.lineTo(ox + dx * length, oy + dy * length); ctx.stroke();
+      ctx.fillText(axis.toUpperCase(), ox + dx * (length + 9), oy + dy * (length + 9));
+    }
+    ctx.fillStyle = '#c9d3e6'; ctx.beginPath(); ctx.arc(ox, oy, 2.5, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  }
+
   function drawPoseOverlay({frame, sourceIndex, center, w, h, playheadSeconds, durationSeconds}) {
     drawTrustedUpperBody(frame, center, w, h);
     drawOrientationGuides(frame, center, w, h);
+    drawAxisGizmo(w, h);
     updateRealtimeHud(frame, sourceIndex);
     renderPoseSummary(frame);
     renderArmPose(Number(playheadSeconds) || 0);
@@ -544,6 +574,7 @@
   byId('cameraAxisX').onclick = () => applyCamera(camera.axisView('x'));
   byId('cameraAxisY').onclick = () => applyCamera(camera.axisView('y'));
   byId('cameraAxisZ').onclick = () => applyCamera(camera.axisView('z'));
+  for (const axis of ['x', 'y', 'z']) byId(`cameraAxis${axis.toUpperCase()}`).style.color = window.MotionViewerCamera.AXIS_COLORS[axis];
   pathCanvas.onpointerdown = event => {
     if (![0, 1, 2].includes(event.button)) return;
     event.preventDefault(); pathCanvas.setPointerCapture(event.pointerId);

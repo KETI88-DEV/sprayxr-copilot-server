@@ -2,6 +2,9 @@
 :root {
   --bg: #07101f;
   --scene: #050b17;
+  --stage-top: #2e3646; /* 3D 그림의 공간은 푸른 기가 도는 회색(책임자 선택 B, 2026-11-12). 남색 포털(상단 바·카드 #0c1728)과 구분되고 위가 조금 밝다 */
+  --stage: #1c2230;
+  --stage-edge: rgba(176, 196, 226, .28);
   --surface: #0c1728;
   --raised: #142238;
   --raised-hover: #1b2c47;
@@ -93,7 +96,7 @@ select:hover { background: var(--raised-hover); }
 
 /* 재생 장면 */
 .v2-stage { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto auto auto; min-height: 0; }
-.stage-viewport { position: relative; min-height: 0; overflow: hidden; background: var(--scene); container-type: size; }
+.stage-viewport { position: relative; min-height: 0; overflow: hidden; background: linear-gradient(180deg, var(--stage-top), var(--stage)); container-type: size; }
 #canvas { display: block; width: 100%; height: 100%; cursor: grab; touch-action: none; }
 #canvas:active { cursor: grabbing; }
 .hud {
@@ -106,6 +109,14 @@ select:hover { background: var(--raised-hover); }
 .hud-zone { display: inline-flex; align-items: center; gap: 8px; }
 .hud-zone b { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; -webkit-text-fill-color: var(--ink); }
 .hud-zone b::before { content: ""; width: 8px; height: 8px; border-radius: 2px; background: currentColor; }
+/* 재생 중 값이 바뀌어도 칸 폭이 그대로이도록 칸마다 가장 긴 값(data-max)을 높이 0 줄로 깔아 둔다. 같은 글꼴로 재므로 글꼴이 늦게 실려도 맞다 */
+.hud [data-max] { display: inline-flex; flex-direction: column; align-items: flex-end; }
+.hud [data-max]::after { content: attr(data-max); height: 0; overflow: hidden; visibility: hidden; }
+/* Zone 칸은 앞의 색 네모가 ::before 라 격자로 둔다: 1행 = 네모·글, 높이 0 인 2행 = 가장 긴 글 */
+.hud-zone b[data-max] { display: inline-grid; grid-template-columns: 8px auto; grid-template-rows: auto 0; gap: 0 6px; }
+.hud-zone b[data-max]::before { grid-area: 1 / 1; }
+.hud-zone b[data-max]::after { grid-area: 2 / 2; }
+.realtime-hud-activity[data-max] { align-items: flex-start; }
 .realtime-hud-activity { color: var(--ink-3); font-size: 12px; }
 .hud-item { display: inline-flex; align-items: center; gap: 6px; color: var(--ink); }
 .hud-item .lucide { color: var(--ink-3); }
@@ -228,7 +239,7 @@ select:hover { background: var(--raised-hover); }
 .feature.is-asked h2 .lucide { color: var(--accent-ink); }
 
 .pose-body { display: grid; grid-template-columns: clamp(132px, 32%, 172px) minmax(0, 1fr); gap: 16px; min-height: 0; }
-.skeleton-screen { position: relative; min-height: 0; overflow: hidden; border-radius: 8px; background: var(--scene); }
+.skeleton-screen { position: relative; min-height: 0; overflow: hidden; border: 1px solid var(--stage-edge); border-radius: 8px; background: var(--stage); }
 #skeletonCanvas { display: block; width: 100%; height: 100%; }
 .posture { position: absolute; top: 6px; left: 8px; color: var(--ink-2); font-size: 12px; }
 .pose-chart { display: grid; grid-template-rows: minmax(0, 1fr) auto; gap: 8px; min-width: 0; }
@@ -411,7 +422,7 @@ button.chip:hover { background: var(--raised-hover); color: var(--ink); }
   .v2-grid { grid-template-columns: minmax(0, 1fr); }
   .v2-main { overflow: visible; grid-template-rows: auto auto; }
   .stage-viewport { height: 56vh; min-height: 280px; }
-  .hud { max-width: calc(100% - 24px); top: 52px; }
+  .hud { max-width: calc(100% - 24px); top: 52px; column-gap: 12px; }   /* 칸 폭을 고정해도 400px 에서 두 줄에 들어가게 */
   .features { grid-template-columns: minmax(0, 1fr); }
   .feature + .feature { border-left: 0; border-top: 1px solid var(--line); }
   .zone-detail { grid-template-columns: repeat(2, minmax(0, 1fr)); }
