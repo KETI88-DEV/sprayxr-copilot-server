@@ -396,7 +396,7 @@
   };
   const MODEL = { quick: '8B', detailed: '27B' };
   const TIMEOUT_SECONDS = { quick: 45, detailed: 120 };
-  const TRANSLATED_TIMEOUT_SECONDS = 150;   // 번역은 27B가 한다. 영어를 거치는 언어는 긴 답에 1분쯤 걸렸다(2026-11-12 시험 서버)
+  const TRANSLATED_TIMEOUT_SECONDS = 180;   // 번역은 27B가 한다. 영어를 거치는 언어는 중앙값 24~34초, 가장 긴 답은 164초였다(2026-11-12 시험 서버)
 
   const chat = (() => {
     const root = $('v2Ask');
