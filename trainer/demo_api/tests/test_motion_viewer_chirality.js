@@ -297,9 +297,9 @@ test('가까운 관절을 나중에 그린다(0°에는 앞으로 뻗은 오른�
   assert.ok(order(back, 'Right Hand') < order(back, 'Left Hand'));
 });
 
-// WCAG 상대 휘도 대비. 색을 그린 불투명도로 패널 배경(#172a44) 위에 섞은 뒤 잰다.
-const BACKGROUND = [0x17, 0x2a, 0x44];
+// WCAG 상대 휘도 대비. 색을 그린 불투명도로 패널 배경(v2 토큰 --stage) 위에 섞은 뒤 잰다.
 const rgb = (hex) => [1, 3, 5].map((index) => parseInt(hex.slice(index, index + 2), 16));
+const BACKGROUND = rgb(fs.readFileSync(path.join(__dirname, '../static/motion_viewer_v2.css'), 'utf8').match(/--stage: (#[0-9a-f]{6})/)[1]);
 const luminance = (color) => color.map((value) => value / 255).map((value) => (value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4))
   .reduce((sum, value, index) => sum + value * [0.2126, 0.7152, 0.0722][index], 0);
 const contrast = (hex, alpha) => {

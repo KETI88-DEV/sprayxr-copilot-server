@@ -2,8 +2,9 @@
 :root {
   --bg: #07101f;
   --scene: #050b17;
-  --stage: #172a44;   /* 3D 그림의 공간. 상단 바·카드(#0c1728)와 질문 열보다 한 단 밝다 */
-  --stage-edge: rgba(150, 182, 224, .28);
+  --stage-top: #34363a; /* 3D 그림의 공간은 채도 낮은 회색. 남색 포털(상단 바·카드 #0c1728)과 구분되고 위가 조금 밝다 */
+  --stage: #232427;
+  --stage-edge: rgba(210, 212, 216, .28);
   --surface: #0c1728;
   --raised: #142238;
   --raised-hover: #1b2c47;
@@ -95,7 +96,7 @@ select:hover { background: var(--raised-hover); }
 
 /* 재생 장면 */
 .v2-stage { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto auto auto; min-height: 0; }
-.stage-viewport { position: relative; min-height: 0; overflow: hidden; background: linear-gradient(180deg, #1b2f4c, #111f35); container-type: size; }
+.stage-viewport { position: relative; min-height: 0; overflow: hidden; background: linear-gradient(180deg, var(--stage-top), var(--stage)); container-type: size; }
 #canvas { display: block; width: 100%; height: 100%; cursor: grab; touch-action: none; }
 #canvas:active { cursor: grabbing; }
 .hud {

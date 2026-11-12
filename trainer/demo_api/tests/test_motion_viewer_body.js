@@ -128,3 +128,49 @@ test('패널과 큰 장면은 같은 표·IK·색 상수를 쓰고 값을 따로
   const drawPanel = CORE.split('\n').find((line) => line.startsWith('function drawSkeletonView('));
   assert.ok(drawPanel.includes('SIDE_COLORS.left') && drawPanel.includes('SIDE_COLORS.right') && drawPanel.includes('SIDE_COLORS.middle'));
 });
+
+// ── 회색 무대: 큰 3D 장면·스켈레톤 패널 배경과 격자 ─────────────
+const V2_CSS = fs.readFileSync(path.join(__dirname, '../static/motion_viewer_v2.css'), 'utf8');
+const LEGACY_CSS = fs.readFileSync(path.join(__dirname, '../motion_viewer.py'), 'utf8').match(/:root\{--bg:#07101f;[^}]*\}/)[0];
+const rgb = (hex) => [1, 3, 5].map((index) => parseInt(hex.slice(index, index + 2), 16));
+const token = (css, name) => css.match(new RegExp(`--${name}: ?(#[0-9a-f]{6})`))[1];
+const saturation = (hex) => {
+  const channels = rgb(hex).map((value) => value / 255), high = Math.max(...channels), low = Math.min(...channels), light = (high + low) / 2;
+  return high === low ? 0 : (high - low) / (1 - Math.abs(2 * light - 1));
+};
+const luminance = (color) => color.map((value) => value / 255).map((value) => (value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4))
+  .reduce((sum, value, index) => sum + value * [0.2126, 0.7152, 0.0722][index], 0);
+/** CSS 색(#hex 또는 rgba)을 배경 위에 섞은 뒤 잰 WCAG 대비. */
+const contrast = (style, background) => {
+  const rgba = style.startsWith('#') ? [...rgb(style), 1] : style.match(/[\d.]+/g).map(Number);
+  const mixed = rgba.slice(0, 3).map((value, index) => value * (rgba[3] ?? 1) + background[index] * (1 - (rgba[3] ?? 1)));
+  const [a, b] = [luminance(mixed), luminance(background)].sort((x, y) => y - x);
+  return (a + 0.05) / (b + 0.05);
+};
+
+test('큰 장면·패널 배경 토큰은 채도 낮은 회색이고 두 화면이 같은 값을 쓴다', () => {
+  for (const name of ['stage-top', 'stage']) {
+    const value = token(V2_CSS, name);
+    assert.ok(saturation(value) < 0.1, `--${name} ${value} 채도 ${saturation(value).toFixed(3)}`);
+    assert.equal(token(LEGACY_CSS, name), value, `기존 화면 --${name}`);
+  }
+  assert.ok(luminance(rgb(token(V2_CSS, 'stage-top'))) > luminance(rgb(token(V2_CSS, 'stage'))), '위가 조금 밝다');
+  assert.match(V2_CSS, /\.stage-viewport \{[^}]*background: linear-gradient\(180deg, var\(--stage-top\), var\(--stage\)\)/);
+  assert.match(V2_CSS, /\.skeleton-screen \{[^}]*background: var\(--stage\)/);
+  const legacy = fs.readFileSync(path.join(__dirname, '../motion_viewer.py'), 'utf8');
+  assert.ok(legacy.includes('.stage-viewport{position:relative;min-height:0;overflow:hidden;background:linear-gradient(180deg,var(--stage-top),var(--stage))}'));
+  assert.ok(/\.skeleton-screen\{[^}]*background:var\(--stage\)\}/.test(legacy));
+  for (const navy of ['#1b2f4c', '#111f35', '#172a44', '150,182,224', '150, 182, 224']) {
+    assert.ok(!V2_CSS.includes(navy) && !CORE.includes(navy), `${navy} 가 남아 있다`);
+  }
+});
+
+test('회색 배경에서 몸 색·격자 주선은 3:1 이상 대비된다(밝은 위쪽 기준)', () => {
+  const top = rgb(token(V2_CSS, 'stage-top')), panel = rgb(token(V2_CSS, 'stage'));
+  const sides = CORE.split('\n').find((line) => line.startsWith('const BODY=')).match(/#[0-9a-f]{6}/g);
+  for (const color of [...sides, '#f5f8ff']) assert.ok(contrast(color, top) >= 3, `몸 ${color} ${contrast(color, top).toFixed(2)}`);
+  const floor = CORE.split('\n').find((line) => line.startsWith('function drawFloorGrid(')).match(/rgba\([^)]*\)/g);
+  assert.ok(contrast(floor[0], top) >= 3, `큰 장면 격자 주선 ${floor[0]} ${contrast(floor[0], top).toFixed(2)}`);
+  const panelGrid = CORE.split('\n').find((line) => line.startsWith('function drawSkeletonView(')).match(/rgba\([^)]*\)/g);
+  for (const style of panelGrid) assert.ok(contrast(style, panel) >= 3, `패널 ${style} ${contrast(style, panel).toFixed(2)}`);
+});
