@@ -58,6 +58,7 @@ name, props...)` 레코드가 이어지고, `tell() < endOffset - 13`인 동안 
 
 from __future__ import annotations
 
+import functools
 import itertools
 import json
 import math
@@ -283,7 +284,16 @@ def read_fbx(path: Path) -> Mesh:
 
     `declared`는 FBX가 스스로 선언한 것 그대로다 — 씬 배치를 위해 빠진 회전을
     채워 넣거나 하지 않는다. `solve_alignment`이 그 빈틈을 실측으로 채운다.
+    뷰어가 요청마다 부르므로 경로·수정 시각·크기가 같으면 이미 읽은 메시를 돌려준다
+    (돌려받은 메시를 제자리에서 고치지 않는다 — `place`처럼 새 메시를 만든다).
     """
+    stat = path.stat()  # 파일이 없으면 예전처럼 FileNotFoundError
+    return _read_fbx_cached(str(path), stat.st_mtime_ns, stat.st_size)
+
+
+@functools.lru_cache(maxsize=16)
+def _read_fbx_cached(path_text: str, _mtime_ns: int, _size: int) -> Mesh:
+    path = Path(path_text)
     roots, _version = _parse_fbx(path)
     geometry_nodes: list[_Node] = []
     model_nodes: list[_Node] = []
