@@ -1,6 +1,7 @@
 """Questions retain their meaning across tabs and detailed formatting."""
 import json
 
+import numpy as np
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -20,7 +21,18 @@ class Pipeline:
         return {"response": "[답변] 권장 작업 순서는 Zone 1 → 2입니다.", "rag_chunks": []}
 
 
-def context(task="trajectory_recomm", coating=True):
+def target_assessment(**overrides):
+    """서명 전 목표 대비 평가(T6 모양). Zone 1 저도막(속도 표본 있음), Zone 2 과도막."""
+    from trainer.demo_api import coating_assessment as ca
+    mask = np.ones((4, 4), bool)
+    rows = [ca.zone_row(1, "1", ca.assess_zone(np.full((4, 4), 90.0), mask, speed_mm_s=[400.0])),
+            ca.zone_row(1, "2", ca.assess_zone(np.full((4, 4), 300.0), mask))]
+    return {"analysis_status": "available", "reason_code": None, "target_thickness_um": 160.0,
+            "target_basis": "default_target", "basis_label": ca.basis_label(160.0, "default_target"),
+            "zones": rows, **overrides}
+
+
+def context(task="trajectory_recomm", coating=True, target=None):
     analysis = {"recommended_flow": ["1", "2"], "selected_flow": ["1"],
                 "adherence_rate": 0.8, "reference_session_count": 6,
                 "direction_summary": {"classification": "horizontal"}, "zone_keys": ["1:1", "1:2"]}
@@ -33,6 +45,8 @@ def context(task="trajectory_recomm", coating=True):
         claims = {"analysis_status": "available", "scope": "final_record", "comparison_basis": "expert_zone_median",
                   "zones": [{"map_num": "1", "zone_id": "1", "actual_um": 180, "reference_um": 120},
                             {"map_num": "1", "zone_id": "2", "actual_um": 80, "reference_um": 120}]}
+        if target is not None:
+            claims["target"] = target
         payload.update(coating_context=claims, coating_signature=sign_context("coating_status", claims))
     return "motion_viewer_analysis:" + json.dumps(payload)
 
@@ -142,3 +156,95 @@ def test_pose_tab_fallback_does_not_claim_a_missing_height_map():
     result = viewer_coating_context(payload)
     assert result["target"] == {"analysis_status": "not_available", "reason_code": "target_assessment_not_loaded"}
     assert result["analysis_status"] == "available" and result["zones"]
+
+
+def ask(task, prompt, value, *, mode="quick", pipeline=None, reports=None):
+    app = FastAPI()
+    app.include_router(create_copilot_router(lambda: pipeline or Pipeline(), store=SequenceStore(":memory:"), reports=reports))
+    response = TestClient(app).post("/api/v1/copilot/query", json={
+        "user_id": "routing-test", "session_id": "S-1", "task_type": task, "response_mode": mode,
+        "prompt": prompt, "context": value})
+    assert response.status_code == 200, response.text
+    return response.json()["data"]
+
+
+@pytest.mark.parametrize("task", ["knowledge_search", "pose_recomm", "trajectory_recomm"])
+@pytest.mark.parametrize("mode", ["quick", "detailed"])
+def test_signed_target_grades_answer_the_coating_question_in_every_tab(task, mode):
+    pipeline = Pipeline()
+    data = ask(task, "도막이 과하거나 모자란 영역이 있어?", context(task, target=target_assessment()), mode=mode, pipeline=pipeline)
+    answer = data["answer"]
+    assert "저도막: 1개" in answer and "과도막: 1개" in answer and "기본 목표 160µm 기준" in answer
+    assert "전문가 대비" in answer and "재생 시점의 도막이 아닙니다" in answer
+    assert "두꺼운 영역" not in answer and "[" not in answer and "픽셀" not in answer
+    assert pipeline.calls == [] and data["retrieval_used"] is False
+
+
+def test_zone_question_gets_the_one_signed_target_row():
+    answer = ask("knowledge_search", "Zone 2 도막은 어때?", context(target=target_assessment()))["answer"]
+    assert "Zone 2: 과도막(칠한 곳 평균 290µm" in answer and "Zone 1" not in answer
+
+
+def test_question_about_the_expert_keeps_the_expert_comparison():
+    # "두꺼운"만으로는 도막 질문으로 판별되지 않는다(copilot_intent). 도막을 말한 질문으로 잰다.
+    answer = ask("knowledge_search", "전문가보다 도막이 두꺼운 곳은 어디야?", context(target=target_assessment()))["answer"]
+    assert "전문가 기준보다 두꺼운 영역" in answer and "저도막: 1개" not in answer
+    assert not answer.startswith("이 질문에는")
+
+
+@pytest.mark.parametrize("target,expected", [
+    ({"analysis_status": "not_available", "reason_code": "height_map_unavailable"}, "이 기록은 높이맵 원본이 없어"),
+    ({"analysis_status": "not_available", "reason_code": "height_map_size_mismatch"}, "이 기록의 높이맵 크기가"),
+    ({"analysis_status": "not_available", "reason_code": "zone_reference_unavailable"}, "이 콘텐츠의 Zone 기준 자료가 없어"),
+    ({"analysis_status": "not_available", "reason_code": "target_assessment_not_loaded"}, "이 질문에는 목표 대비 판정 자료가 함께 오지 않았습니다."),
+    (None, "이 질문에는 목표 대비 판정 자료가 함께 오지 않았습니다."),
+])
+def test_record_without_target_says_so_before_the_expert_comparison(target, expected):
+    answer = ask("knowledge_search", "도막이 과하거나 모자란 영역이 있어?", context(target=target))["answer"]
+    assert answer.startswith(expected) and "아래는 전문가 기록과 견준 값입니다." in answer
+    assert "두꺼운" in answer and "180" in answer
+    if expected.startswith("이 질문에는"):
+        assert "높이맵 원본이 없어" not in answer
+
+
+def test_forged_target_grades_are_not_used():
+    value = context(target=target_assessment()).replace('"grade": "above"', '"grade": "normal"')
+    data = ask("knowledge_search", "도막이 과하거나 모자란 영역이 있어?", value)
+    assert data["coating_context"]["analysis_status"] == "not_available"
+    assert "과도막" not in data["answer"] and "정상: 2개" not in data["answer"]
+
+
+def test_error_analysis_in_the_viewer_uses_the_signed_target():
+    data = ask("error_analysis", "도막 분포 이상 원인은?", context(target=target_assessment()))
+    answer = data["answer"]
+    assert "조절 후보" in answer and "확정된 것은 아닙니다" in answer and "저도막 Zone 1" in answer
+    assert data["coating_context"]["comparison_basis"] == "expert_zone_median" and data["retrieval_used"] is False
+
+
+def test_error_analysis_with_only_expert_rows_falls_back_to_the_completed_report():
+    """알려진 결함: 뷰어의 전문가 대비 자료가 먼저 쓰여 완료 리포트가 있어도 "결과가 없어"라고 답했다."""
+    from trainer.demo_api import coating_assessment as ca
+    row = ca.zone_row(1, "3", ca.assess_zone(np.full((4, 4), 300.0), np.ones((4, 4), bool)))
+
+    class Reports:
+        def latest_complete_analysis(self, _session_id):
+            return "RPT-1", {"coating_zones": [row]}
+
+    data = ask("error_analysis", "도막 분포 이상 원인은?",
+               context(target={"analysis_status": "not_available", "reason_code": "height_map_unavailable"}), reports=Reports())
+    assert "과도막 Zone 3" in data["answer"] and "완료 분석의 도막 결과가 없어" not in data["answer"]
+    assert data["coating_context"]["comparison_basis"] == "saved_coating_report"
+    without = ask("error_analysis", "도막 분포 이상 원인은?", context())
+    assert "완료 분석의 도막 결과가 없어" in without["answer"]
+
+
+def test_advice_prompt_gets_the_compact_target_facts():
+    class Advice(Pipeline):
+        def run(self, **kwargs):
+            self.calls.append(kwargs)
+            return {"response": "[답변] 분사 거리와 이동 속도를 일정하게 유지하세요.", "rag_chunks": []}
+    pipeline = Advice()
+    ask("pose_recomm", "이 Zone에서 도막을 균일하게 만드는 방법은?", context("pose_recomm", target=target_assessment()), pipeline=pipeline)
+    instruction = pipeline.calls[0]["instruction"]
+    assert "검증된 최종 도막 비교 자료" in instruction and "목표 대비 판정" in instruction and "저도막" in instruction
+    assert "six_band_counts" not in instruction and "전문가 대비 대표 두께 비교" not in instruction

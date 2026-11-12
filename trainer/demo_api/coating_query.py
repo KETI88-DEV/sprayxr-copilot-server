@@ -11,6 +11,15 @@ from trainer.demo_api.coating_assessment import (
     RULE_NOTE, adjustment_sentence, basis_label, distribution_sentence, grade_phrase, mean_text)
 
 _ZONE_NUMBER = re.compile(r"(?:zone|존|구역)\s*(\d+)", re.I)
+_EXPERT = re.compile(r"전문가|expert", re.I)
+# 뷰어 기록에 목표 대비 판정이 없을 때 전문가 대비 답 앞에 밝히는 사유. 사유와 다른 말을 하지 않는다.
+_TARGET_MISSING = {
+    "height_map_unavailable": "이 기록은 높이맵 원본이 없어 목표 대비 판정을 낼 수 없습니다.",
+    "height_map_size_mismatch": "이 기록의 높이맵 크기가 Zone 기준 자료와 달라 목표 대비 판정을 내지 않았습니다.",
+    "zone_reference_unavailable": "이 콘텐츠의 Zone 기준 자료가 없어 목표 대비 판정을 낼 수 없습니다.",
+}
+_TARGET_NOT_SENT = "이 질문에는 목표 대비 판정 자료가 함께 오지 않았습니다."
+_VIEWER_NOTE = "최종 높이맵 기준이며 재생 시점의 도막이 아닙니다. 전문가 기록과 견준 두께는 화면의 '전문가 대비'에서 볼 수 있습니다."
 
 
 def _number(value: object) -> float | None:
@@ -104,7 +113,7 @@ def _sum_bands(rows: list[dict[str, Any]]) -> dict[str, int]:
     return total
 
 
-def _grade_answer(rows: list[dict[str, Any]], prompt: str, *, detailed: bool) -> str:
+def _grade_answer(rows: list[dict[str, Any]], prompt: str, *, detailed: bool, viewer: bool = False) -> str:
     """저장된 행의 등급을 읽어 옮긴다. 등급을 다시 계산하지 않는다."""
     basis = basis_label(rows[0]["target_thickness_um"], rows[0]["target_basis"])
     text = [f"{basis}으로 Zone별 도막을 판정했습니다. {RULE_NOTE}"]
@@ -128,12 +137,17 @@ def _grade_answer(rows: list[dict[str, Any]], prompt: str, *, detailed: bool) ->
         # 미도장 비율에는 합격 기준이 없다. 있다/없다로 판정하지 않고 숫자만 옮긴다.
         text.append(("미도장 비율이 큰 곳: " + ", ".join(largest) + "." if largest else "판정한 Zone의 미도장 비율은 모두 1% 미만입니다.")
                     + " 미도장 비율에는 합격 기준이 없어 숫자만 알려 드립니다.")
+    if viewer:
+        text.append(_VIEWER_NOTE)
     return "\n".join(line for line in text if line)
 
 
 def answer_distribution_cause(context: Mapping[str, Any], *, detailed: bool) -> str | None:
     """error_analysis 답: 분포와 저도막·과도막 Zone의 조절 후보. 도막 자료가 없으면 None."""
     zones = context.get("zones") or []
+    if context.get("comparison_basis") == "expert_zone_median":
+        # 뷰어의 전문가 대비 행에는 등급이 없다. 서명된 목표 대비 행만 읽는다.
+        zones = _target_rows(context) or []
     rows = [row for row in zones if "grade" in row]
     if context.get("analysis_status") != "available" or not rows:
         # 2026-11 이전에 저장된 리포트 행에는 등급·분포가 없다. 완료한 세션에 "완료 분석이 없다"고 답하지 않는다.
@@ -153,14 +167,56 @@ def answer_distribution_cause(context: Mapping[str, Any], *, detailed: bool) -> 
     return "\n".join([*text, "조절 후보는 등급에 따른 일반적인 방향이며 원인으로 확정된 것은 아닙니다."])
 
 
-def answer_coating_question(context: dict[str, Any], prompt: str, *, detailed: bool) -> str:
-    rows = context.get("zones") or []
+def _target_rows(context: Mapping[str, Any]) -> list[dict[str, Any]] | None:
+    """뷰어 문맥의 목표 대비 행. 판정이 없으면 None."""
+    target = context.get("target")
+    return target.get("zones") or [] if isinstance(target, Mapping) and target.get("analysis_status") == "available" else None
+
+
+def _selected(rows: list[dict[str, Any]], prompt: str) -> list[dict[str, Any]]:
+    """질문이 Map·Zone 번호를 말하면 그 행만 남긴다."""
     selected_map = re.search(r"map\s*(\d+)", prompt, re.I)
     if selected_map:
         rows = [row for row in rows if str(row.get("map_num")) == selected_map[1]]
-    target = _ZONE_NUMBER.search(prompt)
-    if target:
-        rows = [row for row in rows if str(row.get("zone_id")) == target[1]]
+    zone = _ZONE_NUMBER.search(prompt)
+    if zone:
+        rows = [row for row in rows if str(row.get("zone_id")) == zone[1]]
+    return rows
+
+
+def target_advice_facts(context: Mapping[str, Any]) -> dict[str, Any] | None:
+    """조언 질문의 프롬프트에 넣는 줄인 목표 대비 판정: 재생 위치의 Zone과 저도막·과도막 Zone, 최대 6개."""
+    rows = _target_rows(context)
+    if not rows:
+        return None
+    playback = context.get("playback_context") or {}
+    here = [row for row in rows if (str(row["map_num"]), str(row["zone_id"])) == (str(playback.get("map_num")), str(playback.get("zone_id")))]
+    flagged = [row for row in _graded(rows, "below") + _graded(rows, "above") if row not in here]
+    return {"basis": context["target"]["basis_label"],
+            "zones": [{"map_num": row["map_num"], "zone_id": row["zone_id"], "grade": row["grade"],
+                       "label": grade_phrase(row), "adjustments": row["adjustments"]} for row in (here + flagged)[:6]]}
+
+
+def target_findings_line(context: Mapping[str, Any] | None) -> str | None:
+    """뷰어 '고칠 점' 답 끝의 도막 한 줄. 서명된 목표 대비 판정이 없으면 None."""
+    rows = _target_rows(context) if context else None
+    if rows is None:
+        return None
+    groups = [f"{word} Zone " + "·".join(str(row["zone_id"]) for row in _graded(rows, grade))
+              for word, grade in (("저도막", "below"), ("과도막", "above")) if _graded(rows, grade)]
+    return f"도막({context['target']['basis_label']}): " + (", ".join(groups) or "저도막·과도막 Zone 없음") + "."
+
+
+def answer_coating_question(context: dict[str, Any], prompt: str, *, detailed: bool) -> str:
+    rows = _selected(context.get("zones") or [], prompt)
+    note = None
+    if context.get("comparison_basis") == "expert_zone_median" and not _EXPERT.search(prompt):
+        target_rows = _target_rows(context)
+        if target_rows is None:
+            target = context.get("target") if isinstance(context.get("target"), Mapping) else {}
+            note = _TARGET_MISSING.get(target.get("reason_code"), _TARGET_NOT_SENT) + " 아래는 전문가 기록과 견준 값입니다."
+        elif _selected(target_rows, prompt):
+            return _grade_answer(_selected(target_rows, prompt), prompt, detailed=detailed, viewer=True)
     if context.get("analysis_status") != "available" or not rows:
         return ("도막의 과다·부족 영역을 판단할 신뢰 가능한 Zone별 도막 분석 자료가 없습니다. "
                 "뷰어의 기록을 다시 불러오거나 세션 완료 후 도막 분석 결과를 확인해 주세요.")
@@ -182,7 +238,7 @@ def answer_coating_question(context: dict[str, Any], prompt: str, *, detailed: b
             valid.append({**row, "delta": actual - reference, "delta_percent": (actual / reference - 1) * 100})
     if not valid:
         return "Zone별 도막 두께 비교값이 없어 과다·부족 영역을 판단할 수 없습니다."
-    text = ["최종 높이맵의 Zone별 대표 두께를 전문가 기준과 비교했습니다."]
+    text = [*filter(None, [note]), "최종 높이맵의 Zone별 대표 두께를 전문가 기준과 비교했습니다."]
     for label, group in (("전문가 기준보다 두꺼운 영역", sorted((r for r in valid if r["delta"] > 1e-6), key=lambda r: -r["delta_percent"])),
                          ("전문가 기준보다 얇은 영역", sorted((r for r in valid if r["delta"] < -1e-6), key=lambda r: r["delta_percent"]))):
         text.append(f"{label}: {len(group)}개" + (" (차이가 큰 3곳)" if not detailed and len(group) > 3 else ""))

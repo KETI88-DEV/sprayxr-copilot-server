@@ -18,7 +18,7 @@
 * ``trajectory_recomm`` (plan D2): HTTP 200 SUCCESS with a short
   "준비 중" answer and ``context_status="not_available"``. 엔진이 없다.
 * ``error_analysis``: 완료 리포트에 저장된 Zone별 도막 평가(분포, 저도막·과도막 Zone의 조절 후보)로
-  답한다. 모델을 부르지 않는다. 리포트가 없으면 자료가 없다는 안내와 ``context_status="not_available"``.
+  답한다. 뷰어 문맥에 서명된 목표 대비 판정이 있으면 그것으로, 없으면 리포트로 답한다. 모델을 부르지 않는다. 리포트가 없으면 자료가 없다는 안내와 ``context_status="not_available"``.
 
 Every response uses the v2.5 wrapper. Request validation failures under
 ``/api/v1/`` are wrapped as ERROR 422; other routes keep FastAPI's format.
@@ -45,7 +45,8 @@ from fastapi.responses import JSONResponse
 
 from trainer.demo_api.copilot_contracts import CopilotQueryData, CopilotQueryRequest, CopilotResponse
 from trainer.demo_api.coating_query import (
-    answer_coating_question, answer_distribution_cause, parse_viewer_coating_context, report_coating_context)
+    answer_coating_question, answer_distribution_cause, parse_viewer_coating_context, report_coating_context,
+    target_advice_facts)
 from trainer.demo_api.copilot_intent import classify_question_intent, fallback_intent, preset_intent, is_coating_status_question, is_coating_advice_question
 from trainer.demo_api.dialogue import (authenticated_facts, conversation_key, drop_ungrounded, parse_plan, plain_answer,
                                        selected_direction_answer, ungrounded_measurements, viewer_findings_answer,
@@ -735,13 +736,14 @@ async def _execute_copilot_query(
     trusted_coating = parse_viewer_coating_context(query.context, query.task_type)
     coating_advice_context = (trusted_coating if is_coating_advice_question(query.prompt) and trusted_coating and trusted_coating.get("analysis_status") == "available" else None)
 
-    async def coating_facts() -> dict[str, Any]:
-        """서명된 뷰어 자료가 먼저이고, 없으면 완료 리포트의 도막 행."""
-        if trusted_coating is not None:
-            return trusted_coating
+    async def report_facts() -> dict[str, Any]:
         found_coating = (await to_thread.run_sync(lambda: reports.latest_complete_analysis(query.session_id))
                          if reports is not None and query.session_id else None)
         return report_coating_context(found_coating)
+
+    async def coating_facts() -> dict[str, Any]:
+        """서명된 뷰어 자료가 먼저이고, 없으면 완료 리포트의 도막 행."""
+        return trusted_coating if trusted_coating is not None else await report_facts()
 
     if is_coating_status_question(query.prompt) or (decision and decision["intent"] == "coating_status" and decision["kind"] == "lookup"):
         coating = await coating_facts()
@@ -990,6 +992,10 @@ async def _execute_copilot_query(
         if query.task_type == "error_analysis":
             coating = await coating_facts()
             cause = answer_distribution_cause(coating, detailed=query.response_mode == "detailed")
+            if cause is None and trusted_coating is not None:
+                # 뷰어 자료에 목표 대비 판정이 없으면(전문가 대비 행뿐) 완료 리포트로 답한다.
+                coating = await report_facts()
+                cause = answer_distribution_cause(coating, detailed=query.response_mode == "detailed")
             if cause is not None:
                 return _success_response(query, request_started, answer=cause, retrieval_used=False, citations=[],
                                          coating_context=coating, context_status="available")
@@ -1024,8 +1030,12 @@ async def _execute_copilot_query(
                           if query.response_mode == "quick" and query.task_type == "knowledge_search" else None)
     knowledge_client_context = (definition_context or (json.dumps(facts, ensure_ascii=False, separators=(",", ":")) if facts else viewer_metadata_context(query.context))) if viewer_requested else (definition_context or query.context)
     if coating_advice_context is not None:
-        knowledge_client_context = "[검증된 최종 도막 비교 자료]\n" + json.dumps(coating_advice_context, ensure_ascii=False, separators=(",", ":"))
-        knowledge_client_context += "\n최종 기록의 전문가 대비 대표 두께 비교이며 재생 시점의 현재 도막 판정이 아닙니다. 질문의 원인·방법·관계를 직접 설명하고 확인된 측정 사실과 일반적인 가능한 원인을 구분하세요. 권장 Zone 순서를 대신 답하지 마세요."
+        compact = target_advice_facts(coating_advice_context)
+        knowledge_client_context = "[검증된 최종 도막 비교 자료]\n" + json.dumps(compact or coating_advice_context, ensure_ascii=False, separators=(",", ":"))
+        knowledge_client_context += (
+            "\n목표 대비 판정이며 재생 시점의 도막이 아닙니다. 조절 후보는 등급에 따른 일반적인 방향이고 원인으로 확정된 것이 아닙니다."
+            if compact else "\n최종 기록의 전문가 대비 대표 두께 비교이며 재생 시점의 현재 도막 판정이 아닙니다."
+        ) + " 질문의 원인·방법·관계를 직접 설명하고 확인된 측정 사실과 일반적인 가능한 원인을 구분하세요. 권장 Zone 순서를 대신 답하지 마세요."
     instruction = build_query_instruction(
         query.prompt,
         client_context=knowledge_client_context,

@@ -299,7 +299,9 @@ def viewer_findings_answer(value: str | None) -> str | None:
               + (corrections or "이 Zone에서 계산된 개선 안내는 없습니다."))
     from trainer.demo_api.viewer_arm_pose import parse_viewer_arm_pose
     priority = (parse_viewer_arm_pose(value) or {}).get("priority_corrections") or []
-    return answer + (f"\n팔 자세 우선 교정: {priority[0]}" if priority else "")
+    from trainer.demo_api.coating_query import parse_viewer_coating_context, target_findings_line
+    coating = target_findings_line(parse_viewer_coating_context(value, "knowledge_search"))
+    return answer + (f"\n팔 자세 우선 교정: {priority[0]}" if priority else "") + (f"\n{coating}" if coating else "")
 
 
 def authenticated_facts(value: str | None) -> dict[str, Any]:

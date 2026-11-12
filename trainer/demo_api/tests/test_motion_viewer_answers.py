@@ -117,6 +117,19 @@ def test_evaluation_question_in_the_viewer_names_the_lowest_zone_from_the_signed
     assert dialogue.viewer_findings_answer("motion_viewer_playback:{}") is None
 
 
+def test_findings_answer_adds_one_coating_line_from_the_signed_target() -> None:
+    from trainer.demo_api.tests.test_query_question_routing import target_assessment
+    plain = dialogue.viewer_findings_answer(_playback_context())
+    coating = {"analysis_status": "available", "scope": "final_record", "comparison_basis": "expert_zone_median",
+               "zones": [], "target": target_assessment()}
+    payload = json.loads(_playback_context().split(":", 1)[1])
+    payload.update(coating_context=coating, coating_signature=sign_context("coating_status", coating))
+    answer = dialogue.viewer_findings_answer("motion_viewer_playback:" + json.dumps(payload))
+    assert answer == f"{plain}\n도막(기본 목표 160µm 기준): 저도막 Zone 1, 과도막 Zone 2."
+    payload["coating_context"]["target"]["zones"][0]["grade"] = "normal"  # 서명과 맞지 않으면 붙이지 않는다
+    assert dialogue.viewer_findings_answer("motion_viewer_playback:" + json.dumps(payload)) == plain
+
+
 def test_record_speed_question_in_the_viewer_never_reaches_the_model() -> None:
     pipeline = _Pipeline()
     data = _ask(pipeline, "지금 속도는 적당해?", context=_playback_context())
