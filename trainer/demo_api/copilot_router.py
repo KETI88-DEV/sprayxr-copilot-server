@@ -43,7 +43,7 @@ from fastapi.responses import JSONResponse
 
 from trainer.demo_api.copilot_contracts import CopilotQueryData, CopilotQueryRequest, CopilotResponse
 from trainer.demo_api.coating_query import answer_coating_question, parse_viewer_coating_context, report_coating_context
-from trainer.demo_api.copilot_intent import classify_question_intent, fallback_intent, preset_intent, is_coating_status_question, is_coating_advice_question
+from trainer.demo_api.copilot_intent import classify_question_intent, fallback_intent, preset_intent, is_coating_status_question, is_coating_advice_question, is_general_painting_knowledge
 from trainer.demo_api.dialogue import (authenticated_facts, conversation_key, drop_ungrounded, parse_plan, plain_answer,
                                        selected_direction_answer, ungrounded_measurements, viewer_findings_answer,
                                        viewer_measurement_answer, viewer_metadata_context, without_hanzi)
@@ -691,6 +691,9 @@ async def _execute_copilot_query(
                 logger.exception("copilot dialogue planning failed request_id=%s", query.request_id)
                 decision = {"kind": "clarify", "intent": "knowledge", "scope": "unspecified"}
 
+    if decision is not None and query.task_type == "knowledge_search" and is_general_painting_knowledge(query.prompt):
+        # 계획 모델은 직전 자세·순서 대화에 끌려 일반 지식 질문을 기록 후속 대화로 분류한다(2026-11-12 재현).
+        decision = {"kind": "coating_knowledge", "intent": "knowledge", "scope": "unspecified"}
     if decision is not None:
         intent = decision["intent"]
         if intent == "order_reference" and explicit_actual_order:

@@ -10,6 +10,8 @@ logger = logging.getLogger(__name__)
 
 POSE_INTENTS = {"pose_overall", "pose_worst_zone", "pose_zone", "pose_right", "pose_left", "knowledge"}
 ORDER_INTENTS = {"order_reference", "order_actual", "order_missing", "order_adherence", "order_direction", "knowledge"}
+_PAINTING_SUBJECT = re.compile(r"도막|두께|이격|속도|노즐|압력|안전|보호구|오버랩")
+_RECORD_REFERENCE = re.compile(r"영역|구역|zone|존|부위|현재|지금|이번|내[ 가]|어디|어느", re.I)
 
 
 def is_coating_advice_question(prompt: str) -> bool:
@@ -21,9 +23,15 @@ def is_coating_status_question(prompt: str) -> bool:
     subject = re.search(r"도막|두께|과도막|저도막|coating|thickness", prompt, re.I)
     if not subject or is_coating_advice_question(prompt):
         return False
-    specific = re.search(r"영역|구역|zone|존|부위|현재|지금|이번|내[ 가]|어디|어느", prompt, re.I)
+    specific = _RECORD_REFERENCE.search(prompt)
     definition = re.search(r"뭐|무엇|뜻|의미|정의|원인|예방|방지", prompt)
     return bool(specific or (not definition and re.search(r"과하|모자|부족|이상|상태|어때|분석|평가|얇|두껍|과다|괜찮|충분|양호|균일|불량|칠했|잘됐", prompt)))
+
+
+def is_general_painting_knowledge(prompt: str) -> bool:
+    """기록·Zone·재생 위치를 가리키지 않는 도장 기술 질문(적정값·정의·원인·방법)."""
+    return bool((is_coating_advice_question(prompt) or _PAINTING_SUBJECT.search(prompt))
+                and not _RECORD_REFERENCE.search(prompt) and not re.search(r"시퀀스|기록|재생|분사|아까|방금", prompt))
 
 
 def preset_intent(task_type: str, prompt: str) -> str | None:
@@ -86,7 +94,7 @@ def classify_question_intent(
                 # A tab is a UI preference. A confidently different industrial
                 # subject must not become a Zone-order answer on a bad label.
                 if (is_coating_advice_question(prompt) or (result != "knowledge" and fallback_intent(task_type, prompt) == "knowledge"
-                        and re.search(r"도막|두께|이격|속도|노즐|압력|안전|보호구|오버랩", prompt))):
+                        and _PAINTING_SUBJECT.search(prompt))):
                     return "knowledge"
                 return result
             logger.warning("copilot intent classifier returned invalid label task=%s label=%s", task_type, result)
