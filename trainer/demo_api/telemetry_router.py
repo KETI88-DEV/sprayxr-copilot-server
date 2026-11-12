@@ -151,7 +151,7 @@ _ALERT_ROW_KEYS: Final = (
 )
 
 
-def _coating_alerts(row: dict[str, Any]) -> list[dict[str, Any]]:
+def coating_alerts(row: dict[str, Any]) -> list[dict[str, Any]]:
     """평가 행 → 도막 등급 알림(과도막은 지금 Zone, 저도막은 방금 떠난 Zone). 한 Zone에 세션당 종류별 1회다."""
     alerts: list[dict[str, Any]] = []
 
@@ -333,7 +333,7 @@ def create_telemetry_router(
                         },
                     )
                 if broadcaster is not None and coating_progress.assessment is not None:
-                    for alert in _coating_alerts(coating_progress.assessment):
+                    for alert in coating_alerts(coating_progress.assessment):
                         broadcaster.publish(session_id=query.session_id, sequence_id=query.sequence_id, **alert)
             common_data["coating_feedback"] = cached["coating_feedback"]
             common_data["sequence_feedback"] = cached["sequence_feedback"]
