@@ -441,6 +441,39 @@ def test_session_started_without_a_target_is_reported_as_the_default_target(
     assert phrase in coating["guideline"]
 
 
+def test_error_analysis_answers_from_the_completed_report(engine: CoatingProgressEngine, height_map: bytes) -> None:
+    """error_analysis는 완료 리포트의 도막 평가로 답한다. 리포트가 없으면 자료가 없다고 말한다.
+
+    깨뜨리는 법: error_analysis를 예전처럼 고정 문장으로 돌려보내면 과도막 3번 구역이 답에 없다.
+    """
+    client = _client(engine)
+    body = {"user_id": "u", "session_id": SESSION, "scenario_id": "3", "task_type": "error_analysis",
+            "prompt": "도막 분포 이상 원인은?"}
+    before = client.post("/api/v1/copilot/query", json=body).json()["data"]
+    assert "완료 분석의 도막 결과가 없어" in before["answer"]
+    assert (before["context_status"], before["coating_context"]) == ("not_available", None)
+
+    _complete_session(client, height_map)
+    data = client.post("/api/v1/copilot/query", json=body).json()["data"]
+
+    assert data["answer"].startswith("기본 목표 160µm 기준으로 본 도막 분포입니다. 칠한 면적의 두께 분포: ")
+    assert "과도막 Zone 3(칠한 곳 평균 390µm): 속도·이격거리 기록이 없어 조절 후보를 내지 못했습니다." in data["answer"]
+    assert "저도막" not in data["answer"]
+    assert data["answer"].endswith("원인으로 확정된 것은 아닙니다.")
+    assert data["coating_context"]["comparison_basis"] == "saved_coating_report"
+    assert (data["context_status"], data["retrieval_used"], data["citations"]) == ("available", False, [])
+
+
+def test_coating_status_question_after_complete_lists_grades(engine: CoatingProgressEngine, height_map: bytes) -> None:
+    client = _client(engine)
+    _complete_session(client, height_map)
+
+    data = _ask(client, "도막이 과하거나 모자란 영역이 있어?")
+
+    assert "저도막: 없음\n과도막: 1개 — Map 1 · Zone 3(칠한 곳 평균 390µm, 미도장 0%)\n정상: 1개\n칠한 곳 없음: 1개 — Map 1 · Zone 2" in data["answer"]
+    assert [row["zone_id"] for row in data["coating_context"]["zones"]] == ["1", "2", "3"]
+
+
 def test_after_complete_chip_questions_use_the_session_report(engine: CoatingProgressEngine, height_map: bytes) -> None:
     """뷰어 채팅은 칩으로 유형만 고른다. complete 뒤에는 '구역' 없는 자세 질문도 세션 결과로 답하고, 순서 칩은 순서 리포트로 답한다.
 

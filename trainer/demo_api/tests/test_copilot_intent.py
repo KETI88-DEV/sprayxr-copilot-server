@@ -96,3 +96,15 @@ def test_coating_advice_keeps_its_question_meaning_even_when_a_zone_is_mentioned
 def test_ui_overall_work_similarity_preset_uses_pose_overall_without_model():
     from trainer.demo_api.copilot_intent import preset_intent
     assert preset_intent("pose_recomm", "전체 작업 유사도는?")=="pose_overall"
+
+
+def test_unpainted_and_distribution_questions_are_status_questions():
+    from trainer.demo_api.copilot_intent import is_coating_advice_question, is_coating_status_question
+    for question in ("미도장 영역이 있어?", "미도장은?", "도막 분포는?", "도막 등급은?", "도막 등급은 어때?"):
+        assert is_coating_status_question(question), question
+    for question in ("미도장이 뭐야?", "도막 분포 이상 원인은?"):
+        assert not is_coating_status_question(question), question
+        assert is_coating_advice_question(question), question
+    # "정상"은 상태 낱말이 아니다 — 지식 질문이 상태 질문으로 넘어가지 않는다.
+    assert not is_coating_status_question("정상 도막 두께는 얼마야?")
+    assert not is_coating_advice_question("정상 도막 두께는 얼마야?")

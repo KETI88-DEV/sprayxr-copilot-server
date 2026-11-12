@@ -13,17 +13,17 @@ ORDER_INTENTS = {"order_reference", "order_actual", "order_missing", "order_adhe
 
 
 def is_coating_advice_question(prompt: str) -> bool:
-    return bool(re.search(r"도막|두께|과도막|저도막|coating|thickness", prompt, re.I)
+    return bool(re.search(r"도막|두께|과도막|저도막|미도장|coating|thickness", prompt, re.I)
                 and re.search(r"뭐|무엇|뜻|의미|정의|원인|이유|왜|방법|어떻게|예방|방지|원리|관계|영향|중요|하려면|개선|해야|고치|맞추|조절", prompt))
 
 
 def is_coating_status_question(prompt: str) -> bool:
-    subject = re.search(r"도막|두께|과도막|저도막|coating|thickness", prompt, re.I)
+    subject = re.search(r"도막|두께|과도막|저도막|미도장|coating|thickness", prompt, re.I)
     if not subject or is_coating_advice_question(prompt):
         return False
     specific = re.search(r"영역|구역|zone|존|부위|현재|지금|이번|내[ 가]|어디|어느", prompt, re.I)
     definition = re.search(r"뭐|무엇|뜻|의미|정의|원인|예방|방지", prompt)
-    return bool(specific or (not definition and re.search(r"과하|모자|부족|이상|상태|어때|분석|평가|얇|두껍|과다|괜찮|충분|양호|균일|불량|칠했|잘됐", prompt)))
+    return bool(specific or (not definition and re.search(r"과하|모자|부족|이상|상태|어때|분석|평가|얇|두껍|과다|괜찮|충분|양호|균일|불량|칠했|잘됐|분포|미도장|등급", prompt)))
 
 
 def preset_intent(task_type: str, prompt: str) -> str | None:

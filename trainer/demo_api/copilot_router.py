@@ -15,8 +15,10 @@
   ``session_id``의 가장 최근 시퀀스다. 채점은 MCP 자세 엔진에 위임하고 결과는
   ``pose_context``에 싣는다. **자세는 여기서 채점한다** — ``telemetry/sequence``는
   시퀀스를 데이터베이스에 올리는 일만 한다(p.4).
-* ``trajectory_recomm`` / ``error_analysis`` (plan D2): HTTP 200 SUCCESS with a short
+* ``trajectory_recomm`` (plan D2): HTTP 200 SUCCESS with a short
   "준비 중" answer and ``context_status="not_available"``. 엔진이 없다.
+* ``error_analysis``: 완료 리포트에 저장된 Zone별 도막 평가(분포, 저도막·과도막 Zone의 조절 후보)로
+  답한다. 모델을 부르지 않는다. 리포트가 없으면 자료가 없다는 안내와 ``context_status="not_available"``.
 
 Every response uses the v2.5 wrapper. Request validation failures under
 ``/api/v1/`` are wrapped as ERROR 422; other routes keep FastAPI's format.
@@ -42,7 +44,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from trainer.demo_api.copilot_contracts import CopilotQueryData, CopilotQueryRequest, CopilotResponse
-from trainer.demo_api.coating_query import answer_coating_question, parse_viewer_coating_context, report_coating_context
+from trainer.demo_api.coating_query import (
+    answer_coating_question, answer_distribution_cause, parse_viewer_coating_context, report_coating_context)
 from trainer.demo_api.copilot_intent import classify_question_intent, fallback_intent, preset_intent, is_coating_status_question, is_coating_advice_question
 from trainer.demo_api.dialogue import (authenticated_facts, conversation_key, drop_ungrounded, parse_plan, plain_answer,
                                        selected_direction_answer, ungrounded_measurements, viewer_findings_answer,
@@ -92,7 +95,7 @@ _MOTION_VIEWER_CONTEXT_PREFIX: Final[str] = "motion_viewer_analysis:"
 PENDING_TASK_ANSWERS: Final[Mapping[str, str]] = MappingProxyType(
     {
         "trajectory_recomm": "이동 궤적·도장 순서 추천 기능은 준비 중입니다. 도장 지식 질문에는 지금 답변할 수 있습니다.",
-        "error_analysis": "도막 분포 이상 원인 분석 기능은 준비 중입니다. 도장 지식 질문에는 지금 답변할 수 있습니다.",
+        "error_analysis": "이 세션에는 완료 분석의 도막 결과가 없어 도막 분포 이상 원인을 분석할 수 없습니다. 세션을 마친 뒤 다시 질문해 주세요.",
     }
 )
 
@@ -731,12 +734,17 @@ async def _execute_copilot_query(
 
     trusted_coating = parse_viewer_coating_context(query.context, query.task_type)
     coating_advice_context = (trusted_coating if is_coating_advice_question(query.prompt) and trusted_coating and trusted_coating.get("analysis_status") == "available" else None)
+
+    async def coating_facts() -> dict[str, Any]:
+        """서명된 뷰어 자료가 먼저이고, 없으면 완료 리포트의 도막 행."""
+        if trusted_coating is not None:
+            return trusted_coating
+        found_coating = (await to_thread.run_sync(lambda: reports.latest_complete_analysis(query.session_id))
+                         if reports is not None and query.session_id else None)
+        return report_coating_context(found_coating)
+
     if is_coating_status_question(query.prompt) or (decision and decision["intent"] == "coating_status" and decision["kind"] == "lookup"):
-        coating = trusted_coating
-        if coating is None:
-            found_coating = (await to_thread.run_sync(lambda: reports.latest_complete_analysis(query.session_id))
-                             if reports is not None and query.session_id else None)
-            coating = report_coating_context(found_coating)
+        coating = await coating_facts()
         available = coating.get("analysis_status") == "available"
         return _success_response(query, request_started,
             answer=answer_coating_question(coating, query.prompt, detailed=query.response_mode == "detailed"),
@@ -979,6 +987,12 @@ async def _execute_copilot_query(
         )
 
     if query.task_type != "knowledge_search" and not knowledge_routed:
+        if query.task_type == "error_analysis":
+            coating = await coating_facts()
+            cause = answer_distribution_cause(coating, detailed=query.response_mode == "detailed")
+            if cause is not None:
+                return _success_response(query, request_started, answer=cause, retrieval_used=False, citations=[],
+                                         coating_context=coating, context_status="available")
         answer = pending_answers.get(query.task_type) or PENDING_TASK_ANSWERS[query.task_type]
         return _success_response(
             query, request_started, answer=answer, retrieval_used=False, citations=[]

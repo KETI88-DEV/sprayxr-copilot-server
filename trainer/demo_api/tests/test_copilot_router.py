@@ -730,7 +730,7 @@ def test_pending_task_types_answer_not_available_without_pipeline_or_mcp(
     data = body["data"]
     assert set(data) == _DATA_KEYS
     assert data["answer"] == copilot_router.PENDING_TASK_ANSWERS[task_type]
-    assert "준비 중" in data["answer"]
+    assert "완료 분석" in data["answer"]
     assert data["resolved_intents"] == [task_type]
     assert data["context_status"] == "not_available"
     assert (data["sequence_context"], data["coating_context"], data["pose_context"]) == (None, None, None)

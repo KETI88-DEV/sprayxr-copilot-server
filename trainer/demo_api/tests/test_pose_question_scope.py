@@ -150,6 +150,107 @@ def test_coating_answers_carry_no_section_title(detailed: bool) -> None:
         assert "Zone 3" in answer and "Zone 5" in answer
 
 
+def _graded(zone_id: str, grade: str | None, thickness_um: float | None, unpainted: float, *counts: int,
+            adjustments: tuple[tuple[str, str, int], ...] = ()) -> dict[str, Any]:
+    """완료 리포트에 저장되는 새 도막 행(coating_assessment.zone_row 모양) 가운데 답이 읽는 열쇠."""
+    from trainer.zone_engine.numerical import SIX_BAND_KEYS
+
+    return {"map_num": 1, "zone_id": zone_id, "grade": grade,
+            "status": {"below": "under_app", "normal": "normal", "above": "over_app"}.get(grade or ""),
+            "thickness_um": thickness_um, "target_thickness_um": 160.0, "target_basis": "default_target",
+            "unpainted_fraction": unpainted, "six_band_counts": dict(zip(SIX_BAND_KEYS, counts or (0,) * 6)),
+            "adjustments": [{"variable": variable, "direction": direction, "priority": priority,
+                             "evidence_kind": "quality_rule_candidate"} for variable, direction, priority in adjustments]}
+
+
+def _saved(*rows: dict[str, Any]) -> dict[str, Any]:
+    return coating_query.report_coating_context(("RPT-1", {"coating_zones": list(rows)}))
+
+
+_GRADED = (_graded("3", "below", 98.0, 0.12, 80, 8, 0, 0, 0, 0), _graded("5", "above", 301.0, 0.03, 0, 0, 0, 50, 47, 0),
+           _graded("7", None, None, 1.0), _graded("1", "normal", 171.0, 0.0, 0, 0, 100, 0, 0, 0))
+
+
+@pytest.mark.parametrize("detailed", [False, True])
+def test_report_answer_names_grades_means_and_unpainted_share(detailed: bool) -> None:
+    """새 리포트 행은 등급·칠한 곳 평균·미도장 비율로 답한다. 칠한 곳 없는 Zone도 빠지지 않는다.
+
+    깨뜨리는 법: 인정하는 행을 status 세 값으로만 두면 칠한 곳 없는 7번(status None)이 답에서 사라진다.
+    """
+    answer = coating_query.answer_coating_question(_saved(*_GRADED), "도막이 과하거나 모자란 영역이 있어?", detailed=detailed)
+
+    assert answer.split("\n") == [
+        "기본 목표 160µm 기준으로 Zone별 도막을 판정했습니다. "
+        "등급은 칠한 곳의 평균 두께로 정합니다(목표 미만은 저도막, 목표의 1.5배 이상은 과도막).",
+        "저도막: 1개 — Map 1 · Zone 3(칠한 곳 평균 98µm, 미도장 12%)",
+        "과도막: 1개 — Map 1 · Zone 5(칠한 곳 평균 301µm, 미도장 3%)",
+        "정상: 1개",
+        "칠한 곳 없음: 1개 — Map 1 · Zone 7",
+    ]
+    assert not any(word in answer for word in ("[", "픽셀", "화소", "마스크"))
+
+
+def test_report_answer_orders_by_distance_from_the_target_and_shortens_the_quick_answer() -> None:
+    rows = [_graded(str(zone), "below", thickness, 0.0) for zone, thickness in ((1, 150.0), (2, 40.0), (3, 120.0), (4, 90.0))]
+
+    quick = coating_query.answer_coating_question(_saved(*rows), "도막 상태는 어때?", detailed=False)
+    full = coating_query.answer_coating_question(_saved(*rows), "도막 상태는 어때?", detailed=True)
+
+    assert "저도막: 4개 — Map 1 · Zone 2(칠한 곳 평균 40µm, 미도장 0%), Map 1 · Zone 4(" in quick
+    assert "Zone 3(칠한 곳 평균 120µm, 미도장 0%) 외 1곳\n과도막: 없음\n정상: 0개" in quick
+    assert "Zone 1(칠한 곳 평균 150µm, 미도장 0%)\n과도막: 없음" in full and "외 " not in full
+
+
+def test_a_named_zone_gets_only_its_own_grade() -> None:
+    answer = coating_query.answer_coating_question(_saved(*_GRADED), "Zone 5 도막은 어때?", detailed=False)
+
+    assert answer.split("\n")[1:] == ["Map 1 · Zone 5: 과도막(칠한 곳 평균 301µm, 미도장 3%)"]
+    assert "Zone 3" not in answer
+
+
+def test_distribution_and_unpainted_questions_get_numbers() -> None:
+    """분포는 칠한 면적의 6구간 비율, 미도장은 Zone별 숫자만 준다(합격 기준이 없다)."""
+    context = _saved(*_GRADED)
+
+    distribution = coating_query.answer_coating_question(context, "도막 분포는 어때?", detailed=False)
+    unpainted = coating_query.answer_coating_question(context, "미도장 영역이 있어?", detailed=False)
+
+    # 칠한 화소 285개: 80·8·100·50·47·0
+    assert distribution.endswith("칠한 면적의 두께 분포: 목표의 90% 미만 28%, 90~100% 3%, 100~150% 35%, 150~200% 18%, 200~250% 16%, 250% 이상 0%.")
+    assert "미도장 비율이 큰 곳" not in distribution
+    assert unpainted.endswith("미도장 비율이 큰 곳: Zone 7(100%), Zone 3(12%), Zone 5(3%). 미도장 비율에는 합격 기준이 없어 숫자만 알려 드립니다.")
+    assert "두께 분포" not in unpainted
+
+
+def test_old_saved_rows_keep_the_old_answer() -> None:
+    """2026-11 이전에 저장된 리포트 행에는 grade가 없다. 그 행은 예전 문장 그대로 답한다."""
+    answer = coating_query.answer_coating_question(
+        _saved({"map_num": 1, "zone_id": "3", "status": "under_app"}), "도막이 과하거나 모자란 영역이 있어?", detailed=False)
+
+    assert "도막 부족: Map 1 · Zone 3\n도막 과다: 판정된 영역 없음" in answer
+
+
+def test_distribution_cause_names_candidates_without_claiming_a_cause() -> None:
+    """error_analysis 답: 분포와 저도막·과도막 Zone의 조절 후보. 후보는 원인이 아니라고 밝힌다."""
+    rows = (_graded("3", "below", 98.0, 0.12, 88, adjustments=(("distance_mm", "decrease", 2), ("speed_mm_s", "decrease", 1))),
+            _graded("5", "above", 301.0, 0.03, 0, 0, 0, 97), _graded("1", "normal", 171.0, 0.0, 0, 0, 100))
+
+    answer = coating_query.answer_distribution_cause(_saved(*rows), detailed=False)
+
+    assert answer is not None and answer.split("\n") == [
+        "기본 목표 160µm 기준으로 본 도막 분포입니다. "
+        "칠한 면적의 두께 분포: 목표의 90% 미만 31%, 90~100% 0%, 100~150% 35%, 150~200% 34%, 200~250% 0%, 250% 이상 0%.",
+        "저도막 Zone 3(칠한 곳 평균 98µm): 조절 후보: 이동 속도를 낮추는 쪽, 이격거리를 줄이는 쪽.",
+        "과도막 Zone 5(칠한 곳 평균 301µm): 속도·이격거리 기록이 없어 조절 후보를 내지 못했습니다.",
+        "조절 후보는 등급에 따른 일반적인 방향이며 원인으로 확정된 것은 아닙니다.",
+    ]
+    only_normal = coating_query.answer_distribution_cause(_saved(rows[2]), detailed=True)
+    assert only_normal is not None and only_normal.split("\n")[1:] == ["저도막·과도막으로 판정된 Zone이 없습니다."]
+    # 옛 행·자료 없음은 답하지 않는다(라우터가 자료 없음 안내로 떨어진다).
+    assert coating_query.answer_distribution_cause(_saved({"map_num": 1, "zone_id": "3", "status": "under_app"}), detailed=False) is None
+    assert coating_query.answer_distribution_cause(_saved(), detailed=False) is None
+
+
 def _client_with_two_arms() -> Any:
     result = dict(_MCP_RESULT, summary=_MCP_RESULT["summary"] + _TAIL)
     client, _ = _app(lambda _request: httpx.Response(200, json={"status": "success", "result": result, "error": None}))
