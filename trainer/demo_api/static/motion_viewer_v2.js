@@ -260,24 +260,142 @@
   }
   new ResizeObserver(drawOrderLinks).observe($('v2Order'));
 
-  // ── 도막: Zone별로 전문가 기준과 얼마나 다른지 ─────────────
+  // ── 도막: 목표 대비(기본, PR #8 기준)와 전문가 대비 ─────────
+  // 등급·칸 이름·정상 범위·척도는 서버가 서명한 target의 값만 읽는다. 화면에서 등급을 다시 계산하지 않는다.
+  let coatBasis = 'target';
+  let coatMap = false;
+  const targetOf = () => record?.coating_evaluation?.target || null;
+  const targetReady = () => targetOf()?.analysis_status === 'available';
+  const targetMissing = () => (targetOf()?.reason_code === 'height_map_unavailable'
+    ? '이 기록은 높이맵 원본이 없어 목표 대비 판정이 없습니다' : '이 기록은 목표 대비 판정이 없습니다');
+  const tally = (cls, label, number) => { const item = el('span', cls, `${label} `); item.append(el('b', null, String(number))); return item; };
+  const shareText = (share) => `${Math.round(share * 100)}%`;
+
+  function setCoating(basis, showMap = false) {
+    coatBasis = basis;
+    coatMap = basis === 'expert' && showMap;
+    renderCoating();
+    dispatchEvent(new Event('resize'));
+  }
+
   function renderCoating() {
+    const expert = coatBasis === 'expert';
+    $('v2CoatBasisTarget').setAttribute('aria-pressed', String(!expert));
+    $('v2CoatBasisExpert').setAttribute('aria-pressed', String(expert));
+    $('v2CoatViews').hidden = !expert;
+    $('v2CoatBarsView').setAttribute('aria-pressed', String(!coatMap));
+    $('v2CoatMapView').setAttribute('aria-pressed', String(coatMap));
+    $('v2CoatBars').hidden = coatMap;
+    $('v2CoatMap').hidden = !coatMap;
+    $('v2CoatBars').setAttribute('aria-label', expert ? 'Zone별 도막 두께가 전문가 기준과 얼마나 다른지' : 'Zone별 도막 등급(목표 대비)');
+    $('v2CoatBasisLabel').textContent = !expert && targetReady() ? targetOf().basis_label || '' : '';
+    if (expert) renderExpertCoating(); else renderTargetCoating();
+  }
+
+  function renderTargetCoating() {
+    const host = $('v2CoatBars');
+    const count = $('v2CoatCount');
+    const target = targetOf();
+    count.replaceChildren();
+    if (!record) { host.replaceChildren(); return; }
+    if (!targetReady()) {
+      const go = el('button', 'text-btn', '전문가 대비 보기');
+      go.type = 'button';
+      go.addEventListener('click', () => setCoating('expert'));
+      const box = el('div', 'chart-empty coat-empty');
+      box.append(el('span', null, targetMissing()), go);
+      host.replaceChildren(box);
+      return;
+    }
+    const labels = target.grade_labels || {};
+    const goal = Number(target.target_thickness_um);
+    const edges = target.band_edges_um || [];
+    const band = target.normal_band_um || [];
+    const bandLabels = target.band_labels || [];
+    // 막대 끝(척도)은 마지막 6구간 경계다. 보기 위한 척도일 뿐 판정과 무관하다.
+    const scaleMax = Number(edges[edges.length - 1]) > 0 ? Number(edges[edges.length - 1]) : 1;
+    const at = (value) => `${Math.max(0, Math.min(1, Number(value) / scaleMax)) * 100}%`;
+    const away = (row) => Math.abs(Number(row.thickness_um) - goal) / goal;
+    const rank = (row) => (row.grade === 'below' || row.grade === 'above' ? 0 : row.grade == null ? 1 : 2);
+    const rows = [...(target.zones || [])].sort((left, right) => rank(left) - rank(right)
+      || (rank(left) === 0 ? away(right) - away(left) : 0)
+      || Number(left.map_num) - Number(right.map_num) || Number(left.zone_id) - Number(right.zone_id));
+    const grades = ['below', 'normal', 'above', 'none'];
+    const tallies = grades.map((grade) => [grade, rows.filter((row) => (row.grade ?? 'none') === grade).length])
+      .filter(([grade, number]) => grade !== 'none' || number > 0);
+    count.replaceChildren(...tallies.map(([grade, number]) => tally(`is-${grade}`, labels[grade] ?? grade, number)));
+    // 미도장 0.5% 이상인 Zone이 있을 때만 그 칸을 둔다(표시 문턱일 뿐 판정이 아니다).
+    const showUnpainted = (row) => Number(row.unpainted_fraction) >= 0.005;
+    host.classList.toggle('has-unpainted', rows.some(showUnpainted));
+    const axis = el('div', 'coat-axis');
+    axis.setAttribute('aria-hidden', 'true');
+    const ticks = el('span', 'coat-axis-ticks');
+    for (const value of band) {
+      const label = el('span', null, String(value));
+      label.style.left = at(value);
+      ticks.append(label);
+    }
+    axis.append(el('span'), ticks, el('span', null, 'µm'));
+    host.replaceChildren(axis, ...rows.map((row) => {
+      const grade = row.grade ?? 'none';
+      const button = el('button', 'coat-row is-target');
+      button.type = 'button';
+      button.dataset.zone = String(row.zone_id);
+      const name = el('span', 'coat-zone', String(Number(row.zone_id)));
+      name.style.setProperty('--zone', colorOf(row.zone_id));
+      const track = el('span', 'coat-track is-scale');
+      const fill = el('span', `coat-fill is-${grade}`);
+      fill.style.width = row.thickness_um == null ? '0%' : at(row.thickness_um);
+      track.append(fill);
+      band.forEach((value, index) => {
+        const tick = el('span', `coat-tick${index === 0 ? ' is-goal' : ''}`);
+        tick.style.left = at(value);
+        track.append(tick);
+      });
+      const thickness = row.thickness_um == null ? '—' : `${Math.round(Number(row.thickness_um))} µm`;
+      const unpainted = showUnpainted(row) ? `미도장 ${shareText(Number(row.unpainted_fraction))}` : '';
+      const counts = row.six_band_counts || {};
+      const keys = Object.keys(counts);
+      const total = keys.reduce((sum, key) => sum + (Number(counts[key]) || 0), 0);
+      const strip = el('span', 'coat-bands');
+      const shares = keys.map((key, index) => {
+        const share = total ? (Number(counts[key]) || 0) / total : 0;
+        const part = el('span', `band-${index + 1}`);
+        part.style.width = `${share * 100}%`;
+        strip.append(part);
+        return `${bandLabels[index] ?? key} ${shareText(share)}`;
+      });
+      button.append(name, track, el('span', 'coat-value', thickness), el('span', 'coat-unpainted', unpainted), strip);
+      const summary = [zoneText(row.zone_id), labels[grade] ?? grade,
+        `칠한 곳 평균 ${row.thickness_um == null ? '—' : `${Math.round(Number(row.thickness_um))} µm`}`,
+        `미도장 ${shareText(Number(row.unpainted_fraction) || 0)}`, target.basis_label].filter(Boolean).join(' · ');
+      button.title = total ? `${summary}\n칠한 면적: ${shares.join(', ')}` : summary;
+      button.setAttribute('aria-label', button.title.replaceAll('\n', '. '));
+      button.addEventListener('click', () => seekToZone(row.zone_id));
+      return button;
+    }));
+    markCurrentZone();
+  }
+
+  function renderExpertCoating() {
     const coating = record?.coating_evaluation;
     const host = $('v2CoatBars');
+    host.classList.remove('has-unpainted');
     const zones = (coating?.zones || []).filter((zone) => Number(zone.reference_um) > 0 && Number.isFinite(Number(zone.actual_um)))
       .map((zone) => ({ ...zone, deviation: (Number(zone.actual_um) / Number(zone.reference_um) - 1) * 100 }))
       .sort((left, right) => Math.abs(right.deviation) - Math.abs(left.deviation));
     const count = $('v2CoatCount');
+    // 목표 대비 판정이 없어 전문가 대비로 연 기록은 그 까닭을 한 줄로 알린다.
+    const note = record && !targetReady() ? [el('p', 'coat-note', targetMissing())] : [];
     if (coating?.analysis_status !== 'available' || !zones.length) {
       count.replaceChildren();
-      host.replaceChildren(el('p', 'chart-empty', record ? '이 기록에는 전문가와 견줄 도막 자료가 없습니다' : ''));
+      host.replaceChildren(...note, el('p', 'chart-empty', record ? '이 기록에는 전문가와 견줄 도막 자료가 없습니다' : ''));
       return;
     }
-    const tally = (cls, label, number) => { const item = el('span', cls, `${label} `); item.append(el('b', null, String(number))); return item; };
     count.replaceChildren(tally('is-thick', '두꺼움', zones.filter((zone) => zone.deviation > 0).length),
       tally('is-thin', '얇음', zones.filter((zone) => zone.deviation < 0).length));
     const scale = Math.max(20, Math.ceil(Math.max(...zones.map((zone) => Math.abs(zone.deviation))) / 10) * 10);
-    host.replaceChildren(...zones.map((zone) => {
+    host.replaceChildren(...note, ...zones.map((zone) => {
       const row = el('button', 'coat-row');
       row.type = 'button';
       row.dataset.zone = String(zone.zone_id);
@@ -295,15 +413,11 @@
     }));
     markCurrentZone();
   }
-  for (const [button, showMap] of [[$('v2CoatBarsView'), false], [$('v2CoatMapView'), true]]) {
-    button.addEventListener('click', () => {
-      $('v2CoatBars').hidden = showMap;
-      $('v2CoatMap').hidden = !showMap;
-      $('v2CoatBarsView').setAttribute('aria-pressed', String(!showMap));
-      $('v2CoatMapView').setAttribute('aria-pressed', String(showMap));
-      dispatchEvent(new Event('resize'));
-    });
-  }
+  $('v2CoatBarsView').addEventListener('click', () => setCoating('expert', false));
+  $('v2CoatMapView').addEventListener('click', () => setCoating('expert', true));
+  // 목표 대비로 돌아오면 지도를 닫는다. 전문가 지도는 "전문가 대비 → 전문가 지도"로 지금과 같은 깊이다.
+  $('v2CoatBasisTarget').addEventListener('click', () => setCoating('target'));
+  $('v2CoatBasisExpert').addEventListener('click', () => setCoating('expert', coatMap));
   new MutationObserver(() => {
     const node = $('coatingZone');
     const match = node.textContent.match(/^Zone 0*(\d+)$/);
@@ -730,6 +844,9 @@
   // ── 이벤트 ────────────────────────────────────────────────
   addEventListener('motion-viewer-data', (event) => {
     record = event.detail;
+    // 기록마다 목표 대비로 연다. 목표 대비 판정이 없는 기록은 전문가 대비(막대)로 바로 연다.
+    coatBasis = targetReady() ? 'target' : 'expert';
+    coatMap = false;
     armSeen = record.arm_pose_evaluation;
     anchor = anchorAt(0, 0);
     renderAll();

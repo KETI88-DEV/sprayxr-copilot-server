@@ -203,6 +203,7 @@ def test_v2_page_keeps_every_element_the_playback_scripts_use() -> None:
     needed = set(__import__("re").findall(r"\$\('([A-Za-z0-9_]+)'\)", scripts))
     assert needed and needed <= ids and "function loadMotion" in document and "/*CORE_SCRIPT*/" not in document
     assert {"poseUiTemplate", "zoneTimeline", "realtimeHudSpeed", "coatingCanvas", "v2Ask"} <= ids
+    assert {"v2CoatBasisTarget", "v2CoatBasisExpert"} <= ids
 
 
 def test_v2_question_column_offers_the_same_answer_languages_as_the_first_viewer() -> None:
@@ -216,3 +217,35 @@ def test_v2_question_column_offers_the_same_answer_languages_as_the_first_viewer
     assert len(first) == 12 and second == first
     assert all((static / "flags" / f"{country}.svg").is_file() for _, country in second)
     assert "response_language: sent.language[0]" in (static / "motion_viewer_v2.js").read_text(encoding="utf-8")
+
+
+def _v2_static(name: str) -> str:
+    from pathlib import Path
+    return (Path(motion_viewer.__file__).with_name("static") / name).read_text(encoding="utf-8")
+
+
+def test_v2_coating_feature_names_both_bases_in_visible_text() -> None:
+    page = _v2_static("motion_viewer_v2.html")
+    assert '<button id="v2CoatBasisTarget" type="button" aria-pressed="true">목표 대비</button>' in page
+    assert '<button id="v2CoatBasisExpert" type="button" aria-pressed="false">전문가 대비</button>' in page
+
+
+def test_v2_script_draws_the_target_view_from_the_signed_target_block() -> None:
+    script = _v2_static("motion_viewer_v2.js")
+    assert "coating_evaluation?.target" in script
+    for key in ("six_band_counts", "unpainted_fraction", "band_edges_um", "normal_band_um", "grade_labels", "band_labels", "basis_label"):
+        assert key in script, key
+    assert "reference_um" in script   # 전문가 대비 그림도 남아 있다(D5)
+
+
+def test_v2_expert_map_button_has_a_visible_label() -> None:
+    import re
+    page = _v2_static("motion_viewer_v2.html")
+    bars = re.search(r'<button id="v2CoatBarsView"[^>]*>(.*?)</button>', page).group(1)
+    expert_map = re.search(r'<button id="v2CoatMapView"[^>]*>(.*?)</button>', page).group(1)
+    assert "편차" in re.sub(r"<[^>]+>", "", bars)
+    assert "전문가 지도" in re.sub(r"<[^>]+>", "", expert_map)
+
+
+def test_v2_keeps_sending_the_whole_signed_coating_block() -> None:
+    assert "coating_context: payload.coating_evaluation ?? null" in _v2_static("motion_viewer_v2.js")

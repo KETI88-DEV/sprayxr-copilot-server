@@ -23,6 +23,7 @@
   --alert: #ff7a6b;
   --thin: #5b9bff;
   --thick: #ff7a52;
+  --normal: #aab6c8; /* 목표 대비 정상 등급. 저도막(--thin)·과도막(--thick) 사이의 중립색 */
   --bar: #3a4b69;
   color-scheme: dark;
 }
@@ -284,8 +285,20 @@ select:hover { background: var(--raised-hover); }
 
 .coat-count { display: inline-flex; flex: none; gap: 12px; color: var(--ink-2); font-size: 13px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .coat-count b { font-weight: 600; }
-.coat-count .is-thick b { color: var(--thick); }
-.coat-count .is-thin b { color: var(--thin); }
+.coat-count .is-thick b, .coat-count .is-above b { color: var(--thick); }
+.coat-count .is-thin b, .coat-count .is-below b { color: var(--thin); }
+/* 도막 칸은 머리줄(기준 전환) 아래에 도구 줄(개수·기준 표기 또는 편차·전문가 지도)이 한 줄 더 있다 */
+.feature[data-feature="coating"] { grid-template-rows: auto auto minmax(0, 1fr); }
+.coat-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 0 12px; min-width: 0; min-height: 28px; }   /* 좁으면 기준 표기가 다음 줄로 내려간다(자르지 않는다) */
+.coat-basis { margin-left: auto; color: var(--ink-3); font-size: 12px; white-space: nowrap; }
+.coat-basis:empty { display: none; }
+.coat-note { margin: 0 0 4px; color: var(--ink-3); font-size: 12px; }
+.coat-empty { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.text-btn {
+  height: 28px; padding: 0 10px; border: 1px solid var(--line-strong); border-radius: 8px;
+  background: transparent; color: var(--ink); font-size: 12px; font-weight: 600;
+}
+.text-btn:hover { background: var(--raised); }
 .coat-bars { display: grid; align-content: start; gap: 1px; min-height: 0; overflow-y: auto; font-size: 12px; }
 .coat-row { display: grid; grid-template-columns: 28px minmax(0, 1fr) 44px; align-items: center; gap: 8px; height: 14px; padding: 0; border: 0; background: transparent; text-align: left; }
 .coat-row:hover .coat-track { background: var(--raised-hover); }
@@ -299,6 +312,33 @@ select:hover { background: var(--raised-hover); }
 .coat-fill.is-thick { left: 50%; background: var(--thick); }
 .coat-fill.is-thin { right: 50%; background: var(--thin); }
 .coat-value { color: var(--ink-2); text-align: right; line-height: 1; }
+/* 목표 대비 줄: Zone · 두께 막대(목표선·과도막 경계선) · 칠한 곳 평균 · (미도장) / 아래 2px 6구간 띠 */
+.coat-row.is-target { grid-template-columns: 28px minmax(0, 1fr) 48px; grid-template-rows: 12px 2px; row-gap: 2px; height: auto; }
+.coat-bars.has-unpainted .coat-row.is-target, .coat-bars.has-unpainted .coat-axis { grid-template-columns: 28px minmax(0, 1fr) 48px 64px; }
+.coat-unpainted { display: none; color: var(--ink-3); text-align: right; line-height: 1; white-space: nowrap; }
+.has-unpainted .coat-unpainted { display: block; }
+.coat-track.is-scale::after { display: none; }
+.coat-fill.is-below, .coat-fill.is-above, .coat-fill.is-normal, .coat-fill.is-none { left: 0; }
+.coat-fill.is-below { background: var(--thin); }
+.coat-fill.is-above { background: var(--thick); }
+.coat-fill.is-normal { background: var(--normal); }
+.coat-tick { position: absolute; top: -2px; bottom: -2px; width: 1px; margin-left: -.5px; background: var(--ink-3); }
+.coat-tick.is-goal { background: var(--ink); }
+.coat-bands { grid-column: 2; grid-row: 2; display: flex; height: 2px; overflow: hidden; border-radius: 1px; background: var(--raised); }
+.coat-bands span { flex: none; height: 100%; }
+.coat-bands .band-1 { background: var(--thin); }
+.coat-bands .band-2 { background: #a9c8ff; }
+.coat-bands .band-3 { background: var(--normal); }
+.coat-bands .band-4 { background: #ffb796; }
+.coat-bands .band-5 { background: var(--thick); }
+.coat-bands .band-6 { background: #e0502a; }
+.coat-axis {
+  position: sticky; top: 0; z-index: 1; display: grid; grid-template-columns: 28px minmax(0, 1fr) 48px; gap: 8px;
+  height: 16px; background: var(--surface); color: var(--ink-3); font-size: 12px; line-height: 16px;
+}
+.coat-axis > span:last-child { text-align: right; }
+.coat-axis-ticks { position: relative; }
+.coat-axis-ticks span { position: absolute; top: 0; transform: translateX(-50%); }
 .coat-map { display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto; gap: 6px; min-height: 0; }
 .coat-map-tools { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .coating-screen { position: relative; min-height: 0; overflow: hidden; border-radius: 8px; background: var(--scene); }

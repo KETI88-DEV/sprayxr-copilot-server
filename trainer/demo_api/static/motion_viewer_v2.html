@@ -108,14 +108,21 @@
     <article class="feature" data-feature="coating" aria-labelledby="v2CoatTitle">
       <header>
         <h2 id="v2CoatTitle"><i data-icon="paint-roller"></i>도막</h2>
-        <span id="v2CoatCount" class="coat-count"></span>
-        <div class="seg" role="group" aria-label="도막 보기">
-          <button id="v2CoatBarsView" type="button" aria-pressed="true" aria-label="Zone별 편차"><i data-icon="chart-column"></i></button>
-          <button id="v2CoatMapView" type="button" aria-pressed="false" aria-label="전문가 도막 지도"><i data-icon="map"></i></button>
+        <div class="seg seg-text" role="group" aria-label="도막 기준">
+          <button id="v2CoatBasisTarget" type="button" aria-pressed="true">목표 대비</button>
+          <button id="v2CoatBasisExpert" type="button" aria-pressed="false">전문가 대비</button>
         </div>
         <button class="icon-btn ask-link" type="button" data-ask-tab="coating" aria-label="도막 질문하기"><i data-icon="message-circle"></i></button>
       </header>
-      <div id="v2CoatBars" class="coat-bars" role="img" aria-label="Zone별 도막 두께가 전문가 기준과 얼마나 다른지"></div>
+      <div class="coat-tools">
+        <span id="v2CoatCount" class="coat-count"></span>
+        <span id="v2CoatBasisLabel" class="coat-basis"></span>
+        <div id="v2CoatViews" class="seg" role="group" aria-label="도막 보기" hidden>
+          <button id="v2CoatBarsView" type="button" aria-pressed="true" aria-label="Zone별 편차"><i data-icon="chart-column"></i>편차</button>
+          <button id="v2CoatMapView" type="button" aria-pressed="false" aria-label="전문가 도막 지도"><i data-icon="map"></i>전문가 지도</button>
+        </div>
+      </div>
+      <div id="v2CoatBars" class="coat-bars" role="img" aria-label="Zone별 도막 등급(목표 대비)"></div>
       <div id="v2CoatMap" class="coat-map" hidden>
         <div class="coat-map-tools">
           <span id="coatingZone" class="zone-tag zone-tag-idle">Zone 대기 중</span>

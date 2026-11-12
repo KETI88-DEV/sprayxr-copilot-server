@@ -1331,7 +1331,7 @@ def test_target_assessment_reads_one_face_at_a_time(tmp_path: Path, monkeypatch:
 def test_viewer_scripts_do_not_restate_the_band_rule() -> None:
     """등급 경계·칸 이름·등급 글자는 서버(target의 표시용 열쇠)에서만 온다."""
     static = Path(__file__).resolve().parents[1] / "static"
-    for name in ("motion_viewer_coating.js",):
+    for name in ("motion_viewer_coating.js", "motion_viewer_v2.js"):
         script = (static / name).read_text(encoding="utf-8")
         for word in ("1.5배", "90% 미만", "목표 미만"):
             assert word not in script, (name, word)
