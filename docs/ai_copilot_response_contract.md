@@ -174,7 +174,7 @@ POST /sessions/end
 
 두께는 PR #8 보정값이다: 받은 값에서 10 µm를 한 번 빼고 1600 µm에서 자르며, 1 µm 미만은 미도장으로 본다. 크롭이 닿지 않은 화소는 "칠하지 않음"으로 본다(PR #8 엔진은 "모름"으로 두고 등급을 보류한다). 칠한 곳이 없으면 `zone_id`·`map_num`·`target_*`·`unpainted_fraction` 등은 채우고 `status`·`grade`·`thickness_um`만 `null`이다. 도막을 재지 못했으면(기준 자료 없음 등) `adjustments`는 빈 배열이고 나머지 판정 필드와 `message`·`algorithm_version`은 `null`이다.
 
-`grade`·`status`는 다음 Zone 안내(`coating_progress.status`, 공식 Zone 면적 95% 게이트)와 다른 값이다. 면적 95%를 채웠어도 평균이 목표 미만이면 `below`일 수 있다.
+`grade`·`status`는 다음 Zone 안내(`coating_progress.status`)와 다른 필드다. 다음 Zone 안내(`complete`)는 공식 Zone 면적 95% 충족에 더해 `grade`가 `below`가 아니어야 한다(2026-11-12 책임자 결정). 면적 95%를 채웠어도 평균이 목표 미만이면 `coating_progress.status`는 `needs_more`, `next_zone_id`는 `null`이고 `message`는 "Zone N의 목표 도막 충족 면적은 X%이지만 칠한 곳 평균 두께가 Yµm로 목표 미만입니다(저도막). 이 Zone의 얇은 곳을 보완하세요."다. 그래도 다른 Zone으로 넘어가면 `coating_under_app` 알림이 1회 나간다.
 
 이전 판이 정의한 `uv_bin`, `zone_class`, `under_frac`, `action`, `action_reachable`, `provisional`은 아직 내지 않는다.
 
