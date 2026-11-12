@@ -30,7 +30,7 @@
     node.textContent = zoneId == null ? suffix || '이동 중' : zoneText(zoneId) + suffix;
   };
   const percent = (value) => (Number.isFinite(Number(value)) ? `${Math.round(Number(value))}%` : '—');
-  const DIRECTION = { horizontal: '수평', vertical: '수직', diagonal: '대각', curved_irregular: '곡선·불규칙' };
+  const DIRECTION = window.motionViewerAlerts.DIRECTION;
   // 화면 어디서나 "Zone 8"로 쓴다(기존 스크립트는 "Zone 08").
   window.zoneLabel = (zoneId) => String(Number.isFinite(Number(zoneId)) ? Number(zoneId) : zoneId);
 
@@ -883,7 +883,6 @@
       sequence_reference_context_unavailable: '전문가 순서 기준이 없습니다', no_sequences: '순서를 판정할 분사 구간이 없습니다' };
     let all = [], last = 0, seeking = true, lastKey = null, lastAt = -Infinity, current = null;
     const tone = (alert) => `tone-${A.KIND[alert.anomaly_type]?.tone || 'warn'}`;
-    const describe = (alert) => `${A.KIND[alert.anomaly_type]?.label || '알림'} · ${zoneText(alert.zone_id)} · ${Number(alert.at_seconds).toFixed(1)}초. ${alert.anomaly_type === 'direction_deviation' ? '' : alert.message || ''}`;   // 방향 문장은 영어 키가 섞여 있어 사용자 확인 전까지 쓰지 않는다
     const face = (alert) => {   // [종류 아이콘][Zone 네모+번호][짧은 표기]
       const icon = el('span', `alert-icon ${tone(alert)}`);
       icon.innerHTML = svg(A.KIND[alert.anomaly_type]?.icon || 'triangle-alert');
@@ -891,7 +890,7 @@
       tagZone(zone, alert.zone_id);
       return [icon, zone, el('span', 'alert-word', A.short(alert))];
     };
-    const labelled = (node, alert) => { node.title = describe(alert); node.setAttribute('aria-label', node.title); return node; };
+    const labelled = (node, alert) => { node.title = A.describe(alert); node.setAttribute('aria-label', node.title); return node; };
     function go(alert) {
       current = alert.id;
       if (alert.anomaly_type.startsWith('coating_')) setCoating('target');   // 도막 패널의 그 행이 강조되게

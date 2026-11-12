@@ -104,3 +104,17 @@ test('알림 Zone 을 칠하는 프레임이 구간 안에 있으면 그 첫 프
   assert.equal(alerts.seekIndex(frames, alert.seek_seconds, alert.at_seconds, { zone_id: '9', map_num: '1' }), 2);
   assert.equal(alerts.seekIndex(frames, alert.seek_seconds, alert.at_seconds), 2);
 });
+
+test('describe 는 빈 문장으로 끝나지 않고, 방향 알림은 서버 값의 방향을 한국어로 옮긴다(영어 키 문장은 쓰지 않는다)', () => {
+  const direction = item(15.944, 'direction_deviation', { zone_id: '8', message: '8번 구역은 horizontal 방향으로 도장하세요.',
+    values: { expected_direction: 'horizontal', observed_direction: 'vertical' } });
+  assert.equal(alerts.describe(direction), '방향 이탈 · Zone 8 · 15.9초 · 권장 방향 수평 · 실제 수직');
+  // 값이 없거나 표에 없는 방향(stationary)은 빼고 끝에 빈 꼬리를 남기지 않는다
+  assert.equal(alerts.describe({ ...direction, values: {} }), '방향 이탈 · Zone 8 · 15.9초');
+  assert.equal(alerts.describe({ ...direction, values: { expected_direction: 'diagonal', observed_direction: 'stationary' } }),
+    '방향 이탈 · Zone 8 · 15.9초 · 권장 방향 대각');
+  const coat = item(43.413, 'coating_over_app', { zone_id: '5', message: 'Zone 5의 칠한 곳 평균 두께가 268µm로 목표의 1.5배 이상입니다(과도막).' });
+  assert.equal(alerts.describe(coat), '과도막 · Zone 5 · 43.4초. Zone 5의 칠한 곳 평균 두께가 268µm로 목표의 1.5배 이상입니다(과도막).');
+  assert.equal(alerts.describe({ ...coat, message: null }), '과도막 · Zone 5 · 43.4초');
+  for (const text of [alerts.describe(direction), alerts.describe({ ...coat, message: '' })]) assert.ok(!/[.·]\s*$/.test(text), text);
+});

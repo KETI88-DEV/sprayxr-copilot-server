@@ -144,7 +144,8 @@ def _sequence_alerts(path_text: str, mtime: int, size: int, mode_id: int, legacy
         if decision.anomaly_type is None or window is None:
             continue
         alerts.append(_item(decision.anomaly_type, decision.feedback.reason_code, request.sequence_id, window[3],
-                            request.zone_id, window[1], window[2], "sequence", decision.text_guide, {}, request.sequence_id))
+                            request.zone_id, window[1], window[2], "sequence", decision.text_guide,
+                            dict(zip(("expected_direction", "observed_direction"), decision.directions or ())), request.sequence_id))
     if not judged:
         return _unavailable(next((str(reason) for reason in reasons if reason != "zone_unresolved"), "no_sequences"))
     return {"status": "available", "reason_code": None, "alerts": alerts}

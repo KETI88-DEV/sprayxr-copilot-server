@@ -9,6 +9,8 @@
     coating_over_app: { icon: 'arrow-up-to-line', tone: 'thick', label: '과도막' },
     coating_under_app: { icon: 'arrow-down-to-line', tone: 'thin', label: '저도막' },
   };
+  // 방향 열쇠의 한국어 표시 이름. v2 화면 전체가 이 표 하나를 쓴다.
+  const DIRECTION = { horizontal: '수평', vertical: '수직', diagonal: '대각', curved_irregular: '곡선·불규칙' };
   const ORDER_WORD = { zone_revisit: '다시 칠함', zone_skipped: '건너뜀', zone_out_of_order: '순서 바뀜', unexpected_zone: '기준 밖' };
 
   /** 도막 알림(모션 응답)과 순서·방향 알림(늦게 도착)을 시각순으로. 순서 판정 전이면 도막만. */
@@ -31,6 +33,15 @@
     return alert.values?.thickness_um != null && Number.isFinite(thickness) ? `${word} ${Math.round(thickness)} µm` : word;
   };
 
+  /** 목록·토스트·표지의 title·aria 문장. 방향 알림의 서버 문장은 영어 열쇠가 섞여 있어(공개 SSE 문구는 사용자 결정 대기)
+   *  쓰지 않고, 서버 values 의 기대·관측 방향을 한국어로 옮긴다. 없는 부분은 빼서 빈 꼬리를 남기지 않는다. */
+  const describe = (alert) => {
+    const head = `${KIND[alert.anomaly_type]?.label || '알림'} · Zone ${Number(alert.zone_id)} · ${Number(alert.at_seconds).toFixed(1)}초`;
+    if (alert.anomaly_type !== 'direction_deviation') return alert.message ? `${head}. ${alert.message}` : head;
+    const expected = DIRECTION[alert.values?.expected_direction], observed = DIRECTION[alert.values?.observed_direction];
+    return [head, expected && `권장 방향 ${expected}`, observed && `실제 ${observed}`].filter(Boolean).join(' · ');
+  };
+
   /** 알림으로 옮길 프레임. 분사 구간 [seek, at) 안에서 서버가 준 알림 Zone(지도 번호를 알면 그것까지)을 칠하는 첫 프레임,
    *  없으면 구간 첫 프레임, 표본이 그 사이를 건너뛰었으면 seek 이하의 마지막 프레임
    *  (모두 at 보다 앞이라 이동 뒤에 재생하면 알림이 다시 뜬다). 구간 첫 프레임은 이동 중이거나 다른 Zone 일 수 있다. */
@@ -45,7 +56,7 @@
     return Math.max(0, before);
   };
 
-  const api = { KIND, merge, isJump, crossed, short, seekIndex };
+  const api = { KIND, DIRECTION, merge, isJump, crossed, short, describe, seekIndex };
   globalThis.motionViewerAlerts = api;
   if (typeof module === 'object' && module.exports) module.exports = api;
 })();

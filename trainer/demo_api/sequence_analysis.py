@@ -127,6 +127,7 @@ class SequenceDecision:
     text_guide: str | None
     anomaly_type: str | None = None
     direction_guide: str | None = None
+    directions: tuple[str, str] | None = None   # 방향 이탈의 (기대, 관측) 열쇠. 게이트 전 판정(decide)에만 있고 뷰어 알림 값으로 쓴다
 
 
 def gate_sequence_decision(
@@ -371,6 +372,7 @@ class SequenceAnalysisEngine:
                 EngineFeedback(analysis_status="available", reason_code="direction_deviation"),
                 f"{request.zone_id}번 구역은 {expected} 방향으로 도장하세요.",
                 "direction_deviation",
+                directions=(str(expected), str(actual)),
             )
         next_zone = flow[flow.index(request.zone_id) + 1] if request.zone_id in flow and flow.index(request.zone_id) + 1 < len(flow) else None
         text = f"현재 순서가 적정합니다. 다음 권장 구역은 {next_zone}번입니다." if next_zone else "현재 순서가 적정합니다."

@@ -127,8 +127,10 @@ def test_sequence_alerts_match_the_public_anomaly_stream(tmp_path: Path) -> None
     # 게이트 전 판정 문장(공개 SSE는 여기에 도막 진행 문장을 씌운다).
     assert by_id["SEQ-001"]["message"] == "1번 구역은 horizontal 방향으로 도장하세요."
     assert by_id["SEQ-003"]["message"] == "전문가 권장 Zone 순서를 확인하세요."   # 남은 Zone이 없어 추천이 없다
-    assert all(a["basis"] == "sequence" and a["values"] == {} and a["zone_id"] == "1" and a["map_num"] == "1"
-               for a in viewer["alerts"])
+    assert all(a["basis"] == "sequence" and a["zone_id"] == "1" and a["map_num"] == "1" for a in viewer["alerts"])
+    # 방향 문장은 영어 키라 뷰어가 쓰지 않는다. 대신 판정에 쓴 기대·관측 방향을 값으로 준다(뷰어가 한국어로 옮긴다).
+    assert by_id["SEQ-001"]["values"] == {"expected_direction": "horizontal", "observed_direction": "vertical"}
+    assert by_id["SEQ-003"]["values"] == {}
 
 
 def test_alert_times_follow_the_spray_runs_on_the_playback_clock(tmp_path: Path) -> None:
