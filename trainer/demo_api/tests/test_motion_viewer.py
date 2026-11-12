@@ -274,10 +274,10 @@ def test_motion_viewer_page_explains_the_aggregated_expert_reference(tmp_path: P
     assert 'aria-label="스켈레톤 왼쪽 회전"' in response.text
     assert "function uprightSkeleton" in response.text
     assert "function drawSkeletonView" in response.text
-    # 패널 0°는 등 뒤에서 본 그림이다. 좌우·회전 방향은 호스트의 test_motion_viewer_chirality.js 가 잰다.
-    assert "cross(up,across)" in response.text
-    assert "정면" not in response.text
-    assert "정면" not in viewer_v2_document()
+    # 패널 0°는 정면에서 본 그림이다(몸 오른쪽 = 화면 왼쪽). 좌우·회전 방향은 호스트의 test_motion_viewer_chirality.js 가 잰다.
+    assert "x=-dot(relative,across)" in response.text
+    assert "정면 · 0°" in response.text
+    assert "뒤에서 보기" not in response.text and "뒤에서 보기" not in viewer_v2_document()
     assert "CSV의 Pelvis·몸통·팔·다리 조인트" in response.text
     assert 'id="skeleton"' not in response.text
     assert "function alignSkeleton" not in response.text
@@ -1074,7 +1074,7 @@ def test_skeleton_viewer_redraws_only_the_right_arm_from_the_measured_gun(tmp_pa
     assert "function solveTwoBoneLeg" not in script.text
     assert "motionViewerCorrectLowerBody" not in page.text
     # 패널과 v2 교정 고리가 같은 함수를 쓴다. 다시 세운 팔의 위치와 선 모양은 test_motion_viewer_chirality.js 가 잰다.
-    assert "const {joints,estimated}=panelSkeleton(frame)" in page.text
+    assert "const {joints}=panelSkeleton(frame)" in page.text
     v2 = client.get("/motion-viewer/assets/motion_viewer_v2.js")
     assert v2.status_code == 200
     assert "panelSkeleton(frame).joints" in v2.text
