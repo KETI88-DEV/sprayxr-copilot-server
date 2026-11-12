@@ -228,6 +228,15 @@ def session_summary(assessments: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _below_tenths(mean_um: float, target_um: float) -> float:
+    """저도막 평균을 0.1 단위로 내린다. 반올림하면 159.96이 목표 160.0으로 올라가 "목표 미만"과 모순된다.
+
+    내린 값은 정수 반올림 결과도 원래 평균과 같다(153.45 → 153.4 → "153"). 0.1 반올림은 153.5 → "154"가 된다.
+    """
+    # round(…, 3): 89.99999 같은 부동소수 잡음을 89.9로 내리지 않는다. min: 그래도 목표에는 닿지 않는다.
+    return min(math.floor(round(mean_um * 10, 3)) / 10, round(target_um - 0.1, 1))
+
+
 def zone_row(map_num: int | str, zone_id: str, assessment: Mapping[str, Any]) -> dict[str, Any]:
     """저장·응답에 싣는 행. 반올림은 여기서만 한다."""
     mean_um = assessment["painted_mean_um"]
@@ -236,7 +245,9 @@ def zone_row(map_num: int | str, zone_id: str, assessment: Mapping[str, Any]) ->
         "map_num": int(map_num),
         "status": assessment["status"],
         "grade": assessment["grade"],
-        "thickness_um": None if mean_um is None else round(mean_um, 1),
+        "thickness_um": None if mean_um is None else (
+            _below_tenths(mean_um, assessment["target_thickness_um"]) if assessment["grade"] == "below"
+            else round(mean_um, 1)),
         "target_thickness_um": assessment["target_thickness_um"],
         "target_basis": assessment["target_basis"],
         "normal_band_um": assessment["normal_band_um"],
@@ -273,10 +284,12 @@ def basis_label(target_um: float, target_basis: str) -> str:
 
 
 def mean_text(mean_um: float, target_um: float) -> str:
-    """칠한 곳 평균의 표기(µm 앞 숫자)."""
-    whole = f"{mean_um:.0f}"
-    # 평균 159.6을 "160µm"로 적으면 목표 160에 "저도막"이 모순으로 읽힌다. 그때만 소수 한 자리로 적는다.
-    return f"{mean_um:.1f}" if whole == f"{target_um:g}" and mean_um != target_um else whole
+    """칠한 곳 평균의 표기(µm 앞 숫자). 저도막 행은 `zone_row`가 0.1 단위로 내린 값이 온다."""
+    whole = math.floor(mean_um + 0.5)  # 사사오입. f"{:.0f}"는 x.5를 짝수 쪽으로 붙인다.
+    if mean_um < target_um <= whole:
+        # 평균 159.6을 "160µm"로 적으면 목표 160에 "저도막"이 모순으로 읽힌다. 목표 아래 소수 한 자리로 적는다.
+        return f"{min(mean_um, target_um - 0.1):.1f}"
+    return f"{mean_um:.1f}" if whole == target_um and mean_um != target_um else str(whole)
 
 
 def grade_phrase(row: Mapping[str, Any]) -> str:

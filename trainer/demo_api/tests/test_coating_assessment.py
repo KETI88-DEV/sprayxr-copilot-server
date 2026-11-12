@@ -212,6 +212,16 @@ def test_mean_next_to_the_target_is_not_written_as_the_target() -> None:
     assert (row["grade"], row["thickness_um"]) == ("below", 159.6)
     assert ca.grade_phrase(row) == "저도막(칠한 곳 평균 159.6µm, 미도장 0%)"
     assert [ca.mean_text(mean, 160.0) for mean in (98.0, 159.4, 160.0, 160.3, 240.2)] == ["98", "159", "160", "160.3", "240"]
+    # 159.95 이상은 반올림하면 목표와 같아진다. 행은 내리고, 표기도 목표 아래로 적는다. 정수는 사사오입이다.
+    assert [ca.mean_text(mean, 160.0) for mean in (159.96, 159.9, 154.5)] == ["159.9", "159.9", "155"]
+
+
+def test_below_row_is_floored_so_it_never_reaches_the_target_or_rounds_twice() -> None:
+    near = ca.zone_row("1", "3", ca.assess_zone(np.array([[170.0] * 99 + [166.0]]), np.ones((1, 100), bool)))
+    assert (near["grade"], near["thickness_um"]) == ("below", 159.9)
+    assert ca.grade_phrase(near) == "저도막(칠한 곳 평균 159.9µm, 미도장 0%)"
+    thin = ca.zone_row("1", "3", ca.assess_zone(np.array([[171.0] * 95 + [20.0] * 5]), np.ones((1, 100), bool)))
+    assert (thin["thickness_um"], ca.mean_text(thin["thickness_um"], 160.0)) == (153.4, "153")
 
 
 def test_mismatched_or_empty_mask_returns_none() -> None:

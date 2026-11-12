@@ -403,7 +403,8 @@ def test_undercoat_alert_fires_when_the_trainee_leaves_a_below_zone(tmp_path: Pa
         "message": "기본 목표 160µm 기준: 방금 떠난 Zone 1의 칠한 곳 평균 두께가 90µm로 목표 미만입니다(저도막). "
                    "돌아가 얇은 곳을 보완하세요.",
         "zone_id": "1", "map_num": 1, "status": "under_app", "grade": "below",
-        "thickness_um": 90.0, "target_thickness_um": 160.0, "target_basis": "default_target",
+        # 원시 100µm는 PNG 양자화로 칠한 곳 평균 89.96µm가 된다. 저도막 행은 0.1 단위로 내린다.
+        "thickness_um": 89.9, "target_thickness_um": 160.0, "target_basis": "default_target",
     }
     post(client, request(3, value=100))
     post(client, zone2(4))
@@ -501,11 +502,11 @@ def test_report_session_target_cannot_complete_without_official_mask(tmp_path: P
 
 # 2026-11-12 책임자 결정: 면적 95%를 채워도 칠한 곳 평균이 목표 미만(저도막)이면 다음 Zone으로 보내지 않는다.
 THIN_MEAN_GUIDE = ("기본 목표 160µm 기준: Zone 1의 목표 도막 충족 면적은 95.0%이지만 칠한 곳 평균 두께가 "
-                   "154µm로 목표 미만입니다(저도막). 이 Zone의 얇은 곳을 보완하세요.")
+                   "153µm로 목표 미만입니다(저도막). 이 Zone의 얇은 곳을 보완하세요.")
 
 
 def thin_mean(seq: int = 1) -> AnalyzeSequenceRequest:
-    # 95%는 보정 161µm, 나머지 5%는 보정 10µm로 칠했다 → 칠한 곳 평균 153.5µm(표기 154).
+    # 95%는 보정 161µm, 나머지 5%는 보정 10µm로 칠했다 → 칠한 곳 평균 153.45µm(표기 153).
     return request(seq, valid_count=95, rest=20)
 
 
@@ -549,7 +550,7 @@ def test_thin_zone_guide_and_leaving_alert_agree(tmp_path: Path) -> None:
     post(client, zone2(4))
     alerts = coating_alerts(bus)
     assert [(alert.anomaly_type, alert.sequence_id) for alert in alerts] == [("coating_under_app", "SEQ-002")]
-    assert alerts[0].payload["message"] == ("기본 목표 160µm 기준: 방금 떠난 Zone 1의 칠한 곳 평균 두께가 154µm로 "
+    assert alerts[0].payload["message"] == ("기본 목표 160µm 기준: 방금 떠난 Zone 1의 칠한 곳 평균 두께가 153µm로 "
                                             "목표 미만입니다(저도막). 돌아가 얇은 곳을 보완하세요.")
 
 
@@ -577,3 +578,17 @@ def test_report_rows_use_the_same_thin_mean_gate(tmp_path: Path) -> None:
     surface.flat[95:] = 20
     judgments, _ = engine(tmp_path).judge_zones(scenario_id="3", process="spray", mode_id=3, surfaces={1: surface})
     assert (judgments[0].assessment["grade"], judgments[0].assessment["gate_status"]) == ("below", "needs_more")
+
+
+def test_mean_just_under_the_target_reads_the_same_below_target_number_everywhere(tmp_path: Path) -> None:
+    # 99%는 원시 170µm, 1화소는 원시 158µm → 칠한 곳 평균 약 159.97µm. 반올림하면 "160µm로 목표 미만"이 된다.
+    near = request(value=170, valid_count=99, rest=158)
+    client, bus = alert_client(multimap_engine(tmp_path), tmp_path)
+    data = client.post("/api/v1/copilot/analyze-sequence", json=near.model_dump(mode="json")).json()["data"]
+    progress, feedback = data["coating_progress"], data["coating_feedback"]
+    assert (progress["status"], progress["next_zone_id"], feedback["grade"]) == ("needs_more", None, "below")
+    assert feedback["thickness_um"] == 159.9
+    assert "칠한 곳 평균 두께가 159.9µm로 목표 미만입니다(저도막)." in progress["message"]
+    assert "칠한 곳 평균 159.9µm" in feedback["message"]
+    post(client, zone2(2))
+    assert "칠한 곳 평균 두께가 159.9µm로 목표 미만입니다(저도막)." in coating_alerts(bus)[0].payload["message"]
