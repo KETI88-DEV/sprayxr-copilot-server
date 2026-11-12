@@ -33,8 +33,8 @@
     return alert.values?.thickness_um != null && Number.isFinite(thickness) ? `${word} ${Math.round(thickness)} µm` : word;
   };
 
-  /** 목록·토스트·표지의 title·aria 문장. 방향 알림의 서버 문장은 영어 열쇠가 섞여 있어(공개 SSE 문구는 사용자 결정 대기)
-   *  쓰지 않고, 서버 values 의 기대·관측 방향을 한국어로 옮긴다. 없는 부분은 빼서 빈 꼬리를 남기지 않는다. */
+  /** 목록·토스트·표지의 title·aria 문장. 방향 알림은 서버 문장(권장 방향만 있다) 대신 서버 values 의
+   *  기대·관측 방향을 한국어로 옮긴다. 없는 부분은 빼서 빈 꼬리를 남기지 않는다. */
   const describe = (alert) => {
     const head = `${KIND[alert.anomaly_type]?.label || '알림'} · Zone ${Number(alert.zone_id)} · ${Number(alert.at_seconds).toFixed(1)}초`;
     if (alert.anomaly_type !== 'direction_deviation') return alert.message ? `${head}. ${alert.message}` : head;

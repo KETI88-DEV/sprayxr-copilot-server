@@ -329,7 +329,7 @@ def test_completed_zone_direction_guidance_has_no_stale_unknown_gate_message(tmp
                           {"index": 2, "gun_metrics": {"raytexuv": [0, 100]}}]}).sequence_info
     data = TestClient(app).post("/api/v1/copilot/analyze-sequence", json=req.model_dump(mode="json")).json()["data"]
     assert data["sequence_feedback"]["reason_code"] == "direction_deviation"
-    assert "horizontal" in data["text_guide"]
+    assert "1번 구역은 수평 방향으로 도장하세요." in data["text_guide"] and "horizontal" not in data["text_guide"]
     assert "확인할 수 없습니다" not in data["text_guide"]
     assert data["coating_progress"]["status"] == "complete"
 

@@ -20,7 +20,8 @@ API·웹 화면의 기능 변경을 버전별로 기록합니다. 버전 태그�
   - `coating_under_app`(`reason_code=zone_grade_below`): 다른 Zone으로 넘어간 첫 시퀀스에서 방금 떠난 Zone이 저도막일 때. 본문의 `zone_id`는 지금 Zone이 아니라 떠난 Zone입니다.
   - 도막 알림 본문에는 `zone_id`, `map_num`, `status`(`over_app`|`under_app`), `grade`, `thickness_um`, `target_thickness_um`, `target_basis`가 더해집니다. 한 시퀀스에 알림이 둘 이상 나올 수 있습니다(예: 순서 이탈과 과도막).
   - 세션마다 Zone당 종류별 1회입니다. 발행 이력과 직전 Zone은 서버 메모리에만 있어, 서버가 재시작되면 이미 알린 Zone의 알림이 한 번 더 나올 수 있고 첫 Zone 이동에서는 저도막 알림이 빠질 수 있습니다. 동시 세션이 16개를 넘어 밀려날 때도 직전 Zone을 잃습니다. 모의 발행 경로(`/api/v1/test/sequence/*`)에는 도막 알림이 없습니다.
-  - 순서·방향 이탈 알림의 종류와 발행 조건은 그대로이고, `message`의 도막 문구만 새 표기로 바뀝니다.
+  - 순서·방향 이탈 알림의 종류와 발행 조건은 그대로이고, `message`의 도막 문구가 새 표기로 바뀝니다.
+- 방향 이탈 문장의 방향 값이 영어 열쇠에서 한국어 이름으로 바뀝니다(예: "6번 구역은 horizontal 방향으로 도장하세요." → "6번 구역은 수평 방향으로 도장하세요.", 이름은 수평·수직·대각선·비정형). 이상 알림 SSE `message`, analyze-sequence `text_guide`, 현재·다음 Zone 질의 답에 같이 적용됩니다. 문장에서 방향 값을 잘라 쓰던 화면은 고쳐야 합니다. 리포트의 `expected_direction` 같은 열거값 필드는 그대로입니다.
 - analyze-sequence `coating_feedback`은 이전에는 항상 `not_available`(`coating_engine_pending_integration`)이었고, 이제 현재 Zone의 평가를 싣습니다(`zone_id`, `map_num`, `status`, `grade`, `thickness_um`, `target_thickness_um`, `target_basis`, `normal_band_um`, `unpainted_fraction`, `six_band_counts`, `adjustments`, `message`, `algorithm_version`). 칠한 곳이 없으면 `not_available`이고, 도막을 재지 못했을 때 `reason_code`는 같은 응답 `coating_progress.reason`과 같은 코드입니다. `thickness_um`은 알림과 같이 저도막 평균을 0.1 단위로 내려 적습니다. `adjustments`의 속도·이격거리 항목은 규칙에 따른 조절 후보이며 확정된 원인이나 처방이 아닙니다. `telemetry/sequence` 저장 전용 경로는 그대로입니다.
 - analyze-sequence `guide.speed`·`guide.distance`는 같은 변수에 대한 조절 후보와 방향이 다르거나 `guide`가 `ok`이면 `{"status": null, "message": null, "available": false, "reason": "coating_adjustment_priority"}`로 나갑니다. 방향이 같거나 등급이 정상이면 이전과 같습니다. 이미 `available=false` 항목을 처리하는 화면이면 할 일이 없습니다.
 - 완료 리포트 `coating_report`

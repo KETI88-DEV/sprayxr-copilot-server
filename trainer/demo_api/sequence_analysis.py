@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
+from trainer.demo_api.playback_direction import LABELS as DIRECTION_LABELS
 from trainer.demo_api.sequence_store import SequenceStore
 from trainer.demo_api.telemetry_contracts import (
     AnalyzeSequenceRequest,
@@ -370,7 +371,7 @@ class SequenceAnalysisEngine:
         if direction_error:
             return SequenceDecision(
                 EngineFeedback(analysis_status="available", reason_code="direction_deviation"),
-                f"{request.zone_id}번 구역은 {expected} 방향으로 도장하세요.",
+                f"{request.zone_id}번 구역은 {DIRECTION_LABELS.get(expected, expected)} 방향으로 도장하세요.",
                 "direction_deviation",
                 directions=(str(expected), str(actual)),
             )

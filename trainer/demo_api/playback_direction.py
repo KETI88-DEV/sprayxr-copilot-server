@@ -13,7 +13,9 @@ from typing import Any
 
 from trainer.demo_api.viewer_context import sign_context, verify_context
 
-LABELS = {"horizontal": "수평", "vertical": "수직", "diagonal": "대각선", "irregular": "비정형"}
+# 방향 열쇠의 한국어 표시 이름. 서버 문장과 화면(motion_viewer_alerts.js·motion_viewer_pose.js 사본)이 모두 이 표를 따른다.
+# irregular 는 재생 시각 분류, curved_irregular 는 시퀀스 경로 분류(sequence_analysis.observed_direction)의 열쇠다.
+LABELS = {"horizontal": "수평", "vertical": "수직", "diagonal": "대각선", "irregular": "비정형", "curved_irregular": "비정형"}
 _WINDOW = .16  # Seconds either side, within one continuous painted Map/Zone.
 
 
