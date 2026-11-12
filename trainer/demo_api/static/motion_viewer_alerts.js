@@ -31,7 +31,17 @@
     return alert.values?.thickness_um != null && Number.isFinite(thickness) ? `${word} ${Math.round(thickness)} µm` : word;
   };
 
-  const api = { KIND, merge, isJump, crossed, short };
+  /** 알림으로 옮길 프레임. 분사 구간 [seek, at) 의 첫 프레임, 표본이 그 사이를 건너뛰었으면 seek 이하의 마지막 프레임
+   *  (둘 다 at 보다 앞이라 이동 뒤에 재생하면 알림이 다시 뜬다). */
+  const seekIndex = (frames, seek, at) => {
+    const inside = frames.findIndex((frame) => frame.t >= seek && frame.t < at);
+    if (inside >= 0) return inside;
+    let before = -1;
+    frames.forEach((frame, index) => { if (frame.t <= seek) before = index; });
+    return Math.max(0, before);
+  };
+
+  const api = { KIND, merge, isJump, crossed, short, seekIndex };
   globalThis.motionViewerAlerts = api;
   if (typeof module === 'object' && module.exports) module.exports = api;
 })();

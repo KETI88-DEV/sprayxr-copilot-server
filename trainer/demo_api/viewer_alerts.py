@@ -65,8 +65,13 @@ def _windows(path_text: str, mtime: int, size: int, mode_id: int, legacy: bool) 
     return tuple(out)
 
 
-def spray_windows(path: Path, *, mode_id: int, legacy: bool) -> tuple[Window, ...]:
-    return _windows(*_stamp(path), mode_id, legacy)
+def _shift(seconds: float, offset: float) -> float:
+    return round(max(0.0, seconds - offset), 3)
+
+
+def spray_windows(path: Path, *, mode_id: int, legacy: bool, offset: float = 0.0) -> tuple[Window, ...]:
+    """offset = 재생 프레임 0초가 CSV 첫 행보다 늦은 만큼(첫 행이 빈 기록). 재생 시계로 맞춘다."""
+    return tuple((i, _shift(a, offset), _shift(b, offset), f, z) for i, a, b, f, z in _windows(*_stamp(path), mode_id, legacy))
 
 
 def _item(anomaly_type: str, reason_code: object, sequence_id: str, map_num: object, zone_id: object,
@@ -98,12 +103,15 @@ def _unavailable(reason_code: str) -> dict[str, Any]:
     return {"status": "unavailable", "reason_code": reason_code, "alerts": []}
 
 
-def sequence_alerts_for(path: Path, *, process: str, mode_id: int, legacy: bool, engine: Any) -> dict[str, Any]:
+def sequence_alerts_for(path: Path, *, process: str, mode_id: int, legacy: bool, engine: Any, offset: float = 0.0) -> dict[str, Any]:
     """분사 구간마다 공개 순서·방향 판정. 엔진 예외는 캐시하지 않는다."""
     if process != "spray":   # 본문 tool_type 이 spray_gun 으로 고정이라 블라스팅 기준을 고를 수 없다
         return _unavailable("process_not_supported")
     try:
-        return copy.deepcopy(_sequence_alerts(*_stamp(path), mode_id, legacy, engine))
+        result = copy.deepcopy(_sequence_alerts(*_stamp(path), mode_id, legacy, engine))
+        for alert in result["alerts"]:
+            alert["seek_seconds"], alert["at_seconds"] = _shift(alert["seek_seconds"], offset), _shift(alert["at_seconds"], offset)
+        return result
     except Exception:  # noqa: BLE001 - 재생은 판정 장애와 무관하게 열려야 한다
         logger.exception("viewer sequence alerts failed path=%s", path)
         return _unavailable("engine_error")

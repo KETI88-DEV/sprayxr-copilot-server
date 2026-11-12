@@ -234,7 +234,39 @@ def test_v2_page_has_alert_surfaces_and_loads_the_alert_script_first(tmp_path: P
     assert 'id="v2Toast"' in page and 'aria-live="polite"' in page.split('id="v2Toast"', 1)[1].split(">", 1)[0]
     assert 'id="v2AlertMarks"' in page and 'id="v2AlertsButton"' in page and 'id="v2AlertList"' in page
     assert page.index("/motion-viewer/assets/motion_viewer_alerts.js") < page.index("/motion-viewer/assets/motion_viewer_v2.js")
+    assert 'aria-atomic="false"' in page and "atEnd" in page   # 새 토스트만 읽히고, 끝 시각을 한 번 그린 뒤 감는다
     script = client.get("/motion-viewer/assets/motion_viewer_alerts.js")
     assert script.status_code == 200 and "motionViewerAlerts" in script.text
     # 화면은 판정하지 않는다: 두께 문턱·등급 규칙 낱말이 알림 스크립트에 없다.
     assert "160" not in script.text and "1.5" not in script.text
+
+
+def test_alert_times_subtract_a_leading_empty_row(tmp_path: Path) -> None:
+    client = _client(tmp_path, trainee_um=300)
+    path = tmp_path / "workers" / _TRAINEE / _MODE4 / "4_2001_1.csv"
+    with path.open(encoding="utf-8-sig", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    for row in rows:
+        row["시간(초)"] = str(round(float(row["시간(초)"]) + 0.5, 3))
+    # 관절·트래커·착탄이 모두 빈 첫 행: 재생 0초는 둘째 행이다.
+    rows.insert(0, {**{key: "" for key in rows[0]}, "인덱스": "0", "시간(초)": "0", "분사": "Off", "Zone ID": "-1"})
+    with path.open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+    motion = _get(client, "/motion-viewer/api/motion")
+    assert motion["frames"][0]["t"] == 0.0
+    alerts = [*motion["coating_alerts"], *_get(client, "/motion-viewer/api/alerts")["sequence_alerts"]["alerts"]]
+    timing = {(a["sequence_id"], a["anomaly_type"]): (a["seek_seconds"], a["at_seconds"]) for a in alerts}
+    assert timing[("SEQ-001", "direction_deviation")] == pytest.approx((0.0, 0.3))
+
+
+def test_a_failing_coating_alert_does_not_break_playback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    client = _client(tmp_path, trainee_um=300)
+
+    def boom(*_args: Any, **_kwargs: Any) -> list[Any]:
+        raise OverflowError("cannot convert float infinity to integer")
+
+    monkeypatch.setattr("trainer.demo_api.viewer_alerts.coating_alerts_for", boom)
+    motion = _get(client, "/motion-viewer/api/motion")
+    assert motion["coating_alerts"] == [] and motion["frames"]

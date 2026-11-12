@@ -849,9 +849,9 @@
     const items = $('v2AlertItems'), note = $('v2AlertNote'), count = $('v2AlertCount');
     const NOTE = { process_not_supported: '블라스팅 기록은 순서를 판정하지 않습니다', sequence_reference_unavailable: '전문가 순서 기준이 없습니다',
       sequence_reference_context_unavailable: '전문가 순서 기준이 없습니다', no_sequences: '순서를 판정할 분사 구간이 없습니다' };
-    let all = [], last = 0, seeking = true, lastKey = null, current = null;
+    let all = [], last = 0, seeking = true, lastKey = null, lastAt = -Infinity, current = null;
     const tone = (alert) => `tone-${A.KIND[alert.anomaly_type]?.tone || 'warn'}`;
-    const describe = (alert) => `${A.KIND[alert.anomaly_type]?.label || '알림'} · ${zoneText(alert.zone_id)} · ${Number(alert.at_seconds).toFixed(1)}초. ${alert.message || ''}`;
+    const describe = (alert) => `${A.KIND[alert.anomaly_type]?.label || '알림'} · ${zoneText(alert.zone_id)} · ${Number(alert.at_seconds).toFixed(1)}초. ${alert.anomaly_type === 'direction_deviation' ? '' : alert.message || ''}`;   // 방향 문장은 영어 키가 섞여 있어 사용자 확인 전까지 쓰지 않는다
     const face = (alert) => {   // [종류 아이콘][Zone 네모+번호][짧은 표기]
       const icon = el('span', `alert-icon ${tone(alert)}`);
       icon.innerHTML = svg(A.KIND[alert.anomaly_type]?.icon || 'triangle-alert');
@@ -863,7 +863,7 @@
     function go(alert) {
       current = alert.id;
       if (alert.anomaly_type.startsWith('coating_')) setCoating('target');   // 도막 패널의 그 행이 강조되게
-      seekToSeconds(Number(alert.seek_seconds));
+      seekToIndex(A.seekIndex(record?.frames || [], Number(alert.seek_seconds), Number(alert.at_seconds)));
       paintList();
     }
     function toast(alert) {
@@ -894,7 +894,8 @@
       const sequence = record?.sequence_alerts;
       const pending = Boolean(record) && sequence === undefined;
       button.setAttribute('aria-busy', String(pending));
-      button.title = pending ? '알림 판정 중' : '지난 알림';
+      button.title = pending ? '알림 판정 중' : `알림 ${all.length}건`;
+      button.setAttribute('aria-label', button.title);
       count.hidden = pending || !all.length;
       count.textContent = String(all.length);
       const reason = sequence && sequence.status !== 'available' ? NOTE[sequence.reason_code] || '순서 판정을 불러오지 못했습니다' : '';
@@ -917,18 +918,22 @@
     const open = (value) => {
       list.hidden = !value;
       button.setAttribute('aria-expanded', String(value));
-      if (value) { paintList(); items.querySelector('button')?.focus(); }
+      if (value) {
+        list.style.maxHeight = `${Math.round(($('v2Toast').parentElement.clientHeight || 400) * 0.5)}px`;   // 장면 높이의 절반
+        paintList(); items.querySelector('button')?.focus();
+      }
     };
     button.addEventListener('click', () => open(list.hidden));
     list.addEventListener('keydown', (event) => {
       const rows = [...items.querySelectorAll('button')];
-      if (event.key === 'Escape') { event.preventDefault(); open(false); button.focus(); return; }
       if ((event.key !== 'ArrowDown' && event.key !== 'ArrowUp') || !rows.length) return;
       event.preventDefault();
       const step = event.key === 'ArrowDown' ? 1 : -1;
       rows[(rows.indexOf(document.activeElement) + step + rows.length) % rows.length].focus();
     });
     document.addEventListener('click', (event) => { if (!list.hidden && !event.target.closest('.alerts')) open(false); });
+    document.addEventListener('focusin', (event) => { if (!list.hidden && !event.target.closest('.alerts')) open(false); });
+    document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && !list.hidden) { open(false); button.focus(); } });
     // 탐색은 알림 없이 다시 맞춘다. 캡처 단계라 기존 재생 스크립트의 처리(그리기)보다 먼저 표시가 선다.
     document.addEventListener('input', (event) => { if (event.target.id === 'timeline') seeking = true; }, true);
     document.addEventListener('click', (event) => { if (event.target.closest('#restart')) seeking = true; }, true);
@@ -953,8 +958,9 @@
         if (jumped) lastKey = null;
         for (const alert of A.crossed(all, last, seconds, jumped)) {
           const key = `${alert.anomaly_type}:${alert.zone_id}`;
-          if (key === lastKey) continue;   // 같은 종류·Zone 이 연달아 오면 한 번만 띄운다(목록·표지에는 다 있다)
+          if (key === lastKey && alert.at_seconds - lastAt <= 3) continue;   // 같은 종류·Zone 이 3초 안에 연달아 오면 한 번만(목록·표지에는 다 있다)
           lastKey = key;
+          lastAt = alert.at_seconds;
           toast(alert);
         }
         last = seconds;

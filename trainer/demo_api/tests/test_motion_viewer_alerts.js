@@ -76,3 +76,11 @@ test('종류마다 아이콘과 의미 색이 하나씩 있다', () => {
     assert.ok(alerts.KIND[type].icon && alerts.KIND[type].tone, type);
   }
 });
+
+test('알림 이동은 분사 구간 안의 첫 프레임을, 표본이 구간을 건너뛰었으면 seek 이하의 마지막 프레임을 고른다', () => {
+  const frames = [{ t: 0 }, { t: 0.6 }, { t: 1.2 }, { t: 1.8 }, { t: 2.4 }];
+  assert.equal(alerts.seekIndex(frames, 1.1, 1.5), 2);   // [1.1, 1.5) 안의 1.2
+  assert.equal(alerts.seekIndex(frames, 1.3, 1.5), 2);   // 구간에 프레임이 없다 -> 1.2 (at 보다 앞)
+  assert.ok(frames[alerts.seekIndex(frames, 1.3, 1.5)].t < 1.5);
+  assert.equal(alerts.seekIndex(frames, -1, 0), 0);
+});

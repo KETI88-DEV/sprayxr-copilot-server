@@ -6,6 +6,7 @@ import copy
 import csv
 import gzip
 import json
+import logging
 import math
 import re
 import statistics
@@ -26,6 +27,8 @@ from trainer.demo_api.sequence_store import SequenceStore
 from trainer.demo_api.sequence_analysis import SequenceAnalysisEngine, expert_reference_flows, score_visit_flow
 from trainer.demo_api.v1_store import V1Store
 from trainer.expert_zone_mapping import canonical_expert_zone_id
+
+logger = logging.getLogger(__name__)
 
 _JOINT_PARENTS: tuple[tuple[str, str | None], ...] = (
     ("Pelvis", None),
@@ -597,6 +600,15 @@ def _target_coating_cached(
 def _frames(path: Path, frame_count: int) -> list[dict[str, Any]]:
     stat = path.stat()
     return [dict(frame) for frame in _sample_csv(str(path), (stat.st_mtime_ns, stat.st_size), frame_count)]
+
+
+def _clock_offset(path: Path, frame_count: int) -> float:
+    """재생 0초(첫 표본 프레임)가 CSV 첫 행보다 늦은 만큼. 시계를 못 읽으면 0."""
+    frames = _frames(path, frame_count)
+    with _open_csv(path) as handle:
+        origin = _number(next(csv.DictReader(handle), {}).get("시간(초)"))
+    first = _number(frames[0].get("csv_time_seconds")) if frames else None
+    return first - origin if first is not None and origin is not None else 0.0
 
 
 def _canonicalize_zone_items(
@@ -2019,7 +2031,8 @@ $('overlayFrame').textContent=`${sourceIndex+1} / ${data.frames.length} · ${fra
 if(window.motionViewerPoseOverlay)window.motionViewerPoseOverlay.draw({frame,sourceIndex,playheadSeconds,durationSeconds:data.duration_seconds,center,w,h});
 dispatchEvent(new CustomEvent('motion-viewer-frame',{detail:{frame,sourceIndex,playheadSeconds}}));
 }
-function tick(now){if(playing&&data&&data.frames.length){if(!last)last=now;const elapsed=Math.min(.1,(now-last)/1000)*Number($('speed').value);last=now;playheadSeconds+=elapsed;if(playheadSeconds>=data.duration_seconds){playheadSeconds=0;index=0}else index=interpolatedFrame(playheadSeconds).index;$('timeline').value=index;draw()}requestAnimationFrame(tick)}
+let atEnd=false;// 끝 시각을 한 번 그린 뒤 감는다(끝에서 난 알림이 지나가도록)
+function tick(now){if(playing&&data&&data.frames.length){if(!last)last=now;const elapsed=Math.min(.1,(now-last)/1000)*Number($('speed').value);last=now;playheadSeconds+=elapsed;if(playheadSeconds>=data.duration_seconds&&atEnd){playheadSeconds=0;index=0;atEnd=false}else if(playheadSeconds>=data.duration_seconds){playheadSeconds=data.duration_seconds;index=interpolatedFrame(playheadSeconds).index;atEnd=true}else{index=interpolatedFrame(playheadSeconds).index;atEnd=false}$('timeline').value=index;draw()}requestAnimationFrame(tick)}
 $('worker').onchange=fillProcesses;$('process').onchange=fillModes;$('mode').onchange=fillSessions;$('session').onchange=loadMotion;$('timeline').oninput=e=>{referencePreview=false;index=Number(e.target.value);playheadSeconds=data.frames[index].t;last=0;draw()};$('pointSize').oninput=e=>{$('pointSizeValue').textContent=`${Number(e.target.value).toFixed(2).replace(/0+$/,'').replace(/\.$/,'')} px`;draw()};$('zoneSurface').onchange=draw;$('objectMesh').onchange=draw;$('skeletonTurnLeft').onclick=()=>setSkeletonYaw(skeletonYaw-15);$('skeletonTurnRight').onclick=()=>setSkeletonYaw(skeletonYaw+15);$('skeletonReset').onclick=()=>setSkeletonYaw(0);document.querySelector('.skeleton-card').ontoggle=()=>{if(document.querySelector('.skeleton-card').open)resize()};$('play').onclick=()=>{if(playing){playing=false;last=0;$('play').textContent='재생'}else startPlayback()};$('restart').onclick=()=>{playing=false;referencePreview=false;index=0;playheadSeconds=0;last=0;$('play').textContent='재생';$('timeline').value=0;draw()};
 canvas.onpointerdown=e=>{if(e.button!==0&&e.button!==1)return;e.preventDefault();canvas.setPointerCapture(e.pointerId);drag=e.button===1?{mode:'pan',x:e.clientX,y:e.clientY,panX,panY}:{mode:'rotate',x:e.clientX,y:e.clientY,yaw,pitch};canvas.style.cursor=drag.mode==='pan'?'move':'grabbing'};canvas.onpointermove=e=>{if(!drag)return;if(drag.mode==='pan'){panX=drag.panX+e.clientX-drag.x;panY=drag.panY+e.clientY-drag.y}else{yaw=drag.yaw+(e.clientX-drag.x)*.01;pitch=Math.max(-1.2,Math.min(1.2,drag.pitch+(e.clientY-drag.y)*.01))}draw()};canvas.onpointerup=e=>{if(canvas.hasPointerCapture(e.pointerId))canvas.releasePointerCapture(e.pointerId);drag=null;canvas.style.cursor='grab'};canvas.onpointercancel=()=>{drag=null;canvas.style.cursor='grab'};canvas.onauxclick=e=>e.preventDefault();canvas.onwheel=e=>{e.preventDefault();zoom=Math.max(70,Math.min(420,zoom*(e.deltaY>0?.9:1.1)));draw()};
 addEventListener('resize',resize);(async()=>{try{catalog=await json('/motion-viewer/api/catalog');$('worker').replaceChildren(...catalog.workers.map(worker=>option(worker.worker_id,`${worker.display_name}${worker.role==='expert'?' · 전문가 기준':''}`)));fillProcesses();resize();requestAnimationFrame(tick)}catch(e){$('status').textContent=e.message}})();
@@ -2230,9 +2243,15 @@ def create_motion_viewer_router(
         worker_root = Path(_worker_source(root, worker_id)["root"])
         profile = _read_profile(worker_root, process, mode_id)
         selected = _representative_session(profile) if session_id == "representative" else session_id
+        path = _session_path(worker_root, process, mode_id, profile, selected)
+        try:
+            offset = _clock_offset(path, frame_count)
+        except Exception:  # noqa: BLE001 - 알림 시각을 못 맞춰도 재생은 열려야 한다
+            logger.exception("viewer alert clock offset failed path=%s", path)
+            offset = 0.0
         alerts = sequence_alerts_for(
-            _session_path(worker_root, process, mode_id, profile, selected), process=process, mode_id=mode_id,
-            legacy=_legacy_zone_ids(profile, worker_root, root), engine=sequence_engine,
+            path, process=process, mode_id=mode_id,
+            legacy=_legacy_zone_ids(profile, worker_root, root), engine=sequence_engine, offset=offset,
         )
         return {"selected_session_id": selected, "sequence_alerts": alerts}
 
@@ -2429,8 +2448,13 @@ def create_motion_viewer_router(
             [*payload["pose_evaluation"].get("zones", {}), *payload["coating_reference"]],
             _session_record(profile, selected)))
         from trainer.demo_api.viewer_alerts import coating_alerts_for, spray_windows
-        payload["coating_alerts"] = coating_alerts_for(
-            payload["coating_evaluation"]["target"], spray_windows(selected_path, mode_id=mode_id, legacy=legacy_zone_ids))
+        try:   # 알림 때문에 재생 자료 전체가 500이 되면 안 된다
+            payload["coating_alerts"] = coating_alerts_for(
+                payload["coating_evaluation"]["target"],
+                spray_windows(selected_path, mode_id=mode_id, legacy=legacy_zone_ids, offset=_clock_offset(selected_path, frame_count)))
+        except Exception:  # noqa: BLE001
+            logger.exception("viewer coating alerts failed path=%s", selected_path)
+            payload["coating_alerts"] = []
         from trainer.demo_api.dialogue import viewer_dialogue_context
         payload["dialogue_evaluation"] = viewer_dialogue_context(payload)
         from trainer.demo_api.playback_direction import build_playback_snapshot
