@@ -80,7 +80,7 @@ class IntegrationTests(unittest.TestCase):
     def test_dft_judge_missing_required_field(self) -> None:
         self.reset_state()
         client = TestClient(app)
-        response = client.post("/dft_judge/evaluate", json={"measurements": [100.0]})
+        response = client.post("/dft_judge/evaluate", json={"spec": {"nominal": 100.0}})
         self.assertEqual(response.status_code, 422)
 
     def test_anomaly_detection_under_thickness(self) -> None:

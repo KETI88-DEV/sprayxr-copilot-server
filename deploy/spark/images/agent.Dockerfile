@@ -27,7 +27,8 @@ RUN pip install --no-deps -r /tmp/requirements.lock.txt && pip check
 # mcp_servers가 import하는 trainer 모듈: pose_similarity와 그것이 부르는 simulator_csv,
 # 그리고 /pose_estimation/sequence가 쓰는 joint_names·skeleton_gate·posture_sequence·
 # arm_reference·sequence_dtw·pose_stages와 그것들이 부르는 world_axes·measured_score.
-# 전부 표준 라이브러리만 쓴다.
+# 전부 표준 라이브러리만 쓴다. 도막 도구(dft_judge·anomaly_detection)는 numpy·pillow와
+# trainer/zone_engine(PR #8 엔진)을 쓰는 어댑터 coating_assessment를 부른다.
 # 이 COPY 목록은 test_spark_deploy_contract.py가 그대로 복사해 새 프로세스에서 import를 확인한다.
 COPY trainer/__init__.py trainer/__init__.py
 COPY trainer/scripts/pose_similarity.py trainer/scripts/pose_similarity.py
@@ -42,6 +43,9 @@ COPY trainer/scripts/arm_reference.py trainer/scripts/arm_reference.py
 COPY trainer/scripts/sequence_dtw.py trainer/scripts/sequence_dtw.py
 COPY trainer/scripts/pass_segmentation.py trainer/scripts/pass_segmentation.py
 COPY trainer/scripts/pose_stages.py trainer/scripts/pose_stages.py
+COPY trainer/zone_engine/ trainer/zone_engine/
+COPY trainer/demo_api/__init__.py trainer/demo_api/__init__.py
+COPY trainer/demo_api/coating_assessment.py trainer/demo_api/coating_assessment.py
 COPY mcp_servers/ mcp_servers/
 RUN python3 -c "import mcp_servers.main"
 USER 10001:10001

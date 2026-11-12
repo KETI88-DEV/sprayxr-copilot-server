@@ -30,6 +30,9 @@ PR #8 엔진과 다른 점:
 10. 판정 표면이 좌하단 원점이라 Zone 화소를 더하는 순서가 PR #8(좌상단 원점)과 다르다. 칠한 곳
     평균이 마지막 자리(1e-14 µm 수준, 실시간 표면은 float32라 1e-7 수준)에서 다를 수 있고, 평균이
     목표와 정확히 같은 동률에서는 등급이 갈릴 수 있다.
+11. 측정값 입구(`assess_readings`)는 게이지 측정값처럼 이미 µm인 물리량을 받으므로 10 µm를 빼지
+    않고 판정한다. 같은 이유로 `v+10-10`이 부동소수로 `v`와 1 ulp 다를 수 있어, 평균이 목표와
+    정확히 같은 동률에서만 등급이 갈릴 수 있다.
 """
 
 from __future__ import annotations
@@ -73,8 +76,8 @@ RULE_NOTE: Final[str] = f"등급은 칠한 곳의 평균 두께로 정합니다(
 GRADE_SHORT_LABELS: Final[dict[str, str]] = {
     "below": "목표 미만", "normal": "정상", "above": f"{DISPLAY_BAND_FACTORS[2]:g}배 이상", "none": "미도장"}
 
-_GRADE_WORDS: Final = {"below": "저도막", "normal": "정상", "above": "과도막"}
-_ADJUSTMENT_WORDS: Final = {
+GRADE_WORDS: Final = {"below": "저도막", "normal": "정상", "above": "과도막"}
+ADJUSTMENT_WORDS: Final = {
     ("speed_mm_s", "decrease"): "이동 속도를 낮추는 쪽",
     ("speed_mm_s", "increase"): "이동 속도를 높이는 쪽",
     ("distance_mm", "decrease"): "이격거리를 줄이는 쪽",
@@ -297,14 +300,14 @@ def grade_phrase(row: Mapping[str, Any]) -> str:
     unpainted = f"미도장 {row['unpainted_fraction'] * 100:.0f}%"
     if row["grade"] is None:
         return f"칠한 곳 없음({unpainted})"
-    return f"{_GRADE_WORDS[row['grade']]}(칠한 곳 평균 {mean_text(row['thickness_um'], row['target_thickness_um'])}µm, {unpainted})"
+    return f"{GRADE_WORDS[row['grade']]}(칠한 곳 평균 {mean_text(row['thickness_um'], row['target_thickness_um'])}µm, {unpainted})"
 
 
 def adjustment_sentence(adjustments: Sequence[Mapping[str, Any]]) -> str | None:
     if not adjustments:
         return None
     words = ", ".join(
-        _ADJUSTMENT_WORDS[(item["variable"], item["direction"])]
+        ADJUSTMENT_WORDS[(item["variable"], item["direction"])]
         for item in sorted(adjustments, key=lambda item: item["priority"]))
     return f"조절 후보: {words}. 원인으로 확정된 것은 아닙니다."
 
@@ -316,3 +319,24 @@ def distribution_sentence(six_band_counts: Mapping[str, int]) -> str | None:
         return None
     shares = ", ".join(f"{label} {100.0 * count / total:.0f}%" for label, count in zip(BAND_LABELS, counts))
     return f"칠한 면적의 두께 분포: 목표의 {shares}."
+
+
+def assess_readings(
+    values_um: Sequence[float],
+    target_um: float | None = None,
+    *,
+    speed_mm_s: Sequence[float] = (),
+    distance_mm: Sequence[float] = (),
+) -> dict[str, Any]:
+    """측정값 목록(이미 µm인 물리량) → PR #8 등급·6구간·조절 후보. 높이맵이 아니므로 10 µm를 빼지 않는다."""
+    if not len(values_um):
+        raise ValueError("values_um must not be empty")
+    values = np.asarray(values_um, dtype=np.float64)
+    # PR #8 판정은 높이맵에서 DeadVolume 10 µm를 한 번 빼므로, 측정값에는 미리 더해 상쇄한다.
+    raw = (values + numerical.DEAD_VOLUME_UM).reshape(1, -1)
+    result = assess_zone(raw, np.ones(raw.shape, dtype=bool), target_um, speed_mm_s=speed_mm_s, distance_mm=distance_mm)
+    assert result is not None  # 마스크가 비지 않고 모양이 같다
+    target = result["target_thickness_um"]
+    result["point_grades"] = [
+        numerical.grade_for_mean(float(v), target) if v >= numerical.MIN_PAINTED_UM else None for v in values]
+    return result

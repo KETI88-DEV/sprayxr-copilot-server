@@ -244,3 +244,33 @@ def test_behavior_by_zone_collects_sequence_averages() -> None:
     assert samples["3"] == {"speed_mm_s": [450.0, 410.0], "distance_mm": [260.0]}
     assert not {"-1", "0", ""} & set(samples)
     assert not any(samples.get(zone, {}).get(name) for zone in ("4", "5") for name in ("speed_mm_s", "distance_mm"))
+
+
+def test_readings_are_graded_without_the_dead_volume() -> None:
+    result = ca.assess_readings([150, 158, 171], 160)
+    assert result["grade"] == "below"
+    assert result["painted_mean_um"] == pytest.approx(159.667, abs=1e-3)
+    assert result["six_band_counts"] == {
+        **{key: 0 for key in numerical.SIX_BAND_KEYS},
+        "from_0_9t_to_lt_1_0t": 2, "from_1_0t_to_lt_1_5t": 1}
+    assert result["point_grades"] == ["below", "below", "normal"]
+    # 10 µm를 뺐다면 155로 below가 된다.
+    single = ca.assess_readings([165], 160)
+    assert single["grade"] == "normal"
+    assert single["painted_mean_um"] == pytest.approx(165)
+
+
+def test_readings_match_the_engine_band_rule() -> None:
+    values = np.random.default_rng(7).uniform(1, 500, 100)
+    assert ca.assess_readings(values, 160)["six_band_counts"] == numerical.six_band_counts(values, 160.0)
+
+
+def test_readings_carry_adjustment_candidates() -> None:
+    result = ca.assess_readings([100, 110, 120], 160, speed_mm_s=[450, 460])
+    assert {"variable": "speed_mm_s", "direction": "decrease"}.items() <= result["adjustments"][0].items()
+    assert result["adjustments"][0]["evidence_kind"] == "quality_rule_candidate"
+
+
+def test_readings_reject_an_empty_list() -> None:
+    with pytest.raises(ValueError):
+        ca.assess_readings([])

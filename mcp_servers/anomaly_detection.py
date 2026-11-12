@@ -7,6 +7,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
 from mcp_servers.common import MCPException, MCPResponse, success_response
+from trainer.demo_api import coating_assessment
 
 
 router = APIRouter(prefix="/anomaly_detection", tags=["anomaly_detection"])
@@ -33,8 +34,8 @@ class TimeseriesData(BaseModel):
 
 
 class Spec(BaseModel):
-    nominal_um: float = 100.0
-    tolerance_rule: str = "90/10"
+    nominal_um: float | None = None
+    tolerance_rule: str | None = None  # 학습된 호출 모양을 받기만 한다. 판정에는 쓰지 않는다.
 
 
 class AnomalyRequest(BaseModel):
@@ -45,16 +46,18 @@ class AnomalyRequest(BaseModel):
     image_context: str = ""
 
 
-def _detect_anomalies(measurements: list[DftPoint], nominal: float) -> list[dict]:
-    under_limit = nominal * 0.9
-    over_limit = nominal * 1.2
-    anomalies = []
-    for m in measurements:
-        if m.value_um < under_limit:
-            anomalies.append({"zone_id": m.zone_id, "position": m.position, "value_um": m.value_um, "type": "저도막", "deviation_pct": round((m.value_um - nominal) / nominal * 100, 1)})
-        elif m.value_um > over_limit:
-            anomalies.append({"zone_id": m.zone_id, "position": m.position, "value_um": m.value_um, "type": "과도막", "deviation_pct": round((m.value_um - nominal) / nominal * 100, 1)})
-    return anomalies
+def _list_anomalies(measurements: list[DftPoint], assessed: dict) -> list[dict]:
+    # Zone 등급이 정상이면 낱낱 점이 목표 아래여도 이상으로 싣지 않는다(PR #8은 평균으로 판정한다).
+    if assessed["grade"] not in ("below", "above"):
+        return []
+    nominal = assessed["target_thickness_um"]
+    return [
+        {"zone_id": m.zone_id, "position": m.position, "value_um": m.value_um,
+         "type": coating_assessment.GRADE_WORDS[grade],
+         "deviation_pct": round((m.value_um - nominal) / nominal * 100, 1)}
+        for m, grade in zip(measurements, assessed["point_grades"])
+        if grade in ("below", "above")
+    ]
 
 
 def _analyze_distribution(anomalies: list[dict]) -> str:
@@ -64,43 +67,22 @@ def _analyze_distribution(anomalies: list[dict]) -> str:
     for a in anomalies:
         pos = a.get("position", "unknown")
         position_counts[pos] = position_counts.get(pos, 0) + 1
-    dominant = max(position_counts, key=lambda k: position_counts[k]) if position_counts else "unknown"
+    dominant = max(position_counts, key=lambda k: position_counts[k])
     pos_label = {"upper": "상부", "middle": "중간부", "lower": "하부", "left": "좌측", "right": "우측", "center": "중앙부"}.get(dominant, dominant)
-    dominant_type = anomalies[0]["type"]
-    return f"{pos_label} 영역에 {dominant_type} 집중 ({position_counts[dominant]}건)"
+    # 점마다 등급 낱말이 같다(Zone 등급이 below면 저도막만, above면 과도막만 나올 수 있다).
+    return f"{pos_label} 영역에 {anomalies[0]['type']} 측정점 집중 ({position_counts[dominant]}건)"
 
 
-def _infer_root_causes(timeseries: Optional[TimeseriesData], anomalies: list[dict]) -> list[dict]:
-    causes = []
-    if not timeseries or not anomalies:
-        return causes
+_FACTOR = {"speed_mm_s": "gun_speed", "distance_mm": "standoff_distance"}
 
-    if timeseries.gun_speed_m_per_s and len(timeseries.gun_speed_m_per_s) >= 2:
-        speeds = timeseries.gun_speed_m_per_s
-        speed_mean = mean(speeds)
-        first_half = mean(speeds[:len(speeds)//2])
-        second_half = mean(speeds[len(speeds)//2:])
-        if second_half < first_half * 0.85:
-            causes.append({"cause": f"후반부 이동속도 감소 ({first_half:.2f} → {second_half:.2f} m/s)", "factor": "gun_speed", "confidence": 0.85})
-        elif second_half > first_half * 1.15:
-            causes.append({"cause": f"후반부 이동속도 증가 ({first_half:.2f} → {second_half:.2f} m/s)", "factor": "gun_speed", "confidence": 0.80})
 
-    if timeseries.standoff_distance_mm and len(timeseries.standoff_distance_mm) >= 2:
-        dists = timeseries.standoff_distance_mm
-        dist_std = stdev(dists) if len(dists) > 1 else 0
-        if dist_std > mean(dists) * 0.15:
-            causes.append({"cause": f"이격거리 편차 과다 (표준편차 {dist_std:.0f}mm)", "factor": "standoff_distance", "confidence": 0.75})
-
-    if timeseries.spray_angle_deg and len(timeseries.spray_angle_deg) >= 2:
-        angles = timeseries.spray_angle_deg
-        low_angles = [a for a in angles if a < 60]
-        if len(low_angles) > len(angles) * 0.3:
-            causes.append({"cause": f"분사각도 부족 구간 {len(low_angles)}건 ({min(angles):.0f}°~)", "factor": "spray_angle", "confidence": 0.70})
-
-    if not causes and anomalies:
-        causes.append({"cause": "시계열 데이터 부족으로 원인 특정 불가, 추가 센서 데이터 필요", "factor": "unknown", "confidence": 0.3})
-
-    return causes
+def _root_causes(adjustments: list[dict]) -> list[dict]:
+    # 각도 판정은 PR #8에 없어 원인 후보에서 뺀다. 근거 없는 신뢰도 수도 싣지 않는다.
+    return [
+        {"cause": coating_assessment.ADJUSTMENT_WORDS[(a["variable"], a["direction"])],
+         "factor": _FACTOR[a["variable"]], "evidence_kind": a["evidence_kind"]}
+        for a in sorted(adjustments, key=lambda a: a["priority"])
+    ]
 
 
 @router.post("/detect", response_model=MCPResponse)
@@ -108,25 +90,42 @@ def detect_anomaly(payload: AnomalyRequest) -> MCPResponse:
     if not payload.dft_measurements:
         raise MCPException(code="INVALID_PARAMS", message="dft_measurements must not be empty", status_code=400)
 
-    nominal = payload.spec.nominal_um if payload.spec else mean([m.value_um for m in payload.dft_measurements])
     values = [m.value_um for m in payload.dft_measurements]
+    nominal = payload.spec.nominal_um if payload.spec else None
+    if nominal is not None and nominal <= 0:
+        raise MCPException(code="INVALID_PARAMS", message="nominal_um must be greater than zero", status_code=400)
+    ts = payload.timeseries
+    assessed = coating_assessment.assess_readings(
+        values, nominal,
+        speed_mm_s=[v * 1000.0 for v in ts.gun_speed_m_per_s] if ts else (),
+        distance_mm=ts.standoff_distance_mm if ts else ())
+    grade = assessed["grade"]
 
-    anomalies = _detect_anomalies(payload.dft_measurements, nominal)
-    distribution_pattern = _analyze_distribution(anomalies)
-    root_causes = _infer_root_causes(payload.timeseries, anomalies)
+    anomalies = _list_anomalies(payload.dft_measurements, assessed)
+    root_causes = _root_causes(assessed["adjustments"])
 
     result = {
-        "anomaly_detected": len(anomalies) > 0,
+        "anomaly_detected": grade in ("below", "above"),
         "anomaly_count": len(anomalies),
         "anomalies": anomalies,
-        "distribution_pattern": distribution_pattern,
+        "distribution_pattern": _analyze_distribution(anomalies),
         "root_causes": root_causes,
+        "anomaly_type": coating_assessment.GRADE_WORDS[grade] if grade in ("below", "above") else "",
+        "zone": payload.zone_id,
+        "cause": coating_assessment.adjustment_sentence(assessed["adjustments"]) or "",
+        "grade": grade,
+        "status": assessed["status"],
+        "target_thickness_um": assessed["target_thickness_um"],
+        "target_basis": assessed["target_basis"],
+        "normal_band_um": assessed["normal_band_um"],
+        "six_band_counts": assessed["six_band_counts"],
+        "criterion_version": coating_assessment.ASSESSMENT_VERSION,
         "stats": {
             "mean_um": round(mean(values), 1),
             "stdev_um": round(stdev(values), 1) if len(values) > 1 else 0,
             "min_um": min(values),
             "max_um": max(values),
-            "nominal_um": nominal,
+            "nominal_um": assessed["target_thickness_um"],
         },
         "zone_id": payload.zone_id,
         "image_context": payload.image_context,

@@ -1,8 +1,9 @@
 # mcp 이미지 고정 의존성 (linux/arm64, CPython 3.11). `pip install --no-deps -r` 후 `pip check`.
 #
 # 버전 근거: 개발 컨테이너 ship-paint-trainer(Python 3.11.9) 설치본, 2026-09-15.
-#   루트 fastapi uvicorn pydantic 의 의존 폐포. mcp_servers의 서드파티 import는 이 셋뿐이고,
-#   trainer 쪽은 trainer.scripts.pose_similarity·simulator_csv(표준 라이브러리만)다.
+#   루트 fastapi uvicorn pydantic 의 의존 폐포에 numpy·pillow를 더했다. mcp_servers의 서드파티 import는
+#   이 다섯이고(numpy·pillow는 도막 도구가 trainer.demo_api.coating_assessment·zone_engine으로 쓴다),
+#   trainer 쪽은 표준 라이브러리 모듈과 zone_engine이다.
 # aarch64: pydantic-core만 컴파일 패키지(cp311 manylinux aarch64 휠 확인), 나머지 py3-none-any.
 # agent-api.lock.txt와 같은 버전이어야 한다(테스트가 단언한다).
 annotated-doc==0.0.4
@@ -12,6 +13,8 @@ click==8.3.1
 fastapi==0.135.1
 h11==0.16.0
 idna==3.7
+numpy==1.26.4
+pillow==12.3.0
 pydantic==2.12.5
 pydantic-core==2.41.5
 starlette==0.52.1
