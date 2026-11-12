@@ -24,7 +24,7 @@ function viewer(patch = (line) => line) {
     assert.ok(line, `화면 코드에서 ${marker} 를 찾지 못했다`);
     return patch(line);
   };
-  // arcs: 원마다 {x, y, r, filled, style}. paths: 그은 선마다 {points, style, dash}. 그린 순서 그대로다.
+  // arcs: 원마다 {x, y, r, filled, style, alpha}. paths: 그은 선마다 {points, style, dash, alpha}. 그린 순서 그대로다.
   const arcs = [], paths = [];
   let points = [], shape = null;
   const context2d = {
@@ -33,11 +33,11 @@ function viewer(patch = (line) => line) {
     beginPath() { points = []; shape = null; },
     moveTo(x, y) { shape = 'line'; points.push([x, y]); },
     lineTo(x, y) { points.push([x, y]); },
-    arc(x, y, r) { shape = 'arc'; arcs.push({ x, y, r, filled: null, style: null }); },
+    arc(x, y, r) { shape = 'arc'; arcs.push({ x, y, r, filled: null, style: null, alpha: this.globalAlpha }); },
     fill() { if (shape === 'arc') Object.assign(arcs.at(-1), { filled: true, style: this.fillStyle }); },
     stroke() {
       if (shape === 'arc') Object.assign(arcs.at(-1), { filled: false, style: this.strokeStyle });
-      else paths.push({ points: [...points], style: this.strokeStyle, dash: [...this.dash] });
+      else paths.push({ points: [...points], style: this.strokeStyle, dash: [...this.dash], alpha: this.globalAlpha });
     },
   };
   const skeletonCanvas = { getBoundingClientRect: () => ({ width: 300, height: 300 }), getContext: () => context2d };
@@ -251,6 +251,7 @@ test('왼쪽 팔다리와 오른쪽 팔다리는 다른 색이고 몸통은 둘 
     const left = boneStyle(view, drawn, 'Left Fore Arm', 'Left Hand'), right = boneStyle(view, drawn, 'Right Fore Arm', 'Right Hand');
     const core = boneStyle(view, drawn, 'Spine', 'Chest');
     assert.notEqual(left, right, `${angle}°`);
+    assert.equal(right, '#22d3ee', '건을 든 몸 오른쪽은 청록');
     assert.ok(core !== left && core !== right, `${angle}° 몸통 색`);
     assert.equal(boneStyle(view, drawn, 'Left Calf', 'Left Foot'), left, '다리도 같은 쪽 팔과 같은 색');
     assert.equal(boneStyle(view, drawn, 'Right Calf', 'Right Foot'), right);
@@ -272,6 +273,8 @@ test('바닥 격자는 가장 낮은 발 밑에 그려지고 몸과 함께 돈�
   // 격자는 발보다 아래(화면에서 더 아래쪽)까지 깔린다.
   const lowest = Math.max(...front.lines.flatMap((path) => path.points.map(([, y]) => y)));
   assert.ok(lowest > Math.max(front.drawn['Left Foot'][1], front.drawn['Right Foot'][1]));
+  // 위에서 내려다본다: 0°에서 보는 사람 쪽 선(z = +0.8, 다섯째)이 등 뒤 선(z = −0.8, 첫째)보다 화면 아래다.
+  assert.ok(front.lines[4].points[0][1] > front.lines[0].points[0][1] + 10, '보는 사람 쪽 바닥이 화면 아래');
   // 첫 선(몸 좌우 방향 선)은 0°에서 화면 가로, 우 90°에서는 세로 쪽으로 눕는다.
   const slope = ({ points: [[x1, y1], [x2, y2]] }) => Math.abs(y2 - y1) / Math.max(1e-9, Math.abs(x2 - x1));
   const side = grid(90);
@@ -282,6 +285,39 @@ test('바닥 격자는 가장 낮은 발 밑에 그려지고 몸과 함께 돈�
   assert.ok(front.mark && tip(front.mark)[1] > front.drawn.Pelvis[1] && Math.abs(tip(front.mark)[0] - front.drawn.Pelvis[0]) < 1e-6);
   assert.ok(side.mark && tip(side.mark)[0] < side.drawn.Pelvis[0] - 20);
   assert.ok(view.dashes().every((pattern) => pattern.length === 0));
+});
+
+test('가까운 관절을 나중에 그린다(0°에는 앞으로 뻗은 오른손, 180°에는 왼손)', () => {
+  const view = viewer();
+  view.sandbox.data.bones = BODY_BONES;
+  const order = (drawn, name) => view.arcs.findIndex((arc) => arc.x === drawn[name][0] && arc.y === drawn[name][1]);
+  const front = view.panel(BODY, 0);
+  assert.ok(order(front, 'Right Hand') > order(front, 'Left Hand'));
+  const back = view.panel(BODY, 180);
+  assert.ok(order(back, 'Right Hand') < order(back, 'Left Hand'));
+});
+
+// WCAG 상대 휘도 대비. 색을 그린 불투명도로 패널 배경(#172a44) 위에 섞은 뒤 잰다.
+const BACKGROUND = [0x17, 0x2a, 0x44];
+const rgb = (hex) => [1, 3, 5].map((index) => parseInt(hex.slice(index, index + 2), 16));
+const luminance = (color) => color.map((value) => value / 255).map((value) => (value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4))
+  .reduce((sum, value, index) => sum + value * [0.2126, 0.7152, 0.0722][index], 0);
+const contrast = (hex, alpha) => {
+  const mixed = rgb(hex).map((value, index) => value * alpha + BACKGROUND[index] * (1 - alpha));
+  const [a, b] = [luminance(mixed), luminance(BACKGROUND)].sort((x, y) => y - x);
+  return (a + 0.05) / (b + 0.05);
+};
+
+test('가장 옅게 그린 뼈·관절도 패널 배경과 3:1 이상 대비된다', () => {
+  const view = viewer();
+  view.sandbox.data.bones = BODY_BONES;
+  for (const angle of [0, 45, 90, 135, 180, 270]) {
+    const drawn = view.panel(BODY, angle);
+    const joints = new Set(Object.values(drawn).map(([x, y]) => `${x},${y}`));
+    const body = [...view.arcs, ...view.paths.filter((path) => path.points.some(([x, y]) => joints.has(`${x},${y}`)))];
+    assert.ok(body.length > 30);
+    for (const mark of body) assert.ok(contrast(mark.style, mark.alpha) >= 3, `${angle}° ${mark.style} × ${mark.alpha}: ${contrast(mark.style, mark.alpha).toFixed(2)}`);
+  }
 });
 
 test('v2 교정 고리는 같은 투영 함수로 관절 원과 같은 중심에 그린다', () => {
