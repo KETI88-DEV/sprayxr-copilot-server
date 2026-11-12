@@ -14,6 +14,7 @@ from trainer.demo_api.motion_viewer import (
     _joint_posture_state,
     _smooth_posture_states,
     create_motion_viewer_router,
+    viewer_v2_document,
 )
 from trainer.demo_api.pose_query import PoseEngineResult
 from trainer.demo_api.sequence_store import SequenceStore
@@ -273,6 +274,10 @@ def test_motion_viewer_page_explains_the_aggregated_expert_reference(tmp_path: P
     assert 'aria-label="스켈레톤 왼쪽 회전"' in response.text
     assert "function uprightSkeleton" in response.text
     assert "function drawSkeletonView" in response.text
+    # 패널 0°는 등 뒤에서 본 그림이다. 좌우·회전 방향은 호스트의 test_motion_viewer_chirality.js 가 잰다.
+    assert "cross(up,across)" in response.text
+    assert "정면" not in response.text
+    assert "정면" not in viewer_v2_document()
     assert "CSV의 Pelvis·몸통·팔·다리 조인트" in response.text
     assert 'id="skeleton"' not in response.text
     assert "function alignSkeleton" not in response.text
