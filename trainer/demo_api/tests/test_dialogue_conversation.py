@@ -133,7 +133,7 @@ def test_knowledge_question_after_pose_question_still_searches_documents():
     headers = {"X-Copilot-Conversation": "viewer-thread-K"}
     c.post("/api/v1/copilot/query", json=body("지금 자세는 어때?", task_type="pose_recomm"), headers=headers)
     response = c.post("/api/v1/copilot/query", json=body("적정 이격거리는?", task_type="knowledge_search"), headers=headers)
-    assert pipeline.plans[-1]["history"], "직전 자세 대화가 이력으로 들어가야 재현이 된다"
+    assert "적정 이격거리는?" not in [plan["prompt"] for plan in pipeline.plans], "일반 지식 질문은 기록에 끌리는 계획 모델을 부르지 않는다"
     assert response.headers["X-Copilot-Answer-Source"] == "documents"
     assert "30~40cm" in response.json()["data"]["answer"] and pipeline.conversations == []
 
@@ -152,4 +152,24 @@ def test_knowledge_question_without_history_searches_documents():
     pipeline = HistoryBiasedPipeline(); c = client(pipeline, SequenceStore(":memory:"))
     response = c.post("/api/v1/copilot/query", json=body("적정 이격거리는?", task_type="knowledge_search"))
     assert response.headers["X-Copilot-Answer-Source"] == "documents"
-    assert pipeline.plans[-1]["history"] == [] and pipeline.conversations == []
+    assert pipeline.plans == [] and pipeline.conversations == []
+
+
+def test_knowledge_tab_presets_after_pose_question_search_documents_without_planning():
+    pipeline = HistoryBiasedPipeline(); c = client(pipeline, SequenceStore(":memory:"))
+    headers = {"X-Copilot-Conversation": "viewer-thread-P"}
+    c.post("/api/v1/copilot/query", json=body("지금 자세는 어때?", task_type="pose_recomm"), headers=headers)
+    planned = len(pipeline.plans)
+    for prompt in ("저도막이 뭐야?", "적정 이격거리는?", "적정 분사 속도는?", "과도막의 원인은?"):
+        response = c.post("/api/v1/copilot/query", json=body(prompt, task_type="knowledge_search"), headers=headers)
+        assert response.headers["X-Copilot-Answer-Source"] == "documents", prompt
+    assert len(pipeline.plans) == planned and pipeline.conversations == []
+
+
+def test_record_followups_in_coating_tab_keep_the_planner_chat_route():
+    pipeline = DialoguePipeline(); c = client(pipeline, SequenceStore(":memory:"))
+    headers = {"X-Copilot-Conversation": "viewer-thread-C"}
+    for prompt in ("속도는 괜찮았어?", "제 이격거리는 적당했나요?", "이격거리는 어땠어?", "나의 속도는?", "그럼 속도는?"):
+        response = c.post("/api/v1/copilot/query", json=body(prompt, task_type="knowledge_search"), headers=headers)
+        assert response.headers["X-Copilot-Answer-Source"] == "conversation", prompt
+    assert pipeline.rag_calls == []

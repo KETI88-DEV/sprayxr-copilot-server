@@ -680,7 +680,11 @@ async def _execute_copilot_query(
             # Preserve engine-only responses when the optional generator is offline.
             planned_pipeline = None
         planner = select_query_pipeline(planned_pipeline, "quick") if planned_pipeline else None
-        if getattr(planner, "supports_copilot_dialogue", callable(getattr(planner, "plan_copilot_dialogue", None))):
+        supports_dialogue = getattr(planner, "supports_copilot_dialogue", callable(getattr(planner, "plan_copilot_dialogue", None)))
+        if supports_dialogue and query.task_type == "knowledge_search" and is_general_painting_knowledge(query.prompt):
+            # 계획 모델은 직전 자세·순서 대화에 끌려 일반 지식 질문을 기록 후속 대화로 분류한다(2026-11-12 재현). 부르지 않는다.
+            decision = {"kind": "coating_knowledge", "intent": "knowledge", "scope": "unspecified"}
+        elif supports_dialogue:
             try:
                 def plan():
                     with generation_slot_for(planner):
@@ -691,9 +695,6 @@ async def _execute_copilot_query(
                 logger.exception("copilot dialogue planning failed request_id=%s", query.request_id)
                 decision = {"kind": "clarify", "intent": "knowledge", "scope": "unspecified"}
 
-    if decision is not None and query.task_type == "knowledge_search" and is_general_painting_knowledge(query.prompt):
-        # 계획 모델은 직전 자세·순서 대화에 끌려 일반 지식 질문을 기록 후속 대화로 분류한다(2026-11-12 재현).
-        decision = {"kind": "coating_knowledge", "intent": "knowledge", "scope": "unspecified"}
     if decision is not None:
         intent = decision["intent"]
         if intent == "order_reference" and explicit_actual_order:

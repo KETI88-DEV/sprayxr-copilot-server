@@ -29,9 +29,15 @@ def is_coating_status_question(prompt: str) -> bool:
 
 
 def is_general_painting_knowledge(prompt: str) -> bool:
-    """기록·Zone·재생 위치를 가리키지 않는 도장 기술 질문(적정값·정의·원인·방법)."""
+    """기록·Zone·재생 위치를 가리키지 않는 도장 기술 질문(적정값·정의·원인·방법).
+
+    일반 지식 표지가 있어야 하고, 평가형 어미·1인칭·지시어가 있으면 기록 후속 질문으로 본다
+    ("속도는 괜찮았어?", "제 이격거리는 적당했나요?", "그럼 속도는?").
+    """
     return bool((is_coating_advice_question(prompt) or _PAINTING_SUBJECT.search(prompt))
-                and not _RECORD_REFERENCE.search(prompt) and not re.search(r"시퀀스|기록|재생|분사|아까|방금", prompt))
+                and re.search(r"적정|기준|권장|표준|원인|이유|왜|뭐|무엇|뜻|의미|정의|방법|어떻게|예방|방지|원리|얼마", prompt)
+                and not _RECORD_REFERENCE.search(prompt)
+                and not re.search(r"시퀀스|기록|재생|아까|방금|이\s*분사|었|았|했|어땠|괜찮|제\s|저의|나의|그럼|그\s", prompt))
 
 
 def preset_intent(task_type: str, prompt: str) -> str | None:
