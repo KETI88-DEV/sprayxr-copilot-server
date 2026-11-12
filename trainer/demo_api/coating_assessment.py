@@ -22,6 +22,7 @@ PR #8 엔진과 다른 점:
    PR #8 복호는 8비트 RGB·RGBA PNG만 받는다(complete 높이맵은 PR #8 복호를 그대로 쓴다).
 7. `gate_status`, `coverage_percent`, `overpaint_percent`, `completion_percent`는 PR #8 출력이
    아니다. PR #8의 6구간 개수에서 이 어댑터가 만든 값이다. PR #8에는 면적 게이트가 없다.
+   `gate_status="complete"`는 면적 95% 충족에 더해 PR #8 등급이 `below`가 아니어야 한다.
 8. 조절 후보의 표본은 시퀀스 평균 속도·거리다. PR #8은 그 Zone에 착탄한 분사 중 프레임의
    속도·거리를 쓴다.
 9. 세션 집계의 미도장률·6구간을 항상 낸다. PR #8은 최신 Zone 평가가 하나라도 `available`이
@@ -162,7 +163,8 @@ def assess_zone(
     filled = np.where(painted, np.clip(corrected / target, 0.0, 1.0), 0.0)
     if grade == "above":
         gate_status = "overpaint_risk"
-    elif coverage_percent >= GATE_COVERAGE_PERCENT:
+    # 2026-11-12 책임자 결정: 면적을 채워도 칠한 곳 평균이 목표 미만(저도막)이면 다음 Zone으로 보내지 않는다.
+    elif coverage_percent >= GATE_COVERAGE_PERCENT and grade != "below":
         gate_status = "complete"
     else:
         gate_status = "needs_more"

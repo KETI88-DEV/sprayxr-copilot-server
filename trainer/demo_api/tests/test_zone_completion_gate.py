@@ -49,11 +49,15 @@ def fixture(root: Path) -> tuple[Path, Path]:
 
 
 def request(seq: int = 1, *, value: float = 171, width: int = 10, x0: int = 0,
-            valid_count: int | None = None) -> AnalyzeSequenceRequest:
-    raw = round(value / 20000 * 65025)
-    image = Image.new("RGB", (width, 10), (raw // 255, raw % 255, 255))
+            valid_count: int | None = None, rest: float | None = None) -> AnalyzeSequenceRequest:
+    """`valid_count` 뒤의 화소는 미도장이다. `rest`를 주면 그 두께(원시 µm)로 칠한다."""
+    def pixel(um: float) -> tuple[int, int, int]:
+        raw = round(um / 20000 * 65025)
+        return raw // 255, raw % 255, 255
+    image = Image.new("RGB", (width, 10), pixel(value))
     if valid_count is not None:
-        for i in range(valid_count, width * 10): image.putpixel((i % width, i // width), (0, 0, 0))
+        for i in range(valid_count, width * 10):
+            image.putpixel((i % width, i // width), (0, 0, 0) if rest is None else pixel(rest))
     stream = io.BytesIO()
     image.save(stream, format="PNG")
     return AnalyzeSequenceRequest.model_validate({
@@ -493,3 +497,83 @@ def test_report_session_target_cannot_complete_without_official_mask(tmp_path: P
         surfaces={1: np.full((10, 10), 160, dtype=np.float32)}, target_thickness_um=160)
     assert judgments == []
     assert reason is not None
+
+
+# 2026-11-12 책임자 결정: 면적 95%를 채워도 칠한 곳 평균이 목표 미만(저도막)이면 다음 Zone으로 보내지 않는다.
+THIN_MEAN_GUIDE = ("기본 목표 160µm 기준: Zone 1의 목표 도막 충족 면적은 95.0%이지만 칠한 곳 평균 두께가 "
+                   "154µm로 목표 미만입니다(저도막). 이 Zone의 얇은 곳을 보완하세요.")
+
+
+def thin_mean(seq: int = 1) -> AnalyzeSequenceRequest:
+    # 95%는 보정 161µm, 나머지 5%는 보정 10µm로 칠했다 → 칠한 곳 평균 153.5µm(표기 154).
+    return request(seq, valid_count=95, rest=20)
+
+
+def test_area_met_but_below_mean_keeps_the_trainee_in_the_zone(tmp_path: Path) -> None:
+    result = engine(tmp_path).evaluate(thin_mean())
+    assert result.coverage_percent == 95
+    assert result.assessment["grade"] == "below"
+    assert result.assessment["gate_status"] == "needs_more"
+    assert (result.status, result.recommendation, result.next_zone_id) == (
+        "needs_more", "continue_current_zone", None)
+    assert result.message == THIN_MEAN_GUIDE
+
+
+@pytest.mark.parametrize("req", [request(valid_count=94), request(value=100)])
+def test_area_shortfall_keeps_the_area_guide(tmp_path: Path, req: AnalyzeSequenceRequest) -> None:
+    result = engine(tmp_path).evaluate(req)
+    assert result.status == "needs_more"
+    assert result.message == (
+        f"기본 목표 160µm 기준: Zone 1의 목표 도막 충족 면적은 {result.coverage_percent:.1f}%입니다. "
+        "현재 Zone의 목표 미달 영역만 보완하고 이미 두꺼운 영역은 피하세요.")
+
+
+def test_area_and_mean_met_moves_to_the_next_zone(tmp_path: Path) -> None:
+    result = engine(tmp_path).evaluate(request(valid_count=95))
+    assert result.assessment["grade"] == "normal"
+    assert (result.status, result.next_zone_id) == ("complete", "2")
+    assert result.message == ("기본 목표 160µm 기준: Zone 1의 공식 구역 면적 중 95% 이상이 목표 도막을 충족했습니다. "
+                              "다음 Zone 2로 이동하세요.")
+
+
+def test_thin_zone_guide_and_leaving_alert_agree(tmp_path: Path) -> None:
+    client, bus = alert_client(multimap_engine(tmp_path), tmp_path)
+    data = client.post("/api/v1/copilot/analyze-sequence", json=thin_mean().model_dump(mode="json")).json()["data"]
+    assert data["coating_progress"]["status"] == "needs_more"
+    assert data["coating_progress"]["next_zone_id"] is None
+    assert THIN_MEAN_GUIDE.partition(": ")[2] in data["text_guide"]
+    assert "다음" not in data["text_guide"]
+    assert coating_alerts(bus) == []
+    post(client, zone2(2))
+    post(client, thin_mean(3))
+    post(client, zone2(4))
+    alerts = coating_alerts(bus)
+    assert [(alert.anomaly_type, alert.sequence_id) for alert in alerts] == [("coating_under_app", "SEQ-002")]
+    assert alerts[0].payload["message"] == ("기본 목표 160µm 기준: 방금 떠난 Zone 1의 칠한 곳 평균 두께가 154µm로 "
+                                            "목표 미만입니다(저도막). 돌아가 얇은 곳을 보완하세요.")
+
+
+@pytest.mark.parametrize(("req", "status", "next_zone"), [(thin_mean(), "needs_more", None), (request(), "complete", "2")])
+def test_current_next_query_uses_the_same_gate(
+    tmp_path: Path, req: AnalyzeSequenceRequest, status: str, next_zone: str | None,
+) -> None:
+    from trainer.demo_api.reference_order_query import current_next_answer
+
+    progress = engine(tmp_path)
+    store = SequenceStore(":memory:")
+    store.record(session_key=req.session_id, sequence_id=req.sequence_id, body_sha256="query",
+                 frames=0, received_at="now", body=req.model_dump_json())
+    query = SimpleNamespace(session_id=req.session_id, context=None, scenario_id=None, prompt="다음 구역은?")
+    text, scope, payload = current_next_answer(
+        query, store, sequence_engine=SequenceAnalysisEngine(tmp_path), coating_engine=progress)
+    assert (scope["status"], scope["next_zone_id"]) == (status, next_zone)
+    assert payload["message"] in text
+    if status == "needs_more":
+        assert text.endswith(THIN_MEAN_GUIDE)
+
+
+def test_report_rows_use_the_same_thin_mean_gate(tmp_path: Path) -> None:
+    surface = np.full((10, 10), 171, dtype=np.float32)
+    surface.flat[95:] = 20
+    judgments, _ = engine(tmp_path).judge_zones(scenario_id="3", process="spray", mode_id=3, surfaces={1: surface})
+    assert (judgments[0].assessment["grade"], judgments[0].assessment["gate_status"]) == ("below", "needs_more")

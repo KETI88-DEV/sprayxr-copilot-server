@@ -121,7 +121,8 @@ class CoatingProgressEngine:
     """Merge TSB absolute cumulative crops and judge the official Zone against the target.
 
     Thickness is corrected and graded by `coating_assessment` (PR #8 rules); the
-    advance gate is 95% of the official Zone area meeting the target. Unlike the
+    advance gate is 95% of the official Zone area meeting the target and a painted
+    mean that is not below the target (PR #8 grade other than ``below``). Unlike the
     PR #8 engine, pixels no crop has touched count as unpainted (not unknown) and a
     missing target is judged against 160 µm and reported as `default_target`.
 
@@ -651,6 +652,13 @@ class CoatingProgressEngine:
                 message = f"Zone {request.zone_id}의 공식 구역 면적 중 95% 이상이 목표 도막을 충족했습니다."
                 if next_zone_id is not None:
                     message += f" 다음 Zone {next_zone_id}로 이동하세요."
+            elif coverage_percent >= coating_assessment.GATE_COVERAGE_PERCENT:
+                # 면적은 채웠지만 저도막이라 게이트가 막았다. 떠날 때의 저도막 알림과 같은 숫자를 적는다.
+                recommendation = "continue_current_zone"
+                next_zone_id = None
+                message = (f"Zone {request.zone_id}의 목표 도막 충족 면적은 {coverage_percent:.1f}%이지만 "
+                           f"칠한 곳 평균 두께가 {coating_assessment.mean_text(row['thickness_um'], target_thickness_um)}µm로 "
+                           "목표 미만입니다(저도막). 이 Zone의 얇은 곳을 보완하세요.")
             else:
                 recommendation = "continue_current_zone"
                 next_zone_id = None
