@@ -114,6 +114,37 @@ def _coating_feedback(progress: CoatingProgress) -> CoatingFeedback:
     )
 
 
+_ALERT_ROW_KEYS: Final = (
+    "zone_id", "map_num", "status", "grade", "thickness_um", "target_thickness_um", "target_basis",
+)
+
+
+def _coating_alerts(row: dict[str, Any]) -> list[dict[str, Any]]:
+    """평가 행 → 도막 등급 알림(과도막은 지금 Zone, 저도막은 방금 떠난 Zone). 한 Zone에 세션당 종류별 1회다."""
+    alerts: list[dict[str, Any]] = []
+
+    def add(zone_row: dict[str, Any], anomaly_type: str, reason_code: str, message: str) -> None:
+        basis = coating_assessment.basis_label(zone_row["target_thickness_um"], zone_row["target_basis"])
+        alerts.append({
+            "anomaly_type": anomaly_type,
+            # 시퀀스가 아니라 Zone으로 중복을 막는다. 발행 이력은 세션 시작 때 지워진다.
+            "dedupe_key": f"zone:{zone_row['map_num']}:{zone_row['zone_id']}",
+            "payload": {"reason_code": reason_code, "message": f"{basis}: {message}",
+                        **{key: zone_row[key] for key in _ALERT_ROW_KEYS}},
+        })
+
+    if row["grade"] == "above":
+        add(row, "coating_over_app", "zone_grade_above",
+            f"Zone {row['zone_id']}가 과도막입니다(칠한 곳 평균 {row['thickness_um']:.0f}µm, "
+            f"{coating_assessment.OVER_PHRASE}). 이 Zone의 분사를 멈추세요.")
+    left = row.get("left_zone")
+    if left is not None and left["grade"] == "below":
+        add(left, "coating_under_app", "zone_grade_below",
+            f"방금 떠난 Zone {left['zone_id']}가 저도막입니다(칠한 곳 평균 {left['thickness_um']:.0f}µm, 목표 미만). "
+            "돌아가 얇은 곳을 보완하세요.")
+    return alerts
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -267,6 +298,9 @@ def create_telemetry_router(
                             "message": decision.text_guide,
                         },
                     )
+                if broadcaster is not None and coating_progress.assessment is not None:
+                    for alert in _coating_alerts(coating_progress.assessment):
+                        broadcaster.publish(session_id=query.session_id, sequence_id=query.sequence_id, **alert)
             common_data["coating_feedback"] = cached["coating_feedback"]
             common_data["sequence_feedback"] = cached["sequence_feedback"]
             common_data["text_guide"] = cached["text_guide"]

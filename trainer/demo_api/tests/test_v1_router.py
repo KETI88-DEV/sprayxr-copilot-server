@@ -499,6 +499,21 @@ def test_starting_a_session_clears_its_earlier_anomalies() -> None:
     assert len(bus.since("1_1000053_1", last_event_id=0)) == 1
 
 
+def test_dedupe_key_scopes_an_anomaly_to_a_zone_instead_of_a_sequence() -> None:
+    """Given a zone-scoped key, When another sequence reports the same zone, Then it is suppressed."""
+    bus = AnomalyBroadcaster()
+    zone = {"session_id": "S-5", "anomaly_type": "coating_over_app", "payload": {}, "dedupe_key": "zone:1:1"}
+    assert bus.publish(sequence_id="A", **zone) is not None
+    assert bus.publish(sequence_id="B", **zone) is None
+    assert bus.publish(sequence_id="B", **{**zone, "dedupe_key": "zone:1:2"}) is not None
+
+    # 열쇠를 주지 않으면 지금처럼 시퀀스 단위다.
+    plain = {"session_id": "S-5", "anomaly_type": "direction_deviation", "payload": {}}
+    assert bus.publish(sequence_id="A", **plain) is not None
+    assert bus.publish(sequence_id="A", **plain) is None
+    assert bus.publish(sequence_id="B", **plain) is not None
+
+
 # --- 4. 이상 알림 SSE (p.10) ----------------------------------------------
 #
 # 비종료 SSE 라우트를 TestClient 로 몰면 멈추지 않는다(AGENTS.md). 순수 생성기를 anyio 로

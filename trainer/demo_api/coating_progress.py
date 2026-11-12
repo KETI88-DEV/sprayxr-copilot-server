@@ -153,6 +153,8 @@ class CoatingProgressEngine:
             tuple[str, str, int], dict[int, np.ndarray]
         ] = OrderedDict()
         self._applied: dict[tuple[str, str, int], set[str]] = {}
+        # 세션이 마지막으로 판정받은 Zone. 다른 Zone으로 넘어간 시퀀스에서 떠난 Zone의 등급을 보려고 둔다.
+        self._last_zone: dict[tuple[str, str, int], str] = {}
         self._results: dict[tuple[str, str, int, str, float | None], CoatingProgress] = {}
         self._guard = threading.RLock()
 
@@ -364,6 +366,7 @@ class CoatingProgressEngine:
         while len(self._sessions) > _MAX_SESSIONS:
             expired, _ = self._sessions.popitem(last=False)
             self._applied.pop(expired, None)
+            self._last_zone.pop(expired, None)
             self._results = {item: value for item, value in self._results.items() if item[:3] != expired}
 
     def judge_zones(
@@ -431,6 +434,33 @@ class CoatingProgressEngine:
             key=lambda item: (item.map_num, int(item.zone_id) if item.zone_id.isdigit() else 1_000_000, item.zone_id)
         )
         return judgments, (None if judgments else "coating_reference_invalid")
+
+    def _left_zone_row(
+        self, profile: dict[str, Any], session: dict[int, np.ndarray], zone_id: str,
+        *, scenario_id: str, target_thickness_um: float | None,
+    ) -> dict[str, Any] | None:
+        """방금 떠난 Zone을 지금의 세션 표면에서 평가한 행. 못 재면 None — 알림용이라 본 판정을 막지 않는다."""
+        try:
+            zone = self._zone(profile, zone_id)
+            coating = zone.get("coating") if zone is not None else None
+            if zone is None or not isinstance(coating, dict):
+                return None
+            map_num = int(zone.get("map_num", 1))
+            atlas_width, atlas_height = int(coating.get("atlas_width", 0)), int(coating.get("atlas_height", 0))
+            surface = session.get(map_num)
+            if surface is None or min(atlas_width, atlas_height) <= 0:
+                return None
+            zone_mask, mask_reason = self._atlas_zone_mask(
+                coating, scenario_id=scenario_id, map_num=map_num, zone_id=zone_id,
+                atlas_width=atlas_width, atlas_height=atlas_height, require_official=True,
+            )
+            if mask_reason is not None:
+                return None
+            # 조절 후보 표본은 주지 않는다(알림 본문에 싣지 않는다).
+            assessment = coating_assessment.assess_zone(surface, zone_mask, target_thickness_um)
+        except (TypeError, ValueError):
+            return None
+        return None if assessment is None else coating_assessment.zone_row(map_num, zone_id, assessment)
 
     @staticmethod
     def _next_zone(profile: dict[str, Any], map_num: int, zone_id: str) -> str | None:
@@ -627,11 +657,20 @@ class CoatingProgressEngine:
 
             message = f"{coating_assessment.basis_label(target_thickness_um, target_basis)}: {message}"
 
+            row = coating_assessment.zone_row(map_num, request.zone_id, assessment)
+            previous = self._last_zone.get(session_key)
+            if previous is not None and previous != request.zone_id:
+                left = self._left_zone_row(
+                    profile, session, previous, scenario_id=request.scenario_id, target_thickness_um=requested)
+                if left is not None:
+                    row["left_zone"] = left
+            self._last_zone[session_key] = request.zone_id
+
             result = CoatingProgress(
                 comparison_basis="session_target",
                 target_thickness_um=target_thickness_um,
                 target_basis=target_basis,
-                assessment=coating_assessment.zone_row(map_num, request.zone_id, assessment),
+                assessment=row,
                 expert_completion_percent=expert_coverage.completion_percent if expert_coverage is not None else None,
                 zone_id=request.zone_id,
                 available=True,

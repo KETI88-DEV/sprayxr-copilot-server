@@ -7,6 +7,7 @@
 * 연결 유지용 comment heartbeat 를 최대 15초 간격으로 보낸다
 * 모든 이벤트에 증가하는 `id`를 담아 `Last-Event-ID` 재연결을 받는다
 * 같은 `sequence_id`의 동일 이상을 중복 발행하지 않는다
+  (도막 등급 알림은 `dedupe_key`로 Zone 단위다 — 한 Zone에 세션당 종류별 1회)
 
 마지막 규칙 때문에 발행 이력을 세션별로 들고 있어야 한다. `MonitorRecorder`와 달리
 구독자가 세션으로 갈리므로 큐를 세션별로 둔다.
@@ -41,7 +42,7 @@ class AnomalyEvent:
 @dataclass
 class _SessionState:
     events: deque[AnomalyEvent] = field(default_factory=lambda: deque(maxlen=_BUFFER_PER_SESSION))
-    # (sequence_id, anomaly_type) — 같은 시퀀스의 동일 이상을 두 번 발행하지 않는다.
+    # (dedupe_key 또는 sequence_id, anomaly_type) — 같은 시퀀스(또는 같은 Zone)의 동일 이상을 두 번 발행하지 않는다.
     published: set[tuple[str, str]] = field(default_factory=set)
 
 
@@ -54,12 +55,13 @@ class AnomalyBroadcaster:
         self._seq = 0
 
     def publish(
-        self, *, session_id: str, sequence_id: str, anomaly_type: str, payload: dict[str, Any]
+        self, *, session_id: str, sequence_id: str, anomaly_type: str, payload: dict[str, Any],
+        dedupe_key: str | None = None,
     ) -> AnomalyEvent | None:
-        """``None``이면 같은 시퀀스의 같은 이상이 이미 발행됐다는 뜻이다."""
+        """``None``이면 같은 시퀀스(`dedupe_key`를 주면 그 열쇠)의 같은 이상이 이미 발행됐다는 뜻이다."""
         with self._guard:
             state = self._sessions.setdefault(session_id, _SessionState())
-            key = (sequence_id, anomaly_type)
+            key = (dedupe_key or sequence_id, anomaly_type)
             if key in state.published:
                 logger.info(
                     "anomaly already published session=%s sequence=%s type=%s",

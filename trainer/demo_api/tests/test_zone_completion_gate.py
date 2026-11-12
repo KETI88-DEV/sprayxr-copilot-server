@@ -346,6 +346,82 @@ def multimap_engine(root: Path) -> CoatingProgressEngine:
     return CoatingProgressEngine(ref, zone_reference_root=catalog)
 
 
+def alert_client(progress: CoatingProgressEngine, root: Path) -> tuple[TestClient, AnomalyBroadcaster]:
+    bus = AnomalyBroadcaster()
+    app = FastAPI()
+    app.include_router(create_telemetry_router(store=SequenceStore(":memory:"),
+        sequence_engine=SequenceAnalysisEngine(root), coating_progress_engine=progress, broadcaster=bus))
+    return TestClient(app), bus
+
+
+def post(client: TestClient, req: AnalyzeSequenceRequest) -> None:
+    assert client.post("/api/v1/copilot/analyze-sequence", json=req.model_dump(mode="json")).status_code == 200
+
+
+def zone2(seq: int, **kwargs: Any) -> AnalyzeSequenceRequest:
+    req = request(seq, **kwargs)
+    req.zone_id = "2"
+    req.sequence_result.cur_sequence_heatmap[0].map_num = 2
+    return req
+
+
+def coating_alerts(bus: AnomalyBroadcaster) -> list[Any]:
+    # 순서·방향 이탈 알림이 같은 통로로 나오므로 종류로 거른다.
+    return [event for event in bus.since("gate-test", last_event_id=0) if event.anomaly_type.startswith("coating_")]
+
+
+def test_overcoat_alert_is_published_once_per_zone(tmp_path: Path) -> None:
+    client, bus = alert_client(engine(tmp_path), tmp_path)
+    post(client, request(value=300))
+    alerts = coating_alerts(bus)
+    assert [(alert.anomaly_type, alert.sequence_id) for alert in alerts] == [("coating_over_app", "SEQ-001")]
+    assert alerts[0].payload == {
+        "reason_code": "zone_grade_above",
+        "message": "기본 목표 160µm 기준: Zone 1가 과도막입니다(칠한 곳 평균 290µm, 목표의 1.5배 이상). "
+                   "이 Zone의 분사를 멈추세요.",
+        "zone_id": "1", "map_num": 1, "status": "over_app", "grade": "above",
+        "thickness_um": 289.9, "target_thickness_um": 160.0, "target_basis": "default_target",
+    }
+    post(client, request(2, value=300))
+    assert len(coating_alerts(bus)) == 1
+
+
+def test_undercoat_alert_fires_when_the_trainee_leaves_a_below_zone(tmp_path: Path) -> None:
+    client, bus = alert_client(multimap_engine(tmp_path), tmp_path)
+    post(client, request(value=100))
+    assert coating_alerts(bus) == []
+    post(client, zone2(2))
+    alerts = coating_alerts(bus)
+    assert [(alert.anomaly_type, alert.sequence_id) for alert in alerts] == [("coating_under_app", "SEQ-002")]
+    # 본문의 Zone은 지금 Zone(2)이 아니라 떠난 Zone(1)이다.
+    assert alerts[0].payload == {
+        "reason_code": "zone_grade_below",
+        "message": "기본 목표 160µm 기준: 방금 떠난 Zone 1가 저도막입니다(칠한 곳 평균 90µm, 목표 미만). "
+                   "돌아가 얇은 곳을 보완하세요.",
+        "zone_id": "1", "map_num": 1, "status": "under_app", "grade": "below",
+        "thickness_um": 90.0, "target_thickness_um": 160.0, "target_basis": "default_target",
+    }
+    post(client, request(3, value=100))
+    post(client, zone2(4))
+    assert len(coating_alerts(bus)) == 1
+
+
+def test_normal_and_unpainted_zones_publish_no_coating_alert(tmp_path: Path) -> None:
+    client, bus = alert_client(multimap_engine(tmp_path), tmp_path)
+    post(client, request(valid_count=0))     # Zone 1에 칠한 곳이 없다
+    post(client, zone2(2))                   # 칠한 곳 없는 Zone 1을 떠난다. Zone 2는 정상
+    post(client, request(3, valid_count=0))  # 정상인 Zone 2를 떠난다
+    assert coating_alerts(bus) == []
+
+
+def test_retried_sequence_does_not_publish_the_coating_alert_again(tmp_path: Path) -> None:
+    client, bus = alert_client(engine(tmp_path), tmp_path)
+    over = request(value=300)
+    post(client, over)
+    post(client, over)
+    assert len(coating_alerts(bus)) == 1
+
+
 def test_all_maps_in_a_sequence_survive_warm_and_cold_replay(tmp_path: Path) -> None:
     warm = multimap_engine(tmp_path)
     first = request()
