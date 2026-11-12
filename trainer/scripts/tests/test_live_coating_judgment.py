@@ -24,6 +24,7 @@ _CONFIGS = Path(__file__).resolve().parents[2] / "configs"
 
 JUDGE = "3번 Zone DFT가 150, 158, 171 µm 인데 목표 160 이면 판정은?"
 ANOMALY = "3번 Zone DFT 측정값이 100, 110, 120, 170 µm 이고 목표가 160 µm 인데 이상 탐지해서 원인 후보도 알려줘."
+SPEC = "지금 측정값 150, 158, 171이야 판정해줘"
 DIAGNOSE = "3번 Zone 도막이 불량이야. DFT 측정값 100, 110, 120, 170 µm, 목표 160 µm. 원인을 단계별로 진단해줘."
 
 
@@ -56,6 +57,19 @@ DIAGNOSE = "3번 Zone 도막이 불량이야. DFT 측정값 100, 110, 120, 170 �
         ("건조도막두께 150 ~ 200 µm 권장인데 맞아?", None),
         ("DFT 170µm, 목표 160~200µm", None),
         ("3번 Zone DFT 1,500µm", None),
+        # 명세 R4a-2 (라) 통과 조건 문장: 도막 낱말 없이 "측정값" 목록 + 판정 의도(내부 채팅의 기본 문맥은 도막)
+        (SPEC, ([150.0, 158.0, 171.0], None)),
+        ("측정값 150, 158, 171 합격이야?", ([150.0, 158.0, 171.0], None)),
+        ("측정값 150, 158, 171이야", None),  # 판정 의도가 없으면 모델로
+        ("지금 150, 158, 171이야 판정해줘", None),  # 측정 표지가 없으면 모델로
+        ("자세 측정값 30, 45 판정해줘", None),
+        ("왼팔 각도 측정값 30, 45도 괜찮아?", None),
+        ("분사 거리 측정값 300, 250 괜찮아?", None),
+        ("속도 측정값 300, 250 판정해줘", None),
+        ("측정 1, 2회 판정해줘", None),
+        ("측정값 1,500 판정해줘", None),
+        ("WFT 측정값 300, 320 판정해줘", None),
+        ("측정값 150 ~ 200 권장 범위 판정해줘", None),
     ],
 )
 def test_parse_dft_question(question: str, parsed: tuple[list[float], float | None] | None) -> None:
@@ -116,6 +130,17 @@ def test_cause_questions_get_the_grade_and_no_invented_cause(question: str) -> N
     assert "과도" not in answer.replace("과도막)", "")  # 규칙 설명의 "과도막" 외에는 없다
     assert "<think>" not in answer
     assert "원인을 정할 수 없습니다" in answer
+
+
+def test_spec_sentence_without_coating_words_is_judged_by_dft_judge() -> None:
+    adapter = _McpAdapter()
+    answer, events = _stream(SPEC, adapter)
+
+    assert adapter.calls == [("dft_judge", {"measurements": [150.0, 158.0, 171.0]})]
+    complete = next(p for kind, p in events if kind == "complete")
+    assert complete["tool_call_count"] == 1
+    assert "저도막" in answer and "기본 목표 160µm" in answer
+    assert "90/10" not in answer and "합격" not in answer
 
 
 def test_six_band_distribution_is_reported() -> None:

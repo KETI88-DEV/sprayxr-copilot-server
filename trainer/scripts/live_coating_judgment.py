@@ -29,6 +29,7 @@ _OTHER_UNIT_RE: Final = re.compile(rf"{_NUMBER}\s*(?:mm|cm|m/s|%|도(?!막)|회|
 _NOT_MEASUREMENT: Final = ("wft", "자세", "각도", "거리", "속도", "규정", "권장", "사이", "최소", "최대", "범위")
 _MEASURE_MARKERS: Final = ("측정값", "측정")
 _COATING_WORDS: Final = ("dft", "도막", "두께", "μm")
+_JUDGE_WORDS: Final = ("판정", "합격", "괜찮", "통과", "어때")
 _CAUSE_WORDS: Final = ("원인", "진단", "이상 탐지", "이상탐지", "왜")
 
 
@@ -43,7 +44,9 @@ def parse_dft_question(instruction: str) -> tuple[list[float], float | None] | N
     shortcut: 쉼표 목록(µm 또는 "측정값" 표지) 또는 질문의 유일한 µm 붙은 수만 측정값으로 본다. 그 밖의 말투("150과 158", 공백 목록)는 모델로 보낸다.
     """
     text = instruction.casefold()
-    if not any(word in text for word in _COATING_WORDS) or any(word in text for word in _NOT_MEASUREMENT):
+    # 내부 채팅의 기본 문맥은 도막이라 "측정값" 표지 + 판정 의도면 도막 낱말이 없어도 받는다(명세 R4a-2 (라) 확인 문장).
+    asked = any(word in text for word in _MEASURE_MARKERS) and any(word in text for word in _JUDGE_WORDS)
+    if not (asked or any(word in text for word in _COATING_WORDS)) or any(word in text for word in _NOT_MEASUREMENT):
         return None
     if _RANGE_RE.search(text) or _THOUSANDS_RE.search(text) or _OTHER_UNIT_RE.search(text):
         return None
