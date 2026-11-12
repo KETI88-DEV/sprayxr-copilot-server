@@ -362,7 +362,19 @@ button.chip:hover { background: var(--raised-hover); color: var(--ink); }
 .composer input::placeholder { color: var(--ink-3); }
 .composer .send { width: 40px; height: 40px; border-radius: 10px; }
 .composer-tools { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
-.composer-tools .pick select { height: 28px; max-width: 148px; font-size: 12px; }
+/* 답변 언어: 국기 12개가 한 줄을 고르게 나눠 쓴다. 고른 언어만 또렷하게 보인다 */
+.flags { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 4px; }
+.flag {
+  display: grid; place-items: center; min-width: 0; height: 28px; padding: 0;
+  border: 1px solid var(--line); border-radius: 6px; background: transparent;
+}
+.flag img { display: block; width: 20px; height: 15px; border-radius: 2px; object-fit: cover; opacity: .64; }
+.flag:hover { background: var(--raised); }
+.flag:hover img, .flag[aria-checked="true"] img { opacity: 1; }
+.flag[aria-checked="true"] { border-color: var(--accent-line); background: var(--accent-soft); }
+.language-name { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-2); font-size: 12px; }
+.language-name .lucide { width: 14px; height: 14px; color: var(--ink-3); }
+.chip img { width: 16px; height: 12px; border-radius: 2px; object-fit: cover; }
 
 @media (prefers-reduced-motion: reduce) {
   .loading-bar::after { animation: none; inset: 0; }

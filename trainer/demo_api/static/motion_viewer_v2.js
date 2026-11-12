@@ -383,10 +383,20 @@
     { id: 'knowledge', task: 'knowledge_search', label: '지식', icon: 'book-open', hint: '도장 지식을 질문',
       presets: ['저도막이 뭐야?', '적정 이격거리는?', '적정 분사 속도는?', '과도막의 원인은?'] },
   ];
-  const LANGUAGES = [['ko', '한국어'], ['en', 'English'], ['vi', 'Tiếng Việt'], ['id', 'Bahasa Indonesia'], ['th', 'ไทย'], ['ne', 'नेपाली'],
-    ['my', 'မြန်မာ'], ['uz', 'O‘zbekcha'], ['si', 'සිංහල'], ['ru', 'Русский'], ['zh', '中文'], ['km', 'ខ្មែរ']];
+  // 답변 언어: [언어 코드, 국기 파일, 그 언어로 쓴 이름, 한국어 이름]. 기존 뷰어 질문 창과 같은 12개, 같은 순서다.
+  const LANGUAGES = [['ko', 'kr', '한국어', '한국어'], ['en', 'us', 'English', '영어'], ['vi', 'vn', 'Tiếng Việt', '베트남어'],
+    ['id', 'id', 'Bahasa Indonesia', '인도네시아어'], ['th', 'th', 'ไทย', '태국어'], ['ne', 'np', 'नेपाली', '네팔어'],
+    ['my', 'mm', 'မြန်မာ', '미얀마어'], ['uz', 'uz', 'O‘zbekcha', '우즈베크어'], ['si', 'lk', 'සිංහල', '싱할라어'],
+    ['ru', 'ru', 'Русский', '러시아어'], ['zh', 'cn', '中文', '중국어'], ['km', 'kh', 'ខ្មែរ', '크메르어']];
+  const flagImage = (country) => {
+    const image = el('img');
+    image.src = `${options.flagBase || '/motion-viewer/assets/flags/'}${country}.svg`;
+    image.alt = '';
+    return image;
+  };
   const MODEL = { quick: '8B', detailed: '27B' };
   const TIMEOUT_SECONDS = { quick: 45, detailed: 120 };
+  const TRANSLATED_TIMEOUT_SECONDS = 150;   // 번역은 27B가 한다. 영어를 거치는 언어는 긴 답에 1분쯤 걸렸다(2026-11-12 시험 서버)
 
   const chat = (() => {
     const root = $('v2Ask');
@@ -429,17 +439,47 @@
     const modes = el('div', 'seg');
     modes.setAttribute('role', 'group');
     modes.setAttribute('aria-label', '답변 수준');
-    const language = el('select');
-    language.setAttribute('aria-label', '답변 언어');
-    for (const [code, label] of LANGUAGES) language.append(new Option(label, code));
-    const languageBox = el('span', 'pick');
-    languageBox.innerHTML = svg('languages');
-    languageBox.append(language);
-    languageBox.hidden = Boolean(options.fixedLanguage);
+    // 답변 언어는 국기 12개를 늘 보이게 둔다. 질문은 한국어로 보내고 답만 고른 언어로 받는다.
+    let language = LANGUAGES[0];
+    const flags = el('div', 'flags');
+    flags.setAttribute('role', 'radiogroup');
+    flags.setAttribute('aria-label', '답변 언어');
+    const languageName = el('span', 'language-name');
+    languageName.title = '답변 언어. 질문은 한국어로 보냅니다';
+    const chooseLanguage = (index, focus = false) => {
+      language = LANGUAGES[index];
+      languageName.innerHTML = svg('languages');
+      languageName.append(language[2]);
+      languageName.lang = language[0];
+      [...flags.children].forEach((button, i) => {
+        button.setAttribute('aria-checked', String(i === index));
+        button.tabIndex = i === index ? 0 : -1;
+      });
+      if (focus) flags.children[index].focus();
+    };
+    LANGUAGES.forEach(([code, country, name, korean], index) => {
+      const button = el('button', 'flag');
+      button.type = 'button';
+      button.setAttribute('role', 'radio');
+      button.title = code === 'ko' ? name : `${name} · ${korean}`;
+      button.setAttribute('aria-label', button.title);
+      button.append(flagImage(country));
+      button.addEventListener('click', () => chooseLanguage(index));
+      button.addEventListener('keydown', (event) => {
+        const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[event.key];
+        const next = step ? (index + step + LANGUAGES.length) % LANGUAGES.length
+          : event.key === 'Home' ? 0 : event.key === 'End' ? LANGUAGES.length - 1 : null;
+        if (next == null) return;
+        event.preventDefault();
+        chooseLanguage(next, true);
+      });
+      flags.append(button);
+    });
+    chooseLanguage(0);
     // 기록된 응답만 보여 주는 화면(링크용)에서는 준비된 질문만 쓴다.
     input.disabled = send.disabled = Boolean(options.presetOnly);
-    tools.append(modes, languageBox);
-    form.append(line, tools);
+    tools.append(modes, languageName);
+    form.append(line, flags, tools);
     root.append(head, tabs, log, presets, form);
 
     const empty = () => {
@@ -547,14 +587,14 @@
       return null;
     };
 
-    async function ask(question) {
+    async function ask(question, answerLanguage = language) {
       const prompt = String(question || '').trim();
       if (!prompt || busy) return;
       if (!data && tab.id !== 'knowledge') {
         bubble('msg-a is-error', '기록을 불러온 뒤에 질문할 수 있습니다.');
         return;
       }
-      const sent = { tab, mode, data, state: { map_num: anchor.map_num, zone_id: anchor.zone_id, source_index: anchor.source_index, playhead_seconds: anchor.playhead_seconds },
+      const sent = { tab, mode, language: answerLanguage, data, state: { map_num: anchor.map_num, zone_id: anchor.zone_id, source_index: anchor.source_index, playhead_seconds: anchor.playhead_seconds },
         armPending: tab.id === 'pose' && data && data.arm_pose_evaluation === undefined };
       const asked = bubble('msg-q', prompt);
       const meta = el('div', 'msg-meta');
@@ -577,20 +617,26 @@
       const started = performance.now();
       let reason = null;
       const ticker = setInterval(() => { wait.textContent = `답을 찾는 중 ${Math.round((performance.now() - started) / 1000)}초`; }, 1000);
-      const limit = setTimeout(() => { reason = 'timeout'; controller.abort(); }, TIMEOUT_SECONDS[sent.mode] * 1000);
+      const limitSeconds = sent.language[0] === 'ko' ? TIMEOUT_SECONDS[sent.mode] : TRANSLATED_TIMEOUT_SECONDS;
+      const limit = setTimeout(() => { reason = 'timeout'; controller.abort(); }, limitSeconds * 1000);
       cancel.addEventListener('click', () => { reason = 'cancel'; controller.abort(); });
       busy = controller;
       send.disabled = true;
-      const fail = (message, retry = true) => {
+      const fail = (message, retry = true, inKorean = false) => {
         const node = bubble('msg-a is-error', message);
         if (!input.value && !options.presetOnly) input.value = prompt;
         if (!retry) return;
-        const again = el('button', 'chip', '다시 보내기');
-        again.type = 'button';
-        again.addEventListener('click', () => { if (input.value === prompt) input.value = ''; ask(prompt); });
         const row = el('div', 'msg-meta');
-        row.append(again);
+        const resend = (label, answerIn) => {
+          const button = el('button', 'chip', label);
+          button.type = 'button';
+          button.addEventListener('click', () => { if (input.value === prompt) input.value = ''; ask(prompt, answerIn); });
+          row.append(button);
+        };
+        resend('다시 보내기', sent.language);
+        if (inKorean) resend('한국어로 보기', LANGUAGES[0]);   // 서버 안내: 번역이 안 되면 다시 보내거나 한국어로 받는다
         node.append(row);
+        scroll();
       };
       try {
         const response = await fetch('/api/v1/copilot/query', {
@@ -601,7 +647,7 @@
             session_id: sent.data?.selected_session_id ?? null,
             scenario_id: sent.data?.mode_id != null ? String(sent.data.mode_id) : null,
             task_type: sent.tab.task, prompt, response_mode: sent.mode,
-            language: 'ko', response_language: language.value, use_rag: 'Y',
+            language: 'ko', response_language: sent.language[0], use_rag: 'Y',
             context: sent.data ? context(sent.tab.task, sent.data, sent.state) : null,
           }),
         });
@@ -609,13 +655,22 @@
         try { payload = await response.json(); } catch { /* 본문이 JSON이 아니다 */ }
         waiting.remove();
         if (!payload) { fail(`서버가 답을 주지 못했습니다(HTTP ${response.status}). 잠시 뒤 다시 보내 주세요.`); return; }
-        if (!response.ok || payload.status !== 'SUCCESS') { fail(`질문을 처리하지 못했습니다. ${payload.message || `HTTP ${response.status}`}`); return; }
+        if (response.status === 503 && sent.language[0] !== 'ko') { fail(`답을 ${sent.language[3]}로 옮기지 못했습니다.`, true, true); return; }
+        if (!response.ok || payload.status !== 'SUCCESS') { fail(`질문을 처리하지 못했습니다. ${payload.message || `HTTP ${response.status}`}`, true, sent.language[0] !== 'ko'); return; }
         const result = { ...payload.data, answer_source: response.headers.get('X-Copilot-Answer-Source') };
         const answer = bubble('msg-a', result.answer);
+        answer.lang = sent.language[0];
         const row = el('div', 'msg-meta');
+        row.lang = 'ko';
         const source = sourceChip(result, sent.mode);
         if (source) row.append(source);
         if (result.citations?.length) row.append(chip('book-open', `출처 ${result.citations.length}`, result.citations.join('\n')));
+        if (sent.language[0] !== 'ko') {
+          const said = el('span', 'chip');
+          said.append(flagImage(sent.language[1]), sent.language[2]);
+          said.title = `답변 언어 · ${sent.language[3]}`;
+          row.append(said);
+        }
         if (result.context_status === 'not_available') {
           const none = chip('info', '기록 자료 없음', '이 질문에 쓸 기록 분석 자료가 없었습니다.');
           none.classList.add('is-warn');
@@ -628,7 +683,7 @@
       } catch (error) {
         waiting.remove();
         if (reason === 'cancel') { if (!input.value && !options.presetOnly) input.value = prompt; return; }
-        fail(reason === 'timeout' ? `${TIMEOUT_SECONDS[sent.mode]}초 안에 답이 오지 않아 멈췄습니다.` : '서버에 연결하지 못했습니다. 네트워크를 확인해 주세요.');
+        fail(reason === 'timeout' ? `${limitSeconds}초 안에 답이 오지 않아 멈췄습니다.` : '서버에 연결하지 못했습니다. 네트워크를 확인해 주세요.', true, reason === 'timeout' && sent.language[0] !== 'ko');
       } finally {
         clearInterval(ticker);
         clearTimeout(limit);

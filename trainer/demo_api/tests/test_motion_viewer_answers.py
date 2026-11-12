@@ -190,3 +190,16 @@ def test_v2_page_keeps_every_element_the_playback_scripts_use() -> None:
     needed = set(__import__("re").findall(r"\$\('([A-Za-z0-9_]+)'\)", scripts))
     assert needed and needed <= ids and "function loadMotion" in document and "/*CORE_SCRIPT*/" not in document
     assert {"poseUiTemplate", "zoneTimeline", "realtimeHudSpeed", "coatingCanvas", "v2Ask"} <= ids
+
+
+def test_v2_question_column_offers_the_same_answer_languages_as_the_first_viewer() -> None:
+    import re
+    from pathlib import Path
+
+    static = Path(motion_viewer.__file__).with_name("static")
+    pairs = re.compile(r"\['([a-z]{2})', '([a-z]{2})', ")
+    first = pairs.findall((static / "motion_viewer_chat.js").read_text(encoding="utf-8"))
+    second = pairs.findall((static / "motion_viewer_v2.js").read_text(encoding="utf-8"))
+    assert len(first) == 12 and second == first
+    assert all((static / "flags" / f"{country}.svg").is_file() for _, country in second)
+    assert "response_language: sent.language[0]" in (static / "motion_viewer_v2.js").read_text(encoding="utf-8")
