@@ -36,6 +36,21 @@ def test_origin_migration_preserves_unknown_history_and_retry_origin(tmp_path):
         assert conn.execute("SELECT creation_path FROM sessions WHERE session_id='NORMAL'").fetchone()[0] == "/api/v1/sessions/start"
 
 
+def test_target_basis_migration_keeps_old_rows_unknown(tmp_path):
+    from trainer.demo_api import coating_assessment
+    path = tmp_path / "old.db"
+    with sqlite3.connect(path) as conn:
+        conn.executescript("""CREATE TABLE sessions(session_id TEXT PRIMARY KEY,user_id TEXT,scenario_id TEXT,
+          session_status TEXT,started_at TEXT,ended_at TEXT,target_thickness_um REAL);
+          INSERT INTO sessions VALUES('OLD','U','3','ACTIVE','old',NULL,160.0);""")
+    store = V1Store(str(path))
+    row = store.get_session("OLD")
+    store.close()
+    assert row is not None and row.target_basis is None
+    # 생략했는지 알 수 없는 옛 행은 저장된 목표를 세션 목표로 본다.
+    assert coating_assessment.session_target(row) == 160.0
+
+
 def _viewer(monkeypatch, tmp_path):
     path = tmp_path / "viewer.db"
     state = V1Store(str(path))

@@ -105,6 +105,46 @@ def test_start_remains_backward_compatible_without_target_thickness() -> None:
     assert response.json()["data"]["target_thickness_um"] == 160.0
 
 
+def _app_with_store() -> tuple[TestClient, V1Store]:
+    state = V1Store(":memory:")
+    app = FastAPI()
+    app.include_router(create_v1_router(store=state, broadcaster=AnomalyBroadcaster()))
+    return TestClient(app), state
+
+
+def test_start_records_whether_the_target_was_supplied() -> None:
+    """생략한 목표도 160.0으로 저장되므로, 세션이 목표를 정했는지는 target_basis 로만 가른다."""
+    client, state = _app_with_store()
+
+    omitted = client.post("/api/v1/sessions/start", json=_start_body(session_id="1_1_1"))
+    explicit = client.post(
+        "/api/v1/sessions/start", json=_start_body(session_id="1_1_2", target_thickness_um=160.0)
+    )
+    null = client.post(
+        "/api/v1/sessions/start", json=_start_body(session_id="1_1_3", target_thickness_um=None)
+    )
+
+    assert (omitted.status_code, explicit.status_code, null.status_code) == (200, 200, 200)
+    assert omitted.json()["data"]["target_thickness_um"] == 160.0
+    assert "target_basis" not in omitted.json()["data"]
+    rows = [state.get_session(f"1_1_{n}") for n in (1, 2, 3)]
+    assert [(row.target_thickness_um, row.target_basis) for row in rows if row is not None] == [
+        (160.0, "default_target"), (160.0, "session_target"), (None, "default_target"),
+    ]
+
+
+def test_retried_start_keeps_the_first_target_basis() -> None:
+    """같은 목표 값의 재전송은 충돌이 아니고, 처음 기록한 기준을 덮어쓰지 않는다."""
+    client, state = _app_with_store()
+    client.post("/api/v1/sessions/start", json=_start_body())
+
+    retry = client.post("/api/v1/sessions/start", json=_start_body(target_thickness_um=160.0))
+
+    assert retry.status_code == 200
+    row = state.get_session("1_1000053_1")
+    assert row is not None and row.target_basis == "default_target"
+
+
 @pytest.mark.parametrize("invalid", [0, -1, 20000.1])
 def test_start_rejects_invalid_target_coating_thickness(invalid: float) -> None:
     client, _ = _app()

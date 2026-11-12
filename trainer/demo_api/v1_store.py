@@ -50,7 +50,8 @@ _SCHEMA: Final[tuple[str, ...]] = (
         started_at     TEXT,
         ended_at       TEXT,
         target_thickness_um REAL,
-        created_at TEXT
+        created_at TEXT,
+        target_basis TEXT
     )
     """,
     """
@@ -84,6 +85,8 @@ class SessionRow:
     started_at: str | None
     ended_at: str | None
     target_thickness_um: float | None
+    # 생략한 목표도 160.0으로 저장되므로 세션이 목표를 정했는지는 이 값으로만 가른다. 옛 행은 None.
+    target_basis: str | None = None
 
 
 @dataclass(frozen=True)
@@ -118,7 +121,7 @@ class V1Store:
             if "created_at" not in session_columns:
                 self._conn.execute("ALTER TABLE sessions ADD COLUMN created_at TEXT")
             # Nullable metadata: migration cannot establish the origin of old rows.
-            for name in ("creation_origin", "creation_path"):
+            for name in ("creation_origin", "creation_path", "target_basis"):
                 if name not in session_columns:
                     self._conn.execute(f"ALTER TABLE sessions ADD COLUMN {name} TEXT")
             columns = {str(row[1]) for row in self._conn.execute("PRAGMA table_info(completions)")}
@@ -194,17 +197,20 @@ class V1Store:
         self, *, session_id: str, user_id: str, scenario_id: str, started_at: str,
         target_thickness_um: float | None = None,
         creation_origin: str | None = None, creation_path: str | None = None,
+        target_basis: str | None = None,
     ) -> SessionRow:
         return self.start_session_with_created(
             session_id=session_id, user_id=user_id, scenario_id=scenario_id,
             started_at=started_at, target_thickness_um=target_thickness_um,
             creation_origin=creation_origin, creation_path=creation_path,
+            target_basis=target_basis,
         )[0]
 
     def start_session_with_created(
         self, *, session_id: str, user_id: str, scenario_id: str, started_at: str,
         target_thickness_um: float | None = None,
         creation_origin: str | None = None, creation_path: str | None = None,
+        target_basis: str | None = None,
     ) -> tuple[SessionRow, bool]:
         """Return creation ownership atomically so retries cannot reset event history."""
         if creation_origin not in {None, "real", "test"}:
@@ -212,7 +218,7 @@ class V1Store:
         with self._guard, self._conn:
             self._conn.execute("BEGIN IMMEDIATE")
             existing = self._conn.execute(
-                "SELECT session_id, user_id, scenario_id, session_status, started_at, ended_at, target_thickness_um FROM sessions WHERE session_id = ?",
+                "SELECT session_id, user_id, scenario_id, session_status, started_at, ended_at, target_thickness_um, target_basis FROM sessions WHERE session_id = ?",
                 (session_id,),
             ).fetchone()
             if existing is not None:
@@ -221,13 +227,13 @@ class V1Store:
                     raise SessionConflict("session_id already exists with different start parameters")
                 return row, False
             self._conn.execute(
-                "INSERT INTO sessions (session_id, user_id, scenario_id, session_status, started_at, ended_at, target_thickness_um, created_at, creation_origin, creation_path)"
-                " VALUES (?, ?, ?, 'ACTIVE', ?, NULL, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'), ?, ?)",
-                (session_id, user_id, scenario_id, started_at, target_thickness_um, creation_origin, creation_path),
+                "INSERT INTO sessions (session_id, user_id, scenario_id, session_status, started_at, ended_at, target_thickness_um, created_at, creation_origin, creation_path, target_basis)"
+                " VALUES (?, ?, ?, 'ACTIVE', ?, NULL, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now'), ?, ?, ?)",
+                (session_id, user_id, scenario_id, started_at, target_thickness_um, creation_origin, creation_path, target_basis),
             )
         return SessionRow(
             session_id, user_id, scenario_id, "ACTIVE", started_at, None,
-            target_thickness_um,
+            target_thickness_um, target_basis,
         ), True
 
     def end_session(
@@ -237,7 +243,7 @@ class V1Store:
         with self._guard, self._conn:
             self._conn.execute("BEGIN IMMEDIATE")
             existing = self._conn.execute(
-                "SELECT session_id, user_id, scenario_id, session_status, started_at, ended_at, target_thickness_um FROM sessions WHERE session_id = ?",
+                "SELECT session_id, user_id, scenario_id, session_status, started_at, ended_at, target_thickness_um, target_basis FROM sessions WHERE session_id = ?",
                 (session_id,),
             ).fetchone()
             if existing is not None:
@@ -254,7 +260,7 @@ class V1Store:
                 (session_id, user_id, scenario_id, ended_at),
             )
             row = self._conn.execute(
-                "SELECT session_id, user_id, scenario_id, session_status, started_at, ended_at, target_thickness_um"
+                "SELECT session_id, user_id, scenario_id, session_status, started_at, ended_at, target_thickness_um, target_basis"
                 " FROM sessions WHERE session_id = ?",
                 (session_id,),
             ).fetchone()
@@ -263,7 +269,7 @@ class V1Store:
     def get_session(self, session_id: str) -> SessionRow | None:
         with self._guard:
             row = self._conn.execute(
-                "SELECT session_id, user_id, scenario_id, session_status, started_at, ended_at, target_thickness_um"
+                "SELECT session_id, user_id, scenario_id, session_status, started_at, ended_at, target_thickness_um, target_basis"
                 " FROM sessions WHERE session_id = ?",
                 (session_id,),
             ).fetchone()

@@ -347,6 +347,13 @@ def create_v1_router(
                     session_id=body.session_id, user_id=body.user_id, scenario_id=body.scenario_id,
                     started_at=body.started_at, target_thickness_um=body.target_thickness_um,
                     creation_origin="real", creation_path="/api/v1/sessions/start",
+                    # 생략해도 계약 기본값 160.0이 저장되므로, 세션이 목표를 정했는지를 따로 남긴다.
+                    target_basis=(
+                        "session_target"
+                        if "target_thickness_um" in body.model_fields_set
+                        and body.target_thickness_um is not None
+                        else "default_target"
+                    ),
                 )
             )
         except SessionConflict as exc:
