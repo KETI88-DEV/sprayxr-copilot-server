@@ -14,7 +14,7 @@ import logging
 import threading
 import time
 from datetime import datetime, timezone
-from typing import Any, Final, Iterator, Protocol
+from typing import Any, Final, Iterator, Literal, Protocol
 
 from anyio import to_thread
 from fastapi import APIRouter
@@ -96,9 +96,41 @@ _FEEDBACK_ROW_KEYS: Final = (
 )
 
 
-def _coating_feedback(progress: CoatingProgress) -> CoatingFeedback:
+# 2026-11-12 책임자 결정 3: 엇갈리면 PR #8 조절 후보를 앞세운다. 바꾸려면 "expert_guidance"로.
+ADVICE_PRIORITY: Final[Literal["coating_adjustment", "expert_guidance"]] = "coating_adjustment"
+
+# (조절 후보 변수, 방향) -> 엇갈리는 guide 상태. 같은 방향(decrease와 fast/far)은 엇갈림이 아니다.
+_CONFLICTING_GUIDE: Final = {
+    ("speed_mm_s", "decrease"): ("slow", "ok"),
+    ("speed_mm_s", "increase"): ("fast", "ok"),
+    ("distance_mm", "decrease"): ("near", "ok"),
+    ("distance_mm", "increase"): ("far", "ok"),
+}
+_GUIDE_FIELD: Final = {"speed_mm_s": "speed", "distance_mm": "distance"}
+
+
+def _reconcile_advice(
+    guide: SequenceGuide, row: dict[str, Any] | None, priority: str | None = None,
+) -> tuple[SequenceGuide, dict[str, Any] | None]:
+    """조절 후보와 엇갈리는 guide 항목(또는 priority가 expert_guidance면 그 후보)을 뺀다. 입력은 고치지 않는다."""
+    priority = priority or ADVICE_PRIORITY  # 호출 때 읽어 상수를 바꾸면 바로 반영된다
+    if row is None:
+        return guide, row
+    clashing = [
+        item for item in row["adjustments"]
+        if (g := getattr(guide, _GUIDE_FIELD[item["variable"]])).available
+        and g.status in _CONFLICTING_GUIDE[(item["variable"], item["direction"])]
+    ]
+    if not clashing:
+        return guide, row
+    if priority == "expert_guidance":
+        return guide, {**row, "adjustments": [a for a in row["adjustments"] if a not in clashing]}
+    withheld = GuideItem(status=None, message=None, available=False, reason="coating_adjustment_priority")
+    return guide.model_copy(update={_GUIDE_FIELD[item["variable"]]: withheld for item in clashing}), row
+
+
+def _coating_feedback(progress: CoatingProgress, row: dict[str, Any] | None) -> CoatingFeedback:
     """엔진이 건넨 평가 행(`coating_assessment.zone_row`)을 그대로 옮긴다. 여기서 다시 계산하지 않는다."""
-    row = progress.assessment
     if row is None:
         return CoatingFeedback(
             analysis_status="not_available", reason_code=progress.reason or "coating_assessment_unavailable")
@@ -277,10 +309,11 @@ def create_telemetry_router(
                     coating_progress = coating_progress_engine.evaluate(query)
                 if decision is not None:
                     decision = gate_sequence_decision(query, decision, coating_progress)
+                guide, feedback_row = _reconcile_advice(guide, coating_progress.assessment)
                 cached = {
                     "guide": guide.model_dump(mode="json"),
                     "coating_progress": coating_progress.model_dump(mode="json"),
-                    "coating_feedback": _coating_feedback(coating_progress).model_dump(mode="json"),
+                    "coating_feedback": _coating_feedback(coating_progress, feedback_row).model_dump(mode="json"),
                     "sequence_feedback": (decision.feedback.model_dump(mode="json") if decision else
                                           common_data["sequence_feedback"].model_dump(mode="json")),
                     "text_guide": decision.text_guide if decision else None,
@@ -382,7 +415,9 @@ def create_telemetry_router(
             "이미 누적된 값을 더하지 않고, 현재 시퀀스가 도포한 크롭 영역의 최신 절대 두께로 갱신하여 "
 
             "추가 도장/다음 Zone 이동/과도장 중단 여부를 coating_progress로 반환합니다. "
-            "도막 등급·분포·조절 후보는 coating_feedback으로 반환합니다."
+            "도막 등급·분포·조절 후보는 coating_feedback으로 반환합니다. "
+            "같은 변수에 대해 coating_feedback.adjustments와 guide가 다른 방향을 가리키면 "
+            "guide 항목은 available=false, reason=\"coating_adjustment_priority\"로 비웁니다."
         ),
     )
     async def analyze_sequence(query: AnalyzeSequenceRequest) -> JSONResponse:

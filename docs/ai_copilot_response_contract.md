@@ -178,6 +178,17 @@ POST /sessions/end
 
 이전 판이 정의한 `uv_bin`, `zone_class`, `under_frac`, `action`, `action_reachable`, `provisional`은 아직 내지 않는다.
 
+`analyze-sequence`의 `guide`(전문가 대비 속도·거리 안내)는 같은 변수의 `adjustments` 후보와 엇갈리면 PR #8 후보를 앞세운다(2026-11-12 책임자 결정 3). 엇갈린 `guide` 항목은 `{"status": null, "message": null, "available": false, "reason": "coating_adjustment_priority"}`로 나간다.
+
+| 조절 후보 | 비우는 `guide` 상태 |
+|---|---|
+| `speed_mm_s` `decrease` | `slow`, `ok` |
+| `speed_mm_s` `increase` | `fast`, `ok` |
+| `distance_mm` `decrease` | `near`, `ok` |
+| `distance_mm` `increase` | `far`, `ok` |
+
+같은 방향(예: `decrease`와 `fast`)이거나 후보가 없으면 `guide`는 그대로다. 우선순위는 `telemetry_router.ADVICE_PRIORITY`(`coating_adjustment` 또는 `expert_guidance`) 하나이며, `expert_guidance`로 바꾸면 `guide`를 두고 엇갈린 후보를 `adjustments`와 `message`에서 뺀다.
+
 ### 3.5 `sequence_feedback`
 
 | 필드 | 타입 | 필수 | 설명 |

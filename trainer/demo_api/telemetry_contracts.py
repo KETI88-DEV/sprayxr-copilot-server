@@ -383,6 +383,8 @@ class CoatingFeedback(EngineFeedback):
 
 
 class GuideItem(StrictModel):
+    """`reason="coating_adjustment_priority"`는 같은 응답의 도막 조절 후보와 엇갈려 비운 항목이다."""
+
     status: SpeedGuideStatus | DistanceGuideStatus | None
     message: str | None
     available: bool

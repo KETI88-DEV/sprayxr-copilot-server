@@ -276,6 +276,77 @@ def test_analyze_sequence_fills_coating_feedback_from_the_assessment() -> None:
     assert client.post(ANALYZE_SEQUENCE_PATH, json=_body(scenario_id="3")).json()["data"]["coating_feedback"] == feedback
 
 
+def _assessed(grade: str, *directions: tuple[str, str]) -> Any:
+    row = {**_ZONE_ROW, "grade": grade, "adjustments": [
+        {"variable": var, "direction": d, "priority": i + 1, "evidence_kind": "quality_rule_candidate"}
+        for i, (var, d) in enumerate(directions)]}
+
+    class _Stub:
+        def evaluate(self, request: Any) -> CoatingProgress:
+            return _ProgressStub().evaluate(request).model_copy(update={"assessment": dict(row)})
+
+    return _Stub()
+
+
+_BOTH = (("speed_mm_s", "decrease"), ("distance_mm", "decrease"))
+_WITHHELD = {"status": None, "message": None, "available": False, "reason": "coating_adjustment_priority"}
+
+
+def _analyze(guide: SequenceGuide, progress: Any) -> dict[str, Any]:
+    client = _client(guidance_engine=_GuidanceStub(guide), coating_progress_engine=progress)
+    return client.post(ANALYZE_SEQUENCE_PATH, json=_body(scenario_id="3")).json()["data"]
+
+
+def test_opposite_expert_guide_is_withheld_when_coating_adjustment_leads() -> None:
+    data = _analyze(_guide(speed="slow", distance="far"), _assessed("below", *_BOTH))
+
+    assert data["guide"]["speed"] == _WITHHELD
+    assert data["guide"]["distance"]["status"] == "far"
+    assert [a["variable"] for a in data["coating_feedback"]["adjustments"]] == ["speed_mm_s", "distance_mm"]
+    assert "이동 속도를 낮추는 쪽" in data["coating_feedback"]["message"]
+
+
+def test_ok_guide_is_withheld_when_a_coating_adjustment_exists() -> None:
+    data = _analyze(_guide(speed="ok", distance="far"), _assessed("below", *_BOTH))
+
+    assert data["guide"]["speed"]["reason"] == "coating_adjustment_priority"
+
+
+def test_agreeing_guide_and_adjustment_are_both_kept() -> None:
+    data = _analyze(_guide(speed="fast", distance="far"), _assessed("below", *_BOTH))
+
+    assert data["guide"] == _guide(speed="fast", distance="far").model_dump(mode="json")
+    assert len(data["coating_feedback"]["adjustments"]) == 2
+
+
+def test_expert_priority_drops_the_conflicting_adjustment_instead(monkeypatch: pytest.MonkeyPatch) -> None:
+    from trainer.demo_api import telemetry_router
+
+    monkeypatch.setattr(telemetry_router, "ADVICE_PRIORITY", "expert_guidance")
+    data = _analyze(_guide(speed="slow", distance="far"), _assessed("below", *_BOTH))
+
+    assert data["guide"] == _guide(speed="slow", distance="far").model_dump(mode="json")
+    assert [a["variable"] for a in data["coating_feedback"]["adjustments"]] == ["distance_mm"]
+    assert "이동 속도" not in data["coating_feedback"]["message"]
+
+
+@pytest.mark.parametrize("grade,directions", [
+    ("below", _BOTH),
+    ("above", (("speed_mm_s", "increase"), ("distance_mm", "increase"))),
+])
+def test_no_response_carries_contradicting_speed_or_distance_advice(
+    grade: str, directions: tuple[tuple[str, str], ...],
+) -> None:
+    from trainer.demo_api.telemetry_router import _CONFLICTING_GUIDE
+
+    for speed in ("slow", "ok", "fast"):
+        for distance in ("near", "ok", "far"):
+            data = _analyze(_guide(speed=speed, distance=distance), _assessed(grade, *directions))
+            for item in data["coating_feedback"]["adjustments"]:
+                field = "speed" if item["variable"] == "speed_mm_s" else "distance"
+                assert data["guide"][field]["status"] not in _CONFLICTING_GUIDE[(item["variable"], item["direction"])]
+
+
 def test_analyze_sequence_reports_a_zone_with_nothing_painted_as_not_available() -> None:
     row = {**_ZONE_ROW, "status": None, "grade": None, "thickness_um": None, "unpainted_fraction": 1.0,
            "adjustments": [], "adjustment_reason": "no_valid_painted_pixels"}
