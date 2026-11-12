@@ -56,7 +56,22 @@
     return Math.max(0, before);
   };
 
-  const api = { KIND, DIRECTION, merge, isJump, crossed, short, describe, seekIndex };
+  /** 알림으로 옮긴 프레임이 알림 Zone 을 칠하지 않으면(건너뛴 Zone·이동 중) 따로 강조할 그 Zone. HUD 는 실제 프레임을 그대로 보인다. */
+  const alertZone = (frame, alert) => (alert?.zone_id == null ? null
+    : frame?.spraying && String(frame.zone_id) === String(alert.zone_id) ? null : String(alert.zone_id));
+
+  const NOTE = { process_not_supported: '블라스팅 기록은 순서를 판정하지 않습니다', sequence_reference_unavailable: '전문가 순서 기준이 없습니다',
+    sequence_reference_context_unavailable: '전문가 순서 기준이 없습니다', no_sequences: '순서를 판정할 분사 구간이 없습니다' };
+  /** 목록 머리 문장. 순서·방향 알림(/motion-viewer/api/alerts)은 모션 응답보다 늦게 오므로 그 전에는 불러오는 중이다. */
+  const listStatus = (record, total) => {
+    const sequence = record?.sequence_alerts;
+    const pending = Boolean(record) && sequence === undefined;
+    const reason = sequence && sequence.status !== 'available' ? NOTE[sequence.reason_code] || '순서 판정을 불러오지 못했습니다' : '';
+    const tail = pending ? '순서·방향 알림을 불러오는 중' : total ? '' : '이 기록에는 알림이 없습니다';
+    return { pending, text: [reason, tail].filter(Boolean).join('. ') };
+  };
+
+  const api = { KIND, DIRECTION, merge, isJump, crossed, short, describe, seekIndex, alertZone, listStatus };
   globalThis.motionViewerAlerts = api;
   if (typeof module === 'object' && module.exports) module.exports = api;
 })();

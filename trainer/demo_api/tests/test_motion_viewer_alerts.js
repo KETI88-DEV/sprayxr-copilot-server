@@ -119,3 +119,31 @@ test('describe 는 빈 문장으로 끝나지 않고, 방향 알림은 서버 �
   assert.equal(alerts.describe({ ...coat, message: null }), '과도막 · Zone 5 · 43.4초');
   for (const text of [alerts.describe(direction), alerts.describe({ ...coat, message: '' })]) assert.ok(!/[.·]\s*$/.test(text), text);
 });
+
+test('알림 Zone 을 칠하지 않는 프레임에 내려앉으면 그 Zone 을 따로 강조한다(카나리 V1′ 건너뜀 Zone 13)', () => {
+  // 'Zone 13 건너뜀 4.8초': 구간 [4.655, 4.822) 안에 Zone 13 분사가 없어(건너뛴 Zone) Zone 12 프레임에 선다.
+  const frames = [{ t: 4.60, spraying: true, zone_id: 12, map_num: 1 }, { t: 4.70, spraying: true, zone_id: 12, map_num: 1 }];
+  const skipped = { zone_id: '13', map_num: null, seek_seconds: 4.655, at_seconds: 4.822 };
+  const index = alerts.seekIndex(frames, skipped.seek_seconds, skipped.at_seconds, skipped);
+  assert.equal(frames[index].zone_id, 12);   // HUD 는 실제로 칠하는 Zone 12 그대로
+  assert.equal(alerts.alertZone(frames[index], skipped), '13');
+  // 그 Zone 을 칠하는 프레임이면 현재 Zone 강조로 충분하다
+  assert.equal(alerts.alertZone(frames[index], { zone_id: '12' }), null);
+  assert.equal(alerts.alertZone({ t: 1, spraying: false, zone_id: 12 }, { zone_id: '12' }), '12');   // 이동 중
+  assert.equal(alerts.alertZone(undefined, { zone_id: '13' }), '13');
+  assert.equal(alerts.alertZone(frames[0], { zone_id: null }), null);
+});
+
+test('순서·방향 알림이 오기 전에는 목록이 불러오는 중이라고 알리고, 온 뒤에는 그 문장을 지운다', () => {
+  const coat = [item(9, 'coating_under_app')];
+  const loading = alerts.listStatus({ coating_alerts: coat }, 1);
+  assert.equal(loading.pending, true);
+  assert.equal(loading.text, '순서·방향 알림을 불러오는 중');
+  assert.deepEqual(alerts.listStatus({ coating_alerts: coat, sequence_alerts: { status: 'available', alerts: [item(5)] } }, 2),
+    { pending: false, text: '' });
+  assert.deepEqual(alerts.listStatus({ coating_alerts: [], sequence_alerts: { status: 'available', alerts: [] } }, 0),
+    { pending: false, text: '이 기록에는 알림이 없습니다' });
+  assert.equal(alerts.listStatus({ sequence_alerts: { status: 'unavailable', reason_code: 'request_failed', alerts: [] } }, 0).text,
+    '순서 판정을 불러오지 못했습니다. 이 기록에는 알림이 없습니다');
+  assert.deepEqual(alerts.listStatus(null, 0), { pending: false, text: '이 기록에는 알림이 없습니다' });
+});
