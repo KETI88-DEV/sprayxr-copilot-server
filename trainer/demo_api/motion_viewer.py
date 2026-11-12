@@ -539,37 +539,38 @@ def _target_coating_cached(
     stamps: tuple[tuple[int, str, int, int], ...],
     zones: tuple[tuple[int, str, float | None, float | None], ...],
 ) -> dict[str, Any]:
-    # 표면(2048² float64 = 32 MB)은 캐시하지 않는다. 열쇠의 mtime·크기가 바뀌면 다시 계산한다.
-    surfaces = {}
+    # 표면(2048² float64 = 32 MB)은 캐시하지 않고, 면 하나씩 읽어 평가한 뒤 놓는다.
+    # shortcut: 열쇠가 mtime·크기라 같은 mtime·크기로 내용만 바뀐 PNG는 옛 결과를 낸다, 그런 갱신이 생기면 sha256을 열쇠에 넣는다.
+    catalog = ZoneReferenceCatalog.default()
+    rows, assessments, read_any = [], [], False
     for face, path_text, _, _ in stamps:
         try:
-            surfaces[face] = coating_assessment.painted_surface_from_png(Path(path_text).read_bytes())
+            surface = coating_assessment.painted_surface_from_png(Path(path_text).read_bytes())
         except (OSError, ValueError):
             continue
-    if not surfaces:
+        read_any = True
+        for map_num, zone_id, speed, distance in zones:
+            if map_num != face:
+                continue
+            try:
+                image = catalog.zone_mask(model_key, map_num, zone_id)  # 라벨맵 원래 크기. 리샘플링하지 않는다.
+            except (OSError, ValueError):
+                continue
+            if image is None:
+                continue
+            mask = np.asarray(image) > 0
+            if mask.shape != surface.shape:
+                # PR #8 규칙: 크기가 다른 높이맵·마스크는 맞추지 않고 거부한다.
+                return _target_unavailable("height_map_size_mismatch")
+            assessment = coating_assessment.assess_zone(
+                surface, mask, target_um,
+                speed_mm_s=() if speed is None else (speed,), distance_mm=() if distance is None else (distance,))
+            if assessment is not None:
+                assessments.append(assessment)
+                rows.append(coating_assessment.zone_row(map_num, zone_id, assessment))
+        del surface
+    if not read_any:
         return _target_unavailable("height_map_unavailable")
-    catalog = ZoneReferenceCatalog.default()
-    rows, assessments = [], []
-    for map_num, zone_id, speed, distance in zones:
-        surface = surfaces.get(map_num)
-        if surface is None:
-            continue
-        try:
-            image = catalog.zone_mask(model_key, map_num, zone_id)  # 라벨맵 원래 크기. 리샘플링하지 않는다.
-        except (OSError, ValueError):
-            continue
-        if image is None:
-            continue
-        mask = np.asarray(image) > 0
-        if mask.shape != surface.shape:
-            # PR #8 규칙: 크기가 다른 높이맵·마스크는 맞추지 않고 거부한다.
-            return _target_unavailable("height_map_size_mismatch")
-        assessment = coating_assessment.assess_zone(
-            surface, mask, target_um,
-            speed_mm_s=() if speed is None else (speed,), distance_mm=() if distance is None else (distance,))
-        if assessment is not None:
-            assessments.append(assessment)
-            rows.append(coating_assessment.zone_row(map_num, zone_id, assessment))
     if not rows:
         return _target_unavailable("zone_reference_unavailable")
     target, basis = coating_assessment.resolve_target(target_um)

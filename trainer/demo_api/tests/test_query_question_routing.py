@@ -32,7 +32,7 @@ def target_assessment(**overrides):
             "zones": rows, **overrides}
 
 
-def context(task="trajectory_recomm", coating=True, target=None):
+def context(task="trajectory_recomm", coating=True, target=None, expert=True):
     analysis = {"recommended_flow": ["1", "2"], "selected_flow": ["1"],
                 "adherence_rate": 0.8, "reference_session_count": 6,
                 "direction_summary": {"classification": "horizontal"}, "zone_keys": ["1:1", "1:2"]}
@@ -44,7 +44,7 @@ def context(task="trajectory_recomm", coating=True, target=None):
     if coating:
         claims = {"analysis_status": "available", "scope": "final_record", "comparison_basis": "expert_zone_median",
                   "zones": [{"map_num": "1", "zone_id": "1", "actual_um": 180, "reference_um": 120},
-                            {"map_num": "1", "zone_id": "2", "actual_um": 80, "reference_um": 120}]}
+                            {"map_num": "1", "zone_id": "2", "actual_um": 80, "reference_um": 120}] if expert else []}
         if target is not None:
             claims["target"] = target
         payload.update(coating_context=claims, coating_signature=sign_context("coating_status", claims))
@@ -248,3 +248,23 @@ def test_advice_prompt_gets_the_compact_target_facts():
     instruction = pipeline.calls[0]["instruction"]
     assert "검증된 최종 도막 비교 자료" in instruction and "목표 대비 판정" in instruction and "저도막" in instruction
     assert "six_band_counts" not in instruction and "전문가 대비 대표 두께 비교" not in instruction
+
+
+def test_viewer_note_points_to_the_expert_basis_only_when_expert_rows_exist():
+    """전문가 대비 행이 없는 기록(전문가 본인 기록 등)에서 '전문가 대비'를 보라고 하지 않는다."""
+    with_rows = ask("knowledge_search", "도막이 과하거나 모자란 영역이 있어?", context(target=target_assessment()))["answer"]
+    without = ask("knowledge_search", "도막이 과하거나 모자란 영역이 있어?", context(target=target_assessment(), expert=False))["answer"]
+    assert "'전문가 대비'" in with_rows
+    assert "저도막: 1개" in without and "재생 시점의 도막이 아닙니다" in without
+    assert "전문가" not in without
+
+
+def test_playback_zone_is_kept_when_only_the_target_has_that_zone():
+    from trainer.demo_api.coating_query import parse_viewer_coating_context, target_advice_facts
+    parsed = parse_viewer_coating_context(context(target=target_assessment(), expert=False), "knowledge_search")
+    assert parsed["playback_context"] == {"map_num": "1", "zone_id": "1"}
+    assert target_advice_facts(parsed)["zones"][0]["zone_id"] == "1"
+    # 서명된 어느 행에도 없는 Zone은 붙이지 않는다(화면이 값을 만들지 못한다).
+    value = json.loads(context(target=target_assessment(), expert=False).split(":", 1)[1])
+    value["playback_context"]["zone_id"] = "9"
+    assert "playback_context" not in parse_viewer_coating_context("motion_viewer_analysis:" + json.dumps(value), "knowledge_search")

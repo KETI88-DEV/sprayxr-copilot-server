@@ -19,7 +19,9 @@ _TARGET_MISSING = {
     "zone_reference_unavailable": "이 콘텐츠의 Zone 기준 자료가 없어 목표 대비 판정을 낼 수 없습니다.",
 }
 _TARGET_NOT_SENT = "이 질문에는 목표 대비 판정 자료가 함께 오지 않았습니다."
-_VIEWER_NOTE = "최종 높이맵 기준이며 재생 시점의 도막이 아닙니다. 전문가 기록과 견준 두께는 화면의 '전문가 대비'에서 볼 수 있습니다."
+_VIEWER_NOTE = "최종 높이맵 기준이며 재생 시점의 도막이 아닙니다."
+# 전문가 대비 행이 있는 기록에서만 붙인다(전문가 본인 기록 등은 화면의 '전문가 대비'가 비어 있다).
+_VIEWER_EXPERT_NOTE = " 전문가 기록과 견준 두께는 화면의 '전문가 대비'에서 볼 수 있습니다."
 
 
 def _number(value: object) -> float | None:
@@ -64,8 +66,11 @@ def parse_viewer_coating_context(value: str | None, task_type: str) -> dict[str,
             playback = payload.get("playback_context")
             if isinstance(playback, dict):
                 map_num, zone_id = str(playback.get("map_num")), str(playback.get("zone_id"))
+                target = claims.get("target")
+                target_rows = target.get("zones") if isinstance(target, Mapping) else None
+                signed_rows = [*(claims.get("zones") or []), *(target_rows if isinstance(target_rows, list) else [])]
                 if any(isinstance(row, Mapping) and str(row.get("map_num")) == map_num and str(row.get("zone_id")) == zone_id
-                       for row in claims.get("zones", [])):
+                       for row in signed_rows):
                     # A client selector can choose authenticated rows, never create values.
                     return {**claims, "playback_context": {"map_num": map_num, "zone_id": zone_id}}
             return claims
@@ -113,7 +118,8 @@ def _sum_bands(rows: list[dict[str, Any]]) -> dict[str, int]:
     return total
 
 
-def _grade_answer(rows: list[dict[str, Any]], prompt: str, *, detailed: bool, viewer: bool = False) -> str:
+def _grade_answer(rows: list[dict[str, Any]], prompt: str, *, detailed: bool, viewer: bool = False,
+                  expert_rows: bool = False) -> str:
     """저장된 행의 등급을 읽어 옮긴다. 등급을 다시 계산하지 않는다."""
     basis = basis_label(rows[0]["target_thickness_um"], rows[0]["target_basis"])
     text = [f"{basis}으로 Zone별 도막을 판정했습니다. {RULE_NOTE}"]
@@ -138,7 +144,7 @@ def _grade_answer(rows: list[dict[str, Any]], prompt: str, *, detailed: bool, vi
         text.append(("미도장 비율이 큰 곳: " + ", ".join(largest) + "." if largest else "판정한 Zone의 미도장 비율은 모두 1% 미만입니다.")
                     + " 미도장 비율에는 합격 기준이 없어 숫자만 알려 드립니다.")
     if viewer:
-        text.append(_VIEWER_NOTE)
+        text.append(_VIEWER_NOTE + (_VIEWER_EXPERT_NOTE if expert_rows else ""))
     return "\n".join(line for line in text if line)
 
 
@@ -216,7 +222,8 @@ def answer_coating_question(context: dict[str, Any], prompt: str, *, detailed: b
             target = context.get("target") if isinstance(context.get("target"), Mapping) else {}
             note = _TARGET_MISSING.get(target.get("reason_code"), _TARGET_NOT_SENT) + " 아래는 전문가 기록과 견준 값입니다."
         elif _selected(target_rows, prompt):
-            return _grade_answer(_selected(target_rows, prompt), prompt, detailed=detailed, viewer=True)
+            return _grade_answer(_selected(target_rows, prompt), prompt, detailed=detailed, viewer=True,
+                                 expert_rows=bool(context.get("zones")))
     if context.get("analysis_status") != "available" or not rows:
         return ("도막의 과다·부족 영역을 판단할 신뢰 가능한 Zone별 도막 분석 자료가 없습니다. "
                 "뷰어의 기록을 다시 불러오거나 세션 완료 후 도막 분석 결과를 확인해 주세요.")

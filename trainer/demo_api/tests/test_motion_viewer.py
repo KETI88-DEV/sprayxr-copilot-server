@@ -1296,3 +1296,33 @@ def test_target_assessment_is_cached_per_file_stamp(tmp_path: Path, monkeypatch:
     direct = _target_coating("spray", 4, {1: path}, ["1:1"], {})
     direct["zones"][0]["grade"] = "forged"
     assert _target_coating("spray", 4, {1: path}, ["1:1"], {})["zones"][0]["grade"] != "forged"
+
+
+def test_target_assessment_reads_one_face_at_a_time(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """면마다 표면을 읽고 평가한 뒤 놓는다. 다음 면을 읽을 때 앞 면의 2048² 표면이 남아 있지 않다."""
+    import gc
+    import weakref
+    from trainer.demo_api import coating_assessment
+    from trainer.demo_api.motion_viewer import _target_coating
+
+    alive_at_read: list[int] = []
+    surfaces: list[Any] = []
+    original = coating_assessment.painted_surface_from_png
+
+    def read(raw: bytes) -> Any:
+        gc.collect()
+        alive_at_read.append(sum(ref() is not None for ref in surfaces))
+        surface = original(raw)
+        surfaces.append(weakref.ref(surface))
+        return surface
+
+    monkeypatch.setattr(coating_assessment, "painted_surface_from_png", read)
+    (tmp_path / _TARGET_MODE_ROOT).mkdir(parents=True)
+    path = _write_height_map(tmp_path, "Map01_1002_1_1_Height.png", 181)
+    copy = path.with_name("Map02_1002_1_1_Height.png")
+    copy.write_bytes(path.read_bytes())
+    target = _target_coating("spray", 4, {1: path, 2: copy}, ["1:1", "2:1"], {})
+
+    assert alive_at_read == [0, 0]
+    # 값은 한 면만 줄 때와 같다(2면에는 Learn04 Zone 마스크가 없다).
+    assert target == _target_coating("spray", 4, {1: path}, ["1:1"], {})
