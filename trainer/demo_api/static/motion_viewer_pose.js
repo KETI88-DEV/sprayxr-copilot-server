@@ -66,57 +66,208 @@
       ? twoBoneIK(shoulder, target, BODY.upperArm, BODY.foreArm, add([0, -1, 0], mul(right, outward)))
       : null;
     return {
-      head, neck, chest: add(neck, [0, -BODY.upperChest, 0]), leftShoulder, rightShoulder, gun, leftHand,
+      head, neck, chest: add(neck, [0, -BODY.upperChest, 0]), leftShoulder, rightShoulder, gun, leftHand, grip, forward, right,
       leftArm: arm(leftShoulder, leftHand, -.5),
       rightArm: arm(rightShoulder, grip, .5),
     };
   }
 
+  // 큰 장면 몸의 살 두께(m, [시작, 끝]): 자세 비교 실험대 body_proportions FLESH_RADIUS_ADULT_M × .85
+  // (뷰어 BODY 팔 길이가 성인 위팔의 약 .85 배다). 골반·다리는 재지 않으므로 아랫배만 흐리게 그린다.
+  const FLESH = {
+    neck: [.04, .038], neckSpan: [.02, .06], chest: [.095, .085], chestTop: .075, chestHalf: [.1, .08], shoulderBridge: .055,
+    belly: [.12, .1], bellyDrop: .30, bellyAlpha: .5,
+    upperArm: [.044, .04], foreArm: [.038, .029], palm: [.027, .022], palmReach: [-.01, .07],
+    head: {rx: .082, ry: .108, back: .045, lift: .015}, visor: [.03, .07, .036],
+  };
+  // 건(m): 손잡이 점(gunGrip)에서 아래·뒤로 15° 기운 손잡이, 그 앞 몸통, 연장대, 추적기 앞 노즐. 반폭은 [축, 둘째, 셋째].
+  const GUN = {
+    handle: [.055, .016, .014], handleTilt: Math.PI / 12, body: [.075, .024, .018], bodyAhead: .035,
+    rodFrom: .11, rodRadius: .008, nozzle: [.07, .105], nozzleRadius: [.012, .016],
+  };
+  // 두 단계 명암 [밝은 색, 어두운 색]. 팔·몸통의 밝은 색은 LIMB_COLORS 에서 읽는다.
+  const SHADOW = {arm: '#0f8ea6', core: '#9fb0c6'};
+  const GUN_TONE = ['#aab6c8', '#5f6b7d'], NOZZLE_TONE = ['#fb923c', '#c2410c'], VISOR_TONE = ['#3a4458', '#161b26'];
+  const OUTLINE = 'rgba(10,14,22,.55)';
+  const BODY_LAYER_ALPHA = .88;
+  const LIGHT_SCREEN = [-.5, -.86].map(value => value / Math.hypot(.5, .86));
+  const LIGHT_CAMERA = [-.45, .75, -.5].map(value => value / Math.hypot(.45, .75, .5));
+  const EYE = [0, 0, -4.5]; // 코어 project() 의 원근(4.5 / (4.5 + z))이 가정하는 카메라 공간 눈 위치
+  let bodyLayer = null, lastBodyRect = null;
+
+  // 두 원과 공통 외접선으로 캡슐 윤곽을 지금 경로에 더한다. 반지름(px) = r × zoom × 원근.
+  function capsulePath(g, a, b, ra, rb, center, w, h) {
+    const p = project(a, center, w, h), q = project(b, center, w, h);
+    const pr = Math.max(1, ra * zoom * p[2]), qr = Math.max(1, rb * zoom * q[2]);
+    const dx = q[0] - p[0], dy = q[1] - p[1], d = Math.hypot(dx, dy);
+    if (d <= Math.abs(pr - qr) + .5) {
+      // 축이 화면을 향해 한 원이 다른 원을 품으면 큰 원 하나다.
+      const [c, r] = pr >= qr ? [p, pr] : [q, qr];
+      g.moveTo(c[0] + r, c[1]);
+      g.arc(c[0], c[1], r, 0, Math.PI * 2);
+    } else {
+      const th = Math.atan2(dy, dx), al = Math.acos((pr - qr) / d);
+      g.moveTo(p[0] + pr * Math.cos(th + al), p[1] + pr * Math.sin(th + al));
+      g.arc(p[0], p[1], pr, th + al, th + Math.PI * 2 - al);
+      g.arc(q[0], q[1], qr, th - al, th + al);
+      g.closePath();
+    }
+    return {p, q, d, r: Math.max(pr, qr)};
+  }
+
+  // 두 단계 명암: 화면 빛 방향 n 쪽 절반은 밝은 색, 반대쪽은 어두운 색.
+  function twoTone(g, cx, cy, n, radius, tone) {
+    const gradient = g.createLinearGradient(cx - n[0] * radius, cy - n[1] * radius, cx + n[0] * radius, cy + n[1] * radius);
+    for (const [offset, color] of [[0, tone[1]], [.4, tone[1]], [.52, tone[0]], [1, tone[0]]]) gradient.addColorStop(offset, color);
+    return gradient;
+  }
+
+  function capsule(g, a, b, radii, tone, center, w, h, alpha = 1) {
+    g.save();
+    g.globalAlpha = alpha;
+    g.beginPath();
+    const {p, q, d, r} = capsulePath(g, a, b, radii[0], radii[1], center, w, h);
+    let n = d > .5 ? [(p[1] - q[1]) / d, (q[0] - p[0]) / d] : LIGHT_SCREEN;
+    if (dot(n, LIGHT_SCREEN) < 0) n = mul(n, -1);
+    g.fillStyle = twoTone(g, (p[0] + q[0]) / 2, (p[1] + q[1]) / 2, n, r, tone);
+    g.fill();
+    g.strokeStyle = OUTLINE;
+    g.lineWidth = 1;
+    g.stroke();
+    g.restore();
+  }
+
+  // 여러 캡슐을 한 덩어리로: 2px 윤곽을 먼저 긋고 위를 채워 안쪽 이음선을 지운다.
+  function union(g, parts, tone, center, w, h) {
+    g.beginPath();
+    const ends = parts.map(([a, b, ra, rb]) => capsulePath(g, a, b, ra, rb, center, w, h));
+    g.strokeStyle = OUTLINE;
+    g.lineWidth = 2;
+    g.stroke();
+    const xs = ends.flatMap(end => [end.p[0], end.q[0]]), ys = ends.flatMap(end => [end.p[1], end.q[1]]);
+    const [minX, maxX, minY, maxY] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
+    const radius = Math.max(maxX - minX, maxY - minY) / 2 + Math.max(...ends.map(end => end.r));
+    g.fillStyle = twoTone(g, (minX + maxX) / 2, (minY + maxY) / 2, LIGHT_SCREEN, radius, tone);
+    g.fill();
+  }
+
+  // 축 셋·반폭 셋의 상자. 카메라를 향한 면만 그리고, 빛을 받는 면은 밝은 색이다.
+  function box(g, c, axes, half, tone, center, w, h) {
+    g.save();
+    g.strokeStyle = OUTLINE;
+    g.lineWidth = 1;
+    g.lineJoin = 'round';
+    for (let k = 0; k < 3; k++) for (const sign of [-1, 1]) {
+      const normal = transform(mul(axes[k], sign), [0, 0, 0]), face = add(c, mul(axes[k], sign * half[k]));
+      if (dot(normal, sub(transform(face, center), EYE)) >= 0) continue;
+      const i = (k + 1) % 3, j = (k + 2) % 3;
+      g.beginPath();
+      for (const [s, t] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+        const corner = project(add(face, add(mul(axes[i], s * half[i]), mul(axes[j], t * half[j]))), center, w, h);
+        g.lineTo(corner[0], corner[1]);
+      }
+      g.closePath();
+      g.fillStyle = dot(unit(normal), LIGHT_CAMERA) > .25 ? tone[0] : tone[1];
+      g.fill();
+      g.stroke();
+    }
+    g.restore();
+  }
+
+  function headEllipse(g, c, tone, center, w, h) {
+    const q = project(c, center, w, h), top = project(add(c, [0, FLESH.head.ry, 0]), center, w, h);
+    const rx = FLESH.head.rx * zoom * q[2], ry = Math.max(rx, Math.hypot(top[0] - q[0], top[1] - q[1]));
+    g.beginPath();
+    g.ellipse(q[0], q[1], rx, ry, Math.atan2(top[1] - q[1], top[0] - q[0]) + Math.PI / 2, 0, Math.PI * 2);
+    g.fillStyle = twoTone(g, q[0], q[1], LIGHT_SCREEN, ry, tone);
+    g.fill();
+    g.strokeStyle = OUTLINE;
+    g.lineWidth = 1;
+    g.stroke();
+  }
+
+  // 축 f, 세계 위에서 f 성분을 뺀 위 u, 옆 s = f × u.
+  function axesAlong(forward) {
+    const f = unit(forward, [0, 0, 1]);
+    const u = unit(sub([0, 1, 0], mul(f, f[1])), [0, 0, 1]);
+    return {f, u, s: cross(f, u)};
+  }
+
+  // 그릴 항목 목록. z 는 항목 점들의 카메라 깊이 평균이라 큰 것(먼 것)부터 그린다.
+  function bodyItems(body, frame, center, w, h) {
+    const items = [];
+    const push = (points, paint) => items.push({z: points.reduce((sum, p) => sum + transform(p, center)[2], 0) / points.length, points, paint});
+    const cap = (a, b, radii, tone, alpha) => push([a, b], g => capsule(g, a, b, radii, tone, center, w, h, alpha));
+    const arm = [LIMB_COLORS.arm, SHADOW.arm], core = [LIMB_COLORS.core, SHADOW.core];
+    cap(body.chest, add(body.chest, [0, -FLESH.bellyDrop, 0]), FLESH.belly, core, FLESH.bellyAlpha);
+    // 몸통: 좌우 두 캡슐(정면에서 넓고 옆에서 얇다)과 어깨선을 한 덩어리로.
+    const top = add(body.neck, [0, -FLESH.chestTop, 0]);
+    const torso = [
+      ...[-1, 1].map(sign => [add(top, mul(body.right, sign * FLESH.chestHalf[0])), add(body.chest, mul(body.right, sign * FLESH.chestHalf[1])), ...FLESH.chest]),
+      [body.leftShoulder, body.rightShoulder, FLESH.shoulderBridge, FLESH.shoulderBridge],
+    ];
+    push(torso.flatMap(part => part.slice(0, 2)), g => union(g, torso, core, center, w, h));
+    // 목과 머리는 한 항목이라 머리가 늘 목 위에 그려진다. 머리 중심은 HMD 에서 시선 반대로 물러나 조금 위다.
+    const headCenter = add(add(body.head, mul(body.forward, -FLESH.head.back)), [0, FLESH.head.lift, 0]);
+    push([headCenter], g => {
+      capsule(g, add(body.neck, [0, -FLESH.neckSpan[0], 0]), add(headCenter, [0, -FLESH.neckSpan[1], 0]), FLESH.neck, core, center, w, h);
+      headEllipse(g, headCenter, core, center, w, h);
+    });
+    // HMD 바이저: 시선 축을 따라 놓은 납작한 상자라 어디를 보는지 모양으로 보인다.
+    const view = axesAlong(body.forward);
+    push([add(body.head, mul(view.f, FLESH.visor[0]))], g => box(g, body.head, [view.f, view.s, view.u], FLESH.visor, VISOR_TONE, center, w, h));
+    for (const [shoulder, limb] of [[body.leftShoulder, body.leftArm], [body.rightShoulder, body.rightArm]]) {
+      if (!limb) continue;
+      cap(shoulder, limb.elbow, FLESH.upperArm, arm);
+      cap(limb.elbow, limb.hand, FLESH.foreArm, arm);
+      const along = unit(sub(limb.hand, limb.elbow));
+      cap(add(limb.hand, mul(along, FLESH.palmReach[0])), add(limb.hand, mul(along, FLESH.palmReach[1])), FLESH.palm, arm);
+    }
+    const tool = frame.tool_forward;
+    if (body.gun && tool && length(tool) > 1e-5) {
+      const {f, u, s} = axesAlong(tool);
+      const handleAxis = unit(add(mul(u, -Math.cos(GUN.handleTilt)), mul(f, -Math.sin(GUN.handleTilt))));
+      const handle = add(body.grip, mul(handleAxis, GUN.handle[0]));
+      push([handle], g => box(g, handle, [handleAxis, f, s], GUN.handle, GUN_TONE, center, w, h));
+      const gunBody = add(body.grip, mul(f, GUN.bodyAhead));
+      push([gunBody], g => box(g, gunBody, [f, u, s], GUN.body, GUN_TONE, center, w, h));
+      const [nozzleFrom, nozzleTip] = GUN.nozzle.map(k => add(body.gun, mul(f, k)));
+      cap(add(body.grip, mul(f, GUN.rodFrom)), nozzleFrom, [GUN.rodRadius, GUN.rodRadius], GUN_TONE);
+      cap(nozzleFrom, nozzleTip, GUN.nozzleRadius, NOZZLE_TONE);
+    }
+    return items;
+  }
+
   function drawTrustedUpperBody(frame, center, width, height) {
     const body = trustedUpperBody(frame);
     if (!body) return;
-    const {arm: armColor, core: middle} = LIMB_COLORS;
-    // 뼈 아래에 반투명 살 한 겹: 굵기는 부위별 반지름(m, 자세 비교 실험대 body_proportions)에 확대 배율을 곱한다.
-    const flesh = (a, b, radius, color) => {
-      const p = project(a, center, width, height), q = project(b, center, width, height);
-      const alpha = ctx.globalAlpha;
-      ctx.globalAlpha = .35;
-      ctx.lineCap = 'round';
-      ctx.strokeStyle = color;
-      ctx.lineWidth = 2 * radius * zoom * (p[2] + q[2]) / 2;
-      ctx.beginPath();
-      ctx.moveTo(p[0], p[1]);
-      ctx.lineTo(q[0], q[1]);
-      ctx.stroke();
-      ctx.globalAlpha = alpha;
-    };
-    flesh(body.neck, body.chest, .11, middle);
-    flesh(body.leftShoulder, body.rightShoulder, .06, middle);
-    for (const [shoulder, arm] of [[body.leftShoulder, body.leftArm], [body.rightShoulder, body.rightArm]]) {
-      if (!arm) continue;
-      flesh(shoulder, arm.elbow, .043, armColor);
-      flesh(arm.elbow, arm.hand, .033, armColor);
-    }
-    line(body.head, body.neck, middle, 4, center, width, height);
-    line(body.neck, body.chest, middle, 4, center, width, height);
-    for (const [shoulder, arm, color] of [[body.leftShoulder, body.leftArm, armColor], [body.rightShoulder, body.rightArm, armColor]]) {
-      line(body.neck, shoulder, color, 4, center, width, height);
-      point(shoulder, 4, color, center, width, height);
-      if (!arm) continue;
-      line(shoulder, arm.elbow, color, 3.5, center, width, height);
-      line(arm.elbow, arm.hand, color, 3.5, center, width, height);
-      point(arm.elbow, 4, color, center, width, height);
-      point(arm.hand, 5, color, center, width, height);
-    }
-    // 머리 구: 반지름 .09 m 를 목→머리 방향 .085 m 위에(머리 관절은 두개골 바닥 쪽이다)
-    point(add(body.neck, mul(sub(body.head, body.neck), .085 / BODY.headAboveShoulders)), .09 * zoom, '#f5f8ff', center, width, height);
-    point(body.neck, 4, middle, center, width, height);
-    point(body.chest, 5, middle, center, width, height);
-    // 실측 추적기(건·왼손)는 고리로 따로 그려 IK 손과의 차이가 보이게 둔다.
-    for (const [tracker, color] of [[body.gun, armColor], [body.leftHand, armColor]]) {
+    // 몸은 화면 밖 한 장에 불투명으로 그린 뒤 한 번에 얹는다. 뒤의 분사 흔적은 비치고, 팔·몸통이 겹친 안쪽은 비치지 않는다.
+    bodyLayer ||= document.createElement('canvas');
+    const {width: pixelWidth, height: pixelHeight} = ctx.canvas;
+    if (bodyLayer.width !== pixelWidth || bodyLayer.height !== pixelHeight) Object.assign(bodyLayer, {width: pixelWidth, height: pixelHeight});
+    const items = bodyItems(body, frame, center, width, height).sort((a, b) => b.z - a.z);
+    // 지우기·합성은 몸이 든 화면 상자(장치 px)만 한다. 여유 = 가장 굵은 살 반지름보다 넉넉한 .2 m.
+    const shown = items.flatMap(item => item.points).map(p => project(p, center, width, height));
+    const scale = pixelWidth / width, pad = .2 * zoom * Math.max(...shown.map(q => q[2])) + 4;
+    const [x0, y0] = [0, 1].map(k => Math.max(0, Math.floor((Math.min(...shown.map(q => q[k])) - pad) * scale)));
+    const [x1, y1] = [[0, pixelWidth], [1, pixelHeight]].map(([k, limit]) => Math.min(limit, Math.ceil((Math.max(...shown.map(q => q[k])) + pad) * scale)));
+    const g = bodyLayer.getContext('2d');
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.clearRect(...(lastBodyRect || [0, 0, pixelWidth, pixelHeight]));
+    lastBodyRect = x1 > x0 && y1 > y0 ? [x0, y0, x1 - x0, y1 - y0] : null;
+    if (!lastBodyRect) return;
+    g.setTransform(ctx.getTransform());
+    for (const item of items) item.paint(g);
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalAlpha = BODY_LAYER_ALPHA;
+    ctx.drawImage(bodyLayer, ...lastBodyRect, ...lastBodyRect);
+    ctx.restore();
+    // 실측 추적기(건·왼손)는 맨 위에 고리로 그려 IK 손과의 차이가 보이게 둔다.
+    for (const tracker of [body.gun, body.leftHand]) {
       if (!tracker) continue;
       const shown = project(tracker, center, width, height);
-      ctx.strokeStyle = color;
+      ctx.strokeStyle = LIMB_COLORS.arm;
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.arc(shown[0], shown[1], 8 * shown[2], 0, Math.PI * 2);
@@ -124,38 +275,18 @@
     }
   }
 
+  // 시선과 분사 축은 바이저·건 모양이 보여 준다. 여기서는 노즐 끝에서 착탄점까지의 분사선만 긋는다.
   function drawOrientationGuides(frame, center, width, height) {
-    const tracked = frame?.tracked || {};
-    if (tracked.head && frame.camera_forward) {
-      arrow(tracked.head, addVector(tracked.head, scaleVector(normalize(frame.camera_forward), .42)), '#22d3ee', center, width, height);
-    }
-    if (tracked.right_hand && frame.tool_forward) {
-      const end = addVector(tracked.right_hand, scaleVector(normalize(frame.tool_forward), .42));
-      // 도구: 건 손잡이에서 노즐 쪽으로 반지름 .011 m 막대(어두운 회색 바탕에 흰 줄무늬). 길이 .3 m 는 근사값이다.
-      const nozzle = addVector(tracked.right_hand, scaleVector(normalize(frame.tool_forward), .3));
-      const from = project(tracked.right_hand, center, width, height), to = project(nozzle, center, width, height);
-      ctx.lineCap = 'round';
-      for (const [color, scale, dash] of [['#3a414d', 1, []], ['#f5f8ff', .45, [5, 5]]]) {
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 2 * .011 * zoom * (from[2] + to[2]) / 2 * scale;
-        ctx.setLineDash(dash);
-        ctx.beginPath();
-        ctx.moveTo(from[0], from[1]);
-        ctx.lineTo(to[0], to[1]);
-        ctx.stroke();
-      }
-      ctx.setLineDash([]);
-      arrow(nozzle, end, '#f5f8ff', center, width, height);
-      if (frame.ray_point) {
-        const hitDirection = subtract(frame.ray_point, tracked.right_hand);
-        arrow(tracked.right_hand, frame.ray_point, 'rgba(250,204,21,.82)', center, width, height);
-        if (!document.querySelector('.v2-shell')) {
-          const shown = project(end, center, width, height);
-          ctx.fillStyle = '#fde68a';
-          ctx.font = '600 10px Pretendard, "Noto Sans KR", system-ui';
-          ctx.fillText(`분사축 편차 ${angleDegrees(frame.tool_forward, hitDirection).toFixed(0)}°`, shown[0] + 7, shown[1] - 6);
-        }
-      }
+    const gun = frame?.tracked?.right_hand;
+    if (!gun || !frame.tool_forward || !frame.ray_point) return;
+    const axis = normalize(frame.tool_forward);
+    const tip = addVector(gun, scaleVector(axis, GUN.nozzle[1]));
+    arrow(tip, frame.ray_point, 'rgba(250,204,21,.82)', center, width, height);
+    if (!document.querySelector('.v2-shell')) {
+      const shown = project(addVector(tip, scaleVector(axis, .1)), center, width, height);
+      ctx.fillStyle = '#fde68a';
+      ctx.font = '600 10px Pretendard, "Noto Sans KR", system-ui';
+      ctx.fillText(`분사축 편차 ${angleDegrees(frame.tool_forward, subtract(frame.ray_point, gun)).toFixed(0)}°`, shown[0] + 7, shown[1] - 6);
     }
   }
 
