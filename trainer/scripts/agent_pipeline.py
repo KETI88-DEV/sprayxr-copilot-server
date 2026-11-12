@@ -1123,7 +1123,9 @@ class AgentPipeline:
         def _guarded_run() -> dict[str, Any]:
             # 측정값이 적힌 도막 질문은 모델 대신 dft_judge 로 답한다. 27B 는 도구를 부르지 않고
             # fast 재답이 문서의 옛 90% 규칙을 옮겼다(2026-11-12 카나리 B1). 모델을 쓰지 않으니 슬롯도 잡지 않는다.
-            judged = judge_dft_question(instruction, getattr(self, "tool_adapter", None), session_id, _run_coro_sync)
+            judged = None
+            if live_route == "training_realtime" and not is_sequence_intent(live_route, instruction):
+                judged = judge_dft_question(instruction, getattr(self, "tool_adapter", None), session_id, _run_coro_sync)
             if judged is not None:
                 text, calls = judged
                 if session_id and hasattr(self, "session_context"):
