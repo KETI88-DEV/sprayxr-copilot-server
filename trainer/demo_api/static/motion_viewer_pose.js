@@ -73,10 +73,9 @@
   }
 
   // 큰 장면 몸의 살 두께(m, [시작, 끝]): 자세 비교 실험대 body_proportions FLESH_RADIUS_ADULT_M × .85
-  // (뷰어 BODY 팔 길이가 성인 위팔의 약 .85 배다). 골반·다리는 재지 않으므로 아랫배만 흐리게 그린다.
+  // (뷰어 BODY 팔 길이가 성인 위팔의 약 .85 배다). 골반 아래는 재지 않으므로 가슴에서 끊는다(2026-11-12 사용자 선택 A안).
   const FLESH = {
     neck: [.04, .038], neckSpan: [.02, .06], chest: [.095, .085], chestTop: .075, chestHalf: [.1, .08], shoulderBridge: .055,
-    belly: [.12, .1], bellyDrop: .30, bellyAlpha: .5,
     upperArm: [.044, .04], foreArm: [.038, .029], palm: [.027, .022], palmReach: [-.01, .07],
     head: {rx: .082, ry: .108, back: .045, lift: .015}, visor: [.03, .07, .036],
   };
@@ -199,7 +198,6 @@
     const push = (points, paint) => items.push({z: points.reduce((sum, p) => sum + transform(p, center)[2], 0) / points.length, points, paint});
     const cap = (a, b, radii, tone, alpha) => push([a, b], g => capsule(g, a, b, radii, tone, center, w, h, alpha));
     const arm = [LIMB_COLORS.arm, SHADOW.arm], core = [LIMB_COLORS.core, SHADOW.core];
-    cap(body.chest, add(body.chest, [0, -FLESH.bellyDrop, 0]), FLESH.belly, core, FLESH.bellyAlpha);
     // 몸통: 좌우 두 캡슐(정면에서 넓고 옆에서 얇다)과 어깨선을 한 덩어리로.
     const top = add(body.neck, [0, -FLESH.chestTop, 0]);
     const torso = [
