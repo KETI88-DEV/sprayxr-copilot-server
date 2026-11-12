@@ -878,6 +878,7 @@ def test_motion_viewer_page_exposes_pose_comparison_contract(tmp_path: Path) -> 
     for text in (
         "작업 자세 비교 평가",
         "도장 경로와 작업 자세를 전문가 기준으로 비교합니다.",
+        '<a class="v2-switch" href="/motion-viewer/v2">v2 화면으로 전환',
         "작업자",
         "전문가 작업 유사도",
         "작업 개선 안내",
