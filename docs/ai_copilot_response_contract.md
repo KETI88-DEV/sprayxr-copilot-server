@@ -162,7 +162,7 @@ POST /sessions/end
 | `map_num` | Integer | 조건부 | Height map 번호 |
 | `status` | String | 조건부 | `under_app`, `normal`, `over_app`. `grade`의 다른 이름 |
 | `grade` | String | 조건부 | PR #8 등급 `below`(평균 < 목표), `normal`(목표 ≤ 평균 < 목표의 1.5배), `above`(평균 ≥ 목표의 1.5배) |
-| `thickness_um` | Number | 조건부 | Zone의 칠한 곳 평균 두께(보정 후, µm, 소수 한 자리) |
+| `thickness_um` | Number | 조건부 | Zone의 칠한 곳 평균 두께(보정 후, µm, 소수 한 자리). 저도막(`grade="below"`)은 목표에 닿지 않게 0.1 단위로 내린다(159.96 → 159.9) |
 | `target_thickness_um` | Number | 조건부 | 판정에 쓴 목표 두께(µm) |
 | `target_basis` | String | 조건부 | `session_target`(세션이 목표를 명시), `default_target`(생략 → 160µm) |
 | `normal_band_um` | Array[Number] | 조건부 | `[목표, 목표의 1.5배]` 정상 범위(µm). 표시용 |
