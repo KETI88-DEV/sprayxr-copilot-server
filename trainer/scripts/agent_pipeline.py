@@ -43,6 +43,7 @@ from trainer.scripts.answer_grammar import (
 from trainer.scripts.live_response_contract import FAILED_REPAIR_PATHS, parse_knowledge_answer, retrieved_chunk_ids
 from trainer.scripts.quick_answer import TextCache, inference_key
 from trainer.scripts.live_sequence_fallback import is_sequence_intent
+from trainer.scripts.live_coating_judgment import judge_dft_question
 from trainer.scripts.live_sequence_fallback import (
     LiveSequenceRequest,
     enforce_live_sequence_validation,
@@ -160,6 +161,12 @@ def fast_response_budget(config: dict[str, Any], requested: int | None) -> int:
     configured = int(config.get("generation", {}).get("max_new_tokens", 768))
     limit = ROUTE_MAX_TOKENS["fast"] if requested is None else max(1, min(int(requested), 1024))
     return max(1, min(configured, limit))
+
+# PR #8 등급 정의. 빠른 지식 답과 서빙 설정 fast_system(내부 채팅)이 같은 문장을 쓴다(시험이 묶는다).
+COATING_TERMS_NOTE: Final[str] = (
+    "용어 구별: 이 훈련의 판정에서 저도막은 칠한 곳의 평균 두께가 목표 두께에 못 미친 도막, "
+    "과도막은 칠한 곳의 평균 두께가 목표의 1.5배 이상인 도막이며, 그 사이는 정상입니다."
+)
 
 _PROGRESS_INTERVAL_SEC: Final[float] = 3.0
 
@@ -1114,6 +1121,15 @@ class AgentPipeline:
         cancel_event = threading.Event()
 
         def _guarded_run() -> dict[str, Any]:
+            # 측정값이 적힌 도막 질문은 모델 대신 dft_judge 로 답한다. 27B 는 도구를 부르지 않고
+            # fast 재답이 문서의 옛 90% 규칙을 옮겼다(2026-11-12 카나리 B1). 모델을 쓰지 않으니 슬롯도 잡지 않는다.
+            judged = judge_dft_question(instruction, getattr(self, "tool_adapter", None), session_id, _run_coro_sync)
+            if judged is not None:
+                text, calls = judged
+                if session_id and hasattr(self, "session_context"):
+                    self.session_context.update(session_id, {"instruction": instruction, "response": text, "tool_calls": calls})
+                return {"route": "training_realtime", "response": text, "tool_calls": calls, "rag_chunks": [],
+                        "synthesis_ms": 0, "deadline_hit": False}
             with _GENERATION_SLOT:
                 if cancel_event.is_set():
                     raise GenerationCancelledError("consumer left before generation started")
@@ -1224,6 +1240,8 @@ class AgentPipeline:
             return
 
         if str(result.get("route", "")) == "fast" and not tool_calls:
+            # _strip_think_blocks 는 닫힌 블록만 지운다. 닫히지 않은 <think> 뒤는 생각이지 답이 아니다(카나리 chat_diag).
+            text = text.split("<think>", 1)[0]
             # Citations are reconciled against what this request actually retrieved, so an
             # id left in the streamed text is one the model was shown.
             text = parse_knowledge_answer(text, retrieved_chunk_ids(result.get("rag_chunks", []))).answer
@@ -1346,8 +1364,7 @@ class AgentPipeline:
                     "현재 측정값과 일반 권장값을 구별하세요. 근거에 없는 수치나 사실은 만들지 말고 "
                     "확인할 수 없으면 그 한계를 명확히 말하세요. 거리와 속도를 혼동하지 말고, "
                     "문서의 수치·범위·단위를 정확히 복사하세요. 한국어 한두 문장으로 답하세요. "
-                    "용어 구별: 이 훈련의 판정에서 저도막은 칠한 곳의 평균 두께가 목표 두께에 못 미친 도막, "
-                    "과도막은 칠한 곳의 평균 두께가 목표의 1.5배 이상인 도막이며, 그 사이는 정상입니다. "
+                    f"{COATING_TERMS_NOTE} "
                     "문서에 적정 분사 거리가 없으면 "
                     "도막 두께나 이동 속도를 거리의 정답으로 사용하지 마세요. "
                     "이유를 물으면 지시를 반복하지 말고 원인을 설명하세요. "
