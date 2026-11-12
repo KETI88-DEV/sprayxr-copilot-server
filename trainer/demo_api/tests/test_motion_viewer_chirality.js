@@ -304,3 +304,19 @@ test('v2 교정 고리는 같은 투영 함수로 관절 원과 같은 중심에
     }
   }
 });
+
+test('큰 장면 바닥은 실측 머리에서 CSV 눈높이를 뺀 높이에, 장면 범위보다 넓게 깔린다', () => {
+  const view = viewer();
+  vm.runInContext([coreScript().split('\n').find((line) => line.startsWith('let floorSource')), coreScript().split('\n').find((line) => line.startsWith('function sceneFloor('))].join('\n'), view.sandbox);
+  const frame = (headY) => ({ tracked: { head: [1, headY, 2] }, joints: { Head: [0, 1.7, 0], 'Left Foot': [0, 0.1, 0], 'Right Toe': [0, 0.05, 0] } });
+  // 머리가 4.0~5.0m 를 오르내린다(리프트). 바닥 = 가장 낮게 선 때의 발 = 4.0 − (1.7 − 0.05).
+  view.sandbox.data = { frames: [4.0, 4.5, 5.0].map(frame), reference_surface: { points: [{ point: [3, 4.2, -1] }] }, paint_trace: [] };
+  const grid = vm.runInContext('sceneFloor()', view.sandbox);
+  near(grid.y, 4.0 - 1.65);
+  assert.ok(grid.lo[0] <= 1 - 1 && grid.hi[0] >= 3 + 1 && grid.lo[1] <= -1 - 1 && grid.hi[1] >= 2 + 1, JSON.stringify(grid));
+  // 관절이 없으면 장면에서 가장 낮은 점.
+  view.sandbox.data = { frames: [{ tracked: { head: [0, 4.5, 0] } }], reference_surface: { points: [{ point: [0, 3.2, 0] }] }, paint_trace: [] };
+  near(vm.runInContext('sceneFloor()', view.sandbox).y, 3.2);
+  view.sandbox.data = { frames: [{}] };
+  assert.equal(vm.runInContext('sceneFloor()', view.sandbox), null);
+});
