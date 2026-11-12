@@ -45,7 +45,7 @@ function viewer(patch = (line) => line) {
   vm.runInContext([
     'var yaw=0,pitch=0,zoom=175,panX=0,panY=0,skeletonYaw=0,data={bones:[]};',
     pick('function add(a,b)'), pick('function transform('), pick('function project('),
-    pick('function uprightSkeleton('), pick('function panelSkeleton('), pick('function skeletonProjection('), pick('function drawSkeletonView('),
+    pick('function uprightSkeleton('), pick('function withUpperChest('), pick('function panelSkeleton('), pick('function skeletonProjection('), pick('function drawSkeletonView('),
   ].join('\n'), sandbox);
   /** 관절 이름 → 그 관절이 찍힌 원. 그리기 순서는 깊이 순이라 순서가 아니라 같은 투영 함수가 낸 자리로 찾는다. */
   const byName = (frame) => {
@@ -355,4 +355,92 @@ test('큰 장면 바닥은 실측 머리에서 CSV 눈높이를 뺀 높이에, �
   near(vm.runInContext('sceneFloor()', view.sandbox).y, 3.2);
   view.sandbox.data = { frames: [{}] };
   assert.equal(vm.runInContext('sceneFloor()', view.sandbox), null);
+});
+
+// ── 몸통 길이: 예전 형식 리그의 빠진 가슴 위 마디 ─────────────────
+// 합성 리그: +Z 를 보고 곧게 선 사람(몸 오른쪽 = +X). 마디 값은 두 리그의 바인드 오프셋(m)이다. 예전 형식은 Chest 바로 옆에
+// 어깨가 붙고 머리가 0.137m 위에 있다. 2026-10 리그는 Chest 위 0.2106m 에 어깨 선이 있고, 팔·다리·Spine→Chest 는 같다.
+function rig({ pelvisToSpine, hipDrop, shoulderRise, head }) {
+  const at = (from, offset) => add(from, offset), joints = { Pelvis: [0, 1, 0] };
+  joints.Spine = at(joints.Pelvis, [0, pelvisToSpine, 0]);
+  joints.Chest = at(joints.Spine, [0, 0.105315, 0]);
+  joints.Head = at(joints.Chest, head);
+  for (const [side, sign] of [['Left', -1], ['Right', 1]]) {
+    joints[`${side} Shoulder`] = at(joints.Chest, [sign * 0.028354, shoulderRise, 0]);
+    joints[`${side} Upper Arm`] = at(joints[`${side} Shoulder`], [sign * 0.179695, 0, 0]);
+    joints[`${side} Fore Arm`] = at(joints[`${side} Upper Arm`], [0, -0.243033, 0]);
+    joints[`${side} Hand`] = at(joints[`${side} Fore Arm`], [0, -0.243033, 0]);
+    joints[`${side} Thigh`] = at(joints.Pelvis, [sign * 0.096502, -hipDrop, 0]);
+    joints[`${side} Calf`] = at(joints[`${side} Thigh`], [0, -0.422307, 0]);
+    joints[`${side} Foot`] = at(joints[`${side} Calf`], [0, -0.410989, 0]);
+    joints[`${side} Toe`] = at(joints[`${side} Foot`], [0, -0.067168, 0.133748]);
+  }
+  return joints;
+}
+const LEGACY = () => rig({ pelvisToSpine: 0.105314, hipDrop: 0.093129, shoulderRise: 0, head: [0, 0.136773, 0] });
+const CURRENT = () => rig({ pelvisToSpine: 0.198451, hipDrop: 0, shoulderRise: 0.2106, head: [0, 0.340962, 0.042165] });
+/** 몸 전체를 앞으로 30° 숙이고 옆으로 20° 돌린다(곧게 선 자세에서만 맞는 식을 거른다). */
+function leaned(joints) {
+  const a = Math.PI / 6, b = Math.PI / 9;
+  const turn = ([x, y, z]) => { const [y1, z1] = [y * Math.cos(a) - z * Math.sin(a), y * Math.sin(a) + z * Math.cos(a)]; return [x * Math.cos(b) + z1 * Math.sin(b), y1, -x * Math.sin(b) + z1 * Math.cos(b)]; };
+  return Object.fromEntries(Object.entries(joints).map(([name, point]) => [name, turn(point)]));
+}
+const mid = (a, b) => a.map((value, axis) => (value + b[axis]) / 2);
+/** [몸통/다리, 어깨 폭/몸통]. 몸통 = 엉덩이 선(두 Thigh 중점) → 어깨 선(두 Upper Arm 중점), 다리 = 허벅지 + 종아리. */
+const proportions = (j) => {
+  const torso = distance(mid(j['Left Thigh'], j['Right Thigh']), mid(j['Left Upper Arm'], j['Right Upper Arm']));
+  const leg = distance(j['Right Thigh'], j['Right Calf']) + distance(j['Right Calf'], j['Right Foot']);
+  return [torso / leg, distance(j['Left Upper Arm'], j['Right Upper Arm']) / torso];
+};
+
+test('그려진 뼈 길이 비율은 2026-10 리그 비율과 같다(몸통/다리, 어깨 폭/몸통)', () => {
+  const view = viewer();
+  view.sandbox.data.bones = BODY_BONES;
+  const expected = proportions(CURRENT());
+  for (const angle of [0, 90, 180]) for (const joints of [LEGACY(), leaned(LEGACY())]) {
+    const drawn = view.sandbox.panelSkeleton({ joints }, angle).joints;
+    proportions(drawn).forEach((value, index) => assert.ok(Math.abs(value / expected[index] - 1) < 0.002, `${angle}° ${index}: ${value} ≠ ${expected[index]}`));
+    near(distance(drawn.Chest, drawn.Head), 0.136773 + 0.2106);
+  }
+  // 고치기 전 예전 형식 비율은 몸통이 0.21m 짧아 이 시험에 걸린다.
+  assert.ok(proportions(LEGACY())[0] < expected[0] * 0.7);
+  // 이미 길이가 맞는 최근 형식은 그대로 그린다.
+  for (const joints of [CURRENT(), leaned(CURRENT()), BODY]) {
+    assert.equal(view.sandbox.withUpperChest(joints), joints);
+    const drawn = view.sandbox.panelSkeleton({ joints }, 45).joints, plain = view.sandbox.uprightSkeleton(joints, 45);
+    for (const name of Object.keys(joints)) assert.deepEqual([...drawn[name]], [...plain[name]], name);
+  }
+});
+
+test('관절 방향(부모→자식 단위 벡터)은 자료와 같고 어깨·머리는 가슴 위로 함께 올라간다', () => {
+  const view = viewer();
+  for (const joints of [LEGACY(), leaned(LEGACY())]) {
+    const before = JSON.stringify(joints), raised = view.sandbox.withUpperChest(joints);
+    assert.equal(JSON.stringify(joints), before, '자료(frame.joints)는 그대로다');
+    const direction = (j, a, b) => { const d = j[b].map((value, axis) => value - j[a][axis]), size = Math.hypot(...d); return d.map((value) => value / size); };
+    // Chest→어깨는 빠진 마디를 지나 이어지는 뼈라 방향이 바뀌는 것이 맞다(옆 → 위).
+    for (const [a, b] of BODY_BONES) if (!(a === 'Chest' && b.endsWith('Shoulder'))) {
+      direction(raised, a, b).forEach((value, axis) => near(value, direction(joints, a, b)[axis]));
+      if (!(a === 'Chest' && b === 'Head')) near(distance(raised[a], raised[b]), distance(joints[a], joints[b]));
+    }
+    // 올린 양은 척추(Chest→Head) 방향으로 0.2106m 이고 어깨 두 갈래·머리가 같은 벡터로 움직인다.
+    const lift = raised.Head.map((value, axis) => value - joints.Head[axis]), spine = direction(joints, 'Chest', 'Head');
+    lift.forEach((value, axis) => near(value, spine[axis] * 0.2106));
+    for (const name of Object.keys(joints)) {
+      const moved = /^(Head|(Left|Right) (Shoulder|Upper Arm|Fore Arm|Hand))$/.test(name);
+      raised[name].forEach((value, axis) => near(value - joints[name][axis], moved ? lift[axis] : 0));
+    }
+  }
+});
+
+test('예전 형식 몸에서도 오른팔은 올린 어깨에서 건 손잡이로 다시 세운다', () => {
+  const view = viewer(), joints = LEGACY(), frame = { ...gunFrame(), joints };
+  const { joints: drawn, estimated } = view.sandbox.panelSkeleton(frame, 0);
+  assert.deepEqual([...estimated], REBUILT);
+  // 손잡이는 Head 관절 기준 오른쪽 0.3 · 아래 0.35 · 앞 0.25m(정면 그림: 몸 오른쪽 = −x). 머리가 올라간 만큼 손도 올라간다.
+  drawn['Right Hand'].forEach((value, axis) => near(value - drawn.Head[axis], [-0.3, -0.35, 0.25][axis]));
+  near(distance(drawn['Right Upper Arm'], drawn['Right Fore Arm']), 0.243033);
+  near(distance(drawn['Right Fore Arm'], drawn['Right Hand']), 0.243033);
+  // 어깨는 올린 자리 그대로다(머리와 어깨 사이 거리는 자료와 같다).
+  near(distance(drawn.Head, drawn['Right Upper Arm']), distance(joints.Head, joints['Right Upper Arm']));
 });
