@@ -29,7 +29,6 @@ import numpy as np
 from trainer.demo_api import coating_assessment
 from trainer.demo_api.coating_progress import CoatingProgressEngine
 from trainer.demo_api.telemetry_contracts import learning_mode_from_scenario, process_from_tool_type
-from trainer.zone_engine.numerical import SIX_BAND_KEYS
 
 logger = logging.getLogger(__name__)
 
@@ -190,7 +189,7 @@ def analyze_session_coating(
         (zone for zone in zones if zone["status"] in {"under_app", "over_app"}),
         key=lambda zone: -abs(zone["thickness_um"] - zone["target_thickness_um"]) / zone["target_thickness_um"],
     )[:WORST_ZONE_LIMIT]
-    bands = [summary["six_band_counts"][key] for key in SIX_BAND_KEYS]
+    bands = [summary["six_band_counts"][key] for key in coating_assessment.SIX_BAND_KEYS]
     painted = summary["painted_pixel_count"]
     report = {
         "comparison_basis": "session_target",

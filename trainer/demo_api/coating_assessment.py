@@ -18,12 +18,17 @@ PR #8 엔진과 다른 점:
    선언하고 섞어 추론하지 않는다.
 6. 실시간 크롭은 요청의 `scale_um`으로 복호해 아틀라스에 최근접으로 놓고, complete는 표면 크기가
    프로필과 다르면 최근접으로 맞춘다. PR #8은 눈금 20000 고정이고 크기가 다르면 거부한다.
+   실시간 크롭 복호(`coating_progress._decode_crop`)는 PIL이 여는 그림을 모두 RGB로 바꿔 받는다.
+   PR #8 복호는 8비트 RGB·RGBA PNG만 받는다(complete 높이맵은 PR #8 복호를 그대로 쓴다).
 7. `gate_status`, `coverage_percent`, `overpaint_percent`, `completion_percent`는 PR #8 출력이
    아니다. PR #8의 6구간 개수에서 이 어댑터가 만든 값이다. PR #8에는 면적 게이트가 없다.
 8. 조절 후보의 표본은 시퀀스 평균 속도·거리다. PR #8은 그 Zone에 착탄한 분사 중 프레임의
    속도·거리를 쓴다.
 9. 세션 집계의 미도장률·6구간을 항상 낸다. PR #8은 최신 Zone 평가가 하나라도 `available`이
    아니면 보류한다.
+10. 판정 표면이 좌하단 원점이라 Zone 화소를 더하는 순서가 PR #8(좌상단 원점)과 다르다. 칠한 곳
+    평균이 마지막 자리(1e-14 µm 수준, 실시간 표면은 float32라 1e-7 수준)에서 다를 수 있고, 평균이
+    목표와 정확히 같은 동률에서는 등급이 갈릴 수 있다.
 """
 
 from __future__ import annotations
@@ -46,6 +51,8 @@ from trainer.zone_engine.errors import EngineError
 # PR #8 엔진은 목표를 기본값으로 채우지 않는다. v1 흐름만 160 µm로 판정하고 그 사실을 표시한다(D3).
 DEFAULT_TARGET_UM: Final = 160.0
 GATE_COVERAGE_PERCENT: Final = 95.0
+# 호출 지점이 zone_engine을 직접 읽지 않게 다시 내보낸다.
+SIX_BAND_KEYS: Final = numerical.SIX_BAND_KEYS
 STATUS_BY_GRADE: Final = {"below": "under_app", "normal": "normal", "above": "over_app"}
 # 이 흐름은 PR #8 엔진이 보류할 입력에도 등급을 낸다. 그래서 PR #8 문자열을 그대로 쓰지 않고 접두를 붙인다.
 ASSESSMENT_VERSION: Final = f"coating-v1-adapter/{CRITERION_VERSION}"
