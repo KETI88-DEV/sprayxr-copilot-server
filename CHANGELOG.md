@@ -18,9 +18,10 @@ API·웹 화면의 기능 변경을 버전별로 기록합니다. 버전 태그�
 - 이상 알림 SSE에 `anomaly_type`이 둘 늘었습니다. 모르는 종류를 버리지 말고 표시하는 분기가 필요합니다.
   - `coating_over_app`(`reason_code=zone_grade_above`): 그 Zone의 칠한 곳 평균이 목표의 1.5배 이상이 된 첫 시퀀스.
   - `coating_under_app`(`reason_code=zone_grade_below`): 다른 Zone으로 넘어간 첫 시퀀스에서 방금 떠난 Zone이 저도막일 때. 본문의 `zone_id`는 지금 Zone이 아니라 떠난 Zone입니다.
-  - 세션마다 Zone당 종류별 1회이며, 발행 이력은 서버 메모리에만 있어 서버가 재시작되면 한 번 더 나올 수 있습니다. 모의 발행 경로(`/api/v1/test/sequence/*`)에는 도막 알림이 없습니다.
+  - 도막 알림 본문에는 `zone_id`, `map_num`, `status`(`over_app`|`under_app`), `grade`, `thickness_um`, `target_thickness_um`, `target_basis`가 더해집니다. 한 시퀀스에 알림이 둘 이상 나올 수 있습니다(예: 순서 이탈과 과도막).
+  - 세션마다 Zone당 종류별 1회입니다. 발행 이력과 직전 Zone은 서버 메모리에만 있어, 서버가 재시작되면 이미 알린 Zone의 알림이 한 번 더 나올 수 있고 첫 Zone 이동에서는 저도막 알림이 빠질 수 있습니다. 동시 세션이 16개를 넘어 밀려날 때도 직전 Zone을 잃습니다. 모의 발행 경로(`/api/v1/test/sequence/*`)에는 도막 알림이 없습니다.
   - 순서·방향 이탈 알림의 종류와 발행 조건은 그대로이고, `message`의 도막 문구만 새 표기로 바뀝니다.
-- analyze-sequence `coating_feedback`은 이전에는 항상 `not_available`(`coating_engine_pending_integration`)이었고, 이제 현재 Zone의 평가를 싣습니다(`zone_id`, `status`, `grade`, `thickness_um`, `target_thickness_um`, `target_basis`, `normal_band_um`, `unpainted_fraction`, `six_band_counts`, `adjustments`, `message`, `algorithm_version`). 칠한 곳이 없으면 `not_available`입니다. `adjustments`의 속도·이격거리 항목은 규칙에 따른 조절 후보이며 확정된 원인이나 처방이 아닙니다. `telemetry/sequence` 저장 전용 경로는 그대로입니다.
+- analyze-sequence `coating_feedback`은 이전에는 항상 `not_available`(`coating_engine_pending_integration`)이었고, 이제 현재 Zone의 평가를 싣습니다(`zone_id`, `map_num`, `status`, `grade`, `thickness_um`, `target_thickness_um`, `target_basis`, `normal_band_um`, `unpainted_fraction`, `six_band_counts`, `adjustments`, `message`, `algorithm_version`). 칠한 곳이 없으면 `not_available`이고, 도막을 재지 못했을 때 `reason_code`는 같은 응답 `coating_progress.reason`과 같은 코드입니다. `thickness_um`은 알림과 같이 저도막 평균을 0.1 단위로 내려 적습니다. `adjustments`의 속도·이격거리 항목은 규칙에 따른 조절 후보이며 확정된 원인이나 처방이 아닙니다. `telemetry/sequence` 저장 전용 경로는 그대로입니다.
 - analyze-sequence `guide.speed`·`guide.distance`는 같은 변수에 대한 조절 후보와 방향이 다르거나 `guide`가 `ok`이면 `{"status": null, "message": null, "available": false, "reason": "coating_adjustment_priority"}`로 나갑니다. 방향이 같거나 등급이 정상이면 이전과 같습니다. 이미 `available=false` 항목을 처리하는 화면이면 할 일이 없습니다.
 - 완료 리포트 `coating_report`
   - 판정한 리포트의 `comparison_basis`는 항상 `session_target`이고, `target_thickness_um`은 판정에 쓴 목표, `target_basis`는 새 필드입니다.
@@ -28,18 +29,21 @@ API·웹 화면의 기능 변경을 버전별로 기록합니다. 버전 태그�
   - `distribution`은 칠한 화소 수와 목표·목표의 1.5배 경계, `zone_summary`는 6구간 비율(칠한 면적 대비)입니다. `algorithm_version`은 `coating-session-v2/…`입니다.
   - `expert_comparison`이 새 필드로 실립니다. 전문가 최종 도막과 견준 구역 상태이며 보정 전 두께 기준의 참고 정보입니다. 주 판정과 진행 안내에는 쓰지 않습니다. `guideline`·`llm_briefing` 끝에 이를 알리는 한 문장이 붙습니다.
   - Zone 기준 자료가 없으면 `guideline`은 "이 콘텐츠의 Zone 기준 자료가 없어 도막을 판정하지 못했습니다."로 나가며 사유 코드는 그대로입니다.
-  - `/docs`의 리포트 예시와 시험용 `/api/v1/test/3-complete`가 실제 응답 모양으로 바뀌었습니다. 서버가 내지 않는 값은 `null`입니다. 화면 설계는 새 예시를 기준으로 해 주세요.
+  - `/docs`의 리포트 예시와 시험용 `/api/v1/test/workflow/3-complete`가 실제 응답 모양으로 바뀌었습니다. 서버가 내지 않는 값은 `null`입니다. 화면 설계는 새 예시를 기준으로 해 주세요.
 - `POST /api/v1/copilot/query`
   - `coating_context`가 위 `coating_progress` 변화를 그대로 따르고, `zones[]`는 평가 행입니다. 완료 리포트 답의 행에는 `expert`가 더해집니다(이전 리포트의 행에는 없습니다). `pose_context.coating`에 `grade`, `unpainted_fraction`, `target_thickness_um`, `target_basis`, `gate_status`가 더해집니다.
-  - `task_type=error_analysis`와 도막 분포 질문은 "준비 중" 대신 완료 리포트의 분포와 조절 후보로 답합니다. 완료 세션 도막 답 끝에는 "참고(전문가 대비, 보정 전 두께): …" 한 줄이 붙습니다.
+  - `task_type=error_analysis`는 "준비 중" 대신 완료 리포트의 분포와 조절 후보로 답합니다. 리포트가 없으면 자료 없음을 안내합니다.
+  - 도막 상태·분포 질문(예: "도막 분포 알려줘")은 이전에 문서 검색으로 답했고, 이제 저장된 Zone 등급 목록으로 답합니다. 질문에 "분포"가 있으면 분포 문장이 더해지고 조절 후보는 없습니다.
+  - 완료 세션 도막 답 끝에는 "참고(전문가 대비, 보정 전 두께): …" 한 줄이 붙고, Zone 번호를 묻는 답은 행마다 "· 전문가 대비 …"가 붙습니다. 구역 자세 답 끝에는 전문가 최종 도막과 견준 문장이 붙습니다.
+  - 응답에 `X-Copilot-Answer-Source` 헤더가 더해졌습니다. 더해지기만 하는 변경입니다.
   - 빠른 지식 답은 저도막을 칠한 곳 평균이 목표 미만, 과도막을 목표의 1.5배 이상, 그 사이를 정상으로 정의합니다.
 - 내부 MCP `dft_judge`·`anomaly_detection`의 출력이 같은 기준(등급, 6구간, 조절 후보)으로 바뀌었습니다. 내부 채팅 도구용이며 TSB 공개 응답이 아닙니다. 이 도구가 학습 때와 다른 출력을 내므로 이전 평가 점수와 그대로 비교할 수 없습니다.
 
 ### 도막 판정을 PR #8 기준으로 전환
 
-- 도막 보정·Zone 코칭 엔진(PR #8)을 도입했습니다. 기존 `/api/v1` 흐름은 그 계산 함수를 어댑터 한 곳(`coating_assessment.py`)으로 직접 부릅니다.
+- 도막 보정·Zone 코칭 엔진(PR #8)을 도입했습니다. 기존 `/api/v1` 흐름은 그 계산 함수를 어댑터 한 곳으로 직접 부릅니다.
 - 엔진·설명 서비스(8122·8123)와 `/api/v2` 경로는 기본으로 꺼져 있고 이번 릴리스에서도 켜지 않습니다. 설치와 v2 연동은 별도 Issue에서 이어갑니다.
-- 세션 시작 때 목표를 명시했는지 `sessions.target_basis`에 저장합니다. 이 열이 생기기 전에 시작한 세션은 저장된 목표를 세션 목표로 봅니다. 요청·응답 모양은 그대로입니다.
+- 세션 시작 때 목표를 명시했는지 세션에 저장합니다. 이 저장이 생기기 전에 시작한 세션은 저장된 목표를 세션 목표로 봅니다. 요청·응답 모양은 그대로입니다.
 - 실시간 안내·이상 알림·현재/다음 Zone 질의·리포트 행이 같은 게이트와 같은 문구를 씁니다.
 
 ### 모션뷰어
@@ -48,7 +52,7 @@ API·웹 화면의 기능 변경을 버전별로 기록합니다. 버전 태그�
 - 대상 구조물 모델을 반투명 면과 윤곽선으로, 바닥 격자와 우하단 좌표축을 그립니다. 몸은 굵기가 변하는 캡슐과 깊이 순서로, 건은 손잡이·몸통·연장대·노즐 모양으로 그립니다. 큰 장면의 몸은 재지 않은 아랫배를 그리지 않도록 가슴에서 끊습니다. 상태 막대의 칸 폭은 가장 긴 값에 맞춰 고정합니다.
 - 스켈레톤 패널은 정면에서 본 그림으로 좌우와 팔·다리 색을 바로잡았고, 예전 형식 기록에서 빠진 가슴 위 마디를 패널에서만 채워 몸통 길이를 맞춥니다.
 - 도막 카드는 기록 옆 최종 높이맵으로 잰 목표 대비 평가를 기본으로 보이고, "목표 대비 | 전문가 대비"를 한 번 눌러 바꿉니다. 높이맵이 없는 기록은 이유를 밝히고 전문가 대비로 열립니다. 도막 질문은 서명된 목표 대비 판정으로 답합니다.
-- 다른 언어 답의 대기 한도를 180초로 늘렸습니다. 같은 FBX는 경로·수정 시각·크기가 같으면 다시 파싱하지 않습니다.
+- 다른 언어 답은 180초까지 기다립니다. 같은 FBX는 경로·수정 시각·크기가 같으면 다시 파싱하지 않습니다.
 
 ### DB뷰어
 
@@ -64,8 +68,10 @@ API·웹 화면의 기능 변경을 버전별로 기록합니다. 버전 태그�
 
 ### 운영 참고
 
-- Spark의 MCP 이미지는 엔진 의존(numpy, pillow, `zone_engine`)이 더해져 다시 만들어야 합니다.
-- 이전 버전은 새 리포트의 `coating_report.target_basis`를 읽지 못하므로, 카나리와 운영이 같은 상태 DB를 쓰는지 확인한 뒤 교체합니다.
+- Spark의 MCP 이미지는 도막 계산용 이미지 처리 의존이 더해져 다시 만들어야 합니다.
+- 이전 버전은 새 리포트의 `coating_report.target_basis`와 `expert_comparison`을 읽지 못하므로, 카나리와 운영이 같은 상태 DB를 쓰는지 확인한 뒤 교체합니다. 되돌릴 때도 같은 위험이 있습니다.
+- 분석 결과 캐시 기준이 바뀌었습니다. 배포 시점에 진행 중인 세션이 예전 시퀀스를 다시 보내면 409 `sequence_analysis_out_of_order`가 날 수 있습니다.
+- 이미 저장된 리포트는 이전 기준(행에 `grade` 없음)으로 남고 다시 계산하지 않습니다.
 - 바뀐 서빙 프롬프트(27B·8B)는 실물 모델로 다시 확인해야 합니다.
 - Spark의 학습 데이터 기록은 새 기준으로 다시 변환하기 전까지 이전 기준으로 보입니다.
 
