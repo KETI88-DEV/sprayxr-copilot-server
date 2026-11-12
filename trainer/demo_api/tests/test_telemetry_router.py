@@ -231,7 +231,86 @@ def test_analyze_sequence_returns_current_zone_coating_progress() -> None:
         "comparison_basis": "expert_reference",
         "target_thickness_um": None,
         "expert_completion_percent": None,
+        "target_basis": None,
     }
+
+
+_ZONE_ROW = {
+    "zone_id": "1", "map_num": 1, "status": "under_app", "grade": "below", "thickness_um": 98.0,
+    "target_thickness_um": 160.0, "target_basis": "default_target",
+    # 실제 값(160, 240)이 아니다 — 라우터가 정상 범위를 다시 계산하지 않고 행의 값을 옮기는지 본다.
+    "normal_band_um": [1.0, 2.0], "unpainted_fraction": 0.12,
+    "six_band_counts": {"lt_0_9t": 88, "from_0_9t_to_lt_1_0t": 0, "from_1_0t_to_lt_1_5t": 0,
+                        "from_1_5t_to_lt_2_0t": 0, "from_2_0t_to_lt_2_5t": 0, "gte_2_5t": 0},
+    "coverage_percent": 0.0, "overpaint_percent": 0.0, "completion_percent": 53.9, "gate_status": "needs_more",
+    "adjustments": [{"variable": "speed_mm_s", "direction": "decrease", "priority": 1,
+                     "evidence_kind": "quality_rule_candidate"}],
+    "adjustment_reason": None,
+}
+
+
+class _AssessedProgressStub:
+    def evaluate(self, request: Any) -> CoatingProgress:
+        return _ProgressStub().evaluate(request).model_copy(update={"assessment": dict(_ZONE_ROW)})
+
+
+def test_analyze_sequence_fills_coating_feedback_from_the_assessment() -> None:
+    client = _client(coating_progress_engine=_AssessedProgressStub())
+
+    data = client.post(ANALYZE_SEQUENCE_PATH, json=_body(scenario_id="3")).json()["data"]
+    feedback = data["coating_feedback"]
+
+    assert set(data) == _ANALYZE_DATA_KEYS
+    assert "assessment" not in data["coating_progress"]
+    assert feedback["analysis_status"] == "available"
+    assert feedback["reason_code"] is None
+    for key in ("zone_id", "map_num", "status", "grade", "thickness_um", "target_thickness_um", "target_basis",
+                "normal_band_um", "unpainted_fraction", "six_band_counts", "adjustments"):
+        assert feedback[key] == _ZONE_ROW[key], key
+    assert feedback["message"] == (
+        "Zone 1: 저도막(칠한 곳 평균 98µm, 미도장 12%) "
+        "조절 후보: 이동 속도를 낮추는 쪽. 원인으로 확정된 것은 아닙니다."
+    )
+    assert feedback["algorithm_version"].startswith("coating-v1-adapter/")
+    # 재전송은 저장된 분석을 돌려준다.
+    assert client.post(ANALYZE_SEQUENCE_PATH, json=_body(scenario_id="3")).json()["data"]["coating_feedback"] == feedback
+
+
+def test_analyze_sequence_reports_a_zone_with_nothing_painted_as_not_available() -> None:
+    row = {**_ZONE_ROW, "status": None, "grade": None, "thickness_um": None, "unpainted_fraction": 1.0,
+           "adjustments": [], "adjustment_reason": "no_valid_painted_pixels"}
+
+    class _Unpainted:
+        def evaluate(self, request: Any) -> CoatingProgress:
+            return _ProgressStub().evaluate(request).model_copy(update={"assessment": row})
+
+    feedback = _client(coating_progress_engine=_Unpainted()).post(
+        ANALYZE_SEQUENCE_PATH, json=_body(scenario_id="3"),
+    ).json()["data"]["coating_feedback"]
+
+    assert (feedback["analysis_status"], feedback["reason_code"]) == ("not_available", "no_valid_painted_pixels")
+    assert feedback["unpainted_fraction"] == 1.0
+    assert feedback["message"] == "Zone 1: 칠한 곳 없음(미도장 100%)"
+
+
+_NO_FEEDBACK = {
+    "zone_id": None, "map_num": None, "status": None, "grade": None, "thickness_um": None,
+    "target_thickness_um": None, "target_basis": None, "normal_band_um": None, "unpainted_fraction": None,
+    "six_band_counts": None, "adjustments": [], "message": None, "algorithm_version": None,
+}
+
+
+def test_analyze_sequence_without_an_assessment_reports_why() -> None:
+    stubbed = _client(coating_progress_engine=_ProgressStub()).post(
+        ANALYZE_SEQUENCE_PATH, json=_body(scenario_id="3"),
+    ).json()["data"]
+    no_engine = _client().post(ANALYZE_SEQUENCE_PATH, json=_body(scenario_id="3")).json()["data"]
+
+    assert stubbed["coating_feedback"] == {
+        "analysis_status": "not_available", "reason_code": "coating_assessment_unavailable", **_NO_FEEDBACK}
+    # 도막을 못 잰 까닭이 있으면 그 까닭을 그대로 싣는다.
+    assert no_engine["coating_feedback"] == {
+        "analysis_status": "not_available", "reason_code": "coating_reference_unavailable", **_NO_FEEDBACK}
 
 
 def test_telemetry_sequence_contract_does_not_gain_the_analyze_guide() -> None:

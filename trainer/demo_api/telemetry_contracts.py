@@ -348,7 +348,9 @@ class SequenceDataAck(StrictModel):
 class EngineFeedback(StrictModel):
     """`coating_feedback`·`sequence_feedback`의 자리.
 
-    엔진이 없으므로 `analysis_status`와 `reason_code`만 낸다. 계약 예시는 이 두 객체에
+    `sequence_feedback`과 저장 전용 경로(`telemetry/sequence`)의 `coating_feedback`은
+    `analysis_status`와 `reason_code`만 낸다. analyze-sequence의 `coating_feedback`은 아래
+    `CoatingFeedback`이 채운다. 계약 예시는 이 두 객체에
     `analysis_status`를 넣지 않았지만, §7.3 말미가 "판정할 데이터가 부족하면 임의 값을
     만들지 않고 `analysis_status="not_available"`과 안정적인 `reason_code`를 반환한다"고
     규정하므로 세 feedback의 확인 방법을 하나로 맞춘다. 계약 개정 대상이다.
@@ -356,6 +358,28 @@ class EngineFeedback(StrictModel):
 
     analysis_status: AnalysisStatus
     reason_code: str | None
+
+
+class CoatingFeedback(EngineFeedback):
+    """analyze-sequence의 `coating_feedback`: 현재 Zone의 도막 등급·분포·조절 후보.
+
+    값은 `coating_assessment.zone_row`의 행을 그대로 옮긴 것이다. 칠한 곳이 없으면
+    `not_available`이고 등급·평균만 비며, 도막을 재지 못했으면 나머지가 전부 비어 있다.
+    """
+
+    zone_id: str | None = None
+    map_num: int | None = None
+    status: Literal["under_app", "normal", "over_app"] | None = None
+    grade: Literal["below", "normal", "above"] | None = None
+    thickness_um: float | None = None
+    target_thickness_um: float | None = None
+    target_basis: Literal["session_target", "default_target"] | None = None
+    normal_band_um: list[float] | None = None
+    unpainted_fraction: Annotated[float | None, Field(ge=0, le=1)] = None
+    six_band_counts: dict[str, int] | None = None
+    adjustments: list[dict[str, Any]] = Field(default_factory=list)
+    message: str | None = None
+    algorithm_version: str | None = None
 
 
 class GuideItem(StrictModel):
@@ -371,7 +395,7 @@ class SequenceGuide(StrictModel):
 
 
 class CoatingProgress(StrictModel):
-    """현재 Zone의 세션 누적 도막을 전문가 최종 도막과 비교한 결과."""
+    """현재 Zone의 세션 누적 도막을 목표 두께와 비교한 진행 판정."""
 
     zone_id: str
     available: bool
@@ -386,6 +410,9 @@ class CoatingProgress(StrictModel):
     comparison_basis: Literal["expert_reference", "session_target"] = "expert_reference"
     target_thickness_um: float | None = None
     expert_completion_percent: Annotated[float | None, Field(ge=0, le=100)] = None
+    target_basis: Literal["session_target", "default_target"] | None = None
+    # 엔진이 라우터에 평가 행을 건네는 자리다. 응답·저장에는 직렬화하지 않는다.
+    assessment: dict[str, Any] | None = Field(default=None, exclude=True)
 
 
 class TelemetrySequenceData(StrictModel):
@@ -421,6 +448,7 @@ class TelemetrySequenceResponse(StrictModel):
 
 
 class AnalyzeSequenceData(TelemetrySequenceData):
+    coating_feedback: CoatingFeedback
     guide: SequenceGuide
     coating_progress: CoatingProgress
 

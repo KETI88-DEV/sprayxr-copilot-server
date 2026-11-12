@@ -1,4 +1,4 @@
-"""Current-Zone completion from cumulative crops and official Zone masks."""
+"""Current-Zone completion: cumulative crops, official Zone masks, PR #8 corrected thickness vs the target."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from collections import OrderedDict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 import numpy as np
 from PIL import Image, UnidentifiedImageError
@@ -22,12 +22,7 @@ from trainer.demo_api.telemetry_contracts import AnalyzeSequenceRequest, Coating
 from trainer.zone_reference import ZoneReferenceCatalog
 
 _MAX_SESSIONS = 16
-# 시퀀스 안내(`evaluate`)의 구역 판정 기준. 세션 리포트(`judge_zones`)는 `coating_assessment`로 판정한다.
-_OVERPAINT_RISK_PERCENT = 25.0
-_COMPLETE_PERCENT = 90.0
-_COVERAGE_PERCENT = 85.0
-DEFAULT_TARGET_THICKNESS_UM = 160.0
-_TARGET_COVERAGE_PERCENT = 95.0
+DEFAULT_TARGET_THICKNESS_UM = coating_assessment.DEFAULT_TARGET_UM
 
 
 @dataclass(frozen=True)
@@ -49,15 +44,6 @@ class ZoneCoverage:
     coverage_percent: float
     overpaint_percent: float
     mean_um: float
-    required_coverage_percent: float = _COVERAGE_PERCENT
-
-    @property
-    def status(self) -> Literal["overpaint_risk", "complete", "needs_more"]:
-        if self.overpaint_percent >= _OVERPAINT_RISK_PERCENT:
-            return "overpaint_risk"
-        if self.completion_percent >= _COMPLETE_PERCENT and self.coverage_percent >= self.required_coverage_percent:
-            return "complete"
-        return "needs_more"
 
 
 @dataclass(frozen=True)
@@ -75,7 +61,6 @@ def measure_zone(
     atlas_height: int,
     grid_size: int,
     zone_mask: np.ndarray | None,
-    target_thickness_um: float | None = None,
 ) -> ZoneCoverage | None:
     """좌하단 원점 두께 표면을 전문가 셀에 대고 잰다. 잴 셀이 하나도 없으면 None."""
     completion_values: list[float] = []
@@ -86,8 +71,8 @@ def measure_zone(
         if not isinstance(target, dict):
             continue
         try:
-            q1 = float(target["q1_um"]) if target_thickness_um is None else target_thickness_um * .9
-            q3 = float(target["q3_um"]) if target_thickness_um is None else target_thickness_um * 1.1
+            q1 = float(target["q1_um"])
+            q3 = float(target["q3_um"])
         except (KeyError, TypeError, ValueError):
             continue
         if not math.isfinite(q1) or q1 <= 0 or not math.isfinite(q3):
@@ -117,8 +102,7 @@ def measure_zone(
         # a 0.5 um boundary tolerance so an encoded 100 um target does
         # not become 99.96 um and incorrectly miss coverage.
         covered += int(actual >= q1 - 0.5)
-        upper = q3 if target_thickness_um is not None else q3 + max(q3 - q1, q3 * 0.1, 5.0)
-        overpainted += int(actual > upper + .5)
+        overpainted += int(actual > q3 + max(q3 - q1, q3 * 0.1, 5.0) + .5)
     if not completion_values:
         return None
     total = len(completion_values)
@@ -133,32 +117,13 @@ def measure_zone(
     )
 
 
-def measure_target_zone(
-    surface: np.ndarray, zone_mask: np.ndarray | None, *, target_thickness_um: float,
-) -> ZoneCoverage | None:
-    """Count every official Zone pixel, including unobserved pixels as unmet.
-
-    Expert grid cells and crop averages are diagnostics, never completion proof.
-    A sub-micrometre RG16 boundary tolerance is allowed at the target.
-    """
-    if zone_mask is None or zone_mask.shape != surface.shape or not np.any(zone_mask):
-        return None
-    values = surface[zone_mask]
-    finite = np.isfinite(values)
-    covered = int(np.count_nonzero(finite & (values >= target_thickness_um - 0.5)))
-    overpainted = int(np.count_nonzero(finite & (values > target_thickness_um * 1.1 + 0.5)))
-    total = int(values.size)
-    return ZoneCoverage(
-        cells=total, below=total - covered, above=overpainted,
-        completion_percent=float(np.minimum(np.where(finite, values, 0) / target_thickness_um, 1).mean() * 100),
-        coverage_percent=covered / total * 100, overpaint_percent=overpainted / total * 100,
-        mean_um=float(np.where(finite, values, 0).mean()),
-        required_coverage_percent=_TARGET_COVERAGE_PERCENT,
-    )
-
-
 class CoatingProgressEngine:
-    """Merge TSB absolute cumulative crops and compare official pixels with the target.
+    """Merge TSB absolute cumulative crops and judge the official Zone against the target.
+
+    Thickness is corrected and graded by `coating_assessment` (PR #8 rules); the
+    advance gate is 95% of the official Zone area meeting the target. Unlike the
+    PR #8 engine, pixels no crop has touched count as unpainted (not unknown) and a
+    missing target is judged against 160 µm and reported as `default_target`.
 
     ``cur_sequence_heatmap`` is a crop of the area touched by the current
     sequence, but every encoded pixel is the surface's absolute cumulative
@@ -270,6 +235,9 @@ class CoatingProgressEngine:
         atlas_width: int,
         atlas_height: int,
     ) -> tuple[_DecodedCrop | None, str | None]:
+        # PR #8 복호(`numerical.decode_height_png`)의 main 쪽 사본이다. 다른 점은 요청의 `scale_um`을 쓰는 것과
+        # 최근접 배치다(`coating_assessment` 독스트링 6번). 값이 같음은
+        # `test_live_crop_path_matches_the_engine_cumulative_crop_path`가 지킨다.
         if item.get("encoding") != "png;base64":
             return None, "heatmap_encoding_unsupported"
         scale_um = cls._scale(item.get("format"))
@@ -373,6 +341,9 @@ class CoatingProgressEngine:
         surfaces: dict[int, np.ndarray], map_num: int, crop: _DecodedCrop,
         dimensions: tuple[int, int],
     ) -> None:
+        # PR #8 누적 교체(`numerical.overwrite_cumulative_crops`)의 main 쪽 사본이다. 다른 점은 float32 저장과
+        # B=0 화소가 앞선 값을 지우지 않는 것이다(`coating_assessment` 독스트링 4번). 값이 같음은
+        # `test_live_crop_path_matches_the_engine_cumulative_crop_path`가 지킨다.
         rows, columns = np.nonzero(crop.valid)
         if not rows.size:
             return
@@ -484,7 +455,7 @@ class CoatingProgressEngine:
             from trainer.demo_api.sequence_store import sequence_order_key
 
             key = (request.session_id, request.process_type, request.resolved_mode_id)
-            effective_target = DEFAULT_TARGET_THICKNESS_UM if target_thickness_um is None else target_thickness_um
+            effective_target = coating_assessment.resolve_target(target_thickness_um)[0]
             cached = self._results.get((*key, request.sequence_id, effective_target))
             if cached is not None:
                 return cached.model_copy(deep=True)
@@ -536,8 +507,8 @@ class CoatingProgressEngine:
             if request.zone_id in {"-1", "0"}:
                 return self._unavailable(request.zone_id, "zone_unavailable")
 
-            target_thickness_um = (DEFAULT_TARGET_THICKNESS_UM
-                                   if target_thickness_um is None else target_thickness_um)
+            requested = target_thickness_um
+            target_thickness_um, target_basis = coating_assessment.resolve_target(requested)
             if not math.isfinite(target_thickness_um) or target_thickness_um <= 0:
                 return self._unavailable(request.zone_id, "target_thickness_invalid")
             result_key = (request.session_id, process, mode_id, request.sequence_id, target_thickness_um)
@@ -620,26 +591,28 @@ class CoatingProgressEngine:
             applied.add(request.sequence_id)
             self._remember_session(session_key, session, applied)
 
-            coverage = measure_target_zone(
-                surface, zone_mask, target_thickness_um=target_thickness_um,
-            )
-            if coverage is None:
+            # 조절 후보의 표본은 지금 시퀀스 한 건의 평균 속도·거리뿐이다(리포트는 그 Zone의 저장된 시퀀스 전부).
+            behavior = coating_assessment.behavior_by_zone(
+                [{"zone_id": request.zone_id, "sequence_result": result_payload}])
+            assessment = coating_assessment.assess_zone(
+                surface, zone_mask, requested, **behavior.get(request.zone_id, {}))
+            if assessment is None:
                 return self._unavailable(request.zone_id, "coating_reference_invalid")
 
+            # 전문가 칸 비교는 보정 전 표면에 대는 참고 값이다. 진행 판정에는 쓰지 않는다.
             expert_coverage = measure_zone(
                 surface, target_cells, atlas_width=atlas_width, atlas_height=atlas_height,
                 grid_size=grid_size, zone_mask=zone_mask,
-            ) if target_thickness_um is not None else coverage
+            )
 
-            completion_percent = coverage.completion_percent
-            coverage_percent = coverage.coverage_percent
-            overpaint_percent = coverage.overpaint_percent
-            status = coverage.status
+            coverage_percent = assessment["coverage_percent"]
+            status = assessment["gate_status"]
             if status == "overpaint_risk":
                 recommendation = "stop_current_zone"
                 next_zone_id = None
-                message = (f"Zone {request.zone_id}의 과도장 영역 분사를 중단하세요. "
-                           "목표에 미달한 영역만 확인하고 이미 두꺼운 영역의 재도장을 피하세요.")
+                message = (f"Zone {request.zone_id}의 칠한 곳 평균 두께가 {assessment['painted_mean_um']:.0f}µm로 "
+                           f"{coating_assessment.OVER_PHRASE}입니다(과도막). "
+                           "이 Zone의 분사를 멈추고 목표에 못 미친 곳만 확인하세요.")
             elif status == "complete":
                 recommendation = "move_next_zone"
                 next_zone_id = self._next_zone(profile, map_num, request.zone_id)
@@ -652,20 +625,21 @@ class CoatingProgressEngine:
                 message = (f"Zone {request.zone_id}의 목표 도막 충족 면적은 {coverage_percent:.1f}%입니다. "
                            "현재 Zone의 목표 미달 영역만 보완하고 이미 두꺼운 영역은 피하세요.")
 
-            if target_thickness_um is not None:
-                message = f"세션 목표 {target_thickness_um:g}µm 기준: " + message.replace("전문가 기준 도막", "목표 도막")
+            message = f"{coating_assessment.basis_label(target_thickness_um, target_basis)}: {message}"
 
             result = CoatingProgress(
-                comparison_basis="session_target" if target_thickness_um is not None else "expert_reference",
+                comparison_basis="session_target",
                 target_thickness_um=target_thickness_um,
+                target_basis=target_basis,
+                assessment=coating_assessment.zone_row(map_num, request.zone_id, assessment),
                 expert_completion_percent=expert_coverage.completion_percent if expert_coverage is not None else None,
                 zone_id=request.zone_id,
                 available=True,
                 status=status,
                 recommendation=recommendation,
-                completion_percent=completion_percent,
+                completion_percent=assessment["completion_percent"],
                 coverage_percent=coverage_percent,
-                overpaint_percent=overpaint_percent,
+                overpaint_percent=assessment["overpaint_percent"],
                 next_zone_id=next_zone_id,
                 message=message,
                 reason=None,

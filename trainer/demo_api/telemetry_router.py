@@ -20,6 +20,7 @@ from anyio import to_thread
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
+from trainer.demo_api import coating_assessment
 from trainer.demo_api.monitor import MonitorRecorder
 from trainer.demo_api.anomaly_stream import AnomalyBroadcaster
 from trainer.demo_api.sequence_analysis import SequenceDecision, gate_sequence_decision
@@ -28,6 +29,7 @@ from trainer.demo_api.telemetry_contracts import (
     AnalyzeSequenceData,
     AnalyzeSequenceRequest,
     AnalyzeSequenceResponse,
+    CoatingFeedback,
     CoatingProgress,
     EngineFeedback,
     GuideItem,
@@ -85,6 +87,30 @@ def _unavailable_progress(zone_id: str) -> CoatingProgress:
         next_zone_id=None,
         message=None,
         reason="coating_reference_unavailable",
+    )
+
+
+_FEEDBACK_ROW_KEYS: Final = (
+    "zone_id", "map_num", "status", "grade", "thickness_um", "target_thickness_um", "target_basis",
+    "normal_band_um", "unpainted_fraction", "six_band_counts", "adjustments",
+)
+
+
+def _coating_feedback(progress: CoatingProgress) -> CoatingFeedback:
+    """엔진이 건넨 평가 행(`coating_assessment.zone_row`)을 그대로 옮긴다. 여기서 다시 계산하지 않는다."""
+    row = progress.assessment
+    if row is None:
+        return CoatingFeedback(
+            analysis_status="not_available", reason_code=progress.reason or "coating_assessment_unavailable")
+    graded = row["grade"] is not None
+    message = f"Zone {row['zone_id']}: {coating_assessment.grade_phrase(row)}"
+    adjustment = coating_assessment.adjustment_sentence(row["adjustments"])
+    return CoatingFeedback(
+        analysis_status="available" if graded else "not_available",
+        reason_code=None if graded else "no_valid_painted_pixels",
+        **{key: row[key] for key in _FEEDBACK_ROW_KEYS},
+        message=f"{message} {adjustment}" if adjustment else message,
+        algorithm_version=coating_assessment.ASSESSMENT_VERSION,
     )
 
 
@@ -192,7 +218,7 @@ def create_telemetry_router(
         )
         if analyze:
             assert isinstance(query, AnalyzeSequenceRequest)
-            analysis_key = json.dumps(["official-zone-target-95-v1", query.resolved_mode_id, query.process_type, body_sha256])
+            analysis_key = json.dumps(["zone-target-95-corrected-v1", query.resolved_mode_id, query.process_type, body_sha256])
             cached = sequences.load_analysis(
                 session_key=query.session_id, sequence_id=query.sequence_id, analysis_key=analysis_key,
             )
@@ -201,10 +227,9 @@ def create_telemetry_router(
             if cached is None:
                 guide = guidance_engine.evaluate(query) if guidance_engine is not None else _unavailable_guide()
                 decision = sequence_engine.evaluate(query, sequences) if sequence_engine is not None else None
-                target = None
-                if session_store is not None:
-                    session = session_store.get_session(query.session_id)
-                    target = session.target_thickness_um if session is not None else None
+                # 목표를 생략하고 시작한 세션은 None이 넘어가 기본 목표로 판정된다.
+                target = (coating_assessment.session_target(session_store.get_session(query.session_id))
+                          if session_store is not None else None)
                 if coating_progress_engine is None:
                     coating_progress = _unavailable_progress(query.zone_id)
                 elif callable(getattr(coating_progress_engine, "evaluate_replay", None)):
@@ -223,6 +248,7 @@ def create_telemetry_router(
                 cached = {
                     "guide": guide.model_dump(mode="json"),
                     "coating_progress": coating_progress.model_dump(mode="json"),
+                    "coating_feedback": _coating_feedback(coating_progress).model_dump(mode="json"),
                     "sequence_feedback": (decision.feedback.model_dump(mode="json") if decision else
                                           common_data["sequence_feedback"].model_dump(mode="json")),
                     "text_guide": decision.text_guide if decision else None,
@@ -241,6 +267,7 @@ def create_telemetry_router(
                             "message": decision.text_guide,
                         },
                     )
+            common_data["coating_feedback"] = cached["coating_feedback"]
             common_data["sequence_feedback"] = cached["sequence_feedback"]
             common_data["text_guide"] = cached["text_guide"]
             envelope = AnalyzeSequenceResponse(
@@ -319,7 +346,8 @@ def create_telemetry_router(
             "스프레이의 cur_sequence_heatmap은 해당 시점 피도면의 전체 누적 두께입니다. "
             "이미 누적된 값을 더하지 않고, 현재 시퀀스가 도포한 크롭 영역의 최신 절대 두께로 갱신하여 "
 
-            "추가 도장/다음 Zone 이동/과도장 중단 여부를 coating_progress로 반환합니다."
+            "추가 도장/다음 Zone 이동/과도장 중단 여부를 coating_progress로 반환합니다. "
+            "도막 등급·분포·조절 후보는 coating_feedback으로 반환합니다."
         ),
     )
     async def analyze_sequence(query: AnalyzeSequenceRequest) -> JSONResponse:

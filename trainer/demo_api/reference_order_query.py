@@ -5,6 +5,7 @@ import json
 import re
 from collections.abc import Mapping
 
+from trainer.demo_api import coating_assessment
 from trainer.demo_api.telemetry_contracts import AnalyzeSequenceRequest, learning_mode_from_scenario, process_from_tool_type
 
 
@@ -75,7 +76,7 @@ def current_next_answer(query, sequences, reports=None, *, sequence_engine=None,
         return unknown, scope, None
     get_session = getattr(reports, "get_session", None)
     session = get_session(query.session_id) if callable(get_session) else None
-    target = getattr(session, "target_thickness_um", None)
+    target = coating_assessment.session_target(session)
     def prior_requests():
         for previous in sequences.session_bodies_through(request.session_id, request.sequence_id):
             if previous.get("sequence_id") != request.sequence_id:

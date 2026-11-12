@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import io
 import json
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import numpy as np
 import pytest
@@ -17,6 +20,9 @@ from trainer.demo_api.sequence_analysis import SequenceAnalysisEngine
 from trainer.demo_api.sequence_store import SequenceStore
 from trainer.demo_api.telemetry_contracts import AnalyzeSequenceRequest
 from trainer.demo_api.telemetry_router import create_telemetry_router
+from trainer.demo_api.v1_store import V1Store
+from trainer.zone_engine import numerical
+from trainer.zone_engine.contracts import HeightPng
 
 
 def fixture(root: Path) -> tuple[Path, Path]:
@@ -42,7 +48,7 @@ def fixture(root: Path) -> tuple[Path, Path]:
     return root, catalog
 
 
-def request(seq: int = 1, *, value: float = 160, width: int = 10, x0: int = 0,
+def request(seq: int = 1, *, value: float = 171, width: int = 10, x0: int = 0,
             valid_count: int | None = None) -> AnalyzeSequenceRequest:
     raw = round(value / 20000 * 65025)
     image = Image.new("RGB", (width, 10), (raw // 255, raw % 255, 255))
@@ -63,6 +69,15 @@ def request(seq: int = 1, *, value: float = 160, width: int = 10, x0: int = 0,
 def engine(root: Path) -> CoatingProgressEngine:
     ref, catalog = fixture(root)
     return CoatingProgressEngine(ref, zone_reference_root=catalog)
+
+
+def analyze(root: Path, req: AnalyzeSequenceRequest, session_store: Any = None) -> dict[str, Any]:
+    progress = engine(root)
+    app = FastAPI()
+    app.include_router(create_telemetry_router(store=SequenceStore(":memory:"),
+        sequence_engine=SequenceAnalysisEngine(root), coating_progress_engine=progress,
+        session_store=session_store))
+    return TestClient(app).post("/api/v1/copilot/analyze-sequence", json=req.model_dump(mode="json")).json()["data"]
 
 
 def test_tiny_expert_cell_cannot_unlock_official_zone(tmp_path: Path) -> None:
@@ -89,8 +104,10 @@ def test_exact_target_is_required_and_explicit_session_goal_is_respected(tmp_pat
     explicit = progress.evaluate(request(2, value=180), target_thickness_um=200)
     assert explicit.status == "needs_more"
     assert explicit.target_thickness_um == 200
-    complete = progress.evaluate(request(3, value=200), target_thickness_um=200)
+    complete = progress.evaluate(request(3, value=211), target_thickness_um=200)
     assert complete.status == "complete"
+    # 원시 160µm는 보정하면 150µm다.
+    assert progress.evaluate(request(4, value=160)).status == "needs_more"
 
 
 def test_unknown_official_mask_fails_closed_even_with_complete_expert_cell(tmp_path: Path) -> None:
@@ -173,7 +190,7 @@ def test_missing_older_replay_crop_does_not_rewind_newer_absolute_pixels(tmp_pat
     old = request(1, value=30)
     newer = request(2)
     progress.evaluate(newer)
-    current = request(3, value=160, width=1)
+    current = request(3, value=171, width=1)
     result = progress.evaluate_replay(current, [newer, old])
     assert result.status == "complete"
 
@@ -194,8 +211,69 @@ def test_overcoat_warning_targets_thick_areas_and_does_not_unlock(tmp_path: Path
     result = engine(tmp_path).evaluate(request(value=300, width=5))
     assert result.status == "overpaint_risk"
     assert result.next_zone_id is None
-    assert "과도장 영역" in result.message
-    assert "미달" in result.message
+    assert "과도막" in result.message and "1.5배" in result.message
+
+
+def test_overpaint_risk_follows_the_painted_mean_not_a_pixel_share(tmp_path: Path) -> None:
+    progress = engine(tmp_path)
+    # 30%가 두껍지만 칠한 곳 평균(190µm)은 과도막 경계 아래다.
+    thick_part = progress.evaluate(request(value=200, valid_count=30))
+    assert thick_part.status == "needs_more"
+    assert progress.evaluate(request(2, value=251)).status == "overpaint_risk"
+
+
+def test_live_crop_path_matches_the_engine_cumulative_crop_path(tmp_path: Path) -> None:
+    """실시간 크롭 복호·병합은 PR #8 복호·누적 교체의 사본이다. 같은 PNG에서 같은 판정이 나와야 한다."""
+    rng = np.random.default_rng(20261112)
+    code = rng.integers(0, 2200, size=(10, 10))
+    pixels = np.stack([code // 255, code % 255, np.where(rng.random((10, 10)) < 0.2, 0, 255)], axis=-1)
+    stream = io.BytesIO()
+    Image.fromarray(pixels.astype(np.uint8), "RGB").save(stream, format="PNG")
+    png = stream.getvalue()
+    encoded = base64.b64encode(png).decode("ascii")
+    req = request()
+    req.sequence_result.cur_sequence_heatmap[0].data = encoded
+
+    row = engine(tmp_path).evaluate(req).assessment
+
+    spec = HeightPng.model_validate({
+        "data_base64": encoded, "sha256": hashlib.sha256(png).hexdigest(), "encoding": "rg16_b8",
+        "basis": "cumulative_crop", "width": 10, "height": 10, "origin": "top_left",
+        "crop": {"x0": 0, "y0": 0, "width": 10, "height": 10, "atlas_width": 10, "atlas_height": 10}})
+    surface = numerical.overwrite_cumulative_crops([numerical.place_crop(numerical.decode_height_png(spec), spec)])
+    quality = numerical.assess_zone(surface, np.ones((10, 10), dtype=bool), 160.0)["quality"]
+    assert 0 < quality["painted_pixel_count"] < 100
+    assert row["grade"] == quality["grade"]
+    assert row["six_band_counts"] == quality["six_band_counts"]
+    assert row["unpainted_fraction"] == pytest.approx(quality["unpainted_fraction"])
+    assert row["thickness_um"] == pytest.approx(quality["painted_mean_um"], abs=0.05)
+
+
+@pytest.mark.parametrize(("stored_basis", "target_basis", "label"), [
+    ("default_target", "default_target", "기본 목표 160µm 기준"),
+    ("session_target", "session_target", "세션 목표 160µm 기준"),
+    (None, "session_target", "세션 목표 160µm 기준"),  # target_basis 열이 생기기 전에 만든 세션
+])
+def test_session_started_without_a_target_is_judged_as_the_default_target(
+    tmp_path: Path, stored_basis: str | None, target_basis: str, label: str,
+) -> None:
+    """목표를 생략한 세션도 160.0이 저장되므로 저장된 기준으로만 가른다."""
+    req = request()
+    sessions = V1Store(":memory:")
+    sessions.start_session_with_created(session_id=req.session_id, user_id="test", scenario_id="3",
+        started_at="2026-11-12T00:00:00Z", target_thickness_um=160.0, target_basis=stored_basis)
+    data = analyze(tmp_path, req, sessions)
+    assert data["coating_progress"]["target_basis"] == target_basis
+    assert data["coating_feedback"]["target_basis"] == target_basis
+    assert label in data["text_guide"]
+
+
+@pytest.mark.parametrize(("sessions", "label"), [
+    (None, "기본 목표 160µm 기준"),
+    (SimpleNamespace(get_session=lambda _: SimpleNamespace(target_thickness_um=200)), "세션 목표 200µm 기준"),
+])
+def test_default_target_is_named_in_the_guide(tmp_path: Path, sessions: Any, label: str) -> None:
+    assert label in analyze(tmp_path, request(), sessions)["text_guide"]
 
 
 def test_order_deviation_sse_has_no_conflicting_transition_when_incomplete(tmp_path: Path) -> None:
