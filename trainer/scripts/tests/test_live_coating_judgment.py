@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,8 @@ from trainer.scripts.tool_calling_adapter import ToolInfrastructureError
 
 PipelineEvent = tuple[str, dict[str, Any]]
 _CONFIGS = Path(__file__).resolve().parents[2] / "configs"
+# 2026-11-12 재확인 질문 표(B2·B3 원문과 이전 검토가 막은 오탐). 표 원본은 output/v3-canary-20261112/round3.
+_CORPUS = json.loads((Path(__file__).parent / "data" / "dft_question_corpus.json").read_text(encoding="utf-8"))
 
 JUDGE = "3번 Zone DFT가 150, 158, 171 µm 인데 목표 160 이면 판정은?"
 ANOMALY = "3번 Zone DFT 측정값이 100, 110, 120, 170 µm 이고 목표가 160 µm 인데 이상 탐지해서 원인 후보도 알려줘."
@@ -93,6 +96,21 @@ DIAGNOSE = "3번 Zone 도막이 불량이야. DFT 측정값 100, 110, 120, 170 �
 def test_parse_dft_question(question: str, parsed: tuple[list[float], float | None] | None) -> None:
     assert parse_dft_question(question) == parsed
 
+
+
+@pytest.mark.parametrize("row", _CORPUS, ids=[f"{i + 1}" for i in range(len(_CORPUS))])
+def test_question_corpus(row: dict[str, Any]) -> None:
+    expected = None if row["expected"] == "none" else (row["values"], row["target"])
+    assert parse_dft_question(row["question"]) == expected, row["reason"]
+
+
+@pytest.mark.parametrize("question", ["3번 Zone 도막 150, 158, 171 괜찮아?", "도막 두께 150, 158 정상이야?"])
+def test_b2_questions_routed_fast_are_still_judged(question: str) -> None:
+    """B2 x8: 라우터가 처음부터 fast 로 보내 판정 경로를 건너뛰었다. 측정값이 뽑히면 경로와 무관하게 판정한다."""
+    adapter = _McpAdapter()
+    assert SemanticRouter().classify_live(question) == "fast"
+    answer, _events = _stream(question, adapter)
+    assert [name for name, _ in adapter.calls] == ["dft_judge"] and "저도막" in answer
 
 class _McpAdapter:
     """실제 dft_judge 라우터 함수로 답하는 어댑터 — 판정 규칙을 시험에 다시 쓰지 않는다."""
