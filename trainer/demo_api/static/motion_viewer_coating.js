@@ -11,9 +11,15 @@
   const scaleNote = document.getElementById('coatingScaleNote');
   const geometryNote = document.getElementById('coatingGeometryNote');
   if (!canvas || !zoneLabel || !status || !view2d || !view3d || !scaleRelative || !scaleAbsolute || !legend || !scaleNote || !geometryNote) return;
+  // 목표 대비(PR #8 기준) 전환. 기존 화면에만 있다. 없으면(v2) 전문가 대비만 그린다.
+  const basisTarget = document.getElementById('coatingBasisTarget');
+  const basisExpert = document.getElementById('coatingBasisExpert');
+  const targetPanel = document.getElementById('coatingTargetPanel');
+  const hasBasis = Boolean(basisTarget && basisExpert && targetPanel);
   const context = canvas.getContext('2d');
   let payload = null;
   let zoneKey = null;
+  let basis = hasBasis ? 'target' : 'expert';
   let mode = '2d';
   let colorMode = 'relative';
   let yaw = -.7;
@@ -199,25 +205,132 @@
     }
   }
 
+  // ── 목표 대비: 서버가 준 등급·숫자·칸 이름만 옮긴다. 등급을 다시 계산하지 않는다 ──
+  const node = (tag, className, text) => {
+    const item = document.createElement(tag);
+    if (className) item.className = className;
+    if (text != null) item.textContent = text;
+    return item;
+  };
+  const targetOf = () => payload?.coating_evaluation?.target || null;
+  const targetAvailable = () => targetOf()?.analysis_status === 'available';
+  const targetMissingText = () => (targetOf()?.reason_code === 'height_map_unavailable'
+    ? '이 기록은 높이맵 원본이 없어 목표 대비 판정이 없습니다.' : '이 기록은 목표 대비 판정이 없습니다.');
+  const shareText = (fraction) => {
+    const value = Number(fraction) * 100;
+    if (!Number.isFinite(value)) return '—';
+    return value > 0 && value < 1 ? `${value.toFixed(1)}%` : `${Math.round(value)}%`;
+  };
+
+  function showBasis() {
+    for (const [button, active] of [[basisTarget, basis === 'target'], [basisExpert, basis === 'expert']]) {
+      button.classList.toggle('active', active);
+      button.setAttribute('aria-pressed', String(active));
+    }
+    for (const part of [view2d.parentElement, canvas.parentElement, legend, scaleNote, geometryNote, status]) {
+      if (part) part.hidden = basis === 'target';
+    }
+  }
+
+  function figure(label, value, unit) {
+    const item = node('div', 'coating-target-figure');
+    const number = node('b', null, value);
+    if (unit) number.append(node('small', null, unit));
+    item.append(node('span', null, label), number);
+    return item;
+  }
+
+  function distribution(assessment, row) {
+    const counts = row.six_band_counts || {};
+    const keys = Object.keys(counts);
+    const total = keys.reduce((sum, key) => sum + (Number(counts[key]) || 0), 0);
+    if (!total) return null;
+    const labels = assessment.band_labels || [];
+    const box = node('div', 'coating-target-dist');
+    const bar = node('div', 'coating-target-bar');
+    const parts = keys.map((key, index) => {
+      const share = (Number(counts[key]) || 0) / total;
+      const segment = node('span', `coating-target-band band-${index + 1}`);
+      segment.style.setProperty('width', `${share * 100}%`);
+      segment.title = `${labels[index] ?? key} ${shareText(share)}`;
+      return segment;
+    });
+    // 셋째 칸(목표 이상 정상 구간)의 왼쪽 끝이 목표다. 칸 순서는 band_labels와 같은 약속이다.
+    const below = keys.slice(0, 2).reduce((sum, key) => sum + (Number(counts[key]) || 0), 0) / total;
+    const tick = node('span', 'coating-target-tick');
+    tick.style.setProperty('left', `${below * 100}%`);
+    bar.append(...parts, tick);
+    bar.setAttribute('role', 'img');
+    bar.setAttribute('aria-label', `칠한 면적의 두께 분포: ${parts.map((part) => part.title).join(', ')}`);
+    const ends = node('div', 'coating-target-ends');
+    ends.append(node('span', null, labels[0] ?? ''), node('span', null, labels[labels.length - 1] ?? ''));
+    box.append(node('span', 'coating-target-caption', '칠한 면적의 두께 분포'), bar, ends);
+    return box;
+  }
+
+  function renderTarget() {
+    targetPanel.hidden = false;
+    targetPanel.classList.toggle('is-note', false);
+    const assessment = targetOf();
+    const empty = (message) => node('p', 'coating-target-empty', message);
+    if (!payload) { targetPanel.replaceChildren(empty('기록을 선택하세요.')); return; }
+    if (!targetAvailable()) {
+      targetPanel.replaceChildren(empty(`${targetMissingText()} '전문가 대비'를 눌러 전문가 기준을 볼 수 있습니다.`));
+      return;
+    }
+    const head = node('p', 'coating-target-basis', assessment.basis_label || '');
+    if (!zoneKey) { targetPanel.replaceChildren(head, empty('현재 프레임에는 도장 Zone이 없습니다.')); return; }
+    const [mapNum, zoneId] = zoneKey.split(':');
+    const row = (assessment.zones || []).find((item) => String(item.map_num) === mapNum && String(item.zone_id) === zoneId);
+    if (!row) { targetPanel.replaceChildren(head, empty('이 Zone의 목표 대비 판정이 없습니다.')); return; }
+    const labels = assessment.grade_labels || {};
+    const grade = row.grade ?? 'none';
+    const line = node('div', 'coating-target-grade');
+    const band = row.normal_band_um || assessment.normal_band_um || [];
+    line.append(node('span', `coating-target-badge is-${grade}`, labels[grade] ?? grade));
+    if (band.length === 2) line.append(node('span', 'coating-target-normal', `${labels.normal ?? ''} ${band[0]}~${band[1]} µm`));
+    const figures = node('div', 'coating-target-figures');
+    figures.append(
+      figure('칠한 곳 평균', Number.isFinite(Number(row.thickness_um)) && row.thickness_um != null ? String(row.thickness_um) : '—',
+        row.thickness_um != null ? ' µm' : ''),
+      figure('미도장', shareText(row.unpainted_fraction)),
+    );
+    targetPanel.replaceChildren(...[head, line, figures, distribution(assessment, row)].filter(Boolean));
+  }
+
+  function renderTargetNote() {
+    // 전문가 대비로 연 까닭(목표 대비 판정 없음)을 한 줄로 알린다.
+    targetPanel.hidden = !payload || targetAvailable();
+    targetPanel.classList.toggle('is-note', true);
+    if (!targetPanel.hidden) targetPanel.replaceChildren(node('p', 'coating-target-empty', targetMissingText().replace('이 기록은 ', '')));
+  }
+
+  function zoneTitle() {
+    if (!payload) return 'Zone 대기 중';
+    return zoneKey ? `Zone ${String(zoneKey.split(':')[1]).padStart(2, '0')}` : '이동 구간';
+  }
+
   function renderCoatingZone() {
+    zoneLabel.textContent = zoneTitle();
+    if (hasBasis) {
+      showBasis();
+      if (basis === 'target') { renderTarget(); return; }
+      renderTargetNote();
+    }
     const {width, height} = fitCanvas();
     const reference = currentReference();
     const cells = validCells(reference);
     renderScale(reference, cells);
     if (!payload) {
-      zoneLabel.textContent = 'Zone 대기 중';
       status.textContent = '도막 기준 준비 중';
       drawEmpty(width, height, '기록을 선택하세요.');
       return;
     }
     if (!zoneKey) {
-      zoneLabel.textContent = '이동 구간';
       status.textContent = '분사 Zone 없음';
       drawEmpty(width, height, '현재 프레임에는 도장 Zone이 없습니다.');
       return;
     }
-    const zoneId = zoneKey.split(':')[1];
-    zoneLabel.textContent = `Zone ${String(zoneId).padStart(2, '0')}`;
     if (!reference || reference.source !== 'expert_final_heightmap') {
       status.textContent = '높이맵 기준 없음';
       drawEmpty(width, height, '이 Zone의 최종 높이맵 기준이 없습니다.');
@@ -246,6 +359,10 @@
     renderCoatingZone();
   }
 
+  if (hasBasis) {
+    basisTarget.onclick = () => { basis = 'target'; renderCoatingZone(); };
+    basisExpert.onclick = () => { basis = 'expert'; renderCoatingZone(); };
+  }
   view2d.onclick = () => selectMode('2d');
   view3d.onclick = () => selectMode('3d');
   scaleRelative.onclick = () => { colorMode = 'relative'; renderCoatingZone(); };
@@ -278,6 +395,8 @@
   addEventListener('motion-viewer-data', event => {
     payload = event.detail;
     zoneKey = null;
+    // 기록마다 목표 대비로 연다. 목표 대비 판정이 없는 기록은 전문가 대비로 바로 연다.
+    if (hasBasis) basis = targetAvailable() ? 'target' : 'expert';
     renderCoatingZone();
   });
   addEventListener('motion-viewer-frame', event => {

@@ -1326,3 +1326,21 @@ def test_target_assessment_reads_one_face_at_a_time(tmp_path: Path, monkeypatch:
     assert alive_at_read == [0, 0]
     # 값은 한 면만 줄 때와 같다(2면에는 Learn04 Zone 마스크가 없다).
     assert target == _target_coating("spray", 4, {1: path}, ["1:1"], {})
+
+
+def test_viewer_scripts_do_not_restate_the_band_rule() -> None:
+    """등급 경계·칸 이름·등급 글자는 서버(target의 표시용 열쇠)에서만 온다."""
+    static = Path(__file__).resolve().parents[1] / "static"
+    for name in ("motion_viewer_coating.js",):
+        script = (static / name).read_text(encoding="utf-8")
+        for word in ("1.5배", "90% 미만", "목표 미만"):
+            assert word not in script, (name, word)
+
+
+def test_coating_card_offers_both_bases_with_visible_labels(tmp_path: Path) -> None:
+    page = _client(tmp_path).get("/motion-viewer").text
+
+    assert '<button id="coatingBasisTarget" class="active" type="button" aria-pressed="true">목표 대비</button>' in page
+    assert '<button id="coatingBasisExpert" type="button" aria-pressed="false">전문가 대비</button>' in page
+    assert 'id="coatingTargetPanel"' in page
+    assert "<strong>도막</strong>" in page

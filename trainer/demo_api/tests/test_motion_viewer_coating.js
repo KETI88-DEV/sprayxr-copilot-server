@@ -5,7 +5,22 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-function viewer(layout = null) {
+// 화면 요소 흉내: 글자·툴팁·aria 를 자식까지 모아 읽는다.
+function element() {
+  return {
+    className: '', textContent: '', title: '', hidden: false, children: [], attributes: {}, dataset: {},
+    style: {setProperty(key, value) { this[key] = value; }},
+    classList: {toggle() {}},
+    append(...children) { this.children.push(...children); },
+    replaceChildren(...children) { this.children = children; this.textContent = ''; },
+    setAttribute(key, value) { this.attributes[key] = value; },
+  };
+}
+function text(node) {
+  return [node.textContent, node.title, node.attributes?.['aria-label'], ...(node.children || []).map(text)].filter(Boolean).join(' ');
+}
+
+function viewer(layout = null, {basis = false} = {}) {
   const events = {}, fills = [];
   const frames = [], resizeEvents = [], properties = new Map(), layoutEvents = {};
   const right = layout && {
@@ -42,9 +57,12 @@ function viewer(layout = null) {
     getContext: () => context,
     getBoundingClientRect: () => ({width: 400, height: 250}), parentElement: {},
   });
+  if (basis) {
+    for (const id of ['coatingBasisTarget', 'coatingBasisExpert', 'coatingTargetPanel']) nodes[id] = element();
+  }
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../static/motion_viewer_coating.js'), 'utf8'), {
     document: {
-      getElementById: id => nodes[id], createElement: () => ({textContent: ''}),
+      getElementById: id => nodes[id], createElement: () => (basis ? element() : {textContent: ''}),
       querySelector: selector => ({'.right': right, '.skeleton-card': skeleton, '.skeleton-screen': screen})[selector] || null,
     },
     window: {
@@ -68,6 +86,8 @@ function viewer(layout = null) {
       map_num: '1', zone_id: zone, spraying,
     }}}),
     colors: () => fills.slice(-2),
+    fills,
+    panel: () => text(nodes.coatingTargetPanel),
   };
 }
 
@@ -170,4 +190,77 @@ test('unknown calibration and empty cells give truthful fallback and no NaN lege
   view.frame('2');
   assert.match(view.nodes.coatingStatus.textContent, /셀.*없/);
   assert.doesNotMatch(view.nodes.coatingLegend.textContent, /NaN|Infinity/);
+});
+
+function target(overrides = {}) {
+  return {
+    analysis_status: 'available', reason_code: null, target_thickness_um: 160, target_basis: 'default_target',
+    basis_label: '기본 목표 160µm 기준', normal_band_um: [160, 240], band_edges_um: [144, 160, 240, 320, 400],
+    band_labels: ['90% 미만', '90~100%', '100~150%', '150~200%', '200~250%', '250% 이상'],
+    grade_labels: {below: '목표 미만', normal: '정상', above: '1.5배 이상', none: '미도장'},
+    zones: [{zone_id: '1', map_num: 1, grade: 'below', thickness_um: 98, unpainted_fraction: 0.12, normal_band_um: [160, 240],
+      six_band_counts: {lt_0_9t: 70, from_0_9t_to_lt_1_0t: 10, from_1_0t_to_lt_1_5t: 20, from_1_5t_to_lt_2_0t: 0,
+        from_2_0t_to_lt_2_5t: 0, gte_2_5t: 0}}],
+    ...overrides,
+  };
+}
+
+test('target basis is the default when the basis buttons exist', () => {
+  const view = viewer(null, {basis: true});
+  view.data({coating_reference: {'1:1': reference([100, 200])}, coating_evaluation: {target: target()}});
+  view.frame('1');
+  const panel = view.panel();
+  assert.match(panel, /목표 미만/);
+  assert.match(panel, /98/);
+  assert.match(panel, /12%/);
+  assert.match(panel, /기본 목표 160µm 기준/);
+  assert.match(panel, /정상 160~240 µm/);
+  assert.equal(view.nodes.coatingTargetPanel.hidden, false);
+  assert.equal(view.nodes.coatingBasisTarget.attributes['aria-pressed'], 'true');
+  assert.equal(view.fills.length, 0); // 목표 대비에서는 전문가 지도를 그리지 않는다.
+});
+
+test('grade and band labels come from the server', () => {
+  const view = viewer(null, {basis: true});
+  const labels = ['가짜 칸', '둘', '셋', '넷', '다섯', '여섯'];
+  view.data({coating_evaluation: {target: target({band_labels: labels,
+    grade_labels: {below: '가짜 표기', normal: '정상', above: '1.5배 이상', none: '미도장'}})}});
+  view.frame('1');
+  assert.match(view.panel(), /가짜 표기/);
+  assert.match(view.panel(), /가짜 칸/);
+});
+
+test('expert basis is one click away and shows the expert map', () => {
+  const view = viewer(null, {basis: true});
+  view.data({coating_reference: {'1:1': reference([100, 200])}, coating_evaluation: {target: target()}});
+  view.frame('1');
+  view.nodes.coatingBasisExpert.onclick();
+  assert.match(view.nodes.coatingStatus.textContent, /전문가 최종/);
+  assert.equal(view.nodes.coatingTargetPanel.hidden, true);
+  assert.equal(view.nodes.coatingBasisExpert.attributes['aria-pressed'], 'true');
+  assert.ok(view.fills.length > 0);
+  view.nodes.coatingBasisTarget.onclick();
+  assert.equal(view.nodes.coatingTargetPanel.hidden, false);
+});
+
+test('a record without a height map says why and opens on the expert basis', () => {
+  const view = viewer(null, {basis: true});
+  view.data({coating_reference: {'1:1': reference([100, 200])},
+    coating_evaluation: {target: {analysis_status: 'not_available', reason_code: 'height_map_unavailable'}}});
+  view.frame('1');
+  assert.match(view.nodes.coatingStatus.textContent, /전문가 최종/);
+  assert.match(view.panel(), /높이맵 원본이 없어/);
+  view.nodes.coatingBasisTarget.onclick();
+  assert.match(view.panel(), /전문가 대비/);
+  const other = viewer(null, {basis: true});
+  other.data({coating_evaluation: {target: {analysis_status: 'not_available', reason_code: 'zone_reference_unavailable'}}});
+  assert.match(other.panel(), /목표 대비 판정이 없습니다/);
+  assert.doesNotMatch(other.panel(), /높이맵/);
+});
+
+test('a zone without a target row says so', () => {
+  const view = viewer(null, {basis: true});
+  view.data({coating_evaluation: {target: target()}});
+  view.frame('2');
+  assert.match(view.panel(), /이 Zone의 목표 대비 판정이 없습니다/);
 });
