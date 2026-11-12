@@ -271,3 +271,10 @@ def test_v2_coating_list_follows_the_current_zone_only_when_asked_and_not_while_
     assert "!follow" in script and "coatScrolledByUser" in script
     assert script.count("markCurrentZone(true)") == 1   # 재생·탐색으로 Zone 이 바뀔 때 한 곳뿐
     assert script.count("markCurrentZone();") >= 3      # 목록·순서를 그릴 때는 강조만
+
+
+def test_v2_zone_line_does_not_say_small_difference_for_a_zone_the_coating_panel_flags() -> None:
+    script = _v2_static("motion_viewer_v2.js")
+    note = script[script.index("function renderZoneNote"):script.index("advice.title")]
+    assert "targetOf()?.zones" in note and "'below'" in note and "'above'" in note and "grade_labels" in note
+    assert note.index("coatNote ||") < note.index("전문가 기록과 차이가 작습니다")   # 도막 등급이 먼저

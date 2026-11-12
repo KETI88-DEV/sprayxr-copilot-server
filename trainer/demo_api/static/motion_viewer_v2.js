@@ -100,7 +100,11 @@
     $('v2ZoneScore').parentElement.hidden = !zone;
     const corrections = zone?.corrections || [];
     const advice = $('v2ZoneAdvice');
-    advice.textContent = !zone ? '' : corrections.length ? corrections[0].replace(/[.。]\s*$/, '') + (corrections.length > 1 ? ` 외 ${corrections.length - 1}건` : '') : '전문가 기록과 차이가 작습니다';
+    // 자세 교정이 없어도 목표 대비 도막이 미만·1.5배 이상이면 '차이가 작습니다'는 도막 패널과 반대로 읽힌다. 서버가 낸 등급을 그대로 말한다.
+    const coat = (targetOf()?.zones || []).find((row) => String(row.zone_id) === String(anchor.zone_id) && (row.map_num == null || String(row.map_num) === String(anchor.map_num)));
+    const coatNote = coat && (coat.grade === 'below' || coat.grade === 'above') && coat.thickness_um != null
+      ? `도막 ${targetOf().grade_labels?.[coat.grade] ?? coat.grade} · ${Math.round(Number(coat.thickness_um))} µm` : '';
+    advice.textContent = !zone ? '' : corrections.length ? corrections[0].replace(/[.。]\s*$/, '') + (corrections.length > 1 ? ` 외 ${corrections.length - 1}건` : '') : coatNote || '전문가 기록과 차이가 작습니다';
     advice.title = corrections.join('\n');
     const more = $('v2ZoneMore');
     const metrics = (zone?.metrics || []).filter((metric) => metric.available !== false && metric.similarity_percent != null);
