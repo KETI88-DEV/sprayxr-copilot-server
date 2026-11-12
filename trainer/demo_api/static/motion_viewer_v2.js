@@ -427,13 +427,16 @@
     if (node.textContent !== text) node.textContent = text;
   }).observe($('coatingZone'), { childList: true, characterData: true, subtree: true });
 
-  function markCurrentZone() {
+  // 목록은 이상 행이 맨 위인 순서다. 불러올 때 그려 다시 칠하는 호출은 강조만 하고, 재생·탐색으로 Zone 이 바뀔 때(follow)만 따라간다.
+  let coatScrolledByUser = 0;
+  for (const type of ['wheel', 'touchstart', 'pointerdown', 'keydown']) $('v2CoatBars').addEventListener(type, () => { coatScrolledByUser = performance.now(); }, { passive: true });
+  function markCurrentZone(follow = false) {
     for (const node of document.querySelectorAll('.order-chip, .coat-row')) {
       node.classList.toggle('is-current', anchor.zone_id != null && node.dataset.zone === String(anchor.zone_id) && !node.classList.contains('is-missing'));
     }
     const row = document.querySelector('.coat-row.is-current');
     const box = row?.parentElement;
-    if (!box || box.scrollHeight <= box.clientHeight) return;
+    if (!follow || !box || box.scrollHeight <= box.clientHeight || performance.now() - coatScrolledByUser < 4000) return;
     const inner = row.getBoundingClientRect();
     const outer = box.getBoundingClientRect();
     if (inner.top < outer.top) box.scrollTop -= outer.top - inner.top;
@@ -999,7 +1002,7 @@
     }
     if (previous.zone_id !== anchor.zone_id || previous.map_num !== anchor.map_num || previous.spraying !== anchor.spraying) {
       renderZoneNote();
-      markCurrentZone();
+      markCurrentZone(true);
     }
     renderPoseNow();
     markFlaggedJoints(event.detail.frame);

@@ -263,3 +263,11 @@ def test_v2_question_pins_sit_above_the_slider_that_follows_them_in_the_dom() ->
     pins = re.search(r"z-index:\s*(\d+)", _css_rule(css, ".pins"))
     marks = re.search(r"z-index:\s*(\d+)", _css_rule(css, ".alert-marks"))
     assert pins and marks and int(pins.group(1)) > int(marks.group(1)) >= 1
+
+
+def test_v2_coating_list_follows_the_current_zone_only_when_asked_and_not_while_the_user_scrolls() -> None:
+    script = _v2_static("motion_viewer_v2.js")
+    assert "function markCurrentZone(follow = false)" in script
+    assert "!follow" in script and "coatScrolledByUser" in script
+    assert script.count("markCurrentZone(true)") == 1   # 재생·탐색으로 Zone 이 바뀔 때 한 곳뿐
+    assert script.count("markCurrentZone();") >= 3      # 목록·순서를 그릴 때는 강조만
