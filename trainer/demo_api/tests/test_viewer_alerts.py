@@ -15,7 +15,7 @@ from PIL import Image
 
 from trainer.demo_api import telemetry_router
 from trainer.demo_api.anomaly_stream import AnomalyBroadcaster
-from trainer.demo_api.motion_viewer import create_motion_viewer_router
+from trainer.demo_api.motion_viewer import create_motion_viewer_router, viewer_v2_document
 from trainer.demo_api.sequence_analysis import SequenceAnalysisEngine
 from trainer.demo_api.sequence_store import SequenceStore
 from trainer.demo_api.session_analysis import csv_sequences, read_csv
@@ -227,3 +227,14 @@ def test_engine_error_is_reported_and_not_cached(tmp_path: Path) -> None:
             "status": "unavailable", "reason_code": "engine_error", "alerts": []}
     assert Broken.calls == 2
 
+
+def test_v2_page_has_alert_surfaces_and_loads_the_alert_script_first(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    page = viewer_v2_document()
+    assert 'id="v2Toast"' in page and 'aria-live="polite"' in page.split('id="v2Toast"', 1)[1].split(">", 1)[0]
+    assert 'id="v2AlertMarks"' in page and 'id="v2AlertsButton"' in page and 'id="v2AlertList"' in page
+    assert page.index("/motion-viewer/assets/motion_viewer_alerts.js") < page.index("/motion-viewer/assets/motion_viewer_v2.js")
+    script = client.get("/motion-viewer/assets/motion_viewer_alerts.js")
+    assert script.status_code == 200 and "motionViewerAlerts" in script.text
+    # 화면은 판정하지 않는다: 두께 문턱·등급 규칙 낱말이 알림 스크립트에 없다.
+    assert "160" not in script.text and "1.5" not in script.text

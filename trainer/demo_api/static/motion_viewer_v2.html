@@ -49,6 +49,7 @@
           <label class="range"><span>점 크기 <span id="pointSizeValue">1.5 px</span></span><input id="pointSize" type="range" min="0.5" max="5" step="0.25" value="1.5"></label>
         </div>
       </details>
+      <div id="v2Toast" class="toast" role="status" aria-live="polite" aria-atomic="true"></div>
       <div id="loading" class="loading" role="status"><span class="loading-bar"></span><span>기록을 불러오는 중</span></div>
       <div id="v2StageError" class="stage-error" role="alert" hidden><i data-icon="triangle-alert"></i><span id="v2StageErrorText"></span><button id="v2Reload" type="button"><i data-icon="rotate-cw"></i>다시 불러오기</button></div>
     </div>
@@ -64,6 +65,7 @@
       <button id="restart" class="icon-btn" type="button" aria-label="처음으로"><i data-icon="skip-back"></i></button>
       <div class="scrub">
         <div id="zoneTimeline" class="zone-timeline" aria-hidden="true"></div>
+        <div id="v2AlertMarks" class="alert-marks" aria-hidden="true"></div>
         <div id="v2Pins" class="pins"></div>
         <input id="timeline" type="range" min="0" max="0" value="0" aria-label="재생 위치">
       </div>
@@ -72,6 +74,10 @@
         <option value="0.25">0.25배</option><option value="0.5">0.5배</option><option value="1" selected>1배</option>
         <option value="1.5">1.5배</option><option value="2">2배</option><option value="3">3배</option>
       </select>
+      <div class="alerts">
+        <button id="v2AlertsButton" class="icon-btn" type="button" aria-expanded="false" aria-controls="v2AlertList" aria-label="지난 알림" title="지난 알림"><i data-icon="bell"></i><span id="v2AlertCount" class="badge" hidden></span></button>
+        <div id="v2AlertList" class="alert-list" hidden><p id="v2AlertNote" class="alert-note" hidden></p><ol id="v2AlertItems" aria-label="이 기록의 알림"></ol></div>
+      </div>
     </div>
   </section>
 
@@ -178,5 +184,6 @@
 <script defer src="/motion-viewer/assets/motion_viewer_camera.js"></script>
 <script defer src="/motion-viewer/assets/motion_viewer_pose.js"></script>
 <script defer src="/motion-viewer/assets/motion_viewer_coating.js"></script>
+<script defer src="/motion-viewer/assets/motion_viewer_alerts.js"></script>
 <script defer src="/motion-viewer/assets/motion_viewer_v2.js"></script>
 </body></html>

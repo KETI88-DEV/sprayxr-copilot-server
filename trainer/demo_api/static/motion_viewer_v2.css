@@ -23,6 +23,7 @@
   --alert: #ff7a6b;
   --thin: #5b9bff;
   --thick: #ff7a52;
+  --turn: #c49bff; /* 방향 이탈 알림. 채도가 낮은 보라라 Zone 원색 팔레트와 겹치지 않는다 */
   --normal: #aab6c8; /* 목표 대비 정상 등급. 저도막(--thin)·과도막(--thick) 사이의 중립색 */
   --bar: #3a4b69;
   color-scheme: dark;
@@ -221,6 +222,53 @@ select:hover { background: var(--raised-hover); }
   background: var(--accent-ink);
 }
 .time { min-width: 112px; color: var(--ink-2); font-size: 13px; text-align: right; }
+
+/* 재생 알림: 의미 색은 아이콘과 표지에만, Zone 은 고정 색 네모로만 */
+.tone-warn { --tone: var(--warn); }
+.tone-turn { --tone: var(--turn); }
+.tone-thick { --tone: var(--thick); }
+.tone-thin { --tone: var(--thin); }
+.alert-icon { display: inline-grid; place-items: center; color: var(--tone); }
+.alert-word { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-weight: 600; font-variant-numeric: tabular-nums; }
+.toast {
+  position: absolute; right: 12px; bottom: 12px; display: flex; flex-direction: column; align-items: flex-end; gap: 6px;
+  max-width: min(340px, calc(100% - 68px)); pointer-events: none;
+}
+.toast-item {
+  display: inline-flex; align-items: center; gap: 8px; height: 36px; max-width: 100%; padding: 0 12px 0 10px;
+  border: 1px solid var(--line); border-radius: 8px; background: rgba(7, 16, 31, .86); color: var(--ink);
+  font-size: 13px; white-space: nowrap; pointer-events: auto; animation: v2-toast-in .16s ease-out;
+}
+.toast-item:hover { background: rgba(27, 44, 71, .92); }
+.toast-item .zone-tag { height: 22px; }
+@keyframes v2-toast-in { from { opacity: 0; transform: translateY(4px); } }
+@keyframes v2-toast-fade { from { opacity: 0; } }
+.alert-marks { position: absolute; inset: 0; z-index: 1; pointer-events: none; }
+.alert-mark {
+  position: absolute; bottom: 0; width: 4px; height: 8px; margin-left: -2px; padding: 0;
+  border: 0; border-radius: 2px; background: var(--tone); pointer-events: auto;
+}
+.alerts { position: relative; flex: none; }
+.alerts .icon-btn { position: relative; }
+.badge {
+  position: absolute; top: -5px; right: -5px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px;
+  background: var(--accent); color: #fff; font-size: 10px; font-weight: 700; line-height: 16px; text-align: center; font-variant-numeric: tabular-nums;
+}
+.alert-list {
+  position: absolute; right: 0; bottom: calc(100% + 8px); z-index: 30; width: 320px; max-height: min(440px, 50vh); overflow-y: auto; padding: 6px;
+  border: 1px solid var(--line-strong); border-radius: 12px; background: var(--raised); box-shadow: 0 12px 32px rgba(0, 0, 0, .45);
+}
+.alert-list ol { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.alert-note { margin: 4px 8px 6px; color: var(--ink-2); font-size: 13px; }
+.alert-row {
+  display: flex; align-items: center; gap: 8px; width: 100%; height: 36px; padding: 0 8px;
+  border: 0; border-radius: 6px; background: transparent; color: var(--ink); font-size: 13px; text-align: left; white-space: nowrap;
+}
+.alert-row:hover { background: var(--raised-hover); }
+.alert-row[aria-current="true"] { background: var(--accent-soft); }
+.alert-row.is-ahead { color: var(--ink-3); }
+.alert-row.is-ahead .alert-icon, .alert-row.is-ahead .zone-tag { opacity: .55; }
+.alert-time { margin-left: auto; padding-left: 8px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
 
 /* 세 기능 그림 */
 .features {
@@ -433,6 +481,7 @@ button.chip:hover { background: var(--raised-hover); color: var(--ink); }
 @media (prefers-reduced-motion: reduce) {
   .loading-bar::after { animation: none; inset: 0; }
   .icon-btn, .tabs [role="radio"] { transition: none; }
+  .toast-item { animation-name: v2-toast-fade; }
 }
 @media (max-width: 1440px) {
   .order-chips { gap: 2px; }
@@ -472,4 +521,7 @@ button.chip:hover { background: var(--raised-hover); color: var(--ink); }
   .zone-detail { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .ask { height: 76dvh; border-left: 0; border-top: 1px solid var(--line); }
   .time { min-width: 0; }
+  .toast { left: 56px; right: 12px; align-items: center; max-width: none; }
+  .alerts { margin-left: auto; }   /* 목록이 오른쪽 끝에 붙어 화면 폭 - 32px 로 열리게 */
+  .alert-list { width: calc(100vw - 32px); }
 }
