@@ -157,7 +157,7 @@ POST /sessions/end
 | 필드 | 타입 | 필수 | 설명 |
 |---|---|:---:|---|
 | `analysis_status` | String | Y | `available`, `not_available`. Zone에 칠한 곳이 없으면 `not_available` |
-| `reason_code` | String 또는 Null | Y | 분석 불가 사유. 분석 가능 시 `null`. 칠한 곳이 없으면 `no_valid_painted_pixels` |
+| `reason_code` | String 또는 Null | Y | 분석 불가 사유. 분석 가능 시 `null`. 칠한 곳이 없으면 `no_valid_painted_pixels`, 도막을 재지 못하면 같은 응답 `coating_progress.reason`과 같은 코드(예: `heatmap_unavailable`, `reference_unavailable`, `coating_not_applicable`) |
 | `zone_id` | String | 조건부 | 판정한 Zone ID(`"1"`~`"39"`) |
 | `map_num` | Integer | 조건부 | Height map 번호 |
 | `status` | String | 조건부 | `under_app`, `normal`, `over_app`. `grade`의 다른 이름 |
@@ -168,11 +168,11 @@ POST /sessions/end
 | `normal_band_um` | Array[Number] | 조건부 | `[목표, 목표의 1.5배]` 정상 범위(µm). 표시용 |
 | `unpainted_fraction` | Number | 조건부 | Zone 면적 가운데 칠하지 않은 비율, 0~1 |
 | `six_band_counts` | Object | 조건부 | 칠한 화소를 목표 대비 6구간으로 센 수. 열쇠는 `lt_0_9t`, `from_0_9t_to_lt_1_0t`, `from_1_0t_to_lt_1_5t`, `from_1_5t_to_lt_2_0t`, `from_2_0t_to_lt_2_5t`, `gte_2_5t` |
-| `adjustments` | Array[Object] | Y | 조절 후보. 항목은 `variable`(`speed_mm_s`·`distance_mm`), `direction`(`decrease`·`increase`), `priority`(1·2), `evidence_kind`(`quality_rule_candidate`). **규칙에 따른 후보이고 확정된 원인·처방이 아니다.** 등급이 정상이거나 시퀀스에 평균 속도·거리가 없으면 빈 배열 |
+| `adjustments` | Array[Object] | Y | 조절 후보. 항목은 `variable`(`speed_mm_s`·`distance_mm`), `direction`(`decrease`·`increase`), `priority`(1·2), `evidence_kind`(`quality_rule_candidate`). **규칙에 따른 후보이고 확정된 원인·처방이 아니다.** 등급이 정상이면 빈 배열이다. 시퀀스에 평균 속도·거리가 있는 변수만 후보가 되고, 둘 다 없으면 빈 배열이다 |
 | `message` | String 또는 Null | Y | 훈련생에게 보일 등급 문장. 모델이 만들지 않는다 |
 | `algorithm_version` | String 또는 Null | Y | `coating-v1-adapter/tsb-round-thickness-20261021+painted-zone-mean/1` |
 
-두께는 PR #8 보정값이다: 받은 값에서 10 µm를 한 번 빼고 1600 µm에서 자르며, 1 µm 미만은 미도장으로 본다. 크롭이 닿지 않은 화소는 "칠하지 않음"으로 본다(PR #8 엔진은 "모름"으로 두고 등급을 보류한다). 칠한 곳이 없으면 `zone_id`·`map_num`·`target_*`·`unpainted_fraction` 등은 채우고 `status`·`grade`·`thickness_um`만 `null`이다. 도막을 재지 못했으면(기준 자료 없음 등) 판정 필드가 전부 `null`이다.
+두께는 PR #8 보정값이다: 받은 값에서 10 µm를 한 번 빼고 1600 µm에서 자르며, 1 µm 미만은 미도장으로 본다. 크롭이 닿지 않은 화소는 "칠하지 않음"으로 본다(PR #8 엔진은 "모름"으로 두고 등급을 보류한다). 칠한 곳이 없으면 `zone_id`·`map_num`·`target_*`·`unpainted_fraction` 등은 채우고 `status`·`grade`·`thickness_um`만 `null`이다. 도막을 재지 못했으면(기준 자료 없음 등) `adjustments`는 빈 배열이고 나머지 판정 필드와 `message`·`algorithm_version`은 `null`이다.
 
 `grade`·`status`는 다음 Zone 안내(`coating_progress.status`, 공식 Zone 면적 95% 게이트)와 다른 값이다. 면적 95%를 채웠어도 평균이 목표 미만이면 `below`일 수 있다.
 
@@ -269,7 +269,7 @@ POST /sessions/end
     "latency_ms": 186,
     "event_id": "anomaly-SESSION-001-12",
     "sequence_id": 12,
-    "text_guide": "A-2 구역은 저도막입니다. 해당 구역의 체류 시간을 늘리세요.",
+    "text_guide": "Zone 2는 저도막입니다. 해당 구역의 체류 시간을 늘리세요.",
     "anomaly": {
       "detected": true,
       "anomaly_type": ["coating"],
@@ -277,7 +277,7 @@ POST /sessions/end
         {
           "axis": "thickness",
           "type": "under_app",
-          "zone_id": "A-2",
+          "zone_id": "2",
           "action": "increase_dwell"
         }
       ]
@@ -318,12 +318,12 @@ POST /sessions/end
     "sequence_feedback": {
         "analysis_status": "available",
         "reason_code": null,
-        "current_zone_id": "A-2",
-        "expected_zone_id": "A-2",
-        "next_zone_id": "A-3",
+        "current_zone_id": "2",
+        "expected_zone_id": "2",
+        "next_zone_id": "3",
         "adherence_status": "on_track",
         "deviations": [],
-        "message": "권장 순서에 맞게 A-2 구역을 작업하고 있습니다. 다음 구역은 A-3입니다.",
+        "message": "권장 순서에 맞게 Zone 2를 작업하고 있습니다. 다음 Zone은 3입니다.",
         "algorithm_version": "sequence-feedback-1.0"
     },
     "pose_feedback": {
@@ -336,7 +336,7 @@ POST /sessions/end
 }
 ```
 
-`coating_feedback`은 10×10 합성 표면(절반을 보정 후 118 µm로 칠함, 목표 생략)을 어댑터에 넣어 얻은 실제 모양이다. 화소 수는 그 합성 자료의 값이다. 이 샘플의 `anomaly` 객체와 `pose_feedback`은 이전 판의 설계안이고, 실제 응답 `data`에는 `anomaly`가 없다(§3.11).
+이 샘플에서 지금 코드와 같은 것은 `coating_feedback` 하나다. 10×10 합성 표면(절반을 보정 후 118 µm로 칠함, 목표 생략)과 시퀀스 평균 속도·거리를 어댑터에 넣어 얻은 실제 모양이고, 화소 수는 그 합성 자료의 값이다. 나머지(`message`, `event_id`, 정수 `sequence_id`, `text_guide`, `anomaly`, 여러 필드가 든 `sequence_feedback`, `pose_feedback`)는 이전 판의 설계안이다. 실제 analyze-sequence 응답의 `data`에는 `anomaly`·`event_id`·`pose_feedback`이 없고, `guide`·`coating_progress`가 있으며, `sequence_feedback`은 `analysis_status`·`reason_code`만 낸다(§3.11).
 
 ### 3.10 자세 판정 가능 샘플
 
@@ -377,7 +377,7 @@ POST /sessions/end
 
 실제 본문은 아래 설계안의 `anomaly.items` 형식이 아니라 평평한 객체 하나다. `anomaly.items`·`event_id`·`text_guide`·`sequence_data_ack` 형식은 구현돼 있지 않다. SSE `id:`는 서버가 매기는 증가 정수다.
 
-- 공통 열쇠: `session_id`, `sequence_id`, `anomaly_type`, `reason_code`, `message`.
+- 공통 열쇠: `session_id`, `sequence_id`, `anomaly_type`, `reason_code`, `message`(모의 발행 경로의 이벤트에는 `reason_code`가 없다).
 - `anomaly_type`은 넷이다.
 
 | `anomaly_type` | `reason_code` | 언제 |
@@ -387,9 +387,10 @@ POST /sessions/end
 | `coating_over_app` | `zone_grade_above` | 분석한 시퀀스에서 지금 Zone의 칠한 곳 평균이 목표의 1.5배 이상일 때 |
 | `coating_under_app` | `zone_grade_below` | 다른 Zone으로 넘어간 시퀀스에서 방금 떠난 Zone의 칠한 곳 평균이 목표 미만일 때 |
 
-- 도막 알림은 `POST /api/v1/copilot/analyze-sequence`에서만 나오고, 세션마다 Zone당 종류별 1회다(세션 시작 때 이력을 지운다). 순서·방향 알림은 같은 시퀀스의 같은 이상을 한 번만 보낸다. 한 시퀀스에서 알림이 둘 이상 나올 수 있다.
+- 도막 알림은 `POST /api/v1/copilot/analyze-sequence`에서만 나오고, 서버가 떠 있는 동안 세션마다 Zone당 종류별 1회다(세션 시작 때 이력을 지운다). 순서·방향 알림은 같은 시퀀스의 같은 이상을 한 번만 보낸다. 한 시퀀스에서 알림이 둘 이상 나올 수 있다.
 - 도막 알림에 더해지는 열쇠: `zone_id`, `map_num`, `status`(`over_app`·`under_app`), `grade`(`above`·`below`), `thickness_um`(칠한 곳 평균, 보정 후), `target_thickness_um`, `target_basis`. 값은 §3.4의 Zone 행과 같다.
 - `coating_under_app`의 `zone_id`는 방금 떠난 Zone이라 같은 시퀀스 HTTP 응답의 `coating_feedback.zone_id`(지금 Zone)와 다르다. 서버가 재시작된 직후 첫 Zone 이동에서는 떠난 Zone을 몰라 저도막 알림이 나오지 않을 수 있다.
+- 발행 이력과 직전 Zone은 서버 메모리에만 있다. 서버가 재시작되면 이미 알린 Zone의 도막 알림이 한 번 더 나올 수 있고, 첫 Zone 이동에서는 저도막 알림이 빠질 수 있다. 동시 세션이 16개를 넘어 세션 상태가 밀려날 때도 직전 Zone을 잃는다.
 - 모의 발행 경로(`/api/v1/test/sequence/*`)는 도막 알림을 내지 않는다. 그 경로는 화면 개발용으로 `direction_deviation`과 `distance_deviation`을 낸다.
 
 ```text
@@ -793,6 +794,8 @@ Query 예시는 다음 네 종류로 구분한다.
 ### 4.6 `error_analysis` 예시
 
 `error_analysis`는 완료 리포트에 저장된 Zone별 도막 평가로 답한다. 모델과 MCP를 부르지 않는다. 답은 칠한 면적의 6구간 분포와 저도막·과도막 Zone의 조절 후보다. 조절 후보는 등급에 따른 규칙의 후보이고 원인으로 확정된 것이 아니다. 완료 리포트가 없으면 "이 세션에는 완료 분석의 도막 결과가 없어 …" 안내를 낸다. 2026-11 이전 기준으로 저장된 리포트만 있으면 "이전 기준으로 저장되어 있어 도막 분포와 조절 후보를 낼 수 없습니다"라고 답한다.
+
+질문이 도막 상태를 묻는 말(예: "도막 상태 어때?", "도막 분포 알려줘")이면 `task_type`이 `error_analysis`여도 Zone별 등급 목록으로 답하고 조절 후보는 싣지 않는다. 원인·이유·방법을 묻는 질문이 분포와 조절 후보 답으로 간다.
 
 #### 요청
 

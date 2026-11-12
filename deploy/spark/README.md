@@ -391,7 +391,7 @@ curl -sS -w '\ntime_total=%{time_total}\n' $Q -H 'Content-Type: application/json
   "prompt": "무기질 아연 프라이머의 도장 조건은?", "task_type": "knowledge_search", "use_rag": "Y"}'
 # RAG 미사용
 curl -sS $Q -H 'Content-Type: application/json' -d '{"user_id":"keti-test","request_id":"req-0002","prompt":"도막 두께 90/10 규칙은?","task_type":"knowledge_search","use_rag":"N"}'
-# not_available 3종
+# 순서·자세·도막 질의 3종
 for t in trajectory_recomm pose_recomm error_analysis; do
   curl -sS -w '  [%{http_code} %{time_total}s]\n' $Q -H 'Content-Type: application/json' \
     -d "{\"user_id\":\"keti-test\",\"request_id\":\"req-$t\",\"prompt\":\"확인 요청\",\"task_type\":\"$t\",\"use_rag\":\"Y\"}"
@@ -406,8 +406,9 @@ curl -sS -w '  [%{http_code}]\n' $Q -H 'Content-Type: application/json' -d '{"us
 |---|---|
 | knowledge_search `Y` | HTTP 200, `status: "SUCCESS"`, `code: 200`, `data.request_id`와 `session_id`가 요청값 그대로, `resolved_intents: ["knowledge_search"]`, `retrieval_used: true`, `citations`가 비어 있지 않음(`DOC-…-C…`), `context_status: "not_available"`, `answer`가 비어 있지 않음, `latency_ms`가 curl `time_total`×1000과 비슷함(차이는 네트워크·직렬화 수준) |
 | knowledge_search `N` | 위와 같되 `retrieval_used: false`, `citations: []` |
-| error_analysis | HTTP 200, `SUCCESS`, `retrieval_used: false`, `citations: []`, 응답이 즉시 옴(생성 없음). 같은 시각 `docker compose logs mcp`에 요청 로그 없음. 완료 리포트가 있는 세션이면 `answer`가 도막 분포와 저도막·과도막 Zone의 조절 후보, `context_status: "available"`. 없으면 "이 세션에는 완료 분석의 도막 결과가 없어 …" 안내 |
-| trajectory_recomm / pose_recomm | HTTP 200, `SUCCESS`, `answer`는 "…기능은 준비 중입니다…" 고정 문구, `retrieval_used: false`, `citations: []`, 응답이 즉시 옴(생성 없음). 같은 시각 `docker compose logs mcp`에 요청 로그 없음 |
+| error_analysis | HTTP 200, `SUCCESS`, `retrieval_used: false`, `citations: []`, 응답이 즉시 옴(생성 없음). 같은 시각 `docker compose logs mcp`에 요청 로그 없음. 완료 리포트가 있는 세션에서 원인을 묻는 질문(예: "도막 분포 이상 원인은?")이면 `answer`가 도막 분포와 저도막·과도막 Zone의 조절 후보, `context_status: "available"`. 없으면 "이 세션에는 완료 분석의 도막 결과가 없어 …" 안내 |
+| trajectory_recomm | HTTP 200, `SUCCESS`, `retrieval_used: false`, `citations: []`. 완료 리포트가 있는 세션이면 순서 리포트로 답하고, 없으면 "…기능은 준비 중입니다…" 문구(이 행은 2026-11-12에 다시 확인하지 않았다) |
+| pose_recomm | HTTP 200, `SUCCESS`. 세션의 최근 시퀀스(또는 `context`의 시퀀스)를 MCP 자세 엔진으로 채점해 `pose_context`에 싣는다. 대상이 없으면 안정적인 `reason_code`와 안내 문구(이 행은 2026-11-12에 다시 확인하지 않았다) |
 | `use_rag: true`(boolean) | HTTP 422, `status: "ERROR"`, `code: 422`, `data: null` |
 
 MCP 장애 회귀(T7) 절차:

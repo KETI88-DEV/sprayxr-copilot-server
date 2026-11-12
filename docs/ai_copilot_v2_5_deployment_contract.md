@@ -383,11 +383,13 @@ Trigger ON→OFF 한 번을 하나의 시퀀스로 정의한다. 프레임은 �
 
 `trainer/demo_api/telemetry_router.py`. **응답 `data`는 §7.3의 12키와 정확히 같다** — 필드를 더하지 않는다. 시험이 키 집합을 단언하므로 하나라도 늘면 실패한다.
 
-**`analysis_status`·`reason_code`를 세 feedback에 같은 방법으로 넣는다.** §7.3 말미가 "판정할 데이터가 부족하면 임의 값을 만들지 않고 `analysis_status="not_available"`과 안정적인 `reason_code`를 반환한다"고 규정하므로, `pose_feedback`만이 아니라 `coating_feedback`·`sequence_feedback`도 같은 두 필드로 상태를 말한다. 엔진 미구현은 `reason_code: "engine_not_implemented"`다.
+**`analysis_status`·`reason_code`를 세 feedback에 같은 방법으로 넣는다.** §7.3 말미가 "판정할 데이터가 부족하면 임의 값을 만들지 않고 `analysis_status="not_available"`과 안정적인 `reason_code`를 반환한다"고 규정하므로, `pose_feedback`만이 아니라 `coating_feedback`·`sequence_feedback`도 같은 두 필드로 상태를 말한다. 엔진이 없거나 판정할 자료가 없으면 안정적인 `reason_code`(예: 저장 전용 경로의 `coating_engine_pending_integration`, 순서 기준이 없을 때의 `sequence_reference_unavailable`)를 낸다.
 
 **엔진 상태 (2026-11-12 갱신).** 자세는 텔레메트리에서 채점하지 않는다(`/copilot/query`의 `pose_recomm`이 MCP `/pose_estimation/sequence`로 위임한다). `/copilot/analyze-sequence`는 도막을 판정해 `coating_progress`(95% 면적 게이트)와 `coating_feedback`(PR #8 기준 등급·분포·조절 후보)을 채우고, 순서·방향 판정으로 `sequence_feedback`을 채운다. SSE는 순서·방향 이탈과 도막 등급(과도막·저도막)을 발행한다(§8.2). §7.2의 `anomaly_detection` 조합 단계는 없다.
 
-**엔진 장애는 수신을 실패로 만들지 않는다.** MCP가 HTTP 500이거나 `status != "success"`면 200 + `pose_feedback.reason_code: "engine_unavailable"`이고 시퀀스는 저장된다.
+**엔진 장애는 수신을 실패로 만들지 않는다.** 도막·순서 판정을 못 해도 200이고 시퀀스는 저장된다.
+
+§7.3 샘플의 `coating_feedback`(`nominal_um`, `action_codes`)은 설계안이다. 실제 필드는 응답 계약 §3.4가 정본이다(`target_thickness_um`, `grade`, `adjustments` 등).
 
 **`sequence_data_ack`는 관측된 사실이다.** 같은 `(session_id, sequence_id)`에 **같은 본문**이 다시 오면 `duplicate=true`, `frames_accepted=0`이고 다시 채점하지 않는다. **다른 본문**이 오면 `stored=false`, `duplicate=false`다 — 두 조합이 서로 구별되므로 별도 필드가 필요 없다. 조용히 덮어쓰지 않는다.
 
@@ -430,16 +432,16 @@ Trigger ON→OFF 한 번을 하나의 시퀀스로 정의한다. 프레임은 �
 - 연결 유지용 comment heartbeat를 최대 15초 간격으로 보낸다.
 - 모든 이벤트에 증가하는 `id`를 포함한다.
 - 클라이언트는 `Last-Event-ID`로 재연결할 수 있다.
-- 같은 `sequence_id`의 동일 이상을 중복 발행하지 않는다. 도막 등급 알림은 Zone 단위로 막는다(세션마다 Zone당 종류별 1회).
+- 같은 `sequence_id`의 동일 이상을 중복 발행하지 않는다. 도막 등급 알림은 Zone 단위로 막는다(서버가 떠 있는 동안 세션마다 Zone당 종류별 1회).
 
 ### 8.2 이벤트
 
 실제 본문은 평평한 객체 하나다. 이 문서의 이전 판이 보인 `anomaly.items`·`event_id`·`text_guide`·`sequence_data_ack` 형식은 구현돼 있지 않다. 필드와 예시는 응답 계약 문서(`docs/ai_copilot_response_contract.md`) §3.11 "현재 구현"이 정본이다.
 
-- 공통 열쇠: `session_id`, `sequence_id`, `anomaly_type`, `reason_code`, `message`.
+- 공통 열쇠: `session_id`, `sequence_id`, `anomaly_type`, `reason_code`, `message`(모의 발행 경로의 이벤트에는 `reason_code`가 없다).
 - `anomaly_type`: `sequence_order_deviation`, `direction_deviation`, `coating_over_app`(`zone_grade_above`), `coating_under_app`(`zone_grade_below`). 모의 발행 경로(`/api/v1/test/sequence/*`)는 `direction_deviation`·`distance_deviation`만 내고 도막 알림은 내지 않는다.
 - 도막 알림의 추가 열쇠: `zone_id`, `map_num`, `status`, `grade`, `thickness_um`(칠한 곳 평균, 보정 후), `target_thickness_um`, `target_basis`.
-- 과도막은 지금 Zone의 칠한 곳 평균이 목표의 1.5배 이상이 된 시퀀스에서, 저도막은 다른 Zone으로 넘어간 시퀀스에서 방금 떠난 Zone의 평균이 목표 미만일 때 나온다. 둘 다 세션마다 Zone당 1회다. 서버 재시작 직후 첫 Zone 이동에서는 저도막 알림이 빠질 수 있다.
+- 과도막은 지금 Zone의 칠한 곳 평균이 목표의 1.5배 이상이 된 시퀀스에서, 저도막은 다른 Zone으로 넘어간 시퀀스에서 방금 떠난 Zone의 평균이 목표 미만일 때 나온다. 둘 다 서버가 떠 있는 동안 세션마다 Zone당 1회다. 발행 이력과 직전 Zone은 서버 메모리에만 있다. 서버가 재시작되면 이미 알린 Zone의 도막 알림이 한 번 더 나올 수 있고, 첫 Zone 이동에서는 저도막 알림이 빠질 수 있다. 동시 세션이 16개를 넘어 세션 상태가 밀려날 때도 직전 Zone을 잃는다.
 
 ```text
 id: 42
@@ -805,7 +807,7 @@ LLM 응답 시간은 모델 정밀도와 서빙 백엔드에 따라 달라질 �
 - `/copilot/analyze-sequence`의 `coating_feedback`이 현재 Zone의 등급(`below`·`normal`·`above`, 칠한 곳 평균 기준)·미도장률·6구간 화소 수·조절 후보를 싣는다. 두께는 보정값(10 µm 한 번 차감, 1600 µm 상한, 1 µm 미만 미도장)이다.
 - `coating_progress`의 95% 면적 게이트는 그대로이고 두께만 보정값으로 잰다. `overpaint_risk`는 등급 `above`일 때다. 목표를 생략한 세션은 160 µm로 판정하고 `target_basis="default_target"`을 싣는다.
 - 이상 알림 SSE에 `coating_over_app`·`coating_under_app`이 더해졌다(§8.2).
-- 완료 리포트 `coating_report`는 항상 목표 기준(`comparison_basis="session_target"`)이고 Zone 행에 등급·분포·조절 후보를 싣는다.
+- 완료 리포트 `coating_report`는 판정한 경우 목표 기준(`comparison_basis="session_target"`)이고 Zone 행에 등급·분포·조절 후보를 싣는다.
 - `error_analysis`는 더 이상 "준비 중" 고정 응답이 아니다. 완료 리포트의 도막 분포와 저도막·과도막 Zone의 조절 후보로 답하고, 리포트가 없으면 자료가 없다고 안내한다. 도막·순서·자세를 조합한 원인 설명(§9.1)은 아직 아니다.
 - 저장 전용 `/telemetry/sequence`는 판정하지 않는다(`coating_engine_pending_integration`).
 
