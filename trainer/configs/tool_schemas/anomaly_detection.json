@@ -2,7 +2,7 @@
   "type": "function",
   "function": {
     "name": "anomaly_detection",
-    "description": "도막 두께, 이격거리, 이동속도, 분사각도, 경로 등 시계열 데이터를 분석하여 이상(저도막/과도막)을 탐지하고, 도막 분포를 분석하며, 원인을 파악한다.",
+    "description": "위치별 측정값과 작업 시계열로 Zone 도막 등급(저도막·정상·과도막), 두께 구간 분포, 이동 속도·이격거리 조절 후보를 낸다. 조절 후보는 확정된 원인이 아니다.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -50,8 +50,8 @@
           "type": "object",
           "description": "도막 두께 기준",
           "properties": {
-            "nominal_um": {"type": "number", "description": "기준 두께 (um)"},
-            "tolerance_rule": {"type": "string", "description": "허용 규칙 (예: '90/10')"}
+            "nominal_um": {"type": "number", "description": "목표 두께(μm). 없으면 기본 160"},
+            "tolerance_rule": {"type": "string", "description": "예전 호출 호환용. 판정에 쓰지 않는다"}
           }
         },
         "image_context": {
