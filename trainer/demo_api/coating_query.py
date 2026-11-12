@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from trainer.demo_api.coating_assessment import (
-    RULE_NOTE, adjustment_sentence, basis_label, distribution_sentence, grade_phrase)
+    RULE_NOTE, adjustment_sentence, basis_label, distribution_sentence, grade_phrase, mean_text)
 
 _ZONE_NUMBER = re.compile(r"(?:zone|존|구역)\s*(\d+)", re.I)
 
@@ -116,18 +116,24 @@ def _grade_answer(rows: list[dict[str, Any]], prompt: str, *, detailed: bool) ->
     if "분포" in prompt:
         text.append(distribution_sentence(_sum_bands(rows)) or "")
     if "미도장" in prompt or "안 칠" in prompt:
-        largest = sorted(rows, key=lambda row: -row["unpainted_fraction"])[:3]
+        shares = [(row["zone_id"], f"{row['unpainted_fraction'] * 100:.0f}%")
+                  for row in sorted(rows, key=lambda row: -row["unpainted_fraction"])]
+        # 0%로 적히는 Zone은 "큰 곳"이 아니다.
+        largest = [f"Zone {zone_id}({share})" for zone_id, share in shares if share != "0%"][:3]
         # 미도장 비율에는 합격 기준이 없다. 있다/없다로 판정하지 않고 숫자만 옮긴다.
-        text.append("미도장 비율이 큰 곳: " + ", ".join(f"Zone {row['zone_id']}({row['unpainted_fraction'] * 100:.0f}%)" for row in largest)
-                    + ". 미도장 비율에는 합격 기준이 없어 숫자만 알려 드립니다.")
+        text.append(("미도장 비율이 큰 곳: " + ", ".join(largest) + "." if largest else "판정한 Zone의 미도장 비율은 모두 1% 미만입니다.")
+                    + " 미도장 비율에는 합격 기준이 없어 숫자만 알려 드립니다.")
     return "\n".join(line for line in text if line)
 
 
 def answer_distribution_cause(context: Mapping[str, Any], *, detailed: bool) -> str | None:
-    """error_analysis 답: 분포와 저도막·과도막 Zone의 조절 후보. 새 행이 없으면 None."""
-    rows = [row for row in context.get("zones") or [] if "grade" in row]
+    """error_analysis 답: 분포와 저도막·과도막 Zone의 조절 후보. 도막 자료가 없으면 None."""
+    zones = context.get("zones") or []
+    rows = [row for row in zones if "grade" in row]
     if context.get("analysis_status") != "available" or not rows:
-        return None
+        # 2026-11 이전에 저장된 리포트 행에는 등급·분포가 없다. 완료한 세션에 "완료 분석이 없다"고 답하지 않는다.
+        return ("이 세션의 완료 분석은 이전 기준으로 저장되어 있어 도막 분포와 조절 후보를 낼 수 없습니다."
+                if zones and context.get("comparison_basis") == "saved_coating_report" else None)
     basis = basis_label(rows[0]["target_thickness_um"], rows[0]["target_basis"])
     text = [" ".join(filter(None, (f"{basis}으로 본 도막 분포입니다.", distribution_sentence(_sum_bands(rows)))))]
     for word, grade in (("저도막", "below"), ("과도막", "above")):
@@ -135,7 +141,7 @@ def answer_distribution_cause(context: Mapping[str, Any], *, detailed: bool) -> 
         for row in group if detailed else group[:3]:
             candidates = adjustment_sentence(row["adjustments"])
             # 어댑터 문장의 "원인으로 확정된 것은 아닙니다."는 끝줄에서 한 번만 말한다.
-            text.append(f"{word} Zone {row['zone_id']}(칠한 곳 평균 {row['thickness_um']:.0f}µm): "
+            text.append(f"{word} Zone {row['zone_id']}(칠한 곳 평균 {mean_text(row['thickness_um'], row['target_thickness_um'])}µm): "
                         + (candidates.partition(" 원인으로")[0] if candidates else "속도·이격거리 기록이 없어 조절 후보를 내지 못했습니다."))
     if len(text) == 1:
         return text[0] + "\n저도막·과도막으로 판정된 Zone이 없습니다."

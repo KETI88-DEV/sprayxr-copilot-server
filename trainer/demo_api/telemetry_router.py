@@ -135,12 +135,13 @@ def _coating_alerts(row: dict[str, Any]) -> list[dict[str, Any]]:
 
     if row["grade"] == "above":
         add(row, "coating_over_app", "zone_grade_above",
-            f"Zone {row['zone_id']}가 과도막입니다(칠한 곳 평균 {row['thickness_um']:.0f}µm, "
-            f"{coating_assessment.OVER_PHRASE}). 이 Zone의 분사를 멈추세요.")
+            f"Zone {row['zone_id']}의 칠한 곳 평균 두께가 {row['thickness_um']:.0f}µm로 "
+            f"{coating_assessment.OVER_PHRASE}입니다(과도막). 이 Zone의 분사를 멈추세요.")
     left = row.get("left_zone")
     if left is not None and left["grade"] == "below":
         add(left, "coating_under_app", "zone_grade_below",
-            f"방금 떠난 Zone {left['zone_id']}가 저도막입니다(칠한 곳 평균 {left['thickness_um']:.0f}µm, 목표 미만). "
+            f"방금 떠난 Zone {left['zone_id']}의 칠한 곳 평균 두께가 "
+            f"{coating_assessment.mean_text(left['thickness_um'], left['target_thickness_um'])}µm로 목표 미만입니다(저도막). "
             "돌아가 얇은 곳을 보완하세요.")
     return alerts
 

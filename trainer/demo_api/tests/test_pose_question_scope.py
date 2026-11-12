@@ -220,6 +220,11 @@ def test_distribution_and_unpainted_questions_get_numbers() -> None:
     assert "미도장 비율이 큰 곳" not in distribution
     assert unpainted.endswith("미도장 비율이 큰 곳: Zone 7(100%), Zone 3(12%), Zone 5(3%). 미도장 비율에는 합격 기준이 없어 숫자만 알려 드립니다.")
     assert "두께 분포" not in unpainted
+    # 0%인 Zone은 "큰 곳"에 넣지 않는다.
+    one = coating_query.answer_coating_question(_saved(*_GRADED[2:], _graded("2", "normal", 171.0, 0.004)), "미도장 영역이 있어?", detailed=False)
+    assert one.endswith("미도장 비율이 큰 곳: Zone 7(100%). 미도장 비율에는 합격 기준이 없어 숫자만 알려 드립니다.")
+    none = coating_query.answer_coating_question(_saved(_GRADED[3]), "미도장 영역이 있어?", detailed=False)
+    assert none.endswith("판정한 Zone의 미도장 비율은 모두 1% 미만입니다. 미도장 비율에는 합격 기준이 없어 숫자만 알려 드립니다.")
 
 
 def test_old_saved_rows_keep_the_old_answer() -> None:
@@ -246,8 +251,10 @@ def test_distribution_cause_names_candidates_without_claiming_a_cause() -> None:
     ]
     only_normal = coating_query.answer_distribution_cause(_saved(rows[2]), detailed=True)
     assert only_normal is not None and only_normal.split("\n")[1:] == ["저도막·과도막으로 판정된 Zone이 없습니다."]
-    # 옛 행·자료 없음은 답하지 않는다(라우터가 자료 없음 안내로 떨어진다).
-    assert coating_query.answer_distribution_cause(_saved({"map_num": 1, "zone_id": "3", "status": "under_app"}), detailed=False) is None
+    # 옛 행만 있는 완료 세션에 "완료 분석이 없다"고 답하면 사실과 다르다.
+    assert coating_query.answer_distribution_cause(_saved({"map_num": 1, "zone_id": "3", "status": "under_app"}), detailed=False) == (
+        "이 세션의 완료 분석은 이전 기준으로 저장되어 있어 도막 분포와 조절 후보를 낼 수 없습니다.")
+    # 자료 없음은 답하지 않는다(라우터가 자료 없음 안내로 떨어진다).
     assert coating_query.answer_distribution_cause(_saved(), detailed=False) is None
 
 

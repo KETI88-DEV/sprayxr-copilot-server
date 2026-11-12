@@ -377,7 +377,7 @@ def test_overcoat_alert_is_published_once_per_zone(tmp_path: Path) -> None:
     assert [(alert.anomaly_type, alert.sequence_id) for alert in alerts] == [("coating_over_app", "SEQ-001")]
     assert alerts[0].payload == {
         "reason_code": "zone_grade_above",
-        "message": "기본 목표 160µm 기준: Zone 1가 과도막입니다(칠한 곳 평균 290µm, 목표의 1.5배 이상). "
+        "message": "기본 목표 160µm 기준: Zone 1의 칠한 곳 평균 두께가 290µm로 목표의 1.5배 이상입니다(과도막). "
                    "이 Zone의 분사를 멈추세요.",
         "zone_id": "1", "map_num": 1, "status": "over_app", "grade": "above",
         "thickness_um": 289.9, "target_thickness_um": 160.0, "target_basis": "default_target",
@@ -396,7 +396,7 @@ def test_undercoat_alert_fires_when_the_trainee_leaves_a_below_zone(tmp_path: Pa
     # 본문의 Zone은 지금 Zone(2)이 아니라 떠난 Zone(1)이다.
     assert alerts[0].payload == {
         "reason_code": "zone_grade_below",
-        "message": "기본 목표 160µm 기준: 방금 떠난 Zone 1가 저도막입니다(칠한 곳 평균 90µm, 목표 미만). "
+        "message": "기본 목표 160µm 기준: 방금 떠난 Zone 1의 칠한 곳 평균 두께가 90µm로 목표 미만입니다(저도막). "
                    "돌아가 얇은 곳을 보완하세요.",
         "zone_id": "1", "map_num": 1, "status": "under_app", "grade": "below",
         "thickness_um": 90.0, "target_thickness_um": 160.0, "target_basis": "default_target",

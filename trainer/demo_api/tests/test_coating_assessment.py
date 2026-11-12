@@ -206,6 +206,14 @@ def test_trainee_sentences_use_no_internal_words() -> None:
         assert not any(word in text for word in ("픽셀", "화소", "마스크", "revision"))
 
 
+def test_mean_next_to_the_target_is_not_written_as_the_target() -> None:
+    """평균 159.6을 '160µm'로 적으면 목표 160에 '저도막'이 모순으로 읽힌다. 그때만 소수 한 자리로 적는다."""
+    row = ca.zone_row("1", "3", _zone(169.6))
+    assert (row["grade"], row["thickness_um"]) == ("below", 159.6)
+    assert ca.grade_phrase(row) == "저도막(칠한 곳 평균 159.6µm, 미도장 0%)"
+    assert [ca.mean_text(mean, 160.0) for mean in (98.0, 159.4, 160.0, 160.3, 240.2)] == ["98", "159", "160", "160.3", "240"]
+
+
 def test_mismatched_or_empty_mask_returns_none() -> None:
     surface = np.full((4, 4), 171.0)
     assert ca.assess_zone(surface, np.ones((4, 5), bool)) is None

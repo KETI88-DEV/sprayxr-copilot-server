@@ -263,12 +263,19 @@ def basis_label(target_um: float, target_basis: str) -> str:
     return f"{'기본' if target_basis == 'default_target' else '세션'} 목표 {target_um:g}µm 기준"
 
 
+def mean_text(mean_um: float, target_um: float) -> str:
+    """칠한 곳 평균의 표기(µm 앞 숫자)."""
+    whole = f"{mean_um:.0f}"
+    # 평균 159.6을 "160µm"로 적으면 목표 160에 "저도막"이 모순으로 읽힌다. 그때만 소수 한 자리로 적는다.
+    return f"{mean_um:.1f}" if whole == f"{target_um:g}" and mean_um != target_um else whole
+
+
 def grade_phrase(row: Mapping[str, Any]) -> str:
     """`zone_row` 한 줄 → 훈련생에게 보이는 등급 표기."""
     unpainted = f"미도장 {row['unpainted_fraction'] * 100:.0f}%"
     if row["grade"] is None:
         return f"칠한 곳 없음({unpainted})"
-    return f"{_GRADE_WORDS[row['grade']]}(칠한 곳 평균 {row['thickness_um']:.0f}µm, {unpainted})"
+    return f"{_GRADE_WORDS[row['grade']]}(칠한 곳 평균 {mean_text(row['thickness_um'], row['target_thickness_um'])}µm, {unpainted})"
 
 
 def adjustment_sentence(adjustments: Sequence[Mapping[str, Any]]) -> str | None:

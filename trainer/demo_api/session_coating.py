@@ -120,7 +120,7 @@ def _guideline(zones: list[dict[str, Any]], worst: list[dict[str, Any]], summary
         top = worst[0]
         text += (
             f" 가장 벗어난 곳은 {top['zone_id']}번 구역({'저도막' if top['status'] == 'under_app' else '과도막'}, "
-            f"칠한 곳 평균 {top['thickness_um']:.0f}µm)입니다."
+            f"칠한 곳 평균 {coating_assessment.mean_text(top['thickness_um'], top['target_thickness_um'])}µm)입니다."
         )
     if summary["painted_mean_um"] is not None:
         # 손대지 않은 구역도 미도장으로 들어간 값이라 범위를 "판정한 구역 전체"라고 밝힌다.

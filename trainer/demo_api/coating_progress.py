@@ -637,10 +637,12 @@ class CoatingProgressEngine:
 
             coverage_percent = assessment["coverage_percent"]
             status = assessment["gate_status"]
+            row = coating_assessment.zone_row(map_num, request.zone_id, assessment)
             if status == "overpaint_risk":
                 recommendation = "stop_current_zone"
                 next_zone_id = None
-                message = (f"Zone {request.zone_id}의 칠한 곳 평균 두께가 {assessment['painted_mean_um']:.0f}µm로 "
+                # 같은 시퀀스의 과도막 알림(SSE)과 숫자가 같도록 행의 값을 적는다.
+                message = (f"Zone {request.zone_id}의 칠한 곳 평균 두께가 {row['thickness_um']:.0f}µm로 "
                            f"{coating_assessment.OVER_PHRASE}입니다(과도막). "
                            "이 Zone의 분사를 멈추고 목표에 못 미친 곳만 확인하세요.")
             elif status == "complete":
@@ -657,7 +659,6 @@ class CoatingProgressEngine:
 
             message = f"{coating_assessment.basis_label(target_thickness_um, target_basis)}: {message}"
 
-            row = coating_assessment.zone_row(map_num, request.zone_id, assessment)
             previous = self._last_zone.get(session_key)
             if previous is not None and previous != request.zone_id:
                 left = self._left_zone_row(
