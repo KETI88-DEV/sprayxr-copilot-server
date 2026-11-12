@@ -881,8 +881,8 @@
   const notices = (() => {
     const A = window.motionViewerAlerts;
     const toastHost = $('v2Toast'), marks = $('v2AlertMarks'), button = $('v2AlertsButton'), list = $('v2AlertList');
-    const items = $('v2AlertItems'), note = $('v2AlertNote'), count = $('v2AlertCount');
-    let all = [], last = 0, seeking = true, lastKey = null, lastAt = -Infinity, current = null, focused = null;
+    const items = $('v2AlertItems'), note = $('v2AlertNote'), count = $('v2AlertCount'), live = $('v2AlertLive');
+    let wasPending = false, all = [], last = 0, seeking = true, lastKey = null, lastAt = -Infinity, current = null, focused = null;
     const tone = (alert) => `tone-${A.KIND[alert.anomaly_type]?.tone || 'warn'}`;
     const face = (alert) => {   // [종류 아이콘][Zone 네모+번호][짧은 표기]
       const icon = el('span', `alert-icon ${tone(alert)}`);
@@ -935,14 +935,18 @@
       const { pending, text } = A.listStatus(record, all.length);
       button.setAttribute('aria-busy', String(pending));
       list.setAttribute('aria-busy', String(pending));
+      // 상태가 바뀔 때만 아이콘을 바꾼다. 클릭마다 바꾸면 클릭한 svg 가 떨어져 나가 바깥 클릭 처리가 목록을 바로 닫는다.
       const icon = button.querySelector('svg');
-      if (icon) icon.outerHTML = svg(pending ? 'loader-circle' : 'bell');
+      if (icon && pending !== wasPending) icon.outerHTML = svg(pending ? 'loader-circle' : 'bell');
       button.title = pending ? `알림 ${all.length}건 · 순서·방향 알림을 불러오는 중` : `알림 ${all.length}건`;
       button.setAttribute('aria-label', button.title);
       count.hidden = pending || !all.length;
       count.textContent = String(all.length);
       note.textContent = text;
       note.hidden = !note.textContent;
+      // 목록이 닫혀 있어도 늦게 온 순서·방향 알림이 다 왔다는 것을 화면 읽기 프로그램에 한 번 알린다
+      live.textContent = wasPending && !pending ? `순서·방향 알림을 불러왔습니다. 알림 ${all.length}건` : '';
+      wasPending = pending;
       const keep = items.contains(document.activeElement) ? document.activeElement.dataset.id : null;   // 늦게 온 알림으로 다시 그려도 초점 유지
       items.replaceChildren(...all.map((alert) => {
         const row = labelled(el('button', 'alert-row'), alert);
