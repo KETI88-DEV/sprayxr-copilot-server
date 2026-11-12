@@ -215,7 +215,7 @@ select:hover { background: var(--raised-hover); }
   background: #fff; box-shadow: 0 0 0 2px rgba(5, 11, 23, .8);
 }
 #timeline::-moz-range-thumb { width: 4px; height: 28px; border: 0; border-radius: 2px; background: #fff; box-shadow: 0 0 0 2px rgba(5, 11, 23, .8); }
-.pins { position: absolute; inset: 0; pointer-events: none; }
+.pins { position: absolute; inset: 0; z-index: 2; pointer-events: none; }
 .pin {
   position: absolute; top: -4px; width: 12px; height: 12px; margin-left: -6px; padding: 0; pointer-events: auto;
   border: 2px solid var(--scene); border-radius: 50% 50% 50% 0; transform: rotate(-45deg);

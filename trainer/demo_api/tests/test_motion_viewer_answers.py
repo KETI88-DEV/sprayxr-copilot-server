@@ -249,3 +249,17 @@ def test_v2_expert_map_button_has_a_visible_label() -> None:
 
 def test_v2_keeps_sending_the_whole_signed_coating_block() -> None:
     assert "coating_context: payload.coating_evaluation ?? null" in _v2_static("motion_viewer_v2.js")
+
+
+def _css_rule(css: str, selector: str) -> str:
+    import re
+    return re.search(r"(?m)^" + re.escape(selector) + r"\s*\{([^}]*)\}", css).group(1)
+
+
+def test_v2_question_pins_sit_above_the_slider_that_follows_them_in_the_dom() -> None:
+    import re
+    page, css = _v2_static("motion_viewer_v2.html"), _v2_static("motion_viewer_v2.css")
+    assert page.index('id="v2Pins"') < page.index('id="timeline"')   # 슬라이더가 뒤라서 z-index 없이는 핀을 덮는다
+    pins = re.search(r"z-index:\s*(\d+)", _css_rule(css, ".pins"))
+    marks = re.search(r"z-index:\s*(\d+)", _css_rule(css, ".alert-marks"))
+    assert pins and marks and int(pins.group(1)) > int(marks.group(1)) >= 1
