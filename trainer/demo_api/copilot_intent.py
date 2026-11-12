@@ -17,13 +17,26 @@ def is_coating_advice_question(prompt: str) -> bool:
                 and re.search(r"뭐|무엇|뜻|의미|정의|원인|이유|왜|방법|어떻게|예방|방지|원리|관계|영향|중요|하려면|개선|해야|고치|맞추|조절", prompt))
 
 
-def is_coating_status_question(prompt: str) -> bool:
-    subject = re.search(r"도막|두께|과도막|저도막|미도장|coating|thickness", prompt, re.I)
-    if not subject or is_coating_advice_question(prompt):
+_COATING_SUBJECT = r"도막|두께|과도막|저도막|coating|thickness"
+_COATING_STATE = r"과하|모자|부족|이상|상태|어때|분석|평가|얇|두껍|과다|괜찮|충분|양호|균일|불량|칠했|잘됐"
+
+
+def _asks_coating_state(prompt: str, subject: str, state: str) -> bool:
+    if not re.search(subject, prompt, re.I):
         return False
     specific = re.search(r"영역|구역|zone|존|부위|현재|지금|이번|내[ 가]|어디|어느", prompt, re.I)
     definition = re.search(r"뭐|무엇|뜻|의미|정의|원인|예방|방지", prompt)
-    return bool(specific or (not definition and re.search(r"과하|모자|부족|이상|상태|어때|분석|평가|얇|두껍|과다|괜찮|충분|양호|균일|불량|칠했|잘됐|분포|미도장|등급", prompt)))
+    return bool(specific or (not definition and re.search(state, prompt)))
+
+
+def is_coating_status_question(prompt: str) -> bool:
+    if is_coating_advice_question(prompt):
+        return False
+    if _asks_coating_state(prompt, _COATING_SUBJECT, _COATING_STATE):
+        return True
+    # 넓힌 낱말(미도장·분포·등급)로만 걸리는 질문은 규정·절차를 묻는 지식 질문일 수 있어 문서 검색에 남긴다.
+    return (_asks_coating_state(prompt, _COATING_SUBJECT + "|미도장", _COATING_STATE + "|분포|미도장|등급")
+            and not re.search(r"규정|규격|절차|종류|기준|ISO|SSPC", prompt, re.I))
 
 
 def preset_intent(task_type: str, prompt: str) -> str | None:

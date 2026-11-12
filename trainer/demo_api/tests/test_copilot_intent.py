@@ -108,3 +108,15 @@ def test_unpainted_and_distribution_questions_are_status_questions():
     # "정상"은 상태 낱말이 아니다 — 지식 질문이 상태 질문으로 넘어가지 않는다.
     assert not is_coating_status_question("정상 도막 두께는 얼마야?")
     assert not is_coating_advice_question("정상 도막 두께는 얼마야?")
+
+
+def test_widened_status_words_do_not_capture_rule_and_procedure_questions():
+    """넓힌 낱말(미도장·분포·등급)로만 걸리는 규정·절차 질문은 문서 검색에 남는다."""
+    from trainer.demo_api.copilot_intent import is_coating_status_question
+    for question in ("미도장 부위 보수 절차 알려줘", "ISO 12944 도막 등급은?", "미도장 발생 시 재도장 기준",
+                     "도막 두께 분포 규정은?", "도막 두께 등급 기준 알려줘", "도막 두께 분포 기준은?",
+                     "미도장 판정 기준은?", "도막 등급 규정"):
+        assert not is_coating_status_question(question), question
+    # 넓히기 전에도 상태 질문이던 것은 규정 낱말이 있어도 그대로다.
+    for question in ("도막 두께가 기준보다 얇은 구역은 어디야?", "지금 도막 상태가 기준에 맞아?"):
+        assert is_coating_status_question(question), question
