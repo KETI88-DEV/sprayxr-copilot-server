@@ -16,29 +16,44 @@ const CORE = (() => {
 const POSE = fs.readFileSync(path.join(__dirname, '../static/motion_viewer_pose.js'), 'utf8');
 const UPPER_BODY = POSE.slice(POSE.indexOf('  function trustedUpperBody('), POSE.indexOf('  function drawOrientationGuides('));
 
-/** 코어의 벡터·표·IK 줄과 포즈 스크립트의 상체 함수를 올린다. line/point/ctx 는 그린 것을 적는다. */
-function scene() {
+/**
+ * 코어의 벡터·표·IK 줄과 포즈 스크립트의 상체 함수를 올린다. 그리기 맥락은 경로(beginPath)마다 원·타원·채움·윤곽을 적는다(shapes, 그린 순서).
+ * real 이면 코어의 실제 transform/project 를 yaw·pitch 로 쓰고, 아니면 투영은 (x, y) × zoom 이다(깊이 없음).
+ */
+function scene({ real = false, yaw = 0, pitch = 0 } = {}) {
   const lines = CORE.split('\n');
   const pick = (marker) => {
     const line = lines.find((item) => item.includes(marker));
     assert.ok(line, `코어 스크립트에서 ${marker} 를 찾지 못했다`);
     return line;
   };
-  const drawn = { lines: [], points: [], rings: [] };
-  let style = '';
-  const sandbox = vm.createContext({
-    project: (p) => [p[0], p[1], 1],
-    line: (a, b, color, width) => drawn.lines.push({ a, b, color, width }),
-    point: (p, r, color) => drawn.points.push({ p, r, color }),
-    ctx: {
-      set strokeStyle(value) { style = value; }, get strokeStyle() { return style; }, lineWidth: 1,
-      beginPath() {}, stroke() {}, arc(x, y, r) { drawn.rings.push({ p: [x, y], r, color: style }); },
-    },
-  });
-  vm.runInContext([pick('function add(a,b)'), pick('const BODY='), pick('function gunGrip('), pick('function twoBoneIK('), UPPER_BODY,
+  const shapes = [], alphas = [];
+  let shape = null;
+  const ctx = {
+    canvas: { width: 100, height: 100 }, globalAlpha: 1, lineWidth: 1, strokeStyle: '', fillStyle: '',
+    save() { alphas.push(this.globalAlpha); }, restore() { this.globalAlpha = alphas.pop(); },
+    setTransform() {}, getTransform() { return null; }, clearRect() {}, drawImage() {}, moveTo() {}, lineTo() {}, closePath() {},
+    createLinearGradient() { return { stops: [], addColorStop(offset, color) { this.stops.push([offset, color]); } }; },
+    beginPath() { shape = { arcs: [], ellipses: [], fill: null, stroke: null }; shapes.push(shape); },
+    arc(x, y, r) { shape.arcs.push({ p: [x, y], r }); },
+    ellipse(x, y, rx, ry) { shape.ellipses.push({ p: [x, y], rx, ry }); },
+    fill() { shape.fill = this.fillStyle; shape.alpha = this.globalAlpha; },
+    stroke() { shape.stroke = this.strokeStyle; },
+  };
+  const sandbox = vm.createContext({ ctx, document: { createElement: () => ({ width: 0, height: 0, getContext: () => ctx }) } });
+  const projection = real
+    ? [`var yaw=${yaw},pitch=${pitch},zoom=100,panX=0,panY=0;`, pick('function transform('), pick('function project(')]
+    : ['var zoom=100;function transform(p,c){return p.map((v,i)=>v-c[i])}function project(p){return [p[0]*zoom,p[1]*zoom,1]}'];
+  vm.runInContext([...projection, pick('function add(a,b)'), pick('const BODY='), pick('function gunGrip('), pick('function twoBoneIK('), UPPER_BODY,
     'this.trustedUpperBody=trustedUpperBody;this.drawTrustedUpperBody=drawTrustedUpperBody;'].join('\n'), sandbox);
-  return { sandbox, drawn };
+  return { sandbox, shapes };
 }
+
+/** 채움의 밝은 색(그라디언트면 끝 색). */
+const light = (shape) => (typeof shape.fill === 'string' ? shape.fill : shape.fill?.stops.at(-1)[1]);
+/** 두 끝 원의 중심이 a, b 의 화면 자리인 캡슐 경로. */
+const capsuleAt = (shapes, project, a, b) => shapes.find((shape) => shape.arcs.length === 2 && shape.fill
+  && distance(shape.arcs[0].p, project(a)) < 1e-6 && distance(shape.arcs[1].p, project(b)) < 1e-6);
 
 const sub = (a, b) => a.map((value, axis) => value - b[axis]);
 const add = (a, b) => a.map((value, axis) => value + b[axis]);
@@ -85,21 +100,80 @@ test('닿지 않으면 팔을 목표 쪽으로 곧게 편다', () => {
   }
 });
 
-test('팔·몸통 색은 패널과 같고, 실측 추적기는 따로 고리로 그린다', () => {
-  const { sandbox, drawn } = scene();
+test('팔 캡슐은 어깨–팔꿈치–손을 잇고 패널과 같은 색이며, 실측 추적기는 따로 고리로 그린다', () => {
+  const { sandbox, shapes } = scene();
   sandbox.drawTrustedUpperBody(frame(), [0, 0, 0], 100, 100);
   const body = sandbox.trustedUpperBody(frame());
-  const colorOf = (a, b) => drawn.lines.find((item) => distance(item.a, a) < 1e-9 && distance(item.b, b) < 1e-9)?.color;
-  assert.equal(colorOf(body.rightShoulder, body.rightArm.elbow), '#22d3ee');
-  assert.equal(colorOf(body.rightArm.elbow, body.rightArm.hand), '#22d3ee');
-  assert.equal(colorOf(body.leftShoulder, body.leftArm.elbow), '#22d3ee');
-  assert.equal(colorOf(body.leftArm.elbow, body.leftArm.hand), '#22d3ee');
-  assert.equal(colorOf(body.head, body.neck), '#e6edf7');
-  assert.equal(colorOf(body.neck, body.chest), '#e6edf7');
-  // 고리 = 건과 왼손 추적기(둘 다 팔 색). 건 고리는 IK 손(손잡이)과 떨어져 있다.
-  assert.deepEqual(drawn.rings.map((ring) => ring.color).sort(), ['#22d3ee', '#22d3ee']);
-  assert.ok(drawn.rings.some((ring) => distance(ring.p, [1.3, 1.3]) < 1e-9));
-  assert.ok(drawn.rings.some((ring) => distance(ring.p, [0.7, 1.25]) < 1e-9));
+  const flat = (p) => [p[0] * 100, p[1] * 100];
+  for (const [shoulder, arm] of [[body.leftShoulder, body.leftArm], [body.rightShoulder, body.rightArm]]) {
+    const upper = capsuleAt(shapes, flat, shoulder, arm.elbow), fore = capsuleAt(shapes, flat, arm.elbow, arm.hand);
+    assert.ok(upper && fore, '위팔·아래팔 캡슐이 관절 사이를 잇는다');
+    assert.equal(light(upper), '#22d3ee'); assert.equal(light(fore), '#22d3ee');
+    // 굵기(px) = 살 반지름(m) × zoom: 위팔 어깨 .044 → 팔꿈치 .04, 아래팔은 그보다 가늘다.
+    near(upper.arcs[0].r, 4.4, '위팔 어깨 쪽'); near(upper.arcs[1].r, 4, '위팔 팔꿈치 쪽');
+    assert.ok(fore.arcs[0].r < upper.arcs[1].r && fore.arcs[1].r < fore.arcs[0].r, '아래팔은 손목으로 갈수록 가늘다');
+  }
+  const torso = shapes.find((shape) => shape.arcs.length === 6);
+  assert.equal(light(torso), '#e6edf7', '몸통은 좌우 캡슐과 어깨선을 한 덩어리로 칠한다');
+  const head = shapes.find((shape) => shape.ellipses.length === 1);
+  assert.equal(light(head), '#e6edf7');
+  assert.ok(head.ellipses[0].ry > head.ellipses[0].rx, '머리는 세로로 긴 타원');
+  // 고리 = 건과 왼손 추적기(둘 다 팔 색, 채우지 않음). 건 고리는 IK 손(손잡이)과 떨어져 있다.
+  const rings = shapes.filter((shape) => !shape.fill && shape.stroke === '#22d3ee');
+  assert.equal(rings.length, 2);
+  assert.ok(rings.some((ring) => distance(ring.arcs[0].p, [130, 130]) < 1e-9));
+  assert.ok(rings.some((ring) => distance(ring.arcs[0].p, [70, 125]) < 1e-9));
+  assert.equal(shapes.at(-1), rings.at(-1), '고리는 몸 위에 맨 마지막으로 그린다');
+});
+
+test('건 연장대·노즐은 분사 축을 따라 손잡이에서 추적기 앞으로 뻗는다', () => {
+  const { sandbox, shapes } = scene();
+  const tool = [0.6, -0.48, 0.64], gun = [1.3, 1.3, 2.55];
+  const input = frame({ tool, gun });
+  sandbox.drawTrustedUpperBody(input, [0, 0, 0], 100, 100);
+  const { grip } = sandbox.trustedUpperBody(input);
+  const flat = (p) => [p[0] * 100, p[1] * 100];
+  const along = (from, k) => add(from, tool.map((value) => value * k));
+  nearPoint(grip, along(gun, -0.3), '손잡이는 추적기에서 분사 축 반대로');
+  const rod = capsuleAt(shapes, flat, along(grip, 0.11), along(gun, 0.07));
+  const nozzle = capsuleAt(shapes, flat, along(gun, 0.07), along(gun, 0.105));
+  assert.ok(rod, '연장대: 손잡이 앞 → 추적기 앞 .07 m');
+  assert.ok(nozzle, '노즐: 추적기 앞 .07 → .105 m');
+  assert.equal(light(nozzle), '#fb923c');
+  assert.ok(nozzle.arcs[1].r > nozzle.arcs[0].r, '노즐은 끝으로 갈수록 넓다');
+  // 건 몸통·손잡이 상자는 면(사각형)으로 그린다.
+  assert.ok(shapes.filter((shape) => light(shape) === '#aab6c8' || light(shape) === '#5f6b7d').length >= 3);
+  const noTool = scene();
+  noTool.sandbox.drawTrustedUpperBody(frame({ tool: [0, 0, 0] }), [0, 0, 0], 100, 100);
+  assert.ok(!noTool.shapes.some((shape) => light(shape) === '#fb923c'), '분사 축이 없으면 건을 그리지 않는다');
+});
+
+test('실제 투영에서 거울상이 아니다: 뒤에서 보면 건 든 오른팔이 머리 오른쪽, 앞에서 보면 왼쪽', () => {
+  for (const [yaw, side] of [[0, 1], [Math.PI, -1]]) {
+    const { sandbox, shapes } = scene({ real: true, yaw });
+    sandbox.drawTrustedUpperBody(frame(), [1, 1.5, 2], 400, 400);
+    const body = sandbox.trustedUpperBody(frame());
+    const project = (p) => vm.runInContext(`project(${JSON.stringify(p)},[1,1.5,2],400,400)`, sandbox).slice(0, 2);
+    const right = capsuleAt(shapes, project, body.rightArm.elbow, body.rightArm.hand);
+    const left = capsuleAt(shapes, project, body.leftArm.elbow, body.leftArm.hand);
+    const head = shapes.find((shape) => shape.ellipses.length === 1).ellipses[0].p;
+    assert.ok(right && left);
+    assert.ok(side * (right.arcs[1].p[0] - head[0]) > 0, `yaw ${yaw}: 오른손`);
+    assert.ok(side * (left.arcs[1].p[0] - head[0]) < 0, `yaw ${yaw}: 왼손`);
+  }
+});
+
+test('먼 것부터 그린다: 손이 몸 앞에 있으면 앞에서 볼 때 아래팔이 몸통 위, 뒤에서 볼 때 몸통 아래', () => {
+  for (const [yaw, armOnTop] of [[Math.PI, true], [0, false]]) {
+    const { sandbox, shapes } = scene({ real: true, yaw });
+    sandbox.drawTrustedUpperBody(frame(), [1, 1.5, 2], 400, 400);
+    const body = sandbox.trustedUpperBody(frame());
+    const project = (p) => vm.runInContext(`project(${JSON.stringify(p)},[1,1.5,2],400,400)`, sandbox).slice(0, 2);
+    const fore = shapes.indexOf(capsuleAt(shapes, project, body.rightArm.elbow, body.rightArm.hand));
+    const torso = shapes.findIndex((shape) => shape.arcs.length === 6);
+    assert.ok(fore >= 0 && torso >= 0);
+    assert.equal(fore > torso, armOnTop, `yaw ${yaw}`);
+  }
 });
 
 test('건·왼손 자료가 없으면 그 팔을 그리지 않고, 분사 축이 없으면 건 위치로 뻗는다', () => {

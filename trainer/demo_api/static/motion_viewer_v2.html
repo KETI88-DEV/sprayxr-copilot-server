@@ -40,7 +40,9 @@
             <li><i class="dot" style="background:#f5f8ff"></i>전문가 착탄점</li>
             <li><i class="dot" style="background:#34d399"></i>전문가 경로</li>
             <li><i class="dot" style="background:#ff8a3d"></i>이 기록의 경로</li>
-            <li><i class="dot" style="background:#22d3ee"></i>머리와 손</li>
+            <li><i class="dot" style="background:#22d3ee"></i>팔</li>
+            <li><i class="dot" style="background:#fb923c"></i>건 노즐</li>
+            <li><i class="dot" style="background:#facc15"></i>분사선</li>
           </ul>
           <label class="check"><input id="zoneSurface" type="checkbox" checked>Zone 영역</label>
           <label class="check" title="대상 구조물"><input id="objectMesh" type="checkbox" checked><i data-icon="box"></i>구조물</label>
@@ -91,7 +93,7 @@
           <span id="skeletonPosture" class="posture"></span>
         </div>
         <div class="pose-chart">
-          <div id="v2PoseBars" class="pose-bars" role="img" aria-label="분사별 자세 유사도"></div>
+          <div id="v2PoseBars" class="pose-bars" role="group" aria-label="분사별 자세 유사도"></div>
           <p id="v2PoseNow" class="now"></p>
         </div>
       </div>
@@ -102,7 +104,7 @@
         <h2 id="v2OrderTitle"><i data-icon="route"></i>순서</h2>
         <button class="icon-btn ask-link" type="button" data-ask-tab="order" aria-label="순서 질문하기"><i data-icon="message-circle"></i></button>
       </header>
-      <div id="v2Order" class="order-chart" role="img" aria-label="전문가 권장 순서와 이 기록의 순서"></div>
+      <div id="v2Order" class="order-chart" role="group" aria-label="전문가 권장 순서와 이 기록의 순서"></div>
     </article>
 
     <article class="feature" data-feature="coating" aria-labelledby="v2CoatTitle">
@@ -122,7 +124,7 @@
           <button id="v2CoatMapView" type="button" aria-pressed="false" aria-label="전문가 도막 지도"><i data-icon="map"></i>전문가 지도</button>
         </div>
       </div>
-      <div id="v2CoatBars" class="coat-bars" role="img" aria-label="Zone별 도막 등급(목표 대비)"></div>
+      <div id="v2CoatBars" class="coat-bars" role="group" aria-label="Zone별 도막 등급(목표 대비)"></div>
       <div id="v2CoatMap" class="coat-map" hidden>
         <div class="coat-map-tools">
           <span id="coatingZone" class="zone-tag zone-tag-idle">Zone 대기 중</span>
