@@ -73,7 +73,7 @@ class AccessControlMiddleware:
                 status_code=401, headers={"WWW-Authenticate": 'Basic realm="Co-Pilot Operator", charset="UTF-8"', "Cache-Control": "no-store"},
             )(scope, receive, send)
             return
-        if self.api_key and path.startswith("/api/v1/"):
+        if self.api_key and path.startswith(("/api/v1/", "/api/v2/")):
             supplied = headers.get(b"x-api-key", b"").decode("latin-1")
             if authorization.startswith("Bearer "):
                 supplied = authorization[7:]

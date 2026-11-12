@@ -1,0 +1,50 @@
+{
+  "schema_version": "sprayxr-zone-assets/v1",
+  "manifest_id": "tsb-zones-20261015-v1",
+  "asset_root": "../../../integration/fixtures/tsb_zones_20261015",
+  "coordinate_contract": {
+    "png_origin": "top_left",
+    "uv_origin": "bottom_left",
+    "uv_unit": "atlas_pixels",
+    "resampling": "forbidden_for_corrected_assessment"
+  },
+  "palette": {
+    "path": "palette.csv",
+    "sha256": "7af560da2ecb443c8ea63b1070c6b07a6f939979b5050aa396a8a6469cbb3c70"
+  },
+  "scenario_map": {
+    "path": "scenario_map.csv",
+    "sha256": "c4aeb7db8f8c4c911c53504598de27522704a4e990e59ac73c082b04e7e057d8"
+  },
+  "zone_rects": {
+    "path": "zone_rects.csv",
+    "sha256": "615e8524c422c2dde052da1c690c83849666842f71f4ed26473d1d78db107ae3",
+    "role": "diagnostic_bounds_only_not_assessment_masks"
+  },
+  "label_maps": [
+    {"model_key":"Exam2","map_num":1,"path":"color/Exam2_01.png","sha256":"a5851f63145b48ddb6a2aee56cc43a14f86ae22f229cbe2803bca8815bb702fa","width":2048,"height":2048},
+    {"model_key":"Exam2","map_num":2,"path":"color/Exam2_02.png","sha256":"3cecde8386a60d463960c5fb65c3d5cbfffc6f9b1e9b3e512dbe4a7228084414","width":2048,"height":2048},
+    {"model_key":"Exam2","map_num":3,"path":"color/Exam2_03.png","sha256":"93c861b41d2a437c5290323f9405ea8d4fa59ea4f05bbd857c54ca3f17894001","width":2048,"height":2048},
+    {"model_key":"Exam2","map_num":5,"path":"color/Exam2_05.png","sha256":"6a336843db537b8dbf99fbba04abe19af666065e16547a83719f66f58f88b524","width":2048,"height":2048},
+    {"model_key":"Exam2","map_num":6,"path":"color/Exam2_06.png","sha256":"5a72db35eeeba740fa0ef15ec8150ff6ef3d836f4148d2e73844e89436e901e0","width":2048,"height":2048},
+    {"model_key":"Learn01","map_num":1,"path":"color/Learn01_01.png","sha256":"f537abc80958d7d081baf1034989a45d0be108b2e4e8cf6b129ecdc1fd765edd","width":2048,"height":2048},
+    {"model_key":"Learn02","map_num":1,"path":"color/Learn02_01.png","sha256":"768dac8ef93c88329946276876099353500303dd7461a5a83508bd22d14ee7aa","width":2048,"height":2048},
+    {"model_key":"Learn03","map_num":1,"path":"color/Learn03_01.png","sha256":"820ec4ecb90b1060f0af7f9e528925ba19468e50374e1e7be60e747b662eaec6","width":2048,"height":2048},
+    {"model_key":"Learn04","map_num":1,"path":"color/Learn04_01.png","sha256":"79e276f64abb4d6f037cf2c66154bedfd5dd537d80e2766b9dbac657b01ba32d","width":2048,"height":2048},
+    {"model_key":"Learn05","map_num":1,"path":"color/Learn05_01.png","sha256":"c301c6f6f5e160e399c47fde40e2621982831f6685295e4bb1c809b6152cf548","width":2048,"height":2048},
+    {"model_key":"Learn06","map_num":1,"path":"color/Learn06_01.png","sha256":"025a1b11117ae777110957c72f44ac7b30dfc7fbb75dc53aa174c56dc0a30418","width":2048,"height":2048},
+    {"model_key":"Learn07","map_num":1,"path":"color/Learn07_01.png","sha256":"c1ff40ea78ab52ff6538df22b816e2ee292edb717d1b8c49ac300030ee96e6a4","width":2048,"height":2048},
+    {"model_key":"Learn08","map_num":1,"path":"color/Learn08_01.png","sha256":"786aded3cb5a4798a12a3f3d4cff6e3add2e713d946774436b77a5fe692f3608","width":2048,"height":2048},
+    {"model_key":"Learn09","map_num":1,"path":"color/Learn09_01.png","sha256":"c7eb9482f4bee39c0744009f0d928b12eeeab96afed1256d00bf295900d333d4","width":2048,"height":2048},
+    {"model_key":"Learn10","map_num":1,"path":"color/Learn10_01.png","sha256":"40104773fa00bba0acfba2ac2a08accb258faa894768f5cd79ac4ff596e96e9c","width":2048,"height":2048},
+    {"model_key":"Unit1-1","map_num":1,"path":"color/Unit1-1_01.png","sha256":"831f23630f2014277fea4c2d528819fe487d52cfdfa7d5e234dbbd1ff3927643","width":2048,"height":2048},
+    {"model_key":"Unit1-7","map_num":1,"path":"color/Unit1-7_01.png","sha256":"a41f55544139dee31e18c705a9cdfdac06abebff23e582de8c031d1c74dd8e66","width":2048,"height":2048},
+    {"model_key":"Unit2-1","map_num":1,"path":"color/Unit2-1_01.png","sha256":"46f98c3c564c0ae0bb35efc308856b6c03f8c91bfaf5ab8911d2cc7a72547de6","width":2048,"height":2048},
+    {"model_key":"Unit2-2","map_num":1,"path":"color/Unit2-2_01.png","sha256":"0b6695cd0aa1358e81b780cfce7ed8f09139e6f59be5fa64c5794afbb37f8cb1","width":2048,"height":2048},
+    {"model_key":"Unit2-3","map_num":1,"path":"color/Unit2-3_01.png","sha256":"6b722a3819b7f89500f534ed49d1f8f54b3f5df2bcdfedabf4a45d7ad79ef2a8","width":2048,"height":2048},
+    {"model_key":"Unit2-4","map_num":1,"path":"color/Unit2-4_01.png","sha256":"5a72db35eeeba740fa0ef15ec8150ff6ef3d836f4148d2e73844e89436e901e0","width":2048,"height":2048},
+    {"model_key":"Unit2-5","map_num":1,"path":"color/Unit2-5_01.png","sha256":"5a72db35eeeba740fa0ef15ec8150ff6ef3d836f4148d2e73844e89436e901e0","width":2048,"height":2048},
+    {"model_key":"Unit2-6","map_num":1,"path":"color/Unit2-6_01.png","sha256":"a5851f63145b48ddb6a2aee56cc43a14f86ae22f229cbe2803bca8815bb702fa","width":2048,"height":2048},
+    {"model_key":"Unit2-7","map_num":1,"path":"color/Unit2-7_01.png","sha256":"a5851f63145b48ddb6a2aee56cc43a14f86ae22f229cbe2803bca8815bb702fa","width":2048,"height":2048}
+  ]
+}
