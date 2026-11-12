@@ -84,3 +84,23 @@ test('알림 이동은 분사 구간 안의 첫 프레임을, 표본이 구간�
   assert.ok(frames[alerts.seekIndex(frames, 1.3, 1.5)].t < 1.5);
   assert.equal(alerts.seekIndex(frames, -1, 0), 0);
 });
+
+test('알림 Zone 을 칠하는 프레임이 구간 안에 있으면 그 첫 프레임으로 옮긴다(이동 중·다른 Zone 프레임 건너뜀)', () => {
+  // 카나리 V1(김케티 4_9990001_1): SEQ-015 는 이동 중 → Zone 4 → Zone 5 순서라 구간 첫 프레임은 Zone 5 가 아니다.
+  const frames = [
+    { t: 34.29, spraying: false, zone_id: 6, map_num: 1 },
+    { t: 34.80, spraying: false, zone_id: -1, map_num: null },
+    { t: 35.06, spraying: true, zone_id: 4, map_num: null },
+    { t: 35.32, spraying: true, zone_id: 4, map_num: 1 },
+    { t: 38.92, spraying: false, zone_id: 5, map_num: 1 },
+    { t: 39.18, spraying: true, zone_id: 5, map_num: 2 },
+    { t: 39.44, spraying: true, zone_id: 5, map_num: 1 },
+    { t: 43.50, spraying: true, zone_id: 5, map_num: 1 },
+  ];
+  const alert = { seek_seconds: 34.857, at_seconds: 43.413, zone_id: '5', map_num: '1' };
+  assert.equal(alerts.seekIndex(frames, alert.seek_seconds, alert.at_seconds, alert), 6);
+  assert.equal(alerts.seekIndex(frames, alert.seek_seconds, alert.at_seconds, { zone_id: '5', map_num: null }), 5);   // 지도 번호를 모르면 Zone 만 본다
+  // 구간 안에 그 Zone 분사가 없으면 예전처럼 구간 첫 프레임(at 보다 앞)
+  assert.equal(alerts.seekIndex(frames, alert.seek_seconds, alert.at_seconds, { zone_id: '9', map_num: '1' }), 2);
+  assert.equal(alerts.seekIndex(frames, alert.seek_seconds, alert.at_seconds), 2);
+});

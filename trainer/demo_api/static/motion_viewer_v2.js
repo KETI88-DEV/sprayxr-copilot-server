@@ -895,7 +895,7 @@
     function go(alert) {
       current = alert.id;
       if (alert.anomaly_type.startsWith('coating_')) setCoating('target');   // 도막 패널의 그 행이 강조되게
-      seekToIndex(A.seekIndex(record?.frames || [], Number(alert.seek_seconds), Number(alert.at_seconds)));
+      seekToIndex(A.seekIndex(record?.frames || [], Number(alert.seek_seconds), Number(alert.at_seconds), alert));
       paintList();
     }
     function toast(alert) {

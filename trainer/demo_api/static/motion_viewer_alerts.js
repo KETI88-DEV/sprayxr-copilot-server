@@ -31,9 +31,13 @@
     return alert.values?.thickness_um != null && Number.isFinite(thickness) ? `${word} ${Math.round(thickness)} µm` : word;
   };
 
-  /** 알림으로 옮길 프레임. 분사 구간 [seek, at) 의 첫 프레임, 표본이 그 사이를 건너뛰었으면 seek 이하의 마지막 프레임
-   *  (둘 다 at 보다 앞이라 이동 뒤에 재생하면 알림이 다시 뜬다). */
-  const seekIndex = (frames, seek, at) => {
+  /** 알림으로 옮길 프레임. 분사 구간 [seek, at) 안에서 서버가 준 알림 Zone(지도 번호를 알면 그것까지)을 칠하는 첫 프레임,
+   *  없으면 구간 첫 프레임, 표본이 그 사이를 건너뛰었으면 seek 이하의 마지막 프레임
+   *  (모두 at 보다 앞이라 이동 뒤에 재생하면 알림이 다시 뜬다). 구간 첫 프레임은 이동 중이거나 다른 Zone 일 수 있다. */
+  const seekIndex = (frames, seek, at, alert) => {
+    const painting = alert?.zone_id == null ? -1 : frames.findIndex((frame) => frame.t >= seek && frame.t < at && frame.spraying
+      && String(frame.zone_id) === String(alert.zone_id) && (alert.map_num == null || String(frame.map_num) === String(alert.map_num)));
+    if (painting >= 0) return painting;
     const inside = frames.findIndex((frame) => frame.t >= seek && frame.t < at);
     if (inside >= 0) return inside;
     let before = -1;
