@@ -148,10 +148,12 @@ const contrast = (style, background) => {
   return (a + 0.05) / (b + 0.05);
 };
 
-test('큰 장면·패널 배경 토큰은 채도 낮은 회색이고 두 화면이 같은 값을 쓴다', () => {
+// 책임자 선택(2026-11-12): 중립 회색이 남색 화면 사이에서 따뜻해 보여 푸른 기가 도는 회색(B)으로 바꿨다.
+test('큰 장면·패널 배경 토큰은 푸른 기가 도는 회색이고 두 화면이 같은 값을 쓴다', () => {
   for (const name of ['stage-top', 'stage']) {
-    const value = token(V2_CSS, name);
-    assert.ok(saturation(value) < 0.1, `--${name} ${value} 채도 ${saturation(value).toFixed(3)}`);
+    const value = token(V2_CSS, name), [r, g, b] = rgb(value);
+    assert.ok(saturation(value) < 0.3, `--${name} ${value} 채도 ${saturation(value).toFixed(3)}`);
+    assert.ok(b > g && g > r, `--${name} ${value} 는 파랑 쪽으로 기운다`);
     assert.equal(token(LEGACY_CSS, name), value, `기존 화면 --${name}`);
   }
   assert.ok(luminance(rgb(token(V2_CSS, 'stage-top'))) > luminance(rgb(token(V2_CSS, 'stage'))), '위가 조금 밝다');
