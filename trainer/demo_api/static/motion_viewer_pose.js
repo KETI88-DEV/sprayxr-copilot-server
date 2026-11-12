@@ -75,10 +75,10 @@
   function drawTrustedUpperBody(frame, center, width, height) {
     const body = trustedUpperBody(frame);
     if (!body) return;
-    const {left, right, middle} = SIDE_COLORS;
+    const {arm: armColor, core: middle} = LIMB_COLORS;
     line(body.head, body.neck, middle, 4, center, width, height);
     line(body.neck, body.chest, middle, 4, center, width, height);
-    for (const [shoulder, arm, color] of [[body.leftShoulder, body.leftArm, left], [body.rightShoulder, body.rightArm, right]]) {
+    for (const [shoulder, arm, color] of [[body.leftShoulder, body.leftArm, armColor], [body.rightShoulder, body.rightArm, armColor]]) {
       line(body.neck, shoulder, color, 4, center, width, height);
       point(shoulder, 4, color, center, width, height);
       if (!arm) continue;
@@ -91,7 +91,7 @@
     point(body.neck, 4, middle, center, width, height);
     point(body.chest, 5, middle, center, width, height);
     // 실측 추적기(건·왼손)는 고리로 따로 그려 IK 손과의 차이가 보이게 둔다.
-    for (const [tracker, color] of [[body.gun, right], [body.leftHand, left]]) {
+    for (const [tracker, color] of [[body.gun, armColor], [body.leftHand, armColor]]) {
       if (!tracker) continue;
       const shown = project(tracker, center, width, height);
       ctx.strokeStyle = color;

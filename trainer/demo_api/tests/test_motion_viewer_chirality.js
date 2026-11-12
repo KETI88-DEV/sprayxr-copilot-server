@@ -221,7 +221,7 @@ test('v2 교정 고리도 같은 함수로 관절 위치를 구한다', () => {
   assert.ok(!script.includes('uprightSkeleton('));
 });
 
-// ── 시인성: 좌우 색, 바닥 격자, 교정 고리 ───────────────────────
+// ── 시인성: 팔·다리 색, 바닥 격자, 교정 고리 ───────────────────────
 // 서 있는 사람(+Z 를 봄, 몸 오른쪽 = +X)의 전신. 뼈 목록은 서버 _BONES 와 같은 부모→자식 순서다.
 const BODY = {
   Pelvis: [0, 1.0, 0], Spine: [0, 1.15, 0], Chest: [0, 1.4, 0], Head: [0, 1.65, 0],
@@ -243,19 +243,20 @@ function boneStyle(view, drawn, a, b) {
   return path.style;
 }
 
-test('왼쪽 팔다리와 오른쪽 팔다리는 다른 색이고 몸통은 둘 다와 다르다', () => {
+// 책임자 결정(2026-11-12): 좌우가 아니라 팔과 다리로 나눈다. 팔은 청록, 다리는 회색, 몸통은 밝은 중립색.
+test('두 팔은 청록, 두 다리는 회색, 몸통은 둘 다와 다른 색이다', () => {
   const view = viewer();
   view.sandbox.data.bones = BODY_BONES;
   for (const angle of [0, 90, 180]) {
     const drawn = view.panel(BODY, angle);
-    const left = boneStyle(view, drawn, 'Left Fore Arm', 'Left Hand'), right = boneStyle(view, drawn, 'Right Fore Arm', 'Right Hand');
+    const arm = boneStyle(view, drawn, 'Right Fore Arm', 'Right Hand'), leg = boneStyle(view, drawn, 'Right Calf', 'Right Foot');
     const core = boneStyle(view, drawn, 'Spine', 'Chest');
-    assert.notEqual(left, right, `${angle}°`);
-    assert.equal(right, '#22d3ee', '건을 든 몸 오른쪽은 청록');
-    assert.ok(core !== left && core !== right, `${angle}° 몸통 색`);
-    assert.equal(boneStyle(view, drawn, 'Left Calf', 'Left Foot'), left, '다리도 같은 쪽 팔과 같은 색');
-    assert.equal(boneStyle(view, drawn, 'Right Calf', 'Right Foot'), right);
-    assert.notEqual(drawn['Left Hand'][4], drawn['Right Hand'][4], '손 관절 원도 좌우 색이 다르다');
+    assert.equal(arm, '#22d3ee', `${angle}° 팔은 청록`);
+    assert.equal(boneStyle(view, drawn, 'Left Fore Arm', 'Left Hand'), arm, '왼팔도 같은 청록');
+    assert.equal(boneStyle(view, drawn, 'Left Calf', 'Left Foot'), leg, '두 다리는 같은 색');
+    assert.notEqual(leg, arm, `${angle}° 다리는 팔과 다른 색`);
+    assert.ok(core !== arm && core !== leg, `${angle}° 몸통 색`);
+    assert.equal(drawn['Left Hand'][4], drawn['Right Hand'][4], '두 손 관절 원은 같은 색');
   }
 });
 

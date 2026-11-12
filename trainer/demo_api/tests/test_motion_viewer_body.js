@@ -92,12 +92,12 @@ test('팔·몸통 색은 패널과 같고, 실측 추적기는 따로 고리로 
   const colorOf = (a, b) => drawn.lines.find((item) => distance(item.a, a) < 1e-9 && distance(item.b, b) < 1e-9)?.color;
   assert.equal(colorOf(body.rightShoulder, body.rightArm.elbow), '#22d3ee');
   assert.equal(colorOf(body.rightArm.elbow, body.rightArm.hand), '#22d3ee');
-  assert.equal(colorOf(body.leftShoulder, body.leftArm.elbow), '#9aa3ad');
-  assert.equal(colorOf(body.leftArm.elbow, body.leftArm.hand), '#9aa3ad');
+  assert.equal(colorOf(body.leftShoulder, body.leftArm.elbow), '#22d3ee');
+  assert.equal(colorOf(body.leftArm.elbow, body.leftArm.hand), '#22d3ee');
   assert.equal(colorOf(body.head, body.neck), '#e6edf7');
   assert.equal(colorOf(body.neck, body.chest), '#e6edf7');
-  // 고리 = 건(오른쪽 색)과 왼손 추적기(왼쪽 색). 건 고리는 IK 손(손잡이)과 떨어져 있다.
-  assert.deepEqual(drawn.rings.map((ring) => ring.color).sort(), ['#22d3ee', '#9aa3ad']);
+  // 고리 = 건과 왼손 추적기(둘 다 팔 색). 건 고리는 IK 손(손잡이)과 떨어져 있다.
+  assert.deepEqual(drawn.rings.map((ring) => ring.color).sort(), ['#22d3ee', '#22d3ee']);
   assert.ok(drawn.rings.some((ring) => distance(ring.p, [1.3, 1.3]) < 1e-9));
   assert.ok(drawn.rings.some((ring) => distance(ring.p, [0.7, 1.25]) < 1e-9));
 });
@@ -119,14 +119,14 @@ test('패널과 큰 장면은 같은 표·IK·색 상수를 쓰고 값을 따로
     assert.equal(code.filter((line) => line !== table && line.includes(literal)).length, 0, `코어에서 ${literal} 은 표 한 곳에만 있다`);
     if (literal !== '#22d3ee') assert.ok(!POSE.includes(literal), `포즈 스크립트에 ${literal} 을 다시 적지 않는다`);
   }
-  assert.ok(!/#22d3ee/.test(UPPER_BODY), '큰 장면 상체 색은 SIDE_COLORS 에서 읽는다');
+  assert.ok(!/#22d3ee/.test(UPPER_BODY), '큰 장면 상체 색은 LIMB_COLORS 에서 읽는다');
   assert.ok(!/\.3\b|0\.30/.test(UPPER_BODY), '손잡이 거리는 gunGrip 에서 읽는다');
   const panel = CORE.split('\n').find((line) => line.startsWith('function panelSkeleton('));
   assert.ok(panel.includes('twoBoneIK(') && panel.includes('gunGrip(') && !panel.includes('along='), '패널도 같은 IK 함수를 쓴다');
   assert.ok(UPPER_BODY.includes('twoBoneIK(') && UPPER_BODY.includes('gunGrip(') && UPPER_BODY.includes('BODY.'));
   assert.equal(CORE.split('along=').length - 1, 1, '두 마디 IK 식은 한 곳뿐이다');
   const drawPanel = CORE.split('\n').find((line) => line.startsWith('function drawSkeletonView('));
-  assert.ok(drawPanel.includes('SIDE_COLORS.left') && drawPanel.includes('SIDE_COLORS.right') && drawPanel.includes('SIDE_COLORS.middle'));
+  assert.ok(drawPanel.includes('LIMB_COLORS.arm') && drawPanel.includes('LIMB_COLORS.leg') && drawPanel.includes('LIMB_COLORS.core'));
 });
 
 // ── 회색 무대: 큰 3D 장면·스켈레톤 패널 배경과 격자 ─────────────
