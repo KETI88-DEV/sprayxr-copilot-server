@@ -7,6 +7,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Final, Mapping
 
+from trainer.demo_api import coating_assessment
 from trainer.scripts.hanzi_guard import HANZI_CLASS
 
 KINDS = ("lookup", "coating_knowledge", "chat", "clarify", "correction")
@@ -97,7 +98,18 @@ def viewer_dialogue_context(payload: Mapping[str, Any]) -> dict[str, Any]:
                       "metrics": [{k: m[k] for k in ("key", "label", "actual", "reference", "actual_label", "reference_label", "unit", "similarity_percent") if k in m}
                                   for m in metrics.values()],
                       "corrections": row.get("corrections") or []}
-    return {"record_direction": (payload.get("direction_summary") or {}).get("classification"),
+    target = (payload.get("coating_evaluation") or {}).get("target") or {}
+    extra: dict[str, Any] = {}
+    if target.get("analysis_status") == "available":
+        # 한국어 기준 표기("기본 목표 …기준")는 넣지 않는다. 넣으면 ungrounded_measurements의 기준·목표 낱말 방어가 풀린다.
+        extra = {"coating_target_um": target["target_thickness_um"], "coating_target_basis": target["target_basis"]}
+        for item in target.get("zones") or []:
+            zone = zones.get(f"{item['map_num']}:{item['zone_id']}")
+            if zone is not None:
+                zone["coating_target"] = {"grade": item["grade"], "label": coating_assessment.grade_phrase(item),
+                                          "thickness_um": item["thickness_um"],
+                                          "unpainted_percent": round(item["unpainted_fraction"] * 100)}
+    return {**extra, "record_direction": (payload.get("direction_summary") or {}).get("classification"),
             "work_similarity_percent": pose.get("similarity_percent"),
             "reference_order": order.get("recommended_flow"), "actual_order": order.get("selected_flow"),
             "order_adherence_rate": order.get("adherence_rate"), "zones": zones,

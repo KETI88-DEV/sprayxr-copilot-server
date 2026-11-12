@@ -2,18 +2,23 @@
 
 from __future__ import annotations
 
+import copy
 import csv
 import gzip
 import json
 import math
+import re
 import statistics
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, TextIO
 
+import numpy as np
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse
+from trainer.demo_api import coating_assessment
 from trainer.demo_api.portal_navigation import portal_document
+from trainer.zone_reference import ZoneReferenceCatalog
 
 from trainer.demo_api.motion_viewer_pose import _default_mesh_provider, build_pose_view
 from trainer.demo_api.pose_query import score_body_raw
@@ -457,6 +462,135 @@ def _session_path(
     if not candidate.is_relative_to(mode_root) or not candidate.is_file():
         raise HTTPException(status_code=404, detail="expert session file not found")
     return candidate
+
+
+def _record_height_maps(
+    root: Path, process: str, mode_id: int, profile: dict[str, Any], session_id: str
+) -> dict[int, Path]:
+    """기록의 최종 높이맵 {면: 경로}. `Map{면}_{WorkID}_{회차}_{수행번호}_Height.png`만 쓴다."""
+    parts = session_id.split("_", 2)
+    heightmaps = _session_record(profile, session_id).get("heightmaps")
+    if len(parts) != 3 or not isinstance(heightmaps, list):
+        return {}
+    name = re.compile(rf"map(\d+)_{re.escape(parts[1])}_{re.escape(parts[2])}_(\d+)_height\.png", re.I)
+    mode_root = (root / "raw" / process / "learning" / f"mode_{mode_id:02d}").resolve()
+    latest: dict[int, tuple[int, Path]] = {}
+    for item in heightmaps:
+        source = item.get("source_path") if isinstance(item, dict) else None
+        match = name.fullmatch(Path(source).name) if isinstance(source, str) and source else None
+        if match is None:
+            continue
+        try:
+            candidate = (mode_root / source).resolve()
+            if not candidate.is_relative_to(mode_root) or not candidate.is_file():
+                continue
+        except (OSError, ValueError):
+            continue
+        face, run = int(match[1]), int(match[2])
+        # 수행번호는 정수로 견준다. 이름순이면 _9_가 _10_ 뒤로 간다.
+        if face not in latest or run > latest[face][0]:
+            latest[face] = (run, candidate)
+    return {face: path for face, (_, path) in latest.items()}
+
+
+def _target_unavailable(reason_code: str) -> dict[str, Any]:
+    return {"analysis_status": "not_available", "reason_code": reason_code}
+
+
+def _target_coating(
+    process: str,
+    mode_id: int,
+    height_maps: dict[int, Path],
+    zone_keys: Any,
+    session: dict[str, Any],
+) -> dict[str, Any]:
+    """기록 최종 높이맵의 목표 대비 도막 평가(PR #8 기준). 못 만들면 사유 코드가 든 not_available."""
+    if process != "spray":
+        return _target_unavailable("coating_not_applicable")
+    model_key = ZoneReferenceCatalog.default().resolve_model(str(mode_id))
+    if model_key is None:
+        return _target_unavailable("zone_reference_unavailable")
+    stamps = []
+    for face, path in sorted(height_maps.items()):
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        stamps.append((face, str(path), stat.st_mtime_ns, stat.st_size))
+    faces = {stamp[0] for stamp in stamps}
+    zones = set()
+    for key in zone_keys:
+        map_text, _, zone_id = str(key).partition(":")
+        # 높이맵이 없는 면의 Zone은 평가하지 않는다. 0 표면으로 재면 "칠한 곳 없음"이라는 틀린 진술이 된다.
+        if map_text.isdigit() and int(map_text) in faces and zone_id:
+            zones.add((int(map_text), zone_id,
+                       _number(_zone_analysis_value(session, str(key), "speed_mms")),
+                       _number(_zone_analysis_value(session, str(key), "distance_mm"))))
+    if not zones:
+        return _target_unavailable("height_map_unavailable")
+    ordered = tuple(sorted(zones, key=lambda item: (item[0], len(item[1]), item[1])))
+    return copy.deepcopy(_target_coating_cached(model_key, None, tuple(stamps), ordered))
+
+
+@lru_cache(maxsize=8)
+def _target_coating_cached(
+    model_key: str,
+    target_um: float | None,
+    stamps: tuple[tuple[int, str, int, int], ...],
+    zones: tuple[tuple[int, str, float | None, float | None], ...],
+) -> dict[str, Any]:
+    # 표면(2048² float64 = 32 MB)은 캐시하지 않는다. 열쇠의 mtime·크기가 바뀌면 다시 계산한다.
+    surfaces = {}
+    for face, path_text, _, _ in stamps:
+        try:
+            surfaces[face] = coating_assessment.painted_surface_from_png(Path(path_text).read_bytes())
+        except (OSError, ValueError):
+            continue
+    if not surfaces:
+        return _target_unavailable("height_map_unavailable")
+    catalog = ZoneReferenceCatalog.default()
+    rows, assessments = [], []
+    for map_num, zone_id, speed, distance in zones:
+        surface = surfaces.get(map_num)
+        if surface is None:
+            continue
+        try:
+            image = catalog.zone_mask(model_key, map_num, zone_id)  # 라벨맵 원래 크기. 리샘플링하지 않는다.
+        except (OSError, ValueError):
+            continue
+        if image is None:
+            continue
+        mask = np.asarray(image) > 0
+        if mask.shape != surface.shape:
+            # PR #8 규칙: 크기가 다른 높이맵·마스크는 맞추지 않고 거부한다.
+            return _target_unavailable("height_map_size_mismatch")
+        assessment = coating_assessment.assess_zone(
+            surface, mask, target_um,
+            speed_mm_s=() if speed is None else (speed,), distance_mm=() if distance is None else (distance,))
+        if assessment is not None:
+            assessments.append(assessment)
+            rows.append(coating_assessment.zone_row(map_num, zone_id, assessment))
+    if not rows:
+        return _target_unavailable("zone_reference_unavailable")
+    target, basis = coating_assessment.resolve_target(target_um)
+    summary = coating_assessment.session_summary(assessments)
+    return {
+        "analysis_status": "available", "reason_code": None,
+        "target_thickness_um": target, "target_basis": basis,
+        "basis_label": coating_assessment.basis_label(target, basis),
+        "criterion_version": coating_assessment.ASSESSMENT_VERSION,
+        "normal_band_um": coating_assessment.normal_band_um(target),
+        "band_edges_um": coating_assessment.band_edges_um(target),
+        "band_labels": list(coating_assessment.BAND_LABELS),
+        "grade_labels": dict(coating_assessment.GRADE_SHORT_LABELS),
+        "zones": rows,
+        "summary": {
+            "zone_count": summary["zone_count"], "grade_counts": summary["grade_counts"],
+            "painted_mean_um": None if summary["painted_mean_um"] is None else round(summary["painted_mean_um"], 1),
+            "unpainted_fraction": None if summary["unpainted_fraction"] is None else round(summary["unpainted_fraction"], 4),
+            "six_band_counts": summary["six_band_counts"],
+        },
+    }
 
 
 def _frames(path: Path, frame_count: int) -> list[dict[str, Any]]:
@@ -2233,7 +2367,10 @@ def create_motion_viewer_router(
             **paint_statistics,
         }
         from trainer.demo_api.coating_query import viewer_coating_context
-        payload["coating_evaluation"] = viewer_coating_context(payload)
+        payload["coating_evaluation"] = viewer_coating_context(payload, target=_target_coating(
+            process, mode_id, _record_height_maps(worker_root, process, mode_id, profile, selected),
+            [*payload["pose_evaluation"].get("zones", {}), *payload["coating_reference"]],
+            _session_record(profile, selected)))
         from trainer.demo_api.dialogue import viewer_dialogue_context
         payload["dialogue_evaluation"] = viewer_dialogue_context(payload)
         from trainer.demo_api.playback_direction import build_playback_snapshot

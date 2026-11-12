@@ -19,7 +19,11 @@ def _number(value: object) -> float | None:
     return float(value) if math.isfinite(value) and value >= 0 else None
 
 
-def viewer_coating_context(payload: Mapping[str, Any]) -> dict[str, Any]:
+def viewer_coating_context(payload: Mapping[str, Any], *, target: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """전문가 대비 행(`zones`)과 목표 대비 평가(`target`, PR #8 기준)를 함께 싣는다."""
+    # target 없이 불리는 곳(자세 탭 대체 경로)은 높이맵이 없는 것이 아니라 도막 문맥이 오지 않은 것이다.
+    target = dict(target) if target is not None else {
+        "analysis_status": "not_available", "reason_code": "target_assessment_not_loaded"}
     evaluation = payload.get("pose_evaluation") or {}
     zones = evaluation.get("zones") or {}
     rows = []
@@ -33,8 +37,9 @@ def viewer_coating_context(payload: Mapping[str, Any]) -> dict[str, Any]:
             continue
         rows.append({"map_num": str(zone.get("map_num")), "zone_id": str(zone.get("zone_id")),
                      "actual_um": actual, "reference_um": reference})
-    return {"analysis_status": "available" if rows else "not_available", "scope": "final_record",
-            "comparison_basis": "expert_zone_median", "zones": rows}
+    available = bool(rows) or target.get("analysis_status") == "available"
+    return {"analysis_status": "available" if available else "not_available", "scope": "final_record",
+            "comparison_basis": "expert_zone_median", "zones": rows, "target": target}
 
 
 def parse_viewer_coating_context(value: str | None, task_type: str) -> dict[str, Any] | None:

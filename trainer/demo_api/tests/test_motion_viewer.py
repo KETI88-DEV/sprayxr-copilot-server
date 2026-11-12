@@ -112,6 +112,7 @@ def _client(
     store: SequenceStore | None = None,
     pose_scorer: Any = None,
     mesh_provider: Any = None,
+    heightmaps: list[str] | None = None,
 ) -> TestClient:
     mode_root = tmp_path / "raw" / "spray" / "learning" / "mode_04"
     _write_csv(mode_root / "4_1001_1.csv", offset=0.0)
@@ -182,6 +183,8 @@ def _client(
             },
         ],
     }
+    if heightmaps is not None:
+        profile["sessions"][1]["heightmaps"] = [{"source_path": item} for item in heightmaps]
     profile_path = tmp_path / "generated" / "profiles" / "spray" / "learning" / "mode_04.json"
     profile_path.parent.mkdir(parents=True)
     profile_path.write_text(json.dumps(profile), encoding="utf-8")
@@ -1094,3 +1097,189 @@ def test_motion_viewer_keeps_the_last_spraying_zone_and_gives_skeleton_more_heig
     assert "frame && frame.spraying && Number(frame.zone_id) > 0" in coating.text
     assert "if (!next || next === zoneKey) return;" in coating.text
     assert "zoneKey = next;" in coating.text
+
+
+# --- 목표 대비 도막 평가(PR #8 기준) — 기록 옆 높이맵 PNG로 계산한다 ---------------------------
+
+_TARGET_MODE_ROOT = Path("raw") / "spray" / "learning" / "mode_04"
+
+
+def _zone_one_mask(size: int = 2048) -> Any:
+    import numpy as np
+    from trainer.zone_reference import ZoneReferenceCatalog
+
+    return np.asarray(ZoneReferenceCatalog.default().zone_mask("Learn04", 1, "1", size=(size, size))) > 0
+
+
+def _write_height_map(tmp_path: Path, name: str, raw_um: float, *, size: int = 2048) -> Path:
+    """Learn04 1번 Zone 안만 원시 두께 raw_um(B>0)인 TSB RG16 높이맵."""
+    import io
+    import numpy as np
+    from PIL import Image
+
+    mask = _zone_one_mask(size)
+    code = int(np.rint(raw_um / 20000.0 * 65025.0))
+    rgba = np.zeros((size, size, 4), dtype=np.uint8)
+    rgba[mask] = (code // 255, code % 255, 255, 255)
+    stream = io.BytesIO()
+    Image.fromarray(rgba, "RGBA").save(stream, format="PNG")
+    path = tmp_path / _TARGET_MODE_ROOT / name
+    path.write_bytes(stream.getvalue())
+    return path
+
+
+def _motion(client: TestClient) -> dict[str, Any]:
+    response = client.get("/motion-viewer/api/motion", params={"process": "spray", "mode_id": 4, "session_id": "4_1002_1"})
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def test_motion_endpoint_adds_target_assessment_from_the_record_height_map(tmp_path: Path) -> None:
+    from trainer.demo_api import coating_assessment
+
+    client = _client(tmp_path, heightmaps=["Map01_1002_1_1_Height.png"])
+    _write_height_map(tmp_path, "Map01_1002_1_1_Height.png", 181)
+    coating = _motion(client)["coating_evaluation"]
+    target = coating["target"]
+
+    assert target["analysis_status"] == "available" and target["reason_code"] is None
+    assert (target["target_thickness_um"], target["target_basis"]) == (160.0, "default_target")
+    assert target["basis_label"] == "기본 목표 160µm 기준"
+    assert target["criterion_version"] == coating_assessment.ASSESSMENT_VERSION
+    assert target["normal_band_um"] == coating_assessment.normal_band_um(160.0)
+    assert target["band_edges_um"] == coating_assessment.band_edges_um(160.0)
+    assert target["band_labels"] == list(coating_assessment.BAND_LABELS)
+    assert target["grade_labels"] == coating_assessment.GRADE_SHORT_LABELS
+    row = next(item for item in target["zones"] if (item["map_num"], item["zone_id"]) == (1, "1"))
+    assert row["grade"] == "normal" and row["status"] == "normal"
+    assert row["thickness_um"] == pytest.approx(171, abs=0.5)
+    assert row["unpainted_fraction"] == 0.0
+    assert target["summary"]["zone_count"] == len(target["zones"])
+    assert target["summary"]["grade_counts"]["normal"] == 1
+    assert set(target["summary"]) == {"zone_count", "grade_counts", "painted_mean_um", "unpainted_fraction", "six_band_counts"}
+    # 전문가 대비 자료(D5)는 그대로 있다.
+    assert coating["comparison_basis"] == "expert_zone_median"
+    assert coating["zones"][0]["reference_um"] > 0
+    assert coating["analysis_status"] == "available"
+
+
+def test_record_without_a_height_map_keeps_the_expert_comparison(tmp_path: Path) -> None:
+    coating = _motion(_client(tmp_path))["coating_evaluation"]
+
+    assert coating["target"] == {"analysis_status": "not_available", "reason_code": "height_map_unavailable"}
+    assert coating["zones"]
+
+
+def test_another_records_height_map_in_the_same_folder_is_not_used(tmp_path: Path) -> None:
+    client = _client(tmp_path, heightmaps=["Map01_1001_1_1_Height.png"])
+    _write_height_map(tmp_path, "Map01_1001_1_1_Height.png", 181)
+
+    assert _motion(client)["coating_evaluation"]["target"]["reason_code"] == "height_map_unavailable"
+
+
+def test_target_assessment_is_inside_the_signed_coating_claims(tmp_path: Path) -> None:
+    from trainer.demo_api.viewer_context import verify_context
+
+    client = _client(tmp_path, heightmaps=["Map01_1002_1_1_Height.png"])
+    _write_height_map(tmp_path, "Map01_1002_1_1_Height.png", 181)
+    payload = _motion(client)
+    claims, signature = payload["coating_evaluation"], payload["query_context_signatures"]["coating_status"]
+
+    assert verify_context("coating_status", claims, signature)
+    claims["target"]["zones"][0]["grade"] = "above"
+    assert not verify_context("coating_status", claims, signature)
+
+
+def test_dialogue_facts_carry_the_target_grade_when_available(tmp_path: Path) -> None:
+    client = _client(tmp_path, heightmaps=["Map01_1002_1_1_Height.png"])
+    _write_height_map(tmp_path, "Map01_1002_1_1_Height.png", 181)
+    facts = _motion(client)["dialogue_evaluation"]
+
+    assert facts["zones"]["1:1"]["coating_target"]["grade"] == "normal"
+    assert facts["zones"]["1:1"]["coating_target"]["label"].startswith("정상(칠한 곳 평균 ")
+    assert facts["zones"]["1:1"]["coating_target"]["unpainted_percent"] == 0
+    assert (facts["coating_target_um"], facts["coating_target_basis"]) == (160.0, "default_target")
+
+    plain = _motion(_client(tmp_path / "plain"))["dialogue_evaluation"]
+    assert "coating_target" not in plain["zones"]["1:1"]
+    assert "coating_target_um" not in plain and "coating_target_basis" not in plain
+
+
+def test_target_facts_do_not_unlock_the_reference_word_guard(tmp_path: Path) -> None:
+    from trainer.demo_api import dialogue
+
+    client = _client(tmp_path, heightmaps=["Map01_1002_1_1_Height.png"])
+    _write_height_map(tmp_path, "Map01_1002_1_1_Height.png", 181)
+    facts = _motion(client)["dialogue_evaluation"]
+
+    assert "coating_target" in facts["zones"]["1:1"]
+    assert "표준" in dialogue.ungrounded_measurements("속도는 표준 대비 높습니다.", facts=facts, prompt="")
+    text = json.dumps(facts, ensure_ascii=False)
+    assert "기준" not in text and "목표" not in text
+
+
+def test_path_escape_in_heightmap_source_is_ignored(tmp_path: Path) -> None:
+    client = _client(tmp_path, heightmaps=["../../x/Map01_1002_1_1_Height.png"])
+    escaped = tmp_path / "raw" / "spray" / "x" / "Map01_1002_1_1_Height.png"
+    escaped.parent.mkdir(parents=True)
+    _write_height_map(tmp_path, "Map01_1002_1_1_Height.png", 181).rename(escaped)
+
+    assert _motion(client)["coating_evaluation"]["target"]["reason_code"] == "height_map_unavailable"
+
+
+def test_latest_run_number_is_compared_as_an_integer(tmp_path: Path) -> None:
+    client = _client(tmp_path, heightmaps=["Map01_1002_1_10_Height.png", "Map01_1002_1_9_Height.png"])
+    _write_height_map(tmp_path, "Map01_1002_1_9_Height.png", 100)
+    _write_height_map(tmp_path, "Map01_1002_1_10_Height.png", 181)
+
+    target = _motion(client)["coating_evaluation"]["target"]
+    assert target["zones"][0]["grade"] == "normal"
+
+
+def test_height_map_of_another_size_withholds_the_target_assessment(tmp_path: Path) -> None:
+    client = _client(tmp_path, heightmaps=["Map01_1002_1_1_Height.png"])
+    _write_height_map(tmp_path, "Map01_1002_1_1_Height.png", 181, size=1024)
+    coating = _motion(client)["coating_evaluation"]
+
+    assert coating["target"] == {"analysis_status": "not_available", "reason_code": "height_map_size_mismatch"}
+    assert coating["zones"][0]["reference_um"] > 0
+
+
+def test_zones_on_a_face_without_a_height_map_get_no_target_row(tmp_path: Path) -> None:
+    from trainer.demo_api.motion_viewer import _target_coating
+
+    (tmp_path / _TARGET_MODE_ROOT).mkdir(parents=True)
+    path = _write_height_map(tmp_path, "Map01_1002_1_1_Height.png", 181)
+    target = _target_coating("spray", 4, {1: path}, ["1:1", "2:1"], {})
+
+    assert target["analysis_status"] == "available"
+    assert [(row["map_num"], row["zone_id"]) for row in target["zones"]] == [(1, "1")]
+    assert _target_coating("spray", 4, {1: path}, ["2:1"], {})["reason_code"] == "height_map_unavailable"
+    assert _target_coating("blasting", 4, {1: path}, ["1:1"], {})["reason_code"] == "coating_not_applicable"
+
+
+def test_target_assessment_is_cached_per_file_stamp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import os
+    from trainer.demo_api import coating_assessment
+    from trainer.demo_api.motion_viewer import _target_coating
+
+    calls: list[int] = []
+    original = coating_assessment.painted_surface_from_png
+    monkeypatch.setattr(coating_assessment, "painted_surface_from_png", lambda raw: calls.append(1) or original(raw))
+    client = _client(tmp_path, heightmaps=["Map01_1002_1_1_Height.png"])
+    path = _write_height_map(tmp_path, "Map01_1002_1_1_Height.png", 181)
+
+    first = _motion(client)["coating_evaluation"]["target"]
+    second = _motion(client)["coating_evaluation"]["target"]
+    assert len(calls) == 1 and first == second
+
+    _write_height_map(tmp_path, "Map01_1002_1_1_Height.png", 260)
+    stamp = path.stat().st_mtime_ns + 1_000_000_000
+    os.utime(path, ns=(stamp, stamp))
+    third = _motion(client)["coating_evaluation"]["target"]
+    assert len(calls) == 2 and third["zones"][0]["thickness_um"] != first["zones"][0]["thickness_um"]
+
+    # 캐시된 결과를 응답 조립이 고쳐도 다음 응답은 그대로다(깊은 복사).
+    direct = _target_coating("spray", 4, {1: path}, ["1:1"], {})
+    direct["zones"][0]["grade"] = "forged"
+    assert _target_coating("spray", 4, {1: path}, ["1:1"], {})["zones"][0]["grade"] != "forged"

@@ -133,3 +133,12 @@ def test_coating_how_to_question_uses_rag_and_verified_data_instead_of_fixed_sta
     assert len(pipeline.calls) == 1
     assert "검증된 최종 도막 비교 자료" in pipeline.calls[0]["instruction"]
     assert "180" in pipeline.calls[0]["instruction"] and "120" in pipeline.calls[0]["instruction"]
+
+
+def test_pose_tab_fallback_does_not_claim_a_missing_height_map():
+    from trainer.demo_api.coating_query import viewer_coating_context
+    payload = {"pose_evaluation": {"zones": {
+        "1:1": {"map_num": 1, "zone_id": "1", "metrics": [{"key": "coating_thickness", "available": True, "actual": 150, "reference": 120}]}}}}
+    result = viewer_coating_context(payload)
+    assert result["target"] == {"analysis_status": "not_available", "reason_code": "target_assessment_not_loaded"}
+    assert result["analysis_status"] == "available" and result["zones"]
