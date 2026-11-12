@@ -1,4 +1,5 @@
 import csv
+import hashlib
 import json
 from pathlib import Path
 
@@ -163,6 +164,34 @@ def test_legacy_zone_correction_does_not_remap_new_workers(tmp_path):
     current = catalog.list(worker_id='new-worker')['items'][0]
     assert catalog.detail(legacy['dataset_id'])['features']['zones'][0]['zone_id'] == '3'
     assert catalog.detail(current['dataset_id'])['features']['zones'][0]['zone_id'] == '1'
+
+
+def test_old_records_without_criterion_are_left_as_is(tmp_path):
+    root, output = tmp_path / 'source', tmp_path / 'built'
+    record(root)
+    build_training_datasets(root, output)
+    catalog = TrainingDataCatalog(output, root)
+    item = catalog.list()['items'][0]
+    face = catalog.detail(item['dataset_id'])['coating']['maps'][0]
+    assert face['criterion_version'].startswith('coating-v1-adapter/')
+    path = catalog.artifact(item['dataset_id'])
+    data = json.loads(path.read_text(encoding='utf-8'))
+    old = data['coating']['maps'][0]
+    for key in ('criterion_version', 'thickness_basis', 'basis_label', 'band_labels', 'grade_labels', 'rule_note'):
+        del old[key]
+    old['summary'].update(within_target_percent=50.0, target_tolerance_percent=10.0)
+    path.write_text(json.dumps(data), encoding='utf-8')
+    # 옛 기록처럼 보이게 목록의 크기·해시도 맞춘다(저장된 기록을 다시 쓰는 일은 하지 않는다).
+    index_path = output / 'catalog.json'
+    index = json.loads(index_path.read_text(encoding='utf-8'))
+    for row in index['records']:
+        if row['dataset_id'] == item['dataset_id']:
+            row['json_bytes'], row['artifact_sha256'] = path.stat().st_size, hashlib.sha256(path.read_bytes()).hexdigest()
+    index_path.write_text(json.dumps(index), encoding='utf-8')
+    before = path.read_bytes()
+    shown = TrainingDataCatalog(output, root).detail(item['dataset_id'])['coating']['maps'][0]
+    assert 'criterion_version' not in shown and shown['summary']['within_target_percent'] == 50.0
+    assert path.read_bytes() == before
 
 
 def test_catalog_rejects_escaped_paths(tmp_path):

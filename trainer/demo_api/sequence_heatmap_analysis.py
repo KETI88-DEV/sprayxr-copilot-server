@@ -20,11 +20,12 @@ import numpy as np
 from PIL import Image, UnidentifiedImageError
 
 if __package__:
-    from .training_data_coating import PREVIEW_BACKGROUND, PREVIEW_COLORS, TARGET_TOLERANCE_PERCENT, _histogram, _summary
+    from .training_data_coating import PREVIEW_BACKGROUND, PREVIEW_COLORS, _histogram, _summary
 else:
-    from training_data_coating import PREVIEW_BACKGROUND, PREVIEW_COLORS, TARGET_TOLERANCE_PERCENT, _histogram, _summary
+    from training_data_coating import PREVIEW_BACKGROUND, PREVIEW_COLORS, _histogram, _summary
 
 
+TARGET_TOLERANCE_PERCENT = 10.0  # R4b-2에서 지운다
 ATLAS_SIZE = 2048
 MAX_IMAGE_DIMENSION = 2048
 MAX_IMAGE_PIXELS = 2048 * 2048
@@ -73,8 +74,13 @@ def _physical_summary(
     target_thickness_um: float | None,
 ) -> dict[str, Any]:
     # Reuse the shared statistics; avoid target*10 overflowing before /100.
-    result = _summary(values, target_pixels=target_pixels, target_thickness_um=None)
+    result = _summary(values, target_pixels=target_pixels, target_um=1.0, target_basis="default_target")
+    # R4b-2에서 보정 두께 기준으로 바꾼다. 그 전에는 보정 전 값에 6구간을 붙이지 않는다.
+    for key in ("target_basis", "normal_band_um", "six_band_counts"):
+        del result[key]
     result["target_thickness_um"] = target_thickness_um
+    result["target_tolerance_percent"] = None
+    result["within_target_percent"] = None
     if target_thickness_um is not None:
         result["target_tolerance_percent"] = TARGET_TOLERANCE_PERCENT
         if values is not None and values.size:

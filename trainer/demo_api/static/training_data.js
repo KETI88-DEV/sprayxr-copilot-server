@@ -298,15 +298,20 @@
     for (const key of keys) { const value = finite(summary[key]); if (value !== null) return value; }
     return null;
   }
-  function zoneStats(zones) {
+  function zoneStats(zones, gradeLabels) {
     return (Array.isArray(zones) ? zones : []).map(zone => {
       const summary = zone.summary || zone.thickness || zone;
       const reference = zone.reference || {};
-      return {label: String(zone.zone_id ?? zone.zone_name ?? zone.id ?? '미지정'), color: '#5275d9', median: quantile(summary, ['median_um', 'median']), q1: quantile(summary, ['p25_um', 'q1_um', 'quartile_25_um']), q3: quantile(summary, ['p75_um', 'q3_um', 'quartile_75_um']), reference: {count: finite(reference.record_count) || 0, median: finite(reference.median_um), q1: finite(reference.p25_um), q3: finite(reference.p75_um)}};
+      return {grade: gradeLabels ? (summary.painted_pixels == null ? '미기록' : gradeLabels[summary.grade ?? 'none'] ?? '미기록') : null, label: String(zone.zone_id ?? zone.zone_name ?? zone.id ?? '미지정'), color: '#5275d9', median: quantile(summary, ['median_um', 'median']), q1: quantile(summary, ['p25_um', 'q1_um', 'quartile_25_um']), q3: quantile(summary, ['p75_um', 'q3_um', 'quartile_75_um']), reference: {count: finite(reference.record_count) || 0, median: finite(reference.median_um), q1: finite(reference.p25_um), q3: finite(reference.p75_um)}};
     }).filter(zone => zone.median !== null);
   }
-  function renderZones(host, zones, target) {
-    const entries = zoneStats(zones);
+  // 6구간 개수 중 셋째 칸(정상 구간)의 비율. 구간 경계는 서버가 정한다.
+  function normalShare(counts) {
+    const values = Object.values(counts || {}), total = values.reduce((sum, value) => sum + value, 0);
+    return total ? valueText(values[2] / total * 100, '%') : '—';
+  }
+  function renderZones(host, zones, target, gradeLabels) {
+    const entries = zoneStats(zones, gradeLabels);
     if (!entries.length) { chartEmpty(host, '구역별 두께 중앙값이 기록되지 않았습니다.'); return; }
     const hasReference = entries.some(zone => zone.reference.count > 0 && zone.reference.median !== null);
     const width = 500, left = 90, right = 30, top = 21, rowHeight = hasReference ? 47 : 35, height = top + entries.length * rowHeight + 35;
@@ -353,9 +358,11 @@
     const note = el('p', 'td-help', hasIqr ? `● 현재 맵 중앙값 · 가로 범위: 도포 픽셀의 25–75 백분위수 (IQR)${finite(target) ? ' · 점선: 목표 두께' : ''} · 단위 µm` : '● 현재 맵 중앙값 · IQR은 생성 JSON에 기록되지 않았습니다. · 단위 µm');
     const comparisonNote = el('p', 'td-help', '◆ 전문가 N회 중앙값 분포: 같은 공정·시나리오·맵·구역의 회차별 중앙값을 모은 중앙값과 IQR입니다. 픽셀을 합친 분포와는 계산 기준이 다릅니다.');
     const headers = ['구역', '현재 중앙값 (µm)', '현재 25–75% (µm)'];
+    if (gradeLabels) headers.push('등급');
     if (hasReference) headers.push('전문가 N회 중앙값 분포 (µm)');
     const table = chartTable(headers, entries.map(zone => {
       const row = [zone.label, valueText(zone.median), zone.q1 !== null && zone.q3 !== null ? `${valueText(zone.q1)}–${valueText(zone.q3)}` : '미기록'];
+      if (gradeLabels) row.push(zone.grade);
       if (hasReference) row.push(zone.reference.count > 0 && zone.reference.median !== null ? `${count(zone.reference.count)}회 · ${valueText(zone.reference.median)} [${valueText(zone.reference.q1)}–${valueText(zone.reference.q3)}]` : '미기록');
       return row;
     }));
@@ -448,8 +455,9 @@
       if (currentMap.coverage_domain) basisNote.append(el('p', '', domainKnown ? '분석 영역: 공식 구역 마스크 · 도포율은 해당 영역의 전체 픽셀 대비 도포 픽셀 비율입니다.' : '공식 구역 영역을 확정하지 못해 도포율을 계산하지 않았습니다. 두께 분포는 이미지의 도포 픽셀을 기준으로 표시합니다.'));
       if (currentMap.validity_convention === 'legacy_rg_nonzero') basisNote.append(el('p', '', '이전 형식 맵: B 채널이 모두 0이므로 R 또는 G 채널이 0이 아닌 픽셀을 도포된 영역으로 해석했습니다.'));
       if (currentMap.status === 'not_applicable') basisNote.append(el('p', '', currentMap.reason || '이 맵에는 도막 두께 분석을 적용하지 않습니다.'));
-      if (finite(summary.target_thickness_um) === null) basisNote.append(el('p', '', '목표 두께가 원본에 명시되지 않아 목표 대비 적합 비율은 계산하지 않았습니다.'));
-      else basisNote.append(el('p', '', `목표 범위 비율: 목표 두께 ±${valueText(summary.target_tolerance_percent ?? 10)}% 범위에 포함되는 도포 픽셀 비율입니다.`));
+      const newCriterion = Boolean(currentMap.criterion_version);
+      if (newCriterion) basisNote.append(el('p', '', `${currentMap.basis_label} · 두께는 보정 두께(원본에서 10 µm를 뺀 값)입니다. ${currentMap.rule_note || ''}`));
+      else basisNote.append(el('p', '', '이전 기준(보정 전 두께·목표 ±10%)으로 저장된 기록입니다. 다시 변환하면 새 기준으로 바뀝니다.'));
       const reasons = {
         official_zone_catalog_unavailable: '공식 구역 정보를 불러오지 못했습니다.', scenario_model_unavailable: '시나리오의 공식 모델 정보가 없습니다.',
         official_zones_unavailable: '해당 맵의 공식 구역 정보가 없습니다.', official_zone_mask_unavailable: '일부 공식 구역 마스크를 사용할 수 없습니다.',
@@ -458,10 +466,10 @@
       if (currentMap.reason && currentMap.status !== 'not_applicable') basisNote.append(el('p', '', reasons[currentMap.reason] || currentMap.reason));
       metrics.replaceChildren(...[
         ['도포율', valueText(summary.coverage_percent, '%')], ['평균 두께', valueText(summary.mean_um, ' µm')], ['중앙값', valueText(summary.median_um, ' µm')],
-        ['목표 두께', valueText(summary.target_thickness_um, ' µm')], [`목표 ±${valueText(summary.target_tolerance_percent ?? 10)}% 비율`, valueText(summary.within_target_percent, '%')], ['두께 변동계수', valueText(summary.cv_percent, '%')],
+        ['목표 두께', valueText(summary.target_thickness_um, ' µm')], newCriterion ? ['정상 구간 비율', normalShare(summary.six_band_counts)] : [`목표 ±${valueText(summary.target_tolerance_percent ?? 10)}% 비율`, valueText(summary.within_target_percent, '%')], ['두께 변동계수', valueText(summary.cv_percent, '%')],
       ].map(([labelText, value]) => { const metric = el('div', 'td-coating-metric'); metric.append(el('span', '', labelText), el('strong', '', value)); return metric; }));
       renderHistogram(histogram, currentMap.histogram);
-      renderZones(zones, currentMap.zones, summary.target_thickness_um);
+      renderZones(zones, currentMap.zones, summary.target_thickness_um, newCriterion ? currentMap.grade_labels || {} : null);
       mapNote.textContent = `분석 대상 ${valueText(summary.target_pixels)} 픽셀 · 도포 ${valueText(summary.painted_pixels)} 픽셀 · 도포 픽셀의 10–90 백분위 두께 ${valueText(summary.p10_um)}–${valueText(summary.p90_um)} µm`;
       const reference = currentMap.reference;
       if (reference && finite(reference.record_count) > 0 && finite(reference.median_um) !== null) mapNote.append(el('span', '', ` · 전문가 ${count(reference.record_count)}회 중앙값 분포: ${valueText(reference.median_um)} µm (IQR ${valueText(reference.p25_um)}–${valueText(reference.p75_um)} µm, 회차별 중앙값 기준)`));

@@ -63,7 +63,7 @@ class TrainingDataCoatingTest(unittest.TestCase):
         result = coating.analyze_heightmap(self.path, scenario_id="3", map_num=1, catalog=catalog)
         self.assertEqual(result["status"], "available")
         self.assertEqual(result["summary"]["painted_pixels"], 2)
-        self.assertAlmostEqual(result["summary"]["mean_um"], 78.43137254901961)
+        self.assertAlmostEqual(result["summary"]["mean_um"], 68.43137254901961)
         self.assertAlmostEqual(result["summary"]["coverage_percent"], 200 / 3)
 
     def test_exact_masks_exclude_outside_paint_and_count_inside_black(self):
@@ -81,7 +81,7 @@ class TrainingDataCoatingTest(unittest.TestCase):
         self.assertEqual(result["summary"]["target_pixels"], 4)
         self.assertEqual(result["summary"]["painted_pixels"], 3)
         self.assertEqual(result["summary"]["coverage_percent"], 75.0)
-        self.assertAlmostEqual(result["summary"]["mean_um"], 78.43137254901961)
+        self.assertAlmostEqual(result["summary"]["mean_um"], 68.43137254901961)
         self.assertEqual(result["zones"][0]["hex_color"], "#ff0000")
         self.assertEqual(result["zones"][0]["summary"]["coverage_percent"], 50.0)
         self.assertEqual(result["zones"][1]["summary"]["coverage_percent"], 100.0)
@@ -94,13 +94,13 @@ class TrainingDataCoatingTest(unittest.TestCase):
             catalog=OfficialCatalog({(1, "1"): [[1, 1, 1, 1]]}),
         )
         summary = result["summary"]
-        self.assertAlmostEqual(summary["median_um"], 156.86274509803923)
-        self.assertAlmostEqual(summary["p10_um"], 94.11764705882354)
-        self.assertAlmostEqual(summary["p25_um"], 117.64705882352942)
-        self.assertAlmostEqual(summary["p75_um"], 196.07843137254903)
-        self.assertAlmostEqual(summary["p90_um"], 219.60784313725492)
+        self.assertAlmostEqual(summary["median_um"], 146.86274509803923)
+        self.assertAlmostEqual(summary["p10_um"], 84.11764705882354)
+        self.assertAlmostEqual(summary["p25_um"], 107.64705882352942)
+        self.assertAlmostEqual(summary["p75_um"], 186.07843137254903)
+        self.assertAlmostEqual(summary["p90_um"], 209.6078431372549)
         self.assertAlmostEqual(summary["std_um"], 64.03894752374435)
-        self.assertAlmostEqual(summary["cv_percent"], 40.8248290463863)
+        self.assertAlmostEqual(summary["cv_percent"], 43.60462381456558)
         self.assertEqual(sum(item["count"] for item in result["histogram"]), 3)
         self.assertAlmostEqual(sum(item["percent"] for item in result["histogram"]), 100)
         self.assertEqual(len(result["histogram"]), 24)
@@ -128,7 +128,7 @@ class TrainingDataCoatingTest(unittest.TestCase):
         )
         self.assertEqual(result["status"], "partial")
         self.assertEqual(result["summary"]["painted_pixels"], 1)
-        self.assertAlmostEqual(result["summary"]["mean_um"], 78.43137254901961)
+        self.assertAlmostEqual(result["summary"]["mean_um"], 68.43137254901961)
         self.assertIsNone(result["summary"]["coverage_percent"])
         self.assertEqual(result["zones"], [])
 
@@ -139,25 +139,63 @@ class TrainingDataCoatingTest(unittest.TestCase):
         self.assertEqual(result["summary"]["coverage_percent"], 0)
         self.assertEqual(result["summary"]["painted_pixels"], 0)
 
-    def test_no_target_does_not_invent_a_target_or_pass_rate(self):
+    def test_no_target_judges_at_the_default_and_says_so(self):
         self.save([[(1, 0, 255)]])
         result = coating.analyze_heightmap(
             self.path, scenario_id="3", map_num=1, catalog=OfficialCatalog({(1, "1"): [[1]]}),
         )
+        self.assertEqual(result["basis_label"], "기본 목표 160µm 기준")
+        self.assertEqual(result["thickness_basis"], "corrected")
+        self.assertTrue(result["criterion_version"].startswith("coating-v1-adapter/"))
         for summary in (result["summary"], result["zones"][0]["summary"]):
-            self.assertIsNone(summary["target_thickness_um"])
-            self.assertIsNone(summary["within_target_percent"])
-            self.assertIsNone(summary["target_tolerance_percent"])
+            self.assertEqual(summary["target_thickness_um"], 160.0)
+            self.assertEqual(summary["target_basis"], "default_target")
+            self.assertNotIn("within_target_percent", summary)
+            self.assertNotIn("target_tolerance_percent", summary)
 
-    def test_supplied_target_uses_explicit_ten_percent_tolerance(self):
+    def test_supplied_target_sets_the_six_bands_and_grade(self):
         self.save([[(1, 0, 255), (2, 0, 255), (0, 0, 0)]])
         result = coating.analyze_heightmap(
             self.path, scenario_id="3", map_num=1, target_thickness_um=80,
             catalog=OfficialCatalog({(1, "1"): [[1, 1, 1]]}),
         )
-        self.assertEqual(result["summary"]["target_thickness_um"], 80)
-        self.assertEqual(result["summary"]["target_tolerance_percent"], 10)
-        self.assertEqual(result["summary"]["within_target_percent"], 50)
+        summary = result["summary"]
+        self.assertEqual(summary["target_thickness_um"], 80)
+        self.assertEqual(summary["target_basis"], "session_target")
+        # corrected 68.4 < 0.9*80 ; 146.9 in [1.5, 2.0)*80
+        self.assertEqual(summary["six_band_counts"], {
+            "lt_0_9t": 1, "from_0_9t_to_lt_1_0t": 0, "from_1_0t_to_lt_1_5t": 0,
+            "from_1_5t_to_lt_2_0t": 1, "from_2_0t_to_lt_2_5t": 0, "gte_2_5t": 0})
+        zone = result["zones"][0]["summary"]
+        self.assertEqual(zone["grade"], "normal")  # painted mean 107.6 in [80, 120)
+        self.assertEqual(zone["status"], "normal")
+        self.assertAlmostEqual(zone["unpainted_fraction"], 1 / 3)
+        self.assertNotIn("grade", summary)
+
+    def test_default_target_six_bands_for_three_pixels(self):
+        self.save([[(0, 255, 255), (1, 0, 255), (1, 255, 255)]])
+        result = coating.analyze_heightmap(
+            self.path, scenario_id="3", map_num=1, catalog=OfficialCatalog({(1, "1"): [[1, 1, 1]]}),
+        )
+        # corrected 68.4, 68.4, 146.9 against 160 -> two below 0.9t, one in [0.9t, t)
+        self.assertEqual(result["summary"]["six_band_counts"]["lt_0_9t"], 2)
+        self.assertEqual(result["summary"]["six_band_counts"]["from_0_9t_to_lt_1_0t"], 1)
+        self.assertEqual(result["zones"][0]["summary"]["grade"], "below")
+
+    def test_zone_grade_matches_the_session_report_rule(self):
+        from trainer.demo_api import coating_assessment as ca
+
+        self.save([[(2, 0, 255), (3, 0, 255), (0, 0, 0), (1, 0, 255)]])
+        mask = np.array([[1, 1, 1, 0]], dtype=bool)
+        result = coating.analyze_heightmap(
+            self.path, scenario_id="3", map_num=1, target_thickness_um=120,
+            catalog=OfficialCatalog({(1, "1"): mask.astype(int).tolist()}),
+        )
+        raw = np.array([[2 / 255 * 20000, 3 / 255 * 20000, 0.0, 0.0]])
+        expected = ca.assess_zone(raw, mask, 120)
+        zone = result["zones"][0]["summary"]
+        for key in ("grade", "status", "unpainted_fraction", "painted_mean_um", "gate_status"):
+            self.assertEqual(zone[key], expected[key], key)
 
     def test_all_black_target_has_zero_coverage_and_no_distribution(self):
         self.save([[(0, 0, 0), (0, 0, 0)]])
@@ -168,25 +206,27 @@ class TrainingDataCoatingTest(unittest.TestCase):
         self.assertEqual(result["summary"]["target_pixels"], 2)
         self.assertEqual(result["summary"]["painted_pixels"], 0)
         self.assertEqual(result["summary"]["coverage_percent"], 0)
-        for key in ("mean_um", "median_um", "p10_um", "p90_um", "std_um", "cv_percent", "within_target_percent"):
+        for key in ("mean_um", "median_um", "p10_um", "p90_um", "std_um", "cv_percent"):
             self.assertIsNone(result["summary"][key])
         self.assertEqual(result["histogram"], [])
         self.assertGreater(result["preview_max_um"], 0)
         json.dumps(result, allow_nan=False)
 
-    def test_blue_validity_is_authoritative_even_at_zero_thickness(self):
+    def test_blue_validity_is_authoritative_but_zero_thickness_is_unpainted(self):
         self.save([[(0, 0, 255), (0, 0, 0), (2, 0, 0)]])
         result = coating.analyze_heightmap(
             self.path, scenario_id="3", map_num=1,
             catalog=OfficialCatalog({(1, "1"): [[1, 1, 1]]}),
         )
         self.assertEqual(result["validity_convention"], "tsb_b_channel")
-        self.assertEqual(result["summary"]["painted_pixels"], 1)
-        self.assertAlmostEqual(result["summary"]["coverage_percent"], 100 / 3)
-        self.assertEqual(result["summary"]["mean_um"], 0)
-        self.assertIsNone(result["summary"]["cv_percent"])
+        # B marks the pixel observed, but corrected thickness 0 - 10 < 1 um is unpainted.
+        self.assertEqual(result["summary"]["painted_pixels"], 0)
+        self.assertIsNone(result["summary"]["mean_um"])
+        self.assertEqual(result["histogram"], [])
+        zone = result["zones"][0]["summary"]
+        self.assertEqual(zone["unpainted_fraction"], 1.0)
+        self.assertIsNone(zone["grade"])
         self.assertGreater(result["preview_max_um"], 0)
-        self.assertAlmostEqual(sum(item["percent"] for item in result["histogram"]), 100)
 
     def test_legacy_all_zero_blue_uses_rg_nonzero_with_warning(self):
         self.save([[(1, 0, 0), (0, 255, 0), (0, 0, 0)]])
@@ -198,7 +238,7 @@ class TrainingDataCoatingTest(unittest.TestCase):
         self.assertTrue(result["warnings"])
         self.assertEqual(result["summary"]["painted_pixels"], 2)
         self.assertAlmostEqual(result["summary"]["coverage_percent"], 200 / 3)
-        self.assertAlmostEqual(result["summary"]["mean_um"], 78.43137254901961)
+        self.assertAlmostEqual(result["summary"]["mean_um"], 68.43137254901961)
 
     def test_empty_official_mask_has_known_zero_area_without_coverage_percentage(self):
         self.save([[(1, 0, 255)]])
@@ -227,6 +267,12 @@ class TrainingDataCoatingTest(unittest.TestCase):
         self.assertTrue(np.array_equal(pixels[0, 1], pixels[1, 0]))
         self.assertFalse(np.array_equal(pixels[0, 0], pixels[0, 1]))
         self.assertFalse(np.array_equal(pixels[0, 0], pixels[1, 1]))
+
+    def test_preview_colors_corrected_thickness(self):
+        # raw 78.43 -> corrected 68.43: vmax at the corrected value reaches the last color stop.
+        self.save([[(1, 0, 255)]])
+        pixel = np.asarray(Image.open(io.BytesIO(coating.render_thickness_preview(self.path, vmax_um=68.43137254901961))))[0, 0]
+        self.assertEqual(tuple(pixel), (0xd7, 0x30, 0x1f))
 
     def test_preview_default_scale_matches_analysis_and_clamps_high_values(self):
         self.save([[(1, 0, 255), (255, 255, 255)]])

@@ -321,6 +321,16 @@ def distribution_sentence(six_band_counts: Mapping[str, int]) -> str | None:
     return f"칠한 면적의 두께 분포: 목표의 {shares}."
 
 
+def corrected_painted(raw: np.ndarray, source_painted: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """PR #8 보정 두께와 칠한 자리(관측됨 ∧ 원본 도포 ∧ 보정 ≥ 1 µm). 모든 화소를 관측된 것으로 본다."""
+    return numerical.corrected_values(numerical.Surface(raw, np.ones(raw.shape, dtype=bool), source_painted))
+
+
+def band_counts(values_um: np.ndarray, target_um: float) -> dict[str, int]:
+    """보정 두께 값들의 6구간 개수(PR #8)."""
+    return numerical.six_band_counts(np.asarray(values_um, dtype=np.float64), target_um)
+
+
 def assess_readings(
     values_um: Sequence[float],
     target_um: float | None = None,

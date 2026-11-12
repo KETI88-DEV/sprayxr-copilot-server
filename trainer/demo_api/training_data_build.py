@@ -308,7 +308,7 @@ def attach_expert_references(output_root: Path, rows: list[dict]) -> None:
                     stats = _distribution(values)
                     destination['reference'] = {'record_count': stats['count'], 'median_um': stats['median'],
                                                 'p25_um': stats['p25'], 'p75_um': stats['p75'],
-                                                'basis': '동일 훈련·면·Zone의 전문가 회차별 도막 중앙값 분포'}
+                                                'basis': '동일 훈련·면·Zone의 전문가 회차별 도막 중앙값 분포(보정 두께)'}
         path = output_root / 'records' / f"{row['dataset_id']}.json"
         _write_json(path, data)
         row['json_bytes'], row['artifact_sha256'] = path.stat().st_size, _sha(path)

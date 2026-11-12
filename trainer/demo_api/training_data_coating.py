@@ -5,6 +5,9 @@ uses the union of exact official zone masks; thickness distributions use coated
 pixels within that domain. When the domain cannot be established completely,
 global coverage is unknown and global distributions use coated image pixels.
 No rectangle is substituted for an unavailable official mask.
+
+Thickness is the PR #8 corrected thickness (raw - 10 um, capped); a pixel is
+painted when its corrected thickness is at least 1 um.
 """
 
 from __future__ import annotations
@@ -17,16 +20,19 @@ from typing import Any
 import numpy as np
 from PIL import Image, UnidentifiedImageError
 
+from trainer.demo_api import coating_assessment
+
 
 HEIGHTMAP_SCALE_UM = 20000.0
-TARGET_TOLERANCE_PERCENT = 10.0
 HISTOGRAM_BINS = 24
+_ZONE_JUDGEMENT_KEYS = ("grade", "status", "unpainted_fraction", "painted_mean_um", "gate_status")
 PREVIEW_BACKGROUND = (16, 19, 26)
 # Shared evenly spaced stops, low to high; callers can reproduce this legend.
 PREVIEW_COLORS = ("#253494", "#2c7fb8", "#41b6c4", "#a1dab4", "#ffffcc", "#fe9929", "#d7301f")
 
 
-def _read_heightmap(path: str | Path) -> tuple[np.ndarray, np.ndarray, str]:
+def _read_heightmap(path: str | Path) -> tuple[np.ndarray, np.ndarray, str, np.ndarray]:
+    """Return (corrected thickness, painted, convention, raw thickness where source-painted else 0)."""
     with Image.open(path) as image:
         pixels = np.asarray(image.convert("RGB"), dtype=np.uint8)
     # RG16 is packed in two 8-bit channels, rather than a grayscale uint16 PNG.
@@ -43,7 +49,8 @@ def _read_heightmap(path: str | Path) -> tuple[np.ndarray, np.ndarray, str]:
         # uncoated; decoding this convention must be visible to consumers.
         painted = (pixels[..., 0] > 0) | (pixels[..., 1] > 0)
         convention = "legacy_rg_nonzero"
-    return thickness, painted, convention
+    corrected, painted_now = coating_assessment.corrected_painted(thickness, painted)
+    return corrected, painted_now, convention, np.where(painted, thickness, 0.0)
 
 
 def _preview_max(thickness: np.ndarray, painted: np.ndarray) -> float:
@@ -58,7 +65,8 @@ def _summary(
     values: np.ndarray | None,
     *,
     target_pixels: int | None,
-    target_thickness_um: float | None,
+    target_um: float,
+    target_basis: str,
 ) -> dict[str, Any]:
     painted_pixels = int(values.size) if values is not None else None
     summary: dict[str, Any] = {
@@ -76,9 +84,11 @@ def _summary(
         "p90_um": None,
         "std_um": None,
         "cv_percent": None,
-        "target_thickness_um": target_thickness_um,
-        "target_tolerance_percent": TARGET_TOLERANCE_PERCENT if target_thickness_um is not None else None,
-        "within_target_percent": None,
+        "target_thickness_um": target_um,
+        "target_basis": target_basis,
+        "normal_band_um": coating_assessment.normal_band_um(target_um),
+        "six_band_counts": coating_assessment.band_counts(
+            np.empty(0) if values is None else values, target_um),
     }
     if values is None or not values.size:
         return summary
@@ -94,10 +104,6 @@ def _summary(
         std_um=std,
         cv_percent=std / mean * 100.0 if mean > 0 else None,
     )
-    if target_thickness_um is not None:
-        tolerance = target_thickness_um * TARGET_TOLERANCE_PERCENT / 100.0
-        within = (values >= target_thickness_um - tolerance) & (values <= target_thickness_um + tolerance)
-        summary["within_target_percent"] = float(np.count_nonzero(within) / values.size * 100.0)
     return summary
 
 
@@ -126,9 +132,10 @@ def analyze_heightmap(
 ) -> dict[str, Any]:
     """Analyze one final TSB map; all numeric thickness values are micrometers.
 
-    ``within_target_percent`` uses painted pixels and an explicit +/-10% band
-    only when a finite positive target is supplied. ``std_um`` is population
-    standard deviation. Unavailable coverage and empty distributions are null.
+    Statistics use corrected thickness of painted pixels; ``six_band_counts``
+    and each zone's ``grade`` follow PR #8. A missing target is judged at the
+    default and reported as ``target_basis="default_target"``. ``std_um`` is
+    population standard deviation. Unavailable coverage and empty distributions are null.
 
     ``preview_max_um`` matches ``render_thickness_preview``'s default: the 99th
     percentile over coated image pixels, or 200 when it is not positive. The
@@ -140,10 +147,17 @@ def analyze_heightmap(
         if not math.isfinite(target_thickness_um) or target_thickness_um <= 0:
             target_thickness_um = None
             warnings.append("invalid_target_thickness_ignored")
+    target_um, target_basis = coating_assessment.resolve_target(target_thickness_um)
     result: dict[str, Any] = {
         "status": "unavailable",
         "reason": None,
-        "summary": _summary(None, target_pixels=None, target_thickness_um=target_thickness_um),
+        "criterion_version": coating_assessment.ASSESSMENT_VERSION,
+        "thickness_basis": "corrected",
+        "basis_label": coating_assessment.basis_label(target_um, target_basis),
+        "band_labels": list(coating_assessment.BAND_LABELS),
+        "grade_labels": dict(coating_assessment.GRADE_SHORT_LABELS),
+        "rule_note": coating_assessment.RULE_NOTE,
+        "summary": _summary(None, target_pixels=None, target_um=target_um, target_basis=target_basis),
         "histogram": [],
         "zones": [],
         "statistics_basis": "painted_pixels",
@@ -155,7 +169,7 @@ def analyze_heightmap(
         "warnings": warnings,
     }
     try:
-        thickness, painted, convention = _read_heightmap(path)
+        thickness, painted, convention, source_raw = _read_heightmap(path)
     except (OSError, ValueError, UnidentifiedImageError):
         result["reason"] = "heightmap_unavailable"
         return result
@@ -202,14 +216,17 @@ def analyze_heightmap(
             masks_complete = False
             reason = "official_zone_mask_unavailable"
             warnings.append(f"official_zone_mask_unavailable: zone {definition.zone_id}")
-            zone_summary = _summary(None, target_pixels=None, target_thickness_um=target_thickness_um)
+            zone_summary = _summary(None, target_pixels=None, target_um=target_um, target_basis=target_basis)
+            judgement = None
         else:
             domain |= mask
             zone_summary = _summary(
                 thickness[painted & mask],
                 target_pixels=int(np.count_nonzero(mask)),
-                target_thickness_um=target_thickness_um,
+                target_um=target_um, target_basis=target_basis,
             )
+            judgement = coating_assessment.assess_zone(source_raw, mask, target_um)
+        zone_summary.update({key: None if judgement is None else judgement[key] for key in _ZONE_JUDGEMENT_KEYS})
         result["zones"].append({
             "zone_id": str(definition.zone_id),
             "hex_color": definition.hex_color,
@@ -231,7 +248,7 @@ def analyze_heightmap(
         result["status"] = "partial"
         warnings.append("coverage_unknown: official target domain unavailable; distribution uses coated image pixels")
     result["reason"] = reason
-    result["summary"] = _summary(selected, target_pixels=target_pixels, target_thickness_um=target_thickness_um)
+    result["summary"] = _summary(selected, target_pixels=target_pixels, target_um=target_um, target_basis=target_basis)
     result["histogram"] = _histogram(selected)
     return result
 
@@ -243,7 +260,7 @@ def render_thickness_preview(path: str | Path, *, vmax_um: float | None = None) 
     use the final color stop; callers should display the scale alongside it.
     Pass analysis['preview_max_um'] to make an explicit matching legend.
     """
-    thickness, painted, _ = _read_heightmap(path)
+    thickness, painted, _, _ = _read_heightmap(path)
     if vmax_um is None:
         vmax_um = _preview_max(thickness, painted)
     vmax_um = float(vmax_um)
