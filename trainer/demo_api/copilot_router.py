@@ -442,12 +442,7 @@ def _structured_detail_fallback(
                 comparison.append(f"{label}{particle} {value}입니다.")
         direction = analysis_context.get("direction_summary")
         if isinstance(direction, dict) and direction.get("classification"):
-            direction_label = {
-                "horizontal": "수평",
-                "vertical": "수직",
-                "diagonal": "대각선",
-                "irregular": "비정형",
-            }.get(str(direction["classification"]), str(direction["classification"]))
+            direction_label = DIRECTION_LABELS.get(str(direction["classification"]), str(direction["classification"]))
             comparison.append(f"주요 도포 방향은 {direction_label}입니다.")
         segment_lines: list[str] = []
         if stable_prefix:

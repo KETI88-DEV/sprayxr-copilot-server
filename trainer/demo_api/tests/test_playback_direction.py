@@ -133,3 +133,27 @@ def test_curved_record_aggregate_uses_korean_irregular_label():
     context='motion_viewer_playback:'+json.dumps({'dialogue_context':claims,'dialogue_signature':sign_context('dialogue',claims)})
     answer,result=aggregate_direction(context,'전체 기록의 대표 도포 방향은?')
     assert result['analysis_status']=='available' and result['classification']=='irregular' and '비정형' in answer
+
+
+def test_direction_label_copies_match_the_server_table():
+    """방향 표기 통일(2026-11-12 결정: 대각선·비정형). 서버 표 하나가 정본이고, 화면 사본은 열쇠마다 같은 이름이어야 한다."""
+    import re
+    from pathlib import Path
+    from trainer.demo_api import motion_viewer
+    from trainer.demo_api.playback_direction import LABELS
+    assert LABELS == {"horizontal": "수평", "vertical": "수직", "diagonal": "대각선",
+                      "irregular": "비정형", "curved_irregular": "비정형"}
+    root = Path(motion_viewer.__file__).parent
+    copies = {
+        "motion_viewer_alerts.js DIRECTION": re.search(r"const DIRECTION = \{([^}]*)\}", (root / "static/motion_viewer_alerts.js").read_text(encoding="utf-8")),
+        "motion_viewer_pose.js directionLabel": re.search(r"function directionLabel\(value\) \{\s*return \(\{([^}]*)\}", (root / "static/motion_viewer_pose.js").read_text(encoding="utf-8")),
+        "motion_viewer.py directionName": re.search(r"function directionName\(value\)\{return\(\{([^}]*)\}", (root / "motion_viewer.py").read_text(encoding="utf-8")),
+    }
+    for name, found in copies.items():
+        assert found is not None, name
+        table = dict(re.findall(r"(\w+):\s*'([^']*)'", found.group(1)))
+        assert table and table == {key: LABELS[key] for key in table}, name
+    # v1 요약 이름은 "수평 중심"처럼 꼬리가 붙는다. 앞 이름은 서버 표와 같다.
+    for key, label in motion_viewer._DIRECTION_LABELS.items():
+        if key in LABELS:
+            assert label.split()[0] == LABELS[key], key

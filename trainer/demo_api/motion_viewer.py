@@ -61,7 +61,7 @@ _DIRECTION_LABELS = {
     "horizontal": "수평 중심",
     "vertical": "수직 중심",
     "diagonal": "대각선 중심",
-    "curved_irregular": "곡선·불규칙",
+    "curved_irregular": "비정형",
     "unavailable": "분석 자료 없음",
 }
 
@@ -1967,8 +1967,8 @@ function fillModes(){const p=currentProcess();$('mode').replaceChildren(...p.mod
 function fillSessions(){const worker=currentWorker(),m=currentMode();$('session').replaceChildren(option('representative',`${worker.display_name} · 전체 기록 종합 기준`),...m.sessions.map(s=>option(s,`${worker.display_name} · ${s}`)));loadMotion()}
 function zoneKey(mapNum,zoneId){return mapNum!=null&&Number(zoneId)>0?`${mapNum}:${zoneId}`:null}
 function metricRow(label,value){const row=document.createElement('span');row.className='zone-metric';const name=document.createElement('span'),metric=document.createElement('b');name.textContent=label;metric.textContent=value;row.append(name,metric);return row}
-function directionName(value){return({horizontal:'수평',vertical:'수직',diagonal:'대각',curved_irregular:'곡선·불규칙'})[value]||'자료 없음'}
-function expertDirectionMix(stats){const mix=stats.expert_direction_distribution||{};return`수평 ${((mix.horizontal||0)*100).toFixed(0)}% · 수직 ${((mix.vertical||0)*100).toFixed(0)}% · 대각 ${((mix.diagonal||0)*100).toFixed(0)}%`}
+function directionName(value){return({horizontal:'수평',vertical:'수직',diagonal:'대각선',curved_irregular:'비정형'})[value]||'자료 없음'}
+function expertDirectionMix(stats){const mix=stats.expert_direction_distribution||{};return`수평 ${((mix.horizontal||0)*100).toFixed(0)}% · 수직 ${((mix.vertical||0)*100).toFixed(0)}% · 대각선 ${((mix.diagonal||0)*100).toFixed(0)}%`}
 function zoneColor(zoneId){const number=Number(zoneId);return Number.isInteger(number)&&ZONE_COLORS[number]?ZONE_COLORS[number]:'#94A3B8'}
 function zoneLabel(zoneId){const number=Number(zoneId);return Number.isInteger(number)&&number>=1&&number<=39?String(number).padStart(2,'0'):String(zoneId)}
 function colorWithAlpha(hex,alpha){const value=hex.replace('#','');const number=Number.parseInt(value,16);return`rgba(${number>>16},${number>>8&255},${number&255},${alpha})`}

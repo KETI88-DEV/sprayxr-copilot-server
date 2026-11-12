@@ -9,8 +9,9 @@
     coating_over_app: { icon: 'arrow-up-to-line', tone: 'thick', label: '과도막' },
     coating_under_app: { icon: 'arrow-down-to-line', tone: 'thin', label: '저도막' },
   };
-  // 방향 열쇠의 한국어 표시 이름. v2 화면 전체가 이 표 하나를 쓴다.
-  const DIRECTION = { horizontal: '수평', vertical: '수직', diagonal: '대각', curved_irregular: '곡선·불규칙' };
+  // 방향 열쇠의 한국어 표시 이름. v2 화면 전체가 이 표 하나를 쓴다. 서버 playback_direction.LABELS 의 사본이다
+  // (test_direction_label_copies_match_the_server_table 이 같은지 지킨다).
+  const DIRECTION = { horizontal: '수평', vertical: '수직', diagonal: '대각선', curved_irregular: '비정형' };
   const ORDER_WORD = { zone_revisit: '다시 칠함', zone_skipped: '건너뜀', zone_out_of_order: '순서 바뀜', unexpected_zone: '기준 밖' };
 
   /** 도막 알림(모션 응답)과 순서·방향 알림(늦게 도착)을 시각순으로. 순서 판정 전이면 도막만. */
