@@ -278,3 +278,10 @@ def test_v2_zone_line_does_not_say_small_difference_for_a_zone_the_coating_panel
     note = script[script.index("function renderZoneNote"):script.index("advice.title")]
     assert "targetOf()?.zones" in note and "'below'" in note and "'above'" in note and "grade_labels" in note
     assert note.index("coatNote ||") < note.index("전문가 기록과 차이가 작습니다")   # 도막 등급이 먼저
+
+
+def test_v2_coating_axis_hides_a_tick_label_that_would_touch_the_previous_one() -> None:
+    script = _v2_static("motion_viewer_v2.js")
+    axis = script[script.index("axis.append(el('span'), ticks"):script.index("host.replaceChildren(axis")]
+    assert "new ResizeObserver" in axis and "getBoundingClientRect" in axis and "visibility = 'hidden'" in axis
+    assert "label.style.left = at(value)" in script   # 눈금 위치 계산은 그대로

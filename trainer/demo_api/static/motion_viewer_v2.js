@@ -340,6 +340,16 @@
       ticks.append(label);
     }
     axis.append(el('span'), ticks, el('span', null, 'µm'));
+    // 좁은 폭에서 눈금 글자가 붙으면(160·240 → 160240) 앞 눈금과 겹치는 것을 숨긴다. 위치 계산은 그대로.
+    new ResizeObserver(() => {
+      let edge = -Infinity;
+      for (const tickLabel of ticks.children) {
+        tickLabel.style.visibility = '';
+        const box = tickLabel.getBoundingClientRect();
+        if (!box.width) continue;
+        if (box.left < edge + 4) tickLabel.style.visibility = 'hidden'; else edge = box.right;
+      }
+    }).observe(ticks);
     host.replaceChildren(axis, ...rows.map((row) => {
       const grade = row.grade ?? 'none';
       const button = el('button', 'coat-row is-target');
