@@ -28,7 +28,11 @@ _UNIT_NUMBER_RE: Final = re.compile(rf"(?<![\d.])({_NUMBER}){_UNIT}")
 _OTHER_UNIT_RE: Final = re.compile(rf"{_NUMBER}\s*(?:mm|cm|m/s|%|도(?!막)|회|층|차)")
 _NOT_MEASUREMENT: Final = ("wft", "자세", "각도", "거리", "속도", "규정", "권장", "사이", "최소", "최대", "범위")
 _MEASURE_MARKERS: Final = ("측정값", "측정")
+# 도막 낱말 없는 길: 문장 첫머리·지금/현재/방금/이번·Zone 표기 바로 뒤의 "측정(값)" 다음에 쉼표 목록이 와야 한다("온도 측정값 23, 25"는 제외).
+_BARE_MARKER_RE: Final = re.compile(
+    rf"(?:^|(?:지금|현재|방금|이번|(?:zone|구역)\s*{_NUMBER}|{_NUMBER}\s*번)(?:의|에서|은|는)?)\s*측정(?:값)?\s*[은는이가:]?\s*{_NUMBER}(?:{_UNIT})?\s*[,，、]")
 _COATING_WORDS: Final = ("dft", "도막", "두께", "μm")
+# shortcut: 판정 의도 낱말은 직접 정한 목록이다. 다른 말투는 모델로 간다.
 _JUDGE_WORDS: Final = ("판정", "합격", "괜찮", "통과", "어때")
 _CAUSE_WORDS: Final = ("원인", "진단", "이상 탐지", "이상탐지", "왜")
 
@@ -45,7 +49,8 @@ def parse_dft_question(instruction: str) -> tuple[list[float], float | None] | N
     """
     text = instruction.casefold()
     # 내부 채팅의 기본 문맥은 도막이라 "측정값" 표지 + 판정 의도면 도막 낱말이 없어도 받는다(명세 R4a-2 (라) 확인 문장).
-    asked = any(word in text for word in _MEASURE_MARKERS) and any(word in text for word in _JUDGE_WORDS)
+    asked = (bool(_BARE_MARKER_RE.search(text.strip())) and "다음" not in text
+             and any(word in text for word in _JUDGE_WORDS))
     if not (asked or any(word in text for word in _COATING_WORDS)) or any(word in text for word in _NOT_MEASUREMENT):
         return None
     if _RANGE_RE.search(text) or _THOUSANDS_RE.search(text) or _OTHER_UNIT_RE.search(text):

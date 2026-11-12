@@ -47,7 +47,7 @@
    *  (모두 at 보다 앞이라 이동 뒤에 재생하면 알림이 다시 뜬다). 구간 첫 프레임은 이동 중이거나 다른 Zone 일 수 있다. */
   const seekIndex = (frames, seek, at, alert) => {
     const painting = alert?.zone_id == null ? -1 : frames.findIndex((frame) => frame.t >= seek && frame.t < at && frame.spraying
-      && String(frame.zone_id) === String(alert.zone_id) && (alert.map_num == null || String(frame.map_num) === String(alert.map_num)));
+      && String(frame.zone_id) === String(alert.zone_id) && (alert.map_num == null ? frame.map_num != null : String(frame.map_num) === String(alert.map_num)));
     if (painting >= 0) return painting;
     const inside = frames.findIndex((frame) => frame.t >= seek && frame.t < at);
     if (inside >= 0) return inside;

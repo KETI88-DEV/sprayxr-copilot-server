@@ -100,6 +100,7 @@ test('알림 Zone 을 칠하는 프레임이 구간 안에 있으면 그 첫 프
   const alert = { seek_seconds: 34.857, at_seconds: 43.413, zone_id: '5', map_num: '1' };
   assert.equal(alerts.seekIndex(frames, alert.seek_seconds, alert.at_seconds, alert), 6);
   assert.equal(alerts.seekIndex(frames, alert.seek_seconds, alert.at_seconds, { zone_id: '5', map_num: null }), 5);   // 지도 번호를 모르면 Zone 만 본다
+  assert.equal(alerts.seekIndex(frames, alert.seek_seconds, alert.at_seconds, { zone_id: '4', map_num: null }), 3);   // 지도 번호를 모르면 번호 없는 프레임(2)보다 번호 있는 프레임을 먼저
   // 구간 안에 그 Zone 분사가 없으면 예전처럼 구간 첫 프레임(at 보다 앞)
   assert.equal(alerts.seekIndex(frames, alert.seek_seconds, alert.at_seconds, { zone_id: '9', map_num: '1' }), 2);
   assert.equal(alerts.seekIndex(frames, alert.seek_seconds, alert.at_seconds), 2);
