@@ -281,7 +281,10 @@ def test_motion_viewer_page_explains_the_aggregated_expert_reference(tmp_path: P
     assert "CSV의 Pelvis·몸통·팔·다리 조인트" in response.text
     assert 'id="skeleton"' not in response.text
     assert "function alignSkeleton" not in response.text
-    assert "function solveArm" not in response.text
+    # 전신을 맞추는 보정은 없다. 오른쪽 전완·손만 실측 건 손잡이로 다시 세우고 나머지는 CSV 그대로다.
+    assert "function panelSkeleton" in response.text
+    assert "estimated:['Right Fore Arm','Right Hand']" in response.text
+    assert "별도 보정 없이" not in response.text
     assert "playheadSeconds" in response.text
     assert "const fps=(data.frames.length-1)" not in response.text
     assert "<canvas" in response.text
@@ -1058,7 +1061,7 @@ def test_pose_assets_define_layers_and_interaction_states(tmp_path: Path) -> Non
         assert text in coating.text
 
 
-def test_skeleton_viewer_uses_raw_csv_joints_without_pose_correction(tmp_path: Path) -> None:
+def test_skeleton_viewer_redraws_only_the_right_arm_from_the_measured_gun(tmp_path: Path) -> None:
     client = _client(tmp_path)
     page = client.get("/motion-viewer")
     script = client.get("/motion-viewer/assets/motion_viewer_pose.js")
@@ -1070,7 +1073,12 @@ def test_skeleton_viewer_uses_raw_csv_joints_without_pose_correction(tmp_path: P
     assert "function correctLowerBody" not in script.text
     assert "function solveTwoBoneLeg" not in script.text
     assert "motionViewerCorrectLowerBody" not in page.text
-    assert "const joints=uprightSkeleton(frame&&frame.joints||{})" in page.text
+    # 패널과 v2 교정 고리가 같은 함수를 쓴다. 다시 세운 팔의 위치와 선 모양은 test_motion_viewer_chirality.js 가 잰다.
+    assert "const {joints,estimated}=panelSkeleton(frame)" in page.text
+    v2 = client.get("/motion-viewer/assets/motion_viewer_v2.js")
+    assert v2.status_code == 200
+    assert "panelSkeleton(frame).joints" in v2.text
+    assert "uprightSkeleton(" not in v2.text
 
 
 def test_motion_viewer_keeps_the_last_spraying_zone_and_gives_skeleton_more_height(

@@ -184,10 +184,10 @@
   // 채점 엔진이 교정을 낸 관절을 스켈레톤 위에 고리로 표시한다(기존 스켈레톤 그림과 같은 투영).
   function markFlaggedJoints(frame) {
     const flagged = (sequenceAt(anchor.playhead_seconds)?.joints || []).map((name) => String(name).replace(/([a-z])([A-Z])/g, '$1 $2'));
-    if (!flagged.length || typeof uprightSkeleton !== 'function') return;
+    if (!flagged.length || typeof panelSkeleton !== 'function') return;
     const canvas = $('skeletonCanvas');
     const box = canvas.getBoundingClientRect();
-    const joints = uprightSkeleton(frame?.joints || {});
+    const joints = panelSkeleton(frame).joints;
     const points = Object.values(joints);
     if (!points.length || !box.width) return;
     const xs = points.map((point) => point[0]), ys = points.map((point) => point[1]);
