@@ -330,9 +330,10 @@ class SequenceAnalysisEngine:
                 "reference_session_count": len(references)}
 
     def evaluate(self, request: AnalyzeSequenceRequest, store: SequenceStore) -> SequenceDecision:
-        return gate_sequence_decision(request, self._evaluate(request, store), None)
+        return gate_sequence_decision(request, self.decide(request, store), None)
 
-    def _evaluate(self, request: AnalyzeSequenceRequest, store: SequenceStore) -> SequenceDecision:
+    def decide(self, request: AnalyzeSequenceRequest, store: SequenceStore) -> SequenceDecision:
+        """게이트(도막 진행 문장) 전의 순서·방향 판정. 공개 경로는 `evaluate`로 이 판정에 게이트를 씌운다."""
         if _zone_id(request.model_dump(mode="json")) is None:
             return SequenceDecision(EngineFeedback(analysis_status="not_available", reason_code="zone_unresolved"), None)
         bodies = store.session_bodies_through(request.session_id, request.sequence_id)

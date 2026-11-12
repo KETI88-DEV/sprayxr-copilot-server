@@ -44,6 +44,11 @@ class _Bodies:
     def session_bodies(self, session_id: str) -> list[dict[str, Any]]:
         return self._bodies
 
+    def session_bodies_through(self, session_id: str, sequence_id: str) -> list[dict[str, Any]]:
+        """순서 엔진(`SequenceAnalysisEngine.decide`)이 쓰는 저장소 메서드: 그 시퀀스까지의 본문."""
+        ids = [body.get("sequence_id") for body in self._bodies]
+        return self._bodies[:ids.index(sequence_id) + 1] if sequence_id in ids else list(self._bodies)
+
 
 def _engine_bodies(rows: list[dict[str, str]], *, session_id: str, scenario_id: str) -> list[dict[str, Any]]:
     """분사 구간마다 자세 엔진 본문(`SEQ-001`…, 구간 순서). 구역은 착탄이 가장 많이 난 구역이다."""
