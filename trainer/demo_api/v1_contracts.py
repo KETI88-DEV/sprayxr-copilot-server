@@ -258,11 +258,35 @@ class CoatingRootCause(StrictModel):
     note: str | None = None
 
 
+class CoatingExpertZone(StrictModel):
+    zone_id: str
+    map_num: int
+    status: Literal["normal", "under_app", "over_app"]
+    coverage_percent: float
+    completion_percent: float
+    overpaint_percent: float
+
+
+class CoatingExpertComparison(StrictModel):
+    """참고 판정: 전문가 최종 도막 칸(q1·q3)과 견준 구역 상태. 두께는 보정 전 값이다.
+    주 판정은 상위 `coating_report`의 목표 대비 등급이다. 진행 게이트·등급에는 쓰지 않는다."""
+
+    comparison_basis: Literal["expert_reference"] = "expert_reference"
+    analysis_status: AnalysisStatus
+    reason_code: str | None = None
+    zone_count: int
+    normal: int
+    under_app: int
+    over_app: int
+    zones: list[CoatingExpertZone] = Field(default_factory=list)
+
+
 class CoatingReport(ReportArea):
     """도막 분포 진단. 구역 등급·분포·가장 벗어난 구역은 목표 두께 기준으로 낸다.
 
     `target_basis`는 세션이 목표를 명시했으면 `session_target`, 생략해 기본 목표로 판정했으면
-    `default_target`이다.
+    `default_target`이다. `expert_comparison`은 참고로 싣는 전문가 대비 판정이다. 주 판정
+    (`comparison_basis="session_target"`)과 기준이 다르다.
 
     `coating_distribution_index`만은 **계산식을 아직 받지 못했다.** 예시의 주석이
     "70 - 감산 + σ가산"이라 0~100 눈금인 것까지만 안다. 정의가 오기 전에는 이 값만 null로 둔다.
@@ -277,6 +301,7 @@ class CoatingReport(ReportArea):
     comparison_basis: Literal["expert_reference", "session_target"] = "expert_reference"
     target_thickness_um: float | None = None
     target_basis: Literal["session_target", "default_target"] | None = None
+    expert_comparison: CoatingExpertComparison | None = None
 
 
 # --- 5.2 순서·방향 ----------------------------------------------------------

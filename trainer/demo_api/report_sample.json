@@ -13,51 +13,83 @@
       "report_id": "RPT-123456789abc",
       "report_status": "complete",
       "coating_report": {
+        "comparison_basis": "session_target",
+        "target_thickness_um": 160.0,
+        "target_basis": "default_target",
         "analysis_status": "available",
         "reason_code": null,
-        "algorithm_version": "coating-session-report-1.0",
+        "algorithm_version": "coating-session-v2/tsb-round-thickness-20261021+painted-zone-mean/1",
         "source_artifact_id": "Map01_11000346_1_1_Height.png",
-        "coating_distribution_index": 72.4,
-        "zone_summary": {
-          "under2": 0.31,
-          "under1": 0.22,
-          "normal": 0.24,
-          "over1": 0.12,
-          "over2": 0.07,
-          "over3": 0.04
-        },
+        "guideline": "기본 목표 160µm 기준으로 3개 구역을 판정했습니다: 정상 0개, 저도막 1개(1번), 과도막 1개(3번), 칠한 곳 없음 1개(2번)입니다. 등급은 칠한 곳의 평균 두께로 정합니다(목표 미만은 저도막, 목표의 1.5배 이상은 과도막). 가장 벗어난 곳은 3번 구역(과도막, 칠한 곳 평균 390µm)입니다. 판정한 구역 전체의 칠한 곳 평균은 164µm, 칠하지 않은 면적은 39%입니다. 참고로 전문가 최종 도막과 비교하면 3개 구역 중 전문가 기준 충족 1개, 전문가보다 얇은 구역 1개(2번), 전문가보다 두꺼운 구역 1개(3번)입니다(보정 전 두께 기준).",
         "distribution": {
-          "below": 151,
-          "in_band": 17,
-          "above": 5
+          "below": 78492,
+          "in_band": 0,
+          "above": 25668
         },
-        "reachability": {
-          "reachable": 81,
-          "needs_process": 75
+        "zone_summary": {
+          "under2": 0.7535714285714286,
+          "under1": 0.0,
+          "normal": 0.0,
+          "over1": 0.0,
+          "over2": 0.24642857142857144,
+          "over3": 0.0
         },
         "worst_zones": [
           {
-            "zone_id": "2",
-            "map_num": 2,
-            "uv_bin": [
-              2,
-              3
-            ],
-            "thickness_um": 56,
+            "zone_id": "3",
+            "map_num": 1,
+            "thickness_um": 389.8,
+            "status": "over_app",
+            "action": null,
+            "cause": null
+          },
+          {
+            "zone_id": "1",
+            "map_num": 1,
+            "thickness_um": 89.9,
             "status": "under_app",
-            "zone_class": "under2",
-            "cause": "이동속도 과다·이격 과다",
-            "action": "increase_dwell",
-            "action_reachable": true
+            "action": null,
+            "cause": null
           }
         ],
-        "root_cause": {
-          "dominant": "operator_behavior",
-          "behavior_r2": 0.44,
-          "process_r2": 0.12,
-          "note": "저도막의 주원인은 속도·거리·체류 시간이며 일부 구역은 공정 설정 조정이 필요합니다."
+        "expert_comparison": {
+          "comparison_basis": "expert_reference",
+          "analysis_status": "available",
+          "reason_code": null,
+          "zone_count": 3,
+          "normal": 1,
+          "under_app": 1,
+          "over_app": 1,
+          "zones": [
+            {
+              "zone_id": "1",
+              "map_num": 1,
+              "status": "normal",
+              "coverage_percent": 100.0,
+              "completion_percent": 100.0,
+              "overpaint_percent": 0.0
+            },
+            {
+              "zone_id": "2",
+              "map_num": 1,
+              "status": "under_app",
+              "coverage_percent": 0.0,
+              "completion_percent": 0.0,
+              "overpaint_percent": 0.0
+            },
+            {
+              "zone_id": "3",
+              "map_num": 1,
+              "status": "over_app",
+              "coverage_percent": 100.0,
+              "completion_percent": 100.0,
+              "overpaint_percent": 100.0
+            }
+          ]
         },
-        "guideline": "2번 구역의 체류 시간을 늘리고, 작업자 동작만으로 회복하기 어려운 구역은 공정 설정을 함께 조정하세요."
+        "coating_distribution_index": null,
+        "reachability": null,
+        "root_cause": null
       },
       "sequence_report": {
         "analysis_status": "available",

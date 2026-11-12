@@ -628,3 +628,64 @@ def test_order_adherence_and_unknown_questions_return_distinct_focused_answers()
     assert "순서 탭에서는" in unknown.answer
     assert unknown.context["scope"] == "help"
     assert adherence.answer != unknown.answer
+
+
+# --- 참고 판정: 전문가 대비 (보정 전 두께, 전문가 칸 q1=80·q3=120) -------------------------
+_EXPERT_THICKNESS = {"1": 100.0, "2": 0.0, "3": 400.0}
+
+
+def _expert_report(engine: CoatingProgressEngine, **kwargs: Any) -> Any:
+    return analyze_session_coating(
+        scenario_id="3", bodies=[SPRAY], engine=engine, height_map=_png(_thickness(_EXPERT_THICKNESS)),
+        height_map_name="Map01_x_Height.png", **kwargs,
+    )
+
+
+def test_report_carries_the_expert_comparison_beside_the_target_grade(engine: CoatingProgressEngine) -> None:
+    """1번은 원시 100(보정 90) = 목표 대비 저도막이지만 전문가 칸 80 이상이라 전문가 대비는 충족이다."""
+    result = _expert_report(engine)
+
+    rows = {zone["zone_id"]: zone for zone in result.zones}
+    assert {k: v["status"] for k, v in rows.items()} == {"1": "under_app", "2": None, "3": "over_app"}
+    assert {k: v["expert"]["status"] for k, v in rows.items()} == {"1": "normal", "2": "under_app", "3": "over_app"}
+    report = result.report
+    assert report["comparison_basis"] == "session_target"
+    comparison = report["expert_comparison"]
+    assert comparison["comparison_basis"] == "expert_reference"
+    assert (comparison["normal"], comparison["under_app"], comparison["over_app"]) == (1, 1, 1)
+    assert comparison["zone_count"] == len(comparison["zones"]) == 3
+
+
+def test_expert_sentence_follows_the_target_sentence(engine: CoatingProgressEngine) -> None:
+    guideline = _expert_report(engine).report["guideline"]
+
+    assert guideline.index("기본 목표 160µm 기준") < guideline.index("참고로 전문가 최종 도막과 비교하면")
+    assert guideline.endswith("(보정 전 두께 기준).") or guideline.endswith("입니다(보정 전 두께 기준).")
+    expert_part = guideline[guideline.index("참고로 전문가 최종 도막과 비교하면"):]
+    assert "저도막" not in expert_part and "과도막" not in expert_part
+    assert "전문가보다 얇은 구역 1개(2번)" in expert_part and "전문가보다 두꺼운 구역 1개(3번)" in expert_part
+
+
+def test_expert_comparison_ignores_the_session_target(engine: CoatingProgressEngine) -> None:
+    assert (
+        _expert_report(engine, target_thickness_um=400.0).report["expert_comparison"]
+        == _expert_report(engine).report["expert_comparison"]
+    )
+
+
+def test_zone_without_expert_cells_in_its_mask_has_no_expert_row(tmp_path: Path) -> None:
+    """칸 좌표가 마스크와 안 겹치면 전문가 행이 없고 구역 수에서 빠진다. 전부 없으면 unavailable."""
+    _profile(tmp_path)
+    path = tmp_path / "generated" / "profiles" / "spray" / "learning" / "mode_03.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    for zone in data["aggregate"]["zones"].values():
+        zone["coating"]["cells"] = {"0:0": {"q1_um": 80.0, "median_um": 100.0, "q3_um": 120.0}}
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    result = _expert_report(CoatingProgressEngine(tmp_path))
+
+    assert all(zone["expert"] is None for zone in result.zones)
+    comparison = result.report["expert_comparison"]
+    assert (comparison["analysis_status"], comparison["reason_code"]) == ("unavailable", "expert_cells_unavailable")
+    assert comparison["zone_count"] == 0
+    assert "참고로 전문가" not in result.report["guideline"]

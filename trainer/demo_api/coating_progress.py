@@ -12,7 +12,7 @@ from collections import OrderedDict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 from PIL import Image, UnidentifiedImageError
@@ -23,6 +23,10 @@ from trainer.zone_reference import ZoneReferenceCatalog
 
 _MAX_SESSIONS = 16
 DEFAULT_TARGET_THICKNESS_UM = coating_assessment.DEFAULT_TARGET_UM
+# 1차(b39ea5f) 이전 main의 전문가 대비 상태 규칙. PR #8 기준이 아니다. 리포트의 참고 판정에만 쓴다.
+_EXPERT_OVERPAINT_PERCENT = 25.0
+_EXPERT_COMPLETE_PERCENT = 90.0
+_EXPERT_COVERAGE_PERCENT = 85.0
 
 
 @dataclass(frozen=True)
@@ -46,11 +50,20 @@ class ZoneCoverage:
     mean_um: float
 
 
+def expert_status(coverage: ZoneCoverage) -> Literal["normal", "under_app", "over_app"]:
+    if coverage.overpaint_percent >= _EXPERT_OVERPAINT_PERCENT:
+        return "over_app"
+    if coverage.completion_percent >= _EXPERT_COMPLETE_PERCENT and coverage.coverage_percent >= _EXPERT_COVERAGE_PERCENT:
+        return "normal"
+    return "under_app"
+
+
 @dataclass(frozen=True)
 class ZoneJudgment:
     map_num: int
     zone_id: str
     assessment: dict[str, Any]  # `coating_assessment.assess_zone`의 반올림하지 않은 값
+    expert: ZoneCoverage | None = None  # 전문가 칸과 견준 참고 판정(보정 전 두께). 등급·게이트에는 쓰지 않는다.
 
 
 def measure_zone(
@@ -384,6 +397,7 @@ class CoatingProgressEngine:
 
         표면은 칠한 자리의 원시 두께이고 그 밖은 0이어야 한다. 목표가 없으면 기본 목표 160µm다.
         표면이 없는 면의 구역은 판정하지 않는다 — 높이맵이 한 면만 오면 다른 면을 칠했는지 모른다.
+        `expert`는 전문가 칸과 견준 참고 판정(보정 전 두께)이다. 등급·게이트에는 쓰지 않는다.
         `behavior`는 구역별 속도·거리 표본(`coating_assessment.behavior_by_zone`)이고 조절 후보에만 쓴다.
         """
         with self._guard:
@@ -430,7 +444,11 @@ class CoatingProgressEngine:
                 surface, zone_mask, target_thickness_um, **(behavior or {}).get(zone_id, {}),
             )
             if assessment is not None:
-                judgments.append(ZoneJudgment(map_num, zone_id, assessment))
+                expert = measure_zone(
+                    surface, target_cells, atlas_width=atlas_width, atlas_height=atlas_height,
+                    grid_size=grid_size, zone_mask=zone_mask,
+                )
+                judgments.append(ZoneJudgment(map_num, zone_id, assessment, expert))
         judgments.sort(
             key=lambda item: (item.map_num, int(item.zone_id) if item.zone_id.isdigit() else 1_000_000, item.zone_id)
         )

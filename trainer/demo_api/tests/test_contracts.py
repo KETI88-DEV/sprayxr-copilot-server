@@ -101,10 +101,36 @@ def test_the_contract_covers_every_field_the_example_uses() -> None:
         "report.sequence_report.position_distribution",
         "report.sequence_report.best_reference_similarity",
         "report.sequence_report.position_similarity",
-        "report.coating_report.comparison_basis",
-        "report.coating_report.target_thickness_um",
-        "report.coating_report.target_basis",
+        "report.coating_report.worst_zones.uv_bin",
+        "report.coating_report.worst_zones.zone_class",
+        "report.coating_report.worst_zones.action_reachable",
         "report.pose_report.confidence",
         "report.pose_report.limited_sequence_count",
         "report.pose_report.reason_codes",
     }
+
+
+def test_report_sample_coating_matches_a_real_report() -> None:
+    """예시의 coating_report 는 실제 리포트와 열쇠 집합이 같고 예시 안의 수가 서로 맞는다."""
+    from trainer.demo_api.tests.test_session_coating import _EXPERT_THICKNESS, _png, _profile, _thickness
+    import tempfile
+
+    from trainer.demo_api.coating_progress import CoatingProgressEngine
+    from trainer.demo_api.session_coating import analyze_session_coating
+
+    with tempfile.TemporaryDirectory() as root:
+        _profile(Path(root))
+        real = analyze_session_coating(
+            scenario_id="3", bodies=[{"sequence_setting": {"tool_type": "spray_gun"}}],
+            engine=CoatingProgressEngine(Path(root)), height_map=_png(_thickness(_EXPERT_THICKNESS)),
+            height_map_name="Map01_x_Height.png",
+        ).report
+    example = _sample()["data"]["report"]["coating_report"]
+
+    # 계약 필드지만 아직 값을 못 내는 세 열쇠는 예시에 null 로 남긴다.
+    assert _paths(example) - _paths(real) == {"coating_distribution_index", "reachability", "root_cause"}
+    assert _paths(real) <= _paths(example)
+    comparison = example["expert_comparison"]
+    assert comparison["zone_count"] == comparison["normal"] + comparison["under_app"] + comparison["over_app"]
+    assert comparison["zone_count"] == len(comparison["zones"])
+    assert sum(example["zone_summary"].values()) == pytest.approx(1.0, abs=0.01)

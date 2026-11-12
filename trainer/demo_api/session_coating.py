@@ -11,7 +11,7 @@
    **누적** 두께라 더하지 않는다.
 
 내는 것: 구역별 등급·칠한 곳 평균·미도장률, 칠한 면적의 6구간 비율(`zone_summary`), 3분류 화소 수(`distribution`),
-가장 벗어난 구역과 조절 후보. 조절 후보는 규칙에 따른 후보이고 확정된 원인이 아니다.
+가장 벗어난 구역과 조절 후보, 참고로 전문가 최종 도막 칸과 견준 구역 상태(`expert_comparison`, 보정 전 두께). 조절 후보는 규칙에 따른 후보이고 확정된 원인이 아니다.
 내지 않는 것: `coating_distribution_index`(계산식을 받지 못했다), `reachability`·`root_cause`(근거가 없다), 세션 등급
 (PR #8에도 없다). 전부 null로 둔다 — 값을 지어내지 않는다.
 """
@@ -27,7 +27,7 @@ from typing import Any, Final
 import numpy as np
 
 from trainer.demo_api import coating_assessment
-from trainer.demo_api.coating_progress import CoatingProgressEngine
+from trainer.demo_api.coating_progress import CoatingProgressEngine, ZoneCoverage, expert_status
 from trainer.demo_api.telemetry_contracts import learning_mode_from_scenario, process_from_tool_type
 
 logger = logging.getLogger(__name__)
@@ -39,6 +39,10 @@ SOURCE_CROPS: Final = "cur_sequence_heatmap"
 _MAP_NUMBER: Final = re.compile(r"Map(\d+)", re.IGNORECASE)
 # 계약의 6영역 이름(`CoatingZoneRatio`) — PR #8 6구간과 같은 순서다.
 _RATIO_KEYS: Final = ("under2", "under1", "normal", "over1", "over2", "over3")
+# 목표 대비 등급 낱말(저도막·과도막)과 섞이지 않게 따로 둔다.
+EXPERT_WORDS: Final = {
+    "normal": "전문가 기준 충족", "under_app": "전문가보다 얇은 구역", "over_app": "전문가보다 두꺼운 구역",
+}
 _CAUSE_WORDS: Final = {"speed_mm_s": "이동 속도", "distance_mm": "이격거리"}
 
 
@@ -104,7 +108,44 @@ def _process(bodies: Iterable[Mapping[str, Any]]) -> str | None:
     return None
 
 
-def _guideline(zones: list[dict[str, Any]], worst: list[dict[str, Any]], summary: Mapping[str, Any]) -> str:
+def _expert_row(coverage: ZoneCoverage | None) -> dict[str, Any] | None:
+    if coverage is None:
+        return None
+    return {
+        "status": expert_status(coverage),
+        "coverage_percent": coverage.coverage_percent,
+        "completion_percent": coverage.completion_percent,
+        "overpaint_percent": coverage.overpaint_percent,
+    }
+
+
+def _expert_comparison(zones: list[dict[str, Any]]) -> dict[str, Any]:
+    rows = [zone for zone in zones if zone.get("expert") is not None]
+    counts = {key: sum(zone["expert"]["status"] == key for zone in rows) for key in EXPERT_WORDS}
+    return {
+        "comparison_basis": "expert_reference",
+        "analysis_status": "available" if rows else "unavailable",
+        "reason_code": None if rows else "expert_cells_unavailable",
+        "zone_count": len(rows),
+        **counts,
+        "zones": [{"zone_id": zone["zone_id"], "map_num": zone["map_num"], **zone["expert"]} for zone in rows],
+    }
+
+
+def _expert_sentence(comparison: Mapping[str, Any]) -> str:
+    if comparison["analysis_status"] != "available":
+        return ""
+    parts = [f"{EXPERT_WORDS['normal']} {comparison['normal']}개"]
+    for key in ("under_app", "over_app"):
+        found = [row["zone_id"] for row in comparison["zones"] if row["status"] == key]
+        if found:
+            parts.append(f"{EXPERT_WORDS[key]} {len(found)}개({'·'.join(found)}번)")
+    return f" 참고로 전문가 최종 도막과 비교하면 {comparison['zone_count']}개 구역 중 {', '.join(parts)}입니다(보정 전 두께 기준)."
+
+
+def _guideline(
+    zones: list[dict[str, Any]], worst: list[dict[str, Any]], summary: Mapping[str, Any], expert: Mapping[str, Any]
+) -> str:
     def ids(grade: str | None) -> list[str]:
         return [zone["zone_id"] for zone in zones if zone["grade"] == grade]
 
@@ -127,7 +168,7 @@ def _guideline(zones: list[dict[str, Any]], worst: list[dict[str, Any]], summary
             f" 판정한 구역 전체의 칠한 곳 평균은 {summary['painted_mean_um']:.0f}µm, "
             f"칠하지 않은 면적은 {summary['unpainted_fraction'] * 100:.0f}%입니다."
         )
-    return text
+    return text + _expert_sentence(expert)
 
 
 def _worst_zone(zone: Mapping[str, Any]) -> dict[str, Any]:
@@ -181,8 +222,11 @@ def analyze_session_coating(
         )
 
     zones = [
-        coating_assessment.zone_row(judgment.map_num, judgment.zone_id, judgment.assessment) for judgment in judgments
+        {**coating_assessment.zone_row(judgment.map_num, judgment.zone_id, judgment.assessment),
+         "expert": _expert_row(judgment.expert)}
+        for judgment in judgments
     ]
+    expert_comparison = _expert_comparison(zones)
     summary = coating_assessment.session_summary(judgment.assessment for judgment in judgments)
     # 안정 정렬이라 벗어난 정도가 같으면 구역 순서를 지킨다.
     worst = sorted(
@@ -199,10 +243,11 @@ def analyze_session_coating(
         "reason_code": None,
         "algorithm_version": ALGORITHM_VERSION,
         "source_artifact_id": source,
-        "guideline": _guideline(zones, worst, summary),
+        "guideline": _guideline(zones, worst, summary, expert_comparison),
         # 단위는 칠한 화소 수다. 6구간을 목표 미만 / 정상 구간 / 과도막 경계 이상으로 묶는다.
         "distribution": {"below": sum(bands[:2]), "in_band": bands[2], "above": sum(bands[3:])},
         "zone_summary": dict(zip(_RATIO_KEYS, (count / painted for count in bands))) if painted else None,
         "worst_zones": [_worst_zone(zone) for zone in worst],
+        "expert_comparison": expert_comparison,
     }
     return SessionCoating(report, zones)
