@@ -498,7 +498,8 @@
 
   // 오른쪽 아래 모서리의 작은 좌표축. 장면의 transform 을 그대로 써서 카메라 회전과 함께 돈다
   function drawAxisGizmo(width, height) {
-    const ox = width - 40, oy = height - 40, length = 22;
+    // 좁은 화면에서는 우하단에 뜨는 질문하기 버튼 위로 올린다
+    const ox = width - 40, oy = height - (width < 520 ? 96 : 40), length = 22;
     ctx.save();
     ctx.lineWidth = 2; ctx.lineCap = 'round'; ctx.font = '700 11px system-ui'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     for (const {axis, dx, dy, color} of window.MotionViewerCamera.axisGizmo(transform)) {

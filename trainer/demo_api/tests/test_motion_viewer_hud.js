@@ -37,8 +37,8 @@ test('두 화면의 상태 막대 값 칸마다 가장 긴 값이 적혀 있다'
   for (const [name, html] of [['v2', v2Html], ['기존', legacy]]) {
     for (const id of VALUES) if (LONGEST[id]) assert.equal(maxOf(html, id), LONGEST[id], `${name} ${id}`);
   }
-  // 속도: v2 는 mm/s(천 단위 쉼표), 기존 화면은 m/s 소수 둘째 자리
-  assert.equal(maxOf(v2Html, 'realtimeHudSpeed'), '9,999 mm/s');
+  // 속도: v2 는 mm/s(천 단위 쉼표, 실제 기록에서 26,930 까지 나와 5자리), 기존 화면은 m/s 소수 둘째 자리
+  assert.equal(maxOf(v2Html, 'realtimeHudSpeed'), '99,999 mm/s');
   assert.equal(maxOf(legacy, 'realtimeHudSpeed'), '9.99 m/s');
   // 기존 화면의 판정 표지는 글자가 있어 가장 긴 판정 글로 맞춘다(v2 는 8px 점이라 이미 고정)
   for (const id of ['Speed', 'Distance', 'Axis', 'Direction', 'Coverage']) assert.equal(maxOf(legacy, `realtimeHud${id}State`), '진행 중');
