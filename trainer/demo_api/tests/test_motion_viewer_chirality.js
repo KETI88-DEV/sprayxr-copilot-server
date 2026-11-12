@@ -44,7 +44,7 @@ function viewer(patch = (line) => line) {
   const sandbox = vm.createContext({ skeletonCanvas, skeletonCtx: context2d, $: () => ({ textContent: '' }) });
   vm.runInContext([
     'var yaw=0,pitch=0,zoom=175,panX=0,panY=0,skeletonYaw=0,data={bones:[]};',
-    pick('function add(a,b)'), pick('function transform('), pick('function project('),
+    pick('function add(a,b)'), pick('const BODY='), pick('function gunGrip('), pick('function twoBoneIK('), pick('function transform('), pick('function project('),
     pick('function uprightSkeleton('), pick('function withUpperChest('), pick('function panelSkeleton('), pick('function skeletonProjection('), pick('function drawSkeletonView('),
   ].join('\n'), sandbox);
   /** 관절 이름 → 그 관절이 찍힌 원. 그리기 순서는 깊이 순이라 순서가 아니라 같은 투영 함수가 낸 자리로 찾는다. */
