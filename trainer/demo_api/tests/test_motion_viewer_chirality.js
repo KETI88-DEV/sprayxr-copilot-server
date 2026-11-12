@@ -37,7 +37,7 @@ function viewer(patch = (line) => line) {
     fill() { if (shape === 'arc') Object.assign(arcs.at(-1), { filled: true, style: this.fillStyle }); },
     stroke() {
       if (shape === 'arc') Object.assign(arcs.at(-1), { filled: false, style: this.strokeStyle });
-      else paths.push({ points: [...points], style: this.strokeStyle, dash: [...this.dash], alpha: this.globalAlpha });
+      else paths.push({ points: [...points], style: this.strokeStyle, dash: [...this.dash], alpha: this.globalAlpha, width: this.lineWidth });
     },
   };
   const skeletonCanvas = { getBoundingClientRect: () => ({ width: 300, height: 300 }), getContext: () => context2d };
@@ -315,7 +315,8 @@ test('가장 옅게 그린 뼈·관절도 패널 배경과 3:1 이상 대비된�
   for (const angle of [0, 45, 90, 135, 180, 270]) {
     const drawn = view.panel(BODY, angle);
     const joints = new Set(Object.values(drawn).map(([x, y]) => `${x},${y}`));
-    const body = [...view.arcs, ...view.paths.filter((path) => path.points.some(([x, y]) => joints.has(`${x},${y}`)))];
+    // 살 한 겹(굵은 반투명 띠, 300px 패널에서 6px 초과)은 일부러 옅다. 뼈·관절만 대비를 잰다.
+    const body = [...view.arcs, ...view.paths.filter((path) => path.width <= 6 && path.points.some(([x, y]) => joints.has(`${x},${y}`)))];
     assert.ok(body.length > 30);
     for (const mark of body) assert.ok(contrast(mark.style, mark.alpha) >= 3, `${angle}° ${mark.style} × ${mark.alpha}: ${contrast(mark.style, mark.alpha).toFixed(2)}`);
   }

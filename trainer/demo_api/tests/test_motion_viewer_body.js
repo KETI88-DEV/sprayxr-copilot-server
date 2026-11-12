@@ -27,15 +27,15 @@ function scene() {
   const drawn = { lines: [], points: [], rings: [] };
   let style = '';
   const sandbox = vm.createContext({
-    project: (p) => [p[0], p[1], 1],
+    zoom: 100, project: (p) => [p[0], p[1], 1],
     line: (a, b, color, width) => drawn.lines.push({ a, b, color, width }),
     point: (p, r, color) => drawn.points.push({ p, r, color }),
     ctx: {
       set strokeStyle(value) { style = value; }, get strokeStyle() { return style; }, lineWidth: 1,
-      beginPath() {}, stroke() {}, arc(x, y, r) { drawn.rings.push({ p: [x, y], r, color: style }); },
+      globalAlpha: 1, beginPath() {}, moveTo() {}, lineTo() {}, stroke() {}, fill() {}, arc(x, y, r) { drawn.rings.push({ p: [x, y], r, color: style }); },
     },
   });
-  vm.runInContext([pick('function add(a,b)'), pick('const BODY='), pick('function gunGrip('), pick('function twoBoneIK('), UPPER_BODY,
+  vm.runInContext([pick('function add(a,b)'), pick('function mul('), pick('const BODY='), pick('function gunGrip('), pick('function twoBoneIK('), UPPER_BODY,
     'this.trustedUpperBody=trustedUpperBody;this.drawTrustedUpperBody=drawTrustedUpperBody;'].join('\n'), sandbox);
   return { sandbox, drawn };
 }

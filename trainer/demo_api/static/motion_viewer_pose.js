@@ -76,6 +76,27 @@
     const body = trustedUpperBody(frame);
     if (!body) return;
     const {arm: armColor, core: middle} = LIMB_COLORS;
+    // 뼈 아래에 반투명 살 한 겹: 굵기는 부위별 반지름(m, 자세 비교 실험대 body_proportions)에 확대 배율을 곱한다.
+    const flesh = (a, b, radius, color) => {
+      const p = project(a, center, width, height), q = project(b, center, width, height);
+      const alpha = ctx.globalAlpha;
+      ctx.globalAlpha = .35;
+      ctx.lineCap = 'round';
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2 * radius * zoom * (p[2] + q[2]) / 2;
+      ctx.beginPath();
+      ctx.moveTo(p[0], p[1]);
+      ctx.lineTo(q[0], q[1]);
+      ctx.stroke();
+      ctx.globalAlpha = alpha;
+    };
+    flesh(body.neck, body.chest, .11, middle);
+    flesh(body.leftShoulder, body.rightShoulder, .06, middle);
+    for (const [shoulder, arm] of [[body.leftShoulder, body.leftArm], [body.rightShoulder, body.rightArm]]) {
+      if (!arm) continue;
+      flesh(shoulder, arm.elbow, .043, armColor);
+      flesh(arm.elbow, arm.hand, .033, armColor);
+    }
     line(body.head, body.neck, middle, 4, center, width, height);
     line(body.neck, body.chest, middle, 4, center, width, height);
     for (const [shoulder, arm, color] of [[body.leftShoulder, body.leftArm, armColor], [body.rightShoulder, body.rightArm, armColor]]) {
@@ -87,7 +108,8 @@
       point(arm.elbow, 4, color, center, width, height);
       point(arm.hand, 5, color, center, width, height);
     }
-    point(body.head, 13, '#f5f8ff', center, width, height);
+    // 머리 구: 반지름 .09 m 를 목→머리 방향 .085 m 위에(머리 관절은 두개골 바닥 쪽이다)
+    point(add(body.neck, mul(sub(body.head, body.neck), .085 / BODY.headAboveShoulders)), .09 * zoom, '#f5f8ff', center, width, height);
     point(body.neck, 4, middle, center, width, height);
     point(body.chest, 5, middle, center, width, height);
     // 실측 추적기(건·왼손)는 고리로 따로 그려 IK 손과의 차이가 보이게 둔다.
@@ -109,14 +131,30 @@
     }
     if (tracked.right_hand && frame.tool_forward) {
       const end = addVector(tracked.right_hand, scaleVector(normalize(frame.tool_forward), .42));
-      arrow(tracked.right_hand, end, '#fb923c', center, width, height);
+      // 도구: 건 손잡이에서 노즐 쪽으로 반지름 .011 m 막대(어두운 회색 바탕에 흰 줄무늬). 길이 .3 m 는 근사값이다.
+      const nozzle = addVector(tracked.right_hand, scaleVector(normalize(frame.tool_forward), .3));
+      const from = project(tracked.right_hand, center, width, height), to = project(nozzle, center, width, height);
+      ctx.lineCap = 'round';
+      for (const [color, scale, dash] of [['#3a414d', 1, []], ['#f5f8ff', .45, [5, 5]]]) {
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2 * .011 * zoom * (from[2] + to[2]) / 2 * scale;
+        ctx.setLineDash(dash);
+        ctx.beginPath();
+        ctx.moveTo(from[0], from[1]);
+        ctx.lineTo(to[0], to[1]);
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
+      arrow(nozzle, end, '#f5f8ff', center, width, height);
       if (frame.ray_point) {
         const hitDirection = subtract(frame.ray_point, tracked.right_hand);
         arrow(tracked.right_hand, frame.ray_point, 'rgba(250,204,21,.82)', center, width, height);
-        const shown = project(end, center, width, height);
-        ctx.fillStyle = '#fde68a';
-        ctx.font = '700 10px system-ui';
-        ctx.fillText(`분사축 편차 ${angleDegrees(frame.tool_forward, hitDirection).toFixed(0)}°`, shown[0] + 7, shown[1] - 6);
+        if (!document.querySelector('.v2-shell')) {
+          const shown = project(end, center, width, height);
+          ctx.fillStyle = '#fde68a';
+          ctx.font = '600 10px Pretendard, "Noto Sans KR", system-ui';
+          ctx.fillText(`분사축 편차 ${angleDegrees(frame.tool_forward, hitDirection).toFixed(0)}°`, shown[0] + 7, shown[1] - 6);
+        }
       }
     }
   }
