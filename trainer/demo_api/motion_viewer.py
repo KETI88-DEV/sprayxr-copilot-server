@@ -2033,6 +2033,12 @@ def viewer_v2_document() -> str:
     return shell.replace("/*CORE_SCRIPT*/", _VIEWER_HTML[start:_VIEWER_HTML.index("</script>", start)], 1)
 
 
+def _legacy_zone_ids(profile: dict[str, Any], worker_root: Path, root: Path) -> bool:
+    """기록 CSV의 Zone 번호가 학습모드 전문가 원래 번호인지(canonical 로 바꿔야 하는지)."""
+    zone_id_policy = profile.get("identity", {}).get("zone_id_policy")
+    return zone_id_policy == "legacy_expert" if zone_id_policy in {"source", "legacy_expert"} else worker_root == root
+
+
 def create_motion_viewer_router(
     reference_root: Path,
     *,
@@ -2046,6 +2052,7 @@ def create_motion_viewer_router(
 ) -> APIRouter:
     root = Path(reference_root)
     router = APIRouter()
+    sequence_engine = SequenceAnalysisEngine(root)   # 공개 analyze-sequence 와 같은 전문가 뿌리
 
     @router.get("/motion-viewer", include_in_schema=False, response_class=HTMLResponse)
     def motion_viewer() -> HTMLResponse:
@@ -2089,6 +2096,13 @@ def create_motion_viewer_router(
     def coating_script() -> FileResponse:
         return FileResponse(
             static_root / "motion_viewer_coating.js", media_type="text/javascript",
+            headers={"Cache-Control": "no-cache"},
+        )
+
+    @router.get("/motion-viewer/assets/motion_viewer_alerts.js", include_in_schema=False)
+    def alerts_script() -> FileResponse:
+        return FileResponse(
+            static_root / "motion_viewer_alerts.js", media_type="text/javascript",
             headers={"Cache-Control": "no-cache"},
         )
 
@@ -2204,6 +2218,24 @@ def create_motion_viewer_router(
         return {"selected_session_id": selected, "arm_pose_evaluation": evaluation,
                 "signature": sign_context("arm_pose", evaluation)}
 
+    @router.get("/motion-viewer/api/alerts", include_in_schema=False)
+    def alerts_data(
+        worker_id: str = Query(default=_EXPERT_WORKER_ID, pattern="^[A-Za-z0-9_-]+$"),
+        process: str = Query(pattern="^(spray|blasting)$"),
+        mode_id: int = Query(ge=1, le=10),
+        session_id: str = Query(min_length=1, max_length=100),
+    ) -> dict[str, Any]:
+        """재생 기록의 순서·방향 알림(공개 이상 알림과 같은 판정). 판정에 수 초 걸려 모션과 따로 받는다."""
+        from trainer.demo_api.viewer_alerts import sequence_alerts_for
+        worker_root = Path(_worker_source(root, worker_id)["root"])
+        profile = _read_profile(worker_root, process, mode_id)
+        selected = _representative_session(profile) if session_id == "representative" else session_id
+        alerts = sequence_alerts_for(
+            _session_path(worker_root, process, mode_id, profile, selected), process=process, mode_id=mode_id,
+            legacy=_legacy_zone_ids(profile, worker_root, root), engine=sequence_engine,
+        )
+        return {"selected_session_id": selected, "sequence_alerts": alerts}
+
     @router.get("/motion-viewer/api/motion", include_in_schema=False)
     def motion_data(
         worker_id: str = Query(default=_EXPERT_WORKER_ID, pattern="^[A-Za-z0-9_-]+$"),
@@ -2214,12 +2246,7 @@ def create_motion_viewer_router(
         worker = _worker_source(root, worker_id)
         worker_root = Path(worker["root"])
         profile = _read_profile(worker_root, process, mode_id)
-        zone_id_policy = profile.get("identity", {}).get("zone_id_policy")
-        legacy_zone_ids = (
-            zone_id_policy == "legacy_expert"
-            if zone_id_policy in {"source", "legacy_expert"}
-            else worker_root == root
-        )
+        legacy_zone_ids = _legacy_zone_ids(profile, worker_root, root)
         representative = _representative_session(profile)
         selected = representative if session_id == "representative" else session_id
         selected_path = _session_path(worker_root, process, mode_id, profile, selected)
@@ -2401,6 +2428,9 @@ def create_motion_viewer_router(
             process, mode_id, _record_height_maps(worker_root, process, mode_id, profile, selected),
             [*payload["pose_evaluation"].get("zones", {}), *payload["coating_reference"]],
             _session_record(profile, selected)))
+        from trainer.demo_api.viewer_alerts import coating_alerts_for, spray_windows
+        payload["coating_alerts"] = coating_alerts_for(
+            payload["coating_evaluation"]["target"], spray_windows(selected_path, mode_id=mode_id, legacy=legacy_zone_ids))
         from trainer.demo_api.dialogue import viewer_dialogue_context
         payload["dialogue_evaluation"] = viewer_dialogue_context(payload)
         from trainer.demo_api.playback_direction import build_playback_snapshot
