@@ -73,5 +73,17 @@
     return api;
   }
 
-  window.MotionViewerCamera = {create};
+  // 우하단 축 표시와 X·Y·Z 버튼이 함께 쓰는 색. 3D 공간(#2e3646~#1c2230)에서 3:1 이상이고 팔 청록·Zone 원색·강조 파랑과 겹치지 않게 채도를 낮췄다
+  const AXIS_COLORS = {x: '#e8767f', y: '#9bc77a', z: '#8aa6e8'};
+
+  // 장면과 같은 회전(transform: 원점 기준 점 -> [x, y(위), 깊이])으로 세 단위축이 화면에서 가리키는 쪽을 낸다. dx 는 오른쪽, dy 는 아래가 양수, 먼 축부터
+  function axisGizmo(transform) {
+    return Object.keys(AXIS_COLORS).map((axis, index) => {
+      const unit = [0, 0, 0]; unit[index] = 1;
+      const [x, y, depth] = transform(unit, [0, 0, 0]);
+      return {axis, dx: x, dy: -y, depth, color: AXIS_COLORS[axis]};
+    }).sort((a, b) => b.depth - a.depth);
+  }
+
+  window.MotionViewerCamera = {create, AXIS_COLORS, axisGizmo};
 })();

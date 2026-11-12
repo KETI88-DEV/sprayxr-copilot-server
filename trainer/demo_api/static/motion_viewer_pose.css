@@ -6,7 +6,6 @@
 }
 .camera-gizmo { position:absolute; right:16px; top:16px; z-index:12; display:flex; gap:5px; padding:5px; border:1px solid rgba(100,130,170,.45); border-radius:11px; background:rgba(7,16,31,.88); backdrop-filter:blur(7px); }
 .camera-gizmo button { width:34px; min-width:34px; height:34px; padding:0; border-radius:8px; }
-#cameraAxisX { color:#fb7185; } #cameraAxisY { color:#4ade80; } #cameraAxisZ { color:#60a5fa; }
 .pose-summary { display: grid; gap: 10px; }
 .evaluation-side { overflow-x:hidden; }
 .pose-summary .headline { border-color: #38bdf8; }

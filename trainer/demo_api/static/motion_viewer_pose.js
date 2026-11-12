@@ -496,9 +496,24 @@
     }));
   }
 
+  // 오른쪽 아래 모서리의 작은 좌표축. 장면의 transform 을 그대로 써서 카메라 회전과 함께 돈다
+  function drawAxisGizmo(width, height) {
+    const ox = width - 40, oy = height - 40, length = 22;
+    ctx.save();
+    ctx.lineWidth = 2; ctx.lineCap = 'round'; ctx.font = '700 11px system-ui'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    for (const {axis, dx, dy, color} of window.MotionViewerCamera.axisGizmo(transform)) {
+      ctx.strokeStyle = color; ctx.fillStyle = color;
+      ctx.beginPath(); ctx.moveTo(ox, oy); ctx.lineTo(ox + dx * length, oy + dy * length); ctx.stroke();
+      ctx.fillText(axis.toUpperCase(), ox + dx * (length + 9), oy + dy * (length + 9));
+    }
+    ctx.fillStyle = '#c9d3e6'; ctx.beginPath(); ctx.arc(ox, oy, 2.5, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  }
+
   function drawPoseOverlay({frame, sourceIndex, center, w, h, playheadSeconds, durationSeconds}) {
     drawTrustedUpperBody(frame, center, w, h);
     drawOrientationGuides(frame, center, w, h);
+    drawAxisGizmo(w, h);
     updateRealtimeHud(frame, sourceIndex);
     renderPoseSummary(frame);
     renderArmPose(Number(playheadSeconds) || 0);
@@ -558,6 +573,7 @@
   byId('cameraAxisX').onclick = () => applyCamera(camera.axisView('x'));
   byId('cameraAxisY').onclick = () => applyCamera(camera.axisView('y'));
   byId('cameraAxisZ').onclick = () => applyCamera(camera.axisView('z'));
+  for (const axis of ['x', 'y', 'z']) byId(`cameraAxis${axis.toUpperCase()}`).style.color = window.MotionViewerCamera.AXIS_COLORS[axis];
   pathCanvas.onpointerdown = event => {
     if (![0, 1, 2].includes(event.button)) return;
     event.preventDefault(); pathCanvas.setPointerCapture(event.pointerId);
