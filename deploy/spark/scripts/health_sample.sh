@@ -5,8 +5,11 @@
 #   health_sample.sh --check   기록한 뒤 기준을 넘은 항목을 한 줄씩 쓴다. 하나라도 있으면 종료 코드 1.
 #
 # cron (keti 계정):
-#   */10 * * * * .../health_sample.sh >> .../cron.log 2>&1
+#   */10 * * * * .../health_sample.sh --check >> .../cron.log 2>&1
 #   @reboot sleep 900 && .../health_sample.sh --check >> .../boot-check.log 2>&1
+#
+# cron 도 --check 로 돌린다. 재시작 횟수는 직전 표본과만 비교하므로, 표본마다 점검하지 않으면
+# 표본 사이에 난 재시작이 기록만 되고 드러나지 않는다. 문제 줄만 보려면: grep -v ' ok$' cron.log
 #
 # -e 는 쓰지 않는다. 한 항목을 못 읽어도 나머지는 기록해야 한다.
 # shortcut: health.csv 에 회전이 없다(하루 약 200KB). 100MB 를 넘으면 월별 파일로 나눈다.
