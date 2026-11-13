@@ -204,9 +204,10 @@ prompt:
   user_template: '질문: {question}'
 confidence:
   # 근거 확인 단계(copilot_router, 상세분석 지식 답): 재정렬 1위 점수가 이 값 미만이면 답하지 않는다.
-  # KURE-Reranker-nano 점수 척도. 2026-11-13 2-1 측정에서 답 있는 문항의 5%가 기권되는 값으로 정했다
-  # (같은 문항으로 정한 값이라 낙관적이다). 재정렬 모델을 바꾸면 다시 정해야 한다. 키가 없으면 단계를 끈다.
-  abstain_below_rerank_score: 4.07
+  # KURE-Reranker-nano 점수 척도. 2026-11-13: 2-1 문항으로 정한 4.07이 따로 만든 문항에서 답 있는 질문의
+  # 26%를 막아(등록 기준 10% 초과) 두 문항을 합친 답 있음 294개의 5% 점으로 다시 정했다. 새 문항 기준 잘못 기권 10%,
+  # 근거 없음 차단 67%. 재정렬 모델을 바꾸면 다시 정해야 한다. 키가 없으면 단계를 끈다.
+  abstain_below_rerank_score: 3.28
   min_rerank_score: 0.3
   min_results: 1
   high_threshold: 0.7

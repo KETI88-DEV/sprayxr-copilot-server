@@ -1113,7 +1113,7 @@ async def _execute_copilot_query(
         return error_response(500, "Copilot query failed")
 
     # 근거 확인 단계: 재정렬 1위 점수가 기준값 미만이면 생성한 답을 버린다(설정이 없으면 지금처럼 동작).
-    # 기준값은 재정렬 모델의 점수 척도에 묶인다(KURE-Reranker-nano 4.07, 2026-11-13 2-1 측정). 상세분석만 잰 값이다.
+    # 기준값은 재정렬 모델의 점수 척도에 묶인다(KURE-Reranker-nano 3.28, 2026-11-13 측정). 상세분석만 잰 값이다.
     abstain_below = _abstain_below(pipeline)
     if use_rag and abstain_below is not None and query.response_mode == "detailed":
         scores = [float(c["rerank_score"]) for c in result.get("rag_chunks") or []
