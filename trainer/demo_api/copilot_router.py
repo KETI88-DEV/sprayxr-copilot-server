@@ -196,6 +196,22 @@ ANSWER_SOURCE_HEADER: Final = "X-Copilot-Answer-Source"
 _EVALUATION_QUESTION: Final = re.compile(r"잘한|못한|고쳐야|고칠|개선할|개선점|문제점|부족한 점")
 # 대화 계획 모델이 속도·Zone 질문을 도포 방향으로 분류한다(2026-11-11 Spark: "지금 속도는 적당해?"에 방향을 답함).
 _DIRECTION_WORD: Final = re.compile(r"방향|수평|수직|대각|가로|세로|패턴|direction", re.I)
+# 질문형 문장. 지식 탭에서 계획 모델이 "chat"으로 본 질문 가운데 이것만 먼저 문서로 답해 본다.
+# 인사·맞장구("안녕", "고마워", "야")는 걸리지 않아 지금처럼 대화 경로로 간다.
+_KNOWLEDGE_QUESTION: Final = re.compile(r"[?？]|뭐|무엇|무슨|몇|어떻|어떤|왜|얼마|언제|인가|인지|나요|까요|되나|돼야|해야|하나요")
+
+
+def _abstain_below(pipeline: object) -> float | None:
+    """confidence.abstain_below_rerank_score. 없거나 숫자가 아니면 근거 확인 단계를 끈다."""
+    config = getattr(pipeline, "config", None)
+    confidence = config.get("confidence") if isinstance(config, dict) else None
+    value = confidence.get("abstain_below_rerank_score") if isinstance(confidence, dict) else None
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+# 근거 확인 단계(confidence.abstain_below_rerank_score)가 막은 답. 2026-11-13 2-1 측정에서 도입.
+NO_EVIDENCE_ANSWER: Final = ("제공된 자료에서 이 질문에 답할 근거를 찾지 못했습니다. "
+                             "대상(도장 방식·제품·구역)을 함께 적어 다시 물어 주세요.")
 
 
 def _session_findings(found: tuple[str, Mapping[str, Any]] | None) -> str:
@@ -694,6 +710,34 @@ async def _execute_copilot_query(
                 logger.exception("copilot dialogue planning failed request_id=%s", query.request_id)
                 decision = {"kind": "clarify", "intent": "knowledge", "scope": "unspecified"}
 
+    async def chat_answer() -> JSONResponse:
+        """계획 모델이 대화로 분류한 질문에 문서 검색 없이 답한다(세션 요약·측정값 검사 포함)."""
+        try:
+            if query.session_id:
+                facts["training_summary"] = await to_thread.run_sync(
+                    lambda: summarize_session(sequences.session_bodies(query.session_id),
+                                              selected_sequence_id=_selected_sequence(query.context)))
+                if _EVALUATION_QUESTION.search(query.prompt):
+                    found_report = (await to_thread.run_sync(lambda: reports.latest_complete_analysis(query.session_id))
+                                    if reports is not None else None)
+                    return _success_response(query, request_started, answer=_session_findings(found_report),
+                                             retrieval_used=False, citations=[],
+                                             context_status="available" if found_report else "not_available")
+            def converse():
+                with generation_slot_for(planned_pipeline):
+                    return planned_pipeline.converse_copilot(query.prompt, recent_turns=dialogue_turns,
+                                                             facts=facts, response_mode=query.response_mode)
+            answer = plain_answer(await to_thread.run_sync(converse))
+            if ungrounded_measurements(answer, facts=facts, prompt=query.prompt):
+                # 자료에 없는 측정값은 내보내지 않는다. 한 번 다시 생성하고, 그래도 남으면 그 부분을 뺀다.
+                answer = drop_ungrounded(await to_thread.run_sync(converse), facts=facts, prompt=query.prompt)
+            return _success_response(query, request_started, answer=answer, retrieval_used=False, generated=True,
+                                     citations=[], context_status="available" if facts else "not_available")
+        except Exception:
+            logger.exception("copilot conversation unavailable request_id=%s", query.request_id)
+            return error_response(503, "Conversation engine temporarily unavailable; retry")
+
+    chat_redirected = False
     if decision is not None:
         intent = decision["intent"]
         if intent == "order_reference" and explicit_actual_order:
@@ -706,31 +750,14 @@ async def _execute_copilot_query(
         if viewer_requested and intent == "order_direction" and decision["kind"] in {"lookup", "correction"} and _DIRECTION_WORD.search(query.prompt):
             return frame_answer()
         zone_lookup = (intent == "order_direction" or intent.startswith("pose_")) and decision["scope"] in {"zone", "playback"}
-        if decision["kind"] in {"chat", "clarify", "correction"} or cross_tab or zone_lookup:
-            try:
-                if query.session_id:
-                    facts["training_summary"] = await to_thread.run_sync(
-                        lambda: summarize_session(sequences.session_bodies(query.session_id),
-                                                  selected_sequence_id=_selected_sequence(query.context)))
-                    if _EVALUATION_QUESTION.search(query.prompt):
-                        found_report = (await to_thread.run_sync(lambda: reports.latest_complete_analysis(query.session_id))
-                                        if reports is not None else None)
-                        return _success_response(query, request_started, answer=_session_findings(found_report),
-                                                 retrieval_used=False, citations=[],
-                                                 context_status="available" if found_report else "not_available")
-                def converse():
-                    with generation_slot_for(planned_pipeline):
-                        return planned_pipeline.converse_copilot(query.prompt, recent_turns=dialogue_turns,
-                                                                 facts=facts, response_mode=query.response_mode)
-                answer = plain_answer(await to_thread.run_sync(converse))
-                if ungrounded_measurements(answer, facts=facts, prompt=query.prompt):
-                    # 자료에 없는 측정값은 내보내지 않는다. 한 번 다시 생성하고, 그래도 남으면 그 부분을 뺀다.
-                    answer = drop_ungrounded(await to_thread.run_sync(converse), facts=facts, prompt=query.prompt)
-                return _success_response(query, request_started, answer=answer, retrieval_used=False, generated=True,
-                                         citations=[], context_status="available" if facts else "not_available")
-            except Exception:
-                logger.exception("copilot conversation unavailable request_id=%s", query.request_id)
-                return error_response(503, "Conversation engine temporarily unavailable; retry")
+        # 계획 모델은 짧은 용어 질문("백화가 뭐야?")도 "chat"으로 보내 검색 없이 답하게 했다(2-1 측정, 지식 질문의 약 11%).
+        # 지식 탭의 질문형 문장은 먼저 문서로 답하고, 근거 확인 단계에 걸리면 이 대화 경로로 돌아온다.
+        # 돌아올 길(근거 확인 단계)이 설정된 경우에만 돌린다. 없으면 도장과 무관한 질문까지 문서로 답하게 된다.
+        chat_redirected = (decision["kind"] == "chat" and query.task_type == "knowledge_search" and not viewer_requested
+                           and not cross_tab and not zone_lookup and bool(_KNOWLEDGE_QUESTION.search(query.prompt))
+                           and _abstain_below(planned_pipeline) is not None and query.response_mode == "detailed")
+        if (decision["kind"] in {"chat", "clarify", "correction"} or cross_tab or zone_lookup) and not chat_redirected:
+            return await chat_answer()
 
     trusted_coating = parse_viewer_coating_context(query.context, query.task_type)
     coating_advice_context = (trusted_coating if is_coating_advice_question(query.prompt) and trusted_coating and trusted_coating.get("analysis_status") == "available" else None)
@@ -1085,6 +1112,19 @@ async def _execute_copilot_query(
         logger.exception("copilot query: pipeline failed request_id=%s", query.request_id)
         return error_response(500, "Copilot query failed")
 
+    # 근거 확인 단계: 재정렬 1위 점수가 기준값 미만이면 생성한 답을 버린다(설정이 없으면 지금처럼 동작).
+    # 기준값은 재정렬 모델의 점수 척도에 묶인다(KURE-Reranker-nano 4.07, 2026-11-13 2-1 측정). 상세분석만 잰 값이다.
+    abstain_below = _abstain_below(pipeline)
+    if use_rag and abstain_below is not None and query.response_mode == "detailed":
+        scores = [float(c["rerank_score"]) for c in result.get("rag_chunks") or []
+                  if isinstance(c, dict) and c.get("rerank_score") is not None]
+        if not scores or max(scores) < abstain_below:
+            logger.info("copilot answer withheld: weak evidence request_id=%s top=%s threshold=%s redirected=%s",
+                        query.request_id, max(scores) if scores else None, abstain_below, chat_redirected)
+            if chat_redirected:
+                return await chat_answer()
+            return _success_response(query, request_started, answer=NO_EVIDENCE_ANSWER, retrieval_used=True, citations=[],
+                                     context_status="available" if session_summary or coating_advice_context or facts else "not_available")
     retrieved = retrieved_chunk_ids(result.get("rag_chunks") or []) if use_rag else []
     parsed = parse_knowledge_answer(str(result.get("response", "")), retrieved)
     answer = parsed.body
