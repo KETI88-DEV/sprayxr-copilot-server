@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 import threading
-from collections import deque
+from collections import OrderedDict, deque
 from dataclasses import dataclass, field
 from typing import Any, Final
 
@@ -28,6 +28,8 @@ HEARTBEAT_SEC: Final[float] = 15.0
 # HEARTBEAT_SEC 만큼 밀려 명세서 p.4의 "실시간 Push"가 되지 않는다.
 POLL_SEC: Final[float] = 0.25
 _BUFFER_PER_SESSION: Final[int] = 200
+# 끝난 세션을 지우는 경로가 없어 한도를 둔다. 가장 오래 발행이 없던 세션부터 버린다.
+_MAX_SESSIONS: Final[int] = 64
 
 
 @dataclass(frozen=True)
@@ -51,7 +53,7 @@ class AnomalyBroadcaster:
 
     def __init__(self) -> None:
         self._guard = threading.Lock()
-        self._sessions: dict[str, _SessionState] = {}
+        self._sessions: OrderedDict[str, _SessionState] = OrderedDict()
         self._seq = 0
 
     def publish(
@@ -61,6 +63,9 @@ class AnomalyBroadcaster:
         """``None``이면 같은 시퀀스(`dedupe_key`를 주면 그 열쇠)의 같은 이상이 이미 발행됐다는 뜻이다."""
         with self._guard:
             state = self._sessions.setdefault(session_id, _SessionState())
+            self._sessions.move_to_end(session_id)
+            while len(self._sessions) > _MAX_SESSIONS:
+                self._sessions.popitem(last=False)
             key = (dedupe_key or sequence_id, anomaly_type)
             if key in state.published:
                 logger.info(
