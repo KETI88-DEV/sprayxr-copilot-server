@@ -3,7 +3,8 @@
 #
 # release 브랜치는 main 이력과 끊긴 별도 이력이다. 각 릴리스 커밋의 부모는 직전 release 커밋뿐이라
 # `git clone --single-branch --branch release` 로 받으면 운영 코드만 내려간다.
-# 문서·테스트·학습/평가 스크립트·웹 UI(demo-ui)는 넣지 않는다.
+# 문서·테스트·학습/평가 스크립트·웹 UI(demo-ui)는 넣지 않는다. 문서는 배포 안내 README 하나뿐이다
+# (main의 deploy/release/README.release.md → release의 README.md).
 #
 # 사용(개발 서버, 저장소 안에서):
 #   deploy/release/make_release.sh <원본 커밋> <vX.Y.Z> [원격 이름, 기본 keti]
@@ -52,6 +53,10 @@ missing = sorted(want - found)
 if missing:
     sys.exit('원본 커밋에 없는 파일: ' + ', '.join(missing))
 PY
+# 배포 안내(git에 없는 모델·데이터를 둘 위치)는 release 루트의 README.md로 넣는다.
+readme_blob="$(git rev-parse -q --verify "$src_sha:deploy/release/README.release.md" || true)"
+[ -n "$readme_blob" ] || { echo "원본 커밋에 deploy/release/README.release.md가 없다" >&2; exit 1; }
+git update-index --add --cacheinfo "100644,$readme_blob,README.md"
 tree="$(git write-tree)"
 unset GIT_INDEX_FILE
 

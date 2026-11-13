@@ -15,6 +15,8 @@ API·웹 화면의 기능 변경을 버전별로 기록합니다. 버전 태그�
 - 개발 문서(설계·계획·측정·보고 자료 등 117개)를 저장소에서 뺐습니다. 배포에 필요한 코드·설정·연동 규격만 남습니다.
 - 배포용 `release` 브랜치를 새로 둡니다. `release`와 버전 태그에는 API 서버(agent-api, MCP) 운영에 필요한 코드·설정·배포 정의 245개 파일만 담습니다. 문서, 테스트, 학습·평가 스크립트, 웹 UI(demo-ui)는 넣지 않습니다.
 - 배포 PC는 `git clone --single-branch --branch release <저장소 주소>`로 받습니다. 이미 받은 사본은 `git fetch origin release && git switch release`로 옮깁니다.
+- `release`의 README에 git에 없는 파일(27B 병합 체크포인트, 임베딩·재정렬 모델, 색인, 8B·음성 모델, 운영 DB)을 어디에 넣는지와 띄우는 순서를 적었습니다. 학습 체크포인트(LoRA 어댑터)는 배포 PC에 두지 않습니다.
+- main README를 주제별로 다시 정리했습니다(동작 기준, 모델·데이터 배치, 릴리스 관리).
 - 배포 PC에 남은 개발 문서 사본은 `deploy/purge_internal_docs.sh --execute`로 지웁니다.
 
 ### 운영 참고
