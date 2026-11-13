@@ -545,3 +545,12 @@ def test_image_lock_smoke_fails_when_a_pinned_dependency_is_missing(
     proc = _run_image_smoke(stage_name, allowed - {dropped}, tmp_path / "shadow")
 
     assert proc.returncode != 0, f"{stage_name}: {dropped} 없이도 import가 통과했다 — 차단되지 않는다"
+
+
+def test_api_services_carry_a_memory_limit_and_vllm_does_not() -> None:
+    # 한 컨테이너가 폭주해도 호스트와 27B vLLM 이 같이 넘어지지 않게 한다. GPU 할당에는 걸리지 않는다.
+    for name, limit in {"agent-api": "16g", "mcp": "2g", "web": "512m"}.items():
+        service = _service(name)
+        assert service.get("mem_limit") == limit, name
+        assert service.get("memswap_limit") == limit, name
+    assert "mem_limit" not in _service("vllm")

@@ -96,6 +96,8 @@ services:
       timeout: 5s
       retries: 5
       start_period: 60s
+    mem_limit: 2g
+    memswap_limit: 2g
     restart: unless-stopped
     logging: *logging
 
@@ -164,6 +166,9 @@ services:
       timeout: 15s
       retries: 5
       start_period: 900s
+    # 일반 메모리에만 걸린다(GPU 할당 제외). 폭주한 컨테이너만 죽고 vLLM·호스트는 남는다.
+    mem_limit: 16g
+    memswap_limit: 16g
     restart: unless-stopped
     stop_grace_period: 30s
     logging: *logging
@@ -186,5 +191,7 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+    mem_limit: 512m
+    memswap_limit: 512m
     restart: unless-stopped
     logging: *logging
