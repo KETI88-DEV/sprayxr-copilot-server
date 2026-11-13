@@ -1,8 +1,8 @@
 // 모션 3D 뷰어 v2. 기존 재생 스크립트가 보내는 motion-viewer-data / motion-viewer-frame 이벤트를 받아
-// 결과 한 줄, 지금 Zone 안내, 세 기능 그림(자세·순서·도막), 고정 질문 열을 그린다. 값은 서버가 준 것만 쓴다.
+// 결과 한 줄, HUD 교정 칸, 세 기능 그림(자세·순서·도막), 고정 질문 열을 그린다. 값은 서버가 준 것만 쓴다.
 (() => {
   'use strict';
-  const ICON = {"user":"<path d=\"M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2\" /><circle cx=\"12\" cy=\"7\" r=\"4\" />","spray-can":"<path d=\"M3 3h.01\" /><path d=\"M7 5h.01\" /><path d=\"M11 7h.01\" /><path d=\"M3 7h.01\" /><path d=\"M7 9h.01\" /><path d=\"M3 11h.01\" /><rect width=\"4\" height=\"4\" x=\"15\" y=\"5\" /><path d=\"m19 9 2 2v10c0 .6-.4 1-1 1h-6c-.6 0-1-.4-1-1V11l2-2\" /><path d=\"m13 14 8-2\" /><path d=\"m13 19 8-2\" />","graduation-cap":"<path d=\"M21.42 10.922a1 1 0 0 0-.019-1.838L12.83 5.18a2 2 0 0 0-1.66 0L2.6 9.08a1 1 0 0 0 0 1.832l8.57 3.908a2 2 0 0 0 1.66 0z\" /><path d=\"M22 10v6\" /><path d=\"M6 12.5V16a6 3 0 0 0 12 0v-3.5\" />","history":"<path d=\"M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8\" /><path d=\"M3 3v5h5\" /><path d=\"M12 7v5l4 2\" />","gauge":"<path d=\"m12 14 4-4\" /><path d=\"M3.34 19a10 10 0 1 1 17.32 0\" />","person-standing":"<circle cx=\"12\" cy=\"5\" r=\"1\" /><path d=\"m9 20 3-6 3 6\" /><path d=\"m6 8 6 2 6-2\" /><path d=\"M12 10v4\" />","route":"<circle cx=\"6\" cy=\"19\" r=\"3\" /><path d=\"M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15\" /><circle cx=\"18\" cy=\"5\" r=\"3\" />","crosshair":"<circle cx=\"12\" cy=\"12\" r=\"10\" /><line x1=\"22\" x2=\"18\" y1=\"12\" y2=\"12\" /><line x1=\"6\" x2=\"2\" y1=\"12\" y2=\"12\" /><line x1=\"12\" x2=\"12\" y1=\"6\" y2=\"2\" /><line x1=\"12\" x2=\"12\" y1=\"22\" y2=\"18\" />","play":"<path d=\"M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z\" />","pause":"<rect x=\"14\" y=\"3\" width=\"5\" height=\"18\" rx=\"1\" /><rect x=\"5\" y=\"3\" width=\"5\" height=\"18\" rx=\"1\" />","skip-back":"<path d=\"M17.971 4.285A2 2 0 0 1 21 6v12a2 2 0 0 1-3.029 1.715l-9.997-5.998a2 2 0 0 1-.003-3.432z\" /><path d=\"M3 20V4\" />","focus":"<circle cx=\"12\" cy=\"12\" r=\"3\" /><path d=\"M3 7V5a2 2 0 0 1 2-2h2\" /><path d=\"M17 3h2a2 2 0 0 1 2 2v2\" /><path d=\"M21 17v2a2 2 0 0 1-2 2h-2\" /><path d=\"M7 21H5a2 2 0 0 1-2-2v-2\" />","ruler":"<path d=\"M21.3 15.3a2.4 2.4 0 0 1 0 3.4l-2.6 2.6a2.4 2.4 0 0 1-3.4 0L2.7 8.7a2.41 2.41 0 0 1 0-3.4l2.6-2.6a2.41 2.41 0 0 1 3.4 0Z\" /><path d=\"m14.5 12.5 2-2\" /><path d=\"m11.5 9.5 2-2\" /><path d=\"m8.5 6.5 2-2\" /><path d=\"m17.5 15.5 2-2\" />","axis-3d":"<path d=\"M13.5 10.5 15 9\" /><path d=\"M4 4v15a1 1 0 0 0 1 1h15\" /><path d=\"M4.293 19.707 6 18\" /><path d=\"m9 15 1.5-1.5\" />","arrow-right-left":"<path d=\"m16 3 4 4-4 4\" /><path d=\"M20 7H4\" /><path d=\"m8 21-4-4 4-4\" /><path d=\"M4 17h16\" />","scan":"<path d=\"M3 7V5a2 2 0 0 1 2-2h2\" /><path d=\"M17 3h2a2 2 0 0 1 2 2v2\" /><path d=\"M21 17v2a2 2 0 0 1-2 2h-2\" /><path d=\"M7 21H5a2 2 0 0 1-2-2v-2\" />","layers":"<path d=\"M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z\" /><path d=\"M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12\" /><path d=\"M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17\" />","paint-roller":"<rect width=\"16\" height=\"6\" x=\"2\" y=\"2\" rx=\"2\" /><path d=\"M10 16v-2a2 2 0 0 1 2-2h8a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2\" /><rect width=\"4\" height=\"6\" x=\"8\" y=\"16\" rx=\"1\" />","rotate-ccw":"<path d=\"M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8\" /><path d=\"M3 3v5h5\" />","rotate-cw":"<path d=\"M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8\" /><path d=\"M21 3v5h-5\" />","locate-fixed":"<line x1=\"2\" x2=\"5\" y1=\"12\" y2=\"12\" /><line x1=\"19\" x2=\"22\" y1=\"12\" y2=\"12\" /><line x1=\"12\" x2=\"12\" y1=\"2\" y2=\"5\" /><line x1=\"12\" x2=\"12\" y1=\"19\" y2=\"22\" /><circle cx=\"12\" cy=\"12\" r=\"7\" /><circle cx=\"12\" cy=\"12\" r=\"3\" />","map-pin":"<path d=\"M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0\" /><circle cx=\"12\" cy=\"10\" r=\"3\" />","book-open":"<path d=\"M12 5v16\" /><path d=\"M20.001 19A2 2 0 0022 17V5a2 2 0 00-1.999-2L16 3.002A5 5 0 0012 5a5 5 0 00-4-2H4a2 2 0 00-2 2v12a2 2 0 001.999 2H8a5 5 0 014 2 5 5 0 014-2z\" />","zap":"<path d=\"M15.914 4a1.5 1.5 0 00-2.474-1.561l-9 9A1.5 1.5 0 005.5 14h4.002a.5.5 0 01.471.666L8.086 20a1.5 1.5 0 002.475 1.56l9-9A1.5 1.5 0 0018.5 10h-3.997a.5.5 0 01-.472-.667z\" />","file-search":"<path d=\"M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z\" /><path d=\"M14 2v5a1 1 0 0 0 1 1h5\" /><circle cx=\"11.5\" cy=\"14.5\" r=\"2.5\" /><path d=\"M13.3 16.3 15 18\" />","send":"<path d=\"M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z\" /><path d=\"m21.854 2.147-10.94 10.939\" />","message-square-plus":"<path d=\"M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z\" /><path d=\"M12 8v6\" /><path d=\"M9 11h6\" />","chart-column":"<path d=\"M3 3v16a2 2 0 0 0 2 2h16\" /><path d=\"M18 17V9\" /><path d=\"M13 17V5\" /><path d=\"M8 17v-3\" />","message-circle":"<path d=\"M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 1 0-4.777-4.719\" />","triangle-alert":"<path d=\"m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3\" /><path d=\"M12 9v4\" /><path d=\"M12 17h.01\" />","languages":"<path d=\"m5 8 6 6\" /><path d=\"m4 14 6-6 2-3\" /><path d=\"M2 5h12\" /><path d=\"M7 2h1\" /><path d=\"m22 22-5-10-5 10\" /><path d=\"M14 18h6\" />","chevron-down":"<path d=\"m6 9 6 6 6-6\" />","info":"<circle cx=\"12\" cy=\"12\" r=\"10\" /><path d=\"M12 16v-4\" /><path d=\"M12 8h.01\" />","x":"<path d=\"M18 6 6 18\" /><path d=\"m6 6 12 12\" />","square":"<rect width=\"18\" height=\"18\" x=\"3\" y=\"3\" rx=\"2\" />","map":"<path d=\"M14.106 5.553a2 2 0 0 0 1.788 0l3.659-1.83A1 1 0 0 1 21 4.619v12.764a1 1 0 0 1-.553.894l-4.553 2.277a2 2 0 0 1-1.788 0l-4.212-2.106a2 2 0 0 0-1.788 0l-3.659 1.83A1 1 0 0 1 3 19.381V6.618a1 1 0 0 1 .553-.894l4.553-2.277a2 2 0 0 1 1.788 0z\" /><path d=\"M15 5.764v15\" /><path d=\"M9 3.236v15\" />","trending-down":"<path d=\"M16 17h6v-6\" /><path d=\"m22 17-8.5-8.5-5 5L2 7\" />","route-off":"<circle cx=\"6\" cy=\"19\" r=\"3\" /><path d=\"M9 19h8.5c.4 0 .9-.1 1.3-.2\" /><path d=\"M5.2 5.2A3.5 3.53 0 0 0 6.5 12H12\" /><path d=\"m2 2 20 20\" /><path d=\"M21 15.3a3.5 3.5 0 0 0-3.3-3.3\" /><path d=\"M15 5h-4.3\" /><circle cx=\"18\" cy=\"5\" r=\"3\" />","arrow-up-to-line":"<path d=\"M5 3h14\" /><path d=\"m18 13-6-6-6 6\" /><path d=\"M12 7v14\" />","arrow-down-to-line":"<path d=\"M12 17V3\" /><path d=\"m6 11 6 6 6-6\" /><path d=\"M19 21H5\" />","loader-circle":"<path d=\"M21 12a9 9 0 1 1-6.219-8.56\" />","bell":"<path d=\"M10.268 21a2 2 0 0 0 3.464 0\" /><path d=\"M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326\" />","chevron-left":"<path d=\"m15 18-6-6 6-6\" />","chevron-right":"<path d=\"m9 18 6-6-6-6\" />","grip-vertical":"<circle cx=\"9\" cy=\"12\" r=\"1\" /><circle cx=\"9\" cy=\"5\" r=\"1\" /><circle cx=\"9\" cy=\"19\" r=\"1\" /><circle cx=\"15\" cy=\"12\" r=\"1\" /><circle cx=\"15\" cy=\"5\" r=\"1\" /><circle cx=\"15\" cy=\"19\" r=\"1\" />","thumbs-down":"<path d=\"M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22a3.13 3.13 0 0 1-3-3.88Z\" /><path d=\"M17 14V2\" />","message-square-text":"<path d=\"M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z\" /><path d=\"M7 11h10\" /><path d=\"M7 15h6\" /><path d=\"M7 7h8\" />","check":"<path d=\"M20 6 9 17l-5-5\" />","maximize-2":"<path d=\"M15 3h6v6\" /><path d=\"m21 3-7 7\" /><path d=\"m3 21 7-7\" /><path d=\"M9 21H3v-6\" />","plus":"<path d=\"M5 12h14\" /><path d=\"M12 5v14\" />","box":"<path d=\"M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z\" /><path d=\"m3.3 7 8.7 5 8.7-5\" /><path d=\"M12 22V12\" />"};
+  const ICON = {"user":"<path d=\"M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2\" /><circle cx=\"12\" cy=\"7\" r=\"4\" />","spray-can":"<path d=\"M3 3h.01\" /><path d=\"M7 5h.01\" /><path d=\"M11 7h.01\" /><path d=\"M3 7h.01\" /><path d=\"M7 9h.01\" /><path d=\"M3 11h.01\" /><rect width=\"4\" height=\"4\" x=\"15\" y=\"5\" /><path d=\"m19 9 2 2v10c0 .6-.4 1-1 1h-6c-.6 0-1-.4-1-1V11l2-2\" /><path d=\"m13 14 8-2\" /><path d=\"m13 19 8-2\" />","graduation-cap":"<path d=\"M21.42 10.922a1 1 0 0 0-.019-1.838L12.83 5.18a2 2 0 0 0-1.66 0L2.6 9.08a1 1 0 0 0 0 1.832l8.57 3.908a2 2 0 0 0 1.66 0z\" /><path d=\"M22 10v6\" /><path d=\"M6 12.5V16a6 3 0 0 0 12 0v-3.5\" />","history":"<path d=\"M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8\" /><path d=\"M3 3v5h5\" /><path d=\"M12 7v5l4 2\" />","gauge":"<path d=\"m12 14 4-4\" /><path d=\"M3.34 19a10 10 0 1 1 17.32 0\" />","person-standing":"<circle cx=\"12\" cy=\"5\" r=\"1\" /><path d=\"m9 20 3-6 3 6\" /><path d=\"m6 8 6 2 6-2\" /><path d=\"M12 10v4\" />","route":"<circle cx=\"6\" cy=\"19\" r=\"3\" /><path d=\"M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15\" /><circle cx=\"18\" cy=\"5\" r=\"3\" />","crosshair":"<circle cx=\"12\" cy=\"12\" r=\"10\" /><line x1=\"22\" x2=\"18\" y1=\"12\" y2=\"12\" /><line x1=\"6\" x2=\"2\" y1=\"12\" y2=\"12\" /><line x1=\"12\" x2=\"12\" y1=\"6\" y2=\"2\" /><line x1=\"12\" x2=\"12\" y1=\"22\" y2=\"18\" />","play":"<path d=\"M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z\" />","pause":"<rect x=\"14\" y=\"3\" width=\"5\" height=\"18\" rx=\"1\" /><rect x=\"5\" y=\"3\" width=\"5\" height=\"18\" rx=\"1\" />","skip-back":"<path d=\"M17.971 4.285A2 2 0 0 1 21 6v12a2 2 0 0 1-3.029 1.715l-9.997-5.998a2 2 0 0 1-.003-3.432z\" /><path d=\"M3 20V4\" />","focus":"<circle cx=\"12\" cy=\"12\" r=\"3\" /><path d=\"M3 7V5a2 2 0 0 1 2-2h2\" /><path d=\"M17 3h2a2 2 0 0 1 2 2v2\" /><path d=\"M21 17v2a2 2 0 0 1-2 2h-2\" /><path d=\"M7 21H5a2 2 0 0 1-2-2v-2\" />","ruler":"<path d=\"M21.3 15.3a2.4 2.4 0 0 1 0 3.4l-2.6 2.6a2.4 2.4 0 0 1-3.4 0L2.7 8.7a2.41 2.41 0 0 1 0-3.4l2.6-2.6a2.41 2.41 0 0 1 3.4 0Z\" /><path d=\"m14.5 12.5 2-2\" /><path d=\"m11.5 9.5 2-2\" /><path d=\"m8.5 6.5 2-2\" /><path d=\"m17.5 15.5 2-2\" />","axis-3d":"<path d=\"M13.5 10.5 15 9\" /><path d=\"M4 4v15a1 1 0 0 0 1 1h15\" /><path d=\"M4.293 19.707 6 18\" /><path d=\"m9 15 1.5-1.5\" />","arrow-right-left":"<path d=\"m16 3 4 4-4 4\" /><path d=\"M20 7H4\" /><path d=\"m8 21-4-4 4-4\" /><path d=\"M4 17h16\" />","scan":"<path d=\"M3 7V5a2 2 0 0 1 2-2h2\" /><path d=\"M17 3h2a2 2 0 0 1 2 2v2\" /><path d=\"M21 17v2a2 2 0 0 1-2 2h-2\" /><path d=\"M7 21H5a2 2 0 0 1-2-2v-2\" />","layers":"<path d=\"M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z\" /><path d=\"M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12\" /><path d=\"M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17\" />","paint-roller":"<rect width=\"16\" height=\"6\" x=\"2\" y=\"2\" rx=\"2\" /><path d=\"M10 16v-2a2 2 0 0 1 2-2h8a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2\" /><rect width=\"4\" height=\"6\" x=\"8\" y=\"16\" rx=\"1\" />","rotate-ccw":"<path d=\"M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8\" /><path d=\"M3 3v5h5\" />","rotate-cw":"<path d=\"M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8\" /><path d=\"M21 3v5h-5\" />","locate-fixed":"<line x1=\"2\" x2=\"5\" y1=\"12\" y2=\"12\" /><line x1=\"19\" x2=\"22\" y1=\"12\" y2=\"12\" /><line x1=\"12\" x2=\"12\" y1=\"2\" y2=\"5\" /><line x1=\"12\" x2=\"12\" y1=\"19\" y2=\"22\" /><circle cx=\"12\" cy=\"12\" r=\"7\" /><circle cx=\"12\" cy=\"12\" r=\"3\" />","map-pin":"<path d=\"M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0\" /><circle cx=\"12\" cy=\"10\" r=\"3\" />","book-open":"<path d=\"M12 5v16\" /><path d=\"M20.001 19A2 2 0 0022 17V5a2 2 0 00-1.999-2L16 3.002A5 5 0 0012 5a5 5 0 00-4-2H4a2 2 0 00-2 2v12a2 2 0 001.999 2H8a5 5 0 014 2 5 5 0 014-2z\" />","zap":"<path d=\"M15.914 4a1.5 1.5 0 00-2.474-1.561l-9 9A1.5 1.5 0 005.5 14h4.002a.5.5 0 01.471.666L8.086 20a1.5 1.5 0 002.475 1.56l9-9A1.5 1.5 0 0018.5 10h-3.997a.5.5 0 01-.472-.667z\" />","file-search":"<path d=\"M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z\" /><path d=\"M14 2v5a1 1 0 0 0 1 1h5\" /><circle cx=\"11.5\" cy=\"14.5\" r=\"2.5\" /><path d=\"M13.3 16.3 15 18\" />","send":"<path d=\"M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z\" /><path d=\"m21.854 2.147-10.94 10.939\" />","message-square-plus":"<path d=\"M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z\" /><path d=\"M12 8v6\" /><path d=\"M9 11h6\" />","chart-column":"<path d=\"M3 3v16a2 2 0 0 0 2 2h16\" /><path d=\"M18 17V9\" /><path d=\"M13 17V5\" /><path d=\"M8 17v-3\" />","message-circle":"<path d=\"M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 1 0-4.777-4.719\" />","triangle-alert":"<path d=\"m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3\" /><path d=\"M12 9v4\" /><path d=\"M12 17h.01\" />","languages":"<path d=\"m5 8 6 6\" /><path d=\"m4 14 6-6 2-3\" /><path d=\"M2 5h12\" /><path d=\"M7 2h1\" /><path d=\"m22 22-5-10-5 10\" /><path d=\"M14 18h6\" />","chevron-down":"<path d=\"m6 9 6 6 6-6\" />","info":"<circle cx=\"12\" cy=\"12\" r=\"10\" /><path d=\"M12 16v-4\" /><path d=\"M12 8h.01\" />","x":"<path d=\"M18 6 6 18\" /><path d=\"m6 6 12 12\" />","square":"<rect width=\"18\" height=\"18\" x=\"3\" y=\"3\" rx=\"2\" />","map":"<path d=\"M14.106 5.553a2 2 0 0 0 1.788 0l3.659-1.83A1 1 0 0 1 21 4.619v12.764a1 1 0 0 1-.553.894l-4.553 2.277a2 2 0 0 1-1.788 0l-4.212-2.106a2 2 0 0 0-1.788 0l-3.659 1.83A1 1 0 0 1 3 19.381V6.618a1 1 0 0 1 .553-.894l4.553-2.277a2 2 0 0 1 1.788 0z\" /><path d=\"M15 5.764v15\" /><path d=\"M9 3.236v15\" />","trending-down":"<path d=\"M16 17h6v-6\" /><path d=\"m22 17-8.5-8.5-5 5L2 7\" />","route-off":"<circle cx=\"6\" cy=\"19\" r=\"3\" /><path d=\"M9 19h8.5c.4 0 .9-.1 1.3-.2\" /><path d=\"M5.2 5.2A3.5 3.53 0 0 0 6.5 12H12\" /><path d=\"m2 2 20 20\" /><path d=\"M21 15.3a3.5 3.5 0 0 0-3.3-3.3\" /><path d=\"M15 5h-4.3\" /><circle cx=\"18\" cy=\"5\" r=\"3\" />","arrow-up-to-line":"<path d=\"M5 3h14\" /><path d=\"m18 13-6-6-6 6\" /><path d=\"M12 7v14\" />","arrow-down-to-line":"<path d=\"M12 17V3\" /><path d=\"m6 11 6 6 6-6\" /><path d=\"M19 21H5\" />","loader-circle":"<path d=\"M21 12a9 9 0 1 1-6.219-8.56\" />","bell":"<path d=\"M10.268 21a2 2 0 0 0 3.464 0\" /><path d=\"M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326\" />","chevron-left":"<path d=\"m15 18-6-6 6-6\" />","chevron-right":"<path d=\"m9 18 6-6-6-6\" />","grip-vertical":"<circle cx=\"9\" cy=\"12\" r=\"1\" /><circle cx=\"9\" cy=\"5\" r=\"1\" /><circle cx=\"9\" cy=\"19\" r=\"1\" /><circle cx=\"15\" cy=\"12\" r=\"1\" /><circle cx=\"15\" cy=\"5\" r=\"1\" /><circle cx=\"15\" cy=\"19\" r=\"1\" />","thumbs-down":"<path d=\"M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22a3.13 3.13 0 0 1-3-3.88Z\" /><path d=\"M17 14V2\" />","message-square-text":"<path d=\"M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z\" /><path d=\"M7 11h10\" /><path d=\"M7 15h6\" /><path d=\"M7 7h8\" />","check":"<path d=\"M20 6 9 17l-5-5\" />","maximize-2":"<path d=\"M15 3h6v6\" /><path d=\"m21 3-7 7\" /><path d=\"m3 21 7-7\" /><path d=\"M9 21H3v-6\" />","plus":"<path d=\"M5 12h14\" /><path d=\"M12 5v14\" />","list-checks":"<path d=\"M13 5h8\" /><path d=\"M13 12h8\" /><path d=\"M13 19h8\" /><path d=\"m3 17 2 2 4-4\" /><path d=\"m3 7 2 2 4-4\" />","box":"<path d=\"M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z\" /><path d=\"m3.3 7 8.7 5 8.7-5\" /><path d=\"M12 22V12\" />"};
   const options = window.motionViewerV2Options || {};
   const $ = (id) => document.getElementById(id);
   const svg = (name) => `<svg class="lucide" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${ICON[name] || ''}</svg>`;
@@ -31,6 +31,7 @@
   };
   const percent = (value) => (Number.isFinite(Number(value)) ? `${Math.round(Number(value))}%` : '—');
   const DIRECTION = window.motionViewerAlerts.DIRECTION;
+  const L = window.motionViewerV2Layout;
   // 화면 어디서나 "Zone 8"로 쓴다(기존 스크립트는 "Zone 08").
   window.zoneLabel = (zoneId) => String(Number.isFinite(Number(zoneId)) ? Number(zoneId) : zoneId);
 
@@ -92,59 +93,54 @@
     }
   }
 
-  // ── 지금 Zone 한 줄 ────────────────────────────────────────
-  function renderZoneNote() {
-    const zone = anchor.zone_id == null ? null : record?.pose_evaluation?.zones?.[zoneKey(anchor.map_num, anchor.zone_id)];
-    tagZone($('v2ZoneTag'), zone ? anchor.zone_id : null, zone && !anchor.spraying ? ' · 이동 중' : '');
-    $('v2ZoneScore').textContent = zone ? percent(zone.similarity_percent) : '';
-    $('v2ZoneScore').parentElement.hidden = !zone;
+  // ── HUD: 점·값은 기존 스크립트가 쓴다. 이동 문구만 바꾸고, 교정은 오른쪽 끝 단추로 HUD 아래에 편다 ──
+  // 기존 스크립트(v1과 같이 쓴다)는 매 프레임 '분사 중'/'이동 중'을 쓴다. Zone 이름이 보이면 분사 중이라 그 낱말은 숨긴다.
+  const activityNode = $('realtimeHudActivity');
+  new MutationObserver(() => {
+    const text = activityNode.textContent.trim();
+    if (text === '이동 중') activityNode.textContent = 'Zone 사이 이동';
+    activityNode.hidden = text === '분사 중';
+  }).observe(activityNode, { childList: true, characterData: true, subtree: true });
+
+  const usableMetric = (metric) => metric.available !== false && metric.similarity_percent != null;
+  const metricShow = (metric, number, label) => {
+    const unit = { deg: '°', mm: ' mm', um: ' µm' }[metric.unit] || '';
+    return label || DIRECTION[number] || (Number.isFinite(Number(number)) ? `${Number(number).toFixed(1)}${unit}` : '—');
+  };
+  const zoneAt = (state) => (state.zone_id == null ? null : record?.pose_evaluation?.zones?.[zoneKey(state.map_num, state.zone_id)] || null);
+  let hudOpen = false;
+  function renderHudFix() {
+    const zone = zoneAt(anchor);
     const corrections = zone?.corrections || [];
-    const advice = $('v2ZoneAdvice');
+    const metrics = (zone?.metrics || []).filter(usableMetric);
+    const button = $('v2HudFix');
+    const panel = $('v2HudPanel');
+    button.hidden = !corrections.length && !metrics.length;
+    panel.hidden = button.hidden || !hudOpen;
+    button.setAttribute('aria-expanded', String(!panel.hidden));
+    $('v2HudFixCount').textContent = corrections.length ? String(corrections.length) : '';
+    button.title = button.hidden ? '' : `${zoneText(anchor.zone_id)} ${corrections.length ? `교정 ${corrections.length}건과 ` : ''}항목별 비교`;
+    button.setAttribute('aria-label', button.title || '교정');
+    if (panel.hidden) return;
     // 자세 교정이 없어도 도막 등급이 below·above 면 '차이가 작습니다'는 도막 패널과 반대로 읽힌다. 서버가 낸 등급 글자를 그대로 말한다.
     const coat = (targetOf()?.zones || []).find((row) => String(row.zone_id) === String(anchor.zone_id) && (row.map_num == null || String(row.map_num) === String(anchor.map_num)));
     const coatNote = coat && (coat.grade === 'below' || coat.grade === 'above') && coat.thickness_um != null
       ? `도막 ${targetOf().grade_labels?.[coat.grade] ?? coat.grade} · ${Math.round(Number(coat.thickness_um))} µm` : '';
-    advice.textContent = !zone ? '' : corrections.length ? corrections[0].replace(/[.。]\s*$/, '') + (corrections.length > 1 ? ` 외 ${corrections.length - 1}건` : '') : coatNote || '전문가 기록과 차이가 작습니다';
-    advice.title = corrections.join('\n');
-    const more = $('v2ZoneMore');
-    const usable = (metric) => metric.available !== false && metric.similarity_percent != null;
-    const metrics = (zone?.metrics || []).filter(usable);
-    const detail = $('v2ZoneDetail');
-    // 단추와 펼친 칸은 기록에 비교 항목이 하나라도 있으면 그대로 둔다. 재생 위치마다 숨기면 단추가 깜빡이고 장면 높이가 흔들린다.
-    more.hidden = !Object.values(record?.pose_evaluation?.zones || {}).some((item) => (item.metrics || []).some(usable));
-    if (more.hidden) { detail.hidden = true; more.setAttribute('aria-expanded', 'false'); return; }
-    more.disabled = !metrics.length && detail.hidden;
-    if (!metrics.length) {
-      // 이동·미도장 구간: 칸은 두고 값만 비운다. 앞 Zone 값을 남기면 지금 위치의 값으로 읽힌다.
-      for (const item of detail.children) {
-        item.classList.add('is-idle');
-        item.querySelector('.metric-fill').style.width = '0';
-        item.querySelector('.metric-value').textContent = '—';
-      }
-      return;
-    }
-    if (detail.hidden) return;
-    detail.replaceChildren(...metrics.map((metric) => {
+    const lines = corrections.length ? corrections : [coatNote || '전문가 기록과 차이가 작습니다'];
+    $('v2HudFixList').replaceChildren(...lines.map((line) => el('li', null, line)));
+    $('v2ZoneDetail').replaceChildren(...metrics.map((metric) => {
       const item = el('div', 'metric');
       const track = el('div', 'metric-track');
       const fill = el('div', 'metric-fill');
       fill.style.width = `${Math.max(0, Math.min(100, Number(metric.similarity_percent)))}%`;
       track.append(fill);
       const value = el('div', 'metric-value');
-      const unit = { deg: '°', mm: ' mm', um: ' µm' }[metric.unit] || '';
-      const show = (number, label) => label || DIRECTION[number] || (Number.isFinite(Number(number)) ? `${Number(number).toFixed(1)}${unit}` : '—');
-      value.append(show(metric.actual, metric.actual_label), el('span', null, ` / 전문가 ${show(metric.reference, metric.reference_label)}`));
+      value.append(metricShow(metric, metric.actual, metric.actual_label), el('span', null, ` / 전문가 ${metricShow(metric, metric.reference, metric.reference_label)}`));
       item.append(el('div', 'metric-name', metric.label), track, value);
       return item;
     }));
   }
-  $('v2ZoneMore').addEventListener('click', () => {
-    const detail = $('v2ZoneDetail');
-    detail.hidden = !detail.hidden;
-    $('v2ZoneMore').setAttribute('aria-expanded', String(!detail.hidden));
-    renderZoneNote();
-    dispatchEvent(new Event('resize'));
-  });
+  $('v2HudFix').addEventListener('click', () => { hudOpen = !hudOpen; renderHudFix(); });
   // 장면 칸의 크기가 바뀌면 캔버스 해상도를 다시 맞춘다. 창 크기 이벤트만 믿으면 아래 칸이 접히거나 펼쳐질 때
   // 캔버스가 예전 높이로 남아, 오른쪽 아래 좌표축이 캔버스 밖에 그려진다.
   new ResizeObserver(() => resize()).observe($('canvas').parentElement);
@@ -158,46 +154,107 @@
     const started = (record?.arm_pose_evaluation?.sequences || []).filter((item) => Number.isFinite(Number(item.start_seconds)) && item.start_seconds <= seconds);
     return started.length ? started.reduce((late, item) => (item.start_seconds >= late.start_seconds ? item : late)) : null;
   };
+  // 분사별 자세 유사도 그림(점과 선). 자세 칸과 채팅 참고 카드가 같이 쓴다. 칸의 지금 크기로 다시 그린다.
+  // host.poseSpec = { sequences, average, currentId, onPick }. onPick 이 있으면 점마다 누르는 단추를 얹는다.
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+  const svgNode = (tag, attrs, text) => {
+    const node = document.createElementNS(SVG_NS, tag);
+    for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, value);
+    if (text != null) node.textContent = text;
+    return node;
+  };
+  const sequenceLabel = (item) => `${item.sequence_id} · ${zoneText(item.zone_id)} · ${percent(item.similarity_percent)}`
+    + (item.correction ? `. ${item.correction}` : '') + (item.confidence === 'limited' ? '. 입력 품질 제한으로 참고용' : '');
+  function drawPoseChart(host) {
+    const spec = host.poseSpec;
+    const width = host.clientWidth, height = host.clientHeight;
+    if (!spec || !width || !height) return;
+    const { sequences, average, currentId, onPick } = spec;
+    const box = { left: 30, right: width - 64, top: 20, bottom: height - 11 };
+    const points = L.posePoints(sequences.map((item) => Number(item.similarity_percent)), box);
+    const chart = svgNode('svg', { class: 'pose-svg', viewBox: `0 0 ${width} ${height}`, 'aria-hidden': 'true' });
+    for (const value of [50, 75, 100]) {
+      const y = L.poseY(value, box);
+      chart.append(svgNode('line', { class: 'pc-grid', x1: box.left, x2: box.right, y1: y, y2: y }),
+        svgNode('text', { class: 'pc-tick', x: box.left - 6, y: y + 4, 'text-anchor': 'end' }, String(value)));
+    }
+    if (Number.isFinite(Number(average))) {
+      const y = L.poseY(average, box);
+      chart.append(svgNode('line', { class: 'pc-avg', x1: box.left, x2: box.right, y1: y, y2: y }),
+        svgNode('text', { class: 'pc-avg-label', x: box.right + 8, y: y + 4 }, `평균 ${Math.round(Number(average))}%`));
+    }
+    chart.append(svgNode('polyline', { class: 'pc-line', points: points.map((point) => `${point.x},${point.y}`).join(' ') }));
+    // Zone 색은 바닥의 3px 띠로만
+    const slot = points.length > 1 ? (box.right - box.left) / (points.length - 1) : 12;
+    sequences.forEach((item, index) => chart.append(svgNode('rect', { x: points[index].x - slot / 2 + 1, y: height - 3, width: Math.max(2, slot - 2), height: 3, rx: 1, fill: colorOf(item.zone_id) })));
+    const current = sequences.findIndex((item) => item.sequence_id === currentId);
+    sequences.forEach((item, index) => {
+      if (index === current) return;
+      const cls = `pc-dot${item.correction ? ' is-fix' : ''}${item.confidence === 'limited' ? ' is-limited' : ''}`;
+      chart.append(svgNode('circle', { class: cls, cx: points[index].x, cy: points[index].y, r: item.confidence === 'limited' ? 3.5 : 4 }));
+    });
+    if (current >= 0) {
+      const item = sequences[current], point = points[current];
+      chart.append(svgNode('line', { class: 'pc-now-line', x1: point.x, x2: point.x, y1: point.y + 7, y2: height - 6 }),
+        svgNode('circle', { class: `pc-now${item.confidence === 'limited' ? ' is-limited' : ''}`, cx: point.x, cy: point.y, r: 6 }),
+        svgNode('text', { class: 'pc-now-label', x: point.x, y: point.y - 11, 'text-anchor': 'middle' }, percent(item.similarity_percent)));
+    }
+    const focused = host.contains(document.activeElement) ? [...host.querySelectorAll('.pose-pt')].indexOf(document.activeElement) : -1;
+    host.replaceChildren(chart);
+    if (!onPick) return;
+    // 점마다 누르는 단추. 키보드는 한 칸만 Tab 으로 들어오고 화살표로 옮긴다.
+    const stops = sequences.map((item, index) => {
+      const button = el('button', 'pose-pt');
+      button.type = 'button';
+      button.style.left = `${points[index].x}px`;
+      button.style.top = `${points[index].y}px`;
+      button.title = sequenceLabel(item);
+      button.setAttribute('aria-label', button.title);
+      if (index === current) button.setAttribute('aria-current', 'true');
+      button.tabIndex = index === Math.max(0, current) ? 0 : -1;
+      button.addEventListener('click', () => onPick(item));
+      button.addEventListener('keydown', (event) => {
+        const next = { ArrowRight: index + 1, ArrowLeft: index - 1, Home: 0, End: sequences.length - 1 }[event.key];
+        if (next == null) return;
+        event.preventDefault();
+        stops[Math.max(0, Math.min(sequences.length - 1, next))].focus();
+      });
+      return button;
+    });
+    host.append(...stops);
+    if (focused >= 0) stops[focused]?.focus();
+  }
+  const chartSizes = new ResizeObserver((entries) => { for (const { target } of entries) drawPoseChart(target); });
+  chartSizes.observe($('v2PoseChart'));
+
   function renderPose() {
     const arm = record?.arm_pose_evaluation;
-    const host = $('v2PoseBars');
-    if (arm?.status !== 'available') $('v2PoseScore').textContent = arm === undefined && record ? '…' : '—';
+    const host = $('v2PoseChart');
     if (arm?.status !== 'available') {
       const message = !record ? '' : arm === undefined ? '분사마다 채점하는 중' : ARM_UNAVAILABLE[arm.reason_code] || '자세 채점 결과를 불러오지 못했습니다';
+      host.poseSpec = null;
       host.replaceChildren(el('p', 'chart-empty', message));
       $('v2PoseNow').textContent = '';
       return;
     }
-    const average = el('div', 'pose-avg');
-    average.dataset.label = percent(arm.average_similarity_percent);
-    average.style.bottom = `calc((100% - 8px) * ${Math.max(0, Math.min(100, Number(arm.average_similarity_percent))) / 100})`;
-    host.replaceChildren(average, ...arm.sequences.map((item) => {
-      const bar = el('button', 'pose-bar');
-      bar.type = 'button';
-      bar.dataset.sequence = item.sequence_id;
-      bar.style.setProperty('--h', `${Math.max(2, Math.min(100, Number(item.similarity_percent)))}%`);
-      bar.style.setProperty('--zone', colorOf(item.zone_id));
-      bar.classList.toggle('is-limited', item.confidence === 'limited');
-      bar.classList.toggle('has-fix', Boolean(item.correction));
-      bar.title = `${item.sequence_id} · ${zoneText(item.zone_id)} · ${percent(item.similarity_percent)}`
-        + (item.correction ? `\n${item.correction}` : '') + (item.confidence === 'limited' ? '\n입력 품질 제한으로 참고용' : '');
-      bar.setAttribute('aria-label', bar.title.replaceAll('\n', '. '));
-      bar.addEventListener('click', () => seekToSeconds(Number(item.start_seconds) + 0.01));
-      return bar;
-    }));
-    renderPoseNow();
+    host.poseSpec = { sequences: arm.sequences || [], average: arm.average_similarity_percent, currentId: null,
+      onPick: (item) => seekToSeconds(Number(item.start_seconds) + 0.01) };
+    renderPoseNow(true);
   }
-  function renderPoseNow() {
-    const arm = record?.arm_pose_evaluation;
-    if (arm?.status !== 'available') return;
+  function renderPoseNow(force = false) {
+    const host = $('v2PoseChart');
+    if (!host.poseSpec) return;
     const current = sequenceAt(anchor.playhead_seconds);
-    for (const bar of $('v2PoseBars').querySelectorAll('.pose-bar')) bar.classList.toggle('is-current', bar.dataset.sequence === current?.sequence_id);
+    if (force || host.poseSpec.currentId !== (current?.sequence_id ?? null)) {
+      host.poseSpec.currentId = current?.sequence_id ?? null;
+      drawPoseChart(host);
+    }
     const now = $('v2PoseNow');
-    $('v2PoseScore').textContent = current ? percent(current.similarity_percent) : '—';
     if (!current) { now.textContent = '첫 분사 전입니다'; return; }
-    const head = el('b', null, current.sequence_id);
     const limited = current.confidence === 'limited';
-    now.replaceChildren(head, ` ${current.correction || (limited ? '' : '교정할 관절이 없습니다')}${limited ? ' (입력 품질 제한으로 참고용)' : ''}`);
+    now.replaceChildren(el('b', null, current.sequence_id), ` · ${zoneText(current.zone_id)} · ${percent(current.similarity_percent)}`
+      + (limited ? ' · 참고용(입력 품질 제한)' : '') + ` · ${current.correction || (limited ? '' : '교정할 관절이 없습니다')}`.replace(/ · $/, ''));
+    now.title = now.textContent;
   }
 
   // 채점 엔진이 교정을 낸 관절을 스켈레톤 위에 고리로 표시한다(기존 스켈레톤 그림과 같은 투영 함수).
@@ -222,36 +279,45 @@
     }
   }
 
-  // ── 순서: 전문가 순서와 이 기록의 순서를 선으로 잇는다 ─────
+  // ── 순서: 위 = 전문가 권장, 아래 = 이 기록. 같은 자리의 Zone은 흐리게 두고, 자리가 다른 Zone만 그 색 곡선으로 잇는다 ──
   function renderOrder() {
     const order = record?.reference_order_evaluation || {};
     const host = $('v2Order');
+    const sum = $('v2OrderSum');
     const expert = (order.recommended_flow || []).map(String);
     const actual = (order.selected_flow || []).map(String);
-    if (!expert.length) { host.replaceChildren(el('p', 'chart-empty', record ? '이 학습모드에는 전문가 순서 기준이 없습니다' : '')); return; }
-    const row = (label, zones, missing = []) => {
+    if (!expert.length) { sum.replaceChildren(); host.replaceChildren(el('p', 'chart-empty', record ? '이 학습모드에는 전문가 순서 기준이 없습니다' : '')); return; }
+    const moves = L.orderMoves(expert, actual);
+    const count = (text, number, tail) => [text, el('b', null, String(number)), tail];
+    const line = el('span');   // 머리 줄은 flex 라 글 조각을 한 칸에 묶는다(사이 간격이 끼지 않게)
+    line.append(...count('권장 순서와 자리가 다른 Zone ', moves.moved, '곳'), ...(moves.missing ? count(' · 칠하지 않은 Zone ', moves.missing, '곳') : []));
+    sum.replaceChildren(line);
+    const row = (label, items) => {
       const line = el('div', 'order-row');
       const chips = el('div', 'order-chips');
-      for (const zone of [...zones, ...missing]) {
-        const chip = el('button', 'order-chip', String(Number(zone)));
+      for (const item of items) {
+        const chip = el('button', `order-chip is-${item.state}`, String(Number(item.zone)));
         chip.type = 'button';
-        chip.dataset.zone = zone;
-        chip.style.setProperty('--zone', colorOf(zone));
-        const skipped = missing.includes(zone);
-        chip.classList.toggle('is-missing', skipped);
-        chip.title = skipped ? `${zoneText(zone)} · 칠하지 않음` : `${zoneText(zone)}로 이동`;
+        chip.dataset.zone = item.zone;
+        chip.dataset.state = item.state;
+        if (item.actualIndex != null) chip.dataset.to = String(item.actualIndex);
+        chip.style.setProperty('--zone', colorOf(item.zone));
+        const skipped = item.state === 'skipped';
+        chip.title = skipped ? `${zoneText(item.zone)} · 칠하지 않음` : `${zoneText(item.zone)}로 이동`;
         chip.setAttribute('aria-label', chip.title);
         chip.disabled = skipped;
-        chip.addEventListener('click', () => seekToZone(zone));
+        chip.addEventListener('click', () => seekToZone(item.zone));
         chips.append(chip);
       }
       line.append(el('span', null, label), chips);
       return line;
     };
-    const links = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    const links = document.createElementNS(SVG_NS, 'svg');
     links.setAttribute('class', 'order-links');
     links.setAttribute('aria-hidden', 'true');
-    host.replaceChildren(row('전문가', expert), links, row('이 기록', actual, expert.filter((zone) => !actual.includes(zone))));
+    // 이 기록 줄 끝에는 칠하지 않은 Zone을 점선 칩으로 덧붙인다
+    const skipped = moves.expert.filter((item) => item.state === 'missing').map((item) => ({ zone: item.zone, state: 'skipped' }));
+    host.replaceChildren(row('권장', moves.expert), links, row('이 기록', [...moves.actual, ...skipped]));
     drawOrderLinks();
     markCurrentZone();
   }
@@ -265,17 +331,13 @@
     const center = (chip) => { const rect = chip.getBoundingClientRect(); return rect.left + rect.width / 2 - box.left; };
     links.setAttribute('viewBox', `0 0 ${box.width} ${box.height}`);
     links.replaceChildren();
-    [...top.children].forEach((chip, position) => {
-      const match = [...bottom.children].findIndex((other) => other.dataset.zone === chip.dataset.zone && !other.classList.contains('is-missing'));
-      if (match < 0) return;
-      const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-      line.setAttribute('x1', center(chip)); line.setAttribute('y1', 2);
-      line.setAttribute('x2', center(bottom.children[match])); line.setAttribute('y2', box.height - 2);
-      // 같은 순번이면 흐리게, 순번이 다르면 그 Zone 색으로 잇는다.
-      line.setAttribute('stroke', match === position ? 'rgba(134,150,176,.5)' : colorOf(chip.dataset.zone));
-      line.setAttribute('stroke-opacity', match === position ? '1' : '.85');
-      links.append(line);
-    });
+    const y1 = 2, y2 = box.height - 2, middle = box.height / 2;
+    for (const chip of top.querySelectorAll('[data-state="moved"]')) {
+      const target = bottom.children[Number(chip.dataset.to)];
+      if (!target) continue;
+      const x1 = center(chip), x2 = center(target);
+      links.append(svgNode('path', { d: `M${x1},${y1} C${x1},${middle} ${x2},${middle} ${x2},${y2}`, stroke: colorOf(chip.dataset.zone) }));
+    }
   }
   new ResizeObserver(drawOrderLinks).observe($('v2Order'));
 
@@ -468,9 +530,15 @@
   $('v2CoatBars').addEventListener('scroll', (event) => {   // 스크롤바 끌기 등 우리가 한 것이 아닌 스크롤
     if (event.target.scrollTop !== coatAutoTop) coatScrolledByUser = performance.now();
   }, { passive: true });
+  // 도막 목록이 칸보다 길면 아래를 흐리게 해 더 있다는 것을 보인다(끝까지 내리면 걷는다).
+  const coatBars = $('v2CoatBars');
+  const hintMore = () => coatBars.classList.toggle('has-more', coatBars.scrollTop + coatBars.clientHeight < coatBars.scrollHeight - 2);
+  coatBars.addEventListener('scroll', hintMore, { passive: true });
+  new ResizeObserver(hintMore).observe(coatBars);
+  new MutationObserver(hintMore).observe(coatBars, { childList: true });
   function markCurrentZone(follow = false) {
     for (const node of document.querySelectorAll('.order-chip, .coat-row')) {
-      node.classList.toggle('is-current', anchor.zone_id != null && node.dataset.zone === String(anchor.zone_id) && !node.classList.contains('is-missing'));
+      node.classList.toggle('is-current', anchor.zone_id != null && node.dataset.zone === String(anchor.zone_id) && !node.classList.contains('is-skipped'));
       node.classList.toggle('is-alerted', alertedZone != null && node.dataset.zone === alertedZone);
     }
     // 알림으로 옮겼으면 알림 Zone 행을 보인다(건너뛴 Zone 은 현재 Zone 과 다르다, 카나리 V1′).
@@ -530,47 +598,66 @@
   $('v2Reload').addEventListener('click', () => $('session').dispatchEvent(new Event('change')));
 
   function renderAll() {
-    renderScores(); renderZoneNote(); renderPose(); renderOrder(); renderCoating();
-    layout.syncTabs();
+    renderScores(); renderHudFix(); renderPose(); renderOrder(); renderCoating();
   }
 
-  // ── 화면 나누기: 경계선 손잡이로 뷰어·채팅을 접고 폭을 바꾼다. 뷰어가 좁으면 분석 칸을 탭으로 접는다 ──
-  const L = window.motionViewerV2Layout;
+  // ── 화면 나누기: 경계선 손잡이로 뷰어·채팅을 접고 폭을 바꾼다. 낮거나 좁은 뷰어는 분석 칸을 탭으로 하나만 보인다 ──
   const stored = (key) => { try { return localStorage.getItem(`motionViewerV2.${key}`); } catch { return null; } };
   const remember = (key, value) => { try { localStorage.setItem(`motionViewerV2.${key}`, value); } catch { /* 저장소가 막혀도 화면은 그대로 쓴다 */ } };
   const layout = (() => {
     const grid = $('v2Grid');
     const main = document.querySelector('.v2-main');
-    const features = document.querySelector('.features');
+    const features = $('v2Features');
     const tabs = $('v2FeatureTabs');
+    const tools = $('v2FeatureTools');
+    const fold = $('v2Fold');
     const tabOf = (id) => tabs.querySelector(`[data-feature-tab="${id}"]`);
     let mode = ['both', 'chat-off', 'viewer-off'].includes(stored('mode')) ? stored('mode') : 'both';
     const narrow = matchMedia('(max-width: 900px)');
     const effective = () => (narrow.matches ? 'both' : mode);
     let chatWidth = Number(stored('chatWidth'));
     let count = 3;
-    let shown = [];
+    let panel = { active: 'pose', folded: stored('fold') === '1' };
+    // 칸마다 머리줄의 도구(기준 전환·돌려 보기·질문 단추). 한 칸 보기에서는 탭 줄 오른쪽으로 옮긴다.
+    const toolsOf = Object.fromEntries([...features.querySelectorAll('.feature')].map((feature) => {
+      const header = feature.querySelector('header');
+      return [feature.dataset.feature, { header, nodes: [...header.children].filter((node) => node.tagName !== 'H2') }];
+    }));
     const applyWidth = () => grid.style.setProperty('--chat-w', `${L.clampChatWidth(chatWidth || Number.NaN, grid.clientWidth)}px`);
     function applyFeatures() {
-      count = L.featureCount(main.clientWidth);
-      shown = L.normalizeShown(shown, count);
-      const folded = count < 3;
-      tabs.hidden = !folded;
-      if (folded) features.dataset.count = String(count); else delete features.dataset.count;
-      tabs.setAttribute('aria-multiselectable', String(count === 2));
+      count = L.panelCount(main.clientWidth, innerHeight);
+      const one = count === 1;
+      tabs.hidden = !one;
+      features.dataset.count = String(count);
+      features.hidden = panel.folded;
       for (const feature of features.querySelectorAll('.feature')) {
-        const visible = !folded || shown.includes(feature.dataset.feature);
-        feature.classList.toggle('is-folded', !visible);
-        const tab = tabOf(feature.dataset.feature);
-        tab.setAttribute('aria-selected', String(folded && visible));
-        tab.tabIndex = !folded || shown[shown.length - 1] === feature.dataset.feature ? 0 : -1;
+        const id = feature.dataset.feature;
+        feature.classList.toggle('is-off', one && id !== panel.active);
+        const tab = tabOf(id);
+        tab.setAttribute('aria-selected', String(one && !panel.folded && id === panel.active));
+        tab.tabIndex = id === panel.active ? 0 : -1;
+        const home = toolsOf[id];
+        if (one && !panel.folded && id === panel.active) tools.append(...home.nodes); else home.header.append(...home.nodes);
       }
+      // 접기 단추: 한 칸 보기는 탭 줄 끝, 세 칸 보기는 재생 막대 끝
+      const box = $('v2FoldBox');
+      const place = one ? tabs : document.querySelector('.transport');
+      if (box.parentElement !== place) place.append(box);
+      fold.setAttribute('aria-expanded', String(!panel.folded));
+      fold.title = panel.folded ? '분석 칸 펴기' : '분석 칸 접기';
+      fold.setAttribute('aria-label', fold.title);
     }
-    function showFeature(id) {
-      if (count >= 3 || !L.FEATURES.includes(id)) return;
-      shown = L.pickShown(shown, id, count);
+    function setPanel(next) {
+      const changed = next.folded !== panel.folded || next.active !== panel.active;
+      panel = next;
+      remember('fold', panel.folded ? '1' : '0');
       applyFeatures();
-      dispatchEvent(new Event('resize'));   // 다시 보인 칸(순서 선·도막 지도)이 새 폭으로 그려지게 한다
+      if (changed) dispatchEvent(new Event('resize'));   // 다시 보인 칸(순서 선·도막 지도)이 새 폭으로 그려지게 한다
+    }
+    /** 질문 탭을 바꾸면 한 칸 보기의 그 칸을 앞에 둔다. 사용자가 접어 둔 것은 그대로 둔다. */
+    function showFeature(id) {
+      if (!L.FEATURES.includes(id) || id === panel.active) return;
+      setPanel({ ...panel, active: id });
     }
     function setMode(next, { focus = false } = {}) {
       const before = effective();
@@ -625,171 +712,80 @@
       dispatchEvent(new Event('resize'));
     });
     for (const tab of tabs.querySelectorAll('[role="tab"]')) {
-      tab.addEventListener('click', () => showFeature(tab.dataset.featureTab));
+      tab.addEventListener('click', () => setPanel(L.tabPress(panel, tab.dataset.featureTab)));
       tab.addEventListener('keydown', (event) => {
         const move = { ArrowRight: 1, ArrowLeft: -1 }[event.key];
         if (!move) return;
         event.preventDefault();
         const ids = L.FEATURES;
         const next = ids[(ids.indexOf(tab.dataset.featureTab) + move + ids.length) % ids.length];
+        if (!panel.folded) setPanel({ ...panel, active: next });
         tabOf(next).focus();
       });
     }
+    fold.addEventListener('click', () => setPanel({ ...panel, folded: !panel.folded }));
     new ResizeObserver(applyFeatures).observe(main);
-    addEventListener('resize', applyWidth);
+    addEventListener('resize', () => { applyWidth(); applyFeatures(); });
     narrow.addEventListener('change', () => setMode(mode));
     return {
       setMode, showFeature, applyFeatures,
       get mode() { return effective(); },
-      /** 참고 그림을 뜰 때 접힌 칸도 잠깐 펼친다. 순서 선은 펼친 폭으로 다시 그린다. */
-      withAllFeatures(read) {
-        const before = features.dataset.count;
-        delete features.dataset.count;
-        for (const feature of features.querySelectorAll('.feature.is-folded')) feature.classList.add('is-measuring');
-        drawOrderLinks();
-        try { return read(); } finally {
-          for (const feature of features.querySelectorAll('.is-measuring')) feature.classList.remove('is-measuring');
-          if (before) features.dataset.count = before;
-          drawOrderLinks();
-        }
-      },
-      syncTabs() {
-        $('v2TabPoseScore').textContent = $('v2PoseScore').textContent === '—' ? '' : $('v2PoseScore').textContent;
-        $('v2TabOrderScore').textContent = $('v2ScoreOrder').textContent === '—' ? '' : $('v2ScoreOrder').textContent;
-      },
       start() { setMode(mode); applyFeatures(); },
     };
   })();
 
-  // ── 참고 첨부: 채팅만 볼 때 답 안에 뷰어가 그린 칸과 Zone 수치를 함께 둔다. 질문한 순간의 화면을 옮긴다 ──
-  const metricShow = (metric, number, label) => {
-    const unit = { deg: '°', mm: ' mm', um: ' µm' }[metric.unit] || '';
-    return label || DIRECTION[number] || (Number.isFinite(Number(number)) ? `${Number(number).toFixed(1)}${unit}` : '—');
-  };
-  const usableMetric = (metric) => metric.available !== false && metric.similarity_percent != null;
-  const snapCanvas = (canvas, maxWidth = 960) => {
-    if (!canvas?.width || !canvas.height) return null;
-    const scale = Math.min(1, maxWidth / canvas.width);
-    const out = document.createElement('canvas');
-    out.width = Math.round(canvas.width * scale);
-    out.height = Math.round(canvas.height * scale);
-    const g = out.getContext('2d');
-    g.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--stage').trim() || '#1c2230';
-    g.fillRect(0, 0, out.width, out.height);
-    g.drawImage(canvas, 0, 0, out.width, out.height);
-    try { return out.toDataURL('image/jpeg', 0.86); } catch { return null; }
-  };
-  // DOM으로 그린 칸(막대·순서 선)은 복제해 원래 크기로 두고 상자 폭에 맞춰 줄인다. 안의 캔버스는 그림으로 바꾼다.
-  const snapNode = (node) => {
-    if (!node || !node.offsetWidth || !node.offsetHeight) return null;
-    const clone = node.cloneNode(true);
-    const sources = [...node.querySelectorAll('canvas')];
-    [...clone.querySelectorAll('canvas')].forEach((copy, index) => {
-      const url = snapCanvas(sources[index]);
-      const image = document.createElement('img');
-      if (url) image.src = url;
-      image.alt = '';
-      image.style.width = `${sources[index].offsetWidth}px`;
-      copy.replaceWith(image);
-    });
-    for (const item of [clone, ...clone.querySelectorAll('[id]')]) item.removeAttribute('id');
-    // 원래 칸이 스크롤로 줄을 감추고 있어도 복제본에는 전부 보인다(도막 Zone 13줄)
-    Object.assign(clone.style, { height: 'auto', maxHeight: 'none', overflow: 'visible' });
-    return { clone, width: node.offsetWidth, height: Math.max(node.offsetHeight, node.scrollHeight) };
-  };
-  const scaleClones = new ResizeObserver((entries) => {
-    for (const { target } of entries) {
-      const inner = target.firstElementChild;
-      const style = getComputedStyle(target);
-      const room = target.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
-      const scale = Math.min(1, room / Number(target.dataset.width));
-      inner.style.transform = `scale(${scale})`;
-      target.style.height = `${Math.round(Number(target.dataset.height) * scale)}px`;
-    }
-  });
-  const cloneBox = (snap) => {
-    const box = el('div', 'att-clone');
-    box.dataset.width = snap.width;
-    box.dataset.height = snap.height;
-    const inner = el('div', 'att-scale');
-    inner.style.width = `${snap.width}px`;
-    inner.inert = true;
-    inner.append(snap.clone);
-    box.append(inner);
-    scaleClones.observe(box);
-    return box;
-  };
-  const lightbox = $('v2Lightbox');
-  lightbox.addEventListener('click', (event) => { if (event.target === lightbox) lightbox.close(); });
-  lightbox.addEventListener('close', () => {
-    for (const box of $('v2LightboxBody').querySelectorAll('.att-clone')) scaleClones.unobserve(box);
-    $('v2LightboxBody').replaceChildren();
-  });
-  function openLightbox(make, caption) {
-    $('v2LightboxBody').replaceChildren(make());
-    $('v2LightboxCaption').textContent = caption;
-    lightbox.showModal();
-  }
-  /** 질문한 순간 화면에서 첨부를 떠 둔다. 답이 오면 답 안에 붙인다. 지식 질문에는 붙이지 않는다. */
+  // ── 참고 카드(B안): 채팅만 볼 때 답 아래에 질문한 순간의 기록 값으로 그린 카드를 둔다. 화면을 찍지 않는다 ──
+  /** 질문한 순간의 값을 떠 둔다. 자세 = 분사 그림 + Zone 수치, 도막 = Zone 수치, 순서·지식 = 없음. */
   function captureAttachments(tabId, state) {
     const plan = L.attachmentsFor(tabId);
     if (!plan.length) return null;
-    const where = `${state.zone_id == null ? 'Zone 없음' : zoneText(state.zone_id)} · ${state.playhead_seconds.toFixed(1)}초`;
-    const items = layout.withAllFeatures(() => plan.map((kind) => {
-      if (kind === 'scene') { const url = snapCanvas($('canvas')); return url && { kind, url, caption: where }; }
-      if (kind === 'skeleton') { const url = snapCanvas($('skeletonCanvas'), 640); return url && { kind, url, caption: '이 순간 자세' }; }
-      if (kind === 'poseBars') { const snap = snapNode($('v2PoseBars')); return snap && { kind, snap, caption: '분사별 자세 유사도' }; }
-      if (kind === 'order') { const snap = snapNode($('v2Order')); return snap && { kind, snap, caption: '전문가 순서와 이 기록' }; }
-      if (kind === 'coating') { const snap = snapNode($('v2CoatBars')); return snap && { kind, snap, caption: $('v2CoatBasisLabel').textContent || 'Zone별 도막' }; }
-      if (kind === 'zoneMetrics') {
-        const zone = state.zone_id == null ? null : record?.pose_evaluation?.zones?.[zoneKey(state.map_num, state.zone_id)];
-        const metrics = (zone?.metrics || []).filter(usableMetric);
-        return metrics.length ? { kind, metrics, caption: where } : null;
-      }
-      return null;
-    }).filter(Boolean));
-    return items.length ? items : null;
-  }
-  function renderAttachments(items) {
-    const box = el('div', 'att');
-    const pictures = el('div', 'att-grid');
-    for (const item of items) {
-      if (item.kind === 'zoneMetrics') {
-        const table = el('table', 'att-num');
-        table.innerHTML = '<thead><tr><th scope="col"></th><th scope="col">이 기록</th><th scope="col">전문가</th><th scope="col">유사도</th></tr></thead>';
-        const body = el('tbody');
-        for (const metric of item.metrics) {
-          const row = el('tr');
-          const name = el('th', null, metric.label);
-          name.scope = 'row';
-          row.append(name, el('td', null, metricShow(metric, metric.actual, metric.actual_label)),
-            el('td', null, metricShow(metric, metric.reference, metric.reference_label)), el('td', null, percent(metric.similarity_percent)));
-          body.append(row);
-        }
-        table.append(body);
-        const caption = el('caption', null, `${item.caption} 비교`);
-        table.prepend(caption);
-        box.append(table);
-        continue;
-      }
-      const figure = el('figure', `att-item${item.kind === 'scene' || item.kind === 'order' || item.kind === 'coating' ? ' is-wide' : ''}`);
-      const open = el('button', 'att-open');
-      open.type = 'button';
-      open.setAttribute('aria-label', `${item.caption} 크게 보기`);
-      if (item.url) {
-        const image = el('img');
-        image.src = item.url;
-        image.alt = '';
-        open.append(image);
-        open.addEventListener('click', () => openLightbox(() => { const big = el('img'); big.src = item.url; big.alt = item.caption; return big; }, item.caption));
-      } else {
-        open.append(cloneBox({ ...item.snap, clone: item.snap.clone.cloneNode(true) }));
-        open.addEventListener('click', () => openLightbox(() => cloneBox({ ...item.snap, clone: item.snap.clone.cloneNode(true) }), item.caption));
-      }
-      figure.append(open, el('figcaption', null, item.caption));
-      pictures.append(figure);
+    const card = { zoneId: state.zone_id, chart: null, metrics: [] };
+    if (plan.includes('poseChart')) {
+      const arm = record?.arm_pose_evaluation;
+      const sequences = (arm?.status === 'available' ? arm.sequences || [] : []).filter((item) => Number.isFinite(Number(item.similarity_percent)))
+        .map(({ sequence_id, zone_id, similarity_percent, confidence, correction }) => ({ sequence_id, zone_id, similarity_percent, confidence, correction }));
+      const current = sequenceAt(state.playhead_seconds);
+      if (sequences.length) card.chart = { sequences, average: arm.average_similarity_percent, currentId: current?.sequence_id ?? null, current };
     }
-    if (pictures.children.length) box.prepend(pictures);
+    if (plan.includes('zoneMetrics')) card.metrics = (zoneAt(state)?.metrics || []).filter(usableMetric).map((metric) => ({ ...metric }));
+    return card.chart || card.metrics.length ? card : null;
+  }
+  function renderAttachments(card) {
+    const box = el('div', 'refcard');
+    const head = el('div', 'refcard-head');
+    if (card.zoneId != null) { const tag = el('span', 'zone-tag'); tagZone(tag, card.zoneId); head.append(tag); }
+    if (card.chart?.current) {
+      const value = el('b', null, percent(card.chart.current.similarity_percent));
+      head.append(`${card.chart.current.sequence_id} 자세 유사도 `, value);
+    }
+    head.append(el('span', 'sub', '질문한 재생 위치 기준'));
+    box.append(head);
+    if (card.chart) {
+      const plot = el('div', 'refcard-chart');
+      plot.setAttribute('role', 'img');
+      plot.setAttribute('aria-label', `분사별 자세 유사도 ${card.chart.sequences.length}개, 평균 ${percent(card.chart.average)}`);
+      plot.poseSpec = card.chart;
+      chartSizes.observe(plot);   // 카드가 보이는 순간(채팅만 보기) 그 폭으로 그린다
+      const legend = el('div', 'refcard-legend');
+      legend.innerHTML = '<span><i class="mk is-fix"></i>교정 있음</span><span><i class="mk is-limited"></i>참고용</span><span><i class="mk is-now"></i>질문한 분사</span>';
+      box.append(plot, legend);
+    }
+    if (card.metrics.length) {
+      const table = el('table', 'refcard-table');
+      table.innerHTML = '<thead><tr><th scope="col"></th><th scope="col">이 기록</th><th scope="col">전문가</th><th scope="col">유사도</th></tr></thead>';
+      if (card.zoneId != null) table.querySelector('th').textContent = zoneText(card.zoneId);
+      const body = el('tbody');
+      for (const metric of card.metrics) {
+        const row = el('tr');
+        const name = el('th', null, metric.label);
+        name.scope = 'row';
+        row.append(name, el('td', null, metricShow(metric, metric.actual, metric.actual_label)),
+          el('td', 'ref', metricShow(metric, metric.reference, metric.reference_label)), el('td', null, percent(metric.similarity_percent)));
+        body.append(row);
+      }
+      table.append(body);
+      box.append(table);
+    }
     return box;
   }
 
@@ -1037,14 +1033,14 @@
     const head = el('div', 'ask-head');
     const anchorBox = el('div', 'anchor');
     anchorBox.title = '질문은 이 재생 위치를 기준으로 답합니다';
-    const anchorZone = el('span', 'zone-tag zone-tag-idle', '이동 중');
-    const anchorTime = el('span', 'time', '0.0초');
+    const anchorZone = el('span', 'zone-tag zone-tag-idle');
+    const anchorTime = el('span', 'time', '0:00');
     anchorBox.innerHTML = svg('map-pin');
     anchorBox.append(anchorZone, anchorTime);
     const fresh = iconButton('icon-btn', 'message-square-plus', '새 대화');
     head.append(anchorBox, fresh);
 
-    const tabs = el('div', 'tabs');
+    const tabs = el('div', 'tabs segtabs');
     tabs.setAttribute('role', 'radiogroup');
     tabs.setAttribute('aria-label', '질문 종류');
     const log = el('div', 'ask-log');
@@ -1066,52 +1062,75 @@
     const modes = el('div', 'seg');
     modes.setAttribute('role', 'group');
     modes.setAttribute('aria-label', '답변 수준');
-    // 답변 언어는 국기 12개를 늘 보이게 둔다. 질문은 한국어로 보내고 답만 고른 언어로 받는다.
+    // 답변 언어: 단추 하나(국기 + 그 언어 이름)가 12개 언어 목록을 연다. 질문은 한국어로 보내고 답만 고른 언어로 받는다.
     let language = LANGUAGES[0];
-    const flags = el('div', 'flags');
-    flags.setAttribute('role', 'radiogroup');
-    flags.setAttribute('aria-label', '답변 언어');
-    const languageName = el('span', 'language-name');
-    languageName.title = '답변 언어. 질문은 한국어로 보냅니다';
-    const chooseLanguage = (index, focus = false) => {
-      language = LANGUAGES[index];
-      languageName.innerHTML = svg('languages');
-      languageName.append(language[2]);
-      languageName.lang = language[0];
-      [...flags.children].forEach((button, i) => {
-        button.setAttribute('aria-checked', String(i === index));
-        button.tabIndex = i === index ? 0 : -1;
-      });
-      if (focus) flags.children[index].focus();
-    };
-    LANGUAGES.forEach(([code, country, name, korean], index) => {
-      const button = el('button', 'flag');
-      button.type = 'button';
-      button.setAttribute('role', 'radio');
-      button.title = code === 'ko' ? name : `${name} · ${korean}`;
-      button.setAttribute('aria-label', button.title);
-      button.append(flagImage(country));
-      button.addEventListener('click', () => chooseLanguage(index));
-      button.addEventListener('keydown', (event) => {
-        const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[event.key];
-        const next = step ? (index + step + LANGUAGES.length) % LANGUAGES.length
-          : event.key === 'Home' ? 0 : event.key === 'End' ? LANGUAGES.length - 1 : null;
+    const languageBox = el('div', 'lang');
+    const languageButton = el('button', 'lang-btn');
+    languageButton.type = 'button';
+    languageButton.setAttribute('aria-haspopup', 'listbox');
+    languageButton.setAttribute('aria-expanded', 'false');
+    const languageList = el('div', 'lang-list');
+    languageList.id = 'v2LangList';
+    languageList.setAttribute('role', 'listbox');
+    languageList.setAttribute('aria-label', '답변 언어');
+    languageList.hidden = true;
+    languageButton.setAttribute('aria-controls', languageList.id);
+    const languageOptions = LANGUAGES.map(([code, country, name, korean], index) => {
+      const option = el('button', 'lang-option');
+      option.type = 'button';
+      option.setAttribute('role', 'option');
+      option.lang = code;
+      option.append(flagImage(country), el('span', null, name), el('span', 'ko', code === 'ko' ? '' : korean));
+      option.insertAdjacentHTML('beforeend', svg('check'));
+      option.addEventListener('click', () => { chooseLanguage(index); openLanguages(false); languageButton.focus(); });
+      option.addEventListener('keydown', (event) => {
+        const next = { ArrowDown: index + 1, ArrowUp: index - 1, Home: 0, End: LANGUAGES.length - 1 }[event.key];
         if (next == null) return;
         event.preventDefault();
-        chooseLanguage(next, true);
+        languageOptions[(next + LANGUAGES.length) % LANGUAGES.length].focus();
       });
-      flags.append(button);
+      return option;
     });
+    languageList.append(...languageOptions);
+    const chooseLanguage = (index) => {
+      language = LANGUAGES[index];
+      languageButton.replaceChildren(flagImage(language[1]), el('span', null, language[2]));
+      languageButton.insertAdjacentHTML('beforeend', svg('chevron-down'));
+      languageButton.lang = language[0];
+      languageButton.title = '답변 언어. 질문은 한국어로 보냅니다';
+      languageButton.setAttribute('aria-label', `답변 언어: ${language[3]}`);
+      languageOptions.forEach((option, i) => { option.setAttribute('aria-selected', String(i === index)); option.tabIndex = i === index ? 0 : -1; });
+    };
+    function openLanguages(open) {
+      languageList.hidden = !open;
+      languageButton.setAttribute('aria-expanded', String(open));
+      if (open) languageOptions[LANGUAGES.indexOf(language)].focus();
+    }
+    languageButton.addEventListener('click', () => openLanguages(languageList.hidden));
+    languageButton.addEventListener('keydown', (event) => { if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); openLanguages(true); } });
+    languageBox.addEventListener('keydown', (event) => {
+      if (event.key !== 'Escape' || languageList.hidden) return;
+      event.stopPropagation();
+      openLanguages(false);
+      languageButton.focus();
+    });
+    languageBox.addEventListener('focusout', (event) => { if (!languageBox.contains(event.relatedTarget)) openLanguages(false); });
+    document.addEventListener('click', (event) => { if (!languageList.hidden && !languageBox.contains(event.target)) openLanguages(false); });
+    languageBox.append(languageButton, languageList);
     chooseLanguage(0);
     // 기록된 응답만 보여 주는 화면(링크용)에서는 준비된 질문만 쓴다.
     input.disabled = send.disabled = Boolean(options.presetOnly);
-    tools.append(modes, languageName);
-    form.append(line, flags, tools);
+    tools.append(modes, languageBox);
+    form.append(line, tools);
     root.append(head, tabs, log, presets, form);
 
+    // 추천 질문은 빈 대화에서는 안내 아래에, 대화가 시작되면 입력 칸 위 한 줄(가로로 넘김)에 둔다.
     const empty = () => {
       if (log.children.length) return;
-      log.append(el('p', 'ask-empty', options.notice || '재생을 멈춘 곳을 기준으로 답합니다'));
+      const box = el('div', 'ask-empty');
+      box.append(el('p', null, options.notice || '재생을 멈춘 곳을 기준으로 답합니다'), presets);
+      log.append(box);
+      presets.classList.remove('is-row');
     };
     const scroll = () => { log.scrollTop = log.scrollHeight; };
     const chip = (icon, text, title) => {
@@ -1122,7 +1141,11 @@
       return node;
     };
     const bubble = (cls, text) => {
-      log.querySelector('.ask-empty')?.remove();
+      if (log.querySelector('.ask-empty')) {
+        log.querySelector('.ask-empty').remove();
+        presets.classList.add('is-row');
+        form.before(presets);
+      }
       const node = el('div', `msg ${cls}`, text);
       log.append(node);
       scroll();
@@ -1231,7 +1254,7 @@
       const pin = el('button', 'chip');
       pin.type = 'button';
       pin.innerHTML = svg('map-pin');
-      pin.append(`${sent.state.zone_id == null ? 'Zone 없음' : zoneText(sent.state.zone_id)} · ${sent.state.playhead_seconds.toFixed(2)}초`);
+      pin.append(`${sent.state.zone_id == null ? 'Zone 없음' : zoneText(sent.state.zone_id)} · ${L.clock(sent.state.playhead_seconds)}`);
       pin.title = '질문한 재생 위치로 이동';
       pin.addEventListener('click', () => seekToSeconds(sent.state.playhead_seconds));
       meta.append(pin);
@@ -1347,10 +1370,10 @@
     const reset = () => {
       busy?.abort();
       conversation = newConversation();
+      for (const plot of log.querySelectorAll('.refcard-chart')) chartSizes.unobserve(plot);
       log.replaceChildren();
       pins.replaceChildren();
       feedback.reset();
-      scaleClones.disconnect();   // 지운 대화의 복제 그림을 놓아준다
       $('v2RailCount').textContent = '';
       empty();
     };
@@ -1365,8 +1388,9 @@
         if (changed) reset();   // 다른 기록의 대화가 섞이지 않게 새 대화로 시작한다
       },
       setAnchor(state) {
-        tagZone(anchorZone, state.zone_id, state.zone_id != null && !state.spraying ? ' · 이동 중' : '');
-        anchorTime.textContent = `${state.playhead_seconds.toFixed(2)}초`;
+        tagZone(anchorZone, state.zone_id);   // Zone 사이 이동은 HUD 만 말한다. 이 칸은 답의 기준 Zone 만 보인다
+        anchorZone.hidden = state.zone_id == null;
+        anchorTime.textContent = L.clock(state.playhead_seconds);
         // 접힌 뷰어 줄에는 Zone 번호만 둔다(56px 칸)
         const rail = $('v2RailZone');
         rail.classList.toggle('zone-tag-idle', state.zone_id == null);
@@ -1381,8 +1405,9 @@
   // 서버가 공개 이상 알림과 같은 함수로 판정한 알림을 재생 시각에 맞춰 띄운다. 고르기·짧은 표기는 motion_viewer_alerts.js.
   const notices = (() => {
     const A = window.motionViewerAlerts;
-    const toastHost = $('v2Toast'), marks = $('v2AlertMarks'), button = $('v2AlertsButton'), list = $('v2AlertList');
-    const items = $('v2AlertItems'), note = $('v2AlertNote'), count = $('v2AlertCount'), live = $('v2AlertLive');
+    const toastHost = $('v2Toast'), button = $('v2AlertsButton'), list = $('v2AlertList');
+    const items = $('v2AlertItems'), note = $('v2AlertNote'), kinds = $('v2AlertKinds'), live = $('v2AlertLive');
+    let kindsKey = null;
     let wasPending = false, all = [], last = 0, seeking = true, lastKey = null, lastAt = -Infinity, current = null, focused = null;
     const tone = (alert) => `tone-${A.KIND[alert.anomaly_type]?.tone || 'warn'}`;
     const face = (alert) => {   // [종류 아이콘][Zone 네모+번호][짧은 표기]
@@ -1418,17 +1443,6 @@
       const expire = () => (node.matches(':hover, :focus-within') ? setTimeout(expire, 1000) : node.remove());
       setTimeout(expire, 5000);
     }
-    function paintMarks() {
-      const duration = Number(record?.duration_seconds) || 0;
-      marks.replaceChildren(...(duration ? all : []).map((alert) => {
-        const mark = labelled(el('button', `alert-mark ${tone(alert)}`), alert);
-        mark.type = 'button';
-        mark.tabIndex = -1;   // 키보드는 목록으로 같은 일을 한다
-        mark.style.left = `${Math.max(0, Math.min(100, alert.at_seconds / duration * 100))}%`;
-        mark.addEventListener('click', () => go(alert));
-        return mark;
-      }));
-    }
     function paintAhead() {
       for (const row of items.querySelectorAll('.alert-row')) row.classList.toggle('is-ahead', Number(row.dataset.at) > anchor.playhead_seconds);
     }
@@ -1436,13 +1450,23 @@
       const { pending, text } = A.listStatus(record, all.length);
       button.setAttribute('aria-busy', String(pending));
       list.setAttribute('aria-busy', String(pending));
-      // 상태가 바뀔 때만 아이콘을 바꾼다. 클릭마다 바꾸면 클릭한 svg 가 떨어져 나가 바깥 클릭 처리가 목록을 바로 닫는다.
-      const icon = button.querySelector('svg');
-      if (icon && pending !== wasPending) icon.outerHTML = svg(pending ? 'loader-circle' : 'bell');
-      button.title = pending ? `알림 ${all.length}건 · 순서·방향 알림을 불러오는 중` : `알림 ${all.length}건`;
+      // 단추 = 종류별 개수(아이콘 + 수, 넓으면 이름). 개수가 바뀔 때만 다시 그린다.
+      // 클릭마다 바꾸면 클릭한 svg 가 떨어져 나가 바깥 클릭 처리가 목록을 바로 닫는다.
+      const counts = L.countByKind(all, Object.keys(A.KIND));
+      const key = `${pending}|${counts.map((item) => `${item.type}:${item.count}`).join(',')}`;
+      if (key !== kindsKey) {
+        kindsKey = key;
+        kinds.replaceChildren(...counts.map(({ type, count }) => {
+          const item = el('span', `kind tone-${A.KIND[type].tone}`);
+          item.innerHTML = svg(A.KIND[type].icon);
+          item.append(el('span', 'nm', A.KIND[type].label), String(count));
+          return item;
+        }));
+        if (pending || !counts.length) kinds.insertAdjacentHTML('beforeend', svg(pending ? 'loader-circle' : 'bell'));
+      }
+      const spoken = counts.map(({ type, count }) => `${A.KIND[type].label} ${count}`).join(', ');
+      button.title = `알림 ${all.length}건${spoken ? ` (${spoken})` : ''}${pending ? ' · 순서·방향 알림을 불러오는 중' : ''}`;
       button.setAttribute('aria-label', button.title);
-      count.hidden = pending || !all.length;
-      count.textContent = String(all.length);
       note.textContent = text;
       note.hidden = !note.textContent;
       // 목록이 닫혀 있어도 늦게 온 순서·방향 알림이 다 왔다는 것을 화면 읽기 프로그램에 한 번 알린다
@@ -1454,7 +1478,7 @@
         row.type = 'button';
         row.dataset.at = String(alert.at_seconds);
         row.dataset.id = String(alert.id);
-        row.append(...face(alert), el('span', 'alert-time', `${Number(alert.at_seconds).toFixed(1)}초`));
+        row.append(...face(alert), el('span', 'alert-time', L.clock(alert.at_seconds)));
         if (alert.id === current) row.setAttribute('aria-current', 'true');
         row.addEventListener('click', () => go(alert));
         const item = el('li');
@@ -1487,7 +1511,7 @@
     document.addEventListener('input', (event) => { if (event.target.id === 'timeline') { seeking = true; if (focused) focusZone(null); } }, true);
     document.addEventListener('click', (event) => { if (event.target.closest('#restart')) { seeking = true; if (focused) focusZone(null); } }, true);
 
-    const sync = () => { all = A.merge(record); last = anchor.playhead_seconds; seeking = true; lastKey = null; paintMarks(); paintList(); };
+    const sync = () => { all = A.merge(record); last = anchor.playhead_seconds; seeking = true; lastKey = null; paintList(); };
     return {
       load(payload) {
         current = null;
@@ -1521,6 +1545,14 @@
     };
   })();
 
+  // 재생 시각(m:ss)과 막대 위치. 막대의 지난 쪽·남은 쪽과 손잡이는 --p 하나로 그린다.
+  function renderClock(seconds) {
+    const duration = Number(record?.duration_seconds) || 0;
+    $('v2TimeNow').textContent = L.clock(seconds);
+    $('v2TimeTotal').textContent = L.clock(duration);
+    $('v2Scrub').style.setProperty('--p', `${duration ? Math.max(0, Math.min(100, seconds / duration * 100)) : 0}%`);
+  }
+
   // ── 이벤트 ────────────────────────────────────────────────
   addEventListener('motion-viewer-data', (event) => {
     record = event.detail;
@@ -1529,7 +1561,9 @@
     coatMap = false;
     armSeen = record.arm_pose_evaluation;
     anchor = anchorAt(0, 0);
+    hudOpen = false;
     renderAll();
+    renderClock(0);
     chat.setRecord(record);
     chat.setAnchor(anchor);
     notices.load(record);
@@ -1548,12 +1582,10 @@
       renderScores();
       renderPose();
     }
-    if (previous.zone_id !== anchor.zone_id || previous.map_num !== anchor.map_num || previous.spraying !== anchor.spraying) {
-      renderZoneNote();
-    }
+    if (previous.zone_id !== anchor.zone_id || previous.map_num !== anchor.map_num) renderHudFix();
     if (previous.zone_id !== anchor.zone_id || previous.map_num !== anchor.map_num) markCurrentZone(true);   // 분사만 바뀔 때는 따라가지 않는다
     renderPoseNow();
-    layout.syncTabs();
+    renderClock(seconds);
     markFlaggedJoints(event.detail.frame);
     chat.setAnchor(anchor);
     notices.frame(seconds);

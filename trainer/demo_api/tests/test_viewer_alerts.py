@@ -238,7 +238,9 @@ def test_v2_page_has_alert_surfaces_and_loads_the_alert_script_first(tmp_path: P
     client = _client(tmp_path)
     page = viewer_v2_document()
     assert 'id="v2Toast"' in page and 'aria-live="polite"' in page.split('id="v2Toast"', 1)[1].split(">", 1)[0]
-    assert 'id="v2AlertMarks"' in page and 'id="v2AlertsButton"' in page and 'id="v2AlertList"' in page
+    assert 'id="v2AlertsButton"' in page and 'id="v2AlertList"' in page and 'id="v2AlertKinds"' in page
+    # 2026-11-13 재디자인: 재생 막대 위·아래에 알림 표지를 두지 않는다. 알림은 종류별 수 단추의 목록으로만 연다.
+    assert 'v2AlertMarks' not in page and 'alert-mark' not in page
     assert page.index("/motion-viewer/assets/motion_viewer_alerts.js") < page.index("/motion-viewer/assets/motion_viewer_v2.js")
     assert 'aria-atomic="false"' in page and "atEnd" in page   # 새 토스트만 읽히고, 끝 시각을 한 번 그린 뒤 감는다
     script = client.get("/motion-viewer/assets/motion_viewer_alerts.js")

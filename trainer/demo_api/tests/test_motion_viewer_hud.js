@@ -33,9 +33,12 @@ const LONGEST = {
   realtimeHudAxis: '99.9°', realtimeHudDirection: '분석 중', realtimeHudCoverage: '100%',
 };
 
+// v2 는 이동 문구를 'Zone 사이 이동'으로 바꿔 쓴다(motion_viewer_v2.js, 2026-11-13 재디자인).
+const V2_LONGEST = { realtimeHudActivity: 'Zone 사이 이동' };
+
 test('두 화면의 상태 막대 값 칸마다 가장 긴 값이 적혀 있다', () => {
   for (const [name, html] of [['v2', v2Html], ['기존', legacy]]) {
-    for (const id of VALUES) if (LONGEST[id]) assert.equal(maxOf(html, id), LONGEST[id], `${name} ${id}`);
+    for (const id of VALUES) if (LONGEST[id]) assert.equal(maxOf(html, id), name === 'v2' && V2_LONGEST[id] || LONGEST[id], `${name} ${id}`);
   }
   // 속도: v2 는 mm/s(천 단위 쉼표, 실제 기록에서 26,930 까지 나와 5자리), 기존 화면은 m/s 소수 둘째 자리
   assert.equal(maxOf(v2Html, 'realtimeHudSpeed'), '99,999 mm/s');

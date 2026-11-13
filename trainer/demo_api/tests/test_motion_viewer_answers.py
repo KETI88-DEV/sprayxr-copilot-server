@@ -261,8 +261,8 @@ def test_v2_question_pins_sit_above_the_slider_that_follows_them_in_the_dom() ->
     page, css = _v2_static("motion_viewer_v2.html"), _v2_static("motion_viewer_v2.css")
     assert page.index('id="v2Pins"') < page.index('id="timeline"')   # 슬라이더가 뒤라서 z-index 없이는 핀을 덮는다
     pins = re.search(r"z-index:\s*(\d+)", _css_rule(css, ".pins"))
-    marks = re.search(r"z-index:\s*(\d+)", _css_rule(css, ".alert-marks"))
-    assert pins and marks and int(pins.group(1)) > int(marks.group(1)) >= 1
+    slider = re.search(r"z-index:\s*(\d+)", _css_rule(css, "#timeline"))
+    assert pins and slider and int(pins.group(1)) > int(slider.group(1)) >= 1
 
 
 def test_v2_coating_list_follows_the_current_zone_only_when_asked_and_not_while_the_user_scrolls() -> None:
@@ -275,9 +275,10 @@ def test_v2_coating_list_follows_the_current_zone_only_when_asked_and_not_while_
     assert script.count("markCurrentZone();") >= 3      # 목록·순서를 그릴 때는 강조만
 
 
-def test_v2_zone_line_does_not_say_small_difference_for_a_zone_the_coating_panel_flags() -> None:
+def test_v2_hud_corrections_do_not_say_small_difference_for_a_zone_the_coating_panel_flags() -> None:
+    # 2026-11-13 재디자인: 장면 아래 Zone 줄 대신 HUD 교정 칸이 같은 문장을 보인다.
     script = _v2_static("motion_viewer_v2.js")
-    note = script[script.index("function renderZoneNote"):script.index("advice.title")]
+    note = script[script.index("function renderHudFix"):script.index("$('v2HudFixList')")]
     assert "targetOf()?.zones" in note and "'below'" in note and "'above'" in note and "grade_labels" in note
     assert note.index("coatNote ||") < note.index("전문가 기록과 차이가 작습니다")   # 도막 등급이 먼저
 

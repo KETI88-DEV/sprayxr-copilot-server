@@ -11,36 +11,61 @@ const sandbox = { window: {} };
 vm.runInNewContext(source, sandbox);
 const L = sandbox.window.motionViewerV2Layout;
 
-test('뷰어 폭이 1300 이상이면 세 칸, 900 이상이면 두 칸, 그보다 좁으면 한 칸', () => {
-  assert.equal(L.featureCount(1306), 3);
-  assert.equal(L.featureCount(1300), 3);
-  assert.equal(L.featureCount(1299), 2);
-  assert.equal(L.featureCount(900), 2);
-  assert.equal(L.featureCount(899), 1);
+test('창 높이가 800 이하이거나 뷰어 열이 1300보다 좁으면 한 칸, 아니면 세 칸(두 칸 보기는 없다)', () => {
+  assert.equal(L.panelCount(1306, 1080), 3);
+  assert.equal(L.panelCount(1300, 801), 3);
+  assert.equal(L.panelCount(1299, 1080), 1);
+  assert.equal(L.panelCount(1600, 800), 1);
+  assert.equal(L.panelCount(800, 900), 1);
+  assert.equal(L.pickShown, undefined);
+  assert.equal(L.normalizeShown, undefined);
 });
 
-test('두 칸일 때 숨은 칸을 열면 먼저 열어 둔 칸과 자리를 바꾼다', () => {
-  let shown = L.normalizeShown([], 2);
-  assert.deepEqual([...shown], ['pose', 'order']);
-  shown = L.pickShown(shown, 'coating', 2);
-  assert.deepEqual([...L.displayOrder(shown)], ['order', 'coating']);
-  shown = L.pickShown(shown, 'pose', 2);
-  assert.deepEqual([...L.displayOrder(shown)], ['pose', 'coating']);
+test('한 칸 보기 탭: 다른 탭은 바꾸고, 열린 탭을 다시 누르면 접고, 접힌 채 누르면 그 탭으로 편다', () => {
+  let state = { active: 'pose', folded: false };
+  state = L.tabPress(state, 'order');
+  assert.deepEqual({ ...state }, { active: 'order', folded: false });
+  state = L.tabPress(state, 'order');
+  assert.deepEqual({ ...state }, { active: 'order', folded: true });
+  state = L.tabPress(state, 'coating');
+  assert.deepEqual({ ...state }, { active: 'coating', folded: false });
+  assert.deepEqual({ ...L.tabPress(state, 'nope') }, { active: 'coating', folded: false });
 });
 
-test('이미 보이는 칸을 누르면 칸은 그대로이고 다음에 밀려나지 않는다', () => {
-  let shown = ['pose', 'order'];
-  shown = L.pickShown(shown, 'pose', 2);
-  assert.deepEqual([...L.displayOrder(shown)], ['pose', 'order']);
-  shown = L.pickShown(shown, 'coating', 2);
-  assert.deepEqual([...L.displayOrder(shown)], ['pose', 'coating']);
+test('재생 시각은 m:ss 로 쓴다', () => {
+  assert.equal(L.clock(0), '0:00');
+  assert.equal(L.clock(49.9), '0:49');
+  assert.equal(L.clock(75), '1:15');
+  assert.equal(L.clock(3600), '60:00');
+  assert.equal(L.clock(-3), '0:00');
+  assert.equal(L.clock(Number.NaN), '0:00');
 });
 
-test('칸 수가 줄면 가장 최근 칸을 남기고, 늘면 빠진 칸을 앞에서부터 채운다', () => {
-  assert.deepEqual([...L.normalizeShown(['pose', 'coating'], 1)], ['coating']);
-  assert.deepEqual([...L.displayOrder(L.normalizeShown(['coating'], 2))], ['pose', 'coating']);
-  assert.deepEqual([...L.displayOrder(L.normalizeShown(['order'], 3))], ['pose', 'order', 'coating']);
-  assert.deepEqual([...L.normalizeShown(['nope', 'order', 'order'], 1)], ['order']);
+test('순서: 권장 순서와 같은 자리는 same, 다른 자리는 moved, 이 기록에 없으면 missing, 기준 밖은 extra', () => {
+  const result = L.orderMoves(['8', '12', '11', '10'], ['12', '8', '11', '99']);
+  assert.deepEqual(result.expert.map((item) => item.state), ['moved', 'moved', 'same', 'missing']);
+  assert.deepEqual(result.expert.map((item) => item.actualIndex), [1, 0, 2, -1]);
+  assert.deepEqual(result.actual.map((item) => item.state), ['moved', 'moved', 'same', 'extra']);
+  assert.equal(result.moved, 2);
+  assert.equal(result.missing, 1);
+  const same = L.orderMoves(['1', '2'], ['1', '2']);
+  assert.equal(same.moved, 0);
+  assert.equal(same.missing, 0);
+});
+
+test('자세 그림 좌표: 분사 순서대로 고르게 놓고 유사도 40~100%를 위아래로, 범위 밖은 끝에 붙인다', () => {
+  const box = { left: 30, right: 230, top: 10, bottom: 70 };
+  const points = L.posePoints([40, 100, 70, 20, 130], box);
+  assert.deepEqual(points.map((p) => p.x), [30, 80, 130, 180, 230]);
+  assert.deepEqual(points.map((p) => p.y), [70, 10, 40, 70, 10]);
+  assert.equal(L.posePoints([80], box)[0].x, 130);
+  assert.equal(L.poseY(75, box), 35);
+});
+
+test('알림 개수는 종류 순서대로 세고 없는 종류는 뺀다', () => {
+  const alerts = [{ anomaly_type: 'b' }, { anomaly_type: 'a' }, { anomaly_type: 'b' }, { anomaly_type: 'z' }];
+  assert.deepEqual(L.countByKind(alerts, ['a', 'b', 'c']).map((item) => [item.type, item.count]), [['a', 1], ['b', 2]]);
+  assert.deepEqual([...L.countByKind([], ['a'])], []);
 });
 
 test('채팅 폭 기본값은 화면의 32%를 420~640px로 묶고, 끌어도 뷰어 560px와 채팅 360px를 지킨다', () => {
@@ -89,10 +114,10 @@ test('서버 한도보다 긴 질문·답은 잘라 보내고 Zone 번호는 문
   assert.equal(none.answer.map_num, null);
 });
 
-test('참고 첨부는 질문 칸별로 정해진 그림만 고르고 지식 질문에는 붙이지 않는다', () => {
-  assert.deepEqual([...L.attachmentsFor('pose')], ['skeleton', 'poseBars', 'zoneMetrics']);
-  assert.deepEqual([...L.attachmentsFor('order')], ['scene', 'order']);
-  assert.deepEqual([...L.attachmentsFor('coating')], ['scene', 'coating', 'zoneMetrics']);
+test('참고 카드는 자세 질문에 분사 그림과 Zone 수치, 도막 질문에 Zone 수치만, 순서·지식에는 붙이지 않는다', () => {
+  assert.deepEqual([...L.attachmentsFor('pose')], ['poseChart', 'zoneMetrics']);
+  assert.deepEqual([...L.attachmentsFor('coating')], ['zoneMetrics']);
+  assert.deepEqual([...L.attachmentsFor('order')], []);
   assert.deepEqual([...L.attachmentsFor('knowledge')], []);
   assert.deepEqual([...L.attachmentsFor('unknown')], []);
 });
