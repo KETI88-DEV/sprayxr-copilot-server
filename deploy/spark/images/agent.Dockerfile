@@ -52,7 +52,7 @@ USER 10001:10001
 EXPOSE 8100
 CMD ["python3", "-m", "uvicorn", "mcp_servers.main:app", "--host", "0.0.0.0", "--port", "8100", "--workers", "1"]
 
-# ---------------------------------------------------------------- agent-api (GPU: bge-m3, reranker)
+# ---------------------------------------------------------------- agent-api (GPU: KURE-v3, KURE-Reranker-nano)
 FROM base AS agent-api
 # PyTorch 공식 cu130 인덱스의 aarch64 휠(torch-2.9.1+cu130-cp311-cp311-manylinux_2_28_aarch64.whl, 2026-09-15 인덱스 확인).
 # CUDA 런타임은 휠 의존성(nvidia-*-cu13)으로 들어온다. GB10(SM121) 커널 동작은 README §5에서 확인한다.

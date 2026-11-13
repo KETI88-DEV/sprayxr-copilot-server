@@ -3,9 +3,8 @@
 
 rag_config_spark_vllm.yaml의 컨테이너 경로와 1:1인 배치로 자산을 모은다(배치는 bundle_manifest.py 문서 참고).
 
-- bge-m3: HF 캐시 main 스냅숏에는 pytorch_model.bin만 있고, search_index는 use_safetensors=True로 읽는다.
-  오프라인에서는 safetensors 자동 변환이 네트워크를 요구하므로, refs/pr/130 스냅숏의 model.safetensors를
-  main 스냅숏 파일과 합친 로컬 디렉터리를 만든다. pytorch_model.bin은 기본 제외(--keep-pytorch-bin).
+- 임베딩(KURE-v3)·재정렬(KURE-Reranker-nano): HF 캐시 main 스냅숏을 그대로 넣는다. 둘 다 model.safetensors가
+  main에 있다. KURE-v3의 라이선스 고지 파일(LICENSE, LICENSE-OpenMDW-1.1, NOTICE)도 스냅숏에서 함께 온다.
 - 스냅숏 파일은 blobs로 가는 심볼릭 링크다. 번들에는 실제 파일로 넣는다(심볼릭 링크는 매니페스트가 거부).
 - --link: 같은 파일시스템이면 하드링크(모델 29GB를 복사하지 않음), 아니면 복사로 떨어진다.
 - 선택 자산이 없으면 bundle_sources.json의 absent_optional에 적고 계속한다.
@@ -32,7 +31,7 @@ import bundle_manifest as bm  # noqa: E402
 DEFAULT_FP8_DIR = "/output/merged/qwen36_27b_shipcoat_v6_1_fp8"
 DEFAULT_BF16_DIR = "/output/merged/qwen36_27b_shipcoat_v6_1_bf16"
 DEFAULT_HUB_CACHE = "/hf-cache/hub"
-DEFAULT_INDEX_DIR = "/output/indexes"
+DEFAULT_INDEX_DIR = "/output/indexes_20261113_kure3"  # build_index.py 산출물(2026-11-13, 25,483청크)
 # mcp_servers/pose_estimation.py DEFAULT_POSE_REFERENCE; compose.yaml POSE_REFERENCE_PATH
 DEFAULT_POSE_REFERENCE = "/output/expert_reference/expert_pose_reference.json"
 # mcp_servers/pose_estimation.py DEFAULT_ARM_REFERENCE; compose.yaml ARM_REFERENCE_PATH.
@@ -162,13 +161,7 @@ def build_plan(args: argparse.Namespace) -> tuple[list[CopyItem], dict[str, Any]
     if args.skip_fp8 and not args.with_bf16:
         raise PrepareError("no model selected: drop --skip-fp8 or add --with-bf16")
 
-    embedding, sources["embedding"] = plan_hf_model(
-        "embedding",
-        args.hf_hub_cache,
-        args.bge_m3_repo,
-        exclude=() if args.keep_pytorch_bin else ("pytorch_model.bin",),
-        overrides={"model.safetensors": args.bge_m3_safetensors_revision},
-    )
+    embedding, sources["embedding"] = plan_hf_model("embedding", args.hf_hub_cache, args.embedding_repo)
     reranker, sources["reranker"] = plan_hf_model("reranker", args.hf_hub_cache, args.reranker_repo)
     items += embedding + reranker
 
@@ -244,10 +237,8 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser.add_argument("--with-bf16", action="store_true", help="include the BF16 rollback model (52GB)")
     parser.add_argument("--bf16-dir", type=Path, default=Path(DEFAULT_BF16_DIR))
     parser.add_argument("--hf-hub-cache", type=Path, default=Path(DEFAULT_HUB_CACHE))
-    parser.add_argument("--bge-m3-repo", default="BAAI/bge-m3")
-    parser.add_argument("--bge-m3-safetensors-revision", default="refs/pr/130")
-    parser.add_argument("--keep-pytorch-bin", action="store_true")
-    parser.add_argument("--reranker-repo", default="BAAI/bge-reranker-v2-m3")
+    parser.add_argument("--embedding-repo", default="nlpai-lab/KURE-v3")
+    parser.add_argument("--reranker-repo", default="nlpai-lab/KURE-Reranker-nano")
     parser.add_argument("--index-dir", type=Path, default=Path(DEFAULT_INDEX_DIR))
     parser.add_argument("--pose-reference", type=Path, default=Path(DEFAULT_POSE_REFERENCE))
     parser.add_argument("--arm-reference", type=Path, default=Path(DEFAULT_ARM_REFERENCE))
