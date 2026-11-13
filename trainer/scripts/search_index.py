@@ -55,13 +55,17 @@ def load_metadata(metadata_path: str, embedding_model: Optional[str] = None) -> 
     return metadata
 
 
-def load_embedder(model_name: str, device: str, max_seq_length: int) -> Any:
+def load_embedder(model_name: str, device: str, max_seq_length: int, dtype: Optional[str] = None) -> Any:
     from sentence_transformers import SentenceTransformer
 
+    # dtype (e.g. "bfloat16", config embedding.dtype) must be the same for building and serving.
+    model_kwargs: Dict[str, Any] = {"use_safetensors": True}
+    if dtype:
+        model_kwargs["dtype"] = dtype
     model = SentenceTransformer(
         model_name,
         device=device,
-        model_kwargs={"use_safetensors": True},
+        model_kwargs=model_kwargs,
     )
     model.max_seq_length = max_seq_length
     logger.info("Loaded embedder: %s on %s", model_name, device)
@@ -300,6 +304,7 @@ def main() -> int:
         config["embedding"]["model_name"],
         config["embedding"]["device"],
         config["embedding"]["max_seq_length"],
+        config["embedding"].get("dtype"),
     )
 
     reranker = None

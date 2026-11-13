@@ -55,6 +55,7 @@ def main() -> int:
         config["embedding"]["model_name"],
         config["embedding"].get("device", "cuda"),
         config["embedding"].get("max_seq_length", 1024),
+        config["embedding"].get("dtype"),
     )
     reranker = load_reranker(
         config["reranker"]["model_name"],

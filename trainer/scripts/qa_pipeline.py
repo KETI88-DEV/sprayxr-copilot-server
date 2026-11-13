@@ -172,6 +172,7 @@ def load_all_models(config: Dict[str, Any]) -> Dict[str, Any]:
         config["embedding"]["model_name"],
         config["embedding"]["device"],
         config["embedding"]["max_seq_length"],
+        config["embedding"].get("dtype"),
     )
     logger.info("Loaded embedder in %.2fs", time.time() - t0)
 

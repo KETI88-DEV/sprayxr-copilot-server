@@ -363,16 +363,10 @@ def embed_chunks(
     texts: List[str],
     config: Dict[str, Any],
 ) -> np.ndarray:
-    from sentence_transformers import SentenceTransformer
+    from search_index import load_embedder  # same loading (dtype, max length) as serving
 
     emb_cfg = config["embedding"]
-    logger.info("Loading embedding model: %s", emb_cfg["model_name"])
-    model = SentenceTransformer(
-        emb_cfg["model_name"],
-        device=emb_cfg["device"],
-        model_kwargs={"use_safetensors": True},
-    )
-    model.max_seq_length = emb_cfg["max_seq_length"]
+    model = load_embedder(emb_cfg["model_name"], emb_cfg["device"], emb_cfg["max_seq_length"], emb_cfg.get("dtype"))
 
     logger.info("Encoding %d chunks (batch_size=%d)...", len(texts), emb_cfg["batch_size"])
     t0 = time.time()
@@ -468,6 +462,7 @@ def save_outputs(
             "ef_construction": config["index"]["ef_construction"],
             "total_vectors": len(chunks),
             "embedding_model": config["embedding"]["model_name"],
+            "embedding_dtype": config["embedding"].get("dtype"),
             "tokenizer": str(config["chunking"]["tokenizer_path"]),
             "chunk_size_range": [
                 config["chunking"]["min_tokens"],
@@ -612,6 +607,12 @@ def main() -> int:
         logger.error(
             "Embedding count mismatch: %d embeddings vs %d chunks",
             embeddings.shape[0], len(all_chunks),
+        )
+        return 1
+    if embeddings.shape[1] != config["embedding"]["dimension"]:
+        logger.error(
+            "Embedding dimension %d does not match config embedding.dimension %d",
+            embeddings.shape[1], config["embedding"]["dimension"],
         )
         return 1
 

@@ -662,6 +662,7 @@ class AgentPipeline:
             self.config["embedding"]["model_name"],
             self.config["embedding"]["device"],
             int(self.config["embedding"]["max_seq_length"]),
+            self.config["embedding"].get("dtype"),
         )
         reranker = search_mod.load_reranker(
             self.config["reranker"]["model_name"],
