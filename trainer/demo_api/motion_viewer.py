@@ -2085,6 +2085,11 @@ def create_motion_viewer_router(
         return FileResponse(static_root / f"motion_viewer_v2.{kind}", media_type="text/css" if kind == "css" else "text/javascript",
                             headers={"Cache-Control": "no-cache"})
 
+    @router.get("/motion-viewer/assets/motion_viewer_v2_layout.js", include_in_schema=False)
+    def v2_layout_script() -> FileResponse:
+        return FileResponse(static_root / "motion_viewer_v2_layout.js", media_type="text/javascript",
+                            headers={"Cache-Control": "no-cache"})
+
     @router.get("/motion-viewer/assets/motion_viewer_pose.js", include_in_schema=False)
     def pose_script() -> FileResponse:
         return FileResponse(

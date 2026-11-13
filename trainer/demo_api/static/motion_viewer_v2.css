@@ -533,3 +533,158 @@ button.chip:hover { background: var(--raised-hover); color: var(--ink); }
   .alerts { margin-left: auto; }   /* 목록이 오른쪽 끝에 붙어 화면 폭 - 32px 로 열리게 */
   .alert-list { width: calc(100vw - 32px); }
 }
+
+/* ── 화면 나누기(2026-11-13 B안): 경계선 가운데 손잡이로 뷰어·채팅을 접고 폭을 바꾼다 ── */
+.ask { position: relative; }
+.split {
+  position: absolute; top: 50%; left: 0; z-index: 6; transform: translate(-50%, -50%);
+  display: flex; flex-direction: column; align-items: center; padding: 4px 0;
+  border: 1px solid var(--line-strong); border-radius: 12px; background: var(--surface);
+}
+.split button {
+  display: grid; place-items: center; width: 24px; height: 28px; padding: 0; border: 0; border-radius: 8px;
+  background: transparent; color: var(--ink-3); cursor: pointer; transition: background-color .15s ease-out, color .15s ease-out;
+}
+.split button:hover { background: var(--raised); color: var(--ink); }
+.split .grip { height: 20px; cursor: col-resize; touch-action: none; }
+.split .lucide { width: 14px; height: 14px; }
+.v2-grid.is-resizing, .v2-grid.is-resizing * { cursor: col-resize; user-select: none; }
+.rail { position: relative; display: flex; flex-direction: column; align-items: center; gap: 8px; min-width: 0; padding: 12px 0; background: var(--surface); }
+.rail-left { border-right: 1px solid var(--line); }
+.rail-right { border-left: 1px solid var(--line); }
+.rail .split-edge { left: auto; right: 0; transform: translate(50%, -50%); }
+.rail-right .split-edge { left: 0; right: auto; transform: translate(-50%, -50%); }
+.rail .icon-btn { width: 36px; height: 36px; }
+.rail .count { color: var(--ink-3); font-size: 12px; font-variant-numeric: tabular-nums; }
+.rail .zone-tag { padding-inline: 6px; }
+
+@media (min-width: 901px) {
+  .v2-main { grid-template-rows: minmax(300px, 1fr) auto auto; }
+  .v2-grid { grid-template-columns: minmax(0, 1fr) var(--chat-w, clamp(420px, 32vw, 640px)); }
+  .v2-grid.is-chat-off { grid-template-columns: minmax(0, 1fr) 56px; }
+  .v2-grid.is-chat-off .ask { display: none; }
+  .v2-grid.is-viewer-off { grid-template-columns: 56px minmax(0, 1fr); }
+  .v2-grid.is-viewer-off.has-feedback { grid-template-columns: 56px minmax(0, 1fr) 560px; }
+  /* 뷰어를 접어도 장면은 화면 밖에서 계속 그린다. 참고 그림을 질문한 순간 그대로 옮기려면 캔버스가 살아 있어야 한다 */
+  .v2-grid.is-viewer-off .v2-main { position: fixed; top: 0; left: -200vw; width: 1400px; height: 100dvh; visibility: hidden; }
+  /* 채팅만 볼 때 대화는 읽기 좋은 폭으로 가운데 */
+  .v2-grid.is-viewer-off .ask-head, .v2-grid.is-viewer-off .ask-log,
+  .v2-grid.is-viewer-off .presets, .v2-grid.is-viewer-off .composer { padding-inline: max(16px, calc((100% - 820px) / 2)); }
+  .v2-grid.is-viewer-off .tabs { padding-inline: max(12px, calc((100% - 820px) / 2)); }
+}
+@media (max-width: 900px) {
+  .split, .rail { display: none !important; }
+}
+
+/* ── 좁아진 뷰어: 분석 칸 셋을 탭 줄로 바꾸고 두 칸 또는 한 칸만 보인다 ── */
+.feature-tabs { display: flex; gap: 4px; padding: 0 16px; border-top: 1px solid var(--line); background: var(--surface); }
+.feature-tabs [role="tab"] {
+  display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 12px;
+  border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--ink-2); font-size: 14px;
+  transition: color .15s ease-out, border-color .15s ease-out;
+}
+.feature-tabs [role="tab"]:hover { color: var(--ink); }
+.feature-tabs [role="tab"][aria-selected="true"] { border-bottom-color: var(--accent-line); color: var(--ink); }
+.feature-tabs .lucide { width: 16px; height: 16px; }
+.feature-tabs .figure { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+.features[data-count] { height: auto; }
+.features[data-count="2"] { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+.features[data-count="1"] { grid-template-columns: minmax(0, 1fr) !important; }
+.features[data-count] .feature { grid-column: auto; border-left: 0; border-bottom: 0; }
+.features[data-count] .feature.is-folded:not(.is-measuring) { display: none; }
+.features[data-count="2"] .feature:not(.is-folded) ~ .feature:not(.is-folded) { border-left: 1px solid var(--line); }
+.features[data-count] .feature > header h2, .features[data-count] #v2PoseScore { display: none; }   /* 탭이 이름과 값을 보인다 */
+
+/* ── 답 아래 피드백 단추와 뷰어가 열려 있을 때의 작은 입력 칸 ── */
+.fb-acts { display: inline-flex; gap: 2px; margin-left: auto; }
+.fb-act {
+  display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 6px;
+  background: transparent; color: var(--ink-3); transition: background-color .15s ease-out, color .15s ease-out;
+}
+.fb-act .lucide { width: 16px; height: 16px; }
+.fb-act:hover { background: var(--raised-hover); color: var(--ink); }
+.fb-act[aria-pressed="true"] { background: var(--accent-soft); color: var(--ink); }
+.fb-done { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; color: var(--ink-3); font-size: 12px; }
+.fb-done .lucide { width: 14px; height: 14px; }
+.msg-a.is-target { border-color: var(--accent-line); }
+.fb-inline { display: grid; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); white-space: normal; }
+.fb-inline label, .fb-field label { color: var(--ink-2); font-size: 13px; }
+.fb-inline textarea, .fb textarea {
+  width: 100%; box-sizing: border-box; padding: 8px 12px; border: 1px solid var(--line-strong); border-radius: 8px;
+  background: var(--scene); color: var(--ink); font: inherit; font-size: 14px; line-height: 1.5; resize: vertical; caret-color: var(--accent-ink);
+}
+.fb-row { display: flex; align-items: center; justify-content: flex-end; gap: 8px; }
+.fb-row .grow { flex: 1; }
+.fb-row .icon-btn { width: 32px; height: 32px; }
+.btn {
+  display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px;
+  border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--ink-2); font-size: 13px;
+  transition: background-color .15s ease-out, color .15s ease-out;
+}
+.btn:hover { background: var(--raised); color: var(--ink); }
+.btn .lucide { width: 16px; height: 16px; }
+.btn.primary { border-color: transparent; background: var(--accent); color: #fff; font-weight: 500; }
+.btn.primary:hover { background: #3a62e4; }
+.btn:disabled { opacity: .5; cursor: default; }
+.fb-error { margin: 0; color: var(--alert); font-size: 13px; }
+
+/* ── 채팅만 볼 때 오른쪽 피드백 칸: 어떤 답인지 → 종류 → 글 → 보내기, 아래에 보낸 것 ── */
+.fb { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-left: 1px solid var(--line); background: var(--surface); }
+.fb-head { display: flex; align-items: center; min-height: 48px; padding: 0 8px 0 20px; border-bottom: 1px solid var(--line); }
+.fb-head h2 { margin: 0; font-size: 15px; font-weight: 600; }
+.fb-head .icon-btn { width: 32px; height: 32px; margin-left: auto; border-color: transparent; background: transparent; }
+.fb-empty { margin: 0; padding: 20px; color: var(--ink-3); font-size: 13px; line-height: 1.6; }
+.fb-empty .lucide { width: 14px; height: 14px; vertical-align: -2px; }
+.fb-form { display: grid; gap: 16px; padding: 20px; overflow-y: auto; }
+.fb-target { display: flex; align-items: center; gap: 8px; min-width: 0; color: var(--ink); font-size: 14px; }
+.fb-target .q { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fb-target .time { color: var(--ink-3); font-size: 13px; font-variant-numeric: tabular-nums; }
+.fb-kind { display: grid; grid-template-columns: 1fr 1fr; }
+.fb-kind button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 36px; }
+.fb-kind button[aria-checked="true"] { background: var(--accent-soft); color: var(--ink); }
+.fb-field { display: grid; gap: 6px; }
+.fb-more { display: grid; gap: 8px; color: var(--ink-2); font-size: 13px; }
+.fb-more summary { display: inline-flex; align-items: center; gap: 6px; width: fit-content; list-style: none; cursor: pointer; }
+.fb-more summary::-webkit-details-marker { display: none; }
+.fb-more summary .lucide { width: 14px; height: 14px; }
+.fb-sent { margin-top: auto; padding: 16px 20px 20px; border-top: 1px solid var(--line); }
+.fb-sent h3 { display: flex; align-items: baseline; gap: 8px; margin: 0 0 12px; color: var(--ink-2); font-size: 13px; font-weight: 500; }
+.fb-sent h3 span { color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.fb-sent ul { display: grid; gap: 4px; max-height: 30dvh; margin: 0; padding: 0; overflow-y: auto; list-style: none; }
+.fb-sent li { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; align-items: center; gap: 10px; height: 32px; color: var(--ink-2); font-size: 13px; }
+.fb-sent li .lucide { width: 16px; height: 16px; color: var(--ink-3); }
+.fb-sent li .q { overflow: hidden; color: var(--ink); text-overflow: ellipsis; white-space: nowrap; }
+.fb-sent li .st { color: var(--ink-3); }
+
+/* ── 참고 첨부: 채팅만 볼 때만 답 안에 보인다. 누르면 크게 ── */
+.att { display: none; gap: 12px; margin-top: 12px; white-space: normal; }
+@media (min-width: 901px) { .v2-grid.is-viewer-off .att { display: grid; } }
+.att-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px; }
+.att-item { display: grid; gap: 4px; min-width: 0; margin: 0; }
+.att-item.is-wide { grid-column: 1 / -1; }
+.att-open {
+  display: block; width: 100%; padding: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--stage); cursor: zoom-in; transition: border-color .15s ease-out;
+}
+.att-open:hover { border-color: var(--line-strong); }
+.att-open img { display: block; width: 100%; height: auto; max-height: 320px; object-fit: contain; }
+.att-item figcaption { color: var(--ink-3); font-size: 12px; }
+.att-clone { position: relative; overflow: hidden; padding: 8px 12px; background: var(--surface); text-align: left; box-sizing: content-box; }
+.att-scale { transform-origin: 0 0; pointer-events: none; }
+.att-num { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+.att-num caption { padding-bottom: 6px; color: var(--ink-3); font-size: 12px; text-align: left; }
+.att-num th, .att-num td { height: 32px; padding: 0 12px; border-top: 1px solid var(--line); color: var(--ink); text-align: right; }
+.att-num thead th { border-top: 0; color: var(--ink-3); font-weight: 400; }
+.att-num tbody th { color: var(--ink-2); font-weight: 400; text-align: left; }
+.lightbox {
+  width: min(1200px, 92vw); max-height: 90dvh; padding: 16px; border: 1px solid var(--line-strong); border-radius: 12px;
+  background: var(--surface); color: var(--ink);
+}
+.lightbox::backdrop { background: rgba(5, 11, 23, .72); }
+.lightbox form { display: flex; justify-content: flex-end; }
+.lightbox figure { display: grid; gap: 8px; margin: 0; }
+.lightbox img { display: block; max-width: 100%; max-height: 74dvh; margin: 0 auto; object-fit: contain; }
+.lightbox figcaption { color: var(--ink-2); font-size: 13px; }
+@media (prefers-reduced-motion: reduce) {
+  .split button, .feature-tabs [role="tab"], .fb-act, .btn, .att-open { transition: none; }
+}

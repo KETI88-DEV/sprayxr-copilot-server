@@ -85,5 +85,7 @@
     }).sort((a, b) => b.depth - a.depth);
   }
 
-  window.MotionViewerCamera = {create, AXIS_COLORS, axisGizmo};
+  // 글을 쓰는 칸에서는 F(전체 보기)·WASD 같은 장면 단축키를 쓰지 않는다
+  const isTyping = target => Boolean(target) && (['INPUT', 'SELECT', 'TEXTAREA'].includes(target.tagName) || target.isContentEditable === true);
+  window.MotionViewerCamera = {create, AXIS_COLORS, axisGizmo, isTyping};
 })();

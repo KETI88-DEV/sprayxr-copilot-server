@@ -1,7 +1,10 @@
 """Bounded local feedback receipts, separate from trainee and copilot writes."""
 from __future__ import annotations
 
+import csv
 import html
+import io
+import json
 import math
 import os
 import sqlite3
@@ -13,9 +16,9 @@ from urllib.parse import urlencode, urlsplit
 from uuid import UUID
 
 from anyio import to_thread
-from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import FileResponse, JSONResponse, Response
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from trainer.demo_api import __version__
 from trainer.demo_api.request_provenance import capture_provenance
@@ -40,8 +43,48 @@ _SCHEMA = """CREATE TABLE IF NOT EXISTS user_feedback (
  source_evidence TEXT NOT NULL,
  status TEXT NOT NULL DEFAULT 'new' CHECK(status IN ('new','reviewing','done')),
  status_updated_at TEXT,
- status_updated_by TEXT
+ status_updated_by TEXT,
+ answer_context TEXT
 )"""
+
+
+def _clean_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    value = value.strip()
+    if '\x00' in value:
+        raise ValueError('invalid feedback text')
+    return value
+
+
+class AnswerFeedbackContext(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+    conversation_id: str = Field(min_length=1, max_length=80)
+    question: str = Field(min_length=1, max_length=2000)
+    answer: str = Field(min_length=1, max_length=8000)
+    task: Literal['pose_recomm', 'trajectory_recomm', 'error_analysis', 'knowledge_search']
+    response_mode: Literal['quick', 'detailed']
+    answer_source: str | None = Field(default=None, max_length=40)
+    zone_id: str | None = Field(default=None, max_length=8)
+    map_num: int | None = Field(default=None, ge=0, le=99)
+    playhead_seconds: float | None = Field(default=None, ge=0, le=86400, allow_inf_nan=False)
+    record: str | None = Field(default=None, max_length=200)
+    session_id: str | None = Field(default=None, max_length=80)
+    worker_id: str | None = Field(default=None, max_length=80)
+    correct_answer: str = Field(default='', max_length=4000)
+
+    @field_validator('conversation_id', 'question', 'answer', 'answer_source', 'zone_id', 'record',
+                     'session_id', 'worker_id', 'correct_answer')
+    @classmethod
+    def trimmed(cls, value: str | None) -> str | None:
+        return _clean_text(value)
+
+    @field_validator('conversation_id', 'question', 'answer')
+    @classmethod
+    def not_blank(cls, value: str) -> str:
+        if not value:
+            raise ValueError('invalid feedback text')
+        return value
 
 
 class FeedbackSubmission(BaseModel):
@@ -51,6 +94,13 @@ class FeedbackSubmission(BaseModel):
     name: str = Field(default='', max_length=80)
     kind: Literal['improvement', 'bug', 'question'] = 'improvement'
     page: Literal['docs', 'database', 'motion']
+    answer: AnswerFeedbackContext | None = None
+
+    @model_validator(mode='after')
+    def answer_only_on_motion(self):
+        if self.answer is not None and self.page != 'motion':
+            raise ValueError('answer feedback belongs to the motion viewer')
+        return self
 
     @field_validator('submission_id')
     @classmethod
@@ -72,6 +122,64 @@ class FeedbackStatus(BaseModel):
     status: Literal['new', 'reviewing', 'done']
 
 
+def _add_answer_column(conn: sqlite3.Connection) -> None:
+    """Production DBs predate answer_context; another API worker may add it at the same moment."""
+    if 'answer_context' in {r[1] for r in conn.execute('PRAGMA table_info(user_feedback)')}:
+        return
+    try:
+        conn.execute('ALTER TABLE user_feedback ADD COLUMN answer_context TEXT')
+    except sqlite3.OperationalError as error:
+        if 'duplicate column name' not in str(error):
+            raise
+
+# (JSON key, CSV header); [5:18] come from answer_context, the rest from table columns.
+_EXPORT_FIELDS = [('feedback_id', '피드백 ID'), ('created_at', '접수 시각(UTC)'), ('status', '처리 상태'),
+                  ('label', '종류(답변 오류/답변 메모)'), ('message', '메모'), ('correct_answer', '맞는 답'),
+                  ('question', '질문'), ('answer', '답'), ('task', '질문 종류'), ('response_mode', '답변 수준'),
+                  ('answer_source', '답 출처'), ('zone_id', 'Zone'), ('map_num', 'Map'),
+                  ('playhead_seconds', '재생 위치(초)'), ('record', '기록'), ('session_id', '세션'),
+                  ('worker_id', '작업자'), ('conversation_id', '대화 ID'), ('server_version', '서버 버전')]
+
+
+def answer_feedback_rows(db_path: str, status: str | None) -> list[dict]:
+    """Fresh read-only connection: an export never takes write locks. shortcut: whole result in memory, stream when it outgrows a few thousand rows."""
+    try:
+        conn = sqlite3.connect(f'file:{db_path}?mode=ro', uri=True)
+    except sqlite3.Error:
+        return []
+    try:
+        conn.row_factory = sqlite3.Row
+        sql = 'SELECT * FROM user_feedback WHERE answer_context IS NOT NULL' + (' AND status=?' if status else '') + ' ORDER BY id'
+        raw = conn.execute(sql, [status] if status else []).fetchall()
+    except sqlite3.Error:  # no table or no column yet
+        return []
+    finally:
+        conn.close()
+    rows = []
+    for row in raw:
+        try:
+            context = json.loads(row['answer_context'])
+        except ValueError:
+            context = {}
+        if not isinstance(context, dict):
+            context = {}
+        rows.append({'feedback_id': row['submission_id'], 'created_at': row['created_at'], 'status': row['status'],
+                     'label': 'wrong_answer' if row['kind'] == 'bug' else 'memo', 'message': row['message'],
+                     **{key: context.get(key) for key, _ in _EXPORT_FIELDS[5:18]}, 'server_version': row['server_version']})
+    return rows
+
+
+def _csv_cell(value) -> str:
+    text = '' if value is None else str(value)
+    return "'" + text if text[:1] in ('=', '+', '-', '@') else text
+
+
+def _download(body: bytes, media: str, ext: str) -> Response:
+    stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%MZ')
+    return Response(body, media_type=media, headers={'Content-Disposition': f'attachment; filename="answer_feedback_{stamp}.{ext}"',
+                                                     'Cache-Control': 'no-store'})
+
+
 class FeedbackStore:
     """Lazily add one table to the existing SQLite file; never create users."""
     def __init__(self, db_path: str | None = None):
@@ -89,6 +197,7 @@ class FeedbackStore:
                 with conn:
                     conn.execute(_SCHEMA)
                     conn.execute('CREATE INDEX IF NOT EXISTS idx_feedback_status ON user_feedback(status,id)')
+                    _add_answer_column(conn)
             except BaseException:
                 conn.close()
                 raise
@@ -98,23 +207,25 @@ class FeedbackStore:
     def submit(self, body: FeedbackSubmission, provenance: dict) -> tuple[dict, bool]:
         with self._guard:
             conn = self._connection()
+            context = json.dumps(body.answer.model_dump(), ensure_ascii=False, sort_keys=True) if body.answer else None
             with conn:
                 # The transaction also protects idempotency across API workers.
                 conn.execute('BEGIN IMMEDIATE')
                 row = conn.execute('SELECT * FROM user_feedback WHERE submission_id=?', (body.submission_id,)).fetchone()
                 duplicate = row is not None
                 if duplicate:
-                    if any(row[key] != getattr(body, key) for key in ('message', 'name', 'kind', 'page')):
+                    if (any(row[key] != getattr(body, key) for key in ('message', 'name', 'kind', 'page'))
+                            or row['answer_context'] != context):
                         raise HTTPException(409, '전송 번호가 이미 사용되었습니다. 의견 창을 다시 열어 보내세요.')
                 else:
                     created_at = datetime.now(timezone.utc).isoformat(timespec='seconds')
                     conn.execute('''INSERT INTO user_feedback
                         (submission_id,message,name,kind,page,server_version,created_at,client_ip,
-                         caller_source,caller_origin,caller_referer,source_evidence)
-                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)''',
+                         caller_source,caller_origin,caller_referer,source_evidence,answer_context)
+                        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)''',
                         (body.submission_id, body.message, body.name, body.kind, body.page, __version__, created_at,
                          provenance.get('client_ip'), provenance['caller_source'], provenance.get('caller_origin'),
-                         provenance.get('caller_referer'), provenance['source_evidence']))
+                         provenance.get('caller_referer'), provenance['source_evidence'], context))
                     row = conn.execute('SELECT * FROM user_feedback WHERE submission_id=?', (body.submission_id,)).fetchone()
                 return {'status': 'received', 'feedback_id': row['submission_id'],
                         'created_at': row['created_at'], 'duplicate': duplicate}, duplicate
@@ -157,13 +268,13 @@ async def _submission_body(request: Request) -> FeedbackSubmission:
     raw = bytearray()
     async for chunk in request.stream():
         raw.extend(chunk)
-        if len(raw) > 32_768:
-            raise HTTPException(413, '입력이 너무 깁니다. 의견은 4,000자 이내로 입력하세요.')
+        if len(raw) > 98_304:
+            raise HTTPException(413, '입력이 너무 깁니다. 의견은 4,000자, 답변 정보는 각 항목의 글자 수 이내로 입력하세요.')
     try:
         return FeedbackSubmission.model_validate_json(bytes(raw))
     except ValueError:
         # Never echo untrusted messages or client-supplied fields into error text.
-        raise HTTPException(422, '의견 내용(1~4,000자), 이름(80자 이내), 유형과 페이지를 확인하세요.') from None
+        raise HTTPException(422, '의견 내용(1~4,000자), 이름(80자 이내), 유형, 페이지와 답변 정보를 확인하세요.') from None
 
 
 def create_feedback_router(store: FeedbackStore | None = None) -> APIRouter:
@@ -207,6 +318,24 @@ def create_feedback_admin_router(auth, db_path: str) -> APIRouter:
         except (OSError, sqlite3.Error):
             raise HTTPException(503, '의견 상태를 저장하지 못했습니다. 잠시 후 다시 시도하세요.') from None
         return JSONResponse(result, headers={'Cache-Control': 'no-store'})
+    @router.get('/admin/api/feedback/answers.jsonl')
+    async def answers_jsonl(request: Request, status: Literal['new', 'reviewing', 'done'] | None = Query(default=None)):
+        auth.require(request)
+        rows = await to_thread.run_sync(answer_feedback_rows, db_path, status)
+        body = ''.join(json.dumps(r, ensure_ascii=False) + '\n' for r in rows)
+        return _download(body.encode('utf-8'), 'application/x-ndjson; charset=utf-8', 'jsonl')
+
+    @router.get('/admin/api/feedback/answers.csv')
+    async def answers_csv(request: Request, status: Literal['new', 'reviewing', 'done'] | None = Query(default=None)):
+        auth.require(request)
+        rows = await to_thread.run_sync(answer_feedback_rows, db_path, status)
+        out = io.StringIO()
+        writer = csv.writer(out)
+        writer.writerow([header for _, header in _EXPORT_FIELDS])
+        for r in rows:
+            record = {**r, 'label': '답변 오류' if r['label'] == 'wrong_answer' else '답변 메모'}
+            writer.writerow([_csv_cell(record[key]) for key, _ in _EXPORT_FIELDS])
+        return _download(('\ufeff' + out.getvalue()).encode('utf-8'), 'text/csv; charset=utf-8', 'csv')
     return router
 
 
@@ -224,10 +353,18 @@ def render_feedback_list(conn: sqlite3.Connection | None, *, status: str = 'all'
     for row in rows:
         row = dict(row)
         choices = ''.join(f'<option value="{key}"'+(' selected' if row['status'] == key else '')+f'>{label}</option>' for key,label in STATUSES.items())
+        kind_label, answer_line = KINDS.get(row['kind'], row['kind']), ''
+        if row.get('answer_context'):
+            kind_label = '답변 오류' if row['kind'] == 'bug' else '답변 메모'
+            try:
+                question = json.loads(row['answer_context']).get('question')
+            except (ValueError, AttributeError):
+                question = None
+            answer_line = f'<div class="feedback-answer">질문: {escape(question)}</div>'
         detail_url = escape('/admin/api/record?'+urlencode({'table':'user_feedback','rowid':row['id']}))
         rendered.append(f'''<tr><td>{escape(row['created_at'])}<br><small>{escape(row['client_ip'])}</small></td>
-<td>{escape(KINDS.get(row['kind'],row['kind']))}<br>{escape(row['name'] or '익명')}</td>
-<td><div class="feedback-message">{escape(row['message'])}</div><button type="button" class="record-button" data-detail-url="{detail_url}">상세 보기</button></td>
+<td>{escape(kind_label)}<br>{escape(row['name'] or '익명')}</td>
+<td><div class="feedback-message">{escape(row['message'])}</div>{answer_line}<button type="button" class="record-button" data-detail-url="{detail_url}">상세 보기</button></td>
 <td>{escape(PAGES.get(row['page'],row['page']))}<br><small>v{escape(row['server_version'])}</small></td>
 <td><label class="feedback-status-label">처리 상태<select data-feedback-status="{escape(row['submission_id'])}" disabled>{choices}</select></label>
 <button type="button" data-feedback-save="{escape(row['submission_id'])}" disabled>저장</button>
@@ -236,6 +373,7 @@ def render_feedback_list(conn: sqlite3.Connection | None, *, status: str = 'all'
     following = f'<a href="/admin/feedback?{urlencode({"status":status,"page":page+1})}">다음 →</a>' if page < pages else '<span></span>'
     return f'''<div class="topbar"><div><div class="eyebrow">USER FEEDBACK</div><h1>사용자 의견</h1><div class="sub">페이지에서 접수한 개선·오류·질문을 확인합니다. 전체 {total:,}건</div></div></div>
 <p id="feedback-review-state" class="sub" role="status" aria-live="polite">상태 변경은 <a href="/admin/manage">관리자 로그인</a> 후 사용할 수 있습니다.</p>
-<div class="toolbar"><form method="get" action="/admin/feedback"><label for="feedback-filter">처리 상태</label><select id="feedback-filter" name="status">{options}</select><button>조회</button></form></div>
+<div class="toolbar"><form method="get" action="/admin/feedback"><label for="feedback-filter">처리 상태</label><select id="feedback-filter" name="status">{options}</select><button>조회</button></form>
+<a href="/admin/api/feedback/answers.jsonl">답변 피드백 내려받기(JSONL)</a> <a href="/admin/api/feedback/answers.csv">(CSV)</a> <small>내려받기는 관리자 로그인 후 사용할 수 있습니다.</small></div>
 <div class="table-wrap"><table><thead><tr><th>접수 시각(UTC) · IP</th><th>유형 · 이름</th><th>의견</th><th>페이지 · 버전</th><th>처리 상태</th></tr></thead><tbody>{''.join(rendered) or '<tr><td colspan="5" class="empty">접수된 의견이 없습니다.</td></tr>'}</tbody></table></div>
 <div class="pagination">{previous}<span>{page} / {pages} 페이지</span>{following}</div><script defer src="/assets/copilot_feedback_admin.js"></script>'''

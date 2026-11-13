@@ -20,7 +20,13 @@
   </div>
 </header>
 
-<div class="v2-grid">
+<div class="v2-grid" id="v2Grid">
+<nav id="v2RailViewer" class="rail rail-left" aria-label="접힌 뷰어" hidden>
+  <span id="v2RailZone" class="zone-tag zone-tag-idle">—</span>
+  <div class="split split-edge" role="group" aria-label="화면 나누기">
+    <button id="v2OpenViewer" type="button" aria-label="뷰어 열기" title="뷰어 열기"><i data-icon="chevron-right"></i></button>
+  </div>
+</nav>
 <main class="v2-main">
   <section class="v2-stage" aria-label="재생 장면">
     <div class="stage-viewport">
@@ -81,8 +87,13 @@
     </div>
   </section>
 
+  <div id="v2FeatureTabs" class="feature-tabs" role="tablist" aria-label="분석 결과" hidden>
+    <button id="v2TabPose" type="button" role="tab" data-feature-tab="pose" aria-controls="v2FeaturePose"><i data-icon="person-standing"></i>자세<span id="v2TabPoseScore" class="figure"></span></button>
+    <button id="v2TabOrder" type="button" role="tab" data-feature-tab="order" aria-controls="v2FeatureOrder"><i data-icon="route"></i>순서<span id="v2TabOrderScore" class="figure"></span></button>
+    <button id="v2TabCoating" type="button" role="tab" data-feature-tab="coating" aria-controls="v2FeatureCoating"><i data-icon="paint-roller"></i>도막</button>
+  </div>
   <section class="features" aria-label="분석 결과">
-    <article class="feature" data-feature="pose" aria-labelledby="v2PoseTitle">
+    <article id="v2FeaturePose" class="feature" data-feature="pose" aria-labelledby="v2PoseTitle">
       <header>
         <h2 id="v2PoseTitle"><i data-icon="person-standing"></i>자세</h2>
         <strong id="v2PoseScore" class="figure" title="지금 분사의 자세 유사도">—</strong>
@@ -105,7 +116,7 @@
       </div>
     </article>
 
-    <article class="feature" data-feature="order" aria-labelledby="v2OrderTitle">
+    <article id="v2FeatureOrder" class="feature" data-feature="order" aria-labelledby="v2OrderTitle">
       <header>
         <h2 id="v2OrderTitle"><i data-icon="route"></i>순서</h2>
         <button class="icon-btn ask-link" type="button" data-ask-tab="order" aria-label="순서 질문하기"><i data-icon="message-circle"></i></button>
@@ -113,7 +124,7 @@
       <div id="v2Order" class="order-chart" role="group" aria-label="전문가 권장 순서와 이 기록의 순서"></div>
     </article>
 
-    <article class="feature" data-feature="coating" aria-labelledby="v2CoatTitle">
+    <article id="v2FeatureCoating" class="feature" data-feature="coating" aria-labelledby="v2CoatTitle">
       <header>
         <h2 id="v2CoatTitle"><i data-icon="paint-roller"></i>도막</h2>
         <div class="seg seg-text" role="group" aria-label="도막 기준">
@@ -149,8 +160,45 @@
   </section>
 </main>
 
-<aside id="v2Ask" class="ask" aria-label="질문"></aside>
+<aside id="v2Ask" class="ask" aria-label="질문">
+  <div id="v2Split" class="split" role="group" aria-label="화면 나누기">
+    <button id="v2CollapseViewer" type="button" aria-label="뷰어 접기" title="뷰어 접기"><i data-icon="chevron-left"></i></button>
+    <button id="v2Resize" class="grip" type="button" aria-label="채팅 폭 조절. 왼쪽·오른쪽 화살표로 넓히거나 좁힙니다" title="끌어서 폭 조절"><i data-icon="grip-vertical"></i></button>
+    <button id="v2CollapseChat" type="button" aria-label="채팅 접기" title="채팅 접기"><i data-icon="chevron-right"></i></button>
+  </div>
+</aside>
+<aside id="v2Feedback" class="fb" aria-labelledby="v2FeedbackTitle" hidden>
+  <div class="fb-head"><h2 id="v2FeedbackTitle">피드백</h2><button id="v2FeedbackClose" class="icon-btn" type="button" aria-label="피드백 닫기"><i data-icon="x"></i></button></div>
+  <p id="v2FeedbackEmpty" class="fb-empty">답 아래 <i data-icon="thumbs-down"></i> 또는 <i data-icon="message-square-text"></i>를 누르면 여기에 적을 수 있습니다</p>
+  <form id="v2FeedbackForm" class="fb-form" hidden>
+    <div class="fb-target"><span id="v2FeedbackZone" class="zone-tag zone-tag-idle"></span><span id="v2FeedbackQuestion" class="q"></span><span id="v2FeedbackTime" class="time"></span></div>
+    <div class="seg fb-kind" role="radiogroup" aria-label="피드백 종류">
+      <button id="v2FeedbackWrong" type="button" role="radio" data-kind="wrong"><i data-icon="thumbs-down"></i>잘못됨</button>
+      <button id="v2FeedbackMemo" type="button" role="radio" data-kind="memo"><i data-icon="message-square-text"></i>메모</button>
+    </div>
+    <div class="fb-field"><label id="v2FeedbackLabel" for="v2FeedbackText">무엇이 틀렸나요</label><textarea id="v2FeedbackText" rows="10" maxlength="4000"></textarea></div>
+    <details id="v2FeedbackMore" class="fb-more"><summary><i data-icon="plus"></i>맞는 답 덧붙이기</summary>
+      <label class="sr-only" for="v2FeedbackCorrect">맞는 답</label><textarea id="v2FeedbackCorrect" rows="5" maxlength="4000"></textarea></details>
+    <p id="v2FeedbackError" class="fb-error" role="alert" hidden></p>
+    <div class="fb-row"><button id="v2FeedbackSend" class="btn primary" type="submit"><i data-icon="send"></i>보내기</button></div>
+  </form>
+  <section id="v2FeedbackSent" class="fb-sent" aria-labelledby="v2FeedbackSentTitle" hidden>
+    <h3 id="v2FeedbackSentTitle">보낸 피드백<span id="v2FeedbackSentCount"></span></h3>
+    <ul id="v2FeedbackSentList"></ul>
+  </section>
+</aside>
+<nav id="v2RailChat" class="rail rail-right" aria-label="접힌 채팅" hidden>
+  <button id="v2OpenChatIcon" class="icon-btn" type="button" aria-label="채팅 열기" title="채팅 열기"><i data-icon="message-circle"></i></button>
+  <span id="v2RailCount" class="count" title="질문 수"></span>
+  <div class="split split-edge" role="group" aria-label="화면 나누기">
+    <button id="v2OpenChat" type="button" aria-label="채팅 열기" title="채팅 열기"><i data-icon="chevron-left"></i></button>
+  </div>
+</nav>
 </div>
+<dialog id="v2Lightbox" class="lightbox" aria-label="참고 그림 크게 보기">
+  <form method="dialog"><button class="icon-btn" aria-label="닫기"><i data-icon="x"></i></button></form>
+  <figure><div id="v2LightboxBody"></div><figcaption id="v2LightboxCaption"></figcaption></figure>
+</dialog>
 
 <p id="status" class="sr-only" role="status"></p>
 <div class="legacy-hooks" hidden>
@@ -185,5 +233,6 @@
 <script defer src="/motion-viewer/assets/motion_viewer_pose.js"></script>
 <script defer src="/motion-viewer/assets/motion_viewer_coating.js"></script>
 <script defer src="/motion-viewer/assets/motion_viewer_alerts.js"></script>
+<script defer src="/motion-viewer/assets/motion_viewer_v2_layout.js"></script>
 <script defer src="/motion-viewer/assets/motion_viewer_v2.js"></script>
 </body></html>
