@@ -143,7 +143,9 @@
   $('v2HudFix').addEventListener('click', () => { hudOpen = !hudOpen; renderHudFix(); });
   // 장면 칸의 크기가 바뀌면 캔버스 해상도를 다시 맞춘다. 창 크기 이벤트만 믿으면 아래 칸이 접히거나 펼쳐질 때
   // 캔버스가 예전 높이로 남아, 오른쪽 아래 좌표축이 캔버스 밖에 그려진다.
-  new ResizeObserver(() => resize()).observe($('canvas').parentElement);
+  // 크기가 바뀌면(창·분석 칸 접기·손잡이 끌기·화면 나누기) 잠시 뒤 구조물이 잘리지 않게 줌도 다시 맞춘다.
+  let refit = 0;
+  new ResizeObserver(() => { resize(); clearTimeout(refit); refit = setTimeout(() => fillStage(), 150); }).observe($('canvas').parentElement);
 
   // ── 자세: 스켈레톤과 분사별 자세 유사도 ───────────────────
   const ARM_UNAVAILABLE = {
@@ -363,17 +365,53 @@
     const expert = coatBasis === 'expert';
     $('v2CoatBasisTarget').setAttribute('aria-pressed', String(!expert));
     $('v2CoatBasisExpert').setAttribute('aria-pressed', String(expert));
-    $('v2CoatViews').hidden = !expert;
     $('v2CoatBarsView').setAttribute('aria-pressed', String(!coatMap));
     $('v2CoatMapView').setAttribute('aria-pressed', String(coatMap));
-    $('v2CoatBars').hidden = coatMap;
-    $('v2CoatMap').hidden = !coatMap;
+    coatLayout();
     $('v2CoatBars').setAttribute('aria-label', expert ? 'Zone별 도막 두께가 전문가 기준과 얼마나 다른지' : 'Zone별 도막 등급(목표 대비)');
     $('v2CoatBasisLabel').textContent = !expert && targetReady() ? targetOf().basis_label || '' : '';
     if (expert) renderExpertCoating(); else renderTargetCoating();
   }
 
-  let tickObserver = null;
+  /** 전문가 대비를 한 칸 보기로 볼 때는 편차(왼쪽)와 전문가 지도(오른쪽)를 함께 둔다. 세 칸 보기는 편차·지도 전환. */
+  function coatLayout() {
+    const expert = coatBasis === 'expert';
+    const side = expert && layout.count === 1;
+    $('v2FeatureCoating').classList.toggle('is-side', side);
+    $('v2CoatViews').hidden = !expert || side;
+    $('v2CoatBars').hidden = expert && coatMap && !side;
+    $('v2CoatMap').hidden = !expert || !(coatMap || side);
+    $('v2CoatMapSeg').hidden = $('v2CoatMap').hidden;
+  }
+
+  // 전문가 지도 범례: 가는 색 띠 + 최소·중앙·최대(µm 보정이 있을 때). 지도는 기존 도막 스크립트가 그리고, 범례를 다시 쓸 때 따라 그린다.
+  function renderMapLegend() {
+    const host = $('v2MapLegend');
+    const number = Number(($('coatingZone').textContent.match(/(\d+)/) || [])[1]);
+    const references = record?.coating_reference || {};
+    const key = Number(anchor.zone_id) === number && anchor.map_num != null && references[`${anchor.map_num}:${anchor.zone_id}`]
+      ? `${anchor.map_num}:${anchor.zone_id}` : Object.keys(references).find((item) => Number(item.split(':')[1]) === number);
+    const reference = key ? references[key] : null;
+    const absolute = $('coatingScaleAbsolute').getAttribute('aria-pressed') === 'true';
+    let stops = reference?.physical_calibration === 'available' ? L.legendStops(reference.thickness_um, absolute ? reference.color_scale_um : null) : [];
+    const ticks = [...$('coatingLegend').children].map((tick) => tick.textContent);
+    if (!stops.length && ticks.length > 1) stops = [{ label: ticks[0], at: 0 }, { label: ticks[ticks.length - 1], at: 1 }];
+    const bar = el('i');
+    const labels = el('div', 'map-legend-labels');
+    labels.append(...stops.map((stop) => {
+      const label = el('span', stop.label.startsWith('중앙') ? 'is-mid' : null, stop.label);
+      label.style.left = `${stop.at * 100}%`;
+      label.style.transform = `translateX(-${stop.at * 100}%)`;   // 양 끝은 띠 안쪽으로 붙인다
+      return label;
+    }));
+    const note = el('p', null, `${absolute ? '모든 Zone 공통 µm' : 'Zone 안 상대 색'} · 전문가 최종 도막(훈련자 진행 도막 아님)`);
+    host.title = `${note.textContent}. ${$('coatingStatus').textContent}`;
+    host.replaceChildren(bar, labels, note);
+  }
+  new MutationObserver(renderMapLegend).observe($('coatingLegend'), { childList: true, characterData: true, subtree: true });
+
+  // 목표 대비(C1): Zone마다 한 줄, 문제 Zone 먼저. Zone | 칠한 면적 6구간 100% 막대 | 칠한 곳 평균 µm + 서버 등급 글자.
+  // 등급·구간 이름·경계는 서버 target 값을 그대로 쓴다. 범례는 머리 한 번.
   function renderTargetCoating() {
     const host = $('v2CoatBars');
     const count = $('v2CoatCount');
@@ -390,66 +428,28 @@
       return;
     }
     const labels = target.grade_labels || {};
-    const goal = Number(target.target_thickness_um);
+    const normal = target.normal_band_um || [];
     const edges = target.band_edges_um || [];
-    const band = target.normal_band_um || [];
     const bandLabels = target.band_labels || [];
-    // 막대 끝(척도)은 마지막 6구간 경계다. 보기 위한 척도일 뿐 판정과 무관하다.
-    const scaleMax = Number(edges[edges.length - 1]) > 0 ? Number(edges[edges.length - 1]) : 1;
-    const at = (value) => `${Math.max(0, Math.min(1, Number(value) / scaleMax)) * 100}%`;
-    const away = (row) => Math.abs(Number(row.thickness_um) - goal) / goal;
-    const rank = (row) => (row.grade === 'below' || row.grade === 'above' ? 0 : row.grade == null ? 1 : 2);
-    const rows = [...(target.zones || [])].sort((left, right) => rank(left) - rank(right)
-      || (rank(left) === 0 ? away(right) - away(left) : 0)
-      || Number(left.map_num) - Number(right.map_num) || Number(left.zone_id) - Number(right.zone_id));
-    const grades = ['below', 'normal', 'above', 'none'];
-    const tallies = grades.map((grade) => [grade, rows.filter((row) => (row.grade ?? 'none') === grade).length])
-      .filter(([grade, number]) => grade !== 'none' || number > 0);
-    count.replaceChildren(...tallies.map(([grade, number]) => tally(`is-${grade}`, labels[grade] ?? grade, number)));
-    // 미도장 0.5% 이상인 Zone이 있을 때만 그 칸을 둔다(표시 문턱일 뿐 판정이 아니다).
-    const showUnpainted = (row) => Number(row.unpainted_fraction) >= 0.005;
-    host.classList.toggle('has-unpainted', rows.some(showUnpainted));
-    const axis = el('div', 'coat-axis');
-    axis.setAttribute('aria-hidden', 'true');
-    const ticks = el('span', 'coat-axis-ticks');
-    for (const value of band) {
-      const label = el('span', null, String(value));
-      label.style.left = at(value);
-      ticks.append(label);
-    }
-    axis.append(el('span'), ticks, el('span', null, 'µm'));
-    // 좁은 폭에서 눈금 글자가 붙으면(160·240 → 160240) 앞 눈금과 겹치는 것을 숨긴다. 위치 계산은 그대로.
-    tickObserver?.disconnect();   // 그릴 때마다 하나만 둔다
-    const hideTouching = () => {
-      let edge = -Infinity;
-      for (const tickLabel of ticks.children) {
-        tickLabel.style.visibility = '';
-        const box = tickLabel.getBoundingClientRect();
-        if (!box.width) continue;
-        if (box.left < edge + 4) tickLabel.style.visibility = 'hidden'; else edge = box.right;
-      }
-    };
-    tickObserver = new ResizeObserver(hideTouching);
-    tickObserver.observe(ticks);
-    document.fonts?.ready.then(hideTouching);   // 웹폰트가 늦게 오면 글자 폭이 바뀐다
-    host.replaceChildren(axis, ...rows.map((row) => {
+    host.classList.remove('has-unpainted');
+    // 머리 줄: 6구간 범례(경계 µm는 title)
+    const legend = el('span', 'band-legend');
+    legend.append(el('span', 't', '칠한 면적'));
+    bandLabels.forEach((label, index) => {
+      const item = el('span');
+      item.append(el('i', `band-${index + 1}`), label);
+      if (edges.length === bandLabels.length + 1) item.title = `${edges[index]}~${edges[index + 1]} µm`;
+      legend.append(item);
+    });
+    count.replaceChildren(legend);
+    const showUnpainted = (row) => Number(row.unpainted_fraction) >= 0.005;   // 표시 문턱일 뿐 판정이 아니다
+    host.replaceChildren(...L.coatOrder(target.zones || []).map((row) => {
       const grade = row.grade ?? 'none';
-      const button = el('button', 'coat-row is-target');
+      const button = el('button', 'coat-row is-c1');
       button.type = 'button';
       button.dataset.zone = String(row.zone_id);
       const name = el('span', 'coat-zone', String(Number(row.zone_id)));
       name.style.setProperty('--zone', colorOf(row.zone_id));
-      const track = el('span', 'coat-track is-scale');
-      const fill = el('span', `coat-fill is-${grade}`);
-      fill.style.width = row.thickness_um == null ? '0%' : at(row.thickness_um);
-      track.append(fill);
-      band.forEach((value, index) => {
-        const tick = el('span', `coat-tick${index === 0 ? ' is-goal' : ''}`);
-        tick.style.left = at(value);
-        track.append(tick);
-      });
-      const thickness = row.thickness_um == null ? '—' : `${Math.round(Number(row.thickness_um))} µm`;
-      const unpainted = showUnpainted(row) ? `미도장 ${shareText(Number(row.unpainted_fraction))}` : '';
       const counts = row.six_band_counts || {};
       const keys = Object.keys(counts);
       const total = keys.reduce((sum, key) => sum + (Number(counts[key]) || 0), 0);
@@ -461,10 +461,13 @@
         strip.append(part);
         return `${bandLabels[index] ?? key} ${shareText(share)}`;
       });
-      button.append(name, track, el('span', 'coat-value', thickness), el('span', 'coat-unpainted', unpainted), strip);
+      const value = el('span', 'coat-value');
+      value.append(el('b', null, row.thickness_um == null ? '—' : String(Math.round(Number(row.thickness_um)))), ' µm ', el('em', `g-${grade}`, labels[grade] ?? ''));
+      if (showUnpainted(row)) value.append(el('small', null, `미도장 ${shareText(Number(row.unpainted_fraction))}`));
+      button.append(name, strip, value);
       const summary = [zoneText(row.zone_id), labels[grade] ?? grade,
         `칠한 곳 평균 ${row.thickness_um == null ? '—' : `${Math.round(Number(row.thickness_um))} µm`}`,
-        `미도장 ${shareText(Number(row.unpainted_fraction) || 0)}`, target.basis_label].filter(Boolean).join(' · ');
+        `미도장 ${shareText(Number(row.unpainted_fraction) || 0)}`, normal.length === 2 ? `정상 ${normal[0]}~${normal[1]} µm` : '', target.basis_label].filter(Boolean).join(' · ');
       button.title = total ? `${summary}\n칠한 면적: ${shares.join(', ')}` : summary;
       button.setAttribute('aria-label', button.title.replaceAll('\n', '. '));
       button.addEventListener('click', () => seekToZone(row.zone_id));
@@ -530,9 +533,17 @@
   $('v2CoatBars').addEventListener('scroll', (event) => {   // 스크롤바 끌기 등 우리가 한 것이 아닌 스크롤
     if (event.target.scrollTop !== coatAutoTop) coatScrolledByUser = performance.now();
   }, { passive: true });
-  // 도막 목록이 칸보다 길면 아래를 흐리게 해 더 있다는 것을 보인다(끝까지 내리면 걷는다).
+  // 도막 목록이 칸보다 길면 아래를 흐리게 하고 '아래로 N개 더'를 붙인다(끝까지 내리면 걷는다).
   const coatBars = $('v2CoatBars');
-  const hintMore = () => coatBars.classList.toggle('has-more', coatBars.scrollTop + coatBars.clientHeight < coatBars.scrollHeight - 2);
+  const hintMore = () => {
+    let more = coatBars.querySelector(':scope > .more');
+    if (!more) { more = el('div', 'more'); more.setAttribute('aria-hidden', 'true'); coatBars.append(more); return; }   // 붙이면 다시 불린다
+    const bottom = coatBars.getBoundingClientRect().bottom;
+    const below = [...coatBars.querySelectorAll(':scope > .coat-row')].filter((row) => row.getBoundingClientRect().top >= bottom - 12).length;
+    coatBars.classList.toggle('has-more', below > 0);
+    more.hidden = !below;
+    if (below && more.dataset.count !== String(below)) { more.dataset.count = String(below); more.innerHTML = svg('chevron-down'); more.append(`아래로 ${below}개 더`); }
+  };
   coatBars.addEventListener('scroll', hintMore, { passive: true });
   new ResizeObserver(hintMore).observe(coatBars);
   new MutationObserver(hintMore).observe(coatBars, { childList: true });
@@ -639,6 +650,11 @@
         const home = toolsOf[id];
         if (one && !panel.folded && id === panel.active) tools.append(...home.nodes); else home.header.append(...home.nodes);
       }
+      // 전문가 지도의 2D·3D·상대·µm 도 한 칸 보기에서는 탭 줄 도구 칸(질문 단추 앞)으로
+      const mapSeg = $('v2CoatMapSeg');
+      const coatAsk = toolsOf.coating.nodes[toolsOf.coating.nodes.length - 1];
+      if (one && coatAsk.parentElement === tools) coatAsk.before(mapSeg); else if (mapSeg.parentElement !== $('v2CoatMapTools')) $('v2CoatMapTools').append(mapSeg);
+      coatLayout();
       // 접기 단추: 한 칸 보기는 탭 줄 끝, 세 칸 보기는 재생 막대 끝
       const box = $('v2FoldBox');
       const place = one ? tabs : document.querySelector('.transport');
@@ -730,6 +746,7 @@
     return {
       setMode, showFeature, applyFeatures,
       get mode() { return effective(); },
+      get count() { return count; },
       start() { setMode(mode); applyFeatures(); },
     };
   })();
@@ -852,7 +869,7 @@
       tagZone($('v2FeedbackZone'), info.zone_id);
       $('v2FeedbackQuestion').textContent = info.question;
       $('v2FeedbackQuestion').title = info.question;
-      $('v2FeedbackTime').textContent = Number.isFinite(info.playhead_seconds) ? `${info.playhead_seconds.toFixed(1)}초` : '';
+      $('v2FeedbackTime').textContent = Number.isFinite(info.playhead_seconds) ? L.clock(info.playhead_seconds) : '';
       text.value = carried;
       correct.value = '';
       $('v2FeedbackMore').open = false;
@@ -1462,6 +1479,12 @@
           item.append(el('span', 'nm', A.KIND[type].label), String(count));
           return item;
         }));
+        if (counts.length) {   // 휴대폰 폭에서는 종류별 수 대신 종 + 합계 하나(CSS 가 고른다)
+          const total = el('span', 'kinds-total');
+          total.innerHTML = svg('bell');
+          total.append(String(all.length));
+          kinds.append(total);
+        }
         if (pending || !counts.length) kinds.insertAdjacentHTML('beforeend', svg(pending ? 'loader-circle' : 'bell'));
       }
       const spoken = counts.map(({ type, count }) => `${A.KIND[type].label} ${count}`).join(', ');

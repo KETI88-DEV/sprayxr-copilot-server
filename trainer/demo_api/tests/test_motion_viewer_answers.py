@@ -283,8 +283,9 @@ def test_v2_hud_corrections_do_not_say_small_difference_for_a_zone_the_coating_p
     assert note.index("coatNote ||") < note.index("전문가 기록과 차이가 작습니다")   # 도막 등급이 먼저
 
 
-def test_v2_coating_axis_hides_a_tick_label_that_would_touch_the_previous_one() -> None:
+def test_v2_coating_target_rows_use_server_words_and_the_shared_sort() -> None:
+    # 2026-11-13 재디자인 C1: 눈금 축 대신 Zone마다 6구간 100% 막대와 서버 등급 글자. 순서는 순수 함수 coatOrder.
     script = _v2_static("motion_viewer_v2.js")
-    axis = script[script.index("axis.append(el('span'), ticks"):script.index("host.replaceChildren(axis")]
-    assert "tickObserver?.disconnect()" in axis and "document.fonts" in axis and "new ResizeObserver" in axis and "getBoundingClientRect" in axis and "visibility = 'hidden'" in axis
-    assert "label.style.left = at(value)" in script   # 눈금 위치 계산은 그대로
+    rows = script[script.index("function renderTargetCoating"):script.index("function renderExpertCoating")]
+    assert "L.coatOrder(target.zones" in rows and "labels[grade]" in rows and "bandLabels" in rows
+    assert "아래로 ${below}개 더" in script

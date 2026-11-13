@@ -143,20 +143,22 @@
           <button id="v2CoatMapView" type="button" aria-pressed="false" aria-label="전문가 도막 지도"><i data-icon="map"></i>전문가 지도</button>
         </div>
       </div>
-      <div id="v2CoatBars" class="coat-bars fill" role="group" aria-label="Zone별 도막 등급(목표 대비)"></div>
-      <div id="v2CoatMap" class="coat-map fill" hidden>
-        <div class="coat-map-tools">
-          <span id="coatingZone" class="zone-tag zone-tag-idle">Zone 대기 중</span>
-          <div class="seg" role="group" aria-label="도막 보기와 색상 척도">
-            <button id="coatingView2d" class="active" type="button">2D</button>
-            <button id="coatingView3d" type="button">3D</button>
-            <button id="coatingScaleRelative" class="active" type="button" aria-pressed="true">상대</button>
-            <button id="coatingScaleAbsolute" type="button" aria-pressed="false" disabled>µm</button>
+      <div id="v2CoatBody" class="coat-body fill">
+        <div id="v2CoatBars" class="coat-bars" role="group" aria-label="Zone별 도막 등급(목표 대비)"></div>
+        <div id="v2CoatMap" class="coat-map" hidden>
+          <div id="v2CoatMapTools" class="coat-map-tools">
+            <div id="v2CoatMapSeg" class="seg" role="group" aria-label="도막 지도 보기와 색상 척도">
+              <button id="coatingView2d" class="active" type="button">2D</button>
+              <button id="coatingView3d" type="button">3D</button>
+              <button id="coatingScaleRelative" class="active" type="button" aria-pressed="true">상대</button>
+              <button id="coatingScaleAbsolute" type="button" aria-pressed="false" disabled>µm</button>
+            </div>
           </div>
+          <div class="coating-screen"><canvas id="coatingCanvas" aria-label="전문가 최종 도막 지도"></canvas><span id="coatingZone" class="zone-tag zone-tag-idle">Zone 대기 중</span></div>
+          <div id="v2MapLegend" class="map-legend"></div>
+          <div id="coatingLegend" class="coating-legend" hidden></div>
+          <p id="coatingStatus" class="sr-only"></p>
         </div>
-        <div class="coating-screen"><canvas id="coatingCanvas" aria-label="전문가 최종 도막 지도"></canvas></div>
-        <div id="coatingLegend" class="coating-legend"></div>
-        <p id="coatingStatus" class="coat-status"></p>
       </div>
     </article>
   </section>

@@ -135,3 +135,29 @@ test('자르는 자리가 이모지에 걸려도 반쪽 글자를 남기지 않�
   assert.ok(!/[\ud800-\udbff]$/.test(body.answer.question));
   assert.ok(body.answer.question.endsWith('😀'));
 });
+
+test('도막 목표 대비 줄 순서: 목표 미만(얇은 것부터) → 1.5배 이상(두꺼운 것부터) → 정상(얇은 것부터) → 판정 없음', () => {
+  const rows = [
+    { zone_id: '9', map_num: 1, grade: 'normal', thickness_um: 170 },
+    { zone_id: '3', map_num: 1, grade: 'below', thickness_um: 120 },
+    { zone_id: '8', map_num: 1, grade: null, thickness_um: null },
+    { zone_id: '1', map_num: 1, grade: 'below', thickness_um: 83 },
+    { zone_id: '4', map_num: 1, grade: 'above', thickness_um: 300 },
+    { zone_id: '5', map_num: 1, grade: 'above', thickness_um: 410 },
+    { zone_id: '2', map_num: 1, grade: 'normal', thickness_um: 165 },
+    { zone_id: '7', map_num: 1, grade: null, thickness_um: null },
+  ];
+  assert.deepEqual([...L.coatOrder(rows)].map((row) => row.zone_id), ['1', '3', '5', '4', '2', '9', '7', '8']);
+  assert.equal(rows[0].zone_id, '9');   // 원본은 그대로
+  const tie = [{ zone_id: '12', map_num: 2, grade: 'below', thickness_um: 100 }, { zone_id: '3', map_num: 1, grade: 'below', thickness_um: 100 }];
+  assert.deepEqual([...L.coatOrder(tie)].map((row) => row.zone_id), ['3', '12']);
+});
+
+test('전문가 지도 범례: 최소·중앙·최대를 색 띠 위 자리에 놓는다(µm 척도면 그 척도 안에서)', () => {
+  const thickness = { minimum: 100, median: 150, maximum: 300 };
+  assert.deepEqual([...L.legendStops(thickness, null)].map((s) => [s.label, s.at]), [['100 µm', 0], ['중앙 150', 0.25], ['300 µm', 1]]);
+  assert.deepEqual([...L.legendStops(thickness, { minimum: 0, maximum: 400 })].map((s) => s.at), [0.25, 0.375, 0.75]);
+  assert.deepEqual([...L.legendStops({ minimum: 100, maximum: 300 }, null)].map((s) => s.label), ['100 µm', '300 µm']);
+  assert.deepEqual([...L.legendStops(null, null)], []);
+  assert.deepEqual([...L.legendStops({ minimum: 5, median: 5, maximum: 5 }, null)].map((s) => s.at), [0.5]);
+});

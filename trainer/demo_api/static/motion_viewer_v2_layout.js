@@ -52,6 +52,31 @@
     .map((type) => ({ type, count: (alerts || []).filter((alert) => alert.anomaly_type === type).length }))
     .filter((item) => item.count > 0);
 
+  /** 도막 목표 대비 줄 순서(문제 Zone 먼저): 목표 미만은 얇은 것부터, 1.5배 이상은 두꺼운 것부터, 정상은 얇은 것부터, 판정 없음은 끝.
+   *  등급은 서버가 낸 grade 를 그대로 쓴다(여기서 판정하지 않는다). */
+  const COAT_RANK = { below: 0, above: 1, normal: 2 };
+  const coatOrder = (rows) => [...(rows || [])].sort((left, right) => {
+    const rank = (row) => COAT_RANK[row.grade] ?? 3;
+    const byRank = rank(left) - rank(right);
+    if (byRank) return byRank;
+    const sign = left.grade === 'above' ? -1 : 1;
+    const thick = (row) => Number(row.thickness_um);
+    const byThickness = rank(left) < 3 ? sign * (thick(left) - thick(right)) : 0;
+    return byThickness || Number(left.map_num) - Number(right.map_num) || Number(left.zone_id) - Number(right.zone_id);
+  });
+
+  /** 전문가 지도 범례의 최소·중앙·최대 자리(0~1). scale(µm 척도)이 있으면 그 척도 안, 없으면 최소~최대가 0~1. */
+  const legendStops = (thickness, scale) => {
+    const low = Number(thickness?.minimum), high = Number(thickness?.maximum), middle = Number(thickness?.median);
+    if (!Number.isFinite(low) || !Number.isFinite(high)) return [];
+    const from = scale ? Number(scale.minimum) : low, to = scale ? Number(scale.maximum) : high;
+    if (!(to > from)) return [{ label: `${Math.round(low)} µm`, at: 0.5 }];
+    const at = (value) => Math.max(0, Math.min(1, (value - from) / (to - from)));
+    return [{ label: `${Math.round(low)} µm`, at: at(low) },
+      ...(Number.isFinite(middle) ? [{ label: `중앙 ${Math.round(middle)}`, at: at(middle) }] : []),
+      { label: `${Math.round(high)} µm`, at: at(high) }];
+  };
+
   const defaultChatWidth = (total) => Math.min(640, Math.max(420, Math.round(total * 0.32)));
   const clampChatWidth = (width, total) => {
     if (!Number.isFinite(width)) return defaultChatWidth(total);
@@ -90,6 +115,6 @@
   const attachmentsFor = (tabId) => [...(ATTACHMENTS[tabId] || [])];
 
   window.motionViewerV2Layout = {
-    FEATURES, panelCount, tabPress, clock, orderMoves, poseY, posePoints, countByKind, defaultChatWidth, clampChatWidth, feedbackPayload, attachmentsFor,
+    FEATURES, panelCount, tabPress, clock, orderMoves, poseY, posePoints, countByKind, coatOrder, legendStops, defaultChatWidth, clampChatWidth, feedbackPayload, attachmentsFor,
   };
 })();
