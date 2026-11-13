@@ -570,7 +570,7 @@
     const zoneEvaluation = renderZoneEvaluation(frame, evaluation);
     byId('poseZoneSummary').textContent = zoneEvaluation
       ? `Zone ${zoneLabel(zoneEvaluation.zone_id)}`
-      : 'Zone 대기 중';
+      : 'Zone 대기';
     const current = zoneEvaluation?.similarity_percent ?? evaluation.similarity_percent;
     const predicted = zoneEvaluation?.predicted_similarity_percent ?? evaluation.predicted_similarity_percent;
     byId('posePredicted').textContent = current == null || predicted == null ? '—' : `${current}% → ${predicted}%`;
@@ -621,7 +621,7 @@
     const limited = sequence.confidence === 'limited';
     byId('armPoseSequence').textContent = `${live ? '현재' : '직전'} 분사 ${sequence.sequence_id}`;
     byId('armPoseSequenceScore').textContent = `${sequence.similarity_percent}%`;
-    byId('armPoseCorrection').textContent = [sequence.correction || (limited ? '' : '교정할 관절이 없습니다.'),
+    byId('armPoseCorrection').textContent = [sequence.correction || (limited ? '' : '교정 관절 결과는 없습니다.'),
       limited ? '입력 품질 제한이 있어 참고용입니다.' : ''].filter(Boolean).join(' ');
   }
 
@@ -687,7 +687,7 @@
     renderArmPose(Number(playheadSeconds) || 0);
     const currentZone = currentZoneFromFrame(frame);
     if (currentZone) lastPlaybackZone = currentZone;
-    const activity = currentZone ? `현재 Zone ${zoneLabel(currentZone.zoneId)}` : '이동 구간';
+    const activity = currentZone ? `현재 Zone ${zoneLabel(currentZone.zoneId)}` : '이동 중';
     byId('playbackZone').textContent = `${activity} · ${frame?.posture?.label || '자세 판정 보류'}`;
     const badge = byId('playbackZoneBadge');
     if (lastPlaybackZone) {

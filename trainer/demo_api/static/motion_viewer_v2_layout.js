@@ -73,8 +73,16 @@
     if (!(to > from)) return [{ label: `${Math.round(low)} µm`, at: 0.5 }];
     const at = (value) => Math.max(0, Math.min(1, (value - from) / (to - from)));
     return [{ label: `${Math.round(low)} µm`, at: at(low) },
-      ...(Number.isFinite(middle) ? [{ label: `중앙 ${Math.round(middle)}`, at: at(middle) }] : []),
+      ...(Number.isFinite(middle) ? [{ label: `중앙 ${Math.round(middle)} µm`, at: at(middle) }] : []),
       { label: `${Math.round(high)} µm`, at: at(high) }];
+  };
+
+  /** Zone 칩·도막 행을 누르면 옮겨 갈 프레임. 그 Zone 의 첫 분사 프레임, 표본에 분사가 없으면 그 Zone 의 첫 프레임, 없으면 -1. */
+  const zoneSeekIndex = (frames, zoneId) => {
+    const list = frames || [];
+    const same = (frame) => frame?.zone_id != null && String(frame.zone_id) === String(zoneId);
+    const spraying = list.findIndex((frame) => frame?.spraying && same(frame));
+    return spraying >= 0 ? spraying : list.findIndex(same);
   };
 
   const defaultChatWidth = (total) => Math.min(640, Math.max(420, Math.round(total * 0.32)));
@@ -115,6 +123,6 @@
   const attachmentsFor = (tabId) => [...(ATTACHMENTS[tabId] || [])];
 
   window.motionViewerV2Layout = {
-    FEATURES, panelCount, tabPress, clock, orderMoves, poseY, posePoints, countByKind, coatOrder, legendStops, defaultChatWidth, clampChatWidth, feedbackPayload, attachmentsFor,
+    FEATURES, panelCount, tabPress, clock, orderMoves, poseY, posePoints, countByKind, coatOrder, legendStops, zoneSeekIndex, defaultChatWidth, clampChatWidth, feedbackPayload, attachmentsFor,
   };
 })();

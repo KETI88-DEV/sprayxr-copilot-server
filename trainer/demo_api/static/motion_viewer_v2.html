@@ -32,13 +32,13 @@
     <div class="stage-viewport">
       <canvas id="canvas" aria-label="3D 재생 장면"></canvas>
       <div id="realtimeHud" class="hud" role="group" aria-label="재생 시점의 측정값">
-        <span class="hud-zone"><b id="realtimeHudZone" data-max="Zone 대기">Zone 대기</b><span id="realtimeHudActivity" class="realtime-hud-activity" data-max="Zone 사이 이동">Zone 사이 이동</span></span>
+        <span class="hud-zone"><b id="realtimeHudZone" data-max="Zone 대기">Zone 대기</b><span id="realtimeHudActivity" class="realtime-hud-activity" data-max="이동 중">이동 중</span></span>
         <span class="hud-item" title="속도"><i data-icon="gauge"></i><span id="realtimeHudSpeed" data-max="99,999 mm/s">—</span><span id="realtimeHudSpeedState" class="realtime-hud-state idle">대기</span></span>
         <span class="hud-item" title="이격거리"><i data-icon="ruler"></i><span id="realtimeHudDistance" data-max="9999 mm">—</span><span id="realtimeHudDistanceState" class="realtime-hud-state idle">대기</span></span>
-        <span class="hud-item" title="분사축 편차"><i data-icon="axis-3d"></i><span id="realtimeHudAxis" data-max="99.9°">—</span><span id="realtimeHudAxisState" class="realtime-hud-state idle">대기</span></span>
+        <span class="hud-item" title="분사축 편차"><i data-icon="axis-3d"></i><span id="realtimeHudAxis" data-max="180.0°">—</span><span id="realtimeHudAxisState" class="realtime-hud-state idle">대기</span></span>
         <span class="hud-item" title="도장 방향"><i data-icon="arrow-right-left"></i><span id="realtimeHudDirection" data-max="분석 중">—</span><span id="realtimeHudDirectionState" class="realtime-hud-state idle">대기</span></span>
         <span class="hud-item" title="도포 범위"><i data-icon="scan"></i><span id="realtimeHudCoverage" data-max="100%">—</span><span id="realtimeHudCoverageState" class="realtime-hud-state idle">대기</span></span>
-        <button id="v2HudFix" class="hud-fix" type="button" aria-expanded="false" aria-controls="v2HudPanel" hidden><i data-icon="list-checks"></i><span id="v2HudFixCount"></span></button>
+        <button id="v2HudFix" class="hud-fix" type="button" aria-expanded="false" aria-controls="v2HudPanel" style="visibility: hidden"><i data-icon="list-checks"></i><span id="v2HudFixCount" data-max="99"></span></button>
         <div id="v2HudPanel" class="hud-panel" hidden><ul id="v2HudFixList" class="hud-fix-list"></ul><div id="v2ZoneDetail" class="zone-detail"></div></div>
       </div>
       <details class="layers">
@@ -147,14 +147,18 @@
         <div id="v2CoatBars" class="coat-bars" role="group" aria-label="Zone별 도막 등급(목표 대비)"></div>
         <div id="v2CoatMap" class="coat-map" hidden>
           <div id="v2CoatMapTools" class="coat-map-tools">
-            <div id="v2CoatMapSeg" class="seg" role="group" aria-label="도막 지도 보기와 색상 척도">
-              <button id="coatingView2d" class="active" type="button">2D</button>
-              <button id="coatingView3d" type="button">3D</button>
-              <button id="coatingScaleRelative" class="active" type="button" aria-pressed="true">상대</button>
-              <button id="coatingScaleAbsolute" type="button" aria-pressed="false" disabled>µm</button>
+            <div id="v2CoatMapSeg" class="seg-pair">
+              <div class="seg" role="group" aria-label="도막 지도 보기">
+                <button id="coatingView2d" class="active" type="button">2D</button>
+                <button id="coatingView3d" type="button">3D</button>
+              </div>
+              <div class="seg" role="group" aria-label="도막 지도 색상 척도">
+                <button id="coatingScaleRelative" class="active" type="button" aria-pressed="true">상대</button>
+                <button id="coatingScaleAbsolute" type="button" aria-pressed="false" disabled>µm</button>
+              </div>
             </div>
           </div>
-          <div class="coating-screen"><canvas id="coatingCanvas" aria-label="전문가 최종 도막 지도"></canvas><span id="coatingZone" class="zone-tag zone-tag-idle">Zone 대기 중</span></div>
+          <div class="coating-screen"><canvas id="coatingCanvas" aria-label="전문가 최종 도막 지도"></canvas><span id="coatingZone" class="zone-tag zone-tag-idle">Zone 대기</span></div>
           <div id="v2MapLegend" class="map-legend"></div>
           <div id="coatingLegend" class="coating-legend" hidden></div>
           <p id="coatingStatus" class="sr-only"></p>
