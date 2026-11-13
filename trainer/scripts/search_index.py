@@ -34,7 +34,7 @@ def load_faiss_index(index_path: str, ef_search: int) -> Any:
     return index
 
 
-def load_metadata(metadata_path: str) -> Dict[str, Any]:
+def load_metadata(metadata_path: str, embedding_model: Optional[str] = None) -> Dict[str, Any]:
     path = Path(metadata_path)
     if not path.is_file():
         logger.error("Metadata not found: %s", metadata_path)
@@ -42,6 +42,15 @@ def load_metadata(metadata_path: str) -> Dict[str, Any]:
 
     with path.open("r", encoding="utf-8") as fh:
         metadata = json.load(fh)
+    if embedding_model is not None:
+        # Builds record a hub id ("BAAI/bge-m3") while serving loads a local copy
+        # ("/models/bge-m3"); the last path part names the model in both.
+        built_with = str(metadata.get("embedding_model") or "")
+        if Path(built_with).name.lower() != Path(embedding_model).name.lower():
+            raise ValueError(
+                f"Index {metadata_path} was built with embedding model {built_with!r}, "
+                f"but the config loads {embedding_model!r}"
+            )
     logger.info("Loaded metadata: %d entries", len(metadata.get("id_map", [])))
     return metadata
 
@@ -79,7 +88,8 @@ def retrieve(
     embedder: Any,
     top_k: int = 5,
 ) -> List[Dict[str, Any]]:
-    query_vec = embedder.encode(
+    # encode_query applies the model's query prompt (KURE-v3: "query: "); bge-m3 has none.
+    query_vec = embedder.encode_query(
         query,
         normalize_embeddings=True,
         convert_to_numpy=True,
@@ -283,7 +293,7 @@ def main() -> int:
         config["paths"]["faiss_index"],
         config["index"]["ef_search"],
     )
-    metadata = load_metadata(config["paths"]["metadata_json"])
+    metadata = load_metadata(config["paths"]["metadata_json"], config["embedding"]["model_name"])
     id_map = metadata["id_map"]
 
     embedder = load_embedder(

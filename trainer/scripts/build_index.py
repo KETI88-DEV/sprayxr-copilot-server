@@ -94,13 +94,12 @@ def chunk_text_by_tokens(
     min_tokens: int,
     max_tokens: int,
     overlap_fraction: float,
-    min_chunk_tokens: int,
 ) -> List[Dict[str, Any]]:
+    # Every emitted piece holds text not yet in an earlier chunk, so nothing is dropped
+    # for being short; short sections are merged with neighbours in chunk_document.
     token_count = count_tokens(text, tokenizer)
     if token_count <= max_tokens:
-        if token_count < min_chunk_tokens:
-            return []
-        return [{"text": text, "tokens": token_count}]
+        return [{"text": text, "tokens": token_count}] if text.strip() else []
 
     paragraphs = split_paragraphs(text)
     if len(paragraphs) <= 1:
@@ -120,8 +119,7 @@ def chunk_text_by_tokens(
             if current_parts:
                 combined = "\n\n".join(current_parts)
                 combined_tokens = count_tokens(combined, tokenizer)
-                if combined_tokens >= min_chunk_tokens:
-                    chunks.append({"text": combined, "tokens": combined_tokens})
+                chunks.append({"text": combined, "tokens": combined_tokens})
                 current_parts = []
                 current_tokens = 0
 
@@ -133,8 +131,7 @@ def chunk_text_by_tokens(
                 if sub_tokens + sent_tokens > max_tokens and sub_parts:
                     combined = " ".join(sub_parts)
                     combined_tokens = count_tokens(combined, tokenizer)
-                    if combined_tokens >= min_chunk_tokens:
-                        chunks.append({"text": combined, "tokens": combined_tokens})
+                    chunks.append({"text": combined, "tokens": combined_tokens})
                     keep_count = max(1, len(sub_parts) // 3)
                     sub_parts = sub_parts[-keep_count:]
                     sub_tokens = count_tokens(" ".join(sub_parts), tokenizer)
@@ -143,15 +140,13 @@ def chunk_text_by_tokens(
             if sub_parts:
                 combined = " ".join(sub_parts)
                 combined_tokens = count_tokens(combined, tokenizer)
-                if combined_tokens >= min_chunk_tokens:
-                    chunks.append({"text": combined, "tokens": combined_tokens})
+                chunks.append({"text": combined, "tokens": combined_tokens})
             continue
 
         if current_tokens + para_tokens > max_tokens and current_parts:
             combined = "\n\n".join(current_parts)
             combined_tokens = count_tokens(combined, tokenizer)
-            if combined_tokens >= min_chunk_tokens:
-                chunks.append({"text": combined, "tokens": combined_tokens})
+            chunks.append({"text": combined, "tokens": combined_tokens})
             keep_count = 0
             overlap_acc = 0
             for i in range(len(current_parts) - 1, -1, -1):
@@ -168,9 +163,7 @@ def chunk_text_by_tokens(
 
     if current_parts:
         combined = "\n\n".join(current_parts)
-        combined_tokens = count_tokens(combined, tokenizer)
-        if combined_tokens >= min_chunk_tokens:
-            chunks.append({"text": combined, "tokens": combined_tokens})
+        chunks.append({"text": combined, "tokens": count_tokens(combined, tokenizer)})
 
     return chunks
 
@@ -179,11 +172,8 @@ def chunk_table(
     table_text: str,
     tokenizer: Any,
     max_tokens: int,
-    min_chunk_tokens: int,
 ) -> List[Dict[str, Any]]:
     token_count = count_tokens(table_text, tokenizer)
-    if token_count < min_chunk_tokens:
-        return []
     if token_count <= max_tokens:
         return [{"text": table_text, "tokens": token_count}]
 
@@ -205,16 +195,12 @@ def chunk_table(
         candidate = header + "\n" + "\n".join(batch) if header else "\n".join(batch)
         if count_tokens(candidate, tokenizer) > max_tokens and len(batch) > 1:
             prev = header + "\n" + "\n".join(batch[:-1]) if header else "\n".join(batch[:-1])
-            pt = count_tokens(prev, tokenizer)
-            if pt >= min_chunk_tokens:
-                chunks.append({"text": prev, "tokens": pt})
+            chunks.append({"text": prev, "tokens": count_tokens(prev, tokenizer)})
             batch = [dline]
 
     if batch:
         final = header + "\n" + "\n".join(batch) if header else "\n".join(batch)
-        ft = count_tokens(final, tokenizer)
-        if ft >= min_chunk_tokens:
-            chunks.append({"text": final, "tokens": ft})
+        chunks.append({"text": final, "tokens": count_tokens(final, tokenizer)})
 
     return chunks
 
@@ -223,7 +209,6 @@ def force_split_oversized(
     chunks: List[Dict[str, Any]],
     tokenizer: Any,
     max_tokens: int,
-    min_chunk_tokens: int,
 ) -> List[Dict[str, Any]]:
     result: List[Dict[str, Any]] = []
     for ch in chunks:
@@ -231,20 +216,55 @@ def force_split_oversized(
             result.append(ch)
             continue
         text = ch["text"]
-        token_ids = tokenizer.encode(text, add_special_tokens=False)
-        start = 0
-        while start < len(token_ids):
-            end = min(start + max_tokens, len(token_ids))
-            sub_ids = token_ids[start:end]
-            sub_text = tokenizer.decode(sub_ids, skip_special_tokens=True).strip()
-            sub_tokens = len(sub_ids)
-            if sub_tokens >= min_chunk_tokens and sub_text:
+        # Cut at character offsets: decoding a byte-level token slice can split a
+        # Hangul character and leave U+FFFD at the edges.
+        offsets = tokenizer(text, add_special_tokens=False, return_offsets_mapping=True)["offset_mapping"]
+        for start in range(0, len(offsets), max_tokens):
+            end = start + max_tokens
+            sub_text = text[offsets[start][0]:offsets[end][0] if end < len(offsets) else len(text)].strip()
+            if sub_text:
                 new_ch = dict(ch)
                 new_ch["text"] = sub_text
-                new_ch["tokens"] = sub_tokens
+                new_ch["tokens"] = count_tokens(sub_text, tokenizer)
                 result.append(new_ch)
-            start = end
     return result
+
+
+def merge_short_sections(sections: List[str], tokenizer: Any, min_chunk_tokens: int) -> List[str]:
+    """Join each section shorter than min_chunk_tokens to the next one (the last to the previous)."""
+    merged: List[str] = []
+    carry = ""
+    for section in sections:
+        section = f"{carry}\n\n{section}" if carry else section
+        if count_tokens(section, tokenizer) < min_chunk_tokens:
+            carry = section
+            continue
+        merged.append(section)
+        carry = ""
+    if carry:
+        if merged:
+            merged[-1] = f"{merged[-1]}\n\n{carry}"
+        else:
+            merged.append(carry)
+    return merged
+
+
+# Glyphs from symbol/equation fonts (Unicode private use area) seen in the 2026-03 index.
+# "Sa 2½" comes out as U+E034 U+E035 in doc_0018 and doc_0052; F0B7/F0B0 are the Symbol
+# font bullet and degree sign. Other private-use glyphs have no known meaning and are removed.
+_PUA_FIXES = (
+    (re.compile(r"Sa\s*2\s*\s*"), "Sa 2½"),
+    (re.compile(""), "•"),
+    (re.compile(""), "°"),
+)
+_PUA_OR_REPLACEMENT = re.compile(r"[-�]+")
+
+
+def normalize_glyphs(text: str) -> str:
+    for pattern, replacement in _PUA_FIXES:
+        text = pattern.sub(replacement, text)
+    # U+FFFD runs are mostly table-of-contents dot leaders; a space keeps the words apart.
+    return _PUA_OR_REPLACEMENT.sub(" ", text)
 
 
 def chunk_document(
@@ -266,11 +286,10 @@ def chunk_document(
     all_chunks: List[Dict[str, Any]] = []
 
     if content and isinstance(content, str) and content.strip():
-        sections = split_sections(content)
+        sections = merge_short_sections(split_sections(normalize_glyphs(content)), tokenizer, min_chunk_tokens)
         for section in sections:
             section_chunks = chunk_text_by_tokens(
-                section, tokenizer, min_tokens, max_tokens,
-                overlap_fraction, min_chunk_tokens,
+                section, tokenizer, min_tokens, max_tokens, overlap_fraction,
             )
             for ch in section_chunks:
                 ch["has_table"] = False
@@ -282,7 +301,7 @@ def chunk_document(
     for tbl in tables:
         if not isinstance(tbl, str) or not tbl.strip():
             continue
-        table_chunks = chunk_table(tbl, tokenizer, max_tokens, min_chunk_tokens)
+        table_chunks = chunk_table(normalize_glyphs(tbl), tokenizer, max_tokens)
         for ch in table_chunks:
             ch["has_table"] = True
             ch["has_procedure"] = False
@@ -290,13 +309,39 @@ def chunk_document(
             ch["source_type"] = source_type
             all_chunks.append(ch)
 
-    all_chunks = force_split_oversized(all_chunks, tokenizer, max_tokens, min_chunk_tokens)
+    all_chunks = force_split_oversized(all_chunks, tokenizer, max_tokens)
 
     for seq, ch in enumerate(all_chunks, start=1):
         ch["chunk_id"] = f"DOC-{doc_id}-C{seq:04d}"
         ch["doc_id"] = doc_id
 
     return all_chunks
+
+
+_HANGUL_RUN = re.compile(r"[가-힣]+")
+
+
+def _max_hangul_run(text: str) -> int:
+    return max((len(r) for r in _HANGUL_RUN.findall(text)), default=0)
+
+
+def repair_spacing(chunks: List[Dict[str, Any]], tokenizer: Any, max_run: int = 6) -> int:
+    """Re-space glued Korean with kiwipiepy, the rule of repair_chunk_spacing.py (2026-07 index)."""
+    from kiwipiepy import Kiwi
+
+    kiwi = Kiwi()
+    repaired = 0
+    for ch in chunks:
+        before = _max_hangul_run(ch["text"])
+        if before <= max_run:
+            continue
+        respaced = kiwi.space(ch["text"])
+        if _max_hangul_run(respaced) < before:
+            ch["text"] = respaced
+            ch["tokens"] = count_tokens(respaced, tokenizer)
+            ch["spacing_repaired"] = True
+            repaired += 1
+    return repaired
 
 
 def load_documents(input_dir: Path) -> List[Dict[str, Any]]:
@@ -331,7 +376,9 @@ def embed_chunks(
 
     logger.info("Encoding %d chunks (batch_size=%d)...", len(texts), emb_cfg["batch_size"])
     t0 = time.time()
-    embeddings = model.encode(
+    # encode_document applies the model's own document prompt (KURE-v3: "passage: ");
+    # bge-m3 has none, so its vectors are unchanged. Queries use encode_query in search_index.
+    embeddings = model.encode_document(
         texts,
         batch_size=emb_cfg["batch_size"],
         normalize_embeddings=emb_cfg.get("normalize", True),
@@ -380,6 +427,13 @@ def save_outputs(
 
     paths_cfg = config["paths"]
 
+    # Existing index files are hard-linked into release bundles; opening them for
+    # writing would rewrite those copies too. Every build goes to a new folder.
+    targets = ["chunks_jsonl"] + (["faiss_index", "metadata_json"] if index is not None else [])
+    existing = [paths_cfg[key] for key in targets if Path(paths_cfg[key]).exists()]
+    if existing:
+        raise FileExistsError(f"Refusing to overwrite existing index outputs: {existing}")
+
     jsonl_path = Path(paths_cfg["chunks_jsonl"])
     jsonl_path.parent.mkdir(parents=True, exist_ok=True)
     with jsonl_path.open("w", encoding="utf-8") as fh:
@@ -393,6 +447,7 @@ def save_outputs(
                 "domain_category": ch["domain_category"],
                 "has_table": ch["has_table"],
                 "has_procedure": ch["has_procedure"],
+                "spacing_repaired": ch.get("spacing_repaired", False),
             }
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
     logger.info("Saved chunks.jsonl: %d lines → %s", len(chunks), jsonl_path)
@@ -433,6 +488,7 @@ def save_outputs(
                 "domain_category": ch["domain_category"],
                 "has_table": ch["has_table"],
                 "has_procedure": ch["has_procedure"],
+                "spacing_repaired": ch.get("spacing_repaired", False),
             })
 
         meta_path = Path(paths_cfg["metadata_json"])
@@ -533,6 +589,9 @@ def main() -> int:
         doc_chunks = chunk_document(doc, tokenizer, config)
         all_chunks.extend(doc_chunks)
         logger.debug("  %s → %d chunks", doc["doc_id"], len(doc_chunks))
+
+    repaired = repair_spacing(all_chunks, tokenizer)
+    logger.info("Spacing repaired: %d/%d chunks", repaired, len(all_chunks))
 
     chunk_elapsed = time.time() - t0
     print_summary(all_chunks, chunk_elapsed)

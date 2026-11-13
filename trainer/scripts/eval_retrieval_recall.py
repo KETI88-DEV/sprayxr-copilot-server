@@ -49,7 +49,7 @@ def main() -> int:
 
     config = load_config(args.config)
     index = load_faiss_index(config["paths"]["faiss_index"], config["index"]["ef_search"])
-    metadata = load_metadata(config["paths"]["metadata_json"])
+    metadata = load_metadata(config["paths"]["metadata_json"], config["embedding"]["model_name"])
     id_map = metadata["id_map"]
     embedder = load_embedder(
         config["embedding"]["model_name"],
