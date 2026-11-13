@@ -564,8 +564,9 @@
     }
     const inner = row.getBoundingClientRect();
     const outer = box.getBoundingClientRect();
-    if (inner.top < outer.top) box.scrollTop -= outer.top - inner.top;
-    else if (inner.bottom > outer.bottom) box.scrollTop += inner.bottom - outer.bottom;
+    const room = 6;   // 지금 행의 강조 테두리(바깥 1px)와 아래 흐림이 행을 가리지 않게 여유를 둔다
+    if (inner.top < outer.top + room) box.scrollTop -= outer.top + room - inner.top;
+    else if (inner.bottom > outer.bottom - room) box.scrollTop += inner.bottom - (outer.bottom - room);
     coatAutoTop = box.scrollTop;
   }
 
