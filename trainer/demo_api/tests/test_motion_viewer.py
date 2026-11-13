@@ -1370,3 +1370,13 @@ def test_v2_is_the_main_viewer_and_the_old_screen_moves_to_v1(tmp_path: Path) ->
     assert old.status_code == 200
     assert 'id="v2Grid"' not in old.text
     assert 'class="v2-switch" href="/motion-viewer"' in old.text
+
+
+def test_zone_tag_keeps_zone_color_only_in_the_square() -> None:
+    """2026-11-13 사용자 결정: Zone 표지 테두리·바탕은 무채색, Zone 색은 앞의 8px 네모에만."""
+    css = (Path(__file__).resolve().parents[1] / "static" / "motion_viewer_v2.css").read_text(encoding="utf-8")
+    rule = css[css.index(".zone-tag {"):css.index("}", css.index(".zone-tag {"))]
+    assert "var(--zone" not in rule
+    assert "border: 1px solid var(--line-strong)" in rule
+    square = css[css.index(".zone-tag::before {"):css.index("}", css.index(".zone-tag::before {"))]
+    assert "background: var(--zone" in square

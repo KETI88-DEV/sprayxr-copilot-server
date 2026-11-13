@@ -92,8 +92,8 @@ select:hover { background: var(--raised-hover); }
 /* Zone 표지: 색은 기존 Zone 번호별 고정 색을 --zone 으로 받는다 */
 .zone-tag {
   display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 8px;
-  border: 1px solid var(--zone, var(--line-strong)); border-radius: 6px;
-  background: color-mix(in srgb, var(--zone, transparent) 18%, transparent);
+  border: 1px solid var(--line-strong); border-radius: 6px;   /* Zone 색은 앞의 네모에만(2026-11-13 결정) */
+  background: var(--raised);
   color: var(--ink); font-size: 13px; font-weight: 500; font-variant-numeric: tabular-nums; white-space: nowrap;
 }
 .zone-tag::before { content: ""; width: 8px; height: 8px; border-radius: 2px; background: var(--zone, var(--ink-3)); box-shadow: 0 0 0 1px rgba(238, 245, 255, .35); }
