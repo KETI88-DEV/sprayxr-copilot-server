@@ -82,10 +82,83 @@ def test_limit_accepts_four_thousand_korean_characters_and_optional_name(feedbac
 
 def test_feedback_bounds_raw_body_and_requires_json_and_same_site(feedback_client):
     client, _ = feedback_client
-    assert client.post('/api/feedback', content=' ' * 32769, headers={'Content-Type': 'application/json'}).status_code == 413
+    assert client.post('/api/feedback', content=' ' * 98305, headers={'Content-Type': 'application/json'}).status_code == 413
     assert client.post('/api/feedback', content='message=hello').status_code == 415
     assert client.post('/api/feedback', content='{', headers={'Content-Type': 'application/json'}).status_code == 422
     assert client.post('/api/feedback', json=payload(), headers={'Origin': 'https://unrelated.test'}).status_code == 403
+
+
+def answer_context(**changes):
+    return {'conversation_id': 'conv-1', 'question': '어느 구역이 문제인가요?', 'answer': '3번 구역입니다.',
+            'task': 'pose_recomm', 'response_mode': 'quick', 'answer_source': 'engine', 'zone_id': '3',
+            'map_num': 2, 'playhead_seconds': 12.5, 'record': 'SEQ-012', 'session_id': 'S-1',
+            'worker_id': 'W-1', 'correct_answer': '4번 구역입니다.', **changes}
+
+
+def test_answer_feedback_persists_context_json(feedback_client):
+    import json
+    client, path = feedback_client
+    ctx = answer_context()
+    response = client.post('/api/feedback', json=payload(kind='bug', answer=ctx))
+    assert response.status_code == 201, response.text
+    with sqlite3.connect(path) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute('SELECT * FROM user_feedback').fetchone()
+    assert json.loads(row['answer_context']) == ctx and row['kind'] == 'bug' and row['page'] == 'motion'
+
+
+def test_legacy_database_gets_the_answer_column_without_losing_rows(feedback_client):
+    import json, re
+    module = feedback_module()
+    _, path = feedback_client
+    old = re.sub(r"\n answer_context TEXT,?", '', module._SCHEMA)
+    old = old.replace(' status_updated_by TEXT,', ' status_updated_by TEXT')
+    assert 'answer_context' not in old
+    with sqlite3.connect(path) as conn:
+        conn.execute(old)
+        conn.execute("INSERT INTO user_feedback(submission_id,message,kind,page,server_version,created_at,caller_source,source_evidence) VALUES('old','옛 의견','bug','docs','1','t','x','y')")
+    store = module.FeedbackStore(str(path))
+    body = module.FeedbackSubmission.model_validate(payload(kind='improvement', answer=answer_context()))
+    store.submit(body, {'caller_source': 'x', 'source_evidence': 'y'})
+    store.close()
+    with sqlite3.connect(path) as conn:
+        rows = conn.execute('SELECT message,answer_context FROM user_feedback ORDER BY id').fetchall()
+    assert rows[0] == ('옛 의견', None) and json.loads(rows[1][1])['question'] == '어느 구역이 문제인가요?'
+
+
+def test_answer_on_other_page_or_with_unknown_key_is_rejected(feedback_client):
+    client, path = feedback_client
+    assert client.post('/api/feedback', json=payload(page='docs', answer=answer_context())).status_code == 422
+    assert client.post('/api/feedback', json=payload(answer=answer_context(extra='x'))).status_code == 422
+    with sqlite3.connect(path) as conn:
+        exists = conn.execute("SELECT 1 FROM sqlite_master WHERE name='user_feedback'").fetchone()
+        assert not exists or conn.execute('SELECT COUNT(*) FROM user_feedback').fetchone()[0] == 0
+
+
+def test_same_submission_with_different_answer_conflicts(feedback_client):
+    client, _ = feedback_client
+    body = payload(kind='bug', answer=answer_context())
+    assert client.post('/api/feedback', json=body).status_code == 201
+    assert client.post('/api/feedback', json=body).status_code == 200
+    assert client.post('/api/feedback', json={**body, 'answer': answer_context(answer='다른 답')}).status_code == 409
+
+
+def test_admin_list_labels_answer_feedback_and_escapes_question(feedback_client):
+    client, _ = feedback_client
+    ctx = answer_context(question='<script>x</script>')
+    assert client.post('/api/feedback', json=payload(kind='bug', answer=ctx)).status_code == 201
+    text = client.get('/admin/feedback').text
+    assert '답변 오류' in text and '&lt;script&gt;x&lt;/script&gt;' in text and '<script>x</script>' not in text
+    assert 'class="feedback-answer"' in text
+
+
+def test_large_answer_feedback_body_limit(feedback_client):
+    client, _ = feedback_client
+    big = answer_context(question='가' * 2000, answer='나' * 8000, correct_answer='다' * 4000)
+    body = payload(kind='bug', message='라' * 4000, answer=big)
+    assert 50_000 < len(__import__('json').dumps(body, ensure_ascii=False).encode()) < 98_304
+    assert client.post('/api/feedback', json=body).status_code == 201
+    assert client.post('/api/feedback', content=' ' * 98_305, headers={'Content-Type': 'application/json'}).status_code == 413
 
 
 def test_retries_are_idempotent_but_other_people_on_same_ip_can_submit(feedback_client):
