@@ -107,10 +107,22 @@
     advice.textContent = !zone ? '' : corrections.length ? corrections[0].replace(/[.。]\s*$/, '') + (corrections.length > 1 ? ` 외 ${corrections.length - 1}건` : '') : coatNote || '전문가 기록과 차이가 작습니다';
     advice.title = corrections.join('\n');
     const more = $('v2ZoneMore');
-    const metrics = (zone?.metrics || []).filter((metric) => metric.available !== false && metric.similarity_percent != null);
-    more.hidden = !metrics.length;
+    const usable = (metric) => metric.available !== false && metric.similarity_percent != null;
+    const metrics = (zone?.metrics || []).filter(usable);
     const detail = $('v2ZoneDetail');
-    if (!metrics.length) { detail.hidden = true; more.setAttribute('aria-expanded', 'false'); return; }
+    // 단추와 펼친 칸은 기록에 비교 항목이 하나라도 있으면 그대로 둔다. 재생 위치마다 숨기면 단추가 깜빡이고 장면 높이가 흔들린다.
+    more.hidden = !Object.values(record?.pose_evaluation?.zones || {}).some((item) => (item.metrics || []).some(usable));
+    if (more.hidden) { detail.hidden = true; more.setAttribute('aria-expanded', 'false'); return; }
+    more.disabled = !metrics.length && detail.hidden;
+    if (!metrics.length) {
+      // 이동·미도장 구간: 칸은 두고 값만 비운다. 앞 Zone 값을 남기면 지금 위치의 값으로 읽힌다.
+      for (const item of detail.children) {
+        item.classList.add('is-idle');
+        item.querySelector('.metric-fill').style.width = '0';
+        item.querySelector('.metric-value').textContent = '—';
+      }
+      return;
+    }
     if (detail.hidden) return;
     detail.replaceChildren(...metrics.map((metric) => {
       const item = el('div', 'metric');
@@ -133,6 +145,9 @@
     renderZoneNote();
     dispatchEvent(new Event('resize'));
   });
+  // 장면 칸의 크기가 바뀌면 캔버스 해상도를 다시 맞춘다. 창 크기 이벤트만 믿으면 아래 칸이 접히거나 펼쳐질 때
+  // 캔버스가 예전 높이로 남아, 오른쪽 아래 좌표축이 캔버스 밖에 그려진다.
+  new ResizeObserver(() => resize()).observe($('canvas').parentElement);
 
   // ── 자세: 스켈레톤과 분사별 자세 유사도 ───────────────────
   const ARM_UNAVAILABLE = {
