@@ -5,7 +5,7 @@
 선박 도장·블라스팅 훈련 시뮬레이터와 연동해 작업자에게 피드백과 훈련 결과를 제공하는 AI Co-Pilot 서버입니다.
 전문가 기준 데이터와 훈련 기록을 비교하고 작업 자세와 도장 경로를 시각화합니다. 훈련 중 발생하는 질문에도 답변합니다.
 
-현재 버전은 **v3.1.1**입니다. [버전별 변경 이력](CHANGELOG.md)과 [GitHub 릴리스](https://github.com/KETI88-DEV/sprayxr-copilot-server/releases)에서 추가 기능을 확인할 수 있습니다.
+현재 버전은 **v3.2.0**입니다. [버전별 변경 이력](CHANGELOG.md)과 [GitHub 릴리스](https://github.com/KETI88-DEV/sprayxr-copilot-server/releases)에서 추가 기능을 확인할 수 있습니다.
 
 ## 주요 기능
 
@@ -156,8 +156,8 @@
 | 무엇 | 넣는 위치 | 컨테이너 경로 |
 |---|---|---|
 | 27B 병합 체크포인트(약 52GB, safetensors 15개와 설정·토크나이저 파일) | `${BUNDLE_DIR}/output/merged/qwen36_27b_shipcoat_v6_1_bf16/` | vLLM `/models/shipcoat` |
-| 임베딩·재정렬 모델 | `${BUNDLE_DIR}/models/bge-m3/`, `${BUNDLE_DIR}/models/bge-reranker-v2-m3/` | agent-api `/models/…` |
-| RAG 색인(`faiss.index`, `metadata.json`) | `${BUNDLE_DIR}/output/indexes/` | agent-api `/output/indexes` |
+| 임베딩·재정렬 모델 | `${BUNDLE_DIR}/models/KURE-v3/`, `${BUNDLE_DIR}/models/KURE-Reranker-nano/` | agent-api `/models/…` |
+| RAG 색인(`faiss.index`, `metadata.json`) | `${BUNDLE_DIR}/output/indexes/kure3-20261113/` | agent-api `/output/indexes/kure3-20261113` |
 | 자세 기준(`expert_arm_reference*.json`) | `${BUNDLE_DIR}/output/expert_reference/` | mcp `/output/expert_reference` |
 | 서빙 설정(`rag_config_spark_vllm_bf16*.yaml`) | `${BUNDLE_DIR}/config/` | agent-api `/bundle-config` |
 | 빠른 안내 8B 모델(Qwen3-8B-AWQ) | `${QUICK_MODEL_DIR}` | quick-vllm `/models/quick` |

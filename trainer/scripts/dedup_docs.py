@@ -95,6 +95,15 @@ def load_documents(files: List[Path]) -> List[DocRecord]:
     return records
 
 
+def drop_empty_documents(records: List[DocRecord]) -> Tuple[List[DocRecord], List[str]]:
+    """Documents without text (scans before OCR) all hash alike; left in, stage 1 would
+    mark every one after the first a duplicate of it and hide that they are empty."""
+    empty = [str(r.payload["doc_id"]) for r in records if not r.payload["content"].strip()]
+    for doc_id in empty:
+        logger.warning("Skipping %s: no text content (scanned document needs OCR)", doc_id)
+    return [r for r in records if r.payload["content"].strip()], empty
+
+
 def stage_exact_dedup(records: List[DocRecord]) -> Tuple[List[DocRecord], int]:
     kept: List[DocRecord] = []
     content_hash_to_doc_id: Dict[str, str] = {}
@@ -260,6 +269,7 @@ def write_report(
     paragraph_dedup_count: int,
     total_output: int,
     dry_run: bool,
+    empty_doc_ids: List[str],
 ) -> Dict[str, Any]:
     dedup_rate = 0.0
     if total_input > 0:
@@ -267,6 +277,7 @@ def write_report(
 
     report: Dict[str, Any] = {
         "total_input": total_input,
+        "empty_documents": empty_doc_ids,
         "exact_duplicates": exact_duplicates,
         "near_duplicates": near_duplicates,
         "paragraph_dedup_count": paragraph_dedup_count,
@@ -345,6 +356,8 @@ def main() -> int:
     total_input = len(records)
     logger.info("Loaded %s input documents", total_input)
 
+    records, empty_doc_ids = drop_empty_documents(records)
+
     stage1_records, exact_duplicates = stage_exact_dedup(records)
     logger.info("Stage 1 complete: kept=%s exact_duplicates=%s", len(stage1_records), exact_duplicates)
 
@@ -364,6 +377,7 @@ def main() -> int:
         paragraph_dedup_count=paragraph_dedup_count,
         total_output=len(stage2_records),
         dry_run=args.dry_run,
+        empty_doc_ids=empty_doc_ids,
     )
 
     logger.info("Finished. report=%s", json.dumps(report, ensure_ascii=False))

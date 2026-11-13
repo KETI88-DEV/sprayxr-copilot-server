@@ -5,20 +5,22 @@ chunking:
   overlap_fraction: 0.15
   min_chunk_tokens: 50
   chunk_id_format: DOC-{doc_id}-C{seq:04d}
-# Spark serving config: same retrieval and prompts as rag_config_fewshot_27b.yaml,
-# generation through an external vLLM OpenAI-compatible server (llm.backend: openai).
+# Spark serving config: same prompts as rag_config_fewshot_27b.yaml, generation through an
+# external vLLM OpenAI-compatible server (llm.backend: openai).
+# Retrieval differs since 2026-11-13: KURE-v3 + KURE-Reranker-nano over the rebuilt index
+# (198 documents, 25,483 chunks). rag_config_fewshot_27b.yaml still names bge-m3 because the
+# development container cannot load these models (deploy/spark/requirements/retrieval-eval.txt).
 embedding:
-  # Local directory, not the hub id. search_index loads with use_safetensors=True,
-  # and the HF cache main snapshot of BAAI/bge-m3 has only pytorch_model.bin; offline
-  # the hub id fails because safetensors auto-conversion needs the network
-  # (reproduced 2026-09-15 with HF_HUB_OFFLINE=1). The directory must hold the
-  # main snapshot files plus model.safetensors (refs/pr snapshot 9a0624b8).
-  model_name: /models/bge-m3
+  # Local directory for offline start (HF_HUB_OFFLINE=1). Needs sentence-transformers >= 5.6.1.
+  # The model's own prompts ("query: " / "passage: ") are applied by encode_query/encode_document.
+  model_name: /models/KURE-v3
   device: cuda
-  batch_size: 32
+  batch_size: 16
   max_seq_length: 1024
   normalize: true
-  dimension: 1024
+  dimension: 2048
+  # The index was built in bfloat16 (metadata.json embedding_dtype); serve in the same precision.
+  dtype: bfloat16
 index:
   type: hnsw
   metric: inner_product
@@ -26,10 +28,11 @@ index:
   ef_construction: 200
   ef_search: 256
 reranker:
-  # Local directory for offline start; the cached snapshot already has model.safetensors.
-  model_name: /models/bge-reranker-v2-m3
+  # Local directory for offline start. Needs transformers >= 5.7.0: with 5.6.2 or older this
+  # reranker loads without error and ranks badly (recall@8 0.96 -> 0.61, measured 2026-11-13).
+  model_name: /models/KURE-Reranker-nano
   device: cuda
-  max_length: 1024
+  max_length: 2048
   top_k_retrieve: 20
   top_k_rerank: 8
 llm:
@@ -200,6 +203,11 @@ prompt:
     {context}'
   user_template: '질문: {question}'
 confidence:
+  # 근거 확인 단계(copilot_router, 상세분석 지식 답): 재정렬 1위 점수가 이 값 미만이면 답하지 않는다.
+  # KURE-Reranker-nano 점수 척도. 2026-11-13: 2-1 문항으로 정한 4.07이 따로 만든 문항에서 답 있는 질문의
+  # 26%를 막아(등록 기준 10% 초과) 두 문항을 합친 답 있음 294개의 5% 점으로 다시 정했다. 새 문항 기준 잘못 기권 10%,
+  # 근거 없음 차단 67%. 재정렬 모델을 바꾸면 다시 정해야 한다. 키가 없으면 단계를 끈다.
+  abstain_below_rerank_score: 3.28
   min_rerank_score: 0.3
   min_results: 1
   high_threshold: 0.7
@@ -213,8 +221,10 @@ eval:
   rubric_path: /workspace/trainer/configs/eval_rubric.md
   results_dir: /output/eval_results
 paths:
-  input_dir: /data/deduplicated
-  chunks_jsonl: /data/chunked/chunks.jsonl
-  faiss_index: /output/indexes/faiss.index
-  metadata_json: /output/indexes/metadata.json
-  index_config_json: /output/indexes/index_config.json
+  # input_dir·chunks_jsonl are read and written only by build_index.py on the development
+  # server; the serving image reads faiss_index and metadata_json.
+  input_dir: /data/exports/rebuild-20261113/dedup_out
+  chunks_jsonl: /output/indexes/kure3-20261113/chunks.jsonl
+  faiss_index: /output/indexes/kure3-20261113/faiss.index
+  metadata_json: /output/indexes/kure3-20261113/metadata.json
+  index_config_json: /output/indexes/kure3-20261113/index_config.json

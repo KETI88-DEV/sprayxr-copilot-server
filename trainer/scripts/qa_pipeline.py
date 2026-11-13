@@ -163,7 +163,7 @@ def load_all_models(config: Dict[str, Any]) -> Dict[str, Any]:
 
     t0 = time.time()
     index = load_faiss_index(config["paths"]["faiss_index"], config["index"]["ef_search"])
-    metadata = load_metadata(config["paths"]["metadata_json"])
+    metadata = load_metadata(config["paths"]["metadata_json"], config["embedding"]["model_name"])
     id_map = metadata["id_map"]
     logger.info("Loaded index and metadata in %.2fs", time.time() - t0)
 
@@ -172,6 +172,7 @@ def load_all_models(config: Dict[str, Any]) -> Dict[str, Any]:
         config["embedding"]["model_name"],
         config["embedding"]["device"],
         config["embedding"]["max_seq_length"],
+        config["embedding"].get("dtype"),
     )
     logger.info("Loaded embedder in %.2fs", time.time() - t0)
 

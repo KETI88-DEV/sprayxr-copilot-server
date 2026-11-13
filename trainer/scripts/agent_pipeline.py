@@ -654,12 +654,15 @@ class AgentPipeline:
             self.config["paths"]["faiss_index"],
             int(self.config["index"]["ef_search"]),
         )
-        metadata = search_mod.load_metadata(self.config["paths"]["metadata_json"])
+        metadata = search_mod.load_metadata(
+            self.config["paths"]["metadata_json"], self.config["embedding"]["model_name"],
+        )
         id_map = metadata["id_map"]
         embedder = search_mod.load_embedder(
             self.config["embedding"]["model_name"],
             self.config["embedding"]["device"],
             int(self.config["embedding"]["max_seq_length"]),
+            self.config["embedding"].get("dtype"),
         )
         reranker = search_mod.load_reranker(
             self.config["reranker"]["model_name"],

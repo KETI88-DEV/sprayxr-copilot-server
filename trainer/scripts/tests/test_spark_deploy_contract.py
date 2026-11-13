@@ -34,6 +34,7 @@ NGINX = SPARK / "web" / "nginx.conf"
 AGENT_DOCKERFILE = SPARK / "images" / "agent.Dockerfile"
 AGENT_LOCK = SPARK / "requirements" / "agent-api.lock.txt"
 MCP_LOCK = SPARK / "requirements" / "mcp.lock.txt"
+RETRIEVAL_EVAL = SPARK / "requirements" / "retrieval-eval.txt"
 RAG_CONFIG = REPO / "trainer" / "configs" / "rag_config_spark_vllm.yaml"
 BUNDLE = "/BUNDLE"
 
@@ -372,10 +373,23 @@ def test_mcp_lock_is_a_version_consistent_subset_of_the_agent_lock() -> None:
     assert {name: agent.get(name) for name in mcp} == mcp
 
 
+def test_retrieval_lock_versions_match_the_environment_retrieval_was_evaluated_in() -> None:
+    # 검색은 개발 컨테이너가 아니라 검색 venv에서 쟀다(retrieval-eval.txt). 그 기록과 lock이 어긋나면
+    # Spark가 재 본 적 없는 조합으로 뜬다 — nano 재정렬은 transformers 5.6.2 이하에서 오류 없이 무너진다.
+    agent = _lock(AGENT_LOCK)
+    evaluated = dict(
+        line.split("==") for line in RETRIEVAL_EVAL.read_text(encoding="utf-8").splitlines()
+        if "==" in line and not line.startswith("#")
+    )
+
+    for name in ("transformers", "sentence-transformers", "tokenizers", "faiss-cpu", "huggingface-hub", "safetensors", "numpy"):
+        assert agent[name] == evaluated[name], f"{name}: lock {agent[name]} != evaluated {evaluated[name]}"
+
+
 def test_behavior_critical_lock_versions_match_the_evaluated_container() -> None:
     agent = _lock(AGENT_LOCK)
     checked = 0
-    for name in ("fastapi", "pydantic", "httpx", "transformers", "tokenizers", "sentence-transformers", "faiss-cpu", "peft"):
+    for name in ("fastapi", "pydantic", "httpx", "tokenizers", "faiss-cpu", "peft"):
         try:
             installed = metadata.version(name)
         except metadata.PackageNotFoundError:

@@ -8,6 +8,10 @@
 #     FastAPI 는 Form/File 을 쓰는 라우트를 정의할 때 이것을 요구하므로 없으면 import 스모크가
 #     깨진다 — 2026-09-30 실물 빌드에서 그렇게 터졌다. py3-none-any 라 aarch64 가용성 문제 없다.
 #   (라이브 경로 import 탐침: trainer.demo_api.app, trainer.scripts.agent_pipeline, search_index)
+# 2026-11-13 검색 교체(KURE-v3 + KURE-Reranker-nano): transformers 5.3.0 -> 5.7.0, sentence-transformers 5.2.3 -> 5.6.1.
+#   KURE-v3는 sentence-transformers 5.6.1 이상에서만 읽힌다. KURE-Reranker-nano는 transformers 5.6.2 이하에서
+#   오류 없이 재정렬 recall@8이 0.96 -> 0.61로 무너지고 5.7.0부터 정상이다(이분 탐색 실측).
+#   이 두 버전은 개발 컨테이너가 아니라 검색 전용 venv에서 쟀다: retrieval-eval.txt (같은 폴더).
 # Offline STT uses the already locked torch/transformers/numpy closure. The selected
 # model is openai/whisper-large-v3-turbo@41f01f3fe87f28c78e2fbf8b568835947dd65ed9
 # and is mounted read-only; no Hub access occurs in the running service. Artifact hashes
@@ -55,13 +59,13 @@ rich==14.3.3
 safetensors==0.7.0
 scikit-learn==1.8.0
 scipy==1.17.1
-sentence-transformers==5.2.3
+sentence-transformers==5.6.1
 shellingham==1.5.4
 starlette==0.52.1
 threadpoolctl==3.6.0
 tokenizers==0.22.2
 tqdm==4.67.3
-transformers==5.3.0
+transformers==5.7.0
 typer==0.24.1
 typing-extensions==4.15.0
 typing-inspection==0.4.2

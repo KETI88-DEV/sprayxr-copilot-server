@@ -49,12 +49,13 @@ def main() -> int:
 
     config = load_config(args.config)
     index = load_faiss_index(config["paths"]["faiss_index"], config["index"]["ef_search"])
-    metadata = load_metadata(config["paths"]["metadata_json"])
+    metadata = load_metadata(config["paths"]["metadata_json"], config["embedding"]["model_name"])
     id_map = metadata["id_map"]
     embedder = load_embedder(
         config["embedding"]["model_name"],
         config["embedding"].get("device", "cuda"),
         config["embedding"].get("max_seq_length", 1024),
+        config["embedding"].get("dtype"),
     )
     reranker = load_reranker(
         config["reranker"]["model_name"],
