@@ -1,0 +1,31 @@
+{
+  "type": "function",
+  "function": {
+    "name": "location_tracking",
+    "description": "선박 3D 공간 내 현재 도장 구역을 식별한다. 장비 궤적 좌표를 입력받아 구역 ID, 유형, 커버리지 비율, 미도장 구역을 반환한다. pose/sequence MCP에 공간 context를 공급한다.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "coordinates": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "x": {"type": "number", "description": "X 좌표 (mm)"},
+              "y": {"type": "number", "description": "Y 좌표 (mm)"},
+              "z": {"type": "number", "description": "Z 좌표 (mm)"},
+              "timestamp": {"type": "number", "description": "측정 시각 (epoch seconds)"}
+            },
+            "required": ["x", "y", "z"]
+          },
+          "description": "장비 궤적 3D 좌표 배열"
+        },
+        "ship_model_id": {
+          "type": "string",
+          "description": "선박 3D 모델 식별자 (선택사항)"
+        }
+      },
+      "required": ["coordinates"]
+    }
+  }
+}

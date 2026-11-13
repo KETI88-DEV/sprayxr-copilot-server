@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>3D 모션 뷰어</title>
+<link rel="stylesheet" href="/motion-viewer/assets/motion_viewer_v2.css">
+</head><body>
+<div class="v2-shell">
+<header class="record-bar">
+  <h1 class="sr-only">3D 모션 뷰어</h1>
+  <div class="pickers" role="group" aria-label="재생할 기록 선택">
+    <span class="pick"><i data-icon="user"></i><select id="worker" aria-label="작업자"></select></span>
+    <span class="pick"><i data-icon="spray-can"></i><select id="process" aria-label="훈련 종류"></select></span>
+    <span class="pick"><i data-icon="graduation-cap"></i><select id="mode" aria-label="학습모드"></select></span>
+    <span class="pick pick-record"><i data-icon="history"></i><select id="session" aria-label="재생할 기록"></select></span>
+  </div>
+  <div class="scores" role="group" aria-label="이 기록의 결과">
+    <span class="score" title="작업 유사도: 도구 각도·이격거리·칠하는 방향·도막 두께·몸통 자세와 순서를 전문가 기록과 견준 값"><i data-icon="gauge"></i><span>작업</span><strong id="v2ScoreWork">—</strong></span>
+    <button id="v2Worst" class="jump" type="button" hidden><i data-icon="trending-down"></i><span id="v2WorstZone" class="zone-tag"></span><span id="v2WorstScore" class="figure"></span></button>
+    <span class="score" title="자세 유사도: 분사마다 자세 채점 엔진이 숙련자와 견준 값의 평균"><i data-icon="person-standing"></i><span>자세</span><strong id="v2ScorePose">—</strong></span>
+    <span class="score" title="순서 준수율: 전문가의 Zone 순서와 얼마나 같은지"><i data-icon="route"></i><span>순서</span><strong id="v2ScoreOrder">—</strong></span>
+  </div>
+</header>
+
+<div class="v2-grid">
+<main class="v2-main">
+  <section class="v2-stage" aria-label="재생 장면">
+    <div class="stage-viewport">
+      <canvas id="canvas" aria-label="3D 재생 장면"></canvas>
+      <div id="realtimeHud" class="hud" role="group" aria-label="재생 시점의 측정값">
+        <span class="hud-zone"><b id="realtimeHudZone" data-max="Zone 대기">Zone 대기</b><span id="realtimeHudActivity" class="realtime-hud-activity" data-max="이동 중">이동 중</span></span>
+        <span class="hud-item" title="속도"><i data-icon="gauge"></i><span id="realtimeHudSpeed" data-max="99,999 mm/s">—</span><span id="realtimeHudSpeedState" class="realtime-hud-state idle">대기</span></span>
+        <span class="hud-item" title="이격거리"><i data-icon="ruler"></i><span id="realtimeHudDistance" data-max="9999 mm">—</span><span id="realtimeHudDistanceState" class="realtime-hud-state idle">대기</span></span>
+        <span class="hud-item" title="분사축 편차"><i data-icon="axis-3d"></i><span id="realtimeHudAxis" data-max="99.9°">—</span><span id="realtimeHudAxisState" class="realtime-hud-state idle">대기</span></span>
+        <span class="hud-item" title="도장 방향"><i data-icon="arrow-right-left"></i><span id="realtimeHudDirection" data-max="분석 중">—</span><span id="realtimeHudDirectionState" class="realtime-hud-state idle">대기</span></span>
+        <span class="hud-item" title="도포 범위"><i data-icon="scan"></i><span id="realtimeHudCoverage" data-max="100%">—</span><span id="realtimeHudCoverageState" class="realtime-hud-state idle">대기</span></span>
+      </div>
+      <details class="layers">
+        <summary aria-label="표시 항목"><i data-icon="layers"></i></summary>
+        <div class="layers-body">
+          <ul id="viewerLegend" class="legend">
+            <li><i class="dot" style="background:#f5f8ff"></i>전문가 착탄점</li>
+            <li><i class="dot" style="background:#34d399"></i>전문가 경로</li>
+            <li><i class="dot" style="background:#ff8a3d"></i>이 기록의 경로</li>
+            <li><i class="dot" style="background:#22d3ee"></i>팔</li>
+            <li><i class="dot" style="background:#fb923c"></i>건 노즐</li>
+            <li><i class="dot" style="background:#facc15"></i>분사선</li>
+          </ul>
+          <label class="check"><input id="zoneSurface" type="checkbox" checked>Zone 영역</label>
+          <label class="check" title="대상 구조물"><input id="objectMesh" type="checkbox" checked><i data-icon="box"></i>구조물</label>
+          <label class="range"><span>점 크기 <span id="pointSizeValue">1.5 px</span></span><input id="pointSize" type="range" min="0.5" max="5" step="0.25" value="1.5"></label>
+        </div>
+      </details>
+      <div id="v2Toast" class="toast" role="status" aria-live="polite" aria-atomic="false"></div>
+      <div id="loading" class="loading" role="status"><span class="loading-bar"></span><span>기록을 불러오는 중</span></div>
+      <div id="v2StageError" class="stage-error" role="alert" hidden><i data-icon="triangle-alert"></i><span id="v2StageErrorText"></span><button id="v2Reload" type="button"><i data-icon="rotate-cw"></i>다시 불러오기</button></div>
+    </div>
+    <div class="zone-note">
+      <span id="v2ZoneTag" class="zone-tag zone-tag-idle">이동 중</span>
+      <span class="zone-score" title="이 Zone의 작업 유사도" hidden><i data-icon="gauge"></i><strong id="v2ZoneScore" class="figure"></strong></span>
+      <span id="v2ZoneAdvice" class="advice"></span>
+      <button id="v2ZoneMore" class="icon-btn" type="button" aria-expanded="false" aria-controls="v2ZoneDetail" aria-label="이 Zone의 항목별 비교" hidden><i data-icon="sliders-horizontal"></i></button>
+    </div>
+    <div id="v2ZoneDetail" class="zone-detail" hidden></div>
+    <div class="transport">
+      <button id="v2Play" class="icon-btn primary" type="button" aria-label="재생"><i data-icon="play"></i></button>
+      <button id="restart" class="icon-btn" type="button" aria-label="처음으로"><i data-icon="skip-back"></i></button>
+      <div class="scrub">
+        <div id="zoneTimeline" class="zone-timeline" aria-hidden="true"></div>
+        <div id="v2AlertMarks" class="alert-marks" aria-hidden="true"></div>
+        <div id="v2Pins" class="pins"></div>
+        <input id="timeline" type="range" min="0" max="0" value="0" aria-label="재생 위치">
+      </div>
+      <span id="playbackTime" class="time">0.00 / 0.00초</span>
+      <select id="speed" aria-label="재생 속도">
+        <option value="0.25">0.25배</option><option value="0.5">0.5배</option><option value="1" selected>1배</option>
+        <option value="1.5">1.5배</option><option value="2">2배</option><option value="3">3배</option>
+      </select>
+      <div class="alerts">
+        <button id="v2AlertsButton" class="icon-btn" type="button" aria-expanded="false" aria-controls="v2AlertList" aria-label="알림" title="알림"><i data-icon="bell"></i><span id="v2AlertCount" class="badge" hidden></span></button><span id="v2AlertLive" class="sr-only" role="status"></span>
+        <div id="v2AlertList" class="alert-list" hidden><p id="v2AlertNote" class="alert-note" hidden></p><ol id="v2AlertItems" aria-label="이 기록의 알림"></ol></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="features" aria-label="분석 결과">
+    <article class="feature" data-feature="pose" aria-labelledby="v2PoseTitle">
+      <header>
+        <h2 id="v2PoseTitle"><i data-icon="person-standing"></i>자세</h2>
+        <strong id="v2PoseScore" class="figure" title="지금 분사의 자세 유사도">—</strong>
+        <div class="seg" role="group" aria-label="스켈레톤 돌려 보기">
+          <button id="skeletonTurnLeft" type="button" aria-label="왼쪽으로 돌리기"><i data-icon="rotate-ccw"></i></button>
+          <button id="skeletonReset" type="button" aria-label="정면으로"><i data-icon="locate-fixed"></i></button>
+          <button id="skeletonTurnRight" type="button" aria-label="오른쪽으로 돌리기"><i data-icon="rotate-cw"></i></button>
+        </div>
+        <button class="icon-btn ask-link" type="button" data-ask-tab="pose" aria-label="자세 질문하기"><i data-icon="message-circle"></i></button>
+      </header>
+      <div class="pose-body">
+        <div class="skeleton-card skeleton-screen">
+          <canvas id="skeletonCanvas" aria-label="재생 시점의 스켈레톤"></canvas>
+          <span id="skeletonPosture" class="posture"></span>
+        </div>
+        <div class="pose-chart">
+          <div id="v2PoseBars" class="pose-bars" role="group" aria-label="분사별 자세 유사도"></div>
+          <p id="v2PoseNow" class="now"></p>
+        </div>
+      </div>
+    </article>
+
+    <article class="feature" data-feature="order" aria-labelledby="v2OrderTitle">
+      <header>
+        <h2 id="v2OrderTitle"><i data-icon="route"></i>순서</h2>
+        <button class="icon-btn ask-link" type="button" data-ask-tab="order" aria-label="순서 질문하기"><i data-icon="message-circle"></i></button>
+      </header>
+      <div id="v2Order" class="order-chart" role="group" aria-label="전문가 권장 순서와 이 기록의 순서"></div>
+    </article>
+
+    <article class="feature" data-feature="coating" aria-labelledby="v2CoatTitle">
+      <header>
+        <h2 id="v2CoatTitle"><i data-icon="paint-roller"></i>도막</h2>
+        <div class="seg seg-text" role="group" aria-label="도막 기준">
+          <button id="v2CoatBasisTarget" type="button" aria-pressed="true">목표 대비</button>
+          <button id="v2CoatBasisExpert" type="button" aria-pressed="false">전문가 대비</button>
+        </div>
+        <button class="icon-btn ask-link" type="button" data-ask-tab="coating" aria-label="도막 질문하기"><i data-icon="message-circle"></i></button>
+      </header>
+      <div class="coat-tools">
+        <span id="v2CoatCount" class="coat-count"></span>
+        <span id="v2CoatBasisLabel" class="coat-basis"></span>
+        <div id="v2CoatViews" class="seg" role="group" aria-label="도막 보기" hidden>
+          <button id="v2CoatBarsView" type="button" aria-pressed="true" aria-label="Zone별 편차"><i data-icon="chart-column"></i>편차</button>
+          <button id="v2CoatMapView" type="button" aria-pressed="false" aria-label="전문가 도막 지도"><i data-icon="map"></i>전문가 지도</button>
+        </div>
+      </div>
+      <div id="v2CoatBars" class="coat-bars" role="group" aria-label="Zone별 도막 등급(목표 대비)"></div>
+      <div id="v2CoatMap" class="coat-map" hidden>
+        <div class="coat-map-tools">
+          <span id="coatingZone" class="zone-tag zone-tag-idle">Zone 대기 중</span>
+          <div class="seg" role="group" aria-label="도막 보기와 색상 척도">
+            <button id="coatingView2d" class="active" type="button">2D</button>
+            <button id="coatingView3d" type="button">3D</button>
+            <button id="coatingScaleRelative" class="active" type="button" aria-pressed="true">상대</button>
+            <button id="coatingScaleAbsolute" type="button" aria-pressed="false" disabled>µm</button>
+          </div>
+        </div>
+        <div class="coating-screen"><canvas id="coatingCanvas" aria-label="전문가 최종 도막 지도"></canvas></div>
+        <div id="coatingLegend" class="coating-legend"></div>
+        <p id="coatingStatus" class="coat-status"></p>
+      </div>
+    </article>
+  </section>
+</main>
+
+<aside id="v2Ask" class="ask" aria-label="질문"></aside>
+</div>
+
+<p id="status" class="sr-only" role="status"></p>
+<div class="legacy-hooks" hidden>
+  <div class="evaluation-side"></div>
+  <strong id="overlayTitle"></strong><span id="overlayFrame"></span>
+  <strong id="currentZone"></strong><div id="zoneOrder"></div><div id="zoneDetail"></div><strong id="sessionCount"></strong><strong id="duration"></strong>
+  <strong id="playbackZone"></strong><span id="playbackZoneBadge" hidden></span>
+  <button id="play" type="button">재생</button><span id="skeletonAngle"></span>
+  <span id="coatingScaleNote"></span><span id="coatingGeometryNote"></span>
+</div>
+</div>
+
+<template id="poseUiTemplate">
+<div data-pose-slot="gizmo" class="gizmo" role="group" aria-label="보는 방향">
+  <button id="cameraHome" type="button" aria-label="전체 보기" title="전체 보기"><i data-icon="focus"></i></button>
+  <button id="cameraAxisX" type="button" aria-label="X축에서 보기">X</button>
+  <button id="cameraAxisY" type="button" aria-label="Y축에서 보기">Y</button>
+  <button id="cameraAxisZ" type="button" aria-label="Z축에서 보기">Z</button>
+</div>
+<div data-pose-slot="summary" id="poseSummary">
+  <strong id="poseScore"></strong><small id="poseScoreNote"></small>
+  <div id="armPoseCard"><strong id="armPoseScore"></strong><small id="armPoseNote"></small>
+    <div id="armPoseCurrent" hidden><span id="armPoseSequence"></span><b id="armPoseSequenceScore"></b><p id="armPoseCorrection"></p></div></div>
+  <div id="poseZoneCard"><span id="poseZoneTitle"></span><strong id="poseZoneScore"></strong><b id="posePosture"></b>
+    <span id="poseZoneSummary"></span><span id="poseEstimateNote"></span><div id="poseZoneMetrics"></div></div>
+  <span id="poseActionTitle"></span><ol id="poseActionList"><li id="poseAction"></li></ol><strong id="posePredicted"></strong>
+</div>
+</template>
+
+<script>/*CORE_SCRIPT*/</script>
+<script defer src="/motion-viewer/assets/motion_viewer_camera.js"></script>
+<script defer src="/motion-viewer/assets/motion_viewer_pose.js"></script>
+<script defer src="/motion-viewer/assets/motion_viewer_coating.js"></script>
+<script defer src="/motion-viewer/assets/motion_viewer_alerts.js"></script>
+<script defer src="/motion-viewer/assets/motion_viewer_v2.js"></script>
+</body></html>

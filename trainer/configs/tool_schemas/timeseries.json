@@ -1,0 +1,32 @@
+{
+  "type": "function",
+  "function": {
+    "name": "timeseries",
+    "description": "ReAct Agent 루프의 순환 구조용 세션 state를 관리한다. 매 턴 속도/거리/각도 시계열을 누적 업데이트하여 추세와 편차를 제공한다. action 파라미터로 update 또는 query를 선택한다.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": ["update", "query"],
+          "description": "수행할 동작: update(데이터 추가) 또는 query(현재 상태 조회)"
+        },
+        "session_id": {
+          "type": "string",
+          "description": "세션 식별자"
+        },
+        "data": {
+          "type": "object",
+          "description": "action=update 시 추가할 데이터",
+          "properties": {
+            "timestamp": {"type": "number", "description": "측정 시각 (epoch seconds)"},
+            "speed": {"type": "number", "description": "속도 (m/s)"},
+            "distance": {"type": "number", "description": "거리 (mm)"},
+            "angle": {"type": "number", "description": "각도 (degree)"}
+          }
+        }
+      },
+      "required": ["action", "session_id"]
+    }
+  }
+}

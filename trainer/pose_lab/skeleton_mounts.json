@@ -1,0 +1,787 @@
+{
+ "fitted_sessions": [
+  {
+   "date": "20250905",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "8",
+   "session": "1000645_1",
+   "worker": "김경호"
+  },
+  {
+   "date": "20250831",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "3",
+   "session": "1000404_1",
+   "worker": "김경호"
+  },
+  {
+   "date": "20250831",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "6",
+   "session": "1000420_1",
+   "worker": "김경호"
+  },
+  {
+   "date": "20250905",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "9",
+   "session": "1000646_1",
+   "worker": "김경호"
+  },
+  {
+   "date": "20250905",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "1",
+   "session": "1000638_1",
+   "worker": "김경호"
+  },
+  {
+   "date": "20250831",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "1",
+   "session": "1000415_1",
+   "worker": "김경호"
+  },
+  {
+   "date": "20250905",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "3",
+   "session": "1000611_1",
+   "worker": "김경호"
+  },
+  {
+   "date": "20250831",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "9",
+   "session": "1000410_1",
+   "worker": "김경호"
+  },
+  {
+   "date": "20250831",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "4",
+   "session": "1000392_1",
+   "worker": "김경호"
+  },
+  {
+   "date": "20250905",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "4",
+   "session": "1000641_1",
+   "worker": "김경호"
+  },
+  {
+   "date": "20250825",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "9",
+   "session": "1000291_1",
+   "worker": "손영석"
+  },
+  {
+   "date": "20250825",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "10",
+   "session": "1000305_1",
+   "worker": "손영석"
+  },
+  {
+   "date": "20250825",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "2",
+   "session": "1000297_1",
+   "worker": "손영석"
+  },
+  {
+   "date": "20250825",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "6",
+   "session": "1000288_1",
+   "worker": "손영석"
+  },
+  {
+   "date": "20250825",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "8",
+   "session": "1000303_1",
+   "worker": "손영석"
+  },
+  {
+   "date": "20250826",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "1",
+   "session": "1000336_1",
+   "worker": "손영석"
+  },
+  {
+   "date": "20250826",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "3",
+   "session": "1000325_1",
+   "worker": "손영석"
+  },
+  {
+   "date": "20250825",
+   "frames": 0,
+   "group": "한길숏건",
+   "level": "1",
+   "session": "1000282_1",
+   "worker": "손영석"
+  },
+  {
+   "date": "20250826",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "4",
+   "session": "1000326_1",
+   "worker": "손영석"
+  },
+  {
+   "date": "20250827",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "4",
+   "session": "1000354_1",
+   "worker": "손영석"
+  },
+  {
+   "date": "20250903",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "3",
+   "session": "1000096_1",
+   "worker": "임채원"
+  },
+  {
+   "date": "20250902",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "1",
+   "session": "1000066_1",
+   "worker": "임채원"
+  },
+  {
+   "date": "20250903",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "4",
+   "session": "1000110_1",
+   "worker": "임채원"
+  },
+  {
+   "date": "20250901",
+   "frames": 0,
+   "group": "",
+   "level": "7",
+   "session": "1000044_1",
+   "worker": "임채원"
+  },
+  {
+   "date": "20250903",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "10",
+   "session": "1000129_1",
+   "worker": "임채원"
+  },
+  {
+   "date": "20250902",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "6",
+   "session": "1000058_1",
+   "worker": "임채원"
+  },
+  {
+   "date": "20250902",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "2",
+   "session": "1000054_1",
+   "worker": "임채원"
+  },
+  {
+   "date": "20250902",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "6",
+   "session": "1000084_1",
+   "worker": "임채원"
+  },
+  {
+   "date": "20250903",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "7",
+   "session": "1000100_1",
+   "worker": "임채원"
+  },
+  {
+   "date": "20250902",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "4",
+   "session": "1000056_1",
+   "worker": "임채원"
+  },
+  {
+   "date": "20250904",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "7",
+   "session": "1000570_1",
+   "worker": "전형기"
+  },
+  {
+   "date": "20250905",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "9",
+   "session": "1000587_1",
+   "worker": "전형기"
+  },
+  {
+   "date": "20250904",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "4",
+   "session": "1000567_1",
+   "worker": "전형기"
+  },
+  {
+   "date": "20250905",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "9",
+   "session": "1000600_1",
+   "worker": "전형기"
+  },
+  {
+   "date": "20250908",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "9",
+   "session": "1000786_1",
+   "worker": "전형기"
+  },
+  {
+   "date": "20250904",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "9",
+   "session": "1000572_1",
+   "worker": "전형기"
+  },
+  {
+   "date": "20250909",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "9",
+   "session": "1000799_1",
+   "worker": "전형기"
+  },
+  {
+   "date": "20250904",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "8",
+   "session": "1000571_1",
+   "worker": "전형기"
+  },
+  {
+   "date": "20250905",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "1",
+   "session": "1000579_1",
+   "worker": "전형기"
+  },
+  {
+   "date": "20250901",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "10",
+   "session": "1000451_1",
+   "worker": "전형기"
+  },
+  {
+   "date": "20250902",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "7",
+   "session": "1000493_1",
+   "worker": "정희록"
+  },
+  {
+   "date": "20250901",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "7",
+   "session": "1000462_1",
+   "worker": "정희록"
+  },
+  {
+   "date": "20250901",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "9",
+   "session": "1000464_1",
+   "worker": "정희록"
+  },
+  {
+   "date": "20250903",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "9",
+   "session": "1000561_1",
+   "worker": "정희록"
+  },
+  {
+   "date": "20250902",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "10",
+   "session": "1000522_1",
+   "worker": "정희록"
+  },
+  {
+   "date": "20250903",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "7",
+   "session": "1000534_1",
+   "worker": "정희록"
+  },
+  {
+   "date": "20250901",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "3",
+   "session": "1000471_1",
+   "worker": "정희록"
+  },
+  {
+   "date": "20250903",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "6",
+   "session": "1000533_1",
+   "worker": "정희록"
+  },
+  {
+   "date": "20250902",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "3",
+   "session": "1000489_1",
+   "worker": "정희록"
+  },
+  {
+   "date": "20250902",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "1",
+   "session": "1000487_1",
+   "worker": "정희록"
+  },
+  {
+   "date": "20250906",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "2",
+   "session": "1000718_1",
+   "worker": "최연진"
+  },
+  {
+   "date": "20250906",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "8",
+   "session": "1000698_1",
+   "worker": "최연진"
+  },
+  {
+   "date": "20250906",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "3",
+   "session": "1000679_1",
+   "worker": "최연진"
+  },
+  {
+   "date": "20250906",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "4",
+   "session": "1000758_1",
+   "worker": "최연진"
+  },
+  {
+   "date": "20250906",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "8",
+   "session": "1000671_1",
+   "worker": "최연진"
+  },
+  {
+   "date": "20250906",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "6",
+   "session": "1000669_1",
+   "worker": "최연진"
+  },
+  {
+   "date": "20250906",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "6",
+   "session": "1000735_1",
+   "worker": "최연진"
+  },
+  {
+   "date": "20250906",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "4",
+   "session": "1000720_1",
+   "worker": "최연진"
+  },
+  {
+   "date": "20250906",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "1",
+   "session": "1000704_1",
+   "worker": "최연진"
+  },
+  {
+   "date": "20250906",
+   "frames": 400,
+   "group": "한길숏건",
+   "level": "9",
+   "session": "1000725_1",
+   "worker": "최연진"
+  }
+ ],
+ "grip_limit_m": {
+  "반도숏건": 0.25,
+  "반도폴건": 1.2,
+  "한길숏건": 0.25,
+  "한길폴건": 1.2
+ },
+ "group_session_counts": {
+  "한길숏건": 58
+ },
+ "method": "fk_csv_yxz_orient_gravity",
+ "mounts": {
+  "head": {
+   "offset": [
+    -0.003463982542335501,
+    0.07654612411982689,
+    -0.07864023037079279
+   ],
+   "rotation": [
+    [
+     0.032991135071320406,
+     -0.9992125210769327,
+     -0.02204365509134584
+    ],
+    [
+     -0.013718897461939135,
+     -0.02250632168024822,
+     0.9996525683140387
+    ],
+    [
+     -0.9993614845785957,
+     -0.03267725826175598,
+     -0.014450603217851823
+    ]
+   ]
+  },
+  "left": {
+   "offset": [
+    0.013395813357145129,
+    -0.039104573908280434,
+    0.10912285783327244
+   ],
+   "rotation": [
+    [
+     -0.16574833282322052,
+     -0.08206931800251617,
+     -0.9827472295605442
+    ],
+    [
+     -0.986073900104109,
+     1.995791960032237e-05,
+     0.16630773624564865
+    ],
+    [
+     -0.01362914890202765,
+     0.9966266234875941,
+     -0.08092972047352602
+    ]
+   ]
+  },
+  "right": {
+   "한길숏건": {
+    "offset": [
+     -0.3779035238000122,
+     0.06943153067886497,
+     0.41728197260079763
+    ],
+    "rotation": [
+     [
+      0.00530240931871162,
+      -0.9770266637937138,
+      0.21305112694267483
+     ],
+     [
+      0.9989583699882952,
+      -0.00448077325534034,
+      -0.04541032593324322
+     ],
+     [
+      0.045321733039966505,
+      0.2130699906302179,
+      0.9759852046046058
+     ]
+    ]
+   }
+  }
+ },
+ "prereg": "docs/measurements/2026-09-15-skeleton-mounts-prereg.md",
+ "reported": {
+  "gravity_correction_deg": {
+   "median": 16.124101928727946,
+   "n": 23200,
+   "p90": 17.57964550152088
+  },
+  "leg_tilt_deg": {
+   "median": 18.697776981320466,
+   "n": 23200,
+   "p90": 37.394080350346826
+  },
+  "m_right_norm_by_group": {
+   "한길숏건": 0.5672354497124535
+  }
+ },
+ "seed": 20260915,
+ "validation": {
+  "baseline_no_mount": {
+   "median_miss_mm": {
+    "head": 210.79050996366115,
+    "left": 252.445046788156,
+    "right": 332.770534827315
+   }
+  },
+  "criteria": {
+   "bone_error_le_1e-9m": true,
+   "fold_median_le_200mm": true,
+   "fold_ratio_to_baseline_le_0.7": true,
+   "pooled_median_le_150mm": true
+  },
+  "folds": [
+   {
+    "baseline_no_mount_median_miss_mm": {
+     "head": 251.1896946904567,
+     "left": 293.83034963997216,
+     "right": 329.3213068495311
+    },
+    "eval_frames": 4000,
+    "held_out_worker": "김경호",
+    "m_right_norm_by_group": {
+     "한길숏건": 0.5610302702005381
+    },
+    "median_miss_mm": {
+     "head": 103.01010831178215,
+     "left": 91.34162612747964,
+     "right": 151.67748835905152
+    },
+    "n": {
+     "head": 4000,
+     "left": 4000,
+     "right": 4000
+    },
+    "ratio_to_baseline": {
+     "head": 0.41008891084772575,
+     "left": 0.3108651854357447,
+     "right": 0.4605759943384225
+    },
+    "skipped_sessions_group_missing": 0
+   },
+   {
+    "baseline_no_mount_median_miss_mm": {
+     "head": 211.65945840668596,
+     "left": 272.02596985585376,
+     "right": 382.49383515211673
+    },
+    "eval_frames": 3600,
+    "held_out_worker": "손영석",
+    "m_right_norm_by_group": {
+     "한길숏건": 0.5700525609956035
+    },
+    "median_miss_mm": {
+     "head": 76.33611172157359,
+     "left": 110.83955240111305,
+     "right": 149.3417546081984
+    },
+    "n": {
+     "head": 3600,
+     "left": 3600,
+     "right": 3600
+    },
+    "ratio_to_baseline": {
+     "head": 0.36065532953835744,
+     "left": 0.40745945124227223,
+     "right": 0.3904422526151451
+    },
+    "skipped_sessions_group_missing": 0
+   },
+   {
+    "baseline_no_mount_median_miss_mm": {
+     "head": 226.97180535062984,
+     "left": 259.60423538780117,
+     "right": 298.90062150143683
+    },
+    "eval_frames": 3600,
+    "held_out_worker": "임채원",
+    "m_right_norm_by_group": {
+     "한길숏건": 0.5739204326846915
+    },
+    "median_miss_mm": {
+     "head": 87.81966462261906,
+     "left": 148.73365532588844,
+     "right": 132.6482695432262
+    },
+    "n": {
+     "head": 3600,
+     "left": 3600,
+     "right": 3600
+    },
+    "ratio_to_baseline": {
+     "head": 0.3869188267104532,
+     "left": 0.5729246100461636,
+     "right": 0.4437871988251739
+    },
+    "skipped_sessions_group_missing": 0
+   },
+   {
+    "baseline_no_mount_median_miss_mm": {
+     "head": 208.66762956987554,
+     "left": 225.13491526252454,
+     "right": 365.33792232031425
+    },
+    "eval_frames": 4000,
+    "held_out_worker": "전형기",
+    "m_right_norm_by_group": {
+     "한길숏건": 0.5586894310688523
+    },
+    "median_miss_mm": {
+     "head": 87.99148216729833,
+     "left": 81.3979943815762,
+     "right": 132.35980374514673
+    },
+    "n": {
+     "head": 4000,
+     "left": 4000,
+     "right": 4000
+    },
+    "ratio_to_baseline": {
+     "head": 0.42168247345634907,
+     "left": 0.3615520688412986,
+     "right": 0.3622941820671404
+    },
+    "skipped_sessions_group_missing": 0
+   },
+   {
+    "baseline_no_mount_median_miss_mm": {
+     "head": 188.4006322662447,
+     "left": 234.70496617133088,
+     "right": 306.4881275919488
+    },
+    "eval_frames": 4000,
+    "held_out_worker": "정희록",
+    "m_right_norm_by_group": {
+     "한길숏건": 0.578110296777141
+    },
+    "median_miss_mm": {
+     "head": 66.82773626242289,
+     "left": 86.36448520534833,
+     "right": 118.78242733530644
+    },
+    "n": {
+     "head": 4000,
+     "left": 4000,
+     "right": 4000
+    },
+    "ratio_to_baseline": {
+     "head": 0.354710785513623,
+     "left": 0.36797042096801497,
+     "right": 0.3875596365463481
+    },
+    "skipped_sessions_group_missing": 0
+   },
+   {
+    "baseline_no_mount_median_miss_mm": {
+     "head": 192.41501472280973,
+     "left": 238.39994191431836,
+     "right": 327.2420900906916
+    },
+    "eval_frames": 4000,
+    "held_out_worker": "최연진",
+    "m_right_norm_by_group": {
+     "한길숏건": 0.564896235179618
+    },
+    "median_miss_mm": {
+     "head": 73.28392328167257,
+     "left": 89.09251957510168,
+     "right": 123.8491852444061
+    },
+    "n": {
+     "head": 4000,
+     "left": 3600,
+     "right": 4000
+    },
+    "ratio_to_baseline": {
+     "head": 0.38086384987805827,
+     "left": 0.37371032417080785,
+     "right": 0.3784634953593
+    },
+    "skipped_sessions_group_missing": 0
+   }
+  ],
+  "max_bone_error_m": 1.1657341758564144e-15,
+  "passed": true,
+  "pooled": {
+   "median_miss_mm": {
+    "head": 80.63562015049297,
+    "left": 99.95155401047234,
+    "right": 134.00272965753575
+   },
+   "n": {
+    "head": 23200,
+    "left": 22800,
+    "right": 23200
+   }
+  }
+ },
+ "version": 1
+}

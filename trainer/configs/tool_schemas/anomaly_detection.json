@@ -1,0 +1,65 @@
+{
+  "type": "function",
+  "function": {
+    "name": "anomaly_detection",
+    "description": "위치별 측정값과 작업 시계열로 Zone 도막 등급(저도막·정상·과도막), 두께 구간 분포, 이동 속도·이격거리 조절 후보를 낸다. 조절 후보는 확정된 원인이 아니다.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "dft_measurements": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "value_um": {"type": "number", "description": "DFT 측정값 (um)"},
+              "zone_id": {"type": "string", "description": "측정 구역 ID"},
+              "position": {"type": "string", "enum": ["upper", "middle", "lower", "left", "right", "center"], "description": "구역 내 측정 위치"}
+            },
+            "required": ["value_um"]
+          },
+          "description": "위치별 DFT 측정값 배열"
+        },
+        "timeseries": {
+          "type": "object",
+          "description": "작업 시계열 데이터",
+          "properties": {
+            "timestamps": {"type": "array", "items": {"type": "number"}, "description": "타임스탬프 배열 (초)"},
+            "standoff_distance_mm": {"type": "array", "items": {"type": "number"}, "description": "이격거리 배열 (mm)"},
+            "gun_speed_m_per_s": {"type": "array", "items": {"type": "number"}, "description": "이동속도 배열 (m/s)"},
+            "spray_angle_deg": {"type": "array", "items": {"type": "number"}, "description": "분사각도 배열 (도)"},
+            "trajectory": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "x": {"type": "number"},
+                  "y": {"type": "number"},
+                  "z": {"type": "number"}
+                },
+                "required": ["x", "y", "z"]
+              },
+              "description": "건 이동 경로 좌표 배열"
+            }
+          }
+        },
+        "zone_id": {
+          "type": "string",
+          "description": "분석 대상 구역 ID"
+        },
+        "spec": {
+          "type": "object",
+          "description": "도막 두께 기준",
+          "properties": {
+            "nominal_um": {"type": "number", "description": "목표 두께(μm). 없으면 기본 160"},
+            "tolerance_rule": {"type": "string", "description": "예전 호출 호환용. 판정에 쓰지 않는다"}
+          }
+        },
+        "image_context": {
+          "type": "string",
+          "description": "VLM 모델 히트맵 분석 결과 텍스트 (선택)"
+        }
+      },
+      "required": ["dft_measurements"]
+    }
+  }
+}

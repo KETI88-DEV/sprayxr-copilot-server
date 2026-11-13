@@ -1,0 +1,82 @@
+# Optional overlay: keep the current API image override before this file.
+# Qwen/Qwen3-8B-AWQ revision4da05a8edb55c6046cce958586c33b61da07bb79.
+# Both generators stay resident; RAG/embedding/reranking live only in agent-api.
+services:
+  vllm:
+    environment:
+      GPU_MEMORY_UTILIZATION: "0.62"
+
+  quick-vllm:
+    image: ${VLLM_IMAGE:?Use the same verified arm64 vLLM image as the detailed server}
+    platform: linux/arm64
+    entrypoint: [vllm]
+    command:
+      - serve
+      - /models/quick
+      - --served-model-name
+      - shipcoat-quick-8b
+      - --dtype
+      - half
+      - --quantization
+      - awq_marlin
+      - --max-model-len
+      - "8192"
+      - --max-num-seqs
+      - "2"
+      - --max-num-batched-tokens
+      - "1024"
+      - --gpu-memory-utilization
+      - "0.085"
+      # A fixed KV budget avoids counting the shared RAG process during profiling.
+      - --kv-cache-memory-bytes
+      - "4294967296"
+      - --generation-config
+      - vllm
+      - --enable-prefix-caching
+      - --enforce-eager
+    environment:
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      VLLM_API_KEY: ""
+    volumes:
+      - ${QUICK_MODEL_DIR:-/home/keti/shipcoat/models/Qwen3-8B-AWQ}:/models/quick:ro
+      - ${QUICK_CACHE_DIR:-/home/keti/shipcoat/cache/quick-vllm}:/root/.cache
+    ports:
+      - "127.0.0.1:18001:8000"
+    ipc: host
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    depends_on:
+      vllm:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, python3, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 1800s
+    restart: unless-stopped
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "100m"
+        max-file: "5"
+
+  agent-api:
+    environment:
+      COPILOT_QUICK_BASE_URL: http://quick-vllm:8000/v1
+      COPILOT_QUICK_MODEL: shipcoat-quick-8b
+      COPILOT_QUICK_TOKENIZER_PATH: /quick-model
+      COPILOT_QUICK_CONTEXT_LIMIT: "8192"
+      COPILOT_QUICK_CACHE_ENABLED: "1"
+    volumes:
+      - ${QUICK_MODEL_DIR:-/home/keti/shipcoat/models/Qwen3-8B-AWQ}:/quick-model:ro
+    depends_on:
+      quick-vllm:
+        condition: service_healthy
