@@ -1,6 +1,6 @@
 # Spark 완성품 패키지: vllm / mcp / agent-api / web
 
-DGX Spark(aarch64, GB10 128GB 통합 메모리, CUDA 13)에 올리는 배포 정의와 절차다. 상위 계획은 `docs/superpowers/plans/2026-09-15-spark-rag-first-release.md`(D1~D7, T8)다.
+DGX Spark(aarch64, GB10 128GB 통합 메모리, CUDA 13)에 올리는 배포 정의와 절차다. 상위 계획(D1~D7, T8)은 내부 문서 저장소의 `docs/superpowers/plans/2026-09-15-spark-rag-first-release.md`에 있다.
 
 - **이미지**에는 실행 코드와 고정 의존성만 넣는다(`images/`, `requirements/`).
 - **번들**(`BUNDLE_DIR`)은 모델, 임베딩, 리랭커, RAG 인덱스, 기준 데이터다. sha256 매니페스트로 반입을 검증한다(`scripts/`).
@@ -238,7 +238,7 @@ docker compose config -q && echo COMPOSE_OK
 `VLLM_API_KEY`는 vLLM upstream 인증용이며 웹·copilot API의 사용자 인증을 제공하지 않는다.
 nginx는 `/api/` 전체를 전달하므로 agent-api 포트만 loopback으로 제한해서는 충분하지 않다.
 이번 Tailscale 배포에서는 세 BIND를 위와 같이 제한하고 개발 PC에서
-`ssh -N -L 8080:127.0.0.1:8080 keti@spark-8bb9`로 연결한 뒤 `http://127.0.0.1:8080`에 접속한다.
+`ssh -N -L 8080:127.0.0.1:8080 <사용자>@<spark-호스트>`로 연결한 뒤 `http://127.0.0.1:8080`에 접속한다.
 외부 직접 공개는 접근 정책 또는 인증 프록시를 별도로 검증한 뒤 진행한다.
 
 셸의 export 값은 `.env`보다 우선한다. 경로를 바꾸는 롤백에서는 셸과 `.env`를 함께 갱신한다.

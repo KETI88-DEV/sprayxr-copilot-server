@@ -26,6 +26,6 @@ services:
       - /data/ship-paint-ai/qdrant:/qdrant_storage
       - /data/ship-paint-ai/hf-cache:/hf-cache
       - /data/ship-paint-ai/logs:/logs
-      - /home/mjkim/ship-paint-ai:/workspace
+      - ..:/workspace
     working_dir: /workspace
     command: ["sleep", "infinity"]

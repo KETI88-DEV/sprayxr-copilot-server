@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 8130 비교·교정 화면(pose_lab)을 컨테이너 안에 (재)기동한다. 호스트에서 저장소 루트 기준으로 실행한다.
 #
-#   deploy/start_pose_lab.sh            # 기본 설정(docs/year2/KPI_시험방법.md §6)
+#   deploy/start_pose_lab.sh            # 기본 설정(내부 문서 저장소 docs/year2/KPI_시험방법.md §6)
 #   CONTAINER=다른이름 deploy/start_pose_lab.sh
 #
 # 컨테이너 명령은 `sleep infinity`라 `docker compose up -d` 뒤에 8130은 따로 띄워야 한다.

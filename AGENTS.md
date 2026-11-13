@@ -42,7 +42,7 @@ npm run test:e2e    # playwright
 npm run start:electron
 ```
 
-`basedpyright`, `ruff`, and `task-master` are **not installed** on the host or in the container. Do not put them in a verification plan. Task Master is wired as the `task-master-ai` MCP server in `.mcp.json`.
+`basedpyright`, `ruff`, and `task-master` are **not installed** on the host or in the container. Do not put them in a verification plan. Task Master data (`.taskmaster/`) and the MCP wiring (`.mcp.json`) are local-only since 2026-11-13; copies live in the internal repository.
 
 ## Verification gates that actually exist
 
@@ -81,7 +81,7 @@ npm run start:electron
 | MCP routes/envelopes | `mcp_servers/main.py`, `common.py` | `/health` `servers: 7` = mounted routers, not processes |
 | Current 27B inference / training | `trainer/configs/rag_config_fewshot_27b.yaml`, `qlora_config_27b_v6_1.yaml` | Tool deadline, per-round token caps, `prompt.fast_system` |
 | Spark release package | `deploy/spark/` (`compose.yaml`, `README.md`) | vllm / mcp / agent-api / web images plus a sha256-manifested asset bundle; `trainer/scripts/tests/test_spark_deploy_contract.py` ties compose values to `rag_config_spark_vllm.yaml`. Do not build these images on the x86 host |
-| Latency contract and bench | `docs/superpowers/specs/2026-07-25-latency-budget-live-demo-design.md`, `trainer/scripts/bench_latency.py` | SSE timing semantics; `bench_report.py` is pure aggregation |
+| Latency contract and bench | `trainer/scripts/bench_latency.py`; design note `docs/superpowers/specs/2026-07-25-latency-budget-live-demo-design.md` in the internal repository | SSE timing semantics; `bench_report.py` is pure aggregation |
 
 ## Conventions
 
@@ -90,7 +90,7 @@ npm run start:electron
 - `DEMO_MODE` controls Gradio only. `DEMO_LIVE_MODE` controls the FastAPI chat wiring (`--live` sets it); any other value fails startup by design.
 - Treat YAML/JSON config as source of truth when prose disagrees. `/models`, `/data`, `/output`, `/hf-cache`, `/logs` are mounted artifacts, not repository data.
 - Keep the HF 4-bit backend. Unsloth, FlagEmbedding, and vLLM must not become required dependencies. Production inference uses `llm.backend: openai`, which calls an external vLLM OpenAI-compatible server over HTTP (httpx; no `vllm` package). HF NF4 stays the default for training and evaluation.
-- `.taskmaster/tasks/tasks.json` is tool-managed: use Task Master, then `task-master generate`. Never hand-edit.
+- `.taskmaster/tasks/tasks.json` (local-only) is tool-managed: use Task Master, then `task-master generate`. Never hand-edit.
 - Never read, print, or commit `.env`. Runtime modules do not auto-load dotenv files.
 - Electron keeps `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`; preload exposes only platform/version metadata. Preserve that boundary.
 
@@ -128,6 +128,8 @@ npm run start:electron
 ## Local-only files
 
 `AgenticCopilot_Architecture.md`, `dataset.md`, `AgenticCopilot.png`, `.taskmaster/config.json`, `.claude/`, `.omc/`, and the `models/ data/ output/ hf-cache/` trees are gitignored. They exist in this worktree but not in the repository — do not link them from tracked docs and do not assume a fresh clone has them.
+
+On 2026-11-13 mjkim's internal development documents (117 files: most of `docs/superpowers/`, all of `docs/measurements/`, `docs/year2/`, `docs/year3/`, `docs/archive/`, `docs/local_voice_multilingual_*.md`, PRDs and analysis notes, `trainer/docs/`, `.taskmaster/`, `.agents/`, `skills-lock.json`, `.mcp.json`, the root planning files and two issue batches) left this repository; the exact list is the "내부 개발 문서" section of `.gitignore`. Copies with the same paths live in the private `sprayxr-copilot-internal` repository. Files other developers added in those folders stay tracked. Code comments may still cite the moved paths; read them in the internal repository. Never re-add the listed files here — deployment PCs pull this repository.
 
 `CLAUDE.md.back` is a stale Iter14-era instruction file (it still calls Qwen3-4B current). This file supersedes it; do not mine it for guidance.
 
