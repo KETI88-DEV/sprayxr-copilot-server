@@ -2,7 +2,7 @@
 // 결과 한 줄, 지금 Zone 안내, 세 기능 그림(자세·순서·도막), 고정 질문 열을 그린다. 값은 서버가 준 것만 쓴다.
 (() => {
   'use strict';
-  const ICON = {"user":"<path d=\"M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2\" /><circle cx=\"12\" cy=\"7\" r=\"4\" />","spray-can":"<path d=\"M3 3h.01\" /><path d=\"M7 5h.01\" /><path d=\"M11 7h.01\" /><path d=\"M3 7h.01\" /><path d=\"M7 9h.01\" /><path d=\"M3 11h.01\" /><rect width=\"4\" height=\"4\" x=\"15\" y=\"5\" /><path d=\"m19 9 2 2v10c0 .6-.4 1-1 1h-6c-.6 0-1-.4-1-1V11l2-2\" /><path d=\"m13 14 8-2\" /><path d=\"m13 19 8-2\" />","graduation-cap":"<path d=\"M21.42 10.922a1 1 0 0 0-.019-1.838L12.83 5.18a2 2 0 0 0-1.66 0L2.6 9.08a1 1 0 0 0 0 1.832l8.57 3.908a2 2 0 0 0 1.66 0z\" /><path d=\"M22 10v6\" /><path d=\"M6 12.5V16a6 3 0 0 0 12 0v-3.5\" />","history":"<path d=\"M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8\" /><path d=\"M3 3v5h5\" /><path d=\"M12 7v5l4 2\" />","gauge":"<path d=\"m12 14 4-4\" /><path d=\"M3.34 19a10 10 0 1 1 17.32 0\" />","person-standing":"<circle cx=\"12\" cy=\"5\" r=\"1\" /><path d=\"m9 20 3-6 3 6\" /><path d=\"m6 8 6 2 6-2\" /><path d=\"M12 10v4\" />","route":"<circle cx=\"6\" cy=\"19\" r=\"3\" /><path d=\"M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15\" /><circle cx=\"18\" cy=\"5\" r=\"3\" />","crosshair":"<circle cx=\"12\" cy=\"12\" r=\"10\" /><line x1=\"22\" x2=\"18\" y1=\"12\" y2=\"12\" /><line x1=\"6\" x2=\"2\" y1=\"12\" y2=\"12\" /><line x1=\"12\" x2=\"12\" y1=\"6\" y2=\"2\" /><line x1=\"12\" x2=\"12\" y1=\"22\" y2=\"18\" />","play":"<path d=\"M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z\" />","pause":"<rect x=\"14\" y=\"3\" width=\"5\" height=\"18\" rx=\"1\" /><rect x=\"5\" y=\"3\" width=\"5\" height=\"18\" rx=\"1\" />","skip-back":"<path d=\"M17.971 4.285A2 2 0 0 1 21 6v12a2 2 0 0 1-3.029 1.715l-9.997-5.998a2 2 0 0 1-.003-3.432z\" /><path d=\"M3 20V4\" />","focus":"<circle cx=\"12\" cy=\"12\" r=\"3\" /><path d=\"M3 7V5a2 2 0 0 1 2-2h2\" /><path d=\"M17 3h2a2 2 0 0 1 2 2v2\" /><path d=\"M21 17v2a2 2 0 0 1-2 2h-2\" /><path d=\"M7 21H5a2 2 0 0 1-2-2v-2\" />","ruler":"<path d=\"M21.3 15.3a2.4 2.4 0 0 1 0 3.4l-2.6 2.6a2.4 2.4 0 0 1-3.4 0L2.7 8.7a2.41 2.41 0 0 1 0-3.4l2.6-2.6a2.41 2.41 0 0 1 3.4 0Z\" /><path d=\"m14.5 12.5 2-2\" /><path d=\"m11.5 9.5 2-2\" /><path d=\"m8.5 6.5 2-2\" /><path d=\"m17.5 15.5 2-2\" />","axis-3d":"<path d=\"M13.5 10.5 15 9\" /><path d=\"M4 4v15a1 1 0 0 0 1 1h15\" /><path d=\"M4.293 19.707 6 18\" /><path d=\"m9 15 1.5-1.5\" />","arrow-right-left":"<path d=\"m16 3 4 4-4 4\" /><path d=\"M20 7H4\" /><path d=\"m8 21-4-4 4-4\" /><path d=\"M4 17h16\" />","scan":"<path d=\"M3 7V5a2 2 0 0 1 2-2h2\" /><path d=\"M17 3h2a2 2 0 0 1 2 2v2\" /><path d=\"M21 17v2a2 2 0 0 1-2 2h-2\" /><path d=\"M7 21H5a2 2 0 0 1-2-2v-2\" />","layers":"<path d=\"M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z\" /><path d=\"M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12\" /><path d=\"M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17\" />","paint-roller":"<rect width=\"16\" height=\"6\" x=\"2\" y=\"2\" rx=\"2\" /><path d=\"M10 16v-2a2 2 0 0 1 2-2h8a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2\" /><rect width=\"4\" height=\"6\" x=\"8\" y=\"16\" rx=\"1\" />","rotate-ccw":"<path d=\"M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8\" /><path d=\"M3 3v5h5\" />","rotate-cw":"<path d=\"M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8\" /><path d=\"M21 3v5h-5\" />","locate-fixed":"<line x1=\"2\" x2=\"5\" y1=\"12\" y2=\"12\" /><line x1=\"19\" x2=\"22\" y1=\"12\" y2=\"12\" /><line x1=\"12\" x2=\"12\" y1=\"2\" y2=\"5\" /><line x1=\"12\" x2=\"12\" y1=\"19\" y2=\"22\" /><circle cx=\"12\" cy=\"12\" r=\"7\" /><circle cx=\"12\" cy=\"12\" r=\"3\" />","map-pin":"<path d=\"M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0\" /><circle cx=\"12\" cy=\"10\" r=\"3\" />","book-open":"<path d=\"M12 5v16\" /><path d=\"M20.001 19A2 2 0 0022 17V5a2 2 0 00-1.999-2L16 3.002A5 5 0 0012 5a5 5 0 00-4-2H4a2 2 0 00-2 2v12a2 2 0 001.999 2H8a5 5 0 014 2 5 5 0 014-2z\" />","zap":"<path d=\"M15.914 4a1.5 1.5 0 00-2.474-1.561l-9 9A1.5 1.5 0 005.5 14h4.002a.5.5 0 01.471.666L8.086 20a1.5 1.5 0 002.475 1.56l9-9A1.5 1.5 0 0018.5 10h-3.997a.5.5 0 01-.472-.667z\" />","file-search":"<path d=\"M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z\" /><path d=\"M14 2v5a1 1 0 0 0 1 1h5\" /><circle cx=\"11.5\" cy=\"14.5\" r=\"2.5\" /><path d=\"M13.3 16.3 15 18\" />","send":"<path d=\"M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z\" /><path d=\"m21.854 2.147-10.94 10.939\" />","message-square-plus":"<path d=\"M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z\" /><path d=\"M12 8v6\" /><path d=\"M9 11h6\" />","chart-column":"<path d=\"M3 3v16a2 2 0 0 0 2 2h16\" /><path d=\"M18 17V9\" /><path d=\"M13 17V5\" /><path d=\"M8 17v-3\" />","message-circle":"<path d=\"M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 1 0-4.777-4.719\" />","triangle-alert":"<path d=\"m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3\" /><path d=\"M12 9v4\" /><path d=\"M12 17h.01\" />","languages":"<path d=\"m5 8 6 6\" /><path d=\"m4 14 6-6 2-3\" /><path d=\"M2 5h12\" /><path d=\"M7 2h1\" /><path d=\"m22 22-5-10-5 10\" /><path d=\"M14 18h6\" />","chevron-down":"<path d=\"m6 9 6 6 6-6\" />","info":"<circle cx=\"12\" cy=\"12\" r=\"10\" /><path d=\"M12 16v-4\" /><path d=\"M12 8h.01\" />","x":"<path d=\"M18 6 6 18\" /><path d=\"m6 6 12 12\" />","square":"<rect width=\"18\" height=\"18\" x=\"3\" y=\"3\" rx=\"2\" />","map":"<path d=\"M14.106 5.553a2 2 0 0 0 1.788 0l3.659-1.83A1 1 0 0 1 21 4.619v12.764a1 1 0 0 1-.553.894l-4.553 2.277a2 2 0 0 1-1.788 0l-4.212-2.106a2 2 0 0 0-1.788 0l-3.659 1.83A1 1 0 0 1 3 19.381V6.618a1 1 0 0 1 .553-.894l4.553-2.277a2 2 0 0 1 1.788 0z\" /><path d=\"M15 5.764v15\" /><path d=\"M9 3.236v15\" />","trending-down":"<path d=\"M16 17h6v-6\" /><path d=\"m22 17-8.5-8.5-5 5L2 7\" />","route-off":"<circle cx=\"6\" cy=\"19\" r=\"3\" /><path d=\"M9 19h8.5c.4 0 .9-.1 1.3-.2\" /><path d=\"M5.2 5.2A3.5 3.53 0 0 0 6.5 12H12\" /><path d=\"m2 2 20 20\" /><path d=\"M21 15.3a3.5 3.5 0 0 0-3.3-3.3\" /><path d=\"M15 5h-4.3\" /><circle cx=\"18\" cy=\"5\" r=\"3\" />","arrow-up-to-line":"<path d=\"M5 3h14\" /><path d=\"m18 13-6-6-6 6\" /><path d=\"M12 7v14\" />","arrow-down-to-line":"<path d=\"M12 17V3\" /><path d=\"m6 11 6 6 6-6\" /><path d=\"M19 21H5\" />","loader-circle":"<path d=\"M21 12a9 9 0 1 1-6.219-8.56\" />","bell":"<path d=\"M10.268 21a2 2 0 0 0 3.464 0\" /><path d=\"M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326\" />","box":"<path d=\"M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z\" /><path d=\"m3.3 7 8.7 5 8.7-5\" /><path d=\"M12 22V12\" />"};
+  const ICON = {"user":"<path d=\"M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2\" /><circle cx=\"12\" cy=\"7\" r=\"4\" />","spray-can":"<path d=\"M3 3h.01\" /><path d=\"M7 5h.01\" /><path d=\"M11 7h.01\" /><path d=\"M3 7h.01\" /><path d=\"M7 9h.01\" /><path d=\"M3 11h.01\" /><rect width=\"4\" height=\"4\" x=\"15\" y=\"5\" /><path d=\"m19 9 2 2v10c0 .6-.4 1-1 1h-6c-.6 0-1-.4-1-1V11l2-2\" /><path d=\"m13 14 8-2\" /><path d=\"m13 19 8-2\" />","graduation-cap":"<path d=\"M21.42 10.922a1 1 0 0 0-.019-1.838L12.83 5.18a2 2 0 0 0-1.66 0L2.6 9.08a1 1 0 0 0 0 1.832l8.57 3.908a2 2 0 0 0 1.66 0z\" /><path d=\"M22 10v6\" /><path d=\"M6 12.5V16a6 3 0 0 0 12 0v-3.5\" />","history":"<path d=\"M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8\" /><path d=\"M3 3v5h5\" /><path d=\"M12 7v5l4 2\" />","gauge":"<path d=\"m12 14 4-4\" /><path d=\"M3.34 19a10 10 0 1 1 17.32 0\" />","person-standing":"<circle cx=\"12\" cy=\"5\" r=\"1\" /><path d=\"m9 20 3-6 3 6\" /><path d=\"m6 8 6 2 6-2\" /><path d=\"M12 10v4\" />","route":"<circle cx=\"6\" cy=\"19\" r=\"3\" /><path d=\"M9 19h8.5a3.5 3.5 0 0 0 0-7h-11a3.5 3.5 0 0 1 0-7H15\" /><circle cx=\"18\" cy=\"5\" r=\"3\" />","crosshair":"<circle cx=\"12\" cy=\"12\" r=\"10\" /><line x1=\"22\" x2=\"18\" y1=\"12\" y2=\"12\" /><line x1=\"6\" x2=\"2\" y1=\"12\" y2=\"12\" /><line x1=\"12\" x2=\"12\" y1=\"6\" y2=\"2\" /><line x1=\"12\" x2=\"12\" y1=\"22\" y2=\"18\" />","play":"<path d=\"M5 5a2 2 0 0 1 3.008-1.728l11.997 6.998a2 2 0 0 1 .003 3.458l-12 7A2 2 0 0 1 5 19z\" />","pause":"<rect x=\"14\" y=\"3\" width=\"5\" height=\"18\" rx=\"1\" /><rect x=\"5\" y=\"3\" width=\"5\" height=\"18\" rx=\"1\" />","skip-back":"<path d=\"M17.971 4.285A2 2 0 0 1 21 6v12a2 2 0 0 1-3.029 1.715l-9.997-5.998a2 2 0 0 1-.003-3.432z\" /><path d=\"M3 20V4\" />","focus":"<circle cx=\"12\" cy=\"12\" r=\"3\" /><path d=\"M3 7V5a2 2 0 0 1 2-2h2\" /><path d=\"M17 3h2a2 2 0 0 1 2 2v2\" /><path d=\"M21 17v2a2 2 0 0 1-2 2h-2\" /><path d=\"M7 21H5a2 2 0 0 1-2-2v-2\" />","ruler":"<path d=\"M21.3 15.3a2.4 2.4 0 0 1 0 3.4l-2.6 2.6a2.4 2.4 0 0 1-3.4 0L2.7 8.7a2.41 2.41 0 0 1 0-3.4l2.6-2.6a2.41 2.41 0 0 1 3.4 0Z\" /><path d=\"m14.5 12.5 2-2\" /><path d=\"m11.5 9.5 2-2\" /><path d=\"m8.5 6.5 2-2\" /><path d=\"m17.5 15.5 2-2\" />","axis-3d":"<path d=\"M13.5 10.5 15 9\" /><path d=\"M4 4v15a1 1 0 0 0 1 1h15\" /><path d=\"M4.293 19.707 6 18\" /><path d=\"m9 15 1.5-1.5\" />","arrow-right-left":"<path d=\"m16 3 4 4-4 4\" /><path d=\"M20 7H4\" /><path d=\"m8 21-4-4 4-4\" /><path d=\"M4 17h16\" />","scan":"<path d=\"M3 7V5a2 2 0 0 1 2-2h2\" /><path d=\"M17 3h2a2 2 0 0 1 2 2v2\" /><path d=\"M21 17v2a2 2 0 0 1-2 2h-2\" /><path d=\"M7 21H5a2 2 0 0 1-2-2v-2\" />","layers":"<path d=\"M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z\" /><path d=\"M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12\" /><path d=\"M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17\" />","paint-roller":"<rect width=\"16\" height=\"6\" x=\"2\" y=\"2\" rx=\"2\" /><path d=\"M10 16v-2a2 2 0 0 1 2-2h8a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2\" /><rect width=\"4\" height=\"6\" x=\"8\" y=\"16\" rx=\"1\" />","rotate-ccw":"<path d=\"M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8\" /><path d=\"M3 3v5h5\" />","rotate-cw":"<path d=\"M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8\" /><path d=\"M21 3v5h-5\" />","locate-fixed":"<line x1=\"2\" x2=\"5\" y1=\"12\" y2=\"12\" /><line x1=\"19\" x2=\"22\" y1=\"12\" y2=\"12\" /><line x1=\"12\" x2=\"12\" y1=\"2\" y2=\"5\" /><line x1=\"12\" x2=\"12\" y1=\"19\" y2=\"22\" /><circle cx=\"12\" cy=\"12\" r=\"7\" /><circle cx=\"12\" cy=\"12\" r=\"3\" />","map-pin":"<path d=\"M20 10c0 4.993-5.539 10.193-7.399 11.799a1 1 0 0 1-1.202 0C9.539 20.193 4 14.993 4 10a8 8 0 0 1 16 0\" /><circle cx=\"12\" cy=\"10\" r=\"3\" />","book-open":"<path d=\"M12 5v16\" /><path d=\"M20.001 19A2 2 0 0022 17V5a2 2 0 00-1.999-2L16 3.002A5 5 0 0012 5a5 5 0 00-4-2H4a2 2 0 00-2 2v12a2 2 0 001.999 2H8a5 5 0 014 2 5 5 0 014-2z\" />","zap":"<path d=\"M15.914 4a1.5 1.5 0 00-2.474-1.561l-9 9A1.5 1.5 0 005.5 14h4.002a.5.5 0 01.471.666L8.086 20a1.5 1.5 0 002.475 1.56l9-9A1.5 1.5 0 0018.5 10h-3.997a.5.5 0 01-.472-.667z\" />","file-search":"<path d=\"M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z\" /><path d=\"M14 2v5a1 1 0 0 0 1 1h5\" /><circle cx=\"11.5\" cy=\"14.5\" r=\"2.5\" /><path d=\"M13.3 16.3 15 18\" />","send":"<path d=\"M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z\" /><path d=\"m21.854 2.147-10.94 10.939\" />","message-square-plus":"<path d=\"M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z\" /><path d=\"M12 8v6\" /><path d=\"M9 11h6\" />","chart-column":"<path d=\"M3 3v16a2 2 0 0 0 2 2h16\" /><path d=\"M18 17V9\" /><path d=\"M13 17V5\" /><path d=\"M8 17v-3\" />","message-circle":"<path d=\"M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 1 0-4.777-4.719\" />","triangle-alert":"<path d=\"m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3\" /><path d=\"M12 9v4\" /><path d=\"M12 17h.01\" />","languages":"<path d=\"m5 8 6 6\" /><path d=\"m4 14 6-6 2-3\" /><path d=\"M2 5h12\" /><path d=\"M7 2h1\" /><path d=\"m22 22-5-10-5 10\" /><path d=\"M14 18h6\" />","chevron-down":"<path d=\"m6 9 6 6 6-6\" />","info":"<circle cx=\"12\" cy=\"12\" r=\"10\" /><path d=\"M12 16v-4\" /><path d=\"M12 8h.01\" />","x":"<path d=\"M18 6 6 18\" /><path d=\"m6 6 12 12\" />","square":"<rect width=\"18\" height=\"18\" x=\"3\" y=\"3\" rx=\"2\" />","map":"<path d=\"M14.106 5.553a2 2 0 0 0 1.788 0l3.659-1.83A1 1 0 0 1 21 4.619v12.764a1 1 0 0 1-.553.894l-4.553 2.277a2 2 0 0 1-1.788 0l-4.212-2.106a2 2 0 0 0-1.788 0l-3.659 1.83A1 1 0 0 1 3 19.381V6.618a1 1 0 0 1 .553-.894l4.553-2.277a2 2 0 0 1 1.788 0z\" /><path d=\"M15 5.764v15\" /><path d=\"M9 3.236v15\" />","trending-down":"<path d=\"M16 17h6v-6\" /><path d=\"m22 17-8.5-8.5-5 5L2 7\" />","route-off":"<circle cx=\"6\" cy=\"19\" r=\"3\" /><path d=\"M9 19h8.5c.4 0 .9-.1 1.3-.2\" /><path d=\"M5.2 5.2A3.5 3.53 0 0 0 6.5 12H12\" /><path d=\"m2 2 20 20\" /><path d=\"M21 15.3a3.5 3.5 0 0 0-3.3-3.3\" /><path d=\"M15 5h-4.3\" /><circle cx=\"18\" cy=\"5\" r=\"3\" />","arrow-up-to-line":"<path d=\"M5 3h14\" /><path d=\"m18 13-6-6-6 6\" /><path d=\"M12 7v14\" />","arrow-down-to-line":"<path d=\"M12 17V3\" /><path d=\"m6 11 6 6 6-6\" /><path d=\"M19 21H5\" />","loader-circle":"<path d=\"M21 12a9 9 0 1 1-6.219-8.56\" />","bell":"<path d=\"M10.268 21a2 2 0 0 0 3.464 0\" /><path d=\"M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326\" />","chevron-left":"<path d=\"m15 18-6-6 6-6\" />","chevron-right":"<path d=\"m9 18 6-6-6-6\" />","grip-vertical":"<circle cx=\"9\" cy=\"12\" r=\"1\" /><circle cx=\"9\" cy=\"5\" r=\"1\" /><circle cx=\"9\" cy=\"19\" r=\"1\" /><circle cx=\"15\" cy=\"12\" r=\"1\" /><circle cx=\"15\" cy=\"5\" r=\"1\" /><circle cx=\"15\" cy=\"19\" r=\"1\" />","thumbs-down":"<path d=\"M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22a3.13 3.13 0 0 1-3-3.88Z\" /><path d=\"M17 14V2\" />","message-square-text":"<path d=\"M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z\" /><path d=\"M7 11h10\" /><path d=\"M7 15h6\" /><path d=\"M7 7h8\" />","check":"<path d=\"M20 6 9 17l-5-5\" />","maximize-2":"<path d=\"M15 3h6v6\" /><path d=\"m21 3-7 7\" /><path d=\"m3 21 7-7\" /><path d=\"M9 21H3v-6\" />","plus":"<path d=\"M5 12h14\" /><path d=\"M12 5v14\" />","box":"<path d=\"M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z\" /><path d=\"m3.3 7 8.7 5 8.7-5\" /><path d=\"M12 22V12\" />"};
   const options = window.motionViewerV2Options || {};
   const $ = (id) => document.getElementById(id);
   const svg = (name) => `<svg class="lucide" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${ICON[name] || ''}</svg>`;
@@ -531,7 +531,452 @@
 
   function renderAll() {
     renderScores(); renderZoneNote(); renderPose(); renderOrder(); renderCoating();
+    layout.syncTabs();
   }
+
+  // ── 화면 나누기: 경계선 손잡이로 뷰어·채팅을 접고 폭을 바꾼다. 뷰어가 좁으면 분석 칸을 탭으로 접는다 ──
+  const L = window.motionViewerV2Layout;
+  const stored = (key) => { try { return localStorage.getItem(`motionViewerV2.${key}`); } catch { return null; } };
+  const remember = (key, value) => { try { localStorage.setItem(`motionViewerV2.${key}`, value); } catch { /* 저장소가 막혀도 화면은 그대로 쓴다 */ } };
+  const layout = (() => {
+    const grid = $('v2Grid');
+    const main = document.querySelector('.v2-main');
+    const features = document.querySelector('.features');
+    const tabs = $('v2FeatureTabs');
+    const tabOf = (id) => tabs.querySelector(`[data-feature-tab="${id}"]`);
+    let mode = ['both', 'chat-off', 'viewer-off'].includes(stored('mode')) ? stored('mode') : 'both';
+    let chatWidth = Number(stored('chatWidth'));
+    let count = 3;
+    let shown = [];
+    const applyWidth = () => grid.style.setProperty('--chat-w', `${L.clampChatWidth(chatWidth || Number.NaN, grid.clientWidth)}px`);
+    function applyFeatures() {
+      count = L.featureCount(main.clientWidth);
+      shown = L.normalizeShown(shown, count);
+      const folded = count < 3;
+      tabs.hidden = !folded;
+      if (folded) features.dataset.count = String(count); else delete features.dataset.count;
+      tabs.setAttribute('aria-multiselectable', String(count === 2));
+      for (const feature of features.querySelectorAll('.feature')) {
+        const visible = !folded || shown.includes(feature.dataset.feature);
+        feature.classList.toggle('is-folded', !visible);
+        const tab = tabOf(feature.dataset.feature);
+        tab.setAttribute('aria-selected', String(folded && visible));
+        tab.tabIndex = !folded || shown[shown.length - 1] === feature.dataset.feature ? 0 : -1;
+      }
+    }
+    function showFeature(id) {
+      if (count >= 3 || !L.FEATURES.includes(id)) return;
+      shown = L.pickShown(shown, id, count);
+      applyFeatures();
+      dispatchEvent(new Event('resize'));   // 다시 보인 칸(순서 선·도막 지도)이 새 폭으로 그려지게 한다
+    }
+    function setMode(next, { focus = false } = {}) {
+      mode = next;
+      grid.classList.toggle('is-chat-off', mode === 'chat-off');
+      grid.classList.toggle('is-viewer-off', mode === 'viewer-off');
+      $('v2RailChat').hidden = mode !== 'chat-off';
+      $('v2RailViewer').hidden = mode !== 'viewer-off';
+      $('v2Split').hidden = mode !== 'both';
+      if (mode !== 'viewer-off') feedback.closePanel();
+      remember('mode', mode);
+      applyWidth();
+      requestAnimationFrame(() => { dispatchEvent(new Event('resize')); fillStage(); });
+      if (focus) ({ both: $('v2Resize'), 'chat-off': $('v2OpenChat'), 'viewer-off': $('v2OpenViewer') })[mode]?.focus();
+    }
+    $('v2CollapseViewer').addEventListener('click', () => setMode('viewer-off', { focus: true }));
+    $('v2CollapseChat').addEventListener('click', () => setMode('chat-off', { focus: true }));
+    $('v2OpenViewer').addEventListener('click', () => setMode('both', { focus: true }));
+    $('v2OpenChat').addEventListener('click', () => setMode('both', { focus: true }));
+    $('v2OpenChatIcon').addEventListener('click', () => setMode('both', { focus: true }));
+    // 끌어서 폭 조절. 손잡이는 키보드로도 움직인다(왼쪽 = 채팅 넓게).
+    const grip = $('v2Resize');
+    grip.addEventListener('pointerdown', (event) => {
+      grip.setPointerCapture(event.pointerId);
+      grid.classList.add('is-resizing');
+    });
+    grip.addEventListener('pointermove', (event) => {
+      if (!grip.hasPointerCapture(event.pointerId)) return;
+      chatWidth = L.clampChatWidth(grid.getBoundingClientRect().right - event.clientX, grid.clientWidth);
+      applyWidth();
+    });
+    const endDrag = (event) => {
+      if (!grip.hasPointerCapture(event.pointerId)) return;
+      grip.releasePointerCapture(event.pointerId);
+      grid.classList.remove('is-resizing');
+      remember('chatWidth', String(chatWidth));
+      dispatchEvent(new Event('resize'));
+    };
+    grip.addEventListener('pointerup', endDrag);
+    grip.addEventListener('pointercancel', endDrag);
+    grip.addEventListener('keydown', (event) => {
+      const step = { ArrowLeft: 32, ArrowRight: -32 }[event.key];
+      if (!step && event.key !== 'Home') return;
+      event.preventDefault();
+      const now = L.clampChatWidth(chatWidth || Number.NaN, grid.clientWidth);
+      chatWidth = event.key === 'Home' ? Number.NaN : L.clampChatWidth(now + step, grid.clientWidth);
+      applyWidth();
+      remember('chatWidth', Number.isFinite(chatWidth) ? String(chatWidth) : '');
+      dispatchEvent(new Event('resize'));
+    });
+    for (const tab of tabs.querySelectorAll('[role="tab"]')) {
+      tab.addEventListener('click', () => showFeature(tab.dataset.featureTab));
+      tab.addEventListener('keydown', (event) => {
+        const move = { ArrowRight: 1, ArrowLeft: -1 }[event.key];
+        if (!move) return;
+        event.preventDefault();
+        const ids = L.FEATURES;
+        const next = ids[(ids.indexOf(tab.dataset.featureTab) + move + ids.length) % ids.length];
+        tabOf(next).focus();
+      });
+    }
+    new ResizeObserver(applyFeatures).observe(main);
+    addEventListener('resize', applyWidth);
+    return {
+      setMode, showFeature, applyFeatures,
+      get mode() { return mode; },
+      /** 참고 그림을 뜰 때 접힌 칸도 잠깐 펼친다. 순서 선은 펼친 폭으로 다시 그린다. */
+      withAllFeatures(read) {
+        const before = features.dataset.count;
+        delete features.dataset.count;
+        for (const feature of features.querySelectorAll('.feature.is-folded')) feature.classList.add('is-measuring');
+        drawOrderLinks();
+        try { return read(); } finally {
+          for (const feature of features.querySelectorAll('.is-measuring')) feature.classList.remove('is-measuring');
+          if (before) features.dataset.count = before;
+          drawOrderLinks();
+        }
+      },
+      syncTabs() {
+        $('v2TabPoseScore').textContent = $('v2PoseScore').textContent === '—' ? '' : $('v2PoseScore').textContent;
+        $('v2TabOrderScore').textContent = $('v2ScoreOrder').textContent === '—' ? '' : $('v2ScoreOrder').textContent;
+      },
+      start() { setMode(mode); applyFeatures(); },
+    };
+  })();
+
+  // ── 참고 첨부: 채팅만 볼 때 답 안에 뷰어가 그린 칸과 Zone 수치를 함께 둔다. 질문한 순간의 화면을 옮긴다 ──
+  const metricShow = (metric, number, label) => {
+    const unit = { deg: '°', mm: ' mm', um: ' µm' }[metric.unit] || '';
+    return label || DIRECTION[number] || (Number.isFinite(Number(number)) ? `${Number(number).toFixed(1)}${unit}` : '—');
+  };
+  const usableMetric = (metric) => metric.available !== false && metric.similarity_percent != null;
+  const snapCanvas = (canvas, maxWidth = 960) => {
+    if (!canvas?.width || !canvas.height) return null;
+    const scale = Math.min(1, maxWidth / canvas.width);
+    const out = document.createElement('canvas');
+    out.width = Math.round(canvas.width * scale);
+    out.height = Math.round(canvas.height * scale);
+    const g = out.getContext('2d');
+    g.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--stage').trim() || '#1c2230';
+    g.fillRect(0, 0, out.width, out.height);
+    g.drawImage(canvas, 0, 0, out.width, out.height);
+    try { return out.toDataURL('image/jpeg', 0.86); } catch { return null; }
+  };
+  // DOM으로 그린 칸(막대·순서 선)은 복제해 원래 크기로 두고 상자 폭에 맞춰 줄인다. 안의 캔버스는 그림으로 바꾼다.
+  const snapNode = (node) => {
+    if (!node || !node.offsetWidth || !node.offsetHeight) return null;
+    const clone = node.cloneNode(true);
+    const sources = [...node.querySelectorAll('canvas')];
+    [...clone.querySelectorAll('canvas')].forEach((copy, index) => {
+      const url = snapCanvas(sources[index]);
+      const image = document.createElement('img');
+      if (url) image.src = url;
+      image.alt = '';
+      image.style.width = `${sources[index].offsetWidth}px`;
+      copy.replaceWith(image);
+    });
+    for (const item of [clone, ...clone.querySelectorAll('[id]')]) item.removeAttribute('id');
+    // 원래 칸이 스크롤로 줄을 감추고 있어도 복제본에는 전부 보인다(도막 Zone 13줄)
+    Object.assign(clone.style, { height: 'auto', maxHeight: 'none', overflow: 'visible' });
+    return { clone, width: node.offsetWidth, height: Math.max(node.offsetHeight, node.scrollHeight) };
+  };
+  const scaleClones = new ResizeObserver((entries) => {
+    for (const { target } of entries) {
+      const inner = target.firstElementChild;
+      const style = getComputedStyle(target);
+      const room = target.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+      const scale = Math.min(1, room / Number(target.dataset.width));
+      inner.style.transform = `scale(${scale})`;
+      target.style.height = `${Math.round(Number(target.dataset.height) * scale)}px`;
+    }
+  });
+  const cloneBox = (snap) => {
+    const box = el('div', 'att-clone');
+    box.dataset.width = snap.width;
+    box.dataset.height = snap.height;
+    const inner = el('div', 'att-scale');
+    inner.style.width = `${snap.width}px`;
+    inner.inert = true;
+    inner.append(snap.clone);
+    box.append(inner);
+    scaleClones.observe(box);
+    return box;
+  };
+  const lightbox = $('v2Lightbox');
+  lightbox.addEventListener('click', (event) => { if (event.target === lightbox) lightbox.close(); });
+  function openLightbox(make, caption) {
+    $('v2LightboxBody').replaceChildren(make());
+    $('v2LightboxCaption').textContent = caption;
+    lightbox.showModal();
+  }
+  /** 질문한 순간 화면에서 첨부를 떠 둔다. 답이 오면 답 안에 붙인다. 지식 질문에는 붙이지 않는다. */
+  function captureAttachments(tabId, state) {
+    const plan = L.attachmentsFor(tabId);
+    if (!plan.length) return null;
+    const where = `${state.zone_id == null ? 'Zone 없음' : zoneText(state.zone_id)} · ${state.playhead_seconds.toFixed(1)}초`;
+    const items = layout.withAllFeatures(() => plan.map((kind) => {
+      if (kind === 'scene') { const url = snapCanvas($('canvas')); return url && { kind, url, caption: where }; }
+      if (kind === 'skeleton') { const url = snapCanvas($('skeletonCanvas'), 640); return url && { kind, url, caption: '이 순간 자세' }; }
+      if (kind === 'poseBars') { const snap = snapNode($('v2PoseBars')); return snap && { kind, snap, caption: '분사별 자세 유사도' }; }
+      if (kind === 'order') { const snap = snapNode($('v2Order')); return snap && { kind, snap, caption: '전문가 순서와 이 기록' }; }
+      if (kind === 'coating') { const snap = snapNode($('v2CoatBars')); return snap && { kind, snap, caption: $('v2CoatBasisLabel').textContent || 'Zone별 도막' }; }
+      if (kind === 'zoneMetrics') {
+        const zone = state.zone_id == null ? null : record?.pose_evaluation?.zones?.[zoneKey(state.map_num, state.zone_id)];
+        const metrics = (zone?.metrics || []).filter(usableMetric);
+        return metrics.length ? { kind, metrics, caption: where } : null;
+      }
+      return null;
+    }).filter(Boolean));
+    return items.length ? items : null;
+  }
+  function renderAttachments(items) {
+    const box = el('div', 'att');
+    const pictures = el('div', 'att-grid');
+    for (const item of items) {
+      if (item.kind === 'zoneMetrics') {
+        const table = el('table', 'att-num');
+        table.innerHTML = '<thead><tr><th scope="col"></th><th scope="col">이 기록</th><th scope="col">전문가</th><th scope="col">유사도</th></tr></thead>';
+        const body = el('tbody');
+        for (const metric of item.metrics) {
+          const row = el('tr');
+          const name = el('th', null, metric.label);
+          name.scope = 'row';
+          row.append(name, el('td', null, metricShow(metric, metric.actual, metric.actual_label)),
+            el('td', null, metricShow(metric, metric.reference, metric.reference_label)), el('td', null, percent(metric.similarity_percent)));
+          body.append(row);
+        }
+        table.append(body);
+        const caption = el('caption', null, `${item.caption} 비교`);
+        table.prepend(caption);
+        box.append(table);
+        continue;
+      }
+      const figure = el('figure', `att-item${item.kind === 'scene' || item.kind === 'order' || item.kind === 'coating' ? ' is-wide' : ''}`);
+      const open = el('button', 'att-open');
+      open.type = 'button';
+      open.setAttribute('aria-label', `${item.caption} 크게 보기`);
+      if (item.url) {
+        const image = el('img');
+        image.src = item.url;
+        image.alt = '';
+        open.append(image);
+        open.addEventListener('click', () => openLightbox(() => { const big = el('img'); big.src = item.url; big.alt = item.caption; return big; }, item.caption));
+      } else {
+        open.append(cloneBox({ ...item.snap, clone: item.snap.clone.cloneNode(true) }));
+        open.addEventListener('click', () => openLightbox(() => cloneBox({ ...item.snap, clone: item.snap.clone.cloneNode(true) }), item.caption));
+      }
+      figure.append(open, el('figcaption', null, item.caption));
+      pictures.append(figure);
+    }
+    if (pictures.children.length) box.prepend(pictures);
+    return box;
+  }
+
+  // ── 답변 피드백: 뷰어가 열려 있으면 답 안의 작은 칸, 채팅만 볼 때는 오른쪽 피드백 칸 ──
+  const uuid = () => {
+    if (globalThis.crypto?.randomUUID) return crypto.randomUUID();
+    const bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    const hex = [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('');
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  };
+  const feedback = (() => {
+    const panel = $('v2Feedback');
+    const form = $('v2FeedbackForm');
+    const text = $('v2FeedbackText');
+    const correct = $('v2FeedbackCorrect');
+    const error = $('v2FeedbackError');
+    const sendButton = $('v2FeedbackSend');
+    const LABEL = { wrong: '무엇이 틀렸나요', memo: '메모' };
+    let target = null;   // { node, info, kind, submissionId }
+    let inline = null;
+    let sentCount = 0;
+
+    const markTarget = (node) => {
+      for (const other of document.querySelectorAll('.msg-a.is-target')) other.classList.remove('is-target');
+      node?.classList.add('is-target');
+    };
+    const pressActs = (node, kind) => {
+      for (const button of document.querySelectorAll('.fb-acts button')) {
+        button.setAttribute('aria-pressed', String(button.closest('.msg-a') === node && button.dataset.kind === kind));
+      }
+    };
+    function setKind(kind) {
+      target.kind = kind;
+      for (const button of form.querySelectorAll('.fb-kind [role="radio"]')) {
+        const on = button.dataset.kind === kind;
+        button.setAttribute('aria-checked', String(on));
+        button.setAttribute('aria-pressed', String(on));
+        button.tabIndex = on ? 0 : -1;
+      }
+      $('v2FeedbackLabel').textContent = LABEL[kind];
+      pressActs(target.node, kind);
+    }
+    function closeInline() {
+      inline?.remove();
+      inline = null;
+    }
+    function closePanel() {
+      panel.hidden = true;
+      $('v2Grid').classList.remove('has-feedback');
+      if (!inline) { markTarget(null); pressActs(null); }
+    }
+    function openPanel(node, info, kind, carried = '') {
+      closeInline();
+      target = { node, info, kind, submissionId: uuid() };
+      panel.hidden = false;
+      $('v2Grid').classList.add('has-feedback');
+      $('v2FeedbackEmpty').hidden = true;
+      form.hidden = false;
+      error.hidden = true;
+      tagZone($('v2FeedbackZone'), info.zone_id);
+      $('v2FeedbackQuestion').textContent = info.question;
+      $('v2FeedbackQuestion').title = info.question;
+      $('v2FeedbackTime').textContent = Number.isFinite(info.playhead_seconds) ? `${info.playhead_seconds.toFixed(1)}초` : '';
+      text.value = carried;
+      correct.value = '';
+      $('v2FeedbackMore').open = false;
+      setKind(kind);
+      markTarget(node);
+      text.focus();
+    }
+    function openInline(node, info, kind) {
+      closeInline();
+      target = { node, info, kind, submissionId: uuid() };
+      markTarget(node);
+      pressActs(node, kind);
+      const box = el('form', 'fb-inline');
+      const id = `fbInline${Date.now().toString(36)}`;
+      const label = el('label', null, LABEL[kind]);
+      label.htmlFor = id;
+      const area = el('textarea');
+      area.id = id;
+      area.rows = 3;
+      area.maxLength = 4000;
+      const message = el('p', 'fb-error');
+      message.setAttribute('role', 'alert');
+      message.hidden = true;
+      const row = el('div', 'fb-row');
+      const widen = iconButton('icon-btn', 'maximize-2', '넓게 쓰기');
+      widen.title = '넓게 쓰기';
+      const spacer = el('span', 'grow');
+      const cancel = el('button', 'btn', '취소');
+      cancel.type = 'button';
+      const submit = el('button', 'btn primary');
+      submit.type = 'submit';
+      submit.innerHTML = svg('send');
+      submit.append('보내기');
+      row.append(widen, spacer, cancel, submit);
+      box.append(label, area, message, row);
+      widen.addEventListener('click', () => {
+        const carried = area.value;
+        layout.setMode('viewer-off');
+        openPanel(node, info, target.kind, carried);
+      });
+      cancel.addEventListener('click', () => { closeInline(); markTarget(null); pressActs(null); });
+      box.addEventListener('submit', (event) => { event.preventDefault(); submit.disabled = true; deliver(area.value, '', message).finally(() => { submit.disabled = false; }); });
+      node.append(box);
+      inline = box;
+      area.focus();
+    }
+    function open(node, info, kind) {
+      if (layout.mode === 'viewer-off') openPanel(node, info, kind);
+      else openInline(node, info, kind);
+    }
+    async function deliver(message, correctText, errorNode) {
+      const body = L.feedbackPayload({ submissionId: target.submissionId, kind: target.kind, text: message, correct: correctText, answer: target.info });
+      errorNode.hidden = true;
+      if (!body) { errorNode.textContent = '메모를 적어 주세요.'; errorNode.hidden = false; return; }
+      let response = null;
+      let payload = null;
+      try {
+        response = await fetch('/api/feedback', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        try { payload = await response.json(); } catch { /* 본문 없음 */ }
+      } catch {
+        errorNode.textContent = '보내지 못했습니다. 네트워크를 확인하고 다시 보내 주세요.';
+        errorNode.hidden = false;
+        return;
+      }
+      if (!response.ok) {
+        errorNode.textContent = payload?.detail && typeof payload.detail === 'string' ? payload.detail : `보내지 못했습니다(HTTP ${response.status}).`;
+        errorNode.hidden = false;
+        return;
+      }
+      sent(target);
+    }
+    function sent(done) {
+      const acts = done.node.querySelector('.fb-acts');
+      const mark = el('span', 'fb-done');
+      mark.innerHTML = svg('check');
+      mark.append('보냄');
+      acts?.replaceWith(mark);
+      const item = el('li');
+      item.innerHTML = svg(done.kind === 'wrong' ? 'thumbs-down' : 'message-square-text');
+      const question = el('span', 'q', done.info.question);
+      question.title = done.info.question;
+      item.append(question, el('span', 'st', '접수'));
+      $('v2FeedbackSentList').prepend(item);
+      sentCount += 1;
+      $('v2FeedbackSentCount').textContent = String(sentCount);
+      $('v2FeedbackSent').hidden = false;
+      closeInline();
+      markTarget(null);
+      form.hidden = true;
+      $('v2FeedbackEmpty').hidden = false;
+      target = null;
+    }
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      sendButton.disabled = true;
+      deliver(text.value, correct.value, error).finally(() => { sendButton.disabled = false; });
+    });
+    for (const button of form.querySelectorAll('.fb-kind [role="radio"]')) {
+      button.addEventListener('click', () => setKind(button.dataset.kind));
+      button.addEventListener('keydown', (event) => {
+        if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+        event.preventDefault();
+        const other = form.querySelector(`.fb-kind [data-kind="${button.dataset.kind === 'wrong' ? 'memo' : 'wrong'}"]`);
+        setKind(other.dataset.kind);
+        other.focus();
+      });
+    }
+    $('v2FeedbackClose').addEventListener('click', closePanel);
+    return {
+      closePanel,
+      /** 성공한 답 아래에 잘못됨·메모 단추를 단다. */
+      attach(node, row, info) {
+        const acts = el('span', 'fb-acts');
+        for (const [kind, icon, label] of [['wrong', 'thumbs-down', '잘못된 답으로 알리기'], ['memo', 'message-square-text', '이 답에 메모 남기기']]) {
+          const button = iconButton('fb-act', icon, label);
+          button.title = kind === 'wrong' ? '잘못됨' : '메모';
+          button.dataset.kind = kind;
+          button.setAttribute('aria-pressed', 'false');
+          button.addEventListener('click', () => open(node, info, kind));
+          acts.append(button);
+        }
+        row.append(acts);
+      },
+      reset() {
+        closeInline();
+        closePanel();
+        form.hidden = true;
+        $('v2FeedbackEmpty').hidden = false;
+        target = null;
+      },
+    };
+  })();
 
   // ── 고정 질문 열 ───────────────────────────────────────────
   const TABS = [
@@ -685,6 +1130,7 @@
         button.tabIndex = selected ? 0 : -1;
       }
       for (const feature of document.querySelectorAll('.feature')) feature.classList.toggle('is-asked', feature.dataset.feature === tab.id);
+      layout.showFeature(tab.id);   // 칸이 접혀 있으면 질문하는 칸을 연다
       input.placeholder = options.presetOnly ? '준비된 질문을 눌러 주세요' : tab.hint;
       presets.replaceChildren(...tab.presets.map((question) => {
         const button = el('button', 'preset', question);
@@ -757,6 +1203,8 @@
       }
       const sent = { tab, mode, language: answerLanguage, data, state: { map_num: anchor.map_num, zone_id: anchor.zone_id, source_index: anchor.source_index, playhead_seconds: anchor.playhead_seconds },
         armPending: tab.id === 'pose' && data && data.arm_pose_evaluation === undefined };
+      let refs = null;
+      try { refs = sent.data ? captureAttachments(sent.tab.id, sent.state) : null; } catch { refs = null; }   // 첨부를 못 떠도 질문은 보낸다
       const asked = bubble('msg-q', prompt);
       const meta = el('div', 'msg-meta');
       const pin = el('button', 'chip');
@@ -839,7 +1287,15 @@
         }
         if (result.degraded) { const cut = chip('triangle-alert', '줄인 답', '시간 안에 생성이 끝나지 않아 줄인 답입니다.'); cut.classList.add('is-warn'); row.append(cut); }
         if (sent.armPending) { const early = chip('info', '자세 채점 전', '자세 채점이 끝나기 전에 보낸 질문이라 팔 자세 결과가 답에 없을 수 있습니다.'); early.classList.add('is-warn'); row.append(early); }
-        if (row.children.length) answer.append(row);
+        if (refs) answer.append(renderAttachments(refs));
+        feedback.attach(answer, row, {
+          conversation_id: conversation, question: prompt, answer: String(result.answer || ''), task: sent.tab.task, response_mode: sent.mode,
+          answer_source: result.answer_source || null, zone_id: sent.state.zone_id, map_num: sent.state.map_num,
+          playhead_seconds: sent.state.playhead_seconds, record: sent.data ? recordLabel(sent.data) : null,
+          session_id: sent.data?.selected_session_id ?? null, worker_id: sent.data?.worker?.worker_id ?? null,
+        });
+        answer.append(row);
+        $('v2RailCount').textContent = String(log.querySelectorAll('.msg-q').length);
         scroll();
       } catch (error) {
         waiting.remove();
@@ -872,6 +1328,8 @@
       conversation = newConversation();
       log.replaceChildren();
       pins.replaceChildren();
+      feedback.reset();
+      $('v2RailCount').textContent = '';
       empty();
     };
     fresh.addEventListener('click', reset);
@@ -887,6 +1345,12 @@
       setAnchor(state) {
         tagZone(anchorZone, state.zone_id, state.zone_id != null && !state.spraying ? ' · 이동 중' : '');
         anchorTime.textContent = `${state.playhead_seconds.toFixed(2)}초`;
+        // 접힌 뷰어 줄에는 Zone 번호만 둔다(56px 칸)
+        const rail = $('v2RailZone');
+        rail.classList.toggle('zone-tag-idle', state.zone_id == null);
+        rail.style.setProperty('--zone', state.zone_id == null ? '' : colorOf(state.zone_id));
+        rail.textContent = state.zone_id == null ? '—' : String(Number(state.zone_id));
+        rail.title = state.zone_id == null ? '이동 중' : `${zoneText(state.zone_id)} · ${state.playhead_seconds.toFixed(1)}초`;
       },
     };
   })();
@@ -1067,6 +1531,7 @@
     }
     if (previous.zone_id !== anchor.zone_id || previous.map_num !== anchor.map_num) markCurrentZone(true);   // 분사만 바뀔 때는 따라가지 않는다
     renderPoseNow();
+    layout.syncTabs();
     markFlaggedJoints(event.detail.frame);
     chat.setAnchor(anchor);
     notices.frame(seconds);
@@ -1074,6 +1539,7 @@
 
   hydrate(document);
   syncPlay();
+  layout.start();
   renderAll();
   requestAnimationFrame(() => dispatchEvent(new Event('resize')));   // 스켈레톤·도막 캔버스가 새 배치의 크기로 다시 그려지게 한다
 })();

@@ -1345,3 +1345,15 @@ def test_coating_card_offers_both_bases_with_visible_labels(tmp_path: Path) -> N
     assert '<button id="coatingBasisExpert" type="button" aria-pressed="false">전문가 대비</button>' in page
     assert 'id="coatingTargetPanel"' in page
     assert "<strong>도막</strong>" in page
+
+
+def test_v2_page_loads_the_layout_helpers_before_the_v2_script(tmp_path: Path) -> None:
+    """화면 나누기·피드백·첨부 규칙은 motion_viewer_v2_layout.js 에 있고 v2 스크립트보다 먼저 실려야 한다."""
+    client = _client(tmp_path)
+    page = client.get("/motion-viewer/v2").text
+    helpers = page.index('src="/motion-viewer/assets/motion_viewer_v2_layout.js"')
+    assert helpers < page.index('src="/motion-viewer/assets/motion_viewer_v2.js"')
+    script = client.get("/motion-viewer/assets/motion_viewer_v2_layout.js")
+    assert script.status_code == 200
+    assert script.headers["content-type"].startswith("text/javascript")
+    assert "window.motionViewerV2Layout" in script.text
