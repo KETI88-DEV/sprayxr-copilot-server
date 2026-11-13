@@ -32,7 +32,8 @@
     return Math.max(CHAT_MIN, Math.min(Math.round(width), total - VIEWER_MIN));
   };
 
-  const clip = (value, limit) => (value == null ? null : String(value).slice(0, limit));
+  // 서버 한도는 글자 수다. UTF-16 단위로 자르면 이모지 반쪽이 남아 서버가 422로 거절한다.
+  const clip = (value, limit) => (value == null ? null : Array.from(String(value)).slice(0, limit).join(''));
   /**
    * 기존 의견 접수(POST /api/feedback)에 답변 정보를 담는다. 잘못됨=bug, 메모=improvement.
    * 잘못됨은 글이 없어도 보낼 수 있고, 메모는 글이 있어야 한다(없으면 null).
@@ -42,15 +43,15 @@
     const message = String(text || '').trim() || (wrong ? '잘못된 답으로 표시' : '');
     if (!message) return null;
     return {
-      submission_id: submissionId, message: message.slice(0, 4000), kind: wrong ? 'bug' : 'improvement', page: 'motion',
+      submission_id: submissionId, message: clip(message, 4000), kind: wrong ? 'bug' : 'improvement', page: 'motion',
       answer: {
         conversation_id: clip(answer.conversation_id, 80), question: clip(answer.question, 2000), answer: clip(answer.answer, 8000),
         task: answer.task, response_mode: answer.response_mode, answer_source: clip(answer.answer_source, 40),
         zone_id: answer.zone_id == null ? null : clip(answer.zone_id, 8),
-        map_num: Number.isInteger(answer.map_num) ? answer.map_num : null,
+        map_num: answer.map_num != null && answer.map_num !== '' && Number.isInteger(Number(answer.map_num)) ? Number(answer.map_num) : null,
         playhead_seconds: Number.isFinite(answer.playhead_seconds) ? answer.playhead_seconds : null,
         record: clip(answer.record, 200), session_id: clip(answer.session_id, 80), worker_id: clip(answer.worker_id, 80),
-        correct_answer: String(correct || '').trim().slice(0, 4000),
+        correct_answer: clip(String(correct || '').trim(), 4000),
       },
     };
   };

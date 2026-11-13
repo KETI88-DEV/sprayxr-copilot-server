@@ -545,6 +545,8 @@
     const tabs = $('v2FeatureTabs');
     const tabOf = (id) => tabs.querySelector(`[data-feature-tab="${id}"]`);
     let mode = ['both', 'chat-off', 'viewer-off'].includes(stored('mode')) ? stored('mode') : 'both';
+    const narrow = matchMedia('(max-width: 900px)');
+    const effective = () => (narrow.matches ? 'both' : mode);
     let chatWidth = Number(stored('chatWidth'));
     let count = 3;
     let shown = [];
@@ -571,17 +573,21 @@
       dispatchEvent(new Event('resize'));   // 다시 보인 칸(순서 선·도막 지도)이 새 폭으로 그려지게 한다
     }
     function setMode(next, { focus = false } = {}) {
+      const before = effective();
       mode = next;
-      grid.classList.toggle('is-chat-off', mode === 'chat-off');
-      grid.classList.toggle('is-viewer-off', mode === 'viewer-off');
-      $('v2RailChat').hidden = mode !== 'chat-off';
-      $('v2RailViewer').hidden = mode !== 'viewer-off';
-      $('v2Split').hidden = mode !== 'both';
-      if (mode !== 'viewer-off') feedback.closePanel();
+      const now = effective();
+      grid.classList.toggle('is-chat-off', now === 'chat-off');
+      grid.classList.toggle('is-viewer-off', now === 'viewer-off');
+      $('v2RailChat').hidden = now !== 'chat-off';
+      $('v2RailViewer').hidden = now !== 'viewer-off';
+      $('v2Split').hidden = now !== 'both';
+      if (now !== 'viewer-off') feedback.closePanel();
+      // 뷰어를 접으면 재생을 멈춘다. 알림·재생 위치가 보이지 않는 채로 흘러가지 않게
+      if (now === 'viewer-off' && before !== 'viewer-off' && $('play').textContent.trim() !== '재생') $('v2Play').click();
       remember('mode', mode);
       applyWidth();
       requestAnimationFrame(() => { dispatchEvent(new Event('resize')); fillStage(); });
-      if (focus) ({ both: $('v2Resize'), 'chat-off': $('v2OpenChat'), 'viewer-off': $('v2OpenViewer') })[mode]?.focus();
+      if (focus) ({ both: $('v2Resize'), 'chat-off': $('v2OpenChat'), 'viewer-off': $('v2OpenViewer') })[now]?.focus();
     }
     $('v2CollapseViewer').addEventListener('click', () => setMode('viewer-off', { focus: true }));
     $('v2CollapseChat').addEventListener('click', () => setMode('chat-off', { focus: true }));
@@ -631,9 +637,10 @@
     }
     new ResizeObserver(applyFeatures).observe(main);
     addEventListener('resize', applyWidth);
+    narrow.addEventListener('change', () => setMode(mode));
     return {
       setMode, showFeature, applyFeatures,
-      get mode() { return mode; },
+      get mode() { return effective(); },
       /** 참고 그림을 뜰 때 접힌 칸도 잠깐 펼친다. 순서 선은 펼친 폭으로 다시 그린다. */
       withAllFeatures(read) {
         const before = features.dataset.count;
@@ -714,6 +721,10 @@
   };
   const lightbox = $('v2Lightbox');
   lightbox.addEventListener('click', (event) => { if (event.target === lightbox) lightbox.close(); });
+  lightbox.addEventListener('close', () => {
+    for (const box of $('v2LightboxBody').querySelectorAll('.att-clone')) scaleClones.unobserve(box);
+    $('v2LightboxBody').replaceChildren();
+  });
   function openLightbox(make, caption) {
     $('v2LightboxBody').replaceChildren(make());
     $('v2LightboxCaption').textContent = caption;
@@ -800,9 +811,10 @@
     const error = $('v2FeedbackError');
     const sendButton = $('v2FeedbackSend');
     const LABEL = { wrong: '무엇이 틀렸나요', memo: '메모' };
-    let target = null;   // { node, info, kind, submissionId }
+    let target = null;   // { node, info, kind, submissionId, epoch }
     let inline = null;
     let sentCount = 0;
+    let epoch = 0;       // 새 대화마다 올린다. 보내는 중에 대화가 바뀌면 결과를 버린다
 
     const markTarget = (node) => {
       for (const other of document.querySelectorAll('.msg-a.is-target')) other.classList.remove('is-target');
@@ -835,7 +847,7 @@
     }
     function openPanel(node, info, kind, carried = '') {
       closeInline();
-      target = { node, info, kind, submissionId: uuid() };
+      target = { node, info, kind, submissionId: uuid(), epoch };
       panel.hidden = false;
       $('v2Grid').classList.add('has-feedback');
       $('v2FeedbackEmpty').hidden = true;
@@ -854,7 +866,7 @@
     }
     function openInline(node, info, kind) {
       closeInline();
-      target = { node, info, kind, submissionId: uuid() };
+      target = { node, info, kind, submissionId: uuid(), epoch };
       markTarget(node);
       pressActs(node, kind);
       const box = el('form', 'fb-inline');
@@ -896,7 +908,9 @@
       else openInline(node, info, kind);
     }
     async function deliver(message, correctText, errorNode) {
-      const body = L.feedbackPayload({ submissionId: target.submissionId, kind: target.kind, text: message, correct: correctText, answer: target.info });
+      const current = target;
+      if (!current) return;
+      const body = L.feedbackPayload({ submissionId: current.submissionId, kind: current.kind, text: message, correct: correctText, answer: current.info });
       errorNode.hidden = true;
       if (!body) { errorNode.textContent = '메모를 적어 주세요.'; errorNode.hidden = false; return; }
       let response = null;
@@ -914,9 +928,10 @@
         errorNode.hidden = false;
         return;
       }
-      sent(target);
+      sent(current);
     }
     function sent(done) {
+      if (done.epoch !== epoch) return;
       const acts = done.node.querySelector('.fb-acts');
       const mark = el('span', 'fb-done');
       mark.innerHTML = svg('check');
@@ -931,6 +946,7 @@
       sentCount += 1;
       $('v2FeedbackSentCount').textContent = String(sentCount);
       $('v2FeedbackSent').hidden = false;
+      if (target !== done) return;   // 보내는 사이 다른 답을 골랐으면 그 칸은 그대로 둔다
       closeInline();
       markTarget(null);
       form.hidden = true;
@@ -969,11 +985,16 @@
         row.append(acts);
       },
       reset() {
+        epoch += 1;
         closeInline();
         closePanel();
         form.hidden = true;
         $('v2FeedbackEmpty').hidden = false;
         target = null;
+        sentCount = 0;
+        $('v2FeedbackSentList').replaceChildren();
+        $('v2FeedbackSentCount').textContent = '';
+        $('v2FeedbackSent').hidden = true;
       },
     };
   })();
@@ -1329,6 +1350,7 @@
       log.replaceChildren();
       pins.replaceChildren();
       feedback.reset();
+      scaleClones.disconnect();   // 지운 대화의 복제 그림을 놓아준다
       $('v2RailCount').textContent = '';
       empty();
     };

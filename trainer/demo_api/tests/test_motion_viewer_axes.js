@@ -80,3 +80,11 @@ test('처음 시점 버튼은 집이 아니라 전체 보기 아이콘과 이름
   assert.ok(!read('motion_viewer.py').includes('>⌂<'));
   assert.match(read('motion_viewer.py'), /id="cameraHome" aria-label="전체 보기" title="전체 보기"><svg/);
 });
+
+test('글을 쓰는 칸(입력·선택·여러 줄 글·편집 가능 영역)에서는 장면 단축키를 쓰지 않는다', () => {
+  const { isTyping } = sandbox.window.MotionViewerCamera;
+  for (const tagName of ['INPUT', 'SELECT', 'TEXTAREA']) assert.equal(isTyping({ tagName }), true, tagName);
+  assert.equal(isTyping({ tagName: 'DIV', isContentEditable: true }), true);
+  assert.equal(isTyping({ tagName: 'CANVAS' }), false);
+  assert.equal(isTyping(null), false);
+});

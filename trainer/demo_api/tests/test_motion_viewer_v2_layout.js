@@ -96,3 +96,17 @@ test('참고 첨부는 질문 칸별로 정해진 그림만 고르고 지식 질
   assert.deepEqual([...L.attachmentsFor('knowledge')], []);
   assert.deepEqual([...L.attachmentsFor('unknown')], []);
 });
+
+test('재생 상태가 Map 번호를 문자열로 들고 있어도 숫자로 보낸다', () => {
+  const body = L.feedbackPayload({ submissionId: 'e', kind: 'wrong', text: 'x', correct: '', answer: { ...answer, map_num: '1' } });
+  assert.equal(body.answer.map_num, 1);
+  assert.equal(L.feedbackPayload({ submissionId: 'f', kind: 'wrong', text: 'x', correct: '', answer: { ...answer, map_num: 'x' } }).answer.map_num, null);
+});
+
+test('자르는 자리가 이모지에 걸려도 반쪽 글자를 남기지 않는다', () => {
+  const question = `${'가'.repeat(1999)}😀끝`;
+  const body = L.feedbackPayload({ submissionId: 'g', kind: 'wrong', text: 'x', correct: '', answer: { ...answer, question } });
+  assert.equal([...body.answer.question].length, 2000);
+  assert.ok(!/[\ud800-\udbff]$/.test(body.answer.question));
+  assert.ok(body.answer.question.endsWith('😀'));
+});

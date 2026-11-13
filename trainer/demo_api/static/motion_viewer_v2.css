@@ -535,7 +535,6 @@ button.chip:hover { background: var(--raised-hover); color: var(--ink); }
 }
 
 /* ── 화면 나누기(2026-11-13 B안): 경계선 가운데 손잡이로 뷰어·채팅을 접고 폭을 바꾼다 ── */
-.v2-main { grid-template-rows: minmax(300px, 1fr) auto auto; }
 .ask { position: relative; }
 .split {
   position: absolute; top: 50%; left: 0; z-index: 6; transform: translate(-50%, -50%);
@@ -560,6 +559,7 @@ button.chip:hover { background: var(--raised-hover); color: var(--ink); }
 .rail .zone-tag { padding-inline: 6px; }
 
 @media (min-width: 901px) {
+  .v2-main { grid-template-rows: minmax(300px, 1fr) auto auto; }
   .v2-grid { grid-template-columns: minmax(0, 1fr) var(--chat-w, clamp(420px, 32vw, 640px)); }
   .v2-grid.is-chat-off { grid-template-columns: minmax(0, 1fr) 56px; }
   .v2-grid.is-chat-off .ask { display: none; }
@@ -658,7 +658,7 @@ button.chip:hover { background: var(--raised-hover); color: var(--ink); }
 
 /* ── 참고 첨부: 채팅만 볼 때만 답 안에 보인다. 누르면 크게 ── */
 .att { display: none; gap: 12px; margin-top: 12px; white-space: normal; }
-.v2-grid.is-viewer-off .att { display: grid; }
+@media (min-width: 901px) { .v2-grid.is-viewer-off .att { display: grid; } }
 .att-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px; }
 .att-item { display: grid; gap: 4px; min-width: 0; margin: 0; }
 .att-item.is-wide { grid-column: 1 / -1; }

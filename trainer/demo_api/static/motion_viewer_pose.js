@@ -765,7 +765,7 @@
   pathCanvas.onauxclick = event => event.preventDefault();
   pathCanvas.onwheel = event => { event.preventDefault(); applyCamera(camera.dolly(event.deltaY < 0 ? 1 : -1)); };
   addEventListener('keydown', event => {
-    if (event.target instanceof HTMLInputElement || event.target instanceof HTMLSelectElement) return;
+    if (window.MotionViewerCamera.isTyping(event.target)) return;
     pressedKeys.add(event.code);
     if (event.code === 'KeyF') { event.preventDefault(); refit(); }
   });
