@@ -288,3 +288,94 @@ def test_shared_navigation_renders_an_accessible_bounded_feedback_form(page):
     assert nodes['copilot-feedback-name'][1]['maxlength'] == '80'
     assert nodes['copilot-feedback-state'][1]['aria-live'] == 'polite'
     assert portal_document(document, page) == document
+
+
+def test_answer_column_migration_tolerates_another_worker_adding_it_first(tmp_path):
+    """두 작업자가 동시에 열을 더하려 해도 늦은 쪽이 실패하지 않는다."""
+    import sqlite3
+    from trainer.demo_api.feedback import _SCHEMA, _add_answer_column
+    conn = sqlite3.connect(tmp_path / "race.db")
+    conn.execute(_SCHEMA)
+    _add_answer_column(conn)
+    _add_answer_column(conn)
+    columns = [row[1] for row in conn.execute("PRAGMA table_info(user_feedback)")]
+    assert columns.count("answer_context") == 1
+
+
+def admin_login(client):
+    login = client.post('/admin/api/manage/login', json={'username': 'reviewer', 'password': 'test-feedback-password'}, headers={'Origin': 'http://testserver'})
+    assert login.status_code == 200
+
+
+def seed_answers(client):
+    client.post('/api/feedback', json=payload(message='일반 의견'))
+    wrong = client.post('/api/feedback', json=payload(kind='bug', message='틀렸습니다', answer=answer_context())).json()
+    client.post('/api/feedback', json=payload(message='=SUM(A1)', answer=answer_context(correct_answer='+1 맞는 답')))
+    return wrong['feedback_id']
+
+
+def test_admin_downloads_answer_feedback_jsonl_only_answer_rows(feedback_client):
+    import json
+    client, _ = feedback_client
+    wrong_id = seed_answers(client)
+    admin_login(client)
+    response = client.get('/admin/api/feedback/answers.jsonl')
+    assert response.status_code == 200
+    assert response.headers['content-type'] == 'application/x-ndjson; charset=utf-8'
+    assert response.headers['cache-control'] == 'no-store'
+    assert response.headers['content-disposition'].startswith('attachment; filename="answer_feedback_') and response.headers['content-disposition'].endswith('.jsonl"')
+    rows = [json.loads(line) for line in response.content.decode('utf-8').splitlines()]
+    assert [r['label'] for r in rows] == ['wrong_answer', 'memo']
+    first = rows[0]
+    assert first['feedback_id'] == wrong_id and first['question'] == '어느 구역이 문제인가요?' and first['correct_answer'] == '4번 구역입니다.'
+    assert first['message'] == '틀렸습니다' and first['conversation_id'] == 'conv-1' and first['map_num'] == 2 and first['server_version']
+    assert '어느 구역이 문제인가요?' in response.content.decode('utf-8')  # not \u-escaped
+    client.post('/admin/api/manage/feedback-status', json={'feedback_id': wrong_id, 'status': 'done'},
+                headers={'Origin': 'http://testserver', 'X-DB-CSRF': client.get('/admin/api/manage/status').json()['csrf_token']})
+    done = client.get('/admin/api/feedback/answers.jsonl', params={'status': 'done'}).content.decode().splitlines()
+    assert len(done) == 1 and json.loads(done[0])['feedback_id'] == wrong_id
+    assert client.get('/admin/api/feedback/answers.jsonl', params={'status': 'bogus'}).status_code == 422
+
+
+def test_admin_downloads_answer_feedback_csv_with_bom_and_formula_guard(feedback_client):
+    import csv, io
+    client, _ = feedback_client
+    seed_answers(client)
+    admin_login(client)
+    response = client.get('/admin/api/feedback/answers.csv')
+    assert response.status_code == 200 and response.headers['content-type'] == 'text/csv; charset=utf-8'
+    assert response.content.startswith('﻿'.encode('utf-8')) and response.headers['content-disposition'].endswith('.csv"')
+    table = list(csv.reader(io.StringIO(response.content.decode('utf-8-sig'))))
+    assert table[0][:5] == ['피드백 ID', '접수 시각(UTC)', '처리 상태', '종류(답변 오류/답변 메모)', '메모'] and len(table[0]) == 19
+    assert [r[3] for r in table[1:]] == ['답변 오류', '답변 메모']
+    assert table[2][4] == "'=SUM(A1)" and table[2][5] == "'+1 맞는 답"
+
+
+@pytest.mark.parametrize('route', ['answers.jsonl', 'answers.csv'])
+def test_answer_feedback_download_requires_admin_session(feedback_client, route):
+    client, _ = feedback_client
+    seed_answers(client)
+    response = client.get('/admin/api/feedback/' + route)
+    assert response.status_code == 401
+    assert '어느 구역이' not in response.text and '틀렸습니다' not in response.text
+
+
+def test_answer_feedback_download_is_empty_without_table_or_column(feedback_client):
+    import re
+    client, path = feedback_client
+    admin_login(client)
+    jsonl, csv_ = client.get('/admin/api/feedback/answers.jsonl'), client.get('/admin/api/feedback/answers.csv')
+    assert jsonl.status_code == 200 and jsonl.content == b''
+    assert csv_.status_code == 200 and len(csv_.content.decode('utf-8-sig').strip().splitlines()) == 1
+    old = re.sub(r"\n answer_context TEXT,?", '', feedback_module()._SCHEMA).replace(' status_updated_by TEXT,', ' status_updated_by TEXT')
+    with sqlite3.connect(path) as conn:
+        conn.execute(old)
+    assert client.get('/admin/api/feedback/answers.jsonl').content == b''
+    assert len(client.get('/admin/api/feedback/answers.csv').content.decode('utf-8-sig').strip().splitlines()) == 1
+
+
+def test_feedback_list_links_to_answer_downloads(feedback_client):
+    client, _ = feedback_client
+    text = client.get('/admin/feedback').text
+    assert 'href="/admin/api/feedback/answers.jsonl"' in text and 'href="/admin/api/feedback/answers.csv"' in text
+    assert '답변 피드백 내려받기(JSONL)' in text and '관리자 로그인' in text
