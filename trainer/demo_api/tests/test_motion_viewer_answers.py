@@ -280,7 +280,17 @@ def test_v2_hud_corrections_do_not_say_small_difference_for_a_zone_the_coating_p
     script = _v2_static("motion_viewer_v2.js")
     note = script[script.index("function renderHudFix"):script.index("$('v2HudFixList')")]
     assert "targetOf()?.zones" in note and "'below'" in note and "'above'" in note and "grade_labels" in note
-    assert note.index("coatNote ||") < note.index("전문가 기록과 차이가 작습니다")   # 도막 등급이 먼저
+    # 교정 문장이 없다는 것은 자세가 좋다는 뜻이 아니다(모델 결과, 원인 모름. 2026-11-13 사용자 결정). 사실만 흐리게 적는다.
+    assert note.index("coatNote ||") < note.index("교정 관절 결과 없음")   # 도막 등급이 먼저
+    assert "차이가 작습니다" not in script
+
+
+def test_v2_never_claims_no_joint_needs_correction() -> None:
+    # 점수 60%인 분사에 '교정할 관절이 없습니다'가 붙었다. 의도한 문구가 아니라 중립 사실 문구로 바꾼다.
+    for name in ("motion_viewer_v2.js", "motion_viewer_pose.js"):
+        script = _v2_static(name)
+        assert "교정할 관절" not in script and "차이가 작습니다" not in script, name
+    assert "'교정 관절 결과 없음'" in _v2_static("motion_viewer_v2.js")
 
 
 def test_v2_coating_target_rows_use_server_words_and_the_shared_sort() -> None:

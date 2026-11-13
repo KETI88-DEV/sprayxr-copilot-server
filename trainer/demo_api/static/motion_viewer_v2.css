@@ -376,6 +376,7 @@ select:hover { background: var(--raised-hover); }
 .pose-empty, .chart-empty { align-self: center; margin: 0; color: var(--ink-3); font-size: 13px; }
 .now { min-height: 20px; margin: 0; overflow: hidden; color: var(--ink-2); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
 .now b { color: var(--ink); font-weight: 600; }
+.now .is-muted, .hud-fix-list .is-muted { color: var(--ink-3); }   /* '교정 관절 결과 없음': 자세가 좋다는 말이 아니라 결과가 없다는 사실 */
 
 /* 순서: 위 = 권장, 아래 = 이 기록. 칩은 무채색 바탕 + Zone 색 2px 밑줄. 같은 자리는 흐리게, 자리가 다른 Zone만 곡선 */
 .order-chart { position: relative; display: grid; grid-template-rows: auto minmax(24px, 1fr) auto; align-content: center; }

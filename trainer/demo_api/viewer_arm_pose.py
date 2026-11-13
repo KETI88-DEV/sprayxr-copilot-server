@@ -227,7 +227,7 @@ def arm_pose_answer(arm: Mapping[str, Any], *, current: bool, playback: Mapping[
             when = "직전 분사" if isinstance(end, (int, float)) and isinstance(seconds, (int, float)) and seconds > end else "재생 시점의 분사"
             limited = sequence.get("confidence") == "limited"
             # 엔진이 제한을 건 채점은 정상 자세로 확정하지 않는다.
-            notes = [sequence.get("correction") or ("" if limited else "교정할 관절은 없습니다."),
+            notes = [sequence.get("correction") or ("" if limited else "교정 관절 결과는 없습니다."),
                      "입력 품질 제한이 있어 참고용 유사도입니다." if limited else ""]
             # 분사 하나가 여러 Zone에 걸칠 수 있어 Zone은 적지 않는다(뷰어 Zone 카드와 어긋나 보인다).
             return (f"{when}({sequence['sequence_id']})는 숙련자 팔 자세 대비 자세 유사도 {sequence['similarity_percent']}%입니다. "

@@ -621,7 +621,7 @@
     const limited = sequence.confidence === 'limited';
     byId('armPoseSequence').textContent = `${live ? '현재' : '직전'} 분사 ${sequence.sequence_id}`;
     byId('armPoseSequenceScore').textContent = `${sequence.similarity_percent}%`;
-    byId('armPoseCorrection').textContent = [sequence.correction || (limited ? '' : '교정할 관절이 없습니다.'),
+    byId('armPoseCorrection').textContent = [sequence.correction || (limited ? '' : '교정 관절 결과는 없습니다.'),
       limited ? '입력 품질 제한이 있어 참고용입니다.' : ''].filter(Boolean).join(' ');
   }
 

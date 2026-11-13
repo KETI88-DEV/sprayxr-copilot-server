@@ -67,9 +67,14 @@
     if (index < 0) index = frames.length - 1;
     seekToIndex(index);
   };
-  const seekToZone = (zoneId) => {
-    const index = (record?.frames || []).findIndex((frame) => frame.spraying && String(frame.zone_id) === String(zoneId));
-    if (index >= 0) seekToIndex(index);
+  // 표본에 분사 프레임이 없는 Zone 은 그 Zone 의 첫 프레임으로 옮긴다(2026-11-13 사용자 결정). 프레임이 아예 없으면 누른 단추에 까닭을 적는다.
+  const seekToZone = (zoneId, source) => {
+    const index = L.zoneSeekIndex(record?.frames, zoneId);
+    if (index >= 0) { seekToIndex(index); return; }
+    if (!source) return;
+    source.disabled = true;
+    source.title = `${zoneText(zoneId)} · 이 기록에 프레임 없음`;
+    source.setAttribute('aria-label', source.title);
   };
 
   // ── 결과 한 줄 ─────────────────────────────────────────────
@@ -123,12 +128,12 @@
     button.title = empty ? '' : `${zoneText(anchor.zone_id)} ${corrections.length ? `교정 ${corrections.length}건과 ` : ''}항목별 비교`;
     button.setAttribute('aria-label', button.title || '교정');
     if (panel.hidden) return;
-    // 자세 교정이 없어도 도막 등급이 below·above 면 '차이가 작습니다'는 도막 패널과 반대로 읽힌다. 서버가 낸 등급 글자를 그대로 말한다.
+    // 자세 교정이 없어도 도막 등급이 below·above 면 그 등급을 먼저 말한다(도막 패널과 같은 말). 서버가 낸 등급 글자를 그대로 말한다.
     const coat = (targetOf()?.zones || []).find((row) => String(row.zone_id) === String(anchor.zone_id) && (row.map_num == null || String(row.map_num) === String(anchor.map_num)));
     const coatNote = coat && (coat.grade === 'below' || coat.grade === 'above') && coat.thickness_um != null
       ? `도막 ${targetOf().grade_labels?.[coat.grade] ?? coat.grade} · ${Math.round(Number(coat.thickness_um))} µm` : '';
-    const lines = corrections.length ? corrections : [coatNote || '전문가 기록과 차이가 작습니다'];
-    $('v2HudFixList').replaceChildren(...lines.map((line) => el('li', null, line)));
+    const lines = corrections.length ? corrections : [coatNote || '교정 관절 결과 없음'];
+    $('v2HudFixList').replaceChildren(...lines.map((line) => el('li', line === '교정 관절 결과 없음' ? 'is-muted' : null, line)));
     $('v2ZoneDetail').replaceChildren(...metrics.map((metric) => {
       const item = el('div', 'metric');
       const track = el('div', 'metric-track');
@@ -255,8 +260,10 @@
     const now = $('v2PoseNow');
     if (!current) { now.textContent = '첫 분사 전입니다'; return; }
     const limited = current.confidence === 'limited';
+    // 교정 문장이 없다고 자세가 좋다는 뜻은 아니다(모델 결과, 원인 모름). 사실만 흐리게 적는다.
     now.replaceChildren(el('b', null, current.sequence_id), ` · ${zoneText(current.zone_id)} · ${percent(current.similarity_percent)}`
-      + (limited ? ' · 참고용(입력 품질 제한)' : '') + ` · ${current.correction || (limited ? '' : '교정할 관절이 없습니다')}`.replace(/ · $/, ''));
+      + (limited ? ' · 참고용(입력 품질 제한)' : ''),
+      ...(current.correction ? [` · ${current.correction}`] : limited ? [] : [' · ', el('span', 'is-muted', '교정 관절 결과 없음')]));
     now.title = now.textContent;
   }
 
@@ -306,10 +313,10 @@
         if (item.actualIndex != null) chip.dataset.to = String(item.actualIndex);
         chip.style.setProperty('--zone', colorOf(item.zone));
         const skipped = item.state === 'skipped';
-        chip.title = skipped ? `${zoneText(item.zone)} · 칠하지 않음` : `${zoneText(item.zone)}로 이동`;
+        chip.title = skipped ? `${zoneText(item.zone)} · 칠하지 않음` : `${zoneText(item.zone)} 보기`;
         chip.setAttribute('aria-label', chip.title);
         chip.disabled = skipped;
-        chip.addEventListener('click', () => seekToZone(item.zone));
+        chip.addEventListener('click', (event) => seekToZone(item.zone, event.currentTarget));
         chips.append(chip);
       }
       line.append(el('span', null, label), chips);
@@ -471,7 +478,7 @@
         `미도장 ${shareText(Number(row.unpainted_fraction) || 0)}`, normal.length === 2 ? `정상 ${normal[0]}~${normal[1]} µm` : '', target.basis_label].filter(Boolean).join(' · ');
       button.title = total ? `${summary}\n칠한 면적: ${shares.join(', ')}` : summary;
       button.setAttribute('aria-label', button.title.replaceAll('\n', '. '));
-      button.addEventListener('click', () => seekToZone(row.zone_id));
+      button.addEventListener('click', (event) => seekToZone(row.zone_id, event.currentTarget));
       return button;
     }));
     markCurrentZone();
@@ -508,7 +515,7 @@
       row.append(name, track, el('span', 'coat-value', `${zone.deviation >= 0 ? '+' : '−'}${Math.abs(zone.deviation).toFixed(0)}%`));
       row.title = `${zoneText(zone.zone_id)} · ${Number(zone.actual_um).toFixed(1)} µm / 전문가 ${Number(zone.reference_um).toFixed(1)} µm`;
       row.setAttribute('aria-label', `${row.title} (${zone.deviation >= 0 ? '두꺼움' : '얇음'} ${Math.abs(zone.deviation).toFixed(0)}%)`);
-      row.addEventListener('click', () => seekToZone(zone.zone_id));
+      row.addEventListener('click', (event) => seekToZone(zone.zone_id, event.currentTarget));
       return row;
     }));
     markCurrentZone();

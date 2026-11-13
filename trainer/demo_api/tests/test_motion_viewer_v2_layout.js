@@ -155,9 +155,20 @@ test('도막 목표 대비 줄 순서: 목표 미만(얇은 것부터) → 1.5�
 
 test('전문가 지도 범례: 최소·중앙·최대를 색 띠 위 자리에 놓는다(µm 척도면 그 척도 안에서)', () => {
   const thickness = { minimum: 100, median: 150, maximum: 300 };
-  assert.deepEqual([...L.legendStops(thickness, null)].map((s) => [s.label, s.at]), [['100 µm', 0], ['중앙 150', 0.25], ['300 µm', 1]]);
+  assert.deepEqual([...L.legendStops(thickness, null)].map((s) => [s.label, s.at]), [['100 µm', 0], ['중앙 150 µm', 0.25], ['300 µm', 1]]);
   assert.deepEqual([...L.legendStops(thickness, { minimum: 0, maximum: 400 })].map((s) => s.at), [0.25, 0.375, 0.75]);
   assert.deepEqual([...L.legendStops({ minimum: 100, maximum: 300 }, null)].map((s) => s.label), ['100 µm', '300 µm']);
   assert.deepEqual([...L.legendStops(null, null)], []);
   assert.deepEqual([...L.legendStops({ minimum: 5, median: 5, maximum: 5 }, null)].map((s) => s.at), [0.5]);
+});
+
+test('Zone 으로 옮기기: 그 Zone 의 첫 분사 프레임, 분사 프레임이 없으면 그 Zone 의 첫 프레임, 아예 없으면 -1', () => {
+  const frames = [
+    { zone_id: null, spraying: false }, { zone_id: '13', spraying: false }, { zone_id: '2', spraying: false },
+    { zone_id: '2', spraying: true }, { zone_id: 13, spraying: false },
+  ];
+  assert.equal(L.zoneSeekIndex(frames, '2'), 3);     // 분사 프레임이 먼저
+  assert.equal(L.zoneSeekIndex(frames, 13), 1);      // 표본에 분사가 없으면 첫 프레임(2026-11-13 사용자 결정)
+  assert.equal(L.zoneSeekIndex(frames, '7'), -1);
+  assert.equal(L.zoneSeekIndex(null, '2'), -1);
 });
