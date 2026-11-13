@@ -251,6 +251,36 @@ class IntegrationTests(unittest.TestCase):
         self.assertEqual(result.get("count"), 6)
         self.assertEqual(result.get("trend"), "increasing")
 
+    def test_timeseries_drops_oldest_session_past_the_limit(self) -> None:
+        from mcp_servers import timeseries
+
+        self.reset_state()
+        client = TestClient(app)
+        data = {"timestamp": 1.0, "speed": 0.5, "distance": 300.0, "angle": 90.0}
+        for index in range(timeseries._MAX_SESSIONS + 1):
+            client.post("/timeseries/update", json={"session_id": f"s{index}", "data": data})
+
+        def result_of(session_id: str) -> JsonDict:
+            response = client.get("/timeseries/query", params={"session_id": session_id})
+            return to_dict(to_dict(response_json(response))["result"])
+
+        self.assertEqual(result_of("s0").get("trend"), "no_data")
+        self.assertEqual(result_of(f"s{timeseries._MAX_SESSIONS}").get("count"), 1)
+
+    def test_timeseries_keeps_only_latest_points(self) -> None:
+        from unittest.mock import patch
+
+        self.reset_state()
+        client = TestClient(app)
+        with patch("mcp_servers.timeseries._MAX_POINTS", 3):
+            for index in range(5):
+                data = {"timestamp": float(index), "speed": 0.5, "distance": 300.0, "angle": 90.0}
+                client.post("/timeseries/update", json={"session_id": "capped", "data": data})
+        response = client.get("/timeseries/query", params={"session_id": "capped"})
+        result = to_dict(to_dict(response_json(response))["result"])
+        self.assertEqual(result.get("count"), 3)
+        self.assertEqual(to_dict(result["latest"]).get("timestamp"), 4.0)
+
     def test_timeseries_missing_session(self) -> None:
         self.reset_state()
         client = TestClient(app)
