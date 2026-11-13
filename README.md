@@ -136,9 +136,10 @@ git push --atomic origin main refs/tags/v2.7.3
 
 ### 배포 브랜치 `release` (2026-11-13부터)
 
-- `main`은 개발 통합 브랜치이고, 배포할 내용만 `release` 브랜치에 반영합니다. 버전 태그와 GitHub 릴리스는 `release`의 커밋에 답니다.
-- 배포 PC는 `release` 브랜치를 받아 시험합니다: `git fetch origin release && git switch release`(처음 한 번), 이후 `git pull --ff-only`.
-- 올리는 순서: `main`에서 확인을 마친 커밋을 `release`에 fast-forward로 반영하고, 그 커밋에 태그를 달아 `git push --atomic origin main release refs/tags/vX.Y.Z`로 함께 올립니다.
+- `main`은 개발 통합 브랜치입니다. `release` 브랜치와 버전 태그에는 API 서버(agent-api, MCP) 운영에 필요한 코드·설정·배포 정의만 담습니다(`deploy/release/release_files.txt`). 문서, 테스트, 학습·평가 스크립트, 웹 UI(demo-ui)는 넣지 않습니다.
+- `release`는 main 이력과 끊긴 별도 이력입니다. 배포 PC는 `git clone --single-branch --branch release <저장소 주소>`로 받고, 이후 `git pull --ff-only`로 갱신합니다.
+- 릴리스 만들기: `main`에서 버전·CHANGELOG를 올린 뒤 `deploy/release/make_release.sh main vX.Y.Z`를 실행합니다. 스크립트가 운영 파일만 담은 커밋과 태그를 만들고, import 확인·push·GitHub 릴리스 게시 명령을 출력합니다. 릴리스 워크플로는 `release` 태그에서 돌지 않으므로 게시는 출력된 `gh release create`로 합니다.
+- 운영 코드에 새 모듈이나 데이터 파일이 생기면 `release_files.txt`에 더합니다.
 - 개발 문서(설계·측정·보고 자료)는 어느 브랜치에도 올리지 않습니다(`docs/repository-hygiene.md`).
 
 ## 관련 문서

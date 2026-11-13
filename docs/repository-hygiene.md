@@ -24,7 +24,7 @@
 
 ## 배포 PC 정리
 
-0. 배포 PC는 `release` 브랜치를 받는다(`git fetch origin release && git switch release`). `main`은 개발 통합 브랜치다.
+0. 배포 PC는 운영 코드만 담은 `release` 브랜치를 받는다(`git clone --single-branch --branch release <저장소 주소>`). `release`에는 개발 문서와 테스트가 없다. `main`은 개발 통합 브랜치다.
 1. 배포 PC의 사본에서 `git pull --ff-only`를 실행하면 git이 위 파일을 작업 트리에서 지운다. 미커밋 변경이 있으면 먼저 보존한다. 강제 checkout/reset은 하지 않는다.
 2. `deploy/purge_internal_docs.sh`로 남은 사본을 확인하고, `--execute`로 지운다. 이 스크립트는 `.gitignore`의 "내부 개발 문서" 절에 적힌 경로만 지우고, 추적 파일은 건드리지 않는다.
 3. 이력까지 없는 사본이 필요하면 `git clone --depth 1 --branch main <저장소 주소>`로 다시 받는다. 얕은 클론에는 지금 커밋의 파일만 들어 있다.
