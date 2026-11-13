@@ -184,7 +184,7 @@ def test_spark_serving_config_satisfies_the_openai_backend_contract() -> None:
     assert config["llm"]["backend"] == "openai"
     assert settings.base_url.endswith("/v1")
     assert (settings.sampling.temperature, settings.sampling.top_p, settings.sampling.top_k) == (0.3, 0.8, 20)
-    assert config["generation"]["repetition_penalty"] == 1.15
+    assert config["generation"]["repetition_penalty"] == 1.0
     assert config["llm"]["max_model_len"] == baseline["llm"]["max_model_len"] == 8192
     assert config["llm"]["pass_native_tools"] is False
     assert config["llm"]["tokenizer_path"].startswith("/")

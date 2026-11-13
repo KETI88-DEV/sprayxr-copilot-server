@@ -5,7 +5,7 @@
 선박 도장·블라스팅 훈련 시뮬레이터와 연동해 작업자에게 피드백과 훈련 결과를 제공하는 AI Co-Pilot 서버입니다.
 전문가 기준 데이터와 훈련 기록을 비교하고, 작업 자세와 도장 경로를 시각화하며, 훈련 중 발생하는 질문에 답변합니다.
 
-현재 버전은 **v3.0.1**입니다. [버전별 변경 이력](CHANGELOG.md)과 [GitHub 릴리스](https://github.com/KETI88-DEV/sprayxr-copilot-server/releases)에서 추가 기능을 확인할 수 있습니다.
+현재 버전은 **v3.0.2**입니다. [버전별 변경 이력](CHANGELOG.md)과 [GitHub 릴리스](https://github.com/KETI88-DEV/sprayxr-copilot-server/releases)에서 추가 기능을 확인할 수 있습니다.
 
 ## 주요 기능
 
@@ -132,6 +132,14 @@ git push --atomic origin main refs/tags/v2.7.3
 게시 상태는 저장소의 **Actions → Publish release**, 게시된 내용은 **Releases**에서 확인합니다. 자동 게시와 재게시 대상은 이 절차가 포함된 **v2.7.0 이후**의 태그입니다. 필요하면 Actions의 **Run workflow**에서 해당 태그를 지정해 다시 게시할 수 있습니다. 최신 버전으로 지정하려면 **make_latest**를 선택합니다. 이전 버전이 최신 버전을 덮어쓰는 것은 차단합니다. `v2.6.0`은 소스 비교용 기준 태그이며 자동 게시 대상이 아닙니다. 태그는 이동하거나 덮어쓰지 않습니다.
 릴리스 워크플로를 수정해 `main`에 반영하면 현재 소스 버전의 기존 태그를 다시 게시·검증합니다. 게시 결과는 Actions 요약과 `refs/notes/releases/{태그}`의 Git 메모에 남습니다.
 소스 릴리스 게시와 운영 서버 배포는 별도 절차입니다. 태그를 올려도 운영 서버가 자동으로 재시작되지는 않습니다.
+
+
+### 배포 브랜치 `release` (2026-11-13부터)
+
+- `main`은 개발 통합 브랜치이고, 배포할 내용만 `release` 브랜치에 반영합니다. 버전 태그와 GitHub 릴리스는 `release`의 커밋에 답니다.
+- 배포 PC는 `release` 브랜치를 받아 시험합니다: `git fetch origin release && git switch release`(처음 한 번), 이후 `git pull --ff-only`.
+- 올리는 순서: `main`에서 확인을 마친 커밋을 `release`에 fast-forward로 반영하고, 그 커밋에 태그를 달아 `git push --atomic origin main release refs/tags/vX.Y.Z`로 함께 올립니다.
+- 개발 문서(설계·측정·보고 자료)는 어느 브랜치에도 올리지 않습니다(`docs/repository-hygiene.md`).
 
 ## 관련 문서
 

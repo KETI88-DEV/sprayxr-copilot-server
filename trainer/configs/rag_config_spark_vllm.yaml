@@ -83,7 +83,9 @@ generation:
   do_sample: true
   top_p: 0.8
   top_k: 20
-  repetition_penalty: 1.15
+  # 1.15는 같은 낱말이 다시 나올 자리(예: 두 번째 "과도한")에서 한자 토큰을 밀어 올렸다.
+  # 2026-11-12 운영 요청 재생: 1.15 한자 11/20, 1.0 0/20. Qwen3.6 모델 카드 권장값도 1.0이다.
+  repetition_penalty: 1.0
   enable_thinking: false
 prompt:
   system: '너는 선박 도장 분야 전문 AI 어시스턴트이다. 제공된 문서를 근거로 정확한 기술 정보를 제공하고, 답변 마지막에 근거 문서 ID를

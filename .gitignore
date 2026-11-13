@@ -133,7 +133,7 @@ demo-ui/coverage/
 /deploy/spark/models/*
 !deploy/spark/models/*.manifest.json
 
-# 내부 개발 문서 — mjkim이 추가한 117개 파일. 2026-11-13부터 별도 비공개 저장소(sprayxr-copilot-internal)에서 관리한다.
+# 내부 개발 문서 — mjkim이 추가한 117개 파일. 2026-11-13부터 mjkim의 개발 서버에만 둔다(원격 저장소 없음).
 # 다른 개발자가 추가한 파일은 여기에 넣지 않는다. 배포 PC가 이 커밋을 pull하면 아래 파일이 작업 트리에서 지워진다(docs/repository-hygiene.md).
 /.agents/skills/frontend-design/LICENSE.txt
 /.agents/skills/frontend-design/SKILL.md
