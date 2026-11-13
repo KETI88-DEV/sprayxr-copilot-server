@@ -10,6 +10,7 @@ deploy/spark/scripts/bench_stt_candidate.py
 deploy/spark/scripts/bench_voice_query.py
 deploy/spark/scripts/bundle_manifest.py
 deploy/spark/scripts/check_tokenizer_parity.py
+deploy/spark/scripts/health_sample.sh
 deploy/spark/scripts/import_legacy_copilot.py
 deploy/spark/scripts/legacy_snapshot_manifest.py
 deploy/spark/scripts/prepare_bundle.py
