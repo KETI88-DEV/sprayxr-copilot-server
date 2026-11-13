@@ -164,6 +164,7 @@ trainer/demo_api/static/motion_viewer_pose.js
 trainer/demo_api/static/motion_viewer_v2.css
 trainer/demo_api/static/motion_viewer_v2.html
 trainer/demo_api/static/motion_viewer_v2.js
+trainer/demo_api/static/motion_viewer_v2_layout.js
 trainer/demo_api/static/training_data.js
 trainer/demo_api/telemetry_contracts.py
 trainer/demo_api/telemetry_router.py
