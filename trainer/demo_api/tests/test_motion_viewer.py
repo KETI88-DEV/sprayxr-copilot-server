@@ -220,7 +220,7 @@ def _store_sequence(store: SequenceStore, *, sequence_id: str = "SEQ-020") -> di
 
 
 def test_motion_viewer_page_explains_the_aggregated_expert_reference(tmp_path: Path) -> None:
-    response = _client(tmp_path).get("/motion-viewer")
+    response = _client(tmp_path).get("/motion-viewer/v1")
 
     assert response.status_code == 200
     assert "도장 경로와 작업 자세를 전문가 기준으로 비교합니다." in response.text
@@ -872,13 +872,13 @@ def test_trainee_motion_uses_all_expert_sessions_instead_of_trainee_repetitions(
 
 
 def test_motion_viewer_page_exposes_pose_comparison_contract(tmp_path: Path) -> None:
-    response = _client(tmp_path).get("/motion-viewer")
+    response = _client(tmp_path).get("/motion-viewer/v1")
 
     assert response.status_code == 200
     for text in (
         "작업 자세 비교 평가",
         "도장 경로와 작업 자세를 전문가 기준으로 비교합니다.",
-        '<a class="v2-switch" href="/motion-viewer/v2">v2 화면으로 전환',
+        '<a class="v2-switch" href="/motion-viewer">새 화면으로 전환',
         "작업자",
         "전문가 작업 유사도",
         "작업 개선 안내",
@@ -929,7 +929,7 @@ def test_pose_summary_uses_wide_zone_metric_rows_with_centered_label_and_progres
     tmp_path: Path,
 ) -> None:
     client = _client(tmp_path)
-    page = client.get("/motion-viewer")
+    page = client.get("/motion-viewer/v1")
     script = client.get("/motion-viewer/assets/motion_viewer_pose.js")
     style = client.get("/motion-viewer/assets/motion_viewer_pose.css")
 
@@ -957,7 +957,7 @@ def test_pose_guidance_is_scoped_to_current_zone_and_speed_select_is_readable(
     tmp_path: Path,
 ) -> None:
     client = _client(tmp_path)
-    page = client.get("/motion-viewer")
+    page = client.get("/motion-viewer/v1")
     script = client.get("/motion-viewer/assets/motion_viewer_pose.js")
 
     assert page.status_code == 200
@@ -971,7 +971,7 @@ def test_pose_guidance_is_scoped_to_current_zone_and_speed_select_is_readable(
 
 def test_playback_status_exposes_a_persistent_colored_zone_badge(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    page = client.get("/motion-viewer")
+    page = client.get("/motion-viewer/v1")
     script = client.get("/motion-viewer/assets/motion_viewer_pose.js")
 
     assert page.status_code == 200
@@ -984,7 +984,7 @@ def test_playback_status_exposes_a_persistent_colored_zone_badge(tmp_path: Path)
 
 def test_viewer_overlay_contains_a_matching_translucent_realtime_hud(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    page = client.get("/motion-viewer")
+    page = client.get("/motion-viewer/v1")
     script = client.get("/motion-viewer/assets/motion_viewer_pose.js")
 
     assert page.status_code == 200
@@ -1067,7 +1067,7 @@ def test_pose_assets_define_layers_and_interaction_states(tmp_path: Path) -> Non
 
 def test_skeleton_viewer_redraws_only_the_right_arm_from_the_measured_gun(tmp_path: Path) -> None:
     client = _client(tmp_path)
-    page = client.get("/motion-viewer")
+    page = client.get("/motion-viewer/v1")
     script = client.get("/motion-viewer/assets/motion_viewer_pose.js")
 
     assert page.status_code == 200
@@ -1089,7 +1089,7 @@ def test_motion_viewer_keeps_the_last_spraying_zone_and_gives_skeleton_more_heig
     tmp_path: Path,
 ) -> None:
     client = _client(tmp_path)
-    page = client.get("/motion-viewer")
+    page = client.get("/motion-viewer/v1")
     coating = client.get("/motion-viewer/assets/motion_viewer_coating.js")
 
     assert page.status_code == 200
@@ -1339,7 +1339,7 @@ def test_viewer_scripts_do_not_restate_the_band_rule() -> None:
 
 
 def test_coating_card_offers_both_bases_with_visible_labels(tmp_path: Path) -> None:
-    page = _client(tmp_path).get("/motion-viewer").text
+    page = _client(tmp_path).get("/motion-viewer/v1").text
 
     assert '<button id="coatingBasisTarget" class="active" type="button" aria-pressed="true">목표 대비</button>' in page
     assert '<button id="coatingBasisExpert" type="button" aria-pressed="false">전문가 대비</button>' in page
@@ -1357,3 +1357,16 @@ def test_v2_page_loads_the_layout_helpers_before_the_v2_script(tmp_path: Path) -
     assert script.status_code == 200
     assert script.headers["content-type"].startswith("text/javascript")
     assert "window.motionViewerV2Layout" in script.text
+
+
+def test_v2_is_the_main_viewer_and_the_old_screen_moves_to_v1(tmp_path: Path) -> None:
+    """2026-11-13 사용자 지시: v2가 기본 뷰어. 옛 화면은 /motion-viewer/v1, 예전 v2 주소도 그대로 열린다."""
+    client = _client(tmp_path)
+    main = client.get("/motion-viewer")
+    assert main.status_code == 200
+    assert 'id="v2Grid"' in main.text
+    assert client.get("/motion-viewer/v2").text == main.text
+    old = client.get("/motion-viewer/v1")
+    assert old.status_code == 200
+    assert 'id="v2Grid"' not in old.text
+    assert 'class="v2-switch" href="/motion-viewer"' in old.text
