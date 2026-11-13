@@ -34,7 +34,20 @@ const LONGEST = {
 };
 
 // v2 는 이동 문구를 'Zone 사이 이동'으로 바꿔 쓴다(motion_viewer_v2.js, 2026-11-13 재디자인).
-const V2_LONGEST = { realtimeHudActivity: 'Zone 사이 이동' };
+// 분사축 편차는 두 방향 사이 각이라 180° 까지 나온다(2026-11-13 HUD 폭 고정).
+const V2_LONGEST = { realtimeHudActivity: 'Zone 사이 이동', realtimeHudAxis: '180.0°' };
+
+test('v2 HUD 는 숨기는 칸도 자리를 남겨 폭이 흔들리지 않는다(이동 문구·교정 단추·교정 수)', () => {
+  const v2Js = fs.readFileSync(path.join(root, 'static/motion_viewer_v2.js'), 'utf8');
+  assert.equal(maxOf(v2Html, 'v2HudFixCount'), '99');
+  assert.match(v2Html.match(/<button id="v2HudFix"[^>]*>/)[0], /style="visibility: hidden"/);
+  assert.doesNotMatch(v2Html.match(/<button id="v2HudFix"[^>]*>/)[0], /\shidden[\s>]/);
+  // display:none 로 숨기면 칸이 빠져 폭이 바뀐다
+  assert.doesNotMatch(v2Js, /activityNode\.hidden|\$\('v2HudFix'\)\.hidden|button\.hidden\s*=/);
+  assert.match(v2Js, /activityNode\.style\.visibility = text === '분사 중' \? 'hidden' : ''/);
+  assert.match(v2Js, /button\.style\.visibility = empty \? 'hidden' : ''/);
+  assert.doesNotMatch(v2Css, /\.hud-fix span:empty\s*\{\s*display:\s*none/);
+});
 
 test('두 화면의 상태 막대 값 칸마다 가장 긴 값이 적혀 있다', () => {
   for (const [name, html] of [['v2', v2Html], ['기존', legacy]]) {

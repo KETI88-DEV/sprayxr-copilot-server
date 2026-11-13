@@ -99,7 +99,7 @@
   new MutationObserver(() => {
     const text = activityNode.textContent.trim();
     if (text === '이동 중') activityNode.textContent = 'Zone 사이 이동';
-    activityNode.hidden = text === '분사 중';
+    activityNode.style.visibility = text === '분사 중' ? 'hidden' : '';   // 자리는 남겨 HUD 폭이 흔들리지 않게 한다
   }).observe(activityNode, { childList: true, characterData: true, subtree: true });
 
   const usableMetric = (metric) => metric.available !== false && metric.similarity_percent != null;
@@ -115,11 +115,12 @@
     const metrics = (zone?.metrics || []).filter(usableMetric);
     const button = $('v2HudFix');
     const panel = $('v2HudPanel');
-    button.hidden = !corrections.length && !metrics.length;
-    panel.hidden = button.hidden || !hudOpen;
+    const empty = !corrections.length && !metrics.length;
+    button.style.visibility = empty ? 'hidden' : '';   // 숨겨도 자리는 남겨 HUD 폭이 흔들리지 않게 한다
+    panel.hidden = empty || !hudOpen;
     button.setAttribute('aria-expanded', String(!panel.hidden));
     $('v2HudFixCount').textContent = corrections.length ? String(corrections.length) : '';
-    button.title = button.hidden ? '' : `${zoneText(anchor.zone_id)} ${corrections.length ? `교정 ${corrections.length}건과 ` : ''}항목별 비교`;
+    button.title = empty ? '' : `${zoneText(anchor.zone_id)} ${corrections.length ? `교정 ${corrections.length}건과 ` : ''}항목별 비교`;
     button.setAttribute('aria-label', button.title || '교정');
     if (panel.hidden) return;
     // 자세 교정이 없어도 도막 등급이 below·above 면 '차이가 작습니다'는 도막 패널과 반대로 읽힌다. 서버가 낸 등급 글자를 그대로 말한다.

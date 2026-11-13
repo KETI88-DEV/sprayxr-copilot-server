@@ -35,10 +35,10 @@
         <span class="hud-zone"><b id="realtimeHudZone" data-max="Zone 대기">Zone 대기</b><span id="realtimeHudActivity" class="realtime-hud-activity" data-max="Zone 사이 이동">Zone 사이 이동</span></span>
         <span class="hud-item" title="속도"><i data-icon="gauge"></i><span id="realtimeHudSpeed" data-max="99,999 mm/s">—</span><span id="realtimeHudSpeedState" class="realtime-hud-state idle">대기</span></span>
         <span class="hud-item" title="이격거리"><i data-icon="ruler"></i><span id="realtimeHudDistance" data-max="9999 mm">—</span><span id="realtimeHudDistanceState" class="realtime-hud-state idle">대기</span></span>
-        <span class="hud-item" title="분사축 편차"><i data-icon="axis-3d"></i><span id="realtimeHudAxis" data-max="99.9°">—</span><span id="realtimeHudAxisState" class="realtime-hud-state idle">대기</span></span>
+        <span class="hud-item" title="분사축 편차"><i data-icon="axis-3d"></i><span id="realtimeHudAxis" data-max="180.0°">—</span><span id="realtimeHudAxisState" class="realtime-hud-state idle">대기</span></span>
         <span class="hud-item" title="도장 방향"><i data-icon="arrow-right-left"></i><span id="realtimeHudDirection" data-max="분석 중">—</span><span id="realtimeHudDirectionState" class="realtime-hud-state idle">대기</span></span>
         <span class="hud-item" title="도포 범위"><i data-icon="scan"></i><span id="realtimeHudCoverage" data-max="100%">—</span><span id="realtimeHudCoverageState" class="realtime-hud-state idle">대기</span></span>
-        <button id="v2HudFix" class="hud-fix" type="button" aria-expanded="false" aria-controls="v2HudPanel" hidden><i data-icon="list-checks"></i><span id="v2HudFixCount"></span></button>
+        <button id="v2HudFix" class="hud-fix" type="button" aria-expanded="false" aria-controls="v2HudPanel" style="visibility: hidden"><i data-icon="list-checks"></i><span id="v2HudFixCount" data-max="99"></span></button>
         <div id="v2HudPanel" class="hud-panel" hidden><ul id="v2HudFixList" class="hud-fix-list"></ul><div id="v2ZoneDetail" class="zone-detail"></div></div>
       </div>
       <details class="layers">

@@ -103,8 +103,9 @@ select:hover { background: var(--raised-hover); }
 #canvas { display: block; width: 100%; height: 100%; cursor: grab; touch-action: none; }
 #canvas:active { cursor: grabbing; }
 .hud {
-  position: absolute; top: 12px; left: 12px; max-width: calc(100% - 196px);
-  display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; padding: 6px 12px;
+  /* 폭은 가장 긴 값으로 고정된다. 1333 창에서도 한 줄에 들도록 칸 사이 12px, 오른쪽은 보기 단추(140px)+12px 여백만 비운다 */
+  position: absolute; top: 12px; left: 12px; max-width: calc(100% - 176px);
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 6px 12px;
   border: 1px solid var(--line); border-radius: 8px; background: rgba(7, 16, 31, .78); font-size: 13px;
 }
 /* 기존 스크립트가 HUD에 인라인으로 넣는 Zone 색 테두리와 투명도를 쓰지 않는다. Zone 색은 글자 앞 네모로만 보인다. */
@@ -135,7 +136,6 @@ select:hover { background: var(--raised-hover); }
 }
 .hud-fix:hover, .hud-fix[aria-expanded="true"] { background: var(--raised-hover); color: var(--ink); }
 .hud-fix .lucide { width: 14px; height: 14px; }
-.hud-fix span:empty { display: none; }
 .hud-panel { flex-basis: 100%; display: grid; gap: 8px; margin-top: 2px; padding: 8px 0 4px; border-top: 1px solid var(--line); }
 .hud-fix-list { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; color: var(--ink-2); }
 .gizmo { position: absolute; top: 12px; right: 12px; display: flex; gap: 4px; }
