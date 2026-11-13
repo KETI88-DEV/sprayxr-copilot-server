@@ -11,9 +11,9 @@
 
 번들 배치는 컨테이너 경로와 1:1이다(deploy/spark/compose.yaml 볼륨):
 
-    models/bge-m3/                                  embedding  -> agent-api /models/bge-m3
-    models/bge-reranker-v2-m3/                      reranker   -> agent-api /models/bge-reranker-v2-m3
-    output/indexes/{faiss.index,metadata.json}      rag_index  -> agent-api /output/indexes
+    models/KURE-v3/                                 embedding  -> agent-api /models/KURE-v3
+    models/KURE-Reranker-nano/                      reranker   -> agent-api /models/KURE-Reranker-nano
+    output/indexes/kure3-20261113/{faiss.index,metadata.json}  rag_index -> agent-api /output/indexes/kure3-20261113
     output/merged/qwen36_27b_shipcoat_v6_1_fp8/     model_fp8  -> vllm /models/shipcoat, agent-api 토크나이저
     output/merged/qwen36_27b_shipcoat_v6_1_bf16/    model_bf16 -> 롤백(선택)
     output/expert_reference/expert_arm_reference.json  mcp_pose_reference -> mcp ARM_REFERENCE_PATH (예전 리그)
@@ -59,10 +59,21 @@ _MODEL_REQUIRED = (
 GROUPS: dict[str, tuple[str, tuple[str, ...]]] = {
     "model_fp8": (FP8_MODEL_ROOT, _MODEL_REQUIRED),
     "model_bf16": (BF16_MODEL_ROOT, _MODEL_REQUIRED),
-    # search_index.load_embedder: SentenceTransformer(use_safetensors=True)
-    "embedding": ("models/bge-m3", ("config.json", "modules.json", "tokenizer.json", "model.safetensors", "1_Pooling/config.json")),
-    "reranker": ("models/bge-reranker-v2-m3", ("config.json", "tokenizer.json", "model.safetensors")),
-    "rag_index": ("output/indexes", ("faiss.index", "metadata.json")),
+    # search_index.load_embedder: SentenceTransformer(use_safetensors=True).
+    # config_sentence_transformers.json holds the "query: "/"passage: " prompts that encode_query and
+    # encode_document apply; without it the model loads and silently embeds without prompts.
+    # LICENSE·LICENSE-OpenMDW-1.1·NOTICE: KURE-v3 재배포 조건(Apache-2.0 + OpenMDW-1.1 고지).
+    "embedding": (
+        "models/KURE-v3",
+        (
+            "config.json", "modules.json", "tokenizer.json", "model.safetensors", "1_Pooling/config.json",
+            "config_sentence_transformers.json", "LICENSE", "LICENSE-OpenMDW-1.1", "NOTICE",
+        ),
+    ),
+    "reranker": ("models/KURE-Reranker-nano", ("config.json", "tokenizer.json", "model.safetensors")),
+    # 색인은 날짜가 붙은 하위 폴더에 둔다. 같은 마운트(/output/indexes) 안이라 예전 색인
+    # (output/indexes/faiss.index, bge-m3)이 그대로 남아 이미지·설정만 되돌리면 롤백된다.
+    "rag_index": ("output/indexes/kure3-20261113", ("faiss.index", "metadata.json")),
     # 팔 레퍼런스는 **필수**다. 이 그룹을 실으면서 이 파일을 빼면 MCP는 뜨지만 모든
     # 시퀀스가 reference_data_missing이 된다 — 조용히 채점이 비는 것을 verify가 잡아야 한다.
     # 리그마다 하나씩 둘 다 필수다 — 2026-10 아바타 기준이 빠지면 새 아바타 시퀀스가 대부분 판정 거절된다.

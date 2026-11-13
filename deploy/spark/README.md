@@ -13,7 +13,7 @@ DGX Spark(aarch64, GB10 128GB 통합 메모리, CUDA 13)에 올리는 배포 정
 |---|---|---|---|---|---|
 | `vllm` | `VLLM_IMAGE` (1순위 `vllm/vllm-openai:v0.29.0`, 대안 `nvcr.io/nvidia/vllm:26.08-py3`) | 8000 | `127.0.0.1:18000` | O | FP8 병합본 서빙. OpenAI 호환 API |
 | `mcp` | `images/agent.Dockerfile` target `mcp` | 8100 | 없음 | X | 도구 7종. 단일 replica |
-| `agent-api` | `images/agent.Dockerfile` target `agent-api` | 8120 | `127.0.0.1:58000` (`COPILOT_BIND`/`COPILOT_PORT`) | O (bge-m3, reranker) | `trainer.demo_api.app` live 모드, 단일 워커 |
+| `agent-api` | `images/agent.Dockerfile` target `agent-api` | 8120 | `127.0.0.1:58000` (`COPILOT_BIND`/`COPILOT_PORT`) | O (KURE-v3, KURE-Reranker-nano) | `trainer.demo_api.app` live 모드, 단일 워커 |
 | `web` | `images/web.Dockerfile` | 80 | `0.0.0.0:8080` | X | demo-ui 정적 파일. `/api` same-origin 프록시 |
 
 기동 순서는 `vllm`(healthy) → `mcp`(healthy) → `agent-api` → `web`이다. 통합 메모리 환경이라 vLLM이 먼저 메모리를 잡아야 `--gpu-memory-utilization` 계산이 흔들리지 않는다.
@@ -45,7 +45,7 @@ deploy/spark/
 ### 코드의 고정 경로
 
 - `agent_pipeline.py`와 `tool_calling_adapter.py`는 `/workspace/trainer/configs/{tool_schemas,tool_calling_protocol.json}`를 코드에 고정해 쓴다. 그래서 이미지의 `WORKDIR`을 `/workspace`로 두고 코드를 그 아래에 복사한다.
-- 설정의 자산 경로(`/models/bge-m3`, `/models/bge-reranker-v2-m3`, `/output/indexes/*`, `/output/merged/qwen36_27b_shipcoat_v6_1_fp8`)는 번들 안의 상대 경로와 1:1이다. compose 볼륨이 이 경로를 그대로 연결하므로 설정 파일을 고치지 않는다.
+- 설정의 자산 경로(`/models/KURE-v3`, `/models/KURE-Reranker-nano`, `/output/indexes/kure3-20261113/*`, `/output/merged/qwen36_27b_shipcoat_v6_1_fp8`)는 번들 안의 상대 경로와 1:1이다. compose 볼륨이 이 경로를 그대로 연결하므로 설정 파일을 고치지 않는다.
 
 ## 1. 번들 만들기 (A40 서버, 개발 컨테이너 안)
 
@@ -66,13 +66,13 @@ docker exec -w /workspace ship-paint-trainer nice -n 19 ionice -c3 python3 deplo
 
 번들에 들어가는 것(자산 경로 기준):
 
-- **bge-m3**
-  - HF 캐시 `refs/main` 스냅숏에는 `pytorch_model.bin`만 있다.
-  - `search_index`는 `use_safetensors=True`로 읽는데, 오프라인에서는 safetensors 자동 변환이 네트워크를 요구한다.
-  - 그래서 `refs/pr/130` 스냅숏(`9a0624b8`)의 `model.safetensors`를 main 스냅숏 파일과 합친 로컬 디렉터리를 만든다. `pytorch_model.bin`은 기본으로 제외한다.
-  - 2026-09-15에 `HF_HUB_OFFLINE=1`, CPU로 확인했다. 생성된 디렉터리를 `search_index.load_embedder`와 `load_reranker`로 로드하고 encode/predict까지 성공했다.
+- **임베딩 KURE-v3, 재정렬 KURE-Reranker-nano** (2026-11-13 교체. 그전은 bge-m3, bge-reranker-v2-m3)
+  - HF 캐시 `refs/main` 스냅숏을 그대로 넣는다. 둘 다 `model.safetensors`가 main에 있다.
+  - KURE-v3 폴더에는 `config_sentence_transformers.json`(질문 `query: `, 문서 `passage: ` 접두어)과 라이선스 고지 `LICENSE`, `LICENSE-OpenMDW-1.1`, `NOTICE`가 반드시 있어야 한다. `bundle_manifest.py verify`가 확인한다.
+  - 라이브러리 조건: KURE-v3는 sentence-transformers 5.6.1 이상, KURE-Reranker-nano는 transformers 5.7.0 이상이다. transformers 5.6.2 이하에서는 nano가 오류 없이 재정렬 품질만 무너진다(recall@8 0.96 → 0.61). `requirements/agent-api.lock.txt`가 이 버전을 고정한다.
+  - 예전 번들의 `models/bge-m3`, `models/bge-reranker-v2-m3`, `output/indexes/{faiss.index,metadata.json}`은 지우지 않는다. 이미지와 `AGENT_CONFIG_PATH`만 되돌리면 롤백된다.
 - **FP8 모델**: `fp8_manifest.json`의 `files_sha256`(78개)과 번들 해시를 대조한다. 하나라도 다르면 매니페스트를 쓰지 않는다. BF16은 `merge_manifest.json`의 `files`와 대조한다.
-- **RAG 인덱스**: `faiss.index`와 `metadata.json`만 넣는다(`*.bak_prerepair` 등은 제외). 2026-09-15 기준 `ntotal`은 10829다.
+- **RAG 인덱스**: `output/indexes/kure3-20261113/`에 `faiss.index`와 `metadata.json`만 넣는다. 2026-11-13 색인의 `ntotal`은 25483이다(문서 198개, KURE-v3 bfloat16, 2048차원). 예전 색인(bge-m3)은 10829였다.
 - **MCP 기준 데이터** — 파일이 둘이다.
   - **`expert_arm_reference.json`(필수)**: `ARM_REFERENCE_PATH`(기본
     `/output/expert_reference/expert_arm_reference.json`). **자세 채점·교정이 읽는 유일한
@@ -112,6 +112,8 @@ docker exec -w /workspace ship-paint-trainer nice -n 19 ionice -c3 python3 deplo
     `absent_optional`에 기록된다. 없으면 그 경로가 기준을 추정하지 않고 None을 낸다.
   - 둘 다 knowledge_search와는 무관하다.
 - **평가셋**: `--with-eval-set`을 주면 `data/eval/eval_set_agentic.jsonl`이 들어간다. §17 게이트에 필요하다.
+
+2026-11-13 검색 교체로 바뀐 묶음(`prepare_bundle.py --dry-run` 실측): embedding(KURE-v3) 17파일 2,299,861,356바이트, reranker(KURE-Reranker-nano) 13파일 599,883,866바이트, rag_index 2파일 240,541,197바이트. 아래 표는 교체 전 값이다.
 
 2026-09-15 실측 크기(`bundle_manifest.py create`, 101파일):
 
@@ -359,11 +361,11 @@ curl -sS http://127.0.0.1:58000/api/ready | python3 -m json.tool
 **합격 기준**
 
 - HTTP 200, `ready: true`, `mode: "live"`이다.
-- `checks.pipeline`: `{ok: true, loaded: true, rag_vectors: 10829}`
+- `checks.pipeline`: `{ok: true, loaded: true, rag_vectors: 25483}`
 - `checks.llm`: `{ok: true, backend: "openai", health: true, model_served: true}`
 - `checks.mcp.ok`가 `true`다(정보용, `required: false`).
 - 컨테이너 상태가 `healthy`다.
-- `rag_vectors`가 10829가 아니면 번들 인덱스가 바뀐 것이므로 §3으로 돌아간다.
+- `rag_vectors`가 25483이 아니면 번들 인덱스가 다른 것이므로 §3으로 돌아간다(10829면 예전 bge-m3 색인을 읽고 있는 것이다).
 
 ## 11-0. v2.5 공개 API 전수 스모크
 
@@ -660,7 +662,7 @@ FP8로 돌아갈 때는 `.env`와 셸에 export한 `BUNDLE_DIR`를 원래 값으
 4. vLLM v0.29.0의 MTP 메트릭 이름(§15), `/tokenize` chat 요청 스키마(§9), `VLLM_API_KEY` 환경 변수 인증.
 5. torch 2.9.1+cu130 aarch64 휠의 GB10 커널 지원(§5). faiss-cpu와 sentence-transformers의 aarch64 실행(휠 존재만 확인).
 6. 이미지 빌드 자체(§2): x86 서버 빌드 금지로 실행하지 않았다. lock의 `pip check`, import 스모크, node 이미지에서의 `npm ci`, Dockerfile별 `.dockerignore` 적용이 미확인이다. lock은 개발 컨테이너 설치본에서 의존 폐포를 계산해 만들었다.
-7. 통합 메모리 예산: `GPU_MEMORY_UTILIZATION=0.72`와 agent-api의 bge-m3·reranker(cuda), OS 사이의 여유. 헬스체크 `start_period`(vllm 1800s, agent-api 900s)가 충분한지.
+7. 통합 메모리 예산: `GPU_MEMORY_UTILIZATION=0.72`와 agent-api의 KURE-v3·KURE-Reranker-nano(cuda), OS 사이의 여유. 헬스체크 `start_period`(vllm 1800s, agent-api 900s)가 충분한지.
 8. 모든 지연·처리량 수치(§7, §13, §15). 계획 D1의 값은 추정치다.
 9. vLLM #37431 이슈 본문(§16).
 10. MCP 기준 데이터: `expert_arm_reference.json`과 `expert_arm_reference_avatar_2026-10.json`은 이제

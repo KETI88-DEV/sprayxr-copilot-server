@@ -17,11 +17,11 @@ git pull --ff-only      # 새 버전을 받을 때
 | 무엇 | 받는 곳 | 넣을 위치 |
 |---|---|---|
 | 27B 상세분석 모델(약 52GB) | 공개 배포 없음. 개발 서버의 병합본을 폴더째 복사 | `${BUNDLE_DIR}/output/merged/qwen36_27b_shipcoat_v6_1_bf16/` |
-| RAG 색인 | 개발 서버에서 복사 | `${BUNDLE_DIR}/output/indexes/` |
+| RAG 색인 | 개발 서버에서 복사 | `${BUNDLE_DIR}/output/indexes/kure3-20261113/` |
 | 자세 기준(JSON 2개) | 개발 서버에서 복사 | `${BUNDLE_DIR}/output/expert_reference/` |
 | 서빙 설정 | 개발 서버에서 복사 | `${BUNDLE_DIR}/config/` |
-| 임베딩 모델 | Hugging Face `BAAI/bge-m3` | `${BUNDLE_DIR}/models/bge-m3/` |
-| 재정렬 모델 | Hugging Face `BAAI/bge-reranker-v2-m3` | `${BUNDLE_DIR}/models/bge-reranker-v2-m3/` |
+| 임베딩 모델 | Hugging Face `nlpai-lab/KURE-v3` | `${BUNDLE_DIR}/models/KURE-v3/` |
+| 재정렬 모델 | Hugging Face `nlpai-lab/KURE-Reranker-nano` | `${BUNDLE_DIR}/models/KURE-Reranker-nano/` |
 | 빠른 안내 8B 모델 | Hugging Face `Qwen/Qwen3-8B-AWQ` | `${QUICK_MODEL_DIR}` |
 | 음성 인식 모델 | Hugging Face `openai/whisper-large-v3-turbo` | `${STT_MODEL_DIR}` |
 | 전문가·작업자 기록, 학습모드 FBX | 개발 서버에서 복사 | `${EXPERT_REFERENCE_DIR}`, `${POSE_MODELINGS_DIR}` |
@@ -32,9 +32,8 @@ git pull --ff-only      # 새 버전을 받을 때
 - **Hugging Face 모델**은 운영과 같은 리비전으로 받습니다.
 
 ```bash
-hf download BAAI/bge-m3 --revision 5617a9f61b028005a4858fdac845db406aefb181 --local-dir "$BUNDLE_DIR/models/bge-m3"
-hf download BAAI/bge-m3 model.safetensors --revision 9a0624b896d81da7492a910ffa53731274b6cf3d --local-dir "$BUNDLE_DIR/models/bge-m3"
-hf download BAAI/bge-reranker-v2-m3 --revision 953dc6f6f85a1b2dbfca4c34a2796e7dde08d41e --local-dir "$BUNDLE_DIR/models/bge-reranker-v2-m3"
+hf download nlpai-lab/KURE-v3 --revision 73d5e710bc0b1f324a60746922cbad6d38f480d4 --local-dir "$BUNDLE_DIR/models/KURE-v3"
+hf download nlpai-lab/KURE-Reranker-nano --revision 8514b9e113f3b27c441ed9c2b50f81d80388b2fd --local-dir "$BUNDLE_DIR/models/KURE-Reranker-nano"
 hf download Qwen/Qwen3-8B-AWQ --revision 4da05a8edb55c6046cce958586c33b61da07bb79 --local-dir "$QUICK_MODEL_DIR"
 hf download openai/whisper-large-v3-turbo --revision 41f01f3fe87f28c78e2fbf8b568835947dd65ed9 --local-dir "$STT_MODEL_DIR"
 ```

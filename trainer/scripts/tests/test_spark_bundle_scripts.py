@@ -57,20 +57,22 @@ def _ref(repo: Path, revision: str, commit: str) -> None:
 
 def _make_sources(root: Path) -> dict[str, Path]:
     hub = root / "hub"
-    m3 = hub / "models--BAAI--bge-m3"
+    embedder = hub / "models--nlpai-lab--KURE-v3"
     for rel, content in {
-        "config.json": b'{"model_type": "xlm-roberta"}',
+        "config.json": b'{"model_type": "ministral3"}',
         "modules.json": b"[]",
         "tokenizer.json": b"{}",
-        "pytorch_model.bin": b"PICKLE" * 64,
-        "1_Pooling/config.json": b'{"pooling_mode_cls_token": true}',
+        "model.safetensors": b"SAFETENSORS-KURE",
+        "1_Pooling/config.json": b'{"pooling_mode": "mean"}',
+        "config_sentence_transformers.json": b'{"prompts": {"query": "query: ", "document": "passage: "}}',
+        "LICENSE": b"Apache-2.0",
+        "LICENSE-OpenMDW-1.1": b"OpenMDW-1.1",
+        "NOTICE": b"NOTICE",
     }.items():
-        _snapshot_file(m3, "main0001", rel, content)
-    _ref(m3, "main", "main0001")
-    _snapshot_file(m3, "pr130001", "model.safetensors", b"SAFETENSORS-M3")
-    _ref(m3, "refs/pr/130", "pr130001")
+        _snapshot_file(embedder, "main0001", rel, content)
+    _ref(embedder, "main", "main0001")
 
-    reranker = hub / "models--BAAI--bge-reranker-v2-m3"
+    reranker = hub / "models--nlpai-lab--KURE-Reranker-nano"
     for rel, content in {"config.json": b"{}", "tokenizer.json": b"{}", "model.safetensors": b"SAFETENSORS-RR"}.items():
         _snapshot_file(reranker, "rr000001", rel, content)
     _ref(reranker, "main", "rr000001")
@@ -147,19 +149,20 @@ def _verify(bundle: Path, *extra: str) -> int:
 
 
 def test_prepare_builds_an_offline_loadable_layout_without_symlinks(bundle: Path) -> None:
-    m3 = bundle / "models" / "bge-m3"
+    embedder = bundle / "models" / "KURE-v3"
     sources = json.loads((bundle / "bundle_sources.json").read_text())
 
-    assert (m3 / "model.safetensors").read_bytes() == b"SAFETENSORS-M3"
-    assert not (m3 / "pytorch_model.bin").exists()
-    assert (m3 / "1_Pooling" / "config.json").is_file()
-    assert (bundle / "models" / "bge-reranker-v2-m3" / "model.safetensors").read_bytes() == b"SAFETENSORS-RR"
-    assert sorted(p.name for p in (bundle / "output" / "indexes").iterdir()) == ["faiss.index", "metadata.json"]
+    assert (embedder / "model.safetensors").read_bytes() == b"SAFETENSORS-KURE"
+    assert (embedder / "1_Pooling" / "config.json").is_file()
+    assert json.loads((embedder / "config_sentence_transformers.json").read_text())["prompts"]["query"] == "query: "
+    assert {"LICENSE", "LICENSE-OpenMDW-1.1", "NOTICE"} <= {p.name for p in embedder.iterdir()}
+    assert (bundle / "models" / "KURE-Reranker-nano" / "model.safetensors").read_bytes() == b"SAFETENSORS-RR"
+    index = bundle / "output" / "indexes" / "kure3-20261113"
+    assert sorted(p.name for p in index.iterdir()) == ["faiss.index", "metadata.json"]
     assert (bundle / "config").is_dir()
     assert not [p for p in bundle.rglob("*") if p.is_symlink()]
     assert (bundle / bm.FP8_MODEL_ROOT / "layers-0.safetensors").stat().st_nlink >= 2
-    assert sources["sources"]["embedding"]["excluded"] == ["pytorch_model.bin"]
-    assert sources["sources"]["embedding"]["overrides"]["model.safetensors"]["snapshot"] == "pr130001"
+    assert sources["sources"]["embedding"]["repo_id"] == "nlpai-lab/KURE-v3"
     assert any("mcp_pose_reference" in item for item in sources["absent_optional"])
 
 
@@ -172,9 +175,9 @@ def test_prepare_refuses_a_non_empty_bundle_dir(tmp_path: Path) -> None:
     assert prepare.main(_prepare_args(sources, target)) == 1
 
 
-def test_prepare_fails_when_the_safetensors_revision_is_not_cached(tmp_path: Path) -> None:
+def test_prepare_fails_when_the_embedder_license_notice_is_not_cached(tmp_path: Path) -> None:
     sources = _make_sources(tmp_path / "src")
-    (sources["hub"] / "models--BAAI--bge-m3" / "refs" / "refs" / "pr" / "130").unlink()
+    (sources["hub"] / "models--nlpai-lab--KURE-v3" / "snapshots" / "main0001" / "NOTICE").unlink()
 
     assert prepare.main(_prepare_args(sources, tmp_path / "bundle")) == 1
     assert not (tmp_path / "bundle").exists()
@@ -189,7 +192,7 @@ def test_manifest_round_trip_records_lineage_and_verifies(bundle: Path) -> None:
     assert manifest["images"]["web"]["digest"] is None
     assert manifest["provenance"]["model_fp8"]["compared"] == 7
     assert manifest["provenance"]["model_fp8"]["input_merge_manifest_sha256"] == "d1" * 32
-    assert manifest["groups"]["embedding"]["files"] == 5
+    assert manifest["groups"]["embedding"]["files"] == 9
     assert manifest["total_bytes"] == sum(item["bytes"] for item in manifest["files"])
     assert _verify(bundle) == 0
     assert _verify(bundle, "--image-digest", f"vllm={DIGEST}", "--code-commit", COMMIT) == 0
@@ -213,16 +216,16 @@ def test_verify_catches_same_size_corruption_only_in_full_mode(bundle: Path, cap
 
 def test_verify_reports_missing_and_resized_files(bundle: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert _create(bundle) == 0
-    (bundle / "output" / "indexes" / "metadata.json").unlink()
-    faiss_index = bundle / "output" / "indexes" / "faiss.index"
+    (bundle / "output" / "indexes" / "kure3-20261113" / "metadata.json").unlink()
+    faiss_index = bundle / "output" / "indexes" / "kure3-20261113" / "faiss.index"
     faiss_index.unlink()
     faiss_index.write_bytes(b"short")
     capsys.readouterr()
 
     assert _verify(bundle, "--quick") == 1
     problems = json.loads(capsys.readouterr().out)["problems"]
-    assert "missing: output/indexes/metadata.json" in problems
-    assert any(p.startswith("size differs: output/indexes/faiss.index") for p in problems)
+    assert "missing: output/indexes/kure3-20261113/metadata.json" in problems
+    assert any(p.startswith("size differs: output/indexes/kure3-20261113/faiss.index") for p in problems)
 
 
 def test_verify_requires_the_selected_model_group(bundle: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -266,7 +269,7 @@ def test_create_refuses_a_missing_shard_named_by_the_index(bundle: Path, capsys:
 
 
 def test_create_refuses_symlinks(bundle: Path) -> None:
-    (bundle / "output" / "indexes" / "alias.index").symlink_to("faiss.index")
+    (bundle / "output" / "indexes" / "kure3-20261113" / "alias.index").symlink_to("faiss.index")
 
     assert _create(bundle) == 1
 

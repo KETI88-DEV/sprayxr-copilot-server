@@ -6,6 +6,7 @@ deploy/spark/images/agent.Dockerfile.dockerignore
 deploy/spark/models/whisper-large-v3-turbo.manifest.json
 deploy/spark/requirements/agent-api.lock.txt
 deploy/spark/requirements/mcp.lock.txt
+deploy/spark/requirements/retrieval-eval.txt
 deploy/spark/scripts/bench_stt_candidate.py
 deploy/spark/scripts/bench_voice_query.py
 deploy/spark/scripts/bundle_manifest.py

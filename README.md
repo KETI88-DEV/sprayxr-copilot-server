@@ -156,8 +156,8 @@
 | 무엇 | 넣는 위치 | 컨테이너 경로 |
 |---|---|---|
 | 27B 병합 체크포인트(약 52GB, safetensors 15개와 설정·토크나이저 파일) | `${BUNDLE_DIR}/output/merged/qwen36_27b_shipcoat_v6_1_bf16/` | vLLM `/models/shipcoat` |
-| 임베딩·재정렬 모델 | `${BUNDLE_DIR}/models/bge-m3/`, `${BUNDLE_DIR}/models/bge-reranker-v2-m3/` | agent-api `/models/…` |
-| RAG 색인(`faiss.index`, `metadata.json`) | `${BUNDLE_DIR}/output/indexes/` | agent-api `/output/indexes` |
+| 임베딩·재정렬 모델 | `${BUNDLE_DIR}/models/KURE-v3/`, `${BUNDLE_DIR}/models/KURE-Reranker-nano/` | agent-api `/models/…` |
+| RAG 색인(`faiss.index`, `metadata.json`) | `${BUNDLE_DIR}/output/indexes/kure3-20261113/` | agent-api `/output/indexes/kure3-20261113` |
 | 자세 기준(`expert_arm_reference*.json`) | `${BUNDLE_DIR}/output/expert_reference/` | mcp `/output/expert_reference` |
 | 서빙 설정(`rag_config_spark_vllm_bf16*.yaml`) | `${BUNDLE_DIR}/config/` | agent-api `/bundle-config` |
 | 빠른 안내 8B 모델(Qwen3-8B-AWQ) | `${QUICK_MODEL_DIR}` | quick-vllm `/models/quick` |
