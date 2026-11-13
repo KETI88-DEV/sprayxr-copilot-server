@@ -281,6 +281,56 @@ class IntegrationTests(unittest.TestCase):
         self.assertEqual(result.get("count"), 3)
         self.assertEqual(to_dict(result["latest"]).get("timestamp"), 4.0)
 
+    def test_timeseries_recently_updated_session_survives(self) -> None:
+        from mcp_servers import timeseries
+
+        self.reset_state()
+        client = TestClient(app)
+        data = {"timestamp": 1.0, "speed": 0.5, "distance": 300.0, "angle": 90.0}
+        for index in range(timeseries._MAX_SESSIONS):
+            client.post("/timeseries/update", json={"session_id": f"s{index}", "data": data})
+        client.post("/timeseries/update", json={"session_id": "s0", "data": data})
+        client.post("/timeseries/update", json={"session_id": "new", "data": data})
+
+        def result_of(session_id: str) -> JsonDict:
+            response = client.get("/timeseries/query", params={"session_id": session_id})
+            return to_dict(to_dict(response_json(response))["result"])
+
+        self.assertEqual(result_of("s0").get("count"), 2)
+        self.assertEqual(result_of("s1").get("trend"), "no_data")
+
+    def test_timeseries_concurrent_updates_past_the_limit_do_not_fail(self) -> None:
+        import sys
+        import threading
+
+        from mcp_servers import timeseries
+        from mcp_servers.timeseries import DataPoint, TimeSeriesUpdateRequest, update_timeseries
+
+        self.reset_state()
+        point = DataPoint(timestamp=1.0, speed=0.5, distance=300.0, angle=90.0)
+        errors: list[BaseException] = []
+
+        def hammer() -> None:
+            try:
+                for index in range(4000):
+                    session_id = f"s{index % (timeseries._MAX_SESSIONS + 6)}"
+                    update_timeseries(TimeSeriesUpdateRequest(session_id=session_id, data=point))
+            except BaseException as error:  # noqa: BLE001 - 스레드 안 실패를 모아 단언한다
+                errors.append(error)
+
+        previous = sys.getswitchinterval()
+        sys.setswitchinterval(1e-6)
+        try:
+            threads = [threading.Thread(target=hammer) for _ in range(8)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+        finally:
+            sys.setswitchinterval(previous)
+        self.assertEqual(errors, [])
+        self.assertLessEqual(len(timeseries._sessions), timeseries._MAX_SESSIONS)
+
     def test_timeseries_missing_session(self) -> None:
         self.reset_state()
         client = TestClient(app)

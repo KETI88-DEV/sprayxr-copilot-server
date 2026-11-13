@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from collections import OrderedDict
 from statistics import mean
 
@@ -14,6 +15,7 @@ router = APIRouter(prefix="/timeseries", tags=["timeseries"])
 _MAX_SESSIONS = 64
 _MAX_POINTS = 2000
 _sessions: OrderedDict[str, list["DataPoint"]] = OrderedDict()
+_lock = threading.Lock()
 
 
 class DataPoint(BaseModel):
@@ -51,17 +53,19 @@ def reset_sessions() -> None:
 
 @router.post("/update", response_model=MCPResponse)
 def update_timeseries(payload: TimeSeriesUpdateRequest) -> MCPResponse:
-    series = _sessions.setdefault(payload.session_id, [])
-    _sessions.move_to_end(payload.session_id)
-    series.append(payload.data)
-    del series[:-_MAX_POINTS]
-    while len(_sessions) > _MAX_SESSIONS:
-        _sessions.popitem(last=False)
-    result = {
-        "session_id": payload.session_id,
-        "count": len(series),
-        "trend": _compute_trend(series),
-    }
+    # 동기 엔드포인트라 스레드풀에서 동시에 돈다. 잠그지 않으면 방금 꺼낸 세션이 그 사이 밀려나 KeyError 가 난다.
+    with _lock:
+        series = _sessions.setdefault(payload.session_id, [])
+        _sessions.move_to_end(payload.session_id)
+        series.append(payload.data)
+        del series[:-_MAX_POINTS]
+        while len(_sessions) > _MAX_SESSIONS:
+            _sessions.popitem(last=False)
+        result = {
+            "session_id": payload.session_id,
+            "count": len(series),
+            "trend": _compute_trend(series),
+        }
     return success_response(result=result)
 
 
