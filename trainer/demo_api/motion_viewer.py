@@ -1933,7 +1933,7 @@ button{cursor:pointer;font-weight:700}.primary{background:#3157d5;border-color:#
 @media(max-width:1200px){.shell{grid-template-rows:auto auto auto}.workspace{grid-template-columns:320px minmax(0,1fr)}.right{grid-column:1/-1;grid-template-columns:1fr 1fr;grid-template-rows:auto;border-top:1px solid var(--line)}}
 @media(max-width:760px){.selection-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.workspace{display:flex;flex-direction:column}.evaluation-side{order:1}.stage{order:0}.right{order:2;display:grid;grid-template-columns:1fr;grid-template-rows:auto auto}.skeleton-screen{height:300px;min-height:300px}.coating-card{min-height:400px}.selection-panel{padding:9px 12px}}
 </style></head><body><div class="shell">
-<header class="top"><div class="title">작업 자세 비교 평가<small>도장 경로와 작업 자세를 전문가 기준으로 비교합니다.</small></div><a class="v2-switch" href="/motion-viewer/v2">v2 화면으로 전환<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></a></header>
+<header class="top"><div class="title">작업 자세 비교 평가<small>도장 경로와 작업 자세를 전문가 기준으로 비교합니다.</small></div><a class="v2-switch" href="/motion-viewer">새 화면으로 전환<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></svg></a></header>
 <template id="poseUiTemplate">
 <div data-pose-slot="gizmo" class="camera-gizmo" aria-label="3D 카메라 기즈모"><button id="cameraHome" aria-label="전체 보기" title="전체 보기"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/></svg></button><button id="cameraAxisX" title="X축 시점">X</button><button id="cameraAxisY" title="Y축 시점">Y</button><button id="cameraAxisZ" title="Z축 시점">Z</button></div>
 <div data-pose-slot="summary" id="poseSummary" class="pose-summary"><div class="card pose-overall"><span>전문가 작업 유사도</span><strong id="poseScore">—%</strong><small id="poseScoreNote">Zone 순서와 Zone별 작업 유사도를 전문가 반복 수행 기준으로 비교합니다.</small></div><div id="armPoseCard" class="card"><div class="pose-zone-header"><span>전문가 자세 유사도</span><strong id="armPoseScore">—%</strong></div><small id="armPoseNote">분사마다 팔 관절 자세를 숙련자 기준과 비교합니다.</small><div id="armPoseCurrent" class="pose-arm-current" hidden><div><span id="armPoseSequence"></span><b id="armPoseSequenceScore"></b></div><p id="armPoseCorrection"></p></div></div><div id="poseZoneCard" class="card pose-zone-card"><div class="pose-zone-header"><span id="poseZoneTitle">현재 Zone 작업 유사도</span><strong id="poseZoneScore">—%</strong></div><div class="pose-meta"><span>현재 자세 상태 · <b id="posePosture">기록 준비 중</b></span><span id="poseZoneSummary">Zone 대기 중</span><span id="poseEstimateNote">CSV 조인트 기반 자세 추정</span></div><div id="poseZoneMetrics" class="pose-zone-metrics"><small>재생을 시작하면 현재 Zone의 측정값과 전문가 기준을 표시합니다.</small></div></div><div class="card pose-action"><span id="poseActionTitle">현재 Zone 작업 개선 안내</span><ol id="poseActionList"><li id="poseAction">기록을 선택하세요.</li></ol></div><div class="card pose-predicted"><span>안내 적용 시 예상</span><strong id="posePredicted">—</strong><small>실제 재측정 결과가 아닌 가상 좌표 보정 결과입니다.</small></div></div>
@@ -2068,12 +2068,14 @@ def create_motion_viewer_router(
     router = APIRouter()
     sequence_engine = SequenceAnalysisEngine(root)   # 공개 analyze-sequence 와 같은 전문가 뿌리
 
-    @router.get("/motion-viewer", include_in_schema=False, response_class=HTMLResponse)
-    def motion_viewer() -> HTMLResponse:
+    # 2026-11-13부터 v2가 기본 뷰어다. 옛 화면은 /motion-viewer/v1, 예전 v2 주소(/motion-viewer/v2)도 같은 화면을 연다.
+    @router.get("/motion-viewer/v1", include_in_schema=False, response_class=HTMLResponse)
+    def motion_viewer_v1() -> HTMLResponse:
         return HTMLResponse(portal_document(_VIEWER_HTML,"motion"), headers={"Cache-Control":"no-cache"})
 
     static_root = Path(__file__).with_name("static")
 
+    @router.get("/motion-viewer", include_in_schema=False, response_class=HTMLResponse)
     @router.get("/motion-viewer/v2", include_in_schema=False, response_class=HTMLResponse)
     def motion_viewer_v2() -> HTMLResponse:
         return HTMLResponse(portal_document(viewer_v2_document(), "motion"), headers={"Cache-Control": "no-cache"})
