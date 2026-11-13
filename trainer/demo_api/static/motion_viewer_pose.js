@@ -570,7 +570,7 @@
     const zoneEvaluation = renderZoneEvaluation(frame, evaluation);
     byId('poseZoneSummary').textContent = zoneEvaluation
       ? `Zone ${zoneLabel(zoneEvaluation.zone_id)}`
-      : 'Zone 대기 중';
+      : 'Zone 대기';
     const current = zoneEvaluation?.similarity_percent ?? evaluation.similarity_percent;
     const predicted = zoneEvaluation?.predicted_similarity_percent ?? evaluation.predicted_similarity_percent;
     byId('posePredicted').textContent = current == null || predicted == null ? '—' : `${current}% → ${predicted}%`;
@@ -687,7 +687,7 @@
     renderArmPose(Number(playheadSeconds) || 0);
     const currentZone = currentZoneFromFrame(frame);
     if (currentZone) lastPlaybackZone = currentZone;
-    const activity = currentZone ? `현재 Zone ${zoneLabel(currentZone.zoneId)}` : '이동 구간';
+    const activity = currentZone ? `현재 Zone ${zoneLabel(currentZone.zoneId)}` : '이동 중';
     byId('playbackZone').textContent = `${activity} · ${frame?.posture?.label || '자세 판정 보류'}`;
     const badge = byId('playbackZoneBadge');
     if (lastPlaybackZone) {

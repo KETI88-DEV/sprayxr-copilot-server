@@ -279,7 +279,7 @@
       return;
     }
     const head = node('p', 'coating-target-basis', assessment.basis_label || '');
-    if (!zoneKey) { targetPanel.replaceChildren(head, empty('현재 프레임에는 도장 Zone이 없습니다.')); return; }
+    if (!zoneKey) { targetPanel.replaceChildren(head, empty('이동 중이라 칠하는 Zone이 없음')); return; }
     const [mapNum, zoneId] = zoneKey.split(':');
     const row = (assessment.zones || []).find((item) => String(item.map_num) === mapNum && String(item.zone_id) === zoneId);
     if (!row) { targetPanel.replaceChildren(head, empty('이 Zone의 목표 대비 판정이 없습니다.')); return; }
@@ -306,8 +306,8 @@
   }
 
   function zoneTitle() {
-    if (!payload) return 'Zone 대기 중';
-    return zoneKey ? `Zone ${String(zoneKey.split(':')[1]).padStart(2, '0')}` : '이동 구간';
+    if (!payload) return 'Zone 대기';
+    return zoneKey ? `Zone ${String(zoneKey.split(':')[1]).padStart(2, '0')}` : '이동 중';
   }
 
   function renderCoatingZone() {
@@ -328,7 +328,7 @@
     }
     if (!zoneKey) {
       status.textContent = '분사 Zone 없음';
-      drawEmpty(width, height, '현재 프레임에는 도장 Zone이 없습니다.');
+      drawEmpty(width, height, '이동 중이라 칠하는 Zone이 없음');
       return;
     }
     if (!reference || reference.source !== 'expert_final_heightmap') {

@@ -99,11 +99,10 @@
   }
 
   // ── HUD: 점·값은 기존 스크립트가 쓴다. 이동 문구만 바꾸고, 교정은 오른쪽 끝 단추로 HUD 아래에 편다 ──
-  // 기존 스크립트(v1과 같이 쓴다)는 매 프레임 '분사 중'/'이동 중'을 쓴다. Zone 이름이 보이면 분사 중이라 그 낱말은 숨긴다.
+  // 기존 스크립트(v1과 같이 쓴다)는 매 프레임 '분사 중'/'이동 중'을 쓴다. Zone 이름이 보이면 분사 중이라 그 낱말은 숨긴다(Zone 밖은 어디서나 '이동 중').
   const activityNode = $('realtimeHudActivity');
   new MutationObserver(() => {
     const text = activityNode.textContent.trim();
-    if (text === '이동 중') activityNode.textContent = 'Zone 사이 이동';
     activityNode.style.visibility = text === '분사 중' ? 'hidden' : '';   // 자리는 남겨 HUD 폭이 흔들리지 않게 한다
   }).observe(activityNode, { childList: true, characterData: true, subtree: true });
 
@@ -661,8 +660,14 @@
       }
       // 전문가 지도의 2D·3D·상대·µm 도 한 칸 보기에서는 탭 줄 도구 칸(질문 단추 앞)으로
       const mapSeg = $('v2CoatMapSeg');
+      // 휴대폰 폭(탭 줄 ≤480px)에서는 탭 줄에 다 싣지 못해 지도 도구는 지도 위에, 도막 기준은 도막 칸 첫 줄에 둔다
+      const phone = one && main.clientWidth <= 480;
       const coatAsk = toolsOf.coating.nodes[toolsOf.coating.nodes.length - 1];
-      if (one && coatAsk.parentElement === tools) coatAsk.before(mapSeg); else if (mapSeg.parentElement !== $('v2CoatMapTools')) $('v2CoatMapTools').append(mapSeg);
+      // 세 칸 보기는 지도 도구를 편차·지도 전환 옆(도막 첫 줄)에 두어 지도 높이를 번다
+      const mapHome = one ? $('v2CoatMapTools') : $('v2FeatureCoating').querySelector('.coat-tools');
+      if (one && !phone && coatAsk.parentElement === tools) coatAsk.before(mapSeg); else if (mapSeg.parentElement !== mapHome) mapHome.append(mapSeg);
+      const basis = toolsOf.coating.nodes[0];
+      if (phone && basis.parentElement === tools) $('v2FeatureCoating').querySelector('.coat-tools').prepend(basis);
       coatLayout();
       // 접기 단추: 한 칸 보기는 탭 줄 끝, 세 칸 보기는 재생 막대 끝
       const box = $('v2FoldBox');
@@ -1522,9 +1527,12 @@
     }
     const open = (value) => {
       list.hidden = !value;
+      toastHost.hidden = value;   // 열린 목록 위에 알림이 겹치지 않게
       button.setAttribute('aria-expanded', String(value));
       if (value) {
-        list.style.maxHeight = `${Math.round(($('v2Toast').parentElement.clientHeight || 400) * 0.5)}px`;   // 장면 높이의 절반
+        // 장면 위 남는 높이(포털 메뉴·기록 줄을 덮지 않게), 많아야 420px
+        const room = button.getBoundingClientRect().top - toastHost.parentElement.getBoundingClientRect().top - 16;
+        list.style.maxHeight = `${Math.max(160, Math.min(420, Math.round(room)))}px`;
         paintList(); items.querySelector('button')?.focus();
       }
     };

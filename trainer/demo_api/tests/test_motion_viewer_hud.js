@@ -33,9 +33,9 @@ const LONGEST = {
   realtimeHudAxis: '99.9°', realtimeHudDirection: '분석 중', realtimeHudCoverage: '100%',
 };
 
-// v2 는 이동 문구를 'Zone 사이 이동'으로 바꿔 쓴다(motion_viewer_v2.js, 2026-11-13 재디자인).
+// v2 도 Zone 밖은 '이동 중' 하나로 쓴다(2026-11-13 unslop 문구 통일).
 // 분사축 편차는 두 방향 사이 각이라 180° 까지 나온다(2026-11-13 HUD 폭 고정).
-const V2_LONGEST = { realtimeHudActivity: 'Zone 사이 이동', realtimeHudAxis: '180.0°' };
+const V2_LONGEST = { realtimeHudAxis: '180.0°' };
 
 test('v2 HUD 는 숨기는 칸도 자리를 남겨 폭이 흔들리지 않는다(이동 문구·교정 단추·교정 수)', () => {
   const v2Js = fs.readFileSync(path.join(root, 'static/motion_viewer_v2.js'), 'utf8');
