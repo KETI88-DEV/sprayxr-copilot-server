@@ -45,8 +45,8 @@ from fastapi.responses import JSONResponse
 
 from trainer.demo_api.copilot_contracts import CopilotQueryData, CopilotQueryRequest, CopilotResponse
 from trainer.demo_api.coating_query import (
-    answer_coating_question, answer_distribution_cause, parse_viewer_coating_context, report_coating_context,
-    target_advice_facts)
+    answer_coating_question, answer_distribution_cause, drop_contradicted_causes, parse_viewer_coating_context,
+    report_coating_context, target_advice_facts, zone_measures)
 from trainer.demo_api.copilot_intent import classify_question_intent, fallback_intent, preset_intent, is_coating_status_question, is_coating_advice_question, is_general_painting_knowledge
 from trainer.demo_api.dialogue import (INSTRUCTION_REFUSAL, asks_for_instructions, authenticated_facts, conversation_key,
                                        drop_misattributed_zones, drop_ungrounded, guard_generated_answer, parse_plan, plain_answer,
@@ -557,6 +557,23 @@ _BODY_PART: Final = re.compile(r"(?:오른|왼)\s*(?:쪽\s*)?(?:손|팔)|팔꿈�
 _WORST_ZONE: Final = re.compile(r"(?:zone|존|구역)\s*별|(?:가장|제일)\s*문제|최악|(?:어디|어느).*(?:문제|나쁘|나빠|안\s*좋|낮|못)", re.I)
 
 
+def _viewer_measures(context: str | None, prompt: str) -> tuple[dict[str, dict[str, float]] | None, str | None]:
+    """서명된 뷰어 Zone 실측(속도·이격거리·전문가 중앙값)과 질문이 가리키는 Zone(번호, 없으면 재생 위치)."""
+    claims = viewer_claims(context)
+    if claims is None:
+        return None, requested_zone(prompt, None)
+    playback = claims[0].get("playback_context") if isinstance(claims[0].get("playback_context"), dict) else {}
+    zone = requested_zone(prompt, None) or (str(playback["zone_id"]) if playback.get("zone_id") is not None else None)
+    return zone_measures(claims[1]), zone
+
+
+def _checked_generation(answer: str, query: CopilotQueryRequest, *, instructions: tuple[str, ...] = ()) -> str:
+    """모델이 만든 답의 출구 검사: 지침·내부 키 유출, 다른 Zone의 수치, 거꾸로 된 인과·실측과 엇갈리는 조언."""
+    measures, zone = _viewer_measures(query.context, query.prompt)
+    answer = drop_misattributed_zones(guard_generated_answer(answer, instructions=instructions), _zone_facts(query.context))
+    return drop_contradicted_causes(answer, measures, default_zone=zone)
+
+
 def _zone_facts(context: str | None) -> dict[str, set[str]]:
     """모델 답의 Zone 번호 검사에 쓰는 서명된 Zone 사실. 뷰어 문맥이 없으면 비어 있다(검사하지 않는다)."""
     claims = viewer_claims(context)
@@ -784,7 +801,7 @@ async def _execute_copilot_query(
             if ungrounded_measurements(answer, facts=facts, prompt=query.prompt):
                 # 자료에 없는 측정값은 내보내지 않는다. 한 번 다시 생성하고, 그래도 남으면 그 부분을 뺀다.
                 answer = drop_ungrounded(await to_thread.run_sync(converse), facts=facts, prompt=query.prompt)
-            answer = drop_misattributed_zones(guard_generated_answer(answer), _zone_facts(query.context))
+            answer = _checked_generation(answer, query)
             return _success_response(query, request_started, answer=answer, retrieval_used=False, generated=True,
                                      citations=[], context_status="available" if facts else "not_available")
         except Exception:
@@ -1071,7 +1088,8 @@ async def _execute_copilot_query(
     if query.task_type != "knowledge_search" and not knowledge_routed:
         if query.task_type == "error_analysis":
             coating = await coating_facts()
-            cause = answer_distribution_cause(coating, detailed=query.response_mode == "detailed")
+            measures = _viewer_measures(query.context, query.prompt)[0]
+            cause = answer_distribution_cause(coating, detailed=query.response_mode == "detailed", measures=measures)
             if cause is None and trusted_coating is not None:
                 # 뷰어 자료에 목표 대비 판정이 없으면(전문가 대비 행뿐) 완료 리포트로 답한다.
                 coating = await report_facts()
@@ -1110,7 +1128,7 @@ async def _execute_copilot_query(
                           if query.response_mode == "quick" and query.task_type == "knowledge_search" else None)
     knowledge_client_context = (definition_context or (json.dumps(facts, ensure_ascii=False, separators=(",", ":")) if facts else viewer_metadata_context(query.context))) if viewer_requested else (definition_context or query.context)
     if coating_advice_context is not None:
-        compact = target_advice_facts(coating_advice_context)
+        compact = target_advice_facts(coating_advice_context, measures=_viewer_measures(query.context, query.prompt)[0])
         knowledge_client_context = "[검증된 최종 도막 비교 자료]\n" + json.dumps(compact or coating_advice_context, ensure_ascii=False, separators=(",", ":"))
         knowledge_client_context += (
             "\n목표 대비 판정이며 재생 시점의 도막이 아닙니다. 조절 후보는 등급에 따른 일반적인 방향이고 원인으로 확정된 것이 아닙니다."
@@ -1184,7 +1202,7 @@ async def _execute_copilot_query(
     answer = parsed.body
     if query.response_mode == "quick":
         answer = re.sub(r"\n+\s*\[?근거\]?\s*:?\s*$", "", answer).rstrip()
-    answer = drop_misattributed_zones(guard_generated_answer(answer, instructions=_document_rules(pipeline)), _zone_facts(query.context))
+    answer = _checked_generation(answer, query, instructions=_document_rules(pipeline))
     logger.info(
         "copilot answer normalized request_id=%s repair_path=%s citations=%d dropped=%d",
         query.request_id,
