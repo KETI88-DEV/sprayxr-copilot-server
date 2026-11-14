@@ -186,7 +186,7 @@ def test_viewer_record_is_scored_sequence_by_sequence_from_its_csv() -> None:
     assert len(result["sequences"]) == result["evaluated_sequence_count"]
     first = result["sequences"][0]
     assert first["sequence_id"].startswith("SEQ-") and 0 <= first["start_seconds"] < first["end_seconds"]
-    assert first["correction"] == "왼쪽 손목이 숙련자 평균보다 31 cm 멀리 있었습니다."
+    assert first["correction"] == "왼쪽 손목이 숙련자 평균보다 몸에서 31cm 더 뻗어 있었습니다. 손목을 몸 쪽으로 조금 당기세요."
     assert set(result["zones"]) == {s["zone_id"] for s in result["sequences"]}
 
 

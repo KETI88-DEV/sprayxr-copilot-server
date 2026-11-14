@@ -54,7 +54,8 @@ def test_right_hand_question_answers_from_the_arm_engine(tab: str) -> None:
     result = ask("오른손은 어케 고쳐야돼", tab=tab, pipeline=_model())
     answer = result["answer"]
     assert result["calls"] == [], answer
-    assert "오른쪽 팔꿈치가 숙련자 평균보다 20 cm 가까이" in answer and "Zone 6" not in answer
+    # v3.4.1: 반경 교정은 몸을 기준으로 적고 할 일을 붙인다. 오른손을 물었는데 손목 교정이 없으면 그렇다고 밝힌다.
+    assert "오른쪽 팔꿈치가 숙련자 평균보다 몸 쪽으로 20cm 더 붙어" in answer and "손목 교정은 없고" in answer and "Zone 6" not in answer
 
 
 @pytest.mark.parametrize("prompt", ["왼손은?", "왼손은 어떻게 고쳐?", "손목은 어때?"])
@@ -72,7 +73,7 @@ def test_elbow_questions_use_the_forearm_result_without_inventing_angles(prompt:
     answer = result["answer"]
     assert result["calls"] == [], answer
     assert "°" not in answer and "확인할 수 없습니다" not in answer
-    assert "각도" in answer and "20 cm 가까이" in answer
+    assert "각도" in answer and "몸 쪽으로 20cm 더 붙어" in answer
 
 
 def test_tsb_elbow_question_reads_the_forearm_joint() -> None:
@@ -108,7 +109,7 @@ def test_priority_correction_states_the_corrections_own_measure() -> None:
     scored = [("9", _measured(0.5, "RightForeArm", distance=0.35, radius=-0.20))]
     priority = sa.priority_corrections(sa.zone_summary(scored), measures=sa.joint_measures(scored))
     text = priority[0]["correction_guidance"]
-    assert "20cm 가까이" in text and "35" not in text and "위치가 숙련자 범위" not in text
+    assert "몸 쪽으로 평균 20cm 더 붙어" in text and "35" not in text and "위치가 숙련자 범위" not in text
     scored = [("4", _measured(0.6, "LeftHand", distance=0.12, angle=31.0))]
     text = sa.priority_corrections(sa.zone_summary(scored), measures=sa.joint_measures(scored))[0]["correction_guidance"]
     assert "방향" in text and "31°" in text and "cm" not in text

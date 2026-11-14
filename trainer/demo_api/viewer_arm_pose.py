@@ -18,7 +18,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Mapping
 
-from trainer.demo_api.pose_query import NO_CORRECTION_CAVEAT, PART_WORDS, POSE_SCALE_NOTE
+from trainer.demo_api.pose_query import NO_CORRECTION_CAVEAT, PART_WORDS, POSE_SCALE_NOTE, friendly_correction, limited_note
 from trainer.demo_api.session_analysis import (
     analyze_session, csv_sequences, has_world_joints, painted_zone, read_csv, spray_runs,
 )
@@ -123,18 +123,24 @@ def _evaluate(
             if item.get("analysis_status") != "available":
                 continue
             start, end = runs.get(str(item.get("sequence_id")), (None, None))
-            corrections = item.get("corrections") or []
+            corrections = [c for c in item.get("corrections") or [] if isinstance(c, Mapping) and c.get("label")]
+            quality = item.get("input_quality") if isinstance(item.get("input_quality"), Mapping) else {}
+            entry = {"confidence": item.get("confidence"), "reason_code": item.get("reason_code"),
+                     "reason_codes": [str(code) for code in quality.get("reason_codes") or []]}
             sequences.append({
                 "sequence_id": item.get("sequence_id"), "zone_id": item.get("zone_id"),
                 "start_seconds": _seconds(rows[start], origin) if start is not None else None,
                 "end_seconds": _seconds(rows[end], origin) if end is not None else None,
                 "similarity_percent": _percent(item.get("similarity_score")),
-                "correction": next((str(c["label"]) for c in corrections if isinstance(c, Mapping) and c.get("label")), None),
+                # 교정 문장은 MCP 엔진 문장을 훈련생 말로 바꿔 싣는다(몸 기준·할 일·"분사 내내"). 화면 HUD도 이 문장을 쓴다.
+                "correction": friendly_correction(str(corrections[0]["label"])) if corrections else None,
                 # 팔 방향 질문은 분사의 교정 전부에서 찾는다(첫 교정만 보면 다른 팔의 교정을 놓친다).
-                "corrections": [str(c["label"]) for c in corrections if isinstance(c, Mapping) and c.get("label")],
-                # 화면이 교정이 난 관절을 스켈레톤 위에 표시한다.
-                "joints": [str(c["joint"]) for c in corrections if isinstance(c, Mapping) and c.get("joint")],
-                "confidence": item.get("confidence"),
+                "corrections": [friendly_correction(str(c["label"])) for c in corrections],
+                # 화면이 교정이 난 관절을 스켈레톤 위에 표시한다. `corrections`와 같은 순서다.
+                "joints": [str(c["joint"]) for c in corrections if c.get("joint")],
+                **entry,
+                # 참고용 사유를 쉬운 말로. 프레임 간격만 고르지 않은 분사는 비어 있다(채점에서 빠진 것이 없다).
+                "limited_note": limited_note([entry]) or None,
             })
         guidance = {str(c["zone_id"]): c["correction_guidance"] for c in reversed(analysis.priority_corrections)}
         result = {
@@ -195,10 +201,11 @@ def _sequence_at(arm: Mapping[str, Any], seconds: object) -> Mapping[str, Any] |
 
 
 def _side_answer(arm: Mapping[str, Any], side: str | None, *, current: bool, playback: Mapping[str, Any] | None, zone_id: str | None,
-                 part: str | None = None) -> str:
-    """팔·관절 질문의 답: 엔진이 그 팔(관절)에 낸 교정이 있는 분사를 센다. 교정 문장은 엔진의 것을 그대로 옮긴다.
+                 part: str | None = None, prefer_hand: bool = False) -> str:
+    """팔·관절 질문의 답: 엔진이 그 팔(관절)에 낸 교정이 있는 분사를 센다. 교정 문장은 엔진 문장을 훈련생 말로 바꾼 것이다.
 
     `part`는 엔진 관절 이름 뒷부분(ForeArm=팔꿈치, Hand=손목, UpperArm=위팔). 쪽을 안 말하면 양팔에서 찾는다.
+    `prefer_hand`(오른손·왼손 질문)면 손목 교정을 먼저 들고, 없으면 그렇다고 밝힌 뒤 팔 교정을 든다.
     """
     word = {"right": "오른쪽", "left": "왼쪽"}.get(side or "", "")
     part_word = PART_WORDS.get(part or "", "")
@@ -211,15 +218,26 @@ def _side_answer(arm: Mapping[str, Any], side: str | None, *, current: bool, pla
     elif zone_id is not None:
         scored = [s for s in scored if str(s.get("zone_id")) == zone_id]
         scope = f"Zone {zone_id}의 분사 {len(scored)}회"
-    wanted = f"{word} {part_word}" if word and part_word else part_word or word
 
-    hits = [(s, label) for s in scored for label in s.get("corrections") or [s.get("correction")] if label and wanted in str(label)]
-    limited = sum(s.get("confidence") == "limited" for s in scored)
-    note = f" 이 가운데 {limited}회는 입력 품질 제한이 있어 참고용 채점입니다." if limited else ""
+    def found(wanted: str) -> list[tuple[Mapping[str, Any], str]]:
+        return [(s, friendly_correction(str(label))) for s in scored
+                for label in s.get("corrections") or [s.get("correction")] if label and wanted in str(label)]
+
+    note = limited_note(list(scored))
+    note = f" {note}" if note else ""
+    lead = ""
+    hits = found(f"{word} {part_word}" if word and part_word else part_word or word)
+    if prefer_hand and part is None:
+        wrist = f"{word} 손목".strip()
+        hand_hits = found(wrist)
+        if hand_hits:
+            hits, name = hand_hits, wrist
+        elif hits:
+            lead = f"{wrist} 교정은 없고 {name} 교정이 있습니다. "
     if not hits:
         return f"{scope}에서 {name} 교정은 나오지 않았습니다. {NO_CORRECTION_CAVEAT}{note}"
     count = len({s.get("sequence_id") for s, _ in hits})
-    return f"{scope} 중 {count}회에서 {name} 교정이 나왔습니다. 예({hits[0][0].get('sequence_id')}): {hits[0][1]}{note}"
+    return f"{lead}{scope} 중 {count}회에서 {name} 교정이 나왔습니다. 예({hits[0][0].get('sequence_id')}): {hits[0][1]}{note}"
 
 
 def zone_pose_summary(arm: Mapping[str, Any], work_zones: list[Mapping[str, Any]] | None = None, *, limit: int = 3) -> str:
@@ -246,21 +264,22 @@ def zone_pose_summary(arm: Mapping[str, Any], work_zones: list[Mapping[str, Any]
 
 
 def arm_pose_answer(arm: Mapping[str, Any], *, current: bool, playback: Mapping[str, Any] | None, zone_id: str | None,
-                    side: str | None = None, part: str | None = None) -> str:
+                    side: str | None = None, part: str | None = None, prefer_hand: bool = False) -> str:
     """서명된 채점 결과로만 문장을 만든다. `current`는 "지금·이 Zone" 질문, `side`·`part`는 팔·관절 질문이다."""
     if arm.get("status") != "available":
         return _UNAVAILABLE.get(str(arm.get("reason_code")), "이 기록에서는 숙련자 대비 자세 유사도를 채점할 수 없습니다.")
     if side is not None or part is not None:
-        return _side_answer(arm, side, current=current, playback=playback, zone_id=zone_id, part=part)
+        return _side_answer(arm, side, current=current, playback=playback, zone_id=zone_id, part=part, prefer_hand=prefer_hand)
     if current and zone_id is None:
         sequence = _sequence_at(arm, (playback or {}).get("playhead_seconds"))
         if sequence is not None:
             seconds, end = (playback or {}).get("playhead_seconds"), sequence.get("end_seconds")
             when = "직전 분사" if isinstance(end, (int, float)) and isinstance(seconds, (int, float)) and seconds > end else "재생 시점의 분사"
-            limited = sequence.get("confidence") == "limited"
-            # 엔진이 제한을 건 채점은 정상 자세로 확정하지 않는다.
-            notes = [sequence.get("correction") or ("" if limited else f"교정 관절 결과는 없습니다. {NO_CORRECTION_CAVEAT}"),
-                     "입력 품질 제한이 있어 참고용 유사도입니다." if limited else "", POSE_SCALE_NOTE]
+            # 엔진이 말할 만한 제한을 건 채점은 정상 자세로 확정하지 않는다. 프레임 간격만 고르지 않은 것은 제한이 아니다.
+            limited = limited_note([sequence])
+            correction = sequence.get("correction")
+            notes = [friendly_correction(str(correction)) if correction else ("" if limited else f"교정 관절 결과는 없습니다. {NO_CORRECTION_CAVEAT}"),
+                     limited, POSE_SCALE_NOTE]
             # 분사 하나가 여러 Zone에 걸칠 수 있어 Zone은 적지 않는다(뷰어 Zone 카드와 어긋나 보인다).
             return (f"{when}({sequence['sequence_id']})는 숙련자 팔 자세 대비 자세 유사도 {sequence['similarity_percent']}%입니다. "
                     + " ".join(note for note in notes if note))

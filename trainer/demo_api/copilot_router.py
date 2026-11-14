@@ -65,6 +65,7 @@ from trainer.demo_api.pose_query import (
     angle_note,
     asked_arm,
     asked_part,
+    prefers_hand,
     asks_about_zones,
     asks_whole_session,
     score_pose,
@@ -753,7 +754,8 @@ async def _execute_copilot_query(
         playback = (viewer_analysis or {}).get("playback_context") or (claims[0].get("playback_context") if claims else None)
         answer = angle_note(query.prompt) + arm_pose_answer(
             arm_claims, current=_asks_current_viewer_pose(query.prompt), playback=playback if isinstance(playback, dict) else None,
-            zone_id=requested_zone(query.prompt, None), side=asked_arm(query.prompt), part=asked_part(query.prompt))
+            zone_id=requested_zone(query.prompt, None), side=asked_arm(query.prompt), part=asked_part(query.prompt),
+            prefer_hand=prefers_hand(query.prompt))
         return _success_response(query, request_started, answer=answer, retrieval_used=False, citations=[],
                                  pose_context={"scope": "arm_pose", "status": arm_claims.get("status")} if query.task_type == "pose_recomm" else None,
                                  context_status="available" if arm_claims.get("status") == "available" else "not_available")
@@ -928,7 +930,7 @@ async def _execute_copilot_query(
             arm_answer = arm_pose_answer(
                 arm_pose, current=analysis_context.get("scope") == "current_zone",
                 playback=viewer_analysis.get("playback_context"),  # type: ignore[arg-type]
-                zone_id=requested_zone(query.prompt, None), side=side,
+                zone_id=requested_zone(query.prompt, None), side=side, prefer_hand=prefers_hand(query.prompt),
             )
             # 자세 유사도(시퀀스별 팔 관절 채점)를 먼저, 전문가 기록 대비 작업 유사도를 이어서 답한다.
             # 팔 방향을 물으면 팔 채점 결과만 답한다 — 작업 유사도의 개선 안내에는 팔 방향 항목이 없다.

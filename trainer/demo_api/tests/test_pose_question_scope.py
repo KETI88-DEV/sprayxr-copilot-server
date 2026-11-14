@@ -278,7 +278,7 @@ def test_sequence_context_answers_the_question_not_only_the_summary() -> None:
 
     assert overall["answer"] == _MCP_RESULT["summary"]
     assert "오른팔" in right["answer"] and "교정 대상이 아닙니다" in right["answer"]
-    assert "왼쪽 손목이 숙련자 평균보다 31 cm 멀리 있었습니다." in left["answer"]
+    assert "왼쪽 손목이 숙련자 평균보다 몸에서 31cm 더 뻗어 있었습니다." in left["answer"]  # v3.4.1 몸 기준 표현
     assert len({overall["answer"], right["answer"], left["answer"]}) == 3
     assert right["pose_context"]["sequence_id"] == "SEQ-012"
 

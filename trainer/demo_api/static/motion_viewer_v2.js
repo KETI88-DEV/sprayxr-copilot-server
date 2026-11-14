@@ -171,7 +171,7 @@
     return node;
   };
   const sequenceLabel = (item) => `${item.sequence_id} · ${zoneText(item.zone_id)} · ${percent(item.similarity_percent)}`
-    + (item.correction ? `. ${item.correction}` : '') + (item.confidence === 'limited' ? '. 입력 품질 제한으로 참고용' : '');
+    + (item.correction ? `. ${item.correction}` : '') + (item.limited_note ? `. ${item.limited_note}` : '');
   function drawPoseChart(host) {
     const spec = host.poseSpec;
     const width = host.clientWidth, height = host.clientHeight;
@@ -258,10 +258,11 @@
     }
     const now = $('v2PoseNow');
     if (!current) { now.textContent = '첫 분사 전입니다'; return; }
-    const limited = current.confidence === 'limited';
+    // 프레임 간격만 고르지 않은 분사는 서버가 limited_note를 비운다(채점에서 빠진 것이 없다).
+    const limited = Boolean(current.limited_note);
     // 교정 문장이 없다고 자세가 좋다는 뜻은 아니다(모델 결과, 원인 모름). 사실만 흐리게 적는다.
     now.replaceChildren(el('b', null, current.sequence_id), ` · ${zoneText(current.zone_id)} · ${percent(current.similarity_percent)}`
-      + (limited ? ' · 참고용(입력 품질 제한)' : ''),
+      + (current.limited_note ? ` · ${current.limited_note}` : ''),
       ...(current.correction ? [` · ${current.correction}`] : limited ? [] : [' · ', el('span', 'is-muted', '교정 관절 결과 없음')]));
     now.title = now.textContent;
   }

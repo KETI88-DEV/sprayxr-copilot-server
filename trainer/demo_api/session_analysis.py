@@ -36,7 +36,7 @@ from typing import Any, Final, Mapping, Sequence
 
 import httpx
 
-from trainer.demo_api.pose_query import PoseQueryResult, score_body
+from trainer.demo_api.pose_query import PoseQueryResult, limited_note, radius_phrase, score_body
 from trainer.demo_api.sequence_store import SequenceStore
 from trainer.demo_api.report_jobs import CSV_INFLATED_LIMIT, InputTooLarge
 from trainer.scripts import pose_similarity, simulator_csv
@@ -289,7 +289,8 @@ def _measured_phrase(label: str, measures: Sequence[tuple[str, float]]) -> str |
     average = statistics.mean(values)
     subject = f"{label}{_particle(label)}"
     if mode == "radius":
-        return f"{subject} 숙련자 평균보다 평균 {abs(average) * 100:.0f}cm {'멀리' if average > 0 else '가까이'} 있었습니다."
+        # 반경은 어깨 중점에서 관절까지의 거리다. 몸을 기준으로 적고 할 일을 붙인다(pose_query.radius_phrase와 같은 말).
+        return radius_phrase(label, average, average=True)
     return f"{subject} 향한 방향이 숙련자 평균과 평균 {average:.0f}° 달랐습니다."
 
 
@@ -338,9 +339,10 @@ def _guideline(scored: Sequence[PoseQueryResult], total: int, not_scored: int) -
         parts.append(f"교정이 가장 자주 나온 부위는 {pose_similarity.JOINT_LABELS.get(joint, joint)}입니다({times}회).")
     elif not any(result.confidence == "limited" for result in scored):
         parts.append("비교한 분사 모두 숙련 작업자의 통상 범위 안입니다.")
-    limited = sum(result.confidence == "limited" for result in scored)
-    if limited:
-        parts.append(f"이 중 {limited}회는 입력 품질 또는 비교 범위의 제한이 있어 참고용 유사도입니다. 교정 항목이 없더라도 정상 자세를 확정하지 않습니다.")
+    # 프레임 간격만 고르지 않은 분사(R7)는 채점에서 빠진 것이 없어 말하지 않는다. 나머지 사유는 쉬운 말로 한 번만 적는다.
+    note = limited_note([{"confidence": r.confidence, "reason_code": r.reason_code, "input_quality": r.input_quality} for r in scored])
+    if note:
+        parts.append(f"{note} 교정 항목이 없더라도 정상 자세를 확정하지 않습니다.")
     if not_scored:
         parts.append(f"자세를 판정할 수 없는 분사 {not_scored}회는 평균에서 뺐습니다.")
     return " ".join(parts)
