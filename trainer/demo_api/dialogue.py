@@ -525,7 +525,7 @@ def drop_misattributed_zones(answer: str, zones: Mapping[str, set[str]]) -> str:
     kept, _ = drop_sentences(answer, lambda part: _sentence_misattributed(part, zones))
     return kept if has_body(kept) else "어느 Zone의 결과인지 자료와 맞지 않아 답할 수 없습니다. Zone 번호를 넣어 다시 질문해 주세요."
 # 진행 질문의 계산 재료(viewer_progress). 모델 자료에는 넣지 않는다.
-_PROGRESS_KEYS: Final = {"zones", "zone_first_visit_seconds", "expert_transitions"}
+_PROGRESS_KEYS: Final = {"zones", "zone_first_visit_seconds", "expert_transitions", "position_distribution"}
 
 
 def authenticated_facts(value: str | None) -> dict[str, Any]:

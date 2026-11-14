@@ -10,9 +10,13 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Final
 
-from trainer.demo_api.coating_query import _CAUSES, _EFFECTS
+from trainer.demo_api.coating_query import (_CAUSES, _EFFECTS, _SIMILAR, distance_sentence, measured_relation, measured_sentence,
+                                            parse_viewer_coating_context, zone_measures)
 from trainer.demo_api.copilot_intent import preset_intent
-from trainer.demo_api.viewer_progress import progress_question
+from trainer.demo_api.dialogue import viewer_claims
+from trainer.demo_api.pose_query import josa
+from trainer.demo_api.viewer_arm_pose import parse_viewer_arm_pose
+from trainer.demo_api.viewer_progress import gate_lines, progress_question, viewer_progress_answer
 
 CODES: Final = ("progress_status", "progress_next", "coating_extreme", "coating_over", "completion", "distance_compare",
                 "distance_filter", "speed", "work_metric", "pose_judgement", "order_shape", "zone_exists",
@@ -279,3 +283,298 @@ def classify_record_question(prompt: str, *, task_type: str, previous_subject: M
     else:
         kind = "fact"
     return RecordQuery(kind, tuple(parts))
+
+
+# ---------------------------------------------------------------- 결정적 답(R1~R12·C)
+# 서명된 기록 행만 읽는다. 등급·게이트는 다시 계산하지 않는다(`coating_assessment`를 부르지 않는다).
+ASK_ZONE: Final = "어느 Zone을 말씀하시는지 알 수 없습니다. Zone 번호를 넣어 다시 물어봐 주세요."
+_NO_TARGET: Final = "이 기록에는 목표 대비 판정 자료가 없어 말씀드릴 수 없습니다."
+_NO_ZONE: Final = {"", "-1", "0", "none", "null", "nan"}
+_GATE_PERCENT: Final = 95
+_UNITS: Final = {"deg": "°", "mm": " mm", "um": "µm"}
+
+
+@dataclass(frozen=True)
+class RecordFacts:
+    value: str
+    payload: Mapping[str, Any]
+    claims: Mapping[str, Any]
+    coating: Mapping[str, Any] | None
+    arm: Mapping[str, Any] | None
+
+    @classmethod
+    def from_context(cls, value: str | None) -> "RecordFacts | None":
+        found = viewer_claims(value)
+        if found is None or value is None:
+            return None
+        return cls(value, found[0], found[1], parse_viewer_coating_context(value, "knowledge_search"), parse_viewer_arm_pose(value))
+
+    @property
+    def zone_ids(self) -> list[str]:
+        ids = {str(zone["zone_id"]) for zone in (self.claims.get("zones") or {}).values() if isinstance(zone, Mapping) and zone.get("zone_id") is not None}
+        return sorted(ids, key=lambda zone: (not zone.isdigit(), int(zone) if zone.isdigit() else 0, zone))
+
+    @property
+    def target_rows(self) -> list[Mapping[str, Any]]:
+        target = (self.coating or {}).get("target")
+        if not isinstance(target, Mapping) or target.get("analysis_status") != "available":
+            return []
+        return [row for row in target.get("zones") or [] if isinstance(row, Mapping)]
+
+    @property
+    def measures(self) -> dict[str, dict[str, Any]]:
+        return zone_measures(self.claims)
+
+    @property
+    def playback_zone(self) -> str | None:
+        playback = self.payload.get("playback_context")
+        zone = str(playback.get("zone_id", "")).strip() if isinstance(playback, Mapping) else ""
+        return None if zone.lower() in _NO_ZONE else zone
+
+
+def _is_num(value: object) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _row(facts: RecordFacts, zone: str) -> Mapping[str, Any] | None:
+    return next((row for row in facts.target_rows if str(row.get("zone_id")) == zone), None)
+
+
+def _label(facts: RecordFacts, row: Mapping[str, Any]) -> str:
+    labels = (facts.coating or {}).get("target", {}).get("grade_labels") or {}
+    return str(labels.get(row.get("grade") or "none") or "미도장")
+
+
+def _zone_text(facts: RecordFacts, zone: str) -> str:
+    """"Zone 3은 목표 미만(칠한 곳 평균 95µm, 미도장 0%)" — 등급 낱말은 서명된 행의 라벨이다."""
+    row = _row(facts, zone)
+    if row is None:
+        return f"{josa(f'Zone {zone}', '은', '는')} 판정 행이 이 기록에 없습니다"
+    unpainted = (row.get("unpainted_fraction") or 0) * 100
+    if row.get("grade") is None or not _is_num(row.get("thickness_um")):
+        return f"{josa(f'Zone {zone}', '은', '는')} 칠한 곳이 없습니다(미도장 {unpainted:.0f}%)"
+    return f"{josa(f'Zone {zone}', '은', '는')} {_label(facts, row)}(칠한 곳 평균 {row['thickness_um']:.0f}µm, 미도장 {unpainted:.0f}%)"
+
+
+def _target_um(facts: RecordFacts) -> float | None:
+    value = (facts.coating or {}).get("target", {}).get("target_thickness_um")
+    return float(value) if _is_num(value) else None
+
+
+def _thickness_ranking(facts: RecordFacts, *, thinnest: bool) -> str:
+    rows = sorted((row for row in facts.target_rows if _is_num(row.get("thickness_um"))), key=lambda row: row["thickness_um"], reverse=not thinnest)
+    if not rows:
+        return _NO_TARGET
+    first, rest = rows[0], rows[1:3]
+    target = _target_um(facts)
+    text = (f"가장 {'얇은' if thinnest else '두꺼운'} 곳은 Zone {first['zone_id']}입니다. 칠한 곳 평균 {first['thickness_um']:.1f}µm"
+            + (f"이고 목표는 {target:.0f}µm입니다." if target else "입니다."))
+    return text + (" 그다음은 " + ", ".join(f"Zone {row['zone_id']}({row['thickness_um']:.1f}µm)" for row in rest) + "입니다." if rest else "")
+
+
+def _overpaint(facts: RecordFacts) -> str:
+    rows, target = facts.target_rows, _target_um(facts)
+    if not rows or target is None:
+        return _NO_TARGET
+    heavy = sorted((row for row in rows if _is_num(row.get("overpaint_percent")) and row["overpaint_percent"] > 0), key=lambda row: -row["overpaint_percent"])[:3]
+    text = f"칠한 곳 평균이 목표의 1.5배({target * 1.5:.0f}µm) 이상인 Zone은 {sum(row.get('grade') == 'above' for row in rows)}곳입니다."
+    return text + (" 1.5배를 넘는 면적이 있는 Zone은 " + ", ".join(f"Zone {row['zone_id']}({row['overpaint_percent']:g}%)" for row in heavy) + " 순입니다."
+                   if heavy else " 1.5배를 넘는 면적이 있는 Zone은 0곳입니다.")
+
+
+def _completion(facts: RecordFacts, zones: tuple[str, ...]) -> str:
+    rows = [row for row in facts.target_rows if row.get("gate_status")]
+    if not rows:
+        return _NO_TARGET
+    if not zones:
+        order = [str(zone) for zone in facts.claims.get("reference_order") or []] or facts.zone_ids
+        lines, _ = gate_lines(rows, order=order)
+        done = sum(row["gate_status"] == "complete" for row in rows)
+        return " ".join([f"목표 두께 이상으로 칠한 면적이 {_GATE_PERCENT}% 기준을 넘긴 Zone은 {len(rows)}곳 중 {done}곳입니다.", *lines])
+    out = []
+    for zone in zones:
+        row = _row(facts, zone)
+        if row is None or not row.get("gate_status"):
+            out.append(f"{_zone_text(facts, zone)}.")
+            continue
+        area = f"목표 두께 이상으로 칠한 면적은 {row['coverage_percent']:g}%" if _is_num(row.get("coverage_percent")) else "칠한 면적 자료가 없고"
+        verdict = {"complete": f"{_GATE_PERCENT}% 기준을 넘겨 완료입니다.", "overpaint_risk": f"{_GATE_PERCENT}% 기준과 별개로 과도막이라 더 칠하면 안 됩니다."}.get(
+            row["gate_status"], f"{_GATE_PERCENT}% 기준에 못 미쳐 보완이 필요합니다.")
+        out.append(f"{_zone_text(facts, zone)}. {area}로 {verdict}")
+    return " ".join(out)
+
+
+def _distance_filter(facts: RecordFacts, operator: str | None) -> str:
+    wanted = operator or "higher"
+    names = {"higher": "멀리서", "lower": "가까이서", "similar": "비슷하게"}
+    found: dict[str, list[str]] = {"higher": [], "lower": [], "similar": []}
+    for zone, measure in sorted(facts.measures.items(), key=lambda item: (not item[0].isdigit(), int(item[0]) if item[0].isdigit() else 0)):
+        if (relation := measured_relation(measure, "distance_mm")) is not None:
+            found[relation].append(f"Zone {zone}({measure['distance_mm']:,.0f} mm, 전문가 {measure['reference_distance_mm']:,.0f} mm)")
+    if not any(found.values()):
+        return "이 기록에는 이격거리를 전문가와 견줄 자료가 없습니다."
+    text = f"전문가 중앙값보다 {names[wanted]} 칠한 Zone은 " + (", ".join(found[wanted]) if found[wanted] else "0곳") + "입니다."
+    if wanted != "similar":
+        text += f" 전문가와 비슷한(±{_SIMILAR * 100:.0f}% 이내) Zone은 " + (", ".join(found["similar"]) if found["similar"] else "0곳") + "입니다."
+    return text
+
+
+def _speed(facts: RecordFacts, zone: str) -> str:
+    measure = facts.measures.get(zone) or {}
+    if not _is_num(measure.get("speed_mms")):
+        return f"Zone {zone}의 이동 속도 자료가 이 기록에 없습니다."
+    expert = f"이고 전문가 중앙값은 {measure['reference_speed_mms']:,.0f} mm/s입니다" if _is_num(measure.get("reference_speed_mms")) else "입니다"
+    text = (f"Zone {zone}의 이동 속도는 {measure['speed_mms']:,.0f} mm/s{expert}. "
+            "전문가 기록은 이전 장비 기준이라 맞춰 바꾸라고 하지 않습니다.")
+    return text + (" 이 Zone은 저도막이고, 저도막에서 속도를 올리면 보통 더 얇아집니다." if measure.get("grade") == "below" else "")
+
+
+def _metric_value(item: Mapping[str, Any], side: str) -> str:
+    value = item.get(side)
+    if _is_num(value):
+        return f"{value:g}{_UNITS.get(str(item.get('unit') or ''), item.get('unit') or '')}"
+    return str(item.get(f"{side}_label") or value)
+
+
+def _work_metric(facts: RecordFacts, part: RecordPart) -> str:
+    zones = {str(zone.get("zone_id")): zone for zone in (facts.claims.get("zones") or {}).values() if isinstance(zone, Mapping)}
+    items = {zone: next((m for m in row.get("metrics") or [] if isinstance(m, Mapping) and m.get("key") == part.metric), None) for zone, row in zones.items()}
+    items = {zone: item for zone, item in items.items() if item is not None and _is_num(item.get("similarity_percent"))}
+    if not items:
+        return "이 기록에는 그 항목의 작업 유사도 자료가 없습니다."
+    label = next(iter(items.values())).get("label") or part.metric
+    similarities = {zone: item["similarity_percent"] for zone, item in items.items()}
+    low, high = min(similarities.values()), max(similarities.values())
+    text = (f"{len(items)}개 Zone 모두 {label} 작업 유사도는 {low:g}%입니다." if low == high else
+            f"{len(items)}개 Zone의 {label} 작업 유사도는 {low:g}%~{high:g}%이고 가장 낮은 곳은 Zone {min(similarities, key=similarities.get)}입니다.")  # type: ignore[arg-type]
+    for zone in part.zones or ((facts.playback_zone,) if facts.playback_zone else ()):
+        if zone in items:
+            text += f" Zone {zone}의 {josa(str(label), '은', '는')} {_metric_value(items[zone], 'actual')}이고 전문가는 {_metric_value(items[zone], 'reference')}입니다."
+    return text
+
+
+def _pose_judgement(facts: RecordFacts) -> str:
+    arm = facts.arm or {}
+    if not _is_num(arm.get("average_similarity_percent")):
+        return "이 기록에는 팔 자세를 채점한 결과가 없어 자세 유사도를 말씀드릴 수 없습니다."
+    sequences = [seq for seq in arm.get("sequences") or [] if isinstance(seq, Mapping) and _is_num(seq.get("similarity_percent"))]
+    text = f"팔 자세 유사도는 평균 {arm['average_similarity_percent']:.0f}%입니다."
+    if sequences:
+        text += " 분사별로는 " + ", ".join(f"{seq.get('sequence_id')}(Zone {seq.get('zone_id')}) {seq['similarity_percent']:.0f}%" for seq in sequences) + "입니다."
+    limited = [str(seq.get("sequence_id")) for seq in sequences if seq.get("confidence") == "limited"]
+    if limited:
+        text += " 입력 품질이나 비교 범위에 제한이 있어 참고용 수치입니다(" + ", ".join(limited) + ")."
+    return text + " 숙련자 중간 수준은 약 70%입니다. 이 수치만으로 잘했다 못했다를 가르지 않습니다."
+
+
+def _slot_text(slot: object) -> str:
+    return ", ".join(f"Zone {item['zone_id']} {item['count']}회" for item in slot or [] if isinstance(item, Mapping))  # type: ignore[attr-defined]
+
+
+def _order_shape(facts: RecordFacts, operator: str | None) -> str:
+    slots = [slot for slot in facts.claims.get("position_distribution") or [] if isinstance(slot, list) and slot]
+    count = facts.claims.get("reference_session_count")
+    if operator == "adherence":
+        rate, best, position = (facts.claims.get(key) for key in ("order_adherence_rate", "best_reference_similarity", "position_similarity"))
+        if not all(_is_num(value) for value in (rate, best, position)):
+            return "이 기록에는 순서 준수율 자료가 없습니다."
+        return (f"순서 준수율은 {rate * 100:.1f}%입니다. 가장 비슷한 숙련자 순서와는 {best * 100:.1f}% 같고, 자리별 일치는 "
+                f"{position * 100:.1f}%입니다(숙련자 {count}회 기준).")
+    if not slots or not _is_num(count):
+        return "이 기록에는 숙련자 순서 분포 자료가 없습니다."
+    top = [max(slot, key=lambda item: item["count"]) for slot in slots]
+    if operator == "agreement":
+        spots = ", ".join(f"{name} 자리는 {count}회 중 {item['count']}회가 Zone {item['zone_id']}" for name, item in zip(("첫", "둘째"), top[:2]))
+        return f"숙련자끼리의 일치도 수치는 기록에 없습니다. 다만 {spots}였습니다."
+    first = (f"숙련자 {count}회 모두 Zone {slots[0][0]['zone_id']}부터 시작했습니다." if len(slots[0]) == 1 and slots[0][0]["count"] == count
+             else f"숙련자의 첫 자리는 {_slot_text(slots[0])}입니다.")
+    mine = (facts.claims.get("actual_order") or [None])[0]
+    if operator == "allowed":
+        rate = facts.claims.get("order_adherence_rate")
+        return (f"{first} 둘째 자리는 {_slot_text(slots[1])}입니다." if len(slots) > 1 else first) + (
+            f" 이 기록은 Zone {mine}부터 시작했고 순서 준수율은 {rate * 100:.0f}%입니다." if mine and _is_num(rate) else "")
+    last = f"숙련자의 마지막 자리는 {_slot_text(slots[-1])}입니다."
+    return (f"{last} {first}" if operator == "end" else f"{first} {last}") + (f" 이 기록은 Zone {mine}부터 시작했습니다." if mine else "")
+
+
+def _external(facts: RecordFacts) -> str:
+    text = "PSPC·90/10·ISO·SSPC 같은 외부 규격의 DFT 기준은 이 기록으로는 판정할 수 없습니다."
+    rows = facts.target_rows
+    target = _target_um(facts)
+    if not rows or target is None:
+        return f"{text} 이 기록에는 목표 대비 판정 자료가 없어 우리 기준 결과도 말씀드릴 수 없습니다."
+    below = sum(row.get("grade") == "below" for row in rows)
+    done = sum(row.get("gate_status") == "complete" for row in rows)
+    return f"{text} 이 기록의 기준(목표 {target:.0f}µm)으로는 목표 미만 Zone이 {below}곳이고 {_GATE_PERCENT}% 기준을 넘긴 Zone은 {done}곳입니다."
+
+
+def _missing_zones(facts: RecordFacts, zones: list[str]) -> str:
+    known = [int(zone) for zone in facts.zone_ids if zone.isdigit()]
+    span = f"{min(known)}~{max(known)}" if known and known == list(range(min(known), max(known) + 1)) else ", ".join(facts.zone_ids)
+    return f"Zone {', '.join(zones)}은 이 기록에 없는 Zone입니다. 이 기록의 Zone은 {span}입니다."
+
+
+def cause_answer(facts: RecordFacts, zone: str | None) -> str:
+    """원인 설계(2026-11-14-integrated-cause-analysis-design.md)의 cause_evidence가 붙으면 이 함수 본문만 바꾼다.
+
+    지금은 그 Zone의 등급·칠한 곳 평균·목표와 실측 속도·이격거리(전문가 비교)를 그대로 전한다. 원인 낱말은 새로 만들지 않는다.
+    """
+    if zone is None:
+        return ASK_ZONE
+    measured = measured_sentence(zone, facts.measures.get(zone))
+    row = _row(facts, zone)
+    target = _target_um(facts)
+    if row is None or not _is_num(row.get("thickness_um")) or target is None:
+        return " ".join(item for item in (_NO_TARGET, measured) if item)
+    return " ".join(item for item in (
+        f"{josa(f'Zone {zone}', '은', '는')} 칠한 곳 평균 {row['thickness_um']:.1f}µm로 {_label(facts, row)}입니다(목표 {target:.0f}µm).",
+        measured or "이 Zone의 이동 속도·이격거리 실측이 기록에 없어 원인은 말씀드릴 수 없습니다.") if item)
+
+
+def _priorities(facts: RecordFacts) -> list[tuple[str, str]]:
+    """(제목, 이유) 순위. 도막 게이트 → 팔 자세 → 작업 유사도, 앞 단계에 후보가 있으면 뒤 단계는 보지 않는다."""
+    gate = sorted((row for row in facts.target_rows if row.get("gate_status") == "needs_more" and _is_num(row.get("coverage_percent"))),
+                  key=lambda row: row["coverage_percent"])
+    if gate:
+        return [(f"Zone {row['zone_id']}부터 보완하십시오.", f"목표 두께 이상으로 칠한 면적이 {row['coverage_percent']:g}%로 {_GATE_PERCENT}% 기준에 못 미칩니다.")
+                for row in gate]
+    arm = sorted(((zone, item) for zone, item in ((facts.arm or {}).get("zones") or {}).items() if isinstance(item, Mapping) and _is_num(item.get("similarity_percent"))),
+                 key=lambda pair: pair[1]["similarity_percent"])
+    if arm:
+        return [(f"Zone {zone}의 팔 자세부터 보십시오.", f"팔 자세 유사도가 {item['similarity_percent']:.0f}%로 가장 낮습니다." + (f" {item['guidance']}" if item.get("guidance") else ""))
+                for zone, item in arm]
+    work = sorted((zone for zone in (facts.claims.get("zones") or {}).values() if isinstance(zone, Mapping) and _is_num(zone.get("work_similarity_percent"))),
+                  key=lambda zone: zone["work_similarity_percent"])
+    return [(f"Zone {zone['zone_id']}의 작업 자세부터 보십시오.", f"작업 유사도가 {zone['work_similarity_percent']:.0f}%로 가장 낮습니다.") for zone in work]
+
+
+def one_priority(facts: RecordFacts, *, single: bool) -> str:
+    ranked = _priorities(facts)
+    if not ranked:
+        return "이 기록에서 먼저 고칠 곳을 가릴 판정 자료가 없습니다."
+    if single or len(ranked) == 1:
+        return " ".join(ranked[0])
+    return f"1순위 {' '.join(ranked[0])}\n2순위 {' '.join(ranked[1])}"
+
+
+def answer_part(facts: RecordFacts, part: RecordPart, *, task_type: str) -> tuple[str, dict[str, Any] | None]:
+    """조각 하나의 결정적 답과 sequence_context(진행 질문일 때만)."""
+    code = part.code or ""
+    if part.zone_source == "asked" and (missing := [zone for zone in part.zones if zone not in facts.zone_ids]) and facts.zone_ids:
+        return _missing_zones(facts, missing), None
+    if code in {"progress_status", "progress_next"}:
+        found = viewer_progress_answer(facts.value, part.text, "status" if code == "progress_status" else "next")
+        return found if found else ("이 기록에는 방문 순서 자료가 없어 말씀드릴 수 없습니다.", None)
+    per_zone = {"completion": lambda zone: _completion(facts, (zone,)), "distance_compare": lambda zone: distance_sentence(zone, facts.measures.get(zone))
+                or f"Zone {zone}의 이격거리를 전문가와 견줄 자료가 이 기록에 없습니다.",
+                "speed": lambda zone: _speed(facts, zone), "cause": lambda zone: cause_answer(facts, zone)}
+    if code in per_zone:
+        if not part.zones:
+            return (_completion(facts, ()) if code == "completion" else ASK_ZONE), None
+        return " ".join(per_zone[code](zone) for zone in part.zones), None
+    answers = {"coating_extreme": lambda: _thickness_ranking(facts, thinnest=part.operator != "argmax"), "coating_over": lambda: _overpaint(facts),
+               "distance_filter": lambda: _distance_filter(facts, part.operator), "work_metric": lambda: _work_metric(facts, part),
+               "pose_judgement": lambda: _pose_judgement(facts), "order_shape": lambda: _order_shape(facts, part.operator),
+               "external_standard": lambda: _external(facts), "one_priority": lambda: one_priority(facts, single=part.cardinality == "one"),
+               "zone_exists": lambda: _missing_zones(facts, list(part.zones))}
+    return answers[code](), None

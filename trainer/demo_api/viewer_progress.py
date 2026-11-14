@@ -45,7 +45,9 @@ def transition_counts(flows: Iterable[list[str]]) -> list[dict[str, Any]]:
 
 def order_progress_facts(order: Mapping[str, Any]) -> dict[str, Any]:
     """순서 평가에서 대화 자료(서명됨)로 옮기는 값. 없으면 싣지 않는다(예전 응답과 같은 모양)."""
-    return {key: order[key] for key in ("zone_first_visit_seconds", "expert_transitions") if order.get(key) is not None}
+    return {key: order[key] for key in (
+        "zone_first_visit_seconds", "expert_transitions", "position_distribution", "reference_session_count",
+        "best_reference_similarity", "position_similarity") if order.get(key) is not None}
 
 
 def progress_question(prompt: str) -> str | None:
