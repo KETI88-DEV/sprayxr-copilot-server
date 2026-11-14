@@ -47,20 +47,24 @@ def test_sequence_answer_says_the_other_arm_is_not_the_correction_target() -> No
     assert "왼쪽 위팔" in answer  # 엔진이 실제로 짚은 관절은 알려 준다
 
 
-def test_sequence_answer_without_corrections_reports_the_arm_in_range() -> None:
+def test_sequence_answer_without_corrections_does_not_call_the_arm_normal() -> None:
     pose = _pose([], "숙련자 팔 자세 대비 유사도 80%. 여섯 관절 모두 숙련자 통상 범위 안입니다.")
 
-    assert pose_query.answer_sequence_question(pose, prompt="오른손을 어떻게 고쳐?") == "이 분사에서 오른팔은 숙련자 통상 범위 안입니다."
+    # 2026-11-14: 교정이 없다는 것을 "통상 범위 안"으로 단정하지 않는다(엔진 안내문과 같은 단서를 붙인다).
+    assert pose_query.answer_sequence_question(pose, prompt="오른손을 어떻게 고쳐?") == (
+        "이 분사에서 오른팔 교정 항목은 나오지 않았습니다. 교정 항목이 없더라도 정상 자세를 확정하지 않습니다.")
 
 
-@pytest.mark.parametrize("prompt", ["팔꿈치를 더 펴야 해, 굽혀야 해?", "손목 각도는 어때?", "어깨를 더 올려야 해?"])
+@pytest.mark.parametrize("prompt", ["어깨를 더 올려야 해?", "무릎을 굽혀야 해?"])
 def test_parts_the_engine_does_not_score_are_declined_not_invented(prompt: str) -> None:
     answer = pose_query.unsupported_pose_part(prompt)
 
     assert answer is not None and "확인할 수 없습니다" in answer
 
 
-@pytest.mark.parametrize("prompt", ["오른손을 어떻게 고쳐?", "지금 자세는 어때?", "전체 작업 유사도는?"])
+# 팔꿈치(ForeArm)·손목(Hand)은 엔진이 위치로 잰다. 각도를 물어도 거절하지 않고 위치 결과와 각도가 없는 까닭을 답한다.
+@pytest.mark.parametrize("prompt", ["오른손을 어떻게 고쳐?", "지금 자세는 어때?", "전체 작업 유사도는?",
+                                    "팔꿈치를 더 펴야 해, 굽혀야 해?", "손목 각도는 어때?"])
 def test_scored_questions_are_not_declined(prompt: str) -> None:
     assert pose_query.unsupported_pose_part(prompt) is None
 
@@ -279,10 +283,12 @@ def test_sequence_context_answers_the_question_not_only_the_summary() -> None:
     assert right["pose_context"]["sequence_id"] == "SEQ-012"
 
 
-def test_pose_tab_question_about_an_unscored_part_never_reaches_the_model() -> None:
+def test_pose_tab_elbow_question_reads_the_forearm_and_never_reaches_the_model() -> None:
     client = _client_with_two_arms()
 
     data = client.post(QUERY, json=_query_body(context="SEQ-012", prompt="팔꿈치를 더 펴야 해, 굽혀야 해?")).json()["data"]
 
-    assert "확인할 수 없습니다" in data["answer"]
+    assert "팔꿈치 교정 항목은 나오지 않았습니다" in data["answer"] and "정상 자세를 확정하지 않습니다" in data["answer"]
+    declined = client.post(QUERY, json=_query_body(context="SEQ-012", prompt="어깨를 더 올려야 해?")).json()["data"]
+    assert "확인할 수 없습니다" in declined["answer"]
     assert data["retrieval_used"] is False

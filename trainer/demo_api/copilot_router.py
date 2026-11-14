@@ -49,7 +49,8 @@ from trainer.demo_api.coating_query import (
     target_advice_facts)
 from trainer.demo_api.copilot_intent import classify_question_intent, fallback_intent, preset_intent, is_coating_status_question, is_coating_advice_question, is_general_painting_knowledge
 from trainer.demo_api.dialogue import (INSTRUCTION_REFUSAL, asks_for_instructions, authenticated_facts, conversation_key,
-                                       drop_ungrounded, guard_generated_answer, parse_plan, plain_answer,
+                                       drop_misattributed_zones, drop_ungrounded, guard_generated_answer, parse_plan, plain_answer,
+                                       viewer_claims, zone_fact_numbers,
                                        selected_direction_answer, ungrounded_measurements, viewer_findings_answer,
                                        viewer_measurement_answer, viewer_metadata_context, without_hanzi)
 from trainer.demo_api.playback_direction import playback_direction_from_context, playback_direction_answer, simple_direction_question, requested_direction_scope, aggregate_direction, LABELS as DIRECTION_LABELS
@@ -60,7 +61,9 @@ from trainer.demo_api.pose_query import (
     answer_pose_question,
     answer_sequence_question,
     answer_zone_question,
+    angle_note,
     asked_arm,
+    asked_part,
     asks_about_zones,
     asks_whole_session,
     score_pose,
@@ -70,7 +73,7 @@ from trainer.demo_api.pose_query import (
 )
 from trainer.demo_api.query_language import TranslationUnavailableError, translate_text
 from trainer.demo_api.sequence_store import SequenceStore
-from trainer.demo_api.viewer_arm_pose import arm_pose_answer, parse_viewer_arm_pose
+from trainer.demo_api.viewer_arm_pose import arm_pose_answer, parse_viewer_arm_pose, zone_pose_summary
 from trainer.demo_api.sequence_analysis import SequenceAnalysisEngine
 from trainer.demo_api.reference_order_query import actual_order_intent, current_next_answer, is_current_next_question, is_reference_order_question, resolve_reference_target, reference_order_answer
 from trainer.demo_api.v1_store import V1Store
@@ -549,6 +552,17 @@ def _grounded_detail(candidate: str, base_answer: str, context: Mapping[str, obj
     return True
 
 
+# 손·손목·팔꿈치·위팔 질문. "오른쪽으로 칠해"처럼 방향만 말한 질문은 걸리지 않게 손·팔을 함께 본다.
+_BODY_PART: Final = re.compile(r"(?:오른|왼)\s*(?:쪽\s*)?(?:손|팔)|팔꿈치|손목|위팔|(?:right|left)\s*(?:hand|arm)|elbow|wrist", re.I)
+_WORST_ZONE: Final = re.compile(r"(?:zone|존|구역)\s*별|(?:가장|제일)\s*문제|최악|(?:어디|어느).*(?:문제|나쁘|나빠|안\s*좋|낮|못)", re.I)
+
+
+def _zone_facts(context: str | None) -> dict[str, set[str]]:
+    """모델 답의 Zone 번호 검사에 쓰는 서명된 Zone 사실. 뷰어 문맥이 없으면 비어 있다(검사하지 않는다)."""
+    claims = viewer_claims(context)
+    return zone_fact_numbers(claims[1] if claims else None, parse_viewer_arm_pose(context)) if claims else {}
+
+
 def _document_rules(pipeline: object) -> tuple[str, ...]:
     """문서 답 지침(fast_system) 가운데 유출 검사에 쓸 줄. 저도막·과도막 정의 줄은 답이 그대로 옮겨도 정상이라 뺀다."""
     config = getattr(pipeline, "config", None)
@@ -699,6 +713,26 @@ async def _execute_copilot_query(
                                  context_status="available" if available else "not_available")
     if viewer_requested and (simple_direction_question(query.prompt) or preset_intent("trajectory_recomm", query.prompt) == "order_direction"):
         return frame_answer()
+    arm_claims = parse_viewer_arm_pose(query.context) if viewer_requested else None
+    coating_question = is_coating_status_question(query.prompt) or is_coating_advice_question(query.prompt)
+    if arm_claims is not None and not coating_question and _BODY_PART.search(query.prompt):
+        # 손·손목·팔꿈치 질문은 어느 탭이든 팔 관절 엔진 결과로만 답한다(운영 q4·q5·q6: 작업 안내·모델의 "정상 범위" 답).
+        claims = viewer_claims(query.context)
+        playback = (viewer_analysis or {}).get("playback_context") or (claims[0].get("playback_context") if claims else None)
+        answer = angle_note(query.prompt) + arm_pose_answer(
+            arm_claims, current=_asks_current_viewer_pose(query.prompt), playback=playback if isinstance(playback, dict) else None,
+            zone_id=requested_zone(query.prompt, None), side=asked_arm(query.prompt), part=asked_part(query.prompt))
+        return _success_response(query, request_started, answer=answer, retrieval_used=False, citations=[],
+                                 pose_context={"scope": "arm_pose", "status": arm_claims.get("status")} if query.task_type == "pose_recomm" else None,
+                                 context_status="available" if arm_claims.get("status") == "available" else "not_available")
+    if (arm_claims is not None and viewer_analysis is not None and query.task_type == "pose_recomm"
+            and (preset_intent(query.task_type, query.prompt) == "pose_worst_zone" or _WORST_ZONE.search(query.prompt))):
+        # "Zone별로 어디가 문제야?"는 자세 유사도가 낮은 Zone과 그 교정으로 답한다(운영 q2, 27B Zone 오기).
+        zones = viewer_analysis.get("zones")
+        answer = zone_pose_summary(arm_claims, list(zones.values()) if isinstance(zones, Mapping) else None)
+        return _success_response(query, request_started, answer=answer, retrieval_used=False, citations=[],
+                                 pose_context={"scope": "arm_pose_zones", "status": arm_claims.get("status")},
+                                 context_status="available" if arm_claims.get("status") == "available" else "not_available")
     if viewer_requested and preset_intent(query.task_type, query.prompt) is None:
         signed_answer = viewer_measurement_answer(query.context, query.prompt) or (
             viewer_findings_answer(query.context) if _EVALUATION_QUESTION.search(query.prompt) else None)
@@ -750,7 +784,7 @@ async def _execute_copilot_query(
             if ungrounded_measurements(answer, facts=facts, prompt=query.prompt):
                 # 자료에 없는 측정값은 내보내지 않는다. 한 번 다시 생성하고, 그래도 남으면 그 부분을 뺀다.
                 answer = drop_ungrounded(await to_thread.run_sync(converse), facts=facts, prompt=query.prompt)
-            answer = guard_generated_answer(answer)
+            answer = drop_misattributed_zones(guard_generated_answer(answer), _zone_facts(query.context))
             return _success_response(query, request_started, answer=answer, retrieval_used=False, generated=True,
                                      citations=[], context_status="available" if facts else "not_available")
         except Exception:
@@ -1150,7 +1184,7 @@ async def _execute_copilot_query(
     answer = parsed.body
     if query.response_mode == "quick":
         answer = re.sub(r"\n+\s*\[?근거\]?\s*:?\s*$", "", answer).rstrip()
-    answer = guard_generated_answer(answer, instructions=_document_rules(pipeline))
+    answer = drop_misattributed_zones(guard_generated_answer(answer, instructions=_document_rules(pipeline)), _zone_facts(query.context))
     logger.info(
         "copilot answer normalized request_id=%s repair_path=%s citations=%d dropped=%d",
         query.request_id,

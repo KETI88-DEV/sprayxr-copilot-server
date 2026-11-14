@@ -152,9 +152,12 @@ def test_zone_number_question_on_the_pose_tab_is_answered_from_the_signed_zone()
     assert pipeline.plans == [] and "Zone 3 작업 유사도는 40%" in data["answer"] and "방향" not in data["answer"]
 
 
-def test_unscored_body_part_is_declined_on_the_signed_viewer_path() -> None:
+def test_elbow_question_reads_the_forearm_on_the_signed_viewer_path() -> None:
+    # 팔꿈치는 엔진의 ForeArm이다(2026-11-14). 각도는 없으니 위치 교정만 옮긴다. 엔진이 재지 않는 어깨는 거절한다.
     data = _ask(_Pipeline(), "팔꿈치를 더 펴야 해, 굽혀야 해?", context=_pose_context(), task="pose_recomm")
-    assert "확인할 수 없습니다" in data["answer"] and "작업 유사도" not in data["answer"]
+    assert "오른쪽 팔꿈치가 숙련자 평균보다 22 cm 가까이" in data["answer"] and "작업 유사도" not in data["answer"]
+    shoulder = _ask(_Pipeline(), "어깨를 더 올려야 해?", context=_pose_context(), task="pose_recomm")
+    assert "확인할 수 없습니다" in shoulder["answer"] and "작업 유사도" not in shoulder["answer"]
 
 
 def test_arm_side_question_is_answered_from_every_correction_of_the_arm_scoring() -> None:

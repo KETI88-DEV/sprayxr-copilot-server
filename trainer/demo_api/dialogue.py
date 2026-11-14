@@ -364,6 +364,74 @@ def viewer_findings_answer(value: str | None) -> str | None:
 
 viewer_claims = _viewer_claims
 
+# --- 모델 답의 Zone 번호 검사(27B가 Zone 2의 교정을 "1번 구역"에 붙였다) -----------------------------------
+_ZONE_MENTION: Final = re.compile(r"(?:zone|존|구역)\s*(\d+)|(\d+)\s*번\s*(?:zone|존|구역)", re.I)
+_UNIT_BY_KEY: Final = {"speed_mms": "mm/s", "reference_speed_mms": "mm/s", "distance_mm": "mm", "reference_distance_mm": "mm",
+                       "work_similarity_percent": "%", "similarity_percent": "%", "thickness_um": "µm", "unpainted_percent": "%"}
+_METRIC_UNITS: Final = {"um": "µm", "deg": "°", "mm": "mm", "": ""}
+
+
+def _measure_keys(number: float, unit: str) -> set[str]:
+    return {f"{round(number, digits):g}{unit}" for digits in (0, 1, 2)}
+
+
+def zone_fact_numbers(claims: Mapping[str, Any] | None, arm: Mapping[str, Any] | None = None) -> dict[str, set[str]]:
+    """Zone 번호 → 그 Zone의 서명된 사실에 나오는 측정값(수+단위). 모델 답이 Zone을 바꿔 붙였는지 볼 때 쓴다."""
+    out: dict[str, set[str]] = {}
+
+    def add(zone: object, value: Any, key: str = "") -> None:
+        bucket = out.setdefault(str(zone), set())
+        if isinstance(value, str):
+            for match in _MEASUREMENT.finditer(re.sub(r"(?<=\d),(?=\d{3})", "", value)):
+                unit = _UNIT_ALIASES.get(match[3], match[3])
+                bucket.update(*(_measure_keys(float(n), unit) for n in match.groups()[:2] if n))
+        elif isinstance(value, (int, float)) and not isinstance(value, bool) and key in _UNIT_BY_KEY:
+            bucket.update(_measure_keys(float(value), _UNIT_BY_KEY[key]))
+        elif isinstance(value, Mapping):
+            unit = _METRIC_UNITS.get(str(value.get("unit", "")), str(value.get("unit", "")))
+            for child_key, child in value.items():
+                if child_key in ("actual", "reference") and isinstance(child, (int, float)) and not isinstance(child, bool) and unit:
+                    bucket.update(_measure_keys(float(child), unit))
+                else:
+                    add(zone, child, str(child_key))
+        elif isinstance(value, list):
+            for child in value:
+                add(zone, child, key)
+
+    for zone in ((claims or {}).get("zones") or {}).values():
+        if isinstance(zone, Mapping) and zone.get("zone_id") is not None:
+            add(zone["zone_id"], {k: v for k, v in zone.items() if k not in ("map_num", "zone_id")})
+    if isinstance(arm, Mapping):
+        for zone_id, zone in (arm.get("zones") or {}).items():
+            add(zone_id, zone)
+        for sequence in arm.get("sequences") or []:
+            if isinstance(sequence, Mapping) and sequence.get("zone_id") is not None:
+                add(sequence["zone_id"], {"corrections": sequence.get("corrections")})
+    return out
+
+
+def _sentence_misattributed(sentence: str, zones: Mapping[str, set[str]]) -> bool:
+    named = {a or b for a, b in _ZONE_MENTION.findall(sentence)}
+    if not named or not zones:
+        return False
+    if named - set(zones):
+        return True  # 이 기록에 없는 Zone
+    own = set().union(*(zones[zone] for zone in named))
+    others = set().union(*(values for zone, values in zones.items() if zone not in named))
+    for match in _MEASUREMENT.finditer(re.sub(r"(?<=\d),(?=\d{3})", "", sentence)):
+        unit = _UNIT_ALIASES.get(match[3], match[3])
+        keys = {f"{float(n):g}{unit}" for n in match.groups()[:2] if n}
+        if keys & others and not keys & own:
+            return True
+    return False
+
+
+def drop_misattributed_zones(answer: str, zones: Mapping[str, set[str]]) -> str:
+    """다른 Zone의 측정값을 붙였거나 없는 Zone을 말한 문장을 뺀다. 남는 것이 없으면 확인할 수 없다고 답한다."""
+    if not zones or not _ZONE_MENTION.search(answer):
+        return answer
+    kept = [part.strip() for part in _SENTENCE_END.split(answer) if part.strip() and not _sentence_misattributed(part, zones)]
+    return " ".join(kept) or "어느 Zone의 결과인지 자료와 맞지 않아 답할 수 없습니다. Zone 번호를 넣어 다시 질문해 주세요."
 # 진행 질문의 계산 재료(viewer_progress). 모델 자료에는 넣지 않는다.
 _PROGRESS_KEYS: Final = {"zones", "zone_first_visit_seconds", "expert_transitions"}
 
