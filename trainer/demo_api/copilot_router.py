@@ -48,7 +48,8 @@ from trainer.demo_api.coating_query import (
     answer_coating_question, answer_distribution_cause, parse_viewer_coating_context, report_coating_context,
     target_advice_facts)
 from trainer.demo_api.copilot_intent import classify_question_intent, fallback_intent, preset_intent, is_coating_status_question, is_coating_advice_question, is_general_painting_knowledge
-from trainer.demo_api.dialogue import (authenticated_facts, conversation_key, drop_ungrounded, parse_plan, plain_answer,
+from trainer.demo_api.dialogue import (INSTRUCTION_REFUSAL, asks_for_instructions, authenticated_facts, conversation_key,
+                                       drop_ungrounded, guard_generated_answer, parse_plan, plain_answer,
                                        selected_direction_answer, ungrounded_measurements, viewer_findings_answer,
                                        viewer_measurement_answer, viewer_metadata_context, without_hanzi)
 from trainer.demo_api.playback_direction import playback_direction_from_context, playback_direction_answer, simple_direction_question, requested_direction_scope, aggregate_direction, LABELS as DIRECTION_LABELS
@@ -548,6 +549,14 @@ def _grounded_detail(candidate: str, base_answer: str, context: Mapping[str, obj
     return True
 
 
+def _document_rules(pipeline: object) -> tuple[str, ...]:
+    """문서 답 지침(fast_system) 가운데 유출 검사에 쓸 줄. 저도막·과도막 정의 줄은 답이 그대로 옮겨도 정상이라 뺀다."""
+    config = getattr(pipeline, "config", None)
+    prompt = config.get("prompt") if isinstance(config, dict) else None
+    text = str(prompt.get("fast_system", "")) if isinstance(prompt, dict) else ""
+    return ("\n".join(line for line in text.splitlines() if "저도막" not in line and "과도막" not in line),)
+
+
 def error_response(code: int, message: str) -> JSONResponse:
     envelope = CopilotResponse(status="ERROR", code=code, message=message, data=None)
     return JSONResponse(status_code=code, content=envelope.model_dump(mode="json"))
@@ -625,6 +634,9 @@ async def _execute_copilot_query(
 ) -> JSONResponse:
     """Execute one normalized query for both text and voice transports."""
     request_started = time.monotonic() if started is None else started
+    if asks_for_instructions(query.prompt):
+        # 지침 공개·무시 요청은 모델에 보내지 않는다(2026-11-14 운영 q41).
+        return _success_response(query, request_started, answer=INSTRUCTION_REFUSAL, retrieval_used=False, citations=[])
 
     dialogue_turns = await to_thread.run_sync(lambda: sequences.recent_query_turns(
         query.session_id or "CHAT:" + query.user_id, limit=6,
@@ -738,6 +750,7 @@ async def _execute_copilot_query(
             if ungrounded_measurements(answer, facts=facts, prompt=query.prompt):
                 # 자료에 없는 측정값은 내보내지 않는다. 한 번 다시 생성하고, 그래도 남으면 그 부분을 뺀다.
                 answer = drop_ungrounded(await to_thread.run_sync(converse), facts=facts, prompt=query.prompt)
+            answer = guard_generated_answer(answer)
             return _success_response(query, request_started, answer=answer, retrieval_used=False, generated=True,
                                      citations=[], context_status="available" if facts else "not_available")
         except Exception:
@@ -1137,6 +1150,7 @@ async def _execute_copilot_query(
     answer = parsed.body
     if query.response_mode == "quick":
         answer = re.sub(r"\n+\s*\[?근거\]?\s*:?\s*$", "", answer).rstrip()
+    answer = guard_generated_answer(answer, instructions=_document_rules(pipeline))
     logger.info(
         "copilot answer normalized request_id=%s repair_path=%s citations=%d dropped=%d",
         query.request_id,
