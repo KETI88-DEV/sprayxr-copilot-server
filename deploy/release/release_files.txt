@@ -180,6 +180,7 @@ trainer/demo_api/v1_store.py
 trainer/demo_api/viewer_alerts.py
 trainer/demo_api/viewer_arm_pose.py
 trainer/demo_api/viewer_context.py
+trainer/demo_api/viewer_progress.py
 trainer/demo_api/voice_contracts.py
 trainer/demo_api/voice_router.py
 trainer/demo_api/zone_resolver.py
