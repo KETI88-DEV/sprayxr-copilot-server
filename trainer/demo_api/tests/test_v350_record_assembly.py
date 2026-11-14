@@ -70,3 +70,23 @@ def test_forged_or_missing_signature_turns_record_answers_off() -> None:   # Rev
 def test_unanswerable_question_shaped_part_is_named_but_narration_is_silent() -> None:   # P7
     assert "그 부분은 이 기록에 없습니다." in answer("칠 다 했는데 어디가 제일 얇게 나왔어? 그리고 내 이름이 뭐야?").text
     assert "그 부분은" not in answer("칠 다 했는데 어디가 제일 얇게 나왔어?").text
+
+
+def test_speed_cause_premise_answers_with_speed_and_the_old_equipment_limit() -> None:
+    text = answer("속도가 느려서 얇게 나온 거지?").text
+    assert not text.startswith(("예", "아니요")) and "2,230 mm/s" in text and "이전 장비" in text and "설명하기 어렵" not in text
+
+
+def test_double_conclusion_premise_is_corrected_once() -> None:
+    text = answer("Zone 1은 정상이라고 나왔고 다 칠했으니까 끝난 거지?", AT_24S).text
+    assert text.count("아니요") == 1 and text.count("95%") == 1
+
+
+def test_grade_normal_only_lead_addresses_the_grade_without_repeating_95() -> None:
+    text = answer("Zone 1은 정상이라고 나왔으니 끝난 거지?", AT_24S).text
+    assert text.startswith("아니요. 평균 두께가 기준 안이어도") and text.count("95%") == 1
+
+
+def test_comparison_lead_does_not_repeat_the_value_clause() -> None:   # T44
+    text = answer("나 숙련자보다 느리던데, 속도를 숙련자만큼 올려야 해?").text
+    assert text.count("이동 속도는") == 1

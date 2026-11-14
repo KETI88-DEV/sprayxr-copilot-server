@@ -632,15 +632,16 @@ def _premise_lead(facts: RecordFacts, part: RecordPart, premise: Premise) -> str
         if not rows or any(row is None or not row.get("gate_status") for row in rows):
             return None
         done = all(row["gate_status"] == "complete" for row in rows)  # type: ignore[index]
-        return "예." if done else f"아니요. 다 칠한 것과 완료는 다릅니다. 완료는 목표 두께 이상으로 칠한 면적이 {_GATE_PERCENT}% 이상일 때입니다."
+        if done:
+            return "예."
+        return "아니요. 다 칠한 것과 완료는 다릅니다." if premise.subject == "visited_all" else "아니요. 평균 두께가 기준 안이어도 완료는 칠한 면적으로 봅니다."  # 95% 설명은 본문이 한다
     if premise.kind == "comparison" and zone and premise.subject in _SPEED_RELATION:
         variable = "speed_mm_s" if premise.subject.startswith("speed") else "distance_mm"
         relation = measured_relation(facts.measures.get(zone), variable)
         if relation is None:
             return None
         return ("예." if relation == _SPEED_RELATION[premise.subject] else "아니요.") + (
-            f" Zone {zone}의 {'이동 속도' if variable == 'speed_mm_s' else '이격거리'}는 전문가 중앙값과 견줘 "
-            f"{ {'lower': '낮습니다', 'higher': '높습니다', 'similar': '비슷합니다(±10% 이내)'}[relation] }.")
+            f" 전문가 중앙값보다 { {'lower': '낮습니다', 'higher': '높습니다', 'similar': '비슷합니다(±10% 이내)'}[relation] }.")  # 값은 본문이 말한다
     return None
 
 
@@ -686,7 +687,11 @@ def answer_record_question(context: str | None, prompt: str, *, task_type: str,
         text, context_found = answer_part(facts, part, task_type=task_type)
         sequence_context = sequence_context or context_found
         in_record = all(zone in facts.zone_ids for zone in part.zones) or not facts.zone_ids
-        leads = [lead for premise in part.premises if in_record and (lead := _premise_lead(facts, part, premise))]
+        leads = list(dict.fromkeys(lead for premise in part.premises if in_record and premise.kind != "conclusion" and (lead := _premise_lead(facts, part, premise))))
+        conclusion = next((lead for premise in part.premises if in_record and premise.kind == "conclusion" and (lead := _premise_lead(facts, part, premise))), None)
+        leads += [conclusion] if conclusion else []  # 결론 전제가 둘이어도 바로잡는 문장은 하나
+        if part.code == "cause" and part.zones and in_record and any(p.kind == "cause" and p.subject.split(">")[0] in {"slow", "fast"} for p in part.premises):
+            text = _speed(facts, part.zones[0])  # 속도 원인은 동조도 반박도 없이 값과 이전 장비 한계만
         if leads and part.code == "cause" and part.zones and _target_um(facts):
             text = f"{_zone_text(facts, part.zones[0])}입니다. 목표는 {_target_um(facts):.0f}µm입니다."  # 실측 거리는 lead가 이미 말했다
         sentences.append(" ".join([*leads, text]))
