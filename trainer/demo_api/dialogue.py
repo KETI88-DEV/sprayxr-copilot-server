@@ -5,7 +5,7 @@ import json
 import math
 import re
 from datetime import datetime, timedelta, timezone
-from typing import Any, Final, Mapping
+from typing import Any, Callable, Final, Mapping
 
 from trainer.demo_api import coating_assessment
 from trainer.demo_api.viewer_progress import order_progress_facts
@@ -234,39 +234,75 @@ def drop_ungrounded(answer: str, *, facts: Any, prompt: str) -> str:
 # --- 지침 유출 방어(2026-11-14 운영 q41: 주입 문구에 대화 모델이 시스템 지침을 그대로 출력) -------------------
 INSTRUCTION_REFUSAL: Final = "내부 지침이나 시스템 설정은 알려 드릴 수 없습니다. 도장 작업이나 훈련 기록에 대해 질문해 주세요."
 _NO_SAFE_PART: Final = "제공된 자료로는 답할 수 없습니다."
+_TARGET = r"(?:너|네|니|당신|ai|에이아이|시스템|어시스턴트|챗봇|코파일럿|co-?pilot)"
 _INJECTION: Final = re.compile(
     r"시스템\s*프롬프트|system\s*prompt|hidden\s*prompt|developer\s*mode|jailbreak|프롬프트\s*(?:를|을)?\s*(?:전부|전체|그대로)?\s*(?:보여|출력|알려|공개)"
-    r"|(?:이전|위|앞|기존)(?:의)?\s*(?:모든\s*)?(?:지시|명령|지침|규칙|설정)(?:은|는|을|를|들은|들을)?\s*(?:모두\s*|전부\s*|다\s*)?(?:무시|잊)"
-    r"|(?:너|네|당신)(?:에게|한테|의)?\s*(?:주어진|받은)?\s*(?:지시|지침|규칙|설정)(?:을|를)?\s*(?:전부|전체|그대로)?\s*(?:보여|출력|알려|공개)"
+    # 지시·지침·프롬프트는 이 서비스에 준 것이다. 규칙·설정은 도장 작업의 것일 수 있어 아래 두 경우만 본다.
+    r"|(?:이전|위|앞|기존)(?:의)?\s*(?:모든\s*)?(?:지시|명령|지침|프롬프트)(?:사항)?(?:은|는|을|를|들은|들을)?\s*(?:모두\s*|전부\s*|다\s*)?(?:무시|잊)"
+    rf"|{_TARGET}(?:가|는|에게|한테|의)?\s*(?:주어진|받은|가진)?\s*(?:지시|지침|규칙|설정|명령|프롬프트)(?:을|를|은|는)?\s*(?:전부\s*|전체\s*|그대로\s*|모두\s*|다\s*)?(?:보여|출력|알려|공개|무시|잊)"
+    # 도우미에게 내린 명령형("위의 규칙은 다 무시해."). "무시하고 칠하면"처럼 이어지는 말은 작업 질문이다.
+    r"|(?:규칙|설정)(?:은|는|을|를|들은|들을)?\s*(?:모두\s*|전부\s*|다\s*)?(?:무시해|잊어)(?:\s*(?:줘|라|요|버려))?\s*(?:[.!?,]|$)"
     r"|ignore\s+(?:all\s+|any\s+)?(?:the\s+)?(?:previous|prior|above|earlier)\s+(?:instructions?|prompts?|rules?)"
     r"|(?:reveal|print|show|repeat)\s+(?:me\s+)?(?:your|the)\s+(?:system\s+|hidden\s+|initial\s+)?(?:prompt|instructions?)",
     re.I)
-# 자료·지침의 영문 키(verified_facts, record_direction …). 훈련생에게 가는 한국어 답에는 나올 일이 없다.
-_INTERNAL_KEY: Final = re.compile(r"(?<![A-Za-z0-9])[a-z][a-z0-9]*(?:_[a-z0-9]+)+(?![A-Za-z0-9])")
+# 자료·지침의 영문 키(verified_facts, record_direction …). 파일 이름(surface_prep_guide.pdf)은 키가 아니다.
+_INTERNAL_KEY: Final = re.compile(r"(?<![A-Za-z0-9._/-])[a-z][a-z0-9]*(?:_[a-z0-9]+)+(?![A-Za-z0-9_])(?!\.[A-Za-z0-9]{2,5}\b)")
 _WINDOW: Final = 16
+# 지침 조각 한 개만 같으면 거절하지 않는다. 지침이 허용한 문장(대체 문구·안전 안내)을 답이 그대로 쓸 수 있다.
+_LEAK_SENTENCES: Final = 2
 
 
 def asks_for_instructions(prompt: str) -> bool:
-    """지침을 보여 달라거나 무시하라는 요청. 모델에 보내지 않고 거절한다."""
+    """지침을 보여 달라거나 무시하라는, 이 서비스를 향한 요청. 모델에 보내지 않고 거절한다."""
     return bool(_INJECTION.search(prompt))
 
 
-def _windows(text: str) -> set[str]:
-    flat = re.sub(r"\s+", " ", text)
-    out: set[str] = set()
-    for sentence in re.split(r"[.!?。\n]", flat):
+def drop_sentences(answer: str, bad: Callable[[str], bool]) -> tuple[str, bool]:
+    """`bad`가 참인 문장만 뺀다. 줄 나눔([답변]·[근거] 줄)은 지킨다. (남은 답, 뺀 것이 있는가)."""
+    lines, dropped = [], False
+    for line in answer.split("\n"):
+        parts = re.split(r"(?<=[.!?])\s+", line)
+        kept = [part for part in parts if not (part.strip() and bad(part))]
+        dropped = dropped or len(kept) != len(parts)
+        if kept and any(part.strip() for part in kept) or not line.strip():
+            lines.append(" ".join(kept).rstrip() if len(kept) != len(parts) else line)
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip(), dropped
+
+
+def has_body(answer: str) -> bool:
+    """[답변]·[근거] 표지와 근거 줄을 빼고도 한국어 문장이 남는가."""
+    body = "\n".join(line for line in answer.split("\n") if not re.match(r"\s*(?:\[근거\]|근거\s*:|-\s)", line))
+    return bool(re.search(r"[가-힣]{2,}", re.sub(r"\[(?:답변|근거)\]\s*:?", "", body)))
+
+
+def _fingerprints(text: str) -> dict[str, int]:
+    """지침 문장 조각 → 문장 번호. 따옴표 안(허용된 대체 문구)은 빼고 본다."""
+    flat = re.sub(r"\s+", " ", re.sub(r"'[^']*'|\"[^\"]*\"|‘[^’]*’|“[^”]*”", " ", text))
+    out: dict[str, int] = {}
+    for number, sentence in enumerate(re.split(r"[.!?。\n]", flat)):
         sentence = sentence.strip()
-        out.update(sentence[start:start + _WINDOW] for start in range(0, max(1, len(sentence) - _WINDOW + 1), _WINDOW // 2)
-                   if len(sentence) >= _WINDOW)
-    # 영문 키만 걸린 조각은 지침 문장이 아니다(내부 키 검사가 따로 맡는다).
-    return {window for window in out if len(re.findall(r"[가-힣]", window)) >= 6}
+        for start in range(0, max(1, len(sentence) - _WINDOW + 1), _WINDOW // 2):
+            window = sentence[start:start + _WINDOW]
+            # 영문 키만 걸린 조각은 지침 문장이 아니다(내부 키 검사가 따로 맡는다).
+            if len(window) >= _WINDOW and len(re.findall(r"[가-힣]", window)) >= 6:
+                out.setdefault(window, number)
+    return out
 
 
-def _instruction_windows() -> set[str]:
+def _instruction_texts() -> list[str]:
     texts = [conversation_messages("", recent_turns=[], facts={}, response_mode=mode)[0]["content"].split("\n현재 날짜")[0]
              for mode in ("quick", "detailed")]
     texts.append(planning_messages("", task_type="", recent_turns=[], facts={})[0]["content"])
-    return set().union(*map(_windows, texts))
+    return texts
+
+
+def leaks_instructions(answer: str, instructions: tuple[str, ...] = ()) -> bool:
+    """지침의 서로 다른 문장 조각이 `_LEAK_SENTENCES`개 이상 답에 있으면 지침을 옮긴 것이다."""
+    flat = re.sub(r"\s+", " ", answer)
+    for index, text in enumerate([*_instruction_texts(), *instructions]):
+        if len({(index, number) for window, number in _fingerprints(text).items() if window in flat}) >= _LEAK_SENTENCES:
+            return True
+    return False
 
 
 def guard_generated_answer(answer: str, *, instructions: tuple[str, ...] = ()) -> str:
@@ -274,15 +310,13 @@ def guard_generated_answer(answer: str, *, instructions: tuple[str, ...] = ()) -
 
     `instructions`는 이 요청에 쓴 다른 지침(문서 답의 시스템 지침 등)이다.
     """
-    flat = re.sub(r"\s+", " ", answer)
-    windows = _instruction_windows().union(*map(_windows, instructions))
-    if any(window in flat for window in windows):
+    if leaks_instructions(answer, instructions):
         return INSTRUCTION_REFUSAL
     if not _INTERNAL_KEY.search(answer):
         return answer
-    answer = re.sub(r"\s*\([^()]*\)", lambda match: "" if _INTERNAL_KEY.search(match[0]) else match[0], answer)
-    kept = [part.strip() for part in _SENTENCE_END.split(answer) if part.strip() and not _INTERNAL_KEY.search(part)]
-    return " ".join(kept) or _NO_SAFE_PART
+    answer = re.sub(r"[ \t]*\([^()\n]*\)", lambda match: "" if _INTERNAL_KEY.search(match[0]) else match[0], answer)
+    kept, _ = drop_sentences(answer, lambda part: bool(_INTERNAL_KEY.search(part)))
+    return kept if has_body(kept) else _NO_SAFE_PART
 
 
 def _viewer_claims(value: str | None) -> tuple[dict[str, Any], dict[str, Any]] | None:
@@ -430,8 +464,8 @@ def drop_misattributed_zones(answer: str, zones: Mapping[str, set[str]]) -> str:
     """다른 Zone의 측정값을 붙였거나 없는 Zone을 말한 문장을 뺀다. 남는 것이 없으면 확인할 수 없다고 답한다."""
     if not zones or not _ZONE_MENTION.search(answer):
         return answer
-    kept = [part.strip() for part in _SENTENCE_END.split(answer) if part.strip() and not _sentence_misattributed(part, zones)]
-    return " ".join(kept) or "어느 Zone의 결과인지 자료와 맞지 않아 답할 수 없습니다. Zone 번호를 넣어 다시 질문해 주세요."
+    kept, _ = drop_sentences(answer, lambda part: _sentence_misattributed(part, zones))
+    return kept if has_body(kept) else "어느 Zone의 결과인지 자료와 맞지 않아 답할 수 없습니다. Zone 번호를 넣어 다시 질문해 주세요."
 # 진행 질문의 계산 재료(viewer_progress). 모델 자료에는 넣지 않는다.
 _PROGRESS_KEYS: Final = {"zones", "zone_first_visit_seconds", "expert_transitions"}
 
