@@ -110,7 +110,36 @@ def test_correction_follow_up_does_not_repeat_the_inverted_cause() -> None:
     assert "얇게 형성" not in answer and "분사량이 줄" not in answer
 
 
-def test_general_knowledge_answer_with_inverted_physics_is_withheld() -> None:
+def test_inverted_physics_is_checked_only_against_a_viewer_record() -> None:
     pipeline = RecordingPipeline(plan={"kind": "coating_knowledge", "intent": "knowledge", "scope": "unspecified"}, document="[답변] " + Q33)
-    answer = ask("과도막은 왜 생겨?", tab="knowledge", pipeline=pipeline, raw_context="")["answer"]
-    assert "과도한 분사 거리" not in answer and "두꺼워지" in answer
+    # 기록 문맥 없는 일반 지식 답에는 손대지 않는다(독립 검토 2026-11-14).
+    assert ask("과도막은 왜 생겨?", tab="knowledge", pipeline=pipeline, raw_context="")["answer"] == Q33
+    viewer = ask("과도막은 왜 생겨? 내 기록에서도 과도막 난 데 있어?", tab="knowledge", pipeline=pipeline)["answer"]
+    assert "과도한 분사 거리" not in viewer and "두꺼워지" in viewer
+
+
+@pytest.mark.parametrize("sentence", [
+    "거리가 멀어지면 도막이 얇아지고, 가까워지면 두꺼워집니다.",
+    "속도가 느려지면 두꺼워지고 빨라지면 얇아집니다.",
+    "도막 두께가 목표 160µm보다 낮아 저도막 등급입니다.",
+])
+def test_correct_two_way_physics_is_kept(sentence: str) -> None:
+    assert not cq.inverted_cause(sentence)
+    pipeline = RecordingPipeline(plan={"kind": "coating_knowledge", "intent": "knowledge", "scope": "unspecified"}, document="[답변] " + sentence)
+    assert ask("거리와 속도가 도막에 어떤 영향을 줘?", tab="knowledge", pipeline=pipeline)["answer"] == sentence
+
+
+def test_a_dropped_body_never_leaves_only_labels() -> None:
+    answer = cq.drop_contradicted_causes("[답변] 거리가 멀어서 도막이 두꺼워졌습니다.\n[근거] - 도장 매뉴얼", _measures(), default_zone=None)
+    assert "[답변]" not in answer and "두꺼워지" in answer
+
+
+def test_general_advice_is_not_judged_against_the_playhead_zone() -> None:
+    # 재생 위치가 Zone 8(전문가보다 가까움)이어도 일반 질문의 "거리를 줄이세요"는 그 Zone 조언이 아니다.
+    pipeline = RecordingPipeline(plan={"kind": "coating_knowledge", "intent": "knowledge", "scope": "unspecified"},
+                                 document="[답변] 도막이 두꺼우면 이격거리를 줄이세요.")
+    assert ask("도막이 흘러내리면 어떻게 해?", tab="knowledge", pipeline=pipeline)["answer"] == "도막이 두꺼우면 이격거리를 줄이세요."
+    zone = RecordingPipeline(plan={"kind": "coating_knowledge", "intent": "knowledge", "scope": "zone"},
+                             document="[답변] 이격거리를 더 줄이세요.")
+    answer = ask("이 구역 도막을 두껍게 하려면 어떻게 해?", tab="coating", pipeline=zone)["answer"]
+    assert "더 줄이세요" not in answer and "Zone 8 실측" in answer

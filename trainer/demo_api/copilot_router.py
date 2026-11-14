@@ -557,21 +557,26 @@ _BODY_PART: Final = re.compile(r"(?:오른|왼)\s*(?:쪽\s*)?(?:손|팔)|팔꿈�
 _WORST_ZONE: Final = re.compile(r"(?:zone|존|구역)\s*별|(?:가장|제일)\s*문제|최악|(?:어디|어느).*(?:문제|나쁘|나빠|안\s*좋|낮|못)", re.I)
 
 
+_HERE: Final = re.compile(r"지금|현재|여기|이렇게|이번|방금|(?<![가-힣])이\s*(?:zone|존|구역|기록|분사|곳)|내\s|제\s|나의|저의", re.I)
+
+
 def _viewer_measures(context: str | None, prompt: str) -> tuple[dict[str, dict[str, float]] | None, str | None]:
     """서명된 뷰어 Zone 실측(속도·이격거리·전문가 중앙값)과 질문이 가리키는 Zone(번호, 없으면 재생 위치)."""
     claims = viewer_claims(context)
     if claims is None:
         return None, requested_zone(prompt, None)
     playback = claims[0].get("playback_context") if isinstance(claims[0].get("playback_context"), dict) else {}
-    zone = requested_zone(prompt, None) or (str(playback["zone_id"]) if playback.get("zone_id") is not None else None)
-    return zone_measures(claims[1]), zone
+    # 재생 위치의 Zone은 질문이 "지금·이 구역·이렇게"처럼 그곳을 가리킬 때만 쓴다. 일반 질문은 특정 Zone이 아니다.
+    here = playback.get("zone_id") is not None and bool(_HERE.search(prompt))
+    return zone_measures(claims[1]), requested_zone(prompt, None) or (str(playback["zone_id"]) if here else None)
 
 
 def _checked_generation(answer: str, query: CopilotQueryRequest, *, instructions: tuple[str, ...] = ()) -> str:
     """모델이 만든 답의 출구 검사: 지침·내부 키 유출, 다른 Zone의 수치, 거꾸로 된 인과·실측과 엇갈리는 조언."""
     measures, zone = _viewer_measures(query.context, query.prompt)
     answer = drop_misattributed_zones(guard_generated_answer(answer, instructions=instructions), _zone_facts(query.context))
-    return drop_contradicted_causes(answer, measures, default_zone=zone)
+    # 인과·조언 검사는 이 기록(서명된 뷰어 문맥)에 대한 답에만 한다. 일반 지식 답은 그대로 둔다.
+    return drop_contradicted_causes(answer, measures, default_zone=zone) if measures is not None else answer
 
 
 def _zone_facts(context: str | None) -> dict[str, set[str]]:

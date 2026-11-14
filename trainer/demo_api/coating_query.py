@@ -244,10 +244,17 @@ def _candidate_line(adjustments: list[Mapping[str, Any]], measure: Mapping[str, 
     return " ".join(part for part in parts if part) or "속도·이격거리 기록이 없어 조절 후보를 내지 못했습니다."
 
 
-_THIN: Final = r"얇|저도막|두께가\s*부족|분사량이\s*줄|도막이\s*줄"
-_CLOSE_SLOW: Final = r"가깝|가까웠|가까워|짧았|짧아|짧고|짧은\s*(?:거리|이격)|느렸|느려|느리고|느린\s*속도|낮았|낮아|낮고|낮은\s*속도"
-_THICK: Final = r"두꺼|두껍|과도막"
-_FAR_FAST: Final = r"멀었|멀어|멀고|먼\s*거리|길었|길어|빨랐|빨라|빠르고|빠른\s*속도|높았|높아|과도한\s*(?:분사\s*)?(?:거리|이격|속도)"
+# 원인 → 결과 짝. 결과 낱말마다 같은 절(쉼표·마침표 사이)에서 바로 앞에 나온 원인 낱말 하나와 짝짓는다.
+# "멀어지면 얇아지고, 가까워지면 두꺼워진다"·"느려지면 두꺼워지고 빨라지면 얇아진다"는 짝마다 맞는 방향이다.
+_EFFECTS: Final = (("thin", r"얇|저도막|두께가\s*부족|분사량이\s*줄|도막이\s*줄"), ("thick", r"두꺼|두껍|과도막"))
+_CAUSES: Final = (
+    ("close", r"가깝|가까웠|가까워|짧았|짧아|짧고|짧은\s*(?:거리|이격)"),
+    ("far", r"멀었|멀어|멀고|먼\s*거리|길었|길어|과도한\s*(?:분사\s*)?(?:거리|이격)"),
+    # "낮아·높아"는 속도를 말할 때만 원인이다("두께가 목표보다 낮아 저도막"은 원인이 아니다).
+    ("slow", r"느렸|느려|느리고|느린\s*속도|속도[^,;]{0,40}?낮(?:아|았|고|은)|천천히"),
+    ("fast", r"빨랐|빨라|빠르고|빠른\s*속도|속도[^,;]{0,40}?높(?:아|았|고|은)|과도한\s*(?:분사\s*)?(?:거리\s*또는\s*)?속도"),
+)
+_INVERTED: Final = {("close", "thin"), ("slow", "thin"), ("far", "thick"), ("fast", "thick")}
 _CONCESSIVE: Final = r"는데도|은데도|인데도|음에도|에도\s*불구|데도"
 _ADVICE: Final = {("distance_mm", "decrease"): r"(?:거리|이격)\S*\s*(?:더\s*)?(?:줄|좁히|짧게)|더\s*가까이|가까이\s*(?:가져|대|붙|이동|다가)",
                   ("distance_mm", "increase"): r"(?:거리|이격)\S*\s*(?:더\s*)?(?:늘|넓히|길게)|더\s*멀리|멀리\s*(?:떨어|이동)",
@@ -257,11 +264,17 @@ _GENERAL_PHYSICS: Final = "일반적으로 가까이·천천히 칠할수록 도
 
 
 def inverted_cause(sentence: str) -> bool:
-    """"가깝고 느려서 얇아졌다"처럼 물리 방향이 거꾸로 된 원인 문장. "~는데도 얇았다"는 거꾸로가 아니다."""
-    if re.search(_CONCESSIVE, sentence):
-        return False
-    return bool((re.search(_THIN, sentence) and re.search(_CLOSE_SLOW, sentence))
-                or (re.search(_THICK, sentence) and re.search(_FAR_FAST, sentence)))
+    """"가깝고 느려서 얇아졌다"처럼 같은 절 안의 원인→결과가 물리 방향과 거꾸로인 문장. "~는데도"는 거꾸로가 아니다."""
+    for clause in re.split(r"[,;，]", re.sub(r"(?<=\d),(?=\d{3})", "", sentence)):  # 2,230 mm/s의 쉼표는 절 경계가 아니다
+        if re.search(_CONCESSIVE, clause):
+            continue
+        causes = sorted((match.start(), kind) for kind, pattern in _CAUSES for match in re.finditer(pattern, clause))
+        for effect, pattern in _EFFECTS:
+            for match in re.finditer(pattern, clause):
+                before = [kind for position, kind in causes if position < match.start()]
+                if before and (before[-1], effect) in _INVERTED:
+                    return True
+    return False
 
 
 def _contradicts_measure(sentence: str, measures: Mapping[str, Mapping[str, Any]], zones: list[str]) -> bool:
@@ -273,24 +286,28 @@ def _contradicts_measure(sentence: str, measures: Mapping[str, Mapping[str, Any]
 
 
 def drop_contradicted_causes(answer: str, measures: Mapping[str, Mapping[str, Any]] | None, *, default_zone: str | None = None) -> str:
-    """모델 답에서 물리가 거꾸로 된 원인 문장과 실측 방향과 엇갈리는 조언 문장을 뺀다.
+    """뷰어 기록에 대한 모델 답에서 물리가 거꾸로 된 원인 문장과 실측 방향과 엇갈리는 조언 문장을 뺀다.
 
-    다 빠지면 그 Zone의 실측 비교(없으면 일반적인 방향 한 문장)로 답한다 — 빈 답이나 틀린 인과를 내보내지 않는다.
+    `default_zone`은 질문이 이 기록의 특정 Zone(번호·"지금·이 구역")을 가리킬 때만 준다. 일반 조언은 재생 위치의
+    Zone 실측과 견주지 않는다. 본문이 다 빠지면 그 Zone의 실측 비교(없으면 일반적인 방향 한 문장)로 답한다.
     """
-    sentences = [part.strip() for part in re.split(r"(?<=[.!?])\s+|\n+", answer) if part.strip()]
-    kept: list[str] = []
+    from trainer.demo_api.dialogue import drop_sentences, has_body
     dropped_physics = False
-    for sentence in sentences:
-        named = [a or b for a, b in re.findall(r"(?:zone|존|구역)\s*(\d+)|(\d+)\s*번\s*(?:zone|존|구역)", sentence, re.I)]
-        zones = named or ([default_zone] if default_zone else [])
+
+    def bad(sentence: str) -> bool:
+        nonlocal dropped_physics
         if inverted_cause(sentence):
             dropped_physics = True
-        elif not (measures and _contradicts_measure(sentence, measures, zones)):
-            kept.append(sentence)
-    if len(kept) == len(sentences):
+            return True
+        named = [a or b for a, b in re.findall(r"(?:zone|존|구역)\s*(\d+)|(\d+)\s*번\s*(?:zone|존|구역)", sentence, re.I)]
+        zones = named or ([default_zone] if default_zone else [])
+        return bool(measures and _contradicts_measure(sentence, measures, zones))
+
+    kept, dropped = drop_sentences(answer, bad)
+    if not dropped:
         return answer
-    if kept:
-        return " ".join(kept)
+    if has_body(kept):
+        return kept
     fallback = measured_sentence(default_zone, (measures or {}).get(default_zone)) if default_zone else None
     return fallback or (_GENERAL_PHYSICS if dropped_physics else "제공된 자료로는 답할 수 없습니다.")
 
