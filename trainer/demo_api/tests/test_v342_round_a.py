@@ -60,7 +60,7 @@ def test_follow_up_after_a_hand_on_tip_question(follow_up: str) -> None:
 @pytest.mark.parametrize("question", ["용접선 부위 먼저 스트라이프 칠해도 돼?", "용접 비드 위에 바로 칠해도 되나요?",
                                       "몸을 벽 쪽으로 향해도 돼?", "얼굴을 피도물 쪽으로 향하고 칠해도 돼?", "건을 벽 쪽으로 향해도 돼?"])
 def test_normal_technique_questions_are_not_hazard_acts(question: str) -> None:
-    assert not g.is_hazard_act(question), question
+    assert g.hazard_class((question,)) is None, question
 
 
 def test_body_direction_stays_a_pose_question() -> None:
@@ -69,4 +69,4 @@ def test_body_direction_stays_a_pose_question() -> None:
 
 
 def test_pointing_the_gun_at_a_person_is_still_a_hazard_act() -> None:
-    assert g.is_hazard_act("건을 사람 쪽으로 향해도 돼?")
+    assert g.hazard_class(("건을 사람 쪽으로 향해도 돼?",)) == "high_pressure"

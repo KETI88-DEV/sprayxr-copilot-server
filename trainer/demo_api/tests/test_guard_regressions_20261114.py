@@ -34,7 +34,8 @@ SANCTIONED = [
 def test_answers_using_sanctioned_sentences_pass_the_guard(config: str, answer: str) -> None:
     pipeline = _Configured(config, "[답변] " + answer)
     assert dialogue.guard_generated_answer(answer, instructions=_document_rules(pipeline)) == answer
-    result = ask("밀폐 구역 도장 안전 수칙은?", tab="knowledge", pipeline=pipeline, raw_context="")
+    # 질문은 위험 주제가 아닌 것을 쓴다(위험 주제 답에는 v3.4.3부터 주의 한 줄이 붙는다). 여기서 보는 것은 지침 유출 검사다.
+    result = ask("도장 품질 기준은 어디서 찾아?", tab="knowledge", pipeline=pipeline, raw_context="")
     assert result["answer"] == answer
 
 

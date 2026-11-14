@@ -15,7 +15,7 @@ from trainer.demo_api.tests.viewer_record import AT_3S, RecordingPipeline, ask
 @pytest.mark.parametrize("answer", ["손가락으로 막아도 위험하지 않습니다.", "막아도 됩니다. 다만 위험할 수 있으니 장갑을 끼세요.",
                                     "위험하니 주의하세요. 손가락으로 살짝 막아 확인하면 됩니다.", "에어리스 건 끝을 손가락으로 막는 것은 위험하며 권장되지 않습니다."])
 def test_hand_on_tip_always_gets_the_fixed_answer(answer: str) -> None:
-    assert g.guard_answer(("건 끝을 손가락으로 막아서 확인해도 되나요?", ""), answer, ["DOC-x"]) == (
+    assert g.guard_answer(g.hazard_class(("건 끝을 손가락으로 막아서 확인해도 되나요?",)), answer, ["DOC-x"]) == (
         g.HIGH_PRESSURE_ANSWER, list(g.HIGH_PRESSURE_CITATIONS))
 
 
@@ -24,11 +24,12 @@ def test_hand_on_tip_always_gets_the_fixed_answer(answer: str) -> None:
     ("위험하니 주의하세요. 손가락으로 살짝 막아 확인하면 됩니다.", True), ("주의해서 손가락으로 막아 보세요.", True),
     ("안전합니다. 손가락으로 막아서 확인하세요.", True), ("압력을 뺀 뒤라면 손가락으로 막아도 괜찮아요.", True),
     ("절대 안 된다고 할 수는 없지만 막아서 확인할 수 있습니다.", True), ("마스크 없이 작업하면 안 된다는 규정은 없습니다.", True),
-    ("위험합니다.", True), ("아니요, 안 됩니다.", False), ("하지 마세요. 작업 지침을 확인하세요.", False),
+    # v3.4.3: 허락하는 말이 없으면 답을 두고 주의 한 줄을 덧붙인다("위험합니다."도 그렇다).
+    ("위험합니다.", False), ("아니요, 안 됩니다.", False), ("하지 마세요. 작업 지침을 확인하세요.", False),
     ("마스크 없이 칠해서는 안 됩니다.", False),
 ])
 def test_a_bare_danger_word_is_not_a_refusal(answer: str, replace: bool) -> None:
-    assert g.needs_replacement(answer) is replace
+    assert g.is_permissive(answer) is replace
 
 
 # --- 2. 놓치던 위험 행동 질문 ------------------------------------------------------------------------
@@ -45,7 +46,7 @@ TIP_ACTS = HAZARD_ACTS[:6]
 
 @pytest.mark.parametrize("question", HAZARD_ACTS)
 def test_hazard_act_questions(question: str) -> None:
-    assert g.is_hazard_act(question), question
+    assert g.hazard_class((question,)) is not None, question
 
 
 @pytest.mark.parametrize("question", TIP_ACTS)
@@ -54,12 +55,12 @@ def test_tip_blocking_questions(question: str) -> None:
 
 
 def test_follow_up_after_a_safety_question_uses_the_conversation() -> None:
-    assert g.is_hazard_act("그럼 해도 돼?", previous="작업 중에 담배 피워도 돼?")
-    assert not g.is_hazard_act("그럼 해도 돼?", previous="적정 이격거리는?")
+    assert g.hazard_class(("그럼 해도 돼?",), previous_class=g.classify("작업 중에 담배 피워도 돼?")) == "ignition"
+    assert g.hazard_class(("그럼 해도 돼?",), previous_class=g.classify("적정 이격거리는?")) is None
     pipeline = Pipeline(document="네, 잠깐은 괜찮습니다.")
     _ask(pipeline, "작업 중에 담배 피워도 돼?", conversation="c1")
     data, _ = _ask(pipeline, "그럼 해도 돼?", conversation="c1")
-    assert data["answer"] == g.CONSERVATIVE_ANSWER
+    assert data["answer"] == g.CLASSES["ignition"].answer  # 저장된 종류(ignition)를 이어받고 허락하는 답을 바꾼다
 
 
 # --- 3. 위험 행동이 아닌 질문은 경로·답을 바꾸지 않는다 ---------------------------------------------------
@@ -72,8 +73,8 @@ NOT_HAZARD = ["건 각도는 어떻게?", "마스크 쓰고 칠하면 시야가 
 
 @pytest.mark.parametrize("question", NOT_HAZARD)
 def test_not_hazard_acts(question: str) -> None:
-    assert not g.is_hazard_act(question), question
-    assert g.guard_answer((question, ""), "네, 이 속도는 적정합니다.", []) == ("네, 이 속도는 적정합니다.", [])
+    assert g.hazard_class((question,)) is None, question
+    assert g.guard_answer(g.hazard_class((question,)), "네, 이 속도는 적정합니다.", []) == ("네, 이 속도는 적정합니다.", [])
 
 
 def test_non_hazard_viewer_questions_keep_their_engines() -> None:
