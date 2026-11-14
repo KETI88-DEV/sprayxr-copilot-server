@@ -35,7 +35,7 @@ _MCP_TIMEOUT_SEC: Final[float] = 20.0
 # 자세 유사도를 말하는 답에 붙인다. 숙련자끼리 견줘도 중앙값이 69~78%라 70%를 낮은 점수로 읽기 쉽다(2026-11-14 사용자 지적).
 POSE_SCALE_NOTE: Final[str] = "자세 유사도는 숙련자 평균 동작과 견준 값이며, 숙련자도 보통 70% 안팎입니다."
 # 엔진이 교정을 내지 않은 것은 "정상"이 아니다. 엔진 안내문(session_analysis._guideline)과 같은 문장이다.
-NO_CORRECTION_CAVEAT: Final[str] = "교정 항목이 없더라도 정상 자세를 확정하지 않습니다."
+NO_CORRECTION_CAVEAT: Final[str] = "교정 항목이 없다고 해서 자세가 정상이라는 뜻은 아닙니다."
 # 엔진 관절 이름 → 질문 낱말. 팔꿈치는 ForeArm, 손목은 Hand다(pose_similarity.JOINT_LABELS).
 PART_WORDS: Final[dict[str, str]] = {"ForeArm": "팔꿈치", "Hand": "손목", "UpperArm": "위팔"}
 _PART_QUESTION: Final = (("ForeArm", re.compile(r"팔꿈치|elbow", re.I)), ("Hand", re.compile(r"손목|wrist", re.I)),
@@ -470,9 +470,96 @@ def asked_arm(prompt: str, intent: str | None = None) -> str | None:
     return None
 
 
+def _has_final(word: str) -> bool:
+    """끝 글자에 받침이 있는가. 숫자는 읽는 소리로 본다(1 일, 3 삼, 6 육, 7 칠, 8 팔, 0 영·십·백 — 받침 있음)."""
+    if not word:
+        return False
+    if word[-1].isdigit():
+        return word[-1] in "013678"
+    code = ord(word[-1]) - 0xAC00
+    return 0 <= code < 11172 and code % 28 != 0
+
+
+def josa(word: str, with_final: str, without_final: str) -> str:
+    """'Zone 8' + 은/는 → 'Zone 8은'."""
+    return f"{word}{with_final if _has_final(word) else without_final}"
+
+
+def radius_phrase(label: str, delta_m: float, *, average: bool = False) -> str:
+    """반경 교정(어깨 중점에서 관절까지의 거리 차, arm_reference.Correction)을 몸을 기준으로 적고 할 일을 붙인다."""
+    part = label.split()[-1]
+    subject = f"{label}{'이' if _has_final(label) else '가'}"
+    obj = f"{part}{'을' if _has_final(part) else '를'}"
+    cm = f"{'평균 ' if average else ''}{abs(delta_m) * 100:.0f}cm"
+    if delta_m < 0:
+        return f"{subject} 숙련자 평균보다 몸 쪽으로 {cm} 더 붙어 있었습니다. {obj} 몸에서 더 떼어 주세요."
+    return f"{subject} 숙련자 평균보다 몸 밖으로 {cm} 더 뻗어 있었습니다. {obj} 몸 쪽으로 당겨 주세요."
+
+
+_RADIUS_LABEL: Final = re.compile(r"^(?P<where>스트로크\s*\d+~\d+%\s*구간에서\s*)?(?P<label>\S+\s\S+?)(?:이|가) 숙련자 평균보다 "
+                                  r"(?P<cm>\d+(?:\.\d+)?)\s*cm (?P<way>멀리|가까이) 있었습니다\.?$")
+
+
+def friendly_correction(label: str) -> str:
+    """MCP 자세 엔진의 교정 문장을 훈련생이 바로 쓸 말로 바꾼다. 엔진 이미지는 다시 배포하지 않으므로 여기서 바꾼다.
+
+    엔진 문장은 arm_reference.Correction.text가 반경 차의 부호(멀리/가까이)와 스트로크 구간으로 만든 것이라 그대로
+    되읽을 수 있다. 스트로크 구간 표현은 그대로 둔다. 모르는 모양(방향 교정 등)은 바꾸지 않는다.
+    """
+    text = label.strip()
+    match = _RADIUS_LABEL.match(text)
+    if match:
+        delta = float(match["cm"]) / 100 * (1 if match["way"] == "멀리" else -1)
+        return _whole_stroke(match["where"] or "") + radius_phrase(match["label"], delta)
+    return _whole_stroke(text)
+
+
+def _whole_stroke(text: str) -> str:
+    """스트로크 전체(0~100%)는 '스트로크 내내'. 다른 구간 표현은 그대로 둔다."""
+    return re.sub(r"스트로크\s*0~100%\s*구간에서\s*", "스트로크 내내 ", text)
+
+
+# 엔진이 채점을 제한한 사유(skeleton_gate·reference). 프레임 간격(R7)만 고르지 않은 분사는 채점에서 빠진 것이 없어 말하지 않는다.
+_SILENT_LIMITS: Final = {"frame_interval_irregular", "analysis_degraded"}
+_LIMIT_WORDS: Final = {
+    "skeleton_joint_frozen": "관절 일부가 멈춘 채로 기록된",
+    "skeleton_bone_length_inconsistent": "관절 위치가 흔들려 기록된",
+    "skeleton_rig_mismatch": "기준과 다른 몸 모델로 기록된",
+    "reference_single_worker": "비교할 숙련자 기록이 한 명뿐인",
+}
+
+
+def limit_reasons(item: Mapping[str, Any]) -> list[str]:
+    """제한 사유 가운데 말할 것. 사유를 모르는 제한 결과는 "unknown" 하나로 센다."""
+    if item.get("confidence") != "limited":
+        return []
+    quality = item.get("input_quality") if isinstance(item.get("input_quality"), Mapping) else {}
+    codes = [str(code) for code in [*(item.get("reason_codes") or []), *(quality.get("reason_codes") or []), item.get("reason_code")] if code]
+    if not codes:
+        return ["unknown"]
+    return [code for code in dict.fromkeys(codes) if code not in _SILENT_LIMITS]
+
+
+def limited_note(items: list[Mapping[str, Any]]) -> str:
+    """참고용 분사를 사유별로 한 번만, 쉬운 말로. 말할 사유가 없으면 빈 문자열."""
+    counts: dict[str, int] = {}
+    for item in items:
+        reasons = limit_reasons(item)
+        if reasons:
+            key = next((code for code in reasons if code in _LIMIT_WORDS), reasons[0])
+            counts[key] = counts.get(key, 0) + 1
+    parts = [f"{_LIMIT_WORDS.get(code, '기록 상태가 고르지 않은')} 분사 {count}회" for code, count in counts.items()]
+    return f"{', '.join(parts)}는 참고로만 봐 주세요." if parts else ""
+
+
 def asked_part(prompt: str) -> str | None:
     """팔꿈치·손목·위팔을 물으면 엔진 관절 이름의 뒷부분(ForeArm·Hand·UpperArm)."""
     return next((part for part, pattern in _PART_QUESTION if pattern.search(prompt)), None)
+
+
+def prefers_hand(prompt: str) -> bool:
+    """오른손·왼손·손을 물었는가(손목·손잡이는 아니다)."""
+    return bool(re.search(r"손(?!목|잡이|가락)|hand", prompt, re.I))
 
 
 def angle_note(prompt: str) -> str:
@@ -504,13 +591,21 @@ def answer_sequence_question(pose: PoseQueryResult, *, prompt: str, intent: str 
         found = [str(item["label"]) for item in pose.corrections if item.get("label")
                  and str(item.get("joint", "")).startswith(prefixes) and str(item.get("joint", "")).endswith(part)]
         name = f"{'오른쪽 ' if side == 'right' else '왼쪽 ' if side == 'left' else ''}{PART_WORDS[part]}"
-        return angle_note(prompt) + (" ".join(found) if found else f"이 분사에서 {name} 교정 항목은 나오지 않았습니다. {NO_CORRECTION_CAVEAT}")
+        return angle_note(prompt) + (" ".join(map(friendly_correction, found)) if found
+                                     else f"이 분사에서 {name} 교정 항목은 나오지 않았습니다. {NO_CORRECTION_CAVEAT}")
     if side is None:
         return _TRACKING_SENTENCE.sub("", pose.summary or "").strip() or "숙련자 자세와 비교했습니다."
     prefix, arm = _ARM_WORDS[side]
-    mine = [str(item["label"]) for item in pose.corrections if str(item.get("joint", "")).startswith(prefix) and item.get("label")]
+    mine = [item for item in pose.corrections if str(item.get("joint", "")).startswith(prefix) and item.get("label")]
+    if mine and prefers_hand(prompt):
+        # 오른손·왼손을 물으면 손목(Hand) 교정을 먼저 든다. 없으면 그렇다고 밝히고 팔 교정을 든다.
+        hand = [item for item in mine if str(item.get("joint", "")).endswith("Hand")]
+        side_word = "오른쪽" if side == "right" else "왼쪽"
+        if hand:
+            return " ".join(friendly_correction(str(item["label"])) for item in hand)
+        return f"{side_word} 손목 교정은 없었습니다. 대신 팔 교정이 있습니다. " + " ".join(friendly_correction(str(item["label"])) for item in mine)
     if mine:
-        return " ".join(mine)
+        return " ".join(friendly_correction(str(item["label"])) for item in mine)
     others = [str(item["joint"]) for item in pose.corrections if item.get("joint")]
     if others:
         label = pose_similarity.JOINT_LABELS.get(others[0], others[0])
@@ -674,7 +769,7 @@ def answer_order_question(
             from trainer.demo_api.viewer_progress import gate_lines
             gated = [row for row in analysis.get("coating_zones") or [] if isinstance(row, Mapping) and row.get("gate_status")]
             if gated:
-                focused = "\n".join([focused, *gate_lines(gated, order=flow, visited=set(first), note="세션을 마친 최종 도막 기준입니다.")[0]])
+                focused = "\n".join([focused, *gate_lines(gated, order=flow, visited=set(first), footer="세션이 끝났을 때의 도막 기준입니다.")[0]])
             return ZoneAnswer("available", None, focused, {
                 "analysis_status": "available", "reason_code": None, "scope": "session", "report_id": report_id,
                 "recommended_flow": flow, "first_visit_flow": first, "adherence_rate": rate,

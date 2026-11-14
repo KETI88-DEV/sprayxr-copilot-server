@@ -65,6 +65,7 @@ from trainer.demo_api.pose_query import (
     angle_note,
     asked_arm,
     asked_part,
+    prefers_hand,
     asks_about_zones,
     asks_whole_session,
     score_pose,
@@ -558,7 +559,7 @@ _BODY_PART: Final = re.compile(r"(?:오른|왼)\s*(?:쪽\s*)?(?:손|팔)|팔꿈�
 _WORST_ZONE: Final = re.compile(r"(?:zone|존|구역)\s*별|(?:가장|제일)\s*문제|최악|(?:어디|어느).*(?:문제|나쁘|나빠|안\s*좋|낮|못)", re.I)
 
 
-_HERE: Final = re.compile(r"지금|현재|여기|이렇게|이번|방금|(?<![가-힣])이\s*(?:zone|존|구역|기록|분사|곳)|내\s|제\s|나의|저의", re.I)
+_HERE: Final = re.compile(r"지금|현재|여기|이렇게|이번|방금|아까|(?<![가-힣])이\s*(?:zone|존|구역|기록|분사|곳)|내\s|제\s|나의|저의", re.I)
 
 
 def _viewer_measures(context: str | None, prompt: str) -> tuple[dict[str, dict[str, float]] | None, str | None]:
@@ -577,7 +578,16 @@ def _checked_generation(answer: str, query: CopilotQueryRequest, *, instructions
     measures, zone = _viewer_measures(query.context, query.prompt)
     answer = drop_misattributed_zones(guard_generated_answer(answer, instructions=instructions), _zone_facts(query.context))
     # 인과·조언 검사는 이 기록(서명된 뷰어 문맥)에 대한 답에만 한다. 일반 지식 답은 그대로 둔다.
-    return drop_contradicted_causes(answer, measures, default_zone=zone) if measures is not None else answer
+    if measures is None:
+        return answer
+    return drop_contradicted_causes(answer, measures, default_zone=zone, record_zone=_playback_zone(query.context))
+
+
+def _playback_zone(context: str | None) -> str | None:
+    claims = viewer_claims(context)
+    playback = claims[0].get("playback_context") if claims and isinstance(claims[0].get("playback_context"), dict) else {}
+    zone = playback.get("zone_id")
+    return str(zone) if zone is not None and str(zone) not in {"", "-1", "0"} else None
 
 
 def _zone_facts(context: str | None) -> dict[str, set[str]]:
@@ -744,7 +754,8 @@ async def _execute_copilot_query(
         playback = (viewer_analysis or {}).get("playback_context") or (claims[0].get("playback_context") if claims else None)
         answer = angle_note(query.prompt) + arm_pose_answer(
             arm_claims, current=_asks_current_viewer_pose(query.prompt), playback=playback if isinstance(playback, dict) else None,
-            zone_id=requested_zone(query.prompt, None), side=asked_arm(query.prompt), part=asked_part(query.prompt))
+            zone_id=requested_zone(query.prompt, None), side=asked_arm(query.prompt), part=asked_part(query.prompt),
+            prefer_hand=prefers_hand(query.prompt))
         return _success_response(query, request_started, answer=answer, retrieval_used=False, citations=[],
                                  pose_context={"scope": "arm_pose", "status": arm_claims.get("status")} if query.task_type == "pose_recomm" else None,
                                  context_status="available" if arm_claims.get("status") == "available" else "not_available")
@@ -919,7 +930,7 @@ async def _execute_copilot_query(
             arm_answer = arm_pose_answer(
                 arm_pose, current=analysis_context.get("scope") == "current_zone",
                 playback=viewer_analysis.get("playback_context"),  # type: ignore[arg-type]
-                zone_id=requested_zone(query.prompt, None), side=side,
+                zone_id=requested_zone(query.prompt, None), side=side, prefer_hand=prefers_hand(query.prompt),
             )
             # 자세 유사도(시퀀스별 팔 관절 채점)를 먼저, 전문가 기록 대비 작업 유사도를 이어서 답한다.
             # 팔 방향을 물으면 팔 채점 결과만 답한다 — 작업 유사도의 개선 안내에는 팔 방향 항목이 없다.

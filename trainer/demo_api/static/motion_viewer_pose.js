@@ -618,11 +618,11 @@
       return;
     }
     const live = sequence.end_seconds == null || seconds <= sequence.end_seconds;
-    const limited = sequence.confidence === 'limited';
+    const limited = Boolean(sequence.limited_note);
     byId('armPoseSequence').textContent = `${live ? '현재' : '직전'} 분사 ${sequence.sequence_id}`;
     byId('armPoseSequenceScore').textContent = `${sequence.similarity_percent}%`;
     byId('armPoseCorrection').textContent = [sequence.correction || (limited ? '' : '교정 관절 결과는 없습니다.'),
-      limited ? '입력 품질 제한이 있어 참고용입니다.' : ''].filter(Boolean).join(' ');
+      sequence.limited_note || ''].filter(Boolean).join(' ');
   }
 
   function renderZoneTimeline(payload) {

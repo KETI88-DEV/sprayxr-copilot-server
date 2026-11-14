@@ -8,7 +8,8 @@ from collections.abc import Mapping
 from typing import Any, Final
 
 from trainer.demo_api.coating_assessment import (
-    ADJUSTMENT_WORDS, RULE_NOTE, adjustment_sentence, basis_label, distribution_sentence, grade_phrase, mean_text)
+    ADJUSTMENT_WORDS, RULE_NOTE, basis_label, distribution_sentence, grade_phrase, mean_text)
+from trainer.demo_api.pose_query import josa
 from trainer.demo_api.session_coating import EXPERT_WORDS
 
 _ZONE_NUMBER = re.compile(r"(?:zone|존|구역)\s*(\d+)", re.I)
@@ -171,7 +172,9 @@ def _grade_answer(rows: list[dict[str, Any]], prompt: str, *, detailed: bool, vi
 _MEASURE_FIELDS: Final = {"speed_mm_s": ("speed_mms", "reference_speed_mms", "이동 속도", "mm/s", "빠름", "느림"),
                           "distance_mm": ("distance_mm", "reference_distance_mm", "이격거리", "mm", "멂", "가까움")}
 _SIMILAR: Final = 0.05  # 전문가 중앙값과 ±5% 안이면 "비슷"으로 보고 후보와 엇갈린다고 하지 않는다
-UNDER_REVIEW: Final = "규칙의 조절 후보({words})는 실측 비교와 맞지 않아 검토 중이라 조언으로 드리지 않습니다."
+# 실측과 엇갈리는 조절 후보는 답·리포트에서 말하지 않는다(2026-11-14 사용자 결정, 이슈 #19). 내부 자료(행의 adjustments)에만 남는다.
+_THIN_BY_CLOSE: Final = " 가까이 칠하면 도막은 보통 두꺼워집니다. 그래서 얇게 나온 이유를 거리로는 설명하기 어렵습니다."
+_THICK_BY_FAR: Final = " 멀리 칠하면 도막은 보통 얇아집니다. 그래서 두껍게 나온 이유를 거리로는 설명하기 어렵습니다."
 
 
 def zone_measures(claims: Mapping[str, Any] | None) -> dict[str, dict[str, float]]:
@@ -198,50 +201,56 @@ def measured_relation(measure: Mapping[str, Any] | None, variable: str) -> str |
 
 
 def contradicted(adjustment: Mapping[str, Any], measure: Mapping[str, Any] | None) -> bool:
-    """이미 전문가보다 낮은데 낮추라거나, 이미 높은데 높이라는 후보."""
+    """이미 전문가보다 낮은데 낮추라거나, 이미 높은데 높이라는 후보. 이격거리만 본다.
+
+    전문가 속도는 2025-08~09 이전 장비로 잰 값이라 훈련생 속도가 장비 탓에 약 0.36배로 나온다(2026-11-14 확인).
+    그래서 속도 후보는 실측과 엇갈린다고 판정하지 않는다.
+    """
+    if adjustment.get("variable") != "distance_mm":
+        return False
     relation = measured_relation(measure, str(adjustment.get("variable")))
     return (adjustment.get("direction"), relation) in {("decrease", "lower"), ("increase", "higher")}
 
 
+def _distance_remark(measure: Mapping[str, Any] | None, relation: str | None) -> str:
+    grade = (measure or {}).get("grade")
+    if grade == "below" and relation == "lower":
+        return _THIN_BY_CLOSE
+    if grade == "above" and relation == "higher":
+        return _THICK_BY_FAR
+    return ""
+
+
 def measured_sentence(zone_id: str, measure: Mapping[str, Any] | None) -> str | None:
-    """'실측 이동 속도 2,230 mm/s(전문가 3,514 mm/s보다 37% 느림), 이격거리 …'."""
-    parts = []
-    for variable, (own, reference, title, unit, up, down) in _MEASURE_FIELDS.items():
-        relation = measured_relation(measure, variable)
-        if relation is None:
-            continue
-        mine, expert = measure[own], measure[reference]  # type: ignore[index]
-        word = {"lower": down, "higher": up, "similar": "비슷"}[relation]
-        gap = f"{abs(mine / expert - 1) * 100:.0f}% {word}" if relation != "similar" else "비슷"
-        parts.append(f"{title} {mine:,.0f} {unit}(전문가 {expert:,.0f} {unit}보다 {gap})" if relation != "similar"
-                     else f"{title} {mine:,.0f} {unit}(전문가 {expert:,.0f} {unit}와 비슷)")
+    """'Zone 8 실측값은 이동 속도 2,230 mm/s, 이격거리 251 mm입니다(전문가 550 mm보다 54% 가까움).'
+
+    속도는 측정값만 적는다. 전문가 속도는 다른 장비로 잰 값이라 견주지 않는다(`contradicted`).
+    """
+    parts, compare = [], ""
+    speed = (measure or {}).get("speed_mms")
+    if isinstance(speed, (int, float)):
+        parts.append(f"이동 속도 {speed:,.0f} mm/s")
+    relation = measured_relation(measure, "distance_mm")
+    if relation is not None:
+        mine, expert = measure["distance_mm"], measure["reference_distance_mm"]  # type: ignore[index]
+        parts.append(f"이격거리 {mine:,.0f} mm")
+        compare = (f"(전문가 {expert:,.0f} mm와 비슷)" if relation == "similar" else
+                   f"(전문가 {expert:,.0f} mm보다 {abs(mine / expert - 1) * 100:.0f}% {'멂' if relation == 'higher' else '가까움'})")
     if not parts:
         return None
-    text = f"Zone {zone_id} 실측: " + ", ".join(parts) + "."
-    grade = (measure or {}).get("grade")
-    slow_close = {measured_relation(measure, name) for name in _MEASURE_FIELDS} == {"lower"}
-    fast_far = {measured_relation(measure, name) for name in _MEASURE_FIELDS} == {"higher"}
-    if grade == "below" and slow_close:
-        text += " 가까이·천천히 칠하면 보통 도막이 두꺼워지는 쪽이라, 이 두 값으로는 얇게 나온 까닭을 설명하기 어렵습니다."
-    elif grade == "above" and fast_far:
-        text += " 멀리·빠르게 칠하면 보통 도막이 얇아지는 쪽이라, 이 두 값으로는 두껍게 나온 까닭을 설명하기 어렵습니다."
-    return text
+    return f"Zone {zone_id} 실측값은 " + ", ".join(parts) + f"입니다{compare}." + _distance_remark(measure, relation)
 
 
 def _candidate_line(adjustments: list[Mapping[str, Any]], measure: Mapping[str, Any] | None, zone_id: str) -> str:
-    """조절 후보 문장. 실측이 있으면 엇갈리는 후보는 빼고 실측 비교와 검토 중임을 말한다."""
-    if measure is None:
-        candidates = adjustment_sentence(adjustments)
-        return candidates.partition(" 원인으로")[0] if candidates else "속도·이격거리 기록이 없어 조절 후보를 내지 못했습니다."
-    kept = [item for item in adjustments if not contradicted(item, measure)]
-    dropped = [item for item in adjustments if contradicted(item, measure)]
-    parts = [measured_sentence(zone_id, measure) or ""]
-    if kept:
-        parts.append((adjustment_sentence(kept) or "").partition(" 원인으로")[0])
-    if dropped:
-        words = ", ".join(ADJUSTMENT_WORDS[(item["variable"], item["direction"])] for item in sorted(dropped, key=lambda item: item["priority"]))
-        parts.append(UNDER_REVIEW.format(words=words))
-    return " ".join(part for part in parts if part) or "속도·이격거리 기록이 없어 조절 후보를 내지 못했습니다."
+    """실측 줄과 조절 후보 문장. 실측과 엇갈리는 후보는 말하지 않는다(내부 자료에만 남긴다)."""
+    kept = [item for item in adjustments if not contradicted(item, measure)] if measure is not None else list(adjustments)
+    words = ", ".join(ADJUSTMENT_WORDS[(item["variable"], item["direction"])] for item in sorted(kept, key=lambda item: item["priority"]))
+    parts = [measured_sentence(zone_id, measure) or ""] if measure is not None else []
+    if words:
+        parts.append(f"조절 후보는 {words}입니다.")
+    elif not adjustments:
+        parts.append("속도·이격거리 기록이 없어 조절 후보를 내지 못했습니다.")
+    return " ".join(part for part in parts if part)
 
 
 # 원인 → 결과 짝. 결과 낱말마다 같은 절(쉼표·마침표 사이)에서 바로 앞에 나온 원인 낱말 하나와 짝짓는다.
@@ -285,14 +294,55 @@ def _contradicts_measure(sentence: str, measures: Mapping[str, Mapping[str, Any]
     return False
 
 
-def drop_contradicted_causes(answer: str, measures: Mapping[str, Mapping[str, Any]] | None, *, default_zone: str | None = None) -> str:
-    """뷰어 기록에 대한 모델 답에서 물리가 거꾸로 된 원인 문장과 실측 방향과 엇갈리는 조언 문장을 뺀다.
+# 답이 이 기록을 가리키는 말. 질문이 일반적이어도 문장이 "이 기록에서는 …"이면 재생 위치 Zone의 실측과 견준다.
+_RECORD_SENTENCE: Final = re.compile(r"이\s*기록|이번\s*기록|이번\s*작업|(?<![가-힣])이\s*(?:zone|존|구역|부분|곳)|여기|현재\s*(?:zone|구역)", re.I)
+_DISTANCE_WORDS: Final = {"close": "lower", "far": "higher"}
 
-    `default_zone`은 질문이 이 기록의 특정 Zone(번호·"지금·이 구역")을 가리킬 때만 준다. 일반 조언은 재생 위치의
-    Zone 실측과 견주지 않는다. 본문이 다 빠지면 그 Zone의 실측 비교(없으면 일반적인 방향 한 문장)로 답한다.
+
+def distance_sentence(zone_id: str, measure: Mapping[str, Any] | None) -> str | None:
+    """이격거리만 전문가 중앙값과 견준 문장. 속도는 쓰지 않는다 — 전문가 속도는 2025-08~09 이전 장비로 잰 값이라
+    훈련생 속도가 장비 탓에 약 0.36배로 나온다(2026-11-14 확인). 거리 비교만 믿을 수 있다."""
+    relation = measured_relation(measure, "distance_mm")
+    if relation is None:
+        return None
+    mine, expert = measure["distance_mm"], measure["reference_distance_mm"]  # type: ignore[index]
+    zone = josa(f"Zone {zone_id}", "은", "는")
+    if relation == "similar":
+        return f"{zone} {mine:,.0f} mm 거리에서 칠해 전문가({expert:,.0f} mm)와 비슷했습니다."
+    word = "가까운" if relation == "lower" else "먼"
+    return (f"{zone} {mine:,.0f} mm 거리에서 칠했습니다. 전문가({expert:,.0f} mm)보다 {abs(mine / expert - 1) * 100:.0f}% {word} 거리입니다."
+            + _distance_remark(measure, relation))
+
+
+def record_cause_contradicted(sentence: str, measure: Mapping[str, Any] | None) -> bool:
+    """"거리가 너무 멀어 얇아졌다"처럼 이 기록의 원인을 말했는데 실측 거리 방향과 반대인 문장(거리만 본다)."""
+    relation = measured_relation(measure, "distance_mm")
+    if relation not in ("lower", "higher"):
+        return False
+    for clause in re.split(r"[,;，]", re.sub(r"(?<=\d),(?=\d{3})", "", sentence)):
+        if re.search(_CONCESSIVE, clause):
+            continue
+        causes = sorted((match.start(), kind) for kind, pattern in _CAUSES for match in re.finditer(pattern, clause))
+        for _effect, pattern in _EFFECTS:
+            for match in re.finditer(pattern, clause):
+                before = [kind for position, kind in causes if position < match.start()]
+                # 결과 바로 앞의 원인이 거리일 때만. 속도 원인은 기록과 견주지 않는다.
+                if before and before[-1] in _DISTANCE_WORDS and _DISTANCE_WORDS[before[-1]] != relation:
+                    return True
+    return False
+
+
+def drop_contradicted_causes(answer: str, measures: Mapping[str, Mapping[str, Any]] | None, *, default_zone: str | None = None,
+                             record_zone: str | None = None) -> str:
+    """뷰어 기록에 대한 모델 답에서 물리가 거꾸로 된 원인, 실측 거리와 반대인 원인, 실측과 엇갈리는 조언 문장을 뺀다.
+
+    `default_zone`은 질문이 이 기록의 특정 Zone(번호·"지금·이 구역")을 가리킬 때만 준다. `record_zone`은 재생 위치의
+    Zone으로, 답 문장이 스스로 "이 기록에서는…"이라고 할 때만 쓴다. 일반 조언·일반 원리 문장은 견주지 않는다.
+    기록과 반대인 원인을 뺐으면 그 Zone의 실측 거리 비교를 앞에 둔다. 본문이 다 빠지면 그 문장(없으면 일반 방향)으로 답한다.
     """
     from trainer.demo_api.dialogue import drop_sentences, has_body
     dropped_physics = False
+    corrected: list[str] = []
 
     def bad(sentence: str) -> bool:
         nonlocal dropped_physics
@@ -300,15 +350,22 @@ def drop_contradicted_causes(answer: str, measures: Mapping[str, Mapping[str, An
             dropped_physics = True
             return True
         named = [a or b for a, b in re.findall(r"(?:zone|존|구역)\s*(\d+)|(\d+)\s*번\s*(?:zone|존|구역)", sentence, re.I)]
-        zones = named or ([default_zone] if default_zone else [])
+        here = record_zone if record_zone and _RECORD_SENTENCE.search(sentence) else None
+        zones = named or ([default_zone] if default_zone else [here] if here else [])
+        if measures:
+            for zone in zones:
+                if record_cause_contradicted(sentence, measures.get(zone)):
+                    corrected.append(zone)
+                    return True
         return bool(measures and _contradicts_measure(sentence, measures, zones))
 
     kept, dropped = drop_sentences(answer, bad)
     if not dropped:
         return answer
+    replacement = " ".join(filter(None, (distance_sentence(zone, (measures or {}).get(zone)) for zone in dict.fromkeys(corrected))))
     if has_body(kept):
-        return kept
-    fallback = measured_sentence(default_zone, (measures or {}).get(default_zone)) if default_zone else None
+        return f"{replacement}\n{kept}" if replacement else kept
+    fallback = replacement or (distance_sentence(default_zone, (measures or {}).get(default_zone)) if default_zone else None)
     return fallback or (_GENERAL_PHYSICS if dropped_physics else "제공된 자료로는 답할 수 없습니다.")
 
 
@@ -334,8 +391,8 @@ def answer_distribution_cause(context: Mapping[str, Any], *, detailed: bool,
         for row in group if detailed else group[:3]:
             # 어댑터 문장의 "원인으로 확정된 것은 아닙니다."는 끝줄에서 한 번만 말한다.
             measure = measures.get(str(row["zone_id"])) if measures else None
-            text.append(f"{word} Zone {row['zone_id']}(칠한 곳 평균 {mean_text(row['thickness_um'], row['target_thickness_um'])}µm): "
-                        + _candidate_line(row["adjustments"], measure, str(row["zone_id"])))
+            head = f"{josa('Zone ' + str(row['zone_id']), '은', '는')} {word}입니다(칠한 곳 평균 {mean_text(row['thickness_um'], row['target_thickness_um'])}µm)."
+            text.append(" ".join(filter(None, (head, _candidate_line(row["adjustments"], measure, str(row["zone_id"]))))))
     if len(text) == 1:
         return text[0] + "\n저도막·과도막으로 판정된 Zone이 없습니다."
     return "\n".join([*text, "조절 후보는 등급에 따른 일반적인 방향이며 원인으로 확정된 것은 아닙니다."])
@@ -376,11 +433,11 @@ def target_advice_facts(context: Mapping[str, Any], *, measures: Mapping[str, Ma
         if measure is None:
             return item
         item["adjustments"] = [a for a in row["adjustments"] if not contradicted(a, measure)]
-        item["adjustments_under_review"] = [a for a in row["adjustments"] if contradicted(a, measure)]
-        item["measured"] = {variable: {"record": measure[own], "expert_median": measure[reference],
-                                       "relation": measured_relation(measure, variable)}
-                            for variable, (own, reference, *_rest) in _MEASURE_FIELDS.items()
-                            if measured_relation(measure, variable) is not None}
+        # 속도는 측정값만 싣는다(전문가 속도는 다른 장비로 잰 값이라 관계를 모델에 넘기지 않는다).
+        item["measured"] = {**({"speed_mm_s": {"record": measure["speed_mms"]}} if "speed_mms" in measure else {}),
+                            **({"distance_mm": {"record": measure["distance_mm"], "expert_median": measure["reference_distance_mm"],
+                                                "relation": measured_relation(measure, "distance_mm")}}
+                               if measured_relation(measure, "distance_mm") is not None else {})}
         return item
 
     return {"basis": context["target"]["basis_label"], "zones": [fact(row) for row in (here + flagged)[:6]]}
