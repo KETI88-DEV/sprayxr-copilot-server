@@ -146,9 +146,11 @@ def _grounded_values(facts: Any, prompt: str) -> dict[str, set[float]]:
             # 뷰어 지표는 {"actual": 5.2, "reference": 3.1, "unit": "deg"}처럼 단위를 따로 싣는다(운영 T28: 5.2°가 지어낸 값으로 빠졌다).
             unit = _METRIC_UNIT.get(str(value.get("unit", "")).strip(), "")
             if unit:
+                # 답의 "-5.2°"는 부호를 떼고 읽힌다(_MEASUREMENT). 절댓값도 근거로 둔다.
                 pool.setdefault(unit, set()).update(
-                    float(value[name]) for name in ("actual", "reference")
-                    if isinstance(value.get(name), (int, float)) and not isinstance(value.get(name), bool))
+                    number for name in ("actual", "reference")
+                    if isinstance(value.get(name), (int, float)) and not isinstance(value.get(name), bool)
+                    for number in (float(value[name]), abs(float(value[name]))))
             for child_key, child in value.items():
                 walk(child, str(child_key).lower())
         elif isinstance(value, (list, tuple)):
@@ -266,8 +268,11 @@ def asks_for_instructions(prompt: str) -> bool:
 
 # 뺀 문장 바로 뒤에 남은 문장의 접속어(2026-11-14 운영 T28 "따라서 건 각도는 괜찮았습니다.", T37 "이로 인해 …").
 # 앞 문장을 가리키는 말로 시작하면 그 문장도 뺀다. 논리 접속어만 있으면 접속어를 지운다.
-_POINT_BACK: Final = re.compile(r"^\s*(?:이로\s*인해|이\s*때문에|그\s*때문에|그로\s*인해|그\s*결과|이에\s*따라|이러한\s*이유로|이런\s*이유로)")
-_CONNECTIVE: Final = re.compile(r"^\s*(?:따라서|그러므로|그래서|결국|즉|그러나|하지만|또한|그리고|게다가|한편|반면에?|그런데)\s*,?\s*")
+# 접속어는 문장 첫머리에서 띄어쓰기·쉼표가 뒤따를 때만 본다("즉시", "결국은"을 깎지 않는다).
+_POINT_BACK_WORDS: Final = r"이로\s*인해|이\s*때문에|그\s*때문에|그로\s*인해|그\s*결과|이에\s*따라|이러한\s*이유로|이런\s*이유로"
+_LOGICAL_WORDS: Final = r"따라서|그러므로|그래서|결국|즉|그러나|하지만|또한|그리고|게다가|한편|반면에|반면|그런데"
+_POINT_BACK: Final = re.compile(rf"^\s*(?:{_POINT_BACK_WORDS})(?=[\s,])")
+_CONNECTIVE: Final = re.compile(rf"^\s*(?:{_LOGICAL_WORDS}|{_POINT_BACK_WORDS})(?:\s*,\s*|\s+)")
 
 
 def drop_sentences(answer: str, bad: Callable[[str], bool]) -> tuple[str, bool]:
@@ -275,24 +280,25 @@ def drop_sentences(answer: str, bad: Callable[[str], bool]) -> tuple[str, bool]:
 
     뺀 문장 바로 뒤 문장이 앞 문장을 가리키면("이로 인해…") 함께 빼고, 접속어("따라서…")로 시작하면 접속어만 지운다.
     """
-    lines, dropped, previous_dropped = [], False, False
+    # after: 0 = 앞 문장을 두었다, 1 = 앞 문장을 `bad`로 뺐다, 2 = 앞 문장을 고아로 뺐다(연달아 빼지 않는다).
+    lines, dropped, after = [], False, 0
     for line in answer.split("\n"):
         parts = re.split(r"(?<=[.!?])\s+", line)
         kept: list[str] = []
         changed = False
         for part in parts:
             if part.strip() and bad(part):
-                previous_dropped = changed = True
+                after, changed = 1, True
                 continue
-            if previous_dropped and part.strip():
-                if _POINT_BACK.match(part):
-                    changed = True
+            if after and part.strip():
+                if after == 1 and _POINT_BACK.match(part):
+                    after, changed = 2, True
                     continue
                 stripped = _CONNECTIVE.sub("", part, count=1)
                 changed = changed or stripped != part
                 part = stripped
             if part.strip():
-                previous_dropped = False
+                after = 0
             kept.append(part)
         dropped = dropped or changed
         if kept and any(part.strip() for part in kept) or not line.strip():
