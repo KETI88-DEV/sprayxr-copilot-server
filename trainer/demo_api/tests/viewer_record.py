@@ -61,41 +61,48 @@ def context(task: str, data: dict[str, Any], playback: dict[str, Any]) -> str:
 
 AT_3S = {"map_num": "1", "zone_id": "8", "source_index": 20, "playhead_seconds": 3.011151}
 AT_24S = {"map_num": "1", "zone_id": "1", "source_index": 160, "playhead_seconds": 24.054651}
+AT_28S = {"map_num": "1", "zone_id": "9", "source_index": 190, "playhead_seconds": 28.566211}
+AT_35S = {"map_num": "1", "zone_id": "9", "source_index": 239, "playhead_seconds": 35.933611}
 
 
 class RecordingPipeline:
     """계획 모델·대화 모델·문서 답을 흉내 낸다. 무엇을 불렀는지 남긴다."""
 
     def __init__(self, *, plan: dict[str, str] | None = None, converse: str = "대화 답입니다.",
-                 document: str = "[답변] 문서 답입니다.") -> None:
-        self.plan, self.reply, self.document = plan, converse, document
+                 document: str = "[답변] 문서 답입니다.", chunks: list[dict[str, Any]] | None = None) -> None:
+        self.plan, self.reply, self.document, self.chunks = plan, converse, document, chunks or []
         self.calls: list[str] = []
+        self.kwargs: list[tuple[str, dict[str, Any]]] = []
         self.config: dict[str, Any] = {}
 
     def plan_copilot_dialogue(self, prompt: str, **kwargs: object) -> dict[str, str]:
         self.calls.append("plan")
+        self.kwargs.append(("plan", dict(kwargs)))
         return self.plan or {"kind": "chat", "intent": "knowledge", "scope": "unspecified"}
 
     def converse_copilot(self, prompt: str, **kwargs: object) -> str:
         self.calls.append("converse")
+        self.kwargs.append(("converse", dict(kwargs)))
         return self.reply
 
     def run(self, **kwargs: object) -> dict[str, Any]:
         self.calls.append("run")
-        return {"response": self.document, "rag_chunks": []}
+        self.kwargs.append(("run", dict(kwargs)))
+        return {"response": self.document, "rag_chunks": self.chunks}
 
 
 def ask(prompt: str, *, tab: str = "order", playback: dict[str, Any] = AT_3S, mode: str = "quick",
         pipeline: RecordingPipeline | None = None, data: dict[str, Any] | None = None,
-        raw_context: str | None = None) -> dict[str, Any]:
+        raw_context: str | None = None, store: SequenceStore | None = None) -> dict[str, Any]:
     pipeline = pipeline or RecordingPipeline()
     data = data or payload()
     task = TASKS[tab]
     app = FastAPI()
-    app.include_router(create_copilot_router(lambda: pipeline, store=SequenceStore(":memory:")))
+    app.include_router(create_copilot_router(lambda: pipeline, store=store or SequenceStore(":memory:")))
     response = TestClient(app).post("/api/v1/copilot/query", json={
         "user_id": "COPILOT-AI-TEST", "session_id": data["selected_session_id"], "scenario_id": str(data["mode_id"]),
         "task_type": task, "prompt": prompt, "response_mode": mode,
         "context": raw_context if raw_context is not None else context(task, copy.deepcopy(data), playback)})
     assert response.status_code == 200, response.text
-    return {**response.json()["data"], "source": response.headers["x-copilot-answer-source"], "calls": pipeline.calls}
+    return {**response.json()["data"], "source": response.headers["x-copilot-answer-source"], "calls": pipeline.calls,
+            "headers": {key.lower(): value for key, value in response.headers.items()}}

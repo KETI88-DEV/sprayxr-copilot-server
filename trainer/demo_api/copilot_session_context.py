@@ -179,7 +179,8 @@ def build_query_instruction(
         parts.append("[최근 대화]")
         for turn in recent_turns:
             parts.append(f"사용자: {turn['prompt'][:500]}")
-            parts.append(f"Co-Pilot: {turn['answer'][:1000]}")
+            if turn["answer"]:
+                parts.append(f"Co-Pilot: {turn['answer'][:1000]}")
     if concise:
         # History is evidence, not the latest question. Move the actual
         # request after it without duplicating a possibly long prompt.

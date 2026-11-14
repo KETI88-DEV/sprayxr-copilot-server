@@ -204,6 +204,7 @@ def _parse_motion_viewer_context(value: str | None, *, task_type: str) -> dict[s
 
 # analysis(채점·분석 결과를 옮긴 답, 모델 미사용) · documents(문서 검색 + 모델) · conversation(모델 대화)
 ANSWER_SOURCE_HEADER: Final = "X-Copilot-Answer-Source"
+SUBJECT_HEADER: Final = "X-Copilot-Subject"  # 서버 안에서만 쓴다. 바깥 응답에는 싣지 않는다.
 # 외국어 질문을 한국어로 옮긴 문장(퍼센트 인코딩). 응답 본문은 바꾸지 않는다.
 ANALYSIS_PROMPT_HEADER: Final = "X-Copilot-Analysis-Prompt"
 _EVALUATION_QUESTION: Final = re.compile(r"잘한|못한|고쳐야|고칠|개선할|개선점|문제점|부족한 점")
@@ -635,6 +636,14 @@ def error_response(code: int, message: str) -> JSONResponse:
     return JSONResponse(status_code=code, content=envelope.model_dump(mode="json"))
 
 
+def _header_subject(response: Any) -> dict[str, Any] | None:
+    try:
+        value = json.loads(response.headers.get(SUBJECT_HEADER) or "null")
+    except ValueError:
+        return None
+    return value if isinstance(value, dict) else None
+
+
 def _success_response(
     query: CopilotQueryRequest,
     started: float,
@@ -648,6 +657,7 @@ def _success_response(
     coating_context: dict[str, object] | None = None,
     context_status: str = "not_available",
     generated: bool = False,
+    subject: Mapping[str, Any] | None = None,
 ) -> JSONResponse:
     """`generated`는 모델이 문장을 만든 답에만 준다. 나머지는 채점·분석 결과를 그대로 옮긴 답이다.
 
@@ -688,7 +698,10 @@ def _success_response(
         len(citations),
     )
     source = "documents" if retrieval_used else "conversation" if generated else "analysis"
-    return JSONResponse(status_code=200, content=envelope.model_dump(mode="json"), headers={ANSWER_SOURCE_HEADER: source})
+    headers = {ANSWER_SOURCE_HEADER: source}
+    if subject:
+        headers[SUBJECT_HEADER] = json.dumps(subject, ensure_ascii=True, separators=(",", ":"))
+    return JSONResponse(status_code=200, content=envelope.model_dump(mode="json"), headers=headers)
 
 
 async def _execute_copilot_query(
@@ -1396,6 +1409,7 @@ async def execute_copilot_query(
             session_key=query.session_id or "CHAT:" + query.user_id, user_id=query.user_id,
             prompt=query.prompt, answer=data["answer"], task_type=query.task_type,
             created_at=data["generated_at"], conversation_key=conversation_id, safety_class=safety_class,
+            answer_source=response.headers.get(ANSWER_SOURCE_HEADER, "analysis"), subject=_header_subject(response),
         )
     except Exception:
         logger.exception("copilot query: failed to store dialogue request_id=%s", query.request_id)

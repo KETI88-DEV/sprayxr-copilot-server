@@ -5,7 +5,7 @@ import json
 import math
 import re
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Final, Mapping
+from typing import Any, Callable, Final, Mapping, Sequence
 
 from trainer.demo_api import coating_assessment
 from trainer.demo_api.viewer_progress import order_progress_facts
@@ -79,10 +79,16 @@ def conversation_messages(prompt: str, *, recent_turns: list[dict[str, str]], fa
     messages = [{"role": "system", "content": system + "\n현재 날짜(한국): " + today
                  + "\nverified_facts=" + json.dumps(facts, ensure_ascii=False)}]
     for turn in recent_turns[-6:]:
-        messages.extend([{"role": "user", "content": turn["prompt"][:4000]},
-                         {"role": "assistant", "content": turn["answer"][:6000]}])
+        messages.append({"role": "user", "content": turn["prompt"][:4000]})
+        if turn["answer"]:
+            messages.append({"role": "assistant", "content": turn["answer"][:6000]})
     messages.append({"role": "user", "content": prompt})
     return messages
+
+
+def without_generated_answers(turns: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """모델이 문장을 만든 이전 답(문서·대화·출처 미상)은 비운다. 분석 결과를 옮긴 답만 남는다."""
+    return [{**turn, "answer": turn["answer"] if turn.get("answer_source") == "analysis" else ""} for turn in turns]
 
 
 def viewer_dialogue_context(payload: Mapping[str, Any]) -> dict[str, Any]:
