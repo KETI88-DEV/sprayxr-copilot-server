@@ -105,3 +105,46 @@ def test_saved_report_missing_answer_adds_the_final_gate() -> None:
     answer = answer_order_question(("r", {"sequence_report": report, "coating_zones": rows}),
                                    prompt="다시 칠해야 할 Zone은?", intent="order_missing").answer
     assert "3" in answer and "Zone 1" in answer and "보완" in answer and "Zone 2" in answer
+
+
+# --- 독립 검토 지적(2026-11-14) ---------------------------------------------------------------------------
+
+KNOWLEDGE = ["재도장 간격은 얼마인가요?", "다시 칠할 때 주의할 점은?", "보완 도장 절차 알려줘",
+             "다음에는 어디를 조심해야 해?", "다음엔 어느 부분을 고쳐야 할까요?"]
+
+
+@pytest.mark.parametrize("prompt", KNOWLEDGE)
+def test_knowledge_questions_with_progress_words_are_not_progress_questions(prompt: str) -> None:
+    from trainer.demo_api.viewer_progress import progress_question
+    assert progress_question(prompt) is None and actual_order_intent(prompt) is None
+    assert not is_current_next_question(prompt)
+    # 진행 답(viewer_progress)이 아니다. "고쳐야"는 기존의 서명된 고칠 점 답으로 갈 수 있다.
+    result = ask(prompt, tab="knowledge", pipeline=_model())
+    assert (result["sequence_context"] or {}).get("scope") != "viewer_progress" and "방문하지 않은 Zone" not in result["answer"]
+
+
+def _claims(**extra: object) -> dict:
+    return {"reference_order": ["2", "1", "3"], "actual_order": ["2", "1", "3"],
+            "zone_first_visit_seconds": {"2": 5.0, "1": 8.0, "3": 12.0}, **extra}
+
+
+def test_the_zone_under_the_playhead_counts_as_visited() -> None:
+    from trainer.demo_api.viewer_progress import next_answer
+    answer, scope = next_answer(_claims(), None, {"zone_id": "2", "playhead_seconds": 4.9})
+    assert "2" in scope["visited_zone_ids"] and scope["next_zone_id"] == "1"
+    assert "실제로 다음에 처음 칠한 곳은 Zone 1" in answer
+
+
+def test_moving_playhead_is_not_called_zone_minus_one() -> None:
+    from trainer.demo_api.viewer_progress import next_answer
+    answer, scope = next_answer(_claims(), None, {"zone_id": "-1", "playhead_seconds": 9.0})
+    assert "Zone -1" not in answer and "이동 중" in answer and scope["current_zone_id"] is None
+
+
+def test_without_a_reference_flow_nothing_is_counted_against_zero_zones() -> None:
+    from trainer.demo_api.viewer_progress import next_answer, status_answer
+    claims = _claims(reference_order=[])
+    status, _ = status_answer(claims, None)
+    assert "0개" not in status and "권장 기준" in status
+    answer, scope = next_answer(claims, None, {"zone_id": "2", "playhead_seconds": 6.0})
+    assert "모든 Zone" not in answer and scope["next_zone_id"] is None

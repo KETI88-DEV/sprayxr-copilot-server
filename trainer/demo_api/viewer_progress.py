@@ -17,12 +17,13 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 
 from trainer.demo_api.coating_assessment import GRADE_WORDS, mean_text
-from trainer.demo_api.copilot_intent import is_coating_advice_question
-from trainer.demo_api.reference_order_query import is_current_next_question
+from trainer.demo_api.copilot_intent import is_coating_advice_question, is_general_painting_knowledge
+from trainer.demo_api.reference_order_query import is_current_next_question, is_knowledge_ask
 from trainer.demo_api.sequence_analysis import recommend_next
 
 _STATUS = re.compile(r"빼먹|빠뜨|빠진|누락|미수행|안\s*칠|못\s*칠|덜\s*칠|다시\s*칠|덧칠|재도장|보완|남은\s*(?:구역|zone|존|곳|데)", re.I)
 _MISSING_NOTE = "최종 높이맵 기준이며 재생 시점의 도막이 아닙니다."
+_NO_ZONE = {"", "-1", "0", "none", "null", "nan"}
 
 
 def first_visit_seconds(trace: Iterable[Mapping[str, Any]], *, offset: float = 0.0) -> dict[str, float]:
@@ -52,7 +53,8 @@ def progress_question(prompt: str) -> str | None:
     """"next"(다음 Zone) · "status"(누락·보완) · None."""
     if is_current_next_question(prompt):
         return "next"
-    if _STATUS.search(prompt) and not is_coating_advice_question(prompt):
+    if (_STATUS.search(prompt) and not is_coating_advice_question(prompt) and not is_knowledge_ask(prompt)
+            and not is_general_painting_knowledge(prompt)):
         return "status"
     return None
 
@@ -108,7 +110,8 @@ def status_answer(claims: Mapping[str, Any], coating: Mapping[str, Any] | None) 
     known = list(dict.fromkeys([*reference, *(str(row["zone_id"]) for row in rows or [])]))
     unvisited = [zone for zone in known if zone not in actual]
     lines = [f"아직 방문하지 않은 Zone: {'·'.join(unvisited)}." if unvisited
-             else f"권장 기준 {len(known)}개 Zone 가운데 방문하지 않은 Zone은 없습니다."]
+             else f"권장 기준 {len(known)}개 Zone 가운데 방문하지 않은 Zone은 없습니다." if known
+             else "권장 기준 Zone 자료가 없어 방문하지 않은 Zone은 판단할 수 없습니다."]
     gate, groups = gate_lines(rows, order=reference or actual, visited=set(actual))
     return "\n".join([*lines, *gate]), {"scope": "viewer_progress", "analysis_status": "available",
                                         "unvisited_zone_ids": unvisited, "visited_zone_ids": actual, **groups}
@@ -126,14 +129,21 @@ def _visited_until(claims: Mapping[str, Any], current: str | None, seconds: floa
 def next_answer(claims: Mapping[str, Any], coating: Mapping[str, Any] | None, playback: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
     reference, actual = _zones(claims.get("reference_order")), _zones(claims.get("actual_order"))
     current = str(playback["zone_id"]) if playback.get("zone_id") is not None else None
+    current = None if current is None or current.strip().lower() in _NO_ZONE else current  # "-1"은 Zone 사이 이동 중
     seconds = playback.get("playhead_seconds")
     seconds = float(seconds) if isinstance(seconds, (int, float)) and not isinstance(seconds, bool) and math.isfinite(seconds) else None
     visited = _visited_until(claims, current, seconds)
-    where = f"재생 위치(Zone {current}, {seconds:.1f}초)" if current and seconds is not None else "재생 위치"
+    if current and current not in visited:
+        visited.append(current)  # 첫 착탄 시각 직전이라도 재생 위치가 있는 Zone은 칠하는 중이다
+    place = f"Zone {current}" if current else "이동 중"
+    where = f"재생 위치({place}, {seconds:.1f}초)" if seconds is not None else f"재생 위치({place})"
     scope: dict[str, Any] = {"scope": "viewer_progress", "analysis_status": "available", "current_zone_id": current,
                              "visited_zone_ids": visited, "next_zone_id": None, "basis": None}
     unknown_gate = "재생 시점의 도막 완료 여부는 알 수 없습니다(최종 높이맵만 있습니다)."
     remaining = [zone for zone in reference if zone not in visited]
+    if not reference:
+        done = f"{where}까지 칠한 Zone은 {'·'.join(visited)}입니다. " if visited else ""
+        return done + "권장 순서 기준이 없어 다음 Zone을 정할 수 없습니다. " + unknown_gate, scope
     if not remaining:
         gate, groups = gate_lines(_gate_rows(coating), order=reference or actual)
         scope.update(groups)
