@@ -12,6 +12,7 @@ from typing import Any, Final
 
 from trainer.demo_api.coating_query import (_CAUSES, _EFFECTS, _SIMILAR, distance_sentence, measured_relation, measured_sentence,
                                             parse_viewer_coating_context, zone_measures)
+from trainer.demo_api.coating_assessment import grade_phrase
 from trainer.demo_api.copilot_intent import preset_intent
 from trainer.demo_api.dialogue import viewer_claims
 from trainer.demo_api.pose_query import josa
@@ -286,7 +287,7 @@ def classify_record_question(prompt: str, *, task_type: str, previous_subject: M
 
 
 # ---------------------------------------------------------------- 결정적 답(R1~R12·C)
-# 서명된 기록 행만 읽는다. 등급·게이트는 다시 계산하지 않는다(`coating_assessment`를 부르지 않는다).
+# 서명된 기록 행만 읽는다. 등급·게이트는 다시 계산하지 않는다(표기만 `coating_assessment.grade_phrase`).
 ASK_ZONE: Final = "어느 Zone을 말씀하시는지 알 수 없습니다. Zone 번호를 넣어 다시 물어봐 주세요."
 _NO_TARGET: Final = "이 기록에는 목표 대비 판정 자료가 없어 말씀드릴 수 없습니다."
 _NO_ZONE: Final = {"", "-1", "0", "none", "null", "nan"}
@@ -340,20 +341,12 @@ def _row(facts: RecordFacts, zone: str) -> Mapping[str, Any] | None:
     return next((row for row in facts.target_rows if str(row.get("zone_id")) == zone), None)
 
 
-def _label(facts: RecordFacts, row: Mapping[str, Any]) -> str:
-    labels = (facts.coating or {}).get("target", {}).get("grade_labels") or {}
-    return str(labels.get(row.get("grade") or "none") or "미도장")
-
-
 def _zone_text(facts: RecordFacts, zone: str) -> str:
-    """"Zone 3은 목표 미만(칠한 곳 평균 95µm, 미도장 0%)" — 등급 낱말은 서명된 행의 라벨이다."""
+    """"Zone 3은 저도막(칠한 곳 평균 95µm, 미도장 0%)" — 등급 표기와 반올림은 `coating_assessment.grade_phrase` 그대로."""
     row = _row(facts, zone)
     if row is None:
         return f"{josa(f'Zone {zone}', '은', '는')} 판정 행이 이 기록에 없습니다"
-    unpainted = (row.get("unpainted_fraction") or 0) * 100
-    if row.get("grade") is None or not _is_num(row.get("thickness_um")):
-        return f"{josa(f'Zone {zone}', '은', '는')} 칠한 곳이 없습니다(미도장 {unpainted:.0f}%)"
-    return f"{josa(f'Zone {zone}', '은', '는')} {_label(facts, row)}(칠한 곳 평균 {row['thickness_um']:.0f}µm, 미도장 {unpainted:.0f}%)"
+    return f"{josa(f'Zone {zone}', '은', '는')} {grade_phrase(row)}"
 
 
 def _target_um(facts: RecordFacts) -> float | None:
@@ -527,7 +520,7 @@ def cause_answer(facts: RecordFacts, zone: str | None) -> str:
     if row is None or not _is_num(row.get("thickness_um")) or target is None:
         return " ".join(item for item in (_NO_TARGET, measured) if item)
     return " ".join(item for item in (
-        f"{josa(f'Zone {zone}', '은', '는')} 칠한 곳 평균 {row['thickness_um']:.1f}µm로 {_label(facts, row)}입니다(목표 {target:.0f}µm).",
+        f"{_zone_text(facts, zone)}입니다(소수 첫째 자리까지 {row['thickness_um']:.1f}µm, 목표 {target:.0f}µm).",
         measured or "이 Zone의 이동 속도·이격거리 실측이 기록에 없어 원인은 말씀드릴 수 없습니다.") if item)
 
 

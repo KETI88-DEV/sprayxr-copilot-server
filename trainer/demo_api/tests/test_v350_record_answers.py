@@ -82,3 +82,13 @@ def test_order_progress_facts_carry_distribution_but_model_facts_do_not() -> Non
     carried = order_progress_facts(data["reference_order_evaluation"])
     assert "position_distribution" in carried and carried["reference_session_count"] == 6
     assert "position_distribution" not in authenticated_facts(context("knowledge_search", data, AT_3S))
+
+
+def test_zone_sentence_uses_the_production_grade_phrase() -> None:
+    from trainer.demo_api.coating_assessment import grade_phrase
+    record = facts()
+    for zone in ("1", "8"):
+        row = next(r for r in record.target_rows if str(r["zone_id"]) == zone)
+        for text in (answer_part(record, part("completion", (zone,)), task_type="knowledge_search")[0],
+                     answer_part(record, part("cause", (zone,)), task_type="knowledge_search")[0]):
+            assert grade_phrase(row) in text, (grade_phrase(row), text)
