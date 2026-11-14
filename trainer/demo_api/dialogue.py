@@ -242,7 +242,8 @@ def _viewer_claims(value: str | None) -> tuple[dict[str, Any], dict[str, Any]] |
     return (payload, claims) if isinstance(claims, dict) and verify_context("dialogue", claims, payload.get("dialogue_signature")) else None
 
 
-_RECORD_SCOPE: Final = re.compile(r"지금|현재|방금|이번|이\s*(?:zone|존|구역|시퀀스|분사|기록)|(?:zone|존|구역)\s*\d+|\d+\s*번\s*(?:zone|존|구역)", re.I)
+# "스프레이 분사"의 "이 분사"는 지시어가 아니다(2026-11-14 운영 q25: 지식 질문에 Zone 측정값을 답함).
+_RECORD_SCOPE: Final = re.compile(r"지금|현재|방금|이번|(?<![가-힣])이\s*(?:zone|존|구역|시퀀스|분사|기록)|(?:zone|존|구역)\s*\d+|\d+\s*번\s*(?:zone|존|구역)", re.I)
 _ASKED_ZONE: Final = re.compile(r"(?:zone|존|구역)\s*(\d+)|(\d+)\s*번\s*(?:zone|존|구역)", re.I)
 
 

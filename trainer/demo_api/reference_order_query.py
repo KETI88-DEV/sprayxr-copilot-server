@@ -9,6 +9,9 @@ from trainer.demo_api import coating_assessment
 from trainer.demo_api.telemetry_contracts import AnalyzeSequenceRequest, learning_mode_from_scenario, process_from_tool_type
 
 
+_PROCEDURE = r"표면\s*처리|전처리|세척|탈지|건조|혼합|희석|교반|프라이머|절차|단계|공정|도장\s*전에|칠하기\s*전"
+
+
 def actual_order_intent(prompt: str) -> str | None:
     if re.search(r"누락|빠진|빼먹|빠뜨|미수행|안\s*칠|못\s*칠|덜\s*칠|다시\s*칠|덧칠|재도장|보완", prompt):
         return "order_missing"
@@ -26,6 +29,9 @@ def is_reference_order_question(prompt: str) -> bool:
     if is_current_next_question(prompt):
         return False
     if re.search(r"(?:순서|경로)\s*(?:란|의\s*(?:뜻|의미|정의))|순서.*(?:뭐야|무엇인가|뭔가요|정의|왜\s*중요)", prompt):
+        return False
+    # 표면처리·혼합 같은 공정 절차의 순서는 Zone 작업 순서가 아니라 문서 질문이다(2026-11-14 운영 q30).
+    if re.search(_PROCEDURE, prompt) and not re.search(r"zone|존|구역|피도면|권장|추천|정석", prompt, re.I):
         return False
     order = re.search(r"순서|경로|order|route", prompt, re.I)
     target = re.search(r"작업|도장|피도면|구역|zone|존|블라스팅|스프레이|권장|추천|정석|기준|reference|recommend", prompt, re.I)
