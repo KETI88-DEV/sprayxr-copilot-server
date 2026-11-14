@@ -93,12 +93,13 @@ class RecordingPipeline:
 
 def ask(prompt: str, *, tab: str = "order", playback: dict[str, Any] = AT_3S, mode: str = "quick",
         pipeline: RecordingPipeline | None = None, data: dict[str, Any] | None = None,
-        raw_context: str | None = None, store: SequenceStore | None = None) -> dict[str, Any]:
+        raw_context: str | None = None, store: SequenceStore | None = None, offline: bool = False) -> dict[str, Any]:
+    """`offline=True`면 모델 서버가 없는 라우터(pipeline_provider=None)다."""
     pipeline = pipeline or RecordingPipeline()
     data = data or payload()
     task = TASKS[tab]
     app = FastAPI()
-    app.include_router(create_copilot_router(lambda: pipeline, store=store or SequenceStore(":memory:")))
+    app.include_router(create_copilot_router(None if offline else lambda: pipeline, store=store or SequenceStore(":memory:")))
     response = TestClient(app).post("/api/v1/copilot/query", json={
         "user_id": "COPILOT-AI-TEST", "session_id": data["selected_session_id"], "scenario_id": str(data["mode_id"]),
         "task_type": task, "prompt": prompt, "response_mode": mode,

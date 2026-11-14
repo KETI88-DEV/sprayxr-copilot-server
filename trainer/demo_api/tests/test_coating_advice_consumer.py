@@ -107,11 +107,12 @@ def test_why_thin_answer_does_not_pass_an_inverted_cause() -> None:
     pipeline = RecordingPipeline(plan={"kind": "coating_knowledge", "intent": "knowledge", "scope": "zone"}, document="[답변] " + Q19)
     result = ask("왜 이렇게 얇게 나왔어?", tab="coating", pipeline=pipeline)
     answer = result["answer"]
-    assert "run" in result["calls"]
+    # v3.5.0 설계 표 v19: 계획 모델·문서 답 없이 서명된 기록 행으로 답한다.
+    assert result["calls"] == [] and result["source"] == "analysis"
     assert "얇게 형성되었기 때문" not in answer
-    # 대신 실측 거리 비교를 말하고, 가까운 쪽은 보통 두꺼워진다는 점을 밝힌다. 속도는 전문가 장비가 달라 쓰지 않는다(v3.4.1).
-    assert answer.startswith("Zone 8은 251 mm 거리에서 칠했습니다. 전문가(550 mm)보다 54% 가까운 거리입니다. "
-                             "가까이 칠하면 도막은 보통 두꺼워집니다.") and "mm/s" not in answer
+    # 대신 실측 거리 비교를 말하고, 가까운 쪽은 보통 두꺼워진다는 점을 밝힌다.
+    assert "251 mm" in answer and "550 mm" in answer and "가까이 칠하면 도막은 보통 두꺼워집니다." in answer
+    assert "거리로는 설명하기 어렵" in answer
 
 
 def test_correction_follow_up_does_not_repeat_the_inverted_cause() -> None:

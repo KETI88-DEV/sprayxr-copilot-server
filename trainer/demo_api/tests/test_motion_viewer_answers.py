@@ -67,6 +67,9 @@ class _Pipeline:
     def converse_copilot(self, prompt: str, **kwargs: object) -> str:
         return "대화 답입니다."
 
+    def run(self, **kwargs: object) -> dict[str, Any]:
+        return {"response": "[답변] 문서 답입니다.", "rag_chunks": []}
+
 
 def _ask(pipeline: _Pipeline, prompt: str, *, context: str, task: str = "knowledge_search") -> dict[str, Any]:
     app = FastAPI()
@@ -141,7 +144,8 @@ def test_record_speed_question_in_the_viewer_never_reaches_the_model() -> None:
 def test_only_a_question_about_direction_gets_the_direction_answer() -> None:
     pipeline = _Pipeline()
     talk = _ask(pipeline, "여기는 어때 보여?", context=_playback_context())
-    assert "방향" not in talk["answer"] and talk["answer_source"] == "conversation"
+    # v3.5.0: 기록 표지("여기")가 있는 질문은 대화 모델 대신 문서 경로로 답한다.
+    assert "방향" not in talk["answer"] and talk["answer_source"] == "documents"
     assert "방향" in _ask(pipeline, "여기 칠하는 방향이 맞는 거야?", context=_playback_context())["answer"]
     assert pipeline.plans == ["여기는 어때 보여?", "여기 칠하는 방향이 맞는 거야?"]
 

@@ -22,10 +22,12 @@ def _documents(answer: str) -> RecordingPipeline:
 
 def test_q19_far_distance_cause_is_replaced_by_the_measured_distance() -> None:
     # Zone 8은 251 mm로 전문가 550 mm보다 가까웠다. "멀어 얇아졌다"는 이 기록과 반대다.
-    answer = ask("왜 이렇게 얇게 나왔어?", tab="coating", pipeline=_documents(Q19))["answer"]
+    result = ask("왜 이렇게 얇게 나왔어?", tab="coating", pipeline=_documents(Q19))
+    answer = result["answer"]
+    assert result["source"] == "analysis"  # v3.5.0 설계 표 v19: 문서 답 없이 기록 행으로 답한다
     assert "너무 멀어" not in answer
     assert "251 mm" in answer and "550 mm" in answer and "가까" in answer
-    assert "mm/s" not in answer  # 속도는 전문가 기록 장비가 달라 비교하지 않는다
+    assert "거리로는 설명하기 어렵" in answer
 
 
 def test_q42_conversation_follow_up_does_not_repeat_the_far_distance_cause() -> None:
