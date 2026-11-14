@@ -78,7 +78,7 @@ from trainer.demo_api.query_language import TranslationUnavailableError, transla
 from trainer.demo_api.sequence_store import SequenceStore
 from trainer.demo_api.viewer_arm_pose import arm_pose_answer, parse_viewer_arm_pose, zone_pose_summary
 from trainer.demo_api.sequence_analysis import SequenceAnalysisEngine
-from trainer.demo_api.safety_guard import HIGH_PRESSURE_ANSWER, HIGH_PRESSURE_CITATIONS, guard_answer, hazard_class
+from trainer.demo_api.safety_guard import HIGH_PRESSURE_ANSWER, HIGH_PRESSURE_CITATIONS, classify, guard_answer, hazard_class
 from trainer.demo_api.reference_order_query import actual_order_intent, current_next_answer, is_current_next_question, is_reference_order_question, resolve_reference_target, reference_order_answer
 from trainer.demo_api.v1_store import V1Store
 from trainer.demo_api.viewer_progress import progress_question, viewer_progress_answer
@@ -1331,7 +1331,15 @@ async def execute_copilot_query(
         return await to_thread.run_sync(guarded)
 
     try:
-        normalized = await _translate(query.prompt, query.language, "ko")
+        try:
+            normalized = await _translate(query.prompt, query.language, "ko")
+        except Exception:
+            # 질문 번역이 실패해도 원문만으로 손-팁 질문임을 알면 503 대신 고정 안전 답을 낸다(v3.4.4).
+            # 원문을 그대로 분석 질문으로 넘기면 손-팁으로 판정돼 모델 없이 고정 답이 되고, 그 답은 기존 답 번역을 지난다.
+            if classify(query.prompt) != "hand_tip":
+                raise
+            logger.warning("copilot question translation failed; hand-on-tip original request_id=%s", query.request_id)
+            normalized = query.prompt
         if len(normalized) > 8000:
             raise TranslationUnavailableError("Translated question exceeds analysis limit")
         analysis_query = query.model_copy(update={"prompt": normalized})
