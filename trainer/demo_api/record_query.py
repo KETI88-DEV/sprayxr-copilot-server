@@ -125,8 +125,9 @@ def part_domain(part: RecordPart) -> str | None:
     return part.metric if part.code == "work_metric" and part.metric else CODE_DOMAIN.get(part.code or "")
 
 
-def has_record_marker(prompt: str, *, previous_subject: Mapping[str, Any] | None = None) -> bool:
-    return bool(_PERSON.search(prompt) or _RECORD_REF.search(prompt) or _PAST.search(prompt) or _EVALUATED.search(prompt)
+def has_record_marker(prompt: str, *, previous_subject: Mapping[str, Any] | None = None, person: bool = True) -> bool:
+    """`person=False`면 1인칭("제·나")만으로는 표지로 세지 않는다(라우터의 잡담 판정)."""
+    return bool((person and _PERSON.search(prompt)) or _RECORD_REF.search(prompt) or _PAST.search(prompt) or _EVALUATED.search(prompt)
                 or _SPATIAL.search(prompt) or (previous_subject and _ANAPHORA.search(prompt)))
 
 
@@ -673,7 +674,7 @@ def answer_record_question(context: str | None, prompt: str, *, task_type: str,
     sentences: list[str] = []
     answered: list[RecordPart] = []
     sequence_context: dict[str, Any] | None = None
-    last_key = None
+    seen: set[tuple[Any, ...]] = set()
     any_code = any(part.code for part in query.parts)
     for part in query.parts:
         if part.code is None:
@@ -681,9 +682,9 @@ def answer_record_question(context: str | None, prompt: str, *, task_type: str,
                 sentences.append(_NOT_IN_RECORD)
             continue
         key = (part.code, part.zones, part.operator, part.metric)
-        if key == last_key:  # 같은 코드·같은 Zone이 이어지면 한 번만(T31·T43·T49)
+        if key in seen:  # 같은 코드·같은 Zone은 답 전체에서 한 번만(T31·T43·T49, 사이에 다른 조각이 있어도: v340 #40)
             continue
-        last_key = key
+        seen.add(key)
         text, context_found = answer_part(facts, part, task_type=task_type)
         sequence_context = sequence_context or context_found
         in_record = all(zone in facts.zone_ids for zone in part.zones) or not facts.zone_ids

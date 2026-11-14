@@ -14,10 +14,11 @@ def test_priority_why_and_long_questions_are_not_answered_with_measurements_only
     assert dialogue.viewer_measurement_answer(signed, prompt) is None
 
 
-def test_q40_reaches_the_pipeline() -> None:
+def test_q40_is_answered_with_the_one_priority_from_the_record() -> None:
     # v3.5.0 설계 표 v340 #40: "하나만 콕 집어"는 측정값 짧은 답이 아니라 기록의 우선순위(도막 게이트 최저 Zone 3)로 답한다.
     result = ask(Q40, tab="knowledge", pipeline=_documents("거리부터 일정하게 유지하세요."))
     assert result["source"] == "analysis" and "Zone 3" in result["answer"] and "속도 대표값" not in result["answer"]
+    assert result["answer"].count("Zone 3부터 보완") == 1, result["answer"]
 
 
 @pytest.mark.parametrize("prompt", ["지금 속도 얼마야?", "지금 거리 얼마야?", "이 Zone 속도와 이격거리는 어땠어?"])

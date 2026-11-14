@@ -83,7 +83,7 @@ from trainer.demo_api.safety_guard import (
 )
 from trainer.demo_api.reference_order_query import actual_order_intent, current_next_answer, is_current_next_question, is_reference_order_question, resolve_reference_target, reference_order_answer
 from trainer.demo_api.v1_store import V1Store
-from trainer.demo_api.record_query import BODY_PART, DIRECTION_WORD, WORST_ZONE, answer_record_question, has_record_marker, previous_subject
+from trainer.demo_api.record_query import BODY_PART, DIRECTION_WORD, WORST_ZONE, RecordAnswer, answer_record_question, has_record_marker, previous_subject
 from trainer.demo_api.viewer_progress import progress_question, viewer_progress_answer
 from trainer.demo_api.query_runtime import generation_slot_for, retrieval_question, select_query_pipeline, translation_pipeline_for
 from trainer.scripts.generation_slot import GENERATION_SLOT  # Legacy slot identity for unconfigured clients.
@@ -221,7 +221,9 @@ MIXED_NO_EVIDENCE: Final = "문서에서는 이 질문에 답할 근거를 찾�
 
 def _grounded_route(prompt: str, subject: Mapping[str, Any] | None) -> bool:
     """기록이나 도장 지식을 묻는 질문인가(기록 표지, 또는 도메인 낱말 + 질문형). 그러면 대화 모델 대신 근거 있는 경로로 답한다."""
-    return has_record_marker(prompt, previous_subject=subject) or (is_domain_question(prompt) and bool(_KNOWLEDGE_QUESTION.search(prompt)))
+    domain = is_domain_question(prompt)
+    # 1인칭("제·나")은 도메인 낱말과 함께일 때만 표지다("제 이름 뭐예요?"·"저 오늘 피곤해요"는 잡담). 지시어·과거·평가 표지는 혼자서도 센다.
+    return has_record_marker(prompt, previous_subject=subject, person=domain) or (domain and bool(_KNOWLEDGE_QUESTION.search(prompt)))
 
 
 def _abstain_below(pipeline: object) -> float | None:
@@ -769,7 +771,7 @@ async def _execute_copilot_query(
         return _success_response(query, request_started, answer=record.text, retrieval_used=False, citations=[],
                                  sequence_context=record.sequence_context, context_status="available", subject=record.subject)
     # 기록 표지가 없는 누락·보완·다음 Zone 질문("누락한 Zone은?")은 지금처럼 서명된 방문 순서와 최종 도막 게이트로 답한다.
-    progress_kind = progress_question(query.prompt) if record is None and not safety else None
+    progress_kind = progress_question(query.prompt) if record is None and safety_class is None else None
     progress = viewer_progress_answer(query.context, query.prompt, progress_kind) if progress_kind else None
     if progress is not None:
         return _success_response(query, request_started, answer=progress[0], retrieval_used=False, citations=[],
@@ -780,10 +782,10 @@ async def _execute_copilot_query(
         query = query.model_copy(update={"task_type": "knowledge_search"})
     documents_only = safety or mixed is not None
 
-    def record_only() -> JSONResponse:
+    def record_only(found: RecordAnswer) -> JSONResponse:
         # 모델 서버가 없거나 생성이 실패해도 섞인 질문의 기록 쪽 답은 낸다.
-        return _success_response(query, request_started, answer=mixed.text, retrieval_used=False, citations=[],  # type: ignore[union-attr]
-                                 context_status="available", subject=mixed.subject)  # type: ignore[union-attr]
+        return _success_response(query, request_started, answer=found.text, retrieval_used=False, citations=[],
+                                 sequence_context=found.sequence_context, context_status="available", subject=found.subject)
 
     if is_current_next_question(query.prompt) and not documents_only:
         answer, scope, progress = await to_thread.run_sync(lambda: current_next_answer(
@@ -926,7 +928,9 @@ async def _execute_copilot_query(
         chat_redirected = (decision["kind"] == "chat" and query.task_type == "knowledge_search" and not viewer_requested
                            and not cross_tab and not zone_lookup and bool(_KNOWLEDGE_QUESTION.search(query.prompt))
                            and _abstain_below(planned_pipeline) is not None and query.response_mode == "detailed")
-        if decision["kind"] == "correction" and dialogue_turns and not dialogue_turns[-1].get("safety_class"):
+        # 옛 행(v3.4.4 이전)에는 safety_class 열이 없어 앞 질문 문장도 다시 위험 판정한다.
+        if (decision["kind"] == "correction" and dialogue_turns and not dialogue_turns[-1].get("safety_class")
+                and classify(dialogue_turns[-1]["prompt"]) is None):
             # "아까 답 이상한데"는 앞 질문을 기록으로 다시 답한다. 앞 턴이 위험 질문이면 다시 분류하지 않는다(안전 검사를 건너뛰지 않게).
             again = answer_record_question(query.context, dialogue_turns[-1]["prompt"], task_type=query.task_type,
                                            recent_turns=dialogue_turns[:-1])
@@ -1211,12 +1215,12 @@ async def _execute_copilot_query(
         )
 
     if pipeline_provider is None:
-        return record_only() if mixed is not None else error_response(503, "Copilot pipeline is not configured")
+        return record_only(mixed) if mixed is not None else error_response(503, "Copilot pipeline is not configured")
     try:
         pipeline = intent_pipeline or await to_thread.run_sync(pipeline_provider)
     except Exception:  # noqa: BROAD_EXCEPT_OK - construction failures surface as not ready
         logger.exception("copilot query: pipeline construction failed request_id=%s", query.request_id)
-        return record_only() if mixed is not None else error_response(503, "Copilot pipeline is not ready")
+        return record_only(mixed) if mixed is not None else error_response(503, "Copilot pipeline is not ready")
 
     # Explicit Y/N remains a backwards-compatible override.  When omitted, any
     # question that reaches this knowledge-generation branch needs retrieval;
@@ -1226,7 +1230,7 @@ async def _execute_copilot_query(
     # 섞인 질문의 문서 쪽에는 기록 수치가 든 분석 답도 넘기지 않는다(질문만 남겨 지시어를 풀게 한다).
     recent_turns: list[dict[str, Any]] = [{**turn, "answer": ""} for turn in dialogue_turns] if mixed is not None else model_turns
     question = (mixed.knowledge_question or query.prompt) if mixed is not None else query.prompt  # 지시문·검색어의 질문
-    if query.session_id:
+    if query.session_id and mixed is None:  # 섞인 질문의 문서 쪽에는 세션 수치도 넘기지 않는다
         session_summary = await to_thread.run_sync(
             lambda: summarize_session(sequences.session_bodies(query.session_id),
                                       selected_sequence_id=_selected_sequence(query.context)))
@@ -1285,10 +1289,10 @@ async def _execute_copilot_query(
         result = await to_thread.run_sync(_guarded_run)
     except OpenAIBackendUnavailableError:
         logger.exception("copilot query: model server unavailable request_id=%s", query.request_id)
-        return record_only() if mixed is not None else error_response(503, "Model server unavailable")
+        return record_only(mixed) if mixed is not None else error_response(503, "Model server unavailable")
     except Exception:  # noqa: BROAD_EXCEPT_OK - never leak internals past the boundary
         logger.exception("copilot query: pipeline failed request_id=%s", query.request_id)
-        return record_only() if mixed is not None else error_response(500, "Copilot query failed")
+        return record_only(mixed) if mixed is not None else error_response(500, "Copilot query failed")
 
     # 근거 확인 단계: 재정렬 1위 점수가 기준값 미만이면 생성한 답을 버린다(설정이 없으면 지금처럼 동작).
     # 기준값은 재정렬 모델의 점수 척도에 묶인다(KURE-Reranker-nano 3.28, 2026-11-13 측정). 상세분석만 잰 값이다.

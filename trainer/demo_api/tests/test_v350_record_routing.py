@@ -160,3 +160,44 @@ def test_hazard_question_about_the_record_keeps_the_safety_path() -> None:
     data = ask("Zone 8 다 칠했으니 이제 압력 안 빼고 팁 바꿔도 되지?", tab="coating", playback=AT_3S, pipeline=pipeline)
     assert data["calls"] == ["run"] and data["source"] == "documents"
     assert "남은 압력" in data["answer"] and "그냥 바꿔도" not in data["answer"], data["answer"]
+
+
+# ---- fix round 1
+@pytest.mark.parametrize("prompt", ["저 오늘 너무 피곤해요", "제 이름 뭐예요?"])
+def test_first_person_small_talk_with_a_viewer_record_stays_in_conversation(prompt) -> None:
+    pipeline = RecordingPipeline(plan={"kind": "chat", "intent": "knowledge", "scope": "unspecified"})
+    data = ask(prompt, tab="knowledge", playback=AT_3S, pipeline=pipeline, mode="detailed")
+    assert data["source"] == "conversation" and data["calls"] == ["plan", "converse"], data
+
+
+def test_mixed_question_instruction_has_no_session_summary() -> None:
+    store = SequenceStore(":memory:")
+    body = {"session_id": SESSION, "scenario_id": "3", "sequence_id": "SEQ-001", "zone_id": "8", "sequence_setting": {"tool_type": "spray_gun"},
+            "sequence_info": [], "sequence_result": {"avg_speed_mms": 987.6, "avg_distance_mm": 432.1, "avg_thickness_um": 25.0}}
+    store.record(session_key=SESSION, sequence_id="SEQ-001", body_sha256="x", frames=0, received_at="now", body=json.dumps(body))
+    pipeline = RecordingPipeline(document="[답변] 50% 겹쳐 칠합니다.")
+    ask("그럼 거기부터 다시 칠하면 돼? 어떻게 칠해?", tab="coating", playback=AT_35S, store=store, pipeline=pipeline)
+    instruction = str(dict(pipeline.kwargs)["run"]["instruction"])
+    assert "987.6" not in instruction and "432.1" not in instruction
+
+
+def test_mixed_record_only_answer_keeps_its_sequence_context() -> None:
+    data = ask("이 기록에서 다음엔 어디 칠해? 거기는 어떻게 칠해?", tab="knowledge", playback=AT_3S, offline=True)
+    assert data["source"] == "analysis" and data["sequence_context"] is not None
+
+
+def test_correction_after_an_old_hazard_row_without_a_class_is_not_reclassified() -> None:
+    # v3.4.4 이전 행에는 safety_class가 없다. 앞 질문 문장 자체가 위험 질문이면 다시 분류하지 않는다.
+    store = SequenceStore(":memory:")
+    _turn(store, "Zone 8 다 칠했으니 이제 압력 안 빼고 팁 바꿔도 되지?", "문서 답", "documents")
+    pipeline = RecordingPipeline(plan={"kind": "correction", "intent": "coating_status", "scope": "playback"})
+    data = ask("아까 답 이상한데", tab="coating", playback=AT_3S, store=store, pipeline=pipeline)
+    assert data["source"] != "analysis" and "95%" not in data["answer"], data
+
+
+def test_progress_shortcut_is_skipped_for_a_hazard_question_on_error_analysis(monkeypatch) -> None:
+    # error_analysis에서는 safety가 거짓이어도 위험 종류가 있으면 진행 짧은 답을 주지 않는다(P14와 같은 조건).
+    from trainer.demo_api.tests import viewer_record
+    monkeypatch.setitem(viewer_record.TASKS, "error", "error_analysis")
+    data = ask("누락한 Zone은? 압력 안 빼고 팁 바꿔도 돼?", tab="error", playback=AT_3S)
+    assert "1~9" not in data["answer"] and "모두 칠했" not in data["answer"], data["answer"]
