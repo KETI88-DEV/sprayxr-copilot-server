@@ -146,11 +146,10 @@ def _grounded_values(facts: Any, prompt: str) -> dict[str, set[float]]:
             # 뷰어 지표는 {"actual": 5.2, "reference": 3.1, "unit": "deg"}처럼 단위를 따로 싣는다(운영 T28: 5.2°가 지어낸 값으로 빠졌다).
             unit = _METRIC_UNIT.get(str(value.get("unit", "")).strip(), "")
             if unit:
-                # 답의 "-5.2°"는 부호를 떼고 읽힌다(_MEASUREMENT). 절댓값도 근거로 둔다.
+                # 부호까지 견준다: 답의 "-5.2°"는 -5.2, "5.2°"는 5.2로 읽는다(ungrounded_measurements).
                 pool.setdefault(unit, set()).update(
-                    number for name in ("actual", "reference")
-                    if isinstance(value.get(name), (int, float)) and not isinstance(value.get(name), bool)
-                    for number in (float(value[name]), abs(float(value[name]))))
+                    float(value[name]) for name in ("actual", "reference")
+                    if isinstance(value.get(name), (int, float)) and not isinstance(value.get(name), bool))
             for child_key, child in value.items():
                 walk(child, str(child_key).lower())
         elif isinstance(value, (list, tuple)):
@@ -195,7 +194,11 @@ def ungrounded_measurements(answer: str, *, facts: Any, prompt: str) -> list[str
     for match in _MEASUREMENT.finditer(answer):
         unit = _UNIT_ALIASES.get(match[3], match[3])
         values = pool.get(unit, set()) | (pool.get("", set()) if unit not in ("%", "°") and unit in pool else set())
-        if not all(_matches(float(number), values) for number in match.groups()[:2] if number):
+        # 각도는 부호가 뜻을 바꾼다(앞으로·뒤로 기울기). 바로 앞의 '-'·'−'를 부호로 읽는다.
+        sign = -1.0 if unit == "°" and match.start() > 0 and answer[match.start() - 1] in "-−" else 1.0
+        numbers = [float(number) for number in match.groups()[:2] if number]
+        numbers[:1] = [sign * value for value in numbers[:1]]
+        if not all(_matches(number, values) for number in numbers):
             invented.append(match[0])
     # 값과 떨어져 적힌 속도 단위("평균 속도(m/s)가 896")도 자료의 단위여야 한다.
     invented += [unit for unit in dict.fromkeys(_SPEED_UNIT.findall(answer))
@@ -280,7 +283,8 @@ def drop_sentences(answer: str, bad: Callable[[str], bool]) -> tuple[str, bool]:
 
     뺀 문장 바로 뒤 문장이 앞 문장을 가리키면("이로 인해…") 함께 빼고, 접속어("따라서…")로 시작하면 접속어만 지운다.
     """
-    # after: 0 = 앞 문장을 두었다, 1 = 앞 문장을 `bad`로 뺐다, 2 = 앞 문장을 고아로 뺐다(연달아 빼지 않는다).
+    # after: 0 = 앞 문장을 두었다, 1 = 앞 문장을 뺐다. 앞을 가리키는 문장("이로 인해·그 결과")은 앞 문장이 빠졌으면
+    # 이어서 뺀다(v3.4.3: "이로 인해 …. 그 결과 …"의 "그 결과" 고아). 논리 접속어만 있는 문장은 접속어만 지운다.
     lines, dropped, after = [], False, 0
     for line in answer.split("\n"):
         parts = re.split(r"(?<=[.!?])\s+", line)
@@ -291,8 +295,8 @@ def drop_sentences(answer: str, bad: Callable[[str], bool]) -> tuple[str, bool]:
                 after, changed = 1, True
                 continue
             if after and part.strip():
-                if after == 1 and _POINT_BACK.match(part):
-                    after, changed = 2, True
+                if _POINT_BACK.match(part):
+                    changed = True
                     continue
                 stripped = _CONNECTIVE.sub("", part, count=1)
                 changed = changed or stripped != part

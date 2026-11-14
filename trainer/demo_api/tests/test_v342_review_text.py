@@ -15,7 +15,8 @@ from trainer.demo_api import dialogue
     ("압력이 너무 높습니다. 따라서 압력을 낮추세요.", "압력이 너무 높습니다. 따라서 압력을 낮추세요."),
     ("Zone 3은 999 mm입니다. 그리고 Zone 4는 300 mm로 적정입니다.", "Zone 4는 300 mm로 적정입니다."),
     ("속도가 999 mm/s입니다. 그러나 도막은 목표를 넘었습니다.", "도막은 목표를 넘었습니다."),
-    ("거리 999 mm. 이로 인해 생긴 문제는 없습니다. 그 결과 점수가 올랐습니다.", "점수가 올랐습니다."),
+    # v3.4.3(2차 검토 #6): 앞을 가리키는 문장이 이어지면 함께 뺀다. 다 빠지면 호출한 쪽의 대체 문장이 답한다.
+    ("거리 999 mm. 이로 인해 생긴 문제는 없습니다. 그 결과 점수가 올랐습니다.", ""),
 ])
 def test_connectives_only_at_sentence_start_and_no_chain_drop(text: str, expected: str) -> None:
     assert dialogue.drop_sentences(text, lambda part: "999" in part)[0] == expected
