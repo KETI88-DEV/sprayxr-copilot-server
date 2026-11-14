@@ -10,7 +10,7 @@ from trainer.demo_api.telemetry_contracts import AnalyzeSequenceRequest, learnin
 
 
 def actual_order_intent(prompt: str) -> str | None:
-    if re.search(r"누락|빠진|미수행|안\s*칠", prompt):
+    if re.search(r"누락|빠진|빼먹|빠뜨|미수행|안\s*칠|못\s*칠|덜\s*칠|다시\s*칠|덧칠|재도장|보완", prompt):
         return "order_missing"
     if re.search(r"준수|유사도|점수", prompt):
         return "order_adherence"
@@ -35,7 +35,8 @@ def is_reference_order_question(prompt: str) -> bool:
 def is_current_next_question(prompt: str) -> bool:
     if re.search(r"다음\s*(?:구역|zone|존)\s*(?:이란|의\s*(?:뜻|의미|정의))", prompt, re.I):
         return False
-    return bool(re.search(r"다음\s*(?:구역|zone|존)", prompt, re.I))
+    # "지금 재생하는 곳 다음에는 어디를 칠해?"처럼 Zone 낱말 없이 묻기도 한다(2026-11-14 운영 q12).
+    return bool(re.search(r"다음\s*(?:구역|zone|존)|다음\s*(?:에는|에|으로는|으로|엔|은)?\s*(?:어디|어느)", prompt, re.I))
 
 
 def current_next_answer(query, sequences, reports=None, *, sequence_engine=None, coating_engine=None):

@@ -73,6 +73,7 @@ from trainer.demo_api.viewer_arm_pose import arm_pose_answer, parse_viewer_arm_p
 from trainer.demo_api.sequence_analysis import SequenceAnalysisEngine
 from trainer.demo_api.reference_order_query import actual_order_intent, current_next_answer, is_current_next_question, is_reference_order_question, resolve_reference_target, reference_order_answer
 from trainer.demo_api.v1_store import V1Store
+from trainer.demo_api.viewer_progress import progress_question, viewer_progress_answer
 from trainer.demo_api.query_runtime import generation_slot_for, retrieval_question, select_query_pipeline, translation_pipeline_for
 from trainer.scripts.generation_slot import GENERATION_SLOT  # Legacy slot identity for unconfigured clients.
 from trainer.scripts.live_response_contract import (
@@ -638,6 +639,12 @@ async def _execute_copilot_query(
     except _InvalidViewerPlayback:
         return error_response(422, "Invalid motion viewer playback context")
     relevant_viewer = viewer_analysis is not None and query.task_type in ("pose_recomm", "trajectory_recomm")
+    progress_kind = progress_question(query.prompt)
+    progress = viewer_progress_answer(query.context, query.prompt, progress_kind) if progress_kind else None
+    if progress is not None:
+        # 누락·보완·다음 Zone은 서명된 방문 순서와 최종 도막 게이트로만 답한다. 어느 탭이든 같다(viewer_progress).
+        return _success_response(query, request_started, answer=progress[0], retrieval_used=False, citations=[],
+                                 sequence_context=progress[1], context_status="available")
     if is_current_next_question(query.prompt):
         answer, scope, progress = await to_thread.run_sync(lambda: current_next_answer(
             query, sequences, reports, sequence_engine=sequence_engine, coating_engine=coating_engine,

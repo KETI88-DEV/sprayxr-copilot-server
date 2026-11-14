@@ -605,11 +605,16 @@ def answer_order_question(
     direction = report.get("direction_adherence_rate")
     question = (prompt or "").lower()
     if question:
-        if intent == "order_missing" or any(token in question for token in ("누락", "안 칠", "빠진", "미수행")):
+        if intent == "order_missing" or any(token in question for token in ("누락", "안 칠", "빠진", "빼먹", "미수행", "보완", "다시 칠")):
             focused = (
                 f"권장 순서 중 칠하지 않은 구역은 {'·'.join(missing)}번입니다."
                 if missing else "권장 순서의 모든 구역을 칠했습니다."
             )
+            # 방문만으로는 "다 칠했다"가 아니다. 리포트 행에 최종 게이트가 있으면 보완 대상을 함께 말한다.
+            from trainer.demo_api.viewer_progress import gate_lines
+            gated = [row for row in analysis.get("coating_zones") or [] if isinstance(row, Mapping) and row.get("gate_status")]
+            if gated:
+                focused = "\n".join([focused, *gate_lines(gated, order=flow, visited=set(first), note="세션을 마친 최종 도막 기준입니다.")[0]])
             return ZoneAnswer("available", None, focused, {
                 "analysis_status": "available", "reason_code": None, "scope": "session", "report_id": report_id,
                 "recommended_flow": flow, "first_visit_flow": first, "adherence_rate": rate,

@@ -26,6 +26,7 @@ from trainer.demo_api.pose_query import score_body_raw
 from trainer.demo_api.sequence_store import SequenceStore
 from trainer.demo_api.sequence_analysis import SequenceAnalysisEngine, expert_reference_flows, score_visit_flow
 from trainer.demo_api.v1_store import V1Store
+from trainer.demo_api.viewer_progress import first_visit_seconds, transition_counts
 from trainer.expert_zone_mapping import canonical_expert_zone_id
 
 logger = logging.getLogger(__name__)
@@ -2398,7 +2399,14 @@ def create_motion_viewer_router(
             "selected_flow": selected_flow,
             "reference_session_count": len(reference_flows),
             **order_score,
+            # 재생 위치까지 칠한 Zone과 다음 Zone을 계산하는 재료(viewer_progress). 서명되는 대화 자료로도 옮긴다.
+            "expert_transitions": transition_counts(reference_flows),
         }
+        try:
+            reference_order_evaluation["zone_first_visit_seconds"] = first_visit_seconds(
+                paint_trace, offset=_clock_offset(selected_path, frame_count))
+        except Exception:  # noqa: BLE001 - 시각을 못 맞추면 첫 방문 순서로만 답한다
+            logger.exception("viewer first visit times failed path=%s", selected_path)
         try:
             supplied_mesh = mesh_provider(str(mode_id)) or {}
         except (FileNotFoundError, LookupError, ValueError):

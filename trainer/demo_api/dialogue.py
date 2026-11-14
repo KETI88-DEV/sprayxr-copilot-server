@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Final, Mapping
 
 from trainer.demo_api import coating_assessment
+from trainer.demo_api.viewer_progress import order_progress_facts
 from trainer.scripts.hanzi_guard import HANZI_CLASS
 
 KINDS = ("lookup", "coating_knowledge", "chat", "clarify", "correction")
@@ -112,7 +113,7 @@ def viewer_dialogue_context(payload: Mapping[str, Any]) -> dict[str, Any]:
     return {**extra, "record_direction": (payload.get("direction_summary") or {}).get("classification"),
             "work_similarity_percent": pose.get("similarity_percent"),
             "reference_order": order.get("recommended_flow"), "actual_order": order.get("selected_flow"),
-            "order_adherence_rate": order.get("adherence_rate"), "zones": zones,
+            "order_adherence_rate": order.get("adherence_rate"), "zones": zones, **order_progress_facts(order),
             "record_id": payload.get("selected_session_id"), "scenario_id": str(payload.get("mode_id")),
             "worker_name": (payload.get("worker") or {}).get("display_name"), "process": payload.get("process")}
 
@@ -304,13 +305,19 @@ def viewer_findings_answer(value: str | None) -> str | None:
     return answer + (f"\n팔 자세 우선 교정: {priority[0]}" if priority else "") + (f"\n{coating}" if coating else "")
 
 
+viewer_claims = _viewer_claims
+
+# 진행 질문의 계산 재료(viewer_progress). 모델 자료에는 넣지 않는다.
+_PROGRESS_KEYS: Final = {"zones", "zone_first_visit_seconds", "expert_transitions"}
+
+
 def authenticated_facts(value: str | None) -> dict[str, Any]:
     found = _viewer_claims(value)
     if found is None:
         return {}
     payload, claims = found
     try:
-        facts = {key: val for key, val in claims.items() if key != "zones"}
+        facts = {key: val for key, val in claims.items() if key not in _PROGRESS_KEYS}
         playback = payload.get("playback_context")
         if isinstance(playback, dict):
             key = f"{playback.get('map_num')}:{playback.get('zone_id')}"

@@ -444,7 +444,12 @@ def test_motion_returns_real_representative_frames_and_cross_session_spread(tmp_
         "position_similarity": 1.0,
         "adherence_rate": 1.0,
         "position_distribution": [[{"zone_id": "1", "count": 2, "probability": 1.0}]],
+        "expert_transitions": [],
+        "zone_first_visit_seconds": {"1": 0.0},
     }
+    # 재생 위치 기준 진행 질문의 재료는 서명되는 대화 자료로 옮긴다(2026-11-14 운영 q12·q16).
+    assert data["dialogue_evaluation"]["zone_first_visit_seconds"] == {"1": 0.0}
+    assert data["dialogue_evaluation"]["expert_transitions"] == []
 
 
 def test_chat_is_bound_to_the_current_motion_record_instead_of_an_unrelated_complete_session(
