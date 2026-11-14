@@ -100,8 +100,8 @@ def test_why_thin_answer_does_not_pass_an_inverted_cause() -> None:
     answer = result["answer"]
     assert "run" in result["calls"]
     assert "얇게 형성되었기 때문" not in answer
-    # 대신 실측 비교를 그대로 말하고, 가깝고 느린 쪽은 보통 두꺼워진다는 점을 밝힌다.
-    assert "2,230 mm/s" in answer and "가까움" in answer and "두꺼워지는 쪽" in answer
+    # 대신 실측 거리 비교를 말하고, 가까운 쪽은 보통 두꺼워진다는 점을 밝힌다. 속도는 전문가 장비가 달라 쓰지 않는다(v3.4.1).
+    assert "251 mm" in answer and "가까웠" in answer and "두꺼워지는 쪽" in answer and "mm/s" not in answer
 
 
 def test_correction_follow_up_does_not_repeat_the_inverted_cause() -> None:
@@ -142,4 +142,4 @@ def test_general_advice_is_not_judged_against_the_playhead_zone() -> None:
     zone = RecordingPipeline(plan={"kind": "coating_knowledge", "intent": "knowledge", "scope": "zone"},
                              document="[답변] 이격거리를 더 줄이세요.")
     answer = ask("이 구역 도막을 두껍게 하려면 어떻게 해?", tab="coating", pipeline=zone)["answer"]
-    assert "더 줄이세요" not in answer and "Zone 8 실측" in answer
+    assert "더 줄이세요" not in answer and "Zone 8 이격거리는 251 mm" in answer

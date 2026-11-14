@@ -285,14 +285,59 @@ def _contradicts_measure(sentence: str, measures: Mapping[str, Mapping[str, Any]
     return False
 
 
-def drop_contradicted_causes(answer: str, measures: Mapping[str, Mapping[str, Any]] | None, *, default_zone: str | None = None) -> str:
-    """뷰어 기록에 대한 모델 답에서 물리가 거꾸로 된 원인 문장과 실측 방향과 엇갈리는 조언 문장을 뺀다.
+# 답이 이 기록을 가리키는 말. 질문이 일반적이어도 문장이 "이 기록에서는 …"이면 재생 위치 Zone의 실측과 견준다.
+_RECORD_SENTENCE: Final = re.compile(r"이\s*기록|이번\s*기록|이번\s*작업|(?<![가-힣])이\s*(?:zone|존|구역|부분|곳)|여기|현재\s*(?:zone|구역)", re.I)
+_DISTANCE_WORDS: Final = {"close": "lower", "far": "higher"}
 
-    `default_zone`은 질문이 이 기록의 특정 Zone(번호·"지금·이 구역")을 가리킬 때만 준다. 일반 조언은 재생 위치의
-    Zone 실측과 견주지 않는다. 본문이 다 빠지면 그 Zone의 실측 비교(없으면 일반적인 방향 한 문장)로 답한다.
+
+def distance_sentence(zone_id: str, measure: Mapping[str, Any] | None) -> str | None:
+    """이격거리만 전문가 중앙값과 견준 문장. 속도는 쓰지 않는다 — 전문가 속도는 2025-08~09 이전 장비로 잰 값이라
+    훈련생 속도가 장비 탓에 약 0.36배로 나온다(2026-11-14 확인). 거리 비교만 믿을 수 있다."""
+    relation = measured_relation(measure, "distance_mm")
+    if relation is None:
+        return None
+    mine, expert = measure["distance_mm"], measure["reference_distance_mm"]  # type: ignore[index]
+    if relation == "similar":
+        return f"Zone {zone_id} 이격거리는 {mine:,.0f} mm로 전문가 {expert:,.0f} mm와 비슷했습니다."
+    word = "가까웠습니다" if relation == "lower" else "멀었습니다"
+    text = f"Zone {zone_id} 이격거리는 {mine:,.0f} mm로 전문가 {expert:,.0f} mm보다 {abs(mine / expert - 1) * 100:.0f}% {word}."
+    grade = (measure or {}).get("grade")
+    if grade == "below" and relation == "lower":
+        text += " 가까이 칠하면 보통 도막이 두꺼워지는 쪽이라, 거리로는 얇게 나온 까닭을 설명하기 어렵습니다."
+    elif grade == "above" and relation == "higher":
+        text += " 멀리 칠하면 보통 도막이 얇아지는 쪽이라, 거리로는 두껍게 나온 까닭을 설명하기 어렵습니다."
+    return text
+
+
+def record_cause_contradicted(sentence: str, measure: Mapping[str, Any] | None) -> bool:
+    """"거리가 너무 멀어 얇아졌다"처럼 이 기록의 원인을 말했는데 실측 거리 방향과 반대인 문장(거리만 본다)."""
+    relation = measured_relation(measure, "distance_mm")
+    if relation not in ("lower", "higher"):
+        return False
+    for clause in re.split(r"[,;，]", re.sub(r"(?<=\d),(?=\d{3})", "", sentence)):
+        if re.search(_CONCESSIVE, clause):
+            continue
+        causes = sorted((match.start(), kind) for kind, pattern in _CAUSES for match in re.finditer(pattern, clause))
+        for _effect, pattern in _EFFECTS:
+            for match in re.finditer(pattern, clause):
+                before = [kind for position, kind in causes if position < match.start()]
+                # 결과 바로 앞의 원인이 거리일 때만. 속도 원인은 기록과 견주지 않는다.
+                if before and before[-1] in _DISTANCE_WORDS and _DISTANCE_WORDS[before[-1]] != relation:
+                    return True
+    return False
+
+
+def drop_contradicted_causes(answer: str, measures: Mapping[str, Mapping[str, Any]] | None, *, default_zone: str | None = None,
+                             record_zone: str | None = None) -> str:
+    """뷰어 기록에 대한 모델 답에서 물리가 거꾸로 된 원인, 실측 거리와 반대인 원인, 실측과 엇갈리는 조언 문장을 뺀다.
+
+    `default_zone`은 질문이 이 기록의 특정 Zone(번호·"지금·이 구역")을 가리킬 때만 준다. `record_zone`은 재생 위치의
+    Zone으로, 답 문장이 스스로 "이 기록에서는…"이라고 할 때만 쓴다. 일반 조언·일반 원리 문장은 견주지 않는다.
+    기록과 반대인 원인을 뺐으면 그 Zone의 실측 거리 비교를 앞에 둔다. 본문이 다 빠지면 그 문장(없으면 일반 방향)으로 답한다.
     """
     from trainer.demo_api.dialogue import drop_sentences, has_body
     dropped_physics = False
+    corrected: list[str] = []
 
     def bad(sentence: str) -> bool:
         nonlocal dropped_physics
@@ -300,15 +345,22 @@ def drop_contradicted_causes(answer: str, measures: Mapping[str, Mapping[str, An
             dropped_physics = True
             return True
         named = [a or b for a, b in re.findall(r"(?:zone|존|구역)\s*(\d+)|(\d+)\s*번\s*(?:zone|존|구역)", sentence, re.I)]
-        zones = named or ([default_zone] if default_zone else [])
+        here = record_zone if record_zone and _RECORD_SENTENCE.search(sentence) else None
+        zones = named or ([default_zone] if default_zone else [here] if here else [])
+        if measures:
+            for zone in zones:
+                if record_cause_contradicted(sentence, measures.get(zone)):
+                    corrected.append(zone)
+                    return True
         return bool(measures and _contradicts_measure(sentence, measures, zones))
 
     kept, dropped = drop_sentences(answer, bad)
     if not dropped:
         return answer
+    replacement = " ".join(filter(None, (distance_sentence(zone, (measures or {}).get(zone)) for zone in dict.fromkeys(corrected))))
     if has_body(kept):
-        return kept
-    fallback = measured_sentence(default_zone, (measures or {}).get(default_zone)) if default_zone else None
+        return f"{replacement}\n{kept}" if replacement else kept
+    fallback = replacement or (distance_sentence(default_zone, (measures or {}).get(default_zone)) if default_zone else None)
     return fallback or (_GENERAL_PHYSICS if dropped_physics else "제공된 자료로는 답할 수 없습니다.")
 
 

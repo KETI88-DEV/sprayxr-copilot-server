@@ -558,7 +558,7 @@ _BODY_PART: Final = re.compile(r"(?:오른|왼)\s*(?:쪽\s*)?(?:손|팔)|팔꿈�
 _WORST_ZONE: Final = re.compile(r"(?:zone|존|구역)\s*별|(?:가장|제일)\s*문제|최악|(?:어디|어느).*(?:문제|나쁘|나빠|안\s*좋|낮|못)", re.I)
 
 
-_HERE: Final = re.compile(r"지금|현재|여기|이렇게|이번|방금|(?<![가-힣])이\s*(?:zone|존|구역|기록|분사|곳)|내\s|제\s|나의|저의", re.I)
+_HERE: Final = re.compile(r"지금|현재|여기|이렇게|이번|방금|아까|(?<![가-힣])이\s*(?:zone|존|구역|기록|분사|곳)|내\s|제\s|나의|저의", re.I)
 
 
 def _viewer_measures(context: str | None, prompt: str) -> tuple[dict[str, dict[str, float]] | None, str | None]:
@@ -577,7 +577,16 @@ def _checked_generation(answer: str, query: CopilotQueryRequest, *, instructions
     measures, zone = _viewer_measures(query.context, query.prompt)
     answer = drop_misattributed_zones(guard_generated_answer(answer, instructions=instructions), _zone_facts(query.context))
     # 인과·조언 검사는 이 기록(서명된 뷰어 문맥)에 대한 답에만 한다. 일반 지식 답은 그대로 둔다.
-    return drop_contradicted_causes(answer, measures, default_zone=zone) if measures is not None else answer
+    if measures is None:
+        return answer
+    return drop_contradicted_causes(answer, measures, default_zone=zone, record_zone=_playback_zone(query.context))
+
+
+def _playback_zone(context: str | None) -> str | None:
+    claims = viewer_claims(context)
+    playback = claims[0].get("playback_context") if claims and isinstance(claims[0].get("playback_context"), dict) else {}
+    zone = playback.get("zone_id")
+    return str(zone) if zone is not None and str(zone) not in {"", "-1", "0"} else None
 
 
 def _zone_facts(context: str | None) -> dict[str, set[str]]:
