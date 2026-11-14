@@ -219,6 +219,9 @@ MIXED_DOCUMENT_RULE: Final = "이 기록의 수치·Zone·판정은 말하지 �
 MIXED_NO_EVIDENCE: Final = "문서에서는 이 질문에 답할 근거를 찾지 못했습니다."
 
 
+_FOLLOWUP: Final = re.compile(r"나의|저의|그럼|그렇게|그\s")  # 기록 없는 세션의 후속 질문("그럼 속도는?")은 대화로 둔다.
+
+
 def _grounded_route(prompt: str, subject: Mapping[str, Any] | None) -> bool:
     """기록이나 도장 지식을 묻는 질문인가(기록 표지, 또는 도메인 낱말 + 질문형). 그러면 대화 모델 대신 근거 있는 경로로 답한다."""
     domain = is_domain_question(prompt)
@@ -226,17 +229,23 @@ def _grounded_route(prompt: str, subject: Mapping[str, Any] | None) -> bool:
     return has_record_marker(prompt, previous_subject=subject, person=domain) or (domain and bool(_KNOWLEDGE_QUESTION.search(prompt)))
 
 
-def _abstain_below(pipeline: object) -> float | None:
-    """confidence.abstain_below_rerank_score. 없거나 숫자가 아니면 근거 확인 단계를 끈다."""
+def _abstain_below(pipeline: object, response_mode: str) -> float | None:
+    """상세 분석은 confidence.abstain_below_rerank_score, 빠른 안내는 quick_abstain_below_rerank_score. 없거나 숫자가 아니면 근거 확인 단계를 끈다."""
     config = getattr(pipeline, "config", None)
     confidence = config.get("confidence") if isinstance(config, dict) else None
-    value = confidence.get("abstain_below_rerank_score") if isinstance(confidence, dict) else None
+    key = "abstain_below_rerank_score" if response_mode == "detailed" else "quick_abstain_below_rerank_score"
+    value = confidence.get(key) if isinstance(confidence, dict) else None
     return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 
 # 근거 확인 단계(confidence.abstain_below_rerank_score)가 막은 답. 2026-11-13 2-1 측정에서 도입.
 NO_EVIDENCE_ANSWER: Final = ("제공된 자료에서 이 질문에 답할 근거를 찾지 못했습니다. "
                              "대상(도장 방식·제품·구역)을 함께 적어 다시 물어 주세요.")
+
+
+# 어지럼을 묻는데 문서에 근거가 없을 때 근거 없는 답 뒤에 붙이는 한 줄(숫자 없음).
+DIZZY_NOTE: Final = "몸이 불편하면 멈추고 교관에게 알리세요."
+_DIZZY: Final = re.compile(r"어지럼|어지러|어지럽|멀미|메스꺼|울렁")
 
 
 def _session_findings(found: tuple[str, Mapping[str, Any]] | None) -> str:
@@ -742,7 +751,12 @@ async def _execute_copilot_query(
         user_id=query.user_id, conversation_key=conversation_id,
     ))
     # 서명된 뷰어 기록이 있을 때만 켠다(사용자 결정 7). 세션 요약으로 답하는 기존 대화 경로(TSB·시퀀스 질문)는 그대로 둔다.
-    grounded = viewer_claims(query.context) is not None and _grounded_route(query.prompt, previous_subject(dialogue_turns))
+    # 서명된 기록이 없어도 도장·훈련 낱말이 든 지식 질문은 문서로 답한다(사용자 결정 4). 낱말 없는 잡담·TSB 요약 대화는 그대로.
+    # 기록 표지가 붙은 질문("속도는 괜찮았어?")은 기록이 없으면 지금처럼 세션 대화로 둔다.
+    subject = previous_subject(dialogue_turns)
+    grounded = _grounded_route(query.prompt, subject) and (
+        viewer_claims(query.context) is not None
+        or not (_FOLLOWUP.search(query.prompt) or has_record_marker(query.prompt, previous_subject=subject, past=False)))
     # 기록·도장 지식 질문에는 모델이 만든 이전 답을 다시 넘기지 않는다(지어낸 Zone이 다음 답의 근거가 된다). 잡담은 그대로.
     model_turns = without_generated_answers(dialogue_turns) if grounded else dialogue_turns
     # 위험 행동을 해도 되는지 묻는 질문은 대화 경로·측정값 짧은 답·뷰어 엔진 답으로 보내지 않고 문서 검색으로 답한 뒤
@@ -899,9 +913,10 @@ async def _execute_copilot_query(
                     return planned_pipeline.converse_copilot(query.prompt, recent_turns=model_turns,
                                                              facts=facts, response_mode=query.response_mode)
             answer = plain_answer(await to_thread.run_sync(converse))
-            if ungrounded_measurements(answer, facts=facts, prompt=query.prompt):
+            extended = is_domain_question(query.prompt)
+            if ungrounded_measurements(answer, facts=facts, prompt=query.prompt, extended=extended):
                 # 자료에 없는 측정값은 내보내지 않는다. 한 번 다시 생성하고, 그래도 남으면 그 부분을 뺀다.
-                answer = drop_ungrounded(await to_thread.run_sync(converse), facts=facts, prompt=query.prompt)
+                answer = drop_ungrounded(await to_thread.run_sync(converse), facts=facts, prompt=query.prompt, extended=extended)
             answer = _checked_generation(answer, query)
             return _success_response(query, request_started, answer=answer, retrieval_used=False, generated=True,
                                      citations=[], context_status="available" if facts else "not_available")
@@ -927,7 +942,8 @@ async def _execute_copilot_query(
         # 돌아올 길(근거 확인 단계)이 설정된 경우에만 돌린다. 없으면 도장과 무관한 질문까지 문서로 답하게 된다.
         chat_redirected = (decision["kind"] == "chat" and query.task_type == "knowledge_search" and not viewer_requested
                            and not cross_tab and not zone_lookup and bool(_KNOWLEDGE_QUESTION.search(query.prompt))
-                           and _abstain_below(planned_pipeline) is not None and query.response_mode == "detailed")
+                           and not is_domain_question(query.prompt)
+                           and _abstain_below(planned_pipeline, query.response_mode) is not None)
         # 옛 행(v3.4.4 이전)에는 safety_class 열이 없어 앞 질문 문장도 다시 위험 판정한다.
         if (decision["kind"] == "correction" and dialogue_turns and not dialogue_turns[-1].get("safety_class")
                 and classify(dialogue_turns[-1]["prompt"]) is None):
@@ -1296,8 +1312,8 @@ async def _execute_copilot_query(
 
     # 근거 확인 단계: 재정렬 1위 점수가 기준값 미만이면 생성한 답을 버린다(설정이 없으면 지금처럼 동작).
     # 기준값은 재정렬 모델의 점수 척도에 묶인다(KURE-Reranker-nano 3.28, 2026-11-13 측정). 상세분석만 잰 값이다.
-    abstain_below = _abstain_below(pipeline)
-    if use_rag and abstain_below is not None and query.response_mode == "detailed":
+    abstain_below = _abstain_below(pipeline, query.response_mode)
+    if use_rag and abstain_below is not None:
         scores = [float(c["rerank_score"]) for c in result.get("rag_chunks") or []
                   if isinstance(c, dict) and c.get("rerank_score") is not None]
         if not scores or max(scores) < abstain_below:
@@ -1307,6 +1323,8 @@ async def _execute_copilot_query(
                 return await chat_answer()
             # 위험 주제 질문은 근거가 약해도 그 종류의 고정 문장으로 답한다.
             withheld, withheld_citations = guard_answer(safety_class, "", []) if safety else (NO_EVIDENCE_ANSWER, [])
+            if not safety and _DIZZY.search(query.prompt):
+                withheld += "\n" + DIZZY_NOTE
             if mixed is not None:
                 withheld = mixed.text + "\n" + MIXED_NO_EVIDENCE
             return _success_response(query, request_started, answer=withheld, retrieval_used=True, citations=withheld_citations,

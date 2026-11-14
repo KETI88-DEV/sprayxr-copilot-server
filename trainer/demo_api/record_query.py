@@ -125,9 +125,9 @@ def part_domain(part: RecordPart) -> str | None:
     return part.metric if part.code == "work_metric" and part.metric else CODE_DOMAIN.get(part.code or "")
 
 
-def has_record_marker(prompt: str, *, previous_subject: Mapping[str, Any] | None = None, person: bool = True) -> bool:
-    """`person=False`면 1인칭("제·나")만으로는 표지로 세지 않는다(라우터의 잡담 판정)."""
-    return bool((person and _PERSON.search(prompt)) or _RECORD_REF.search(prompt) or _PAST.search(prompt) or _EVALUATED.search(prompt)
+def has_record_marker(prompt: str, *, previous_subject: Mapping[str, Any] | None = None, person: bool = True, past: bool = True) -> bool:
+    """`person=False`면 1인칭("제·나")만으로는 표지로 세지 않는다(라우터의 잡담 판정). `past=False`면 "합격" 같은 과거·결과 낱말을 세지 않는다(기록 없이 묻는 공개 지식 질문)."""
+    return bool((person and _PERSON.search(prompt)) or _RECORD_REF.search(prompt) or (past and _PAST.search(prompt)) or _EVALUATED.search(prompt)
                 or _SPATIAL.search(prompt) or (previous_subject and _ANAPHORA.search(prompt)))
 
 

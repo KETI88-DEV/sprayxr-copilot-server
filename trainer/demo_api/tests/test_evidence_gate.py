@@ -56,16 +56,22 @@ def test_greetings_still_go_straight_to_the_conversation_path():
     assert data["answer"] == "대화 경로의 답입니다." and pipeline.runs == []
 
 
-def test_without_a_configured_gate_chat_questions_are_not_redirected():
+def test_without_a_gate_domain_questions_still_use_documents_and_others_chat():
+    pipeline = Pipeline(top=6.2, config={})
+    ask(pipeline, "가사시간이 뭐지?")
+    assert len(pipeline.runs) == 1 and pipeline.conversations == []
     pipeline = Pipeline(top=6.2, config={})
     data = ask(pipeline, "BTS 멤버는 몇 명이야?")
     assert data["answer"] == "대화 경로의 답입니다." and pipeline.runs == []
 
 
-def test_quick_mode_is_not_redirected_or_gated():
-    pipeline = Pipeline(top=1.5)
-    data = ask(pipeline, "BTS 멤버는 몇 명이야?", mode="quick")
-    assert data["answer"] == "대화 경로의 답입니다." and pipeline.runs == []
+QUICK = {"confidence": {"abstain_below_rerank_score": 4.0, "quick_abstain_below_rerank_score": 2.0}}
+
+
+def test_quick_domain_question_uses_documents_and_its_own_gate():
+    assert ask(Pipeline(top=1.5, config=QUICK), "가사시간이 뭐지?", mode="quick")["answer"] == NO_EVIDENCE_ANSWER
+    assert ask(Pipeline(top=2.5, config=QUICK), "가사시간이 뭐지?", mode="quick")["citations"] == ["DOC-doc_0001-C0001"]
+    assert "혼합 후" in ask(Pipeline(top=1.5), "가사시간이 뭐지?", mode="quick")["answer"]
 
 
 class KnowledgePipeline(Pipeline):
