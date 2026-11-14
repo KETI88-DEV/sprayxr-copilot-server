@@ -180,12 +180,19 @@ def test_actual_history_questions_still_require_actual_data(tmp_path, prompt):
     assert "1 → 3 → 2" not in data["answer"]
 
 
-@pytest.mark.parametrize("prompt", ["안녕", "도장 작업 순서란 무엇인가요?", "다음 구역이란 무엇인가요?"])
+@pytest.mark.parametrize("prompt", ["안녕", "다음 구역이란 무엇인가요?"])
 def test_general_or_realtime_questions_are_not_replaced_with_a_reference_plan(tmp_path, prompt):
     profile(tmp_path, "spray", ["1", "3", "2"])
     data = query(client(tmp_path, pipeline=Pipeline()), prompt=prompt)
     assert data["sequence_context"] is None
     assert data["answer"] == "일반 대화 답변입니다."
+
+
+def test_painting_order_term_question_is_answered_as_knowledge_not_a_reference_plan(tmp_path):
+    profile(tmp_path, "spray", ["1", "3", "2"])
+    data = query(client(tmp_path, pipeline=Pipeline()), prompt="도장 작업 순서란 무엇인가요?")
+    assert data["sequence_context"] is None
+    assert data["answer"] == "일반 지식 답변입니다."
 
 
 def test_detailed_reference_answer_is_short_and_has_reference_basis(tmp_path):

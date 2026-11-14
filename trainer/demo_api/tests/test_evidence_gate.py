@@ -58,13 +58,13 @@ def test_greetings_still_go_straight_to_the_conversation_path():
 
 def test_without_a_configured_gate_chat_questions_are_not_redirected():
     pipeline = Pipeline(top=6.2, config={})
-    data = ask(pipeline, "가사시간이 뭐지?")
+    data = ask(pipeline, "BTS 멤버는 몇 명이야?")
     assert data["answer"] == "대화 경로의 답입니다." and pipeline.runs == []
 
 
 def test_quick_mode_is_not_redirected_or_gated():
     pipeline = Pipeline(top=1.5)
-    data = ask(pipeline, "가사시간이 뭐지?", mode="quick")
+    data = ask(pipeline, "BTS 멤버는 몇 명이야?", mode="quick")
     assert data["answer"] == "대화 경로의 답입니다." and pipeline.runs == []
 
 
