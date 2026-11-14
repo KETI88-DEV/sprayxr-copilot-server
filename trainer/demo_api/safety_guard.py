@@ -35,18 +35,20 @@ _TOPIC: Final = re.compile(
     r"밀폐\s*(?:공간|구역|된)|산소\s*결핍|질식|사다리|고소\s*작업|추락|감전|누전|"
     + _en(r"respirator|ppe|explosion|explosive|static\s+electricity|grounding|confined\s+space|ladder|electric\s+shock|injection\s+injury"),
     re.I)
-_TIP: Final = r"건\s*(?:끝|선단|앞|입구)|팁|노즐|분사구|토출구|" + _en(r"tip|nozzle|gun")
-_HAND: Final = r"손가락|손구락|손끝|엄지|검지|손바닥|맨손|손으로|손을|장갑|" + _en(r"fingers?|thumb|palm|hands?|gloves?")
-_HAND_BLOCK: Final = r"막|덮|누르|눌러|눌러서|" + _en(r"block|cover|plug|press")
-_TIP_TOUCH: Final = _HAND_BLOCK + r"|대(?:도|면|고|서)|" + _en(r"put|hold|touch")
+# 손이 건 끝에 닿는 행동(2차 검토 2026-11-14). "건"만으로는 팁이 아니다("손으로 건을 꽉 눌러 잡아도 돼?").
+_TIP: Final = r"건\s*(?:끝|앞|선단|입구)|팁|노즐|분사구|토출구|" + _en(r"tips?|nozzles?")
+_HAND: Final = r"손가락|손구락|손끝|엄지|검지|손바닥|맨손|장갑|손(?!목|잡이)|" + _en(r"fingers?|thumbs?|palms?|hands?|gloves?")
+# "막혔다·막힌"은 노즐 상태지 손으로 막는 행동이 아니다.
+_TIP_ACTION: Final = (r"막(?!혀|혔|힌|힘|히)|덮|갖다|대(?:도|면|고|서|보|봐|기|는)|닦|누르|눌러|만지|만져|확인|"
+                      + _en(r"block|cover|plug|press|touch|put|wipe|check|hold"))
 # 사람에게 위험한 행동 그 자체(위험 행동 질문의 대상).
 _HAZARD_ACT: Final = re.compile(
     r"고압.{0,15}(?:손|몸|피부).{0,6}(?:만지|만져|대|닿)|(?:손|몸|피부).{0,6}(?:만지|만져|대|닿).{0,15}고압|"
     r"(?:마스크|보호구|방독|송기|장갑|보안경|호흡\s*보호).{0,6}(?:안\s*(?:쓰|끼|착용)|없이|벗|빼고)|"
     r"(?:시너|용제|희석제).{0,8}(?:손|피부|얼굴|몸).{0,6}(?:씻|닦|묻|바르)|(?:손|피부|얼굴|몸).{0,6}(?:시너|용제)로|"
-    r"담배|흡연|라이터|성냥|불\s*(?:붙|피우)|용접|화기|"
+    r"담배|흡연|라이터|성냥|불\s*(?:붙|피우)|화기|"
     r"압력.{0,6}(?:안\s*빼|빼지\s*않|안\s*낮추|그대로).{0,15}(?:팁|노즐|건|호스|필터|분해|교체|갈|청소)|"
-    r"(?:사람|몸|얼굴|동료|눈).{0,4}(?:쪽|에게|에|을)?\s*(?:으로|로)?\s*(?:향|겨누|쏘|뿌)|"
+    r"(?:건|총|노즐|팁|스프레이)\S*.{0,8}(?:사람|동료|얼굴|몸|눈|손)\s*(?:쪽|에게|에|을)?\s*(?:으로|로)?\s*(?:향|겨누|쏘|뿌)|"
     r"(?:안전\s*장치|방아쇠\s*잠금).{0,6}(?:풀|빼|없이|안\s*걸)|밀폐.{0,12}(?:혼자|환기\s*없이|마스크\s*없이)|"
     r"사다리.{0,12}(?:혼자|한\s*손|뛰|올라서)",
     re.I)
@@ -74,12 +76,25 @@ def is_safety_topic(text: str) -> bool:
 
 
 def blocks_tip_by_hand(text: str) -> bool:
-    """건 끝·팁·노즐을 손(가락)·장갑으로 막거나 대는 행동, 또는 손으로 무엇을 막는 행동."""
-    if not text:
-        return False
-    tip, hand = re.search(_TIP, text, re.I), re.search(_HAND, text, re.I)
-    return bool((tip and hand and re.search(_TIP_TOUCH, text, re.I))
-                or (hand and re.search(_HAND_BLOCK, text, re.I) and not re.search(r"손목|손잡이|잡고", text)))
+    """손(가락·바닥·장갑)과 팁 낱말(팁·노즐·건 끝·건 앞·분사구)과 닿는 행동(막·대·닦·누르·만지·확인)이 함께 있는가.
+
+    묻는 꼴(허락·방법·확인)과 상관없다. 이 판정이 참이면 어느 경로든 고정 답이다.
+    """
+    return bool(text and re.search(_TIP, text, re.I) and re.search(_HAND, text, re.I) and re.search(_TIP_ACTION, text, re.I))
+
+
+# 앞 질문을 받는 짧은 후속("그럼 해도 돼?", "그래도 돼?", "괜찮겠지?", "진짜 안 돼? 잠깐인데").
+_SHORT_FOLLOW_UP: Final = re.compile(r"돼|되|괜찮|어때|안\s*돼|잠깐")
+
+
+def follows_hand_on_tip(text: str, previous: str) -> bool:
+    """손-팁 질문 바로 뒤의 짧은 후속 질문인가(같은 대화의 앞 질문으로 본다)."""
+    return bool(previous and text and len(text.strip()) <= 20 and _SHORT_FOLLOW_UP.search(text) and blocks_tip_by_hand(previous))
+
+
+def hand_on_tip(questions: tuple[str, ...], *, previous: str = "") -> bool:
+    """이 요청(원문·한국어 질문)이나 짧은 후속 질문이 손-팁 접촉을 말하는가."""
+    return any(blocks_tip_by_hand(text) or follows_hand_on_tip(text, previous) for text in questions if text)
 
 
 def asks_permission(text: str) -> bool:
@@ -91,9 +106,11 @@ def is_hazard_act(text: str, *, previous: str = "") -> bool:
     """사람에게 위험한 행동을 해도 되는지 묻는가. "그럼 해도 돼?"는 같은 대화의 앞 질문으로 본다."""
     if not text:
         return False
+    if blocks_tip_by_hand(text) or follows_hand_on_tip(text, previous):
+        return True
     if _FOLLOW_UP.search(text) and previous and previous != text:
         return is_hazard_act(previous)
-    return asks_permission(text) and (blocks_tip_by_hand(text) or bool(_HAZARD_ACT.search(text)))
+    return asks_permission(text) and bool(_HAZARD_ACT.search(text))
 
 
 # 이전 판의 이름. 위험 행동 판정이 경로를 정한다.
@@ -111,8 +128,7 @@ def guard_answer(questions: tuple[str, ...], answer: str, citations: list[str], 
     texts = [text for text in questions if text]
     if not any(is_hazard_act(text, previous=previous) for text in texts):
         return answer, citations
-    acts = [text for text in texts if blocks_tip_by_hand(text)] or ([previous] if previous and blocks_tip_by_hand(previous) else [])
-    if acts:
+    if hand_on_tip(tuple(texts), previous=previous):
         # 손으로 건 끝을 막는 행동은 모델 답이 무엇이든 고정 답이다(검토 2026-11-14: "막아도 됩니다. 다만 위험할 수 …").
         return HIGH_PRESSURE_ANSWER, list(HIGH_PRESSURE_CITATIONS)
     if needs_replacement(answer):

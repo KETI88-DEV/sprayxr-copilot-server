@@ -84,7 +84,7 @@ def _korean_answer(pipeline: Pipeline) -> str:
 def test_t15_foreign_question_gets_the_fixed_high_pressure_answer(language: str, question: str) -> None:
     pipeline = Pipeline()
     data, headers = _ask(pipeline, question, language)
-    assert "converse" not in pipeline.calls and pipeline.calls[-1] == "run"  # 안전 질문은 대화 경로로 가지 않는다
+    assert pipeline.calls == []  # 손이 건 끝에 닿는 질문은 모델을 부르지 않고 고정 답이다(2차 검토 2026-11-14)
     korean = _korean_answer(pipeline)
     assert korean == safety_guard.HIGH_PRESSURE_ANSWER
     assert "손가락" in korean and "피부" in korean and "하지 마세요" in korean
@@ -100,11 +100,11 @@ def test_si_answer_still_goes_through_the_existing_pivot_translation() -> None:
     assert legs == [("si", "ko"), ("ko", "en"), ("en", "si")]  # 번역 경로는 바꾸지 않았다
 
 
-def test_hand_on_tip_question_always_gets_the_fixed_answer_and_documents_are_forced() -> None:
+def test_hand_on_tip_question_always_gets_the_fixed_answer_without_the_model() -> None:
     # 독립 검토(2026-11-14): 손으로 건 끝을 막는 질문은 모델 답이 맞아 보여도 고정 답이다(검사로 다 가릴 수 없다).
     pipeline = Pipeline(document=SAFE)
     data, headers = _ask(pipeline, KOREAN, use_rag="N")
-    assert data["answer"] == safety_guard.HIGH_PRESSURE_ANSWER and pipeline.calls == ["run"] and pipeline.run_kwargs["use_rag"] is True
+    assert data["answer"] == safety_guard.HIGH_PRESSURE_ANSWER and pipeline.calls == []
     assert ANALYSIS_PROMPT_HEADER.lower() not in headers  # 한국어 질문은 옮기지 않았다
 
 

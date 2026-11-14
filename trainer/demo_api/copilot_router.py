@@ -78,7 +78,8 @@ from trainer.demo_api.query_language import TranslationUnavailableError, transla
 from trainer.demo_api.sequence_store import SequenceStore
 from trainer.demo_api.viewer_arm_pose import arm_pose_answer, parse_viewer_arm_pose, zone_pose_summary
 from trainer.demo_api.sequence_analysis import SequenceAnalysisEngine
-from trainer.demo_api.safety_guard import guard_answer, is_hazard_act, is_safety_topic
+from trainer.demo_api.safety_guard import (HIGH_PRESSURE_ANSWER, HIGH_PRESSURE_CITATIONS, guard_answer, hand_on_tip,
+                                           is_hazard_act, is_safety_topic)
 from trainer.demo_api.reference_order_query import actual_order_intent, current_next_answer, is_current_next_question, is_reference_order_question, resolve_reference_target, reference_order_answer
 from trainer.demo_api.v1_store import V1Store
 from trainer.demo_api.viewer_progress import progress_question, viewer_progress_answer
@@ -721,6 +722,10 @@ async def _execute_copilot_query(
     # 위험 행동을 해도 되는지 묻는 질문은 대화 경로·측정값 짧은 답·뷰어 엔진 답으로 보내지 않고 문서 검색으로 답한 뒤
     # 답을 검사한다(2026-11-14 훈련생 질문 시험 T15). "그럼 해도 돼?"는 같은 대화의 앞 질문으로 본다.
     previous_prompt = dialogue_turns[-1]["prompt"] if dialogue_turns else ""
+    if hand_on_tip(questions, previous=previous_prompt):
+        # 손이 건 끝에 닿는 질문은 경로·탭·답변 수준과 상관없이 모델 없이 고정 답이다(v3.4.1 운영: 베트남어 답이 막으라고 했다).
+        return _success_response(query, request_started, answer=HIGH_PRESSURE_ANSWER, retrieval_used=False,
+                                 citations=list(HIGH_PRESSURE_CITATIONS), context_status="available")
     safety = query.task_type != "error_analysis" and any(is_hazard_act(text, previous=previous_prompt) for text in questions)
     if safety and query.task_type != "knowledge_search":
         query = query.model_copy(update={"task_type": "knowledge_search"})
