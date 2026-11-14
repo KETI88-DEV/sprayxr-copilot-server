@@ -127,7 +127,7 @@ _MEASUREMENT: Final = re.compile(r"(\d+(?:\.\d+)?)(?:\s*[~∼-]\s*(\d+(?:\.\d+)?
 # 넓힌 단위(지식 답): 시간·횟수·점수·길이·압력. 긴 단위가 짧은 것보다 앞이고 °C가 °보다 앞이다.
 _MEASUREMENT_EXTENDED: Final = re.compile(
     r"(\d+(?:\.\d+)?)(?:\s*[~∼-]\s*(\d+(?:\.\d+)?))?\s*"
-    r"(mm/s|cm/s|m/s|mm|cm|µm|μm|um|%|°C|℃|°|시간|분|초|점|회|배|인치|bar(?![A-Za-z])|MPa|psi(?![A-Za-z])|m(?![m/²A-Za-z]))")
+    r"(mm/s|cm/s|m/s|mm|cm|µm|μm|um|%|°C|℃|°|시간|분(?!류|기|야|석)|초(?!과|기)|점(?!검)|회(?!전|복|사|의)|배(?!열|치|경)|인치|bar(?![A-Za-z])|MPa|psi(?![A-Za-z])|m(?![m/²A-Za-z]))")
 _UNIT_ALIASES: Final = {"μm": "µm", "um": "µm", "℃": "°C"}
 _METRIC_UNIT: Final = {"deg": "°", "°": "°", "um": "µm", "µm": "µm", "μm": "µm", "mm": "mm", "cm": "cm", "mm/s": "mm/s", "%": "%"}
 _SENTENCE_END: Final = re.compile(r"(?<=[.!?])\s+|\n+")

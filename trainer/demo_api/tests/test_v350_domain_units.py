@@ -28,3 +28,18 @@ def test_extended_units_accept_values_in_facts_and_chunk_text() -> None:
 
 def test_celsius_is_not_read_as_angle() -> None:
     assert ungrounded_measurements("25℃ 이하", facts={"a": {"actual": 25, "unit": "deg"}}, prompt="", extended=True) == ["25℃"]
+
+
+@pytest.mark.parametrize("text", ["3점검", "100초과", "2배열", "5분류", "1분기", "3회전", "3회복"])
+def test_extended_units_ignore_korean_compounds(text: str) -> None:
+    assert ungrounded_measurements(f"{text} 합니다.", facts={}, prompt="", extended=True) == []
+
+
+@pytest.mark.parametrize("text, found", [("5분이 지나면", "5분"), ("3점을 받아야", "3점"), ("2회는 필요", "2회"), ("30초 동안", "30초")])
+def test_extended_units_keep_josa_cases(text: str, found: str) -> None:
+    assert ungrounded_measurements(text, facts={}, prompt="", extended=True) == [found]
+
+
+def test_extended_leaves_existing_units_unchanged() -> None:
+    answer, facts = "12mm, 80%, -5.2°, 99mm, 90%", {"a": {"actual": 12, "unit": "mm"}, "r": {"similarity": 0.8}, "g": {"actual": -5.2, "unit": "deg"}}
+    assert ungrounded_measurements(answer, facts=facts, prompt="", extended=True) == ungrounded_measurements(answer, facts=facts, prompt="") == ["99mm", "90%"]
