@@ -123,6 +123,7 @@ trainer/demo_api/reference_order_query.py
 trainer/demo_api/report_jobs.py
 trainer/demo_api/report_sample.json
 trainer/demo_api/request_provenance.py
+trainer/demo_api/safety_guard.py
 trainer/demo_api/scenario_adapter.py
 trainer/demo_api/sequence_analysis.py
 trainer/demo_api/sequence_heatmap_analysis.py
