@@ -36,11 +36,12 @@ _TOPIC: Final = re.compile(
     + _en(r"respirator|ppe|explosion|explosive|static\s+electricity|grounding|confined\s+space|ladder|electric\s+shock|injection\s+injury"),
     re.I)
 # 손이 건 끝에 닿는 행동(2차 검토 2026-11-14). "건"만으로는 팁이 아니다("손으로 건을 꽉 눌러 잡아도 돼?").
-_TIP: Final = r"건\s*(?:끝|앞|선단|입구)|팁|노즐|분사구|토출구|" + _en(r"tips?|nozzles?")
+_TIP: Final = (r"건\s*(?:끝|앞|선단|입구|머리)|건의\s*끝|총구|분무구|팁|노즐|분사구|토출구|"
+               + _en(r"tips?|nozzles?|gun\s+(?:tip|nozzle|end)|spray\s+gun"))
 _HAND: Final = r"손가락|손구락|손끝|엄지|검지|손바닥|맨손|장갑|손(?!목|잡이)|" + _en(r"fingers?|thumbs?|palms?|hands?|gloves?")
-# "막혔다·막힌"은 노즐 상태지 손으로 막는 행동이 아니다.
-_TIP_ACTION: Final = (r"막(?!혀|혔|힌|힘|히)|덮|갖다|대(?:도|면|고|서|보|봐|기|는)|닦|누르|눌러|만지|만져|확인|"
-                      + _en(r"block|cover|plug|press|touch|put|wipe|check|hold"))
+# "막혔다·막힌"은 노즐 상태지 손으로 막는 행동이 아니다. "확인·check·hold"는 접촉이 아니다(3차 검토: "손 위치 확인하는 팁").
+_TIP_ACTION: Final = (r"막(?!혀|혔|힌|힘|히)|덮|갖다|대(?:도|면|고|서|보|봐|기|는)|닦|누르|눌러|만지|만져|붙이|붙여|"
+                      + _en(r"block|cover|plug|press|touch|put|wipe"))
 # 사람에게 위험한 행동 그 자체(위험 행동 질문의 대상).
 _HAZARD_ACT: Final = re.compile(
     r"고압.{0,15}(?:손|몸|피부).{0,6}(?:만지|만져|대|닿)|(?:손|몸|피부).{0,6}(?:만지|만져|대|닿).{0,15}고압|"
@@ -85,11 +86,14 @@ def blocks_tip_by_hand(text: str) -> bool:
 
 # 앞 질문을 받는 짧은 후속("그럼 해도 돼?", "그래도 돼?", "괜찮겠지?", "진짜 안 돼? 잠깐인데").
 _SHORT_FOLLOW_UP: Final = re.compile(r"돼|되|괜찮|어때|안\s*돼|잠깐")
+# 새 질문의 표지. 이것이 있으면 앞 손-팁 질문의 후속이 아니다(3차 검토: "도막 두께는 어떻게 되나요?").
+_NEW_SUBJECT: Final = re.compile(r"어떻게|도막|두께|구역|zone|자세|점수|속도|거리|다음|순서", re.I)
 
 
 def follows_hand_on_tip(text: str, previous: str) -> bool:
     """손-팁 질문 바로 뒤의 짧은 후속 질문인가(같은 대화의 앞 질문으로 본다)."""
-    return bool(previous and text and len(text.strip()) <= 20 and _SHORT_FOLLOW_UP.search(text) and blocks_tip_by_hand(previous))
+    return bool(previous and text and len(text.strip()) <= 20 and _SHORT_FOLLOW_UP.search(text)
+                and not _NEW_SUBJECT.search(text) and blocks_tip_by_hand(previous))
 
 
 def hand_on_tip(questions: tuple[str, ...], *, previous: str = "") -> bool:
