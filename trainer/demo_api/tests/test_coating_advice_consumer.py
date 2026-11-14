@@ -33,16 +33,19 @@ def test_measured_comparison_decides_whether_a_candidate_is_advice() -> None:
     assert cq.measured_relation(measures["7"], "speed_mm_s") == "similar"  # 1,976 vs 1,964 mm/s
     decrease = {"variable": "distance_mm", "direction": "decrease", "priority": 2}
     assert cq.contradicted(decrease, measures["8"]) and not cq.contradicted(decrease, measures["4"])
+    # 전문가 속도는 이전 장비로 잰 값이라(훈련생이 약 0.36배) 속도 후보는 실측과 엇갈린다고 판정하지 않는다(v3.4.1).
+    assert not cq.contradicted({"variable": "speed_mm_s", "direction": "decrease", "priority": 1}, measures["8"])
 
 
 def test_distribution_cause_states_measurements_instead_of_contradicted_candidates() -> None:
     coating = payload()["coating_evaluation"]
     answer = cq.answer_distribution_cause(coating, detailed=True, measures=_measures())
     zone8 = next(line for line in answer.split("\n") if "Zone 8(" in line)
-    assert "2,230 mm/s" in zone8 and "3,514 mm/s" in zone8 and "느림" in zone8 and "가까움" in zone8
-    assert "조절 후보:" not in zone8 and "검토 중" in zone8
+    # 속도는 측정값으로만 적고 전문가와 견주지 않는다. 거리만 견줘 후보를 걸러 낸다.
+    assert "2,230 mm/s" in zone8 and "3,514 mm/s" not in zone8 and "느림" not in zone8 and "가까움" in zone8
+    assert "조절 후보: 이동 속도를 낮추는 쪽." in zone8 and "규칙의 조절 후보(이격거리를 줄이는 쪽)" in zone8 and "검토 중" in zone8
     zone4 = next(line for line in answer.split("\n") if "Zone 4(" in line)
-    assert "조절 후보: 이격거리를 줄이는 쪽" in zone4 and "이동 속도를 낮추는 쪽" in zone4 and "검토 중" in zone4
+    assert "조절 후보: 이동 속도를 낮추는 쪽, 이격거리를 줄이는 쪽" in zone4 and "검토 중" not in zone4
     # 실측이 없으면(완료 리포트만) 예전처럼 후보를 적는다.
     assert "조절 후보: 이동 속도를 낮추는 쪽, 이격거리를 줄이는 쪽" in cq.answer_distribution_cause(coating, detailed=True)
 
@@ -55,7 +58,7 @@ def test_error_analysis_query_uses_the_signed_measurements() -> None:
         "user_id": "u", "session_id": data["selected_session_id"], "task_type": "error_analysis", "prompt": "왜 얇아?",
         "response_mode": "detailed", "context": context("knowledge_search", data, AT_3S)}).json()["data"]["answer"]
     zone8 = next(line for line in answer.split("\n") if "Zone 8(" in line)
-    assert "검토 중" in zone8 and "조절 후보:" not in zone8
+    assert "검토 중" in zone8 and "조절 후보: 이동 속도를 낮추는 쪽." in zone8 and "느림" not in zone8
 
 
 def test_model_facts_carry_measurements_and_drop_contradicted_candidates() -> None:
@@ -63,9 +66,11 @@ def test_model_facts_carry_measurements_and_drop_contradicted_candidates() -> No
     facts = cq.target_advice_facts({**data["coating_evaluation"], "playback_context": {"map_num": "1", "zone_id": "8"}},
                                    measures=_measures())
     zone8 = facts["zones"][0]
-    assert zone8["zone_id"] == "8" and zone8["adjustments"] == []
-    assert {item["variable"] for item in zone8["adjustments_under_review"]} == {"speed_mm_s", "distance_mm"}
-    assert zone8["measured"]["speed_mm_s"] == {"record": 2230.0, "expert_median": 3514.0, "relation": "lower"}
+    assert zone8["zone_id"] == "8" and [item["variable"] for item in zone8["adjustments"]] == ["speed_mm_s"]
+    assert {item["variable"] for item in zone8["adjustments_under_review"]} == {"distance_mm"}
+    # 속도는 측정값만 싣는다. 전문가 속도와의 관계는 모델에 넘기지 않는다.
+    assert zone8["measured"]["speed_mm_s"] == {"record": 2230.0}
+    assert zone8["measured"]["distance_mm"] == {"record": 250.8, "expert_median": 550.0, "relation": "lower"}
 
 
 @pytest.mark.parametrize("sentence", [

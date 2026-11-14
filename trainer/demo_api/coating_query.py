@@ -198,33 +198,41 @@ def measured_relation(measure: Mapping[str, Any] | None, variable: str) -> str |
 
 
 def contradicted(adjustment: Mapping[str, Any], measure: Mapping[str, Any] | None) -> bool:
-    """이미 전문가보다 낮은데 낮추라거나, 이미 높은데 높이라는 후보."""
+    """이미 전문가보다 낮은데 낮추라거나, 이미 높은데 높이라는 후보. 이격거리만 본다.
+
+    전문가 속도는 2025-08~09 이전 장비로 잰 값이라 훈련생 속도가 장비 탓에 약 0.36배로 나온다(2026-11-14 확인).
+    그래서 속도 후보는 실측과 엇갈린다고 판정하지 않는다.
+    """
+    if adjustment.get("variable") != "distance_mm":
+        return False
     relation = measured_relation(measure, str(adjustment.get("variable")))
     return (adjustment.get("direction"), relation) in {("decrease", "lower"), ("increase", "higher")}
 
 
 def measured_sentence(zone_id: str, measure: Mapping[str, Any] | None) -> str | None:
-    """'실측 이동 속도 2,230 mm/s(전문가 3,514 mm/s보다 37% 느림), 이격거리 …'."""
+    """'Zone 8 실측: 이동 속도 2,230 mm/s, 이격거리 251 mm(전문가 550 mm보다 54% 가까움).'
+
+    속도는 측정값만 적는다. 전문가 속도는 다른 장비로 잰 값이라 견주지 않는다(`contradicted`).
+    """
     parts = []
-    for variable, (own, reference, title, unit, up, down) in _MEASURE_FIELDS.items():
-        relation = measured_relation(measure, variable)
-        if relation is None:
-            continue
+    speed = (measure or {}).get("speed_mms")
+    if isinstance(speed, (int, float)):
+        parts.append(f"이동 속도 {speed:,.0f} mm/s")
+    relation = measured_relation(measure, "distance_mm")
+    if relation is not None:
+        own, reference, title, unit, up, down = _MEASURE_FIELDS["distance_mm"]
         mine, expert = measure[own], measure[reference]  # type: ignore[index]
-        word = {"lower": down, "higher": up, "similar": "비슷"}[relation]
-        gap = f"{abs(mine / expert - 1) * 100:.0f}% {word}" if relation != "similar" else "비슷"
-        parts.append(f"{title} {mine:,.0f} {unit}(전문가 {expert:,.0f} {unit}보다 {gap})" if relation != "similar"
-                     else f"{title} {mine:,.0f} {unit}(전문가 {expert:,.0f} {unit}와 비슷)")
+        parts.append(f"{title} {mine:,.0f} {unit}(전문가 {expert:,.0f} {unit}와 비슷)" if relation == "similar"
+                     else f"{title} {mine:,.0f} {unit}(전문가 {expert:,.0f} {unit}보다 {abs(mine / expert - 1) * 100:.0f}% "
+                          f"{up if relation == 'higher' else down})")
     if not parts:
         return None
     text = f"Zone {zone_id} 실측: " + ", ".join(parts) + "."
     grade = (measure or {}).get("grade")
-    slow_close = {measured_relation(measure, name) for name in _MEASURE_FIELDS} == {"lower"}
-    fast_far = {measured_relation(measure, name) for name in _MEASURE_FIELDS} == {"higher"}
-    if grade == "below" and slow_close:
-        text += " 가까이·천천히 칠하면 보통 도막이 두꺼워지는 쪽이라, 이 두 값으로는 얇게 나온 까닭을 설명하기 어렵습니다."
-    elif grade == "above" and fast_far:
-        text += " 멀리·빠르게 칠하면 보통 도막이 얇아지는 쪽이라, 이 두 값으로는 두껍게 나온 까닭을 설명하기 어렵습니다."
+    if grade == "below" and relation == "lower":
+        text += " 가까이 칠하면 보통 도막이 두꺼워지는 쪽이라, 거리로는 얇게 나온 까닭을 설명하기 어렵습니다."
+    elif grade == "above" and relation == "higher":
+        text += " 멀리 칠하면 보통 도막이 얇아지는 쪽이라, 거리로는 두껍게 나온 까닭을 설명하기 어렵습니다."
     return text
 
 
@@ -429,10 +437,11 @@ def target_advice_facts(context: Mapping[str, Any], *, measures: Mapping[str, Ma
             return item
         item["adjustments"] = [a for a in row["adjustments"] if not contradicted(a, measure)]
         item["adjustments_under_review"] = [a for a in row["adjustments"] if contradicted(a, measure)]
-        item["measured"] = {variable: {"record": measure[own], "expert_median": measure[reference],
-                                       "relation": measured_relation(measure, variable)}
-                            for variable, (own, reference, *_rest) in _MEASURE_FIELDS.items()
-                            if measured_relation(measure, variable) is not None}
+        # 속도는 측정값만 싣는다(전문가 속도는 다른 장비로 잰 값이라 관계를 모델에 넘기지 않는다).
+        item["measured"] = {**({"speed_mm_s": {"record": measure["speed_mms"]}} if "speed_mms" in measure else {}),
+                            **({"distance_mm": {"record": measure["distance_mm"], "expert_median": measure["reference_distance_mm"],
+                                                "relation": measured_relation(measure, "distance_mm")}}
+                               if measured_relation(measure, "distance_mm") is not None else {})}
         return item
 
     return {"basis": context["target"]["basis_label"], "zones": [fact(row) for row in (here + flagged)[:6]]}
