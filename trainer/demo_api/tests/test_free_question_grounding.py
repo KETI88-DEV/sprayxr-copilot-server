@@ -66,7 +66,8 @@ def test_dropping_keeps_the_grounded_part_of_the_answer() -> None:
     assert cleaned == "평균 속도: 905 mm/s."
     assert dialogue.drop_ungrounded("속도를 5~10% 낮추세요.", facts=FACTS, prompt="") == "세션 기록으로는 확인할 수 없습니다."
     labelled = "[분석] 평균 속도: 905 mm/s (표준 범위)\n평균 거리: 753.15 mm (표준 범위)\n\n속도는 표준 범위 내입니다."
-    assert dialogue.drop_ungrounded(labelled, facts=FACTS, prompt="") == "평균 속도: 905 mm/s 평균 거리: 753.15 mm"
+    # v3.4.2: 다른 출구 검사처럼 줄 나눔을 지킨다.
+    assert dialogue.drop_ungrounded(labelled, facts=FACTS, prompt="") == "평균 속도: 905 mm/s\n평균 거리: 753.15 mm"
 
 
 class _Pipeline:
