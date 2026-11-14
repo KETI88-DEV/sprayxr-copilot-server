@@ -6,11 +6,11 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Final
 
-from trainer.demo_api.coating_query import (_CAUSES, _EFFECTS, _SIMILAR, distance_sentence, measured_relation, measured_sentence,
+from trainer.demo_api.coating_query import (_CAUSES, _DISTANCE_WORDS, _EFFECTS, _SIMILAR, distance_sentence, measured_relation, measured_sentence,
                                             parse_viewer_coating_context, zone_measures)
 from trainer.demo_api.coating_assessment import grade_phrase, mean_text
 from trainer.demo_api.copilot_intent import preset_intent
@@ -576,3 +576,135 @@ def answer_part(facts: RecordFacts, part: RecordPart, *, task_type: str) -> tupl
                "external_standard": lambda: _external(facts), "one_priority": lambda: one_priority(facts, single=part.cardinality == "one"),
                "zone_exists": lambda: _missing_zones(facts, list(part.zones))}
     return answers[code](), None
+
+
+# ---------------------------------------------------------------- 답 조립(전제 바로잡기 · 조각별 답 · 단서 한 줄 · subject)
+_NOT_IN_RECORD: Final = "그 부분은 이 기록에 없습니다."
+_QUESTION_SHAPED: Final = re.compile(r"[?？]\s*$|(?:나요|까요|가요|죠|줘|세요)[.]?\s*$")  # 서술형 첫 문장에는 "없습니다"를 붙이지 않는다(P7)
+_METRIC_NAMES: Final = {"pose_similarity": "자세 유사도", "work_similarity": "작업 유사도", "order_adherence": "순서 준수율"}
+_COATING_CODES: Final = {"coating_extreme", "coating_over", "completion", "external_standard", "cause"}
+_SPEED_RELATION: Final = {"speed_slower": "lower", "speed_faster": "higher", "distance_farther": "higher", "distance_closer": "lower"}
+
+
+@dataclass(frozen=True)
+class RecordAnswer:
+    text: str                                  # 기록 쪽 결정적 문장(섞인 질문이면 기록 조각만)
+    kind: str                                  # RecordQuery.kind ("none"은 나오지 않는다)
+    subject: dict[str, Any] | None             # {"domain": str, "zone_ids": list[str], "operator": str}
+    knowledge_question: str | None             # 섞인 질문의 지식 조각 문장(이어 붙임), 아니면 None
+    sequence_context: dict[str, Any] | None    # progress_* 답의 context
+
+
+def previous_subject(turns: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
+    """바로 앞 행이 결정적 답(analysis)이고 subject가 있을 때만. 모델이 쓴 답의 주제는 이어받지 않는다."""
+    last = turns[-1] if turns else None
+    subject = last.get("subject") if last else None
+    return dict(subject) if last and last.get("answer_source") == "analysis" and isinstance(subject, Mapping) and subject else None
+
+
+def _metric_values(facts: RecordFacts) -> dict[str, float | None]:
+    adherence = facts.claims.get("order_adherence_rate")
+    return {"pose_similarity": (facts.arm or {}).get("average_similarity_percent"), "work_similarity": facts.claims.get("work_similarity_percent"),
+            "order_adherence": adherence * 100 if _is_num(adherence) else None}
+
+
+def _premise_lead(facts: RecordFacts, part: RecordPart, premise: Premise) -> str | None:
+    """"예."/"아니요." + 서명된 사실. 어느 쪽인지 서명 값으로 가릴 수 없으면 None(동조도 반박도 하지 않는다)."""
+    zone = part.zones[0] if part.zones else None
+    if premise.kind == "named_number" and premise.value is not None:
+        values = _metric_values(facts)
+        same = [name for name, value in values.items() if _is_num(value) and round(value) == round(premise.value)]
+        asked = values.get(premise.subject)
+        if premise.subject in same:
+            return f"예. {_METRIC_NAMES[premise.subject]}는 {premise.value:g}%입니다."
+        if same:
+            return f"아니요. {premise.value:g}%는 {_METRIC_NAMES[same[0]]}입니다."
+        return f"아니요. 이 기록의 {_METRIC_NAMES[premise.subject]}는 {asked:.0f}%입니다." if _is_num(asked) else None
+    if premise.kind == "cause" and zone:
+        cause = premise.subject.split(">")[0]
+        measure = facts.measures.get(zone)
+        relation = measured_relation(measure, "distance_mm")
+        if cause in _DISTANCE_WORDS and relation is not None:
+            return ("예. " if _DISTANCE_WORDS[cause] == relation else "아니요. ") + (distance_sentence(zone, measure) or "")
+        return None  # 속도 원인은 R6(_speed)가 값과 한계만 말한다
+    if premise.kind == "conclusion":
+        rows = [_row(facts, z) for z in part.zones] if part.zones else list(facts.target_rows)
+        if not rows or any(row is None or not row.get("gate_status") for row in rows):
+            return None
+        done = all(row["gate_status"] == "complete" for row in rows)  # type: ignore[index]
+        return "예." if done else f"아니요. 다 칠한 것과 완료는 다릅니다. 완료는 목표 두께 이상으로 칠한 면적이 {_GATE_PERCENT}% 이상일 때입니다."
+    if premise.kind == "comparison" and zone and premise.subject in _SPEED_RELATION:
+        variable = "speed_mm_s" if premise.subject.startswith("speed") else "distance_mm"
+        relation = measured_relation(facts.measures.get(zone), variable)
+        if relation is None:
+            return None
+        return ("예." if relation == _SPEED_RELATION[premise.subject] else "아니요.") + (
+            f" Zone {zone}의 {'이동 속도' if variable == 'speed_mm_s' else '이격거리'}는 전문가 중앙값과 견줘 "
+            f"{ {'lower': '낮습니다', 'higher': '높습니다', 'similar': '비슷합니다(±10% 이내)'}[relation] }.")
+    return None
+
+
+def _subject_zones(facts: RecordFacts, part: RecordPart) -> list[str]:
+    if part.code in {"coating_extreme"}:
+        rows = sorted((r for r in facts.target_rows if _is_num(r.get("thickness_um"))), key=lambda r: r["thickness_um"], reverse=part.operator == "argmax")
+        return [str(rows[0]["zone_id"])] if rows else []
+    if part.code == "coating_over":
+        heavy = sorted((r for r in facts.target_rows if _is_num(r.get("overpaint_percent")) and r["overpaint_percent"] > 0), key=lambda r: -r["overpaint_percent"])[:3]
+        return [str(r["zone_id"]) for r in heavy]
+    if part.code == "distance_filter":
+        want = {"lower": "lower", "similar": "similar"}.get(part.operator or "", "higher")
+        return [z for z, m in facts.measures.items() if measured_relation(m, "distance_mm") == want]
+    if part.code == "one_priority":
+        ranked = _priorities(facts)
+        found = re.search(r"Zone (\d+)", ranked[0][0]) if ranked else None
+        return [found.group(1)] if found else []
+    return [z for z in part.zones if z in facts.zone_ids]
+
+
+def answer_record_question(context: str | None, prompt: str, *, task_type: str,
+                           recent_turns: Sequence[Mapping[str, Any]]) -> RecordAnswer | None:
+    facts = RecordFacts.from_context(context)
+    if facts is None:  # 서명 없음·위조 = 기록 분류 끔
+        return None
+    query = classify_record_question(prompt, task_type=task_type, previous_subject=previous_subject(recent_turns), playback_zone=facts.playback_zone)
+    if query.kind == "none":
+        return None
+    sentences: list[str] = []
+    answered: list[RecordPart] = []
+    sequence_context: dict[str, Any] | None = None
+    last_key = None
+    any_code = any(part.code for part in query.parts)
+    for part in query.parts:
+        if part.code is None:
+            if any_code and not part.knowledge and _QUESTION_SHAPED.search(part.text):
+                sentences.append(_NOT_IN_RECORD)
+            continue
+        key = (part.code, part.zones, part.operator, part.metric)
+        if key == last_key:  # 같은 코드·같은 Zone이 이어지면 한 번만(T31·T43·T49)
+            continue
+        last_key = key
+        text, context_found = answer_part(facts, part, task_type=task_type)
+        sequence_context = sequence_context or context_found
+        in_record = all(zone in facts.zone_ids for zone in part.zones) or not facts.zone_ids
+        leads = [lead for premise in part.premises if in_record and (lead := _premise_lead(facts, part, premise))]
+        if leads and part.code == "cause" and part.zones and _target_um(facts):
+            text = f"{_zone_text(facts, part.zones[0])}입니다. 목표는 {_target_um(facts):.0f}µm입니다."  # 실측 거리는 lead가 이미 말했다
+        sentences.append(" ".join([*leads, text]))
+        if text != ASK_ZONE and text != _NO_TARGET and in_record:
+            answered.append(part)
+    body = "\n".join(sentences)
+    caveats = []
+    if any(part.code in _COATING_CODES for part in answered) and "세션이 끝났을 때" not in body:
+        caveats.append("도막 수치는 세션이 끝났을 때의 도막 기준입니다.")
+    if any(part.code in {"completion", "cause", "external_standard"} for part in answered) and "95%" not in body:
+        caveats.append(f"완료는 목표 두께 이상 면적 {_GATE_PERCENT}% 기준입니다.")
+    if any(part.code == "pose_judgement" for part in answered):
+        if "70%" not in body:
+            caveats.append("숙련자 중간 수준은 약 70%입니다.")
+        if "참고용" not in body and any(isinstance(s, Mapping) and s.get("confidence") == "limited" for s in (facts.arm or {}).get("sequences") or []):
+            caveats.append("입력 품질 제한이 있어 참고용입니다.")
+    text = body + ("\n참고: " + " ".join(caveats) if caveats else "")
+    first = answered[0] if answered else next((part for part in query.parts if part.code), None)
+    subject = ({"domain": part_domain(first) or "overall", "zone_ids": _subject_zones(facts, first), "operator": first.operator or first.code or ""}
+               if first and first.code else None)
+    return RecordAnswer(text, query.kind, subject, query.knowledge_question or None, sequence_context)

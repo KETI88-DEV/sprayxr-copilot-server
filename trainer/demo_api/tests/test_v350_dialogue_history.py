@@ -43,3 +43,15 @@ def test_source_is_stored_and_subject_header_is_not_forwarded() -> None:
     turn = store.recent_query_turns(data["session_id"], user_id="COPILOT-AI-TEST")[-1]
     assert turn["answer_source"] == "analysis"
     assert "x-copilot-subject" not in data["headers"]
+
+
+def test_subject_header_is_persisted_but_never_reaches_the_client(monkeypatch) -> None:
+    from trainer.demo_api import copilot_router
+    real = copilot_router._success_response
+    monkeypatch.setattr(copilot_router, "_success_response",
+                        lambda *a, **k: real(*a, **{**k, "subject": {"domain": "order", "zone_ids": ["8"], "operator": "progress_next"}}))
+    store = SequenceStore(":memory:")
+    data = ask("다음엔 어디 칠해야 돼?", tab="order", store=store)
+    assert copilot_router.SUBJECT_HEADER.lower() not in data["headers"]
+    turn = store.recent_query_turns(data["session_id"], user_id="COPILOT-AI-TEST")[-1]
+    assert turn["subject"] == {"domain": "order", "zone_ids": ["8"], "operator": "progress_next"}
