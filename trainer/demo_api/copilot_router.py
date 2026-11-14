@@ -83,6 +83,7 @@ from trainer.demo_api.safety_guard import (
 )
 from trainer.demo_api.reference_order_query import actual_order_intent, current_next_answer, is_current_next_question, is_reference_order_question, resolve_reference_target, reference_order_answer
 from trainer.demo_api.v1_store import V1Store
+from trainer.demo_api.record_query import BODY_PART, DIRECTION_WORD, WORST_ZONE
 from trainer.demo_api.viewer_progress import progress_question, viewer_progress_answer
 from trainer.demo_api.query_runtime import generation_slot_for, retrieval_question, select_query_pipeline, translation_pipeline_for
 from trainer.scripts.generation_slot import GENERATION_SLOT  # Legacy slot identity for unconfigured clients.
@@ -208,8 +209,6 @@ SUBJECT_HEADER: Final = "X-Copilot-Subject"  # 서버 안에서만 쓴다. 바�
 # 외국어 질문을 한국어로 옮긴 문장(퍼센트 인코딩). 응답 본문은 바꾸지 않는다.
 ANALYSIS_PROMPT_HEADER: Final = "X-Copilot-Analysis-Prompt"
 _EVALUATION_QUESTION: Final = re.compile(r"잘한|못한|고쳐야|고칠|개선할|개선점|문제점|부족한 점")
-# 대화 계획 모델이 속도·Zone 질문을 도포 방향으로 분류한다(2026-11-11 Spark: "지금 속도는 적당해?"에 방향을 답함).
-_DIRECTION_WORD: Final = re.compile(r"방향|수평|수직|대각|가로|세로|패턴|direction", re.I)
 # 질문형 문장. 지식 탭에서 계획 모델이 "chat"으로 본 질문 가운데 이것만 먼저 문서로 답해 본다.
 # 인사·맞장구("안녕", "고마워", "야")는 걸리지 않아 지금처럼 대화 경로로 간다.
 _KNOWLEDGE_QUESTION: Final = re.compile(r"[?？]|뭐|무엇|무슨|몇|어떻|어떤|왜|얼마|언제|인가|인지|나요|까요|되나|돼야|해야|하나요")
@@ -561,9 +560,6 @@ def _grounded_detail(candidate: str, base_answer: str, context: Mapping[str, obj
     return True
 
 
-# 손·손목·팔꿈치·위팔 질문. "오른쪽으로 칠해"처럼 방향만 말한 질문은 걸리지 않게 손·팔을 함께 본다.
-_BODY_PART: Final = re.compile(r"(?:오른|왼)\s*(?:쪽\s*)?(?:손|팔)|팔꿈치|손목|위팔|(?:right|left)\s*(?:hand|arm)|elbow|wrist", re.I)
-_WORST_ZONE: Final = re.compile(r"(?:zone|존|구역)\s*별|(?:가장|제일)\s*문제|최악|(?:어디|어느).*(?:문제|나쁘|나빠|안\s*좋|낮|못)", re.I)
 
 
 _HERE: Final = re.compile(r"지금|현재|여기|이렇게|이번|방금|아까|(?<![가-힣])이\s*(?:zone|존|구역|기록|분사|곳)|내\s|제\s|나의|저의", re.I)
@@ -805,7 +801,7 @@ async def _execute_copilot_query(
         return frame_answer()
     arm_claims = parse_viewer_arm_pose(query.context) if viewer_requested and not safety else None
     coating_question = is_coating_status_question(query.prompt) or is_coating_advice_question(query.prompt)
-    if arm_claims is not None and not coating_question and _BODY_PART.search(query.prompt) and not NOT_JOINT.search(query.prompt):
+    if arm_claims is not None and not coating_question and BODY_PART.search(query.prompt) and not NOT_JOINT.search(query.prompt):
         # 손·손목·팔꿈치 질문은 어느 탭이든 팔 관절 엔진 결과로만 답한다(운영 q4·q5·q6: 작업 안내·모델의 "정상 범위" 답).
         claims = viewer_claims(query.context)
         playback = (viewer_analysis or {}).get("playback_context") or (claims[0].get("playback_context") if claims else None)
@@ -817,7 +813,7 @@ async def _execute_copilot_query(
                                  pose_context={"scope": "arm_pose", "status": arm_claims.get("status")} if query.task_type == "pose_recomm" else None,
                                  context_status="available" if arm_claims.get("status") == "available" else "not_available")
     if (arm_claims is not None and viewer_analysis is not None and query.task_type == "pose_recomm"
-            and (preset_intent(query.task_type, query.prompt) == "pose_worst_zone" or _WORST_ZONE.search(query.prompt))):
+            and (preset_intent(query.task_type, query.prompt) == "pose_worst_zone" or WORST_ZONE.search(query.prompt))):
         # "Zone별로 어디가 문제야?"는 자세 유사도가 낮은 Zone과 그 교정으로 답한다(운영 q2, 27B Zone 오기).
         zones = viewer_analysis.get("zones")
         answer = zone_pose_summary(arm_claims, list(zones.values()) if isinstance(zones, Mapping) else None)
@@ -893,7 +889,7 @@ async def _execute_copilot_query(
             return await reference_answer()
         cross_tab = ((intent.startswith("pose_") and query.task_type != "pose_recomm")
                      or (intent.startswith("order_") and query.task_type != "trajectory_recomm"))
-        if viewer_requested and intent == "order_direction" and decision["kind"] in {"lookup", "correction"} and _DIRECTION_WORD.search(query.prompt):
+        if viewer_requested and intent == "order_direction" and decision["kind"] in {"lookup", "correction"} and DIRECTION_WORD.search(query.prompt):
             return frame_answer()
         zone_lookup = (intent == "order_direction" or intent.startswith("pose_")) and decision["scope"] in {"zone", "playback"}
         # 계획 모델은 짧은 용어 질문("백화가 뭐야?")도 "chat"으로 보내 검색 없이 답하게 했다(2-1 측정, 지식 질문의 약 11%).
@@ -956,7 +952,7 @@ async def _execute_copilot_query(
     # only a successful semantic-model classification may cross-route to RAG.
     knowledge_routed = intent == "knowledge" and (classifier is not None or decision is not None)
     if viewer_requested and intent == "order_direction" and not knowledge_routed and (
-            query.task_type == "trajectory_recomm" or _DIRECTION_WORD.search(query.prompt)):
+            query.task_type == "trajectory_recomm" or DIRECTION_WORD.search(query.prompt)):
         return frame_answer()
     viewer_context_requested = bool(query.context and query.context.startswith(_MOTION_VIEWER_CONTEXT_PREFIX))
     if viewer_analysis is not None and query.task_type == "pose_recomm" and "playback_context" in viewer_analysis and _asks_current_viewer_pose(query.prompt) and not is_coating_advice_question(query.prompt):

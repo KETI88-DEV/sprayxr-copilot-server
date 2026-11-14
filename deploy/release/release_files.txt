@@ -119,6 +119,7 @@ trainer/demo_api/pose_query.py
 trainer/demo_api/query_language.py
 trainer/demo_api/query_runtime.py
 trainer/demo_api/readiness.py
+trainer/demo_api/record_query.py
 trainer/demo_api/reference_order_query.py
 trainer/demo_api/report_jobs.py
 trainer/demo_api/report_sample.json
