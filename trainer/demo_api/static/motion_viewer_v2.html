@@ -15,7 +15,7 @@
   <div class="scores" role="group" aria-label="이 기록의 결과">
     <span class="score" title="작업 유사도: 도구 각도·이격거리·칠하는 방향·도막 두께·몸통 자세와 순서를 전문가 기록과 견준 값"><i data-icon="gauge"></i><span>작업</span><strong id="v2ScoreWork">—</strong></span>
     <button id="v2Worst" class="jump" type="button" hidden><i data-icon="trending-down"></i><span id="v2WorstZone" class="zone-tag"></span><span id="v2WorstScore" class="figure"></span></button>
-    <span class="score" title="자세 유사도: 분사마다 자세 채점 엔진이 숙련자와 견준 값의 평균"><i data-icon="person-standing"></i><span>자세</span><strong id="v2ScorePose">—</strong></span>
+    <span class="score" title="자세 유사도: 분사마다 숙련자 평균 동작과 견준 값의 평균. 숙련자도 보통 70% 안팎입니다."><i data-icon="person-standing"></i><span>자세</span><strong id="v2ScorePose">—</strong></span>
     <span class="score" title="순서 준수율: 전문가의 Zone 순서와 얼마나 같은지"><i data-icon="route"></i><span>순서</span><strong id="v2ScoreOrder">—</strong></span>
   </div>
 </header>
@@ -110,7 +110,7 @@
           <span id="skeletonPosture" class="posture"></span>
         </div>
         <div class="pose-chart">
-          <p class="viz-head">분사별 자세 유사도<span class="lg"><i class="mk is-fix"></i>교정 있음</span><span class="lg"><i class="mk is-limited"></i>참고용</span></p>
+          <p class="viz-head" title="숙련자 평균 동작과 견준 값입니다. 숙련자도 보통 70% 안팎입니다.">분사별 자세 유사도<span class="lg"><i class="mk is-fix"></i>교정 있음</span><span class="lg"><i class="mk is-limited"></i>참고용</span></p>
           <div id="v2PoseChart" class="viz-plot" role="group" aria-label="분사별 자세 유사도. 점을 누르면 그 분사로 이동합니다"></div>
           <p id="v2PoseNow" class="now"></p>
         </div>

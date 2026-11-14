@@ -607,7 +607,7 @@
       return;
     }
     byId('armPoseScore').textContent = `${evaluation.average_similarity_percent}%`;
-    byId('armPoseNote').textContent = `분사 ${evaluation.evaluated_sequence_count}회 평균 · 숙련자 팔 관절 기준`;
+    byId('armPoseNote').textContent = `분사 ${evaluation.evaluated_sequence_count}회 평균 · 숙련자 평균 동작 대비(숙련자도 보통 70% 안팎)`;
     current.hidden = false;
     // 재생 위치 직전에 시작한 분사. 분사가 끝난 이동 구간에서는 그 분사를 '직전'으로 보인다.
     const sequence = (evaluation.sequences || []).filter(item => item.start_seconds != null && item.start_seconds <= seconds).at(-1);

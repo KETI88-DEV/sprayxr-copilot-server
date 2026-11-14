@@ -265,8 +265,43 @@ def zone_summary(scored: Sequence[tuple[str, PoseQueryResult]]) -> list[dict[str
     return out
 
 
-def priority_corrections(zones: Sequence[Mapping[str, Any]], limit: int = PRIORITY_LIMIT) -> list[dict[str, Any]]:
-    """발생률이 높은 (구역, 관절) 순. 같으면 횟수가 많은 쪽."""
+def joint_measures(scored: Sequence[tuple[str, PoseQueryResult]]) -> dict[tuple[str, str], list[tuple[str, float]]]:
+    """(구역, 관절) → 분사마다 교정 문장이 쓴 척도. 리포트에는 싣지 않고 우선 교정 문장만 쓴다."""
+    out: dict[tuple[str, str], list[tuple[str, float]]] = {}
+    for zone, result in scored:
+        for joint, measure in result.joint_measures.items():
+            out.setdefault((zone, joint), []).append(measure)
+    return out
+
+
+def _particle(word: str) -> str:
+    last = ord(word[-1]) - 0xAC00 if word else -1
+    return "이" if 0 <= last < 11172 and last % 28 else "가"
+
+
+def _measured_phrase(label: str, measures: Sequence[tuple[str, float]]) -> str | None:
+    """교정 문장(arm_reference.Correction.text)과 같은 척도·같은 낱말로 평균을 적는다. 반경·방향이 섞이면 많은 쪽."""
+    modes = Counter(mode for mode, _ in measures)
+    if not modes:
+        return None
+    mode = modes.most_common(1)[0][0]
+    values = [value for kind, value in measures if kind == mode]
+    average = statistics.mean(values)
+    subject = f"{label}{_particle(label)}"
+    if mode == "radius":
+        return f"{subject} 숙련자 평균보다 평균 {abs(average) * 100:.0f}cm {'멀리' if average > 0 else '가까이'} 있었습니다."
+    return f"{subject} 향한 방향이 숙련자 평균과 평균 {average:.0f}° 달랐습니다."
+
+
+def priority_corrections(
+    zones: Sequence[Mapping[str, Any]], limit: int = PRIORITY_LIMIT,
+    *, measures: Mapping[tuple[str, str], Sequence[tuple[str, float]]] | None = None,
+) -> list[dict[str, Any]]:
+    """발생률이 높은 (구역, 관절) 순. 같으면 횟수가 많은 쪽.
+
+    `measures`가 있으면 분사별 교정 문장과 같은 척도(반경 차·방향 차)로 적는다. 관절 위치 거리(`average_distance`)로
+    적으면 "20 cm 가까이"인 교정이 "평균 35cm"로 보였다(2026-11-14 운영 시험).
+    """
     pairs = sorted(
         ((zone, joint) for zone in zones for joint in zone["problem_joints"]),
         key=lambda pair: (-pair[1]["occurrence_rate"], -pair[1]["occurrence_count"]),
@@ -275,9 +310,10 @@ def priority_corrections(zones: Sequence[Mapping[str, Any]], limit: int = PRIORI
     for priority, (zone, joint) in enumerate(pairs[:limit], start=1):
         label = pose_similarity.JOINT_LABELS.get(joint["joint"], joint["joint"])
         distance = joint["average_distance"]
-        guidance = (
-            f"{zone['zone_id']}번 구역 분사 {zone['evaluated_sequence_count']}회 중 {joint['occurrence_count']}회에서 "
-            f"{label} 위치가 숙련자 범위를 벗어났습니다"
+        lead = f"{zone['zone_id']}번 구역 분사 {zone['evaluated_sequence_count']}회 중 {joint['occurrence_count']}회에서 "
+        measured = _measured_phrase(label, (measures or {}).get((str(zone["zone_id"]), joint["joint"]), ()))
+        guidance = lead + measured if measured else (
+            lead + f"{label} 위치가 숙련자 범위를 벗어났습니다"
             + (f"(평균 {distance * 100:.0f}cm)." if distance is not None else ".")
         )
         out.append({
@@ -383,5 +419,5 @@ def analyze_session(
     zones = zone_summary(zoned)
     return SessionPoseAnalysis(
         "available", round(average, 4), guideline, details, count_map, [body for _, _, body in targets],
-        zone_summary=zones, priority_corrections=priority_corrections(zones),
+        zone_summary=zones, priority_corrections=priority_corrections(zones, measures=joint_measures(zoned)),
     )

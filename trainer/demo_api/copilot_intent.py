@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 POSE_INTENTS = {"pose_overall", "pose_worst_zone", "pose_zone", "pose_right", "pose_left", "knowledge"}
 ORDER_INTENTS = {"order_reference", "order_actual", "order_missing", "order_adherence", "order_direction", "knowledge"}
-_PAINTING_SUBJECT = re.compile(r"도막|두께|이격|속도|노즐|압력|안전|보호구|오버랩")
+_PAINTING_SUBJECT = re.compile(r"도막|두께|이격|속도|노즐|압력|안전|보호구|오버랩|표면\s*처리|전처리|절차")
 _RECORD_REFERENCE = re.compile(r"영역|구역|zone|존|부위|현재|지금|이번|내[ 가]|어디|어느", re.I)
 
 
@@ -48,9 +48,9 @@ def is_general_painting_knowledge(prompt: str) -> bool:
     ("속도는 괜찮았어?", "제 이격거리는 적당했나요?", "그럼 속도는?").
     """
     return bool((is_coating_advice_question(prompt) or _PAINTING_SUBJECT.search(prompt))
-                and re.search(r"적정|기준|권장|표준|원인|이유|왜|뭐|무엇|뜻|의미|정의|방법|어떻게|예방|방지|원리|얼마", prompt)
+                and re.search(r"적정|기준|권장|표준|원인|이유|왜|뭐|무엇|뜻|의미|정의|방법|어떻게|예방|방지|원리|얼마|순서|절차|단계|알려", prompt)
                 and not _RECORD_REFERENCE.search(prompt)
-                and not re.search(r"시퀀스|기록|재생|아까|방금|이\s*분사|었|았|했|어땠|괜찮|제\s|저의|나의|그럼|그\s", prompt))
+                and not re.search(r"시퀀스|기록|재생|아까|방금|(?<![가-힣])이\s*분사|었|았|했|어땠|괜찮|제\s|저의|나의|그럼|그\s", prompt))
 
 
 def preset_intent(task_type: str, prompt: str) -> str | None:

@@ -32,6 +32,19 @@ from trainer.scripts import pose_similarity
 logger = logging.getLogger(__name__)
 
 _MCP_TIMEOUT_SEC: Final[float] = 20.0
+# 자세 유사도를 말하는 답에 붙인다. 숙련자끼리 견줘도 중앙값이 69~78%라 70%를 낮은 점수로 읽기 쉽다(2026-11-14 사용자 지적).
+POSE_SCALE_NOTE: Final[str] = "자세 유사도는 숙련자 평균 동작과 견준 값이며, 숙련자도 보통 70% 안팎입니다."
+# 엔진이 교정을 내지 않은 것은 "정상"이 아니다. 엔진 안내문(session_analysis._guideline)과 같은 문장이다.
+NO_CORRECTION_CAVEAT: Final[str] = "교정 항목이 없더라도 정상 자세를 확정하지 않습니다."
+# 엔진 관절 이름 → 질문 낱말. 팔꿈치는 ForeArm, 손목은 Hand다(pose_similarity.JOINT_LABELS).
+PART_WORDS: Final[dict[str, str]] = {"ForeArm": "팔꿈치", "Hand": "손목", "UpperArm": "위팔"}
+_PART_QUESTION: Final = (("ForeArm", re.compile(r"팔꿈치|elbow", re.I)), ("Hand", re.compile(r"손목|wrist", re.I)),
+                         ("UpperArm", re.compile(r"위팔|상완|upper\s*arm", re.I)))
+_ANGLE_QUESTION: Final = re.compile(r"각도|몇\s*도|°|degree|angle", re.I)
+# 손·팔 낱말이 있어도 관절 자세가 아닌 질문: 보호구·통증·손잡이·건(도구) 각도·압력(2026-11-14 독립 검토).
+NOT_JOINT: Final = re.compile(r"보호대|보호구|장갑|착용|통증|아프|아파|부상|예방|스트레칭|손잡이|그립|잡은|쥔|쥐고|"
+                              r"(?<![가-힣])건(?![가-힣])|건\s*(?:각도|을|의|이|은)|스프레이\s*건|도구|노즐|압력|안전", re.I)
+ANGLE_NOTE: Final[str] = ("채점 엔진은 관절 각도를 재지 않고 숙련자 평균 위치와의 거리·방향을 비교하므로 각도 수치는 드릴 수 없습니다.")
 
 
 @dataclass(frozen=True)
@@ -50,6 +63,8 @@ class PoseQueryResult:
     summary: str | None
     # 교정된 관절 → 숙련자와의 거리(m). 엔진 evidence 라 `pose_context`에는 싣지 않고 세션 리포트 집계만 쓴다.
     joint_distances: dict[str, float] = field(default_factory=dict)
+    # 교정 관절 → 교정 문장이 말한 척도("radius", 반경 차 m) 또는 ("heading", 방향 차 °). 우선 교정 문장이 같은 수를 쓴다.
+    joint_measures: dict[str, tuple[str, float]] = field(default_factory=dict)
     confidence: str | None = None
     input_quality: dict[str, Any] = field(default_factory=dict)
 
@@ -187,7 +202,27 @@ def score_body(
             if isinstance(item, dict) and isinstance(item.get("evidence"), dict)
             and isinstance(item["evidence"].get("distance_m"), (int, float)) and item.get("joint")
         },
+        joint_measures={
+            str(item["joint"]): measure
+            for item in result.get("corrections") or []
+            if isinstance(item, dict) and item.get("joint") and (measure := _measure(item.get("evidence"))) is not None
+        },
     )
+
+
+def _measure(evidence: object) -> tuple[str, float] | None:
+    """교정 문장이 쓴 척도(arm_reference.Correction.text와 같은 판단: 반경 몫 σ가 크거나 같으면 반경)."""
+    if not isinstance(evidence, dict):
+        return None
+    radial, angular = evidence.get("radial_sigma"), evidence.get("angular_sigma")
+    radius, angle = evidence.get("radius_delta_m"), evidence.get("angle_from_expert_deg")
+    if not isinstance(radial, (int, float)) or not isinstance(angular, (int, float)):
+        return None
+    if radial >= angular and isinstance(radius, (int, float)):
+        return "radius", float(radius)
+    if radial < angular and isinstance(angle, (int, float)):
+        return "heading", float(angle)
+    return None
 
 
 def score_body_raw(
@@ -381,7 +416,7 @@ def answer_zone_question(found: tuple[str, Mapping[str, Any]] | None, *, context
         distance = top.get("average_distance")
         answer += f"(평균 {distance * 100:.0f}cm)." if isinstance(distance, (int, float)) else "."
     else:
-        answer += " 숙련자 범위를 벗어난 관절은 없었습니다."
+        answer += f" 숙련자 범위를 벗어난 관절은 없었습니다. {NO_CORRECTION_CAVEAT}"
 
     coating = next(
         (item for item in analysis.get("coating_zones") or []
@@ -391,6 +426,7 @@ def answer_zone_question(found: tuple[str, Mapping[str, Any]] | None, *, context
     if coating is not None:
         report = analysis.get("coating_report") if isinstance(analysis.get("coating_report"), Mapping) else {}
         answer += _coating_sentence(coating, report.get("target_thickness_um") if report.get("comparison_basis") == "session_target" else None)
+    answer += f" {POSE_SCALE_NOTE}"
 
     return ZoneAnswer(
         analysis_status="available",
@@ -419,7 +455,8 @@ def answer_zone_question(found: tuple[str, Mapping[str, Any]] | None, *, context
 
 
 _TRACKING_SENTENCE: Final = re.compile(r"\s*착탄을 몸이 따라간 기울기 [+-]?\d+(?:\.\d+)?\(시퀀스 \d+개\)\.?")
-_UNSCORED_PART: Final = re.compile(r"팔꿈치|어깨|무릎|허리|(?:손목|손|팔)\s*각도|elbow|shoulder|knee", re.I)
+# 팔 관절 엔진이 재지 않는 부위. 팔꿈치(ForeArm)·손목(Hand)·위팔은 잰다 — 각도가 아니라 위치를(ANGLE_NOTE).
+_UNSCORED_PART: Final = re.compile(r"어깨|무릎|허리|shoulder|knee", re.I)
 _WHOLE_SESSION: Final = re.compile(r"전체|세션|가장|어느|어디|최악")
 _ARM_WORDS: Final = {"right": ("Right", "오른팔"), "left": ("Left", "왼팔")}
 
@@ -433,6 +470,17 @@ def asked_arm(prompt: str, intent: str | None = None) -> str | None:
     return None
 
 
+def asked_part(prompt: str) -> str | None:
+    """팔꿈치·손목·위팔을 물으면 엔진 관절 이름의 뒷부분(ForeArm·Hand·UpperArm)."""
+    return next((part for part, pattern in _PART_QUESTION if pattern.search(prompt)), None)
+
+
+def angle_note(prompt: str) -> str:
+    """각도를 물었으면 왜 각도 수치가 없는지 먼저 밝힌다(지어내지 않는다)."""
+    joint = asked_part(prompt) is not None or bool(re.search(r"팔|arm", prompt, re.I))
+    return ANGLE_NOTE + " " if _ANGLE_QUESTION.search(prompt) and joint and not NOT_JOINT.search(prompt) else ""
+
+
 def asks_whole_session(prompt: str, intent: str | None = None) -> bool:
     """구역이나 분사 하나가 아니라 세션 전체를 묻는 질문인가."""
     return intent == "pose_worst_zone" or bool(_WHOLE_SESSION.search(prompt))
@@ -444,12 +492,19 @@ def unsupported_pose_part(prompt: str) -> str | None:
     if match is None:
         return None
     return (f"질문하신 내용({match.group(0)})은 채점 결과로는 확인할 수 없습니다. "
-            "채점 엔진은 양팔의 위팔·아래팔·손 위치만 숙련자와 비교합니다.")
+            "채점 엔진은 양팔의 위팔·팔꿈치·손목 위치만 숙련자와 비교합니다.")
 
 
 def answer_sequence_question(pose: PoseQueryResult, *, prompt: str, intent: str | None = None) -> str:
     """분사 하나의 엔진 결과에서 질문이 묻는 것만 답한다."""
-    side = asked_arm(prompt, intent)
+    side, part = asked_arm(prompt, intent), asked_part(prompt)
+    if part is not None:
+        # 팔꿈치(ForeArm)·손목(Hand)·위팔: 그 관절의 교정만 옮긴다. 쪽을 안 말하면 양팔이다.
+        prefixes = (_ARM_WORDS[side][0],) if side else ("Right", "Left")
+        found = [str(item["label"]) for item in pose.corrections if item.get("label")
+                 and str(item.get("joint", "")).startswith(prefixes) and str(item.get("joint", "")).endswith(part)]
+        name = f"{'오른쪽 ' if side == 'right' else '왼쪽 ' if side == 'left' else ''}{PART_WORDS[part]}"
+        return angle_note(prompt) + (" ".join(found) if found else f"이 분사에서 {name} 교정 항목은 나오지 않았습니다. {NO_CORRECTION_CAVEAT}")
     if side is None:
         return _TRACKING_SENTENCE.sub("", pose.summary or "").strip() or "숙련자 자세와 비교했습니다."
     prefix, arm = _ARM_WORDS[side]
@@ -460,7 +515,7 @@ def answer_sequence_question(pose: PoseQueryResult, *, prompt: str, intent: str 
     if others:
         label = pose_similarity.JOINT_LABELS.get(others[0], others[0])
         return f"이 분사에서 {arm}은 교정 대상이 아닙니다. 채점 엔진이 짚은 관절은 {label}입니다."
-    return f"이 분사에서 {arm}은 숙련자 통상 범위 안입니다."
+    return f"이 분사에서 {arm} 교정 항목은 나오지 않았습니다. {NO_CORRECTION_CAVEAT}"
 
 
 def _pose_overview(found: tuple[str, Mapping[str, Any]] | None) -> ZoneAnswer:
@@ -481,7 +536,7 @@ def _pose_overview(found: tuple[str, Mapping[str, Any]] | None) -> ZoneAnswer:
     answer = (
         f"세션 전체 자세 유사도는 {float(score) * 100:.0f}%입니다."
         f"{count_text} 가장 낮은 구역은 {worst['zone_id']}번"
-        f"({float(worst['average_similarity_score']) * 100:.0f}%)입니다."
+        f"({float(worst['average_similarity_score']) * 100:.0f}%)입니다. {POSE_SCALE_NOTE}"
     )
     return ZoneAnswer("available", None, answer, {
         "analysis_status": "available", "reason_code": None, "scope": "session",
@@ -491,14 +546,14 @@ def _pose_overview(found: tuple[str, Mapping[str, Any]] | None) -> ZoneAnswer:
 
 
 def _body_part_answer(
-    found: tuple[str, Mapping[str, Any]] | None, *, side: str, zone_id: str | None = None,
+    found: tuple[str, Mapping[str, Any]] | None, *, side: str | None, zone_id: str | None = None, part: str | None = None,
 ) -> ZoneAnswer:
-    """세션 전체, 또는 `zone_id` 구역 안에서 그쪽 팔의 반복 문제를 답한다."""
+    """세션 전체, 또는 `zone_id` 구역 안에서 그쪽 팔(또는 그 관절)의 반복 문제를 답한다. 쪽을 안 말하면 양팔이다."""
     if found is None:
         return zone_unavailable("session_report_unavailable", zone_id=zone_id)
     report_id, analysis = found
     pose = analysis.get("pose_report") if isinstance(analysis.get("pose_report"), Mapping) else {}
-    prefix = "Right" if side == "right" else "Left"
+    prefixes = ("Right",) if side == "right" else ("Left",) if side == "left" else ("Right", "Left")
     zones = [zone for zone in pose.get("zone_summary") or []
              if isinstance(zone, Mapping) and (zone_id is None or str(zone.get("zone_id")) == zone_id)]
     if zone_id is not None and not zones:
@@ -506,7 +561,8 @@ def _body_part_answer(
     candidates: list[tuple[float, float, Mapping[str, Any], Mapping[str, Any]]] = []
     for zone in zones:
         for joint in zone.get("problem_joints") or []:
-            if not isinstance(joint, Mapping) or not str(joint.get("joint", "")).startswith(prefix):
+            name = str(joint.get("joint", "")) if isinstance(joint, Mapping) else ""
+            if not name.startswith(prefixes) or (part is not None and not name.endswith(part)):
                 continue
             candidates.append((
                 float(joint.get("occurrence_rate") or 0.0),
@@ -514,10 +570,11 @@ def _body_part_answer(
                 zone,
                 joint,
             ))
-    side_label = "오른쪽" if side == "right" else "왼쪽"
+    side_label = "오른쪽 " if side == "right" else "왼쪽 " if side == "left" else "양쪽 "
     if not candidates:
         where = f"{zone_id}번 구역에서 " if zone_id is not None else ""
-        answer = f"{where}{side_label} 팔·손은 전문가 기준을 벗어난 반복 문제가 발견되지 않았습니다."
+        subject = PART_WORDS[part] if part else "팔·손"
+        answer = f"{where}{side_label}{subject}은(는) 전문가 기준을 벗어난 반복 문제가 발견되지 않았습니다. {NO_CORRECTION_CAVEAT}"
         return ZoneAnswer("available", None, answer, {
             "analysis_status": "available", "reason_code": None, "scope": "body_part",
             "report_id": report_id, "zone_id": zone_id, "sequence_id": None,
@@ -549,13 +606,16 @@ def answer_pose_question(
 ) -> ZoneAnswer:
     """완료 세션의 구조화된 자세 결과를 질문 의도에 맞게 설명한다."""
     target = requested_zone(prompt, context)
-    side = asked_arm(prompt, intent)
+    side, part = asked_arm(prompt, intent), asked_part(prompt)
     if target is not None:
         # 구역은 어디를 볼지만 정한다. 무엇을 답할지는 질문이 정한다.
-        return _body_part_answer(found, side=side, zone_id=target) if side else answer_zone_question(found, context=target)
+        if side or part:
+            return _body_part_answer(found, side=side, zone_id=target, part=part)
+        return answer_zone_question(found, context=target)
     lowered = prompt.lower()
-    if side:
-        return _body_part_answer(found, side=side)
+    if side or part:
+        answer = _body_part_answer(found, side=side, part=part)
+        return ZoneAnswer(answer.analysis_status, answer.reason_code, angle_note(prompt) + answer.answer, answer.context)
     if intent == "pose_worst_zone" or any(token in lowered for token in ("문제", "안 좋", "낮", "어디", "어느", "최악")):
         return answer_zone_question(found, context=None)
     if intent == "pose_overall" or any(token in lowered for token in ("전체", "평균", "유사도", "점수", "퍼센트", "자세")):
@@ -605,11 +665,16 @@ def answer_order_question(
     direction = report.get("direction_adherence_rate")
     question = (prompt or "").lower()
     if question:
-        if intent == "order_missing" or any(token in question for token in ("누락", "안 칠", "빠진", "미수행")):
+        if intent == "order_missing" or any(token in question for token in ("누락", "안 칠", "빠진", "빼먹", "미수행", "보완", "다시 칠")):
             focused = (
                 f"권장 순서 중 칠하지 않은 구역은 {'·'.join(missing)}번입니다."
                 if missing else "권장 순서의 모든 구역을 칠했습니다."
             )
+            # 방문만으로는 "다 칠했다"가 아니다. 리포트 행에 최종 게이트가 있으면 보완 대상을 함께 말한다.
+            from trainer.demo_api.viewer_progress import gate_lines
+            gated = [row for row in analysis.get("coating_zones") or [] if isinstance(row, Mapping) and row.get("gate_status")]
+            if gated:
+                focused = "\n".join([focused, *gate_lines(gated, order=flow, visited=set(first), note="세션을 마친 최종 도막 기준입니다.")[0]])
             return ZoneAnswer("available", None, focused, {
                 "analysis_status": "available", "reason_code": None, "scope": "session", "report_id": report_id,
                 "recommended_flow": flow, "first_visit_flow": first, "adherence_rate": rate,

@@ -45,10 +45,12 @@ from fastapi.responses import JSONResponse
 
 from trainer.demo_api.copilot_contracts import CopilotQueryData, CopilotQueryRequest, CopilotResponse
 from trainer.demo_api.coating_query import (
-    answer_coating_question, answer_distribution_cause, parse_viewer_coating_context, report_coating_context,
-    target_advice_facts)
+    answer_coating_question, answer_distribution_cause, drop_contradicted_causes, parse_viewer_coating_context,
+    report_coating_context, target_advice_facts, zone_measures)
 from trainer.demo_api.copilot_intent import classify_question_intent, fallback_intent, preset_intent, is_coating_status_question, is_coating_advice_question, is_general_painting_knowledge
-from trainer.demo_api.dialogue import (authenticated_facts, conversation_key, drop_ungrounded, parse_plan, plain_answer,
+from trainer.demo_api.dialogue import (INSTRUCTION_REFUSAL, asks_for_instructions, authenticated_facts, conversation_key,
+                                       drop_misattributed_zones, drop_ungrounded, guard_generated_answer, parse_plan, plain_answer,
+                                       viewer_claims, zone_fact_numbers,
                                        selected_direction_answer, ungrounded_measurements, viewer_findings_answer,
                                        viewer_measurement_answer, viewer_metadata_context, without_hanzi)
 from trainer.demo_api.playback_direction import playback_direction_from_context, playback_direction_answer, simple_direction_question, requested_direction_scope, aggregate_direction, LABELS as DIRECTION_LABELS
@@ -59,7 +61,10 @@ from trainer.demo_api.pose_query import (
     answer_pose_question,
     answer_sequence_question,
     answer_zone_question,
+    NOT_JOINT,
+    angle_note,
     asked_arm,
+    asked_part,
     asks_about_zones,
     asks_whole_session,
     score_pose,
@@ -69,10 +74,11 @@ from trainer.demo_api.pose_query import (
 )
 from trainer.demo_api.query_language import TranslationUnavailableError, translate_text
 from trainer.demo_api.sequence_store import SequenceStore
-from trainer.demo_api.viewer_arm_pose import arm_pose_answer, parse_viewer_arm_pose
+from trainer.demo_api.viewer_arm_pose import arm_pose_answer, parse_viewer_arm_pose, zone_pose_summary
 from trainer.demo_api.sequence_analysis import SequenceAnalysisEngine
 from trainer.demo_api.reference_order_query import actual_order_intent, current_next_answer, is_current_next_question, is_reference_order_question, resolve_reference_target, reference_order_answer
 from trainer.demo_api.v1_store import V1Store
+from trainer.demo_api.viewer_progress import progress_question, viewer_progress_answer
 from trainer.demo_api.query_runtime import generation_slot_for, retrieval_question, select_query_pipeline, translation_pipeline_for
 from trainer.scripts.generation_slot import GENERATION_SLOT  # Legacy slot identity for unconfigured clients.
 from trainer.scripts.live_response_contract import (
@@ -238,7 +244,7 @@ def _pose_engine_question(query: CopilotQueryRequest) -> bool:
     분류가 빗나가면 자유 대화가 채점 없이 수치와 판정을 지어낸다(2026-11-11 재현).
     """
     return (query.task_type == "pose_recomm" and not is_coating_status_question(query.prompt)
-            and not is_coating_advice_question(query.prompt)
+            and not is_coating_advice_question(query.prompt) and not NOT_JOINT.search(query.prompt)
             and bool(re.search(r"자세(?!히|하게|한)|동작|교정|고쳐|고치|pose|posture|팔꿈치|어깨|무릎|허리|elbow|shoulder|knee|(?:zone|존|구역)\s*\d+",
                                query.prompt, re.I)))
 
@@ -547,6 +553,47 @@ def _grounded_detail(candidate: str, base_answer: str, context: Mapping[str, obj
     return True
 
 
+# 손·손목·팔꿈치·위팔 질문. "오른쪽으로 칠해"처럼 방향만 말한 질문은 걸리지 않게 손·팔을 함께 본다.
+_BODY_PART: Final = re.compile(r"(?:오른|왼)\s*(?:쪽\s*)?(?:손|팔)|팔꿈치|손목|위팔|(?:right|left)\s*(?:hand|arm)|elbow|wrist", re.I)
+_WORST_ZONE: Final = re.compile(r"(?:zone|존|구역)\s*별|(?:가장|제일)\s*문제|최악|(?:어디|어느).*(?:문제|나쁘|나빠|안\s*좋|낮|못)", re.I)
+
+
+_HERE: Final = re.compile(r"지금|현재|여기|이렇게|이번|방금|(?<![가-힣])이\s*(?:zone|존|구역|기록|분사|곳)|내\s|제\s|나의|저의", re.I)
+
+
+def _viewer_measures(context: str | None, prompt: str) -> tuple[dict[str, dict[str, float]] | None, str | None]:
+    """서명된 뷰어 Zone 실측(속도·이격거리·전문가 중앙값)과 질문이 가리키는 Zone(번호, 없으면 재생 위치)."""
+    claims = viewer_claims(context)
+    if claims is None:
+        return None, requested_zone(prompt, None)
+    playback = claims[0].get("playback_context") if isinstance(claims[0].get("playback_context"), dict) else {}
+    # 재생 위치의 Zone은 질문이 "지금·이 구역·이렇게"처럼 그곳을 가리킬 때만 쓴다. 일반 질문은 특정 Zone이 아니다.
+    here = playback.get("zone_id") is not None and bool(_HERE.search(prompt))
+    return zone_measures(claims[1]), requested_zone(prompt, None) or (str(playback["zone_id"]) if here else None)
+
+
+def _checked_generation(answer: str, query: CopilotQueryRequest, *, instructions: tuple[str, ...] = ()) -> str:
+    """모델이 만든 답의 출구 검사: 지침·내부 키 유출, 다른 Zone의 수치, 거꾸로 된 인과·실측과 엇갈리는 조언."""
+    measures, zone = _viewer_measures(query.context, query.prompt)
+    answer = drop_misattributed_zones(guard_generated_answer(answer, instructions=instructions), _zone_facts(query.context))
+    # 인과·조언 검사는 이 기록(서명된 뷰어 문맥)에 대한 답에만 한다. 일반 지식 답은 그대로 둔다.
+    return drop_contradicted_causes(answer, measures, default_zone=zone) if measures is not None else answer
+
+
+def _zone_facts(context: str | None) -> dict[str, set[str]]:
+    """모델 답의 Zone 번호 검사에 쓰는 서명된 Zone 사실. 뷰어 문맥이 없으면 비어 있다(검사하지 않는다)."""
+    claims = viewer_claims(context)
+    return zone_fact_numbers(claims[1] if claims else None, parse_viewer_arm_pose(context)) if claims else {}
+
+
+def _document_rules(pipeline: object) -> tuple[str, ...]:
+    """문서 답 지침(fast_system) 가운데 유출 검사에 쓸 줄. 저도막·과도막 정의 줄은 답이 그대로 옮겨도 정상이라 뺀다."""
+    config = getattr(pipeline, "config", None)
+    prompt = config.get("prompt") if isinstance(config, dict) else None
+    text = str(prompt.get("fast_system", "")) if isinstance(prompt, dict) else ""
+    return ("\n".join(line for line in text.splitlines() if "저도막" not in line and "과도막" not in line),)
+
+
 def error_response(code: int, message: str) -> JSONResponse:
     envelope = CopilotResponse(status="ERROR", code=code, message=message, data=None)
     return JSONResponse(status_code=code, content=envelope.model_dump(mode="json"))
@@ -624,6 +671,9 @@ async def _execute_copilot_query(
 ) -> JSONResponse:
     """Execute one normalized query for both text and voice transports."""
     request_started = time.monotonic() if started is None else started
+    if asks_for_instructions(query.prompt):
+        # 지침 공개·무시 요청은 모델에 보내지 않는다(2026-11-14 운영 q41).
+        return _success_response(query, request_started, answer=INSTRUCTION_REFUSAL, retrieval_used=False, citations=[])
 
     dialogue_turns = await to_thread.run_sync(lambda: sequences.recent_query_turns(
         query.session_id or "CHAT:" + query.user_id, limit=6,
@@ -638,6 +688,12 @@ async def _execute_copilot_query(
     except _InvalidViewerPlayback:
         return error_response(422, "Invalid motion viewer playback context")
     relevant_viewer = viewer_analysis is not None and query.task_type in ("pose_recomm", "trajectory_recomm")
+    progress_kind = progress_question(query.prompt)
+    progress = viewer_progress_answer(query.context, query.prompt, progress_kind) if progress_kind else None
+    if progress is not None:
+        # 누락·보완·다음 Zone은 서명된 방문 순서와 최종 도막 게이트로만 답한다. 어느 탭이든 같다(viewer_progress).
+        return _success_response(query, request_started, answer=progress[0], retrieval_used=False, citations=[],
+                                 sequence_context=progress[1], context_status="available")
     if is_current_next_question(query.prompt):
         answer, scope, progress = await to_thread.run_sync(lambda: current_next_answer(
             query, sequences, reports, sequence_engine=sequence_engine, coating_engine=coating_engine,
@@ -680,6 +736,26 @@ async def _execute_copilot_query(
                                  context_status="available" if available else "not_available")
     if viewer_requested and (simple_direction_question(query.prompt) or preset_intent("trajectory_recomm", query.prompt) == "order_direction"):
         return frame_answer()
+    arm_claims = parse_viewer_arm_pose(query.context) if viewer_requested else None
+    coating_question = is_coating_status_question(query.prompt) or is_coating_advice_question(query.prompt)
+    if arm_claims is not None and not coating_question and _BODY_PART.search(query.prompt) and not NOT_JOINT.search(query.prompt):
+        # 손·손목·팔꿈치 질문은 어느 탭이든 팔 관절 엔진 결과로만 답한다(운영 q4·q5·q6: 작업 안내·모델의 "정상 범위" 답).
+        claims = viewer_claims(query.context)
+        playback = (viewer_analysis or {}).get("playback_context") or (claims[0].get("playback_context") if claims else None)
+        answer = angle_note(query.prompt) + arm_pose_answer(
+            arm_claims, current=_asks_current_viewer_pose(query.prompt), playback=playback if isinstance(playback, dict) else None,
+            zone_id=requested_zone(query.prompt, None), side=asked_arm(query.prompt), part=asked_part(query.prompt))
+        return _success_response(query, request_started, answer=answer, retrieval_used=False, citations=[],
+                                 pose_context={"scope": "arm_pose", "status": arm_claims.get("status")} if query.task_type == "pose_recomm" else None,
+                                 context_status="available" if arm_claims.get("status") == "available" else "not_available")
+    if (arm_claims is not None and viewer_analysis is not None and query.task_type == "pose_recomm"
+            and (preset_intent(query.task_type, query.prompt) == "pose_worst_zone" or _WORST_ZONE.search(query.prompt))):
+        # "Zone별로 어디가 문제야?"는 자세 유사도가 낮은 Zone과 그 교정으로 답한다(운영 q2, 27B Zone 오기).
+        zones = viewer_analysis.get("zones")
+        answer = zone_pose_summary(arm_claims, list(zones.values()) if isinstance(zones, Mapping) else None)
+        return _success_response(query, request_started, answer=answer, retrieval_used=False, citations=[],
+                                 pose_context={"scope": "arm_pose_zones", "status": arm_claims.get("status")},
+                                 context_status="available" if arm_claims.get("status") == "available" else "not_available")
     if viewer_requested and preset_intent(query.task_type, query.prompt) is None:
         signed_answer = viewer_measurement_answer(query.context, query.prompt) or (
             viewer_findings_answer(query.context) if _EVALUATION_QUESTION.search(query.prompt) else None)
@@ -731,6 +807,7 @@ async def _execute_copilot_query(
             if ungrounded_measurements(answer, facts=facts, prompt=query.prompt):
                 # 자료에 없는 측정값은 내보내지 않는다. 한 번 다시 생성하고, 그래도 남으면 그 부분을 뺀다.
                 answer = drop_ungrounded(await to_thread.run_sync(converse), facts=facts, prompt=query.prompt)
+            answer = _checked_generation(answer, query)
             return _success_response(query, request_started, answer=answer, retrieval_used=False, generated=True,
                                      citations=[], context_status="available" if facts else "not_available")
         except Exception:
@@ -1017,7 +1094,8 @@ async def _execute_copilot_query(
     if query.task_type != "knowledge_search" and not knowledge_routed:
         if query.task_type == "error_analysis":
             coating = await coating_facts()
-            cause = answer_distribution_cause(coating, detailed=query.response_mode == "detailed")
+            measures = _viewer_measures(query.context, query.prompt)[0]
+            cause = answer_distribution_cause(coating, detailed=query.response_mode == "detailed", measures=measures)
             if cause is None and trusted_coating is not None:
                 # 뷰어 자료에 목표 대비 판정이 없으면(전문가 대비 행뿐) 완료 리포트로 답한다.
                 coating = await report_facts()
@@ -1056,7 +1134,7 @@ async def _execute_copilot_query(
                           if query.response_mode == "quick" and query.task_type == "knowledge_search" else None)
     knowledge_client_context = (definition_context or (json.dumps(facts, ensure_ascii=False, separators=(",", ":")) if facts else viewer_metadata_context(query.context))) if viewer_requested else (definition_context or query.context)
     if coating_advice_context is not None:
-        compact = target_advice_facts(coating_advice_context)
+        compact = target_advice_facts(coating_advice_context, measures=_viewer_measures(query.context, query.prompt)[0])
         knowledge_client_context = "[검증된 최종 도막 비교 자료]\n" + json.dumps(compact or coating_advice_context, ensure_ascii=False, separators=(",", ":"))
         knowledge_client_context += (
             "\n목표 대비 판정이며 재생 시점의 도막이 아닙니다. 조절 후보는 등급에 따른 일반적인 방향이고 원인으로 확정된 것이 아닙니다."
@@ -1130,6 +1208,7 @@ async def _execute_copilot_query(
     answer = parsed.body
     if query.response_mode == "quick":
         answer = re.sub(r"\n+\s*\[?근거\]?\s*:?\s*$", "", answer).rstrip()
+    answer = _checked_generation(answer, query, instructions=_document_rules(pipeline))
     logger.info(
         "copilot answer normalized request_id=%s repair_path=%s citations=%d dropped=%d",
         query.request_id,
