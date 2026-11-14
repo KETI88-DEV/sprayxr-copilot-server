@@ -78,8 +78,7 @@ from trainer.demo_api.query_language import TranslationUnavailableError, transla
 from trainer.demo_api.sequence_store import SequenceStore
 from trainer.demo_api.viewer_arm_pose import arm_pose_answer, parse_viewer_arm_pose, zone_pose_summary
 from trainer.demo_api.sequence_analysis import SequenceAnalysisEngine
-from trainer.demo_api.safety_guard import (HIGH_PRESSURE_ANSWER, HIGH_PRESSURE_CITATIONS, guard_answer, hand_on_tip,
-                                           is_hazard_act, is_safety_topic)
+from trainer.demo_api.safety_guard import HIGH_PRESSURE_ANSWER, HIGH_PRESSURE_CITATIONS, classify, guard_answer, hazard_class
 from trainer.demo_api.reference_order_query import actual_order_intent, current_next_answer, is_current_next_question, is_reference_order_question, resolve_reference_target, reference_order_answer
 from trainer.demo_api.v1_store import V1Store
 from trainer.demo_api.viewer_progress import progress_question, viewer_progress_answer
@@ -704,10 +703,12 @@ async def _execute_copilot_query(
     coating_engine: object | None = None,
     conversation_id: str | None = None,
     original_prompt: str | None = None,
+    safety_class: str | None = None,
 ) -> JSONResponse:
     """Execute one normalized query for both text and voice transports.
 
-    `original_prompt`는 외국어 질문의 원문이다(`query.prompt`는 한국어로 옮긴 질문). 안전 판정은 둘 다로 한다.
+    `original_prompt`는 외국어 질문의 원문이다(`query.prompt`는 한국어로 옮긴 질문).
+    `safety_class`는 바깥(execute_copilot_query)이 두 질문과 앞 턴의 저장된 종류로 고른 위험 종류다(safety_guard).
     """
     request_started = time.monotonic() if started is None else started
     if asks_for_instructions(query.prompt):
@@ -721,16 +722,15 @@ async def _execute_copilot_query(
     ))
     # 위험 행동을 해도 되는지 묻는 질문은 대화 경로·측정값 짧은 답·뷰어 엔진 답으로 보내지 않고 문서 검색으로 답한 뒤
     # 답을 검사한다(2026-11-14 훈련생 질문 시험 T15). "그럼 해도 돼?"는 같은 대화의 앞 질문으로 본다.
-    previous_prompt = dialogue_turns[-1]["prompt"] if dialogue_turns else ""
-    if hand_on_tip(questions, previous=previous_prompt):
+    if safety_class == "hand_tip":
         # 손이 건 끝에 닿는 질문은 경로·탭·답변 수준과 상관없이 모델 없이 고정 답이다(v3.4.1 운영: 베트남어 답이 막으라고 했다).
         return _success_response(query, request_started, answer=HIGH_PRESSURE_ANSWER, retrieval_used=False,
                                  citations=list(HIGH_PRESSURE_CITATIONS), context_status="available")
-    safety = query.task_type != "error_analysis" and any(is_hazard_act(text, previous=previous_prompt) for text in questions)
+    # 위험 주제 질문은 대화 경로·측정값 짧은 답·뷰어 엔진 답으로 보내지 않고 문서 검색으로 답한 뒤 답을 검사한다.
+    safety = safety_class is not None and query.task_type != "error_analysis"
     if safety and query.task_type != "knowledge_search":
         query = query.model_copy(update={"task_type": "knowledge_search"})
-    # 안전 주제 지식 질문(접지는 왜 해? 등)은 대화 경로로 보내지 않는다. 뷰어 탭의 경로는 바꾸지 않는다.
-    safety_topic = safety or (query.task_type == "knowledge_search" and any(is_safety_topic(text) for text in questions))
+    safety_topic = safety
     facts = authenticated_facts(query.context)
     try:
         # Pose/order playback validation applies only when consuming that
@@ -1255,7 +1255,8 @@ async def _execute_copilot_query(
                         query.request_id, max(scores) if scores else None, abstain_below, chat_redirected)
             if chat_redirected:
                 return await chat_answer()
-            withheld, withheld_citations = guard_answer(questions, NO_EVIDENCE_ANSWER, [], previous=previous_prompt)
+            # 위험 주제 질문은 근거가 약해도 그 종류의 고정 문장으로 답한다.
+            withheld, withheld_citations = guard_answer(safety_class, "", []) if safety else (NO_EVIDENCE_ANSWER, [])
             return _success_response(query, request_started, answer=withheld, retrieval_used=True, citations=withheld_citations,
                                      context_status="available" if session_summary or coating_advice_context or facts else "not_available")
     retrieved = retrieved_chunk_ids(result.get("rag_chunks") or []) if use_rag else []
@@ -1265,7 +1266,7 @@ async def _execute_copilot_query(
         answer = re.sub(r"\n+\s*\[?근거\]?\s*:?\s*$", "", answer).rstrip()
     answer = _checked_generation(answer, query, instructions=_document_rules(pipeline))
     # 위험한 행동을 해도 되는지 묻는 안전 질문은 한국어 답을 옮기기 전에 검사한다(바꾼 문장도 기존 번역을 지난다).
-    answer, citations = guard_answer(questions, answer, list(parsed.citations), previous=previous_prompt)
+    answer, citations = guard_answer(safety_class if safety else None, answer, list(parsed.citations))
     logger.info(
         "copilot answer normalized request_id=%s repair_path=%s citations=%d dropped=%d",
         query.request_id,
@@ -1330,19 +1331,33 @@ async def execute_copilot_query(
         return await to_thread.run_sync(guarded)
 
     try:
-        normalized = await _translate(query.prompt, query.language, "ko")
+        try:
+            normalized = await _translate(query.prompt, query.language, "ko")
+        except Exception:
+            # 질문 번역이 실패해도 원문만으로 손-팁 질문임을 알면 503 대신 고정 안전 답을 낸다(v3.4.4).
+            # 원문을 그대로 분석 질문으로 넘기면 손-팁으로 판정돼 모델 없이 고정 답이 되고, 그 답은 기존 답 번역을 지난다.
+            if classify(query.prompt) != "hand_tip":
+                raise
+            logger.warning("copilot question translation failed; hand-on-tip original request_id=%s", query.request_id)
+            normalized = query.prompt
         if len(normalized) > 8000:
             raise TranslationUnavailableError("Translated question exceeds analysis limit")
         analysis_query = query.model_copy(update={"prompt": normalized})
         if query.language != "ko":
             # 질문 번역과 답 번역 가운데 어디가 틀렸는지 가릴 수 있게 분석에 쓴 한국어 질문을 남긴다.
             logger.info("copilot translated question request_id=%s language=%s ko=%r", query.request_id, query.language, normalized)
+        # 위험 종류는 한국어 질문·원문으로 고르고, 짧은 후속 질문은 앞 턴에 저장한 종류를 이어받는다(다시 판정하지 않는다).
+        previous = await to_thread.run_sync(lambda: sequences.recent_query_turns(
+            query.session_id or "CHAT:" + query.user_id, limit=1, user_id=query.user_id, conversation_key=conversation_id))
+        previous_turn = previous[-1] if previous else {}
+        safety_class = hazard_class((normalized, query.prompt if query.language != "ko" else ""),
+                                    previous_class=previous_turn.get("safety_class"), previous_text=previous_turn.get("prompt", ""))
         response = await _execute_copilot_query(
             analysis_query, pipeline_provider=pipeline_provider, pending_answers=pending_answers,
             sequences=sequences, mcp_base_url=mcp_base_url, transport=transport,
             started=request_started, reports=reports, sequence_engine=sequence_engine,
             coating_engine=coating_engine, conversation_id=conversation_id,
-            original_prompt=query.prompt if query.language != "ko" else None,
+            original_prompt=query.prompt if query.language != "ko" else None, safety_class=safety_class,
         )
         if response.status_code != 200:
             return response
@@ -1368,7 +1383,7 @@ async def execute_copilot_query(
         sequences.record_query_turn(
             session_key=query.session_id or "CHAT:" + query.user_id, user_id=query.user_id,
             prompt=query.prompt, answer=data["answer"], task_type=query.task_type,
-            created_at=data["generated_at"], conversation_key=conversation_id,
+            created_at=data["generated_at"], conversation_key=conversation_id, safety_class=safety_class,
         )
     except Exception:
         logger.exception("copilot query: failed to store dialogue request_id=%s", query.request_id)

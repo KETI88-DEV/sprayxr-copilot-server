@@ -111,6 +111,9 @@ class SequenceStore:
             columns = {row[1] for row in self._conn.execute("PRAGMA table_info(query_turns)")}
             if "conversation_key" not in columns:
                 self._conn.execute("ALTER TABLE query_turns ADD COLUMN conversation_key TEXT")
+            if "safety_class" not in columns:
+                # 위험 주제 질문의 종류(safety_guard). 후속 질문이 다시 판정하지 않고 이어받는다(v3.4.3).
+                self._conn.execute("ALTER TABLE query_turns ADD COLUMN safety_class TEXT")
             self._conn.execute("CREATE INDEX IF NOT EXISTS idx_query_dialogue ON query_turns (session_key, user_id, conversation_key, id)")
             self._conn.execute(_QUERY_TURNS_INDEX)
             self._conn.execute("""CREATE TABLE IF NOT EXISTS sequence_analysis_results (
@@ -264,15 +267,16 @@ class SequenceStore:
         task_type: str,
         created_at: str,
         conversation_key: str | None = None,
+        safety_class: str | None = None,
     ) -> None:
         """Persist one completed exchange for contextual follow-up questions."""
         if not session_key:
             return
         with self._guard, self._conn:
             self._conn.execute(
-                "INSERT INTO query_turns (session_key, user_id, prompt, answer, task_type, created_at, conversation_key)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (session_key, user_id, prompt, answer, task_type, created_at, conversation_key),
+                "INSERT INTO query_turns (session_key, user_id, prompt, answer, task_type, created_at, conversation_key, safety_class)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (session_key, user_id, prompt, answer, task_type, created_at, conversation_key, safety_class),
             )
 
     def recent_query_turns(self, session_key: str, *, limit: int = 4, user_id: str | None = None, conversation_key: str | None = None) -> list[dict[str, str]]:
@@ -284,7 +288,7 @@ class SequenceStore:
             params.extend([user_id, conversation_key])
         with self._guard:
             rows = self._conn.execute(
-                "SELECT user_id, prompt, answer, task_type, created_at FROM query_turns WHERE " + where + " ORDER BY id DESC LIMIT ?",
+                "SELECT user_id, prompt, answer, task_type, created_at, safety_class FROM query_turns WHERE " + where + " ORDER BY id DESC LIMIT ?",
                 [*params, bounded],
             ).fetchall()
         return [
@@ -294,8 +298,10 @@ class SequenceStore:
                 "answer": str(answer),
                 "task_type": str(task_type),
                 "created_at": str(created_at),
+                # 위험 종류가 있는 턴에만 싣는다(모델에 넘기는 최근 대화 모양을 바꾸지 않으려고).
+                **({"safety_class": str(safety_class)} if safety_class else {}),
             }
-            for user_id, prompt, answer, task_type, created_at in reversed(rows)
+            for user_id, prompt, answer, task_type, created_at, safety_class in reversed(rows)
         ]
 
     def recent_sequence_catalog(
