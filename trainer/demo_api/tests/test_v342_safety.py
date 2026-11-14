@@ -58,12 +58,19 @@ class Pipeline:
                 "rag_chunks": [{"chunk_id": "DOC-doc_0219-C0082", "text": "공압식 에어리스 도장기"}]}
 
 
-def _ask(pipeline: Pipeline, prompt: str, language: str = "ko", **extra: object) -> tuple[dict, dict]:
+_STORES: dict[int, SequenceStore] = {}
+
+
+def _ask(pipeline: Pipeline, prompt: str, language: str = "ko", *, conversation: str | None = None,
+         **extra: object) -> tuple[dict, dict]:
+    """같은 파이프라인으로 묻는 질문은 같은 대화 기록(저장소)을 쓴다."""
     app = FastAPI()
-    app.include_router(create_copilot_router(lambda: pipeline, store=SequenceStore(":memory:")))
+    store = _STORES.setdefault(id(pipeline), SequenceStore(":memory:"))
+    app.include_router(create_copilot_router(lambda: pipeline, store=store))
     response = TestClient(app).post("/api/v1/copilot/query", json={
         "user_id": "COPILOT-AI-TEST", "task_type": "knowledge_search", "response_mode": "quick", "prompt": prompt,
-        "language": language, "response_language": language, **extra})
+        "language": language, "response_language": language, **extra},
+        headers={"X-Copilot-Conversation": conversation} if conversation else {})
     assert response.status_code == 200, response.text
     return response.json()["data"], dict(response.headers)
 
@@ -93,10 +100,11 @@ def test_si_answer_still_goes_through_the_existing_pivot_translation() -> None:
     assert legs == [("si", "ko"), ("ko", "en"), ("en", "si")]  # 번역 경로는 바꾸지 않았다
 
 
-def test_safe_korean_answer_is_kept_and_documents_are_forced() -> None:
+def test_hand_on_tip_question_always_gets_the_fixed_answer_and_documents_are_forced() -> None:
+    # 독립 검토(2026-11-14): 손으로 건 끝을 막는 질문은 모델 답이 맞아 보여도 고정 답이다(검사로 다 가릴 수 없다).
     pipeline = Pipeline(document=SAFE)
     data, headers = _ask(pipeline, KOREAN, use_rag="N")
-    assert data["answer"] == SAFE and pipeline.calls == ["run"] and pipeline.run_kwargs["use_rag"] is True
+    assert data["answer"] == safety_guard.HIGH_PRESSURE_ANSWER and pipeline.calls == ["run"] and pipeline.run_kwargs["use_rag"] is True
     assert ANALYSIS_PROMPT_HEADER.lower() not in headers  # 한국어 질문은 옮기지 않았다
 
 
@@ -135,7 +143,8 @@ def test_non_safety_topics(text: str) -> None:
 
 
 @pytest.mark.parametrize("answer,replace", [
-    (SAFE, False), ("하지 마세요. 피부에 도료가 들어갈 수 있습니다.", False), (DANGEROUS, True),
+    (SAFE, True),  # "위험하며 권장되지 않습니다"는 분명한 금지가 아니다(검토 2026-11-14)
+    ("하지 마세요. 피부에 도료가 들어갈 수 있습니다.", False), (DANGEROUS, True),
     ("네, 일반적으로 쓸 수 있는 방법입니다.", True), ("위험할 수 있지만 손가락으로 막아 확인할 수 있습니다.", True),
     ("제공된 자료에서 이 질문에 답할 근거를 찾지 못했습니다.", True),
 ])

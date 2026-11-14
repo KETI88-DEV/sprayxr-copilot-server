@@ -78,7 +78,7 @@ from trainer.demo_api.query_language import TranslationUnavailableError, transla
 from trainer.demo_api.sequence_store import SequenceStore
 from trainer.demo_api.viewer_arm_pose import arm_pose_answer, parse_viewer_arm_pose, zone_pose_summary
 from trainer.demo_api.sequence_analysis import SequenceAnalysisEngine
-from trainer.demo_api.safety_guard import guard_answer, is_safety_question
+from trainer.demo_api.safety_guard import guard_answer, is_hazard_act, is_safety_topic
 from trainer.demo_api.reference_order_query import actual_order_intent, current_next_answer, is_current_next_question, is_reference_order_question, resolve_reference_target, reference_order_answer
 from trainer.demo_api.v1_store import V1Store
 from trainer.demo_api.viewer_progress import progress_question, viewer_progress_answer
@@ -566,6 +566,26 @@ _WORST_ZONE: Final = re.compile(r"(?:zone|존|구역)\s*별|(?:가장|제일)\s*
 _HERE: Final = re.compile(r"지금|현재|여기|이렇게|이번|방금|아까|(?<![가-힣])이\s*(?:zone|존|구역|기록|분사|곳)|내\s|제\s|나의|저의", re.I)
 
 
+_HEADER_LIMIT: Final = 1024
+_TRUNCATED: Final = "…"
+
+
+def analysis_prompt_header(text: str) -> str:
+    """퍼센트 인코딩한 분석 질문 헤더 값. 한글은 글자당 9바이트라 nginx 기본 헤더 버퍼를 넘기지 않게 1024바이트로 자른다.
+
+    코드 포인트 경계에서 자르고 끝에 "…"를 붙인다. 전체 문장은 로그에 남는다.
+    """
+    encoded = quote(text, safe="")
+    if len(encoded) <= _HEADER_LIMIT:
+        return encoded
+    budget = _HEADER_LIMIT - len(quote(_TRUNCATED, safe=""))
+    low, high = 0, len(text)
+    while low < high:  # quote(text[:n])가 budget 안인 가장 큰 n
+        middle = (low + high + 1) // 2
+        low, high = (middle, high) if len(quote(text[:middle], safe="")) <= budget else (low, middle - 1)
+    return quote(text[:low] + _TRUNCATED, safe="")
+
+
 def _viewer_measures(context: str | None, prompt: str) -> tuple[dict[str, dict[str, float]] | None, str | None]:
     """서명된 뷰어 Zone 실측(속도·이격거리·전문가 중앙값)과 질문이 가리키는 Zone(번호, 없으면 재생 위치)."""
     claims = viewer_claims(context)
@@ -693,15 +713,19 @@ async def _execute_copilot_query(
         # 지침 공개·무시 요청은 모델에 보내지 않는다(2026-11-14 운영 q41).
         return _success_response(query, request_started, answer=INSTRUCTION_REFUSAL, retrieval_used=False, citations=[])
     questions = (query.prompt, original_prompt or "")
-    # 안전 질문은 대화 경로·측정값 짧은 답으로 보내지 않고 문서 검색으로 답한다(2026-11-14 훈련생 질문 시험 T15).
-    safety = query.task_type != "error_analysis" and any(is_safety_question(text) for text in questions)
-    if safety and query.task_type != "knowledge_search":
-        query = query.model_copy(update={"task_type": "knowledge_search"})
 
     dialogue_turns = await to_thread.run_sync(lambda: sequences.recent_query_turns(
         query.session_id or "CHAT:" + query.user_id, limit=6,
         user_id=query.user_id, conversation_key=conversation_id,
     ))
+    # 위험 행동을 해도 되는지 묻는 질문은 대화 경로·측정값 짧은 답·뷰어 엔진 답으로 보내지 않고 문서 검색으로 답한 뒤
+    # 답을 검사한다(2026-11-14 훈련생 질문 시험 T15). "그럼 해도 돼?"는 같은 대화의 앞 질문으로 본다.
+    previous_prompt = dialogue_turns[-1]["prompt"] if dialogue_turns else ""
+    safety = query.task_type != "error_analysis" and any(is_hazard_act(text, previous=previous_prompt) for text in questions)
+    if safety and query.task_type != "knowledge_search":
+        query = query.model_copy(update={"task_type": "knowledge_search"})
+    # 안전 주제 지식 질문(접지는 왜 해? 등)은 대화 경로로 보내지 않는다. 뷰어 탭의 경로는 바꾸지 않는다.
+    safety_topic = safety or (query.task_type == "knowledge_search" and any(is_safety_topic(text) for text in questions))
     facts = authenticated_facts(query.context)
     try:
         # Pose/order playback validation applies only when consuming that
@@ -788,7 +812,7 @@ async def _execute_copilot_query(
                                      context_status="available")
     decision = None
     planned_pipeline = None
-    if (query.task_type != "error_analysis" and pipeline_provider is not None and not safety
+    if (query.task_type != "error_analysis" and pipeline_provider is not None and not safety_topic
             and preset_intent(query.task_type, query.prompt) is None and not is_coating_status_question(query.prompt) and not _pose_engine_question(query)):
         try:
             planned_pipeline = await to_thread.run_sync(pipeline_provider)
@@ -1226,7 +1250,7 @@ async def _execute_copilot_query(
                         query.request_id, max(scores) if scores else None, abstain_below, chat_redirected)
             if chat_redirected:
                 return await chat_answer()
-            withheld, withheld_citations = guard_answer(questions, NO_EVIDENCE_ANSWER, [])
+            withheld, withheld_citations = guard_answer(questions, NO_EVIDENCE_ANSWER, [], previous=previous_prompt)
             return _success_response(query, request_started, answer=withheld, retrieval_used=True, citations=withheld_citations,
                                      context_status="available" if session_summary or coating_advice_context or facts else "not_available")
     retrieved = retrieved_chunk_ids(result.get("rag_chunks") or []) if use_rag else []
@@ -1236,7 +1260,7 @@ async def _execute_copilot_query(
         answer = re.sub(r"\n+\s*\[?근거\]?\s*:?\s*$", "", answer).rstrip()
     answer = _checked_generation(answer, query, instructions=_document_rules(pipeline))
     # 위험한 행동을 해도 되는지 묻는 안전 질문은 한국어 답을 옮기기 전에 검사한다(바꾼 문장도 기존 번역을 지난다).
-    answer, citations = guard_answer(questions, answer, list(parsed.citations))
+    answer, citations = guard_answer(questions, answer, list(parsed.citations), previous=previous_prompt)
     logger.info(
         "copilot answer normalized request_id=%s repair_path=%s citations=%d dropped=%d",
         query.request_id,
@@ -1345,7 +1369,7 @@ async def execute_copilot_query(
         logger.exception("copilot query: failed to store dialogue request_id=%s", query.request_id)
     headers = {ANSWER_SOURCE_HEADER: response.headers.get(ANSWER_SOURCE_HEADER, "analysis")}
     if query.language != "ko":
-        headers[ANALYSIS_PROMPT_HEADER] = quote(normalized, safe="")  # 헤더는 latin-1이라 퍼센트 인코딩한다
+        headers[ANALYSIS_PROMPT_HEADER] = analysis_prompt_header(normalized)
     return JSONResponse(status_code=200, content=body, headers=headers)
 
 
