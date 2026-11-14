@@ -23,7 +23,7 @@ ANSWERS = [  # (이름, part, playback, 꼭 있어야 할 낱말, 없어야 할 
     ("R1 argmax", part("coating_extreme", operator="argmax"), AT_3S, ["Zone 1", "161.7"], None),
     ("R2", part("coating_over"), AT_24S, ["0곳", "Zone 1", "10.1%", "Zone 2", "1.3%", "240"], None),
     ("R3 all", part("completion"), AT_35S, ["9", "95%", "0곳"], r"완료된 상태|끝났습니다"),
-    ("R3 zone 1", part("completion", ("1",)), AT_24S, ["Zone 1", "정상", "47.9%", "95%", "보완"], None),
+    ("R3 zone 1", part("completion", ("1",)), AT_24S, ["Zone 1", "162µm", "160µm", "이상이지만", "47.9%", "95%", "보완"], r"정상"),
     ("R3 zone 8", part("completion", ("8",)), AT_35S, ["Zone 8", "1.9%", "95%"], None),
     ("R4", part("distance_compare", ("8",)), AT_3S, ["Zone 8", "251 mm", "550 mm", "54%", "가까운"], None),
     ("R4 similar", part("distance_compare", ("7",)), AT_3S, ["Zone 7", "비슷"], None),
@@ -87,8 +87,46 @@ def test_order_progress_facts_carry_distribution_but_model_facts_do_not() -> Non
 def test_zone_sentence_uses_the_production_grade_phrase() -> None:
     from trainer.demo_api.coating_assessment import grade_phrase
     record = facts()
-    for zone in ("1", "8"):
+    for zone, codes in (("1", ("cause",)), ("8", ("completion", "cause"))):  # Zone 1 완료 답은 정상+보완 모순을 피해 대비문이다
         row = next(r for r in record.target_rows if str(r["zone_id"]) == zone)
-        for text in (answer_part(record, part("completion", (zone,)), task_type="knowledge_search")[0],
-                     answer_part(record, part("cause", (zone,)), task_type="knowledge_search")[0]):
+        for code in codes:
+            text = answer_part(record, part(code, (zone,)), task_type="knowledge_search")[0]
             assert grade_phrase(row) in text, (grade_phrase(row), text)
+
+
+def test_normal_grade_with_needs_more_gate_reads_as_a_contrast() -> None:
+    text, _ = answer_part(facts(AT_24S), part("completion", ("1",)), task_type="knowledge_search")
+    assert "정상" not in text and "이상이지만" in text and "보완이 필요" in text, text
+
+
+def test_missing_zone_uses_the_right_particle() -> None:
+    assert "Zone 10, 11은" in answer_part(facts(), part("progress_status", ("10", "11")), task_type="knowledge_search")[0]
+    assert "Zone 12는" in answer_part(facts(), part("completion", ("12",)), task_type="knowledge_search")[0]
+
+
+def _resigned(mutate):
+    data = payload()
+    mutate(data)
+    data["query_context_signatures"] = viewer_signatures(data)
+    data["query_context_signatures"]["arm_pose"] = sign_context("arm_pose", data["arm_pose_evaluation"])
+    return facts(data=data)
+
+
+def _all_complete(data) -> None:
+    for row in data["coating_evaluation"]["target"]["zones"]:
+        row["gate_status"] = "complete"
+
+
+def test_one_priority_falls_back_to_the_arm_pose_zone() -> None:
+    text = one_priority(_resigned(_all_complete), single=True)
+    assert "Zone 9" in text and "팔 자세" in text and "50%" in text and "팔꿈치" in text, text
+
+
+def test_one_priority_falls_back_to_work_similarity() -> None:
+    def mutate(data) -> None:
+        _all_complete(data)
+        data["arm_pose_evaluation"]["zones"] = {}
+    record = _resigned(mutate)
+    lowest = min(record.claims["zones"].values(), key=lambda zone: zone["work_similarity_percent"])
+    text = one_priority(record, single=True)
+    assert f"Zone {lowest['zone_id']}" in text and f"{lowest['work_similarity_percent']:.0f}%" in text and "작업 유사도" in text, text

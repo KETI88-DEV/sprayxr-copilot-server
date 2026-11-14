@@ -12,7 +12,7 @@ from typing import Any, Final
 
 from trainer.demo_api.coating_query import (_CAUSES, _EFFECTS, _SIMILAR, distance_sentence, measured_relation, measured_sentence,
                                             parse_viewer_coating_context, zone_measures)
-from trainer.demo_api.coating_assessment import grade_phrase
+from trainer.demo_api.coating_assessment import grade_phrase, mean_text
 from trainer.demo_api.copilot_intent import preset_intent
 from trainer.demo_api.dialogue import viewer_claims
 from trainer.demo_api.pose_query import josa
@@ -393,6 +393,11 @@ def _completion(facts: RecordFacts, zones: tuple[str, ...]) -> str:
         area = f"목표 두께 이상으로 칠한 면적은 {row['coverage_percent']:g}%" if _is_num(row.get("coverage_percent")) else "칠한 면적 자료가 없고"
         verdict = {"complete": f"{_GATE_PERCENT}% 기준을 넘겨 완료입니다.", "overpaint_risk": f"{_GATE_PERCENT}% 기준과 별개로 과도막이라 더 칠하면 안 됩니다."}.get(
             row["gate_status"], f"{_GATE_PERCENT}% 기준에 못 미쳐 보완이 필요합니다.")
+        if row.get("grade") == "normal" and row["gate_status"] == "needs_more" and _is_num(row.get("coverage_percent")) and _is_num(row.get("thickness_um")):
+            # "정상"과 "보완 필요"를 나란히 쓰면 모순으로 읽힌다(2026-11-14 사용자 지적). 평균 두께와 면적 기준을 대비로 적는다.
+            out.append(f"{josa(f'Zone {zone}', '은', '는')} 칠한 곳 평균 두께는 {mean_text(row['thickness_um'], row['target_thickness_um'])}µm로 목표 "
+                       f"{row['target_thickness_um']:.0f}µm 이상이지만, 목표 두께 이상으로 칠한 면적이 {row['coverage_percent']:g}%라 {_GATE_PERCENT}% 기준에 못 미쳐 보완이 필요합니다.")
+            continue
         out.append(f"{_zone_text(facts, zone)}. {area}로 {verdict}")
     return " ".join(out)
 
@@ -504,7 +509,7 @@ def _external(facts: RecordFacts) -> str:
 def _missing_zones(facts: RecordFacts, zones: list[str]) -> str:
     known = [int(zone) for zone in facts.zone_ids if zone.isdigit()]
     span = f"{min(known)}~{max(known)}" if known and known == list(range(min(known), max(known) + 1)) else ", ".join(facts.zone_ids)
-    return f"Zone {', '.join(zones)}은 이 기록에 없는 Zone입니다. 이 기록의 Zone은 {span}입니다."
+    return f"{josa('Zone ' + ', '.join(zones), '은', '는')} 이 기록에 없는 Zone입니다. 이 기록의 Zone은 {span}입니다."
 
 
 def cause_answer(facts: RecordFacts, zone: str | None) -> str:
