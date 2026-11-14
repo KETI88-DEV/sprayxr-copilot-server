@@ -76,12 +76,36 @@ def is_safety_topic(text: str) -> bool:
     return bool(text and _TOPIC.search(text))
 
 
-def blocks_tip_by_hand(text: str) -> bool:
-    """손(가락·바닥·장갑)과 팁 낱말(팁·노즐·건 끝·건 앞·분사구)과 닿는 행동(막·대·닦·누르·만지·확인)이 함께 있는가.
+# 질문 번역이 팁 낱말을 뭉갠다(운영 2026-11-14: vi "손가락으로 스프레이 끝을 막고", uz "건은 … 손가락으로 눌러",
+# my 번역에서는 손가락이 사라짐). 그래서 (1) 한국어는 손가락급 낱말 + 분사 장비 + 닿는 행동, (2) 외국어 원문은
+# 손가락 + 분사 장비 낱말만으로 본다. 그냥 "손"은 넣지 않는다("손으로 건을 꽉 눌러 잡아도 돼?").
+_FINGER_KO: Final = r"손가락|손구락|엄지|검지|손끝|손바닥"
+_SPRAY_KO: Final = r"에어리스|스프레이|분사기|분무기|분사구|노즐|팁|펌프|건(?=[은는을이의에도\s,.?]|$)"
+_FINGER_ML: Final = r"ngón\s*tay|jari|นิ้ว|औंला|လက်ချောင်း|barmo|ඇඟිල|пал(?:ец|ьц)|手指|ម្រាមដៃ"
+_SPRAY_ML: Final = (r"airless|súng|đầu\s*phun|vòi\s*phun|semprot|nosel|ปืน|หัวพ่น|แอร์เลส|गन|एयरलेस|ဂန်း|pistolet|"
+                    r"purkagich|ගන්|пистолет|сопл|распыл|喷枪|枪嘴|枪口|喷嘴|កាំភ្លើង")
+# 방아쇠에 손가락을 거는 질문은 팁 접촉이 아니다.
+_TRIGGER: Final = r"방아쇠|trigger|cò\s*súng|bóp\s*cò|pelatuk|ไกปืน|ट्रिगर|спуск|курок|扳机|គន្លឹះ"
 
+
+def _finger_on_spray_equipment(text: str) -> bool:
+    if re.search(_TRIGGER, text, re.I):
+        return False
+    korean = re.search(_FINGER_KO, text) and re.search(_SPRAY_KO, text) and re.search(_TIP_ACTION, text, re.I)
+    foreign = re.search(_FINGER_ML, text, re.I) and re.search(_SPRAY_ML, text, re.I)
+    return bool(korean or foreign)
+
+
+def blocks_tip_by_hand(text: str) -> bool:
+    """손(가락·바닥·장갑)과 팁 낱말(팁·노즐·건 끝·건 앞·분사구)과 닿는 행동(막·대·닦·누르·만지)이 함께 있는가.
+
+    번역이 팁 낱말을 뭉개는 경우를 위해 손가락 + 분사 장비(외국어 원문은 행동 없이도)도 본다.
     묻는 꼴(허락·방법·확인)과 상관없다. 이 판정이 참이면 어느 경로든 고정 답이다.
     """
-    return bool(text and re.search(_TIP, text, re.I) and re.search(_HAND, text, re.I) and re.search(_TIP_ACTION, text, re.I))
+    if not text:
+        return False
+    return bool(re.search(_TIP, text, re.I) and re.search(_HAND, text, re.I) and re.search(_TIP_ACTION, text, re.I)) \
+        or _finger_on_spray_equipment(text)
 
 
 # 앞 질문을 받는 짧은 후속("그럼 해도 돼?", "그래도 돼?", "괜찮겠지?", "진짜 안 돼? 잠깐인데").
