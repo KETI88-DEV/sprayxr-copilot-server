@@ -37,7 +37,7 @@ ANSWERS = [  # (이름, part, playback, 꼭 있어야 할 낱말, 없어야 할 
     ("R9 agreement", part("order_shape", operator="agreement"), AT_3S, ["기록에 없", "6회 중 6회", "6회 중 5회"], None),
     ("R10", part("progress_status", ("10", "11")), AT_3S, ["Zone 10", "11", "1~9"], r"안 칠"),
     ("R11", part("external_standard"), AT_35S, ["판정할 수 없", "160", "DFT", "8곳", "0곳"], r"합격입니다"),
-    ("C zone 8", part("cause", ("8",)), AT_3S, ["Zone 8", "77.2", "251 mm", "550 mm", "가까", "거리로는 설명하기 어렵", "2,230 mm/s"], r"멀어|멀리서"),
+    ("C zone 8", part("cause", ("8",)), AT_3S, ["Zone 8", "77", "251 mm", "550 mm", "가까", "거리로는 설명하기 어렵", "2,230 mm/s"], r"멀어|멀리서"),
 ]
 
 

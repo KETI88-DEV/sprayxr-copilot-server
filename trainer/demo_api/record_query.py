@@ -520,7 +520,7 @@ def cause_answer(facts: RecordFacts, zone: str | None) -> str:
     if row is None or not _is_num(row.get("thickness_um")) or target is None:
         return " ".join(item for item in (_NO_TARGET, measured) if item)
     return " ".join(item for item in (
-        f"{_zone_text(facts, zone)}입니다(소수 첫째 자리까지 {row['thickness_um']:.1f}µm, 목표 {target:.0f}µm).",
+        f"{_zone_text(facts, zone)}입니다. 목표는 {target:.0f}µm입니다.",
         measured or "이 Zone의 이동 속도·이격거리 실측이 기록에 없어 원인은 말씀드릴 수 없습니다.") if item)
 
 
