@@ -40,14 +40,17 @@ def test_measured_comparison_decides_whether_a_candidate_is_advice() -> None:
 def test_distribution_cause_states_measurements_instead_of_contradicted_candidates() -> None:
     coating = payload()["coating_evaluation"]
     answer = cq.answer_distribution_cause(coating, detailed=True, measures=_measures())
-    zone8 = next(line for line in answer.split("\n") if "Zone 8(" in line)
+    zone8 = next(line for line in answer.split("\n") if line.startswith("Zone 8은"))
     # 속도는 측정값으로만 적고 전문가와 견주지 않는다. 거리만 견줘 후보를 걸러 낸다.
-    assert "2,230 mm/s" in zone8 and "3,514 mm/s" not in zone8 and "느림" not in zone8 and "가까움" in zone8
-    assert "조절 후보: 이동 속도를 낮추는 쪽." in zone8 and "규칙의 조절 후보(이격거리를 줄이는 쪽)" in zone8 and "검토 중" in zone8
-    zone4 = next(line for line in answer.split("\n") if "Zone 4(" in line)
-    assert "조절 후보: 이동 속도를 낮추는 쪽, 이격거리를 줄이는 쪽" in zone4 and "검토 중" not in zone4
-    # 실측이 없으면(완료 리포트만) 예전처럼 후보를 적는다.
-    assert "조절 후보: 이동 속도를 낮추는 쪽, 이격거리를 줄이는 쪽" in cq.answer_distribution_cause(coating, detailed=True)
+    assert zone8 == ("Zone 8은 저도막입니다(칠한 곳 평균 77µm). Zone 8 실측값은 이동 속도 2,230 mm/s, 이격거리 251 mm입니다"
+                     "(전문가 550 mm보다 54% 가까움). 가까이 칠하면 도막은 보통 두꺼워집니다. 그래서 얇게 나온 이유를 거리로는 "
+                     "설명하기 어렵습니다. 조절 후보는 이동 속도를 낮추는 쪽입니다.")
+    # 실측과 엇갈리는 후보(거리를 줄이는 쪽)는 답 어디에도 말하지 않는다(2026-11-14 사용자 결정).
+    assert "이격거리를 줄이는 쪽" not in zone8 and "검토 중" not in answer and "규칙의 조절 후보" not in answer
+    zone4 = next(line for line in answer.split("\n") if line.startswith("Zone 4는"))
+    assert "조절 후보는 이동 속도를 낮추는 쪽, 이격거리를 줄이는 쪽입니다." in zone4 and "먼" not in zone4
+    # 실측이 없으면(완료 리포트만) 규칙 후보를 그대로 적는다.
+    assert "조절 후보는 이동 속도를 낮추는 쪽, 이격거리를 줄이는 쪽입니다." in cq.answer_distribution_cause(coating, detailed=True)
 
 
 def test_error_analysis_query_uses_the_signed_measurements() -> None:
@@ -57,8 +60,8 @@ def test_error_analysis_query_uses_the_signed_measurements() -> None:
     answer = TestClient(app).post("/api/v1/copilot/query", json={
         "user_id": "u", "session_id": data["selected_session_id"], "task_type": "error_analysis", "prompt": "왜 얇아?",
         "response_mode": "detailed", "context": context("knowledge_search", data, AT_3S)}).json()["data"]["answer"]
-    zone8 = next(line for line in answer.split("\n") if "Zone 8(" in line)
-    assert "검토 중" in zone8 and "조절 후보: 이동 속도를 낮추는 쪽." in zone8 and "느림" not in zone8
+    zone8 = next(line for line in answer.split("\n") if line.startswith("Zone 8은"))
+    assert "조절 후보는 이동 속도를 낮추는 쪽입니다." in zone8 and "검토 중" not in zone8 and "이격거리를 줄이는 쪽" not in zone8
 
 
 def test_model_facts_carry_measurements_and_drop_contradicted_candidates() -> None:
@@ -67,7 +70,8 @@ def test_model_facts_carry_measurements_and_drop_contradicted_candidates() -> No
                                    measures=_measures())
     zone8 = facts["zones"][0]
     assert zone8["zone_id"] == "8" and [item["variable"] for item in zone8["adjustments"]] == ["speed_mm_s"]
-    assert {item["variable"] for item in zone8["adjustments_under_review"]} == {"distance_mm"}
+    # 엇갈리는 후보는 모델 자료에도 싣지 않는다(모델이 말하지 못하게).
+    assert "adjustments_under_review" not in zone8 and "distance_mm" not in {item["variable"] for item in zone8["adjustments"]}
     # 속도는 측정값만 싣는다. 전문가 속도와의 관계는 모델에 넘기지 않는다.
     assert zone8["measured"]["speed_mm_s"] == {"record": 2230.0}
     assert zone8["measured"]["distance_mm"] == {"record": 250.8, "expert_median": 550.0, "relation": "lower"}
@@ -106,7 +110,8 @@ def test_why_thin_answer_does_not_pass_an_inverted_cause() -> None:
     assert "run" in result["calls"]
     assert "얇게 형성되었기 때문" not in answer
     # 대신 실측 거리 비교를 말하고, 가까운 쪽은 보통 두꺼워진다는 점을 밝힌다. 속도는 전문가 장비가 달라 쓰지 않는다(v3.4.1).
-    assert "251 mm" in answer and "가까웠" in answer and "두꺼워지는 쪽" in answer and "mm/s" not in answer
+    assert answer.startswith("Zone 8은 251 mm 거리에서 칠했습니다. 전문가(550 mm)보다 54% 가까운 거리입니다. "
+                             "가까이 칠하면 도막은 보통 두꺼워집니다.") and "mm/s" not in answer
 
 
 def test_correction_follow_up_does_not_repeat_the_inverted_cause() -> None:
@@ -120,7 +125,7 @@ def test_inverted_physics_is_checked_only_against_a_viewer_record() -> None:
     # 기록 문맥 없는 일반 지식 답에는 손대지 않는다(독립 검토 2026-11-14).
     assert ask("과도막은 왜 생겨?", tab="knowledge", pipeline=pipeline, raw_context="")["answer"] == Q33
     viewer = ask("과도막은 왜 생겨? 내 기록에서도 과도막 난 데 있어?", tab="knowledge", pipeline=pipeline)["answer"]
-    assert "과도한 분사 거리" not in viewer and "두꺼워지" in viewer
+    assert "과도한 분사 거리" not in viewer and "두꺼워" in viewer
 
 
 @pytest.mark.parametrize("sentence", [
@@ -147,4 +152,4 @@ def test_general_advice_is_not_judged_against_the_playhead_zone() -> None:
     zone = RecordingPipeline(plan={"kind": "coating_knowledge", "intent": "knowledge", "scope": "zone"},
                              document="[답변] 이격거리를 더 줄이세요.")
     answer = ask("이 구역 도막을 두껍게 하려면 어떻게 해?", tab="coating", pipeline=zone)["answer"]
-    assert "더 줄이세요" not in answer and "Zone 8 이격거리는 251 mm" in answer
+    assert "더 줄이세요" not in answer and "Zone 8은 251 mm 거리에서 칠했습니다" in answer

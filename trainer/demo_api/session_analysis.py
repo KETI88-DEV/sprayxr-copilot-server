@@ -36,7 +36,7 @@ from typing import Any, Final, Mapping, Sequence
 
 import httpx
 
-from trainer.demo_api.pose_query import PoseQueryResult, limited_note, radius_phrase, score_body
+from trainer.demo_api.pose_query import NO_CORRECTION_CAVEAT, PoseQueryResult, limited_note, radius_phrase, score_body
 from trainer.demo_api.sequence_store import SequenceStore
 from trainer.demo_api.report_jobs import CSV_INFLATED_LIMIT, InputTooLarge
 from trainer.scripts import pose_similarity, simulator_csv
@@ -311,7 +311,7 @@ def priority_corrections(
     for priority, (zone, joint) in enumerate(pairs[:limit], start=1):
         label = pose_similarity.JOINT_LABELS.get(joint["joint"], joint["joint"])
         distance = joint["average_distance"]
-        lead = f"{zone['zone_id']}번 구역 분사 {zone['evaluated_sequence_count']}회 중 {joint['occurrence_count']}회에서 "
+        lead = f"{zone['zone_id']}번 구역에서 분사 {zone['evaluated_sequence_count']}회 중 {joint['occurrence_count']}회, "
         measured = _measured_phrase(label, (measures or {}).get((str(zone["zone_id"]), joint["joint"]), ()))
         guidance = lead + measured if measured else (
             lead + f"{label} 위치가 숙련자 범위를 벗어났습니다"
@@ -342,7 +342,7 @@ def _guideline(scored: Sequence[PoseQueryResult], total: int, not_scored: int) -
     # 프레임 간격만 고르지 않은 분사(R7)는 채점에서 빠진 것이 없어 말하지 않는다. 나머지 사유는 쉬운 말로 한 번만 적는다.
     note = limited_note([{"confidence": r.confidence, "reason_code": r.reason_code, "input_quality": r.input_quality} for r in scored])
     if note:
-        parts.append(f"{note} 교정 항목이 없더라도 정상 자세를 확정하지 않습니다.")
+        parts.append(f"{note} {NO_CORRECTION_CAVEAT}")
     if not_scored:
         parts.append(f"자세를 판정할 수 없는 분사 {not_scored}회는 평균에서 뺐습니다.")
     return " ".join(parts)

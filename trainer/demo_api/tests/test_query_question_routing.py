@@ -217,7 +217,7 @@ def test_forged_target_grades_are_not_used():
 def test_error_analysis_in_the_viewer_uses_the_signed_target():
     data = ask("error_analysis", "도막 분포 이상 원인은?", context(target=target_assessment()))
     answer = data["answer"]
-    assert "조절 후보" in answer and "확정된 것은 아닙니다" in answer and "저도막 Zone 1" in answer
+    assert "조절 후보" in answer and "확정된 것은 아닙니다" in answer and "Zone 1은 저도막입니다" in answer
     assert data["coating_context"]["comparison_basis"] == "expert_zone_median" and data["retrieval_used"] is False
 
 
@@ -232,7 +232,7 @@ def test_error_analysis_with_only_expert_rows_falls_back_to_the_completed_report
 
     data = ask("error_analysis", "도막 분포 이상 원인은?",
                context(target={"analysis_status": "not_available", "reason_code": "height_map_unavailable"}), reports=Reports())
-    assert "과도막 Zone 3" in data["answer"] and "완료 분석의 도막 결과가 없어" not in data["answer"]
+    assert "Zone 3은 과도막입니다" in data["answer"] and "완료 분석의 도막 결과가 없어" not in data["answer"]
     assert data["coating_context"]["comparison_basis"] == "saved_coating_report"
     without = ask("error_analysis", "도막 분포 이상 원인은?", context())
     assert "완료 분석의 도막 결과가 없어" in without["answer"]

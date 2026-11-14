@@ -36,7 +36,7 @@ def test_sequence_answer_drops_the_engine_session_tracking_sentence() -> None:
 def test_sequence_answer_quotes_the_engine_correction_for_the_asked_arm(prompt: str, intent: str | None) -> None:
     answer = pose_query.answer_sequence_question(_pose([_LEFT], "숙련자 팔 자세 대비 유사도 20%."), prompt=prompt, intent=intent)
 
-    assert _LEFT["label"] in answer
+    assert pose_query.friendly_correction(_LEFT["label"]) in answer  # v3.4.1: "스트로크 0~100% 구간에서" → "스트로크 내내"
     assert "기울기" not in answer
 
 
@@ -52,7 +52,7 @@ def test_sequence_answer_without_corrections_does_not_call_the_arm_normal() -> N
 
     # 2026-11-14: 교정이 없다는 것을 "통상 범위 안"으로 단정하지 않는다(엔진 안내문과 같은 단서를 붙인다).
     assert pose_query.answer_sequence_question(pose, prompt="오른손을 어떻게 고쳐?") == (
-        "이 분사에서 오른팔 교정 항목은 나오지 않았습니다. 교정 항목이 없더라도 정상 자세를 확정하지 않습니다.")
+        "이 분사에서 오른팔 교정 항목은 나오지 않았습니다. 교정 항목이 없다고 해서 자세가 정상이라는 뜻은 아닙니다.")
 
 
 @pytest.mark.parametrize("prompt", ["어깨를 더 올려야 해?", "무릎을 굽혀야 해?"])
@@ -249,8 +249,8 @@ def test_distribution_cause_names_candidates_without_claiming_a_cause() -> None:
     assert answer is not None and answer.split("\n") == [
         "기본 목표 160µm 기준으로 본 도막 분포입니다. "
         "칠한 면적의 두께 분포: 목표의 90% 미만 31%, 90~100% 0%, 100~150% 35%, 150~200% 34%, 200~250% 0%, 250% 이상 0%.",
-        "저도막 Zone 3(칠한 곳 평균 98µm): 조절 후보: 이동 속도를 낮추는 쪽, 이격거리를 줄이는 쪽.",
-        "과도막 Zone 5(칠한 곳 평균 301µm): 속도·이격거리 기록이 없어 조절 후보를 내지 못했습니다.",
+        "Zone 3은 저도막입니다(칠한 곳 평균 98µm). 조절 후보는 이동 속도를 낮추는 쪽, 이격거리를 줄이는 쪽입니다.",
+        "Zone 5는 과도막입니다(칠한 곳 평균 301µm). 속도·이격거리 기록이 없어 조절 후보를 내지 못했습니다.",
         "조절 후보는 등급에 따른 일반적인 방향이며 원인으로 확정된 것은 아닙니다.",
     ]
     only_normal = coating_query.answer_distribution_cause(_saved(rows[2]), detailed=True)
@@ -278,7 +278,7 @@ def test_sequence_context_answers_the_question_not_only_the_summary() -> None:
 
     assert overall["answer"] == _MCP_RESULT["summary"]
     assert "오른팔" in right["answer"] and "교정 대상이 아닙니다" in right["answer"]
-    assert "왼쪽 손목이 숙련자 평균보다 몸에서 31cm 더 뻗어 있었습니다." in left["answer"]  # v3.4.1 몸 기준 표현
+    assert "왼쪽 손목이 숙련자 평균보다 몸 밖으로 31cm 더 뻗어 있었습니다." in left["answer"]  # v3.4.1 몸 기준 표현
     assert len({overall["answer"], right["answer"], left["answer"]}) == 3
     assert right["pose_context"]["sequence_id"] == "SEQ-012"
 
@@ -288,7 +288,7 @@ def test_pose_tab_elbow_question_reads_the_forearm_and_never_reaches_the_model()
 
     data = client.post(QUERY, json=_query_body(context="SEQ-012", prompt="팔꿈치를 더 펴야 해, 굽혀야 해?")).json()["data"]
 
-    assert "팔꿈치 교정 항목은 나오지 않았습니다" in data["answer"] and "정상 자세를 확정하지 않습니다" in data["answer"]
+    assert "팔꿈치 교정 항목은 나오지 않았습니다" in data["answer"] and "자세가 정상이라는 뜻은 아닙니다" in data["answer"]
     declined = client.post(QUERY, json=_query_body(context="SEQ-012", prompt="어깨를 더 올려야 해?")).json()["data"]
     assert "확인할 수 없습니다" in declined["answer"]
     assert data["retrieval_used"] is False

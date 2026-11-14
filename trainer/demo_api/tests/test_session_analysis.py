@@ -245,7 +245,7 @@ def test_zone_summary_keeps_only_the_most_frequent_joint_per_zone() -> None:
     priority = sa.priority_corrections(zones)
 
     assert [(p["zone_id"], p["joint"]) for p in priority] == [("12", "LeftHand"), ("3", "RightForeArm")]
-    assert priority[1]["correction_guidance"].startswith("3번 구역 분사 3회 중 2회에서")
+    assert priority[1]["correction_guidance"].startswith("3번 구역에서 분사 3회 중 2회, ")
     assert "(평균 8cm)" in priority[1]["correction_guidance"]
 
 
@@ -358,5 +358,5 @@ def test_limited_confidence_is_preserved_in_session_report_without_claiming_norm
     assert report["confidence"] == "limited"
     assert report["limited_sequence_count"] == report["evaluated_sequence_count"] > 0
     assert report["reason_codes"] == ["comparison_scope_limited"]
-    assert "참고용" in report["guideline"]
+    assert "참고로만" in report["guideline"]
     assert "모두 숙련 작업자의 통상 범위 안" not in report["guideline"]

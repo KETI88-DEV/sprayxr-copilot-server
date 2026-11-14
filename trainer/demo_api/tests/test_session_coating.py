@@ -457,7 +457,7 @@ def test_error_analysis_answers_from_the_completed_report(engine: CoatingProgres
     data = client.post("/api/v1/copilot/query", json=body).json()["data"]
 
     assert data["answer"].startswith("기본 목표 160µm 기준으로 본 도막 분포입니다. 칠한 면적의 두께 분포: ")
-    assert "과도막 Zone 3(칠한 곳 평균 390µm): 속도·이격거리 기록이 없어 조절 후보를 내지 못했습니다." in data["answer"]
+    assert "Zone 3은 과도막입니다(칠한 곳 평균 390µm). 속도·이격거리 기록이 없어 조절 후보를 내지 못했습니다." in data["answer"]
     assert "저도막" not in data["answer"]
     assert data["answer"].endswith("원인으로 확정된 것은 아닙니다.")
     assert data["coating_context"]["comparison_basis"] == "saved_coating_report"

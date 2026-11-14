@@ -37,9 +37,9 @@ def _arm(sequences: list[dict]) -> dict:
 
 def test_radius_corrections_name_the_body_and_give_an_action() -> None:
     assert pose_query.friendly_correction(ELBOW) == (
-        "스트로크 0~100% 구간에서 오른쪽 팔꿈치가 숙련자 평균보다 몸 쪽으로 22cm 더 붙어 있었습니다. 팔꿈치를 몸에서 조금 더 떼세요.")
+        "스트로크 내내 오른쪽 팔꿈치가 숙련자 평균보다 몸 쪽으로 22cm 더 붙어 있었습니다. 팔꿈치를 몸에서 더 떼어 주세요.")
     assert pose_query.friendly_correction(WRIST) == (
-        "스트로크 20~80% 구간에서 오른쪽 손목이 숙련자 평균보다 몸에서 9cm 더 뻗어 있었습니다. 손목을 몸 쪽으로 조금 당기세요.")
+        "스트로크 20~80% 구간에서 오른쪽 손목이 숙련자 평균보다 몸 밖으로 9cm 더 뻗어 있었습니다. 손목을 몸 쪽으로 당겨 주세요.")
     assert pose_query.friendly_correction(HEADING) == HEADING
 
 
@@ -50,29 +50,29 @@ def test_production_right_hand_answer() -> None:
     sequences += [_sequence(5 + 100 * k, [ELBOW], ["RightForeArm"]) for k in range(1, 4)]
     sequences.append(_sequence(25, [WRIST], ["RightHand"]))
     answer = arm_pose_answer(_arm(sequences), current=False, playback=None, zone_id=None, side="right", prefer_hand=True)
-    assert "입력 품질" not in answer and "참고용" not in answer
-    assert "오른쪽 손목" in answer and "SEQ-025" in answer and "몸에서 9cm 더 뻗어" in answer
+    assert "입력 품질" not in answer and "참고로만" not in answer
+    assert "오른쪽 손목" in answer and "SEQ-025" in answer and "몸 밖으로 9cm 더 뻗어" in answer
     assert "cm 가까이" not in answer
 
 
 def test_right_hand_without_a_wrist_correction_says_so_and_uses_the_arm() -> None:
     sequences = [_sequence(5, [ELBOW], ["RightForeArm"])]
     answer = arm_pose_answer(_arm(sequences), current=False, playback=None, zone_id=None, side="right", prefer_hand=True)
-    assert "손목 교정은 없고" in answer and "팔꿈치를 몸에서 조금 더 떼세요" in answer
+    assert "손목 교정은 없었습니다" in answer and "팔꿈치를 몸에서 더 떼어 주세요" in answer
 
 
 def test_other_limit_reasons_are_said_once_in_plain_words() -> None:
     sequences = [_sequence(1, [], [], reasons=["skeleton_joint_frozen", "frame_interval_irregular"]),
                  _sequence(2, [], [], reasons=["skeleton_joint_frozen"]), _sequence(3, [], [], reasons=["frame_interval_irregular"])]
     answer = arm_pose_answer(_arm(sequences), current=False, playback=None, zone_id=None, side="left")
-    assert answer.count("참고용") == 1 and "관절 일부가 움직이지 않게 기록된 분사 2회는 참고용입니다" in answer
+    assert answer.count("참고로만") == 1 and "관절 일부가 멈춘 채로 기록된 분사 2회는 참고로만 봐 주세요" in answer
     assert "입력 품질" not in answer
 
 
 def test_viewer_sequences_carry_friendly_text_and_the_engine_reason() -> None:
     assert pose_query.limited_note([{"confidence": "limited", "reason_codes": ["frame_interval_irregular"]}]) == ""
     item = {"confidence": "limited", "reason_code": "skeleton_bone_length_inconsistent"}
-    assert pose_query.limited_note([item]) == "관절 위치가 흔들리게 기록된 분사 1회는 참고용입니다."
+    assert pose_query.limited_note([item]) == "관절 위치가 흔들려 기록된 분사 1회는 참고로만 봐 주세요."
 
 
 def test_tsb_sequence_answer_prefers_the_wrist_for_a_hand_question() -> None:
@@ -87,15 +87,15 @@ def test_session_guideline_does_not_blame_input_quality_for_frame_intervals() ->
                              input_quality={"reason_codes": ["frame_interval_irregular"]})
     frozen = PoseQueryResult("available", "skeleton_joint_frozen", "S2", 0.6, "joint_only", [], None, confidence="limited",
                              input_quality={"reason_codes": ["skeleton_joint_frozen"]})
-    assert "입력 품질" not in sa._guideline([timing], 1, 0) and "참고용" not in sa._guideline([timing], 1, 0)
-    assert "관절 일부가 움직이지 않게 기록된 분사 1회는 참고용입니다" in sa._guideline([timing, frozen], 2, 0)
+    assert "입력 품질" not in sa._guideline([timing], 1, 0) and "참고로만" not in sa._guideline([timing], 1, 0)
+    assert "관절 일부가 멈춘 채로 기록된 분사 1회는 참고로만 봐 주세요" in sa._guideline([timing, frozen], 2, 0)
 
 
 def test_priority_correction_names_the_body_reference() -> None:
     scored = [("9", PoseQueryResult("available", None, None, 0.5, "joint_only", [{"joint": "RightForeArm"}], None,
                                     joint_distances={"RightForeArm": 0.35}, joint_measures={"RightForeArm": ("radius", -0.22)}))]
     text = sa.priority_corrections(sa.zone_summary(scored), measures=sa.joint_measures(scored))[0]["correction_guidance"]
-    assert "몸 쪽으로 평균 22cm 더 붙어" in text and "떼세요" in text
+    assert "몸 쪽으로 평균 22cm 더 붙어" in text and "떼어 주세요" in text
 
 
 def test_viewer_hud_uses_the_server_limited_note() -> None:

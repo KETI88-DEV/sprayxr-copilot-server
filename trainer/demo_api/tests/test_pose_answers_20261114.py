@@ -55,7 +55,7 @@ def test_right_hand_question_answers_from_the_arm_engine(tab: str) -> None:
     answer = result["answer"]
     assert result["calls"] == [], answer
     # v3.4.1: 반경 교정은 몸을 기준으로 적고 할 일을 붙인다. 오른손을 물었는데 손목 교정이 없으면 그렇다고 밝힌다.
-    assert "오른쪽 팔꿈치가 숙련자 평균보다 몸 쪽으로 20cm 더 붙어" in answer and "손목 교정은 없고" in answer and "Zone 6" not in answer
+    assert "오른쪽 팔꿈치가 숙련자 평균보다 몸 쪽으로 20cm 더 붙어" in answer and "손목 교정은 없었습니다" in answer and "Zone 6" not in answer
 
 
 @pytest.mark.parametrize("prompt", ["왼손은?", "왼손은 어떻게 고쳐?", "손목은 어때?"])
@@ -63,7 +63,7 @@ def test_no_correction_is_not_called_normal(prompt: str) -> None:
     result = ask(prompt, tab="pose", pipeline=_model())
     answer = result["answer"]
     assert result["calls"] == [], answer
-    assert "나오지 않았습니다" in answer and "정상 자세를 확정하지 않습니다" in answer
+    assert "나오지 않았습니다" in answer and "자세가 정상이라는 뜻은 아닙니다" in answer
     assert "정상 범위" not in answer and "통상 범위 안" not in answer
 
 
@@ -85,7 +85,7 @@ def test_tsb_elbow_question_reads_the_forearm_joint() -> None:
     answer = pose_query.answer_pose_question(found, prompt="팔꿈치는 어때?", context=None).answer
     assert "오른쪽 팔꿈치" in answer
     hand = pose_query.answer_pose_question(found, prompt="오른쪽 손목은?", context=None).answer
-    assert "오른쪽 손목" in hand and "정상 자세를 확정하지 않습니다" in hand
+    assert "오른쪽 손목" in hand and "자세가 정상이라는 뜻은 아닙니다" in hand
 
 
 # --- (c) 교정 없음 ≠ 정상 ----------------------------------------------------------------------------------
@@ -93,7 +93,7 @@ def test_tsb_elbow_question_reads_the_forearm_joint() -> None:
 def test_sequence_without_arm_correction_is_not_called_normal() -> None:
     pose = PoseQueryResult("available", None, "SEQ-1", 0.7, "joint_only", [], "요약")
     answer = pose_query.answer_sequence_question(pose, prompt="왼팔은?")
-    assert "통상 범위 안" not in answer and "정상 자세를 확정하지 않습니다" in answer
+    assert "통상 범위 안" not in answer and "자세가 정상이라는 뜻은 아닙니다" in answer
 
 
 # --- (d) 우선 교정의 수치와 문장 ------------------------------------------------------------------------

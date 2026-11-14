@@ -162,8 +162,8 @@ def test_elbow_question_reads_the_forearm_on_the_signed_viewer_path() -> None:
 
 def test_arm_side_question_is_answered_from_every_correction_of_the_arm_scoring() -> None:
     right = _ask(_Pipeline(), "오른손을 어떻게 고쳐?", context=_pose_context(), task="pose_recomm")["answer"]
-    assert "채점한 분사 2회 중 1회에서 오른팔 교정이 나왔습니다" in right and "SEQ-001" in right and "오른쪽 팔꿈치" in right
-    assert "특정된" not in right and "참고용" in right  # 첫 교정(왼쪽 손목)만 보면 오른팔 교정을 놓친다
+    assert "채점한 분사 2회 가운데 1회에서 오른팔 교정이 나왔습니다" in right and "SEQ-001" in right and "오른쪽 팔꿈치" in right
+    assert "특정된" not in right and "참고로만" in right  # 첫 교정(왼쪽 손목)만 보면 오른팔 교정을 놓친다
     assert "왼팔 교정은 나오지 않았습니다" in viewer_arm_pose.arm_pose_answer(
         {**ARM, "sequences": [ARM["sequences"][1]]}, current=False, playback=None, zone_id=None, side="left")
     waiting = _ask(_Pipeline(), "오른손을 어떻게 고쳐?", context=_pose_context(arm=None), task="pose_recomm")["answer"]

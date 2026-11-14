@@ -129,7 +129,7 @@ def test_arm_pose_answer_follows_the_playhead_the_zone_and_the_record() -> None:
     limited = {**ARM, "sequences": [{**ARM["sequences"][1], "confidence": "limited"}]}
     reference_only = viewer_arm_pose.arm_pose_answer(
         limited, current=True, playback={"playhead_seconds": 35.0}, zone_id=None)
-    assert "참고용" in reference_only and "교정 관절 결과는 없습니다" not in reference_only and "  " not in reference_only
+    assert "참고로만" in reference_only and "교정 관절 결과는 없습니다" not in reference_only and "  " not in reference_only
     assert "Zone 8의 자세 유사도는 평균 80%" in at(5.0)  # 첫 분사 전에는 선택 Zone
     zone = viewer_arm_pose.arm_pose_answer(ARM, current=False, playback=None, zone_id="9")
     assert "Zone 9의 자세 유사도는 평균 60%" in zone and "오른쪽 위팔" in zone
@@ -186,7 +186,7 @@ def test_viewer_record_is_scored_sequence_by_sequence_from_its_csv() -> None:
     assert len(result["sequences"]) == result["evaluated_sequence_count"]
     first = result["sequences"][0]
     assert first["sequence_id"].startswith("SEQ-") and 0 <= first["start_seconds"] < first["end_seconds"]
-    assert first["correction"] == "왼쪽 손목이 숙련자 평균보다 몸에서 31cm 더 뻗어 있었습니다. 손목을 몸 쪽으로 조금 당기세요."
+    assert first["correction"] == "왼쪽 손목이 숙련자 평균보다 몸 밖으로 31cm 더 뻗어 있었습니다. 손목을 몸 쪽으로 당겨 주세요."
     assert set(result["zones"]) == {s["zone_id"] for s in result["sequences"]}
 
 

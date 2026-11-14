@@ -27,10 +27,10 @@ def test_missing_and_touch_up_questions_use_visits_and_the_final_gate(tab: str, 
     assert result["calls"] == [] and result["source"] == "analysis", answer
     # 9개 Zone 모두 최종 게이트가 needs_more다. v3.4.1: 목록을 다 늘어놓지 않고 목표 두께 이상 면적이 가장 낮은 3곳만,
     # 등급 낱말(정상·저도막)과 평균 µm 없이, 줄을 나눠 적는다. 전체 목록은 도막 탭.
-    assert "9개 Zone을 모두 칠했지만 모두 보완이 필요합니다" in answer
-    assert "Zone 3(목표 두께 이상 0%), Zone 8(목표 두께 이상 1.9%), Zone 5(목표 두께 이상 2.8%)" in answer
+    assert "9개 Zone을 모두 칠했지만 9개 모두 보완이 필요합니다." in answer
+    assert "가장 부족한 곳은 Zone 3(목표 두께 이상 0%), Zone 8(1.9%), Zone 5(2.8%)입니다." in answer
     assert "정상" not in answer and "저도막" not in answer and "µm" not in answer and "방문하지 않은" not in answer
-    assert "도막 탭" in answer and "세션 끝 도막 기준" in answer and "\n" in answer
+    assert answer.endswith("전체 목록은 도막 탭에서 확인하세요. 세션이 끝났을 때의 도막 기준입니다.") and "\n" in answer
     assert "빠진" not in answer
 
 
@@ -46,8 +46,10 @@ def test_next_zone_uses_the_playhead_and_expert_transitions(tab: str, prompt: st
     result = ask(prompt, tab=tab, playback=AT_3S, pipeline=_model())
     answer = result["answer"]
     assert result["calls"] == [], answer
-    # 3.0초까지 Zone 9·8을 칠했다. 전문가 6회 중 2회가 Zone 8 다음에 Zone 5로 갔다(5와 6이 2회로 같으면 권장 순서가 앞선 5).
-    assert "Zone 5" in answer and "9·8" in answer and "확인할 수 없습니다" not in answer
+    # 3.0초까지 Zone 9·8을 칠했다. 전문가 6회 중 2회씩 Zone 8 다음에 Zone 5와 6으로 갔다 → 동률이라 둘 다 든다.
+    assert "재생 위치(Zone 8, 3.0초)까지 Zone 9와 8을 칠했습니다." in answer and "확인할 수 없습니다" not in answer
+    assert "다음은 Zone 5나 Zone 6을 권합니다. 전문가 기록에서 Zone 8 다음으로 두 곳이 똑같이 많았습니다(6회 중 각 2회)." in answer
+    assert result["sequence_context"]["next_zone_candidates"] == ["5", "6"]
     assert "Zone 7" in answer  # 이 기록이 실제로 다음에 칠한 곳
     assert result["sequence_context"]["next_zone_id"] == "5"
     assert result["sequence_context"]["visited_zone_ids"] == ["9", "8"]
@@ -57,7 +59,7 @@ def test_when_every_zone_is_visited_the_final_gate_lists_touch_ups() -> None:
     result = ask("지금 위치에서 다음 Zone은 어디야?", playback=AT_24S, mode="detailed", pipeline=_model())
     answer = result["answer"]
     assert result["calls"] == [] and "확인할 수 없습니다" not in answer
-    assert "모두 한 번 이상 칠했습니다" in answer and "재생 시점의 도막 완료 여부는 알 수 없" in answer
+    assert "모두 한 번 이상 칠했습니다" in answer and "도막은 세션이 끝났을 때 값만 있어서 이 시점에 다 칠해졌는지는 알 수 없습니다." in answer
     assert "보완" in answer and "Zone 8" in answer
     assert result["sequence_context"]["next_zone_id"] is None
 
@@ -134,7 +136,7 @@ def test_the_zone_under_the_playhead_counts_as_visited() -> None:
     from trainer.demo_api.viewer_progress import next_answer
     answer, scope = next_answer(_claims(), None, {"zone_id": "2", "playhead_seconds": 4.9})
     assert "2" in scope["visited_zone_ids"] and scope["next_zone_id"] == "1"
-    assert "실제로 다음에 처음 칠한 곳은 Zone 1" in answer
+    assert "이 기록에서는 실제로 Zone 1을 다음에 처음 칠했습니다." in answer
 
 
 def test_moving_playhead_is_not_called_zone_minus_one() -> None:
@@ -173,8 +175,8 @@ def test_thirteen_zone_touch_up_lists_the_three_lowest_areas_only() -> None:
     answer, scope = status_answer({"reference_order": order, "actual_order": order}, _rows(areas))
     assert answer != PRODUCTION
     lines = answer.split("\n")
-    assert lines[0] == "13개 Zone을 모두 칠했지만 모두 보완이 필요합니다."
-    assert "가장 부족한 곳: Zone 3(목표 두께 이상 0%), Zone 5(목표 두께 이상 4.2%), Zone 1(목표 두께 이상 9.9%)." in lines
+    assert lines[0] == "13개 Zone을 모두 칠했지만 13개 모두 보완이 필요합니다."
+    assert "가장 부족한 곳은 Zone 3(목표 두께 이상 0%), Zone 5(4.2%), Zone 1(9.9%)입니다." in lines
     assert answer.count("Zone ") == 3 + 0 and "정상" not in answer and "µm" not in answer
     assert len(scope["touch_up_zone_ids"]) == 13
 
@@ -184,5 +186,36 @@ def test_partial_completion_and_unvisited_zones_are_counted() -> None:
     rows = _rows({"1": 10.0, "2": 98.0, "3": 50.0}, complete=("2",))
     answer, _ = status_answer({"reference_order": ["1", "2", "3", "4"], "actual_order": ["1", "2", "3"]}, rows)
     lines = answer.split("\n")
-    assert lines[0] == "아직 칠하지 않은 Zone: Zone 4."
-    assert "칠한 Zone 3개 중 2개는 보완이 필요합니다." in lines and "완료한 Zone: Zone 2." in lines
+    assert lines[0] == "아직 칠하지 않은 Zone은 Zone 4입니다."
+    assert "지금까지 칠한 Zone 3개 가운데 2개는 보완이 필요합니다." in lines and "완료한 Zone은 Zone 2입니다." in lines
+
+
+# --- 확정 문구(2026-11-14 사용자 승인)와 동률 규칙 ---------------------------------------------------------
+
+def _next(transitions: dict[tuple[str, str], int], *, current: str = "8") -> tuple[str, dict]:
+    from trainer.demo_api.viewer_progress import next_answer
+    claims = {"reference_order": ["7", "4", "8", "5", "6", "3"], "actual_order": ["9", "8", "7", "4", "5", "6", "3"],
+              "zone_first_visit_seconds": {"9": 0.0, "8": 0.2, "7": 4.5}, "expert_transitions": [
+                  {"from": a, "to": b, "count": n} for (a, b), n in transitions.items()]}
+    return next_answer(claims, None, {"zone_id": current, "playhead_seconds": 3.0})
+
+
+def test_a_single_best_transition_names_one_zone() -> None:
+    answer, scope = _next({("8", "5"): 2, ("8", "6"): 1})
+    assert answer.split("\n")[0] == ("재생 위치(Zone 8, 3.0초)까지 Zone 9와 8을 칠했습니다. 다음은 Zone 5를 권합니다. "
+                                     "전문가 기록에서 Zone 8 다음으로 많이 간 곳 가운데 아직 칠하지 않은 Zone입니다(3회 중 2회).")
+    assert scope["next_zone_candidates"] == ["5"]
+
+
+def test_three_way_tie_names_three_zones() -> None:
+    answer, scope = _next({("8", "5"): 1, ("8", "6"): 1, ("8", "3"): 1})
+    assert "다음은 Zone 5, Zone 6이나 Zone 3을 권합니다. 전문가 기록에서 Zone 8 다음으로 세 곳이 똑같이 많았습니다(3회 중 각 1회)." in answer
+    assert scope["next_zone_candidates"] == ["5", "6", "3"]
+
+
+def test_three_or_more_painted_zones_are_joined_with_dots_and_long_lists_are_cut() -> None:
+    from trainer.demo_api.viewer_progress import _painted, status_answer
+    assert _painted(["9", "8", "5"]) == "Zone 9·8·5를" and _painted(["7", "1"]) == "Zone 7과 1을"
+    order = ["1", "2", "3", "4", "5", "6", "7"]
+    answer, _ = status_answer({"reference_order": order, "actual_order": ["1", "2"]}, None)
+    assert answer.split("\n")[0] == "아직 칠하지 않은 Zone은 Zone 3·4·5 외 2곳입니다."

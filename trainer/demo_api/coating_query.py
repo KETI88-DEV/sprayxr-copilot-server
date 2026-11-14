@@ -8,7 +8,8 @@ from collections.abc import Mapping
 from typing import Any, Final
 
 from trainer.demo_api.coating_assessment import (
-    ADJUSTMENT_WORDS, RULE_NOTE, adjustment_sentence, basis_label, distribution_sentence, grade_phrase, mean_text)
+    ADJUSTMENT_WORDS, RULE_NOTE, basis_label, distribution_sentence, grade_phrase, mean_text)
+from trainer.demo_api.pose_query import josa
 from trainer.demo_api.session_coating import EXPERT_WORDS
 
 _ZONE_NUMBER = re.compile(r"(?:zone|존|구역)\s*(\d+)", re.I)
@@ -171,7 +172,9 @@ def _grade_answer(rows: list[dict[str, Any]], prompt: str, *, detailed: bool, vi
 _MEASURE_FIELDS: Final = {"speed_mm_s": ("speed_mms", "reference_speed_mms", "이동 속도", "mm/s", "빠름", "느림"),
                           "distance_mm": ("distance_mm", "reference_distance_mm", "이격거리", "mm", "멂", "가까움")}
 _SIMILAR: Final = 0.05  # 전문가 중앙값과 ±5% 안이면 "비슷"으로 보고 후보와 엇갈린다고 하지 않는다
-UNDER_REVIEW: Final = "규칙의 조절 후보({words})는 실측 비교와 맞지 않아 검토 중이라 조언으로 드리지 않습니다."
+# 실측과 엇갈리는 조절 후보는 답·리포트에서 말하지 않는다(2026-11-14 사용자 결정, 이슈 #19). 내부 자료(행의 adjustments)에만 남는다.
+_THIN_BY_CLOSE: Final = " 가까이 칠하면 도막은 보통 두꺼워집니다. 그래서 얇게 나온 이유를 거리로는 설명하기 어렵습니다."
+_THICK_BY_FAR: Final = " 멀리 칠하면 도막은 보통 얇아집니다. 그래서 두껍게 나온 이유를 거리로는 설명하기 어렵습니다."
 
 
 def zone_measures(claims: Mapping[str, Any] | None) -> dict[str, dict[str, float]]:
@@ -209,47 +212,45 @@ def contradicted(adjustment: Mapping[str, Any], measure: Mapping[str, Any] | Non
     return (adjustment.get("direction"), relation) in {("decrease", "lower"), ("increase", "higher")}
 
 
+def _distance_remark(measure: Mapping[str, Any] | None, relation: str | None) -> str:
+    grade = (measure or {}).get("grade")
+    if grade == "below" and relation == "lower":
+        return _THIN_BY_CLOSE
+    if grade == "above" and relation == "higher":
+        return _THICK_BY_FAR
+    return ""
+
+
 def measured_sentence(zone_id: str, measure: Mapping[str, Any] | None) -> str | None:
-    """'Zone 8 실측: 이동 속도 2,230 mm/s, 이격거리 251 mm(전문가 550 mm보다 54% 가까움).'
+    """'Zone 8 실측값은 이동 속도 2,230 mm/s, 이격거리 251 mm입니다(전문가 550 mm보다 54% 가까움).'
 
     속도는 측정값만 적는다. 전문가 속도는 다른 장비로 잰 값이라 견주지 않는다(`contradicted`).
     """
-    parts = []
+    parts, compare = [], ""
     speed = (measure or {}).get("speed_mms")
     if isinstance(speed, (int, float)):
         parts.append(f"이동 속도 {speed:,.0f} mm/s")
     relation = measured_relation(measure, "distance_mm")
     if relation is not None:
-        own, reference, title, unit, up, down = _MEASURE_FIELDS["distance_mm"]
-        mine, expert = measure[own], measure[reference]  # type: ignore[index]
-        parts.append(f"{title} {mine:,.0f} {unit}(전문가 {expert:,.0f} {unit}와 비슷)" if relation == "similar"
-                     else f"{title} {mine:,.0f} {unit}(전문가 {expert:,.0f} {unit}보다 {abs(mine / expert - 1) * 100:.0f}% "
-                          f"{up if relation == 'higher' else down})")
+        mine, expert = measure["distance_mm"], measure["reference_distance_mm"]  # type: ignore[index]
+        parts.append(f"이격거리 {mine:,.0f} mm")
+        compare = (f"(전문가 {expert:,.0f} mm와 비슷)" if relation == "similar" else
+                   f"(전문가 {expert:,.0f} mm보다 {abs(mine / expert - 1) * 100:.0f}% {'멂' if relation == 'higher' else '가까움'})")
     if not parts:
         return None
-    text = f"Zone {zone_id} 실측: " + ", ".join(parts) + "."
-    grade = (measure or {}).get("grade")
-    if grade == "below" and relation == "lower":
-        text += " 가까이 칠하면 보통 도막이 두꺼워지는 쪽이라, 거리로는 얇게 나온 까닭을 설명하기 어렵습니다."
-    elif grade == "above" and relation == "higher":
-        text += " 멀리 칠하면 보통 도막이 얇아지는 쪽이라, 거리로는 두껍게 나온 까닭을 설명하기 어렵습니다."
-    return text
+    return f"Zone {zone_id} 실측값은 " + ", ".join(parts) + f"입니다{compare}." + _distance_remark(measure, relation)
 
 
 def _candidate_line(adjustments: list[Mapping[str, Any]], measure: Mapping[str, Any] | None, zone_id: str) -> str:
-    """조절 후보 문장. 실측이 있으면 엇갈리는 후보는 빼고 실측 비교와 검토 중임을 말한다."""
-    if measure is None:
-        candidates = adjustment_sentence(adjustments)
-        return candidates.partition(" 원인으로")[0] if candidates else "속도·이격거리 기록이 없어 조절 후보를 내지 못했습니다."
-    kept = [item for item in adjustments if not contradicted(item, measure)]
-    dropped = [item for item in adjustments if contradicted(item, measure)]
-    parts = [measured_sentence(zone_id, measure) or ""]
-    if kept:
-        parts.append((adjustment_sentence(kept) or "").partition(" 원인으로")[0])
-    if dropped:
-        words = ", ".join(ADJUSTMENT_WORDS[(item["variable"], item["direction"])] for item in sorted(dropped, key=lambda item: item["priority"]))
-        parts.append(UNDER_REVIEW.format(words=words))
-    return " ".join(part for part in parts if part) or "속도·이격거리 기록이 없어 조절 후보를 내지 못했습니다."
+    """실측 줄과 조절 후보 문장. 실측과 엇갈리는 후보는 말하지 않는다(내부 자료에만 남긴다)."""
+    kept = [item for item in adjustments if not contradicted(item, measure)] if measure is not None else list(adjustments)
+    words = ", ".join(ADJUSTMENT_WORDS[(item["variable"], item["direction"])] for item in sorted(kept, key=lambda item: item["priority"]))
+    parts = [measured_sentence(zone_id, measure) or ""] if measure is not None else []
+    if words:
+        parts.append(f"조절 후보는 {words}입니다.")
+    elif not adjustments:
+        parts.append("속도·이격거리 기록이 없어 조절 후보를 내지 못했습니다.")
+    return " ".join(part for part in parts if part)
 
 
 # 원인 → 결과 짝. 결과 낱말마다 같은 절(쉼표·마침표 사이)에서 바로 앞에 나온 원인 낱말 하나와 짝짓는다.
@@ -305,16 +306,12 @@ def distance_sentence(zone_id: str, measure: Mapping[str, Any] | None) -> str | 
     if relation is None:
         return None
     mine, expert = measure["distance_mm"], measure["reference_distance_mm"]  # type: ignore[index]
+    zone = josa(f"Zone {zone_id}", "은", "는")
     if relation == "similar":
-        return f"Zone {zone_id} 이격거리는 {mine:,.0f} mm로 전문가 {expert:,.0f} mm와 비슷했습니다."
-    word = "가까웠습니다" if relation == "lower" else "멀었습니다"
-    text = f"Zone {zone_id} 이격거리는 {mine:,.0f} mm로 전문가 {expert:,.0f} mm보다 {abs(mine / expert - 1) * 100:.0f}% {word}."
-    grade = (measure or {}).get("grade")
-    if grade == "below" and relation == "lower":
-        text += " 가까이 칠하면 보통 도막이 두꺼워지는 쪽이라, 거리로는 얇게 나온 까닭을 설명하기 어렵습니다."
-    elif grade == "above" and relation == "higher":
-        text += " 멀리 칠하면 보통 도막이 얇아지는 쪽이라, 거리로는 두껍게 나온 까닭을 설명하기 어렵습니다."
-    return text
+        return f"{zone} {mine:,.0f} mm 거리에서 칠해 전문가({expert:,.0f} mm)와 비슷했습니다."
+    word = "가까운" if relation == "lower" else "먼"
+    return (f"{zone} {mine:,.0f} mm 거리에서 칠했습니다. 전문가({expert:,.0f} mm)보다 {abs(mine / expert - 1) * 100:.0f}% {word} 거리입니다."
+            + _distance_remark(measure, relation))
 
 
 def record_cause_contradicted(sentence: str, measure: Mapping[str, Any] | None) -> bool:
@@ -394,8 +391,8 @@ def answer_distribution_cause(context: Mapping[str, Any], *, detailed: bool,
         for row in group if detailed else group[:3]:
             # 어댑터 문장의 "원인으로 확정된 것은 아닙니다."는 끝줄에서 한 번만 말한다.
             measure = measures.get(str(row["zone_id"])) if measures else None
-            text.append(f"{word} Zone {row['zone_id']}(칠한 곳 평균 {mean_text(row['thickness_um'], row['target_thickness_um'])}µm): "
-                        + _candidate_line(row["adjustments"], measure, str(row["zone_id"])))
+            head = f"{josa('Zone ' + str(row['zone_id']), '은', '는')} {word}입니다(칠한 곳 평균 {mean_text(row['thickness_um'], row['target_thickness_um'])}µm)."
+            text.append(" ".join(filter(None, (head, _candidate_line(row["adjustments"], measure, str(row["zone_id"]))))))
     if len(text) == 1:
         return text[0] + "\n저도막·과도막으로 판정된 Zone이 없습니다."
     return "\n".join([*text, "조절 후보는 등급에 따른 일반적인 방향이며 원인으로 확정된 것은 아닙니다."])
@@ -436,7 +433,6 @@ def target_advice_facts(context: Mapping[str, Any], *, measures: Mapping[str, Ma
         if measure is None:
             return item
         item["adjustments"] = [a for a in row["adjustments"] if not contradicted(a, measure)]
-        item["adjustments_under_review"] = [a for a in row["adjustments"] if contradicted(a, measure)]
         # 속도는 측정값만 싣는다(전문가 속도는 다른 장비로 잰 값이라 관계를 모델에 넘기지 않는다).
         item["measured"] = {**({"speed_mm_s": {"record": measure["speed_mms"]}} if "speed_mms" in measure else {}),
                             **({"distance_mm": {"record": measure["distance_mm"], "expert_median": measure["reference_distance_mm"],

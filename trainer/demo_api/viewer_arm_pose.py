@@ -18,7 +18,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Mapping
 
-from trainer.demo_api.pose_query import NO_CORRECTION_CAVEAT, PART_WORDS, POSE_SCALE_NOTE, friendly_correction, limited_note
+from trainer.demo_api.pose_query import NO_CORRECTION_CAVEAT, PART_WORDS, POSE_SCALE_NOTE, friendly_correction, josa, limited_note
 from trainer.demo_api.session_analysis import (
     analyze_session, csv_sequences, has_world_joints, painted_zone, read_csv, spray_runs,
 )
@@ -233,11 +233,12 @@ def _side_answer(arm: Mapping[str, Any], side: str | None, *, current: bool, pla
         if hand_hits:
             hits, name = hand_hits, wrist
         elif hits:
-            lead = f"{wrist} 교정은 없고 {name} 교정이 있습니다. "
+            lead = f"{wrist} 교정은 없었습니다. 대신 {name} 교정이 있습니다. "
     if not hits:
         return f"{scope}에서 {name} 교정은 나오지 않았습니다. {NO_CORRECTION_CAVEAT}{note}"
     count = len({s.get("sequence_id") for s, _ in hits})
-    return f"{lead}{scope} 중 {count}회에서 {name} 교정이 나왔습니다. 예({hits[0][0].get('sequence_id')}): {hits[0][1]}{note}"
+    example = josa(str(hits[0][0].get("sequence_id")), "을", "를")
+    return f"{lead}{scope} 가운데 {count}회에서 {name} 교정이 나왔습니다. 그중 {example} 보면, {hits[0][1]}{note}"
 
 
 def zone_pose_summary(arm: Mapping[str, Any], work_zones: list[Mapping[str, Any]] | None = None, *, limit: int = 3) -> str:
