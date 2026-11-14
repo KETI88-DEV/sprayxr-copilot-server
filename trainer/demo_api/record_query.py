@@ -51,10 +51,13 @@ _KNOWLEDGE: Final = re.compile(r"적정|기준|권장|표준|정의|뜻|의미|�
 _ZONE_NUMBERS: Final = re.compile(r"(?:zone|존|구역)\s*(\d{1,2}(?:\s*(?:,|와|과|이랑|랑|하고|및)\s*\d{1,2})*)", re.I)  # T33
 
 _EFFECT_ANY: Final = "|".join(pattern for _, pattern in _EFFECTS)
-_ONE_PRIORITY: Final = re.compile(r"뭐부터|무엇부터|먼저\s*(?:고쳐|신경)|하나만\s*콕|콕\s*집|딱\s*하나")  # T49 v22 v340-40
+# "뭐부터 해야 돼요?"는 작업 절차 질문이라 "고치"가 붙어야 한다.
+_ONE_PRIORITY: Final = re.compile(r"(?:뭐|무엇)부터\s*(?:고|개선)|먼저\s*(?:고쳐|신경)|콕\s*집")  # T49 v22 v340-40
 _ONLY_ONE: Final = re.compile(r"딱\s*하나|하나만|콕\s*집")  # 질문 전체에 걸린다
 _EXTERNAL: Final = re.compile(r"PSPC|90/10|ISO|SSPC|IMO")  # T50
 _EXTERNAL_ASK: Final = re.compile(r"합격|판정|통과|충족")
+_NOT_COMPLETION: Final = re.compile(r"몇|얼마|어떻게|조건|코트")  # "몇 코트까지 칠해야 끝난 거예요?"는 기준을 묻는다
+_ORDER_SUBJECT: Final = re.compile(r"숙련자|전문가|zone|존|구역", re.I)  # 시작·끝 낱말만으로는 작업 절차 질문과 가를 수 없다
 _COMPLETION: Final = re.compile(r"끝난|끝났|끝낸|완료|다\s*칠했|다시\s*(?:안\s*)?(?:가|칠)")  # T34 T38 T43
 _STATUS_ASKED: Final = re.compile(r"빼먹|빠뜨|빠진|누락|미수행|안\s*칠|못\s*칠|덜\s*칠")  # T33(Zone 번호가 있으면 "왜"가 있어도 상태 질문)
 _WHY: Final = re.compile(r"왜|원인|이유|때문")
@@ -123,7 +126,7 @@ def has_record_marker(prompt: str, *, previous_subject: Mapping[str, Any] | None
 
 
 def split_parts(prompt: str) -> list[str]:
-    # shortcut: "~고 ~?" 꼴은 나누지 않는다("잘하고 있는 거예요?"를 가르기 때문). 필요한 문항이 나오면 그때 더한다.
+    # "고 " 분할은 두 쪽이 모두 기록 코드를 가질 때만이라 classify_record_question 안에서 한다.
     pieces: list[str] = []
     for sentence in re.split(r"(?<=[?？!.])\s+", prompt.strip()):
         pieces += [piece.strip() for piece in re.split(r"(?<=고,)\s*", sentence) if piece.strip()]
@@ -155,25 +158,26 @@ def _codes(piece: str, task_type: str, has_subject: bool, marker: bool, asked: b
     external = _EXTERNAL.search(piece) and _EXTERNAL_ASK.search(piece)
     if external:
         add(external.start(), "external_standard")
-    completion = None if external else _COMPLETION.search(piece)
+    completion = None if external or _NOT_COMPLETION.search(piece) else _COMPLETION.search(piece)
     if completion:
         add(completion.start(), "completion")
-    cause = bool(effect and (_WHY.search(piece) or pair)) or bool(has_subject and (match := re.search(r"원인|이유", piece)))
+    cause = bool(effect and (_WHY.search(piece) or pair)) or bool(has_subject and re.search(r"원인|이유", piece))
     if cause and marker:
         add(0, "cause")
     elif (extreme := _EXTREME.search(piece)) and (_THIN.search(piece) or _THICK.search(piece)):
         add(extreme.start(), "coating_extreme", "argmin" if _THIN.search(piece) else "argmax")
     elif (thick := _THICK.search(piece)) and _WHERE.search(piece) and not _WHY.search(piece):
         add(thick.start(), "coating_over")
-    if not completion:
+    trajectory = task_type == "trajectory_recomm"  # 순서 탭의 질문은 표지 없이도 기록 질문이다
+    if not completion and (marker or trajectory or asked):
         status = progress_question(piece)
         if status == "next":
             add(0, "progress_next")
         elif status == "status" or (asked and _STATUS_ASKED.search(piece)):
             add(0, "progress_status")
-    if _ORDER_WORD.search(piece):
+    if _ORDER_WORD.search(piece) and (marker or trajectory or re.search(r"숙련자|전문가", piece)):
         operator = next((name for name, pattern in _ORDER_OPERATORS if re.search(pattern, piece)), None)
-        if operator:
+        if operator and (operator not in {"start", "end"} or _ORDER_SUBJECT.search(piece)):
             add(0, "order_shape", operator)
     if not (cause and marker):  # "거리가 멀어서 얇게 나온 거지?"는 원인 질문이지 거리 비교가 아니다(T40)
         if (match := _FILTER.search(piece)) and _WHERE.search(piece) and not asked:
@@ -231,14 +235,30 @@ def classify_record_question(prompt: str, *, task_type: str, previous_subject: M
         return RecordQuery("none", ())
     cardinality = "one" if _ONLY_ONE.search(prompt) else "any"
     parts: list[RecordPart] = []
-    for piece in split_parts(prompt):
-        knowledge = bool(_KNOWLEDGE.search(piece))
+
+    def analyse(piece: str, marker: bool | None = None) -> tuple[list[tuple[int, str, str | None, str | None]], str | None]:
         # 손·방향·"뭐부터 고쳐"·구역별 자세 문제는 기존 경로의 몫이다.
         reserved = bool(BODY_PART.search(piece) or _DIRECTION_ONLY.search(piece)
                         or (task_type in {"pose_recomm", "trajectory_recomm"} and (WORST_ZONE.search(piece) or re.search(r"뭐부터|무엇부터", piece))))
-        marker = has_record_marker(piece, previous_subject=previous_subject)
-        asked = bool(_ZONE_NUMBERS.search(piece))
-        hits, pair = ([], None) if reserved else _codes(piece, task_type, bool(previous_subject), marker, asked)
+        if reserved:
+            return [], None
+        marker = has_record_marker(piece, previous_subject=previous_subject) if marker is None else marker
+        return _codes(piece, task_type, bool(previous_subject), marker, bool(_ZONE_NUMBERS.search(piece)))
+
+    def divide(piece: str, marker: bool) -> list[str]:
+        # "~고" 앞뒤가 각각 기록 코드를 가질 때만 가른다("잘하고 있는 거예요?"는 앞 절에 코드가 없어 그대로 둔다).
+        for match in re.finditer(r"(?<=고)\s+", piece):
+            left, right = piece[:match.start()], piece[match.end():]
+            if analyse(left, marker)[0] and analyse(right, marker)[0]:
+                return [left, *divide(right, marker)]
+        return [piece]
+
+    # 가른 조각은 원래 한 문장의 표지를 물려받는다.
+    for piece, marker in ((half, whole_marker) for whole in split_parts(prompt)
+                          for whole_marker in [has_record_marker(whole, previous_subject=previous_subject)] for half in divide(whole, whole_marker)):
+        knowledge = bool(_KNOWLEDGE.search(piece))
+        marker = marker or has_record_marker(piece, previous_subject=previous_subject)
+        hits, pair = analyse(piece, marker)
         if not hits:
             if knowledge or marker:  # 표지 없는 맞장구("잘하고 있는 거예요?")는 조각으로 세지 않는다
                 parts.append(RecordPart(piece, None, (), "none", None, None, cardinality, (), knowledge))

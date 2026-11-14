@@ -79,18 +79,22 @@ def test_record_questions_are_classified(case) -> None:
     assert [(p.code, p.zones, p.operator) for p in result.parts] == parts
 
 
+def _text(case_id):
+    return next(case[1] for case in CASES if case[0] == case_id)
+
+
 def _premises(prompt, task, subject=None, playback="8"):
     return {premise for part in _classify(prompt, task, subject, playback).parts for premise in part.premises}
 
 
 def test_premises_are_extracted() -> None:
-    assert Premise("named_number", "pose_similarity", 87.0) in _premises(CASES[2][1], "pose_recomm")
-    assert Premise("cause", "far>thin", None) in _premises(CASES[15][1], "knowledge_search", DISTANCE_8)
-    assert Premise("conclusion", "visited_all", None) in _premises(CASES[9][1], "trajectory_recomm", None, "9")
-    assert Premise("conclusion", "grade_normal", None) in _premises(CASES[18][1], "knowledge_search", None, "1")
-    assert Premise("comparison", "speed_slower", None) in _premises(CASES[19][1], "knowledge_search")
-    assert [p.cardinality for p in _classify(CASES[22][1]).parts] == ["one", "one"]
-    assert [p.cardinality for p in _classify(CASES[25][1]).parts] == ["any", "any", "any"]
+    assert Premise("named_number", "pose_similarity", 87.0) in _premises(_text("T27"), "pose_recomm")
+    assert Premise("cause", "far>thin", None) in _premises(_text("T40"), "knowledge_search", DISTANCE_8)
+    assert Premise("conclusion", "visited_all", None) in _premises(_text("T34"), "trajectory_recomm", None, "9")
+    assert Premise("conclusion", "grade_normal", None) in _premises(_text("T43"), "knowledge_search", None, "1")
+    assert Premise("comparison", "speed_slower", None) in _premises(_text("T44"), "knowledge_search")
+    assert [p.cardinality for p in _classify(_text("T49")).parts] == ["one", "one"]
+    assert [p.cardinality for p in _classify(_text("v22")).parts] == ["any", "any", "any"]
 
 
 @pytest.mark.parametrize("task,prompt", [
@@ -132,3 +136,20 @@ def test_pronoun_without_a_previous_subject_uses_the_playback_zone() -> None:
 def test_subject_from_another_family_is_not_used() -> None:
     subject = {"domain": "pose", "zone_ids": ["9"], "operator": "argmin"}
     assert _classify("왜 그렇게 얇게 나온 거야?", subject=subject, playback="8").parts[0].zones == ("8",)
+
+
+@pytest.mark.parametrize("prompt", [
+    "도장 작업 시작 전에 뭘 점검해야 해요?",
+    "스프레이 건을 어디서 시작해서 어디서 끝내요?",
+    "도장 작업 뭐부터 해야 돼요?",
+    "몇 코트까지 칠해야 끝난 거예요?",
+])
+def test_bare_words_without_a_record_signal_are_not_record_questions(prompt) -> None:
+    assert _classify(prompt).kind == "none"
+
+
+def test_a_part_splits_at_go_only_when_both_halves_are_record_questions() -> None:
+    both = _classify("내 거리 비교하고 다음 Zone 알려줘")
+    assert [part.code for part in both.parts] == ["distance_compare", "progress_next"]
+    assert [part.code for part in _classify("제 자세 괜찮아요? 잘하고 있는 거예요?", "pose_recomm").parts] == ["pose_judgement"]
+    assert len(_classify("제 자세 잘하고 있는 거예요?", "pose_recomm").parts) == 1

@@ -560,8 +560,6 @@ def _grounded_detail(candidate: str, base_answer: str, context: Mapping[str, obj
     return True
 
 
-
-
 _HERE: Final = re.compile(r"지금|현재|여기|이렇게|이번|방금|아까|(?<![가-힣])이\s*(?:zone|존|구역|기록|분사|곳)|내\s|제\s|나의|저의", re.I)
 
 
