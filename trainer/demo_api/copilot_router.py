@@ -78,7 +78,9 @@ from trainer.demo_api.query_language import TranslationUnavailableError, transla
 from trainer.demo_api.sequence_store import SequenceStore
 from trainer.demo_api.viewer_arm_pose import arm_pose_answer, parse_viewer_arm_pose, zone_pose_summary
 from trainer.demo_api.sequence_analysis import SequenceAnalysisEngine
-from trainer.demo_api.safety_guard import HIGH_PRESSURE_ANSWER, HIGH_PRESSURE_CITATIONS, classify, guard_answer, hazard_class
+from trainer.demo_api.safety_guard import (
+    HIGH_PRESSURE_ANSWER, HIGH_PRESSURE_CITATIONS, classify, fixed_answer_translation, guard_answer, hazard_class,
+)
 from trainer.demo_api.reference_order_query import actual_order_intent, current_next_answer, is_current_next_question, is_reference_order_question, resolve_reference_target, reference_order_answer
 from trainer.demo_api.v1_store import V1Store
 from trainer.demo_api.viewer_progress import progress_question, viewer_progress_answer
@@ -1364,7 +1366,17 @@ async def execute_copilot_query(
         body = json.loads(response.body)
         data = body["data"]
         # 분석 답은 항상 한국어다. 모델이 섞어 낸 한자는 번역 전에 뺀다.
-        data["answer"] = await _translate(without_hanzi(data["answer"], prompt=normalized), "ko", response_language)
+        korean_answer = without_hanzi(data["answer"], prompt=normalized)
+        try:
+            data["answer"] = await _translate(korean_answer, "ko", response_language)
+        except Exception:
+            # 고정 고압 안전 답만 미리 옮겨 둔 문장으로 낸다(v3.4.5, 운영 우즈베크어 답 번역이 늘 실패). 다른 답은 503.
+            prepared = fixed_answer_translation(korean_answer, response_language)
+            if prepared is None:
+                raise
+            logger.warning("copilot answer translation failed; prepared safety answer request_id=%s language=%s",
+                           query.request_id, response_language)
+            data["answer"] = prepared
     except Exception:  # Translation failures never masquerade as a requested-language answer.
         logger.exception("copilot translation failed request_id=%s", query.request_id)
         return error_response(503, "Query translation unavailable; retry or use Korean")

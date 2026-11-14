@@ -49,8 +49,27 @@ def test_failed_question_translation_still_gives_the_fixed_answer_for_hand_on_ti
     assert pipeline.calls == []  # 모델은 부르지 않았다
 
 
-def test_when_the_answer_translation_also_fails_it_stays_503() -> None:
+def test_when_the_answer_translation_also_fails_the_prepared_translation_is_used() -> None:
+    # v3.4.5: 운영 우즈베크어에서 고정 답의 답 번역이 늘 실패했다. 고정 답에만 미리 옮겨 둔 문장을 쓴다.
     status, body = _status(FailingQuestion(answer_ok=False), VI)
+    assert status == 200 and body["data"]["answer"] == g.fixed_answer_translation(g.HIGH_PRESSURE_ANSWER, "vi")
+
+
+class FailingAnswer(Pipeline):
+    """질문 번역은 되고 답 번역만 실패한다."""
+
+    def __init__(self) -> None:
+        super().__init__(document="이격거리는 300~400mm가 적정합니다.", converse="이격거리는 300~400mm가 적정합니다.")
+
+    def translate_copilot_text(self, text: str, *, source_language: str, target_language: str) -> str:
+        self.translations.append((text, source_language, target_language))
+        if target_language == "ko":
+            return "적정 분사 거리는 얼마인가요?"
+        raise TranslationUnavailableError("translation failed")
+
+
+def test_ordinary_answer_translation_failure_stays_503() -> None:
+    status, body = _status(FailingAnswer(), "Khoảng cách phun phù hợp là bao nhiêu?")
     assert status == 503 and body["status"] == "ERROR"
 
 
