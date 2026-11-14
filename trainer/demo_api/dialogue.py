@@ -351,12 +351,19 @@ def _viewer_zone(payload: Mapping[str, Any], claims: Mapping[str, Any], prompt: 
     return f"Map {playback.get('map_num')} · Zone {playback.get('zone_id')}", zone if isinstance(zone, Mapping) else None
 
 
+_NOT_A_LOOKUP: Final = re.compile(r"무엇부터|뭐부터|무엇을\s*먼저|뭘\s*먼저|먼저|왜|이유|어떻게|우선\s*순위|우선해")
+_LOOKUP_MAX_CHARS: Final = 80
+
+
 def viewer_measurement_answer(value: str | None, prompt: str) -> str | None:
     """뷰어 기록의 속도·이격거리를 묻는 질문은 서명된 Zone 대표값으로만 답한다.
 
     모델에 맡기면 단위와 값을 섞는다(2026-11-11 Spark: 속도·거리 질문에 "268.6 mm와 78.8 µm"). 일반 지식 질문("적정 이격거리는?")은 건드리지 않는다.
     """
     asked = [name for name, word in (("speed", "속도"), ("distance", "거리|이격")) if re.search(word, prompt)]
+    if _NOT_A_LOOKUP.search(prompt) or len(prompt) > _LOOKUP_MAX_CHARS or len(re.findall(r"[?？]", prompt)) >= 2:
+        # 무엇부터·왜·어떻게를 묻거나 여러 가지를 함께 묻는 질문은 측정값만으로 답이 되지 않는다(v3.4.0 운영 q22·q40).
+        return None
     found = _viewer_claims(value)
     if not asked or found is None or not _RECORD_SCOPE.search(prompt):
         return None
