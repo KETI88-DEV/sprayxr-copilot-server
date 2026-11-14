@@ -754,7 +754,7 @@ def answer_order_question(
             from trainer.demo_api.viewer_progress import gate_lines
             gated = [row for row in analysis.get("coating_zones") or [] if isinstance(row, Mapping) and row.get("gate_status")]
             if gated:
-                focused = "\n".join([focused, *gate_lines(gated, order=flow, visited=set(first), note="세션을 마친 최종 도막 기준입니다.")[0]])
+                focused = "\n".join([focused, *gate_lines(gated, order=flow, visited=set(first), footer="세션 끝 도막 기준입니다.")[0]])
             return ZoneAnswer("available", None, focused, {
                 "analysis_status": "available", "reason_code": None, "scope": "session", "report_id": report_id,
                 "recommended_flow": flow, "first_visit_flow": first, "adherence_rate": rate,

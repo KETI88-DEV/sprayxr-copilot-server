@@ -25,10 +25,12 @@ def test_missing_and_touch_up_questions_use_visits_and_the_final_gate(tab: str, 
     result = ask(prompt, tab=tab, mode=mode, pipeline=_model())
     answer = result["answer"]
     assert result["calls"] == [] and result["source"] == "analysis", answer
-    assert "방문하지 않은 Zone은 없습니다" in answer
-    # 9개 Zone 모두 최종 게이트가 needs_more다. 정상 등급인 Zone 1도 면적(47.9%)이 모자라 보완 대상이다.
-    assert "보완" in answer and "Zone 1" in answer and "47.9%" in answer and "77µm" in answer
-    assert "완료한 Zone은 없습니다" in answer
+    # 9개 Zone 모두 최종 게이트가 needs_more다. v3.4.1: 목록을 다 늘어놓지 않고 목표 두께 이상 면적이 가장 낮은 3곳만,
+    # 등급 낱말(정상·저도막)과 평균 µm 없이, 줄을 나눠 적는다. 전체 목록은 도막 탭.
+    assert "9개 Zone을 모두 칠했지만 모두 보완이 필요합니다" in answer
+    assert "Zone 3(목표 두께 이상 0%), Zone 8(목표 두께 이상 1.9%), Zone 5(목표 두께 이상 2.8%)" in answer
+    assert "정상" not in answer and "저도막" not in answer and "µm" not in answer and "방문하지 않은" not in answer
+    assert "도막 탭" in answer and "세션 끝 도막 기준" in answer and "\n" in answer
     assert "빠진" not in answer
 
 
@@ -55,7 +57,7 @@ def test_when_every_zone_is_visited_the_final_gate_lists_touch_ups() -> None:
     result = ask("지금 위치에서 다음 Zone은 어디야?", playback=AT_24S, mode="detailed", pipeline=_model())
     answer = result["answer"]
     assert result["calls"] == [] and "확인할 수 없습니다" not in answer
-    assert "모든 Zone" in answer and "재생 시점의 도막 완료 여부는 알 수 없" in answer
+    assert "모두 한 번 이상 칠했습니다" in answer and "재생 시점의 도막 완료 여부는 알 수 없" in answer
     assert "보완" in answer and "Zone 8" in answer
     assert result["sequence_context"]["next_zone_id"] is None
 
@@ -147,4 +149,40 @@ def test_without_a_reference_flow_nothing_is_counted_against_zero_zones() -> Non
     status, _ = status_answer(claims, None)
     assert "0개" not in status and "권장 기준" in status
     answer, scope = next_answer(claims, None, {"zone_id": "2", "playhead_seconds": 6.0})
-    assert "모든 Zone" not in answer and scope["next_zone_id"] is None
+    assert "모두 한 번 이상 칠했습니다" not in answer and scope["next_zone_id"] is None
+
+
+# --- 운영 답(2026-11-14, Zone 13개): 전부 글로 늘어놓아 읽을 수 없었다 ---------------------------------------
+
+PRODUCTION = ("권장 기준 13개 Zone 가운데 방문하지 않은 Zone은 없습니다. 방문했지만 보완이 필요한 Zone(완료 기준: 목표 두께 이상 면적 95%, "
+              "저도막 아님): Zone 8(정상 165µm, 목표 이상 면적 61.9%), Zone 12(저도막 127µm, …) … Zone 1(저도막 109µm, 목표 이상 면적 9.9%). "
+              "완료한 Zone은 없습니다. 최종 높이맵 기준이며 재생 시점의 도막이 아닙니다.")
+
+
+def _rows(areas: dict[str, float], *, complete: tuple[str, ...] = ()) -> dict:
+    zones = [{"zone_id": zone, "map_num": 1, "grade": "normal" if zone == "8" else "below", "thickness_um": 120.0,
+              "target_thickness_um": 160.0, "unpainted_fraction": 0.0, "coverage_percent": area,
+              "gate_status": "complete" if zone in complete else "needs_more"} for zone, area in areas.items()]
+    return {"target": {"analysis_status": "available", "zones": zones}}
+
+
+def test_thirteen_zone_touch_up_lists_the_three_lowest_areas_only() -> None:
+    from trainer.demo_api.viewer_progress import status_answer
+    areas = {str(n): float(area) for n, area in zip(range(1, 14), (9.9, 30.0, 0.0, 12.5, 4.2, 50.0, 20.0, 61.9, 40.0, 33.0, 15.0, 25.0, 45.0))}
+    order = [str(n) for n in range(1, 14)]
+    answer, scope = status_answer({"reference_order": order, "actual_order": order}, _rows(areas))
+    assert answer != PRODUCTION
+    lines = answer.split("\n")
+    assert lines[0] == "13개 Zone을 모두 칠했지만 모두 보완이 필요합니다."
+    assert "가장 부족한 곳: Zone 3(목표 두께 이상 0%), Zone 5(목표 두께 이상 4.2%), Zone 1(목표 두께 이상 9.9%)." in lines
+    assert answer.count("Zone ") == 3 + 0 and "정상" not in answer and "µm" not in answer
+    assert len(scope["touch_up_zone_ids"]) == 13
+
+
+def test_partial_completion_and_unvisited_zones_are_counted() -> None:
+    from trainer.demo_api.viewer_progress import status_answer
+    rows = _rows({"1": 10.0, "2": 98.0, "3": 50.0}, complete=("2",))
+    answer, _ = status_answer({"reference_order": ["1", "2", "3", "4"], "actual_order": ["1", "2", "3"]}, rows)
+    lines = answer.split("\n")
+    assert lines[0] == "아직 칠하지 않은 Zone: Zone 4."
+    assert "칠한 Zone 3개 중 2개는 보완이 필요합니다." in lines and "완료한 Zone: Zone 2." in lines
