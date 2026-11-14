@@ -32,6 +32,7 @@ import math
 import os
 import re
 import time
+from urllib.parse import quote
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from types import MappingProxyType
@@ -77,6 +78,8 @@ from trainer.demo_api.query_language import TranslationUnavailableError, transla
 from trainer.demo_api.sequence_store import SequenceStore
 from trainer.demo_api.viewer_arm_pose import arm_pose_answer, parse_viewer_arm_pose, zone_pose_summary
 from trainer.demo_api.sequence_analysis import SequenceAnalysisEngine
+from trainer.demo_api.safety_guard import (HIGH_PRESSURE_ANSWER, HIGH_PRESSURE_CITATIONS, guard_answer, hand_on_tip,
+                                           is_hazard_act, is_safety_topic)
 from trainer.demo_api.reference_order_query import actual_order_intent, current_next_answer, is_current_next_question, is_reference_order_question, resolve_reference_target, reference_order_answer
 from trainer.demo_api.v1_store import V1Store
 from trainer.demo_api.viewer_progress import progress_question, viewer_progress_answer
@@ -200,6 +203,8 @@ def _parse_motion_viewer_context(value: str | None, *, task_type: str) -> dict[s
 
 # analysis(채점·분석 결과를 옮긴 답, 모델 미사용) · documents(문서 검색 + 모델) · conversation(모델 대화)
 ANSWER_SOURCE_HEADER: Final = "X-Copilot-Answer-Source"
+# 외국어 질문을 한국어로 옮긴 문장(퍼센트 인코딩). 응답 본문은 바꾸지 않는다.
+ANALYSIS_PROMPT_HEADER: Final = "X-Copilot-Analysis-Prompt"
 _EVALUATION_QUESTION: Final = re.compile(r"잘한|못한|고쳐야|고칠|개선할|개선점|문제점|부족한 점")
 # 대화 계획 모델이 속도·Zone 질문을 도포 방향으로 분류한다(2026-11-11 Spark: "지금 속도는 적당해?"에 방향을 답함).
 _DIRECTION_WORD: Final = re.compile(r"방향|수평|수직|대각|가로|세로|패턴|direction", re.I)
@@ -562,6 +567,26 @@ _WORST_ZONE: Final = re.compile(r"(?:zone|존|구역)\s*별|(?:가장|제일)\s*
 _HERE: Final = re.compile(r"지금|현재|여기|이렇게|이번|방금|아까|(?<![가-힣])이\s*(?:zone|존|구역|기록|분사|곳)|내\s|제\s|나의|저의", re.I)
 
 
+_HEADER_LIMIT: Final = 1024
+_TRUNCATED: Final = "…"
+
+
+def analysis_prompt_header(text: str) -> str:
+    """퍼센트 인코딩한 분석 질문 헤더 값. 한글은 글자당 9바이트라 nginx 기본 헤더 버퍼를 넘기지 않게 1024바이트로 자른다.
+
+    코드 포인트 경계에서 자르고 끝에 "…"를 붙인다. 전체 문장은 로그에 남는다.
+    """
+    encoded = quote(text, safe="")
+    if len(encoded) <= _HEADER_LIMIT:
+        return encoded
+    budget = _HEADER_LIMIT - len(quote(_TRUNCATED, safe=""))
+    low, high = 0, len(text)
+    while low < high:  # quote(text[:n])가 budget 안인 가장 큰 n
+        middle = (low + high + 1) // 2
+        low, high = (middle, high) if len(quote(text[:middle], safe="")) <= budget else (low, middle - 1)
+    return quote(text[:low] + _TRUNCATED, safe="")
+
+
 def _viewer_measures(context: str | None, prompt: str) -> tuple[dict[str, dict[str, float]] | None, str | None]:
     """서명된 뷰어 Zone 실측(속도·이격거리·전문가 중앙값)과 질문이 가리키는 Zone(번호, 없으면 재생 위치)."""
     claims = viewer_claims(context)
@@ -678,17 +703,34 @@ async def _execute_copilot_query(
     sequence_engine: SequenceAnalysisEngine | None = None,
     coating_engine: object | None = None,
     conversation_id: str | None = None,
+    original_prompt: str | None = None,
 ) -> JSONResponse:
-    """Execute one normalized query for both text and voice transports."""
+    """Execute one normalized query for both text and voice transports.
+
+    `original_prompt`는 외국어 질문의 원문이다(`query.prompt`는 한국어로 옮긴 질문). 안전 판정은 둘 다로 한다.
+    """
     request_started = time.monotonic() if started is None else started
     if asks_for_instructions(query.prompt):
         # 지침 공개·무시 요청은 모델에 보내지 않는다(2026-11-14 운영 q41).
         return _success_response(query, request_started, answer=INSTRUCTION_REFUSAL, retrieval_used=False, citations=[])
+    questions = (query.prompt, original_prompt or "")
 
     dialogue_turns = await to_thread.run_sync(lambda: sequences.recent_query_turns(
         query.session_id or "CHAT:" + query.user_id, limit=6,
         user_id=query.user_id, conversation_key=conversation_id,
     ))
+    # 위험 행동을 해도 되는지 묻는 질문은 대화 경로·측정값 짧은 답·뷰어 엔진 답으로 보내지 않고 문서 검색으로 답한 뒤
+    # 답을 검사한다(2026-11-14 훈련생 질문 시험 T15). "그럼 해도 돼?"는 같은 대화의 앞 질문으로 본다.
+    previous_prompt = dialogue_turns[-1]["prompt"] if dialogue_turns else ""
+    if hand_on_tip(questions, previous=previous_prompt):
+        # 손이 건 끝에 닿는 질문은 경로·탭·답변 수준과 상관없이 모델 없이 고정 답이다(v3.4.1 운영: 베트남어 답이 막으라고 했다).
+        return _success_response(query, request_started, answer=HIGH_PRESSURE_ANSWER, retrieval_used=False,
+                                 citations=list(HIGH_PRESSURE_CITATIONS), context_status="available")
+    safety = query.task_type != "error_analysis" and any(is_hazard_act(text, previous=previous_prompt) for text in questions)
+    if safety and query.task_type != "knowledge_search":
+        query = query.model_copy(update={"task_type": "knowledge_search"})
+    # 안전 주제 지식 질문(접지는 왜 해? 등)은 대화 경로로 보내지 않는다. 뷰어 탭의 경로는 바꾸지 않는다.
+    safety_topic = safety or (query.task_type == "knowledge_search" and any(is_safety_topic(text) for text in questions))
     facts = authenticated_facts(query.context)
     try:
         # Pose/order playback validation applies only when consuming that
@@ -698,13 +740,13 @@ async def _execute_copilot_query(
     except _InvalidViewerPlayback:
         return error_response(422, "Invalid motion viewer playback context")
     relevant_viewer = viewer_analysis is not None and query.task_type in ("pose_recomm", "trajectory_recomm")
-    progress_kind = progress_question(query.prompt)
+    progress_kind = None if safety else progress_question(query.prompt)
     progress = viewer_progress_answer(query.context, query.prompt, progress_kind) if progress_kind else None
     if progress is not None:
         # 누락·보완·다음 Zone은 서명된 방문 순서와 최종 도막 게이트로만 답한다. 어느 탭이든 같다(viewer_progress).
         return _success_response(query, request_started, answer=progress[0], retrieval_used=False, citations=[],
                                  sequence_context=progress[1], context_status="available")
-    if is_current_next_question(query.prompt):
+    if is_current_next_question(query.prompt) and not safety:
         answer, scope, progress = await to_thread.run_sync(lambda: current_next_answer(
             query, sequences, reports, sequence_engine=sequence_engine, coating_engine=coating_engine,
         ))
@@ -729,7 +771,7 @@ async def _execute_copilot_query(
         )
     # A full reference plan is available before any trainee sequence or complete
     # report. It never authorizes realtime movement or supplies actual visits.
-    if (has_reference_plan and not relevant_viewer and query.task_type != "error_analysis"
+    if (has_reference_plan and not relevant_viewer and query.task_type != "error_analysis" and not safety
             and is_reference_order_question(query.prompt)):
         return await reference_answer()
     frame_direction = playback_direction_from_context(query.context)
@@ -744,9 +786,9 @@ async def _execute_copilot_query(
         return _success_response(query, request_started, answer=playback_direction_answer(frame_direction),
                                  retrieval_used=False, citations=[], sequence_context=frame_direction or {"scope": "current_frame", "analysis_status": "unavailable"},
                                  context_status="available" if available else "not_available")
-    if viewer_requested and (simple_direction_question(query.prompt) or preset_intent("trajectory_recomm", query.prompt) == "order_direction"):
+    if viewer_requested and not safety and (simple_direction_question(query.prompt) or preset_intent("trajectory_recomm", query.prompt) == "order_direction"):
         return frame_answer()
-    arm_claims = parse_viewer_arm_pose(query.context) if viewer_requested else None
+    arm_claims = parse_viewer_arm_pose(query.context) if viewer_requested and not safety else None
     coating_question = is_coating_status_question(query.prompt) or is_coating_advice_question(query.prompt)
     if arm_claims is not None and not coating_question and _BODY_PART.search(query.prompt) and not NOT_JOINT.search(query.prompt):
         # 손·손목·팔꿈치 질문은 어느 탭이든 팔 관절 엔진 결과로만 답한다(운영 q4·q5·q6: 작업 안내·모델의 "정상 범위" 답).
@@ -767,7 +809,7 @@ async def _execute_copilot_query(
         return _success_response(query, request_started, answer=answer, retrieval_used=False, citations=[],
                                  pose_context={"scope": "arm_pose_zones", "status": arm_claims.get("status")},
                                  context_status="available" if arm_claims.get("status") == "available" else "not_available")
-    if viewer_requested and preset_intent(query.task_type, query.prompt) is None:
+    if viewer_requested and not safety and preset_intent(query.task_type, query.prompt) is None:
         signed_answer = viewer_measurement_answer(query.context, query.prompt) or (
             viewer_findings_answer(query.context) if _EVALUATION_QUESTION.search(query.prompt) else None)
         if signed_answer is not None:
@@ -775,7 +817,8 @@ async def _execute_copilot_query(
                                      context_status="available")
     decision = None
     planned_pipeline = None
-    if query.task_type != "error_analysis" and pipeline_provider is not None and preset_intent(query.task_type, query.prompt) is None and not is_coating_status_question(query.prompt) and not _pose_engine_question(query):
+    if (query.task_type != "error_analysis" and pipeline_provider is not None and not safety_topic
+            and preset_intent(query.task_type, query.prompt) is None and not is_coating_status_question(query.prompt) and not _pose_engine_question(query)):
         try:
             planned_pipeline = await to_thread.run_sync(pipeline_provider)
         except Exception:
@@ -859,7 +902,7 @@ async def _execute_copilot_query(
         """서명된 뷰어 자료가 먼저이고, 없으면 완료 리포트의 도막 행."""
         return trusted_coating if trusted_coating is not None else await report_facts()
 
-    if is_coating_status_question(query.prompt) or (decision and decision["intent"] == "coating_status" and decision["kind"] == "lookup"):
+    if not safety and (is_coating_status_question(query.prompt) or (decision and decision["intent"] == "coating_status" and decision["kind"] == "lookup")):
         coating = await coating_facts()
         available = coating.get("analysis_status") == "available"
         return _success_response(query, request_started,
@@ -1130,7 +1173,7 @@ async def _execute_copilot_query(
     # Explicit Y/N remains a backwards-compatible override.  When omitted, any
     # question that reaches this knowledge-generation branch needs retrieval;
     # structured pose/order/report questions have already returned above.
-    use_rag = query.use_rag != "N"
+    use_rag = query.use_rag != "N" or safety
     session_summary = ""
     recent_turns: list[dict[str, str]] = dialogue_turns
     if query.session_id:
@@ -1212,7 +1255,8 @@ async def _execute_copilot_query(
                         query.request_id, max(scores) if scores else None, abstain_below, chat_redirected)
             if chat_redirected:
                 return await chat_answer()
-            return _success_response(query, request_started, answer=NO_EVIDENCE_ANSWER, retrieval_used=True, citations=[],
+            withheld, withheld_citations = guard_answer(questions, NO_EVIDENCE_ANSWER, [], previous=previous_prompt)
+            return _success_response(query, request_started, answer=withheld, retrieval_used=True, citations=withheld_citations,
                                      context_status="available" if session_summary or coating_advice_context or facts else "not_available")
     retrieved = retrieved_chunk_ids(result.get("rag_chunks") or []) if use_rag else []
     parsed = parse_knowledge_answer(str(result.get("response", "")), retrieved)
@@ -1220,6 +1264,8 @@ async def _execute_copilot_query(
     if query.response_mode == "quick":
         answer = re.sub(r"\n+\s*\[?근거\]?\s*:?\s*$", "", answer).rstrip()
     answer = _checked_generation(answer, query, instructions=_document_rules(pipeline))
+    # 위험한 행동을 해도 되는지 묻는 안전 질문은 한국어 답을 옮기기 전에 검사한다(바꾼 문장도 기존 번역을 지난다).
+    answer, citations = guard_answer(questions, answer, list(parsed.citations), previous=previous_prompt)
     logger.info(
         "copilot answer normalized request_id=%s repair_path=%s citations=%d dropped=%d",
         query.request_id,
@@ -1232,7 +1278,7 @@ async def _execute_copilot_query(
         request_started,
         answer=answer,
         retrieval_used=use_rag,
-        citations=list(parsed.citations),
+        citations=citations,
         degraded=parsed.repair_path in FAILED_REPAIR_PATHS or bool(result.get("deadline_hit", False)),
         coating_context=coating_advice_context,
         context_status="available" if session_summary or coating_advice_context or facts else "not_available",
@@ -1288,11 +1334,15 @@ async def execute_copilot_query(
         if len(normalized) > 8000:
             raise TranslationUnavailableError("Translated question exceeds analysis limit")
         analysis_query = query.model_copy(update={"prompt": normalized})
+        if query.language != "ko":
+            # 질문 번역과 답 번역 가운데 어디가 틀렸는지 가릴 수 있게 분석에 쓴 한국어 질문을 남긴다.
+            logger.info("copilot translated question request_id=%s language=%s ko=%r", query.request_id, query.language, normalized)
         response = await _execute_copilot_query(
             analysis_query, pipeline_provider=pipeline_provider, pending_answers=pending_answers,
             sequences=sequences, mcp_base_url=mcp_base_url, transport=transport,
             started=request_started, reports=reports, sequence_engine=sequence_engine,
             coating_engine=coating_engine, conversation_id=conversation_id,
+            original_prompt=query.prompt if query.language != "ko" else None,
         )
         if response.status_code != 200:
             return response
@@ -1322,8 +1372,10 @@ async def execute_copilot_query(
         )
     except Exception:
         logger.exception("copilot query: failed to store dialogue request_id=%s", query.request_id)
-    return JSONResponse(status_code=200, content=body,
-                        headers={ANSWER_SOURCE_HEADER: response.headers.get(ANSWER_SOURCE_HEADER, "analysis")})
+    headers = {ANSWER_SOURCE_HEADER: response.headers.get(ANSWER_SOURCE_HEADER, "analysis")}
+    if query.language != "ko":
+        headers[ANALYSIS_PROMPT_HEADER] = analysis_prompt_header(normalized)
+    return JSONResponse(status_code=200, content=body, headers=headers)
 
 
 def create_copilot_router(

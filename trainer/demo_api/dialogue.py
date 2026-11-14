@@ -125,6 +125,7 @@ _ZONE_MEASURES: Final = {"speed_mms": "selected_speed_mms", "reference_speed_mms
                          "reference_distance_mm": "median_distance_mm"}
 _MEASUREMENT: Final = re.compile(r"(\d+(?:\.\d+)?)(?:\s*[~∼-]\s*(\d+(?:\.\d+)?))?\s*(mm/s|cm/s|m/s|mm|cm|µm|μm|um|%|°)")
 _UNIT_ALIASES: Final = {"μm": "µm", "um": "µm"}
+_METRIC_UNIT: Final = {"deg": "°", "°": "°", "um": "µm", "µm": "µm", "μm": "µm", "mm": "mm", "cm": "cm", "mm/s": "mm/s", "%": "%"}
 _SENTENCE_END: Final = re.compile(r"(?<=[.!?])\s+|\n+")
 _SPEED_UNIT: Final = re.compile(r"(?<![A-Za-zµμ])(mm/s|cm/s|m/s)(?![A-Za-z])")
 _REFERENCE_WORD: Final = re.compile(r"표준|기준|목표|하한|상한")
@@ -142,6 +143,14 @@ def _grounded_values(facts: Any, prompt: str) -> dict[str, set[float]]:
 
     def walk(value: Any, key: str = "") -> None:
         if isinstance(value, Mapping):
+            # 뷰어 지표는 {"actual": 5.2, "reference": 3.1, "unit": "deg"}처럼 단위를 따로 싣는다(운영 T28: 5.2°가 지어낸 값으로 빠졌다).
+            unit = _METRIC_UNIT.get(str(value.get("unit", "")).strip(), "")
+            if unit:
+                # 답의 "-5.2°"는 부호를 떼고 읽힌다(_MEASUREMENT). 절댓값도 근거로 둔다.
+                pool.setdefault(unit, set()).update(
+                    number for name in ("actual", "reference")
+                    if isinstance(value.get(name), (int, float)) and not isinstance(value.get(name), bool)
+                    for number in (float(value[name]), abs(float(value[name]))))
             for child_key, child in value.items():
                 walk(child, str(child_key).lower())
         elif isinstance(value, (list, tuple)):
@@ -227,8 +236,8 @@ def drop_ungrounded(answer: str, *, facts: Any, prompt: str) -> str:
 
     answer = _LEGACY_LABEL.sub("", answer)
     answer = re.sub(r"\s*\([^()]*\)", lambda match: "" if invented(match[0]) else match[0], answer)
-    kept = [part.strip() for part in _SENTENCE_END.split(answer) if part.strip() and not invented(part)]
-    return " ".join(kept) or "세션 기록으로는 확인할 수 없습니다."
+    kept, _ = drop_sentences(answer, invented)
+    return kept if re.search(r"[가-힣A-Za-z]", kept) else "세션 기록으로는 확인할 수 없습니다."
 
 
 # --- 지침 유출 방어(2026-11-14 운영 q41: 주입 문구에 대화 모델이 시스템 지침을 그대로 출력) -------------------
@@ -257,15 +266,43 @@ def asks_for_instructions(prompt: str) -> bool:
     return bool(_INJECTION.search(prompt))
 
 
+# 뺀 문장 바로 뒤에 남은 문장의 접속어(2026-11-14 운영 T28 "따라서 건 각도는 괜찮았습니다.", T37 "이로 인해 …").
+# 앞 문장을 가리키는 말로 시작하면 그 문장도 뺀다. 논리 접속어만 있으면 접속어를 지운다.
+# 접속어는 문장 첫머리에서 띄어쓰기·쉼표가 뒤따를 때만 본다("즉시", "결국은"을 깎지 않는다).
+_POINT_BACK_WORDS: Final = r"이로\s*인해|이\s*때문에|그\s*때문에|그로\s*인해|그\s*결과|이에\s*따라|이러한\s*이유로|이런\s*이유로"
+_LOGICAL_WORDS: Final = r"따라서|그러므로|그래서|결국|즉|그러나|하지만|또한|그리고|게다가|한편|반면에|반면|그런데"
+_POINT_BACK: Final = re.compile(rf"^\s*(?:{_POINT_BACK_WORDS})(?=[\s,])")
+_CONNECTIVE: Final = re.compile(rf"^\s*(?:{_LOGICAL_WORDS}|{_POINT_BACK_WORDS})(?:\s*,\s*|\s+)")
+
+
 def drop_sentences(answer: str, bad: Callable[[str], bool]) -> tuple[str, bool]:
-    """`bad`가 참인 문장만 뺀다. 줄 나눔([답변]·[근거] 줄)은 지킨다. (남은 답, 뺀 것이 있는가)."""
-    lines, dropped = [], False
+    """`bad`가 참인 문장만 뺀다. 줄 나눔([답변]·[근거] 줄)은 지킨다. (남은 답, 뺀 것이 있는가).
+
+    뺀 문장 바로 뒤 문장이 앞 문장을 가리키면("이로 인해…") 함께 빼고, 접속어("따라서…")로 시작하면 접속어만 지운다.
+    """
+    # after: 0 = 앞 문장을 두었다, 1 = 앞 문장을 `bad`로 뺐다, 2 = 앞 문장을 고아로 뺐다(연달아 빼지 않는다).
+    lines, dropped, after = [], False, 0
     for line in answer.split("\n"):
         parts = re.split(r"(?<=[.!?])\s+", line)
-        kept = [part for part in parts if not (part.strip() and bad(part))]
-        dropped = dropped or len(kept) != len(parts)
+        kept: list[str] = []
+        changed = False
+        for part in parts:
+            if part.strip() and bad(part):
+                after, changed = 1, True
+                continue
+            if after and part.strip():
+                if after == 1 and _POINT_BACK.match(part):
+                    after, changed = 2, True
+                    continue
+                stripped = _CONNECTIVE.sub("", part, count=1)
+                changed = changed or stripped != part
+                part = stripped
+            if part.strip():
+                after = 0
+            kept.append(part)
+        dropped = dropped or changed
         if kept and any(part.strip() for part in kept) or not line.strip():
-            lines.append(" ".join(kept).rstrip() if len(kept) != len(parts) else line)
+            lines.append(" ".join(kept).rstrip() if changed else line)
     return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip(), dropped
 
 
