@@ -87,7 +87,7 @@ def test_non_hazard_viewer_questions_keep_their_engines() -> None:
 
 def test_safety_topic_question_in_the_knowledge_tab_still_avoids_the_conversation_route() -> None:
     pipeline = Pipeline(document="정전기 사고를 막으려면 접지합니다.")
-    _ask(pipeline, "스프레이 작업 때 접지는 왜 해?")
+    _ask(pipeline, "접지 안 하고 칠해도 돼?")  # v3.4.4: 주제만 묻는 "접지는 왜 해?"는 위험 종류가 없다
     assert pipeline.calls == ["run"]
 
 

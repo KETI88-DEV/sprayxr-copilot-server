@@ -111,7 +111,7 @@ def test_every_class_has_text_and_hand_tip_is_always_fixed() -> None:
 
 def test_hazard_topic_never_uses_the_conversation_route_and_gets_a_caution() -> None:
     pipeline = Pipeline(document="정전기 사고를 막으려면 접지합니다.")
-    data, _ = _ask(pipeline, "스프레이 작업 때 접지는 왜 해?")
+    data, _ = _ask(pipeline, "접지 안 하고 칠해도 돼?")  # v3.4.4: 주제만 묻는 "접지는 왜 해?"는 위험 종류가 없다
     assert pipeline.calls == ["run"]
     assert data["answer"] == "정전기 사고를 막으려면 접지합니다.\n" + g.CLASSES["grounding"].caution
     assert "DOC-doc_0036-C0117" in data["citations"]

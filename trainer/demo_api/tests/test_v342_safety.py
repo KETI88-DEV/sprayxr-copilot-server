@@ -118,7 +118,7 @@ def test_other_risky_permission_gets_the_class_sentence_and_its_citations() -> N
 
 def test_safety_questions_that_are_not_permission_questions_keep_the_documents_answer() -> None:
     pipeline = Pipeline(document="정전기 사고를 막으려면 도장 장비와 피도물을 접지합니다.")
-    data, _ = _ask(pipeline, "스프레이 작업 때 접지는 왜 해?")
+    data, _ = _ask(pipeline, "접지 안 하고 칠해도 돼?")
     # v3.4.3: 허락하는 말이 없는 답은 두고 그 종류의 주의 한 줄을 덧붙인다.
     assert pipeline.calls == ["run"] and data["answer"] == (
         "정전기 사고를 막으려면 도장 장비와 피도물을 접지합니다.\n" + safety_guard.CLASSES["grounding"].caution)
@@ -135,13 +135,15 @@ def test_finger_on_tip_is_recognised(text: str) -> None:
     assert safety_guard.hazard_class((text,)) == "hand_tip"
 
 
-@pytest.mark.parametrize("text", ["시너 냄새를 맡으면 어때?", "밀폐 구역 작업 수칙은?", "사다리 위에서 칠해도 되나요?", "눈에 도료가 튀면 어떻게 해?",
-                                  "호흡 보호구는 뭘 써야 해?", "도장 중 화재가 나면?", "Is it safe to spray near a heater without grounding?"])
+@pytest.mark.parametrize("text", ["시너 냄새를 맡으면 어때?", "사다리 위에서 칠해도 되나요?", "눈에 도료가 튀면 어떻게 해?",
+                                  "Is it safe to spray near a heater without grounding?"])
 def test_safety_topics(text: str) -> None:
     assert safety_guard.hazard_class((text,)) is not None
 
 
-@pytest.mark.parametrize("text", ["적정 이격거리는?", "다음 구역은?", "노즐 팁 크기는 뭘 써?", "저도막이 뭐야?"])
+# v3.4.4: 위험한 조건·행동 없이 주제만 묻는 질문("밀폐 구역 작업 수칙은?")은 위험 종류가 없다(일반 경로).
+@pytest.mark.parametrize("text", ["적정 이격거리는?", "다음 구역은?", "노즐 팁 크기는 뭘 써?", "저도막이 뭐야?",
+                                  "밀폐 구역 작업 수칙은?", "호흡 보호구는 뭘 써야 해?", "도장 중 화재가 나면?"])
 def test_non_safety_topics(text: str) -> None:
     assert safety_guard.hazard_class((text,)) is None
 
