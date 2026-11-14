@@ -61,6 +61,7 @@ from trainer.demo_api.pose_query import (
     answer_pose_question,
     answer_sequence_question,
     answer_zone_question,
+    NOT_JOINT,
     angle_note,
     asked_arm,
     asked_part,
@@ -243,7 +244,7 @@ def _pose_engine_question(query: CopilotQueryRequest) -> bool:
     분류가 빗나가면 자유 대화가 채점 없이 수치와 판정을 지어낸다(2026-11-11 재현).
     """
     return (query.task_type == "pose_recomm" and not is_coating_status_question(query.prompt)
-            and not is_coating_advice_question(query.prompt)
+            and not is_coating_advice_question(query.prompt) and not NOT_JOINT.search(query.prompt)
             and bool(re.search(r"자세(?!히|하게|한)|동작|교정|고쳐|고치|pose|posture|팔꿈치|어깨|무릎|허리|elbow|shoulder|knee|(?:zone|존|구역)\s*\d+",
                                query.prompt, re.I)))
 
@@ -737,7 +738,7 @@ async def _execute_copilot_query(
         return frame_answer()
     arm_claims = parse_viewer_arm_pose(query.context) if viewer_requested else None
     coating_question = is_coating_status_question(query.prompt) or is_coating_advice_question(query.prompt)
-    if arm_claims is not None and not coating_question and _BODY_PART.search(query.prompt):
+    if arm_claims is not None and not coating_question and _BODY_PART.search(query.prompt) and not NOT_JOINT.search(query.prompt):
         # 손·손목·팔꿈치 질문은 어느 탭이든 팔 관절 엔진 결과로만 답한다(운영 q4·q5·q6: 작업 안내·모델의 "정상 범위" 답).
         claims = viewer_claims(query.context)
         playback = (viewer_analysis or {}).get("playback_context") or (claims[0].get("playback_context") if claims else None)

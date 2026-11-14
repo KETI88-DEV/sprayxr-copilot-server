@@ -129,3 +129,19 @@ def test_viewer_pose_panels_carry_the_same_hint() -> None:
     static = Path(pose_query.__file__).with_name("static")
     assert "숙련자도 보통 70% 안팎" in (static / "motion_viewer_v2.html").read_text(encoding="utf-8")
     assert "숙련자도 보통 70% 안팎" in (static / "motion_viewer_pose.js").read_text(encoding="utf-8")
+
+
+# --- 독립 검토 지적(2026-11-14): 안전·통증·도구 질문은 팔 관절 엔진 답이 아니다 ----------------------------
+
+@pytest.mark.parametrize("prompt", ["손목 보호대 착용해야 해?", "팔꿈치 통증 예방법", "오른쪽 손잡이 압력", "오른손으로 잡은 건 각도는?"])
+@pytest.mark.parametrize("tab", ["pose", "knowledge"])
+def test_safety_pain_and_tool_questions_skip_the_arm_engine(prompt: str, tab: str) -> None:
+    result = ask(prompt, tab=tab, pipeline=_model("모델 답입니다."))
+    assert result["calls"], result["answer"]
+    assert (result["pose_context"] or {}).get("scope") != "arm_pose" and pose_query.ANGLE_NOTE not in result["answer"]
+
+
+def test_angle_note_is_only_for_joint_angles() -> None:
+    assert pose_query.angle_note("팔꿈치 각도가 몇 도 차이 나?")
+    assert pose_query.angle_note("오른손으로 잡은 건 각도는?") == ""
+    assert pose_query.angle_note("오른팔은 어떻게 고쳐?") == ""

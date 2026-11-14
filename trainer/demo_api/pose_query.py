@@ -41,6 +41,9 @@ PART_WORDS: Final[dict[str, str]] = {"ForeArm": "팔꿈치", "Hand": "손목", "
 _PART_QUESTION: Final = (("ForeArm", re.compile(r"팔꿈치|elbow", re.I)), ("Hand", re.compile(r"손목|wrist", re.I)),
                          ("UpperArm", re.compile(r"위팔|상완|upper\s*arm", re.I)))
 _ANGLE_QUESTION: Final = re.compile(r"각도|몇\s*도|°|degree|angle", re.I)
+# 손·팔 낱말이 있어도 관절 자세가 아닌 질문: 보호구·통증·손잡이·건(도구) 각도·압력(2026-11-14 독립 검토).
+NOT_JOINT: Final = re.compile(r"보호대|보호구|장갑|착용|통증|아프|아파|부상|예방|스트레칭|손잡이|그립|잡은|쥔|쥐고|"
+                              r"(?<![가-힣])건(?![가-힣])|건\s*(?:각도|을|의|이|은)|스프레이\s*건|도구|노즐|압력|안전", re.I)
 ANGLE_NOTE: Final[str] = ("채점 엔진은 관절 각도를 재지 않고 숙련자 평균 위치와의 거리·방향을 비교하므로 각도 수치는 드릴 수 없습니다.")
 
 
@@ -474,7 +477,8 @@ def asked_part(prompt: str) -> str | None:
 
 def angle_note(prompt: str) -> str:
     """각도를 물었으면 왜 각도 수치가 없는지 먼저 밝힌다(지어내지 않는다)."""
-    return ANGLE_NOTE + " " if _ANGLE_QUESTION.search(prompt) else ""
+    joint = asked_part(prompt) is not None or bool(re.search(r"팔|arm", prompt, re.I))
+    return ANGLE_NOTE + " " if _ANGLE_QUESTION.search(prompt) and joint and not NOT_JOINT.search(prompt) else ""
 
 
 def asks_whole_session(prompt: str, intent: str | None = None) -> bool:
