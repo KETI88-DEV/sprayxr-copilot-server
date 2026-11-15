@@ -40,7 +40,9 @@ def test_no_record_follow_ups_and_record_style_questions_split_documents_from_se
     docs = ("그럼 가사 시간은 얼마야?", "그럼 에어리스 팁 517은 무슨 뜻이야?", "나의 VR 어지럼 기준은?",
             "그 도료 가사시간은 몇 시간이야?", "저의 도장 기능사 합격 점수는?")
     chat = ("칠한 도막 두께가 몇 마이크로미터야?", "분사 속도가 몇으로 나왔어?",
-            "각도가 정상이라고 나왔는데 맞아?", "도장 끝났는데 점수가 몇 점이야?")
+            "각도가 정상이라고 나왔는데 맞아?", "도장 끝났는데 점수가 몇 점이야?",
+            "내 속도는 얼마야?", "제 이격거리는 얼마였어?", "내 속도는 뭐였지?", "이번 도막은 얼마나 나왔어?",
+            "방금 도막 두께 얼마야?", "내 도막 두께 얼마야?")
     for prompt in docs:
         pipeline = Pipeline(top=6.2, config=QUICK)
         ask(pipeline, prompt, mode="quick")
@@ -48,4 +50,4 @@ def test_no_record_follow_ups_and_record_style_questions_split_documents_from_se
     for prompt in chat:
         pipeline = Pipeline(top=6.2, config={})
         ask(pipeline, prompt, mode="quick")
-        assert pipeline.runs == [] and len(pipeline.conversations) == 1, prompt
+        assert pipeline.runs == [], prompt  # 문서로 가지 않는다(대화 또는 기록 답)

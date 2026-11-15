@@ -229,7 +229,7 @@ def _grounded_route(prompt: str, subject: Mapping[str, Any] | None, *, viewer: b
     """기록이나 도장 지식을 묻는 질문인가. 그러면 대화 모델 대신 근거 있는 경로로 답한다.
 
     서명된 기록이 있으면: 기록 표지, 또는 도메인 낱말 + 질문형.
-    기록이 없으면(사용자 결정 4): 도메인 낱말이 있고, 지식 문형이면 문서, 아니면 기록 표지·후속 형태는 세션 대화, 나머지는 문서.
+    기록이 없으면(사용자 결정 4): 도메인 낱말이 있고, 기록 표지면 세션 대화, 지식 문형이면 문서, 후속 형태면 세션 대화, 나머지는 문서.
     1인칭("제·나")은 도메인 낱말과 함께일 때만 표지다("제 이름 뭐예요?"는 잡담).
     """
     domain = is_domain_question(prompt)
@@ -237,7 +237,9 @@ def _grounded_route(prompt: str, subject: Mapping[str, Any] | None, *, viewer: b
         return has_record_marker(prompt, previous_subject=subject, person=domain) or (domain and bool(_KNOWLEDGE_QUESTION.search(prompt)))
     if not domain:
         return False
-    return bool(_KNOWLEDGE_SHAPE.search(prompt)) or not (_FOLLOWUP.search(prompt) or has_record_marker(prompt, previous_subject=subject))
+    if has_record_marker(prompt, previous_subject=subject):
+        return False  # 내 기록을 묻는 말("내 속도는 얼마야?")은 지식 문형이어도 세션 대화다.
+    return bool(_KNOWLEDGE_SHAPE.search(prompt)) or not _FOLLOWUP.search(prompt)
 
 
 def _abstain_below(pipeline: object, response_mode: str) -> float | None:
