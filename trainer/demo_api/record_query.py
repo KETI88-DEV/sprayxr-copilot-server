@@ -10,11 +10,11 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Final
 
-from trainer.demo_api.coating_query import (_CAUSES, _DISTANCE_WORDS, _EFFECTS, _SIMILAR, distance_sentence, measured_relation, measured_sentence,
+from trainer.demo_api.coating_query import (_CAUSES, _RECORD_SENTENCE, _DISTANCE_WORDS, _EFFECTS, _SIMILAR, distance_sentence, measured_relation, measured_sentence,
                                             parse_viewer_coating_context, zone_measures)
 from trainer.demo_api.coating_assessment import grade_phrase, mean_text
 from trainer.demo_api.copilot_intent import preset_intent
-from trainer.demo_api.dialogue import viewer_claims
+from trainer.demo_api.dialogue import drop_sentences, viewer_claims
 from trainer.demo_api.pose_query import josa
 from trainer.demo_api.viewer_arm_pose import parse_viewer_arm_pose
 from trainer.demo_api.viewer_progress import gate_lines, progress_question, viewer_progress_answer
@@ -714,3 +714,76 @@ def answer_record_question(context: str | None, prompt: str, *, task_type: str,
     subject = ({"domain": part_domain(first) or "overall", "zone_ids": _subject_zones(facts, first), "operator": first.operator or first.code or ""}
                if first and first.code else None)
     return RecordAnswer(text, query.kind, subject, query.knowledge_question or None, sequence_context)
+
+
+# ---------------------------------------------------------------- 모델이 만든 답의 출구 검사 G3~G6
+_NAMED_ZONE: Final = re.compile(r"(?:zone|존|구역)\s*(\d+)|(\d+)\s*번\s*(?:zone|존|구역)", re.I)
+_SUPERLATIVE: Final = re.compile(r"(?:가장|제일)\D{0,15}?(얇|두껍|두꺼|낮|높|멀|가깝|가까)")
+_EXISTENCE: Final = re.compile(r"(?:zone|존|구역|데|곳)[은는이가]?\s*(없|있)(?:습니다|어요|다)", re.I)
+_VERDICT_WORD: Final = re.compile(r"불?합격|완료|끝났|다\s*됐|다시\s*안\s*가도|정상\s*범위")
+_CONDITIONAL: Final = re.compile(r"[되하이]면|다면|[한된]\s*[뒤후]|때")  # "완료되면 …"은 판정이 아니라 절차다
+_STANDARD_WORD: Final = re.compile(r"권장|기준|표준|적정")
+_MM_VALUE: Final = re.compile(r"(\d[\d,]*(?:\.\d+)?)\s*(mm|cm)")
+
+
+def ground_generated(answer: str, facts: RecordFacts, *, zone: str | None, drop_only: bool = False, marked: bool = True) -> str:
+    """모델 답의 문장 가운데 이 기록의 최저·유무·판정·기준값을 말하는 것을 서명 자료의 문장으로 바꾼다(`drop_only`면 뺀다).
+
+    `marked`는 질문이 기록 표지를 가졌는가. 표지도 없고 문장에 Zone 번호·"이 기록" 같은 말도 없으면 일반 지식이라 건드리지 않는다.
+    """
+    rows = facts.target_rows
+    shown_distance = {"멀": "higher", "가깝": "lower", "가까": "lower"}
+
+    def fix(sentence: str) -> str | None:
+        named = [a or b for a, b in _NAMED_ZONE.findall(sentence)]
+        if not (marked or named or _RECORD_SENTENCE.search(sentence)):
+            return None
+        thick_zones = [r for r in rows if r.get("grade") == "above"]  # 과도막 Zone = 칠한 곳 평균이 목표의 1.5배 이상(R2의 첫 수)
+        if (top := _SUPERLATIVE.search(sentence)) and named:  # G3
+            word = top[1]
+            if word in shown_distance:
+                want = shown_distance[word]
+                truth = [z for z, m in facts.measures.items() if measured_relation(m, "distance_mm") == want]
+                return _distance_filter(facts, want) if truth and not set(named) <= set(truth) else None
+            if word in {"얇", "두껍", "두꺼"} or re.search(r"도막|두께", sentence):
+                thin = word in {"얇", "낮"}
+                ranked = sorted((r for r in rows if _is_num(r.get("thickness_um"))), key=lambda r: r["thickness_um"], reverse=not thin)
+                return _thickness_ranking(facts, thinnest=thin) if ranked and named[0] != str(ranked[0]["zone_id"]) else None
+        if (claim := _EXISTENCE.search(sentence)) and not _VERDICT_WORD.search(sentence):  # G4
+            exists = claim[1] == "있"
+            if re.search(r"숙련자|전문가|전문가보다", sentence) and (relation := re.search(r"멀|가까|비슷", sentence)):
+                want = {"멀": "higher", "가": "lower", "비": "similar"}[relation[0]]
+                actual = any(measured_relation(m, "distance_mm") == want for m in facts.measures.values())
+                return _distance_filter(facts, want) if actual != exists and facts.measures else None
+            if re.search(r"과도막|두껍|두꺼", sentence) and rows:
+                return _overpaint(facts) if bool(thick_zones) != exists else None
+        if _VERDICT_WORD.search(sentence) and not _CONDITIONAL.search(sentence):  # G5
+            if re.search(r"합격", sentence):
+                return _external(facts)
+            target = tuple(dict.fromkeys(named or ([zone] if zone else [])))
+            return _completion(facts, target)
+        for value, unit in _MM_VALUE.findall(sentence):  # G6
+            if not _STANDARD_WORD.search(sentence):
+                break
+            mm = float(value.replace(",", "")) * (10 if unit == "cm" else 1)
+            for z in named or ([zone] if zone else list(facts.measures)):
+                ref = (facts.measures.get(z) or {}).get("reference_distance_mm")
+                if _is_num(ref) and (round(mm) == round(ref) or round(mm, 1) == round(ref, 1)):
+                    return (f"Zone {z}의 숙련자 측정 중앙값 이격거리는 {ref:,.1f} mm입니다. 숙련자가 실제로 칠한 값을 잰 것이며 정해진 기준은 아닙니다.")
+        return None
+
+    if drop_only:
+        return drop_sentences(answer, lambda sentence: fix(sentence) is not None)[0]
+    seen: set[str] = set()
+    lines: list[str] = []
+    for line in answer.split("\n"):
+        parts: list[str] = []
+        for part in re.split(r"(?<=[.!?])\s+", line):
+            fixed = fix(part) if part.strip() else None
+            if fixed is None:
+                parts.append(part)
+            elif fixed not in seen:
+                seen.add(fixed)
+                parts.append(fixed)
+        lines.append(" ".join(parts))
+    return "\n".join(lines)

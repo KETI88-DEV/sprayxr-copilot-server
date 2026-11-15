@@ -36,7 +36,7 @@ from urllib.parse import quote
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Annotated, Final
+from typing import TYPE_CHECKING, Annotated, Any, Final
 
 from anyio import to_thread
 from fastapi import APIRouter, Body, FastAPI, Request
@@ -50,7 +50,7 @@ from trainer.demo_api.coating_query import (
     report_coating_context, target_advice_facts, zone_measures)
 from trainer.demo_api.copilot_intent import classify_question_intent, fallback_intent, preset_intent, is_coating_status_question, is_coating_advice_question, is_domain_question, is_general_painting_knowledge
 from trainer.demo_api.dialogue import (INSTRUCTION_REFUSAL, asks_for_instructions, authenticated_facts, conversation_key,
-                                       drop_misattributed_zones, drop_ungrounded, guard_generated_answer, parse_plan, plain_answer,
+                                       drop_misattributed_zones, drop_ungrounded, guard_generated_answer, has_body, parse_plan, plain_answer,
                                        viewer_claims, zone_fact_numbers,
                                        selected_direction_answer, ungrounded_measurements, viewer_findings_answer,
                                        viewer_measurement_answer, viewer_metadata_context, without_generated_answers, without_hanzi)
@@ -83,7 +83,7 @@ from trainer.demo_api.safety_guard import (
 )
 from trainer.demo_api.reference_order_query import actual_order_intent, current_next_answer, is_current_next_question, is_reference_order_question, resolve_reference_target, reference_order_answer
 from trainer.demo_api.v1_store import V1Store
-from trainer.demo_api.record_query import BODY_PART, DIRECTION_WORD, WORST_ZONE, RecordAnswer, answer_record_question, has_record_marker, previous_subject
+from trainer.demo_api.record_query import BODY_PART, DIRECTION_WORD, WORST_ZONE, RecordAnswer, RecordFacts, answer_record_question, ground_generated, has_record_marker, previous_subject
 from trainer.demo_api.viewer_progress import progress_question, viewer_progress_answer
 from trainer.demo_api.query_runtime import generation_slot_for, retrieval_question, select_query_pipeline, translation_pipeline_for
 from trainer.scripts.generation_slot import GENERATION_SLOT  # Legacy slot identity for unconfigured clients.
@@ -628,14 +628,38 @@ def _viewer_measures(context: str | None, prompt: str) -> tuple[dict[str, dict[s
     return zone_measures(claims[1]), requested_zone(prompt, None) or (str(playback["zone_id"]) if here else None)
 
 
-def _checked_generation(answer: str, query: CopilotQueryRequest, *, instructions: tuple[str, ...] = ()) -> str:
-    """모델이 만든 답의 출구 검사: 지침·내부 키 유출, 다른 Zone의 수치, 거꾸로 된 인과·실측과 엇갈리는 조언."""
+_NO_ANSWER: Final = "제공된 자료로는 답할 수 없습니다."
+
+
+def _checked_generation(answer: str, query: CopilotQueryRequest, *, instructions: tuple[str, ...] = (),
+                        evidence: tuple[str, ...] | None = None, drop_only: bool = False, safety: bool = False) -> str:
+    """모델이 만든 답의 출구 검사: 지침·내부 키 유출, 근거 없는 수치, 다른 Zone의 수치, 거꾸로 된 인과·조언, 이 기록의 최저·유무·판정·기준값.
+
+    `evidence`(검색 조각 본문)를 주는 문서 경로만 수치 근거 검사(G1)를 한다. 대화 경로는 세션 요약을 따로 대조한다.
+    `drop_only`(섞인 질문의 문서 문장)는 바꾸지 않고 빼며, 다 빠지면 빈 문자열이다(기록 문장은 호출부가 붙인다).
+    """
     measures, zone = _viewer_measures(query.context, query.prompt)
-    answer = drop_misattributed_zones(guard_generated_answer(answer, instructions=instructions), _zone_facts(query.context))
+    answer = guard_generated_answer(answer, instructions=instructions)
+    had_body = has_body(answer)
     # 인과·조언 검사는 이 기록(서명된 뷰어 문맥)에 대한 답에만 한다. 일반 지식 답은 그대로 둔다.
+    record = RecordFacts.from_context(query.context) if measures is not None else None
+    if record is not None and evidence is not None and ungrounded_measurements(answer, facts=_grounding(query, evidence), prompt=query.prompt, extended=True):
+        answer = drop_ungrounded(answer, facts=_grounding(query, evidence), prompt=query.prompt, extended=True)
+    answer = drop_misattributed_zones(answer, _zone_facts(query.context))
     if measures is None:
         return answer
-    return drop_contradicted_causes(answer, measures, default_zone=zone, record_zone=_playback_zone(query.context))
+    answer = drop_contradicted_causes(answer, measures, default_zone=zone, record_zone=_playback_zone(query.context))
+    if record is not None and not safety:
+        answer = ground_generated(answer, record, zone=zone, drop_only=drop_only, marked=has_record_marker(query.prompt))
+    if had_body and (not has_body(answer) or answer.strip() in {_NO_ANSWER, "세션 기록으로는 확인할 수 없습니다."}):
+        return "" if drop_only else _NO_ANSWER
+    return answer
+
+
+def _grounding(query: CopilotQueryRequest, evidence: tuple[str, ...]) -> dict[str, Any]:
+    """문서 답의 수치가 기댈 수 있는 값: 서명된 대화 자료, 도막·팔 자세 문맥, 검색 조각 본문. 대화 기록은 넣지 않는다."""
+    return {"facts": authenticated_facts(query.context), "coating": parse_viewer_coating_context(query.context, "knowledge_search"),
+            "arm": parse_viewer_arm_pose(query.context), "evidence": list(evidence)}
 
 
 def _playback_zone(context: str | None) -> str | None:
@@ -1344,7 +1368,9 @@ async def _execute_copilot_query(
     answer = parsed.body
     if query.response_mode == "quick":
         answer = re.sub(r"\n+\s*\[?근거\]?\s*:?\s*$", "", answer).rstrip()
-    answer = _checked_generation(answer, query, instructions=_document_rules(pipeline))
+    answer = _checked_generation(
+        answer, query, instructions=_document_rules(pipeline), safety=safety, drop_only=mixed is not None,
+        evidence=tuple(str(c.get("text", "")) for c in result.get("rag_chunks") or [] if isinstance(c, dict)))
     # 위험한 행동을 해도 되는지 묻는 안전 질문은 한국어 답을 옮기기 전에 검사한다(바꾼 문장도 기존 번역을 지난다).
     answer, citations = guard_answer(safety_class if safety else None, answer, list(parsed.citations))
     if mixed is not None:
