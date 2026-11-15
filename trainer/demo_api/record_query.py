@@ -719,9 +719,10 @@ def answer_record_question(context: str | None, prompt: str, *, task_type: str,
 # ---------------------------------------------------------------- 모델이 만든 답의 출구 검사 G3~G6
 _NAMED_ZONE: Final = re.compile(r"(?:zone|존|구역)\s*(\d+)|(\d+)\s*번\s*(?:zone|존|구역)", re.I)
 _SUPERLATIVE: Final = re.compile(r"(?:가장|제일)\D{0,15}?(얇|두껍|두꺼|낮|높|멀|가깝|가까)")
-_EXISTENCE: Final = re.compile(r"(?:zone|존|구역|데|곳)[은는이가]?\s*(없|있)(?:습니다|어요|다)", re.I)
+_EXISTENCE: Final = re.compile(r"(없|있)(?:습니다|어요|다)(?!는)")
 _VERDICT_WORD: Final = re.compile(r"불?합격|완료|끝났|다\s*됐|다시\s*안\s*가도|정상\s*범위")
-_CONDITIONAL: Final = re.compile(r"[되하이]면|다면|[한된]\s*[뒤후]|때")  # "완료되면 …"은 판정이 아니라 절차다
+_CONDITIONAL: Final = re.compile(r"(?:완료|끝났)(?:되|된|됐)?(?:면|다면|뒤|후)|다\s*칠하면")  # 판정 낱말이 조건절 안에 있을 때만 절차다
+_BARE_PASS: Final = re.compile(r"^\W*불?합격(?:입니다|이에요|이다)\W*$")  # "합격입니다."만 있는 문장은 이 기록의 판정이다
 _STANDARD_WORD: Final = re.compile(r"권장|기준|표준|적정")
 _MM_VALUE: Final = re.compile(r"(\d[\d,]*(?:\.\d+)?)\s*(mm|cm)")
 
@@ -757,7 +758,7 @@ def ground_generated(answer: str, facts: RecordFacts, *, zone: str | None, drop_
                 return _distance_filter(facts, want) if actual != exists and facts.measures else None
             if re.search(r"과도막|두껍|두꺼", sentence) and rows:
                 return _overpaint(facts) if bool(thick_zones) != exists else None
-        if _VERDICT_WORD.search(sentence) and not _CONDITIONAL.search(sentence):  # G5
+        if _VERDICT_WORD.search(sentence) and not _CONDITIONAL.search(sentence) and (named or zone or _RECORD_SENTENCE.search(sentence) or _BARE_PASS.search(sentence)):  # G5: 질문 표지만으로는 켜지 않는다
             if re.search(r"합격", sentence):
                 return _external(facts)
             target = tuple(dict.fromkeys(named or ([zone] if zone else [])))
@@ -766,9 +767,10 @@ def ground_generated(answer: str, facts: RecordFacts, *, zone: str | None, drop_
             if not _STANDARD_WORD.search(sentence):
                 break
             mm = float(value.replace(",", "")) * (10 if unit == "cm" else 1)
+            decimal = "." in value
             for z in named or ([zone] if zone else list(facts.measures)):
                 ref = (facts.measures.get(z) or {}).get("reference_distance_mm")
-                if _is_num(ref) and (round(mm) == round(ref) or round(mm, 1) == round(ref, 1)):
+                if _is_num(ref) and (round(mm, 1) == round(ref, 1) if decimal else int(mm) == int(ref + 0.5)):
                     return (f"Zone {z}의 숙련자 측정 중앙값 이격거리는 {ref:,.1f} mm입니다. 숙련자가 실제로 칠한 값을 잰 것이며 정해진 기준은 아닙니다.")
         return None
 

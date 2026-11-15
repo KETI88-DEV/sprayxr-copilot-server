@@ -643,8 +643,10 @@ def _checked_generation(answer: str, query: CopilotQueryRequest, *, instructions
     had_body = has_body(answer)
     # 인과·조언 검사는 이 기록(서명된 뷰어 문맥)에 대한 답에만 한다. 일반 지식 답은 그대로 둔다.
     record = RecordFacts.from_context(query.context) if measures is not None else None
-    if record is not None and evidence is not None and ungrounded_measurements(answer, facts=_grounding(query, evidence), prompt=query.prompt, extended=True):
-        answer = drop_ungrounded(answer, facts=_grounding(query, evidence), prompt=query.prompt, extended=True)
+    if record is not None and evidence is not None:
+        pool = _grounding(query, evidence)
+        if ungrounded_measurements(answer, facts=pool, prompt=query.prompt, extended=True):
+            answer = drop_ungrounded(answer, facts=pool, prompt=query.prompt, extended=True)
     answer = drop_misattributed_zones(answer, _zone_facts(query.context))
     if measures is None:
         return answer
@@ -652,7 +654,10 @@ def _checked_generation(answer: str, query: CopilotQueryRequest, *, instructions
     if record is not None and not safety:
         answer = ground_generated(answer, record, zone=zone, drop_only=drop_only, marked=has_record_marker(query.prompt))
     if had_body and (not has_body(answer) or answer.strip() in {_NO_ANSWER, "세션 기록으로는 확인할 수 없습니다."}):
-        return "" if drop_only else _NO_ANSWER
+        if drop_only:
+            return ""
+        found = answer_record_question(query.context, query.prompt, task_type=query.task_type, recent_turns=())  # 분류된 기록 질문이면 그 결정적 답
+        return found.text if found is not None and found.kind != "mixed" else _NO_ANSWER
     return answer
 
 

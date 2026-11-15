@@ -64,3 +64,50 @@ def test_verdict_word_without_a_record_marker_is_left_alone() -> None:  # P13: �
     pipeline = RecordingPipeline(document="[답변] 건조 완료 상태에서 덧칠합니다.")
     data = ask("건조 후 덧칠 시점은 어떻게 판단해?", tab="knowledge", playback=AT_35S, pipeline=pipeline)
     assert "건조 완료 상태에서 덧칠합니다." in data["answer"], data["answer"]
+
+
+# ---- fix round 1
+@pytest.mark.parametrize("answer", ["Zone 3은 완료된 뒤 덧칠하면 됩니다.", "Zone 3은 이미 완료되어 덧칠하면 됩니다.", "Zone 3은 완료됐을 때 덧칠합니다."])
+def test_false_completion_claim_with_a_conditional_word_is_still_replaced(answer: str) -> None:
+    out = ground_generated(answer, facts(AT_35S), zone=None)
+    assert out != answer and "Zone 3" in out and "보완" in out, out
+
+
+def test_completion_inside_a_conditional_clause_passes() -> None:
+    answer = "Zone 3이 완료되면 다음 Zone으로 갑니다."
+    assert ground_generated(answer, facts(AT_35S), zone=None) == answer
+
+
+@pytest.mark.parametrize("answer", ["건조 완료 후 덧칠합니다.", "도막이 정상 범위인지 확인하세요."])
+def test_general_verdict_words_pass_even_in_a_marked_question(answer: str) -> None:
+    assert ground_generated(answer, facts(AT_35S), zone=None, marked=True) == answer
+    assert ground_generated(answer, facts(AT_35S), zone=None, marked=True, drop_only=True) == answer
+
+
+@pytest.mark.parametrize("answer,changed", [("숙련자보다 멀리서 뿌린 Zone은 있습니다.", False), ("숙련자보다 멀리서 뿌린 Zone은 없습니다.", True),
+                                            ("과도막은 없습니다.", False), ("과도막은 있습니다.", True), ("과도막이 발생한 Zone은 있습니다.", True)])
+def test_existence_claims_are_checked_in_both_directions(answer: str, changed: bool) -> None:
+    assert (ground_generated(answer, facts(AT_24S), zone=None) != answer) is changed
+
+
+def _query(prompt: str):
+    from trainer.demo_api.copilot_contracts import CopilotQueryRequest
+    data = payload()
+    return CopilotQueryRequest(user_id="COPILOT-AI-TEST", session_id=data["selected_session_id"], scenario_id=str(data["mode_id"]),
+                               task_type="knowledge_search", prompt=prompt, response_mode="quick",
+                               context=context("knowledge_search", data, AT_35S))
+
+
+def test_safety_questions_skip_the_record_claim_checks() -> None:
+    from trainer.demo_api.copilot_router import _checked_generation
+    query = _query("내 기록에서 이 구역은 어때?")
+    assert "합격" not in _checked_generation("Zone 3은 합격입니다.", query)
+    assert _checked_generation("Zone 3은 합격입니다.", query, safety=True) == "Zone 3은 합격입니다."
+
+
+def test_everything_dropped_gives_the_deterministic_answer_or_the_no_answer_line() -> None:
+    from trainer.demo_api.copilot_router import _checked_generation
+    drop = "Zone 3은 속도를 숙련자 수준으로 올리세요."
+    assert "Zone 8" in _checked_generation(drop, _query("칠 다 했는데 어디가 제일 얇게 나왔어?")) and "숙련자 수준" not in _checked_generation(drop, _query("칠 다 했는데 어디가 제일 얇게 나왔어?"))
+    assert _checked_generation(drop, _query("건 잡는 법 알려줘")) == "제공된 자료로는 답할 수 없습니다."
+    assert _checked_generation(drop, _query("건 잡는 법 알려줘"), drop_only=True) == ""
