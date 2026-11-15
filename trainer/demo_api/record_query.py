@@ -47,7 +47,7 @@ _DIRECTION_ONLY: Final = re.compile(DIRECTION_WORD.pattern.replace("|패턴", ""
 # 기록 표지. "저도막"의 저+도처럼 낱말 속 글자는 걸리지 않게 앞뒤를 본다.
 _PERSON: Final = re.compile(r"(?<![가-힣])(?:내|제|저|나|우리)(?:가|는|한테|\s)")  # T20 T21 T44 T45
 _RECORD_REF: Final = re.compile(r"기록|이번|여기|화면에|(?:zone|존|구역)\s*\d|이\s*(?:zone|존|구역)|지금|현재|방금", re.I)  # T39 T50 v22
-_PAST: Final = re.compile(r"칠했|칠한|뿌렸|뿌린|나왔|나온|나와|됐|끝난|끝났|완료|합격|떠\s*있|정상이라고\s*나")  # T34 T36 T42
+_PAST: Final = re.compile(r"칠했|칠한|뿌렸|뿌린|나왔|나온|나와|됐|끝난|끝났|완료|떠\s*있|정상이라고\s*나")  # T34 T36 T42
 _EVALUATED: Final = re.compile(r"괜찮았|어땠|적당했|잘한|나쁜\s*거|맞지|거지")  # T27 T28 T43
 _SPATIAL: Final = re.compile(r"거기|거긴|그곳|그\s*(?:zone|존|구역)", re.I)  # T38 T43
 _ANAPHORA: Final = re.compile(r"그럼|그렇게")  # T37 T41 T46 — 앞 질문이 있을 때만 표지다
@@ -125,9 +125,9 @@ def part_domain(part: RecordPart) -> str | None:
     return part.metric if part.code == "work_metric" and part.metric else CODE_DOMAIN.get(part.code or "")
 
 
-def has_record_marker(prompt: str, *, previous_subject: Mapping[str, Any] | None = None, person: bool = True, past: bool = True) -> bool:
-    """`person=False`면 1인칭("제·나")만으로는 표지로 세지 않는다(라우터의 잡담 판정). `past=False`면 "합격" 같은 과거·결과 낱말을 세지 않는다(기록 없이 묻는 공개 지식 질문)."""
-    return bool((person and _PERSON.search(prompt)) or _RECORD_REF.search(prompt) or (past and _PAST.search(prompt)) or _EVALUATED.search(prompt)
+def has_record_marker(prompt: str, *, previous_subject: Mapping[str, Any] | None = None, person: bool = True) -> bool:
+    """`person=False`면 1인칭("제·나")만으로는 표지로 세지 않는다(라우터의 잡담 판정)."""
+    return bool((person and _PERSON.search(prompt)) or _RECORD_REF.search(prompt) or _PAST.search(prompt) or _EVALUATED.search(prompt)
                 or _SPATIAL.search(prompt) or (previous_subject and _ANAPHORA.search(prompt)))
 
 

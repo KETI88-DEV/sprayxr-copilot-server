@@ -219,14 +219,25 @@ MIXED_DOCUMENT_RULE: Final = "이 기록의 수치·Zone·판정은 말하지 �
 MIXED_NO_EVIDENCE: Final = "문서에서는 이 질문에 답할 근거를 찾지 못했습니다."
 
 
-_FOLLOWUP: Final = re.compile(r"나의|저의|그럼|그렇게|그\s")  # 기록 없는 세션의 후속 질문("그럼 속도는?")은 대화로 둔다.
+# 기록 없는 세션의 후속 질문("그럼 속도는?")은 대화로 둔다.
+_FOLLOWUP: Final = re.compile(r"나의|저의|그럼|그렇게")
+# 규정·정의·권장값을 묻는 문형. 이것이면 후속·1인칭 낱말이 있어도 문서로 간다. "몇 점 이상"은 되고 "몇 점이야"는 기록 질문이다.
+_KNOWLEDGE_SHAPE: Final = re.compile(r"기준|뜻|의미|무엇|뭐|이란|적정|권장|얼마|무슨|어떻게|몇\s*(?:분|시간)|몇\s*점\s*이상|합격\s*점수")
 
 
-def _grounded_route(prompt: str, subject: Mapping[str, Any] | None) -> bool:
-    """기록이나 도장 지식을 묻는 질문인가(기록 표지, 또는 도메인 낱말 + 질문형). 그러면 대화 모델 대신 근거 있는 경로로 답한다."""
+def _grounded_route(prompt: str, subject: Mapping[str, Any] | None, *, viewer: bool = True) -> bool:
+    """기록이나 도장 지식을 묻는 질문인가. 그러면 대화 모델 대신 근거 있는 경로로 답한다.
+
+    서명된 기록이 있으면: 기록 표지, 또는 도메인 낱말 + 질문형.
+    기록이 없으면(사용자 결정 4): 도메인 낱말이 있고, 지식 문형이면 문서, 아니면 기록 표지·후속 형태는 세션 대화, 나머지는 문서.
+    1인칭("제·나")은 도메인 낱말과 함께일 때만 표지다("제 이름 뭐예요?"는 잡담).
+    """
     domain = is_domain_question(prompt)
-    # 1인칭("제·나")은 도메인 낱말과 함께일 때만 표지다("제 이름 뭐예요?"·"저 오늘 피곤해요"는 잡담). 지시어·과거·평가 표지는 혼자서도 센다.
-    return has_record_marker(prompt, previous_subject=subject, person=domain) or (domain and bool(_KNOWLEDGE_QUESTION.search(prompt)))
+    if viewer:
+        return has_record_marker(prompt, previous_subject=subject, person=domain) or (domain and bool(_KNOWLEDGE_QUESTION.search(prompt)))
+    if not domain:
+        return False
+    return bool(_KNOWLEDGE_SHAPE.search(prompt)) or not (_FOLLOWUP.search(prompt) or has_record_marker(prompt, previous_subject=subject))
 
 
 def _abstain_below(pipeline: object, response_mode: str) -> float | None:
@@ -751,12 +762,8 @@ async def _execute_copilot_query(
         user_id=query.user_id, conversation_key=conversation_id,
     ))
     # 서명된 뷰어 기록이 있을 때만 켠다(사용자 결정 7). 세션 요약으로 답하는 기존 대화 경로(TSB·시퀀스 질문)는 그대로 둔다.
-    # 서명된 기록이 없어도 도장·훈련 낱말이 든 지식 질문은 문서로 답한다(사용자 결정 4). 낱말 없는 잡담·TSB 요약 대화는 그대로.
-    # 기록 표지가 붙은 질문("속도는 괜찮았어?")은 기록이 없으면 지금처럼 세션 대화로 둔다.
-    subject = previous_subject(dialogue_turns)
-    grounded = _grounded_route(query.prompt, subject) and (
-        viewer_claims(query.context) is not None
-        or not (_FOLLOWUP.search(query.prompt) or has_record_marker(query.prompt, previous_subject=subject, past=False)))
+    # 서명된 기록이 없어도 도장·훈련 낱말이 든 지식 질문은 문서로 답한다(사용자 결정 4). 잡담·TSB 요약 대화는 그대로.
+    grounded = _grounded_route(query.prompt, previous_subject(dialogue_turns), viewer=viewer_claims(query.context) is not None)
     # 기록·도장 지식 질문에는 모델이 만든 이전 답을 다시 넘기지 않는다(지어낸 Zone이 다음 답의 근거가 된다). 잡담은 그대로.
     model_turns = without_generated_answers(dialogue_turns) if grounded else dialogue_turns
     # 위험 행동을 해도 되는지 묻는 질문은 대화 경로·측정값 짧은 답·뷰어 엔진 답으로 보내지 않고 문서 검색으로 답한 뒤

@@ -34,3 +34,18 @@ class ClarifyPipeline(Pipeline):
 def test_domain_question_that_reaches_chat_drops_invented_minutes() -> None:
     data = ask(ClarifyPipeline(top=6.2, config=QUICK), "VR 어지러우면 몇 분 쉬어?", mode="quick")
     assert "5~10분" not in data["answer"]
+
+
+def test_no_record_follow_ups_and_record_style_questions_split_documents_from_session_chat() -> None:
+    docs = ("그럼 가사 시간은 얼마야?", "그럼 에어리스 팁 517은 무슨 뜻이야?", "나의 VR 어지럼 기준은?",
+            "그 도료 가사시간은 몇 시간이야?", "저의 도장 기능사 합격 점수는?")
+    chat = ("칠한 도막 두께가 몇 마이크로미터야?", "분사 속도가 몇으로 나왔어?",
+            "각도가 정상이라고 나왔는데 맞아?", "도장 끝났는데 점수가 몇 점이야?")
+    for prompt in docs:
+        pipeline = Pipeline(top=6.2, config=QUICK)
+        ask(pipeline, prompt, mode="quick")
+        assert len(pipeline.runs) == 1 and pipeline.conversations == [], prompt
+    for prompt in chat:
+        pipeline = Pipeline(top=6.2, config={})
+        ask(pipeline, prompt, mode="quick")
+        assert pipeline.runs == [] and len(pipeline.conversations) == 1, prompt
