@@ -652,9 +652,10 @@ def _checked_generation(answer: str, query: CopilotQueryRequest, *, instructions
         return answer
     answer = drop_contradicted_causes(answer, measures, default_zone=zone, record_zone=_playback_zone(query.context))
     if record is not None and not safety:
-        answer = ground_generated(answer, record, zone=zone, drop_only=drop_only, marked=has_record_marker(query.prompt))
+        answer = ground_generated(answer, record, zone=zone, drop_only=drop_only, marked=has_record_marker(query.prompt),
+                                  zone_asked=requested_zone(query.prompt, None) is not None)
     if had_body and (not has_body(answer) or answer.strip() in {_NO_ANSWER, "세션 기록으로는 확인할 수 없습니다."}):
-        if drop_only:
+        if drop_only or safety:  # 위험 질문은 빈 답을 guard_answer에 넘겨 그 종류의 고정 문장을 받는다(기록 답·"답할 수 없습니다" 금지)
             return ""
         found = answer_record_question(query.context, query.prompt, task_type=query.task_type, recent_turns=())  # 분류된 기록 질문이면 그 결정적 답
         return found.text if found is not None and found.kind != "mixed" else _NO_ANSWER

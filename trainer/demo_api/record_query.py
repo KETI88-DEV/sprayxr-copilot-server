@@ -61,7 +61,8 @@ _ONE_PRIORITY: Final = re.compile(r"(?:뭐|무엇)부터\s*(?:고|개선)|먼저
 _ONLY_ONE: Final = re.compile(r"딱\s*하나|하나만|콕\s*집")  # 질문 전체에 걸린다
 _EXTERNAL: Final = re.compile(r"PSPC|90/10|ISO|SSPC|IMO")  # T50
 _EXTERNAL_ASK: Final = re.compile(r"합격|판정|통과|충족")
-_NOT_COMPLETION: Final = re.compile(r"몇|얼마|어떻게|조건|코트")  # "몇 코트까지 칠해야 끝난 거예요?"는 기준을 묻는다
+# "몇 코트까지 칠해야 끝난 거예요?"는 기준을 묻는다. "몇 개 Zone 끝났어요?"·"얼마나 끝났어요?"는 완료 개수를 묻는다.
+_NOT_COMPLETION: Final = re.compile(r"(?:몇|얼마)(?!\s*(?:개|곳)|나\s*(?:끝|완료|다\s*칠))|어떻게|조건|코트")
 _ORDER_SUBJECT: Final = re.compile(r"숙련자|전문가|zone|존|구역", re.I)  # 시작·끝 낱말만으로는 작업 절차 질문과 가를 수 없다
 _COMPLETION: Final = re.compile(r"끝난|끝났|끝낸|완료|다\s*칠했|다시\s*(?:안\s*)?(?:가|칠)")  # T34 T38 T43
 _STATUS_ASKED: Final = re.compile(r"빼먹|빠뜨|빠진|누락|미수행|안\s*칠|못\s*칠|덜\s*칠")  # T33(Zone 번호가 있으면 "왜"가 있어도 상태 질문)
@@ -389,17 +390,17 @@ def _completion(facts: RecordFacts, zones: tuple[str, ...]) -> str:
     for zone in zones:
         row = _row(facts, zone)
         if row is None or not row.get("gate_status"):
-            out.append(f"{_zone_text(facts, zone)}.")
+            out.append(f"{_zone_text(facts, zone)}{'.' if row is None else '입니다.'}")
             continue
         area = f"목표 두께 이상으로 칠한 면적은 {row['coverage_percent']:g}%" if _is_num(row.get("coverage_percent")) else "칠한 면적 자료가 없고"
         verdict = {"complete": f"{_GATE_PERCENT}% 기준을 넘겨 완료입니다.", "overpaint_risk": f"{_GATE_PERCENT}% 기준과 별개로 과도막이라 더 칠하면 안 됩니다."}.get(
             row["gate_status"], f"{_GATE_PERCENT}% 기준에 못 미쳐 보완이 필요합니다.")
         if row.get("grade") == "normal" and row["gate_status"] == "needs_more" and _is_num(row.get("coverage_percent")) and _is_num(row.get("thickness_um")):
             # "정상"과 "보완 필요"를 나란히 쓰면 모순으로 읽힌다(2026-11-14 사용자 지적). 평균 두께와 면적 기준을 대비로 적는다.
-            out.append(f"{josa(f'Zone {zone}', '은', '는')} 칠한 곳 평균 두께는 {mean_text(row['thickness_um'], row['target_thickness_um'])}µm로 목표 "
+            out.append(f"Zone {zone}의 칠한 곳 평균 두께는 {mean_text(row['thickness_um'], row['target_thickness_um'])}µm로 목표 "
                        f"{row['target_thickness_um']:.0f}µm 이상이지만, 목표 두께 이상으로 칠한 면적이 {row['coverage_percent']:g}%라 {_GATE_PERCENT}% 기준에 못 미쳐 보완이 필요합니다.")
             continue
-        out.append(f"{_zone_text(facts, zone)}. {area}로 {verdict}")
+        out.append(f"{_zone_text(facts, zone)}입니다. {area}로 {verdict}")
     return " ".join(out)
 
 
@@ -585,6 +586,8 @@ _QUESTION_SHAPED: Final = re.compile(r"[?？]\s*$|(?:나요|까요|가요|죠|�
 _METRIC_NAMES: Final = {"pose_similarity": "자세 유사도", "work_similarity": "작업 유사도", "order_adherence": "순서 준수율"}
 _COATING_CODES: Final = {"coating_extreme", "coating_over", "completion", "external_standard", "cause"}
 _SPEED_RELATION: Final = {"speed_slower": "lower", "speed_faster": "higher", "distance_farther": "higher", "distance_closer": "lower"}
+_COMPARISON_PHRASE: Final = {"speed_slower": "속도가 느린", "speed_faster": "속도가 빠른", "distance_farther": "멀리서 칠한", "distance_closer": "가까이서 칠한"}
+_ASKS_ACTION: Final = re.compile(r"[가-힣]야\s*(?:해|돼|되|하|할|겠)")  # "올려야 해?"·"뿌려야 돼?": 할 일을 묻는 질문
 
 
 @dataclass(frozen=True)
@@ -617,16 +620,17 @@ def _premise_lead(facts: RecordFacts, part: RecordPart, premise: Premise) -> str
         same = [name for name, value in values.items() if _is_num(value) and round(value) == round(premise.value)]
         asked = values.get(premise.subject)
         if premise.subject in same:
-            return f"예. {_METRIC_NAMES[premise.subject]}는 {premise.value:g}%입니다."
+            return None  # 맞는 수는 본문이 말한다. "예."는 "잘한 거 맞지?"에 대한 답으로 읽힌다(최종 검토 I3)
         if same:
             return f"아니요. {premise.value:g}%는 {_METRIC_NAMES[same[0]]}입니다."
-        return f"아니요. 이 기록의 {_METRIC_NAMES[premise.subject]}는 {asked:.0f}%입니다." if _is_num(asked) else None
+        return f"아니요. 이 기록의 {josa(_METRIC_NAMES[premise.subject], '은', '는')} {asked:.0f}%입니다." if _is_num(asked) else None
     if premise.kind == "cause" and zone:
         cause = premise.subject.split(">")[0]
         measure = facts.measures.get(zone)
         relation = measured_relation(measure, "distance_mm")
         if cause in _DISTANCE_WORDS and relation is not None:
-            return ("예. " if _DISTANCE_WORDS[cause] == relation else "아니요. ") + (distance_sentence(zone, measure) or "")
+            agrees = _DISTANCE_WORDS[cause] == relation
+            return ("" if agrees and _ASKS_ACTION.search(part.text) else "예. " if agrees else "아니요. ") + (distance_sentence(zone, measure) or "")
         return None  # 속도 원인은 R6(_speed)가 값과 한계만 말한다
     if premise.kind == "conclusion":
         rows = [_row(facts, z) for z in part.zones] if part.zones else list(facts.target_rows)
@@ -641,8 +645,12 @@ def _premise_lead(facts: RecordFacts, part: RecordPart, premise: Premise) -> str
         relation = measured_relation(facts.measures.get(zone), variable)
         if relation is None:
             return None
-        return ("예." if relation == _SPEED_RELATION[premise.subject] else "아니요.") + (
-            f" 전문가 중앙값보다 { {'lower': '낮습니다', 'higher': '높습니다', 'similar': '비슷합니다(±10% 이내)'}[relation] }.")  # 값은 본문이 말한다
+        # "예."로 열면 "올려야 해?"에 대한 처방으로 읽힌다(최종 검토 I3). 비교 사실만 말하고, 값은 본문이 말한다.
+        said = f"숙련자 기록보다 {_COMPARISON_PHRASE[premise.subject]} 것은"
+        if relation == _SPEED_RELATION[premise.subject]:
+            return f"{said} 맞습니다."
+        return f"{said} 아닙니다. " + {"lower": "전문가 중앙값보다 낮습니다.", "higher": "전문가 중앙값보다 높습니다.",
+                                      "similar": "전문가 중앙값과 비슷합니다(±10% 이내)."}[relation]
     return None
 
 
@@ -722,15 +730,18 @@ _SUPERLATIVE: Final = re.compile(r"(?:가장|제일)\D{0,15}?(얇|두껍|두꺼|
 _EXISTENCE: Final = re.compile(r"(?:zone|존|구역|데|곳|과도막)[은는이가]?\s*(없|있)(?:습니다|어요|다)(?!는)", re.I)  # 유무의 주어가 바로 앞에 있어야 한다("~ㄹ 수 있습니다"는 제외)
 _VERDICT_WORD: Final = re.compile(r"불?합격|완료|끝났|다\s*됐|다시\s*안\s*가도|정상\s*범위")
 _CONDITIONAL: Final = re.compile(r"(?:완료|끝났)(?:되|된|됐)?(?:면|다면|뒤|후)|다\s*칠하면")  # 판정 낱말이 조건절 안에 있을 때만 절차다
+_ZONE_COUNT: Final = re.compile(r"(\d+)\s*(?:개|곳)\s*(?:의\s*)?(?:zone|존|구역)|(?:zone|존|구역)[은는이가]?\s*(?:총\s*)?(\d+)\s*(?:개|곳)", re.I)
 _BARE_PASS: Final = re.compile(r"^\W*불?합격(?:입니다|이에요|이다)\W*$")  # "합격입니다."만 있는 문장은 이 기록의 판정이다
 _STANDARD_WORD: Final = re.compile(r"권장|기준|표준|적정")
 _MM_VALUE: Final = re.compile(r"(\d[\d,]*(?:\.\d+)?)\s*(mm|cm)")
 
 
-def ground_generated(answer: str, facts: RecordFacts, *, zone: str | None, drop_only: bool = False, marked: bool = True) -> str:
+def ground_generated(answer: str, facts: RecordFacts, *, zone: str | None, drop_only: bool = False, marked: bool = True,
+                     zone_asked: bool = True) -> str:
     """모델 답의 문장 가운데 이 기록의 최저·유무·판정·기준값을 말하는 것을 서명 자료의 문장으로 바꾼다(`drop_only`면 뺀다).
 
     `marked`는 질문이 기록 표지를 가졌는가. 표지도 없고 문장에 Zone 번호·"이 기록" 같은 말도 없으면 일반 지식이라 건드리지 않는다.
+    `zone_asked`는 `zone`이 질문의 Zone 번호에서 왔는가. "지금·여기"(재생 위치)에서 온 Zone만으로는 판정 검사(G5)를 켜지 않는다.
     """
     rows = facts.target_rows
     shown_distance = {"멀": "higher", "가깝": "lower", "가까": "lower"}
@@ -758,9 +769,15 @@ def ground_generated(answer: str, facts: RecordFacts, *, zone: str | None, drop_
                 return _distance_filter(facts, want) if actual != exists and facts.measures else None
             if re.search(r"과도막|두껍|두꺼", sentence) and rows:
                 return _overpaint(facts) if bool(thick_zones) != exists else None
-        if _VERDICT_WORD.search(sentence) and not _CONDITIONAL.search(sentence) and (named or zone or _RECORD_SENTENCE.search(sentence) or _BARE_PASS.search(sentence)):  # G5: 질문 표지만으로는 켜지 않는다
+        count = _ZONE_COUNT.search(sentence)
+        if _VERDICT_WORD.search(sentence) and not _CONDITIONAL.search(sentence) and (
+                named or (zone and zone_asked) or count or _RECORD_SENTENCE.search(sentence) or _BARE_PASS.search(sentence)):  # G5: 질문 표지만으로는 켜지 않는다
             if re.search(r"합격", sentence):
                 return _external(facts)
+            if count and not named:  # "3개 Zone이 완료되었습니다": 완료 개수가 서명 자료와 다르면 전체 완료 답으로
+                gated = [r for r in rows if r.get("gate_status")]
+                done = sum(r["gate_status"] == "complete" for r in gated)
+                return _completion(facts, ()) if gated and int(count[1] or count[2]) != done else None
             target = tuple(dict.fromkeys(named or ([zone] if zone else [])))
             return _completion(facts, target)
         for value, unit in _MM_VALUE.findall(sentence):  # G6

@@ -24,9 +24,9 @@ def test_conclusion_premises_are_answered_with_the_gate() -> None:   # T43, T34
     assert t34.startswith("아니요") and "95%" in t34
 
 
-def test_true_comparison_premise_starts_with_yes() -> None:   # T44
+def test_true_comparison_premise_is_confirmed_without_yes() -> None:   # T44 — "예."는 "올리세요"로 읽힌다(최종 검토 I3)
     text = answer("나 숙련자보다 느리던데, 속도를 숙련자만큼 올려야 해?").text
-    assert text.startswith("예") and "이전 장비" in text
+    assert text.startswith("숙련자 기록보다 속도가 느린 것은 맞습니다.") and "이전 장비" in text
 
 
 def test_missing_zone_is_named_not_explained() -> None:   # T33
