@@ -719,7 +719,7 @@ def answer_record_question(context: str | None, prompt: str, *, task_type: str,
 # ---------------------------------------------------------------- 모델이 만든 답의 출구 검사 G3~G6
 _NAMED_ZONE: Final = re.compile(r"(?:zone|존|구역)\s*(\d+)|(\d+)\s*번\s*(?:zone|존|구역)", re.I)
 _SUPERLATIVE: Final = re.compile(r"(?:가장|제일)\D{0,15}?(얇|두껍|두꺼|낮|높|멀|가깝|가까)")
-_EXISTENCE: Final = re.compile(r"(없|있)(?:습니다|어요|다)(?!는)")
+_EXISTENCE: Final = re.compile(r"(?:zone|존|구역|데|곳|과도막)[은는이가]?\s*(없|있)(?:습니다|어요|다)(?!는)", re.I)  # 유무의 주어가 바로 앞에 있어야 한다("~ㄹ 수 있습니다"는 제외)
 _VERDICT_WORD: Final = re.compile(r"불?합격|완료|끝났|다\s*됐|다시\s*안\s*가도|정상\s*범위")
 _CONDITIONAL: Final = re.compile(r"(?:완료|끝났)(?:되|된|됐)?(?:면|다면|뒤|후)|다\s*칠하면")  # 판정 낱말이 조건절 안에 있을 때만 절차다
 _BARE_PASS: Final = re.compile(r"^\W*불?합격(?:입니다|이에요|이다)\W*$")  # "합격입니다."만 있는 문장은 이 기록의 판정이다

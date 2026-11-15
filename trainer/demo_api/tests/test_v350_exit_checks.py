@@ -111,3 +111,8 @@ def test_everything_dropped_gives_the_deterministic_answer_or_the_no_answer_line
     assert "Zone 8" in _checked_generation(drop, _query("칠 다 했는데 어디가 제일 얇게 나왔어?")) and "숙련자 수준" not in _checked_generation(drop, _query("칠 다 했는데 어디가 제일 얇게 나왔어?"))
     assert _checked_generation(drop, _query("건 잡는 법 알려줘")) == "제공된 자료로는 답할 수 없습니다."
     assert _checked_generation(drop, _query("건 잡는 법 알려줘"), drop_only=True) == ""
+
+
+@pytest.mark.parametrize("answer", ["두꺼운 도막은 균열이 생길 수 있습니다.", "과도막이 생기면 흘러내림이 있습니다."])
+def test_general_possibility_sentences_are_not_existence_claims(answer: str) -> None:
+    assert ground_generated(answer, facts(AT_24S), zone=None, marked=True) == answer
