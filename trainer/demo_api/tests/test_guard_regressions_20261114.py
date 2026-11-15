@@ -17,7 +17,9 @@ class _Configured(RecordingPipeline):
     """운영 설정 파일의 fast_system을 그대로 가진 파이프라인."""
 
     def __init__(self, config_name: str, document: str) -> None:
-        super().__init__(plan={"kind": "coating_knowledge", "intent": "knowledge", "scope": "unspecified"}, document=document)
+        # 근거 확인 단계(quick_abstain_below_rerank_score)가 이 시험의 대상(지침 유출 검사)을 가리지 않게 검색 1위 점수를 충분히 높게 준다.
+        super().__init__(plan={"kind": "coating_knowledge", "intent": "knowledge", "scope": "unspecified"}, document=document,
+                         chunks=[{"chunk_id": "DOC-x", "text": "도장 품질 기준 문서", "rerank_score": 9.0}])
         self.config = yaml.safe_load((_CONFIGS / config_name).read_text(encoding="utf-8"))
 
 
