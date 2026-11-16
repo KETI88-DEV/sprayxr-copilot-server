@@ -10,7 +10,9 @@ logger = logging.getLogger(__name__)
 
 POSE_INTENTS = {"pose_overall", "pose_worst_zone", "pose_zone", "pose_right", "pose_left", "knowledge"}
 ORDER_INTENTS = {"order_reference", "order_actual", "order_missing", "order_adherence", "order_direction", "knowledge"}
-_PAINTING_SUBJECT = re.compile(r"도막|두께|이격|속도|노즐|압력|안전|보호구|오버랩|표면\s*처리|전처리|절차")
+_PAINTING_SUBJECT = re.compile(r"도막|두께|이격|속도|노즐|압력|안전|보호구|오버랩|표면\s*처리|전처리|절차"
+    r"|도료|도장|스프레이|에어리스|팁|시너|희석|가사\s*시간|경화|건조|블라스팅|마스크|환기|훈련|(?i:vr)|어지럼|어지러|멀미|시험|실기|기능사|자격"
+    r"|(?:스프레이|에어리스|도장)\s*건|건\s*(?:끝|각도|거리|속도|이동|선단)")
 _RECORD_REFERENCE = re.compile(r"영역|구역|zone|존|부위|현재|지금|이번|내[ 가]|어디|어느", re.I)
 
 
@@ -39,6 +41,10 @@ def is_coating_status_question(prompt: str) -> bool:
     # 넓힌 낱말(미도장·분포·등급)로만 걸리는 질문은 규정·절차를 묻는 지식 질문일 수 있어 문서 검색에 남긴다.
     return (_asks_coating_state(prompt, _COATING_SUBJECT + "|미도장", _COATING_STATE + "|분포|미도장|등급")
             and not re.search(r"규정|규격|절차|종류|기준|ISO|SSPC", prompt, re.I))
+
+
+def is_domain_question(prompt: str) -> bool:
+    return bool(_PAINTING_SUBJECT.search(prompt) or re.search(_COATING_SUBJECT, prompt, re.I))
 
 
 def is_general_painting_knowledge(prompt: str) -> bool:

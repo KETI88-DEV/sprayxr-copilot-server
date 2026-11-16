@@ -171,7 +171,7 @@ def _grade_answer(rows: list[dict[str, Any]], prompt: str, *, detailed: bool, vi
 # 실측 속도·이격거리와 전문가 중앙값을 함께 보고, 실측과 엇갈리는 후보는 조언으로 말하지 않는다.
 _MEASURE_FIELDS: Final = {"speed_mm_s": ("speed_mms", "reference_speed_mms", "이동 속도", "mm/s", "빠름", "느림"),
                           "distance_mm": ("distance_mm", "reference_distance_mm", "이격거리", "mm", "멂", "가까움")}
-_SIMILAR: Final = 0.05  # 전문가 중앙값과 ±5% 안이면 "비슷"으로 보고 후보와 엇갈린다고 하지 않는다
+_SIMILAR: Final = 0.10  # 전문가 중앙값과 ±10% 안이면 "비슷". 원인 설계와 같은 ±10%(2026-11-14 사용자 결정 2)
 # 실측과 엇갈리는 조절 후보는 답·리포트에서 말하지 않는다(2026-11-14 사용자 결정, 이슈 #19). 내부 자료(행의 adjustments)에만 남는다.
 _THIN_BY_CLOSE: Final = " 가까이 칠하면 도막은 보통 두꺼워집니다. 그래서 얇게 나온 이유를 거리로는 설명하기 어렵습니다."
 _THICK_BY_FAR: Final = " 멀리 칠하면 도막은 보통 얇아집니다. 그래서 두껍게 나온 이유를 거리로는 설명하기 어렵습니다."
@@ -255,7 +255,7 @@ def _candidate_line(adjustments: list[Mapping[str, Any]], measure: Mapping[str, 
 
 # 원인 → 결과 짝. 결과 낱말마다 같은 절(쉼표·마침표 사이)에서 바로 앞에 나온 원인 낱말 하나와 짝짓는다.
 # "멀어지면 얇아지고, 가까워지면 두꺼워진다"·"느려지면 두꺼워지고 빨라지면 얇아진다"는 짝마다 맞는 방향이다.
-_EFFECTS: Final = (("thin", r"얇|저도막|두께가\s*부족|분사량이\s*줄|도막이\s*줄"), ("thick", r"두꺼|두껍|과도막"))
+_EFFECTS: Final = (("thin", r"얇|저도막|두께가\s*부족|분사량이\s*줄|도막이\s*줄"), ("thick", r"두꺼|두껍|과도막|과부착|과도하게\s*부착|몰림|몰려|흘러내"))
 _CAUSES: Final = (
     ("close", r"가깝|가까웠|가까워|짧았|짧아|짧고|짧은\s*(?:거리|이격)"),
     ("far", r"멀었|멀어|멀고|먼\s*거리|길었|길어|과도한\s*(?:분사\s*)?(?:거리|이격)"),
@@ -284,6 +284,28 @@ def inverted_cause(sentence: str) -> bool:
                 if before and (before[-1], effect) in _INVERTED:
                     return True
     return False
+
+
+def effect_contradicts_grade(sentence: str, measure: Mapping[str, Any] | None) -> bool:
+    """"두껍게 부착됐다"를 목표 미달(below) Zone에, "얇다"를 목표 초과(above) Zone에 말한 문장."""
+    wrong = {"below": "thick", "above": "thin"}.get(str((measure or {}).get("grade")))
+    if wrong is None:
+        return False
+    pattern = dict(_EFFECTS)[wrong]
+    return any(not re.search(_CONCESSIVE, clause) and re.search(pattern, clause)
+               for clause in re.split(r"[,;，]", re.sub(r"(?<=\d),(?=\d{3})", "", sentence)))
+
+
+_SPEED_TO_EXPERT: Final = r"속도\S*\s*(?:를\s*)?(?:숙련자|전문가)\s*(?:수준|만큼|처럼)"
+
+
+def prescribes_speed(sentence: str) -> bool:
+    """이 기록(Zone·기록 문장)이나 숙련자·전문가를 짚어 속도를 바꾸라는 문장. 전문가 속도는 옛 장비 값이라 처방 근거가 못 된다."""
+    advice = any(re.search(_ADVICE[("speed_mm_s", d)], sentence) for d in ("decrease", "increase"))
+    if not (advice or re.search(_SPEED_TO_EXPERT, sentence)):
+        return False
+    return bool(re.search(r"(?:zone|존|구역)\s*\d+|\d+\s*번\s*(?:zone|존|구역)", sentence, re.I)
+                or _RECORD_SENTENCE.search(sentence) or re.search(r"숙련자|전문가", sentence))
 
 
 def _contradicts_measure(sentence: str, measures: Mapping[str, Mapping[str, Any]], zones: list[str]) -> bool:
@@ -357,6 +379,8 @@ def drop_contradicted_causes(answer: str, measures: Mapping[str, Mapping[str, An
                 if record_cause_contradicted(sentence, measures.get(zone)):
                     corrected.append(zone)
                     return True
+            if any(effect_contradicts_grade(sentence, measures.get(zone)) for zone in zones) or prescribes_speed(sentence):
+                return True
         return bool(measures and _contradicts_measure(sentence, measures, zones))
 
     kept, dropped = drop_sentences(answer, bad)

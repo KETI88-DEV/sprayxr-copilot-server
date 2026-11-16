@@ -208,6 +208,8 @@ confidence:
   # 26%를 막아(등록 기준 10% 초과) 두 문항을 합친 답 있음 294개의 5% 점으로 다시 정했다. 새 문항 기준 잘못 기권 10%,
   # 근거 없음 차단 67%. 재정렬 모델을 바꾸면 다시 정해야 한다. 키가 없으면 단계를 끈다.
   abstain_below_rerank_score: 3.28
+  # 빠른 안내 근거 확인 기준값. 2026-11-14 공개 19문항(T01~T19) 측정(CPU, eager 어텐션): 답 있음 17개 최저 4.71, T16 -0.44, T17 2.80. 규칙 min(3.28, 4.69)=3.28. 키가 없으면 빠른 안내 근거 확인을 끈다.
+  quick_abstain_below_rerank_score: 3.28
   min_rerank_score: 0.3
   min_results: 1
   high_threshold: 0.7

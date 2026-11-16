@@ -5,7 +5,7 @@ import json
 import math
 import re
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Final, Mapping
+from typing import Any, Callable, Final, Mapping, Sequence
 
 from trainer.demo_api import coating_assessment
 from trainer.demo_api.viewer_progress import order_progress_facts
@@ -79,10 +79,16 @@ def conversation_messages(prompt: str, *, recent_turns: list[dict[str, str]], fa
     messages = [{"role": "system", "content": system + "\n현재 날짜(한국): " + today
                  + "\nverified_facts=" + json.dumps(facts, ensure_ascii=False)}]
     for turn in recent_turns[-6:]:
-        messages.extend([{"role": "user", "content": turn["prompt"][:4000]},
-                         {"role": "assistant", "content": turn["answer"][:6000]}])
+        messages.append({"role": "user", "content": turn["prompt"][:4000]})
+        if turn["answer"]:
+            messages.append({"role": "assistant", "content": turn["answer"][:6000]})
     messages.append({"role": "user", "content": prompt})
     return messages
+
+
+def without_generated_answers(turns: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """모델이 문장을 만든 이전 답(문서·대화·출처 미상)은 비운다. 분석 결과를 옮긴 답만 남는다."""
+    return [{**turn, "answer": turn["answer"] if turn.get("answer_source") == "analysis" else ""} for turn in turns]
 
 
 def viewer_dialogue_context(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -124,7 +130,11 @@ def viewer_dialogue_context(payload: Mapping[str, Any]) -> dict[str, Any]:
 _ZONE_MEASURES: Final = {"speed_mms": "selected_speed_mms", "reference_speed_mms": "median_speed_mms",
                          "reference_distance_mm": "median_distance_mm"}
 _MEASUREMENT: Final = re.compile(r"(\d+(?:\.\d+)?)(?:\s*[~∼-]\s*(\d+(?:\.\d+)?))?\s*(mm/s|cm/s|m/s|mm|cm|µm|μm|um|%|°)")
-_UNIT_ALIASES: Final = {"μm": "µm", "um": "µm"}
+# 넓힌 단위(지식 답): 시간·횟수·점수·길이·압력. 긴 단위가 짧은 것보다 앞이고 °C가 °보다 앞이다.
+_MEASUREMENT_EXTENDED: Final = re.compile(
+    r"(\d+(?:\.\d+)?)(?:\s*[~∼-]\s*(\d+(?:\.\d+)?))?\s*"
+    r"(mm/s|cm/s|m/s|mm|cm|µm|μm|um|%|°C|℃|°|시간|분(?!류|기|야|석)|초(?!과|기)|점(?!검)|회(?!전|복|사|의)|배(?!열|치|경)|인치|bar(?![A-Za-z])|MPa|psi(?![A-Za-z])|m(?![m/²A-Za-z]))")
+_UNIT_ALIASES: Final = {"μm": "µm", "um": "µm", "℃": "°C"}
 _METRIC_UNIT: Final = {"deg": "°", "°": "°", "um": "µm", "µm": "µm", "μm": "µm", "mm": "mm", "cm": "cm", "mm/s": "mm/s", "%": "%"}
 _SENTENCE_END: Final = re.compile(r"(?<=[.!?])\s+|\n+")
 _SPEED_UNIT: Final = re.compile(r"(?<![A-Za-zµμ])(mm/s|cm/s|m/s)(?![A-Za-z])")
@@ -132,12 +142,12 @@ _REFERENCE_WORD: Final = re.compile(r"표준|기준|목표|하한|상한")
 _LEGACY_LABEL: Final = re.compile(r"\[(?:분석|판정|원인|조치|근거|답변)\]\s*")
 
 
-def _grounded_values(facts: Any, prompt: str) -> dict[str, set[float]]:
+def _grounded_values(facts: Any, prompt: str, extended: bool = False) -> dict[str, set[float]]:
     """자료와 질문에 실린 값. 단위가 붙은 값은 그 단위로, 단위 없는 수는 ""로, 비율·각도는 키 이름으로 가른다."""
     pool: dict[str, set[float]] = {}
 
     def text(value: str) -> None:
-        for match in _MEASUREMENT.finditer(value):
+        for match in (_MEASUREMENT_EXTENDED if extended else _MEASUREMENT).finditer(value):
             unit = _UNIT_ALIASES.get(match[3], match[3])
             pool.setdefault(unit, set()).update(float(number) for number in match.groups()[:2] if number)
 
@@ -186,12 +196,12 @@ def _matches(number: float, values: set[float]) -> bool:
     return any(abs(number - round(value, digits)) < 1e-9 for value in values for digits in range(4))
 
 
-def ungrounded_measurements(answer: str, *, facts: Any, prompt: str) -> list[str]:
+def ungrounded_measurements(answer: str, *, facts: Any, prompt: str, extended: bool = False) -> list[str]:
     """답에 나온 측정값(수 + 단위) 가운데 자료·질문에 없는 것. 단위 없는 수(날짜·셈)는 보지 않는다."""
-    pool = _grounded_values(facts, prompt)
+    pool = _grounded_values(facts, prompt, extended)
     invented: list[str] = []
     answer = re.sub(r"(?<=\d),(?=\d{3})", "", answer)  # 1,814.76 → 1814.76
-    for match in _MEASUREMENT.finditer(answer):
+    for match in (_MEASUREMENT_EXTENDED if extended else _MEASUREMENT).finditer(answer):
         unit = _UNIT_ALIASES.get(match[3], match[3])
         values = pool.get(unit, set()) | (pool.get("", set()) if unit not in ("%", "°") and unit in pool else set())
         # 각도는 부호가 뜻을 바꾼다(앞으로·뒤로 기울기). 바로 앞의 '-'·'−'를 부호로 읽는다.
@@ -232,10 +242,10 @@ def without_hanzi(answer: str, *, prompt: str) -> str:
     return " ".join(kept) or "답변을 한국어로 만들지 못했습니다. 다시 질문해 주세요."
 
 
-def drop_ungrounded(answer: str, *, facts: Any, prompt: str) -> str:
+def drop_ungrounded(answer: str, *, facts: Any, prompt: str, extended: bool = False) -> str:
     """자료에 없는 측정값이 든 괄호와 문장을 뺀다. 남는 것이 없으면 확인할 수 없다고 답한다."""
     def invented(part: str) -> bool:
-        return bool(ungrounded_measurements(part, facts=facts, prompt=prompt))
+        return bool(ungrounded_measurements(part, facts=facts, prompt=prompt, extended=extended))
 
     answer = _LEGACY_LABEL.sub("", answer)
     answer = re.sub(r"\s*\([^()]*\)", lambda match: "" if invented(match[0]) else match[0], answer)
@@ -515,7 +525,7 @@ def drop_misattributed_zones(answer: str, zones: Mapping[str, set[str]]) -> str:
     kept, _ = drop_sentences(answer, lambda part: _sentence_misattributed(part, zones))
     return kept if has_body(kept) else "어느 Zone의 결과인지 자료와 맞지 않아 답할 수 없습니다. Zone 번호를 넣어 다시 질문해 주세요."
 # 진행 질문의 계산 재료(viewer_progress). 모델 자료에는 넣지 않는다.
-_PROGRESS_KEYS: Final = {"zones", "zone_first_visit_seconds", "expert_transitions"}
+_PROGRESS_KEYS: Final = {"zones", "zone_first_visit_seconds", "expert_transitions", "position_distribution"}
 
 
 def authenticated_facts(value: str | None) -> dict[str, Any]:

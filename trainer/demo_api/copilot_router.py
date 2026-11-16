@@ -36,7 +36,7 @@ from urllib.parse import quote
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Annotated, Final
+from typing import TYPE_CHECKING, Annotated, Any, Final
 
 from anyio import to_thread
 from fastapi import APIRouter, Body, FastAPI, Request
@@ -48,12 +48,12 @@ from trainer.demo_api.copilot_contracts import CopilotQueryData, CopilotQueryReq
 from trainer.demo_api.coating_query import (
     answer_coating_question, answer_distribution_cause, drop_contradicted_causes, parse_viewer_coating_context,
     report_coating_context, target_advice_facts, zone_measures)
-from trainer.demo_api.copilot_intent import classify_question_intent, fallback_intent, preset_intent, is_coating_status_question, is_coating_advice_question, is_general_painting_knowledge
+from trainer.demo_api.copilot_intent import classify_question_intent, fallback_intent, preset_intent, is_coating_status_question, is_coating_advice_question, is_domain_question, is_general_painting_knowledge
 from trainer.demo_api.dialogue import (INSTRUCTION_REFUSAL, asks_for_instructions, authenticated_facts, conversation_key,
-                                       drop_misattributed_zones, drop_ungrounded, guard_generated_answer, parse_plan, plain_answer,
+                                       drop_misattributed_zones, drop_ungrounded, guard_generated_answer, has_body, parse_plan, plain_answer,
                                        viewer_claims, zone_fact_numbers,
                                        selected_direction_answer, ungrounded_measurements, viewer_findings_answer,
-                                       viewer_measurement_answer, viewer_metadata_context, without_hanzi)
+                                       viewer_measurement_answer, viewer_metadata_context, without_generated_answers, without_hanzi)
 from trainer.demo_api.playback_direction import playback_direction_from_context, playback_direction_answer, simple_direction_question, requested_direction_scope, aggregate_direction, LABELS as DIRECTION_LABELS
 from trainer.demo_api.copilot_live_analysis import current_zone, live_analysis
 from trainer.demo_api.copilot_session_context import build_query_instruction, summarize_session, viewer_definition_context
@@ -83,6 +83,7 @@ from trainer.demo_api.safety_guard import (
 )
 from trainer.demo_api.reference_order_query import actual_order_intent, current_next_answer, is_current_next_question, is_reference_order_question, resolve_reference_target, reference_order_answer
 from trainer.demo_api.v1_store import V1Store
+from trainer.demo_api.record_query import BODY_PART, DIRECTION_WORD, WORST_ZONE, RecordAnswer, RecordFacts, answer_record_question, ground_generated, has_record_marker, previous_subject
 from trainer.demo_api.viewer_progress import progress_question, viewer_progress_answer
 from trainer.demo_api.query_runtime import generation_slot_for, retrieval_question, select_query_pipeline, translation_pipeline_for
 from trainer.scripts.generation_slot import GENERATION_SLOT  # Legacy slot identity for unconfigured clients.
@@ -204,27 +205,60 @@ def _parse_motion_viewer_context(value: str | None, *, task_type: str) -> dict[s
 
 # analysis(채점·분석 결과를 옮긴 답, 모델 미사용) · documents(문서 검색 + 모델) · conversation(모델 대화)
 ANSWER_SOURCE_HEADER: Final = "X-Copilot-Answer-Source"
+SUBJECT_HEADER: Final = "X-Copilot-Subject"  # 서버 안에서만 쓴다. 바깥 응답에는 싣지 않는다.
 # 외국어 질문을 한국어로 옮긴 문장(퍼센트 인코딩). 응답 본문은 바꾸지 않는다.
 ANALYSIS_PROMPT_HEADER: Final = "X-Copilot-Analysis-Prompt"
 _EVALUATION_QUESTION: Final = re.compile(r"잘한|못한|고쳐야|고칠|개선할|개선점|문제점|부족한 점")
-# 대화 계획 모델이 속도·Zone 질문을 도포 방향으로 분류한다(2026-11-11 Spark: "지금 속도는 적당해?"에 방향을 답함).
-_DIRECTION_WORD: Final = re.compile(r"방향|수평|수직|대각|가로|세로|패턴|direction", re.I)
 # 질문형 문장. 지식 탭에서 계획 모델이 "chat"으로 본 질문 가운데 이것만 먼저 문서로 답해 본다.
 # 인사·맞장구("안녕", "고마워", "야")는 걸리지 않아 지금처럼 대화 경로로 간다.
 _KNOWLEDGE_QUESTION: Final = re.compile(r"[?？]|뭐|무엇|무슨|몇|어떻|어떤|왜|얼마|언제|인가|인지|나요|까요|되나|돼야|해야|하나요")
 
 
-def _abstain_below(pipeline: object) -> float | None:
-    """confidence.abstain_below_rerank_score. 없거나 숫자가 아니면 근거 확인 단계를 끈다."""
+# 섞인 질문(기록 조각 + 지식 조각)의 문서 쪽 지시와, 문서 답이 비었을 때 기록 문장 뒤에 붙이는 문장.
+MIXED_DOCUMENT_RULE: Final = "이 기록의 수치·Zone·판정은 말하지 말고 문서의 일반 기준만 말하세요."
+MIXED_NO_EVIDENCE: Final = "문서에서는 이 질문에 답할 근거를 찾지 못했습니다."
+
+
+# 기록 없는 세션의 후속 질문("그럼 속도는?")은 대화로 둔다.
+_FOLLOWUP: Final = re.compile(r"나의|저의|그럼|그렇게")
+# 규정·정의·권장값을 묻는 문형. 이것이면 후속·1인칭 낱말이 있어도 문서로 간다. "몇 점 이상"은 되고 "몇 점이야"는 기록 질문이다.
+_KNOWLEDGE_SHAPE: Final = re.compile(r"기준|뜻|의미|무엇|뭐|이란|적정|권장|얼마|무슨|어떻게|몇\s*(?:분|시간)|몇\s*점\s*이상|합격\s*점수")
+
+
+def _grounded_route(prompt: str, subject: Mapping[str, Any] | None, *, viewer: bool = True) -> bool:
+    """기록이나 도장 지식을 묻는 질문인가. 그러면 대화 모델 대신 근거 있는 경로로 답한다.
+
+    서명된 기록이 있으면: 기록 표지, 또는 도메인 낱말 + 질문형.
+    기록이 없으면(사용자 결정 4): 도메인 낱말이 있고, 기록 표지면 세션 대화, 지식 문형이면 문서, 후속 형태면 세션 대화, 나머지는 문서.
+    1인칭("제·나")은 도메인 낱말과 함께일 때만 표지다("제 이름 뭐예요?"는 잡담).
+    """
+    domain = is_domain_question(prompt)
+    if viewer:
+        return has_record_marker(prompt, previous_subject=subject, person=domain) or (domain and bool(_KNOWLEDGE_QUESTION.search(prompt)))
+    if not domain:
+        return False
+    if has_record_marker(prompt, previous_subject=subject):
+        return False  # 내 기록을 묻는 말("내 속도는 얼마야?")은 지식 문형이어도 세션 대화다.
+    return bool(_KNOWLEDGE_SHAPE.search(prompt)) or not _FOLLOWUP.search(prompt)
+
+
+def _abstain_below(pipeline: object, response_mode: str) -> float | None:
+    """상세 분석은 confidence.abstain_below_rerank_score, 빠른 안내는 quick_abstain_below_rerank_score. 없거나 숫자가 아니면 근거 확인 단계를 끈다."""
     config = getattr(pipeline, "config", None)
     confidence = config.get("confidence") if isinstance(config, dict) else None
-    value = confidence.get("abstain_below_rerank_score") if isinstance(confidence, dict) else None
+    key = "abstain_below_rerank_score" if response_mode == "detailed" else "quick_abstain_below_rerank_score"
+    value = confidence.get(key) if isinstance(confidence, dict) else None
     return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 
 # 근거 확인 단계(confidence.abstain_below_rerank_score)가 막은 답. 2026-11-13 2-1 측정에서 도입.
 NO_EVIDENCE_ANSWER: Final = ("제공된 자료에서 이 질문에 답할 근거를 찾지 못했습니다. "
                              "대상(도장 방식·제품·구역)을 함께 적어 다시 물어 주세요.")
+
+
+# 어지럼을 묻는데 문서에 근거가 없을 때 근거 없는 답 뒤에 붙이는 한 줄(숫자 없음).
+DIZZY_NOTE: Final = "몸이 불편하면 멈추고 교관에게 알리세요."
+_DIZZY: Final = re.compile(r"어지럼|어지러|어지럽|멀미|메스꺼|울렁")
 
 
 def _session_findings(found: tuple[str, Mapping[str, Any]] | None) -> str:
@@ -560,11 +594,6 @@ def _grounded_detail(candidate: str, base_answer: str, context: Mapping[str, obj
     return True
 
 
-# 손·손목·팔꿈치·위팔 질문. "오른쪽으로 칠해"처럼 방향만 말한 질문은 걸리지 않게 손·팔을 함께 본다.
-_BODY_PART: Final = re.compile(r"(?:오른|왼)\s*(?:쪽\s*)?(?:손|팔)|팔꿈치|손목|위팔|(?:right|left)\s*(?:hand|arm)|elbow|wrist", re.I)
-_WORST_ZONE: Final = re.compile(r"(?:zone|존|구역)\s*별|(?:가장|제일)\s*문제|최악|(?:어디|어느).*(?:문제|나쁘|나빠|안\s*좋|낮|못)", re.I)
-
-
 _HERE: Final = re.compile(r"지금|현재|여기|이렇게|이번|방금|아까|(?<![가-힣])이\s*(?:zone|존|구역|기록|분사|곳)|내\s|제\s|나의|저의", re.I)
 
 
@@ -599,14 +628,44 @@ def _viewer_measures(context: str | None, prompt: str) -> tuple[dict[str, dict[s
     return zone_measures(claims[1]), requested_zone(prompt, None) or (str(playback["zone_id"]) if here else None)
 
 
-def _checked_generation(answer: str, query: CopilotQueryRequest, *, instructions: tuple[str, ...] = ()) -> str:
-    """모델이 만든 답의 출구 검사: 지침·내부 키 유출, 다른 Zone의 수치, 거꾸로 된 인과·실측과 엇갈리는 조언."""
+_NO_ANSWER: Final = "제공된 자료로는 답할 수 없습니다."
+
+
+def _checked_generation(answer: str, query: CopilotQueryRequest, *, instructions: tuple[str, ...] = (),
+                        evidence: tuple[str, ...] | None = None, drop_only: bool = False, safety: bool = False) -> str:
+    """모델이 만든 답의 출구 검사: 지침·내부 키 유출, 근거 없는 수치, 다른 Zone의 수치, 거꾸로 된 인과·조언, 이 기록의 최저·유무·판정·기준값.
+
+    `evidence`(검색 조각 본문)를 주는 문서 경로만 수치 근거 검사(G1)를 한다. 대화 경로는 세션 요약을 따로 대조한다.
+    `drop_only`(섞인 질문의 문서 문장)는 바꾸지 않고 빼며, 다 빠지면 빈 문자열이다(기록 문장은 호출부가 붙인다).
+    """
     measures, zone = _viewer_measures(query.context, query.prompt)
-    answer = drop_misattributed_zones(guard_generated_answer(answer, instructions=instructions), _zone_facts(query.context))
+    answer = guard_generated_answer(answer, instructions=instructions)
+    had_body = has_body(answer)
     # 인과·조언 검사는 이 기록(서명된 뷰어 문맥)에 대한 답에만 한다. 일반 지식 답은 그대로 둔다.
+    record = RecordFacts.from_context(query.context) if measures is not None else None
+    if record is not None and evidence is not None:
+        pool = _grounding(query, evidence)
+        if ungrounded_measurements(answer, facts=pool, prompt=query.prompt, extended=True):
+            answer = drop_ungrounded(answer, facts=pool, prompt=query.prompt, extended=True)
+    answer = drop_misattributed_zones(answer, _zone_facts(query.context))
     if measures is None:
         return answer
-    return drop_contradicted_causes(answer, measures, default_zone=zone, record_zone=_playback_zone(query.context))
+    answer = drop_contradicted_causes(answer, measures, default_zone=zone, record_zone=_playback_zone(query.context))
+    if record is not None and not safety:
+        answer = ground_generated(answer, record, zone=zone, drop_only=drop_only, marked=has_record_marker(query.prompt),
+                                  zone_asked=requested_zone(query.prompt, None) is not None)
+    if had_body and (not has_body(answer) or answer.strip() in {_NO_ANSWER, "세션 기록으로는 확인할 수 없습니다."}):
+        if drop_only or safety:  # 위험 질문은 빈 답을 guard_answer에 넘겨 그 종류의 고정 문장을 받는다(기록 답·"답할 수 없습니다" 금지)
+            return ""
+        found = answer_record_question(query.context, query.prompt, task_type=query.task_type, recent_turns=())  # 분류된 기록 질문이면 그 결정적 답
+        return found.text if found is not None and found.kind != "mixed" else _NO_ANSWER
+    return answer
+
+
+def _grounding(query: CopilotQueryRequest, evidence: tuple[str, ...]) -> dict[str, Any]:
+    """문서 답의 수치가 기댈 수 있는 값: 서명된 대화 자료, 도막·팔 자세 문맥, 검색 조각 본문. 대화 기록은 넣지 않는다."""
+    return {"facts": authenticated_facts(query.context), "coating": parse_viewer_coating_context(query.context, "knowledge_search"),
+            "arm": parse_viewer_arm_pose(query.context), "evidence": list(evidence)}
 
 
 def _playback_zone(context: str | None) -> str | None:
@@ -635,6 +694,14 @@ def error_response(code: int, message: str) -> JSONResponse:
     return JSONResponse(status_code=code, content=envelope.model_dump(mode="json"))
 
 
+def _header_subject(response: Any) -> dict[str, Any] | None:
+    try:
+        value = json.loads(response.headers.get(SUBJECT_HEADER) or "null")
+    except ValueError:
+        return None
+    return value if isinstance(value, dict) else None
+
+
 def _success_response(
     query: CopilotQueryRequest,
     started: float,
@@ -648,6 +715,7 @@ def _success_response(
     coating_context: dict[str, object] | None = None,
     context_status: str = "not_available",
     generated: bool = False,
+    subject: Mapping[str, Any] | None = None,
 ) -> JSONResponse:
     """`generated`는 모델이 문장을 만든 답에만 준다. 나머지는 채점·분석 결과를 그대로 옮긴 답이다.
 
@@ -688,7 +756,10 @@ def _success_response(
         len(citations),
     )
     source = "documents" if retrieval_used else "conversation" if generated else "analysis"
-    return JSONResponse(status_code=200, content=envelope.model_dump(mode="json"), headers={ANSWER_SOURCE_HEADER: source})
+    headers = {ANSWER_SOURCE_HEADER: source}
+    if subject:
+        headers[SUBJECT_HEADER] = json.dumps(subject, ensure_ascii=True, separators=(",", ":"))
+    return JSONResponse(status_code=200, content=envelope.model_dump(mode="json"), headers=headers)
 
 
 async def _execute_copilot_query(
@@ -722,6 +793,11 @@ async def _execute_copilot_query(
         query.session_id or "CHAT:" + query.user_id, limit=6,
         user_id=query.user_id, conversation_key=conversation_id,
     ))
+    # 서명된 뷰어 기록이 있을 때만 켠다(사용자 결정 7). 세션 요약으로 답하는 기존 대화 경로(TSB·시퀀스 질문)는 그대로 둔다.
+    # 서명된 기록이 없어도 도장·훈련 낱말이 든 지식 질문은 문서로 답한다(사용자 결정 4). 잡담·TSB 요약 대화는 그대로.
+    grounded = _grounded_route(query.prompt, previous_subject(dialogue_turns), viewer=viewer_claims(query.context) is not None)
+    # 기록·도장 지식 질문에는 모델이 만든 이전 답을 다시 넘기지 않는다(지어낸 Zone이 다음 답의 근거가 된다). 잡담은 그대로.
+    model_turns = without_generated_answers(dialogue_turns) if grounded else dialogue_turns
     # 위험 행동을 해도 되는지 묻는 질문은 대화 경로·측정값 짧은 답·뷰어 엔진 답으로 보내지 않고 문서 검색으로 답한 뒤
     # 답을 검사한다(2026-11-14 훈련생 질문 시험 T15). "그럼 해도 돼?"는 같은 대화의 앞 질문으로 본다.
     if safety_class == "hand_tip":
@@ -732,7 +808,6 @@ async def _execute_copilot_query(
     safety = safety_class is not None and query.task_type != "error_analysis"
     if safety and query.task_type != "knowledge_search":
         query = query.model_copy(update={"task_type": "knowledge_search"})
-    safety_topic = safety
     facts = authenticated_facts(query.context)
     try:
         # Pose/order playback validation applies only when consuming that
@@ -742,13 +817,30 @@ async def _execute_copilot_query(
     except _InvalidViewerPlayback:
         return error_response(422, "Invalid motion viewer playback context")
     relevant_viewer = viewer_analysis is not None and query.task_type in ("pose_recomm", "trajectory_recomm")
-    progress_kind = None if safety else progress_question(query.prompt)
+    # 서명된 뷰어 기록을 묻는 질문은 계획 모델 앞에서 기록 행으로만 답한다(record_query). 위험 질문은 위에서 갈렸고 여기 오지 않는다.
+    record = (answer_record_question(query.context, query.prompt, task_type=query.task_type, recent_turns=dialogue_turns)
+              if safety_class is None else None)
+    if record is not None and record.kind != "mixed":
+        return _success_response(query, request_started, answer=record.text, retrieval_used=False, citations=[],
+                                 sequence_context=record.sequence_context, context_status="available", subject=record.subject)
+    # 기록 표지가 없는 누락·보완·다음 Zone 질문("누락한 Zone은?")은 지금처럼 서명된 방문 순서와 최종 도막 게이트로 답한다.
+    progress_kind = progress_question(query.prompt) if record is None and safety_class is None else None
     progress = viewer_progress_answer(query.context, query.prompt, progress_kind) if progress_kind else None
     if progress is not None:
-        # 누락·보완·다음 Zone은 서명된 방문 순서와 최종 도막 게이트로만 답한다. 어느 탭이든 같다(viewer_progress).
         return _success_response(query, request_started, answer=progress[0], retrieval_used=False, citations=[],
                                  sequence_context=progress[1], context_status="available")
-    if is_current_next_question(query.prompt) and not safety:
+    # 섞인 질문(기록 조각 + 지식 조각)은 기록 문장을 먼저 두고, 지식 조각만 문서로 답한다(안전 질문과 같은 문서 경로).
+    mixed = record if record is not None and record.kind == "mixed" else None
+    if mixed is not None and query.task_type != "knowledge_search":
+        query = query.model_copy(update={"task_type": "knowledge_search"})
+    documents_only = safety or mixed is not None
+
+    def record_only(found: RecordAnswer) -> JSONResponse:
+        # 모델 서버가 없거나 생성이 실패해도 섞인 질문의 기록 쪽 답은 낸다.
+        return _success_response(query, request_started, answer=found.text, retrieval_used=False, citations=[],
+                                 sequence_context=found.sequence_context, context_status="available", subject=found.subject)
+
+    if is_current_next_question(query.prompt) and not documents_only:
         answer, scope, progress = await to_thread.run_sync(lambda: current_next_answer(
             query, sequences, reports, sequence_engine=sequence_engine, coating_engine=coating_engine,
         ))
@@ -773,7 +865,7 @@ async def _execute_copilot_query(
         )
     # A full reference plan is available before any trainee sequence or complete
     # report. It never authorizes realtime movement or supplies actual visits.
-    if (has_reference_plan and not relevant_viewer and query.task_type != "error_analysis" and not safety
+    if (has_reference_plan and not relevant_viewer and query.task_type != "error_analysis" and not documents_only
             and is_reference_order_question(query.prompt)):
         return await reference_answer()
     frame_direction = playback_direction_from_context(query.context)
@@ -788,11 +880,11 @@ async def _execute_copilot_query(
         return _success_response(query, request_started, answer=playback_direction_answer(frame_direction),
                                  retrieval_used=False, citations=[], sequence_context=frame_direction or {"scope": "current_frame", "analysis_status": "unavailable"},
                                  context_status="available" if available else "not_available")
-    if viewer_requested and not safety and (simple_direction_question(query.prompt) or preset_intent("trajectory_recomm", query.prompt) == "order_direction"):
+    if viewer_requested and not documents_only and (simple_direction_question(query.prompt) or preset_intent("trajectory_recomm", query.prompt) == "order_direction"):
         return frame_answer()
-    arm_claims = parse_viewer_arm_pose(query.context) if viewer_requested and not safety else None
+    arm_claims = parse_viewer_arm_pose(query.context) if viewer_requested and not documents_only else None
     coating_question = is_coating_status_question(query.prompt) or is_coating_advice_question(query.prompt)
-    if arm_claims is not None and not coating_question and _BODY_PART.search(query.prompt) and not NOT_JOINT.search(query.prompt):
+    if arm_claims is not None and not coating_question and BODY_PART.search(query.prompt) and not NOT_JOINT.search(query.prompt):
         # 손·손목·팔꿈치 질문은 어느 탭이든 팔 관절 엔진 결과로만 답한다(운영 q4·q5·q6: 작업 안내·모델의 "정상 범위" 답).
         claims = viewer_claims(query.context)
         playback = (viewer_analysis or {}).get("playback_context") or (claims[0].get("playback_context") if claims else None)
@@ -804,14 +896,14 @@ async def _execute_copilot_query(
                                  pose_context={"scope": "arm_pose", "status": arm_claims.get("status")} if query.task_type == "pose_recomm" else None,
                                  context_status="available" if arm_claims.get("status") == "available" else "not_available")
     if (arm_claims is not None and viewer_analysis is not None and query.task_type == "pose_recomm"
-            and (preset_intent(query.task_type, query.prompt) == "pose_worst_zone" or _WORST_ZONE.search(query.prompt))):
+            and (preset_intent(query.task_type, query.prompt) == "pose_worst_zone" or WORST_ZONE.search(query.prompt))):
         # "Zone별로 어디가 문제야?"는 자세 유사도가 낮은 Zone과 그 교정으로 답한다(운영 q2, 27B Zone 오기).
         zones = viewer_analysis.get("zones")
         answer = zone_pose_summary(arm_claims, list(zones.values()) if isinstance(zones, Mapping) else None)
         return _success_response(query, request_started, answer=answer, retrieval_used=False, citations=[],
                                  pose_context={"scope": "arm_pose_zones", "status": arm_claims.get("status")},
                                  context_status="available" if arm_claims.get("status") == "available" else "not_available")
-    if viewer_requested and not safety and preset_intent(query.task_type, query.prompt) is None:
+    if viewer_requested and not documents_only and preset_intent(query.task_type, query.prompt) is None:
         signed_answer = viewer_measurement_answer(query.context, query.prompt) or (
             viewer_findings_answer(query.context) if _EVALUATION_QUESTION.search(query.prompt) else None)
         if signed_answer is not None:
@@ -819,7 +911,7 @@ async def _execute_copilot_query(
                                      context_status="available")
     decision = None
     planned_pipeline = None
-    if (query.task_type != "error_analysis" and pipeline_provider is not None and not safety_topic
+    if (query.task_type != "error_analysis" and pipeline_provider is not None and not documents_only
             and preset_intent(query.task_type, query.prompt) is None and not is_coating_status_question(query.prompt) and not _pose_engine_question(query)):
         try:
             planned_pipeline = await to_thread.run_sync(pipeline_provider)
@@ -836,7 +928,7 @@ async def _execute_copilot_query(
                 def plan():
                     with generation_slot_for(planner):
                         return parse_plan(planner.plan_copilot_dialogue(query.prompt, task_type=query.task_type,
-                                          recent_turns=dialogue_turns, facts=facts))
+                                          recent_turns=model_turns, facts=facts))
                 decision = await to_thread.run_sync(plan)
             except Exception:
                 logger.exception("copilot dialogue planning failed request_id=%s", query.request_id)
@@ -857,12 +949,13 @@ async def _execute_copilot_query(
                                              context_status="available" if found_report else "not_available")
             def converse():
                 with generation_slot_for(planned_pipeline):
-                    return planned_pipeline.converse_copilot(query.prompt, recent_turns=dialogue_turns,
+                    return planned_pipeline.converse_copilot(query.prompt, recent_turns=model_turns,
                                                              facts=facts, response_mode=query.response_mode)
             answer = plain_answer(await to_thread.run_sync(converse))
-            if ungrounded_measurements(answer, facts=facts, prompt=query.prompt):
+            extended = is_domain_question(query.prompt)
+            if ungrounded_measurements(answer, facts=facts, prompt=query.prompt, extended=extended):
                 # 자료에 없는 측정값은 내보내지 않는다. 한 번 다시 생성하고, 그래도 남으면 그 부분을 뺀다.
-                answer = drop_ungrounded(await to_thread.run_sync(converse), facts=facts, prompt=query.prompt)
+                answer = drop_ungrounded(await to_thread.run_sync(converse), facts=facts, prompt=query.prompt, extended=extended)
             answer = _checked_generation(answer, query)
             return _success_response(query, request_started, answer=answer, retrieval_used=False, generated=True,
                                      citations=[], context_status="available" if facts else "not_available")
@@ -880,7 +973,7 @@ async def _execute_copilot_query(
             return await reference_answer()
         cross_tab = ((intent.startswith("pose_") and query.task_type != "pose_recomm")
                      or (intent.startswith("order_") and query.task_type != "trajectory_recomm"))
-        if viewer_requested and intent == "order_direction" and decision["kind"] in {"lookup", "correction"} and _DIRECTION_WORD.search(query.prompt):
+        if viewer_requested and intent == "order_direction" and decision["kind"] in {"lookup", "correction"} and DIRECTION_WORD.search(query.prompt):
             return frame_answer()
         zone_lookup = (intent == "order_direction" or intent.startswith("pose_")) and decision["scope"] in {"zone", "playback"}
         # 계획 모델은 짧은 용어 질문("백화가 뭐야?")도 "chat"으로 보내 검색 없이 답하게 했다(2-1 측정, 지식 질문의 약 11%).
@@ -888,12 +981,24 @@ async def _execute_copilot_query(
         # 돌아올 길(근거 확인 단계)이 설정된 경우에만 돌린다. 없으면 도장과 무관한 질문까지 문서로 답하게 된다.
         chat_redirected = (decision["kind"] == "chat" and query.task_type == "knowledge_search" and not viewer_requested
                            and not cross_tab and not zone_lookup and bool(_KNOWLEDGE_QUESTION.search(query.prompt))
-                           and _abstain_below(planned_pipeline) is not None and query.response_mode == "detailed")
-        if (decision["kind"] in {"chat", "clarify", "correction"} or cross_tab or zone_lookup) and not chat_redirected:
+                           and not is_domain_question(query.prompt)
+                           and _abstain_below(planned_pipeline, query.response_mode) is not None)
+        # 옛 행(v3.4.4 이전)에는 safety_class 열이 없어 앞 질문 문장도 다시 위험 판정한다.
+        if (decision["kind"] == "correction" and dialogue_turns and not dialogue_turns[-1].get("safety_class")
+                and classify(dialogue_turns[-1]["prompt"]) is None):
+            # "아까 답 이상한데"는 앞 질문을 기록으로 다시 답한다. 앞 턴이 위험 질문이면 다시 분류하지 않는다(안전 검사를 건너뛰지 않게).
+            again = answer_record_question(query.context, dialogue_turns[-1]["prompt"], task_type=query.task_type,
+                                           recent_turns=dialogue_turns[:-1])
+            if again is not None and again.kind != "mixed":
+                return _success_response(query, request_started, answer=again.text, retrieval_used=False, citations=[],
+                                         sequence_context=again.sequence_context, context_status="available", subject=again.subject)
+        # 기록·도장 지식 질문은 대화 모델이 아니라 아래 분석·문서 경로가 답한다. 되묻기와 잡담만 대화로 답한다.
+        if ((decision["kind"] in {"chat", "clarify", "correction"} or cross_tab or zone_lookup) and not chat_redirected
+                and (decision["kind"] == "clarify" or not grounded)):
             return await chat_answer()
 
     trusted_coating = parse_viewer_coating_context(query.context, query.task_type)
-    coating_advice_context = (trusted_coating if is_coating_advice_question(query.prompt) and trusted_coating and trusted_coating.get("analysis_status") == "available" else None)
+    coating_advice_context = (trusted_coating if mixed is None and is_coating_advice_question(query.prompt) and trusted_coating and trusted_coating.get("analysis_status") == "available" else None)
 
     async def report_facts() -> dict[str, Any]:
         found_coating = (await to_thread.run_sync(lambda: reports.latest_complete_analysis(query.session_id))
@@ -904,7 +1009,7 @@ async def _execute_copilot_query(
         """서명된 뷰어 자료가 먼저이고, 없으면 완료 리포트의 도막 행."""
         return trusted_coating if trusted_coating is not None else await report_facts()
 
-    if not safety and (is_coating_status_question(query.prompt) or (decision and decision["intent"] == "coating_status" and decision["kind"] == "lookup")):
+    if not documents_only and (is_coating_status_question(query.prompt) or (decision and decision["intent"] == "coating_status" and decision["kind"] == "lookup")):
         coating = await coating_facts()
         available = coating.get("analysis_status") == "available"
         return _success_response(query, request_started,
@@ -943,7 +1048,7 @@ async def _execute_copilot_query(
     # only a successful semantic-model classification may cross-route to RAG.
     knowledge_routed = intent == "knowledge" and (classifier is not None or decision is not None)
     if viewer_requested and intent == "order_direction" and not knowledge_routed and (
-            query.task_type == "trajectory_recomm" or _DIRECTION_WORD.search(query.prompt)):
+            query.task_type == "trajectory_recomm" or DIRECTION_WORD.search(query.prompt)):
         return frame_answer()
     viewer_context_requested = bool(query.context and query.context.startswith(_MOTION_VIEWER_CONTEXT_PREFIX))
     if viewer_analysis is not None and query.task_type == "pose_recomm" and "playback_context" in viewer_analysis and _asks_current_viewer_pose(query.prompt) and not is_coating_advice_question(query.prompt):
@@ -1165,30 +1270,28 @@ async def _execute_copilot_query(
         )
 
     if pipeline_provider is None:
-        return error_response(503, "Copilot pipeline is not configured")
+        return record_only(mixed) if mixed is not None else error_response(503, "Copilot pipeline is not configured")
     try:
         pipeline = intent_pipeline or await to_thread.run_sync(pipeline_provider)
     except Exception:  # noqa: BROAD_EXCEPT_OK - construction failures surface as not ready
         logger.exception("copilot query: pipeline construction failed request_id=%s", query.request_id)
-        return error_response(503, "Copilot pipeline is not ready")
+        return record_only(mixed) if mixed is not None else error_response(503, "Copilot pipeline is not ready")
 
     # Explicit Y/N remains a backwards-compatible override.  When omitted, any
     # question that reaches this knowledge-generation branch needs retrieval;
     # structured pose/order/report questions have already returned above.
     use_rag = query.use_rag != "N" or safety
     session_summary = ""
-    recent_turns: list[dict[str, str]] = dialogue_turns
-    if query.session_id:
-        session_summary, recent_turns = await to_thread.run_sync(
-            lambda: (
-                summarize_session(sequences.session_bodies(query.session_id),
-                                  selected_sequence_id=_selected_sequence(query.context)),
-                dialogue_turns,
-            )
-        )
+    # 섞인 질문의 문서 쪽에는 기록 수치가 든 분석 답도 넘기지 않는다(질문만 남겨 지시어를 풀게 한다).
+    recent_turns: list[dict[str, Any]] = [{**turn, "answer": ""} for turn in dialogue_turns] if mixed is not None else model_turns
+    question = (mixed.knowledge_question or query.prompt) if mixed is not None else query.prompt  # 지시문·검색어의 질문
+    if query.session_id and mixed is None:  # 섞인 질문의 문서 쪽에는 세션 수치도 넘기지 않는다
+        session_summary = await to_thread.run_sync(
+            lambda: summarize_session(sequences.session_bodies(query.session_id),
+                                      selected_sequence_id=_selected_sequence(query.context)))
     definition_context = (viewer_definition_context(query.prompt, query.context)
-                          if query.response_mode == "quick" and query.task_type == "knowledge_search" else None)
-    knowledge_client_context = (definition_context or (json.dumps(facts, ensure_ascii=False, separators=(",", ":")) if facts else viewer_metadata_context(query.context))) if viewer_requested else (definition_context or query.context)
+                          if query.response_mode == "quick" and query.task_type == "knowledge_search" and mixed is None else None)
+    knowledge_client_context = MIXED_DOCUMENT_RULE if mixed is not None else (definition_context or (json.dumps(facts, ensure_ascii=False, separators=(",", ":")) if facts else viewer_metadata_context(query.context))) if viewer_requested else (definition_context or query.context)
     if coating_advice_context is not None:
         compact = target_advice_facts(coating_advice_context, measures=_viewer_measures(query.context, query.prompt)[0])
         knowledge_client_context = "[검증된 최종 도막 비교 자료]\n" + json.dumps(compact or coating_advice_context, ensure_ascii=False, separators=(",", ":"))
@@ -1197,7 +1300,7 @@ async def _execute_copilot_query(
             if compact else "\n최종 기록의 전문가 대비 대표 두께 비교이며 재생 시점의 현재 도막 판정이 아닙니다."
         ) + " 질문의 원인·방법·관계를 직접 설명하고 확인된 측정 사실과 일반적인 가능한 원인을 구분하세요. 권장 Zone 순서를 대신 답하지 마세요."
     instruction = build_query_instruction(
-        query.prompt,
+        question,
         client_context=knowledge_client_context,
         session_summary=session_summary,
         recent_turns=[] if definition_context is not None else recent_turns,
@@ -1205,7 +1308,7 @@ async def _execute_copilot_query(
         concise=query.response_mode == "detailed",
     )
     generation_instruction = (build_query_instruction(
-        query.prompt,
+        question,
         client_context=knowledge_client_context,
         session_summary=session_summary,
         recent_turns=[] if definition_context is not None else recent_turns,
@@ -1229,11 +1332,11 @@ async def _execute_copilot_query(
                     "quick_cache_scope": json.dumps([query.user_id, query.scenario_id, query.task_type]),
                     "concise_answer": True,
                     "generation_instruction": generation_instruction,
-                    **({"retrieval_instruction": query.prompt}
+                    **({"retrieval_instruction": question}
                        if getattr(pipeline, "quick_query_runtime", None) is not None else {}),
                 } if query.response_mode == "quick" else {
                     # 응답 수준 지시문이 검색어에 섞이면 무관한 문단이 잡힌다(Issue #9).
-                    "retrieval_instruction": retrieval_question(query.prompt, context=instruction),
+                    "retrieval_instruction": retrieval_question(question, context=instruction),
                 }),
             )
 
@@ -1241,15 +1344,15 @@ async def _execute_copilot_query(
         result = await to_thread.run_sync(_guarded_run)
     except OpenAIBackendUnavailableError:
         logger.exception("copilot query: model server unavailable request_id=%s", query.request_id)
-        return error_response(503, "Model server unavailable")
+        return record_only(mixed) if mixed is not None else error_response(503, "Model server unavailable")
     except Exception:  # noqa: BROAD_EXCEPT_OK - never leak internals past the boundary
         logger.exception("copilot query: pipeline failed request_id=%s", query.request_id)
-        return error_response(500, "Copilot query failed")
+        return record_only(mixed) if mixed is not None else error_response(500, "Copilot query failed")
 
     # 근거 확인 단계: 재정렬 1위 점수가 기준값 미만이면 생성한 답을 버린다(설정이 없으면 지금처럼 동작).
     # 기준값은 재정렬 모델의 점수 척도에 묶인다(KURE-Reranker-nano 3.28, 2026-11-13 측정). 상세분석만 잰 값이다.
-    abstain_below = _abstain_below(pipeline)
-    if use_rag and abstain_below is not None and query.response_mode == "detailed":
+    abstain_below = _abstain_below(pipeline, query.response_mode)
+    if use_rag and abstain_below is not None:
         scores = [float(c["rerank_score"]) for c in result.get("rag_chunks") or []
                   if isinstance(c, dict) and c.get("rerank_score") is not None]
         if not scores or max(scores) < abstain_below:
@@ -1259,16 +1362,27 @@ async def _execute_copilot_query(
                 return await chat_answer()
             # 위험 주제 질문은 근거가 약해도 그 종류의 고정 문장으로 답한다.
             withheld, withheld_citations = guard_answer(safety_class, "", []) if safety else (NO_EVIDENCE_ANSWER, [])
+            if not safety and _DIZZY.search(query.prompt):
+                withheld += "\n" + DIZZY_NOTE
+            if mixed is not None:
+                withheld = mixed.text + "\n" + MIXED_NO_EVIDENCE
             return _success_response(query, request_started, answer=withheld, retrieval_used=True, citations=withheld_citations,
-                                     context_status="available" if session_summary or coating_advice_context or facts else "not_available")
+                                     context_status="available" if session_summary or coating_advice_context or facts else "not_available",
+                                     subject=mixed.subject if mixed is not None else None)
     retrieved = retrieved_chunk_ids(result.get("rag_chunks") or []) if use_rag else []
     parsed = parse_knowledge_answer(str(result.get("response", "")), retrieved)
     answer = parsed.body
     if query.response_mode == "quick":
         answer = re.sub(r"\n+\s*\[?근거\]?\s*:?\s*$", "", answer).rstrip()
-    answer = _checked_generation(answer, query, instructions=_document_rules(pipeline))
+    answer = _checked_generation(
+        answer, query, instructions=_document_rules(pipeline), safety=safety, drop_only=mixed is not None,
+        evidence=tuple(str(c.get("text", "")) for c in result.get("rag_chunks") or [] if isinstance(c, dict)))
     # 위험한 행동을 해도 되는지 묻는 안전 질문은 한국어 답을 옮기기 전에 검사한다(바꾼 문장도 기존 번역을 지난다).
     answer, citations = guard_answer(safety_class if safety else None, answer, list(parsed.citations))
+    if mixed is not None:
+        # 기록 문장 먼저, 문서 문장은 뒤에. 문서 본문이 비면 근거가 없다고만 덧붙인다(기록 문장을 되풀이하지 않는다).
+        body = "" if parsed.repair_path in FAILED_REPAIR_PATHS else answer.strip()  # 빈 본문의 대체 문장("답변을 생성하지 못했습니다")도 빈 답이다
+        answer = mixed.text + "\n" + (body or MIXED_NO_EVIDENCE)
     logger.info(
         "copilot answer normalized request_id=%s repair_path=%s citations=%d dropped=%d",
         query.request_id,
@@ -1286,6 +1400,7 @@ async def _execute_copilot_query(
         coating_context=coating_advice_context,
         context_status="available" if session_summary or coating_advice_context or facts else "not_available",
         generated=True,
+        subject=mixed.subject if mixed is not None else None,
     )
 
 
@@ -1396,6 +1511,7 @@ async def execute_copilot_query(
             session_key=query.session_id or "CHAT:" + query.user_id, user_id=query.user_id,
             prompt=query.prompt, answer=data["answer"], task_type=query.task_type,
             created_at=data["generated_at"], conversation_key=conversation_id, safety_class=safety_class,
+            answer_source=response.headers.get(ANSWER_SOURCE_HEADER, "analysis"), subject=_header_subject(response),
         )
     except Exception:
         logger.exception("copilot query: failed to store dialogue request_id=%s", query.request_id)
