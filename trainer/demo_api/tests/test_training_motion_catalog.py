@@ -16,7 +16,8 @@ def publish(root, output, *, worker='new_worker', worker_name='새 작업자', s
            'mode_label':'학습모드 4','quality_status':quality,'zone_id_available':mapped,
            'zone_count':1 if mapped else 0,'source_kind':'converted','frame_count':5,'heightmap_count':0}
     artifact = {'metadata':row,'features':{'zone_order':[{'map_num':1,'zone_id':'1'}],
-        'zones':[{'map_num':1,'zone_id':'1','speed_mms':{'median':300},'distance_mm':{'median':250}}]},
+        'zones':[{'map_num':1,'zone_id':'1','speed_mms':{'median':1600},'distance_mm':{'median':260},
+                  'speed_real_mms':{'median':300},'distance_real_mm':{'median':250}}]},
         'provenance':{'source_csv':{'relative_path':source.relative_to(root).as_posix()},'heightmaps':[]}}
     content=json.dumps(artifact,ensure_ascii=False).encode()
     records=output/'records';records.mkdir(parents=True,exist_ok=True)
@@ -56,6 +57,15 @@ def test_auto_registered_record_actually_plays_with_source_zone_ids(monkeypatch,
     assert body['selected_session_id']=='4_2001_1' and len(body['frames'])==5
     assert body['frames'][0]['zone_id']=='1'
     assert body['paint_trace'] and body['query_context_signatures']
+
+
+def test_session_zone_metrics_use_measured_real_columns_not_simulator_input(monkeypatch,tmp_path):
+    output=tmp_path/'built';monkeypatch.setenv('TRAINING_DATA_ROOT',str(output))
+    publish(tmp_path,output)
+    profile=TrainingMotionCatalog(tmp_path).profile('new_worker','spray',4)
+    zone=profile['sessions'][0]['analysis']['zones']['1:1']
+    assert (zone['speed_mms'],zone['distance_mm'])==(300,250)
+    assert profile['aggregate']['zones']['1:1']['speed_mms']['median']==300
 
 
 def test_auto_catalog_does_not_duplicate_existing_worker_or_session(monkeypatch,tmp_path):

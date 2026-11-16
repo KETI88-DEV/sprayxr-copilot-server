@@ -99,9 +99,11 @@ class TrainingMotionCatalog:
             if zone.get('map_num') is None or zone.get('zone_id') is None:
                 continue
             key = f"{zone['map_num']}:{zone['zone_id']}"
+            # Expert profiles (build_expert_reference) use the measured Real columns; the
+            # feature `speed_mms` is the simulator Input setting (mostly a fixed 1600).
             zones[key] = {'map_num': zone['map_num'], 'zone_id': str(zone['zone_id']),
-                'speed_mms': (zone.get('speed_mms') or {}).get('median'),
-                'distance_mm': (zone.get('distance_mm') or {}).get('median')}
+                'speed_mms': (zone.get('speed_real_mms') or {}).get('median'),
+                'distance_mm': (zone.get('distance_real_mm') or {}).get('median')}
         # Features produced for old foreman files were canonicalized at build
         # time, while playback still reads their original CSV Zone numbers.
         legacy = row.get('source_kind') != 'converted' and str(relative).startswith('raw/')
