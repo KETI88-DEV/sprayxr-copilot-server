@@ -1,13 +1,16 @@
 """모델이 쓰는 도장·기록 답에 싣는 시뮬레이터 기본 설정(v3.5.1). 모델이 현장 조언을 지어내지 않게 이 훈련이 무엇인지 알려 준다.
 
 지침이 아니라 사실이다. 유출 검사 지문에는 넣지 않고(dialogue._instruction_texts는 이 블록을 싣기 전 지침만 본다),
-수치 근거 검사에는 블록 본문 자체를 근거로 준다(목표·기준 낱말 검사도 이 블록의 정의를 따른다).
+수치 근거 검사는 이 기록을 가리키지 않는 일반 문장에만 블록 값을 쓴다(`ungrounded_with_simulator`).
 """
 from __future__ import annotations
 
-from typing import Final
+import re
+from typing import Any, Final
 
+from trainer.demo_api.coating_query import _RECORD_SENTENCE
 from trainer.demo_api.copilot_intent import is_domain_question
+from trainer.demo_api.dialogue import _ASKED_ZONE, _MEASUREMENT_EXTENDED, _SPEED_UNIT, ungrounded_measurements
 from trainer.demo_api.record_query import has_record_marker
 
 SIMULATOR_CONTEXT: Final = """[시뮬레이터 기본 설정]
@@ -18,6 +21,34 @@ SIMULATOR_CONTEXT: Final = """[시뮬레이터 기본 설정]
 - 이격거리·속도의 기준은 Zone별 전문가 측정 중앙값입니다. 전문가 속도는 이전 장비 기록이라 속도를 맞추라고 하지 않습니다. 거리나 속도를 몇 % 바꾸라는 고정 규칙은 없습니다.
 - 단위: 위치 m, 이격거리 mm, 속도 mm/s, 각도 °, 도막 µm, 압력 bar, 온도 ℃."""
 
+_BLASTING: Final = re.compile(r"블라스팅|blasting", re.I)
+# 블록의 스프레이건·도막 목표 문장은 블라스팅 세션에 맞지 않는다(query_runtime.retrieval_question과 같은 낱말).
+# shortcut: 질문 글자만 본다(앞 대화의 블라스팅 맥락은 보지 않는다).
+_ASSERTED: Final = {re.sub(r"\s+", "", m[0].replace("μ", "µ")) for m in _MEASUREMENT_EXTENDED.finditer(SIMULATOR_CONTEXT)}
+_ASSERTED_UNITS: Final = set(_SPEED_UNIT.findall(SIMULATOR_CONTEXT))
+_BLOCK_WORDS: Final = {"목표", "기준"}  # 블록이 정의하는 낱말
+
+
+def is_blasting(prompt: str) -> bool:
+    return bool(_BLASTING.search(prompt))
+
+
 def wants_simulator_context(prompt: str) -> bool:
-    """대화 경로: 도장 낱말이나 기록 표지가 있는 질문만. 주제 밖 잡담은 지금처럼 둔다."""
-    return is_domain_question(prompt) or has_record_marker(prompt)
+    """대화 경로: 도장 낱말이나 기록 표지가 있는 질문만. 주제 밖 잡담·블라스팅 질문은 지금처럼 둔다."""
+    return not is_blasting(prompt) and (is_domain_question(prompt) or has_record_marker(prompt))
+
+
+def refers_to_record(sentence: str) -> bool:
+    return bool(_RECORD_SENTENCE.search(sentence) or _ASKED_ZONE.search(sentence) or has_record_marker(sentence))
+
+
+def ungrounded_with_simulator(answer: str, *, facts: Any, prompt: str, extended: bool = False) -> list[str]:
+    """`ungrounded_measurements`에, 이 기록을 가리키지 않는 문장에 한해 블록이 쓴 그대로의 값(범위는 범위 그대로)을 허용한다."""
+    invented: list[str] = []
+    for sentence in re.split(r"(?<=[.!?])\s+|\n+", answer):
+        found = ungrounded_measurements(sentence, facts=facts, prompt=prompt, extended=extended)
+        if found and not refers_to_record(sentence):
+            found = [m for m in found if re.sub(r"\s+", "", m.replace("μ", "µ")) not in _ASSERTED
+                     and m not in _ASSERTED_UNITS and m not in _BLOCK_WORDS]
+        invented += found
+    return invented

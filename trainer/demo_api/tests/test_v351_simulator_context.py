@@ -77,3 +77,46 @@ def test_documents_answer_stating_simulator_facts_is_kept_for_a_record() -> None
 def test_other_numbers_are_still_ungrounded() -> None:
     assert dialogue.ungrounded_measurements(FACT_ANSWER, facts={"s": SIMULATOR_CONTEXT}, prompt="", extended=True) == []
     assert dialogue.ungrounded_measurements("압력은 700 bar입니다.", facts={"s": SIMULATOR_CONTEXT}, prompt="", extended=True) == ["700 bar"]
+
+
+# --- 1차 수정: 블록 수치는 이 기록을 가리키지 않는 일반 문장만 받친다 ---------------------------------
+GENERAL = "압력은 108~504 bar 범위에서 36 bar 단위로 고릅니다."
+RECORD_CLAIMS = ["이 기록은 압력을 504 bar로 설정했습니다.", "이 기록의 신너 희석률은 1.6%입니다.", "이 기록의 속도는 기준보다 24% 느립니다."]
+
+
+@pytest.mark.parametrize("claim", RECORD_CLAIMS)
+def test_record_sentences_are_not_grounded_by_the_block_on_the_conversation_route(claim: str) -> None:
+    pipeline = RecordingPipeline(plan=CLARIFY, converse=claim)
+    data = ask("VR 어지러우면 몇 분 쉬어?", tab="knowledge", playback=AT_35S, pipeline=pipeline)
+    assert pipeline.calls.count("converse") == 2, "한 번 다시 생성한다"
+    for number in ("504 bar", "1.6%", "24%"):
+        assert number not in data["answer"], data["answer"]
+
+
+@pytest.mark.parametrize("claim", RECORD_CLAIMS)
+def test_record_sentences_are_not_grounded_by_the_block_on_the_documents_route(claim: str) -> None:
+    pipeline = RecordingPipeline(document="[답변] " + claim, chunks=[{"chunk_id": "DOC-x", "text": "작업 중 환기를 유지한다.", "rerank_score": 9.0}])
+    data = ask("압력은 어떻게 정해?", tab="knowledge", playback=AT_35S, pipeline=pipeline)
+    for number in ("504 bar", "1.6%", "24%"):
+        assert number not in data["answer"], data["answer"]
+
+
+def test_general_sentence_with_the_written_range_passes_but_endpoints_do_not() -> None:
+    data = ask("VR 어지러우면 몇 분 쉬어?", tab="knowledge", playback=AT_35S, pipeline=RecordingPipeline(plan=CLARIFY, converse=GENERAL))
+    assert data["answer"] == GENERAL
+    pipeline = RecordingPipeline(document="[답변] " + GENERAL, chunks=[{"chunk_id": "DOC-x", "text": "환기", "rerank_score": 9.0}])
+    assert GENERAL in ask("압력은 어떻게 정해?", tab="knowledge", playback=AT_35S, pipeline=pipeline)["answer"]
+    for endpoint in ("압력은 504 bar까지 고릅니다.", "압력은 108 bar부터입니다."):
+        data = ask("VR 어지러우면 몇 분 쉬어?", tab="knowledge", pipeline=RecordingPipeline(plan=CLARIFY, converse=endpoint), raw_context="")
+        assert "bar" not in data["answer"], data["answer"]
+
+
+def test_blasting_questions_get_no_block_and_are_checked_as_before() -> None:
+    pipeline = RecordingPipeline(document="[답변] " + GENERAL)
+    ask("블라스팅 노즐 압력은 몇 bar로 해?", tab="knowledge", pipeline=pipeline, raw_context="")
+    run = dict(pipeline.kwargs)["run"]
+    assert MARK not in run["instruction"]
+    chat = RecordingPipeline(plan=CLARIFY, converse=GENERAL)
+    data = ask("블라스팅 노즐 압력은 몇 bar로 해?", tab="knowledge", pipeline=chat, raw_context="")
+    assert "simulator_context" not in dict(chat.kwargs).get("converse", {})
+    assert "108~504" not in data["answer"], data["answer"]

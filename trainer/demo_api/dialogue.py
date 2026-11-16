@@ -245,10 +245,10 @@ def without_hanzi(answer: str, *, prompt: str) -> str:
     return " ".join(kept) or "답변을 한국어로 만들지 못했습니다. 다시 질문해 주세요."
 
 
-def drop_ungrounded(answer: str, *, facts: Any, prompt: str, extended: bool = False) -> str:
+def drop_ungrounded(answer: str, *, facts: Any, prompt: str, extended: bool = False, check: Callable[..., list[str]] | None = None) -> str:
     """자료에 없는 측정값이 든 괄호와 문장을 뺀다. 남는 것이 없으면 확인할 수 없다고 답한다."""
     def invented(part: str) -> bool:
-        return bool(ungrounded_measurements(part, facts=facts, prompt=prompt, extended=extended))
+        return bool((check or ungrounded_measurements)(part, facts=facts, prompt=prompt, extended=extended))
 
     answer = _LEGACY_LABEL.sub("", answer)
     answer = re.sub(r"\s*\([^()]*\)", lambda match: "" if invented(match[0]) else match[0], answer)
