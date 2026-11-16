@@ -93,3 +93,11 @@ def test_valid_cause_premise_matching_the_record_is_confirmed_without_yes() -> N
 
 def test_cause_premise_against_the_measured_distance_still_says_no() -> None:   # T40: Zone 8은 가까운데 "멀어서"
     assert _answer("거리가 멀어서 얇게 나온 거지?").startswith("아니요. Zone 8")
+
+
+# ---- 재검토 추가 2: 사실을 말하고 이유를 묻는 질문("가까웠는데 왜 얇아?")은 전제가 아니라 예·아니요로 열지 않는다
+@pytest.mark.parametrize("prompt,fact", [("Zone 8 거리가 가까웠는데 왜 얇아?", "Zone 8은 251 mm"),
+                                         ("Zone 4 거리가 멀었는데 왜 두꺼워?", "Zone 4는 407 mm")])
+def test_stated_fact_with_a_why_question_gets_no_yes_or_no(prompt: str, fact: str) -> None:
+    text = _answer(prompt)
+    assert text.startswith(fact) and not text.startswith(("예", "아니요")), text

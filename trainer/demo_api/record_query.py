@@ -586,6 +586,7 @@ _QUESTION_SHAPED: Final = re.compile(r"[?？]\s*$|(?:나요|까요|가요|죠|�
 _METRIC_NAMES: Final = {"pose_similarity": "자세 유사도", "work_similarity": "작업 유사도", "order_adherence": "순서 준수율"}
 _COATING_CODES: Final = {"coating_extreme", "coating_over", "completion", "external_standard", "cause"}
 _SPEED_RELATION: Final = {"speed_slower": "lower", "speed_faster": "higher", "distance_farther": "higher", "distance_closer": "lower"}
+_STATED_WHY: Final = re.compile(r"(?:는데|은데|니까).*?(?:왜|어째서|이유)")  # 사실 + 이유 질문
 _COMPARISON_PHRASE: Final = {"speed_slower": "속도가 느린", "speed_faster": "속도가 빠른", "distance_farther": "멀리서 칠한", "distance_closer": "가까이서 칠한"}
 
 
@@ -629,7 +630,8 @@ def _premise_lead(facts: RecordFacts, part: RecordPart, premise: Premise) -> str
         relation = measured_relation(measure, "distance_mm")
         if cause in _DISTANCE_WORDS and relation is not None:
             # 실측과 다르거나 방향이 물리적으로 거꾸로면(가까워서 얇다·멀어서 두껍다) "아니요."; 맞아도 "예."로 인과를 인정하지 않고 사실만 말한다
-            wrong = _DISTANCE_WORDS[cause] != relation or (cause, effect) in _INVERTED
+            # "가까웠는데 왜 얇아?"는 사실을 말하고 이유를 묻는다. 전제가 아니므로 예·아니요로 열지 않는다
+            wrong = not _STATED_WHY.search(part.text) and (_DISTANCE_WORDS[cause] != relation or (cause, effect) in _INVERTED)
             return ("아니요. " if wrong else "") + (distance_sentence(zone, measure) or "")
         return None  # 속도 원인은 R6(_speed)가 값과 한계만 말한다
     if premise.kind == "conclusion":
