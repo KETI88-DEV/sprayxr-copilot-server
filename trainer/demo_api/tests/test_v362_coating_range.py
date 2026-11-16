@@ -102,3 +102,32 @@ def test_range_is_read_from_the_record_not_assumed() -> None:
     # 2026-11-14 기록은 옛 판정 범위(160~240µm)를 담고 있다. 문장은 기록의 범위를 그대로 쓴다.
     out = text("coating_over", data=payload())
     assert "상한(240µm)" in out and "200µm" not in out, out
+
+
+def test_one_answer_uses_the_row_range_not_a_different_target_block_range() -> None:
+    # 세션 범위 150~250µm로 판정한 행인데 target 블록은 목표만으로 구한 150~187.5µm를 담은 경우(조정 라운드 1 지적 a).
+    from trainer.demo_api import coating_assessment as ca
+    from trainer.demo_api.viewer_context import sign_context, viewer_signatures
+    data = payload()
+    target = data["coating_evaluation"]["target"]
+    target.update(target_thickness_um=150.0, normal_band_um=[150.0, 187.5], zones=[
+        ca.zone_row(1, "1", ca.assess_readings([270.0] * 4, 150.0, max_thickness_um=250.0)),
+        ca.zone_row(1, "2", ca.assess_readings([160.0, 160.0, 160.0, 260.0], 150.0, max_thickness_um=250.0))])
+    data["query_context_signatures"] = viewer_signatures(data)
+    data["query_context_signatures"]["arm_pose"] = sign_context("arm_pose", data["arm_pose_evaluation"])
+    for code, zones, operator in (("completion", ("2",), None), ("completion", (), None), ("coating_over", (), None),
+                                  ("cause", ("2",), None), ("coating_extreme", (), "argmax"), ("external_standard", (), None)):
+        out = text(code, zones, operator, data=data)
+        assert "187.5" not in out, (code, out)
+        assert "150~250µm" in out or "상한(250µm)" in out, (code, out)
+
+
+def test_below_grade_zone_never_says_mostly_above() -> None:
+    # 평균은 하한 미만(저도막)인데 범위 밖 면적은 상한 초과가 더 많은 Zone(조정 라운드 1 지적 b).
+    from trainer.demo_api import coating_assessment as ca
+    from trainer.demo_api.viewer_progress import shortfall_text
+    row = ca.zone_row(1, "4", ca.assess_readings([1.5, 1.5, 210.0, 210.0, 210.0]))
+    assert row["grade"] == "below" and row["gate_status"] == "needs_more", row
+    out = shortfall_text(row)
+    assert "주로" not in out and "보완" not in out, out
+    assert "하한(160µm) 미만(미도장 포함) 40%" in out and "상한(200µm) 초과 60%" in out, out

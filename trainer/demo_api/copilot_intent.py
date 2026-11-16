@@ -13,10 +13,17 @@ ORDER_INTENTS = {"order_reference", "order_actual", "order_missing", "order_adhe
 _PAINTING_SUBJECT = re.compile(r"도막|두께|이격|속도|노즐|압력|안전|보호구|오버랩|표면\s*처리|전처리|절차"
     r"|도료|도장|스프레이|에어리스|팁|시너|희석|가사\s*시간|경화|건조|블라스팅|마스크|환기|훈련|(?i:vr)|어지럼|어지러|멀미|시험|실기|기능사|자격"
     r"|(?:스프레이|에어리스|도장)\s*건|건\s*(?:끝|각도|거리|속도|이동|선단)")
-# 자세 낱말만으로는 도장 질문이 아니다("요가 자세 종류는?"). 자세 문맥(자세 탭·서명된 자세 기록)에서
-# 개념을 묻는 말(_POSE_CONCEPT)과 함께일 때만 일반 지식으로 센다(v3.6.2, v360-review Important 1·2).
+# 자세 낱말도 도장 질문의 낱말이다(966a3d0: "자세 종류로는 어떤게있어?"). 자세 낱말만 있는 질문은 개념 표지
+# (_POSE_CONCEPT)가 있을 때만 일반 지식이다. "자세 유사도는 얼마야?"·"팔꿈치는 왜 지적됐어?"는 기록 질문이다(v3.6.2).
 _POSE_SUBJECT = re.compile(r"자세(?!히|하게|한)|동작|도구|도포|팔꿈치|어깨|무릎|허리|posture|pose", re.I)
 _POSE_CONCEPT = re.compile(r"종류|유형|뜻|의미|정의")
+# 도장이 아닌 활동·분야. 자세·동작 낱말이 겹쳐도 주제 밖 질문이라 대화 경로에 둔다("주제 밖은 일부러 열어 둔다"
+# 결정, 2026-11-14). 도장 낱말이 함께 있으면 도장 질문이다. 짧게 유지한다: 문제가 된 질문에서 고른 낱말만.
+_OFF_TOPIC = re.compile(r"요리|요가|스쿼트|필라테스|헬스|운동|디스크|골프|축구|야구|등산|달리기|러닝|수영|춤|댄스")
+
+
+def is_off_topic(prompt: str) -> bool:
+    return bool(_OFF_TOPIC.search(prompt)) and not _PAINTING_SUBJECT.search(prompt) and not re.search(_COATING_SUBJECT, prompt, re.I)
 _RECORD_REFERENCE = re.compile(r"영역|구역|zone|존|부위|현재|지금|이번|내[ 가]|어디|어느", re.I)
 
 
@@ -48,18 +55,19 @@ def is_coating_status_question(prompt: str) -> bool:
 
 
 def is_domain_question(prompt: str) -> bool:
+    # 자세 낱말은 넣지 않는다. 넣으면 서명된 기록의 자세 질문("자세 유사도는 얼마야?")이 대화 대신 문서로 간다(4c5da92와 다름).
     return bool(_PAINTING_SUBJECT.search(prompt) or re.search(_COATING_SUBJECT, prompt, re.I))
 
 
-def is_general_painting_knowledge(prompt: str, *, pose: bool = False) -> bool:
+def is_general_painting_knowledge(prompt: str) -> bool:
     """기록·Zone·재생 위치를 가리키지 않는 도장 기술 질문(적정값·정의·원인·방법).
 
     일반 지식 표지가 있어야 하고, 평가형 어미·1인칭·지시어가 있으면 기록 후속 질문으로 본다
     ("속도는 괜찮았어?", "제 이격거리는 적당했나요?", "그럼 속도는?").
-    `pose`는 자세 문맥이다. 그때만 자세 낱말 + 개념 표지("자세 종류는?")를 센다. "자세 유사도는 얼마야?"는 기록 질문이다.
+    자세 낱말만 있으면 개념 표지가 있어야 하고, 주제 밖 활동 낱말이 있으면 도장 지식이 아니다.
     """
-    posture = pose and _POSE_SUBJECT.search(prompt) and _POSE_CONCEPT.search(prompt)
-    return bool((posture or ((is_coating_advice_question(prompt) or _PAINTING_SUBJECT.search(prompt))
+    posture = _POSE_SUBJECT.search(prompt) and _POSE_CONCEPT.search(prompt)
+    return bool(not is_off_topic(prompt) and (posture or ((is_coating_advice_question(prompt) or _PAINTING_SUBJECT.search(prompt))
                  and re.search(r"적정|기준|권장|표준|원인|이유|왜|뭐|무엇|뜻|의미|정의|종류|유형|어떤|차이|방법|어떻게|예방|방지|원리|얼마|순서|절차|단계|알려", prompt)))
                 and not _RECORD_REFERENCE.search(prompt)
                 and not re.search(r"시퀀스|기록|재생|아까|방금|(?<![가-힣])이\s*분사|었|았|했|어땠|괜찮|제\s|저의|나의|그럼|그\s", prompt))
@@ -86,7 +94,7 @@ def preset_intent(task_type: str, prompt: str) -> str | None:
 
 
 def fallback_intent(task_type: str, prompt: str) -> str:
-    if is_coating_advice_question(prompt) or is_general_painting_knowledge(prompt, pose=task_type == "pose_recomm"):
+    if is_coating_advice_question(prompt) or is_general_painting_knowledge(prompt):
         return "knowledge"
     lowered = prompt.lower()
     if task_type == "pose_recomm":
@@ -125,7 +133,7 @@ def classify_question_intent(
                 # A tab is a UI preference. A confidently different industrial
                 # subject must not become a Zone-order answer on a bad label.
                 if (is_coating_advice_question(prompt) or (result != "knowledge" and fallback_intent(task_type, prompt) == "knowledge"
-                        and (_PAINTING_SUBJECT.search(prompt) or task_type == "pose_recomm" and _POSE_SUBJECT.search(prompt)))):
+                        and (_PAINTING_SUBJECT.search(prompt) or _POSE_SUBJECT.search(prompt)))):
                     return "knowledge"
                 return result
             logger.warning("copilot intent classifier returned invalid label task=%s label=%s", task_type, result)

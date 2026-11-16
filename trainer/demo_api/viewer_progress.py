@@ -81,12 +81,13 @@ def _num(value: object) -> bool:
 
 
 def normal_band(item: Mapping[str, Any]) -> tuple[float, float]:
-    """판정 행(또는 target 블록)의 정상 범위. 기록에 범위가 없을 때만 목표에서 `resolve_band`로 구한다."""
+    """판정 행(또는 target 블록)의 정상 범위: `normal_band_um`, 다음은 하한·상한 필드. 둘 다 없을 때만 목표에서 `resolve_band`로 구한다."""
     value = item.get("normal_band_um")
     if isinstance(value, (list, tuple)) and len(value) == 2 and all(_num(v) for v in value):
         return float(value[0]), float(value[1])
     target = item.get("target_thickness_um")
-    return resolve_band(float(target) if _num(target) else None)
+    limits = {key: float(item[key]) for key in ("min_thickness_um", "max_thickness_um") if _num(item.get(key))}
+    return resolve_band(float(target) if _num(target) else None, **limits)
 
 
 def band_text(item: Mapping[str, Any]) -> str:
@@ -124,7 +125,10 @@ def shortfall_text(row: Mapping[str, Any]) -> str:
     if below is None:
         return f"상한({high:g}µm)을 넘는 면적은 {over:g}%입니다."
     text = f"범위 밖 면적은 하한({low:g}µm) 미만(미도장 포함) {below:g}%, 상한({high:g}µm) 초과 {over:g}%"
-    return text + {"under": "라 보완(더 칠하기)이 필요합니다.", "over": "로 주로 상한 초과입니다.", None: "입니다."}[shortfall_side(row)]
+    side = shortfall_side(row)
+    if side == "over" and row.get("grade") == "below":
+        side = None  # 평균이 하한 미만(저도막)인 Zone에 "주로 상한 초과"는 엇갈려 읽힌다. 두 비율만 말한다.
+    return text + {"under": "라 보완(더 칠하기)이 필요합니다.", "over": "로 주로 상한 초과입니다.", None: "입니다."}[side]
 
 
 def _area_text(row: Mapping[str, Any], *, first: bool) -> str:

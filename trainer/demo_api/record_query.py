@@ -356,9 +356,19 @@ def _target_um(facts: RecordFacts) -> float | None:
     return float(value) if _is_num(value) else None
 
 
-def _band(facts: RecordFacts) -> str:
-    """"160~200µm" — 기록 target 블록의 정상 범위(없으면 목표에서 구한다)."""
-    return band_text((facts.coating or {}).get("target") or {})
+def _range(facts: RecordFacts, zone: str | None = None) -> tuple[float, float]:
+    """판정 행의 정상 범위. Zone을 주면 그 행, 아니면 모든 행이 같은 범위일 때 그 범위, 그래도 없으면 target 블록.
+
+    한 답에 행 범위(세션 150~250µm)와 target 블록 범위(목표로만 구한 150~187.5µm)가 섞이지 않게 행을 먼저 본다.
+    """
+    rows = [row for row in ([_row(facts, zone)] if zone else facts.target_rows) if row is not None]
+    bands = {normal_band(row) for row in rows}
+    return bands.pop() if len(bands) == 1 else normal_band((facts.coating or {}).get("target") or {})
+
+
+def _band(facts: RecordFacts, zone: str | None = None) -> str:
+    low, high = _range(facts, zone)
+    return f"{low:g}~{high:g}µm"
 
 
 def _thickness_ranking(facts: RecordFacts, *, thinnest: bool) -> str:
@@ -368,7 +378,7 @@ def _thickness_ranking(facts: RecordFacts, *, thinnest: bool) -> str:
     first, rest = rows[0], rows[1:3]
     target = _target_um(facts)
     text = (f"가장 {'얇은' if thinnest else '두꺼운'} 곳은 Zone {first['zone_id']}입니다. 칠한 곳 평균 {first['thickness_um']:.1f}µm"
-            + (f"이고 정상 범위는 {_band(facts)}입니다." if target else "입니다."))
+            + (f"이고 정상 범위는 {_band(facts, str(first['zone_id']))}입니다." if target else "입니다."))
     return text + (" 그다음은 " + ", ".join(f"Zone {row['zone_id']}({row['thickness_um']:.1f}µm)" for row in rest) + "입니다." if rest else "")
 
 
@@ -377,7 +387,7 @@ def _overpaint(facts: RecordFacts) -> str:
     if not rows or target is None:
         return _NO_TARGET
     heavy = sorted((row for row in rows if _is_num(row.get("overpaint_percent")) and row["overpaint_percent"] > 0), key=lambda row: -row["overpaint_percent"])[:3]
-    high = normal_band((facts.coating or {}).get("target") or {})[1]
+    high = _range(facts)[1]
     text = f"칠한 곳 평균이 상한({high:g}µm)을 넘는 Zone은 {sum(row.get('grade') == 'above' for row in rows)}곳입니다."
     return text + (" 상한을 넘는 면적이 있는 Zone은 " + ", ".join(f"Zone {row['zone_id']}({row['overpaint_percent']:g}%)" for row in heavy) + " 순입니다."
                    if heavy else " 상한을 넘는 면적이 있는 Zone은 0곳입니다.")
@@ -536,7 +546,7 @@ def cause_answer(facts: RecordFacts, zone: str | None) -> str:
     if row is None or not _is_num(row.get("thickness_um")) or target is None:
         return " ".join(item for item in (_NO_TARGET, measured) if item)
     return " ".join(item for item in (
-        f"{_zone_text(facts, zone)}입니다. 정상 범위는 {_band(facts)}입니다.",
+        f"{_zone_text(facts, zone)}입니다. 정상 범위는 {_band(facts, zone)}입니다.",
         measured or "이 Zone의 이동 속도·이격거리 실측이 기록에 없어 원인은 말씀드릴 수 없습니다.") if item)
 
 
@@ -727,7 +737,7 @@ def answer_record_question(context: str | None, prompt: str, *, task_type: str,
         if part.code == "cause" and part.zones and in_record and any(p.kind == "cause" and p.subject.split(">")[0] in {"slow", "fast"} for p in part.premises):
             text = _speed(facts, part.zones[0])  # 속도 원인은 동조도 반박도 없이 값과 이전 장비 한계만
         if leads and part.code == "cause" and part.zones and _target_um(facts):
-            text = f"{_zone_text(facts, part.zones[0])}입니다. 정상 범위는 {_band(facts)}입니다."  # 실측 거리는 lead가 이미 말했다
+            text = f"{_zone_text(facts, part.zones[0])}입니다. 정상 범위는 {_band(facts, part.zones[0])}입니다."  # 실측 거리는 lead가 이미 말했다
         sentences.append(" ".join([*leads, text]))
         if text != ASK_ZONE and text != _NO_TARGET and in_record:
             answered.append(part)

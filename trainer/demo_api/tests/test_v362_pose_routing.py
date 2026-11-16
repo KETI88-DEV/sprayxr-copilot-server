@@ -1,20 +1,23 @@
-"""v3.6.2 자세 낱말 라우팅(v360-review.md Important 1·2).
+"""v3.6.2 자세 낱말 라우팅(v360-review.md Important 1·2, 조정 라운드 1 판정 R1).
 
-자세 낱말만으로는 도장 질문이 아니다. 도장 낱말과 함께이거나 자세 문맥(자세 탭·서명된 자세 기록)일 때만 센다.
-자세 문맥에서도 "종류·유형·뜻·의미·정의"를 묻는 개념 질문만 문서로 보낸다(966a3d0의 의도). 기록 질문은 4c5da92처럼 답한다.
+자세 낱말(자세·동작·팔꿈치·무릎 등)은 도장 질문의 낱말이다(966a3d0). 다만 도장이 아닌 활동·분야를 가리키는 낱말
+(요리·요가·스쿼트·디스크 등)이 있고 도장 낱말이 없으면 주제 밖 질문이라 어느 탭이든 대화 경로에 둔다.
+자세 낱말만 있는 질문은 종류·유형·뜻·의미·정의를 물을 때만 문서로 보낸다. 기록 질문은 4c5da92처럼 답한다.
 """
 from __future__ import annotations
 
 import pytest
 
 from trainer.demo_api.copilot_contracts import CopilotQueryRequest
-from trainer.demo_api.copilot_intent import classify_question_intent, fallback_intent, is_domain_question, is_general_painting_knowledge
+from trainer.demo_api.copilot_intent import is_domain_question, is_general_painting_knowledge
 from trainer.demo_api.copilot_router import _pose_engine_question
 from trainer.demo_api.tests.viewer_record import RecordingPipeline, ask
 
 RECORD = ["자세 유사도는 얼마야?", "자세 점수가 왜 낮아?", "팔꿈치는 왜 지적됐어?", "전문가와 자세 차이는?", "무릎 자세는 어떻게 고쳐?"]
-OFF_TOPIC = ["요리 도구 종류는 뭐야?", "요가 자세 종류는?", "스쿼트 동작 방법 알려줘", "허리 디스크 예방 방법은?"]
-CONCEPT = ["자세 종류로는 어떤게있어?", "도장 작업 자세에는 어떤 종류가 있나요?", "무릎을 굽힌 자세의 의미는?"]
+OFF_TOPIC = ["요리 도구 종류는 뭐야?", "요가 자세 종류는?", "요가 동작 종류 알려줘", "스쿼트 동작 방법 알려줘", "허리 디스크 예방 방법은?"]
+CONCEPT = ["자세 종류로는 어떤 게 있어?", "자세 종류로는 어떤게있어?", "도장 작업 자세에는 어떤 종류가 있나요?",
+           "무릎을 굽힌 자세의 의미는?", "스프레이 자세 종류는?"]
+TABS = ["knowledge", "order", "pose"]
 
 # 4c5da92에서 서명된 뷰어 기록으로 물었을 때의 경로(answer source, 부른 모델 단계)와 답 머리.
 BASE = {
@@ -46,37 +49,46 @@ def _query(prompt: str, task: str = "pose_recomm") -> CopilotQueryRequest:
 @pytest.mark.parametrize("prompt", RECORD)
 def test_tsb_session_pose_questions_go_to_the_scoring_engine(prompt: str) -> None:
     assert _pose_engine_question(_query(prompt))
+    assert not is_general_painting_knowledge(prompt)
 
 
-@pytest.mark.parametrize("prompt", CONCEPT)
-def test_pose_concept_questions_skip_the_scoring_engine(prompt: str) -> None:
+@pytest.mark.parametrize("prompt", CONCEPT + OFF_TOPIC)
+def test_concept_and_off_topic_questions_skip_the_scoring_engine(prompt: str) -> None:
     assert not _pose_engine_question(_query(prompt))
 
 
-@pytest.mark.parametrize("tab", ["knowledge", "order"])
+@pytest.mark.parametrize("tab", TABS)
 @pytest.mark.parametrize("prompt", OFF_TOPIC)
 @pytest.mark.parametrize("viewer", [True, False])
-def test_off_topic_questions_stay_on_the_conversation_route(prompt: str, tab: str, viewer: bool) -> None:
+def test_off_topic_questions_stay_on_the_conversation_route_on_every_tab(prompt: str, tab: str, viewer: bool) -> None:
     result = ask(prompt, tab=tab, **({} if viewer else {"raw_context": ""}))
     assert (result["source"], result["calls"]) == ("conversation", ["plan", "converse"]), result
 
 
 @pytest.mark.parametrize("prompt", OFF_TOPIC)
-def test_pose_words_alone_are_not_painting_words(prompt: str) -> None:
+def test_off_topic_questions_are_not_painting_questions(prompt: str) -> None:
     assert not is_domain_question(prompt) and not is_general_painting_knowledge(prompt)
 
 
+@pytest.mark.parametrize("tab", TABS)
 @pytest.mark.parametrize("prompt", CONCEPT)
-def test_pose_concept_questions_use_documents_in_a_pose_context(prompt: str) -> None:
-    for kwargs in ({"tab": "pose"}, {"tab": "pose", "raw_context": ""}):
-        pipeline = RecordingPipeline()
-        result = ask(prompt, pipeline=pipeline, **kwargs)
-        assert result["source"] == "documents" and "plan" not in pipeline.calls, (kwargs, result)
-    assert is_general_painting_knowledge(prompt, pose=True)
-    assert fallback_intent("pose_recomm", prompt) == "knowledge"
-    assert classify_question_intent("pose_recomm", prompt, lambda *_: "pose_overall") == "knowledge"
+@pytest.mark.parametrize("viewer", [True, False])
+def test_pose_concept_questions_use_documents_on_every_tab(prompt: str, tab: str, viewer: bool) -> None:
+    pipeline = RecordingPipeline()
+    result = ask(prompt, tab=tab, pipeline=pipeline, **({} if viewer else {"raw_context": ""}))
+    assert result["source"] == "documents" and "plan" not in pipeline.calls, result
+    assert is_general_painting_knowledge(prompt)
 
 
-@pytest.mark.parametrize("prompt", RECORD)
-def test_pose_record_questions_are_not_concept_questions_even_in_a_pose_context(prompt: str) -> None:
-    assert not is_general_painting_knowledge(prompt, pose=True)
+def test_query_chat_posture_types_question_uses_documents() -> None:
+    # /query-chat(query_chat.js)은 knowledge_search, 문맥 없이 보낸다.
+    result = ask("자세 종류로는 어떤 게 있어?", tab="knowledge", raw_context="")
+    assert result["source"] == "documents", result
+
+
+def test_bare_pose_concept_question_on_the_pose_tab_uses_documents() -> None:
+    assert ask("허리 자세 의미가 뭐야?", tab="pose")["source"] == "documents"
+
+
+def test_painting_word_overrides_the_off_topic_lexicon() -> None:
+    assert is_general_painting_knowledge("도장할 때 요가처럼 허리를 굽히는 자세의 의미는?")
