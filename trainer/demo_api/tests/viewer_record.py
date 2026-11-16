@@ -35,6 +35,21 @@ def payload(*, progress: bool = True) -> dict[str, Any]:
     return data
 
 
+def payload_range() -> dict[str, Any]:
+    """v3.6.2 정상 범위(160~200µm) 판정 행 두 개로 바꾼 기록. 운영 판정 함수로 만든다.
+
+    Zone 1: 보정 220µm 일색(상한 초과, 범위 안 0%). Zone 2: 보정 170·170·170·240(평균 187.5 정상, 범위 안 75%, 상한 초과 25%).
+    """
+    from trainer.demo_api import coating_assessment as ca
+    data = payload()
+    target = data["coating_evaluation"]["target"]
+    target.update(normal_band_um=[160.0, 200.0], zones=[
+        ca.zone_row(1, "1", ca.assess_readings([220.0] * 4)), ca.zone_row(1, "2", ca.assess_readings([170.0, 170.0, 170.0, 240.0]))])
+    data["query_context_signatures"] = viewer_signatures(data)
+    data["query_context_signatures"]["arm_pose"] = sign_context("arm_pose", data["arm_pose_evaluation"])
+    return data
+
+
 def context(task: str, data: dict[str, Any], playback: dict[str, Any]) -> str:
     """motion_viewer_v2.js `context()`와 같은 문자열."""
     sigs = data["query_context_signatures"]

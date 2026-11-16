@@ -21,9 +21,9 @@ def part(code, zones=(), operator=None, metric=None, cardinality="any"):
 ANSWERS = [  # (이름, part, playback, 꼭 있어야 할 낱말, 없어야 할 정규식)
     ("R1 argmin", part("coating_extreme", operator="argmin"), AT_35S, ["Zone 8", "77.2", "160", "Zone 2", "84.3", "Zone 5", "89.6"], r"Zone 9"),
     ("R1 argmax", part("coating_extreme", operator="argmax"), AT_3S, ["Zone 1", "161.7"], None),
-    ("R2", part("coating_over"), AT_24S, ["0곳", "Zone 1", "10.1%", "Zone 2", "1.3%", "240"], None),
+    ("R2", part("coating_over"), AT_24S, ["0곳", "Zone 1", "10.1%", "Zone 2", "1.3%", "상한(240µm)"], r"1\.5배"),  # 기록의 범위(160~240µm)를 읽는다
     ("R3 all", part("completion"), AT_35S, ["9", "95%", "0곳"], r"완료된 상태|끝났습니다"),
-    ("R3 zone 1", part("completion", ("1",)), AT_24S, ["Zone 1", "162µm", "160µm", "이상이지만", "47.9%", "95%", "보완"], r"정상"),
+    ("R3 zone 1", part("completion", ("1",)), AT_24S, ["Zone 1", "162µm", "160~240µm", "안이지만", "47.9%", "95%", "보완"], r"정상(?!\s*범위)"),
     ("R3 zone 8", part("completion", ("8",)), AT_35S, ["Zone 8", "1.9%", "95%"], None),
     ("R4", part("distance_compare", ("8",)), AT_3S, ["Zone 8", "251 mm", "550 mm", "54%", "가까운"], None),
     ("R4 similar", part("distance_compare", ("7",)), AT_3S, ["Zone 7", "비슷"], None),
@@ -96,7 +96,7 @@ def test_zone_sentence_uses_the_production_grade_phrase() -> None:
 
 def test_normal_grade_with_needs_more_gate_reads_as_a_contrast() -> None:
     text, _ = answer_part(facts(AT_24S), part("completion", ("1",)), task_type="knowledge_search")
-    assert "정상" not in text and "이상이지만" in text and "보완이 필요" in text, text
+    assert not re.search(r"정상(?!\s*범위)", text) and "안이지만" in text and "보완(더 칠하기)이 필요" in text, text
 
 
 def test_missing_zone_uses_the_right_particle() -> None:

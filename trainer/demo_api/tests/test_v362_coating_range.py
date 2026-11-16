@@ -1,0 +1,104 @@
+"""v3.6.2 새 도막 기준(정상 범위 하한~상한, 기본 160~200µm) 문구와 모자람의 방향(v360-review.md §6).
+
+범위 안 면적이 모자란 까닭이 상한 초과면 "보완(더 칠하기)"을 말하지 않는다. 수치는 기록 행의 값만 쓴다.
+"""
+from __future__ import annotations
+
+import re
+
+from trainer.demo_api.record_query import RecordFacts, RecordPart, answer_part, answer_record_question, one_priority
+from trainer.demo_api.simulator_context import SIMULATOR_CONTEXT
+from trainer.demo_api.tests.viewer_record import AT_3S, context, payload, payload_range
+from trainer.demo_api.viewer_progress import gate_lines
+
+OLD = r"목표 두께 이상|1\.5배|240|목표는 160"
+
+
+def facts(data=None, playback=AT_3S):
+    return RecordFacts.from_context(context("knowledge_search", data or payload_range(), playback))
+
+
+def part(code, zones=(), operator=None):
+    return RecordPart(text="", code=code, zones=zones, zone_source="asked" if zones else "none", operator=operator,
+                      metric=None, cardinality="any", premises=(), knowledge=False)
+
+
+def text(code, zones=(), operator=None, data=None):
+    return answer_part(facts(data), part(code, zones, operator), task_type="knowledge_search")[0]
+
+
+def test_mixed_zone_short_of_area_because_of_overfilm_is_not_told_to_paint_more() -> None:
+    out = text("completion", ("2",))
+    for word in ("정상 범위(160~200µm) 안", "75%", "95%", "상한(200µm)", "25%", "상한 초과"):
+        assert word in out, (word, out)
+    assert not re.search(OLD + r"|보완|더 칠", out), out
+
+
+def test_all_above_zone_states_zero_in_range_not_zero_above_target() -> None:
+    out = text("completion", ("1",))
+    assert "과도막" in out and "정상 범위(160~200µm) 안 면적은 0%" in out, out
+    assert not re.search(OLD + r"|보완", out), out
+
+
+def test_overfilm_counts_zones_above_the_upper_bound() -> None:
+    out = text("coating_over")
+    assert "상한(200µm)을 넘는 Zone은 1곳" in out and "상한을 넘는 면적" in out, out
+    assert "Zone 1(100%)" in out and "Zone 2(25%)" in out, out
+    assert not re.search(OLD, out), out
+
+
+def test_target_lines_state_the_range() -> None:
+    for out in (text("coating_extreme", operator="argmax"), text("cause", ("2",))):
+        assert "정상 범위는 160~200µm입니다" in out, out
+        assert not re.search(OLD, out), out
+
+
+def test_all_zone_completion_counts_use_the_range() -> None:
+    out = text("completion")
+    assert "2곳 중 0곳" in out and "정상 범위(160~200µm)" in out, out
+    assert not re.search(OLD + r"|보완이 필요", out), out
+
+
+def test_completion_reference_sentence_names_both_conditions() -> None:
+    found = answer_record_question(context("knowledge_search", payload_range(), AT_3S),
+                                   "이 기록 도막을 PSPC 90/10 규칙으로 판정하면 합격이에요?", task_type="knowledge_search", recent_turns=[])
+    assert found is not None
+    assert "완료는 정상 범위 안 면적이 95% 이상이고 평균이 정상 범위일 때입니다." in found.text, found.text
+    assert "하한 미만 Zone" in found.text and not re.search(OLD, found.text), found.text
+
+
+def test_priority_does_not_tell_an_overfilm_zone_to_paint_more() -> None:
+    out = one_priority(facts(), single=True)
+    assert "Zone 2" in out and "상한 초과" in out, out
+    assert not re.search(OLD + r"|보완", out), out
+
+
+def test_shortfall_below_the_lower_bound_still_says_touch_up() -> None:
+    # 2026-11-14 기록 Zone 1: 평균 정상, 범위 안 47.9%, 상한 초과 10.1%, 나머지는 하한 미만이다.
+    out = text("completion", ("1",), data=payload())
+    assert "보완(더 칠하기)" in out and "하한(160µm) 미만" in out and "10.1%" in out, out
+    assert "목표 두께 이상" not in out, out
+    assert "Zone 3부터 보완하십시오." in one_priority(facts(payload()), single=True)
+
+
+def test_viewer_gate_lines_split_overfilm_shortfall_from_touch_up() -> None:
+    rows = facts().target_rows
+    lines, groups = gate_lines(list(rows), order=["1", "2"])
+    joined = "\n".join(lines)
+    assert groups["touch_up_zone_ids"] == [] and groups["over_band_zone_ids"] == ["2"], groups
+    assert groups["overpaint_zone_ids"] == ["1"], groups
+    assert "보완" not in joined and any("Zone 2" in line and "상한 초과" in line for line in lines), joined
+    under, _ = gate_lines(list(facts(payload()).target_rows), order=[])
+    assert "가장 부족한 곳은 Zone 3(정상 범위 안 0%)" in "\n".join(under), under
+
+
+def test_simulator_block_states_the_default_range_only() -> None:
+    assert ("- 기본 정상 범위는 160~200µm이고 세션마다 다르게 정할 수 있습니다. Zone은 픽셀의 95%가 정상 범위 안이고 "
+            "평균이 정상 범위일 때 완료입니다. 90/10 규칙 같은 측정점 규격으로 판정하지 않습니다.") in SIMULATOR_CONTEXT
+    assert not re.search(r"320|1차|2차|목표 두께 이상|저도막이 아니면", SIMULATOR_CONTEXT), SIMULATOR_CONTEXT
+
+
+def test_range_is_read_from_the_record_not_assumed() -> None:
+    # 2026-11-14 기록은 옛 판정 범위(160~240µm)를 담고 있다. 문장은 기록의 범위를 그대로 쓴다.
+    out = text("coating_over", data=payload())
+    assert "상한(240µm)" in out and "200µm" not in out, out

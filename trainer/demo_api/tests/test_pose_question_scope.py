@@ -185,7 +185,8 @@ def test_report_answer_names_grades_means_and_unpainted_share(detailed: bool) ->
 
     assert answer.split("\n") == [
         "기본 목표 160µm 기준으로 Zone별 도막을 판정했습니다. "
-        "등급은 칠한 곳의 평균 두께로 정합니다(목표 미만은 저도막, 목표의 1.5배 이상은 과도막).",
+        # 966a3d0 정상 범위 기준(기본 160~200µm). 문장은 coating_assessment.RULE_NOTE 그대로다.
+        "등급은 칠한 곳의 평균 두께로 정합니다(하한 미만은 저도막, 하한~상한은 정상, 상한 초과는 과도막). 기본 정상범위는 160~200µm입니다.",
         "저도막: 1개 — Map 1 · Zone 3(칠한 곳 평균 98µm, 미도장 12%)",
         "과도막: 1개 — Map 1 · Zone 5(칠한 곳 평균 301µm, 미도장 3%)",
         "정상: 1개",
@@ -220,7 +221,8 @@ def test_distribution_and_unpainted_questions_get_numbers() -> None:
     unpainted = coating_query.answer_coating_question(context, "미도장 영역이 있어?", detailed=False)
 
     # 칠한 화소 285개: 80·8·100·50·47·0
-    assert distribution.endswith("칠한 면적의 두께 분포: 목표의 90% 미만 28%, 90~100% 3%, 100~150% 35%, 150~200% 18%, 200~250% 16%, 250% 이상 0%.")
+    # 966a3d0부터 분포는 저도막·정상·과도막 세 묶음이다(coating_assessment.distribution_sentence). 88·100·97
+    assert distribution.endswith("칠한 면적의 두께 분포: 저도막 31%, 정상 35%, 과도막 34%.")
     assert "미도장 비율이 큰 곳" not in distribution
     assert unpainted.endswith("미도장 비율이 큰 곳: Zone 7(100%), Zone 3(12%), Zone 5(3%). 미도장 비율에는 합격 기준이 없어 숫자만 알려 드립니다.")
     assert "두께 분포" not in unpainted
@@ -248,7 +250,7 @@ def test_distribution_cause_names_candidates_without_claiming_a_cause() -> None:
 
     assert answer is not None and answer.split("\n") == [
         "기본 목표 160µm 기준으로 본 도막 분포입니다. "
-        "칠한 면적의 두께 분포: 목표의 90% 미만 31%, 90~100% 0%, 100~150% 35%, 150~200% 34%, 200~250% 0%, 250% 이상 0%.",
+        "칠한 면적의 두께 분포: 저도막 31%, 정상 35%, 과도막 34%.",
         "Zone 3은 저도막입니다(칠한 곳 평균 98µm). 조절 후보는 이동 속도를 낮추는 쪽, 이격거리를 줄이는 쪽입니다.",
         "Zone 5는 과도막입니다(칠한 곳 평균 301µm). 속도·이격거리 기록이 없어 조절 후보를 내지 못했습니다.",
         "조절 후보는 등급에 따른 일반적인 방향이며 원인으로 확정된 것은 아닙니다.",

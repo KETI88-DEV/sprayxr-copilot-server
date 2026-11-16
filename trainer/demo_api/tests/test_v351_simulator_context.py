@@ -10,12 +10,12 @@ from trainer.demo_api.tests.viewer_record import AT_35S, RecordingPipeline, ask
 
 MARK = "[시뮬레이터 기본 설정]"
 CLARIFY = {"kind": "clarify", "intent": "knowledge", "scope": "unspecified"}
-FACT_ANSWER = "목표 도막은 1차 160µm입니다. 압력은 108~504 bar 범위에서 고릅니다. 신너 희석률은 0~24%입니다."
+FACT_ANSWER = "기본 정상 범위는 160~200µm이고 세션마다 다르게 정할 수 있습니다. 압력은 108~504 bar 범위에서 고릅니다. 신너 희석률은 0~24%입니다."
 
 
 def test_block_has_the_agreed_facts_and_no_unconfirmed_gun_type() -> None:
     assert SIMULATOR_CONTEXT.startswith(MARK)
-    for fact in ("160µm", "320µm", "108~504 bar", "36 bar", "0~24%", "1.6%", "519", "323", "90/10", "mm/s"):
+    for fact in ("160~200µm", "108~504 bar", "36 bar", "0~24%", "1.6%", "519", "323", "90/10", "mm/s"):
         assert fact in SIMULATOR_CONTEXT
     assert "에어리스" not in SIMULATOR_CONTEXT
 

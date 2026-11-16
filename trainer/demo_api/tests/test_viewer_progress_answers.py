@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 import pytest
 
@@ -25,11 +26,11 @@ def test_missing_and_touch_up_questions_use_visits_and_the_final_gate(tab: str, 
     result = ask(prompt, tab=tab, mode=mode, pipeline=_model())
     answer = result["answer"]
     assert result["calls"] == [] and result["source"] == "analysis", answer
-    # 9개 Zone 모두 최종 게이트가 needs_more다. v3.4.1: 목록을 다 늘어놓지 않고 목표 두께 이상 면적이 가장 낮은 3곳만,
+    # 9개 Zone 모두 최종 게이트가 needs_more다. v3.4.1: 목록을 다 늘어놓지 않고 정상 범위 안 면적이 가장 낮은 3곳만,
     # 등급 낱말(정상·저도막)과 평균 µm 없이, 줄을 나눠 적는다. 전체 목록은 도막 탭.
     assert "9개 Zone을 모두 칠했지만 9개 모두 보완이 필요합니다." in answer
-    assert "가장 부족한 곳은 Zone 3(목표 두께 이상 0%), Zone 8(1.9%), Zone 5(2.8%)입니다." in answer
-    assert "정상" not in answer and "저도막" not in answer and "µm" not in answer and "방문하지 않은" not in answer
+    assert "가장 부족한 곳은 Zone 3(정상 범위 안 0%), Zone 8(1.9%), Zone 5(2.8%)입니다." in answer
+    assert not re.search(r"정상(?!\s*범위)", answer) and "저도막" not in answer and "µm" not in answer and "방문하지 않은" not in answer
     assert answer.endswith("전체 목록은 도막 탭에서 확인하세요. 세션이 끝났을 때의 도막 기준입니다.") and "\n" in answer
     assert "빠진" not in answer
 
@@ -103,7 +104,9 @@ def test_saved_report_missing_answer_adds_the_final_gate() -> None:
     report = {"analysis_status": "available", "recommended_flow": ["1", "2", "3"], "first_visit_flow": ["1", "2"],
               "evaluated_visit_count": 2, "on_track_visit_count": 2, "adherence_rate": 1.0}
     rows = [{"zone_id": "1", "map_num": 1, "grade": "below", "thickness_um": 90.0, "target_thickness_um": 160.0,
-             "unpainted_fraction": 0.0, "coverage_percent": 10.0, "gate_status": "needs_more"},
+             "unpainted_fraction": 0.0, "coverage_percent": 10.0, "overpaint_percent": 0.0, "gate_status": "needs_more",
+             "six_band_counts": {"lt_0_9t": 90, "from_0_9t_to_lt_1_0t": 0, "from_1_0t_to_lt_1_5t": 10,
+                                 "from_1_5t_to_lt_2_0t": 0, "from_2_0t_to_lt_2_5t": 0, "gte_2_5t": 0}},
             {"zone_id": "2", "map_num": 1, "grade": "normal", "thickness_um": 170.0, "target_thickness_um": 160.0,
              "unpainted_fraction": 0.0, "coverage_percent": 97.0, "gate_status": "complete"}]
     answer = answer_order_question(("r", {"sequence_report": report, "coating_zones": rows}),
@@ -163,7 +166,9 @@ PRODUCTION = ("권장 기준 13개 Zone 가운데 방문하지 않은 Zone은 �
 
 def _rows(areas: dict[str, float], *, complete: tuple[str, ...] = ()) -> dict:
     zones = [{"zone_id": zone, "map_num": 1, "grade": "normal" if zone == "8" else "below", "thickness_um": 120.0,
-              "target_thickness_um": 160.0, "unpainted_fraction": 0.0, "coverage_percent": area,
+              "target_thickness_um": 160.0, "unpainted_fraction": 0.0, "coverage_percent": area, "overpaint_percent": 0.0,
+              "six_band_counts": {"lt_0_9t": round(100 - area), "from_0_9t_to_lt_1_0t": 0, "from_1_0t_to_lt_1_5t": round(area),
+                                  "from_1_5t_to_lt_2_0t": 0, "from_2_0t_to_lt_2_5t": 0, "gte_2_5t": 0},
               "gate_status": "complete" if zone in complete else "needs_more"} for zone, area in areas.items()]
     return {"target": {"analysis_status": "available", "zones": zones}}
 
@@ -176,8 +181,8 @@ def test_thirteen_zone_touch_up_lists_the_three_lowest_areas_only() -> None:
     assert answer != PRODUCTION
     lines = answer.split("\n")
     assert lines[0] == "13개 Zone을 모두 칠했지만 13개 모두 보완이 필요합니다."
-    assert "가장 부족한 곳은 Zone 3(목표 두께 이상 0%), Zone 5(4.2%), Zone 1(9.9%)입니다." in lines
-    assert answer.count("Zone ") == 3 + 0 and "정상" not in answer and "µm" not in answer
+    assert "가장 부족한 곳은 Zone 3(정상 범위 안 0%), Zone 5(4.2%), Zone 1(9.9%)입니다." in lines
+    assert answer.count("Zone ") == 3 + 0 and not re.search(r"정상(?!\s*범위)", answer) and "µm" not in answer
     assert len(scope["touch_up_zone_ids"]) == 13
 
 
