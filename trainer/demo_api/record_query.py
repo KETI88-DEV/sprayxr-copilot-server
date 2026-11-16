@@ -10,7 +10,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Final
 
-from trainer.demo_api.coating_query import (_CAUSES, _RECORD_SENTENCE, _DISTANCE_WORDS, _EFFECTS, _SIMILAR, distance_sentence, measured_relation, measured_sentence,
+from trainer.demo_api.coating_query import (_CAUSES, _RECORD_SENTENCE, _DISTANCE_WORDS, _EFFECTS, _INVERTED, _SIMILAR, distance_sentence, measured_relation, measured_sentence,
                                             parse_viewer_coating_context, zone_measures)
 from trainer.demo_api.coating_assessment import grade_phrase, mean_text
 from trainer.demo_api.copilot_intent import preset_intent
@@ -587,7 +587,6 @@ _METRIC_NAMES: Final = {"pose_similarity": "자세 유사도", "work_similarity"
 _COATING_CODES: Final = {"coating_extreme", "coating_over", "completion", "external_standard", "cause"}
 _SPEED_RELATION: Final = {"speed_slower": "lower", "speed_faster": "higher", "distance_farther": "higher", "distance_closer": "lower"}
 _COMPARISON_PHRASE: Final = {"speed_slower": "속도가 느린", "speed_faster": "속도가 빠른", "distance_farther": "멀리서 칠한", "distance_closer": "가까이서 칠한"}
-_ASKS_ACTION: Final = re.compile(r"[가-힣]야\s*(?:해|돼|되|하|할|겠)")  # "올려야 해?"·"뿌려야 돼?": 할 일을 묻는 질문
 
 
 @dataclass(frozen=True)
@@ -625,12 +624,13 @@ def _premise_lead(facts: RecordFacts, part: RecordPart, premise: Premise) -> str
             return f"아니요. {premise.value:g}%는 {_METRIC_NAMES[same[0]]}입니다."
         return f"아니요. 이 기록의 {josa(_METRIC_NAMES[premise.subject], '은', '는')} {asked:.0f}%입니다." if _is_num(asked) else None
     if premise.kind == "cause" and zone:
-        cause = premise.subject.split(">")[0]
+        cause, effect = premise.subject.split(">")
         measure = facts.measures.get(zone)
         relation = measured_relation(measure, "distance_mm")
         if cause in _DISTANCE_WORDS and relation is not None:
-            agrees = _DISTANCE_WORDS[cause] == relation
-            return ("" if agrees and _ASKS_ACTION.search(part.text) else "예. " if agrees else "아니요. ") + (distance_sentence(zone, measure) or "")
+            # 실측과 다르거나 방향이 물리적으로 거꾸로면(가까워서 얇다·멀어서 두껍다) "아니요."; 맞아도 "예."로 인과를 인정하지 않고 사실만 말한다
+            wrong = _DISTANCE_WORDS[cause] != relation or (cause, effect) in _INVERTED
+            return ("아니요. " if wrong else "") + (distance_sentence(zone, measure) or "")
         return None  # 속도 원인은 R6(_speed)가 값과 한계만 말한다
     if premise.kind == "conclusion":
         rows = [_row(facts, z) for z in part.zones] if part.zones else list(facts.target_rows)

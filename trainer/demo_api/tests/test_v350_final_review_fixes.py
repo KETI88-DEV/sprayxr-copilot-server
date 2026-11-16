@@ -76,3 +76,20 @@ def test_low_film_completion_answer_is_a_full_sentence() -> None:
 def test_contrast_completion_answer_uses_the_possessive() -> None:
     text = _answer("Zone 1 끝났어?", AT_24S)
     assert "Zone 1의 칠한 곳 평균 두께는" in text and "Zone 1은 칠한 곳" not in text, text
+
+
+# ---- 재검토 추가: 원인 전제의 방향이 물리적으로 거꾸로면(가까움→얇음, 멂→두꺼움) 동조하지 않는다
+@pytest.mark.parametrize("prompt,zone", [("거리가 가까워서 얇게 나온 거지?", "Zone 8"),   # Zone 8: 전문가보다 가깝고 저도막
+                                         ("Zone 4 거리가 멀어서 두껍게 나온 거지?", "Zone 4")])   # Zone 4: 전문가보다 멂
+def test_physically_reversed_cause_premise_is_not_affirmed(prompt: str, zone: str) -> None:
+    text = _answer(prompt)
+    assert text.startswith("아니요. ") and zone in text and not text.startswith("예"), text
+
+
+def test_valid_cause_premise_matching_the_record_is_confirmed_without_yes() -> None:   # Zone 4: 멀어서 얇다, 실측도 멂
+    text = _answer("Zone 4 거리가 멀어서 얇게 나온 거지?")
+    assert text.startswith("Zone 4는 407 mm") and not text.startswith(("예", "아니요")), text
+
+
+def test_cause_premise_against_the_measured_distance_still_says_no() -> None:   # T40: Zone 8은 가까운데 "멀어서"
+    assert _answer("거리가 멀어서 얇게 나온 거지?").startswith("아니요. Zone 8")
