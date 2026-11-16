@@ -39,14 +39,15 @@ def test_hand_without_a_tip_noun_is_not_hand_on_tip(question: str) -> None:
 def test_public_route_returns_the_fixed_answer_without_the_model(question: str, mode: str) -> None:
     pipeline = Pipeline(document="네, 손가락으로 막아 확인하면 됩니다.", converse="네, 그렇게 하셔도 됩니다.")
     data, _ = _ask(pipeline, question, response_mode=mode)
-    assert data["answer"] == g.HIGH_PRESSURE_ANSWER and data["citations"] == list(g.HIGH_PRESSURE_CITATIONS)
+    assert data["answer"] == (g.QUICK_HIGH_PRESSURE_ANSWER if mode == "quick" else g.HIGH_PRESSURE_ANSWER)
+    assert data["citations"] == list(g.HIGH_PRESSURE_CITATIONS)
     assert "converse" not in pipeline.calls and "plan" not in pipeline.calls
 
 
 @pytest.mark.parametrize("tab", ["pose", "order", "coating", "knowledge"])
 def test_viewer_tabs_return_the_fixed_answer(tab: str) -> None:
     result = ask("건 앞에 손 갖다 대도 괜찮아?", tab=tab, playback=AT_3S, pipeline=RecordingPipeline(converse="네, 괜찮습니다."))
-    assert result["answer"] == g.HIGH_PRESSURE_ANSWER and result["calls"] == []
+    assert result["answer"] == g.QUICK_HIGH_PRESSURE_ANSWER and result["calls"] == []
 
 
 @pytest.mark.parametrize("follow_up", ["그럼 해도 돼?", "그래도 돼?", "괜찮겠지?", "진짜 안 돼? 잠깐인데"])
@@ -54,7 +55,7 @@ def test_follow_up_after_a_hand_on_tip_question(follow_up: str) -> None:
     pipeline = Pipeline(document="잠깐이면 괜찮습니다.", converse="잠깐이면 괜찮습니다.")
     _ask(pipeline, "건 끝을 손가락으로 막아도 돼?", conversation="tip")
     data, _ = _ask(pipeline, follow_up, conversation="tip")
-    assert data["answer"] == g.HIGH_PRESSURE_ANSWER
+    assert data["answer"] == g.QUICK_HIGH_PRESSURE_ANSWER
 
 
 @pytest.mark.parametrize("question", ["용접선 부위 먼저 스트라이프 칠해도 돼?", "용접 비드 위에 바로 칠해도 되나요?",

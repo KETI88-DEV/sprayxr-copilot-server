@@ -19,7 +19,9 @@ def _model(reply: str = "왼손 자세는 정상 범위 내에 있는 것으로 
 
 @pytest.mark.parametrize("prompt", ["Zone별로 어디가 제일 문제야?", "가장 문제가 큰 Zone은?", "어느 구역 자세가 제일 나빠?"])
 def test_worst_zone_questions_get_the_per_zone_pose_summary(prompt: str) -> None:
-    result = ask(prompt, tab="pose", pipeline=_model())
+    quick = ask(prompt, tab="pose", pipeline=_model())["answer"]  # 빠른 안내 한 줄(2026-11-16): 가장 낮은 Zone
+    assert quick.startswith("자세 유사도가 가장 낮은 곳은 Zone 9(50%)") and "\n" not in quick and len(quick) <= 60
+    result = ask(prompt, tab="pose", mode="detailed", pipeline=_model())
     answer = result["answer"]
     assert result["calls"] == [], answer
     # 자세 유사도(팔 관절 엔진)가 가장 낮은 곳을 먼저 답하고, Zone별 요청이면 다른 구역도 보존한다.
@@ -55,7 +57,9 @@ def test_conversation_answers_pass_the_zone_check() -> None:
 
 @pytest.mark.parametrize("tab", ["pose", "knowledge"])
 def test_right_hand_question_answers_from_the_arm_engine(tab: str) -> None:
-    result = ask("오른손은 어케 고쳐야돼", tab=tab, pipeline=_model())
+    quick = ask("오른손은 어케 고쳐야돼", tab=tab, pipeline=_model())["answer"]  # 빠른 안내 한 줄은 할 일만(2026-11-16)
+    assert quick == "분사 2회 중 1회 오른팔 교정: 오른쪽 팔꿈치를 몸에서 20cm 더 떼어 주세요."
+    result = ask("오른손은 어케 고쳐야돼", tab=tab, mode="detailed", pipeline=_model())
     answer = result["answer"]
     assert result["calls"] == [], answer
     # v3.4.1: 반경 교정은 몸을 기준으로 적고 할 일을 붙인다. 오른손을 물었는데 손목 교정이 없으면 그렇다고 밝힌다.
@@ -77,7 +81,7 @@ def test_elbow_questions_use_the_forearm_result_without_inventing_angles(prompt:
     answer = result["answer"]
     assert result["calls"] == [], answer
     assert "°" not in answer and "확인할 수 없습니다" not in answer
-    assert "각도" in answer and "몸 쪽으로 20cm 더 붙어" in answer
+    assert "각도" in answer and ("몸에서 20cm 더 떼어" if mode == "quick" else "몸 쪽으로 20cm 더 붙어") in answer
 
 
 def test_tsb_elbow_question_reads_the_forearm_joint() -> None:
@@ -125,7 +129,8 @@ def test_pose_percent_answers_explain_the_expert_scale() -> None:
     arm = payload()["arm_pose_evaluation"]
     assert NOTE in arm_pose_answer(arm, current=False, playback=None, zone_id=None)
     assert NOTE in arm_pose_answer(arm, current=True, playback=AT_3S, zone_id=None)
-    assert NOTE in ask("지금 자세는 어때?", tab="pose")["answer"]
+    assert NOTE in ask("지금 자세는 어때?", tab="pose", mode="detailed")["answer"]
+    assert "숙련자도 70% 안팎" in ask("지금 자세는 어때?", tab="pose")["answer"]  # 빠른 안내 한 줄
     assert "70% 안팎" in NOTE and "숙련자 평균 동작" in NOTE
 
 

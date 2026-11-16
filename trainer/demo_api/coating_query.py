@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from typing import Any, Final
 
 from trainer.demo_api.coating_assessment import (
-    ADJUSTMENT_WORDS, RULE_NOTE, basis_label, distribution_sentence, grade_phrase, mean_text)
+    ADJUSTMENT_WORDS, GRADE_WORDS, RULE_NOTE, basis_label, distribution_sentence, grade_phrase, mean_text)
 from trainer.demo_api.pose_query import josa
 from trainer.demo_api.session_coating import EXPERT_WORDS
 
@@ -130,10 +130,21 @@ def _expert_line(rows: list[dict[str, Any]], *, detailed: bool) -> str:
     return "참고(전문가 대비, 보정 전 두께): " + ", ".join(parts) + "."
 
 
+def _quick_grades(rows: list[dict[str, Any]], prompt: str, basis: str) -> str:
+    """빠른 안내 한 줄: 물은 Zone의 등급, 아니면 등급별 Zone 수(2026-11-16, 60자 한 줄). 등급은 저장된 행 그대로다."""
+    if _ZONE_NUMBER.search(prompt):
+        return " ".join(f"{josa(_zone_label(row), '은', '는')} {grade_phrase(row)}입니다." for row in rows)
+    counts = [f"{word} {len(_graded(rows, grade))}곳" for word, grade in (("저도막", "below"), ("과도막", "above"), ("정상", "normal"))]
+    unpainted = len(_graded(rows, None))
+    return ", ".join(counts + ([f"칠한 곳 없음 {unpainted}곳"] if unpainted else [])) + f"입니다({basis})."
+
+
 def _grade_answer(rows: list[dict[str, Any]], prompt: str, *, detailed: bool, viewer: bool = False,
-                  expert_rows: bool = False, report_expert: bool = False) -> str:
+                  expert_rows: bool = False, report_expert: bool = False, quick: bool = False) -> str:
     """저장된 행의 등급을 읽어 옮긴다. 등급을 다시 계산하지 않는다."""
     basis = basis_label(rows[0]["target_thickness_um"], rows[0]["target_basis"])
+    if quick and "분포" not in prompt and "미도장" not in prompt and "안 칠" not in prompt:
+        return _quick_grades(rows, prompt, basis)
     text = [f"{basis}으로 Zone별 도막을 판정했습니다. {RULE_NOTE}"]
     if _ZONE_NUMBER.search(prompt):
         text += [f"{_zone_label(row)}: {grade_phrase(row)}"
@@ -394,7 +405,7 @@ def drop_contradicted_causes(answer: str, measures: Mapping[str, Mapping[str, An
 
 
 def answer_distribution_cause(context: Mapping[str, Any], *, detailed: bool,
-                              measures: Mapping[str, Mapping[str, Any]] | None = None) -> str | None:
+                              measures: Mapping[str, Mapping[str, Any]] | None = None, quick: bool = False) -> str | None:
     """error_analysis 답: 분포와 저도막·과도막 Zone의 조절 후보. 도막 자료가 없으면 None.
 
     `measures`(뷰어 Zone 실측)가 있으면 후보를 실측과 맞춰 본다(_candidate_line).
@@ -409,6 +420,17 @@ def answer_distribution_cause(context: Mapping[str, Any], *, detailed: bool,
         return ("이 세션의 완료 분석은 이전 기준으로 저장되어 있어 도막 분포와 조절 후보를 낼 수 없습니다."
                 if zones and context.get("comparison_basis") == "saved_coating_report" else None)
     basis = basis_label(rows[0]["target_thickness_um"], rows[0]["target_basis"])
+    flagged = _graded(rows, "below") + _graded(rows, "above")
+    if quick and flagged:
+        # 빠른 안내 한 줄(2026-11-16): 가장 먼 저도막(없으면 과도막) Zone과 실측과 엇갈리지 않는 조절 후보. 원인 미확정은 그대로 밝힌다.
+        row = flagged[0]
+        measure = measures.get(str(row["zone_id"])) if measures else None
+        kept = [item for item in row["adjustments"] if not contradicted(item, measure)]
+        head = f"Zone {row['zone_id']} {GRADE_WORDS[row['grade']]}({mean_text(row['thickness_um'], row['target_thickness_um'])}µm)"
+        if kept:
+            return head + " 조절 후보(원인 미확정): " + ", ".join(
+                ADJUSTMENT_WORDS[(item["variable"], item["direction"])] for item in sorted(kept, key=lambda item: item["priority"])) + "."
+        return head + ("입니다." if row["adjustments"] else "입니다. 속도·이격거리 기록이 없어 조절 후보를 내지 못했습니다.")
     text = [" ".join(filter(None, (f"{basis}으로 본 도막 분포입니다.", distribution_sentence(_sum_bands(rows)))))]
     for word, grade in (("저도막", "below"), ("과도막", "above")):
         group = _graded(rows, grade)
@@ -477,7 +499,8 @@ def target_findings_line(context: Mapping[str, Any] | None) -> str | None:
     return f"도막({context['target']['basis_label']}): " + (", ".join(groups) or "저도막·과도막 Zone 없음") + "."
 
 
-def answer_coating_question(context: dict[str, Any], prompt: str, *, detailed: bool) -> str:
+def answer_coating_question(context: dict[str, Any], prompt: str, *, detailed: bool, quick: bool = False) -> str:
+    """`quick`은 질의 응답 수준이 빠른 안내일 때만 준다. `detailed=False`만으로는 바꾸지 않는다(완료 분석 요약이 그 문장을 쓴다)."""
     rows = _selected(context.get("zones") or [], prompt)
     note = None
     if context.get("comparison_basis") == "expert_zone_median" and not _EXPERT.search(prompt):
@@ -487,16 +510,18 @@ def answer_coating_question(context: dict[str, Any], prompt: str, *, detailed: b
             note = _TARGET_MISSING.get(target.get("reason_code"), _TARGET_NOT_SENT) + " 아래는 전문가 기록과 견준 값입니다."
         elif _selected(target_rows, prompt):
             return _grade_answer(_selected(target_rows, prompt), prompt, detailed=detailed, viewer=True,
-                                 expert_rows=bool(context.get("zones")))
+                                 expert_rows=bool(context.get("zones")), quick=quick)
     if context.get("analysis_status") != "available" or not rows:
         return ("도막의 과다·부족 영역을 판단할 신뢰 가능한 Zone별 도막 분석 자료가 없습니다. "
                 "뷰어의 기록을 다시 불러오거나 세션 완료 후 도막 분석 결과를 확인해 주세요.")
     if context.get("comparison_basis") == "saved_coating_report":
         if all("grade" in row for row in rows):
-            return _grade_answer(rows, prompt, detailed=detailed, report_expert=True)
+            return _grade_answer(rows, prompt, detailed=detailed, report_expert=True, quick=quick)
         # 2026-11 이전에 저장된 리포트 행에는 grade가 없다.
         groups = [(label, [row for row in rows if row.get("status") == status])
                   for label, status in (("도막 부족", "under_app"), ("도막 과다", "over_app"))]
+        if quick:
+            return ", ".join(f"{label} {len(group)}곳" for label, group in groups) + "입니다(저장된 최종 도막 기준)."
         text = ["분석 가능한 Zone의 저장된 최종 도막 결과를 기준으로 확인했습니다."]
         for label, group in groups:
             text.append(f"{label}: " + (", ".join(f"Map {r.get('map_num', '?')} · Zone {r.get('zone_id')}" for r in group) or "판정된 영역 없음"))
@@ -509,6 +534,11 @@ def answer_coating_question(context: dict[str, Any], prompt: str, *, detailed: b
             valid.append({**row, "delta": actual - reference, "delta_percent": (actual / reference - 1) * 100})
     if not valid:
         return "Zone별 도막 두께 비교값이 없어 과다·부족 영역을 판단할 수 없습니다."
+    if quick:
+        thick, thin = sum(r["delta"] > 1e-6 for r in valid), sum(r["delta"] < -1e-6 for r in valid)
+        if note:  # 판정이 없는 까닭은 상세 분석이 밝힌다. 한 줄에는 목표 판정이 없다는 사실만 남긴다.
+            return f"목표 대비 판정이 없어 전문가와 견줬습니다: 두꺼운 Zone {thick}곳, 얇은 Zone {thin}곳."
+        return f"전문가보다 두꺼운 Zone {thick}곳, 얇은 Zone {thin}곳입니다(최종 높이맵 기준)."
     text = [*filter(None, [note]), "최종 높이맵의 Zone별 대표 두께를 전문가 기준과 비교했습니다."]
     for label, group in (("전문가 기준보다 두꺼운 영역", sorted((r for r in valid if r["delta"] > 1e-6), key=lambda r: -r["delta_percent"])),
                          ("전문가 기준보다 얇은 영역", sorted((r for r in valid if r["delta"] < -1e-6), key=lambda r: r["delta_percent"]))):

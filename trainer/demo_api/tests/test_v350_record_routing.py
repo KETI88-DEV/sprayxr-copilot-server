@@ -11,15 +11,15 @@ DETERMINISTIC = [  # (번호, tab, playback, mode, 질문, 꼭 있어야 할 낱
     ("T20", "pose", AT_3S, "quick", "제 자세 괜찮아요? 잘하고 있는 거예요?", ["54%", "참고용", "70%"]),
     ("T21", "pose", AT_3S, "quick", "숙련자도 70% 정도라던데, 그럼 저는 나쁜 거예요?", ["54%", "참고용"]),
     ("T27", "pose", AT_3S, "quick", "화면에 87% 떠 있던데, 내 자세 유사도가 87%면 숙련자(70%)보다 잘한 거 맞지?", ["아니요", "작업 유사도", "54%"]),
-    ("T28", "pose", AT_3S, "quick", "건 각도는 괜찮았어?", ["100%", "5.2°", "3.1°"]),
-    ("T31", "order", AT_3S, "quick", "칠하는 순서가 정해져 있어요? 아무 데서나 시작하면 안 돼요?", ["Zone 7", "6회 모두", "45%"]),
+    ("T28", "pose", AT_3S, "detailed", "건 각도는 괜찮았어?", ["100%", "5.2°", "3.1°"]),
+    ("T31", "order", AT_3S, "detailed", "칠하는 순서가 정해져 있어요? 아무 데서나 시작하면 안 돼요?", ["Zone 7", "6회 모두", "45%"]),
     ("T32", "order", AT_3S, "detailed", "순서 준수율 45%는 어떻게 나온 거고, 숙련자들끼리는 순서가 얼마나 일치해?", ["45.1%", "기록에 없"]),
     ("T33", "order", AT_3S, "quick", "Zone 10이랑 11은 왜 안 칠했다고 나와요?", ["1~9"]),
     ("T34", "order", AT_35S, "quick", "다 칠했으니까 이제 끝난 거죠?", ["아니요", "95%"]),
     ("T35", "order", AT_3S, "quick", "숙련자는 보통 어느 Zone에서 시작해서 어디서 끝내요?", ["Zone 7", "6회", "3회"]),
     ("T36", "coating", AT_35S, "quick", "칠 다 했는데 어디가 제일 얇게 나왔어?", ["Zone 8", "77.2"]),
-    ("T39", "coating", AT_3S, "quick", "이 Zone 속도랑 이격거리 숙련자랑 비교해줘.", ["2,230", "3,514", "251 mm", "54%"]),
-    ("T42", "coating", AT_24S, "quick", "두껍게 너무 많이 뿌린 데도 있어요?", ["0곳", "10.1%"]),
+    ("T39", "coating", AT_3S, "detailed", "이 Zone 속도랑 이격거리 숙련자랑 비교해줘.", ["2,230", "3,514", "251 mm", "54%"]),
+    ("T42", "coating", AT_24S, "detailed", "두껍게 너무 많이 뿌린 데도 있어요?", ["0곳", "10.1%"]),
     ("T43", "coating", AT_24S, "quick", "Zone 1은 정상이라고 나왔으니까 다 끝난 거지? 거긴 다시 안 가도 되지?", ["아니요", "47.9%"]),
     ("T44", "coating", AT_3S, "quick", "나 숙련자보다 느리던데, 속도를 숙련자만큼 올려야 해?", ["이전 장비"]),
     ("T46", "knowledge", AT_24S, "quick", "그럼 숙련자보다 멀리서 뿌린 Zone은 있었어?", ["Zone 4"]),
@@ -73,7 +73,8 @@ def test_mixed_question_puts_record_sentence_first_and_documents_after() -> None
     ask("왜 그렇게 얇게 나온 거야?", tab="coating", playback=AT_35S, store=store)
     pipeline = RecordingPipeline(document="[답변] 거리 약 30cm를 일정하게 유지하고 50% 겹쳐 칠합니다.",
                                  chunks=[{"chunk_id": "doc-1", "text": "스프레이 거리는 약 30cm를 유지하고 50% 겹쳐 칠한다.", "rerank_score": 9.0}])
-    data = ask("그럼 거기부터 다시 칠하면 돼? 어떻게 칠해?", tab="coating", playback=AT_35S, store=store, pipeline=pipeline)  # T38
+    data = ask("그럼 거기부터 다시 칠하면 돼? 어떻게 칠해?", tab="coating", playback=AT_35S, store=store, pipeline=pipeline,
+               mode="detailed")  # T38. 빠른 안내는 한 줄이라 문서 문장이 기록 문장 뒤로 밀려난다(2026-11-16)
     first, _, rest = data["answer"].partition("\n")
     assert "Zone 8" in first and "1.9%" in first, data["answer"]
     assert "30cm" in rest, data["answer"]

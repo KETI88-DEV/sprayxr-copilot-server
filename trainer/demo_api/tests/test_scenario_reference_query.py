@@ -17,6 +17,11 @@ URL = "/api/v1/copilot/query"
 QUESTION = "이 피도면의 작업 순서를 구역 단위로 알려주세요."
 
 
+
+def _flow(answer: str) -> str:
+    """빠른 안내는 화살표를 붙여 쓴다(Zone 7→4→8, 2026-11-16). 두 수준을 같은 꼴로 견준다."""
+    return answer.replace(" → ", "→")
+
 def profile(root: Path, process: str, flow: list[str], mode: int = 3) -> None:
     path = root / "generated" / "profiles" / process / "learning" / f"mode_{mode:02d}.json"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -67,8 +72,8 @@ def test_mode_only_reference_question_bypasses_empty_facts_conversation(tmp_path
     profile(tmp_path, "spray", ["1", "3", "2"])
     pipeline = Pipeline()
     data = query(client(tmp_path, pipeline=pipeline), task_type=task, context="스프레이 도장")
-    assert "Zone 1 → 3 → 2" in data["answer"]
-    assert "현재 등록된 기준" in data["answer"]
+    assert "Zone 1→3→2" in _flow(data["answer"])
+    assert "등록 기준" in data["answer"]  # 빠른 안내 한 줄은 "등록 기준 순서"(2026-11-16)
     assert "학습 모드 3" in data["answer"]
     assert "스프레이" in data["answer"]
     assert data["context_status"] == "available"
@@ -86,7 +91,7 @@ def test_unknown_process_shows_both_registered_plans_without_selecting_spray(tmp
     profile(tmp_path, "blasting", ["2", "1", "3"])
     data = query(client(tmp_path))
     assert "스프레이" in data["answer"] and "블라스팅" in data["answer"]
-    assert "1 → 3 → 2" in data["answer"] and "2 → 1 → 3" in data["answer"]
+    assert "1→3→2" in _flow(data["answer"]) and "2→1→3" in _flow(data["answer"])
     assert data["sequence_context"]["process"] is None
     assert data["sequence_context"]["recommended_flow"] is None
     assert {p["process"] for p in data["sequence_context"]["reference_plans"]} == {"spray", "blasting"}
@@ -95,7 +100,7 @@ def test_unknown_process_shows_both_registered_plans_without_selecting_spray(tmp
 def test_unknown_process_with_only_blasting_labels_the_available_process(tmp_path):
     profile(tmp_path, "blasting", ["3", "1", "2"])
     data = query(client(tmp_path))
-    assert "블라스팅" in data["answer"] and "3 → 1 → 2" in data["answer"]
+    assert "블라스팅" in _flow(data["answer"]) and "3→1→2" in _flow(data["answer"])
     assert data["sequence_context"]["process"] == "blasting"
 
 
@@ -129,7 +134,7 @@ def test_saved_sequence_supplies_mode_and_blasting_process(tmp_path):
                      "scenario_id": "3", "sequence_setting": {"tool_type": "blasting_gun"}}))
     data = query(client(tmp_path, store=store), scenario_id=None, session_id="SAVED")
     assert data["scenario_id"] == "3" and data["sequence_context"]["process"] == "blasting"
-    assert "3 → 1 → 2" in data["answer"]
+    assert "3→1→2" in _flow(data["answer"])
 
 
 @pytest.mark.parametrize("scenario,reason,needed", [(None, "scenario_id_missing", "모드"), ("11", "sequence_reference_unavailable", "기준")])
@@ -146,7 +151,7 @@ def test_semantic_order_reference_lookup_works_across_default_tab(tmp_path):
     profile(tmp_path, "spray", ["1", "3", "2"])
     pipeline = Pipeline({"kind": "lookup", "intent": "order_reference", "scope": "record"})
     data = query(client(tmp_path, pipeline=pipeline), prompt="이 피도면을 어디부터 시작하면 좋을까요?", context="spray")
-    assert "1 → 3 → 2" in data["answer"]
+    assert "1→3→2" in _flow(data["answer"])
     assert pipeline.calls == ["plan"]
 
 
@@ -159,7 +164,7 @@ def test_semantic_tab_classifier_can_request_a_reference_plan_without_a_session(
 
     data = query(client(tmp_path, pipeline=Classifier()), task_type="trajectory_recomm",
                  prompt="이 피도면을 어디부터 시작하면 좋을까요?", context="spray")
-    assert "1 → 3 → 2" in data["answer"]
+    assert "1→3→2" in _flow(data["answer"])
 
 
 def test_bad_semantic_reference_label_does_not_replace_an_explicit_actual_question(tmp_path):
@@ -177,7 +182,7 @@ def test_actual_history_questions_still_require_actual_data(tmp_path, prompt):
     data = query(client(tmp_path), task_type="trajectory_recomm", session_id="EMPTY", prompt=prompt)
     assert data["context_status"] == "not_available"
     assert data["sequence_context"].get("scope") != "reference_only"
-    assert "1 → 3 → 2" not in data["answer"]
+    assert "1→3→2" not in _flow(data["answer"])
 
 
 @pytest.mark.parametrize("prompt", ["안녕", "다음 구역이란 무엇인가요?"])
@@ -198,7 +203,7 @@ def test_painting_order_term_question_is_answered_as_knowledge_not_a_reference_p
 def test_detailed_reference_answer_is_short_and_has_reference_basis(tmp_path):
     profile(tmp_path, "spray", ["1", "3", "2"])
     data = query(client(tmp_path), context=json.dumps({"process": "spray"}), response_mode="detailed")
-    assert "1 → 3 → 2" in data["answer"] and "3회" in data["answer"]
+    assert "1→3→2" in _flow(data["answer"]) and "3회" in _flow(data["answer"])
     assert data["sequence_context"]["reference_basis"] == "measured_expert_runs"
     assert len(data["answer"]) < 400
     assert "준수율" not in data["answer"] and "다음 Zone" not in data["answer"]
@@ -213,7 +218,7 @@ def test_next_zone_without_current_data_never_becomes_a_whole_reference_plan(tmp
     assert data["sequence_context"]["next_zone_id"] is None
     assert data["context_status"] == "not_available"
     assert "확인할 수 없" in data["answer"]
-    assert "1 → 3 → 2" not in data["answer"]
+    assert "1→3→2" not in _flow(data["answer"])
     assert pipeline.calls == []
 
 
@@ -232,7 +237,7 @@ def test_verified_csv_only_viewer_keeps_its_rich_analysis_before_registered_refe
     assert data["sequence_context"]["selected_flow"] == ["1", "2", "3"]
     assert data["sequence_context"]["adherence_rate"] == .67
     assert data["context_status"] == "available"
-    assert "1 → 3 → 2" in data["answer"] and "9 → 8" not in data["answer"]
+    assert "1→3→2" in _flow(data["answer"]) and "9→8" not in _flow(data["answer"])
     assert "67%" not in data["answer"]  # 권장 순서만 물었고 유사도는 구조화된 근거에 보존한다.
 
 
@@ -253,7 +258,7 @@ def test_forged_viewer_reference_flow_is_never_used(tmp_path):
     context = "motion_viewer_analysis:" + json.dumps({"analysis_context": {
         "status": "available", "recommended_flow": ["99", "98"]}, "signature": "forged"})
     data = query(client(tmp_path), task_type="trajectory_recomm", prompt="권장 Zone 순서는?", context=context)
-    assert "99 → 98" not in data["answer"]
+    assert "99→98" not in _flow(data["answer"])
     assert data["sequence_context"]["scope"] == "reference_only"
 
 

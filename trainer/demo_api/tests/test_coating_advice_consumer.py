@@ -105,7 +105,7 @@ def test_advice_that_contradicts_the_measured_direction_is_dropped() -> None:
 def test_why_thin_answer_does_not_pass_an_inverted_cause() -> None:
     # 운영에서는 계획 모델이 문서 답으로 보냈다(답출처 documents).
     pipeline = RecordingPipeline(plan={"kind": "coating_knowledge", "intent": "knowledge", "scope": "zone"}, document="[답변] " + Q19)
-    result = ask("왜 이렇게 얇게 나왔어?", tab="coating", pipeline=pipeline)
+    result = ask("왜 이렇게 얇게 나왔어?", tab="coating", pipeline=pipeline, mode="detailed")  # 상세 분석의 전체 답. 빠른 안내는 한 줄 60자다(2026-11-16)
     answer = result["answer"]
     # v3.5.0 설계 표 v19: 계획 모델·문서 답 없이 서명된 기록 행으로 답한다.
     assert result["calls"] == [] and result["source"] == "analysis"
@@ -125,7 +125,7 @@ def test_inverted_physics_is_checked_only_against_a_viewer_record() -> None:
     pipeline = RecordingPipeline(plan={"kind": "coating_knowledge", "intent": "knowledge", "scope": "unspecified"}, document="[답변] " + Q33)
     # 기록 문맥 없는 일반 지식 답에는 손대지 않는다(독립 검토 2026-11-14).
     assert ask("과도막은 왜 생겨?", tab="knowledge", pipeline=pipeline, raw_context="")["answer"] == Q33
-    viewer = ask("과도막은 왜 생겨? 내 기록에서도 과도막 난 데 있어?", tab="knowledge", pipeline=pipeline)["answer"]
+    viewer = ask("과도막은 왜 생겨? 내 기록에서도 과도막 난 데 있어?", tab="knowledge", pipeline=pipeline, mode="detailed")["answer"]  # 상세 분석의 전체 답. 빠른 안내는 한 줄 60자다(2026-11-16)
     assert "과도한 분사 거리" not in viewer and "두꺼워" in viewer
 
 

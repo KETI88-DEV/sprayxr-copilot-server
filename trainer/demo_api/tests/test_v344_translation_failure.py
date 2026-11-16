@@ -45,7 +45,7 @@ def test_failed_question_translation_still_gives_the_fixed_answer_for_hand_on_ti
     pipeline = FailingQuestion()
     data, _ = _ask(pipeline, VI, "vi")
     assert data["answer"] == "Đừng dùng ngón tay bịt đầu súng." and data["citations"] == list(g.HIGH_PRESSURE_CITATIONS)
-    assert (g.HIGH_PRESSURE_ANSWER, "ko", "vi") in pipeline.translations  # 고정 답을 기존 답 번역으로 옮겼다
+    assert (g.QUICK_HIGH_PRESSURE_ANSWER, "ko", "vi") in pipeline.translations  # 고정 답(빠른 안내 한 줄)을 기존 답 번역으로 옮겼다
     assert pipeline.calls == []  # 모델은 부르지 않았다
 
 

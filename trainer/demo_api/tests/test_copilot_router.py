@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 from trainer.demo_api import chat_service as chat_service_mod
 from trainer.demo_api import copilot_router
 from trainer.demo_api.app import create_app
+from trainer.demo_api.quick_answer import one_line
 from trainer.scripts import agent_pipeline
 from trainer.scripts.openai_backend import OpenAIBackendUnavailableError
 
@@ -235,8 +236,8 @@ def test_detailed_order_mode_explains_verified_report_without_extra_generation()
         prompt="권장 Zone 순서는?", response_mode="detailed",
     )).json()["data"]
 
-    assert quick["answer"].startswith("권장 작업 순서는 Zone 1 → 3 → 2입니다.")
-    assert detailed["answer"] == quick["answer"]  # 같은 조회 요청은 응답 모드만으로 불필요한 통계를 더하지 않는다.
+    assert quick["answer"].startswith("권장 작업 순서는 Zone 1→3→2입니다.")  # 빠른 안내는 화살표를 붙여 쓴다
+    assert detailed["answer"].replace(" → ", "→") == quick["answer"]  # 같은 조회 요청은 응답 모드만으로 불필요한 통계를 더하지 않는다.
     assert "[" not in detailed["answer"]  # 제목 틀 없이 문장으로 낸다(2026-11-11 지시)
     assert "Zone 1 → 3 → 2" in detailed["answer"]
     assert "유동 구간" not in detailed["answer"] and "67%" not in detailed["answer"]
@@ -728,7 +729,7 @@ def test_pending_task_types_answer_not_available_without_pipeline_or_mcp(
     assert body["status"] == "SUCCESS"
     data = body["data"]
     assert set(data) == _DATA_KEYS
-    assert data["answer"] == copilot_router.PENDING_TASK_ANSWERS[task_type]
+    assert data["answer"] == one_line(copilot_router.PENDING_TASK_ANSWERS[task_type])  # 빠른 안내 한 줄
     assert "완료 분석" in data["answer"]
     assert data["resolved_intents"] == [task_type]
     assert data["context_status"] == "not_available"

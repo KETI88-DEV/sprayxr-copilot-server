@@ -198,6 +198,8 @@ def reference_order_answer(engine, *, scenario_id: str | None, process: str | No
         lines.append(f"{label}: Zone " + " → ".join(str(zone) for zone in plan["flow"]))
     mode = learning_mode_from_scenario(scenario_id)
     label = f"학습 모드 {mode}" if mode is not None else f"시나리오 {scenario_id}"
+    if not detailed:  # 빠른 안내 한 줄(60자): 공정이 둘이면 화살표 목록은 공통 출구(quick_answer)가 앞부분과 개수로 줄인다
+        return label + " 등록 기준 순서: " + ", ".join(line.replace(": Zone", " Zone") for line in lines) + ".", context
     answer = label + " 현재 등록된 기준 순서 — " + "; ".join(lines) + "."
     if detailed:
         counts = ", ".join(("스프레이" if plan["process"] == "spray" else "블라스팅")

@@ -6,7 +6,7 @@ QUICK = {"confidence": {"abstain_below_rerank_score": 4.0, "quick_abstain_below_
 
 def test_dizzy_question_without_evidence_gets_the_fixed_line() -> None:   # T16
     data = ask(Pipeline(top=1.0, config=QUICK), "VR로 연습하다가 어지러우면 몇 분 쉬어야 해요?", mode="quick")
-    assert data["answer"] == NO_EVIDENCE_ANSWER + "\n" + DIZZY_NOTE
+    assert data["answer"] == DIZZY_NOTE + " " + NO_EVIDENCE_ANSWER.split(". ")[0] + "."  # 빠른 안내 한 줄은 몸 상태 안내가 먼저다
 
 
 def test_domain_question_with_weak_evidence_does_not_fall_back_to_chat() -> None:

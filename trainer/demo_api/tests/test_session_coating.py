@@ -276,8 +276,9 @@ def _client(engine: CoatingProgressEngine, reports: V1Store | None = None) -> Te
     return TestClient(app)
 
 
-def _ask(client: TestClient, prompt: str, *, session_id: str = SESSION, context: str | None = None) -> dict[str, Any]:
-    body = {"user_id": "u", "session_id": session_id, "scenario_id": "3", "task_type": "pose_recomm", "prompt": prompt}
+def _ask(client: TestClient, prompt: str, *, session_id: str = SESSION, context: str | None = None, mode: str = "quick") -> dict[str, Any]:
+    body = {"user_id": "u", "session_id": session_id, "scenario_id": "3", "task_type": "pose_recomm", "prompt": prompt,
+            "response_mode": mode}
     if context is not None:
         body["context"] = context
     response = client.post("/api/v1/copilot/query", json=body)
@@ -317,7 +318,8 @@ def test_after_complete_pose_recomm_names_the_most_problematic_zone(engine: Coat
     assert report["coating_report"]["guideline"] not in report["llm_briefing"]
     assert [zone["zone_id"] for zone in report["pose_report"]["zone_summary"]] == ["1", "3"]
 
-    worst = _ask(client, "가장 문제 있는 구역이 어디야?")
+    assert _ask(client, "가장 문제 있는 구역이 어디야?")["answer"] == "가장 문제가 큰 구역은 3번 구역입니다."  # 빠른 안내 한 줄
+    worst = _ask(client, "가장 문제 있는 구역이 어디야?", mode="detailed")
 
     assert worst["context_status"] == "available"
     assert worst["answer"].startswith("가장 문제가 큰 구역은 3번 구역입니다.")
@@ -326,7 +328,7 @@ def test_after_complete_pose_recomm_names_the_most_problematic_zone(engine: Coat
     assert "이 구역 도막은 기본 목표 160µm 기준으로 과도막(칠한 곳 평균 390µm, 미도장 0%)입니다." in worst["answer"]
     assert worst["pose_context"]["scope"] == "zone" and worst["pose_context"]["report_id"] == report_id
 
-    zone1 = _ask(client, "이 구역 자세 어땠어?", context="1")
+    zone1 = _ask(client, "이 구역 자세 어땠어?", context="1", mode="detailed")
     assert zone1["answer"].startswith("1번 구역 결과입니다.")
     assert "숙련자 범위를 벗어난 관절은 없었습니다" in zone1["answer"]
     assert "정상(칠한 곳 평균" in zone1["answer"]
@@ -458,7 +460,9 @@ def test_error_analysis_answers_from_the_completed_report(engine: CoatingProgres
     assert (before["context_status"], before["coating_context"]) == ("not_available", None)
 
     _complete_session(client, height_map)
-    data = client.post("/api/v1/copilot/query", json=body).json()["data"]
+    quick = client.post("/api/v1/copilot/query", json=body).json()["data"]["answer"]  # 빠른 안내 한 줄(2026-11-16)
+    assert quick == "Zone 3 과도막(390µm)입니다. 속도·이격거리 기록이 없어 조절 후보를 내지 못했습니다."
+    data = client.post("/api/v1/copilot/query", json={**body, "response_mode": "detailed"}).json()["data"]
 
     assert data["answer"].startswith("기본 목표 160µm 기준으로 본 도막 분포입니다. 칠한 면적의 두께 분포: ")
     assert "Zone 3은 과도막입니다(칠한 곳 평균 390µm). 속도·이격거리 기록이 없어 조절 후보를 내지 못했습니다." in data["answer"]
@@ -472,7 +476,8 @@ def test_coating_status_question_after_complete_lists_grades(engine: CoatingProg
     client = _client(engine)
     _complete_session(client, height_map)
 
-    data = _ask(client, "도막이 과하거나 모자란 영역이 있어?")
+    assert _ask(client, "도막이 과하거나 모자란 영역이 있어?")["answer"] == "저도막 0곳, 과도막 1곳, 정상 1곳, 칠한 곳 없음 1곳입니다(기본 목표 160µm 기준)."
+    data = _ask(client, "도막이 과하거나 모자란 영역이 있어?", mode="detailed")
 
     assert "저도막: 없음\n과도막: 1개 — Map 1 · Zone 3(칠한 곳 평균 390µm, 미도장 0%)\n정상: 1개\n칠한 곳 없음: 1개 — Map 1 · Zone 2" in data["answer"]
     assert [row["zone_id"] for row in data["coating_context"]["zones"]] == ["1", "2", "3"]
@@ -730,9 +735,11 @@ def test_zone_answer_sentence_names_the_expert_comparison(engine: CoatingProgres
     client = _client(engine)
     _complete_session(client, height_map)
 
-    assert "전문가 최종 도막과 견주면" in _ask(client, "가장 문제 있는 구역이 어디야?")["answer"]
+    assert "전문가 최종 도막과 견주면" in _ask(client, "가장 문제 있는 구역이 어디야?", mode="detailed")["answer"]
 
 
-def _ask_knowledge(client: TestClient, prompt: str) -> dict[str, Any]:
-    body = {"user_id": "u", "session_id": SESSION, "scenario_id": "3", "task_type": "knowledge_search", "prompt": prompt}
+def _ask_knowledge(client: TestClient, prompt: str, mode: str = "detailed") -> dict[str, Any]:
+    """전체 답을 보는 시험이라 상세 분석으로 묻는다(빠른 안내는 한 줄 60자, 2026-11-16)."""
+    body = {"user_id": "u", "session_id": SESSION, "scenario_id": "3", "task_type": "knowledge_search", "prompt": prompt,
+            "response_mode": mode}
     return client.post("/api/v1/copilot/query", json=body).json()["data"]

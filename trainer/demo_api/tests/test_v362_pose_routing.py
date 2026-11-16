@@ -39,7 +39,8 @@ def test_signed_pose_record_questions_answer_as_before_v360(tab: str, prompt: st
     source, calls, head = BASE[(tab, prompt)]
     result = ask(prompt, tab=tab)
     assert (result["source"], result["calls"]) == (source, calls), result
-    assert result["answer"].startswith(head), result["answer"]
+    # 답 머리는 상세 분석에서 견준다. 빠른 안내는 한 줄 60자다(2026-11-16).
+    assert ask(prompt, tab=tab, mode="detailed")["answer"].startswith(head) and "\n" not in result["answer"]
 
 
 def _query(prompt: str, task: str = "pose_recomm") -> CopilotQueryRequest:

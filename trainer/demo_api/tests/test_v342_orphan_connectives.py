@@ -50,7 +50,7 @@ def test_t28_pose_tab_answer_keeps_its_measured_first_sentence() -> None:
     zone = payload()["dialogue_evaluation"]["zones"]["1:8"]
     tool = next(m for m in zone["metrics"] if m["key"] == "tool_angle")
     reply = f"Zone 8의 도구 각도는 {tool['actual']}°로 숙련자 {tool['reference']}°와 거의 같습니다. 따라서 건 각도는 괜찮았습니다."
-    result = ask("건 각도는 괜찮았어?", tab="pose", playback=AT_3S, pipeline=RecordingPipeline(converse=reply))
+    result = ask("건 각도는 괜찮았어?", tab="pose", playback=AT_3S, pipeline=RecordingPipeline(converse=reply), mode="detailed")  # 상세 분석의 전체 답. 빠른 안내는 한 줄 60자다(2026-11-16)
     # v3.5.0 설계 표 T28: 대화 모델 없이 서명된 도구 각도 행으로 답한다.
     assert result["calls"] == [] and result["source"] == "analysis"
     assert f"{tool['actual']}°" in result["answer"] and f"{tool['reference']}°" in result["answer"]

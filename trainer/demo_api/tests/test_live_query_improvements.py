@@ -150,14 +150,14 @@ def test_server_signed_viewer_analysis_works_without_a_saved_session() -> None:
 
     quick = query(dict(context, record={"filename": "client-only.csv"}), signature)
     assert quick["context_status"] == "available"
-    assert quick["answer"].startswith("권장 작업 순서는 Zone 1 → 3 → 2입니다.")
+    assert quick["answer"].startswith("권장 작업 순서는 Zone 1→3→2입니다.")  # 빠른 안내는 화살표를 붙여 쓴다
     assert "record" not in quick["sequence_context"]
     detailed = query(context, signature, mode="detailed")
     assert detailed["context_status"] == "available"
     assert "[" not in detailed["answer"]
     assert "유동 구간" not in detailed["answer"]
     assert detailed["degraded"] is False
-    assert detailed["answer"] == quick["answer"]
+    assert detailed["answer"].replace(" → ", "→") == quick["answer"]  # 같은 답, 빠른 안내는 화살표만 붙여 쓴다
     assert detailed["sequence_context"]["adherence_rate"] == .67
     assert query(dict(context, adherence_rate=0.99), signature)["context_status"] == "not_available"
     assert query(context, "forged-signature")["context_status"] == "not_available"

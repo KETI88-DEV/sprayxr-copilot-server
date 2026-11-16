@@ -22,7 +22,7 @@ def _documents(answer: str) -> RecordingPipeline:
 
 def test_q19_far_distance_cause_is_replaced_by_the_measured_distance() -> None:
     # Zone 8은 251 mm로 전문가 550 mm보다 가까웠다. "멀어 얇아졌다"는 이 기록과 반대다.
-    result = ask("왜 이렇게 얇게 나왔어?", tab="coating", pipeline=_documents(Q19))
+    result = ask("왜 이렇게 얇게 나왔어?", tab="coating", pipeline=_documents(Q19), mode="detailed")  # 상세 분석의 전체 답. 빠른 안내는 한 줄 60자다(2026-11-16)
     answer = result["answer"]
     assert result["source"] == "analysis"  # v3.5.0 설계 표 v19: 문서 답 없이 기록 행으로 답한다
     assert "너무 멀어" not in answer

@@ -6,6 +6,7 @@ from urllib.parse import unquote
 import pytest
 
 from trainer.demo_api import safety_guard as g
+from trainer.demo_api.quick_answer import one_line
 from trainer.demo_api.copilot_router import ANALYSIS_PROMPT_HEADER, analysis_prompt_header
 from trainer.demo_api.tests.test_v342_safety import Pipeline, _ask
 from trainer.demo_api.tests.viewer_record import AT_3S, RecordingPipeline, ask
@@ -60,7 +61,7 @@ def test_follow_up_after_a_safety_question_uses_the_conversation() -> None:
     pipeline = Pipeline(document="네, 잠깐은 괜찮습니다.")
     _ask(pipeline, "작업 중에 담배 피워도 돼?", conversation="c1")
     data, _ = _ask(pipeline, "그럼 해도 돼?", conversation="c1")
-    assert data["answer"] == g.CLASSES["ignition"].answer  # 저장된 종류(ignition)를 이어받고 허락하는 답을 바꾼다
+    assert data["answer"] == one_line(g.CLASSES["ignition"].answer)  # 저장된 종류(ignition)를 이어받고 허락하는 답을 바꾼다
 
 
 # --- 3. 위험 행동이 아닌 질문은 경로·답을 바꾸지 않는다 ---------------------------------------------------

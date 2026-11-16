@@ -37,7 +37,7 @@ def test_document_answer_about_the_record_is_checked_against_signed_data() -> No
     pipeline = RecordingPipeline(plan={"kind": "coating_knowledge", "intent": "knowledge", "scope": "unspecified"},
                                  document="[답변] 이 기록에서 제일 얇은 곳은 Zone 9입니다. 덧칠은 50% 겹쳐 합니다.",
                                  chunks=[{"chunk_id": "DOC-x", "text": "덧칠은 50% 겹쳐 칠한다.", "rerank_score": 9.0}])
-    data = ask("얇은 도막은 어떻게 보완해?", tab="knowledge", playback=AT_35S, pipeline=pipeline)
+    data = ask("얇은 도막은 어떻게 보완해?", tab="knowledge", playback=AT_35S, pipeline=pipeline, mode="detailed")  # 상세 분석의 전체 답. 빠른 안내는 한 줄 60자다(2026-11-16)
     assert "Zone 8" in data["answer"] and "Zone 9입니다" not in data["answer"] and "50% 겹쳐" in data["answer"], data["answer"]
 
 

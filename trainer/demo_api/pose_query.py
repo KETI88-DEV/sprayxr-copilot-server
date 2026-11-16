@@ -45,6 +45,7 @@ _ANGLE_QUESTION: Final = re.compile(r"각도|몇\s*도|°|degree|angle", re.I)
 NOT_JOINT: Final = re.compile(r"보호대|보호구|장갑|착용|통증|아프|아파|부상|예방|스트레칭|손잡이|그립|잡은|쥔|쥐고|"
                               r"(?<![가-힣])건(?![가-힣])|건\s*(?:각도|을|의|이|은)|스프레이\s*건|도구|노즐|압력|안전", re.I)
 ANGLE_NOTE: Final[str] = "관절 각도 수치는 없으며, 숙련자 평균 위치의 거리·방향을 비교합니다."
+QUICK_ANGLE_NOTE: Final[str] = "관절 각도 수치는 없습니다."  # 빠른 안내는 교정 문장 뒤에 붙인다(한 줄 60자)
 
 
 def wants_full_list(prompt: str, *, subject: str = r"Zone|존|구역|분사|시퀀스|sequence") -> bool:
@@ -498,12 +499,18 @@ def josa(word: str, with_final: str, without_final: str) -> str:
     return f"{word}{with_final if _has_final(word) else without_final}"
 
 
-def radius_phrase(label: str, delta_m: float, *, average: bool = False) -> str:
-    """반경 교정(어깨 중점에서 관절까지의 거리 차, arm_reference.Correction)을 몸을 기준으로 적고 할 일을 붙인다."""
+def radius_phrase(label: str, delta_m: float, *, average: bool = False, quick: bool = False) -> str:
+    """반경 교정(어깨 중점에서 관절까지의 거리 차, arm_reference.Correction)을 몸을 기준으로 적고 할 일을 붙인다.
+
+    `quick`이면 할 일 한 문장에 거리를 넣는다("오른쪽 팔꿈치를 몸에서 20cm 더 떼어 주세요.").
+    """
     part = label.split()[-1]
     subject = f"{label}{'이' if _has_final(label) else '가'}"
     obj = f"{part}{'을' if _has_final(part) else '를'}"
     cm = f"{'평균 ' if average else ''}{abs(delta_m) * 100:.0f}cm"
+    if quick:
+        whole = f"{label}{'을' if _has_final(label) else '를'}"
+        return f"{whole} 몸에서 {cm} 더 떼어 주세요." if delta_m < 0 else f"{whole} 몸 쪽으로 {cm} 당겨 주세요."
     if delta_m < 0:
         return f"{subject} 숙련자 평균보다 몸 쪽으로 {cm} 더 붙어 있었습니다. {obj} 몸에서 더 떼어 주세요."
     return f"{subject} 숙련자 평균보다 몸 밖으로 {cm} 더 뻗어 있었습니다. {obj} 몸 쪽으로 당겨 주세요."
@@ -513,7 +520,7 @@ _RADIUS_LABEL: Final = re.compile(r"^(?P<where>스트로크\s*\d+~\d+%\s*구간�
                                   r"(?P<cm>\d+(?:\.\d+)?)\s*cm (?P<way>멀리|가까이) 있었습니다\.?$")
 
 
-def friendly_correction(label: str) -> str:
+def friendly_correction(label: str, *, quick: bool = False) -> str:
     """MCP 자세 엔진의 교정 문장을 훈련생이 바로 쓸 말로 바꾼다. 엔진 이미지는 다시 배포하지 않으므로 여기서 바꾼다.
 
     엔진 문장은 arm_reference.Correction.text가 반경 차의 부호(멀리/가까이)와 스트로크 구간으로 만든 것이라 그대로
@@ -523,7 +530,8 @@ def friendly_correction(label: str) -> str:
     match = _RADIUS_LABEL.match(text)
     if match:
         delta = float(match["cm"]) / 100 * (1 if match["way"] == "멀리" else -1)
-        return _whole_stroke(match["where"] or "") + radius_phrase(match["label"], delta)
+        where = _whole_stroke(match["where"] or "")
+        return (where.removeprefix("스트로크 내내 ") if quick else where) + radius_phrase(match["label"], delta, quick=quick)
     return _whole_stroke(text)
 
 
