@@ -48,6 +48,7 @@ trainer/demo_api/anomaly_stream.py
 trainer/demo_api/answer_feedback.py
 trainer/demo_api/api_call_log.py
 trainer/demo_api/api_docs.py
+trainer/demo_api/openapi_output_docs.py
 trainer/demo_api/app.py
 trainer/demo_api/assets/query-voice-ko.wav
 trainer/demo_api/assets/zone_reference/color/Exam2_01.png
@@ -208,6 +209,9 @@ trainer/expert_zone_mapping.py
 trainer/__init__.py
 trainer/multilingual/glossary.json
 trainer/multilingual/glossary.py
+trainer/multilingual/tsb_import.py
+trainer/multilingual/tsb_reference.py
+trainer/multilingual/tsb_reference.json
 trainer/multilingual/__init__.py
 trainer/pose_lab/body_proportions.py
 trainer/pose_lab/composite.py

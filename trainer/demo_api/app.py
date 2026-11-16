@@ -48,6 +48,7 @@ from trainer.demo_api.v1_router import create_v1_router
 from trainer.demo_api.v1_store import V1Store
 from trainer.demo_api.monitor import MonitorRecorder
 from trainer.demo_api.monitor_api import create_monitor_router
+from trainer.demo_api.openapi_output_docs import add_openapi_output_overviews
 from trainer.demo_api.motion_viewer import create_motion_viewer_router
 from trainer.demo_api.readiness import evaluate_live_readiness
 from trainer.demo_api.sequence import default_snapshot, session_snapshot
@@ -731,6 +732,7 @@ def create_app(
         schema = default_openapi()
         _add_openapi_input_overviews(schema)
         add_test_input_overviews(schema)
+        add_openapi_output_overviews(schema)
         schema.setdefault("components", {}).setdefault("securitySchemes", {})["TSBApiKey"] = {
             "type": "apiKey", "in": "header", "name": "X-API-Key",
             "description": "서버에서 API 키를 활성화한 경우 사용합니다. JSON 본문은 변경하지 않습니다.",
