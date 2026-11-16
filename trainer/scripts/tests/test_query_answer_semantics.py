@@ -15,7 +15,8 @@ def test_inadequate_cause_answer_is_rewritten_once_and_only_repaired_answer_is_c
     pipeline, _, searched, chunks = _pipeline(monkeypatch)
     chunks[:] = [{'chunk_id':'DOC-a-C0001', 'text':'빠른 이동과 부족한 겹침은 낮은 도막 두께를 만들 수 있습니다.', 'rerank_score':8.0}]
     outputs = iter(['[답변] 저도막은 두께가 부족한 현상입니다.\n[근거] DOC-a-C0001', 'REWRITE',
-                    '[답변] 이동이 빠르거나 겹침이 부족하면 도료가 충분히 쌓이지 않을 수 있습니다.\n[근거] DOC-a-C0001', 'OK'])
+                    '[답변] 이동이 빠르거나 겹침이 부족하면 도료가 충분히 쌓이지 않을 수 있습니다.\n[근거] DOC-a-C0001',
+                    '이유: 문단이 요청한 원인을 설명함\n근거: 1\n판정: OK'])
     calls = []
     def generate(messages, **kwargs):
         calls.append((messages, kwargs))
@@ -63,7 +64,7 @@ def test_changed_evidence_invalidates_semantically_validated_cache(monkeypatch):
     def generate(messages, **kwargs):
         calls.append(kwargs)
         if kwargs.get('answer_regex') == REVIEW_REGEX:
-            return 'OK'
+            return '이유: 문단이 요청한 원인을 설명함\n근거: 1\n판정: OK'
         return '[답변] 근거에 적힌 작업 조건이 원인이 될 수 있습니다.\n[근거] DOC-a-C0001'
     pipeline._generate_direct = generate
     run_query(pipeline)
@@ -105,7 +106,7 @@ def test_previous_dialogue_change_invalidates_a_reviewed_answer(monkeypatch):
     def generate(messages, **kwargs):
         calls.append(kwargs)
         if kwargs.get('answer_regex') == REVIEW_REGEX:
-            return 'OK'
+            return '이유: 문단과 조건을 반영함\n근거: 1\n판정: OK'
         return '[답변] 앞서 제시한 조건을 반영한 가능한 원인입니다.\n[근거] DOC-a-C0001'
     pipeline._generate_direct = generate
     run_query(pipeline)
@@ -130,7 +131,8 @@ def test_unreviewed_abstention_is_not_cached_even_with_a_valid_response_shape(mo
 def test_a_citation_only_candidate_is_repaired_before_a_judge_can_approve_it(monkeypatch):
     pipeline, _, _, _ = _pipeline(monkeypatch)
     outputs = iter(['[답변]\n[근거] DOC-a-C0001',
-                    '[답변] 질문에 요청한 내용을 설명합니다.\n[근거] DOC-a-C0001', 'OK'])
+                    '[답변] 질문에 요청한 내용을 설명합니다.\n[근거] DOC-a-C0001',
+                    '이유: 문단에 근거한 종류를 설명함\n근거: 1\n판정: OK'])
     calls = []
     def generate(messages, **kwargs):
         calls.append(kwargs)
@@ -155,4 +157,23 @@ def test_a_resolved_technical_followup_is_reviewed_without_question_keywords(mon
         answer_question='평평한 면 전체가 얇아지는 것도 같은 원리야?')
     assert '평평한 면도 모서리와 같은 원리' not in result['response']
     assert result['metadata']['answer_review']['verdict'] == 'insufficient'
+    assert len(calls) == 2
+
+
+def test_pipeline_preserves_supported_explanation_and_binds_only_its_real_source(monkeypatch):
+    pipeline, _, _, chunks = _pipeline(monkeypatch)
+    pipeline.config['llm']['append_citations'] = True
+    chunks[:] = [{'chunk_id':'DOC-definition-C0001', 'text':'X의 뜻을 정의합니다.', 'rerank_score':8.0},
+                 {'chunk_id':'DOC-causes-C0001', 'text':'A와 B가 X를 일으키는 원인입니다.', 'rerank_score':7.9}]
+    outputs = iter(['[답변] 원인은 A와 B입니다.\n[근거] DOC-definition-C0001',
+                    '이유: 둘째 문단이 두 원인을 설명함\n근거: 2\n판정: OK'])
+    calls = []
+    def generate(*args, **kwargs):
+        calls.append(True)
+        return next(outputs)
+    pipeline._generate_direct = generate
+    result = run_query(pipeline, answer_question='X의 원인은?')
+    assert result['response'] == '[답변] 원인은 A와 B입니다.\n[근거] DOC-causes-C0001'
+    assert result['citations'] == ['DOC-causes-C0001']
+    assert result['metadata']['answer_review']['verdict'] == 'attribution_corrected'
     assert len(calls) == 2

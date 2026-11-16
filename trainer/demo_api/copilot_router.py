@@ -55,7 +55,7 @@ from trainer.demo_api.dialogue import (INSTRUCTION_REFUSAL, asks_for_instruction
                                        drop_misattributed_zones, drop_ungrounded, guard_generated_answer, has_body, parse_plan, plain_answer,
                                        viewer_claims, zone_fact_numbers,
                                        selected_direction_answer, ungrounded_measurements, viewer_findings_answer,
-                                       viewer_measurement_answer, viewer_metadata_context, dialogue_turns_for_model, without_hanzi)
+                                       viewer_measurement_answer, viewer_metadata_context, dialogue_turns_for_model, dialogue_resolution_advice, without_hanzi)
 from trainer.demo_api.playback_direction import playback_direction_from_context, playback_direction_answer, simple_direction_question, requested_direction_scope, aggregate_direction, LABELS as DIRECTION_LABELS
 from trainer.demo_api.copilot_live_analysis import current_zone, live_analysis
 from trainer.demo_api.simulator_context import SIMULATOR_CONTEXT, is_blasting, wants_simulator_context
@@ -1074,13 +1074,9 @@ async def _execute_copilot_query(
         grounded = True
     if (decision is not None and decision.get("context_relation") == "followup"
             and decision["kind"] == "coating_knowledge" and decision["intent"] == "knowledge"):
-        candidate = str(decision.get("resolved_question") or "").strip()
-        # A planner's reformulation is conversational interpretation, not a new
-        # source of measurements. Reject numbers introduced by earlier AI prose.
-        numbers = lambda text: set(re.findall(r"\d+(?:\.\d+)?", text))
-        user_numbers = numbers(" ".join([query.prompt, *[str(turn.get("prompt") or "") for turn in dialogue_turns]]))
-        if candidate and numbers(candidate) <= user_numbers:
-            resolved_question = candidate
+        resolved_question = dialogue_resolution_advice(
+            decision.get("resolved_question"), prompt=query.prompt, recent_turns=dialogue_turns,
+        )
 
     async def chat_answer() -> JSONResponse:
         """계획 모델이 대화로 분류한 질문에 문서 검색 없이 답한다(세션 요약·측정값 검사 포함)."""
@@ -1450,6 +1446,12 @@ async def _execute_copilot_query(
             "\n목표 대비 판정이며 재생 시점의 도막이 아닙니다. 조절 후보는 등급에 따른 일반적인 방향이고 원인으로 확정된 것이 아닙니다."
             if compact else "\n최종 기록의 전문가 대비 대표 두께 비교이며 재생 시점의 현재 도막 판정이 아닙니다."
         ) + " 질문의 원인·방법·관계를 직접 설명하고 확인된 측정 사실과 일반적인 가능한 원인을 구분하세요. 권장 Zone 순서를 대신 답하지 마세요."
+    if resolved_question:
+        knowledge_client_context = (knowledge_client_context or "") + (
+            "\n[후속 질문 해석 — 미검증 대화 참고]\n" + json.dumps(resolved_question, ensure_ascii=False) +
+            "\n모델의 임시 해석일 뿐 답변·사실·새 주제의 근거가 아닙니다. "
+            "사용자 원문 대화의 대상이나 조건을 추가하거나 바꾸는 부분은 사용하지 마세요."
+        )
     # Add the relation after all fact-specific context builders, which may
     # replace the client context. Retrieval must retain this scope decision.
     if document_followup:
@@ -1465,7 +1467,6 @@ async def _execute_copilot_query(
         response_mode=query.response_mode,
         concise=query.response_mode == "detailed",
         simulator_context=block,
-        resolved_question=resolved_question,
     )
     generation_instruction = (build_query_instruction(
         question,
@@ -1475,7 +1476,6 @@ async def _execute_copilot_query(
         response_mode=query.response_mode,
         concise=True,
         simulator_context=block,
-        resolved_question=resolved_question,
     ) if query.response_mode == "quick" else instruction)
 
     def _guarded_run() -> Mapping[str, object]:
@@ -1495,10 +1495,10 @@ async def _execute_copilot_query(
                     "quick_cache_scope": json.dumps([query.user_id, query.scenario_id, query.task_type]),
                     "concise_answer": True,
                     "generation_instruction": generation_instruction,
-                    "retrieval_instruction": resolved_question or question,
+                    "retrieval_instruction": question,
                 } if query.response_mode == "quick" else {
                     # 응답 수준 지시문이 검색어에 섞이면 무관한 문단이 잡힌다(Issue #9).
-                    "retrieval_instruction": retrieval_question(resolved_question or question, context=instruction),
+                    "retrieval_instruction": retrieval_question(question, context=instruction),
                 }),
             )
 
@@ -1513,7 +1513,7 @@ async def _execute_copilot_query(
 
     metadata = result.get("metadata")
     review = metadata.get("answer_review") if isinstance(metadata, Mapping) else None
-    review_failed = isinstance(review, Mapping) and review.get("verdict") not in {"ok", "rewritten", "cached", "not_required"}
+    review_failed = isinstance(review, Mapping) and review.get("verdict") not in {"ok", "rewritten", "cached", "not_required", "attribution_corrected"}
     # 근거 확인 단계: 재정렬 1위 점수가 기준값 미만이면 생성한 답을 버린다(설정이 없으면 지금처럼 동작).
     # 기준값은 재정렬 모델의 점수 척도에 묶인다(KURE-Reranker-nano 3.28, 2026-11-13 측정). 상세분석만 잰 값이다.
     abstain_below = _abstain_below(pipeline, query.response_mode)

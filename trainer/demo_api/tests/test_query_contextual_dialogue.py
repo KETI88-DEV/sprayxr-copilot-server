@@ -233,7 +233,8 @@ def test_dialogue_relation_survives_assembling_signed_coating_advice(relation, m
         assert "기포" in retrieval and "저도막" not in retrieval
 
 
-def test_resolved_followup_question_retains_original_subject_and_accumulated_user_conditions():
+@pytest.mark.parametrize("mode", ["quick", "detailed"])
+def test_resolved_followup_question_retains_original_subject_and_accumulated_user_conditions(mode):
     store = SequenceStore(":memory:")
     previous(store)
     previous(store, prompt="이격거리는 적절했는데?", answer="그렇다면 이동 속도를 확인할 수 있습니다.")
@@ -242,15 +243,93 @@ def test_resolved_followup_question_retains_original_subject_and_accumulated_use
     resolved = "이격거리가 적절하고 도료 유량이 정상이라는 사용자 조건에서 평평한 면 전체에 저도막이 생기는 가능한 원인은?"
     pipeline = DialoguePipeline({"kind": "coating_knowledge", "intent": "knowledge", "scope": "unspecified",
                                  "context_relation": "followup", "resolved_question": resolved})
-    data = ask(client(pipeline, store), original)
+    data = ask(client(pipeline, store), original, response_mode=mode)
     assert data["retrieval_used"] is True and len(pipeline.calls) == 1
     call = pipeline.calls[0]
-    assert call["retrieval_instruction"] == resolved
+    assert original in call["retrieval_instruction"]
     assert call["answer_question"] == original
-    assert resolved in call["generation_instruction"]
-    assert call["generation_instruction"].endswith(original)
-    assert "미검증" in call["generation_instruction"]
+    generation = call.get("generation_instruction") or call["instruction"]
+    assert resolved in generation
+    assert generation.endswith(original)
+    assert "미검증" in generation
     assert len(pipeline.plans[0][1]["recent_turns"]) == 3
+    from trainer.demo_api.query_runtime import retrieval_question
+    search = retrieval_question(call["retrieval_instruction"], context=call["instruction"])
+    assert "저도막이 생기는 원인은" in search and "도료 유량은 정상 범위였어요" in search
+    assert original in search
+
+
+@pytest.mark.parametrize("mode", ["quick", "detailed"])
+def test_planner_declarative_answer_cannot_replace_the_original_user_subject(mode):
+    from trainer.demo_api.query_runtime import retrieval_question
+    store = SequenceStore(":memory:")
+    previous(store)
+    bad = "분사 거리는 적절하지만, 도막의 손상 여부는 다른 요인에 따라 달라질 수 있습니다."
+    pipeline = DialoguePipeline({"kind": "coating_knowledge", "intent": "knowledge", "scope": "unspecified",
+                                 "context_relation": "followup", "resolved_question": bad})
+    original = "이격거리는 적절했는데?"
+    ask(client(pipeline, store), original, response_mode=mode)
+    call = pipeline.calls[-1]
+    assert "적절했는데" in call["retrieval_instruction"] and call["answer_question"] == original
+    search = retrieval_question(call["retrieval_instruction"], context=call["instruction"])
+    assert "저도막이 생기는 원인은 무엇인가요?" in search and "적절했는데" in search
+    generation = call.get("generation_instruction") or call["instruction"]
+    assert "손상" not in search and bad not in generation
+
+
+@pytest.mark.parametrize("advice", ["도막 손상이 생기는 원인은?", "거리 조건을 제외한 얇은 도막 원인"])
+@pytest.mark.parametrize("mode", ["quick", "detailed"])
+def test_unverified_resolution_is_only_advice_and_cannot_supersede_user_history(advice, mode):
+    from trainer.demo_api.query_runtime import retrieval_question
+    store = SequenceStore(":memory:")
+    previous(store)
+    pipeline = DialoguePipeline({"kind": "coating_knowledge", "intent": "knowledge", "scope": "unspecified",
+                                 "context_relation": "followup", "resolved_question": advice})
+    original = "이격거리는 적절했는데?"
+    ask(client(pipeline, store), original, response_mode=mode)
+    call = pipeline.calls[-1]
+    assert "적절했는데" in call["retrieval_instruction"]
+    instruction = call.get("generation_instruction") or call["instruction"]
+    assert advice in instruction and instruction.index(advice) < instruction.index("[최근 대화]")
+    assert instruction.endswith(original)
+    search = retrieval_question(call["retrieval_instruction"], context=call["instruction"])
+    assert "저도막이 생기는 원인은 무엇인가요?" in search and "적절했는데" in search
+    assert "손상" not in search
+
+
+def test_resolution_advice_marker_does_not_remove_the_raw_followup_search_context():
+    from trainer.demo_api.query_runtime import retrieval_question
+    context = ("[문서 후속 질문]\n[후속 질문 해석 — 미검증 대화 참고]\n도막 손상 원인은?\n"
+               "[최근 대화]\n사용자: 저도막이 생기는 원인은?\nCo-Pilot: 이전 답변\n"
+               "사용자: 도료 유량은 정상 범위였어요.\n")
+    result = retrieval_question("이격거리는 적절했는데?", context=context)
+    assert "저도막이 생기는 원인은?" in result and "도료 유량은 정상 범위였어요" in result
+    assert "손상" not in result
+    switched = retrieval_question("기포 예방 방법은?", context="[새 주제 질문]\n" + context)
+    assert "저도막" not in switched and "기포" in switched
+
+
+@pytest.mark.parametrize("origin,advice,prefix", [
+    ("저도막이 생기는 원인은?", "블라스팅 작업에서 도막 손상이 생기는 원인은?", "선박 도장 스프레이 건 작업"),
+    ("블라스팅 노즐에서 분진이 많이 생기는 원인은?", "스프레이 도장에서 손상이 생기는 원인은?", "선박 블라스팅 노즐 작업"),
+])
+def test_resolution_advice_cannot_choose_the_retrieval_process(origin, advice, prefix):
+    from trainer.demo_api.query_runtime import retrieval_question
+    store = SequenceStore(":memory:")
+    previous(store, prompt=origin)
+    pipeline = DialoguePipeline({"kind": "coating_knowledge", "intent": "knowledge", "scope": "unspecified",
+                                 "context_relation": "followup", "resolved_question": advice})
+    ask(client(pipeline, store), "이격거리는 적절했는데?")
+    call = pipeline.calls[-1]
+    query = retrieval_question(call["retrieval_instruction"], context=call["instruction"])
+    assert query.startswith(prefix), query
+
+
+def test_new_topic_or_an_explicit_current_process_does_not_inherit_an_old_process():
+    from trainer.demo_api.query_runtime import retrieval_question
+    context = "[문서 후속 질문]\n[최근 대화]\n사용자: 블라스팅 분진 원인은?"
+    assert retrieval_question("스프레이 이격거리는?", context=context).startswith("선박 도장 스프레이")
+    assert retrieval_question("기포 원인은?", context="[새 주제 질문]\n" + context).startswith("선박 도장 스프레이")
 
 
 def test_foreign_previous_answer_is_preserved_for_a_korean_followup():
@@ -347,7 +426,7 @@ def test_semantic_followup_reuses_the_existing_guard_for_other_hazard_classes():
 
 
 @pytest.mark.parametrize("verdict,degraded", [
-    ("ok", False), ("rewritten", False), ("cached", False), ("not_required", False),
+    ("ok", False), ("rewritten", False), ("cached", False), ("not_required", False), ("attribution_corrected", False),
     ("budget_exhausted", True), ("rejected", True), ("invalid_review", True),
     ("unavailable", True), ("insufficient", True),
 ])

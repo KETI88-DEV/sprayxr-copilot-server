@@ -115,6 +115,10 @@ def translation_pipeline_for(pipeline: Any, source: str, target: str) -> Any:
 
 def retrieval_question(question: str, *, context: str = "") -> str:
     """Expand training terms to the vocabulary in manuals; never add numeric advice."""
+    # The router renders model advice as one JSON-quoted physical line. Remove
+    # that data block before reading relation, history or process selectors;
+    # an interpretation must not change those through its words or headings.
+    context = re.sub(r"(?m)^\[후속 질문 해석[^\n]*\]\r?\n[^\n]*(?:\r?\n모델의 임시 해석[^\n]*)?", "", context)
     query = question
     terms = {
         "저도막": "도막 두께 부족 규정 두께 미달 얇은 도막",
@@ -137,22 +141,30 @@ def retrieval_question(question: str, *, context: str = "") -> str:
         r"(?:(?:그럼|그러면|그런데)\s*)?[^?!.]{2,50}?(?:은|는|이란|란|에\s*대해)\s*"
         r"(?:뭐|무엇|어떤|어떻게|왜|어디|언제|누구|설명|알려|[?？]\s*$)", question))
     semantic_followup = '[문서 후속 질문]' in context
-    resolved_question = '[해석완료검색질문]' in context or '[후속 질문 해석' in context
     new_topic = '[새 주제 질문]' in context or '[새주제질문]' in context
-    if not resolved_question and not new_topic and (semantic_followup or (follows_up(question) and not explicit_topic)) and "[최근 대화]" in context:
+    previous: list[str] = []
+    # An interpretation is unverified model advice, not an independent source
+    # of the user's subject. Its presence must never suppress original turns.
+    if not new_topic and (semantic_followup or (follows_up(question) and not explicit_topic)) and "[최근 대화]" in context:
         previous = re.findall(r"사용자: (.+)", context.split("[최근 대화]", 1)[1])
         if previous:
-            # Legacy planners may provide no resolved question (or its numbers
-            # may have failed validation). Keep the bounded user exchanges in
-            # time order instead of guessing which condition is the subject.
+            # Keep bounded user exchanges in time order instead of guessing
+            # which condition is the subject or trusting a rewritten subject.
             # This retains the original problem and the intermediate exclusions.
             prefix = " ".join(value[:200] for value in previous[-6:])
             query = prefix + " " + query
     current_context = context.split("[최근 대화]", 1)[0]
-    if re.search(r"블라스팅|blasting", question, re.I) or (
-        not re.search(r"스프레이|spray", question, re.I)
-        and re.search(r"블라스팅|blasting", current_context, re.I)
-    ):
+    def explicit_process(text: str) -> str | None:
+        if re.search(r"블라스팅|blasting", text, re.I):
+            return "blasting"
+        return "spray" if re.search(r"스프레이|spray", text, re.I) else None
+    # Current user wording wins; an actual same-topic user exchange can supply
+    # an omitted process. Only then consult current context with advice removed.
+    process = explicit_process(question)
+    if process is None and previous:
+        process = next((found for text in reversed(previous) if (found := explicit_process(text))), None)
+    process = process or explicit_process(current_context)
+    if process == "blasting":
         return "선박 블라스팅 노즐 작업 " + query
     return "선박 도장 스프레이 건 작업 " + query
 

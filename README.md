@@ -5,7 +5,7 @@
 선박 도장·블라스팅 훈련 시뮬레이터와 연동해 작업자에게 피드백과 훈련 결과를 제공하는 AI Co-Pilot 서버입니다.
 전문가 기준 데이터와 훈련 기록을 비교하고 작업 자세와 도장 경로를 시각화합니다. 훈련 중 발생하는 질문에도 답변합니다.
 
-현재 버전은 **v3.8.0**입니다. [버전별 변경 이력](CHANGELOG.md)과 [GitHub 릴리스](https://github.com/KETI88-DEV/sprayxr-copilot-server/releases)에서 추가 기능을 확인할 수 있습니다.
+현재 버전은 **v3.8.1**입니다. [버전별 변경 이력](CHANGELOG.md)과 [GitHub 릴리스](https://github.com/KETI88-DEV/sprayxr-copilot-server/releases)에서 추가 기능을 확인할 수 있습니다.
 
 ## 주요 기능
 

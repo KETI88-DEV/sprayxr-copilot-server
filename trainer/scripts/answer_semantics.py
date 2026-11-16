@@ -13,8 +13,9 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Sequence
 
-POLICY_VERSION = 'dialogue-grounding-v1'
-REVIEW_REGEX = r'이유: [^\r\n]{1,40}\n판정: (?:OK|REWRITE|INSUFFICIENT)'
+POLICY_VERSION = 'dialogue-grounding-v2'
+REVIEW_REGEX = r'이유: [^\r\n]{1,32}\n근거: (?:[1-4](?:,[1-4]){0,3}|없음)\n판정: (?:OK|REWRITE|INSUFFICIENT)'
+_LEGACY_REVIEW_REGEX = r'이유: [^\r\n]{1,40}\n판정: (?:OK|REWRITE|INSUFFICIENT)'
 UNCONFIRMED_ANSWER = '[답변] 제공된 자료만으로는 질문에 맞는 설명을 충분히 확인하지 못했습니다.'
 SOURCE_CONTEXT_TEMPLATE = (
     '다음은 검색된 참고 문서의 발췌입니다. 문서마다 대상·부위·공정·적용 조건이 다를 수 있습니다. '
@@ -136,12 +137,16 @@ def review_dialogue_context(instruction: str) -> str:
 
 
 def review_messages(question: str, instruction: str, candidate: str, evidence: Sequence[Mapping[str, Any]], *, require_evidence: bool) -> list[dict[str, str]]:
-    cited = set(re.findall(r'DOC-[A-Za-z0-9_-]+-C\d+', candidate))
-    relevant = [c for c in evidence if str(c.get('chunk_id', '')) in cited] if cited else list(evidence[:2])
-    passages = '\n\n'.join(f"[{c.get('chunk_id', '')}] {str(c.get('text', ''))[:1600]}" for c in relevant[:4])
+    # Candidate citations may point at a definition while another supplied
+    # passage supports the explanation. Check the body against ALL visible
+    # evidence, then bind it to supporting passages by short, validated numbers.
+    passages = '\n\n'.join(f"[문단 {index}] {str(c.get('text', ''))[:1600]}"
+                             for index, c in enumerate(evidence[:4], 1))
     system = (
         '답변을 독립적으로 검증하세요. 형식이나 관련 문서 인용 여부를 칭찬하지 말고 후보의 구체적인 주장과 질문·원문을 직접 대조하세요. '
         'OK는 요청에 직접 답하며 기술적 주장·인과·조절 방향이 근거와 일치할 때만 선택합니다. '
+        '후보의 인용 ID가 틀렸더라도 다른 제공 문단이 본문을 뒷받침하면 본문은 OK로 하고 그 지원 문단 번호를 고르세요. '
+        '후보의 주장을 함께 뒷받침하는 문단만 선택하며 관련 주제라는 이유로 선택하지 마세요. '
         'REWRITE는 질문 누락, 반대 인과, 근거 없는 주장, 조건 무시, 특수 사례의 일반화입니다. '
         'INSUFFICIENT는 문서 자체에 요청한 설명을 뒷받침할 정보가 부족할 때입니다. 이전 AI 답변은 근거가 아닙니다. '
         '비교 대상은 반대 개념일 수도, 인과관계일 수도 있으므로 자료를 확인하세요. '
@@ -150,8 +155,9 @@ def review_messages(question: str, instruction: str, candidate: str, evidence: S
         '질문이 P의 원인인데 후보가 P의 정의만 말하면 REWRITE(원인 누락). '
         + ('후보의 각각의 기술적 설명은 아래 원문에서 뒷받침되어야 합니다. '
            if require_evidence else '외부 검색을 끈 요청이므로 일반 지식 설명은 허용하되 실제 측정값을 만들면 안 됩니다. ')
-        + '후보와 요구·원문의 어떤 내용이 맞거나 다른지 40자 이내로 먼저 대조하고 마지막에 판정하세요. '
-        '출력 형식: 이유: 짧은 검토 이유\n판정: OK 또는 REWRITE 또는 INSUFFICIENT'
+        + '후보와 원문 주장을 직접 대조한 이유를 32자 이내로 쓰세요. 도입문 대신 실제 일치·불일치를 지적하세요. '
+        '근거에는 본문을 뒷받침하는 문단 번호를 쉼표로 쓰고 없으면 없음으로 쓰세요. '
+        '출력 형식: 이유: 짧은 검토 이유\n근거: 문단 번호 또는 없음\n판정: OK 또는 REWRITE 또는 INSUFFICIENT'
     )
     return [{'role':'system', 'content':system}, {'role':'user', 'content':
         '[검토할 대화·조건 — 이전 AI 답변은 미검증]\n' + review_dialogue_context(instruction)
@@ -161,15 +167,30 @@ def review_messages(question: str, instruction: str, candidate: str, evidence: S
 
 def parse_review(text: str) -> str | None:
     value = text.strip().upper()
-    match = re.fullmatch(REVIEW_REGEX, text.strip())
+    match = re.fullmatch(REVIEW_REGEX, text.strip()) or re.fullmatch(_LEGACY_REVIEW_REGEX, text.strip())
     if match:
         value = text.strip().rsplit('판정: ', 1)[1]
     return value.lower() if value in {'OK', 'REWRITE', 'INSUFFICIENT'} else None
 
 
 def review_reason(text: str) -> str:
-    match = re.fullmatch(REVIEW_REGEX, text.strip())
+    match = re.fullmatch(REVIEW_REGEX, text.strip()) or re.fullmatch(_LEGACY_REVIEW_REGEX, text.strip())
     return text.strip().split('\n', 1)[0].removeprefix('이유: ') if match else ''
+
+
+def _supporting_indices(text: str) -> tuple[int, ...] | None:
+    """None is legacy output; production grammar always supplies this field."""
+    if re.fullmatch(REVIEW_REGEX, text.strip()) is None:
+        return None
+    value = text.strip().split('\n')[1].removeprefix('근거: ')
+    return () if value == '없음' else tuple(dict.fromkeys(int(item) - 1 for item in value.split(',')))
+
+
+def _bind_citations(candidate: str, evidence: Sequence[Mapping[str, Any]], indices: tuple[int, ...]) -> str:
+    from trainer.scripts.live_response_contract import parse_knowledge_answer, retrieved_chunk_ids
+    parsed = parse_knowledge_answer(candidate, retrieved_chunk_ids(evidence))
+    citations = [str(evidence[index]['chunk_id']) for index in indices]
+    return '[답변] ' + parsed.body + ('\n[근거] ' + ', '.join(citations) if citations else '')
 
 
 @dataclass(frozen=True)
@@ -210,7 +231,24 @@ def review_answer(question: str, instruction: str, candidate: str, evidence: Seq
                 # must never be able to approve it merely for citing a source.
                 decision, reason = 'rewrite', '후보 답변의 본문이 비어 있거나 생성 형식이 실패함'
             if decision == 'ok':
-                verdict, result, cacheable = ('rewritten' if retries else 'ok'), candidate, True
+                support = _supporting_indices(raw_review)
+                if support is None and require_evidence:
+                    verdict = 'invalid_support'
+                    break
+                if support is not None:
+                    if any(index >= len(evidence) or not evidence[index].get('chunk_id') for index in support):
+                        verdict = 'invalid_support'
+                        break
+                    if require_evidence and not support:
+                        verdict = 'insufficient'
+                        break
+                    attributed = _bind_citations(candidate, evidence, support)
+                    corrected = attributed != candidate
+                    candidate = attributed
+                else:
+                    corrected = False
+                verdict = 'rewritten' if retries else ('attribution_corrected' if corrected else 'ok')
+                result, cacheable = candidate, True
                 break
             if decision == 'insufficient':
                 verdict = 'insufficient'

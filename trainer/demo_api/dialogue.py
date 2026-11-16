@@ -62,6 +62,8 @@ def planning_messages(prompt: str, *, task_type: str, recent_turns: list[dict[st
         "직전 위험 행동을 조건만 바꾸어 다시 묻는 발언도 같은 주제의 followup이며, 위험 행동과 무관한 새 주제는 new_topic입니다. "
         "resolved_question은 followup일 때만 원래 주제와 누적된 사용자 조건을 담아 독립적으로 이해할 수 있는 질문으로 씁니다(600자 이내). "
         "직전 문장만 되풀이하지 말고 recent_dialogue 전체에서 처음의 대상과 이후 조건을 함께 보세요. "
+        "질문 또는 짧은 검색 주제어만 쓰며, 질문에 답하거나 원인·영향을 설명하는 평서문을 쓰지 마세요. "
+        "사용자 원문의 대상을 다른 현상으로 바꾸거나 새로운 원인·사실을 추가하지 마세요. 확실하지 않으면 빈 문자열입니다. "
         "사용자의 조건은 확인된 측정 사실이 아니라 사용자 진술이라고 표현하고, 이전 AI 답의 수치·원인은 확정 사실로 넣지 마세요. "
         "현재 발언이 new_topic이거나 해석할 수 없으면 resolved_question은 빈 문자열입니다. "
         "intent: knowledge=일반 설명/대화, coating_status=도막 상태, order_reference=권장 순서, order_actual=실제 순서, "
@@ -138,6 +140,24 @@ def dialogue_turns_for_model(turns: Sequence[Mapping[str, Any]]) -> list[dict[st
         item["answer"] = answer if trusted_analysis or not answer else "[이전 AI 답변·미검증 대화] " + answer
         copied.append(item)
     return copied
+
+
+def dialogue_resolution_advice(value: Any, *, prompt: str, recent_turns: Sequence[Mapping[str, Any]]) -> str | None:
+    """Keep a bounded interpretation as advice rather than a replacement query.
+
+    Obvious declarative completions are answers rather than interpretations.
+    Short noun-phrase searches remain valid; a question mark is not required.
+    Subject preservation happens at the retrieval boundary independently of
+    this conservative format check.
+    """
+    if not isinstance(value, str) or not value.strip() or len(value) > 600:
+        return None
+    candidate = value.strip()
+    if re.search(r"(?:습니다|입니다|한다|된다|있다|없다|이다|였다)[.!。?？]?\s*$", candidate):
+        return None
+    numbers = lambda text: set(re.findall(r"\d+(?:\.\d+)?", text))
+    user_numbers = numbers(" ".join([prompt, *[str(turn.get("prompt") or "") for turn in recent_turns]]))
+    return candidate if numbers(candidate) <= user_numbers else None
 
 
 def viewer_dialogue_context(payload: Mapping[str, Any]) -> dict[str, Any]:

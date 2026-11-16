@@ -64,6 +64,57 @@ class AnswerSemanticsTests(unittest.TestCase):
         self.assertIn('처음 원인에 관한 질문', messages[-1]['content'])
         self.assertNotIn('장황한 설정 ' * 100, messages[-1]['content'])
 
+    def test_review_sees_supporting_passages_even_when_the_candidate_cites_the_wrong_one(self):
+        from trainer.scripts.answer_semantics import review_messages
+        evidence = [{'chunk_id':'DOC-definition-C0001', 'text':'X의 뜻을 정의합니다.'},
+                    {'chunk_id':'DOC-causes-C0001', 'text':'A와 B가 X를 일으키는 원인입니다.'}]
+        messages = review_messages('X의 원인은?', '', '[답변] 원인은 A와 B입니다.\n[근거] DOC-definition-C0001',
+                                   evidence, require_evidence=True)
+        self.assertIn('A와 B가 X를 일으키는 원인', messages[-1]['content'])
+
+    def test_a_supported_body_is_preserved_while_its_citation_is_corrected(self):
+        from trainer.scripts.answer_semantics import review_answer
+        evidence = [{'chunk_id':'DOC-definition-C0001', 'text':'X의 뜻을 정의합니다.'},
+                    {'chunk_id':'DOC-causes-C0001', 'text':'A와 B가 X를 일으키는 원인입니다.'}]
+        result = review_answer('X의 원인은?', '', '[답변] 원인은 A와 B입니다.\n[근거] DOC-definition-C0001', evidence,
+            complete=lambda *args:'이유: 둘째 문단이 A와 B 원인을 설명함\n근거: 2\n판정: OK',
+            regenerate=lambda *args:self.fail('a correct body needs no generation'), require_evidence=True, budget_seconds=3)
+        self.assertEqual(result.text, '[답변] 원인은 A와 B입니다.\n[근거] DOC-causes-C0001')
+        self.assertTrue(result.cacheable)
+        self.assertEqual(result.verdict, 'attribution_corrected')
+        self.assertEqual(result.retries, 0)
+
+    def test_invalid_support_and_no_support_cannot_certify_a_rag_answer(self):
+        from trainer.scripts.answer_semantics import review_answer
+        for support in ['4', '없음']:
+            result = review_answer('X의 원인은?', '', '[답변] 후보 답변입니다.',
+                [{'chunk_id':'DOC-one-C0001', 'text':'문서'}],
+                complete=lambda *args:'이유: 검토 이유\n근거: ' + support + '\n판정: OK',
+                regenerate=lambda *args:self.fail('invalid support must not generate'), require_evidence=True, budget_seconds=3)
+            self.assertFalse(result.cacheable)
+            self.assertNotIn('후보 답변입니다', result.text)
+
+    def test_rag_approval_without_the_support_field_is_rejected(self):
+        from trainer.scripts.answer_semantics import review_answer
+        result = review_answer('X의 원인은?', '', '[답변] 후보 답변입니다.',
+            [{'chunk_id':'DOC-one-C0001', 'text':'자료'}], complete=lambda *args:'OK',
+            regenerate=lambda *args:self.fail('missing attribution must not repair'), require_evidence=True, budget_seconds=3)
+        self.assertFalse(result.cacheable)
+        self.assertEqual(result.verdict, 'invalid_support')
+
+    def test_no_rag_can_approve_without_a_source_but_insufficient_never_can(self):
+        from trainer.scripts.answer_semantics import review_answer
+        result = review_answer('일반적인 원인은?', '', '[답변] 일반 지식으로 설명합니다.', [],
+            complete=lambda *args:'이유: 일반 설명에 직접 답함\n근거: 없음\n판정: OK',
+            regenerate=lambda *args:self.fail('no repair needed'), require_evidence=False, budget_seconds=3)
+        self.assertTrue(result.cacheable)
+        self.assertNotIn('[근거]', result.text)
+        rejected = review_answer('원인은?', '', '[답변] 후보 답변입니다.', [{'chunk_id':'DOC-one-C0001','text':'자료'}],
+            complete=lambda *args:'이유: 자료가 부족함\n근거: 1\n판정: INSUFFICIENT',
+            regenerate=lambda *args:self.fail('insufficient evidence must not repair'), require_evidence=True, budget_seconds=3)
+        self.assertFalse(rejected.cacheable)
+        self.assertEqual(rejected.verdict, 'insufficient')
+
     def test_a_blank_or_invalid_review_cannot_approve_the_candidate(self):
         from trainer.scripts.answer_semantics import review_answer
         for output in ['', 'Maybe OK', '[답변] 괜찮습니다.']:

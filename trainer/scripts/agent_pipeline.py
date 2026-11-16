@@ -1499,7 +1499,7 @@ class AgentPipeline:
                             if not acquired:
                                 raise TimeoutError("Quick semantic review slot busy")
                         try:
-                            return bounded_completion(review_messages, timeout, backend=reviewer, tokens=64, regex=REVIEW_REGEX)
+                            return bounded_completion(review_messages, timeout, backend=reviewer, tokens=80, regex=REVIEW_REGEX)
                         finally:
                             if acquired:
                                 QUICK_GENERATION_SLOT.release()
