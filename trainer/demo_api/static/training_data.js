@@ -10,7 +10,7 @@
   const query = new URLSearchParams(window.location.search);
   const state = {
     worker: query.get('worker_id') || 'all', process: query.get('process') || 'all', mode: query.get('scenario_id') || 'all',
-    date: query.get('acquired_at') || 'all', zoneMapping: ['present', 'absent'].includes(query.get('zone_mapping')) ? query.get('zone_mapping') : 'all',
+    quality: ['complete', 'needs_review'].includes(query.get('quality_status')) ? query.get('quality_status') : 'all',
     q: (query.get('q') || '').slice(0, 100), page: Number.isSafeInteger(Number(query.get('page'))) && Number(query.get('page')) > 0 ? Number(query.get('page')) : 1,
     limit: [10, 25, 50, 100].includes(Number(query.get('limit'))) ? Number(query.get('limit')) : 25,
     pages: 1, listAbort: null, detailAbort: null, returnFocus: null, mapView: 'decoded', data: null,
@@ -75,12 +75,14 @@
     } catch (_) { return null; }
   }
   function params(paginated = true) {
-    const result = new URLSearchParams({worker_id: state.worker, process: state.process, scenario_id: state.mode, acquired_at: state.date, zone_mapping: state.zoneMapping, q: state.q});
+    const result = new URLSearchParams({worker_id: state.worker, process: state.process, scenario_id: state.mode, quality_status: state.quality, q: state.q});
     if (paginated) { result.set('page', String(state.page)); result.set('limit', String(state.limit)); }
     return result;
   }
   function syncUrl() {
     const url = new URL(window.location.href);
+    url.searchParams.delete('acquired_at');
+    url.searchParams.delete('zone_mapping');
     params().forEach((value, key) => {
       if (value === 'all' || value === '' || (key === 'page' && value === '1') || (key === 'limit' && value === '25')) url.searchParams.delete(key);
       else url.searchParams.set(key, value);
@@ -100,7 +102,7 @@
   }
   function listMessage(title, note, retry = false) {
     const cell = el('td', 'td-table-message');
-    cell.colSpan = 7;
+    cell.colSpan = 6;
     cell.append(el('strong', '', title));
     if (note) cell.append(el('div', '', note));
     if (retry) {
@@ -142,7 +144,6 @@
       nameCell.append(name, el('small', 'td-row-note', `${count(item.frame_count)} 프레임 · ${count(item.zone_count)} 구역 · 맵 ${count(item.heightmap_count)}개`));
       row.append(nameCell, el('td', '', item.worker_name || item.worker_id || '미지정'), el('td', 'td-muted', processLabel(item.process)), el('td', '', item.mode_label || item.scenario_id || '미지정'));
       row.append(el('td', 'td-date', dateText(item.acquired_at)));
-      row.append(el('td', '', hasZoneId(item) ? '있음' : '없음'));
       const qualityCell = el('td'); qualityCell.append(badge(item.quality_status)); row.append(qualityCell);
       row.addEventListener('click', event => { if (!event.target.closest('button, a')) name.click(); });
       return row;
@@ -163,7 +164,6 @@
     $('td-kpi-review').textContent = count((finite(summary.needs_review) || 0) + (finite(summary.failed) || 0));
     $('td-kpi-review-note').textContent = summary.failed ? `품질 검토 · 변환 실패 ${count(summary.failed)}건 포함` : '품질 검토 대상';
     $('td-kpi-maps').textContent = count(summary.heightmap_count);
-    $('td-zone-counts').textContent = `있음 ${count(summary.with_zone_id)}건 · 없음 ${count(summary.without_zone_id)}건 · 현재 조회 기준`;
     const firstDate = dateText(summary.acquisition_date_min), lastDate = dateText(summary.acquisition_date_max);
     $('td-acquisition-range').textContent = firstDate === lastDate ? firstDate : `${firstDate} ~ ${lastDate}`;
     $('td-acquisition-note').textContent = `취득일 확인 ${count(summary.dated_count)} / ${count(filtered)}건 · 현재 조회 기준`;
@@ -171,8 +171,7 @@
     setOptions('td-worker', options.workers, state.worker, '전체 작업자');
     setOptions('td-process', options.processes, state.process, '전체 공정');
     setOptions('td-mode', options.modes, state.mode, '전체 시나리오');
-    setOptions('td-date', options.dates, state.date, '전체 훈련날짜');
-    setOptions('td-zone-mapping', options.zone_mappings, state.zoneMapping, '전체');
+    setOptions('td-quality', [{id:'needs_review',label:'확인 필요'},{id:'complete',label:'완료'}], state.quality, '전체 품질');
     renderBars('td-worker-chart', summary.by_worker, '현재 조회 결과의 작업자별 데이터 수', '#5275d9');
     renderBars('td-mode-chart', summary.by_mode, '현재 조회 결과의 학습모드별 데이터 수', '#42a69b');
     renderBars('td-process-chart', summary.by_process, '현재 조회 결과의 공정별 데이터 수', '#8d7ac9');
@@ -556,12 +555,12 @@
 
   $('td-search').value = state.q; $('td-limit').value = String(state.limit);
   $('td-filter-form').addEventListener('submit', event => {
-    event.preventDefault(); state.worker = $('td-worker').value; state.process = $('td-process').value; state.mode = $('td-mode').value; state.date = $('td-date').value; state.zoneMapping = $('td-zone-mapping').value; state.q = $('td-search').value.trim(); state.page = 1; loadList();
+    event.preventDefault(); state.worker = $('td-worker').value; state.process = $('td-process').value; state.mode = $('td-mode').value; state.quality = $('td-quality').value; state.q = $('td-search').value.trim(); state.page = 1; loadList();
   });
-  ['td-worker', 'td-process', 'td-mode', 'td-date', 'td-zone-mapping'].forEach(id => $(id).addEventListener('change', () => $('td-filter-form').requestSubmit()));
+  ['td-worker', 'td-process', 'td-mode', 'td-quality'].forEach(id => $(id).addEventListener('change', () => $('td-filter-form').requestSubmit()));
   $('td-reset').addEventListener('click', () => {
-    state.worker = state.process = state.mode = state.date = state.zoneMapping = 'all'; state.q = ''; state.page = 1;
-    $('td-worker').value = $('td-process').value = $('td-mode').value = $('td-date').value = $('td-zone-mapping').value = 'all'; $('td-search').value = ''; loadList();
+    state.worker = state.process = state.mode = state.quality = 'all'; state.q = ''; state.page = 1;
+    $('td-worker').value = $('td-process').value = $('td-mode').value = $('td-quality').value = 'all'; $('td-search').value = ''; loadList();
   });
   $('td-refresh').addEventListener('click', loadList);
   $('td-limit').addEventListener('change', () => { state.limit = Number($('td-limit').value); state.page = 1; loadList(); });

@@ -123,3 +123,26 @@ def test_learning_routes_reject_unknown_zone_mapping_and_process(zone_client, en
     url = '/admin/api/training-data' + endpoint
     assert zone_client.get(url, params={'zone_mapping': 'unknown'}).status_code == 422
     assert zone_client.get(url, params={'process': 'grinding-other'}).status_code == 422
+
+
+def test_quality_filter_matches_list_counts_and_both_exports(zone_catalog):
+    path = zone_catalog.root / 'catalog.json'
+    index = json.loads(path.read_text(encoding='utf-8'))
+    for row, quality in zip(index['records'], ['complete', 'needs_review', 'failed', 'unknown']):
+        row['quality_status'] = quality
+    path.write_text(json.dumps(index), encoding='utf-8')
+    app = FastAPI()
+    app.include_router(create_training_data_router(zone_catalog))
+    with TestClient(app) as client:
+        for quality, expected in [('complete', {'legacy-mapped'}),
+                                  ('needs_review', {'legacy-unassigned', 'raw-grinding', 'converted-mapped'})]:
+            params = {'quality_status': quality}
+            listing = client.get('/admin/api/training-data', params=params).json()
+            assert listing['filtered_count'] == len(expected)
+            assert {row['dataset_name'] for row in listing['items']} == expected
+            rows = list(csv.DictReader(io.StringIO(client.get('/admin/api/training-data/export.csv', params=params).content.decode('utf-8-sig'))))
+            assert {row['dataset_name'] for row in rows} == expected
+            with zipfile.ZipFile(io.BytesIO(client.get('/admin/api/training-data/export.zip', params=params).content)) as archive:
+                assert json.loads(archive.read('manifest.json'))['count'] == len(expected)
+        for endpoint in ['', '/export.csv', '/export.zip']:
+            assert client.get('/admin/api/training-data'+endpoint, params={'quality_status':'wrong'}).status_code == 422
