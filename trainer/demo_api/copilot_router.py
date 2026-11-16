@@ -52,7 +52,7 @@ from trainer.demo_api.coating_query import (
     report_coating_context, target_advice_facts, zone_measures)
 from trainer.demo_api.copilot_intent import classify_question_intent, fallback_intent, preset_intent, is_coating_status_question, is_coating_advice_question, is_domain_question, is_general_painting_knowledge, is_explanatory_question, is_off_topic
 from trainer.demo_api.dialogue import (INSTRUCTION_REFUSAL, asks_for_instructions, authenticated_facts, conversation_key,
-                                       drop_misattributed_zones, drop_ungrounded, guard_generated_answer, has_body, parse_plan, plain_answer,
+                                       drop_misattributed_zones, drop_sentences, drop_ungrounded, guard_generated_answer, has_body, parse_plan, plain_answer,
                                        viewer_claims, zone_fact_numbers,
                                        selected_direction_answer, ungrounded_measurements, viewer_findings_answer,
                                        viewer_measurement_answer, viewer_metadata_context, dialogue_turns_for_model, dialogue_resolution_advice, without_hanzi)
@@ -258,6 +258,35 @@ def _abstain_below(pipeline: object, response_mode: str) -> float | None:
 # 근거 확인 단계(confidence.abstain_below_rerank_score)가 막은 답. 2026-11-13 2-1 측정에서 도입.
 NO_EVIDENCE_ANSWER: Final = ("제공된 자료에서 이 질문에 답할 근거를 찾지 못했습니다. "
                              "대상(도장 방식·제품·구역)을 함께 적어 다시 물어 주세요.")
+
+
+# 근거가 약한 기술 질문 중 정의만 묻는 질문은 일반 설명으로 답한다(2026-11-16 사용자 결정 B안).
+# v7 평가에서 문서 없는 대화 답이 "헤그만 눈금 6 = 6µm" 같은 수치를 지어냈다. 검색이 놓친 24건 중 v6.1이 일반 지식으로
+# 맞힌 것은 정의 질문뿐이고 원인·절차·수치 질문은 틀렸다. 그래서 정의 질문만 열고 숫자가 든 문장은 뺀다.
+HEDGED_PREFIX: Final = "제공된 자료에서는 근거를 찾지 못해 일반적인 설명으로 답합니다. "
+_TECHNICAL: Final = re.compile(r"µm|μm|㎛|mm|°C|게이지|측정|시험|규격|LD50|독성|위험물|UN\s*번호|용제|크실렌|톨루엔|선체|선박|수선|블록"
+                               r"|도면|탱크|부식|방청|녹|강판|철판|용접|그릿|숏|막후계|조도|프로파일|스크러버|집진|배기|SDS|ISO|ASTM|SSPC"
+                               r"|NACE|PSPC|예시|그림|양식|견본|계획서|차트", re.I)
+_DEFINITION: Final = re.compile(r"뭐야|뭐지|뭔가요|뭐예요|뭐에요|무엇인가|무엇이야|무엇인지|뜻|의미|정의|란\s*무엇|어떤\s*(?:장치|현상|도료|것)|차이")
+_NOT_DEFINITION: Final = re.compile(r"\d|몇|얼마|%|µm|μm|㎛|mm|°|시간|온도|압력|비율|희석|두께|간격|규격|기준|수치|값|번호|등급|예시|도면|그림"
+                                    r"|견본|양식|계획서|표에서|제품|어떻게|방법|절차|순서|원인|이유|왜")
+
+
+def is_technical_question(prompt: str) -> bool:
+    return is_domain_question(prompt) or bool(_TECHNICAL.search(prompt))
+
+
+def allows_general_definition(prompt: str) -> bool:
+    """근거가 약할 때 일반 설명으로 답해도 되는 질문: 정의·뜻만 묻고 수치·규격·절차·원인·문서 속 예시를 묻지 않는다."""
+    return bool(_DEFINITION.search(prompt)) and not _NOT_DEFINITION.search(prompt)
+
+
+def hedged_answer(answer: str) -> str | None:
+    """일반 설명 답: 숫자가 든 문장을 빼고 근거 없음을 앞에 밝힌다. 남는 문장이 없으면 None(기권)."""
+    kept, _ = drop_sentences(plain_answer(answer), lambda part: bool(re.search(r"\d", part)))
+    if not has_body(kept) or re.search(r"(?:확인할|답할) 수 없습니다", kept):  # 출구 검사가 남긴 대체 문장은 일반 설명이 아니다
+        return None
+    return HEDGED_PREFIX + kept.strip()
 
 
 # 어지럼을 묻는데 문서에 근거가 없을 때 근거 없는 답 뒤에 붙이는 한 줄(숫자 없음).
@@ -1083,7 +1112,7 @@ async def _execute_copilot_query(
             decision.get("resolved_question"), prompt=query.prompt, recent_turns=dialogue_turns,
         )
 
-    async def chat_answer() -> JSONResponse:
+    async def chat_answer(hedged: bool = False) -> JSONResponse:
         """계획 모델이 대화로 분류한 질문에 문서 검색 없이 답한다(세션 요약·측정값 검사 포함)."""
         try:
             if query.session_id:
@@ -1107,6 +1136,8 @@ async def _execute_copilot_query(
                 # 자료에 없는 측정값은 내보내지 않는다. 한 번 다시 생성하고, 그래도 남으면 그 부분을 뺀다.
                 answer = drop_ungrounded(await to_thread.run_sync(converse), facts=facts, prompt=query.prompt, extended=extended)
             answer = _checked_generation(answer, query)
+            if hedged:
+                answer = hedged_answer(answer) or NO_EVIDENCE_ANSWER
             return _success_response(query, request_started, answer=answer, retrieval_used=False, generated=True,
                                      citations=[], context_status="available" if facts else "not_available")
         except Exception:
@@ -1534,8 +1565,12 @@ async def _execute_copilot_query(
         if not scores or max(scores) < abstain_below:
             logger.info("copilot answer withheld: weak evidence request_id=%s top=%s threshold=%s redirected=%s",
                         query.request_id, max(scores) if scores else None, abstain_below, chat_redirected)
-            if chat_redirected:
-                return await chat_answer()
+            technical = is_technical_question(query.prompt)
+            if chat_redirected and not technical:
+                return await chat_answer()  # 주제 밖 질문은 일부러 열어 둔다
+            if (not safety and mixed is None and allows_general_definition(query.prompt)
+                    and callable(getattr(planned_pipeline, "converse_copilot", None))):
+                return await chat_answer(hedged=True)
             # 위험 주제 질문은 근거가 약해도 그 종류의 고정 문장으로 답한다.
             withheld, withheld_citations = guard_answer(safety_class, "", []) if safety else (NO_EVIDENCE_ANSWER, [])
             if not safety and _DIZZY.search(query.prompt):

@@ -94,3 +94,40 @@ def test_strong_evidence_keeps_the_knowledge_answer_and_a_missing_gate_changes_n
     assert ask(KnowledgePipeline(top=0.1, config={}), "가사시간이 뭐지?")["citations"] == ["DOC-doc_0001-C0001"]
     bad = {"confidence": {"abstain_below_rerank_score": "4.0"}}
     assert ask(KnowledgePipeline(top=0.1, config=bad), "가사시간이 뭐지?")["citations"] == ["DOC-doc_0001-C0001"]
+
+
+class HedgePipeline(KnowledgePipeline):
+    """근거가 약할 때 대화 모델이 일반 지식으로 답하는 경우(v7 평가 Z005: "헤그만 눈금 6 = 6µm")."""
+
+    def __init__(self, *, top, reply, kind="coating_knowledge"):
+        super().__init__(top=top)
+        self.reply, self.kind = reply, kind
+
+    def plan_copilot_dialogue(self, prompt, **kwargs):
+        return {"kind": self.kind, "intent": "knowledge", "scope": "unspecified"}
+
+    def converse_copilot(self, prompt, **kwargs):
+        self.conversations.append(prompt)
+        return self.reply
+
+
+def test_a_weak_evidence_definition_question_gets_a_marked_general_answer_without_numbers():
+    pipeline = HedgePipeline(top=1.5, reply="[분석] 새깅은 도료가 흘러내려 처지는 현상입니다. 보통 150µm 이상에서 생깁니다.")
+    data = ask(pipeline, "새깅이 뭐지?")
+    assert data["answer"] == "제공된 자료에서는 근거를 찾지 못해 일반적인 설명으로 답합니다. 새깅은 도료가 흘러내려 처지는 현상입니다."
+    assert data["citations"] == []
+
+
+def test_weak_evidence_technical_questions_that_ask_for_values_or_causes_still_abstain():
+    for prompt, kind in (("헤그만 게이지 눈금 6은 입자 크기가 몇 µm를 뜻하나요?", "chat"),  # 도메인 낱말 없이 대화로 분류됨
+                         ("크실렌의 LD50 값은 얼마인가요?", "chat"),
+                         ("과도막의 원인은?", "coating_knowledge"),
+                         ("인트럼센트 도료의 팽창 배율은?", "coating_knowledge")):
+        pipeline = HedgePipeline(top=1.5, reply="지어낸 답입니다.", kind=kind)
+        assert ask(pipeline, prompt)["answer"] == NO_EVIDENCE_ANSWER, prompt
+        assert pipeline.conversations == [], prompt
+
+
+def test_a_general_answer_with_only_numbers_left_abstains():
+    pipeline = HedgePipeline(top=1.5, reply="두께 150µm 기준입니다.")
+    assert ask(pipeline, "새깅이 뭐지?")["answer"] == NO_EVIDENCE_ANSWER
