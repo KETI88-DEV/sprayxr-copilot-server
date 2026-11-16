@@ -122,7 +122,9 @@ def test_weak_evidence_technical_questions_that_ask_for_values_or_causes_still_a
     for prompt, kind in (("헤그만 게이지 눈금 6은 입자 크기가 몇 µm를 뜻하나요?", "chat"),  # 도메인 낱말 없이 대화로 분류됨
                          ("크실렌의 LD50 값은 얼마인가요?", "chat"),
                          ("과도막의 원인은?", "coating_knowledge"),
-                         ("인트럼센트 도료의 팽창 배율은?", "coating_knowledge")):
+                         ("인트럼센트 도료의 팽창 배율은?", "coating_knowledge"),
+                         ("SVR이 뭐야?", "chat"),  # Spark 실측: 고형분률 대신 Support Vector Regression으로 답함
+                         ("드라이아이스 블라스팅으로 도막을 제거하는 조건은 무엇인가요?", "chat")):
         pipeline = HedgePipeline(top=1.5, reply="지어낸 답입니다.", kind=kind)
         assert ask(pipeline, prompt)["answer"] == NO_EVIDENCE_ANSWER, prompt
         assert pipeline.conversations == [], prompt
