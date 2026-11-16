@@ -1,6 +1,8 @@
 """POST /api/v1/copilot/query (v2.5).
 
-``task_type`` picks the path (plan D3); the semantic router is not consulted.
+``task_type`` selects a preferred training analysis. General explanations and
+semantic document follow-ups preserve the question's meaning across these tabs.
+Verified measurements keep their engine path; generated dialogue is not evidence.
 
 * ``knowledge_search``: the live pipeline singleton shared with ``/api/chat``
   runs ``run(force_route="fast")`` in a worker thread inside the shared
@@ -15,8 +17,8 @@
   ``session_id``의 가장 최근 시퀀스다. 채점은 MCP 자세 엔진에 위임하고 결과는
   ``pose_context``에 싣는다. **자세는 여기서 채점한다** — ``telemetry/sequence``는
   시퀀스를 데이터베이스에 올리는 일만 한다(p.4).
-* ``trajectory_recomm`` (plan D2): HTTP 200 SUCCESS with a short
-  "준비 중" answer and ``context_status="not_available"``. 엔진이 없다.
+* ``trajectory_recomm``: 등록된 기준 순서와 저장된 수행 순서·진행 결과로 답한다.
+  순서의 이유·방법을 묻는 설명 질문은 관련 자료를 제공한 지식 생성 경로로 보낸다.
 * ``error_analysis``: 완료 리포트에 저장된 Zone별 도막 평가(분포, 저도막·과도막 Zone의 조절 후보)로
   답한다. 뷰어 문맥에 서명된 목표 대비 판정이 있으면 그것으로, 없으면 리포트로 답한다. 모델을 부르지 않는다. 리포트가 없으면 자료가 없다는 안내와 ``context_status="not_available"``.
 
@@ -48,12 +50,12 @@ from trainer.demo_api.copilot_contracts import CopilotQueryData, CopilotQueryReq
 from trainer.demo_api.coating_query import (
     answer_coating_question, answer_distribution_cause, drop_contradicted_causes, parse_viewer_coating_context,
     report_coating_context, target_advice_facts, zone_measures)
-from trainer.demo_api.copilot_intent import classify_question_intent, fallback_intent, preset_intent, is_coating_status_question, is_coating_advice_question, is_domain_question, is_general_painting_knowledge, is_off_topic
+from trainer.demo_api.copilot_intent import classify_question_intent, fallback_intent, preset_intent, is_coating_status_question, is_coating_advice_question, is_domain_question, is_general_painting_knowledge, is_explanatory_question, is_off_topic
 from trainer.demo_api.dialogue import (INSTRUCTION_REFUSAL, asks_for_instructions, authenticated_facts, conversation_key,
                                        drop_misattributed_zones, drop_ungrounded, guard_generated_answer, has_body, parse_plan, plain_answer,
                                        viewer_claims, zone_fact_numbers,
                                        selected_direction_answer, ungrounded_measurements, viewer_findings_answer,
-                                       viewer_measurement_answer, viewer_metadata_context, without_generated_answers, without_hanzi)
+                                       viewer_measurement_answer, viewer_metadata_context, dialogue_turns_for_model, without_hanzi)
 from trainer.demo_api.playback_direction import playback_direction_from_context, playback_direction_answer, simple_direction_question, requested_direction_scope, aggregate_direction, LABELS as DIRECTION_LABELS
 from trainer.demo_api.copilot_live_analysis import current_zone, live_analysis
 from trainer.demo_api.simulator_context import SIMULATOR_CONTEXT, is_blasting, wants_simulator_context
@@ -80,7 +82,7 @@ from trainer.demo_api.sequence_store import SequenceStore
 from trainer.demo_api.viewer_arm_pose import arm_pose_answer, parse_viewer_arm_pose, zone_pose_summary
 from trainer.demo_api.sequence_analysis import SequenceAnalysisEngine
 from trainer.demo_api.safety_guard import (
-    HIGH_PRESSURE_ANSWER, HIGH_PRESSURE_CITATIONS, classify, fixed_answer_translation, guard_answer, hazard_class,
+    CLASSES as SAFETY_CLASSES, HIGH_PRESSURE_ANSWER, HIGH_PRESSURE_CITATIONS, classify, fixed_answer_translation, guard_answer, hazard_class,
 )
 from trainer.demo_api.reference_order_query import actual_order_intent, current_next_answer, is_current_next_question, is_reference_order_question, resolve_reference_target, reference_order_answer
 from trainer.demo_api.v1_store import V1Store
@@ -280,13 +282,48 @@ def _selected_sequence(context: str | None) -> str | None:
     return value if value and not value.isdigit() and ":" not in value and len(value) <= 64 else None
 
 
+def _pose_evaluation_lookup(prompt: str) -> bool:
+    """Reasons already present in a score/correction are measured lookups.
+
+    An evaluation's computed finding differs from asking how scoring works or
+    how to perform a movement. Those conceptual/method requests stay with Qwen.
+    """
+    if is_off_topic(prompt) or NOT_JOINT.search(prompt):
+        return False
+    if re.search(r"원리|계산|산출|정의|뜻|의미|종류|유형|방법|요령|예방", prompt):
+        return False
+    pose_subject = BODY_PART.search(prompt) or re.search(r"자세|동작|관절|posture|pose", prompt, re.I)
+    reason = re.search(r"왜|이유|근거", prompt)
+    score_finding = re.search(r"(?:점수|유사도).{0,24}(?:낮|높|떨어|올라)", prompt)
+    produced_finding = re.search(r"지적(?:을\s*)?(?:됐|되었|된|받)", prompt)
+    produced_correction = re.search(r"교정\s*결과|(?:나온|받은|표시된).{0,16}교정|교정.{0,16}(?:나왔|나온|표시됐)", prompt)
+    return bool(pose_subject and reason and (score_finding or produced_finding or produced_correction))
+
+
+def _arm_lookup_question(prompt: str) -> bool:
+    """Positive gate for an engine measurement, score or computed correction."""
+    if not BODY_PART.search(prompt) or NOT_JOINT.search(prompt) or is_off_topic(prompt):
+        return False
+    if _pose_evaluation_lookup(prompt):
+        return True
+    if is_explanatory_question(prompt):
+        return False
+    normalized = re.sub(r"[\s?？.!。]", "", prompt)
+    bare = re.fullmatch(r"(?:(?:오른|왼)(?:쪽)?(?:손|팔)|손목|팔꿈치|위팔)(?:은|는|이|가)?", normalized)
+    return bool(bare or re.search(r"고쳐|고치|교정|어때|어땠|유사도|점수|몇\s*도(?=\s*(?:차이|정도|야|인가|였|이야|[?？]|$))|얼마.*차이", prompt)
+                or re.search(r"(?:면|도|야)\s*(?:돼|되|해)(?:요|나요|니)?[?？.!。\s]*$", prompt)
+                or re.search(r"(?:각도|위치)(?:은|는|가|이)?\s*(?:어떻게\s*(?:돼|되|나와)|얼마|몇|어때)?[?？.!。\s]*$", prompt))
+
+
 def _pose_engine_question(query: CopilotQueryRequest) -> bool:
     """자세 탭의 자세 질문은 대화 계획·모델 분류를 거치지 않고 채점 엔진으로 간다.
 
     분류가 빗나가면 자유 대화가 채점 없이 수치와 판정을 지어낸다(2026-11-11 재현).
     """
     return (query.task_type == "pose_recomm" and not is_coating_status_question(query.prompt)
-            and not is_coating_advice_question(query.prompt) and not is_general_painting_knowledge(query.prompt)
+            and not is_coating_advice_question(query.prompt) and (not is_general_painting_knowledge(query.prompt) or _arm_lookup_question(query.prompt))
+            and (not BODY_PART.search(query.prompt) or _arm_lookup_question(query.prompt))
+            and (not is_explanatory_question(query.prompt) or _pose_evaluation_lookup(query.prompt))
             and not is_off_topic(query.prompt) and not NOT_JOINT.search(query.prompt)
             and bool(re.search(r"자세(?!히|하게|한)|동작|교정|고쳐|고치|pose|posture|팔꿈치|어깨|무릎|허리|elbow|shoulder|knee|(?:zone|존|구역)\s*\d+",
                                query.prompt, re.I)))
@@ -645,7 +682,7 @@ def _checked_generation(answer: str, query: CopilotQueryRequest, *, instructions
     had_body = has_body(answer)
     # 인과·조언 검사는 이 기록(서명된 뷰어 문맥)에 대한 답에만 한다. 일반 지식 답은 그대로 둔다.
     record = RecordFacts.from_context(query.context) if measures is not None else None
-    if record is not None and evidence is not None:
+    if evidence is not None and (record is not None or parse_viewer_arm_pose(query.context) is not None):
         pool = _grounding(query, evidence)
         if ungrounded_measurements(answer, facts=pool, prompt=query.prompt, extended=True):
             answer = drop_ungrounded(answer, facts=pool, prompt=query.prompt, extended=True)
@@ -702,6 +739,67 @@ def _header_subject(response: Any) -> dict[str, Any] | None:
     except ValueError:
         return None
     return value if isinstance(value, dict) else None
+
+
+def _with_answer_trace(response: JSONResponse, result: Mapping[str, Any]) -> JSONResponse:
+    """Carry a bounded diagnostic to persistence, never to the public envelope.
+
+    Only the pipeline's explicit trace schema is accepted. Whole prompts,
+    context, model configuration and arbitrary metadata are not copied.
+    """
+    metadata = result.get("metadata")
+    trace = metadata.get("answer_trace") if isinstance(metadata, Mapping) else None
+    if not isinstance(trace, Mapping):
+        return response
+    clean: dict[str, Any] = {}
+    for key, limit in (("policy_version", 80), ("question", 512), ("retrieval_query", 512),
+                       ("initial_answer", 512), ("final_answer", 512)):
+        if isinstance(trace.get(key), str):
+            clean[key] = trace[key][:limit]
+    count = trace.get("retrieved_candidates")
+    if isinstance(count, int) and not isinstance(count, bool) and count >= 0:
+        clean["retrieved_candidates"] = min(count, 2147483647)
+    evidence = trace.get("selected_evidence")
+    if isinstance(evidence, list):
+        clean["selected_evidence"] = []
+        for item in evidence[:4]:
+            if not isinstance(item, Mapping):
+                continue
+            row: dict[str, Any] = {key: item[key][:limit] for key, limit in (
+                ("chunk_id", 160), ("sha256", 64), ("excerpt", 600)) if isinstance(item.get(key), str)}
+            for key in ("characters", "rerank_score"):
+                number = item.get(key)
+                if isinstance(number, (int, float)) and not isinstance(number, bool):
+                    try:
+                        if math.isfinite(number):
+                            row[key] = number
+                    except OverflowError:
+                        pass
+            clean["selected_evidence"].append(row)
+    review = trace.get("review")
+    if isinstance(review, Mapping):
+        clean["review"] = {}
+        if isinstance(review.get("verdict"), str):
+            clean["review"]["verdict"] = review["verdict"][:80]
+        if isinstance(review.get("reason"), str):
+            clean["review"]["reason"] = review["reason"][:160]
+        for key in ("retries", "calls", "latency_ms"):
+            number = review.get(key)
+            if isinstance(number, int) and not isinstance(number, bool) and number >= 0:
+                clean["review"][key] = min(number, 2147483647)
+        if isinstance(review.get("cacheable"), bool):
+            clean["review"]["cacheable"] = review["cacheable"]
+    if len(json.dumps(clean, ensure_ascii=False).encode("utf-8")) > 16384:
+        for item in clean.get("selected_evidence", []):
+            item["excerpt"] = item.get("excerpt", "")[:200]
+        clean["truncated"] = True
+    if len(json.dumps(clean, ensure_ascii=False).encode("utf-8")) > 16384:
+        for key in ("question", "retrieval_query", "initial_answer", "final_answer"):
+            if key in clean:
+                clean[key] = clean[key][:256]
+    if clean:
+        response._copilot_answer_trace = clean
+    return response
 
 
 def _success_response(
@@ -791,7 +889,11 @@ async def _execute_copilot_query(
         return _success_response(query, request_started, answer=INSTRUCTION_REFUSAL, retrieval_used=False, citations=[])
     # A tab suggests a subject, not the user's intent. Definitions and types
     # must be explained even when a pose/order tab supplies a signed record.
-    if query.task_type != "error_analysis" and is_general_painting_knowledge(query.prompt):
+    arm_lookup = _arm_lookup_question(query.prompt)
+    evaluation_lookup = _pose_evaluation_lookup(query.prompt)
+    general_knowledge = is_general_painting_knowledge(query.prompt) and not arm_lookup and not evaluation_lookup
+    explanatory_request = is_explanatory_question(query.prompt, query.task_type) and not evaluation_lookup
+    if query.task_type != "error_analysis" and (general_knowledge or explanatory_request):
         query = query.model_copy(update={"task_type": "knowledge_search"})
     questions = (query.prompt, original_prompt or "")
 
@@ -802,8 +904,9 @@ async def _execute_copilot_query(
     # 서명된 뷰어 기록이 있을 때만 켠다(사용자 결정 7). 세션 요약으로 답하는 기존 대화 경로(TSB·시퀀스 질문)는 그대로 둔다.
     # 서명된 기록이 없어도 도장·훈련 낱말이 든 지식 질문은 문서로 답한다(사용자 결정 4). 잡담·TSB 요약 대화는 그대로.
     grounded = _grounded_route(query.prompt, previous_subject(dialogue_turns), viewer=viewer_claims(query.context) is not None)
-    # 기록·도장 지식 질문에는 모델이 만든 이전 답을 다시 넘기지 않는다(지어낸 Zone이 다음 답의 근거가 된다). 잡담은 그대로.
-    model_turns = without_generated_answers(dialogue_turns) if grounded else dialogue_turns
+    # 이전 생성 답의 문구는 반박·조건 추가를 이해하는 데 필요하다. 대화로만
+    # 표시해 전달하고, 측정 사실·기록 subject·숫자 검증 자료에는 넣지 않는다.
+    model_turns = dialogue_turns_for_model(dialogue_turns)
     # 위험 행동을 해도 되는지 묻는 질문은 대화 경로·측정값 짧은 답·뷰어 엔진 답으로 보내지 않고 문서 검색으로 답한 뒤
     # 답을 검사한다(2026-11-14 훈련생 질문 시험 T15). "그럼 해도 돼?"는 같은 대화의 앞 질문으로 본다.
     if safety_class == "hand_tip":
@@ -846,7 +949,7 @@ async def _execute_copilot_query(
         return _success_response(query, request_started, answer=found.text, retrieval_used=False, citations=[],
                                  sequence_context=found.sequence_context, context_status="available", subject=found.subject)
 
-    if is_current_next_question(query.prompt) and not documents_only:
+    if is_current_next_question(query.prompt) and not documents_only and not explanatory_request:
         answer, scope, progress = await to_thread.run_sync(lambda: current_next_answer(
             query, sequences, reports, sequence_engine=sequence_engine, coating_engine=coating_engine,
         ))
@@ -872,7 +975,7 @@ async def _execute_copilot_query(
     # A full reference plan is available before any trainee sequence or complete
     # report. It never authorizes realtime movement or supplies actual visits.
     if (has_reference_plan and not relevant_viewer and query.task_type != "error_analysis" and not documents_only
-            and is_reference_order_question(query.prompt)):
+            and is_reference_order_question(query.prompt) and not explanatory_request):
         return await reference_answer()
     frame_direction = playback_direction_from_context(query.context)
     viewer_requested = bool(query.context and query.context.startswith(("motion_viewer_analysis:", "motion_viewer_playback:")))
@@ -890,7 +993,7 @@ async def _execute_copilot_query(
         return frame_answer()
     arm_claims = parse_viewer_arm_pose(query.context) if viewer_requested and not documents_only else None
     coating_question = is_coating_status_question(query.prompt) or is_coating_advice_question(query.prompt)
-    if arm_claims is not None and not coating_question and BODY_PART.search(query.prompt) and not NOT_JOINT.search(query.prompt):
+    if arm_claims is not None and arm_lookup and not coating_question:
         # 손·손목·팔꿈치 질문은 어느 탭이든 팔 관절 엔진 결과로만 답한다(운영 q4·q5·q6: 작업 안내·모델의 "정상 범위" 답).
         claims = viewer_claims(query.context)
         playback = (viewer_analysis or {}).get("playback_context") or (claims[0].get("playback_context") if claims else None)
@@ -909,13 +1012,15 @@ async def _execute_copilot_query(
         return _success_response(query, request_started, answer=answer, retrieval_used=False, citations=[],
                                  pose_context={"scope": "arm_pose_zones", "status": arm_claims.get("status")},
                                  context_status="available" if arm_claims.get("status") == "available" else "not_available")
-    if viewer_requested and not documents_only and preset_intent(query.task_type, query.prompt) is None:
+    if viewer_requested and not documents_only and not explanatory_request and preset_intent(query.task_type, query.prompt) is None:
         signed_answer = viewer_measurement_answer(query.context, query.prompt) or (
             viewer_findings_answer(query.context) if _EVALUATION_QUESTION.search(query.prompt) else None)
         if signed_answer is not None:
             return _success_response(query, request_started, answer=signed_answer, retrieval_used=False, citations=[],
                                      context_status="available")
     decision = None
+    document_followup = False
+    resolved_question: str | None = None
     planned_pipeline = None
     if (query.task_type != "error_analysis" and pipeline_provider is not None and not documents_only
             and preset_intent(query.task_type, query.prompt) is None and not is_coating_status_question(query.prompt) and not _pose_engine_question(query)):
@@ -939,6 +1044,43 @@ async def _execute_copilot_query(
             except Exception:
                 logger.exception("copilot dialogue planning failed request_id=%s", query.request_id)
                 decision = {"kind": "clarify", "intent": "knowledge", "scope": "unspecified"}
+
+    # Elliptical conditions may omit every hazard keyword. Once the existing
+    # planner identifies the same topic, reuse the established hazard path.
+    # This re-entry is bounded: an explicit safety_class skips planning below.
+    previous_hazard = dialogue_turns[-1].get("safety_class") if dialogue_turns else None
+    if (safety_class is None and decision is not None and decision.get("context_relation") == "followup"
+            and previous_hazard in SAFETY_CLASSES):
+        response = await _execute_copilot_query(
+            query, pipeline_provider=pipeline_provider, pending_answers=pending_answers,
+            sequences=sequences, mcp_base_url=mcp_base_url, transport=transport,
+            started=request_started, reports=reports, sequence_engine=sequence_engine,
+            coating_engine=coating_engine, conversation_id=conversation_id,
+            original_prompt=original_prompt, safety_class=previous_hazard,
+        )
+        response._copilot_safety_class = previous_hazard
+        return response
+
+    # A semantic continuation of a document explanation needs the same grounded
+    # document path even when this utterance omits the original technical noun.
+    # The model supplies the relationship; a new-topic decision never inherits it.
+    if (decision is not None and decision.get("context_relation") == "followup"
+            and decision["kind"] in {"chat", "correction", "coating_knowledge"}
+            and decision["intent"] == "knowledge" and dialogue_turns
+            and dialogue_turns[-1].get("answer_source") == "documents"):
+        document_followup = True
+        decision = {**decision, "kind": "coating_knowledge"}
+        query = query.model_copy(update={"task_type": "knowledge_search"})
+        grounded = True
+    if (decision is not None and decision.get("context_relation") == "followup"
+            and decision["kind"] == "coating_knowledge" and decision["intent"] == "knowledge"):
+        candidate = str(decision.get("resolved_question") or "").strip()
+        # A planner's reformulation is conversational interpretation, not a new
+        # source of measurements. Reject numbers introduced by earlier AI prose.
+        numbers = lambda text: set(re.findall(r"\d+(?:\.\d+)?", text))
+        user_numbers = numbers(" ".join([query.prompt, *[str(turn.get("prompt") or "") for turn in dialogue_turns]]))
+        if candidate and numbers(candidate) <= user_numbers:
+            resolved_question = candidate
 
     async def chat_answer() -> JSONResponse:
         """계획 모델이 대화로 분류한 질문에 문서 검색 없이 답한다(세션 요약·측정값 검사 포함)."""
@@ -976,11 +1118,11 @@ async def _execute_copilot_query(
         if intent == "order_reference" and explicit_actual_order:
             intent = explicit_actual_order
             decision = {**decision, "intent": intent}
-        if has_reference_plan and not relevant_viewer and intent == "order_reference" and decision["kind"] == "lookup":
+        if has_reference_plan and not relevant_viewer and intent == "order_reference" and decision["kind"] == "lookup" and not explanatory_request:
             return await reference_answer()
         cross_tab = ((intent.startswith("pose_") and query.task_type != "pose_recomm")
                      or (intent.startswith("order_") and query.task_type != "trajectory_recomm"))
-        if viewer_requested and intent == "order_direction" and decision["kind"] in {"lookup", "correction"} and DIRECTION_WORD.search(query.prompt):
+        if viewer_requested and intent == "order_direction" and decision["kind"] in {"lookup", "correction"} and DIRECTION_WORD.search(query.prompt) and not explanatory_request:
             return frame_answer()
         zone_lookup = (intent == "order_direction" or intent.startswith("pose_")) and decision["scope"] in {"zone", "playback"}
         # 계획 모델은 짧은 용어 질문("백화가 뭐야?")도 "chat"으로 보내 검색 없이 답하게 했다(2-1 측정, 지식 질문의 약 11%).
@@ -988,7 +1130,7 @@ async def _execute_copilot_query(
         # 돌아올 길(근거 확인 단계)이 설정된 경우에만 돌린다. 없으면 도장과 무관한 질문까지 문서로 답하게 된다.
         chat_redirected = (decision["kind"] == "chat" and query.task_type == "knowledge_search" and not viewer_requested
                            and not cross_tab and not zone_lookup and bool(_KNOWLEDGE_QUESTION.search(query.prompt))
-                           and not is_domain_question(query.prompt)
+                           and not is_domain_question(query.prompt) and not is_off_topic(query.prompt)
                            and _abstain_below(planned_pipeline, query.response_mode) is not None)
         # 옛 행(v3.4.4 이전)에는 safety_class 열이 없어 앞 질문 문장도 다시 위험 판정한다.
         if (decision["kind"] == "correction" and dialogue_turns and not dialogue_turns[-1].get("safety_class")
@@ -1049,12 +1191,12 @@ async def _execute_copilot_query(
         logger.info("copilot intent request_id=%s task=%s intent=%s", query.request_id, query.task_type, intent)
     if intent == "order_reference" and explicit_actual_order:
         intent = explicit_actual_order
-    if has_reference_plan and not relevant_viewer and intent == "order_reference":
+    if has_reference_plan and not relevant_viewer and intent == "order_reference" and not explanatory_request:
         return await reference_answer()
     # If the model is unavailable, keep the selected structured tab operational;
     # only a successful semantic-model classification may cross-route to RAG.
     knowledge_routed = intent == "knowledge" and (classifier is not None or decision is not None)
-    if viewer_requested and intent == "order_direction" and not knowledge_routed and (
+    if viewer_requested and intent == "order_direction" and not knowledge_routed and not explanatory_request and (
             query.task_type == "trajectory_recomm" or DIRECTION_WORD.search(query.prompt)):
         return frame_answer()
     viewer_context_requested = bool(query.context and query.context.startswith(_MOTION_VIEWER_CONTEXT_PREFIX))
@@ -1108,7 +1250,9 @@ async def _execute_copilot_query(
             context_status="available" if available else "not_available",
         )
     # Unsigned/forged viewer claims can still resolve against saved server data.
-    if viewer_context_requested:
+    if (viewer_context_requested and viewer_claims(query.context) is None
+            and parse_viewer_arm_pose(query.context) is None
+            and parse_viewer_coating_context(query.context, "knowledge_search") is None):
         query = query.model_copy(update={"context": None})
 
     context = (query.context or "").strip()
@@ -1306,6 +1450,12 @@ async def _execute_copilot_query(
             "\n목표 대비 판정이며 재생 시점의 도막이 아닙니다. 조절 후보는 등급에 따른 일반적인 방향이고 원인으로 확정된 것이 아닙니다."
             if compact else "\n최종 기록의 전문가 대비 대표 두께 비교이며 재생 시점의 현재 도막 판정이 아닙니다."
         ) + " 질문의 원인·방법·관계를 직접 설명하고 확인된 측정 사실과 일반적인 가능한 원인을 구분하세요. 권장 Zone 순서를 대신 답하지 마세요."
+    # Add the relation after all fact-specific context builders, which may
+    # replace the client context. Retrieval must retain this scope decision.
+    if document_followup:
+        knowledge_client_context = "[문서 후속 질문]\n직전 기술 설명에 대한 조건 추가 또는 적용 범위의 재검토입니다.\n" + (knowledge_client_context or "")
+    elif decision is not None and decision.get("context_relation") == "new_topic":
+        knowledge_client_context = "[새 주제 질문]\n이전 검색 주제를 이어받지 않는 독립적인 질문입니다.\n" + (knowledge_client_context or "")
     block = "" if is_blasting(query.prompt) else SIMULATOR_CONTEXT
     instruction = build_query_instruction(
         question,
@@ -1315,6 +1465,7 @@ async def _execute_copilot_query(
         response_mode=query.response_mode,
         concise=query.response_mode == "detailed",
         simulator_context=block,
+        resolved_question=resolved_question,
     )
     generation_instruction = (build_query_instruction(
         question,
@@ -1324,12 +1475,14 @@ async def _execute_copilot_query(
         response_mode=query.response_mode,
         concise=True,
         simulator_context=block,
+        resolved_question=resolved_question,
     ) if query.response_mode == "quick" else instruction)
 
     def _guarded_run() -> Mapping[str, object]:
         with generation_slot_for(pipeline):
             return pipeline.run(
                 instruction=instruction,
+                answer_question=question,
                 force_route="fast",
                 use_pipeline_history=False,
                 session_id=query.session_id,
@@ -1342,11 +1495,10 @@ async def _execute_copilot_query(
                     "quick_cache_scope": json.dumps([query.user_id, query.scenario_id, query.task_type]),
                     "concise_answer": True,
                     "generation_instruction": generation_instruction,
-                    **({"retrieval_instruction": question}
-                       if getattr(pipeline, "quick_query_runtime", None) is not None else {}),
+                    "retrieval_instruction": resolved_question or question,
                 } if query.response_mode == "quick" else {
                     # 응답 수준 지시문이 검색어에 섞이면 무관한 문단이 잡힌다(Issue #9).
-                    "retrieval_instruction": retrieval_question(question, context=instruction),
+                    "retrieval_instruction": retrieval_question(resolved_question or question, context=instruction),
                 }),
             )
 
@@ -1359,6 +1511,9 @@ async def _execute_copilot_query(
         logger.exception("copilot query: pipeline failed request_id=%s", query.request_id)
         return record_only(mixed) if mixed is not None else error_response(500, "Copilot query failed")
 
+    metadata = result.get("metadata")
+    review = metadata.get("answer_review") if isinstance(metadata, Mapping) else None
+    review_failed = isinstance(review, Mapping) and review.get("verdict") not in {"ok", "rewritten", "cached", "not_required"}
     # 근거 확인 단계: 재정렬 1위 점수가 기준값 미만이면 생성한 답을 버린다(설정이 없으면 지금처럼 동작).
     # 기준값은 재정렬 모델의 점수 척도에 묶인다(KURE-Reranker-nano 3.28, 2026-11-13 측정). 상세분석만 잰 값이다.
     abstain_below = _abstain_below(pipeline, query.response_mode)
@@ -1376,9 +1531,11 @@ async def _execute_copilot_query(
                 withheld += "\n" + DIZZY_NOTE
             if mixed is not None:
                 withheld = mixed.text + "\n" + MIXED_NO_EVIDENCE
-            return _success_response(query, request_started, answer=withheld, retrieval_used=True, citations=withheld_citations,
+            response = _success_response(query, request_started, answer=withheld, retrieval_used=True, citations=withheld_citations,
+                                     degraded=review_failed,
                                      context_status="available" if session_summary or coating_advice_context or facts else "not_available",
                                      subject=mixed.subject if mixed is not None else None)
+            return _with_answer_trace(response, result)
     retrieved = retrieved_chunk_ids(result.get("rag_chunks") or []) if use_rag else []
     parsed = parse_knowledge_answer(str(result.get("response", "")), retrieved)
     answer = parsed.body
@@ -1400,18 +1557,19 @@ async def _execute_copilot_query(
         len(parsed.citations),
         len(parsed.dropped),
     )
-    return _success_response(
+    response = _success_response(
         query,
         request_started,
         answer=answer,
         retrieval_used=use_rag,
         citations=citations,
-        degraded=parsed.repair_path in FAILED_REPAIR_PATHS or bool(result.get("deadline_hit", False)),
+        degraded=review_failed or parsed.repair_path in FAILED_REPAIR_PATHS or bool(result.get("deadline_hit", False)),
         coating_context=coating_advice_context,
         context_status="available" if session_summary or coating_advice_context or facts else "not_available",
         generated=True,
         subject=mixed.subject if mixed is not None else None,
     )
+    return _with_answer_trace(response, result)
 
 
 async def execute_copilot_query(
@@ -1488,6 +1646,9 @@ async def execute_copilot_query(
         )
         if response.status_code != 200:
             return response
+        # A semantic follow-up can recover a hazard that the current utterance
+        # did not name. Persist it so a third omitted-subject turn retains it.
+        safety_class = getattr(response, "_copilot_safety_class", safety_class)
         body = json.loads(response.body)
         data = body["data"]
         # 분석 답은 항상 한국어다. 모델이 섞어 낸 한자는 번역 전에 뺀다.
@@ -1535,6 +1696,8 @@ async def execute_copilot_query(
                 "sequence_context": data.get("sequence_context"), "pose_context": data.get("pose_context"),
                 "coating_context": data.get("coating_context"), "recent_turns": recent_context,
                 "context_truncated": False,
+                **({"answer_trace": response._copilot_answer_trace}
+                   if hasattr(response, "_copilot_answer_trace") else {}),
             },
         )
     except Exception:

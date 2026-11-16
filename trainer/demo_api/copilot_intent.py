@@ -59,6 +59,21 @@ def is_domain_question(prompt: str) -> bool:
     return bool(_PAINTING_SUBJECT.search(prompt) or re.search(_COATING_SUBJECT, prompt, re.I))
 
 
+def is_explanatory_question(prompt: str, task_type: str | None = None) -> bool:
+    """An explanation request must not be replaced by a bare measurement.
+
+    This is an answer-shape guard, not a technical answer or topic classifier.
+    Exact UI lookups retain their verified analysis responses.
+    """
+    if is_off_topic(prompt) or (task_type is not None and preset_intent(task_type, prompt) is not None):
+        return False
+    if re.search(r"원인|이유|왜|원리|방법|요령|장단점|차이점|영향|관계|부담.*줄|편하게.*(?:유지|하려|하려면)", prompt):
+        return True
+    # A request for a way of acting differs from asking which correction or
+    # measurement the engine returned. Keep those direct analysis lookups.
+    return bool("어떻게" in prompt and not re.search(r"어떻게\s*(?:고쳐|고치|교정|돼|되|나와|나왔)", prompt))
+
+
 def is_general_painting_knowledge(prompt: str) -> bool:
     """기록·Zone·재생 위치를 가리키지 않는 도장 기술 질문(적정값·정의·원인·방법).
 

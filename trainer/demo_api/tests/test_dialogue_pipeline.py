@@ -41,7 +41,11 @@ def test_planner_sees_current_utterance_and_previous_turns():
     data=json.loads(messages[-1]['content'])
     assert data['current_utterance']=='야' and data['recent_dialogue'][0]['prompt']=='도포 방향은?'
     assert re.fullmatch(plan_regex(),json.dumps(decision))
-    assert options['max_tokens']==96
+    assert options['max_tokens'] <= 192
+    expanded = {"kind": "coating_knowledge", "intent": "knowledge", "scope": "unspecified",
+                "context_relation": "followup", "resolved_question": "거리가 적절하다는 조건에서 저도막이 남는 원인은?"}
+    assert re.fullmatch(options['answer_regex'], json.dumps(expanded, ensure_ascii=False))
+    assert parse_plan(expanded) == expanded
 
 
 def test_context_trimming_keeps_current_question_and_whole_exchanges():
@@ -55,6 +59,12 @@ def test_context_trimming_keeps_current_question_and_whole_exchanges():
 @pytest.mark.parametrize('value',[{}, {'kind':'chat','intent':'knowledge','scope':'unknown'}, {'kind':'chat','intent':'knowledge','scope':'record','extra':'instruction'}])
 def test_plans_must_follow_closed_contract(value):
     with pytest.raises(ValueError):parse_plan(value)
+
+
+@pytest.mark.parametrize("extra", [{"context_relation": "other"}, {"resolved_question": "가" * 601}])
+def test_dialogue_interpretation_is_bounded_after_decoding(extra):
+    with pytest.raises(ValueError):
+        parse_plan({"kind": "coating_knowledge", "intent": "knowledge", "scope": "unspecified", **extra})
 
 
 def test_viewer_facts_keep_zone_pattern_separate_from_global_direction():

@@ -223,6 +223,7 @@ trainer/pose_lab/skeleton.py
 trainer/pose_lab/spread_reference.py
 trainer/scripts/agent_pipeline.py
 trainer/scripts/answer_grammar.py
+trainer/scripts/answer_semantics.py
 trainer/scripts/arm_reference.py
 trainer/scripts/build_spread_reference.py
 trainer/scripts/demo_app.py

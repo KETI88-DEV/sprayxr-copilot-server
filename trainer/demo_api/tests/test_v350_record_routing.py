@@ -136,12 +136,19 @@ def test_domain_question_classified_as_chat_goes_to_documents() -> None:
     assert "converse" not in data["calls"] and "run" in data["calls"], data
 
 
-def test_generated_answers_are_not_sent_back_to_the_model() -> None:
+def test_generated_answers_are_preserved_as_unverified_dialogue_not_measurement_facts() -> None:
     store = SequenceStore(":memory:")
     _turn(store, "어디 다시 칠해?", "9번 구역에서 다시 칠해야 합니다.", "documents")
     pipeline = RecordingPipeline()
     ask("얇은 도막은 어떻게 보완해?", tab="knowledge", playback=AT_3S, store=store, pipeline=pipeline)
-    assert pipeline.kwargs and "9번 구역" not in _sent(pipeline)
+    assert pipeline.kwargs and "9번 구역에서 다시 칠해야 합니다." in _sent(pipeline)
+    assert "미검증" in _sent(pipeline)
+    from trainer.demo_api.copilot_contracts import CopilotQueryRequest
+    from trainer.demo_api.copilot_router import _grounding
+    from trainer.demo_api.tests.viewer_record import context
+    query = CopilotQueryRequest(user_id=USER, task_type="knowledge_search", prompt="얇은 도막은 어떻게 보완해?",
+                                context=context("knowledge_search", payload(), AT_3S))
+    assert "9번 구역에서 다시 칠해야 합니다." not in json.dumps(_grounding(query, ()), ensure_ascii=False)
 
 
 def test_off_topic_chat_keeps_its_history() -> None:
@@ -151,7 +158,7 @@ def test_off_topic_chat_keeps_its_history() -> None:
     data = ask("그럼 저녁은?", tab="knowledge", playback=AT_3S, store=store, pipeline=pipeline)
     assert data["calls"] == ["plan", "converse"]
     turns = dict(pipeline.kwargs)["converse"]["recent_turns"]
-    assert any(turn["answer"] == "김밥을 추천합니다." for turn in turns)
+    assert any("김밥을 추천합니다." in turn["answer"] and "미검증" in turn["answer"] for turn in turns)
 
 
 def test_hazard_question_about_the_record_keeps_the_safety_path() -> None:

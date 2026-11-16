@@ -131,7 +131,10 @@ class CopilotQueryData(StrictModel):
     latency_ms: Annotated[int, Field(ge=0)]
     # v2.5 §9.2 예시와 §9.3이 요구하는 필드. 정상 완료는 false, 제한 시간 내 생성이
     # 끝나지 않아 축약 응답을 낼 때 true다.
-    degraded: bool
+    degraded: Annotated[bool, Field(description=(
+        "답변 생성·형식·의미 검토를 충분히 완료하지 못했거나 근거가 부족해 답변을 보류한 경우 true입니다. "
+        "true이면 answer에 표시된 한계를 확인하고, 해당 답변을 확정된 분석 결과로 사용하지 않습니다."
+    ))]
     answer: str
     language: QueryLanguage = "ko"
     response_language: QueryLanguage = "ko"

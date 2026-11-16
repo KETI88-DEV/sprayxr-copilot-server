@@ -124,11 +124,30 @@ def retrieval_question(question: str, *, context: str = "") -> str:
     }
     for term, expansion in terms.items():
         query = query.replace(term, expansion)
-    # Ambiguous follow-ups still need the last known subject, not the UI metadata.
-    if re.match(r"그럼|그때|그거|그러면|왜\s*그래", question) and "[최근 대화]" in context:
+    # Carry the user's technical subject across an elliptical extra condition.
+    # Previous AI text is deliberately excluded from search: it may be the very
+    # explanation being corrected. An explicitly new subject starts fresh.
+    def follows_up(text: str) -> bool:
+        return bool(re.match(r"그럼|그때|그거|그러면|왜\s*그래|그런데|아니|그래도", text)
+                    or re.search(r"했는데|한데|인데|일텐데|다는데|맞았|적절했|일정했|맞지\s*않", text))
+    # A self-contained topic followed by its own question is a topic switch,
+    # including topics unknown to this application. Do not enumerate domain or
+    # general-knowledge nouns here.
+    explicit_topic = bool(re.match(
+        r"(?:(?:그럼|그러면|그런데)\s*)?[^?!.]{2,50}?(?:은|는|이란|란|에\s*대해)\s*"
+        r"(?:뭐|무엇|어떤|어떻게|왜|어디|언제|누구|설명|알려|[?？]\s*$)", question))
+    semantic_followup = '[문서 후속 질문]' in context
+    resolved_question = '[해석완료검색질문]' in context or '[후속 질문 해석' in context
+    new_topic = '[새 주제 질문]' in context or '[새주제질문]' in context
+    if not resolved_question and not new_topic and (semantic_followup or (follows_up(question) and not explicit_topic)) and "[최근 대화]" in context:
         previous = re.findall(r"사용자: (.+)", context.split("[최근 대화]", 1)[1])
         if previous:
-            query = previous[-1][:300] + " " + query
+            # Legacy planners may provide no resolved question (or its numbers
+            # may have failed validation). Keep the bounded user exchanges in
+            # time order instead of guessing which condition is the subject.
+            # This retains the original problem and the intermediate exclusions.
+            prefix = " ".join(value[:200] for value in previous[-6:])
+            query = prefix + " " + query
     current_context = context.split("[최근 대화]", 1)[0]
     if re.search(r"블라스팅|blasting", question, re.I) or (
         not re.search(r"스프레이|spray", question, re.I)
