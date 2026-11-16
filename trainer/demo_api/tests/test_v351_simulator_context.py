@@ -1,4 +1,4 @@
-"""v3.5.1 시뮬레이터 기본 설정 블록: 모델이 쓰는 도장·기록 답에만 싣고, 유출 검사·수치 근거 검사에서는 사실로 본다."""
+"""v3.5.1 시뮬레이터 기본 설정 블록: 모델이 쓰는 도장·기록 답에만 싣는다. 모델에게 알려 줄 뿐 수치 근거로 쓰지 않고, 유출 지문에도 넣지 않는다."""
 from __future__ import annotations
 
 import pytest
@@ -63,23 +63,7 @@ def test_simulator_facts_are_not_instruction_leakage_but_real_instructions_still
     assert dialogue.leaks_instructions(real[:200])
 
 
-def test_conversation_answer_stating_simulator_facts_is_kept() -> None:
-    data = ask("VR 어지러우면 몇 분 쉬어?", tab="knowledge", pipeline=RecordingPipeline(plan=CLARIFY, converse=FACT_ANSWER), raw_context="")
-    assert data["answer"] == FACT_ANSWER
-
-
-def test_documents_answer_stating_simulator_facts_is_kept_for_a_record() -> None:
-    pipeline = RecordingPipeline(document="[답변] " + FACT_ANSWER, chunks=[{"chunk_id": "DOC-x", "text": "작업 중 환기를 유지한다.", "rerank_score": 9.0}])
-    data = ask("압력은 어떻게 정해?", tab="knowledge", playback=AT_35S, pipeline=pipeline)
-    assert "108~504 bar" in data["answer"] and "160µm" in data["answer"], data["answer"]
-
-
-def test_other_numbers_are_still_ungrounded() -> None:
-    assert dialogue.ungrounded_measurements(FACT_ANSWER, facts={"s": SIMULATOR_CONTEXT}, prompt="", extended=True) == []
-    assert dialogue.ungrounded_measurements("압력은 700 bar입니다.", facts={"s": SIMULATOR_CONTEXT}, prompt="", extended=True) == ["700 bar"]
-
-
-# --- 1차 수정: 블록 수치는 이 기록을 가리키지 않는 일반 문장만 받친다 ---------------------------------
+# --- 블록 수치는 어떤 문장도 받치지 않는다(수치 근거 검사는 v3.5.0 그대로) ---------------------------------
 GENERAL = "압력은 108~504 bar 범위에서 36 bar 단위로 고릅니다."
 RECORD_CLAIMS = ["이 기록은 압력을 504 bar로 설정했습니다.", "이 기록의 신너 희석률은 1.6%입니다.", "이 기록의 속도는 기준보다 24% 느립니다."]
 
@@ -101,16 +85,6 @@ def test_record_sentences_are_not_grounded_by_the_block_on_the_documents_route(c
         assert number not in data["answer"], data["answer"]
 
 
-def test_general_sentence_with_the_written_range_passes_but_endpoints_do_not() -> None:
-    data = ask("VR 어지러우면 몇 분 쉬어?", tab="knowledge", playback=AT_35S, pipeline=RecordingPipeline(plan=CLARIFY, converse=GENERAL))
-    assert data["answer"] == GENERAL
-    pipeline = RecordingPipeline(document="[답변] " + GENERAL, chunks=[{"chunk_id": "DOC-x", "text": "환기", "rerank_score": 9.0}])
-    assert GENERAL in ask("압력은 어떻게 정해?", tab="knowledge", playback=AT_35S, pipeline=pipeline)["answer"]
-    for endpoint in ("압력은 504 bar까지 고릅니다.", "압력은 108 bar부터입니다."):
-        data = ask("VR 어지러우면 몇 분 쉬어?", tab="knowledge", pipeline=RecordingPipeline(plan=CLARIFY, converse=endpoint), raw_context="")
-        assert "bar" not in data["answer"], data["answer"]
-
-
 def test_blasting_questions_get_no_block_and_are_checked_as_before() -> None:
     pipeline = RecordingPipeline(document="[답변] " + GENERAL)
     ask("블라스팅 노즐 압력은 몇 bar로 해?", tab="knowledge", pipeline=pipeline, raw_context="")
@@ -123,27 +97,20 @@ def test_blasting_questions_get_no_block_and_are_checked_as_before() -> None:
 
 
 HONORIFIC = ["희석률은 1.6%로 하셨습니다.", "압력을 504 bar로 설정하셨네요."]
-GENERAL_OK = ["신너 희석률은 0~24% 범위에서 1.6% 단위로 고릅니다.", "2차 목표 도막은 320µm입니다."]
+
+EVASIONS = ["희석률은 1.6%로 하셨습니다.", "압력을 504 bar로 설정하셨네요.", "희석률을 1.6% 단위로 맞추셨어요.", "희석률을 1.6% 단위로 올리셨네요.",
+            "희석률 1.6% 단위로 넣었어요.", "압력을 36 bar 단위로 두 번 올렸습니다.", "2차 도막은 320µm까지 올라갔습니다.", GENERAL]
 
 
-@pytest.mark.parametrize("claim", HONORIFIC)
-def test_honorific_past_sentences_are_not_grounded_by_the_block(claim: str) -> None:
+@pytest.mark.parametrize("claim", EVASIONS)
+def test_block_numbers_ground_nothing_on_either_route(claim: str) -> None:
     pipeline = RecordingPipeline(plan=CLARIFY, converse=claim)
     data = ask("VR 어지러우면 몇 분 쉬어?", tab="knowledge", playback=AT_35S, pipeline=pipeline)
-    assert pipeline.calls.count("converse") == 2 and "1.6%" not in data["answer"] and "504 bar" not in data["answer"], data["answer"]
-    pipeline = RecordingPipeline(document="[답변] " + claim, chunks=[{"chunk_id": "DOC-x", "text": "환기", "rerank_score": 9.0}])
-    data = ask("압력은 어떻게 정해?", tab="knowledge", playback=AT_35S, pipeline=pipeline)
-    assert "1.6%" not in data["answer"] and "504 bar" not in data["answer"], data["answer"]
-
-
-@pytest.mark.parametrize("claim", GENERAL_OK)
-def test_single_values_pass_only_with_their_block_word(claim: str) -> None:
-    data = ask("VR 어지러우면 몇 분 쉬어?", tab="knowledge", playback=AT_35S, pipeline=RecordingPipeline(plan=CLARIFY, converse=claim))
-    assert data["answer"] == claim
-    pipeline = RecordingPipeline(document="[답변] " + claim, chunks=[{"chunk_id": "DOC-x", "text": "환기", "rerank_score": 9.0}])
-    assert claim in ask("압력은 어떻게 정해?", tab="knowledge", playback=AT_35S, pipeline=pipeline)["answer"]
-
-
-def test_a_bare_block_value_without_its_word_is_refused() -> None:
-    from trainer.demo_api.simulator_context import ungrounded_with_simulator
-    assert ungrounded_with_simulator("희석률은 1.6%입니다.", facts={}, prompt="", extended=True) == ["1.6%"]
+    assert pipeline.calls.count("converse") == 2, "한 번 다시 생성한다"
+    for number in ("1.6%", "504 bar", "36 bar", "320µm", "108~504"):
+        assert number not in data["answer"], data["answer"]
+    docs = RecordingPipeline(document="[답변] " + claim, chunks=[{"chunk_id": "DOC-x", "text": "환기", "rerank_score": 9.0}])
+    data = ask("압력은 어떻게 정해?", tab="knowledge", playback=AT_35S, pipeline=docs)
+    # 320µm은 서명된 기록의 목표 두께이기도 해서 v3.5.0에서도 문서 경로를 지난다.
+    for number in ("1.6%", "504 bar", "36 bar", "108~504"):
+        assert number not in data["answer"], data["answer"]

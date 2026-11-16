@@ -56,7 +56,7 @@ from trainer.demo_api.dialogue import (INSTRUCTION_REFUSAL, asks_for_instruction
                                        viewer_measurement_answer, viewer_metadata_context, without_generated_answers, without_hanzi)
 from trainer.demo_api.playback_direction import playback_direction_from_context, playback_direction_answer, simple_direction_question, requested_direction_scope, aggregate_direction, LABELS as DIRECTION_LABELS
 from trainer.demo_api.copilot_live_analysis import current_zone, live_analysis
-from trainer.demo_api.simulator_context import SIMULATOR_CONTEXT, is_blasting, ungrounded_with_simulator, wants_simulator_context
+from trainer.demo_api.simulator_context import SIMULATOR_CONTEXT, is_blasting, wants_simulator_context
 from trainer.demo_api.copilot_session_context import build_query_instruction, summarize_session, viewer_definition_context
 from trainer.demo_api.pose_query import (
     answer_order_question,
@@ -633,8 +633,7 @@ _NO_ANSWER: Final = "제공된 자료로는 답할 수 없습니다."
 
 
 def _checked_generation(answer: str, query: CopilotQueryRequest, *, instructions: tuple[str, ...] = (),
-                        evidence: tuple[str, ...] | None = None, drop_only: bool = False, safety: bool = False,
-                        simulator: bool = False) -> str:
+                        evidence: tuple[str, ...] | None = None, drop_only: bool = False, safety: bool = False) -> str:
     """모델이 만든 답의 출구 검사: 지침·내부 키 유출, 근거 없는 수치, 다른 Zone의 수치, 거꾸로 된 인과·조언, 이 기록의 최저·유무·판정·기준값.
 
     `evidence`(검색 조각 본문)를 주는 문서 경로만 수치 근거 검사(G1)를 한다. 대화 경로는 세션 요약을 따로 대조한다.
@@ -647,9 +646,8 @@ def _checked_generation(answer: str, query: CopilotQueryRequest, *, instructions
     record = RecordFacts.from_context(query.context) if measures is not None else None
     if record is not None and evidence is not None:
         pool = _grounding(query, evidence)
-        check = ungrounded_with_simulator if simulator else ungrounded_measurements
-        if check(answer, facts=pool, prompt=query.prompt, extended=True):
-            answer = drop_ungrounded(answer, facts=pool, prompt=query.prompt, extended=True, check=check)
+        if ungrounded_measurements(answer, facts=pool, prompt=query.prompt, extended=True):
+            answer = drop_ungrounded(answer, facts=pool, prompt=query.prompt, extended=True)
     answer = drop_misattributed_zones(answer, _zone_facts(query.context))
     if measures is None:
         return answer
@@ -951,16 +949,15 @@ async def _execute_copilot_query(
                                              retrieval_used=False, citations=[],
                                              context_status="available" if found_report else "not_available")
             simulator = {"simulator_context": SIMULATOR_CONTEXT} if wants_simulator_context(query.prompt) else {}
-            check = ungrounded_with_simulator if simulator else ungrounded_measurements
             def converse():
                 with generation_slot_for(planned_pipeline):
                     return planned_pipeline.converse_copilot(query.prompt, recent_turns=model_turns,
                                                              facts=facts, response_mode=query.response_mode, **simulator)
             answer = plain_answer(await to_thread.run_sync(converse))
             extended = is_domain_question(query.prompt)
-            if check(answer, facts=facts, prompt=query.prompt, extended=extended):
+            if ungrounded_measurements(answer, facts=facts, prompt=query.prompt, extended=extended):
                 # 자료에 없는 측정값은 내보내지 않는다. 한 번 다시 생성하고, 그래도 남으면 그 부분을 뺀다.
-                answer = drop_ungrounded(await to_thread.run_sync(converse), facts=facts, prompt=query.prompt, extended=extended, check=check)
+                answer = drop_ungrounded(await to_thread.run_sync(converse), facts=facts, prompt=query.prompt, extended=extended)
             answer = _checked_generation(answer, query)
             return _success_response(query, request_started, answer=answer, retrieval_used=False, generated=True,
                                      citations=[], context_status="available" if facts else "not_available")
@@ -1384,8 +1381,7 @@ async def _execute_copilot_query(
         answer = re.sub(r"\n+\s*\[?근거\]?\s*:?\s*$", "", answer).rstrip()
     answer = _checked_generation(
         answer, query, instructions=_document_rules(pipeline), safety=safety, drop_only=mixed is not None,
-        evidence=tuple(str(c.get("text", "")) for c in result.get("rag_chunks") or [] if isinstance(c, dict)),
-        simulator=bool(block))
+        evidence=tuple(str(c.get("text", "")) for c in result.get("rag_chunks") or [] if isinstance(c, dict)))
     # 위험한 행동을 해도 되는지 묻는 안전 질문은 한국어 답을 옮기기 전에 검사한다(바꾼 문장도 기존 번역을 지난다).
     answer, citations = guard_answer(safety_class if safety else None, answer, list(parsed.citations))
     if mixed is not None:
