@@ -120,3 +120,30 @@ def test_blasting_questions_get_no_block_and_are_checked_as_before() -> None:
     data = ask("블라스팅 노즐 압력은 몇 bar로 해?", tab="knowledge", pipeline=chat, raw_context="")
     assert "simulator_context" not in dict(chat.kwargs).get("converse", {})
     assert "108~504" not in data["answer"], data["answer"]
+
+
+HONORIFIC = ["희석률은 1.6%로 하셨습니다.", "압력을 504 bar로 설정하셨네요."]
+GENERAL_OK = ["신너 희석률은 0~24% 범위에서 1.6% 단위로 고릅니다.", "2차 목표 도막은 320µm입니다."]
+
+
+@pytest.mark.parametrize("claim", HONORIFIC)
+def test_honorific_past_sentences_are_not_grounded_by_the_block(claim: str) -> None:
+    pipeline = RecordingPipeline(plan=CLARIFY, converse=claim)
+    data = ask("VR 어지러우면 몇 분 쉬어?", tab="knowledge", playback=AT_35S, pipeline=pipeline)
+    assert pipeline.calls.count("converse") == 2 and "1.6%" not in data["answer"] and "504 bar" not in data["answer"], data["answer"]
+    pipeline = RecordingPipeline(document="[답변] " + claim, chunks=[{"chunk_id": "DOC-x", "text": "환기", "rerank_score": 9.0}])
+    data = ask("압력은 어떻게 정해?", tab="knowledge", playback=AT_35S, pipeline=pipeline)
+    assert "1.6%" not in data["answer"] and "504 bar" not in data["answer"], data["answer"]
+
+
+@pytest.mark.parametrize("claim", GENERAL_OK)
+def test_single_values_pass_only_with_their_block_word(claim: str) -> None:
+    data = ask("VR 어지러우면 몇 분 쉬어?", tab="knowledge", playback=AT_35S, pipeline=RecordingPipeline(plan=CLARIFY, converse=claim))
+    assert data["answer"] == claim
+    pipeline = RecordingPipeline(document="[답변] " + claim, chunks=[{"chunk_id": "DOC-x", "text": "환기", "rerank_score": 9.0}])
+    assert claim in ask("압력은 어떻게 정해?", tab="knowledge", playback=AT_35S, pipeline=pipeline)["answer"]
+
+
+def test_a_bare_block_value_without_its_word_is_refused() -> None:
+    from trainer.demo_api.simulator_context import ungrounded_with_simulator
+    assert ungrounded_with_simulator("희석률은 1.6%입니다.", facts={}, prompt="", extended=True) == ["1.6%"]

@@ -24,7 +24,14 @@ SIMULATOR_CONTEXT: Final = """[시뮬레이터 기본 설정]
 _BLASTING: Final = re.compile(r"블라스팅|blasting", re.I)
 # 블록의 스프레이건·도막 목표 문장은 블라스팅 세션에 맞지 않는다(query_runtime.retrieval_question과 같은 낱말).
 # shortcut: 질문 글자만 본다(앞 대화의 블라스팅 맥락은 보지 않는다).
-_ASSERTED: Final = {re.sub(r"\s+", "", m[0].replace("μ", "µ")) for m in _MEASUREMENT_EXTENDED.finditer(SIMULATOR_CONTEXT)}
+def _norm(text: str) -> str:
+    return re.sub(r"\s+", "", text.replace("μ", "µ"))
+
+
+# 블록에 쓴 값 → 그 값이 붙은 낱말(단독 값은 낱말과 함께 쓴 문장만 받친다. 범위는 쓴 그대로면 충분하다).
+_WITH: Final = {"1.6%": "단위", "36bar": "단위", "95%": "목표|두께|면적|완료|픽셀", "160µm": "1차", "320µm": "2차"}
+_ASSERTED: Final = {_norm(m[0]): re.compile(_WITH[_norm(m[0])]) if _norm(m[0]) in _WITH else None
+                    for m in _MEASUREMENT_EXTENDED.finditer(SIMULATOR_CONTEXT)}
 _ASSERTED_UNITS: Final = set(_SPEED_UNIT.findall(SIMULATOR_CONTEXT))
 _BLOCK_WORDS: Final = {"목표", "기준"}  # 블록이 정의하는 낱말
 
@@ -38,8 +45,12 @@ def wants_simulator_context(prompt: str) -> bool:
     return not is_blasting(prompt) and (is_domain_question(prompt) or has_record_marker(prompt))
 
 
+# 높임 과거·2인칭("하셨·칠하신")은 훈련생이 한 일을 말한다. 기록 표지가 아니어도 기록 문장으로 본다.
+_HONORIFIC: Final = re.compile(r"(?:하|쓰|칠하|뿌리|설정하|사용하|선택하|고르)셨|(?:하|칠하|설정하|사용하|선택하|고르)신")
+
+
 def refers_to_record(sentence: str) -> bool:
-    return bool(_RECORD_SENTENCE.search(sentence) or _ASKED_ZONE.search(sentence) or has_record_marker(sentence))
+    return bool(_HONORIFIC.search(sentence) or _RECORD_SENTENCE.search(sentence) or _ASKED_ZONE.search(sentence) or has_record_marker(sentence))
 
 
 def ungrounded_with_simulator(answer: str, *, facts: Any, prompt: str, extended: bool = False) -> list[str]:
@@ -48,7 +59,7 @@ def ungrounded_with_simulator(answer: str, *, facts: Any, prompt: str, extended:
     for sentence in re.split(r"(?<=[.!?])\s+|\n+", answer):
         found = ungrounded_measurements(sentence, facts=facts, prompt=prompt, extended=extended)
         if found and not refers_to_record(sentence):
-            found = [m for m in found if re.sub(r"\s+", "", m.replace("μ", "µ")) not in _ASSERTED
+            found = [m for m in found if not (_norm(m) in _ASSERTED and ((need := _ASSERTED[_norm(m)]) is None or need.search(sentence)))
                      and m not in _ASSERTED_UNITS and m not in _BLOCK_WORDS]
         invented += found
     return invented
