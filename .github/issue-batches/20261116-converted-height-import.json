@@ -1,0 +1,6 @@
+{
+  "key": "converted-height-import-20261116",
+  "title": "[데이터] 가공 완료 Height 폴더 반영 및 검증 후 원본 정리",
+  "body": "## 사용자 요청과 범위\n\n- C:/data/RealSPRAY/Sequences 직하 *_Height 폴더의 Zone ID 가공 완료 CSV를 기존 메인 Spark에 반영하고 반영된 폴더를 통째로 삭제합니다. 이미 서버에 동일하게 보관된 중복도 검증 후 삭제하라는 추가 지시가 있습니다.\n- 고정 완료 대상 68폴더: CSV68/PNG5337/RAW5337, 총10742파일·19645836911bytes. _2_Height6개도 포함합니다.\n- 직하 미변환 CSV878/기타1756, Over 및 10_11000233_1_Height의 INCOMPLETE 표시는 제외합니다. 이후 새로 생기거나 변경된 폴더는 검증 대상에 자동 포함하지 않습니다.\n\n## 완료 기준\n\n- 모든 폴더 내부 파일을 expert_reference_data/imports/tsb-20261111의 snapshot 하위에 보관하고 원본/원격 추출본 SHA256을 전수 대조합니다. 이름·크기·기존 receipt만으로 삭제하지 않습니다.\n- 기존 SQL 매핑과 ingestion을 재사용하며 후보 JSON, 실제 Zone/히트맵 품질, catalog 승자 및 중복 유지 사유를 구분합니다. 확인되지 않은 작업자·날짜·숙련도는 추측하지 않습니다.\n- 원본 내용·목록·시각·재분석 지점·잠김·reparsepoint·INCOMPLETE 여부와 resolved 절대 경로를 삭제 직전에 재검사합니다. 검증된 snapshot 대상만 native PowerShell -LiteralPath로 삭제합니다.\n- 파일 보존/등록에 실패한 대상은 삭제하지 않습니다. 입력 경로 바로 아래 미변환 자료와 새 미완료 폴더는 그대로 둡니다.\n- 메인 Spark192.168.0.20만 사용하며 서브 서버·E: 원본 코퍼스·LLM 가중치·전문가 정책은 변경하지 않습니다.\n\n## 진행 기록\n\n- snapshot68의 전파일 원본 SHA256과 전후 size/mtime/reparse 검사를 완료했습니다. 오류는0건이며 SQL index hash도 기존 provenance와 일치합니다.\n- 전송/등록과 운영 검증 결과를 확인한 뒤 삭제·최종 건수로 완료 처리합니다.\n",
+  "state": "open"
+}

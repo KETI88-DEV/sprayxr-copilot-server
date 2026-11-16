@@ -1,0 +1,6 @@
+{
+  "key": "db-sequence-guides-20261116",
+  "title": "[DB뷰어] 시퀀스 분석 목록의 text_guide 안내문 표시",
+  "body": "## 현상과 요청\n\n- sequence_analysis_results 목록에서 result JSON을 열어야 text_guide를 확인할 수 있습니다. 목록에 출력 안내문을 직접 보여야 합니다.\n\n## 구현과 완료 기준\n\n- 저장된 result JSON의 최상위 text_guide를 파생 열로 보여주되 원본 JSON·상세 팝업·DB 내용·검색·페이지 이동은 유지합니다.\n- 누락/null/잘못된 타입은 안내 없음, 구형 문자열은 이전 형식으로 구분합니다. 긴 문장·개행·HTML/따옴표를 안전하게 표시합니다.\n- 신규 회귀 12 failed로 변경 전 누락을 재현했고 최소 구현 후 기존 DB뷰어와 21 passed, 관련 DB/학습자료/가져오기 검사 216 passed를 확인했습니다.\n- 독립 정적 검토에서 잔여 P1/P2가 없으며 메인 서버 배포·실제 목록 확인 후 완료 처리합니다.\n",
+  "state": "open"
+}
