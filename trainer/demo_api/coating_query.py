@@ -287,7 +287,7 @@ def inverted_cause(sentence: str) -> bool:
 
 
 def effect_contradicts_grade(sentence: str, measure: Mapping[str, Any] | None) -> bool:
-    """"두껍게 부착됐다"를 목표 미달(below) Zone에, "얇다"를 목표 초과(above) Zone에 말한 문장."""
+    """"두껍게 부착됐다"를 하한 미만(below) Zone에, "얇다"를 상한 초과(above) Zone에 말한 문장."""
     wrong = {"below": "thick", "above": "thin"}.get(str((measure or {}).get("grade")))
     if wrong is None:
         return False

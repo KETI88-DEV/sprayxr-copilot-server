@@ -8,6 +8,27 @@
   const submit = byId('copilot-feedback-submit'), reset = byId('copilot-feedback-reset');
   const state = byId('copilot-feedback-state');
   let pending = false, submissionId;
+  const list = document.createElement('section'); list.className = 'feedback-public-list';
+  const title = document.createElement('h3'); title.textContent = '접수한 의견과 처리 상태';
+  const link = document.createElement('a'); link.href = '/feedback'; link.textContent = '전체 의견 보기 →';
+  const items = document.createElement('div'); items.setAttribute('aria-live','polite');
+  list.append(title, link, items); dialog.append(list);
+  async function loadList() {
+    items.textContent = '불러오는 중…';
+    try {
+      const response = await fetch('/api/feedback/list', {cache:'no-store'});
+      if (!response.ok) throw new Error();
+      const data = await response.json(); items.replaceChildren();
+      for (const row of data.items.slice(0,5)) {
+        const card = document.createElement('article'), status = document.createElement('strong'), text = document.createElement('p');
+        status.textContent = `${data.statuses[row.status]} · ${row.name || '익명'}`;
+        text.textContent = row.message; card.append(status,text);
+        if(row.resolution){const resolution=document.createElement('small');resolution.textContent='처리 내용 · '+row.resolution;card.append(resolution);}
+        items.append(card);
+      }
+      if(!data.items.length) items.textContent = '아직 접수된 의견이 없습니다.';
+    } catch { items.textContent = '목록을 불러오지 못했습니다. 전체 의견 보기에서 다시 확인하세요.'; }
+  }
   function uuid() {
     if (globalThis.crypto?.randomUUID) return crypto.randomUUID();
     const bytes = new Uint8Array(16);
@@ -23,6 +44,7 @@
     if (!dialog.open) dialog.showModal();
     if (!submissionId) submissionId = uuid();
     message.focus();
+    loadList();
   });
   byId('copilot-feedback-close').addEventListener('click', () => dialog.close());
   dialog.addEventListener('close', () => open.focus());
@@ -42,7 +64,7 @@
     try {
       const response = await fetch('/api/feedback', {
         method: 'POST', credentials: 'same-origin', headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
-        body: JSON.stringify({submission_id: submissionId || (submissionId = uuid()), message: message.value.trim(), name: name.value.trim(), kind: kind.value, page: document.body.dataset.portalPage}),
+        body: JSON.stringify({submission_id: submissionId || (submissionId = uuid()), message: message.value.trim(), name: name.value.trim(), kind: kind.value, page: ['docs','database','motion'].includes(document.body.dataset.portalPage)?document.body.dataset.portalPage:'docs'}),
         signal: controller.signal,
       });
       if (!response.ok) {
@@ -53,6 +75,7 @@
       const receipt = await response.json();
       if (receipt.status !== 'received' || !receipt.feedback_id) throw new Error('접수 확인을 받지 못했습니다. 입력을 유지한 채 다시 보내주세요.');
       form.reset(); submissionId = uuid(); notice('의견이 접수되었습니다. 감사합니다.', 'success');
+      loadList();
     } catch (error) {
       notice(error.name === 'AbortError' ? '접수 확인이 지연됩니다. 입력은 유지됩니다. 다시 보내면 중복 접수되지 않습니다.' : error.name === 'Error' && error.message ? error.message : '연결을 확인하고 다시 보내주세요. 입력은 유지됩니다.', 'error');
     } finally {

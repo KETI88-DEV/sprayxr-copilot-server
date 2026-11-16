@@ -1,7 +1,8 @@
 """v1 흐름이 PR #8 도막 기준(`trainer/zone_engine`)으로 판정하게 하는 얇은 어댑터.
 
-수치 규칙(복호 식, 10 µm 1회 차감, 1600 µm 상한, 1 µm 미만 미도장, 등급 경계, 6구간,
-칠한 곳 평균)은 PR #8 함수를 그대로 부르므로 같다. 다른 것은 입력을 다루는 방식이다.
+복호 식, 10 µm 1회 차감, 1600 µm 상한, 1 µm 미만 미도장과 칠한 곳 평균은 PR #8 함수를 쓴다.
+공개 API의 정상 구간은 TSB 요청에 따라 별도의 하한·상한(기본 160~200µm, 양쪽 경계 포함)으로 판정한다.
+PR #8 원본 엔진 자체의 기준은 바꾸지 않는다.
 
 PR #8 엔진과 다른 점:
 
@@ -54,27 +55,27 @@ from trainer.zone_engine.errors import EngineError
 
 # PR #8 엔진은 목표를 기본값으로 채우지 않는다. v1 흐름만 160 µm로 판정하고 그 사실을 표시한다(D3).
 DEFAULT_TARGET_UM: Final = 160.0
+DEFAULT_MAX_UM: Final = 200.0
 GATE_COVERAGE_PERCENT: Final = 95.0
 # 호출 지점이 zone_engine을 직접 읽지 않게 다시 내보낸다.
 SIX_BAND_KEYS: Final = numerical.SIX_BAND_KEYS
 STATUS_BY_GRADE: Final = {"below": "under_app", "normal": "normal", "above": "over_app"}
 # 이 흐름은 PR #8 엔진이 보류할 입력에도 등급을 낸다. 그래서 PR #8 문자열을 그대로 쓰지 않고 접두를 붙인다.
-ASSESSMENT_VERSION: Final = f"coating-v1-adapter/{CRITERION_VERSION}"
+ASSESSMENT_VERSION: Final = f"coating-v1-adapter/range-20261116/{CRITERION_VERSION}"
 
-# 표시용 사본. 판정·계산에는 쓰지 않는다(판정은 numerical이 한다).
-# numerical은 이 수를 상수로 내보내지 않는다(grade_for_mean, six_band_counts 안에 있다).
-# PR #8 경계가 바뀌면 test_display_edges_match_the_engine이 깨진다.
-DISPLAY_BAND_FACTORS: Final = (0.9, 1.0, 1.5, 2.0, 2.5)  # 6구간 경계 ÷ 목표. [1]~[2]가 정상 구간
+# 공개 API 기본 범위의 표시용 경계. PR #8 numerical의 1.5배 경계와 의도적으로 다르다.
+# 기존 JSON의 여섯 band key는 호환을 위해 유지하며, 실제 정상 경계는 normal_band_um과 band_labels로 전달한다.
+DISPLAY_BAND_FACTORS: Final = (0.9, 1.0, 1.25, 2.0, 2.5)  # 기본 160~200µm 표시용. 명시 범위는 normal_band_um 우선.
 
 BAND_LABELS: Final[tuple[str, ...]] = (
     f"{DISPLAY_BAND_FACTORS[0] * 100:g}% 미만",
     *(f"{low * 100:g}~{high * 100:g}%" for low, high in zip(DISPLAY_BAND_FACTORS, DISPLAY_BAND_FACTORS[1:])),
     f"{DISPLAY_BAND_FACTORS[-1] * 100:g}% 이상",
 )
-OVER_PHRASE: Final[str] = f"목표의 {DISPLAY_BAND_FACTORS[2]:g}배 이상"
-RULE_NOTE: Final[str] = f"등급은 칠한 곳의 평균 두께로 정합니다(목표 미만은 저도막, {OVER_PHRASE}은 과도막)."
+OVER_PHRASE: Final[str] = "정상범위 상한 초과"
+RULE_NOTE: Final[str] = "등급은 칠한 곳의 평균 두께로 정합니다(하한 미만은 저도막, 하한~상한은 정상, 상한 초과는 과도막). 기본 정상범위는 160~200µm입니다."
 GRADE_SHORT_LABELS: Final[dict[str, str]] = {
-    "below": "목표 미만", "normal": "정상", "above": f"{DISPLAY_BAND_FACTORS[2]:g}배 이상", "none": "미도장"}
+    "below": "하한 미만", "normal": "정상", "above": "상한 초과", "none": "미도장"}
 
 GRADE_WORDS: Final = {"below": "저도막", "normal": "정상", "above": "과도막"}
 ADJUSTMENT_WORDS: Final = {
@@ -101,6 +102,24 @@ def session_target(session: Any) -> float | None:
     return getattr(session, "target_thickness_um", None)
 
 
+def session_limits(session: Any) -> dict[str, float | None]:
+    """Stored explicit range; legacy sessions resolve from their single target."""
+    return {key: value for key, value in {
+        "min_thickness_um": getattr(session, "target_thickness_min_um", None),
+        "max_thickness_um": getattr(session, "target_thickness_max_um", None),
+    }.items() if value is not None}
+
+
+def resolve_band(target_um: float | None = None, *, min_thickness_um: float | None = None,
+                 max_thickness_um: float | None = None) -> tuple[float, float]:
+    """Legacy target denotes the lower bound with a 25% normal margin."""
+    lower = float(min_thickness_um if min_thickness_um is not None else resolve_target(target_um)[0])
+    upper = float(max_thickness_um if max_thickness_um is not None else min(20000.0, lower * 1.25))
+    if not (math.isfinite(lower) and math.isfinite(upper) and 0 < lower <= upper <= 20000):
+        raise ValueError("normal thickness range must satisfy 0 < min <= max <= 20000")
+    return lower, upper
+
+
 def band_edges_um(target_um: float) -> list[float]:
     """6구간 경계(µm) — 표시용."""
     return [factor * target_um for factor in DISPLAY_BAND_FACTORS]
@@ -108,7 +127,7 @@ def band_edges_um(target_um: float) -> list[float]:
 
 def normal_band_um(target_um: float) -> list[float]:
     """[목표, 과도막 경계] — 표시용."""
-    return band_edges_um(target_um)[1:3]
+    return list(resolve_band(target_um))
 
 
 def painted_surface_from_png(raw: bytes) -> np.ndarray:
@@ -139,6 +158,8 @@ def assess_zone(
     zone_mask: np.ndarray,
     target_um: float | None = None,
     *,
+    min_thickness_um: float | None = None,
+    max_thickness_um: float | None = None,
     speed_mm_s: Sequence[float] = (),
     distance_mm: Sequence[float] = (),
 ) -> dict[str, Any] | None:
@@ -153,21 +174,35 @@ def assess_zone(
     # 어느 크롭에도 들지 않은 화소를 "아직 칠하지 않음"으로 본다. PR #8 엔진은 "모름"으로 두고 등급을 보류한다.
     surface_obj = numerical.Surface(raw, np.ones(raw.shape, dtype=bool), raw > 0)
     target, target_basis = resolve_target(target_um)
+    lower, upper = resolve_band(target_um, min_thickness_um=min_thickness_um, max_thickness_um=max_thickness_um)
+    target = lower
+    if min_thickness_um is not None or max_thickness_um is not None:
+        target_basis = "session_target"
     result = numerical.assess_zone(surface_obj, mask, target)
     quality = result["quality"]
     observed = result["metrics"]["observed_statistics"]
 
     zone_pixel_count = quality["zone_pixel_count"]
-    grade = quality["grade"]
-    bands = quality["six_band_counts"]
-    counts = [bands[key] for key in numerical.SIX_BAND_KEYS]
-    coverage_percent = 100.0 * sum(counts[2:]) / zone_pixel_count
+    mean = quality["painted_mean_um"]
+    grade = None if mean is None else ("below" if mean < lower else "above" if mean > upper else "normal")
+    quality["grade"] = grade
     corrected, painted = numerical.corrected_values(surface_obj)
+    samples = corrected[mask & painted]
+    # Keep six report bins, with the normal bin matching the requested inclusive range.
+    conditions = (samples < .9 * lower, (samples >= .9 * lower) & (samples < lower),
+                  (samples >= lower) & (samples <= upper),
+                  (samples > upper) & (samples < max(2 * lower, upper)),
+                  (samples > upper) & (samples >= max(2 * lower, upper)) & (samples < max(2.5 * lower, upper)),
+                  (samples > upper) & (samples >= max(2.5 * lower, upper)))
+    bands = {key: int(np.count_nonzero(condition)) for key, condition in zip(numerical.SIX_BAND_KEYS, conditions)}
+    quality["six_band_counts"] = bands
+    counts = [bands[key] for key in numerical.SIX_BAND_KEYS]
+    coverage_percent = 100.0 * counts[2] / zone_pixel_count
     filled = np.where(painted, np.clip(corrected / target, 0.0, 1.0), 0.0)
     if grade == "above":
         gate_status = "overpaint_risk"
     # 2026-11-12 책임자 결정: 면적을 채워도 칠한 곳 평균이 목표 미만(저도막)이면 다음 Zone으로 보내지 않는다.
-    elif coverage_percent >= GATE_COVERAGE_PERCENT and grade != "below":
+    elif coverage_percent >= GATE_COVERAGE_PERCENT and grade == "normal":
         gate_status = "complete"
     else:
         gate_status = "needs_more"
@@ -194,7 +229,7 @@ def assess_zone(
         "overpaint_percent": 100.0 * sum(counts[3:]) / zone_pixel_count,
         "completion_percent": 100.0 * float(filled[mask].sum()) / zone_pixel_count,
         "gate_status": gate_status,
-        "normal_band_um": normal_band_um(target),
+        "normal_band_um": [lower, upper],
         # PR #8의 statement 문장은 내부 용어가 있어 옮기지 않는다.
         "adjustments": [
             {key: action[key] for key in ("variable", "direction", "priority", "evidence_kind")}
@@ -228,6 +263,7 @@ def session_summary(assessments: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
             key: sum(item["six_band_counts"][key] for item in items) for key in numerical.SIX_BAND_KEYS},
         "target_thickness_um": target,
         "target_basis": target_basis,
+        "normal_band_um": items[0]["normal_band_um"] if items else list(resolve_band()),
     }
 
 
@@ -317,8 +353,10 @@ def distribution_sentence(six_band_counts: Mapping[str, int]) -> str | None:
     total = sum(counts)
     if not total:
         return None
-    shares = ", ".join(f"{label} {100.0 * count / total:.0f}%" for label, count in zip(BAND_LABELS, counts))
-    return f"칠한 면적의 두께 분포: 목표의 {shares}."
+    groups = [("저도막", sum(counts[:2])), ("정상", counts[2]), ("과도막", sum(counts[3:]))]
+    return "칠한 면적의 두께 분포: " + ", ".join(
+        f"{label} {100.0 * count / total:.0f}%" for label, count in groups if count
+    ) + "."
 
 
 def corrected_painted(raw: np.ndarray, source_painted: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -327,14 +365,22 @@ def corrected_painted(raw: np.ndarray, source_painted: np.ndarray) -> tuple[np.n
 
 
 def band_counts(values_um: np.ndarray, target_um: float) -> dict[str, int]:
-    """보정 두께 값들의 6구간 개수(PR #8)."""
-    return numerical.six_band_counts(np.asarray(values_um, dtype=np.float64), target_um)
+    """보정 두께의 기본 하한~1.25배 정상범위에 맞춘 여섯 구간 개수."""
+    values = np.asarray(values_um, dtype=np.float64)
+    edges = band_edges_um(target_um)
+    conditions = (values < edges[0], (values >= edges[0]) & (values < edges[1]),
+                  (values >= edges[1]) & (values <= edges[2]),
+                  (values > edges[2]) & (values < edges[3]),
+                  (values >= edges[3]) & (values < edges[4]), values >= edges[4])
+    return {key: int(np.count_nonzero(part)) for key, part in zip(SIX_BAND_KEYS, conditions)}
 
 
 def assess_readings(
     values_um: Sequence[float],
     target_um: float | None = None,
     *,
+    min_thickness_um: float | None = None,
+    max_thickness_um: float | None = None,
     speed_mm_s: Sequence[float] = (),
     distance_mm: Sequence[float] = (),
 ) -> dict[str, Any]:
@@ -344,9 +390,12 @@ def assess_readings(
     values = np.asarray(values_um, dtype=np.float64)
     # PR #8 판정은 높이맵에서 DeadVolume 10 µm를 한 번 빼므로, 측정값에는 미리 더해 상쇄한다.
     raw = (values + numerical.DEAD_VOLUME_UM).reshape(1, -1)
-    result = assess_zone(raw, np.ones(raw.shape, dtype=bool), target_um, speed_mm_s=speed_mm_s, distance_mm=distance_mm)
+    result = assess_zone(raw, np.ones(raw.shape, dtype=bool), target_um,
+                         min_thickness_um=min_thickness_um, max_thickness_um=max_thickness_um,
+                         speed_mm_s=speed_mm_s, distance_mm=distance_mm)
     assert result is not None  # 마스크가 비지 않고 모양이 같다
     target = result["target_thickness_um"]
+    lower, upper = result["normal_band_um"]
     result["point_grades"] = [
-        numerical.grade_for_mean(float(v), target) if v >= numerical.MIN_PAINTED_UM else None for v in values]
+        ("below" if v < lower else "above" if v > upper else "normal") if v >= numerical.MIN_PAINTED_UM else None for v in values]
     return result

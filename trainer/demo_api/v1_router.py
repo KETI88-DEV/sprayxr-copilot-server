@@ -255,6 +255,8 @@ def create_v1_router(
     def _coating(
         bodies: list[dict[str, Any]], *, scenario_id: str, height_map: bytes | None, height_map_name: str | None,
         target_thickness_um: float | None = None,
+        min_thickness_um: float | None = None,
+        max_thickness_um: float | None = None,
     ) -> SessionCoating | None:
         """세션 끝 도막(`session_coating`). 여기서 터져도 자세·순서 결과는 남긴다 — 리포트를 failed로 만들지 않는다."""
         if coating_engine is None:
@@ -264,6 +266,7 @@ def create_v1_router(
                 scenario_id=scenario_id, bodies=bodies, engine=coating_engine,
                 height_map=height_map, height_map_name=height_map_name,
                 target_thickness_um=target_thickness_um,
+                min_thickness_um=min_thickness_um, max_thickness_um=max_thickness_um,
             )
         except Exception:  # noqa: BLE001 - 도막만 unavailable 로 낸다.
             logger.exception("session coating analysis failed scenario=%s", scenario_id)
@@ -299,6 +302,7 @@ def create_v1_router(
                 result.source_bodies, scenario_id=scenario_id,
                 height_map=height_map, height_map_name=height_map_name,
                 target_thickness_um=target_thickness_um,
+                **coating_assessment.session_limits(state.get_session(session_id)),
             )
             coating_report = coating.report if coating is not None else None
             state.finish_completion(
@@ -337,8 +341,11 @@ def create_v1_router(
         description=(
             "VR 훈련 콘텐츠가 시작될 때 한 번 호출합니다. user_id가 처음이면 사용자를 생성하고, "
             "기존 사용자면 숙련도와 주 사용 손을 갱신한 뒤 세션을 ACTIVE 상태로 저장합니다. "
-            "스프레이 훈련은 target_thickness_um에 이번 훈련의 목표 도막 두께(µm)를 입력할 수 있으며, "
-            "기존 연동처럼 생략해도 세션 시작은 정상 처리됩니다."
+            "스프레이 정상 도막은 기본 160~200µm입니다. target_thickness_min_um·target_thickness_max_um으로 "
+            "경계값을 포함한 정상범위를 지정할 수 있습니다. 기존 target_thickness_um 단일 값만 보내면 "
+            "그 값부터 1.25배까지 정상으로 봅니다(160 → 160~200). 모두 생략해도 동작합니다. "
+            "응답 data.first_zone_id·first_zone_guidance가 선택 공정·콘텐츠의 등록된 전문가 첫 Zone을 안내합니다. "
+            "tool_type은 생략하면 spray_gun이며 블라스팅 시작 안내에는 blasting_gun을 보냅니다."
         ),
     )
     async def sessions_start(body: SessionStartRequest) -> JSONResponse:
@@ -346,13 +353,17 @@ def create_v1_router(
             row, session_created = await to_thread.run_sync(
                 lambda: state.start_session_with_created(
                     session_id=body.session_id, user_id=body.user_id, scenario_id=body.scenario_id,
-                    started_at=body.started_at, target_thickness_um=body.target_thickness_um,
+                    started_at=body.started_at,
+                    target_thickness_um=(body.target_thickness_min_um if body.target_thickness_min_um is not None else body.target_thickness_um),
+                    target_thickness_min_um=body.target_thickness_min_um,
+                    target_thickness_max_um=body.target_thickness_max_um,
+                    tool_type=body.tool_type,
                     creation_origin="real", creation_path="/api/v1/sessions/start",
                     # 생략해도 계약 기본값 160.0이 저장되므로, 세션이 목표를 정했는지를 따로 남긴다.
                     target_basis=(
                         "session_target"
-                        if "target_thickness_um" in body.model_fields_set
-                        and body.target_thickness_um is not None
+                        if ("target_thickness_um" in body.model_fields_set and body.target_thickness_um is not None)
+                        or body.target_thickness_min_um is not None
                         else "default_target"
                     ),
                 )
@@ -370,12 +381,28 @@ def create_v1_router(
         if session_created:
             anomalies.reset(body.session_id)
         logger.info("session start %s user=%s created=%s", body.session_id, body.user_id, created)
+        process = "blasting" if (row.tool_type or body.tool_type) == "blasting_gun" else "spray"
+        plan = (sequence_engine.reference_plan(scenario_id=row.scenario_id, process=process)
+                if sequence_engine is not None else None)
+        first_zone = str(plan["flow"][0]) if plan and plan.get("flow") else None
+        guidance = {
+            "analysis_status": "available" if first_zone else "not_available",
+            "reason_code": None if first_zone else "sequence_reference_unavailable",
+            "process": process, "zone_id": first_zone,
+            "recommended_flow": plan["flow"] if plan else [],
+            "reference_basis": "measured_expert_runs" if first_zone else None,
+            "message": (f"Zone {first_zone}부터 작업을 시작하세요." if first_zone else
+                        "이 콘텐츠의 전문가 작업 순서 기준이 아직 등록되어 있지 않습니다."),
+        }
+        lower, upper = coating_assessment.resolve_band(row.target_thickness_um, **coating_assessment.session_limits(row))
         return _ok(
             SessionStateData(
                 session_id=row.session_id, user_id=row.user_id, scenario_id=row.scenario_id,
                 session_status=row.session_status, started_at=row.started_at, ended_at=row.ended_at,
                 user_created=created,
                 target_thickness_um=row.target_thickness_um,
+                target_thickness_min_um=lower, target_thickness_max_um=upper,
+                first_zone_id=first_zone, first_zone_guidance=guidance,
             ).model_dump(mode="json")
         )
 
@@ -409,6 +436,8 @@ def create_v1_router(
                 session_status="COMPLETED", started_at=row.started_at, ended_at=row.ended_at,
                 user_created=False,
                 target_thickness_um=row.target_thickness_um,
+                target_thickness_min_um=coating_assessment.resolve_band(row.target_thickness_um, **coating_assessment.session_limits(row))[0],
+                target_thickness_max_um=coating_assessment.resolve_band(row.target_thickness_um, **coating_assessment.session_limits(row))[1],
             ).model_dump(mode="json")
         )
 

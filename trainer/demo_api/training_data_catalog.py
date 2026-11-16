@@ -56,7 +56,7 @@ class TrainingDataCatalog:
                 continue
         return result
 
-    def _selected(self, *, worker_id='all', process='all', scenario_id='all', acquired_at='all', zone_mapping='all', q='', **_) -> tuple[dict, list[dict], list[dict]]:
+    def _selected(self, *, worker_id='all', process='all', scenario_id='all', acquired_at='all', zone_mapping='all', quality_status='all', q='', **_) -> tuple[dict, list[dict], list[dict]]:
         index = self._index()
         rows = self._rows(index)
         needle = q.strip().casefold()
@@ -64,6 +64,8 @@ class TrainingDataCatalog:
                     and (process == 'all' or r['process'] == process)
                     and (scenario_id == 'all' or r['scenario_id'] == scenario_id)
                     and (zone_mapping == 'all' or r['zone_id_status'] == zone_mapping)
+                    and (quality_status == 'all' or (r.get('quality_status') == 'complete' if quality_status == 'complete'
+                                                    else r.get('quality_status') != 'complete'))
                     and (acquired_at == 'all' or (acquisition_date(r.get('acquired_at')) is None if acquired_at == 'unknown'
                                                   else acquisition_date(r.get('acquired_at')) == acquired_at))
                     and (not needle or needle in ' '.join(str(r.get(k, '')) for k in ('dataset_name', 'worker_name', 'mode_label', 'scenario_id')).casefold())]
@@ -162,32 +164,35 @@ def create_training_data_router(catalog: TrainingDataCatalog | None = None) -> A
     store = catalog or TrainingDataCatalog()
     router = APIRouter(prefix='/admin/api/training-data', include_in_schema=False)
 
-    def filters(worker_id: str, process: str, scenario_id: str, acquired_at: str, q: str, zone_mapping: str) -> dict:
+    def filters(worker_id: str, process: str, scenario_id: str, acquired_at: str, q: str, zone_mapping: str, quality_status: str) -> dict:
         if acquired_at not in {'all', 'unknown'} and acquisition_date(acquired_at) != acquired_at:
             raise HTTPException(422, '훈련날짜는 YYYY-MM-DD 형식의 유효한 날짜여야 합니다.')
         return dict(worker_id=worker_id, process=process, scenario_id=scenario_id, acquired_at=acquired_at, q=q,
-                    zone_mapping=zone_mapping)
+                    zone_mapping=zone_mapping, quality_status=quality_status)
 
     @router.get('')
     def listing(worker_id: str = Query('all', max_length=120), process: str = Query('all', pattern='^(all|spray|blasting|grinding)$'),
                 scenario_id: str = Query('all', max_length=120), acquired_at: str = Query('all', max_length=10), q: str = Query('', max_length=100),
                 zone_mapping: str = Query('all', pattern='^(all|present|absent)$'),
+                quality_status: str = Query('all', pattern='^(all|complete|needs_review)$'),
                 page: int = Query(1, ge=1), limit: int = Query(25, ge=1, le=200)):
-        return store.list(page=page, limit=limit, **filters(worker_id, process, scenario_id, acquired_at, q, zone_mapping))
+        return store.list(page=page, limit=limit, **filters(worker_id, process, scenario_id, acquired_at, q, zone_mapping, quality_status))
 
     @router.get('/export.csv')
     def export_csv(worker_id: str = Query('all', max_length=120), process: str = Query('all', pattern='^(all|spray|blasting|grinding)$'),
                    scenario_id: str = Query('all', max_length=120), acquired_at: str = Query('all', max_length=10), q: str = Query('', max_length=100),
-                   zone_mapping: str = Query('all', pattern='^(all|present|absent)$')):
-        return Response(store.csv_export(**filters(worker_id, process, scenario_id, acquired_at, q, zone_mapping)), media_type='text/csv; charset=utf-8',
+                   zone_mapping: str = Query('all', pattern='^(all|present|absent)$'),
+                   quality_status: str = Query('all', pattern='^(all|complete|needs_review)$')):
+        return Response(store.csv_export(**filters(worker_id, process, scenario_id, acquired_at, q, zone_mapping, quality_status)), media_type='text/csv; charset=utf-8',
                         headers={'Content-Disposition': 'attachment; filename="training-datasets.csv"'})
 
     @router.get('/export.zip')
     def export_zip(worker_id: str = Query('all', max_length=120), process: str = Query('all', pattern='^(all|spray|blasting|grinding)$'),
                    scenario_id: str = Query('all', max_length=120), acquired_at: str = Query('all', max_length=10), q: str = Query('', max_length=100),
-                   zone_mapping: str = Query('all', pattern='^(all|present|absent)$')):
+                   zone_mapping: str = Query('all', pattern='^(all|present|absent)$'),
+                   quality_status: str = Query('all', pattern='^(all|complete|needs_review)$')):
         try:
-            content = store.zip_export(**filters(worker_id, process, scenario_id, acquired_at, q, zone_mapping))
+            content = store.zip_export(**filters(worker_id, process, scenario_id, acquired_at, q, zone_mapping, quality_status))
         except (OSError, ValueError) as error:
             raise HTTPException(409, str(error)) from error
         return Response(content, media_type='application/zip', headers={'Content-Disposition': 'attachment; filename="training-datasets.zip"'})

@@ -155,7 +155,9 @@ def _guideline(
         if found:
             parts.append(f"{label} {len(found)}개({'·'.join(found)}번)")
     basis = coating_assessment.basis_label(summary["target_thickness_um"], summary["target_basis"])
-    text = f"{basis}으로 {len(zones)}개 구역을 판정했습니다: {', '.join(parts)}입니다. {coating_assessment.RULE_NOTE}"
+    lower, upper = summary["normal_band_um"]
+    text = (f"{basis}, 정상범위 {lower:g}~{upper:g}µm(경계 포함)으로 {len(zones)}개 구역을 판정했습니다: "
+            f"{', '.join(parts)}입니다. 등급은 칠한 곳의 평균 두께로 정하며 하한 미만은 저도막, 상한 초과는 과도막입니다.")
     if worst:
         top = worst[0]
         text += (
@@ -191,6 +193,8 @@ def analyze_session_coating(
     height_map: bytes | None = None,
     height_map_name: str | None = None,
     target_thickness_um: float | None = None,
+    min_thickness_um: float | None = None,
+    max_thickness_um: float | None = None,
 ) -> SessionCoating:
     """세션 끝 도막을 구역별로 판정한다(모듈 독스트링의 순서). `bodies`는 시간 순서여야 한다."""
     mode_id = learning_mode_from_scenario(scenario_id)
@@ -214,7 +218,8 @@ def analyze_session_coating(
 
     judgments, reason = engine.judge_zones(
         scenario_id=scenario_id, process=process, mode_id=mode_id, surfaces=surfaces,
-        target_thickness_um=target_thickness_um, behavior=coating_assessment.behavior_by_zone(bodies),
+        target_thickness_um=target_thickness_um, min_thickness_um=min_thickness_um,
+        max_thickness_um=max_thickness_um, behavior=coating_assessment.behavior_by_zone(bodies),
     )
     if not judgments:
         return _unavailable(
@@ -239,6 +244,7 @@ def analyze_session_coating(
         "comparison_basis": "session_target",
         "target_thickness_um": summary["target_thickness_um"],
         "target_basis": summary["target_basis"],
+        "normal_band_um": summary["normal_band_um"],
         "analysis_status": "available",
         "reason_code": None,
         "algorithm_version": ALGORITHM_VERSION,
