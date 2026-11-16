@@ -55,7 +55,7 @@ _JOINT_PARENTS: tuple[tuple[str, str | None], ...] = (
 )
 
 _BONES = [[parent, joint] for joint, parent in _JOINT_PARENTS if parent is not None]
-_PROCESS_LABELS = {"spray": "스프레이", "blasting": "블라스팅"}
+_PROCESS_LABELS = {"spray": "스프레이", "blasting": "블라스팅", "grinding": "그라인딩"}
 _EXPERT_NAME = "전형기"
 _EXPERT_WORKER_ID = "jeon_hyeonggi"
 _DIRECTION_LABELS = {
@@ -309,6 +309,9 @@ def _world_joints(row: dict[str, str]) -> dict[str, list[float]]:
 
 
 def _open_csv(path: Path) -> TextIO:
+    # Converted recordings carry sparse base64 heatmaps in individual cells.
+    if csv.field_size_limit() < 64 * 1024 * 1024:
+        csv.field_size_limit(64 * 1024 * 1024)
     if path.name.lower().endswith(".gz"):
         return gzip.open(path, "rt", encoding="utf-8-sig", newline="")
     return path.open("r", encoding="utf-8-sig", newline="")
@@ -316,7 +319,7 @@ def _open_csv(path: Path) -> TextIO:
 
 @lru_cache(maxsize=64)
 def _sample_csv(
-    path_text: str, stamp: tuple[int, int], frame_count: int
+    path_text: str, stamp: tuple[int, int], frame_count: int, process: str | None = None
 ) -> tuple[dict[str, Any], ...]:
     del stamp
     path = Path(path_text)
@@ -330,11 +333,14 @@ def _sample_csv(
         for index in range(count)
     }
     frames: list[dict[str, Any]] = []
-    tool_prefix = "블라스트 건" if "blasting" in {part.casefold() for part in path.parts} else "한길숏건"
+    tool_prefix = "블라스트 건" if process == "blasting" or "blasting" in {part.casefold() for part in path.parts} else "한길숏건"
     with _open_csv(path) as handle:
         for index, row in enumerate(csv.DictReader(handle)):
             if index not in targets:
                 continue
+            if process == "grinding":
+                tool_prefix = next((str(key).strip()[:-11] for key in row
+                                    if "그라인" in str(key) and str(key).strip().endswith(" Position X")), "그라인더")
             joints = _world_joints(row)
             tracked = {
                 "head": _vector(row, "카메라"),
@@ -450,7 +456,8 @@ def _representative_session(profile: dict[str, Any]) -> str:
 
 
 def _session_path(
-    root: Path, process: str, mode_id: int, profile: dict[str, Any], session_id: str
+    root: Path, process: str, mode_id: int, profile: dict[str, Any], session_id: str,
+    *, source_root: Path | None = None,
 ) -> Path:
     session = next(
         (item for item in profile["sessions"] if str(item.get("session_id")) == session_id),
@@ -458,6 +465,15 @@ def _session_path(
     )
     if session is None:
         raise HTTPException(status_code=404, detail="expert session not found")
+    catalog_source = session.get("sources", {}).get("catalog_relative_path")
+    if catalog_source is not None:
+        if source_root is None or not isinstance(catalog_source, str):
+            raise HTTPException(status_code=404, detail="recording source unavailable")
+        trusted = source_root.resolve()
+        candidate = (trusted / catalog_source).resolve()
+        if not candidate.is_relative_to(trusted) or not candidate.is_file():
+            raise HTTPException(status_code=404, detail="recording source unavailable")
+        return candidate
     source = session.get("sources", {}).get("csv_path")
     if not isinstance(source, str) or not source:
         raise HTTPException(status_code=422, detail="expert session source is invalid")
@@ -469,11 +485,23 @@ def _session_path(
 
 
 def _record_height_maps(
-    root: Path, process: str, mode_id: int, profile: dict[str, Any], session_id: str
+    root: Path, process: str, mode_id: int, profile: dict[str, Any], session_id: str,
+    *, source_root: Path | None = None,
 ) -> dict[int, Path]:
     """기록의 최종 높이맵 {면: 경로}. `Map{면}_{WorkID}_{회차}_{수행번호}_Height.png`만 쓴다."""
+    session = _session_record(profile, session_id)
+    heightmaps = session.get("heightmaps")
+    if session.get("dataset_id") and source_root is not None:
+        images = {}
+        for image in heightmaps or []:
+            relative, face = image.get("relative_path"), _number(image.get("map_num"))
+            if not isinstance(relative, str) or face is None or face < 1 or not face.is_integer():
+                continue
+            path = (source_root / relative).resolve()
+            if path.is_relative_to(source_root.resolve()) and path.is_file():
+                images[int(face)] = path
+        return images
     parts = session_id.split("_", 2)
-    heightmaps = _session_record(profile, session_id).get("heightmaps")
     if len(parts) != 3 or not isinstance(heightmaps, list):
         return {}
     name = re.compile(rf"map(\d+)_{re.escape(parts[1])}_{re.escape(parts[2])}_(\d+)_height\.png", re.I)
@@ -598,9 +626,9 @@ def _target_coating_cached(
     }
 
 
-def _frames(path: Path, frame_count: int) -> list[dict[str, Any]]:
+def _frames(path: Path, frame_count: int, process: str | None = None) -> list[dict[str, Any]]:
     stat = path.stat()
-    return [dict(frame) for frame in _sample_csv(str(path), (stat.st_mtime_ns, stat.st_size), frame_count)]
+    return [dict(frame) for frame in _sample_csv(str(path), (stat.st_mtime_ns, stat.st_size), frame_count, process)]
 
 
 def _clock_offset(path: Path, frame_count: int) -> float:
@@ -794,13 +822,14 @@ def _zone_strokes(path_text: str, stamp: tuple[int, int]) -> tuple[dict[str, Any
     return tuple(strokes)
 
 
-def _zone_flow_guides(paths: list[Path], *, max_strokes: int = 8) -> list[dict[str, Any]]:
+def _zone_flow_guides(paths: list[Path], *, max_strokes: int = 8, zone_transform: Any = None) -> list[dict[str, Any]]:
     grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
     sessions_by_zone: dict[tuple[str, str], set[int]] = {}
     for session_index, path in enumerate(paths):
         stat = path.stat()
         for stroke in _zone_strokes(str(path), (stat.st_mtime_ns, stat.st_size)):
-            key = (stroke["map_num"], stroke["zone_id"])
+            zone = zone_transform(path, stroke["zone_id"]) if zone_transform is not None else stroke["zone_id"]
+            key = (stroke["map_num"], zone)
             item = dict(stroke)
             item["session_index"] = session_index
             grouped.setdefault(key, []).append(item)
@@ -993,7 +1022,7 @@ def _zone_cells(
     )
 
 
-def _zone_surface_statistics(paths: list[Path], *, uv_cell_size: float = 32.0) -> list[dict[str, Any]]:
+def _zone_surface_statistics(paths: list[Path], *, uv_cell_size: float = 32.0, zone_transform: Any = None) -> list[dict[str, Any]]:
     grouped: dict[tuple[str, str], dict[tuple[int, int], dict[str, Any]]] = {}
     for path in paths:
         stat = path.stat()
@@ -1001,6 +1030,8 @@ def _zone_surface_statistics(paths: list[Path], *, uv_cell_size: float = 32.0) -
             str(path), (stat.st_mtime_ns, stat.st_size), uv_cell_size
         ):
             map_num, zone_id, u_cell, v_cell = key
+            if zone_transform is not None:
+                zone_id = zone_transform(path, zone_id)
             cell = grouped.setdefault((map_num, zone_id), {}).setdefault(
                 (u_cell, v_cell), {"sum": [0.0, 0.0, 0.0], "count": 0}
             )
@@ -2037,7 +2068,22 @@ let atEnd=false;// 끝 시각을 한 번 그린 뒤 감는다(끝에서 난 알�
 function tick(now){if(playing&&data&&data.frames.length){if(!last)last=now;const elapsed=Math.min(.1,(now-last)/1000)*Number($('speed').value);last=now;playheadSeconds+=elapsed;if(playheadSeconds>=data.duration_seconds&&atEnd){playheadSeconds=0;index=0;atEnd=false}else if(playheadSeconds>=data.duration_seconds){playheadSeconds=data.duration_seconds;index=interpolatedFrame(playheadSeconds).index;atEnd=true}else{index=interpolatedFrame(playheadSeconds).index;atEnd=false}$('timeline').value=index;draw()}requestAnimationFrame(tick)}
 $('worker').onchange=fillProcesses;$('process').onchange=fillModes;$('mode').onchange=fillSessions;$('session').onchange=loadMotion;$('timeline').oninput=e=>{referencePreview=false;index=Number(e.target.value);playheadSeconds=data.frames[index].t;last=0;draw()};$('pointSize').oninput=e=>{$('pointSizeValue').textContent=`${Number(e.target.value).toFixed(2).replace(/0+$/,'').replace(/\.$/,'')} px`;draw()};$('zoneSurface').onchange=draw;$('objectMesh').onchange=draw;$('skeletonTurnLeft').onclick=()=>setSkeletonYaw(skeletonYaw-15);$('skeletonTurnRight').onclick=()=>setSkeletonYaw(skeletonYaw+15);$('skeletonReset').onclick=()=>setSkeletonYaw(0);document.querySelector('.skeleton-card').ontoggle=()=>{if(document.querySelector('.skeleton-card').open)resize()};$('play').onclick=()=>{if(playing){playing=false;last=0;$('play').textContent='재생'}else startPlayback()};$('restart').onclick=()=>{playing=false;referencePreview=false;index=0;playheadSeconds=0;last=0;$('play').textContent='재생';$('timeline').value=0;draw()};
 canvas.onpointerdown=e=>{if(e.button!==0&&e.button!==1)return;e.preventDefault();canvas.setPointerCapture(e.pointerId);drag=e.button===1?{mode:'pan',x:e.clientX,y:e.clientY,panX,panY}:{mode:'rotate',x:e.clientX,y:e.clientY,yaw,pitch};canvas.style.cursor=drag.mode==='pan'?'move':'grabbing'};canvas.onpointermove=e=>{if(!drag)return;if(drag.mode==='pan'){panX=drag.panX+e.clientX-drag.x;panY=drag.panY+e.clientY-drag.y}else{yaw=drag.yaw+(e.clientX-drag.x)*.01;pitch=Math.max(-1.2,Math.min(1.2,drag.pitch+(e.clientY-drag.y)*.01))}draw()};canvas.onpointerup=e=>{if(canvas.hasPointerCapture(e.pointerId))canvas.releasePointerCapture(e.pointerId);drag=null;canvas.style.cursor='grab'};canvas.onpointercancel=()=>{drag=null;canvas.style.cursor='grab'};canvas.onauxclick=e=>e.preventDefault();canvas.onwheel=e=>{e.preventDefault();zoom=Math.max(70,Math.min(420,zoom*(e.deltaY>0?.9:1.1)));draw()};
-addEventListener('resize',resize);(async()=>{try{catalog=await json('/motion-viewer/api/catalog');$('worker').replaceChildren(...catalog.workers.map(worker=>option(worker.worker_id,`${worker.display_name}${worker.role==='expert'?' · 전문가 기준':''}`)));fillProcesses();resize();requestAnimationFrame(tick)}catch(e){$('status').textContent=e.message}})();
+let catalogRefreshPending=false,catalogRefreshedAt=0;
+async function refreshCatalogOptions(){
+if(!catalog||document.hidden||catalogRefreshPending||Date.now()-catalogRefreshedAt<10000)return;
+catalogRefreshPending=true;catalogRefreshedAt=Date.now();
+try{const incoming=await json('/motion-viewer/api/catalog');if(JSON.stringify(incoming)===JSON.stringify(catalog))return;
+const selected=Object.fromEntries(['worker','process','mode','session'].map(id=>[id,$(id).value])),worker=incoming.workers.find(row=>row.worker_id===selected.worker),process=worker&&worker.processes.find(row=>row.process===selected.process),mode=process&&process.modes.find(row=>String(row.mode_id)===selected.mode);
+// A background refresh adds choices without replacing a playing recording.
+if(!mode||(selected.session!=='representative'&&!mode.sessions.includes(selected.session)))return;
+catalog=incoming;
+$('worker').replaceChildren(...catalog.workers.map(row=>option(row.worker_id,`${row.display_name}${row.role==='expert'?' · 전문가 기준':''}`)));$('worker').value=selected.worker;
+$('process').replaceChildren(...worker.processes.map(row=>option(row.process,row.label)));$('process').value=selected.process;
+$('mode').replaceChildren(...process.modes.map(row=>option(row.mode_id,`학습모드 ${row.mode_id} · ${row.session_count}회`)));$('mode').value=selected.mode;
+$('session').replaceChildren(option('representative',`${worker.display_name} · 전체 기록 종합 기준`),...mode.sessions.map(row=>option(row,`${worker.display_name} · ${row}`)));$('session').value=selected.session;
+}catch(e){/* Existing recording stays usable when a background check fails. */}finally{catalogRefreshPending=false}}
+addEventListener('focus',refreshCatalogOptions);document.addEventListener('visibilitychange',()=>{if(!document.hidden)refreshCatalogOptions()});
+addEventListener('resize',resize);(async()=>{try{catalog=await json('/motion-viewer/api/catalog');catalogRefreshedAt=Date.now();$('worker').replaceChildren(...catalog.workers.map(worker=>option(worker.worker_id,`${worker.display_name}${worker.role==='expert'?' · 전문가 기준':''}`)));fillProcesses();resize();requestAnimationFrame(tick)}catch(e){$('status').textContent=e.message}})();
 </script><script defer src="/motion-viewer/assets/motion_viewer_camera.js"></script><script defer src="/motion-viewer/assets/motion_viewer_pose.js"></script><script defer src="/motion-viewer/assets/motion_viewer_coating.js"></script><script defer src="/motion-viewer/assets/motion_viewer_chat.js"></script></body></html>"""
 
 
@@ -2048,9 +2094,10 @@ def viewer_v2_document() -> str:
     return shell.replace("/*CORE_SCRIPT*/", _VIEWER_HTML[start:_VIEWER_HTML.index("</script>", start)], 1)
 
 
-def _legacy_zone_ids(profile: dict[str, Any], worker_root: Path, root: Path) -> bool:
+def _legacy_zone_ids(profile: dict[str, Any], worker_root: Path, root: Path, session_id: str | None = None) -> bool:
     """기록 CSV의 Zone 번호가 학습모드 전문가 원래 번호인지(canonical 로 바꿔야 하는지)."""
-    zone_id_policy = profile.get("identity", {}).get("zone_id_policy")
+    session_policy = _session_record(profile, session_id).get("zone_id_policy") if session_id is not None else None
+    zone_id_policy = session_policy or profile.get("identity", {}).get("zone_id_policy")
     return zone_id_policy == "legacy_expert" if zone_id_policy in {"source", "legacy_expert"} else worker_root == root
 
 
@@ -2068,6 +2115,33 @@ def create_motion_viewer_router(
     root = Path(reference_root)
     router = APIRouter()
     sequence_engine = SequenceAnalysisEngine(root)   # 공개 analyze-sequence 와 같은 전문가 뿌리
+    from trainer.demo_api.training_motion_catalog import TrainingMotionCatalog
+    training_records = TrainingMotionCatalog(root)
+
+    def viewer_workers():
+        workers = {worker['worker_id']: worker for worker in _worker_sources(root)}
+        for worker in training_records.workers():
+            if worker['worker_id'] not in workers:
+                workers[worker['worker_id']] = {**worker, 'catalog_only': True}
+        return list(workers.values())
+
+    def viewer_worker(worker_id):
+        worker = next((item for item in viewer_workers() if item['worker_id'] == worker_id), None)
+        if worker is None:
+            raise HTTPException(status_code=404, detail="worker data not found")
+        return worker
+
+    def viewer_profile(worker, process, mode_id):
+        try:
+            base = None if worker.get('catalog_only') else _read_profile(Path(worker['root']), process, mode_id)
+        except HTTPException as error:
+            if error.status_code != 404:
+                raise
+            base = None
+        profile = training_records.profile(worker['worker_id'], process, mode_id, base)
+        if profile is None:
+            raise HTTPException(status_code=404, detail="motion profile not found")
+        return profile
 
     # 2026-11-13부터 v2가 기본 뷰어다. 옛 화면은 /motion-viewer/v1, 예전 v2 주소(/motion-viewer/v2)도 같은 화면을 연다.
     @router.get("/motion-viewer/v1", include_in_schema=False, response_class=HTMLResponse)
@@ -2152,22 +2226,27 @@ def create_motion_viewer_router(
     @router.get("/motion-viewer/api/catalog", include_in_schema=False)
     def motion_catalog() -> dict[str, Any]:
         workers: list[dict[str, Any]] = []
-        for worker in _worker_sources(root):
+        for worker in viewer_workers():
             processes: list[dict[str, Any]] = []
             worker_root = Path(worker["root"])
             for process, label in _PROCESS_LABELS.items():
                 modes: list[dict[str, Any]] = []
                 for mode_id in range(1, 11):
                     try:
-                        profile = _read_profile(worker_root, process, mode_id)
-                        representative = _representative_session(profile)
+                        profile = _read_profile(worker_root, process, mode_id) if not worker.get('catalog_only') else None
+                        representative = _representative_session(profile) if profile else None
                     except HTTPException:
-                        continue
-                    sessions = sorted(
+                        profile, representative = None, None
+                    sessions = {
                         str(item.get("session_id"))
-                        for item in profile["sessions"]
+                        for item in (profile or {}).get("sessions", [])
                         if item.get("session_id")
-                    )
+                    }
+                    sessions.update(training_records.session_ids(worker['worker_id'], process, mode_id))
+                    sessions = sorted(sessions)
+                    if not sessions:
+                        continue
+                    representative = representative or sessions[0]
                     modes.append({
                         "mode_id": mode_id,
                         "session_count": len(sessions),
@@ -2223,18 +2302,19 @@ def create_motion_viewer_router(
     @router.get("/motion-viewer/api/arm-pose", include_in_schema=False)
     def arm_pose_data(
         worker_id: str = Query(default=_EXPERT_WORKER_ID, pattern="^[A-Za-z0-9_-]+$"),
-        process: str = Query(pattern="^(spray|blasting)$"),
+        process: str = Query(pattern="^(spray|blasting|grinding)$"),
         mode_id: int = Query(ge=1, le=10),
         session_id: str = Query(min_length=1, max_length=100),
     ) -> dict[str, Any]:
         """재생 기록의 자세 유사도(분사마다 팔 관절 엔진). 채점에 수 초 걸려 모션과 따로 받는다."""
         from trainer.demo_api.viewer_arm_pose import build_arm_pose_evaluation
         from trainer.demo_api.viewer_context import sign_context
-        worker_root = Path(_worker_source(root, worker_id)["root"])
-        profile = _read_profile(worker_root, process, mode_id)
+        worker = viewer_worker(worker_id)
+        worker_root = Path(worker["root"])
+        profile = viewer_profile(worker, process, mode_id)
         selected = _representative_session(profile) if session_id == "representative" else session_id
         evaluation = build_arm_pose_evaluation(
-            _session_path(worker_root, process, mode_id, profile, selected), record_id=selected,
+            _session_path(worker_root, process, mode_id, profile, selected, source_root=root), record_id=selected,
             process=process, mode_id=mode_id, mcp_base_url=mcp_base_url, transport=transport,
         )
         return {"selected_session_id": selected, "arm_pose_evaluation": evaluation,
@@ -2243,16 +2323,17 @@ def create_motion_viewer_router(
     @router.get("/motion-viewer/api/alerts", include_in_schema=False)
     def alerts_data(
         worker_id: str = Query(default=_EXPERT_WORKER_ID, pattern="^[A-Za-z0-9_-]+$"),
-        process: str = Query(pattern="^(spray|blasting)$"),
+        process: str = Query(pattern="^(spray|blasting|grinding)$"),
         mode_id: int = Query(ge=1, le=10),
         session_id: str = Query(min_length=1, max_length=100),
     ) -> dict[str, Any]:
         """재생 기록의 순서·방향 알림(공개 이상 알림과 같은 판정). 판정에 수 초 걸려 모션과 따로 받는다."""
         from trainer.demo_api.viewer_alerts import sequence_alerts_for
-        worker_root = Path(_worker_source(root, worker_id)["root"])
-        profile = _read_profile(worker_root, process, mode_id)
+        worker = viewer_worker(worker_id)
+        worker_root = Path(worker["root"])
+        profile = viewer_profile(worker, process, mode_id)
         selected = _representative_session(profile) if session_id == "representative" else session_id
-        path = _session_path(worker_root, process, mode_id, profile, selected)
+        path = _session_path(worker_root, process, mode_id, profile, selected, source_root=root)
         try:
             offset = _clock_offset(path, frame_count)
         except Exception:  # noqa: BLE001 - 알림 시각을 못 맞춰도 재생은 열려야 한다
@@ -2260,26 +2341,26 @@ def create_motion_viewer_router(
             offset = 0.0
         alerts = sequence_alerts_for(
             path, process=process, mode_id=mode_id,
-            legacy=_legacy_zone_ids(profile, worker_root, root), engine=sequence_engine, offset=offset,
+            legacy=_legacy_zone_ids(profile, worker_root, root, selected), engine=sequence_engine, offset=offset,
         )
         return {"selected_session_id": selected, "sequence_alerts": alerts}
 
     @router.get("/motion-viewer/api/motion", include_in_schema=False)
     def motion_data(
         worker_id: str = Query(default=_EXPERT_WORKER_ID, pattern="^[A-Za-z0-9_-]+$"),
-        process: str = Query(pattern="^(spray|blasting)$"),
+        process: str = Query(pattern="^(spray|blasting|grinding)$"),
         mode_id: int = Query(ge=1, le=10),
         session_id: str = Query(min_length=1, max_length=100),
     ) -> dict[str, Any]:
-        worker = _worker_source(root, worker_id)
+        worker = viewer_worker(worker_id)
         worker_root = Path(worker["root"])
-        profile = _read_profile(worker_root, process, mode_id)
-        legacy_zone_ids = _legacy_zone_ids(profile, worker_root, root)
+        profile = viewer_profile(worker, process, mode_id)
         representative = _representative_session(profile)
         selected = representative if session_id == "representative" else session_id
-        selected_path = _session_path(worker_root, process, mode_id, profile, selected)
+        legacy_zone_ids = _legacy_zone_ids(profile, worker_root, root, selected)
+        selected_path = _session_path(worker_root, process, mode_id, profile, selected, source_root=root)
         selected_frames = _canonicalize_zone_items(
-            _frames(selected_path, frame_count), process=process, mode_id=mode_id,
+            _frames(selected_path, frame_count, process), process=process, mode_id=mode_id,
             legacy_expert_zone_ids=legacy_zone_ids,
         )
         if not selected_frames:
@@ -2287,6 +2368,7 @@ def create_motion_viewer_router(
         sampled_sessions: list[list[dict[str, Any]]] = []
         sampled_session_records: list[dict[str, Any]] = []
         session_paths: list[Path] = []
+        zone_policy_by_path: dict[str, bool] = {}
         representative_frames: list[dict[str, Any]] = []
         reference_profile = profile
         expert_session_paths: list[Path] = []
@@ -2295,10 +2377,10 @@ def create_motion_viewer_router(
             if not current_id:
                 continue
             try:
-                current_path = _session_path(worker_root, process, mode_id, profile, current_id)
+                current_path = _session_path(worker_root, process, mode_id, profile, current_id, source_root=root)
                 sampled = _canonicalize_zone_items(
-                    _frames(current_path, frame_count), process=process, mode_id=mode_id,
-                    legacy_expert_zone_ids=legacy_zone_ids,
+                    _frames(current_path, frame_count, process), process=process, mode_id=mode_id,
+                    legacy_expert_zone_ids=_legacy_zone_ids(profile, worker_root, root, current_id),
                 )
             except HTTPException:
                 continue
@@ -2310,6 +2392,7 @@ def create_motion_viewer_router(
                     "frames": sampled,
                 })
                 session_paths.append(current_path)
+                zone_policy_by_path[str(current_path)] = _legacy_zone_ids(profile, worker_root, root, current_id)
                 if current_id == representative:
                     representative_frames = sampled
         if worker["role"] == "expert":
@@ -2318,7 +2401,12 @@ def create_motion_viewer_router(
                 if record["session_id"] != selected
             ]
         else:
-            expert_profile = _read_profile(root, process, mode_id)
+            try:
+                expert_profile = _read_profile(root, process, mode_id)
+            except HTTPException as error:
+                if error.status_code != 404:
+                    raise
+                expert_profile = {'sessions': [], 'aggregate': {'zones': {}, 'macro_orders': []}}
             reference_profile = expert_profile
             evaluation_references = []
             for expert_session in expert_profile["sessions"]:
@@ -2328,13 +2416,14 @@ def create_motion_viewer_router(
                 try:
                     expert_path = _session_path(root, process, mode_id, expert_profile, expert_id)
                     expert_frames = _canonicalize_zone_items(
-                        _frames(expert_path, frame_count), process=process, mode_id=mode_id,
+                        _frames(expert_path, frame_count, process), process=process, mode_id=mode_id,
                         legacy_expert_zone_ids=expert_profile.get("identity", {}).get("zone_id_policy") != "source",
                     )
                 except HTTPException:
                     continue
                 if expert_frames:
                     expert_session_paths.append(expert_path)
+                    zone_policy_by_path[str(expert_path)] = expert_profile.get("identity", {}).get("zone_id_policy") != "source"
                     evaluation_references.append({
                         "session_id": expert_id,
                         "session": expert_session,
@@ -2346,19 +2435,12 @@ def create_motion_viewer_router(
             legacy_expert_zone_ids=legacy_zone_ids,
         )
         reference_paths = session_paths if worker["role"] == "expert" else expert_session_paths
-        reference_legacy_zone_ids = (
-            legacy_zone_ids if worker["role"] == "expert"
-            else reference_profile.get("identity", {}).get("zone_id_policy") != "source"
-        )
+        def reference_zone(path, zone):
+            policy = "learning" if zone_policy_by_path.get(str(path), False) else "source"
+            return canonical_expert_zone_id(process, policy, mode_id, zone) or zone
         paint_statistics = _reference_paint_statistics(reference_paths)
-        zone_flow_guides = _canonicalize_zone_items(
-            _zone_flow_guides(reference_paths), process=process, mode_id=mode_id,
-            legacy_expert_zone_ids=reference_legacy_zone_ids,
-        )
-        zone_surfaces = _canonicalize_zone_items(
-            _zone_surface_statistics(reference_paths), process=process, mode_id=mode_id,
-            legacy_expert_zone_ids=reference_legacy_zone_ids,
-        )
+        zone_flow_guides = _zone_flow_guides(reference_paths, zone_transform=reference_zone)
+        zone_surfaces = _zone_surface_statistics(reference_paths, zone_transform=reference_zone)
         direction_summary = _direction_summary(paint_trace)
         zone_order, zone_statistics = _zone_playback_statistics(
             profile,
@@ -2435,7 +2517,12 @@ def create_motion_viewer_router(
                 profile,
                 selected,
                 evaluation_references,
-            ),
+            ) if evaluation_references or not worker.get('catalog_only') else {
+                'status': 'not_available', 'reason_code': 'expert_reference_unavailable',
+                'message': '이 공정·학습모드의 전문가 비교 기준이 없습니다.',
+                'similarity_percent': None, 'predicted_similarity_percent': None,
+                'reference_session_count': 0, 'zones': {}, 'corrections': [],
+            },
             "process": process,
             "process_label": _PROCESS_LABELS[process],
             "mode_id": mode_id,
@@ -2460,7 +2547,7 @@ def create_motion_viewer_router(
         }
         from trainer.demo_api.coating_query import viewer_coating_context
         payload["coating_evaluation"] = viewer_coating_context(payload, target=_target_coating(
-            process, mode_id, _record_height_maps(worker_root, process, mode_id, profile, selected),
+            process, mode_id, _record_height_maps(worker_root, process, mode_id, profile, selected, source_root=root),
             [*payload["pose_evaluation"].get("zones", {}), *payload["coating_reference"]],
             _session_record(profile, selected)))
         from trainer.demo_api.viewer_alerts import coating_alerts_for, spray_windows

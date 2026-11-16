@@ -681,6 +681,18 @@ def answer_record_question(context: str | None, prompt: str, *, task_type: str,
     query = classify_record_question(prompt, task_type=task_type, previous_subject=previous_subject(recent_turns), playback_zone=facts.playback_zone)
     if query.kind == "none":
         return None
+    # Dataset selectors can expose several texture faces with the same Zone
+    # number. These signed facts explicitly withhold ambiguous measurements;
+    # require the face selector instead of treating them as absent or taking
+    # another face's last row from the legacy Zone-number fact reader.
+    ambiguous = facts.claims.get("ambiguous_zone_ids")
+    ambiguous = {str(zone) for zone in ambiguous if str(zone).isdigit()} if isinstance(ambiguous, list) else set()
+    unresolved = sorted({zone for part in query.parts if part.code for zone in part.zones if zone in ambiguous}, key=int)
+    if unresolved:
+        shown = "·".join(unresolved)
+        return RecordAnswer(f"Zone {shown} 번호가 여러 면에 있습니다. 훈련 문맥에서 면과 Zone을 선택해 주세요.",
+                            "fact", None, None, {"analysis_status": "not_available", "reason_code": "dataset_map_zone_selection_required",
+                                                  "zone_ids": unresolved})
     sentences: list[str] = []
     answered: list[RecordPart] = []
     sequence_context: dict[str, Any] | None = None
