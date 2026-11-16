@@ -137,6 +137,7 @@ def build_query_instruction(
     recent_turns: list[dict[str, str]],
     response_mode: str = "quick",
     concise: bool = False,
+    simulator_context: str = "",
 ) -> str:
     """Add server-owned context without changing the external query contract."""
     context = (client_context or "").strip()
@@ -181,6 +182,8 @@ def build_query_instruction(
             parts.append(f"사용자: {turn['prompt'][:500]}")
             if turn["answer"]:
                 parts.append(f"Co-Pilot: {turn['answer'][:1000]}")
+    if simulator_context:
+        parts.append(simulator_context)
     if concise:
         # History is evidence, not the latest question. Move the actual
         # request after it without duplicating a possibly long prompt.

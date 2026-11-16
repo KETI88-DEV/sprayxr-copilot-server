@@ -135,6 +135,7 @@ trainer/demo_api/session_coating.py
 trainer/demo_api/sim_contracts.py
 trainer/demo_api/sim_session.py
 trainer/demo_api/simulator.py
+trainer/demo_api/simulator_context.py
 trainer/demo_api/simulator_stub.py
 trainer/demo_api/speech_to_text.py
 trainer/demo_api/static/api_docs.js
