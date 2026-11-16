@@ -169,7 +169,7 @@ class CoatingProgressEngine:
         self._applied: dict[tuple[str, str, int], set[str]] = {}
         # 세션이 마지막으로 판정받은 Zone. 다른 Zone으로 넘어간 시퀀스에서 떠난 Zone의 등급을 보려고 둔다.
         self._last_zone: dict[tuple[str, str, int], str] = {}
-        self._results: dict[tuple[str, str, int, str, float | None], CoatingProgress] = {}
+        self._results: dict[tuple[str, str, int, str, float, float], CoatingProgress] = {}
         self._guard = threading.RLock()
 
     @property
@@ -391,6 +391,8 @@ class CoatingProgressEngine:
         mode_id: int,
         surfaces: dict[int, np.ndarray],
         target_thickness_um: float | None = None,
+        min_thickness_um: float | None = None,
+        max_thickness_um: float | None = None,
         behavior: Mapping[str, Mapping[str, Sequence[float]]] | None = None,
     ) -> tuple[list[ZoneJudgment], str | None]:
         """세션 끝 두께(면 번호 → 좌하단 원점 표면)를 프로필의 모든 구역에서 목표 두께에 대고 판정한다.
@@ -441,7 +443,8 @@ class CoatingProgressEngine:
             if mask_reason is not None:
                 continue
             assessment = coating_assessment.assess_zone(
-                surface, zone_mask, target_thickness_um, **(behavior or {}).get(zone_id, {}),
+                surface, zone_mask, target_thickness_um, min_thickness_um=min_thickness_um,
+                max_thickness_um=max_thickness_um, **(behavior or {}).get(zone_id, {}),
             )
             if assessment is not None:
                 expert = measure_zone(
@@ -457,6 +460,7 @@ class CoatingProgressEngine:
     def _left_zone_row(
         self, profile: dict[str, Any], session: dict[int, np.ndarray], zone_id: str,
         *, scenario_id: str, target_thickness_um: float | None,
+        min_thickness_um: float | None = None, max_thickness_um: float | None = None,
     ) -> dict[str, Any] | None:
         """방금 떠난 Zone을 지금의 세션 표면에서 평가한 행. 못 재면 None — 알림용이라 본 판정을 막지 않는다."""
         try:
@@ -476,7 +480,8 @@ class CoatingProgressEngine:
             if mask_reason is not None:
                 return None
             # 조절 후보 표본은 주지 않는다(알림 본문에 싣지 않는다).
-            assessment = coating_assessment.assess_zone(surface, zone_mask, target_thickness_um)
+            assessment = coating_assessment.assess_zone(surface, zone_mask, target_thickness_um,
+                min_thickness_um=min_thickness_um, max_thickness_um=max_thickness_um)
         except (TypeError, ValueError):
             return None
         return None if assessment is None else coating_assessment.zone_row(map_num, zone_id, assessment)
@@ -498,14 +503,20 @@ class CoatingProgressEngine:
         prior_requests: Iterable[AnalyzeSequenceRequest],
         *,
         target_thickness_um: float | None = None,
+        min_thickness_um: float | None = None,
+        max_thickness_um: float | None = None,
     ) -> CoatingProgress:
         """Restore missing crops, including telemetry-only records, without reapplying older pixels."""
         with self._guard:
             from trainer.demo_api.sequence_store import sequence_order_key
 
             key = (request.session_id, request.process_type, request.resolved_mode_id)
-            effective_target = coating_assessment.resolve_target(target_thickness_um)[0]
-            cached = self._results.get((*key, request.sequence_id, effective_target))
+            try:
+                lower, upper = coating_assessment.resolve_band(target_thickness_um,
+                    min_thickness_um=min_thickness_um, max_thickness_um=max_thickness_um)
+            except (TypeError, ValueError):
+                return self._unavailable(request.zone_id, "target_thickness_invalid")
+            cached = self._results.get((*key, request.sequence_id, lower, upper))
             if cached is not None:
                 return cached.model_copy(deep=True)
             if request.process_type == "spray" and request.resolved_mode_id is not None:
@@ -541,10 +552,12 @@ class CoatingProgressEngine:
                             applied.add(previous.sequence_id)
                         if surfaces:
                             self._remember_session(key, surfaces, applied)
-            return self.evaluate(request, target_thickness_um=target_thickness_um)
+            return self.evaluate(request, target_thickness_um=target_thickness_um,
+                min_thickness_um=min_thickness_um, max_thickness_um=max_thickness_um)
 
     def evaluate(
         self, request: AnalyzeSequenceRequest, *, target_thickness_um: float | None = None,
+        min_thickness_um: float | None = None, max_thickness_um: float | None = None,
     ) -> CoatingProgress:
         with self._guard:
             process = request.process_type
@@ -558,9 +571,16 @@ class CoatingProgressEngine:
 
             requested = target_thickness_um
             target_thickness_um, target_basis = coating_assessment.resolve_target(requested)
+            try:
+                target_thickness_um, upper = coating_assessment.resolve_band(requested,
+                    min_thickness_um=min_thickness_um, max_thickness_um=max_thickness_um)
+            except (TypeError, ValueError):
+                return self._unavailable(request.zone_id, "target_thickness_invalid")
+            if min_thickness_um is not None or max_thickness_um is not None:
+                target_basis = "session_target"
             if not math.isfinite(target_thickness_um) or target_thickness_um <= 0:
                 return self._unavailable(request.zone_id, "target_thickness_invalid")
-            result_key = (request.session_id, process, mode_id, request.sequence_id, target_thickness_um)
+            result_key = (request.session_id, process, mode_id, request.sequence_id, target_thickness_um, upper)
             cached = self._results.get(result_key)
             if cached is not None:
                 return cached.model_copy(deep=True)
@@ -644,7 +664,8 @@ class CoatingProgressEngine:
             behavior = coating_assessment.behavior_by_zone(
                 [{"zone_id": request.zone_id, "sequence_result": result_payload}])
             assessment = coating_assessment.assess_zone(
-                surface, zone_mask, requested, **behavior.get(request.zone_id, {}))
+                surface, zone_mask, requested, min_thickness_um=min_thickness_um,
+                max_thickness_um=max_thickness_um, **behavior.get(request.zone_id, {}))
             if assessment is None:
                 return self._unavailable(request.zone_id, "coating_reference_invalid")
 
@@ -682,13 +703,18 @@ class CoatingProgressEngine:
                 next_zone_id = None
                 message = (f"Zone {request.zone_id}의 목표 도막 충족 면적은 {coverage_percent:.1f}%입니다. "
                            "현재 Zone의 목표 미달 영역만 보완하고 이미 두꺼운 영역은 피하세요.")
+                if assessment["overpaint_percent"] > 0:
+                    message = (f"Zone {request.zone_id}의 정상범위 면적은 {coverage_percent:.1f}%, "
+                               f"상한 초과 면적은 {assessment['overpaint_percent']:.1f}%입니다. "
+                               "두꺼운 영역은 분사를 멈추고 하한 미달 영역만 확인하세요.")
 
-            message = f"{coating_assessment.basis_label(target_thickness_um, target_basis)}: {message}"
+            message = f"정상범위 {target_thickness_um:g}~{upper:g}µm: {message}"
 
             previous = self._last_zone.get(session_key)
             if previous is not None and previous != request.zone_id:
                 left = self._left_zone_row(
-                    profile, session, previous, scenario_id=request.scenario_id, target_thickness_um=requested)
+                    profile, session, previous, scenario_id=request.scenario_id, target_thickness_um=requested,
+                    min_thickness_um=min_thickness_um, max_thickness_um=max_thickness_um)
                 if left is not None:
                     row["left_zone"] = left
             self._last_zone[session_key] = request.zone_id

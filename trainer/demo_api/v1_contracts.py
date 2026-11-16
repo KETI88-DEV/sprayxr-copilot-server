@@ -14,7 +14,7 @@ import json
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from trainer.demo_api.contracts import StrictModel
 
@@ -73,6 +73,9 @@ class SessionStartRequest(StrictModel):
             "session_id": "3_11000346_1", "user_id": "1234",
             "scenario_id": "3", "started_at": "2026-10-08T01:05:44.726Z",
             "target_thickness_um": 160.0,
+            "target_thickness_min_um": 160.0,
+            "target_thickness_max_um": 200.0,
+            "tool_type": "spray_gun",
             "worker": {"skill_level": "novice"},
         }},
     )
@@ -110,11 +113,31 @@ class SessionStartRequest(StrictModel):
         gt=0,
         le=20000,
         description=(
-            "이번 세션의 목표 도막 두께(µm)입니다. 스프레이 도막 판정 기준으로 저장되며, "
-            "생략 시 스프레이 기본 목표는 160µm입니다. 블라스팅 세션에서는 사용하지 않습니다."
+            "기존 연동용 목표 도막 하한(µm)입니다. 단일 값 160을 보내도 정상범위는 160~200입니다. "
+            "하한·상한 필드가 있으면 그 범위를 우선합니다. 단일 값만 보내면 상한은 해당 값의 1.25배입니다. "
+            "모두 생략하면 정상범위 160~200µm를 적용하며 블라스팅에는 사용하지 않습니다."
         ),
         examples=[160.0],
     )]
+    target_thickness_min_um: Annotated[float | None, Field(
+        gt=0, le=20000, description="정상 도막 두께의 하한(µm, 경계 포함). max와 함께 입력합니다. 예:160.", examples=[160.0]
+    )] = None
+    target_thickness_max_um: Annotated[float | None, Field(
+        gt=0, le=20000, description="정상 도막 두께의 상한(µm, 경계 포함). min과 함께 입력합니다. 예:200. 상한 초과만 과도막입니다.", examples=[200.0]
+    )] = None
+    tool_type: Annotated[Literal["spray_gun", "blasting_gun"], Field(
+        description="시작 시 첫 Zone 기준을 고를 도구입니다. 생략하면 spray_gun(스프레이). 블라스팅은 blasting_gun을 보냅니다."
+    )] = "spray_gun"
+
+    @model_validator(mode="after")
+    def validate_thickness_range(self):
+        low, high = self.target_thickness_min_um, self.target_thickness_max_um
+        if (low is None) != (high is None):
+            raise ValueError("target_thickness_min_um and target_thickness_max_um must be provided together")
+        if low is not None and low > high:
+            raise ValueError("target_thickness_min_um must be <= target_thickness_max_um")
+        return self
+
     worker: Annotated[WorkerProfile, Field(
         description="훈련자의 숙련도와 주 사용 손 정보입니다. 사용자 프로필 생성 또는 갱신에 사용합니다."
     )]
@@ -300,6 +323,7 @@ class CoatingReport(ReportArea):
     root_cause: CoatingRootCause | None = None
     comparison_basis: Literal["expert_reference", "session_target"] = "expert_reference"
     target_thickness_um: float | None = None
+    normal_band_um: list[float] | None = None
     target_basis: Literal["session_target", "default_target"] | None = None
     expert_comparison: CoatingExpertComparison | None = None
 
@@ -495,3 +519,7 @@ class SessionStateData(StrictModel):
     target_thickness_um: Annotated[float | None, Field(
         description="세션 시작 시 저장된 목표 도막 두께(µm)입니다. 입력하지 않은 기존 세션은 null입니다."
     )]
+    target_thickness_min_um: float | None = None
+    target_thickness_max_um: float | None = None
+    first_zone_id: str | None = None
+    first_zone_guidance: dict[str, Any] | None = None

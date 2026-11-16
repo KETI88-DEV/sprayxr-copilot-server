@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Annotated
 
 from anyio import to_thread
-from fastapi import APIRouter, File, Form, Query, UploadFile
+from fastapi import APIRouter, File, Form, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 
 from trainer.demo_api.copilot_contracts import CopilotQueryRequest, RagUsage, ResponseMode, TaskType
@@ -22,6 +22,7 @@ from trainer.demo_api.copilot_router import (
     execute_copilot_query,
 )
 from trainer.demo_api.guided_workflow import DEMO_USER_ID, ensure_demo_user
+from trainer.demo_api.dialogue import conversation_key
 from trainer.demo_api.query_language import LANGUAGE_DESCRIPTION, QueryLanguage
 from trainer.demo_api.sequence_store import SequenceStore
 from trainer.demo_api.sequence_analysis import SequenceAnalysisEngine
@@ -43,6 +44,14 @@ TEST_VOICE_QUERY_PATH = "/api/v1/test/query-voice"
 TEST_VOICE_ASSET_PATH = "/api/v1/test/assets/query-voice-ko.wav"
 MAX_UPLOAD_BYTES = 1_048_576
 SpeechToTextProvider = Callable[[], SpeechToText]
+_AUDIO_ERRORS = {
+    "audio_must_be_mono": "Invalid audio: WAV must be mono (1 channel)",
+    "audio_must_be_16khz": "Invalid audio: WAV sample rate must be 16000 Hz",
+    "audio_must_be_pcm16": "Invalid audio: WAV must contain uncompressed 16-bit PCM samples",
+    "audio_is_empty": "Invalid audio: WAV contains no samples",
+    "audio_is_truncated": "Invalid audio: WAV sample data is truncated; upload the complete recording",
+    "audio_too_long": "Invalid audio: recording must be 15 seconds or shorter",
+}
 
 _TEST_USER_ID = DEMO_USER_ID
 _TEST_SESSION_ID = "SWAGGER-VOICE-DEMO"
@@ -234,6 +243,7 @@ def create_voice_router(
         context: str | None,
         response_mode: ResponseMode = "quick",
         response_language: QueryLanguage | None = None,
+        conversation_id: str | None = None,
     ) -> JSONResponse:
         started = time.monotonic()
         if len(payload) > MAX_UPLOAD_BYTES:
@@ -241,8 +251,8 @@ def create_voice_router(
 
         try:
             validated = validate_wav(payload)
-        except InvalidAudioError:
-            return error_response(422, "Invalid audio")
+        except InvalidAudioError as exc:
+            return error_response(422, _AUDIO_ERRORS.get(str(exc), "Invalid audio"))
 
         stt_started = time.monotonic()
         try:
@@ -286,6 +296,7 @@ def create_voice_router(
             reports=reports,
             sequence_engine=sequence_engine,
             coating_engine=coating_engine,
+            conversation_id=conversation_id,
         )
         if response.status_code != 200:
             return response
@@ -303,16 +314,19 @@ def create_voice_router(
             language,
             stt_latency_ms,
         )
-        return JSONResponse(status_code=200, content=body)
+        return JSONResponse(status_code=200, content=body, headers={
+            key: value for key, value in response.headers.items() if key.lower().startswith("x-copilot-")
+        })
 
     @router.post(
         VOICE_QUERY_PATH,
         response_model=VoiceCopilotResponse,
         tags=["3. AI Co-Pilot 질의"],
         summary="3-2. VR 음성 Co-Pilot 질의",
-        description="HMD에서 녹음한 WAV를 STT로 변환한 뒤 기존 Query와 동일한 경로로 답변합니다. WAV PCM16·16kHz·mono·15초 이하만 허용합니다. language는 음성 인식 언어이며, response_language를 생략하면 같은 언어로 답합니다. 답변은 텍스트이고 TTS 음성 생성은 포함하지 않습니다.",
+        description="HMD에서 녹음한 WAV를 STT로 변환한 뒤 기존 Query와 동일한 경로로 답변합니다. WAV PCM16·16kHz·mono·15초 이하만 허용합니다. language는 음성 인식 언어이며, response_language를 생략하면 같은 언어로 답합니다. 답변은 텍스트이고 TTS 음성 생성은 포함하지 않습니다. 422는 WAV 형식·길이·인식된 발화 유무를 확인하세요. 503의 Speech recognition은 STT 단계, Model/Query translation은 인식 이후 답변 단계의 실패입니다. 선택 헤더 X-Copilot-Conversation으로 텍스트 Query와 같은 대화 이력을 이어갈 수 있습니다.",
     )
     async def voice_query(
+        request: Request,
         audio: Annotated[UploadFile, File(description="WAV, PCM 16-bit, 16 kHz, mono, maximum 15 seconds")],
         user_id: Annotated[str, Form(min_length=1, description="음성 질문을 요청한 훈련자의 고유 식별자입니다.", examples=["1234"])],
         language: Annotated[VoiceLanguage, Form(description="업로드한 음성의 언어 코드(STT)입니다. " + LANGUAGE_DESCRIPTION, examples=["ko"])],
@@ -344,6 +358,7 @@ def create_voice_router(
             context=context,
             response_mode=response_mode,
             response_language=response_language,
+            conversation_id=conversation_key(request.headers.get("x-copilot-conversation")),
         )
 
     @router.post(

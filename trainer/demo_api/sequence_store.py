@@ -123,7 +123,7 @@ class SequenceStore:
             if "safety_class" not in columns:
                 # 위험 주제 질문의 종류(safety_guard). 후속 질문이 다시 판정하지 않고 이어받는다(v3.4.3).
                 self._conn.execute("ALTER TABLE query_turns ADD COLUMN safety_class TEXT")
-            for column in ("answer_source", "subject"):  # 답 출처(analysis·documents·conversation)와 답이 가리킨 대상(JSON). v3.5.0
+            for column in ("answer_source", "subject", "query_context"):  # sources, subject and bounded feedback/training context
                 if column not in columns:
                     self._conn.execute(f"ALTER TABLE query_turns ADD COLUMN {column} TEXT")
             self._conn.execute("CREATE INDEX IF NOT EXISTS idx_query_dialogue ON query_turns (session_key, user_id, conversation_key, id)")
@@ -282,17 +282,27 @@ class SequenceStore:
         safety_class: str | None = None,
         answer_source: str | None = None,
         subject: Mapping[str, Any] | None = None,
-    ) -> None:
-        """Persist one completed exchange for contextual follow-up questions."""
+        query_context: Mapping[str, Any] | None = None,
+    ) -> int | None:
+        """Persist an exchange and return its receipt for answer feedback."""
         if not session_key:
             return
+        serialized_context = None
+        if query_context is not None:
+            serialized_context = json.dumps(dict(query_context), ensure_ascii=False, separators=(",", ":"))
+            original_bytes = len(serialized_context.encode("utf-8"))
+            if original_bytes > 131_072:
+                # Preserve a complete JSON marker, never a broken/partial fact
+                # snapshot that could silently become a training example.
+                serialized_context = json.dumps({"context_truncated": True, "original_bytes": original_bytes})
         with self._guard, self._conn:
-            self._conn.execute(
-                "INSERT INTO query_turns (session_key, user_id, prompt, answer, task_type, created_at, conversation_key, safety_class, answer_source, subject)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            cursor = self._conn.execute(
+                "INSERT INTO query_turns (session_key, user_id, prompt, answer, task_type, created_at, conversation_key, safety_class, answer_source, subject, query_context)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (session_key, user_id, prompt, answer, task_type, created_at, conversation_key, safety_class, answer_source,
-                 json.dumps(subject, ensure_ascii=False) if subject else None),
+                 json.dumps(subject, ensure_ascii=False) if subject else None, serialized_context),
             )
+            return int(cursor.lastrowid)
 
     def recent_query_turns(self, session_key: str, *, limit: int = 4, user_id: str | None = None, conversation_key: str | None = None) -> list[dict[str, Any]]:
         """Return a bounded chronological window without leaking another session."""

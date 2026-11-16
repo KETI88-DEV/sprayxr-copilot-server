@@ -98,6 +98,17 @@ def test_ui_overall_work_similarity_preset_uses_pose_overall_without_model():
     assert preset_intent("pose_recomm", "전체 작업 유사도는?")=="pose_overall"
 
 
+def test_posture_taxonomy_is_knowledge_even_when_a_pose_label_is_returned():
+    from trainer.demo_api.copilot_intent import is_general_painting_knowledge, fallback_intent
+    for question in ("자세 종류로는 어떤게있어?", "도장 작업 자세에는 어떤 종류가 있나요?", "무릎을 굽힌 자세의 의미는?"):
+        assert is_general_painting_knowledge(question), question
+        for task in ("pose_recomm", "trajectory_recomm"):
+            assert fallback_intent(task, question) == "knowledge", question
+            assert classify_question_intent(task, question, lambda *_: "pose_overall") == "knowledge", question
+    for question in ("지금 자세는 어때?", "내 자세 종류는 뭐야?", "Zone 3 자세는 어때?", "전체 자세 유사도는?"):
+        assert not is_general_painting_knowledge(question), question
+
+
 def test_unpainted_and_distribution_questions_are_status_questions():
     from trainer.demo_api.copilot_intent import is_coating_advice_question, is_coating_status_question
     for question in ("미도장 영역이 있어?", "미도장은?", "도막 분포는?", "도막 등급은?", "도막 등급은 어때?"):

@@ -41,3 +41,9 @@ def test_accepts_pcm_16khz_mono_wav_up_to_fifteen_seconds() -> None:
 def test_rejects_audio_outside_the_public_contract(audio: bytes, reason: str) -> None:
     with pytest.raises(InvalidAudioError, match=reason):
         validate_wav(audio)
+
+
+def test_rejects_wav_with_truncated_pcm_data_even_when_header_is_valid() -> None:
+    audio = _wav()
+    with pytest.raises(InvalidAudioError, match="audio_is_truncated"):
+        validate_wav(audio[:-20])

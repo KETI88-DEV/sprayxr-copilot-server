@@ -99,7 +99,8 @@ def current_next_answer(query, sequences, reports=None, *, sequence_engine=None,
         for previous in sequences.session_bodies_through(request.session_id, request.sequence_id):
             if previous.get("sequence_id") != request.sequence_id:
                 yield AnalyzeSequenceRequest.model_validate(previous)
-    progress = coating_engine.evaluate_replay(request, prior_requests(), target_thickness_um=target)
+    progress = coating_engine.evaluate_replay(request, prior_requests(), target_thickness_um=target,
+                                             **coating_assessment.session_limits(session))
     decision = gate_sequence_decision(request, decision, progress)
     scope.update(analysis_status="available" if progress.available else "not_available",
                  reason_code=progress.reason, status=progress.status)

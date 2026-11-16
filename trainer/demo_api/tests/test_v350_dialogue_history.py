@@ -27,6 +27,29 @@ def test_old_rows_without_a_source_count_as_generated(tmp_path) -> None:
     assert without_generated_answers([turn])[0]["answer"] == ""
 
 
+def test_query_context_is_stored_as_complete_json_and_old_rows_remain_unknown(tmp_path) -> None:
+    import json
+    store = SequenceStore(str(tmp_path / 'contexts.db'))
+    context = {'scenario_id': '3', 'context': '현재 Zone 3', 'pose_context': {'similarity_score': .9}, 'context_truncated': False}
+    receipt = store.record_query_turn(session_key='S', user_id='U', prompt='지금 자세는?', answer='90%입니다.',
+                                     task_type='pose_recomm', created_at='t', query_context=context)
+    row = store._conn.execute('SELECT query_context FROM query_turns WHERE id=?', (receipt,)).fetchone()
+    assert json.loads(row[0]) == context
+    receipt = store.record_query_turn(session_key='S', user_id='U', prompt='q', answer='a', task_type='knowledge_search', created_at='t')
+    assert store._conn.execute('SELECT query_context FROM query_turns WHERE id=?', (receipt,)).fetchone()[0] is None
+
+
+def test_oversized_query_context_is_marked_instead_of_becoming_partial_training_facts() -> None:
+    import json
+    store = SequenceStore(':memory:')
+    receipt = store.record_query_turn(session_key='S', user_id='U', prompt='q', answer='a', task_type='knowledge_search', created_at='t',
+                                     query_context={'context': '가' * 131072, 'context_truncated': False})
+    raw = store._conn.execute('SELECT query_context FROM query_turns WHERE id=?', (receipt,)).fetchone()[0]
+    assert len(raw.encode('utf-8')) <= 131072
+    assert json.loads(raw)['context_truncated'] is True
+    assert 'context' not in json.loads(raw)
+
+
 def test_generated_answers_are_removed_but_analysis_answers_stay() -> None:
     turns = [{"prompt": "a", "answer": "문서 답", "answer_source": "documents"},
              {"prompt": "b", "answer": "대화 답", "answer_source": "conversation"},

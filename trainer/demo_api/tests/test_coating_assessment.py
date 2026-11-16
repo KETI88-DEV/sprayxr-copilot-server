@@ -46,9 +46,11 @@ def test_matches_the_engine_height_png_path() -> None:
     theirs = numerical.assess_zone(numerical.place_crop(numerical.decode_height_png(spec), spec), mask, 160.0)["quality"]
 
     assert mine is not None and theirs["grade"] is not None and 0.0 < theirs["unpainted_fraction"] < 1.0
-    for key in ("grade", "painted_mean_um", "painted_pixel_count", "zone_pixel_count",
-                "unpainted_fraction", "six_band_counts"):
+    # Decoding and physical statistics stay identical; public range policy is now separate.
+    for key in ("painted_mean_um", "painted_pixel_count", "zone_pixel_count", "unpainted_fraction"):
         assert mine[key] == theirs[key], key
+    assert mine["normal_band_um"] == [160, 200]
+    assert sum(mine["six_band_counts"].values()) == mine["painted_pixel_count"]
 
 
 def test_correction_follows_the_author_oracle() -> None:
@@ -68,7 +70,7 @@ def test_missing_target_uses_160_and_says_so() -> None:
     assert (default["grade"], default["status"], default["painted_mean_um"]) == ("normal", "normal", 161.0)
     assert (default["unpainted_fraction"], default["coverage_percent"], default["gate_status"]) == (0.0, 100.0, "complete")
     assert default["six_band_counts"]["from_1_0t_to_lt_1_5t"] == 16
-    assert default["normal_band_um"] == [160.0, 240.0]
+    assert default["normal_band_um"] == [160.0, 200.0]
 
     explicit = _zone(171.0, target_um=200.0)
     assert (explicit["target_thickness_um"], explicit["target_basis"]) == (200.0, "session_target")
@@ -83,7 +85,7 @@ def test_gate_is_area_while_grade_is_mean() -> None:
     assert short["completion_percent"] == 94.0
     assert _zone(171.0, count=95, unpainted=5)["gate_status"] == "complete"
     thick = _zone(251.0, count=100)
-    assert (thick["grade"], thick["coverage_percent"], thick["overpaint_percent"]) == ("above", 100.0, 100.0)
+    assert (thick["grade"], thick["coverage_percent"], thick["overpaint_percent"]) == ("above", 0.0, 100.0)
     assert thick["gate_status"] == "overpaint_risk"
     # 목표의 절반만 쌓인 면: 채운 면적은 0%, 진행률은 50%
     half = _zone(90.0)
@@ -150,20 +152,21 @@ def test_adjustments_follow_the_grade_and_need_samples() -> None:
     assert _zone(0.0, speed_mm_s=[400.0])["adjustment_reason"] == "no_valid_painted_pixels"
 
 
-def test_display_edges_match_the_engine() -> None:
+def test_display_edges_match_the_public_inclusive_range() -> None:
     assert len(ca.BAND_LABELS) == len(numerical.SIX_BAND_KEYS)
-    assert ca.normal_band_um(160.0) == [160.0, 240.0]
-    assert ca.band_edges_um(160.0) == [144.0, 160.0, 240.0, 320.0, 400.0]
+    assert ca.normal_band_um(160.0) == [160.0, 200.0]
+    assert ca.band_edges_um(160.0) == [144.0, 160.0, 200.0, 320.0, 400.0]
     for target in (160.0, 200.0, 137.3):
         band = ca.normal_band_um(target)
-        assert numerical.grade_for_mean(band[0], target) == "normal"
-        assert numerical.grade_for_mean(np.nextafter(band[0], 0), target) == "below"
-        assert numerical.grade_for_mean(np.nextafter(band[1], 0), target) == "normal"
-        assert numerical.grade_for_mean(band[1], target) == "above"
+        assert ca.assess_readings([band[0]], target)["grade"] == "normal"
+        assert ca.assess_readings([band[0] - .01], target)["grade"] == "below"
+        assert ca.assess_readings([band[1]], target)["grade"] == "normal"
+        assert ca.assess_readings([band[1] + .01], target)["grade"] == "above"
         for index, edge in enumerate(ca.band_edges_um(target)):
-            at = numerical.six_band_counts(np.array([edge]), target)
-            under = numerical.six_band_counts(np.array([np.nextafter(edge, 0)]), target)
-            assert at[numerical.SIX_BAND_KEYS[index + 1]] == 1
+            at = ca.band_counts(np.array([edge]), target)
+            under = ca.band_counts(np.array([np.nextafter(edge, 0)]), target)
+            # Upper boundary itself remains in the normal band.
+            assert at[numerical.SIX_BAND_KEYS[index if index == 2 else index + 1]] == 1
             assert under[numerical.SIX_BAND_KEYS[index]] == 1
 
 
@@ -193,14 +196,13 @@ def test_trainee_sentences_use_no_internal_words() -> None:
     assert ca.adjustment_sentence([]) is None
     distribution = ca.distribution_sentence(
         dict(zip(numerical.SIX_BAND_KEYS, (10, 10, 50, 20, 5, 5), strict=True)))
-    assert distribution == ("칠한 면적의 두께 분포: 목표의 90% 미만 10%, 90~100% 10%, 100~150% 50%, "
-                            "150~200% 20%, 200~250% 5%, 250% 이상 5%.")
+    assert distribution == "칠한 면적의 두께 분포: 저도막 20%, 정상 50%, 과도막 30%."
     assert ca.distribution_sentence(rows[3]["six_band_counts"]) is None
     assert ca.basis_label(160.0, "default_target") == "기본 목표 160µm 기준"
     assert ca.basis_label(200.0, "session_target") == "세션 목표 200µm 기준"
-    assert ca.OVER_PHRASE == "목표의 1.5배 이상"
-    assert ca.RULE_NOTE == "등급은 칠한 곳의 평균 두께로 정합니다(목표 미만은 저도막, 목표의 1.5배 이상은 과도막)."
-    assert ca.GRADE_SHORT_LABELS == {"below": "목표 미만", "normal": "정상", "above": "1.5배 이상", "none": "미도장"}
+    assert ca.OVER_PHRASE == "정상범위 상한 초과"
+    assert "기본 정상범위는 160~200µm" in ca.RULE_NOTE
+    assert ca.GRADE_SHORT_LABELS == {"below": "하한 미만", "normal": "정상", "above": "상한 초과", "none": "미도장"}
 
     for text in (*phrases, adjustment, distribution, ca.RULE_NOTE, ca.basis_label(160.0, "default_target")):
         assert not any(word in text for word in ("픽셀", "화소", "마스크", "revision"))
@@ -260,9 +262,9 @@ def test_readings_are_graded_without_the_dead_volume() -> None:
     assert single["painted_mean_um"] == pytest.approx(165)
 
 
-def test_readings_match_the_engine_band_rule() -> None:
+def test_readings_match_the_public_band_rule() -> None:
     values = np.random.default_rng(7).uniform(1, 500, 100)
-    assert ca.assess_readings(values, 160)["six_band_counts"] == numerical.six_band_counts(values, 160.0)
+    assert ca.assess_readings(values, 160)["six_band_counts"] == ca.band_counts(values, 160.0)
 
 
 def test_readings_carry_adjustment_candidates() -> None:

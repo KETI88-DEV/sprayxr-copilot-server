@@ -52,6 +52,7 @@ def validate_wav(audio: bytes) -> ValidatedWav:
             sample_width = source.getsampwidth()
             frame_count = source.getnframes()
             compression = source.getcomptype()
+            frame_bytes = source.readframes(frame_count)
     except (EOFError, wave.Error):
         raise InvalidAudioError("invalid_wav") from None
 
@@ -63,6 +64,8 @@ def validate_wav(audio: bytes) -> ValidatedWav:
         raise InvalidAudioError("audio_must_be_pcm16")
     if frame_count <= 0:
         raise InvalidAudioError("audio_is_empty")
+    if len(frame_bytes) != frame_count * channels * sample_width:
+        raise InvalidAudioError("audio_is_truncated")
     duration = frame_count / sample_rate
     if duration > 15.0:
         raise InvalidAudioError("audio_too_long")

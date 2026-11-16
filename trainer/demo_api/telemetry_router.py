@@ -282,7 +282,12 @@ def create_telemetry_router(
         )
         if analyze:
             assert isinstance(query, AnalyzeSequenceRequest)
-            analysis_key = json.dumps(["zone-target-95-corrected-v1", query.resolved_mode_id, query.process_type, body_sha256])
+            session = session_store.get_session(query.session_id) if session_store is not None else None
+            target = coating_assessment.session_target(session)
+            limits = coating_assessment.session_limits(session)
+            band = coating_assessment.resolve_band(target, **limits)
+            analysis_key = json.dumps([coating_assessment.ASSESSMENT_VERSION, list(band),
+                                       query.resolved_mode_id, query.process_type, body_sha256])
             cached = sequences.load_analysis(
                 session_key=query.session_id, sequence_id=query.sequence_id, analysis_key=analysis_key,
             )
@@ -292,8 +297,6 @@ def create_telemetry_router(
                 guide = guidance_engine.evaluate(query) if guidance_engine is not None else _unavailable_guide()
                 decision = sequence_engine.evaluate(query, sequences) if sequence_engine is not None else None
                 # 목표를 생략하고 시작한 세션은 None이 넘어가 기본 목표로 판정된다.
-                target = (coating_assessment.session_target(session_store.get_session(query.session_id))
-                          if session_store is not None else None)
                 if coating_progress_engine is None:
                     coating_progress = _unavailable_progress(query.zone_id)
                 elif callable(getattr(coating_progress_engine, "evaluate_replay", None)):
@@ -304,6 +307,7 @@ def create_telemetry_router(
                                 yield AnalyzeSequenceRequest.model_validate(body)
                     coating_progress = coating_progress_engine.evaluate_replay(
                         query, prior_requests(), target_thickness_um=target,
+                        **limits,
                     )
                 else:
                     coating_progress = coating_progress_engine.evaluate(query)

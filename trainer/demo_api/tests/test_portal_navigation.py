@@ -34,7 +34,7 @@ def test_all_three_pages_share_navigation_and_select_the_current_page(monkeypatc
     monkeypatch.setenv('DEMO_LIVE_MODE','off')
     monkeypatch.setenv('SEQUENCE_DB_PATH',str(tmp_path/'nav.db'))
     client=TestClient(create_app())
-    expected=['/docs','/admin','/motion-viewer','https://github.com/KETI88-DEV/sprayxr-copilot-server']
+    expected=['/docs','/admin','/motion-viewer','/query-chat','https://github.com/KETI88-DEV/sprayxr-copilot-server']
     for path,selected in [('/docs','/docs'),('/admin','/admin'),('/admin/sessions','/admin'),('/admin/manage','/admin'),('/motion-viewer','/motion-viewer')]:
         response=client.get(path)
         assert response.status_code==200

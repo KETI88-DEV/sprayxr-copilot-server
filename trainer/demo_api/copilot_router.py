@@ -286,7 +286,8 @@ def _pose_engine_question(query: CopilotQueryRequest) -> bool:
     분류가 빗나가면 자유 대화가 채점 없이 수치와 판정을 지어낸다(2026-11-11 재현).
     """
     return (query.task_type == "pose_recomm" and not is_coating_status_question(query.prompt)
-            and not is_coating_advice_question(query.prompt) and not NOT_JOINT.search(query.prompt)
+            and not is_coating_advice_question(query.prompt) and not is_general_painting_knowledge(query.prompt)
+            and not NOT_JOINT.search(query.prompt)
             and bool(re.search(r"자세(?!히|하게|한)|동작|교정|고쳐|고치|pose|posture|팔꿈치|어깨|무릎|허리|elbow|shoulder|knee|(?:zone|존|구역)\s*\d+",
                                query.prompt, re.I)))
 
@@ -788,6 +789,10 @@ async def _execute_copilot_query(
     if asks_for_instructions(query.prompt):
         # 지침 공개·무시 요청은 모델에 보내지 않는다(2026-11-14 운영 q41).
         return _success_response(query, request_started, answer=INSTRUCTION_REFUSAL, retrieval_used=False, citations=[])
+    # A tab suggests a subject, not the user's intent. Definitions and types
+    # must be explained even when a pose/order tab supplies a signed record.
+    if query.task_type != "error_analysis" and is_general_painting_knowledge(query.prompt):
+        query = query.model_copy(update={"task_type": "knowledge_search"})
     questions = (query.prompt, original_prompt or "")
 
     dialogue_turns = await to_thread.run_sync(lambda: sequences.recent_query_turns(
@@ -1511,16 +1516,32 @@ async def execute_copilot_query(
         data.pop("response_language", None)
     data["latency_ms"] = max(0, int((time.monotonic() - request_started) * 1000))
     data["generated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    query_turn_id = None
     try:
-        sequences.record_query_turn(
+        recent_context = sequences.recent_query_turns(
+            query.session_id or "CHAT:" + query.user_id, limit=6,
+            user_id=query.user_id, conversation_key=conversation_id,
+        )
+        query_turn_id = sequences.record_query_turn(
             session_key=query.session_id or "CHAT:" + query.user_id, user_id=query.user_id,
             prompt=query.prompt, answer=data["answer"], task_type=query.task_type,
             created_at=data["generated_at"], conversation_key=conversation_id, safety_class=safety_class,
             answer_source=response.headers.get(ANSWER_SOURCE_HEADER, "analysis"), subject=_header_subject(response),
+            query_context={
+                "scenario_id": data.get("scenario_id") or query.scenario_id,
+                "session_id": query.session_id, "response_mode": query.response_mode,
+                "language": query.language, "response_language": response_language,
+                "analysis_prompt": normalized, "context": query.context,
+                "sequence_context": data.get("sequence_context"), "pose_context": data.get("pose_context"),
+                "coating_context": data.get("coating_context"), "recent_turns": recent_context,
+                "context_truncated": False,
+            },
         )
     except Exception:
         logger.exception("copilot query: failed to store dialogue request_id=%s", query.request_id)
     headers = {ANSWER_SOURCE_HEADER: response.headers.get(ANSWER_SOURCE_HEADER, "analysis")}
+    if isinstance(query_turn_id, int) and not isinstance(query_turn_id, bool):
+        headers["X-Copilot-Query-Turn"] = str(query_turn_id)
     if query.language != "ko":
         headers[ANALYSIS_PROMPT_HEADER] = analysis_prompt_header(normalized)
     return JSONResponse(status_code=200, content=body, headers=headers)
@@ -1552,10 +1573,10 @@ def create_copilot_router(
         summary="3-1. 텍스트 기반 Co-Pilot 질의",
         description=(
             "Replay 및 일반 UI용 텍스트 질의입니다. 답변 수준에 따라 Qwen3-8B 또는 Qwen3.6-27B 모델과 RAG를 사용합니다.\n\n"
-            "- **빠른 안내 (`quick`, 기본값) · Qwen3-8B 모델**: 질문의 핵심부터 짧게 답합니다. 필수 안전 조건은 함께 안내합니다.\n"
+            "- **빠른 안내 (`quick`, 기본값) · Qwen3-8B 모델**: 핵심 한 문장으로 답하며, 필수 안전 조건이 있을 때만 짧은 두 번째 문장을 덧붙입니다.\n"
             "  - 사용자·세션 맥락·검색 근거가 모두 같은 반복 질문은 최대 2분간 생성 결과를 재사용합니다.\n"
             "  - 새 시퀀스·대화·문맥·근거가 반영되면 다시 생성합니다. 새 질문의 처리 시간은 모델 부하에 따라 달라집니다.\n"
-            "- **상세 분석 (`detailed`) · Qwen3.6-27B 모델**: 기존 27B 빠른 답변 수준으로 결론·근거·조치를 간결하게 분석합니다(2문장 또는 최대 2개 짧은 항목).\n"
+            "- **상세 분석 (`detailed`) · Qwen3.6-27B 모델**: 결론과 필요한 근거를 최대 2문장으로 답합니다. 인사말·반복 요약·긴 배경은 생략합니다.\n"
             "- **대화 맥락**: 일반 지식·일상 대화·계산·후속 질문도 처리합니다. 탭 선택이 질문 의도를 강제하지 않습니다. 도장 지식이 필요한 경우에 RAG를 사용합니다.\n"
             "  - 선택 헤더 `X-Copilot-Conversation`: 채팅 창 식별자(영문·숫자·`._:-`, 최대 128자). 사용자·훈련 세션과 함께 대화 이력을 분리합니다. 생략하면 기본 대화를 사용합니다. 인증 수단은 아닙니다.\n"
             "  - 선택 헤더 `X-Copilot-Source`: `motion-viewer`(3D VIEWER), `assistant-test`(TEST). DB 표시용 출처 힌트이며 훈련 대상 작업자 ID와 별개입니다.\n"

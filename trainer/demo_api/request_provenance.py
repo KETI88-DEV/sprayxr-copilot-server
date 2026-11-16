@@ -9,7 +9,7 @@ from ipaddress import ip_address
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
-CALLER_LABELS = {"motion-viewer": "3D VIEWER", "assistant-test": "TEST",
+CALLER_LABELS = {"motion-viewer": "3D VIEWER", "assistant-test": "TEST", "query-chat": "QUERY CHAT",
                  "test-api": "TEST API", "api-docs": "API DOCS", "simulator-api": "SIMULATOR/API"}
 PROVENANCE_COLUMNS = ("client_ip", "caller_source", "caller_origin", "caller_referer", "source_evidence")
 
@@ -49,7 +49,7 @@ def capture_provenance(scope: dict[str, Any]) -> dict[str, Any]:
     headers = scope.get("headers", [])
     supplied = _header(headers, b"x-copilot-source").strip().lower()
     referer = _safe_url(_header(headers, b"referer"))
-    if supplied in {"motion-viewer", "assistant-test"}:
+    if supplied in {"motion-viewer", "assistant-test", "query-chat"}:
         source, evidence = supplied, "header"
     elif scope.get("path", "").startswith("/api/v1/test/"):
         source, evidence = "test-api", "path"

@@ -58,6 +58,26 @@ def client(pipeline):
 
 
 @pytest.mark.parametrize("task", ["knowledge_search", "pose_recomm", "trajectory_recomm"])
+def test_posture_types_are_explained_instead_of_scoring_current_pose(task):
+    class Knowledge(Pipeline):
+        def plan_copilot_dialogue(self, *args, **kwargs):
+            raise AssertionError("A standalone taxonomy question does not need dialogue classification")
+        def run(self, **kwargs):
+            self.calls.append(kwargs)
+            return {"response": "[답변] 도장 작업 자세는 선 자세, 몸을 낮춘 자세, 쪼그려 앉은 자세 등으로 나눌 수 있습니다.", "rag_chunks": []}
+    pipeline = Knowledge()
+    response = client(pipeline).post("/api/v1/copilot/query", json={
+        "user_id": "routing-test", "task_type": task,
+        "prompt": "자세 종류로는 어떤게있어?", "context": context("pose_recomm")})
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert "선 자세" in data["answer"]
+    assert "유사도" not in data["answer"]
+    assert data["retrieval_used"] is True
+    assert len(pipeline.calls) == 1
+
+
+@pytest.mark.parametrize("task", ["knowledge_search", "pose_recomm", "trajectory_recomm"])
 @pytest.mark.parametrize("mode", ["quick", "detailed"])
 def test_coating_question_answers_signed_coating_values_in_every_tab(task, mode):
     pipeline = Pipeline()

@@ -63,13 +63,13 @@ TEST_VOICE_QUERY_PATH = "/api/v1/test/query-voice"
 TEST_VOICE_ASSET_PATH = "/api/v1/test/assets/query-voice-ko.wav"
 
 
-def _client(stt: _Stt, pipeline: _Pipeline, reports: V1Store | None = None) -> TestClient:
+def _client(stt: _Stt, pipeline: _Pipeline, reports: V1Store | None = None, store: SequenceStore | None = None) -> TestClient:
     app = FastAPI()
     app.include_router(
         create_voice_router(
             lambda: pipeline,
             stt_provider=lambda: stt,
-            store=SequenceStore(":memory:"),
+            store=store if store is not None else SequenceStore(":memory:"),
             mcp_base_url="http://127.0.0.1:9",
             reports=reports,
         )
@@ -114,6 +114,31 @@ def test_blank_transcript_is_rejected_without_calling_the_model() -> None:
     assert response.status_code == 422
     assert response.json()["data"] is None
     assert pipeline.calls == []
+
+
+def test_voice_uses_the_same_conversation_header_and_preserves_turn_reference() -> None:
+    store = SequenceStore(":memory:")
+    client = _client(_Stt(), _Pipeline(), store=store)
+    response = client.post(VOICE_QUERY_PATH, headers={"X-Copilot-Conversation": "voice-thread"},
+                           data={"user_id": "W-017", "language": "ko"},
+                           files={"audio": ("question.wav", _wav(), "audio/wav")})
+    assert response.status_code == 200
+    turns = store.recent_query_turns("CHAT:W-017", user_id="W-017", conversation_key="voice-thread")
+    assert len(turns) == 1 and turns[0]["prompt"] == "저도막이 무엇인지 설명해줘"
+    assert int(response.headers["X-Copilot-Query-Turn"]) > 0
+    assert response.headers["X-Copilot-Answer-Source"] == "documents"
+    assert store.recent_query_turns("CHAT:W-017", user_id="W-017", conversation_key="another-thread") == []
+
+
+def test_invalid_wav_reports_which_input_requirement_failed() -> None:
+    stt = _Stt()
+    client = _client(stt, _Pipeline())
+    audio = _wav()[:-20]
+    response = client.post(VOICE_QUERY_PATH, data={"user_id": "W-017", "language": "ko"},
+                           files={"audio": ("partial.wav", audio, "audio/wav")})
+    assert response.status_code == 422
+    assert "truncated" in response.json()["message"]
+    assert stt.calls == []
 
 
 @pytest.mark.parametrize("value,enabled", [(None, True), ("Y", True), ("N", False), ("y", True), ("n", False)])
