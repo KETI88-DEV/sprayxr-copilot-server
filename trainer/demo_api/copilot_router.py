@@ -286,10 +286,20 @@ def _pose_engine_question(query: CopilotQueryRequest) -> bool:
     분류가 빗나가면 자유 대화가 채점 없이 수치와 판정을 지어낸다(2026-11-11 재현).
     """
     return (query.task_type == "pose_recomm" and not is_coating_status_question(query.prompt)
-            and not is_coating_advice_question(query.prompt) and not is_general_painting_knowledge(query.prompt)
+            and not is_coating_advice_question(query.prompt) and not is_general_painting_knowledge(query.prompt, pose=True)
             and not NOT_JOINT.search(query.prompt)
             and bool(re.search(r"자세(?!히|하게|한)|동작|교정|고쳐|고치|pose|posture|팔꿈치|어깨|무릎|허리|elbow|shoulder|knee|(?:zone|존|구역)\s*\d+",
                                query.prompt, re.I)))
+
+
+def _pose_context(query: CopilotQueryRequest) -> bool:
+    """자세 탭이거나 서명된 자세 기록이 붙은 질문. 이때만 자세 낱말을 일반 지식 판단에 센다(v3.6.2)."""
+    if query.task_type == "pose_recomm":
+        return True
+    try:
+        return _parse_motion_viewer_context(query.context, task_type="pose_recomm") is not None
+    except _InvalidViewerPlayback:
+        return False
 
 
 def _asks_current_viewer_pose(prompt: str) -> bool:
@@ -791,7 +801,8 @@ async def _execute_copilot_query(
         return _success_response(query, request_started, answer=INSTRUCTION_REFUSAL, retrieval_used=False, citations=[])
     # A tab suggests a subject, not the user's intent. Definitions and types
     # must be explained even when a pose/order tab supplies a signed record.
-    if query.task_type != "error_analysis" and is_general_painting_knowledge(query.prompt):
+    pose_context = _pose_context(query)
+    if query.task_type != "error_analysis" and is_general_painting_knowledge(query.prompt, pose=pose_context):
         query = query.model_copy(update={"task_type": "knowledge_search"})
     questions = (query.prompt, original_prompt or "")
 
@@ -926,7 +937,7 @@ async def _execute_copilot_query(
             planned_pipeline = None
         planner = select_query_pipeline(planned_pipeline, "quick") if planned_pipeline else None
         supports_dialogue = getattr(planner, "supports_copilot_dialogue", callable(getattr(planner, "plan_copilot_dialogue", None)))
-        if supports_dialogue and query.task_type == "knowledge_search" and is_general_painting_knowledge(query.prompt):
+        if supports_dialogue and query.task_type == "knowledge_search" and is_general_painting_knowledge(query.prompt, pose=pose_context):
             # 계획 모델은 직전 자세·순서 대화에 끌려 일반 지식 질문을 기록 후속 대화로 분류한다(2026-11-12 재현). 부르지 않는다.
             decision = {"kind": "coating_knowledge", "intent": "knowledge", "scope": "unspecified"}
         elif supports_dialogue:

@@ -101,12 +101,15 @@ def test_ui_overall_work_similarity_preset_uses_pose_overall_without_model():
 def test_posture_taxonomy_is_knowledge_even_when_a_pose_label_is_returned():
     from trainer.demo_api.copilot_intent import is_general_painting_knowledge, fallback_intent
     for question in ("자세 종류로는 어떤게있어?", "도장 작업 자세에는 어떤 종류가 있나요?", "무릎을 굽힌 자세의 의미는?"):
-        assert is_general_painting_knowledge(question), question
+        # v3.6.2: 자세 낱말만 있는 질문은 자세 문맥(pose=True)에서만 도장 지식이다("요가 자세 종류는?"은 잡담).
+        assert is_general_painting_knowledge(question, pose=True), question
         for task in ("pose_recomm", "trajectory_recomm"):
             assert fallback_intent(task, question) == "knowledge", question
             assert classify_question_intent(task, question, lambda *_: "pose_overall") == "knowledge", question
     for question in ("지금 자세는 어때?", "내 자세 종류는 뭐야?", "Zone 3 자세는 어때?", "전체 자세 유사도는?"):
-        assert not is_general_painting_knowledge(question), question
+        assert not is_general_painting_knowledge(question, pose=True), question
+    assert not is_general_painting_knowledge("자세 종류로는 어떤게있어?")
+    assert is_general_painting_knowledge("도장 작업 자세에는 어떤 종류가 있나요?")
 
 
 def test_unpainted_and_distribution_questions_are_status_questions():
