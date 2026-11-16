@@ -314,7 +314,7 @@ def test_blasting_keeps_reference_order_without_spray_thickness_gate(tmp_path: P
     store.record(session_key=req.session_id, sequence_id=req.sequence_id, body_sha256="blasting",
                  frames=0, received_at="now", body=req.model_dump_json())
     decision = SequenceAnalysisEngine(tmp_path).evaluate(req, store)
-    assert "다음 권장 구역은 2" in decision.text_guide
+    assert "다음 권장 Zone 2" in decision.text_guide
     assert CoatingProgressEngine(tmp_path).evaluate(req).reason == "coating_not_applicable"
 
 
@@ -329,7 +329,7 @@ def test_completed_zone_direction_guidance_has_no_stale_unknown_gate_message(tmp
                           {"index": 2, "gun_metrics": {"raytexuv": [0, 100]}}]}).sequence_info
     data = TestClient(app).post("/api/v1/copilot/analyze-sequence", json=req.model_dump(mode="json")).json()["data"]
     assert data["sequence_feedback"]["reason_code"] == "direction_deviation"
-    assert "1번 구역은 수평 방향으로 도장하세요." in data["text_guide"] and "horizontal" not in data["text_guide"]
+    assert "Zone 1: 수평 방향으로 도장하세요." in data["text_guide"] and "horizontal" not in data["text_guide"]
     assert "확인할 수 없습니다" not in data["text_guide"]
     assert data["coating_progress"]["status"] == "complete"
 
@@ -400,8 +400,8 @@ def test_undercoat_alert_fires_when_the_trainee_leaves_a_below_zone(tmp_path: Pa
     # 본문의 Zone은 지금 Zone(2)이 아니라 떠난 Zone(1)이다.
     assert alerts[0].payload == {
         "reason_code": "zone_grade_below",
-        "message": "기본 목표 160µm 기준: 방금 떠난 Zone 1의 칠한 곳 평균 두께가 90µm로 목표 미만입니다(저도막). "
-                   "돌아가 얇은 곳을 보완하세요.",
+        "message": "기본 목표 160µm 기준: 방금 떠난 Zone 1 칠한 곳 평균 90µm(하한 미만·저도막). "
+                   "돌아가 얇은 곳만 보완하세요.",
         "zone_id": "1", "map_num": 1, "status": "under_app", "grade": "below",
         # 원시 100µm는 PNG 양자화로 칠한 곳 평균 89.96µm가 된다. 저도막 행은 0.1 단위로 내린다.
         "thickness_um": 89.9, "target_thickness_um": 160.0, "target_basis": "default_target",
@@ -501,8 +501,8 @@ def test_report_session_target_cannot_complete_without_official_mask(tmp_path: P
 
 
 # 2026-11-12 책임자 결정: 면적 95%를 채워도 칠한 곳 평균이 목표 미만(저도막)이면 다음 Zone으로 보내지 않는다.
-THIN_MEAN_GUIDE = ("기본 목표 160µm 기준: Zone 1의 목표 도막 충족 면적은 95.0%이지만 칠한 곳 평균 두께가 "
-                   "153µm로 목표 미만입니다(저도막). 이 Zone의 얇은 곳을 보완하세요.")
+THIN_MEAN_GUIDE = ("정상범위 160~200µm: Zone 1 충족 면적 95.0%, 칠한 곳 평균 "
+                   "153µm(하한 미만·저도막). 얇은 곳만 보완하세요.")
 
 
 def thin_mean(seq: int = 1) -> AnalyzeSequenceRequest:
@@ -550,8 +550,8 @@ def test_thin_zone_guide_and_leaving_alert_agree(tmp_path: Path) -> None:
     post(client, zone2(4))
     alerts = coating_alerts(bus)
     assert [(alert.anomaly_type, alert.sequence_id) for alert in alerts] == [("coating_under_app", "SEQ-002")]
-    assert alerts[0].payload["message"] == ("기본 목표 160µm 기준: 방금 떠난 Zone 1의 칠한 곳 평균 두께가 153µm로 "
-                                            "목표 미만입니다(저도막). 돌아가 얇은 곳을 보완하세요.")
+    assert alerts[0].payload["message"] == ("기본 목표 160µm 기준: 방금 떠난 Zone 1 칠한 곳 평균 153µm"
+                                            "(하한 미만·저도막). 돌아가 얇은 곳만 보완하세요.")
 
 
 @pytest.mark.parametrize(("req", "status", "next_zone"), [(thin_mean(), "needs_more", None), (request(), "complete", "2")])
@@ -588,7 +588,7 @@ def test_mean_just_under_the_target_reads_the_same_below_target_number_everywher
     progress, feedback = data["coating_progress"], data["coating_feedback"]
     assert (progress["status"], progress["next_zone_id"], feedback["grade"]) == ("needs_more", None, "below")
     assert feedback["thickness_um"] == 159.9
-    assert "칠한 곳 평균 두께가 159.9µm로 목표 미만입니다(저도막)." in progress["message"]
+    assert "칠한 곳 평균 159.9µm(하한 미만·저도막)." in progress["message"]
     assert "칠한 곳 평균 159.9µm" in feedback["message"]
     post(client, zone2(2))
-    assert "칠한 곳 평균 두께가 159.9µm로 목표 미만입니다(저도막)." in coating_alerts(bus)[0].payload["message"]
+    assert "칠한 곳 평균 159.9µm(하한 미만·저도막)." in coating_alerts(bus)[0].payload["message"]

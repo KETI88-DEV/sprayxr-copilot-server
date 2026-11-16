@@ -236,12 +236,11 @@ def test_detailed_order_mode_explains_verified_report_without_extra_generation()
     )).json()["data"]
 
     assert quick["answer"].startswith("권장 작업 순서는 Zone 1 → 3 → 2입니다.")
-    assert detailed["answer"] != quick["answer"]
+    assert detailed["answer"] == quick["answer"]  # 같은 조회 요청은 응답 모드만으로 불필요한 통계를 더하지 않는다.
     assert "[" not in detailed["answer"]  # 제목 틀 없이 문장으로 낸다(2026-11-11 지시)
     assert "Zone 1 → 3 → 2" in detailed["answer"]
-    assert "유동 구간" in detailed["answer"]
-    assert "순서 준수율은 67%입니다." in detailed["answer"]
-    assert not detailed["answer"].startswith(quick["answer"])
+    assert "유동 구간" not in detailed["answer"] and "67%" not in detailed["answer"]
+    assert detailed["sequence_context"]["adherence_rate"] == .67  # 구조화된 근거는 온전히 유지한다.
     assert not detailed["answer"].rstrip().endswith("근거:")
     assert pipeline.calls == []
     assert detailed["degraded"] is False

@@ -52,7 +52,7 @@ def test_sequence_answer_without_corrections_does_not_call_the_arm_normal() -> N
 
     # 2026-11-14: 교정이 없다는 것을 "통상 범위 안"으로 단정하지 않는다(엔진 안내문과 같은 단서를 붙인다).
     assert pose_query.answer_sequence_question(pose, prompt="오른손을 어떻게 고쳐?") == (
-        "이 분사에서 오른팔 교정 항목은 나오지 않았습니다. 교정 항목이 없다고 해서 자세가 정상이라는 뜻은 아닙니다.")
+        "이 분사에서 오른팔 교정 항목은 나오지 않았습니다. 교정이 없어도 자세가 정상이라는 뜻은 아닙니다.")
 
 
 @pytest.mark.parametrize("prompt", ["어깨를 더 올려야 해?", "무릎을 굽혀야 해?"])
@@ -186,7 +186,7 @@ def test_report_answer_names_grades_means_and_unpainted_share(detailed: bool) ->
     assert answer.split("\n") == [
         "기본 목표 160µm 기준으로 Zone별 도막을 판정했습니다. "
         # 966a3d0 정상 범위 기준(기본 160~200µm). 문장은 coating_assessment.RULE_NOTE 그대로다.
-        "등급은 칠한 곳의 평균 두께로 정합니다(하한 미만은 저도막, 하한~상한은 정상, 상한 초과는 과도막). 기본 정상범위는 160~200µm입니다.",
+        "칠한 곳 평균 기준: 하한 미만 저도막·하한~상한 정상(경계 포함)·상한 초과 과도막. 기본 160~200µm.",
         "저도막: 1개 — Map 1 · Zone 3(칠한 곳 평균 98µm, 미도장 12%)",
         "과도막: 1개 — Map 1 · Zone 5(칠한 곳 평균 301µm, 미도장 3%)",
         "정상: 1개",

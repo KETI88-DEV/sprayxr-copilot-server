@@ -39,7 +39,7 @@ def answer_system_prompt(*, detailed: bool, has_evidence: bool) -> str:
         '답변 전에 묻는 대상과 범위가 맞는지, 요청한 원인·방법·차이를 빠뜨리지 않았는지 스스로 확인하세요. '
         + ('핵심 결론과 꼭 필요한 근거·조치를 최대 두 문장으로 간결하게 설명하세요. '
            if detailed else '핵심 한 문장을 우선하되 요청한 원인·조건을 빠뜨리면 짧은 두 번째 문장을 사용하세요. ')
-        + '한국어 존댓말을 사용하고 인사말·반복 요약·장황한 배경·표는 생략하세요. 형식은 [답변] 본문입니다. '
+        + '한국어 존댓말을 사용하고 인사말·반복 요약·장황한 배경·표는 생략하세요. 불필요한 예시·중복 부연 없이 답하세요. 형식은 [답변] 본문입니다. '
         + ('다음 줄 [근거]에는 실제 사용한 문서의 chunk_id만 쓰세요. 충분한 근거가 없으면 그 한계를 말하고 인용을 지어내지 마세요.'
            if has_evidence else '외부 참고 문서는 제공되지 않았습니다. 문서 번호나 [근거] 줄을 만들지 마세요.')
     )
@@ -60,6 +60,28 @@ def cacheable_candidate(answer: str) -> bool:
     return not bool(re.search(
         r'확인(?:할수없|하지못|되지않)|판단할수없|근거(?:를찾지못|가없|가부족|부족)|'
         r'답변(?:을생성하지못|을제공할수없|하기어렵)|자료(?:가부족|만으로)|질문에맞는설명을충분히', compact))
+
+
+def has_repetition_loop(body: str) -> bool:
+    """Reject three consecutive identical meaningful sentences or list clauses.
+
+    This detects a generation loop, not reuse of a term across distinct facts.
+    Numeric values, ranges and units can legitimately repeat in a requested list.
+    """
+    number = r'[+±−-]?\d+(?:\.\d+)?'
+    unit = r'(?:[µμu]m|(?:mm|cm|m)(?:/s)?|mms|°|deg|%|ms|s|min|h|Hz|kPa|MPa|bar|psi|도|초|분|시간|회|개|곳|건)'
+    measurement = rf'{number}\s*(?:{unit})?(?:\s*[~–—-]\s*{number}\s*(?:{unit})?)?'
+    previous, count = None, 0
+    for part in re.split(r'[\r\n,，;；.!?。！？]+', body):
+        part = re.sub(r'\s+', ' ', part).strip().casefold()
+        if not part or re.fullmatch(measurement, part, re.I) or not re.search(r'[가-힣A-Za-z]', part):
+            previous, count = None, 0
+            continue
+        count = count + 1 if part == previous else 1
+        if count >= 3:
+            return True
+        previous = part
+    return False
 
 
 def _score(chunk: Mapping[str, Any]) -> float | None:
@@ -229,7 +251,7 @@ def review_answer(question: str, instruction: str, candidate: str, evidence: Seq
             else:
                 # An empty/failed body is a known structural failure; a model
                 # must never be able to approve it merely for citing a source.
-                decision, reason = 'rewrite', '후보 답변의 본문이 비어 있거나 생성 형식이 실패함'
+                decision, reason = 'rewrite', '본문이 비어 있거나 같은 문장·절이 반복되는 생성 형식 실패'
             if decision == 'ok':
                 support = _supporting_indices(raw_review)
                 if support is None and require_evidence:

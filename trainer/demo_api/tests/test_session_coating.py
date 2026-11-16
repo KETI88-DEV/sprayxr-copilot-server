@@ -185,7 +185,7 @@ def test_worst_zone_carries_adjustment_candidates_without_claiming_a_cause(
 
     worst = result.report["worst_zones"][0]
     assert worst["zone_id"] == "3"
-    assert "이동 속도를 높이는 쪽" in worst["action"] and "확정된 것은 아닙니다" in worst["action"]
+    assert "이동 속도를 높이는 쪽" in worst["action"] and "원인 미확정" in worst["action"]
     assert worst["cause"] == "원인 후보: 이동 속도 (확정 아님)"
     zone3 = next(zone for zone in result.zones if zone["zone_id"] == "3")
     assert zone3["adjustments"][0]["evidence_kind"] == "quality_rule_candidate"
@@ -310,7 +310,11 @@ def test_after_complete_pose_recomm_names_the_most_problematic_zone(engine: Coat
     report_id = response.json()["data"]["report_id"]
     report = client.get(f"/api/v1/reports/{report_id}").json()["data"]["report"]
     assert report["coating_report"]["analysis_status"] == "available"
-    assert report["coating_report"]["guideline"] in report["llm_briefing"]
+    worst = report["coating_report"]["worst_zones"][0]
+    assert f"Zone {worst['zone_id']}" in report["llm_briefing"]
+    assert f"{worst['thickness_um']:g}µm" in report["llm_briefing"]
+    assert "160~200µm" in report["llm_briefing"]
+    assert report["coating_report"]["guideline"] not in report["llm_briefing"]
     assert [zone["zone_id"] for zone in report["pose_report"]["zone_summary"]] == ["1", "3"]
 
     worst = _ask(client, "가장 문제 있는 구역이 어디야?")
@@ -398,7 +402,7 @@ def test_without_an_expert_reference_the_briefing_says_why_coating_is_missing(tm
     report = client.get(f"/api/v1/reports/{response.json()['data']['report_id']}").json()["data"]["report"]
 
     assert report["coating_report"]["reason_code"] == "reference_unavailable"
-    assert "도막은 분석하지 못했습니다: 이 콘텐츠의 Zone 기준 자료가 없어 도막을 판정하지 못했습니다." in report["llm_briefing"]
+    assert "도막 미평가(Zone 기준 없음)." in report["llm_briefing"]
     assert report["pose_report"]["analysis_status"] == "available"
 
 
@@ -589,7 +593,7 @@ def test_order_answers_follow_recommended_actual_missing_and_direction_questions
     direction = answer_order_question(found, prompt="도포 방향은 잘 지켰어?")
 
     assert "7 → 4 → 8 → 9" in recommended.answer
-    assert "Zone 7에서 시작" in recommended.answer
+    assert "Zone 7 →" in recommended.answer
     assert actual.answer == "이번 세션에서 처음 칠한 순서는 9 → 7 → 4입니다."
     assert missing.answer == "권장 순서 중 칠하지 않은 구역은 8번입니다."
     assert direction.answer == "전문가 기준 도포 방향 준수율은 75%입니다."
@@ -659,9 +663,10 @@ def test_report_carries_the_expert_comparison_beside_the_target_grade(engine: Co
 def test_expert_sentence_follows_the_target_sentence(engine: CoatingProgressEngine) -> None:
     guideline = _expert_report(engine).report["guideline"]
 
-    assert guideline.index("기본 목표 160µm 기준") < guideline.index("참고로 전문가 최종 도막과 비교하면")
+    expert_label = "전문가 최종 도막 대비:"
+    assert guideline.index("기본 목표 160µm 기준") < guideline.index(expert_label)
     assert guideline.endswith("(보정 전 두께 기준).") or guideline.endswith("입니다(보정 전 두께 기준).")
-    expert_part = guideline[guideline.index("참고로 전문가 최종 도막과 비교하면"):]
+    expert_part = guideline[guideline.index(expert_label):]
     assert "저도막" not in expert_part and "과도막" not in expert_part
     assert "전문가보다 얇은 구역 1개(2번)" in expert_part and "전문가보다 두꺼운 구역 1개(3번)" in expert_part
 

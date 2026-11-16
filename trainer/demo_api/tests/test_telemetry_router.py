@@ -269,7 +269,7 @@ def test_analyze_sequence_fills_coating_feedback_from_the_assessment() -> None:
         assert feedback[key] == _ZONE_ROW[key], key
     assert feedback["message"] == (
         "Zone 1: 저도막(칠한 곳 평균 98µm, 미도장 12%) "
-        "조절 후보: 이동 속도를 낮추는 쪽. 원인으로 확정된 것은 아닙니다."
+        "조절 후보: 이동 속도를 낮추는 쪽(원인 미확정)."
     )
     assert feedback["algorithm_version"].startswith("coating-v1-adapter/")
     # 재전송은 저장된 분석을 돌려준다.

@@ -175,7 +175,7 @@ def test_query_less_sequences_are_scored_from_the_csv_and_stored_ones_win() -> N
     }]
     assert len(report["priority_corrections"]) == sa.PRIORITY_LIMIT
     # 문장은 분사마다 다르지만 부위는 같다 — 부위로 센다.
-    assert f"오른쪽 위팔입니다({scored}회)" in report["guideline"]
+    assert f"주요 교정: 오른쪽 위팔({scored}회)" in report["guideline"]
 
 
 def test_unscorable_sequences_leave_the_average_and_are_counted() -> None:
@@ -190,7 +190,7 @@ def test_unscorable_sequences_leave_the_average_and_are_counted() -> None:
     assert result.average_similarity_score == pytest.approx(0.5)
     assert result.counts["not_scored"] == 2
     assert result.counts["reason:skeleton_height_out_of_range"] == 2
-    assert "판정할 수 없는 분사 2회" in result.guideline
+    assert "미판정 2회 제외" in result.guideline
 
 
 def test_a_legacy_csv_falls_back_to_stored_sequences_only() -> None:
@@ -245,7 +245,7 @@ def test_zone_summary_keeps_only_the_most_frequent_joint_per_zone() -> None:
     priority = sa.priority_corrections(zones)
 
     assert [(p["zone_id"], p["joint"]) for p in priority] == [("12", "LeftHand"), ("3", "RightForeArm")]
-    assert priority[1]["correction_guidance"].startswith("3번 구역에서 분사 3회 중 2회, ")
+    assert priority[1]["correction_guidance"].startswith("3번 구역 분사 3회 중 2회: ")
     assert "(평균 8cm)" in priority[1]["correction_guidance"]
 
 
@@ -359,4 +359,4 @@ def test_limited_confidence_is_preserved_in_session_report_without_claiming_norm
     assert report["limited_sequence_count"] == report["evaluated_sequence_count"] > 0
     assert report["reason_codes"] == ["comparison_scope_limited"]
     assert "참고로만" in report["guideline"]
-    assert "모두 숙련 작업자의 통상 범위 안" not in report["guideline"]
+    assert "모두 숙련자 통상 범위 안" not in report["guideline"]

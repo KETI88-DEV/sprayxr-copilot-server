@@ -67,7 +67,10 @@ def answer_regex(*, has_evidence: bool) -> str:
 
 def quick_answer_regex(*, has_evidence: bool) -> str:
     """A short live paragraph and one canonical citation; no transport/control tags."""
-    body = r"\[답변\] [^\n\[<>]+"
+    # The live model must start an answer before moving to the optional citation.
+    # Otherwise a space alone is a valid body, so concise decoding can emit only
+    # the scaffold and evidence. Keep the evaluation grammar above unchanged.
+    body = r"\[답변\] [^\s\[<>][^\n\[<>]*"
     return body + rf"(\n\[근거\] {_DOC_ID})?" if has_evidence else body
 
 

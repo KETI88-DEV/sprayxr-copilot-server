@@ -87,7 +87,8 @@ def test_t15_foreign_question_gets_the_fixed_high_pressure_answer(language: str,
     assert pipeline.calls == []  # 손이 건 끝에 닿는 질문은 모델을 부르지 않고 고정 답이다(2차 검토 2026-11-14)
     korean = _korean_answer(pipeline)
     assert korean == safety_guard.HIGH_PRESSURE_ANSWER
-    assert "손가락" in korean and "피부" in korean and "하지 마세요" in korean
+    assert "손가락" in korean and "피부" in korean and "막지 마세요" in korean
+    assert "압력" in korean and "멈추고" in korean and "관리자" in korean
     assert data["citations"] == list(safety_guard.HIGH_PRESSURE_CITATIONS)
     # 다음 QA가 질문 번역과 답 번역 오류를 가를 수 있게, 분석에 쓴 한국어 질문을 헤더로 알린다(본문은 그대로).
     assert unquote(headers[ANALYSIS_PROMPT_HEADER.lower()]) == KOREAN

@@ -149,7 +149,7 @@ def gate_sequence_decision(
     if progress is not None and progress.available:
         text = progress.message
     else:
-        text = f"현재 Zone {request.zone_id}의 목표 도막 충족 여부를 확인할 수 없습니다. 구역 이동 전 도막과 공식 구역 데이터를 확인하세요."
+        text = f"현재 Zone {request.zone_id} 도막 완료 미확인. 이동 전 도막·공식 구역 자료를 확인하세요."
     if direction:
         text = f"{direction} {text}"
     return SequenceDecision(decision.feedback, text, decision.anomaly_type, direction)
@@ -360,7 +360,7 @@ class SequenceAnalysisEngine:
             # 판정은 권장 순서, 추천은 지금 위치에서의 전문가 전이(recommend_next).
             next_zone = recommend_next(request.zone_id, set(visits), self._transitions(profile), flow)
             text = (
-                f"권장 순서에서 이탈했습니다. 지금 위치에서는 다음으로 {next_zone}번 구역을 권합니다."
+                f"권장 순서 이탈. 현재 위치의 다음 권장 Zone {next_zone}."
                 if next_zone else "전문가 권장 Zone 순서를 확인하세요."
             )
             return SequenceDecision(
@@ -371,12 +371,12 @@ class SequenceAnalysisEngine:
         if direction_error:
             return SequenceDecision(
                 EngineFeedback(analysis_status="available", reason_code="direction_deviation"),
-                f"{request.zone_id}번 구역은 {DIRECTION_LABELS.get(expected, expected)} 방향으로 도장하세요.",
+                f"Zone {request.zone_id}: {DIRECTION_LABELS.get(expected, expected)} 방향으로 도장하세요.",
                 "direction_deviation",
                 directions=(str(expected), str(actual)),
             )
         next_zone = flow[flow.index(request.zone_id) + 1] if request.zone_id in flow and flow.index(request.zone_id) + 1 < len(flow) else None
-        text = f"현재 순서가 적정합니다. 다음 권장 구역은 {next_zone}번입니다." if next_zone else "현재 순서가 적정합니다."
+        text = f"순서 적정. 다음 권장 Zone {next_zone}." if next_zone else "순서 적정."
         return SequenceDecision(EngineFeedback(analysis_status="available", reason_code=None), text)
 
     def report_bodies(self, bodies: Iterable[dict[str, Any]], *, scenario_id: str) -> dict[str, Any]:
@@ -448,11 +448,11 @@ class SequenceAnalysisEngine:
         flow_score = score_visit_flow(first_visits, references)
         adherence = flow_score["adherence_rate"]
         guideline = (
-            f"전형기 {len(references)}회 실측 순서를 기준으로 순서 유사도는 {adherence * 100:.1f}%입니다. "
-            f"대표 흐름은 {'→'.join(flow)}입니다."
+            f"전문가 {len(references)}회 실측 기준: 순서 유사도 {adherence * 100:.1f}%, "
+            f"대표 흐름 {'→'.join(flow)}."
         )
         if direction_rate is not None:
-            guideline += f" 방향 준수율은 {direction_rate * 100:.1f}%입니다."
+            guideline += f" 방향 준수율 {direction_rate * 100:.1f}%."
         return {
             "analysis_status": "available", "reason_code": None,
             "algorithm_version": ALGORITHM_VERSION, "guideline": guideline,

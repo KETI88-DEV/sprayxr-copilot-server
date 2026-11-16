@@ -50,8 +50,8 @@ def test_recommended_order_answer_prioritizes_action_over_raw_rank_probabilities
     result = answer_order_question(found, prompt="권장 Zone 순서는?", intent="order_reference")
 
     assert result.answer.startswith("권장 작업 순서는 Zone 7 → 4 → 8입니다.")
-    assert "우선 Zone 7에서 시작한 뒤 Zone 4로 이동하세요." in result.answer
-    assert "이 시작 순서는 전문가 작업의 약 83%에서 동일하게 나타났습니다." in result.answer
+    assert "전문가 6회 기준" in result.answer
+    assert result.answer.count("Zone 7") == 1
     assert "순번별 주요 분포" not in result.answer
     assert result.context["position_distribution"] == report["position_distribution"]
 
@@ -73,7 +73,7 @@ def test_single_zone_reference_is_not_described_as_a_broken_one_item_order() -> 
 
     result = answer_order_question(("RPT-mode1", {"sequence_report": report}), prompt="권장 순서는?", intent="order_reference")
 
-    assert result.answer == "학습모드 1은 Zone 1 한 곳으로 구성되어 있으며, 전형기 5회 모두 Zone 1부터 작업했습니다."
+    assert result.answer == "권장 작업 순서는 Zone 1입니다. 전문가 5회 기준입니다."
 
 
 

@@ -106,7 +106,7 @@ def test_missing_or_forged_coating_values_do_not_become_order_or_normal_answers(
     assert "권장" not in data["answer"] and "9999" not in data["answer"]
 
 
-@pytest.mark.parametrize("question,expected", [("누락한 Zone은?", "누락"), ("실제 수행 순서는?", "칠한 순서"),
+@pytest.mark.parametrize("question,expected", [("누락한 Zone은?", "칠하지 않은"), ("실제 수행 순서는?", "칠한 순서"),
                                                ("순서 준수율은?", "유사도"), ("도포 방향은?", "방향")])
 def test_detailed_order_answer_preserves_the_specific_question(question, expected):
     data = client(Pipeline()).post("/api/v1/copilot/query", json={
@@ -195,7 +195,7 @@ def test_signed_target_grades_answer_the_coating_question_in_every_tab(task, mod
     data = ask(task, "도막이 과하거나 모자란 영역이 있어?", context(task, target=target_assessment()), mode=mode, pipeline=pipeline)
     answer = data["answer"]
     assert "저도막: 1개" in answer and "과도막: 1개" in answer and "기본 목표 160µm 기준" in answer
-    assert "전문가 대비" in answer and "재생 시점의 도막이 아닙니다" in answer
+    assert "전문가 대비" in answer and "최종 높이맵 기준(재생 시점 아님)" in answer
     assert "두꺼운 영역" not in answer and "[" not in answer and "픽셀" not in answer
     assert pipeline.calls == [] and data["retrieval_used"] is False
 
@@ -213,18 +213,18 @@ def test_question_about_the_expert_keeps_the_expert_comparison():
 
 
 @pytest.mark.parametrize("target,expected", [
-    ({"analysis_status": "not_available", "reason_code": "height_map_unavailable"}, "이 기록은 높이맵 원본이 없어"),
-    ({"analysis_status": "not_available", "reason_code": "height_map_size_mismatch"}, "이 기록의 높이맵 크기가"),
-    ({"analysis_status": "not_available", "reason_code": "zone_reference_unavailable"}, "이 콘텐츠의 Zone 기준 자료가 없어"),
-    ({"analysis_status": "not_available", "reason_code": "target_assessment_not_loaded"}, "이 질문에는 목표 대비 판정 자료가 함께 오지 않았습니다."),
-    (None, "이 질문에는 목표 대비 판정 자료가 함께 오지 않았습니다."),
+    ({"analysis_status": "not_available", "reason_code": "height_map_unavailable"}, "높이맵 원본 없음: 목표 대비 판정 불가."),
+    ({"analysis_status": "not_available", "reason_code": "height_map_size_mismatch"}, "높이맵·Zone 기준 크기 불일치: 목표 대비 판정 불가."),
+    ({"analysis_status": "not_available", "reason_code": "zone_reference_unavailable"}, "Zone 기준 없음: 목표 대비 판정 불가."),
+    ({"analysis_status": "not_available", "reason_code": "target_assessment_not_loaded"}, "목표 대비 판정 자료가 없습니다."),
+    (None, "목표 대비 판정 자료가 없습니다."),
 ])
 def test_record_without_target_says_so_before_the_expert_comparison(target, expected):
     answer = ask("knowledge_search", "도막이 과하거나 모자란 영역이 있어?", context(target=target))["answer"]
     assert answer.startswith(expected) and "아래는 전문가 기록과 견준 값입니다." in answer
     assert "두꺼운" in answer and "180" in answer
-    if expected.startswith("이 질문에는"):
-        assert "높이맵 원본이 없어" not in answer
+    if expected == "목표 대비 판정 자료가 없습니다.":
+        assert "높이맵 원본 없음" not in answer
 
 
 def test_forged_target_grades_are_not_used():
@@ -275,7 +275,7 @@ def test_viewer_note_points_to_the_expert_basis_only_when_expert_rows_exist():
     with_rows = ask("knowledge_search", "도막이 과하거나 모자란 영역이 있어?", context(target=target_assessment()))["answer"]
     without = ask("knowledge_search", "도막이 과하거나 모자란 영역이 있어?", context(target=target_assessment(), expert=False))["answer"]
     assert "'전문가 대비'" in with_rows
-    assert "저도막: 1개" in without and "재생 시점의 도막이 아닙니다" in without
+    assert "저도막: 1개" in without and "최종 높이맵 기준(재생 시점 아님)" in without
     assert "전문가" not in without
 
 

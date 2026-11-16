@@ -30,7 +30,7 @@ ANSWERS = [  # (이름, part, playback, 꼭 있어야 할 낱말, 없어야 할 
     ("R5 far", part("distance_filter", operator="higher"), AT_24S, ["Zone 4", "330"], r"없습니다"),
     ("R6", part("speed", ("8",)), AT_3S, ["2,230 mm/s", "3,514", "이전 장비", "더 얇아"], r"올리세요|높이세요|맞추세요"),
     ("R7", part("work_metric", metric="tool_angle"), AT_3S, ["9개 Zone 모두", "100%", "5.2°", "3.1°"], None),
-    ("R8", part("pose_judgement"), AT_3S, ["54%", "59%", "50%", "참고용", "70%"], r"나쁜|정상|보통 수준|잘하고"),
+    ("R8", part("pose_judgement"), AT_3S, ["54%", "50~59%", "참고용", "70%"], r"나쁜|정상|보통 수준|잘하고"),
     ("R9 start", part("order_shape", operator="start"), AT_3S, ["Zone 7", "6회", "Zone 9", "3회", "Zone 1", "2회", "Zone 3", "1회"], None),
     ("R9 allowed", part("order_shape", operator="allowed"), AT_3S, ["Zone 7", "6회 모두", "Zone 9", "45%"], None),
     ("R9 adherence", part("order_shape", operator="adherence"), AT_3S, ["45.1%", "55.6%", "20.7%", "6회"], None),

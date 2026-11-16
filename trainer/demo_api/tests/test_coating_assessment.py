@@ -192,7 +192,7 @@ def test_trainee_sentences_use_no_internal_words() -> None:
     assert phrases == ["저도막(칠한 곳 평균 98µm, 미도장 12%)", "정상(칠한 곳 평균 171µm, 미도장 0%)",
                        "과도막(칠한 곳 평균 301µm, 미도장 3%)", "칠한 곳 없음(미도장 100%)"]
     adjustment = ca.adjustment_sentence(rows[0]["adjustments"])
-    assert adjustment == "조절 후보: 이동 속도를 낮추는 쪽, 이격거리를 줄이는 쪽. 원인으로 확정된 것은 아닙니다."
+    assert adjustment == "조절 후보: 이동 속도를 낮추는 쪽, 이격거리를 줄이는 쪽(원인 미확정)."
     assert ca.adjustment_sentence([]) is None
     distribution = ca.distribution_sentence(
         dict(zip(numerical.SIX_BAND_KEYS, (10, 10, 50, 20, 5, 5), strict=True)))
@@ -201,7 +201,7 @@ def test_trainee_sentences_use_no_internal_words() -> None:
     assert ca.basis_label(160.0, "default_target") == "기본 목표 160µm 기준"
     assert ca.basis_label(200.0, "session_target") == "세션 목표 200µm 기준"
     assert ca.OVER_PHRASE == "정상범위 상한 초과"
-    assert "기본 정상범위는 160~200µm" in ca.RULE_NOTE
+    assert "기본 160~200µm" in ca.RULE_NOTE and "경계 포함" in ca.RULE_NOTE
     assert ca.GRADE_SHORT_LABELS == {"below": "하한 미만", "normal": "정상", "above": "상한 초과", "none": "미도장"}
 
     for text in (*phrases, adjustment, distribution, ca.RULE_NOTE, ca.basis_label(160.0, "default_target")):

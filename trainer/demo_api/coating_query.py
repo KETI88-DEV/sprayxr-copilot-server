@@ -16,14 +16,14 @@ _ZONE_NUMBER = re.compile(r"(?:zone|존|구역)\s*(\d+)", re.I)
 _EXPERT = re.compile(r"전문가|expert", re.I)
 # 뷰어 기록에 목표 대비 판정이 없을 때 전문가 대비 답 앞에 밝히는 사유. 사유와 다른 말을 하지 않는다.
 _TARGET_MISSING = {
-    "height_map_unavailable": "이 기록은 높이맵 원본이 없어 목표 대비 판정을 낼 수 없습니다.",
-    "height_map_size_mismatch": "이 기록의 높이맵 크기가 Zone 기준 자료와 달라 목표 대비 판정을 내지 않았습니다.",
-    "zone_reference_unavailable": "이 콘텐츠의 Zone 기준 자료가 없어 목표 대비 판정을 낼 수 없습니다.",
+    "height_map_unavailable": "높이맵 원본 없음: 목표 대비 판정 불가.",
+    "height_map_size_mismatch": "높이맵·Zone 기준 크기 불일치: 목표 대비 판정 불가.",
+    "zone_reference_unavailable": "Zone 기준 없음: 목표 대비 판정 불가.",
 }
-_TARGET_NOT_SENT = "이 질문에는 목표 대비 판정 자료가 함께 오지 않았습니다."
-_VIEWER_NOTE = "최종 높이맵 기준이며 재생 시점의 도막이 아닙니다."
+_TARGET_NOT_SENT = "목표 대비 판정 자료가 없습니다."
+_VIEWER_NOTE = "최종 높이맵 기준(재생 시점 아님)."
 # 전문가 대비 행이 있는 기록에서만 붙인다(전문가 본인 기록 등은 화면의 '전문가 대비'가 비어 있다).
-_VIEWER_EXPERT_NOTE = " 전문가 기록과 견준 두께는 화면의 '전문가 대비'에서 볼 수 있습니다."
+_VIEWER_EXPERT_NOTE = " 전문가 비교 두께는 '전문가 대비'를 확인하세요."
 
 
 def _number(value: object) -> float | None:

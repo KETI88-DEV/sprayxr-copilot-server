@@ -18,7 +18,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Mapping
 
-from trainer.demo_api.pose_query import NO_CORRECTION_CAVEAT, PART_WORDS, POSE_SCALE_NOTE, friendly_correction, josa, limited_note
+from trainer.demo_api.pose_query import NO_CORRECTION_CAVEAT, PART_WORDS, POSE_SCALE_NOTE, friendly_correction, josa, limited_note, wants_full_list
 from trainer.demo_api.session_analysis import (
     analyze_session, csv_sequences, has_world_joints, painted_zone, read_csv, spray_runs,
 )
@@ -201,7 +201,7 @@ def _sequence_at(arm: Mapping[str, Any], seconds: object) -> Mapping[str, Any] |
 
 
 def _side_answer(arm: Mapping[str, Any], side: str | None, *, current: bool, playback: Mapping[str, Any] | None, zone_id: str | None,
-                 part: str | None = None, prefer_hand: bool = False) -> str:
+                 part: str | None = None, prefer_hand: bool = False, prompt: str = "") -> str:
     """팔·관절 질문의 답: 엔진이 그 팔(관절)에 낸 교정이 있는 분사를 센다. 교정 문장은 엔진 문장을 훈련생 말로 바꾼 것이다.
 
     `part`는 엔진 관절 이름 뒷부분(ForeArm=팔꿈치, Hand=손목, UpperArm=위팔). 쪽을 안 말하면 양팔에서 찾는다.
@@ -233,44 +233,53 @@ def _side_answer(arm: Mapping[str, Any], side: str | None, *, current: bool, pla
         if hand_hits:
             hits, name = hand_hits, wrist
         elif hits:
-            lead = f"{wrist} 교정은 없었습니다. 대신 {name} 교정이 있습니다. "
+            lead = f"{wrist} 교정은 없었습니다. "
     if not hits:
         return f"{scope}에서 {name} 교정은 나오지 않았습니다. {NO_CORRECTION_CAVEAT}{note}"
     count = len({s.get("sequence_id") for s, _ in hits})
-    example = josa(str(hits[0][0].get("sequence_id")), "을", "를")
-    return f"{lead}{scope} 가운데 {count}회에서 {name} 교정이 나왔습니다. 그중 {example} 보면, {hits[0][1]}{note}"
+    if wants_full_list(prompt, subject=r"교정|분사|시퀀스|sequence"):
+        listed = list(dict.fromkeys(f"{seq.get('sequence_id')}: {guidance}" for seq, guidance in hits))
+        return f"{lead}{scope} 중 {count}회에서 {name} 교정:\n" + "\n".join(listed) + note
+    return f"{lead}{scope} 중 {count}회에서 {name} 교정: {hits[0][1]}{note}"
 
 
-def zone_pose_summary(arm: Mapping[str, Any], work_zones: list[Mapping[str, Any]] | None = None, *, limit: int = 3) -> str:
+def zone_pose_summary(arm: Mapping[str, Any], work_zones: list[Mapping[str, Any]] | None = None, *, limit: int = 3, prompt: str = "") -> str:
     """"Zone별로 어디가 문제야?"의 답: 자세 유사도가 낮은 Zone부터 `limit`개와 그 Zone의 우선 교정.
 
     작업 유사도(뷰어 Zone 카드)는 다른 척도라 맨 끝에 이름을 달아 한 줄로만 덧붙인다(운영 q2는 둘을 섞어 답했다).
     """
     if arm.get("status") != "available":
-        return arm_pose_answer(arm, current=False, playback=None, zone_id=None)
+        return arm_pose_answer(arm, current=False, playback=None, zone_id=None, prompt=prompt)
     zones = sorted(((str(key), zone) for key, zone in (arm.get("zones") or {}).items()
                     if isinstance(zone, Mapping) and isinstance(zone.get("similarity_percent"), (int, float))),
                    key=lambda item: (item[1]["similarity_percent"], int(item[0]) if item[0].isdigit() else 10**6))
     if not zones:
         return "이 기록에는 Zone별로 자세를 채점한 분사가 없습니다."
-    lines = [f"자세 유사도가 낮은 Zone: " + ", ".join(f"Zone {key}({zone['similarity_percent']}%)" for key, zone in zones[:limit]) + "."]
-    for key, zone in zones[:limit]:
-        lines.append(f"Zone {key}: " + (zone.get("guidance") or f"반복해 어긋난 관절은 없습니다. {NO_CORRECTION_CAVEAT}"))
+    full = wants_full_list(prompt, subject=r"Zone|존|구역")
+    selected = zones if full else zones[:1 if prompt else limit]
+    lines = [f"Zone {key}({zone['similarity_percent']}%): " +
+             (zone.get("guidance") or f"반복 교정은 없습니다. {NO_CORRECTION_CAVEAT}") for key, zone in selected]
     lines.append(POSE_SCALE_NOTE)
     rows = [row for row in work_zones or [] if isinstance(row.get("similarity_percent"), (int, float))]
-    if rows:
+    if rows and "작업" in prompt:
         worst = min(rows, key=lambda row: float(row["similarity_percent"]))
         lines.append(f"참고: 작업 유사도(도구 각도·이격거리 등 전문가 기록 대비)로는 Zone {worst.get('zone_id')}({round(float(worst['similarity_percent']))}%)이 가장 낮습니다.")
     return "\n".join(lines)
 
 
 def arm_pose_answer(arm: Mapping[str, Any], *, current: bool, playback: Mapping[str, Any] | None, zone_id: str | None,
-                    side: str | None = None, part: str | None = None, prefer_hand: bool = False) -> str:
+                    side: str | None = None, part: str | None = None, prefer_hand: bool = False, prompt: str = "") -> str:
     """서명된 채점 결과로만 문장을 만든다. `current`는 "지금·이 Zone" 질문, `side`·`part`는 팔·관절 질문이다."""
     if arm.get("status") != "available":
         return _UNAVAILABLE.get(str(arm.get("reason_code")), "이 기록에서는 숙련자 대비 자세 유사도를 채점할 수 없습니다.")
     if side is not None or part is not None:
-        return _side_answer(arm, side, current=current, playback=playback, zone_id=zone_id, part=part, prefer_hand=prefer_hand)
+        return _side_answer(arm, side, current=current, playback=playback, zone_id=zone_id, part=part, prefer_hand=prefer_hand, prompt=prompt)
+    if wants_full_list(prompt, subject=r"분사|시퀀스|sequence"):
+        sequences = [seq for seq in arm.get('sequences') or [] if isinstance(seq, Mapping)
+                     and (zone_id is None or str(seq.get('zone_id')) == zone_id)]
+        if sequences:
+            rows = [f"{seq.get('sequence_id')}(Zone {seq.get('zone_id')}): {seq.get('similarity_percent')}%" for seq in sequences]
+            return "분사별 팔 자세 유사도: " + ", ".join(rows) + ". " + POSE_SCALE_NOTE + " " + limited_note(sequences)
     if current and zone_id is None:
         sequence = _sequence_at(arm, (playback or {}).get("playhead_seconds"))
         if sequence is not None:
@@ -282,14 +291,14 @@ def arm_pose_answer(arm: Mapping[str, Any], *, current: bool, playback: Mapping[
             notes = [friendly_correction(str(correction)) if correction else ("" if limited else f"교정 관절 결과는 없습니다. {NO_CORRECTION_CAVEAT}"),
                      limited, POSE_SCALE_NOTE]
             # 분사 하나가 여러 Zone에 걸칠 수 있어 Zone은 적지 않는다(뷰어 Zone 카드와 어긋나 보인다).
-            return (f"{when}({sequence['sequence_id']})는 숙련자 팔 자세 대비 자세 유사도 {sequence['similarity_percent']}%입니다. "
+            return (f"{when}({sequence['sequence_id']}) 팔 자세 유사도 {sequence['similarity_percent']}%입니다. "
                     + " ".join(note for note in notes if note))
         zone_id = str(playback["zone_id"]) if playback and playback.get("zone_id") is not None else None
     if zone_id is not None:
         zone = (arm.get("zones") or {}).get(zone_id)
         if not isinstance(zone, Mapping):
             return f"Zone {zone_id}에는 자세를 채점한 분사가 없습니다."
-        return (f"Zone {zone_id}의 자세 유사도는 평균 {zone['similarity_percent']}%입니다(분사 {zone['evaluated_sequence_count']}회). "
+        return (f"Zone {zone_id} 자세 유사도 평균 {zone['similarity_percent']}%(분사 {zone['evaluated_sequence_count']}회). "
                 + (zone.get("guidance") or f"이 Zone에서 반복해 어긋난 관절은 없습니다. {NO_CORRECTION_CAVEAT}") + f" {POSE_SCALE_NOTE}")
     priority = arm.get("priority_corrections") or []
     return (str(arm.get("guideline") or "").replace("평균 유사도", "평균 자세 유사도") + (f" 우선 교정: {priority[0]}" if priority else "")

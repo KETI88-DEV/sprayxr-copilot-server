@@ -62,6 +62,7 @@ from trainer.demo_api.simulator_context import SIMULATOR_CONTEXT, is_blasting, w
 from trainer.demo_api.copilot_session_context import build_query_instruction, summarize_session, viewer_definition_context
 from trainer.demo_api.pose_query import (
     answer_order_question,
+    order_request_fields,
     answer_pose_question,
     answer_sequence_question,
     answer_zone_question,
@@ -370,6 +371,10 @@ def _viewer_answer(task_type: str, prompt: str, context: Mapping[str, object], i
         flow = flow if isinstance(flow, list) else []
         if not flow:
             return "현재 재생 기록에서는 전문가 Zone 순서 기준을 계산할 수 없습니다."
+        if len(order_request_fields(prompt)) > 1:
+            report = dict(context)
+            report.update(analysis_status="available", first_visit_flow=context.get("selected_flow") or [])
+            return answer_order_question((None, {"sequence_report":report}), prompt=prompt, intent=selected_intent).answer
         if selected_intent == "order_direction":
             direction = context.get("direction_summary")
             classification = direction.get("classification") if isinstance(direction, Mapping) else None
@@ -1000,7 +1005,7 @@ async def _execute_copilot_query(
         answer = angle_note(query.prompt) + arm_pose_answer(
             arm_claims, current=_asks_current_viewer_pose(query.prompt), playback=playback if isinstance(playback, dict) else None,
             zone_id=requested_zone(query.prompt, None), side=asked_arm(query.prompt), part=asked_part(query.prompt),
-            prefer_hand=prefers_hand(query.prompt))
+            prefer_hand=prefers_hand(query.prompt), prompt=query.prompt)
         return _success_response(query, request_started, answer=answer, retrieval_used=False, citations=[],
                                  pose_context={"scope": "arm_pose", "status": arm_claims.get("status")} if query.task_type == "pose_recomm" else None,
                                  context_status="available" if arm_claims.get("status") == "available" else "not_available")
@@ -1008,7 +1013,7 @@ async def _execute_copilot_query(
             and (preset_intent(query.task_type, query.prompt) == "pose_worst_zone" or WORST_ZONE.search(query.prompt))):
         # "Zone별로 어디가 문제야?"는 자세 유사도가 낮은 Zone과 그 교정으로 답한다(운영 q2, 27B Zone 오기).
         zones = viewer_analysis.get("zones")
-        answer = zone_pose_summary(arm_claims, list(zones.values()) if isinstance(zones, Mapping) else None)
+        answer = zone_pose_summary(arm_claims, list(zones.values()) if isinstance(zones, Mapping) else None, prompt=query.prompt)
         return _success_response(query, request_started, answer=answer, retrieval_used=False, citations=[],
                                  pose_context={"scope": "arm_pose_zones", "status": arm_claims.get("status")},
                                  context_status="available" if arm_claims.get("status") == "available" else "not_available")
@@ -1205,10 +1210,13 @@ async def _execute_copilot_query(
         *,
         available: bool,
     ) -> tuple[str, bool]:
-        """Explain computed results directly without a second generation pass."""
-        if query.response_mode != "detailed" or not available:
-            return base_answer, False
-        return _structured_detail_fallback(query.task_type, base_answer, analysis_context, intent=intent), False
+        """Computed answers already contain the requested fields in both modes.
+
+        Selecting detailed must not append unrelated statistics or a second
+        score family. Explicit multi-field/list requests are assembled at their
+        factual source before this boundary; structured context remains full.
+        """
+        return base_answer, False
 
     if viewer_analysis is not None and query.task_type in ("pose_recomm", "trajectory_recomm") and not knowledge_routed:
         declined = unsupported_pose_part(query.prompt) if query.task_type == "pose_recomm" else None
@@ -1225,11 +1233,14 @@ async def _execute_copilot_query(
             arm_answer = arm_pose_answer(
                 arm_pose, current=analysis_context.get("scope") == "current_zone",
                 playback=viewer_analysis.get("playback_context"),  # type: ignore[arg-type]
-                zone_id=requested_zone(query.prompt, None), side=side, prefer_hand=prefers_hand(query.prompt),
+                zone_id=requested_zone(query.prompt, None), side=side, prefer_hand=prefers_hand(query.prompt), prompt=query.prompt,
             )
-            # 자세 유사도(시퀀스별 팔 관절 채점)를 먼저, 전문가 기록 대비 작업 유사도를 이어서 답한다.
-            # 팔 방향을 물으면 팔 채점 결과만 답한다 — 작업 유사도의 개선 안내에는 팔 방향 항목이 없다.
-            verified_answer = arm_answer if side is not None else arm_answer + "\n" + verified_answer
+            # Keep the requested score family; show both only when both were
+            # explicitly requested. Signed measures/context remain unchanged.
+            work_requested = bool(re.search(r"작업\s*(?:유사도|점수)|종합\s*유사도", query.prompt))
+            pose_requested = bool(re.search(r"자세|관절|팔", query.prompt))
+            verified_answer = (arm_answer + "\n" + verified_answer if work_requested and pose_requested
+                               else verified_answer if work_requested else arm_answer)
             analysis_context = {**analysis_context, "arm_pose": {key: item for key, item in arm_pose.items() if key != "sequences"}}
             available = available or arm_pose.get("status") == "available"
         elif side is not None:

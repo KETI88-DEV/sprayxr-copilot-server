@@ -44,7 +44,7 @@ from trainer.scripts.live_response_contract import FAILED_REPAIR_PATHS, parse_kn
 from trainer.scripts.quick_answer import TextCache, inference_key
 from trainer.scripts.answer_semantics import (
     POLICY_VERSION, REVIEW_REGEX, SOURCE_CONTEXT_TEMPLATE, answer_system_prompt,
-    cacheable_candidate, evidence_trace, review_answer, review_required, select_evidence,
+    cacheable_candidate, evidence_trace, has_repetition_loop, review_answer, review_required, select_evidence,
 )
 from trainer.scripts.live_sequence_fallback import is_sequence_intent
 from trainer.scripts.live_coating_judgment import judge_dft_question
@@ -1464,7 +1464,8 @@ class AgentPipeline:
                 def semantic_candidate_valid(text):
                     parsed_candidate = parse_knowledge_answer(text, retrieved_chunk_ids(evidence))
                     return (parsed_candidate.repair_path not in FAILED_REPAIR_PATHS
-                            and bool(re.search(r"[가-힣A-Za-z0-9]", parsed_candidate.body)))
+                            and bool(re.search(r"[가-힣A-Za-z0-9]", parsed_candidate.body))
+                            and not has_repetition_loop(parsed_candidate.body))
                 semantic_review = {"verdict": "cached" if cached is not None else "not_required",
                                    "retries": 0, "calls": 0, "latency_ms": 0, "cacheable": True}
                 if cached is None and (review_required(answer_question, instruction=generation_instruction or instruction)

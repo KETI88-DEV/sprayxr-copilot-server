@@ -155,9 +155,10 @@ def test_server_signed_viewer_analysis_works_without_a_saved_session() -> None:
     detailed = query(context, signature, mode="detailed")
     assert detailed["context_status"] == "available"
     assert "[" not in detailed["answer"]
-    assert "유동 구간" in detailed["answer"]
+    assert "유동 구간" not in detailed["answer"]
     assert detailed["degraded"] is False
-    assert detailed["answer"] != quick["answer"]
+    assert detailed["answer"] == quick["answer"]
+    assert detailed["sequence_context"]["adherence_rate"] == .67
     assert query(dict(context, adherence_rate=0.99), signature)["context_status"] == "not_available"
     assert query(context, "forged-signature")["context_status"] == "not_available"
     assert query(context, signature, answer="권장 순서는 1 → 2 → 3입니다.")["answer"] == quick["answer"]

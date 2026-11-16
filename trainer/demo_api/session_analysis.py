@@ -311,7 +311,7 @@ def priority_corrections(
     for priority, (zone, joint) in enumerate(pairs[:limit], start=1):
         label = pose_similarity.JOINT_LABELS.get(joint["joint"], joint["joint"])
         distance = joint["average_distance"]
-        lead = f"{zone['zone_id']}번 구역에서 분사 {zone['evaluated_sequence_count']}회 중 {joint['occurrence_count']}회, "
+        lead = f"{zone['zone_id']}번 구역 분사 {zone['evaluated_sequence_count']}회 중 {joint['occurrence_count']}회: "
         measured = _measured_phrase(label, (measures or {}).get((str(zone["zone_id"]), joint["joint"]), ()))
         guidance = lead + measured if measured else (
             lead + f"{label} 위치가 숙련자 범위를 벗어났습니다"
@@ -329,22 +329,22 @@ def priority_corrections(
 
 def _guideline(scored: Sequence[PoseQueryResult], total: int, not_scored: int) -> str:
     average = statistics.mean(r.similarity_score for r in scored if r.similarity_score is not None)
-    parts = [f"분사 {total}회 중 {len(scored)}회의 자세를 숙련 작업자와 비교했습니다. 평균 유사도 {average * 100:.0f}%."]
+    parts = [f"숙련자 대비 자세 비교: 분사 {total}회 중 {len(scored)}회, 평균 유사도 {average * 100:.0f}%."]
     # 분사마다 첫 교정(전달되는 하나)의 부위를 센다. 문장은 분사마다 각도가 달라 같은 교정도 다른 문장이다.
     joints = Counter(
         str(c.get("joint")) for r in scored for c in r.corrections[:1] if isinstance(c, Mapping) and c.get("joint")
     )
     if joints:
         joint, times = joints.most_common(1)[0]
-        parts.append(f"교정이 가장 자주 나온 부위는 {pose_similarity.JOINT_LABELS.get(joint, joint)}입니다({times}회).")
+        parts.append(f"주요 교정: {pose_similarity.JOINT_LABELS.get(joint, joint)}({times}회).")
     elif not any(result.confidence == "limited" for result in scored):
-        parts.append("비교한 분사 모두 숙련 작업자의 통상 범위 안입니다.")
+        parts.append("비교한 분사 모두 숙련자 통상 범위 안입니다.")
     # 프레임 간격만 고르지 않은 분사(R7)는 채점에서 빠진 것이 없어 말하지 않는다. 나머지 사유는 쉬운 말로 한 번만 적는다.
     note = limited_note([{"confidence": r.confidence, "reason_code": r.reason_code, "input_quality": r.input_quality} for r in scored])
     if note:
         parts.append(f"{note} {NO_CORRECTION_CAVEAT}")
     if not_scored:
-        parts.append(f"자세를 판정할 수 없는 분사 {not_scored}회는 평균에서 뺐습니다.")
+        parts.append(f"미판정 {not_scored}회 제외.")
     return " ".join(parts)
 
 

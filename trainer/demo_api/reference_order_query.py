@@ -198,9 +198,9 @@ def reference_order_answer(engine, *, scenario_id: str | None, process: str | No
         lines.append(f"{label}: Zone " + " → ".join(str(zone) for zone in plan["flow"]))
     mode = learning_mode_from_scenario(scenario_id)
     label = f"학습 모드 {mode}" if mode is not None else f"시나리오 {scenario_id}"
-    answer = label + "의 현재 등록된 기준 작업 순서입니다.\n" + "\n".join("- " + line for line in lines)
+    answer = label + " 현재 등록된 기준 순서 — " + "; ".join(lines) + "."
     if detailed:
         counts = ", ".join(("스프레이" if plan["process"] == "spray" else "블라스팅")
                            + f" {plan['reference_session_count']}회" for plan in plans)
-        answer += f" 등록된 전문가 수행({counts})의 대표 경로이며 실제 수행·완료 여부를 뜻하지 않습니다."
+        answer += f" 전문가({counts}) 기준이며 실제 수행·완료 판정은 아닙니다."
     return answer, context

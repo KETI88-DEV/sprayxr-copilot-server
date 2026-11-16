@@ -22,11 +22,15 @@ def test_worst_zone_questions_get_the_per_zone_pose_summary(prompt: str) -> None
     result = ask(prompt, tab="pose", pipeline=_model())
     answer = result["answer"]
     assert result["calls"] == [], answer
-    # 자세 유사도(팔 관절 엔진)가 낮은 Zone부터: Zone 9(50%), Zone 1(59%).
-    assert answer.index("Zone 9(50%)") < answer.index("Zone 1(59%)")
+    # 자세 유사도(팔 관절 엔진)가 가장 낮은 곳을 먼저 답하고, Zone별 요청이면 다른 구역도 보존한다.
+    assert "Zone 9(50%)" in answer
+    if "별" in prompt:
+        assert answer.index("Zone 9(50%)") < answer.index("Zone 1(59%)")
+    else:
+        assert "Zone 1(59%)" not in answer
     assert "오른쪽 팔꿈치" in answer and NOTE in answer
-    # 작업 유사도는 다른 척도다. 섞어 답하지 않고 이름을 달아 따로 적는다.
-    assert "작업 유사도" in answer.split("\n")[-1] and "Zone 6(79%)" in answer.split("\n")[-1]
+    # 자세 질문에 별도 척도인 작업 유사도를 자동으로 덧붙이지 않는다.
+    assert "작업 유사도" not in answer
 
 
 def test_model_sentences_that_name_the_wrong_zone_are_dropped() -> None:

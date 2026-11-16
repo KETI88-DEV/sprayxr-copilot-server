@@ -40,6 +40,47 @@ def test_adequate_definition_keeps_one_generation_and_legacy_calls_are_unchanged
     assert len(generated) == 2
 
 
+def test_a_repeating_clause_loop_is_repaired_before_approval_and_only_the_repair_is_cached(monkeypatch):
+    pipeline, _, _, _ = _pipeline(monkeypatch)
+    looping = '[답변] 가능한 조건은 ' + ', '.join(['같은 조건을 확인하세요'] * 13) + ', 같은 조건'
+    corrected = '[답변] 작업 조건을 확인해야 합니다.\n[근거] DOC-a-C0001'
+    generations = []
+    reviews = []
+    def generate(messages, **kwargs):
+        if kwargs.get('answer_regex') == REVIEW_REGEX:
+            reviews.append(messages)
+            return '이유: 문단의 설명을 반영함\n근거: 1\n판정: OK'
+        generations.append(messages)
+        return looping if len(generations) == 1 else corrected
+    pipeline._generate_direct = generate
+    first = run_query(pipeline, answer_question='이 용어는 무엇인가요?')
+    assert '같은 조건' not in first['response'] and '작업 조건을 확인' in first['response']
+    assert len(generations) == 2 and len(reviews) == 1
+    assert first['metadata']['answer_review']['verdict'] == 'rewritten'
+    second = run_query(pipeline, answer_question='이 용어는 무엇인가요?')
+    assert second['metadata']['quick_cache_hit'] is True
+    assert second['response'] == first['response'] and len(generations) == 2
+
+
+def test_a_persisting_repetition_loop_is_withheld_and_never_cached(monkeypatch):
+    pipeline, _, _, _ = _pipeline(monkeypatch)
+    looping = '[답변] ' + '동일한 설명을 반복합니다. ' * 4
+    calls = []
+    def generate(messages, **kwargs):
+        calls.append(kwargs)
+        if kwargs.get('answer_regex') == REVIEW_REGEX:
+            return '이유: 문서와 같은 설명임\n근거: 1\n판정: OK'
+        return looping
+    pipeline._generate_direct = generate
+    for _ in range(2):
+        result = run_query(pipeline, answer_question='이 용어는 무엇인가요?')
+        assert '동일한 설명을 반복합니다' not in result['response']
+        assert not result['metadata']['quick_cache_hit']
+        assert result['metadata']['answer_review']['cacheable'] is False
+        assert result['metadata']['answer_review']['retries'] == 1
+    assert len(calls) == 4  # 두 요청 각각 최초 생성 + 제한된 재생성 한 번, judge가 loop를 승인할 수 없다.
+
+
 def test_failed_or_insufficient_review_does_not_publish_or_cache_the_rejected_candidate(monkeypatch):
     pipeline, _, _, _ = _pipeline(monkeypatch)
     pipeline.config['llm']['append_citations'] = True

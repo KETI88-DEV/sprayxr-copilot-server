@@ -15,7 +15,7 @@ from trainer.demo_api.coating_query import (_CAUSES, _RECORD_SENTENCE, _DISTANCE
 from trainer.demo_api.coating_assessment import grade_phrase, mean_text
 from trainer.demo_api.copilot_intent import preset_intent
 from trainer.demo_api.dialogue import drop_sentences, viewer_claims
-from trainer.demo_api.pose_query import josa
+from trainer.demo_api.pose_query import josa, wants_full_list
 from trainer.demo_api.viewer_arm_pose import parse_viewer_arm_pose
 from trainer.demo_api.viewer_progress import band_text, gate_lines, normal_band, progress_question, shortfall_side, shortfall_text, viewer_progress_answer
 
@@ -423,7 +423,7 @@ def _completion(facts: RecordFacts, zones: tuple[str, ...]) -> str:
     return " ".join(out)
 
 
-def _distance_filter(facts: RecordFacts, operator: str | None) -> str:
+def _distance_filter(facts: RecordFacts, operator: str | None, prompt: str = "") -> str:
     wanted = operator or "higher"
     names = {"higher": "멀리서", "lower": "가까이서", "similar": "비슷하게"}
     found: dict[str, list[str]] = {"higher": [], "lower": [], "similar": []}
@@ -432,10 +432,13 @@ def _distance_filter(facts: RecordFacts, operator: str | None) -> str:
             found[relation].append(f"Zone {zone}({measure['distance_mm']:,.0f} mm, 전문가 {measure['reference_distance_mm']:,.0f} mm)")
     if not any(found.values()):
         return "이 기록에는 이격거리를 전문가와 견줄 자료가 없습니다."
-    text = f"전문가 중앙값보다 {names[wanted]} 칠한 Zone은 " + (", ".join(found[wanted]) if found[wanted] else "0곳") + "입니다."
-    if wanted != "similar":
-        text += f" 전문가와 비슷한(±{_SIMILAR * 100:.0f}% 이내) Zone은 " + (", ".join(found["similar"]) if found["similar"] else "0곳") + "입니다."
-    return text
+    requested = [wanted, *(key for key, word in [('higher','멀'), ('lower','가까'), ('similar','비슷')]
+                           if key != wanted and word in prompt)]
+    lines = []
+    for key in requested:
+        label = f"전문가와 비슷한(±{_SIMILAR * 100:.0f}% 이내)" if key == "similar" else f"전문가 중앙값보다 {names[key]} 칠한"
+        lines.append(label + " Zone은 " + (", ".join(found[key]) if found[key] else "0곳") + "입니다.")
+    return " ".join(lines)
 
 
 def _speed(facts: RecordFacts, zone: str) -> str:
@@ -472,18 +475,21 @@ def _work_metric(facts: RecordFacts, part: RecordPart) -> str:
     return text
 
 
-def _pose_judgement(facts: RecordFacts) -> str:
+def _pose_judgement(facts: RecordFacts, prompt: str = "") -> str:
     arm = facts.arm or {}
     if not _is_num(arm.get("average_similarity_percent")):
         return "이 기록에는 팔 자세를 채점한 결과가 없어 자세 유사도를 말씀드릴 수 없습니다."
     sequences = [seq for seq in arm.get("sequences") or [] if isinstance(seq, Mapping) and _is_num(seq.get("similarity_percent"))]
-    text = f"팔 자세 유사도는 평균 {arm['average_similarity_percent']:.0f}%입니다."
+    spread = ""
     if sequences:
-        text += " 분사별로는 " + ", ".join(f"{seq.get('sequence_id')}(Zone {seq.get('zone_id')}) {seq['similarity_percent']:.0f}%" for seq in sequences) + "입니다."
+        values = [float(seq['similarity_percent']) for seq in sequences]
+        spread = f"(분사 {len(sequences)}회, {min(values):.0f}~{max(values):.0f}%)"
+    text = f"팔 자세 유사도는 평균 {arm['average_similarity_percent']:.0f}%{spread}입니다."
+    if sequences and wants_full_list(prompt, subject=r"분사|시퀀스|sequence"):
+        text += "\n" + ", ".join(f"{seq.get('sequence_id')}(Zone {seq.get('zone_id')}) {seq['similarity_percent']:.0f}%" for seq in sequences) + "."
     limited = [str(seq.get("sequence_id")) for seq in sequences if seq.get("confidence") == "limited"]
-    if limited:
-        text += " 입력 품질이나 비교 범위에 제한이 있어 참고용 수치입니다(" + ", ".join(limited) + ")."
-    return text + " 숙련자 중간 수준은 약 70%입니다. 이 수치만으로 잘했다 못했다를 가르지 않습니다."
+    note = "입력 품질·비교 범위 제한이 있어 참고용이며, " if limited else ""
+    return text + " " + note + "숙련자도 약 70%이므로 점수만으로 우열을 판단하지 않습니다."
 
 
 def _slot_text(slot: object) -> str:
@@ -594,8 +600,8 @@ def answer_part(facts: RecordFacts, part: RecordPart, *, task_type: str) -> tupl
             return (_completion(facts, ()) if code == "completion" else ASK_ZONE), None
         return " ".join(per_zone[code](zone) for zone in part.zones), None
     answers = {"coating_extreme": lambda: _thickness_ranking(facts, thinnest=part.operator != "argmax"), "coating_over": lambda: _overpaint(facts),
-               "distance_filter": lambda: _distance_filter(facts, part.operator), "work_metric": lambda: _work_metric(facts, part),
-               "pose_judgement": lambda: _pose_judgement(facts), "order_shape": lambda: _order_shape(facts, part.operator),
+               "distance_filter": lambda: _distance_filter(facts, part.operator, part.text), "work_metric": lambda: _work_metric(facts, part),
+               "pose_judgement": lambda: _pose_judgement(facts, part.text), "order_shape": lambda: _order_shape(facts, part.operator),
                "external_standard": lambda: _external(facts), "one_priority": lambda: one_priority(facts, single=part.cardinality == "one"),
                "zone_exists": lambda: _missing_zones(facts, list(part.zones))}
     return answers[code](), None
@@ -744,9 +750,9 @@ def answer_record_question(context: str | None, prompt: str, *, task_type: str,
     body = "\n".join(sentences)
     caveats = []
     if any(part.code in _COATING_CODES for part in answered) and "세션이 끝났을 때" not in body:
-        caveats.append("도막 수치는 세션이 끝났을 때의 도막 기준입니다.")
-    if any(part.code in {"completion", "cause", "external_standard"} for part in answered) and "95%" not in body:
-        caveats.append(f"완료는 정상 범위 안 면적이 {_GATE_PERCENT}% 이상이고 평균이 정상 범위일 때입니다.")
+        caveats.append("세션이 끝났을 때의 도막 기준입니다.")
+    if any(part.code in {"completion", "external_standard"} for part in answered) and "95%" not in body:
+        caveats.append(f"완료: 정상 범위 안 면적 {_GATE_PERCENT}% 이상·평균 정상.")
     if any(part.code == "pose_judgement" for part in answered):
         if "70%" not in body:
             caveats.append("숙련자 중간 수준은 약 70%입니다.")

@@ -63,7 +63,7 @@ def test_completion_reference_sentence_names_both_conditions() -> None:
     found = answer_record_question(context("knowledge_search", payload_range(), AT_3S),
                                    "이 기록 도막을 PSPC 90/10 규칙으로 판정하면 합격이에요?", task_type="knowledge_search", recent_turns=[])
     assert found is not None
-    assert "완료는 정상 범위 안 면적이 95% 이상이고 평균이 정상 범위일 때입니다." in found.text, found.text
+    assert "정상 범위 안 면적 95% 이상" in found.text and "평균 정상" in found.text, found.text
     assert "하한 미만 Zone" in found.text and not re.search(OLD, found.text), found.text
 
 

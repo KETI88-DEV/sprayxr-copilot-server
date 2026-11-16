@@ -233,8 +233,7 @@ def test_verified_csv_only_viewer_keeps_its_rich_analysis_before_registered_refe
     assert data["sequence_context"]["adherence_rate"] == .67
     assert data["context_status"] == "available"
     assert "1 → 3 → 2" in data["answer"] and "9 → 8" not in data["answer"]
-    if mode == "detailed":
-        assert "67%" in data["answer"]
+    assert "67%" not in data["answer"]  # 권장 순서만 물었고 유사도는 구조화된 근거에 보존한다.
 
 
 def test_invalid_signed_viewer_playback_cannot_be_hidden_by_reference_shortcut(tmp_path):
@@ -335,5 +334,5 @@ def test_blasting_next_guidance_keeps_its_existing_order_engine(tmp_path):
                  frames=0, received_at="now", body=req.model_dump_json())
     data = query(client(tmp_path, store=store), session_id=req.session_id,
                  prompt="작업 순서상 다음 Zone은 어디야?")
-    assert "다음 권장 구역은 2" in data["answer"]
+    assert "다음 권장 Zone 2" in data["answer"]
     assert data["coating_context"] is None

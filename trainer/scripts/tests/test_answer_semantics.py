@@ -3,6 +3,17 @@ import unittest
 
 
 class AnswerSemanticsTests(unittest.TestCase):
+    def test_repetition_gate_detects_sentence_and_clause_loops_without_rejecting_distinct_items(self):
+        from trainer.scripts.answer_semantics import has_repetition_loop
+        self.assertTrue(has_repetition_loop('같은 조건을 확인하세요. ' * 3))
+        self.assertTrue(has_repetition_loop(', '.join(['같은 조건을 확인하세요'] * 3)))
+        self.assertFalse(has_repetition_loop('첫 번째 조건을 확인하세요, 다른 조건을 확인하세요, 마지막 조건을 확인하세요.'))
+        self.assertFalse(has_repetition_loop('같은 조건을 확인하세요. ' * 2))
+        self.assertFalse(has_repetition_loop('160µm, 160µm, 160µm'))
+        for value in ('160~200µm', '1000 mm/s', '160–200µm'):
+            with self.subTest(value=value):
+                self.assertFalse(has_repetition_loop(', '.join([value] * 3)))
+
     def test_general_cause_and_correction_are_reviewed_but_a_definition_is_not(self):
         from trainer.scripts.answer_semantics import review_required
         for question in ['저도막이 생기는 원인은 무엇인가요?', '기포는 왜 생겨요?',

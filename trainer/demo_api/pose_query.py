@@ -33,9 +33,9 @@ logger = logging.getLogger(__name__)
 
 _MCP_TIMEOUT_SEC: Final[float] = 20.0
 # 자세 유사도를 말하는 답에 붙인다. 숙련자끼리 견줘도 중앙값이 69~78%라 70%를 낮은 점수로 읽기 쉽다(2026-11-14 사용자 지적).
-POSE_SCALE_NOTE: Final[str] = "자세 유사도는 숙련자 평균 동작과 견준 값이며, 숙련자도 보통 70% 안팎입니다."
+POSE_SCALE_NOTE: Final[str] = "숙련자 평균 동작 대비 유사도이며, 숙련자도 70% 안팎입니다."
 # 엔진이 교정을 내지 않은 것은 "정상"이 아니다. 엔진 안내문(session_analysis._guideline)과 같은 문장이다.
-NO_CORRECTION_CAVEAT: Final[str] = "교정 항목이 없다고 해서 자세가 정상이라는 뜻은 아닙니다."
+NO_CORRECTION_CAVEAT: Final[str] = "교정이 없어도 자세가 정상이라는 뜻은 아닙니다."
 # 엔진 관절 이름 → 질문 낱말. 팔꿈치는 ForeArm, 손목은 Hand다(pose_similarity.JOINT_LABELS).
 PART_WORDS: Final[dict[str, str]] = {"ForeArm": "팔꿈치", "Hand": "손목", "UpperArm": "위팔"}
 _PART_QUESTION: Final = (("ForeArm", re.compile(r"팔꿈치|elbow", re.I)), ("Hand", re.compile(r"손목|wrist", re.I)),
@@ -44,7 +44,20 @@ _ANGLE_QUESTION: Final = re.compile(r"각도|몇\s*도|°|degree|angle", re.I)
 # 손·팔 낱말이 있어도 관절 자세가 아닌 질문: 보호구·통증·손잡이·건(도구) 각도·압력(2026-11-14 독립 검토).
 NOT_JOINT: Final = re.compile(r"보호대|보호구|장갑|착용|통증|아프|아파|부상|예방|스트레칭|손잡이|그립|잡은|쥔|쥐고|"
                               r"(?<![가-힣])건(?![가-힣])|건\s*(?:각도|을|의|이|은)|스프레이\s*건|도구|노즐|압력|안전", re.I)
-ANGLE_NOTE: Final[str] = ("채점 엔진은 관절 각도를 재지 않고 숙련자 평균 위치와의 거리·방향을 비교하므로 각도 수치는 드릴 수 없습니다.")
+ANGLE_NOTE: Final[str] = "관절 각도 수치는 없으며, 숙련자 평균 위치의 거리·방향을 비교합니다."
+
+
+def wants_full_list(prompt: str, *, subject: str = r"Zone|존|구역|분사|시퀀스|sequence") -> bool:
+    """Distinguish a requested breakdown from an overall average question."""
+    return bool(re.search(rf"(?:{subject})\s*별|(?:모든|전체)\s*(?:{subject})|"
+                          rf"(?:{subject}).{{0,30}}(?:전부|모두|각각|목록)|(?:전부|모두|전체)\s*(?:보여|알려|나열|출력)", prompt, re.I))
+
+
+def order_request_fields(prompt: str) -> set[str]:
+    """Fields explicitly requested together, independent of the chosen tab intent."""
+    markers = {'reference':r'권장|추천|정석', 'actual':r'실제|수행\s*순서|칠한\s*순서',
+               'score':r'준수|유사도|점수|수치', 'direction':r'방향', 'missing':r'누락|빠진|미방문|미수행|안\s*칠'}
+    return {key for key, pattern in markers.items() if re.search(pattern, prompt, re.I)}
 
 
 @dataclass(frozen=True)
@@ -759,6 +772,46 @@ def answer_order_question(
         answer += f" 순서 이탈이 가장 많은 구역은 {worst['zone_id']}번({worst['deviation_count']}회)입니다."
     direction = report.get("direction_adherence_rate")
     question = (prompt or "").lower()
+    requested = order_request_fields(question)
+    if len(requested) > 1:
+        parts = []
+        if 'reference' in requested:
+            parts.append("권장: Zone " + (' → '.join(flow) or '기준 없음'))
+        if 'actual' in requested:
+            parts.append("실제: " + ('Zone ' + ' → '.join(first) if first else '방문 기록 없음'))
+        if 'missing' in requested:
+            parts.append("미방문: " + ('Zone ' + '·'.join(missing) if missing else '없음'))
+            from trainer.demo_api.viewer_progress import gate_lines
+            gated = [row for row in analysis.get('coating_zones') or [] if isinstance(row, Mapping) and row.get('gate_status')]
+            if gated:
+                parts.extend(gate_lines(gated, order=flow, visited=set(first),
+                                        footer='세션이 끝났을 때의 도막 기준입니다.')[0])
+        if 'score' in requested:
+            value = report.get('adherence_rate')
+            scores = [f"순서 유사도 {float(value) * 100:.0f}%"] if isinstance(value, (int,float)) else ['순서 유사도 자료 없음']
+            all_scores = bool(re.search(r'모두|전부|수치|통계|세부', question))
+            for label, key, named in [('최근접 전문가 수행', 'best_reference_similarity', r'최근접|가장\s*가까운\s*전문가'),
+                                      ('순번별 통계', 'position_similarity', r'순번\s*별')]:
+                metric = report.get(key)
+                if (all_scores or re.search(named, question)) and isinstance(metric, (int,float)):
+                    scores.append(f'{label} {float(metric) * 100:.0f}%')
+            parts.append(', '.join(scores))
+        if 'direction' in requested:
+            from trainer.demo_api.playback_direction import LABELS
+            summary = report.get('direction_summary')
+            label = LABELS.get(summary.get('classification')) if isinstance(summary, Mapping) else None
+            if label:
+                parts.append(f'전체 기록의 주요 도포 방향 {label}')
+            if isinstance(direction, (int,float)):
+                parts.append(f'도포 방향 준수율 {float(direction) * 100:.0f}%')
+            elif not label:
+                parts.append('도포 방향 평가 자료 없음')
+        return ZoneAnswer('available', None, '; '.join(parts) + '.', {
+            'analysis_status':'available', 'reason_code':None, 'scope':'session', 'report_id':report_id,
+            'recommended_flow':flow, 'first_visit_flow':first, 'adherence_rate':report.get('adherence_rate'),
+            'deviation_count':report.get('deviation_count'), 'direction_adherence_rate':direction,
+            'best_reference_similarity':report.get('best_reference_similarity'), 'position_similarity':report.get('position_similarity'),
+        })
     if question:
         if intent == "order_missing" or any(token in question for token in ("누락", "안 칠", "빠진", "빼먹", "미수행", "보완", "다시 칠")):
             focused = (
@@ -795,31 +848,9 @@ def answer_order_question(
         if intent == "order_reference" or any(token in question for token in ("권장", "추천", "정석")):
             reference_count = int(report.get("reference_session_count") or 0)
             distributions = report.get("position_distribution") or []
-            if len(flow) == 1 and reference_count:
-                focused = (
-                    f"학습모드 1은 Zone {flow[0]} 한 곳으로 구성되어 있으며, "
-                    f"전형기 {reference_count}회 모두 Zone {flow[0]}부터 작업했습니다."
-                )
-            else:
-                focused = f"권장 작업 순서는 Zone {' → '.join(flow)}입니다."
-                top_choices: list[tuple[str, float]] = []
-                for row in distributions[:2]:
-                    if isinstance(row, list) and row and isinstance(row[0], Mapping):
-                        top_choices.append((
-                            str(row[0].get("zone_id")), float(row[0].get("probability") or 0),
-                        ))
-                if (
-                    len(flow) >= 2 and len(top_choices) == 2
-                    and top_choices[0][0] == flow[0] and top_choices[1][0] == flow[1]
-                    and min(top_choices[0][1], top_choices[1][1]) >= 0.6
-                ):
-                    confidence = min(top_choices[0][1], top_choices[1][1]) * 100
-                    focused += (
-                        f"\n\n우선 Zone {flow[0]}에서 시작한 뒤 Zone {flow[1]}로 이동하세요. "
-                        f"이 시작 순서는 전문가 작업의 약 {confidence:.0f}%에서 동일하게 나타났습니다."
-                    )
-                elif flow:
-                    focused += f"\n\n우선 Zone {flow[0]}에서 시작하세요."
+            focused = f"권장 작업 순서는 Zone {' → '.join(flow)}입니다."
+            if reference_count:
+                focused += f" 전문가 {reference_count}회 기준입니다."
             return ZoneAnswer("available", None, focused, {
                 "analysis_status": "available", "reason_code": None, "scope": "session", "report_id": report_id,
                 "recommended_flow": flow, "first_visit_flow": first, "adherence_rate": rate,

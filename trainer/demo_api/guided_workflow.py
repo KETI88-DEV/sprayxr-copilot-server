@@ -281,11 +281,11 @@ class GuidedWorkflow:
                 run.evaluation_mode = "mock_fallback"
                 guide = SequenceGuide(
                     speed=GuideItem(
-                        status="slow", message="이동 속도를 조금 높이세요.", available=True, reason=None
+                        status="slow", message="이동 속도를 높이세요.", available=True, reason=None
                     ),
                     distance=GuideItem(
                         status="near",
-                        message="스프레이건을 피도면에서 조금 멀리 이동하세요.",
+                        message="피도면에서 조금 멀리 이동하세요.",
                         available=True,
                         reason=None,
                     ),
@@ -336,7 +336,7 @@ def create_guided_workflow_router(
         ),
         responses=_swagger_response({"test_context": _RESET_CONTEXT, "workflow_status": "ready", "step": 0,
                                      "user_id": DEMO_USER_ID, "session_id": "SWAGGER-SESSION-a1b2c3d4",
-                                     "what_happened": "모의훈련자 계정을 유지하고 새 세션 식별자를 준비했습니다.",
+                                     "what_happened": "모의훈련자 유지·새 세션 ID 준비 완료.",
                                      "beginner_tip": "다음으로 0-1을 실행하세요.", "next_endpoint": f"{_PREFIX}/1-start"}),
     )
     def reset() -> JSONResponse:
@@ -346,8 +346,8 @@ def create_guided_workflow_router(
                 "user_id": run.user_id, "session_id": run.session_id, "scenario_id": run.scenario_id}},
             _RESET_CONTEXT["input_summary"], _RESET_CONTEXT["evaluation_focus"])
         return _ok({"test_context":context,"workflow_status":"ready","step":0,"user_id":run.user_id,"session_id":run.session_id,
-                    "what_happened":"모의훈련자 계정을 유지하고 새 세션 식별자를 준비했습니다. 실제 사용자 기록은 지우지 않았습니다.",
-                    "beginner_tip":"다음으로 0-1 세션 시작의 Try it out과 Execute를 누르세요.","next_endpoint":f"{_PREFIX}/1-start"})
+                    "what_happened":"모의훈련자 유지·새 세션 ID 준비 완료. 실제 기록은 유지합니다.",
+                    "beginner_tip":"0-1 세션 시작을 실행하세요.","next_endpoint":f"{_PREFIX}/1-start"})
 
     @router.post(
         "/1-start", response_model=ApiResponse, tags=[_TAG], summary="0-1. 모의 훈련 세션 시작",
@@ -376,8 +376,8 @@ def create_guided_workflow_router(
             input_used["user_registration"]["created_at"] = run.user_created_at
         return _ok({"test_context":_test_context(input_used, _START_CONTEXT["input_summary"], _START_CONTEXT["evaluation_focus"]),
                     "workflow_status":"running","step":1,"user_id":run.user_id,"session_id":run.session_id,
-                    "session_status":"ACTIVE","what_happened":"실제 sessions/start와 같은 상태 전이를 수행해 ACTIVE 세션을 만들었습니다.",
-                    "beginner_tip":"다음으로 0-2 시퀀스 분석을 실행해 구조화된 가이드를 확인하세요.","next_endpoint":f"{_PREFIX}/2-sequence"})
+                    "session_status":"ACTIVE","what_happened":"ACTIVE 세션을 시작했습니다.",
+                    "beginner_tip":"0-2 시퀀스 분석을 실행하세요.","next_endpoint":f"{_PREFIX}/2-sequence"})
 
     @router.post(
         "/2-sequence", response_model=ApiResponse, tags=[_TAG], summary="0-2. 예제 시퀀스 분석 및 코칭 확인",
@@ -388,8 +388,8 @@ def create_guided_workflow_router(
             "### 예상 결과\n전문가 기준이 있으면 그 기준에 따른 상태를 반환합니다. 기준이 없으면 `mock_fallback`으로 표시된 `slow/near` 예시를 반환합니다."
         ),
         responses=_swagger_response({"test_context": _SEQUENCE_CONTEXT, "workflow_status": "running", "step": 2,
-                                     "guide": {"speed": {"status": "slow", "message": "이동 속도를 조금 높이세요."},
-                                               "distance": {"status": "near", "message": "피도면에서 조금 멀어지세요."}},
+                                     "guide": {"speed": {"status": "slow", "message": "이동 속도를 높이세요."},
+                                               "distance": {"status": "near", "message": "피도면에서 조금 멀리 이동하세요."}},
                                      "what_happened": "예제 입력을 비교해 코칭 상태를 만들었습니다.",
                                      "beginner_tip": "입력값과 status를 비교하세요.", "next_endpoint": f"{_PREFIX}/3-complete"}),
     )
@@ -401,8 +401,8 @@ def create_guided_workflow_router(
         return _ok({"test_context":context,
                     "workflow_status":"running","step":2,"session_id":run.session_id,
                     "sequence_id":f"SWAGGER-SEQUENCE-{run.run_id}","guide":guide.model_dump(mode="json"),
-                    "what_happened":"예제 속도와 이격거리를 비교하여 VR에서 바로 사용할 코칭 상태를 만들었습니다.",
-                    "beginner_tip":"slow이면 속도를 높이고 near이면 피도면에서 조금 멀어지라는 뜻입니다.","next_endpoint":f"{_PREFIX}/3-complete"})
+                    "what_happened":"예제 속도·이격거리의 코칭 결과입니다.",
+                    "beginner_tip":"slow: 속도 높이기, near: 피도면에서 멀어지기.","next_endpoint":f"{_PREFIX}/3-complete"})
 
     @router.post(
         "/3-complete", response_model=ApiResponse, tags=[_TAG], summary="0-3. 모의 훈련 종료 및 리포트 요청",
@@ -427,8 +427,8 @@ def create_guided_workflow_router(
         return _ok({"test_context":_test_context(input_used, _COMPLETE_CONTEXT["input_summary"], _COMPLETE_CONTEXT["evaluation_focus"]),
                     "workflow_status":"report_ready","step":3,"session_id":run.session_id,
                     "session_status":"COMPLETED","report_id":run.report_id,
-                    "what_happened":"모의 세션을 종료하고 최종 평가를 조회할 report_id를 생성했습니다.",
-                    "beginner_tip":"마지막으로 0-4 리포트 확인을 실행하세요.","next_endpoint":f"{_PREFIX}/4-report"})
+                    "what_happened":"모의 세션 종료·report_id 발급 완료.",
+                    "beginner_tip":"0-4 리포트 확인을 실행하세요.","next_endpoint":f"{_PREFIX}/4-report"})
 
     @router.post(
         "/4-report", response_model=ApiResponse, tags=[_TAG], summary="0-4. 모의 최종 리포트 확인",
@@ -440,7 +440,7 @@ def create_guided_workflow_router(
         ),
         responses=_swagger_response({"test_context": _REPORT_CONTEXT, "workflow_status": "complete", "step": 4,
                                      **_mock_report(), "report_id": "RPT-example",
-                                     "what_happened": "정식 리포트와 같은 모양의 완성 리포트를 반환했습니다.",
+                                     "what_happened": "모의 훈련 완료. 최종 리포트입니다.",
                                      "beginner_tip": "report 아래 네 항목을 확인하세요.", "next_endpoint": f"{_PREFIX}/0-reset"}),
     )
     def report() -> JSONResponse:
@@ -450,7 +450,7 @@ def create_guided_workflow_router(
         return _ok({"test_context":_test_context(input_used, _REPORT_CONTEXT["input_summary"], _REPORT_CONTEXT["evaluation_focus"]),
                     "workflow_status":"complete","step":4,
                     **_mock_report(run), "report_id":run.report_id,
-                    "what_happened":"모의연동 전 과정을 완료하고 정식 리포트와 같은 모양의 완성 리포트를 반환했습니다.",
-                    "beginner_tip":"다시 시험하려면 0-0 초기화부터 반복하세요.","next_endpoint":f"{_PREFIX}/0-reset"})
+                    "what_happened":"모의 훈련 완료. 최종 리포트입니다.",
+                    "beginner_tip":"재시험은 0-0 초기화부터 시작하세요.","next_endpoint":f"{_PREFIX}/0-reset"})
 
     return router, workflow
