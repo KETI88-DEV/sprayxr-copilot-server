@@ -31,9 +31,11 @@ def datasets(tmp_path):
         features = {'frame_count': 100, 'duration_seconds': 12, 'sequence_count': 4,
                     'zone_order': [{'map_num': 1, 'zone_id': '3'}, {'map_num': 1, 'zone_id': '1'}] if i != 4 else [],
                     'zones': [{'map_num': 1, 'zone_id': '3', 'frame_count': 50,
-                               'distance_mm': {'median': 250}, 'speed_mms': {'median': speed}},
+                               'distance_mm': {'median': 260}, 'speed_mms': {'median': 1600},
+                               'distance_real_mm': {'median': 250}, 'speed_real_mms': {'median': speed}},
                               {'map_num': 1, 'zone_id': '1', 'frame_count': 50,
-                               'distance_mm': {'median': 220}, 'speed_mms': {'median': speed+10}}] if i != 4 else []}
+                               'distance_mm': {'median': 230}, 'speed_mms': {'median': 1600},
+                               'distance_real_mm': {'median': 220}, 'speed_real_mms': {'median': speed+10}}] if i != 4 else []}
         artifact = {'metadata': meta, 'features': features, 'coating': {'maps': []}, 'quality': {'status': 'needs_review'}}
         content = json.dumps(artifact, ensure_ascii=False).encode()
         (output / 'records' / f'{dataset_id}.json').write_bytes(content)
@@ -124,7 +126,8 @@ def test_repeated_zone_numbers_never_mix_measurements_between_faces(datasets):
     path = datasets.root / 'records' / f'{dataset_id}.json'
     artifact = json.loads(path.read_text(encoding='utf-8'))
     artifact['features']['zones'].append({'map_num': 2, 'zone_id': '3', 'frame_count': 50,
-                                          'distance_mm': {'median': 450}, 'speed_mms': {'median': 999}})
+                                          'distance_real_mm': {'median': 450}, 'speed_real_mms': {'median': 999},
+                                          'speed_mms': {'median': 1600}})
     content = json.dumps(artifact, ensure_ascii=False).encode()
     path.write_bytes(content)
     index_path = datasets.root / 'catalog.json'

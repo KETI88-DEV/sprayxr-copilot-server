@@ -109,7 +109,8 @@ class QueryChatDatasets:
             key = f'{face}:{zone}'
             expert = reference.get(key) or {}
             zones[key] = {'map_num': face, 'zone_id': zone, 'frame_count': row.get('frame_count'),
-                          'distance_mm': representative(row.get('distance_mm')), 'speed_mms': representative(row.get('speed_mms')),
+                          # Measured Real columns, as in the expert profiles; feature `speed_mms` is the simulator Input (mostly 1600).
+                          'distance_mm': representative(row.get('distance_real_mm')), 'speed_mms': representative(row.get('speed_real_mms')),
                           'reference_distance_mm': representative(expert.get('distance_mm')),
                           'reference_speed_mms': representative(expert.get('speed_mms')),
                           'direction': None, 'posture_label': None, 'metrics': [], 'corrections': []}
