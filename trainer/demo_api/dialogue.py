@@ -55,7 +55,8 @@ def planning_messages(prompt: str, *, task_type: str, recent_turns: list[dict[st
     }, ensure_ascii=False)}]
 
 
-def conversation_messages(prompt: str, *, recent_turns: list[dict[str, str]], facts: dict[str, Any], response_mode: str) -> list[dict[str, str]]:
+def conversation_messages(prompt: str, *, recent_turns: list[dict[str, str]], facts: dict[str, Any], response_mode: str,
+                          simulator_context: str = "") -> list[dict[str, str]]:
     system = (
         "사용자와 자연스럽게 대화하는 AI Co-Pilot입니다. 한국어로 현재 발언에 직접 답하세요. "
         "도장과 무관한 지식·일상·계산 질문에도 답하고, '야'처럼 부르면 자연스럽게 응답하세요. "
@@ -77,7 +78,9 @@ def conversation_messages(prompt: str, *, recent_turns: list[dict[str, str]], fa
     )
     today = datetime.now(timezone(timedelta(hours=9))).date().isoformat()
     messages = [{"role": "system", "content": system + "\n현재 날짜(한국): " + today
-                 + "\nverified_facts=" + json.dumps(facts, ensure_ascii=False)}]
+                 + "\nverified_facts=" + json.dumps(facts, ensure_ascii=False)
+                 # 사실이지 지침이 아니다. 유출 지문(_instruction_texts)은 "현재 날짜" 앞까지만 보므로 이 뒤는 지문에 들지 않는다.
+                 + ("\n" + simulator_context if simulator_context else "")}]
     for turn in recent_turns[-6:]:
         messages.append({"role": "user", "content": turn["prompt"][:4000]})
         if turn["answer"]:

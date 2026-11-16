@@ -56,6 +56,7 @@ from trainer.demo_api.dialogue import (INSTRUCTION_REFUSAL, asks_for_instruction
                                        viewer_measurement_answer, viewer_metadata_context, without_generated_answers, without_hanzi)
 from trainer.demo_api.playback_direction import playback_direction_from_context, playback_direction_answer, simple_direction_question, requested_direction_scope, aggregate_direction, LABELS as DIRECTION_LABELS
 from trainer.demo_api.copilot_live_analysis import current_zone, live_analysis
+from trainer.demo_api.simulator_context import SIMULATOR_CONTEXT, is_blasting, wants_simulator_context
 from trainer.demo_api.copilot_session_context import build_query_instruction, summarize_session, viewer_definition_context
 from trainer.demo_api.pose_query import (
     answer_order_question,
@@ -947,10 +948,11 @@ async def _execute_copilot_query(
                     return _success_response(query, request_started, answer=_session_findings(found_report),
                                              retrieval_used=False, citations=[],
                                              context_status="available" if found_report else "not_available")
+            simulator = {"simulator_context": SIMULATOR_CONTEXT} if wants_simulator_context(query.prompt) else {}
             def converse():
                 with generation_slot_for(planned_pipeline):
                     return planned_pipeline.converse_copilot(query.prompt, recent_turns=model_turns,
-                                                             facts=facts, response_mode=query.response_mode)
+                                                             facts=facts, response_mode=query.response_mode, **simulator)
             answer = plain_answer(await to_thread.run_sync(converse))
             extended = is_domain_question(query.prompt)
             if ungrounded_measurements(answer, facts=facts, prompt=query.prompt, extended=extended):
@@ -1299,6 +1301,7 @@ async def _execute_copilot_query(
             "\n목표 대비 판정이며 재생 시점의 도막이 아닙니다. 조절 후보는 등급에 따른 일반적인 방향이고 원인으로 확정된 것이 아닙니다."
             if compact else "\n최종 기록의 전문가 대비 대표 두께 비교이며 재생 시점의 현재 도막 판정이 아닙니다."
         ) + " 질문의 원인·방법·관계를 직접 설명하고 확인된 측정 사실과 일반적인 가능한 원인을 구분하세요. 권장 Zone 순서를 대신 답하지 마세요."
+    block = "" if is_blasting(query.prompt) else SIMULATOR_CONTEXT
     instruction = build_query_instruction(
         question,
         client_context=knowledge_client_context,
@@ -1306,6 +1309,7 @@ async def _execute_copilot_query(
         recent_turns=[] if definition_context is not None else recent_turns,
         response_mode=query.response_mode,
         concise=query.response_mode == "detailed",
+        simulator_context=block,
     )
     generation_instruction = (build_query_instruction(
         question,
@@ -1314,6 +1318,7 @@ async def _execute_copilot_query(
         recent_turns=[] if definition_context is not None else recent_turns,
         response_mode=query.response_mode,
         concise=True,
+        simulator_context=block,
     ) if query.response_mode == "quick" else instruction)
 
     def _guarded_run() -> Mapping[str, object]:

@@ -487,9 +487,10 @@ class AgentPipeline:
             messages = planning_messages(prompt, task_type=task_type, recent_turns=recent_turns, facts=facts)
         return parse_plan(self._dialogue_completion(messages, max_tokens=96, answer_regex=plan_regex(), **options))
 
-    def converse_copilot(self, prompt, *, recent_turns, facts, response_mode, **options):
+    def converse_copilot(self, prompt, *, recent_turns, facts, response_mode, simulator_context="", **options):
         from trainer.demo_api.dialogue import conversation_messages
-        messages = conversation_messages(prompt, recent_turns=recent_turns, facts=facts, response_mode=response_mode)
+        messages = conversation_messages(prompt, recent_turns=recent_turns, facts=facts, response_mode=response_mode,
+                                         simulator_context=simulator_context)
         return self._dialogue_completion(messages, max_tokens=192 if response_mode == "quick" else 128, **options)
 
     def translate_copilot_text(self, text: str, *, source_language: str, target_language: str,
