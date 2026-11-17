@@ -10,6 +10,7 @@ import logging
 import math
 import re
 import statistics
+from collections.abc import Iterator, Mapping
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, TextIO
@@ -75,8 +76,34 @@ def _number(value: Any) -> float | None:
     return parsed if math.isfinite(parsed) else None
 
 
-def _normalized_row(row: dict[str, str]) -> dict[str, str]:
-    return {str(key).strip().casefold(): value for key, value in row.items()}
+@lru_cache(maxsize=32)
+def _normalized_headers(headers: tuple[str, ...]) -> dict[str, str]:
+    # CSV rows share their headers. Keep the last original key for aliases,
+    # matching the old normalized-dict comprehension's last-value-wins rule.
+    return {str(key).strip().casefold(): key for key in headers}
+
+
+class _NormalizedRow(Mapping[str, str]):
+    """Read only the requested cells without copying/normalizing a wide CSV row."""
+
+    __slots__ = ("_row", "_headers")
+
+    def __init__(self, row: dict[str, str]) -> None:
+        self._row = row
+        self._headers = _normalized_headers(tuple(row))
+
+    def __getitem__(self, key: str) -> str:
+        return self._row[self._headers[key]]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._headers)
+
+    def __len__(self) -> int:
+        return len(self._headers)
+
+
+def _normalized_row(row: dict[str, str]) -> Mapping[str, str]:
+    return _NormalizedRow(row)
 
 
 def _vector(row: dict[str, str], prefix: str) -> list[float] | None:

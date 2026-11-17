@@ -88,9 +88,6 @@ def test_coating_question_answers_signed_coating_values_in_every_tab(task, mode)
     assert response.status_code == 200
     data = response.json()["data"]
     assert "두꺼운" in data["answer"] and "얇은" in data["answer"]
-    if mode == "quick":  # 빠른 안내는 한 줄 요약이다(2026-11-16). Zone별 값은 상세 분석에 남는다.
-        assert data["answer"] == "목표 대비 판정이 없어 전문가와 견줬습니다: 두꺼운 Zone 1곳, 얇은 Zone 1곳."
-        return
     assert "최종" in data["answer"]
     assert "180" in data["answer"] and "80" in data["answer"] and "120" in data["answer"]
     assert "권장 Zone 순서" not in data["answer"] and "1 → 2" not in data["answer"]
@@ -200,9 +197,6 @@ def test_signed_target_grades_answer_the_coating_question_in_every_tab(task, mod
     data = ask(task, "도막이 과하거나 모자란 영역이 있어?", context(task, target=target_assessment()), mode=mode, pipeline=pipeline)
     answer = data["answer"]
     assert pipeline.calls == [] and data["retrieval_used"] is False
-    if mode == "quick":  # 빠른 안내는 등급별 Zone 수 한 줄이다(2026-11-16).
-        assert answer == "저도막 1곳, 과도막 1곳, 정상 0곳입니다(기본 목표 160µm 기준)."
-        return
     assert "저도막: 1개" in answer and "과도막: 1개" in answer and "기본 목표 160µm 기준" in answer
     assert "전문가 대비" in answer and "최종 높이맵 기준(재생 시점 아님)" in answer
     assert "두꺼운 영역" not in answer and "[" not in answer and "픽셀" not in answer
@@ -213,7 +207,7 @@ def test_zone_question_gets_the_one_signed_target_row():
     answer = ask("knowledge_search", "Zone 2 도막은 어때?", context(target=target_assessment()), mode="detailed")["answer"]
     assert "Zone 2: 과도막(칠한 곳 평균 290µm" in answer and "Zone 1" not in answer
     quick = ask("knowledge_search", "Zone 2 도막은 어때?", context(target=target_assessment()))["answer"]
-    assert quick == "Map 1 · Zone 2는 과도막(칠한 곳 평균 290µm, 미도장 0%)입니다."
+    assert "Zone 2: 과도막(칠한 곳 평균 290µm" in quick and "Zone 1" not in quick
 
 
 def test_question_about_the_expert_keeps_the_expert_comparison():
@@ -233,7 +227,7 @@ def test_question_about_the_expert_keeps_the_expert_comparison():
 def test_record_without_target_says_so_before_the_expert_comparison(target, expected):
     answer = ask("knowledge_search", "도막이 과하거나 모자란 영역이 있어?", context(target=target), mode="detailed")["answer"]
     quick = ask("knowledge_search", "도막이 과하거나 모자란 영역이 있어?", context(target=target))["answer"]
-    assert quick.startswith("목표 대비 판정이 없어 전문가와 견줬습니다") and "\n" not in quick
+    assert quick.startswith(expected) and "아래는 전문가 기록과 견준 값입니다." in quick
     assert answer.startswith(expected) and "아래는 전문가 기록과 견준 값입니다." in answer
     assert "두꺼운" in answer and "180" in answer
     if expected == "목표 대비 판정 자료가 없습니다.":
@@ -249,7 +243,7 @@ def test_forged_target_grades_are_not_used():
 
 def test_error_analysis_in_the_viewer_uses_the_signed_target():
     quick = ask("error_analysis", "도막 분포 이상 원인은?", context(target=target_assessment()))["answer"]
-    assert quick.startswith("Zone 1 저도막(") and "조절 후보(원인 미확정)" in quick and len(quick) <= 60
+    assert "Zone 1은 저도막입니다" in quick and "조절 후보" in quick and "확정된 것은 아닙니다" in quick
     data = ask("error_analysis", "도막 분포 이상 원인은?", context(target=target_assessment()), mode="detailed")
     answer = data["answer"]
     assert "조절 후보" in answer and "확정된 것은 아닙니다" in answer and "Zone 1은 저도막입니다" in answer

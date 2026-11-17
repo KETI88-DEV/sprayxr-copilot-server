@@ -73,7 +73,8 @@ def test_mode_only_reference_question_bypasses_empty_facts_conversation(tmp_path
     pipeline = Pipeline()
     data = query(client(tmp_path, pipeline=pipeline), task_type=task, context="스프레이 도장")
     assert "Zone 1→3→2" in _flow(data["answer"])
-    assert "등록 기준" in data["answer"]  # 빠른 안내 한 줄은 "등록 기준 순서"(2026-11-16)
+    assert "현재 등록된 기준 순서" in data["answer"]
+    assert "전문가(스프레이 3회) 기준이며 실제 수행·완료 판정은 아닙니다." in data["answer"]
     assert "학습 모드 3" in data["answer"]
     assert "스프레이" in data["answer"]
     assert data["context_status"] == "available"

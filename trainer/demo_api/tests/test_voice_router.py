@@ -179,7 +179,7 @@ def test_voice_detailed_mode_matches_text_and_invalid_mode_is_rejected() -> None
     detailed = _post(client, response_mode="detailed")
     assert detailed.status_code == 200
     assert "상세 분석" in pipeline.calls[0]["instruction"]
-    assert pipeline.calls[0]["max_tokens"] == 128
+    assert pipeline.calls[0]["max_tokens"] == 1024
     assert pipeline.calls[0]["compact_analysis"] is True
     invalid = _post(client, response_mode="slow")
     assert invalid.status_code == 422

@@ -161,7 +161,7 @@ def test_zone_number_question_on_the_pose_tab_is_answered_from_the_signed_zone()
 def test_elbow_question_reads_the_forearm_on_the_signed_viewer_path() -> None:
     # 팔꿈치는 엔진의 ForeArm이다(2026-11-14). 각도는 없으니 위치 교정만 옮긴다. 엔진이 재지 않는 어깨는 거절한다.
     quick = _ask(_Pipeline(), "팔꿈치를 더 펴야 해, 굽혀야 해?", context=_pose_context(), task="pose_recomm")["answer"]
-    assert "오른쪽 팔꿈치를 몸에서 22cm 더 떼어 주세요." in quick and "\n" not in quick  # 빠른 안내 한 줄(2026-11-16)
+    assert "오른쪽 팔꿈치가 숙련자 평균보다 몸 쪽으로 22cm 더 붙어" in quick
     data = _ask(_Pipeline(), "팔꿈치를 더 펴야 해, 굽혀야 해?", context=_pose_context(), task="pose_recomm", response_mode="detailed")
     assert "오른쪽 팔꿈치가 숙련자 평균보다 몸 쪽으로 22cm 더 붙어" in data["answer"] and "작업 유사도" not in data["answer"]
     shoulder = _ask(_Pipeline(), "어깨를 더 올려야 해?", context=_pose_context(), task="pose_recomm")

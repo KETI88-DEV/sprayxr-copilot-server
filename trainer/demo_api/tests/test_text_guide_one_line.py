@@ -84,7 +84,7 @@ def test_longest_zone_numbers_and_direction_still_fit(progress, direction) -> No
 
 
 @pytest.mark.parametrize("mode", ["quick", "detailed"])
-def test_current_next_query_uses_the_one_line_guide_only_when_quick(tmp_path: Path, mode: str) -> None:
+def test_current_next_query_keeps_the_full_gate_explanation_in_both_modes(tmp_path: Path, mode: str) -> None:
     from types import SimpleNamespace
 
     from trainer.demo_api.reference_order_query import current_next_answer
@@ -101,7 +101,4 @@ def test_current_next_query_uses_the_one_line_guide_only_when_quick(tmp_path: Pa
                             prompt="다음 구역은?", response_mode=mode)
     text, _, payload = current_next_answer(
         query, store, sequence_engine=SequenceAnalysisEngine(tmp_path), coating_engine=progress)
-    if mode == "quick":
-        assert "저도막" in _one_line(text)
-    else:
-        assert text.endswith(payload["message"]) and "정상범위 160~200µm" in text
+    assert text.endswith(payload["message"]) and "정상범위 160~200µm" in text

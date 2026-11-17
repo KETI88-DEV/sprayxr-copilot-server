@@ -29,7 +29,7 @@ def test_general_conversation_has_history_and_no_painting_qa_scaffold():
     assert answer == '1과 3은 4입니다.'
     assert [m['role'] for m in messages] == ['system','user','assistant','user']
     assert '1과 3' in messages[1]['content'] and messages[-1]['content'] == '그 둘을 더하면?'
-    assert options['answer_regex'] is None and options['max_tokens'] == 96
+    assert options['answer_regex'] is None and options['max_tokens'] == 1024
     assert options['enable_thinking'] is False
 
 

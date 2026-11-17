@@ -158,7 +158,7 @@ def test_order_playback_membership_is_also_signed(pose_context: dict) -> None:
              "context": "motion_viewer_analysis:" + json.dumps(signed)}
     valid = client.post("/api/v1/copilot/query", json=query)
     assert valid.status_code == 200
-    assert "Zone 2→3" in valid.json()["data"]["answer"]  # 빠른 안내는 화살표를 붙여 쓴다
+    assert "Zone 2 → 3" in valid.json()["data"]["answer"]
     signed["playback_context"]["map_num"] = "9"
     query["context"] = "motion_viewer_analysis:" + json.dumps(signed)
     assert client.post("/api/v1/copilot/query", json=query).status_code == 422

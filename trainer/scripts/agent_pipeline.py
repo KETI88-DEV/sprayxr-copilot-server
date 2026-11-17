@@ -498,7 +498,9 @@ class AgentPipeline:
         from trainer.demo_api.dialogue import conversation_messages
         messages = conversation_messages(prompt, recent_turns=recent_turns, facts=facts, response_mode=response_mode,
                                          simulator_context=simulator_context)
-        return self._dialogue_completion(messages, max_tokens=96 if response_mode == "quick" else 128, **options)
+        # Query modes choose the resident model; both retain the complete answer.
+        # The fixed ceiling and context check keep generation bounded.
+        return self._dialogue_completion(messages, max_tokens=1024, **options)
 
     def translate_copilot_text(self, text: str, *, source_language: str, target_language: str,
                                inference_backend: Any = None, inference_counter: Any = None,

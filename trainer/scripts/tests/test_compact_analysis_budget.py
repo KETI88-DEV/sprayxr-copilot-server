@@ -128,20 +128,20 @@ def test_compact_analysis_preserves_scoped_history_opt_out(pipeline):
 
 
 @pytest.mark.parametrize("mode", ["quick", "detailed"])
-def test_general_conversation_uses_short_reply_budget_for_both_modes(pipeline, mode):
+def test_general_conversation_has_a_bounded_complete_reply_budget_for_both_modes(pipeline, mode):
     pipe, _ = pipeline
     answer = pipe.converse_copilot("안녕", recent_turns=[], facts={}, response_mode=mode)
 
     assert answer.startswith("[답변]")
-    assert pipe.model.calls[-1][1]["max_tokens"] == (192 if mode=="quick" else 128)
+    assert pipe.model.calls[-1][1]["max_tokens"] == 1024
 
 
-def test_detailed_instruction_requests_answer_first_with_bounded_explanation():
+def test_detailed_instruction_requests_the_complete_answer_first():
     instruction = build_query_instruction(
         "도포 방향의 근거와 개선 방법을 설명해줘", client_context=None, session_summary="", recent_turns=[], response_mode="detailed",
     )
 
     assert "질문에 먼저 직접 답" in instruction
-    assert "2문장" in instruction and "최대 2개" in instruction
-    assert "제목" in instruction and "추측하지" in instruction
+    assert "2문장" not in instruction and "최대 2개" not in instruction
+    assert "필요한 문단과 목록을 유지" in instruction and "추측하지" in instruction
     assert "원인, 권장 조치를 구분" not in instruction

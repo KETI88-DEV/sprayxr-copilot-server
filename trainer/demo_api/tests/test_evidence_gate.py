@@ -3,7 +3,6 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from trainer.demo_api.copilot_router import NO_EVIDENCE_ANSWER, create_copilot_router
-from trainer.demo_api.quick_answer import one_line
 from trainer.demo_api.sequence_store import SequenceStore
 
 GATE = {"confidence": {"abstain_below_rerank_score": 4.0}}
@@ -70,7 +69,7 @@ QUICK = {"confidence": {"abstain_below_rerank_score": 4.0, "quick_abstain_below_
 
 
 def test_quick_domain_question_uses_documents_and_its_own_gate():
-    assert ask(Pipeline(top=1.5, config=QUICK), "가사시간이 뭐지?", mode="quick")["answer"] == one_line(NO_EVIDENCE_ANSWER)
+    assert ask(Pipeline(top=1.5, config=QUICK), "가사시간이 뭐지?", mode="quick")["answer"] == NO_EVIDENCE_ANSWER
     assert ask(Pipeline(top=2.5, config=QUICK), "가사시간이 뭐지?", mode="quick")["citations"] == ["DOC-doc_0001-C0001"]
     assert "혼합 후" in ask(Pipeline(top=1.5), "가사시간이 뭐지?", mode="quick")["answer"]
 

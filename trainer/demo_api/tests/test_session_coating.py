@@ -318,11 +318,12 @@ def test_after_complete_pose_recomm_names_the_most_problematic_zone(engine: Coat
     assert report["coating_report"]["guideline"] not in report["llm_briefing"]
     assert [zone["zone_id"] for zone in report["pose_report"]["zone_summary"]] == ["1", "3"]
 
-    assert _ask(client, "가장 문제 있는 구역이 어디야?")["answer"] == "가장 문제가 큰 구역은 3번 구역입니다."  # 빠른 안내 한 줄
+    quick = _ask(client, "가장 문제 있는 구역이 어디야?")["answer"]
     worst = _ask(client, "가장 문제 있는 구역이 어디야?", mode="detailed")
 
     assert worst["context_status"] == "available"
     assert worst["answer"].startswith("가장 문제가 큰 구역은 3번 구역입니다.")
+    assert quick == worst["answer"]
     assert "평균 자세 유사도는 40%로 세션 평균 57%보다 낮습니다" in worst["answer"]
     assert "오른쪽 위팔 위치가 숙련자 범위를 벗어난 분사가 2회 중 2회였습니다(평균 12cm)" in worst["answer"]
     assert "이 구역 도막은 기본 목표 160µm 기준으로 과도막(칠한 곳 평균 390µm, 미도장 0%)입니다." in worst["answer"]
@@ -460,8 +461,8 @@ def test_error_analysis_answers_from_the_completed_report(engine: CoatingProgres
     assert (before["context_status"], before["coating_context"]) == ("not_available", None)
 
     _complete_session(client, height_map)
-    quick = client.post("/api/v1/copilot/query", json=body).json()["data"]["answer"]  # 빠른 안내 한 줄(2026-11-16)
-    assert quick == "Zone 3 과도막(390µm)입니다. 속도·이격거리 기록이 없어 조절 후보를 내지 못했습니다."
+    quick = client.post("/api/v1/copilot/query", json=body).json()["data"]["answer"]
+    assert "Zone 3은 과도막입니다(칠한 곳 평균 390µm)" in quick and quick.endswith("원인으로 확정된 것은 아닙니다.")
     data = client.post("/api/v1/copilot/query", json={**body, "response_mode": "detailed"}).json()["data"]
 
     assert data["answer"].startswith("기본 목표 160µm 기준으로 본 도막 분포입니다. 칠한 면적의 두께 분포: ")
@@ -476,10 +477,11 @@ def test_coating_status_question_after_complete_lists_grades(engine: CoatingProg
     client = _client(engine)
     _complete_session(client, height_map)
 
-    assert _ask(client, "도막이 과하거나 모자란 영역이 있어?")["answer"] == "저도막 0곳, 과도막 1곳, 정상 1곳, 칠한 곳 없음 1곳입니다(기본 목표 160µm 기준)."
+    quick = _ask(client, "도막이 과하거나 모자란 영역이 있어?")["answer"]
     data = _ask(client, "도막이 과하거나 모자란 영역이 있어?", mode="detailed")
 
     assert "저도막: 없음\n과도막: 1개 — Map 1 · Zone 3(칠한 곳 평균 390µm, 미도장 0%)\n정상: 1개\n칠한 곳 없음: 1개 — Map 1 · Zone 2" in data["answer"]
+    assert quick == data["answer"]
     assert [row["zone_id"] for row in data["coating_context"]["zones"]] == ["1", "2", "3"]
 
 

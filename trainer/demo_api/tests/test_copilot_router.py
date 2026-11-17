@@ -15,7 +15,6 @@ from fastapi.testclient import TestClient
 from trainer.demo_api import chat_service as chat_service_mod
 from trainer.demo_api import copilot_router
 from trainer.demo_api.app import create_app
-from trainer.demo_api.quick_answer import one_line
 from trainer.scripts import agent_pipeline
 from trainer.scripts.openai_backend import OpenAIBackendUnavailableError
 
@@ -135,25 +134,14 @@ def test_knowledge_search_runs_the_pipeline_on_the_fast_route(monkeypatch: pytes
     response = _client(monkeypatch, pipeline).post(URL, json=_body())
 
     assert response.status_code == 200
-    assert "정의 질문은 뜻만 한 문장" in pipeline.calls[0]["generation_instruction"]
-    assert [{key: value for key, value in call.items() if key != "generation_instruction"} for call in pipeline.calls] == [
-        {
-            "instruction": (
-                "[사용자 질문]\n저도막이 무엇인지 설명해줘.\n"
-                "[응답 수준]\n빠른 안내: 반드시 완결된 한국어 문장 2개 이내로 답하세요. "
-                "표·목록·제목·배경 설명은 쓰지 말고, 첫 문장은 핵심 판단, 두 번째 문장은 즉시 조치로 구성하세요."
-            ),
-            "force_route": "fast",
-            "session_id": None,
-            "enable_thinking": False,
-            "use_rag": True,
-            "max_tokens": 128,
-            "request_id": "req-query-0044",
-            "quick_cache_scope": '["W-017", null, "knowledge_search"]',
-            "concise_answer": True,
-            "use_pipeline_history": False,
-        }
-    ]
+    call = pipeline.calls[0]
+    assert call["generation_instruction"].endswith("저도막이 무엇인지 설명해줘.")
+    assert "전체 목록·Zone 순서는 유지" in call["generation_instruction"]
+    assert "60자" not in call["generation_instruction"] and "2문장" not in call["generation_instruction"]
+    assert call["force_route"] == "fast" and call["enable_thinking"] is False
+    assert call["use_rag"] is True and call["use_pipeline_history"] is False
+    assert call["max_tokens"] == 1024 and call["request_id"] == "req-query-0044"
+    assert call["quick_cache_scope"] == '["W-017", null, "knowledge_search"]'
 
 
 def test_detailed_mode_requests_evidence_and_action_from_the_model(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -167,12 +155,12 @@ def test_detailed_mode_requests_evidence_and_action_from_the_model(monkeypatch: 
     assert response.status_code == 200
     instruction = pipeline.calls[0]["instruction"]
     assert "상세 분석" in instruction
-    assert "2문장" in instruction
+    assert "2문장" not in instruction and "필요한 문단과 목록을 유지" in instruction
     assert "근거" in instruction
     assert "권장 조치" in instruction
     assert pipeline.calls[0]["force_route"] == "fast"
     assert pipeline.calls[0]["enable_thinking"] is False
-    assert pipeline.calls[0]["max_tokens"] == 128
+    assert pipeline.calls[0]["max_tokens"] == 1024
     assert pipeline.calls[0]["compact_analysis"] is True
 
 
@@ -236,8 +224,8 @@ def test_detailed_order_mode_explains_verified_report_without_extra_generation()
         prompt="권장 Zone 순서는?", response_mode="detailed",
     )).json()["data"]
 
-    assert quick["answer"].startswith("권장 작업 순서는 Zone 1→3→2입니다.")  # 빠른 안내는 화살표를 붙여 쓴다
-    assert detailed["answer"].replace(" → ", "→") == quick["answer"]  # 같은 조회 요청은 응답 모드만으로 불필요한 통계를 더하지 않는다.
+    assert quick["answer"].startswith("권장 작업 순서는 Zone 1 → 3 → 2입니다.")
+    assert detailed["answer"] == quick["answer"]  # 두 모드 모두 원래 순서와 문장을 보존한다.
     assert "[" not in detailed["answer"]  # 제목 틀 없이 문장으로 낸다(2026-11-11 지시)
     assert "Zone 1 → 3 → 2" in detailed["answer"]
     assert "유동 구간" not in detailed["answer"] and "67%" not in detailed["answer"]
@@ -729,7 +717,7 @@ def test_pending_task_types_answer_not_available_without_pipeline_or_mcp(
     assert body["status"] == "SUCCESS"
     data = body["data"]
     assert set(data) == _DATA_KEYS
-    assert data["answer"] == one_line(copilot_router.PENDING_TASK_ANSWERS[task_type])  # 빠른 안내 한 줄
+    assert data["answer"] == copilot_router.PENDING_TASK_ANSWERS[task_type]
     assert "완료 분석" in data["answer"]
     assert data["resolved_intents"] == [task_type]
     assert data["context_status"] == "not_available"

@@ -9,7 +9,6 @@ from __future__ import annotations
 import pytest
 
 from trainer.demo_api import safety_guard as g
-from trainer.demo_api.quick_answer import one_line
 from trainer.demo_api.copilot_router import analysis_prompt_header
 from trainer.demo_api.sequence_store import SequenceStore
 from trainer.demo_api.tests.test_v342_safety import Pipeline, _ask
@@ -114,15 +113,14 @@ def test_hazard_topic_never_uses_the_conversation_route_and_gets_a_caution() -> 
     pipeline = Pipeline(document="정전기 사고를 막으려면 접지합니다.")
     data, _ = _ask(pipeline, "접지 안 하고 칠해도 돼?")  # v3.4.4: 주제만 묻는 "접지는 왜 해?"는 위험 종류가 없다
     assert pipeline.calls == ["run"]
-    # 빠른 안내 한 줄은 주의를 앞에 둔다(2026-11-16). 60자에 들면 문서 답도 남는다.
-    assert data["answer"] == g.CLASSES["grounding"].caution + " 정전기 사고를 막으려면 접지합니다."
+    assert data["answer"] == "정전기 사고를 막으려면 접지합니다.\n" + g.CLASSES["grounding"].caution
     assert "DOC-doc_0036-C0117" in data["citations"]
 
 
 def test_permissive_document_answer_is_replaced_with_the_class_sentence() -> None:
     pipeline = Pipeline(document="잠깐이면 괜찮습니다.")
     data, _ = _ask(pipeline, "히터 옆에서 칠해도 돼?")
-    assert data["answer"] == one_line(g.CLASSES["ignition"].answer) and data["citations"] == list(g.CLASSES["ignition"].citations)
+    assert data["answer"] == g.CLASSES["ignition"].answer and data["citations"] == list(g.CLASSES["ignition"].citations)
 
 
 def test_foreign_follow_up_inherits_the_stored_class() -> None:
@@ -137,7 +135,7 @@ def test_foreign_follow_up_inherits_the_stored_class() -> None:
     _ask(pipeline, "Có thể lấy ngón tay bịt đầu súng không?", "vi", conversation="vi-1")
     _ask(pipeline, "Vậy làm được không?", "vi", conversation="vi-1")
     korean_answers = [text for text, source, _ in pipeline.translations if source == "ko"]
-    assert korean_answers == [g.QUICK_HIGH_PRESSURE_ANSWER, g.QUICK_HIGH_PRESSURE_ANSWER] and pipeline.calls == []
+    assert korean_answers == [g.HIGH_PRESSURE_ANSWER, g.HIGH_PRESSURE_ANSWER] and pipeline.calls == []
 
 
 def test_safety_class_is_stored_on_the_turn() -> None:

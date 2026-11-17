@@ -8,7 +8,6 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from trainer.demo_api.copilot_router import create_copilot_router
-from trainer.demo_api.quick_answer import one_line
 from trainer.demo_api.sequence_store import SequenceStore
 from trainer.demo_api.tests.document_evidence import supported_document_result
 from trainer.demo_api.tests.test_pose_engine_first import ARM, _viewer_context
@@ -381,7 +380,7 @@ def test_generation_trace_has_a_byte_bound_and_ignores_nonfinite_metadata(charac
 
 
 def test_semantic_safety_followups_keep_the_original_hazard_for_two_and_three_turns():
-    from trainer.demo_api.safety_guard import QUICK_HIGH_PRESSURE_ANSWER as HIGH_PRESSURE_ANSWER  # 빠른 안내 한 줄
+    from trainer.demo_api.safety_guard import HIGH_PRESSURE_ANSWER
     store = SequenceStore(":memory:")
     pipeline = DialoguePipeline({"kind": "chat", "intent": "knowledge", "scope": "unspecified",
                                  "context_relation": "followup", "resolved_question": ""})
@@ -422,7 +421,7 @@ def test_semantic_followup_reuses_the_existing_guard_for_other_hazard_classes():
     c = client(pipeline, store)
     ask(c, "작업 중에 담배 피워도 돼?")
     data = ask(c, "시간은 짧은데?")
-    assert data["answer"] == one_line(CLASSES["ignition"].answer)
+    assert data["answer"] == CLASSES["ignition"].answer
     assert store.recent_query_turns("CHAT:U", user_id="U")[-1]["safety_class"] == "ignition"
     assert pipeline.conversations == []
 

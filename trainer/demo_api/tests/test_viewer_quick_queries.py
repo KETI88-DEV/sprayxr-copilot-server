@@ -62,7 +62,8 @@ def test_api_uses_authoritative_history_once_and_definition_repeats_have_stable_
     assert "이전 답변" not in pipeline.calls[0]["instruction"]
     assert pipeline.calls[0]["concise_answer"] is True
     assert pipeline.calls[0]["use_pipeline_history"] is False
-    assert "정의 질문은 뜻만 한 문장" in pipeline.calls[0]["generation_instruction"]
+    assert "전체 목록·Zone 순서는 유지" in pipeline.calls[0]["generation_instruction"]
+    assert "60자" not in pipeline.calls[0]["generation_instruction"]
     # A real follow-up still sees the server-owned dialogue and current playback.
     client.post("/api/v1/copilot/query", json={**body, "prompt": "그럼 왜?", "context": _context(200)})
     assert "저도막은 기준보다 얇은 도막" in pipeline.calls[-1]["instruction"]

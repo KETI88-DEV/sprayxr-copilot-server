@@ -18,7 +18,6 @@ from fastapi.testclient import TestClient
 
 from trainer.demo_api import safety_guard
 from trainer.demo_api.copilot_router import ANALYSIS_PROMPT_HEADER, create_copilot_router
-from trainer.demo_api.quick_answer import one_line
 from trainer.demo_api.sequence_store import SequenceStore
 
 KOREAN = "에어리스 건이 막힌 것 같은데 건 끝을 손가락으로 막아서 확인해도 되나요?"
@@ -87,7 +86,7 @@ def test_t15_foreign_question_gets_the_fixed_high_pressure_answer(language: str,
     data, headers = _ask(pipeline, question, language)
     assert pipeline.calls == []  # 손이 건 끝에 닿는 질문은 모델을 부르지 않고 고정 답이다(2차 검토 2026-11-14)
     korean = _korean_answer(pipeline)
-    assert korean == safety_guard.QUICK_HIGH_PRESSURE_ANSWER  # 빠른 안내 한 줄: 금지와 조치 문장(2026-11-16)
+    assert korean == safety_guard.HIGH_PRESSURE_ANSWER
     assert "손가락" in korean and "막지 마세요" in korean
     assert "압력" in korean and "멈추고" in korean and "관리자" in korean
     assert data["citations"] == list(safety_guard.HIGH_PRESSURE_CITATIONS)
@@ -106,7 +105,7 @@ def test_hand_on_tip_question_always_gets_the_fixed_answer_without_the_model() -
     # 독립 검토(2026-11-14): 손으로 건 끝을 막는 질문은 모델 답이 맞아 보여도 고정 답이다(검사로 다 가릴 수 없다).
     pipeline = Pipeline(document=SAFE)
     data, headers = _ask(pipeline, KOREAN, use_rag="N")
-    assert data["answer"] == safety_guard.QUICK_HIGH_PRESSURE_ANSWER and pipeline.calls == []
+    assert data["answer"] == safety_guard.HIGH_PRESSURE_ANSWER and pipeline.calls == []
     assert ANALYSIS_PROMPT_HEADER.lower() not in headers  # 한국어 질문은 옮기지 않았다
 
 
@@ -115,7 +114,7 @@ def test_other_risky_permission_gets_the_class_sentence_and_its_citations() -> N
     pipeline = Pipeline(document="잠깐이면 마스크 없이 칠해도 괜찮습니다.")
     data, _ = _ask(pipeline, "밀폐된 탱크 안에서 방독 마스크 없이 잠깐 칠해도 되나요?")
     ventilation = safety_guard.CLASSES["ventilation"]
-    assert data["answer"] == one_line(ventilation.answer) and data["citations"] == list(ventilation.citations)
+    assert data["answer"] == ventilation.answer and data["citations"] == list(ventilation.citations)
 
 
 def test_safety_questions_that_are_not_permission_questions_keep_the_documents_answer() -> None:
@@ -124,9 +123,10 @@ def test_safety_questions_that_are_not_permission_questions_keep_the_documents_a
     # v3.4.3: 허락하는 말이 없는 답은 두고 그 종류의 주의 한 줄을 덧붙인다.
     assert pipeline.calls == ["run"] and data["answer"] == (
         "정전기 사고를 막으려면 도장 장비와 피도물을 접지합니다.\n" + safety_guard.CLASSES["grounding"].caution)
-    # 빠른 안내는 한 줄이라 주의 한 줄을 앞에 둔다(2026-11-16).
+    # 빠른 안내도 문서 본문과 필수 안전 주의를 모두 보존한다.
     quick, _ = _ask(Pipeline(document="정전기 사고를 막으려면 도장 장비와 피도물을 접지합니다."), "접지 안 하고 칠해도 돼?")
-    assert quick["answer"] == safety_guard.CLASSES["grounding"].caution
+    assert quick["answer"] == (
+        "정전기 사고를 막으려면 도장 장비와 피도물을 접지합니다.\n" + safety_guard.CLASSES["grounding"].caution)
 
 
 def test_ordinary_questions_are_untouched() -> None:

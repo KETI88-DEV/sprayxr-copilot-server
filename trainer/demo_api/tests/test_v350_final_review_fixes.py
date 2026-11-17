@@ -4,7 +4,6 @@ from __future__ import annotations
 import pytest
 
 from trainer.demo_api.record_query import RecordFacts, answer_record_question, ground_generated
-from trainer.demo_api.quick_answer import one_line
 from trainer.demo_api.safety_guard import CLASSES
 from trainer.demo_api.tests.viewer_record import AT_3S, AT_24S, AT_35S, RecordingPipeline, ask, context, payload
 
@@ -21,7 +20,7 @@ def _answer(prompt, playback=AT_3S, task="knowledge_search"):
 def test_emptied_safety_answer_falls_back_to_the_hazard_sentence(prompt: str, document: str, hazard: str) -> None:
     pipeline = RecordingPipeline(document=document, chunks=[{"chunk_id": "DOC-x", "text": "작업 중 환기를 유지한다.", "rerank_score": 9.0}])
     data = ask(prompt, tab="knowledge", playback=AT_3S, pipeline=pipeline)
-    assert data["answer"] == one_line(CLASSES[hazard].answer), data["answer"]  # 빠른 안내 한 줄
+    assert data["answer"] == CLASSES[hazard].answer, data["answer"]
 
 
 # ---- I2: "지금·여기"만으로는 일반 문서 문장을 Zone 판정으로 바꾸지 않는다

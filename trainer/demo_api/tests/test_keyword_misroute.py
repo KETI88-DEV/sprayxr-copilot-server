@@ -49,8 +49,6 @@ def _data(arm: str) -> dict[str, Any]:
 def _ask(prompt: str, tab: str, arm: str = "arm", mode: str = "quick", **kwargs: Any) -> dict[str, Any]:
     kwargs.setdefault("pipeline", DocumentRecordingPipeline())
     found = ask(prompt, tab=tab, mode=mode, data=_data(arm), **kwargs)
-    if mode == "quick":
-        assert "\n" not in found["answer"], found["answer"]
     return found
 
 
@@ -244,8 +242,8 @@ def test_f_quick_mixed_answer_starts_with_the_part_asked_first(arm: str, mode: s
     found = _ask("과도막은 왜 생겨? 내 기록에서도 과도막 난 데 있어?", "knowledge", arm, mode,
                  pipeline=DocumentRecordingPipeline(document="[답변] " + LONG_DOCUMENT))
     assert found["source"] == "documents", found
-    if mode == "quick":  # 문서 답이 한 줄을 채우면 기록 문장은 잘린다
-        assert found["answer"] == LONG_DOCUMENT, found["answer"]
+    if mode == "quick":
+        assert found["answer"].startswith(LONG_DOCUMENT) and "칠한 곳 평균" in found["answer"], found["answer"]
     else:  # 상세 분석은 지금처럼 기록 문장이 앞이다
         assert found["answer"].startswith("칠한 곳 평균") and found["answer"].endswith(LONG_DOCUMENT), found["answer"]
 
@@ -299,7 +297,8 @@ def test_review_i1_order_tab_never_claims_missing_arm_scoring(prompt: str, mode:
 ])
 def test_review_i2_quick_record_question_with_a_knowledge_word_keeps_the_record_first(prompt: str, tab: str, playback: dict, record: str) -> None:
     found = _ask(prompt, tab, playback=playback, pipeline=DocumentRecordingPipeline(document="[답변] " + LONG_DOCUMENT))
-    assert found["source"] == "documents" and record in found["answer"] and LONG_DOCUMENT not in found["answer"], found["answer"]
+    assert found["source"] == "documents" and record in found["answer"] and LONG_DOCUMENT in found["answer"], found["answer"]
+    assert found["answer"].index(record) < found["answer"].index(LONG_DOCUMENT), found["answer"]
 
 
 @both

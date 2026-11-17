@@ -19,8 +19,8 @@ def _model(reply: str = "왼손 자세는 정상 범위 내에 있는 것으로 
 
 @pytest.mark.parametrize("prompt", ["Zone별로 어디가 제일 문제야?", "가장 문제가 큰 Zone은?", "어느 구역 자세가 제일 나빠?"])
 def test_worst_zone_questions_get_the_per_zone_pose_summary(prompt: str) -> None:
-    quick = ask(prompt, tab="pose", pipeline=_model())["answer"]  # 빠른 안내 한 줄(2026-11-16): 가장 낮은 Zone
-    assert quick.startswith("자세 유사도가 가장 낮은 곳은 Zone 9(50%)") and "\n" not in quick and len(quick) <= 60
+    quick = ask(prompt, tab="pose", pipeline=_model())["answer"]
+    assert "Zone 9(50%)" in quick and "오른쪽 팔꿈치" in quick and NOTE in quick
     result = ask(prompt, tab="pose", mode="detailed", pipeline=_model())
     answer = result["answer"]
     assert result["calls"] == [], answer
@@ -57,8 +57,8 @@ def test_conversation_answers_pass_the_zone_check() -> None:
 
 @pytest.mark.parametrize("tab", ["pose", "knowledge"])
 def test_right_hand_question_answers_from_the_arm_engine(tab: str) -> None:
-    quick = ask("오른손은 어케 고쳐야돼", tab=tab, pipeline=_model())["answer"]  # 빠른 안내 한 줄은 할 일만(2026-11-16)
-    assert quick == "분사 2회 중 1회 오른팔 교정: 오른쪽 팔꿈치를 몸에서 20cm 더 떼어 주세요."
+    quick = ask("오른손은 어케 고쳐야돼", tab=tab, pipeline=_model())["answer"]
+    assert "오른쪽 팔꿈치가 숙련자 평균보다 몸 쪽으로 20cm 더 붙어" in quick and "손목 교정은 없었습니다" in quick
     result = ask("오른손은 어케 고쳐야돼", tab=tab, mode="detailed", pipeline=_model())
     answer = result["answer"]
     assert result["calls"] == [], answer
@@ -81,7 +81,7 @@ def test_elbow_questions_use_the_forearm_result_without_inventing_angles(prompt:
     answer = result["answer"]
     assert result["calls"] == [], answer
     assert "°" not in answer and "확인할 수 없습니다" not in answer
-    assert "각도" in answer and ("몸에서 20cm 더 떼어" if mode == "quick" else "몸 쪽으로 20cm 더 붙어") in answer
+    assert "각도" in answer and "몸 쪽으로 20cm 더 붙어" in answer
 
 
 def test_tsb_elbow_question_reads_the_forearm_joint() -> None:

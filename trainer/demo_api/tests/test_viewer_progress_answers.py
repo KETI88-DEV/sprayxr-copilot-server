@@ -29,9 +29,6 @@ def test_missing_and_touch_up_questions_use_visits_and_the_final_gate(tab: str, 
     # 9개 Zone 모두 최종 게이트가 needs_more다. v3.4.1: 목록을 다 늘어놓지 않고 정상 범위 안 면적이 가장 낮은 3곳만,
     # 등급 낱말(정상·저도막)과 평균 µm 없이, 줄을 나눠 적는다.
     assert "9개 Zone을 모두 칠했지만 9개 모두 보완이 필요합니다." in answer
-    if mode == "quick":  # 빠른 안내는 한 줄 60자다(2026-11-16). 첫 문장이 답이다.
-        assert answer == "9개 Zone을 모두 칠했지만 9개 모두 보완이 필요합니다."
-        return
     assert "가장 부족한 곳은 Zone 3(정상 범위 안 0%), Zone 8(1.9%), Zone 5(2.8%)입니다." in answer
     assert not re.search(r"정상(?!\s*범위)", answer) and "저도막" not in answer and "µm" not in answer and "방문하지 않은" not in answer
     assert answer.endswith("최종 도막 기준이며 재생 시점의 도막은 아닙니다.") and "\n" in answer
@@ -52,9 +49,10 @@ def test_next_zone_uses_the_playhead_and_expert_transitions(tab: str, prompt: st
     assert result["calls"] == [], answer
     # 3.0초까지 Zone 9·8을 칠했다. 전문가 6회 중 2회씩 Zone 8 다음에 Zone 5와 6으로 갔다 → 동률이라 둘 다 든다.
     assert answer.startswith("다음은 Zone 5나 Zone 6을 권합니다") and "현재 Zone 8" in answer
-    assert "전문가 6회 중 각 2회로 동률" in answer and "\n" not in answer  # 빠른 안내 한 줄(2026-11-16)
+    assert "전문가 6회 중 각 2회로 동률" in answer
+    assert "최종 도막만 있어 현재 완료 여부는 알 수 없습니다" in answer
     detailed = ask(prompt, tab=tab, playback=AT_3S, mode="detailed", pipeline=_model())["answer"]
-    assert detailed.startswith(answer) and "최종 도막만 있어 현재 완료 여부는 알 수 없습니다" in detailed
+    assert detailed == answer
     assert result["sequence_context"]["next_zone_candidates"] == ["5", "6"]
     assert "Zone 7" not in answer  # 권장 다음 구역만 물었으므로 이 기록의 실제 다음 방문은 나열하지 않는다.
     assert result["sequence_context"]["next_zone_id"] == "5"
