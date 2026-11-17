@@ -50,7 +50,8 @@ WORST = [
     _progress("complete", coverage=100.0, mean=199.0, next_zone="38"),
     _progress("overpaint_risk", coverage=12.3, over=99.9, mean=1600.0),
     _progress("needs_more", coverage=100.0, mean=159.96),
-    _progress("needs_more", coverage=99.9, over=99.9),
+    _progress("needs_more", coverage=45.5, over=54.5),  # 정상범위+상한 초과 ≤ 100%. 둘 다 두 자리 소수
+    _progress("needs_more", coverage=0.1, over=99.9),
     _progress("needs_more", coverage=94.9),
     None,
 ]
@@ -70,6 +71,8 @@ def test_longest_zone_numbers_and_direction_still_fit(progress, direction) -> No
         assert "분사 중지" in text
     if progress is not None and progress.status == "complete":
         assert "Zone 38로 이동" in text
+    if progress is not None and progress.status == "needs_more" and progress.overpaint_percent:
+        assert "상한 초과" in text and "분사 중지" in text
 
 
 @pytest.mark.parametrize("mode", ["quick", "detailed"])
