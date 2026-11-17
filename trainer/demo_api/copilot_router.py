@@ -222,12 +222,15 @@ _WORK_SCORE_ASKED: Final = re.compile(r"작업\s*(?:유사도|점수)|종합\s*�
 _POSE_ASKED: Final = re.compile(r"자세(?!히|하게|한)|동작|관절|posture|pose", re.I)
 NO_ARM_POSE: Final = "이 기록에는 팔 자세 채점 결과가 없어 자세 유사도를 알 수 없습니다."
 NO_ARM_WORK_NOTE: Final = "참고로 아래는 작업 유사도(거리·각도·방향 비교, 자세 유사도와 다른 값)입니다."
-# 이의 제기만 하는 말("아까 답 이상한데", "다시 봐줘"). 새 주장·질문이 붙으면 앞 질문을 다시 답하지 않는다(사용자 결정 I6).
-_OBJECTION: Final = re.compile(r"이상|틀린|틀렸|틀리|잘못|다시\s*(?:봐|확인|답|말|알려|해)|아닌\s*것\s*같|맞아|맞나|맞는\s*거|확실|진짜|정말")
+# 이의 제기 말투("아까 답 이상한데", "아닌 거 같은데", "다시 봐줘"). 이것과 군말을 걷어 내고 남는 내용이 없으면
+# 이의 제기만 한 말이다. 내용(주장·질문)이나 숫자가 남으면 앞 질문을 다시 답하지 않는다(사용자 결정 I6).
+_OBJECTION_WORDS: Final = re.compile(
+    r"이상(?:한데|하네|해요?|하다|하지\s*않아)?|틀린|틀렸|틀리|잘못|아닌\s*(?:거|것)\s*같|아니잖아|아닌데|아니야|아냐|아니"
+    r"|맞아|맞나|맞는\s*거|확실해|진짜|정말|다시|확인|아까|방금|그거|그건|이거|답|대답|말|좀|봐|줘|해|요|거|같은데|같아|[?？!.~,·\s]")
 
 
 def _objection_only(prompt: str) -> bool:
-    return all(_OBJECTION.search(piece) for piece in split_parts(prompt))
+    return not re.search(r"\d", prompt) and len(_OBJECTION_WORDS.sub("", prompt)) <= 2
 
 
 def _no_arm_notice(prompt: str, side: str | None) -> str:
@@ -1222,19 +1225,19 @@ async def _execute_copilot_query(
                            and _abstain_below(planned_pipeline, query.response_mode) is not None)
         # 옛 행(v3.4.4 이전)에는 safety_class 열이 없어 앞 질문 문장도 다시 위험 판정한다.
         if (decision["kind"] == "correction" and dialogue_turns and not dialogue_turns[-1].get("safety_class")
-                and classify(dialogue_turns[-1]["prompt"]) is None and not _objection_only(query.prompt)):
-            # 새 말에 주장·질문이 있으면 앞 질문을 되풀이하지 않고 그 말을 문서로 답한다(사용자 결정 I6).
-            decision = {**decision, "kind": "coating_knowledge", "intent": "knowledge"}
-            query = query.model_copy(update={"task_type": "knowledge_search"})
-            grounded = True
-        elif (decision["kind"] == "correction" and dialogue_turns and not dialogue_turns[-1].get("safety_class")
                 and classify(dialogue_turns[-1]["prompt"]) is None):
             # "아까 답 이상한데"는 앞 질문을 기록으로 다시 답한다. 앞 턴이 위험 질문이면 다시 분류하지 않는다(안전 검사를 건너뛰지 않게).
             again = answer_record_question(query.context, dialogue_turns[-1]["prompt"], task_type=query.task_type,
                                            recent_turns=dialogue_turns[:-1], quick=query.response_mode == "quick")
             if again is not None and again.kind != "mixed":
-                return _success_response(query, request_started, answer=again.text, retrieval_used=False, citations=[],
-                                         sequence_context=again.sequence_context, context_status="available", subject=again.subject)
+                if _objection_only(query.prompt):
+                    return _success_response(query, request_started, answer=again.text, retrieval_used=False, citations=[],
+                                             sequence_context=again.sequence_context, context_status="available", subject=again.subject)
+                # 앞 답이 기록 답이고 새 말에 주장·질문이 있으면 되풀이하지 않고 그 말을 문서로 답한다(사용자 결정 I6).
+                # 앞 답이 기록 답이 아니면(잡담·주제 밖 지적) 예전처럼 아래 대화 경로가 받는다.
+                decision = {**decision, "kind": "coating_knowledge", "intent": "knowledge"}
+                query = query.model_copy(update={"task_type": "knowledge_search"})
+                grounded = True
         # 기록·도장 지식 질문은 대화 모델이 아니라 아래 분석·문서 경로가 답한다. 되묻기와 잡담만 대화로 답한다.
         if ((decision["kind"] in {"chat", "clarify", "correction"} or cross_tab or zone_lookup) and not chat_redirected
                 and (decision["kind"] == "clarify" or not grounded

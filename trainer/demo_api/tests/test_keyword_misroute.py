@@ -200,7 +200,8 @@ def test_d_pair_pose_concept_question_goes_to_the_documents(arm: str, mode: str)
 
 # ---------------------------------------------------------------- E. 일반 명사·문서 산출물 낱말은 기록·기준 순서 표지가 아니다
 @both
-@pytest.mark.parametrize("prompt", ["건도막 두께는 PSPC 구역이랑 그 외 구역에서 어떤 법칙으로 판정해?", "미도장 부위는 정확히 어떤 상태를 말하나요?"])
+@pytest.mark.parametrize("prompt", ["건도막 두께는 PSPC 구역이랑 그 외 구역에서 어떤 법칙으로 판정해?", "미도장 부위는 정확히 어떤 상태를 말하나요?",
+                                    "두껍게 칠한 부위를 과도막이라고 말하나요?"])  # 재검토 N3: "칠한"은 기록 지시가 아니다
 def test_e_rule_and_definition_questions_go_to_the_documents(prompt: str, arm: str, mode: str) -> None:
     """사례 16·17: "구역·부위" 낱말 하나에 도막 상태 답이 나왔다."""
     found = _ask(prompt, "knowledge", arm, mode)
@@ -358,9 +359,29 @@ def test_review_i6_objection_with_a_claim_answers_the_claim_from_the_documents(m
 
 
 @pytest.mark.parametrize("mode", MODES)
-@pytest.mark.parametrize("objection", ["아까 답 이상한데", "다시 봐줘", "틀린 것 같은데"])
+@pytest.mark.parametrize("objection", ["아까 답 이상한데", "다시 봐줘", "틀린 것 같은데", "아닌 거 같은데", "아니잖아"])  # 재검토 N2
 def test_review_i6_pair_objection_alone_answers_the_previous_question_again(objection: str, mode: str) -> None:
     store = SequenceStore(":memory:")
     _ask("뭐부터 고쳐야 돼? 딱 하나만 콕 집어줘.", "knowledge", mode=mode, store=store)
     found = _ask(objection, "knowledge", mode=mode, store=store, pipeline=RecordingPipeline(plan=_CORRECTION))
     assert found["source"] == "analysis" and found["answer"].startswith("Zone 3부터 보완"), found["answer"]
+
+
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("claim", ["160 이상이어야 하는 거 아냐?", "그럼 속도를 올리면 되는 거 아냐"])
+def test_review_n2_a_claim_without_objection_words_is_not_an_objection(claim: str, mode: str) -> None:
+    store = SequenceStore(":memory:")
+    _ask("뭐부터 고쳐야 돼? 딱 하나만 콕 집어줘.", "knowledge", mode=mode, store=store)
+    found = _ask(claim, "knowledge", mode=mode, store=store, pipeline=RecordingPipeline(plan=_CORRECTION))
+    # 앞 질문(기록 우선순위)을 되풀이하지 않는다. 기록 낱말("속도")이 있으면 기록 답이 받는다.
+    assert not found["answer"].startswith("Zone 3부터 보완"), found["answer"]
+    assert found["source"] == ("documents" if claim.startswith("160") else "analysis"), found
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_review_n1_correction_after_a_non_record_answer_stays_in_the_conversation(mode: str) -> None:
+    """앞 답이 기록 답이 아니면(주제 밖 잡담) 이의 제기는 예전처럼 대화 경로가 받는다. 문서 기권으로 바꾸지 않는다."""
+    store = SequenceStore(":memory:")
+    _ask("오늘 점심 뭐 먹을까요?", "knowledge", mode=mode, store=store)
+    found = _ask("아니 그거 말고 다른 메뉴는?", "knowledge", mode=mode, store=store, pipeline=RecordingPipeline(plan=_CORRECTION))
+    assert found["source"] != "documents", found
