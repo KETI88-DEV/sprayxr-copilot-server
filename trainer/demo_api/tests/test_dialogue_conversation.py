@@ -173,3 +173,16 @@ def test_record_followups_in_coating_tab_keep_the_planner_chat_route():
         response = c.post("/api/v1/copilot/query", json=body(prompt, task_type="knowledge_search"), headers=headers)
         assert response.headers["X-Copilot-Answer-Source"] == "conversation", prompt
     assert pipeline.rag_calls == []
+
+
+def test_detailed_conversation_without_documents_is_answered_by_the_quick_model():
+    from types import SimpleNamespace
+    from trainer.demo_api.query_runtime import QuickQueryRuntime
+    pipeline = DialoguePipeline(); quick = SimpleNamespace(name="8B")
+    pipeline.quick_query_runtime = QuickQueryRuntime(quick, object(), 8192)
+    seen = []
+    original = pipeline.converse_copilot
+    pipeline.converse_copilot = lambda prompt, **kw: seen.append(kw.get("inference_backend")) or original(prompt, **kw)
+    c = client(pipeline, SequenceStore(":memory:"))
+    answer = c.post("/api/v1/copilot/query", json=body("야", response_mode="detailed")).json()["data"]
+    assert answer["answer"] == "네, 말씀하세요." and seen == [quick]

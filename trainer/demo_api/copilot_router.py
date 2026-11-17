@@ -1185,10 +1185,13 @@ async def _execute_copilot_query(
                                              retrieval_used=False, citations=[],
                                              context_status="available" if found_report else "not_available")
             simulator = {"simulator_context": SIMULATOR_CONTEXT} if wants_simulator_context(query.prompt) else {}
+            # 문서 없는 대화는 응답 수준과 무관하게 빠른 안내 모델이 답한다(없으면 그대로 27B).
+            # 27B LoRA v7.1은 자료가 없을 때 "음.. 그거"·"응"에 지어낸 이상 탐지 진단 틀을 냈다(2026-11-17).
+            talker = select_query_pipeline(planned_pipeline, "quick")
             def converse():
-                with generation_slot_for(planned_pipeline):
-                    return planned_pipeline.converse_copilot(query.prompt, recent_turns=model_turns,
-                                                             facts=facts, response_mode=query.response_mode, **simulator)
+                with generation_slot_for(talker):
+                    return talker.converse_copilot(query.prompt, recent_turns=model_turns,
+                                                   facts=facts, response_mode=query.response_mode, **simulator)
             answer = plain_answer(await to_thread.run_sync(converse))
             extended = is_domain_question(query.prompt)
             if ungrounded_measurements(answer, facts=facts, prompt=query.prompt, extended=extended):
