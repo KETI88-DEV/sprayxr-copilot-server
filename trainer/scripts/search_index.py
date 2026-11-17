@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import re
 import sys
 import time
 from pathlib import Path
@@ -106,6 +107,8 @@ def retrieve(
         if idx == -1 or idx >= len(id_map):
             continue
         entry = id_map[int(idx)]
+        if entry["chunk_id"] in EXCLUDED_CHUNKS:
+            continue
         results.append({
             "rank": rank,
             "chunk_id": entry["chunk_id"],
@@ -147,6 +150,32 @@ def rerank(
     return ranked[:top_k]
 
 
+DUPLICATE_FETCH_FACTOR = 3
+# 틀린 답을 만드는 것으로 확인된 조각은 검색에서 뺀다(목록과 이유는 파일에).
+EXCLUDED_CHUNKS: frozenset[str] = frozenset(
+    json.loads((Path(__file__).resolve().parents[1] / "configs" / "evidence_exclusions.json").read_text(encoding="utf-8"))["조각"]
+)
+_DUPLICATE_NOISE = re.compile(r"<br\s*/?>|[\s|\-•·]")
+
+
+def duplicate_key(text: str) -> str:
+    """공백·<br>·표 기호를 지운 앞 200자. 같으면 같은 근거로 본다."""
+    return _DUPLICATE_NOISE.sub("", text)[:200]
+
+
+def fold_duplicates(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """검색 순위가 가장 높은 것 하나만 남기고 같은 본문을 접는다."""
+    seen: set[str] = set()
+    kept: List[Dict[str, Any]] = []
+    for candidate in candidates:
+        key = duplicate_key(str(candidate.get("text", "")))
+        if key in seen:
+            continue
+        seen.add(key)
+        kept.append(candidate)
+    return kept
+
+
 def search_and_rerank(
     query: str,
     index: Any,
@@ -164,7 +193,9 @@ def search_and_rerank(
     timing: Dict[str, float] = {}
 
     t0 = time.time()
-    candidates = retrieve(query, index, id_map, embedder, top_k=top_k)
+    # 색인의 약 9%가 같은 본문(NCS 학습 목표·평가표 반복 등)이라 그대로면 상위 후보를 같은 문장이 채운다
+    # (2026-11-17 "과도막은 왜 생겨?"에서 처짐 문장 반복이 직접 원인 조각을 밀어냄). 넉넉히 꺼내 접은 뒤 top_k 를 채운다.
+    candidates = fold_duplicates(retrieve(query, index, id_map, embedder, top_k=top_k * DUPLICATE_FETCH_FACTOR))[:top_k]
     timing["retrieve_ms"] = (time.time() - t0) * 1000
 
     if skip_rerank or reranker is None:
