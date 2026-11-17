@@ -261,3 +261,48 @@ def test_guard_stops_unless_own_lock(monkeypatch):
 
 def test_health_sample_script_parses():
     subprocess.run(["bash", "-n", str(Path(ops_lock.__file__).with_name("health_sample.sh"))], check=True)
+
+
+def test_container_replaced_without_lock_is_a_warning(ops):
+    before = {"ready": True, "ready_code": 200, "model": "A", "containers": {"shipcoat-spark-web-1": "web:1(aaa)"}}
+    after = {**before, "containers": {"shipcoat-spark-web-1": "web:2(bbb)"}}
+    state = dict(before)
+    probe = lambda: dict(state)  # noqa: E731
+    ops_lock.watch([], NOW, probe)
+    state.update(after)
+    message = ops_lock.watch([], NOW, probe)
+    assert message == "[경고] 잠금 없이 운영 변경 · 컨테이너 교체: shipcoat-spark-web-1 web:1(aaa) → web:2(bbb)"
+    ops_lock.take("other", "KURE", "웹 교체", UNTIL, NOW)
+    state.update(before)
+    assert ops_lock.watch([], NOW, probe).startswith("[운영 상태] 컨테이너 교체")
+
+
+def test_check_without_kind_accepts_any_own_lock():
+    ops_lock.take("vllm", "KURE", "교체", UNTIL, NOW)
+    assert ops_lock.check("KURE", None, NOW)[0]
+    assert not ops_lock.check("V3", None, NOW)[0]
+
+
+def _guard(tmp_path, *args, by=None):
+    import os
+    fake = tmp_path / "fake-docker"
+    fake.write_text('#!/bin/sh\necho "REAL $*"\n')
+    fake.chmod(0o755)
+    env = {**os.environ, "DOCKER_REAL": str(fake), "OPS_LOCK": str(Path(ops_lock.__file__))}
+    env.pop("OPS_LOCK_BY", None)
+    if by:
+        env["OPS_LOCK_BY"] = by
+    script = Path(ops_lock.__file__).with_name("docker_guard.sh")
+    return subprocess.run(["bash", str(script), *args], capture_output=True, text=True, env=env)
+
+
+def test_docker_guard_blocks_production_changes_without_own_lock(tmp_path):
+    assert _guard(tmp_path, "ps", "-a").stdout == "REAL ps -a\n"
+    blocked = _guard(tmp_path, "stop", "shipcoat-spark-web-1")
+    assert blocked.returncode == 3 and "운영 잠금 없이" in blocked.stderr and "REAL" not in blocked.stdout
+    assert _guard(tmp_path, "stop", "my-test-box").returncode == 0  # 운영 이름이 아니면 통과
+    now = datetime.now(timezone.utc)
+    ops_lock.take("other", "KURE", "웹 재시작", now + timedelta(hours=1), now)
+    assert _guard(tmp_path, "restart", "shipcoat-spark-web-1", by="V3").returncode == 3  # 남의 잠금
+    assert _guard(tmp_path, "restart", "shipcoat-spark-web-1", by="KURE").stdout == "REAL restart shipcoat-spark-web-1\n"
+    assert _guard(tmp_path, "compose", "-p", "shipcoat-spark", "up", "-d").returncode == 3

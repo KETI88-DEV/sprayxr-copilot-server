@@ -248,7 +248,7 @@ def check(by: str, what: str, now: datetime) -> tuple[bool, str]:
     if lock is None:
         return False, f"잠금이 없다. 먼저: ops_lock.py take --what {what} --by {by} --reason ... --until HH:MM"
     _note_expired(lock, now)
-    if lock.get("broken") or lock.get("by") != by or lock.get("what") != what:
+    if lock.get("broken") or lock.get("by") != by or (what and lock.get("what") != what):
         return False, f"자기 잠금이 아니다: {describe(lock, now)}"
     if expired(lock, now):
         return False, f"자기 잠금이지만 기한이 지났다: {describe(lock, now)}. release 후 다시 take"
@@ -337,7 +337,24 @@ def _probe() -> dict[str, Any]:
         model = ",".join(sorted(models)) or None
     except (OSError, ValueError, KeyError, TypeError):
         model = None
-    return {"ready": ready_code == 200, "ready_code": ready_code, "model": model}
+    return {"ready": ready_code == 200, "ready_code": ready_code, "model": model, "containers": _containers()}
+
+
+def _containers() -> dict[str, str]:
+    """운영 컨테이너 이름 → "이미지(ID 앞 12자)". 잠금 없이 바뀐 것을 잡는 데 쓴다. 감싼 docker 를 거치지 않는다."""
+    names = os.environ.get("OPS_PROD_CONTAINERS", "shipcoat-spark-agent-api-1 shipcoat-spark-mcp-1 "
+                           "shipcoat-spark-vllm-1 shipcoat-spark-quick-vllm-1 shipcoat-spark-web-1").split()
+    try:
+        out = subprocess.run(["/usr/bin/docker", "ps", "-a", "--no-trunc", "--format", "{{.Names}}\t{{.Image}}\t{{.ID}}"],
+                             capture_output=True, text=True, timeout=30, check=True).stdout
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    found = {}
+    for line in out.splitlines():
+        name, image, cid = (line.split("\t") + ["", ""])[:3]
+        if name in names:
+            found[name] = f"{image}({cid[:12]})"
+    return found
 
 
 def changes(previous: dict[str, Any], current: dict[str, Any]) -> list[str]:
@@ -357,6 +374,10 @@ def changes(previous: dict[str, Any], current: dict[str, Any]) -> list[str]:
             found.append(f"vLLM 모델 응답 없음(직전 {before})")
         else:
             found.append(f"vLLM 모델 응답 복구: {after}")
+    before_ids, after_ids = previous.get("containers") or {}, current.get("containers") or {}
+    for name in sorted(set(before_ids) & set(after_ids)):
+        if before_ids[name] != after_ids[name]:
+            found.append(f"컨테이너 교체: {name} {before_ids[name]} → {after_ids[name]}")
     was, now_down = set(previous.get("down", [])), set(current["down"])
     if now_down - was:
         found.append("운영 컨테이너 중단: " + ", ".join(sorted(now_down - was)))
@@ -376,8 +397,9 @@ def watch(down: list[str], now: datetime, probe=_probe) -> str | None:
     message = None
     sent = True
     if found:
-        message = "[운영 상태] " + " · ".join(found)
         lock = read_lock()
+        unlocked = lock is None and any(text.startswith(("컨테이너 교체", "모델 바뀜")) for text in found)
+        message = ("[경고] 잠금 없이 운영 변경 · " if unlocked else "[운영 상태] ") + " · ".join(found)
         if lock:
             _note_expired(lock, now)
             message += f" · 예정된 작업 중(잠금: {describe(lock, now)})"
@@ -403,7 +425,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("status")
     p = sub.add_parser("check")
     p.add_argument("--by", required=True)
-    p.add_argument("--what", choices=WHAT, required=True)
+    p.add_argument("--what", choices=WHAT, help="생략하면 종류는 보지 않는다(감싼 docker 명령이 쓴다)")
     p = sub.add_parser("version")
     vsub = p.add_subparsers(dest="action", required=True)
     vsub.add_parser("next").add_argument("--by", required=True)
@@ -419,6 +441,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "take":
             ok, lock = take(args.what, args.by.strip(), args.reason.strip(), parse_until(args.until, now), now)
             print(("잠금을 잡았다: " if ok else "이미 잡혀 있다: ") + describe(lock, now))
+            if ok:
+                print(f'운영 컨테이너를 바꾸는 docker 명령 전에: export OPS_LOCK_BY="{lock["by"]}"')
             return 0 if ok else 1
         if args.command == "release":
             if args.force and not args.reason.strip():
