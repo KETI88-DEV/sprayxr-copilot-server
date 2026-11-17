@@ -175,14 +175,22 @@ def test_record_followups_in_coating_tab_keep_the_planner_chat_route():
     assert pipeline.rag_calls == []
 
 
-def test_detailed_conversation_without_documents_is_answered_by_the_quick_model():
+def test_only_a_diagnostic_scaffold_conversation_is_rewritten_by_the_quick_model():
     from types import SimpleNamespace
     from trainer.demo_api.query_runtime import QuickQueryRuntime
     pipeline = DialoguePipeline(); quick = SimpleNamespace(name="8B")
     pipeline.quick_query_runtime = QuickQueryRuntime(quick, object(), 8192)
     seen = []
     original = pipeline.converse_copilot
-    pipeline.converse_copilot = lambda prompt, **kw: seen.append(kw.get("inference_backend")) or original(prompt, **kw)
+    def converse(prompt, **kw):
+        seen.append(kw.get("inference_backend"))
+        if prompt == "응" and kw.get("inference_backend") is None:
+            return "[분석] 현재 시퀀스의 분사 패턴을 확인했습니다.\n[판정] 이상 탐지"
+        return "어떤 내용을 말씀하시는지 알려주세요." if prompt == "응" else original(prompt, **kw)
+    pipeline.converse_copilot = converse
     c = client(pipeline, SequenceStore(":memory:"))
+    answer = c.post("/api/v1/copilot/query", json=body("응", response_mode="detailed")).json()["data"]
+    assert answer["answer"] == "어떤 내용을 말씀하시는지 알려주세요." and seen == [None, quick]
+    seen.clear()
     answer = c.post("/api/v1/copilot/query", json=body("야", response_mode="detailed")).json()["data"]
-    assert answer["answer"] == "네, 말씀하세요." and seen == [quick]
+    assert answer["answer"] == "네, 말씀하세요." and seen == [None]  # 진단 틀이 없으면 27B 답 그대로

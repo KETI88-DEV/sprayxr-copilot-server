@@ -215,6 +215,8 @@ SUBJECT_HEADER: Final = "X-Copilot-Subject"  # 서버 안에서만 쓴다. 바�
 # 외국어 질문을 한국어로 옮긴 문장(퍼센트 인코딩). 응답 본문은 바꾸지 않는다.
 ANALYSIS_PROMPT_HEADER: Final = "X-Copilot-Analysis-Prompt"
 _EVALUATION_QUESTION: Final = re.compile(r"잘한|못한|고쳐야|고칠|개선할|개선점|문제점|부족한 점")
+# 대화 지침이 금지한 도구 진단 틀(줄 머리의 [분석]·[판정]·[원인]·[조치]).
+_DIAGNOSTIC_SCAFFOLD: Final = re.compile(r"(?m)^\s*\[(?:분석|판정|원인|조치)\]")
 # 자세 탭에서 무엇을 물을 수 있는지 묻거나 낱말을 옮겨 달라는 말은 채점 조회가 아니다(사례 11·12). 자세 탭에만 쓴다.
 _TAB_OR_WORD: Final = re.compile(r"탭|(?:물어볼|질문할)\s*수|영어로|한자로|영어\s*(?:단어|표현)")
 _WORK_SCORE_ASKED: Final = re.compile(r"작업\s*(?:유사도|점수)|종합\s*유사도")
@@ -1185,13 +1187,17 @@ async def _execute_copilot_query(
                                              retrieval_used=False, citations=[],
                                              context_status="available" if found_report else "not_available")
             simulator = {"simulator_context": SIMULATOR_CONTEXT} if wants_simulator_context(query.prompt) else {}
-            # 문서 없는 대화는 응답 수준과 무관하게 빠른 안내 모델이 답한다(없으면 그대로 27B).
-            # 27B LoRA v7.1은 자료가 없을 때 "음.. 그거"·"응"에 지어낸 이상 탐지 진단 틀을 냈다(2026-11-17).
-            talker = select_query_pipeline(planned_pipeline, "quick")
             def converse():
-                with generation_slot_for(talker):
-                    return talker.converse_copilot(query.prompt, recent_turns=model_turns,
-                                                   facts=facts, response_mode=query.response_mode, **simulator)
+                kwargs = dict(recent_turns=model_turns, facts=facts, response_mode=query.response_mode, **simulator)
+                with generation_slot_for(planned_pipeline):
+                    raw = planned_pipeline.converse_copilot(query.prompt, **kwargs)
+                # 27B LoRA v7.1은 자료 없는 "음.. 그거"·"응"에 금지된 [분석]/[판정] 진단 틀로 지어낸 이상 탐지를 냈다
+                # (2026-11-17). 그 틀이 나온 답만 빠른 안내 모델로 다시 쓴다. 주제 밖 대화 등 나머지는 27B 그대로.
+                fallback = select_query_pipeline(planned_pipeline, "quick")
+                if fallback is not planned_pipeline and _DIAGNOSTIC_SCAFFOLD.search(raw):
+                    with generation_slot_for(fallback):
+                        return fallback.converse_copilot(query.prompt, **kwargs)
+                return raw
             answer = plain_answer(await to_thread.run_sync(converse))
             extended = is_domain_question(query.prompt)
             if ungrounded_measurements(answer, facts=facts, prompt=query.prompt, extended=extended):
