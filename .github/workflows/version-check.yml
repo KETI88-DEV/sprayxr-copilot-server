@@ -1,0 +1,23 @@
+name: Version number check
+
+# main 에 올라온 __version__ 이 이미 다른 코드에 쓰인 번호이거나 마지막 태그보다 작으면 실패로 표시한다.
+# 릴리스 게시(release.yml)와는 따로 돈다. 규칙은 trainer/scripts/version_tag_check.py 독스트링.
+on:
+  push:
+    branches: ['main']
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out with tags
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check package version against tags
+        run: python3 trainer/scripts/version_tag_check.py
