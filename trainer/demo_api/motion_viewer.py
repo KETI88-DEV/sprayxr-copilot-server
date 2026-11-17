@@ -318,18 +318,41 @@ def _open_csv(path: Path) -> TextIO:
 
 
 @lru_cache(maxsize=64)
+def _csv_span(path_text: str, stamp: tuple[int, int]) -> tuple[int, int, float | None, float | None]:
+    """(재생을 시작할 행, 행 수, 그 행의 CSV 시각, 첫 행의 CSV 시각).
+
+    재생은 첫 분사부터 시작한다(2026-11-17 사용자 원칙). 세션 시작부터 담긴 변환 기록은 앞부분이 건을 들기 전
+    대기·추적 초기화 구간이라 0:00에 건 위치·시점 중심이 틀어진다. 분사가 없는 기록은 첫 행부터다.
+    """
+    del stamp
+    start, rows, start_time, first_time, found = 0, 0, None, None, False
+    with _open_csv(Path(path_text)) as handle:
+        reader = csv.reader(handle)
+        header = [name.strip() for name in next(reader, [])]
+        spray = header.index("분사") if "분사" in header else None
+        clock = header.index("시간(초)") if "시간(초)" in header else None
+        for index, row in enumerate(reader):
+            rows += 1
+            when = _number(row[clock]) if clock is not None and clock < len(row) else None
+            if index == 0:
+                first_time = when
+            if not found and spray is not None and spray < len(row) and _spraying(row[spray]):
+                start, start_time, found = index, when, True
+    return start, rows, (start_time if found else first_time), first_time
+
+
+@lru_cache(maxsize=64)
 def _sample_csv(
     path_text: str, stamp: tuple[int, int], frame_count: int, process: str | None = None
 ) -> tuple[dict[str, Any], ...]:
-    del stamp
     path = Path(path_text)
-    with _open_csv(path) as handle:
-        row_count = max(0, sum(1 for _ in handle) - 1)
-    if row_count == 0:
+    start, row_count, _, _ = _csv_span(path_text, stamp)
+    span = row_count - start
+    if span <= 0:
         return ()
-    count = min(frame_count, row_count)
+    count = min(frame_count, span)
     targets = {
-        round(index * (row_count - 1) / max(1, count - 1))
+        start + round(index * (span - 1) / max(1, count - 1))
         for index in range(count)
     }
     frames: list[dict[str, Any]] = []
@@ -632,12 +655,14 @@ def _frames(path: Path, frame_count: int, process: str | None = None) -> list[di
 
 
 def _clock_offset(path: Path, frame_count: int) -> float:
-    """재생 0초(첫 표본 프레임)가 CSV 첫 행보다 늦은 만큼. 시계를 못 읽으면 0."""
-    frames = _frames(path, frame_count)
-    with _open_csv(path) as handle:
-        origin = _number(next(csv.DictReader(handle), {}).get("시간(초)"))
-    first = _number(frames[0].get("csv_time_seconds")) if frames else None
-    return first - origin if first is not None and origin is not None else 0.0
+    """재생 0초(첫 분사 행)가 CSV 첫 행보다 늦은 만큼. 시계를 못 읽으면 0.
+
+    재생 프레임과 같은 `_csv_span` 캐시를 쓴다(예전에는 공정 인자 없이 CSV를 한 번 더 읽었다).
+    """
+    del frame_count
+    stat = path.stat()
+    _, _, start_time, origin = _csv_span(str(path), (stat.st_mtime_ns, stat.st_size))
+    return start_time - origin if start_time is not None and origin is not None else 0.0
 
 
 def _canonicalize_zone_items(
