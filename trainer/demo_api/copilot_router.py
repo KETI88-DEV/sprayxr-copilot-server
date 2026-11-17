@@ -215,6 +215,10 @@ SUBJECT_HEADER: Final = "X-Copilot-Subject"  # 서버 안에서만 쓴다. 바�
 # 외국어 질문을 한국어로 옮긴 문장(퍼센트 인코딩). 응답 본문은 바꾸지 않는다.
 ANALYSIS_PROMPT_HEADER: Final = "X-Copilot-Analysis-Prompt"
 _EVALUATION_QUESTION: Final = re.compile(r"잘한|못한|고쳐야|고칠|개선할|개선점|문제점|부족한 점")
+# "뭐부터 고치면/고쳐야/고칠"은 활용형과 상관없이 같은 답 틀이다(2026-11-17 사례 5: "고치면"만 기본 답으로 갔다).
+_FIRST_FIX: Final = re.compile(r"(?:뭐|무엇)부터\s*(?:고치|고쳐|고칠|개선)|먼저\s*(?:고치|고쳐|고칠)")
+# 탭에서 무엇을 물을 수 있는지 묻거나 낱말을 옮겨 달라는 말은 기록 조회가 아니다("지금 자세탭인데 …가능하니?", "자세가 영어로 뭐야", 사례 11·12).
+_TAB_OR_WORD: Final = re.compile(r"탭|(?:물어볼|질문할|쓸)\s*수|영어로|한자로|영어\s*(?:단어|표현)")
 # 질문형 문장. 지식 탭에서 계획 모델이 "chat"으로 본 질문 가운데 이것만 먼저 문서로 답해 본다.
 # 인사·맞장구("안녕", "고마워", "야")는 걸리지 않아 지금처럼 대화 경로로 간다.
 _KNOWLEDGE_QUESTION: Final = re.compile(r"[?？]|뭐|무엇|무슨|몇|어떻|어떤|왜|얼마|언제|인가|인지|나요|까요|되나|돼야|해야|하나요")
@@ -358,9 +362,10 @@ def _pose_engine_question(query: CopilotQueryRequest) -> bool:
             and not is_coating_advice_question(query.prompt) and (not is_general_painting_knowledge(query.prompt) or _arm_lookup_question(query.prompt))
             and (not BODY_PART.search(query.prompt) or _arm_lookup_question(query.prompt))
             and (not is_explanatory_question(query.prompt) or _pose_evaluation_lookup(query.prompt))
-            and not is_off_topic(query.prompt) and not NOT_JOINT.search(query.prompt)
-            and bool(re.search(r"자세(?!히|하게|한)|동작|교정|고쳐|고치|pose|posture|팔꿈치|어깨|무릎|허리|elbow|shoulder|knee|(?:zone|존|구역)\s*\d+",
-                               query.prompt, re.I)))
+            and not is_off_topic(query.prompt) and not NOT_JOINT.search(query.prompt) and not _TAB_OR_WORD.search(query.prompt)
+            and bool(BODY_PART.search(query.prompt)  # "왼손은?"(사례 10)
+                     or re.search(r"자세(?!히|하게|한)|동작|교정|고쳐|고치|고칠|pose|posture|팔꿈치|어깨|무릎|허리|elbow|shoulder|knee|(?:zone|존|구역)\s*\d+",
+                                  query.prompt, re.I)))
 
 
 def _asks_current_viewer_pose(prompt: str) -> bool:
@@ -472,7 +477,8 @@ def _viewer_answer(task_type: str, prompt: str, context: Mapping[str, object], i
         matching = [message for message in messages if side in message or ("오른" if side == "오른손" else "왼") in message]
         return f"{side} 개선 안내: {' '.join(matching)}" if matching else f"현재 기록에서 {side}에 특정된 개선 항목은 없습니다. 전체 작업 유사도는 {_percent_text(context.get('similarity_percent'), already_percent=True)}입니다."
     worst = min(rows, key=lambda row: float(row["similarity_percent"]))
-    if selected_intent == "pose_worst_zone" or any(word in prompt for word in ("문제", "최악", "낮", "어느", "어디")):
+    # 부분 문자열("낮")이면 "팔꿈치를 낮춰야 해?"도 최저 Zone 답이 된다.
+    if selected_intent == "pose_worst_zone" or WORST_ZONE.search(prompt) or re.search(r"(?:가장|제일)\s*낮", prompt):
         corrections = worst.get("corrections")
         guidance = " ".join(str(item) for item in corrections if isinstance(item, str)) if isinstance(corrections, list) else ""
         return f"현재 기록에서 작업 유사도가 가장 낮은 구역은 Zone {worst.get('zone_id')}({_percent_text(worst.get('similarity_percent'), already_percent=True)})입니다." + (f" {guidance}" if guidance else "")
@@ -1071,8 +1077,11 @@ async def _execute_copilot_query(
                                  pose_context={"scope": "arm_pose_zones", "status": arm_claims.get("status")},
                                  context_status="available" if arm_claims.get("status") == "available" else "not_available")
     if viewer_requested and not documents_only and not explanatory_request and preset_intent(query.task_type, query.prompt) is None:
+        # 손·팔 질문은 소견 틀이 아니라 팔 자세 틀이 답한다(사례 4). 자세 탭에서 팔 채점이 있으면 "뭐부터 고쳐"는 팔 자세 우선 교정이다(T22).
+        findings = ((_EVALUATION_QUESTION.search(query.prompt) or _FIRST_FIX.search(query.prompt)) and not BODY_PART.search(query.prompt)
+                    and not (query.task_type == "pose_recomm" and arm_claims is not None and _FIRST_FIX.search(query.prompt)))
         signed_answer = viewer_measurement_answer(query.context, query.prompt) or (
-            viewer_findings_answer(query.context) if _EVALUATION_QUESTION.search(query.prompt) else None)
+            viewer_findings_answer(query.context) if findings else None)
         if signed_answer is not None:
             return _success_response(query, request_started, answer=signed_answer, retrieval_used=False, citations=[],
                                      context_status="available")
@@ -1199,7 +1208,7 @@ async def _execute_copilot_query(
                                          sequence_context=again.sequence_context, context_status="available", subject=again.subject)
         # 기록·도장 지식 질문은 대화 모델이 아니라 아래 분석·문서 경로가 답한다. 되묻기와 잡담만 대화로 답한다.
         if ((decision["kind"] in {"chat", "clarify", "correction"} or cross_tab or zone_lookup) and not chat_redirected
-                and (decision["kind"] == "clarify" or not grounded)):
+                and (decision["kind"] == "clarify" or not grounded or _TAB_OR_WORD.search(query.prompt))):
             return await chat_answer()
 
     trusted_coating = parse_viewer_coating_context(query.context, query.task_type)
@@ -1303,10 +1312,15 @@ async def _execute_copilot_query(
                 verified_answer = f"평균 자세 유사도는 {average:.0f}%, 전체 작업 유사도는 {work}입니다."  # 둘 다 물으면 한 줄에 둘 다
             analysis_context = {**analysis_context, "arm_pose": {key: item for key, item in arm_pose.items() if key != "sequences"}}
             available = available or arm_pose.get("status") == "available"
-        elif side is not None:
+        elif side is not None or BODY_PART.search(query.prompt):
             # 팔 채점이 없으면 작업 개선 안내만 남는다. 거기에 팔별 항목이 없다는 말이 "팔에 문제가 없다"로 읽히지 않게 밝힌다.
+            # 쪽이 없는 신체 부위("팔꿈치를 더 펴야 해?")도 같다(2026-11-17 사례 7).
             verified_answer = ("팔 자세 채점 결과가 없어 팔별 교정 여부는 알 수 없습니다.\n" + verified_answer if query.response_mode == "quick" else
                                verified_answer + "\n팔 자세 채점 결과를 받지 못해 팔별 교정 여부는 이 답에 없습니다. 자세 채점이 끝난 뒤 다시 질문해 주세요.")
+        elif (query.response_mode == "detailed" and re.search(r"자세(?!히|하게|한)", query.prompt)
+              and not re.search(r"작업\s*(?:유사도|점수)|종합\s*유사도", query.prompt)):
+            # "자세 유사도"는 팔 관절 엔진 값에만 쓴다. "자세" 질문에 작업 유사도만 답하면 팔 자세 채점이 없다는 말이 빠진다(사례 8·9). 빠른 안내 한 줄은 작업 유사도 답을 그대로 둔다.
+            verified_answer += "\n팔 자세 채점 결과를 받지 못해 팔 자세 판정은 이 답에 없습니다. 자세 채점이 끝난 뒤 다시 질문해 주세요."
         answer, detail_degraded = await _synthesize_structured_detail(
             verified_answer, analysis_context, available=available
         )
@@ -1631,7 +1645,9 @@ async def _execute_copilot_query(
     if mixed is not None:
         # 기록 문장 먼저, 문서 문장은 뒤에. 문서 본문이 비면 근거가 없다고만 덧붙인다(기록 문장을 되풀이하지 않는다).
         body = "" if parsed.repair_path in FAILED_REPAIR_PATHS else answer.strip()  # 빈 본문의 대체 문장("답변을 생성하지 못했습니다")도 빈 답이다
-        answer = mixed.text + "\n" + (body or MIXED_NO_EVIDENCE)
+        # 빠른 안내는 앞 문장만 남는다. 사용자가 지식 조각을 먼저 물었으면 문서 문장을 앞에 둔다(사례 18).
+        answer = (body + "\n" + mixed.text if body and mixed.knowledge_first and query.response_mode == "quick"
+                  else mixed.text + "\n" + (body or MIXED_NO_EVIDENCE))
     logger.info(
         "copilot answer normalized request_id=%s repair_path=%s citations=%d dropped=%d",
         query.request_id,

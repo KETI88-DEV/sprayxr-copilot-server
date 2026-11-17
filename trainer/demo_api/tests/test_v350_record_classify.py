@@ -42,7 +42,8 @@ CASES = [  # (번호, 질문, task_type, previous_subject, playback_zone, kind, 
     ("T30", "빼먹은 데는 없어?", "trajectory_recomm", None, "8", "fact", [("progress_status", (), None)]),
     ("T31", "칠하는 순서가 정해져 있어요? 아무 데서나 시작하면 안 돼요?", "trajectory_recomm", None, "8", "fact",
      [("order_shape", (), "allowed"), ("order_shape", (), "allowed")]),
-    ("T32", "순서 준수율 45%는 어떻게 나온 거고, 숙련자들끼리는 순서가 얼마나 일치해?", "trajectory_recomm", None, "8", "fact",
+    # T32 앞 절(계산 방식)은 지식 조각이다(2026-11-17 사례 3). 기록 수치는 그대로 답하고 문서가 계산 방식을 답한다.
+    ("T32", "순서 준수율 45%는 어떻게 나온 거고, 숙련자들끼리는 순서가 얼마나 일치해?", "trajectory_recomm", None, "8", "mixed",
      [("order_shape", (), "adherence"), ("order_shape", (), "agreement")]),
     ("T33", "Zone 10이랑 11은 왜 안 칠했다고 나와요?", "trajectory_recomm", None, "8", "fact", [("progress_status", ("10", "11"), None)]),
     ("T34", "다 칠했으니까 이제 끝난 거죠?", "trajectory_recomm", None, "9", "judgement", [("completion", (), None)]),
@@ -124,8 +125,9 @@ def test_bare_first_person_does_not_make_a_record_question() -> None:
     assert _classify("제가 VR 하다 어지러운데 몇 분 쉬어야 해요?").kind == "none"
 
 
-def test_long_question_v340_40_is_mixed() -> None:
-    assert _classify(LONG_V340_40).kind == "mixed"
+def test_long_question_v340_40_is_not_a_record_question() -> None:
+    # 예전에는 섞인 질문이었다(기록 우선순위 + 문서). 2026-11-17 사례 1: 일반 요인 중 고르기라 문서로만 답한다.
+    assert _classify(LONG_V340_40).kind == "none"
 
 
 def test_pronoun_without_a_previous_subject_uses_the_playback_zone() -> None:

@@ -42,6 +42,9 @@ def is_reference_order_question(prompt: str) -> bool:
     # 표면처리·혼합 같은 공정 절차의 순서는 Zone 작업 순서가 아니라 문서 질문이다(2026-11-14 운영 q30).
     if re.search(_PROCEDURE, prompt) and not re.search(r"zone|존|구역|피도면|권장|추천|정석", prompt, re.I):
         return False
+    # 문서 속 그림·차트의 순서는 등록된 Zone 기준 순서가 아니다(2026-11-17 사례 14). "피도면"의 "도면"은 빼고 본다.
+    if re.search(r"예시|그림|차트|(?<!피)도면|견본|양식|계획서|마일스톤|이정표", prompt):
+        return False
     order = re.search(r"순서|경로|order|route", prompt, re.I)
     target = re.search(r"작업|도장|피도면|구역|zone|존|블라스팅|스프레이|권장|추천|정석|기준|reference|recommend", prompt, re.I)
     return bool(order and target)

@@ -51,8 +51,12 @@ _PAST: Final = re.compile(r"칠했|칠한|뿌렸|뿌린|나왔|나온|나와|됐
 _EVALUATED: Final = re.compile(r"괜찮았|어땠|적당했|잘한|나쁜\s*거|맞지|거지")  # T27 T28 T43
 _SPATIAL: Final = re.compile(r"거기|거긴|그곳|그\s*(?:zone|존|구역)", re.I)  # T38 T43
 _ANAPHORA: Final = re.compile(r"그럼|그렇게")  # T37 T41 T46 — 앞 질문이 있을 때만 표지다
-_HERE: Final = re.compile(r"지금|이\s*(?:zone|존|구역)|여기|이렇게|현재", re.I)  # T39 v19
-_KNOWLEDGE: Final = re.compile(r"적정|기준|권장|표준|정의|뜻|의미|원리|원래|문서|규칙|규격|어떻게\s*칠|왜\s*생")  # T38 T41 T45 T50 v33
+_HERE: Final = re.compile(r"지금|이\s*(?:zone|존|구역)|여기|이렇게|현재|넘어가", re.I)  # T39 v19, "다음으로 넘어가도 돼?"는 지금 Zone을 묻는다
+_KNOWLEDGE: Final = re.compile(r"적정|기준|권장|표준|정의|뜻|의미|원리|원래|문서|규칙|규격|어떻게\s*칠|왜\s*생"
+                             r"|어떻게\s*(?:나온\s*거|계산|정해|구해)|계산\s*(?:방식|법)")  # T38 T41 T45 T50 v33, T32 앞 절(계산 방식)
+# "거리인지 속도인지 겹침인지"처럼 일반 요인 가운데 고르라는 말은 기록 대상이 없으면 지식 질문이다(2026-11-17 사례 1).
+_GENERAL_CHOICE: Final = re.compile(r"(?:인지|는지)\s.{0,20}?(?:인지|는지)")
+_RECORD_OBJECT: Final = re.compile(r"(?:zone|존|구역)\s*\d|이\s*(?:zone|존|구역)|기록", re.I)
 _ZONE_NUMBERS: Final = re.compile(r"(?:zone|존|구역)\s*(\d{1,2}(?:\s*(?:,|와|과|이랑|랑|하고|및)\s*\d{1,2})*)", re.I)  # T33
 
 _EFFECT_ANY: Final = "|".join(pattern for _, pattern in _EFFECTS)
@@ -64,7 +68,7 @@ _EXTERNAL_ASK: Final = re.compile(r"합격|판정|통과|충족")
 # "몇 코트까지 칠해야 끝난 거예요?"는 기준을 묻는다. "몇 개 Zone 끝났어요?"·"얼마나 끝났어요?"는 완료 개수를 묻는다.
 _NOT_COMPLETION: Final = re.compile(r"(?:몇|얼마)(?!\s*(?:개|곳)|나\s*(?:끝|완료|다\s*칠))|어떻게|조건|코트")
 _ORDER_SUBJECT: Final = re.compile(r"숙련자|전문가|zone|존|구역", re.I)  # 시작·끝 낱말만으로는 작업 절차 질문과 가를 수 없다
-_COMPLETION: Final = re.compile(r"끝난|끝났|끝낸|완료|다\s*칠했|다시\s*(?:안\s*)?(?:가|칠)")  # T34 T38 T43
+_COMPLETION: Final = re.compile(r"끝난|끝났|끝낸|완료|다\s*칠했|다시\s*(?:안\s*)?(?:가|칠)|채웠|채워졌|넘어가도")  # T34 T38 T43, 2026-11-17 사례 20
 _STATUS_ASKED: Final = re.compile(r"빼먹|빠뜨|빠진|누락|미수행|안\s*칠|못\s*칠|덜\s*칠")  # T33(Zone 번호가 있으면 "왜"가 있어도 상태 질문)
 _WHY: Final = re.compile(r"왜|원인|이유|때문")
 _EXTREME: Final = re.compile(r"제일|가장|최고|최저")  # T36
@@ -236,6 +240,10 @@ def _zones(piece: str, code: str, subject: Mapping[str, Any] | None, playback: s
     return (), "none"
 
 
+def _general_choice(piece: str) -> bool:
+    return bool(_GENERAL_CHOICE.search(piece)) and not _RECORD_OBJECT.search(piece)
+
+
 def classify_record_question(prompt: str, *, task_type: str, previous_subject: Mapping[str, Any] | None,
                              playback_zone: str | None) -> RecordQuery:
     if preset_intent(task_type, prompt):
@@ -244,8 +252,8 @@ def classify_record_question(prompt: str, *, task_type: str, previous_subject: M
     parts: list[RecordPart] = []
 
     def analyse(piece: str, marker: bool | None = None) -> tuple[list[tuple[int, str, str | None, str | None]], str | None]:
-        # 손·방향·"뭐부터 고쳐"·구역별 자세 문제는 기존 경로의 몫이다.
-        reserved = bool(BODY_PART.search(piece) or _DIRECTION_ONLY.search(piece)
+        # 손·방향·"뭐부터 고쳐"·구역별 자세 문제는 기존 경로의 몫이다. 일반 요인 중 고르기는 기록 코드를 달지 않는다(지식 조각).
+        reserved = bool(BODY_PART.search(piece) or _DIRECTION_ONLY.search(piece) or _general_choice(piece)
                         or (task_type in {"pose_recomm", "trajectory_recomm"} and (WORST_ZONE.search(piece) or re.search(r"뭐부터|무엇부터", piece))))
         if reserved:
             return [], None
@@ -263,7 +271,7 @@ def classify_record_question(prompt: str, *, task_type: str, previous_subject: M
     # 가른 조각은 원래 한 문장의 표지를 물려받는다.
     for piece, marker in ((half, whole_marker) for whole in split_parts(prompt)
                           for whole_marker in [has_record_marker(whole, previous_subject=previous_subject)] for half in divide(whole, whole_marker)):
-        knowledge = bool(_KNOWLEDGE.search(piece))
+        knowledge = bool(_KNOWLEDGE.search(piece)) or _general_choice(piece)
         marker = marker or has_record_marker(piece, previous_subject=previous_subject)
         hits, pair = analyse(piece, marker)
         if not hits:
@@ -733,6 +741,7 @@ class RecordAnswer:
     subject: dict[str, Any] | None             # {"domain": str, "zone_ids": list[str], "operator": str}
     knowledge_question: str | None             # 섞인 질문의 지식 조각 문장(이어 붙임), 아니면 None
     sequence_context: dict[str, Any] | None    # progress_* 답의 context
+    knowledge_first: bool = False              # 섞인 질문에서 사용자가 지식 조각을 먼저 물었는가(빠른 안내의 문장 순서)
 
 
 def previous_subject(turns: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
@@ -886,7 +895,8 @@ def answer_record_question(context: str | None, prompt: str, *, task_type: str,
     first = answered[0] if answered else next((part for part in query.parts if part.code), None)
     subject = ({"domain": part_domain(first) or "overall", "zone_ids": _subject_zones(facts, first), "operator": first.operator or first.code or ""}
                if first and first.code else None)
-    return RecordAnswer(text, query.kind, subject, query.knowledge_question or None, sequence_context)
+    return RecordAnswer(text, query.kind, subject, query.knowledge_question or None, sequence_context,
+                        knowledge_first=bool(query.parts) and query.parts[0].knowledge)
 
 
 # ---------------------------------------------------------------- 모델이 만든 답의 출구 검사 G3~G6
