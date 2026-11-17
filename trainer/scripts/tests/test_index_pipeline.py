@@ -141,3 +141,51 @@ def test_retrieve_encodes_the_question_with_the_query_prompt() -> None:
     results = search_index.retrieve("저도막 원인", Index(), id_map, embedder, top_k=1)
     assert embedder.queries == ["저도막 원인"]
     assert results[0]["chunk_id"] == "DOC-a-C0001"
+
+
+def test_repeated_passages_fold_so_other_evidence_reaches_the_reranker() -> None:
+    # 2026-11-17: 같은 처짐 문장 조각이 상위 후보를 채워 과도막 직접 원인 조각이 재순위에 못 들어갔다.
+    class Embedder:
+        def encode_query(self, query: str, **_kwargs: Any) -> np.ndarray:
+            return np.ones(2, dtype=np.float32)
+
+    class Index:
+        def __init__(self) -> None:
+            self.k = 0
+
+        def search(self, vec: np.ndarray, k: int) -> tuple[np.ndarray, np.ndarray]:
+            self.k = k
+            return np.array([list(range(k, 0, -1))], dtype=np.float32), np.array([list(range(k))])
+
+    class Reranker:
+        def predict(self, pairs: list[tuple[str, str]], **_kwargs: Any) -> np.ndarray:
+            self.texts = [text for _q, text in pairs]
+            return np.zeros(len(pairs), dtype=np.float32)
+
+    sag = "과도막 두께 또는 과도한 희석제 사용으로 처짐"
+    id_map = [{"chunk_id": f"DOC-d{i}-C0001", "doc_id": f"d{i}", "text": f"| {sag} |" if i % 2 else f"{sag}<br>", "tokens": 1}
+              for i in range(4)]
+    id_map += [{"chunk_id": f"DOC-x-C{i:04d}", "doc_id": "x", "text": f"중첩부 과도막 원인 {i}", "tokens": 1} for i in range(8)]
+    index, reranker = Index(), Reranker()
+    config = {"reranker": {"top_k_retrieve": 3, "top_k_rerank": 3}}
+    results, _ = search_index.search_and_rerank("과도막 원인", index, id_map, Embedder(), reranker, config)
+    assert index.k == 3 * search_index.DUPLICATE_FETCH_FACTOR
+    assert reranker.texts == [f"{sag}<br>", "중첩부 과도막 원인 0", "중첩부 과도막 원인 1"]
+    assert [r["chunk_id"] for r in results][:1] == ["DOC-d0-C0001"]
+
+
+def test_chunks_confirmed_wrong_never_reach_the_answer() -> None:
+    # 2026-11-17 전수 조사: "이슬점보다 3°C 낮은 조건에서는 도장할 수 없다"처럼 기준이 뒤집힌 조각.
+    assert "DOC-doc_0008-C0006" in search_index.EXCLUDED_CHUNKS
+
+    class Embedder:
+        def encode_query(self, query: str, **_kwargs: Any) -> np.ndarray:
+            return np.ones(2, dtype=np.float32)
+
+    class Index:
+        def search(self, vec: np.ndarray, k: int) -> tuple[np.ndarray, np.ndarray]:
+            return np.array([[0.9, 0.8]]), np.array([[0, 1]])
+
+    id_map = [{"chunk_id": "DOC-doc_0008-C0006", "doc_id": "doc_0008", "text": "3°C 낮은", "tokens": 1},
+              {"chunk_id": "DOC-a-C0001", "doc_id": "a", "text": "3°C 이상 높아야", "tokens": 1}]
+    assert [r["chunk_id"] for r in search_index.retrieve("이슬점", Index(), id_map, Embedder(), top_k=2)] == ["DOC-a-C0001"]

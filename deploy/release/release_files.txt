@@ -32,6 +32,7 @@ mcp_servers/pose_estimation.py
 mcp_servers/sequence_validation.py
 mcp_servers/timeseries.py
 mcp_servers/vlm_analysis.py
+trainer/configs/evidence_exclusions.json
 trainer/configs/rag_config_fewshot_27b.yaml
 trainer/configs/rag_config_spark_vllm.yaml
 trainer/configs/tool_calling_protocol.json
