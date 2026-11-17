@@ -439,3 +439,10 @@ def test_semantic_review_failure_is_visible_in_existing_degraded_flag(verdict, d
             return result
     data = ask(client(ReviewedPipeline()), "저도막이 생기는 원인은 무엇인가요?")
     assert data["degraded"] is degraded
+
+
+def test_detailed_search_keeps_training_terms_found_verbatim_in_the_manuals():
+    from trainer.demo_api.query_runtime import retrieval_question
+    for term in ("저도막", "과도막", "이격거리", "오버랩"):
+        assert term in retrieval_question(f"{term}의 원인은?", expand_terms=False)
+    assert "두께 미달" in retrieval_question("저도막이 뭐야?")  # 빠른 안내 기본값은 그대로

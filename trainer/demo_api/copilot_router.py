@@ -1571,7 +1571,7 @@ async def _execute_copilot_query(
                     "retrieval_instruction": question,
                 } if query.response_mode == "quick" else {
                     # 응답 수준 지시문이 검색어에 섞이면 무관한 문단이 잡힌다(Issue #9).
-                    "retrieval_instruction": retrieval_question(question, context=instruction),
+                    "retrieval_instruction": retrieval_question(question, context=instruction, expand_terms=False),
                 }),
             )
 

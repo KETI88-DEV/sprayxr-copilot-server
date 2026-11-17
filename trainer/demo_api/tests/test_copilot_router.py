@@ -190,7 +190,7 @@ def test_detailed_mode_searches_documents_with_the_question_not_the_answer_direc
     retrieval = pipeline.calls[0]["retrieval_instruction"]
     assert "응답 수준" not in retrieval
     assert "상세 분석" not in retrieval
-    assert "분사 거리" in retrieval  # 빠른 안내와 같은 매뉴얼 용어 확장
+    assert "이격거리" in retrieval  # 사용자 낱말을 그대로 검색한다(매뉴얼에 같은 낱말이 있음)
     assert "상세 분석" in pipeline.calls[0]["instruction"]  # 생성 지시는 그대로
 
 

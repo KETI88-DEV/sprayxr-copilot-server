@@ -113,19 +113,22 @@ def translation_pipeline_for(pipeline: Any, source: str, target: str) -> Any:
     return pipeline if isinstance(pipeline, _QuickPipeline) else select_query_pipeline(parent, "quick")
 
 
-def retrieval_question(question: str, *, context: str = "") -> str:
+def retrieval_question(question: str, *, context: str = "", expand_terms: bool = True) -> str:
     """Expand training terms to the vocabulary in manuals; never add numeric advice."""
     # The router renders model advice as one JSON-quoted physical line. Remove
     # that data block before reading relation, history or process selectors;
     # an interpretation must not change those through its words or headings.
     context = re.sub(r"(?m)^\[후속 질문 해석[^\n]*\]\r?\n[^\n]*(?:\r?\n모델의 임시 해석[^\n]*)?", "", context)
     query = question
+    # The detailed (27B) route passes expand_terms=False: the KURE index contains these terms
+    # verbatim ("저도막 결함의 원인 중 하나는 중첩 부족"), and replacing them hid those passages
+    # (2026-11-17). Quick guidance re-applies this function in _QuickPipeline.run and keeps the table.
     terms = {
         "저도막": "도막 두께 부족 규정 두께 미달 얇은 도막",
         "과도막": "도막 두께 과다 과도하게 두꺼운 도막",
         "이격거리": "분사 거리 피도체와 건 사이 거리",
         "오버랩": "중첩 overlap 겹침",
-    }
+    } if expand_terms else {}
     for term, expansion in terms.items():
         query = query.replace(term, expansion)
     # Carry the user's technical subject across an elliptical extra condition.
