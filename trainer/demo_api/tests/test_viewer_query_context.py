@@ -3,12 +3,13 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from trainer.demo_api.copilot_router import create_copilot_router
+from trainer.demo_api.copilot_router import NO_ARM_POSE, create_copilot_router
 from trainer.demo_api.sequence_store import SequenceStore
 from trainer.demo_api.viewer_context import sign_context, viewer_signatures
 
@@ -58,10 +59,10 @@ def test_current_pose_uses_only_the_playback_maps_signed_zone(pose_context: dict
     result = _query(_client(), pose_context, mode=mode, prompt=prompt)
     assert result.status_code == 200
     data = result.json()["data"]
-    if mode == "quick" and "오른손" in prompt:  # 팔 채점이 없다는 말이 한 줄의 앞이다(2026-11-16)
-        assert data["answer"].startswith("팔 자세 채점 결과가 없어") and "40%" not in data["answer"]
-        return
-    assert "88%" in data["answer"]
+    if mode == "quick":  # 팔 채점이 없다는 한 줄이 답이다(2026-11-16 손 질문, 2026-11-17 I7 자세 질문)
+        assert data["answer"].startswith("팔 자세 채점 결과가 없어" if "오른손" in prompt else NO_ARM_POSE) and "%" not in data["answer"]
+    else:
+        assert "88%" in data["answer"]
     assert "40%" not in data["answer"] and "66%" not in data["answer"]
     assert "전역 최저" not in data["answer"] and "999" not in data["answer"]
     assert data["pose_context"]["scope"] == "current_zone"
@@ -75,10 +76,13 @@ def test_current_pose_uses_only_the_playback_maps_signed_zone(pose_context: dict
 @pytest.mark.parametrize("mode", ["quick", "detailed"])
 def test_explicit_global_questions_ignore_the_playback_selection(pose_context: dict, prompt: str, expected: str, mode: str) -> None:
     data = _query(_client(), pose_context, prompt=prompt, mode=mode).json()["data"]
-    assert expected in data["answer"]
+    if "자세" in prompt:  # 2026-11-17 사용자 결정 I7: 팔 채점 없이 자세를 물으면 작업 유사도(다른 값)로 대신 답하지 않는다.
+        assert data["answer"].startswith(NO_ARM_POSE), data["answer"]
+    if mode == "detailed" or "자세" not in prompt:
+        assert expected in data["answer"]
     # 뷰어 점수는 작업 유사도다. "자세 유사도"는 전문가 자세(팔 관절 엔진)와의 유사도에만 쓴다.
-    assert "자세 유사도" not in data["answer"]
-    if "유사도" in data["answer"]:
+    assert not re.search(r"자세 유사도[는가은]?\s*\d", data["answer"])
+    if re.search(r"\d+%", data["answer"]):
         assert "작업 유사도" in data["answer"]
     assert len(data["pose_context"]["zones"]) == 3
     assert data["pose_context"].get("scope") != "current_zone"
@@ -86,12 +90,12 @@ def test_explicit_global_questions_ignore_the_playback_selection(pose_context: d
 
 def test_current_pose_stays_structured_when_semantic_classifier_says_knowledge(pose_context: dict) -> None:
     data = _query(_client(classify_as="knowledge"), pose_context).json()["data"]
-    assert "88%" in data["answer"]
+    assert data["answer"] == NO_ARM_POSE  # 2026-11-17 사용자 결정 I7: 팔 채점 없이 자세를 물으면 작업 유사도(다른 값)로 대신 답하지 않는다.
     assert data["retrieval_used"] is False
 
 
 def test_current_zone_number_uses_the_playback_map_when_zone_numbers_repeat(pose_context: dict) -> None:
-    data = _query(_client(), pose_context, prompt="현재 Zone 2 자세는?", playback={
+    data = _query(_client(), pose_context, prompt="현재 Zone 2 자세는?", mode="detailed", playback={  # 빠른 안내는 I7 안내 한 줄이다
         "map_num": "2", "zone_id": "2", "playhead_seconds": 8}).json()["data"]
     assert "66%" in data["answer"]
     assert "88%" not in data["answer"]
@@ -103,14 +107,15 @@ def test_current_pose_without_a_zone_does_not_fall_back_to_global_worst(pose_con
     data = _query(_client(), pose_context, mode=mode, playback={"playhead_seconds": 0, "source_index": 0,
         "map_num": None, "zone_id": None}).json()["data"]
     assert data["context_status"] == "not_available"
-    assert "Zone ID가 없는 구간" in data["answer"]
+    assert ("Zone ID가 없는 구간" in data["answer"]) if mode == "detailed" else data["answer"] == NO_ARM_POSE  # 빠른 안내는 I7 안내 한 줄
     assert "70%" not in data["answer"] and "40%" not in data["answer"]
 
 
 @pytest.mark.parametrize("prompt", ["전체 자세 유사도는?", "지금 자세는 어때?"])
 def test_legacy_signed_context_without_playback_preserves_global_answer(pose_context: dict, prompt: str) -> None:
-    data = _query(_client(), pose_context, prompt=prompt, include_playback=False).json()["data"]
-    assert data["context_status"] == "available"
+    # 빠른 안내는 I7 안내 한 줄이라 전체 답이 남는지는 상세 분석으로 본다.
+    data = _query(_client(), pose_context, prompt=prompt, include_playback=False, mode="detailed").json()["data"]
+    assert data["context_status"] == "available" and data["answer"].startswith(NO_ARM_POSE)
     assert "70%" in data["answer"] and "40%" in data["answer"]
 
 

@@ -17,7 +17,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from trainer.demo_api import viewer_arm_pose
-from trainer.demo_api.copilot_router import create_copilot_router
+from trainer.demo_api.copilot_router import NO_ARM_POSE, create_copilot_router
 from trainer.demo_api.motion_viewer import create_motion_viewer_router
 from trainer.demo_api.session_analysis import spray_runs
 from trainer.demo_api.sequence_store import SequenceStore
@@ -170,7 +170,8 @@ def test_forged_arm_pose_numbers_are_ignored() -> None:
         "user_id": "COPILOT-DEMO-USER", "task_type": "pose_recomm", "prompt": "지금 자세 어때?",
         "context": _viewer_context("0" * 64),
     }).json()["data"]
-    assert "자세 유사도" not in data["answer"] and "작업 유사도는 93%" in data["answer"]
+    # 위조 서명의 팔 점수는 버린다. 팔 채점이 없으므로 작업 유사도로 대신 답하지 않는다(2026-11-17 사용자 결정 I7).
+    assert data["answer"] == NO_ARM_POSE and "%" not in data["answer"]
     assert "arm_pose" not in data["pose_context"]
 
 

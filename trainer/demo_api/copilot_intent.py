@@ -36,15 +36,17 @@ _COATING_SUBJECT = r"도막|두께|과도막|저도막|coating|thickness"
 _COATING_STATE = r"과하|모자|부족|이상|상태|어때|분석|평가|얇|두껍|과다|괜찮|충분|양호|균일|불량|칠했|잘됐"
 
 
-# 정의·규정을 묻는 말. "구역·부위" 같은 일반 명사만 있고 이 기록을 가리키는 말(지시어·소유·번호)이 없으면 지식 질문이다(2026-11-17 사례 16·17).
+# 기록 객체(2026-11-17 계획): 이 Zone·Zone N·내 기록·이번에 칠한·방금 분사·제가 칠한. 1인칭·"지금"만으로는 기록 객체가 아니다.
+RECORD_OBJECT = re.compile(r"(?:zone|존|구역)\s*\d|(?<![가-힣])(?:이|내|제|우리)\s*(?:zone|존|구역|기록|도막)|기록|방금|이번"
+                           r"|(?:칠|뿌)(?:한|했|린|렸)", re.I)
+# 정의·규정을 묻는 말. "구역·부위" 같은 일반 명사만 있고 기록 객체·재생 시점이 없으면 지식 질문이다(사례 16·17).
 _RULE_ASK = re.compile(r"법칙|원칙|규정|규격|말하나요|말하는|말해요|뜻|정의|어떻게\s*판정")
-_OWN_RECORD = re.compile(r"(?<![가-힣])(?:이|내|제|우리)\s*(?:zone|존|구역|기록|도막)|(?:zone|존|구역)\s*\d|현재|지금|이번", re.I)
 
 
 def _asks_coating_state(prompt: str, subject: str, state: str) -> bool:
     if not re.search(subject, prompt, re.I):
         return False
-    if _RULE_ASK.search(prompt) and not _OWN_RECORD.search(prompt):
+    if _RULE_ASK.search(prompt) and not RECORD_OBJECT.search(prompt) and not re.search(r"지금|현재", prompt):
         return False
     specific = _RECORD_REFERENCE.search(prompt)
     definition = re.search(r"뭐|무엇|뜻|의미|정의|원인|예방|방지", prompt)

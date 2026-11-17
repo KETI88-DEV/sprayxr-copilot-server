@@ -9,7 +9,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from trainer.demo_api.copilot_router import create_copilot_router, install_copilot_error_handlers
+from trainer.demo_api.copilot_router import NO_ARM_POSE, create_copilot_router, install_copilot_error_handlers
 from trainer.demo_api.sequence_store import SequenceStore
 from trainer.demo_api.speech_to_text import Transcript
 from trainer.demo_api.viewer_context import sign_context
@@ -153,7 +153,8 @@ def test_foreign_posture_question_keeps_signed_playback_scope_and_numeric_measur
                 "corrections": []}}, "corrections": []}
     envelope = {"analysis_context": context, "signature": sign_context("pose_recomm", context),
                 "playback_context": {"map_num": "1", "zone_id": "2", "playhead_seconds": 5}}
-    pipeline = Pipeline(translated_answer="The work similarity in Map 1, Zone 2 is 88%.")
+    # 팔 채점이 없어 자세를 답할 수 없다는 한 줄이 답이다(2026-11-17 사용자 결정 I7). 범위는 여전히 재생 Zone이다.
+    pipeline = Pipeline(translated_answer="This record has no arm posture scoring, so the posture similarity is unknown.")
     response = client(pipeline).post(URL, json=body(
         prompt="How is my current posture?", language="en", task_type="pose_recomm",
         context="motion_viewer_analysis:" + json.dumps(envelope)))
@@ -161,7 +162,8 @@ def test_foreign_posture_question_keeps_signed_playback_scope_and_numeric_measur
     data = response.json()["data"]
     assert data["pose_context"]["scope"] == "current_zone"
     assert set(data["pose_context"]["zones"]) == {"1:2"}
-    assert data["answer"] == "The work similarity in Map 1, Zone 2 is 88%."
+    assert data["answer"] == "This record has no arm posture scoring, so the posture similarity is unknown."
+    assert pipeline.translations[-1][0] == NO_ARM_POSE
     assert data["retrieval_used"] is False
 
 

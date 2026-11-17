@@ -110,8 +110,9 @@ def test_correction_reruns_the_previous_record_question() -> None:
     store = SequenceStore(":memory:")
     _turn(store, "왜 이렇게 얇게 나왔어?", "가까이서 칠해 얇아졌습니다.", "documents")
     pipeline = RecordingPipeline(plan={"kind": "correction", "intent": "coating_status", "scope": "playback"})
-    data = ask("근데 가까이서 천천히 뿌리면 오히려 두꺼워지는 거 아냐? 아까 답 이상한데", tab="coating", playback=AT_3S,
-               store=store, pipeline=pipeline)  # v340 #42
+    # 이의 제기만 한 말이다. 새 주장이 붙은 말("가까이서 천천히 … 아냐? 아까 답 이상한데", v340 #42)은 2026-11-17 사용자 결정(I6)으로
+    # 앞 질문을 다시 답하지 않고 문서로 답한다(test_keyword_misroute.py).
+    data = ask("아까 답 이상한데", tab="coating", playback=AT_3S, store=store, pipeline=pipeline)
     assert "거리로는 설명하기 어렵" in data["answer"], data["answer"]
     assert data["source"] == "analysis" and data["calls"] == ["plan"]
 

@@ -174,7 +174,7 @@ def test_arm_side_question_is_answered_from_every_correction_of_the_arm_scoring(
     assert "왼팔 교정은 나오지 않았습니다" in viewer_arm_pose.arm_pose_answer(
         {**ARM, "sequences": [ARM["sequences"][1]]}, current=False, playback=None, zone_id=None, side="left")
     waiting = _ask(_Pipeline(), "오른손을 어떻게 고쳐?", context=_pose_context(arm=None), task="pose_recomm")["answer"]
-    assert "팔 자세 채점 결과를 받지 못해" in waiting
+    assert waiting == "팔 자세 채점 결과가 없어 오른손 교정 여부는 알 수 없습니다."  # 빠른 안내 한 줄(2026-11-17 사용자 결정 I7)
 
 
 def test_whole_record_arm_answer_names_which_similarity_it_reports() -> None:

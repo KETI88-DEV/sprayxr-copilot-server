@@ -89,7 +89,7 @@ from trainer.demo_api.safety_guard import (
 )
 from trainer.demo_api.reference_order_query import actual_order_intent, current_next_answer, is_current_next_question, is_reference_order_question, resolve_reference_target, reference_order_answer
 from trainer.demo_api.v1_store import V1Store
-from trainer.demo_api.record_query import BODY_PART, DIRECTION_WORD, WORST_ZONE, RecordAnswer, RecordFacts, answer_record_question, ground_generated, has_record_marker, previous_subject
+from trainer.demo_api.record_query import BODY_PART, DIRECTION_WORD, FIRST_FIX, WORST_ZONE, RecordAnswer, RecordFacts, answer_record_question, split_parts, ground_generated, has_record_marker, previous_subject
 from trainer.demo_api.viewer_progress import progress_question, viewer_progress_answer
 from trainer.demo_api.query_runtime import generation_slot_for, retrieval_question, select_query_pipeline, translation_pipeline_for
 from trainer.scripts.generation_slot import GENERATION_SLOT  # Legacy slot identity for unconfigured clients.
@@ -215,10 +215,28 @@ SUBJECT_HEADER: Final = "X-Copilot-Subject"  # 서버 안에서만 쓴다. 바�
 # 외국어 질문을 한국어로 옮긴 문장(퍼센트 인코딩). 응답 본문은 바꾸지 않는다.
 ANALYSIS_PROMPT_HEADER: Final = "X-Copilot-Analysis-Prompt"
 _EVALUATION_QUESTION: Final = re.compile(r"잘한|못한|고쳐야|고칠|개선할|개선점|문제점|부족한 점")
-# "뭐부터 고치면/고쳐야/고칠"은 활용형과 상관없이 같은 답 틀이다(2026-11-17 사례 5: "고치면"만 기본 답으로 갔다).
-_FIRST_FIX: Final = re.compile(r"(?:뭐|무엇)부터\s*(?:고치|고쳐|고칠|개선)|먼저\s*(?:고치|고쳐|고칠)")
-# 탭에서 무엇을 물을 수 있는지 묻거나 낱말을 옮겨 달라는 말은 기록 조회가 아니다("지금 자세탭인데 …가능하니?", "자세가 영어로 뭐야", 사례 11·12).
-_TAB_OR_WORD: Final = re.compile(r"탭|(?:물어볼|질문할|쓸)\s*수|영어로|한자로|영어\s*(?:단어|표현)")
+# 자세 탭에서 무엇을 물을 수 있는지 묻거나 낱말을 옮겨 달라는 말은 채점 조회가 아니다(사례 11·12). 자세 탭에만 쓴다.
+_TAB_OR_WORD: Final = re.compile(r"탭|(?:물어볼|질문할)\s*수|영어로|한자로|영어\s*(?:단어|표현)")
+_WORK_SCORE_ASKED: Final = re.compile(r"작업\s*(?:유사도|점수)|종합\s*유사도")
+# 자세를 묻는 말. 팔 채점이 없으면 작업 유사도(다른 값)로 대신 답하지 않는다(2026-11-17 사용자 결정 I7).
+_POSE_ASKED: Final = re.compile(r"자세(?!히|하게|한)|동작|관절|posture|pose", re.I)
+NO_ARM_POSE: Final = "이 기록에는 팔 자세 채점 결과가 없어 자세 유사도를 알 수 없습니다."
+NO_ARM_WORK_NOTE: Final = "참고로 아래는 작업 유사도(거리·각도·방향 비교, 자세 유사도와 다른 값)입니다."
+# 이의 제기만 하는 말("아까 답 이상한데", "다시 봐줘"). 새 주장·질문이 붙으면 앞 질문을 다시 답하지 않는다(사용자 결정 I6).
+_OBJECTION: Final = re.compile(r"이상|틀린|틀렸|틀리|잘못|다시\s*(?:봐|확인|답|말|알려|해)|아닌\s*것\s*같|맞아|맞나|맞는\s*거|확실|진짜|정말")
+
+
+def _objection_only(prompt: str) -> bool:
+    return all(_OBJECTION.search(piece) for piece in split_parts(prompt))
+
+
+def _no_arm_notice(prompt: str, side: str | None) -> str:
+    """팔 채점 없이 자세·신체 부위를 물은 질문의 첫 문장. 작업 유사도 수치는 넣지 않는다."""
+    part = BODY_PART.search(prompt)
+    if part is None and side is None:
+        return NO_ARM_POSE
+    label = " ".join(part.group(0).split()) if part else "팔별"
+    return f"팔 자세 채점 결과가 없어 {label} 교정 여부는 알 수 없습니다."
 # 질문형 문장. 지식 탭에서 계획 모델이 "chat"으로 본 질문 가운데 이것만 먼저 문서로 답해 본다.
 # 인사·맞장구("안녕", "고마워", "야")는 걸리지 않아 지금처럼 대화 경로로 간다.
 _KNOWLEDGE_QUESTION: Final = re.compile(r"[?？]|뭐|무엇|무슨|몇|어떻|어떤|왜|얼마|언제|인가|인지|나요|까요|되나|돼야|해야|하나요")
@@ -364,7 +382,7 @@ def _pose_engine_question(query: CopilotQueryRequest) -> bool:
             and (not is_explanatory_question(query.prompt) or _pose_evaluation_lookup(query.prompt))
             and not is_off_topic(query.prompt) and not NOT_JOINT.search(query.prompt) and not _TAB_OR_WORD.search(query.prompt)
             and bool(BODY_PART.search(query.prompt)  # "왼손은?"(사례 10)
-                     or re.search(r"자세(?!히|하게|한)|동작|교정|고쳐|고치|고칠|pose|posture|팔꿈치|어깨|무릎|허리|elbow|shoulder|knee|(?:zone|존|구역)\s*\d+",
+                     or re.search(r"자세(?!히|하게|한)|동작|교정|고쳐|고치|고칠|개선|pose|posture|팔꿈치|어깨|무릎|허리|elbow|shoulder|knee|(?:zone|존|구역)\s*\d+",
                                   query.prompt, re.I)))
 
 
@@ -1078,8 +1096,13 @@ async def _execute_copilot_query(
                                  context_status="available" if arm_claims.get("status") == "available" else "not_available")
     if viewer_requested and not documents_only and not explanatory_request and preset_intent(query.task_type, query.prompt) is None:
         # 손·팔 질문은 소견 틀이 아니라 팔 자세 틀이 답한다(사례 4). 자세 탭에서 팔 채점이 있으면 "뭐부터 고쳐"는 팔 자세 우선 교정이다(T22).
-        findings = ((_EVALUATION_QUESTION.search(query.prompt) or _FIRST_FIX.search(query.prompt)) and not BODY_PART.search(query.prompt)
-                    and not (query.task_type == "pose_recomm" and arm_claims is not None and _FIRST_FIX.search(query.prompt)))
+        # 자세 탭에서 팔 채점 없이 자세를 물으면 아래 채점 없음 안내가 답한다(I7).
+        first_fix = bool(FIRST_FIX.search(query.prompt))
+        pose_tab = query.task_type == "pose_recomm"
+        arm_priority = pose_tab and first_fix and arm_claims is not None
+        no_arm_pose = pose_tab and arm_claims is None and bool(_POSE_ASKED.search(query.prompt))
+        findings = ((bool(_EVALUATION_QUESTION.search(query.prompt)) or first_fix) and not BODY_PART.search(query.prompt)
+                    and not arm_priority and not no_arm_pose)
         signed_answer = viewer_measurement_answer(query.context, query.prompt) or (
             viewer_findings_answer(query.context) if findings else None)
         if signed_answer is not None:
@@ -1199,6 +1222,12 @@ async def _execute_copilot_query(
                            and _abstain_below(planned_pipeline, query.response_mode) is not None)
         # 옛 행(v3.4.4 이전)에는 safety_class 열이 없어 앞 질문 문장도 다시 위험 판정한다.
         if (decision["kind"] == "correction" and dialogue_turns and not dialogue_turns[-1].get("safety_class")
+                and classify(dialogue_turns[-1]["prompt"]) is None and not _objection_only(query.prompt)):
+            # 새 말에 주장·질문이 있으면 앞 질문을 되풀이하지 않고 그 말을 문서로 답한다(사용자 결정 I6).
+            decision = {**decision, "kind": "coating_knowledge", "intent": "knowledge"}
+            query = query.model_copy(update={"task_type": "knowledge_search"})
+            grounded = True
+        elif (decision["kind"] == "correction" and dialogue_turns and not dialogue_turns[-1].get("safety_class")
                 and classify(dialogue_turns[-1]["prompt"]) is None):
             # "아까 답 이상한데"는 앞 질문을 기록으로 다시 답한다. 앞 턴이 위험 질문이면 다시 분류하지 않는다(안전 검사를 건너뛰지 않게).
             again = answer_record_question(query.context, dialogue_turns[-1]["prompt"], task_type=query.task_type,
@@ -1208,7 +1237,8 @@ async def _execute_copilot_query(
                                          sequence_context=again.sequence_context, context_status="available", subject=again.subject)
         # 기록·도장 지식 질문은 대화 모델이 아니라 아래 분석·문서 경로가 답한다. 되묻기와 잡담만 대화로 답한다.
         if ((decision["kind"] in {"chat", "clarify", "correction"} or cross_tab or zone_lookup) and not chat_redirected
-                and (decision["kind"] == "clarify" or not grounded or _TAB_OR_WORD.search(query.prompt))):
+                and (decision["kind"] == "clarify" or not grounded
+                     or (query.task_type == "pose_recomm" and _TAB_OR_WORD.search(query.prompt)))):
             return await chat_answer()
 
     trusted_coating = parse_viewer_coating_context(query.context, query.task_type)
@@ -1303,7 +1333,7 @@ async def _execute_copilot_query(
             )
             # Keep the requested score family; show both only when both were
             # explicitly requested. Signed measures/context remain unchanged.
-            work_requested = bool(re.search(r"작업\s*(?:유사도|점수)|종합\s*유사도", query.prompt))
+            work_requested = bool(_WORK_SCORE_ASKED.search(query.prompt))
             pose_requested = bool(re.search(r"자세|관절|팔", query.prompt))
             verified_answer = (arm_answer + "\n" + verified_answer if work_requested and pose_requested
                                else verified_answer if work_requested else arm_answer)
@@ -1312,15 +1342,14 @@ async def _execute_copilot_query(
                 verified_answer = f"평균 자세 유사도는 {average:.0f}%, 전체 작업 유사도는 {work}입니다."  # 둘 다 물으면 한 줄에 둘 다
             analysis_context = {**analysis_context, "arm_pose": {key: item for key, item in arm_pose.items() if key != "sequences"}}
             available = available or arm_pose.get("status") == "available"
-        elif side is not None or BODY_PART.search(query.prompt):
-            # 팔 채점이 없으면 작업 개선 안내만 남는다. 거기에 팔별 항목이 없다는 말이 "팔에 문제가 없다"로 읽히지 않게 밝힌다.
-            # 쪽이 없는 신체 부위("팔꿈치를 더 펴야 해?")도 같다(2026-11-17 사례 7).
-            verified_answer = ("팔 자세 채점 결과가 없어 팔별 교정 여부는 알 수 없습니다.\n" + verified_answer if query.response_mode == "quick" else
-                               verified_answer + "\n팔 자세 채점 결과를 받지 못해 팔별 교정 여부는 이 답에 없습니다. 자세 채점이 끝난 뒤 다시 질문해 주세요.")
-        elif (query.response_mode == "detailed" and re.search(r"자세(?!히|하게|한)", query.prompt)
-              and not re.search(r"작업\s*(?:유사도|점수)|종합\s*유사도", query.prompt)):
-            # "자세 유사도"는 팔 관절 엔진 값에만 쓴다. "자세" 질문에 작업 유사도만 답하면 팔 자세 채점이 없다는 말이 빠진다(사례 8·9). 빠른 안내 한 줄은 작업 유사도 답을 그대로 둔다.
-            verified_answer += "\n팔 자세 채점 결과를 받지 못해 팔 자세 판정은 이 답에 없습니다. 자세 채점이 끝난 뒤 다시 질문해 주세요."
+        elif (query.task_type == "pose_recomm"  # 순서 탭은 팔 채점을 읽지 않는다(검토 I1)
+              and (side is not None or BODY_PART.search(query.prompt) or _POSE_ASKED.search(query.prompt))
+              and not _WORK_SCORE_ASKED.search(query.prompt)):
+            # 자세 유사도(팔 관절 엔진)와 작업 유사도는 다른 값이다. 팔 채점 없이 자세·신체 부위를 물으면 채점이 없다고 답하고,
+            # 작업 유사도는 상세 분석에서만 다른 값이라고 밝힌 뒤 덧붙인다(2026-11-17 사용자 결정 I7). 작업 유사도를 직접 물으면 위 조건에서 빠진다.
+            notice = _no_arm_notice(query.prompt, side)
+            verified_answer = (notice if query.response_mode == "quick" else
+                               f"{notice} 자세 채점이 끝난 뒤 다시 질문해 주세요.\n{NO_ARM_WORK_NOTE} {verified_answer}")
         answer, detail_degraded = await _synthesize_structured_detail(
             verified_answer, analysis_context, available=available
         )
