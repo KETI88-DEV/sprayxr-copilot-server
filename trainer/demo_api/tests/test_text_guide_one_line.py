@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 
 import pytest
 
@@ -13,6 +14,7 @@ from trainer.demo_api.tests.test_zone_completion_gate import analyze, request, t
 
 def _one_line(text: str | None) -> str:
     assert text and "\n" not in text and len(text) <= QUICK_LIMIT, text
+    assert not re.search(r"(?:하세요|해주세요|해 주세요|바랍니다|입니다|하십시오)", text), text
     return text
 
 
@@ -48,6 +50,7 @@ def _progress(status: str, *, coverage: float, over: float = 0.0, mean: float = 
 
 WORST = [
     _progress("complete", coverage=100.0, mean=199.0, next_zone="38"),
+    _progress("complete", coverage=100.0, mean=199.0),
     _progress("overpaint_risk", coverage=12.3, over=99.9, mean=1600.0),
     _progress("needs_more", coverage=100.0, mean=159.96),
     _progress("needs_more", coverage=45.5, over=54.5),  # 정상범위+상한 초과 ≤ 100%. 둘 다 두 자리 소수
@@ -64,13 +67,18 @@ def test_longest_zone_numbers_and_direction_still_fit(progress, direction) -> No
     reason = "direction_deviation" if direction else None
     decision = SequenceDecision(EngineFeedback(analysis_status="available", reason_code=reason),
                                 direction or "순서 적정.", "direction_deviation" if direction else None, direction)
-    text = _one_line(gate_sequence_decision(req, decision, progress).text_guide)
+    result = gate_sequence_decision(req, decision, progress)
+    text = _one_line(result.text_guide)
     if direction:
-        assert text.startswith(direction)
+        assert text.startswith("Zone 39: 대각선 도포 권장.")
+        assert result.detail_guide.startswith(direction)
     if progress is not None and progress.status == "overpaint_risk":
         assert "분사 중지" in text
     if progress is not None and progress.status == "complete":
-        assert "Zone 38로 이동" in text
+        if progress.next_zone_id:
+            assert "Zone 38로 이동" in text
+        else:
+            assert "구역 완료" in text and "이동" not in text
     if progress is not None and progress.status == "needs_more" and progress.overpaint_percent:
         assert "상한 초과" in text and "분사 중지" in text
 

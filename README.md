@@ -5,7 +5,9 @@
 선박 도장·블라스팅 훈련 시뮬레이터와 연동해 작업자에게 피드백과 훈련 결과를 제공하는 AI Co-Pilot 서버입니다.
 전문가 기준 데이터와 훈련 기록을 비교하고 작업 자세와 도장 경로를 시각화합니다. 훈련 중 발생하는 질문에도 답변합니다.
 
-현재 버전은 **v3.8.8**입니다. [버전별 변경 이력](CHANGELOG.md)과 [GitHub 릴리스](https://github.com/KETI88-DEV/sprayxr-copilot-server/releases)에서 추가 기능을 확인할 수 있습니다.
+현재 버전은 **v3.8.9**입니다. [버전별 변경 이력](CHANGELOG.md)과 [GitHub 릴리스](https://github.com/KETI88-DEV/sprayxr-copilot-server/releases)에서 추가 기능을 확인할 수 있습니다.
+
+시퀀스 분석의 `text_guide`는 “얇은 곳만 보완 권장”, “Zone 2로 이동 권장”, “분사 중지”처럼 60자 이내의 짧은 명사형으로 안내합니다. 상세 수치와 근거는 도막 진행·피드백 필드에서 확인할 수 있습니다. 새 문구는 새 분석에 적용되며 이미 저장된 응답 캐시는 유지합니다.
 
 세션 시작 응답의 `first_zone_id`와 `first_zone_guidance`에서 첫 작업 Zone을 확인할 수 있습니다. 스프레이·블라스팅별로 등록된 기준 순서를 사용하며, 기준이 없는 실전·Unit 콘텐츠는 안내 불가 사유를 반환합니다.
 

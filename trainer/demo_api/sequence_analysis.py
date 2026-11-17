@@ -136,6 +136,11 @@ class SequenceDecision:
     detail_guide: str | None = None   # 게이트의 전체 문장(정상범위·면적 포함). 자세한 질의 답용, text_guide는 한 줄
 
 
+def _brief_direction(text: str) -> str:
+    """Shorten the engine instruction while keeping its full form for details."""
+    return text.replace(" 방향으로 도장하세요.", " 도포 권장.")
+
+
 def gate_sequence_decision(
     request: AnalyzeSequenceRequest, decision: SequenceDecision,
     progress: CoatingProgress | None,
@@ -150,7 +155,7 @@ def gate_sequence_decision(
     known = progress if progress is not None and progress.available else None
     state, action, brief = _coating_line(known, complete=complete)
     # 시뮬레이터는 안내를 한 줄(60자)만 보여 준다. 방향 이탈이 있으면 방향 문장 + 짧은 도막 조치.
-    text = f"{direction} {brief}." if direction else f"Zone {request.zone_id} {state}. {action}."
+    text = f"{_brief_direction(direction)} {brief}." if direction else f"Zone {request.zone_id} {state}. {action}."
     if known is None and not direction:
         text = f"현재 {text}"
     if len(text) > QUICK_LIMIT:
@@ -168,26 +173,26 @@ def _coating_line(progress: CoatingProgress | None, *, complete: bool) -> tuple[
     판정은 `coating_progress`가 정한 status·면적·next_zone_id를 그대로 쓰고 문장만 줄인다.
     """
     if progress is None:
-        return "도막 완료 미확인", "이동 전 도막 자료를 확인하세요", "도막 완료 미확인, 이동 전 확인하세요"
+        return "도막 완료 미확인", "이동 전 도막 자료 확인 필요", "도막 완료 미확인, 이동 전 확인 필요"
     mean = (progress.assessment or {}).get("thickness_um")
     if complete:
-        move = f"Zone {progress.next_zone_id}로 이동하세요" if progress.next_zone_id else "완료입니다"
+        move = f"Zone {progress.next_zone_id}로 이동 권장" if progress.next_zone_id else "구역 완료"
         return "공식 면적 95% 이상 충족", move, f"면적 충족, {move}"
     if progress.status == "overpaint_risk":
         state = f"칠한 곳 평균 {mean:.0f}µm(과도막)" if mean is not None else "과도막"
-        return state, "분사 중지, 하한 미달부만 확인하세요", "과도막, 분사 중지하세요"
+        return state, "분사 중지·하한 미달부만 확인", "과도막, 분사 중지"
     coverage = progress.coverage_percent or 0.0
     if coverage >= coating_assessment.GATE_COVERAGE_PERCENT:  # 면적은 채웠지만 저도막이라 게이트가 막았다
         target = progress.target_thickness_um
         state = (f"면적 충족, 칠한 곳 평균 {coating_assessment.mean_text(mean, target)}µm(저도막)"
                  if mean is not None and target is not None else "면적 충족, 저도막")
-        return state, "얇은 곳만 보완하세요", "저도막, 얇은 곳만 보완하세요"
+        return state, "얇은 곳만 보완 권장", "저도막, 얇은 곳만 보완 권장"
     over = progress.overpaint_percent or 0.0
     if over > 0:
-        return (f"정상범위 {coverage:.1f}%, 상한 초과 {over:.1f}%", "두꺼운 곳 분사 중지, 얇은 곳 보완",
+        return (f"정상범위 {coverage:.1f}%, 상한 초과 {over:.1f}%", "두꺼운 곳 분사 중지, 얇은 곳 보완 권장",
                 f"상한 초과 {over:.1f}%, 두꺼운 곳 분사 중지")
-    return (f"정상범위 면적 {coverage:.1f}%", "하한 미달부만 보완하고 두꺼운 곳은 피하세요",
-            f"정상범위 {coverage:.1f}%, 얇은 곳만 보완하세요")
+    return (f"정상범위 면적 {coverage:.1f}%", "하한 미달부만 보완, 두꺼운 곳 회피 권장",
+            f"정상범위 {coverage:.1f}%, 얇은 곳만 보완 권장")
 
 
 def _zone_id(body: dict[str, Any]) -> str | None:
@@ -396,7 +401,7 @@ class SequenceAnalysisEngine:
             next_zone = recommend_next(request.zone_id, set(visits), self._transitions(profile), flow)
             text = (
                 f"권장 순서 이탈. 현재 위치의 다음 권장 Zone {next_zone}."
-                if next_zone else "전문가 권장 Zone 순서를 확인하세요."
+                if next_zone else "전문가 권장 Zone 순서 확인 바람."
             )
             return SequenceDecision(
                 EngineFeedback(analysis_status="available", reason_code=order_reason),
@@ -404,10 +409,12 @@ class SequenceAnalysisEngine:
                 "sequence_order_deviation",
             )
         if direction_error:
+            direction = f"Zone {request.zone_id}: {DIRECTION_LABELS.get(expected, expected)} 방향으로 도장하세요."
             return SequenceDecision(
                 EngineFeedback(analysis_status="available", reason_code="direction_deviation"),
-                f"Zone {request.zone_id}: {DIRECTION_LABELS.get(expected, expected)} 방향으로 도장하세요.",
+                _brief_direction(direction),
                 "direction_deviation",
+                direction_guide=direction,
                 directions=(str(expected), str(actual)),
             )
         next_zone = flow[flow.index(request.zone_id) + 1] if request.zone_id in flow and flow.index(request.zone_id) + 1 < len(flow) else None

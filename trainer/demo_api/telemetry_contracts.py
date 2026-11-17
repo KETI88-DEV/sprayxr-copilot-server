@@ -439,7 +439,13 @@ class TelemetrySequenceData(StrictModel):
     sequence_data_ack: SequenceDataAck
     coating_feedback: EngineFeedback
     sequence_feedback: EngineFeedback
-    text_guide: str | None
+    text_guide: str | None = Field(
+        description="시퀀스 분석의 실시간 안내. 60자 이내 한 줄 명사형으로 상태와 조치를 요약합니다. "
+                    "예: 보완 권장·이동 권장·확인 필요·분사 중지. 상세 근거는 coating_progress와 "
+                    "피드백 필드를 참고하세요. 분석하지 않는 업로드 경로나 안내 불가 상태는 null입니다.",
+        examples=["Zone 1 공식 면적 95% 이상 충족. Zone 2로 이동 권장.",
+                  "현재 Zone 1 도막 완료 미확인. 이동 전 도막 자료 확인 필요."],
+    )
 
 
 class TelemetrySequenceResponse(StrictModel):

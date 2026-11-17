@@ -329,7 +329,8 @@ def test_completed_zone_direction_guidance_has_no_stale_unknown_gate_message(tmp
                           {"index": 2, "gun_metrics": {"raytexuv": [0, 100]}}]}).sequence_info
     data = TestClient(app).post("/api/v1/copilot/analyze-sequence", json=req.model_dump(mode="json")).json()["data"]
     assert data["sequence_feedback"]["reason_code"] == "direction_deviation"
-    assert "Zone 1: 수평 방향으로 도장하세요." in data["text_guide"] and "horizontal" not in data["text_guide"]
+    assert "Zone 1: 수평 도포 권장." in data["text_guide"] and "horizontal" not in data["text_guide"]
+    assert "160~200µm" in data["coating_progress"]["message"]
     assert "확인할 수 없습니다" not in data["text_guide"]
     assert data["coating_progress"]["status"] == "complete"
 
@@ -592,3 +593,24 @@ def test_mean_just_under_the_target_reads_the_same_below_target_number_everywher
     assert "칠한 곳 평균 159.9µm" in feedback["message"]
     post(client, zone2(2))
     assert "칠한 곳 평균 159.9µm(하한 미만·저도막)." in coating_alerts(bus)[0].payload["message"]
+
+
+def test_blasting_direction_guide_is_nominal_without_changing_direction_evidence(tmp_path: Path) -> None:
+    fixture(tmp_path)
+    source = tmp_path / "generated/profiles/spray/learning/mode_03.json"
+    target = tmp_path / "generated/profiles/blasting/learning/mode_03.json"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(source.read_bytes())
+    req = request()
+    req.sequence_setting["tool_type"] = "blasting_gun"
+    req.sequence_info = AnalyzeSequenceRequest.model_validate({**req.model_dump(mode="json"),
+        "sequence_info": [{"index": 1, "gun_metrics": {"raytexuv": [0, 0]}},
+                          {"index": 2, "gun_metrics": {"raytexuv": [0, 100]}}]}).sequence_info
+    store = SequenceStore(":memory:")
+    store.record(session_key=req.session_id, sequence_id=req.sequence_id, body_sha256="blasting-direction",
+                 frames=0, received_at="now", body=req.model_dump_json())
+    decision = SequenceAnalysisEngine(tmp_path).evaluate(req, store)
+    assert decision.feedback.reason_code == "direction_deviation"
+    assert decision.text_guide == "Zone 1: 수평 도포 권장."
+    assert decision.directions == ("horizontal", "vertical")
+    assert decision.direction_guide == "Zone 1: 수평 방향으로 도장하세요."
