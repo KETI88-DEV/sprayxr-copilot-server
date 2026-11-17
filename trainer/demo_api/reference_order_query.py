@@ -107,7 +107,8 @@ def current_next_answer(query, sequences, reports=None, *, sequence_engine=None,
     if (progress.available and progress.zone_id == request.zone_id and progress.status == "complete"
             and progress.recommendation == "move_next_zone"):
         scope["next_zone_id"] = progress.next_zone_id
-    return decision.text_guide or unknown, scope, progress.model_dump(mode="json")
+    guide = decision.text_guide if getattr(query, "response_mode", None) == "quick" else decision.detail_guide
+    return guide or decision.text_guide or unknown, scope, progress.model_dump(mode="json")
 
 
 def _processes(text: str) -> set[str]:

@@ -542,7 +542,7 @@ def test_thin_zone_guide_and_leaving_alert_agree(tmp_path: Path) -> None:
     data = client.post("/api/v1/copilot/analyze-sequence", json=thin_mean().model_dump(mode="json")).json()["data"]
     assert data["coating_progress"]["status"] == "needs_more"
     assert data["coating_progress"]["next_zone_id"] is None
-    assert THIN_MEAN_GUIDE.partition(": ")[2] in data["text_guide"]
+    assert "저도막" in data["text_guide"] and "얇은 곳만 보완" in data["text_guide"]
     assert "다음" not in data["text_guide"]
     assert coating_alerts(bus) == []
     post(client, zone2(2))

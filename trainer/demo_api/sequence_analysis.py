@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
+from trainer.demo_api import coating_assessment
 from trainer.demo_api.playback_direction import LABELS as DIRECTION_LABELS
+from trainer.demo_api.quick_answer import QUICK_LIMIT
 from trainer.demo_api.sequence_store import SequenceStore
 from trainer.demo_api.telemetry_contracts import (
     AnalyzeSequenceRequest,
@@ -19,6 +22,7 @@ from trainer.demo_api.telemetry_contracts import (
     process_from_tool_type,
 )
 
+logger = logging.getLogger(__name__)
 ALGORITHM_VERSION = "sequence-reference-2.0"
 _NO_ZONE = {"", "-1", "0", "none", "null", "nan"}
 
@@ -129,6 +133,7 @@ class SequenceDecision:
     anomaly_type: str | None = None
     direction_guide: str | None = None
     directions: tuple[str, str] | None = None   # 방향 이탈의 (기대, 관측) 열쇠. 게이트 전 판정(decide)에만 있고 뷰어 알림 값으로 쓴다
+    detail_guide: str | None = None   # 게이트의 전체 문장(정상범위·면적 포함). 자세한 질의 답용, text_guide는 한 줄
 
 
 def gate_sequence_decision(
@@ -140,19 +145,49 @@ def gate_sequence_decision(
         return decision
     direction = (getattr(decision, "direction_guide", None) or decision.text_guide
                  if decision.feedback.reason_code == "direction_deviation" else None)
-    if (progress is not None and progress.available and progress.zone_id == request.zone_id
-            and progress.status == "complete" and progress.recommendation == "move_next_zone"):
-        text = progress.message
-        if direction:
-            text = f"{direction} {text}"
-        return SequenceDecision(decision.feedback, text, decision.anomaly_type, direction)
-    if progress is not None and progress.available:
-        text = progress.message
-    else:
-        text = f"현재 Zone {request.zone_id} 도막 완료 미확인. 이동 전 도막·공식 구역 자료를 확인하세요."
+    complete = (progress is not None and progress.available and progress.zone_id == request.zone_id
+                and progress.status == "complete" and progress.recommendation == "move_next_zone")
+    known = progress if progress is not None and progress.available else None
+    state, action, brief = _coating_line(known, complete=complete)
+    # 시뮬레이터는 안내를 한 줄(60자)만 보여 준다. 방향 이탈이 있으면 방향 문장 + 짧은 도막 조치.
+    text = f"{direction} {brief}." if direction else f"Zone {request.zone_id} {state}. {action}."
+    if known is None and not direction:
+        text = f"현재 {text}"
+    if len(text) > QUICK_LIMIT:
+        logger.warning("text_guide_over_limit length=%d zone=%s", len(text), request.zone_id)
+    detail = (known.message if known is not None else
+              f"현재 Zone {request.zone_id} 도막 완료 미확인. 이동 전 도막·공식 구역 자료를 확인하세요.")
     if direction:
-        text = f"{direction} {text}"
-    return SequenceDecision(decision.feedback, text, decision.anomaly_type, direction)
+        detail = f"{direction} {detail}"
+    return SequenceDecision(decision.feedback, text, decision.anomaly_type, direction, detail_guide=detail)
+
+
+def _coating_line(progress: CoatingProgress | None, *, complete: bool) -> tuple[str, str, str]:
+    """한 줄 안내용 도막 문장 조각: (상태, 조치, 방향 문장 뒤에 붙일 짧은 꼴).
+
+    판정은 `coating_progress`가 정한 status·면적·next_zone_id를 그대로 쓰고 문장만 줄인다.
+    """
+    if progress is None:
+        return "도막 완료 미확인", "이동 전 도막 자료를 확인하세요", "도막 완료 미확인, 이동 전 확인하세요"
+    mean = (progress.assessment or {}).get("thickness_um")
+    if complete:
+        move = f"Zone {progress.next_zone_id}로 이동하세요" if progress.next_zone_id else "완료입니다"
+        return "공식 면적 95% 이상 충족", move, f"면적 충족, {move}"
+    if progress.status == "overpaint_risk":
+        state = f"칠한 곳 평균 {mean:.0f}µm(과도막)" if mean is not None else "과도막"
+        return state, "분사 중지, 하한 미달부만 확인하세요", "과도막, 분사 중지하세요"
+    coverage = progress.coverage_percent or 0.0
+    if coverage >= coating_assessment.GATE_COVERAGE_PERCENT:  # 면적은 채웠지만 저도막이라 게이트가 막았다
+        target = progress.target_thickness_um
+        state = (f"면적 충족, 칠한 곳 평균 {coating_assessment.mean_text(mean, target)}µm(저도막)"
+                 if mean is not None and target is not None else "면적 충족, 저도막")
+        return state, "얇은 곳만 보완하세요", "저도막, 얇은 곳만 보완하세요"
+    over = progress.overpaint_percent or 0.0
+    if over > 0:
+        return (f"정상범위 {coverage:.1f}%, 상한 초과 {over:.1f}%", "두꺼운 곳 분사 중지, 얇은 곳 보완",
+                f"상한 초과 {over:.1f}%, 두꺼운 곳 분사 중지")
+    return (f"정상범위 면적 {coverage:.1f}%", "하한 미달부만 보완하고 두꺼운 곳은 피하세요",
+            f"정상범위 {coverage:.1f}%, 얇은 곳만 보완하세요")
 
 
 def _zone_id(body: dict[str, Any]) -> str | None:
