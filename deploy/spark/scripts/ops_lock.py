@@ -247,7 +247,7 @@ def release(by: str, now: datetime, force: bool = False, reason: str = "") -> tu
 def check(by: str, what: str, now: datetime) -> tuple[bool, str]:
     lock = read_lock()
     if lock is None:
-        return False, f"잠금이 없다. 먼저: ops_lock.py take --what {what} --by {by} --reason ... --until HH:MM"
+        return False, f"잠금이 없다. 먼저: ops_lock.py take --what {what or "agent-api|vllm|test|other"} --by {by} --reason ... --until HH:MM"
     _note_expired(lock, now)
     if lock.get("broken") or lock.get("by") != by or (what and lock.get("what") != what):
         return False, f"자기 잠금이 아니다: {describe(lock, now)}"
