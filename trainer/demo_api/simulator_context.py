@@ -22,6 +22,21 @@ SIMULATOR_CONTEXT: Final = """[시뮬레이터 기본 설정]
 
 _BLASTING: Final = re.compile(r"블라스팅|blasting", re.I)
 _TRAINING_MODE: Final = re.compile(r"(?:훈련|학습)\s*모드")
+_MODE_CATALOG: Final = re.compile(
+    r"(?:훈련|학습)\s*모드(?:는|가|의)?\s*(?:총\s*)?"
+    r"(?:몇\s*(?:개|가지|종류)|개수|갯수|종류(?!별)|범위|목록|전체\s*(?:목록|종류)|번호\s*(?:범위|목록))")
+
+
+def simulator_configuration_facts(prompt: str) -> dict[str, object] | None:
+    """Server configuration, separate from NCS evidence or session measures.
+
+    A numbered mode's coating technique is not a request for the mode catalog.
+    Only the confirmed catalog is supplied; names and per-mode properties are
+    not inferred from the mode numbers.
+    """
+    if _MODE_CATALOG.search(prompt) is None:
+        return None
+    return {"simulator_configuration": {"training_mode_ids": list(range(1, 11))}}
 
 
 def is_blasting(prompt: str) -> bool:
