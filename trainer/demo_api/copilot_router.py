@@ -51,7 +51,7 @@ from trainer.demo_api.quick_answer import QUICK_LIMIT, one_line
 from trainer.demo_api.coating_query import (
     answer_coating_question, answer_distribution_cause, drop_contradicted_causes, parse_viewer_coating_context,
     report_coating_context, target_advice_facts, zone_measures)
-from trainer.demo_api.copilot_intent import classify_question_intent, fallback_intent, preset_intent, is_coating_status_question, is_coating_advice_question, is_domain_question, is_general_painting_knowledge, is_explanatory_question, is_off_topic
+from trainer.demo_api.copilot_intent import RECORD_OBJECT, classify_question_intent, fallback_intent, preset_intent, is_coating_status_question, is_coating_advice_question, is_domain_question, is_general_painting_knowledge, is_explanatory_question, is_off_topic
 from trainer.demo_api.dialogue import (INSTRUCTION_REFUSAL, asks_for_instructions, authenticated_facts, conversation_key,
                                        drop_misattributed_zones, drop_sentences, drop_ungrounded, guard_generated_answer, has_body, parse_plan, plain_answer,
                                        viewer_claims, zone_fact_numbers,
@@ -1254,7 +1254,11 @@ async def _execute_copilot_query(
             return await chat_answer()
 
     trusted_coating = parse_viewer_coating_context(query.context, query.task_type)
-    coating_advice_context = (trusted_coating if mixed is None and is_coating_advice_question(query.prompt) and trusted_coating and trusted_coating.get("analysis_status") == "available" else None)
+    # 빠른 안내(8B)는 기록 수치를 받으면 지식 질문에도 그 수치로 답한다(2026-11-17 운영 #42). 질문이 기록을 가리킬 때만 넘긴다.
+    # 기록을 가리키는 말은 계획(2026-11-17)의 기록 객체 정의 하나로 본다. 1인칭·"지금"만으로는 기록이 아니다.
+    record_pointed = bool(RECORD_OBJECT.search(query.prompt))
+    coating_advice_context = (trusted_coating if mixed is None and is_coating_advice_question(query.prompt) and trusted_coating and trusted_coating.get("analysis_status") == "available"
+                              and (query.response_mode != "quick" or record_pointed) else None)
 
     async def report_facts() -> dict[str, Any]:
         found_coating = (await to_thread.run_sync(lambda: reports.latest_complete_analysis(query.session_id))
@@ -1566,7 +1570,8 @@ async def _execute_copilot_query(
                                       selected_sequence_id=_selected_sequence(query.context)))
     definition_context = (viewer_definition_context(query.prompt, query.context)
                           if query.response_mode == "quick" and query.task_type == "knowledge_search" and mixed is None else None)
-    knowledge_client_context = MIXED_DOCUMENT_RULE if mixed is not None else (definition_context or (json.dumps(facts, ensure_ascii=False, separators=(",", ":")) if facts else viewer_metadata_context(query.context))) if viewer_requested else (definition_context or query.context)
+    viewer_facts = facts if facts and (query.response_mode != "quick" or record_pointed) else None
+    knowledge_client_context = MIXED_DOCUMENT_RULE if mixed is not None else (definition_context or (json.dumps(viewer_facts, ensure_ascii=False, separators=(",", ":")) if viewer_facts else viewer_metadata_context(query.context))) if viewer_requested else (definition_context or query.context)
     if coating_advice_context is not None:
         compact = target_advice_facts(coating_advice_context, measures=_viewer_measures(query.context, query.prompt)[0])
         knowledge_client_context = "[검증된 최종 도막 비교 자료]\n" + json.dumps(compact or coating_advice_context, ensure_ascii=False, separators=(",", ":"))

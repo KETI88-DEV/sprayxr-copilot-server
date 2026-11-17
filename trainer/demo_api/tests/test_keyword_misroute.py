@@ -385,3 +385,15 @@ def test_review_n1_correction_after_a_non_record_answer_stays_in_the_conversatio
     _ask("오늘 점심 뭐 먹을까요?", "knowledge", mode=mode, store=store)
     found = _ask("아니 그거 말고 다른 메뉴는?", "knowledge", mode=mode, store=store, pipeline=RecordingPipeline(plan=_CORRECTION))
     assert found["source"] != "documents", found
+
+
+@pytest.mark.parametrize("arm", ARMS)
+def test_quick_knowledge_answer_gets_no_record_numbers_unless_the_question_points_at_the_record(arm: str) -> None:
+    """운영 v3.8.14 #42: 빠른 안내(8B)가 문서 대신 넘겨받은 Zone 8 거리로 답했다. 기록을 가리키지 않으면 기록 수치를 넘기지 않는다."""
+    contexts = {}
+    for mode in MODES:
+        pipeline = RecordingPipeline()
+        _ask(LONG_BEGINNER, "knowledge", arm, mode, pipeline=pipeline)
+        contexts[mode] = str([kwargs for name, kwargs in pipeline.kwargs if name == "run"])
+    assert "검증된 최종 도막 비교 자료" in contexts["detailed"]  # 상세 분석은 그대로 넘긴다(시험이 실패할 수 있음을 보인다)
+    assert "검증된 최종 도막 비교 자료" not in contexts["quick"], contexts["quick"][:400]
