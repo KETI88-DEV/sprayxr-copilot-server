@@ -1,0 +1,162 @@
+[
+  {
+    "key": "detailed-frame-direction-20261106",
+    "number": 6,
+    "url": "https://github.com/KETI88-DEV/sprayxr-copilot-server/issues/6",
+    "state": "open",
+    "updated_at": "2026-11-12T22:24:54Z",
+    "source_sha256": "d4f681a8cde155040c38305d26a1b580f84d663750ee61d99c33d19d7749123c"
+  },
+  {
+    "key": "dialogue-provenance-20261106",
+    "number": 5,
+    "url": "https://github.com/KETI88-DEV/sprayxr-copilot-server/issues/5",
+    "state": "closed",
+    "updated_at": "2026-11-06T08:50:52Z",
+    "source_sha256": "d649b092a40d2ef4315d3f2813b890a4f314835b60fd53974246b9129af5ff7c"
+  },
+  {
+    "key": "query-intent-20261106",
+    "number": 4,
+    "url": "https://github.com/KETI88-DEV/sprayxr-copilot-server/issues/4",
+    "state": "closed",
+    "updated_at": "2026-11-06T07:48:00Z",
+    "source_sha256": "5ce31a063ded95624a66e6fb81117b1911d8b7642502f738e42fe37c10ec0edc"
+  },
+  {
+    "key": "query-multilingual-20261106",
+    "number": 3,
+    "url": "https://github.com/KETI88-DEV/sprayxr-copilot-server/issues/3",
+    "state": "closed",
+    "updated_at": "2026-11-06T07:09:12Z",
+    "source_sha256": "8b18452f2c0ab5d6310e4559305cdccf8ee6f8cec84fa4f467881794457b73b8"
+  },
+  {
+    "key": "corrected-zone-integration-20261111",
+    "number": 15,
+    "url": "https://github.com/KETI88-DEV/sprayxr-copilot-server/issues/15",
+    "state": "open",
+    "updated_at": "2026-11-12T15:39:36Z",
+    "source_sha256": "5b00b174fc2f20e99fc4e7f69cc4145f3e290469513c54bdc6adbb9dcafbbb5e"
+  },
+  {
+    "key": "portal-navigation-20261111",
+    "number": 10,
+    "url": "https://github.com/KETI88-DEV/sprayxr-copilot-server/issues/10",
+    "state": "closed",
+    "updated_at": "2026-11-11T07:30:31Z",
+    "source_sha256": "5eac679196b5523a3a638a29155bd53e5f330df83b4e949ddcb3c0d4395d0064"
+  },
+  {
+    "key": "pose-engine-integration-20261111",
+    "number": 12,
+    "url": "https://github.com/KETI88-DEV/sprayxr-copilot-server/issues/12",
+    "state": "closed",
+    "updated_at": "2026-11-11T08:26:58Z",
+    "source_sha256": "12cc8f0e7b1eb174907b8b4f5c9bd05bd2fda25a38705ac4bef6737ad3affef2"
+  },
+  {
+    "key": "training-corpus-import-20261111",
+    "number": 14,
+    "url": "https://github.com/KETI88-DEV/sprayxr-copilot-server/issues/14",
+    "state": "closed",
+    "updated_at": "2026-11-11T12:57:33Z",
+    "source_sha256": "5998e8526373e19b71d50934be6bf0c65752b84e99e5b68ad33650b2f257c278"
+  },
+  {
+    "key": "tsb-server-readiness-20261111",
+    "number": 11,
+    "url": "https://github.com/KETI88-DEV/sprayxr-copilot-server/issues/11",
+    "state": "closed",
+    "updated_at": "2026-11-12T16:13:01Z",
+    "source_sha256": "5dd244ea36b6c1ce74c28ef1ac4b04988e5db0d5b6bbe6a1a09cf76d9111dc8c"
+  },
+  {
+    "key": "zone-direction-owner-parity-20261111",
+    "number": 13,
+    "url": "https://github.com/KETI88-DEV/sprayxr-copilot-server/issues/13",
+    "state": "open",
+    "updated_at": "2026-11-11T08:27:00Z",
+    "source_sha256": "435ad87382242fb9b86464119c85d882af8470a42965126683246ab829db002f"
+  },
+  {
+    "key": "api-output-tsb-terms-20261116",
+    "number": 28,
+    "url": "https://github.com/KETI88-DEV/sprayxr-copilot-server/issues/28",
+    "state": "closed",
+    "updated_at": "2026-11-16T08:37:13Z",
+    "source_sha256": "3fb011a2178a3009273d27dcac7e47d5a0d62f428396cd7b2574ad17ae8a37bc"
+  },
+  {
+    "key": "concise-api-start-zone-20261116",
+    "number": 27,
+    "url": "https://github.com/KETI88-DEV/sprayxr-copilot-server/issues/27",
+    "state": "closed",
+    "updated_at": "2026-11-16T08:06:22Z",
+    "source_sha256": "293a60d7d7ce4db0579bd51497039ced9587ac127766a0ec49b6d72bdb976a68"
+  },
+  {
+    "key": "converted-height-import-20261116",
+    "number": 30,
+    "url": "https://github.com/KETI88-DEV/sprayxr-copilot-server/issues/30",
+    "state": "closed",
+    "updated_at": "2026-11-16T10:00:45Z",
+    "source_sha256": "83690649c6875a67dc6e15d653e9b83e0f24632e0096c50084679e0dc8921864"
+  },
+  {
+    "key": "db-sequence-guides-20261116",
+    "number": 31,
+    "url": "https://github.com/KETI88-DEV/sprayxr-copilot-server/issues/31",
+    "state": "closed",
+    "updated_at": "2026-11-16T09:30:30Z",
+    "source_sha256": "dfe6270ae85da196704094b66b67324597f33d692d3388e92ac687b3721299e6"
+  },
+  {
+    "key": "voice-sample-rate-20261116",
+    "number": 29,
+    "url": "https://github.com/KETI88-DEV/sprayxr-copilot-server/issues/29",
+    "state": "closed",
+    "updated_at": "2026-11-16T08:59:02Z",
+    "source_sha256": "99d22a7a599aea3e85d40d55fb8a78df7a87ac45e8e9deedcbba6d9c577ec699"
+  },
+  {
+    "key": "converted-height-import-20261117",
+    "number": 33,
+    "url": "https://github.com/KETI88-DEV/sprayxr-copilot-server/issues/33",
+    "state": "closed",
+    "updated_at": "2026-11-17T02:12:50Z",
+    "source_sha256": "2f6fe6b857450bcfb490d5efaa88ffe63045207f65bc563f1216d93a1676ee38"
+  },
+  {
+    "key": "db-training-facets-20261117",
+    "number": 36,
+    "url": "https://github.com/KETI88-DEV/sprayxr-copilot-server/issues/36",
+    "state": "closed",
+    "updated_at": "2026-11-17T03:46:39Z",
+    "source_sha256": "334de53feadf7b291c0d8163e45599127a6ba7a450f4d124d08e4e13a61098fb"
+  },
+  {
+    "key": "query-evidence-glossary-20261117",
+    "number": 37,
+    "url": "https://github.com/KETI88-DEV/sprayxr-copilot-server/issues/37",
+    "state": "open",
+    "updated_at": "2026-11-17T07:09:48Z",
+    "source_sha256": "787f19af22c6072e17237510d3bc5eba3f54c26eb0dcf53a3c7729095df55f1f"
+  },
+  {
+    "key": "sequence-nominal-guide-20261117",
+    "number": 35,
+    "url": "https://github.com/KETI88-DEV/sprayxr-copilot-server/issues/35",
+    "state": "closed",
+    "updated_at": "2026-11-17T02:54:06Z",
+    "source_sha256": "85db0a207dc17ae3da9003a85cde5d5c15dd7de2ca10870750088cfb385e98f0"
+  },
+  {
+    "key": "training-data-download-performance-20261117",
+    "number": 34,
+    "url": "https://github.com/KETI88-DEV/sprayxr-copilot-server/issues/34",
+    "state": "open",
+    "updated_at": "2026-11-17T02:12:51Z",
+    "source_sha256": "4c704f4b3613485c9f224beab9a14f3c6cddda5496e4df66a4a0a475afcc1d88"
+  }
+]
