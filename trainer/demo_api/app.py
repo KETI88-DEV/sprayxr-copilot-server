@@ -25,6 +25,7 @@ from trainer.demo_api import __version__, chat_service as chat_service_mod
 from trainer.demo_api.access_control import AccessControlMiddleware, OperatorCredentials
 from trainer.demo_api.api_call_log import ApiCallStore, ApiCallLoggingMiddleware
 from trainer.demo_api.api_docs import api_docs_document, create_api_docs_router
+from trainer.demo_api.maintenance import create_maintenance_router
 from trainer.demo_api.query_chat import create_query_chat_router
 from trainer.demo_api.chat_service import ChatService, build_default_live_runner
 from trainer.demo_api.contracts import ChatRequest
@@ -546,6 +547,7 @@ def create_app(
         docs_url=None,
     )
     app.include_router(create_api_docs_router())
+    app.include_router(create_maintenance_router())
 
     @app.get("/docs", include_in_schema=False)
     async def swagger_docs(request: Request) -> HTMLResponse:

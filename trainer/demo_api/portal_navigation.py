@@ -35,7 +35,7 @@ html{scroll-padding-top:calc(var(--copilot-nav-height) + 12px)}
 #copilot-navigation .portal-links>.portal-link:focus-visible{outline:2px solid #8cdaf0;outline-offset:-2px}
 body[data-portal-page=database] .app-shell{min-height:calc(100vh - var(--copilot-nav-height))}
 body[data-portal-page=database] .sidebar{top:var(--copilot-nav-height);height:calc(100vh - var(--copilot-nav-height))}
-body[data-portal-page=motion] .shell{height:calc(100dvh - var(--copilot-nav-height))}
+body[data-portal-page=motion] .shell{height:calc(100dvh - var(--copilot-nav-height) - var(--copilot-banner-height,0px))}
 body[data-portal-page=motion] .top{padding:14px 22px}
 body[data-portal-page=motion] .top .title{font-size:22px;line-height:1.3;letter-spacing:-.025em}
 body[data-portal-page=motion] .top .title small{font-size:12px;line-height:1.5;margin-top:5px;letter-spacing:0}
@@ -51,8 +51,21 @@ body[data-portal-page=docs] .swagger-ui .opblock,body[data-portal-page=docs] .sw
 @media(max-width:850px){body[data-portal-page=database] .sidebar{top:auto;height:auto}}
 @media(max-width:780px){#copilot-navigation{padding:0 12px;gap:9px}#copilot-navigation .portal-brand-name{display:none}#copilot-navigation .portal-links{flex:1}}
 @media(max-width:720px){body[data-portal-page=motion] .stage{height:calc(100dvh - var(--copilot-nav-height) - 86px)}}
+#copilot-maintenance{position:sticky;top:var(--copilot-nav-height);z-index:9999;display:flex;align-items:flex-start;gap:8px;padding:7px 24px;background:var(--raised,#142238);border-bottom:1px solid var(--line-strong,#293c5d);color:var(--ink,#eef5ff);font:500 12px/1.55 Inter,Pretendard,"Noto Sans KR",system-ui,sans-serif}
+#copilot-maintenance[hidden]{display:none}
+#copilot-maintenance svg{flex:none;width:15px;height:15px;margin-top:2px;color:var(--warn,#f2b84b)}
+#copilot-maintenance span{min-width:0;overflow-wrap:anywhere}
+@media(max-width:780px){#copilot-maintenance{padding:7px 12px}}
 @media(max-width:600px){:root{--copilot-nav-height:48px}#copilot-navigation .portal-links{grid-template-columns:repeat(6,minmax(104px,1fr));gap:4px}#copilot-navigation .portal-links>.portal-link{font-size:11px;padding:6px;gap:5px;height:34px}#copilot-navigation .portal-icon{flex-basis:16px;width:16px;height:16px}}
 """
+
+# 점검 배너(maintenance_banner.js 가 /api/maintenance 를 보고 켠다). 닫기 버튼은 없다 — 점검이 끝나면 사라진다.
+_BANNER_PAGES = {"docs", "motion", "chat"}
+_BANNER_HTML = ('<div id="copilot-maintenance" role="status" hidden>'
+                '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" '
+                'stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 '
+                '1.4 0l3.106-3.105c.32-.322.863-.22.983.218a6 6 0 0 1-8.259 7.057l-7.91 7.91a1 1 0 0 1-2.999-3l7.91-7.91a6 6 0 0 1 '
+                '7.057-8.259c.438.12.54.662.219.984z"/></svg><span data-maintenance-text></span></div>')  # Lucide wrench
 
 _FEEDBACK_HTML = '''<dialog id="copilot-feedback-dialog" aria-labelledby="copilot-feedback-title" aria-describedby="copilot-feedback-note">
 <form id="copilot-feedback-form"><div class="feedback-heading"><h2 id="copilot-feedback-title">의견 보내기</h2><button type="button" id="copilot-feedback-close" aria-label="의견 창 닫기">×</button></div>
@@ -84,6 +97,9 @@ def portal_document(document: str, active: str) -> str:
            '<svg class="portal-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">' + _ICONS['feedback'] +
            '</svg><span>의견 보내기</span></button></nav></header>')
     document = document.replace('</head>', f'<style id="copilot-navigation-style">{_CSS}</style><link rel="stylesheet" href="/assets/copilot_feedback.css"></head>', 1)
+    if active in _BANNER_PAGES:
+        bar += _BANNER_HTML
     document = re.sub(r'<body\b[^>]*>', lambda match: match.group(0)[:-1] + f' data-portal-page="{active}">' + bar,
                       document, count=1, flags=re.IGNORECASE)
-    return document.replace('</body>', _FEEDBACK_HTML + '</body>', 1)
+    tail = _FEEDBACK_HTML + ('<script defer src="/assets/maintenance_banner.js"></script>' if active in _BANNER_PAGES else '')
+    return document.replace('</body>', tail + '</body>', 1)
