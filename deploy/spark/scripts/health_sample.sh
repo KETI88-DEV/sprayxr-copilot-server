@@ -3,6 +3,7 @@
 #
 #   health_sample.sh           표본만 기록한다. 종료 코드 0.
 #   health_sample.sh --check   기록한 뒤 기준을 넘은 항목을 한 줄씩 쓴다. 하나라도 있으면 종료 코드 1.
+#                              같은 폴더의 ops_lock.py watch 로 상태 변화를 Slack 에 알린다(OPS_LOCK 로 경로 변경).
 #
 # cron (keti 계정):
 #   */10 * * * * .../health_sample.sh --check >> .../cron.log 2>&1
@@ -74,10 +75,12 @@ while read -r id name; do
   row container_health "${name}" "${health[${name}]}"
 done < <(run docker ps --no-trunc --format '{{.ID}} {{.Names}}')
 
+down=()
 for name in ${PROD_CONTAINERS}; do
   if [[ -z "${health[${name}]:-}" ]]; then
     row container_health "${name}" missing
     problems+=("${name} 컨테이너가 없거나 꺼져 있다")
+    down+=("${name}")
     continue
   fi
   [[ "${health[${name}]}" == healthy ]] || problems+=("${name} 상태가 ${health[${name}]}")
@@ -99,6 +102,9 @@ while IFS=', ' read -r pid used; do
 done < <(run nvidia-smi --query-compute-apps=pid,used_memory --format=csv,noheader,nounits)
 
 if (( CHECK )); then
+  # /api/ready·vLLM 모델 이름·컨테이너 중단이 직전과 달라졌을 때만 Slack 한 번(판정과 전송은 ops_lock.py 한 곳).
+  # 실패해도 위의 기록과 아래 종료 코드는 그대로다.
+  timeout 60 python3 "${OPS_LOCK:-$(dirname "$(readlink -f "$0")")/ops_lock.py}" watch --down "${down[*]}" || true
   if (( ${#problems[@]} )); then
     for problem in "${problems[@]}"; do echo "${ts} ${problem}"; done
     exit 1

@@ -37,7 +37,10 @@ deploy/spark/
     ├── render_rollback_config.py # BF16 롤백 설정
     ├── run_fp8_gate.sh           # 30문항 × RUNS회(기본 8) 생성·채점, 기존 run에 이어 붙이기
     ├── quality_gate.py           # NF4 기준선 대비 단계적 95% Welch CI 판정(exit 0/1/2/3)
-    └── soak.sh                   # 장시간 소크
+    ├── soak.sh                   # 장시간 소크
+    ├── health_sample.sh          # 10분 cron 점검. --check 는 상태 변화를 Slack 으로(§21)
+    ├── ops_lock.py               # 운영 작업 잠금·버전 예약·점검 배너 파일·Slack(§21)
+    └── ops_lock_guard.py         # 교체 스크립트 첫 줄의 잠금 확인
 ```
 
 `trainer/scripts/tests/test_spark_deploy_contract.py`는 compose와 entrypoint의 값을 `rag_config_spark_vllm.yaml`, 번들 배치, 코드와 대조한다(served name, max-model-len, 샘플링 override, 마운트 경로, nginx 타임아웃, lock). `test_spark_bundle_scripts.py`는 스크립트를 합성 디렉터리로 검증한다.
@@ -699,3 +702,34 @@ FP8로 돌아갈 때는 `.env`와 셸에 export한 `BUNDLE_DIR`를 원래 값으
 find "${POSE_MODELINGS_DIR:-/home/keti/shipcoat/data/modelings}" -maxdepth 1 -type f -printf '%f\n' | sort
 sha256sum "${POSE_MODELINGS_DIR:-/home/keti/shipcoat/data/modelings}"/*.fbx
 ```
+
+## 21. 운영 교체 순서: 잠금 → 교체 → 해제
+
+여러 사람과 세션이 같은 시각에 교체하거나 같은 버전 번호를 쓰지 않도록, 운영을 건드리는 작업은 모두 잠금을 먼저 잡는다.
+`ops_lock.py`와 `health_sample.sh`는 운영 폴더 `/home/keti/shipcoat/ops`에 함께 둔다(호스트 python3, 표준 라이브러리만).
+
+```bash
+OPS=/home/keti/shipcoat/ops
+python3 $OPS/ops_lock.py status                                   # 1. 누가 하고 있는지 본다
+python3 $OPS/ops_lock.py take --what vllm --by KURE \
+  --reason "vLLM 교체" --until 10:30                               # 2. 잡는다(한국 시각). 이미 있으면 종료 코드 1
+python3 $OPS/ops_lock.py version next --by KURE                   # 3. 새 이미지면 번호를 예약한다(예: 3.8.9)
+#    교체 스크립트는 맨 처음 check 로 자기 잠금인지 확인한다. 아니면 멈춘다.
+python3 $OPS/ops_lock.py check --by KURE --what vllm || exit 1     #    (python 스크립트는 ops_lock_guard.require_lock)
+python3 $OPS/ops_lock.py release --by KURE                        # 4. 끝나면 푼다
+```
+
+- `--what`은 `agent-api`·`vllm`·`test`·`other` 중 하나다. 화면 배너와 Slack 에 영향 문구가 붙는다
+  (`vllm` 상세 분석(27B) 일시 중단, `agent-api` API 잠시 끊김, `test` 시험 중(응답이 느릴 수 있음)).
+- 기한이 지나도 잠금은 풀리지 않는다. `status`·`take`·`check`에 "만료"로만 보인다. 연장하려면 `release` 후 다시 `take`.
+- 남의 잠금은 `release --by 내이름 --force --reason "..."`로만 푼다. 이유는 이력에 남고 Slack 으로 나간다.
+- `version next`는 장부(`versions.json`)와 운영 agent-api 이미지 라벨 `org.opencontainers.image.version` 중 큰 값에 패치 1을 더한다.
+  번호를 직접 정하면 `version reserve X.Y.Z --by 이름`. 이미 예약됐거나 운영 중인 번호는 거부한다.
+- 모든 상태 변화는 `lock-history.jsonl`에 한 줄씩 남는다.
+- `take`/`release`는 `/home/keti/shipcoat/results/ops/maintenance.json`(컨테이너 `/output/eval_results/ops/maintenance.json`)을 쓴다.
+  agent-api `GET /api/maintenance`가 이 파일을 읽어 API 문서·모션 뷰어·AI 질문 화면 맨 위에 배너를 띄운다.
+  담당 이름은 이 파일에 넣지 않는다. `--reason`도 `/api/maintenance`로 공개되므로 사람 이름을 쓰지 않는다.
+- Slack 웹훅 주소는 `$OPS/slack_webhook`(권한 600) 한 곳에만 둔다. 파일이 없거나 전송이 실패하면 경고만 하고 잠금은 그대로 진행된다.
+- `health_sample.sh --check`(cron 10분)는 `/api/ready` 200 여부, vLLM `/v1/models` 모델 이름, 운영 컨테이너 중단이 직전과 달라졌을 때만
+  Slack 을 한 번 보낸다(직전 상태 `$OPS/watch-state.json`). 잠금이 있으면 "예정된 작업 중(잠금: …)"을 붙인다.
+
