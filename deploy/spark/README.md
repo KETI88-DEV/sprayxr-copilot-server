@@ -708,23 +708,25 @@ sha256sum "${POSE_MODELINGS_DIR:-/home/keti/shipcoat/data/modelings}"/*.fbx
 여러 사람과 세션이 같은 시각에 교체하거나 같은 버전 번호를 쓰지 않도록, 운영을 건드리는 작업은 모두 잠금을 먼저 잡는다.
 `ops_lock.py`와 `health_sample.sh`는 운영 폴더 `/home/keti/shipcoat/ops`에 함께 둔다(호스트 python3, 표준 라이브러리만).
 
+`--by`·`OPS_LOCK_BY`는 GitHub 닉네임으로 통일한다. 같은 사람의 여러 세션(Claude 세션 등)은 `--reason` 앞에 `[세션명]`을 붙여 구분한다.
+
 ```bash
 OPS=/home/keti/shipcoat/ops
 python3 $OPS/ops_lock.py status                                   # 1. 누가 하고 있는지 본다
-python3 $OPS/ops_lock.py take --what vllm --by KURE \
+python3 $OPS/ops_lock.py take --what vllm --by GITHUB_ID \
   --reason "vLLM 교체" --until 10:30                               # 2. 잡는다(한국 시각). 이미 있으면 종료 코드 1
-python3 $OPS/ops_lock.py version next --by KURE                   # 3. 새 이미지면 번호를 예약한다(예: 3.8.9)
+python3 $OPS/ops_lock.py version next --by GITHUB_ID                   # 3. 새 이미지면 번호를 예약한다(예: 3.8.9)
 #    교체 스크립트는 맨 처음 check 로 자기 잠금인지 확인한다. 아니면 멈춘다.
-python3 $OPS/ops_lock.py check --by KURE --what vllm || exit 1     #    (python 스크립트는 ops_lock_guard.require_lock)
-python3 $OPS/ops_lock.py release --by KURE                        # 4. 끝나면 푼다
+python3 $OPS/ops_lock.py check --by GITHUB_ID --what vllm || exit 1     #    (python 스크립트는 ops_lock_guard.require_lock)
+python3 $OPS/ops_lock.py release --by GITHUB_ID                        # 4. 끝나면 푼다
 ```
 
 - `--what`은 `agent-api`·`vllm`·`test`·`other` 중 하나다. 화면 배너와 Slack 에 영향 문구가 붙는다
   (`vllm` 상세 분석(27B) 일시 중단, `agent-api` API 잠시 끊김, `test` 시험 중(응답이 느릴 수 있음)).
 - 기한이 지나도 잠금은 풀리지 않는다. `status`·`take`·`check`에 "만료"로만 보인다. 연장하려면 `release` 후 다시 `take`.
-- 남의 잠금은 `release --by 내이름 --force --reason "..."`로만 푼다. 이유는 이력에 남고 Slack 으로 나간다.
+- 남의 잠금은 `release --by GITHUB_ID --force --reason "..."`로만 푼다. 이유는 이력에 남고 Slack 으로 나간다.
 - `version next`는 장부(`versions.json`)와 운영 agent-api 이미지 라벨 `org.opencontainers.image.version` 중 큰 값에 패치 1을 더한다.
-  번호를 직접 정하면 `version reserve X.Y.Z --by 이름`. 이미 예약됐거나 운영 중인 번호는 거부한다.
+  번호를 직접 정하면 `version reserve X.Y.Z --by GITHUB_ID`. 이미 예약됐거나 운영 중인 번호는 거부한다.
 - 모든 상태 변화는 `lock-history.jsonl`에 한 줄씩 남는다.
 - `take`/`release`는 `/home/keti/shipcoat/results/ops/maintenance.json`(컨테이너 `/output/eval_results/ops/maintenance.json`)을 쓴다.
   agent-api `GET /api/maintenance`가 이 파일을 읽어 API 문서·모션 뷰어·AI 질문 화면 맨 위에 배너를 띄운다.

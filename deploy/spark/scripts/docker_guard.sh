@@ -2,8 +2,8 @@
 # keti 계정의 `docker` 앞에 서서, 운영 잠금 없이 운영 컨테이너를 바꾸는 명령을 거부한다.
 #
 # 설치(Spark): ~/bin/docker 로 복사하고 ~/.bashrc·~/.profile 맨 위에서 PATH 앞에 ~/bin 을 둔다.
-#   잠금:  python3 ~/shipcoat/ops/ops_lock.py take --what agent-api --by 이름 --reason ... --until HH:MM
-#          export OPS_LOCK_BY=이름
+#   잠금:  python3 ~/shipcoat/ops/ops_lock.py take --what agent-api --by GITHUB_ID --reason ... --until HH:MM
+#          export OPS_LOCK_BY=GITHUB_ID
 # 읽기 명령(ps·inspect·logs·exec·images·stats 등)은 그대로 통과한다.
 # 바꾸는 명령(run·create·start·stop·restart·kill·rm·rename·update·pause·unpause·compose up/down/…)이
 # 운영 이름(shipcoat-spark-*)이나 shipcoat compose 를 건드리면 OPS_LOCK_BY 의 잠금을 확인한다.
@@ -33,8 +33,8 @@ if (( mutating )); then
       {
         echo "운영 잠금 없이 운영 컨테이너를 바꾸려 해서 멈췄다: docker $*"
         python3 "$LOCK" status 2>/dev/null | sed 's/^/  지금 잠금: /'
-        echo "  먼저: python3 $LOCK take --what agent-api|vllm|test|other --by 이름 --reason 이유 --until HH:MM"
-        echo "        export OPS_LOCK_BY=이름"
+        echo "  먼저: python3 $LOCK take --what agent-api|vllm|test|other --by GITHUB_ID --reason 이유 --until HH:MM"
+        echo "        export OPS_LOCK_BY=GITHUB_ID"
       } >&2
       exit 3
     fi
