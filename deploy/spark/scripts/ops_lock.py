@@ -320,6 +320,44 @@ def reserve_version(version: str, by: str, now: datetime) -> str:
     return _with_ledger(change)
 
 
+def deployed_commit() -> str | None:
+    """운영 agent-api 의 코드 커밋(이미지 라벨 revision). 못 읽으면 None."""
+    container = os.environ.get("OPS_AGENT_CONTAINER", "shipcoat-spark-agent-api-1")
+    try:
+        out = subprocess.run(
+            ["docker", "inspect", "-f", '{{index .Config.Labels "org.opencontainers.image.revision"}}', container],
+            capture_output=True, text=True, timeout=30, check=True).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return out or None
+
+
+def preflight(by: str, version: str, base: str, now: datetime) -> tuple[bool, list[str]]:
+    """배포 직전 점검. 누가 먼저 배포할지 모르므로 배포하는 쪽이 매번 직접 돌린다.
+
+    base 는 배포자가 개발 PC 에서 `git merge-base --is-ancestor <base> <새 커밋>` 으로 확인한 운영 커밋이다.
+    Spark 에는 git 이력이 없어 조상 관계는 볼 수 없고, 그 사이 운영이 바뀌었는지만 본다.
+    """
+    problems = []
+    ok, text = check(by, None, now)
+    if not ok:
+        problems.append(text)
+    path = ops_dir() / "versions.json"
+    ledger = json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
+    if not any(entry.get("version") == version and entry.get("by") == by for entry in ledger):
+        problems.append(f"{version} 은 장부에 {by} 이름으로 예약돼 있지 않다(version next/reserve)")
+    deployed = deployed_version()
+    if deployed and _vkey(version) <= _vkey(deployed):
+        problems.append(f"{version} 이 운영 버전 {deployed} 보다 크지 않다")
+    running = deployed_commit()
+    if running is None:
+        problems.append("운영 agent-api 커밋을 읽지 못했다")
+    elif len(base) < 7 or not running.startswith(base):
+        problems.append(f"운영 커밋이 {running[:12]} 이다(확인한 기준 {base[:12]}). 그 사이 누가 배포했으면 "
+                        f"새 커밋에 {running[:12]} 이 들어 있는지 git 으로 다시 확인한다")
+    return not problems, problems
+
+
 # --- 운영 상태 감시 (health_sample.sh --check)
 
 def _probe() -> dict[str, Any]:
@@ -433,6 +471,10 @@ def main(argv: list[str] | None = None) -> int:
     v = vsub.add_parser("reserve")
     v.add_argument("version")
     v.add_argument("--by", required=True)
+    p = sub.add_parser("preflight", help="배포 직전 점검(잠금·버전 예약·운영 버전·운영 커밋)")
+    p.add_argument("--by", required=True)
+    p.add_argument("--version", required=True)
+    p.add_argument("--base", required=True, help="새 커밋에 들어 있음을 git 으로 확인한 운영 커밋(7자 이상)")
     p = sub.add_parser("watch")
     p.add_argument("--down", default="", help="꺼져 있는 운영 컨테이너 이름(공백 구분)")
     args = parser.parse_args(argv)
@@ -467,6 +509,11 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 print(reserve_version(args.version, args.by.strip(), now))
             return 0
+        if args.command == "preflight":
+            ok, problems = preflight(args.by.strip(), args.version.strip(), args.base.strip(), now)
+            print("배포 전 점검 통과" if ok else "배포 전 점검 실패:\n- " + "\n- ".join(problems),
+                  file=sys.stdout if ok else sys.stderr)
+            return 0 if ok else 1
         message = watch(args.down.split(), now)
         if message:
             print(message)

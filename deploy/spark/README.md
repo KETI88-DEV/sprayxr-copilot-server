@@ -718,6 +718,10 @@ python3 $OPS/ops_lock.py take --what vllm --by GITHUB_ID \
 python3 $OPS/ops_lock.py version next --by GITHUB_ID                   # 3. 새 이미지면 번호를 예약한다(예: 3.8.9)
 #    교체 스크립트는 맨 처음 check 로 자기 잠금인지 확인한다. 아니면 멈춘다.
 python3 $OPS/ops_lock.py check --by GITHUB_ID --what vllm || exit 1     #    (python 스크립트는 ops_lock_guard.require_lock)
+# 배포 직전 점검(누가 먼저 배포할지 모르므로 매번). 개발 PC 에서 운영 커밋이 새 커밋에 들어 있는지 먼저 본다:
+#   RUN=$(ssh keti@SPARK docker inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' shipcoat-spark-agent-api-1)
+#   git fetch keti && git merge-base --is-ancestor "$RUN" <새 커밋> || echo "운영 변경이 빠졌다. rebase 먼저"
+python3 $OPS/ops_lock.py preflight --by GITHUB_ID --version 3.8.10 --base "$RUN" || exit 1
 python3 $OPS/ops_lock.py release --by GITHUB_ID                        # 4. 끝나면 푼다
 ```
 

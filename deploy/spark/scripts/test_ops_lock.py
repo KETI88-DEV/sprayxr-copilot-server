@@ -306,3 +306,18 @@ def test_docker_guard_blocks_production_changes_without_own_lock(tmp_path):
     assert _guard(tmp_path, "restart", "shipcoat-spark-web-1", by="V3").returncode == 3  # 남의 잠금
     assert _guard(tmp_path, "restart", "shipcoat-spark-web-1", by="KURE").stdout == "REAL restart shipcoat-spark-web-1\n"
     assert _guard(tmp_path, "compose", "-p", "shipcoat-spark", "up", "-d").returncode == 3
+
+
+def test_preflight_needs_own_lock_reserved_version_higher_version_and_same_running_commit(monkeypatch):
+    monkeypatch.setattr(ops_lock, "deployed_commit", lambda: "1e1d7139ff26efc88a4d3cc007170248708ca8cf")
+    ok, problems = ops_lock.preflight("LuzyCat", "3.8.9", "1e1d713", NOW)
+    assert not ok and len(problems) == 2  # 잠금 없음, 예약 없음
+    ops_lock.take("agent-api", "LuzyCat", "[V3] 교체", UNTIL, NOW)
+    ops_lock.reserve_version("3.8.9", "LuzyCat", NOW)
+    assert ops_lock.preflight("LuzyCat", "3.8.9", "1e1d713", NOW) == (True, [])
+    ok, problems = ops_lock.preflight("LuzyCat", "3.8.9", "d0d3d33", NOW)  # 그 사이 운영이 바뀜
+    assert not ok and "운영 커밋이 1e1d7139ff26" in problems[0]
+    ops_lock.reserve_version("3.8.7", "LuzyCat", NOW)
+    ok, problems = ops_lock.preflight("LuzyCat", "3.8.7", "1e1d713", NOW)  # 운영(3.8.8)보다 낮다
+    assert not ok and "크지 않다" in problems[0]
+    assert not ops_lock.preflight("LuzyCat", "3.8.9", "1e1d", NOW)[0]  # 7자 미만 기준은 받지 않는다
