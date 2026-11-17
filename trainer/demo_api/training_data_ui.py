@@ -189,7 +189,7 @@ def render_training_data() -> str:
       <div class="td-field td-search-field"><label for="td-search">검색어</label><input id="td-search" name="q" type="search" maxlength="100" autocomplete="off" placeholder="데이터명, 작업자, 원본 파일 검색"></div>
       <div class="td-filter-actions"><button type="submit">조회</button><button type="button" id="td-reset" class="td-button-secondary">초기화</button></div>
     </form>
-    <div class="td-filter-foot"><p class="td-help">CSV 훈련 기록 1개(1세션) = 학습 데이터 1건 · 확인 필요에는 Zone ID 누락 등 검증 이슈가 포함됩니다.</p><button type="button" id="td-refresh" class="td-link">새로고침 ↻</button></div>
+    <div class="td-filter-foot"><p class="td-help">CSV 훈련 기록 1개(1세션) = 학습 데이터 1건 · 확인 필요에는 Zone ID 누락 등 검증 이슈가 포함됩니다. <span id="td-filter-status" role="status" aria-live="polite"></span></p><button type="button" id="td-refresh" class="td-link">새로고침 ↻</button></div>
   </section>
 
   <div class="td-chart-grid" aria-label="조회 결과 분포">

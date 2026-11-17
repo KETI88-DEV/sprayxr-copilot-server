@@ -158,3 +158,13 @@ On 2026-11-13 mjkim's internal development documents (117 files: most of `docs/s
 - Registered reference-order planning does not require trainee sequences. Keep `reference_only` separate from actual visits/scores/current progress and preserve signed viewer comparisons.
 - Public feedback submissions create only feedback records; processing-state writes use the existing administrator session and CSRF checks.
 - The user explicitly authorized TSB corpus ingestion on 2026-11-11, superseding the earlier deferral. Preserve Windows originals and use only the original Spark (192.168.0.20). Import archives under expert_reference_data/imports/tsb-20261111 and publish record JSON through trainer.scripts.ingest_tsb_corpus; valid Zone data takes precedence per process/session. Unmapped records remain reviewable data and do not silently replace reference policies or imply LLM weight training.
+
+## Shared Spark operations and Slack notices
+
+- Before production-affecting tests or server/model replacement, check `/home/keti/shipcoat/ops/ops_lock.py status` and acquire the matching `test`, `agent-api`, `vllm`, or `other` lock. The user explicitly adopted this coordination procedure on 2026-11-17.
+- Use the operator's GitHub nickname for `--by`; distinguish concurrent AI sessions with a short `[session]` prefix in `--reason`. Reasons are public in the maintenance banner: do not include personal names, credentials, or private payloads.
+- Register the work and expected KST end time with `take`, check ownership/type immediately before the operation, and pass `OPS_LOCK_BY` to guarded Docker commands. `take` and `release` send the authorized routine Slack notices automatically; do not read or print the webhook file.
+- Reserve release numbers with `version next` or `version reserve`. Before deployment, verify the running code commit is included in the new commit and run `preflight` with the reserved version and running base commit. Do not reuse another operator's reservation.
+- If another operator holds the lock, continue independent local work and leave the server unchanged. Expiry is not an automatic release; do not force-release another person's lock without explicit authorization.
+- Release your own lock when server work has ended and its final state is recorded, including after a successful rollback, and verify the final lock state. While recovery is still active, keep ownership valid or explicitly hand over. When changing operation type, release and acquire the new type; if someone else acquires it first, stop server mutations.
+- The full workflow is documented in `deploy/spark/README.md` section 21. Code history remains in GitHub; Slack communicates shared-server work and state.

@@ -91,14 +91,28 @@
     $('td-export-csv').href = `${API}/export.csv?${params(false)}`;
     $('td-export-zip').href = `${API}/export.zip?${params(false)}`;
   }
-  function setOptions(id, entries, selected, allLabel) {
+  function setOptions(id, entries, selected, allLabel, unavailableNote = '현재 조건 0건') {
     const select = $(id);
+    const previous = [...select.options].find(option => option.value === selected);
+    const previousLabel = previous?.dataset.facetLabel || previous?.label;
     select.replaceChildren(new Option(allLabel, 'all'));
     (Array.isArray(entries) ? entries : []).forEach(entry => {
       if (entry && entry.id !== undefined && String(entry.id) !== 'all') select.add(new Option(String(entry.label ?? entry.id), String(entry.id)));
     });
-    if (![...select.options].some(option => option.value === selected) && selected !== 'all') select.add(new Option(selected, selected));
+    if (![...select.options].some(option => option.value === selected) && selected !== 'all') {
+      const label = previousLabel || selected;
+      const unavailable = new Option(`${label} · ${unavailableNote}`, selected);
+      unavailable.disabled = true;
+      unavailable.dataset.facetLabel = label;
+      select.add(unavailable);
+    }
     select.value = selected;
+  }
+  function setFilterLoading(loading) {
+    ['td-worker', 'td-process', 'td-mode', 'td-quality'].forEach(id => { $(id).disabled = loading; });
+    $('td-filter-form').setAttribute('aria-busy', String(loading));
+    const status = $('td-filter-status');
+    if (status) status.textContent = loading ? '선택지를 갱신하는 중입니다.' : '';
   }
   function listMessage(title, note, retry = false) {
     const cell = el('td', 'td-table-message');
@@ -171,12 +185,12 @@
     setOptions('td-worker', options.workers, state.worker, '전체 작업자');
     setOptions('td-process', options.processes, state.process, '전체 공정');
     setOptions('td-mode', options.modes, state.mode, '전체 시나리오');
-    setOptions('td-quality', [{id:'needs_review',label:'확인 필요'},{id:'complete',label:'완료'}], state.quality, '전체 품질');
+    setOptions('td-quality', options.qualities, state.quality, '전체 품질');
     renderBars('td-worker-chart', summary.by_worker, '현재 조회 결과의 작업자별 데이터 수', '#5275d9');
     renderBars('td-mode-chart', summary.by_mode, '현재 조회 결과의 학습모드별 데이터 수', '#42a69b');
     renderBars('td-process-chart', summary.by_process, '현재 조회 결과의 공정별 데이터 수', '#8d7ac9');
     if (data.available === false) listMessage('학습 데이터가 아직 생성되지 않았습니다.', data.build?.reason || '훈련 기록 CSV와 연결된 높이맵 텍스처의 변환 결과가 준비되면 표시됩니다.');
-    else if (!Array.isArray(data.items) || !data.items.length) listMessage(total ? '조건에 맞는 학습 데이터가 없습니다.' : '등록된 학습 데이터가 없습니다.', total ? '작업자, 공정, 학습모드 또는 검색어를 바꿔 보세요.' : '훈련 기록을 변환하면 이곳에서 확인할 수 있습니다.');
+    else if (!Array.isArray(data.items) || !data.items.length) listMessage(total ? '조건에 맞는 학습 데이터가 없습니다.' : '등록된 학습 데이터가 없습니다.', total ? '선택한 필터는 유지됩니다. 작업자, 공정, 시나리오, 품질 또는 검색어를 바꾸거나 초기화해 주세요.' : '훈련 기록을 변환하면 이곳에서 확인할 수 있습니다.');
     else renderRows(data.items);
     $('td-table-status').textContent = `전체 ${count(total)}건 중 ${count(filtered)}건 조회 · 데이터명을 누르면 상세 내용을 확인합니다.`;
     const start = filtered ? (state.page - 1) * state.limit + 1 : 0;
@@ -196,21 +210,25 @@
   async function loadList() {
     state.listAbort?.abort();
     const abort = new AbortController(); state.listAbort = abort;
+    setFilterLoading(true);
     $('td-list-panel').setAttribute('aria-busy', 'true');
     $('td-table-status').textContent = '학습 데이터를 불러오고 있습니다.';
     $('td-prev').disabled = true; $('td-next').disabled = true;
     syncUrl();
     try {
       const data = await fetchJson(`${API}?${params()}`, abort.signal);
-      if (!abort.signal.aborted) renderList(data);
+      if (state.listAbort === abort && !abort.signal.aborted) renderList(data);
     } catch (error) {
       if (error.name !== 'AbortError' && !abort.signal.aborted) {
+        for (const [id, key, label] of [['td-worker', 'worker', '전체 작업자'], ['td-process', 'process', '전체 공정'], ['td-mode', 'mode', '전체 시나리오'], ['td-quality', 'quality', '전체 품질']]) {
+          setOptions(id, [], state[key], label, '선택지 조회 실패');
+        }
         listMessage('학습 데이터를 불러오지 못했습니다.', error.message || '연결 상태를 확인한 후 다시 시도해 주세요.', true);
         $('td-table-status').textContent = '조회에 실패했습니다. 다시 불러오기를 눌러 주세요.';
         ['td-export-csv', 'td-export-zip'].forEach(id => $(id).setAttribute('aria-disabled', 'true'));
       }
     } finally {
-      if (state.listAbort === abort) $('td-list-panel').setAttribute('aria-busy', 'false');
+      if (state.listAbort === abort) { $('td-list-panel').setAttribute('aria-busy', 'false'); setFilterLoading(false); }
     }
   }
 
@@ -555,7 +573,11 @@
 
   $('td-search').value = state.q; $('td-limit').value = String(state.limit);
   $('td-filter-form').addEventListener('submit', event => {
-    event.preventDefault(); state.worker = $('td-worker').value; state.process = $('td-process').value; state.mode = $('td-mode').value; state.quality = $('td-quality').value; state.q = $('td-search').value.trim(); state.page = 1; loadList();
+    event.preventDefault();
+    for (const [key, id] of [['worker', 'td-worker'], ['process', 'td-process'], ['mode', 'td-mode'], ['quality', 'td-quality']]) {
+      if (!$(id).disabled) state[key] = $(id).value;
+    }
+    state.q = $('td-search').value.trim(); state.page = 1; loadList();
   });
   ['td-worker', 'td-process', 'td-mode', 'td-quality'].forEach(id => $(id).addEventListener('change', () => $('td-filter-form').requestSubmit()));
   $('td-reset').addEventListener('click', () => {
