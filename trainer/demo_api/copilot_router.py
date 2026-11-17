@@ -60,7 +60,7 @@ from trainer.demo_api.dialogue import (INSTRUCTION_REFUSAL, asks_for_instruction
                                        viewer_measurement_answer, viewer_metadata_context, dialogue_turns_for_model, dialogue_resolution_advice, without_hanzi)
 from trainer.demo_api.playback_direction import playback_direction_from_context, playback_direction_answer, simple_direction_question, requested_direction_scope, aggregate_direction, LABELS as DIRECTION_LABELS
 from trainer.demo_api.copilot_live_analysis import current_zone, live_analysis
-from trainer.demo_api.simulator_context import SIMULATOR_CONTEXT, is_blasting, wants_simulator_context
+from trainer.demo_api.simulator_context import SIMULATOR_CONTEXT, is_blasting, wants_simulator_context, simulator_configuration_facts
 from trainer.demo_api.copilot_session_context import build_query_instruction, summarize_session, viewer_definition_context
 from trainer.demo_api.pose_query import (
     answer_order_question,
@@ -940,7 +940,7 @@ def _success_response(
         retrieval_used,
         len(citations),
     )
-    source = "documents" if retrieval_used else "conversation" if generated else "analysis"
+    source = "documents" if retrieval_used else "conversation" if generated and not degraded else "analysis"
     headers = {ANSWER_SOURCE_HEADER: source}
     if subject:
         headers[SUBJECT_HEADER] = json.dumps(subject, ensure_ascii=True, separators=(",", ":"))
@@ -1119,6 +1119,7 @@ async def _execute_copilot_query(
     decision = None
     document_followup = False
     resolved_question: str | None = None
+    simulator_facts = simulator_configuration_facts(query.prompt) if not documents_only else None
     planned_pipeline = None
     if (query.task_type != "error_analysis" and pipeline_provider is not None and not documents_only
             and preset_intent(query.task_type, query.prompt) is None and not is_coating_status_question(query.prompt) and not _pose_engine_question(query)):
@@ -1129,7 +1130,9 @@ async def _execute_copilot_query(
             planned_pipeline = None
         planner = select_query_pipeline(planned_pipeline, "quick") if planned_pipeline else None
         supports_dialogue = getattr(planner, "supports_copilot_dialogue", callable(getattr(planner, "plan_copilot_dialogue", None)))
-        if supports_dialogue and query.task_type == "knowledge_search" and is_general_painting_knowledge(query.prompt):
+        if simulator_facts is not None:
+            decision = {"kind": "chat", "intent": "knowledge", "scope": "unspecified"}
+        elif supports_dialogue and query.task_type == "knowledge_search" and is_general_painting_knowledge(query.prompt):
             # 계획 모델은 직전 자세·순서 대화에 끌려 일반 지식 질문을 기록 후속 대화로 분류한다(2026-11-12 재현). 부르지 않는다.
             decision = {"kind": "coating_knowledge", "intent": "knowledge", "scope": "unspecified"}
         elif supports_dialogue:
@@ -1184,8 +1187,11 @@ async def _execute_copilot_query(
             # quick general explanation. Use the same scoped facts/history for
             # generation and numeric validation as the knowledge branch.
             conversation_facts = (dict(viewer_facts or {}) if knowledge_scope and viewer_requested else facts)
+            if simulator_facts is not None:
+                conversation_facts = dict(simulator_facts)
             conversation_turns = [] if knowledge_scope and definition_context is not None else model_turns
-            omit_training_values = knowledge_scope and viewer_requested and query.response_mode == "quick" and not record_pointed
+            omit_training_values = (simulator_facts is not None
+                                    or (knowledge_scope and viewer_requested and query.response_mode == "quick" and not record_pointed))
             if query.session_id and not omit_training_values:
                 conversation_facts["training_summary"] = await to_thread.run_sync(
                     lambda: summarize_session(sequences.session_bodies(query.session_id),
@@ -1216,10 +1222,13 @@ async def _execute_copilot_query(
             if hedged:
                 answer = hedged_answer(answer, quick=query.response_mode == "quick") or NO_EVIDENCE_ANSWER
             return _success_response(query, request_started, answer=answer, retrieval_used=False, generated=True,
-                                     citations=[], context_status="available" if facts else "not_available")
+                                     citations=[], context_status="available" if facts or simulator_facts else "not_available")
         except Exception:
             logger.exception("copilot conversation unavailable request_id=%s", query.request_id)
             return error_response(503, "Conversation engine temporarily unavailable; retry")
+
+    if simulator_facts is not None:
+        return await chat_answer()
 
     chat_redirected = False
     if decision is not None:
@@ -1234,12 +1243,11 @@ async def _execute_copilot_query(
         if viewer_requested and intent == "order_direction" and decision["kind"] in {"lookup", "correction"} and DIRECTION_WORD.search(query.prompt) and not explanatory_request:
             return frame_answer()
         zone_lookup = (intent == "order_direction" or intent.startswith("pose_")) and decision["scope"] in {"zone", "playback"}
-        # 계획 모델은 짧은 용어 질문("백화가 뭐야?")도 "chat"으로 보내 검색 없이 답하게 했다(2-1 측정, 지식 질문의 약 11%).
-        # 지식 탭의 질문형 문장은 먼저 문서로 답하고, 근거 확인 단계에 걸리면 이 대화 경로로 돌아온다.
-        # 돌아올 길(근거 확인 단계)이 설정된 경우에만 돌린다. 없으면 도장과 무관한 질문까지 문서로 답하게 된다.
+        # Preserve positive painting/record grounding, but a generic how/why
+        # sentence must not override the planner's semantic chat decision.
         chat_redirected = (decision["kind"] == "chat" and query.task_type == "knowledge_search" and not viewer_requested
                            and not cross_tab and not zone_lookup and bool(_KNOWLEDGE_QUESTION.search(query.prompt))
-                           and not is_domain_question(query.prompt) and not is_off_topic(query.prompt)
+                           and (grounded or is_technical_question(query.prompt)) and not is_off_topic(query.prompt)
                            and _abstain_below(planned_pipeline, query.response_mode) is not None)
         # 옛 행(v3.4.4 이전)에는 safety_class 열이 없어 앞 질문 문장도 다시 위험 판정한다.
         if (decision["kind"] == "correction" and dialogue_turns and not dialogue_turns[-1].get("safety_class")

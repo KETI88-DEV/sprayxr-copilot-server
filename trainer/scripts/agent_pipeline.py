@@ -44,8 +44,8 @@ from trainer.scripts.answer_grammar import (
 from trainer.scripts.live_response_contract import FAILED_REPAIR_PATHS, parse_knowledge_answer, retrieved_chunk_ids
 from trainer.scripts.quick_answer import TextCache, inference_key
 from trainer.scripts.answer_semantics import (
-    POLICY_VERSION, REVIEW_REGEX, SOURCE_CONTEXT_TEMPLATE, answer_system_prompt,
-    cacheable_candidate, evidence_trace, has_repetition_loop, review_answer, review_required, select_evidence,
+    POLICY_VERSION, SOURCE_CONTEXT_TEMPLATE, answer_system_prompt,
+    cacheable_candidate, evidence_trace, has_repetition_loop, review_answer, review_regex, review_required, select_evidence,
 )
 from trainer.scripts.live_sequence_fallback import is_sequence_intent
 from trainer.scripts.live_coating_judgment import judge_dft_question
@@ -1537,7 +1537,8 @@ class AgentPipeline:
                             if not acquired:
                                 raise TimeoutError("Quick semantic review slot busy")
                         try:
-                            return bounded_completion(review_messages, timeout, backend=reviewer, tokens=80, regex=REVIEW_REGEX)
+                            return bounded_completion(review_messages, timeout, backend=reviewer, tokens=80,
+                                                      regex=review_regex(len(evidence)))
                         finally:
                             if acquired:
                                 QUICK_GENERATION_SLOT.release()

@@ -328,3 +328,112 @@ def test_metadata_only_definition_fallback_drops_irrelevant_playback_history():
     response = ask(client(pipeline, store), prompt="저도막이란 무엇인가요?", mode="quick", context=metadata)
     assert response.status_code == 200
     assert pipeline.conversations[0]["recent_turns"] == []
+
+
+@pytest.mark.parametrize("prompt", [
+    "면접에서 긴장하지 않으려면 어떻게 하면 좋을까?",
+    "새로운 언어를 꾸준히 공부하려면 어떻게 하면 좋을까?",
+])
+def test_semantic_general_chat_is_not_redirected_to_documents_by_question_shape(prompt):
+    class General(Pipeline):
+        def plan_copilot_dialogue(self, prompt, **kwargs):
+            return {"kind": "chat", "intent": "knowledge", "scope": "unspecified"}
+
+    pipeline = General()
+    response = ask(client(pipeline), prompt=prompt, mode="quick")
+    assert response.status_code == 200 and response.json()["data"]["degraded"] is False
+    assert pipeline.runs == [] and len(pipeline.conversations) == 1
+    assert pipeline.conversations[0]["prompt"] == prompt
+    assert response.headers["X-Copilot-Answer-Source"] == "conversation"
+
+
+def test_positive_painting_knowledge_still_uses_documents_when_planner_would_say_chat():
+    class MistakenPlanner(Pipeline):
+        def plan_copilot_dialogue(self, prompt, **kwargs):
+            return {"kind": "chat", "intent": "knowledge", "scope": "unspecified"}
+
+    pipeline = MistakenPlanner()
+    response = ask(client(pipeline), prompt="도막 기포를 예방하려면 어떻게 해야 하나요?", mode="quick")
+    assert response.status_code == 200 and len(pipeline.runs) == 1
+    assert pipeline.conversations == []
+    assert response.headers["X-Copilot-Answer-Source"] == "documents"
+
+
+@pytest.mark.parametrize("prompt", ["훈련모드는 몇 가지가 있어?", "학습 모드는 총 몇 개야?"])
+def test_confirmed_simulator_mode_configuration_does_not_require_ncs_document_support(prompt):
+    from trainer.demo_api.simulator_context import SIMULATOR_CONTEXT
+
+    class Modes(Pipeline):
+        def __init__(self):
+            super().__init__()
+            self.plans = []
+
+        def plan_copilot_dialogue(self, prompt, **kwargs):
+            self.plans.append(prompt)
+            return super().plan_copilot_dialogue(prompt, **kwargs)
+
+        def converse_copilot(self, prompt, **kwargs):
+            self.conversations.append({"prompt": prompt, **kwargs})
+            return "훈련모드는 1~10번, 총 10개입니다."
+
+    pipeline = Modes()
+    response = ask(client(pipeline), prompt=prompt, mode="quick")
+    data = response.json()["data"]
+    assert response.status_code == 200 and data["degraded"] is False
+    assert pipeline.runs == [] and pipeline.plans == []
+    assert pipeline.conversations[0]["simulator_context"] == SIMULATOR_CONTEXT
+    assert pipeline.conversations[0]["facts"]["simulator_configuration"]["training_mode_ids"] == list(range(1, 11))
+    assert "1~10" in data["answer"] and data["retrieval_used"] is False and data["citations"] == []
+    assert response.headers["X-Copilot-Answer-Source"] == "conversation"
+
+
+def test_mode_number_in_a_coating_technique_question_is_not_a_mode_catalog_question():
+    pipeline = Pipeline()
+    response = ask(client(pipeline), prompt="훈련모드 3에서 도막 기포를 방지하려면 어떻게 해야 하나요?", mode="quick")
+    assert response.status_code == 200 and len(pipeline.runs) == 1
+    assert pipeline.conversations == []
+
+
+@pytest.mark.parametrize("verdict", ["unavailable", "invalid_review", "invalid_support", "rejected", "budget_exhausted"])
+def test_a_withheld_review_failure_is_not_labelled_as_a_successful_conversation(verdict):
+    pipeline = Pipeline(response="[답변] 제공된 자료만으로는 질문에 맞는 설명을 충분히 확인하지 못했습니다.", verdict=verdict)
+    response = ask(client(pipeline), mode="quick")
+    assert response.json()["data"]["degraded"] is True and pipeline.conversations == []
+    assert response.headers["X-Copilot-Answer-Source"] == "analysis"
+
+
+@pytest.mark.parametrize("prompt", [
+    "헤그만 게이지 눈금 6은 입자 크기가 몇 µm를 뜻하나요?",
+    "크실렌의 LD50 값은 얼마인가요?",
+    "SVR이 뭐야?",
+])
+def test_positive_technical_requests_do_not_skip_evidence_when_planner_says_chat(prompt):
+    class Technical(Pipeline):
+        def plan_copilot_dialogue(self, prompt, **kwargs):
+            return {"kind": "chat", "intent": "knowledge", "scope": "unspecified"}
+
+    pipeline = Technical()
+    response = ask(client(pipeline), prompt=prompt, mode="quick")
+    assert response.status_code == 200
+    assert len(pipeline.runs) == 1 and pipeline.conversations == []
+
+
+@pytest.mark.parametrize("prompt", ["이 기록은 훈련모드 몇 번이야?", "현재 학습모드 번호는 뭐야?"])
+def test_selected_mode_questions_are_not_the_global_simulator_catalog(prompt):
+    from trainer.demo_api.simulator_context import simulator_configuration_facts
+
+    assert simulator_configuration_facts(prompt) is None
+
+
+def test_selected_record_mode_retains_its_signed_facts_instead_of_catalog_facts():
+    import json
+    from trainer.demo_api.viewer_context import sign_context
+
+    claims = {"record_id": "selected-training-record", "scenario_id": "3"}
+    selected = "motion_viewer_playback:" + json.dumps({"record": "스프레이 학습모드 3", "playback_context": {},
+        "dialogue_context": claims, "dialogue_signature": sign_context("dialogue", claims)})
+    pipeline = Pipeline(missing=True)
+    response = ask(client(pipeline), prompt="이 기록은 훈련모드 몇 번이야?", mode="quick", context=selected)
+    assert response.status_code == 200 and pipeline.conversations
+    assert pipeline.conversations[0]["facts"]["scenario_id"] == "3"
+    assert "simulator_configuration" not in pipeline.conversations[0]["facts"]

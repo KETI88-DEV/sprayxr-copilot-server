@@ -44,11 +44,11 @@ def test_a_term_question_the_planner_calls_chat_is_answered_from_documents_when_
     assert len(pipeline.runs) == 1 and pipeline.conversations == []
 
 
-def test_a_redirected_question_with_weak_evidence_returns_to_the_conversation_path():
+def test_a_general_question_planned_as_chat_does_not_search_documents():
     pipeline = Pipeline(top=1.5)
     data = ask(pipeline, "BTS 멤버는 몇 명이야?")
     assert data["answer"] == "대화 경로의 답입니다." and data["retrieval_used"] is False
-    assert len(pipeline.runs) == 1 and pipeline.conversations == ["BTS 멤버는 몇 명이야?"]
+    assert pipeline.runs == [] and pipeline.conversations == ["BTS 멤버는 몇 명이야?"]
 
 
 def test_greetings_still_go_straight_to_the_conversation_path():

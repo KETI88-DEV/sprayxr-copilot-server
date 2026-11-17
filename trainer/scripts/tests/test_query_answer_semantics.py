@@ -1,6 +1,12 @@
 """Live knowledge generation repairs a semantic mismatch once, without fixed QA."""
+import re
+
 from trainer.demo_api.tests.test_query_quick_latency import _pipeline
-from trainer.scripts.answer_semantics import REVIEW_REGEX
+
+
+def _is_review(options):
+    grammar = options.get('answer_regex')
+    return bool(grammar and re.fullmatch(grammar, '이유: 원문과 일치함\n근거: 1\n판정: OK'))
 
 
 def run_query(pipeline, **overrides):
@@ -47,7 +53,7 @@ def test_a_repeating_clause_loop_is_repaired_before_approval_and_only_the_repair
     generations = []
     reviews = []
     def generate(messages, **kwargs):
-        if kwargs.get('answer_regex') == REVIEW_REGEX:
+        if _is_review(kwargs):
             reviews.append(messages)
             return '이유: 문단의 설명을 반영함\n근거: 1\n판정: OK'
         generations.append(messages)
@@ -68,7 +74,7 @@ def test_a_persisting_repetition_loop_is_withheld_and_never_cached(monkeypatch):
     calls = []
     def generate(messages, **kwargs):
         calls.append(kwargs)
-        if kwargs.get('answer_regex') == REVIEW_REGEX:
+        if _is_review(kwargs):
             return '이유: 문서와 같은 설명임\n근거: 1\n판정: OK'
         return looping
     pipeline._generate_direct = generate
@@ -104,7 +110,7 @@ def test_changed_evidence_invalidates_semantically_validated_cache(monkeypatch):
     calls = []
     def generate(messages, **kwargs):
         calls.append(kwargs)
-        if kwargs.get('answer_regex') == REVIEW_REGEX:
+        if _is_review(kwargs):
             return '이유: 문단이 요청한 원인을 설명함\n근거: 1\n판정: OK'
         return '[답변] 근거에 적힌 작업 조건이 원인이 될 수 있습니다.\n[근거] DOC-a-C0001'
     pipeline._generate_direct = generate
@@ -129,7 +135,7 @@ def test_review_timeout_never_certifies_or_caches_an_unchecked_candidate(monkeyp
     calls = []
     def generate(messages, **kwargs):
         calls.append(kwargs)
-        if kwargs.get('answer_regex') == REVIEW_REGEX:
+        if _is_review(kwargs):
             raise TimeoutError('judge unavailable')
         return '[답변] 잘못된 정의만 반복합니다.\n[근거] DOC-a-C0001'
     pipeline._generate_direct = generate
@@ -146,7 +152,7 @@ def test_previous_dialogue_change_invalidates_a_reviewed_answer(monkeypatch):
     calls = []
     def generate(messages, **kwargs):
         calls.append(kwargs)
-        if kwargs.get('answer_regex') == REVIEW_REGEX:
+        if _is_review(kwargs):
             return '이유: 문단과 조건을 반영함\n근거: 1\n판정: OK'
         return '[답변] 앞서 제시한 조건을 반영한 가능한 원인입니다.\n[근거] DOC-a-C0001'
     pipeline._generate_direct = generate
