@@ -12,7 +12,7 @@ import json
 import re
 import statistics
 import threading
-from collections import Counter
+from collections import Counter, OrderedDict
 from pathlib import Path
 
 from trainer.demo_api.training_data_catalog import TrainingDataCatalog
@@ -26,6 +26,7 @@ class TrainingMotionCatalog:
         self._fingerprint = None
         self._records = []
         self._lock = threading.Lock()
+        self._sessions = OrderedDict()
 
     @staticmethod
     def worker_id(value) -> str:
@@ -56,6 +57,7 @@ class TrainingMotionCatalog:
                     and row.get('process') in {'spray', 'blasting', 'grinding'}
                     and str(row.get('scenario_id', '')).isdigit() and 1 <= int(row['scenario_id']) <= 10]
                 self._fingerprint = fingerprint
+                self._sessions.clear()
             return list(self._records)
 
     def workers(self) -> list[dict]:
@@ -83,7 +85,20 @@ class TrainingMotionCatalog:
 
     def _session(self, row: dict) -> dict | None:
         try:
-            artifact = self.catalog.detail(row['dataset_id'])
+            path = self.catalog._safe(self.catalog.root, f"records/{row['dataset_id']}.json")
+            stat = path.stat()
+            stamp = (stat.st_mtime_ns, stat.st_size, row['artifact_sha256'],
+                     self.session_id(row), row.get('worker_id'), row.get('source_kind'))
+            # Retain only the small viewer summary, never the full feature JSON
+            # or its sparse base64 cells. The stamp still detects file changes.
+            with self._lock:
+                cached = self._sessions.get(row['dataset_id'])
+                if cached is not None and cached[0] == stamp:
+                    self._sessions.move_to_end(row['dataset_id'])
+                    session = copy.deepcopy(cached[1])
+                    source = (self.source_root / session['sources']['catalog_relative_path']).resolve()
+                    return session if source.is_relative_to(self.source_root) and source.is_file() else None
+                artifact = self.catalog._detail_row(row)
         except (OSError, ValueError, KeyError):
             return None
         meta, features = artifact.get('metadata') or {}, artifact.get('features') or {}
@@ -107,13 +122,19 @@ class TrainingMotionCatalog:
         # Features produced for old foreman files were canonicalized at build
         # time, while playback still reads their original CSV Zone numbers.
         legacy = row.get('source_kind') != 'converted' and str(relative).startswith('raw/')
-        return {'session_id': self.session_id(row), 'dataset_id': row['dataset_id'],
+        session = {'session_id': self.session_id(row), 'dataset_id': row['dataset_id'],
                 'source_worker_id': row.get('worker_id'),
                 'zone_id_policy': 'legacy_expert' if legacy else 'source',
                 'sources': {'catalog_relative_path': relative},
                 'heightmaps': (artifact.get('provenance') or {}).get('heightmaps') or [],
                 'target_thickness_um': meta.get('target_thickness_um'),
                 'analysis': {'macro_order': features.get('zone_order') or [], 'zones': zones}}
+        with self._lock:
+            self._sessions[row['dataset_id']] = (stamp, copy.deepcopy(session))
+            self._sessions.move_to_end(row['dataset_id'])
+            while len(self._sessions) > 128:
+                self._sessions.popitem(last=False)
+        return session
 
     def profile(self, worker_id: str, process: str, mode_id: int, base: dict | None = None) -> dict | None:
         rows = self.selections(worker_id, process, mode_id)

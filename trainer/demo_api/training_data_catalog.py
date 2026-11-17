@@ -127,7 +127,22 @@ class TrainingDataCatalog:
         return path
 
     def detail(self, dataset_id: str) -> dict:
-        return json.loads(self.artifact(dataset_id).read_text(encoding='utf-8'))
+        row = next((r for r in self._rows(self._index()) if r['dataset_id'] == dataset_id), None)
+        if row is None:
+            raise FileNotFoundError('학습 데이터를 찾을 수 없습니다.')
+        return self._detail_row(row)
+
+    def _detail_row(self, row: dict) -> dict:
+        """Load an already selected catalog row, verifying and parsing the same bytes.
+
+        The viewer selects all records for a mode from one validated index. It
+        must not reload and stat the entire catalog for each selected artifact.
+        """
+        path = self._safe(self.root, f"records/{row['dataset_id']}.json")
+        content = path.read_bytes()
+        if len(content) != row['json_bytes'] or hashlib.sha256(content).hexdigest() != row['artifact_sha256']:
+            raise ValueError('학습 데이터 파일 검증에 실패했습니다.')
+        return json.loads(content)
 
     def image(self, dataset_id: str, image_index: int, view='raw') -> Path:
         data = self.detail(dataset_id)

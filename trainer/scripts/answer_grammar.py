@@ -66,12 +66,12 @@ def answer_regex(*, has_evidence: bool) -> str:
 
 
 def quick_answer_regex(*, has_evidence: bool) -> str:
-    """A short live paragraph and one canonical citation; no transport/control tags."""
+    """A complete live body and canonical citations; no transport/control tags."""
     # The live model must start an answer before moving to the optional citation.
     # Otherwise a space alone is a valid body, so concise decoding can emit only
     # the scaffold and evidence. Keep the evaluation grammar above unchanged.
-    body = r"\[답변\] [^\s\[<>][^\n\[<>]*"
-    return body + rf"(\n\[근거\] {_DOC_ID})?" if has_evidence else body
+    body = r"\[답변\] [^\s\[<>][^\[<>]*"
+    return body + rf"(\n\[근거\] {_DOC_ID}(, {_DOC_ID}){{0,2}})?" if has_evidence else body
 
 
 def structured_output_mode(config: Mapping[str, Any]) -> StructuredOutputMode:

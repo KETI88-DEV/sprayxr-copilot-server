@@ -48,7 +48,6 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from trainer.demo_api.copilot_contracts import CopilotQueryData, CopilotQueryRequest, CopilotResponse
-from trainer.demo_api.quick_answer import QUICK_LIMIT, one_line
 from trainer.demo_api.coating_query import (
     answer_coating_question, answer_distribution_cause, drop_contradicted_causes, parse_viewer_coating_context,
     report_coating_context, target_advice_facts, zone_measures)
@@ -70,7 +69,6 @@ from trainer.demo_api.pose_query import (
     answer_zone_question,
     NOT_JOINT,
     angle_note,
-    QUICK_ANGLE_NOTE,
     asked_arm,
     asked_part,
     prefers_hand,
@@ -88,7 +86,7 @@ from trainer.demo_api.sequence_store import SequenceStore
 from trainer.demo_api.viewer_arm_pose import arm_pose_answer, parse_viewer_arm_pose, zone_pose_summary
 from trainer.demo_api.sequence_analysis import SequenceAnalysisEngine
 from trainer.demo_api.safety_guard import (
-    CLASSES as SAFETY_CLASSES, HIGH_PRESSURE_ANSWER, HIGH_PRESSURE_CITATIONS, QUICK_HIGH_PRESSURE_ANSWER, classify, fixed_answer_translation, guard_answer, hazard_class,
+    CLASSES as SAFETY_CLASSES, HIGH_PRESSURE_ANSWER, HIGH_PRESSURE_CITATIONS, classify, fixed_answer_translation, guard_answer, hazard_class,
 )
 from trainer.demo_api.reference_order_query import actual_order_intent, current_next_answer, is_current_next_question, is_reference_order_question, resolve_reference_target, reference_order_answer
 from trainer.demo_api.v1_store import V1Store
@@ -296,7 +294,7 @@ NO_EVIDENCE_ANSWER: Final = ("제공된 자료에서 이 질문에 답할 근거
 # v7 평가에서 문서 없는 대화 답이 "헤그만 눈금 6 = 6µm" 같은 수치를 지어냈다. 검색이 놓친 24건 중 v6.1이 일반 지식으로
 # 맞힌 것은 정의 질문뿐이고 원인·절차·수치 질문은 틀렸다. 그래서 정의 질문만 열고 숫자가 든 문장은 뺀다.
 HEDGED_PREFIX: Final = "제공된 자료에서는 근거를 찾지 못해 일반적인 설명으로 답합니다. "
-QUICK_HEDGED_PREFIX: Final = "문서 밖 일반 설명: "  # 빠른 안내는 한 줄이라 앞말이 설명을 밀어내지 않게 짧게 쓴다
+QUICK_HEDGED_PREFIX: Final = "문서 밖 일반 설명: "
 _TECHNICAL: Final = re.compile(r"µm|μm|㎛|mm|°C|게이지|측정|시험|규격|LD50|독성|위험물|UN\s*번호|용제|크실렌|톨루엔|선체|선박|수선|블록"
                                r"|도면|탱크|부식|방청|녹|강판|철판|용접|그릿|숏|막후계|조도|프로파일|스크러버|집진|배기|SDS|ISO|ASTM|SSPC"
                                r"|NACE|PSPC|예시|그림|양식|견본|계획서|차트", re.I)
@@ -336,7 +334,7 @@ def _session_findings(found: tuple[str, Mapping[str, Any]] | None) -> str:
     pose, coating = answer_zone_question(found, context=None), report_coating_context(found)
     parts = [pose.answer] if pose.analysis_status == "available" else []
     if coating["analysis_status"] == "available":
-        parts.append(answer_coating_question(coating, "", detailed=False))
+        parts.append(answer_coating_question(coating, "", detailed=True))
     return "\n".join(parts) or "이 세션은 완료 분석 결과가 없어 잘한 점이나 고칠 점을 판정할 수 없습니다."
 
 
@@ -423,10 +421,8 @@ def _current_viewer_pose_context(prompt: str, context: dict[str, object]) -> dic
     }
 
 
-def _viewer_answer(task_type: str, prompt: str, context: Mapping[str, object], intent: str | None, *, quick: bool = False) -> str:
+def _viewer_answer(task_type: str, prompt: str, context: Mapping[str, object], intent: str | None) -> str:
     """Build the factual answer from signed measures, never client prose.
-
-    `quick`이면 Zone 작업 비교 답을 "Zone 8 작업 유사도 81%: 첫 교정" 한 문장으로 낸다(한 줄 60자).
 
     뷰어의 `similarity_percent`는 도구 각도·몸통 기울기·칠하는 방식·도막 두께·이격거리를 묶은 **작업 유사도**다.
     "자세 유사도"는 전문가 자세(팔 관절 엔진)와의 유사도에만 쓴다 — 같은 말로 다른 숫자를 내지 않는다.
@@ -471,14 +467,10 @@ def _viewer_answer(task_type: str, prompt: str, context: Mapping[str, object], i
         zone = rows[0]
         corrections = zone.get("corrections")
         guidance = " ".join(item for item in corrections if isinstance(item, str)) if isinstance(corrections, list) else ""
-        first = next((item for item in corrections if isinstance(item, str)), None) if isinstance(corrections, list) else None
         if re.search(r"오른|right|왼|left", prompt, re.I):
             side = "오른" if re.search(r"오른|right", prompt, re.I) else "왼"
             matching = [item for item in corrections if isinstance(item, str) and side in item] if isinstance(corrections, list) else []
             guidance = " ".join(matching) if matching else f"이 Zone에는 {side}손에 특정된 교정 항목이 없습니다."
-            first = matching[0] if matching else guidance
-        if quick and first:  # 교정이 없으면 아래 답이 이미 한 줄이다
-            return f"Zone {zone.get('zone_id')} 작업 유사도 {_percent_text(zone.get('similarity_percent'), already_percent=True)}: {first}"
         return (f"현재 재생 구간(Map {context.get('map_num')} · Zone {zone.get('zone_id')})의 작업 유사도는 "
                 f"{_percent_text(zone.get('similarity_percent'), already_percent=True)}입니다. "
                 + (guidance or "별도의 작업 개선 항목은 없습니다."))
@@ -491,9 +483,6 @@ def _viewer_answer(task_type: str, prompt: str, context: Mapping[str, object], i
             return f"현재 재생 기록에는 Zone {target}의 작업 비교값이 없습니다."
         corrections = zone.get("corrections")
         guidance = " ".join(str(item) for item in corrections if isinstance(item, str)) if isinstance(corrections, list) else ""
-        first = next((item for item in corrections if isinstance(item, str)), None) if isinstance(corrections, list) else None
-        if quick and first:
-            return f"Zone {target} 작업 유사도 {_percent_text(zone.get('similarity_percent'), already_percent=True)}: {first}"
         return f"Zone {target} 작업 유사도는 {_percent_text(zone.get('similarity_percent'), already_percent=True)}입니다." + (f" {guidance}" if guidance else " 별도의 작업 개선 항목은 없습니다.")
     if selected_intent in {"pose_right", "pose_left"}:
         side = "오른손" if selected_intent == "pose_right" else "왼손"
@@ -775,8 +764,7 @@ def _checked_generation(answer: str, query: CopilotQueryRequest, *, instructions
     if had_body and (not has_body(answer) or answer.strip() in {_NO_ANSWER, "세션 기록으로는 확인할 수 없습니다."}):
         if drop_only or safety:  # 위험 질문은 빈 답을 guard_answer에 넘겨 그 종류의 고정 문장을 받는다(기록 답·"답할 수 없습니다" 금지)
             return ""
-        found = answer_record_question(query.context, query.prompt, task_type=query.task_type, recent_turns=(),
-                                       quick=query.response_mode == "quick")  # 분류된 기록 질문이면 그 결정적 답
+        found = answer_record_question(query.context, query.prompt, task_type=query.task_type, recent_turns=())
         return found.text if found is not None and found.kind != "mixed" else _NO_ANSWER
     return answer
 
@@ -902,11 +890,6 @@ def _success_response(
     답을 만든 곳은 응답 헤더로만 알린다 — 본문 키를 엄격히 검사하는 기존 클라이언트가 있어 본문은 바꾸지 않는다.
     화면이 요청한 답변 수준만 보고 모델 이름을 붙이면 채점 결과에도 모델 이름이 붙는다(2026-11-11 뷰어 점검).
     """
-    if query.response_mode == "quick":
-        # 시뮬레이터는 빠른 안내를 한 줄만 보인다(2026-11-16). 번역은 이 뒤(execute_copilot_query)에서 한다.
-        answer = QUICK_HIGH_PRESSURE_ANSWER if answer == HIGH_PRESSURE_ANSWER else one_line(answer)
-        if len(answer) > QUICK_LIMIT:
-            logger.warning("quick_answer_over_limit length=%d task_type=%s request_id=%s", len(answer), query.task_type, query.request_id)
     generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     # Wall clock from handler entry to just before serialization, slot wait included.
     latency_ms = int((time.monotonic() - started) * 1000)
@@ -1012,8 +995,7 @@ async def _execute_copilot_query(
         return error_response(422, "Invalid motion viewer playback context")
     relevant_viewer = viewer_analysis is not None and query.task_type in ("pose_recomm", "trajectory_recomm")
     # 서명된 뷰어 기록을 묻는 질문은 계획 모델 앞에서 기록 행으로만 답한다(record_query). 위험 질문은 위에서 갈렸고 여기 오지 않는다.
-    record = (answer_record_question(query.context, query.prompt, task_type=query.task_type, recent_turns=dialogue_turns,
-                                     quick=query.response_mode == "quick")
+    record = (answer_record_question(query.context, query.prompt, task_type=query.task_type, recent_turns=dialogue_turns)
               if safety_class is None else None)
     if record is not None and record.kind != "mixed":
         return _success_response(query, request_started, answer=record.text, retrieval_used=False, citations=[],
@@ -1051,7 +1033,7 @@ async def _execute_copilot_query(
         reference_query = query.model_copy(update={"scenario_id": scenario})
         answer, scope = await to_thread.run_sync(lambda: reference_order_answer(
             sequence_engine, scenario_id=scenario, process=process,
-            detailed=query.response_mode == "detailed",
+            detailed=True,
         ))
         return _success_response(
             reference_query, request_started, answer=answer, retrieval_used=False,
@@ -1083,13 +1065,11 @@ async def _execute_copilot_query(
         # 손·손목·팔꿈치 질문은 어느 탭이든 팔 관절 엔진 결과로만 답한다(운영 q4·q5·q6: 작업 안내·모델의 "정상 범위" 답).
         claims = viewer_claims(query.context)
         playback = (viewer_analysis or {}).get("playback_context") or (claims[0].get("playback_context") if claims else None)
-        quick = query.response_mode == "quick"
         answer = arm_pose_answer(
             arm_claims, current=_asks_current_viewer_pose(query.prompt), playback=playback if isinstance(playback, dict) else None,
             zone_id=requested_zone(query.prompt, None), side=asked_arm(query.prompt), part=asked_part(query.prompt),
-            prefer_hand=prefers_hand(query.prompt), prompt=query.prompt, quick=quick)
-        # 빠른 안내는 할 일을 앞에 두고 각도 안내를 짧게 뒤에 붙인다(한 줄 60자).
-        answer = answer + " " + QUICK_ANGLE_NOTE if quick and angle_note(query.prompt) else angle_note(query.prompt) + answer
+            prefer_hand=prefers_hand(query.prompt), prompt=query.prompt)
+        answer = angle_note(query.prompt) + answer
         return _success_response(query, request_started, answer=answer, retrieval_used=False, citations=[],
                                  pose_context={"scope": "arm_pose", "status": arm_claims.get("status")} if query.task_type == "pose_recomm" else None,
                                  context_status="available" if arm_claims.get("status") == "available" else "not_available")
@@ -1097,8 +1077,7 @@ async def _execute_copilot_query(
             and (preset_intent(query.task_type, query.prompt) == "pose_worst_zone" or WORST_ZONE.search(query.prompt))):
         # "Zone별로 어디가 문제야?"는 자세 유사도가 낮은 Zone과 그 교정으로 답한다(운영 q2, 27B Zone 오기).
         zones = viewer_analysis.get("zones")
-        answer = zone_pose_summary(arm_claims, list(zones.values()) if isinstance(zones, Mapping) else None, prompt=query.prompt,
-                                   quick=query.response_mode == "quick")
+        answer = zone_pose_summary(arm_claims, list(zones.values()) if isinstance(zones, Mapping) else None, prompt=query.prompt)
         return _success_response(query, request_started, answer=answer, retrieval_used=False, citations=[],
                                  pose_context={"scope": "arm_pose_zones", "status": arm_claims.get("status")},
                                  context_status="available" if arm_claims.get("status") == "available" else "not_available")
@@ -1254,7 +1233,7 @@ async def _execute_copilot_query(
                 and classify(dialogue_turns[-1]["prompt"]) is None):
             # "아까 답 이상한데"는 앞 질문을 기록으로 다시 답한다. 앞 턴이 위험 질문이면 다시 분류하지 않는다(안전 검사를 건너뛰지 않게).
             again = answer_record_question(query.context, dialogue_turns[-1]["prompt"], task_type=query.task_type,
-                                           recent_turns=dialogue_turns[:-1], quick=query.response_mode == "quick")
+                                           recent_turns=dialogue_turns[:-1])
             if again is not None and again.kind != "mixed":
                 if _objection_only(query.prompt):
                     return _success_response(query, request_started, answer=again.text, retrieval_used=False, citations=[],
@@ -1289,8 +1268,7 @@ async def _execute_copilot_query(
         coating = await coating_facts()
         available = coating.get("analysis_status") == "available"
         return _success_response(query, request_started,
-            answer=answer_coating_question(coating, query.prompt, detailed=query.response_mode == "detailed",
-                                           quick=query.response_mode == "quick"),
+            answer=answer_coating_question(coating, query.prompt, detailed=True),
             retrieval_used=False, citations=[], coating_context=coating,
             context_status="available" if available else "not_available")
 
@@ -1353,7 +1331,7 @@ async def _execute_copilot_query(
         analysis_context = (_current_viewer_pose_context(query.prompt, viewer_analysis)
                             if query.task_type == "pose_recomm" else viewer_analysis)
         available = analysis_context.get("scope") != "current_zone" or analysis_context.get("status") == "available"
-        verified_answer = _viewer_answer(query.task_type, query.prompt, analysis_context, intent, quick=query.response_mode == "quick")
+        verified_answer = _viewer_answer(query.task_type, query.prompt, analysis_context, intent)
         arm_pose = parse_viewer_arm_pose(query.context) if query.task_type == "pose_recomm" else None
         side = asked_arm(query.prompt, intent) if query.task_type == "pose_recomm" else None
         if arm_pose is not None:
@@ -1361,7 +1339,6 @@ async def _execute_copilot_query(
                 arm_pose, current=analysis_context.get("scope") == "current_zone",
                 playback=viewer_analysis.get("playback_context"),  # type: ignore[arg-type]
                 zone_id=requested_zone(query.prompt, None), side=side, prefer_hand=prefers_hand(query.prompt), prompt=query.prompt,
-                quick=query.response_mode == "quick",
             )
             # Keep the requested score family; show both only when both were
             # explicitly requested. Signed measures/context remain unchanged.
@@ -1369,9 +1346,6 @@ async def _execute_copilot_query(
             pose_requested = bool(re.search(r"자세|관절|팔", query.prompt))
             verified_answer = (arm_answer + "\n" + verified_answer if work_requested and pose_requested
                                else verified_answer if work_requested else arm_answer)
-            average, work = arm_pose.get("average_similarity_percent"), _percent_text(analysis_context.get("similarity_percent"), already_percent=True)
-            if work_requested and pose_requested and query.response_mode == "quick" and isinstance(average, (int, float)) and work:
-                verified_answer = f"평균 자세 유사도는 {average:.0f}%, 전체 작업 유사도는 {work}입니다."  # 둘 다 물으면 한 줄에 둘 다
             analysis_context = {**analysis_context, "arm_pose": {key: item for key, item in arm_pose.items() if key != "sequences"}}
             available = available or arm_pose.get("status") == "available"
         elif (query.task_type == "pose_recomm"  # 순서 탭은 팔 채점을 읽지 않는다(검토 I1)
@@ -1550,12 +1524,11 @@ async def _execute_copilot_query(
         if query.task_type == "error_analysis":
             coating = await coating_facts()
             measures = _viewer_measures(query.context, query.prompt)[0]
-            cause = answer_distribution_cause(coating, detailed=query.response_mode == "detailed", measures=measures,
-                                              quick=query.response_mode == "quick")
+            cause = answer_distribution_cause(coating, detailed=True, measures=measures)
             if cause is None and trusted_coating is not None:
                 # 뷰어 자료에 목표 대비 판정이 없으면(전문가 대비 행뿐) 완료 리포트로 답한다.
                 coating = await report_facts()
-                cause = answer_distribution_cause(coating, detailed=query.response_mode == "detailed", quick=query.response_mode == "quick")
+                cause = answer_distribution_cause(coating, detailed=True)
             if cause is not None:
                 return _success_response(query, request_started, answer=cause, retrieval_used=False, citations=[],
                                          coating_context=coating, context_status="available")
@@ -1646,7 +1619,7 @@ async def _execute_copilot_query(
                 session_id=query.session_id,
                 enable_thinking=False,
                 use_rag=use_rag,
-                max_tokens=128,
+                max_tokens=1024,
                 **({"defer_without_evidence": may_defer,
                     "evidence_score_threshold": _abstain_below(pipeline, query.response_mode)}
                    if supports_deferral else {}),
@@ -1709,7 +1682,7 @@ async def _execute_copilot_query(
             # 위험 주제 질문은 근거가 약해도 그 종류의 고정 문장으로 답한다.
             withheld, withheld_citations = guard_answer(safety_class, "", []) if safety else (NO_EVIDENCE_ANSWER, [])
             if not safety and _DIZZY.search(query.prompt):
-                # 빠른 안내는 앞 문장만 남으므로 몸 상태 안내를 앞에 둔다.
+                # 빠른 안내에서는 몸 상태 안내를 먼저 전한다.
                 withheld = DIZZY_NOTE + "\n" + withheld if query.response_mode == "quick" else withheld + "\n" + DIZZY_NOTE
             if mixed is not None:
                 withheld = mixed.text + "\n" + MIXED_NO_EVIDENCE
@@ -1730,14 +1703,10 @@ async def _execute_copilot_query(
     answer, citations = guard_answer(safety_class if safety else None, answer, list(parsed.citations))
     if review_failed or parsed.repair_path in FAILED_REPAIR_PATHS:
         citations = []
-    caution = SAFETY_CLASSES[safety_class].caution if safety and safety_class in SAFETY_CLASSES else None
-    if query.response_mode == "quick" and caution and answer.endswith("\n" + caution):
-        # 빠른 안내는 앞 문장만 남는다. 덧붙인 안전 주의가 잘려 나가지 않게 앞에 둔다.
-        answer = caution + "\n" + answer.removesuffix("\n" + caution)
     if mixed is not None:
         # 기록 문장 먼저, 문서 문장은 뒤에. 문서 본문이 비면 근거가 없다고만 덧붙인다(기록 문장을 되풀이하지 않는다).
         body = "" if parsed.repair_path in FAILED_REPAIR_PATHS else answer.strip()  # 빈 본문의 대체 문장("답변을 생성하지 못했습니다")도 빈 답이다
-        # 빠른 안내는 앞 문장만 남는다. 사용자가 지식 조각을 먼저 물었으면 문서 문장을 앞에 둔다(사례 18).
+        # 사용자가 지식 조각을 먼저 물었으면 문서 문장을 앞에 둔다(사례 18).
         answer = (body + "\n" + mixed.text if body and mixed.knowledge_first and query.response_mode == "quick"
                   else mixed.text + "\n" + (body or MIXED_NO_EVIDENCE))
     logger.info(
@@ -1967,10 +1936,11 @@ def create_copilot_router(
         summary="3-1. 텍스트 기반 Co-Pilot 질의",
         description=(
             "Replay 및 일반 UI용 텍스트 질의입니다. 답변 수준에 따라 Qwen3-8B 또는 Qwen3.6-27B 모델과 RAG를 사용합니다.\n\n"
-            "- **빠른 안내 (`quick`, 기본값) · Qwen3-8B 모델**: 질문의 답을 줄바꿈 없는 한글 60자 이내 한 줄로 답합니다. 전체 목록·근거는 상세 분석에서 확인합니다.\n"
+            "- **빠른 안내 (`quick`, 기본값) · Qwen3-8B 모델**: 답변 본문과 필요한 문장·목록을 요약하거나 줄이지 않고 제공합니다.\n"
             "  - 사용자·세션 맥락·검색 근거가 모두 같은 반복 질문은 최대 2분간 생성 결과를 재사용합니다.\n"
             "  - 새 시퀀스·대화·문맥·근거가 반영되면 다시 생성합니다. 새 질문의 처리 시간은 모델 부하에 따라 달라집니다.\n"
-            "- **상세 분석 (`detailed`) · Qwen3.6-27B 모델**: 결론과 필요한 근거를 최대 2문장으로 답합니다. 인사말·반복 요약·긴 배경은 생략합니다.\n"
+            "- **상세 분석 (`detailed`) · Qwen3.6-27B 모델**: 답변 본문과 필요한 근거·조치를 문장 수 제한 없이 제공합니다.\n"
+            "- 두 모드 모두 생성은 최대 1,024토큰으로 제한하며 인용·안전·수치 검사를 유지합니다.\n"
             "- **대화 맥락**: 일반 지식·일상 대화·계산·후속 질문도 처리합니다. 탭 선택이 질문 의도를 강제하지 않습니다. 도장 지식이 필요한 경우에 RAG를 사용합니다.\n"
             "  - `use_rag=Y`는 검색을 허용합니다. 적합한 문서 근거가 없으면 대화 맥락을 반영해 LLM이 답합니다. 안전 기준·훈련 실측값은 추측으로 대체하지 않습니다.\n"
             "  - `retrieval_used=true`와 `citations`는 답변에 실제 사용한 유효 NCS 근거를 뜻합니다. 검색을 시도했다는 의미가 아닙니다.\n"
