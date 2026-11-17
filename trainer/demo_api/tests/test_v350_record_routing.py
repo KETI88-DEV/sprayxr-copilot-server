@@ -5,6 +5,7 @@ import pytest
 
 from trainer.demo_api.copilot_router import MIXED_DOCUMENT_RULE, MIXED_NO_EVIDENCE
 from trainer.demo_api.sequence_store import SequenceStore
+from trainer.demo_api.tests.document_evidence import DocumentRecordingPipeline
 from trainer.demo_api.tests.viewer_record import AT_3S, AT_24S, AT_28S, AT_35S, RecordingPipeline, ask, payload
 
 DETERMINISTIC = [  # (번호, tab, playback, mode, 질문, 꼭 있어야 할 낱말)
@@ -71,8 +72,7 @@ def test_mixed_question_puts_record_sentence_first_and_documents_after() -> None
     store = SequenceStore(":memory:")
     ask("칠 다 했는데 어디가 제일 얇게 나왔어?", tab="coating", playback=AT_35S, store=store)
     ask("왜 그렇게 얇게 나온 거야?", tab="coating", playback=AT_35S, store=store)
-    pipeline = RecordingPipeline(document="[답변] 거리 약 30cm를 일정하게 유지하고 50% 겹쳐 칠합니다.",
-                                 chunks=[{"chunk_id": "doc-1", "text": "스프레이 거리는 약 30cm를 유지하고 50% 겹쳐 칠한다.", "rerank_score": 9.0}])
+    pipeline = DocumentRecordingPipeline(document="[답변] 거리 약 30cm를 일정하게 유지하고 50% 겹쳐 칠합니다.")
     data = ask("그럼 거기부터 다시 칠하면 돼? 어떻게 칠해?", tab="coating", playback=AT_35S, store=store, pipeline=pipeline,
                mode="detailed")  # T38. 빠른 안내는 한 줄이라 문서 문장이 기록 문장 뒤로 밀려난다(2026-11-16)
     first, _, rest = data["answer"].partition("\n")

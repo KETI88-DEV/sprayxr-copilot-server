@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from trainer.demo_api.copilot_router import create_copilot_router
 from trainer.demo_api.quick_answer import one_line
 from trainer.demo_api.sequence_store import SequenceStore
+from trainer.demo_api.tests.document_evidence import supported_document_result
 from trainer.demo_api.tests.test_pose_engine_first import ARM, _viewer_context
 from trainer.demo_api.viewer_context import sign_context
 
@@ -35,7 +36,7 @@ class DialoguePipeline:
 
     def run(self, **kwargs):
         self.calls.append(kwargs)
-        return {"response": "[답변] 이동 속도와 패스 겹침을 확인하세요. 거리가 적절했다는 조건만으로 원인을 확정할 수는 없습니다.", "rag_chunks": []}
+        return supported_document_result("[답변] 이동 속도와 패스 겹침을 확인하세요. 거리가 적절했다는 조건만으로 원인을 확정할 수는 없습니다.")
 
 
 def client(pipeline, store=None):

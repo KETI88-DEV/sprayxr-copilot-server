@@ -4,6 +4,7 @@ from __future__ import annotations
 import pytest
 
 from trainer.demo_api import coating_query as cq
+from trainer.demo_api.tests.document_evidence import DocumentRecordingPipeline
 
 from trainer.demo_api.tests.viewer_record import RecordingPipeline, ask, payload
 
@@ -17,7 +18,7 @@ Q22 = "Zone 6 속도랑 거리 어땠어? 뭐부터 고치면 돼?"
 
 
 def _documents(answer: str) -> RecordingPipeline:
-    return RecordingPipeline(plan={"kind": "coating_knowledge", "intent": "knowledge", "scope": "zone"}, document="[답변] " + answer)
+    return DocumentRecordingPipeline(plan={"kind": "coating_knowledge", "intent": "knowledge", "scope": "zone"}, document="[답변] " + answer)
 
 
 def test_q19_far_distance_cause_is_replaced_by_the_measured_distance() -> None:

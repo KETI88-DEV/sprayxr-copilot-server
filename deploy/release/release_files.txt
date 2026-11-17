@@ -114,9 +114,11 @@ trainer/demo_api/feedback.py
 trainer/demo_api/feedback_review_ui.py
 trainer/demo_api/feedback_sync.py
 trainer/demo_api/guided_workflow.py
+trainer/demo_api/glossary_query.py
 trainer/demo_api/__init__.py
 trainer/demo_api/monitor_api.py
 trainer/demo_api/monitor.py
+trainer/demo_api/maintenance.py
 trainer/demo_api/motion_viewer_pose.py
 trainer/demo_api/motion_viewer.py
 trainer/demo_api/playback_direction.py
@@ -126,6 +128,7 @@ trainer/demo_api/query_chat_data.py
 trainer/demo_api/query_chat.py
 trainer/demo_api/query_language.py
 trainer/demo_api/query_runtime.py
+trainer/demo_api/quick_answer.py
 trainer/demo_api/readiness.py
 trainer/demo_api/record_query.py
 trainer/demo_api/reference_order_query.py
@@ -183,6 +186,8 @@ trainer/demo_api/static/motion_viewer_v2_layout.js
 trainer/demo_api/static/query_chat.css
 trainer/demo_api/static/query_chat.html
 trainer/demo_api/static/query_chat.js
+trainer/demo_api/static/query_answer_source.js
+trainer/demo_api/static/maintenance_banner.js
 trainer/demo_api/static/training_data.js
 trainer/demo_api/telemetry_contracts.py
 trainer/demo_api/telemetry_router.py
@@ -249,6 +254,7 @@ trainer/scripts/pose_stages.py
 trainer/scripts/posture_sequence.py
 trainer/scripts/prompt_budget.py
 trainer/scripts/quick_answer.py
+trainer/scripts/query_feedback_review.py
 trainer/scripts/replay_telemetry.py
 trainer/scripts/rig_profile.py
 trainer/scripts/rotation_math.py

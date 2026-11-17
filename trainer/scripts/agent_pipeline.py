@@ -8,6 +8,7 @@ import contextvars
 import importlib
 import json
 import logging
+import math
 import os
 import re
 import sys
@@ -1298,6 +1299,8 @@ class AgentPipeline:
         inference_context_limit: int | None = None,
         compact_analysis: bool = False,
         answer_question: str | None = None,
+        defer_without_evidence: bool = False,
+        evidence_score_threshold: float | None = None,
     ) -> dict[str, Any]:
         """Skip retrieval with ``use_rag=False``; opt into brief live analysis with ``compact_analysis``.
 
@@ -1336,6 +1339,40 @@ class AgentPipeline:
             for r in rag_results
         ]
         retrieved_candidate_count = len(rag_chunks)
+        if defer_without_evidence and use_rag and route == "fast":
+            # Live Query can return to contextual conversation before spending a
+            # generation call. This is not an evaluation/default-run policy.
+            nonempty = [chunk for chunk in rag_chunks if str(chunk.get("text", "")).strip()]
+            reason = "empty" if not nonempty else None
+            if nonempty and evidence_score_threshold is not None:
+                scores = [chunk.get("rerank_score") for chunk in nonempty]
+                if (not isinstance(evidence_score_threshold, (int, float))
+                        or isinstance(evidence_score_threshold, bool) or not math.isfinite(evidence_score_threshold)
+                        or any(not isinstance(score, (int, float)) or isinstance(score, bool)
+                               or not math.isfinite(score) for score in scores)):
+                    # A failed/malformed retrieval response is not evidence that
+                    # the question has no relevant documents.
+                    raise ValueError("Live evidence score is unavailable or invalid")
+                if max(scores) < evidence_score_threshold:
+                    reason = "below_threshold"
+            if reason is not None:
+                return {
+                    "request_id": active_request_id, "session_id": active_session_id,
+                    "response": "", "rag_chunks": [], "citations": [], "tool_calls": [],
+                    "instruction": instruction, "route": route, "timing": rag_timing,
+                    "deadline_hit": False,
+                    "metadata": {
+                        "latency_ms": int((time.monotonic() - t0) * 1000),
+                        "retrieval_decision": {"status": "no_relevant_evidence", "reason": reason, "attempted": True},
+                        "answer_trace": {
+                            "policy_version": POLICY_VERSION, "question": answer_question or instruction,
+                            "retrieval_query": retrieval_instruction or instruction,
+                            "retrieved_candidates": retrieved_candidate_count,
+                            "selected_evidence": evidence_trace(nonempty),
+                            "review": {"verdict": "not_required", "reason": "retrieval_" + reason},
+                        },
+                    },
+                }
         if answer_question is not None and route == "fast":
             rag_chunks = select_evidence(rag_chunks, limit=4)
 

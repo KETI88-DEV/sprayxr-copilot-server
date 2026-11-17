@@ -151,6 +151,14 @@ On 2026-11-13 mjkim's internal development documents (117 files: most of `docs/s
 - Query dialogue uses persisted history scoped by user, training session and optional `X-Copilot-Conversation`. All Query `AgentPipeline.run` calls disable pipeline history; its unscoped memory is not a second source of conversation context.
 - Viewer dialogue facts require the server signature. Selected Zone representative statistics are not instantaneous measurements.
 
+## Query evidence, translations and update review
+
+- `retrieval_used` means suitable document evidence actually supported the answer, not merely that retrieval ran. Keep NCS citations and the RAG badge off answers without document support and direct glossary translations; glossary answers use their separate source badge.
+- Direct translation answers use only exact verified glossary renderings or activated TSB reference terms with provenance. Preserve raw CSV quarantine and keep user-provided terminology separate from technical evidence. Never turn an LLM translation into a verified dictionary entry.
+- Preserve the underlying knowledge question when the user only requests an output language. Translation follow-ups reuse only scoped prior user source text. Apply the explicit translation target to its output checks without weakening the Korean-only guard for unrelated answers.
+- `trainer.scripts.query_feedback_review` produces read-only review data, not training examples or approval writes. Existing administrator authentication, CSRF, corrections and candidate approval remain authoritative. Record review/application separately from model training and deployment.
+- Learning modes are 1–10. Practical/Unit support depends on registered references; do not invent a different supported range.
+
 ## Zone completion and reference planning
 
 - Spray advancement requires95% of official Zone pixels meeting the session target(default160µm) **and** a PR #8 grade other than `below` (painted mean not under the target; owner decision 2026-11-12). Area met but `below` → `needs_more`, no `next_zone_id`, a "보완" guide; leaving that Zone still fires `coating_under_app` once. The gate lives only in `coating_assessment.assess_zone` (`gate_status`). Crop-only mean/expert-cell coverage is not proof of whole-Zone completion. Reuse the same gate for sequence feedback, SSE, current-next queries and explicit-target reports.
@@ -165,6 +173,7 @@ On 2026-11-13 mjkim's internal development documents (117 files: most of `docs/s
 - Use the operator's GitHub nickname for `--by`; distinguish concurrent AI sessions with a short `[session]` prefix in `--reason`. Reasons are public in the maintenance banner: do not include personal names, credentials, or private payloads.
 - Register the work and expected KST end time with `take`, check ownership/type immediately before the operation, and pass `OPS_LOCK_BY` to guarded Docker commands. `take` and `release` send the authorized routine Slack notices automatically; do not read or print the webhook file.
 - Reserve release numbers with `version next` or `version reserve`. Before deployment, verify the running code commit is included in the new commit and run `preflight` with the reserved version and running base commit. Do not reuse another operator's reservation.
+- Publish through the manual release workflow using a verified `source_sha`, reserved `tag`, container-import-prechecked `expected_release_tree`, and explicit `make_latest`. Release trees use the deployment allowlist and separate history. Reuse an existing annotated tag only after source/tree verification; never move or overwrite it.
 - If another operator holds the lock, continue independent local work and leave the server unchanged. Expiry is not an automatic release; do not force-release another person's lock without explicit authorization.
 - Release your own lock when server work has ended and its final state is recorded, including after a successful rollback, and verify the final lock state. While recovery is still active, keep ownership valid or explicitly hand over. When changing operation type, release and acquire the new type; if someone else acquires it first, stop server mutations.
 - The full workflow is documented in `deploy/spark/README.md` section 21. Code history remains in GitHub; Slack communicates shared-server work and state.

@@ -103,7 +103,8 @@ class CopilotQueryRequest(StrictModel):
     )] = None
     use_rag: Annotated[RagUsage, Field(
         description=(
-            "지식 검색(RAG) 사용 여부입니다. Y는 관련 지식 검색을 사용하고 N은 검색 없이 현재 문맥만 사용합니다. "
+            "지식 검색(RAG) 허용 여부입니다. Y는 관련 문서 검색을 허용하고 N은 문서 검색을 사용하지 않습니다. "
+            "검색을 허용하거나 시도한 것과 실제 답변에 문서 근거를 사용한 것은 다르며, 실제 사용 여부는 retrieval_used로 확인합니다. "
             "Y/N만 허용하며 소문자 y/n도 입력할 수 있습니다. 생략하면 Y로 처리합니다."
         ),
         examples=["Y"],
@@ -143,8 +144,14 @@ class CopilotQueryData(StrictModel):
     sequence_context: dict[str, object] | None
     coating_context: dict[str, object] | None
     pose_context: dict[str, object] | None
-    retrieval_used: bool
-    citations: list[str]
+    retrieval_used: Annotated[bool, Field(description=(
+        "질문에 적합한 NCS 등 등록 문서 근거가 실제 답변을 뒷받침한 경우에만 true입니다. "
+        "검색 시도 여부가 아닙니다. 문서 근거를 쓰지 않은 일반 LLM·문맥 답변과 직접 용어집 번역은 false입니다."
+    ))]
+    citations: Annotated[list[str], Field(description=(
+        "실제 답변에 사용한 문서 근거의 식별자 목록입니다. 검색 후보 전체를 뜻하지 않습니다. "
+        "문서 근거를 쓰지 않은 일반 LLM·문맥 답변과 직접 용어집 번역은 빈 배열이며, 용어집 출처를 NCS 인용으로 섞지 않습니다."
+    ))]
 
 
 class CopilotResponse(StrictModel):

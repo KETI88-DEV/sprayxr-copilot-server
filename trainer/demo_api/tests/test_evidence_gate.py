@@ -86,7 +86,9 @@ def test_weak_evidence_withholds_the_generated_knowledge_answer():
     pipeline = KnowledgePipeline(top=3.9)
     data = ask(pipeline, "인트럼센트 도료의 팽창 배율은?")
     assert data["answer"] == NO_EVIDENCE_ANSWER
-    assert data["citations"] == [] and data["retrieval_used"] is True
+    # A retrieval attempt is not evidence use when every candidate was withheld.
+    assert data["citations"] == [] and data["retrieval_used"] is False
+    assert len(pipeline.runs) == 1
     assert pipeline.conversations == []
 
 

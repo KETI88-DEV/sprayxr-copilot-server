@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from trainer.demo_api.copilot_router import create_copilot_router
 from trainer.demo_api.sequence_store import SequenceStore
+from trainer.demo_api.tests.document_evidence import supported_document_result
 from trainer.demo_api.viewer_context import sign_context
 
 
@@ -64,7 +65,7 @@ def test_posture_types_are_explained_instead_of_scoring_current_pose(task):
             raise AssertionError("A standalone taxonomy question does not need dialogue classification")
         def run(self, **kwargs):
             self.calls.append(kwargs)
-            return {"response": "[답변] 도장 작업 자세는 선 자세, 몸을 낮춘 자세, 쪼그려 앉은 자세 등으로 나눌 수 있습니다.", "rag_chunks": []}
+            return supported_document_result("[답변] 도장 작업 자세는 선 자세, 몸을 낮춘 자세, 쪼그려 앉은 자세 등으로 나눌 수 있습니다.")
     pipeline = Knowledge()
     response = client(pipeline).post("/api/v1/copilot/query", json={
         "user_id": "routing-test", "task_type": task,
@@ -159,7 +160,7 @@ def test_coating_how_to_question_uses_rag_and_verified_data_instead_of_fixed_sta
     class Advice(Pipeline):
         def run(self, **kwargs):
             self.calls.append(kwargs)
-            return {"response": "[답변] 균일한 도막을 위해 분사 거리와 이동 속도를 일정하게 유지하세요.", "rag_chunks": []}
+            return supported_document_result("[답변] 균일한 도막을 위해 분사 거리와 이동 속도를 일정하게 유지하세요.")
     pipeline = Advice()
     response = client(pipeline).post("/api/v1/copilot/query", json={
         "user_id": "routing-test", "task_type": task, "response_mode": mode,
@@ -276,7 +277,7 @@ def test_advice_prompt_gets_the_compact_target_facts():
     class Advice(Pipeline):
         def run(self, **kwargs):
             self.calls.append(kwargs)
-            return {"response": "[답변] 분사 거리와 이동 속도를 일정하게 유지하세요.", "rag_chunks": []}
+            return supported_document_result("[답변] 분사 거리와 이동 속도를 일정하게 유지하세요.")
     pipeline = Advice()
     ask("pose_recomm", "이 Zone에서 도막을 균일하게 만드는 방법은?", context("pose_recomm", target=target_assessment()), pipeline=pipeline)
     instruction = pipeline.calls[0]["instruction"]

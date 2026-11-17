@@ -136,15 +136,30 @@ def restore_translation(text: str, prefix: str, tokens: list[str]) -> str:
         raise TranslationUnavailableError("Translation changed protected placeholders")
     return marker.sub(lambda match: tokens[int(match.group(1))], text)
 
+def translation_references(text: str, source: str, target: str) -> tuple[list[dict[str, str]], list[dict]]:
+    """Internal auto-source requests use attested matches, never a guessed passthrough."""
+    languages = list(LANGUAGE_NAMES) if source == "auto" else [source]
+    pairs: list[dict[str, str]] = []
+    hints: list[dict] = []
+    for language in languages:
+        for pair in term_pairs(text, language, target):
+            if pair not in pairs:
+                pairs.append(pair)
+    for language in languages:
+        for hint in reference_hints(text, language, target, protected_pairs=pairs):
+            if not any(old['source'] == hint['source'] and old['target'] == hint['target'] for old in hints):
+                hints.append(hint)
+    return pairs, hints[:6]
+
+
 def translation_messages(text: str, *, source_language: str, target_language: str) -> list[dict[str, str]]:
     # The terms go only in the request data. Repeating them at the end of the system prompt
     # made the quick 8B copy an English question back untranslated (Spark A/B 2026-11-09).
-    glossary = term_pairs(text, source_language, target_language)
-    reference = reference_hints(text, source_language, target_language, protected_pairs=glossary)
+    glossary, reference = translation_references(text, source_language, target_language)
 
     def request(source_text: str, glossary: list[dict[str, str]] | None = None) -> str:
         return json.dumps({
-            "source_language": LANGUAGE_NAMES[source_language],
+            "source_language": "Detect the source language from source_text" if source_language == "auto" else LANGUAGE_NAMES[source_language],
             "target_language": LANGUAGE_NAMES[target_language],
             **({"glossary": glossary} if glossary else {}),
             **({"translation_reference": reference} if glossary is not None and reference else {}),
@@ -168,7 +183,7 @@ def translation_messages(text: str, *, source_language: str, target_language: st
             "Return ONLY a complete JSON object with one string field: {\"text\":\"translation\"}. "
             + _TARGET_INSTRUCTIONS[target_language]
         )},
-        {"role": "user", "content": request(_TRANSLATION_EXAMPLES[source_language])},
+        {"role": "user", "content": request(_TRANSLATION_EXAMPLES["en" if source_language == "auto" else source_language])},
         {"role": "assistant", "content": json.dumps({"text": _TRANSLATION_EXAMPLES[target_language]}, ensure_ascii=False)},
         {"role": "user", "content": request(text, glossary)},
     ]
@@ -217,7 +232,8 @@ def translate_text(pipeline: object, text: str, *, source_language: str, target_
     for pattern in (_IDENTIFIERS, _UNITS):
         if Counter(pattern.findall(source)) != Counter(pattern.findall(target)):
             raise TranslationUnavailableError("Translation changed identifiers or units")
-    if missing_terms(text, translated, source_language, target_language):
+    sources = list(LANGUAGE_NAMES) if source_language == "auto" else [source_language]
+    if any(missing_terms(text, translated, source, target_language) for source in sources):
         raise TranslationUnavailableError("Translation dropped a glossary term")
     if isinstance(cache, TextCache):
         cache.put(key, translated)

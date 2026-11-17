@@ -20,24 +20,43 @@ remote="${3:-keti}"
 [[ "$version" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || { echo "버전 형식은 vX.Y.Z" >&2; exit 2; }
 
 top="$(git rev-parse --show-toplevel)"
-list="$top/deploy/release/release_files.txt"
+cd "$top"
 src_sha="$(git rev-parse --verify "$src^{commit}")"
+manifest_path=deploy/release/release_files.txt
+manifest_blob="$(git rev-parse --verify "$src_sha:$manifest_path")"
 
 code_version="$(git show "$src_sha:trainer/demo_api/__init__.py" | sed -n 's/^__version__ = "\(.*\)"$/\1/p')"
 [ "v$code_version" = "$version" ] || { echo "원본의 __version__(${code_version})과 ${version}이 다르다" >&2; exit 1; }
 git rev-parse -q --verify "refs/tags/$version" >/dev/null && { echo "태그 ${version}이 이미 있다" >&2; exit 1; }
 
+# 고정한 원본의 목록만 쓴다. 작업 트리의 미커밋 목록이나 다른 체크아웃은 배포 범위를 바꾸지 않는다.
+list="$(mktemp)"
+index="$(mktemp)"
+trap 'rm -f "$index" "$list"' EXIT
+git show "$src_sha:$manifest_path" > "$list"
+
 # 문서·테스트가 목록에 섞이지 않았는지 먼저 본다(test_api_docs.py는 앱이 import하는 운영 모듈이다).
-bad="$(grep -E '\.md$|\.pdf$|(^|/)tests?/|^docs/|^\.github/|^demo-ui/' "$list" || true)"
+bad="$(grep -Ei '\.md$|\.pdf$|(^|/)tests?/|^docs/|^\.github/|^demo-ui/' "$list" || true)"
 [ -z "$bad" ] || { echo "목록에 문서·테스트가 있다:" >&2; echo "$bad" >&2; exit 1; }
 
-index="$(mktemp)"
-trap 'rm -f "$index"' EXIT
 export GIT_INDEX_FILE="$index"
 git read-tree --empty
 python3 - "$list" "$src_sha" <<'PY' | git update-index --index-info
 import subprocess, sys
-want = {line for line in open(sys.argv[1], encoding='utf-8').read().splitlines() if line}
+from pathlib import PurePosixPath
+want = set()
+for path in open(sys.argv[1], encoding='utf-8').read().splitlines():
+    if not path:
+        continue
+    relative = PurePosixPath(path)
+    if (path != path.strip() or path != relative.as_posix() or relative.is_absolute()
+            or '..' in relative.parts or '\\' in path
+            or (relative.name.startswith('.env') and not relative.name.endswith('.example'))
+            or path in want):
+        sys.exit('허용할 수 없거나 중복된 배포 경로: ' + path)
+    want.add(path)
+if 'trainer/demo_api/__init__.py' not in want:
+    sys.exit('배포 목록에 패키지 버전 파일이 없다')
 raw = subprocess.run(['git', '-c', 'core.quotepath=false', 'ls-tree', '-r', '-z', sys.argv[2]],
                      capture_output=True, check=True).stdout.decode('utf-8')
 found = set()
@@ -46,7 +65,9 @@ for rec in raw.split('\0'):
         continue
     meta, path = rec.split('\t', 1)
     if path in want:
-        mode, _type, sha = meta.split()
+        mode, kind, sha = meta.split()
+        if kind != 'blob' or mode not in {'100644', '100755'}:
+            sys.exit('일반 파일이 아닌 배포 경로: ' + path)
         sys.stdout.write(f'{mode} {sha}\t{path}\n')
         found.add(path)
 missing = sorted(want - found)
@@ -62,14 +83,22 @@ unset GIT_INDEX_FILE
 
 parent_args=()
 if prev="$(git rev-parse -q --verify "refs/remotes/$remote/release")"; then
+  if git merge-base "$prev" "$src_sha" >/dev/null; then
+    echo "기존 release가 main 이력을 포함한다. 별도 배포 이력을 확인해야 한다" >&2
+    exit 1
+  fi
   parent_args=(-p "$prev")
 fi
 short="$(git rev-parse --short "$src_sha")"
-commit="$(git commit-tree "$tree" "${parent_args[@]}" -m "release: ${version} — API 서버 운영 코드만 담은 배포본" -m "main ${short} 기준. agent-api와 MCP 실행에 필요한 $(wc -l < "$list")개 파일만 담는다. 문서, 테스트, 학습·평가 스크립트, 웹 UI(demo-ui)는 넣지 않는다.")"
-git tag -a "$version" "$commit" -m "${version}: API 서버 운영 코드만 담은 배포본 (main ${short})"
+printf -v provenance 'Source-Main-Commit: %s\nRelease-Manifest-Blob: %s' "$src_sha" "$manifest_blob"
+commit="$(git commit-tree "$tree" "${parent_args[@]}" -m "release: ${version} — API 서버 운영 코드만 담은 배포본" -m "main ${short} 기준. agent-api와 MCP 실행에 필요한 $(wc -l < "$list")개 파일만 담는다. 문서, 테스트, 학습·평가 스크립트, 웹 UI(demo-ui)는 넣지 않는다." -m "$provenance")"
+git tag -a "$version" "$commit" -m "${version}: API 서버 운영 코드만 담은 배포본 (main ${src_sha})" -m "$provenance"
 
 echo "릴리스 커밋 ${commit} (파일 $(git ls-tree -r --name-only "$commit" | wc -l)개), 태그 ${version}"
+echo "원본 main ${src_sha}, 목록 blob ${manifest_blob}, 배포 tree ${tree}"
 echo
+echo "0) 원본 ${src_sha} 체크아웃에서 버전·원본·배포 트리 확인:"
+echo "   python3 trainer/scripts/version_tag_check.py"
 echo "1) import 확인(개발 서버 컨테이너):"
 echo "   d=\$PWD/output/release-check-${version}; mkdir -p \$d && git archive ${commit} | tar -x -C \$d"
 echo "   docker exec -w /workspace/output/release-check-${version} -e PYTHONPATH=/workspace/output/release-check-${version} ship-paint-trainer python3 -c 'import trainer.demo_api.app, mcp_servers.main'"

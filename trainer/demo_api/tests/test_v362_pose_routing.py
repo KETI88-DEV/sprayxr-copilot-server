@@ -11,7 +11,8 @@ import pytest
 from trainer.demo_api.copilot_contracts import CopilotQueryRequest
 from trainer.demo_api.copilot_intent import is_domain_question, is_general_painting_knowledge
 from trainer.demo_api.copilot_router import _pose_engine_question
-from trainer.demo_api.tests.viewer_record import RecordingPipeline, ask
+from trainer.demo_api.tests.document_evidence import DocumentRecordingPipeline
+from trainer.demo_api.tests.viewer_record import ask
 
 RECORD = ["자세 유사도는 얼마야?", "자세 점수가 왜 낮아?", "팔꿈치는 왜 지적됐어?", "전문가와 자세 차이는?", "무릎 자세는 어떻게 고쳐?"]
 OFF_TOPIC = ["요리 도구 종류는 뭐야?", "요가 자세 종류는?", "요가 동작 종류 알려줘", "스쿼트 동작 방법 알려줘", "허리 디스크 예방 방법은?"]
@@ -75,7 +76,7 @@ def test_off_topic_questions_are_not_painting_questions(prompt: str) -> None:
 @pytest.mark.parametrize("prompt", CONCEPT)
 @pytest.mark.parametrize("viewer", [True, False])
 def test_pose_concept_questions_use_documents_on_every_tab(prompt: str, tab: str, viewer: bool) -> None:
-    pipeline = RecordingPipeline()
+    pipeline = DocumentRecordingPipeline()
     result = ask(prompt, tab=tab, pipeline=pipeline, **({} if viewer else {"raw_context": ""}))
     assert result["source"] == "documents" and "plan" not in pipeline.calls, result
     assert is_general_painting_knowledge(prompt)
@@ -83,12 +84,12 @@ def test_pose_concept_questions_use_documents_on_every_tab(prompt: str, tab: str
 
 def test_query_chat_posture_types_question_uses_documents() -> None:
     # /query-chat(query_chat.js)은 knowledge_search, 문맥 없이 보낸다.
-    result = ask("자세 종류로는 어떤 게 있어?", tab="knowledge", raw_context="")
+    result = ask("자세 종류로는 어떤 게 있어?", tab="knowledge", raw_context="", pipeline=DocumentRecordingPipeline())
     assert result["source"] == "documents", result
 
 
 def test_bare_pose_concept_question_on_the_pose_tab_uses_documents() -> None:
-    assert ask("허리 자세 의미가 뭐야?", tab="pose")["source"] == "documents"
+    assert ask("허리 자세 의미가 뭐야?", tab="pose", pipeline=DocumentRecordingPipeline())["source"] == "documents"
 
 
 def test_painting_word_overrides_the_off_topic_lexicon() -> None:

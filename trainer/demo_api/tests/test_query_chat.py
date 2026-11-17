@@ -23,6 +23,18 @@ def test_chat_uses_same_api_and_server_receipt_for_feedback():
     assert client.get('/assets/query_chat.js?name=/etc/passwd&media=text/plain').text == js
 
 
+def test_chat_loads_evidence_labels_before_the_query_client():
+    app = FastAPI()
+    app.include_router(create_query_chat_router())
+    client = TestClient(app)
+    html = client.get('/query-chat').text
+    assert html.index('/assets/query_answer_source.js') < html.index('/assets/query_chat.js')
+    asset = client.get('/assets/query_answer_source.js')
+    assert asset.status_code == 200
+    assert asset.headers['cache-control'] == 'no-cache'
+    assert 'CopilotAnswerSource' in asset.text
+
+
 def test_recorded_answer_receipt_identifies_the_saved_answer():
     store = SequenceStore(':memory:')
     first = store.record_query_turn(session_key='CHAT:query-chat',user_id='query-chat',

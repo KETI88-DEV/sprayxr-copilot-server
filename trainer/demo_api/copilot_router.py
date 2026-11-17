@@ -29,6 +29,7 @@ Every response uses the v2.5 wrapper. Request validation failures under
 from __future__ import annotations
 
 import json
+import inspect
 import logging
 import math
 import os
@@ -80,7 +81,9 @@ from trainer.demo_api.pose_query import (
     requested_zone,
     zone_unavailable,
 )
-from trainer.demo_api.query_language import TranslationUnavailableError, translate_text
+from trainer.demo_api.query_language import TranslationUnavailableError, translate_text, translation_references
+from trainer.demo_api.glossary_query import lookup_translation_question, parse_translation_request, requested_response_language
+from trainer.multilingual.tsb_reference import reference_version
 from trainer.demo_api.sequence_store import SequenceStore
 from trainer.demo_api.viewer_arm_pose import arm_pose_answer, parse_viewer_arm_pose, zone_pose_summary
 from trainer.demo_api.sequence_analysis import SequenceAnalysisEngine
@@ -215,7 +218,7 @@ SUBJECT_HEADER: Final = "X-Copilot-Subject"  # 서버 안에서만 쓴다. 바�
 # 외국어 질문을 한국어로 옮긴 문장(퍼센트 인코딩). 응답 본문은 바꾸지 않는다.
 ANALYSIS_PROMPT_HEADER: Final = "X-Copilot-Analysis-Prompt"
 _EVALUATION_QUESTION: Final = re.compile(r"잘한|못한|고쳐야|고칠|개선할|개선점|문제점|부족한 점")
-# 대화 지침이 금지한 도구 진단 틀(줄 머리의 [분석]·[판정]·[원인]·[조치]).
+# Preserve main ebb923c3's narrowly scoped v7.1 diagnostic-scaffold repair.
 _DIAGNOSTIC_SCAFFOLD: Final = re.compile(r"(?m)^\s*\[(?:분석|판정|원인|조치)\]")
 # 자세 탭에서 무엇을 물을 수 있는지 묻거나 낱말을 옮겨 달라는 말은 채점 조회가 아니다(사례 11·12). 자세 탭에만 쓴다.
 _TAB_OR_WORD: Final = re.compile(r"탭|(?:물어볼|질문할)\s*수|영어로|한자로|영어\s*(?:단어|표현)")
@@ -830,7 +833,7 @@ def _with_answer_trace(response: JSONResponse, result: Mapping[str, Any]) -> JSO
         return response
     clean: dict[str, Any] = {}
     for key, limit in (("policy_version", 80), ("question", 512), ("retrieval_query", 512),
-                       ("initial_answer", 512), ("final_answer", 512)):
+                       ("initial_answer", 512), ("final_answer", 512), ("fallback_reason", 80)):
         if isinstance(trace.get(key), str):
             clean[key] = trace[key][:limit]
     count = trace.get("retrieved_candidates")
@@ -1173,11 +1176,18 @@ async def _execute_copilot_query(
             decision.get("resolved_question"), prompt=query.prompt, recent_turns=dialogue_turns,
         )
 
-    async def chat_answer(hedged: bool = False) -> JSONResponse:
+    async def chat_answer(hedged: bool = False, *, conversation_pipeline: object | None = None,
+                          knowledge_scope: bool = False) -> JSONResponse:
         """계획 모델이 대화로 분류한 질문에 문서 검색 없이 답한다(세션 요약·측정값 검사 포함)."""
         try:
-            if query.session_id:
-                facts["training_summary"] = await to_thread.run_sync(
+            # A document miss does not widen the viewer data supplied to a
+            # quick general explanation. Use the same scoped facts/history for
+            # generation and numeric validation as the knowledge branch.
+            conversation_facts = (dict(viewer_facts or {}) if knowledge_scope and viewer_requested else facts)
+            conversation_turns = [] if knowledge_scope and definition_context is not None else model_turns
+            omit_training_values = knowledge_scope and viewer_requested and query.response_mode == "quick" and not record_pointed
+            if query.session_id and not omit_training_values:
+                conversation_facts["training_summary"] = await to_thread.run_sync(
                     lambda: summarize_session(sequences.session_bodies(query.session_id),
                                               selected_sequence_id=_selected_sequence(query.context)))
                 if _EVALUATION_QUESTION.search(query.prompt):
@@ -1187,22 +1197,21 @@ async def _execute_copilot_query(
                                              retrieval_used=False, citations=[],
                                              context_status="available" if found_report else "not_available")
             simulator = {"simulator_context": SIMULATOR_CONTEXT} if wants_simulator_context(query.prompt) else {}
+            conversation_engine = conversation_pipeline if conversation_pipeline is not None else planned_pipeline
             def converse():
-                kwargs = dict(recent_turns=model_turns, facts=facts, response_mode=query.response_mode, **simulator)
-                with generation_slot_for(planned_pipeline):
-                    raw = planned_pipeline.converse_copilot(query.prompt, **kwargs)
-                # 27B LoRA v7.1은 자료 없는 "음.. 그거"·"응"에 금지된 [분석]/[판정] 진단 틀로 지어낸 이상 탐지를 냈다
-                # (2026-11-17). 그 틀이 나온 답만 빠른 안내 모델로 다시 쓴다. 주제 밖 대화 등 나머지는 27B 그대로.
-                fallback = select_query_pipeline(planned_pipeline, "quick")
-                if fallback is not planned_pipeline and _DIAGNOSTIC_SCAFFOLD.search(raw):
+                kwargs = dict(recent_turns=conversation_turns, facts=conversation_facts, response_mode=query.response_mode, **simulator)
+                with generation_slot_for(conversation_engine):
+                    raw = conversation_engine.converse_copilot(query.prompt, **kwargs)
+                fallback = select_query_pipeline(conversation_engine, "quick")
+                if fallback is not conversation_engine and _DIAGNOSTIC_SCAFFOLD.search(raw):
                     with generation_slot_for(fallback):
                         return fallback.converse_copilot(query.prompt, **kwargs)
                 return raw
             answer = plain_answer(await to_thread.run_sync(converse))
             extended = is_domain_question(query.prompt)
-            if ungrounded_measurements(answer, facts=facts, prompt=query.prompt, extended=extended):
+            if ungrounded_measurements(answer, facts=conversation_facts, prompt=query.prompt, extended=extended):
                 # 자료에 없는 측정값은 내보내지 않는다. 한 번 다시 생성하고, 그래도 남으면 그 부분을 뺀다.
-                answer = drop_ungrounded(await to_thread.run_sync(converse), facts=facts, prompt=query.prompt, extended=extended)
+                answer = drop_ungrounded(await to_thread.run_sync(converse), facts=conversation_facts, prompt=query.prompt, extended=extended)
             answer = _checked_generation(answer, query)
             if hedged:
                 answer = hedged_answer(answer, quick=query.response_mode == "quick") or NO_EVIDENCE_ANSWER
@@ -1254,8 +1263,7 @@ async def _execute_copilot_query(
             return await chat_answer()
 
     trusted_coating = parse_viewer_coating_context(query.context, query.task_type)
-    # 빠른 안내(8B)는 기록 수치를 받으면 지식 질문에도 그 수치로 답한다(2026-11-17 운영 #42). 질문이 기록을 가리킬 때만 넘긴다.
-    # 기록을 가리키는 말은 계획(2026-11-17)의 기록 객체 정의 하나로 본다. 1인칭·"지금"만으로는 기록이 아니다.
+    # Preserve v3.8.15: quick knowledge answers receive measurements only for a record-directed question.
     record_pointed = bool(RECORD_OBJECT.search(query.prompt))
     coating_advice_context = (trusted_coating if mixed is None and is_coating_advice_question(query.prompt) and trusted_coating and trusted_coating.get("analysis_status") == "available"
                               and (query.response_mode != "quick" or record_pointed) else None)
@@ -1611,6 +1619,15 @@ async def _execute_copilot_query(
         simulator_context=block,
     ) if query.response_mode == "quick" else instruction)
 
+    # The quick adapter forwards kwargs to its parent. Older SDK/test pipelines
+    # keep their exact run signature and their previous post-generation gate.
+    run_target = getattr(pipeline, "_parent", pipeline)
+    try:
+        supports_deferral = "defer_without_evidence" in inspect.signature(run_target.run).parameters
+    except (TypeError, ValueError):
+        supports_deferral = False
+    may_defer = supports_deferral and use_rag and not documents_only
+
     def _guarded_run() -> Mapping[str, object]:
         with generation_slot_for(pipeline):
             return pipeline.run(
@@ -1622,6 +1639,9 @@ async def _execute_copilot_query(
                 enable_thinking=False,
                 use_rag=use_rag,
                 max_tokens=128,
+                **({"defer_without_evidence": may_defer,
+                    "evidence_score_threshold": _abstain_below(pipeline, query.response_mode)}
+                   if supports_deferral else {}),
                 **({"compact_analysis": True} if query.response_mode == "detailed" else {}),
                 request_id=query.request_id,
                 **({
@@ -1647,6 +1667,22 @@ async def _execute_copilot_query(
     metadata = result.get("metadata")
     review = metadata.get("answer_review") if isinstance(metadata, Mapping) else None
     review_failed = isinstance(review, Mapping) and review.get("verdict") not in {"ok", "rewritten", "cached", "not_required", "attribution_corrected"}
+    retrieval_decision = metadata.get("retrieval_decision") if isinstance(metadata, Mapping) else None
+    retrieval_missing = (not review_failed and isinstance(retrieval_decision, Mapping)
+            and retrieval_decision.get("status") == "no_relevant_evidence"
+            and retrieval_decision.get("attempted") is True
+            and retrieval_decision.get("reason") in {"empty", "below_threshold"})
+    # The semantic reviewer can find that high-ranked passages do not support
+    # this question. Its validated INSUFFICIENT result is distinct from a
+    # failed/unavailable judge, a rejected answer or an exhausted time budget.
+    review_insufficient = isinstance(review, Mapping) and review.get("verdict") == "insufficient"
+    if may_defer and (retrieval_missing or review_insufficient):
+        response = await chat_answer(conversation_pipeline=pipeline, knowledge_scope=True)
+        original_trace = metadata.get("answer_trace") if isinstance(metadata, Mapping) else None
+        fallback_trace = dict(original_trace) if isinstance(original_trace, Mapping) else {}
+        fallback_trace["fallback_reason"] = ("review_insufficient" if review_insufficient
+                                              else "retrieval_" + str(retrieval_decision["reason"]))
+        return _with_answer_trace(response, {**result, "metadata": {**metadata, "answer_trace": fallback_trace}})
     # 근거 확인 단계: 재정렬 1위 점수가 기준값 미만이면 생성한 답을 버린다(설정이 없으면 지금처럼 동작).
     # 기준값은 재정렬 모델의 점수 척도에 묶인다(KURE-Reranker-nano 3.28, 2026-11-13 측정). 상세분석만 잰 값이다.
     abstain_below = _abstain_below(pipeline, query.response_mode)
@@ -1657,11 +1693,11 @@ async def _execute_copilot_query(
             logger.info("copilot answer withheld: weak evidence request_id=%s top=%s threshold=%s redirected=%s",
                         query.request_id, max(scores) if scores else None, abstain_below, chat_redirected)
             technical = is_technical_question(query.prompt)
-            if chat_redirected and not technical:
-                return await chat_answer()  # 주제 밖 질문은 일부러 열어 둔다
-            if (not safety and mixed is None and allows_general_definition(query.prompt)
+            if chat_redirected and not technical and not review_failed:
+                return await chat_answer(knowledge_scope=True)  # 주제 밖 질문은 일부러 열어 둔다
+            if (not safety and mixed is None and not review_failed and allows_general_definition(query.prompt)
                     and callable(getattr(planned_pipeline, "converse_copilot", None))):
-                return await chat_answer(hedged=True)
+                return await chat_answer(hedged=True, knowledge_scope=True)
             # 위험 주제 질문은 근거가 약해도 그 종류의 고정 문장으로 답한다.
             withheld, withheld_citations = guard_answer(safety_class, "", []) if safety else (NO_EVIDENCE_ANSWER, [])
             if not safety and _DIZZY.search(query.prompt):
@@ -1669,7 +1705,7 @@ async def _execute_copilot_query(
                 withheld = DIZZY_NOTE + "\n" + withheld if query.response_mode == "quick" else withheld + "\n" + DIZZY_NOTE
             if mixed is not None:
                 withheld = mixed.text + "\n" + MIXED_NO_EVIDENCE
-            response = _success_response(query, request_started, answer=withheld, retrieval_used=True, citations=withheld_citations,
+            response = _success_response(query, request_started, answer=withheld, retrieval_used=bool(withheld_citations), citations=withheld_citations,
                                      degraded=review_failed,
                                      context_status="available" if session_summary or coating_advice_context or facts else "not_available",
                                      subject=mixed.subject if mixed is not None else None)
@@ -1684,6 +1720,8 @@ async def _execute_copilot_query(
         evidence=tuple(str(c.get("text", "")) for c in result.get("rag_chunks") or [] if isinstance(c, dict)))
     # 위험한 행동을 해도 되는지 묻는 안전 질문은 한국어 답을 옮기기 전에 검사한다(바꾼 문장도 기존 번역을 지난다).
     answer, citations = guard_answer(safety_class if safety else None, answer, list(parsed.citations))
+    if review_failed or parsed.repair_path in FAILED_REPAIR_PATHS:
+        citations = []
     caution = SAFETY_CLASSES[safety_class].caution if safety and safety_class in SAFETY_CLASSES else None
     if query.response_mode == "quick" and caution and answer.endswith("\n" + caution):
         # 빠른 안내는 앞 문장만 남는다. 덧붙인 안전 주의가 잘려 나가지 않게 앞에 둔다.
@@ -1705,7 +1743,8 @@ async def _execute_copilot_query(
         query,
         request_started,
         answer=answer,
-        retrieval_used=use_rag,
+        retrieval_used=bool(use_rag and citations and not review_failed
+                            and parsed.repair_path not in FAILED_REPAIR_PATHS),
         citations=citations,
         degraded=review_failed or parsed.repair_path in FAILED_REPAIR_PATHS or bool(result.get("deadline_hit", False)),
         coating_context=coating_advice_context,
@@ -1746,8 +1785,8 @@ async def execute_copilot_query(
         # These language pairs are more reliable from English than from Korean
         # on the existing 27B translator. Validate values and language on BOTH
         # legs; the Korean analysis and public response language stay unchanged.
-        if source == "ko" and target in {"ne", "my", "si", "km"}:
-            english = await _translate(text, "ko", "en")
+        if source in {"ko", "auto"} and target in {"ne", "my", "si", "km"}:
+            english = await _translate(text, source, "en")
             return await _translate(english, "en", target)
         if pipeline_provider is None:
             raise TranslationUnavailableError("Translation engine unavailable")
@@ -1760,34 +1799,72 @@ async def execute_copilot_query(
         return await to_thread.run_sync(guarded)
 
     try:
-        try:
-            normalized = await _translate(query.prompt, query.language, "ko")
-        except Exception:
-            # 질문 번역이 실패해도 원문만으로 손-팁 질문임을 알면 503 대신 고정 안전 답을 낸다(v3.4.4).
-            # 원문을 그대로 분석 질문으로 넘기면 손-팁으로 판정돼 모델 없이 고정 답이 되고, 그 답은 기존 답 번역을 지난다.
-            if classify(query.prompt) != "hand_tip":
-                raise
-            logger.warning("copilot question translation failed; hand-on-tip original request_id=%s", query.request_id)
+        translation_turns = await to_thread.run_sync(lambda: sequences.recent_query_turns(
+            query.session_id or "CHAT:" + query.user_id, limit=6, user_id=query.user_id, conversation_key=conversation_id))
+        translation_history = [{"role": "user", "content": turn["prompt"]} for turn in translation_turns]
+        translation_request = parse_translation_request(query.prompt, recent_turns=translation_history)
+        if translation_request is None:
+            response_language = requested_response_language(query.prompt) or response_language
+        glossary_context: dict[str, object] | None = None
+        if translation_request is not None:
+            # A translation request is not a request for a definition or a pose score.
+            # Preserve the original source text; translating the question first can
+            # erase the foreign term the user actually asked about.
             normalized = query.prompt
+        else:
+            try:
+                normalized = await _translate(query.prompt, query.language, "ko")
+            except Exception:
+                # 질문 번역 실패 때 원문으로 손-팁 위험임을 알면 기존 고정 안전 답을 유지한다.
+                if classify(query.prompt) != "hand_tip":
+                    raise
+                logger.warning("copilot question translation failed; hand-on-tip original request_id=%s", query.request_id)
+                normalized = query.prompt
         if len(normalized) > 8000:
             raise TranslationUnavailableError("Translated question exceeds analysis limit")
         analysis_query = query.model_copy(update={"prompt": normalized})
-        if query.language != "ko":
+        if query.language != "ko" and translation_request is None:
             # 질문 번역과 답 번역 가운데 어디가 틀렸는지 가릴 수 있게 분석에 쓴 한국어 질문을 남긴다.
             logger.info("copilot translated question request_id=%s language=%s ko=%r", query.request_id, query.language, normalized)
         # 위험 종류는 한국어 질문·원문으로 고르고, 짧은 후속 질문은 앞 턴에 저장한 종류를 이어받는다(다시 판정하지 않는다).
-        previous = await to_thread.run_sync(lambda: sequences.recent_query_turns(
-            query.session_id or "CHAT:" + query.user_id, limit=1, user_id=query.user_id, conversation_key=conversation_id))
-        previous_turn = previous[-1] if previous else {}
+        previous_turn = translation_turns[-1] if translation_turns else {}
         safety_class = hazard_class((normalized, query.prompt if query.language != "ko" else ""),
                                     previous_class=previous_turn.get("safety_class"), previous_text=previous_turn.get("prompt", ""))
-        response = await _execute_copilot_query(
-            analysis_query, pipeline_provider=pipeline_provider, pending_answers=pending_answers,
-            sequences=sequences, mcp_base_url=mcp_base_url, transport=transport,
-            started=request_started, reports=reports, sequence_engine=sequence_engine,
-            coating_engine=coating_engine, conversation_id=conversation_id,
-            original_prompt=query.prompt if query.language != "ko" else None, safety_class=safety_class,
-        )
+        if translation_request is not None:
+            response_language = translation_request.target_language
+            dictionary = lookup_translation_question(query.prompt, recent_turns=translation_history)
+            source_language = (translation_request.source_language
+                               or (dictionary.source_language if dictionary is not None else None)
+                               or "auto")
+            if dictionary is not None:
+                translated_answer = dictionary.answer
+                provenance = {"kind": dictionary.source_kind, **dictionary.provenance}
+                answer_source = "glossary"
+            else:
+                pairs, hints = translation_references(translation_request.source_text, source_language, response_language)
+                translated_answer = await _translate(translation_request.source_text, source_language, response_language)
+                target_key = re.sub(r"\s+", "", translated_answer).casefold()
+                applied = [hint for hint in [*pairs, *hints]
+                           if re.sub(r"\s+", "", hint["target"]).casefold() in target_key]
+                provenance = {"kind": "translation_hints", "reference_version": reference_version(), "applied": applied}
+                answer_source = "glossary" if applied else "conversation"
+            glossary_context = {"source_text": translation_request.source_text, "source_language": source_language,
+                                "target_language": response_language, "provenance": provenance}
+            # Explicit translation preserves the whole phrase and its measurements,
+            # including Chinese characters. Normal Korean-generation checks remain
+            # unchanged for all non-translation answers.
+            response = _success_response(analysis_query.model_copy(update={"response_mode": "detailed"}), request_started,
+                                         answer=translated_answer, retrieval_used=False, citations=[],
+                                         generated=dictionary is None)
+            response.headers[ANSWER_SOURCE_HEADER] = answer_source
+        else:
+            response = await _execute_copilot_query(
+                analysis_query, pipeline_provider=pipeline_provider, pending_answers=pending_answers,
+                sequences=sequences, mcp_base_url=mcp_base_url, transport=transport,
+                started=request_started, reports=reports, sequence_engine=sequence_engine,
+                coating_engine=coating_engine, conversation_id=conversation_id,
+                original_prompt=query.prompt if query.language != "ko" else None, safety_class=safety_class,
+            )
         if response.status_code != 200:
             return response
         # A semantic follow-up can recover a hazard that the current utterance
@@ -1796,9 +1873,10 @@ async def execute_copilot_query(
         body = json.loads(response.body)
         data = body["data"]
         # 분석 답은 항상 한국어다. 모델이 섞어 낸 한자는 번역 전에 뺀다.
-        korean_answer = without_hanzi(data["answer"], prompt=normalized)
+        korean_answer = without_hanzi(data["answer"], prompt=normalized) if translation_request is None else None
         try:
-            data["answer"] = await _translate(korean_answer, "ko", response_language)
+            if translation_request is None:
+                data["answer"] = await _translate(korean_answer, "ko", response_language)
         except Exception:
             # 고정 고압 안전 답만 미리 옮겨 둔 문장으로 낸다(v3.4.5, 운영 우즈베크어 답 번역이 늘 실패). 다른 답은 503.
             prepared = fixed_answer_translation(korean_answer, response_language)
@@ -1840,6 +1918,7 @@ async def execute_copilot_query(
                 "sequence_context": data.get("sequence_context"), "pose_context": data.get("pose_context"),
                 "coating_context": data.get("coating_context"), "recent_turns": recent_context,
                 "context_truncated": False,
+                **({"glossary_context": glossary_context} if glossary_context is not None else {}),
                 **({"answer_trace": response._copilot_answer_trace}
                    if hasattr(response, "_copilot_answer_trace") else {}),
             },
@@ -1849,7 +1928,7 @@ async def execute_copilot_query(
     headers = {ANSWER_SOURCE_HEADER: response.headers.get(ANSWER_SOURCE_HEADER, "analysis")}
     if isinstance(query_turn_id, int) and not isinstance(query_turn_id, bool):
         headers["X-Copilot-Query-Turn"] = str(query_turn_id)
-    if query.language != "ko":
+    if query.language != "ko" and translation_request is None:
         headers[ANALYSIS_PROMPT_HEADER] = analysis_prompt_header(normalized)
     return JSONResponse(status_code=200, content=body, headers=headers)
 
@@ -1885,12 +1964,16 @@ def create_copilot_router(
             "  - 새 시퀀스·대화·문맥·근거가 반영되면 다시 생성합니다. 새 질문의 처리 시간은 모델 부하에 따라 달라집니다.\n"
             "- **상세 분석 (`detailed`) · Qwen3.6-27B 모델**: 결론과 필요한 근거를 최대 2문장으로 답합니다. 인사말·반복 요약·긴 배경은 생략합니다.\n"
             "- **대화 맥락**: 일반 지식·일상 대화·계산·후속 질문도 처리합니다. 탭 선택이 질문 의도를 강제하지 않습니다. 도장 지식이 필요한 경우에 RAG를 사용합니다.\n"
+            "  - `use_rag=Y`는 검색을 허용합니다. 적합한 문서 근거가 없으면 대화 맥락을 반영해 LLM이 답합니다. 안전 기준·훈련 실측값은 추측으로 대체하지 않습니다.\n"
+            "  - `retrieval_used=true`와 `citations`는 답변에 실제 사용한 유효 NCS 근거를 뜻합니다. 검색을 시도했다는 의미가 아닙니다.\n"
+            "  - 응답 헤더 `X-Copilot-Answer-Source`: `documents`(RAG), `conversation`(LLM), `analysis`(분석 안내), `glossary`(용어집). AI 질문 화면에도 실제 출처를 표시합니다.\n"
             "  - 선택 헤더 `X-Copilot-Conversation`: 채팅 창 식별자(영문·숫자·`._:-`, 최대 128자). 사용자·훈련 세션과 함께 대화 이력을 분리합니다. 생략하면 기본 대화를 사용합니다. 인증 수단은 아닙니다.\n"
             "  - 선택 헤더 `X-Copilot-Source`: `motion-viewer`(3D VIEWER), `assistant-test`(TEST). DB 표시용 출처 힌트이며 훈련 대상 작업자 ID와 별개입니다.\n"
             "- **훈련 전 기준 순서**: `scenario_id`가 확인되고 등록된 기준이 있으면 시퀀스·리포트 없이도 Zone 작업 순서를 안내합니다. 공정이 불명확하면 등록된 스프레이·블라스팅 기준을 구분합니다.\n"
             "  - 기준 순서 조회는 실제 방문·준수율·도막 완료 판정이 아닙니다. 현재 다음 Zone 이동 질문은 저장된 시퀀스와 도막 완료 상태로 판단합니다.\n"
             "- **질문 언어**: `language`로 지정합니다. 생략 시 `ko`입니다.\n"
             "- **답변 언어**: `response_language`로 지정하며, 생략/null이면 질문 언어를 따릅니다.\n"
+            "  - 명시적인 용어 번역 질문은 검증된 용어집과 검토를 마친 TSB 용어를 우선 사용합니다. 없는 문구·문장 전체는 LLM으로 번역합니다. 용어집 근거는 NCS `citations`에 섞지 않습니다.\n"
             "- 외국어 질문을 한국어 분석·검색으로 연결하고 최종 `answer`를 요청 언어로 번역합니다.\n"
             "- 점수·단위·Zone 순서·구조화 context·citations는 유지합니다. 번역 처리 시간이 추가됩니다.\n"
             "  - 일부 언어는 번역 품질을 위해 기존 Qwen3.6-27B 모델을 사용합니다.\n"

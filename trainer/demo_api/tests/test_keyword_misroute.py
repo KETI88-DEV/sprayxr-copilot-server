@@ -12,6 +12,7 @@ from typing import Any
 import pytest
 
 from trainer.demo_api.sequence_store import SequenceStore
+from trainer.demo_api.tests.document_evidence import DocumentRecordingPipeline
 from trainer.demo_api.tests.test_scenario_reference_query import Pipeline as ReferencePipeline
 from trainer.demo_api.tests.test_scenario_reference_query import client as reference_client
 from trainer.demo_api.tests.test_scenario_reference_query import profile
@@ -46,6 +47,7 @@ def _data(arm: str) -> dict[str, Any]:
 
 
 def _ask(prompt: str, tab: str, arm: str = "arm", mode: str = "quick", **kwargs: Any) -> dict[str, Any]:
+    kwargs.setdefault("pipeline", DocumentRecordingPipeline())
     found = ask(prompt, tab=tab, mode=mode, data=_data(arm), **kwargs)
     if mode == "quick":
         assert "\n" not in found["answer"], found["answer"]
@@ -78,7 +80,7 @@ def test_a_how_a_rate_is_computed_goes_to_the_documents_with_the_record_numbers(
     앞 절은 기록 코드가 있는 지식 조각이라 빠른 안내도 기록 수치가 앞이다(검토 I2: 문서 답이 수치를 밀어내지 않게).
     """
     found = _ask("순서 준수율 45%는 어떻게 나온 거고, 숙련자들끼리는 순서가 얼마나 일치해?", "order", arm, mode,
-                 pipeline=RecordingPipeline(document="[답변] " + LONG_DOCUMENT))
+                 pipeline=DocumentRecordingPipeline(document="[답변] " + LONG_DOCUMENT))
     assert found["source"] == "documents" and found["calls"] == ["run"], found
     assert found["answer"].startswith("순서 준수율은 45.1%"), found["answer"]
     if mode == "detailed":
@@ -240,7 +242,7 @@ def test_e_pair_plan_questions_keep_the_registered_plan(tmp_path, prompt: str, m
 def test_f_quick_mixed_answer_starts_with_the_part_asked_first(arm: str, mode: str) -> None:
     """사례 18: "과도막은 왜 생겨? 내 기록에서도…"의 빠른 안내에 기록 문장만 남았다."""
     found = _ask("과도막은 왜 생겨? 내 기록에서도 과도막 난 데 있어?", "knowledge", arm, mode,
-                 pipeline=RecordingPipeline(document="[답변] " + LONG_DOCUMENT))
+                 pipeline=DocumentRecordingPipeline(document="[답변] " + LONG_DOCUMENT))
     assert found["source"] == "documents", found
     if mode == "quick":  # 문서 답이 한 줄을 채우면 기록 문장은 잘린다
         assert found["answer"] == LONG_DOCUMENT, found["answer"]
@@ -296,7 +298,7 @@ def test_review_i1_order_tab_never_claims_missing_arm_scoring(prompt: str, mode:
     ("문서엔 적정 이격거리가 30cm라던데 왜 나한테는 멀리 떨어지라고 해?", "knowledge", AT_24S, "Zone 1"),  # T45
 ])
 def test_review_i2_quick_record_question_with_a_knowledge_word_keeps_the_record_first(prompt: str, tab: str, playback: dict, record: str) -> None:
-    found = _ask(prompt, tab, playback=playback, pipeline=RecordingPipeline(document="[답변] " + LONG_DOCUMENT))
+    found = _ask(prompt, tab, playback=playback, pipeline=DocumentRecordingPipeline(document="[답변] " + LONG_DOCUMENT))
     assert found["source"] == "documents" and record in found["answer"] and LONG_DOCUMENT not in found["answer"], found["answer"]
 
 
@@ -307,7 +309,9 @@ def test_review_i3_first_fix_conjugations_share_one_answer_on_the_knowledge_tab(
 
 
 @pytest.mark.parametrize("mode", MODES)
-@pytest.mark.parametrize("prompt", ["저도막을 영어로하면?", "이 도료 겨울에도 쓸 수 있어?"])
+# Explicit translation now has its own glossary/target-language regressions;
+# this pair continues to test painting concepts against the document route.
+@pytest.mark.parametrize("prompt", ["저도막의 뜻은 뭐야?", "이 도료 겨울에도 쓸 수 있어?"])
 def test_review_i4_tab_or_word_markers_do_not_turn_off_documents_on_the_knowledge_tab(prompt: str, mode: str) -> None:
     found = _ask(prompt, "knowledge", mode=mode)
     assert found["source"] == "documents" and DOCUMENT in found["answer"], found
@@ -353,7 +357,7 @@ def test_review_i6_objection_with_a_claim_answers_the_claim_from_the_documents(m
     store = SequenceStore(":memory:")
     _ask("뭐부터 고쳐야 돼? 딱 하나만 콕 집어줘.", "knowledge", mode=mode, store=store)
     found = _ask("근데 가까이서 천천히 뿌리면 오히려 두꺼워지는 거 아냐? 아까 답 이상한데", "knowledge", mode=mode, store=store,
-                 pipeline=RecordingPipeline(plan=_CORRECTION))
+                 pipeline=DocumentRecordingPipeline(plan=_CORRECTION))
     assert found["source"] == "documents" and found["calls"] == ["plan", "run"], found
     assert "Zone 3부터" not in found["answer"] and DOCUMENT in found["answer"], found["answer"]
 
@@ -372,7 +376,7 @@ def test_review_i6_pair_objection_alone_answers_the_previous_question_again(obje
 def test_review_n2_a_claim_without_objection_words_is_not_an_objection(claim: str, mode: str) -> None:
     store = SequenceStore(":memory:")
     _ask("뭐부터 고쳐야 돼? 딱 하나만 콕 집어줘.", "knowledge", mode=mode, store=store)
-    found = _ask(claim, "knowledge", mode=mode, store=store, pipeline=RecordingPipeline(plan=_CORRECTION))
+    found = _ask(claim, "knowledge", mode=mode, store=store, pipeline=DocumentRecordingPipeline(plan=_CORRECTION))
     # 앞 질문(기록 우선순위)을 되풀이하지 않는다. 기록 낱말("속도")이 있으면 기록 답이 받는다.
     assert not found["answer"].startswith("Zone 3부터 보완"), found["answer"]
     assert found["source"] == ("documents" if claim.startswith("160") else "analysis"), found
@@ -397,3 +401,4 @@ def test_quick_knowledge_answer_gets_no_record_numbers_unless_the_question_point
         contexts[mode] = str([kwargs for name, kwargs in pipeline.kwargs if name == "run"])
     assert "검증된 최종 도막 비교 자료" in contexts["detailed"]  # 상세 분석은 그대로 넘긴다(시험이 실패할 수 있음을 보인다)
     assert "검증된 최종 도막 비교 자료" not in contexts["quick"], contexts["quick"][:400]
+

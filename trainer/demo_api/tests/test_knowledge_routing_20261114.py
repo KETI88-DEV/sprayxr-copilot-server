@@ -12,6 +12,7 @@ from trainer.demo_api.copilot_router import create_copilot_router
 from trainer.demo_api.dialogue import viewer_measurement_answer
 from trainer.demo_api.reference_order_query import is_reference_order_question
 from trainer.demo_api.sequence_store import SequenceStore
+from trainer.demo_api.tests.document_evidence import DocumentRecordingPipeline
 from trainer.demo_api.tests.viewer_record import AT_3S, RecordingPipeline, ask, context, payload
 
 
@@ -21,7 +22,7 @@ from trainer.demo_api.tests.viewer_record import AT_3S, RecordingPipeline, ask, 
     "스프레이 도장 전에 표면처리는 어떤 순서로 해?", "표면처리 절차 알려줘",
 ])
 def test_viewer_knowledge_questions_go_to_the_documents(tab: str, prompt: str) -> None:
-    result = ask(prompt, tab=tab)
+    result = ask(prompt, tab=tab, pipeline=DocumentRecordingPipeline())
     assert result["source"] == "documents" and result["calls"][-1] == "run", result["answer"]
     assert "전문가 기록은" not in result["answer"]
 

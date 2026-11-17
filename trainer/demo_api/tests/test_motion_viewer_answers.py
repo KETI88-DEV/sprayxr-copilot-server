@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from trainer.demo_api import dialogue, motion_viewer, pose_query, viewer_arm_pose
 from trainer.demo_api.copilot_router import create_copilot_router
 from trainer.demo_api.sequence_store import SequenceStore
+from trainer.demo_api.tests.document_evidence import supported_document_result
 from trainer.demo_api.viewer_context import sign_context, verify_context
 
 ZONES = {
@@ -68,7 +69,7 @@ class _Pipeline:
         return "대화 답입니다."
 
     def run(self, **kwargs: object) -> dict[str, Any]:
-        return {"response": "[답변] 문서 답입니다.", "rag_chunks": []}
+        return supported_document_result("[답변] 문서 답입니다.")
 
 
 def _ask(pipeline: _Pipeline, prompt: str, *, context: str, task: str = "knowledge_search", response_mode: str = "quick") -> dict[str, Any]:

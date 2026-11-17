@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from trainer.demo_api.copilot_router import create_copilot_router
 from trainer.demo_api.sequence_store import SequenceStore
+from trainer.demo_api.tests.document_evidence import supported_document_result
 from trainer.demo_api.viewer_context import sign_context
 
 
@@ -125,7 +126,7 @@ class HistoryBiasedPipeline(DialoguePipeline):
         return "적정 이격 거리 관련 데이터는 제공되지 않았습니다."
     def run(self, **kwargs):
         self.rag_calls.append(kwargs)
-        return {"response": "[답변] 적정 이격거리는 30~40cm입니다.", "rag_chunks": []}
+        return supported_document_result("[답변] 적정 이격거리는 30~40cm입니다.")
 
 
 def test_knowledge_question_after_pose_question_still_searches_documents():
@@ -194,3 +195,4 @@ def test_only_a_diagnostic_scaffold_conversation_is_rewritten_by_the_quick_model
     seen.clear()
     answer = c.post("/api/v1/copilot/query", json=body("야", response_mode="detailed")).json()["data"]
     assert answer["answer"] == "네, 말씀하세요." and seen == [None]  # 진단 틀이 없으면 27B 답 그대로
+
