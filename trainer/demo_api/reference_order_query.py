@@ -42,6 +42,9 @@ def is_reference_order_question(prompt: str) -> bool:
     # 표면처리·혼합 같은 공정 절차의 순서는 Zone 작업 순서가 아니라 문서 질문이다(2026-11-14 운영 q30).
     if re.search(_PROCEDURE, prompt) and not re.search(r"zone|존|구역|피도면|권장|추천|정석", prompt, re.I):
         return False
+    # 문서 속 그림·차트의 순서는 등록된 Zone 기준 순서가 아니다(2026-11-17 사례 14). Zone 계획 대상이 있으면 위 절차 줄처럼 남긴다.
+    if re.search(r"예시|그림|차트|견본|양식|계획서|마일스톤|이정표", prompt) and not re.search(r"zone|존|구역|피도면|권장|추천|정석", prompt, re.I):
+        return False
     order = re.search(r"순서|경로|order|route", prompt, re.I)
     target = re.search(r"작업|도장|피도면|구역|zone|존|블라스팅|스프레이|권장|추천|정석|기준|reference|recommend", prompt, re.I)
     return bool(order and target)
@@ -107,7 +110,8 @@ def current_next_answer(query, sequences, reports=None, *, sequence_engine=None,
     if (progress.available and progress.zone_id == request.zone_id and progress.status == "complete"
             and progress.recommendation == "move_next_zone"):
         scope["next_zone_id"] = progress.next_zone_id
-    return decision.text_guide or unknown, scope, progress.model_dump(mode="json")
+    guide = decision.text_guide if getattr(query, "response_mode", None) == "quick" else decision.detail_guide
+    return guide or decision.text_guide or unknown, scope, progress.model_dump(mode="json")
 
 
 def _processes(text: str) -> set[str]:
@@ -198,9 +202,11 @@ def reference_order_answer(engine, *, scenario_id: str | None, process: str | No
         lines.append(f"{label}: Zone " + " → ".join(str(zone) for zone in plan["flow"]))
     mode = learning_mode_from_scenario(scenario_id)
     label = f"학습 모드 {mode}" if mode is not None else f"시나리오 {scenario_id}"
-    answer = label + "의 현재 등록된 기준 작업 순서입니다.\n" + "\n".join("- " + line for line in lines)
+    if not detailed:  # 빠른 안내 한 줄(60자): 공정이 둘이면 화살표 목록은 공통 출구(quick_answer)가 앞부분과 개수로 줄인다
+        return label + " 등록 기준 순서: " + ", ".join(line.replace(": Zone", " Zone") for line in lines) + ".", context
+    answer = label + " 현재 등록된 기준 순서 — " + "; ".join(lines) + "."
     if detailed:
         counts = ", ".join(("스프레이" if plan["process"] == "spray" else "블라스팅")
                            + f" {plan['reference_session_count']}회" for plan in plans)
-        answer += f" 등록된 전문가 수행({counts})의 대표 경로이며 실제 수행·완료 여부를 뜻하지 않습니다."
+        answer += f" 전문가({counts}) 기준이며 실제 수행·완료 판정은 아닙니다."
     return answer, context

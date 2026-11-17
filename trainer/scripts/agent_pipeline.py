@@ -8,6 +8,7 @@ import contextvars
 import importlib
 import json
 import logging
+import math
 import os
 import re
 import sys
@@ -42,13 +43,17 @@ from trainer.scripts.answer_grammar import (
 )
 from trainer.scripts.live_response_contract import FAILED_REPAIR_PATHS, parse_knowledge_answer, retrieved_chunk_ids
 from trainer.scripts.quick_answer import TextCache, inference_key
+from trainer.scripts.answer_semantics import (
+    POLICY_VERSION, REVIEW_REGEX, SOURCE_CONTEXT_TEMPLATE, answer_system_prompt,
+    cacheable_candidate, evidence_trace, has_repetition_loop, review_answer, review_required, select_evidence,
+)
 from trainer.scripts.live_sequence_fallback import is_sequence_intent
 from trainer.scripts.live_coating_judgment import judge_dft_question
 from trainer.scripts.live_sequence_fallback import (
     LiveSequenceRequest,
     enforce_live_sequence_validation,
 )
-from trainer.scripts.generation_slot import GENERATION_SLOT, RAG_SLOT
+from trainer.scripts.generation_slot import GENERATION_SLOT, QUICK_GENERATION_SLOT, RAG_SLOT
 from trainer.scripts.openai_backend import (
     ContextLengthExceededError,
     GenerationCancelledError,
@@ -56,6 +61,7 @@ from trainer.scripts.openai_backend import (
     OpenAIChatBackend,
     StructuredOutputUnsupportedError,
     generation_cancel_scope,
+    generation_deadline_scope,
 )
 from trainer.scripts.prompt_budget import (
     PromptTokenCounter,
@@ -162,10 +168,11 @@ def fast_response_budget(config: dict[str, Any], requested: int | None) -> int:
     limit = ROUTE_MAX_TOKENS["fast"] if requested is None else max(1, min(int(requested), 1024))
     return max(1, min(configured, limit))
 
-# PR #8 등급 정의. 빠른 지식 답과 서빙 설정 fast_system(내부 채팅)이 같은 문장을 쓴다(시험이 묶는다).
+# Live generation uses session bounds instead of deriving an upper limit from a
+# single target. Legacy evaluation prompts remain configured independently.
 COATING_TERMS_NOTE: Final[str] = (
-    "용어 구별: 이 훈련의 판정에서 저도막은 칠한 곳의 평균 두께가 목표 두께에 못 미친 도막, "
-    "과도막은 칠한 곳의 평균 두께가 목표의 1.5배 이상인 도막이며, 그 사이는 정상입니다."
+    "용어 구별: 저도막은 해당 작업의 허용 하한보다 얇은 도막, 과도막은 허용 상한보다 두꺼운 도막입니다. "
+    "구체적인 범위는 제공된 세션 목표를 사용하고 목표만으로 상한 배수를 만들지 마세요."
 )
 
 _PROGRESS_INTERVAL_SEC: Final[float] = 3.0
@@ -482,10 +489,10 @@ class AgentPipeline:
         # Keep planner inputs small independently of the answer budget.
         counter = options.get("inference_counter") or self._prompt_token_counter()
         limit = options.get("inference_context_limit") or context_window(self.config)
-        while counter.count_messages(messages) + 128 > limit and recent_turns:
+        while counter.count_messages(messages) + 224 > limit and recent_turns:
             recent_turns = recent_turns[1:]
             messages = planning_messages(prompt, task_type=task_type, recent_turns=recent_turns, facts=facts)
-        return parse_plan(self._dialogue_completion(messages, max_tokens=96, answer_regex=plan_regex(), **options))
+        return parse_plan(self._dialogue_completion(messages, max_tokens=192, answer_regex=plan_regex(), **options))
 
     def converse_copilot(self, prompt, *, recent_turns, facts, response_mode, simulator_context="", **options):
         from trainer.demo_api.dialogue import conversation_messages
@@ -846,10 +853,11 @@ class AgentPipeline:
         inference_counter: Any = None,
         inference_prompt_budget: int | None = None,
         visible_evidence: list[dict[str, Any]] | None = None,
+        context_template_override: str | None = None,
     ) -> list[dict[str, str]]:
         if system_prompt is None:
             system_prompt = str(self.config.get("prompt", {}).get("system", ""))
-        context_template = str(
+        context_template = context_template_override or str(
             self.config.get("prompt", {}).get(
                 "context_template",
                 "아래는 관련 문서입니다. 이 문서만을 근거로 답변하세요.\n\n{context}",
@@ -1290,6 +1298,9 @@ class AgentPipeline:
         inference_counter: Any = None,
         inference_context_limit: int | None = None,
         compact_analysis: bool = False,
+        answer_question: str | None = None,
+        defer_without_evidence: bool = False,
+        evidence_score_threshold: float | None = None,
     ) -> dict[str, Any]:
         """Skip retrieval with ``use_rag=False``; opt into brief live analysis with ``compact_analysis``.
 
@@ -1327,6 +1338,43 @@ class AgentPipeline:
             }
             for r in rag_results
         ]
+        retrieved_candidate_count = len(rag_chunks)
+        if defer_without_evidence and use_rag and route == "fast":
+            # Live Query can return to contextual conversation before spending a
+            # generation call. This is not an evaluation/default-run policy.
+            nonempty = [chunk for chunk in rag_chunks if str(chunk.get("text", "")).strip()]
+            reason = "empty" if not nonempty else None
+            if nonempty and evidence_score_threshold is not None:
+                scores = [chunk.get("rerank_score") for chunk in nonempty]
+                if (not isinstance(evidence_score_threshold, (int, float))
+                        or isinstance(evidence_score_threshold, bool) or not math.isfinite(evidence_score_threshold)
+                        or any(not isinstance(score, (int, float)) or isinstance(score, bool)
+                               or not math.isfinite(score) for score in scores)):
+                    # A failed/malformed retrieval response is not evidence that
+                    # the question has no relevant documents.
+                    raise ValueError("Live evidence score is unavailable or invalid")
+                if max(scores) < evidence_score_threshold:
+                    reason = "below_threshold"
+            if reason is not None:
+                return {
+                    "request_id": active_request_id, "session_id": active_session_id,
+                    "response": "", "rag_chunks": [], "citations": [], "tool_calls": [],
+                    "instruction": instruction, "route": route, "timing": rag_timing,
+                    "deadline_hit": False,
+                    "metadata": {
+                        "latency_ms": int((time.monotonic() - t0) * 1000),
+                        "retrieval_decision": {"status": "no_relevant_evidence", "reason": reason, "attempted": True},
+                        "answer_trace": {
+                            "policy_version": POLICY_VERSION, "question": answer_question or instruction,
+                            "retrieval_query": retrieval_instruction or instruction,
+                            "retrieved_candidates": retrieved_candidate_count,
+                            "selected_evidence": evidence_trace(nonempty),
+                            "review": {"verdict": "not_required", "reason": "retrieval_" + reason},
+                        },
+                    },
+                }
+        if answer_question is not None and route == "fast":
+            rag_chunks = select_evidence(rag_chunks, limit=4)
 
         summary = self.session_context.summarize_previous(active_session_id) if use_pipeline_history else ""
 
@@ -1352,6 +1400,8 @@ class AgentPipeline:
         deadline_hit = False
         synthesis_ms = 0
         quick_cache_hit = False
+        semantic_trace: dict[str, Any] | None = None
+        semantic_review: dict[str, Any] | None = None
         if route == "fast":
             fast_system = str(self.config.get("prompt", {}).get("fast_system", "")).strip()
             if compact_analysis:
@@ -1393,6 +1443,11 @@ class AgentPipeline:
                     "필수 안전 조건이나 요청한 조치만 필요하면 짧은 두 번째 문장으로 설명하세요. "
                     "문서 근거와 측정값·단위·적용 조건은 그대로 유지하고, 기존 [답변]/[근거] 형식을 지키세요."
                 )
+            if answer_question is not None:
+                # One shared request contract replaces accumulated definition-
+                # and mode-specific live instructions. The original utterance is
+                # retained; retrieval vocabulary must not redefine its intent.
+                fast_system = answer_system_prompt(detailed=compact_analysis, has_evidence=bool(evidence))
             visible_evidence: list[dict[str, Any]] = []
             messages = self._build_messages(
                 instruction=generation_instruction or instruction,
@@ -1400,6 +1455,7 @@ class AgentPipeline:
                 rag_chunks=evidence,
                 session_context_summary=summary,
                 system_prompt=fast_system or None,
+                **({"context_template_override": SOURCE_CONTEXT_TEMPLATE} if answer_question is not None else {}),
                 **({"inference_counter": counter, "inference_prompt_budget": token_budget,
                     "visible_evidence": visible_evidence} if inference_backend is not None or compact_analysis else {}),
             )
@@ -1423,6 +1479,7 @@ class AgentPipeline:
             if quick_cache_scope is not None and cache is None:
                 self._quick_answer_cache = cache = TextCache(capacity=128, ttl=120)
             cache_key = (inference_key(quick_cache_scope, session_id, id(inference_backend if inference_backend is not None else getattr(self, "model", None)),
+                                       POLICY_VERSION if answer_question is not None else None, answer_question,
                                        messages, fast_max_tokens, rag_chunks)
                          if quick_cache_scope is not None else None)
             cached = cache.get(cache_key) if cache_key is not None else None
@@ -1438,11 +1495,84 @@ class AgentPipeline:
                 max_tokens=fast_max_tokens,
                 **({"inference_backend": inference_backend} if inference_backend is not None else {}),
             )
+            initial_response = raw_response
+            semantic_cacheable = True
+            if answer_question is not None:
+                def semantic_candidate_valid(text):
+                    parsed_candidate = parse_knowledge_answer(text, retrieved_chunk_ids(evidence))
+                    return (parsed_candidate.repair_path not in FAILED_REPAIR_PATHS
+                            and bool(re.search(r"[가-힣A-Za-z0-9]", parsed_candidate.body))
+                            and not has_repetition_loop(parsed_candidate.body))
+                semantic_review = {"verdict": "cached" if cached is not None else "not_required",
+                                   "retries": 0, "calls": 0, "latency_ms": 0, "cacheable": True}
+                if cached is None and (review_required(answer_question, instruction=generation_instruction or instruction)
+                                       or not semantic_candidate_valid(raw_response)):
+                    selected_backend = inference_backend if inference_backend is not None else self.model
+                    quick_runtime = getattr(self, "quick_query_runtime", None)
+                    reviewer = getattr(quick_runtime, "backend", selected_backend)
+
+                    def bounded_completion(review_messages, timeout, *, backend, tokens, regex=None):
+                        temporary = None
+                        if isinstance(backend, OpenAIChatBackend):
+                            # Isolate operation deadlines and deterministic review
+                            # sampling without mutating either resident backend.
+                            temporary = OpenAIChatBackend(replace(
+                                backend.settings, request_timeout_sec=max(.05, timeout),
+                                connect_timeout_sec=min(backend.settings.connect_timeout_sec, max(.05, timeout)),
+                            ))
+                            backend = temporary
+                        try:
+                            with generation_deadline_scope(timeout):
+                                return self._generate_direct(review_messages, enable_thinking=False,
+                                    max_tokens=tokens, answer_regex=regex, inference_backend=backend)
+                        finally:
+                            if temporary is not None:
+                                temporary.close()
+
+                    def complete_review(review_messages, timeout):
+                        separate_slot = reviewer is not selected_backend
+                        acquired = False
+                        if separate_slot:
+                            acquired = QUICK_GENERATION_SLOT.acquire(timeout=min(.15, timeout))
+                            if not acquired:
+                                raise TimeoutError("Quick semantic review slot busy")
+                        try:
+                            return bounded_completion(review_messages, timeout, backend=reviewer, tokens=80, regex=REVIEW_REGEX)
+                        finally:
+                            if acquired:
+                                QUICK_GENERATION_SLOT.release()
+
+                    def regenerate_answer(repair, timeout):
+                        repair_messages = messages + [
+                            {"role":"assistant", "content":initial_response},
+                            {"role":"user", "content":repair + "\n[현재 질문]\n" + answer_question},
+                        ]
+                        if counter.count_messages(repair_messages) + fast_max_tokens + 32 > max_model_len:
+                            raise ValueError("Answer repair exceeds model context")
+                        return bounded_completion(repair_messages, timeout, backend=selected_backend,
+                                                  tokens=fast_max_tokens, regex=constraint)
+
+                    reviewed = review_answer(answer_question, generation_instruction or instruction, raw_response, evidence,
+                        complete=complete_review, regenerate=regenerate_answer, require_evidence=use_rag,
+                        budget_seconds=7.0 if compact_analysis else 5.0, valid_candidate=semantic_candidate_valid)
+                    raw_response = reviewed.text
+                    semantic_cacheable = reviewed.cacheable
+                    semantic_review = {"verdict":reviewed.verdict, "retries":reviewed.retries, "calls":reviewed.calls,
+                                       "latency_ms":reviewed.elapsed_ms, "cacheable":reviewed.cacheable, "reason":reviewed.reason}
+                semantic_cacheable = semantic_cacheable and cacheable_candidate(raw_response)
+                semantic_review['cacheable'] = semantic_cacheable
+                semantic_trace = {"policy_version":POLICY_VERSION, "question":answer_question[:1000],
+                    "retrieval_query":str(retrieval_instruction or instruction)[:1000],
+                    "retrieved_candidates":retrieved_candidate_count, "selected_evidence":evidence_trace(evidence),
+                    "review":semantic_review, "initial_answer":initial_response[:1000], "final_answer":raw_response[:1000]}
+                logger.info("copilot semantic answer request_id=%s verdict=%s retries=%s evidence=%s",
+                            active_request_id, semantic_review['verdict'], semantic_review['retries'],
+                            ','.join(str(c.get('chunk_id','')) for c in evidence))
             if cache_key is not None and cached is None:
                 parsed = parse_knowledge_answer(raw_response, retrieved_chunk_ids(evidence))
                 # Never retain failed, incomplete or invalidly cited generations.
                 shape_ok = re.fullmatch(knowledge_answer_regex(has_evidence=bool(evidence)), raw_response.strip()) is not None
-                if (shape_ok and parsed.repair_path not in FAILED_REPAIR_PATHS and not parsed.dropped
+                if (semantic_cacheable and cacheable_candidate(raw_response) and shape_ok and parsed.repair_path not in FAILED_REPAIR_PATHS and not parsed.dropped
                         and parsed.body.endswith((".", "?", "!", "。"))):
                     cache.put(cache_key, raw_response)
             final_no_think, thinking = self._strip_think_blocks(raw_response)
@@ -1503,7 +1633,8 @@ class AgentPipeline:
 
         latency_ms = int((time.monotonic() - t0) * 1000)
         tool_sections = self._assemble_tool_sections(tool_calls)
-        citations = self._extract_citations(response_text, rag_chunks)
+        citations = (list(parse_knowledge_answer(response_text, retrieved_chunk_ids(rag_chunks)).citations)
+                     if answer_question is not None else self._extract_citations(response_text, rag_chunks))
         if bool(self.config.get("llm", {}).get("append_citations", False)):
             response_text = self._append_citations(response_text, citations)
         text_guide = self._build_text_guide(response_text, trainee_profile)
@@ -1552,6 +1683,9 @@ class AgentPipeline:
 
         if quick_cache_scope is not None:
             result["metadata"]["quick_cache_hit"] = quick_cache_hit
+        if semantic_trace is not None:
+            result["metadata"]["answer_trace"] = semantic_trace
+            result["metadata"]["answer_review"] = semantic_review
 
         if use_pipeline_history:
             self.session_context.update(

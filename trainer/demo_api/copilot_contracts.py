@@ -81,7 +81,7 @@ class CopilotQueryRequest(StrictModel):
         description=(
             "답변 수준입니다. 생략하면 `quick`(빠른 안내)으로 처리합니다.\n\n"
             "- `quick`: **빠른 안내 · Qwen3-8B 모델**\n"
-            "  - 질문의 핵심을 한 문장으로 답하며, 필수 안전 조건이 있을 때만 짧은 두 번째 문장을 덧붙입니다.\n"
+            "  - 질문의 답을 줄바꿈 없는 한글 60자 이내 한 줄로 답합니다. 전체 목록·근거는 `detailed`에서 확인합니다.\n"
             "- `detailed`: **상세 분석 · Qwen3.6-27B 모델**\n"
             "  - 기존 27B 빠른 답변 수준으로 핵심 답변·근거·조치를 간결하게 분석합니다.\n"
             "  - 전체 최대 2문장으로 설명하며 인사말·반복 요약·불필요한 배경은 생략합니다.\n\n"
@@ -103,7 +103,8 @@ class CopilotQueryRequest(StrictModel):
     )] = None
     use_rag: Annotated[RagUsage, Field(
         description=(
-            "지식 검색(RAG) 사용 여부입니다. Y는 관련 지식 검색을 사용하고 N은 검색 없이 현재 문맥만 사용합니다. "
+            "지식 검색(RAG) 허용 여부입니다. Y는 관련 문서 검색을 허용하고 N은 문서 검색을 사용하지 않습니다. "
+            "검색을 허용하거나 시도한 것과 실제 답변에 문서 근거를 사용한 것은 다르며, 실제 사용 여부는 retrieval_used로 확인합니다. "
             "Y/N만 허용하며 소문자 y/n도 입력할 수 있습니다. 생략하면 Y로 처리합니다."
         ),
         examples=["Y"],
@@ -131,7 +132,10 @@ class CopilotQueryData(StrictModel):
     latency_ms: Annotated[int, Field(ge=0)]
     # v2.5 §9.2 예시와 §9.3이 요구하는 필드. 정상 완료는 false, 제한 시간 내 생성이
     # 끝나지 않아 축약 응답을 낼 때 true다.
-    degraded: bool
+    degraded: Annotated[bool, Field(description=(
+        "답변 생성·형식·의미 검토를 충분히 완료하지 못했거나 근거가 부족해 답변을 보류한 경우 true입니다. "
+        "true이면 answer에 표시된 한계를 확인하고, 해당 답변을 확정된 분석 결과로 사용하지 않습니다."
+    ))]
     answer: str
     language: QueryLanguage = "ko"
     response_language: QueryLanguage = "ko"
@@ -140,8 +144,14 @@ class CopilotQueryData(StrictModel):
     sequence_context: dict[str, object] | None
     coating_context: dict[str, object] | None
     pose_context: dict[str, object] | None
-    retrieval_used: bool
-    citations: list[str]
+    retrieval_used: Annotated[bool, Field(description=(
+        "질문에 적합한 NCS 등 등록 문서 근거가 실제 답변을 뒷받침한 경우에만 true입니다. "
+        "검색 시도 여부가 아닙니다. 문서 근거를 쓰지 않은 일반 LLM·문맥 답변과 직접 용어집 번역은 false입니다."
+    ))]
+    citations: Annotated[list[str], Field(description=(
+        "실제 답변에 사용한 문서 근거의 식별자 목록입니다. 검색 후보 전체를 뜻하지 않습니다. "
+        "문서 근거를 쓰지 않은 일반 LLM·문맥 답변과 직접 용어집 번역은 빈 배열이며, 용어집 출처를 NCS 인용으로 섞지 않습니다."
+    ))]
 
 
 class CopilotResponse(StrictModel):

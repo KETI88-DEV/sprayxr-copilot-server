@@ -506,6 +506,27 @@ class SessionCompleteData(StrictModel):
     height_map_image_bytes: int | None
 
 
+class FirstZoneGuidance(StrictModel):
+    """등록된 전문가 순서의 시작 구역. 실전·Unit 기준이 없으면 구역을 추정하지 않는다."""
+
+    analysis_status: Literal["available", "not_available"]
+    reason_code: str | None = None
+    process: Literal["spray", "blasting"]
+    zone_id: Annotated[str | None, Field(
+        description="등록된 전문가 작업 순서의 첫 Zone ID입니다. 기준이 없으면 null입니다.",
+        examples=["1"],
+    )] = None
+    recommended_flow: list[str] = Field(
+        default_factory=list, description="등록된 실측 전문가 작업 순서입니다. 기준이 없으면 빈 목록입니다.",
+        examples=[["1", "2", "3"]],
+    )
+    reference_basis: Literal["measured_expert_runs"] | None = None
+    message: Annotated[str, Field(
+        description="시작 구역 또는 기준 미등록을 알리는 짧은 안내입니다.",
+        examples=["Zone 1에서 시작하세요."],
+    )]
+
+
 class SessionStateData(StrictModel):
     """`/sessions/start`·`/sessions/end`의 `data`."""
 
@@ -521,5 +542,16 @@ class SessionStateData(StrictModel):
     )]
     target_thickness_min_um: float | None = None
     target_thickness_max_um: float | None = None
-    first_zone_id: str | None = None
-    first_zone_guidance: dict[str, Any] | None = None
+    first_zone_id: Annotated[str | None, Field(
+        description="훈련 시작 시 안내하는 첫 Zone ID입니다. 등록된 기준이 없는 실전·Unit 등은 null입니다.",
+        examples=["1"],
+    )] = None
+    first_zone_guidance: FirstZoneGuidance | None = Field(
+        default=None, description="첫 Zone과 전문가 순서 안내입니다. 세션 종료 응답은 null입니다.",
+    )
+
+
+class SessionResponse(ApiResponse):
+    """세션 시작·종료의 구체적인 응답 구조. 기존 봉투와 JSON 필드를 유지한다."""
+
+    data: SessionStateData

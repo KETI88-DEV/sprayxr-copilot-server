@@ -31,7 +31,9 @@ import json
 import logging
 import os
 import re
+import socket
 import threading
+import time
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -52,6 +54,9 @@ _PROBE_TIMEOUT_SEC: Final[float] = 2.0
 
 _cancel_event: contextvars.ContextVar[threading.Event | None] = contextvars.ContextVar(
     "openai_backend_cancel_event", default=None
+)
+_generation_deadline: contextvars.ContextVar[float | None] = contextvars.ContextVar(
+    "openai_backend_generation_deadline", default=None
 )
 
 
@@ -114,6 +119,22 @@ def generation_cancel_scope(event: threading.Event) -> Iterator[None]:
         yield
     finally:
         _cancel_event.reset(token)
+
+
+@contextmanager
+def generation_deadline_scope(timeout_sec: float) -> Iterator[None]:
+    """Bound a whole completion, including a continuously active token stream.
+
+    Nested operations inherit the earliest deadline. Consumer cancellation stays
+    independent, so an optional review timeout never cancels the parent query.
+    """
+    previous = _generation_deadline.get()
+    deadline = time.monotonic() + max(0.0, timeout_sec)
+    token = _generation_deadline.set(min(previous, deadline) if previous is not None else deadline)
+    try:
+        yield
+    finally:
+        _generation_deadline.reset(token)
 
 
 @dataclass(frozen=True)
@@ -261,16 +282,61 @@ class OpenAIChatBackend:
     ) -> str:
         """Returns the generated text; raises an :class:`OpenAIBackendError` subclass on failure."""
         cancel = _cancel_event.get()
-        if cancel is not None and cancel.is_set():
-            raise GenerationCancelledError("cancelled before the request was sent")
+        deadline = _generation_deadline.get()
+        expired = threading.Event()
+        active_response: list[httpx.Response] = []
+        response_lock = threading.Lock()
+
+        def check_cancelled() -> None:
+            if expired.is_set() or (deadline is not None and time.monotonic() >= deadline):
+                raise OpenAIBackendTimeoutError("model generation exceeded its total operation deadline")
+            if cancel is not None and cancel.is_set():
+                raise GenerationCancelledError("consumer left during generation")
+
+        def expire() -> None:
+            expired.set()
+            with response_lock:
+                response = active_response[0] if active_response else None
+            if response is None:
+                return
+            # Closing/shutting down the active stream wakes a blocked socket read
+            # and makes vLLM abort the request, rather than leaving generation in
+            # the background after the API has stopped waiting.
+            network = response.extensions.get("network_stream")
+            try:
+                connection = network.get_extra_info("socket") if network is not None else None
+                if connection is not None:
+                    connection.shutdown(socket.SHUT_RDWR)
+            except (AttributeError, OSError):
+                pass
+            try:
+                response.close()
+            except Exception as exc:
+                logger.debug("deadline stream close failed: %s", type(exc).__name__)
+
+        check_cancelled()
 
         payload = self.build_payload(
             messages, max_tokens=max_tokens, enable_thinking=enable_thinking, answer_regex=answer_regex
         )
         parts: list[str] = []
         finish_reason: str | None = None
+        timer = None
+        request_options: dict[str, Any] = {}
+        if deadline is not None:
+            remaining = max(.001, deadline - time.monotonic())
+            request_options["timeout"] = httpx.Timeout(
+                remaining, connect=min(remaining, self.settings.connect_timeout_sec),
+                pool=min(remaining, self.settings.connect_timeout_sec),
+            )
+            timer = threading.Timer(remaining, expire)
+            timer.daemon = True
+            timer.start()
         try:
-            with self._client.stream("POST", "/chat/completions", json=payload) as response:
+            with self._client.stream("POST", "/chat/completions", json=payload, **request_options) as response:
+                with response_lock:
+                    active_response.append(response)
+                check_cancelled()
                 if response.status_code != 200:
                     body = response.read().decode("utf-8", errors="replace")
                     message = _error_message(body)
@@ -284,9 +350,7 @@ class OpenAIChatBackend:
                         )
                     raise _status_error(response.status_code, message)
                 for line in response.iter_lines():
-                    if cancel is not None and cancel.is_set():
-                        # Leaving the ``with`` closes the connection mid-body; vLLM aborts the request.
-                        raise GenerationCancelledError("consumer left during generation")
+                    check_cancelled()
                     if not line.startswith("data:"):
                         continue
                     data = line[len("data:") :].strip()
@@ -300,9 +364,18 @@ class OpenAIChatBackend:
                         if choice.get("finish_reason"):
                             finish_reason = str(choice["finish_reason"])
         except httpx.TimeoutException as exc:
+            check_cancelled()
             raise OpenAIBackendTimeoutError(f"model server timed out: {type(exc).__name__}") from exc
         except httpx.TransportError as exc:
+            check_cancelled()
             raise OpenAIBackendUnavailableError(f"model server unreachable: {type(exc).__name__}") from exc
+        except RuntimeError:
+            check_cancelled()
+            raise
+        finally:
+            if timer is not None:
+                timer.cancel()
+        check_cancelled()
 
         if finish_reason is None:
             raise OpenAIBackendUnavailableError("model server stream ended without a finish_reason")

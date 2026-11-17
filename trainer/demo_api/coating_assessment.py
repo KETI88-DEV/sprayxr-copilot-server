@@ -73,7 +73,7 @@ BAND_LABELS: Final[tuple[str, ...]] = (
     f"{DISPLAY_BAND_FACTORS[-1] * 100:g}% 이상",
 )
 OVER_PHRASE: Final[str] = "정상범위 상한 초과"
-RULE_NOTE: Final[str] = "등급은 칠한 곳의 평균 두께로 정합니다(하한 미만은 저도막, 하한~상한은 정상, 상한 초과는 과도막). 기본 정상범위는 160~200µm입니다."
+RULE_NOTE: Final[str] = "칠한 곳 평균 기준: 하한 미만 저도막·하한~상한 정상(경계 포함)·상한 초과 과도막. 기본 160~200µm."
 GRADE_SHORT_LABELS: Final[dict[str, str]] = {
     "below": "하한 미만", "normal": "정상", "above": "상한 초과", "none": "미도장"}
 
@@ -345,7 +345,7 @@ def adjustment_sentence(adjustments: Sequence[Mapping[str, Any]]) -> str | None:
     words = ", ".join(
         ADJUSTMENT_WORDS[(item["variable"], item["direction"])]
         for item in sorted(adjustments, key=lambda item: item["priority"]))
-    return f"조절 후보: {words}. 원인으로 확정된 것은 아닙니다."
+    return f"조절 후보: {words}(원인 미확정)."
 
 
 def distribution_sentence(six_band_counts: Mapping[str, int]) -> str | None:

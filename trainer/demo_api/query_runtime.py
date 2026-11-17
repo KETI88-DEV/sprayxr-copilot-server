@@ -113,27 +113,61 @@ def translation_pipeline_for(pipeline: Any, source: str, target: str) -> Any:
     return pipeline if isinstance(pipeline, _QuickPipeline) else select_query_pipeline(parent, "quick")
 
 
-def retrieval_question(question: str, *, context: str = "") -> str:
+def retrieval_question(question: str, *, context: str = "", expand_terms: bool = True) -> str:
     """Expand training terms to the vocabulary in manuals; never add numeric advice."""
+    # The router renders model advice as one JSON-quoted physical line. Remove
+    # that data block before reading relation, history or process selectors;
+    # an interpretation must not change those through its words or headings.
+    context = re.sub(r"(?m)^\[후속 질문 해석[^\n]*\]\r?\n[^\n]*(?:\r?\n모델의 임시 해석[^\n]*)?", "", context)
     query = question
+    # The detailed (27B) route passes expand_terms=False: the KURE index contains these terms
+    # verbatim ("저도막 결함의 원인 중 하나는 중첩 부족"), and replacing them hid those passages
+    # (2026-11-17). Quick guidance re-applies this function in _QuickPipeline.run and keeps the table.
     terms = {
         "저도막": "도막 두께 부족 규정 두께 미달 얇은 도막",
         "과도막": "도막 두께 과다 과도하게 두꺼운 도막",
         "이격거리": "분사 거리 피도체와 건 사이 거리",
         "오버랩": "중첩 overlap 겹침",
-    }
+    } if expand_terms else {}
     for term, expansion in terms.items():
         query = query.replace(term, expansion)
-    # Ambiguous follow-ups still need the last known subject, not the UI metadata.
-    if re.match(r"그럼|그때|그거|그러면|왜\s*그래", question) and "[최근 대화]" in context:
+    # Carry the user's technical subject across an elliptical extra condition.
+    # Previous AI text is deliberately excluded from search: it may be the very
+    # explanation being corrected. An explicitly new subject starts fresh.
+    def follows_up(text: str) -> bool:
+        return bool(re.match(r"그럼|그때|그거|그러면|왜\s*그래|그런데|아니|그래도", text)
+                    or re.search(r"했는데|한데|인데|일텐데|다는데|맞았|적절했|일정했|맞지\s*않", text))
+    # A self-contained topic followed by its own question is a topic switch,
+    # including topics unknown to this application. Do not enumerate domain or
+    # general-knowledge nouns here.
+    explicit_topic = bool(re.match(
+        r"(?:(?:그럼|그러면|그런데)\s*)?[^?!.]{2,50}?(?:은|는|이란|란|에\s*대해)\s*"
+        r"(?:뭐|무엇|어떤|어떻게|왜|어디|언제|누구|설명|알려|[?？]\s*$)", question))
+    semantic_followup = '[문서 후속 질문]' in context
+    new_topic = '[새 주제 질문]' in context or '[새주제질문]' in context
+    previous: list[str] = []
+    # An interpretation is unverified model advice, not an independent source
+    # of the user's subject. Its presence must never suppress original turns.
+    if not new_topic and (semantic_followup or (follows_up(question) and not explicit_topic)) and "[최근 대화]" in context:
         previous = re.findall(r"사용자: (.+)", context.split("[최근 대화]", 1)[1])
         if previous:
-            query = previous[-1][:300] + " " + query
+            # Keep bounded user exchanges in time order instead of guessing
+            # which condition is the subject or trusting a rewritten subject.
+            # This retains the original problem and the intermediate exclusions.
+            prefix = " ".join(value[:200] for value in previous[-6:])
+            query = prefix + " " + query
     current_context = context.split("[최근 대화]", 1)[0]
-    if re.search(r"블라스팅|blasting", question, re.I) or (
-        not re.search(r"스프레이|spray", question, re.I)
-        and re.search(r"블라스팅|blasting", current_context, re.I)
-    ):
+    def explicit_process(text: str) -> str | None:
+        if re.search(r"블라스팅|blasting", text, re.I):
+            return "blasting"
+        return "spray" if re.search(r"스프레이|spray", text, re.I) else None
+    # Current user wording wins; an actual same-topic user exchange can supply
+    # an omitted process. Only then consult current context with advice removed.
+    process = explicit_process(question)
+    if process is None and previous:
+        process = next((found for text in reversed(previous) if (found := explicit_process(text))), None)
+    process = process or explicit_process(current_context)
+    if process == "blasting":
         return "선박 블라스팅 노즐 작업 " + query
     return "선박 도장 스프레이 건 작업 " + query
 

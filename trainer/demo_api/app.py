@@ -25,6 +25,7 @@ from trainer.demo_api import __version__, chat_service as chat_service_mod
 from trainer.demo_api.access_control import AccessControlMiddleware, OperatorCredentials
 from trainer.demo_api.api_call_log import ApiCallStore, ApiCallLoggingMiddleware
 from trainer.demo_api.api_docs import api_docs_document, create_api_docs_router
+from trainer.demo_api.maintenance import create_maintenance_router
 from trainer.demo_api.query_chat import create_query_chat_router
 from trainer.demo_api.chat_service import ChatService, build_default_live_runner
 from trainer.demo_api.contracts import ChatRequest
@@ -48,6 +49,7 @@ from trainer.demo_api.v1_router import create_v1_router
 from trainer.demo_api.v1_store import V1Store
 from trainer.demo_api.monitor import MonitorRecorder
 from trainer.demo_api.monitor_api import create_monitor_router
+from trainer.demo_api.openapi_output_docs import add_openapi_output_overviews
 from trainer.demo_api.motion_viewer import create_motion_viewer_router
 from trainer.demo_api.readiness import evaluate_live_readiness
 from trainer.demo_api.sequence import default_snapshot, session_snapshot
@@ -105,7 +107,7 @@ VR·Replay 시뮬레이터의 **연동 규격과 API 호출·응답**을 확인�
 - **시퀀스 입력:** TSB는 Trigger ON부터 OFF까지의 **현재 시퀀스 텍스트 데이터**와 해당 시퀀스가 도포한 영역의 히트맵 크롭을 전송합니다.
 - **누적 히트맵:** `cur_sequence_heatmap`의 크롭 내 픽셀값은 해당 시점 피도면의 **전체 누적 두께**입니다. 서버는 이전 값에 더하지 않고 최신 절대값으로 갱신합니다.
 - **속도 상태:** `slow / ok / fast`, 이격거리 상태: `near / ok / far`입니다.
-- **음성 입력:** WAV PCM16, 16 kHz, mono, 최대 15초입니다. STT 뒤 기존 Query와 같은 답변 경로를 사용합니다.
+- **음성 입력:** WAV PCM16·mono·최대 15초·6MiB입니다. 8~192kHz 입력을 서버에서 16kHz로 자동 변환한 뒤 STT·기존 Query로 처리합니다.
 - **공통 응답:** `status / code / message / data`이며, 성공은 `status=SUCCESS`, 검증 실패는 주로 HTTP 422입니다.
 - **멱등성:** 동일한 `session_id + sequence_id`와 동일 본문을 재전송하면 중복 저장하지 않습니다.
 - **충돌 처리:** 같은 ID의 내용이 다르거나 새 시퀀스가 이미 처리한 시퀀스보다 이전 순서이면 HTTP 409를 반환합니다. 같은 내용의 정상 재시도는 기존 결과를 반환합니다.
@@ -545,6 +547,7 @@ def create_app(
         docs_url=None,
     )
     app.include_router(create_api_docs_router())
+    app.include_router(create_maintenance_router())
 
     @app.get("/docs", include_in_schema=False)
     async def swagger_docs(request: Request) -> HTMLResponse:
@@ -731,6 +734,7 @@ def create_app(
         schema = default_openapi()
         _add_openapi_input_overviews(schema)
         add_test_input_overviews(schema)
+        add_openapi_output_overviews(schema)
         schema.setdefault("components", {}).setdefault("securitySchemes", {})["TSBApiKey"] = {
             "type": "apiKey", "in": "header", "name": "X-API-Key",
             "description": "서버에서 API 키를 활성화한 경우 사용합니다. JSON 본문은 변경하지 않습니다.",

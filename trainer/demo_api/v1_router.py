@@ -38,6 +38,7 @@ from trainer.demo_api.v1_contracts import (
     SequenceReport,
     SessionCompleteData,
     SessionEndRequest,
+    SessionResponse,
     SessionStartRequest,
     SessionStateData,
     UserCreateRequest,
@@ -72,9 +73,9 @@ def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _ok(data: Any) -> JSONResponse:
+def _ok(data: Any, *, message: str = "Operation completed successfully") -> JSONResponse:
     return JSONResponse(
-        status_code=200, content=ApiResponse(data=data).model_dump(mode="json")
+        status_code=200, content=ApiResponse(data=data, message=message).model_dump(mode="json")
     )
 
 
@@ -203,6 +204,8 @@ def _briefing(
     pose_report: dict[str, Any],
     sequence_report: dict[str, Any] | None,
     coating_report: dict[str, Any] | None = None,
+    counts: dict[str, int] | None = None,
+    coating_zones: list[dict[str, Any]] | None = None,
 ) -> str | None:
     """Create a fast, deterministic narrative from available structured evidence."""
     parts: list[str] = []
@@ -210,26 +213,75 @@ def _briefing(
         adherence = sequence_report.get("adherence_rate")
         deviations = sequence_report.get("deviation_count")
         if isinstance(adherence, (int, float)):
-            parts.append(f"전문가 기준 Zone 순서 준수율은 {adherence * 100:.1f}%이며 순서 이탈은 {deviations or 0}회입니다.")
+            deviation = f"(이탈 {deviations}회)" if isinstance(deviations, int) else ""
+            parts.append(f"순서 준수 {adherence * 100:.1f}%{deviation}.")
         direction = sequence_report.get("direction_adherence_rate")
+        if direction is None and isinstance(sequence_report.get("direction_summary"), dict):
+            direction = sequence_report["direction_summary"].get("direction_adherence_rate")
         if isinstance(direction, (int, float)):
-            parts.append(f"도포 방향 준수율은 {direction * 100:.1f}%입니다.")
+            parts.append(f"방향 준수 {direction * 100:.1f}%.")
     if pose_report.get("analysis_status") == "available":
         similarity = pose_report.get("average_similarity_score")
+        scope: list[str] = []
+        evaluated = pose_report.get("evaluated_sequence_count")
+        if isinstance(evaluated, int):
+            scope.append(f"평가 {evaluated}회")
+        for key, label in (("not_scored", "미판정"), ("no_zone", "Zone 미지정")):
+            excluded = (counts or {}).get(key)
+            if isinstance(excluded, int) and excluded > 0:
+                scope.append(f"{label} {excluded}회 제외")
         if isinstance(similarity, (int, float)):
-            parts.append(f"숙련 작업자 대비 자세 평균 유사도는 {similarity * 100:.1f}%입니다.")
-        if pose_report.get("guideline"):
-            parts.append(str(pose_report["guideline"]))
-    if not parts:
-        return None
-    if coating_report and coating_report.get("analysis_status") == "available" and coating_report.get("guideline"):
-        parts.append(str(coating_report["guideline"]))
-    elif coating_report and coating_report.get("guideline"):
-        # 분석은 돌았지만 판정하지 못했다 — 그 사유를 그대로 말한다.
-        parts.append(f"도막은 분석하지 못했습니다: {coating_report['guideline']}")
-    else:
-        parts.append("이 서버에는 도막 판정에 필요한 Zone 기준 자료가 설정되지 않아 도막 평가를 내지 못했습니다.")
-    return " ".join(parts)
+            denominator = f"({', '.join(scope)})" if scope else ""
+            parts.append(f"자세 유사도 {similarity * 100:.1f}%{denominator}.")
+        corrections = [row for row in pose_report.get("priority_corrections") or []
+                       if isinstance(row, dict) and row.get("correction_guidance")]
+        limited_count = pose_report.get("limited_sequence_count")
+        limited = (pose_report.get("confidence") == "limited"
+                   or isinstance(limited_count, int) and limited_count > 0
+                   or "comparison_scope_limited" in (pose_report.get("reason_codes") or []))
+        if limited:
+            count_note = f"(제한 {limited_count}회)" if isinstance(limited_count, int) and limited_count > 0 else ""
+            parts.append(f"자세 참고용·비교 제한{count_note}.")
+            if not corrections:
+                parts.append("교정 없음은 정상 보장이 아닙니다.")
+        if corrections:
+            top = min(corrections, key=lambda row: row.get("priority", 999))
+            zone = f"Zone {top['zone_id']} " if top.get("zone_id") is not None else ""
+            parts.append(f"우선 교정: {zone}{top['correction_guidance']}")
+    if coating_report and coating_report.get("analysis_status") == "available":
+        band = coating_report.get("normal_band_um")
+        normal = (f"(정상 {band[0]:g}~{band[1]:g}µm)" if isinstance(band, list) and len(band) == 2
+                  and all(isinstance(value, (int, float)) for value in band) else "")
+        worst = coating_report.get("worst_zones") or []
+        if worst and isinstance(worst[0], dict):
+            top = worst[0]
+            status = {"under_app": "저도막", "over_app": "과도막"}.get(top.get("status"), "")
+            value = top.get("thickness_um")
+            thickness = f" {value:g}µm" if isinstance(value, (int, float)) else ""
+            parts.append(f"도막 Zone {top['zone_id']} {status}{thickness}{normal}.")
+            if top.get("action"):
+                parts.append(str(top["action"]))
+        else:
+            parts.append(f"도막 분석 완료{normal}.")
+        unpainted = [row for row in coating_zones or []
+                     if row.get("unpainted_fraction") == 1 and row.get("zone_id") is not None]
+        if unpainted:
+            labels = [f"Map {row['map_num']}·Zone {row['zone_id']}" if row.get("map_num") is not None
+                      else f"Zone {row['zone_id']}" for row in unpainted[:3]]
+            more = " 등" if len(unpainted) > len(labels) else ""
+            parts.append(f"미도장 {len(unpainted)}개({', '.join(labels)}{more}).")
+    elif parts:
+        reason = coating_report.get("reason_code") if coating_report else None
+        note = {
+            "reference_unavailable": "도막 미평가(Zone 기준 없음).",
+            "coating_reference_unavailable": "도막 미평가(Zone 기준 없음).",
+            "reference_context_unavailable": "도막 미평가(공정·콘텐츠 기준 없음).",
+            "heatmap_unavailable": "도막 미평가(높이맵 없음).",
+            "coating_not_applicable": "도막 평가 제외(블라스팅).",
+            "coating_analysis_failed": "도막 분석 실패.",
+        }.get(reason, "도막 미평가.")
+        parts.append(note)
+    return " ".join(parts) if parts else None
 
 
 def create_v1_router(
@@ -315,7 +367,8 @@ def create_v1_router(
                     # 질의(pose_recomm)가 구역 답에 쓰는 구역별 도막 판정. 리포트 본문에는 싣지 않는다.
                     "coating_zones": coating.zones if coating is not None else [],
                     "llm_briefing": _briefing(
-                        pose_report=pose_report, sequence_report=sequence_report, coating_report=coating_report
+                        pose_report=pose_report, sequence_report=sequence_report, coating_report=coating_report,
+                        counts=result.counts, coating_zones=coating.zones if coating is not None else None,
                     ),
                     "counts": result.counts,
                     "sequences": result.sequences,
@@ -336,7 +389,7 @@ def create_v1_router(
     # --- 1. 세션 관리 (p.1-3) ---------------------------------------------
 
     @router.post(
-        "/sessions/start", response_model=ApiResponse, tags=["1. 세션 관리"],
+        "/sessions/start", response_model=SessionResponse, tags=["1. 세션 관리"],
         summary="1-1. 훈련 세션 시작",
         description=(
             "VR 훈련 콘텐츠가 시작될 때 한 번 호출합니다. user_id가 처음이면 사용자를 생성하고, "
@@ -345,7 +398,8 @@ def create_v1_router(
             "경계값을 포함한 정상범위를 지정할 수 있습니다. 기존 target_thickness_um 단일 값만 보내면 "
             "그 값부터 1.25배까지 정상으로 봅니다(160 → 160~200). 모두 생략해도 동작합니다. "
             "응답 data.first_zone_id·first_zone_guidance가 선택 공정·콘텐츠의 등록된 전문가 첫 Zone을 안내합니다. "
-            "tool_type은 생략하면 spray_gun이며 블라스팅 시작 안내에는 blasting_gun을 보냅니다."
+            "tool_type은 생략하면 spray_gun이며 블라스팅 시작 안내에는 blasting_gun을 보냅니다. "
+            "실전·Unit 등 등록된 순서 기준이 없는 콘텐츠는 첫 Zone을 추정하지 않고 null을 반환합니다."
         ),
     )
     async def sessions_start(body: SessionStartRequest) -> JSONResponse:
@@ -391,8 +445,8 @@ def create_v1_router(
             "process": process, "zone_id": first_zone,
             "recommended_flow": plan["flow"] if plan else [],
             "reference_basis": "measured_expert_runs" if first_zone else None,
-            "message": (f"Zone {first_zone}부터 작업을 시작하세요." if first_zone else
-                        "이 콘텐츠의 전문가 작업 순서 기준이 아직 등록되어 있지 않습니다."),
+            "message": (f"Zone {first_zone}에서 시작하세요." if first_zone else
+                        "등록된 작업 순서 기준이 없습니다."),
         }
         lower, upper = coating_assessment.resolve_band(row.target_thickness_um, **coating_assessment.session_limits(row))
         return _ok(
@@ -403,11 +457,12 @@ def create_v1_router(
                 target_thickness_um=row.target_thickness_um,
                 target_thickness_min_um=lower, target_thickness_max_um=upper,
                 first_zone_id=first_zone, first_zone_guidance=guidance,
-            ).model_dump(mode="json")
+            ).model_dump(mode="json"),
+            message=f"훈련 시작. {guidance['message']}",
         )
 
     @router.post(
-        "/sessions/end", response_model=ApiResponse, tags=["1. 세션 관리"],
+        "/sessions/end", response_model=SessionResponse, tags=["1. 세션 관리"],
         summary="1-2. 훈련 세션 마감",
         description="사용자가 콘텐츠를 정상 종료하거나 중도 종료했을 때 호출합니다. 시작 API에서 사용한 session_id를 그대로 보내며, 서버는 종료 시각과 COMPLETED 상태를 기록합니다.",
     )

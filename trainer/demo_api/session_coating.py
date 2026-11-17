@@ -140,7 +140,7 @@ def _expert_sentence(comparison: Mapping[str, Any]) -> str:
         found = [row["zone_id"] for row in comparison["zones"] if row["status"] == key]
         if found:
             parts.append(f"{EXPERT_WORDS[key]} {len(found)}개({'·'.join(found)}번)")
-    return f" 참고로 전문가 최종 도막과 비교하면 {comparison['zone_count']}개 구역 중 {', '.join(parts)}입니다(보정 전 두께 기준)."
+    return f" 전문가 최종 도막 대비: {comparison['zone_count']}개 구역, {', '.join(parts)}(보정 전 두께 기준)."
 
 
 def _guideline(
@@ -156,19 +156,19 @@ def _guideline(
             parts.append(f"{label} {len(found)}개({'·'.join(found)}번)")
     basis = coating_assessment.basis_label(summary["target_thickness_um"], summary["target_basis"])
     lower, upper = summary["normal_band_um"]
-    text = (f"{basis}, 정상범위 {lower:g}~{upper:g}µm(경계 포함)으로 {len(zones)}개 구역을 판정했습니다: "
-            f"{', '.join(parts)}입니다. 등급은 칠한 곳의 평균 두께로 정하며 하한 미만은 저도막, 상한 초과는 과도막입니다.")
+    text = (f"{basis}, 정상범위 {lower:g}~{upper:g}µm(경계 포함): {len(zones)}개 구역, "
+            f"{', '.join(parts)}. 칠한 곳 평균 기준(하한 미만 저도막·상한 초과 과도막).")
     if worst:
         top = worst[0]
         text += (
-            f" 가장 벗어난 곳은 {top['zone_id']}번 구역({'저도막' if top['status'] == 'under_app' else '과도막'}, "
-            f"칠한 곳 평균 {coating_assessment.mean_text(top['thickness_um'], top['target_thickness_um'])}µm)입니다."
+            f" 최대 이탈: {top['zone_id']}번 구역({'저도막' if top['status'] == 'under_app' else '과도막'}, "
+            f"칠한 곳 평균 {coating_assessment.mean_text(top['thickness_um'], top['target_thickness_um'])}µm)."
         )
     if summary["painted_mean_um"] is not None:
         # 손대지 않은 구역도 미도장으로 들어간 값이라 범위를 "판정한 구역 전체"라고 밝힌다.
         text += (
-            f" 판정한 구역 전체의 칠한 곳 평균은 {summary['painted_mean_um']:.0f}µm, "
-            f"칠하지 않은 면적은 {summary['unpainted_fraction'] * 100:.0f}%입니다."
+            f" 판정 구역 전체: 칠한 곳 평균 {summary['painted_mean_um']:.0f}µm, "
+            f"미도장 {summary['unpainted_fraction'] * 100:.0f}%."
         )
     return text + _expert_sentence(expert)
 

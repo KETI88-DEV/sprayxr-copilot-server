@@ -17,7 +17,7 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 
 from trainer.demo_api.coating_assessment import SIX_BAND_KEYS, resolve_band
-from trainer.demo_api.pose_query import josa
+from trainer.demo_api.pose_query import josa, wants_full_list
 from trainer.demo_api.copilot_intent import is_coating_advice_question, is_general_painting_knowledge
 from trainer.demo_api.reference_order_query import is_current_next_question, is_knowledge_ask
 from trainer.demo_api.sequence_analysis import recommend_next
@@ -73,7 +73,7 @@ def _gate_rows(coating: Mapping[str, Any] | None) -> list[Mapping[str, Any]] | N
 
 
 _LISTED = 3  # 글로 적는 Zone 수. 나머지는 도막 탭에서 본다(2026-11-14 운영 답이 13곳을 다 늘어놓아 읽을 수 없었다).
-_VIEWER_FOOTER = "전체 목록은 도막 탭에서 확인하세요. 세션이 끝났을 때의 도막 기준입니다."
+_VIEWER_FOOTER = "최종 도막 기준이며 재생 시점의 도막은 아닙니다."
 
 
 def _num(value: object) -> bool:
@@ -140,13 +140,13 @@ def _area_text(row: Mapping[str, Any], *, first: bool) -> str:
     return f"Zone {row['zone_id']}({'정상 범위 안 ' if first else ''}{area:g}%)"
 
 
-def _zone_list(zones: list[str]) -> str:
-    shown = zones[:_LISTED]
+def _zone_list(zones: list[str], *, show_all: bool = False) -> str:
+    shown = zones if show_all else zones[:_LISTED]
     return "Zone " + "·".join(shown) + (f" 외 {len(zones) - len(shown)}곳" if len(zones) > len(shown) else "")
 
 
 def gate_lines(rows: list[Mapping[str, Any]] | None, *, order: list[str], visited: set[str] | None = None,
-               footer: str = _VIEWER_FOOTER, lead: str = "") -> tuple[list[str], dict[str, list[str]]]:
+               footer: str = _VIEWER_FOOTER, lead: str = "", show_all: bool = False) -> tuple[list[str], dict[str, list[str]]]:
     """최종 도막 게이트 요약 줄과 Zone 목록. 보완 Zone 수, 정상 범위 안 면적이 가장 낮은 3곳, 과도막·완료 Zone.
 
     완료 전(needs_more)이라도 범위 밖 면적이 주로 상한 초과인 Zone은 보완(더 칠하기)으로 묶지 않는다(`shortfall_side`).
@@ -177,17 +177,18 @@ def gate_lines(rows: list[Mapping[str, Any]] | None, *, order: list[str], visite
     elif touch:
         lines.append(f"{total}개 Zone 가운데 {len(touch)}개는 보완이 필요합니다.")
     if touch:
-        lowest = sorted(touch, key=lambda row: float(row.get("coverage_percent") or 0.0))[:_LISTED]
-        lines.append("가장 부족한 곳은 " + ", ".join(_area_text(row, first=index == 0) for index, row in enumerate(lowest)) + "입니다.")
+        ranked = sorted(touch, key=lambda row: float(row.get("coverage_percent") or 0.0))
+        lowest = ranked if show_all else ranked[:_LISTED]
+        lines.append(("보완할 곳은 " if show_all else "가장 부족한 곳은 ") + ", ".join(_area_text(row, first=index == 0) for index, row in enumerate(lowest)) + "입니다.")
     if over_band:
-        lines.append(f"완료 전이지만 정상 범위를 벗어난 면적이 주로 상한 초과인 Zone은 {_zone_list([str(row['zone_id']) for row in over_band])}입니다.")
+        lines.append(f"상한 초과 면적이 주된 미완료 구역: {_zone_list([str(row['zone_id']) for row in over_band], show_all=show_all)}.")
     if unknown:
-        lines.append(f"정상 범위 안 면적이 95%에 못 미친 다른 Zone은 {_zone_list([str(row['zone_id']) for row in unknown])}입니다.")
+        lines.append(f"정상 범위 안 면적이 95% 미만인 다른 구역: {_zone_list([str(row['zone_id']) for row in unknown], show_all=show_all)}.")
     if groups["overpaint_risk"]:
-        lines.append(f"과도막이라 더 칠하면 안 되는 Zone은 {_zone_list([str(row['zone_id']) for row in groups['overpaint_risk']])}입니다.")
+        lines.append(f"과도막이라 더 칠하면 안 되는 구역: {_zone_list([str(row['zone_id']) for row in groups['overpaint_risk']], show_all=show_all)}.")
     done = [str(row["zone_id"]) for row in groups["complete"]]
     if done:
-        lines.append(f"완료한 Zone은 {_zone_list(done)}입니다.")
+        lines.append(f"완료: {_zone_list(done, show_all=show_all)}.")
     lines.append(footer)
     return lines, {"touch_up_zone_ids": [str(row["zone_id"]) for row in touch],
                    "over_band_zone_ids": [str(row["zone_id"]) for row in over_band],
@@ -195,15 +196,16 @@ def gate_lines(rows: list[Mapping[str, Any]] | None, *, order: list[str], visite
                    "complete_zone_ids": done}
 
 
-def status_answer(claims: Mapping[str, Any], coating: Mapping[str, Any] | None) -> tuple[str, dict[str, Any]]:
+def status_answer(claims: Mapping[str, Any], coating: Mapping[str, Any] | None, *, prompt: str = "") -> tuple[str, dict[str, Any]]:
     """미방문 / 방문했으나 보완 필요 / 완료. 미방문 줄은 미방문 Zone이 있을 때만 쓴다."""
     reference, actual = _zones(claims.get("reference_order")), _zones(claims.get("actual_order"))
     rows = _gate_rows(coating)
     known = list(dict.fromkeys([*reference, *(str(row["zone_id"]) for row in rows or [])]))
     unvisited = [zone for zone in known if zone not in actual]
-    lines = [f"아직 칠하지 않은 Zone은 {_zone_list(unvisited)}입니다."] if unvisited else []
+    show_all = wants_full_list(prompt, subject=r"Zone|존|구역")
+    lines = [f"아직 칠하지 않은 구역: {_zone_list(unvisited, show_all=show_all)}."] if unvisited else []
     lead = f"{len(known)}개 Zone을 모두 " if known and not unvisited else ""
-    gate, groups = gate_lines(rows, order=reference or actual, visited=set(actual), lead=lead)
+    gate, groups = gate_lines(rows, order=reference or actual, visited=set(actual), lead=lead, show_all=show_all)
     if not known and not rows:
         lines.append("권장 기준 Zone 자료가 없어 칠하지 않은 Zone은 판단할 수 없습니다.")
     return "\n".join([*lines, *gate]), {"scope": "viewer_progress", "analysis_status": "available",
@@ -226,7 +228,7 @@ def _painted(zones: list[str]) -> str:
     return josa("Zone " + "·".join(zones), "을", "를")
 
 
-def next_answer(claims: Mapping[str, Any], coating: Mapping[str, Any] | None, playback: Mapping[str, Any]) -> tuple[str, dict[str, Any]]:
+def next_answer(claims: Mapping[str, Any], coating: Mapping[str, Any] | None, playback: Mapping[str, Any], *, prompt: str = "") -> tuple[str, dict[str, Any]]:
     reference, actual = _zones(claims.get("reference_order")), _zones(claims.get("actual_order"))
     current = str(playback["zone_id"]) if playback.get("zone_id") is not None else None
     current = None if current is None or current.strip().lower() in _NO_ZONE else current  # "-1"은 Zone 사이 이동 중
@@ -239,15 +241,15 @@ def next_answer(claims: Mapping[str, Any], coating: Mapping[str, Any] | None, pl
     where = f"재생 위치({place}, {seconds:.1f}초)" if seconds is not None else f"재생 위치({place})"
     scope: dict[str, Any] = {"scope": "viewer_progress", "analysis_status": "available", "current_zone_id": current,
                              "visited_zone_ids": visited, "next_zone_id": None, "basis": None}
-    unknown_gate = "도막은 세션이 끝났을 때 값만 있어서 이 시점에 다 칠해졌는지는 알 수 없습니다."
+    unknown_gate = "최종 도막만 있어 현재 완료 여부는 알 수 없습니다."
     remaining = [zone for zone in reference if zone not in visited]
     if not reference:
-        done = f"{where}까지 {_painted(visited)} 칠했습니다. " if visited else ""
-        return done + "권장 순서 기준이 없어 다음 Zone을 정할 수 없습니다. " + unknown_gate, scope
+        return "권장 순서 기준이 없어 다음 Zone을 정할 수 없습니다. " + unknown_gate, scope
     if not remaining:
-        gate, groups = gate_lines(_gate_rows(coating), order=reference or actual)
+        gate, groups = gate_lines(_gate_rows(coating), order=reference or actual,
+                                  show_all=wants_full_list(prompt, subject=r"Zone|존|구역"))
         scope.update(groups)
-        head = f"{where}까지 권장 Zone을 모두 한 번 이상 칠했습니다. {unknown_gate}"
+        head = f"권장 Zone을 모두 한 번 이상 칠했습니다. {unknown_gate}"
         return "\n".join([head, *gate]), scope
     transitions = {(str(item["from"]), str(item["to"])): int(item["count"])
                    for item in claims.get("expert_transitions") or [] if isinstance(item, Mapping)}
@@ -259,18 +261,15 @@ def next_answer(claims: Mapping[str, Any], coating: Mapping[str, Any] | None, pl
                   key=lambda zone: reference.index(zone) if zone in reference else len(reference))[:3] if count else []
     scope.update(next_zone_id=choice, basis="expert_transition" if count else "recommended_flow",
                  next_zone_candidates=tied if len(tied) > 1 else [choice])
-    done = f"{where}까지 {_painted(visited)} 칠했습니다. " if visited else f"{where}까지 칠한 Zone이 없습니다. "
     if len(tied) > 1:
         names = [f"Zone {zone}" for zone in tied]
         options = ", ".join(names[:-2] + [josa(names[-2], "이나", "나") + " " + names[-1]])
         places = {2: "두 곳이", 3: "세 곳이"}[len(tied)]
-        lines = [done + f"다음은 {josa(options, '을', '를')} 권합니다. "
-                 f"전문가 기록에서 Zone {current} 다음으로 {places} 똑같이 많았습니다({total}회 중 각 {count}회)."]
+        lines = [f"다음은 {josa(options, '을', '를')} 권합니다(현재 {place}, 전문가 {total}회 중 각 {count}회로 동률)."]
     else:
-        reason = (f"전문가 기록에서 Zone {current} 다음으로 많이 간 곳 가운데 아직 칠하지 않은 Zone입니다({total}회 중 {count}회)."
-                  if count else "권장 순서에서 아직 칠하지 않은 첫 Zone입니다.")
-        lines = [done + f"다음은 {josa(f'Zone {choice}', '을', '를')} 권합니다. {reason}"]
-    if current in actual and actual.index(current) + 1 < len(actual) and actual[actual.index(current) + 1] not in visited:
+        reason = f"현재 {place}, 전문가 {total}회 중 {count}회" if count else f"현재 {place}, 권장 순서의 첫 미방문 구역"
+        lines = [f"다음은 {josa(f'Zone {choice}', '을', '를')} 권합니다({reason})."]
+    if re.search(r"실제|기록", prompt) and current in actual and actual.index(current) + 1 < len(actual) and actual[actual.index(current) + 1] not in visited:
         lines.append(f"이 기록에서는 실제로 {josa(f'Zone {actual[actual.index(current) + 1]}', '을', '를')} 다음에 처음 칠했습니다.")
     lines.append(unknown_gate)
     return "\n".join(lines), scope
@@ -286,6 +285,6 @@ def viewer_progress_answer(value: str | None, prompt: str, kind: str) -> tuple[s
     payload, claims = found
     coating = parse_viewer_coating_context(value, "knowledge_search")
     if kind == "status":
-        return status_answer(claims, coating)
+        return status_answer(claims, coating, prompt=prompt)
     playback = payload.get("playback_context") if isinstance(payload.get("playback_context"), Mapping) else {}
-    return next_answer(claims, coating, playback)
+    return next_answer(claims, coating, playback, prompt=prompt)

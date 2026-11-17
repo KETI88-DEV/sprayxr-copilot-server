@@ -29,9 +29,11 @@ from trainer.demo_api.sequence_analysis import SequenceAnalysisEngine
 from trainer.demo_api.v1_store import V1Store
 from trainer.demo_api.speech_to_text import (
     InvalidAudioError,
+    MAX_WAV_BYTES,
     SpeechToText,
     SpeechToTextUnavailableError,
     VoiceLanguage,
+    normalize_wav,
     validate_wav,
 )
 from trainer.demo_api.voice_contracts import VoiceCopilotResponse, VoiceQueryData
@@ -42,11 +44,13 @@ VOICE_QUERY_PATH = "/api/v1/copilot/query-voice"
 TEST_TEXT_QUERY_PATH = "/api/v1/test/query"
 TEST_VOICE_QUERY_PATH = "/api/v1/test/query-voice"
 TEST_VOICE_ASSET_PATH = "/api/v1/test/assets/query-voice-ko.wav"
-MAX_UPLOAD_BYTES = 1_048_576
+MAX_UPLOAD_BYTES = MAX_WAV_BYTES
 SpeechToTextProvider = Callable[[], SpeechToText]
 _AUDIO_ERRORS = {
     "audio_must_be_mono": "Invalid audio: WAV must be mono (1 channel)",
-    "audio_must_be_16khz": "Invalid audio: WAV sample rate must be 16000 Hz",
+    "audio_sample_rate_out_of_range": "Invalid audio: WAV sample rate must be 8000 to 192000 Hz",
+    "audio_too_large": "Invalid audio: WAV must be 6 MiB or smaller",
+    "invalid_wav_metadata": "Invalid audio: WAV header and PCM metadata do not agree",
     "audio_must_be_pcm16": "Invalid audio: WAV must contain uncompressed 16-bit PCM samples",
     "audio_is_empty": "Invalid audio: WAV contains no samples",
     "audio_is_truncated": "Invalid audio: WAV sample data is truncated; upload the complete recording",
@@ -250,15 +254,16 @@ def create_voice_router(
             return error_response(413, "Audio file is too large")
 
         try:
-            validated = validate_wav(payload)
+            validated = await to_thread.run_sync(validate_wav, payload)
         except InvalidAudioError as exc:
             return error_response(422, _AUDIO_ERRORS.get(str(exc), "Invalid audio"))
 
         stt_started = time.monotonic()
         try:
+            normalized = await to_thread.run_sync(normalize_wav, validated)
             speech_engine = await to_thread.run_sync(stt_provider)
             transcript_result = await to_thread.run_sync(
-                lambda: speech_engine.transcribe(validated.audio, language)
+                lambda: speech_engine.transcribe(normalized.audio, language)
             )
         except SpeechToTextUnavailableError:
             logger.warning("voice query STT unavailable request_id=%s language=%s", request_id, language)
@@ -323,11 +328,11 @@ def create_voice_router(
         response_model=VoiceCopilotResponse,
         tags=["3. AI Co-Pilot 질의"],
         summary="3-2. VR 음성 Co-Pilot 질의",
-        description="HMD에서 녹음한 WAV를 STT로 변환한 뒤 기존 Query와 동일한 경로로 답변합니다. WAV PCM16·16kHz·mono·15초 이하만 허용합니다. language는 음성 인식 언어이며, response_language를 생략하면 같은 언어로 답합니다. 답변은 텍스트이고 TTS 음성 생성은 포함하지 않습니다. 422는 WAV 형식·길이·인식된 발화 유무를 확인하세요. 503의 Speech recognition은 STT 단계, Model/Query translation은 인식 이후 답변 단계의 실패입니다. 선택 헤더 X-Copilot-Conversation으로 텍스트 Query와 같은 대화 이력을 이어갈 수 있습니다.",
+        description="HMD에서 녹음한 WAV를 STT로 변환한 뒤 기존 Query와 동일한 경로로 답변합니다. WAV PCM16·mono·15초 이하, 6MiB까지 허용합니다. 입력 샘플레이트는 8~192kHz이며 44.1kHz·48kHz 등은 서버에서 16kHz로 자동 변환합니다. 이미 16kHz인 음성은 그대로 사용합니다. 샘플레이트는 WAV 헤더에서 읽으므로 별도 입력값이 필요 없습니다. stt_latency_ms에는 변환·음성 인식 시간이 포함됩니다. language는 음성 인식 언어이며, response_language를 생략하면 같은 언어로 답합니다. 답변은 텍스트이고 TTS 음성 생성은 포함하지 않습니다. 413은 파일 크기, 422는 WAV 형식·샘플레이트·길이·인식된 발화 유무를 확인하세요. 503의 Speech recognition은 변환·STT 단계, Model/Query translation은 인식 이후 답변 단계의 실패입니다. 선택 헤더 X-Copilot-Conversation으로 텍스트 Query와 같은 대화 이력을 이어갈 수 있습니다.",
     )
     async def voice_query(
         request: Request,
-        audio: Annotated[UploadFile, File(description="WAV, PCM 16-bit, 16 kHz, mono, maximum 15 seconds")],
+        audio: Annotated[UploadFile, File(description="WAV PCM16·mono·최대 15초·6MiB. 8~192kHz 입력을 서버에서 16kHz로 자동 변환합니다(예: 44.1kHz, 48kHz). 샘플레이트는 WAV 헤더에서 읽습니다.")],
         user_id: Annotated[str, Form(min_length=1, description="음성 질문을 요청한 훈련자의 고유 식별자입니다.", examples=["1234"])],
         language: Annotated[VoiceLanguage, Form(description="업로드한 음성의 언어 코드(STT)입니다. " + LANGUAGE_DESCRIPTION, examples=["ko"])],
         session_id: Annotated[str | None, Form(description="진행 중인 세션 식별자(CSV 파일명에서 확장자 제외)", examples=["3_11000346_1"])] = None,

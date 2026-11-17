@@ -20,11 +20,13 @@ import re
 from dataclasses import dataclass
 from typing import Final
 
-CONSERVATIVE_ANSWER: Final = "안전과 관련된 작업이라 확인되지 않은 방법은 하지 마세요. 장비를 멈추고 압력을 뺀 뒤 작업 지침이나 관리자에게 확인하세요."
+CONSERVATIVE_ANSWER: Final = "확인되지 않은 작업은 하지 마세요. 장비를 멈추고 압력을 뺀 뒤 지침이나 관리자에게 확인하세요."
 # 근거: DOC-doc_0219-C0084 "(라) 도료의 분출 압력이 높으므로 건 선단에 손을 내밀면 안 된다.",
 #       DOC-doc_0036-C0062 "에어리스 스프레이의 고압 분사에 의하여 도료 및 시너 등이 눈, 피부 등에 침투되는 위험에 주의한다."
-HIGH_PRESSURE_ANSWER: Final = ("건 끝을 손가락이나 손으로 막아서 확인하지 마세요. 에어리스 건은 분출 압력이 높아 도료와 시너가 "
-                               "피부나 눈에 침투할 수 있습니다. 장비를 멈추고 압력을 뺀 뒤 작업 지침이나 관리자에게 확인하세요.")
+HIGH_PRESSURE_ANSWER: Final = ("건 끝을 손·손가락으로 막지 마세요. 고압 도료·시너가 피부·눈에 침투할 수 있습니다. "
+                               "장비를 멈추고 압력을 뺀 뒤 지침이나 관리자에게 확인하세요.")
+# 빠른 안내(한 줄 60자)의 고정 답: 앞 두 문장만 남기면 조치 문장이 빠지므로 금지와 조치 문장을 남긴다(2026-11-16).
+QUICK_HIGH_PRESSURE_ANSWER: Final = "건 끝을 손·손가락으로 막지 마세요. 장비를 멈추고 압력을 뺀 뒤 지침이나 관리자에게 확인하세요."
 # 고정 고압 답의 답 번역이 실패할 때만 쓰는 문장(v3.4.5). 운영 우즈베크어는 "Incomplete translation"으로 늘 실패했다.
 # 번역 경로는 그대로 먼저 탄다. 모델(Claude)이 옮긴 문장이라 원어민 검수 전이다(2026-11-14).
 _HIGH_PRESSURE_FALLBACK: Final = {
@@ -54,7 +56,7 @@ _HIGH_PRESSURE_FALLBACK: Final = {
 
 def fixed_answer_translation(answer: str, language: str) -> str | None:
     """고정 고압 답을 그 언어로 미리 옮겨 둔 문장. 다른 답이나 한국어는 None — 답 번역 실패 때만 부른다."""
-    return _HIGH_PRESSURE_FALLBACK.get(language) if answer == HIGH_PRESSURE_ANSWER else None
+    return _HIGH_PRESSURE_FALLBACK.get(language) if answer in (HIGH_PRESSURE_ANSWER, QUICK_HIGH_PRESSURE_ANSWER) else None
 
 
 HIGH_PRESSURE_CITATIONS: Final =("DOC-doc_0219-C0084", "DOC-doc_0036-C0062")

@@ -56,11 +56,10 @@ class TrainingDataCatalog:
                 continue
         return result
 
-    def _selected(self, *, worker_id='all', process='all', scenario_id='all', acquired_at='all', zone_mapping='all', quality_status='all', q='', **_) -> tuple[dict, list[dict], list[dict]]:
-        index = self._index()
-        rows = self._rows(index)
+    @staticmethod
+    def _filtered(rows: list[dict], *, worker_id='all', process='all', scenario_id='all', acquired_at='all', zone_mapping='all', quality_status='all', q='', **_) -> list[dict]:
         needle = q.strip().casefold()
-        selected = [r for r in rows if (worker_id == 'all' or r['worker_id'] == worker_id)
+        return [r for r in rows if (worker_id == 'all' or r['worker_id'] == worker_id)
                     and (process == 'all' or r['process'] == process)
                     and (scenario_id == 'all' or r['scenario_id'] == scenario_id)
                     and (zone_mapping == 'all' or r['zone_id_status'] == zone_mapping)
@@ -69,6 +68,11 @@ class TrainingDataCatalog:
                     and (acquired_at == 'all' or (acquisition_date(r.get('acquired_at')) is None if acquired_at == 'unknown'
                                                   else acquisition_date(r.get('acquired_at')) == acquired_at))
                     and (not needle or needle in ' '.join(str(r.get(k, '')) for k in ('dataset_name', 'worker_name', 'mode_label', 'scenario_id')).casefold())]
+
+    def _selected(self, **filters) -> tuple[dict, list[dict], list[dict]]:
+        index = self._index()
+        rows = self._rows(index)
+        selected = self._filtered(rows, **filters)
         selected.sort(key=lambda r: (r['worker_name'], r['process'], r['scenario_id'].zfill(8), r['dataset_name']))
         return index, rows, selected
 
@@ -80,9 +84,14 @@ class TrainingDataCatalog:
             ordered = sorted(counts.items(), key=lambda item: (not item[0].isdigit(), int(item[0]) if item[0].isdigit() else 0, item[0]))
             return [{'id': k, 'label': (labels or {}).get(k, names[k]), 'count': v} for k, v in ordered]
         def options(field, label_field=None, labels=None):
-            values = {r[field]: (labels or {}).get(r[field], r.get(label_field, r[field])) for r in rows}
+            eligible = self._filtered(rows, **{**filters, field: 'all'})
+            values = {r[field]: (labels or {}).get(r[field], r.get(label_field, r[field])) for r in eligible}
             return [{'id': k, 'label': v} for k, v in sorted(values.items(), key=lambda x: x[0].zfill(8))]
         labels = {'spray': '스프레이', 'blasting': '블라스팅', 'grinding': '그라인딩'}
+        quality_rows = self._filtered(rows, **{**filters, 'quality_status': 'all'})
+        qualities = [{'id': value, 'label': label} for value, label in
+                     [('needs_review', '확인 필요'), ('complete', '완료')]
+                     if any((r.get('quality_status') == 'complete') == (value == 'complete') for r in quality_rows)]
         pages = max(1, math.ceil(len(selected) / limit))
         page = min(max(1, page), pages)
         dates = [day for row in selected if (day := acquisition_date(row.get('acquired_at'))) is not None]
@@ -104,7 +113,7 @@ class TrainingDataCatalog:
                             'by_worker': grouped('worker_id', 'worker_name'), 'by_mode': grouped('scenario_id', 'mode_label'),
                             'by_process': grouped('process', labels=labels)},
                 'options': {'workers': options('worker_id', 'worker_name'), 'processes': options('process', labels=labels),
-                            'modes': options('scenario_id', 'mode_label'), 'dates': date_options,
+                            'modes': options('scenario_id', 'mode_label'), 'qualities': qualities, 'dates': date_options,
                             'zone_mappings': [{'id': 'present', 'label': '있음'}, {'id': 'absent', 'label': '없음'}]},
                 'items': [{k: v for k, v in r.items() if k != 'artifact_sha256'} for r in selected[(page - 1) * limit:page * limit]]}
 

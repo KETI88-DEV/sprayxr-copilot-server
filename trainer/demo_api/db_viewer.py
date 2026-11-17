@@ -64,6 +64,8 @@ _CSS += """
 .sidebar-admin{margin-top:auto;padding-top:28px;flex-shrink:0}.sidebar-admin a{display:flex;align-items:center;gap:9px;border-top:1px solid #ffffff15;padding:16px 10px 3px;color:#91a5c6;text-decoration:none;font-size:12px;font-weight:500;transition:color .15s}
 .sidebar-admin svg{width:16px;height:16px}.sidebar-admin a:hover,.sidebar-admin a.active{color:#e1eaff}.sidebar-admin a:focus-visible{outline:2px solid #9cb7f2;outline-offset:3px}
 @media(max-width:850px){.sidebar-admin{margin-top:12px;padding-top:8px}}
+.sequence-text-guide{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.6;min-width:280px;max-width:420px;max-height:8em;overflow:auto}
+.sequence-guide-legacy{display:block;margin-top:5px;color:var(--muted);font-size:11px}
 """
 
 
@@ -96,6 +98,31 @@ def _cell(value: object) -> str:
     return html.escape(text)
 
 
+def _analysis_text_guide(value: object) -> tuple[str | None, bool]:
+    """Read the saved cache field once; never guess a guide from unrelated keys."""
+    payload = value
+    if isinstance(value, str):
+        try:
+            payload = json.loads(value)
+        except (ValueError, TypeError):
+            return (value if value.strip() else None), True
+    if isinstance(payload, dict):
+        guide = payload.get("text_guide")
+        return (guide if isinstance(guide, str) and guide.strip() else None), False
+    if isinstance(payload, str):
+        return (payload if payload.strip() else None), True
+    return None, False
+
+
+def _guide_cell(guide: str | None, *, legacy: bool = False) -> str:
+    if guide is None:
+        return '<span class="null">안내 없음</span>'
+    escaped = html.escape(guide, quote=True)
+    kind = "legacy" if legacy else "text"
+    note = '<small class="sequence-guide-legacy">구형 result 문자열</small>' if legacy else ''
+    return f'<div class="sequence-text-guide" data-guide-format="{kind}" title="{escaped}">{escaped}</div>{note}'
+
+
 def _sidebar(tables: list[tuple[str, int]], selected: str | None, overview: str = "home") -> str:
     labels = {"sessions":"훈련 세션","users":"작업자","sequences":"시퀀스 기록",
               "query_turns":"질문·답변","completions":"최종 리포트",
@@ -111,7 +138,7 @@ def _sidebar(tables: list[tuple[str, int]], selected: str | None, overview: str 
     sessions = f'<a class="table-link home-nav{" active" if overview == "sessions" else ""}" href="/admin/sessions"><span>▤ 훈련세션</span></a>'
     training = f'<a class="table-link home-nav{" active" if overview == "training" else ""}"' + (' aria-current="page"' if overview == 'training' else '') + ' href="/admin/training-data"><span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v7c0 4 16 4 16 0V5M4 12v7c0 4 16 4 16 0v-7"/></svg>학습 데이터</span></a>'
     admin = '<div class="sidebar-admin"><a href="/admin/manage"' + (' class="active" aria-current="page"' if overview == "manage" else '') + '><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="m9 3-.6 2.2-2 .9-2-.7-2 3.4 1.5 1.6v2.3l-1.5 1.6 2 3.4 2-.6 2 .9L9 20h4l.6-2.1 2-.9 2 .6 2-3.4-1.5-1.6v-2.3l1.5-1.6-2-3.4-2 .7-2-.9L13 3Z"/><circle cx="11" cy="11.5" r="3"/></svg><span>관리자 모드</span></a></div>'
-    feedback = '<a class="table-link' + (' active' if overview == 'feedback' else '') + '" href="/admin/feedback"><span>사용자 의견</span></a>'
+    feedback = '<a class="table-link home-nav' + (' active' if overview == 'feedback' else '') + '" href="/admin/feedback"><span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M21 15a3 3 0 0 1-3 3H7l-4 3V6a3 3 0 0 1 3-3h12a3 3 0 0 1 3 3Z"/><path d="M8 8h8M8 12h5"/></svg>사용자 의견</span></a>'
     return '<div class="brand">AI Co-Pilot<small>훈련 데이터 대시보드</small></div><div class="side-title">Overview</div>' + home + sessions + training + feedback + '<div class="side-title">데이터 조회</div>' + links + admin
 
 
@@ -230,6 +257,10 @@ def create_db_viewer_router() -> APIRouter:
                 return _page(render_dashboard(conn, dict(table_counts), days=days, metric=metric,origin=origin), side, origin)
             quoted = '"' + selected.replace('"', '""') + '"'
             columns = [str(item[1]) for item in conn.execute(f"PRAGMA table_info({quoted})")]
+            display_columns = list(columns)
+            derived_guide = selected == "sequence_analysis_results" and "result" in columns and "text_guide" not in columns
+            if derived_guide:
+                display_columns.insert(display_columns.index("result"), "text_guide")
             where = " WHERE " + scope_condition(conn,selected,origin)
             params: list[object] = []
             if q and columns:
@@ -240,7 +271,7 @@ def create_db_viewer_router() -> APIRouter:
             pages = max(1, math.ceil(total / limit))
             current_page = min(page, pages)
             rows = conn.execute(f"SELECT rowid AS __viewer_rowid, * FROM {quoted}{where} ORDER BY rowid DESC LIMIT ? OFFSET ?", [*params, limit, (current_page - 1) * limit]).fetchall()
-            heading = '<th>상세</th><th>호출 채널</th><th>호출 IP</th>' + "".join(f"<th>{html.escape(column)}</th>" for column in columns)
+            heading = '<th>상세</th><th>호출 채널</th><th>호출 IP</th>' + "".join(f"<th>{html.escape(column)}</th>" for column in display_columns)
             if selected == 'completions':
                 heading = '<th>처리 현황 · 서버 기록 기준</th>' + heading
             def record_row(row):
@@ -251,10 +282,18 @@ def create_db_viewer_router() -> APIRouter:
                 if selected == 'completions':
                     progress = report_progress(row)
                     progress_cell = '<td>' + html.escape(progress['label']) + '<small style="display:block;line-height:1.7">대기 경과 '+html.escape(progress['elapsed'])+'<br>최근 처리 '+html.escape(progress['latest_at'] or '미기록')+'<br>상태 사유 '+html.escape(progress['reason'])+'</small></td>'
-                return f'<tr data-detail-url="{url}" tabindex="0" aria-label="레코드 {row["__viewer_rowid"]} 상세">'+progress_cell+f'<td><button type="button" class="record-button" data-detail-url="{url}">상세</button></td>' + caller_cells + ''.join(f'<td>{_cell(row[column])}</td>' for column in columns) + '</tr>'
+                cells: list[str] = []
+                for column in display_columns:
+                    if selected == "sequence_analysis_results" and column == "text_guide":
+                        guide, legacy = (_analysis_text_guide(row["result"]) if derived_guide else
+                                         (row[column] if isinstance(row[column], str) and row[column].strip() else None, False))
+                        cells.append('<td data-column="text_guide">' + _guide_cell(guide, legacy=legacy) + '</td>')
+                    else:
+                        cells.append(f'<td>{_cell(row[column])}</td>')
+                return f'<tr data-detail-url="{url}" tabindex="0" aria-label="레코드 {row["__viewer_rowid"]} 상세">'+progress_cell+f'<td><button type="button" class="record-button" data-detail-url="{url}">상세</button></td>' + caller_cells + ''.join(cells) + '</tr>'
             rendered = ''.join(record_row(row) for row in rows)
             if not rendered:
-                rendered = f'<tr><td class="empty" colspan="{len(columns)+3+int(selected == "completions")}">조건에 맞는 데이터가 없습니다.</td></tr>'
+                rendered = f'<tr><td class="empty" colspan="{len(display_columns)+3+int(selected == "completions")}">조건에 맞는 데이터가 없습니다.</td></tr>'
             query = html.escape(q)
             base = f"/admin?table={quote(selected)}&limit={limit}&q={quote(q)}"
             previous = f'<a href="{base}&page={current_page - 1}">← 이전</a>' if current_page > 1 else "<span></span>"

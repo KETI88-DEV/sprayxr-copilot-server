@@ -10,12 +10,12 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Final
 
-from trainer.demo_api.coating_query import (_CAUSES, _RECORD_SENTENCE, _DISTANCE_WORDS, _EFFECTS, _INVERTED, _SIMILAR, distance_sentence, measured_relation, measured_sentence,
-                                            parse_viewer_coating_context, zone_measures)
-from trainer.demo_api.coating_assessment import grade_phrase, mean_text
-from trainer.demo_api.copilot_intent import preset_intent
+from trainer.demo_api.coating_query import (_CAUSES, _RECORD_SENTENCE, _DISTANCE_WORDS, _EFFECTS, _INVERTED, _SIMILAR, _distance_remark, distance_sentence,
+                                            measured_relation, measured_sentence, parse_viewer_coating_context, zone_measures)
+from trainer.demo_api.coating_assessment import GRADE_WORDS, grade_phrase, mean_text
+from trainer.demo_api.copilot_intent import RECORD_OBJECT, preset_intent
 from trainer.demo_api.dialogue import drop_sentences, viewer_claims
-from trainer.demo_api.pose_query import josa
+from trainer.demo_api.pose_query import josa, wants_full_list
 from trainer.demo_api.viewer_arm_pose import parse_viewer_arm_pose
 from trainer.demo_api.viewer_progress import band_text, gate_lines, normal_band, progress_question, shortfall_side, shortfall_text, viewer_progress_answer
 
@@ -51,20 +51,29 @@ _PAST: Final = re.compile(r"칠했|칠한|뿌렸|뿌린|나왔|나온|나와|됐
 _EVALUATED: Final = re.compile(r"괜찮았|어땠|적당했|잘한|나쁜\s*거|맞지|거지")  # T27 T28 T43
 _SPATIAL: Final = re.compile(r"거기|거긴|그곳|그\s*(?:zone|존|구역)", re.I)  # T38 T43
 _ANAPHORA: Final = re.compile(r"그럼|그렇게")  # T37 T41 T46 — 앞 질문이 있을 때만 표지다
-_HERE: Final = re.compile(r"지금|이\s*(?:zone|존|구역)|여기|이렇게|현재", re.I)  # T39 v19
-_KNOWLEDGE: Final = re.compile(r"적정|기준|권장|표준|정의|뜻|의미|원리|원래|문서|규칙|규격|어떻게\s*칠|왜\s*생")  # T38 T41 T45 T50 v33
+# "다음 Zone으로 넘어가도 돼?"는 지금(재생) Zone의 완료를 묻는다. 그래서 재생 Zone을 받는 표지에 넣는다.
+_HERE: Final = re.compile(r"지금|이\s*(?:zone|존|구역)|여기|이렇게|현재|(?:zone|존|구역)\S*\s*넘어가", re.I)  # T39 v19
+_KNOWLEDGE: Final = re.compile(r"적정|기준|권장|표준|정의|뜻|의미|원리|원래|문서|규칙|규격|어떻게\s*칠|왜\s*생"
+                             r"|어떻게\s*(?:나온\s*거|계산|정해|구해)|계산\s*(?:방식|법)")  # T38 T41 T45 T50 v33, T32 앞 절(계산 방식)
+# "거리인지 속도인지 겹침인지"처럼 일반 요인(명사) 가운데 고르라는 말은 기록 객체가 없으면 지식 질문이다(2026-11-17 사례 1).
+# "빨랐는지 느렸는지"처럼 동사로 고르는 말은 기록 평가일 수 있어 보지 않는다.
+_GENERAL_CHOICE: Final = re.compile(r"인지\s.{0,20}?인지")
 _ZONE_NUMBERS: Final = re.compile(r"(?:zone|존|구역)\s*(\d{1,2}(?:\s*(?:,|와|과|이랑|랑|하고|및)\s*\d{1,2})*)", re.I)  # T33
 
 _EFFECT_ANY: Final = "|".join(pattern for _, pattern in _EFFECTS)
+# "먼저 고치는 일" 하나의 정의. 활용형(고치면·고쳐야·고칠)이 답 틀을 가르지 않게 라우터도 이것을 쓴다(2026-11-17 사례 5).
 # "뭐부터 해야 돼요?"는 작업 절차 질문이라 "고치"가 붙어야 한다.
-_ONE_PRIORITY: Final = re.compile(r"(?:뭐|무엇)부터\s*(?:고|개선)|먼저\s*(?:고쳐|신경)|콕\s*집")  # T49 v22 v340-40
+FIRST_FIX: Final = re.compile(r"(?:뭐|무엇)부터\s*(?:고치|고쳐|고칠|개선)|먼저\s*(?:고치|고쳐|고칠|개선)")
+_ONE_PRIORITY: Final = re.compile(FIRST_FIX.pattern + r"|먼저\s*신경|콕\s*집")  # T49 v22 v340-40
 _ONLY_ONE: Final = re.compile(r"딱\s*하나|하나만|콕\s*집")  # 질문 전체에 걸린다
 _EXTERNAL: Final = re.compile(r"PSPC|90/10|ISO|SSPC|IMO")  # T50
 _EXTERNAL_ASK: Final = re.compile(r"합격|판정|통과|충족")
 # "몇 코트까지 칠해야 끝난 거예요?"는 기준을 묻는다. "몇 개 Zone 끝났어요?"·"얼마나 끝났어요?"는 완료 개수를 묻는다.
 _NOT_COMPLETION: Final = re.compile(r"(?:몇|얼마)(?!\s*(?:개|곳)|나\s*(?:끝|완료|다\s*칠))|어떻게|조건|코트")
 _ORDER_SUBJECT: Final = re.compile(r"숙련자|전문가|zone|존|구역", re.I)  # 시작·끝 낱말만으로는 작업 절차 질문과 가를 수 없다
-_COMPLETION: Final = re.compile(r"끝난|끝났|끝낸|완료|다\s*칠했|다시\s*(?:안\s*)?(?:가|칠)")  # T34 T38 T43
+# "목표 두께를 채웠나요?"·"다음 Zone으로 넘어가도 돼?"(사례 20). "도료 채웠는데"·"다음 단계로 넘어가도"는 아니다.
+_COMPLETION: Final = re.compile(r"끝난|끝났|끝낸|완료|다\s*칠했|다시\s*(?:안\s*)?(?:가|칠)"
+                              r"|(?:두께|목표|기준)\S*\s*(?:다\s*)?(?:채웠|채워졌)|(?:zone|존|구역)\S*\s*넘어가도", re.I)  # T34 T38 T43
 _STATUS_ASKED: Final = re.compile(r"빼먹|빠뜨|빠진|누락|미수행|안\s*칠|못\s*칠|덜\s*칠")  # T33(Zone 번호가 있으면 "왜"가 있어도 상태 질문)
 _WHY: Final = re.compile(r"왜|원인|이유|때문")
 _EXTREME: Final = re.compile(r"제일|가장|최고|최저")  # T36
@@ -236,6 +245,10 @@ def _zones(piece: str, code: str, subject: Mapping[str, Any] | None, playback: s
     return (), "none"
 
 
+def _general_choice(piece: str) -> bool:
+    return bool(_GENERAL_CHOICE.search(piece)) and not RECORD_OBJECT.search(piece)
+
+
 def classify_record_question(prompt: str, *, task_type: str, previous_subject: Mapping[str, Any] | None,
                              playback_zone: str | None) -> RecordQuery:
     if preset_intent(task_type, prompt):
@@ -244,8 +257,8 @@ def classify_record_question(prompt: str, *, task_type: str, previous_subject: M
     parts: list[RecordPart] = []
 
     def analyse(piece: str, marker: bool | None = None) -> tuple[list[tuple[int, str, str | None, str | None]], str | None]:
-        # 손·방향·"뭐부터 고쳐"·구역별 자세 문제는 기존 경로의 몫이다.
-        reserved = bool(BODY_PART.search(piece) or _DIRECTION_ONLY.search(piece)
+        # 손·방향·"뭐부터 고쳐"·구역별 자세 문제는 기존 경로의 몫이다. 일반 요인 중 고르기는 기록 코드를 달지 않는다(지식 조각).
+        reserved = bool(BODY_PART.search(piece) or _DIRECTION_ONLY.search(piece) or _general_choice(piece)
                         or (task_type in {"pose_recomm", "trajectory_recomm"} and (WORST_ZONE.search(piece) or re.search(r"뭐부터|무엇부터", piece))))
         if reserved:
             return [], None
@@ -263,7 +276,7 @@ def classify_record_question(prompt: str, *, task_type: str, previous_subject: M
     # 가른 조각은 원래 한 문장의 표지를 물려받는다.
     for piece, marker in ((half, whole_marker) for whole in split_parts(prompt)
                           for whole_marker in [has_record_marker(whole, previous_subject=previous_subject)] for half in divide(whole, whole_marker)):
-        knowledge = bool(_KNOWLEDGE.search(piece))
+        knowledge = bool(_KNOWLEDGE.search(piece)) or _general_choice(piece)
         marker = marker or has_record_marker(piece, previous_subject=previous_subject)
         hits, pair = analyse(piece, marker)
         if not hits:
@@ -423,7 +436,7 @@ def _completion(facts: RecordFacts, zones: tuple[str, ...]) -> str:
     return " ".join(out)
 
 
-def _distance_filter(facts: RecordFacts, operator: str | None) -> str:
+def _distance_filter(facts: RecordFacts, operator: str | None, prompt: str = "") -> str:
     wanted = operator or "higher"
     names = {"higher": "멀리서", "lower": "가까이서", "similar": "비슷하게"}
     found: dict[str, list[str]] = {"higher": [], "lower": [], "similar": []}
@@ -432,10 +445,13 @@ def _distance_filter(facts: RecordFacts, operator: str | None) -> str:
             found[relation].append(f"Zone {zone}({measure['distance_mm']:,.0f} mm, 전문가 {measure['reference_distance_mm']:,.0f} mm)")
     if not any(found.values()):
         return "이 기록에는 이격거리를 전문가와 견줄 자료가 없습니다."
-    text = f"전문가 중앙값보다 {names[wanted]} 칠한 Zone은 " + (", ".join(found[wanted]) if found[wanted] else "0곳") + "입니다."
-    if wanted != "similar":
-        text += f" 전문가와 비슷한(±{_SIMILAR * 100:.0f}% 이내) Zone은 " + (", ".join(found["similar"]) if found["similar"] else "0곳") + "입니다."
-    return text
+    requested = [wanted, *(key for key, word in [('higher','멀'), ('lower','가까'), ('similar','비슷')]
+                           if key != wanted and word in prompt)]
+    lines = []
+    for key in requested:
+        label = f"전문가와 비슷한(±{_SIMILAR * 100:.0f}% 이내)" if key == "similar" else f"전문가 중앙값보다 {names[key]} 칠한"
+        lines.append(label + " Zone은 " + (", ".join(found[key]) if found[key] else "0곳") + "입니다.")
+    return " ".join(lines)
 
 
 def _speed(facts: RecordFacts, zone: str) -> str:
@@ -472,18 +488,21 @@ def _work_metric(facts: RecordFacts, part: RecordPart) -> str:
     return text
 
 
-def _pose_judgement(facts: RecordFacts) -> str:
+def _pose_judgement(facts: RecordFacts, prompt: str = "") -> str:
     arm = facts.arm or {}
     if not _is_num(arm.get("average_similarity_percent")):
         return "이 기록에는 팔 자세를 채점한 결과가 없어 자세 유사도를 말씀드릴 수 없습니다."
     sequences = [seq for seq in arm.get("sequences") or [] if isinstance(seq, Mapping) and _is_num(seq.get("similarity_percent"))]
-    text = f"팔 자세 유사도는 평균 {arm['average_similarity_percent']:.0f}%입니다."
+    spread = ""
     if sequences:
-        text += " 분사별로는 " + ", ".join(f"{seq.get('sequence_id')}(Zone {seq.get('zone_id')}) {seq['similarity_percent']:.0f}%" for seq in sequences) + "입니다."
+        values = [float(seq['similarity_percent']) for seq in sequences]
+        spread = f"(분사 {len(sequences)}회, {min(values):.0f}~{max(values):.0f}%)"
+    text = f"팔 자세 유사도는 평균 {arm['average_similarity_percent']:.0f}%{spread}입니다."
+    if sequences and wants_full_list(prompt, subject=r"분사|시퀀스|sequence"):
+        text += "\n" + ", ".join(f"{seq.get('sequence_id')}(Zone {seq.get('zone_id')}) {seq['similarity_percent']:.0f}%" for seq in sequences) + "."
     limited = [str(seq.get("sequence_id")) for seq in sequences if seq.get("confidence") == "limited"]
-    if limited:
-        text += " 입력 품질이나 비교 범위에 제한이 있어 참고용 수치입니다(" + ", ".join(limited) + ")."
-    return text + " 숙련자 중간 수준은 약 70%입니다. 이 수치만으로 잘했다 못했다를 가르지 않습니다."
+    note = "입력 품질·비교 범위 제한이 있어 참고용이며, " if limited else ""
+    return text + " " + note + "숙련자도 약 70%이므로 점수만으로 우열을 판단하지 않습니다."
 
 
 def _slot_text(slot: object) -> str:
@@ -550,35 +569,39 @@ def cause_answer(facts: RecordFacts, zone: str | None) -> str:
         measured or "이 Zone의 이동 속도·이격거리 실측이 기록에 없어 원인은 말씀드릴 수 없습니다.") if item)
 
 
-def _priorities(facts: RecordFacts) -> list[tuple[str, str]]:
-    """(제목, 이유) 순위. 도막 게이트 → 팔 자세 → 작업 유사도, 앞 단계에 후보가 있으면 뒤 단계는 보지 않는다."""
+def _priorities(facts: RecordFacts, *, quick: bool = False) -> list[tuple[str, str]]:
+    """(제목, 이유) 순위. 도막 게이트 → 팔 자세 → 작업 유사도, 앞 단계에 후보가 있으면 뒤 단계는 보지 않는다.
+
+    `quick`이면 이유에서 범위 밖 면적·교정 문장을 빼 한 줄(60자)에 들게 한다. 95% 기준 판정은 그대로다.
+    """
     gate = sorted((row for row in facts.target_rows if row.get("gate_status") == "needs_more" and _is_num(row.get("coverage_percent"))),
                   key=lambda row: row["coverage_percent"])
     if gate:
         # 범위 밖 면적이 주로 상한 초과인 Zone에는 "보완하십시오"를 쓰지 않는다(v3.6.2).
         return [(f"Zone {row['zone_id']}부터 {'보완하십시오' if shortfall_side(row) == 'under' else '보십시오'}.",
+                 f"정상 범위 안 면적이 {row['coverage_percent']:g}%로 {_GATE_PERCENT}% 기준에 못 미칩니다." if quick else
                  f"정상 범위({band_text(row)}) 안 면적이 {row['coverage_percent']:g}%로 {_GATE_PERCENT}% 기준에 못 미칩니다. {shortfall_text(row)}".rstrip())
                 for row in gate]
     arm = sorted(((zone, item) for zone, item in ((facts.arm or {}).get("zones") or {}).items() if isinstance(item, Mapping) and _is_num(item.get("similarity_percent"))),
                  key=lambda pair: pair[1]["similarity_percent"])
     if arm:
-        return [(f"Zone {zone}의 팔 자세부터 보십시오.", f"팔 자세 유사도가 {item['similarity_percent']:.0f}%로 가장 낮습니다." + (f" {item['guidance']}" if item.get("guidance") else ""))
+        return [(f"Zone {zone}의 팔 자세부터 보십시오.", f"팔 자세 유사도가 {item['similarity_percent']:.0f}%로 가장 낮습니다." + (f" {item['guidance']}" if item.get("guidance") and not quick else ""))
                 for zone, item in arm]
     work = sorted((zone for zone in (facts.claims.get("zones") or {}).values() if isinstance(zone, Mapping) and _is_num(zone.get("work_similarity_percent"))),
                   key=lambda zone: zone["work_similarity_percent"])
     return [(f"Zone {zone['zone_id']}의 작업 자세부터 보십시오.", f"작업 유사도가 {zone['work_similarity_percent']:.0f}%로 가장 낮습니다.") for zone in work]
 
 
-def one_priority(facts: RecordFacts, *, single: bool) -> str:
-    ranked = _priorities(facts)
+def one_priority(facts: RecordFacts, *, single: bool, quick: bool = False) -> str:
+    ranked = _priorities(facts, quick=quick)
     if not ranked:
         return "이 기록에서 먼저 고칠 곳을 가릴 판정 자료가 없습니다."
-    if single or len(ranked) == 1:
+    if single or quick or len(ranked) == 1:
         return " ".join(ranked[0])
     return f"1순위 {' '.join(ranked[0])}\n2순위 {' '.join(ranked[1])}"
 
 
-def answer_part(facts: RecordFacts, part: RecordPart, *, task_type: str) -> tuple[str, dict[str, Any] | None]:
+def answer_part(facts: RecordFacts, part: RecordPart, *, task_type: str, quick: bool = False) -> tuple[str, dict[str, Any] | None]:
     """조각 하나의 결정적 답과 sequence_context(진행 질문일 때만)."""
     code = part.code or ""
     if part.zone_source == "asked" and (missing := [zone for zone in part.zones if zone not in facts.zone_ids]) and facts.zone_ids:
@@ -594,11 +617,116 @@ def answer_part(facts: RecordFacts, part: RecordPart, *, task_type: str) -> tupl
             return (_completion(facts, ()) if code == "completion" else ASK_ZONE), None
         return " ".join(per_zone[code](zone) for zone in part.zones), None
     answers = {"coating_extreme": lambda: _thickness_ranking(facts, thinnest=part.operator != "argmax"), "coating_over": lambda: _overpaint(facts),
-               "distance_filter": lambda: _distance_filter(facts, part.operator), "work_metric": lambda: _work_metric(facts, part),
-               "pose_judgement": lambda: _pose_judgement(facts), "order_shape": lambda: _order_shape(facts, part.operator),
-               "external_standard": lambda: _external(facts), "one_priority": lambda: one_priority(facts, single=part.cardinality == "one"),
+               "distance_filter": lambda: _distance_filter(facts, part.operator, part.text), "work_metric": lambda: _work_metric(facts, part),
+               "pose_judgement": lambda: _pose_judgement(facts, part.text), "order_shape": lambda: _order_shape(facts, part.operator),
+               "external_standard": lambda: _external(facts), "one_priority": lambda: one_priority(facts, single=part.cardinality == "one", quick=quick),
                "zone_exists": lambda: _missing_zones(facts, list(part.zones))}
     return answers[code](), None
+
+
+# ---------------------------------------------------------------- 빠른 안내(quick) 한 문장(2026-11-16, 60자 한 줄)
+# 시뮬레이터는 quick 답을 한 줄만 보인다. 공통 출구(quick_answer.one_line)는 앞 문장만 남기므로, 질문의 답을 첫 문장에 둔다.
+# 수치·Zone·판정은 위 답과 같은 서명 행에서 읽는다. None이면 위 답을 그대로 쓴다(공통 출구가 문장 단위로 줄인다).
+def _quick_distance(zone: str, measure: Mapping[str, Any] | None) -> str | None:
+    relation = measured_relation(measure, "distance_mm")
+    if relation is None:
+        return None
+    mine, expert = measure["distance_mm"], measure["reference_distance_mm"]  # type: ignore[index]
+    head = f"{josa(f'Zone {zone}', '은', '는')} {mine:,.0f} mm로 전문가({expert:,.0f} mm)"
+    if relation == "similar":
+        return f"{head}와 비슷했습니다."
+    return f"{head}보다 {abs(mine / expert - 1) * 100:.0f}% {'가까이서' if relation == 'lower' else '멀리서'} 칠했습니다."
+
+
+def _quick_cause(facts: RecordFacts, zone: str) -> str | None:
+    row = _row(facts, zone)
+    if row is None or not _is_num(row.get("thickness_um")) or row.get("grade") not in GRADE_WORDS or _target_um(facts) is None:
+        return None
+    head = f"{josa(f'Zone {zone}', '은', '는')} {GRADE_WORDS[row['grade']]}({mean_text(row['thickness_um'], row['target_thickness_um'])}µm)"
+    measure = facts.measures.get(zone)
+    relation = measured_relation(measure, "distance_mm")
+    if relation is None:
+        return head + "입니다."
+    mine, expert = measure["distance_mm"], measure["reference_distance_mm"]  # type: ignore[index]
+    if _distance_remark(measure, relation):
+        return f"{head}이지만 전문가보다 {'가까이' if relation == 'lower' else '멀리'}({mine:,.0f} mm) 칠해 거리로는 설명하기 어렵습니다."
+    return f"{head}이고 이격거리는 {mine:,.0f} mm(전문가 {expert:,.0f} mm)입니다."
+
+
+def _quick_speed(facts: RecordFacts, zone: str, *, after_lead: bool) -> str | None:
+    measure = facts.measures.get(zone) or {}
+    if not _is_num(measure.get("speed_mms")):
+        return None
+    if after_lead:  # "숙련자 기록보다 속도가 느린 것은 맞습니다." 뒤
+        return "전문가 속도는 이전 장비 기록이라 맞추지 않습니다."
+    ref = measure.get("reference_speed_mms")
+    return f"Zone {zone} 이동 속도는 {measure['speed_mms']:,.0f} mm/s" + (f"(전문가 {ref:,.0f} mm/s는 이전 장비 기준)" if _is_num(ref) else "") + "입니다."
+
+
+def _quick_speed_distance(facts: RecordFacts, zone: str) -> str | None:
+    measure = facts.measures.get(zone) or {}
+    if measured_relation(measure, "distance_mm") is None or not _is_num(measure.get("speed_mms")) or not _is_num(measure.get("reference_speed_mms")):
+        return None
+    return (f"Zone {zone}: 거리 {measure['distance_mm']:,.0f} mm(전문가 {measure['reference_distance_mm']:,.0f}), "
+            f"속도 {measure['speed_mms']:,.0f} mm/s(전문가 {measure['reference_speed_mms']:,.0f}·이전 장비).")
+
+
+def _quick_completion(facts: RecordFacts, zones: tuple[str, ...]) -> str | None:
+    rows = [row for row in facts.target_rows if row.get("gate_status")]
+    if not rows:
+        return None
+    if not zones:
+        done = sum(row["gate_status"] == "complete" for row in rows)
+        return f"완료 Zone은 {len(rows)}곳 중 {done}곳입니다(정상 범위 안 면적 {_GATE_PERCENT}% 기준)."
+    out = []
+    for zone in zones:
+        row = _row(facts, zone)
+        if row is None or not row.get("gate_status") or not _is_num(row.get("coverage_percent")):
+            return None
+        name, area = josa(f"Zone {zone}", "은", "는"), f"{row['coverage_percent']:g}%"
+        out.append({"complete": f"{name} 범위 안 면적 {area}로 {_GATE_PERCENT}% 기준을 넘겨 완료입니다.",
+                    "overpaint_risk": f"{name} 과도막이라 더 칠하면 안 됩니다(범위 안 면적 {area})."}.get(
+            row["gate_status"], f"{name} 범위 안 면적이 {area}라 {_GATE_PERCENT}% 기준에 못 미"
+            + ("쳐 보완이 필요합니다." if shortfall_side(row) == "under" and row.get("grade") != "above" else "칩니다.")))
+    return " ".join(out)
+
+
+def _quick_order_ends(facts: RecordFacts) -> str | None:
+    slots = [slot for slot in facts.claims.get("position_distribution") or [] if isinstance(slot, list) and slot]
+    count = facts.claims.get("reference_session_count")
+    if not slots or not _is_num(count):
+        return None
+
+    def where(slot: list[Mapping[str, Any]]) -> str:
+        top = max(slot, key=lambda item: item["count"])
+        return f"{count}회 모두 Zone {top['zone_id']}" if len(slot) == 1 and top["count"] == count else f"주로 Zone {top['zone_id']}({top['count']}회)"
+    return f"숙련자는 {where(slots[0])}에서 시작해 {where(slots[-1])}에서 끝냈습니다."
+
+
+def _quick_pose(facts: RecordFacts) -> str | None:
+    average = (facts.arm or {}).get("average_similarity_percent")
+    return f"팔 자세 유사도는 평균 {average:.0f}%입니다(숙련자도 약 70%)." if _is_num(average) else None
+
+
+def _quick_text(facts: RecordFacts, part: RecordPart, text: str, *, has_leads: bool) -> str:
+    zone = part.zones[0] if len(part.zones) == 1 else None
+    found = None
+    if part.code == "cause" and zone:
+        if has_leads:
+            return ""  # 앞 문장(거리 전제 바로잡기)이 답이다
+        speed_cause = any(p.kind == "cause" and p.subject.split(">")[0] in {"slow", "fast"} for p in part.premises)
+        found = _quick_speed(facts, zone, after_lead=False) if speed_cause else _quick_cause(facts, zone)
+    elif part.code == "completion":
+        found = _quick_completion(facts, part.zones)
+    elif part.code == "speed" and zone:
+        found = _quick_speed(facts, zone, after_lead=has_leads)
+    elif part.code == "distance_compare" and zone:
+        found = _quick_distance(zone, facts.measures.get(zone))
+    elif part.code == "order_shape" and part.operator in {"start", "end"}:
+        found = _quick_order_ends(facts)
+    elif part.code == "pose_judgement":
+        found = _quick_pose(facts)
+    return text if found is None else found
 
 
 # ---------------------------------------------------------------- 답 조립(전제 바로잡기 · 조각별 답 · 단서 한 줄 · subject)
@@ -618,6 +746,7 @@ class RecordAnswer:
     subject: dict[str, Any] | None             # {"domain": str, "zone_ids": list[str], "operator": str}
     knowledge_question: str | None             # 섞인 질문의 지식 조각 문장(이어 붙임), 아니면 None
     sequence_context: dict[str, Any] | None    # progress_* 답의 context
+    knowledge_first: bool = False              # 섞인 질문의 첫 조각이 기록 코드 없는 지식 조각인가(빠른 안내의 문장 순서)
 
 
 def previous_subject(turns: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
@@ -633,8 +762,11 @@ def _metric_values(facts: RecordFacts) -> dict[str, float | None]:
             "order_adherence": adherence * 100 if _is_num(adherence) else None}
 
 
-def _premise_lead(facts: RecordFacts, part: RecordPart, premise: Premise) -> str | None:
-    """"예."/"아니요." + 서명된 사실. 어느 쪽인지 서명 값으로 가릴 수 없으면 None(동조도 반박도 하지 않는다)."""
+def _premise_lead(facts: RecordFacts, part: RecordPart, premise: Premise, *, quick: bool = False) -> str | None:
+    """"예."/"아니요." + 서명된 사실. 어느 쪽인지 서명 값으로 가릴 수 없으면 None(동조도 반박도 하지 않는다).
+
+    `quick`이면 사실을 한 문장으로 줄이고(거리), 결론 전제는 "예."/"아니요."만 남긴다(설명은 본문 quick 문장이 한다).
+    """
     zone = part.zones[0] if part.zones else None
     if premise.kind == "named_number" and premise.value is not None:
         values = _metric_values(facts)
@@ -653,7 +785,7 @@ def _premise_lead(facts: RecordFacts, part: RecordPart, premise: Premise) -> str
             # 실측과 다르거나 방향이 물리적으로 거꾸로면(가까워서 얇다·멀어서 두껍다) "아니요."; 맞아도 "예."로 인과를 인정하지 않고 사실만 말한다
             # "가까웠는데 왜 얇아?"는 사실을 말하고 이유를 묻는다. 전제가 아니므로 예·아니요로 열지 않는다
             wrong = not _STATED_WHY.search(part.text) and (_DISTANCE_WORDS[cause] != relation or (cause, effect) in _INVERTED)
-            return ("아니요. " if wrong else "") + (distance_sentence(zone, measure) or "")
+            return ("아니요. " if wrong else "") + ((_quick_distance(zone, measure) if quick else distance_sentence(zone, measure)) or "")
         return None  # 속도 원인은 R6(_speed)가 값과 한계만 말한다
     if premise.kind == "conclusion":
         rows = [_row(facts, z) for z in part.zones] if part.zones else list(facts.target_rows)
@@ -662,6 +794,8 @@ def _premise_lead(facts: RecordFacts, part: RecordPart, premise: Premise) -> str
         done = all(row["gate_status"] == "complete" for row in rows)  # type: ignore[index]
         if done:
             return "예."
+        if quick:
+            return "아니요."
         return "아니요. 다 칠한 것과 완료는 다릅니다." if premise.subject == "visited_all" else "아니요. 평균 두께가 기준 안이어도 완료는 칠한 면적으로 봅니다."  # 95% 설명은 본문이 한다
     if premise.kind == "comparison" and zone and premise.subject in _SPEED_RELATION:
         variable = "speed_mm_s" if premise.subject.startswith("speed") else "distance_mm"
@@ -695,7 +829,8 @@ def _subject_zones(facts: RecordFacts, part: RecordPart) -> list[str]:
 
 
 def answer_record_question(context: str | None, prompt: str, *, task_type: str,
-                           recent_turns: Sequence[Mapping[str, Any]]) -> RecordAnswer | None:
+                           recent_turns: Sequence[Mapping[str, Any]], quick: bool = False) -> RecordAnswer | None:
+    """`quick`이면 조각마다 질문의 답을 담은 한 문장(_quick_text)을 쓴다. 상세 분석 답은 바뀌지 않는다."""
     facts = RecordFacts.from_context(context)
     if facts is None:  # 서명 없음·위조 = 기록 분류 끔
         return None
@@ -719,6 +854,10 @@ def answer_record_question(context: str | None, prompt: str, *, task_type: str,
     sequence_context: dict[str, Any] | None = None
     seen: set[tuple[Any, ...]] = set()
     any_code = any(part.code for part in query.parts)
+    # "이 Zone 속도와 이격거리는?"은 quick에서 한 문장으로 답한다(속도 문장만 남으면 거리 답이 사라진다).
+    pair = {part.code: part for part in query.parts if part.code in {"speed", "distance_compare"} and len(part.zones) == 1 and not part.premises}
+    pair_zone = pair["speed"].zones[0] if quick and len(pair) == 2 and pair["speed"].zones == pair["distance_compare"].zones else None
+    pair_text = _quick_speed_distance(facts, pair_zone) if pair_zone and pair_zone in facts.zone_ids else None
     for part in query.parts:
         if part.code is None:
             if any_code and not part.knowledge and _QUESTION_SHAPED.search(part.text):
@@ -728,25 +867,30 @@ def answer_record_question(context: str | None, prompt: str, *, task_type: str,
         if key in seen:  # 같은 코드·같은 Zone은 답 전체에서 한 번만(T31·T43·T49, 사이에 다른 조각이 있어도: v340 #40)
             continue
         seen.add(key)
-        text, context_found = answer_part(facts, part, task_type=task_type)
+        text, context_found = answer_part(facts, part, task_type=task_type, quick=quick)
         sequence_context = sequence_context or context_found
         in_record = all(zone in facts.zone_ids for zone in part.zones) or not facts.zone_ids
-        leads = list(dict.fromkeys(lead for premise in part.premises if in_record and premise.kind != "conclusion" and (lead := _premise_lead(facts, part, premise))))
-        conclusion = next((lead for premise in part.premises if in_record and premise.kind == "conclusion" and (lead := _premise_lead(facts, part, premise))), None)
+        leads = list(dict.fromkeys(lead for premise in part.premises if in_record and premise.kind != "conclusion" and (lead := _premise_lead(facts, part, premise, quick=quick))))
+        conclusion = next((lead for premise in part.premises if in_record and premise.kind == "conclusion" and (lead := _premise_lead(facts, part, premise, quick=quick))), None)
         leads += [conclusion] if conclusion else []  # 결론 전제가 둘이어도 바로잡는 문장은 하나
         if part.code == "cause" and part.zones and in_record and any(p.kind == "cause" and p.subject.split(">")[0] in {"slow", "fast"} for p in part.premises):
             text = _speed(facts, part.zones[0])  # 속도 원인은 동조도 반박도 없이 값과 이전 장비 한계만
         if leads and part.code == "cause" and part.zones and _target_um(facts):
             text = f"{_zone_text(facts, part.zones[0])}입니다. 정상 범위는 {_band(facts, part.zones[0])}입니다."  # 실측 거리는 lead가 이미 말했다
-        sentences.append(" ".join([*leads, text]))
+        if pair_text and part in pair.values():
+            text, leads = ("" if pair_text in sentences else pair_text), []
+        elif quick and in_record and text not in (ASK_ZONE, _NO_TARGET):
+            text = _quick_text(facts, part, text, has_leads=bool(leads))
+        if leads or text:
+            sentences.append(" ".join(item for item in (*leads, text) if item))
         if text != ASK_ZONE and text != _NO_TARGET and in_record:
             answered.append(part)
     body = "\n".join(sentences)
     caveats = []
     if any(part.code in _COATING_CODES for part in answered) and "세션이 끝났을 때" not in body:
-        caveats.append("도막 수치는 세션이 끝났을 때의 도막 기준입니다.")
-    if any(part.code in {"completion", "cause", "external_standard"} for part in answered) and "95%" not in body:
-        caveats.append(f"완료는 정상 범위 안 면적이 {_GATE_PERCENT}% 이상이고 평균이 정상 범위일 때입니다.")
+        caveats.append("세션이 끝났을 때의 도막 기준입니다.")
+    if any(part.code in {"completion", "external_standard"} for part in answered) and "95%" not in body:
+        caveats.append(f"완료: 정상 범위 안 면적 {_GATE_PERCENT}% 이상·평균 정상.")
     if any(part.code == "pose_judgement" for part in answered):
         if "70%" not in body:
             caveats.append("숙련자 중간 수준은 약 70%입니다.")
@@ -756,7 +900,8 @@ def answer_record_question(context: str | None, prompt: str, *, task_type: str,
     first = answered[0] if answered else next((part for part in query.parts if part.code), None)
     subject = ({"domain": part_domain(first) or "overall", "zone_ids": _subject_zones(facts, first), "operator": first.operator or first.code or ""}
                if first and first.code else None)
-    return RecordAnswer(text, query.kind, subject, query.knowledge_question or None, sequence_context)
+    return RecordAnswer(text, query.kind, subject, query.knowledge_question or None, sequence_context,
+                        knowledge_first=bool(query.parts) and query.parts[0].knowledge and query.parts[0].code is None)
 
 
 # ---------------------------------------------------------------- 모델이 만든 답의 출구 검사 G3~G6
