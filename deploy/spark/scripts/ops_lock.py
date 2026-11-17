@@ -3,15 +3,16 @@
 
 호스트 python3(3.12) 표준 라이브러리만 쓴다. 운영 폴더(OPS_DIR)에 이 파일과 health_sample.sh 를 같이 둔다.
 
-  ops_lock.py take --what vllm --by KURE --reason "vLLM 교체" --until 10:30
-  ops_lock.py release --by KURE                        # 잡은 사람만 푼다
-  ops_lock.py release --by 정성오 --force --reason "담당자 연락 두절, 작업 끝난 것 확인"
+  ops_lock.py take --what vllm --by GITHUB_ID --reason "vLLM 교체" --until 10:30
+  ops_lock.py release --by GITHUB_ID                        # 잡은 사람만 푼다
+  ops_lock.py release --by GITHUB_ID --force --reason "담당자 연락 두절, 작업 끝난 것 확인"
   ops_lock.py status
-  ops_lock.py check --by KURE --what vllm              # 교체 스크립트가 시작 전에 부른다. 자기 잠금이 아니면 1
-  ops_lock.py version next --by KURE                   # 다음 패치 버전을 예약하고 출력한다
-  ops_lock.py version reserve 3.9.0 --by KURE
+  ops_lock.py check --by GITHUB_ID --what vllm              # 교체 스크립트가 시작 전에 부른다. 자기 잠금이 아니면 1
+  ops_lock.py version next --by GITHUB_ID                   # 다음 패치 버전을 예약하고 출력한다
+  ops_lock.py version reserve 3.9.0 --by GITHUB_ID
   ops_lock.py watch --down "컨테이너 ..."              # health_sample.sh --check 가 부른다
 
+--by 는 GitHub 닉네임으로 통일한다(2026-11-17). 같은 사람의 여러 세션은 --reason 앞에 [세션명]을 붙여 구분한다.
 --until 은 한국 시각이다. "HH:MM"(오늘) 또는 ISO 시각. 시간대가 없는 ISO 는 한국 시각으로 읽는다.
 기한이 지나도 잠금은 저절로 풀리지 않는다. "만료"로 보이기만 한다.
 
