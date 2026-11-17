@@ -174,18 +174,37 @@ def test_repeated_passages_fold_so_other_evidence_reaches_the_reranker() -> None
     assert [r["chunk_id"] for r in results][:1] == ["DOC-d0-C0001"]
 
 
-def test_chunks_confirmed_wrong_never_reach_the_answer() -> None:
-    # 2026-11-17 전수 조사: "이슬점보다 3°C 낮은 조건에서는 도장할 수 없다"처럼 기준이 뒤집힌 조각.
-    assert "DOC-doc_0008-C0006" in search_index.EXCLUDED_CHUNKS
+def test_corrected_evidence_replaces_the_wrong_chunk_under_the_same_id() -> None:
+    # 2026-11-17 전수 조사: 원본에도 "이슬점보다 3℃ 낮은 조건에서는 도장할 수 없다"로 인쇄된 조각을 고친 본문으로 바꾼다.
+    corrections = json.loads(search_index.CORRECTIONS_PATH.read_text(encoding="utf-8"))["조각"]
+    assert "3℃ 이상 높지 않은" in corrections["DOC-doc_0008-C0006"]["본문"]
+    assert all(entry["본문"].strip() for entry in corrections.values())
+    assert not set(corrections) & search_index.EXCLUDED_CHUNKS
 
     class Embedder:
+        def encode_document(self, texts: list[str], **_kwargs: Any) -> np.ndarray:
+            self.texts = texts
+            return np.ones((len(texts), 2), dtype=np.float32)
+
         def encode_query(self, query: str, **_kwargs: Any) -> np.ndarray:
             return np.ones(2, dtype=np.float32)
 
     class Index:
-        def search(self, vec: np.ndarray, k: int) -> tuple[np.ndarray, np.ndarray]:
-            return np.array([[0.9, 0.8]]), np.array([[0, 1]])
+        ntotal = 2
 
-    id_map = [{"chunk_id": "DOC-doc_0008-C0006", "doc_id": "doc_0008", "text": "3°C 낮은", "tokens": 1},
-              {"chunk_id": "DOC-a-C0001", "doc_id": "a", "text": "3°C 이상 높아야", "tokens": 1}]
-    assert [r["chunk_id"] for r in search_index.retrieve("이슬점", Index(), id_map, Embedder(), top_k=2)] == ["DOC-a-C0001"]
+        def add(self, vectors: np.ndarray) -> None:
+            self.ntotal += len(vectors)
+
+        def search(self, vec: np.ndarray, k: int) -> tuple[np.ndarray, np.ndarray]:
+            return np.array([[0.9, 0.8, 0.7]]), np.array([[0, 1, 2]])
+
+    id_map = [{"chunk_id": "DOC-a-C0001", "doc_id": "a", "text": "3°C 낮은", "tokens": 1, "faiss_id": 0},
+              {"chunk_id": "DOC-b-C0001", "doc_id": "b", "text": "다른 근거", "tokens": 1, "faiss_id": 1}]
+    index, embedder = Index(), Embedder()
+    fixed = {"DOC-a-C0001": {"본문": "3℃ 이상 높아야"}}
+    assert search_index.apply_evidence_corrections(index, id_map, embedder, fixed) == 1
+    assert embedder.texts == ["3℃ 이상 높아야"] and index.ntotal == len(id_map) == 3
+    results = search_index.retrieve("이슬점", index, id_map, embedder, top_k=3)
+    assert [(r["chunk_id"], r["text"]) for r in results] == [("DOC-b-C0001", "다른 근거"), ("DOC-a-C0001", "3℃ 이상 높아야")]
+    with pytest.raises(ValueError):
+        search_index.apply_evidence_corrections(index, id_map, embedder, {"DOC-z-C0009": {"본문": "x"}})

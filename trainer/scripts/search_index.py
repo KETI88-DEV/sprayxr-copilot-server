@@ -107,7 +107,7 @@ def retrieve(
         if idx == -1 or idx >= len(id_map):
             continue
         entry = id_map[int(idx)]
-        if entry["chunk_id"] in EXCLUDED_CHUNKS:
+        if entry["chunk_id"] in EXCLUDED_CHUNKS or entry.get("superseded"):
             continue
         results.append({
             "rank": rank,
@@ -151,6 +151,7 @@ def rerank(
 
 
 DUPLICATE_FETCH_FACTOR = 3
+CORRECTIONS_PATH = Path(__file__).resolve().parents[1] / "configs" / "evidence_corrections.json"
 # 틀린 답을 만드는 것으로 확인된 조각은 검색에서 뺀다(목록과 이유는 파일에).
 EXCLUDED_CHUNKS: frozenset[str] = frozenset(
     json.loads((Path(__file__).resolve().parents[1] / "configs" / "evidence_exclusions.json").read_text(encoding="utf-8"))["조각"]
@@ -174,6 +175,28 @@ def fold_duplicates(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         seen.add(key)
         kept.append(candidate)
     return kept
+
+
+def apply_evidence_corrections(index: Any, id_map: List[Dict[str, Any]], embedder: Any,
+                               corrections: Optional[Dict[str, Dict[str, Any]]] = None) -> int:
+    """원본 대조로 고친 조각을 같은 ID로 색인 끝에 더하고, 원래 벡터는 검색에서 뺀다. 고친 조각 수를 돌려준다."""
+    if corrections is None:
+        corrections = json.loads(CORRECTIONS_PATH.read_text(encoding="utf-8"))["조각"]
+    assert index.ntotal == len(id_map), (index.ntotal, len(id_map))
+    originals = {entry["chunk_id"]: entry for entry in id_map if entry["chunk_id"] in corrections and not entry.get("superseded")}
+    missing = set(corrections) - set(originals)
+    if missing:
+        raise ValueError(f"보정할 조각이 색인에 없다: {sorted(missing)}")
+    ids = sorted(originals)
+    texts = [corrections[cid]["본문"] for cid in ids]
+    # build_index.py 와 같은 문서 프롬프트(KURE-v3 "passage: ")·정규화로 만든다.
+    vectors = embedder.encode_document(texts, normalize_embeddings=True, convert_to_numpy=True)
+    index.add(np.asarray(vectors, dtype=np.float32))
+    for cid, text in zip(ids, texts):
+        originals[cid]["superseded"] = True
+        id_map.append({**originals[cid], "text": text, "faiss_id": len(id_map), "corrected": True, "superseded": False})
+    assert index.ntotal == len(id_map), (index.ntotal, len(id_map))
+    return len(ids)
 
 
 def search_and_rerank(
