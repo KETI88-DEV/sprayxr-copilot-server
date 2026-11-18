@@ -679,6 +679,8 @@ class AgentPipeline:
             self.config["reranker"]["device"],
             int(self.config["reranker"]["max_length"]),
         )
+        index, corrected = search_mod.apply_evidence_corrections(index, id_map, embedder)
+        logger.info("Evidence corrections applied: %d chunks", corrected)
         return index, id_map, embedder, reranker
 
     @staticmethod

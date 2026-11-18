@@ -107,7 +107,7 @@ def retrieve(
         if idx == -1 or idx >= len(id_map):
             continue
         entry = id_map[int(idx)]
-        if entry["chunk_id"] in EXCLUDED_CHUNKS:
+        if entry["chunk_id"] in EXCLUDED_CHUNKS or entry.get("superseded"):
             continue
         results.append({
             "rank": rank,
@@ -151,6 +151,7 @@ def rerank(
 
 
 DUPLICATE_FETCH_FACTOR = 3
+CORRECTIONS_PATH = Path(__file__).resolve().parents[1] / "configs" / "evidence_corrections.json"
 # 틀린 답을 만드는 것으로 확인된 조각은 검색에서 뺀다(목록과 이유는 파일에).
 EXCLUDED_CHUNKS: frozenset[str] = frozenset(
     json.loads((Path(__file__).resolve().parents[1] / "configs" / "evidence_exclusions.json").read_text(encoding="utf-8"))["조각"]
@@ -174,6 +175,54 @@ def fold_duplicates(candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         seen.add(key)
         kept.append(candidate)
     return kept
+
+
+class CorrectedIndex:
+    """HNSW 색인은 그대로 두고 고친 조각 벡터를 따로 들고 있다가 검색 때 정확한 거리로 합친다.
+
+    torch 임베더를 CPU 로 돌린 뒤 HNSW 에 add 하면 다음 search 가 돌아오지 않는다(2026-11-18 개발 컨테이너 재현,
+    OpenMP 충돌로 보임). 색인을 바꾸지 않으니 고친 조각 밖의 검색 결과도 보정 전과 같다.
+    """
+
+    def __init__(self, base: Any, vectors: np.ndarray) -> None:
+        self.base, self.vectors = base, vectors
+        self.inner_product = getattr(base, "metric_type", 1) == 0  # faiss.METRIC_INNER_PRODUCT
+        self.ntotal = base.ntotal + len(vectors)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.base, name)
+
+    def search(self, query: np.ndarray, k: int) -> tuple[np.ndarray, np.ndarray]:
+        dist, ids = self.base.search(query, k)
+        extra = self.vectors @ query[0] if self.inner_product else ((self.vectors - query[0]) ** 2).sum(axis=1)
+        all_dist = np.concatenate([dist[0], extra.astype(dist.dtype)])
+        all_ids = np.concatenate([ids[0], np.arange(self.base.ntotal, self.ntotal, dtype=ids.dtype)])
+        order = np.argsort(-all_dist if self.inner_product else all_dist, kind="stable")[:k]
+        return all_dist[order][None], all_ids[order][None]
+
+
+def apply_evidence_corrections(index: Any, id_map: List[Dict[str, Any]], embedder: Any,
+                               corrections: Optional[Dict[str, Dict[str, Any]]] = None) -> tuple[Any, int]:
+    """원본 대조로 고친 조각을 같은 ID로 더하고 원래 벡터는 검색에서 뺀다. (검색에 쓸 색인, 고친 조각 수)를 돌려준다."""
+    if corrections is None:
+        corrections = json.loads(CORRECTIONS_PATH.read_text(encoding="utf-8"))["조각"]
+    assert index.ntotal == len(id_map), (index.ntotal, len(id_map))
+    originals = {entry["chunk_id"]: entry for entry in id_map if entry["chunk_id"] in corrections and not entry.get("superseded")}
+    missing = set(corrections) - set(originals)
+    if missing:
+        raise ValueError(f"보정할 조각이 색인에 없다: {sorted(missing)}")
+    if not originals:
+        return index, 0
+    ids = sorted(originals)
+    texts = [corrections[cid]["본문"] for cid in ids]
+    # build_index.py 와 같은 문서 프롬프트(KURE-v3 "passage: ")·정규화로 만든다.
+    vectors = embedder.encode_document(texts, normalize_embeddings=True, convert_to_numpy=True)
+    for cid, text in zip(ids, texts):
+        originals[cid]["superseded"] = True
+        id_map.append({**originals[cid], "text": text, "faiss_id": len(id_map), "corrected": True, "superseded": False})
+    corrected = CorrectedIndex(index, np.asarray(vectors, dtype=np.float32))
+    assert corrected.ntotal == len(id_map), (corrected.ntotal, len(id_map))
+    return corrected, len(ids)
 
 
 def search_and_rerank(
