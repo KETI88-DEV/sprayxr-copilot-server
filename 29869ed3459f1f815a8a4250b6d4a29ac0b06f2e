@@ -1,0 +1,12 @@
+{
+  "id": 449524635,
+  "tag_name": "v3.11.0",
+  "html_url": "https://github.com/KETI88-DEV/sprayxr-copilot-server/releases/tag/v3.11.0",
+  "published_at": "2026-11-18T04:28:03Z",
+  "source_main_commit": "bed5c8277556ea147a535aaeb52adb060ea5e1ec",
+  "release_commit": "29869ed3459f1f815a8a4250b6d4a29ac0b06f2e",
+  "release_tree": "c55c73e7b1b28d68597f6760719ad73d7808ae5f",
+  "is_latest": true,
+  "import_verification": "operator-prechecked tree; exact hash matched before publication",
+  "run_url": "https://github.com/KETI88-DEV/sprayxr-copilot-server/actions/runs/44237498491"
+}
