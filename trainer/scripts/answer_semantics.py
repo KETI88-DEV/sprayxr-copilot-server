@@ -14,8 +14,9 @@ from dataclasses import dataclass
 from itertools import combinations
 from typing import Any, Callable, Mapping, Sequence
 
-POLICY_VERSION = 'dialogue-grounding-v2'
-REVIEW_REGEX = r'이유: [^\r\n]{1,32}\n근거: (?:[1-4](?:,[1-4]){0,3}|없음)\n판정: (?:OK|REWRITE|INSUFFICIENT)'
+POLICY_VERSION = 'dialogue-grounding-v7'
+MAX_VISIBLE_EVIDENCE = 8
+REVIEW_REGEX = r'이유: [^\r\n]{1,32}\n근거: (?:[1-8](?:,[1-8]){0,7}|없음)\n판정: (?:OK|REWRITE|INSUFFICIENT)'
 _LEGACY_REVIEW_REGEX = r'이유: [^\r\n]{1,40}\n판정: (?:OK|REWRITE|INSUFFICIENT)'
 UNCONFIRMED_ANSWER = '[답변] 제공된 자료만으로는 질문에 맞는 설명을 충분히 확인하지 못했습니다.'
 SOURCE_CONTEXT_TEMPLATE = (
@@ -25,17 +26,18 @@ SOURCE_CONTEXT_TEMPLATE = (
 )
 
 
-def review_regex(evidence_count: int) -> str:
+def review_regex(evidence_count: int, *, reason_limit: int = 32) -> str:
     """Constrain decoder support to the visible, uniquely ordered paragraph sets.
 
     REVIEW_REGEX remains the parser's superset for historical responses. The
     decoder must not invent a fourth paragraph when only three were supplied.
     """
-    visible = max(0, min(evidence_count, 4))
+    visible = max(0, min(evidence_count, MAX_VISIBLE_EVIDENCE))
     supports = ['없음'] + [','.join(map(str, indices))
                          for size in range(1, visible + 1)
                          for indices in combinations(range(1, visible + 1), size)]
-    return (r'이유: [^\r\n]{1,32}\n근거: (?:' + '|'.join(supports)
+    reason_limit = max(1, min(reason_limit, 32))
+    return (rf'이유: [^\r\n]{{1,{reason_limit}}}\n근거: (?:' + '|'.join(supports)
             + r')\n판정: (?:OK|REWRITE|INSUFFICIENT)')
 
 
@@ -43,11 +45,15 @@ def answer_system_prompt(*, detailed: bool, has_evidence: bool, summarize: bool 
     from trainer.demo_api.quick_answer import QUERY_SUMMARY_INSTRUCTION
     return (
         '당신은 자연스럽게 대화하는 선박 도장 훈련 코치입니다. 현재 사용자가 무엇을 요구하는지 먼저 이해하고 그 요구에 직접 답하세요. '
+        '수식·코드 등 특정 표현을 유지하거나 제외하라는 사용자의 명시적 지시는 현재 질문의 맥락대로 따르세요. '
+        '요청하지 않은 표기나 계산 결과를 임의로 덧붙이지 마세요. '
         '정의를 물으면 뜻, 원인·이유를 물으면 발생 조건과 이유, 방법을 물으면 실행 방법, 비교를 물으면 차이를 설명하세요. '
         '비교하는 두 대상을 무조건 반대이거나 상호 배타적인 개념으로 가정하지 말고 정의·공통점·인과관계·포함관계를 구분하세요. '
         '문서에 적힌 증가·감소 및 원인·결과의 방향을 바꾸지 마세요. '
         '검색 문서가 관련 있다는 이유만으로 그 문장의 주제로 질문을 바꾸지 마세요. '
         '일반 질문에 특정 부위·조건의 사례만 제시할 때는 그 한계를 명시하고 전체 현상처럼 정의하지 마세요. '
+        '문서에 질문의 일부 원인·방법·조건만 확인되면 확인되는 부분부터 답하고 나머지는 확인되지 않는다고 구분하세요. '
+        '모든 원인이 한 문서에 함께 나와야 답할 수 있는 것은 아닙니다. 서로 다른 문단의 설명도 대상·공정·조건이 맞으면 함께 사용할 수 있습니다. '
         '앞선 대화의 지시어와 추가 조건을 반영하고, 사용자가 이전 답을 정정하면 그 설명을 다시 검토하세요. '
         '이전 AI 답변은 대화 참고이며 검증된 사실이 아닙니다. 사용자 관찰은 조건으로 다루고 서버 실측값으로 바꾸지 마세요. '
         '확인된 현재 측정값과 일반적인 가능한 원인을 구분하고 실제 원인을 데이터 없이 확정하지 마세요. '
@@ -76,6 +82,7 @@ def cacheable_candidate(answer: str) -> bool:
     compact = re.sub(r'\s+', '', answer)
     return not bool(re.search(
         r'확인(?:할수없|하지못|되지않)|판단할수없|근거(?:를찾지못|가없|가부족|부족)|'
+        r'(?:해당|요청한)(?:정보|내용)(?:가|이)없|'
         r'답변(?:을생성하지못|을제공할수없|하기어렵)|자료(?:가부족|만으로)|질문에맞는설명을충분히', compact))
 
 
@@ -144,7 +151,7 @@ def evidence_trace(chunks: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     return [{'chunk_id': str(c.get('chunk_id', ''))[:160],
              'sha256': hashlib.sha256(str(c.get('text', '')).encode()).hexdigest(),
              'characters': len(str(c.get('text', ''))), 'rerank_score': _score(c),
-             'excerpt': str(c.get('text', ''))[:1600]} for c in chunks[:4]]
+             'excerpt': str(c.get('text', ''))[:1600]} for c in chunks[:MAX_VISIBLE_EVIDENCE]]
 
 
 def review_dialogue_context(instruction: str) -> str:
@@ -175,32 +182,68 @@ def review_dialogue_context(instruction: str) -> str:
     return '\n\n'.join(blocks) or instruction[:1600]
 
 
-def review_messages(question: str, instruction: str, candidate: str, evidence: Sequence[Mapping[str, Any]], *, require_evidence: bool) -> list[dict[str, str]]:
+def review_messages(question: str, instruction: str, candidate: str, evidence: Sequence[Mapping[str, Any]], *, require_evidence: bool,
+                    reason_limit: int = 32) -> list[dict[str, str]]:
     # Candidate citations may point at a definition while another supplied
     # passage supports the explanation. Check the body against ALL visible
     # evidence, then bind it to supporting passages by short, validated numbers.
-    passages = '\n\n'.join(f"[문단 {index}] {str(c.get('text', ''))[:1600]}"
-                             for index, c in enumerate(evidence[:4], 1))
-    system = (
-        '답변을 독립적으로 검증하세요. 형식이나 관련 문서 인용 여부를 칭찬하지 말고 후보의 구체적인 주장과 질문·원문을 직접 대조하세요. '
+    common = (
+        '답변을 독립적으로 검증하세요. 질문의 대상·요구한 설명·사용자가 제공한 조건을 먼저 확인하세요. '
+        '짧은 질문도 제공된 대화·작업 맥락을 함께 읽고 그 대상과 적용 범위에 맞게 답했는지 검토하세요. '
+        '요청한 관계를 바꾸면 REWRITE입니다. 종류(type-of) 질문에 부분·구성요소(part-of)나 관련 용어·작업 순서만 나열하는 것은 답이 아닙니다. '
+        '유형은 분류 기준과 작업 맥락에 맞아야 하며 기준이 불명확할 때는 맥락에 맞는 확인 질문도 OK입니다. '
+        '후보가 다른 현상을 설명하거나 조건을 무시하거나 반대 인과를 말하면 REWRITE입니다. '
+        '일반적인 원인·방법을 묻는 질문은 모든 가능한 원인을 망라할 필요가 없습니다. '
+        '현재 질문이 원인인데 정의만 말하거나, 사용자가 제외한 조건만 원인으로 되풀이하면 REWRITE입니다. '
+        '이전 AI 답변은 미검증이며 새로운 사실을 확인하는 근거가 아닙니다. '
+    )
+    if require_evidence:
+        policy = (
+        '후보의 구체적인 주장과 질문·원문을 직접 대조하세요. '
+        '먼저 질문의 대상·공정·조건과 요구한 설명을 구분하고, 각 문단이 그중 어떤 부분에 답할 수 있는지 확인한 뒤 후보를 검토하세요. '
+        '용어가 비슷해도 대상·공정·작업 단계가 다르면 같은 설명의 근거로 삼지 마세요. '
+        '원문의 주어·대상 현상·조건·인과 방향을 각각 대조하세요. 주어가 잘린 원인 목록의 대상을 추정하거나 다른 현상의 원인을 질문한 현상으로 옮기면 안 됩니다. '
+        '어떤 현상을 예방해야 한다는 학습 목표·자기평가 문항만으로는 그 현상의 원인을 설명할 수 없습니다. '
         'OK는 요청에 직접 답하며 기술적 주장·인과·조절 방향이 근거와 일치할 때만 선택합니다. '
+        '확인되는 일부 설명과 그 범위·한계를 정확히 답하면 OK입니다. '
         '후보의 인용 ID가 틀렸더라도 다른 제공 문단이 본문을 뒷받침하면 본문은 OK로 하고 그 지원 문단 번호를 고르세요. '
         '후보의 주장을 함께 뒷받침하는 문단만 선택하며 관련 주제라는 이유로 선택하지 마세요. '
         'REWRITE는 질문 누락, 반대 인과, 근거 없는 주장, 조건 무시, 특수 사례의 일반화입니다. '
-        'INSUFFICIENT는 문서 자체에 요청한 설명을 뒷받침할 정보가 부족할 때입니다. 이전 AI 답변은 근거가 아닙니다. '
+        '문서에 일부 요구를 설명할 정보가 있지만 후보가 전부 거절하거나 범위를 과장하면 REWRITE로 하고 활용 가능한 문단을 고르세요. '
+        'INSUFFICIENT는 요청한 설명의 어느 부분도 문서로 답할 수 없을 때만 선택하며 이때 근거는 없음입니다. '
         '비교 대상은 반대 개념일 수도, 인과관계일 수도 있으므로 자료를 확인하세요. '
         '검토 예: 문서가 A 증가→B 발생인데 후보가 A 감소→B 발생이면 REWRITE(반대 원인). '
         '이전 질문이 문제 P의 원인이고 현재 사용자가 A는 정상이었다고 했는데 후보가 A가 정상이면 좋다고만 답하면 REWRITE(남은 원인 누락). '
         '질문이 P의 원인인데 후보가 P의 정의만 말하면 REWRITE(원인 누락). '
-        + ('후보의 각각의 기술적 설명은 아래 원문에서 뒷받침되어야 합니다. '
-           if require_evidence else '외부 검색을 끈 요청이므로 일반 지식 설명은 허용하되 실제 측정값을 만들면 안 됩니다. ')
-        + '후보와 원문 주장을 직접 대조한 이유를 32자 이내로 쓰세요. 도입문 대신 실제 일치·불일치를 지적하세요. '
+        '후보의 각각의 기술적 설명은 아래 원문에서 뒷받침되어야 합니다. '
         '근거에는 본문을 뒷받침하는 문단 번호를 쉼표로 쓰고 없으면 없음으로 쓰세요. '
+        )
+        passages = '\n\n'.join(f"[문단 {index}] {str(c.get('text', ''))}"
+                                 for index, c in enumerate(evidence[:MAX_VISIBLE_EVIDENCE], 1))
+        reference = '\n[참고 문서]\n' + (passages or '없음')
+        reason_instruction = '후보와 원문 주장을 직접 대조한 이유'
+    else:
+        policy = (
+            '이 후보는 문서 기반 답변이 아닌 일반 지식 설명 또는 정보 한계 설명입니다. '
+            '문서 부재만으로 INSUFFICIENT를 선택하지 마세요. '
+            '일반적으로 가능한 원인·방법·관계를 질문한 경우에는 기술적으로 타당하고 질문에 직접 답하면 OK입니다. '
+            '가능한 원인과 현재 작업에서 확인된 실제 원인을 구분하세요. '
+            '질문의 대상·조건을 바꾸거나, 문서로 확인했다는 주장·문서 번호·현재 실측값·임의 수치 기준을 만들면 REWRITE입니다. '
+            '제공되지 않은 비공개 기록·측정이나 실시간 정보는 알 수 없습니다. '
+            '사용자가 문서만 요구하거나 필요한 기록·현재 정보가 제공되지 않은 경우, 확인할 수 없음을 밝히고 필요한 자료를 요청하는 정직한 한계 설명은 OK입니다. '
+            '이때 요구를 무시하고 일반 지식으로 보충하거나 확인한 것처럼 단정하면 REWRITE입니다. '
+            '후보가 안전하고 타당한 일반 설명도 정직한 한계 설명도 제공하지 못하면 INSUFFICIENT입니다. '
+            '근거는 항상 없음으로 쓰세요. '
+        )
+        reference = ''
+        reason_instruction = '후보가 질문·조건·알 수 있는 정보의 범위를 지키는지 검토한 이유'
+    system = (common + policy + f'{reason_instruction}를 {reason_limit}자 이내로 쓰세요. '
+        '질문 문장을 복사하지 말고 실제 일치·불일치만 지적하세요. '
         '출력 형식: 이유: 짧은 검토 이유\n근거: 문단 번호 또는 없음\n판정: OK 또는 REWRITE 또는 INSUFFICIENT'
     )
     return [{'role':'system', 'content':system}, {'role':'user', 'content':
         '[검토할 대화·조건 — 이전 AI 답변은 미검증]\n' + review_dialogue_context(instruction)
-        + '\n[참고 문서]\n' + (passages or '없음') + '\n[현재 질문]\n' + question[:4000]
+        + reference + '\n[현재 질문]\n' + question[:4000]
         + '\n[후보 답변]\n' + candidate[:3000]}]
 
 
@@ -226,9 +269,11 @@ def _supporting_indices(text: str) -> tuple[int, ...] | None:
 
 
 def _bind_citations(candidate: str, evidence: Sequence[Mapping[str, Any]], indices: tuple[int, ...]) -> str:
-    from trainer.scripts.live_response_contract import parse_knowledge_answer, retrieved_chunk_ids
-    parsed = parse_knowledge_answer(candidate, retrieved_chunk_ids(evidence))
+    from trainer.scripts.live_response_contract import parse_knowledge_answer
     citations = [str(evidence[index]['chunk_id']) for index in indices]
+    # Inline IDs otherwise survive the corrected evidence line and are added
+    # back by the public parser. Only independently approved sources may remain.
+    parsed = parse_knowledge_answer(candidate, citations)
     return '[답변] ' + parsed.body + ('\n[근거] ' + ', '.join(citations) if citations else '')
 
 
@@ -241,15 +286,22 @@ class ReviewedAnswer:
     elapsed_ms: int
     cacheable: bool
     reason: str = ''
+    events: tuple[dict[str, Any], ...] = ()
 
 
 def review_answer(question: str, instruction: str, candidate: str, evidence: Sequence[Mapping[str, Any]], *,
                   complete: Callable[[list[dict[str, str]], float], str],
                   regenerate: Callable[[str, float], str], require_evidence: bool,
                   budget_seconds: float, clock: Callable[[], float] = time.monotonic,
+                  review_timeout_seconds: float = 2.5,
+                  review_reason_limit: int = 32,
+                  review_transport_retries: int = 0,
+                  retryable_review_error: Callable[[Exception], bool] = lambda _exc: False,
                   valid_candidate: Callable[[str], bool] = lambda value: bool(value.strip())) -> ReviewedAnswer:
     start = clock()
     calls = retries = 0
+    transport_retries_left = max(0, min(review_transport_retries, 1))
+    events: list[dict[str, Any]] = []
     verdict, result, cacheable, reason = 'unavailable', UNCONFIRMED_ANSWER, False, ''
     try:
         while True:
@@ -258,13 +310,36 @@ def review_answer(question: str, instruction: str, candidate: str, evidence: Seq
                 verdict = 'budget_exhausted'
                 break
             if valid_candidate(candidate):
-                calls += 1
-                raw_review = complete(review_messages(question, instruction, candidate, evidence,
-                                                      require_evidence=require_evidence), min(2.5, remaining))
+                messages = review_messages(question, instruction, candidate, evidence,
+                                           require_evidence=require_evidence, reason_limit=review_reason_limit)
+                while True:
+                    remaining = budget_seconds - (clock() - start)
+                    if remaining <= .05:
+                        raise TimeoutError('Semantic review phase exhausted')
+                    calls += 1
+                    try:
+                        raw_review = complete(messages, min(review_timeout_seconds, remaining))
+                        break
+                    except Exception as exc:
+                        events.append({'verdict':'review_error','error_type':type(exc).__name__,
+                            'support':[],'support_valid':False,'within_budget':clock()-start<budget_seconds,
+                            'elapsed_ms':int((clock()-start)*1000)})
+                        if not transport_retries_left or not retryable_review_error(exc):
+                            raise
+                        # A transport failure has no semantic verdict. Recheck
+                        # the identical candidate once, never regenerate it for
+                        # this reason or extend the total review phase.
+                        transport_retries_left -= 1
+                decision, reason = parse_review(raw_review), review_reason(raw_review)
+                support = _supporting_indices(raw_review)
+                support_valid = support is not None and all(index < len(evidence) and evidence[index].get('chunk_id') for index in support)
+                events.append({'verdict':decision or 'invalid', 'reason':reason,
+                    'support':[str(evidence[index]['chunk_id']) for index in support or ()] if support_valid else [],
+                    'support_valid':bool(support_valid),'within_budget':clock() - start < budget_seconds,
+                    'elapsed_ms':int((clock() - start) * 1000)})
                 if clock() - start >= budget_seconds:
                     verdict = 'budget_exhausted'
                     break
-                decision, reason = parse_review(raw_review), review_reason(raw_review)
             else:
                 # An empty/failed body is a known structural failure; a model
                 # must never be able to approve it merely for citing a source.
@@ -290,8 +365,21 @@ def review_answer(question: str, instruction: str, candidate: str, evidence: Seq
                 result, cacheable = candidate, True
                 break
             if decision == 'insufficient':
-                verdict = 'insufficient'
-                break
+                support = _supporting_indices(raw_review)
+                if support and any(index >= len(evidence) or not evidence[index].get('chunk_id') for index in support):
+                    verdict = 'invalid_support'
+                    break
+                if not require_evidence or not support or retries:
+                    verdict = 'insufficient'
+                    break
+                # A reviewer may still apply an exhaustive-answer standard.
+                # Positive support permits one smaller candidate, never approval
+                # of the original claims. The next review must validate it anew.
+                supported_ids = ', '.join(str(evidence[index]['chunk_id']) for index in support)
+                reason += ('\n질문에 답할 수 있는 부분 근거: ' + supported_ids + '. '
+                           '이 자료가 직접 설명하는 부분만 범위를 밝혀 답하고, 남은 요구는 확인되지 않는다고 구분하세요. '
+                           '모든 원인·방법을 망라하려고 새 주장을 보충하지 마세요.')
+                decision = 'rewrite'
             if decision != 'rewrite':
                 verdict = 'invalid_review'
                 break
@@ -307,10 +395,12 @@ def review_answer(question: str, instruction: str, candidate: str, evidence: Seq
                 ('검토 이유: ' + reason + '\n' if reason else '') +
                 '검토에서 앞 후보가 질문 요구·적용 범위·후속 조건을 충분히 반영하지 못했습니다. '
                 '원래 질문을 다시 읽고 요청한 내용에 직접 답하세요. 정의만 반복하거나 특정 사례를 전체 현상으로 확대하지 마세요. '
-                '참고 문서와 확인된 사실만 사용하고 자료가 부족하면 한계를 설명하세요. 앞 후보의 틀린 내용을 답습하지 마세요.',
+                + ('참고 문서와 확인된 사실만 사용하고 자료가 부족하면 한계를 설명하세요. ' if require_evidence else
+                 '문서로 확인되지 않은 일반 지식으로 설명하되 현재 실측·문서 인용·임의 수치 기준을 만들지 마세요. ')
+                + '앞 후보의 틀린 내용을 답습하지 마세요.',
                 remaining)
     except Exception:
         # A failed optional judge must not certify or cache a candidate that was
         # selected for review. The API's existing evidence/safety checks still run.
         verdict = 'budget_exhausted' if clock() - start >= budget_seconds else 'unavailable'
-    return ReviewedAnswer(result, verdict, retries, calls, int((clock() - start) * 1000), cacheable, reason)
+    return ReviewedAnswer(result, verdict, retries, calls, int((clock() - start) * 1000), cacheable, reason, tuple(events))

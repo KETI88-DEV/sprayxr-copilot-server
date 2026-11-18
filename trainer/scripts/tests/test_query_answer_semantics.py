@@ -120,6 +120,22 @@ def test_changed_evidence_invalidates_semantically_validated_cache(monkeypatch):
     assert len(calls) == 4
 
 
+def test_changed_review_policy_invalidates_a_previously_approved_cached_answer(monkeypatch):
+    import trainer.scripts.agent_pipeline as module
+    pipeline, _, _, _ = _pipeline(monkeypatch)
+    calls = []
+    def generate(_messages, **options):
+        calls.append(options)
+        if _is_review(options):
+            return '이유: 원문과 일치함\n근거: 1\n판정: OK'
+        return '[답변] 작업 조건이 원인이 될 수 있습니다.\n[근거] DOC-a-C0001'
+    pipeline._generate_direct = generate
+    run_query(pipeline)
+    assert run_query(pipeline)['metadata']['quick_cache_hit'] and len(calls) == 2
+    monkeypatch.setattr(module, 'POLICY_VERSION', module.POLICY_VERSION + '-changed-contract')
+    assert not run_query(pipeline)['metadata']['quick_cache_hit'] and len(calls) == 4
+
+
 def test_a_rewrite_that_still_does_not_answer_is_withheld_instead_of_cached(monkeypatch):
     pipeline, _, _, _ = _pipeline(monkeypatch)
     outputs = iter(['[답변] 정의만 설명합니다.\n[근거] DOC-a-C0001', 'REWRITE',

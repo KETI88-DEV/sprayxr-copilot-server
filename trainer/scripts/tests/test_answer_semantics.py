@@ -121,7 +121,7 @@ class AnswerSemanticsTests(unittest.TestCase):
         self.assertTrue(result.cacheable)
         self.assertNotIn('[근거]', result.text)
         rejected = review_answer('원인은?', '', '[답변] 후보 답변입니다.', [{'chunk_id':'DOC-one-C0001','text':'자료'}],
-            complete=lambda *args:'이유: 자료가 부족함\n근거: 1\n판정: INSUFFICIENT',
+            complete=lambda *args:'이유: 자료가 부족함\n근거: 없음\n판정: INSUFFICIENT',
             regenerate=lambda *args:self.fail('insufficient evidence must not repair'), require_evidence=True, budget_seconds=3)
         self.assertFalse(rejected.cacheable)
         self.assertEqual(rejected.verdict, 'insufficient')

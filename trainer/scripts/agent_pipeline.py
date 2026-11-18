@@ -44,7 +44,7 @@ from trainer.scripts.answer_grammar import (
 from trainer.scripts.live_response_contract import FAILED_REPAIR_PATHS, parse_knowledge_answer, retrieved_chunk_ids
 from trainer.scripts.quick_answer import TextCache, inference_key
 from trainer.scripts.answer_semantics import (
-    POLICY_VERSION, SOURCE_CONTEXT_TEMPLATE, answer_system_prompt,
+    MAX_VISIBLE_EVIDENCE, POLICY_VERSION, SOURCE_CONTEXT_TEMPLATE, answer_system_prompt,
     cacheable_candidate, evidence_trace, has_repetition_loop, review_answer, review_regex, review_required, select_evidence,
 )
 from trainer.scripts.live_sequence_fallback import is_sequence_intent
@@ -58,6 +58,7 @@ from trainer.scripts.openai_backend import (
     ContextLengthExceededError,
     GenerationCancelledError,
     OpenAIBackendSettings,
+    OpenAIBackendTimeoutError,
     OpenAIChatBackend,
     StructuredOutputUnsupportedError,
     generation_cancel_scope,
@@ -413,6 +414,8 @@ class VLLMWrapper:
 
 
 class AgentPipeline:
+    supports_reviewed_knowledge_fallback = True
+
     def __init__(
         self,
         config_path: str | Path,
@@ -494,13 +497,78 @@ class AgentPipeline:
             messages = planning_messages(prompt, task_type=task_type, recent_turns=recent_turns, facts=facts)
         return parse_plan(self._dialogue_completion(messages, max_tokens=192, answer_regex=plan_regex(), **options))
 
-    def converse_copilot(self, prompt, *, recent_turns, facts, response_mode, simulator_context="", summarize=False, **options):
-        from trainer.demo_api.dialogue import conversation_messages
+    def converse_copilot(self, prompt, *, recent_turns, facts, response_mode, simulator_context="", summarize=False,
+                         knowledge_fallback=False, **options):
+        from trainer.demo_api.dialogue import KNOWLEDGE_TASK_CONTEXT, conversation_messages
         messages = conversation_messages(prompt, recent_turns=recent_turns, facts=facts, response_mode=response_mode,
-                                         simulator_context=simulator_context, summarize=summarize)
+                                         simulator_context=simulator_context, summarize=summarize,
+                                         knowledge_fallback=knowledge_fallback)
         # Query modes choose the resident model; presentation is independent.
         # The fixed ceiling and context check keep generation bounded.
-        return self._dialogue_completion(messages, max_tokens=1024, **options)
+        candidate = self._dialogue_completion(messages, max_tokens=1024,
+            answer_regex=knowledge_answer_regex(has_evidence=False) if knowledge_fallback else None, **options)
+        if not knowledge_fallback:
+            return candidate
+
+        selected = options.get("inference_backend", self.model)
+        runtime = getattr(self, "quick_query_runtime", None)
+        reviewer = selected if response_mode == "detailed" else getattr(runtime, "backend", selected)
+        review_tokens = 64 if response_mode == "detailed" else 80
+        review_reason_limit = 12 if response_mode == "detailed" else 32
+        review_options = dict(options)
+        if reviewer is not selected:
+            review_options.update(inference_backend=reviewer, inference_counter=runtime.token_counter,
+                                  inference_context_limit=runtime.context_limit)
+
+        def bounded(messages, timeout, *, review=False):
+            selected_options = dict(review_options if review else options)
+            backend = selected_options.get("inference_backend", self.model)
+            temporary = None
+            acquired = False
+            try:
+                if review and reviewer is not selected:
+                    acquired = QUICK_GENERATION_SLOT.acquire(timeout=min(.15, timeout))
+                    if not acquired:
+                        raise TimeoutError("Quick semantic review slot busy")
+                if isinstance(backend, OpenAIChatBackend):
+                    temporary = OpenAIChatBackend(replace(backend.settings, request_timeout_sec=max(.05, timeout),
+                        connect_timeout_sec=min(backend.settings.connect_timeout_sec, max(.05, timeout))))
+                    selected_options["inference_backend"] = temporary
+                with generation_deadline_scope(timeout):
+                    return self._dialogue_completion(list(messages), max_tokens=review_tokens if review else 1024,
+                        answer_regex=review_regex(0, reason_limit=review_reason_limit) if review else knowledge_answer_regex(has_evidence=False), **selected_options)
+            finally:
+                if temporary is not None:
+                    temporary.close()
+                if acquired:
+                    QUICK_GENERATION_SLOT.release()
+
+        def regenerate(repair, timeout):
+            return bounded(messages + [{"role": "assistant", "content": candidate},
+                {"role": "user", "content": repair + "\n[현재 질문]\n" + prompt}], timeout)
+
+        instruction = ("[최근 대화]\n" + json.dumps(recent_turns, ensure_ascii=False)
+                       + "\n[클라이언트 현재 문맥]\n[서버 작업 맥락]\n" + KNOWLEDGE_TASK_CONTEXT
+                       + '\n[확인된 사실]\n' + json.dumps(facts, ensure_ascii=False))
+        def valid_fallback(value):
+            parsed = parse_knowledge_answer(value, [])
+            return (parsed.repair_path not in FAILED_REPAIR_PATHS
+                    and re.fullmatch(knowledge_answer_regex(has_evidence=False), value.strip()) is not None
+                    and bool(re.search(r"[가-힣A-Za-z0-9]", parsed.body))
+                    and not has_repetition_loop(parsed.body))
+        checked = review_answer(prompt, instruction, candidate, [],
+            complete=lambda review_messages, timeout: bounded(review_messages, timeout, review=True),
+            regenerate=regenerate, require_evidence=False, budget_seconds=25.0 if response_mode == "detailed" else 5.0,
+            review_timeout_seconds=8.0 if response_mode == "detailed" else 2.5,
+            review_reason_limit=review_reason_limit,
+            review_transport_retries=1 if response_mode == "detailed" else 0,
+            retryable_review_error=lambda exc:isinstance(exc,OpenAIBackendTimeoutError),
+            valid_candidate=valid_fallback)
+        if not checked.cacheable:
+            # An unavailable judge is an operational error, not a validated
+            # insufficiency or permission to publish an unchecked explanation.
+            raise ValueError("General knowledge answer could not be verified: " + checked.verdict)
+        return checked.text
 
     def translate_copilot_text(self, text: str, *, source_language: str, target_language: str,
                                inference_backend: Any = None, inference_counter: Any = None,
@@ -1290,6 +1358,8 @@ class AgentPipeline:
             by_id = self._chunks_by_id = {str(row.get("chunk_id", "")): row for row in self.id_map if not row.get("superseded")}
         excluded = getattr(search_mod, "EXCLUDED_CHUNKS", frozenset())
         wanted = [dict(by_id[c]) for c in dict.fromkeys(chunk_ids) if c in by_id and c not in excluded]
+        limit = max(0, min(MAX_VISIBLE_EVIDENCE, int(self.config.get("reranker", {}).get("top_k_rerank", 8))))
+        wanted = wanted[:limit]
         if not wanted:
             return rag_chunks
         if self.reranker is not None:
@@ -1298,7 +1368,7 @@ class AgentPipeline:
         pinned = [{"chunk_id": row["chunk_id"], "text": row.get("text", ""), "rerank_score": row.get("rerank_score"),
                    "pinned": True} for row in wanted]
         kept = {row["chunk_id"] for row in pinned}
-        room = max(0, int(self.config.get("reranker", {}).get("top_k_rerank", 8)) - len(pinned))
+        room = max(0, limit - len(pinned))
         return pinned + [chunk for chunk in rag_chunks if chunk["chunk_id"] not in kept][:room]
 
     def run(
@@ -1541,7 +1611,10 @@ class AgentPipeline:
                                        or not semantic_candidate_valid(raw_response)):
                     selected_backend = inference_backend if inference_backend is not None else self.model
                     quick_runtime = getattr(self, "quick_query_runtime", None)
-                    reviewer = getattr(quick_runtime, "backend", selected_backend)
+                    reviewer = selected_backend if compact_analysis else getattr(quick_runtime, "backend", selected_backend)
+                    review_max_tokens = 64 if compact_analysis else 80
+                    review_reason_limit = 12 if compact_analysis else 32
+                    review_contexts = []
 
                     def bounded_completion(review_messages, timeout, *, backend, tokens, regex=None):
                         temporary = None
@@ -1562,6 +1635,12 @@ class AgentPipeline:
                                 temporary.close()
 
                     def complete_review(review_messages, timeout):
+                        review_counter = (getattr(quick_runtime, "token_counter", None) or counter) if reviewer is not selected_backend else counter
+                        review_limit = getattr(quick_runtime, "context_limit", max_model_len) if reviewer is not selected_backend else max_model_len
+                        review_tokens = review_counter.count_messages(review_messages)
+                        review_contexts.append({'prompt_tokens':review_tokens,'max_new_tokens':review_max_tokens,'context_limit':review_limit})
+                        if review_tokens + review_max_tokens + 32 > review_limit:
+                            raise ValueError("Semantic review exceeds model context")
                         separate_slot = reviewer is not selected_backend
                         acquired = False
                         if separate_slot:
@@ -1569,8 +1648,8 @@ class AgentPipeline:
                             if not acquired:
                                 raise TimeoutError("Quick semantic review slot busy")
                         try:
-                            return bounded_completion(review_messages, timeout, backend=reviewer, tokens=80,
-                                                      regex=review_regex(len(evidence)))
+                            return bounded_completion(review_messages, timeout, backend=reviewer, tokens=review_max_tokens,
+                                                      regex=review_regex(len(evidence), reason_limit=review_reason_limit))
                         finally:
                             if acquired:
                                 QUICK_GENERATION_SLOT.release()
@@ -1587,11 +1666,16 @@ class AgentPipeline:
 
                     reviewed = review_answer(answer_question, generation_instruction or instruction, raw_response, evidence,
                         complete=complete_review, regenerate=regenerate_answer, require_evidence=use_rag,
-                        budget_seconds=7.0 if compact_analysis else 5.0, valid_candidate=semantic_candidate_valid)
+                        budget_seconds=25.0 if compact_analysis else 5.0,
+                        review_timeout_seconds=8.0 if compact_analysis else 2.5,
+                        review_transport_retries=1 if compact_analysis else 0,
+                        retryable_review_error=lambda exc:isinstance(exc,OpenAIBackendTimeoutError),
+                        review_reason_limit=review_reason_limit, valid_candidate=semantic_candidate_valid)
                     raw_response = reviewed.text
                     semantic_cacheable = reviewed.cacheable
                     semantic_review = {"verdict":reviewed.verdict, "retries":reviewed.retries, "calls":reviewed.calls,
-                                       "latency_ms":reviewed.elapsed_ms, "cacheable":reviewed.cacheable, "reason":reviewed.reason}
+                                       "latency_ms":reviewed.elapsed_ms, "cacheable":reviewed.cacheable, "reason":reviewed.reason,
+                                       "events":list(reviewed.events),"contexts":review_contexts}
                 semantic_cacheable = semantic_cacheable and cacheable_candidate(raw_response)
                 semantic_review['cacheable'] = semantic_cacheable
                 semantic_trace = {"policy_version":POLICY_VERSION, "question":answer_question[:1000],

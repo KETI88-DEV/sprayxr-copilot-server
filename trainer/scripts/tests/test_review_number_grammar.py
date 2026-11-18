@@ -17,17 +17,17 @@ def _review(support, verdict='OK'):
     return f'이유: 원문의 주장을 반영함\n근거: {support}\n판정: {verdict}'
 
 
-@pytest.mark.parametrize('count', [0, 1, 2, 3, 4, 8])
+@pytest.mark.parametrize('count', [0, 1, 2, 3, 4, 5, 6, 8, 12])
 def test_review_grammar_allows_exactly_the_visible_canonical_support_sets(count):
     grammar = _grammar(count)
-    visible = min(count, 4)
+    visible = min(count, 8)
     allowed = {'없음'} | {','.join(map(str, values))
                          for size in range(1, visible + 1)
                          for values in combinations(range(1, visible + 1), size)}
     for support in allowed:
         for verdict in ('OK', 'REWRITE', 'INSUFFICIENT'):
             assert re.fullmatch(grammar, _review(support, verdict)), (count, support, verdict)
-    for support in ('0', '5', '', '1,1', '2,1', '1,2,4,1', str(visible + 1)):
+    for support in ('0', '9', '', '1,1', '2,1', '1,2,4,1', str(visible + 1)):
         assert re.fullmatch(grammar, _review(support)) is None, (count, support)
 
 

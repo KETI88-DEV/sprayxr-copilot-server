@@ -35,6 +35,7 @@ import math
 import os
 import re
 import time
+from contextlib import nullcontext
 from urllib.parse import quote
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
@@ -52,7 +53,7 @@ from trainer.demo_api.coating_query import (
     answer_coating_question, answer_distribution_cause, drop_contradicted_causes, parse_viewer_coating_context,
     report_coating_context, target_advice_facts, zone_measures)
 from trainer.demo_api.copilot_intent import RECORD_OBJECT, classify_question_intent, fallback_intent, preset_intent, is_coating_status_question, is_coating_advice_question, is_domain_question, is_general_painting_knowledge, is_explanatory_question, is_off_topic
-from trainer.demo_api.dialogue import (INSTRUCTION_REFUSAL, asks_for_instructions, authenticated_facts, conversation_key,
+from trainer.demo_api.dialogue import (GENERAL_KNOWLEDGE_LIMIT, INSTRUCTION_REFUSAL, asks_for_instructions, authenticated_facts, conversation_key,
                                        drop_misattributed_zones, drop_sentences, drop_ungrounded, guard_generated_answer, has_body, parse_plan, plain_answer,
                                        viewer_claims, zone_fact_numbers,
                                        selected_direction_answer, ungrounded_measurements, viewer_findings_answer,
@@ -95,13 +96,14 @@ from trainer.demo_api.record_query import BODY_PART, DIRECTION_WORD, FIRST_FIX, 
 from trainer.demo_api.viewer_progress import progress_question, viewer_progress_answer
 from trainer.demo_api.query_runtime import generation_slot_for, retrieval_question, select_query_pipeline, translation_pipeline_for
 from trainer.demo_api.quick_answer import summarize_query_answer
+from trainer.scripts.answer_semantics import cacheable_candidate
 from trainer.scripts.generation_slot import GENERATION_SLOT  # Legacy slot identity for unconfigured clients.
 from trainer.scripts.live_response_contract import (
     FAILED_REPAIR_PATHS,
     parse_knowledge_answer,
     retrieved_chunk_ids,
 )
-from trainer.scripts.openai_backend import OpenAIBackendUnavailableError
+from trainer.scripts.openai_backend import OpenAIBackendUnavailableError, generation_deadline_scope
 
 if TYPE_CHECKING:
     from trainer.demo_api.chat_service import _Pipeline
@@ -832,7 +834,7 @@ def _with_answer_trace(response: JSONResponse, result: Mapping[str, Any]) -> JSO
     evidence = trace.get("selected_evidence")
     if isinstance(evidence, list):
         clean["selected_evidence"] = []
-        for item in evidence[:4]:
+        for item in evidence[:8]:
             if not isinstance(item, Mapping):
                 continue
             row: dict[str, Any] = {key: item[key][:limit] for key, limit in (
@@ -859,6 +861,24 @@ def _with_answer_trace(response: JSONResponse, result: Mapping[str, Any]) -> JSO
                 clean["review"][key] = min(number, 2147483647)
         if isinstance(review.get("cacheable"), bool):
             clean["review"]["cacheable"] = review["cacheable"]
+        events=review.get("events")
+        if isinstance(events,list):
+            clean["review"]["events"]=[]
+            for event in events[:2]:
+                if not isinstance(event,Mapping):continue
+                entry={key:event[key][:160] for key in ("verdict","reason") if isinstance(event.get(key),str)}
+                for key in ("support_valid","within_budget"):
+                    if isinstance(event.get(key),bool):entry[key]=event[key]
+                if isinstance(event.get("elapsed_ms"),int) and not isinstance(event["elapsed_ms"],bool):
+                    entry["elapsed_ms"]=max(0,min(event["elapsed_ms"],2147483647))
+                if isinstance(event.get("support"),list):
+                    entry["support"]=[value[:160] for value in event["support"][:8] if isinstance(value,str)]
+                clean["review"]["events"].append(entry)
+        contexts=review.get("contexts")
+        if isinstance(contexts,list):
+            clean["review"]["contexts"]=[{key:item[key] for key in ("prompt_tokens","max_new_tokens","context_limit")
+                if isinstance(item.get(key),int) and not isinstance(item[key],bool) and 0<=item[key]<=2147483647}
+                for item in contexts[:2] if isinstance(item,Mapping)]
     if len(json.dumps(clean, ensure_ascii=False).encode("utf-8")) > 16384:
         for item in clean.get("selected_evidence", []):
             item["excerpt"] = item.get("excerpt", "")[:200]
@@ -867,6 +887,16 @@ def _with_answer_trace(response: JSONResponse, result: Mapping[str, Any]) -> JSO
         for key in ("question", "retrieval_query", "initial_answer", "final_answer"):
             if key in clean:
                 clean[key] = clean[key][:256]
+    if len(json.dumps(clean, ensure_ascii=False).encode("utf-8")) > 16384:
+        # Eight visible sources and bounded review events can still exceed the
+        # byte ceiling with four-byte Unicode. Keep IDs/events, shrink text.
+        def byte_prefix(value):
+            if isinstance(value,str):return value.encode("utf-8")[:160].decode("utf-8",errors="ignore")
+            if isinstance(value,list):return [byte_prefix(item) for item in value]
+            if isinstance(value,dict):return {key:byte_prefix(item) for key,item in value.items()}
+            return value
+        clean=byte_prefix(clean)
+        clean["truncated"]=True
     if clean:
         response._copilot_answer_trace = clean
     return response
@@ -1191,26 +1221,38 @@ async def _execute_copilot_query(
             conversation_engine = conversation_pipeline if conversation_pipeline is not None else planned_pipeline
             def converse():
                 kwargs = dict(recent_turns=conversation_turns, facts=conversation_facts, response_mode=query.response_mode, **simulator)
-                if query.summarize:
+                if query.summarize or knowledge_scope:
                     target = getattr(conversation_engine, "_parent", conversation_engine)
                     parameters = inspect.signature(target.converse_copilot).parameters
-                    if "summarize" in parameters or any(item.kind == inspect.Parameter.VAR_KEYWORD for item in parameters.values()):
+                    accepts_options = any(item.kind == inspect.Parameter.VAR_KEYWORD for item in parameters.values())
+                    if query.summarize and ("summarize" in parameters or accepts_options):
                         kwargs["summarize"] = True
-                with generation_slot_for(conversation_engine):
+                    if knowledge_scope and ("knowledge_fallback" in parameters or accepts_options):
+                        kwargs["knowledge_fallback"] = True
+                deadline = generation_deadline_scope(30.0 if query.response_mode == "detailed" else 15.0) if knowledge_scope else nullcontext()
+                with generation_slot_for(conversation_engine), deadline:
                     raw = conversation_engine.converse_copilot(query.prompt, **kwargs)
                 fallback = select_query_pipeline(conversation_engine, "quick")
                 if fallback is not conversation_engine and _DIAGNOSTIC_SCAFFOLD.search(raw):
                     with generation_slot_for(fallback):
                         return fallback.converse_copilot(query.prompt, **kwargs)
                 return raw
-            answer = plain_answer(await to_thread.run_sync(converse))
+            def answer_body(raw):
+                # No document was supplied to this fallback generator. Model
+                # document IDs must not survive merely because the array is [].
+                return (parse_knowledge_answer(raw, []).body if knowledge_scope else plain_answer(raw))
+            answer = answer_body(await to_thread.run_sync(converse))
             extended = is_domain_question(query.prompt)
             if ungrounded_measurements(answer, facts=conversation_facts, prompt=query.prompt, extended=extended):
                 # 자료에 없는 측정값은 내보내지 않는다. 한 번 다시 생성하고, 그래도 남으면 그 부분을 뺀다.
-                answer = drop_ungrounded(await to_thread.run_sync(converse), facts=conversation_facts, prompt=query.prompt, extended=extended)
+                answer = drop_ungrounded(answer_body(await to_thread.run_sync(converse)), facts=conversation_facts, prompt=query.prompt, extended=extended)
             answer = _checked_generation(answer, query)
             if hedged:
                 answer = hedged_answer(answer, quick=query.response_mode == "quick") or NO_EVIDENCE_ANSWER
+            if (knowledge_scope and not hedged and has_body(answer) and cacheable_candidate(answer)
+                    and answer not in {NO_EVIDENCE_ANSWER, _NO_ANSWER, INSTRUCTION_REFUSAL}
+                    and not answer.startswith((GENERAL_KNOWLEDGE_LIMIT, HEDGED_PREFIX, QUICK_HEDGED_PREFIX))):
+                answer = GENERAL_KNOWLEDGE_LIMIT + answer
             return _success_response(query, request_started, answer=answer, retrieval_used=False, generated=True,
                                      citations=[], context_status="available" if facts or simulator_facts else "not_available")
         except Exception:
@@ -1587,8 +1629,8 @@ async def _execute_copilot_query(
         )
     # 결함 원인 질문(2026-11-18 '저도막 원인' 오답): 원인이 여러 조각에 흩어져 검색 8칸에 다 들지 않는다.
     # 원문 조각 묶음을 근거 앞에 붙이고 인과 방향 규칙을 준다. 직전 질문 하나에서만 결함을 이어받는다.
-    inherit = [str(dialogue_turns[-1].get("prompt", ""))] if dialogue_turns and not (
-        decision is not None and decision.get("context_relation") == "new_topic") else []
+    inherit = ([str(dialogue_turns[-1].get("prompt", ""))]
+               if dialogue_turns and decision is not None and decision.get("context_relation") == "followup" else [])
     cause_topic = (defect_cause_topic(question, inherit)
                    if query.task_type == "knowledge_search" and mixed is None and use_rag and coating_advice_context is None else None)
     if cause_topic is not None:
@@ -1687,12 +1729,21 @@ async def _execute_copilot_query(
     # this question. Its validated INSUFFICIENT result is distinct from a
     # failed/unavailable judge, a rejected answer or an exhausted time budget.
     review_insufficient = isinstance(review, Mapping) and review.get("verdict") == "insufficient"
-    if may_defer and (retrieval_missing or review_insufficient):
+    # Failure to produce a verified RAG answer is not a finding that the
+    # documents lack evidence. Discard it, then allow a separate no-document
+    # answer only when this runtime guarantees that answer its own review.
+    unreviewed_body = not cacheable_candidate(str(result.get("response", "")))
+    rag_abstained = (isinstance(review, Mapping) and review.get("cacheable") is False and unreviewed_body
+                     and not parse_knowledge_answer(str(result.get("response", "")), retrieved_chunk_ids(result.get("rag_chunks") or [])).citations)
+    fresh_general = (bool(getattr(pipeline, "supports_reviewed_knowledge_fallback", False))
+                     and query.task_type == "knowledge_search" and not record_pointed and not query.context and not query.session_id
+                     and (review_failed or rag_abstained))
+    if may_defer and (retrieval_missing or review_insufficient or fresh_general):
         response = await chat_answer(conversation_pipeline=pipeline, knowledge_scope=True)
         original_trace = metadata.get("answer_trace") if isinstance(metadata, Mapping) else None
         fallback_trace = dict(original_trace) if isinstance(original_trace, Mapping) else {}
-        fallback_trace["fallback_reason"] = ("review_insufficient" if review_insufficient
-                                              else "retrieval_" + str(retrieval_decision["reason"]))
+        fallback_trace["fallback_reason"] = ("review_insufficient" if review_insufficient else
+            "retrieval_" + str(retrieval_decision["reason"]) if retrieval_missing else "rag_answer_unavailable")
         return _with_answer_trace(response, {**result, "metadata": {**metadata, "answer_trace": fallback_trace}})
     # 근거 확인 단계: 재정렬 1위 점수가 기준값 미만이면 생성한 답을 버린다(설정이 없으면 지금처럼 동작).
     # 기준값은 재정렬 모델의 점수 척도에 묶인다(KURE-Reranker-nano 3.28, 2026-11-13 측정). 상세분석만 잰 값이다.

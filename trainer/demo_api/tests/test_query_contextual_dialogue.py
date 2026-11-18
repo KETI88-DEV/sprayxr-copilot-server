@@ -375,7 +375,7 @@ def test_generation_trace_has_a_byte_bound_and_ignores_nonfinite_metadata(charac
     response = _with_answer_trace(JSONResponse({"ok": True}), {"metadata": {"answer_trace": trace}})
     result = response._copilot_answer_trace
     assert len(json.dumps(result, ensure_ascii=False).encode("utf-8")) <= 16384
-    assert len(result["selected_evidence"]) == 4
+    assert len(result["selected_evidence"]) == 8
     assert all("rerank_score" not in item for item in result["selected_evidence"])
 
 
