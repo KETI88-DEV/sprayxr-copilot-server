@@ -7,6 +7,7 @@ import time
 from dataclasses import dataclass, replace
 from typing import Any, Mapping
 
+from trainer.demo_api.term_rules import means_otherwise
 from trainer.scripts.generation_slot import GENERATION_SLOT, QUICK_GENERATION_SLOT
 
 
@@ -143,7 +144,8 @@ def retrieval_question(question: str, *, context: str = "", expand_terms: bool =
         "오버랩": "중첩 overlap 겹침",
     } if expand_terms else {}
     for term, expansion in terms.items():
-        query = query.replace(term, expansion)
+        if not means_otherwise(term, question):  # 전기 작업의 '최소 이격거리'는 분사 거리가 아니다
+            query = query.replace(term, expansion)
     # Carry the user's technical subject across an elliptical extra condition.
     # Previous AI text is deliberately excluded from search: it may be the very
     # explanation being corrected. An explicitly new subject starts fresh.

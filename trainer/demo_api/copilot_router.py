@@ -63,6 +63,7 @@ from trainer.demo_api.copilot_live_analysis import current_zone, live_analysis
 from trainer.demo_api.simulator_context import SIMULATOR_CONTEXT, is_blasting, wants_simulator_context, simulator_configuration_facts
 from trainer.demo_api.copilot_session_context import build_query_instruction, summarize_session, viewer_definition_context
 from trainer.demo_api.defect_cause import cause_context, defect_cause_topic, pinned_chunks
+from trainer.demo_api.term_rules import matched_terms, term_context, with_document_terms
 from trainer.demo_api.pose_query import (
     answer_order_question,
     order_request_fields,
@@ -1649,6 +1650,14 @@ async def _execute_copilot_query(
                    if query.task_type == "knowledge_search" and mixed is None and use_rag and coating_advice_context is None else None)
     if cause_topic is not None:
         knowledge_client_context = (knowledge_client_context + "\n" if knowledge_client_context else "") + cause_context(cause_topic)
+    # 교육 용어 ↔ 문서 표현(configs/term_rules.json): 검색어에 문서 표현을 덧붙이고 대응 한 줄을 준다.
+    # 내 기록을 묻는 질문(기록 지칭·뷰어 서명 자료·도막 비교)에는 문서 쪽 표현을 섞지 않는다.
+    term_rules = (matched_terms(question, inherit) if query.task_type == "knowledge_search" and mixed is None and use_rag
+                  and not record_pointed and not facts and coating_advice_context is None else [])
+    # 원인 질문의 결함은 원인 묶음 규칙이 맡는다. 겹쳐 주면 8B가 근거에 없는 원인을 지어냈다(2026-11-18 '과도막은 왜 생겨?').
+    term_rules = [rule for rule in term_rules if rule["용어"] != cause_topic]
+    if term_rules:
+        knowledge_client_context = (knowledge_client_context + "\n" if knowledge_client_context else "") + term_context(term_rules)
     # Add the relation after all fact-specific context builders, which may
     # replace the client context. Retrieval must retain this scope decision.
     if document_followup:
@@ -1715,10 +1724,10 @@ async def _execute_copilot_query(
                     "quick_cache_scope": json.dumps([query.user_id, query.scenario_id, query.task_type] + ([True] if query.summarize else [])),
                     "concise_answer": True,
                     "generation_instruction": generation_instruction,
-                    "retrieval_instruction": question,
+                    "retrieval_instruction": with_document_terms(question, term_rules),
                 } if query.response_mode == "quick" else {
                     # 응답 수준 지시문이 검색어에 섞이면 무관한 문단이 잡힌다(Issue #9).
-                    "retrieval_instruction": retrieval_question(question, context=instruction, expand_terms=False),
+                    "retrieval_instruction": with_document_terms(retrieval_question(question, context=instruction, expand_terms=False), term_rules),
                 }),
             )
 
