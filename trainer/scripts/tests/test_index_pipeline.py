@@ -177,7 +177,7 @@ def test_repeated_passages_fold_so_other_evidence_reaches_the_reranker() -> None
 def test_corrected_evidence_replaces_the_wrong_chunk_under_the_same_id() -> None:
     # 2026-11-17 전수 조사: 원본에도 "이슬점보다 3℃ 낮은 조건에서는 도장할 수 없다"로 인쇄된 조각을 고친 본문으로 바꾼다.
     corrections = json.loads(search_index.CORRECTIONS_PATH.read_text(encoding="utf-8"))["조각"]
-    assert "3℃ 이상 높지 않은" in corrections["DOC-doc_0008-C0006"]["본문"]
+    assert "이슬점보다 3℃ 이상 높을 때만" in corrections["DOC-doc_0008-C0006"]["본문"]
     assert all(entry["본문"].strip() for entry in corrections.values())
     assert not set(corrections) & search_index.EXCLUDED_CHUNKS
 
