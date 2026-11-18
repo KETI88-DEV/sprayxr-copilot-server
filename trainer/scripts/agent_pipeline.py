@@ -494,11 +494,11 @@ class AgentPipeline:
             messages = planning_messages(prompt, task_type=task_type, recent_turns=recent_turns, facts=facts)
         return parse_plan(self._dialogue_completion(messages, max_tokens=192, answer_regex=plan_regex(), **options))
 
-    def converse_copilot(self, prompt, *, recent_turns, facts, response_mode, simulator_context="", **options):
+    def converse_copilot(self, prompt, *, recent_turns, facts, response_mode, simulator_context="", summarize=False, **options):
         from trainer.demo_api.dialogue import conversation_messages
         messages = conversation_messages(prompt, recent_turns=recent_turns, facts=facts, response_mode=response_mode,
-                                         simulator_context=simulator_context)
-        # Query modes choose the resident model; both retain the complete answer.
+                                         simulator_context=simulator_context, summarize=summarize)
+        # Query modes choose the resident model; presentation is independent.
         # The fixed ceiling and context check keep generation bounded.
         return self._dialogue_completion(messages, max_tokens=1024, **options)
 
@@ -1295,6 +1295,7 @@ class AgentPipeline:
         concise_answer: bool = False,
         use_pipeline_history: bool = True,
         generation_instruction: str | None = None,
+        answer_summary: bool = False,
         retrieval_instruction: str | None = None,
         inference_backend: Any = None,
         inference_counter: Any = None,
@@ -1449,7 +1450,7 @@ class AgentPipeline:
                 # One shared request contract replaces accumulated definition-
                 # and mode-specific live instructions. The original utterance is
                 # retained; retrieval vocabulary must not redefine its intent.
-                fast_system = answer_system_prompt(detailed=compact_analysis, has_evidence=bool(evidence))
+                fast_system = answer_system_prompt(detailed=compact_analysis, has_evidence=bool(evidence), summarize=answer_summary)
             visible_evidence: list[dict[str, Any]] = []
             messages = self._build_messages(
                 instruction=generation_instruction or instruction,

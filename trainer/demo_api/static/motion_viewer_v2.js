@@ -1332,6 +1332,7 @@
             session_id: sent.data?.selected_session_id ?? null,
             scenario_id: sent.data?.mode_id != null ? String(sent.data.mode_id) : null,
             task_type: sent.tab.task, prompt, response_mode: sent.mode,
+            summarize: false,
             language: 'ko', response_language: sent.language[0], use_rag: 'Y',
             context: sent.data ? context(sent.tab.task, sent.data, sent.state) : null,
           }),

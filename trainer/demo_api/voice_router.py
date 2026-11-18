@@ -14,7 +14,7 @@ from anyio import to_thread
 from fastapi import APIRouter, File, Form, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
 
-from trainer.demo_api.copilot_contracts import CopilotQueryRequest, RagUsage, ResponseMode, TaskType
+from trainer.demo_api.copilot_contracts import CopilotQueryRequest, RagUsage, ResponseMode, TaskType, SUMMARY_DESCRIPTION
 from trainer.demo_api.copilot_router import (
     PENDING_TASK_ANSWERS,
     PipelineProvider,
@@ -76,6 +76,7 @@ def _text_query_test_context(
     use_rag: RagUsage,
     language: QueryLanguage = "ko",
     response_language: QueryLanguage | None = None,
+    summarize: bool = True,
 ) -> dict[str, object]:
     return {
         "input_used": {
@@ -84,6 +85,7 @@ def _text_query_test_context(
                 "prompt": prompt,
                 "task_type": task_type,
                 "response_mode": response_mode,
+                "summarize": summarize,
                 "use_rag": use_rag,
                 "language": language,
                 "response_language": response_language,
@@ -98,12 +100,11 @@ def _text_query_test_context(
         },
         "input_summary": (
             f"‘{prompt}’ 질문을 실제 텍스트 Query 처리 경로에 전달하며, "
-            f"답변 수준은 {response_mode}, RAG 사용 여부는 {use_rag}입니다. "
+            f"답변 모델은 {response_mode}, 요약 여부는 {str(summarize).lower()}, RAG 사용 여부는 {use_rag}입니다. "
             "모의훈련자 계정을 재사용하며 훈련 세션은 생성하지 않습니다."
         ),
         "evaluation_focus": (
-            "answer가 질문에 직접 답하는지 확인하고, response_mode를 quick과 detailed로 바꾸어 "
-            "답변 구조와 분량 차이를 비교하세요."
+            "answer가 질문에 직접 답하는지 확인하고, response_mode로 모델을, summarize로 핵심 요약과 전체 본문을 비교하세요."
         ),
     }
 
@@ -144,7 +145,7 @@ _TEXT_QUERY_TEST_RESPONSE = {
 }
 
 
-def _voice_test_context(response_language: QueryLanguage | None = None) -> dict[str, object]:
+def _voice_test_context(response_language: QueryLanguage | None = None, summarize: bool = True) -> dict[str, object]:
     return {
         "input_used": {
             "equivalent_real_api": VOICE_QUERY_PATH,
@@ -165,6 +166,7 @@ def _voice_test_context(response_language: QueryLanguage | None = None) -> dict[
                 "request_id": _TEST_REQUEST_ID,
                 "task_type": "knowledge_search",
                 "response_mode": "quick",
+                "summarize": summarize,
                 "use_rag": "Y",
                 "context": "Swagger 음성질의 모의연동",
             },
@@ -246,6 +248,7 @@ def create_voice_router(
         use_rag: RagUsage,
         context: str | None,
         response_mode: ResponseMode = "quick",
+        summarize: bool = True,
         response_language: QueryLanguage | None = None,
         conversation_id: str | None = None,
     ) -> JSONResponse:
@@ -289,6 +292,7 @@ def create_voice_router(
             use_rag=use_rag,
             context=context,
             response_mode=response_mode,
+            summarize=summarize,
         )
         response = await execute_copilot_query(
             query,
@@ -339,7 +343,8 @@ def create_voice_router(
         scenario_id: Annotated[str | None, Form(description="session_id의 첫 '_' 앞 콘텐츠 식별자", examples=["3"])] = None,
         request_id: Annotated[str | None, Form(description="클라이언트 로그와 서버 응답을 연결하기 위한 호출 추적용 식별자입니다.", examples=["REQ-VOICE-001"])] = None,
         task_type: Annotated[TaskType, Form(description="텍스트 Query API와 동일한 작업 유형", examples=["knowledge_search"])] = "knowledge_search",
-        response_mode: Annotated[ResponseMode, Form(description="quick은 짧은 안내, detailed는 상세 분석입니다.")] = "quick",
+        response_mode: Annotated[ResponseMode, Form(description="quick은 Qwen3-8B, detailed는 Qwen3.6-27B 모델을 선택합니다. 답변 분량은 summarize로 선택합니다.")] = "quick",
+        summarize: Annotated[bool, Form(description=SUMMARY_DESCRIPTION)] = True,
         use_rag: Annotated[RagUsage, Form(
             description="Y는 지식 검색 사용, N은 미사용입니다. 소문자 y/n도 허용하며 생략 시 Y입니다.",
             examples=["Y"],
@@ -362,6 +367,7 @@ def create_voice_router(
             use_rag=use_rag,
             context=context,
             response_mode=response_mode,
+            summarize=summarize,
             response_language=response_language,
             conversation_id=conversation_key(request.headers.get("x-copilot-conversation")),
         )
@@ -376,10 +382,10 @@ def create_voice_router(
             f"모의훈련자(`{DEMO_USER_ID}`) 계정을 공통으로 사용하며 계정이 없으면 등록합니다. 훈련 세션은 생성하지 않습니다.\n\n"
             "### 기본 입력\n"
             f"질문은 **‘{_TEST_TEXT_PROMPT}’**, `task_type=knowledge_search`, "
-            "`response_mode=quick`이며 RAG 기본값은 Y(지식 검색 사용)입니다.\n\n"
+            "`response_mode=quick`, `summarize=true`이며 RAG 기본값은 Y(지식 검색 사용)입니다.\n\n"
             "### 사용 방법\n"
             "먼저 기본값으로 실행한 뒤 `prompt`를 자유롭게 바꿔 보세요. "
-            "`response_mode`를 `detailed`로 바꾸면 상세 분석 형식을 비교할 수 있습니다.\n\n"
+            "`response_mode`로 모델을 바꾸고 `summarize=false`로 전체 본문을 비교할 수 있습니다.\n\n"
             "### 결과 읽는 법\n"
             "`data.test_context.input_used`에서 실제 사용된 값을 확인하고, "
             "`answer`, `retrieval_used`, `citations`를 함께 확인하세요."
@@ -396,8 +402,9 @@ def create_voice_router(
             description="실제 Query API와 동일한 작업 유형입니다.",
         )] = "knowledge_search",
         response_mode: Annotated[ResponseMode, Query(
-            description="quick은 짧은 안내, detailed는 근거와 조치를 포함한 상세 분석입니다.",
+            description="quick은 Qwen3-8B, detailed는 Qwen3.6-27B 모델입니다. 답변 분량은 summarize로 선택합니다.",
         )] = "quick",
+        summarize: Annotated[bool, Query(description=SUMMARY_DESCRIPTION)] = True,
         language: Annotated[QueryLanguage, Query(
             description="질문 언어입니다. 생략 시 ko입니다. " + LANGUAGE_DESCRIPTION,
         )] = "ko",
@@ -421,6 +428,7 @@ def create_voice_router(
             response_language=response_language,
             task_type=task_type,
             response_mode=response_mode,
+            summarize=summarize,
             use_rag=use_rag,
             context="Swagger 텍스트 Query 모의연동",
         )
@@ -440,7 +448,7 @@ def create_voice_router(
         body = json.loads(response.body)
         body["data"] = {
             "test_context": _text_query_test_context(
-                prompt, task_type, response_mode, use_rag, language, response_language
+                prompt, task_type, response_mode, use_rag, language, response_language, summarize
             ),
             **body["data"],
         }
@@ -455,7 +463,7 @@ def create_voice_router(
             "파라미터나 파일을 입력하지 않고 서버에 포함된 한국어 WAV를 실제 STT와 Query 경로로 처리합니다.\n\n"
             "### 자동 사용 입력\n"
             f"음성 문장은 **‘{_TEST_SPOKEN_TEXT}’**이며, PCM16·16 kHz·mono WAV입니다. "
-            f"모의훈련자 계정 `user_id={_TEST_USER_ID}`, `language=ko`, `task_type=knowledge_search`를 사용하며 RAG는 Y(지식 검색 사용)로 처리합니다. "
+            f"모의훈련자 계정 `user_id={_TEST_USER_ID}`, `language=ko`, `task_type=knowledge_search`, `summarize=true`를 사용하며 RAG는 Y(지식 검색 사용)로 처리합니다. "
             "계정이 없으면 최초 등록하며 훈련 세션은 생성하지 않습니다.\n\n"
             "### 결과 읽는 법\n"
             "응답의 `data.test_context.input_used`에서 전체 입력을 먼저 보고, `transcript`에서 STT 결과, "
@@ -466,6 +474,7 @@ def create_voice_router(
         responses=_VOICE_TEST_RESPONSE,
     )
     async def test_voice_query(
+        summarize: Annotated[bool, Query(description=SUMMARY_DESCRIPTION)] = True,
         response_language: Annotated[QueryLanguage | None, Query(
             description="한국어 예제 음성에 대한 답변 언어입니다. 생략 시 한국어입니다. " + LANGUAGE_DESCRIPTION,
             examples=["ko"],
@@ -484,11 +493,12 @@ def create_voice_router(
             use_rag="Y",
             context="Swagger 음성질의 모의연동",
             response_language=response_language,
+            summarize=summarize,
         )
         if response.status_code != 200:
             return response
         body = json.loads(response.body)
-        body["data"] = {"test_context": _voice_test_context(response_language), **body["data"]}
+        body["data"] = {"test_context": _voice_test_context(response_language, summarize), **body["data"]}
         return JSONResponse(status_code=200, content=body)
 
     @router.get(

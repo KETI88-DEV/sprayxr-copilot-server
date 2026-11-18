@@ -145,7 +145,7 @@
   $('chat-form').addEventListener('submit',async event=>{
     event.preventDefault();const prompt=$('prompt').value.trim();if(!prompt||busy||contextPending||contextError)return;
     const mode=$('response-mode').value,lang=$('response-language').value;
-    const payload={user_id:'query-chat',prompt,task_type:'knowledge_search',response_mode:mode,language:'ko',response_language:lang,use_rag:'Y',request_id:'CHAT-'+uuid()};
+    const payload={user_id:'query-chat',prompt,task_type:'knowledge_search',response_mode:mode,summarize:false,language:'ko',response_language:lang,use_rag:'Y',request_id:'CHAT-'+uuid()};
     const questionContext=selectedContext;
     if(questionContext)Object.assign(payload,{scenario_id:questionContext.scenario_id,session_id:questionContext.session_id,context:questionContext.context});
     busy=true;controls();add('user',prompt);$('prompt').value='';sizePrompt();const card=add('assistant','답변을 작성하고 있습니다…');card.querySelector('.message-text').classList.add('pending');const started=performance.now();$('chat-status').textContent='질문을 처리하고 있습니다…';

@@ -171,8 +171,8 @@ def _clean_openapi_description(value: object, fallback_name: str) -> str:
 
 _OPENAPI_VALUE_GUIDANCE: dict[str, dict[str, str]] = {
     "response_mode": {
-        "quick": "훈련 중 바로 확인할 핵심 판단과 권장 조치를 짧게 반환합니다.",
-        "detailed": "현재 상황, 판단 근거, 원인과 권장 조치를 구조화해 자세히 반환합니다.",
+        "quick": "Qwen3-8B 빠른 안내 모델입니다. 답변 분량은 summarize로 선택합니다.",
+        "detailed": "Qwen3.6-27B 상세 분석 모델입니다. 답변 분량은 summarize로 선택합니다.",
     },
     "task_type": {
         "trajectory_recomm": "Zone 순서와 도장 경로를 안내합니다.",
@@ -241,6 +241,12 @@ def _openapi_parameter_details(
 ) -> list[str]:
     node = _resolve_openapi_schema(node, components)
     details: list[str] = []
+    if name == "summarize" and node.get("type") == "boolean":
+        if "default" in node:
+            details.append(f"    - 기본값: `{str(node['default']).lower()}`")
+        details.append("    - `true`: 핵심 답변을 요약합니다. 필요한 안전 경고·판정 한계·수치·단위·Zone 순서는 유지합니다.")
+        details.append("    - `false`: 문단·목록을 유지한 전체 답변을 제공합니다. AI질문 페이지와 모션뷰어 채팅에서 사용합니다.")
+        return details
     if "default" in node and node["default"] is not None:
         details.append(f"    - 기본값: `{node['default']}`")
     omission = _OPENAPI_OMISSION_GUIDANCE.get(name)

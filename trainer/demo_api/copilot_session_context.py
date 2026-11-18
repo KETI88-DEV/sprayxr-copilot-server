@@ -139,6 +139,7 @@ def build_query_instruction(
     concise: bool = False,
     simulator_context: str = "",
     resolved_question: str | None = None,
+    summarize: bool = False,
 ) -> str:
     """Add server-owned context without changing the external query contract."""
     context = (client_context or "").strip()
@@ -157,6 +158,9 @@ def build_query_instruction(
             )
         ),
     ]
+    if summarize:
+        from trainer.demo_api.quick_answer import QUERY_SUMMARY_INSTRUCTION
+        parts[3] = ("상세 분석 모델: " if response_mode == "detailed" else "빠른 안내 모델: ") + QUERY_SUMMARY_INSTRUCTION
     parts.extend((
         "[질문 해석]",
         "질문이 요구한 모든 항목·수치·단위·안전 조건과 명시적으로 요청한 전체 목록·Zone 순서는 유지하세요. "
