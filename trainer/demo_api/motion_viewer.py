@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import copy
+import asyncio
 import csv
 import gzip
+import hashlib
 import json
 import logging
 import math
@@ -14,15 +16,24 @@ from collections.abc import Iterator, Mapping
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, TextIO
+from uuid import uuid4
 
 import numpy as np
-from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi import APIRouter, Header, HTTPException, Query, Request
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from starlette.concurrency import run_in_threadpool
 from trainer.demo_api import coating_assessment
 from trainer.demo_api.portal_navigation import portal_document
 from trainer.zone_reference import ZoneReferenceCatalog
 
 from trainer.demo_api.motion_viewer_pose import _default_mesh_provider, build_pose_view
+from trainer.demo_api.motion_viewer_cache import PayloadRevisions, file_revision
+from trainer.demo_api.motion_viewer_progress import (
+    LoadProgressStore, LoadStopped, progress_rows, progress_units, record_row_total, run_load, stage,
+)
+from trainer.demo_api.training_worker_identity import (
+    UNKNOWN_WORKER_ID, worker_group_id, worker_group_label, worker_sort_key,
+)
 from trainer.demo_api.pose_query import score_body_raw
 from trainer.demo_api.sequence_store import SequenceStore
 from trainer.demo_api.sequence_analysis import SequenceAnalysisEngine, expert_reference_flows, score_visit_flow
@@ -345,7 +356,7 @@ def _open_csv(path: Path) -> TextIO:
 
 
 @lru_cache(maxsize=64)
-def _csv_span(path_text: str, stamp: tuple[int, int]) -> tuple[int, int, float | None, float | None]:
+def _csv_span(path_text: str, stamp: tuple[int, ...]) -> tuple[int, int, float | None, float | None]:
     """(재생을 시작할 행, 행 수, 그 행의 CSV 시각, 첫 행의 CSV 시각).
 
     재생은 첫 분사부터 시작한다(2026-11-17 사용자 원칙). 세션 시작부터 담긴 변환 기록은 앞부분이 건을 들기 전
@@ -358,7 +369,10 @@ def _csv_span(path_text: str, stamp: tuple[int, int]) -> tuple[int, int, float |
         header = [name.strip() for name in next(reader, [])]
         spray = header.index("분사") if "분사" in header else None
         clock = header.index("시간(초)") if "시간(초)" in header else None
-        for index, row in enumerate(reader):
+        # DictReader skips [] blank records, and treats quoted newlines as one
+        # record. Use that same definition for sampling indexes and totals.
+        records = (row for row in reader if row)
+        for index, row in enumerate(progress_rows(records, stage='csv_count', path=path_text)):
             rows += 1
             when = _number(row[clock]) if clock is not None and clock < len(row) else None
             if index == 0:
@@ -370,10 +384,11 @@ def _csv_span(path_text: str, stamp: tuple[int, int]) -> tuple[int, int, float |
 
 @lru_cache(maxsize=64)
 def _sample_csv(
-    path_text: str, stamp: tuple[int, int], frame_count: int, process: str | None = None
+    path_text: str, stamp: tuple[int, ...], frame_count: int, process: str | None = None
 ) -> tuple[dict[str, Any], ...]:
     path = Path(path_text)
     start, row_count, _, _ = _csv_span(path_text, stamp)
+    record_row_total(path, row_count)
     span = row_count - start
     if span <= 0:
         return ()
@@ -385,7 +400,7 @@ def _sample_csv(
     frames: list[dict[str, Any]] = []
     tool_prefix = "블라스트 건" if process == "blasting" or "blasting" in {part.casefold() for part in path.parts} else "한길숏건"
     with _open_csv(path) as handle:
-        for index, row in enumerate(csv.DictReader(handle)):
+        for index, row in enumerate(progress_rows(csv.DictReader(handle), stage='csv_frames', path=path)):
             if index not in targets:
                 continue
             if process == "grinding":
@@ -464,7 +479,7 @@ def _worker_sources(root: Path) -> list[dict[str, Any]]:
             pass
         sources.append({
             "worker_id": directory.name,
-            "display_name": str(metadata.get("display_name") or directory.name),
+            "display_name": worker_group_label(directory.name, metadata.get("display_name")),
             "role": str(metadata.get("role") or "trainee"),
             "root": directory,
         })
@@ -507,7 +522,7 @@ def _representative_session(profile: dict[str, Any]) -> str:
 
 def _session_path(
     root: Path, process: str, mode_id: int, profile: dict[str, Any], session_id: str,
-    *, source_root: Path | None = None,
+    *, source_root: Path | None = None, require_exists: bool = True,
 ) -> Path:
     session = next(
         (item for item in profile["sessions"] if str(item.get("session_id")) == session_id),
@@ -521,7 +536,7 @@ def _session_path(
             raise HTTPException(status_code=404, detail="recording source unavailable")
         trusted = source_root.resolve()
         candidate = (trusted / catalog_source).resolve()
-        if not candidate.is_relative_to(trusted) or not candidate.is_file():
+        if not candidate.is_relative_to(trusted) or (require_exists and not candidate.is_file()):
             raise HTTPException(status_code=404, detail="recording source unavailable")
         return candidate
     source = session.get("sources", {}).get("csv_path")
@@ -529,7 +544,7 @@ def _session_path(
         raise HTTPException(status_code=422, detail="expert session source is invalid")
     mode_root = (root / "raw" / process / "learning" / f"mode_{mode_id:02d}").resolve()
     candidate = (mode_root / source).resolve()
-    if not candidate.is_relative_to(mode_root) or not candidate.is_file():
+    if not candidate.is_relative_to(mode_root) or (require_exists and not candidate.is_file()):
         raise HTTPException(status_code=404, detail="expert session file not found")
     return candidate
 
@@ -579,6 +594,19 @@ def _target_unavailable(reason_code: str) -> dict[str, Any]:
     return {"analysis_status": "not_available", "reason_code": reason_code}
 
 
+def _zone_asset_revision() -> tuple:
+    assets = Path(__file__).with_name('assets') / 'zone_reference'
+    return PayloadRevisions.stamp([assets, assets / 'color', *assets.glob('*.csv'), *assets.glob('color/*.png')])
+
+
+@lru_cache(maxsize=1)
+def _viewer_zone_catalog(asset_revision: tuple) -> ZoneReferenceCatalog:
+    # A new instance owns new label/mask caches only when official assets change.
+    # Its self-keyed lru entries remain bounded by ZoneReferenceCatalog's limits.
+    assets = next(path for path, _ in asset_revision if path.name == 'zone_reference')
+    return ZoneReferenceCatalog(assets)
+
+
 def _target_coating(
     process: str,
     mode_id: int,
@@ -589,16 +617,17 @@ def _target_coating(
     """기록 최종 높이맵의 목표 대비 도막 평가(PR #8 기준). 못 만들면 사유 코드가 든 not_available."""
     if process != "spray":
         return _target_unavailable("coating_not_applicable")
-    model_key = ZoneReferenceCatalog.default().resolve_model(str(mode_id))
+    asset_revision = _zone_asset_revision()
+    model_key = _viewer_zone_catalog(asset_revision).resolve_model(str(mode_id))
     if model_key is None:
         return _target_unavailable("zone_reference_unavailable")
     stamps = []
     for face, path in sorted(height_maps.items()):
         try:
-            stat = path.stat()
+            revision = file_revision(path)
         except OSError:
             continue
-        stamps.append((face, str(path), stat.st_mtime_ns, stat.st_size))
+        stamps.append((face, str(path), revision))
     faces = {stamp[0] for stamp in stamps}
     zones = set()
     for key in zone_keys:
@@ -611,21 +640,21 @@ def _target_coating(
     if not zones:
         return _target_unavailable("height_map_unavailable")
     ordered = tuple(sorted(zones, key=lambda item: (item[0], len(item[1]), item[1])))
-    return copy.deepcopy(_target_coating_cached(model_key, None, tuple(stamps), ordered))
+    return copy.deepcopy(_target_coating_cached(model_key, None, tuple(stamps), ordered, asset_revision))
 
 
 @lru_cache(maxsize=8)
 def _target_coating_cached(
     model_key: str,
     target_um: float | None,
-    stamps: tuple[tuple[int, str, int, int], ...],
+    stamps: tuple[tuple[int, str, tuple[int, ...]], ...],
     zones: tuple[tuple[int, str, float | None, float | None], ...],
+    asset_revision: tuple,
 ) -> dict[str, Any]:
     # 표면(2048² float64 = 32 MB)은 캐시하지 않고, 면 하나씩 읽어 평가한 뒤 놓는다.
-    # shortcut: 열쇠가 mtime·크기라 같은 mtime·크기로 내용만 바뀐 PNG는 옛 결과를 낸다, 그런 갱신이 생기면 sha256을 열쇠에 넣는다.
-    catalog = ZoneReferenceCatalog.default()
+    catalog = _viewer_zone_catalog(asset_revision)
     rows, assessments, read_any = [], [], False
-    for face, path_text, _, _ in stamps:
+    for face, path_text, _ in stamps:
         try:
             surface = coating_assessment.painted_surface_from_png(Path(path_text).read_bytes())
         except (OSError, ValueError):
@@ -677,8 +706,7 @@ def _target_coating_cached(
 
 
 def _frames(path: Path, frame_count: int, process: str | None = None) -> list[dict[str, Any]]:
-    stat = path.stat()
-    return [dict(frame) for frame in _sample_csv(str(path), (stat.st_mtime_ns, stat.st_size), frame_count, process)]
+    return [dict(frame) for frame in _sample_csv(str(path), file_revision(path), frame_count, process)]
 
 
 def _clock_offset(path: Path, frame_count: int) -> float:
@@ -687,8 +715,7 @@ def _clock_offset(path: Path, frame_count: int) -> float:
     재생 프레임과 같은 `_csv_span` 캐시를 쓴다(예전에는 공정 인자 없이 CSV를 한 번 더 읽었다).
     """
     del frame_count
-    stat = path.stat()
-    _, _, start_time, origin = _csv_span(str(path), (stat.st_mtime_ns, stat.st_size))
+    _, _, start_time, origin = _csv_span(str(path), file_revision(path))
     return start_time - origin if start_time is not None and origin is not None else 0.0
 
 
@@ -706,14 +733,14 @@ def _canonicalize_zone_items(
 
 @lru_cache(maxsize=64)
 def _paint_cells(
-    path_text: str, stamp: tuple[int, int], cell_size: float
+    path_text: str, stamp: tuple[int, ...], cell_size: float
 ) -> tuple[tuple[Any, ...], ...]:
     del stamp
     cells: dict[tuple[int, int, int], dict[str, Any]] = {}
     previous: list[float] | None = None
     previous_zone: str | None = None
     with _open_csv(Path(path_text)) as handle:
-        for row in csv.DictReader(handle):
+        for row in progress_rows(csv.DictReader(handle), stage='csv_cells', path=path_text):
             point = _ray_point(row)
             if not _spraying(row.get("분사")) or point is None:
                 previous = None
@@ -761,9 +788,8 @@ def _reference_paint_statistics(paths: list[Path], *, cell_size: float = 0.01) -
     totals = {"horizontal": 0, "vertical": 0, "diagonal": 0}
     raw_point_count = 0
     for path in paths:
-        stat = path.stat()
         for key, point_sum, count, direction_sum, moves, horizontal, vertical, diagonal in _paint_cells(
-            str(path), (stat.st_mtime_ns, stat.st_size), cell_size
+            str(path), file_revision(path), cell_size
         ):
             cell = combined.setdefault(key, {"sum": [0.0] * 3, "count": 0, "direction": [0.0] * 3, "moves": 0})
             for axis in range(3):
@@ -827,7 +853,7 @@ def _sample_polyline(points: list[list[float]], limit: int = 36) -> list[list[fl
 
 
 @lru_cache(maxsize=64)
-def _zone_strokes(path_text: str, stamp: tuple[int, int]) -> tuple[dict[str, Any], ...]:
+def _zone_strokes(path_text: str, stamp: tuple[int, ...]) -> tuple[dict[str, Any], ...]:
     del stamp
     strokes: list[dict[str, Any]] = []
     points: list[list[float]] = []
@@ -856,7 +882,7 @@ def _zone_strokes(path_text: str, stamp: tuple[int, int]) -> tuple[dict[str, Any
         identity = None
 
     with _open_csv(Path(path_text)) as handle:
-        for row in csv.DictReader(handle):
+        for row in progress_rows(csv.DictReader(handle), stage='csv_strokes', path=path_text):
             point = _ray_point(row)
             map_zone = _map_zone_uv(row)
             current = (map_zone[0], map_zone[1]) if map_zone else None
@@ -878,8 +904,7 @@ def _zone_flow_guides(paths: list[Path], *, max_strokes: int = 8, zone_transform
     grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
     sessions_by_zone: dict[tuple[str, str], set[int]] = {}
     for session_index, path in enumerate(paths):
-        stat = path.stat()
-        for stroke in _zone_strokes(str(path), (stat.st_mtime_ns, stat.st_size)):
+        for stroke in _zone_strokes(str(path), file_revision(path)):
             zone = zone_transform(path, stroke["zone_id"]) if zone_transform is not None else stroke["zone_id"]
             key = (stroke["map_num"], zone)
             item = dict(stroke)
@@ -1052,12 +1077,12 @@ def _build_zone_surface(
 
 @lru_cache(maxsize=64)
 def _zone_cells(
-    path_text: str, stamp: tuple[int, int], uv_cell_size: float
+    path_text: str, stamp: tuple[int, ...], uv_cell_size: float
 ) -> tuple[tuple[Any, ...], ...]:
     del stamp
     cells: dict[tuple[str, str, int, int], dict[str, Any]] = {}
     with _open_csv(Path(path_text)) as handle:
-        for row in csv.DictReader(handle):
+        for row in progress_rows(csv.DictReader(handle), stage='csv_surfaces', path=path_text):
             point = _ray_point(row)
             identity = _map_zone_uv(row)
             if not _spraying(row.get("분사")) or point is None or identity is None:
@@ -1077,9 +1102,8 @@ def _zone_cells(
 def _zone_surface_statistics(paths: list[Path], *, uv_cell_size: float = 32.0, zone_transform: Any = None) -> list[dict[str, Any]]:
     grouped: dict[tuple[str, str], dict[tuple[int, int], dict[str, Any]]] = {}
     for path in paths:
-        stat = path.stat()
         for key, point_sum, count in _zone_cells(
-            str(path), (stat.st_mtime_ns, stat.st_size), uv_cell_size
+            str(path), file_revision(path), uv_cell_size
         ):
             map_num, zone_id, u_cell, v_cell = key
             if zone_transform is not None:
@@ -1683,14 +1707,14 @@ def _multi_session_zone_evaluation(
     selected_session = _session_record(selected_profile, selected_session_id)
     selected_frame_zones = _zone_frame_profiles(selected_frames)
     reference_frame_zones = [
-        _zone_frame_profiles(record["frames"]) for record in reference_records
+        _zone_frame_profiles(record["frames"]) for record in progress_units(reference_records, stage='reference_statistics')
     ]
     selected_order = _macro_order(selected_session)
     reference_orders = [_macro_order(record["session"]) for record in reference_records]
     order_score = _order_similarity(selected_order, reference_orders)
     zone_keys = set(selected_frame_zones) | set(selected_session.get("analysis", {}).get("zones", {}))
     zone_output: dict[str, dict[str, Any]] = {}
-    for zone_key in sorted(zone_keys):
+    for zone_key in progress_units(sorted(zone_keys), stage='zone_evaluation', unit='zones'):
         selected_frame = selected_frame_zones.get(zone_key, {})
         reference_frames = [profile.get(zone_key, {}) for profile in reference_frame_zones]
         selected_pattern = (
@@ -1834,7 +1858,7 @@ def _paint_trace(frames: list[dict[str, Any]]) -> list[dict[str, Any]]:
 @lru_cache(maxsize=64)
 def _dense_paint_trace_cached(
     path_text: str,
-    stamp: tuple[int, int],
+    stamp: tuple[int, ...],
     target_hz: float,
     max_points: int,
 ) -> tuple[tuple[Any, ...], ...]:
@@ -1854,7 +1878,7 @@ def _dense_paint_trace_cached(
             pending = None
 
     with _open_csv(Path(path_text)) as handle:
-        for frame_index, row in enumerate(csv.DictReader(handle)):
+        for frame_index, row in enumerate(progress_rows(csv.DictReader(handle), stage='csv_trace', path=path_text)):
             raw_time = _number(row.get("시간(초)"))
             if origin_time is None:
                 origin_time = raw_time if raw_time is not None else frame_index / 120.0
@@ -1906,9 +1930,8 @@ def _dense_paint_trace_cached(
 def _dense_paint_trace(
     path: Path, *, target_hz: float = 30.0, max_points: int = 12_000
 ) -> list[dict[str, Any]]:
-    stat = path.stat()
     raw = _dense_paint_trace_cached(
-        str(path), (stat.st_mtime_ns, stat.st_size), target_hz, max_points
+        str(path), file_revision(path), target_hz, max_points
     )
     return [
         {
@@ -1963,7 +1986,7 @@ def _direction_summary(trace: list[dict[str, Any]]) -> dict[str, Any]:
 
 _VIEWER_HTML = r"""<!doctype html>
 <html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>작업 자세 비교 평가</title><link rel="stylesheet" href="/motion-viewer/assets/motion_viewer_pose.css"><style>
+<title>작업 자세 비교 평가</title><script src="/motion-viewer/assets/motion_viewer_cache.js"></script><link rel="stylesheet" href="/motion-viewer/assets/motion_viewer_pose.css"><style>
 :root{--bg:#07101f;--stage-top:#2e3646;--stage:#1c2230;--stage-edge:rgba(176,196,226,.28);--panel:#101b2e;--panel2:#16243a;--ink:#eef5ff;--muted:#91a0b8;--line:#293b56;--cyan:#22d3ee;--green:#34d399}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font-family:Inter,Pretendard,"Noto Sans KR",system-ui,sans-serif}
 .shell{height:100dvh;display:grid;grid-template-rows:auto minmax(0,1fr);overflow:hidden}.top{display:flex;justify-content:space-between;align-items:center;padding:16px 22px;border-bottom:1px solid var(--line);background:#0a1424}
@@ -1976,7 +1999,7 @@ button{cursor:pointer;font-weight:700}.primary{background:#3157d5;border-color:#
 .realtime-hud{margin-top:9px;padding:9px 10px 8px;background:rgba(7,16,31,.42);border-top:1px solid rgba(89,116,150,.35);border-radius:7px}.realtime-hud-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:7px}.realtime-hud-head strong{font-size:12px;margin:0}.realtime-hud-activity{font-size:10px;font-weight:800;color:#94a3b8}.realtime-hud-grid{display:grid;gap:5px}.realtime-hud-row{display:grid;grid-template-columns:62px minmax(74px,1fr) auto;align-items:center;gap:8px;font-size:10px}.realtime-hud-label{color:#94a3b8}.realtime-hud-value{color:#e5f1ff;font-variant-numeric:tabular-nums;text-align:right}.realtime-hud-state{min-width:34px;padding:1px 6px;border:1px solid currentColor;border-radius:999px;font-size:9px;font-weight:800;text-align:center}.realtime-hud-state.ok{color:#22c55e}.realtime-hud-state.warn{color:#facc15}.realtime-hud-state.alert{color:#fb7185}.realtime-hud-state.idle{color:#64748b}
 /* 재생 중 값이 바뀌어도 칸 폭이 그대로이도록 칸마다 가장 긴 값(data-max)을 높이 0 줄로 깔아 둔다. 같은 글꼴로 재므로 글꼴이 늦게 실려도 맞다 */
 .realtime-hud [data-max]{display:inline-flex;flex-direction:column;align-items:flex-end}.realtime-hud [data-max]::after{content:attr(data-max);height:0;overflow:hidden;visibility:hidden}.realtime-hud-head strong[data-max]{align-items:flex-start}.realtime-hud-state[data-max]{align-items:center}
-.loading{position:absolute;inset:0;display:grid;place-content:center;justify-items:center;gap:13px;background:rgba(5,12,24,.72);backdrop-filter:blur(3px);z-index:5;color:#dce8ff;font-size:13px;font-weight:700}.loading[hidden]{display:none}.spinner{width:34px;height:34px;border:3px solid rgba(125,211,252,.2);border-top-color:#22d3ee;border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
+.loading{position:absolute;inset:0;display:grid;place-content:center;justify-items:center;gap:13px;background:rgba(5,12,24,.72);backdrop-filter:blur(3px);z-index:5;color:#dce8ff;font-size:13px;font-weight:700}.record-cache-legend{display:block;margin-top:5px;color:var(--muted);font-size:10px}.record-cache-legend span{color:#34d399}.loading progress{width:min(320px,70vw);height:8px;accent-color:var(--cyan)}.loading button{width:auto;padding:5px 16px}.loading #loadingUnits{font-variant-numeric:tabular-nums}.loading[hidden]{display:none}.spinner{width:34px;height:34px;border:3px solid rgba(125,211,252,.2);border-top-color:#22d3ee;border-radius:50%;animation:spin .8s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:14px;margin-bottom:11px}.card span{display:block;color:var(--muted);font-size:11px}.card strong{display:block;font-size:20px;margin-top:5px}.legend{font-size:12px;color:var(--muted);line-height:2}.dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:7px}.help{font-size:12px;color:var(--muted);line-height:1.65;margin-top:18px}.status{min-height:18px;color:var(--cyan);font-size:12px;margin-top:12px}
 .zone-order{display:flex;flex-wrap:wrap;gap:7px;margin-top:10px}.zone-chip{width:auto;padding:6px 10px;border:2px solid var(--zone-color);border-radius:999px;font-size:11px;color:var(--zone-color);background:#111f35}.zone-chip.active{box-shadow:0 0 0 2px #f5f8ff,0 0 14px var(--zone-color)}.zone-chip.selected{background:var(--zone-color);color:#07101f}.zone-detail-title{font-size:15px!important;color:var(--ink)!important;font-weight:800;margin-bottom:9px}.zone-metric{display:flex!important;justify-content:space-between;gap:10px;padding:7px 0;border-top:1px solid rgba(89,116,150,.2);font-size:11px!important}.zone-metric b{color:#e8f1ff;font-weight:700;text-align:right}.zone-note{margin-top:9px;color:#7890ad;font-size:10px;line-height:1.5}
 .skeleton-card{padding:0;overflow:hidden}.skeleton-card summary{cursor:pointer;padding:14px;font-weight:800;font-size:13px;list-style:none}.skeleton-card summary::-webkit-details-marker{display:none}.skeleton-card summary:after{content:'▾';float:right;color:var(--cyan)}.skeleton-card:not([open]) summary:after{content:'▸'}.skeleton-screen{position:relative;height:300px;border-top:1px solid var(--stage-edge);border-bottom:1px solid var(--stage-edge);background:var(--stage)}#skeletonCanvas{display:block;width:100%;height:300px}.skeleton-posture,.skeleton-angle{position:absolute;top:9px;padding:4px 7px;border-radius:999px;background:rgba(7,16,31,.78);color:#a9c2df;font-size:10px}.skeleton-posture{left:10px;color:#dff7ff;font-weight:800}.skeleton-angle{right:10px}.skeleton-controls{display:grid;grid-template-columns:1fr 1fr 1fr;gap:7px;padding:10px}.skeleton-turn{font-size:20px;padding:7px;text-shadow:0 2px 5px rgba(34,211,238,.45)}.skeleton-reset{font-size:11px}.skeleton-note{padding:0 12px 12px;color:#7890ad;font-size:10px;line-height:1.5}
@@ -2026,7 +2049,7 @@ button{cursor:pointer;font-weight:700}.primary{background:#3157d5;border-color:#
 <div><label for="worker">작업자</label><select id="worker" class="select"></select></div>
 <div><label for="process">훈련 종류</label><select id="process" class="select"></select></div>
 <div><label for="mode">학습모드</label><select id="mode" class="select"></select></div>
-<div><label for="session">재생할 기록</label><select id="session" class="select"></select></div>
+<div><label for="session">재생할 기록</label><select id="session" class="select" aria-describedby="recordCacheLegend"></select><small id="recordCacheLegend" class="record-cache-legend">↓ 불러오기 필요 · <span>✓ 이 창에 보관됨</span> · 선택 시 원본 변경 확인</small></div>
 </div></section>
 <main class="workspace"><aside class="evaluation-side"><div class="viewer-tools">
 <label for="pointSize">흰색 포인트 크기 · <span id="pointSizeValue">1.5 px</span></label><input id="pointSize" type="range" min="0.5" max="5" step="0.25" value="1.5">
@@ -2034,7 +2057,7 @@ button{cursor:pointer;font-weight:700}.primary{background:#3157d5;border-color:#
 <label class="toggle"><input id="objectMesh" type="checkbox" checked>대상 구조물 표시</label>
 <div id="status" class="status">데이터를 불러오는 중입니다.</div>
 </div></aside>
-<section class="stage"><div class="stage-viewport"><canvas id="canvas"></canvas><div class="overlay"><strong id="overlayTitle">학습모드</strong><span id="overlayFrame">프레임 준비 중</span><div id="viewerLegend" class="viewer-legend"><div><i class="dot" style="background:#f5f8ff"></i>전문가 전체 Ray Point 점군</div><div><i class="dot" style="background:#a78bfa"></i>Map·Zone별 관측 영역</div><div><i class="dot" style="background:var(--green)"></i>Zone별 전문가 표준 도장 패턴</div><div><i class="dot" style="background:#ff8a3d"></i>선택 기록의 페인트 누적 궤적</div><div><i class="dot" style="background:var(--cyan)"></i>머리·양손 실측 위치와 추정 상체</div></div><div id="realtimeHud" class="realtime-hud"><div class="realtime-hud-head"><strong id="realtimeHudZone" data-max="Zone 대기">Zone 대기</strong><span id="realtimeHudActivity" class="realtime-hud-activity" data-max="이동 중">이동 중</span></div><div class="realtime-hud-grid"><div class="realtime-hud-row"><span class="realtime-hud-label">속도</span><span id="realtimeHudSpeed" class="realtime-hud-value" data-max="9.99 m/s">—</span><span id="realtimeHudSpeedState" class="realtime-hud-state idle" data-max="진행 중">대기</span></div><div class="realtime-hud-row"><span class="realtime-hud-label">이격거리</span><span id="realtimeHudDistance" class="realtime-hud-value" data-max="9999 mm">—</span><span id="realtimeHudDistanceState" class="realtime-hud-state idle" data-max="진행 중">대기</span></div><div class="realtime-hud-row"><span class="realtime-hud-label">분사축 편차</span><span id="realtimeHudAxis" class="realtime-hud-value" data-max="99.9°">—</span><span id="realtimeHudAxisState" class="realtime-hud-state idle" data-max="진행 중">대기</span></div><div class="realtime-hud-row"><span class="realtime-hud-label">도장 방향</span><span id="realtimeHudDirection" class="realtime-hud-value" data-max="분석 중">—</span><span id="realtimeHudDirectionState" class="realtime-hud-state idle" data-max="진행 중">대기</span></div><div class="realtime-hud-row"><span class="realtime-hud-label">도포 범위</span><span id="realtimeHudCoverage" class="realtime-hud-value" data-max="100%">—</span><span id="realtimeHudCoverageState" class="realtime-hud-state idle" data-max="진행 중">대기</span></div></div></div></div><div id="loading" class="loading"><div class="spinner"></div><span>전문가 기록을 불러오는 중입니다.</span></div></div><div class="playback-dock"><div class="playback-status"><div class="playback-live"><strong id="playbackZone">현재 Zone 대기 중</strong><span id="playbackZoneBadge" class="playback-zone-badge" hidden>Zone 대기</span></div><span id="playbackTime">0.00 / 0.00초</span></div><div id="zoneTimeline" class="zone-timeline" aria-label="Zone 진행 구간"></div><input id="timeline" type="range" min="0" max="0" value="0" aria-label="진행 위치"><div class="playback-controls"><button id="play" class="primary">재생</button><button id="restart">처음으로</button><div class="speed-control"><label for="speed">재생 속도</label><select id="speed" aria-label="재생 속도"><option value="0.25">0.25배</option><option value="0.5">0.5배</option><option value="1" selected>1.0배</option><option value="1.5">1.5배</option><option value="2">2.0배</option><option value="3">3.0배</option></select></div></div></div></section>
+<section class="stage"><div class="stage-viewport"><canvas id="canvas"></canvas><div class="overlay"><strong id="overlayTitle">학습모드</strong><span id="overlayFrame">프레임 준비 중</span><div id="viewerLegend" class="viewer-legend"><div><i class="dot" style="background:#f5f8ff"></i>전문가 전체 Ray Point 점군</div><div><i class="dot" style="background:#a78bfa"></i>Map·Zone별 관측 영역</div><div><i class="dot" style="background:var(--green)"></i>Zone별 전문가 표준 도장 패턴</div><div><i class="dot" style="background:#ff8a3d"></i>선택 기록의 페인트 누적 궤적</div><div><i class="dot" style="background:var(--cyan)"></i>머리·양손 실측 위치와 추정 상체</div></div><div id="realtimeHud" class="realtime-hud"><div class="realtime-hud-head"><strong id="realtimeHudZone" data-max="Zone 대기">Zone 대기</strong><span id="realtimeHudActivity" class="realtime-hud-activity" data-max="이동 중">이동 중</span></div><div class="realtime-hud-grid"><div class="realtime-hud-row"><span class="realtime-hud-label">속도</span><span id="realtimeHudSpeed" class="realtime-hud-value" data-max="9.99 m/s">—</span><span id="realtimeHudSpeedState" class="realtime-hud-state idle" data-max="진행 중">대기</span></div><div class="realtime-hud-row"><span class="realtime-hud-label">이격거리</span><span id="realtimeHudDistance" class="realtime-hud-value" data-max="9999 mm">—</span><span id="realtimeHudDistanceState" class="realtime-hud-state idle" data-max="진행 중">대기</span></div><div class="realtime-hud-row"><span class="realtime-hud-label">분사축 편차</span><span id="realtimeHudAxis" class="realtime-hud-value" data-max="99.9°">—</span><span id="realtimeHudAxisState" class="realtime-hud-state idle" data-max="진행 중">대기</span></div><div class="realtime-hud-row"><span class="realtime-hud-label">도장 방향</span><span id="realtimeHudDirection" class="realtime-hud-value" data-max="분석 중">—</span><span id="realtimeHudDirectionState" class="realtime-hud-state idle" data-max="진행 중">대기</span></div><div class="realtime-hud-row"><span class="realtime-hud-label">도포 범위</span><span id="realtimeHudCoverage" class="realtime-hud-value" data-max="100%">—</span><span id="realtimeHudCoverageState" class="realtime-hud-state idle" data-max="진행 중">대기</span></div></div></div></div><div id="loading" class="loading" role="status"><progress id="loadingProgress" aria-label="불러오기 진행도"></progress><strong id="loadingStage">기록을 불러오는 중</strong><span id="loadingUnits">단계 확인 중</span><button id="loadingCancel" type="button">취소</button></div></div><div class="playback-dock"><div class="playback-status"><div class="playback-live"><strong id="playbackZone">현재 Zone 대기 중</strong><span id="playbackZoneBadge" class="playback-zone-badge" hidden>Zone 대기</span></div><span id="playbackTime">0.00 / 0.00초</span></div><div id="zoneTimeline" class="zone-timeline" aria-label="Zone 진행 구간"></div><input id="timeline" type="range" min="0" max="0" value="0" aria-label="진행 위치"><div class="playback-controls"><button id="play" class="primary">재생</button><button id="restart">처음으로</button><div class="speed-control"><label for="speed">재생 속도</label><select id="speed" aria-label="재생 속도"><option value="0.25">0.25배</option><option value="0.5">0.5배</option><option value="1" selected>1.0배</option><option value="1.5">1.5배</option><option value="2">2.0배</option><option value="3">3.0배</option></select></div></div></div></section>
 <aside class="side right"><div class="hidden-data-hooks"><strong id="currentZone">대기 중</strong><div id="zoneOrder"></div><div id="zoneDetail"></div><strong id="sessionCount">-</strong><strong id="duration">-</strong></div>
 <details class="card skeleton-card" open><summary>CSV 조인트 기반 전신 스켈레톤</summary><div class="skeleton-screen"><canvas id="skeletonCanvas" aria-label="CSV 조인트 기반 전신 스켈레톤"></canvas><span id="skeletonPosture" class="skeleton-posture">자세 판정 대기</span><span id="skeletonAngle" class="skeleton-angle">정면 · 0°</span></div><div class="skeleton-controls"><button id="skeletonTurnLeft" class="skeleton-turn" aria-label="스켈레톤 왼쪽 회전" title="왼쪽으로 15도 회전">↶</button><button id="skeletonReset" class="skeleton-reset">정면 보기</button><button id="skeletonTurnRight" class="skeleton-turn" aria-label="스켈레톤 오른쪽 회전" title="오른쪽으로 15도 회전">↷</button></div><div class="skeleton-note">CSV의 Pelvis·몸통·팔·다리 조인트를 그대로 연결해 표시합니다. 오른쪽 전완과 손은 건 위치 기록이 있으면 건 손잡이 쪽으로 다시 세워 그립니다. 시뮬레이터 IK 관절 데이터의 특성상 일부 자세가 부자연스럽게 보일 수 있습니다.</div></details>
 <section class="card coating-card"><div class="coating-header"><strong>도막</strong><span id="coatingZone">Zone 대기 중</span></div><div class="coating-basis" role="group" aria-label="도막 기준"><button id="coatingBasisTarget" class="active" type="button" aria-pressed="true">목표 대비</button><button id="coatingBasisExpert" type="button" aria-pressed="false">전문가 대비</button></div><div id="coatingTargetPanel" class="coating-target" hidden></div><div class="coating-switch" role="group" aria-label="도막 보기와 색상 척도"><button id="coatingView2d" class="active" type="button" title="2D 분포 보기">2D</button><button id="coatingView3d" type="button" title="3D 높이 강조 보기">3D</button><button id="coatingScaleRelative" class="active" type="button" aria-pressed="true">상대 분포</button><button id="coatingScaleAbsolute" type="button" aria-pressed="false" disabled>절대 두께 (µm)</button></div><div id="coatingStatus" class="coating-status">도막 기준 준비 중</div><div class="coating-screen"><canvas id="coatingCanvas" aria-label="전문가 최종 높이맵 기반 현재 Zone 도막 분포"></canvas></div><div id="coatingLegend" class="coating-legend" aria-label="도막 색상 범례">0%　25%　50%　75%　100%</div><div id="coatingScaleNote" class="coating-note">Zone별 상대 분포 · 물리 두께 보정 확인 중</div><div id="coatingGeometryNote" class="coating-note">전문가 최종 도막 기준이며 훈련자의 진행 도막이 아닙니다.</div></section></aside>
@@ -2042,14 +2065,17 @@ button{cursor:pointer;font-weight:700}.primary{background:#3157d5;border-color:#
 const $=id=>document.getElementById(id); const canvas=$('canvas'),ctx=canvas.getContext('2d'),skeletonCanvas=$('skeletonCanvas'),skeletonCtx=skeletonCanvas.getContext('2d');
 const ZONE_COLORS=[null,'#FF0000','#00FF00','#0000FF','#00FFFF','#FF00FF','#FFFF00','#FF8000','#FF0080','#00FF80','#80FF00','#0080FF','#8000FF','#FF8080','#80FF80','#8080FF','#800000','#008000','#000080','#80FFFF','#FF80FF','#FFFF80','#008080','#800080','#808000','#FFBF80','#FF80BF','#BFFF80','#80FFBF','#BF80FF','#80BFFF','#FF40BF','#FFBF40','#40FFBF','#BFFF40','#40BFFF','#BF40FF','#40BFBF','#BF40BF','#BFBF40'];
 let catalog=null,data=null,index=0,playheadSeconds=0,playing=false,last=0,yaw=-0.55,pitch=0.1,zoom=175,panX=0,panY=0,viewCenter=null,drag=null,loadGeneration=0,skeletonYaw=0;
-async function json(url){const r=await fetch(url);if(!r.ok)throw new Error((await r.json()).detail||'데이터를 읽을 수 없습니다.');return r.json()}
+async function json(url,options={}){const r=await fetch(url,{...options,cache:'no-store'});if(!r.ok)throw new Error((await r.json()).detail||'데이터를 읽을 수 없습니다.');return r.json()}
+const payloadCache=MotionViewerCache.create({fetchJson:json,onChange:()=>queueMicrotask(refreshSessionLabels)});
+function motionUrl(session=$('session').value){return '/motion-viewer/api/motion?'+new URLSearchParams({worker_id:$('worker').value,process:$('process').value,mode_id:$('mode').value,session_id:session})}
+function refreshSessionLabels(){if(!catalog)return;const worker=currentWorker(),mode=worker&&currentMode();if(!mode)return;for(const item of $('session').options){const label=item.value==='representative'?`${worker.display_name} · 전체 기록 종합 기준`:`${worker.display_name} · ${mode.session_labels?.[item.value]||item.value}`;const ready=payloadCache.has(motionUrl(item.value));item.textContent=(ready?'✓ ':'↓ ')+label+(ready?' · 빠른 로딩 (이 창)':'');item.style.color=ready?'#34d399':'';item.dataset.cacheReady=String(ready);item.title=ready?'✓ 이 창에 보관된 재생 자료입니다. 선택할 때 원본 변경 여부를 다시 확인합니다.':'↓ 이 창에 재생 자료가 없어 불러오기가 필요합니다.'}}
 function option(value,text){const o=document.createElement('option');o.value=value;o.textContent=text;return o}
 function currentWorker(){return catalog.workers.find(worker=>worker.worker_id===$('worker').value)}
 function currentProcess(){return currentWorker().processes.find(p=>p.process===$('process').value)}
 function currentMode(){return currentProcess().modes.find(m=>String(m.mode_id)===$('mode').value)}
 function fillProcesses(){const worker=currentWorker();$('process').replaceChildren(...worker.processes.map(p=>option(p.process,p.label)));fillModes()}
 function fillModes(){const p=currentProcess();$('mode').replaceChildren(...p.modes.map(m=>option(m.mode_id,`학습모드 ${m.mode_id} · ${m.session_count}회`)));const four=p.modes.find(m=>m.mode_id===4);if(four)$('mode').value='4';fillSessions()}
-function fillSessions(){const worker=currentWorker(),m=currentMode();$('session').replaceChildren(option('representative',`${worker.display_name} · 전체 기록 종합 기준`),...m.sessions.map(s=>option(s,`${worker.display_name} · ${s}`)));loadMotion()}
+function fillSessions(){const worker=currentWorker(),m=currentMode();$('session').replaceChildren(option('representative',`${worker.display_name} · 전체 기록 종합 기준`),...m.sessions.map(s=>option(s,`${worker.display_name} · ${m.session_labels?.[s]||s}`)));refreshSessionLabels();loadMotion()}
 function zoneKey(mapNum,zoneId){return mapNum!=null&&Number(zoneId)>0?`${mapNum}:${zoneId}`:null}
 function metricRow(label,value){const row=document.createElement('span');row.className='zone-metric';const name=document.createElement('span'),metric=document.createElement('b');name.textContent=label;metric.textContent=value;row.append(name,metric);return row}
 function directionName(value){return({horizontal:'수평',vertical:'수직',diagonal:'대각선',curved_irregular:'비정형'})[value]||'자료 없음'}
@@ -2065,10 +2091,12 @@ function showReferencePreview(key){playing=false;last=0;index=0;playheadSeconds=
 function startPlayback(){const fromPreview=referencePreview;referencePreview=false;selectedDetailKey='all';zoneDetailMode='auto';displayedZoneKey=null;if(fromPreview){index=0;playheadSeconds=0;$('timeline').value=0}showZoneDetail('all');playing=true;last=0;$('play').textContent='일시정지';draw()}
 function renderZoneOrder(){const host=$('zoneOrder');host.replaceChildren();const allButton=document.createElement('button');allButton.className='zone-chip';allButton.dataset.zoneKey='all';allButton.textContent='전체';allButton.style.setProperty('--zone-color',zoneVisualColor('all'));allButton.onclick=()=>showReferencePreview('all');host.append(allButton);for(const item of data.zone_order||[]){const button=document.createElement('button'),key=zoneKey(item.map_num,item.zone_id);button.className='zone-chip';button.dataset.zoneKey=key;button.textContent=`${item.order}. Zone ${zoneLabel(item.zone_id)}`;button.style.setProperty('--zone-color',zoneVisualColor(key));button.onclick=()=>showReferencePreview(key);host.append(button)}showZoneDetail('all')}
 function updateZonePanel(frame){const key=zoneKey(frame.map_num,frame.zone_id);$('currentZone').textContent=key?`Zone ${zoneLabel(frame.zone_id)}${frame.spraying?' · 분사 중':' · 조준/이동'}`:'이동/대기';for(const chip of $('zoneOrder').querySelectorAll('.zone-chip'))chip.classList.toggle('active',chip.dataset.zoneKey===key);if(zoneDetailMode==='auto'&&key&&key!==displayedZoneKey){showZoneDetail(key);displayedZoneKey=key}}
-function setLoading(active){$('loading').hidden=!active;canvas.setAttribute('aria-busy',active?'true':'false');for(const id of ['process','mode','session'])$(id).disabled=active}
+let activeLoadController=null;
+function setLoading(active){$('loading').hidden=!active;canvas.setAttribute('aria-busy',active?'true':'false');if(active)$('status').dataset.loadState='loading';for(const id of ['process','mode','session'])$(id).disabled=active}
+function setLoadProgress(value){const label=$('loadingStage'),count=$('loadingUnits'),bar=$('loadingProgress');if(!label||!count||!bar)return;label.textContent=value.stage_label||'기록을 불러오는 중';const unit=({rows:'행',records:'기록',zones:'Zone'})[value.unit]||'',done=Number.isFinite(value.completed)?value.completed:0,known=Number.isFinite(value.total)&&value.total>=0;count.textContent=unit?(known?`${done.toLocaleString()} / ${value.total.toLocaleString()} ${unit}`:`${done.toLocaleString()} ${unit} 처리 · 총량 확인 중`):value.status==='completed'?'완료':'진행 중';if(known&&value.total>0){bar.max=value.total;bar.value=done}else if(value.phase_complete||value.status==='completed'){bar.max=1;bar.value=1}else bar.removeAttribute('value');bar.setAttribute('aria-label',label.textContent+(count.textContent?' · '+count.textContent:''));$('status').textContent=label.textContent+' 중입니다.'}
 function averageCameraForward(payload){const vectors=(payload&&payload.frames||[]).map(frame=>frame.camera_forward).filter(vector=>Array.isArray(vector)&&vector.length===3);if(!vectors.length)return null;return unit(vectors.reduce((sum,vector)=>add(sum,vector),[0,0,0]),[0,0,1])}
 function resetViewToCamera(payload=data){const first=payload&&payload.frames&&payload.frames[0],points=payload&&payload.reference_surface&&payload.reference_surface.points||[],fallback=points.length?points.reduce((sum,item)=>add(sum,item.point),[0,0,0]).map(value=>value/points.length):[0,0,0],forward=averageCameraForward(payload);viewCenter=first&&((first.tracked||{}).head||(first.joints||{}).Head||(first.joints||{}).Pelvis)||fallback;panX=0;panY=0;if(forward){yaw=Math.atan2(forward[0],forward[2]);pitch=Math.asin(Math.max(-.95,Math.min(.95,forward[1])))}else{yaw=-.55;pitch=.1}zoom=175}
-async function loadMotion(){const generation=++loadGeneration;playing=false;last=0;displayedZoneKey=null;selectedDetailKey='all';zoneDetailMode='auto';referencePreview=false;$('play').textContent='재생';$('status').textContent='모션과 통계 범위를 계산하는 중입니다.';setLoading(true);try{const q=new URLSearchParams({worker_id:$('worker').value,process:$('process').value,mode_id:$('mode').value,session_id:$('session').value});const incoming=await json('/motion-viewer/api/motion?'+q);if(generation!==loadGeneration)return;data=incoming;index=0;playheadSeconds=0;resetViewToCamera(incoming);$('timeline').max=Math.max(0,data.frames.length-1);$('timeline').value=0;$('sessionCount').textContent=`${data.sampled_session_count}회`;$('duration').textContent=`${data.duration_seconds.toFixed(1)}초`;$('overlayTitle').textContent=`${data.worker.display_name} · ${data.process_label} · 학습모드 ${data.mode_id}`;renderZoneOrder();dispatchEvent(new CustomEvent('motion-viewer-data',{detail:incoming}));$('status').textContent=`${data.selected_session_id} 준비 완료`;draw()}catch(e){if(generation!==loadGeneration)return;data=null;$('status').textContent=e.message;draw()}finally{if(generation===loadGeneration)setLoading(false)}}
+async function loadMotion(){const generation=++loadGeneration;activeLoadController?.abort();const controller=new AbortController();activeLoadController=controller;playing=false;last=0;displayedZoneKey=null;selectedDetailKey='all';zoneDetailMode='auto';referencePreview=false;$('play').textContent='재생';setLoading(true);setLoadProgress({stage_label:'모션과 통계 범위 준비',completed:0,total:null});try{const incoming=await payloadCache.load(motionUrl(),{signal:controller.signal,onProgress:value=>{if(generation===loadGeneration&&!controller.signal.aborted)setLoadProgress(value)}});if(generation!==loadGeneration||controller.signal.aborted)return;data=incoming;index=0;playheadSeconds=0;resetViewToCamera(incoming);$('timeline').max=Math.max(0,data.frames.length-1);$('timeline').value=0;$('sessionCount').textContent=`${data.sampled_session_count}회`;$('duration').textContent=`${data.duration_seconds.toFixed(1)}초`;$('overlayTitle').textContent=`${data.worker.display_name} · ${data.process_label} · 학습모드 ${data.mode_id}`;renderZoneOrder();dispatchEvent(new CustomEvent('motion-viewer-data',{detail:incoming}));draw();setLoadProgress({status:'completed',stage_label:'장면 준비 완료',completed:1,total:1,unit:'records'});await new Promise(resolve=>requestAnimationFrame(resolve));if(generation!==loadGeneration)return;if(controller.signal.aborted)throw new DOMException('Load cancelled','AbortError');$('status').dataset.loadState='ready';$('status').textContent=`${data.source_session_id||data.selected_session_id} 준비 완료`}catch(e){if(generation!==loadGeneration)return;data=null;$('status').dataset.loadState=e.name==='AbortError'?'cancelled':'failed';$('status').textContent=e.name==='AbortError'?'불러오기를 취소했습니다.':e.message;draw()}finally{if(generation===loadGeneration){setLoading(false);activeLoadController=null}}}
 function resize(){const dpr=devicePixelRatio||1,rect=canvas.getBoundingClientRect(),skeletonRect=skeletonCanvas.getBoundingClientRect();canvas.width=Math.round(rect.width*dpr);canvas.height=Math.round(rect.height*dpr);ctx.setTransform(dpr,0,0,dpr,0,0);if(skeletonRect.width){skeletonCanvas.width=Math.round(skeletonRect.width*dpr);skeletonCanvas.height=Math.round(skeletonRect.height*dpr);skeletonCtx.setTransform(dpr,0,0,dpr,0,0)}draw()}
 function transform(point,center){let x=point[0]-center[0],y=point[1]-center[1],z=point[2]-center[2];let cy=Math.cos(yaw),sy=Math.sin(yaw),x1=x*cy-z*sy,z1=x*sy+z*cy;let cp=Math.cos(pitch),sp=Math.sin(pitch),y1=y*cp-z1*sp,z2=y*sp+z1*cp;return [x1,y1,z2]}
 function project(point,center,w,h){const [x,y,z]=transform(point,center),pers=4.5/(4.5+z);return [w/2+panX+x*zoom*pers,h/2+panY-y*zoom*pers,pers]}
@@ -2133,9 +2161,12 @@ $('worker').replaceChildren(...catalog.workers.map(row=>option(row.worker_id,`${
 $('process').replaceChildren(...worker.processes.map(row=>option(row.process,row.label)));$('process').value=selected.process;
 $('mode').replaceChildren(...process.modes.map(row=>option(row.mode_id,`학습모드 ${row.mode_id} · ${row.session_count}회`)));$('mode').value=selected.mode;
 $('session').replaceChildren(option('representative',`${worker.display_name} · 전체 기록 종합 기준`),...mode.sessions.map(row=>option(row,`${worker.display_name} · ${row}`)));$('session').value=selected.session;
+refreshSessionLabels();
 }catch(e){/* Existing recording stays usable when a background check fails. */}finally{catalogRefreshPending=false}}
 addEventListener('focus',refreshCatalogOptions);document.addEventListener('visibilitychange',()=>{if(!document.hidden)refreshCatalogOptions()});
-addEventListener('resize',resize);(async()=>{try{catalog=await json('/motion-viewer/api/catalog');catalogRefreshedAt=Date.now();$('worker').replaceChildren(...catalog.workers.map(worker=>option(worker.worker_id,`${worker.display_name}${worker.role==='expert'?' · 전문가 기준':''}`)));fillProcesses();resize();requestAnimationFrame(tick)}catch(e){$('status').textContent=e.message}})();
+$('session').addEventListener('pointerdown',()=>payloadCache.refresh());$('session').addEventListener('focus',()=>payloadCache.refresh());addEventListener('focus',()=>payloadCache.refresh());setInterval(refreshSessionLabels,10000);
+$('loadingCancel').onclick=()=>activeLoadController?.abort();addEventListener('pagehide',()=>activeLoadController?.abort());
+addEventListener('resize',resize);(async()=>{try{catalog=await json('/motion-viewer/api/catalog');catalogRefreshedAt=Date.now();$('worker').replaceChildren(...catalog.workers.map(worker=>option(worker.worker_id,`${worker.display_name}${worker.role==='expert'?' · 전문가 기준':''}`)));if(catalog.workers.some(worker=>worker.worker_id==='jeon_hyeonggi'))$('worker').value='jeon_hyeonggi';fillProcesses();resize();requestAnimationFrame(tick)}catch(e){$('status').textContent=e.message}})();
 </script><script defer src="/motion-viewer/assets/motion_viewer_camera.js"></script><script defer src="/motion-viewer/assets/motion_viewer_pose.js"></script><script defer src="/motion-viewer/assets/motion_viewer_coating.js"></script><script defer src="/motion-viewer/assets/motion_viewer_chat.js"></script></body></html>"""
 
 
@@ -2169,31 +2200,129 @@ def create_motion_viewer_router(
     sequence_engine = SequenceAnalysisEngine(root)   # 공개 analyze-sequence 와 같은 전문가 뿌리
     from trainer.demo_api.training_motion_catalog import TrainingMotionCatalog
     training_records = TrainingMotionCatalog(root)
+    payload_revisions = PayloadRevisions()
+    load_progress = LoadProgressStore()
+
+    @router.get('/motion-viewer/api/load-progress', include_in_schema=False)
+    async def load_progress_status(load_id: str = Query(pattern='^[a-f0-9-]{32,36}$')) -> JSONResponse:
+        return JSONResponse(load_progress.snapshot(load_id), headers={'Cache-Control': 'no-store'})
 
     def viewer_workers():
-        workers = {worker['worker_id']: worker for worker in _worker_sources(root)}
+        workers = {}
+        for worker in _worker_sources(root):
+            key = worker_group_id(worker['worker_id'], worker['display_name'])
+            if key == UNKNOWN_WORKER_ID:
+                group = workers.setdefault(key, {**worker, 'worker_id': key, 'root': root, 'source_workers': []})
+                group['source_workers'].append(worker)
+            else:
+                workers[key] = worker
         for worker in training_records.workers():
             if worker['worker_id'] not in workers:
                 workers[worker['worker_id']] = {**worker, 'catalog_only': True}
-        return list(workers.values())
+        return sorted(workers.values(), key=lambda worker: worker_sort_key(worker['worker_id'], worker['display_name']))
 
     def viewer_worker(worker_id):
         worker = next((item for item in viewer_workers() if item['worker_id'] == worker_id), None)
         if worker is None:
+            # Selector grouping does not remove pre-existing original-ID URLs.
+            # This view keeps only that worker's source sessions and IDs.
+            worker = next((item for item in _worker_sources(root) if item['worker_id'] == worker_id), None)
+        if worker is None:
+            source = training_records.source_worker(worker_id)
+            if source is not None:
+                worker = {**source, 'catalog_only': True}
+        if worker is None:
             raise HTTPException(status_code=404, detail="worker data not found")
         return worker
 
-    def viewer_profile(worker, process, mode_id):
+    def legacy_profile(worker, process, mode_id):
+        if worker.get('source_workers'):
+            sessions = []
+            for source in worker['source_workers']:
+                profile = legacy_profile(source, process, mode_id)
+                if profile is None:
+                    continue
+                for original in profile['sessions']:
+                    source_id = str(original.get('session_id', ''))
+                    try:
+                        csv_path = _session_path(Path(source['root']), process, mode_id, profile, source_id)
+                    except HTTPException:
+                        continue
+                    session = copy.deepcopy(original)
+                    session.update(session_id='legacy_' + hashlib.sha256(
+                        (source['worker_id'] + ':' + source_id).encode()).hexdigest()[:32],
+                        source_worker_id=source['worker_id'], source_session_id=source_id,
+                        zone_id_policy='legacy_expert' if _legacy_zone_ids(
+                            profile, Path(source['root']), root, source_id) else 'source')
+                    session['sources'] = {'catalog_relative_path': csv_path.resolve().relative_to(root.resolve()).as_posix()}
+                    heightmaps = _record_height_maps(Path(source['root']), process, mode_id, profile, source_id)
+                    session['heightmaps'] = [{'map_num': face, 'relative_path': path.resolve().relative_to(root.resolve()).as_posix()}
+                                             for face, path in heightmaps.items()]
+                    session['dataset_id'] = session['session_id']
+                    sessions.append(session)
+            return ({'identity': {'zone_id_policy': 'source'}, 'sessions': sessions,
+                     'aggregate': {'zones': {}, 'macro_orders': []}} if sessions else None)
         try:
-            base = None if worker.get('catalog_only') else _read_profile(Path(worker['root']), process, mode_id)
+            return None if worker.get('catalog_only') else _read_profile(Path(worker['root']), process, mode_id)
         except HTTPException as error:
             if error.status_code != 404:
                 raise
-            base = None
+            return None
+
+    def viewer_profile(worker, process, mode_id):
+        base = legacy_profile(worker, process, mode_id)
         profile = training_records.profile(worker['worker_id'], process, mode_id, base)
         if profile is None:
             raise HTTPException(status_code=404, detail="motion profile not found")
         return profile
+
+    def motion_metadata_paths(worker, process, mode_id):
+        paths = [training_records.catalog.root / 'catalog.json', root / 'workers']
+        sources = worker.get('source_workers') or [worker]
+        for source in [*sources, {'root': root}]:
+            worker_root = Path(source['root'])
+            paths.extend([worker_root / 'worker.json', worker_root / 'generated/profiles' / process / 'learning' / f'mode_{mode_id:02d}.json'])
+        paths.extend(training_records.catalog.root / 'records' / (str(row['dataset_id']) + '.json')
+                     for row in training_records.selections(worker['worker_id'], process, mode_id))
+        return paths
+
+    def motion_source_stamp(worker, process, mode_id, profile, selected):
+        """Track actual playback/reference inputs without reading their contents."""
+        paths = motion_metadata_paths(worker, process, mode_id)
+        profiles = [(Path(worker['root']), profile)]
+        for source in worker.get('source_workers') or []:
+            try:
+                profiles.append((Path(source['root']), _read_profile(Path(source['root']), process, mode_id)))
+            except HTTPException:
+                pass
+        try:
+            profiles.append((root, _read_profile(root, process, mode_id)))
+        except HTTPException:
+            pass
+        for worker_root, current in profiles:
+            for session in current.get('sessions', []):
+                try:
+                    paths.append(_session_path(worker_root, process, mode_id, current, str(session['session_id']), source_root=root, require_exists=False))
+                except HTTPException:
+                    continue
+                trusted = root.resolve() if session.get('dataset_id') else (worker_root / 'raw' / process / 'learning' / f'mode_{mode_id:02d}').resolve()
+                for image in session.get('heightmaps') or []:
+                    relative = image.get('relative_path' if session.get('dataset_id') else 'source_path')
+                    if isinstance(relative, str):
+                        declared = (trusted / relative).resolve()
+                        if declared.is_relative_to(trusted):
+                            paths.append(declared)
+                dataset_id = session.get('dataset_id')
+                if dataset_id and str(dataset_id).isalnum():
+                    paths.append(training_records.catalog.root / 'records' / (str(dataset_id) + '.json'))
+        paths.extend(_record_height_maps(Path(worker['root']), process, mode_id, profile, selected, source_root=root).values())
+        paths.extend(training_records.declared_source_paths(worker['worker_id'], process, mode_id))
+        paths.extend(path for path, _ in _zone_asset_revision())
+        return payload_revisions.stamp(paths)
+
+    @router.get('/motion-viewer/api/cache-status', include_in_schema=False)
+    def payload_cache_status(token: str = Query(min_length=1, max_length=64)) -> dict[str, bool]:
+        return {'valid': payload_revisions.valid(token)}
 
     # 2026-11-13부터 v2가 기본 뷰어다. 옛 화면은 /motion-viewer/v1, 예전 v2 주소(/motion-viewer/v2)도 같은 화면을 연다.
     @router.get("/motion-viewer/v1", include_in_schema=False, response_class=HTMLResponse)
@@ -2217,6 +2346,11 @@ def create_motion_viewer_router(
     @router.get("/motion-viewer/assets/motion_viewer_v2_layout.js", include_in_schema=False)
     def v2_layout_script() -> FileResponse:
         return FileResponse(static_root / "motion_viewer_v2_layout.js", media_type="text/javascript",
+                            headers={"Cache-Control": "no-cache"})
+
+    @router.get("/motion-viewer/assets/motion_viewer_cache.js", include_in_schema=False)
+    def payload_cache_script() -> FileResponse:
+        return FileResponse(static_root / "motion_viewer_cache.js", media_type="text/javascript",
                             headers={"Cache-Control": "no-cache"})
 
     @router.get("/motion-viewer/assets/motion_viewer_pose.js", include_in_schema=False)
@@ -2285,7 +2419,7 @@ def create_motion_viewer_router(
                 modes: list[dict[str, Any]] = []
                 for mode_id in range(1, 11):
                     try:
-                        profile = _read_profile(worker_root, process, mode_id) if not worker.get('catalog_only') else None
+                        profile = legacy_profile(worker, process, mode_id)
                         representative = _representative_session(profile) if profile else None
                     except HTTPException:
                         profile, representative = None, None
@@ -2304,6 +2438,10 @@ def create_motion_viewer_router(
                         "session_count": len(sessions),
                         "representative_session_id": representative,
                         "sessions": sessions,
+                        **({'session_labels': {
+                            **{str(item['session_id']): f"{item['source_session_id']} · ID {item.get('source_worker_id', '')}" for item in (profile or {}).get('sessions', []) if item.get('source_session_id')},
+                            **training_records.session_labels(worker['worker_id'], process, mode_id),
+                        }} if worker['worker_id'] == UNKNOWN_WORKER_ID else {}),
                     })
                 if modes:
                     processes.append({"process": process, "label": label, "modes": modes})
@@ -2314,7 +2452,8 @@ def create_motion_viewer_router(
                     "role": worker["role"],
                     "processes": processes,
                 })
-        legacy_processes = workers[0]["processes"] if workers else []
+        legacy_worker = next((worker for worker in workers if worker['worker_id'] == _EXPERT_WORKER_ID), workers[0] if workers else None)
+        legacy_processes = legacy_worker["processes"] if legacy_worker else []
         return {"workers": workers, "processes": legacy_processes}
 
     @router.get("/motion-viewer/api/evaluations", include_in_schema=False)
@@ -2397,18 +2536,17 @@ def create_motion_viewer_router(
         )
         return {"selected_session_id": selected, "sequence_alerts": alerts}
 
-    @router.get("/motion-viewer/api/motion", include_in_schema=False)
-    def motion_data(
-        worker_id: str = Query(default=_EXPERT_WORKER_ID, pattern="^[A-Za-z0-9_-]+$"),
-        process: str = Query(pattern="^(spray|blasting|grinding)$"),
-        mode_id: int = Query(ge=1, le=10),
-        session_id: str = Query(min_length=1, max_length=100),
+    def build_motion_data(
+        worker_id: str, process: str, mode_id: int, session_id: str,
     ) -> dict[str, Any]:
+        stage('profile')
         worker = viewer_worker(worker_id)
         worker_root = Path(worker["root"])
+        metadata_stamp = payload_revisions.stamp(motion_metadata_paths(worker, process, mode_id))
         profile = viewer_profile(worker, process, mode_id)
         representative = _representative_session(profile)
         selected = representative if session_id == "representative" else session_id
+        input_stamp = motion_source_stamp(worker, process, mode_id, profile, selected)
         legacy_zone_ids = _legacy_zone_ids(profile, worker_root, root, selected)
         selected_path = _session_path(worker_root, process, mode_id, profile, selected, source_root=root)
         selected_frames = _canonicalize_zone_items(
@@ -2424,7 +2562,7 @@ def create_motion_viewer_router(
         representative_frames: list[dict[str, Any]] = []
         reference_profile = profile
         expert_session_paths: list[Path] = []
-        for session in profile["sessions"]:
+        for session in progress_units(profile["sessions"], stage='record_prepare'):
             current_id = str(session.get("session_id", ""))
             if not current_id:
                 continue
@@ -2461,7 +2599,7 @@ def create_motion_viewer_router(
                 expert_profile = {'sessions': [], 'aggregate': {'zones': {}, 'macro_orders': []}}
             reference_profile = expert_profile
             evaluation_references = []
-            for expert_session in expert_profile["sessions"]:
+            for expert_session in progress_units(expert_profile["sessions"], stage='expert_prepare'):
                 expert_id = str(expert_session.get("session_id", ""))
                 if not expert_id:
                     continue
@@ -2557,6 +2695,7 @@ def create_motion_viewer_router(
             "triangles": supplied_mesh.get("triangles", []) if mesh_available else [],
             "fallback": None if mesh_available else "ray_point_surface",
         }
+        stage('response')
         payload = {
             "expert_name": _EXPERT_NAME,
             "worker": {
@@ -2598,6 +2737,7 @@ def create_motion_viewer_router(
             **paint_statistics,
         }
         from trainer.demo_api.coating_query import viewer_coating_context
+        stage('coating')
         payload["coating_evaluation"] = viewer_coating_context(payload, target=_target_coating(
             process, mode_id, _record_height_maps(worker_root, process, mode_id, profile, selected, source_root=root),
             [*payload["pose_evaluation"].get("zones", {}), *payload["coating_reference"]],
@@ -2611,9 +2751,10 @@ def create_motion_viewer_router(
             logger.exception("viewer coating alerts failed path=%s", selected_path)
             payload["coating_alerts"] = []
         from trainer.demo_api.dialogue import viewer_dialogue_context
+        stage('response')
         payload["dialogue_evaluation"] = viewer_dialogue_context(payload)
         from trainer.demo_api.playback_direction import build_playback_snapshot
-        snapshot_key = f"{frame_count}:{selected_path}:{selected_path.stat().st_mtime_ns}:{selected_path.stat().st_size}:{process}:{mode_id}:{legacy_zone_ids}"
+        snapshot_key = f"{frame_count}:{selected_path}:{file_revision(selected_path)}:{process}:{mode_id}:{legacy_zone_ids}"
         with _open_csv(selected_path) as clock_handle:
             csv_origin = _number(next(csv.DictReader(clock_handle), {}).get("시간(초)"))
         clock_valid = csv_origin is not None and bool(selected_frames) and all(_number(frame.get("csv_time_seconds")) is not None for frame in selected_frames)
@@ -2624,6 +2765,47 @@ def create_motion_viewer_router(
 
         from trainer.demo_api.viewer_context import viewer_signatures
         payload["query_context_signatures"] = viewer_signatures(payload)
+        if worker['worker_id'] == UNKNOWN_WORKER_ID:
+            selected_record = _session_record(profile, selected)
+            payload['worker']['selection_worker_id'] = worker['worker_id']
+            payload['worker']['worker_id'] = selected_record.get('source_worker_id') or worker['worker_id']
+            payload['source_session_id'] = selected_record.get('source_session_id', selected)
+        if (payload_revisions.stamp(motion_metadata_paths(worker, process, mode_id)) == metadata_stamp
+                and motion_source_stamp(worker, process, mode_id, profile, selected) == input_stamp):
+            payload['viewer_cache'] = {'token': payload_revisions.register(input_stamp), 'scope': 'browser_payload', 'max_age_seconds': 300}
         return payload
+
+    @router.get('/motion-viewer/api/motion', include_in_schema=False)
+    async def motion_data(
+        request: Request,
+        worker_id: str = Query(default=_EXPERT_WORKER_ID, pattern='^[A-Za-z0-9_-]+$'),
+        process: str = Query(pattern='^(spray|blasting|grinding)$'),
+        mode_id: int = Query(ge=1, le=10),
+        session_id: str = Query(min_length=1, max_length=100),
+        load_id: str | None = Header(default=None, alias='X-Motion-Load-ID', pattern='^[a-f0-9-]{32,36}$'),
+    ) -> dict[str, Any]:
+        try:
+            job = load_progress.start(load_id or uuid4().hex)
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail='Load ID already used') from error
+        task = asyncio.create_task(run_in_threadpool(
+            run_load, job, lambda: build_motion_data(worker_id, process, mode_id, session_id)))
+        def consume_result(done):
+            if not done.cancelled():
+                done.exception()
+        try:
+            while not task.done():
+                done, _ = await asyncio.wait({task}, timeout=0.15)
+                if not done and await request.is_disconnected():
+                    job.cancel()
+                    task.add_done_callback(consume_result)
+                    raise HTTPException(status_code=499, detail='Motion load cancelled')
+            return await task
+        except asyncio.CancelledError:
+            job.cancel()
+            task.add_done_callback(consume_result)
+            raise
+        except LoadStopped as error:
+            raise HTTPException(status_code=409, detail='Motion load cancelled or expired') from error
 
     return router

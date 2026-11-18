@@ -24,6 +24,7 @@ from trainer.demo_api.session_analysis import (
     analyze_session, csv_sequences, has_world_joints, painted_zone, read_csv, spray_runs,
 )
 from trainer.scripts import replay_telemetry
+from trainer.demo_api.motion_viewer_cache import file_revision
 
 logger = logging.getLogger(__name__)
 _USER = "motion-viewer"
@@ -86,8 +87,7 @@ def build_arm_pose_evaluation(
     if process != "spray":
         return {"status": "unavailable", "reason_code": "process_not_supported"}
     try:
-        stat = csv_path.stat()
-        return _evaluate(str(csv_path), (stat.st_mtime_ns, stat.st_size), record_id, mode_id, mcp_base_url, transport)
+        return _evaluate(str(csv_path), file_revision(csv_path), record_id, mode_id, mcp_base_url, transport)
     except _RetryableEvaluation as exc:
         return exc.result
     except Exception:  # noqa: BLE001 - 뷰어 재생은 자세 엔진 장애와 무관하게 열려야 한다. 실패는 캐시하지 않는다.
@@ -97,7 +97,7 @@ def build_arm_pose_evaluation(
 
 @lru_cache(maxsize=32)
 def _evaluate(
-    path_text: str, stamp: tuple[int, int], record_id: str, mode_id: int, mcp_base_url: str, transport: Any
+    path_text: str, stamp: tuple[int, ...], record_id: str, mode_id: int, mcp_base_url: str, transport: Any
 ) -> dict[str, Any]:
     del stamp  # 파일이 바뀌면 다시 채점하도록 캐시 키에만 쓴다
     # 자세 엔진은 세션 ID별로 상태(굳은 관절 등)를 쌓고 지우는 경로가 없다. 같은 이름을 다시 쓰면 앞선 채점이

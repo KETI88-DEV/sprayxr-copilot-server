@@ -123,3 +123,26 @@ def test_converted_csv_large_sparse_cell_and_explicit_blasting_tool(tmp_path):
             writer.writerow(row)
     frames=_frames(source,5,'blasting')
     assert len(frames)==5 and frames[0]['tracked']['right_hand']==[2.0,1.0,3.0]
+
+
+def test_worker_choices_are_name_sorted_with_one_unknown_bucket_and_original_ids(monkeypatch, tmp_path):
+    output = tmp_path / 'built'; monkeypatch.setenv('TRAINING_DATA_ROOT', str(output))
+    publish(tmp_path, output, worker='z', worker_name='하 작업자', session='4_2201_1')
+    publish(tmp_path, output, worker='a', worker_name='가 작업자', session='4_2202_1')
+    publish(tmp_path, output, worker='raw-unknown-a', worker_name='미기록', session='4_2203_1')
+    # Equal source session IDs under unknown workers must remain separate records.
+    publish(tmp_path, output, worker='raw-unknown-b', worker_name='', session='4_2203_1')
+    client = _client(tmp_path)
+    workers = client.get('/motion-viewer/api/catalog').json()['workers']
+    assert [item['display_name'] for item in workers] == ['가 작업자', '전형기', '하 작업자', '이름 미확인']
+    unknown = workers[-1]
+    assert unknown['worker_id'] == '__unknown_workers__'
+    sessions = unknown['processes'][0]['modes'][0]['sessions']
+    assert len(sessions) == 2 and len(set(sessions)) == 2
+    profile = TrainingMotionCatalog(tmp_path).profile('__unknown_workers__', 'spray', 4)
+    assert {row['source_worker_id'] for row in profile['sessions']} == {'raw-unknown-a', 'raw-unknown-b'}
+    assert {row['source_session_id'] for row in profile['sessions']} == {'4_2203_1'}
+    payload = client.get('/motion-viewer/api/motion', params={
+        'worker_id': '__unknown_workers__', 'process': 'spray', 'mode_id': 4, 'session_id': sessions[0]}).json()
+    assert payload['worker']['worker_id'] in {'raw-unknown-a', 'raw-unknown-b'}
+    assert payload['worker']['selection_worker_id'] == '__unknown_workers__'

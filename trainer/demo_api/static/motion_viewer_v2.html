@@ -2,6 +2,7 @@
 <html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>3D 모션 뷰어</title>
 <link rel="stylesheet" href="/motion-viewer/assets/motion_viewer_v2.css">
+<script src="/motion-viewer/assets/motion_viewer_cache.js"></script>
 </head><body>
 <div class="v2-shell">
 <header class="record-bar">
@@ -10,7 +11,8 @@
     <span class="pick"><i data-icon="user"></i><select id="worker" aria-label="작업자"></select></span>
     <span class="pick"><i data-icon="spray-can"></i><select id="process" aria-label="훈련 종류"></select></span>
     <span class="pick"><i data-icon="graduation-cap"></i><select id="mode" aria-label="학습모드"></select></span>
-    <span class="pick pick-record"><i data-icon="history"></i><select id="session" aria-label="재생할 기록"></select></span>
+    <span class="pick pick-record"><i data-icon="history"></i><select id="session" aria-label="재생할 기록" aria-describedby="recordCacheLegend"></select></span>
+    <small id="recordCacheLegend" class="record-cache-legend">↓ 불러오기 필요 · <span>✓ 이 창에 보관됨</span> · 선택 시 원본 변경 확인</small>
   </div>
   <div class="scores" role="group" aria-label="이 기록의 결과">
     <span class="score" title="작업 유사도: 도구 각도·이격거리·칠하는 방향·도막 두께·몸통 자세와 순서를 전문가 기록과 견준 값"><i data-icon="gauge"></i><span>작업</span><strong id="v2ScoreWork">—</strong></span>
@@ -58,7 +60,7 @@
         </div>
       </details>
       <div id="v2Toast" class="toast" role="status" aria-live="polite" aria-atomic="false"></div>
-      <div id="loading" class="loading" role="status"><span class="loading-bar"></span><span>기록을 불러오는 중</span></div>
+      <div id="loading" class="loading" role="status"><progress id="loadingProgress" aria-label="불러오기 진행도"></progress><strong id="loadingStage">기록을 불러오는 중</strong><span id="loadingUnits">단계 확인 중</span><button id="loadingCancel" type="button">취소</button></div>
       <div id="v2StageError" class="stage-error" role="alert" hidden><i data-icon="triangle-alert"></i><span id="v2StageErrorText"></span><button id="v2Reload" type="button"><i data-icon="rotate-cw"></i>다시 불러오기</button></div>
     </div>
     <div class="transport">

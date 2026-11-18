@@ -610,9 +610,9 @@
   new MutationObserver(syncPlay).observe($('play'), { childList: true, characterData: true, subtree: true });
   new MutationObserver(() => {
     const text = $('status').textContent.trim();
-    const failed = Boolean(text) && !text.endsWith('준비 완료') && !text.endsWith('중입니다.');
+    const failed = ['failed', 'cancelled'].includes($('status').dataset.loadState);
     $('v2StageError').hidden = !failed;
-    $('v2StageErrorText').textContent = failed ? `기록을 불러오지 못했습니다. ${text}` : '';
+    $('v2StageErrorText').textContent = failed ? ($('status').dataset.loadState === 'cancelled' ? text : `기록을 불러오지 못했습니다. ${text}`) : '';
     if (failed) { record = null; armSeen = undefined; renderAll(); chat.setRecord(null); notices.load(null); }
   }).observe($('status'), { childList: true, characterData: true, subtree: true });
   $('v2Reload').addEventListener('click', () => $('session').dispatchEvent(new Event('change')));
@@ -1561,7 +1561,7 @@
         toastHost.replaceChildren();
         sync();
         if (!payload) return;
-        const query = new URLSearchParams({ worker_id: payload.worker?.worker_id, process: payload.process,
+        const query = new URLSearchParams({ worker_id: payload.worker?.selection_worker_id || payload.worker?.worker_id, process: payload.process,
           mode_id: payload.mode_id, session_id: payload.selected_session_id });
         fetch('/motion-viewer/api/alerts?' + query)
           .then((response) => (response.ok ? response.json() : Promise.reject(new Error(String(response.status)))))

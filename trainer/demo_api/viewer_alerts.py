@@ -22,6 +22,7 @@ from trainer.demo_api.session_analysis import painted_zone, read_csv, spray_runs
 from trainer.demo_api.telemetry_contracts import AnalyzeSequenceRequest
 from trainer.demo_api.telemetry_router import coating_alerts
 from trainer.demo_api.viewer_arm_pose import _Bodies, _engine_bodies, _seconds
+from trainer.demo_api.motion_viewer_cache import PayloadRevisions, file_revision
 from trainer.expert_zone_mapping import canonical_expert_zone_id
 
 logger = logging.getLogger(__name__)
@@ -39,14 +40,13 @@ def _canonical(mode_id: int, legacy: bool, zone: object) -> str:
     return str(canonical_expert_zone_id("spray", "learning" if legacy else "source", mode_id, zone))
 
 
-def _stamp(path: Path) -> tuple[str, int, int]:
-    stat = path.stat()
-    return str(path), stat.st_mtime_ns, stat.st_size
+def _stamp(path: Path) -> tuple[str, tuple[int, ...]]:
+    return str(path), file_revision(path)
 
 
 @lru_cache(maxsize=32)
-def _windows(path_text: str, mtime: int, size: int, mode_id: int, legacy: bool) -> tuple[Window, ...]:
-    del mtime, size  # 파일이 바뀌면 다시 읽도록 열쇠에만 쓴다
+def _windows(path_text: str, revision: tuple[int, ...], mode_id: int, legacy: bool) -> tuple[Window, ...]:
+    del revision
     rows = _rows(Path(path_text))
     origin = (_seconds(rows[0], 0.0) or 0.0) if rows else 0.0
     out: list[Window] = []
@@ -108,7 +108,10 @@ def sequence_alerts_for(path: Path, *, process: str, mode_id: int, legacy: bool,
     if process != "spray":   # 본문 tool_type 이 spray_gun 으로 고정이라 블라스팅 기준을 고를 수 없다
         return _unavailable("process_not_supported")
     try:
-        result = copy.deepcopy(_sequence_alerts(*_stamp(path), mode_id, legacy, engine))
+        reference_root = getattr(engine, '_root', None)
+        reference_revision = (PayloadRevisions.stamp([Path(reference_root) / 'generated/profiles/spray/learning' / f'mode_{mode_id:02d}.json'])
+                              if reference_root is not None else ())
+        result = copy.deepcopy(_sequence_alerts(*_stamp(path), mode_id, legacy, engine, reference_revision))
         for alert in result["alerts"]:
             alert["seek_seconds"], alert["at_seconds"] = _shift(alert["seek_seconds"], offset), _shift(alert["at_seconds"], offset)
         return result
@@ -117,9 +120,9 @@ def sequence_alerts_for(path: Path, *, process: str, mode_id: int, legacy: bool,
         return _unavailable("engine_error")
 
 
-# shortcut: 열쇠가 CSV 파일뿐이라 전문가 프로필이 바뀌어도 옛 판정을 낸다(최대 32건), 프로필을 실행 중에 갈게 되면 프로필 mtime을 열쇠에 넣는다.
 @lru_cache(maxsize=32)
-def _sequence_alerts(path_text: str, mtime: int, size: int, mode_id: int, legacy: bool, engine: Any) -> dict[str, Any]:
+def _sequence_alerts(path_text: str, revision: tuple[int, ...], mode_id: int, legacy: bool, engine: Any, reference_revision: tuple) -> dict[str, Any]:
+    del reference_revision  # The engine reads this exact profile on a cache miss.
     rows = _rows(Path(path_text))
     bodies = _engine_bodies(rows, session_id="motion-viewer-alerts", scenario_id=str(mode_id))
     requests = []
@@ -132,7 +135,7 @@ def _sequence_alerts(path_text: str, mtime: int, size: int, mode_id: int, legacy
     if not requests:
         return _unavailable("no_sequences")
     store = _Bodies([body for body, _ in requests])
-    windows = {window[0]: window for window in _windows(path_text, mtime, size, mode_id, legacy)}
+    windows = {window[0]: window for window in _windows(path_text, revision, mode_id, legacy)}
     alerts, reasons, judged = [], [], False
     for _body, request in requests:
         decision = engine.decide(request, store)

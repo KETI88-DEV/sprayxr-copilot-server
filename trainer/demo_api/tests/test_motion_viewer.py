@@ -405,8 +405,37 @@ def test_catalog_discovers_future_worker_directory_without_code_change(tmp_path:
 
     payload = client.get("/motion-viewer/api/catalog").json()
 
-    assert [worker["display_name"] for worker in payload["workers"]] == ["전형기", "김경호"]
-    assert payload["workers"][1]["worker_id"] == "kim_gyeongho"
+    assert [worker["display_name"] for worker in payload["workers"]] == ["김경호", "전형기"]
+    assert payload["workers"][0]["worker_id"] == "kim_gyeongho"
+
+
+def test_unknown_legacy_worker_directories_share_selector_without_merging_recordings(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    source_profile = tmp_path / 'generated/profiles/spray/learning/mode_04.json'
+    for worker_id in ['unknown_a', 'unknown_b']:
+        worker_root = tmp_path / 'workers' / worker_id
+        profile = worker_root / 'generated/profiles/spray/learning/mode_04.json'
+        profile.parent.mkdir(parents=True)
+        profile.write_bytes(source_profile.read_bytes())
+        # No display-name evidence exists for either source worker.
+        for source in (tmp_path / 'raw/spray/learning/mode_04').glob('*.csv'):
+            target = worker_root / 'raw/spray/learning/mode_04' / source.name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(source.read_bytes())
+    workers = client.get('/motion-viewer/api/catalog').json()['workers']
+    assert [worker['display_name'] for worker in workers] == ['전형기', '이름 미확인']
+    unknown = workers[-1]
+    mode = unknown['processes'][0]['modes'][0]
+    assert len(mode['sessions']) == 4
+    assert len(set(mode['sessions'])) == 4
+    assert all('ID unknown_' in label for label in mode['session_labels'].values())
+    payload = client.get('/motion-viewer/api/motion', params={
+        'worker_id': unknown['worker_id'], 'process': 'spray', 'mode_id': 4,
+        'session_id': mode['sessions'][0]}).json()
+    assert payload['worker']['worker_id'] in {'unknown_a', 'unknown_b'}
+    assert payload['worker']['selection_worker_id'] == unknown['worker_id']
+    assert payload['source_session_id'] in {'4_1001_1', '4_1002_1'}
+    assert len(payload['frames']) == 5
 
 
 def test_motion_returns_real_representative_frames_and_cross_session_spread(tmp_path: Path) -> None:
