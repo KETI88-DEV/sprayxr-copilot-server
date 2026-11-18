@@ -1,7 +1,7 @@
 """Curated passages cannot narrow a composite question or inherit a new topic."""
 import pytest
 
-from trainer.demo_api.defect_cause import defect_cause_topic
+from trainer.demo_api.context_prompts import matched_prompt
 from trainer.demo_api.sequence_store import SequenceStore
 from trainer.demo_api.tests.test_query_contextual_dialogue import DialoguePipeline, ask, client
 
@@ -12,7 +12,7 @@ from trainer.demo_api.tests.test_query_contextual_dialogue import DialoguePipeli
     '과도막과 도막 두께 부족은 왜 생기나요?',
 ])
 def test_multiple_known_subjects_do_not_force_one_curated_topic(prompt):
-    assert defect_cause_topic(prompt) is None
+    assert matched_prompt(prompt) is None
 
 
 def test_history_is_not_inherited_without_an_explicit_followup_decision():
@@ -33,3 +33,8 @@ def test_an_explicit_followup_to_a_composite_subject_stays_generic():
     ask(client(p,store),'그럼 원인은?',response_mode='detailed')
     assert 'pinned_chunk_ids' not in p.calls[-1]
     assert '[결함 원인 질문]' not in p.calls[-1]['instruction']
+
+
+@pytest.mark.parametrize('prompt', ['저도막과 과도막이 생기면 어떤 문제가 있어?', '과도막 말고 저도막은 어떤 문제가 생겨?'])
+def test_multiple_subjects_do_not_force_one_effect_type(prompt):
+    assert matched_prompt(prompt) is None

@@ -1,4 +1,4 @@
-"""결함 원인 질문의 원문 근거 묶음(2026-11-18 '저도막 원인' 오답)."""
+"""질문 유형별 맥락 프롬프트와 근거 묶음(2026-11-18 '저도막 원인' 오답, 상세 분석 기권)."""
 from __future__ import annotations
 
 import json
@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from trainer.demo_api.defect_cause import cause_context, defect_cause_topic, pinned_chunks
+from trainer.demo_api.context_prompts import _TYPES, context_text, matched_prompt
 from trainer.demo_api.sequence_store import SequenceStore
 from trainer.demo_api.tests.test_query_contextual_dialogue import DialoguePipeline, ask, client
 from trainer.scripts.agent_pipeline import AgentPipeline
@@ -15,30 +15,46 @@ from trainer.scripts.agent_pipeline import AgentPipeline
 CONFIGS = Path(__file__).resolve().parents[2] / "configs"
 
 
+def _named(name):
+    return next(entry for entry in _TYPES if entry["이름"] == name)
+
+
 @pytest.mark.parametrize("prompt, previous, expected", [
-    ("저도막의 원인은?", [], "저도막"),
-    ("저도막은 왜 생겨?", [], "저도막"),
-    ("도막 두께 부족이 생기는 이유", [], "저도막"),
-    ("과도막은 왜 생겨?", [], "과도막"),
-    ("그럼 원인은?", ["저도막이 뭐야?"], "저도막"),
-    ("저도막이 뭐야?", [], None),            # 정의 질문은 원인 묶음을 쓰지 않는다
+    ("저도막의 원인은?", [], "저도막 원인"),
+    ("저도막은 왜 생겨?", [], "저도막 원인"),
+    ("도막 두께 부족이 생기는 이유", [], "저도막 원인"),
+    ("과도막은 왜 생겨?", [], "과도막 원인"),
+    ("그럼 원인은?", ["저도막이 뭐야?"], "저도막 원인"),
+    ("과도막이 생기면 어떤 문제가 있어?", [], "과도막 영향"),   # '생기'가 있어도 영향 질문이다
+    ("저도막이 생기면 어떤 문제가 있어?", [], "저도막 영향"),
+    ("그럼 어떤 문제가 생겨?", ["과도막이 뭐야?"], "과도막 영향"),
+    ("충전전로 최소 이격거리는?", [], "충전전로 최소 이격거리"),
+    ("저도막이 뭐야?", [], None),            # 정의 질문은 묶음을 쓰지 않는다
     ("그럼 원인은?", [], None),
     ("처짐은 왜 생겨?", [], None),           # 묶음에 없는 결함
     ("그럼 원인은?", ["이격거리는 얼마가 적당해?"], None),
+    ("이격거리는 얼마가 적당해?", ["충전전로 최소 이격거리는?"], None),  # 전기 안전거리는 이어받지 않는다
+    ("후도막형 도료는 왜 써?", [], None),
 ])
-def test_cause_question_finds_its_defect(prompt, previous, expected):
-    assert defect_cause_topic(prompt, previous) == expected
+def test_question_type_is_found(prompt, previous, expected):
+    found = matched_prompt(prompt, previous)
+    assert (found["이름"] if found else None) == expected
 
 
-def test_bundle_uses_no_excluded_chunk():
+def test_every_type_uses_no_excluded_chunk_and_has_a_rule():
     excluded = set(json.loads((CONFIGS / "evidence_exclusions.json").read_text(encoding="utf-8"))["조각"])
-    bundle = json.loads((CONFIGS / "defect_cause_evidence.json").read_text(encoding="utf-8"))["결함"]
-    assert all(entry["조각"] and not excluded & set(entry["조각"]) for entry in bundle.values())
+    for entry in _TYPES:
+        assert entry["조각"] and entry["규칙"] and not excluded & set(entry["조각"]), entry["이름"]
 
 
-def test_context_rule_forbids_flipping_cause_and_effect():
-    rule = cause_context("과도막")
+def test_cause_rule_forbids_flipping_cause_and_effect():
+    rule = context_text(_named("과도막 원인"))
     assert "질문한 결함: 과도막" in rule and "방향을 바꾸지" in rule and "B가 A의 원인이라는 뜻이 아닙니다" in rule
+
+
+def test_effect_rule_asks_for_consequences_not_causes():
+    rule = context_text(_named("과도막 영향"))
+    assert "[결함 영향 질문]" in rule and "결과로 바꿔 쓰지" in rule
 
 
 def _pipeline(rows):
@@ -69,7 +85,7 @@ def test_router_pins_the_bundle_and_adds_the_rule_for_a_cause_question():
     pipeline = DialoguePipeline()
     ask(client(pipeline), "저도막의 원인은?", response_mode="detailed")
     call = pipeline.calls[-1]
-    assert call["pinned_chunk_ids"] == pinned_chunks("저도막")
+    assert call["pinned_chunk_ids"] == _named("저도막 원인")["조각"]
     assert "[결함 원인 질문]" in call["instruction"]
 
 
@@ -79,7 +95,7 @@ def test_router_inherits_the_defect_from_the_previous_question():
                             task_type="knowledge_search", created_at="2026-11-18T05:05:01Z", answer_source="documents")
     pipeline = DialoguePipeline({"kind": "coating_knowledge", "intent": "knowledge", "scope": "unspecified", "context_relation": "followup"})
     ask(client(pipeline, store), "그럼 원인은?", response_mode="quick")
-    assert pipeline.calls[-1]["pinned_chunk_ids"] == pinned_chunks("저도막")
+    assert pipeline.calls[-1]["pinned_chunk_ids"] == _named("저도막 원인")["조각"]
 
 
 class _PinnedLowScore(DialoguePipeline):
@@ -109,3 +125,11 @@ def test_router_leaves_other_questions_unpinned():
     pipeline = DialoguePipeline()
     ask(client(pipeline), "이격거리는 얼마가 적당해?", response_mode="quick")
     assert "pinned_chunk_ids" not in pipeline.calls[-1]
+
+
+def test_router_pins_the_electrical_clearance_passages():
+    pipeline = DialoguePipeline()
+    ask(client(pipeline), "충전전로 최소 이격거리는?", response_mode="quick")
+    call = pipeline.calls[-1]
+    assert call["pinned_chunk_ids"] == _named("충전전로 최소 이격거리")["조각"]
+    assert "[전기 안전거리 질문]" in call["generation_instruction"]

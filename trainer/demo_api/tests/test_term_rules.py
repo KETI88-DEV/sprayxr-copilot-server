@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from trainer.demo_api.defect_cause import defect_cause_topic
+from trainer.demo_api.context_prompts import matched_prompt
 from trainer.demo_api.term_rules import _RULES, matched_terms, term_context, with_document_terms
 from trainer.demo_api.tests.test_query_contextual_dialogue import DialoguePipeline, ask, client
 
@@ -35,7 +35,7 @@ def test_follow_up_inherits_the_term_of_the_previous_question():
 
 
 def test_high_build_paint_is_not_an_excess_film_cause_question():
-    assert defect_cause_topic("후도막형 도료는 왜 써?") is None
+    assert matched_prompt("후도막형 도료는 왜 써?") is None
 
 
 def test_document_terms_are_appended_and_the_user_term_kept():

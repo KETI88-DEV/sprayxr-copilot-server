@@ -32,7 +32,7 @@ mcp_servers/pose_estimation.py
 mcp_servers/sequence_validation.py
 mcp_servers/timeseries.py
 mcp_servers/vlm_analysis.py
-trainer/configs/defect_cause_evidence.json
+trainer/configs/context_prompts.json
 trainer/configs/term_rules.json
 trainer/configs/evidence_corrections.json
 trainer/configs/evidence_exclusions.json
@@ -96,7 +96,7 @@ trainer/demo_api/copilot_live_analysis.py
 trainer/demo_api/copilot_router.py
 trainer/demo_api/copilot_session_context.py
 trainer/demo_api/corrected_router.py
-trainer/demo_api/defect_cause.py
+trainer/demo_api/context_prompts.py
 trainer/demo_api/term_rules.py
 trainer/demo_api/db_admin_auth.py
 trainer/demo_api/db_record_time.py

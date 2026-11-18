@@ -67,7 +67,7 @@ def test_a_validated_partial_finding_remains_visible_after_its_repair_exhausts_t
 
 def test_curated_passages_cannot_exceed_the_shared_rerank_evidence_limit():
     from types import SimpleNamespace
-    from trainer.demo_api.tests.test_defect_cause_evidence import _pipeline
+    from trainer.demo_api.tests.test_context_prompts import _pipeline
     p=_pipeline([{'chunk_id':f'C{i}','text':f'본문 {i}'} for i in range(10)])
     found=p._pin_evidence('원인은?',[f'C{i}' for i in range(10)],[],SimpleNamespace(EXCLUDED_CHUNKS=frozenset()))
     assert len(found)==4
