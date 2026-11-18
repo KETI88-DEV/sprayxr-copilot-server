@@ -32,6 +32,7 @@ mcp_servers/pose_estimation.py
 mcp_servers/sequence_validation.py
 mcp_servers/timeseries.py
 mcp_servers/vlm_analysis.py
+trainer/configs/defect_cause_evidence.json
 trainer/configs/evidence_corrections.json
 trainer/configs/evidence_exclusions.json
 trainer/configs/rag_config_fewshot_27b.yaml
@@ -93,6 +94,7 @@ trainer/demo_api/copilot_live_analysis.py
 trainer/demo_api/copilot_router.py
 trainer/demo_api/copilot_session_context.py
 trainer/demo_api/corrected_router.py
+trainer/demo_api/defect_cause.py
 trainer/demo_api/db_admin_auth.py
 trainer/demo_api/db_admin_router.py
 trainer/demo_api/db_admin_store.py

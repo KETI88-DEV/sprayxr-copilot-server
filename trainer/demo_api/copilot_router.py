@@ -61,6 +61,7 @@ from trainer.demo_api.playback_direction import playback_direction_from_context,
 from trainer.demo_api.copilot_live_analysis import current_zone, live_analysis
 from trainer.demo_api.simulator_context import SIMULATOR_CONTEXT, is_blasting, wants_simulator_context, simulator_configuration_facts
 from trainer.demo_api.copilot_session_context import build_query_instruction, summarize_session, viewer_definition_context
+from trainer.demo_api.defect_cause import cause_context, defect_cause_topic, pinned_chunks
 from trainer.demo_api.pose_query import (
     answer_order_question,
     order_request_fields,
@@ -1584,6 +1585,14 @@ async def _execute_copilot_query(
             "\n모델의 임시 해석일 뿐 답변·사실·새 주제의 근거가 아닙니다. "
             "사용자 원문 대화의 대상이나 조건을 추가하거나 바꾸는 부분은 사용하지 마세요."
         )
+    # 결함 원인 질문(2026-11-18 '저도막 원인' 오답): 원인이 여러 조각에 흩어져 검색 8칸에 다 들지 않는다.
+    # 원문 조각 묶음을 근거 앞에 붙이고 인과 방향 규칙을 준다. 직전 질문 하나에서만 결함을 이어받는다.
+    inherit = [str(dialogue_turns[-1].get("prompt", ""))] if dialogue_turns and not (
+        decision is not None and decision.get("context_relation") == "new_topic") else []
+    cause_topic = (defect_cause_topic(question, inherit)
+                   if query.task_type == "knowledge_search" and mixed is None and use_rag and coating_advice_context is None else None)
+    if cause_topic is not None:
+        knowledge_client_context = (knowledge_client_context + "\n" if knowledge_client_context else "") + cause_context(cause_topic)
     # Add the relation after all fact-specific context builders, which may
     # replace the client context. Retrieval must retain this scope decision.
     if document_followup:
@@ -1619,9 +1628,11 @@ async def _execute_copilot_query(
         parameters = inspect.signature(run_target.run).parameters
         supports_deferral = "defer_without_evidence" in parameters
         supports_summary = "answer_summary" in parameters or any(item.kind == inspect.Parameter.VAR_KEYWORD for item in parameters.values())
+        supports_pin = "pinned_chunk_ids" in parameters or any(item.kind == inspect.Parameter.VAR_KEYWORD for item in parameters.values())
     except (TypeError, ValueError):
         supports_deferral = False
         supports_summary = False
+        supports_pin = False
     may_defer = supports_deferral and use_rag and not documents_only
 
     def _guarded_run() -> Mapping[str, object]:
@@ -1636,6 +1647,7 @@ async def _execute_copilot_query(
                 use_rag=use_rag,
                 max_tokens=1024,
                 **({"answer_summary": True} if query.summarize and supports_summary else {}),
+                **({"pinned_chunk_ids": pinned_chunks(cause_topic)} if cause_topic is not None and supports_pin else {}),
                 **({"defer_without_evidence": may_defer,
                     "evidence_score_threshold": _abstain_below(pipeline, query.response_mode)}
                    if supports_deferral else {}),
@@ -1685,7 +1697,9 @@ async def _execute_copilot_query(
     # 근거 확인 단계: 재정렬 1위 점수가 기준값 미만이면 생성한 답을 버린다(설정이 없으면 지금처럼 동작).
     # 기준값은 재정렬 모델의 점수 척도에 묶인다(KURE-Reranker-nano 3.28, 2026-11-13 측정). 상세분석만 잰 값이다.
     abstain_below = _abstain_below(pipeline, query.response_mode)
-    if use_rag and abstain_below is not None:
+    # 결함 원인 묶음 조각은 골라 둔 근거라 재정렬 점수로 거르지 않는다(과도막 묶음 최고 2.59 < 3.28, 2026-11-18).
+    pinned_used = any(isinstance(c, dict) and c.get("pinned") for c in result.get("rag_chunks") or [])
+    if use_rag and abstain_below is not None and not pinned_used:
         scores = [float(c["rerank_score"]) for c in result.get("rag_chunks") or []
                   if isinstance(c, dict) and c.get("rerank_score") is not None]
         if not scores or max(scores) < abstain_below:
