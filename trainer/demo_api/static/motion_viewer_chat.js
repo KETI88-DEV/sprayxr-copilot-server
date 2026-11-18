@@ -391,6 +391,7 @@
           task_type: sentTask.id,
           prompt,
           response_mode: sentMode,
+          summarize: false,
           language: 'ko',
           response_language: sentLanguage,
           use_rag: 'Y',

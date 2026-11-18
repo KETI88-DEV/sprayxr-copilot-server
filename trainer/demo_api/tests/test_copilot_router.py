@@ -141,7 +141,8 @@ def test_knowledge_search_runs_the_pipeline_on_the_fast_route(monkeypatch: pytes
     assert call["force_route"] == "fast" and call["enable_thinking"] is False
     assert call["use_rag"] is True and call["use_pipeline_history"] is False
     assert call["max_tokens"] == 1024 and call["request_id"] == "req-query-0044"
-    assert call["quick_cache_scope"] == '["W-017", null, "knowledge_search"]'
+    assert call["quick_cache_scope"] == '["W-017", null, "knowledge_search", true]'
+    assert call["answer_summary"] is True
 
 
 def test_detailed_mode_requests_evidence_and_action_from_the_model(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -149,7 +150,7 @@ def test_detailed_mode_requests_evidence_and_action_from_the_model(monkeypatch: 
     pipeline = _FakePipeline()
 
     response = _client(monkeypatch, pipeline).post(
-        URL, json=_body(response_mode="detailed", context="현재 Zone은 3입니다.")
+        URL, json=_body(response_mode="detailed", summarize=False, context="현재 Zone은 3입니다.")
     )
 
     assert response.status_code == 200
@@ -162,6 +163,7 @@ def test_detailed_mode_requests_evidence_and_action_from_the_model(monkeypatch: 
     assert pipeline.calls[0]["enable_thinking"] is False
     assert pipeline.calls[0]["max_tokens"] == 1024
     assert pipeline.calls[0]["compact_analysis"] is True
+    assert "answer_summary" not in pipeline.calls[0]
 
 
 def test_detailed_mode_searches_documents_with_the_question_not_the_answer_directive(

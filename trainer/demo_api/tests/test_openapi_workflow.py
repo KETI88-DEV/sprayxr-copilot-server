@@ -358,8 +358,12 @@ def test_every_public_operation_shows_a_bulleted_input_parameter_overview() -> N
     query = schema["paths"]["/api/v1/copilot/query"]["post"]["description"]
     assert "- `response_mode(string)` :" in query
     assert "    - 기본값: `quick`" in query
-    assert "    - `quick`: 훈련 중 바로 확인할 핵심 판단과 권장 조치를 짧게 반환합니다." in query
-    assert "    - `detailed`: 현재 상황, 판단 근거, 원인과 권장 조치를 구조화해 자세히 반환합니다." in query
+    assert "    - `quick`: Qwen3-8B 빠른 안내 모델입니다. 답변 분량은 summarize로 선택합니다." in query
+    assert "    - `detailed`: Qwen3.6-27B 상세 분석 모델입니다. 답변 분량은 summarize로 선택합니다." in query
+    assert "- `summarize(boolean)` :" in query
+    assert "    - 기본값: `true`" in query
+    assert "    - `true`: 핵심 답변을 요약합니다." in query
+    assert "    - `false`: 문단·목록을 유지한 전체 답변을 제공합니다." in query
     assert "    - `trajectory_recomm`: Zone 순서와 도장 경로를 안내합니다." in query
     assert "    - 생략 시: Y로 처리하여 관련 지식 검색(RAG)을 사용합니다." in query
     assert "    - `Y`: 관련 지식과 현재 세션 문맥을 검색해 답변에 활용합니다." in query

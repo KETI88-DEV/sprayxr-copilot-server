@@ -17,6 +17,14 @@ from trainer.demo_api.query_language import LANGUAGE_DESCRIPTION, QueryLanguage
 TaskType = Literal["trajectory_recomm", "pose_recomm", "error_analysis", "knowledge_search"]
 ResponseMode = Literal["quick", "detailed"]
 ContextStatus = Literal["available", "not_available"]
+SUMMARY_DESCRIPTION = (
+    "답변 요약 여부입니다. 생략하면 true이며 VR에서 바로 확인할 핵심 답변을 짧게 제공합니다. "
+    "false이면 필요한 설명·문단·목록을 유지한 전체 본문을 제공합니다. "
+    "response_mode의 모델 선택과 독립적으로 적용합니다. "
+    "요약하더라도 안전 경고·한계·확인된 수치와 단위·Zone 순서는 생략하거나 중간에서 자르지 않습니다. "
+    "질문에 맞춰 이미 구성된 분석·기록의 사실/조치 안내와 고정 안전 답변은 필수 내용이므로 그대로 제공합니다. "
+    "명시적인 문구·문장 번역 요청은 요약하지 않고 전체를 번역합니다."
+)
 
 
 def _normalize_rag_usage(value: object) -> object:
@@ -38,6 +46,7 @@ class CopilotQueryRequest(StrictModel):
                 "prompt": "다음 Zone을 어떤 순서로 칠해야 하나요?",
                 "task_type": "knowledge_search",
                 "response_mode": "quick",
+                "summarize": True,
                 "language": "ko",
                 "response_language": "ko",
                 "use_rag": "Y",
@@ -79,11 +88,10 @@ class CopilotQueryRequest(StrictModel):
     )]
     response_mode: Annotated[ResponseMode, Field(
         description=(
-            "답변 수준입니다. 생략하면 `quick`(빠른 안내)으로 처리합니다.\n\n"
+            "답변 모델 선택입니다. 생략하면 `quick`(빠른 안내)으로 처리합니다.\n\n"
             "- `quick`: **빠른 안내 · Qwen3-8B 모델**\n"
-            "  - 답변 본문과 필요한 문장·목록을 요약하거나 줄이지 않고 제공합니다.\n"
             "- `detailed`: **상세 분석 · Qwen3.6-27B 모델**\n"
-            "  - 답변 본문과 필요한 근거·조치를 문장 수 제한 없이 제공합니다.\n"
+            "답변 분량은 별도 `summarize`로 선택합니다. 기본 true는 핵심 요약, false는 전체 본문입니다.\n"
             "두 모드 모두 생성은 최대 1,024토큰으로 제한하며 인용·안전·수치 검사를 유지합니다.\n\n"
             "서버에서 확인한 자세·순서 평가 결과는 그대로 사용합니다. "
             "답변 번역은 분석 모델과 별도로 선택합니다. 일반 지원 언어는 Qwen3-8B, "
@@ -92,6 +100,7 @@ class CopilotQueryRequest(StrictModel):
         ),
         examples=["quick"],
     )] = "quick"
+    summarize: Annotated[bool, Field(description=SUMMARY_DESCRIPTION, examples=[True, False])] = True
     language: Annotated[QueryLanguage, Field(
         description="질문 언어 코드입니다. 생략 시 ko(한국어)입니다. " + LANGUAGE_DESCRIPTION,
         examples=["ko", "vi"],

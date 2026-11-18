@@ -18,7 +18,7 @@ class Element{
   focus(){}
   remove(){if(this.parent)this.parent.children=this.parent.children.filter(child=>child!==this);}
 }
-async function page(source,data){
+async function page(source,data,mode='quick'){
   const elements=new Map(),requests=[];
   const get=id=>{if(!elements.has(id))elements.set(id,new Element());return elements.get(id);};
   const document={getElementById:get,createElement:tag=>new Element(tag),querySelectorAll:()=>[],addEventListener(){},documentElement:new Element()};
@@ -33,7 +33,7 @@ async function page(source,data){
   vm.createContext(context);
   for(const name of ['query_answer_source.js','query_chat.js'])vm.runInContext(fs.readFileSync(path.join(__dirname,'../static',name),'utf8'),context);
   await new Promise(resolve=>setImmediate(resolve));
-  get('prompt').value='저도막의 원인은?';get('response-mode').value='quick';get('response-language').value='ko';
+  get('prompt').value='저도막의 원인은?';get('response-mode').value=mode;get('response-language').value='ko';
   await get('chat-form').events.submit({preventDefault(){}});
   return {elements,requests,assistant:get('messages').children.find(item=>item.className==='message assistant')};
 }
@@ -51,4 +51,14 @@ test('a term translation is labelled glossary, not document RAG',async()=>{
   const {assistant}=await page('glossary',{retrieval_used:false,citations:['TSB:VR_Language.csv:27']});
   assert.equal(assistant.querySelector('.evidence-badge')?.textContent,'용어집');
   assert.doesNotMatch(assistant.querySelector('.answer-meta')?.textContent||'',/Qwen/,'dictionary lookup must not claim a model was invoked');
+});
+
+for(const mode of ['quick','detailed'])test(`the question page requests and renders the full ${mode} answer`,async()=>{
+  const answer='표면을 먼저 준비하세요.\n근거와 작업 조건을 함께 확인하세요.';
+  const {assistant,requests}=await page('documents',{answer,retrieval_used:true,citations:['DOC-doc_0001-C0001']},mode);
+  const sent=JSON.parse(requests.find(request=>request.url==='/api/v1/copilot/query').options.body);
+  assert.equal(sent.response_mode,mode);
+  assert.equal(sent.summarize,false,'browser questions must opt out of the VR summary default');
+  assert.equal(assistant.querySelector('.message-text').textContent,answer);
+  assert.ok(assistant.querySelector('.answer-tools'),'full answers remain rateable');
 });

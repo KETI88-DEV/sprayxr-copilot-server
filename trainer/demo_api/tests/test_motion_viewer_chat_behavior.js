@@ -59,6 +59,7 @@ async function submit(app, question = '지금 자세는 어때?') {
     app.emit('motion-viewer-data', data);
     await app.find('mvc-chips').children[index].fire('click');
     const { request, completion } = await submit(app, '도막이 과하거나 모자란 영역이 있어?');
+    assert.equal(request.body.summarize, false, 'viewer tabs retain the full contextual answer');
     const value = JSON.parse(request.body.context.slice(request.body.context.indexOf(':') + 1));
     assert.equal(value.coating_signature, 'signed-coating');
     assert.equal(value.coating_context.zones[0].actual_um, 180);
@@ -99,6 +100,7 @@ async function submit(app, question = '지금 자세는 어때?') {
     const { request, completion } = await submit(app);
     assert.equal(request.body.use_rag, 'Y');
     assert.equal(request.body.response_mode, 'detailed');
+    assert.equal(request.body.summarize, false);
     assert.deepEqual(decode(request).playback_context, { map_num: '1', zone_id: '2', source_index: 2, playhead_seconds: 2.5 });
     assert.match(app.find('mvc-context').textContent, /Map 1.*Zone 2.*2\.50/);
     // Changes after fetch starts must not relabel the eventual answer.

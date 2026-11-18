@@ -11,6 +11,26 @@ const sandbox = { window: {} };
 vm.runInNewContext(source, sandbox);
 const L = sandbox.window.motionViewerV2Layout;
 
+for (const mode of ['quick', 'detailed']) test(`v2 채팅도 ${mode} 모델에서 전체 답변을 요청하고 선택 작업자·문맥을 유지한다`, () => {
+  const script = fs.readFileSync(path.join(__dirname, '../static/motion_viewer_v2.js'), 'utf8');
+  const posting = script.slice(script.indexOf("const response = await fetch('/api/v1/copilot/query'"));
+  const expression = posting.match(/body: JSON\.stringify\((\{[\s\S]*?\n\s*\})\),/);
+  assert.ok(expression, '실제 Query 요청 body 식을 검사한다');
+  const sent = {mode, language: ['vi'], tab: {task: 'pose_recomm'}, state: {zone: '3'},
+    data: {worker: {worker_id: 'SELECTED-WORKER'}, selected_session_id: '3_RECORD_1', mode_id: 3}};
+  const body = JSON.parse(vm.runInNewContext(`JSON.stringify(${expression[1]})`, {
+    sent, prompt: '지금 자세는 어때?', context: () => 'signed-viewer-context',
+  }));
+  assert.equal(body.summarize, false);
+  assert.equal(body.response_mode, mode);
+  assert.equal(body.user_id, 'SELECTED-WORKER');
+  assert.equal(body.session_id, '3_RECORD_1');
+  assert.equal(body.scenario_id, '3');
+  assert.equal(body.language, 'ko');
+  assert.equal(body.response_language, 'vi');
+  assert.equal(body.context, 'signed-viewer-context');
+});
+
 test('창 높이가 800 이하이거나 뷰어 열이 1300보다 좁으면 한 칸, 아니면 세 칸(두 칸 보기는 없다)', () => {
   assert.equal(L.panelCount(1306, 1080), 3);
   assert.equal(L.panelCount(1300, 801), 3);

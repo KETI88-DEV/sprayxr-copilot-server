@@ -44,7 +44,7 @@ def test_query_preserves_every_model_sentence_and_list_item(mode):
     app.include_router(create_copilot_router(lambda: pipeline, store=SequenceStore(":memory:")))
     response = TestClient(app).post("/api/v1/copilot/query", json={
         "user_id": "COPILOT-AI-TEST", "prompt": "도막을 고르게 형성하는 절차를 설명해 주세요.",
-        "response_mode": mode, "task_type": "knowledge_search", "use_rag": "Y",
+        "response_mode": mode, "summarize": False, "task_type": "knowledge_search", "use_rag": "Y",
     })
     assert response.status_code == 200
     data = response.json()["data"]
@@ -58,7 +58,7 @@ def test_query_preserves_every_model_sentence_and_list_item(mode):
 @pytest.mark.parametrize("mode", ["quick", "detailed"])
 def test_voice_query_preserves_the_same_complete_body(mode):
     pipeline = _Documents()
-    response = _post(_client(_Stt("도막을 고르게 형성하는 절차를 설명해 주세요."), pipeline), response_mode=mode)
+    response = _post(_client(_Stt("도막을 고르게 형성하는 절차를 설명해 주세요."), pipeline), response_mode=mode, summarize="false")
     assert response.status_code == 200
     assert response.json()["data"]["answer"] == BODY
 

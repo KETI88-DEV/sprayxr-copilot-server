@@ -93,6 +93,7 @@ from trainer.demo_api.v1_store import V1Store
 from trainer.demo_api.record_query import BODY_PART, DIRECTION_WORD, FIRST_FIX, WORST_ZONE, RecordAnswer, RecordFacts, answer_record_question, split_parts, ground_generated, has_record_marker, previous_subject
 from trainer.demo_api.viewer_progress import progress_question, viewer_progress_answer
 from trainer.demo_api.query_runtime import generation_slot_for, retrieval_question, select_query_pipeline, translation_pipeline_for
+from trainer.demo_api.quick_answer import summarize_query_answer
 from trainer.scripts.generation_slot import GENERATION_SLOT  # Legacy slot identity for unconfigured clients.
 from trainer.scripts.live_response_contract import (
     FAILED_REPAIR_PATHS,
@@ -927,7 +928,11 @@ def _success_response(
     headers = {ANSWER_SOURCE_HEADER: source}
     if subject:
         headers[SUBJECT_HEADER] = json.dumps(subject, ensure_ascii=True, separators=(",", ":"))
-    return JSONResponse(status_code=200, content=envelope.model_dump(mode="json"), headers=headers)
+    response = JSONResponse(status_code=200, content=envelope.model_dump(mode="json"), headers=headers)
+    # Engine/record builders already select the requested facts and required
+    # limits/actions. A generic prose extractor must not reinterpret that core.
+    response._copilot_precomposed_answer = not generated or bool(subject)
+    return response
 
 
 async def _execute_copilot_query(
@@ -1185,6 +1190,11 @@ async def _execute_copilot_query(
             conversation_engine = conversation_pipeline if conversation_pipeline is not None else planned_pipeline
             def converse():
                 kwargs = dict(recent_turns=conversation_turns, facts=conversation_facts, response_mode=query.response_mode, **simulator)
+                if query.summarize:
+                    target = getattr(conversation_engine, "_parent", conversation_engine)
+                    parameters = inspect.signature(target.converse_copilot).parameters
+                    if "summarize" in parameters or any(item.kind == inspect.Parameter.VAR_KEYWORD for item in parameters.values()):
+                        kwargs["summarize"] = True
                 with generation_slot_for(conversation_engine):
                     raw = conversation_engine.converse_copilot(query.prompt, **kwargs)
                 fallback = select_query_pipeline(conversation_engine, "quick")
@@ -1588,6 +1598,7 @@ async def _execute_copilot_query(
         recent_turns=[] if definition_context is not None else recent_turns,
         response_mode=query.response_mode,
         concise=query.response_mode == "detailed",
+        summarize=query.summarize,
         simulator_context=block,
     )
     generation_instruction = (build_query_instruction(
@@ -1597,6 +1608,7 @@ async def _execute_copilot_query(
         recent_turns=[] if definition_context is not None else recent_turns,
         response_mode=query.response_mode,
         concise=True,
+        summarize=query.summarize,
         simulator_context=block,
     ) if query.response_mode == "quick" else instruction)
 
@@ -1604,9 +1616,12 @@ async def _execute_copilot_query(
     # keep their exact run signature and their previous post-generation gate.
     run_target = getattr(pipeline, "_parent", pipeline)
     try:
-        supports_deferral = "defer_without_evidence" in inspect.signature(run_target.run).parameters
+        parameters = inspect.signature(run_target.run).parameters
+        supports_deferral = "defer_without_evidence" in parameters
+        supports_summary = "answer_summary" in parameters or any(item.kind == inspect.Parameter.VAR_KEYWORD for item in parameters.values())
     except (TypeError, ValueError):
         supports_deferral = False
+        supports_summary = False
     may_defer = supports_deferral and use_rag and not documents_only
 
     def _guarded_run() -> Mapping[str, object]:
@@ -1620,13 +1635,16 @@ async def _execute_copilot_query(
                 enable_thinking=False,
                 use_rag=use_rag,
                 max_tokens=1024,
+                **({"answer_summary": True} if query.summarize and supports_summary else {}),
                 **({"defer_without_evidence": may_defer,
                     "evidence_score_threshold": _abstain_below(pipeline, query.response_mode)}
                    if supports_deferral else {}),
                 **({"compact_analysis": True} if query.response_mode == "detailed" else {}),
                 request_id=query.request_id,
                 **({
-                    "quick_cache_scope": json.dumps([query.user_id, query.scenario_id, query.task_type]),
+                    # Preserve the established full-body cache namespace for
+                    # false, and isolate the new concise-generation namespace.
+                    "quick_cache_scope": json.dumps([query.user_id, query.scenario_id, query.task_type] + ([True] if query.summarize else [])),
                     "concise_answer": True,
                     "generation_instruction": generation_instruction,
                     "retrieval_instruction": question,
@@ -1851,6 +1869,11 @@ async def execute_copilot_query(
         data = body["data"]
         # 분석 답은 항상 한국어다. 모델이 섞어 낸 한자는 번역 전에 뺀다.
         korean_answer = without_hanzi(data["answer"], prompt=normalized) if translation_request is None else None
+        if query.summarize and korean_answer is not None:
+            # All record/generation/safety guards have run. Present each cached
+            # full body independently, before the existing translation checks.
+            korean_answer = summarize_query_answer(korean_answer, safety=bool(safety_class),
+                precomposed=bool(getattr(response, "_copilot_precomposed_answer", False)))
         try:
             if translation_request is None:
                 data["answer"] = await _translate(korean_answer, "ko", response_language)
@@ -1890,6 +1913,7 @@ async def execute_copilot_query(
             query_context={
                 "scenario_id": data.get("scenario_id") or query.scenario_id,
                 "session_id": query.session_id, "response_mode": query.response_mode,
+                "summarize": query.summarize,
                 "language": query.language, "response_language": response_language,
                 "analysis_prompt": normalized, "context": query.context,
                 "sequence_context": data.get("sequence_context"), "pose_context": data.get("pose_context"),
@@ -1935,11 +1959,13 @@ def create_copilot_router(
         tags=["3. AI Co-Pilot 질의"],
         summary="3-1. 텍스트 기반 Co-Pilot 질의",
         description=(
-            "Replay 및 일반 UI용 텍스트 질의입니다. 답변 수준에 따라 Qwen3-8B 또는 Qwen3.6-27B 모델과 RAG를 사용합니다.\n\n"
-            "- **빠른 안내 (`quick`, 기본값) · Qwen3-8B 모델**: 답변 본문과 필요한 문장·목록을 요약하거나 줄이지 않고 제공합니다.\n"
-            "  - 사용자·세션 맥락·검색 근거가 모두 같은 반복 질문은 최대 2분간 생성 결과를 재사용합니다.\n"
+            "VR·Replay 및 일반 UI용 텍스트 질의입니다. response_mode로 모델을, summarize로 답변 분량을 선택합니다.\n\n"
+            "- **빠른 안내 (`quick`, 기본값) · Qwen3-8B 모델**: 빠른 안내 모델을 사용합니다.\n"
+            "  - 사용자·세션 맥락·검색 근거·요약 설정이 모두 같은 반복 질문은 최대 2분간 생성 결과를 재사용합니다.\n"
             "  - 새 시퀀스·대화·문맥·근거가 반영되면 다시 생성합니다. 새 질문의 처리 시간은 모델 부하에 따라 달라집니다.\n"
-            "- **상세 분석 (`detailed`) · Qwen3.6-27B 모델**: 답변 본문과 필요한 근거·조치를 문장 수 제한 없이 제공합니다.\n"
+            "- **상세 분석 (`detailed`) · Qwen3.6-27B 모델**: 상세 분석 모델을 사용합니다.\n"
+            "- **답변 요약 (`summarize`)**: 생략/true는 VR용 핵심 요약, false는 필요한 문단·목록을 유지한 전체 본문입니다. 모델 선택과 독립적이며 안전 경고·한계·수치·단위·Zone 순서는 보존합니다. 명시적인 번역 요청은 전체 문구·문장을 유지합니다.\n"
+            "  - 질문에 맞춰 구성된 분석·기록의 사실/조치 안내와 고정 안전 답변은 필수 내용을 그대로 제공합니다.\n"
             "- 두 모드 모두 생성은 최대 1,024토큰으로 제한하며 인용·안전·수치 검사를 유지합니다.\n"
             "- **대화 맥락**: 일반 지식·일상 대화·계산·후속 질문도 처리합니다. 탭 선택이 질문 의도를 강제하지 않습니다. 도장 지식이 필요한 경우에 RAG를 사용합니다.\n"
             "  - `use_rag=Y`는 검색을 허용합니다. 적합한 문서 근거가 없으면 대화 맥락을 반영해 LLM이 답합니다. 안전 기준·훈련 실측값은 추측으로 대체하지 않습니다.\n"
@@ -1962,18 +1988,18 @@ def create_copilot_router(
         "korean": {"summary": "한국어 질문·답변 (기존 호출 호환)", "value": {
             "user_id": "1234", "scenario_id": "3", "session_id": "3_11000346_1",
             "prompt": "스프레이 도장 시 적정 이격거리를 알려주세요.",
-            "task_type": "knowledge_search", "response_mode": "quick", "use_rag": "Y",
+            "task_type": "knowledge_search", "response_mode": "quick", "summarize": True, "use_rag": "Y",
             "language": "ko", "response_language": "ko",
         }},
         "vietnamese": {"summary": "베트남어 질문 → 베트남어 답변", "value": {
             "user_id": "1234", "scenario_id": "3", "session_id": "3_11000346_1",
             "prompt": "Khoảng cách phun phù hợp là bao nhiêu?",
-            "task_type": "knowledge_search", "response_mode": "quick", "use_rag": "Y",
+            "task_type": "knowledge_search", "response_mode": "quick", "summarize": True, "use_rag": "Y",
             "language": "vi", "response_language": "vi",
         }},
         "english_to_korean": {"summary": "영어 질문 → 한국어 답변", "value": {
             "user_id": "1234", "prompt": "How can I keep a consistent spray distance?",
-            "task_type": "knowledge_search", "response_mode": "detailed", "use_rag": "Y",
+            "task_type": "knowledge_search", "response_mode": "detailed", "summarize": True, "use_rag": "Y",
             "language": "en", "response_language": "ko",
         }},
     })]) -> JSONResponse:
