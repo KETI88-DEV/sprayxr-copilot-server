@@ -27,6 +27,8 @@ from trainer.demo_api.api_call_log import ApiCallStore, ApiCallLoggingMiddleware
 from trainer.demo_api.api_docs import api_docs_document, create_api_docs_router
 from trainer.demo_api.maintenance import create_maintenance_router
 from trainer.demo_api.query_chat import create_query_chat_router
+from trainer.demo_api.portal_home import create_home_router
+from trainer.demo_api.knowledge_library import create_knowledge_library_router
 from trainer.demo_api.chat_service import ChatService, build_default_live_runner
 from trainer.demo_api.contracts import ChatRequest
 from trainer.demo_api.copilot_router import create_copilot_router, install_copilot_error_handlers
@@ -661,6 +663,8 @@ def create_app(
     app.include_router(create_db_viewer_router())
     app.include_router(create_feedback_router())
     app.include_router(create_query_chat_router())
+    app.include_router(create_home_router())
+    app.include_router(create_knowledge_library_router())
     app.include_router(
         create_motion_viewer_router(
             expert_guidance.reference_root,

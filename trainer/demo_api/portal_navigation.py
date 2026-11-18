@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 
 _LINKS = (
+    ("home", "/home", "홈", "업데이트 내역과 서비스 현황"),
     ("docs", "/docs", "API 문서", "Swagger API 문서"),
     ("database", "/admin", "DB 뷰어", "훈련 데이터와 세션 조회"),
     ("motion", "/motion-viewer", "3D 모션 뷰어", "전문가 모션과 작업 자세 비교"),
@@ -12,6 +13,7 @@ _LINKS = (
 )
 
 _ICONS = {
+    "home": '<path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1Z"/>',
     "docs": '<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9Z"/><path d="M14 3v6h6M8 13h8M8 17h6"/>',
     "database": '<ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/>',
     "motion": '<path d="m12 3 9 5v9l-9 5-9-5V8Zm0 10 9-5M3 8l9 5v9M7.5 5.5l9 5"/>',
@@ -27,7 +29,7 @@ html{scroll-padding-top:calc(var(--copilot-nav-height) + 12px)}
 #copilot-navigation{height:var(--copilot-nav-height);min-height:var(--copilot-nav-height);position:sticky;top:0;z-index:10000;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:0 24px;background:#101d34;border-bottom:1px solid #293c5d;color:#eef4ff;box-shadow:0 2px 10px #0e1c3612;font-family:Inter,Pretendard,"Noto Sans KR",system-ui,sans-serif}
 #copilot-navigation .portal-brand{display:flex;align-items:center;gap:9px;flex-shrink:0;color:#eef4ff;font-size:13px;font-weight:750;letter-spacing:.01em}
 #copilot-navigation .portal-logo{display:grid;place-items:center;width:28px;height:28px;background:#24417a;border:1px solid #4566a2;border-radius:7px;font-size:10px;letter-spacing:.04em;color:#dce9ff}
-#copilot-navigation .portal-links{display:grid;grid-template-columns:repeat(6,minmax(108px,1fr));align-items:center;gap:6px;flex:0 1 820px;min-width:0;margin-left:auto;overflow-x:auto;scrollbar-width:thin;overscroll-behavior-inline:contain}
+#copilot-navigation .portal-links{display:grid;grid-template-columns:repeat(7,minmax(108px,1fr));align-items:center;gap:6px;flex:0 1 820px;min-width:0;margin-left:auto;overflow-x:auto;scrollbar-width:thin;overscroll-behavior-inline:contain}
 #copilot-navigation .portal-links>.portal-link{display:flex;position:static;align-items:center;justify-content:center;gap:7px;width:100%;height:36px;min-width:0;max-width:none;margin:0;padding:8px 10px;border:1px solid transparent;border-radius:7px;background:transparent;text-decoration:none;color:#bbcbe5;font-family:inherit;font-size:12px;font-weight:650;font-style:normal;line-height:18px;letter-spacing:normal;text-transform:none;white-space:nowrap;box-shadow:none;appearance:none;cursor:pointer;transition:background .12s,color .12s}
 #copilot-navigation .portal-icon{display:block;flex:0 0 18px;width:18px;height:18px}
 #copilot-navigation .portal-links>.portal-link:hover{background:#20324f;color:#fff}
@@ -56,11 +58,11 @@ body[data-portal-page=docs] .swagger-ui .opblock,body[data-portal-page=docs] .sw
 #copilot-maintenance svg{flex:none;width:15px;height:15px;margin-top:2px;color:var(--warn,#f2b84b)}
 #copilot-maintenance span{min-width:0;overflow-wrap:anywhere}
 @media(max-width:780px){#copilot-maintenance{padding:7px 12px}}
-@media(max-width:600px){:root{--copilot-nav-height:48px}#copilot-navigation .portal-links{grid-template-columns:repeat(6,minmax(104px,1fr));gap:4px}#copilot-navigation .portal-links>.portal-link{font-size:11px;padding:6px;gap:5px;height:34px}#copilot-navigation .portal-icon{flex-basis:16px;width:16px;height:16px}}
+@media(max-width:600px){:root{--copilot-nav-height:48px}#copilot-navigation .portal-links{grid-template-columns:repeat(7,minmax(104px,1fr));gap:4px}#copilot-navigation .portal-links>.portal-link{font-size:11px;padding:6px;gap:5px;height:34px}#copilot-navigation .portal-icon{flex-basis:16px;width:16px;height:16px}}
 """
 
 # 점검 배너(maintenance_banner.js 가 /api/maintenance 를 보고 켠다). 닫기 버튼은 없다 — 점검이 끝나면 사라진다.
-_BANNER_PAGES = {"docs", "motion", "chat"}
+_BANNER_PAGES = {"home", "docs", "motion", "chat"}
 _BANNER_HTML = ('<div id="copilot-maintenance" role="status" hidden>'
                 '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" '
                 'stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 '
@@ -81,7 +83,7 @@ def portal_document(document: str, active: str) -> str:
     """Insert a header without changing scripts, canvases, API URLs, or body attributes."""
     if 'id="copilot-navigation"' in document:
         return document
-    if active not in {"docs", "database", "motion", "chat", "feedback"}:
+    if active not in {"home", "docs", "database", "motion", "chat", "feedback"}:
         raise ValueError("unknown portal page")
     links = "".join(
         f'<a class="portal-link" data-portal-link="{key}" href="{path}" title="{title}"' +
@@ -101,5 +103,8 @@ def portal_document(document: str, active: str) -> str:
         bar += _BANNER_HTML
     document = re.sub(r'<body\b[^>]*>', lambda match: match.group(0)[:-1] + f' data-portal-page="{active}">' + bar,
                       document, count=1, flags=re.IGNORECASE)
+    if active == "chat":
+        document = document.replace("</head>", '<link rel="stylesheet" href="/assets/knowledge_library.css"></head>', 1)
+        document = document.replace("</body>", '<script defer src="/assets/knowledge_library.js"></script></body>', 1)
     tail = _FEEDBACK_HTML + ('<script defer src="/assets/maintenance_banner.js"></script>' if active in _BANNER_PAGES else '')
     return document.replace('</body>', tail + '</body>', 1)

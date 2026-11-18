@@ -35,6 +35,7 @@ def create_query_chat_router(catalog: TrainingDataCatalog | None = None) -> APIR
             return FileResponse(static / filename, media_type=content_type, headers={'Cache-Control': 'no-cache'})
         return asset
 
-    for filename, content_type in [('query_chat.js', 'text/javascript'), ('query_answer_source.js', 'text/javascript'), ('query_chat.css', 'text/css')]:
+    for filename, content_type in [('query_chat.js', 'text/javascript'), ('query_answer_source.js', 'text/javascript'),
+                                   ('query_chat_presets.js', 'text/javascript'), ('query_chat.css', 'text/css')]:
         router.add_api_route('/assets/' + filename, asset_handler(filename, content_type), methods=['GET'])
     return router

@@ -77,6 +77,8 @@ select {
 }
 .pick select { padding-left: 34px; max-width: 200px; }
 .pick-record select { max-width: 320px; }
+.record-cache-legend { flex-basis: 100%; margin: 0; color: var(--ink-2); font-size: 11px; }
+.record-cache-legend span { color: #34d399; }
 select:hover { background: var(--raised-hover); }
 .scores { display: flex; align-items: center; gap: 20px; margin-left: auto; white-space: nowrap; }
 .score { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-2); font-size: 13px; }
@@ -173,6 +175,10 @@ select:hover { background: var(--raised-hover); }
   position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 12px;
   background: rgba(5, 11, 23, .66); color: var(--ink-2); font-size: 13px;
 }
+.loading progress { width: min(320px, 70vw); height: 8px; accent-color: var(--accent-ink); }
+.loading strong { color: var(--ink); font-weight: 600; }
+.loading #loadingUnits { font-variant-numeric: tabular-nums; }
+.loading button { width: auto; padding: 5px 16px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); color: var(--ink); }
 .loading-bar { position: relative; width: 160px; height: 2px; overflow: hidden; border-radius: 1px; background: var(--line-strong); }
 .loading-bar::after { content: ""; position: absolute; inset: 0 60% 0 0; background: var(--accent-ink); animation: v2-load 1.1s ease-in-out infinite alternate; }
 @keyframes v2-load { to { transform: translateX(150%); } }

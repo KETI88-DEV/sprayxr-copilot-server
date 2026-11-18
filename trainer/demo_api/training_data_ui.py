@@ -174,7 +174,7 @@ def render_training_data() -> str:
   <div class="td-kpis" aria-label="학습 데이터 현황">
     <div class="td-kpi"><span>전체 데이터</span><strong id="td-kpi-total">—</strong><small>CSV 세션 기준</small></div>
     <div class="td-kpi td-highlight"><span>조회 데이터</span><strong id="td-kpi-filtered">—</strong><small>현재 필터에 해당</small></div>
-    <div class="td-kpi"><span>작업자</span><strong id="td-kpi-workers">—</strong><small>현재 조회 결과</small></div>
+    <div class="td-kpi"><span>작업자 그룹</span><strong id="td-kpi-workers">—</strong><small>이름 미확인은 1개 그룹</small></div>
     <div class="td-kpi td-good"><span>품질 완료</span><strong id="td-kpi-complete">—</strong><small>변환 검증 기준</small></div>
     <div class="td-kpi td-review"><span>확인 필요</span><strong id="td-kpi-review">—</strong><small id="td-kpi-review-note">품질 검토 대상</small></div>
     <div class="td-kpi"><span>높이맵 텍스처</span><strong id="td-kpi-maps">—</strong><small>현재 조회 결과</small></div>
@@ -189,11 +189,11 @@ def render_training_data() -> str:
       <div class="td-field td-search-field"><label for="td-search">검색어</label><input id="td-search" name="q" type="search" maxlength="100" autocomplete="off" placeholder="데이터명, 작업자, 원본 파일 검색"></div>
       <div class="td-filter-actions"><button type="submit">조회</button><button type="button" id="td-reset" class="td-button-secondary">초기화</button></div>
     </form>
-    <div class="td-filter-foot"><p class="td-help">CSV 훈련 기록 1개(1세션) = 학습 데이터 1건 · 확인 필요에는 Zone ID 누락 등 검증 이슈가 포함됩니다. <span id="td-filter-status" role="status" aria-live="polite"></span></p><button type="button" id="td-refresh" class="td-link">새로고침 ↻</button></div>
+    <div class="td-filter-foot"><p class="td-help">CSV 훈련 기록 1개(1세션) = 학습 데이터 1건 · 이름 미확인 그룹은 해당 원본 작업자 ID를 모두 조회합니다. · 확인 필요에는 Zone ID 누락 등 검증 이슈가 포함됩니다. <span id="td-filter-status" role="status" aria-live="polite"></span></p><button type="button" id="td-refresh" class="td-link">새로고침 ↻</button></div>
   </section>
 
   <div class="td-chart-grid" aria-label="조회 결과 분포">
-    <section class="td-panel td-chart-card"><h2>작업자별 데이터</h2><p class="td-chart-note">현재 조회 결과 · 건</p><div id="td-worker-chart" class="td-bars"><p class="td-chart-empty">불러오는 중</p></div></section>
+    <section class="td-panel td-chart-card"><h2>작업자별 데이터</h2><p class="td-chart-note">현재 조회 결과 · 건수 많은 순 · 이름 미확인은 하나로 집계</p><div id="td-worker-chart" class="td-bars"><p class="td-chart-empty">불러오는 중</p></div></section>
     <section class="td-panel td-chart-card"><h2>학습모드별 데이터</h2><p class="td-chart-note">현재 조회 결과 · 건</p><div id="td-mode-chart" class="td-bars"><p class="td-chart-empty">불러오는 중</p></div></section>
     <section class="td-panel td-chart-card"><h2>공정별 데이터</h2><p class="td-chart-note">현재 조회 결과 · 건</p><div id="td-process-chart" class="td-bars"><p class="td-chart-empty">불러오는 중</p></div></section>
   </div>

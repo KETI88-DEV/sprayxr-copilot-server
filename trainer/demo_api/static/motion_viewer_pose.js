@@ -583,7 +583,7 @@
     request_failed: '자세 채점 결과를 불러오지 못했습니다.',
   };
   function loadArmPose(payload) {
-    const query = new URLSearchParams({worker_id: payload.worker?.worker_id, process: payload.process,
+    const query = new URLSearchParams({worker_id: payload.worker?.selection_worker_id || payload.worker?.worker_id, process: payload.process,
       mode_id: payload.mode_id, session_id: payload.selected_session_id});
     fetch('/motion-viewer/api/arm-pose?' + query)
       .then(response => response.ok ? response.json() : Promise.reject(new Error(String(response.status))))

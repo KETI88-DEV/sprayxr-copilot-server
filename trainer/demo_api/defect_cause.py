@@ -18,10 +18,11 @@ _SPACE = re.compile(r"\s+")
 
 def _defect_in(text: str) -> str | None:
     flat = _SPACE.sub("", text)
-    for name, entry in _DATA.items():
-        if any(_SPACE.sub("", alias) in flat for alias in entry["별칭"]):
-            return name
-    return None
+    found = [name for name, entry in _DATA.items()
+             if any(_SPACE.sub("", alias) in flat for alias in entry["별칭"])]
+    # A comparison or correction can mention more than one defect. Do not
+    # turn dictionary order into an interpretation of the user's subject.
+    return found[0] if len(found) == 1 else None
 
 
 def defect_cause_topic(prompt: str, previous_prompts: Iterable[str] = ()) -> str | None:
@@ -31,6 +32,9 @@ def defect_cause_topic(prompt: str, previous_prompts: Iterable[str] = ()) -> str
     found = _defect_in(prompt)
     if found is not None:
         return found
+    flat = _SPACE.sub("", prompt)
+    if any(_SPACE.sub("", alias) in flat for entry in _DATA.values() for alias in entry["별칭"]):
+        return None  # More than one known subject is deliberately unpinned.
     for previous in reversed(list(previous_prompts)):
         found = _defect_in(previous)
         if found is not None:
