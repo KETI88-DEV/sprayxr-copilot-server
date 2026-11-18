@@ -1281,6 +1281,26 @@ class AgentPipeline:
             "deadline_hit": bool(result.get("deadline_hit", False)),
         }
 
+    def _pin_evidence(self, query: str, chunk_ids: tuple[str, ...] | list[str], rag_chunks: list[dict[str, Any]],
+                      search_mod: Any) -> list[dict[str, Any]]:
+        """Put curated index passages first; excluded or unknown ids are skipped, total stays at top_k_rerank."""
+        by_id = getattr(self, "_chunks_by_id", None)
+        if by_id is None:
+            # A corrected passage shares its chunk_id with the superseded original; never pin the original.
+            by_id = self._chunks_by_id = {str(row.get("chunk_id", "")): row for row in self.id_map if not row.get("superseded")}
+        excluded = getattr(search_mod, "EXCLUDED_CHUNKS", frozenset())
+        wanted = [dict(by_id[c]) for c in dict.fromkeys(chunk_ids) if c in by_id and c not in excluded]
+        if not wanted:
+            return rag_chunks
+        if self.reranker is not None:
+            with RAG_SLOT:
+                wanted = search_mod.rerank(query, wanted, self.reranker, top_k=len(wanted))
+        pinned = [{"chunk_id": row["chunk_id"], "text": row.get("text", ""), "rerank_score": row.get("rerank_score"),
+                   "pinned": True} for row in wanted]
+        kept = {row["chunk_id"] for row in pinned}
+        room = max(0, int(self.config.get("reranker", {}).get("top_k_rerank", 8)) - len(pinned))
+        return pinned + [chunk for chunk in rag_chunks if chunk["chunk_id"] not in kept][:room]
+
     def run(
         self,
         instruction: str,
@@ -1306,10 +1326,13 @@ class AgentPipeline:
         answer_question: str | None = None,
         defer_without_evidence: bool = False,
         evidence_score_threshold: float | None = None,
+        pinned_chunk_ids: tuple[str, ...] | list[str] = (),
     ) -> dict[str, Any]:
         """Skip retrieval with ``use_rag=False``; opt into brief live analysis with ``compact_analysis``.
 
-        Default evaluation prompts, evidence and response budgets remain unchanged.
+        ``pinned_chunk_ids`` puts curated index passages ahead of the search results
+        (live defect-cause questions). Default evaluation prompts, evidence and
+        response budgets remain unchanged.
         """
         t0 = time.monotonic()
         if not instruction.strip():
@@ -1344,12 +1367,16 @@ class AgentPipeline:
             for r in rag_results
         ]
         retrieved_candidate_count = len(rag_chunks)
+        if pinned_chunk_ids and use_rag:
+            rag_chunks = self._pin_evidence(retrieval_instruction or instruction, pinned_chunk_ids, rag_chunks, search_mod)
+        pinned_count = sum(1 for chunk in rag_chunks if chunk.get("pinned"))
         if defer_without_evidence and use_rag and route == "fast":
             # Live Query can return to contextual conversation before spending a
             # generation call. This is not an evaluation/default-run policy.
             nonempty = [chunk for chunk in rag_chunks if str(chunk.get("text", "")).strip()]
             reason = "empty" if not nonempty else None
-            if nonempty and evidence_score_threshold is not None:
+            # Curated passages are relevant by construction; their reranker score is not a relevance gate.
+            if nonempty and evidence_score_threshold is not None and not pinned_count:
                 scores = [chunk.get("rerank_score") for chunk in nonempty]
                 if (not isinstance(evidence_score_threshold, (int, float))
                         or isinstance(evidence_score_threshold, bool) or not math.isfinite(evidence_score_threshold)
@@ -1379,7 +1406,7 @@ class AgentPipeline:
                     },
                 }
         if answer_question is not None and route == "fast":
-            rag_chunks = select_evidence(rag_chunks, limit=4)
+            rag_chunks = rag_chunks[:pinned_count] + select_evidence(rag_chunks[pinned_count:], limit=max(0, 4 - pinned_count))
 
         summary = self.session_context.summarize_previous(active_session_id) if use_pipeline_history else ""
 
@@ -1389,7 +1416,7 @@ class AgentPipeline:
                         if inference_context_limit is not None else prompt_token_budget(self.config))
         # Limit only the visible live analysis evidence, after full retrieval/reranking.
         # Keep the highest-ranked passages even when later prompt fitting is needed.
-        analysis_chunks = rag_chunks[:4] if compact_analysis else rag_chunks
+        analysis_chunks = rag_chunks[:max(4, pinned_count)] if compact_analysis else rag_chunks
         evidence_tokens = sum(counter.count_text(str(c.get("text", ""))) for c in analysis_chunks)
         if evidence_tokens > token_budget:
             evidence = compress_evidence(instruction, analysis_chunks)
@@ -1400,7 +1427,7 @@ class AgentPipeline:
         if inference_backend is not None and concise_answer:
             # A short live answer uses the four highest-ranked passages. Keep the
             # full retrieval/reranking step and the default evaluation path intact.
-            evidence = evidence[:4]
+            evidence = evidence[:max(4, pinned_count)]
 
         deadline_hit = False
         synthesis_ms = 0
