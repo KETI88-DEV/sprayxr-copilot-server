@@ -189,22 +189,37 @@ def test_corrected_evidence_replaces_the_wrong_chunk_under_the_same_id() -> None
         def encode_query(self, query: str, **_kwargs: Any) -> np.ndarray:
             return np.ones(2, dtype=np.float32)
 
-    class Index:
+    class Index:  # add 가 없다: 보정은 색인을 바꾸지 않아야 한다(HNSW add 뒤 search 멈춤, 2026-11-18)
         ntotal = 2
 
-        def add(self, vectors: np.ndarray) -> None:
-            self.ntotal += len(vectors)
-
         def search(self, vec: np.ndarray, k: int) -> tuple[np.ndarray, np.ndarray]:
-            return np.array([[0.9, 0.8, 0.7]]), np.array([[0, 1, 2]])
+            return np.array([[0.9, 0.8]], dtype=np.float32), np.array([[0, 1]])
 
     id_map = [{"chunk_id": "DOC-a-C0001", "doc_id": "a", "text": "3°C 낮은", "tokens": 1, "faiss_id": 0},
               {"chunk_id": "DOC-b-C0001", "doc_id": "b", "text": "다른 근거", "tokens": 1, "faiss_id": 1}]
-    index, embedder = Index(), Embedder()
+    embedder = Embedder()
     fixed = {"DOC-a-C0001": {"본문": "3℃ 이상 높아야"}}
-    assert search_index.apply_evidence_corrections(index, id_map, embedder, fixed) == 1
-    assert embedder.texts == ["3℃ 이상 높아야"] and index.ntotal == len(id_map) == 3
+    index, count = search_index.apply_evidence_corrections(Index(), id_map, embedder, fixed)
+    assert count == 1 and embedder.texts == ["3℃ 이상 높아야"] and index.ntotal == len(id_map) == 3
     results = search_index.retrieve("이슬점", index, id_map, embedder, top_k=3)
-    assert [(r["chunk_id"], r["text"]) for r in results] == [("DOC-b-C0001", "다른 근거"), ("DOC-a-C0001", "3℃ 이상 높아야")]
+    # 고친 벡터는 질의와 같아 L2 거리 0 으로 맨 앞, 원래 조각(0번)은 빠진다.
+    assert [(r["chunk_id"], r["text"]) for r in results] == [("DOC-a-C0001", "3℃ 이상 높아야"), ("DOC-b-C0001", "다른 근거")]
     with pytest.raises(ValueError):
         search_index.apply_evidence_corrections(index, id_map, embedder, {"DOC-z-C0009": {"본문": "x"}})
+
+
+@pytest.mark.parametrize("metric", ["l2", "ip"])
+def test_corrected_index_matches_exact_search_over_all_vectors(metric: str) -> None:
+    faiss = pytest.importorskip("faiss")
+    rng = np.random.default_rng(0)
+    base_vecs = rng.standard_normal((200, 8)).astype(np.float32)
+    extra = rng.standard_normal((5, 8)).astype(np.float32)
+    query = rng.standard_normal((1, 8)).astype(np.float32)
+    flat = faiss.IndexFlatL2(8) if metric == "l2" else faiss.IndexFlatIP(8)
+    flat.add(base_vecs)
+    exact = faiss.IndexFlatL2(8) if metric == "l2" else faiss.IndexFlatIP(8)
+    exact.add(np.vstack([base_vecs, extra]))
+    dist, ids = search_index.CorrectedIndex(flat, extra).search(query, 10)
+    want_dist, want_ids = exact.search(query, 10)
+    assert ids.tolist() == want_ids.tolist()
+    np.testing.assert_allclose(dist, want_dist, rtol=1e-4, atol=1e-4)
