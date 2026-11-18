@@ -35,6 +35,22 @@ def test_chat_loads_evidence_labels_before_the_query_client():
     assert 'CopilotAnswerSource' in asset.text
 
 
+def test_chat_has_question_sidebar_library_hooks_and_allowlisted_preset_asset():
+    app = FastAPI()
+    app.include_router(create_query_chat_router())
+    client = TestClient(app)
+    html = client.get('/query-chat').text
+    assert 'id="question-sidebar"' in html
+    assert 'aria-controls="question-sidebar"' in html
+    assert 'data-knowledge-open' in html
+    assert html.index('/assets/query_chat_presets.js') < html.index('/assets/query_chat.js')
+    presets = client.get('/assets/query_chat_presets.js')
+    assert presets.status_code == 200 and presets.headers['cache-control'] == 'no-cache'
+    assert 'CopilotQuestionPresets' in presets.text
+    assert client.get('/assets/query_chat_presets.js?filename=/etc/passwd').text == presets.text
+    assert client.get('/assets/not-allowlisted.js').status_code == 404
+
+
 def test_recorded_answer_receipt_identifies_the_saved_answer():
     store = SequenceStore(':memory:')
     first = store.record_query_turn(session_key='CHAT:query-chat',user_id='query-chat',

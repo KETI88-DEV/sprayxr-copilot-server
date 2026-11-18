@@ -6,29 +6,64 @@
   let conversation='query-chat:'+uuid(), busy=false;
   let selectedContext=null,contextPending=false,contextError=false,selectionGeneration=0;
   const smallScreen=window.matchMedia('(max-width:760px)');
+  const wideScreen=window.matchMedia('(min-width:1180px)');
+  let activeDrawer=null,drawerOpener=null;
   function controls(){ $('send').disabled=busy||contextPending||contextError;$('new-chat').disabled=busy; }
-  function drawer(open){
-    const mobile=smallScreen.matches;
-    $('chat-sidebar').classList.toggle('is-open',open&&mobile);
-    $('chat-sidebar').inert=mobile&&!open;
-    $('chat-backdrop').hidden=!open||!mobile;
-    $('open-settings').setAttribute('aria-expanded',String(open&&mobile));
-    if(open&&mobile){$('close-settings').focus();}
+  function updateDrawers(){
+    const settingsOpen=activeDrawer==='settings'&&smallScreen.matches;
+    const questionsOpen=activeDrawer==='questions'&&!wideScreen.matches;
+    const modal=settingsOpen||questionsOpen;
+    for(const [id,open,collapsed] of [['chat-sidebar',settingsOpen,smallScreen.matches],['question-sidebar',questionsOpen,!wideScreen.matches]]){
+      const panel=$(id);
+      panel.classList.toggle('is-open',open);
+      panel.inert=(collapsed&&!open)||(modal&&!open);
+      panel.setAttribute('aria-hidden',String(collapsed&&!open));
+      if(open){panel.setAttribute('role','dialog');panel.setAttribute('aria-modal','true');}
+      else{panel.removeAttribute('role');panel.removeAttribute('aria-modal');}
+    }
+    $('conversation').inert=modal;
+    $('chat-backdrop').hidden=!modal;
+    $('open-settings').setAttribute('aria-expanded',String(settingsOpen));
+    $('open-questions').setAttribute('aria-expanded',String(questionsOpen));
   }
-  function closeSettings(){drawer(false);if(smallScreen.matches)$('open-settings').focus();}
-  $('open-settings').addEventListener('click',()=>drawer(true));
+  function closeDrawers(restore=true){
+    const opener=drawerOpener;
+    activeDrawer=null;drawerOpener=null;updateDrawers();
+    if(restore&&opener){if(opener.getClientRects().length)opener.focus();else $('prompt').focus();}
+  }
+  function openDrawer(kind,opener){
+    if((kind==='settings'&&!smallScreen.matches)||(kind==='questions'&&wideScreen.matches)){
+      closeDrawers(false);$(kind==='settings'?'training-worker':'preset-search').focus();return;
+    }
+    drawerOpener=opener||document.activeElement;
+    activeDrawer=kind;updateDrawers();
+    $(kind==='settings'?'close-settings':'close-questions').focus();
+  }
+  function drawer(open){if(open)openDrawer('settings',document.activeElement);else closeDrawers(false);}
+  function closeSettings(){closeDrawers();}
+  document.addEventListener('copilot:close-panels',()=>closeDrawers(false));
+  $('open-settings').addEventListener('click',()=>openDrawer('settings',$('open-settings')));
   $('close-settings').addEventListener('click',closeSettings);
-  $('chat-backdrop').addEventListener('click',closeSettings);
+  $('open-questions').addEventListener('click',()=>openDrawer('questions',$('open-questions')));
+  $('close-questions').addEventListener('click',()=>closeDrawers());
+  $('chat-backdrop').addEventListener('click',()=>closeDrawers());
   $('context-chip').addEventListener('click',()=>{drawer(true);if(!smallScreen.matches)$('training-worker').focus();});
   $('apply-training').addEventListener('click',()=>{closeSettings();if(!smallScreen.matches)$('prompt').focus();});
   document.addEventListener('keydown',event=>{
-    if(!smallScreen.matches||!$('chat-sidebar').classList.contains('is-open'))return;
-    if(event.key==='Escape'){event.preventDefault();closeSettings();}
+    if(!activeDrawer)return;
+    const panel=$(activeDrawer==='settings'?'chat-sidebar':'question-sidebar');
+    if(event.key==='Escape'){event.preventDefault();closeDrawers();}
     if(event.key==='Tab'){
-      const nodes=[...$('chat-sidebar').querySelectorAll('button,select,input,a')].filter(e=>!e.disabled&&e.getClientRects().length);
-      if(event.shiftKey&&document.activeElement===nodes[0]){event.preventDefault();nodes.at(-1)?.focus();}
-      else if(!event.shiftKey&&document.activeElement===nodes.at(-1)){event.preventDefault();nodes[0]?.focus();}
+      const nodes=[...panel.querySelectorAll('button,select,input,a[href],summary,[tabindex]:not([tabindex="-1"])')].filter(e=>!e.disabled&&!e.hidden&&e.getClientRects().length);
+      if(!nodes.length)return;
+      if(event.shiftKey&&(document.activeElement===nodes[0]||!panel.contains(document.activeElement))){event.preventDefault();nodes.at(-1).focus();}
+      else if(!event.shiftKey&&(document.activeElement===nodes.at(-1)||!panel.contains(document.activeElement))){event.preventDefault();nodes[0].focus();}
     }
+  });
+  document.addEventListener('focusin',event=>{
+    if(!activeDrawer)return;
+    const panel=$(activeDrawer==='settings'?'chat-sidebar':'question-sidebar');
+    if(!panel.contains(event.target))$(activeDrawer==='settings'?'close-settings':'close-questions').focus();
   });
   function viewport(){
     const v=window.visualViewport;
@@ -38,10 +73,12 @@
   window.addEventListener('resize',viewport);
   window.visualViewport?.addEventListener('resize',viewport);
   window.visualViewport?.addEventListener('scroll',viewport);
-  smallScreen.addEventListener('change',()=>{drawer(false);viewport();});
+  const changedLayout=()=>{closeDrawers();viewport();};
+  smallScreen.addEventListener('change',changedLayout);
+  wideScreen.addEventListener('change',changedLayout);
   for(const name of ['gesturestart','gesturechange'])document.addEventListener(name,event=>{if(smallScreen.matches&&event.cancelable)event.preventDefault();},{passive:false});
   document.addEventListener('touchmove',event=>{if(smallScreen.matches&&event.touches.length>1&&event.cancelable)event.preventDefault();},{passive:false});
-  drawer(false);viewport();
+  updateDrawers();viewport();
   function sizePrompt(){const field=$('prompt');field.style.height='auto';field.style.height=Math.min(smallScreen.matches?120:150,Math.max(28,field.scrollHeight))+'px';}
   $('prompt').addEventListener('input',sizePrompt);
   async function requestJson(url,options,timeoutMs){
@@ -140,7 +177,18 @@
   }
   $('response-mode').addEventListener('change',()=>{$('mode-label').textContent=$('response-mode').selectedOptions[0].textContent;});
   $('new-chat').addEventListener('click',()=>{if(busy)return;conversation='query-chat:'+uuid();$('messages').replaceChildren();$('chat-status').textContent='새 대화를 시작합니다.';if(!smallScreen.matches)$('prompt').focus();});
-  document.querySelectorAll('[data-prompt]').forEach(button=>button.addEventListener('click',()=>{$('prompt').value=button.dataset.prompt;$('prompt').focus();}));
+  function choosePreset(item){
+    $('prompt').value=item.prompt;closeDrawers(false);sizePrompt();$('prompt').focus();
+    $('chat-status').textContent=item.requiresContext&&!selectedContext
+      ?'이 질문은 훈련 기록을 선택해야 실제 기록을 확인할 수 있습니다. 설정에서 기록을 연결한 뒤 질문을 보내세요.'
+      :'질문을 입력했습니다. 내용을 확인하거나 수정한 뒤 보내세요.';
+  }
+  function renderPresets(){
+    const count=window.CopilotQuestionPresets?.render($('question-list'),choosePreset,$('preset-search').value||'')||0;
+    $('preset-count').textContent=`${count}개 질문 · 선택해도 자동 전송되지 않습니다.`;
+  }
+  $('preset-search').addEventListener('input',renderPresets);renderPresets();
+  document.querySelectorAll('[data-prompt]').forEach(button=>button.addEventListener('click',()=>choosePreset({prompt:button.dataset.prompt})));
   $('prompt').addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.shiftKey&&!event.isComposing){event.preventDefault();$('chat-form').requestSubmit();}});
   $('chat-form').addEventListener('submit',async event=>{
     event.preventDefault();const prompt=$('prompt').value.trim();if(!prompt||busy||contextPending||contextError)return;
@@ -149,7 +197,7 @@
     const questionContext=selectedContext;
     if(questionContext)Object.assign(payload,{scenario_id:questionContext.scenario_id,session_id:questionContext.session_id,context:questionContext.context});
     busy=true;controls();add('user',prompt);$('prompt').value='';sizePrompt();const card=add('assistant','답변을 작성하고 있습니다…');card.querySelector('.message-text').classList.add('pending');const started=performance.now();$('chat-status').textContent='질문을 처리하고 있습니다…';
-    try{const {response,body}=await requestJson('/api/v1/copilot/query',{method:'POST',headers:{'Content-Type':'application/json','X-Copilot-Conversation':conversation,'X-Copilot-Source':'query-chat'},body:JSON.stringify(payload)},90000);if(!response.ok||body.status!=='SUCCESS'||!body.data?.answer)throw new Error(typeof body.message==='string'?body.message:'질문을 처리하지 못했습니다. 잠시 후 다시 시도하세요.');card.querySelector('.message-text').textContent=body.data.answer;window.CopilotAnswerSource.render(card,body.data,response.headers.get('X-Copilot-Answer-Source')||'');const elapsed=((performance.now()-started)/1000).toFixed(1);card.append(make('div','answer-meta',`${mode==='quick'?'빠른 안내':'상세 분석'} · ${elapsed}초`));if(questionContext)card.append(make('div','answer-meta',describeContext(questionContext)));rating(card,Number(response.headers.get('X-Copilot-Query-Turn')));$('chat-status').textContent='답변 아래에서 평가와 코멘트를 남길 수 있습니다.';}
+    try{const {response,body}=await requestJson('/api/v1/copilot/query',{method:'POST',headers:{'Content-Type':'application/json','X-Copilot-Conversation':conversation,'X-Copilot-Source':'query-chat'},body:JSON.stringify(payload)},90000);if(!response.ok||body.status!=='SUCCESS'||!body.data?.answer)throw new Error(typeof body.message==='string'?body.message:'질문을 처리하지 못했습니다. 잠시 후 다시 시도하세요.');card.querySelector('.message-text').textContent=body.data.answer;const elapsed=((performance.now()-started)/1000).toFixed(1),metadata=make('div','answer-meta',`${mode==='quick'?'빠른 안내':'상세 분석'} · ${elapsed}초 · `);window.CopilotAnswerSource.render(metadata,body.data,response.headers.get('X-Copilot-Answer-Source')||'');card.append(metadata);if(questionContext)card.append(make('div','answer-meta',describeContext(questionContext)));rating(card,Number(response.headers.get('X-Copilot-Query-Turn')));$('chat-status').textContent='답변 아래에서 평가와 코멘트를 남길 수 있습니다.';}
     catch(error){card.classList.add('error');card.querySelector('.message-text').textContent=error.message||'서버 연결을 확인하세요.';$('chat-status').textContent='전송하지 못했습니다. 질문을 다시 입력해 주세요.';if(!$('prompt').value)$('prompt').value=prompt;}
     finally{card.querySelector('.message-text').classList.remove('pending');busy=false;controls();bottom();if(!smallScreen.matches)$('prompt').focus();}
   });

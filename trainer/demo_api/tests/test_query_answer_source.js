@@ -25,9 +25,15 @@ test('glossary and training records stay distinct from document RAG',()=>{
   assert.equal(describe({retrieval_used:false,citations:[]},'analysis').label,'분석 안내');
   assert.doesNotMatch(describe({retrieval_used:false,citations:[]},'analysis').description,/훈련 기록/);
 });
-test('legacy genuine citations work and arbitrary server strings are not rendered as labels',()=>{
-  assert.equal(describe({retrieval_used:true,citations:['DOC-doc_0002-C0010']},'').label,'RAG');
+test('document source is required and arbitrary server strings are not rendered as labels',()=>{
+  assert.notEqual(describe({retrieval_used:true,citations:['DOC-doc_0002-C0010']},'').kind,'rag');
   assert.equal(describe({retrieval_used:false,citations:['<img src=x onerror=alert(1)>']},'<script>').label,'답변 출처 미확인');
+});
+test('a document-like label without a validated chunk citation never claims RAG',()=>{
+  for(const citations of [['DOC-fake'],['TSB:VR_Language.csv:1'],['<script>'],[]]){
+    assert.notEqual(describe({retrieval_used:true,citations},'documents').kind,'rag');
+  }
+  assert.notEqual(describe({retrieval_used:false,citations:['DOC-doc_0001-C0001']},'documents').kind,'rag');
 });
 test('degraded supported document answer shows its limitation',()=>{
   assert.equal(describe({retrieval_used:true,citations:['DOC-doc_0001-C0001'],degraded:true},'documents').label,'RAG · 확인 필요');
