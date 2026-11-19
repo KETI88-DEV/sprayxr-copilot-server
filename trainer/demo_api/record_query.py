@@ -13,6 +13,7 @@ from typing import Any, Final
 from trainer.demo_api.coating_query import (_CAUSES, _RECORD_SENTENCE, _DISTANCE_WORDS, _EFFECTS, _INVERTED, _SIMILAR, _distance_remark, distance_sentence,
                                             measured_relation, measured_sentence, parse_viewer_coating_context, zone_measures)
 from trainer.demo_api.coating_assessment import GRADE_WORDS, grade_phrase, mean_text
+from trainer.demo_api.context_prompts import recent_subject
 from trainer.demo_api.copilot_intent import RECORD_OBJECT, preset_intent
 from trainer.demo_api.dialogue import drop_sentences, viewer_claims
 from trainer.demo_api.pose_query import josa, wants_full_list
@@ -828,6 +829,49 @@ def _subject_zones(facts: RecordFacts, part: RecordPart) -> list[str]:
     return [z for z in part.zones if z in facts.zone_ids]
 
 
+# "지금 내가 한 거랑 비교하면?"(2026-11-19 꼬리물기 마지막 단계). 지식 답(뜻·원인·대책) 뒤에 내 기록을 대 보는 질문이다.
+_MINE_COMPARE: Final = re.compile(
+    r"(?:(?:내가|제가|나는|저는|내|제)\s*(?:(?:한|칠한|뿌린|작업한|분사한)\s*(?:거|것|작업|기록|결과)?|기록|작업|결과)|(?:숙련자|전문가)(?:\s*기록)?)"
+    r"\s*(?:이?랑|와|과|하고|에|를|을)?\s*(?:비교|견주|대어?\s*보|비춰)")
+_COMPARE_LIMIT: Final = 3
+
+
+def _compare_zones(facts: RecordFacts, term: str | None) -> list[str] | None:
+    """비교할 Zone. 결함 용어가 있으면 그 판정 Zone(재생 위치 Zone 먼저, 나머지는 심한 순), 없으면 재생 위치 Zone."""
+    rows = facts.target_rows
+    if term == "미도장":
+        picked = [row for row in rows if row.get("grade") == "none" or (_is_num(row.get("unpainted_fraction")) and row["unpainted_fraction"] > 0)]
+        picked.sort(key=lambda row: -(row.get("unpainted_fraction") or 1.0))
+    elif term in ("저도막", "과도막"):
+        picked = [row for row in rows if row.get("grade") == ("below" if term == "저도막" else "above") and _is_num(row.get("thickness_um"))]
+        picked.sort(key=lambda row: row["thickness_um"], reverse=term == "과도막")
+    else:
+        return [facts.playback_zone] if facts.playback_zone in facts.zone_ids else None
+    zones = [str(row["zone_id"]) for row in picked]
+    if facts.playback_zone in zones:
+        zones.remove(facts.playback_zone)
+        zones.insert(0, facts.playback_zone)
+    return zones
+
+
+def _compare_answer(facts: RecordFacts, prompt: str, recent_turns: Sequence[Mapping[str, Any]]) -> RecordAnswer | None:
+    if not _MINE_COMPARE.search(prompt):
+        return None
+    term = recent_subject([*(str(turn.get("prompt", "")) for turn in recent_turns), prompt])
+    zones = _compare_zones(facts, term)
+    if zones is None:
+        return None
+    if not zones:
+        return RecordAnswer(f"이 기록에는 {term} Zone이 없습니다.\n참고: 세션이 끝났을 때의 도막 기준입니다.", "cause",
+                            {"domain": "coating", "zone_ids": [], "operator": "cause"}, None, None)
+    shown = zones[:_COMPARE_LIMIT]
+    lines = [cause_answer(facts, zone) for zone in shown]
+    if len(zones) > len(shown):
+        lines.append(f"그 밖의 {term} Zone: " + ", ".join(f"Zone {zone}" for zone in zones[len(shown):]) + ".")
+    return RecordAnswer("\n".join(lines) + "\n참고: 세션이 끝났을 때의 도막 기준입니다.", "cause",
+                        {"domain": "coating", "zone_ids": shown, "operator": "cause"}, None, None)
+
+
 def answer_record_question(context: str | None, prompt: str, *, task_type: str,
                            recent_turns: Sequence[Mapping[str, Any]], quick: bool = False) -> RecordAnswer | None:
     """`quick`이면 조각마다 질문의 답을 담은 한 문장(_quick_text)을 쓴다. 상세 분석 답은 바뀌지 않는다."""
@@ -836,7 +880,7 @@ def answer_record_question(context: str | None, prompt: str, *, task_type: str,
         return None
     query = classify_record_question(prompt, task_type=task_type, previous_subject=previous_subject(recent_turns), playback_zone=facts.playback_zone)
     if query.kind == "none":
-        return None
+        return _compare_answer(facts, prompt, recent_turns)
     # Dataset selectors can expose several texture faces with the same Zone
     # number. These signed facts explicitly withhold ambiguous measurements;
     # require the face selector instead of treating them as absent or taking

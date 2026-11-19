@@ -38,6 +38,12 @@ def matched_terms(prompt: str, previous_prompts: Iterable[str] = ()) -> list[dic
     return []
 
 
+def named_terms(text: str) -> set[str]:
+    """글에 별칭이 나온 교육 용어 이름(제외어는 보지 않는다). 꼬리물기 이어받기의 주제 경계로 쓴다."""
+    flat = _flat(text)
+    return {rule["용어"] for rule in _RULES if any(_flat(alias) in flat for alias in rule["별칭"])}
+
+
 def means_otherwise(term: str, text: str) -> bool:
     """용어가 이 글에서 다른 뜻인가(예: '충전전로 최소 이격거리'). 빠른 안내의 용어 풀이 표도 이걸 따른다."""
     flat = _flat(text)
