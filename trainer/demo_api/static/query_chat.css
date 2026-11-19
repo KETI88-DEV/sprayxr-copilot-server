@@ -12,3 +12,5 @@
 @media(max-width:380px){.conversation-heading{padding-left:7px;padding-right:7px;gap:4px}.conversation-heading .icon-button{width:38px;min-width:38px}.heading-title small{font-size:9px}.heading-actions{gap:0}}
 @media(max-width:760px){.chat-sidebar,.question-sidebar{top:var(--chat-viewport-top,0px);bottom:auto;height:var(--chat-viewport-height,100dvh);max-height:var(--chat-viewport-height,100dvh)}}
 @media(prefers-reduced-motion:reduce){.question-sidebar{transition:none}}
+.heading-actions .labelled-action{display:flex;align-items:center;justify-content:center;gap:6px;padding:7px 10px}.action-label{font-size:11px;white-space:nowrap}
+@media(max-width:760px){.heading-actions .labelled-action{padding:7px}.heading-actions .action-label{display:none}}

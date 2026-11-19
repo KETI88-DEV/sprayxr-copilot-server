@@ -134,7 +134,8 @@ def test_worker_choices_are_name_sorted_with_one_unknown_bucket_and_original_ids
     publish(tmp_path, output, worker='raw-unknown-b', worker_name='', session='4_2203_1')
     client = _client(tmp_path)
     workers = client.get('/motion-viewer/api/catalog').json()['workers']
-    assert [item['display_name'] for item in workers] == ['가 작업자', '전형기', '하 작업자', '이름 미확인']
+    assert [item['display_name'] for item in workers] == ['전형기', '가 작업자', '하 작업자', '이름 미확인']
+    assert workers[0]['role'] == 'expert'
     unknown = workers[-1]
     assert unknown['worker_id'] == '__unknown_workers__'
     sessions = unknown['processes'][0]['modes'][0]['sessions']

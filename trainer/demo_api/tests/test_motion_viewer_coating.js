@@ -102,6 +102,34 @@ function reference(cells, physical = true) {
   };
 }
 
+test('blasting has no spray film thickness judgment or fabricated expert film distribution', () => {
+  const view = viewer(null, {basis: true});
+  view.data({process: 'blasting', process_label: '블라스팅', coating_reference: {'1:1': reference([100, 200])}});
+  view.frame('1');
+  assert.match(view.nodes.coatingStatus.textContent, /블라스팅.*도막 두께 판정.*없/);
+  assert.match(view.nodes.coatingGeometryNote.textContent, /스프레이.*도막/);
+  assert.equal(view.nodes.coatingScaleAbsolute.disabled, true);
+  assert.equal(view.nodes.coatingBasisExpert.disabled, true);
+  assert.ok(!view.fills.some(color => color.startsWith('rgb(')), 'a blasting heightmap must not be rendered as spray film');
+});
+
+test('v2 blasting panel explains the absent film judgment and disables expert-film switching', () => {
+  const script = fs.readFileSync(path.join(__dirname, '../static/motion_viewer_v2.js'), 'utf8').replace(/\r\n/g, '\n');
+  const start = script.indexOf('  function renderCoating() {');
+  const body = script.slice(start, script.indexOf('\n  /**', start));
+  const layoutBody = script.slice(script.indexOf('  function coatLayout() {'), script.indexOf('\n  // 전문가 지도 범례'));
+  const nodes = Object.fromEntries(['v2CoatBasisTarget','v2CoatBasisExpert','v2CoatBarsView','v2CoatMapView','v2FeatureCoating','v2CoatViews','v2CoatMap','v2CoatMapSeg','v2CoatBars','v2CoatCount','v2CoatBasisLabel'].map(id => [id, element()]));
+  nodes.v2FeatureCoating.classList.remove = () => {};
+  const context = {$: id => nodes[id], record: {process: 'blasting', process_label: '블라스팅'}, coatBasis: 'expert', coatMap: true, layout: {count: 1},
+    el: (tag, cls, content) => {const node=element();node.className=cls;node.textContent=content;return node;}};
+  vm.runInNewContext(body + layoutBody + '\nrenderCoating();coatLayout();', context);
+  assert.match(text(nodes.v2CoatBars), /블라스팅.*도막 두께 판정.*없/);
+  assert.equal(nodes.v2CoatBasisExpert.disabled, true);
+  assert.equal(nodes.v2CoatMap.hidden, true);
+  assert.equal(nodes.v2CoatBars.hidden, false);
+  assert.equal(nodes.v2CoatBars.children.length, 1);
+});
+
 test('absolute colors compare the same thickness across zones in 2D and 3D', () => {
   const view = viewer();
   view.data({coating_reference: {'1:1': reference([100, 200]), '1:2': reference([200, 1000])}});

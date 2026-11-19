@@ -47,7 +47,8 @@ def test_viewer_shells_load_real_payload_cache_and_do_not_claim_server_payload_c
         html = client.get(page).text
         assert 'src="/motion-viewer/assets/motion_viewer_cache.js"' in html
         assert "payloadCache.load(motionUrl()," in html
-        assert 'id="recordCacheLegend"' in html and '✓ 이 창에 보관됨' in html
+        assert 'id="recordCacheLegend"' in html and '✓ 빠른 로딩' in html
+        assert '빠른 로딩 (이 창)' not in html
         for key in ['loadingProgress', 'loadingStage', 'loadingUnits', 'loadingCancel']:
             assert f'id="{key}"' in html
     assert client.get('/motion-viewer/assets/motion_viewer_cache.js').status_code == 200

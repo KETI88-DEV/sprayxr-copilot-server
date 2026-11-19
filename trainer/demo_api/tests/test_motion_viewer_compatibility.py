@@ -12,6 +12,49 @@ from trainer.demo_api.tests.test_motion_viewer import _client, _write_csv, _writ
 from trainer.demo_api.tests.test_training_motion_catalog import publish
 
 
+@pytest.mark.parametrize('worker, name, expected_worker', [
+    ('new_worker', '새 작업자', 'new_worker'),
+    ('legacy_foreman', '전형기', 'jeon_hyeonggi'),
+    ('unknown_source', '', '__unknown_workers__'),
+])
+def test_dataset_selection_resolves_the_same_record_that_actually_plays(monkeypatch, tmp_path, worker, name, expected_worker):
+    output = tmp_path / 'built'; monkeypatch.setenv('TRAINING_DATA_ROOT', str(output))
+    row = publish(tmp_path, output, worker=worker, worker_name=name)
+    client = _client(tmp_path)
+    response = client.get('/motion-viewer/api/selection', params={'dataset_id': row['dataset_id']})
+    assert response.status_code == 200, response.text
+    selection = response.json()
+    assert selection == {'dataset_id': row['dataset_id'], 'worker_id': expected_worker, 'process': 'spray',
+                         'mode_id': 4, 'session_id': 'dataset_' + row['dataset_id'] if not name else row['session_id']}
+    playback = client.get('/motion-viewer/api/motion', params={key: value for key, value in selection.items() if key != 'dataset_id'})
+    assert playback.status_code == 200, playback.text
+    assert playback.json()['dataset_id'] == row['dataset_id']
+    assert playback.json()['selected_session_id'] == selection['session_id']
+
+
+def test_dataset_selection_does_not_substitute_unplayable_or_missing_records(monkeypatch, tmp_path):
+    output = tmp_path / 'built'; monkeypatch.setenv('TRAINING_DATA_ROOT', str(output))
+    row = publish(tmp_path, output, quality='needs_review')
+    client = _client(tmp_path)
+    assert client.get('/motion-viewer/api/selection', params={'dataset_id': row['dataset_id']}).status_code == 404
+    assert client.get('/motion-viewer/api/selection', params={'dataset_id': '0' * 32}).status_code == 404
+
+
+def test_dataset_selection_rejects_an_artifact_shadowed_by_the_same_logical_session(monkeypatch, tmp_path):
+    output = tmp_path / 'built'; monkeypatch.setenv('TRAINING_DATA_ROOT', str(output))
+    row = publish(tmp_path, output)
+    index_path = output / 'catalog.json'
+    (output / 'records' / ('1' * 32 + '.json')).write_bytes(
+        (output / 'records' / (row['dataset_id'] + '.json')).read_bytes())
+    index = json.loads(index_path.read_text(encoding='utf-8'))
+    index['records'].append({**row, 'dataset_id': '1' * 32, 'source_kind': 'legacy'})
+    index_path.write_text(json.dumps(index), encoding='utf-8')
+    client = _client(tmp_path)
+    response = client.get('/motion-viewer/api/selection', params={'dataset_id': '1' * 32})
+    assert response.status_code == 409
+    assert '다른 등록 자료' in response.json()['detail']
+
+
 @pytest.mark.parametrize('endpoint', ['motion', 'arm-pose', 'alerts'])
 @pytest.mark.parametrize('source_kind', ['catalog', 'legacy'])
 def test_original_unknown_worker_urls_select_only_that_workers_original_session(monkeypatch, tmp_path, endpoint, source_kind):

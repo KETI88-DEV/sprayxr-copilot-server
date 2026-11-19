@@ -67,7 +67,8 @@ const { create } = require('../static/motion_viewer_cache.js');
     currentWorker: () => ({ display_name: '작업자' }), currentMode: () => ({}),
     payloadCache: { has: url => retained && url.endsWith('session_id=a') } });
   vm.runInContext(functions + '\nrefreshSessionLabels();', labels);
-  assert.match(controls.session.options[0].textContent, /빠른 로딩 \(이 창\)/);
+  assert.match(controls.session.options[0].textContent, /빠른 로딩/);
+  assert.doesNotMatch(controls.session.options[0].textContent, /이 창/);
   assert.match(controls.session.options[0].textContent, /^✓ /);
   assert.equal(controls.session.options[0].style.color, '#34d399');
   assert.match(controls.session.options[1].textContent, /^↓ /);

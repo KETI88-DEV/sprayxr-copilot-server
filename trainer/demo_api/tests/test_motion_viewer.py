@@ -224,7 +224,7 @@ def test_motion_viewer_page_explains_the_aggregated_expert_reference(tmp_path: P
 
     assert response.status_code == 200
     assert "도장 경로와 작업 자세를 전문가 기준으로 비교합니다." in response.text
-    assert "전체 기록 종합 기준" in response.text
+    assert "전문가 종합 기준" in response.text
     assert "대표 실측 모션" not in response.text
     assert "통계 범위" in response.text
     assert "페인트 누적 궤적" in response.text
@@ -405,8 +405,8 @@ def test_catalog_discovers_future_worker_directory_without_code_change(tmp_path:
 
     payload = client.get("/motion-viewer/api/catalog").json()
 
-    assert [worker["display_name"] for worker in payload["workers"]] == ["김경호", "전형기"]
-    assert payload["workers"][0]["worker_id"] == "kim_gyeongho"
+    assert [worker["display_name"] for worker in payload["workers"]] == ["전형기", "김경호"]
+    assert payload["workers"][1]["worker_id"] == "kim_gyeongho"
 
 
 def test_unknown_legacy_worker_directories_share_selector_without_merging_recordings(tmp_path: Path) -> None:

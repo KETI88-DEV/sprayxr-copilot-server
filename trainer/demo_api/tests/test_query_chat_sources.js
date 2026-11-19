@@ -19,7 +19,7 @@ class Element{
   focus(){}
   remove(){if(this.parent)this.parent.children=this.parent.children.filter(child=>child!==this);}
 }
-async function page(source,data,mode='quick'){
+async function page(source,data,mode='quick',model=null,translationModel=null){
   const elements=new Map(),requests=[];
   const get=id=>{if(!elements.has(id))elements.set(id,new Element());return elements.get(id);};
   const document={getElementById:get,createElement:tag=>new Element(tag),querySelectorAll:()=>[],addEventListener(){},documentElement:new Element()};
@@ -27,7 +27,7 @@ async function page(source,data,mode='quick'){
   const fetch=async(url,options={})=>{
     requests.push({url,options});
     if(url.startsWith('/query-chat/api/options'))return {ok:true,json:async()=>({workers:[],processes:[],modes:[],sessions:[]})};
-    if(url==='/api/v1/copilot/query')return {ok:true,json:async()=>({status:'SUCCESS',data:{answer:'답변',...data}}),headers:{get:name=>name==='X-Copilot-Answer-Source'?source:name==='X-Copilot-Query-Turn'?'12':null}};
+    if(url==='/api/v1/copilot/query')return {ok:true,json:async()=>({status:'SUCCESS',data:{answer:'답변',...data}}),headers:{get:name=>name==='X-Copilot-Answer-Source'?source:name==='X-Copilot-Query-Turn'?'12':name==='X-Copilot-Model'?model:name==='X-Copilot-Translation-Model'?translationModel:null}};
     if(url==='/api/query-feedback')return {ok:true,json:async()=>({status:'SUCCESS'})};
     throw new Error('Unexpected request '+url);
   };
@@ -52,6 +52,34 @@ test('a completed Query answer renders its actual RAG source and keeps feedback 
 test('a no-document response labels the same Query conversation LLM',async()=>{
   const {assistant}=await page('conversation',{retrieval_used:false,citations:[]});
   assert.equal(assistant.querySelector('.answer-source')?.textContent,'LLM');
+});
+
+test('answer metadata shows the server-confirmed model alongside mode and elapsed time',async()=>{
+  const {assistant}=await page('documents',{retrieval_used:true,citations:['DOC-doc_0001-C0001']},'quick','Qwen3-8B-AWQ');
+  assert.match(assistant.querySelector('.answer-meta').textContent,/빠른 안내 · [\d.]+초 · Qwen3-8B-AWQ · /);
+  assert.equal(assistant.querySelector('.answer-source').textContent,'RAG');
+});
+
+for(const [served,name] of [['shipcoat-quick-8b','Qwen3-8B (AWQ)'],['qwen36-27b-shipcoat-v7-1-bf16','Qwen3.6-27B (v7.1)']])test(`the verified ${served} alias shows its confirmed Qwen name and preserves the served ID`,async()=>{
+  const {assistant}=await page('conversation',{retrieval_used:false},'quick',served);
+  assert.ok(assistant.querySelector('.answer-meta').textContent.includes(name));
+  assert.equal(assistant.querySelector('.answer-meta').title,served);
+});
+
+test('unknown served model IDs remain literal instead of receiving an inferred family name',async()=>{
+  const {assistant}=await page('conversation',{retrieval_used:false},'quick','unregistered-model-v9');
+  assert.match(assistant.querySelector('.answer-meta').textContent,/unregistered-model-v9/);
+  assert.doesNotMatch(assistant.querySelector('.answer-meta').textContent,/Qwen/);
+});
+
+test('missing model metadata never guesses a model from the requested response mode',async()=>{
+  const {assistant}=await page('analysis',{retrieval_used:false},'detailed');
+  assert.doesNotMatch(assistant.querySelector('.answer-meta').textContent,/Qwen|27B|8B/);
+});
+
+test('a separately confirmed translation model is distinguished from the answer model',async()=>{
+  const {assistant}=await page('documents',{retrieval_used:true,citations:['DOC-doc_0001-C0001']},'detailed','qwen36-27b-shipcoat-v6-1-fp8','Qwen3-8B-AWQ');
+  assert.match(assistant.querySelector('.answer-meta').textContent,/qwen36-27b-shipcoat-v6-1-fp8 · 번역 Qwen3-8B-AWQ · /);
 });
 test('a term translation is labelled glossary, not document RAG',async()=>{
   const {assistant}=await page('glossary',{retrieval_used:false,citations:['TSB:VR_Language.csv:27']});

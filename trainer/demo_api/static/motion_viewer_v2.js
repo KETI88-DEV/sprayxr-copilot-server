@@ -370,6 +370,19 @@
   }
 
   function renderCoating() {
+    const unsupported = record?.process && record.process !== 'spray';
+    for (const id of ['v2CoatBasisTarget', 'v2CoatBasisExpert', 'v2CoatBarsView', 'v2CoatMapView']) $(id).disabled = Boolean(unsupported);
+    if (unsupported) {
+      const label = record.process_label || {blasting: '블라스팅', grinding: '그라인딩'}[record.process] || record.process;
+      $('v2FeatureCoating').classList.remove('is-side');
+      $('v2CoatViews').hidden = true; $('v2CoatMap').hidden = true; $('v2CoatMapSeg').hidden = true; $('v2CoatBars').hidden = false;
+      $('v2CoatCount').replaceChildren(); $('v2CoatBasisLabel').textContent = '스프레이 도막 기준 적용 안 함';
+      $('v2CoatBars').setAttribute('aria-label', `${label} 도막 판정 미지원`);
+      const box = el('div', 'chart-empty coat-empty');
+      box.append(el('span', null, `${label}에는 도막 두께 판정이 없습니다.`), el('small', null, '표면 품질 지표는 도막 두께와 별도로 확인해야 합니다.'));
+      $('v2CoatBars').replaceChildren(box);
+      return;
+    }
     const expert = coatBasis === 'expert';
     $('v2CoatBasisTarget').setAttribute('aria-pressed', String(!expert));
     $('v2CoatBasisExpert').setAttribute('aria-pressed', String(expert));
@@ -383,7 +396,7 @@
 
   /** 전문가 대비를 한 칸 보기로 볼 때는 편차(왼쪽)와 전문가 지도(오른쪽)를 함께 둔다. 세 칸 보기는 편차·지도 전환. */
   function coatLayout() {
-    const expert = coatBasis === 'expert';
+    const expert = coatBasis === 'expert' && !(record?.process && record.process !== 'spray');
     const side = expert && layout.count === 1;
     $('v2FeatureCoating').classList.toggle('is-side', side);
     $('v2CoatViews').hidden = !expert || side;

@@ -216,7 +216,7 @@ test('건 자료가 없으면 CSV 관절을 그대로 실선으로 그린다', (
 });
 
 test('v2 교정 고리도 같은 함수로 관절 위치를 구한다', () => {
-  const script = fs.readFileSync(path.join(__dirname, '../static/motion_viewer_v2.js'), 'utf8');
+  const script = fs.readFileSync(path.join(__dirname, '../static/motion_viewer_v2.js'), 'utf8').replace(/\r\n/g, '\n');
   assert.ok(script.includes('panelSkeleton(frame).joints'));
   assert.ok(!script.includes('uprightSkeleton('));
 });
@@ -325,7 +325,7 @@ test('가장 옅게 그린 뼈·관절도 패널 배경과 3:1 이상 대비된�
 test('v2 교정 고리는 같은 투영 함수로 관절 원과 같은 중심에 그린다', () => {
   const view = viewer();
   view.sandbox.data.bones = BODY_BONES;
-  const script = fs.readFileSync(path.join(__dirname, '../static/motion_viewer_v2.js'), 'utf8');
+  const script = fs.readFileSync(path.join(__dirname, '../static/motion_viewer_v2.js'), 'utf8').replace(/\r\n/g, '\n');
   const start = script.indexOf('  function markFlaggedJoints(frame) {');
   const body = script.slice(start, script.indexOf('\n  }\n', start) + 4);
   const mark = vm.runInContext(`(function ($, sequenceAt, anchor) {\n${body}\nreturn markFlaggedJoints; })`, view.sandbox)(
