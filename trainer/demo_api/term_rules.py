@@ -11,19 +11,42 @@ import re
 from pathlib import Path
 from typing import Iterable
 
-_RULES = json.loads((Path(__file__).resolve().parents[1] / "configs" / "term_rules.json").read_text(encoding="utf-8"))["용어"]
+_CONFIG = json.loads((Path(__file__).resolve().parents[1] / "configs" / "term_rules.json").read_text(encoding="utf-8"))
+_RULES = _CONFIG["용어"]
 _SPACE = re.compile(r"\s+")
+# 오타 → 바른 용어. 목록(term_rules.json '오타')에 적힌 글자열만 바꾼다. 앞에 한글이 붙어 있으면 다른 낱말의 일부라 두고,
+# 긴 것부터 맞춘다. 비슷한 글자를 어림으로 맞추지 않는다: '분사 강도'가 '분사 각도'로, '저도 많이'가 '저도막'으로 바뀐다.
+_TYPOS = {typo: right for right, wrong in _CONFIG.get("오타", {}).items() for typo in wrong}
+_TYPO = re.compile("(?<![가-힣])(?:" + "|".join(map(re.escape, sorted(_TYPOS, key=len, reverse=True))) + ")") if _TYPOS else None
 
 
 def _flat(text: str) -> str:
-    return _SPACE.sub("", text)
+    return _SPACE.sub("", text).casefold()  # 'dft 뭐임'도 DFT다
 
 
-def _found(text: str, around: str) -> list[dict]:
+def _names(rule: dict) -> list[str]:
+    """용어를 찾는 말: 별칭과 구어(입말 표현)."""
+    return [*rule["별칭"], *rule.get("구어", ())]
+
+
+def _found(text: str, around: str, *, formal: bool = False) -> list[dict]:
     flat, near = _flat(text), _flat(around)
     return [rule for rule in _RULES
-            if any(_flat(alias) in flat for alias in rule["별칭"])
+            if any(_flat(alias) in flat for alias in (rule["별칭"] if formal else _names(rule)))
             and not any(_flat(word) in near for word in rule["제외"])]
+
+
+def routed_terms(prompt: str) -> list[dict]:
+    """질문을 도장 질문(문서 경로)으로 보게 하는 용어: '경로'가 참이고 '별칭'(구어 제외)이 질문에 있으며 제외어가 없다.
+
+    구어('가까이서 뿌', '안 말라')는 일상어·기록 대화와 겹쳐 경로 판정에 쓰지 않는다. 2026-11-18의 여덟 용어는 '경로'가 없어
+    예전 경로 그대로다(순서 탭 '도포 방향은 어떻게 돼?'가 문서로 새지 않는다)."""
+    return [rule for rule in _found(prompt, prompt, formal=True) if rule.get("경로")]
+
+
+def fix_typos(text: str) -> str:
+    """등록된 용어 오타를 바른 용어로 바꾼다('저도맥이 뭐야?' → '저도막이 뭐야?'). 질문 분석·검색·이어받기가 모두 바른 용어를 본다."""
+    return _TYPO.sub(lambda found: _TYPOS[found.group()], text) if _TYPO else text
 
 
 def matched_terms(prompt: str, previous_prompts: Iterable[str] = ()) -> list[dict]:
@@ -38,10 +61,29 @@ def matched_terms(prompt: str, previous_prompts: Iterable[str] = ()) -> list[dic
     return []
 
 
+_MEANING = re.compile(r"뭐|머[야에예임]|모야|무엇|뜻|의미|정의|이?란\s*[?？]?$|설명|차이|다른가|다르|어떤\s*(?:상태|것|거|현상)")
+_NOT_MEANING = re.compile(r"왜|원인|이유|어떻게\s*(?:해|하|칠|재|써|쓰|막|고)|어떡|방법|얼마|몇|언제|어디|기준|적정|순서|문제|영향|결과|위험")
+
+
+def meaning_evidence(prompt: str, rules: list[dict]) -> list[str]:
+    """뜻·차이만 묻는 질문('습도막이 뭐야?', 낱말만 적은 '저도막', '습도막과 건조도막 차이')이면 그 용어의 근거 조각.
+
+    검색은 낱말이 닮은 다른 뜻의 조각을 가져온다(습도막→상대습도, 드라이 스프레이→에어리스 장비, 2026-11-20).
+    뜻을 적은 조각을 검색 결과 앞에 붙여 두면 답이 그 조각을 인용한다. 용어가 셋 이상이면 좁히지 않는다."""
+    formal = {rule["용어"] for rule in _found(prompt, prompt, formal=True)}
+    rules = [rule for rule in rules if rule["용어"] in formal]  # 구어로만 걸린 용어('곰보빵'의 곰보)는 뜻 근거를 붙이지 않는다
+    if not rules or len(rules) > 2:
+        return []
+    bare = _flat(prompt).strip("?？!.") in {_flat(alias) for rule in rules for alias in [rule["용어"], *rule["별칭"]]}
+    if not bare and not (_MEANING.search(prompt) and not _NOT_MEANING.search(prompt)):
+        return []
+    return list(dict.fromkeys(chunk for rule in rules for chunk in rule["근거"][:3 if len(rules) == 1 else 2]))
+
+
 def named_terms(text: str) -> set[str]:
     """글에 별칭이 나온 교육 용어 이름(제외어는 보지 않는다). 꼬리물기 이어받기의 주제 경계로 쓴다."""
     flat = _flat(text)
-    return {rule["용어"] for rule in _RULES if any(_flat(alias) in flat for alias in rule["별칭"])}
+    return {rule["용어"] for rule in _RULES if any(_flat(alias) in flat for alias in _names(rule))}
 
 
 def means_otherwise(term: str, text: str) -> bool:
