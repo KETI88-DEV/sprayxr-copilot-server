@@ -395,67 +395,74 @@ class CoatingProgressEngine:
         max_thickness_um: float | None = None,
         behavior: Mapping[str, Mapping[str, Sequence[float]]] | None = None,
     ) -> tuple[list[ZoneJudgment], str | None]:
-        """세션 끝 두께(면 번호 → 좌하단 원점 표면)를 프로필의 모든 구역에서 목표 두께에 대고 판정한다.
+        """세션 끝 두께가 있는 면의 공식 구역 전체를 목표 두께에 대고 판정한다.
 
         표면은 칠한 자리의 원시 두께이고 그 밖은 0이어야 한다. 목표가 없으면 기본 목표 160µm다.
         표면이 없는 면의 구역은 판정하지 않는다 — 높이맵이 한 면만 오면 다른 면을 칠했는지 모른다.
-        `expert`는 전문가 칸과 견준 참고 판정(보정 전 두께)이다. 등급·게이트에는 쓰지 않는다.
+        전문가 프로필은 `expert` 참고 판정(보정 전 두께)에만 필요하다. 등급·게이트·평가 구역은 제한하지 않는다.
         `behavior`는 구역별 속도·거리 표본(`coating_assessment.behavior_by_zone`)이고 조절 후보에만 쓴다.
         """
+        catalog = self._zone_catalog
+        # 학습 모드로 정규화된 ID를 사용해 TR-L03 등 기존 허용 별칭도 같은 공식 Zone을 본다.
+        model_key = catalog.resolve_model(str(mode_id)) if catalog is not None else None
+        if catalog is None or model_key is None:
+            return [], "zone_reference_unavailable"
         with self._guard:
-            profile, reason = self._load_profile(process, mode_id)
-        if profile is None:
-            return [], reason or "reference_unavailable"
-        judgments: list[ZoneJudgment] = []
-        for key, zone in profile["aggregate"]["zones"].items():
+            profile, _ = self._load_profile(process, mode_id)
+        references: dict[tuple[int, str], tuple[int, int, int, dict[str, Any]]] = {}
+        profile_zones = profile["aggregate"]["zones"] if profile is not None else {}
+        for key, zone in profile_zones.items():
             if not isinstance(zone, dict):
                 continue
             coating = zone.get("coating")
             if not isinstance(coating, dict) or coating.get("analysis_status") != "available":
                 continue
-            map_num = int(zone.get("map_num", 1))
-            zone_id = str(zone.get("zone_id") or str(key).partition(":")[2])
-            atlas_width = int(coating.get("atlas_width", 0))
-            atlas_height = int(coating.get("atlas_height", 0))
-            grid_size = int(coating.get("grid_size", 0))
-            target_cells = coating.get("cells")
-            surface = surfaces.get(map_num)
-            # 등급은 전문가 칸을 쓰지 않지만 실시간 `evaluate`와 같은 Zone 집합을 판정하려고 이 조건을 남긴다.
-            # 전문가 칸이 없는 Zone은 등급·구역 수·세션 평균에서 빠진다.
-            if surface is None or min(atlas_width, atlas_height, grid_size) <= 0 or not isinstance(target_cells, dict):
+            try:
+                map_num = int(zone.get("map_num", 1))
+                width, height = int(coating.get("atlas_width", 0)), int(coating.get("atlas_height", 0))
+                grid = int(coating.get("grid_size", 0))
+            except (TypeError, ValueError):
                 continue
-            if surface.shape != (atlas_height, atlas_width):
-                # TSB 안내: 해상도가 다르면 최근접으로 맞춘다. PR #8 엔진은 크기가 다른 아틀라스를 거부한다(기존 동작 유지).
-                surface = np.asarray(
-                    Image.fromarray(surface.astype(np.float32)).resize(
-                        (atlas_width, atlas_height), Image.Resampling.NEAREST
-                    )
+            cells = coating.get("cells")
+            if 0 < width <= 4096 and 0 < height <= 4096 and grid > 0 and isinstance(cells, dict):
+                zone_id = str(zone.get("zone_id") or str(key).partition(":")[2])
+                references[(map_num, zone_id)] = (width, height, grid, cells)
+        judgments: list[ZoneJudgment] = []
+        for map_num, raw_surface in surfaces.items():
+            for zone in catalog.zones(model_key, map_num):
+                zone_id = zone.zone_id
+                mask_image = catalog.zone_mask(model_key, map_num, zone_id)
+                if mask_image is None:
+                    continue
+                width, height = mask_image.size
+                zone_mask = np.flipud(np.asarray(mask_image, dtype=np.uint8) > 0)
+                # 공식 라벨맵의 화소가 분모다. TSB 안내대로 해상도가 다르면 최근접으로 맞춘다.
+                surface = (raw_surface if raw_surface.shape == (height, width) else np.asarray(
+                    Image.fromarray(raw_surface.astype(np.float32)).resize((width, height), Image.Resampling.NEAREST)
+                ))
+                assessment = coating_assessment.assess_zone(
+                    surface, zone_mask, target_thickness_um, min_thickness_um=min_thickness_um,
+                    max_thickness_um=max_thickness_um, **(behavior or {}).get(zone_id, {}),
                 )
-            zone_mask, mask_reason = self._atlas_zone_mask(
-                coating,
-                scenario_id=scenario_id,
-                map_num=map_num,
-                zone_id=zone_id,
-                atlas_width=atlas_width,
-                atlas_height=atlas_height,
-                require_official=True,
-            )
-            if mask_reason is not None:
-                continue
-            assessment = coating_assessment.assess_zone(
-                surface, zone_mask, target_thickness_um, min_thickness_um=min_thickness_um,
-                max_thickness_um=max_thickness_um, **(behavior or {}).get(zone_id, {}),
-            )
-            if assessment is not None:
-                expert = measure_zone(
-                    surface, target_cells, atlas_width=atlas_width, atlas_height=atlas_height,
-                    grid_size=grid_size, zone_mask=zone_mask,
-                )
+                if assessment is None:
+                    continue
+                expert = None
+                reference = references.get((map_num, zone_id))
+                if reference is not None:
+                    ref_width, ref_height, grid, cells = reference
+                    expert_surface, expert_mask = surface, zone_mask
+                    if surface.shape != (ref_height, ref_width):
+                        expert_surface = np.asarray(Image.fromarray(surface.astype(np.float32)).resize(
+                            (ref_width, ref_height), Image.Resampling.NEAREST))
+                        expert_mask = np.asarray(Image.fromarray(zone_mask.astype(np.uint8)).resize(
+                            (ref_width, ref_height), Image.Resampling.NEAREST)) > 0
+                    expert = measure_zone(expert_surface, cells, atlas_width=ref_width, atlas_height=ref_height,
+                                          grid_size=grid, zone_mask=expert_mask)
                 judgments.append(ZoneJudgment(map_num, zone_id, assessment, expert))
         judgments.sort(
             key=lambda item: (item.map_num, int(item.zone_id) if item.zone_id.isdigit() else 1_000_000, item.zone_id)
         )
-        return judgments, (None if judgments else "coating_reference_invalid")
+        return judgments, (None if judgments else "zone_reference_unavailable")
 
     def _left_zone_row(
         self, profile: dict[str, Any], session: dict[int, np.ndarray], zone_id: str,

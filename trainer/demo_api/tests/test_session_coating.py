@@ -124,7 +124,10 @@ def test_height_map_zones_are_graded_against_the_target(engine: CoatingProgressE
     )
 
     zones = {zone["zone_id"]: zone for zone in result.zones}
-    assert {zone_id: zone["status"] for zone_id, zone in zones.items()} == {"1": "normal", "2": None, "3": "over_app"}
+    assert {zone_id: zone["status"] for zone_id, zone in zones.items()} == {
+        "1": "normal", "2": None, "3": "over_app", "4": None, "5": None,
+        "6": None, "7": None, "8": None, "9": None,
+    }
     assert zones["1"]["thickness_um"] == pytest.approx(170.0, abs=0.5)
     assert zones["3"]["thickness_um"] == pytest.approx(390.0, abs=0.5)
     report = result.report
@@ -140,7 +143,7 @@ def test_height_map_zones_are_graded_against_the_target(engine: CoatingProgressE
     assert sum(report["zone_summary"].values()) == pytest.approx(1.0)
     assert [zone["zone_id"] for zone in report["worst_zones"]] == ["3"]
     assert report["worst_zones"][0]["thickness_um"] == pytest.approx(390.0, abs=0.5)
-    for phrase in ("기본 목표 160µm 기준", "과도막 1개(3번)", "칠한 곳 없음 1개(2번)"):
+    for phrase in ("기본 목표 160µm 기준", "과도막 1개(3번)", "칠한 곳 없음 7개(2·4·5·6·7·8·9번)"):
         assert phrase in report["guideline"]
 
 
@@ -160,6 +163,50 @@ def test_zone_rows_carry_the_area_gate_next_to_the_grade(engine: CoatingProgress
 
     zone1 = next(zone for zone in result.zones if zone["zone_id"] == "1")
     assert (zone1["coverage_percent"], zone1["gate_status"], zone1["grade"]) == (100.0, "complete", "normal")
+
+
+def test_report_evaluates_painted_and_unpainted_official_zones_missing_from_the_expert_profile(
+    engine: CoatingProgressEngine,
+) -> None:
+    """프로필은 1~3번뿐이어도 최종 높이맵의 공식 1~9번을 빠짐없이 평가한다."""
+    result = analyze_session_coating(
+        scenario_id="3", bodies=[SPRAY], engine=engine, height_map=_png(_thickness({"9": 180.0}))
+    )
+    zones = {zone["zone_id"]: zone for zone in result.zones}
+
+    assert set(zones) == {str(zone) for zone in range(1, 10)}
+    assert (zones["9"]["grade"], zones["9"]["gate_status"]) == ("normal", "complete")
+    assert zones["9"]["thickness_um"] == pytest.approx(170.0, abs=0.5)
+    assert all(zones[str(zone)]["unpainted_fraction"] == 1.0 for zone in range(1, 9))
+    assert all(zones[str(zone)]["expert"] is None for zone in range(4, 10))
+    assert result.report["expert_comparison"]["zone_count"] == 3
+
+
+@pytest.mark.parametrize("scenario", ["3", "TR-L03", "learning-mode-3"])
+def test_target_assessment_needs_official_zones_and_height_but_not_expert_samples(
+    tmp_path: Path, height_map: bytes, scenario: str
+) -> None:
+    result = analyze_session_coating(
+        scenario_id=scenario, bodies=[SPRAY], engine=CoatingProgressEngine(tmp_path), height_map=height_map
+    )
+
+    assert result.report["analysis_status"] == "available"
+    assert result.report["comparison_basis"] == "session_target"
+    assert len(result.zones) == 9
+    assert result.report["expert_comparison"]["analysis_status"] == "unavailable"
+    assert result.report["expert_comparison"]["zone_count"] == 0
+    assert all(zone["expert"] is None for zone in result.zones)
+
+
+def test_final_assessment_does_not_invent_unpainted_data_for_a_map_without_a_surface(tmp_path: Path) -> None:
+    from trainer.demo_api.tests.test_zone_completion_gate import multimap_engine
+
+    judgments, reason = multimap_engine(tmp_path).judge_zones(
+        scenario_id="3", process="spray", mode_id=3, surfaces={1: np.full((10, 10), 180.0)}
+    )
+
+    assert reason is None
+    assert [(zone.map_num, zone.zone_id) for zone in judgments] == [(1, "1")]
 
 
 def test_height_map_pixels_without_blue_support_are_unpainted(engine: CoatingProgressEngine) -> None:
@@ -235,7 +282,10 @@ def test_without_a_height_map_later_crops_overwrite_earlier_ones(engine: Coating
 
     result = analyze_session_coating(scenario_id="3", bodies=bodies, engine=engine)
 
-    assert {zone["zone_id"]: zone["status"] for zone in result.zones} == {"1": "normal", "2": None, "3": "normal"}
+    assert {zone["zone_id"]: zone["status"] for zone in result.zones} == {
+        "1": "normal", "2": None, "3": "normal", "4": None, "5": None,
+        "6": None, "7": None, "8": None, "9": None,
+    }
     assert result.report["source_artifact_id"] == "cur_sequence_heatmap"
 
 
@@ -244,7 +294,7 @@ def test_without_a_height_map_later_crops_overwrite_earlier_ones(engine: Coating
     [
         ("Unit3", [SPRAY], True, "reference_context_unavailable"),
         ("3", [{"sequence_setting": {"tool_type": "blasting"}}], True, "coating_not_applicable"),
-        ("3", [SPRAY], False, "reference_unavailable"),
+        ("3", [SPRAY], False, "heatmap_unavailable"),
         ("3", [SPRAY], True, "heatmap_unavailable"),
     ],
 )
@@ -253,10 +303,8 @@ def test_missing_inputs_are_unavailable_without_numbers(
 ) -> None:
     if with_profile:
         _profile(tmp_path)
-    height_map = _png(_thickness(THICKNESS)) if reason == "reference_unavailable" else None
-
     result = analyze_session_coating(
-        scenario_id=scenario, bodies=bodies, engine=CoatingProgressEngine(tmp_path), height_map=height_map
+        scenario_id=scenario, bodies=bodies, engine=CoatingProgressEngine(tmp_path)
     )
 
     assert result.report["analysis_status"] == "unavailable"
@@ -414,8 +462,8 @@ def test_a_zone_without_scored_sequences_is_not_answered_with_numbers() -> None:
     assert "similarity_score" not in result.context
 
 
-def test_without_an_expert_reference_the_briefing_says_why_coating_is_missing(tmp_path: Path, height_map: bytes) -> None:
-    """도막 엔진은 있는데 Zone 기준 자료가 없으면 '외부 엔진 연동 후'가 아니라 실제 사유를 말한다. 자세 결과는 그대로 남는다."""
+def test_without_an_expert_reference_the_briefing_still_uses_official_target_grades(tmp_path: Path, height_map: bytes) -> None:
+    """전문가 표본이 없어도 공식 Zone·높이맵의 목표 판정과 자세 결과는 보존한다."""
     client = _client(CoatingProgressEngine(tmp_path))
 
     response = client.post(
@@ -429,8 +477,9 @@ def test_without_an_expert_reference_the_briefing_says_why_coating_is_missing(tm
     )
     report = client.get(f"/api/v1/reports/{response.json()['data']['report_id']}").json()["data"]["report"]
 
-    assert report["coating_report"]["reason_code"] == "reference_unavailable"
-    assert "도막 미평가(Zone 기준 없음)." in report["llm_briefing"]
+    assert report["coating_report"]["analysis_status"] == "available"
+    assert report["coating_report"]["expert_comparison"]["analysis_status"] == "unavailable"
+    assert "도막 Zone 3 과도막" in report["llm_briefing"]
     assert report["pose_report"]["analysis_status"] == "available"
 
 
@@ -539,9 +588,10 @@ def test_coating_status_question_after_complete_lists_grades(engine: CoatingProg
     quick = _ask(client, "도막이 과하거나 모자란 영역이 있어?")["answer"]
     data = _ask(client, "도막이 과하거나 모자란 영역이 있어?", mode="detailed")
 
-    assert "저도막: 없음\n과도막: 1개 — Map 1 · Zone 3(칠한 곳 평균 390µm, 미도장 0%)\n정상: 1개\n칠한 곳 없음: 1개 — Map 1 · Zone 2" in data["answer"]
+    assert "저도막: 없음\n과도막: 1개 — Map 1 · Zone 3(칠한 곳 평균 390µm, 미도장 0%)\n정상: 1개\n칠한 곳 없음: 7개 — Map 1 · Zone 2" in data["answer"]
+    assert "Map 1 · Zone 9" in data["answer"]
     assert quick == data["answer"]
-    assert [row["zone_id"] for row in data["coating_context"]["zones"]] == ["1", "2", "3"]
+    assert [row["zone_id"] for row in data["coating_context"]["zones"]] == ["1", "2", "3", "4", "5", "6", "7", "8", "9"]
 
 
 def test_after_complete_chip_questions_use_the_session_report(engine: CoatingProgressEngine, height_map: bytes) -> None:
@@ -716,8 +766,13 @@ def test_report_carries_the_expert_comparison_beside_the_target_grade(engine: Co
     result = _expert_report(engine)
 
     rows = {zone["zone_id"]: zone for zone in result.zones}
-    assert {k: v["status"] for k, v in rows.items()} == {"1": "under_app", "2": None, "3": "over_app"}
-    assert {k: v["expert"]["status"] for k, v in rows.items()} == {"1": "normal", "2": "under_app", "3": "over_app"}
+    assert {k: v["status"] for k, v in rows.items()} == {
+        "1": "under_app", "2": None, "3": "over_app", "4": None, "5": None,
+        "6": None, "7": None, "8": None, "9": None,
+    }
+    assert {k: v["expert"]["status"] for k, v in rows.items() if v["expert"] is not None} == {
+        "1": "normal", "2": "under_app", "3": "over_app",
+    }
     report = result.report
     assert report["comparison_basis"] == "session_target"
     comparison = report["expert_comparison"]
