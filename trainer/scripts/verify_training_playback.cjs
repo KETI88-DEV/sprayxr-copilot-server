@@ -10,6 +10,7 @@ invalid_dataset_id explicit_retest_requires_one_record credentials_file_must_not
 current_completed_audit_required explicit_record_not_unique_or_eligible duplicate_dataset_identity
 selection_identity_mismatch rendered_identity_mismatch private_files_must_be_outside_git invalid_credentials_file
 playwright_module_must_be_absolute playwright_dependency_unavailable invalid_timeline renderer_not_ready
+browser_executable_must_be_absolute browser_executable_unavailable
 sample_position_unavailable playback_did_not_advance invalid_admin_session invalid_renderer browser_script_error
 verification_run_or_files_changed proof_not_recorded`.split(/\s+/));
 const HELP = `Usage: node trainer/scripts/verify_training_playback.cjs
@@ -21,6 +22,7 @@ Defaults: one pending eligible record, sequential playback, one page at a time.
 Credentials: protected JSON {"username":"...","password":"..."} outside Git.
 Output must also be outside Git; a new playback-* evidence directory is created.
 Uses demo-ui's @playwright/test or PLAYBACK_PLAYWRIGHT_MODULE (absolute module path).
+Optional PLAYBACK_BROWSER_EXECUTABLE selects an existing absolute browser executable.
 Requires an existing current completed JSON/source audit; never POSTs /start.
 Writes actual playback proofs using administrator login and same-origin CSRF.
 Load budget: 45s navigation + 120s ready; each playback advance: 10s.
@@ -94,6 +96,14 @@ function readCredentials(filename) {
     && data.password, 'invalid_credentials_file');
   return {username:data.username,password:data.password};
 }
+function launchOptions(executable) {
+  if (!executable) return {headless:true};
+  check(path.isAbsolute(executable),'browser_executable_must_be_absolute');
+  let isFile = false;
+  try {isFile = fs.statSync(executable).isFile();} catch (_) {}
+  check(isFile,'browser_executable_unavailable');
+  return {headless:true,executablePath:executable};
+}
 // Never serialize external error messages, request bodies, cookie jars, or auth responses.
 function failureCode(error) {
   const code = String(error?.message || '');
@@ -138,6 +148,7 @@ async function sample(page, position, fraction) {
     renderer_ready:after.rendererReady,context_lost:after.contextLost};
 }
 async function main(options) {
+  const browserOptions = launchOptions(process.env.PLAYBACK_BROWSER_EXECUTABLE);
   outsideGit(options.outputDir);
   const credentials = readCredentials(options.credentialsFile);
   const requireUI = createRequire(path.resolve(__dirname,'../../demo-ui/package.json'));
@@ -151,7 +162,7 @@ async function main(options) {
   const output = fs.mkdtempSync(path.join(options.outputDir,'playback-'));
   const write = (filename, data) => fs.writeFileSync(path.join(output,filename),JSON.stringify(data,null,2));
   const log = data => console.log(JSON.stringify({at:new Date().toISOString(),...data}));
-  const browser = await chromium.launch({headless:true});
+  const browser = await chromium.launch(browserOptions);
   let context, csrf = '', expires = 0;
   const results = [];
   try {
@@ -247,7 +258,7 @@ async function main(options) {
     csrf = ''; await browser.close();
   }
 }
-module.exports = {parseArgs,selectQueue,assertIdentity};
+module.exports = {parseArgs,selectQueue,assertIdentity,launchOptions};
 if (require.main === module) {
   try {
     const options = parseArgs(process.argv.slice(2));
