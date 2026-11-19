@@ -5,7 +5,7 @@ import json
 import re
 import unicodedata
 from collections import Counter
-from typing import Annotated, Literal
+from typing import Annotated, Callable, Literal
 
 from pydantic import BeforeValidator
 from trainer.multilingual.glossary import missing_terms, term_pairs
@@ -202,7 +202,8 @@ def parse_translation(raw: str) -> str:
     return payload["text"].strip()
 
 
-def translate_text(pipeline: object, text: str, *, source_language: str, target_language: str) -> str:
+def translate_text(pipeline: object, text: str, *, source_language: str, target_language: str,
+                   on_generated: Callable[[], None] | None = None) -> str:
     if source_language == target_language:
         return text
     method = getattr(pipeline, "translate_copilot_text", None)
@@ -237,4 +238,6 @@ def translate_text(pipeline: object, text: str, *, source_language: str, target_
         raise TranslationUnavailableError("Translation dropped a glossary term")
     if isinstance(cache, TextCache):
         cache.put(key, translated)
+    if on_generated is not None:
+        on_generated()
     return translated

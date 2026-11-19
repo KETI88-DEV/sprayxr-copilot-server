@@ -94,7 +94,8 @@ from trainer.demo_api.reference_order_query import actual_order_intent, current_
 from trainer.demo_api.v1_store import V1Store
 from trainer.demo_api.record_query import BODY_PART, DIRECTION_WORD, FIRST_FIX, WORST_ZONE, RecordAnswer, RecordFacts, answer_record_question, split_parts, ground_generated, has_record_marker, previous_subject
 from trainer.demo_api.viewer_progress import progress_question, viewer_progress_answer
-from trainer.demo_api.query_runtime import generation_slot_for, retrieval_question, select_query_pipeline, translation_pipeline_for
+from trainer.demo_api.query_runtime import (generation_slot_for, query_model_name, retrieval_question,
+                                          safe_model_name, select_query_pipeline, translation_pipeline_for)
 from trainer.demo_api.quick_answer import summarize_query_answer
 from trainer.scripts.answer_semantics import cacheable_candidate
 from trainer.scripts.generation_slot import GENERATION_SLOT  # Legacy slot identity for unconfigured clients.
@@ -216,6 +217,8 @@ def _parse_motion_viewer_context(value: str | None, *, task_type: str) -> dict[s
 
 # analysis(채점·분석 결과를 옮긴 답, 모델 미사용) · documents(문서 검색 + 모델) · conversation(모델 대화)
 ANSWER_SOURCE_HEADER: Final = "X-Copilot-Answer-Source"
+MODEL_HEADER: Final = "X-Copilot-Model"
+TRANSLATION_MODEL_HEADER: Final = "X-Copilot-Translation-Model"
 SUBJECT_HEADER: Final = "X-Copilot-Subject"  # 서버 안에서만 쓴다. 바깥 응답에는 싣지 않는다.
 # 외국어 질문을 한국어로 옮긴 문장(퍼센트 인코딩). 응답 본문은 바꾸지 않는다.
 ANALYSIS_PROMPT_HEADER: Final = "X-Copilot-Analysis-Prompt"
@@ -915,6 +918,7 @@ def _success_response(
     coating_context: dict[str, object] | None = None,
     context_status: str = "not_available",
     generated: bool = False,
+    model_name: str | None = None,
     subject: Mapping[str, Any] | None = None,
 ) -> JSONResponse:
     """`generated`는 모델이 문장을 만든 답에만 준다. 나머지는 채점·분석 결과를 그대로 옮긴 답이다.
@@ -957,6 +961,8 @@ def _success_response(
     )
     source = "documents" if retrieval_used else "conversation" if generated and not degraded else "analysis"
     headers = {ANSWER_SOURCE_HEADER: source}
+    if generated and (name := safe_model_name(model_name)) is not None:
+        headers[MODEL_HEADER] = name
     if subject:
         headers[SUBJECT_HEADER] = json.dumps(subject, ensure_ascii=True, separators=(",", ":"))
     response = JSONResponse(status_code=200, content=envelope.model_dump(mode="json"), headers=headers)
@@ -1219,7 +1225,9 @@ async def _execute_copilot_query(
                                              context_status="available" if found_report else "not_available")
             simulator = {"simulator_context": SIMULATOR_CONTEXT} if wants_simulator_context(query.prompt) else {}
             conversation_engine = conversation_pipeline if conversation_pipeline is not None else planned_pipeline
+            generated_model: str | None = None
             def converse():
+                nonlocal generated_model
                 kwargs = dict(recent_turns=conversation_turns, facts=conversation_facts, response_mode=query.response_mode, **simulator)
                 if query.summarize or knowledge_scope:
                     target = getattr(conversation_engine, "_parent", conversation_engine)
@@ -1235,7 +1243,10 @@ async def _execute_copilot_query(
                 fallback = select_query_pipeline(conversation_engine, "quick")
                 if fallback is not conversation_engine and _DIAGNOSTIC_SCAFFOLD.search(raw):
                     with generation_slot_for(fallback):
-                        return fallback.converse_copilot(query.prompt, **kwargs)
+                        answer = fallback.converse_copilot(query.prompt, **kwargs)
+                    generated_model = query_model_name(fallback)
+                    return answer
+                generated_model = query_model_name(conversation_engine)
                 return raw
             def answer_body(raw):
                 # No document was supplied to this fallback generator. Model
@@ -1247,6 +1258,8 @@ async def _execute_copilot_query(
                 # 자료에 없는 측정값은 내보내지 않는다. 한 번 다시 생성하고, 그래도 남으면 그 부분을 뺀다.
                 answer = drop_ungrounded(answer_body(await to_thread.run_sync(converse)), facts=conversation_facts, prompt=query.prompt, extended=extended)
             answer = _checked_generation(answer, query)
+            if answer in {NO_EVIDENCE_ANSWER, _NO_ANSWER, INSTRUCTION_REFUSAL}:
+                generated_model = None
             if hedged:
                 answer = hedged_answer(answer, quick=query.response_mode == "quick") or NO_EVIDENCE_ANSWER
             if (knowledge_scope and not hedged and has_body(answer) and cacheable_candidate(answer)
@@ -1254,7 +1267,8 @@ async def _execute_copilot_query(
                     and not answer.startswith((GENERAL_KNOWLEDGE_LIMIT, HEDGED_PREFIX, QUICK_HEDGED_PREFIX))):
                 answer = GENERAL_KNOWLEDGE_LIMIT + answer
             return _success_response(query, request_started, answer=answer, retrieval_used=False, generated=True,
-                                     citations=[], context_status="available" if facts or simulator_facts else "not_available")
+                                     citations=[], context_status="available" if facts or simulator_facts else "not_available",
+                                     model_name=generated_model)
         except Exception:
             logger.exception("copilot conversation unavailable request_id=%s", query.request_id)
             return error_response(503, "Conversation engine temporarily unavailable; retry")
@@ -1783,7 +1797,11 @@ async def _execute_copilot_query(
         answer, query, instructions=_document_rules(pipeline), safety=safety, drop_only=mixed is not None,
         evidence=tuple(str(c.get("text", "")) for c in result.get("rag_chunks") or [] if isinstance(c, dict)))
     # 위험한 행동을 해도 되는지 묻는 안전 질문은 한국어 답을 옮기기 전에 검사한다(바꾼 문장도 기존 번역을 지난다).
+    generated_answer = answer
     answer, citations = guard_answer(safety_class if safety else None, answer, list(parsed.citations))
+    generated_model = (metadata.get("generation_model") if isinstance(metadata, Mapping)
+                       and metadata.get("quick_cache_hit") is not True and answer == generated_answer
+                       and parsed.repair_path not in FAILED_REPAIR_PATHS and not review_failed else None)
     if review_failed or parsed.repair_path in FAILED_REPAIR_PATHS:
         citations = []
     if mixed is not None:
@@ -1810,6 +1828,7 @@ async def _execute_copilot_query(
         coating_context=coating_advice_context,
         context_status="available" if session_summary or coating_advice_context or facts else "not_available",
         generated=True,
+        model_name=generated_model,
         subject=mixed.subject if mixed is not None else None,
     )
     return _with_answer_trace(response, result)
@@ -1837,9 +1856,10 @@ async def execute_copilot_query(
         # A per-request binding switches only the HTTP generator, never the shared model.
         pipeline_provider = lambda: select_query_pipeline(original_provider(), query.response_mode)
     pipeline: object | None = None
+    last_translation_model: str | None = None
 
     async def _translate(text: str, source: str, target: str) -> str:
-        nonlocal pipeline
+        nonlocal pipeline, last_translation_model
         if source == target:
             return text
         # These language pairs are more reliable from English than from Korean
@@ -1853,10 +1873,17 @@ async def execute_copilot_query(
         if pipeline is None:
             pipeline = await to_thread.run_sync(pipeline_provider)
         translator = translation_pipeline_for(pipeline, source, target)
-        def guarded() -> str:
+        def guarded() -> tuple[str, str | None]:
+            generated = False
+            def mark_generated() -> None:
+                nonlocal generated
+                generated = True
             with generation_slot_for(translator):
-                return translate_text(translator, text, source_language=source, target_language=target)
-        return await to_thread.run_sync(guarded)
+                translated = translate_text(translator, text, source_language=source, target_language=target,
+                                            on_generated=mark_generated)
+            return translated, query_model_name(translator) if generated else None
+        translated, last_translation_model = await to_thread.run_sync(guarded)
+        return translated
 
     try:
         translation_turns = await to_thread.run_sync(lambda: sequences.recent_query_turns(
@@ -1915,7 +1942,7 @@ async def execute_copilot_query(
             # unchanged for all non-translation answers.
             response = _success_response(analysis_query.model_copy(update={"response_mode": "detailed"}), request_started,
                                          answer=translated_answer, retrieval_used=False, citations=[],
-                                         generated=dictionary is None)
+                                         generated=dictionary is None, model_name=last_translation_model)
             response.headers[ANSWER_SOURCE_HEADER] = answer_source
         else:
             response = await _execute_copilot_query(
@@ -1941,6 +1968,7 @@ async def execute_copilot_query(
                 precomposed=bool(getattr(response, "_copilot_precomposed_answer", False)))
         try:
             if translation_request is None:
+                last_translation_model = None
                 data["answer"] = await _translate(korean_answer, "ko", response_language)
         except Exception:
             # 고정 고압 안전 답만 미리 옮겨 둔 문장으로 낸다(v3.4.5, 운영 우즈베크어 답 번역이 늘 실패). 다른 답은 503.
@@ -1950,6 +1978,7 @@ async def execute_copilot_query(
             logger.warning("copilot answer translation failed; prepared safety answer request_id=%s language=%s",
                            query.request_id, response_language)
             data["answer"] = prepared
+            last_translation_model = None
     except Exception:  # Translation failures never masquerade as a requested-language answer.
         logger.exception("copilot translation failed request_id=%s", query.request_id)
         return error_response(503, "Query translation unavailable; retry or use Korean")
@@ -1992,6 +2021,10 @@ async def execute_copilot_query(
     except Exception:
         logger.exception("copilot query: failed to store dialogue request_id=%s", query.request_id)
     headers = {ANSWER_SOURCE_HEADER: response.headers.get(ANSWER_SOURCE_HEADER, "analysis")}
+    if (model_name := safe_model_name(response.headers.get(MODEL_HEADER))) is not None:
+        headers[MODEL_HEADER] = model_name
+    if last_translation_model is not None and last_translation_model != headers.get(MODEL_HEADER):
+        headers[TRANSLATION_MODEL_HEADER] = last_translation_model
     if isinstance(query_turn_id, int) and not isinstance(query_turn_id, bool):
         headers["X-Copilot-Query-Turn"] = str(query_turn_id)
     if query.language != "ko" and translation_request is None:
@@ -2036,6 +2069,7 @@ def create_copilot_router(
             "  - `use_rag=Y`는 검색을 허용합니다. 적합한 문서 근거가 없으면 대화 맥락을 반영해 LLM이 답합니다. 안전 기준·훈련 실측값은 추측으로 대체하지 않습니다.\n"
             "  - `retrieval_used=true`와 `citations`는 답변에 실제 사용한 유효 NCS 근거를 뜻합니다. 검색을 시도했다는 의미가 아닙니다.\n"
             "  - 응답 헤더 `X-Copilot-Answer-Source`: `documents`(RAG), `conversation`(LLM), `analysis`(분석 안내), `glossary`(용어집). AI 질문 화면에도 실제 출처를 표시합니다.\n"
+            "  - 응답 헤더 `X-Copilot-Model`: 이번 답변을 생성한 실제 모델 식별자입니다. 캐시·규칙·직접 용어집 답변이나 모델을 확인할 수 없는 경우에는 생략합니다. 답변 번역에 다른 모델을 실제 호출하면 `X-Copilot-Translation-Model`로 구분합니다.\n"
             "  - 선택 헤더 `X-Copilot-Conversation`: 채팅 창 식별자(영문·숫자·`._:-`, 최대 128자). 사용자·훈련 세션과 함께 대화 이력을 분리합니다. 생략하면 기본 대화를 사용합니다. 인증 수단은 아닙니다.\n"
             "  - 선택 헤더 `X-Copilot-Source`: `motion-viewer`(3D VIEWER), `assistant-test`(TEST). DB 표시용 출처 힌트이며 훈련 대상 작업자 ID와 별개입니다.\n"
             "- **훈련 전 기준 순서**: `scenario_id`가 확인되고 등록된 기준이 있으면 시퀀스·리포트 없이도 Zone 작업 순서를 안내합니다. 공정이 불명확하면 등록된 스프레이·블라스팅 기준을 구분합니다.\n"

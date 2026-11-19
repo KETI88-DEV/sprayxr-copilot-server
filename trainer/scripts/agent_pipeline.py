@@ -1800,6 +1800,11 @@ class AgentPipeline:
 
         if quick_cache_scope is not None:
             result["metadata"]["quick_cache_hit"] = quick_cache_hit
+        if route == "fast" and not quick_cache_hit:
+            backend = inference_backend if inference_backend is not None else self.model
+            model_name = getattr(getattr(backend, "settings", None), "served_model_name", None)
+            if isinstance(model_name, str):
+                result["metadata"]["generation_model"] = model_name
         if semantic_trace is not None:
             result["metadata"]["answer_trace"] = semantic_trace
             result["metadata"]["answer_review"] = semantic_review
