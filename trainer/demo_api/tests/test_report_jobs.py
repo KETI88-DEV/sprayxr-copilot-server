@@ -166,6 +166,14 @@ def test_missing_persisted_input_fails_cleanly(tmp_path):
     })
     ReportJobs(state, lambda *args, **kwargs: pytest.fail("must not analyze missing input")).run(row.report_id)
     assert state.get_completion(row.report_id).report_status == "failed"
+    client, _ = make_client(state)
+    report = client.get(f"/api/v1/reports/{row.report_id}").json()["data"]["report"]
+    for area in ("coating_report", "sequence_report", "pose_report"):
+        assert report[area]["analysis_status"] == "unavailable"
+        assert report[area]["reason_code"] == "report_input_unavailable"
+        assert "입력 자료" in report[area]["guideline"]
+    assert report["coating_report"]["distribution"] is None
+    assert report["pose_report"]["average_similarity_score"] is None
 
 
 def test_two_processes_do_not_analyze_the_same_report_twice(tmp_path):

@@ -195,12 +195,15 @@ def analyze_session_coating(
     target_thickness_um: float | None = None,
     min_thickness_um: float | None = None,
     max_thickness_um: float | None = None,
+    tool_type: str | None = None,
 ) -> SessionCoating:
     """세션 끝 도막을 구역별로 판정한다(모듈 독스트링의 순서). `bodies`는 시간 순서여야 한다."""
     mode_id = learning_mode_from_scenario(scenario_id)
     if mode_id is None:
         return _unavailable("reference_context_unavailable", "학습 콘텐츠가 아니어서 도막을 판정할 Zone 기준 자료가 없습니다.")
-    process = _process(bodies)
+    # 관절 CSV를 복원하지 못해도 시작 시 확정한 공정과 최종 높이맵은 유효하다.
+    # 옛 세션에는 tool_type이 없으므로 원래 시퀀스 본문의 공정 추론을 유지한다.
+    process = process_from_tool_type(tool_type) or _process(bodies)
     if process == "blasting":
         return _unavailable("coating_not_applicable", "블라스팅 세션은 도막 두께를 판정하지 않습니다.")
     if process is None:

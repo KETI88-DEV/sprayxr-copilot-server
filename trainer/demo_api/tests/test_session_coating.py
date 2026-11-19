@@ -23,6 +23,7 @@ from PIL import Image
 from trainer.demo_api.coating_progress import CoatingProgressEngine
 from trainer.demo_api.copilot_router import create_copilot_router
 from trainer.demo_api.sequence_store import SequenceStore
+from trainer.demo_api.session_analysis import csv_sequences
 from trainer.demo_api.session_coating import analyze_session_coating
 from trainer.demo_api.v1_router import create_v1_router
 from trainer.demo_api.v1_store import V1Store
@@ -189,6 +190,30 @@ def test_worst_zone_carries_adjustment_candidates_without_claiming_a_cause(
     assert worst["cause"] == "원인 후보: 이동 속도 (확정 아님)"
     zone3 = next(zone for zone in result.zones if zone["zone_id"] == "3")
     assert zone3["adjustments"][0]["evidence_kind"] == "quality_rule_candidate"
+
+
+def test_csv_restored_sequences_keep_measured_behavior_for_coating_advice(
+    engine: CoatingProgressEngine, height_map: bytes
+) -> None:
+    """CSV 분사 속도·거리 실측이 있어도 복원 본문의 요약을 비우면 도막 조절 후보가 사라진다."""
+    rows = [
+        {"분사": "On", "Zone ID": "3", "Pelvis Position X (World)": "0",
+         "한길숏건 Position X": str(index), "한길숏건 Position Y": "0", "한길숏건 Position Z": "0",
+         "Speed (Real)": speed, "Distance (Real)": distance, "Ray Texture Map Number": "nan"}
+        for index, (speed, distance) in enumerate((("100", "200"), ("300", "400"), ("nan", "")))
+    ]
+    rows.append({**rows[0], "분사": "Off", "Speed (Real)": "9999", "Distance (Real)": "9999"})
+    bodies = csv_sequences(rows, session_id="3_CSV_BEHAVIOR_1", user_id="u", scenario_id="3")
+
+    result = analyze_session_coating(scenario_id="3", bodies=bodies, engine=engine, height_map=height_map)
+
+    assert bodies[0]["sequence_result"] == {"avg_speed_mms": 200.0, "avg_distance_mm": 300.0}
+    assert bodies[0]["sequence_info"][2]["gun_metrics"]["speed"] is None
+    assert bodies[0]["sequence_info"][0]["gun_metrics"]["raytexmapnum"] is None
+    zone3 = next(zone for zone in result.zones if zone["zone_id"] == "3")
+    assert {item["variable"] for item in zone3["adjustments"]} == {"speed_mm_s", "distance_mm"}
+    assert all(item["evidence_kind"] == "quality_rule_candidate" for item in zone3["adjustments"])
+    assert "확정 아님" in result.report["worst_zones"][0]["cause"]
 
 
 def test_without_a_height_map_later_crops_overwrite_earlier_ones(engine: CoatingProgressEngine, height_map: bytes) -> None:
@@ -446,6 +471,40 @@ def test_session_started_without_a_target_is_reported_as_the_default_target(
     coating = client.get(f"/api/v1/reports/{report_id}").json()["data"]["report"]["coating_report"]
     assert (coating["target_basis"], coating["target_thickness_um"]) == (basis, 160.0)
     assert phrase in coating["guideline"]
+
+
+@pytest.mark.parametrize("tool_type", ["spray_gun", "blasting_gun"])
+def test_complete_uses_the_session_process_when_pose_sequences_are_missing(
+    engine: CoatingProgressEngine, height_map: bytes, tool_type: str
+) -> None:
+    """관절 CSV나 저장 시퀀스가 없어도 시작 때 확정한 공정과 최종 높이맵은 도막 판정에 쓴다."""
+    state = V1Store(":memory:")
+    app = FastAPI()
+    app.include_router(create_v1_router(
+        store=state, sequences=SequenceStore(":memory:"), coating_engine=engine,
+    ))
+    client = TestClient(app)
+    started = client.post("/api/v1/sessions/start", json={
+        "session_id": SESSION, "user_id": "u", "scenario_id": "3",
+        "started_at": "2026-10-15T00:00:00Z", "tool_type": tool_type,
+        "worker": {"skill_level": "novice", "handedness": "right"},
+    })
+    assert started.status_code == 200, started.text
+
+    report_id = _complete_session(client, height_map)
+    report = client.get(f"/api/v1/reports/{report_id}").json()["data"]["report"]
+
+    assert report["report_status"] == "complete"
+    assert report["pose_report"]["analysis_status"] == "unavailable"
+    coating = report["coating_report"]
+    if tool_type == "spray_gun":
+        assert coating["analysis_status"] == "available"
+        assert coating["target_basis"] == "default_target"
+        assert coating["worst_zones"][0]["zone_id"] == "3"
+    else:
+        assert coating["analysis_status"] == "unavailable"
+        assert coating["reason_code"] == "coating_not_applicable"
+        assert coating["distribution"] is None
 
 
 def test_error_analysis_answers_from_the_completed_report(engine: CoatingProgressEngine, height_map: bytes) -> None:

@@ -28,6 +28,7 @@ import csv
 import gzip
 import io
 import logging
+import math
 import statistics
 import zlib
 from collections import Counter
@@ -102,7 +103,8 @@ def _float(row: Mapping[str, str], column: str) -> float | None:
     if value is None or str(value).strip() == "":
         return None
     try:
-        return float(value)
+        number = float(value)
+        return number if math.isfinite(number) else None
     except ValueError:
         return None
 
@@ -180,6 +182,11 @@ def csv_sequences(
     out: list[dict[str, Any]] = []
     for number, (start, end) in enumerate(spray_runs(rows), start=1):
         window = rows[start:end + 1]
+        measured: dict[str, float] = {}
+        for field, column in (("avg_speed_mms", "Speed (Real)"), ("avg_distance_mm", "Distance (Real)")):
+            values = [value for row in window if (value := _float(row, column)) is not None and value >= 0]
+            if values:
+                measured[field] = statistics.mean(values)
         out.append({
             "session_id": session_id,
             "user_id": user_id,
@@ -188,7 +195,7 @@ def csv_sequences(
             "sequence_id": f"SEQ-{number:03d}",
             "sequence_setting": {"tool_type": "spray_gun"},
             "sequence_info": [_frame(row, gun, i) for i, row in enumerate(window, start=1)],
-            "sequence_result": {},
+            "sequence_result": measured,
         })
     return out
 

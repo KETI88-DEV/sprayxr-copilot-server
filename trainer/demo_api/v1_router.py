@@ -179,8 +179,18 @@ def _report(row: Any) -> ReportDetail:
     )
     analysis = payload.get("analysis")
     if row.report_status == "failed":
+        error = analysis.get("error") if isinstance(analysis, dict) else None
+        reason = error if error in {"report_input_unavailable", "session_analysis_failed"} else _ANALYSIS_FAILED
+        guide = ("리포트 입력 자료를 읽지 못했습니다. 업로드 자료와 저장소 상태를 확인해 주세요."
+                 if reason == "report_input_unavailable" else _ANALYSIS_FAILED_GUIDE)
+        detail.report.coating_report = CoatingReport(
+            analysis_status="unavailable", reason_code=reason, guideline=guide
+        )
+        detail.report.sequence_report = SequenceReport(
+            analysis_status="unavailable", reason_code=reason, guideline=guide
+        )
         detail.report.pose_report = PoseReport(
-            analysis_status="unavailable", reason_code=_ANALYSIS_FAILED, guideline=_ANALYSIS_FAILED_GUIDE
+            analysis_status="unavailable", reason_code=reason, guideline=guide
         )
     elif isinstance(analysis, dict):
         if isinstance(analysis.get("pose_report"), dict):
@@ -309,6 +319,7 @@ def create_v1_router(
         target_thickness_um: float | None = None,
         min_thickness_um: float | None = None,
         max_thickness_um: float | None = None,
+        tool_type: str | None = None,
     ) -> SessionCoating | None:
         """세션 끝 도막(`session_coating`). 여기서 터져도 자세·순서 결과는 남긴다 — 리포트를 failed로 만들지 않는다."""
         if coating_engine is None:
@@ -319,6 +330,7 @@ def create_v1_router(
                 height_map=height_map, height_map_name=height_map_name,
                 target_thickness_um=target_thickness_um,
                 min_thickness_um=min_thickness_um, max_thickness_um=max_thickness_um,
+                tool_type=tool_type,
             )
         except Exception:  # noqa: BLE001 - 도막만 unavailable 로 낸다.
             logger.exception("session coating analysis failed scenario=%s", scenario_id)
@@ -350,11 +362,13 @@ def create_v1_router(
                 SequenceReport(analysis_status="unavailable", reason_code=_FLOW_MISSING, guideline=_ENGINE_MISSING).model_dump(mode="json")
             )
             pose_report = result.pose_report()
+            session = state.get_session(session_id)
             coating = _coating(
                 result.source_bodies, scenario_id=scenario_id,
                 height_map=height_map, height_map_name=height_map_name,
                 target_thickness_um=target_thickness_um,
-                **coating_assessment.session_limits(state.get_session(session_id)),
+                **coating_assessment.session_limits(session),
+                tool_type=session.tool_type if session is not None else None,
             )
             coating_report = coating.report if coating is not None else None
             state.finish_completion(
