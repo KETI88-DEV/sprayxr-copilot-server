@@ -124,3 +124,14 @@ def test_native_generation_metadata_preserves_the_backend_and_omits_cache_hits(m
     cached = pipeline.run(**kwargs)
     assert first["metadata"].get("generation_model") == expected
     assert "generation_model" not in cached["metadata"]
+
+
+def test_evaluation_pipeline_without_a_model_attribute_keeps_its_response(monkeypatch):
+    from trainer.demo_api.tests.test_query_quick_latency import _pipeline
+    pipeline, _, _, _ = _pipeline(monkeypatch)
+    del pipeline.model
+
+    result = pipeline.run(instruction="평가용 도장 분사 거리?", force_route="fast")
+
+    assert result["response"].startswith("[답변]")
+    assert "generation_model" not in result["metadata"]
