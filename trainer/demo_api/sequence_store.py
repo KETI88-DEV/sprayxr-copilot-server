@@ -20,6 +20,7 @@ import re
 import sqlite3
 import threading
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Final
@@ -130,9 +131,13 @@ class SequenceStore:
             self._conn.execute(_QUERY_TURNS_INDEX)
             self._conn.execute("""CREATE TABLE IF NOT EXISTS sequence_analysis_results (
                 session_key TEXT NOT NULL, sequence_id TEXT NOT NULL,
-                analysis_key TEXT NOT NULL, result TEXT NOT NULL,
+                analysis_key TEXT NOT NULL, result TEXT NOT NULL, created_at TEXT,
                 PRIMARY KEY (session_key, sequence_id, analysis_key)
             )""")
+            analysis_columns = {row[1] for row in self._conn.execute('PRAGMA table_info(sequence_analysis_results)')}
+            if 'created_at' not in analysis_columns:
+                # Legacy creation times were never recorded; keep them NULL.
+                self._conn.execute('ALTER TABLE sequence_analysis_results ADD COLUMN created_at TEXT')
             _add_missing_columns(self._conn)
 
     @staticmethod
@@ -265,8 +270,8 @@ class SequenceStore:
     def save_analysis(self, *, session_key: str, sequence_id: str, analysis_key: str, result: dict[str, Any]) -> None:
         with self._guard, self._conn:
             self._conn.execute(
-                "INSERT OR IGNORE INTO sequence_analysis_results VALUES (?, ?, ?, ?)",
-                (session_key, sequence_id, analysis_key, json.dumps(result, ensure_ascii=False)),
+                "INSERT OR IGNORE INTO sequence_analysis_results (session_key,sequence_id,analysis_key,result,created_at) VALUES (?, ?, ?, ?, ?)",
+                (session_key, sequence_id, analysis_key, json.dumps(result, ensure_ascii=False), datetime.now(timezone.utc).isoformat()),
             )
 
     def record_query_turn(

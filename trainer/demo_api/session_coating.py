@@ -3,7 +3,8 @@
 세션이 끝났을 때의 두께를 구역마다 목표 두께에 대고 판정한다. 기준은 PR #8 도막 기준이고 계산은
 `coating_assessment` 어댑터가 한다: 보정 두께로 재고, 칠한 곳의 평균으로 저도막·정상·과도막을 가른다(경계 값은
 어댑터에만 있다). 세션이 목표를 명시하지 않았으면 기본 목표로 판정하고 `target_basis="default_target"`으로 밝힌다.
-구역 경계는 TSB 라벨맵이고, 판정할 구역 목록은 프로필에서 얻는다.
+구역 경계와 판정할 구역 목록은 TSB 공식 라벨맵이다. 표면이 있는 면의 모든 공식 구역을 판정하며,
+전문가 프로필은 별도의 참고 비교에만 사용한다.
 
 두께를 얻는 순서:
 1. complete의 `height_map_image` — 세션 끝 누적 두께로 읽는다(회차 합산 없음). 파일명의 `MapNN`이 면 번호(없으면 1).
@@ -195,12 +196,15 @@ def analyze_session_coating(
     target_thickness_um: float | None = None,
     min_thickness_um: float | None = None,
     max_thickness_um: float | None = None,
+    tool_type: str | None = None,
 ) -> SessionCoating:
     """세션 끝 도막을 구역별로 판정한다(모듈 독스트링의 순서). `bodies`는 시간 순서여야 한다."""
     mode_id = learning_mode_from_scenario(scenario_id)
     if mode_id is None:
         return _unavailable("reference_context_unavailable", "학습 콘텐츠가 아니어서 도막을 판정할 Zone 기준 자료가 없습니다.")
-    process = _process(bodies)
+    # 관절 CSV를 복원하지 못해도 시작 시 확정한 공정과 최종 높이맵은 유효하다.
+    # 옛 세션에는 tool_type이 없으므로 원래 시퀀스 본문의 공정 추론을 유지한다.
+    process = process_from_tool_type(tool_type) or _process(bodies)
     if process == "blasting":
         return _unavailable("coating_not_applicable", "블라스팅 세션은 도막 두께를 판정하지 않습니다.")
     if process is None:
@@ -223,7 +227,7 @@ def analyze_session_coating(
     )
     if not judgments:
         return _unavailable(
-            reason or "coating_reference_unavailable", "이 콘텐츠의 Zone 기준 자료가 없어 도막을 판정하지 못했습니다."
+            reason or "zone_reference_unavailable", "이 콘텐츠의 공식 Zone 자료가 없어 도막을 판정하지 못했습니다."
         )
 
     zones = [

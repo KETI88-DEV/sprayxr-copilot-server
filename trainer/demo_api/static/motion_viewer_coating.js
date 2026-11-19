@@ -312,6 +312,18 @@
 
   function renderCoatingZone() {
     zoneLabel.textContent = zoneTitle();
+    const unsupported = payload?.process && payload.process !== 'spray';
+    for (const control of [basisTarget, basisExpert, view2d, view3d, scaleRelative]) if (control) control.disabled = Boolean(unsupported);
+    if (unsupported) {
+      const label = payload.process_label || {blasting: '블라스팅', grinding: '그라인딩'}[payload.process] || payload.process;
+      const message = `${label}에는 도막 두께 판정이 없습니다.`;
+      status.textContent = message; status.hidden = false;
+      geometryNote.textContent = '스프레이 도막 기준을 이 공정에 적용하지 않습니다.'; geometryNote.hidden = false;
+      scaleAbsolute.disabled = true; legend.textContent = '도막 색상 척도 없음'; scaleNote.textContent = '이 공정의 표면 품질 지표는 도막 두께와 별도로 확인해야 합니다.';
+      if (targetPanel) { targetPanel.textContent = message; targetPanel.hidden = false; }
+      const {width, height} = fitCanvas(); drawEmpty(width, height, message);
+      return;
+    }
     if (hasBasis) {
       showBasis();
       if (basis === 'target') { renderTarget(); return; }

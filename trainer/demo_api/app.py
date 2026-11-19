@@ -43,6 +43,7 @@ from trainer.demo_api.anomaly_stream import AnomalyBroadcaster
 from trainer.demo_api.feedback import create_feedback_router
 from trainer.demo_api.sequence_analysis import SequenceAnalysisEngine
 from trainer.demo_api.sequence_store import SequenceStore
+from trainer.demo_api.page_access import PageAccessStore, PageAccessMiddleware
 from trainer.demo_api.engine_gateway import EngineGateway, ExplanationGateway
 from trainer.demo_api.engine_store import CorrectedStore
 from trainer.demo_api.engine_worker import CorrectedOutboxWorker
@@ -656,6 +657,9 @@ def create_app(
         )
 
     app.state.monitor_recorder = recorder
+    page_access_store = PageAccessStore.for_database(Path(SequenceStore._default_path()))
+    app.state.page_access_store = page_access_store
+    app.add_middleware(PageAccessMiddleware, store=page_access_store)
     app.state.sim_session_store = store
     # v2.5 이전 데모 인터페이스. 계약의 /sessions/*·/telemetry/sequence 가 대응한다.
     app.include_router(create_simulator_router(recorder, store, resolver), include_in_schema=False)

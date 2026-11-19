@@ -164,18 +164,24 @@ def render_training_data() -> str:
     """Return a shell populated from the generated-artifact API in the browser."""
     return r"""
 <section id="training-data-root" aria-labelledby="td-page-title">
+  <link rel="stylesheet" href="/admin/assets/training_verification.css">
   <header class="td-header">
     <div><div class="td-eyebrow">TRAINING DATASET</div><h1 id="td-page-title">학습 데이터</h1>
       <p class="td-description">훈련 기록 CSV와 연결된 높이맵 텍스처를 세션별 JSON으로 변환한 데이터입니다.<br>작업자와 학습모드별 구성을 살펴보고, 각 데이터의 맵 분석과 생성 JSON을 확인합니다.<br>호출 채널: 파일 수집 · 호출 IP: 해당 없음</p>
     </div>
-    <div class="td-header-meta">취득 기간<strong id="td-acquisition-range">불러오는 중</strong><span id="td-acquisition-note">현재 조회 데이터 기준</span></div>
+    <div id="td-library-meta" class="td-header-meta">취득 기간<strong id="td-acquisition-range">불러오는 중</strong><span id="td-acquisition-note">현재 조회 데이터 기준</span></div>
   </header>
 
+  <div class="td-view-tabs" role="tablist" aria-label="학습 데이터 보기">
+    <button id="td-library-tab" type="button" role="tab" aria-controls="td-library-panel" aria-selected="true">학습 데이터</button>
+    <button id="td-verification-tab" type="button" role="tab" aria-controls="tv-root" aria-selected="false" tabindex="-1">구축 검증</button>
+  </div>
+  <div id="td-library-panel" role="tabpanel" aria-labelledby="td-library-tab">
   <div class="td-kpis" aria-label="학습 데이터 현황">
     <div class="td-kpi"><span>전체 데이터</span><strong id="td-kpi-total">—</strong><small>CSV 세션 기준</small></div>
     <div class="td-kpi td-highlight"><span>조회 데이터</span><strong id="td-kpi-filtered">—</strong><small>현재 필터에 해당</small></div>
     <div class="td-kpi"><span>작업자 그룹</span><strong id="td-kpi-workers">—</strong><small>이름 미확인은 1개 그룹</small></div>
-    <div class="td-kpi td-good"><span>품질 완료</span><strong id="td-kpi-complete">—</strong><small>변환 검증 기준</small></div>
+    <div class="td-kpi td-good"><span>품질 완료 등록</span><strong id="td-kpi-complete">—</strong><small>변환 품질 기준 · 재생 검증 별도</small></div>
     <div class="td-kpi td-review"><span>확인 필요</span><strong id="td-kpi-review">—</strong><small id="td-kpi-review-note">품질 검토 대상</small></div>
     <div class="td-kpi"><span>높이맵 텍스처</span><strong id="td-kpi-maps">—</strong><small>현재 조회 결과</small></div>
   </div>
@@ -208,6 +214,25 @@ def render_training_data() -> str:
     </div>
     <p class="td-footer-note">취득일은 원본 자료의 날짜 근거를 기준으로 연월일만 표시합니다. 근거가 없는 기록은 ‘미기록’으로 표시합니다.<br>이 화면은 학습용 데이터의 생성·검증 결과이며, 모델 학습 완료 여부를 의미하지 않습니다.</p>
   </section>
+  </div>
+
+  <section id="tv-root" role="tabpanel" aria-labelledby="td-verification-tab" hidden>
+    <div class="tv-intro"><div><h2>구축 검증</h2><p>품질 완료로 등록된 자료와 실제 재생까지 확인한 유효 구축 자료를 구분합니다.<br>검증 통과 건수는 모델 학습 완료 건수가 아닙니다.</p><p id="tv-run"></p></div><div class="tv-actions"><a href="/admin/api/training-verification/export.json">결과 JSON ↓</a><a href="/admin/api/training-verification/export.csv">결과 CSV ↓</a><a id="tv-login" href="/admin/manage">관리자 로그인</a><button id="tv-start" type="button" hidden>JSON·원천 점검 시작</button></div></div>
+    <div class="tv-definition"><strong>집계 단위와 확인 범위</strong><p id="tv-definition">동일 공정의 훈련 기록 1회에서 가공한 JSON과 연결 모션 자료를 1건으로 집계합니다.</p><p id="tv-scope">JSON·원천 연결과 실제 브라우저 시작·중간·끝 구간 재생을 확인합니다. 전체 훈련 시간 연속 재생이나 라벨 정확도·AI 성능 시험을 뜻하지 않습니다.</p><p>유효 구축 = JSON 통과 + 연결 원천 통과 + 실제 재생 통과 − 중복 자료 · 목표 기준 1,000건</p></div>
+    <p id="tv-stale" class="tv-stale" role="status" hidden>등록 목록이 검증 당시와 달라졌습니다. 이전 검증 결과는 현재 유효 구축 건수에 포함하지 않습니다.</p>
+    <div class="tv-kpis" aria-label="구축 검증 현황">
+      <div class="tv-kpi"><span>품질 완료 등록</span><strong id="tv-kpi-registered">—</strong></div>
+      <div class="tv-kpi"><span>JSON 통과</span><strong id="tv-kpi-json-passed">—</strong></div>
+      <div class="tv-kpi"><span>연결 원천 통과</span><strong id="tv-kpi-source-passed">—</strong></div>
+      <div class="tv-kpi"><span>실제 재생 통과</span><strong id="tv-kpi-browser-passed">—</strong></div>
+      <div class="tv-kpi tv-valid"><span>유효 구축</span><strong id="tv-kpi-valid">—</strong></div>
+      <div class="tv-kpi"><span>재생 미검증</span><strong id="tv-kpi-pending">—</strong></div>
+    </div>
+    <div class="td-panel tv-progress-box"><div class="tv-phase-line"><strong id="tv-phase">검증 상태 확인 중</strong><span id="tv-goal">기준 1,000건</span></div><progress id="tv-progress" max="1" value="0" aria-label="실제 브라우저 재생 확인 진행률"></progress><p id="tv-progress-text" role="status" aria-live="polite">등록 건수와 검증 통과 건수를 별도로 확인합니다.</p></div>
+    <div class="td-panel tv-filters" role="search" aria-label="구축 검증 필터"><div class="tv-filter"><label for="tv-status-filter">검증 상태</label><select id="tv-status-filter"><option value="all">전체 상태</option><option value="passed">전체 단계 통과</option><option value="failed">실패 포함</option><option value="pending">미검증 포함</option><option value="duplicates">중복 제외</option></select></div><div class="tv-filter"><label for="tv-process-filter">공정</label><select id="tv-process-filter"><option value="all">전체 공정</option><option value="spray">스프레이</option><option value="blasting">블라스팅</option><option value="grinding">그라인딩</option></select></div><div class="tv-filter tv-search-filter"><label for="tv-search">기록·작업자 검색</label><input id="tv-search" type="search" maxlength="120" placeholder="데이터명, 작업자, 기록 ID"></div><button id="tv-refresh" type="button" class="td-button-secondary">새로고침</button></div>
+    <div id="tv-table" class="td-panel" aria-busy="false"><div class="tv-table-scroll"><table aria-label="기록별 구축 검증 결과"><thead><tr><th scope="col">기록</th><th scope="col">작업자</th><th scope="col">공정·모드</th><th scope="col">JSON</th><th scope="col">연결 원천</th><th scope="col">실제 재생</th><th scope="col">실패·제외 사유</th><th scope="col">자료 확인</th></tr></thead><tbody id="tv-items"><tr><td colspan="8">구축 검증 결과를 불러오는 중입니다.</td></tr></tbody></table></div><div class="tv-pagination"><span id="tv-pagination"></span><div><button id="tv-prev" type="button" class="td-button-secondary" disabled>← 이전</button><button id="tv-next" type="button" class="td-button-secondary" disabled>다음 →</button></div></div></div>
+    <p id="tv-message" role="status" aria-live="polite"></p><p class="td-help">실제 브라우저 재생은 운영 검증에서 별도로 수행합니다. 결과가 반영되기 전에는 미검증으로 표시합니다. 관리자 점검은 현재 등록 목록으로 새 검증 회차를 시작합니다.</p>
+  </section>
 
   <dialog id="td-detail" class="td-modal" aria-labelledby="td-detail-title" aria-describedby="td-detail-description">
     <header class="td-modal-head"><div><div class="td-eyebrow">DATASET DETAIL</div><h2 id="td-detail-title">학습 데이터 상세</h2><p id="td-detail-description" class="td-help">원본 출처, 연결 맵과 생성된 JSON을 확인합니다.</p><p class="td-help">호출 채널: 파일 수집 · 호출 IP: 해당 없음</p></div><button type="button" id="td-detail-close" class="td-close" aria-label="상세 창 닫기">×</button></header>
@@ -215,4 +240,5 @@ def render_training_data() -> str:
   </dialog>
 </section>
 <script src="/admin/assets/training_data.js" defer></script>
+<script src="/admin/assets/training_verification.js" defer></script>
 """

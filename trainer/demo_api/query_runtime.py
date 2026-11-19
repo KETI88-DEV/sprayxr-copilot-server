@@ -10,6 +10,19 @@ from typing import Any, Mapping
 from trainer.scripts.generation_slot import GENERATION_SLOT, QUICK_GENERATION_SLOT
 
 
+def safe_model_name(value: Any) -> str | None:
+    """Only a short served-model identifier may cross the HTTP header boundary."""
+    if (isinstance(value, str) and len(value) <= 128
+            and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]*(?:/[A-Za-z0-9][A-Za-z0-9._:-]*)?", value)):
+        return value
+    return None
+
+
+def query_model_name(pipeline: Any) -> str | None:
+    settings = getattr(getattr(pipeline, "model", None), "settings", None)
+    return safe_model_name(getattr(settings, "served_model_name", None))
+
+
 @dataclass(frozen=True)
 class QuickRuntimeConfig:
     base_url: str

@@ -2049,7 +2049,7 @@ button{cursor:pointer;font-weight:700}.primary{background:#3157d5;border-color:#
 <div><label for="worker">작업자</label><select id="worker" class="select"></select></div>
 <div><label for="process">훈련 종류</label><select id="process" class="select"></select></div>
 <div><label for="mode">학습모드</label><select id="mode" class="select"></select></div>
-<div><label for="session">재생할 기록</label><select id="session" class="select" aria-describedby="recordCacheLegend"></select><small id="recordCacheLegend" class="record-cache-legend">↓ 불러오기 필요 · <span>✓ 이 창에 보관됨</span> · 선택 시 원본 변경 확인</small></div>
+<div><label for="session">재생할 기록</label><select id="session" class="select" aria-describedby="recordCacheLegend"></select><small id="recordCacheLegend" class="record-cache-legend">↓ 불러오기 필요 · <span>✓ 빠른 로딩</span> · 선택 시 원본 변경 확인</small></div>
 </div></section>
 <main class="workspace"><aside class="evaluation-side"><div class="viewer-tools">
 <label for="pointSize">흰색 포인트 크기 · <span id="pointSizeValue">1.5 px</span></label><input id="pointSize" type="range" min="0.5" max="5" step="0.25" value="1.5">
@@ -2065,17 +2065,23 @@ button{cursor:pointer;font-weight:700}.primary{background:#3157d5;border-color:#
 const $=id=>document.getElementById(id); const canvas=$('canvas'),ctx=canvas.getContext('2d'),skeletonCanvas=$('skeletonCanvas'),skeletonCtx=skeletonCanvas.getContext('2d');
 const ZONE_COLORS=[null,'#FF0000','#00FF00','#0000FF','#00FFFF','#FF00FF','#FFFF00','#FF8000','#FF0080','#00FF80','#80FF00','#0080FF','#8000FF','#FF8080','#80FF80','#8080FF','#800000','#008000','#000080','#80FFFF','#FF80FF','#FFFF80','#008080','#800080','#808000','#FFBF80','#FF80BF','#BFFF80','#80FFBF','#BF80FF','#80BFFF','#FF40BF','#FFBF40','#40FFBF','#BFFF40','#40BFFF','#BF40FF','#40BFBF','#BF40BF','#BFBF40'];
 let catalog=null,data=null,index=0,playheadSeconds=0,playing=false,last=0,yaw=-0.55,pitch=0.1,zoom=175,panX=0,panY=0,viewCenter=null,drag=null,loadGeneration=0,skeletonYaw=0;
+let renderedFrameIndex=null,rendererFrameCount=0;
+function playbackProbe(){const contextLost=Boolean(ctx?.isContextLost?.());return{datasetId:data?.dataset_id||null,sessionId:data?.selected_session_id||null,workerId:$('worker').value,process:$('process').value,modeId:$('mode').value,framesLoaded:data?.frames?.length||0,currentTime:playheadSeconds,durationSeconds:data?.duration_seconds||0,renderedFrameIndex,rendererFrameCount,playing,renderer:'canvas-2d',contextLost,rendererReady:Boolean(ctx)&&!contextLost&&renderedFrameIndex!==null,canvasWidth:canvas.width,canvasHeight:canvas.height,loadState:$('status').dataset.loadState||'idle'}}
+window.__motionPlaybackProbe=playbackProbe;
 async function json(url,options={}){const r=await fetch(url,{...options,cache:'no-store'});if(!r.ok)throw new Error((await r.json()).detail||'데이터를 읽을 수 없습니다.');return r.json()}
 const payloadCache=MotionViewerCache.create({fetchJson:json,onChange:()=>queueMicrotask(refreshSessionLabels)});
 function motionUrl(session=$('session').value){return '/motion-viewer/api/motion?'+new URLSearchParams({worker_id:$('worker').value,process:$('process').value,mode_id:$('mode').value,session_id:session})}
-function refreshSessionLabels(){if(!catalog)return;const worker=currentWorker(),mode=worker&&currentMode();if(!mode)return;for(const item of $('session').options){const label=item.value==='representative'?`${worker.display_name} · 전체 기록 종합 기준`:`${worker.display_name} · ${mode.session_labels?.[item.value]||item.value}`;const ready=payloadCache.has(motionUrl(item.value));item.textContent=(ready?'✓ ':'↓ ')+label+(ready?' · 빠른 로딩 (이 창)':'');item.style.color=ready?'#34d399':'';item.dataset.cacheReady=String(ready);item.title=ready?'✓ 이 창에 보관된 재생 자료입니다. 선택할 때 원본 변경 여부를 다시 확인합니다.':'↓ 이 창에 재생 자료가 없어 불러오기가 필요합니다.'}}
+function refreshSessionLabels(){if(!catalog)return;const worker=currentWorker(),mode=worker&&currentMode();if(!mode)return;for(const item of $('session').options){const label=item.value==='representative'?`${worker.display_name} · 전문가 종합 기준`:`${worker.display_name} · ${mode.session_labels?.[item.value]||item.value}`;const ready=payloadCache.has(motionUrl(item.value));item.textContent=(ready?'✓ ':'↓ ')+label+(ready?' · 빠른 로딩':'');item.style.color=ready?'#34d399':'';item.dataset.cacheReady=String(ready);item.title=ready?'✓ 보관된 재생 자료입니다. 선택할 때 원본 변경 여부를 다시 확인합니다.':'↓ 재생 자료를 불러와야 합니다.'}}
 function option(value,text){const o=document.createElement('option');o.value=value;o.textContent=text;return o}
 function currentWorker(){return catalog.workers.find(worker=>worker.worker_id===$('worker').value)}
 function currentProcess(){return currentWorker().processes.find(p=>p.process===$('process').value)}
 function currentMode(){return currentProcess().modes.find(m=>String(m.mode_id)===$('mode').value)}
-function fillProcesses(){const worker=currentWorker();$('process').replaceChildren(...worker.processes.map(p=>option(p.process,p.label)));fillModes()}
-function fillModes(){const p=currentProcess();$('mode').replaceChildren(...p.modes.map(m=>option(m.mode_id,`학습모드 ${m.mode_id} · ${m.session_count}회`)));const four=p.modes.find(m=>m.mode_id===4);if(four)$('mode').value='4';fillSessions()}
-function fillSessions(){const worker=currentWorker(),m=currentMode();$('session').replaceChildren(option('representative',`${worker.display_name} · 전체 기록 종합 기준`),...m.sessions.map(s=>option(s,`${worker.display_name} · ${m.session_labels?.[s]||s}`)));refreshSessionLabels();loadMotion()}
+function fillWorkers(selected=''){const workers=[...catalog.workers].sort((a,b)=>Number(b.worker_id==='jeon_hyeonggi')-Number(a.worker_id==='jeon_hyeonggi')||Number(b.role==='expert')-Number(a.role==='expert'));$('worker').replaceChildren(...workers.map(worker=>{const item=option(worker.worker_id,`${worker.display_name}${worker.role==='expert'?' · 전문가 기준':''}`);item.style.color=worker.role==='expert'?'#f8d36d':'#c5d2e5';return item}));if(workers.some(worker=>worker.worker_id===selected))$('worker').value=selected;const expert=currentWorker()?.role==='expert';$('worker').style.color=expert?'#f8d36d':'';$('worker').dataset.referenceRole=expert?'expert':'trainee';$('worker').title=expert?'전문가 기준 작업자':'선택한 작업자의 실제 훈련 기록'}
+function fillProcesses(selected={}){const worker=currentWorker();if(!worker)throw new Error('재생할 작업자 기록이 없습니다.');const expert=worker.role==='expert';$('worker').style.color=expert?'#f8d36d':'';$('worker').dataset.referenceRole=expert?'expert':'trainee';$('worker').title=expert?'전문가 기준 작업자':'선택한 작업자의 실제 훈련 기록';$('process').replaceChildren(...worker.processes.map(p=>option(p.process,p.label)));if(worker.processes.some(p=>p.process===selected.process))$('process').value=selected.process;fillModes(selected)}
+function fillModes(selected={}){const p=currentProcess();$('mode').replaceChildren(...p.modes.map(m=>option(m.mode_id,`학습모드 ${m.mode_id} · ${m.session_count}회`)));const chosen=p.modes.find(m=>m.mode_id===Number(selected.mode_id))||p.modes.find(m=>m.mode_id===4);if(chosen)$('mode').value=String(chosen.mode_id);fillSessions(selected.session_id)}
+function sessionOptions(worker,mode){return[...(worker.role==='expert'?[option('representative',`${worker.display_name} · 전문가 종합 기준`)]:[]),...mode.sessions.map(s=>option(s,`${worker.display_name} · ${mode.session_labels?.[s]||s}`))]}
+function fillSessions(selected=''){const worker=currentWorker(),m=currentMode();$('session').replaceChildren(...sessionOptions(worker,m));if(m.sessions.includes(selected)||(selected==='representative'&&worker.role==='expert'))$('session').value=selected;refreshSessionLabels();loadMotion()}
+function applySelection(selected={}){if(selected.dataset_id){const worker=catalog.workers.find(row=>row.worker_id===selected.worker_id),process=worker?.processes.find(row=>row.process===selected.process),mode=process?.modes.find(row=>row.mode_id===Number(selected.mode_id));if(!mode||!mode.sessions.includes(selected.session_id))throw new Error('선택한 학습 데이터가 재생 목록과 일치하지 않습니다. 새로고침해 주세요.')}fillWorkers(selected.worker_id);fillProcesses(selected)}
 function zoneKey(mapNum,zoneId){return mapNum!=null&&Number(zoneId)>0?`${mapNum}:${zoneId}`:null}
 function metricRow(label,value){const row=document.createElement('span');row.className='zone-metric';const name=document.createElement('span'),metric=document.createElement('b');name.textContent=label;metric.textContent=value;row.append(name,metric);return row}
 function directionName(value){return({horizontal:'수평',vertical:'수직',diagonal:'대각선',curved_irregular:'비정형'})[value]||'자료 없음'}
@@ -2096,7 +2102,7 @@ function setLoading(active){$('loading').hidden=!active;canvas.setAttribute('ari
 function setLoadProgress(value){const label=$('loadingStage'),count=$('loadingUnits'),bar=$('loadingProgress');if(!label||!count||!bar)return;label.textContent=value.stage_label||'기록을 불러오는 중';const unit=({rows:'행',records:'기록',zones:'Zone'})[value.unit]||'',done=Number.isFinite(value.completed)?value.completed:0,known=Number.isFinite(value.total)&&value.total>=0;count.textContent=unit?(known?`${done.toLocaleString()} / ${value.total.toLocaleString()} ${unit}`:`${done.toLocaleString()} ${unit} 처리 · 총량 확인 중`):value.status==='completed'?'완료':'진행 중';if(known&&value.total>0){bar.max=value.total;bar.value=done}else if(value.phase_complete||value.status==='completed'){bar.max=1;bar.value=1}else bar.removeAttribute('value');bar.setAttribute('aria-label',label.textContent+(count.textContent?' · '+count.textContent:''));$('status').textContent=label.textContent+' 중입니다.'}
 function averageCameraForward(payload){const vectors=(payload&&payload.frames||[]).map(frame=>frame.camera_forward).filter(vector=>Array.isArray(vector)&&vector.length===3);if(!vectors.length)return null;return unit(vectors.reduce((sum,vector)=>add(sum,vector),[0,0,0]),[0,0,1])}
 function resetViewToCamera(payload=data){const first=payload&&payload.frames&&payload.frames[0],points=payload&&payload.reference_surface&&payload.reference_surface.points||[],fallback=points.length?points.reduce((sum,item)=>add(sum,item.point),[0,0,0]).map(value=>value/points.length):[0,0,0],forward=averageCameraForward(payload);viewCenter=first&&((first.tracked||{}).head||(first.joints||{}).Head||(first.joints||{}).Pelvis)||fallback;panX=0;panY=0;if(forward){yaw=Math.atan2(forward[0],forward[2]);pitch=Math.asin(Math.max(-.95,Math.min(.95,forward[1])))}else{yaw=-.55;pitch=.1}zoom=175}
-async function loadMotion(){const generation=++loadGeneration;activeLoadController?.abort();const controller=new AbortController();activeLoadController=controller;playing=false;last=0;displayedZoneKey=null;selectedDetailKey='all';zoneDetailMode='auto';referencePreview=false;$('play').textContent='재생';setLoading(true);setLoadProgress({stage_label:'모션과 통계 범위 준비',completed:0,total:null});try{const incoming=await payloadCache.load(motionUrl(),{signal:controller.signal,onProgress:value=>{if(generation===loadGeneration&&!controller.signal.aborted)setLoadProgress(value)}});if(generation!==loadGeneration||controller.signal.aborted)return;data=incoming;index=0;playheadSeconds=0;resetViewToCamera(incoming);$('timeline').max=Math.max(0,data.frames.length-1);$('timeline').value=0;$('sessionCount').textContent=`${data.sampled_session_count}회`;$('duration').textContent=`${data.duration_seconds.toFixed(1)}초`;$('overlayTitle').textContent=`${data.worker.display_name} · ${data.process_label} · 학습모드 ${data.mode_id}`;renderZoneOrder();dispatchEvent(new CustomEvent('motion-viewer-data',{detail:incoming}));draw();setLoadProgress({status:'completed',stage_label:'장면 준비 완료',completed:1,total:1,unit:'records'});await new Promise(resolve=>requestAnimationFrame(resolve));if(generation!==loadGeneration)return;if(controller.signal.aborted)throw new DOMException('Load cancelled','AbortError');$('status').dataset.loadState='ready';$('status').textContent=`${data.source_session_id||data.selected_session_id} 준비 완료`}catch(e){if(generation!==loadGeneration)return;data=null;$('status').dataset.loadState=e.name==='AbortError'?'cancelled':'failed';$('status').textContent=e.name==='AbortError'?'불러오기를 취소했습니다.':e.message;draw()}finally{if(generation===loadGeneration){setLoading(false);activeLoadController=null}}}
+async function loadMotion(){const generation=++loadGeneration;activeLoadController?.abort();const controller=new AbortController();activeLoadController=controller;playing=false;last=0;renderedFrameIndex=null;rendererFrameCount=0;data=null;displayedZoneKey=null;selectedDetailKey='all';zoneDetailMode='auto';referencePreview=false;$('play').textContent='재생';setLoading(true);setLoadProgress({stage_label:'모션과 통계 범위 준비',completed:0,total:null});try{const incoming=await payloadCache.load(motionUrl(),{signal:controller.signal,onProgress:value=>{if(generation===loadGeneration&&!controller.signal.aborted)setLoadProgress(value)}});if(generation!==loadGeneration||controller.signal.aborted)return;data=incoming;index=0;playheadSeconds=0;resetViewToCamera(incoming);$('timeline').max=Math.max(0,data.frames.length-1);$('timeline').value=0;$('sessionCount').textContent=`${data.sampled_session_count}회`;$('duration').textContent=`${data.duration_seconds.toFixed(1)}초`;$('overlayTitle').textContent=`${data.worker.display_name} · ${data.process_label} · 학습모드 ${data.mode_id}`;renderZoneOrder();dispatchEvent(new CustomEvent('motion-viewer-data',{detail:incoming}));draw();setLoadProgress({status:'completed',stage_label:'장면 준비 완료',completed:1,total:1,unit:'records'});await new Promise(resolve=>requestAnimationFrame(resolve));if(generation!==loadGeneration)return;if(controller.signal.aborted)throw new DOMException('Load cancelled','AbortError');$('status').dataset.loadState='ready';$('status').textContent=`${data.source_session_id||data.selected_session_id} 준비 완료`}catch(e){if(generation!==loadGeneration)return;data=null;renderedFrameIndex=null;$('status').dataset.loadState=e.name==='AbortError'?'cancelled':'failed';$('status').textContent=e.name==='AbortError'?'불러오기를 취소했습니다.':e.message;draw()}finally{if(generation===loadGeneration){setLoading(false);activeLoadController=null}}}
 function resize(){const dpr=devicePixelRatio||1,rect=canvas.getBoundingClientRect(),skeletonRect=skeletonCanvas.getBoundingClientRect();canvas.width=Math.round(rect.width*dpr);canvas.height=Math.round(rect.height*dpr);ctx.setTransform(dpr,0,0,dpr,0,0);if(skeletonRect.width){skeletonCanvas.width=Math.round(skeletonRect.width*dpr);skeletonCanvas.height=Math.round(skeletonRect.height*dpr);skeletonCtx.setTransform(dpr,0,0,dpr,0,0)}draw()}
 function transform(point,center){let x=point[0]-center[0],y=point[1]-center[1],z=point[2]-center[2];let cy=Math.cos(yaw),sy=Math.sin(yaw),x1=x*cy-z*sy,z1=x*sy+z*cy;let cp=Math.cos(pitch),sp=Math.sin(pitch),y1=y*cp-z1*sp,z2=y*sp+z1*cp;return [x1,y1,z2]}
 function project(point,center,w,h){const [x,y,z]=transform(point,center),pers=4.5/(4.5+z);return [w/2+panX+x*zoom*pers,h/2+panY-y*zoom*pers,pers]}
@@ -2142,6 +2148,7 @@ drawSkeletonView(frame);
 if(!referencePreview)updateZonePanel(frame);
 $('overlayFrame').textContent=`${sourceIndex+1} / ${data.frames.length} · ${frame.t.toFixed(2)}초`;
 if(window.motionViewerPoseOverlay)window.motionViewerPoseOverlay.draw({frame,sourceIndex,playheadSeconds,durationSeconds:data.duration_seconds,center,w,h});
+renderedFrameIndex=sourceIndex;rendererFrameCount++;
 dispatchEvent(new CustomEvent('motion-viewer-frame',{detail:{frame,sourceIndex,playheadSeconds}}));
 }
 let atEnd=false;// 끝 시각을 한 번 그린 뒤 감는다(끝에서 난 알림이 지나가도록)
@@ -2157,16 +2164,16 @@ const selected=Object.fromEntries(['worker','process','mode','session'].map(id=>
 // A background refresh adds choices without replacing a playing recording.
 if(!mode||(selected.session!=='representative'&&!mode.sessions.includes(selected.session)))return;
 catalog=incoming;
-$('worker').replaceChildren(...catalog.workers.map(row=>option(row.worker_id,`${row.display_name}${row.role==='expert'?' · 전문가 기준':''}`)));$('worker').value=selected.worker;
+fillWorkers(selected.worker);
 $('process').replaceChildren(...worker.processes.map(row=>option(row.process,row.label)));$('process').value=selected.process;
 $('mode').replaceChildren(...process.modes.map(row=>option(row.mode_id,`학습모드 ${row.mode_id} · ${row.session_count}회`)));$('mode').value=selected.mode;
-$('session').replaceChildren(option('representative',`${worker.display_name} · 전체 기록 종합 기준`),...mode.sessions.map(row=>option(row,`${worker.display_name} · ${row}`)));$('session').value=selected.session;
+$('session').replaceChildren(...sessionOptions(worker,mode));$('session').value=selected.session;
 refreshSessionLabels();
 }catch(e){/* Existing recording stays usable when a background check fails. */}finally{catalogRefreshPending=false}}
 addEventListener('focus',refreshCatalogOptions);document.addEventListener('visibilitychange',()=>{if(!document.hidden)refreshCatalogOptions()});
 $('session').addEventListener('pointerdown',()=>payloadCache.refresh());$('session').addEventListener('focus',()=>payloadCache.refresh());addEventListener('focus',()=>payloadCache.refresh());setInterval(refreshSessionLabels,10000);
 $('loadingCancel').onclick=()=>activeLoadController?.abort();addEventListener('pagehide',()=>activeLoadController?.abort());
-addEventListener('resize',resize);(async()=>{try{catalog=await json('/motion-viewer/api/catalog');catalogRefreshedAt=Date.now();$('worker').replaceChildren(...catalog.workers.map(worker=>option(worker.worker_id,`${worker.display_name}${worker.role==='expert'?' · 전문가 기준':''}`)));if(catalog.workers.some(worker=>worker.worker_id==='jeon_hyeonggi'))$('worker').value='jeon_hyeonggi';fillProcesses();resize();requestAnimationFrame(tick)}catch(e){$('status').textContent=e.message}})();
+addEventListener('resize',resize);(async()=>{try{catalog=await json('/motion-viewer/api/catalog');catalogRefreshedAt=Date.now();const datasetId=new URLSearchParams(window.location.search).get('dataset_id');const selected=datasetId?await json('/motion-viewer/api/selection?'+new URLSearchParams({dataset_id:datasetId})):{};applySelection(selected);resize();requestAnimationFrame(tick)}catch(e){$('status').dataset.loadState='failed';$('status').textContent=e.message;$('loading').hidden=true}})();
 </script><script defer src="/motion-viewer/assets/motion_viewer_camera.js"></script><script defer src="/motion-viewer/assets/motion_viewer_pose.js"></script><script defer src="/motion-viewer/assets/motion_viewer_coating.js"></script><script defer src="/motion-viewer/assets/motion_viewer_chat.js"></script></body></html>"""
 
 
@@ -2219,7 +2226,9 @@ def create_motion_viewer_router(
         for worker in training_records.workers():
             if worker['worker_id'] not in workers:
                 workers[worker['worker_id']] = {**worker, 'catalog_only': True}
-        return sorted(workers.values(), key=lambda worker: worker_sort_key(worker['worker_id'], worker['display_name']))
+        return sorted(workers.values(), key=lambda worker: (
+            worker['worker_id'] != _EXPERT_WORKER_ID,
+            worker_sort_key(worker['worker_id'], worker['display_name'])))
 
     def viewer_worker(worker_id):
         worker = next((item for item in viewer_workers() if item['worker_id'] == worker_id), None)
@@ -2455,6 +2464,27 @@ def create_motion_viewer_router(
         legacy_worker = next((worker for worker in workers if worker['worker_id'] == _EXPERT_WORKER_ID), workers[0] if workers else None)
         legacy_processes = legacy_worker["processes"] if legacy_worker else []
         return {"workers": workers, "processes": legacy_processes}
+
+    @router.get('/motion-viewer/api/selection', include_in_schema=False)
+    def dataset_selection(dataset_id: str = Query(pattern='^[0-9a-f]{32}$')) -> dict[str, Any]:
+        """Resolve a registered artifact to the viewer's existing identity/session policy."""
+        row = next((item for item in training_records.records() if item['dataset_id'] == dataset_id), None)
+        if row is None:
+            raise HTTPException(status_code=404, detail='재생 가능한 학습 데이터를 찾지 못했습니다.')
+        worker_id = training_records.selection_worker(row)
+        mode_id = int(row['scenario_id'])
+        session_id = training_records.selection_session_id(row, worker_id)
+        selected = next((item for item in training_records.selections(worker_id, row['process'], mode_id)
+                         if training_records.selection_session_id(item, worker_id) == session_id), None)
+        if selected is None or selected['dataset_id'] != dataset_id:
+            raise HTTPException(status_code=409, detail='동일 세션의 다른 등록 자료가 우선되어 이 데이터는 직접 재생할 수 없습니다.')
+        worker = viewer_worker(worker_id)
+        profile = viewer_profile(worker, row['process'], mode_id)
+        session = _session_record(profile, session_id)
+        if session.get('dataset_id') != dataset_id:
+            raise HTTPException(status_code=409, detail='선택한 데이터와 재생 기록이 일치하지 않습니다.')
+        return {'dataset_id': dataset_id, 'worker_id': worker_id, 'process': row['process'],
+                'mode_id': mode_id, 'session_id': session_id}
 
     @router.get("/motion-viewer/api/evaluations", include_in_schema=False)
     def evaluation_catalog() -> dict[str, Any]:
@@ -2718,6 +2748,7 @@ def create_motion_viewer_router(
             "process_label": _PROCESS_LABELS[process],
             "mode_id": mode_id,
             "selected_session_id": selected,
+            "dataset_id": _session_record(profile, selected).get('dataset_id'),
             "representative_session_id": representative,
             "sampled_session_count": len(sampled_sessions),
             "duration_seconds": round(duration, 3),
