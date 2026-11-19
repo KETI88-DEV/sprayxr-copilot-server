@@ -1627,7 +1627,16 @@ async def _execute_copilot_query(
                                       selected_sequence_id=_selected_sequence(query.context)))
     definition_context = (viewer_definition_context(query.prompt, query.context)
                           if query.response_mode == "quick" and query.task_type == "knowledge_search" and mixed is None else None)
-    viewer_facts = facts if facts and (query.response_mode != "quick" or record_pointed) else None
+    # 질문 유형(결함 뜻·원인·영향·대책)은 최근 대화에서 대상이 적힌 가장 가까운 질문까지 거슬러 이어받는다(명시적 후속 질문일 때만).
+    # 용어 규칙은 이전 질문들의 제외어까지 보므로 직전 질문 하나만 넘긴다.
+    followup = bool(dialogue_turns) and decision is not None and decision.get("context_relation") == "followup"
+    inherit = [str(dialogue_turns[-1].get("prompt", ""))] if followup else []
+    chain = [str(turn.get("prompt", "")) for turn in dialogue_turns] if followup else []
+    prompt_type = (matched_prompt(question, chain)
+                   if query.task_type == "knowledge_search" and mixed is None and use_rag and coating_advice_context is None else None)
+    # 유형 질문은 기록을 가리키지 않으면 일반 지식이다. 상세 분석도 기록 수치를 넘기지 않는다: 넘기면 27B가 "이 기록에서 왜"로 읽고
+    # 일반 원인 근거를 받고도 기권했다(2026-11-19 뷰어 '그럼 왜 생겨?'). 내 기록과의 비교는 "내가 한 거랑 비교하면?"이 따로 답한다.
+    viewer_facts = facts if facts and (query.response_mode != "quick" or record_pointed) and (prompt_type is None or record_pointed) else None
     knowledge_client_context = MIXED_DOCUMENT_RULE if mixed is not None else (definition_context or (json.dumps(viewer_facts, ensure_ascii=False, separators=(",", ":")) if viewer_facts else viewer_metadata_context(query.context))) if viewer_requested else (definition_context or query.context)
     if coating_advice_context is not None:
         compact = target_advice_facts(coating_advice_context, measures=_viewer_measures(query.context, query.prompt)[0])
@@ -1643,11 +1652,9 @@ async def _execute_copilot_query(
             "사용자 원문 대화의 대상이나 조건을 추가하거나 바꾸는 부분은 사용하지 마세요."
         )
     # 질문 유형별 맥락 프롬프트(configs/context_prompts.json: 결함 영향·원인, 충전전로 이격거리).
-    # 골라 둔 원문 조각을 근거 앞에 붙이고 유형 규칙을 준다. 명시적 후속 질문일 때만 직전 질문 하나에서 대상을 이어받는다.
-    inherit = ([str(dialogue_turns[-1].get("prompt", ""))]
-               if dialogue_turns and decision is not None and decision.get("context_relation") == "followup" else [])
-    prompt_type = (matched_prompt(question, inherit)
-                   if query.task_type == "knowledge_search" and mixed is None and use_rag and coating_advice_context is None else None)
+    # 골라 둔 원문 조각을 근거 앞에 붙이고 유형 규칙을 준다. 명시적 후속 질문일 때만 대상을 이어받는다.
+    # 유형은 최근 대화에서 대상이 적힌 가장 가까운 질문까지 거슬러 본다("저도막이 뭐야?"→"원인이 뭔데?"→"그러면 어떻게 해야 하는데?").
+    # 유형(prompt_type)은 기록 수치를 넘길지 정하기 전에 위에서 골랐다.
     if prompt_type is not None:
         knowledge_client_context = (knowledge_client_context + "\n" if knowledge_client_context else "") + context_text(prompt_type)
     # 교육 용어 ↔ 문서 표현(configs/term_rules.json): 검색어에 문서 표현을 덧붙이고 대응 한 줄을 준다.
