@@ -63,7 +63,7 @@ from trainer.demo_api.copilot_live_analysis import current_zone, live_analysis
 from trainer.demo_api.simulator_context import SIMULATOR_CONTEXT, is_blasting, wants_simulator_context, simulator_configuration_facts
 from trainer.demo_api.copilot_session_context import build_query_instruction, summarize_session, viewer_definition_context
 from trainer.demo_api.context_prompts import context_text, matched_prompt
-from trainer.demo_api.term_rules import matched_terms, term_context, with_document_terms
+from trainer.demo_api.term_rules import fix_typos, matched_terms, meaning_evidence, routed_terms, term_context, with_document_terms
 from trainer.demo_api.pose_query import (
     answer_order_question,
     order_request_fields,
@@ -265,6 +265,41 @@ MIXED_NO_EVIDENCE: Final = "문서에서는 이 질문에 답할 근거를 찾�
 _FOLLOWUP: Final = re.compile(r"나의|저의|그럼|그렇게")
 # 규정·정의·권장값을 묻는 문형. 이것이면 후속·1인칭 낱말이 있어도 문서로 간다. "몇 점 이상"은 되고 "몇 점이야"는 기록 질문이다.
 _KNOWLEDGE_SHAPE: Final = re.compile(r"기준|뜻|의미|무엇|뭐|이란|적정|권장|얼마|무슨|어떻게|몇\s*(?:분|시간)|몇\s*점\s*이상|합격\s*점수")
+
+
+# 앞 답을 다시 풀어 달라는 말과 앞 질문을 가리키는 짧은 되물음. 대화 모델이 받으면 답의 수치가 걸러져
+# "세션 기록으로는 확인할 수 없습니다."만 남았다(2026-11-20 운영 '쉽게 다시 설명해줘', '그게 몇 센치야?').
+_REPHRASE: Final = re.compile(
+    r"^(?:좀\s*)?(?:더\s*)?(?:쉽게|간단히|간단하게|짧게|한\s*줄로|한\s*마디로|다시|예를\s*들어|예를\s*들면|자세히|자세하게|구체적으로)"
+    r"(?:\s*(?:좀|다시|한\s*번))*\s*(?:설명|말|얘기|이야기|알려|요약)?(?:\s*(?:해|줘|주세요|줄래요?|봐|요))*[.!?~\s]*$")
+_CONFUSED: Final = re.compile(r"^(?:뭔|무슨)\s*(?:소리|말|뜻)\s*(?:야|이야|인지|임|이에요|인가요)?[.!?~\s]*$|^이해가?\s*안\s*(?:돼|되|가|감)\S*[.!?~\s]*$")
+_MY_RUN: Final = re.compile(r"었|았|했|였|내가|제가|나는|저는|지금|방금|이번")
+# 앞 답을 가리켜 되묻는 짧은 말만: 물음말이 있어야 하고 "그건 그렇고 …"·"그거 말고 …" 같은 화제 전환은 아니다.
+_POINTS_BACK: Final = re.compile(r"^(?:그게|그건|그거|둘은|둘\s*다|그\s*둘은?)(?!\s*(?:그렇고|말고))(?=.{0,18}$).*?(?:몇|얼마|왜|뭐|뭔|무슨|무엇|어떻|어떤|어느|언제|어디)")
+# 대화 모델이 잡담으로 본 질문을 문서 경로로 되돌릴 때 보는 도장 낱말. 구어 대상('안 말라', '뿌옇게')만 맞은 일상 질문은 되돌리지 않는다.
+_PAINT_WORD: Final = re.compile(r"칠|도장|도막|도료|페인트|스프레이|뿌리|뿌려|뿌릴|분사|쏘|코팅|프라이머|시너|신너|신나|피도|도포|건을|건은|건이")
+
+
+def _registered_knowledge(prompt: str) -> bool:
+    """용어 규칙의 정식 용어가 있거나, 도장 낱말과 함께 질문 유형에 맞는 질문. 계획 모델이 잡담이라 해도 문서로 답한다(뷰어 밖에서만)."""
+    return bool(routed_terms(prompt)) or (bool(_PAINT_WORD.search(prompt)) and matched_prompt(prompt) is not None)
+
+
+def _restated_followup(prompt: str, turns: Sequence[Mapping[str, Any]]) -> str | None:
+    """앞 문서 답을 다시 풀어 달라는 말이면 그 질문에 지금 말을 덧붙인 질문. 문서 경로가 같은 근거로 다시 답한다.
+    앞 답이 문서 답이 아니거나(기록·잡담) 내 기록을 가리키는 말이면 None(지금 경로 그대로)."""
+    text = prompt.strip()
+    asks_again = lambda value: bool(_CONFUSED.match(value) or _REPHRASE.match(value) or _POINTS_BACK.match(value))
+    if not asks_again(text) or RECORD_OBJECT.search(text) or _MY_RUN.search(text):
+        return None
+    for turn in reversed(turns):
+        earlier = str(turn.get("prompt") or "").strip()
+        if asks_again(earlier):
+            continue
+        if turn.get("answer_source") != "documents":
+            return None
+        return f"{earlier} ({'쉽게 다시 설명해 주세요' if _CONFUSED.match(text) else text})"
+    return None
 
 
 def _grounded_route(prompt: str, subject: Mapping[str, Any] | None, *, viewer: bool = True) -> bool:
@@ -998,6 +1033,15 @@ async def _execute_copilot_query(
     if asks_for_instructions(query.prompt):
         # 지침 공개·무시 요청은 모델에 보내지 않는다(2026-11-14 운영 q41).
         return _success_response(query, request_started, answer=INSTRUCTION_REFUSAL, retrieval_used=False, citations=[])
+    dialogue_turns = await to_thread.run_sync(lambda: sequences.recent_query_turns(
+        query.session_id or "CHAT:" + query.user_id, limit=6,
+        user_id=query.user_id, conversation_key=conversation_id,
+    ))
+    # 저장된 질문은 사용자가 적은 그대로다. 이어받기가 앞 질문의 용어를 찾도록 이 요청 안에서만 오타를 고쳐 본다.
+    dialogue_turns = [{**turn, "prompt": fix_typos(str(turn.get("prompt") or ""))} for turn in dialogue_turns]
+    restated = _restated_followup(query.prompt, dialogue_turns)
+    if restated is not None:
+        query = query.model_copy(update={"prompt": restated})
     # A tab suggests a subject, not the user's intent. Definitions and types
     # must be explained even when a pose/order tab supplies a signed record.
     arm_lookup = _arm_lookup_question(query.prompt)
@@ -1008,10 +1052,6 @@ async def _execute_copilot_query(
         query = query.model_copy(update={"task_type": "knowledge_search"})
     questions = (query.prompt, original_prompt or "")
 
-    dialogue_turns = await to_thread.run_sync(lambda: sequences.recent_query_turns(
-        query.session_id or "CHAT:" + query.user_id, limit=6,
-        user_id=query.user_id, conversation_key=conversation_id,
-    ))
     # 서명된 뷰어 기록이 있을 때만 켠다(사용자 결정 7). 세션 요약으로 답하는 기존 대화 경로(TSB·시퀀스 질문)는 그대로 둔다.
     # 서명된 기록이 없어도 도장·훈련 낱말이 든 지식 질문은 문서로 답한다(사용자 결정 4). 잡담·TSB 요약 대화는 그대로.
     grounded = _grounded_route(query.prompt, previous_subject(dialogue_turns), viewer=viewer_claims(query.context) is not None)
@@ -1294,7 +1334,7 @@ async def _execute_copilot_query(
         # sentence must not override the planner's semantic chat decision.
         chat_redirected = (decision["kind"] == "chat" and query.task_type == "knowledge_search" and not viewer_requested
                            and not cross_tab and not zone_lookup and bool(_KNOWLEDGE_QUESTION.search(query.prompt))
-                           and (grounded or is_technical_question(query.prompt)) and not is_off_topic(query.prompt)
+                           and (grounded or is_technical_question(query.prompt) or _registered_knowledge(query.prompt)) and not is_off_topic(query.prompt)
                            and _abstain_below(planned_pipeline, query.response_mode) is not None)
         # 옛 행(v3.4.4 이전)에는 safety_class 열이 없어 앞 질문 문장도 다시 위험 판정한다.
         if (decision["kind"] == "correction" and dialogue_turns and not dialogue_turns[-1].get("safety_class")
@@ -1634,6 +1674,10 @@ async def _execute_copilot_query(
     chain = [str(turn.get("prompt", "")) for turn in dialogue_turns] if followup else []
     prompt_type = (matched_prompt(question, chain)
                    if query.task_type == "knowledge_search" and mixed is None and use_rag and coating_advice_context is None else None)
+    # 안내 유형(거리·속도의 영향 등)은 일반 지식 질문에만 쓴다. 뷰어에서 내 작업을 묻는 말("지금 너무 빨리 움직였어?")은
+    # 지금까지처럼 기록 수치로 답한다.
+    if prompt_type is not None and facts and not prompt_type["이어받기"] and _MY_RUN.search(question):
+        prompt_type = None
     # 유형 질문은 기록을 가리키지 않으면 일반 지식이다. 상세 분석도 기록 수치를 넘기지 않는다: 넘기면 27B가 "이 기록에서 왜"로 읽고
     # 일반 원인 근거를 받고도 기권했다(2026-11-19 뷰어 '그럼 왜 생겨?'). 내 기록과의 비교는 "내가 한 거랑 비교하면?"이 따로 답한다.
     viewer_facts = facts if facts and (query.response_mode != "quick" or record_pointed) and (prompt_type is None or record_pointed) else None
@@ -1665,6 +1709,8 @@ async def _execute_copilot_query(
     term_rules = [rule for rule in term_rules if prompt_type is None or rule["용어"] != prompt_type["용어"]]
     if term_rules:
         knowledge_client_context = (knowledge_client_context + "\n" if knowledge_client_context else "") + term_context(term_rules)
+    # 붙일 근거 조각: 질문 유형의 묶음, 없으면 뜻을 묻는 질문에 한해 그 용어의 근거.
+    pinned_chunks = list(prompt_type["조각"]) if prompt_type is not None else meaning_evidence(question, term_rules)
     # Add the relation after all fact-specific context builders, which may
     # replace the client context. Retrieval must retain this scope decision.
     if document_followup:
@@ -1719,7 +1765,7 @@ async def _execute_copilot_query(
                 use_rag=use_rag,
                 max_tokens=1024,
                 **({"answer_summary": True} if query.summarize and supports_summary else {}),
-                **({"pinned_chunk_ids": list(prompt_type["조각"])} if prompt_type is not None and supports_pin else {}),
+                **({"pinned_chunk_ids": pinned_chunks} if pinned_chunks and supports_pin else {}),
                 **({"defer_without_evidence": may_defer,
                     "evidence_score_threshold": _abstain_below(pipeline, query.response_mode)}
                    if supports_deferral else {}),
@@ -1925,7 +1971,8 @@ async def execute_copilot_query(
                 normalized = query.prompt
         if len(normalized) > 8000:
             raise TranslationUnavailableError("Translated question exceeds analysis limit")
-        analysis_query = query.model_copy(update={"prompt": normalized})
+        # 번역 요청은 적은 글 그대로 옮긴다. 그 밖의 질문은 등록된 용어 오타를 고쳐 분석한다(저장·표시는 원문).
+        analysis_query = query.model_copy(update={"prompt": normalized if translation_request is not None else fix_typos(normalized)})
         if query.language != "ko" and translation_request is None:
             # 질문 번역과 답 번역 가운데 어디가 틀렸는지 가릴 수 있게 분석에 쓴 한국어 질문을 남긴다.
             logger.info("copilot translated question request_id=%s language=%s ko=%r", query.request_id, query.language, normalized)

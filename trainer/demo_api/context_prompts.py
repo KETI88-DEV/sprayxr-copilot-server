@@ -13,34 +13,59 @@ from typing import Iterable
 
 from trainer.demo_api.term_rules import named_terms
 
-_TYPES = json.loads((Path(__file__).resolve().parents[1] / "configs" / "context_prompts.json").read_text(encoding="utf-8"))["질문 유형"]
+_CONFIG = json.loads((Path(__file__).resolve().parents[1] / "configs" / "context_prompts.json").read_text(encoding="utf-8"))
 _SPACE = re.compile(r"\s+")
 
 
+def _filled(entry: dict) -> dict:
+    """'종류'를 적은 유형은 그 종류의 질문 낱말·질문 제외·규칙 틀을 받는다. 틀의 {용어}·{표현}·{다른 결함}·{안내}는 유형의 값으로 채우고
+    '덧붙임' 줄을 뒤에 붙인다. '질문'이 없는 종류(안내)는 대상만 맞으면 쓴다."""
+    kind = entry.get("종류")
+    if kind is None:
+        return {"질문 제외": [], **entry}
+    return {"질문": _CONFIG["질문 낱말"].get(kind, [""]), "질문 제외": _CONFIG["질문 제외"].get(kind, []),
+            "규칙": [line.format(**entry) for line in _CONFIG["규칙 틀"][kind]] + list(entry.get("덧붙임", ())), **entry}
+
+
+_TYPES = [_filled(entry) for entry in _CONFIG["질문 유형"]]
+_INHERITED = {entry["용어"] for entry in _TYPES if entry["이어받기"]}
+
+
 def _has(text: str, words: Iterable[str]) -> bool:
-    flat = _SPACE.sub("", text)
-    return any(_SPACE.sub("", word) in flat for word in words)
+    flat = _SPACE.sub("", text).casefold()
+    return any(_SPACE.sub("", word).casefold() in flat for word in words)
+
+
+def _about(text: str, entry: dict) -> bool:
+    """글에 유형의 대상이 있고 다른 뜻이라는 낱말('제외': '어깨 처짐', '백화점', 블라스팅 거리)이 없다."""
+    return _has(text, entry["대상"]) and not _has(text, entry.get("제외", ()))
+
+
+def _asks(prompt: str, entry: dict) -> bool:
+    """유형의 질문 낱말이 있고 그 종류가 아니라는 낱말('질문 제외')이 없다."""
+    return _has(prompt, entry["질문"]) and not _has(prompt, entry["질문 제외"])
 
 
 def _subjects(text: str) -> set[str]:
-    return {entry["용어"] for entry in _TYPES if _has(text, entry["대상"])}
+    """글에 적힌 결함(이어받는 유형의 용어). 둘 이상이면 비교·정정 질문이라 한 묶음으로 좁히지 않는다."""
+    return {entry["용어"] for entry in _TYPES if entry["이어받기"] and _about(text, entry)}
 
 
 def _other_topic(text: str) -> bool:
-    """결함 대상은 없고 다른 교육 용어(이격거리·분사 속도 등)가 있는 질문 = 주제가 바뀐 곳. 더 거슬러 이어받지 않는다."""
-    return bool(named_terms(text) - {entry["용어"] for entry in _TYPES if entry["이어받기"]})
+    """결함 대상은 없고 다른 주제(교육 용어, 안내 유형의 대상)를 말한 질문 = 주제가 바뀐 곳. 더 거슬러 이어받지 않는다."""
+    return bool(named_terms(text) - _INHERITED) or any(_about(text, entry) for entry in _TYPES if not entry["이어받기"])
 
 
 def matched_prompt(prompt: str, previous_prompts: Iterable[str] = ()) -> dict | None:
     """처음 맞는 질문 유형. 질문에 대상이 없으면 대상이 적힌 가장 가까운 이전 질문에서 이어받는다.
-    대상이 둘 이상인 비교·정정 질문('저도막 말고 과도막 원인')은 한 묶음으로 좁히지 않는다.
-    사이에 다른 교육 용어를 물은 질문이 있으면 그 앞으로는 거슬러 가지 않는다."""
+    결함이 둘 이상인 비교·정정 질문('저도막 말고 과도막 원인')은 한 묶음으로 좁히지 않는다.
+    사이에 다른 주제를 물은 질문이 있으면 그 앞으로는 거슬러 가지 않는다."""
     subjects = _subjects(prompt)
-    if subjects:
-        return None if len(subjects) > 1 else next(
-            (entry for entry in _TYPES if _has(prompt, entry["질문"]) and _has(prompt, entry["대상"])), None)
-    if _other_topic(prompt):
+    if len(subjects) > 1:
         return None
+    found = next((entry for entry in _TYPES if _asks(prompt, entry) and _about(prompt, entry)), None)
+    if found is not None or subjects or _other_topic(prompt):
+        return found
     for previous in reversed(list(previous_prompts)):
         subjects = _subjects(previous)
         if not subjects:
@@ -48,8 +73,7 @@ def matched_prompt(prompt: str, previous_prompts: Iterable[str] = ()) -> dict | 
                 return None
             continue
         return None if len(subjects) > 1 else next(
-            (entry for entry in _TYPES
-             if entry["이어받기"] and _has(prompt, entry["질문"]) and _has(previous, entry["대상"])), None)
+            (entry for entry in _TYPES if entry["이어받기"] and _asks(prompt, entry) and _about(previous, entry)), None)
     return None
 
 

@@ -24,7 +24,8 @@ CONFIGS = Path(__file__).resolve().parents[2] / "configs"
     ("충전전로 최소 이격거리는?", []),           # 전기 안전거리는 다른 뜻
     ("블라스팅 연마재 분사속도는?", []),         # 연마재 분사속도는 다른 뜻
     ("후도막형 도료는 왜 써?", ["후도막형 도료"]),  # 도료 종류이지 과도막 결함이 아니다
-    ("가사시간이 뭐야?", []),
+    ("가사시간이 뭐야?", ["가사시간"]),          # 2026-11-20 등록
+    ("점심 메뉴 추천해 줘", []),
 ])
 def test_terms_are_found_and_other_meanings_left_alone(prompt, expected):
     assert [rule["용어"] for rule in matched_terms(prompt)] == expected
@@ -55,10 +56,10 @@ def test_every_rule_has_meaning_and_evidence_outside_the_exclusion_list():
 @pytest.mark.parametrize("mode", ["quick", "detailed"])
 def test_router_adds_the_rule_and_the_document_terms(mode):
     pipeline = DialoguePipeline()
-    ask(client(pipeline), "이격거리는 얼마가 적당해?", response_mode=mode)
+    ask(client(pipeline), "분사 각도는 몇 도가 적당해?", response_mode=mode)  # 이격거리·속도·중첩 적정값은 2026-11-20부터 근거 묶음(질문 유형)이 맡는다
     call = pipeline.calls[-1]
     assert "[용어 대응]" in (call.get("generation_instruction") or call["instruction"])
-    assert "이격거리" in call["retrieval_instruction"] and "분사 거리" in call["retrieval_instruction"]
+    assert "분사 각도" in call["retrieval_instruction"] and "피도면과의 각도 직각" in call["retrieval_instruction"]
 
 
 def test_router_leaves_record_questions_alone():

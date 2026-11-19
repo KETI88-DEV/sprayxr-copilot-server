@@ -21,8 +21,10 @@ def test_history_is_not_inherited_without_an_explicit_followup_decision():
         task_type='knowledge_search',created_at='2026-11-18T05:05:01Z',answer_source='documents')
     p=DialoguePipeline()
     ask(client(p,store),'도장 처짐은 왜 생겨?',response_mode='detailed')
-    assert 'pinned_chunk_ids' not in p.calls[-1]
-    assert '[결함 원인 질문]' not in p.calls[-1]['instruction']
+    # 앞 질문의 저도막을 이어받지 않는다. 처짐(흘림)은 2026-11-20부터 제 묶음이 있다.
+    assert '질문한 결함: 저도막' not in p.calls[-1]['instruction'] and '질문한 결함: 흘림' in p.calls[-1]['instruction']
+    ask(client(p,store),'도장 일정은 왜 밀려?',response_mode='detailed')
+    assert 'pinned_chunk_ids' not in p.calls[-1] and '[결함 원인 질문]' not in p.calls[-1]['instruction']
 
 
 def test_an_explicit_followup_to_a_composite_subject_stays_generic():

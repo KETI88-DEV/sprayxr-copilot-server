@@ -6,6 +6,8 @@ import logging
 import re
 from collections.abc import Callable
 
+from trainer.demo_api.term_rules import routed_terms
+
 logger = logging.getLogger(__name__)
 
 POSE_INTENTS = {"pose_overall", "pose_worst_zone", "pose_zone", "pose_right", "pose_left", "knowledge"}
@@ -22,8 +24,15 @@ _POSE_CONCEPT = re.compile(r"종류|유형|뜻|의미|정의")
 _OFF_TOPIC = re.compile(r"요리|요가|스쿼트|필라테스|헬스|운동|디스크|골프|축구|야구|등산|달리기|러닝|수영|춤|댄스")
 
 
+def _painting_subject(prompt: str) -> bool:
+    """도장 낱말이 있는가. 용어 규칙(term_rules.json)에 '경로'로 적은 교육 용어도 도장 낱말이다: 계획 모델이 '오렌지필'을 과일 껍질,
+    'DFT'를 푸리에 변환, '신너'를 뜻 모를 말로 보고 잡담으로 답했다(2026-11-20). 별칭(정식 이름)만 보고 구어는 보지 않으며,
+    제외어가 있으면 그 용어가 아니다('백화점', '징크스')."""
+    return bool(_PAINTING_SUBJECT.search(prompt) or routed_terms(prompt))
+
+
 def is_off_topic(prompt: str) -> bool:
-    return bool(_OFF_TOPIC.search(prompt)) and not _PAINTING_SUBJECT.search(prompt) and not re.search(_COATING_SUBJECT, prompt, re.I)
+    return bool(_OFF_TOPIC.search(prompt)) and not _painting_subject(prompt) and not re.search(_COATING_SUBJECT, prompt, re.I)
 _RECORD_REFERENCE = re.compile(r"영역|구역|zone|존|부위|현재|지금|이번|내[ 가]|어디|어느", re.I)
 
 
@@ -42,7 +51,7 @@ RECORD_OBJECT = re.compile(_RECORD_POINTER + r"|(?:칠|뿌)(?:한|했|린|렸)",
 # 정의 질문 판정에는 지시·소유·번호만 본다. "두껍게 칠한 부위를 …라고 말하나요?"의 "칠한"은 기록을 가리키지 않는다.
 _RECORD_POINTER_RE = re.compile(_RECORD_POINTER, re.I)
 # 정의·규정을 묻는 말. "구역·부위" 같은 일반 명사만 있고 기록 객체·재생 시점이 없으면 지식 질문이다(사례 16·17).
-_RULE_ASK = re.compile(r"법칙|원칙|규정|규격|말하나요|말하는|말해요|뜻|정의|어떻게\s*판정")
+_RULE_ASK = re.compile(r"법칙|원칙|규정|규격|말하나요|말하는|말해요|뜻|정의|어떻게\s*판정|정확히\s*어떤")  # "미도장 부위는 정확히 어떤 상태야?"는 뜻을 묻는다
 
 
 def _asks_coating_state(prompt: str, subject: str, state: str) -> bool:
@@ -67,7 +76,7 @@ def is_coating_status_question(prompt: str) -> bool:
 
 def is_domain_question(prompt: str) -> bool:
     # 자세 낱말은 넣지 않는다. 넣으면 서명된 기록의 자세 질문("자세 유사도는 얼마야?")이 대화 대신 문서로 간다(4c5da92와 다름).
-    return bool(_PAINTING_SUBJECT.search(prompt) or re.search(_COATING_SUBJECT, prompt, re.I))
+    return bool(_painting_subject(prompt) or re.search(_COATING_SUBJECT, prompt, re.I))
 
 
 def is_explanatory_question(prompt: str, task_type: str | None = None) -> bool:
@@ -93,7 +102,7 @@ def is_general_painting_knowledge(prompt: str) -> bool:
     자세 낱말만 있으면 개념 표지가 있어야 하고, 주제 밖 활동 낱말이 있으면 도장 지식이 아니다.
     """
     posture = _POSE_SUBJECT.search(prompt) and _POSE_CONCEPT.search(prompt)
-    return bool(not is_off_topic(prompt) and (posture or ((is_coating_advice_question(prompt) or _PAINTING_SUBJECT.search(prompt))
+    return bool(not is_off_topic(prompt) and (posture or ((is_coating_advice_question(prompt) or _painting_subject(prompt))
                  and re.search(r"적정|기준|권장|표준|원인|이유|왜|뭐|무엇|뜻|의미|정의|종류|유형|어떤|차이|방법|어떻게|예방|방지|원리|얼마|순서|절차|단계|알려", prompt)))
                 and not _RECORD_REFERENCE.search(prompt)
                 and not re.search(r"시퀀스|기록|재생|아까|방금|(?<![가-힣])이\s*분사|었|았|했|어땠|괜찮|제\s|저의|나의|그럼|그\s", prompt))

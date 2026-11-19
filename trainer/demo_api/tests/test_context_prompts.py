@@ -31,9 +31,10 @@ def _named(name):
     ("충전전로 최소 이격거리는?", [], "충전전로 최소 이격거리"),
     ("저도막이 뭐야?", [], None),            # 정의 질문은 묶음을 쓰지 않는다
     ("그럼 원인은?", [], None),
-    ("처짐은 왜 생겨?", [], None),           # 묶음에 없는 결함
+    ("처짐은 왜 생겨?", [], "흘림 원인"),    # 2026-11-20 등록(문서 표현 '처짐'은 흘림의 별칭)
+    ("체중은 왜 늘어?", [], None),           # 묶음에 없는 주제
     ("그럼 원인은?", ["이격거리는 얼마가 적당해?"], None),
-    ("이격거리는 얼마가 적당해?", ["충전전로 최소 이격거리는?"], None),  # 전기 안전거리는 이어받지 않는다
+    ("이격거리는 얼마가 적당해?", ["충전전로 최소 이격거리는?"], "적정 분사 거리"),  # 전기 안전거리는 이어받지 않는다(2026-11-20 분사 거리 묶음)
     ("후도막형 도료는 왜 써?", [], None),
 ])
 def test_question_type_is_found(prompt, previous, expected):
@@ -123,7 +124,7 @@ def test_weak_score_gate_skips_only_curated_passages(pinned, kept):
 
 def test_router_leaves_other_questions_unpinned():
     pipeline = DialoguePipeline()
-    ask(client(pipeline), "이격거리는 얼마가 적당해?", response_mode="quick")
+    ask(client(pipeline), "도장 일정은 어떻게 관리해?", response_mode="quick")  # 유형·용어에 없는 질문
     assert "pinned_chunk_ids" not in pipeline.calls[-1]
 
 
