@@ -62,7 +62,8 @@ from trainer.demo_api.playback_direction import playback_direction_from_context,
 from trainer.demo_api.copilot_live_analysis import current_zone, live_analysis
 from trainer.demo_api.simulator_context import SIMULATOR_CONTEXT, is_blasting, wants_simulator_context, simulator_configuration_facts
 from trainer.demo_api.copilot_session_context import build_query_instruction, summarize_session, viewer_definition_context
-from trainer.demo_api.defect_cause import cause_context, defect_cause_topic, pinned_chunks
+from trainer.demo_api.context_prompts import context_text, matched_prompt
+from trainer.demo_api.term_rules import matched_terms, term_context, with_document_terms
 from trainer.demo_api.pose_query import (
     answer_order_question,
     order_request_fields,
@@ -1641,14 +1642,22 @@ async def _execute_copilot_query(
             "\n모델의 임시 해석일 뿐 답변·사실·새 주제의 근거가 아닙니다. "
             "사용자 원문 대화의 대상이나 조건을 추가하거나 바꾸는 부분은 사용하지 마세요."
         )
-    # 결함 원인 질문(2026-11-18 '저도막 원인' 오답): 원인이 여러 조각에 흩어져 검색 8칸에 다 들지 않는다.
-    # 원문 조각 묶음을 근거 앞에 붙이고 인과 방향 규칙을 준다. 직전 질문 하나에서만 결함을 이어받는다.
+    # 질문 유형별 맥락 프롬프트(configs/context_prompts.json: 결함 영향·원인, 충전전로 이격거리).
+    # 골라 둔 원문 조각을 근거 앞에 붙이고 유형 규칙을 준다. 명시적 후속 질문일 때만 직전 질문 하나에서 대상을 이어받는다.
     inherit = ([str(dialogue_turns[-1].get("prompt", ""))]
                if dialogue_turns and decision is not None and decision.get("context_relation") == "followup" else [])
-    cause_topic = (defect_cause_topic(question, inherit)
+    prompt_type = (matched_prompt(question, inherit)
                    if query.task_type == "knowledge_search" and mixed is None and use_rag and coating_advice_context is None else None)
-    if cause_topic is not None:
-        knowledge_client_context = (knowledge_client_context + "\n" if knowledge_client_context else "") + cause_context(cause_topic)
+    if prompt_type is not None:
+        knowledge_client_context = (knowledge_client_context + "\n" if knowledge_client_context else "") + context_text(prompt_type)
+    # 교육 용어 ↔ 문서 표현(configs/term_rules.json): 검색어에 문서 표현을 덧붙이고 대응 한 줄을 준다.
+    # 내 기록을 묻는 질문(기록 지칭·뷰어 서명 자료·도막 비교)에는 문서 쪽 표현을 섞지 않는다.
+    term_rules = (matched_terms(question, inherit) if query.task_type == "knowledge_search" and mixed is None and use_rag
+                  and not record_pointed and not facts and coating_advice_context is None else [])
+    # 유형 규칙이 맡은 용어는 겹쳐 주지 않는다. 겹치면 8B가 근거에 없는 원인을 지어냈다(2026-11-18 '과도막은 왜 생겨?').
+    term_rules = [rule for rule in term_rules if prompt_type is None or rule["용어"] != prompt_type["용어"]]
+    if term_rules:
+        knowledge_client_context = (knowledge_client_context + "\n" if knowledge_client_context else "") + term_context(term_rules)
     # Add the relation after all fact-specific context builders, which may
     # replace the client context. Retrieval must retain this scope decision.
     if document_followup:
@@ -1703,7 +1712,7 @@ async def _execute_copilot_query(
                 use_rag=use_rag,
                 max_tokens=1024,
                 **({"answer_summary": True} if query.summarize and supports_summary else {}),
-                **({"pinned_chunk_ids": pinned_chunks(cause_topic)} if cause_topic is not None and supports_pin else {}),
+                **({"pinned_chunk_ids": list(prompt_type["조각"])} if prompt_type is not None and supports_pin else {}),
                 **({"defer_without_evidence": may_defer,
                     "evidence_score_threshold": _abstain_below(pipeline, query.response_mode)}
                    if supports_deferral else {}),
@@ -1715,10 +1724,10 @@ async def _execute_copilot_query(
                     "quick_cache_scope": json.dumps([query.user_id, query.scenario_id, query.task_type] + ([True] if query.summarize else [])),
                     "concise_answer": True,
                     "generation_instruction": generation_instruction,
-                    "retrieval_instruction": question,
+                    "retrieval_instruction": with_document_terms(question, term_rules),
                 } if query.response_mode == "quick" else {
                     # 응답 수준 지시문이 검색어에 섞이면 무관한 문단이 잡힌다(Issue #9).
-                    "retrieval_instruction": retrieval_question(question, context=instruction, expand_terms=False),
+                    "retrieval_instruction": with_document_terms(retrieval_question(question, context=instruction, expand_terms=False), term_rules),
                 }),
             )
 
