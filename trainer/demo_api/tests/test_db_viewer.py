@@ -53,6 +53,37 @@ def test_db_viewer_searches_values_and_escapes_query(monkeypatch, tmp_path) -> N
     assert "&lt;script&gt;" in escaped.text
 
 
+def test_every_data_table_starts_with_record_time_even_when_missing(monkeypatch, tmp_path):
+    from html.parser import HTMLParser
+
+    class TableHeaders(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.inside = False
+            self.headers = []
+
+        def handle_starttag(self, tag, attrs):
+            if tag == 'th':
+                self.inside = True
+
+        def handle_data(self, data):
+            if self.inside:
+                self.headers.append(data)
+
+        def handle_endtag(self, tag):
+            if tag == 'th':
+                self.inside = False
+
+    client = _client(monkeypatch, tmp_path)
+    with sqlite3.connect(tmp_path / 'viewer.db') as conn:
+        conn.execute('CREATE TABLE dated (id TEXT, created_at TEXT)')
+        conn.execute("INSERT INTO dated VALUES('dated-record','2026-11-19T00:00:00Z')")
+    for table, expected in [('dated', 'created_at'), ('sessions', '생성 시각 미기록')]:
+        parser = TableHeaders()
+        parser.feed(client.get('/admin', params={'table': table}).text)
+        assert parser.headers[0] == expected
+
+
 def test_table_record_popup_returns_nested_parameters_without_mutating_data(monkeypatch, tmp_path) -> None:
     client = _client(monkeypatch, tmp_path)
     assert 'data-detail-url=' in client.get('/admin?table=sessions').text

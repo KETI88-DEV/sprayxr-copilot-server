@@ -15,6 +15,7 @@ from typing import Any
 
 from trainer.demo_api.db_admin_auth import DBAdminAuth, fail
 from trainer.demo_api.report_jobs import hold_idle_reports
+from trainer.demo_api.db_record_time import TIME_COLUMNS, MISSING_TIME, first_record_time
 
 TABLES = {"users": "훈련자", "sessions": "훈련 세션", "sequences": "시퀀스 기록",
           "query_turns": "질문·답변", "completions": "최종 리포트", "api_calls": "API 호출 이력"}
@@ -28,8 +29,8 @@ FIELDS = {
     },
     "sessions": {"creation_origin": {"label": "데이터 출처", "choices": {"unknown": "출처 미기록", "real": "일반 API 연동", "test": "모의 테스트"}}},
 }
-DISPLAY = ("session_id", "user_id", "name", "scenario_id", "creation_origin", "session_status", "sequence_id",
-           "report_id", "report_status", "skill_level", "dominant_hand", "age", "gender", "prompt", "path", "created_at", "received_at")
+DISPLAY = (*TIME_COLUMNS, "session_id", "user_id", "name", "scenario_id", "creation_origin", "session_status", "sequence_id",
+           "report_id", "report_status", "skill_level", "dominant_hand", "age", "gender", "prompt", "path")
 RELATIONS = (("sequence_analysis_results", "session_key"), ("sequences", "session_key"),
              ("query_turns", "session_key"), ("completions", "session_id"), ("api_calls", "session_id"))
 
@@ -77,12 +78,14 @@ class DBAdminStore:
 
     @staticmethod
     def values(row):
-        return {key: row[key] for key in DISPLAY if key in row}
+        values = {key: row[key] for key in DISPLAY if key in row}
+        return {MISSING_TIME: None, **values} if first_record_time(row) == MISSING_TIME else values
 
     def records(self, table: str, q: str, page: int) -> dict:
         with self.connection() as conn:
             self.checked_table(conn, table)
             columns = [name for name in DISPLAY if name in self.columns(conn, table)]
+            missing_time = first_record_time(columns) == MISSING_TIME
             where = "1"
             params = []
             if q:
@@ -93,7 +96,7 @@ class DBAdminStore:
             page = min(page, max(1, (total + 24) // 25))
             selected = ",".join('"' + name + '"' for name in columns)
             rows = conn.execute(f'SELECT rowid AS __rowid,{selected} FROM "{table}" WHERE {where} ORDER BY rowid DESC LIMIT 25 OFFSET ?', [*params, (page - 1) * 25])
-            return {"table": table, "label": TABLES[table], "columns": columns, "total": total, "page": page,
+            return {"table": table, "label": TABLES[table], "columns": ([MISSING_TIME] if missing_time else []) + columns, "total": total, "page": page,
                     "rows": [{"rowid": row["__rowid"], "values": self.values(dict(row))} for row in rows],
                     "tables": {name: label for name, label in TABLES.items() if self.columns(conn, name)}}
 

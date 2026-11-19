@@ -27,6 +27,7 @@ from trainer.demo_api.training_data_ui import TRAINING_DATA_CSS, render_training
 from trainer.demo_api.db_sequence_heatmap import attach_heatmap_link, create_sequence_heatmap_router
 from trainer.demo_api.db_sequence_heatmap_ui import SEQUENCE_HEATMAP_CSS
 from trainer.demo_api.feedback import render_feedback_list
+from trainer.demo_api.db_record_time import MISSING_TIME, first_record_time
 
 _CSS = """
 :root{color-scheme:light;--bg:#f4f7fb;--panel:#fff;--ink:#152033;--muted:#68758a;--line:#dde4ee;
@@ -189,6 +190,14 @@ def create_db_viewer_router() -> APIRouter:
     def training_data_script():
         return FileResponse(Path(__file__).parent / 'static' / 'training_data.js', media_type='text/javascript', headers={'Cache-Control': 'no-cache'})
 
+    @router.get('/admin/assets/training_verification.js', include_in_schema=False)
+    def training_verification_script():
+        return FileResponse(Path(__file__).parent / 'static' / 'training_verification.js', media_type='text/javascript', headers={'Cache-Control': 'no-cache'})
+
+    @router.get('/admin/assets/training_verification.css', include_in_schema=False)
+    def training_verification_styles():
+        return FileResponse(Path(__file__).parent / 'static' / 'training_verification.css', media_type='text/css', headers={'Cache-Control': 'no-cache'})
+
     @router.get("/admin/assets/db_viewer.js", include_in_schema=False)
     def detail_script():
         return FileResponse(Path(__file__).parent / "static" / "db_viewer.js", media_type="text/javascript", headers={"Cache-Control":"no-cache"})
@@ -257,7 +266,8 @@ def create_db_viewer_router() -> APIRouter:
                 return _page(render_dashboard(conn, dict(table_counts), days=days, metric=metric,origin=origin), side, origin)
             quoted = '"' + selected.replace('"', '""') + '"'
             columns = [str(item[1]) for item in conn.execute(f"PRAGMA table_info({quoted})")]
-            display_columns = list(columns)
+            time_column = first_record_time(columns)
+            display_columns = [column for column in columns if column != time_column]
             derived_guide = selected == "sequence_analysis_results" and "result" in columns and "text_guide" not in columns
             if derived_guide:
                 display_columns.insert(display_columns.index("result"), "text_guide")
@@ -271,9 +281,11 @@ def create_db_viewer_router() -> APIRouter:
             pages = max(1, math.ceil(total / limit))
             current_page = min(page, pages)
             rows = conn.execute(f"SELECT rowid AS __viewer_rowid, * FROM {quoted}{where} ORDER BY rowid DESC LIMIT ? OFFSET ?", [*params, limit, (current_page - 1) * limit]).fetchall()
+            time_heading = '<th>' + ('생성 시각 미기록' if time_column == MISSING_TIME else html.escape(time_column)) + '</th>'
             heading = '<th>상세</th><th>호출 채널</th><th>호출 IP</th>' + "".join(f"<th>{html.escape(column)}</th>" for column in display_columns)
             if selected == 'completions':
                 heading = '<th>처리 현황 · 서버 기록 기준</th>' + heading
+            heading = time_heading + heading
             def record_row(row):
                 url = html.escape('/admin/api/record?' + urlencode({'table':selected,'rowid':row['__viewer_rowid']}))
                 provenance = record_provenance(conn, selected, row)
@@ -290,10 +302,11 @@ def create_db_viewer_router() -> APIRouter:
                         cells.append('<td data-column="text_guide">' + _guide_cell(guide, legacy=legacy) + '</td>')
                     else:
                         cells.append(f'<td>{_cell(row[column])}</td>')
-                return f'<tr data-detail-url="{url}" tabindex="0" aria-label="레코드 {row["__viewer_rowid"]} 상세">'+progress_cell+f'<td><button type="button" class="record-button" data-detail-url="{url}">상세</button></td>' + caller_cells + ''.join(cells) + '</tr>'
+                time_cell = '<td>' + ('미기록' if time_column == MISSING_TIME else _cell(row[time_column])) + '</td>'
+                return f'<tr data-detail-url="{url}" tabindex="0" aria-label="레코드 {row["__viewer_rowid"]} 상세">'+time_cell+progress_cell+f'<td><button type="button" class="record-button" data-detail-url="{url}">상세</button></td>' + caller_cells + ''.join(cells) + '</tr>'
             rendered = ''.join(record_row(row) for row in rows)
             if not rendered:
-                rendered = f'<tr><td class="empty" colspan="{len(display_columns)+3+int(selected == "completions")}">조건에 맞는 데이터가 없습니다.</td></tr>'
+                rendered = f'<tr><td class="empty" colspan="{len(display_columns)+4+int(selected == "completions")}">조건에 맞는 데이터가 없습니다.</td></tr>'
             query = html.escape(q)
             base = f"/admin?table={quote(selected)}&limit={limit}&q={quote(q)}"
             previous = f'<a href="{base}&page={current_page - 1}">← 이전</a>' if current_page > 1 else "<span></span>"

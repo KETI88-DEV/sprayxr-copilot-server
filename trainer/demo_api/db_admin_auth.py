@@ -50,6 +50,7 @@ class AdminSession:
     username: str
     csrf: str
     expires: float
+    credential_revision: str
 
 
 class DBAdminAuth:
@@ -101,7 +102,8 @@ class DBAdminAuth:
         valid = hmac.compare_digest(username.encode(), credentials["username"].encode()) and valid
         if not valid:
             fail(401, "관리자 ID 또는 비밀번호가 올바르지 않습니다.")
-        session = AdminSession(username, secrets.token_urlsafe(32), now + SESSION_SECONDS)
+        revision = hashlib.sha256(credentials['signing_key'].encode()).hexdigest()
+        session = AdminSession(username, secrets.token_urlsafe(32), now + SESSION_SECONDS, revision)
         token = secrets.token_urlsafe(48)
         with self._guard:
             self._failures.pop(client, None)
@@ -119,6 +121,12 @@ class DBAdminAuth:
             if session and session.expires <= time.time():
                 self._sessions.pop(token, None)
                 return None
+            if session:
+                revision = hashlib.sha256(self._credentials()['signing_key'].encode()).hexdigest()
+                if not hmac.compare_digest(session.credential_revision, revision):
+                    # Explicit operator re-provisioning also revokes prior cookies.
+                    self._sessions.pop(token, None)
+                    return None
             return session
 
     def require(self, request: Request, *, write: bool = False) -> AdminSession:

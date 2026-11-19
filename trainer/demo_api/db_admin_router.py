@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from trainer.demo_api.db_admin_auth import COOKIE, SESSION_SECONDS, DBAdminAuth, fail
 from trainer.demo_api.db_admin_store import DBAdminStore
 from trainer.demo_api.sequence_store import DEFAULT_DB_PATH
+from trainer.demo_api.page_access import PageAccessStore
 
 
 class Target(BaseModel):
@@ -36,8 +39,11 @@ def create_db_admin_router() -> APIRouter:
     path = Path(os.environ.get("SEQUENCE_DB_PATH", DEFAULT_DB_PATH))
     auth = DBAdminAuth(Path(os.environ.get("DB_ADMIN_CREDENTIALS_PATH", str(path.parent / "db_admin_credentials.json"))))
     store = DBAdminStore(path, auth)
+    page_access_store = PageAccessStore.for_database(path)
     from trainer.demo_api.feedback import create_feedback_admin_router
     router.include_router(create_feedback_admin_router(auth, str(path)))
+    from trainer.demo_api.training_verification import create_training_verification_router
+    router.include_router(create_training_verification_router(auth))
 
     def response(data: dict):
         return JSONResponse(data, headers={"Cache-Control": "no-store"})
@@ -131,6 +137,27 @@ def create_db_admin_router() -> APIRouter:
     def history(request: Request):
         auth.require(request)
         return response(store.history())
+
+    @router.get('/admin/api/manage/page-access')
+    def page_access(request: Request, page: int = Query(default=1, ge=1),
+                    limit: int = Query(default=50, ge=1, le=100),
+                    page_filter: str = Query(default='all', pattern='^(all|home|docs|admin|motion-viewer|query-chat|feedback)$'),
+                    client_ip: str = Query(default='', max_length=45),
+                    source: str = Query(default='all', pattern='^(all|direct|internal|external)$'),
+                    since: datetime | None = None, until: datetime | None = None):
+        auth.require(request)
+        from trainer.demo_api.request_provenance import valid_ip
+        if client_ip and valid_ip(client_ip) is None:
+            fail(422, 'IP 주소 형식을 확인하세요.')
+        from trainer.demo_api.page_access import utc_stamp
+        if since and until and utc_stamp(since) > utc_stamp(until):
+            fail(422, '조회 시작 시각은 종료 시각보다 늦을 수 없습니다.')
+        selected = getattr(request.app.state, 'page_access_store', page_access_store)
+        try:
+            return response(selected.records(page=page, limit=limit, page_filter=page_filter, client_ip=client_ip,
+                source=source, since=since, until=until))
+        except (OSError, sqlite3.Error):
+            fail(503, '페이지 접근 기록을 읽을 수 없습니다. 잠시 후 다시 시도하세요.')
 
     return router
 

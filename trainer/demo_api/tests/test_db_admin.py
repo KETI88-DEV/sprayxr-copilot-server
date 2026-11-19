@@ -27,7 +27,7 @@ def admin(monkeypatch, tmp_path):
     SequenceStore(str(path)).close()
     with sqlite3.connect(path) as conn:
         conn.execute("INSERT INTO sequences VALUES('S1','SEQ1','sha',1,'t','{}')")
-        conn.execute("INSERT INTO sequence_analysis_results VALUES('S1','SEQ1','key','{}')")
+        conn.execute("INSERT INTO sequence_analysis_results(session_key,sequence_id,analysis_key,result) VALUES('S1','SEQ1','key','{}')")
         conn.execute("INSERT INTO query_turns(session_key,user_id,prompt,answer,task_type,created_at) VALUES('S1','U1','q','a','knowledge_search','t')")
         conn.execute("CREATE TABLE api_calls(id INTEGER PRIMARY KEY,session_id TEXT,path TEXT)")
         conn.execute("INSERT INTO api_calls VALUES(1,'S1','/api/v1/sessions/start')")
@@ -279,3 +279,50 @@ def test_management_audit_stays_private_when_the_viewer_is_public(admin):
     assert client.get("/admin/api/record?table=admin_change_log&rowid=1").status_code == 404
     assert "admin_change_log" not in client.get("/admin").text
     assert "backup_name" not in client.get("/admin?table=admin_change_log").text
+
+
+def test_page_access_requires_administrator_and_never_leaks_to_public_viewer(admin):
+    client, path, _ = admin
+    assert client.get(BASE + '/page-access').status_code == 401
+    from trainer.demo_api.page_access import PageAccessStore
+    store = PageAccessStore.for_database(path)
+    from datetime import datetime, timezone
+    store.append(created_at=datetime.now(timezone.utc).isoformat(), client_ip='192.0.2.77',
+                 path='/docs', source='direct', source_basis='unavailable')
+    login(client)
+    response = client.get(BASE + '/page-access', params={'page_filter': 'docs', 'client_ip': '192.0.2.77'})
+    assert response.status_code == 200 and response.headers['cache-control'] == 'no-store'
+    row = response.json()['rows'][0]
+    assert row['client_ip'] == '192.0.2.77' and row['identity'] == 'unconfirmed'
+    assert client.get(BASE + '/page-access', params={'limit': 201}).status_code == 422
+    assert client.get(BASE + '/page-access', params={'since': 'not-a-date'}).status_code == 422
+    assert client.get(BASE + '/page-access', headers={'Origin': 'http://elsewhere.test'}).status_code == 403
+    client.cookies.clear()
+    assert client.get(BASE + '/page-access').status_code == 401
+    for url in ('/admin', '/admin/manage', '/admin?table=page_access'):
+        assert '192.0.2.77' not in client.get(url).text
+    assert client.get('/admin/api/record?table=page_access&rowid=1').status_code == 404
+
+
+@pytest.mark.parametrize(('table', 'first'), [('users', 'created_at'), ('sessions', 'created_at'),
+    ('sequences', 'received_at'), ('query_turns', 'created_at'), ('completions', 'requested_at'),
+    ('api_calls', '__created_at')])
+def test_administrator_data_starts_with_available_record_timestamp(admin, table, first):
+    client, _, _ = admin
+    login(client)
+    data = client.get(BASE + '/records', params={'table': table}).json()
+    assert data['columns'][0] == first
+    assert list(data['rows'][0]['values'])[0] == first
+
+
+def test_credential_rotation_revokes_old_cookies_and_persists_only_hashes(admin):
+    from trainer.demo_api.db_admin_auth import configure_credentials
+    client, _, directory = admin
+    login(client)
+    credentials = directory / 'db-admin.json'
+    configure_credentials(credentials, 'keti', 'replacement-test-password')
+    assert 'replacement-test-password' not in credentials.read_text(encoding='utf-8')
+    assert client.get(BASE + '/records?table=users').status_code == 401
+    assert client.post(BASE + '/login', json={'username': 'admin', 'password': 'test-password'}, headers=ORIGIN).status_code == 401
+    result = client.post(BASE + '/login', json={'username': 'keti', 'password': 'replacement-test-password'}, headers=ORIGIN)
+    assert result.status_code == 200 and result.json()['username'] == 'keti'

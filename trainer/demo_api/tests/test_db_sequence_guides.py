@@ -108,5 +108,5 @@ def test_new_guide_column_is_specific_to_sequence_results_and_empty_lists_have_c
     other = client.get("/admin?table=sequences")
     assert 'data-column="text_guide"' not in other.text
     empty = client.get("/admin", params={"table": "sequence_analysis_results", "q": "no-record"})
-    assert 'colspan="8"' in empty.text
+    assert 'colspan="9"' in empty.text  # Includes the creation-time column.
     assert "조건에 맞는 데이터가 없습니다." in empty.text

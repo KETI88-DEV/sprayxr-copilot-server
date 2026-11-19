@@ -220,7 +220,13 @@ def test_training_data_overview_is_public_without_operational_database(tmp_path,
         response = client.get('/admin/training-data')
         assert response.status_code == 200
         assert '학습 데이터' in response.text and '/admin/assets/training_data.js' in response.text
+        assert 'id="td-verification-tab"' in response.text and 'id="tv-root"' in response.text
+        assert '품질 완료 등록' in response.text and '전체 훈련 시간 연속 재생' in response.text
+        assert 'id="tv-start" type="button" hidden' in response.text
         assert client.get('/admin/assets/training_data.js').status_code == 200
+        for suffix in ['js', 'css']:
+            asset = client.get('/admin/assets/training_verification.' + suffix)
+            assert asset.status_code == 200 and asset.headers['cache-control'] == 'no-cache'
         assert client.get('/admin/api/training-data').json()['available'] is False
 
 

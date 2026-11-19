@@ -90,6 +90,32 @@ def test_analysis_result_survives_database_reopen(tmp_path: Path) -> None:
     assert reopened.load_analysis(session_key="S2", sequence_id="SEQ-1", analysis_key="spray") is None
 
 
+def test_analysis_creation_time_preserves_legacy_unknown_and_first_insert(tmp_path: Path) -> None:
+    import sqlite3
+    from datetime import datetime, timezone
+    path = tmp_path / 'legacy-analysis.db'
+    with sqlite3.connect(path) as conn:
+        conn.execute('CREATE TABLE sequence_analysis_results (session_key TEXT, sequence_id TEXT, analysis_key TEXT, result TEXT, PRIMARY KEY(session_key,sequence_id,analysis_key))')
+        conn.execute("INSERT INTO sequence_analysis_results VALUES('S1','OLD','spray','{}')")
+    before = datetime.now(timezone.utc)
+    store = SequenceStore(str(path))
+    store.save_analysis(session_key='S1', sequence_id='NEW', analysis_key='spray', result={'guide': 'first'})
+    with sqlite3.connect(path) as conn:
+        legacy = conn.execute("SELECT created_at FROM sequence_analysis_results WHERE sequence_id='OLD'").fetchone()[0]
+        first = conn.execute("SELECT created_at FROM sequence_analysis_results WHERE sequence_id='NEW'").fetchone()[0]
+    assert legacy is None
+    assert before <= datetime.fromisoformat(first) <= datetime.now(timezone.utc)
+    store.save_analysis(session_key='S1', sequence_id='NEW', analysis_key='spray', result={'guide': 'retry'})
+    store.save_analysis(session_key='S1', sequence_id='OLD', analysis_key='spray', result={'guide': 'retry'})
+    store.close()
+    reopened = SequenceStore(str(path))
+    assert reopened.load_analysis(session_key='S1', sequence_id='NEW', analysis_key='spray') == {'guide': 'first'}
+    reopened.close()
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT created_at FROM sequence_analysis_results WHERE sequence_id='NEW'").fetchone()[0] == first
+        assert conn.execute("SELECT created_at FROM sequence_analysis_results WHERE sequence_id='OLD'").fetchone()[0] is None
+
+
 def test_unusable_path_falls_back_to_memory(tmp_path: Path) -> None:
     """Given an unwritable path, When constructed, Then ingest still works.
 
