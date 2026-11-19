@@ -97,6 +97,9 @@ trainer/demo_api/copilot_session_context.py
 trainer/demo_api/corrected_router.py
 trainer/demo_api/defect_cause.py
 trainer/demo_api/db_admin_auth.py
+trainer/demo_api/db_record_time.py
+trainer/demo_api/page_access.py
+trainer/demo_api/training_verification.py
 trainer/demo_api/db_admin_router.py
 trainer/demo_api/db_admin_store.py
 trainer/demo_api/db_admin_ui.py
@@ -205,6 +208,8 @@ trainer/demo_api/static/portal_home.html
 trainer/demo_api/static/portal_home.js
 trainer/demo_api/static/query_chat_presets.js
 trainer/demo_api/static/training_data.js
+trainer/demo_api/static/training_verification.js
+trainer/demo_api/static/training_verification.css
 trainer/demo_api/telemetry_contracts.py
 trainer/demo_api/telemetry_router.py
 trainer/demo_api/test_api_docs.py
