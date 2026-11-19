@@ -99,6 +99,7 @@ class CompletionRow:
     report_status: str
     requested_at: str
     payload: dict[str, Any]
+    legacy_inputs_unavailable: bool = False  # read-time provenance finding; never persisted
 
 
 class V1Store:
@@ -357,13 +358,21 @@ class V1Store:
 
         with self._guard:
             row = self._conn.execute(
-                "SELECT report_id, session_id, report_status, requested_at, payload"
+                "SELECT report_id, session_id, report_status, requested_at, payload, fingerprint,"
+                " processing_started_at, processing_updated_at, processing_finished_at, processing_reason"
                 " FROM completions WHERE report_id = ?",
                 (report_id,),
             ).fetchone()
         if row is None:
             return None
-        return CompletionRow(row[0], row[1], row[2], row[3], json.loads(row[4]))
+        payload = json.loads(row[4])
+        # Modern create_completion writes queued/updated metadata immediately,
+        # even before a worker starts. Only marker-free legacy rows qualify;
+        # age, a missing file, or an empty analysis is not evidence of this case.
+        legacy_inputs = (str(row[2]).lower() == "pending" and isinstance(payload, dict)
+                         and not {"artifacts", "analysis", "analysis_requested"}.intersection(payload)
+                         and all(value is None for value in row[5:]))
+        return CompletionRow(row[0], row[1], row[2], row[3], payload, legacy_inputs)
 
     def complete_sessions(self, *, limit: int = 50) -> list[dict[str, Any]]:
         """`complete` 리포트가 있는 세션, 최근 것부터(세션마다 최신 리포트 하나)."""

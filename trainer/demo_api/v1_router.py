@@ -169,16 +169,21 @@ async def _sse_body(
 def _report(row: Any) -> ReportDetail:
     """Overlay every completed analysis area without inventing unavailable values."""
     payload = row.payload if isinstance(row.payload, dict) else {}
+    status = "pending" if row.report_status == "PENDING" else row.report_status
     detail = _unavailable_report(
         report_id=row.report_id,
         session_id=row.session_id,
-        status=row.report_status,
+        status=status,
         generated_at=row.requested_at,
         user_id=payload.get("user_id"),
         scenario_id=payload.get("scenario_id"),
     )
     analysis = payload.get("analysis")
-    if row.report_status == "failed":
+    if status == "pending" and getattr(row, "legacy_inputs_unavailable", False):
+        for area in (detail.report.coating_report, detail.report.sequence_report, detail.report.pose_report):
+            area.reason_code = "legacy_report_inputs_unavailable"
+            area.guideline = "이전 리포트의 입력 자료 참조 확인 불가. 원본 CSV·높이맵 재업로드 권장."
+    if status == "failed":
         error = analysis.get("error") if isinstance(analysis, dict) else None
         reason = error if error in {"report_input_unavailable", "session_analysis_failed"} else _ANALYSIS_FAILED
         guide = ("리포트 입력 자료를 읽지 못했습니다. 업로드 자료와 저장소 상태를 확인해 주세요."
@@ -615,7 +620,7 @@ def create_v1_router(
         return _ok(
             ReportStatusData(
                 report_id=row.report_id, session_id=row.session_id,
-                report_status=row.report_status,  # type: ignore[arg-type]
+                report_status="pending" if row.report_status == "PENDING" else row.report_status,  # type: ignore[arg-type]
                 requested_at=row.requested_at,
             ).model_dump(mode="json")
         )
