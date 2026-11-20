@@ -386,7 +386,10 @@
     host.replaceChildren(svg, note, ...(hasReference ? [comparisonNote] : []), table);
   }
 
-  function renderCoating(data) {
+  function renderCoating(data, options = {}) {
+    const prefix = ['td', 'tv-inspection'].includes(options.idPrefix) ? options.idPrefix : 'td';
+    const controlId = name => `${prefix}-${name}`;
+    const viewState = options.isolated ? {mapView: 'decoded'} : state;
     const coating = data.coating || {};
     const maps = Array.isArray(coating.maps) ? coating.maps : [];
     const notApplicable = data.metadata?.process === 'blasting' || (maps.length > 0 && maps.every(map => map.status === 'not_applicable'));
@@ -398,38 +401,38 @@
     }
     const controls = el('div', 'td-map-controls');
     const field = el('div', 'td-field td-map-select');
-    const label = el('label', '', '분석 맵'); label.htmlFor = 'td-map-select';
-    const select = el('select'); select.id = 'td-map-select';
+    const label = el('label', '', '분석 맵'); label.htmlFor = controlId('map-select');
+    const select = el('select'); select.id = controlId('map-select');
     maps.forEach((map, index) => select.add(new Option(`맵 ${map.map_num ?? index + 1} · ${map.filename || '파일명 미기록'}`, String(index))));
     field.append(label, select);
     const segment = el('div', 'td-segment'); segment.setAttribute('role', 'group'); segment.setAttribute('aria-label', '도장 맵 표시 방식');
     const decoded = el('button', '', '두께 환산 맵'); decoded.type = 'button';
     const raw = el('button', '', '원본 맵'); raw.type = 'button'; segment.append(decoded, raw);
     const tools = el('div', 'td-map-tools');
-    const enlarge = el('a', 'td-map-enlarge', '이미지 크게 보기 ↗'); enlarge.id = 'td-image-enlarge'; enlarge.target = '_blank'; enlarge.rel = 'noopener noreferrer';
+    const enlarge = el('a', 'td-map-enlarge', '이미지 크게 보기 ↗'); enlarge.id = controlId('image-enlarge'); enlarge.target = '_blank'; enlarge.rel = 'noopener noreferrer';
     tools.append(segment, enlarge); controls.append(field, tools); section.append(controls);
     const figure = el('figure', 'td-map-figure'); const stage = el('div', 'td-map-stage');
-    const image = el('img'); image.id = 'td-map-image'; image.alt = '도장 맵';
+    const image = el('img'); image.id = controlId('map-image'); image.alt = '도장 맵';
     const imageMessage = el('p', 'td-map-message'); stage.append(image, imageMessage);
-    const caption = el('figcaption'); const scale = el('div', 'td-map-scale'); scale.id = 'td-map-scale'; figure.append(stage, scale, caption); section.append(figure);
+    const caption = el('figcaption'); const scale = el('div', 'td-map-scale'); scale.id = controlId('map-scale'); figure.append(stage, scale, caption); section.append(figure);
     const basisNote = el('div', 'td-map-notes'); section.append(basisNote);
     const metrics = el('div', 'td-coating-metrics'); section.append(metrics);
     const analysisGrid = el('div', 'td-analysis-grid');
     const histCard = el('div', 'td-analysis-card'); histCard.append(el('h4', '', '도막 두께 히스토그램'), el('p', 'td-help', '도포 픽셀 기준 · 두께 구간별 픽셀 수와 비율'));
-    const histogram = el('div', 'td-chart-scroll'); histogram.id = 'td-histogram'; histCard.append(histogram);
+    const histogram = el('div', 'td-chart-scroll'); histogram.id = controlId('histogram'); histCard.append(histogram);
     const zoneCard = el('div', 'td-analysis-card'); zoneCard.append(el('h4', '', '구역별 중앙값 · IQR'), el('p', 'td-help', '구역별 도막 두께의 대표값과 분포 범위'));
-    const zones = el('div', 'td-chart-scroll'); zones.id = 'td-zone-chart'; zoneCard.append(zones); analysisGrid.append(histCard, zoneCard); section.append(analysisGrid);
+    const zones = el('div', 'td-chart-scroll'); zones.id = controlId('zone-chart'); zoneCard.append(zones); analysisGrid.append(histCard, zoneCard); section.append(analysisGrid);
     const mapNote = el('p', 'td-help'); mapNote.style.marginTop = '15px'; section.append(mapNote);
     let currentMap = maps[0];
     function showImage() {
       const decodedUrl = safeImageUrl(currentMap.thickness_image_url);
       const rawUrl = safeImageUrl(currentMap.image_url);
       decoded.disabled = !decodedUrl; raw.disabled = !rawUrl;
-      if (state.mapView === 'decoded' && !decodedUrl && rawUrl) state.mapView = 'raw';
-      if (state.mapView === 'raw' && !rawUrl && decodedUrl) state.mapView = 'decoded';
-      decoded.setAttribute('aria-pressed', String(state.mapView === 'decoded'));
-      raw.setAttribute('aria-pressed', String(state.mapView === 'raw'));
-      const url = state.mapView === 'decoded' ? decodedUrl : rawUrl;
+      if (viewState.mapView === 'decoded' && !decodedUrl && rawUrl) viewState.mapView = 'raw';
+      if (viewState.mapView === 'raw' && !rawUrl && decodedUrl) viewState.mapView = 'decoded';
+      decoded.setAttribute('aria-pressed', String(viewState.mapView === 'decoded'));
+      raw.setAttribute('aria-pressed', String(viewState.mapView === 'raw'));
+      const url = viewState.mapView === 'decoded' ? decodedUrl : rawUrl;
       enlarge.hidden = !url;
       if (url) enlarge.href = url; else enlarge.removeAttribute('href');
       image.hidden = !url; imageMessage.hidden = Boolean(url);
@@ -440,11 +443,11 @@
         // Assign the same-origin path, keeping generated artifact URLs inspectable.
         const parsed = new URL(url); image.setAttribute('src', `${parsed.pathname}${parsed.search}${parsed.hash}`);
       } else image.removeAttribute('src');
-      image.alt = `맵 ${currentMap.map_num ?? Number(select.value) + 1} ${state.mapView === 'decoded' ? '도막 두께 환산 이미지' : '원본 인코딩 이미지'}`;
-      caption.textContent = currentMap.status === 'not_applicable' ? '원본 텍스처 · 블라스팅 기록의 저장 이미지입니다. 도막 두께 분석을 적용하지 않습니다.' : state.mapView === 'decoded' ? '두께 환산 맵 · 검은 영역은 미도포 영역입니다. 표시 상한 이상의 두께는 같은 색으로 보이며, 통계와 히스토그램은 원래 두께를 사용합니다.' : '원본 맵 · 저장된 픽셀 인코딩 이미지입니다. 원본 색상 자체를 실제 도막 두께로 해석하지 마세요.';
+      image.alt = `맵 ${currentMap.map_num ?? Number(select.value) + 1} ${viewState.mapView === 'decoded' ? '도막 두께 환산 이미지' : '원본 인코딩 이미지'}`;
+      caption.textContent = currentMap.status === 'not_applicable' ? '원본 텍스처 · 블라스팅 기록의 저장 이미지입니다. 도막 두께 분석을 적용하지 않습니다.' : viewState.mapView === 'decoded' ? '두께 환산 맵 · 검은 영역은 미도포 영역입니다. 표시 상한 이상의 두께는 같은 색으로 보이며, 통계와 히스토그램은 원래 두께를 사용합니다.' : '원본 맵 · 저장된 픽셀 인코딩 이미지입니다. 원본 색상 자체를 실제 도막 두께로 해석하지 마세요.';
       const colors = (Array.isArray(currentMap.preview_colors) ? currentMap.preview_colors : []).filter(color => /^#[a-f\d]{6}$/i.test(color));
       const max = finite(currentMap.preview_max_um);
-      scale.hidden = state.mapView !== 'decoded' || colors.length < 2 || max === null || max <= 0;
+      scale.hidden = viewState.mapView !== 'decoded' || colors.length < 2 || max === null || max <= 0;
       scale.replaceChildren();
       if (!scale.hidden) {
         const legend = svgEl('svg', {viewBox: '0 0 490 46', role: 'img', 'aria-label': `도막 두께 색상 범위: 0에서 ${valueText(max)} 마이크로미터 이상`});
@@ -491,10 +494,10 @@
       const reference = currentMap.reference;
       if (reference && finite(reference.record_count) > 0 && finite(reference.median_um) !== null) mapNote.append(el('span', '', ` · 전문가 ${count(reference.record_count)}회 중앙값 분포: ${valueText(reference.median_um)} µm (IQR ${valueText(reference.p25_um)}–${valueText(reference.p75_um)} µm, 회차별 중앙값 기준)`));
     }
-    decoded.addEventListener('click', () => { state.mapView = 'decoded'; showImage(); });
-    raw.addEventListener('click', () => { state.mapView = 'raw'; showImage(); });
+    decoded.addEventListener('click', () => { viewState.mapView = 'decoded'; showImage(); });
+    raw.addEventListener('click', () => { viewState.mapView = 'raw'; showImage(); });
     select.addEventListener('change', showMap);
-    state.mapView = 'decoded'; showMap();
+    viewState.mapView = 'decoded'; showMap();
     return section;
   }
 
@@ -571,6 +574,7 @@
     if (state.returnFocus?.isConnected) state.returnFocus.focus();
   }
 
+  window.TrainingDataPresentation = Object.freeze({coating: renderCoating, json: renderJson});
   $('td-search').value = state.q; $('td-limit').value = String(state.limit);
   $('td-filter-form').addEventListener('submit', event => {
     event.preventDefault();

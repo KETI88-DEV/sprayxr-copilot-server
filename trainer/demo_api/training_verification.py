@@ -28,6 +28,17 @@ SCOPE = 'JSON·원천 파일 SHA-256은 전수 확인하고, 실제 브라우저
 _ID = re.compile(r'^[0-9a-f]{32}$')
 
 
+def _exam_metadata(*, valid: int, stale: bool, historical_target: int) -> dict:
+    """Current quantity presentation, separate from the historical audit target.
+
+    This counts technically verified quality-complete records, not a person's
+    qualification. Original worker/role metadata and persisted audits stay intact.
+    """
+    return {'target': 1200, 'population': 'quality_complete',
+            'technical_goal_met': not stale and valid >= 1200,
+            'historical_run_target': historical_target}
+
+
 def _now():
     return datetime.now(timezone.utc).isoformat(timespec='seconds')
 
@@ -134,6 +145,7 @@ class ConstructionVerification:
             registered=sum(isinstance(r,dict) and r.get('quality_status')=='complete'
                            for r in self.catalog._index().get('records',[]))
             return {'phase':'not_started','definition':DEFINITION,'scope':SCOPE,'target':1000,
+                    'exam':_exam_metadata(valid=0,stale=False,historical_target=1000),
                     'stale':False,'summary':{'registered':registered,'json_passed':0,'source_passed':0,
                     'browser_passed':0,'browser_failed':0,'duplicates':0,'valid':0,'pending':registered,
                     'goal_met':False},'items':[]}
@@ -160,6 +172,8 @@ class ConstructionVerification:
             'pending':sum(r['browser_status']=='pending' for r in items),
             'snapshot_valid':valid,'valid':0 if report['stale'] else valid,
             'goal_met':not report['stale'] and valid>=1000}
+        report['exam']=_exam_metadata(valid=report['summary']['valid'],stale=report['stale'],
+                                     historical_target=report.get('target',1000))
         for item in items:
             item.pop('_source',None);item.pop('_artifact',None)
         return report

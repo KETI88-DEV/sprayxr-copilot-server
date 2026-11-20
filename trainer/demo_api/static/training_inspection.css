@@ -1,0 +1,62 @@
+/* Independent dialog IDs and layout keep the existing library detail untouched. */
+body.tv-inspection-open{overflow:hidden}
+#tv-inspection{width:min(1280px,calc(100vw - 40px));background:#f3f6fa}
+#tv-inspection .td-modal-head{padding:19px 25px 15px}
+#tv-inspection .td-modal-body{max-height:calc(100dvh - 205px);padding-top:14px}
+#tv-inspection .ti-status{font-size:11px;line-height:1.7;color:#617493;padding:10px 25px;margin:0;background:#edf3fc;border-bottom:1px solid #dfe7f3}
+#tv-inspection .ti-section{padding:21px 23px;margin-bottom:16px;min-width:0}
+#tv-inspection h3{font-size:16px;margin:0 0 8px;color:#233a59}
+#tv-inspection h4{font-size:12px;color:#3b5475;margin:12px 0}
+#tv-inspection .ti-meta-grid,#tv-inspection .ti-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:18px 0}
+#tv-inspection .ti-meta-grid>div{padding:0 14px 0 0;min-width:0}
+#tv-inspection .ti-record-provenance>summary{font-size:11px;color:#627a99;cursor:pointer}
+#tv-inspection .ti-record-provenance .ti-meta-grid{margin:12px 0}
+#tv-inspection dt{color:#6a7d96;font-size:10px;line-height:1.6;margin:0 0 6px}
+#tv-inspection dd{font-size:13px;font-weight:650;line-height:1.7;color:#253e61;margin:0;overflow-wrap:anywhere}
+#tv-inspection .ti-metrics>div{padding:12px 14px;background:#f3f6fb;border:1px solid #e7edf6;border-radius:8px;min-width:0}
+#tv-inspection .ti-metrics dd{font-size:18px;font-variant-numeric:tabular-nums}
+#tv-inspection .ti-metrics small{font-size:10px;color:#7c8ba0;line-height:1.5;display:block;margin-top:6px}
+#tv-inspection .ti-pipeline{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;padding:0;list-style:none;margin:17px 0 0}
+#tv-inspection .ti-pipeline li{border:1px solid #e0e7f1;border-radius:9px;padding:14px;min-width:0;background:#fbfcff}
+#tv-inspection .ti-pipeline strong{font-size:12px;display:block;color:#35527a}
+#tv-inspection .ti-step-state{display:inline-block;background:#eaf1fc;color:#496b9e;font-size:9px;border-radius:4px;padding:3px 6px;margin:8px 0 2px}
+#tv-inspection .ti-pipeline p{font-size:10px;line-height:1.7;color:#78869b;margin:6px 0}
+#tv-inspection .ti-pipeline small{display:block;font-size:10px;line-height:1.7;overflow-wrap:anywhere;color:#4f688b}
+#tv-inspection .ti-csv-scroll{border:1px solid #dde5f1;border-radius:8px;overflow:auto;max-height:250px;margin-top:14px}
+#tv-inspection .ti-csv-scroll table{font-family:Consolas,monospace;min-width:560px;width:100%;font-size:10px}
+#tv-inspection .ti-csv-scroll th,#tv-inspection .ti-csv-scroll td{padding:9px 12px;max-width:250px;white-space:pre;overflow-wrap:normal;font-size:10px}
+#tv-inspection .ti-csv-scroll th{position:sticky;top:0;background:#eff4fb;z-index:1}
+#tv-inspection .ti-scope-controls{display:flex;align-items:center;gap:12px;margin:23px 0 13px;justify-content:space-between;flex-wrap:wrap}
+#tv-inspection .ti-scope-controls label{display:flex;align-items:center;gap:10px;min-width:220px;font-size:12px;font-weight:650;color:#506988}
+#tv-inspection .ti-scope-controls select{min-width:220px;width:auto;max-width:100%}
+#tv-inspection #ti-whole[aria-pressed=true]{background:#e9f0ff;border-color:#c9d8fb;color:#274eaa}
+#tv-inspection .ti-order{font-size:11px;padding:9px 12px;color:#476e9d;background:#edf4fd;border-radius:6px;display:inline-block;margin:8px 0 0}
+#tv-inspection .ti-chart-grid{display:grid;grid-template-columns:1fr 1fr;gap:15px;margin:18px 0 6px}
+#tv-inspection .ti-stat-details{border-top:1px solid #e1e8f2;padding-top:13px;margin-top:16px}
+#tv-inspection .ti-stat-details>summary{cursor:pointer;font-size:12px;font-weight:650;color:#42648d;padding:4px 0}
+#tv-inspection :is(button,a,select,summary):focus-visible{outline:3px solid #426bc5;outline-offset:3px}
+#tv-inspection .ti-stat-chart{border:1px solid #e0e8f3;background:#fff;border-radius:9px;padding:14px;min-width:0;overflow:hidden}
+#tv-inspection .ti-stat-chart h4{margin:0 0 15px;font-size:12px}
+#tv-inspection .ti-stat-chart svg{display:block;width:100%;min-height:72px;max-height:260px}
+#tv-inspection .ti-stat-chart svg text{font-size:12px;fill:#5b7290}
+#tv-inspection .ti-stat-chart svg rect,#tv-inspection .ti-stat-chart svg circle{fill:#547fce}
+#tv-inspection .ti-classifications{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:18px}
+#tv-inspection .ti-classification{border-top:1px solid #e5ebf3;padding-top:13px;font-size:11px;color:#77879c;line-height:1.8}
+#tv-inspection .ti-classification strong{color:#516b8c;font-size:11px}
+#tv-inspection .ti-classification p{margin:5px 0 0}
+#tv-inspection .ti-map-domain{font-size:11px;line-height:1.8;color:#657c9b;margin:15px 0 8px;padding:0 3px}
+#tv-inspection .ti-links{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:15px}
+#tv-inspection .ti-links button{font-size:11px;padding:8px 11px}
+#tv-inspection .ti-missing{font-size:11px;line-height:1.8;color:#7b8b9f;background:#f4f7fb;border-radius:7px;padding:14px}
+#tv-inspection .ti-error{font-size:12px;line-height:1.8;color:#a54d46;overflow-wrap:anywhere}
+#tv-inspection #ti-reconvert{margin:12px 10px 10px 0}
+#tv-inspection .ti-job-steps{list-style:none;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin:14px 0;padding:0}
+#tv-inspection .ti-job-steps li{padding:12px 14px;border:1px solid #e1e8f2;border-radius:8px;font-size:11px;line-height:1.7}
+#tv-inspection .ti-job-steps strong{font-size:11px;color:#42648d;margin-right:10px}
+#tv-inspection .ti-job-steps span{color:#6d8099;font-size:10px}
+#tv-inspection .ti-job-steps p{margin:6px 0 0;color:#7b899c;font-size:10px;overflow-wrap:anywhere}
+#tv-inspection #ti-job-download{margin-top:13px}
+@media(max-width:900px){#tv-inspection .ti-meta-grid,#tv-inspection .ti-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}#tv-inspection .ti-chart-grid{grid-template-columns:1fr}#tv-inspection .ti-pipeline{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:760px){#tv-inspection{width:calc(100vw - 18px);max-height:calc(100dvh - 20px)}#tv-inspection .td-modal-head{padding:16px}#tv-inspection .ti-status{padding:10px 16px}#tv-inspection .td-modal-body{padding:12px;max-height:calc(100dvh - 215px)}#tv-inspection .ti-section{padding:17px 15px}#tv-inspection h3{font-size:15px}#tv-inspection .ti-scope-controls{gap:9px}#tv-inspection .ti-scope-controls label{width:100%;justify-content:space-between}#tv-inspection .ti-scope-controls select{min-width:0;flex:1}#tv-inspection .ti-classifications,#tv-inspection .ti-job-steps{grid-template-columns:1fr}#tv-inspection .ti-meta-grid{gap:15px}#tv-inspection .ti-stat-chart{padding:11px}#tv-inspection .ti-metrics{gap:7px}#tv-inspection .ti-metrics>div{padding:10px}#tv-inspection .ti-metrics dd{font-size:16px}}
+@media(max-width:420px){#tv-inspection .ti-pipeline{grid-template-columns:1fr}#tv-inspection .ti-links>a,#tv-inspection .ti-links>button{width:100%;justify-content:center}#tv-inspection .ti-meta-grid dd{font-size:12px}}
+@media(prefers-reduced-motion:reduce){#tv-inspection *{scroll-behavior:auto!important}}
