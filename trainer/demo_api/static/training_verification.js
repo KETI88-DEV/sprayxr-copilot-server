@@ -111,6 +111,7 @@
     state.active=view==='verification';
     for (const [id,active] of [['td-library-tab',!state.active],['td-verification-tab',state.active]]) {$(id).setAttribute('aria-selected',String(active));$(id).tabIndex=active?0:-1;if(active&&focus)$(id).focus();}
     $('td-library-panel').hidden=state.active;$('tv-root').hidden=!state.active;$('td-library-meta').hidden=state.active;
+    window.TrainingTransform?.activate(state.active);
     const url=new URL(window.location.href);if(state.active)url.searchParams.set('view','verification');else url.searchParams.delete('view');window.history.replaceState(null,'',url);
     if(state.active){await Promise.all([auth(),load()]);}else{clearTimeout(state.timer);state.controller?.abort();}
   }

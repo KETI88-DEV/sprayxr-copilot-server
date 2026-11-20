@@ -206,6 +206,18 @@ def create_db_viewer_router() -> APIRouter:
     def training_inspection_styles():
         return FileResponse(Path(__file__).parent / 'static' / 'training_inspection.css', media_type='text/css', headers={'Cache-Control': 'no-cache'})
 
+    @router.get('/admin/assets/training_transform.js', include_in_schema=False)
+    def training_transform_script():
+        return FileResponse(Path(__file__).parent / 'static' / 'training_transform.js', media_type='text/javascript', headers={'Cache-Control': 'no-cache'})
+
+    @router.get('/admin/assets/training_transform.css', include_in_schema=False)
+    def training_transform_styles():
+        return FileResponse(Path(__file__).parent / 'static' / 'training_transform.css', media_type='text/css', headers={'Cache-Control': 'no-cache'})
+
+    @router.get('/admin/assets/training_transform_scene.js', include_in_schema=False)
+    def training_transform_scene_script():
+        return FileResponse(Path(__file__).parent / 'static' / 'training_transform_scene.js', media_type='text/javascript', headers={'Cache-Control': 'no-cache'})
+
     @router.get("/admin/assets/db_viewer.js", include_in_schema=False)
     def detail_script():
         return FileResponse(Path(__file__).parent / "static" / "db_viewer.js", media_type="text/javascript", headers={"Cache-Control":"no-cache"})

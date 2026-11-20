@@ -1,7 +1,22 @@
 {
   "schema_version": 1,
-  "github_release_count": 43,
+  "github_release_count": 44,
   "updates": [
+    {
+      "published_at": null,
+      "date_source": "개발 변경 이력 날짜 · 운영 반영 여부는 서버 버전으로 확인",
+      "url": "https://github.com/KETI88-DEV/sprayxr-copilot-server/releases/tag/v3.15.0",
+      "body": "### 원본 훈련 기록에서 학습 JSON까지\n\n- 실제 기록 한 건의 원본 CSV·연결 높이맵, 가공 정보와 저장 JSON을 세 영역으로 비교합니다.\n- 면·Zone을 선택하면 거리·속도 통계, 도막 수치와 실제 JSON 항목이 함께 바뀝니다.\n- 3D 미리보기에서 선택 기록의 도장 경로와 기준 자료의 Zone 외곽을 출처와 함께 확인합니다.\n- 해당 기록의 원본 높이맵과 두께 환산 분포를 비교합니다.\n- 모바일에서는 세로로 배치하며 기존 검증 결과·자료 상세·다운로드를 유지합니다.\n\n원본 자료와 등록 JSON·카탈로그를 변경하지 않습니다. 릴리스 게시와 운영 서버 반영은 별도로 확인합니다.",
+      "ui_changes": [
+        "DB뷰어 → 학습 데이터 → 시험자료 확인 상단에서 CSV·높이맵 → 가공 정보 → JSON을 비교합니다.",
+        "Zone 선택으로 3D 경로·거리와 속도 통계·도막 수치·JSON 항목을 함께 확인합니다.",
+        "PC에서는 세 열, 모바일에서는 세로 배치로 표시합니다."
+      ],
+      "source": "변경 이력",
+      "date": "2026-11-20",
+      "title": "공인시험 자료 가공 과정 시각화",
+      "version": "v3.15.0"
+    },
     {
       "published_at": null,
       "date_source": "개발 변경 이력 날짜 · 운영 반영 여부는 서버 버전으로 확인",

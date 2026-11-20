@@ -215,6 +215,9 @@ trainer/demo_api/static/training_verification.js
 trainer/demo_api/static/training_inspection.js
 trainer/demo_api/static/training_verification.css
 trainer/demo_api/static/training_inspection.css
+trainer/demo_api/static/training_transform.js
+trainer/demo_api/static/training_transform.css
+trainer/demo_api/static/training_transform_scene.js
 trainer/demo_api/telemetry_contracts.py
 trainer/demo_api/telemetry_router.py
 trainer/demo_api/test_api_docs.py
