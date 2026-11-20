@@ -1,7 +1,20 @@
 {
   "schema_version": 1,
-  "github_release_count": 42,
+  "github_release_count": 43,
   "updates": [
+    {
+      "published_at": null,
+      "date_source": "개발 변경 이력 날짜 · 운영 반영 여부는 서버 버전으로 확인",
+      "url": "https://github.com/KETI88-DEV/sprayxr-copilot-server/releases/tag/v3.14.2",
+      "body": "- 결함 대책 질문 유형 16개의 맥락 프롬프트에 \"방법이 여러 개면 겹치는 것은 하나로 합쳐 5개 이내로 말하세요.\"를 더했습니다. 운영 27B를 Qwen3.8 원본으로 바꿔 본 시험에서 \"저도막을 막을려면 어떻해야되?\" 같은 질문에 같은 방법을 33개 넘게 되풀이하다 잘린 약 1,900자 답(100초 이상)이 나왔습니다.",
+      "ui_changes": [
+        "결함을 막거나 고치는 방법을 물으면 겹치는 방법을 합쳐 5개 이내로 답합니다."
+      ],
+      "source": "변경 이력",
+      "date": "2026-11-20",
+      "title": "대책 답 5개 이내",
+      "version": "v3.14.2"
+    },
     {
       "published_at": null,
       "date_source": "개발 변경 이력 날짜 · 운영 반영 여부는 서버 버전으로 확인",
