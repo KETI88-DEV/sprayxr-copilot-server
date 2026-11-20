@@ -166,6 +166,7 @@ def render_training_data() -> str:
 <section id="training-data-root" aria-labelledby="td-page-title">
   <link rel="stylesheet" href="/admin/assets/training_verification.css">
   <link rel="stylesheet" href="/admin/assets/training_inspection.css">
+  <link rel="stylesheet" href="/admin/assets/training_transform.css">
   <header class="td-header">
     <div><div class="td-eyebrow">TRAINING DATASET</div><h1 id="td-page-title">학습 데이터</h1>
       <p class="td-description">훈련 기록 CSV와 연결된 높이맵 텍스처를 세션별 JSON으로 변환한 데이터입니다.<br>작업자와 학습모드별 구성을 살펴보고, 각 데이터의 맵 분석과 생성 JSON을 확인합니다.<br>호출 채널: 파일 수집 · 호출 IP: 해당 없음</p>
@@ -219,7 +220,23 @@ def render_training_data() -> str:
 
   <section id="tv-root" role="tabpanel" aria-labelledby="td-verification-tab" hidden>
     <div class="tv-intro tv-exam-intro"><div><span class="tv-eyebrow">EXAM DATA INSPECTION</span><h2>CSV에서 시험자료까지, 한 기록씩 확인합니다</h2><p>품질 완료로 등록된 회차의 원천 CSV, 저장된 특징 정보와 생성 JSON을 함께 확인합니다.<br>작업자 역할과 자격은 각 기록의 출처 정보를 그대로 표시합니다.</p><p id="tv-exam-quantity" class="tv-exam-quantity">시험자료 수량 기준 1,200건 · 품질 완료 자료의 기술 검증</p><p id="tv-run"></p></div><div class="tv-actions"><a href="/admin/api/training-verification/export.json">검증 증빙 JSON ↓</a><a href="/admin/api/training-verification/export.csv">검증 목록 CSV ↓</a><a id="tv-login" href="/admin/manage" target="_blank" rel="noopener">관리자 로그인 ↗</a></div></div>
-    <ol class="tv-exam-pipeline" aria-label="시험자료 확인 흐름"><li><span>01</span><strong>CSV 원천</strong><small>필드와 일부 행 확인</small></li><li><span>02</span><strong>필드 파싱</strong><small>시간·좌표·입력값</small></li><li><span>03</span><strong>분사 구간 · Zone</strong><small>회차 내 구간과 방문</small></li><li><span>04</span><strong>통계 · 정보</strong><small>거리·속도·저장 분석</small></li><li><span>05</span><strong>회차 JSON</strong><small>특징 정보와 출처</small></li><li><span>06</span><strong>검증 증빙</strong><small>JSON·원천·재생 결과</small></li></ol>
+    <section id="tt-root" class="tt-panel" aria-labelledby="tt-title">
+      <header class="tt-heading">
+        <div><span class="tt-eyebrow">ONE RECORD · CSV → INFORMATION → JSON</span><h2 id="tt-title">훈련 기록 한 건이 학습 정보로 바뀌는 과정</h2><p>실제 기록의 원본 값, Zone별로 정리된 정보와 저장 JSON을 함께 살펴봅니다.</p></div>
+        <label class="tt-record-field" for="tt-record">예시 기록<select id="tt-record" disabled><option value="">예시 기록을 불러오는 중입니다.</option></select></label>
+      </header>
+      <ol class="tt-flow" aria-label="학습데이터 가공 흐름"><li>훈련 CSV · 연결 높이맵</li><li>분사 구간 · Zone별 집계</li><li>회차별 학습 JSON</li></ol>
+      <div id="tt-meta" class="tt-meta"></div>
+      <div class="tt-toolbar"><div class="tt-views" role="group" aria-label="가공 정보 보기"><button id="tt-view-zone" type="button" aria-pressed="true">구역·도장 경로</button><button id="tt-view-metrics" type="button" aria-pressed="false">거리·속도</button><button id="tt-view-coating" type="button" aria-pressed="false">도막 분포</button></div><div id="tt-zones" class="tt-zones" role="group" aria-label="예시 기록 Zone 선택"></div></div>
+      <p id="tt-explanation" class="tt-flow-note">원본의 어떤 값이 어떤 정보로 정리되는지 보려면 예시 기록을 선택하세요.</p>
+      <div class="tt-grid">
+        <article class="tt-card"><h3><span>01</span> 원본 훈련데이터</h3><div id="tt-source"><p class="tt-empty">CSV에 기록된 일부 행과 연결 높이맵을 표시합니다.</p></div></article>
+        <article class="tt-card tt-card-visual"><h3><span>02</span> 가공된 정보</h3><div id="tt-visual"><p class="tt-empty">구역, 작업 경로, 거리·속도 통계와 도막 분포를 확인합니다.</p></div></article>
+        <article class="tt-card"><h3><span>03</span> 학습데이터 JSON</h3><div id="tt-json"><p class="tt-empty">저장 JSON에서 현재 설명에 해당하는 항목을 발췌해 표시합니다.</p></div></article>
+      </div>
+      <footer class="tt-footer"><p id="tt-status" role="status" aria-live="polite">예시 자료를 준비하고 있습니다.</p><button id="tt-retry" type="button" class="td-button-secondary" hidden>다시 불러오기</button><div id="tt-actions" class="tt-actions"></div></footer>
+      <p class="tt-footnote">가공 결과와 연결 원본을 조회하는 예시입니다. 새 변환·모델 학습을 실행하거나 기존 검증 결과를 변경하지 않습니다.</p>
+    </section>
     <p class="tv-exam-hint">목록의 기록명을 누르면 전체 훈련 요약과 Zone별 정보를 확인합니다. 새 CSV 재변환은 상세 창에서 관리자가 별도로 실행합니다.</p>
     <div class="tv-definition"><strong>시험자료의 집계 단위와 기술 확인 범위</strong><p id="tv-definition">동일 공정의 훈련 기록 1회에서 가공한 JSON과 연결 모션 자료를 1건으로 집계합니다.</p><p id="tv-scope">JSON·원천 연결과 실제 브라우저 시작·중간·끝 구간 재생을 확인합니다. 전체 훈련 시간 연속 재생이나 라벨 정확도·AI 성능 시험을 뜻하지 않습니다.</p><p>유효 구축 = JSON 통과 + 연결 원천 통과 + 실제 재생 통과 − 중복 자료. 품질 완료 등록은 전문가 신원·자격 인증이나 모델 학습 완료 판정이 아닙니다.</p><p id="tv-historical-target">기존 검증 회차와 당시 수량 기준을 보존합니다.</p></div>
     <p id="tv-stale" class="tv-stale" role="status" hidden>등록 목록이 검증 당시와 달라졌습니다. 이전 검증 결과는 현재 유효 구축 건수에 포함하지 않습니다.</p>
@@ -249,6 +266,8 @@ def render_training_data() -> str:
   </dialog>
 </section>
 <script src="/admin/assets/training_data.js" defer></script>
+<script src="/admin/assets/training_transform_scene.js" defer></script>
+<script src="/admin/assets/training_transform.js" defer></script>
 <script src="/admin/assets/training_inspection.js" defer></script>
 <script src="/admin/assets/training_verification.js" defer></script>
 """
