@@ -135,7 +135,7 @@ def _coating_feedback(progress: CoatingProgress, row: dict[str, Any] | None) -> 
         return CoatingFeedback(
             analysis_status="not_available", reason_code=progress.reason or "coating_assessment_unavailable")
     graded = row["grade"] is not None
-    message = f"Zone {row['zone_id']}: {coating_assessment.grade_phrase(row)}"
+    message = f"{row['zone_id']}구역: {coating_assessment.grade_phrase(row)}"
     adjustment = coating_assessment.adjustment_sentence(row["adjustments"])
     return CoatingFeedback(
         analysis_status="available" if graded else "not_available",
@@ -167,13 +167,13 @@ def coating_alerts(row: dict[str, Any]) -> list[dict[str, Any]]:
 
     if row["grade"] == "above":
         add(row, "coating_over_app", "zone_grade_above",
-            f"Zone {row['zone_id']} 칠한 곳 평균 {row['thickness_um']:.0f}µm(상한 초과·과도막). 분사를 멈추세요.")
+            f"{row['zone_id']}구역 칠한 곳 평균 {row['thickness_um']:.0f}µm(상한 초과·과도막). 분사를 멈추세요.")
     left = row.get("left_zone")
     if left is not None and left["grade"] == "below":
         add(left, "coating_under_app", "zone_grade_below",
-            f"방금 떠난 Zone {left['zone_id']} 칠한 곳 평균 "
+            f"방금 떠난 {left['zone_id']}구역 칠한 곳 평균 "
             f"{coating_assessment.mean_text(left['thickness_um'], left['target_thickness_um'])}µm(하한 미만·저도막). "
-            "돌아가 얇은 곳만 보완하세요.")
+            "돌아가 도막 분포 확인 후 보완하세요.")
     return alerts
 
 

@@ -689,30 +689,30 @@ class CoatingProgressEngine:
                 recommendation = "stop_current_zone"
                 next_zone_id = None
                 # 같은 시퀀스의 과도막 알림(SSE)과 숫자가 같도록 행의 값을 적는다.
-                message = (f"Zone {request.zone_id} 칠한 곳 평균 {row['thickness_um']:.0f}µm(상한 초과·과도막). "
-                           "분사 중지, 하한 미달부만 확인하세요.")
+                message = (f"{request.zone_id}구역 칠한 곳 평균 {row['thickness_um']:.0f}µm(상한 초과·과도막). "
+                           "분사 중지, 도막 분포를 확인하세요.")
             elif status == "complete":
                 recommendation = "move_next_zone"
                 next_zone_id = self._next_zone(profile, map_num, request.zone_id)
-                message = f"Zone {request.zone_id} 공식 면적 95% 이상 충족."
+                message = f"{request.zone_id}구역 공식 면적 95% 이상 충족."
                 if next_zone_id is not None:
-                    message += f" Zone {next_zone_id}로 이동하세요."
+                    message += f" {next_zone_id}구역으로 이동하세요."
             elif coverage_percent >= coating_assessment.GATE_COVERAGE_PERCENT:
                 # 면적은 채웠지만 저도막이라 게이트가 막았다. 떠날 때의 저도막 알림과 같은 숫자를 적는다.
                 recommendation = "continue_current_zone"
                 next_zone_id = None
-                message = (f"Zone {request.zone_id} 충족 면적 {coverage_percent:.1f}%, "
+                message = (f"{request.zone_id}구역 충족 면적 {coverage_percent:.1f}%, "
                            f"칠한 곳 평균 {coating_assessment.mean_text(row['thickness_um'], target_thickness_um)}µm(하한 미만·저도막). "
-                           "얇은 곳만 보완하세요.")
+                           "도막 분포 확인 후 보완하세요.")
             else:
                 recommendation = "continue_current_zone"
                 next_zone_id = None
-                message = (f"Zone {request.zone_id} 정상범위 면적 {coverage_percent:.1f}%. "
-                           "하한 미달부만 보완하고 두꺼운 곳은 피하세요.")
+                message = (f"{request.zone_id}구역 정상범위 면적 {coverage_percent:.1f}%. "
+                           "도막 분포 확인 후 보완하세요.")
                 if assessment["overpaint_percent"] > 0:
-                    message = (f"Zone {request.zone_id} 정상범위 면적 {coverage_percent:.1f}%, "
-                               f"상한 초과 {assessment['overpaint_percent']:.1f}%. "
-                               "두꺼운 곳은 분사 중지, 하한 미달부만 확인하세요.")
+                    message = (f"{request.zone_id}구역 정상범위 면적 {coverage_percent:.1f}%, "
+                               f"과도막 면적 {assessment['overpaint_percent']:.1f}%. "
+                               "분사 중지, 도막 분포를 확인하세요.")
 
             message = f"정상범위 {target_thickness_um:g}~{upper:g}µm: {message}"
 
