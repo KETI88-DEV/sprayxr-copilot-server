@@ -40,6 +40,12 @@ def test_remedy_rules_name_the_defect_its_document_wording_and_no_borrowing():
         assert "대책으로 옮기지 마세요" in rule and "근거에 없는 방법이나 수치는" in rule
 
 
+def test_every_remedy_rule_caps_the_list_at_five_methods():
+    # Qwen3.8 원본이 대책을 33개 넘게 되풀이했다(2026-11-20 운영 교체 시험).
+    remedies = [entry for entry in _TYPES if entry["이름"].endswith("대책")]
+    assert len(remedies) >= 16 and all("5개 이내로" in context_text(entry) for entry in remedies)
+
+
 def test_router_inherits_the_defect_across_two_followups():
     store = SequenceStore(":memory:")
     for at, prompt in (("05:05:01", "저도막이 뭐야?"), ("05:05:20", "원인이 뭔데?")):
