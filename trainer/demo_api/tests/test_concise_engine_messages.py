@@ -36,18 +36,18 @@ def test_complete_coating_guide_keeps_the_physical_gate_and_next_zone(tmp_path: 
     assert progress.status == "complete" and progress.recommendation == "move_next_zone"
     assert progress.next_zone_id == "2"
     assert "160~200µm" in progress.message and "95%" in progress.message
-    assert "공식" in progress.message and "Zone 2" in progress.message
+    assert "공식" in progress.message and "2구역" in progress.message
     assert len(progress.message) <= 72
 
 
-def test_overpaint_coating_guide_keeps_stop_and_only_low_area_action(tmp_path: Path):
+def test_overpaint_coating_guide_keeps_stop_and_distribution_check(tmp_path: Path):
     _profile(tmp_path)
     progress = _engine(tmp_path).evaluate(_request(sequence_id="SHORT-OVER", thickness_um=300))
     assert progress.status == "overpaint_risk" and progress.recommendation == "stop_current_zone"
     assert progress.next_zone_id is None
     assert "160~200µm" in progress.message and "칠한 곳 평균" in progress.message
     assert "과도막" in progress.message and ("중지" in progress.message or "멈추" in progress.message)
-    assert "하한 미달" in progress.message
+    assert "도막 분포" in progress.message
     assert len(progress.message) <= 105
 
 
@@ -77,7 +77,7 @@ def test_sequence_unknown_gate_does_not_issue_a_move_in_its_brief_guide(tmp_path
     _record(store, body)
     decision = engine.evaluate(AnalyzeSequenceRequest.model_validate(body), store)
     assert decision.feedback.reason_code is not None
-    assert "현재 Zone 3" in decision.text_guide and "이동 전" in decision.text_guide
+    assert "현재 3구역" in decision.text_guide and "이동 전" in decision.text_guide
     assert "다음" not in decision.text_guide
     assert len(decision.text_guide) <= 62
 

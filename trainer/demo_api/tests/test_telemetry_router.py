@@ -268,7 +268,7 @@ def test_analyze_sequence_fills_coating_feedback_from_the_assessment() -> None:
                 "normal_band_um", "unpainted_fraction", "six_band_counts", "adjustments"):
         assert feedback[key] == _ZONE_ROW[key], key
     assert feedback["message"] == (
-        "Zone 1: 저도막(칠한 곳 평균 98µm, 미도장 12%) "
+        "1구역: 저도막(칠한 곳 평균 98µm, 미도장 12%) "
         "조절 후보: 이동 속도를 낮추는 쪽(원인 미확정)."
     )
     assert feedback["algorithm_version"].startswith("coating-v1-adapter/")
@@ -361,7 +361,7 @@ def test_analyze_sequence_reports_a_zone_with_nothing_painted_as_not_available()
 
     assert (feedback["analysis_status"], feedback["reason_code"]) == ("not_available", "no_valid_painted_pixels")
     assert feedback["unpainted_fraction"] == 1.0
-    assert feedback["message"] == "Zone 1: 칠한 곳 없음(미도장 100%)"
+    assert feedback["message"] == "1구역: 칠한 곳 없음(미도장 100%)"
 
 
 _NO_FEEDBACK = {
@@ -662,7 +662,7 @@ def test_analyze_sequence_returns_feedback_and_publishes_the_same_anomaly() -> N
     ).json()["data"]
 
     assert data["sequence_feedback"] == {"analysis_status": "available", "reason_code": "zone_skipped"}
-    assert "현재 Zone 1" in data["text_guide"]
+    assert "현재 1구역" in data["text_guide"]
     assert "2번" not in data["text_guide"]
     events = bus.since("1_1001642_1", last_event_id=0)
     assert len(events) == 1

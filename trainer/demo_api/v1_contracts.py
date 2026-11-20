@@ -523,7 +523,7 @@ class FirstZoneGuidance(StrictModel):
     reference_basis: Literal["measured_expert_runs"] | None = None
     message: Annotated[str, Field(
         description="시작 구역 또는 기준 미등록을 알리는 짧은 안내입니다.",
-        examples=["Zone 1에서 시작하세요."],
+        examples=["1구역에서 시작하세요."],
     )]
 
 

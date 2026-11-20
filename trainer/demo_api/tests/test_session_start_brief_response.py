@@ -43,12 +43,12 @@ def test_start_envelope_says_the_measured_first_zone_and_preserves_idempotency(t
     first = client.post("/api/v1/sessions/start", json=body).json()
     repeated = client.post("/api/v1/sessions/start", json=body).json()
     assert first["status"] == repeated["status"] == "SUCCESS"
-    assert first["message"] == repeated["message"] == f"훈련 시작. Zone {zone}에서 시작하세요."
+    assert first["message"] == repeated["message"] == f"훈련 시작. {zone}구역에서 시작하세요."
     assert first["data"]["first_zone_id"] == zone
     guidance = first["data"]["first_zone_guidance"]
     assert guidance["zone_id"] == zone
     assert guidance["recommended_flow"][0] == zone
-    assert guidance["message"] == f"Zone {zone}에서 시작하세요."
+    assert guidance["message"] == f"{zone}구역에서 시작하세요."
     assert store.get_session(body["session_id"]).tool_type == tool_type
 
 

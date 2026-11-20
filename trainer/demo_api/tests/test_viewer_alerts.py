@@ -125,12 +125,13 @@ def test_sequence_alerts_match_the_public_anomaly_stream(tmp_path: Path) -> None
     }
     by_id = {a["sequence_id"]: a for a in viewer["alerts"]}
     # 게이트 전 판정 문장(공개 SSE는 여기에 도막 진행 문장을 씌운다).
-    assert by_id["SEQ-001"]["message"] == "1번 구역은 수평 방향으로 도장하세요."
+    assert by_id["SEQ-001"]["message"] == "1구역: 수평 도포 권장."
     # 공개 SSE message 도 같은 한국어 방향 이름이다(4차 결정: 사람이 읽는 문장에 영어 열쇠를 싣지 않는다).
     sse = {e.sequence_id: e.payload["message"] for e in broadcaster.since("S-1", last_event_id=0)
            if e.anomaly_type == "direction_deviation"}
-    assert sse["SEQ-001"].startswith("1번 구역은 수평 방향으로 도장하세요.") and "horizontal" not in sse["SEQ-001"]
-    assert by_id["SEQ-003"]["message"] == "전문가 권장 Zone 순서를 확인하세요."   # 남은 Zone이 없어 추천이 없다
+    assert sse["SEQ-001"] == "1구역: 수평 도포 권장. 도막 완료 미확인, 이동 전 확인 필요."
+    assert "horizontal" not in sse["SEQ-001"]
+    assert by_id["SEQ-003"]["message"] == "전문가 권장 Zone 순서 확인 바람."   # 남은 Zone이 없어 추천이 없다
     assert all(a["basis"] == "sequence" and a["zone_id"] == "1" and a["map_num"] == "1" for a in viewer["alerts"])
     # 뷰어는 방향 문장 대신 판정에 쓴 기대·관측 방향 열쇠를 값으로 받아 한국어로 옮긴다. 열거값은 바꾸지 않는다.
     assert by_id["SEQ-001"]["values"] == {"expected_direction": "horizontal", "observed_direction": "vertical"}

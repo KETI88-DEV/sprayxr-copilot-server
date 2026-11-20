@@ -340,5 +340,5 @@ def test_blasting_next_guidance_keeps_its_existing_order_engine(tmp_path):
                  frames=0, received_at="now", body=req.model_dump_json())
     data = query(client(tmp_path, store=store), session_id=req.session_id,
                  prompt="작업 순서상 다음 Zone은 어디야?")
-    assert "다음 권장 Zone 2" in data["answer"]
+    assert "다음 권장 2구역" in data["answer"]
     assert data["coating_context"] is None

@@ -464,7 +464,7 @@ def create_v1_router(
             "process": process, "zone_id": first_zone,
             "recommended_flow": plan["flow"] if plan else [],
             "reference_basis": "measured_expert_runs" if first_zone else None,
-            "message": (f"Zone {first_zone}에서 시작하세요." if first_zone else
+            "message": (f"{first_zone}구역에서 시작하세요." if first_zone else
                         "등록된 작업 순서 기준이 없습니다."),
         }
         lower, upper = coating_assessment.resolve_band(row.target_thickness_um, **coating_assessment.session_limits(row))

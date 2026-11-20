@@ -14,6 +14,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from PIL import Image
 
+from trainer.demo_api import coating_assessment
 from trainer.demo_api.anomaly_stream import AnomalyBroadcaster
 from trainer.demo_api.coating_progress import CoatingProgressEngine
 from trainer.demo_api.sequence_analysis import SequenceAnalysisEngine
@@ -211,11 +212,12 @@ def test_wrong_map_and_unobserved_pixels_never_unlock(tmp_path: Path) -> None:
     assert unknown.coverage_percent == 0
 
 
-def test_overcoat_warning_targets_thick_areas_and_does_not_unlock(tmp_path: Path) -> None:
+def test_overcoat_warning_stops_spray_without_unlocking_or_locating_thick_pixels(tmp_path: Path) -> None:
     result = engine(tmp_path).evaluate(request(value=300, width=5))
     assert result.status == "overpaint_risk"
     assert result.next_zone_id is None
-    assert "과도막" in result.message and "1.5배" in result.message
+    assert "과도막" in result.message and "분사 중지" in result.message
+    assert "도막 분포" in result.message and "두꺼운 곳" not in result.message
 
 
 def test_overpaint_risk_follows_the_painted_mean_not_a_pixel_share(tmp_path: Path) -> None:
@@ -227,7 +229,7 @@ def test_overpaint_risk_follows_the_painted_mean_not_a_pixel_share(tmp_path: Pat
 
 
 def test_live_crop_path_matches_the_engine_cumulative_crop_path(tmp_path: Path) -> None:
-    """실시간 크롭 복호·병합은 PR #8 복호·누적 교체의 사본이다. 같은 PNG에서 같은 판정이 나와야 한다."""
+    """두 복호·누적 경로에 같은 공개 API 정상범위(160~200µm)를 적용하면 같은 판정이 나와야 한다."""
     rng = np.random.default_rng(20261112)
     code = rng.integers(0, 2200, size=(10, 10))
     pixels = np.stack([code // 255, code % 255, np.where(rng.random((10, 10)) < 0.2, 0, 255)], axis=-1)
@@ -245,7 +247,14 @@ def test_live_crop_path_matches_the_engine_cumulative_crop_path(tmp_path: Path) 
         "basis": "cumulative_crop", "width": 10, "height": 10, "origin": "top_left",
         "crop": {"x0": 0, "y0": 0, "width": 10, "height": 10, "atlas_width": 10, "atlas_height": 10}})
     surface = numerical.overwrite_cumulative_crops([numerical.place_crop(numerical.decode_height_png(spec), spec)])
-    quality = numerical.assess_zone(surface, np.ones((10, 10), dtype=bool), 160.0)["quality"]
+    # PR #8 assess_zone은 상한 인자를 받지 않고 1.5배를 쓴다. 공개 API의 범위 정책은
+    # 두 경로 모두 같은 어댑터에 맡겨 복호·누적 경로만 비교한다.
+    quality = coating_assessment.assess_zone(
+        np.where(surface.source_painted, surface.raw_um, 0), np.ones((10, 10), dtype=bool),
+        160.0, min_thickness_um=160.0, max_thickness_um=200.0,
+    )
+    assert quality is not None
+    assert quality["normal_band_um"] == [160, 200]
     assert 0 < quality["painted_pixel_count"] < 100
     assert row["grade"] == quality["grade"]
     assert row["six_band_counts"] == quality["six_band_counts"]
@@ -253,13 +262,13 @@ def test_live_crop_path_matches_the_engine_cumulative_crop_path(tmp_path: Path) 
     assert row["thickness_um"] == pytest.approx(quality["painted_mean_um"], abs=0.05)
 
 
-@pytest.mark.parametrize(("stored_basis", "target_basis", "label"), [
-    ("default_target", "default_target", "기본 목표 160µm 기준"),
-    ("session_target", "session_target", "세션 목표 160µm 기준"),
-    (None, "session_target", "세션 목표 160µm 기준"),  # target_basis 열이 생기기 전에 만든 세션
+@pytest.mark.parametrize(("stored_basis", "target_basis"), [
+    ("default_target", "default_target"),
+    ("session_target", "session_target"),
+    (None, "session_target"),  # target_basis 열이 생기기 전에 만든 세션
 ])
 def test_session_started_without_a_target_is_judged_as_the_default_target(
-    tmp_path: Path, stored_basis: str | None, target_basis: str, label: str,
+    tmp_path: Path, stored_basis: str | None, target_basis: str,
 ) -> None:
     """목표를 생략한 세션도 160.0이 저장되므로 저장된 기준으로만 가른다."""
     req = request()
@@ -269,15 +278,26 @@ def test_session_started_without_a_target_is_judged_as_the_default_target(
     data = analyze(tmp_path, req, sessions)
     assert data["coating_progress"]["target_basis"] == target_basis
     assert data["coating_feedback"]["target_basis"] == target_basis
-    assert label in data["text_guide"]
+    assert data["coating_progress"]["target_thickness_um"] == 160
+    assert data["coating_feedback"]["normal_band_um"] == [160, 200]
+    assert "정상범위 160~200µm" in data["coating_progress"]["message"]
+    assert len(data["text_guide"]) <= 60
 
 
-@pytest.mark.parametrize(("sessions", "label"), [
-    (None, "기본 목표 160µm 기준"),
-    (SimpleNamespace(get_session=lambda _: SimpleNamespace(target_thickness_um=200)), "세션 목표 200µm 기준"),
+@pytest.mark.parametrize(("sessions", "basis", "target", "band"), [
+    (None, "default_target", 160, [160, 200]),
+    (SimpleNamespace(get_session=lambda _: SimpleNamespace(target_thickness_um=200)), "session_target", 200, [200, 250]),
 ])
-def test_default_target_is_named_in_the_guide(tmp_path: Path, sessions: Any, label: str) -> None:
-    assert label in analyze(tmp_path, request(), sessions)["text_guide"]
+def test_target_basis_and_range_are_preserved_outside_the_short_guide(
+    tmp_path: Path, sessions: Any, basis: str, target: int, band: list[int],
+) -> None:
+    data = analyze(tmp_path, request(), sessions)
+    assert data["coating_progress"]["target_basis"] == basis
+    assert data["coating_feedback"]["target_basis"] == basis
+    assert data["coating_progress"]["target_thickness_um"] == target
+    assert data["coating_feedback"]["normal_band_um"] == band
+    assert f"정상범위 {band[0]}~{band[1]}µm" in data["coating_progress"]["message"]
+    assert len(data["text_guide"]) <= 60
 
 
 def test_order_deviation_sse_has_no_conflicting_transition_when_incomplete(tmp_path: Path) -> None:
@@ -314,7 +334,7 @@ def test_blasting_keeps_reference_order_without_spray_thickness_gate(tmp_path: P
     store.record(session_key=req.session_id, sequence_id=req.sequence_id, body_sha256="blasting",
                  frames=0, received_at="now", body=req.model_dump_json())
     decision = SequenceAnalysisEngine(tmp_path).evaluate(req, store)
-    assert "다음 권장 Zone 2" in decision.text_guide
+    assert "다음 권장 2구역" in decision.text_guide
     assert CoatingProgressEngine(tmp_path).evaluate(req).reason == "coating_not_applicable"
 
 
@@ -329,7 +349,7 @@ def test_completed_zone_direction_guidance_has_no_stale_unknown_gate_message(tmp
                           {"index": 2, "gun_metrics": {"raytexuv": [0, 100]}}]}).sequence_info
     data = TestClient(app).post("/api/v1/copilot/analyze-sequence", json=req.model_dump(mode="json")).json()["data"]
     assert data["sequence_feedback"]["reason_code"] == "direction_deviation"
-    assert "Zone 1: 수평 도포 권장." in data["text_guide"] and "horizontal" not in data["text_guide"]
+    assert "1구역: 수평 도포 권장." in data["text_guide"] and "horizontal" not in data["text_guide"]
     assert "160~200µm" in data["coating_progress"]["message"]
     assert "확인할 수 없습니다" not in data["text_guide"]
     assert data["coating_progress"]["status"] == "complete"
@@ -382,8 +402,7 @@ def test_overcoat_alert_is_published_once_per_zone(tmp_path: Path) -> None:
     assert [(alert.anomaly_type, alert.sequence_id) for alert in alerts] == [("coating_over_app", "SEQ-001")]
     assert alerts[0].payload == {
         "reason_code": "zone_grade_above",
-        "message": "기본 목표 160µm 기준: Zone 1의 칠한 곳 평균 두께가 290µm로 목표의 1.5배 이상입니다(과도막). "
-                   "이 Zone의 분사를 멈추세요.",
+        "message": "기본 목표 160µm 기준: 1구역 칠한 곳 평균 290µm(상한 초과·과도막). 분사를 멈추세요.",
         "zone_id": "1", "map_num": 1, "status": "over_app", "grade": "above",
         "thickness_um": 289.9, "target_thickness_um": 160.0, "target_basis": "default_target",
     }
@@ -401,8 +420,8 @@ def test_undercoat_alert_fires_when_the_trainee_leaves_a_below_zone(tmp_path: Pa
     # 본문의 Zone은 지금 Zone(2)이 아니라 떠난 Zone(1)이다.
     assert alerts[0].payload == {
         "reason_code": "zone_grade_below",
-        "message": "기본 목표 160µm 기준: 방금 떠난 Zone 1 칠한 곳 평균 90µm(하한 미만·저도막). "
-                   "돌아가 얇은 곳만 보완하세요.",
+        "message": "기본 목표 160µm 기준: 방금 떠난 1구역 칠한 곳 평균 90µm(하한 미만·저도막). "
+                   "돌아가 도막 분포 확인 후 보완하세요.",
         "zone_id": "1", "map_num": 1, "status": "under_app", "grade": "below",
         # 원시 100µm는 PNG 양자화로 칠한 곳 평균 89.96µm가 된다. 저도막 행은 0.1 단위로 내린다.
         "thickness_um": 89.9, "target_thickness_um": 160.0, "target_basis": "default_target",
@@ -502,8 +521,8 @@ def test_report_session_target_cannot_complete_without_official_mask(tmp_path: P
 
 
 # 2026-11-12 책임자 결정: 면적 95%를 채워도 칠한 곳 평균이 목표 미만(저도막)이면 다음 Zone으로 보내지 않는다.
-THIN_MEAN_GUIDE = ("정상범위 160~200µm: Zone 1 충족 면적 95.0%, 칠한 곳 평균 "
-                   "153µm(하한 미만·저도막). 얇은 곳만 보완하세요.")
+THIN_MEAN_GUIDE = ("정상범위 160~200µm: 1구역 충족 면적 95.0%, 칠한 곳 평균 "
+                   "153µm(하한 미만·저도막). 도막 분포 확인 후 보완하세요.")
 
 
 def thin_mean(seq: int = 1) -> AnalyzeSequenceRequest:
@@ -526,16 +545,16 @@ def test_area_shortfall_keeps_the_area_guide(tmp_path: Path, req: AnalyzeSequenc
     result = engine(tmp_path).evaluate(req)
     assert result.status == "needs_more"
     assert result.message == (
-        f"기본 목표 160µm 기준: Zone 1의 목표 도막 충족 면적은 {result.coverage_percent:.1f}%입니다. "
-        "현재 Zone의 목표 미달 영역만 보완하고 이미 두꺼운 영역은 피하세요.")
+        f"정상범위 160~200µm: 1구역 정상범위 면적 {result.coverage_percent:.1f}%. "
+        "도막 분포 확인 후 보완하세요.")
 
 
 def test_area_and_mean_met_moves_to_the_next_zone(tmp_path: Path) -> None:
     result = engine(tmp_path).evaluate(request(valid_count=95))
     assert result.assessment["grade"] == "normal"
     assert (result.status, result.next_zone_id) == ("complete", "2")
-    assert result.message == ("기본 목표 160µm 기준: Zone 1의 공식 구역 면적 중 95% 이상이 목표 도막을 충족했습니다. "
-                              "다음 Zone 2로 이동하세요.")
+    assert result.message == ("정상범위 160~200µm: 1구역 공식 면적 95% 이상 충족. "
+                              "2구역으로 이동하세요.")
 
 
 def test_thin_zone_guide_and_leaving_alert_agree(tmp_path: Path) -> None:
@@ -543,7 +562,7 @@ def test_thin_zone_guide_and_leaving_alert_agree(tmp_path: Path) -> None:
     data = client.post("/api/v1/copilot/analyze-sequence", json=thin_mean().model_dump(mode="json")).json()["data"]
     assert data["coating_progress"]["status"] == "needs_more"
     assert data["coating_progress"]["next_zone_id"] is None
-    assert "저도막" in data["text_guide"] and "얇은 곳만 보완" in data["text_guide"]
+    assert "저도막" in data["text_guide"] and "도막 분포 확인 후 보완" in data["text_guide"]
     assert "다음" not in data["text_guide"]
     assert coating_alerts(bus) == []
     post(client, zone2(2))
@@ -551,8 +570,8 @@ def test_thin_zone_guide_and_leaving_alert_agree(tmp_path: Path) -> None:
     post(client, zone2(4))
     alerts = coating_alerts(bus)
     assert [(alert.anomaly_type, alert.sequence_id) for alert in alerts] == [("coating_under_app", "SEQ-002")]
-    assert alerts[0].payload["message"] == ("기본 목표 160µm 기준: 방금 떠난 Zone 1 칠한 곳 평균 153µm"
-                                            "(하한 미만·저도막). 돌아가 얇은 곳만 보완하세요.")
+    assert alerts[0].payload["message"] == ("기본 목표 160µm 기준: 방금 떠난 1구역 칠한 곳 평균 153µm"
+                                            "(하한 미만·저도막). 돌아가 도막 분포 확인 후 보완하세요.")
 
 
 @pytest.mark.parametrize(("req", "status", "next_zone"), [(thin_mean(), "needs_more", None), (request(), "complete", "2")])
@@ -611,6 +630,6 @@ def test_blasting_direction_guide_is_nominal_without_changing_direction_evidence
                  frames=0, received_at="now", body=req.model_dump_json())
     decision = SequenceAnalysisEngine(tmp_path).evaluate(req, store)
     assert decision.feedback.reason_code == "direction_deviation"
-    assert decision.text_guide == "Zone 1: 수평 도포 권장."
+    assert decision.text_guide == "1구역: 수평 도포 권장."
     assert decision.directions == ("horizontal", "vertical")
-    assert decision.direction_guide == "Zone 1: 수평 방향으로 도장하세요."
+    assert decision.direction_guide == "1구역: 수평 방향으로 도장하세요."
