@@ -1,13 +1,13 @@
 # 선박 도장 AI Co-Pilot (SprayXR)
 
-**[API 문서](http://keti-xr-lab.iptime.org:58000/docs) · [DB뷰어](http://keti-xr-lab.iptime.org:58000/admin) · [3D 모션뷰어](http://keti-xr-lab.iptime.org:58000/motion-viewer)**
+**[메인 페이지](http://keti-xr-lab.iptime.org:58000/home) · [API 문서](http://keti-xr-lab.iptime.org:58000/docs) · [DB뷰어](http://keti-xr-lab.iptime.org:58000/admin) · [3D 모션뷰어](http://keti-xr-lab.iptime.org:58000/motion-viewer)**
 
 선박 도장·블라스팅 훈련 시뮬레이터와 연동해 작업자에게 피드백과 훈련 결과를 제공하는 AI Co-Pilot 서버입니다.
 전문가 기준 데이터와 훈련 기록을 비교하고 작업 자세와 도장 경로를 시각화합니다. 훈련 중 발생하는 질문에도 답변합니다.
 
-소스 버전은 **v3.13.0**입니다. [버전별 변경 이력](CHANGELOG.md)과 [GitHub 릴리스](https://github.com/KETI88-DEV/sprayxr-copilot-server/releases)에서 변경 내용을 확인할 수 있습니다. 소스 게시와 서버 배포는 별도로 진행하며, 각 운영 서버의 반영 버전과 상태는 Home에서 확인합니다.
+소스 버전은 **v3.14.0**입니다. [버전별 변경 이력](CHANGELOG.md)과 [GitHub 릴리스](https://github.com/KETI88-DEV/sprayxr-copilot-server/releases)에서 변경 내용을 확인할 수 있습니다. 소스 게시와 서버 배포는 별도로 진행하며, 각 운영 서버의 반영 버전과 상태는 Home에서 확인합니다.
 
-DB뷰어 학습 데이터의 **구축 검증**에서 등록 건수와 JSON·원천 해시·실제 모션 재생의 검증 결과를 구분해 확인하고 증빙 목록을 내려받을 수 있습니다. 관리자만 검사를 실행하며 조회는 공개입니다. 페이지 접근 기록은 별도 관리자 화면에서 확인합니다.
+DB뷰어 학습 데이터의 **시험자료 확인(구축 검증)**에서 등록 건수와 기존 JSON·원천·실제 모션 재생 검증 결과를 확인하고 증빙 목록을 내려받을 수 있습니다. 기록을 선택하면 전체·Zone 통계와 CSV→JSON 정보화 과정을 살펴볼 수 있습니다. 관리자만 검사를 실행하며 조회는 공개입니다. 페이지 접근 기록은 별도 관리자 화면에서 확인합니다.
 
 v3.12 소스의 Home은 등록 학습자료 현황과 업데이트, 주요 화면의 진입점을 모았습니다. AI 질문에서는 분야별 질문 예시를 골라 입력하고 학습자료의 근거 문단을 찾아 읽을 수 있습니다. 모바일은 설정과 질문 목록을 각각 메뉴로 열며, 답변 수준·응답 시간 옆에서 실제 출처를 확인합니다. 기존 요약 옵션과 모델 선택은 그대로입니다.
 
