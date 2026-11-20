@@ -30,10 +30,15 @@
   }
   function renderRows() {
     const focused=document.activeElement;let focusTarget=null;
+    const track=(node,id,action)=>{node.dataset.verificationDataset=id;node.dataset.verificationAction=action;if(focused?.dataset?.verificationDataset===id&&focused.dataset.verificationAction===action)focusTarget=node;};
+    const inspect=(id,trigger)=>{if(window.TrainingInspection?.open)return window.TrainingInspection.open(id,trigger);$('tv-message').textContent='자료 상세 기능을 불러오지 못했습니다. 새로고침 후 다시 확인해 주세요.';};
     const items = (Array.isArray(state.report?.items) ? state.report.items : []).filter(matches), pages = Math.max(1, Math.ceil(items.length / 25));
     state.page = Math.min(state.page, pages);
     const rows = items.slice((state.page - 1) * 25, state.page * 25).map(item => {
-      const row = el('tr'), name = el('td');name.append(el('strong',item.dataset_name || item.dataset_id),el('small',item.session_id));
+      const row = el('tr'), name = el('td'),validId=/^[0-9a-f]{32}$/.test(item.dataset_id);
+      const open=el(validId?'button':'strong',item.dataset_name || item.dataset_id,'tv-record-open');
+      if(validId){open.type='button';track(open,item.dataset_id,'inspection');open.addEventListener('click',()=>inspect(item.dataset_id,open));row.className='tv-record-row';row.addEventListener('click',event=>{if(!event.target?.closest?.('a,button,input,select'))inspect(item.dataset_id,open);});}
+      name.append(open,el('small',item.session_id));
       row.append(name, el('td',item.worker_name || item.worker_id || '미확인'), el('td',processLabel(item.process) + ' · 모드 ' + (item.scenario_id || '미기록')));
       for (const status of [item.json_status,item.source_status,item.browser_status]) {const cell = el('td');cell.append(badge(status));row.append(cell);}
       const note = el('td');if(item.duplicate)note.append(el('span','중복 제외','tv-duplicate'));
@@ -41,11 +46,12 @@
       if (why.length) {const list = el('ul'); for (const reason of why) {const item = el('li',reasons[reason] || '검증 사유 확인 필요');item.title=String(reason);list.append(item);} note.append(list);}
       row.append(note);
       const actions = el('td', null, 'tv-row-actions');
-      if (/^[0-9a-f]{32}$/.test(item.dataset_id)) for (const [label,href,action] of [['JSON 보기',`/admin/api/training-data/${item.dataset_id}`,'json'],['3D 재생',`/motion-viewer?dataset_id=${item.dataset_id}`,'playback']]) {
+      if (validId) for (const [label,href,action] of [['JSON 보기',`/admin/api/training-data/${item.dataset_id}`,'json'],['3D 재생',`/motion-viewer?dataset_id=${item.dataset_id}`,'playback']]) {
         const link=el('a',label);link.href=href;link.target='_blank';link.rel='noopener';link.dataset.verificationDataset=item.dataset_id;link.dataset.verificationAction=action;
         if(focused?.dataset?.verificationDataset===item.dataset_id&&focused.dataset.verificationAction===action)focusTarget=link;
         actions.append(link);
       }
+      if(validId){const detail=el('button','자료 상세','tv-inspect-action');detail.type='button';track(detail,item.dataset_id,'inspection-action');detail.addEventListener('click',()=>inspect(item.dataset_id,detail));actions.append(detail);}
       row.append(actions);return row;
     });
     if (!rows.length) {const row=el('tr'),cell=el('td',state.report?.phase==='not_started'?'구축 검증을 아직 시작하지 않았습니다. 등록 건수는 재생 검증 통과 건수가 아닙니다.':'조건에 맞는 검증 기록이 없습니다.');cell.colSpan=8;row.append(cell);rows.push(row);}
@@ -68,7 +74,11 @@
     $('tv-phase').textContent=phases[report.phase] || '검증 상태 확인 필요';
     $('tv-stale').textContent=typeof report.stale_reason==='string'&&report.stale_reason.trim()?report.stale_reason:'등록 목록이 검증 당시와 달라졌습니다. 이전 검증 결과는 현재 유효 구축 건수에 포함하지 않습니다.';
     $('tv-stale').hidden=!report.stale;
-    $('tv-goal').textContent=summary.goal_met&&!report.stale?`기준 ${count(report.target || 1000)}건 충족`:`기준 ${count(report.target || 1000)}건 미충족 · ${count(summary.valid)}건 검증 통과`;
+    const examTarget=Number(report.exam?.target)>0?Number(report.exam.target):1200;
+    const met=!report.stale&&Number(summary.valid)>=examTarget;
+    $('tv-goal').textContent=met?`시험 수량 기준 ${count(examTarget)}건 충족`:`시험 수량 기준 ${count(examTarget)}건 미충족 · ${count(summary.valid)}건 기술 검증 통과`;
+    $('tv-exam-quantity').textContent=`검증 회차의 품질 완료 등록 ${count(summary.registered)}건 · 시험자료 수량 기준 ${count(examTarget)}건`;
+    $('tv-historical-target').textContent=`보존된 검증 회차의 당시 기준 ${count(report.exam?.historical_run_target??report.target??1000)}건 · 회차와 기존 증빙을 유지합니다.`;
     const auditing=report.phase==='checking_json',eligible=(Array.isArray(report.items)?report.items:[]).filter(item=>item.json_status==='passed'&&item.source_status==='passed'&&!item.duplicate).length;
     $('tv-progress').max=Math.max(1,auditing?Number(summary.registered)||0:eligible);
     $('tv-progress').value=auditing?Number(report.processed)||0:Number(summary.browser_passed||0)+Number(summary.browser_failed||0);

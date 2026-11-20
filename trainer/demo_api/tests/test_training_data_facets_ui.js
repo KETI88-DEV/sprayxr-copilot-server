@@ -13,7 +13,7 @@ class Element {
   constructor(tag = 'div', id = '') {
     this.tagName = tag.toUpperCase(); this.id = id; this.children = []; this.listeners = {};
     this.attrs = {}; this.dataset = {}; this._value = ''; this._text = ''; this.disabled = false;
-    this.className = ''; this.open = false; this.isConnected = true;
+    this.className = ''; this.open = false; this.isConnected = true; this.style = {};
     const classes = new Set();
     this.classList = {add: (...names) => names.forEach(name => classes.add(name)), remove: (...names) => names.forEach(name => classes.delete(name)), contains: name => classes.has(name)};
   }
@@ -101,13 +101,24 @@ function setup(search = '') {
   });
   vm.runInNewContext(source, {document, window, fetch, Option, Node: Element, AbortController, URL, URLSearchParams, Intl, console, setTimeout, clearTimeout}, {filename: sourcePath});
   return {
-    document, requests, get: id => document.getElementById(id), location: () => location,
+    document, requests, get: id => document.getElementById(id), location: () => location, presentation: window.TrainingDataPresentation,
     values: id => document.getElementById(id).options.map(entry => entry.value),
     async respond(index, data) { requests[index].resolve(data); await settle(); },
     async reject(index, error = new Error('late network error')) { requests[index].reject(error); await settle(); },
     async change(id, value) { const node = document.getElementById(id); node.value = value; assert.equal(node.value, value, 'test must select an existing option'); await node.emit('change'); },
   };
 }
+
+test('reusable coating presentation isolates inspection IDs and leaves library controls intact',async()=>{
+  const app=setup();assert.equal(typeof app.presentation?.coating,'function');assert.equal(typeof app.presentation?.json,'function');
+  const data={dataset_id:'a'.repeat(32),metadata:{process:'blasting'},coating:{maps:[{map_num:1,status:'not_applicable',image_url:'/admin/api/training-data/a/images/0'}]}};
+  const library=app.presentation.coating(data),inspection=app.presentation.coating(data,{idPrefix:'tv-inspection',isolated:true});
+  const flatten=node=>node.children.flatMap(child=>[child,...flatten(child)]);
+  assert.ok(flatten(library).some(node=>node.id==='td-map-select'));
+  assert.ok(flatten(inspection).some(node=>node.id==='tv-inspection-map-select'));
+  assert.ok(!flatten(inspection).some(node=>node.id?.startsWith('td-')));
+  assert.match(inspection.textContent,/블라스팅.*도막 두께/);
+});
 
 test('a worker change renders all four server facets and sends the current search with every selected filter', async () => {
   const app = setup(); await app.respond(0, listing());

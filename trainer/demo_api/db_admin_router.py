@@ -44,6 +44,8 @@ def create_db_admin_router() -> APIRouter:
     router.include_router(create_feedback_admin_router(auth, str(path)))
     from trainer.demo_api.training_verification import create_training_verification_router
     router.include_router(create_training_verification_router(auth))
+    from trainer.demo_api.training_data_inspection import create_training_inspection_router
+    router.include_router(create_training_inspection_router(auth))
 
     def response(data: dict):
         return JSONResponse(data, headers={"Cache-Control": "no-store"})

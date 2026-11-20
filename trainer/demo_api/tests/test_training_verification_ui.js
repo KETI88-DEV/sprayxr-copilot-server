@@ -9,15 +9,15 @@ const text=node=>[node.textContent,...node.children.map(text)].filter(Boolean).j
 const item=(id,status='pending')=>({dataset_id:id.repeat(32),dataset_name:'기록 '+id,worker_name:'작업자 '+id,process:'spray',scenario_id:'4',session_id:'session-'+id,json_status:'passed',source_status:'passed',browser_status:status,duplicate:false,reasons:[]});
 async function page({authenticated=false,report,view='verification'}={}){
   report ||= {phase:'not_started',target:1000,stale:false,definition:'한 훈련 기록 = 1건',scope:'시작·중간·끝 재생, 전체 연속 재생 아님',summary:{registered:8,json_passed:0,source_passed:0,browser_passed:0,browser_failed:0,duplicates:0,valid:0,pending:8,goal_met:false},items:[]};
-  const nodes=new Map(),requests=[],events={};const get=id=>{if(!nodes.has(id))nodes.set(id,new Element());return nodes.get(id);};
+  const nodes=new Map(),requests=[],events={},inspections=[];const get=id=>{if(!nodes.has(id))nodes.set(id,new Element());return nodes.get(id);};
   for(const id of ['tv-status-filter','tv-process-filter'])get(id).value='all';
   Element.active=null;
   const document={get activeElement(){return Element.active;},getElementById:get,createElement:tag=>new Element(tag),hidden:false,addEventListener:(name,fn)=>events[name]=fn};
-  const window={location:{href:'http://localhost/admin/training-data?view='+view},history:{replaceState(){}},addEventListener:(name,fn)=>events[name]=fn};
+  const window={location:{href:'http://localhost/admin/training-data?view='+view},history:{replaceState(){}},TrainingInspection:{open:(id,trigger)=>inspections.push({id,trigger})},addEventListener:(name,fn)=>events[name]=fn};
   const fetch=async(url,options={})=>{requests.push({url,options});return {ok:true,status:200,json:async()=>url.includes('/manage/status')?{authenticated,csrf_token:'csrf-test',expires_at:Date.now()/1000+3600}:report};};
   vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../static/training_verification.js'),'utf8'),{document,window,fetch,URL,URLSearchParams,AbortController,Date,setTimeout:()=>1,clearTimeout(){}});
   await new Promise(resolve=>setImmediate(resolve));
-  return {get,requests,events,document};
+  return {get,requests,events,document,inspections};
 }
 test('unverified registration is not presented as browser success or valid construction',async()=>{
   const {get,requests}=await page();
@@ -62,4 +62,14 @@ test('library and verification tabs use real tab semantics and keyboard navigati
   const {get}=await page({view:'library'});assert.equal(get('tv-root').hidden,true);
   await get('td-library-tab').events.keydown({key:'ArrowRight',preventDefault(){}});
   assert.equal(get('tv-root').hidden,false);assert.equal(get('td-library-panel').hidden,true);assert.equal(get('td-verification-tab').attributes['aria-selected'],'true');
+});
+test('exam quantity uses1200 technical scope without reusing the historical1000 goal flag',async()=>{
+  const report={phase:'finished',target:1000,exam:{target:1200,historical_run_target:1000},stale:false,summary:{registered:1201,valid:1100,pending:0,goal_met:true},items:[]};
+  const {get,requests}=await page({report});assert.match(get('tv-goal').textContent,/1,200/);assert.match(get('tv-goal').textContent,/미충족/);assert.match(get('tv-historical-target').textContent,/1,000/);assert.ok(!requests.some(row=>row.options.method==='POST'));
+});
+test('a record opens the separate inspection and keeps the exact JSON and playback actions',async()=>{
+  const {get,inspections}=await page({report:{phase:'finished',target:1000,summary:{registered:1,valid:1,pending:0},items:[item('a','passed')]}});
+  const row=get('tv-items').children[0],name=row.children[0].children[0];assert.equal(name.tagName,'button');await name.events.click();
+  assert.equal(inspections[0].id,'a'.repeat(32));assert.equal(inspections[0].trigger,name);
+  assert.ok(row.children.at(-1).children.some(node=>node.href==='/motion-viewer?dataset_id='+'a'.repeat(32)));
 });
