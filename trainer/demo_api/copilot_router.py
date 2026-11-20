@@ -63,7 +63,7 @@ from trainer.demo_api.copilot_live_analysis import current_zone, live_analysis
 from trainer.demo_api.simulator_context import SIMULATOR_CONTEXT, is_blasting, wants_simulator_context, simulator_configuration_facts
 from trainer.demo_api.copilot_session_context import build_query_instruction, summarize_session, viewer_definition_context
 from trainer.demo_api.context_prompts import context_text, matched_prompt
-from trainer.demo_api.term_rules import fix_typos, matched_terms, meaning_evidence, routed_terms, term_context, with_document_terms
+from trainer.demo_api.term_rules import fix_typos, matched_terms, meaning_evidence, routed_terms, term_context, unit_facts, with_document_terms
 from trainer.demo_api.pose_query import (
     answer_order_question,
     order_request_fields,
@@ -1264,6 +1264,9 @@ async def _execute_copilot_query(
                     return _success_response(query, request_started, answer=_session_findings(found_report),
                                              retrieval_used=False, citations=[],
                                              context_status="available" if found_report else "not_available")
+            units = {} if _MY_RUN.search(query.prompt) else unit_facts(query.prompt)
+            if units:  # 단위 뜻은 일반 지식이다. 답 모델·검토·수치 검사가 같은 뜻을 본다.
+                conversation_facts = {**conversation_facts, "단위 뜻": units}
             simulator = {"simulator_context": SIMULATOR_CONTEXT} if wants_simulator_context(query.prompt) else {}
             conversation_engine = conversation_pipeline if conversation_pipeline is not None else planned_pipeline
             generated_model: str | None = None
