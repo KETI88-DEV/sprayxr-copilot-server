@@ -44,6 +44,25 @@ def routed_terms(prompt: str) -> list[dict]:
     return [rule for rule in _found(prompt, prompt, formal=True) if rule.get("경로")]
 
 
+# 단위의 뜻·환산을 묻는 말. 기록 수치를 묻는 질문("이격거리 몇 mm였어?")에 단위 표를 붙이지 않으려고 본다.
+_UNIT_ASK = re.compile(r"뭐|무엇|뜻|의미|단위|환산|바꾸|얼마나|차이|같[아은]|몇\s*(?:[A-Za-zµμ㎛㎡℃°%]|마이크로|미크론|밀리|센치|센티|미터|인치|피트|리터|갤런|도\b|초\b)")
+
+
+def unit_facts(prompt: str) -> dict[str, str]:
+    """질문이 뜻·환산을 묻는 단위의 뜻(일반 지식). 문서 근거 없이 답할 때 답 모델과 검토가 '마이크로미터'를 측정 공구로 읽지 않게 준다."""
+    if not _UNIT_ASK.search(prompt):
+        return {}
+    return {unit["단위"]: unit["뜻"] for unit in _CONFIG.get("단위", ())
+            if any(re.search(_unit_pattern(alias), prompt, re.I) for alias in unit["별칭"])}
+
+
+def _unit_pattern(alias: str) -> str:
+    if alias.startswith("(?"):  # 앞 글자 조건을 직접 적은 별칭('마이크로미터' 안의 '미터'는 미터가 아니다)
+        return alias
+    # 영문 기호는 낱말 안에 들어 있을 때('similar'의 mil, 'µm'의 m) 맞지 않게 한다.
+    return (r"(?<![A-Za-zµμ/])" + re.escape(alias) + r"(?![A-Za-z/²2])") if alias.isascii() and alias.isalpha() else re.escape(alias)
+
+
 def fix_typos(text: str) -> str:
     """등록된 용어 오타를 바른 용어로 바꾼다('저도맥이 뭐야?' → '저도막이 뭐야?'). 질문 분석·검색·이어받기가 모두 바른 용어를 본다."""
     return _TYPO.sub(lambda found: _TYPOS[found.group()], text) if _TYPO else text

@@ -272,3 +272,49 @@ def test_viewer_question_about_my_own_run_keeps_the_record_numbers():
     mine = DialoguePipeline()
     ask(client(mine), "지금 너무 빨리 움직였어?", response_mode="detailed", context=viewer)
     assert all("[도장 지식 질문" not in str(call.get("instruction", "")) for call in mine.calls)
+
+
+@pytest.mark.parametrize("prompt", ["마이크로미터가 뭐야?", "마이크론이 뭐야?", "µm가 뭐야?"])
+def test_the_thickness_unit_is_explained_from_the_documents(prompt):
+    # 운영 3.13.3 상세 분석이 측정 공구로 답했다가 검토에서 거절돼 503 이 났다.
+    rules = matched_terms(prompt)
+    assert [rule["용어"] for rule in rules] == ["마이크로미터"] and "단위" in rules[0]["뜻"]
+    assert meaning_evidence(prompt, rules) == ["DOC-doc_0190-C0145", "DOC-doc_0045-C0180"]
+
+
+def test_a_viewer_thickness_question_with_the_unit_stays_a_record_question():
+    from trainer.demo_api.tests.viewer_record import AT_3S, context, payload
+    viewer = context("knowledge_search", payload(), AT_3S)
+    with_unit, plain = DialoguePipeline(), DialoguePipeline()
+    first = ask(client(with_unit), "Zone 8 두께 몇 마이크로미터야?", response_mode="quick", context=viewer)
+    second = ask(client(plain), "Zone 8 두께 몇이야?", response_mode="quick", context=viewer)
+    assert first["answer"] == second["answer"] and "µm" in first["answer"]
+    assert len(with_unit.calls) == len(plain.calls) and not any(call.get("pinned_chunk_ids") for call in with_unit.calls)
+
+
+# TSB 연동 단위 표(2026-08): 위치 m, 이격거리 mm, 속도 mm/s, 각도 °, 도막 µm, 압력 bar, 넓이 m², 도료량 L, 비율 %, 온도 ℃, 텍스처 px, 누적 시간 s, 간격 ms
+@pytest.mark.parametrize("prompt, unit", [
+    ("m가 뭐야?", "미터(m)"), ("mm가 뭐야?", "밀리미터(mm)"), ("mm/s가 뭐야?", "mm/s"), ("°가 무슨 뜻이야?", "도(°)"),
+    ("마이크로미터가 뭐야?", "마이크로미터(µm)"), ("bar가 뭐야?", "바(bar)"), ("m2가 뭐야?", "제곱미터(m²)"), ("L가 뭐야?", "리터(L)"),
+    ("%가 뭐야?", "퍼센트(%)"), ("℃가 뭐야?", "섭씨(℃)"), ("px가 뭐야?", "픽셀(px)"), ("s가 무슨 단위야?", "초(s)"), ("ms가 뭐야?", "밀리초(ms)"),
+    ("150 bar는 몇 MPa야?", "메가파스칼(MPa)"), ("1마이크론은 몇 mm야?", "마이크로미터(µm)"),
+])
+def test_every_unit_of_the_simulator_table_has_a_meaning(prompt, unit):
+    from trainer.demo_api.term_rules import unit_facts
+    assert unit in unit_facts(prompt)
+
+
+@pytest.mark.parametrize("prompt", ["이격거리 300mm 유지해", "Zone 8 두께 몇이야?", "similar family milk items", "저도막이 뭐야?", "몇 도로 기울여야 해?"])
+def test_unit_meanings_are_given_only_when_a_unit_is_asked_about(prompt):
+    from trainer.demo_api.term_rules import unit_facts
+    assert unit_facts(prompt) == {}
+
+
+def test_a_general_explanation_gets_the_unit_meaning_as_a_fact():
+    # 운영 3.13.3: "1마이크론은 몇 mm야?" 의 답이 근거 없는 수치로 지워져 "세션 기록으로는 확인할 수 없습니다."만 남았다.
+    pipeline = DialoguePipeline(CHAT)
+    ask(client(pipeline), "bar가 뭐야?", response_mode="quick")
+    assert any("0.1MPa" in json.dumps(kwargs.get("facts"), ensure_ascii=False) for _, kwargs in pipeline.conversations)
+    mine = DialoguePipeline(CHAT)
+    ask(client(mine), "내가 몇 bar로 했어?", response_mode="quick")
+    assert not any("0.1MPa" in json.dumps(kwargs.get("facts"), ensure_ascii=False) for _, kwargs in mine.conversations)
