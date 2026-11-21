@@ -117,8 +117,18 @@ def with_document_terms(query: str, rules: list[dict]) -> str:
     return f"{query} ({', '.join(dict.fromkeys(extra))})" if extra else query
 
 
-def term_context(rules: list[dict]) -> str:
+def same_word_lines(prompt: str, terms: Iterable[str]) -> list[str]:
+    """질문이 용어를 다른 말로 불렀을 때 둘을 잇는 줄("질문의 '노점'은(는) 이슬점과 같은 말입니다").
+
+    별칭으로 용어는 찾아도 답변 맥락에 이 말이 없으면 v8이 이슬점 근거를 받고 '해당 정보가 없습니다'로 답했다(2026-11-21 운영)."""
+    flat, terms = _flat(prompt), set(terms)
+    return [f"- 질문의 '{word}'은(는) {rule['용어']}과(와) 같은 말입니다. {rule['용어']}의 근거로 답하세요."
+            for rule in _RULES if rule["용어"] in terms and _flat(rule["용어"]) not in flat
+            for word in [next((w for w in rule.get("같은 말", ()) if _flat(w) in flat), None)] if word]
+
+
+def term_context(rules: list[dict], prompt: str = "") -> str:
     lines = [f"- {rule['용어']}: 문서에서는 {', '.join(repr(e) for e in rule['문서 표현'])}(으)로 씁니다. 뜻은 {rule['뜻']}입니다. "
              f"같은 뜻이므로 그 표현으로 적힌 근거로 답하세요." + (f" {rule['주의']}" if rule["주의"] else "")
              for rule in rules]
-    return "[용어 대응]\n" + "\n".join(lines)
+    return "[용어 대응]\n" + "\n".join(same_word_lines(prompt, [rule["용어"] for rule in rules]) + lines)

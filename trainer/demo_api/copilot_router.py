@@ -63,7 +63,7 @@ from trainer.demo_api.copilot_live_analysis import current_zone, live_analysis
 from trainer.demo_api.simulator_context import SIMULATOR_CONTEXT, is_blasting, wants_simulator_context, simulator_configuration_facts
 from trainer.demo_api.copilot_session_context import build_query_instruction, summarize_session, viewer_definition_context
 from trainer.demo_api.context_prompts import context_text, matched_prompt
-from trainer.demo_api.term_rules import fix_typos, matched_terms, meaning_evidence, routed_terms, term_context, unit_facts, with_document_terms
+from trainer.demo_api.term_rules import fix_typos, matched_terms, meaning_evidence, routed_terms, same_word_lines, term_context, unit_facts, with_document_terms
 from trainer.demo_api.pose_query import (
     answer_order_question,
     order_request_fields,
@@ -1704,6 +1704,8 @@ async def _execute_copilot_query(
     # 유형(prompt_type)은 기록 수치를 넘길지 정하기 전에 위에서 골랐다.
     if prompt_type is not None:
         knowledge_client_context = (knowledge_client_context + "\n" if knowledge_client_context else "") + context_text(prompt_type)
+        # 질문이 결함을 다른 말로 불렀으면("더스트 스프레이는 왜 생겨?") 유형 규칙의 용어와 잇는 줄을 더한다.
+        knowledge_client_context += "".join("\n" + line for line in same_word_lines(question, [prompt_type["용어"]]))
     # 교육 용어 ↔ 문서 표현(configs/term_rules.json): 검색어에 문서 표현을 덧붙이고 대응 한 줄을 준다.
     # 내 기록을 묻는 질문(기록 지칭·뷰어 서명 자료·도막 비교)에는 문서 쪽 표현을 섞지 않는다.
     term_rules = (matched_terms(question, inherit) if query.task_type == "knowledge_search" and mixed is None and use_rag
@@ -1711,7 +1713,7 @@ async def _execute_copilot_query(
     # 유형 규칙이 맡은 용어는 겹쳐 주지 않는다. 겹치면 8B가 근거에 없는 원인을 지어냈다(2026-11-18 '과도막은 왜 생겨?').
     term_rules = [rule for rule in term_rules if prompt_type is None or rule["용어"] != prompt_type["용어"]]
     if term_rules:
-        knowledge_client_context = (knowledge_client_context + "\n" if knowledge_client_context else "") + term_context(term_rules)
+        knowledge_client_context = (knowledge_client_context + "\n" if knowledge_client_context else "") + term_context(term_rules, question)
     # 붙일 근거 조각: 질문 유형의 묶음, 없으면 뜻을 묻는 질문에 한해 그 용어의 근거.
     pinned_chunks = list(prompt_type["조각"]) if prompt_type is not None else meaning_evidence(question, term_rules)
     # Add the relation after all fact-specific context builders, which may
