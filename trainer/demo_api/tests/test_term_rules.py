@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from trainer.demo_api.context_prompts import matched_prompt
-from trainer.demo_api.term_rules import _RULES, matched_terms, term_context, with_document_terms
+from trainer.demo_api.term_rules import _RULES, fix_typos, matched_terms, same_word_lines, term_context, with_document_terms
 from trainer.demo_api.tests.test_query_contextual_dialogue import DialoguePipeline, ask, client
 
 CONFIGS = Path(__file__).resolve().parents[2] / "configs"
@@ -83,3 +83,14 @@ def test_cause_question_keeps_only_the_cause_rule_for_its_defect():
     ask(client(pipeline), "과도막은 왜 생겨?", response_mode="quick")
     text = pipeline.calls[-1].get("generation_instruction") or pipeline.calls[-1]["instruction"]
     assert "[결함 원인 질문]" in text and "[용어 대응]" not in text
+
+
+def test_a_question_that_calls_the_term_by_another_word_gets_the_link_line():
+    # v8이 '노점이 뭐야?'에 이슬점 근거를 받고도 '해당 정보가 없습니다'로 답했다(2026-11-21 운영).
+    context = term_context(matched_terms("노점이 뭐야?"), "노점이 뭐야?")
+    assert "질문의 '노점'은(는) 이슬점과(와) 같은 말입니다" in context
+    assert "같은 말입니다" not in term_context(matched_terms("이슬점이 뭐야?"), "이슬점이 뭐야?")
+    assert same_word_lines("더스트 스프레이는 왜 생겨?", ["드라이 스프레이"]) and not same_word_lines("팁 막힘은 왜 생겨?", ["스프레이 팁"])
+    assert fix_typos("저도막 워인이 뭐야?") == "저도막 원인이 뭐야?"
+    for rule in _RULES:
+        assert set(rule.get("같은 말", ())) <= set(rule["별칭"]), rule["용어"]
