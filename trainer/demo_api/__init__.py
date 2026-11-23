@@ -1,4 +1,4 @@
 """SprayXR simulator-facing API and viewer package."""
 
-__version__ = "3.15.2"
+__version__ = "3.15.3"
 
