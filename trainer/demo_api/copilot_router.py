@@ -779,6 +779,8 @@ def _viewer_measures(context: str | None, prompt: str) -> tuple[dict[str, dict[s
 
 
 _NO_ANSWER: Final = "제공된 자료로는 답할 수 없습니다."
+# 일반 설명이 검토를 못 넘었을 때의 답. 문서 답이 검토를 못 넘었을 때(answer_semantics.UNCONFIRMED_ANSWER)와 같은 문장이다.
+UNCONFIRMED_GENERAL_ANSWER: Final = "제공된 자료만으로는 질문에 맞는 설명을 충분히 확인하지 못했습니다."
 
 
 def _checked_generation(answer: str, query: CopilotQueryRequest, *, instructions: tuple[str, ...] = (),
@@ -1315,6 +1317,11 @@ async def _execute_copilot_query(
                                      model_name=generated_model)
         except Exception:
             logger.exception("copilot conversation unavailable request_id=%s", query.request_id)
+            if knowledge_scope:
+                # 문서 근거가 없어 만든 일반 설명이 검토를 못 넘으면(거절·시간 초과) 오류 대신 확인 불가로 답한다(2026-11-23).
+                # 검토를 못 넘은 설명 자체는 내보내지 않는다.
+                return _success_response(query, request_started, answer=UNCONFIRMED_GENERAL_ANSWER, retrieval_used=False, citations=[],
+                                         degraded=True, context_status="available" if facts or simulator_facts else "not_available")
             return error_response(503, "Conversation engine temporarily unavailable; retry")
 
     if simulator_facts is not None:
