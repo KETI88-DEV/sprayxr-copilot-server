@@ -45,10 +45,14 @@ def test_failed_rag_is_discarded_before_a_fresh_answer_and_its_independent_revie
     assert saved['answer_trace']['review']['verdict']==verdict
 
 
-def test_a_fresh_fallback_with_an_unavailable_judge_is_an_error_not_an_approved_answer():
+def test_a_fresh_fallback_with_an_unavailable_judge_says_unconfirmed_instead_of_an_error_or_the_unreviewed_answer():
+    # 2026-11-23: 503 오류 대신 확인 불가로 답한다. 검토를 못 넘은 설명은 내보내지 않는다.
     p,calls=unavailable_pipeline('budget_exhausted',judge_unavailable=True)
     response=ask(client(p))
-    assert response.status_code==503 and response.json()['data'] is None
+    data=response.json()['data']
+    assert response.status_code==200 and data['degraded']
+    assert data['answer']==UNCONFIRMED_ANSWER.removeprefix('[답변] ') and '작업 조건에 따라' not in data['answer']
+    assert data['citations']==[] and response.headers['X-Copilot-Answer-Source']=='analysis'
     assert calls==['generate','review']
 
 
