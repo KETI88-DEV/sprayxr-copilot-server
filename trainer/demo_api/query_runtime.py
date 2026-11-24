@@ -84,8 +84,10 @@ class _QuickPipeline:
         if not self._runtime.cache_enabled:
             kwargs["quick_cache_scope"] = None
         if kwargs.get("retrieval_instruction"):
+            # 상세 분석과 같은 검색어(용어를 풀이로 바꾸지 않음)로 같은 근거를 찾는다. 바꾸면 두 모드의 근거와 답이 갈렸다
+            # (2026-11-24 현장 피드백 "빠른 답변과 상세 분석 답변이 너무 다름").
             kwargs["retrieval_instruction"] = retrieval_question(
-                kwargs["retrieval_instruction"], context=kwargs.get("instruction", ""),
+                kwargs["retrieval_instruction"], context=kwargs.get("instruction", ""), expand_terms=False,
             )
         return self._parent.run(**kwargs, **self._options())
 
@@ -136,7 +138,7 @@ def retrieval_question(question: str, *, context: str = "", expand_terms: bool =
     query = question
     # The detailed (27B) route passes expand_terms=False: the KURE index contains these terms
     # verbatim ("저도막 결함의 원인 중 하나는 중첩 부족"), and replacing them hid those passages
-    # (2026-11-17). Quick guidance re-applies this function in _QuickPipeline.run and keeps the table.
+    # (2026-11-17). Quick guidance uses the same setting since 2026-11-24 so both modes find the same evidence.
     terms = {
         "저도막": "도막 두께 부족 규정 두께 미달 얇은 도막",
         "과도막": "도막 두께 과다 과도하게 두꺼운 도막",
