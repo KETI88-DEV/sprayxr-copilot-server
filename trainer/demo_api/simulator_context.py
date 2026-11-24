@@ -9,6 +9,7 @@ import re
 from typing import Final
 
 from trainer.demo_api.copilot_intent import is_domain_question
+from trainer.demo_api.query_runtime import explicit_work_process
 from trainer.demo_api.record_query import has_record_marker
 
 SIMULATOR_CONTEXT: Final = """[시뮬레이터 기본 설정]
@@ -20,7 +21,6 @@ SIMULATOR_CONTEXT: Final = """[시뮬레이터 기본 설정]
 - 이격거리·속도의 기준은 Zone별 전문가 측정 중앙값입니다. 전문가 속도는 이전 장비 기록이라 속도를 맞추라고 하지 않습니다. 거리나 속도를 몇 % 바꾸라는 고정 규칙은 없습니다.
 - 단위: 위치 m, 이격거리 mm, 속도 mm/s, 각도 °, 도막 µm, 압력 bar, 온도 ℃."""
 
-_BLASTING: Final = re.compile(r"블라스팅|blasting", re.I)
 _TRAINING_MODE: Final = re.compile(r"(?:훈련|학습)\s*모드")
 _MODE_CATALOG: Final = re.compile(
     r"(?:훈련|학습)\s*모드(?:는|가|의)?\s*(?:총\s*)?"
@@ -39,15 +39,13 @@ def simulator_configuration_facts(prompt: str) -> dict[str, object] | None:
     return {"simulator_configuration": {"training_mode_ids": list(range(1, 11))}}
 
 
-def is_blasting(prompt: str) -> bool:
-    """블록의 스프레이건·도막 목표 문장은 블라스팅 세션에 맞지 않는다(query_runtime.retrieval_question과 같은 낱말).
-
-    shortcut: 질문 글자만 본다(앞 대화의 블라스팅 맥락은 보지 않는다).
-    """
-    return bool(_BLASTING.search(prompt))
+def spray_simulator_context(prompt: str) -> str:
+    """스프레이건·도막 목표 설정은 스프레이 공정에만 적용한다."""
+    return "" if explicit_work_process(prompt) in {"blasting", "grinding"} else SIMULATOR_CONTEXT
 
 
 def wants_simulator_context(prompt: str) -> bool:
-    """대화 경로: 도장 낱말이나 기록 표지가 있는 질문만. 주제 밖 잡담·블라스팅 질문은 지금처럼 둔다."""
-    return not is_blasting(prompt) and (is_domain_question(prompt) or has_record_marker(prompt)
-                                       or bool(_TRAINING_MODE.search(prompt)))
+    """대화 경로에서는 도장 낱말이나 기록 표지가 있는 스프레이 질문에 설정을 전달한다."""
+    return bool(spray_simulator_context(prompt)) and (
+        is_domain_question(prompt) or has_record_marker(prompt) or bool(_TRAINING_MODE.search(prompt))
+    )

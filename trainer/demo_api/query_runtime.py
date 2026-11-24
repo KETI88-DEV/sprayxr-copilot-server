@@ -129,6 +129,15 @@ def translation_pipeline_for(pipeline: Any, source: str, target: str) -> Any:
     return pipeline if isinstance(pipeline, _QuickPipeline) else select_query_pipeline(parent, "quick")
 
 
+def explicit_work_process(text: str) -> str | None:
+    """Return an explicitly named process; leave unqualified language to caller context."""
+    if re.search(r"블라스팅|blasting", text, re.I):
+        return "blasting"
+    if re.search(r"그라인딩|grinding", text, re.I):
+        return "grinding"
+    return "spray" if re.search(r"스프레이|spray", text, re.I) else None
+
+
 def retrieval_question(question: str, *, context: str = "", expand_terms: bool = True) -> str:
     """Expand training terms to the vocabulary in manuals; never add numeric advice."""
     # The router renders model advice as one JSON-quoted physical line. Remove
@@ -174,18 +183,16 @@ def retrieval_question(question: str, *, context: str = "", expand_terms: bool =
             prefix = " ".join(value[:200] for value in previous[-6:])
             query = prefix + " " + query
     current_context = context.split("[최근 대화]", 1)[0]
-    def explicit_process(text: str) -> str | None:
-        if re.search(r"블라스팅|blasting", text, re.I):
-            return "blasting"
-        return "spray" if re.search(r"스프레이|spray", text, re.I) else None
     # Current user wording wins; an actual same-topic user exchange can supply
     # an omitted process. Only then consult current context with advice removed.
-    process = explicit_process(question)
+    process = explicit_work_process(question)
     if process is None and previous:
-        process = next((found for text in reversed(previous) if (found := explicit_process(text))), None)
-    process = process or explicit_process(current_context)
+        process = next((found for text in reversed(previous) if (found := explicit_work_process(text))), None)
+    process = process or explicit_work_process(current_context)
     if process == "blasting":
         return "선박 블라스팅 노즐 작업 " + query
+    if process == "grinding":
+        return "선박 표면 처리 그라인딩 작업 " + query
     return "선박 도장 스프레이 건 작업 " + query
 
 

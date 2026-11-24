@@ -10,6 +10,13 @@ from trainer.demo_api.telemetry_contracts import AnalyzeSequenceRequest, learnin
 
 
 _PROCEDURE = r"표면\s*처리|전처리|세척|탈지|건조|혼합|희석|교반|프라이머|절차|단계|공정|도장\s*전에|칠하기\s*전"
+_EXCLUDED_ORDER = re.compile(r"(?:순서|경로)(?:는|를|은|을)?\s*(?:말고|빼고|제외하고|대신)")
+_REFERENCE_TARGET = re.compile(r"도장|피도면|구역|\bzone\b|존(?!재|중)|블라스팅|스프레이|학습\s*모드|시나리오|\bTR-L\d+\b", re.I)
+_NEXT_ZONE = re.compile(r"다음\s*(?:으로\s*)?(?:(?:칠|도장)\s*(?:할|해야\s*할)\s*)?(?:구역|zone|존)", re.I)
+_NEXT_ZONE_ASK = re.compile(
+    r"^(?:은|는|이|가|을|를)?(?:$|어디|어딘|어느(?:곳|구역|존)|어떤(?:곳|구역|존)|뭐|뭔|무엇|몇번|번호|알려|안내|추천"
+    r"|어떻게(?:돼|되)|(?:(?:으)?로)?(?:바로|이제)?(?:이동|넘어가|가도|가야|가면|진행해도|옮겨|칠하면|칠해야))"
+)
 
 
 # "재도장 간격은?", "다시 칠할 때 주의할 점은?"처럼 방법·조건을 묻는 지식 질문의 표지(2026-11-14 독립 검토).
@@ -35,7 +42,7 @@ def actual_order_intent(prompt: str) -> str | None:
 
 def is_reference_order_question(prompt: str) -> bool:
     """Recognize explicit planning requests without borrowing actual-history facts."""
-    if actual_order_intent(prompt) is not None:
+    if actual_order_intent(prompt) is not None or _EXCLUDED_ORDER.search(prompt):
         return False
     if is_current_next_question(prompt):
         return False
@@ -47,9 +54,9 @@ def is_reference_order_question(prompt: str) -> bool:
     # 문서 속 그림·차트의 순서는 등록된 Zone 기준 순서가 아니다(2026-11-17 사례 14). Zone 계획 대상이 있으면 위 절차 줄처럼 남긴다.
     if re.search(r"예시|그림|차트|견본|양식|계획서|마일스톤|이정표", prompt) and not re.search(r"zone|존|구역|피도면|권장|추천|정석", prompt, re.I):
         return False
-    order = re.search(r"순서|경로|order|route", prompt, re.I)
-    target = re.search(r"작업|도장|피도면|구역|zone|존|블라스팅|스프레이|권장|추천|정석|기준|reference|recommend", prompt, re.I)
-    return bool(order and target)
+    # "파이썬 작업 순서"처럼 작업·순서 낱말만 있는 다른 주제를 피도면 순서로 읽지 않는다.
+    qualified = re.match(r"^\s*(?:권장|추천|정석|기준)\s*(?:작업\s*)?(?:순서|경로)", prompt)
+    return bool(re.search(r"순서|경로|order|route", prompt, re.I) and (_REFERENCE_TARGET.search(prompt) or qualified))
 
 
 def is_current_next_question(prompt: str) -> bool:
@@ -65,8 +72,17 @@ def is_current_next_question(prompt: str) -> bool:
         r"|어떻게(?:돼|돼요|되나요|되는지)|알려(?:줘|주세요|줘요)|안내해줘)?",
         re.sub(r"[\s?？!.。]", "", prompt),
     )
-    return bool(short_order or re.search(r"다음\s*(?:구역|zone|존)", prompt, re.I)
-                or (re.search(r"다음\s*(?:에는|에|으로는|으로|엔|은)?\s*(?:어디|어느)", prompt) and re.search(r"칠|구역|zone|존", prompt, re.I)))
+    if short_order:
+        return True
+    zone = _NEXT_ZONE.search(prompt)
+    if zone is not None:
+        # "다음 구역의 두께"·"다음 구역에서 필요한 보호구"는 그 구역의 속성을 묻는다.
+        tail = re.sub(r"[\s?？!.。]", "", prompt[zone.end():])
+        if is_knowledge_ask(tail) and not re.fullmatch(r"(?:은|는|이|가)?어떻게(?:돼|돼요|되나요|되는지)", tail):
+            return False
+        return bool(_NEXT_ZONE_ASK.match(tail))
+    return bool(re.search(r"다음\s*(?:에는|에|으로는|으로|엔|은)?\s*(?:어디|어느)", prompt)
+                and re.search(r"칠|구역|zone|존", prompt, re.I))
 
 
 _COMPLETION = re.compile(r"다\s*칠했|다\s*칠한\s*거|완료\s*(?:됐|되었|했|된\s*거|야|인가|냐|\?|$)|끝났|끝냈|넘어가도")
@@ -82,17 +98,51 @@ def is_current_completion_question(prompt: str) -> bool:
                 and not is_knowledge_ask(prompt))
 
 
-def _first_zone_answer(query, reports, sequence_engine, scope, unknown):
+_PROGRESS_UNAVAILABLE = {
+    "session_id_missing": ("session_required", "훈련 세션 ID(session_id)가 없어 현재 구역의 진행 상태를 확인할 수 없습니다. 훈련을 시작한 뒤 세션 ID를 함께 보내 주세요."),
+    "playback_live_progress_unavailable": ("analysis_unavailable", "재생 기록에서 현재 도막의 완료 여부를 판정할 자료가 없습니다. 훈련 세션의 분사 기록을 확인해 주세요."),
+    "no_sequence_for_session": ("sequence_missing", "아직 받은 분사 기록이 없어 현재 구역의 완료 여부를 확인할 수 없습니다. 분사 시퀀스가 전송된 뒤 다시 질문해 주세요."),
+    "current_sequence_unavailable": ("sequence_unavailable", "최근 분사 기록을 읽을 수 없어 현재 구역의 완료 여부를 확인할 수 없습니다. 시퀀스 전송 결과를 확인해 주세요."),
+    "current_scenario_mismatch": ("scenario_mismatch", "질문의 콘텐츠와 최근 분사 기록의 콘텐츠가 달라 완료 여부를 확인할 수 없습니다. 현재 훈련의 scenario_id를 확인해 주세요."),
+    "zone_unresolved": ("zone_unresolved", "최근 분사 기록에 유효한 구역 번호(Zone ID)가 없어 완료 여부를 확인할 수 없습니다. 구역이 인식된 뒤 다시 질문해 주세요."),
+    "sequence_engine_unavailable": ("analysis_unavailable", "구역 진행 분석을 사용할 수 없어 완료 여부를 확인할 수 없습니다. 잠시 후 다시 질문해 주세요."),
+    "coating_engine_unavailable": ("analysis_unavailable", "도막 분석을 사용할 수 없어 구역 완료 여부를 확인할 수 없습니다. 잠시 후 다시 질문해 주세요."),
+    "heatmap_unavailable": ("heatmap_unavailable", "최근 분사 기록에 도막 히트맵이 없어 완료 여부를 확인할 수 없습니다. 히트맵을 포함한 시퀀스가 전송된 뒤 다시 질문해 주세요."),
+    "heatmap_map_unavailable": ("heatmap_unavailable", "현재 구역이 속한 면의 도막 히트맵이 없어 완료 여부를 확인할 수 없습니다. 구역의 면 번호와 히트맵을 확인해 주세요."),
+    "heatmap_dimensions_invalid": ("heatmap_unavailable", "도막 히트맵의 크기 또는 배치 좌표를 확인할 수 없어 구역 완료를 판정할 수 없습니다. 이미지와 크롭 정보를 확인해 주세요."),
+    "heatmap_invalid": ("heatmap_unavailable", "도막 히트맵을 읽을 수 없어 구역 완료를 판정할 수 없습니다. 전송한 이미지 형식을 확인해 주세요."),
+    "sequence_reference_unavailable": ("reference_unavailable", "해당 콘텐츠와 공정에 사용할 기준 순서가 없어 구역 순서를 안내할 수 없습니다."),
+    "scenario_id_missing": ("scenario_required", "아직 받은 분사 기록이 없어 콘텐츠를 확인할 수 없습니다. 현재 훈련의 scenario_id를 함께 보내 주세요."),
+    "coating_reference_unavailable": ("reference_unavailable", "해당 콘텐츠의 도막 분석 기준이 등록되어 있지 않아 완료 여부를 확인할 수 없습니다."),
+    "coating_reference_invalid": ("reference_unavailable", "도막 판정에 사용할 공식 구역 기준이 제공되지 않아 완료 여부를 확인할 수 없습니다."),
+}
+_PROGRESS_UNKNOWN = "현재 구역의 완료 여부를 판단할 도막 분석 결과가 없습니다. 구역과 도막 데이터가 전송됐는지 확인해 주세요."
+
+
+def progress_unavailability(reason: object) -> tuple[str, str]:
+    """Select approved messages from the observed progress result."""
+    default = ("analysis_unavailable", _PROGRESS_UNKNOWN)
+    return _PROGRESS_UNAVAILABLE.get(reason, default) if isinstance(reason, str) else default
+
+
+def _progress_unavailable(scope, reason: str):
+    scope["reason_code"] = reason
+    return progress_unavailability(reason)[1], scope, None
+
+
+def _first_zone_answer(query, reports, sequence_engine, scope):
     """분사 기록이 아직 없으면 세션 시작 응답과 같은 첫 구역을 안내한다(완료 판정은 하지 않는다)."""
     get_session = getattr(reports, "get_session", None)
     session = get_session(query.session_id) if callable(get_session) else None
     scenario = query.scenario_id or getattr(session, "scenario_id", None)
     process = "blasting" if getattr(session, "tool_type", None) == "blasting_gun" else "spray"
-    plan = (sequence_engine.reference_plan(scenario_id=scenario, process=process)
-            if sequence_engine is not None and scenario else None)
+    if not scenario:
+        return _progress_unavailable(scope, "scenario_id_missing")
+    if not callable(getattr(sequence_engine, "reference_plan", None)):
+        return _progress_unavailable(scope, "sequence_engine_unavailable")
+    plan = sequence_engine.reference_plan(scenario_id=scenario, process=process)
     if not plan or not plan.get("flow"):
-        scope["reason_code"] = "current_sequence_unavailable"
-        return unknown, scope, None
+        return _progress_unavailable(scope, "sequence_reference_unavailable")
     first = str(plan["flow"][0])
     scope.update(scope="reference_only", analysis_status="available", reason_code="no_sequence_yet",
                  scenario_id=scenario, process=process, next_zone_id=first)
@@ -104,40 +154,39 @@ def current_next_answer(query, sequences, reports=None, *, sequence_engine=None,
     """Replay saved physical evidence through the telemetry gate, without DB writes."""
     scope = {"scope": "current_progress", "analysis_status": "not_available",
              "current_zone_id": None, "next_zone_id": None, "can_compare": False}
-    unknown = "현재 구역의 완료 여부를 확인할 수 없습니다. 구역 이동 전 현재 도막과 공식 구역 데이터를 확인해 주세요."
-    if not query.session_id or (query.context or "").startswith("motion_viewer_"):
-        scope["reason_code"] = "current_progress_unavailable"
-        return unknown, scope, None
+    if (query.context or "").startswith("motion_viewer_"):
+        return _progress_unavailable(scope, "playback_live_progress_unavailable")
+    if not query.session_id:
+        return _progress_unavailable(scope, "session_id_missing")
     latest = sequences.latest_sequence_id(query.session_id)
     if not latest:
-        return _first_zone_answer(query, reports, sequence_engine, scope, unknown)
-    body = sequences.load_body(session_key=query.session_id, sequence_id=latest) if latest else None
+        if is_current_completion_question(query.prompt):
+            return _progress_unavailable(scope, "no_sequence_for_session")
+        return _first_zone_answer(query, reports, sequence_engine, scope)
+    body = sequences.load_body(session_key=query.session_id, sequence_id=latest)
     try:
         request = AnalyzeSequenceRequest.model_validate(body)
     except (TypeError, ValueError):
-        scope["reason_code"] = "current_sequence_unavailable"
-        return unknown, scope, None
+        return _progress_unavailable(scope, "current_sequence_unavailable")
     if query.scenario_id and query.scenario_id != request.scenario_id:
         selected_mode = learning_mode_from_scenario(query.scenario_id)
         if selected_mode is None or selected_mode != request.resolved_mode_id:
-            scope["reason_code"] = "current_scenario_mismatch"
-            return unknown, scope, None
+            return _progress_unavailable(scope, "current_scenario_mismatch")
     scope.update(scenario_id=request.scenario_id, sequence_id=request.sequence_id,
                  process=request.process_type, current_zone_id=request.zone_id)
     if str(request.zone_id).lower() in {"", "-1", "0", "none", "null"}:
-        scope["reason_code"] = "zone_unresolved"
-        return unknown, scope, None
+        return _progress_unavailable(scope, "zone_unresolved")
     if sequence_engine is None:
-        scope["reason_code"] = "sequence_engine_unavailable"
-        return unknown, scope, None
+        return _progress_unavailable(scope, "sequence_engine_unavailable")
     from trainer.demo_api.sequence_analysis import gate_sequence_decision
     decision = sequence_engine.evaluate(request, sequences)
     if request.process_type == "blasting":
         scope["analysis_status"] = decision.feedback.analysis_status
-        return decision.text_guide or unknown, scope, None
+        if decision.feedback.analysis_status != "available":
+            return _progress_unavailable(scope, "sequence_reference_unavailable")
+        return decision.text_guide or _PROGRESS_UNKNOWN, scope, None
     if coating_engine is None:
-        scope["reason_code"] = "coating_engine_unavailable"
-        return unknown, scope, None
+        return _progress_unavailable(scope, "coating_engine_unavailable")
     get_session = getattr(reports, "get_session", None)
     session = get_session(query.session_id) if callable(get_session) else None
     target = coating_assessment.session_target(session)
@@ -147,15 +196,17 @@ def current_next_answer(query, sequences, reports=None, *, sequence_engine=None,
                 yield AnalyzeSequenceRequest.model_validate(previous)
     progress = coating_engine.evaluate_replay(request, prior_requests(), target_thickness_um=target,
                                              **coating_assessment.session_limits(session))
-    decision = gate_sequence_decision(request, decision, progress)
     scope.update(analysis_status="available" if progress.available else "not_available",
                  reason_code=progress.reason, status=progress.status)
-    if (progress.available and progress.zone_id == request.zone_id and progress.status == "complete"
+    if not progress.available:
+        return progress_unavailability(progress.reason)[1], scope, progress.model_dump(mode="json")
+    decision = gate_sequence_decision(request, decision, progress)
+    if (progress.zone_id == request.zone_id and progress.status == "complete"
             and progress.recommendation == "move_next_zone"):
         scope["next_zone_id"] = progress.next_zone_id
     # The telemetry guide remains short; Query returns the complete gate explanation.
-    guide = decision.detail_guide or decision.text_guide or unknown
-    if is_current_completion_question(query.prompt) and progress.available and progress.zone_id == request.zone_id:
+    guide = decision.detail_guide or decision.text_guide or _PROGRESS_UNKNOWN
+    if is_current_completion_question(query.prompt) and progress.zone_id == request.zone_id:
         # 완료를 물었으면 판정을 먼저 말한다. 다른 구역 번호를 물어도 훈련 중에는 지금 구역만 판정한다.
         named = _NAMED_ZONE.search(query.prompt)
         asked = (named[1] or named[2]) if named else None
