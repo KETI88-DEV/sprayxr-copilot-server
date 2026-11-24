@@ -241,3 +241,20 @@ def test_new_sequence_supersedes_a_completed_report_with_a_known_boundary() -> N
     assert result["sequence_context"]["recommended_flow"] == ["1", "2"]
     assert result["sequence_context"]["first_visit_flow"] == ["1", "2"]
     assert result["sequence_context"]["report_id"] is None
+
+
+def test_live_pose_cut_by_the_deadline_reports_the_pending_sprays_and_warms_them(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 2026-11-24: 6초 제한에 걸리면 질문마다 채점 수·평균이 달랐다. 남은 분사 수를 밝히고 뒤에서 채점해 둔다.
+    store = _store(5)
+    clock = iter(range(0, 100, 4))  # 한 번 볼 때마다 4초가 지난다
+    monkeypatch.setattr(copilot_live_analysis.time, "monotonic", lambda: float(next(clock)))
+    monkeypatch.setattr(copilot_live_analysis, "score_body",
+                        lambda body, **kwargs: pose_query.PoseQueryResult("available", None, body["sequence_id"], 0.8, None, [], "summary"))
+    warmed: list[list[str]] = []
+    monkeypatch.setattr(copilot_live_analysis, "_warm_remaining", lambda store, bodies, **kwargs: warmed.append([b["sequence_id"] for b in bodies]))
+    found = copilot_live_analysis.live_analysis(store, session_id="S-LIVE", scenario_id=None, task_type="pose_recomm",
+                                                sequence_engine=None, mcp_base_url="http://mcp")
+    context = found[1]["live_pose_context"]
+    assert context["pending_sequence_count"] > 0
+    assert context["evaluated_sequence_count"] + context["pending_sequence_count"] == context["sampled_sequence_count"]
+    assert len(warmed) == 1 and len(warmed[0]) == context["pending_sequence_count"]

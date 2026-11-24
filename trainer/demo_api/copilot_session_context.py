@@ -104,6 +104,10 @@ def summarize_session(bodies: list[dict[str, Any]], *, recent_limit: int = 3, se
     )
     averages: dict[str, float] = {}
     for key in _METRICS:
+        if key == "avg_thickness_um":
+            # 분사마다의 평균 두께를 다시 평균한 값은 누적 도막 두께가 아니다(같은 세션에서 27µm 대 누적 판정 338µm).
+            # 모델이 이 값으로 "정상 범위 유지"라고 답했다(2026-11-24 현장 피드백). 누적 도막은 도막 판정 답이 말한다.
+            continue
         values = [float(fact[key]) for fact in facts if key in fact]
         if values:
             averages[key] = round(sum(values) / len(values), 3)

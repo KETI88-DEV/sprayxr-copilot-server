@@ -46,7 +46,6 @@ def test_session_summary_keeps_accumulated_order_metrics_without_raw_frames() ->
         "session_averages": {
             "avg_speed_mms": "465 mm/s",
             "avg_distance_mm": "256.25 mm",
-            "avg_thickness_um": "142.5 µm",
         },
         "recent_sequences": [
             {"sequence_id": "SEQ-002", "zone_id": None, "avg_speed_mms": "460 mm/s", "avg_distance_mm": "255 mm", "avg_thickness_um": "142.5 µm"},

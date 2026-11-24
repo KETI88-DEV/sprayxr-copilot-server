@@ -146,4 +146,4 @@ def test_evaluation_questions_quote_the_completed_session_report_without_the_mod
 
     pipeline = _Pipeline(["속도 편차가 큽니다."])  # 모델을 부르면 이 지어낸 평가가 나간다
     data = _ask(pipeline, prompt="이번 세션에서 가장 먼저 고쳐야 할 점 하나만 알려줘.")
-    assert "판정할 수 없습니다" in data["answer"] and pipeline.facts == []
+    assert "세션을 마치면 잘한 점과 고칠 점을 정리해 알려 드립니다" in data["answer"] and pipeline.facts == []
