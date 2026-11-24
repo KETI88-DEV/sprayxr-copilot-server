@@ -405,6 +405,7 @@ class CoatingProgress(StrictModel):
     recommendation: CoatingRecommendation | None
     completion_percent: Annotated[float | None, Field(ge=0, le=100)]
     coverage_percent: Annotated[float | None, Field(ge=0, le=100)]
+    normal_band_percent: Annotated[float | None, Field(ge=0, le=100)] = None
     overpaint_percent: Annotated[float | None, Field(ge=0, le=100)]
     next_zone_id: str | None
     message: str | None
