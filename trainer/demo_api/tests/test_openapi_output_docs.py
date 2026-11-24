@@ -30,10 +30,18 @@ def test_start_and_report_descriptions_include_deep_output_fields_and_nullable_v
     start = _operation(schema, "/api/v1/sessions/start")["description"]
     assert "data.first_zone_guidance.zone_id(string | null)" in start
     assert "data.first_zone_guidance.recommended_flow(array<string>)" in start
+    assert "data.recommended_flow(array<string>)" in start
     assert "실전" in start and "null" in start
     report = _operation(schema, "/api/v1/reports/{report_id}", "get")["description"]
     assert "data.report.pose_report.priority_corrections[].correction_guidance(string)" in report
     assert "data.report.coating_report.worst_zones[].thickness_um(number | null)" in report
+
+
+def test_order_alias_is_only_in_the_start_response_example(schema):
+    start = _operation(schema, "/api/v1/sessions/start")["responses"]["200"]["content"]["application/json"]["example"]
+    end = _operation(schema, "/api/v1/sessions/end")["responses"]["200"]["content"]["application/json"]["example"]
+    assert start["data"]["recommended_flow"] == start["data"]["first_zone_guidance"]["recommended_flow"]
+    assert "recommended_flow" not in end["data"]
 
 
 def test_query_documents_fallbacks_dynamic_context_and_evidence_without_inventing_context_keys(schema):

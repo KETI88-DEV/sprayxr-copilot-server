@@ -54,6 +54,7 @@ from trainer.demo_api.report_jobs import (
 from trainer.demo_api.session_coating import SessionCoating, analyze_session_coating
 from trainer.demo_api.sequence_store import SequenceStore
 from trainer.demo_api.sequence_analysis import SequenceAnalysisEngine
+from trainer.demo_api.quick_answer import QUICK_LIMIT
 from trainer.demo_api.v1_store import SessionConflict, V1Store
 
 logger = logging.getLogger(__name__)
@@ -416,7 +417,8 @@ def create_v1_router(
             "스프레이 정상 도막은 기본 160~200µm입니다. target_thickness_min_um·target_thickness_max_um으로 "
             "경계값을 포함한 정상범위를 지정할 수 있습니다. 기존 target_thickness_um 단일 값만 보내면 "
             "그 값부터 1.25배까지 정상으로 봅니다(160 → 160~200). 모두 생략해도 동작합니다. "
-            "응답 data.first_zone_id·first_zone_guidance가 선택 공정·콘텐츠의 등록된 전문가 첫 Zone을 안내합니다. "
+            "응답 data.recommended_flow는 선택 공정·콘텐츠의 등록된 전문가 구역 순서입니다. "
+            "기존 data.first_zone_id·first_zone_guidance도 유지하며 두 recommended_flow 목록은 같습니다. "
             "tool_type은 생략하면 spray_gun이며 블라스팅 시작 안내에는 blasting_gun을 보냅니다. "
             "실전·Unit 등 등록된 순서 기준이 없는 콘텐츠는 첫 Zone을 추정하지 않고 null을 반환합니다."
         ),
@@ -457,15 +459,20 @@ def create_v1_router(
         process = "blasting" if (row.tool_type or body.tool_type) == "blasting_gun" else "spray"
         plan = (sequence_engine.reference_plan(scenario_id=row.scenario_id, process=process)
                 if sequence_engine is not None else None)
-        first_zone = str(plan["flow"][0]) if plan and plan.get("flow") else None
+        flow = [str(zone) for zone in plan["flow"]] if plan and plan.get("flow") else []
+        first_zone = flow[0] if flow else None
+        start_message = "등록된 작업 순서 기준이 없습니다."
+        if first_zone:
+            start_message = f"{first_zone}구역에서 시작하세요. 권장 순서: {'→'.join(flow)}."
+            if len(f"훈련 시작. {start_message}") > QUICK_LIMIT:
+                start_message = f"{first_zone}구역에서 시작하세요. 전체 {len(flow)}개 순서는 recommended_flow를 확인하세요."
         guidance = {
             "analysis_status": "available" if first_zone else "not_available",
             "reason_code": None if first_zone else "sequence_reference_unavailable",
             "process": process, "zone_id": first_zone,
-            "recommended_flow": plan["flow"] if plan else [],
+            "recommended_flow": flow,
             "reference_basis": "measured_expert_runs" if first_zone else None,
-            "message": (f"{first_zone}구역에서 시작하세요." if first_zone else
-                        "등록된 작업 순서 기준이 없습니다."),
+            "message": start_message,
         }
         lower, upper = coating_assessment.resolve_band(row.target_thickness_um, **coating_assessment.session_limits(row))
         return _ok(
@@ -475,7 +482,7 @@ def create_v1_router(
                 user_created=created,
                 target_thickness_um=row.target_thickness_um,
                 target_thickness_min_um=lower, target_thickness_max_um=upper,
-                first_zone_id=first_zone, first_zone_guidance=guidance,
+                first_zone_id=first_zone, first_zone_guidance=guidance, recommended_flow=flow,
             ).model_dump(mode="json"),
             message=f"훈련 시작. {guidance['message']}",
         )
@@ -512,7 +519,7 @@ def create_v1_router(
                 target_thickness_um=row.target_thickness_um,
                 target_thickness_min_um=coating_assessment.resolve_band(row.target_thickness_um, **coating_assessment.session_limits(row))[0],
                 target_thickness_max_um=coating_assessment.resolve_band(row.target_thickness_um, **coating_assessment.session_limits(row))[1],
-            ).model_dump(mode="json")
+            ).model_dump(mode="json", exclude={"recommended_flow"})
         )
 
     # --- 5. 최종 평가와 리포트 (p.11-16) ----------------------------------

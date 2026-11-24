@@ -21,6 +21,10 @@ from trainer.demo_api import coating_assessment
 from trainer.demo_api.telemetry_contracts import AnalyzeSequenceRequest, CoatingProgress
 from trainer.zone_reference import ZoneReferenceCatalog
 
+# Persisted responses include this revision so a retry cannot reuse coverage
+# calculated by the old one-sample/one-atlas-pixel placement.
+CROP_PLACEMENT_VERSION = "atlas-nearest-20261124"
+
 _MAX_SESSIONS = 16
 DEFAULT_TARGET_THICKNESS_UM = coating_assessment.DEFAULT_TARGET_UM
 # 1차(b39ea5f) 이전 main의 전문가 대비 상태 규칙. PR #8 기준이 아니다. 리포트의 참고 판정에만 쓴다.
@@ -267,6 +271,11 @@ class CoatingProgressEngine:
             height = float(item["height"])
             img_width = int(item["img_width"])
             img_height = int(item["img_height"])
+            if (not all(math.isfinite(value) and value.is_integer() for value in (x0, y0, width, height))
+                    or not (0 <= x0 < atlas_width and 0 <= y0 < atlas_height)
+                    or min(width, height) <= 0
+                    or min(img_width, img_height) <= 0):
+                return None, "heatmap_dimensions_invalid"
             encoded = item["data"]
             if not isinstance(encoded, str):
                 raise ValueError
@@ -274,8 +283,18 @@ class CoatingProgressEngine:
             image = Image.open(io.BytesIO(raw)).convert("RGB")
             if image.size != (img_width, img_height):
                 return None, "heatmap_dimensions_invalid"
-            if min(width, height, img_width, img_height) <= 0:
-                return None, "heatmap_dimensions_invalid"
+            # Bound allocation to the atlas intersection, including legacy crops
+            # whose declared rectangle extends beyond its right/top edge.
+            footprint = (min(int(width), atlas_width - int(x0)), min(int(height), atlas_height - int(y0)))
+            if image.size != footprint or footprint != (width, height):
+                # width/height describe atlas coverage, not PNG sample count.
+                # Resize packed channels together with NEAREST: interpolation
+                # would fabricate RG16 thickness and B8 validity at edges.
+                source_box = (0.0, img_height * (1.0 - footprint[1] / height),
+                              img_width * footprint[0] / width, float(img_height))
+                image = image.resize(footprint, Image.Resampling.NEAREST, box=source_box)
+            img_width, img_height = footprint
+            width, height = float(img_width), float(img_height)
         except (KeyError, TypeError, ValueError, binascii.Error, UnidentifiedImageError, OSError):
             return None, "heatmap_invalid"
 

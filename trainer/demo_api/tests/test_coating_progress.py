@@ -125,6 +125,138 @@ def test_cumulative_maps_replace_previous_absolute_thickness_instead_of_adding(t
     assert third.completion_percent == pytest.approx(100.0, abs=0.2)
 
 
+def _subsample_crop(request: AnalyzeSequenceRequest, size: tuple[int, int]) -> None:
+    """TSB may send a smaller PNG for an unchanged atlas-space rectangle."""
+    crop = request.sequence_result.cur_sequence_heatmap[0]
+    with Image.open(io.BytesIO(base64.b64decode(crop.data))) as source:
+        image = source.resize(size, Image.Resampling.NEAREST)
+    stream = io.BytesIO()
+    image.save(stream, format="PNG")
+    crop.data = base64.b64encode(stream.getvalue()).decode("ascii")
+    crop.img_width, crop.img_height = size
+
+
+@pytest.mark.parametrize("size", [(4, 4), (2, 2), (1, 1)])
+def test_subsampled_png_covers_the_same_declared_atlas_rectangle(tmp_path: Path, size: tuple[int, int]) -> None:
+    _profile(tmp_path)
+    request = _request(sequence_id="SEQ-001", thickness_um=171.0)
+    _subsample_crop(request, size)
+    result = _engine(tmp_path).evaluate(request)
+    assert result.coverage_percent == 100.0
+    assert result.assessment["unpainted_fraction"] == 0.0
+    assert result.assessment["thickness_um"] == pytest.approx(161.0, abs=0.2)
+    assert result.status == "complete"
+    assert result.next_zone_id == "2"
+
+
+def test_subsampled_png_preserves_validity_when_expanded(tmp_path: Path) -> None:
+    _profile(tmp_path)
+    request = _request(sequence_id="SEQ-001", thickness_um=171.0)
+    image = Image.new("RGBA", (2, 2), _rg_for_um(171.0))
+    image.putpixel((1, 0), (255, 255, 0, 255))
+    image.putpixel((1, 1), (255, 255, 0, 255))
+    stream = io.BytesIO()
+    image.save(stream, format="PNG")
+    crop = request.sequence_result.cur_sequence_heatmap[0]
+    crop.data = base64.b64encode(stream.getvalue()).decode("ascii")
+    crop.img_width = crop.img_height = 2
+    result = _engine(tmp_path).evaluate(request)
+    assert result.coverage_percent == 50.0
+    assert result.assessment["unpainted_fraction"] == 0.5
+    assert result.overpaint_percent == 0.0
+
+
+def test_replay_expands_subsampled_partial_crops_before_absolute_merge(tmp_path: Path) -> None:
+    _profile(tmp_path)
+    first = _request(sequence_id="SEQ-001", thickness_um=171.0)
+    second = _request(sequence_id="SEQ-002", thickness_um=171.0)
+    for request, x0 in ((first, 0), (second, 2)):
+        crop = request.sequence_result.cur_sequence_heatmap[0]
+        crop.x0, crop.width = x0, 2
+        _subsample_crop(request, (1, 2))
+    result = _engine(tmp_path).evaluate_replay(second, [first])
+    assert result.status == "complete"
+    assert result.coverage_percent == 100.0
+    assert result.assessment["thickness_um"] == pytest.approx(161.0, abs=0.2)
+
+
+def test_oversized_atlas_rectangle_is_clipped_to_bounded_output_before_expansion() -> None:
+    crop = _heatmap(171.0)
+    crop["width"] = 10**9
+    decoded, reason = CoatingProgressEngine._decode_crop(crop, atlas_width=4, atlas_height=4)
+    assert reason is None
+    assert decoded is not None
+    assert decoded.thickness_um.shape == decoded.valid.shape == (4, 4)
+    assert decoded.valid.all()
+    assert decoded.x_indices.tolist() == decoded.y_indices[::-1].tolist() == [0, 1, 2, 3]
+
+
+def test_expansion_clips_the_atlas_edge_without_changing_png_origin() -> None:
+    request = _request(sequence_id="SEQ-001", thickness_um=171.0)
+    _subsample_crop(request, (2, 2))
+    crop = request.sequence_result.cur_sequence_heatmap[0].model_dump(mode="json")
+    image = Image.new("RGBA", (2, 2), _rg_for_um(500.0))
+    image.putpixel((0, 1), _rg_for_um(171.0))  # PNG bottom-left remains atlas bottom-left.
+    stream = io.BytesIO()
+    image.save(stream, format="PNG")
+    crop.update(x0=2, y0=2, data=base64.b64encode(stream.getvalue()).decode("ascii"))
+    decoded, reason = CoatingProgressEngine._decode_crop(crop, atlas_width=4, atlas_height=4)
+    assert reason is None
+    assert decoded is not None
+    assert decoded.thickness_um.shape == (2, 2)
+    assert decoded.thickness_um.min() == pytest.approx(171.0, abs=0.2)
+    assert decoded.thickness_um.max() == pytest.approx(171.0, abs=0.2)
+    assert decoded.x_indices.tolist() == [2, 3]
+    assert decoded.y_indices.tolist() == [3, 2]
+
+
+@pytest.mark.parametrize("axis", ["x", "y"])
+def test_expanded_cumulative_crop_keeps_neighbor_overpaint_on_its_official_zone(tmp_path: Path, axis: str) -> None:
+    from trainer.demo_api.telemetry_router import coating_alerts
+    _profile(tmp_path)
+    official = tmp_path / "fixture_official"
+    (official / "palette.csv").write_text(
+        "zone_id,hex,r,g,b\n1,#FF0000,255,0,0\n2,#00FF00,0,255,0\n", encoding="utf-8")
+    label = Image.new("RGB", (4, 4), (0, 255, 0))
+    for y in range(4):
+        for x in range(4):
+            if (axis == "x" and x < 2) or (axis == "y" and y >= 2):
+                label.putpixel((x, y), (255, 0, 0))
+    label.save(official / "color/Learn03_01.png")
+    with (official / "zone_rects.csv").open("a", encoding="utf-8") as stream:
+        stream.write("Learn03,01,2,0.5,0,0.5,1,2,0,2,4,0.5,0,1,1,50\n")
+    profile_path = tmp_path / "generated/profiles/spray/learning/mode_03.json"
+    profile = json.loads(profile_path.read_text(encoding="utf-8"))
+    profile["aggregate"]["zones"]["1:2"] = {
+        **profile["aggregate"]["zones"]["1:1"], "zone_id": "2",
+    }
+    profile_path.write_text(json.dumps(profile), encoding="utf-8")
+    image = Image.new("RGBA", (2, 2), _rg_for_um(171.0))
+    for point in ([(1, 0), (1, 1)] if axis == "x" else [(0, 0), (1, 0)]):
+        image.putpixel(point, _rg_for_um(500.0))
+    stream = io.BytesIO()
+    image.save(stream, format="PNG")
+    engine = _engine(tmp_path)
+    for number, zone in ((1, "1"), (2, "2")):
+        request = _request(sequence_id=f"SEQ-{number:03d}", thickness_um=171.0)
+        request.zone_id = zone
+        crop = request.sequence_result.cur_sequence_heatmap[0]
+        crop.img_width = crop.img_height = 2
+        crop.data = base64.b64encode(stream.getvalue()).decode("ascii")
+        result = engine.evaluate(request)
+        alerts = coating_alerts(result.assessment)
+        assert result.zone_id == result.assessment["zone_id"] == zone
+        if zone == "1":
+            assert result.status == "complete"
+            assert result.overpaint_percent == 0.0
+            assert alerts == []
+        else:
+            assert result.status == "complete"
+            assert result.overpaint_percent == 100.0
+            assert [(item["anomaly_type"], item["payload"]["zone_id"], item["payload"]["map_num"])
+                    for item in alerts] == [("coating_over_app", "2", 1)]
+
+
 def test_thickness_is_corrected_before_the_area_gate(tmp_path: Path) -> None:
     """원시 165µm는 보정하면 155µm라 목표 160µm에 못 미친다."""
     _profile(tmp_path)

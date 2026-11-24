@@ -57,7 +57,15 @@ def is_current_next_question(prompt: str) -> bool:
         return False
     # "지금 재생하는 곳 다음에는 어디를 칠해?"처럼 Zone 낱말 없이 묻기도 한다(2026-11-14 운영 q12).
     # "다음에는 어디를 조심해야 해?"는 진행 질문이 아니다. Zone 낱말이 없으면 "칠"이 함께 있어야 한다.
-    return bool(re.search(r"다음\s*(?:구역|zone|존)", prompt, re.I)
+    # TSB 음성은 현재 세션을 따로 보내므로 "그 다음 순서는 뭐지"처럼
+    # 구역 낱말을 생략한다. 짧은 조회형 전체 문장만 받아 절차·정의 질문은 남긴다.
+    short_order = re.fullmatch(
+        r"(?:(?:그럼|그러면|그|지금|이제))*다음(?:작업)?순서(?:는|가|를)?"
+        r"(?:뭐(?:지|야|예요|에요|죠|인가요)?|무엇(?:인가요|이야|이죠|이지)?"
+        r"|어떻게(?:돼|돼요|되나요|되는지)|알려(?:줘|주세요|줘요)|안내해줘)?",
+        re.sub(r"[\s?？!.。]", "", prompt),
+    )
+    return bool(short_order or re.search(r"다음\s*(?:구역|zone|존)", prompt, re.I)
                 or (re.search(r"다음\s*(?:에는|에|으로는|으로|엔|은)?\s*(?:어디|어느)", prompt) and re.search(r"칠|구역|zone|존", prompt, re.I)))
 
 
@@ -179,7 +187,7 @@ def _selector_context(value: str | None) -> Mapping[str, object]:
 
 
 def resolve_reference_target(query, sequences, reports=None, *, facts=None) -> tuple[str | None, str | None]:
-    """Explicit request metadata wins over the latest saved session telemetry."""
+    """질문의 명시적 공정 선택을 제외하면 저장된 세션·분사 공정을 우선한다."""
     context = _selector_context(query.context)
     prompt_scenario = re.search(r"(?:학습\s*(?:모드)?|시나리오|scenario|mode)\s*[:#-]?\s*(\d+)", query.prompt, re.I)
     scenario = query.scenario_id or (prompt_scenario.group(1) if prompt_scenario else None)
@@ -188,12 +196,13 @@ def resolve_reference_target(query, sequences, reports=None, *, facts=None) -> t
         match = re.search(r"(?:학습\s*(?:모드)?|시나리오|scenario|mode)\s*[:#-]?\s*(\d+)", query.context, re.I)
         scenario = match.group(1) if match else None
     explicit = _processes(query.prompt)
+    selector = set()
     if not explicit:
         process_value = context.get("process") or context.get("tool_type")
         process = process_from_tool_type(process_value)
-        explicit = {process} if process else _processes(query.context or "")
+        selector = {process} if process else _processes(query.context or "")
     process = next(iter(explicit)) if len(explicit) == 1 else None
-    body = None
+    session = None
     if query.session_id:
         latest = sequences.latest_sequence_id(query.session_id)
         body = sequences.load_body(session_key=query.session_id, sequence_id=latest) if latest else None
@@ -202,14 +211,21 @@ def resolve_reference_target(query, sequences, reports=None, *, facts=None) -> t
         if not explicit and body:
             setting = body.get("sequence_setting")
             process = process_from_tool_type(setting.get("tool_type")) if isinstance(setting, dict) else None
+        get_session = getattr(reports, "get_session", None)
+        session = get_session(query.session_id) if callable(get_session) else None
         if scenario is None:
-            get_session = getattr(reports, "get_session", None)
-            session = get_session(query.session_id) if callable(get_session) else None
             scenario = getattr(session, "scenario_id", None)
+        if not explicit and process is None:
+            process = process_from_tool_type(getattr(session, "tool_type", None))
     facts = facts or {}
     scenario = scenario or facts.get("scenario_id")
     if not explicit and process is None:
         process = process_from_tool_type(facts.get("process"))
+    if not explicit and process is None and session is not None and not getattr(session, "tool_type", None):
+        # 구형 시작 세션도 Start의 생략 기본값과 같다. 실제 도구가 있으면 위에서 이미 골랐다.
+        process = "spray"
+    if not explicit and process is None and len(selector) == 1:
+        process = next(iter(selector))
     return (str(scenario) if scenario is not None else None), process
 
 

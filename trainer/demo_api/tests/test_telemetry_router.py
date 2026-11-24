@@ -449,6 +449,54 @@ def test_duplicate_analysis_survives_router_restart_without_reapplying_engines()
     assert second_stub.calls == 0
 
 
+def test_crop_placement_revision_refreshes_old_result_then_deduplicates_retries(monkeypatch: Any) -> None:
+    from trainer.demo_api import telemetry_router as module
+    store = SequenceStore(":memory:")
+    bus = AnomalyBroadcaster()
+    monkeypatch.setattr(module, "CROP_PLACEMENT_VERSION", "old-sparse-placement", raising=False)
+    previous = _client(store=store, guidance_engine=_GuidanceStub(_guide(speed="slow")),
+                       sequence_engine=_SequenceStub(), broadcaster=bus)
+    assert previous.post(ANALYZE_SEQUENCE_PATH, json=_body()).status_code == 200
+
+    monkeypatch.setattr(module, "CROP_PLACEMENT_VERSION", "new-nearest-placement", raising=False)
+    guidance = _GuidanceStub(_guide(speed="fast"))
+    updated = _client(store=store, guidance_engine=guidance, sequence_engine=_SequenceStub(), broadcaster=bus)
+    refreshed = updated.post(ANALYZE_SEQUENCE_PATH, json=_body())
+    repeated = updated.post(ANALYZE_SEQUENCE_PATH, json=_body())
+    assert refreshed.status_code == repeated.status_code == 200
+    assert refreshed.json()["data"]["guide"]["speed"]["status"] == "fast"
+    assert refreshed.json()["data"]["sequence_data_ack"]["duplicate"] is True
+    assert refreshed.json()["data"]["guide"] == repeated.json()["data"]["guide"]
+    assert guidance.calls == 1
+    assert len(bus.since(_body()["session_id"], last_event_id=0)) == 1
+
+
+def test_pre_revision_historical_retry_returns_saved_result_without_replaying_engines() -> None:
+    class PreRevisionStore(SequenceStore):
+        def save_analysis(self, **kwargs: Any) -> None:
+            key = json.loads(kwargs["analysis_key"])
+            kwargs["analysis_key"] = json.dumps([key[0], *key[2:]])
+            super().save_analysis(**kwargs)
+
+    store = PreRevisionStore(":memory:")
+    bus = AnomalyBroadcaster()
+    previous = _client(store=store, guidance_engine=_GuidanceStub(_guide(speed="slow")),
+                       sequence_engine=_SequenceStub(), broadcaster=bus)
+    first = _body(sequence_id="SEQ-001")
+    assert previous.post(ANALYZE_SEQUENCE_PATH, json=first).status_code == 200
+    assert previous.post(URL, json=_body(sequence_id="SEQ-002")).status_code == 200
+    assert previous.post(URL, json=_body(sequence_id="SEQ-003")).status_code == 200
+    guidance = _GuidanceStub(_guide(speed="fast"))
+    updated = _client(store=store, guidance_engine=guidance, sequence_engine=_SequenceStub(), broadcaster=bus)
+    repeated = updated.post(ANALYZE_SEQUENCE_PATH, json=first)
+    assert repeated.status_code == 200
+    assert repeated.json()["data"]["guide"]["speed"]["status"] == "slow"
+    assert repeated.json()["data"]["sequence_data_ack"]["duplicate"] is True
+    assert updated.post(ANALYZE_SEQUENCE_PATH, json=_body(sequence_id="SEQ-002")).status_code == 409
+    assert guidance.calls == 0
+    assert len(bus.since(_body()["session_id"], last_event_id=0)) == 1
+
+
 def test_historical_first_analysis_does_not_rewind_guidance_smoothing() -> None:
     store = SequenceStore(":memory:")
     stub = _GuidanceStub(_guide())

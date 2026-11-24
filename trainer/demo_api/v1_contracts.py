@@ -549,6 +549,15 @@ class SessionStateData(StrictModel):
     first_zone_guidance: FirstZoneGuidance | None = Field(
         default=None, description="첫 Zone과 전문가 순서 안내입니다. 세션 종료 응답은 null입니다.",
     )
+    recommended_flow: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Start 응답의 선택 시나리오·공정에 등록된 전문가 구역 순서입니다. "
+            "first_zone_guidance.recommended_flow와 같고 각 항목은 문자열 Zone ID입니다. "
+            "등록 기준이 없으면 빈 목록이며 실제 수행·완료 순서를 뜻하지 않습니다. End 응답에는 생략합니다."
+        ),
+        examples=[["2", "3", "1"]],
+    )
 
 
 class SessionResponse(ApiResponse):

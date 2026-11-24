@@ -21,6 +21,7 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
 from trainer.demo_api import coating_assessment
+from trainer.demo_api.coating_progress import CROP_PLACEMENT_VERSION
 from trainer.demo_api.monitor import MonitorRecorder
 from trainer.demo_api.anomaly_stream import AnomalyBroadcaster
 from trainer.demo_api.sequence_analysis import SequenceDecision, gate_sequence_decision
@@ -285,13 +286,21 @@ def create_telemetry_router(
             target = coating_assessment.session_target(session)
             limits = coating_assessment.session_limits(session)
             band = coating_assessment.resolve_band(target, **limits)
-            analysis_key = json.dumps([coating_assessment.ASSESSMENT_VERSION, list(band),
+            analysis_key = json.dumps([coating_assessment.ASSESSMENT_VERSION, CROP_PLACEMENT_VERSION, list(band),
                                        query.resolved_mode_id, query.process_type, body_sha256])
             cached = sequences.load_analysis(
                 session_key=query.session_id, sequence_id=query.sequence_id, analysis_key=analysis_key,
             )
             if cached is None and sequences.latest_sequence_id(query.session_id) != query.sequence_id:
-                return reject("sequence_analysis_out_of_order: analyze each sequence before submitting a later sequence")
+                # Historical retries keep their original recorded result. Replaying
+                # them through today's decoder would rewind live session state.
+                legacy_key = json.dumps([coating_assessment.ASSESSMENT_VERSION, list(band),
+                                         query.resolved_mode_id, query.process_type, body_sha256])
+                cached = sequences.load_analysis(
+                    session_key=query.session_id, sequence_id=query.sequence_id, analysis_key=legacy_key,
+                )
+                if cached is None:
+                    return reject("sequence_analysis_out_of_order: analyze each sequence before submitting a later sequence")
             if cached is None:
                 guide = guidance_engine.evaluate(query) if guidance_engine is not None else _unavailable_guide()
                 decision = sequence_engine.evaluate(query, sequences) if sequence_engine is not None else None

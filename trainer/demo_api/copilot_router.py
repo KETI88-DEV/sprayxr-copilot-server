@@ -225,7 +225,8 @@ SUBJECT_HEADER: Final = "X-Copilot-Subject"  # 서버 안에서만 쓴다. 바�
 ANALYSIS_PROMPT_HEADER: Final = "X-Copilot-Analysis-Prompt"
 _EVALUATION_QUESTION: Final = re.compile(r"잘한|못한|고쳐야|고칠|개선할|개선점|문제점|부족한 점")
 # 훈련 총평("잘한 점과 고칠 점 알려줘"): 판정 모델에 넘기면 문서 검색이 27µm를 "정상 범위"라고 칭찬했다(2026-11-24 음성 질의 시험).
-_SESSION_REVIEW: Final = re.compile(r"(?:잘한|못한|고칠|고쳐야\s*(?:할|될)|개선할|부족한)\s*점|개선점")
+_SESSION_REVIEW: Final = re.compile(r"(?:잘한|못한|고칠|고쳐야\s*(?:할|될)|개선할|부족한)\s*점|개선점"
+                                  r"|(?:지금|현재)\s*(?:뭐가|무엇이|어떤)\s*문제")
 _SESSION_REVIEW_PENDING: Final = ("세션을 마치면 잘한 점과 고칠 점을 정리해 알려 드립니다. 지금은 '전체 자세 유사도는?', "
                                   "'순서 준수율은?', '다음 구역으로 넘어가도 돼?'처럼 하나씩 물어봐 주세요.")
 # Preserve main ebb923c3's narrowly scoped v7.1 diagnostic-scaffold repair.
@@ -1123,7 +1124,16 @@ async def _execute_copilot_query(
     has_reference_plan = callable(getattr(sequence_engine, "reference_plan", None))
     explicit_actual_order = actual_order_intent(query.prompt)
     # 판정 모델 없이 순서 분석으로 보내는 말. 자세를 묻는 말("자세 유사도는 얼마야?")은 순서 탭이어도 넣지 않는다.
-    direct_order = explicit_actual_order if query.task_type == "trajectory_recomm" and not _POSE_ASKED.search(query.prompt) else None
+    order_object = (re.search(r"순서|방문", query.prompt)
+                    or (explicit_actual_order == "order_missing" and re.search(r"구역|zone|존", query.prompt, re.I)))
+    session_order = (query.task_type == "knowledge_search" and query.session_id
+                     and not (query.context or "").startswith("motion_viewer_")
+                     and order_object
+                     and not is_coating_status_question(query.prompt) and not is_coating_advice_question(query.prompt))
+    direct_order = (explicit_actual_order if (query.task_type == "trajectory_recomm" or session_order)
+                    and not _POSE_ASKED.search(query.prompt) and not explanatory_request and not documents_only else None)
+    if direct_order and session_order:
+        query = query.model_copy(update={"task_type": "trajectory_recomm"})
     async def reference_answer():
         scenario, process = await to_thread.run_sync(
             lambda: resolve_reference_target(query, sequences, reports, facts=facts)
