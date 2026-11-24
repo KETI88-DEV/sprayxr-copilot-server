@@ -10,6 +10,7 @@ from trainer.demo_api.sequence_store import SequenceStore
 from trainer.demo_api.v1_contracts import SessionStartRequest
 from trainer.demo_api.v1_router import create_v1_router
 from trainer.demo_api.v1_store import SessionConflict, V1Store
+from trainer.demo_api.tests.test_zone_completion_gate import analyze, request
 
 
 @pytest.mark.parametrize("thickness,grade", [(159.9, "below"), (160, "normal"), (180, "normal"),
@@ -54,7 +55,30 @@ def test_overpaint_area_counts_toward_completion_gate():
     result = coating.assess_zone(raw, np.ones((10, 10), bool))
     assert result["grade"] == "normal"
     assert result["coverage_percent"] == 100
+    assert result["normal_band_percent"] == 80
     assert result["gate_status"] == "complete"
+
+
+def test_progress_api_separates_normal_area_from_target_coverage(tmp_path):
+    before = analyze(tmp_path / "before", request(width=4))["coating_progress"]
+    after = analyze(tmp_path / "after", request(width=6, valid_count=30, rest=250))["coating_progress"]
+
+    assert before["normal_band_percent"] == 40
+    assert before["coverage_percent"] == 40
+    assert before["overpaint_percent"] == 0
+    assert after["normal_band_percent"] == 30
+    assert after["coverage_percent"] == 60
+    assert after["overpaint_percent"] == 30
+    assert after["next_zone_id"] is None
+
+
+def test_progress_api_normal_area_is_null_without_heatmap(tmp_path):
+    sequence = request()
+    sequence.sequence_result.cur_sequence_heatmap = None
+    progress = analyze(tmp_path, sequence)["coating_progress"]
+
+    assert progress["available"] is False
+    assert progress["normal_band_percent"] is None
 
 
 def _body(**updates):

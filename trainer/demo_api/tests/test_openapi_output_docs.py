@@ -96,6 +96,7 @@ def test_generic_v1_response_docs_expose_concrete_payloads_and_list_items(schema
 
 def test_nullable_status_unions_explain_all_allowed_progress_and_guide_values(schema):
     output = _operation(schema, "/api/v1/copilot/analyze-sequence")["description"].split("### 출력 파라미터", 1)[1]
+    assert "data.coating_progress.normal_band_percent(number | null)" in output
     fields = output.split("### 응답 예시", 1)[0]
     for value in ("needs_more", "complete", "overpaint_risk", "continue_current_zone",
                   "move_next_zone", "stop_current_zone", "slow", "fast", "near", "far"):

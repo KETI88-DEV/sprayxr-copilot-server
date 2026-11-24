@@ -86,7 +86,9 @@ class SessionStartRequest(StrictModel):
             min_length=1,
             description=(
                 "TSB 시뮬레이터가 생성한 훈련 세션 식별자입니다. 완료 시 첨부되는 "
-                "CSV 파일명에서 확장자를 뺀 값과 동일하게 사용합니다."
+                "CSV 파일명에서 확장자를 뺀 값과 동일하게 사용합니다. "
+                "시뮬레이터에서 다시하기를 누르면 같은 user_id·scenario_id로 새 session_id를 발급하고 "
+                "이후 시퀀스·질의·알림 구독·리포트에 그 ID를 사용합니다."
             ),
             examples=["3_11000346_1"],
         ),

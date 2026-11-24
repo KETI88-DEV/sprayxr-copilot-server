@@ -713,13 +713,13 @@ class CoatingProgressEngine:
             coverage_percent = assessment["coverage_percent"]
             status = assessment["gate_status"]
             row = coating_assessment.zone_row(map_num, request.zone_id, assessment)
+            overpaint_action = "잠시 분사를 멈추고 도막 분포를 확인한 뒤 부족한 구간만 보완하세요."
             if status == "overpaint_risk":
                 recommendation = "stop_current_zone"
                 next_zone_id = None
                 # 같은 시퀀스의 과도막 알림(SSE)과 숫자가 같도록 행의 값을 적는다.
                 message = (f"{request.zone_id}구역 칠한 곳 평균 {row['thickness_um']:.0f}µm(상한 초과·과도막), "
-                           f"{target_thickness_um:g}µm 이상 면적 {coverage_percent:.1f}%. "
-                           "두꺼운 곳은 더 칠하지 말고 덜 칠한 곳만 보완하세요.")
+                           f"{target_thickness_um:g}µm 이상 면적 {coverage_percent:.1f}%. {overpaint_action}")
             elif status == "complete":
                 recommendation = "move_next_zone"
                 next_zone_id = self._next_zone(profile, map_num, request.zone_id, self._visited.get(session_key, ()))
@@ -744,8 +744,7 @@ class CoatingProgressEngine:
                            "도막 분포 확인 후 보완하세요.")
                 if assessment["overpaint_percent"] > 0:
                     message = (f"{request.zone_id}구역 {target_thickness_um:g}µm 이상 면적 {coverage_percent:.1f}%, "
-                               f"과도막 면적 {assessment['overpaint_percent']:.1f}%. "
-                               "두꺼운 곳은 더 칠하지 말고 덜 칠한 곳만 보완하세요.")
+                               f"과도막 면적 {assessment['overpaint_percent']:.1f}%. {overpaint_action}")
 
             message = f"정상범위 {target_thickness_um:g}~{upper:g}µm: {message}"
 
@@ -771,6 +770,7 @@ class CoatingProgressEngine:
                 recommendation=recommendation,
                 completion_percent=assessment["completion_percent"],
                 coverage_percent=coverage_percent,
+                normal_band_percent=assessment["normal_band_percent"],
                 overpaint_percent=assessment["overpaint_percent"],
                 next_zone_id=next_zone_id,
                 message=message,

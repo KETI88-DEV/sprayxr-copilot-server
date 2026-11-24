@@ -228,6 +228,7 @@ def assess_zone(
         "unpainted_fraction": quality["unpainted_fraction"],
         "six_band_counts": bands,
         "coverage_percent": coverage_percent,
+        "normal_band_percent": 100.0 * counts[2] / zone_pixel_count,
         "overpaint_percent": 100.0 * sum(counts[3:]) / zone_pixel_count,
         "completion_percent": 100.0 * float(filled[mask].sum()) / zone_pixel_count,
         "gate_status": gate_status,

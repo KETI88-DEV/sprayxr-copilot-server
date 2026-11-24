@@ -224,6 +224,7 @@ def test_analyze_sequence_returns_current_zone_coating_progress() -> None:
         "recommendation": "continue_current_zone",
         "completion_percent": 62.5,
         "coverage_percent": 50.0,
+        "normal_band_percent": None,
         "overpaint_percent": 0.0,
         "next_zone_id": None,
         "message": "Zone 1을 추가 도장하세요.",

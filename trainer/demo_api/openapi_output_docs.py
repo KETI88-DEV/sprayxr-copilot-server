@@ -70,6 +70,7 @@ _MEANINGS = {
     "recommendation": "현재 Zone 유지·이동 등 진행 권고입니다.",
     "completion_percent": "해당 판정 기준에 대한 구역 진행 비율(0~100%)입니다.",
     "coverage_percent": "공식 Zone 면적 중 목표 두께(정상 범위 하한) 이상인 면적 비율(0~100%)입니다. 상한을 넘은 과도막 면적도 포함합니다.",
+    "normal_band_percent": "공식 Zone 전체 면적 중 보정 두께가 세션 정상범위 안에 있는 비율(0~100%)입니다. 양쪽 경계를 포함하며, 훈련 화면의 정상 도막 면적에 사용할 수 있습니다. 자료가 없으면 null입니다. 구역 이동은 status와 next_zone_id로 확인합니다.",
     "overpaint_percent": "공식 Zone 면적 중 상한을 초과한 면적 비율(0~100%)입니다.",
     "thickness_um": "판정에 사용하는 칠한 곳 평균 두께(µm)입니다. 미평가·미도장은 null일 수 있습니다.",
     "target_thickness_um": "목표 두께 또는 정상범위 하한(µm)입니다.",

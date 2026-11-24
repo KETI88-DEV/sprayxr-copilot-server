@@ -414,6 +414,8 @@ def create_v1_router(
         description=(
             "VR 훈련 콘텐츠가 시작될 때 한 번 호출합니다. user_id가 처음이면 사용자를 생성하고, "
             "기존 사용자면 숙련도와 주 사용 손을 갱신한 뒤 세션을 ACTIVE 상태로 저장합니다. "
+            "같은 session_id와 시작 파라미터의 재전송은 기존 회차를 조회하며, 같은 ID에서 "
+            "시작 파라미터가 달라지면 409입니다. 다시하기는 새 session_id로 시작합니다. "
             "스프레이 정상 도막은 기본 160~200µm입니다. target_thickness_min_um·target_thickness_max_um으로 "
             "경계값을 포함한 정상범위를 지정할 수 있습니다. 기존 target_thickness_um 단일 값만 보내면 "
             "그 값부터 1.25배까지 정상으로 봅니다(160 → 160~200). 모두 생략해도 동작합니다. "

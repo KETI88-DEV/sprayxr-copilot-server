@@ -212,12 +212,12 @@ def test_wrong_map_and_unobserved_pixels_never_unlock(tmp_path: Path) -> None:
     assert unknown.coverage_percent == 0
 
 
-def test_overcoat_warning_stops_thick_spots_without_unlocking_the_next_zone(tmp_path: Path) -> None:
+def test_overcoat_warning_prompts_a_temporary_pause_without_unlocking_the_next_zone(tmp_path: Path) -> None:
     result = engine(tmp_path).evaluate(request(value=300, width=5))
     assert result.status == "overpaint_risk"
     assert result.next_zone_id is None
-    assert "과도막" in result.message and "더 칠하지 말고 덜 칠한 곳만 보완" in result.message
-    assert "분사 중지" not in result.message and "160µm 이상 면적 50.0%" in result.message
+    assert "과도막" in result.message and "잠시 분사를 멈추고 도막 분포를 확인" in result.message
+    assert "부족한 구간만 보완" in result.message and "160µm 이상 면적 50.0%" in result.message
 
 
 def test_overpaint_risk_follows_the_painted_mean_not_a_pixel_share(tmp_path: Path) -> None:
@@ -405,12 +405,27 @@ def test_overcoat_alert_is_published_once_per_zone(tmp_path: Path) -> None:
     assert [(alert.anomaly_type, alert.sequence_id) for alert in alerts] == [("coating_over_app", "SEQ-001")]
     assert alerts[0].payload == {
         "reason_code": "zone_grade_above",
-        "message": "기본 목표 160µm 기준: 1구역 칠한 곳 평균 290µm(상한 초과·과도막). 분사를 멈추세요.",
+        "message": "기본 목표 160µm 기준: 1구역 칠한 곳 평균 290µm(상한 초과·과도막). 추가 분사 중지. 2구역으로 이동하세요.",
         "zone_id": "1", "map_num": 1, "status": "over_app", "grade": "above",
         "thickness_um": 289.9, "target_thickness_um": 160.0, "target_basis": "default_target",
     }
     post(client, request(2, value=300))
     assert len(coating_alerts(bus)) == 1
+
+
+def test_local_overcoat_alert_requests_temporarily_pausing_and_checking(tmp_path: Path) -> None:
+    client, bus = alert_client(engine(tmp_path), tmp_path)
+    response = client.post("/api/v1/copilot/analyze-sequence", json=request(value=300, width=5).model_dump(mode="json"))
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["coating_progress"]["status"] == "overpaint_risk"
+    assert data["coating_progress"]["next_zone_id"] is None
+    assert "일시 중지" in data["text_guide"] and "부족한 곳만 보완" in data["text_guide"]
+    assert len(data["text_guide"]) <= 60
+    alert, = coating_alerts(bus)
+    assert alert.anomaly_type == "coating_over_app" and alert.payload["zone_id"] == "1"
+    assert "잠시 분사를 멈추고 도막 분포를 확인" in alert.payload["message"]
+    assert "부족한 구간만 보완" in alert.payload["message"] and "이동" not in alert.payload["message"]
 
 
 def test_undercoat_alert_fires_when_the_trainee_leaves_a_below_zone(tmp_path: Path) -> None:

@@ -152,7 +152,7 @@ _ALERT_ROW_KEYS: Final = (
 )
 
 
-def coating_alerts(row: dict[str, Any]) -> list[dict[str, Any]]:
+def coating_alerts(row: dict[str, Any], *, next_zone_id: str | None = None) -> list[dict[str, Any]]:
     """평가 행 → 도막 등급 알림(과도막은 지금 Zone, 저도막은 방금 떠난 Zone). 한 Zone에 세션당 종류별 1회다."""
     alerts: list[dict[str, Any]] = []
 
@@ -167,8 +167,17 @@ def coating_alerts(row: dict[str, Any]) -> list[dict[str, Any]]:
         })
 
     if row["grade"] == "above":
+        gate_status = row.get("gate_status")
+        if gate_status == "complete":
+            action = "추가 분사 중지."
+            if next_zone_id is not None:
+                action += f" {next_zone_id}구역으로 이동하세요."
+        elif gate_status == "overpaint_risk":
+            action = "잠시 분사를 멈추고 도막 분포를 확인한 뒤 부족한 구간만 보완하세요."
+        else:
+            action = "잠시 분사를 멈추고 도막 분포를 확인하세요."
         add(row, "coating_over_app", "zone_grade_above",
-            f"{row['zone_id']}구역 칠한 곳 평균 {row['thickness_um']:.0f}µm(상한 초과·과도막). 분사를 멈추세요.")
+            f"{row['zone_id']}구역 칠한 곳 평균 {row['thickness_um']:.0f}µm(상한 초과·과도막). {action}")
     left = row.get("left_zone")
     if left is not None and left["grade"] == "below":
         add(left, "coating_under_app", "zone_grade_below",
@@ -345,7 +354,7 @@ def create_telemetry_router(
                         },
                     )
                 if broadcaster is not None and coating_progress.assessment is not None:
-                    for alert in coating_alerts(coating_progress.assessment):
+                    for alert in coating_alerts(coating_progress.assessment, next_zone_id=coating_progress.next_zone_id):
                         broadcaster.publish(session_id=query.session_id, sequence_id=query.sequence_id, **alert)
             common_data["coating_feedback"] = cached["coating_feedback"]
             common_data["sequence_feedback"] = cached["sequence_feedback"]

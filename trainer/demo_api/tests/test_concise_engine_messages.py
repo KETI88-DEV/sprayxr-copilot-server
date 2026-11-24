@@ -65,7 +65,7 @@ def test_feedback_and_alerts_keep_the_grade_and_noncausal_adjustment(tmp_path: P
     alert = coating_alerts(over.assessment)[0]
     assert alert["anomaly_type"] == "coating_over_app"
     assert "과도막" in alert["payload"]["message"] and "µm" in alert["payload"]["message"]
-    assert "멈추" in alert["payload"]["message"] or "중지" in alert["payload"]["message"]
+    assert "추가 분사 중지" in alert["payload"]["message"] and "이동" not in alert["payload"]["message"]
     assert len(alert["payload"]["message"]) <= 100
 
 
