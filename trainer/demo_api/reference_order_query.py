@@ -24,9 +24,11 @@ def is_knowledge_ask(prompt: str) -> bool:
 def actual_order_intent(prompt: str) -> str | None:
     if re.search(r"누락|빠진|빼먹|빠뜨|미수행|안\s*칠|못\s*칠|덜\s*칠|다시\s*칠|덧칠|재도장|보완", prompt) and not is_knowledge_ask(prompt):
         return "order_missing"
-    if re.search(r"준수|유사도|점수", prompt):
+    # "칠한 순서도 숙련자랑 비슷해?"는 실제 순서가 아니라 순서 유사도다(판정 모델을 건너뛰면서 갈린다).
+    if re.search(r"준수|유사도|점수|비슷|닮았|일치", prompt):
         return "order_adherence"
-    if re.search(r"실제|수행\s*순서|칠한\s*순서", prompt):
+    # "지금까지 내가 칠한 구역 순서 알려줘"처럼 사이에 구역 낱말이 끼어도 실제 순서다(2026-11-24 음성 질의 시험).
+    if re.search(r"실제|수행\s*순서|칠한\s*(?:구역|zone|존)?\s*순서|칠했던\s*순서|지금까지.*순서", prompt, re.I):
         return "order_actual"
     return None
 
@@ -59,6 +61,37 @@ def is_current_next_question(prompt: str) -> bool:
                 or (re.search(r"다음\s*(?:에는|에|으로는|으로|엔|은)?\s*(?:어디|어느)", prompt) and re.search(r"칠|구역|zone|존", prompt, re.I)))
 
 
+_COMPLETION = re.compile(r"다\s*칠했|다\s*칠한\s*거|완료\s*(?:됐|되었|했|된\s*거|야|인가|냐|\?|$)|끝났|끝냈|넘어가도")
+_NAMED_ZONE = re.compile(r"(?:zone|존|구역)\s*(\d+)|(\d+)\s*번\s*(?:zone|존|구역)", re.I)
+
+
+def is_current_completion_question(prompt: str) -> bool:
+    """훈련 중 "지금 구역 다 칠했어?"·"2번 구역 완료됐어?": 다음 구역 질문과 같은 완료 판정으로 답한다.
+
+    판정 경로가 없으면 문서 검색이 "완료되었습니다"를 지어냈다(2026-11-24 음성 질의 시험, 시퀀스 0개에서도).
+    """
+    return bool(_COMPLETION.search(prompt) and re.search(r"구역|zone|존|지금|현재|여기|이제", prompt, re.I)
+                and not is_knowledge_ask(prompt))
+
+
+def _first_zone_answer(query, reports, sequence_engine, scope, unknown):
+    """분사 기록이 아직 없으면 세션 시작 응답과 같은 첫 구역을 안내한다(완료 판정은 하지 않는다)."""
+    get_session = getattr(reports, "get_session", None)
+    session = get_session(query.session_id) if callable(get_session) else None
+    scenario = query.scenario_id or getattr(session, "scenario_id", None)
+    process = "blasting" if getattr(session, "tool_type", None) == "blasting_gun" else "spray"
+    plan = (sequence_engine.reference_plan(scenario_id=scenario, process=process)
+            if sequence_engine is not None and scenario else None)
+    if not plan or not plan.get("flow"):
+        scope["reason_code"] = "current_sequence_unavailable"
+        return unknown, scope, None
+    first = str(plan["flow"][0])
+    scope.update(scope="reference_only", analysis_status="available", reason_code="no_sequence_yet",
+                 scenario_id=scenario, process=process, next_zone_id=first)
+    flow = " → ".join(str(zone) for zone in plan["flow"])
+    return f"아직 분사 기록이 없습니다. {first}구역에서 시작하세요(권장 순서 {flow}).", scope, None
+
+
 def current_next_answer(query, sequences, reports=None, *, sequence_engine=None, coating_engine=None):
     """Replay saved physical evidence through the telemetry gate, without DB writes."""
     scope = {"scope": "current_progress", "analysis_status": "not_available",
@@ -68,6 +101,8 @@ def current_next_answer(query, sequences, reports=None, *, sequence_engine=None,
         scope["reason_code"] = "current_progress_unavailable"
         return unknown, scope, None
     latest = sequences.latest_sequence_id(query.session_id)
+    if not latest:
+        return _first_zone_answer(query, reports, sequence_engine, scope, unknown)
     body = sequences.load_body(session_key=query.session_id, sequence_id=latest) if latest else None
     try:
         request = AnalyzeSequenceRequest.model_validate(body)
@@ -111,8 +146,16 @@ def current_next_answer(query, sequences, reports=None, *, sequence_engine=None,
             and progress.recommendation == "move_next_zone"):
         scope["next_zone_id"] = progress.next_zone_id
     # The telemetry guide remains short; Query returns the complete gate explanation.
-    guide = decision.detail_guide
-    return guide or decision.text_guide or unknown, scope, progress.model_dump(mode="json")
+    guide = decision.detail_guide or decision.text_guide or unknown
+    if is_current_completion_question(query.prompt) and progress.available and progress.zone_id == request.zone_id:
+        # 완료를 물었으면 판정을 먼저 말한다. 다른 구역 번호를 물어도 훈련 중에는 지금 구역만 판정한다.
+        named = _NAMED_ZONE.search(query.prompt)
+        asked = (named[1] or named[2]) if named else None
+        head = (f"지금 구역은 {request.zone_id}구역입니다. 훈련 중에는 지금 구역의 완료만 판정합니다. "
+                if asked and asked != str(request.zone_id) else "")
+        verdict = "완료 기준을 넘었습니다." if progress.status == "complete" else "아직 완료되지 않았습니다."
+        guide = f"{head}{request.zone_id}구역은 {verdict} {guide}"
+    return guide, scope, progress.model_dump(mode="json")
 
 
 def _processes(text: str) -> set[str]:

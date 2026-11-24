@@ -25,10 +25,34 @@ def current_zone(store: SequenceStore, session_id: str) -> str | None:
             return zone
     return None
 
-_CACHE_LIMIT = 128
-_CACHE_TTL = 300.0
+# 저장된 분사는 바뀌지 않는다. 훈련 한 회(수십 분) 동안 다시 채점하지 않게 오래 둔다.
+# 5분·128개였을 때 6초 제한에 걸린 질문마다 채점 수와 평균이 달랐다(2026-11-24: 54회·54% 다음 질문 55%).
+_CACHE_LIMIT = 4096
+_CACHE_TTL = 3600.0
 _GUARD = threading.Lock()
 _CACHES: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
+_WARMING: set[tuple[int, str]] = set()
+
+
+def _warm_remaining(store: SequenceStore, bodies: list[dict[str, Any]], *, session_id: str,
+                    mcp_base_url: str, transport: Any) -> None:
+    """시간 제한으로 못 채점한 분사를 뒤에서 마저 채점해 둔다. 다음 질문은 전체 분사로 답한다."""
+    key = (id(store), session_id)
+    with _GUARD:
+        if key in _WARMING:
+            return
+        _WARMING.add(key)
+
+    def run() -> None:
+        try:
+            for body in bodies:
+                _score_cached(store, body, session_id=session_id, mcp_base_url=mcp_base_url,
+                              transport=transport, timeout_sec=2.0)
+        finally:
+            with _GUARD:
+                _WARMING.discard(key)
+
+    threading.Thread(target=run, name="pose-cache-warm", daemon=True).start()
 
 
 def _score_cached(store: SequenceStore, body: dict[str, Any], *, session_id: str,
@@ -76,9 +100,13 @@ def live_analysis(store: SequenceStore, *, session_id: str, scenario_id: str | N
     scored: list[tuple[str, PoseQueryResult]] = []
     reasons: dict[str, str] = {}
     deadline = time.monotonic() + 6.0
-    for body in reversed(candidates):
+    ordered = list(reversed(candidates))
+    pending: list[dict[str, Any]] = []
+    for index, body in enumerate(ordered):
         remaining = deadline - time.monotonic()
         if remaining <= 0:
+            pending = ordered[index:]
+            _warm_remaining(store, pending, session_id=session_id, mcp_base_url=mcp_base_url, transport=transport)
             break
         result = _score_cached(store, body, session_id=session_id, mcp_base_url=mcp_base_url,
                                transport=transport, timeout_sec=min(2.0, remaining))
@@ -97,5 +125,6 @@ def live_analysis(store: SequenceStore, *, session_id: str, scenario_id: str | N
         "source": "live_sequences", "scope": "zone" if zone_id is not None else "session", "zone_id": zone_id,
         "total_sequence_count": len(bodies), "sampled_sequence_count": len(candidates),
         "evaluated_sequence_count": len(scored), "reason_codes": reasons,
+        "pending_sequence_count": len(pending),
     }
     return None, analysis

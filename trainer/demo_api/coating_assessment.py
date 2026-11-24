@@ -197,13 +197,15 @@ def assess_zone(
     bands = {key: int(np.count_nonzero(condition)) for key, condition in zip(numerical.SIX_BAND_KEYS, conditions)}
     quality["six_band_counts"] = bands
     counts = [bands[key] for key in numerical.SIX_BAND_KEYS]
-    coverage_percent = 100.0 * counts[2] / zone_pixel_count
+    # 2026-11-24 사용자 결정: 면적 게이트는 하한(목표) 이상 면적이다. 상한을 넘은 과도막 화소도 목표를 채운 것으로 센다.
+    # 전에는 정상 범위(하한~상한) 안 면적만 세어 과도막으로 칠한 Zone은 영영 완료되지 않았다(현장 피드백).
+    coverage_percent = 100.0 * sum(counts[2:]) / zone_pixel_count
     filled = np.where(painted, np.clip(corrected / target, 0.0, 1.0), 0.0)
-    if grade == "above":
-        gate_status = "overpaint_risk"
     # 2026-11-12 책임자 결정: 면적을 채워도 칠한 곳 평균이 목표 미만(저도막)이면 다음 Zone으로 보내지 않는다.
-    elif coverage_percent >= GATE_COVERAGE_PERCENT and grade == "normal":
-        gate_status = "complete"
+    if coverage_percent >= GATE_COVERAGE_PERCENT and grade in ("normal", "above"):
+        gate_status = "complete"  # 과도막이어도 더 칠하지 않고 다음 Zone으로 간다
+    elif grade == "above":
+        gate_status = "overpaint_risk"
     else:
         gate_status = "needs_more"
 

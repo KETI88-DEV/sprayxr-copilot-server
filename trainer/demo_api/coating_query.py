@@ -12,7 +12,8 @@ from trainer.demo_api.coating_assessment import (
 from trainer.demo_api.pose_query import josa
 from trainer.demo_api.session_coating import EXPERT_WORDS
 
-_ZONE_NUMBER = re.compile(r"(?:zone|존|구역)\s*(\d+)", re.I)
+# "3번 구역"(음성 질의에서 흔한 말)도 그 구역만 답한다. 없으면 전체 구역 목록이 나왔다(2026-11-24).
+_ZONE_NUMBER = re.compile(r"(?:zone|존|구역)\s*(\d+)|(\d+)\s*번\s*(?:zone|존|구역)", re.I)
 _EXPERT = re.compile(r"전문가|expert", re.I)
 # 뷰어 기록에 목표 대비 판정이 없을 때 전문가 대비 답 앞에 밝히는 사유. 사유와 다른 말을 하지 않는다.
 _TARGET_MISSING = {
@@ -405,7 +406,8 @@ def drop_contradicted_causes(answer: str, measures: Mapping[str, Mapping[str, An
 
 
 def answer_distribution_cause(context: Mapping[str, Any], *, detailed: bool,
-                              measures: Mapping[str, Mapping[str, Any]] | None = None, quick: bool = False) -> str | None:
+                              measures: Mapping[str, Mapping[str, Any]] | None = None, quick: bool = False,
+                              prompt: str = "") -> str | None:
     """error_analysis 답: 분포와 저도막·과도막 Zone의 조절 후보. 도막 자료가 없으면 None.
 
     `measures`(뷰어 Zone 실측)가 있으면 후보를 실측과 맞춰 본다(_candidate_line).
@@ -419,6 +421,8 @@ def answer_distribution_cause(context: Mapping[str, Any], *, detailed: bool,
         # 2026-11 이전에 저장된 리포트 행에는 등급·분포가 없다. 완료한 세션에 "완료 분석이 없다"고 답하지 않는다.
         return ("이 세션의 완료 분석은 이전 기준으로 저장되어 있어 도막 분포와 조절 후보를 낼 수 없습니다."
                 if zones and context.get("comparison_basis") == "saved_coating_report" else None)
+    # "3번 구역 도막이 부족한 이유"처럼 구역을 말하면 그 구역만 답한다. 그 구역 행이 없으면 전체를 답한다.
+    rows = _selected(rows, prompt) or rows
     basis = basis_label(rows[0]["target_thickness_um"], rows[0]["target_basis"])
     flagged = _graded(rows, "below") + _graded(rows, "above")
     if quick and flagged:
@@ -457,7 +461,7 @@ def _selected(rows: list[dict[str, Any]], prompt: str) -> list[dict[str, Any]]:
         rows = [row for row in rows if str(row.get("map_num")) == selected_map[1]]
     zone = _ZONE_NUMBER.search(prompt)
     if zone:
-        rows = [row for row in rows if str(row.get("zone_id")) == zone[1]]
+        rows = [row for row in rows if str(row.get("zone_id")) == (zone[1] or zone[2])]
     return rows
 
 

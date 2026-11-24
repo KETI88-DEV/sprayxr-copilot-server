@@ -91,7 +91,7 @@ from trainer.demo_api.sequence_analysis import SequenceAnalysisEngine
 from trainer.demo_api.safety_guard import (
     CLASSES as SAFETY_CLASSES, HIGH_PRESSURE_ANSWER, HIGH_PRESSURE_CITATIONS, classify, fixed_answer_translation, guard_answer, hazard_class,
 )
-from trainer.demo_api.reference_order_query import actual_order_intent, current_next_answer, is_current_next_question, is_reference_order_question, resolve_reference_target, reference_order_answer
+from trainer.demo_api.reference_order_query import actual_order_intent, current_next_answer, is_current_completion_question, is_current_next_question, is_reference_order_question, resolve_reference_target, reference_order_answer
 from trainer.demo_api.v1_store import V1Store
 from trainer.demo_api.record_query import BODY_PART, DIRECTION_WORD, FIRST_FIX, WORST_ZONE, RecordAnswer, RecordFacts, answer_record_question, split_parts, ground_generated, has_record_marker, previous_subject
 from trainer.demo_api.viewer_progress import progress_question, viewer_progress_answer
@@ -224,6 +224,10 @@ SUBJECT_HEADER: Final = "X-Copilot-Subject"  # 서버 안에서만 쓴다. 바�
 # 외국어 질문을 한국어로 옮긴 문장(퍼센트 인코딩). 응답 본문은 바꾸지 않는다.
 ANALYSIS_PROMPT_HEADER: Final = "X-Copilot-Analysis-Prompt"
 _EVALUATION_QUESTION: Final = re.compile(r"잘한|못한|고쳐야|고칠|개선할|개선점|문제점|부족한 점")
+# 훈련 총평("잘한 점과 고칠 점 알려줘"): 판정 모델에 넘기면 문서 검색이 27µm를 "정상 범위"라고 칭찬했다(2026-11-24 음성 질의 시험).
+_SESSION_REVIEW: Final = re.compile(r"(?:잘한|못한|고칠|고쳐야\s*(?:할|될)|개선할|부족한)\s*점|개선점")
+_SESSION_REVIEW_PENDING: Final = ("세션을 마치면 잘한 점과 고칠 점을 정리해 알려 드립니다. 지금은 '전체 자세 유사도는?', "
+                                  "'순서 준수율은?', '다음 구역으로 넘어가도 돼?'처럼 하나씩 물어봐 주세요.")
 # Preserve main ebb923c3's narrowly scoped v7.1 diagnostic-scaffold repair.
 _DIAGNOSTIC_SCAFFOLD: Final = re.compile(r"(?m)^\s*\[(?:분석|판정|원인|조치)\]")
 # 자세 탭에서 무엇을 물을 수 있는지 묻거나 낱말을 옮겨 달라는 말은 채점 조회가 아니다(사례 11·12). 자세 탭에만 쓴다.
@@ -1050,6 +1054,12 @@ async def _execute_copilot_query(
     evaluation_lookup = _pose_evaluation_lookup(query.prompt)
     general_knowledge = is_general_painting_knowledge(query.prompt) and not arm_lookup and not evaluation_lookup
     explanatory_request = is_explanatory_question(query.prompt, query.task_type) and not evaluation_lookup
+    if query.task_type == "pose_recomm" and not general_knowledge and not is_off_topic(query.prompt):
+        # "어깨는 어떻게 해?": '어떻게'로 지식 질문이 되어 판정 모델이 건강 상담으로 답했다(2026-11-24). 채점 범위부터 밝힌다.
+        declined = unsupported_pose_part(query.prompt)
+        if declined is not None:
+            return _success_response(query, request_started, answer=declined, retrieval_used=False, citations=[],
+                                     context_status="not_available")
     if query.task_type != "error_analysis" and (general_knowledge or explanatory_request):
         query = query.model_copy(update={"task_type": "knowledge_search"})
     questions = (query.prompt, original_prompt or "")
@@ -1102,7 +1112,8 @@ async def _execute_copilot_query(
         return _success_response(query, request_started, answer=found.text, retrieval_used=False, citations=[],
                                  sequence_context=found.sequence_context, context_status="available", subject=found.subject)
 
-    if is_current_next_question(query.prompt) and not documents_only and not explanatory_request:
+    completion_asked = is_current_completion_question(query.prompt) and not (query.context or "").startswith("motion_viewer_")
+    if (is_current_next_question(query.prompt) or completion_asked) and not documents_only and not explanatory_request:
         answer, scope, progress = await to_thread.run_sync(lambda: current_next_answer(
             query, sequences, reports, sequence_engine=sequence_engine, coating_engine=coating_engine,
         ))
@@ -1111,6 +1122,8 @@ async def _execute_copilot_query(
             context_status="available" if scope["analysis_status"] == "available" else "not_available")
     has_reference_plan = callable(getattr(sequence_engine, "reference_plan", None))
     explicit_actual_order = actual_order_intent(query.prompt)
+    # 판정 모델 없이 순서 분석으로 보내는 말. 자세를 묻는 말("자세 유사도는 얼마야?")은 순서 탭이어도 넣지 않는다.
+    direct_order = explicit_actual_order if query.task_type == "trajectory_recomm" and not _POSE_ASKED.search(query.prompt) else None
     async def reference_answer():
         scenario, process = await to_thread.run_sync(
             lambda: resolve_reference_target(query, sequences, reports, facts=facts)
@@ -1180,13 +1193,22 @@ async def _execute_copilot_query(
         if signed_answer is not None:
             return _success_response(query, request_started, answer=signed_answer, retrieval_used=False, citations=[],
                                      context_status="available")
+    if (query.session_id and not viewer_requested and not documents_only and not explanatory_request
+            and _SESSION_REVIEW.search(query.prompt) and not is_general_painting_knowledge(query.prompt)
+            and (not is_domain_question(query.prompt) or _MY_RUN.search(query.prompt) or re.search(r"훈련|세션", query.prompt))):
+        found_report = (await to_thread.run_sync(lambda: reports.latest_complete_analysis(query.session_id))
+                        if reports is not None else None)
+        return _success_response(query, request_started, answer=_session_findings(found_report) if found_report else _SESSION_REVIEW_PENDING,
+                                 retrieval_used=False, citations=[], context_status="available" if found_report else "not_available")
     decision = None
     document_followup = False
     resolved_question: str | None = None
     simulator_facts = simulator_configuration_facts(query.prompt) if not documents_only else None
     planned_pipeline = None
     if (query.task_type != "error_analysis" and pipeline_provider is not None and not documents_only
-            and preset_intent(query.task_type, query.prompt) is None and not is_coating_status_question(query.prompt) and not _pose_engine_question(query)):
+            and preset_intent(query.task_type, query.prompt) is None and not is_coating_status_question(query.prompt) and not _pose_engine_question(query)
+            # 실제 순서·준수율·누락을 묻는 말은 정해진 문구처럼 판정 모델 없이 순서 분석으로 간다(2026-11-24 "순서 준수율은 몇 퍼센트야?").
+            and not direct_order):
         try:
             planned_pipeline = await to_thread.run_sync(pipeline_provider)
         except Exception:
@@ -1395,7 +1417,8 @@ async def _execute_copilot_query(
     classifier = None
     if query.task_type in ("pose_recomm", "trajectory_recomm"):
         classifier = None
-        intent = intent or preset_intent(query.task_type, query.prompt)
+        intent = intent or preset_intent(query.task_type, query.prompt) or (
+            direct_order)
         if intent is None and _pose_engine_question(query):
             intent = fallback_intent(query.task_type, query.prompt)
         if pipeline_provider is not None and intent is None:
@@ -1598,6 +1621,10 @@ async def _execute_copilot_query(
             zone.context.update(live_context)
             base_answer = ("지금 작업 중인 구역 기준입니다. " if live_zone and live_zone == working_zone
                            else "" if live_zone else "지금까지 올라온 분사 기준입니다. ") + base_answer
+            if live_context.get("pending_sequence_count"):
+                # 6초 안에 다 채점하지 못했다. 몇 회로 답했는지 밝힌다(남은 분사는 뒤에서 채점해 다음 질문에 쓴다).
+                base_answer = (f"올라온 분사 {live_context['sampled_sequence_count']}회 중 "
+                               f"최근 {live_context['sampled_sequence_count'] - live_context['pending_sequence_count']}회만 채점한 결과입니다. ") + base_answer
         answer, detail_degraded = await _synthesize_structured_detail(
             base_answer, zone.context, available=zone.analysis_status == "available"
         )
@@ -1642,11 +1669,11 @@ async def _execute_copilot_query(
         if query.task_type == "error_analysis":
             coating = await coating_facts()
             measures = _viewer_measures(query.context, query.prompt)[0]
-            cause = answer_distribution_cause(coating, detailed=True, measures=measures)
+            cause = answer_distribution_cause(coating, detailed=True, measures=measures, prompt=query.prompt)
             if cause is None and trusted_coating is not None:
                 # 뷰어 자료에 목표 대비 판정이 없으면(전문가 대비 행뿐) 완료 리포트로 답한다.
                 coating = await report_facts()
-                cause = answer_distribution_cause(coating, detailed=True)
+                cause = answer_distribution_cause(coating, detailed=True, prompt=query.prompt)
             if cause is not None:
                 return _success_response(query, request_started, answer=cause, retrieval_used=False, citations=[],
                                          coating_context=coating, context_status="available")
@@ -1671,7 +1698,9 @@ async def _execute_copilot_query(
     # 섞인 질문의 문서 쪽에는 기록 수치가 든 분석 답도 넘기지 않는다(질문만 남겨 지시어를 풀게 한다).
     recent_turns: list[dict[str, Any]] = [{**turn, "answer": ""} for turn in dialogue_turns] if mixed is not None else model_turns
     question = (mixed.knowledge_question or query.prompt) if mixed is not None else query.prompt  # 지시문·검색어의 질문
-    if query.session_id and mixed is None:  # 섞인 질문의 문서 쪽에는 세션 수치도 넘기지 않는다
+    # 섞인 질문의 문서 쪽에는 세션 수치도 넘기지 않는다. 뷰어 밖(시뮬레이터)에서는 기록을 가리킨 질문에만 넘긴다:
+    # 넘기면 "적정 거리는 몇 mm야?"에 내 이격거리 545mm가 섞여 "30~545mm"로 답했다(2026-11-24 음성 질의 시험).
+    if query.session_id and mixed is None and (viewer_requested or record_pointed or _MY_RUN.search(question)):
         session_summary = await to_thread.run_sync(
             lambda: summarize_session(sequences.session_bodies(query.session_id),
                                       selected_sequence_id=_selected_sequence(query.context)))

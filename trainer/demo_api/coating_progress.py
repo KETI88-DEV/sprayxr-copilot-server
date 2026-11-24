@@ -169,6 +169,7 @@ class CoatingProgressEngine:
         self._applied: dict[tuple[str, str, int], set[str]] = {}
         # 세션이 마지막으로 판정받은 Zone. 다른 Zone으로 넘어간 시퀀스에서 떠난 Zone의 등급을 보려고 둔다.
         self._last_zone: dict[tuple[str, str, int], str] = {}
+        self._visited: dict[tuple[str, str, int], set[str]] = {}  # 세션에서 칠한 구역(다음 구역 추천에서 뺀다)
         self._results: dict[tuple[str, str, int, str, float, float], CoatingProgress] = {}
         self._guard = threading.RLock()
 
@@ -381,6 +382,7 @@ class CoatingProgressEngine:
             expired, _ = self._sessions.popitem(last=False)
             self._applied.pop(expired, None)
             self._last_zone.pop(expired, None)
+            self._visited.pop(expired, None)
             self._results = {item: value for item, value in self._results.items() if item[:3] != expired}
 
     def judge_zones(
@@ -494,14 +496,20 @@ class CoatingProgressEngine:
         return None if assessment is None else coating_assessment.zone_row(map_num, zone_id, assessment)
 
     @staticmethod
-    def _next_zone(profile: dict[str, Any], map_num: int, zone_id: str) -> str | None:
+    def _next_zone(profile: dict[str, Any], map_num: int, zone_id: str, visited: Iterable[str] = ()) -> str | None:
+        """전문가 순서에서 지금 구역 뒤의, 이번 세션에 아직 칠하지 않은 첫 구역(뒤에 없으면 앞에서 찾는다).
+
+        이미 칠한 구역을 다음으로 권하면 안 된다(2026-11-24 현장 피드백). 모두 칠했으면 None.
+        """
+        done = {str(zone) for zone in visited} | {zone_id}
         for candidate in profile["aggregate"].get("macro_orders", []):
             order = candidate.get("order")
             if not isinstance(order, list):
                 continue
-            for index, item in enumerate(order[:-1]):
+            for index, item in enumerate(order):
                 if int(item.get("map_num", 1)) == map_num and str(item.get("zone_id")) == zone_id:
-                    return str(order[index + 1].get("zone_id"))
+                    later = order[index + 1:] + order[:index]
+                    return next((str(step.get("zone_id")) for step in later if str(step.get("zone_id")) not in done), None)
         return None
 
     def evaluate_replay(
@@ -533,6 +541,7 @@ class CoatingProgressEngine:
                         if (previous.session_id, previous.process_type, previous.resolved_mode_id) == key
                         and sequence_order_key(previous.sequence_id) < sequence_order_key(request.sequence_id)),
                         key=lambda previous: sequence_order_key(previous.sequence_id))
+                    self._visited[key] = {str(previous.zone_id) for previous in prior if str(previous.zone_id) not in {"-1", "0"}}
                     applied = self._applied.get(key, set())
                     if any(previous.sequence_id not in applied for previous in prior):
                         # Rebuild from persisted absolute snapshots, so a late-restored old
@@ -689,12 +698,17 @@ class CoatingProgressEngine:
                 recommendation = "stop_current_zone"
                 next_zone_id = None
                 # 같은 시퀀스의 과도막 알림(SSE)과 숫자가 같도록 행의 값을 적는다.
-                message = (f"{request.zone_id}구역 칠한 곳 평균 {row['thickness_um']:.0f}µm(상한 초과·과도막). "
-                           "분사 중지, 도막 분포를 확인하세요.")
+                message = (f"{request.zone_id}구역 칠한 곳 평균 {row['thickness_um']:.0f}µm(상한 초과·과도막), "
+                           f"{target_thickness_um:g}µm 이상 면적 {coverage_percent:.1f}%. "
+                           "두꺼운 곳은 더 칠하지 말고 덜 칠한 곳만 보완하세요.")
             elif status == "complete":
                 recommendation = "move_next_zone"
-                next_zone_id = self._next_zone(profile, map_num, request.zone_id)
+                next_zone_id = self._next_zone(profile, map_num, request.zone_id, self._visited.get(session_key, ()))
                 message = f"{request.zone_id}구역 공식 면적 95% 이상 충족."
+                if assessment["grade"] == "above":
+                    # 과도막도 완료다. 더 칠하면 더 두꺼워질 뿐이라 다음 구역으로 보낸다(2026-11-24 사용자 결정).
+                    message = (f"{request.zone_id}구역 공식 면적 95% 이상 충족, 칠한 곳 평균 {row['thickness_um']:.0f}µm(과도막). "
+                               "더 칠하지 마세요.")
                 if next_zone_id is not None:
                     message += f" {next_zone_id}구역으로 이동하세요."
             elif coverage_percent >= coating_assessment.GATE_COVERAGE_PERCENT:
@@ -707,12 +721,12 @@ class CoatingProgressEngine:
             else:
                 recommendation = "continue_current_zone"
                 next_zone_id = None
-                message = (f"{request.zone_id}구역 정상범위 면적 {coverage_percent:.1f}%. "
+                message = (f"{request.zone_id}구역 {target_thickness_um:g}µm 이상 면적 {coverage_percent:.1f}%. "
                            "도막 분포 확인 후 보완하세요.")
                 if assessment["overpaint_percent"] > 0:
-                    message = (f"{request.zone_id}구역 정상범위 면적 {coverage_percent:.1f}%, "
+                    message = (f"{request.zone_id}구역 {target_thickness_um:g}µm 이상 면적 {coverage_percent:.1f}%, "
                                f"과도막 면적 {assessment['overpaint_percent']:.1f}%. "
-                               "분사 중지, 도막 분포를 확인하세요.")
+                               "두꺼운 곳은 더 칠하지 말고 덜 칠한 곳만 보완하세요.")
 
             message = f"정상범위 {target_thickness_um:g}~{upper:g}µm: {message}"
 
@@ -724,6 +738,7 @@ class CoatingProgressEngine:
                 if left is not None:
                     row["left_zone"] = left
             self._last_zone[session_key] = request.zone_id
+            self._visited.setdefault(session_key, set()).add(str(request.zone_id))
 
             result = CoatingProgress(
                 comparison_basis="session_target",
