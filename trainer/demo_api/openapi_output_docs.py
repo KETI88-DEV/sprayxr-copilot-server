@@ -270,6 +270,8 @@ def _response_example(path: str, node: dict[str, Any], components: dict[str, Any
         data.update(session_status="COMPLETED" if ended else "ACTIVE", started_at="2026-11-16T00:00:00Z",
                     ended_at="2026-11-16T00:01:00Z" if ended else None,
                     target_thickness_um=160.0, target_thickness_min_um=160.0, target_thickness_max_um=200.0)
+        if ended:
+            data.pop("recommended_flow", None)
         if not ended:
             data["first_zone_guidance"] = {"analysis_status": "not_available", "reason_code": "sequence_reference_unavailable",
                 "process": "spray", "zone_id": None, "recommended_flow": [], "reference_basis": None,
@@ -301,6 +303,7 @@ def _stream_documentation() -> str:
         "  - `data.session_id(string)` : 훈련 세션 식별자입니다.",
         "  - `data.sequence_id(string)` : 이상이 발생한 시퀀스 식별자입니다.",
         "  - `data.anomaly_type(string)` : 이상 종류입니다. 추가 payload 키는 이벤트별 가변 항목입니다.",
+        "  - 도막 이벤트의 `data.map_num`과 `data.zone_id`는 판정 대상 면과 구역입니다. 시퀀스가 바뀐 뒤 도착한 알림도 이벤트의 `sequence_id`와 면·구역으로 표시합니다. `coating_under_app`은 직전에 떠난 구역을 가리킬 수 있습니다.",
         "- `: keep-alive` : 연결 유지 주석이며 이상 발생이나 새 분석 결과가 아닙니다. 이상이 없으면 알림 이벤트가 없을 수 있습니다.",
         "", "### 응답 예시", "", "이상 이벤트의 전송 형식 예시이며 실제 발생을 뜻하지 않습니다.", "", "```text",
         'id: 1\nevent: anomaly_detection\ndata: {"session_id":"3_11000346_1","sequence_id":"SEQ-001","anomaly_type":"direction_deviation","message":"도포 방향을 확인하세요."}\n\n: keep-alive', "```",
