@@ -5,6 +5,19 @@
     {
       "published_at": null,
       "date_source": "개발 변경 이력 날짜 · 운영 반영 여부는 서버 버전으로 확인",
+      "url": "https://github.com/KETI88-DEV/sprayxr-copilot-server/releases/tag/v3.15.7",
+      "body": "- 질문이 새 주제로 바뀌면 관련 없는 앞 답을 제외합니다.\n- 훈련 기록의 문제 구역이나 자세는 확인된 결과로 답합니다.\n- 답할 자료가 없으면 빠진 자료와 확인 방법을 알려 줍니다.",
+      "ui_changes": [
+        "VR·Replay·AI 질문에서 답변을 낼 수 없는 이유를 구체적으로 안내합니다."
+      ],
+      "source": "변경 이력",
+      "date": "2026-11-24",
+      "title": "AI 질문 문맥과 답변 불가 안내 개선",
+      "version": "v3.15.7"
+    },
+    {
+      "published_at": null,
+      "date_source": "개발 변경 이력 날짜 · 운영 반영 여부는 서버 버전으로 확인",
       "url": "https://github.com/KETI88-DEV/sprayxr-copilot-server/releases/tag/v3.15.6",
       "body": "- 정상범위 면적 비율을 별도로 제공합니다.\n- 과도막이 생긴 구역의 완료 여부에 따라 안내를 구분합니다.\n- 다시하기 시 새 회차 ID를 사용하는 방법을 Start API 문서에 명시했습니다.",
       "ui_changes": [

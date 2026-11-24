@@ -345,6 +345,21 @@ def add_openapi_output_overviews(schema: dict[str, Any]) -> None:
                          "- `null`은 미제공·미판정 등 해당 필드의 빈 값입니다. 0점·정상·0µm로 바꾸어 해석하지 않습니다. `degraded=true`는 제한 답변입니다."]
                 if path.endswith("/analyze-sequence"):
                     notes.append("- 도막 정상범위는 기본 160~200µm(경계 포함)입니다. 다음 구역 안내는 공식 Zone 면적의 목표 두께 이상 95% 등 진행 조건을 확인하며 평균 두께만으로 이동하지 않습니다.")
+                if path in {"/api/v1/copilot/query", "/api/v1/copilot/query-voice"}:
+                    reason_header = "X-Copilot-Unavailable-Reason"
+                    reason_description = (
+                        "답변을 확정할 수 없을 때 보내는 짧은 사유 코드입니다. 사용자에게는 요청 언어로 작성된 "
+                        "data.answer의 이유와 확인 방법을 표시합니다."
+                    )
+                    success.setdefault("headers", {}).setdefault(reason_header, {
+                        "description": reason_description, "schema": {"type": "string"}, "example": "sequence_missing",
+                    })
+                    notes.append(
+                        "- 답할 수 없는 경우 `data.answer`에 이용할 수 없는 자료나 근거, 확인할 다음 단계를 안내합니다. "
+                        "선택 응답 헤더 `X-Copilot-Unavailable-Reason`에서 `session_required`, `sequence_missing`, "
+                        "`zone_unresolved`, `heatmap_unavailable`, `report_unavailable`, `insufficient_evidence` 등의 코드를 확인할 수 있습니다. "
+                        "훈련 기록 없이 답할 수 있는 일반 질문은 `context_status=not_available`이어도 정상 답변입니다."
+                    )
                 if "/test/" in path:
                     notes.append("- **모의·테스트 예시:** `test_context`의 생성 방식을 확인하세요. 형식·UI 확인용 수치는 실측 결과가 아니며 실제 실행값과 다를 수 있습니다. 아래 예시에서 관찰되는 키는 테스트별 가변 항목입니다.")
                 documentation = "\n".join([_MARKER, "", *notes, "", *fields, "", "### 응답 예시", "",

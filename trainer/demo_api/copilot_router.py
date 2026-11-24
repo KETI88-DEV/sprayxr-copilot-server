@@ -60,7 +60,7 @@ from trainer.demo_api.dialogue import (GENERAL_KNOWLEDGE_LIMIT, INSTRUCTION_REFU
                                        viewer_measurement_answer, viewer_metadata_context, dialogue_turns_for_model, dialogue_resolution_advice, without_hanzi)
 from trainer.demo_api.playback_direction import playback_direction_from_context, playback_direction_answer, simple_direction_question, requested_direction_scope, aggregate_direction, LABELS as DIRECTION_LABELS
 from trainer.demo_api.copilot_live_analysis import current_zone, live_analysis
-from trainer.demo_api.simulator_context import SIMULATOR_CONTEXT, is_blasting, wants_simulator_context, simulator_configuration_facts
+from trainer.demo_api.simulator_context import SIMULATOR_CONTEXT, spray_simulator_context, wants_simulator_context, simulator_configuration_facts
 from trainer.demo_api.copilot_session_context import build_query_instruction, summarize_session, viewer_definition_context
 from trainer.demo_api.context_prompts import context_text, matched_prompt
 from trainer.demo_api.term_rules import fix_typos, matched_terms, meaning_evidence, routed_terms, same_word_lines, term_context, unit_facts, with_document_terms
@@ -92,6 +92,7 @@ from trainer.demo_api.safety_guard import (
     CLASSES as SAFETY_CLASSES, HIGH_PRESSURE_ANSWER, HIGH_PRESSURE_CITATIONS, classify, fixed_answer_translation, guard_answer, hazard_class,
 )
 from trainer.demo_api.reference_order_query import actual_order_intent, current_next_answer, is_current_completion_question, is_current_next_question, is_reference_order_question, resolve_reference_target, reference_order_answer
+from trainer.demo_api.reference_order_query import progress_unavailability
 from trainer.demo_api.v1_store import V1Store
 from trainer.demo_api.record_query import BODY_PART, DIRECTION_WORD, FIRST_FIX, WORST_ZONE, RecordAnswer, RecordFacts, answer_record_question, split_parts, ground_generated, has_record_marker, previous_subject
 from trainer.demo_api.viewer_progress import progress_question, viewer_progress_answer
@@ -223,11 +224,12 @@ TRANSLATION_MODEL_HEADER: Final = "X-Copilot-Translation-Model"
 SUBJECT_HEADER: Final = "X-Copilot-Subject"  # 서버 안에서만 쓴다. 바깥 응답에는 싣지 않는다.
 # 외국어 질문을 한국어로 옮긴 문장(퍼센트 인코딩). 응답 본문은 바꾸지 않는다.
 ANALYSIS_PROMPT_HEADER: Final = "X-Copilot-Analysis-Prompt"
+UNAVAILABLE_REASON_HEADER: Final = "X-Copilot-Unavailable-Reason"
 _EVALUATION_QUESTION: Final = re.compile(r"잘한|못한|고쳐야|고칠|개선할|개선점|문제점|부족한 점")
 # 훈련 총평("잘한 점과 고칠 점 알려줘"): 판정 모델에 넘기면 문서 검색이 27µm를 "정상 범위"라고 칭찬했다(2026-11-24 음성 질의 시험).
 _SESSION_REVIEW: Final = re.compile(r"(?:잘한|못한|고칠|고쳐야\s*(?:할|될)|개선할|부족한)\s*점|개선점"
                                   r"|(?:지금|현재)\s*(?:뭐가|무엇이|어떤)\s*문제")
-_SESSION_REVIEW_PENDING: Final = ("세션을 마치면 잘한 점과 고칠 점을 정리해 알려 드립니다. 지금은 '전체 자세 유사도는?', "
+_SESSION_REVIEW_PENDING: Final = ("세션을 마치면 잘한 점과 고칠 점을 정리해 알려 드립니다. 아직 완료 리포트가 없습니다. 지금은 '전체 자세 유사도는?', "
                                   "'순서 준수율은?', '다음 구역으로 넘어가도 돼?'처럼 하나씩 물어봐 주세요.")
 # Preserve main ebb923c3's narrowly scoped v7.1 diagnostic-scaffold repair.
 _DIAGNOSTIC_SCAFFOLD: Final = re.compile(r"(?m)^\s*\[(?:분석|판정|원인|조치)\]")
@@ -333,6 +335,19 @@ def _abstain_below(pipeline: object, response_mode: str) -> float | None:
     return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 
+def _training_selector_only(context: str | None) -> bool:
+    """The selector describes the recording, not the desired evidence or work conditions."""
+    if not context:
+        return True
+    try:
+        selector = json.loads(context)
+    except (ValueError, RecursionError):
+        return False
+    return (isinstance(selector, dict)
+            and selector.keys() <= {"session_id", "scenario_id", "mode_id", "process", "tool_type"}
+            and all(type(value) in (str, int) for value in selector.values()))
+
+
 # 근거 확인 단계(confidence.abstain_below_rerank_score)가 막은 답. 2026-11-13 2-1 측정에서 도입.
 NO_EVIDENCE_ANSWER: Final = ("제공된 자료에서 이 질문에 답할 근거를 찾지 못했습니다. "
                              "대상(도장 방식·제품·구역)을 함께 적어 다시 물어 주세요.")
@@ -374,7 +389,8 @@ DIZZY_NOTE: Final = "몸이 불편하면 멈추고 교관에게 알리세요."
 _DIZZY: Final = re.compile(r"어지럼|어지러|어지럽|멀미|메스꺼|울렁")
 
 
-def _session_findings(found: tuple[str, Mapping[str, Any]] | None) -> str:
+def _session_findings(found: tuple[str, Mapping[str, Any]] | None, *,
+                      fallback: str = "이 세션은 완료 분석 결과가 없어 잘한 점이나 고칠 점을 판정할 수 없습니다.") -> str:
     """평가를 묻는 자유 질문의 답: 완료 분석의 판정(자세 최저 구역, 도막 과다·부족 구역)을 그대로 전한다.
 
     모델에 판정을 넘겨 풀어 쓰게 하면 8B가 없는 판정을 만든다(2026-11-11 Spark: 도막이 정상인 9번 구역을 "도막 부족").
@@ -383,7 +399,24 @@ def _session_findings(found: tuple[str, Mapping[str, Any]] | None) -> str:
     parts = [pose.answer] if pose.analysis_status == "available" else []
     if coating["analysis_status"] == "available":
         parts.append(answer_coating_question(coating, "", detailed=True))
-    return "\n".join(parts) or "이 세션은 완료 분석 결과가 없어 잘한 점이나 고칠 점을 판정할 수 없습니다."
+    return "\n".join(parts) or fallback
+
+
+_RECORD_REVIEW_SCOPE: Final = re.compile(r"선택한\s*(?:훈련|기록|세션)|(?:내|제|이번|이)\s*(?:훈련\s*기록|세션|기록)")
+_RECORD_REVIEW_ASK: Final = re.compile(r"가장.{0,12}문제|우선.{0,18}문제|주요\s*문제|고칠\s*점|개선점")
+_RECORD_POSE_ASK: Final = re.compile(r"자세(?!히|하게|한).{0,18}(?:확인|개선|평가|어때|유사도|점수)")
+_UNANCHORED_FOLLOWUP: Final = re.compile(
+    r"(?:(?:그건|그거는|그거|그게)\s*(?:어때|왜|어떻게|뭐야|뭐지)|"
+    r"(?:그럼|그러면|그래서)\s*(?:왜|어떻게|뭐야|뭐지))[?？.!。\s]*"
+)
+
+
+def _record_review_kind(prompt: str) -> str | None:
+    if not _RECORD_REVIEW_SCOPE.search(prompt):
+        return None
+    if _RECORD_POSE_ASK.search(prompt):
+        return "pose"
+    return "findings" if _RECORD_REVIEW_ASK.search(prompt) else None
 
 
 def _selected_sequence(context: str | None) -> str | None:
@@ -963,6 +996,7 @@ def _success_response(
     generated: bool = False,
     model_name: str | None = None,
     subject: Mapping[str, Any] | None = None,
+    unavailable_reason: str | None = None,
 ) -> JSONResponse:
     """`generated`는 모델이 문장을 만든 답에만 준다. 나머지는 채점·분석 결과를 그대로 옮긴 답이다.
 
@@ -1004,6 +1038,8 @@ def _success_response(
     )
     source = "documents" if retrieval_used else "conversation" if generated and not degraded else "analysis"
     headers = {ANSWER_SOURCE_HEADER: source}
+    if unavailable_reason is not None:
+        headers[UNAVAILABLE_REASON_HEADER] = unavailable_reason
     if generated and (name := safe_model_name(model_name)) is not None:
         headers[MODEL_HEADER] = name
     if subject:
@@ -1046,6 +1082,10 @@ async def _execute_copilot_query(
     ))
     # 저장된 질문은 사용자가 적은 그대로다. 이어받기가 앞 질문의 용어를 찾도록 이 요청 안에서만 오타를 고쳐 본다.
     dialogue_turns = [{**turn, "prompt": fix_typos(str(turn.get("prompt") or ""))} for turn in dialogue_turns]
+    if not dialogue_turns and _UNANCHORED_FOLLOWUP.fullmatch(query.prompt.strip()):
+        return _success_response(query, request_started,
+            answer="어떤 내용을 가리키는지 알 수 있는 앞 질문이 없습니다. 궁금한 대상이나 상황을 함께 알려 주세요.",
+            retrieval_used=False, citations=[], unavailable_reason="clarification_required")
     restated = _restated_followup(query.prompt, dialogue_turns)
     if restated is not None:
         query = query.model_copy(update={"prompt": restated})
@@ -1120,7 +1160,8 @@ async def _execute_copilot_query(
         ))
         return _success_response(query, request_started, answer=answer, retrieval_used=False,
             citations=[], sequence_context=scope, coating_context=progress,
-            context_status="available" if scope["analysis_status"] == "available" else "not_available")
+            context_status="available" if scope["analysis_status"] == "available" else "not_available",
+            unavailable_reason=progress_unavailability(scope.get("reason_code"))[0] if scope["analysis_status"] != "available" else None)
     has_reference_plan = callable(getattr(sequence_engine, "reference_plan", None))
     explicit_actual_order = actual_order_intent(query.prompt)
     # 판정 모델 없이 순서 분석으로 보내는 말. 자세를 묻는 말("자세 유사도는 얼마야?")은 순서 탭이어도 넣지 않는다.
@@ -1147,6 +1188,7 @@ async def _execute_copilot_query(
             reference_query, request_started, answer=answer, retrieval_used=False,
             citations=[], sequence_context=scope,
             context_status="available" if scope["analysis_status"] == "available" else "not_available",
+            unavailable_reason=progress_unavailability(scope.get("reason_code"))[0] if scope["analysis_status"] != "available" else None,
         )
     # A full reference plan is available before any trainee sequence or complete
     # report. It never authorizes realtime movement or supplies actual visits.
@@ -1189,6 +1231,54 @@ async def _execute_copilot_query(
         return _success_response(query, request_started, answer=answer, retrieval_used=False, citations=[],
                                  pose_context={"scope": "arm_pose_zones", "status": arm_claims.get("status")},
                                  context_status="available" if arm_claims.get("status") == "available" else "not_available")
+    record_review = _record_review_kind(query.prompt) if not documents_only and not explanatory_request else None
+    if record_review == "pose" and query.session_id and not viewer_requested:
+        pose_query = query.model_copy(update={"task_type": "pose_recomm"})
+        if _pose_engine_question(pose_query) and await to_thread.run_sync(
+            lambda: sequences.latest_sequence_id(query.session_id)
+        ):
+            query, record_review = pose_query, None
+    if record_review is not None and not coating_question and not BODY_PART.search(query.prompt):
+        reason = "analysis_unavailable"
+        pose_context = None
+        answer = None
+        if viewer_requested:
+            claims = viewer_claims(query.context)
+            if record_review == "pose" and arm_claims is not None and arm_claims.get("status") == "available":
+                playback = (viewer_analysis or {}).get("playback_context") or (claims[0].get("playback_context") if claims else None)
+                answer = arm_pose_answer(arm_claims, current=_asks_current_viewer_pose(query.prompt),
+                    playback=playback if isinstance(playback, dict) else None,
+                    zone_id=requested_zone(query.prompt, None), prompt=query.prompt)
+            elif record_review == "findings":
+                answer = viewer_findings_answer(query.context)
+            if not claims:
+                missing = "선택한 훈련 기록을 확인할 수 없습니다. 목록에서 기록을 다시 불러와 주세요."
+            elif record_review == "pose":
+                missing = "선택한 훈련 기록에 자세 채점 결과가 없어 자세나 교정 방향을 판단할 수 없습니다."
+            else:
+                missing = ("선택한 훈련 기록에 구역별 종합 평가가 없어 어느 구역을 먼저 고칠지 판단할 수 없습니다. "
+                           "이격거리, 이동 속도, 작업 순서처럼 확인할 항목을 지정해 주세요.")
+        elif not query.session_id:
+            reason = "session_required"
+            missing = "어느 훈련인지 확인할 수 없습니다. 훈련 기록을 선택한 뒤 다시 물어보세요."
+        else:
+            found = (await to_thread.run_sync(lambda: reports.latest_complete_analysis(query.session_id))
+                     if reports is not None else None)
+            if found is not None and record_review == "pose":
+                pose = answer_pose_question(found, prompt=query.prompt, context=query.context)
+                pose_context = pose.context
+                answer = pose.answer if pose.analysis_status == "available" else None
+            elif found is not None:
+                answer = _session_findings(found, fallback="")
+            if found is None:
+                reason = "report_unavailable"
+                missing = "이 훈련의 완료 리포트가 없어 평가할 수 없습니다. 리포트 분석이 끝난 뒤 다시 물어보세요."
+            else:
+                missing = ("완료 리포트에 자세 채점 결과가 없습니다." if record_review == "pose"
+                           else "완료 리포트에 구역별 도막 또는 자세 평가 결과가 없습니다.")
+        return _success_response(query, request_started, answer=answer or missing, retrieval_used=False, citations=[],
+                                 context_status="available" if answer else "not_available",
+                                 pose_context=pose_context, unavailable_reason=None if answer else reason)
     if viewer_requested and not documents_only and not explanatory_request and preset_intent(query.task_type, query.prompt) is None:
         # 손·팔 질문은 소견 틀이 아니라 팔 자세 틀이 답한다(사례 4). 자세 탭에서 팔 채점이 있으면 "뭐부터 고쳐"는 팔 자세 우선 교정이다(T22).
         # 자세 탭에서 팔 채점 없이 자세를 물으면 아래 채점 없음 안내가 답한다(I7).
@@ -1209,7 +1299,8 @@ async def _execute_copilot_query(
         found_report = (await to_thread.run_sync(lambda: reports.latest_complete_analysis(query.session_id))
                         if reports is not None else None)
         return _success_response(query, request_started, answer=_session_findings(found_report) if found_report else _SESSION_REVIEW_PENDING,
-                                 retrieval_used=False, citations=[], context_status="available" if found_report else "not_available")
+                                 retrieval_used=False, citations=[], context_status="available" if found_report else "not_available",
+                                 unavailable_reason=None if found_report else "report_unavailable")
     decision = None
     document_followup = False
     resolved_question: str | None = None
@@ -1274,19 +1365,26 @@ async def _execute_copilot_query(
         resolved_question = dialogue_resolution_advice(
             decision.get("resolved_question"), prompt=query.prompt, recent_turns=dialogue_turns,
         )
+    # 계획은 앞 대화와 비교해 주제 전환을 판정하지만, 새 질문을 생성할 때는
+    # 앞 답변으로부터 구역·판정·기술 주제를 다시 끌어오지 않는다.
+    new_topic = decision is not None and decision.get("context_relation") == "new_topic"
+    if new_topic:
+        model_turns = []
 
     async def chat_answer(hedged: bool = False, *, conversation_pipeline: object | None = None,
-                          knowledge_scope: bool = False) -> JSONResponse:
+                          knowledge_scope: bool = False, independent_scope: bool = False) -> JSONResponse:
         """계획 모델이 대화로 분류한 질문에 문서 검색 없이 답한다(세션 요약·측정값 검사 포함)."""
         try:
             # A document miss does not widen the viewer data supplied to a
             # quick general explanation. Use the same scoped facts/history for
             # generation and numeric validation as the knowledge branch.
-            conversation_facts = (dict(viewer_facts or {}) if knowledge_scope and viewer_requested else facts)
+            independent_chat = independent_scope or (new_topic and not grounded and not knowledge_scope)
+            conversation_facts = ({} if independent_chat else
+                                  dict(viewer_facts or {}) if knowledge_scope and viewer_requested else facts)
             if simulator_facts is not None:
                 conversation_facts = dict(simulator_facts)
-            conversation_turns = [] if knowledge_scope and definition_context is not None else model_turns
-            omit_training_values = (simulator_facts is not None
+            conversation_turns = [] if independent_scope or (knowledge_scope and definition_context is not None) else model_turns
+            omit_training_values = (independent_chat or simulator_facts is not None
                                     or (knowledge_scope and viewer_requested and query.response_mode == "quick" and not record_pointed))
             if query.session_id and not omit_training_values:
                 conversation_facts["training_summary"] = await to_thread.run_sync(
@@ -1353,7 +1451,8 @@ async def _execute_copilot_query(
                 # 문서 근거가 없어 만든 일반 설명이 검토를 못 넘으면(거절·시간 초과) 오류 대신 확인 불가로 답한다(2026-11-23).
                 # 검토를 못 넘은 설명 자체는 내보내지 않는다.
                 return _success_response(query, request_started, answer=UNCONFIRMED_GENERAL_ANSWER, retrieval_used=False, citations=[],
-                                         degraded=True, context_status="available" if facts or simulator_facts else "not_available")
+                                         degraded=True, context_status="available" if facts or simulator_facts else "not_available",
+                                         unavailable_reason="answer_verification_unavailable")
             return error_response(503, "Conversation engine temporarily unavailable; retry")
 
     if simulator_facts is not None:
@@ -1768,7 +1867,7 @@ async def _execute_copilot_query(
         knowledge_client_context = "[문서 후속 질문]\n직전 기술 설명에 대한 조건 추가 또는 적용 범위의 재검토입니다.\n" + (knowledge_client_context or "")
     elif decision is not None and decision.get("context_relation") == "new_topic":
         knowledge_client_context = "[새 주제 질문]\n이전 검색 주제를 이어받지 않는 독립적인 질문입니다.\n" + (knowledge_client_context or "")
-    block = "" if is_blasting(query.prompt) else SIMULATOR_CONTEXT
+    block = spray_simulator_context(query.prompt)
     instruction = build_query_instruction(
         question,
         client_context=knowledge_client_context,
@@ -1862,11 +1961,14 @@ async def _execute_copilot_query(
     unreviewed_body = not cacheable_candidate(str(result.get("response", "")))
     rag_abstained = (isinstance(review, Mapping) and review.get("cacheable") is False and unreviewed_body
                      and not parse_knowledge_answer(str(result.get("response", "")), retrieved_chunk_ids(result.get("rag_chunks") or [])).citations)
+    independent_general = general_knowledge and not followup and (viewer_requested or _training_selector_only(query.context))
     fresh_general = (bool(getattr(pipeline, "supports_reviewed_knowledge_fallback", False))
-                     and query.task_type == "knowledge_search" and not record_pointed and not query.context and not query.session_id
+                     and query.task_type == "knowledge_search" and not record_pointed
+                     and (independent_general or (not query.context and not query.session_id))
                      and (review_failed or rag_abstained))
     if may_defer and (retrieval_missing or review_insufficient or fresh_general):
-        response = await chat_answer(conversation_pipeline=pipeline, knowledge_scope=True)
+        response = await chat_answer(conversation_pipeline=pipeline, knowledge_scope=True,
+                                     independent_scope=fresh_general and independent_general)
         original_trace = metadata.get("answer_trace") if isinstance(metadata, Mapping) else None
         fallback_trace = dict(original_trace) if isinstance(original_trace, Mapping) else {}
         fallback_trace["fallback_reason"] = ("review_insufficient" if review_insufficient else
@@ -1899,19 +2001,25 @@ async def _execute_copilot_query(
             response = _success_response(query, request_started, answer=withheld, retrieval_used=bool(withheld_citations), citations=withheld_citations,
                                      degraded=review_failed,
                                      context_status="available" if session_summary or coating_advice_context or facts else "not_available",
-                                     subject=mixed.subject if mixed is not None else None)
+                                     subject=mixed.subject if mixed is not None else None,
+                                     unavailable_reason=None if safety or mixed is not None else (
+                                         "answer_verification_unavailable" if review_failed and not review_insufficient
+                                         else "insufficient_evidence"))
             return _with_answer_trace(response, result)
     retrieved = retrieved_chunk_ids(result.get("rag_chunks") or []) if use_rag else []
     parsed = parse_knowledge_answer(str(result.get("response", "")), retrieved)
     answer = parsed.body
     if query.response_mode == "quick":
         answer = re.sub(r"\n+\s*\[?근거\]?\s*:?\s*$", "", answer).rstrip()
-    answer = _checked_generation(
-        answer, query, instructions=_document_rules(pipeline), safety=safety, drop_only=mixed is not None,
-        evidence=tuple(str(c.get("text", "")) for c in result.get("rag_chunks") or [] if isinstance(c, dict)))
+    if review_failed:
+        answer = "" if safety else UNCONFIRMED_GENERAL_ANSWER
+    else:
+        answer = _checked_generation(
+            answer, query, instructions=_document_rules(pipeline), safety=safety, drop_only=mixed is not None,
+            evidence=tuple(str(c.get("text", "")) for c in result.get("rag_chunks") or [] if isinstance(c, dict)))
     # 위험한 행동을 해도 되는지 묻는 안전 질문은 한국어 답을 옮기기 전에 검사한다(바꾼 문장도 기존 번역을 지난다).
     generated_answer = answer
-    answer, citations = guard_answer(safety_class if safety else None, answer, list(parsed.citations))
+    answer, citations = guard_answer(safety_class if safety else None, answer, [] if review_failed else list(parsed.citations))
     generated_model = (metadata.get("generation_model") if isinstance(metadata, Mapping)
                        and metadata.get("quick_cache_hit") is not True and answer == generated_answer
                        and parsed.repair_path not in FAILED_REPAIR_PATHS and not review_failed else None)
@@ -1919,7 +2027,7 @@ async def _execute_copilot_query(
         citations = []
     if mixed is not None:
         # 기록 문장 먼저, 문서 문장은 뒤에. 문서 본문이 비면 근거가 없다고만 덧붙인다(기록 문장을 되풀이하지 않는다).
-        body = "" if parsed.repair_path in FAILED_REPAIR_PATHS else answer.strip()  # 빈 본문의 대체 문장("답변을 생성하지 못했습니다")도 빈 답이다
+        body = "" if review_failed or parsed.repair_path in FAILED_REPAIR_PATHS else answer.strip()
         # 사용자가 지식 조각을 먼저 물었으면 문서 문장을 앞에 둔다(사례 18).
         answer = (body + "\n" + mixed.text if body and mixed.knowledge_first and query.response_mode == "quick"
                   else mixed.text + "\n" + (body or MIXED_NO_EVIDENCE))
@@ -1943,6 +2051,9 @@ async def _execute_copilot_query(
         generated=True,
         model_name=generated_model,
         subject=mixed.subject if mixed is not None else None,
+        unavailable_reason=(
+            "insufficient_evidence" if review_insufficient else "answer_verification_unavailable"
+        ) if review_failed and not safety and mixed is None else None,
     )
     return _with_answer_trace(response, result)
 
@@ -2059,13 +2170,17 @@ async def execute_copilot_query(
                                          generated=dictionary is None, model_name=last_translation_model)
             response.headers[ANSWER_SOURCE_HEADER] = answer_source
         else:
-            response = await _execute_copilot_query(
-                analysis_query, pipeline_provider=pipeline_provider, pending_answers=pending_answers,
-                sequences=sequences, mcp_base_url=mcp_base_url, transport=transport,
-                started=request_started, reports=reports, sequence_engine=sequence_engine,
-                coating_engine=coating_engine, conversation_id=conversation_id,
-                original_prompt=query.prompt if query.language != "ko" else None, safety_class=safety_class,
-            )
+            try:
+                response = await _execute_copilot_query(
+                    analysis_query, pipeline_provider=pipeline_provider, pending_answers=pending_answers,
+                    sequences=sequences, mcp_base_url=mcp_base_url, transport=transport,
+                    started=request_started, reports=reports, sequence_engine=sequence_engine,
+                    coating_engine=coating_engine, conversation_id=conversation_id,
+                    original_prompt=query.prompt if query.language != "ko" else None, safety_class=safety_class,
+                )
+            except Exception:
+                logger.exception("copilot analysis failed request_id=%s", query.request_id)
+                return error_response(500, "Copilot query failed")
         if response.status_code != 200:
             return response
         # A semantic follow-up can recover a hazard that the current utterance
@@ -2135,6 +2250,8 @@ async def execute_copilot_query(
     except Exception:
         logger.exception("copilot query: failed to store dialogue request_id=%s", query.request_id)
     headers = {ANSWER_SOURCE_HEADER: response.headers.get(ANSWER_SOURCE_HEADER, "analysis")}
+    if unavailable_reason := response.headers.get(UNAVAILABLE_REASON_HEADER):
+        headers[UNAVAILABLE_REASON_HEADER] = unavailable_reason
     if (model_name := safe_model_name(response.headers.get(MODEL_HEADER))) is not None:
         headers[MODEL_HEADER] = model_name
     if last_translation_model is not None and last_translation_model != headers.get(MODEL_HEADER):

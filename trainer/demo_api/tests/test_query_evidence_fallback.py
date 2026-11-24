@@ -127,6 +127,52 @@ def test_semantic_review_failure_does_not_trigger_unreviewed_conversation(verdic
 
 
 @pytest.mark.parametrize("mode", ["quick", "detailed"])
+@pytest.mark.parametrize("context", [None, '{"scenario_id":"3","process":"spray"}'])
+def test_reviewed_general_fallback_does_not_depend_on_vr_metadata_or_use_paint_measurements(mode, context):
+    from trainer.demo_api.tests.test_zone_completion_gate import request
+
+    class ReviewedGeneral(Pipeline):
+        supports_reviewed_knowledge_fallback = True
+
+    pipeline = ReviewedGeneral(response="[답변] 도막 기포가 원인입니다.", verdict="rejected")
+    req = request()
+    store = SequenceStore(":memory:")
+    store.record(session_key=req.session_id, sequence_id=req.sequence_id, body_sha256=req.sequence_id,
+                 frames=0, received_at="now", body=req.model_dump_json())
+    result = ask(client(pipeline, store), prompt="저도막의 원인은 무엇인가요?", mode=mode,
+                 session_id=req.session_id, context=context)
+    data = result.json()["data"]
+    assert "작업 속도" in data["answer"] and "도막 기포가 원인" not in data["answer"]
+    assert data["citations"] == [] and data["retrieval_used"] is False
+    assert [call["facts"] for call in pipeline.conversations] == [{}]
+    assert pipeline.conversations[0]["knowledge_fallback"] is True
+
+
+def test_semantic_review_failure_withholds_a_substantive_candidate():
+    pipeline = Pipeline(response="[답변] 기포 때문에 도막이 얇아집니다.\n[근거] " + DOC,
+                        verdict="rejected")
+    data = ask(client(pipeline)).json()["data"]
+    assert "기포 때문에" not in data["answer"]
+    assert "확인하지 못했습니다" in data["answer"] and data["degraded"] is True
+    assert data["citations"] == [] and data["retrieval_used"] is False
+    assert pipeline.conversations == []
+
+
+def test_semantic_review_failure_withholds_only_the_unverified_part_of_a_mixed_question():
+    from trainer.demo_api.copilot_router import MIXED_NO_EVIDENCE
+    from trainer.demo_api.tests.viewer_record import AT_35S, context, payload
+
+    pipeline = Pipeline(response="[답변] 이 현장 도장 규칙은 장비 회전 순서를 따릅니다.\n[근거] " + DOC,
+                        verdict="rejected")
+    response = ask(client(pipeline), prompt="순서 준수율 45%는 어떻게 나온 거고, 숙련자들끼리는 순서가 얼마나 일치해?",
+                   task_type="trajectory_recomm", context=context("trajectory_recomm", payload(), AT_35S))
+    data = response.json()["data"]
+    assert "45.1%" in data["answer"] and MIXED_NO_EVIDENCE in data["answer"]
+    assert "장비 회전 순서" not in data["answer"]
+    assert data["citations"] == [] and data["retrieval_used"] is False
+
+
+@pytest.mark.parametrize("mode", ["quick", "detailed"])
 def test_valid_review_insufficient_falls_back_even_with_high_rerank_score(mode):
     pipeline = Pipeline(response="[답변] 질문에 맞는 설명을 충분히 확인하지 못했습니다.", verdict="insufficient")
     response = ask(client(pipeline), mode=mode)
@@ -357,6 +403,25 @@ def test_positive_painting_knowledge_still_uses_documents_when_planner_would_say
     assert response.status_code == 200 and len(pipeline.runs) == 1
     assert pipeline.conversations == []
     assert response.headers["X-Copilot-Answer-Source"] == "documents"
+
+
+@pytest.mark.parametrize("mode", ["quick", "detailed"])
+def test_explicit_grinding_question_keeps_its_process_in_search_and_generation(mode):
+    from trainer.demo_api.query_runtime import QuickQueryRuntime
+    from trainer.demo_api.simulator_context import SIMULATOR_CONTEXT, wants_simulator_context
+
+    prompt = "그라인딩할 때 압력을 지나치게 주면 어떤 문제가 생기나요?"
+    pipeline = Pipeline()
+    pipeline.quick_query_runtime = QuickQueryRuntime(object(), None, 8192)
+    response = ask(client(pipeline), prompt=prompt, mode=mode)
+    assert response.status_code == 200
+    assert len(pipeline.runs) == 1
+    call = pipeline.runs[0]
+    assert call["retrieval_instruction"].startswith("선박 표면 처리 그라인딩 작업 ")
+    assert prompt in call["retrieval_instruction"] and "스프레이 건 작업" not in call["retrieval_instruction"]
+    assert SIMULATOR_CONTEXT not in call["instruction"]
+    assert SIMULATOR_CONTEXT not in call.get("generation_instruction", "")
+    assert not wants_simulator_context(prompt)
 
 
 @pytest.mark.parametrize("prompt", ["훈련모드는 몇 가지가 있어?", "학습 모드는 총 몇 개야?"])
