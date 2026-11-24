@@ -40,14 +40,13 @@ def test_complete_coating_guide_keeps_the_physical_gate_and_next_zone(tmp_path: 
     assert len(progress.message) <= 72
 
 
-def test_overpaint_coating_guide_keeps_stop_and_distribution_check(tmp_path: Path):
+def test_overcoat_complete_guide_says_stop_painting_and_names_the_next_zone(tmp_path: Path):
     _profile(tmp_path)
     progress = _engine(tmp_path).evaluate(_request(sequence_id="SHORT-OVER", thickness_um=300))
-    assert progress.status == "overpaint_risk" and progress.recommendation == "stop_current_zone"
-    assert progress.next_zone_id is None
+    assert progress.status == "complete" and progress.recommendation == "move_next_zone"
+    assert progress.next_zone_id == "2"
     assert "160~200µm" in progress.message and "칠한 곳 평균" in progress.message
-    assert "과도막" in progress.message and ("중지" in progress.message or "멈추" in progress.message)
-    assert "도막 분포" in progress.message
+    assert "과도막" in progress.message and "더 칠하지 마세요" in progress.message and "2구역" in progress.message
     assert len(progress.message) <= 105
 
 

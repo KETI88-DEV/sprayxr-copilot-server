@@ -85,8 +85,10 @@ def test_gate_is_area_while_grade_is_mean() -> None:
     assert short["completion_percent"] == 94.0
     assert _zone(171.0, count=95, unpainted=5)["gate_status"] == "complete"
     thick = _zone(251.0, count=100)
-    assert (thick["grade"], thick["coverage_percent"], thick["overpaint_percent"]) == ("above", 0.0, 100.0)
-    assert thick["gate_status"] == "overpaint_risk"
+    assert (thick["grade"], thick["coverage_percent"], thick["overpaint_percent"]) == ("above", 100.0, 100.0)
+    assert thick["gate_status"] == "complete"  # 하한 이상 면적이 95% 이상이면 과도막도 완료
+    # 과도막 위험은 평균이 상한을 넘고 하한 이상 면적이 95% 미만일 때만이다.
+    assert _zone(251.0, count=50, unpainted=50)["gate_status"] == "overpaint_risk"
     # 목표의 절반만 쌓인 면: 채운 면적은 0%, 진행률은 50%
     half = _zone(90.0)
     assert (half["coverage_percent"], half["completion_percent"]) == (0.0, 50.0)

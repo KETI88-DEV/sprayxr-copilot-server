@@ -48,13 +48,13 @@ def test_explicit_range_reaches_pixel_gate_and_summary():
     assert result["coverage_percent"] == 10
 
 
-def test_overpaint_area_cannot_satisfy_completion_gate():
+def test_overpaint_area_counts_toward_completion_gate():
     raw = np.full((10, 10), 190.)  # corrected180
-    raw[:2, :] = 220.  # corrected210; mean186 but 20% outside normal range
+    raw[:2, :] = 220.  # corrected210; mean186, 20% above the upper bound but still >= the lower bound
     result = coating.assess_zone(raw, np.ones((10, 10), bool))
     assert result["grade"] == "normal"
-    assert result["coverage_percent"] == 80
-    assert result["gate_status"] == "needs_more"
+    assert result["coverage_percent"] == 100
+    assert result["gate_status"] == "complete"
 
 
 def _body(**updates):
@@ -140,7 +140,9 @@ def test_realtime_engine_and_cache_use_both_range_limits(tmp_path):
     excess = engine.evaluate(request, min_thickness_um=160, max_thickness_um=180)
     assert normal.status == "complete"
     assert normal.assessment["normal_band_um"] == [160, 200]
-    assert excess.status == "overpaint_risk"
+    # 하한 이상 면적이 95% 이상이면 칠한 곳 평균이 상한을 넘어도(과도막) 완료다.
+    assert excess.status == "complete"
+    assert excess.assessment["grade"] == "above"
     assert excess.assessment["normal_band_um"] == [160, 180]
 
 

@@ -10,21 +10,19 @@ from trainer.demo_api.tests.test_session_start_brief_response import Reference, 
 from trainer.demo_api.tests.test_zone_completion_gate import analyze, request
 
 
-def test_mixed_thickness_reports_overpaint_area_without_locating_unexposed_pixels(tmp_path: Path) -> None:
+def test_mixed_thickness_counts_overpaint_area_toward_completion(tmp_path: Path) -> None:
     # Seventy pixels are normal; thirty exceed 200µm after the single 10µm correction.
-    # The painted mean remains normal, so this exercises needs_more rather than the stop-grade branch.
+    # Since 2026-11-24 the gate counts every pixel at or above the lower bound, so the Zone is complete.
     data = analyze(tmp_path, request(value=171, valid_count=70, rest=240))
     progress = data["coating_progress"]
-    assert progress["status"] == "needs_more"
-    assert progress["coverage_percent"] == 70
+    assert progress["status"] == "complete"
+    assert progress["coverage_percent"] == 100
     assert progress["overpaint_percent"] == 30
-    assert progress["zone_id"] == "1" and progress["next_zone_id"] is None
+    assert progress["zone_id"] == "1" and progress["next_zone_id"] == "2"
     assert data["coating_feedback"]["grade"] == "normal"
     for text in (data["text_guide"], progress["message"]):
-        assert "과도막 면적 30.0%" in text
-        assert "분사 중지" in text
-        assert not any(word in text for word in ("두꺼운 곳", "회피", "피하세요", "상한 초과 30.0%"))
-        assert "1구역" in text and "Zone 1" not in text
+        assert "1구역" in text and "2구역" in text and "Zone" not in text
+        assert "분사 중지" not in text
     assert "160~200µm" in progress["message"]
     assert "1구역" in data["coating_feedback"]["message"]
     assert len(data["text_guide"]) <= 60

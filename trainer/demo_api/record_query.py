@@ -415,7 +415,7 @@ def _completion(facts: RecordFacts, zones: tuple[str, ...]) -> str:
         order = [str(zone) for zone in facts.claims.get("reference_order") or []] or facts.zone_ids
         lines, _ = gate_lines(rows, order=order)
         done = sum(row["gate_status"] == "complete" for row in rows)
-        return " ".join([f"정상 범위({_band(facts)}) 안 면적이 {_GATE_PERCENT}% 이상이고 평균이 정상 범위인 완료 Zone은 {len(rows)}곳 중 {done}곳입니다.", *lines])
+        return " ".join([f"목표 두께({_band(facts)}의 하한) 이상 면적이 {_GATE_PERCENT}% 이상이고 평균이 하한 이상인 완료 Zone은 {len(rows)}곳 중 {done}곳입니다.", *lines])
     out = []
     for zone in zones:
         row = _row(facts, zone)
@@ -423,7 +423,7 @@ def _completion(facts: RecordFacts, zones: tuple[str, ...]) -> str:
             out.append(f"{_zone_text(facts, zone)}{'.' if row is None else '입니다.'}")
             continue
         band = band_text(row)
-        area = f"정상 범위({band}) 안 면적은 {row['coverage_percent']:g}%" if _is_num(row.get("coverage_percent")) else "칠한 면적 자료가 없고"
+        area = f"목표 두께({normal_band(row)[0]:g}µm) 이상 면적은 {row['coverage_percent']:g}%" if _is_num(row.get("coverage_percent")) else "칠한 면적 자료가 없고"
         # 완료 전이면 범위 밖 면적이 어느 쪽인지 말한다. 주로 상한 초과면 "보완"을 말하지 않는다(v3.6.2, 기본 160~200µm).
         short = f"{_GATE_PERCENT}% 기준에 못 미칩니다. {shortfall_text(row)}".rstrip()
         verdict = {"complete": f"{_GATE_PERCENT}% 기준을 넘겨 완료입니다.", "overpaint_risk": f"{_GATE_PERCENT}% 기준과 별개로 과도막이라 더 칠하면 안 됩니다."}.get(
@@ -431,7 +431,7 @@ def _completion(facts: RecordFacts, zones: tuple[str, ...]) -> str:
         if row.get("grade") == "normal" and row["gate_status"] == "needs_more" and _is_num(row.get("coverage_percent")) and _is_num(row.get("thickness_um")):
             # 등급 "정상"과 "보완 필요"를 나란히 쓰면 모순으로 읽힌다(2026-11-14 사용자 지적). 평균 두께와 면적 기준을 대비로 적는다.
             out.append(f"Zone {zone}의 칠한 곳 평균 두께는 {mean_text(row['thickness_um'], row['target_thickness_um'])}µm로 정상 범위({band}) "
-                       f"안이지만, 범위 안 면적이 {row['coverage_percent']:g}%라 {short}")
+                       f"안이지만, 목표 두께 이상 면적이 {row['coverage_percent']:g}%라 {short}")
             continue
         out.append(f"{_zone_text(facts, zone)}입니다. {area}로 {verdict}")
     return " ".join(out)
@@ -580,8 +580,8 @@ def _priorities(facts: RecordFacts, *, quick: bool = False) -> list[tuple[str, s
     if gate:
         # 범위 밖 면적이 주로 상한 초과인 Zone에는 "보완하십시오"를 쓰지 않는다(v3.6.2).
         return [(f"Zone {row['zone_id']}부터 {'보완하십시오' if shortfall_side(row) == 'under' else '보십시오'}.",
-                 f"정상 범위 안 면적이 {row['coverage_percent']:g}%로 {_GATE_PERCENT}% 기준에 못 미칩니다." if quick else
-                 f"정상 범위({band_text(row)}) 안 면적이 {row['coverage_percent']:g}%로 {_GATE_PERCENT}% 기준에 못 미칩니다. {shortfall_text(row)}".rstrip())
+                 f"목표 두께 이상 면적이 {row['coverage_percent']:g}%로 {_GATE_PERCENT}% 기준에 못 미칩니다." if quick else
+                 f"목표 두께 이상 면적이 {row['coverage_percent']:g}%로 {_GATE_PERCENT}% 기준에 못 미칩니다. {shortfall_text(row)}".rstrip())
                 for row in gate]
     arm = sorted(((zone, item) for zone, item in ((facts.arm or {}).get("zones") or {}).items() if isinstance(item, Mapping) and _is_num(item.get("similarity_percent"))),
                  key=lambda pair: pair[1]["similarity_percent"])
@@ -678,16 +678,16 @@ def _quick_completion(facts: RecordFacts, zones: tuple[str, ...]) -> str | None:
         return None
     if not zones:
         done = sum(row["gate_status"] == "complete" for row in rows)
-        return f"완료 Zone은 {len(rows)}곳 중 {done}곳입니다(정상 범위 안 면적 {_GATE_PERCENT}% 기준)."
+        return f"완료 Zone은 {len(rows)}곳 중 {done}곳입니다(목표 두께 이상 면적 {_GATE_PERCENT}% 기준)."
     out = []
     for zone in zones:
         row = _row(facts, zone)
         if row is None or not row.get("gate_status") or not _is_num(row.get("coverage_percent")):
             return None
         name, area = josa(f"Zone {zone}", "은", "는"), f"{row['coverage_percent']:g}%"
-        out.append({"complete": f"{name} 범위 안 면적 {area}로 {_GATE_PERCENT}% 기준을 넘겨 완료입니다.",
-                    "overpaint_risk": f"{name} 과도막이라 더 칠하면 안 됩니다(범위 안 면적 {area})."}.get(
-            row["gate_status"], f"{name} 범위 안 면적이 {area}라 {_GATE_PERCENT}% 기준에 못 미"
+        out.append({"complete": f"{name} 목표 두께 이상 면적 {area}로 {_GATE_PERCENT}% 기준을 넘겨 완료입니다.",
+                    "overpaint_risk": f"{name} 과도막이라 더 칠하면 안 됩니다(목표 두께 이상 면적 {area})."}.get(
+            row["gate_status"], f"{name} 목표 두께 이상 면적이 {area}라 {_GATE_PERCENT}% 기준에 못 미"
             + ("쳐 보완이 필요합니다." if shortfall_side(row) == "under" and row.get("grade") != "above" else "칩니다.")))
     return " ".join(out)
 
@@ -934,7 +934,7 @@ def answer_record_question(context: str | None, prompt: str, *, task_type: str,
     if any(part.code in _COATING_CODES for part in answered) and "세션이 끝났을 때" not in body:
         caveats.append("세션이 끝났을 때의 도막 기준입니다.")
     if any(part.code in {"completion", "external_standard"} for part in answered) and "95%" not in body:
-        caveats.append(f"완료: 정상 범위 안 면적 {_GATE_PERCENT}% 이상·평균 정상.")
+        caveats.append(f"완료: 목표 두께 이상 면적 {_GATE_PERCENT}% 이상·평균이 목표 이상(과도막 포함).")
     if any(part.code == "pose_judgement" for part in answered):
         if "70%" not in body:
             caveats.append("숙련자 중간 수준은 약 70%입니다.")

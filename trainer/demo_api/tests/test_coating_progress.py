@@ -162,16 +162,17 @@ def test_duplicate_sequence_does_not_double_count_the_same_heatmap(tmp_path: Pat
     assert duplicate.completion_percent == pytest.approx(60.0, abs=0.2)
 
 
-def test_overpainted_zone_tells_the_worker_to_stop(tmp_path: Path) -> None:
+def test_overpainted_zone_is_complete_and_tells_the_worker_to_stop_painting(tmp_path: Path) -> None:
     _profile(tmp_path)
 
     result = _engine(tmp_path).evaluate(
         _request(sequence_id="SEQ-001", thickness_um=251.0)
     )
 
-    assert result.status == "overpaint_risk"
-    assert result.recommendation == "stop_current_zone"
+    assert result.status == "complete"
+    assert result.recommendation == "move_next_zone"
     assert result.overpaint_percent == 100.0
+    assert "더 칠하지 마세요" in result.message
 
 
 def test_session_target_changes_compliance_without_changing_expert_reference(tmp_path: Path) -> None:

@@ -29,7 +29,7 @@ def test_missing_and_touch_up_questions_use_visits_and_the_final_gate(tab: str, 
     # 9개 Zone 모두 최종 게이트가 needs_more다. v3.4.1: 목록을 다 늘어놓지 않고 정상 범위 안 면적이 가장 낮은 3곳만,
     # 등급 낱말(정상·저도막)과 평균 µm 없이, 줄을 나눠 적는다.
     assert "9개 Zone을 모두 칠했지만 9개 모두 보완이 필요합니다." in answer
-    assert "가장 부족한 곳은 Zone 3(정상 범위 안 0%), Zone 8(1.9%), Zone 5(2.8%)입니다." in answer
+    assert "가장 부족한 곳은 Zone 3(목표 이상 0%), Zone 8(1.9%), Zone 5(2.8%)입니다." in answer
     assert not re.search(r"정상(?!\s*범위)", answer) and "저도막" not in answer and "µm" not in answer and "방문하지 않은" not in answer
     assert answer.endswith("최종 도막 기준이며 재생 시점의 도막은 아닙니다.") and "\n" in answer
     assert "빠진" not in answer
@@ -184,7 +184,7 @@ def test_thirteen_zone_touch_up_lists_the_three_lowest_areas_only() -> None:
     assert answer != PRODUCTION
     lines = answer.split("\n")
     assert lines[0] == "13개 Zone을 모두 칠했지만 13개 모두 보완이 필요합니다."
-    assert "가장 부족한 곳은 Zone 3(정상 범위 안 0%), Zone 5(4.2%), Zone 1(9.9%)입니다." in lines
+    assert "가장 부족한 곳은 Zone 3(목표 이상 0%), Zone 5(4.2%), Zone 1(9.9%)입니다." in lines
     assert answer.count("Zone ") == 3 + 0 and not re.search(r"정상(?!\s*범위)", answer) and "µm" not in answer
     assert len(scope["touch_up_zone_ids"]) == 13
 

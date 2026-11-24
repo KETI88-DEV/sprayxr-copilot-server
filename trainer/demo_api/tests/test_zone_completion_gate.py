@@ -212,12 +212,12 @@ def test_wrong_map_and_unobserved_pixels_never_unlock(tmp_path: Path) -> None:
     assert unknown.coverage_percent == 0
 
 
-def test_overcoat_warning_stops_spray_without_unlocking_or_locating_thick_pixels(tmp_path: Path) -> None:
+def test_overcoat_warning_stops_thick_spots_without_unlocking_the_next_zone(tmp_path: Path) -> None:
     result = engine(tmp_path).evaluate(request(value=300, width=5))
     assert result.status == "overpaint_risk"
     assert result.next_zone_id is None
-    assert "과도막" in result.message and "분사 중지" in result.message
-    assert "도막 분포" in result.message and "두꺼운 곳" not in result.message
+    assert "과도막" in result.message and "더 칠하지 말고 덜 칠한 곳만 보완" in result.message
+    assert "분사 중지" not in result.message and "160µm 이상 면적 50.0%" in result.message
 
 
 def test_overpaint_risk_follows_the_painted_mean_not_a_pixel_share(tmp_path: Path) -> None:
@@ -225,7 +225,10 @@ def test_overpaint_risk_follows_the_painted_mean_not_a_pixel_share(tmp_path: Pat
     # 30%가 두껍지만 칠한 곳 평균(190µm)은 과도막 경계 아래다.
     thick_part = progress.evaluate(request(value=200, valid_count=30))
     assert thick_part.status == "needs_more"
-    assert progress.evaluate(request(2, value=251)).status == "overpaint_risk"
+    assert progress.evaluate(request(2, value=251, valid_count=50)).status == "overpaint_risk"
+    # 하한 이상 면적이 95% 이상이면 과도막도 완료다(2026-11-24).
+    done = engine(tmp_path / "full").evaluate(request(2, value=251, valid_count=95))
+    assert (done.status, done.coverage_percent) == ("complete", 95)
 
 
 def test_live_crop_path_matches_the_engine_cumulative_crop_path(tmp_path: Path) -> None:
@@ -545,7 +548,7 @@ def test_area_shortfall_keeps_the_area_guide(tmp_path: Path, req: AnalyzeSequenc
     result = engine(tmp_path).evaluate(req)
     assert result.status == "needs_more"
     assert result.message == (
-        f"정상범위 160~200µm: 1구역 정상범위 면적 {result.coverage_percent:.1f}%. "
+        f"정상범위 160~200µm: 1구역 160µm 이상 면적 {result.coverage_percent:.1f}%. "
         "도막 분포 확인 후 보완하세요.")
 
 

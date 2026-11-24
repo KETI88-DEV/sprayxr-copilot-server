@@ -20,9 +20,9 @@ def _one_line(text: str | None) -> str:
 
 @pytest.mark.parametrize(("req", "words", "absent"), [
     (request(valid_count=95), ("1구역", "95%", "2구역으로 이동"), ()),
-    (request(valid_count=50), ("1구역", "정상범위", "50.0%", "보완"), ("다음", "이동하세요")),
+    (request(valid_count=50), ("1구역", "목표 이상", "50.0%", "보완"), ("다음", "이동하세요")),
     (thin_mean(), ("1구역", "저도막", "153", "보완"), ("다음", "이동하세요")),
-    (request(value=300), ("1구역", "과도막", "분사 중지"), ("다음", "이동하세요")),
+    (request(value=300), ("1구역", "과도막", "95%", "2구역으로 이동"), ("분사 중지",)),  # 하한 이상 면적이 95%면 과도막도 완료
 ])
 def test_coating_guides_fit_one_line_and_keep_the_gate(tmp_path: Path, req, words, absent) -> None:
     text = _one_line(analyze(tmp_path, req)["text_guide"])
@@ -53,7 +53,7 @@ WORST = [
     _progress("complete", coverage=100.0, mean=199.0),
     _progress("overpaint_risk", coverage=12.3, over=99.9, mean=1600.0),
     _progress("needs_more", coverage=100.0, mean=159.96),
-    _progress("needs_more", coverage=45.5, over=54.5),  # 정상범위+상한 초과 ≤ 100%. 둘 다 두 자리 소수
+    _progress("needs_more", coverage=45.5, over=54.5),  # 목표 이상+상한 초과 길이 시험. 둘 다 두 자리 소수
     _progress("needs_more", coverage=0.1, over=99.9),
     _progress("needs_more", coverage=94.9),
     None,
@@ -73,14 +73,14 @@ def test_longest_zone_numbers_and_direction_still_fit(progress, direction) -> No
         assert text.startswith("39구역: 대각선 도포 권장.")
         assert result.detail_guide.startswith(direction)
     if progress is not None and progress.status == "overpaint_risk":
-        assert "분사 중지" in text
+        assert "덜 칠한 곳만 보완" in text and "분사 중지" not in text
     if progress is not None and progress.status == "complete":
         if progress.next_zone_id:
             assert "38구역으로 이동" in text
         else:
             assert "구역 완료" in text and "이동" not in text
     if progress is not None and progress.status == "needs_more" and progress.overpaint_percent:
-        assert "과도막 면적" in text and "분사 중지" in text
+        assert "과도막 면적" in text and "덜 칠한 곳만 보완" in text
 
 
 @pytest.mark.parametrize("mode", ["quick", "detailed"])

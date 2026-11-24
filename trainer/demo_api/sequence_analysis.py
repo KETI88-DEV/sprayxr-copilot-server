@@ -177,10 +177,11 @@ def _coating_line(progress: CoatingProgress | None, *, complete: bool) -> tuple[
     mean = (progress.assessment or {}).get("thickness_um")
     if complete:
         move = f"{progress.next_zone_id}구역으로 이동 권장" if progress.next_zone_id else "구역 완료"
-        return "공식 면적 95% 이상 충족", move, f"면적 충족, {move}"
+        over = (progress.assessment or {}).get("grade") == "above"  # 과도막도 완료다(2026-11-24). 더 칠하지 않게 알린다.
+        return ("공식 면적 95% 이상 충족(과도막)" if over else "공식 면적 95% 이상 충족"), move, f"면적 충족, {move}"
     if progress.status == "overpaint_risk":
         state = f"칠한 곳 평균 {mean:.0f}µm(과도막)" if mean is not None else "과도막"
-        return state, "분사 중지·도막 분포 확인 필요", "과도막, 분사 중지"
+        return state, "덜 칠한 곳만 보완", "과도막, 덜 칠한 곳만 보완"
     coverage = progress.coverage_percent or 0.0
     if coverage >= coating_assessment.GATE_COVERAGE_PERCENT:  # 면적은 채웠지만 저도막이라 게이트가 막았다
         target = progress.target_thickness_um
@@ -190,10 +191,10 @@ def _coating_line(progress: CoatingProgress | None, *, complete: bool) -> tuple[
     over = progress.overpaint_percent or 0.0
     if over > 0:
         # 비율만으로 두꺼운 화소의 위치나 속도·거리 조절 방향을 추정하지 않는다.
-        return (f"정상범위 {coverage:.1f}%, 과도막 면적 {over:.1f}%", "분사 중지·도막 분포 확인 필요",
-                f"과도막 면적 {over:.1f}%, 분사 중지")
-    return (f"정상범위 면적 {coverage:.1f}%", "도막 분포 확인 후 보완 권장",
-            f"정상범위 {coverage:.1f}%, 도막 분포 확인 후 보완 권장")
+        return (f"목표 이상 {coverage:.1f}%, 과도막 면적 {over:.1f}%", "덜 칠한 곳만 보완",
+                f"과도막 면적 {over:.1f}%, 덜 칠한 곳만 보완")
+    return (f"목표 이상 면적 {coverage:.1f}%", "도막 분포 확인 후 보완 권장",
+            f"목표 이상 {coverage:.1f}%, 도막 분포 확인 후 보완 권장")
 
 
 def _zone_id(body: dict[str, Any]) -> str | None:

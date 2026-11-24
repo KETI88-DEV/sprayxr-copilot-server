@@ -69,7 +69,7 @@ _MEANINGS = {
     "next_zone_id": "현재 구역의 진행 판정을 통과한 뒤 안내하는 다음 구역입니다. 없거나 미판정이면 null입니다.",
     "recommendation": "현재 Zone 유지·이동 등 진행 권고입니다.",
     "completion_percent": "해당 판정 기준에 대한 구역 진행 비율(0~100%)입니다.",
-    "coverage_percent": "공식 Zone 면적 중 정상 두께를 충족한 면적 비율(0~100%)입니다.",
+    "coverage_percent": "공식 Zone 면적 중 목표 두께(정상 범위 하한) 이상인 면적 비율(0~100%)입니다. 상한을 넘은 과도막 면적도 포함합니다.",
     "overpaint_percent": "공식 Zone 면적 중 상한을 초과한 면적 비율(0~100%)입니다.",
     "thickness_um": "판정에 사용하는 칠한 곳 평균 두께(µm)입니다. 미평가·미도장은 null일 수 있습니다.",
     "target_thickness_um": "목표 두께 또는 정상범위 하한(µm)입니다.",
@@ -340,7 +340,7 @@ def add_openapi_output_overviews(schema: dict[str, Any]) -> None:
                          "- `available`은 분석 가능, `not_available`·`unavailable`은 미평가/제한, `pending`은 결과 대기입니다. 상태와 `reason_code`를 함께 확인하세요.",
                          "- `null`은 미제공·미판정 등 해당 필드의 빈 값입니다. 0점·정상·0µm로 바꾸어 해석하지 않습니다. `degraded=true`는 제한 답변입니다."]
                 if path.endswith("/analyze-sequence"):
-                    notes.append("- 도막 정상범위는 기본 160~200µm(경계 포함)입니다. 다음 구역 안내는 공식 Zone 면적의 정상범위 충족 95% 이상 등 진행 조건을 확인하며 평균 두께만으로 이동하지 않습니다.")
+                    notes.append("- 도막 정상범위는 기본 160~200µm(경계 포함)입니다. 다음 구역 안내는 공식 Zone 면적의 목표 두께 이상 95% 등 진행 조건을 확인하며 평균 두께만으로 이동하지 않습니다.")
                 if "/test/" in path:
                     notes.append("- **모의·테스트 예시:** `test_context`의 생성 방식을 확인하세요. 형식·UI 확인용 수치는 실측 결과가 아니며 실제 실행값과 다를 수 있습니다. 아래 예시에서 관찰되는 키는 테스트별 가변 항목입니다.")
                 documentation = "\n".join([_MARKER, "", *notes, "", *fields, "", "### 응답 예시", "",

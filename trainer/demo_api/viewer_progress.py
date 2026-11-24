@@ -4,7 +4,7 @@
 몰라 "확인할 수 없습니다"였다(q16). 여기서는 계산만 한다:
 
 * 방문: 대화 자료의 `actual_order`(첫 방문 순서)와 `zone_first_visit_seconds`(재생 시각 기준 첫 방문).
-* 도막: 서명된 판정 행의 `gate_status`(정상 범위 안 면적 95% + 평균 정상 범위, `coating_assessment`가 정한 값).
+* 도막: 서명된 판정 행의 `gate_status`(목표 두께 이상 면적 95% + 평균이 목표 이상, `coating_assessment`가 정한 값).
   최종 높이맵 하나뿐이라 재생 중간 시점의 완료 여부는 모른다.
 * 다음 Zone: 전문가 전이(`recommend_next`) — 재생 위치까지 칠한 Zone은 뺀다.
 """
@@ -124,20 +124,21 @@ def shortfall_text(row: Mapping[str, Any]) -> str:
         return ""
     if below is None:
         return f"상한({high:g}µm)을 넘는 면적은 {over:g}%입니다."
-    text = f"범위 밖 면적은 하한({low:g}µm) 미만(미도장 포함) {below:g}%, 상한({high:g}µm) 초과 {over:g}%"
-    side = shortfall_side(row)
-    if side == "over" and row.get("grade") == "below":
-        side = None  # 평균이 하한 미만(저도막)인 Zone에 "주로 상한 초과"는 엇갈려 읽힌다. 두 비율만 말한다.
-    return text + {"under": "라 보완(더 칠하기)이 필요합니다.", "over": "로 주로 상한 초과입니다.", None: "입니다."}[side]
+    # 2026-11-24부터 완료 면적은 하한 이상(과도막 포함)이다. 하한 미만은 보완하고 상한 초과는 더 칠하지 않게 둘 다 말한다.
+    if below > 0 and over > 0:
+        return f"하한({low:g}µm) 미만(미도장 포함) {below:g}%는 보완(더 칠하기)이 필요하고, 상한({high:g}µm)을 넘은 {over:g}%는 더 칠하지 마세요."
+    if below > 0:
+        return f"하한({low:g}µm) 미만(미도장 포함) 면적이 {below:g}%라 보완(더 칠하기)이 필요합니다."
+    return f"상한({high:g}µm)을 넘은 면적은 {over:g}%입니다. 더 칠하지 마세요." if over > 0 else ""
 
 
 def _area_text(row: Mapping[str, Any], *, first: bool) -> str:
-    """'Zone 3(정상 범위 안 0%)', 둘째부터 'Zone 8(1.9%)'. 등급 낱말·평균 두께는 적지 않는다
+    """'Zone 3(목표 이상 0%)', 둘째부터 'Zone 8(1.9%)'. 등급 낱말·평균 두께는 적지 않는다
     (면적이 모자라 보완인데 "정상"이 붙으면 엇갈려 읽힌다)."""
     area = row.get("coverage_percent")
     if not isinstance(area, (int, float)):
         return f"Zone {row['zone_id']}"
-    return f"Zone {row['zone_id']}({'정상 범위 안 ' if first else ''}{area:g}%)"
+    return f"Zone {row['zone_id']}({'목표 이상 ' if first else ''}{area:g}%)"
 
 
 def _zone_list(zones: list[str], *, show_all: bool = False) -> str:
@@ -147,7 +148,7 @@ def _zone_list(zones: list[str], *, show_all: bool = False) -> str:
 
 def gate_lines(rows: list[Mapping[str, Any]] | None, *, order: list[str], visited: set[str] | None = None,
                footer: str = _VIEWER_FOOTER, lead: str = "", show_all: bool = False) -> tuple[list[str], dict[str, list[str]]]:
-    """최종 도막 게이트 요약 줄과 Zone 목록. 보완 Zone 수, 정상 범위 안 면적이 가장 낮은 3곳, 과도막·완료 Zone.
+    """최종 도막 게이트 요약 줄과 Zone 목록. 보완 Zone 수, 목표 두께 이상 면적이 가장 낮은 3곳, 과도막·완료 Zone.
 
     완료 전(needs_more)이라도 범위 밖 면적이 주로 상한 초과인 Zone은 보완(더 칠하기)으로 묶지 않는다(`shortfall_side`).
 
@@ -183,7 +184,7 @@ def gate_lines(rows: list[Mapping[str, Any]] | None, *, order: list[str], visite
     if over_band:
         lines.append(f"상한 초과 면적이 주된 미완료 구역: {_zone_list([str(row['zone_id']) for row in over_band], show_all=show_all)}.")
     if unknown:
-        lines.append(f"정상 범위 안 면적이 95% 미만인 다른 구역: {_zone_list([str(row['zone_id']) for row in unknown], show_all=show_all)}.")
+        lines.append(f"목표 두께 이상 면적이 95% 미만인 다른 구역: {_zone_list([str(row['zone_id']) for row in unknown], show_all=show_all)}.")
     if groups["overpaint_risk"]:
         lines.append(f"과도막이라 더 칠하면 안 되는 구역: {_zone_list([str(row['zone_id']) for row in groups['overpaint_risk']], show_all=show_all)}.")
     done = [str(row["zone_id"]) for row in groups["complete"]]

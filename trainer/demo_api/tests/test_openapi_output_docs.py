@@ -105,7 +105,7 @@ def test_expert_percentages_use_valid_reference_cells_and_never_the_target_area_
     current = _operation(schema, "/api/v1/copilot/analyze-sequence")["description"]
     current_fields = current.split("### 출력 파라미터", 1)[1].split("### 응답 예시", 1)[0]
     target_line = next(line for line in current_fields.splitlines() if "data.coating_progress.coverage_percent(" in line)
-    assert "공식 Zone 면적" in target_line and "정상 두께" in target_line
+    assert "공식 Zone 면적" in target_line and "목표 두께" in target_line and "과도막" in target_line
     expert_line = next(line for line in current_fields.splitlines() if "data.coating_progress.expert_completion_percent(" in line)
     assert "유효 전문가 격자" in expert_line and "보정 전" in expert_line
 
