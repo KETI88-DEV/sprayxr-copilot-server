@@ -93,26 +93,37 @@ def test_tiny_expert_cell_cannot_unlock_official_zone(tmp_path: Path) -> None:
     assert result.target_thickness_um == 160
 
 
-@pytest.mark.parametrize(("count", "status"), [(94, "needs_more"), (95, "complete"), (100, "complete")])
-def test_completion_requires_95_percent_of_all_official_pixels(tmp_path: Path, count: int, status: str) -> None:
-    result = engine(tmp_path).evaluate(request(valid_count=count))
+@pytest.mark.parametrize(("count", "rest", "completion", "grade", "status"), [
+    (84, None, 84.0, "normal", "needs_more"),
+    (85, None, 85.0, "normal", "complete"),
+    (70, 90, 85.0, "below", "complete"),
+    (100, None, 100.0, "normal", "complete"),
+])
+def test_completion_uses_displayed_weighted_progress(
+    tmp_path: Path, count: int, rest: float | None, completion: float, grade: str, status: str,
+) -> None:
+    result = engine(tmp_path).evaluate(request(valid_count=count, rest=rest))
     assert result.status == status
     assert result.coverage_percent == count
+    assert result.completion_percent == pytest.approx(completion, abs=0.1)
+    assert result.assessment["grade"] == grade
     assert (result.next_zone_id == "2") == (status == "complete")
 
 
-def test_exact_target_is_required_and_explicit_session_goal_is_respected(tmp_path: Path) -> None:
+def test_weighted_progress_respects_the_explicit_session_goal(tmp_path: Path) -> None:
     progress = engine(tmp_path)
     below = progress.evaluate(request(value=150))
-    assert below.status == "needs_more"
-    assert below.coverage_percent == 0
-    explicit = progress.evaluate(request(2, value=180), target_thickness_um=200)
+    assert below.status == "complete"
+    assert below.coverage_percent == 0 and below.completion_percent == pytest.approx(87.5, abs=0.1)
+    explicit = progress.evaluate(request(2, value=150), target_thickness_um=200)
     assert explicit.status == "needs_more"
     assert explicit.target_thickness_um == 200
     complete = progress.evaluate(request(3, value=211), target_thickness_um=200)
     assert complete.status == "complete"
-    # 원시 160µm는 보정하면 150µm다.
-    assert progress.evaluate(request(4, value=160)).status == "needs_more"
+    # 원시 160µm는 보정하면 150µm다. 목표 도달 면적은 0%이고 진행률은 93.8%다.
+    corrected = progress.evaluate(request(4, value=160))
+    assert corrected.status == "complete" and corrected.coverage_percent == 0
+    assert corrected.completion_percent == pytest.approx(93.8, abs=0.1)
 
 
 def test_unknown_official_mask_fails_closed_even_with_complete_expert_cell(tmp_path: Path) -> None:
@@ -217,7 +228,7 @@ def test_overcoat_warning_prompts_a_temporary_pause_without_unlocking_the_next_z
     assert result.status == "overpaint_risk"
     assert result.next_zone_id is None
     assert "과도막" in result.message and "잠시 분사를 멈추고 도막 분포를 확인" in result.message
-    assert "부족한 구간만 보완" in result.message and "160µm 이상 면적 50.0%" in result.message
+    assert "부족한 구간만 보완" in result.message and "진행률 50.0%" in result.message
 
 
 def test_overpaint_risk_follows_the_painted_mean_not_a_pixel_share(tmp_path: Path) -> None:
@@ -226,9 +237,9 @@ def test_overpaint_risk_follows_the_painted_mean_not_a_pixel_share(tmp_path: Pat
     thick_part = progress.evaluate(request(value=200, valid_count=30))
     assert thick_part.status == "needs_more"
     assert progress.evaluate(request(2, value=251, valid_count=50)).status == "overpaint_risk"
-    # 하한 이상 면적이 95% 이상이면 과도막도 완료다(2026-11-24).
-    done = engine(tmp_path / "full").evaluate(request(2, value=251, valid_count=95))
-    assert (done.status, done.coverage_percent) == ("complete", 95)
+    # 진행률이 85%면 완료이며 과도막 경고는 유지한다.
+    done = engine(tmp_path / "full").evaluate(request(2, value=251, valid_count=85))
+    assert (done.status, done.completion_percent, done.assessment["grade"]) == ("complete", 85, "above")
 
 
 def test_live_crop_path_matches_the_engine_cumulative_crop_path(tmp_path: Path) -> None:
@@ -515,8 +526,8 @@ def test_requests_without_valid_crops_allocate_no_session_or_applied_metadata(tm
 
 def test_report_session_target_uses_same_strict_zone_gate_as_live(tmp_path: Path) -> None:
     progress = engine(tmp_path)
-    surface = np.full((10, 10), 150, dtype=np.float32)
-    live = progress.evaluate(request(value=150), target_thickness_um=160)
+    surface = np.full((10, 10), 140, dtype=np.float32)
+    live = progress.evaluate(request(value=140), target_thickness_um=160)
     judgments, reason = progress.judge_zones(scenario_id="3", process="spray", mode_id=3,
         surfaces={1: surface}, target_thickness_um=160)
     assert reason is None
@@ -538,9 +549,8 @@ def test_report_session_target_cannot_complete_without_official_mask(tmp_path: P
     assert reason is not None
 
 
-# 2026-11-12 책임자 결정: 면적 95%를 채워도 칠한 곳 평균이 목표 미만(저도막)이면 다음 Zone으로 보내지 않는다.
-THIN_MEAN_GUIDE = ("정상범위 160~200µm: 1구역 충족 면적 95.0%, 칠한 곳 평균 "
-                   "153µm(하한 미만·저도막). 도막 분포 확인 후 보완하세요.")
+COMPLETE_GUIDE = ("정상범위 160~200µm: 1구역 진행률 85% 이상 충족. "
+                  "2구역으로 이동하세요.")
 
 
 def thin_mean(seq: int = 1) -> AnalyzeSequenceRequest:
@@ -548,40 +558,40 @@ def thin_mean(seq: int = 1) -> AnalyzeSequenceRequest:
     return request(seq, valid_count=95, rest=20)
 
 
-def test_area_met_but_below_mean_keeps_the_trainee_in_the_zone(tmp_path: Path) -> None:
+def test_progress_met_but_below_mean_still_allows_next_zone(tmp_path: Path) -> None:
     result = engine(tmp_path).evaluate(thin_mean())
     assert result.coverage_percent == 95
     assert result.assessment["grade"] == "below"
-    assert result.assessment["gate_status"] == "needs_more"
+    assert result.assessment["gate_status"] == "complete"
     assert (result.status, result.recommendation, result.next_zone_id) == (
-        "needs_more", "continue_current_zone", None)
-    assert result.message == THIN_MEAN_GUIDE
+        "complete", "move_next_zone", "2")
+    assert result.message == COMPLETE_GUIDE
 
 
-@pytest.mark.parametrize("req", [request(valid_count=94), request(value=100)])
-def test_area_shortfall_keeps_the_area_guide(tmp_path: Path, req: AnalyzeSequenceRequest) -> None:
+@pytest.mark.parametrize("req", [request(valid_count=84), request(value=100)])
+def test_progress_shortfall_guide_uses_the_displayed_progress(tmp_path: Path, req: AnalyzeSequenceRequest) -> None:
     result = engine(tmp_path).evaluate(req)
     assert result.status == "needs_more"
     assert result.message == (
-        f"정상범위 160~200µm: 1구역 160µm 이상 면적 {result.coverage_percent:.1f}%. "
+        f"정상범위 160~200µm: 1구역 진행률 {result.completion_percent:.1f}%. "
         "도막 분포 확인 후 보완하세요.")
 
 
-def test_area_and_mean_met_moves_to_the_next_zone(tmp_path: Path) -> None:
-    result = engine(tmp_path).evaluate(request(valid_count=95))
+def test_progress_met_moves_to_the_next_zone(tmp_path: Path) -> None:
+    result = engine(tmp_path).evaluate(request(valid_count=85))
     assert result.assessment["grade"] == "normal"
     assert (result.status, result.next_zone_id) == ("complete", "2")
-    assert result.message == ("정상범위 160~200µm: 1구역 공식 면적 95% 이상 충족. "
-                              "2구역으로 이동하세요.")
+    assert result.message == COMPLETE_GUIDE
 
 
 def test_thin_zone_guide_and_leaving_alert_agree(tmp_path: Path) -> None:
     client, bus = alert_client(multimap_engine(tmp_path), tmp_path)
     data = client.post("/api/v1/copilot/analyze-sequence", json=thin_mean().model_dump(mode="json")).json()["data"]
-    assert data["coating_progress"]["status"] == "needs_more"
-    assert data["coating_progress"]["next_zone_id"] is None
-    assert "저도막" in data["text_guide"] and "도막 분포 확인 후 보완" in data["text_guide"]
-    assert "다음" not in data["text_guide"]
+    assert data["coating_progress"]["status"] == "complete"
+    assert data["coating_progress"]["next_zone_id"] == "2"
+    assert data["coating_feedback"]["grade"] == "below"
+    assert "2구역으로 이동" in data["text_guide"]
+    assert "보완" not in data["text_guide"]
     assert coating_alerts(bus) == []
     post(client, zone2(2))
     post(client, thin_mean(3))
@@ -589,10 +599,13 @@ def test_thin_zone_guide_and_leaving_alert_agree(tmp_path: Path) -> None:
     alerts = coating_alerts(bus)
     assert [(alert.anomaly_type, alert.sequence_id) for alert in alerts] == [("coating_under_app", "SEQ-002")]
     assert alerts[0].payload["message"] == ("기본 목표 160µm 기준: 방금 떠난 1구역 칠한 곳 평균 153µm"
-                                            "(하한 미만·저도막). 돌아가 도막 분포 확인 후 보완하세요.")
+                                            "(하한 미만·저도막). 훈련 후 도막 분포를 확인하세요.")
 
 
-@pytest.mark.parametrize(("req", "status", "next_zone"), [(thin_mean(), "needs_more", None), (request(), "complete", "2")])
+@pytest.mark.parametrize(("req", "status", "next_zone"), [
+    (request(valid_count=84), "needs_more", None),
+    (request(valid_count=70, rest=90), "complete", "2"),
+])
 def test_current_next_query_uses_the_same_gate(
     tmp_path: Path, req: AnalyzeSequenceRequest, status: str, next_zone: str | None,
 ) -> None:
@@ -608,25 +621,28 @@ def test_current_next_query_uses_the_same_gate(
     assert (scope["status"], scope["next_zone_id"]) == (status, next_zone)
     assert payload["message"] in text
     if status == "needs_more":
-        assert text.endswith(THIN_MEAN_GUIDE)
+        assert "84.0%" in text and "이동하세요" not in text
+    else:
+        assert text.endswith(COMPLETE_GUIDE)
 
 
-def test_report_rows_use_the_same_thin_mean_gate(tmp_path: Path) -> None:
+def test_report_rows_use_the_progress_gate_and_keep_the_below_grade(tmp_path: Path) -> None:
     surface = np.full((10, 10), 171, dtype=np.float32)
-    surface.flat[95:] = 20
+    surface.flat[70:] = 90
     judgments, _ = engine(tmp_path).judge_zones(scenario_id="3", process="spray", mode_id=3, surfaces={1: surface})
-    assert (judgments[0].assessment["grade"], judgments[0].assessment["gate_status"]) == ("below", "needs_more")
+    assert (judgments[0].assessment["grade"], judgments[0].assessment["gate_status"]) == ("below", "complete")
+    assert judgments[0].assessment["completion_percent"] == 85.0
 
 
-def test_mean_just_under_the_target_reads_the_same_below_target_number_everywhere(tmp_path: Path) -> None:
+def test_mean_just_under_the_target_is_reported_separately_from_completion(tmp_path: Path) -> None:
     # 99%는 원시 170µm, 1화소는 원시 158µm → 칠한 곳 평균 약 159.97µm. 반올림하면 "160µm로 목표 미만"이 된다.
     near = request(value=170, valid_count=99, rest=158)
     client, bus = alert_client(multimap_engine(tmp_path), tmp_path)
     data = client.post("/api/v1/copilot/analyze-sequence", json=near.model_dump(mode="json")).json()["data"]
     progress, feedback = data["coating_progress"], data["coating_feedback"]
-    assert (progress["status"], progress["next_zone_id"], feedback["grade"]) == ("needs_more", None, "below")
+    assert (progress["status"], progress["next_zone_id"], feedback["grade"]) == ("complete", "2", "below")
     assert feedback["thickness_um"] == 159.9
-    assert "칠한 곳 평균 159.9µm(하한 미만·저도막)." in progress["message"]
+    assert progress["message"] == COMPLETE_GUIDE
     assert "칠한 곳 평균 159.9µm" in feedback["message"]
     post(client, zone2(2))
     assert "칠한 곳 평균 159.9µm(하한 미만·저도막)." in coating_alerts(bus)[0].payload["message"]

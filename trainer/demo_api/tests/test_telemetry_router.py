@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -472,11 +473,17 @@ def test_crop_placement_revision_refreshes_old_result_then_deduplicates_retries(
     assert len(bus.since(_body()["session_id"], last_event_id=0)) == 1
 
 
-def test_pre_revision_historical_retry_returns_saved_result_without_replaying_engines() -> None:
+@pytest.mark.parametrize("pre_atlas", [False, True])
+def test_pre_revision_historical_retry_returns_saved_result_without_replaying_engines(pre_atlas: bool) -> None:
+    from trainer.demo_api import coating_assessment
+
     class PreRevisionStore(SequenceStore):
         def save_analysis(self, **kwargs: Any) -> None:
             key = json.loads(kwargs["analysis_key"])
-            kwargs["analysis_key"] = json.dumps([key[0], *key[2:]])
+            key[0] = coating_assessment.PRE_PROGRESS_ADVANCE_VERSION
+            if pre_atlas:
+                del key[1]
+            kwargs["analysis_key"] = json.dumps(key)
             super().save_analysis(**kwargs)
 
     store = PreRevisionStore(":memory:")
@@ -496,6 +503,53 @@ def test_pre_revision_historical_retry_returns_saved_result_without_replaying_en
     assert updated.post(ANALYZE_SEQUENCE_PATH, json=_body(sequence_id="SEQ-002")).status_code == 409
     assert guidance.calls == 0
     assert len(bus.since(_body()["session_id"], last_event_id=0)) == 1
+
+
+def test_latest_spray_retry_rechecks_completion_after_an_assessment_revision(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from trainer.demo_api import coating_assessment
+    from trainer.demo_api.tests.test_zone_completion_gate import engine, request
+
+    store = SequenceStore(":memory:")
+    guidance = _GuidanceStub(_guide())
+    body = request(valid_count=70, rest=90).model_dump(mode="json")
+    client = _client(store=store, guidance_engine=guidance, coating_progress_engine=engine(tmp_path))
+
+    with monkeypatch.context() as previous:
+        previous.setattr(coating_assessment, "ASSESSMENT_VERSION", coating_assessment.PRE_PROGRESS_ADVANCE_VERSION)
+        previous.setattr(coating_assessment, "GATE_COMPLETION_PERCENT", 95)
+        old = client.post(ANALYZE_SEQUENCE_PATH, json=body).json()["data"]
+        assert old["coating_progress"]["status"] == "needs_more"
+
+    restarted = _client(store=store, guidance_engine=guidance,
+                        coating_progress_engine=engine(tmp_path / "restarted"))
+    refreshed = restarted.post(ANALYZE_SEQUENCE_PATH, json=body).json()["data"]
+    repeat = restarted.post(ANALYZE_SEQUENCE_PATH, json=body).json()["data"]
+    assert refreshed["sequence_data_ack"]["duplicate"] is True
+    assert refreshed["coating_progress"]["status"] == "complete"
+    assert refreshed["coating_progress"]["coverage_percent"] == 70
+    assert refreshed["coating_progress"]["completion_percent"] == pytest.approx(85.0, abs=0.1)
+    assert repeat["coating_progress"] == refreshed["coating_progress"]
+    assert guidance.calls == 2
+
+
+def test_blasting_retry_keeps_its_saved_result_across_spray_assessment_versions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from trainer.demo_api import coating_assessment
+
+    guidance = _GuidanceStub(_guide())
+    body = _body(sequence_setting={"tool_type": "blasting_gun"})
+    client = _client(guidance_engine=guidance)
+    with monkeypatch.context() as previous:
+        previous.setattr(coating_assessment, "ASSESSMENT_VERSION", coating_assessment.PRE_PROGRESS_ADVANCE_VERSION)
+        first = client.post(ANALYZE_SEQUENCE_PATH, json=body).json()["data"]
+
+    retry = client.post(ANALYZE_SEQUENCE_PATH, json=body).json()["data"]
+    assert retry["sequence_data_ack"]["duplicate"] is True
+    assert retry["guide"] == first["guide"]
+    assert guidance.calls == 1
 
 
 def test_historical_first_analysis_does_not_rewind_guidance_smoothing() -> None:

@@ -79,19 +79,27 @@ def test_missing_target_uses_160_and_says_so() -> None:
     assert ca.resolve_target(None) == (160.0, "default_target")
 
 
-def test_gate_is_area_while_grade_is_mean() -> None:
-    short = _zone(171.0, count=94, unpainted=6)
-    assert (short["grade"], short["coverage_percent"], short["gate_status"]) == ("normal", 94.0, "needs_more")
-    assert short["completion_percent"] == 94.0
-    assert _zone(171.0, count=95, unpainted=5)["gate_status"] == "complete"
-    thick = _zone(251.0, count=100)
-    assert (thick["grade"], thick["coverage_percent"], thick["overpaint_percent"]) == ("above", 100.0, 100.0)
-    assert thick["gate_status"] == "complete"  # 하한 이상 면적이 95% 이상이면 과도막도 완료
-    # 과도막 위험은 평균이 상한을 넘고 하한 이상 면적이 95% 미만일 때만이다.
-    assert _zone(251.0, count=50, unpainted=50)["gate_status"] == "overpaint_risk"
+def test_gate_uses_completion_percent_while_grade_uses_painted_mean() -> None:
+    short = _zone(171.0, count=84, unpainted=16)
+    assert (short["grade"], short["completion_percent"], short["gate_status"]) == ("normal", 84.0, "needs_more")
+    assert _zone(171.0, count=85, unpainted=15)["gate_status"] == "complete"
+    thick = _zone(251.0, count=85, unpainted=15)
+    assert (thick["grade"], thick["coverage_percent"], thick["overpaint_percent"]) == ("above", 85.0, 85.0)
+    assert thick["gate_status"] == "complete"
+    thick_half = _zone(1600.0, count=50, unpainted=50)
+    assert (thick_half["completion_percent"], thick_half["gate_status"]) == (50.0, "overpaint_risk")
     # 목표의 절반만 쌓인 면: 채운 면적은 0%, 진행률은 50%
     half = _zone(90.0)
     assert (half["coverage_percent"], half["completion_percent"]) == (0.0, 50.0)
+
+
+def test_gate_compares_unrounded_progress() -> None:
+    short = _zone(145.95)
+    assert short["completion_percent"] == pytest.approx(84.96875)
+    assert short["gate_status"] == "needs_more"
+    reached = _zone(171.0, count=85, unpainted=15)
+    assert reached["completion_percent"] == 85.0
+    assert reached["gate_status"] == "complete"
 
 
 def test_old_png_without_blue_channel_is_not_all_unpainted() -> None:

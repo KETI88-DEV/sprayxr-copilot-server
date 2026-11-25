@@ -52,8 +52,8 @@ def test_next_order_procedure_and_explanation_questions_remain_knowledge(prompt)
 
 
 @pytest.mark.parametrize("voice", [False, True])
-@pytest.mark.parametrize("coverage,next_zone", [(50, None), (100, "2"), (None, None)])
-def test_vague_next_order_uses_the_same_official_gate_for_text_and_voice(tmp_path, voice, coverage, next_zone):
+@pytest.mark.parametrize("coverage,next_zone", [(84, None), (85, "2"), (None, None)])
+def test_vague_next_order_uses_the_same_completion_gate_for_text_and_voice(tmp_path, voice, coverage, next_zone):
     req = request(valid_count=coverage)
     if coverage is None:
         req.sequence_result.cur_sequence_heatmap = None
@@ -69,8 +69,8 @@ def test_vague_next_order_uses_the_same_official_gate_for_text_and_voice(tmp_pat
     assert pipeline.plans == [] and pipeline.runs == []
     if coverage is None:
         assert data["context_status"] == "not_available"
-    elif coverage == 50:
-        assert data["coating_context"]["status"] == "needs_more"
+    else:
+        assert data["coating_context"]["status"] == ("needs_more" if next_zone is None else "complete")
     if voice:
         assert data["transcript"] == prompt
 

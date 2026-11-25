@@ -12,7 +12,9 @@ from typing import Any, Final
 
 from trainer.demo_api.coating_query import (_CAUSES, _RECORD_SENTENCE, _DISTANCE_WORDS, _EFFECTS, _INVERTED, _SIMILAR, _distance_remark, distance_sentence,
                                             measured_relation, measured_sentence, parse_viewer_coating_context, zone_measures)
-from trainer.demo_api.coating_assessment import GRADE_WORDS, grade_phrase, mean_text
+from trainer.demo_api.coating_assessment import (
+    ASSESSMENT_VERSION, GATE_COMPLETION_PERCENT, GRADE_WORDS, PRE_PROGRESS_ADVANCE_VERSION, grade_phrase, mean_text,
+)
 from trainer.demo_api.context_prompts import recent_subject
 from trainer.demo_api.copilot_intent import RECORD_OBJECT, preset_intent
 from trainer.demo_api.dialogue import drop_sentences, viewer_claims
@@ -307,7 +309,7 @@ def classify_record_question(prompt: str, *, task_type: str, previous_subject: M
 ASK_ZONE: Final = "어느 Zone을 말씀하시는지 알 수 없습니다. Zone 번호를 넣어 다시 물어봐 주세요."
 _NO_TARGET: Final = "이 기록에는 목표 대비 판정 자료가 없어 말씀드릴 수 없습니다."
 _NO_ZONE: Final = {"", "-1", "0", "none", "null", "nan"}
-_GATE_PERCENT: Final = 95
+_LEGACY_NORMAL_BAND_VERSION: Final = "coating-v1-adapter/tsb-round-thickness-20261021+painted-zone-mean/1"
 _UNITS: Final = {"deg": "°", "mm": " mm", "um": "µm"}
 
 
@@ -337,6 +339,19 @@ class RecordFacts:
         if not isinstance(target, Mapping) or target.get("analysis_status") != "available":
             return []
         return [row for row in target.get("zones") or [] if isinstance(row, Mapping)]
+
+    @property
+    def completion_rule(self) -> tuple[str, str, str]:
+        """Report the rule stamped by the server with the result, not today's rule for an old result."""
+        target = (self.coating or {}).get("target")
+        revision = target.get("criterion_version") if isinstance(target, Mapping) else None
+        if revision == ASSESSMENT_VERSION:
+            return "completion_percent", "진행률", f"진행률 {GATE_COMPLETION_PERCENT:g}% 이상"
+        if revision == PRE_PROGRESS_ADVANCE_VERSION:
+            return "coverage_percent", "목표 두께 이상 면적", "기록 당시 목표 두께 이상 면적 95%"
+        if revision == _LEGACY_NORMAL_BAND_VERSION:
+            return "coverage_percent", "정상 범위 내 면적", "기록 당시 정상 범위 내 면적 95%"
+        return "coverage_percent", "기록의 판정 면적", ""
 
     @property
     def measures(self) -> dict[str, dict[str, Any]]:
@@ -411,11 +426,13 @@ def _completion(facts: RecordFacts, zones: tuple[str, ...]) -> str:
     rows = [row for row in facts.target_rows if row.get("gate_status")]
     if not rows:
         return _NO_TARGET
+    field, label, rule = facts.completion_rule
+    basis = f"({rule})" if rule else ""
     if not zones:
         order = [str(zone) for zone in facts.claims.get("reference_order") or []] or facts.zone_ids
         lines, _ = gate_lines(rows, order=order)
         done = sum(row["gate_status"] == "complete" for row in rows)
-        return " ".join([f"목표 두께({_band(facts)}의 하한) 이상 면적이 {_GATE_PERCENT}% 이상이고 평균이 하한 이상인 완료 Zone은 {len(rows)}곳 중 {done}곳입니다.", *lines])
+        return " ".join([f"완료 Zone은 {len(rows)}곳 중 {done}곳입니다{basis}. 정상 범위는 {_band(facts)}입니다.", *lines])
     out = []
     for zone in zones:
         row = _row(facts, zone)
@@ -423,17 +440,16 @@ def _completion(facts: RecordFacts, zones: tuple[str, ...]) -> str:
             out.append(f"{_zone_text(facts, zone)}{'.' if row is None else '입니다.'}")
             continue
         band = band_text(row)
-        area = f"목표 두께({normal_band(row)[0]:g}µm) 이상 면적은 {row['coverage_percent']:g}%" if _is_num(row.get("coverage_percent")) else "칠한 면적 자료가 없고"
+        value = f"{label}은 {row[field]:g}%입니다." if _is_num(row.get(field)) else f"{label} 자료가 없습니다."
         # 완료 전이면 범위 밖 면적이 어느 쪽인지 말한다. 주로 상한 초과면 "보완"을 말하지 않는다(v3.6.2, 기본 160~200µm).
-        short = f"{_GATE_PERCENT}% 기준에 못 미칩니다. {shortfall_text(row)}".rstrip()
-        verdict = {"complete": f"{_GATE_PERCENT}% 기준을 넘겨 완료입니다.", "overpaint_risk": f"{_GATE_PERCENT}% 기준과 별개로 과도막이라 더 칠하면 안 됩니다."}.get(
+        short = f"완료 기준에 못 미칩니다{basis}. {shortfall_text(row)}".rstrip()
+        verdict = {"complete": f"완료입니다{basis}.", "overpaint_risk": "과도막이라 더 칠하면 안 됩니다."}.get(
             row["gate_status"], short)
-        if row.get("grade") == "normal" and row["gate_status"] == "needs_more" and _is_num(row.get("coverage_percent")) and _is_num(row.get("thickness_um")):
-            # 등급 "정상"과 "보완 필요"를 나란히 쓰면 모순으로 읽힌다(2026-11-14 사용자 지적). 평균 두께와 면적 기준을 대비로 적는다.
+        if row.get("grade") == "normal" and row["gate_status"] == "needs_more" and _is_num(row.get(field)) and _is_num(row.get("thickness_um")):
             out.append(f"Zone {zone}의 칠한 곳 평균 두께는 {mean_text(row['thickness_um'], row['target_thickness_um'])}µm로 정상 범위({band}) "
-                       f"안이지만, 목표 두께 이상 면적이 {row['coverage_percent']:g}%라 {short}")
+                       f"안이지만, {label} {row[field]:g}%로 {short}")
             continue
-        out.append(f"{_zone_text(facts, zone)}입니다. {area}로 {verdict}")
+        out.append(f"{_zone_text(facts, zone)}입니다. {value} {verdict}")
     return " ".join(out)
 
 
@@ -573,15 +589,16 @@ def cause_answer(facts: RecordFacts, zone: str | None) -> str:
 def _priorities(facts: RecordFacts, *, quick: bool = False) -> list[tuple[str, str]]:
     """(제목, 이유) 순위. 도막 게이트 → 팔 자세 → 작업 유사도, 앞 단계에 후보가 있으면 뒤 단계는 보지 않는다.
 
-    `quick`이면 이유에서 범위 밖 면적·교정 문장을 빼 한 줄(60자)에 들게 한다. 95% 기준 판정은 그대로다.
+    `quick`이면 이유에서 범위 밖 면적·교정 문장을 뺀다. 기록의 완료 판정은 그대로 쓴다.
     """
-    gate = sorted((row for row in facts.target_rows if row.get("gate_status") == "needs_more" and _is_num(row.get("coverage_percent"))),
-                  key=lambda row: row["coverage_percent"])
+    field, label, rule = facts.completion_rule
+    gate = sorted((row for row in facts.target_rows if row.get("gate_status") == "needs_more" and _is_num(row.get(field))),
+                  key=lambda row: row[field])
     if gate:
         # 범위 밖 면적이 주로 상한 초과인 Zone에는 "보완하십시오"를 쓰지 않는다(v3.6.2).
+        basis = f"({rule})" if rule else ""
         return [(f"Zone {row['zone_id']}부터 {'보완하십시오' if shortfall_side(row) == 'under' else '보십시오'}.",
-                 f"목표 두께 이상 면적이 {row['coverage_percent']:g}%로 {_GATE_PERCENT}% 기준에 못 미칩니다." if quick else
-                 f"목표 두께 이상 면적이 {row['coverage_percent']:g}%로 {_GATE_PERCENT}% 기준에 못 미칩니다. {shortfall_text(row)}".rstrip())
+                 f"{label} {row[field]:g}%로 미완료입니다{basis}." + (f" {shortfall_text(row)}".rstrip() if not quick else ""))
                 for row in gate]
     arm = sorted(((zone, item) for zone, item in ((facts.arm or {}).get("zones") or {}).items() if isinstance(item, Mapping) and _is_num(item.get("similarity_percent"))),
                  key=lambda pair: pair[1]["similarity_percent"])
@@ -676,19 +693,21 @@ def _quick_completion(facts: RecordFacts, zones: tuple[str, ...]) -> str | None:
     rows = [row for row in facts.target_rows if row.get("gate_status")]
     if not rows:
         return None
+    field, label, rule = facts.completion_rule
+    basis = f"({rule})" if rule else ""
     if not zones:
         done = sum(row["gate_status"] == "complete" for row in rows)
-        return f"완료 Zone은 {len(rows)}곳 중 {done}곳입니다(목표 두께 이상 면적 {_GATE_PERCENT}% 기준)."
+        return f"완료 Zone은 {len(rows)}곳 중 {done}곳입니다{basis}."
     out = []
     for zone in zones:
         row = _row(facts, zone)
-        if row is None or not row.get("gate_status") or not _is_num(row.get("coverage_percent")):
+        if row is None or not row.get("gate_status") or not _is_num(row.get(field)):
             return None
-        name, area = josa(f"Zone {zone}", "은", "는"), f"{row['coverage_percent']:g}%"
-        out.append({"complete": f"{name} 목표 두께 이상 면적 {area}로 {_GATE_PERCENT}% 기준을 넘겨 완료입니다.",
-                    "overpaint_risk": f"{name} 과도막이라 더 칠하면 안 됩니다(목표 두께 이상 면적 {area})."}.get(
-            row["gate_status"], f"{name} 목표 두께 이상 면적이 {area}라 {_GATE_PERCENT}% 기준에 못 미"
-            + ("쳐 보완이 필요합니다." if shortfall_side(row) == "under" and row.get("grade") != "above" else "칩니다.")))
+        name, value = josa(f"Zone {zone}", "은", "는"), f"{row[field]:g}%"
+        shortfall = "보완 필요" if shortfall_side(row) == "under" and row.get("grade") != "above" else "미완료"
+        out.append({"complete": f"{name} {label} {value}, 완료{basis}.",
+                    "overpaint_risk": f"{name} 과도막이라 더 칠하면 안 됩니다({label} {value})."}.get(
+            row["gate_status"], f"{name} {label} {value}, {shortfall}{basis}."))
     return " ".join(out)
 
 
@@ -797,7 +816,14 @@ def _premise_lead(facts: RecordFacts, part: RecordPart, premise: Premise, *, qui
             return "예."
         if quick:
             return "아니요."
-        return "아니요. 다 칠한 것과 완료는 다릅니다." if premise.subject == "visited_all" else "아니요. 평균 두께가 기준 안이어도 완료는 칠한 면적으로 봅니다."  # 95% 설명은 본문이 한다
+        if premise.subject == "visited_all":
+            return "아니요. 다 칠한 것과 완료는 다릅니다."
+        field, _, rule = facts.completion_rule
+        if field == "completion_percent":
+            return "아니요. 이동 여부는 Zone 진행률로 판단합니다."
+        if rule:
+            return "아니요. 평균 두께가 기준 안이어도 완료는 칠한 면적으로 봅니다."
+        return "아니요. 평균 두께와 완료 판정은 따로 확인합니다."
     if premise.kind == "comparison" and zone and premise.subject in _SPEED_RELATION:
         variable = "speed_mm_s" if premise.subject.startswith("speed") else "distance_mm"
         relation = measured_relation(facts.measures.get(zone), variable)
@@ -933,10 +959,11 @@ def answer_record_question(context: str | None, prompt: str, *, task_type: str,
     caveats = []
     if any(part.code in _COATING_CODES for part in answered) and "세션이 끝났을 때" not in body:
         caveats.append("세션이 끝났을 때의 도막 기준입니다.")
-    if any(part.code in {"completion", "external_standard"} for part in answered) and "95%" not in body:
-        caveats.append(f"완료: 목표 두께 이상 면적 {_GATE_PERCENT}% 이상·평균이 목표 이상(과도막 포함).")
+    _, _, completion_rule = facts.completion_rule
+    if completion_rule and completion_rule not in body and any(part.code in {"completion", "external_standard"} for part in answered):
+        caveats.append(f"완료 기준은 {completion_rule}입니다.")
     if any(part.code == "pose_judgement" for part in answered):
-        if "70%" not in body:
+        if "숙련자도 약 70%" not in body:
             caveats.append("숙련자 중간 수준은 약 70%입니다.")
         if "참고용" not in body and any(isinstance(s, Mapping) and s.get("confidence") == "limited" for s in (facts.arm or {}).get("sequences") or []):
             caveats.append("입력 품질 제한이 있어 참고용입니다.")

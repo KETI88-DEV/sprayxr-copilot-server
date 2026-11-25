@@ -35,8 +35,8 @@ def test_complete_coating_guide_keeps_the_physical_gate_and_next_zone(tmp_path: 
     progress = _engine(tmp_path).evaluate(_request(sequence_id="SHORT-COMPLETE", thickness_um=180))
     assert progress.status == "complete" and progress.recommendation == "move_next_zone"
     assert progress.next_zone_id == "2"
-    assert "160~200µm" in progress.message and "95%" in progress.message
-    assert "공식" in progress.message and "2구역" in progress.message
+    assert "160~200µm" in progress.message and "진행률 85%" in progress.message
+    assert "2구역" in progress.message
     assert len(progress.message) <= 72
 
 

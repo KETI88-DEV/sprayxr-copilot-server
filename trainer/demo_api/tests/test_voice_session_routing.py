@@ -38,7 +38,10 @@ def _store(*bodies):
     return store
 
 
-@pytest.mark.parametrize(("req", "verdict"), [(thin_mean(), "1구역은 아직 완료되지 않았습니다."), (request(), "1구역은 완료 기준을 넘었습니다.")])
+@pytest.mark.parametrize(("req", "verdict"), [
+    (request(valid_count=84), "1구역은 아직 완료되지 않았습니다."),
+    (thin_mean(), "1구역은 완료 기준을 넘었습니다."),
+])
 def test_completion_question_states_the_gate_verdict_first(tmp_path: Path, req, verdict):
     query = SimpleNamespace(session_id=req.session_id, context=None, scenario_id=None, prompt="지금 구역 다 칠했어?")
     text, _, _ = current_next_answer(query, _store(req), sequence_engine=SequenceAnalysisEngine(tmp_path), coating_engine=engine(tmp_path))
@@ -46,7 +49,7 @@ def test_completion_question_states_the_gate_verdict_first(tmp_path: Path, req, 
 
 
 def test_completion_question_about_another_zone_says_only_the_current_zone_is_judged(tmp_path: Path):
-    req = thin_mean()
+    req = request(valid_count=84)
     query = SimpleNamespace(session_id=req.session_id, context=None, scenario_id=None, prompt="2번 구역 완료됐어?")
     text, _, _ = current_next_answer(query, _store(req), sequence_engine=SequenceAnalysisEngine(tmp_path), coating_engine=engine(tmp_path))
     assert text.startswith("지금 구역은 1구역입니다. 훈련 중에는 지금 구역의 완료만 판정합니다. 1구역은 아직 완료되지 않았습니다.")
@@ -144,7 +147,7 @@ def test_next_zone_skips_zones_already_painted_in_the_session():
 
 
 def test_overcoated_zone_is_complete_and_sends_the_trainee_on(tmp_path: Path):
-    # 2026-11-24 사용자 결정: 하한(160µm) 이상 면적 95%면 완료. 과도막도 더 칠하지 않고 다음으로 간다.
+    # 진행률 85% 이상이면 완료. 과도막도 더 칠하지 않고 다음으로 간다.
     progress = engine(tmp_path).evaluate(request(value=300))
     assert (progress.status, progress.recommendation) == ("complete", "move_next_zone")
     assert progress.coverage_percent == 100.0

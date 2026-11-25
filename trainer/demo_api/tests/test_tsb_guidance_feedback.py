@@ -37,7 +37,7 @@ def test_unlocated_thickness_without_overpaint_does_not_instruct_pixel_avoidance
 
 
 def test_completed_guidance_uses_korean_zone_names_without_changing_machine_ids(tmp_path: Path) -> None:
-    data = analyze(tmp_path, request(valid_count=95))
+    data = analyze(tmp_path, request(valid_count=85))
     progress = data["coating_progress"]
     assert progress["zone_id"] == "1" and progress["next_zone_id"] == "2"
     assert progress["status"] == "complete" and progress["recommendation"] == "move_next_zone"

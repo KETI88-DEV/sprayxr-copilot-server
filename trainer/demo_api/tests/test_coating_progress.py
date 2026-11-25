@@ -257,16 +257,17 @@ def test_expanded_cumulative_crop_keeps_neighbor_overpaint_on_its_official_zone(
                     for item in alerts] == [("coating_over_app", "2", 1)]
 
 
-def test_thickness_is_corrected_before_the_area_gate(tmp_path: Path) -> None:
-    """원시 165µm는 보정하면 155µm라 목표 160µm에 못 미친다."""
+def test_thickness_is_corrected_before_the_progress_gate(tmp_path: Path) -> None:
+    """원시 140µm는 보정하면 130µm라 160µm 목표의 진행률이 약 81%다."""
     _profile(tmp_path)
     engine = _engine(tmp_path)
 
-    below = engine.evaluate(_request(sequence_id="SEQ-001", thickness_um=165.0))
+    below = engine.evaluate(_request(sequence_id="SEQ-001", thickness_um=140.0))
     met = engine.evaluate(_request(sequence_id="SEQ-002", thickness_um=171.0))
 
     assert below.status == "needs_more"
     assert below.coverage_percent == 0
+    assert below.completion_percent == pytest.approx(81.25, abs=0.2)
     assert met.status == "complete"
 
 

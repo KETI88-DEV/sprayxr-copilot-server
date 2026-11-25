@@ -4,7 +4,7 @@
 몰라 "확인할 수 없습니다"였다(q16). 여기서는 계산만 한다:
 
 * 방문: 대화 자료의 `actual_order`(첫 방문 순서)와 `zone_first_visit_seconds`(재생 시각 기준 첫 방문).
-* 도막: 서명된 판정 행의 `gate_status`(목표 두께 이상 면적 95% + 평균이 목표 이상, `coating_assessment`가 정한 값).
+* 도막: 서명된 판정 행의 `gate_status`(`coating_assessment`가 정한 값).
   최종 높이맵 하나뿐이라 재생 중간 시점의 완료 여부는 모른다.
 * 다음 Zone: 전문가 전이(`recommend_next`) — 재생 위치까지 칠한 Zone은 뺀다.
 """
@@ -184,7 +184,7 @@ def gate_lines(rows: list[Mapping[str, Any]] | None, *, order: list[str], visite
     if over_band:
         lines.append(f"상한 초과 면적이 주된 미완료 구역: {_zone_list([str(row['zone_id']) for row in over_band], show_all=show_all)}.")
     if unknown:
-        lines.append(f"목표 두께 이상 면적이 95% 미만인 다른 구역: {_zone_list([str(row['zone_id']) for row in unknown], show_all=show_all)}.")
+        lines.append(f"그 밖의 미완료 구역: {_zone_list([str(row['zone_id']) for row in unknown], show_all=show_all)}.")
     if groups["overpaint_risk"]:
         lines.append(f"과도막이라 더 칠하면 안 되는 구역: {_zone_list([str(row['zone_id']) for row in groups['overpaint_risk']], show_all=show_all)}.")
     done = [str(row["zone_id"]) for row in groups["complete"]]

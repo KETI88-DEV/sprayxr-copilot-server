@@ -164,7 +164,7 @@ def test_realtime_engine_and_cache_use_both_range_limits(tmp_path):
     excess = engine.evaluate(request, min_thickness_um=160, max_thickness_um=180)
     assert normal.status == "complete"
     assert normal.assessment["normal_band_um"] == [160, 200]
-    # 하한 이상 면적이 95% 이상이면 칠한 곳 평균이 상한을 넘어도(과도막) 완료다.
+    # 진행률이 85% 이상이면 칠한 곳 평균이 상한을 넘어도(과도막) 완료다.
     assert excess.status == "complete"
     assert excess.assessment["grade"] == "above"
     assert excess.assessment["normal_band_um"] == [160, 180]

@@ -1,6 +1,6 @@
 """v3.6.2 새 도막 기준(정상 범위 하한~상한, 기본 160~200µm) 문구와 모자람의 방향(v360-review.md §6).
 
-완료 면적은 하한 이상(과도막 포함)이다. 상한 초과 면적은 "보완(더 칠하기)"이 아니라 더 칠하지 말라고 말한다. 수치는 기록 행의 값만 쓴다.
+완료 진행률은 하한에서 화소별 기여를 제한한다. 상한 초과 면적은 더 칠하지 말라고 말한다. 수치는 기록 행의 값만 쓴다.
 """
 from __future__ import annotations
 
@@ -29,14 +29,14 @@ def text(code, zones=(), operator=None, data=None):
 
 def test_mixed_zone_with_overfilm_area_counts_it_toward_completion() -> None:
     out = text("completion", ("2",))
-    for word in ("목표 두께(160µm) 이상 면적은 100%", "95%", "완료"):
+    for word in ("진행률", "100%", "85% 이상", "완료"):
         assert word in out, (word, out)
     assert not re.search(OLD + r"|보완|더 칠", out), out
 
 
 def test_all_above_zone_counts_overfilm_area_as_target_or_more() -> None:
     out = text("completion", ("1",))
-    assert "과도막" in out and "목표 두께(160µm) 이상 면적은 100%" in out, out
+    assert "과도막" in out and "진행률" in out and "100%" in out, out
     assert not re.search(OLD + r"|보완", out), out
 
 
@@ -59,11 +59,16 @@ def test_all_zone_completion_counts_use_the_range() -> None:
     assert not re.search(OLD + r"|보완이 필요", out), out
 
 
-def test_completion_reference_sentence_names_both_conditions() -> None:
+def test_original_viewer_record_keeps_its_own_completion_rule() -> None:
+    out = text("completion", ("1",), data=payload())
+    assert "기록 당시 정상 범위 내 면적 95%" in out and "85% 이상" not in out, out
+
+
+def test_completion_reference_sentence_states_the_current_progress_rule() -> None:
     found = answer_record_question(context("knowledge_search", payload_range(), AT_3S),
                                    "이 기록 도막을 PSPC 90/10 규칙으로 판정하면 합격이에요?", task_type="knowledge_search", recent_turns=[])
     assert found is not None
-    assert "목표 두께 이상 면적 95% 이상" in found.text and "평균이 목표 이상" in found.text, found.text
+    assert "진행률 85% 이상" in found.text and "평균이 목표 이상" not in found.text, found.text
     assert "하한 미만 Zone" in found.text and not re.search(OLD, found.text), found.text
 
 
@@ -93,9 +98,9 @@ def test_viewer_gate_lines_split_overfilm_shortfall_from_touch_up() -> None:
 
 
 def test_simulator_block_states_the_default_range_only() -> None:
-    assert ("- 기본 정상 범위는 160~200µm이고 세션마다 다르게 정할 수 있습니다. Zone은 픽셀의 95%가 목표 두께(정상 범위 하한) 이상이고 "
-            "칠한 곳 평균이 하한 이상일 때 완료입니다. 과도막이어도 완료이며 더 칠하지 않고 다음 Zone으로 갑니다. "
-            "90/10 규칙 같은 측정점 규격으로 판정하지 않습니다.") in SIMULATOR_CONTEXT
+    assert "기본 정상 범위는 160~200µm" in SIMULATOR_CONTEXT
+    assert "진행률" in SIMULATOR_CONTEXT and "85%" in SIMULATOR_CONTEXT
+    assert "평균 도막 등급은 품질 안내에 사용합니다" in SIMULATOR_CONTEXT
     assert not re.search(r"320|1차|2차|저도막이 아니면", SIMULATOR_CONTEXT), SIMULATOR_CONTEXT
 
 

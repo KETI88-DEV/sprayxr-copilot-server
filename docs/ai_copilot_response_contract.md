@@ -161,11 +161,11 @@ POST /sessions/end
 | `zone_id` | String | 조건부 | 판정한 Zone ID(`"1"`~`"39"`) |
 | `map_num` | Integer | 조건부 | Height map 번호 |
 | `status` | String | 조건부 | `under_app`, `normal`, `over_app`. `grade`의 다른 이름 |
-| `grade` | String | 조건부 | PR #8 등급 `below`(평균 < 목표), `normal`(목표 ≤ 평균 < 목표의 1.5배), `above`(평균 ≥ 목표의 1.5배) |
+| `grade` | String | 조건부 | 칠한 곳 평균 기준 `below`(하한 미만), `normal`(하한~상한, 경계 포함), `above`(상한 초과) |
 | `thickness_um` | Number | 조건부 | Zone의 칠한 곳 평균 두께(보정 후, µm, 소수 한 자리). 저도막(`grade="below"`)은 목표에 닿지 않게 0.1 단위로 내린다(159.96 → 159.9) |
 | `target_thickness_um` | Number | 조건부 | 판정에 쓴 목표 두께(µm) |
 | `target_basis` | String | 조건부 | `session_target`(세션이 목표를 명시), `default_target`(생략 → 160µm) |
-| `normal_band_um` | Array[Number] | 조건부 | `[목표, 목표의 1.5배]` 정상 범위(µm). 표시용 |
+| `normal_band_um` | Array[Number] | 조건부 | 도막 품질 판정에 쓰는 `[하한, 상한]`(기본 `[160, 200]`µm) |
 | `unpainted_fraction` | Number | 조건부 | Zone 면적 가운데 칠하지 않은 비율, 0~1 |
 | `six_band_counts` | Object | 조건부 | 칠한 화소를 목표 대비 6구간으로 센 수. 열쇠는 `lt_0_9t`, `from_0_9t_to_lt_1_0t`, `from_1_0t_to_lt_1_5t`, `from_1_5t_to_lt_2_0t`, `from_2_0t_to_lt_2_5t`, `gte_2_5t` |
 | `adjustments` | Array[Object] | Y | 조절 후보. 항목은 `variable`(`speed_mm_s`·`distance_mm`), `direction`(`decrease`·`increase`), `priority`(1·2), `evidence_kind`(`quality_rule_candidate`). **규칙에 따른 후보이고 확정된 원인·처방이 아니다.** 등급이 정상이면 빈 배열이다. 시퀀스에 평균 속도·거리가 있는 변수만 후보가 되고, 둘 다 없으면 빈 배열이다 |
@@ -174,7 +174,7 @@ POST /sessions/end
 
 두께는 PR #8 보정값이다: 받은 값에서 10 µm를 한 번 빼고 1600 µm에서 자르며, 1 µm 미만은 미도장으로 본다. 크롭이 닿지 않은 화소는 "칠하지 않음"으로 본다(PR #8 엔진은 "모름"으로 두고 등급을 보류한다). 칠한 곳이 없으면 `zone_id`·`map_num`·`target_*`·`unpainted_fraction` 등은 채우고 `status`·`grade`·`thickness_um`만 `null`이다. 도막을 재지 못했으면(기준 자료 없음 등) `adjustments`는 빈 배열이고 나머지 판정 필드와 `message`·`algorithm_version`은 `null`이다.
 
-`grade`·`status`는 다음 Zone 안내(`coating_progress.status`)와 다른 필드다. 다음 Zone 안내(`complete`)는 공식 Zone 면적 95% 충족에 더해 `grade`가 `below`가 아니어야 한다(2026-11-12 책임자 결정). 면적 95%를 채웠어도 평균이 목표 미만이면 `coating_progress.status`는 `needs_more`, `next_zone_id`는 `null`이고 `message`는 "Zone N의 목표 도막 충족 면적은 X%이지만 칠한 곳 평균 두께가 Yµm로 목표 미만입니다(저도막). 이 Zone의 얇은 곳을 보완하세요."다. 그래도 다른 Zone으로 넘어가면 `coating_under_app` 알림이 1회 나간다.
+`coating_progress.completion_percent`는 공식 Zone 픽셀의 `min(보정 두께 / 세션 목표 두께, 1)`을 평균한 뒤 백분율로 나타낸 값이다. 미도장 픽셀은 0으로 계산한다. 반올림 전 진행률이 85% 이상이면 `coating_progress.status`는 `complete`이며, 다음 Zone이 있으면 `next_zone_id`로 안내한다. `coverage_percent`는 목표 두께 이상인 면적 비율이며 과도막 면적도 포함한다. `normal_band_percent`는 정상 범위 안의 면적 비율이다. 평균 도막 등급과 과도막 경고는 품질 피드백으로 제공한다.
 
 이전 판이 정의한 `uv_bin`, `zone_class`, `under_frac`, `action`, `action_reachable`, `provisional`은 아직 내지 않는다.
 

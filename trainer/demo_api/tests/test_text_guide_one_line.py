@@ -19,10 +19,10 @@ def _one_line(text: str | None) -> str:
 
 
 @pytest.mark.parametrize(("req", "words", "absent"), [
-    (request(valid_count=95), ("1구역", "95%", "2구역으로 이동"), ()),
-    (request(valid_count=50), ("1구역", "목표 이상", "50.0%", "보완"), ("다음", "이동하세요")),
-    (thin_mean(), ("1구역", "저도막", "153", "보완"), ("다음", "이동하세요")),
-    (request(value=300), ("1구역", "과도막", "95%", "추가 분사 중지", "2구역으로 이동"), ("일시 중지",)),
+    (request(valid_count=85), ("1구역", "진행률 85%", "2구역으로 이동"), ()),
+    (request(valid_count=50), ("1구역", "진행률 50.0%", "보완"), ("다음", "이동하세요")),
+    (thin_mean(), ("1구역", "진행률 85%", "2구역으로 이동"), ("보완",)),
+    (request(value=300), ("1구역", "과도막", "진행률 85%", "추가 분사 중지", "2구역으로 이동"), ("일시 중지",)),
 ])
 def test_coating_guides_fit_one_line_and_keep_the_gate(tmp_path: Path, req, words, absent) -> None:
     text = _one_line(analyze(tmp_path, req)["text_guide"])
@@ -52,10 +52,10 @@ WORST = [
     _progress("complete", coverage=100.0, mean=199.0, next_zone="38"),
     _progress("complete", coverage=100.0, mean=199.0),
     _progress("overpaint_risk", coverage=12.3, over=99.9, mean=1600.0),
-    _progress("needs_more", coverage=100.0, mean=159.96),
+    _progress("needs_more", coverage=84.9, mean=159.96),
     _progress("needs_more", coverage=45.5, over=54.5),  # 목표 이상+상한 초과 길이 시험. 둘 다 두 자리 소수
     _progress("needs_more", coverage=0.1, over=99.9),
-    _progress("needs_more", coverage=94.9),
+    _progress("needs_more", coverage=84.9),
     None,
 ]
 

@@ -6,6 +6,7 @@ from copy import deepcopy
 import json
 from typing import Any
 
+from trainer.demo_api.coating_assessment import GATE_COMPLETION_PERCENT
 from trainer.demo_api.v1_contracts import (
     ReportDetail, ReportStatusData, SessionCompleteData, UserProfile,
 )
@@ -68,7 +69,7 @@ _MEANINGS = {
     "coating_progress": "현재 Zone의 도막 진행 판정입니다. 평균 두께만으로 다음 Zone 이동을 허용하지 않습니다.",
     "next_zone_id": "현재 구역의 진행 판정을 통과한 뒤 안내하는 다음 구역입니다. 없거나 미판정이면 null입니다.",
     "recommendation": "현재 Zone 유지·이동 등 진행 권고입니다.",
-    "completion_percent": "해당 판정 기준에 대한 구역 진행 비율(0~100%)입니다.",
+    "completion_percent": "공식 Zone 전체에서 화소별 목표 두께 도달 비율을 최대 100%로 제한해 평균한 진행률(0~100%)입니다.",
     "coverage_percent": "공식 Zone 면적 중 목표 두께(정상 범위 하한) 이상인 면적 비율(0~100%)입니다. 상한을 넘은 과도막 면적도 포함합니다.",
     "normal_band_percent": "공식 Zone 전체 면적 중 보정 두께가 세션 정상범위 안에 있는 비율(0~100%)입니다. 양쪽 경계를 포함하며, 훈련 화면의 정상 도막 면적에 사용할 수 있습니다. 자료가 없으면 null입니다. 구역 이동은 status와 next_zone_id로 확인합니다.",
     "overpaint_percent": "공식 Zone 면적 중 상한을 초과한 면적 비율(0~100%)입니다.",
@@ -344,7 +345,7 @@ def add_openapi_output_overviews(schema: dict[str, Any]) -> None:
                          "- `available`은 분석 가능, `not_available`·`unavailable`은 미평가/제한, `pending`은 결과 대기입니다. 상태와 `reason_code`를 함께 확인하세요.",
                          "- `null`은 미제공·미판정 등 해당 필드의 빈 값입니다. 0점·정상·0µm로 바꾸어 해석하지 않습니다. `degraded=true`는 제한 답변입니다."]
                 if path.endswith("/analyze-sequence"):
-                    notes.append("- 도막 정상범위는 기본 160~200µm(경계 포함)입니다. 다음 구역 안내는 공식 Zone 면적의 목표 두께 이상 95% 등 진행 조건을 확인하며 평균 두께만으로 이동하지 않습니다.")
+                    notes.append(f"- 도막 정상 범위는 기본 160~200µm(경계 포함)입니다. 화면 진행률 `coating_progress.completion_percent`가 {GATE_COMPLETION_PERCENT:g}% 이상이면 현재 Zone을 완료로 판정합니다. 평균 도막 등급은 품질 안내에 사용합니다.")
                 if path in {"/api/v1/copilot/query", "/api/v1/copilot/query-voice"}:
                     reason_header = "X-Copilot-Unavailable-Reason"
                     reason_description = (

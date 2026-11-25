@@ -43,7 +43,7 @@ def payload_range() -> dict[str, Any]:
     from trainer.demo_api import coating_assessment as ca
     data = payload()
     target = data["coating_evaluation"]["target"]
-    target.update(normal_band_um=[160.0, 200.0], zones=[
+    target.update(criterion_version=ca.ASSESSMENT_VERSION, normal_band_um=[160.0, 200.0], zones=[
         ca.zone_row(1, "1", ca.assess_readings([220.0] * 4)), ca.zone_row(1, "2", ca.assess_readings([170.0, 170.0, 170.0, 240.0]))])
     data["query_context_signatures"] = viewer_signatures(data)
     data["query_context_signatures"]["arm_pose"] = sign_context("arm_pose", data["arm_pose_evaluation"])

@@ -101,7 +101,7 @@ def test_nullable_status_unions_explain_all_allowed_progress_and_guide_values(sc
     for value in ("needs_more", "complete", "overpaint_risk", "continue_current_zone",
                   "move_next_zone", "stop_current_zone", "slow", "fast", "near", "far"):
         assert f"`{value}`" in fields
-    assert "160~200µm" in fields and "95%" in fields
+    assert "160~200µm" in fields and "85%" in fields
 
 
 def test_expert_percentages_use_valid_reference_cells_and_never_the_target_area_gate(schema):
