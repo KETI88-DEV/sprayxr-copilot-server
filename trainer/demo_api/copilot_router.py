@@ -1238,14 +1238,26 @@ async def _execute_copilot_query(
                                          context_status=live_answer.context_status, unavailable_reason=live_answer.unavailable_reason)
 
     session = None
+    target_asked = not documents_only and session_target_question(query.prompt, require_training_scope=not query.session_id)
+    session_problem = None
     if query.session_id and not documents_only and (
-        session_target_question(query.prompt) or re.search(r"목표|상한|하한|윗값|아랫값|정상\s*범위", query.prompt)
+        target_asked or re.search(r"목표|상한|하한|윗값|아랫값|정상\s*범위", query.prompt)
     ):
         get_session = getattr(reports, "get_session", None)
         session = await to_thread.run_sync(lambda: get_session(query.session_id)) if callable(get_session) else None
-        if (session is not None and (getattr(session, "user_id", None) != query.user_id
-                or query.scenario_id not in (None, getattr(session, "scenario_id", None)))):
+        if session is not None:
+            if getattr(session, "user_id", None) != query.user_id:
+                session_problem = ("session_mismatch", "요청의 작업자와 훈련 세션이 일치하지 않습니다. 세션 ID를 확인해 주세요.")
+            elif query.scenario_id not in (None, getattr(session, "scenario_id", None)):
+                session_problem = ("scenario_mismatch", "요청의 시나리오와 훈련 세션이 일치하지 않습니다. 시나리오 ID를 확인해 주세요.")
+        if session_problem is not None:
             session = None
+    if target_asked and not viewer_requested and session is None:
+        reason, answer = session_problem or (
+            "session_required", "훈련 시작 기록에서 목표 도막을 확인할 수 없습니다. 현재 훈련 세션 ID를 확인해 주세요.",
+        )
+        return _success_response(query, request_started, answer=answer, retrieval_used=False, citations=[],
+                                 unavailable_reason=reason)
     if session is not None:
         target = session_coating_target_answer(query.prompt, session)
         if target is not None:

@@ -20,6 +20,10 @@ _DISTANCE = re.compile(r"이격\s*거리|평균\s*거리|건을?\s*(?:가장\s*)
 _PART = re.compile(r"(?<![\d.+-])(\d+(?:\.\d+)?)\s*(?:%|퍼센트)\s*(?:는|를|가|에)?\s*"
                    r"(?:보정\s*)?(?:도막\s*)?(?:두께\s*)?(\d+(?:\.\d+)?)\s*(?:마이크론|[µμu]m)", re.I)
 _REPLAY = re.compile(r"리포트|보고서|리플레이|\breplay\b|완료\s*(?:기록|화면|표|결과)|종료", re.I)
+_MEASURED_COATING = re.compile(
+    r"(?:지금|방금|현재|실제로)\s*(?:내가\s*)?(?:칠한|뿌린|도포한)\s*(?:평균\s*)?(?:도막|두께)"
+    r"[^.!?。！？]{0,32}(?:몇\s*(?:마이크론|미크론|[µμu]m)|얼마)", re.I,
+)
 _SEQUENCE_ID = re.compile(r"\bSEQ-\d{1,12}(?![\d-])", re.I)
 _SPEED = re.compile(r"이동\s*속도|건\s*속도|분사\s*속도|속도")
 _MOTION_JUDGMENT = re.compile(r"빠르|빨랐|느리|느렸|괜찮|적절|적정|너무\s*(?:가깝|멀)")
@@ -109,6 +113,9 @@ def detail_intent(prompt: str, previous_prompt: str = "", *, task_type: str | No
         return "spray_duration"
     if _RECENT.search(prompt) and re.search(r"도막", prompt) and re.search(r"이전\s*값|전후|증분", prompt) and re.search(r"차이|늘어|늘었", prompt):
         return "coating_change"
+    if (_MEASURED_COATING.search(prompt) and not _REPLAY.search(prompt) and not _ZONE.search(prompt)
+            and not re.search(r"가정|만약|~라면|차이|도달|까지|더\s*칠|검사\s*기준", prompt)):
+        return "current_coating_measurement"
     if re.search(r"재방문|다시\s*돌아간", prompt) and re.search(r"순서|흐름", prompt) and re.search(r"최초|처음", prompt):
         return "report_visits"
     if _DISTANCE.search(prompt) and re.search(r"처음|첫\s*분사", prompt) and re.search(r"돌아|재방문|다시\s*(?:와|왔|가|갔|방문)", prompt):
