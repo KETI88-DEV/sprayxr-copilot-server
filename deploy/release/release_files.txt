@@ -56,6 +56,7 @@ trainer/demo_api/openapi_output_docs.py
 trainer/demo_api/app.py
 trainer/demo_api/assets/query-voice-ko.wav
 trainer/demo_api/assets/portal_releases.json
+trainer/demo_api/assets/query_api_qa_2026-11-25.json
 trainer/demo_api/assets/zone_reference/color/Exam2_01.png
 trainer/demo_api/assets/zone_reference/color/Exam2_02.png
 trainer/demo_api/assets/zone_reference/color/Exam2_03.png

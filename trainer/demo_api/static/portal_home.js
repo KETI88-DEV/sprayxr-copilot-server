@@ -29,13 +29,65 @@ function notes(body){
   else target.append(make('p','',value));
  }
 }
-function open(post,button){
+const verdictNames={pass:'통과',partial:'부분 통과',fail:'실패'};
+function answerCard(title,result,extraClass=''){
+ const card=make('div','qa-answer '+extraClass);
+ card.append(make('h4','',title),make('p','qa-answer-text',result.answer));
+ if(result.note)card.append(make('p','qa-note',result.note));
+ return card;
+}
+function queryAnswers(report,target){
+ const questions=report.questions;
+ target.replaceChildren(make('h3','','시험 질문과 답변'));
+ target.append(make('p','qa-meta',`질문 ${questions.length}개 · 최초 시험 ${report.baseline_version} · 재시험 ${report.retested_version}`));
+ const before=report.baseline_counts,after=report.retest_counts;
+ target.append(make('p','qa-meta',`최초 통과 ${before.pass}개, 부분 통과 ${before.partial}개, 실패 ${before.fail}개`));
+ target.append(make('p','qa-meta',`재시험 통과 ${after.pass}개, 부분 통과 ${after.partial}개, 실패 ${after.fail}개`));
+ const filter=make('label','qa-filter'),checkbox=make('input');checkbox.type='checkbox';
+ filter.append(checkbox,document.createTextNode('최초 시험에서 실패한 질문만 보기'));
+ const list=make('div','qa-list');target.append(filter,list);
+ function renderQuestions(){
+  list.replaceChildren();let group='';
+  for(const item of questions){
+   if(checkbox.checked&&item.baseline.verdict!=='fail')continue;
+   if(group!==item.group){group=item.group;list.append(make('h4','qa-group',group));}
+   const question=make('details','qa-question');question.dataset.questionId=item.id;
+   const heading=make('summary','qa-question-summary');
+   heading.append(make('span','qa-id',item.id),make('span','qa-prompt',item.question),
+                  make('span','qa-verdict '+item.baseline.verdict,verdictNames[item.baseline.verdict]));
+   const answers=make('div','qa-answer-grid');
+   answers.append(answerCard('최초 실제 답변',item.baseline));
+   if(item.baseline.verdict!=='pass'){
+    if(item.retest?.verdict==='pass')answers.append(answerCard('교정 후 실제 답변 · 통과',item.retest));
+    else{
+     const status=item.retest?'재시험 '+verdictNames[item.retest.verdict]:'재시험 미실시';
+     answers.append(answerCard('기대 답변 · '+status,{answer:item.expected_answer}));
+     if(item.retest)answers.append(answerCard('재시험 실제 답변 · '+verdictNames[item.retest.verdict],item.retest,'qa-observed'));
+    }
+   }else if(item.retest){
+    answers.append(answerCard('재시험 실제 답변 · '+verdictNames[item.retest.verdict],item.retest));
+   }
+   question.append(heading,answers);list.append(question);
+  }
+ }
+ checkbox.addEventListener('change',renderQuestions);renderQuestions();
+}
+async function open(post,button){
  lastFocus=button;$('release-version').textContent=post.version;$('release-title').textContent=post.title;
  $('release-date').textContent=(post.date||'날짜 미기록')+' · '+(post.date_source||post.source||'변경 이력');
  const ui=$('release-ui-changes');ui.replaceChildren();if(post.ui_changes?.length){ui.append(make('h3','','화면이 이렇게 달라졌습니다'));for(const text of post.ui_changes)ui.append(make('p','',text));}
  notes(post.body);
+ const qa=$('release-query-qa');qa.replaceChildren();qa.hidden=!post.has_query_qa;
  const source=$('release-source');source.hidden=!post.url;if(post.url)source.href=post.url;
  $('release-dialog').showModal();$('release-close').focus();
+ if(!post.has_query_qa)return;
+ const loading=make('p','qa-meta','시험 결과를 불러오는 중입니다.');loading.setAttribute('role','status');qa.append(loading);
+ try{
+  const detail=await read('/home/api/updates/'+encodeURIComponent(post.version));
+  if($('release-dialog').open&&$('release-version').textContent===post.version)queryAnswers(detail.query_qa,qa);
+ }catch{
+  if($('release-dialog').open&&$('release-version').textContent===post.version)loading.textContent='시험 결과를 불러오지 못했습니다.';
+ }
 }
 function close(){$('release-dialog').close();lastFocus?.focus();}
 $('release-close').addEventListener('click',close);$('release-done').addEventListener('click',close);

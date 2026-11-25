@@ -53,3 +53,30 @@ def test_all_three_pages_share_navigation_and_select_the_current_page(monkeypatc
     assert client.get('/openapi.json').status_code==200
     assert client.get('/docs/oauth2-redirect').status_code==200
     assert client.get('/api/health').json()['status']=='ok'
+
+
+def test_query_qa_update_shows_real_answers_with_verified_or_expected_corrections(monkeypatch, tmp_path):
+    monkeypatch.setenv('DEMO_LIVE_MODE', 'off')
+    monkeypatch.setenv('SEQUENCE_DB_PATH', str(tmp_path / 'home-qa.db'))
+    client = TestClient(create_app())
+    assert 'id="release-query-qa"' in client.get('/home').text
+
+    posts = client.get('/home/api/updates').json()['updates']
+    recent = [row for row in posts if row['version'] in ('v3.15.10', 'v3.15.11')]
+    assert len(recent) == 2
+    assert all(row['has_query_qa'] is True and 'query_qa' not in row for row in recent)
+
+    detail = client.get('/home/api/updates/v3.15.11').json()['query_qa']
+    questions = {row['id']: row for row in detail['questions']}
+    assert len(questions) == 100
+    assert all(row['question'] and row['baseline']['answer'] for row in questions.values())
+    assert sum('retest' in row for row in questions.values()) == 43
+    assert questions['D08']['baseline']['verdict'] == 'fail'
+    assert '85%' in questions['D08']['baseline']['answer']
+    assert questions['D08']['retest']['verdict'] == 'pass'
+    assert '분사 기록' in questions['D08']['retest']['answer']
+    assert questions['W07']['retest']['verdict'] == 'fail'
+    assert '처짐' in questions['W07']['expected_answer']
+    assert questions['W33']['baseline']['verdict'] == 'fail' and 'retest' not in questions['W33']
+    assert questions['W33']['expected_answer']
+    assert 'query_qa' not in client.get('/home/api/updates/v3.15.9').json()
