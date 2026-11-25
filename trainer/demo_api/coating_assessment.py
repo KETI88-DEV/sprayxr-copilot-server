@@ -23,7 +23,9 @@ PR #8 엔진과 다른 점:
    PR #8 복호는 8비트 RGB·RGBA PNG만 받는다(complete 높이맵은 PR #8 복호를 그대로 쓴다).
 7. `gate_status`, `coverage_percent`, `overpaint_percent`, `completion_percent`는 PR #8 출력이
    아니다. PR #8의 6구간 개수에서 이 어댑터가 만든 값이다. PR #8에는 면적 게이트가 없다.
-   `gate_status="complete"`는 면적 95% 충족에 더해 PR #8 등급이 `below`가 아니어야 한다.
+   `gate_status="complete"`는 공식 Zone 전체의 목표 대비 진행률이 85% 이상일 때 적용한다.
+   화소별 목표 도달 비율은 최대 100%로 계산하고, 기존 진행률 값을 그대로 판정에 사용한다.
+   칠한 곳 평균 등급은 도막 품질을 설명한다.
 8. 조절 후보의 표본은 시퀀스 평균 속도·거리다. PR #8은 그 Zone에 착탄한 분사 중 프레임의
    속도·거리를 쓴다.
 9. 세션 집계의 미도장률·6구간을 항상 낸다. PR #8은 최신 Zone 평가가 하나라도 `available`이
@@ -56,12 +58,13 @@ from trainer.zone_engine.errors import EngineError
 # PR #8 엔진은 목표를 기본값으로 채우지 않는다. v1 흐름만 160 µm로 판정하고 그 사실을 표시한다(D3).
 DEFAULT_TARGET_UM: Final = 160.0
 DEFAULT_MAX_UM: Final = 200.0
-GATE_COVERAGE_PERCENT: Final = 95.0
+GATE_COMPLETION_PERCENT: Final = 85.0
 # 호출 지점이 zone_engine을 직접 읽지 않게 다시 내보낸다.
 SIX_BAND_KEYS: Final = numerical.SIX_BAND_KEYS
 STATUS_BY_GRADE: Final = {"below": "under_app", "normal": "normal", "above": "over_app"}
 # 이 흐름은 PR #8 엔진이 보류할 입력에도 등급을 낸다. 그래서 PR #8 문자열을 그대로 쓰지 않고 접두를 붙인다.
-ASSESSMENT_VERSION: Final = f"coating-v1-adapter/range-20261116/{CRITERION_VERSION}"
+PRE_PROGRESS_ADVANCE_VERSION: Final = f"coating-v1-adapter/range-20261116/{CRITERION_VERSION}"
+ASSESSMENT_VERSION: Final = f"{PRE_PROGRESS_ADVANCE_VERSION}/advance-progress-20261125"
 
 # 공개 API 기본 범위의 표시용 경계. PR #8 numerical의 1.5배 경계와 의도적으로 다르다.
 # 기존 JSON의 여섯 band key는 호환을 위해 유지하며, 실제 정상 경계는 normal_band_um과 band_labels로 전달한다.
@@ -197,13 +200,13 @@ def assess_zone(
     bands = {key: int(np.count_nonzero(condition)) for key, condition in zip(numerical.SIX_BAND_KEYS, conditions)}
     quality["six_band_counts"] = bands
     counts = [bands[key] for key in numerical.SIX_BAND_KEYS]
-    # 2026-11-24 사용자 결정: 면적 게이트는 하한(목표) 이상 면적이다. 상한을 넘은 과도막 화소도 목표를 채운 것으로 센다.
-    # 전에는 정상 범위(하한~상한) 안 면적만 세어 과도막으로 칠한 Zone은 영영 완료되지 않았다(현장 피드백).
+    # 과도막 화소도 목표에 도달한 면적에 포함한다.
     coverage_percent = 100.0 * sum(counts[2:]) / zone_pixel_count
     filled = np.where(painted, np.clip(corrected / target, 0.0, 1.0), 0.0)
-    # 2026-11-12 책임자 결정: 면적을 채워도 칠한 곳 평균이 목표 미만(저도막)이면 다음 Zone으로 보내지 않는다.
-    if coverage_percent >= GATE_COVERAGE_PERCENT and grade in ("normal", "above"):
-        gate_status = "complete"  # 과도막이어도 더 칠하지 않고 다음 Zone으로 간다
+    completion_percent = 100.0 * float(filled[mask].sum()) / zone_pixel_count
+    # 화면과 같은 진행률로 이동을 판단한다. 화소의 과도막이 다른 화소의 부족분을 채우지는 않는다.
+    if completion_percent >= GATE_COMPLETION_PERCENT:
+        gate_status = "complete"
     elif grade == "above":
         gate_status = "overpaint_risk"
     else:
@@ -230,7 +233,7 @@ def assess_zone(
         "coverage_percent": coverage_percent,
         "normal_band_percent": 100.0 * counts[2] / zone_pixel_count,
         "overpaint_percent": 100.0 * sum(counts[3:]) / zone_pixel_count,
-        "completion_percent": 100.0 * float(filled[mask].sum()) / zone_pixel_count,
+        "completion_percent": completion_percent,
         "gate_status": gate_status,
         "normal_band_um": [lower, upper],
         # PR #8의 statement 문장은 내부 용어가 있어 옮기지 않는다.

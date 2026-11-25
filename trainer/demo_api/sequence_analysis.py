@@ -170,33 +170,29 @@ def gate_sequence_decision(
 def _coating_line(progress: CoatingProgress | None, *, complete: bool) -> tuple[str, str, str]:
     """한 줄 안내용 도막 문장 조각: (상태, 조치, 방향 문장 뒤에 붙일 짧은 꼴).
 
-    판정은 `coating_progress`가 정한 status·면적·next_zone_id를 그대로 쓰고 문장만 줄인다.
+    판정은 `coating_progress`가 정한 상태·진행률·next_zone_id를 그대로 쓰고 문장만 줄인다.
     """
     if progress is None:
         return "도막 완료 미확인", "이동 전 도막 자료 확인 필요", "도막 완료 미확인, 이동 전 확인 필요"
     mean = (progress.assessment or {}).get("thickness_um")
     if complete:
+        fulfilled = f"진행률 {coating_assessment.GATE_COMPLETION_PERCENT:g}% 이상 충족"
         move = f"{progress.next_zone_id}구역으로 이동 권장" if progress.next_zone_id else "구역 완료"
         if (progress.assessment or {}).get("grade") == "above":
             action = f"추가 분사 중지, {move}"
-            return "공식 면적 95% 이상 충족(과도막)", action, f"과도막, {action}"
-        return "공식 면적 95% 이상 충족", move, f"면적 충족, {move}"
+            return f"{fulfilled}(과도막)", action, f"과도막, {action}"
+        return fulfilled, move, f"진행률 충족, {move}"
     pause = "분사 일시 중지·도막 확인 후 부족한 곳만 보완"
     if progress.status == "overpaint_risk":
         state = f"칠한 곳 평균 {mean:.0f}µm(과도막)" if mean is not None else "과도막"
         return state, pause, f"과도막, {pause}"
-    coverage = progress.coverage_percent or 0.0
-    if coverage >= coating_assessment.GATE_COVERAGE_PERCENT:  # 면적은 채웠지만 저도막이라 게이트가 막았다
-        target = progress.target_thickness_um
-        state = (f"면적 충족, 칠한 곳 평균 {coating_assessment.mean_text(mean, target)}µm(저도막)"
-                 if mean is not None and target is not None else "면적 충족, 저도막")
-        return state, "도막 분포 확인 후 보완 권장", "저도막, 도막 분포 확인 후 보완 권장"
+    completion = progress.completion_percent
+    state = f"진행률 {completion:.1f}%" if completion is not None else "진행률 미확인"
     over = progress.overpaint_percent or 0.0
     if over > 0:
         # 비율만으로 두꺼운 화소의 위치나 속도·거리 조절 방향을 추정하지 않는다.
-        return (f"목표 이상 {coverage:.1f}%, 과도막 면적 {over:.1f}%", pause, f"과도막 면적 {over:.1f}%, {pause}")
-    return (f"목표 이상 면적 {coverage:.1f}%", "도막 분포 확인 후 보완 권장",
-            f"목표 이상 {coverage:.1f}%, 도막 분포 확인 후 보완 권장")
+        return (f"{state}, 과도막 면적 {over:.1f}%", pause, f"과도막 면적 {over:.1f}%, {pause}")
+    return (state, "도막 분포 확인 후 보완 권장", f"{state}, 도막 분포 확인 후 보완 권장")
 
 
 def _zone_id(body: dict[str, Any]) -> str | None:

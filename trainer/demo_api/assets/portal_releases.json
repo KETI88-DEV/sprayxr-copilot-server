@@ -5,6 +5,19 @@
     {
       "published_at": null,
       "date_source": "개발 변경 이력 날짜 · 운영 반영 여부는 서버 버전으로 확인",
+      "url": "https://github.com/KETI88-DEV/sprayxr-copilot-server/releases/tag/v3.15.8",
+      "body": "- 스프레이 구역 진행률(completion_percent)의 반올림 전 값이 85% 이상이면 다음 구역을 안내합니다. 픽셀별 목표 두께 도달률을 최대 100%로 제한해 공식 구역 전체의 평균을 냅니다.\n- 목표 두께 이상 면적과 기존 정상 범위(기본 160~200µm)에 따른 도막 등급을 품질 정보로 표시하며, 과도막 경고도 제공합니다.",
+      "ui_changes": [
+        "시퀀스 응답과 훈련 중 질문에서 진행률 85% 기준으로 다음 구역을 안내합니다."
+      ],
+      "source": "변경 이력",
+      "date": "2026-11-25",
+      "title": "스프레이 구역 이동 기준 완화",
+      "version": "v3.15.8"
+    },
+    {
+      "published_at": null,
+      "date_source": "개발 변경 이력 날짜 · 운영 반영 여부는 서버 버전으로 확인",
       "url": "https://github.com/KETI88-DEV/sprayxr-copilot-server/releases/tag/v3.15.7",
       "body": "- 질문이 새 주제로 바뀌면 관련 없는 앞 답을 제외합니다.\n- 훈련 기록의 문제 구역이나 자세는 확인된 결과로 답합니다.\n- 답할 자료가 없으면 빠진 자료와 확인 방법을 알려 줍니다.",
       "ui_changes": [

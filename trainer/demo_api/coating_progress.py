@@ -138,9 +138,8 @@ class CoatingProgressEngine:
     """Merge TSB absolute cumulative crops and judge the official Zone against the target.
 
     Thickness is corrected and graded by `coating_assessment` (PR #8 rules); the
-    advance gate is 95% of the official Zone area meeting the target and a painted
-    mean that is not below the target (PR #8 grade other than ``below``). Unlike the
-    PR #8 engine, pixels no crop has touched count as unpainted (not unknown) and a
+    advance gate uses the displayed completion percentage of the official Zone. The painted mean
+    is graded separately. Pixels no crop has touched count as unpainted, and a
     missing target is judged against 160 µm and reported as `default_target`.
 
     ``cur_sequence_heatmap`` is a crop of the area touched by the current
@@ -711,6 +710,7 @@ class CoatingProgressEngine:
             )
 
             coverage_percent = assessment["coverage_percent"]
+            completion_percent = assessment["completion_percent"]
             status = assessment["gate_status"]
             row = coating_assessment.zone_row(map_num, request.zone_id, assessment)
             overpaint_action = "잠시 분사를 멈추고 도막 분포를 확인한 뒤 부족한 구간만 보완하세요."
@@ -719,31 +719,25 @@ class CoatingProgressEngine:
                 next_zone_id = None
                 # 같은 시퀀스의 과도막 알림(SSE)과 숫자가 같도록 행의 값을 적는다.
                 message = (f"{request.zone_id}구역 칠한 곳 평균 {row['thickness_um']:.0f}µm(상한 초과·과도막), "
-                           f"{target_thickness_um:g}µm 이상 면적 {coverage_percent:.1f}%. {overpaint_action}")
+                           f"진행률 {completion_percent:.1f}%. {overpaint_action}")
             elif status == "complete":
                 recommendation = "move_next_zone"
                 next_zone_id = self._next_zone(profile, map_num, request.zone_id, self._visited.get(session_key, ()))
-                message = f"{request.zone_id}구역 공식 면적 95% 이상 충족."
+                message = f"{request.zone_id}구역 진행률 {coating_assessment.GATE_COMPLETION_PERCENT:g}% 이상 충족"
                 if assessment["grade"] == "above":
                     # 과도막도 완료다. 더 칠하면 더 두꺼워질 뿐이라 다음 구역으로 보낸다(2026-11-24 사용자 결정).
-                    message = (f"{request.zone_id}구역 공식 면적 95% 이상 충족, 칠한 곳 평균 {row['thickness_um']:.0f}µm(과도막). "
-                               "더 칠하지 마세요.")
+                    message += f", 칠한 곳 평균 {row['thickness_um']:.0f}µm(과도막). 더 칠하지 마세요."
+                else:
+                    message += "."
                 if next_zone_id is not None:
                     message += f" {next_zone_id}구역으로 이동하세요."
-            elif coverage_percent >= coating_assessment.GATE_COVERAGE_PERCENT:
-                # 면적은 채웠지만 저도막이라 게이트가 막았다. 떠날 때의 저도막 알림과 같은 숫자를 적는다.
-                recommendation = "continue_current_zone"
-                next_zone_id = None
-                message = (f"{request.zone_id}구역 충족 면적 {coverage_percent:.1f}%, "
-                           f"칠한 곳 평균 {coating_assessment.mean_text(row['thickness_um'], target_thickness_um)}µm(하한 미만·저도막). "
-                           "도막 분포 확인 후 보완하세요.")
             else:
                 recommendation = "continue_current_zone"
                 next_zone_id = None
-                message = (f"{request.zone_id}구역 {target_thickness_um:g}µm 이상 면적 {coverage_percent:.1f}%. "
+                message = (f"{request.zone_id}구역 진행률 {completion_percent:.1f}%. "
                            "도막 분포 확인 후 보완하세요.")
                 if assessment["overpaint_percent"] > 0:
-                    message = (f"{request.zone_id}구역 {target_thickness_um:g}µm 이상 면적 {coverage_percent:.1f}%, "
+                    message = (f"{request.zone_id}구역 진행률 {completion_percent:.1f}%, "
                                f"과도막 면적 {assessment['overpaint_percent']:.1f}%. {overpaint_action}")
 
             message = f"정상범위 {target_thickness_um:g}~{upper:g}µm: {message}"
@@ -768,7 +762,7 @@ class CoatingProgressEngine:
                 available=True,
                 status=status,
                 recommendation=recommendation,
-                completion_percent=assessment["completion_percent"],
+                completion_percent=completion_percent,
                 coverage_percent=coverage_percent,
                 normal_band_percent=assessment["normal_band_percent"],
                 overpaint_percent=assessment["overpaint_percent"],

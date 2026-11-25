@@ -180,10 +180,12 @@ def coating_alerts(row: dict[str, Any], *, next_zone_id: str | None = None) -> l
             f"{row['zone_id']}구역 칠한 곳 평균 {row['thickness_um']:.0f}µm(상한 초과·과도막). {action}")
     left = row.get("left_zone")
     if left is not None and left["grade"] == "below":
+        action = ("훈련 후 도막 분포를 확인하세요." if left.get("gate_status") == "complete"
+                  else "돌아가 도막 분포 확인 후 보완하세요.")
         add(left, "coating_under_app", "zone_grade_below",
             f"방금 떠난 {left['zone_id']}구역 칠한 곳 평균 "
             f"{coating_assessment.mean_text(left['thickness_um'], left['target_thickness_um'])}µm(하한 미만·저도막). "
-            "돌아가 도막 분포 확인 후 보완하세요.")
+            + action)
     return alerts
 
 
@@ -295,19 +297,22 @@ def create_telemetry_router(
             target = coating_assessment.session_target(session)
             limits = coating_assessment.session_limits(session)
             band = coating_assessment.resolve_band(target, **limits)
-            analysis_key = json.dumps([coating_assessment.ASSESSMENT_VERSION, CROP_PLACEMENT_VERSION, list(band),
-                                       query.resolved_mode_id, query.process_type, body_sha256])
+            previous_version = coating_assessment.PRE_PROGRESS_ADVANCE_VERSION
+            version = coating_assessment.ASSESSMENT_VERSION if query.process_type == "spray" else previous_version
+            inputs = [list(band), query.resolved_mode_id, query.process_type, body_sha256]
+            analysis_key = json.dumps([version, CROP_PLACEMENT_VERSION, *inputs])
             cached = sequences.load_analysis(
                 session_key=query.session_id, sequence_id=query.sequence_id, analysis_key=analysis_key,
             )
             if cached is None and sequences.latest_sequence_id(query.session_id) != query.sequence_id:
                 # Historical retries keep their original recorded result. Replaying
                 # them through today's decoder would rewind live session state.
-                legacy_key = json.dumps([coating_assessment.ASSESSMENT_VERSION, list(band),
-                                         query.resolved_mode_id, query.process_type, body_sha256])
-                cached = sequences.load_analysis(
-                    session_key=query.session_id, sequence_id=query.sequence_id, analysis_key=legacy_key,
-                )
+                for prior_inputs in ([previous_version, CROP_PLACEMENT_VERSION, *inputs],
+                                     [previous_version, *inputs]):
+                    cached = sequences.load_analysis(session_key=query.session_id, sequence_id=query.sequence_id,
+                                                     analysis_key=json.dumps(prior_inputs))
+                    if cached is not None:
+                        break
                 if cached is None:
                     return reject("sequence_analysis_out_of_order: analyze each sequence before submitting a later sequence")
             if cached is None:
