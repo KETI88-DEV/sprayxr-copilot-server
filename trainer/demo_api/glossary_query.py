@@ -56,6 +56,7 @@ _END = r"\s*[.!?。！？]*\s*\Z"
 _QUESTION = r"(?:뭐(?:야|예요|에요)|뭐라고\s*(?:해(?:요)?|하나요|하죠)|어떻게\s*(?:말해|말하나요|표현해)|알려\s*(?:줘|주세요))"
 _ACTION = r"(?:하면|번역(?:해\s*(?:줘|주세요)|해|하라|해\s*줄래|해\s*주시겠어요|\s*바람)?|" + _QUESTION + ")"
 _WHAT_IS = rf"what\s+is\s+(?P<subject>.+?)\s+in\s+(?P<language>{_LANG}){_END}"
+_LABEL_ONLY_NOTE = r"(?:\s*[.!。]\s*(?:말\s*붙이지\s*말고|설명(?:은\s*빼고|\s*없이)))?"
 _PATTERNS = tuple((re.compile(pattern, re.IGNORECASE | re.DOTALL), intent) for pattern, intent in (
     (rf"(?:please\s+)?translate\s+(?P<subject>.+?)\s+from\s+(?P<source_language>{_LANG})\s+(?:into|to)\s+(?P<language>{_LANG}){_END}", "explicit"),
     (rf"(?:please\s+)?translate\s+(?P<subject>.+?)\s+(?:into|to)\s+(?P<language>{_LANG}){_END}", "explicit"),
@@ -64,11 +65,17 @@ _PATTERNS = tuple((re.compile(pattern, re.IGNORECASE | re.DOTALL), intent) for p
     (rf"(?P<subject>.+?)\s*(?P<language>{_LANG})\s*(?:으로|로)\s*(?P<action>{_ACTION}){_END}", "action"),
     (rf"(?P<language>{_LANG})\s*(?:으로|로)\s*(?P<subject>.+?)\s*(?P<action>{_ACTION}){_END}", "action"),
     (rf"(?P<subject>.+?)\s*(?P<language>{_LANG})\s*(?:표현|번역|명칭|단어)(?:은|는|이|가)?\s*(?:{_QUESTION})?{_END}", "explicit"),
+    (rf"(?P<subject>.+?)\s*(?P<language>{_LANG})\s*표기(?:은|는|이|가|을|를)?"
+     rf"\s*(?:만\s*)?(?:{_QUESTION})?{_LABEL_ONLY_NOTE}{_END}", "label"),
     (rf"(?P<subject>.+?)\s*(?P<language>{_LANG})\s*(?:으로|로){_END}", "bare"),
 ))
 _WEAK_ACTIONS = {"알려줘", "알려주세요", "뭐야", "뭐예요", "뭐에요"}
 _MULTIPLE_TARGETS = re.compile(rf"(?<![A-Za-z]){_LANG}\s*(?:와|과|및|[,/])\s*\Z", re.IGNORECASE)
-_FOLLOWUP = re.compile(rf"(?:(?:그럼|그러면|그렇다면)\s*)?(?P<language>{_LANG})\s*(?:으로|로)\s*(?:{_ACTION})?{_END}", re.IGNORECASE)
+_FOLLOWUP = re.compile(
+    rf"(?:아\s*[,，]\s*)?(?:(?:그럼|그러면|그렇다면|이번에는|이번엔)\s*)?"
+    rf"(?P<language>{_LANG})\s*(?:(?:으로|로)\s*(?:{_ACTION})?|표기\s*(?:으로|로)?\s*만){_END}",
+    re.IGNORECASE,
+)
 _QUOTES = {'"': '"', "'": "'", "“": "”", "‘": "’", "`": "`"}
 
 
@@ -131,7 +138,7 @@ def _explicit_request(prompt: str) -> TranslationRequest | None:
         source = found.groupdict().get("source_language")
         if text is not None and target is not None:
             action = re.sub(r"\s+", "", found.groupdict().get("action") or "")
-            if (intent in {"bare", "weak"} or action in _WEAK_ACTIONS) and not (
+            if (intent in {"bare", "weak", "label"} or action in _WEAK_ACTIONS) and not (
                 found["subject"].lstrip()[0] in _QUOTES or _registered_form(text)
             ):
                 continue

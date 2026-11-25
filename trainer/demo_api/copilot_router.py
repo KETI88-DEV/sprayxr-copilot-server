@@ -52,7 +52,7 @@ from trainer.demo_api.copilot_contracts import CopilotQueryData, CopilotQueryReq
 from trainer.demo_api.coating_query import (
     answer_coating_question, answer_distribution_cause, drop_contradicted_causes, parse_viewer_coating_context,
     report_coating_context, target_advice_facts, zone_measures)
-from trainer.demo_api.copilot_intent import RECORD_OBJECT, classify_question_intent, fallback_intent, preset_intent, is_coating_status_question, is_coating_advice_question, is_domain_question, is_general_painting_knowledge, is_explanatory_question, is_off_topic
+from trainer.demo_api.copilot_intent import RECORD_OBJECT, classify_question_intent, coating_status_lookup_allowed, fallback_intent, preset_intent, is_coating_status_question, is_coating_advice_question, is_domain_question, is_general_painting_knowledge, is_explanatory_question, is_off_topic
 from trainer.demo_api.dialogue import (GENERAL_KNOWLEDGE_LIMIT, INSTRUCTION_REFUSAL, asks_for_instructions, authenticated_facts, conversation_key,
                                        drop_misattributed_zones, drop_sentences, drop_ungrounded, guard_generated_answer, has_body, parse_plan, plain_answer,
                                        viewer_claims, zone_fact_numbers,
@@ -61,7 +61,7 @@ from trainer.demo_api.dialogue import (GENERAL_KNOWLEDGE_LIMIT, INSTRUCTION_REFU
 from trainer.demo_api.playback_direction import playback_direction_from_context, playback_direction_answer, simple_direction_question, requested_direction_scope, aggregate_direction, LABELS as DIRECTION_LABELS
 from trainer.demo_api.copilot_live_analysis import current_zone, live_analysis
 from trainer.demo_api.simulator_context import SIMULATOR_CONTEXT, spray_simulator_context, wants_simulator_context, simulator_configuration_facts
-from trainer.demo_api.copilot_session_context import build_query_instruction, summarize_session, viewer_definition_context
+from trainer.demo_api.copilot_session_context import build_query_instruction, session_coating_target_answer, summarize_session, viewer_definition_context
 from trainer.demo_api.context_prompts import context_text, matched_prompt
 from trainer.demo_api.term_rules import fix_typos, matched_terms, meaning_evidence, routed_terms, same_word_lines, term_context, unit_facts, with_document_terms
 from trainer.demo_api.pose_query import (
@@ -91,8 +91,11 @@ from trainer.demo_api.sequence_analysis import SequenceAnalysisEngine
 from trainer.demo_api.safety_guard import (
     CLASSES as SAFETY_CLASSES, HIGH_PRESSURE_ANSWER, HIGH_PRESSURE_CITATIONS, classify, fixed_answer_translation, guard_answer, hazard_class,
 )
-from trainer.demo_api.reference_order_query import actual_order_intent, current_next_answer, is_current_completion_question, is_current_next_question, is_reference_order_question, resolve_reference_target, reference_order_answer
-from trainer.demo_api.reference_order_query import progress_unavailability
+from trainer.demo_api.reference_order_query import (
+    actual_order_intent, current_next_answer, is_current_completion_question, is_current_next_question,
+    is_current_progress_question, is_reference_order_question, progress_unavailability,
+    reference_order_answer, reference_position_question, resolve_reference_target,
+)
 from trainer.demo_api.v1_store import V1Store
 from trainer.demo_api.record_query import BODY_PART, DIRECTION_WORD, FIRST_FIX, WORST_ZONE, RecordAnswer, RecordFacts, answer_record_question, split_parts, ground_generated, has_record_marker, previous_subject
 from trainer.demo_api.viewer_progress import progress_question, viewer_progress_answer
@@ -409,6 +412,15 @@ _UNANCHORED_FOLLOWUP: Final = re.compile(
     r"(?:(?:그건|그거는|그거|그게)\s*(?:어때|왜|어떻게|뭐야|뭐지)|"
     r"(?:그럼|그러면|그래서)\s*(?:왜|어떻게|뭐야|뭐지))[?？.!。\s]*"
 )
+_UNIDENTIFIED_READING: Final = re.compile(
+    r"^\s*(?:화면에\s*)?\d+(?:\.\d+)?\s*(?:이|가)?\s*"
+    r"(?:나왔|나와|찍혔|떴|떠|표시[됐돼])[^\n]*?(?:손봐|고쳐|조절|바꿔|정상|문제)[^\n]*$"
+)
+_PAST_TRAINING_ASK: Final = re.compile(
+    r"(?:지난\s*(?:주|번|달)|저번|예전|그날).{0,60}(?:훈련|기록|실습).{0,75}"
+    r"(?:어디|어느|뭐|무엇|부족|과도막|저도막|점수|유사도)", re.DOTALL,
+)
+_SURFACE_COLOR_GRADE: Final = re.compile(r"(?:색|빛깔|광택).{0,18}(?:만|보이|보고).{0,35}\bsa\s*[1-3]", re.I)
 
 
 def _record_review_kind(prompt: str) -> str | None:
@@ -1147,16 +1159,61 @@ async def _execute_copilot_query(
     if mixed is not None and query.task_type != "knowledge_search":
         query = query.model_copy(update={"task_type": "knowledge_search"})
     documents_only = safety or mixed is not None
+    viewer_requested = bool(query.context and query.context.startswith(("motion_viewer_analysis:", "motion_viewer_playback:")))
 
     def record_only(found: RecordAnswer) -> JSONResponse:
         # 모델 서버가 없거나 생성이 실패해도 섞인 질문의 기록 쪽 답은 낸다.
         return _success_response(query, request_started, answer=found.text, retrieval_used=False, citations=[],
                                  sequence_context=found.sequence_context, context_status="available", subject=found.subject)
 
+    if not documents_only and _UNIDENTIFIED_READING.fullmatch(query.prompt):
+        return _success_response(query, request_started,
+            answer="숫자만으로는 조정할 항목을 알 수 없습니다. 화면에 나온 항목 이름과 단위를 알려 주세요.",
+            retrieval_used=False, citations=[], unavailable_reason="clarification_required")
+    if not documents_only and _SURFACE_COLOR_GRADE.search(query.prompt):
+        return _success_response(query, request_started,
+            answer="표면 색만으로는 블라스팅 청정도를 판정할 수 없습니다. 표면의 잔류 오염과 얼룩을 확인하고 지정된 검사 기준과 비교해 주세요.",
+            retrieval_used=False, citations=[], unavailable_reason="clarification_required")
+    if not query.session_id and not viewer_requested and not documents_only and _PAST_TRAINING_ASK.search(query.prompt):
+        return _success_response(query, request_started,
+            answer="어느 훈련인지 확인할 자료가 없습니다. 해당 훈련 기록을 선택하거나 세션 ID를 보내 주세요.",
+            retrieval_used=False, citations=[], unavailable_reason="session_required")
+
+    if query.session_id and not documents_only and re.search(r"목표|상한|하한|윗값|아랫값|정상\s*범위", query.prompt):
+        get_session = getattr(reports, "get_session", None)
+        session = await to_thread.run_sync(lambda: get_session(query.session_id)) if callable(get_session) else None
+        if (session is not None and getattr(session, "user_id", None) == query.user_id
+                and (query.scenario_id is None or getattr(session, "scenario_id", None) == query.scenario_id)):
+            target = session_coating_target_answer(query.prompt, session)
+            if target is not None:
+                answer, scope = target
+                return _success_response(query, request_started, answer=answer, retrieval_used=False, citations=[],
+                                         coating_context=scope, context_status="available")
+
+    position = reference_position_question(query.prompt)
+    previous = dialogue_turns[-1] if dialogue_turns else {}
+    previous_prompt = str(previous.get("prompt") or "") if previous.get("answer_source") == "analysis" else ""
+    short = re.sub(r"[\s?.!？。]", "", query.prompt)
+    continue_plan = (
+        re.fullmatch(r"(?:그|그러면|그럼)?다음(?:은|에는|이)?(?:뭐야|뭐지|어디|어디야)?(?:순서만)?", short)
+        and bool(reference_position_question(previous_prompt))
+    )
+    repeat_current = (
+        re.fullmatch(r"몇번(?:이라고|이야|이죠)(?:짧게|번호만)?", short)
+        and (is_current_next_question(previous_prompt) or is_current_completion_question(previous_prompt))
+    )
+    remaining_progress = (
+        re.fullmatch(r"얼마나더(?:해야돼|해야해|칠해)(?:숫자로만(?:대충)?)?", short)
+        and (is_current_next_question(previous_prompt) or is_current_progress_question(previous_prompt))
+    )
     completion_asked = is_current_completion_question(query.prompt) and not (query.context or "").startswith("motion_viewer_")
-    if (is_current_next_question(query.prompt) or completion_asked) and not documents_only and not explanatory_request:
+    progress_asked = is_current_progress_question(query.prompt) or bool(remaining_progress)
+    if (not position and not continue_plan and (is_current_next_question(query.prompt) or completion_asked or progress_asked or repeat_current)
+            and not documents_only and (not explanatory_request or progress_asked)):
+        progress_query = (query.model_copy(update={"prompt": "현재 구역 진행률이 얼마나 남았어?"})
+                          if remaining_progress else query)
         answer, scope, progress = await to_thread.run_sync(lambda: current_next_answer(
-            query, sequences, reports, sequence_engine=sequence_engine, coating_engine=coating_engine,
+            progress_query, sequences, reports, sequence_engine=sequence_engine, coating_engine=coating_engine,
         ))
         return _success_response(query, request_started, answer=answer, retrieval_used=False,
             citations=[], sequence_context=scope, coating_context=progress,
@@ -1175,14 +1232,14 @@ async def _execute_copilot_query(
                     and not _POSE_ASKED.search(query.prompt) and not explanatory_request and not documents_only else None)
     if direct_order and session_order:
         query = query.model_copy(update={"task_type": "trajectory_recomm"})
-    async def reference_answer():
+    async def reference_answer(position=None):
         scenario, process = await to_thread.run_sync(
-            lambda: resolve_reference_target(query, sequences, reports, facts=facts)
+            lambda: resolve_reference_target(query, sequences, reports, facts=facts, position=position)
         )
         reference_query = query.model_copy(update={"scenario_id": scenario})
         answer, scope = await to_thread.run_sync(lambda: reference_order_answer(
             sequence_engine, scenario_id=scenario, process=process,
-            detailed=True,
+            detailed=True, position=position,
         ))
         return _success_response(
             reference_query, request_started, answer=answer, retrieval_used=False,
@@ -1193,10 +1250,9 @@ async def _execute_copilot_query(
     # A full reference plan is available before any trainee sequence or complete
     # report. It never authorizes realtime movement or supplies actual visits.
     if (has_reference_plan and not relevant_viewer and query.task_type != "error_analysis" and not documents_only
-            and is_reference_order_question(query.prompt) and not explanatory_request):
-        return await reference_answer()
+            and (position or continue_plan or (is_reference_order_question(query.prompt) and not explanatory_request))):
+        return await reference_answer(position)
     frame_direction = playback_direction_from_context(query.context)
-    viewer_requested = bool(query.context and query.context.startswith(("motion_viewer_analysis:", "motion_viewer_playback:")))
     def frame_answer():
         if requested_direction_scope(query.prompt) != "frame":
             answer, scope = aggregate_direction(query.context, query.prompt)
@@ -1513,7 +1569,9 @@ async def _execute_copilot_query(
         """서명된 뷰어 자료가 먼저이고, 없으면 완료 리포트의 도막 행."""
         return trusted_coating if trusted_coating is not None else await report_facts()
 
-    if not documents_only and (is_coating_status_question(query.prompt) or (decision and decision["intent"] == "coating_status" and decision["kind"] == "lookup")):
+    if not documents_only and (is_coating_status_question(query.prompt) or (
+            decision and decision["intent"] == "coating_status" and decision["kind"] == "lookup"
+            and coating_status_lookup_allowed(query.prompt))):
         coating = await coating_facts()
         available = coating.get("analysis_status") == "available"
         return _success_response(query, request_started,

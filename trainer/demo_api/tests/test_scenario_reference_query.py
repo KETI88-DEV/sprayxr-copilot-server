@@ -210,6 +210,101 @@ def test_detailed_reference_answer_is_short_and_has_reference_basis(tmp_path):
     assert "준수율" not in data["answer"] and "다음 Zone" not in data["answer"]
 
 
+@pytest.mark.parametrize("prompt,position", [
+    ("학습 2에서 뭐부터 칠해? 아직 시작 버튼도 안 눌렀어.", ("first", None)),
+    ("나 지금 방금 켰는데 바로 어디부터 분사해?", ("first", None)),
+    ("아니 작업한 데 말고, 가야 하는 첫 구역 번호만.", ("first", None)),
+    ("2번 끝내면 어디로 가는 거였더라?", ("after", "2")),
+    ("3번 하고 나면 그 뒤는요?", ("after", "3")),
+    ("그럼 학습모드 11도 2번부터 칠하면 되는 거야?", ("first", None)),
+    ("지금 여기는 끝났어? 다음 어디로 옮겨?", None),
+    ("표면처리는 뭐부터 해야 해?", None),
+    ("어디부터 세척해야 녹이 없어지나요?", None),
+    ("10번 하고 나면 도막을 얼마나 말려야 돼?", None),
+    ("그 다음은?", None),
+])
+def test_reference_position_recognizes_bounded_planning_questions(prompt, position):
+    from trainer.demo_api.reference_order_query import reference_position_question
+
+    assert reference_position_question(prompt) == position
+
+
+def test_numbered_reference_position_stays_separate_from_actual_move(tmp_path):
+    from trainer.demo_api.reference_order_query import reference_order_answer
+
+    profile(tmp_path, "spray", ["2", "3", "1"])
+    profile(tmp_path, "blasting", ["1", "2", "3"])
+    engine = SequenceAnalysisEngine(tmp_path)
+    answer, state = reference_order_answer(engine, scenario_id="3", process=None, position=("first", None))
+    assert "스프레이" in answer and "Zone 2" in answer
+    assert "블라스팅" in answer and "Zone 1" in answer
+    assert state["scope"] == "reference_only" and state["recommended_flow"] is None
+    assert state.get("next_zone_id") is None
+
+    answer, state = reference_order_answer(engine, scenario_id="3", process="spray", position=("after", "3"))
+    assert "Zone 3 다음: Zone 1" in answer
+    assert state["recommended_flow"] == ["2", "3", "1"] and state.get("next_zone_id") is None
+
+    answer, _ = reference_order_answer(engine, scenario_id="3", process="spray", position=("after", "1"))
+    assert "Zone 1이 마지막 구역" in answer
+
+
+@pytest.mark.parametrize("prompt,expected", [
+    ("방금 내가 얼마나 칠했는지 퍼센트 찍어줘.", True),
+    ("지금 구역 진행률 몇 퍼센트야?", True),
+    ("현재까지 칠한 진행률 숫자로 알려줘.", True),
+    ("지금 얼마나 더 해야 돼?", True),
+    ("목표 두께 도달 면적은 50%라는데 그럼 아직도 못 가는 거 아냐?", True),
+    ("2번 구역에서 160 넘는 면적은 50%라는데, 그러면 진행률도 50%인 거야?", True),
+    ("아직 빨간 표시도 아니고 평균은 정상인 줄 알았는데 왜 붙잡아 둬?", True),
+    ("작업 속도는 얼마나 빨라야 돼?", False),
+    ("구역이 85프로 넘으면 도막 목표를 85마이크론으로 바꾸라는 뜻인가?", False),
+    ("진행률은 어떻게 계산해?", False),
+    ("칠한 거", False),
+])
+def test_current_progress_questions_separate_live_values_from_definitions(prompt, expected):
+    from trainer.demo_api.reference_order_query import is_current_progress_question
+
+    assert is_current_progress_question(prompt) is expected
+
+
+@pytest.mark.parametrize("prompt,expected", [
+    ("저 이제 건 내려도 돼요, 다음 존 찍어주세요.", True),
+    ("화면엔 85로 반올림될 텐데 바로 넘어가면 안 돼?", True),
+    ("2조는 끝나요? 이제 다음 쪼 ㄴ가?", True),
+    ("건은 멈추고 3조 쪽으로 넘어감 되냐?", True),
+    ("2번 구역 진행률이 벌써 95퍼니까 건 내려놓고 3번으로 가면 되죠?", True),
+    ("2번 존 끝? 하고 3번 존 가도 됨? 한 줄만.", True),
+    ("지금 밥 먹으러 가도 돼?", False),
+    ("다음 구역에서 준비해야 할 안전 장비는?", False),
+])
+def test_current_move_paraphrases_dont_capture_unrelated_questions(prompt, expected):
+    from trainer.demo_api.reference_order_query import is_current_next_question
+
+    assert is_current_next_question(prompt) is expected
+
+
+def test_completion_words_inside_a_rewrite_request_do_not_imply_a_result():
+    from trainer.demo_api.reference_order_query import is_current_completion_question
+
+    prompt = "'Zone 7을 완료했습니다'는 내가 적어본 UI 문구인데, 철자 자연스럽게 바꿔 줘."
+    assert not is_current_completion_question(prompt)
+
+
+def test_position_explicit_mode_overrides_selected_mode_without_falling_back(tmp_path):
+    from trainer.demo_api.reference_order_query import reference_order_answer, resolve_reference_target
+
+    profile(tmp_path, "spray", ["2", "3", "1"])
+    request = SimpleNamespace(context=None, scenario_id="3", session_id=None,
+                              prompt="그럼 학습모드 11도 2번부터 칠하면 되는 거야?")
+    position = ("first", None)
+    scenario, process = resolve_reference_target(request, SequenceStore(":memory:"), position=position)
+    answer, state = reference_order_answer(SequenceAnalysisEngine(tmp_path), scenario_id=scenario,
+                                          process=process, position=position)
+    assert scenario == "11" and "11" in answer
+    assert state["reason_code"] == "sequence_reference_unavailable"
+
+
 @pytest.mark.parametrize("prompt", ["현재 작업 순서에서 다음 구역은 어디인가요?", "작업 순서상 다음 Zone은 어디야?", "지금 다음 Zone으로 이동해도 되나요?"])
 def test_next_zone_without_current_data_never_becomes_a_whole_reference_plan(tmp_path, prompt):
     profile(tmp_path, "spray", ["1", "3", "2"])

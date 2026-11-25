@@ -131,3 +131,69 @@ def test_widened_status_words_do_not_capture_rule_and_procedure_questions():
     # 넓히기 전에도 상태 질문이던 것은 규정 낱말이 있어도 그대로다.
     for question in ("도막 두께가 기준보다 얇은 구역은 어디야?", "지금 도막 상태가 기준에 맞아?"):
         assert is_coating_status_question(question), question
+
+
+def test_coating_symptoms_and_causal_hypotheses_are_explanations():
+    from trainer.demo_api.copilot_intent import is_coating_advice_question, is_coating_status_question
+
+    for question in ("칠한 게 자꾸 눈물처럼 아래로 흘러. 이건 도막이 부족한 거야?",
+                     "도막이 아래로 흘러내리는데 이게 저도막이라는 뜻이야?",
+                     "도막 얇다고 무조건 희석제 많이 넣어서 그런 거 맞지?"):
+        assert is_coating_advice_question(question), question
+        assert not is_coating_status_question(question), question
+
+    assert is_coating_status_question("도막이 흘러내린 3번 구역의 실제 도막 상태를 리포트로 알려줘.")
+
+
+def test_non_spray_process_and_observed_defect_skip_even_mistaken_coating_lookup():
+    from trainer.demo_api.tests.test_query_evidence_fallback import DOC, Pipeline, ask, client
+
+    class WrongLookup(Pipeline):
+        def plan_copilot_dialogue(self, prompt, **kwargs):
+            return {"kind": "lookup", "intent": "coating_status", "scope": "zone"}
+
+    for prompt in ("칠한 게 자꾸 눈물처럼 아래로 흘러. 이건 도막이 부족한 거야?",
+                   "블라스팅 중인데 얇은 도막이면 더 쏴서 160까지 도료를 쌓아야 돼?"):
+        pipeline = WrongLookup(response=f"[답변] 문서로 확인한 일반 공정 설명입니다.\n[근거] {DOC}")
+        response = ask(client(pipeline), prompt=prompt, mode="quick")
+        assert response.status_code == 200
+        assert response.json()["data"]["coating_context"] is None
+        assert pipeline.runs or pipeline.conversations
+
+
+def test_grinder_alias_and_process_corrections_choose_the_actual_operation():
+    from trainer.demo_api.copilot_intent import is_domain_question, is_off_topic
+    from trainer.demo_api.query_runtime import explicit_work_process, retrieval_question
+    from trainer.demo_api.simulator_context import wants_simulator_context
+
+    question = "아니, 스프레이 말고 그라인더 디스크를 한곳에 멈추고 누르는 얘기야."
+    assert explicit_work_process(question) == "grinding"
+    assert retrieval_question(question).startswith("선박 표면 처리 그라인딩 작업 ")
+    assert not wants_simulator_context(question)
+    assert explicit_work_process("그라인딩이 아니라 스프레이로 칠하는 거야.") == "spray"
+    assert is_domain_question("그라인더 디스크를 너무 세게 누르면 어떻게 돼?")
+    assert not is_off_topic("그라인더 디스크를 너무 세게 누르면 어떻게 돼?")
+    assert is_off_topic("허리 디스크 운동은 어떤 게 있어?")
+
+
+def test_low_film_typo_keeps_the_term_and_its_definition_question():
+    from trainer.demo_api.copilot_intent import is_coating_status_question
+    from trainer.demo_api.term_rules import fix_typos, matched_terms, meaning_evidence
+
+    question = fix_typos("저도마악이라는 게 두껍게 발랐다는 말이야? 현장 용어 맞아?")
+    assert question.startswith("저도막이라는 게")
+    assert not is_coating_status_question(question)
+    assert meaning_evidence(question, matched_terms(question))
+
+
+def test_film_stage_comparison_pins_definition_and_measurement_evidence():
+    from trainer.demo_api.copilot_intent import is_domain_question
+    from trainer.demo_api.term_rules import matched_terms, meaning_evidence
+
+    for question in ("습도막 두께랑 건도막 두께 차이를, 언제 재는지도 같이 알려 줘.",
+                     "방금 칠하고 잰 160마이크로랑 마른 뒤 160마이크로랑 같은 판정이야?"):
+        assert is_domain_question(question)
+        terms = matched_terms(question)
+        assert {term["용어"] for term in terms} == {"습도막", "건조도막"}
+        assert "DOC-doc_0033-C0020" in meaning_evidence(question, terms)
+    assert matched_terms("방금 칠하고 나갔다가 마른 뒤 다시 올게.") == []

@@ -129,13 +129,16 @@ def translation_pipeline_for(pipeline: Any, source: str, target: str) -> Any:
     return pipeline if isinstance(pipeline, _QuickPipeline) else select_query_pipeline(parent, "quick")
 
 
+_WORK_PROCESS = re.compile(
+    r"(?P<blasting>블라스팅|blasting)|(?P<grinding>그라인딩|그라인더|grinding|grinder)|(?P<spray>스프레이|spray)", re.I)
+_PROCESS_EXCLUSION = re.compile(r"\s*(?:(?:은|는|이|가|를|을)\s*)?(?:말고|아니라|아니고)")
+
+
 def explicit_work_process(text: str) -> str | None:
     """Return an explicitly named process; leave unqualified language to caller context."""
-    if re.search(r"블라스팅|blasting", text, re.I):
-        return "blasting"
-    if re.search(r"그라인딩|grinding", text, re.I):
-        return "grinding"
-    return "spray" if re.search(r"스프레이|spray", text, re.I) else None
+    named = {match.lastgroup for match in _WORK_PROCESS.finditer(text)
+             if not _PROCESS_EXCLUSION.match(text, match.end())}
+    return next((process for process in ("blasting", "grinding", "spray") if process in named), None)
 
 
 def retrieval_question(question: str, *, context: str = "", expand_terms: bool = True) -> str:

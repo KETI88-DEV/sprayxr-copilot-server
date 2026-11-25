@@ -145,3 +145,53 @@ def test_technical_explanations_are_not_replaced_by_actual_order_lookup(tmp_path
     data = _ask(_client(tmp_path, pipeline=pipeline), prompt).json()["data"]
     assert data["sequence_context"] is None
     assert pipeline.runs
+
+
+def test_first_spray_zone_question_and_followup_use_the_registered_plan(tmp_path):
+    profile(tmp_path, "spray", ["2", "3", "1"])
+    reports = SimpleNamespace(get_session=lambda _: SimpleNamespace(scenario_id="3", tool_type="spray_gun"))
+    pipeline = Planner()
+    client = _client(tmp_path, pipeline=pipeline, reports=reports)
+    common = {"user_id": "COPILOT-AI-TEST", "session_id": "gate-test", "scenario_id": "3",
+              "task_type": "knowledge_search", "response_mode": "quick"}
+    headers = {"X-Copilot-Source": "assistant-test", "X-Copilot-Conversation": "first-zone"}
+
+    def ask(prompt):
+        response = client.post("/api/v1/copilot/query", json={**common, "prompt": prompt}, headers=headers)
+        assert response.status_code == 200
+        return response.json()["data"]
+
+    first = ask("나 지금 방금 켰는데 바로 어디부터 분사해?")
+    assert first["sequence_context"]["scope"] == "reference_only"
+    assert "첫 구역: Zone 2" in first["answer"]
+    followup = ask("그 다음은? 순서만.")
+    assert followup["sequence_context"]["recommended_flow"] == ["2", "3", "1"]
+    assert "2 → 3 → 1" in followup["answer"]
+    assert not pipeline.plans and not pipeline.runs
+
+
+def test_live_progress_without_a_sequence_cannot_return_a_completion_percent(tmp_path):
+    pipeline = Planner()
+    response = _ask(_client(tmp_path, pipeline=pipeline), "방금 내가 얼마나 칠했는지 퍼센트 찍어줘.")
+    assert response.status_code == 200
+    assert response.headers["X-Copilot-Unavailable-Reason"] == "sequence_missing"
+    assert response.json()["data"]["coating_context"] is None
+    assert not pipeline.plans and not pipeline.runs
+
+
+@pytest.mark.parametrize("prompt, reason, fragment", [
+    ("080이 나왔다는데 뭘 손봐야 하죠?", "clarification_required", "단위"),
+    ("지난주에 내가 다른 컴퓨터에서 한 훈련 있잖아. 그날 가장 부족했던 곳 어디였지?",
+     "session_required", "훈련 기록"),
+    ("블라스팅한 쇳판이 은색으로 보이면 Sa 2½이라고 찍어도 돼?", "clarification_required", "표면 색만"),
+])
+def test_insufficient_information_cannot_be_replaced_by_guessed_measurements(tmp_path, prompt, reason, fragment):
+    pipeline = Planner()
+    client = _client(tmp_path, pipeline=pipeline)
+    response = client.post("/api/v1/copilot/query", json={
+        "user_id": "COPILOT-AI-TEST", "prompt": prompt, "task_type": "knowledge_search",
+    }, headers={"X-Copilot-Source": "assistant-test"})
+    assert response.status_code == 200
+    assert response.headers["X-Copilot-Unavailable-Reason"] == reason
+    assert fragment in response.json()["data"]["answer"]
+    assert not pipeline.plans and not pipeline.runs
