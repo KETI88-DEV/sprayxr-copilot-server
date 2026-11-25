@@ -5,6 +5,18 @@
     {
       "published_at": null,
       "date_source": "개발 변경 이력 날짜 · 운영 반영 여부는 서버 버전으로 확인",
+      "url": "https://github.com/KETI88-DEV/sprayxr-copilot-server/releases/tag/v3.15.12",
+      "body": "- 이전 시험에서 통과한 56개를 제외하고 44개를 추가 시험했습니다. 배포 전 실제 응답을 확인한 결과 44개가 모두 통과했습니다.\n- 구역 순서와 도막·자세·리포트의 근거 확인, 현장 용어와 다국어 응답을 개선했습니다. 각 문항을 펼치면 최초 응답과 추가 시험에서 받은 실제 응답을 비교할 수 있습니다.",
+      "ui_changes": ["실제 시험에서 통과한 답변은 녹색 테두리로 구분합니다."],
+      "source": "변경 이력",
+      "date": "2026-11-25",
+      "title": "Query API 미통과 문항 추가 교정",
+      "version": "v3.15.12",
+      "has_query_qa": true
+    },
+    {
+      "published_at": null,
+      "date_source": "개발 변경 이력 날짜 · 운영 반영 여부는 서버 버전으로 확인",
       "url": "https://github.com/KETI88-DEV/sprayxr-copilot-server/releases/tag/v3.15.11",
       "body": "- 홈 업데이트에서 실제 질문과 최초 응답을 펼쳐볼 수 있습니다.\n- 실패 문항은 교정 후 통과한 실제 응답을 함께 제공합니다. 기대 답변과 재시험 실제 결과를 구분합니다.",
       "ui_changes": [],

@@ -21,6 +21,7 @@ class TranslationRequest:
     source_text: str
     target_language: str
     source_language: str | None = None
+    require_standard: bool = False
 
 
 @dataclass(frozen=True)
@@ -41,7 +42,7 @@ _LANGUAGES = {
     "th": ("태국어", "Thai"),
     "ne": ("네팔어", "Nepali"),
     "my": ("미얀마어", "버마어", "Burmese"),
-    "uz": ("우즈베크어", "Uzbek"),
+    "uz": ("우즈베크어", "우즈벡어", "우즈베크", "우즈벡", "Uzbek"),
     "si": ("싱할라어", "Sinhala"),
     "ru": ("러시아어", "Russian"),
     "zh": ("중국어", "Chinese"),
@@ -57,7 +58,20 @@ _QUESTION = r"(?:뭐(?:야|예요|에요)|뭐라고\s*(?:해(?:요)?|하나요|�
 _ACTION = r"(?:하면|번역(?:해\s*(?:줘|주세요)|해|하라|해\s*줄래|해\s*주시겠어요|\s*바람)?|" + _QUESTION + ")"
 _WHAT_IS = rf"what\s+is\s+(?P<subject>.+?)\s+in\s+(?P<language>{_LANG}){_END}"
 _LABEL_ONLY_NOTE = r"(?:\s*[.!。]\s*(?:말\s*붙이지\s*말고|설명(?:은\s*빼고|\s*없이)))?"
+_QUOTED = r'''(?P<subject>"[^"\n]+"|'[^'\n]+'|“[^”\n]+”|‘[^’\n]+’|`[^`\n]+`)'''
+_QUOTE_QUALIFIER = r'''(?:[^"'“‘`\n.!?]{1,44}?(?:의|인|문구|문장|라벨|표시|안내)\s*)?'''
+_TERM_QUALIFIER = r"(?:(?:도장\s*현장\s*)?(?:현장\s*)?(?:용어표|용어집)(?:를\s*기준으로|에\s*따라|로)\s*)?"
+_SHORT_LABEL = r"(?:(?:한\s*)?(?:용어|단어(?:\s*/\s*구)?|구절|표기|명칭)\s*만)"
 _PATTERNS = tuple((re.compile(pattern, re.IGNORECASE | re.DOTALL), intent) for pattern, intent in (
+    (rf"{_QUOTE_QUALIFIER}{_QUOTED}(?:을|를)?\s*(?P<language>{_LANG})\s*(?:도장\s*)?"
+     rf"(?:규격|표준|공식)\s*용어(?:로|로만)\s*(?:정확히\s*)?{_ACTION}{_END}", "standard"),
+    (rf"{_QUOTE_QUALIFIER}{_QUOTED}(?:을|를)?\s*(?P<language>{_LANG})\s*(?:으로|로)\s*"
+     rf"(?:[,，]\s*{_SHORT_LABEL}(?:\s*{_QUESTION})?|번역해\s*(?:줘|주세요|줄래|주시겠어요)){_END}", "explicit"),
+    (rf"{_QUOTED}(?:이?라고)\s*(?:써|쓰여|적혀)\s*있는\s*(?:메뉴|버튼|라벨|문구)(?:가|를|의)?\s*"
+     rf"(?:무슨\s*뜻인지\s*)?(?P<language>{_LANG})\s*(?:으로|로)\s*(?:짧게\s*)?"
+     rf"(?:바꿔\s*쓰고\s*싶어(?:요)?|바꿔\s*(?:줘|주세요)|옮겨\s*(?:줘|주세요)){_END}", "explicit"),
+    (rf"{_TERM_QUALIFIER}(?P<subject>.+?)\s*[,，]?\s*(?P<language>{_LANG})\s*(?:으로|로)?\s*"
+     rf"{_SHORT_LABEL}\s*(?:{_QUESTION})?{_END}", "label"),
     (rf"(?:please\s+)?translate\s+(?P<subject>.+?)\s+from\s+(?P<source_language>{_LANG})\s+(?:into|to)\s+(?P<language>{_LANG}){_END}", "explicit"),
     (rf"(?:please\s+)?translate\s+(?P<subject>.+?)\s+(?:into|to)\s+(?P<language>{_LANG}){_END}", "explicit"),
     (_WHAT_IS, "weak"),
@@ -142,17 +156,23 @@ def _explicit_request(prompt: str) -> TranslationRequest | None:
                 found["subject"].lstrip()[0] in _QUOTES or _registered_form(text)
             ):
                 continue
-            return TranslationRequest(text, target, _language(source) if source else None)
+            return TranslationRequest(text, target, _language(source) if source else None,
+                                      require_standard=intent == "standard")
     return None
 
 
-_OUTPUT_ACTION = r"(?:(?:설명|답변|대답|표현|작성)(?:해\s*(?:줘|주세요)|해\s*줄래|하세요)|알려\s*(?:줘|주세요)|써\s*(?:줘|주세요))"
+_OUTPUT_ACTION = (r"(?:(?:설명|답변|대답|표현|작성)(?:해\s*(?:줘|주세요)|해\s*줄래|하세요)|"
+                  r"알려\s*(?:줘|주세요)|써\s*(?:줘|주세요)|부탁(?:해(?:요)?|드려요|드립니다|합니다))")
 _OUTPUT_MODIFIERS = r"(?:(?:좀|간단히|자세히|짧게|만)\s*)*"
 _OUTPUT_SUFFIX = re.compile(rf"(?P<language>{_LANG})\s*(?:으로|로)\s*{_OUTPUT_MODIFIERS}{_OUTPUT_ACTION}{_END}", re.IGNORECASE)
 _OUTPUT_PREFIX = re.compile(rf"(?P<language>{_LANG})\s*(?:으로|로)\s*(?P<question>.+?)\s*{_OUTPUT_ACTION}{_END}", re.IGNORECASE | re.DOTALL)
 _OUTPUT_ENGLISH = re.compile(rf"(?:please\s+)?(?:answer|respond|explain)(?:\s+.+?)?\s+in\s+(?P<language>{_LANG}){_END}", re.IGNORECASE | re.DOTALL)
 _OUTPUT_WHAT_IS = re.compile(_WHAT_IS, re.IGNORECASE | re.DOTALL)
 _SOURCE_DESCRIPTOR = re.compile(r"^(?:된|쓰인|쓴|말한|말하는|적힌|작성된|작성한|작성하는|만들어진|기록된|설명한|설명하는|대답한|진행한|진행하는)(?:\s|$)")
+_DETACHED_OUTPUT_PREFERENCE = re.compile(
+    rf"(?P<question>.+?[?!.])\s+(?:(?:답변|대답|설명)만\s+)?(?P<language>{_LANG})\s*(?:으로|로)\s*"
+    rf"{_OUTPUT_MODIFIERS}{_OUTPUT_ACTION}{_END}", re.IGNORECASE | re.DOTALL,
+)
 
 
 def requested_response_language(prompt: str) -> str | None:
@@ -178,6 +198,12 @@ def requested_response_language(prompt: str) -> str | None:
         # Exact or quoted terms remain translation requests in _explicit_request.
         return _language(found["language"])
     return None
+
+
+def question_without_output_preference(prompt: str) -> str:
+    """Remove only a detached instruction about how to write the answer."""
+    preference = _DETACHED_OUTPUT_PREFERENCE.fullmatch(prompt.strip())
+    return preference["question"] if preference is not None else prompt
 
 
 def parse_translation_request(
@@ -210,8 +236,14 @@ def parse_translation_request(
         request = _explicit_request(previous)
         if request is None:
             return None
-        return TranslationRequest(request.source_text, target, request.source_language)
+        return TranslationRequest(request.source_text, target, request.source_language, request.require_standard)
     return None
+
+
+def unverified_standard_answer(request: TranslationRequest) -> str:
+    language_name = _LANGUAGES[request.target_language][0]
+    return (f"‘{request.source_text}’에 해당하는 검증된 {language_name} 규격 용어를 확인할 수 없습니다. "
+            "현장 표현의 뜻이나 해당 규격 문서를 알려 주세요.")
 
 
 def _key(text: str) -> str:
@@ -272,7 +304,7 @@ def lookup_translation_question(
         return _result(request, candidates, "verified_glossary")
     # The policy concerns CSV evidence only: Russian still has verified glossary
     # renderings above despite having no source column in the user-provided CSVs.
-    if request.target_language in LANGUAGE_POLICY:
+    if request.require_standard or request.target_language in LANGUAGE_POLICY:
         return None
     corpus = tsb_reference.load_corpus()
     for term in corpus.get("reference_terms", []):

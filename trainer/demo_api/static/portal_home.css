@@ -82,6 +82,7 @@
   background: #fff;
 }
 .qa-answer:only-child, .qa-answer.qa-observed { grid-column: 1 / -1; }
+.qa-answer.qa-answer-pass { border-color: #2f8f59; }
 .qa-answer h4 {
   margin: 0 0 7px;
   color: #315a91;
