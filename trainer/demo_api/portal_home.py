@@ -11,11 +11,20 @@ from trainer.demo_api.portal_navigation import portal_document
 from trainer.demo_api.training_data_catalog import TrainingDataCatalog
 from trainer.demo_api.training_worker_identity import is_unknown_worker
 
+_ASSETS = Path(__file__).with_name('assets')
+
 @lru_cache(maxsize=1)
 def release_posts():
-    path=Path(__file__).with_name('assets')/'portal_releases.json'
+    path=_ASSETS/'portal_releases.json'
     data=json.loads(path.read_text(encoding='utf-8'))
     return data['updates']
+
+
+@lru_cache(maxsize=1)
+def query_qa_report():
+    path = _ASSETS / 'query_api_qa_2026-11-25.json'
+    return json.loads(path.read_text(encoding='utf-8'))
+
 
 def create_home_router(catalog: TrainingDataCatalog | None=None) -> APIRouter:
     router=APIRouter(include_in_schema=False)
@@ -40,6 +49,8 @@ def create_home_router(catalog: TrainingDataCatalog | None=None) -> APIRouter:
         match=next((row for row in release_posts() if row['version']==version),None)
         if match is None:
             raise HTTPException(404,'업데이트 기록을 찾을 수 없습니다.')
+        if match.get('has_query_qa'):
+            return {**match, 'query_qa': query_qa_report()}
         return match
 
     @router.get('/home/api/summary')
