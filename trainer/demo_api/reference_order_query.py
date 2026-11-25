@@ -578,7 +578,7 @@ def answer_session_facts(query, sequences, reports, *, previous_prompt: str = ""
     prompt = query.prompt
     if _asks_to_rewrite_text(prompt):
         return None
-    detail = query_session_details.detail_intent(prompt, previous_prompt)
+    detail = query_session_details.detail_intent(prompt, previous_prompt, task_type=query.task_type)
     if detail == "grinding_reference":
         scenario, _ = resolve_reference_target(query.model_copy(update={"session_id": None}), sequences)
         answer, scope = reference_order_answer(sequence_engine, scenario_id=scenario, process="grinding", detailed=True)
@@ -722,12 +722,16 @@ def answer_session_facts(query, sequences, reports, *, previous_prompt: str = ""
         if found is None:
             if detail == "report_vr_status":
                 return _unavailable("이 훈련에서 완료된 리포트와 확정된 시뮬레이터 점수·합격 결과를 아직 확인할 수 없습니다.", "report_missing")
+            if detail == "report_pass_improvement":
+                return _unavailable("완료 리포트가 없어 시뮬레이터 점수와 이 훈련의 개선 우선순위를 확인할 수 없습니다.", "report_missing")
+            if detail == "report_trajectory_improvement":
+                return _unavailable("전체 훈련 궤적의 개선점은 완료 리포트가 생성되면 확인할 수 있습니다.", "report_missing")
             if detail == "report_missing_coating":
                 return _unavailable("현재 훈련에 확인된 완료 도막 측정이 없습니다. 빈칸을 측정값 0µm나 미도장 100%로 기록할 수 없습니다.", "report_missing")
             return _unavailable("이 세션에서 질문에 필요한 완료 리포트를 확인할 수 없습니다.", "report_missing")
         report_id, analysis = found
         payload = {}
-        if detail in {"report_vr_vs_pose", "report_pass_threshold", "report_vr_status", "report_pass_vs_coating",
+        if detail in {"report_vr_vs_pose", "report_pass_threshold", "report_vr_status", "report_pass_vs_coating", "report_pass_improvement",
                       "report_distance_median"}:
             load = getattr(reports, "get_completion", None)
             row = load(report_id) if callable(load) else None

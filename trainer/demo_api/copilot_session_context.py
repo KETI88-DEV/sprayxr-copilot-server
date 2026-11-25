@@ -29,22 +29,54 @@ _LOWER_BOUND = re.compile(r"하한|아랫\s*(?:값|한계)|최소\s*(?:값|치|�
 _TARGET_ONLY = re.compile(r"목표\s*(?:두께|값|치)?\s*만")
 _CONFIG_EXCLUSIONS = re.compile(
     r"실측|실제|측정|채웠|도달|충족|미달|충분|과도막|저도막|원인|이유|왜|방법|원리|"
-    r"어떻게\s*(?:설정|정|변경|조절)|설정\s*하나|변경\s*하나|몇\s*번|더\s*(?:칠|뿌)|"
+    r"어떻게\s*(?:설정|정|변경|조절)|몇\s*번|더\s*(?:칠|뿌)|"
     r"진행률|도포율|차이|비교|환산|바꿔|가정|규격"
 )
+_SETTING_SCOPE_EXCLUSIONS = re.compile(
+    r"리포트|보고서|리플레이|\breplay\b|시방|현장|조선소|표준|\b(?:PSPC|ISO|SSPC|AMPP|NACE)\b"
+    r"|(?<![\d.])\d+\s*(?:번(?:째)?\s*)?(?:구역|존|zone)"
+    r"|(?:다음|다른|이전)\s*(?:구역|존|zone)(?:의|에서)?\s*(?:목표|도막|두께)"
+    r"|(?:구역|존|zone)\s*#?\s*\d+",
+    re.I,
+)
+_THICKNESS_UNIT = r"(?:[µμu]m|mm|mil\b|미크론|마이크론|마이크로(?:\s*미터)?)"
+_SUPPLIED_THICKNESS = re.compile(rf"\d+(?:[.,]\d+)?\s*{_THICKNESS_UNIT}", re.I)
+_SETTING_METHOD = re.compile(r"(?:설정|변경)\s*하나")
+# STT can render 도막 as 주막. Only the technical 두께 + setting expression is
+# recognized here so an unrelated question about 주막 stays unchanged.
+_SPOKEN_TARGET = re.compile(
+    r"(?:도\s*막|주막|(?:이번|현재|이)\s*(?:세션|훈련)(?:에서|의)?)\s*"
+    r"(?:목표\s*)?두께\s*[은는를이가]?\s*"
+    rf"(?:몇(?:\s*{_THICKNESS_UNIT})?|얼마|어느\s*(?:값|수치))\s*으?로\s*(?:해|하|설정|맞[추춰]|정|잡)",
+    re.I,
+)
+
+
+def session_target_question(prompt: str) -> bool:
+    """Identify a session setting lookup independently of whether a row exists."""
+    if (_CONFIG_EXCLUSIONS.search(prompt) or _SETTING_SCOPE_EXCLUSIONS.search(prompt)
+            or explicit_work_process(prompt) in {"blasting", "grinding"}):
+        return False
+    if (not _SETTING_METHOD.search(prompt) and _THICKNESS_SUBJECT.search(prompt)
+            and ("목표" in prompt or _NORMAL_BAND.search(prompt))):
+        return True
+    return bool(_SPOKEN_TARGET.search(prompt) and not _SUPPLIED_THICKNESS.search(prompt))
 
 
 def session_coating_target_answer(
     prompt: str, session: SessionRow | None,
 ) -> tuple[str, dict[str, object]] | None:
-    """Answer only setting lookups for a caller-validated spray session."""
-    if session is None or (session.tool_type is not None and process_from_tool_type(session.tool_type) != "spray"):
+    """Answer setting lookups for a caller-validated session."""
+    if session is None or not session_target_question(prompt):
         return None
-    if explicit_work_process(prompt) in {"blasting", "grinding"}:
-        return None
-    band_asked = _NORMAL_BAND.search(prompt)
-    if (not _THICKNESS_SUBJECT.search(prompt) or not (band_asked or "목표" in prompt)
-            or _CONFIG_EXCLUSIONS.search(prompt)):
+    process = process_from_tool_type(session.tool_type)
+    if process == "blasting" and _SPOKEN_TARGET.search(prompt):
+        return "현재 세션은 블라스팅입니다. 스프레이 도막 두께 목표는 적용하지 않습니다.", {
+            "scope": "session_target",
+            "analysis_status": "not_available",
+            "reason_code": "coating_target_not_applicable",
+        }
+    if session.tool_type is not None and process != "spray":
         return None
 
     target = session_target(session)
@@ -61,8 +93,10 @@ def session_coating_target_answer(
         answer = f"{subject} 정상 도막 두께 상한은 {upper:g}µm입니다."
     elif asks_lower and not asks_upper:
         answer = f"{subject} 정상 도막 두께 하한은 {lower:g}µm입니다."
-    elif (band_asked and not _TARGET_ONLY.search(prompt)) or (asks_lower and asks_upper):
+    elif (_NORMAL_BAND.search(prompt) and not _TARGET_ONLY.search(prompt)) or (asks_lower and asks_upper):
         answer = f"{subject} 정상 도막 두께 범위는 {lower:g}~{upper:g}µm입니다."
+    elif _SPOKEN_TARGET.search(prompt) and not _TARGET_ONLY.search(prompt):
+        answer = f"{subject} 목표 도막 두께는 {lower:g}µm이고 정상 범위는 {lower:g}~{upper:g}µm입니다."
     else:
         answer = f"{subject} 목표 도막 두께는 {lower:g}µm입니다."
     return answer, {

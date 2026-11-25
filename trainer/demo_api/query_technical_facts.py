@@ -28,9 +28,10 @@ _AFTER_DRYING = re.compile(r"(?:마른|건조(?:된|한)?)\s*(?:뒤|후)")
 _MEASUREMENT = re.compile(r"잰|재(?:는|요|야|어|보)|측정")
 _EQUIVALENT = re.compile(r"같[은아나]|똑같|차이|다르")
 _SITE_SPEC = re.compile(
-    r"(?:(?:우리|이)\s*(?:조선소|현장|회사|사업장|작업장)|사내).{0,28}(?:표준|시방|기준)"
+    r"(?:(?:우리|이)\s*(?:조선소|현장|회사|사업장|작업장)|사내).{0,28}(?:표준|시방|기준|규격)"
 )
 _SPEC_VALUE = re.compile(r"수치|한도|허용값|얼마|몇\s*(?:마이크로|미크론|[µμ]m|mm|퍼센트|%|도|$)", re.I)
+_FILM_ACCEPTANCE_CRITERIA = re.compile(r"(?:판별|판정|합격|검수|수락)\s*기준|허용\s*(?:범위|두께)")
 _SIMULATION = re.compile(r"시뮬레이터|가상\s*훈련|(?<![A-Za-z])VR(?![A-Za-z])", re.I)
 _THICKNESS = r"\s*(?:[µμu]m|㎛|마이크로(?:미터)?|미크론)"
 _VALUE = re.compile(rf"(?<![\d.-])(\d{{1,5}}(?:\.\d+)?)(?:{_THICKNESS})?\s*(?:이면|인데|라면|은|는)", re.I)
@@ -73,6 +74,11 @@ _FAN_TAIL = re.compile(
 _AIRLESS = re.compile(r"에어리스|airless", re.I)
 _AIR_ATOMIZATION = re.compile(r"공기\s*(?:분무|분사|스프레이)|압축\s*공기")
 _VISIBLE_INSPECTION = re.compile(r"눈으로|육안|눈에\s*안\s*띄|보이지|안\s*보")
+_COATING_THICKNESS_TOPIC = re.compile(r"도막|도료층|\b(?:DFT|WFT)\b", re.I)
+_THICKNESS_CHECK = re.compile(r"두께|저도막|과도막|\b(?:DFT|WFT)\b", re.I)
+_SUBSTRATE_THICKNESS = re.compile(r"(?:강판|철판|강재|모재|재료|판재)\s*(?:의\s*)?(?:잔존\s*)?두께")
+_LOCATE_FILM_DEFECT = re.compile(r"구별|구분|판별|식별|어떻게\s*(?:찾|확인|판정)|찾아내|찾는\s*(?:법|방법)")
+_REQUEST_METHOD = re.compile(r"방법|하는\s*법|찾는\s*법|어떻게|찾아내|알려|하려면")
 _SALT = re.compile(r"염분|수용성\s*염|소금기")
 _OIL = re.compile(r"기름|유분|그리스|기름때")
 _ABRASIVE_MEDIA = re.compile(r"연마재|알갱이|그릿|쇼트")
@@ -145,6 +151,29 @@ def _film_measurement_answer(prompt: str, *, summarize: bool) -> str | None:
     if summarize and definition and _EQUIVALENT.search(prompt):
         return "습도막(WFT)은 도장 직후 마르기 전, 건도막(DFT)은 도막이 건조된 뒤의 두께를 잽니다."
     return None
+
+
+def _film_inspection_method(prompt: str, *, prior_coating: bool) -> str | None:
+    """Separate how to check film thickness from a query for session readings."""
+    if _INSPECTION_DOC_LOOKUP.search(prompt) or not _THICKNESS_CHECK.search(prompt):
+        return None
+    coating = _COATING_THICKNESS_TOPIC.search(prompt)
+    visual = _VISIBLE_INSPECTION.search(prompt) and (
+        coating or (prior_coating and not _SUBSTRATE_THICKNESS.search(prompt))
+    )
+    how = (coating and re.search(r"저도막|과도막", prompt)
+           and _LOCATE_FILM_DEFECT.search(prompt) and _REQUEST_METHOD.search(prompt))
+    if not (visual or how):
+        return None
+    if _SIMULATION.search(prompt):
+        return ("구역별 도막 히트맵의 수치나 범례를 이 세션의 정상 범위와 비교하세요. "
+                "하한보다 얇은 부분은 저도막, 상한보다 두꺼운 부분은 과도막입니다.")
+    # ISO 2808 methods and ISO 19840 sampling and acceptance scope:
+    # https://www.iso.org/standard/71583.html and https://www.iso.org/standard/59523.html
+    if _WET_FILM.search(prompt):
+        return "육안으로 정확한 두께를 판정하기 어렵습니다. 도장 직후 습도막을 측정하고 도료 시방의 습도막 기준과 비교하세요."
+    return ("육안으로는 도막 두께 수치를 확인하기 어렵습니다. 현장은 건조 후 두께계로 여러 지점을 재고 시방과 비교하세요. "
+            "훈련에서는 구역별 도막 히트맵과 세션 정상 범위를 비교하세요.")
 
 
 def _simulator_grade(prompt: str, *, target_thickness_um: float | None,
@@ -390,11 +419,14 @@ def technical_fact_answer(
     target_min_thickness_um: float | None = None,
     target_max_thickness_um: float | None = None,
     summarize: bool = True,
+    prior_coating: bool = False,
 ) -> str | None:
     """Answer a specific ambiguity from domain facts or direct simulator behavior."""
     prompt = fix_typos(prompt).strip()
     process = explicit_work_process(prompt)
-    if _SITE_SPEC.search(prompt) and _SPEC_VALUE.search(prompt):
+    if _SITE_SPEC.search(prompt) and (
+        _SPEC_VALUE.search(prompt) or (_COATING_THICKNESS_TOPIC.search(prompt) and _FILM_ACCEPTANCE_CRITERIA.search(prompt))
+    ):
         return "해당 현장 표준서 없이는 허용 수치를 확인할 수 없습니다. 정확한 기준명이나 표준서 번호와 해당 항목을 알려 주세요."
     if (answer := _inspection_comparison_answer(prompt)) is not None:
         return answer
@@ -406,6 +438,8 @@ def technical_fact_answer(
         if _GAUGE.search(prompt):
             return _coating_inspection_answer(prompt)
         return None
+    if (answer := _film_inspection_method(prompt, prior_coating=prior_coating)) is not None:
+        return answer
     if not _SIMULATION.search(prompt):
         return (
             _coating_definition_answer(prompt)

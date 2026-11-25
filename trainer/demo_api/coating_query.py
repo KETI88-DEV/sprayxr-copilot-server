@@ -13,7 +13,13 @@ from trainer.demo_api.pose_query import josa
 from trainer.demo_api.session_coating import EXPERT_WORDS
 
 # "3번 구역"(음성 질의에서 흔한 말)도 그 구역만 답한다. 없으면 전체 구역 목록이 나왔다(2026-11-24).
-_ZONE_NUMBER = re.compile(r"(?:zone|존|구역)\s*(\d+)|(\d+)\s*번\s*(?:zone|존|구역)", re.I)
+_ZONE_NUMBER = re.compile(
+    r"(?:zone|존|구역)\s*(\d+)(?![\d.])|(?<![\d.])(\d+)\s*(?:번\s*)?(?:zone|존|구역)(?!\s*\d)", re.I,
+)
+_SPOKEN_ZONE_NUMBERS = dict(zip(
+    ("원 투 쓰리 포 파이브 식스 세븐 에잇 나인 텐").split(), map(str, range(1, 11)),
+))
+_SPOKEN_ZONE = re.compile(r"(?:\bzone|(?<![가-힣])존)\s+(" + "|".join(_SPOKEN_ZONE_NUMBERS) + r")(?![가-힣])", re.I)
 _EXPERT = re.compile(r"전문가|expert", re.I)
 # 뷰어 기록에 목표 대비 판정이 없을 때 전문가 대비 답 앞에 밝히는 사유. 사유와 다른 말을 하지 않는다.
 _TARGET_MISSING = {
@@ -133,7 +139,7 @@ def _expert_line(rows: list[dict[str, Any]], *, detailed: bool) -> str:
 
 def _quick_grades(rows: list[dict[str, Any]], prompt: str, basis: str) -> str:
     """빠른 안내 한 줄: 물은 Zone의 등급, 아니면 등급별 Zone 수(2026-11-16, 60자 한 줄). 등급은 저장된 행 그대로다."""
-    if _ZONE_NUMBER.search(prompt):
+    if coating_zone_number(prompt):
         return " ".join(f"{josa(_zone_label(row), '은', '는')} {grade_phrase(row)}입니다." for row in rows)
     counts = [f"{word} {len(_graded(rows, grade))}곳" for word, grade in (("저도막", "below"), ("과도막", "above"), ("정상", "normal"))]
     unpainted = len(_graded(rows, None))
@@ -147,7 +153,7 @@ def _grade_answer(rows: list[dict[str, Any]], prompt: str, *, detailed: bool, vi
     if quick and "분포" not in prompt and "미도장" not in prompt and "안 칠" not in prompt:
         return _quick_grades(rows, prompt, basis)
     text = [f"{basis}으로 Zone별 도막을 판정했습니다. {RULE_NOTE}"]
-    if _ZONE_NUMBER.search(prompt):
+    if coating_zone_number(prompt):
         text += [f"{_zone_label(row)}: {grade_phrase(row)}"
                  + (f" · 전문가 대비 {EXPERT_WORDS[row['expert']['status']]}" if report_expert and row.get("expert") else "")
                  for row in rows]
@@ -421,10 +427,20 @@ def answer_distribution_cause(context: Mapping[str, Any], *, detailed: bool,
         # 2026-11 이전에 저장된 리포트 행에는 등급·분포가 없다. 완료한 세션에 "완료 분석이 없다"고 답하지 않는다.
         return ("이 세션의 완료 분석은 이전 기준으로 저장되어 있어 도막 분포와 조절 후보를 낼 수 없습니다."
                 if zones and context.get("comparison_basis") == "saved_coating_report" else None)
-    # "3번 구역 도막이 부족한 이유"처럼 구역을 말하면 그 구역만 답한다. 그 구역 행이 없으면 전체를 답한다.
-    rows = _selected(rows, prompt) or rows
+    # A missing selected row cannot be replaced by findings from another zone.
+    rows = _selected(rows, prompt)
+    if not rows:
+        return None
+    named_zone = coating_zone_number(prompt)
     basis = basis_label(rows[0]["target_thickness_um"], rows[0]["target_basis"])
     flagged = _graded(rows, "below") + _graded(rows, "above")
+    cause_check = (
+        "도막 분포만으로 원인을 확정할 수 없습니다. 해당 구역 분사의 이동 속도·이격거리와 "
+        "패스 겹침·재분사 여부를 작업 기록에서 확인하세요."
+        if re.search(r"원인|이유|왜", prompt)
+        and (flagged or any(_number(row.get("overpaint_percent")) for row in rows))
+        else ""
+    )
     if quick and flagged:
         # 빠른 안내 한 줄(2026-11-16): 가장 먼 저도막(없으면 과도막) Zone과 실측과 엇갈리지 않는 조절 후보. 원인 미확정은 그대로 밝힌다.
         row = flagged[0]
@@ -432,9 +448,11 @@ def answer_distribution_cause(context: Mapping[str, Any], *, detailed: bool,
         kept = [item for item in row["adjustments"] if not contradicted(item, measure)]
         head = f"Zone {row['zone_id']} {GRADE_WORDS[row['grade']]}({mean_text(row['thickness_um'], row['target_thickness_um'])}µm)"
         if kept:
-            return head + " 조절 후보(원인 미확정): " + ", ".join(
+            answer = head + " 조절 후보(원인 미확정): " + ", ".join(
                 ADJUSTMENT_WORDS[(item["variable"], item["direction"])] for item in sorted(kept, key=lambda item: item["priority"])) + "."
-        return head + ("입니다." if row["adjustments"] else "입니다. 속도·이격거리 기록이 없어 조절 후보를 내지 못했습니다.")
+        else:
+            answer = head + ("입니다." if row["adjustments"] else "입니다. 속도·이격거리 기록이 없어 조절 후보를 내지 못했습니다.")
+        return " ".join(filter(None, (answer, cause_check)))
     text = [" ".join(filter(None, (f"{basis}으로 본 도막 분포입니다.", distribution_sentence(_sum_bands(rows)))))]
     for word, grade in (("저도막", "below"), ("과도막", "above")):
         group = _graded(rows, grade)
@@ -443,6 +461,17 @@ def answer_distribution_cause(context: Mapping[str, Any], *, detailed: bool,
             measure = measures.get(str(row["zone_id"])) if measures else None
             head = f"{josa('Zone ' + str(row['zone_id']), '은', '는')} {word}입니다(칠한 곳 평균 {mean_text(row['thickness_um'], row['target_thickness_um'])}µm)."
             text.append(" ".join(filter(None, (head, _candidate_line(row["adjustments"], measure, str(row["zone_id"]))))))
+    if named_zone:
+        for row in rows:
+            if row["grade"] in {None, "normal"}:
+                text.append(f"{_zone_label(row)}: {grade_phrase(row)}.")
+            overpaint = _number(row.get("overpaint_percent"))
+            if overpaint and row["grade"] != "above":
+                text.append(f"{_zone_label(row)}의 부분 과도막 면적은 {overpaint:g}%입니다.")
+    if cause_check:
+        text.append(cause_check)
+    if named_zone and not flagged:
+        return "\n".join(text)
     if len(text) == 1:
         return text[0] + "\n저도막·과도막으로 판정된 Zone이 없습니다."
     return "\n".join([*text, "조절 후보는 등급에 따른 일반적인 방향이며 원인으로 확정된 것은 아닙니다."])
@@ -454,14 +483,22 @@ def _target_rows(context: Mapping[str, Any]) -> list[dict[str, Any]] | None:
     return target.get("zones") or [] if isinstance(target, Mapping) and target.get("analysis_status") == "available" else None
 
 
+def coating_zone_number(prompt: str) -> str | None:
+    """A named zone can arrive as digits or an STT transcription of its label."""
+    if match := _ZONE_NUMBER.search(prompt):
+        return match[1] or match[2]
+    if match := _SPOKEN_ZONE.search(prompt):
+        return _SPOKEN_ZONE_NUMBERS[match[1]]
+    return None
+
+
 def _selected(rows: list[dict[str, Any]], prompt: str) -> list[dict[str, Any]]:
     """질문이 Map·Zone 번호를 말하면 그 행만 남긴다."""
     selected_map = re.search(r"map\s*(\d+)", prompt, re.I)
     if selected_map:
         rows = [row for row in rows if str(row.get("map_num")) == selected_map[1]]
-    zone = _ZONE_NUMBER.search(prompt)
-    if zone:
-        rows = [row for row in rows if str(row.get("zone_id")) == (zone[1] or zone[2])]
+    if zone := coating_zone_number(prompt):
+        rows = [row for row in rows if str(row.get("zone_id")) == zone]
     return rows
 
 

@@ -22,13 +22,28 @@ _PART = re.compile(r"(?<![\d.+-])(\d+(?:\.\d+)?)\s*(?:%|퍼센트)\s*(?:는|를|
 _REPLAY = re.compile(r"리포트|보고서|리플레이|\breplay\b|완료\s*(?:기록|화면|표|결과)|종료", re.I)
 _SEQUENCE_ID = re.compile(r"\bSEQ-\d{1,12}(?![\d-])", re.I)
 _SPEED = re.compile(r"이동\s*속도|건\s*속도|분사\s*속도|속도")
+_MOTION_JUDGMENT = re.compile(r"빠르|빨랐|느리|느렸|괜찮|적절|적정|너무\s*(?:가깝|멀)")
 _VR_RESULT = re.compile(r"(?:시뮬레이터|\bvr\b).{0,45}(?:점수|합격)|(?:점수|합격).{0,25}(?:시뮬레이터|\bvr\b)", re.I)
 _GRADE_MATCHES = {"above": r"과도막|상한\s*초과", "below": r"저도막|하한\s*미달", "normal": r"정상(?:\s*도막)?"}
+_PASS_GOAL = re.compile(r"(?:합격|통과)(?:을|를)?\s*(?:하|할)\s*(?:려면|려고|기\s*위해)")
+_BARE_PASS_GOAL = re.compile(
+    r"\s*(?:합격|통과)(?:을|를)?\s*(?:하|할)\s*려면\s*어떻게\s*"
+    r"(?:해야\s*(?:하지|하죠|하나요|해요?|돼요?|되나요)|해요?)\s*[?.!？。]*\s*"
+)
+_RUN_SCOPE = re.compile(r"(?:이번|전체|내)\s*(?:훈련|작업)|시뮬레이터|\bvr\b|리플레이|리포트|\breplay\b", re.I)
+_UNRELATED_PASS = re.compile(r"도막|검사|접착|자격증|시험|인증|채용|면접|몇\s*점")
 
 
-def _report_reading_intent(prompt: str) -> str | None:
+def _report_reading_intent(prompt: str, task_type: str | None) -> str | None:
     if re.search(r"(?:새|막\s*연)\s*훈련", prompt) and re.search(r"그\s*점수|앞\s*기록", prompt) and re.search(r"합격|결과", prompt):
         return "report_vr_status"
+    if (_PASS_GOAL.search(prompt) and not _UNRELATED_PASS.search(prompt)
+            and (_RUN_SCOPE.search(prompt) or task_type == "error_analysis" or _BARE_PASS_GOAL.fullmatch(prompt))):
+        return "report_pass_improvement"
+    if (_RUN_SCOPE.search(prompt) and re.search(r"궤적|경로", prompt)
+            and re.search(r"개선|보완|고쳐|수정", prompt)
+            and not (_ZONE.search(prompt) or _RECENT.search(prompt) or re.search(r"프레임|분사\s*방향|도포\s*방향", prompt))):
+        return "report_trajectory_improvement"
     if not _REPLAY.search(prompt):
         return None
     if re.search(r"빠른\s*안내|상세\s*분석|response_mode", prompt, re.I) and re.search(r"계산|저장|갱신", prompt):
@@ -55,12 +70,12 @@ def _report_reading_intent(prompt: str) -> str | None:
     return None
 
 
-def detail_intent(prompt: str, previous_prompt: str = "") -> str | None:
+def detail_intent(prompt: str, previous_prompt: str = "", *, task_type: str | None = None) -> str | None:
     if _SEQUENCE_ID.search(prompt) and re.search(r"이격\s*거리|이동\s*속도|분사\s*속도", prompt):
         return "sequence_measurement"
     if _DISTANCE.search(prompt) and re.search(r"중앙값|중앙\s*값", prompt) and re.search(r"저장|분사|시퀀스", prompt):
         return "report_distance_median"
-    if reading := _report_reading_intent(prompt):
+    if reading := _report_reading_intent(prompt, task_type):
         return reading
     if re.search(r"블라스팅|블라스트", prompt) and re.search(r"권장|안내", prompt) and re.search(r"조도|실제\s*작업", prompt):
         return "blasting_start_evidence"
@@ -267,8 +282,81 @@ def sequence_answer(intent: str, prompt: str, bodies: Sequence[Mapping]) -> tupl
     length = "cm" if in_cm else "mm"
     speed_text = f"{speed / scale:g}{length}/s" if speed is not None else "기록 없음"
     distance_text = f"{distance / scale:g}{length}" if distance is not None else "기록 없음"
-    return (f"최근 분사의 저장 평균은 건 이동 속도 {speed_text}, 이격거리 {distance_text}입니다.",
-            None if speed is not None or distance is not None else "analysis_unavailable")
+    answer = f"최근 분사의 저장 평균은 건 이동 속도 {speed_text}, 이격거리 {distance_text}입니다."
+    if intent == "recent_motion" and _MOTION_JUDGMENT.search(prompt):
+        answer += " 이 측정값만으로는 적정 여부를 판단할 수 없습니다. 적용할 장비·훈련 기준과 비교해야 합니다."
+    return answer, None if speed is not None or distance is not None else "analysis_unavailable"
+
+
+def _recorded_vr_result(payload: Mapping) -> str:
+    score = _number(payload.get("vr_score"))
+    passed = payload.get("is_pass")
+    verdict = "합격" if passed is True else "불합격" if passed is False else "합격 여부 미기록"
+    if score is not None:
+        return f"시뮬레이터 수행 점수는 {score:g}점({verdict})입니다."
+    if isinstance(passed, bool):
+        return f"시뮬레이터 결과는 {verdict}이며, 수행 점수는 기록되지 않았습니다."
+    return "시뮬레이터 수행 점수와 합격 여부를 확인할 수 없습니다."
+
+
+def _flow_comparison(sequence: Mapping) -> str | None:
+    observed = sequence.get("first_visit_flow")
+    recommended = sequence.get("recommended_flow")
+    if not observed or not recommended:
+        return None
+    return f"최초 방문 {'→'.join(map(str, observed))}, 대표 권장 {'→'.join(map(str, recommended))}입니다."
+
+
+def _trajectory_improvement(sequence: Mapping) -> str | None:
+    if sequence.get("analysis_status") != "available":
+        return None
+    comparison = _flow_comparison(sequence)
+    order_rate = _number(sequence.get("adherence_rate"))
+    notes = [comparison] if comparison else []
+    if order_rate is not None:
+        notes.append(f"순서 유사도 {order_rate * 100:g}%입니다.")
+        if comparison and order_rate < 1:
+            notes.append("대표 권장 흐름으로 구역 이동 순서를 연습하세요.")
+    directions = _mapping(sequence.get("direction_summary"))
+    direction_rate = _number(sequence.get("direction_adherence_rate"))
+    if direction_rate is None:
+        direction_rate = _number(directions.get("direction_adherence_rate"))
+    if direction_rate is not None:
+        notes.append(f"방향 준수율 {direction_rate * 100:g}%입니다.")
+        rows = [_mapping(row) for row in directions.get("zone_summary") or []]
+        worst = max(rows, key=lambda row: _number(row.get("direction_error_count")) or 0, default={})
+        errors = _number(worst.get("direction_error_count"))
+        label = DIRECTION_LABELS.get(str(worst.get("expected_direction")))
+        if errors and errors > 0 and worst.get("zone_id") and label:
+            notes.append(f"방향 불일치가 많았던 {worst['zone_id']}번 구역({errors:g}회)에서 {label} 도포를 연습하세요.")
+        elif direction_rate < 1:
+            notes.append("리플레이에서 분사 궤적을 기준 도포 방향과 대조하세요.")
+    return " ".join(notes) or None
+
+
+def _priority_coating_action(analysis: Mapping, coating: Mapping) -> str | None:
+    band = coating.get("normal_band_um")
+    if (coating.get("analysis_status") != "available" or not isinstance(band, (list, tuple)) or len(band) != 2):
+        return None
+    lower, upper = map(_number, band)
+    if lower is None or upper is None or not 0 < lower <= upper:
+        return None
+    deviations = []
+    for item in analysis.get("coating_zones") or []:
+        row = _mapping(item)
+        average = _number(row.get("thickness_um"))
+        if not row.get("zone_id") or average is None:
+            continue
+        if row.get("grade") == "above" and average > upper:
+            deviations.append((average - upper, row, average, "과도막을 줄이세요."))
+        if row.get("grade") == "below" and average < lower:
+            deviations.append((lower - average, row, average, "목표 미달 부분만 보완하세요."))
+    if not deviations:
+        return None
+    _, row, average, action = max(deviations, key=lambda item: item[0])
+    face = f"Map {row['map_num']} " if row.get("map_num") is not None else ""
+    return (f"정상 범위 {lower:g}~{upper:g}µm에서 평균 두께 편차가 가장 큰 "
+            f"{face}{row['zone_id']}번 구역({average:g}µm)의 {action}")
 
 
 def report_answer(intent: str, prompt: str, analysis: Mapping, payload: Mapping,
@@ -276,6 +364,22 @@ def report_answer(intent: str, prompt: str, analysis: Mapping, payload: Mapping,
     sequence = _mapping(analysis.get("sequence_report"))
     coating = _mapping(analysis.get("coating_report"))
     pose_report = _mapping(analysis.get("pose_report"))
+    if intent == "report_trajectory_improvement":
+        guidance = _trajectory_improvement(sequence)
+        if guidance:
+            return guidance, None
+        return "이 완료 리포트에는 개선할 이동 순서나 도포 방향을 확인할 궤적 평가가 없습니다.", "analysis_unavailable"
+    if intent == "report_pass_improvement":
+        notes = [_recorded_vr_result(payload), "이 리포트에서 합격 기준 점수는 확인할 수 없습니다."]
+        if action := _priority_coating_action(analysis, coating):
+            notes.append(action)
+        order_rate = _number(sequence.get("adherence_rate"))
+        if sequence.get("analysis_status") == "available" and order_rate is not None and order_rate < 1:
+            if comparison := _flow_comparison(sequence):
+                notes.append(comparison + " 다음 훈련에서는 대표 권장 흐름을 연습하세요.")
+        if len(notes) == 2:
+            notes.append("이 리포트에서 우선 개선할 도막이나 순서 항목은 확인되지 않습니다.")
+        return " ".join(notes), None
     if intent == "report_coating_source":
         source = coating.get("source_artifact_id")
         if source == SOURCE_CROPS:
@@ -362,10 +466,7 @@ def report_answer(intent: str, prompt: str, analysis: Mapping, payload: Mapping,
         return (count + f"최초 방문 {first_text}, 대표 권장 {representative or '확인 불가'}입니다. "
                 f"누락 수와 별개로 {evaluation}입니다."), None
     if intent in ("report_vr_vs_pose", "report_pass_threshold", "report_vr_status"):
-        score = _number(payload.get("vr_score"))
-        passed = payload.get("is_pass")
-        result = ("합격" if passed is True else "불합격" if passed is False else "합격 여부 미기록")
-        recorded = f"시뮬레이터 수행 점수는 {score:g}점({result})입니다." if score is not None else "시뮬레이터 수행 점수가 기록되지 않았습니다."
+        recorded = _recorded_vr_result(payload)
         if intent == "report_vr_status":
             return f"이 훈련의 리포트 분석이 완료되었습니다. {recorded}", None
         if intent == "report_pass_threshold":
