@@ -45,6 +45,10 @@ function queryAnswers(report,target){
  target.append(make('p','qa-meta',`최초 통과 ${before.pass}개, 부분 통과 ${before.partial}개, 실패 ${before.fail}개`));
  target.append(make('p','qa-meta',`재시험 통과 ${after.pass}개, 부분 통과 ${after.partial}개, 실패 ${after.fail}개`));
  if(report.retest_environment)target.append(make('p','qa-meta',report.retest_environment));
+ if(report.regression){
+  const {count:total,retest_counts:result}=report.regression;
+  target.append(make('p','qa-meta',`기존 회귀 ${total}개 중 재시험 통과 ${result.pass}개, 부분 통과 ${result.partial}개, 실패 ${result.fail}개`));
+ }
  if(report.followup_counts){
   const result=report.followup_counts;
   target.append(make('p','qa-meta',`추가 재시험 ${report.followup_version} · 통과 ${result.pass}개, 부분 통과 ${result.partial}개, 실패 ${result.fail}개`));
@@ -75,8 +79,9 @@ function queryAnswers(report,target){
    }else if(item.baseline.verdict!=='pass'){
     if(item.retest?.verdict==='pass')answers.append(answerCard('교정 후 실제 답변 · 통과',item.retest));
     else{
-     const status=item.retest?'재시험 '+verdictNames[item.retest.verdict]:'재시험 미실시';
-     answers.append(answerCard('기대 답변 · '+status,{answer:item.expected_answer}));
+     const status=item.retest?'재시험 '+verdictNames[item.retest.verdict]:item.retest_scope||'재시험 미실시';
+     const expectation={answer:item.expected_answer,note:item.scope_note};
+     answers.append(answerCard('기대 답변 · '+status,expectation));
      if(item.retest)answers.append(answerCard('재시험 실제 답변 · '+verdictNames[item.retest.verdict],item.retest,'qa-observed'));
     }
    }else if(item.retest){

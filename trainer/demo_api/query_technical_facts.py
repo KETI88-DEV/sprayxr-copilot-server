@@ -77,6 +77,60 @@ _SALT = re.compile(r"염분|수용성\s*염|소금기")
 _OIL = re.compile(r"기름|유분|그리스|기름때")
 _ABRASIVE_MEDIA = re.compile(r"연마재|알갱이|그릿|쇼트")
 _EDGE = re.compile(r"모서리|절단부|절단면|날\s*선|날카로운")
+_COMPARE_INSPECTION = re.compile(
+    r"같[아은]|같이|대신|바꿔|환산|변환|차이|다르|다른|별도|각각|하나만|비교|통과|생략|기준.{0,8}(?:이상|이하)"
+)
+_INSPECTION_DOC_LOOKUP = re.compile(r"(?:NCS|문서|자료|매뉴얼)에서|근거(?:를|가)?\s*(?:찾|인용)", re.I)
+_INSPECTION_MEASUREMENTS = (
+    (
+        re.compile(r"격자\s*(?:절개|검사|시험)|크로스\s*컷|cross[ -]?cut", re.I),
+        re.compile(r"풀\s*오프|pull[ -]?off|인장식", re.I),
+        # ISO 2409 cross-cut and ISO 4624 pull-off: https://www.iso.org/standard/76041.html
+        # https://www.iso.org/standard/83350.html
+        "격자 절개 시험은 절개한 도막이 얼마나 떨어지는지 살펴 박리 저항을 등급으로 평가합니다. "
+        "풀오프 시험은 도막을 당겨 떼는 데 필요한 인장 응력(MPa)을 측정합니다.",
+    ),
+    (
+        re.compile(
+            r"(?:조도|거칠기|표면|[µμ]m|마이크로미터).*(?<![A-Za-z])Ra(?![A-Za-z])|"
+            r"(?<![A-Za-z])Ra(?![A-Za-z]).*(?:조도|거칠기|표면|[µμ]m|마이크로미터)",
+            re.I,
+        ),
+        re.compile(r"(?<![A-Za-z])Rz(?![A-Za-z])", re.I),
+        # ISO 21920-2 surface profile parameters: https://www.iso.org/standard/72226.html
+        "Ra는 표면 단면의 평균적인 높이 편차이고, Rz는 요철의 높낮이 폭을 보는 지표입니다. "
+        "단위는 같아도 표면의 높이 분포에 따라 두 지표의 관계가 달라집니다.",
+    ),
+    (
+        re.compile(r"먼지.{0,8}양|분진.{0,8}양|먼지.{0,8}수량"),
+        re.compile(r"입자\s*크기|입경"),
+        # ISO 8502-3 tape method: https://www.iso.org/obp/ui/#iso:std:iso:8502:-3:ed-2:v1:en
+        "먼지 양은 표면에 남아 테이프에 붙은 잔류 먼지가 얼마나 많은지를 봅니다. 입자 크기는 붙은 먼지 입자의 크기를 "
+        "따로 분류합니다. 먼지가 적어도 큰 입자가 남을 수 있습니다.",
+    ),
+    (
+        re.compile(r"도막\s*두께|건도막|\bDFT\b", re.I),
+        re.compile(r"홀리데이|holiday|도막\s*(?:끊김|불연속|연속성)\s*검사", re.I),
+        # AMPP discontinuity checks: https://protect-perform.ampp.org/fbe-application-inspection-common-challenges-and-how-to-avoid-them/
+        "도막 두께 검사는 표본 위치의 두께를 잽니다. 홀리데이 검사는 핀홀이나 미도장처럼 "
+        "도막이 끊긴 곳을 확인합니다. 두께가 적정해도 다른 위치의 끊김까지 확인된 것은 아닙니다.",
+    ),
+    (
+        re.compile(r"(?:강판|강재|모재|철판)\s*(?:잔존|남은)\s*두께"),
+        re.compile(r"도막\s*(?:두께|검사|게이지)|건도막|\bDFT\b", re.I),
+        # DeFelsko documents substrate wall and paint measurement separately:
+        # https://www.defelsko.com/resources/measurement-of-effects-of-erosion-and-corrosion
+        "강판 잔존 두께는 부식·마모 후 남은 강재의 두께입니다. 도막 두께는 강판 위에 형성된 도료층의 두께입니다. "
+        "단위를 바꿔도 측정한 대상은 그대로입니다.",
+    ),
+    (
+        re.compile(r"색상\s*(?:코드|번호)|컬러\s*(?:코드|번호)"),
+        re.compile(r"광택|유광|반광|무광"),
+        # ISO 2813 gloss measurements: https://www.iso.org/standard/56807.html
+        "색상 코드는 색을 지정하고 광택은 도장면에 비친 빛의 반사 정도를 봅니다. 같은 색에서도 "
+        "유광과 반광 마감은 달라 광택 요구사항을 별도로 확인해야 합니다.",
+    ),
+)
 
 
 def _film_measurement_answer(prompt: str, *, summarize: bool) -> str | None:
@@ -251,6 +305,14 @@ def _coating_inspection_answer(prompt: str) -> str | None:
             "블라스팅으로 생긴 표면 요철이 두께계 값에 영향을 줍니다. 매끈한 시편에서 계측기를 검증한 뒤 "
             "규격에 따라 거칠기를 보정하거나, 장비·검사 절차가 지정한 기준면에서 확인하세요."
         )
+    if (
+        _GAUGE.search(prompt) and re.search(r"모서리|경계|곡면|곡률", prompt)
+        and re.search(r"값[^.?!]{0,24}(?:튀|흔들|불안정)|값이\s*달라", prompt)
+    ):
+        return (
+            "모서리나 좁은 곡면에서는 형상과 프로브 위치 때문에 두께계 값이 흔들릴 수 있습니다. "
+            "그 값만으로 저도막을 확정할 수 없으니 장비 설명서와 시방에 맞는 프로브와 위치에서 다시 확인하세요."
+        )
     if _ADHESION.search(prompt) and re.search(r"도막|두께", prompt) and re.search(r"합격|통과|대신", prompt):
         return (
             "도막 두께의 합격으로 접착력 합격을 판정할 수 없습니다. 접착력은 시방이 지정한 별도 시험과 합격 기준으로 확인합니다."
@@ -261,6 +323,22 @@ def _coating_inspection_answer(prompt: str) -> str | None:
             "확정할 수 없습니다. 어느 경계에서 벗겨졌는지와 층간 오염·재도장 조건을 확인하세요."
         )
     return None
+
+
+def _inspection_comparison_answer(prompt: str) -> str | None:
+    """Compare distinct inspection results without treating them as training readings."""
+    if not _COMPARE_INSPECTION.search(prompt) or _INSPECTION_DOC_LOOKUP.search(prompt):
+        return None
+    explanations = [
+        explanation for first, second, explanation in _INSPECTION_MEASUREMENTS
+        if first.search(prompt) and second.search(prompt)
+    ]
+    if not explanations:
+        return None
+    return " ".join([
+        *explanations,
+        "서로 대체할 수 없으므로 시방이 요구하는 항목과 시험법을 따라 기록하고 판정하세요.",
+    ])
 
 
 def _coating_preparation_answer(prompt: str) -> str | None:
@@ -318,6 +396,8 @@ def technical_fact_answer(
     process = explicit_work_process(prompt)
     if _SITE_SPEC.search(prompt) and _SPEC_VALUE.search(prompt):
         return "해당 현장 표준서 없이는 허용 수치를 확인할 수 없습니다. 정확한 기준명이나 표준서 번호와 해당 항목을 알려 주세요."
+    if (answer := _inspection_comparison_answer(prompt)) is not None:
+        return answer
     if (answer := _process_answer(prompt, process)) is not None:
         return answer
     if (answer := _film_measurement_answer(prompt, summarize=summarize)) is not None:

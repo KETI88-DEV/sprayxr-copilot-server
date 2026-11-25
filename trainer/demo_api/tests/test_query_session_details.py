@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 
 from trainer.demo_api.sequence_store import SequenceStore
-from trainer.demo_api.tests.test_scenario_reference_query import Pipeline, client, profile, query
+from trainer.demo_api.tests.test_scenario_reference_query import Pipeline, URL, client, profile, query
 
 
 def _saved_run(use_report):
@@ -15,30 +15,37 @@ def _saved_run(use_report):
         "sequence_report": {
             "analysis_status": "available", "recommended_flow": ["2", "1", "3"],
             "first_visit_flow": ["3", "1", "2"], "skipped_zone_count": 0, "deviation_count": 1,
-            "adherence_rate": 1.0,
+            "adherence_rate": 1.0, "direction_adherence_rate": .25,
+            "direction_summary": {"evaluated_sequence_count": 4, "matched_sequence_count": 1},
+            "zone_summary": [{"zone_id": "3", "visit_count": 2, "revisit_count": 1, "deviation_count": 1}],
         },
         "coating_report": {"analysis_status": "available", "normal_band_um": [145, 190],
-                           "coating_distribution_index": None, "root_cause": None},
+                           "coating_distribution_index": None, "root_cause": None,
+                           "source_artifact_id": "QA-Map02.png",
+                           "distribution": {"below": 20, "in_band": 70, "above": 10}},
         "coating_zones": [
             {"zone_id": "1", "map_num": 1, "thickness_um": 120, "grade": "below"},
             {"zone_id": "2", "map_num": 1, "thickness_um": 220, "grade": "above"},
             {"zone_id": "3", "map_num": 1, "thickness_um": 170, "grade": "normal"},
         ],
-        "pose_report": {"analysis_status": "unavailable", "average_similarity_score": None},
+        "pose_report": {"analysis_status": "unavailable", "average_similarity_score": None, "evaluated_sequence_count": 0},
     }
     stored = SimpleNamespace(user_id="COPILOT-DEMO-USER", scenario_id="3", tool_type="spray_gun",
                              target_thickness_um=145, target_thickness_min_um=145,
-                             target_thickness_max_um=190, target_basis="session_target")
+                             target_thickness_max_um=190, target_basis="session_target",
+                             session_status="COMPLETED" if use_report else "STARTED")
     reports = SimpleNamespace(get_session=lambda _: stored,
                               latest_complete_analysis=lambda _: ("RPT-RUN", report) if use_report else None,
                               get_completion=lambda _: SimpleNamespace(
                                   session_id="RUN", report_status="complete",
-                                  payload={"user_id": stored.user_id, "scenario_id": "3", "vr_score": 78, "is_pass": True},
+                                  payload={"user_id": stored.user_id, "scenario_id": "3", "vr_score": 78, "is_pass": True,
+                                           "avg_distance_mm": 271},
                               ))
-    for index, (zone, distance) in enumerate(zip(("3", "1", "3", "2"), (210, 330, 260, 290)), start=1):
+    visits = zip(("3", "1", "3", "2"), (210, 330, 260, 290), (280, 360, 380, 420))
+    for index, (zone, distance, speed) in enumerate(visits, start=1):
         sequence_id = f"SEQ-{index:03d}"
         body = {"scenario_id": "3", "user_id": stored.user_id, "sequence_id": sequence_id, "zone_id": zone,
-                "sequence_result": {"avg_distance_mm": distance, "avg_speed_mms": 420.0},
+                "sequence_result": {"avg_distance_mm": distance, "avg_speed_mms": speed},
                 "sequence_setting": {"tool_type": "spray_gun"}}
         store.record(session_key="RUN", sequence_id=sequence_id, body_sha256=sequence_id,
                      frames=1, received_at="now", body=json.dumps(body))
@@ -126,3 +133,49 @@ def test_grinding_plan_uses_registered_grinding_data_only(tmp_path):
     response = query(client(tmp_path), prompt="스프레이 말고, 학습모드 3의 그라인딩 전용 순서를 알려줘.", summarize=False)
     assert "그라인딩" in response["answer"] and "9 → 8" in response["answer"]
     assert "1 → 4 → 7" not in response["answer"]
+
+
+@pytest.mark.parametrize("prompt, fragments", [
+    ("최종 도막 리포트가 읽은 높이맵의 파일명은 뭔가요?", ("QA-Map02.png", "높이맵")),
+    ("이 리포트에서 과도막 구역 수 비율과 과도막 면적 비율은 각각 얼마인가요?", ("1/3", "33.3%", "10/100", "10.0%")),
+    ("완료 보고서에서 순서 유사도와 방향 준수율은 왜 다른가요? 방향 평가와 일치 건수도 알려 주세요.", ("100%", "25%", "4회", "1회")),
+    ("완료 기록 기준 어느 구역에 두 번 방문했고 재방문과 순서 이탈은 각각 몇 번인가요?", ("3번", "방문 2회", "재방문 1회", "순서 이탈 1회")),
+    ("저장된 분사 평균 이격거리의 중앙값을 리포트 평균과 구별해 줘.", ("275mm", "271mm")),
+    ("SEQ-003의 구역과 저장된 평균 이격거리를 알려줘.", ("SEQ-003", "3번", "260mm")),
+    ("SEQ-005의 이격거리를 찾아줘.", ("SEQ-005", "없습니다")),
+    ("리플레이 분석이 완료됐나요? VR 점수와 합격도 확인해 주세요.", ("완료", "78점", "합격")),
+    ("자세를 못 채점했다면 분사 기록도 없는지, 리포트 채점 건수와 같이 비교해 주세요.", ("저장된 분사 4개", "자세 채점 0개")),
+    ("3번에 처음 갔을 때와 다시 갔을 때 이격거리와 이동 속도의 차이가 최종 도막의 원인인가요?",
+     ("210mm", "260mm", "50mm 증가", "280mm/s", "380mm/s", "100mm/s 증가", "원인을 입증할 수는 없습니다")),
+])
+def test_query_report_and_raw_record_scopes_use_authoritative_rows(tmp_path, prompt, fragments):
+    store, reports = _saved_run(True)
+    pipeline = Pipeline()
+    response = query(client(tmp_path, store=store, reports=reports, pipeline=pipeline),
+                     session_id="RUN", prompt=prompt, summarize=False)
+    assert all(fragment in response["answer"] for fragment in fragments), response["answer"]
+    assert "RPT-RUN" not in response["answer"]
+    assert not pipeline.calls
+
+
+def test_completed_vr_result_cannot_carry_to_another_session_in_one_conversation(tmp_path):
+    store, reports = _saved_run(True)
+    old_report = reports.latest_complete_analysis
+    reports.latest_complete_analysis = lambda session_id: old_report(session_id) if session_id == "RUN" else None
+    pipeline = Pipeline()
+    app_client = client(tmp_path, store=store, reports=reports, pipeline=pipeline)
+
+    def submit(session_id, prompt):
+        response = app_client.post(URL, json={
+            "user_id": "COPILOT-DEMO-USER", "scenario_id": "3", "session_id": session_id,
+            "task_type": "knowledge_search", "prompt": prompt,
+        }, headers={"X-Copilot-Conversation": "scoped-result-test"})
+        assert response.status_code == 200
+        return response.json()["data"]
+
+    old = submit("RUN", "완료 리포트 분석 상태와 VR 시뮬레이터 점수, 합격 여부만 알려 줘.")
+    assert "78점(합격)" in old["answer"]
+    fresh = submit("NEW", "새 훈련에도 앞 기록의 그 점수와 합격이 나왔나요?")
+    assert fresh["context_status"] == "not_available"
+    assert "78" not in fresh["answer"] and "아직 확인할 수 없습니다" in fresh["answer"]
+    assert not pipeline.calls

@@ -81,3 +81,33 @@ def test_missing_term_evidence_leaves_the_existing_route_available(monkeypatch):
 def test_correction_switches_to_the_named_tool():
     answer = technical_fact_answer("그라인더 말고 스프레이 건을 한 곳에 계속 대면?")
     assert answer and "과도막" in answer and "과삭" not in answer
+
+
+@pytest.mark.parametrize(
+    ("question", "required"),
+    [
+        ("접착력 검사표의 격자 절개 등급을 풀오프 MPa 값으로 바꿔 적어도 되나요?", ("격자", "인장 응력", "대체")),
+        ("크로스컷과 pull-off의 결과를 검사표에 같은 항목으로 적을 수 있나요?", ("박리", "인장 응력", "대체")),
+        ("시방에서 요구한 조도 Rz 대신 조도계의 Ra를 써도 되나요?", ("평균", "높낮이", "대체")),
+        ("블라스팅 표면 검사 때 Ra랑 Rz가 둘 다 마이크로미터면 환산해도 돼요?", ("평균", "높낮이", "대체")),
+        ("먼지 테이프에서 먼지 양하고 입자 크기를 하나만 기록하면 안 돼요?", ("잔류 먼지", "입자", "시방")),
+        ("도막 두께 시방을 통과했으니 홀리데이 검사는 생략해도 돼요?", ("표본", "핀홀", "대체")),
+        ("강판 잔존 두께 mm 값을 도막 두께 µm로 환산해 항목을 대신 적으래요.", ("남은 강재", "도료층", "대체")),
+        ("도장표에서 색상 번호가 같다고 유광/반광을 같은 항목으로 검사해도 되나요?", ("반사", "광택 요구사항", "별도")),
+        ("두께계 값이 모서리 가까이 가면 튀는데 저도막이라고 써요?", ("프로브", "확정할 수 없으니", "시방")),
+    ],
+)
+def test_inspection_methods_keep_their_distinct_result_types(question, required):
+    answer = technical_fact_answer(question)
+    assert answer and all(word in answer for word in required)
+
+
+@pytest.mark.parametrize("question", [
+    "풀오프 시험의 장비 설치 방법을 문서에서 찾아 주세요.",
+    "Ra와 Rz라고 이름 붙인 두 작업자는 같은 팀인가요?",
+    "NCS 문서에서 격자 절개와 풀오프가 어떤 차이인지 근거를 찾아 주세요.",
+    "이번 2번 구역의 도막 두께 합격 기준을 확인해 주세요.",
+    "홀리데이 검사표를 보내줄 테니 실제 결과를 보고 판정해 주세요.",
+])
+def test_inspection_comparisons_do_not_replace_document_or_off_topic_queries(question):
+    assert technical_fact_answer(question) is None

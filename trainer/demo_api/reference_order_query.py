@@ -659,11 +659,14 @@ def answer_session_facts(query, sequences, reports, *, previous_prompt: str = ""
                                                      **coating_assessment.session_limits(session))
         answer, reason = query_session_details.project_distribution(prompt, target)
         return _unavailable(answer, reason) if reason else LiveSessionAnswer(answer)
-    if detail == "target_provenance":
+    if detail in {"target_provenance", "target_range_midpoint"}:
         if session is None or session_owner != query.user_id:
-            return _unavailable("시작 요청을 확인할 수 없어 목표 범위가 명시됐는지 판단할 수 없습니다.", "session_required")
+            return _unavailable("시작 요청을 확인할 수 없어 적용된 목표 범위를 판단할 수 없습니다.", "session_required")
         lower, upper = coating_assessment.resolve_band(coating_assessment.session_target(session),
                                                         **coating_assessment.session_limits(session))
+        if detail == "target_range_midpoint":
+            midpoint = (lower + upper) / 2
+            return LiveSessionAnswer(f"이 세션의 정상 범위 {lower:g}~{upper:g}µm의 중앙값은 {midpoint:g}µm입니다. 진행률 계산은 범위 하한인 {lower:g}µm를 목표 두께로 사용합니다.")
         basis = getattr(session, "target_basis", None)
         if basis == "session_target":
             return LiveSessionAnswer(f"세션 시작 요청에 도막 기준이 명시되었으며 적용 범위는 {lower:g}~{upper:g}µm입니다. 기본값과 같아도 입력을 생략한 것은 아닙니다.")
@@ -674,6 +677,17 @@ def answer_session_facts(query, sequences, reports, *, previous_prompt: str = ""
     if detail == "abrasive_usage":
         return _unavailable("블라스팅 세션의 시작 기록은 연마재 사용량 계측값이 아닙니다. 이 세션에서 연마재 소비량이 0kg이었는지 확인할 측정 자료가 없습니다.",
                             "analysis_unavailable")
+    if detail == "blasting_start_evidence":
+        if session is None or session_owner != query.user_id or process_from_tool_type(session.tool_type) != "blasting":
+            return _unavailable("선택한 블라스팅 세션의 시작 기록과 계측 자료를 확인할 수 없습니다.", "session_required")
+        plan = sequence_engine.reference_plan(scenario_id=stored_scenario, process="blasting") if sequence_engine else None
+        first = (plan.get("flow") or [None])[0] if plan else None
+        recommended = f"등록된 블라스팅 첫 권장 구역은 {first}번입니다. " if first is not None else ""
+        stored = sum(accessible(body) for body in sequences.session_bodies(query.session_id))
+        observed = f"현재 저장된 작업 시퀀스는 {stored}개입니다." if stored else "이 세션에서 실제 작업 시퀀스는 확인되지 않습니다."
+        return LiveSessionAnswer(recommended + observed + " 시작 안내만으로 실제 작업이나 표면 조도를 판정할 수 없습니다.")
+    if detail == "response_mode_record":
+        return LiveSessionAnswer("빠른안내와 상세분석은 Query 답변의 모델과 설명 수준을 선택하는 기능입니다. 옵션을 바꿔도 저장된 시뮬레이터 점수나 완료 도막 수치를 다시 계산하거나 기록하지 않습니다.")
     if detail == "coating_change":
         bodies = [body for body in sequences.session_bodies(query.session_id) if accessible(body)]
         selected = zone or (str(bodies[-1].get("zone_id")) if bodies else None)
@@ -706,24 +720,31 @@ def answer_session_facts(query, sequences, reports, *, previous_prompt: str = ""
         get_report = getattr(reports, "latest_complete_analysis", None)
         found = get_report(query.session_id) if session_owner == query.user_id and callable(get_report) else None
         if found is None:
+            if detail == "report_vr_status":
+                return _unavailable("이 훈련에서 완료된 리포트와 확정된 시뮬레이터 점수·합격 결과를 아직 확인할 수 없습니다.", "report_missing")
+            if detail == "report_missing_coating":
+                return _unavailable("현재 훈련에 확인된 완료 도막 측정이 없습니다. 빈칸을 측정값 0µm나 미도장 100%로 기록할 수 없습니다.", "report_missing")
             return _unavailable("이 세션에서 질문에 필요한 완료 리포트를 확인할 수 없습니다.", "report_missing")
         report_id, analysis = found
         payload = {}
-        if detail in ("report_vr_vs_pose", "report_pass_threshold"):
+        if detail in {"report_vr_vs_pose", "report_pass_threshold", "report_vr_status", "report_pass_vs_coating",
+                      "report_distance_median"}:
             load = getattr(reports, "get_completion", None)
             row = load(report_id) if callable(load) else None
             if row is not None and row.session_id == query.session_id and row.report_status == "complete":
                 candidate = row.payload
                 if candidate.get("user_id") == query.user_id and _matches_scenario(query.scenario_id or stored_scenario, candidate.get("scenario_id")):
                     payload = candidate
-        bodies = [body for body in sequences.session_bodies(query.session_id) if accessible(body)] if detail == "report_visits" else []
+        sequence_reads = {"report_visits", "report_pose_coverage", "report_distance_median"}
+        bodies = [body for body in sequences.session_bodies(query.session_id) if accessible(body)] if detail in sequence_reads else []
         answer, reason = query_session_details.report_answer(detail, prompt, analysis, payload, bodies)
         return _unavailable(answer, reason) if reason else LiveSessionAnswer(answer)
     if detail and detail != "coating_sources":
         if detail in ("visit_distance_change", "maximum_sequence_distance", "sequence_zone"):
             bodies = [body for body in sequences.session_bodies(query.session_id) if accessible(body)]
         else:
-            sequence_id = sequences.latest_sequence_id(query.session_id)
+            sequence_id = (query_session_details.sequence_id_in_prompt(prompt) if detail == "sequence_measurement"
+                           else sequences.latest_sequence_id(query.session_id))
             body = sequences.load_body(session_key=query.session_id, sequence_id=sequence_id) if sequence_id else None
             bodies = [body] if body is not None and accessible(body) else []
         answer, reason = query_session_details.sequence_answer(detail, prompt, bodies)

@@ -447,3 +447,34 @@ def test_vietnamese_explicit_quoted_translation_passes_only_the_source_sentence(
 ])
 def test_label_surroundings_do_not_replace_the_actual_question(prompt):
     assert _api().parse_translation_request(prompt) is None
+
+
+def test_english_quoted_translation_accepts_bounded_ui_purpose():
+    request = _api().lookup_translation_question("Translate 「短喷枪」 from Chinese into English for the tool selector.")
+    assert request is not None and request.answer == "Short Spray Gun"
+    assert request.source_kind == "tsb_reference"
+
+
+@pytest.mark.parametrize(("prompt", "source", "target"), [
+    ("Tolong terjemahkan “검사 장비를 점검한 뒤 작업을 시작하세요.” ke bahasa Indonesia. Cukup hasil terjemahannya.",
+     "검사 장비를 점검한 뒤 작업을 시작하세요.", "id"),
+    ("请把“读取值和目标值分开显示”翻译成韩语。只给译文。", "读取值和目标值分开显示", "ko"),
+    ("Переведите «В отчёте указана оценка, полученная в симуляторе» на английский. Только перевод.",
+     "В отчёте указана оценка, полученная в симуляторе", "en"),
+    ("‘트리거를 1.5 s 이상 누른 경우에만 현재 패스 시간을 기록합니다.’를 베트남어로 옮겨줘. 기호와 단위는 그대로.",
+     "트리거를 1.5 s 이상 누른 경우에만 현재 패스 시간을 기록합니다.", "vi"),
+])
+def test_explicit_quoted_native_language_requests_do_not_translate_the_entire_prompt(prompt, source, target):
+    request = _api().parse_translation_request(prompt)
+    assert request is not None and request.source_text == source and request.target_language == target
+    assert _api().lookup_translation_question(prompt) is None
+
+
+@pytest.mark.parametrize("prompt", [
+    "Translate 「短喷枪」 from Chinese into English for the tool selector and tell me the safe pressure.",
+    "Tolong terjemahkan ‘노즐’ dan ‘스프레이 건’ ke bahasa Indonesia.",
+    "请解释“目标值”的含义，使用韩语。",
+    "Переведите «отчёт» на английский и корейский.",
+])
+def test_native_translation_keeps_multi_subject_and_explanatory_prompts_separate(prompt):
+    assert _api().parse_translation_request(prompt) is None

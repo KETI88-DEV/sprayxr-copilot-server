@@ -36,6 +36,8 @@ def _named(name):
     ("그럼 원인은?", ["이격거리는 얼마가 적당해?"], None),
     ("이격거리는 얼마가 적당해?", ["충전전로 최소 이격거리는?"], "적정 분사 거리"),  # 전기 안전거리는 이어받지 않는다(2026-11-20 분사 거리 묶음)
     ("후도막형 도료는 왜 써?", [], None),
+    ("NCS 선박도장 자료에서 도장관리도의 구역별 정보 항목을 찾아 주세요.", [], "도장관리도"),
+    ("시방과 함께 보는 도장 관리 도면에는 어떤 물량 정보가 있나요?", [], "도장관리도"),
 ])
 def test_question_type_is_found(prompt, previous, expected):
     found = matched_prompt(prompt, previous)
@@ -46,6 +48,12 @@ def test_every_type_uses_no_excluded_chunk_and_has_a_rule():
     excluded = set(json.loads((CONFIGS / "evidence_exclusions.json").read_text(encoding="utf-8"))["조각"])
     for entry in _TYPES:
         assert entry["조각"] and entry["규칙"] and not excluded & set(entry["조각"]), entry["이름"]
+
+
+def test_coating_plan_pins_actual_corrected_ncs_passages():
+    evidence = json.loads((CONFIGS / "evidence_corrections.json").read_text(encoding="utf-8"))["조각"]
+    plan = _named("도장관리도")
+    assert all("도장관리도는 도장시방서를 기준으로" in evidence[chunk]["본문"] for chunk in plan["조각"])
 
 
 def test_cause_rule_forbids_flipping_cause_and_effect():

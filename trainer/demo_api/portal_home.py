@@ -15,6 +15,7 @@ _ASSETS = Path(__file__).with_name('assets')
 _QUERY_QA_FILES = {
     1: 'query_api_qa_2026-11-25.json',
     2: 'query_api_qa_round2_2026-11-25.json',
+    3: 'query_api_qa_round3_2026-11-25.json',
 }
 
 @lru_cache(maxsize=1)
