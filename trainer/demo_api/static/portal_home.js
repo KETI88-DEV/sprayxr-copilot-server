@@ -44,6 +44,7 @@ function queryAnswers(report,target){
  const before=report.baseline_counts,after=report.retest_counts;
  target.append(make('p','qa-meta',`최초 통과 ${before.pass}개, 부분 통과 ${before.partial}개, 실패 ${before.fail}개`));
  target.append(make('p','qa-meta',`재시험 통과 ${after.pass}개, 부분 통과 ${after.partial}개, 실패 ${after.fail}개`));
+ if(report.retest_environment)target.append(make('p','qa-meta',report.retest_environment));
  if(report.followup_counts){
   const result=report.followup_counts;
   target.append(make('p','qa-meta',`추가 재시험 ${report.followup_version} · 통과 ${result.pass}개, 부분 통과 ${result.partial}개, 실패 ${result.fail}개`));
@@ -59,8 +60,10 @@ function queryAnswers(report,target){
    if(group!==item.group){group=item.group;list.append(make('h4','qa-group',group));}
    const question=make('details','qa-question');question.dataset.questionId=item.id;
    const heading=make('summary','qa-question-summary');
+   const corrected=item.baseline.verdict!=='pass'&&(item.followup??item.retest)?.verdict==='pass';
+   const verdict=corrected?'pass':item.baseline.verdict;
    heading.append(make('span','qa-id',item.id),make('span','qa-prompt',item.question),
-                  make('span','qa-verdict '+item.baseline.verdict,verdictNames[item.baseline.verdict]));
+                  make('span','qa-verdict '+verdict,corrected?'교정 완료':verdictNames[verdict]));
    const answers=make('div','qa-answer-grid');
    answers.append(answerCard('최초 실제 답변',item.baseline));
    if(item.followup){

@@ -53,6 +53,30 @@ _LOW_FILM_DEFINITION = re.compile(
 )
 _THICK_DEFINITION = re.compile(r"두껍게\s*(?:칠|발)|두꺼운\s*(?:도막|상태)")
 _DEFINED_TERM = re.compile(r"(?:(?:이|라)는\s*(?:게|건)|뜻|의미|용어|말이(?:야|에요|인가))")
+_SUBSTRATE_TEMP = re.compile(r"(?:강판|철판|피도면|(?:바탕|강재)?\s*표면)\s*(?:표면\s*)?온도")
+_GAUGE = re.compile(r"도막\s*(?:게이지|측정기)|두께\s*(?:계|게이지|측정기)|DFT\s*(?:게이지|측정기)", re.I)
+_BASE_COAT = re.compile(r"하도|밑칠|프라이머|중도", re.I)
+_SEPARATE_COAT = re.compile(r"상도\s*(?:만|두께)|(?:상도|마감칠).{0,20}(?:따로|별도|분리)")
+_ADHESION = re.compile(r"부착력|접착력")
+_TAKE_READING = re.compile(r"측정|재는|잰|찍[었어]|게이지")
+_ROUGHEST_SURFACE = re.compile(r"블라스[트팅]|거칠|요철|조도")
+_RECOAT = re.compile(r"덧칠|재도장|상도\s*올|한\s*번\s*더\s*칠")
+_TOUCH_DRY = re.compile(r"지촉\s*건조|손.{0,15}(?:안\s*묻|묻어나지\s*않)|만져도.{0,10}(?:안\s*묻|묻어나지\s*않)")
+_POT_LIFE = re.compile(r"가사\s*시간|가용\s*시간|\bpot\s*life\b", re.I)
+_VOLUME_RATIO = re.compile(r"(?:부피|용적|체적)\s*(?:비|기준)")
+_MASS_RATIO = re.compile(r"전자\s*저울|저울|(?:질량|중량|무게)\s*(?:비|기준)")
+_TOP_PEEL = re.compile(r"(?:상도|마감\s*층|위에\s*칠한\s*층).{0,28}(?:벗겨|들뜨|들떴|들리|박리|떼)")
+_BOTTOM_REMAINS = re.compile(r"(?:하도|프라이머|아래\s*(?:칠|층|도막)|밑\s*(?:칠|층|도막)).{0,24}(?:그대로|붙어|남[아았])")
+_FAN_TAIL = re.compile(
+    r"테일링|핑거링|(?:분사|분무)\s*(?:패턴|자국|모양|폭).{0,22}(?:양\s*(?:끝|쪽)|가장자리).{0,16}(?:줄|띠)"
+)
+_AIRLESS = re.compile(r"에어리스|airless", re.I)
+_AIR_ATOMIZATION = re.compile(r"공기\s*(?:분무|분사|스프레이)|압축\s*공기")
+_VISIBLE_INSPECTION = re.compile(r"눈으로|육안|눈에\s*안\s*띄|보이지|안\s*보")
+_SALT = re.compile(r"염분|수용성\s*염|소금기")
+_OIL = re.compile(r"기름|유분|그리스|기름때")
+_ABRASIVE_MEDIA = re.compile(r"연마재|알갱이|그릿|쇼트")
+_EDGE = re.compile(r"모서리|절단부|절단면|날\s*선|날카로운")
 
 
 def _film_measurement_answer(prompt: str, *, summarize: bool) -> str | None:
@@ -125,6 +149,58 @@ def _process_answer(prompt: str, process: str | None) -> str | None:
     if _SHOT.search(prompt) and _GRIT.search(prompt) and _COMPARISON.search(prompt):
         # Abrasive manufacturer product specification: Winoa, Sample Card (SAE Spec).
         return "대표적인 강재 연마재에서 쇼트는 둥근 입자, 그릿은 각진 입자입니다. 모양에 따라 표면에 남기는 요철도 달라집니다."
+    if (
+        _SALT.search(prompt) and _VISIBLE_INSPECTION.search(prompt) and re.search(r"검사|확인|측정|넘어", prompt)
+        and re.search(r"판|피도면|표면|도막|바닷물|블라스[트팅]", prompt)
+    ):
+        return (
+            "수용성 염분은 눈에 띄지 않아도 남을 수 있습니다. 승인된 방식으로 표면에서 염분을 채취해 확인하세요. "
+            "예를 들어 브레슬법으로 채취한 용액의 전도도를 재고, 판정은 현장 시방의 기준을 적용합니다."
+        )
+    if blasting:
+        return _blasting_preparation_answer(prompt)
+    if re.search(r"탄소강|연강|철판", prompt) and re.search(r"스테인리스|스텐|STS", prompt, re.I) and re.search(r"디스크|연마석|연삭석", prompt):
+        return (
+            "탄소강을 갈고 남은 철 입자가 디스크를 통해 스테인리스에 옮아 녹이나 표면 오염을 일으킬 수 있습니다. "
+            "스테인리스용으로 지정된 오염되지 않은 디스크를 사용하세요."
+        )
+    if (
+        re.search(r"용접\s*비드", prompt) and _GRINDING.search(prompt)
+        and re.search(r"(?:철판|모재|바탕)\s*(?:높이|면)|높이까지|평평하게|평탄하게", prompt)
+    ):
+        return (
+            "용접 비드의 마감 수준은 용접·도장 시방과 현장 승인 조건을 따르세요. 돌출부나 스패터를 정리하되 "
+            "주변 철판 높이까지 임의로 갈거나 비드·모재의 단면을 줄이면 안 됩니다."
+        )
+    return None
+
+
+def _blasting_preparation_answer(prompt: str) -> str | None:
+    if _OIL.search(prompt) and re.search(r"먼저|순서|탈지|그대로|날아갈", prompt):
+        return (
+            "표면의 기름이나 그리스는 승인된 방법으로 먼저 제거한 뒤 블라스팅하세요. 기름이 남은 채 연마재를 쏘면 "
+            "주변 표면이나 회수 연마재가 다시 오염될 수 있습니다."
+        )
+    if re.search(r"(?:다시|새로|오늘).{0,18}(?:녹슬|녹\s*이|녹\s*이\s*생|발청)", prompt) and re.search(r"하도|도장|칠해", prompt):
+        return (
+            "어제의 검사 결과는 오늘의 표면 상태를 보증하지 않습니다. 지금 생긴 녹과 오염을 다시 확인하고, "
+            "현장 시방이 요구하는 표면 상태로 되돌린 뒤 하도를 칠하세요."
+        )
+    if _ABRASIVE_MEDIA.search(prompt) and re.search(r"회수|재사용|다시.{0,16}(?:넣|써|사용)", prompt):
+        return (
+            "먼저 연마재가 재사용 가능한 종류인지 확인하세요. 회수분에서 도막 찌꺼기, 이물질과 파쇄된 미세 입자를 "
+            "분리하고 청정도·입도 기준에 맞는 것만 재사용합니다."
+        )
+    if re.search(r"공기", prompt) and re.search(r"압력계|청정도|오일|수분|물기|검사.{0,15}뭐|검사.{0,15}무엇", prompt):
+        return (
+            "압력계는 공기 속 오일이나 물을 보여주지 않습니다. 분사 공기에 그런 오염물이 섞이면 표면을 다시 오염시킬 수 "
+            "있으므로 승인된 공기 청정도 검사(예: 흰 흡수지 검사)로 따로 확인하세요."
+        )
+    if _EDGE.search(prompt) and re.search(r"둥글|라운딩|라운드", prompt):
+        return (
+            "블라스팅은 표면을 세정하고 조도를 만드는 공정입니다. 요구된 모서리 라운딩은 절단부 다듬기나 연삭 등 "
+            "승인된 방법으로 따로 처리하고 현장 시방에 맞게 확인하세요."
+        )
     return None
 
 
@@ -156,6 +232,79 @@ def _coating_definition_answer(prompt: str) -> str | None:
     return None
 
 
+def _coating_inspection_answer(prompt: str) -> str | None:
+    if (
+        _SPRAY.search(prompt) and _SUBSTRATE_TEMP.search(prompt) and re.search(r"습도|이슬점|결로", prompt)
+        and re.search(r"왜|이유|무슨\s*관련", prompt)
+    ):
+        return (
+            "공기의 온도와 습도로 구한 이슬점을 강판의 실제 온도와 비교해 결로 위험을 확인합니다. "
+            "강판 온도는 기온과 다를 수 있어 따로 재며, 도장 가능 여부는 현장 시방과 도료 기준으로 확인합니다."
+        )
+    if _BASE_COAT.search(prompt) and _SEPARATE_COAT.search(prompt) and _GAUGE.search(prompt) and _TAKE_READING.search(prompt):
+        return (
+            "일반 도막 게이지로 잰 한 값은 여러 층을 합친 전체 두께입니다. 상도 두께를 구하려면 같은 위치의 상도 전후 값을 "
+            "비교하거나 그 도막에 맞는 층별 측정법을 써야 합니다."
+        )
+    if _ROUGHEST_SURFACE.search(prompt) and _GAUGE.search(prompt) and re.search(r"영점|교정|보정", prompt):
+        return (
+            "블라스팅으로 생긴 표면 요철이 두께계 값에 영향을 줍니다. 매끈한 시편에서 계측기를 검증한 뒤 "
+            "규격에 따라 거칠기를 보정하거나, 장비·검사 절차가 지정한 기준면에서 확인하세요."
+        )
+    if _ADHESION.search(prompt) and re.search(r"도막|두께", prompt) and re.search(r"합격|통과|대신", prompt):
+        return (
+            "도막 두께의 합격으로 접착력 합격을 판정할 수 없습니다. 접착력은 시방이 지정한 별도 시험과 합격 기준으로 확인합니다."
+        )
+    if _TOP_PEEL.search(prompt) and _BOTTOM_REMAINS.search(prompt):
+        return (
+            "하도는 붙어 있고 위층만 들렸다면 층간 박리 가능성이 있습니다. 이 모습만으로 철판과 하도의 접착 불량을 "
+            "확정할 수 없습니다. 어느 경계에서 벗겨졌는지와 층간 오염·재도장 조건을 확인하세요."
+        )
+    return None
+
+
+def _coating_preparation_answer(prompt: str) -> str | None:
+    if _TOUCH_DRY.search(prompt) and _RECOAT.search(prompt):
+        return (
+            "손에 묻어나지 않는 지촉건조 상태만으로 덧칠 시점을 판단할 수 없습니다. "
+            "제품 기술자료(TDS)에 적힌 해당 온도의 최소·최대 재도장 간격을 확인하세요."
+        )
+    if _POT_LIFE.search(prompt) and re.search(r"지났|넘었|초과|끝났|경과", prompt) and re.search(r"희석|신너|시너|써도|사용", prompt):
+        return (
+            "가사시간이 지난 배합물은 흐르더라도 사용하지 마세요. 희석제는 이미 진행된 경화 반응이나 가사시간을 되돌리지 못합니다. "
+            "제조사 지침에 따라 남은 도료를 처리하고 새로 배합하세요."
+        )
+    if _VOLUME_RATIO.search(prompt) and _MASS_RATIO.search(prompt) and re.search(r"배합|혼합|경화제", prompt):
+        return (
+            "부피비를 저울의 질량비에 그대로 적용할 수는 없습니다. 성분의 밀도가 다르면 같은 부피비라도 질량비가 달라집니다. "
+            "제품 지침의 부피비로 재거나 제조사가 제공한 질량비를 확인하세요."
+        )
+    if (
+        re.search(r"하도|프라이머|밑칠", prompt) and re.search(r"상도|마감\s*칠", prompt)
+        and re.search(r"하는\s*일|무슨\s*일|역할|어떤\s*일|어떤\s*기능", prompt)
+        and not re.search(r"(?:문서|자료|매뉴얼|NCS)에서|근거를?\s*(?:찾|인용)", prompt, re.I)
+    ):
+        return (
+            "하도는 바탕면에 잘 붙어 후속 도막의 바탕을 만들고 부식을 막는 데 도움을 줍니다. "
+            "상도는 햇빛·비 등 외부 환경에서 도막을 보호하고 색상과 외관을 유지합니다. 구체 역할은 도장 시스템에 따라 달라집니다."
+        )
+    return None
+
+
+def _spray_equipment_answer(prompt: str) -> str | None:
+    if _FAN_TAIL.search(prompt) and re.search(r"압력|원인|왜", prompt):
+        return (
+            "분사 폭 양 가장자리에 진한 띠가 생기면 테일링일 수 있습니다. 압력 부족뿐 아니라 도료 점도, 팁 상태나 "
+            "공급 상태도 확인하세요. 압력을 최대로 올리기보다 장비와 도료가 허용하는 조건에서 시험 분사 패턴을 확인하세요."
+        )
+    if _AIRLESS.search(prompt) and _AIR_ATOMIZATION.search(prompt) and re.search(r"무화|잘게|흩트|원리|차이|둘\s*다", prompt):
+        return (
+            "일반 공기분무 건은 압축공기로 도료를 잘게 흩뜨립니다. 에어리스는 가압된 도료가 작은 팁 구멍을 지나면서 "
+            "무화됩니다. 펌프를 구동하는 공기나 일부 장비의 보조 공기는 무화 방식과 구분합니다."
+        )
+    return None
+
+
 def technical_fact_answer(
     prompt: str,
     *,
@@ -174,9 +323,16 @@ def technical_fact_answer(
     if (answer := _film_measurement_answer(prompt, summarize=summarize)) is not None:
         return answer
     if process in ("blasting", "grinding"):
+        if _GAUGE.search(prompt):
+            return _coating_inspection_answer(prompt)
         return None
     if not _SIMULATION.search(prompt):
-        return _coating_definition_answer(prompt)
+        return (
+            _coating_definition_answer(prompt)
+            or _coating_inspection_answer(prompt)
+            or _coating_preparation_answer(prompt)
+            or _spray_equipment_answer(prompt)
+        )
     if _EXCESS_FILM.search(prompt) and _UNPAINTED.search(prompt) and _PROGRESS_OFFSET.search(prompt):
         return (
             "두껍게 칠한 부분은 옆의 미도장을 보상하지 않습니다. 각 화소의 목표 두께 도달률은 최대 100%이고, "

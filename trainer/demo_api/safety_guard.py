@@ -3,7 +3,7 @@
 "에어리스 건 끝을 손가락으로 막아서 확인해도 되나요?"에 외국어 답 10개 중 8개가 위험한 행동을 허락했다.
 허락형 질문 낱말을 늘려 가는 방식은 구멍이 계속 남아(검토 두 번) 위험 주제 판정으로 바꿨다.
 
-1. 위험 주제(`hazard_class`): 묻는 꼴과 상관없이 위험 종류로 고른다 — 손이 건 끝에 닿음, 고압 분사, 압력 해제,
+1. 위험 주제(`hazard_class`): 묻는 꼴과 상관없이 위험 종류로 고른다 — 고압 주입 손상, 손이 건 끝에 닿음, 고압 분사, 압력 해제,
    환기·밀폐, 보호구, 유기용제, 화기, 접지·정전기, 어지러움·건강, 고소, 감전.
 2. 위험 주제 질문은 대화 경로·측정값 짧은 답으로 보내지 않고 문서 검색으로 답한다(경로는 copilot_router).
 3. 답 검사(`guard_answer`): 손이 건 끝에 닿는 질문은 늘 고정 답. 그 밖은 답에 허락하는 말(네·괜찮·해도 됩니다·무방·
@@ -25,6 +25,14 @@ CONSERVATIVE_ANSWER: Final = "확인되지 않은 작업은 하지 마세요. �
 #       DOC-doc_0036-C0062 "에어리스 스프레이의 고압 분사에 의하여 도료 및 시너 등이 눈, 피부 등에 침투되는 위험에 주의한다."
 HIGH_PRESSURE_ANSWER: Final = ("건 끝을 손·손가락으로 막지 마세요. 고압 도료·시너가 피부·눈에 침투할 수 있습니다. "
                                "장비를 멈추고 압력을 뺀 뒤 지침이나 관리자에게 확인하세요.")
+INJECTION_INJURY_ANSWER: Final = (
+    "즉시 작업을 중단하고 응급실에서 진료를 받으세요. 상처가 작아도 고압 도료가 피부 안으로 들어갔을 수 있습니다. "
+    "의료진에게 고압 분사로 다쳤다고 말하고, 가능하면 도료 제품명이나 SDS를 알려 주세요."
+)
+_INJECTION_INJURY_ENGLISH: Final = (
+    "Stop work immediately and get emergency medical care. Even a small wound may be a high-pressure paint injection injury. "
+    "Tell the medical team what happened and give them the paint name or its safety data sheet, if available."
+)
 # 빠른 안내(한 줄 60자)의 고정 답: 앞 두 문장만 남기면 조치 문장이 빠지므로 금지와 조치 문장을 남긴다(2026-11-16).
 QUICK_HIGH_PRESSURE_ANSWER: Final = "건 끝을 손·손가락으로 막지 마세요. 장비를 멈추고 압력을 뺀 뒤 지침이나 관리자에게 확인하세요."
 # 고정 고압 답의 답 번역이 실패할 때만 쓰는 문장(v3.4.5). 운영 우즈베크어는 "Incomplete translation"으로 늘 실패했다.
@@ -55,7 +63,9 @@ _HIGH_PRESSURE_FALLBACK: Final = {
 
 
 def fixed_answer_translation(answer: str, language: str) -> str | None:
-    """고정 고압 답을 그 언어로 미리 옮겨 둔 문장. 다른 답이나 한국어는 None — 답 번역 실패 때만 부른다."""
+    """고정 안전 답의 번역이 실패했을 때 사용할 사전 번역 문장."""
+    if language == "en" and answer == INJECTION_INJURY_ANSWER:
+        return _INJECTION_INJURY_ENGLISH
     return _HIGH_PRESSURE_FALLBACK.get(language) if answer in (HIGH_PRESSURE_ANSWER, QUICK_HIGH_PRESSURE_ANSWER) else None
 
 
@@ -64,16 +74,36 @@ HIGH_PRESSURE_CITATIONS: Final =("DOC-doc_0219-C0084", "DOC-doc_0036-C0062")
 
 @dataclass(frozen=True)
 class HazardClass:
-    """위험 종류 하나: 고정 문장(허락하는 답을 바꿀 때), 주의 한 줄(답에 덧붙일 때), 근거 청크."""
+    """위험 종류 하나: 고정 문장, 주의 한 줄, 문서 청크 또는 확인한 외부 원문."""
 
     answer: str
     caution: str
     citations: tuple[str, ...] = ()
+    source_urls: tuple[str, ...] = ()
 
 
-# 근거 청크는 운영 RAG 메타데이터(2026-11-14 사본)에서 찾았다. 문장은 그 청크에 있는 내용만 쓴다.
+# 운영 문서 청크로 확인한 경우 citations, 제조사·안전기관의 원문을 확인한 경우 source_urls를 기록한다.
+# 외부 원문은 검토용 메타데이터이며 요청의 RAG 인용으로 내보내지 않는다.
 CLASSES: Final[dict[str, HazardClass]] = {
     "hand_tip": HazardClass(HIGH_PRESSURE_ANSWER, HIGH_PRESSURE_ANSWER, HIGH_PRESSURE_CITATIONS),
+    "injection_injury": HazardClass(
+        INJECTION_INJURY_ANSWER, INJECTION_INJURY_ANSWER,
+        source_urls=("https://www.graco.com/content/dam/graco/com_documents/FCD/FDC0688/FDC0688EN.pdf",)),
+    "cutting_wheel_side": HazardClass(
+        "측면 연삭용으로 표시되지 않은 절단석은 옆면으로 갈지 마세요. 옆으로 힘이 가해지면 디스크가 파손될 수 있습니다. "
+        "표시와 장비 설명서에 맞는 연삭용 디스크를 사용하세요.",
+        "절단 전용 디스크의 옆면으로 연삭하지 마세요.",
+        source_urls=("https://www.nortonabrasives.com/en-us/resources/expertise/safety-cutting-vs-grinding",)),
+    "grinding_wheel_speed": HazardClass(
+        "디스크에 표시된 최대 허용 RPM은 그라인더의 최대 무부하 RPM보다 낮으면 안 됩니다. 축에 맞더라도 "
+        "회전수와 함께 디스크 크기·용도·가드가 장비 설명서에 맞는지 확인하세요.",
+        "디스크의 최대 허용 회전수를 넘기지 마세요.",
+        source_urls=("https://obis.osha.gov/SLTC/etools/shipyard/standard/tools/index_tl.html",)),
+    "airless_tip_removal": HazardClass(
+        "에어리스 장비를 멈추고 해당 장비 설명서의 잔압 해소 및 방아쇠 잠금 절차를 마친 뒤 팁을 분리하세요. "
+        "장비마다 조작 순서가 다르므로 해당 모델의 압력 해제 절차를 확인하세요.",
+        "장비 설명서의 잔압 해소 절차를 마친 뒤 팁을 분리하세요.",
+        ("DOC-doc_0193-C0233", "DOC-doc_0219-C0084")),
     # DOC-doc_0219-C0084 "건 선단에 손을 내밀면 안 된다", DOC-doc_0036-C0062 "고압 분사 … 눈, 피부 등에 침투"
     "high_pressure": HazardClass(
         "고압 도료가 나오는 건·호스에 손이나 몸을 대거나 건을 사람 쪽으로 향하지 마세요. 분출 압력이 높아 도료와 시너가 피부나 눈에 침투할 수 있습니다.",
@@ -100,10 +130,12 @@ CLASSES: Final[dict[str, HazardClass]] = {
     "ignition": HazardClass(
         "도장 작업장과 그 근처에서는 흡연이나 불꽃이 나는 작업을 하지 마세요. 도료와 시너 증기에 불이 붙을 수 있습니다.",
         "도장 중에는 근처에서 흡연이나 불꽃이 나는 작업을 하지 마세요.", ("DOC-doc_0014-C0030", "DOC-doc_0014-C0029")),
-    # DOC-doc_0036-C0117 "고압 라인에 항상 전기 접지선을 연결 … 펌핑 장비도 … 적절한 접지", DOC-doc_0013-C0036
+    # DOC-doc_0036-C0117 고압 라인·펌핑 장비 접지, DOC-doc_0013-C0036 정전기 점화 방지.
     "grounding": HazardClass(
-        "접지하지 않고 칠하지 마세요. 에어리스 장비는 건과 펌프 사이의 고압 라인에 접지선을 연결하고 펌프도 접지해야 합니다.",
-        "에어리스 장비는 고압 라인과 펌프를 접지한 상태에서만 쓰세요.", ("DOC-doc_0036-C0117", "DOC-doc_0013-C0036")),
+        "접지가 확인되기 전에는 시험 분사도 하지 마세요. 정전기 방전으로 도료·용제 증기에 불이 붙을 수 있습니다. "
+        "장비 설명서와 현장 절차에 따라 장비와 도장 대상의 접지를 확인하세요.",
+        "정전기 방전으로 도료나 용제 증기에 불이 붙을 수 있으므로 접지를 확인한 후에만 분사하세요.",
+        ("DOC-doc_0036-C0117", "DOC-doc_0013-C0036")),
     # DOC-doc_0023-C0839 눈 접촉 "다량의 물로 10~15분간 눈을 충분히 씻을 것 … 의사의 치료", 피부 접촉 "다량의 물로 10~15분간 씻거나"
     "contact": HazardClass(
         "도료나 시너가 눈에 들어가거나 피부에 묻으면 바로 많은 물로 10~15분간 씻고 진료를 받으세요.",
@@ -169,6 +201,26 @@ def _finger_on_spray_equipment(text: str) -> bool:
 _SYMPTOM: Final = r"어지러|어지럽|어질|현기증|두통|머리\s*(?:가\s*)?아프|메스꺼|구역질|토할|숨\s*(?:이\s*)?(?:막|차)"
 _FUME: Final = r"계속|칠|작업|시너|신나|용제|냄새|증기|도료|페인트"
 _IGNITER: Final = r"히터|난로|화기|불꽃|불티|스파크|그라인더|용접|토치|버너"
+_INJECTION_SPRAY = re.compile(
+    r"에어리스|고압\s*(?:도료|페인트|분사|분무|스프레이|주입|호스)|"
+    + _en(r"airless|high[- ]pressure\s+(?:paint|spray|hose|injection)"), re.I,
+)
+_PUNCTURE_REPORT = re.compile(
+    r"바늘\s*(?:자국|구멍)|상처(?:가|뿐)?\s*(?:났|생겼|뿐|보였)|찔렸|뚫렸|피(?:가|는)\s*(?:났|나왔|나는데|안|별로)|"
+    r"(?:살|피부|손가락|손)\s*(?:아래|속|안)(?:으로|에)?.{0,12}(?:들어갔|스며들었|주입됐|들어온)|"
+    r"(?:피부|손가락|손)\s*(?:에|을)?\s*(?:관통했|뚫었|찔렀)|"
+    + _en(r"punctur(?:ed|e\s+wound)|pierced|injected\s+(?:paint|coating|thinner|fluid)|"
+          r"(?:paint|coating|thinner)\s+(?:went|got)\s+(?:under|into)\s+(?:(?:my|the)\s+)?(?:skin|finger|hand)"), re.I,
+)
+_CUTTING_WHEEL = re.compile(r"절단\s*석|절단용\s*(?:연마재|휠|디스크|날)|컷오프\s*(?:휠|디스크)|" + _en(r"cut[- ]?off\s+(?:wheel|dis[ck])"), re.I)
+_WHEEL_SIDE = re.compile(r"옆면|측면|사이드|side\s+(?:face|load|grind)", re.I)
+_SIDE_GRINDING = re.compile(r"갈면|갈아|갈아내|갈아도|연삭|연마|그라인딩|비드|grind", re.I)
+_GRINDING_WHEEL = re.compile(r"디스크|연마석|연삭석|절단석|숫돌|" + _en(r"wheel|dis[ck]"), re.I)
+_GRINDER = re.compile(r"그라인더|연삭기|" + _en(r"grinder"), re.I)
+_SPEED_RATING = re.compile(r"RPM|회전\s*수|회전\s*속도", re.I)
+_WHEEL_COMPATIBILITY = re.compile(r"적힌|최대|정격|허용|축|장착|호환|써도|사용|rate|match|mount", re.I)
+_AIRLESS_TIP_REMOVAL = re.compile(r"(?:팁|노즐).{0,18}(?:뺄|빼기|분리|빼려|탈착)")
+_PRE_REMOVAL = re.compile(r"전에|먼저|바로\s*손대|확인해야|사전|분리\s*전")
 _PATTERNS: Final[tuple[tuple[str, re.Pattern[str]], ...]] = (
     ("high_pressure", re.compile(
         r"고압.{0,15}(?:손|몸|피부).{0,6}(?:만지|만져|대|닿)|(?:손|몸|피부).{0,6}(?:만지|만져|대|닿).{0,15}고압|"
@@ -205,7 +257,8 @@ _PATTERNS: Final[tuple[tuple[str, re.Pattern[str]], ...]] = (
         + _en(r"smok\w*|lighters?|cigarettes?|(?:heaters?|flames?|sparks?|grind\w*|weld\w*|torch\w*).{0,15}(?:near|next\s+to|beside|while)|"
               r"(?:near|next\s+to|beside)\s+(?:a\s+|the\s+)?(?:heaters?|flames?|sparks?|fire|weld\w*)"), re.I)),
     ("grounding", re.compile(
-        r"접지\S*\s*(?:안|없이|빼|하지\s*않|생략)|접지\s*선\S*\s*(?:빼|풀|떼)|" + _en(r"without\s+grounding|ungrounded|not\s+grounded"), re.I)),
+        r"접지\S*\s*(?:안|없이|빼|뺐|하지\s*않|생략)|접지\s*선\S*\s*(?:뺐|빼|풀|떼|뗐|제거|해제)|"
+        + _en(r"without\s+grounding|ungrounded|not\s+grounded"), re.I)),
     # VR 멀미는 훈련 질문이다("VR로 연습하다가 어지러우면 몇 분 쉬어야 해요?") — 어지러움은 용제·작업과 함께일 때만.
     ("health", re.compile(
         rf"^(?!.*(?<![A-Za-z])VR|.*(?:가상|고글|헤드셋|멀미)).*(?:(?:{_SYMPTOM}).{{0,15}}(?:{_FUME})|(?:{_FUME}).{{0,15}}(?:{_SYMPTOM}))|"
@@ -252,8 +305,16 @@ def classify(text: str, *, context: str = "") -> str | None:
     """이 문장 하나의 위험 종류. 없으면 None."""
     if not text:
         return None
+    if _INJECTION_SPRAY.search(text) and _PUNCTURE_REPORT.search(text):
+        return "injection_injury"
     if blocks_tip_by_hand(text, context=context):
         return "hand_tip"
+    if _CUTTING_WHEEL.search(text) and _WHEEL_SIDE.search(text) and _SIDE_GRINDING.search(text):
+        return "cutting_wheel_side"
+    if _GRINDING_WHEEL.search(text) and _GRINDER.search(text) and _SPEED_RATING.search(text) and _WHEEL_COMPATIBILITY.search(text):
+        return "grinding_wheel_speed"
+    if _INJECTION_SPRAY.search(text) and _AIRLESS_TIP_REMOVAL.search(text) and _PRE_REMOVAL.search(text):
+        return "airless_tip_removal"
     return next((name for name, pattern in _PATTERNS if pattern.search(text)), None)
 
 
@@ -265,9 +326,9 @@ def is_follow_up(text: str) -> bool:
 def hazard_class(questions: tuple[str, ...], *, previous_class: str | None = None, previous_text: str = "") -> str | None:
     """요청(한국어 질문·원문)의 위험 종류. 직접 고르지 못한 짧은 후속 질문은 앞 턴에 저장한 종류를 이어받는다."""
     texts = [text for text in questions if text]
-    found = next((name for text in texts if (name := classify(text, context=previous_text))), None)
+    found = [name for text in texts if (name := classify(text, context=previous_text))]
     if found:
-        return found
+        return "injection_injury" if "injection_injury" in found else found[0]
     if previous_class in CLASSES and any(is_follow_up(text) for text in texts):
         return previous_class
     return None
@@ -292,11 +353,21 @@ def guard_answer(safety_class: str | None, answer: str, citations: list[str]) ->
     hazard = CLASSES.get(safety_class or "")
     if hazard is None:
         return answer, citations
-    if safety_class == "hand_tip":
-        return HIGH_PRESSURE_ANSWER, list(HIGH_PRESSURE_CITATIONS)
+    if (fixed := fixed_safety_answer(safety_class)) is not None:
+        return fixed
     cited = list(dict.fromkeys([*citations, *hazard.citations]))
     if is_permissive(answer) or not answer.strip():
         return hazard.answer, list(hazard.citations) or citations
     if hazard.caution in answer:
         return answer, cited
     return f"{answer.rstrip()}\n{hazard.caution}", cited
+
+
+def fixed_safety_answer(safety_class: str | None) -> tuple[str, list[str]] | None:
+    """Safety instructions that should go out directly without generation."""
+    if safety_class in (
+        "hand_tip", "injection_injury", "cutting_wheel_side", "grinding_wheel_speed", "airless_tip_removal",
+    ):
+        hazard = CLASSES[safety_class]
+        return hazard.answer, list(hazard.citations)
+    return None
