@@ -143,7 +143,10 @@ trainer/demo_api/pose_query.py
 trainer/demo_api/query_chat_data.py
 trainer/demo_api/query_chat.py
 trainer/demo_api/query_language.py
+trainer/demo_api/query_language_rules.py
 trainer/demo_api/query_runtime.py
+trainer/demo_api/query_technical_facts.py
+trainer/demo_api/query_unit_math.py
 trainer/demo_api/quick_answer.py
 trainer/demo_api/readiness.py
 trainer/demo_api/record_query.py

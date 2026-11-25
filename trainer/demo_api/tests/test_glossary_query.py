@@ -375,3 +375,44 @@ def test_an_english_what_is_domain_question_ends_an_older_dictionary_translation
              {"role": "assistant", "content": "Nozzle"},
              {"role": "user", "content": "What is the cause of coating defects in English?"}]
     assert _api().parse_translation_request("그럼 베트남어로?", recent_turns=turns) is None
+
+
+@pytest.mark.parametrize(("prompt", "answer", "source"), [
+    ("도장 현장 용어표로 건조도막두께, 영어 한 단어/구만 알려줘.", "dry film thickness", "verified_glossary"),
+    ("스프레이건의 '노즐'을 중국어로, 용어만.", "喷嘴", "tsb_reference"),
+])
+def test_compact_label_requests_resolve_the_actual_term(prompt, answer, source):
+    result = _api().lookup_translation_question(prompt)
+    assert result is not None and result.answer == answer and result.source_kind == source
+
+
+def test_named_standard_requires_attestation_instead_of_guessing_an_unfamiliar_term():
+    prompt = "한국 현장 별명인 '갯물 찍힘'을 우즈벡 도장 규격 용어로 정확히 번역해줘."
+    request = _api().parse_translation_request(prompt)
+    assert request is not None and request.source_text == "갯물 찍힘"
+    assert request.target_language == "uz" and request.require_standard
+    assert _api().lookup_translation_question(prompt) is None
+    followup = _api().parse_translation_request("그럼 영어로?", recent_turns=[{"role": "user", "content": prompt}])
+    assert followup is not None and followup.require_standard
+
+
+def test_polite_language_override_keeps_the_definition_intent():
+    prompt = "저도막은 어떤 상태인가요? 대답만 영어로 부탁해요."
+    assert _api().parse_translation_request(prompt) is None
+    assert _api().requested_response_language(prompt) == "en"
+    assert _api().question_without_output_preference(prompt) == "저도막은 어떤 상태인가요?"
+
+
+@pytest.mark.parametrize(("prompt", "source", "target"), [
+    ("안내 문구 ‘건을 300 mm 떨어뜨리고, 도막은 160 µm를 목표로 하세요.’를 베트남어로 번역해 줘.",
+     "건을 300 mm 떨어뜨리고, 도막은 160 µm를 목표로 하세요.", "vi"),
+    ("‘다음 순서’라고 써 있는 메뉴가 무슨 뜻인지 영어로 짧게 바꿔 쓰고 싶어.", "다음 순서", "en"),
+])
+def test_quoted_text_references_translate_only_the_requested_copy(prompt, source, target):
+    request = _api().parse_translation_request(prompt)
+    assert request is not None and request.source_text == source and request.target_language == target
+    assert _api().lookup_translation_question(prompt) is None
+
+
+def test_quoted_text_is_not_extracted_from_an_explanation_question():
+    assert _api().parse_translation_request("안내 문구 ‘다음 순서’가 언제 뜨는지 영어로 알려줘.") is None

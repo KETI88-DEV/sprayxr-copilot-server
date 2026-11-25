@@ -152,13 +152,18 @@ def test_non_spray_process_and_observed_defect_skip_even_mistaken_coating_lookup
         def plan_copilot_dialogue(self, prompt, **kwargs):
             return {"kind": "lookup", "intent": "coating_status", "scope": "zone"}
 
-    for prompt in ("칠한 게 자꾸 눈물처럼 아래로 흘러. 이건 도막이 부족한 거야?",
-                   "블라스팅 중인데 얇은 도막이면 더 쏴서 160까지 도료를 쌓아야 돼?"):
+    for prompt, required in (
+        ("칠한 게 자꾸 눈물처럼 아래로 흘러. 이건 도막이 부족한 거야?", ("처짐", "측정")),
+        ("블라스팅 중인데 얇은 도막이면 더 쏴서 160까지 도료를 쌓아야 돼?", ("표면 준비", "적용하지")),
+    ):
         pipeline = WrongLookup(response=f"[답변] 문서로 확인한 일반 공정 설명입니다.\n[근거] {DOC}")
         response = ask(client(pipeline), prompt=prompt, mode="quick")
         assert response.status_code == 200
-        assert response.json()["data"]["coating_context"] is None
-        assert pipeline.runs or pipeline.conversations
+        data = response.json()["data"]
+        assert data["coating_context"] is None
+        assert not data["retrieval_used"]
+        assert all(word in data["answer"] for word in required), data["answer"]
+        assert not pipeline.runs and not pipeline.conversations
 
 
 def test_grinder_alias_and_process_corrections_choose_the_actual_operation():

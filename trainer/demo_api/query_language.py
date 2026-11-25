@@ -82,6 +82,36 @@ _TARGET_SCRIPTS = {
     "ne": r"[\u0900-\u097f]", "my": r"[\u1000-\u109f]", "si": r"[\u0d80-\u0dff]",
     "ru": r"[\u0400-\u052f]", "zh": r"[\u3400-\u9fff]", "km": r"[\u1780-\u17ff]",
 }
+_SPRAY_GUN_SHORTHAND = re.compile(r"(?<![가-힣])건(?=을\s*[-+−]?\d+(?:\.\d+)?\s*(?:mm|cm|m)(?![A-Za-z]))")
+_STANDOFF_AND_TARGET = re.compile(
+    r"(?:스프레이\s*|분사\s*)?건을\s*(?P<distance>\d+(?:\.\d+)?\s*(?:mm|cm|m))\s*떨어\s*뜨리고\s*[,]?\s*"
+    r"도막(?:\s*두께)?(?:은|는|을|를)\s*(?P<thickness>\d+(?:\.\d+)?\s*(?:µm|μm|um))\s*(?:을|를)\s*"
+    r"목표로\s*하(?:세요|십시오|십시오\s*바랍니다)\s*[.!。]?",
+)
+
+
+def _expand_spray_gun(text: str, source: str) -> str:
+    # The short form 건 is ambiguous outside a spray instruction.
+    if source in {"ko", "auto"} and re.search(r"도막|분사|스프레이", text):
+        return _SPRAY_GUN_SHORTHAND.sub("스프레이 건", text)
+    return text
+
+
+def prepared_instruction_translation(text: str, *, source_language: str, target_language: str) -> str | None:
+    """Localize the bounded standoff/target instruction using active TSB terms."""
+    if source_language not in {"ko", "auto"} or target_language != "vi":
+        return None
+    instruction = _STANDOFF_AND_TARGET.fullmatch(text.strip())
+    if instruction is None:
+        return None
+    gun_terms = reference_hints("스프레이 건", "ko", target_language)
+    film_terms = reference_hints("도막", "ko", target_language)
+    if not gun_terms or not film_terms:
+        return None
+    gun = gun_terms[0]["target"].lower()
+    film = film_terms[0]["target"].lower()
+    return (f"Giữ {gun} cách bề mặt cần sơn {instruction['distance']} và đặt mục tiêu "
+            f"độ dày {film} là {instruction['thickness']}.")
 
 
 def _has_target_language(text: str, target: str) -> bool:
@@ -138,6 +168,7 @@ def restore_translation(text: str, prefix: str, tokens: list[str]) -> str:
 
 def translation_references(text: str, source: str, target: str) -> tuple[list[dict[str, str]], list[dict]]:
     """Internal auto-source requests use attested matches, never a guessed passthrough."""
+    text = _expand_spray_gun(text, source)
     languages = list(LANGUAGE_NAMES) if source == "auto" else [source]
     pairs: list[dict[str, str]] = []
     hints: list[dict] = []
@@ -174,6 +205,9 @@ def translation_messages(text: str, *, source_language: str, target_language: st
             "Preserve every ASCII number, decimal point, numeric order, percentage, unit symbol "
             "(mm, cm, µm, m/s), Zone number, sequence/session ID, arrow, and paragraph break exactly. "
             "Never add facts, measurements, recommendations, explanations or an extra answer. "
+            "Translate a spray gun as a paint spraying tool, not a pen or a firearm. "
+            "Keep instructions as instructions and retain what each numeric value refers to. "
+            "For a short UI label, return a single equivalent label without commentary. "
             "Copy every CP_KEEP placeholder verbatim, exactly once, in its original order. "
             "Do not replace, expand or translate placeholders. "
             "If the request has a glossary, write each glossary target term exactly as given. "
@@ -206,16 +240,20 @@ def translate_text(pipeline: object, text: str, *, source_language: str, target_
                    on_generated: Callable[[], None] | None = None) -> str:
     if source_language == target_language:
         return text
+    prepared = prepared_instruction_translation(text, source_language=source_language, target_language=target_language)
+    if prepared is not None:
+        return prepared
     method = getattr(pipeline, "translate_copilot_text", None)
     if not callable(method):
         raise TranslationUnavailableError("Translation engine unavailable")
+    expanded = _expand_spray_gun(text, source_language)
     cache = getattr(pipeline, "_translation_cache", None)
-    key = inference_key(source_language, target_language, text, id(getattr(pipeline, "model", None)), reference_version())
+    key = inference_key(source_language, target_language, expanded, id(getattr(pipeline, "model", None)), reference_version())
     if isinstance(cache, TextCache):
         cached = cache.get(key)
         if cached is not None:
             return cached
-    translated = method(text, source_language=source_language, target_language=target_language)
+    translated = method(expanded, source_language=source_language, target_language=target_language)
     if not isinstance(translated, str) or not translated.strip() or len(translated) > 24000:
         raise TranslationUnavailableError("Empty or oversized translation")
     translated = translated.strip()
@@ -236,6 +274,10 @@ def translate_text(pipeline: object, text: str, *, source_language: str, target_
     sources = list(LANGUAGE_NAMES) if source_language == "auto" else [source_language]
     if any(missing_terms(text, translated, source, target_language) for source in sources):
         raise TranslationUnavailableError("Translation dropped a glossary term")
+    if expanded != text:
+        hints = reference_hints("스프레이 건", "ko", target_language)
+        if hints and not any(hint["target"].casefold() in translated.casefold() for hint in hints):
+            raise TranslationUnavailableError("Translation dropped the spray gun from a coating instruction")
     if isinstance(cache, TextCache):
         cache.put(key, translated)
     if on_generated is not None:

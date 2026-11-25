@@ -82,8 +82,16 @@ from trainer.demo_api.pose_query import (
     requested_zone,
     zone_unavailable,
 )
-from trainer.demo_api.query_language import TranslationUnavailableError, translate_text, translation_references
-from trainer.demo_api.glossary_query import lookup_translation_question, parse_translation_request, requested_response_language
+from trainer.demo_api.query_language import (
+    TranslationUnavailableError, prepared_instruction_translation, translate_text, translation_references,
+)
+from trainer.demo_api.glossary_query import (
+    lookup_translation_question, parse_translation_request, question_without_output_preference,
+    requested_response_language, unverified_standard_answer,
+)
+from trainer.demo_api.query_language_rules import narrow_language_answer, unrelated_definition
+from trainer.demo_api.query_technical_facts import technical_fact_answer
+from trainer.demo_api.query_unit_math import supplied_thickness_answer
 from trainer.multilingual.tsb_reference import reference_version
 from trainer.demo_api.sequence_store import SequenceStore
 from trainer.demo_api.viewer_arm_pose import arm_pose_answer, parse_viewer_arm_pose, zone_pose_summary
@@ -92,7 +100,7 @@ from trainer.demo_api.safety_guard import (
     CLASSES as SAFETY_CLASSES, HIGH_PRESSURE_ANSWER, HIGH_PRESSURE_CITATIONS, classify, fixed_answer_translation, guard_answer, hazard_class,
 )
 from trainer.demo_api.reference_order_query import (
-    actual_order_intent, current_next_answer, is_current_completion_question, is_current_next_question,
+    actual_order_intent, answer_session_facts, current_next_answer, is_current_completion_question, is_current_next_question,
     is_current_progress_question, is_reference_order_question, progress_unavailability,
     reference_order_answer, reference_position_question, resolve_reference_target,
 )
@@ -1179,16 +1187,44 @@ async def _execute_copilot_query(
             answer="어느 훈련인지 확인할 자료가 없습니다. 해당 훈련 기록을 선택하거나 세션 ID를 보내 주세요.",
             retrieval_used=False, citations=[], unavailable_reason="session_required")
 
+    if not documents_only:
+        language_answer = narrow_language_answer(original_prompt or query.prompt) or narrow_language_answer(query.prompt)
+        stated_answer = language_answer or unrelated_definition(query.prompt) or supplied_thickness_answer(query.prompt)
+        if stated_answer is not None:
+            return _success_response(query, request_started, answer=stated_answer, retrieval_used=False, citations=[])
+        if not viewer_requested:
+            live_answer = await to_thread.run_sync(lambda: answer_session_facts(
+                query, sequences, reports, previous_prompt=str(dialogue_turns[-1].get("prompt", "")) if dialogue_turns else "",
+                sequence_engine=sequence_engine, coating_engine=coating_engine,
+            ))
+            if live_answer is not None:
+                return _success_response(query, request_started, answer=live_answer.text, retrieval_used=False, citations=[],
+                                         sequence_context=live_answer.sequence_context, coating_context=live_answer.coating_context,
+                                         pose_context=live_answer.pose_context,
+                                         context_status=live_answer.context_status, unavailable_reason=live_answer.unavailable_reason)
+
+    session = None
     if query.session_id and not documents_only and re.search(r"목표|상한|하한|윗값|아랫값|정상\s*범위", query.prompt):
         get_session = getattr(reports, "get_session", None)
         session = await to_thread.run_sync(lambda: get_session(query.session_id)) if callable(get_session) else None
-        if (session is not None and getattr(session, "user_id", None) == query.user_id
-                and (query.scenario_id is None or getattr(session, "scenario_id", None) == query.scenario_id)):
-            target = session_coating_target_answer(query.prompt, session)
-            if target is not None:
-                answer, scope = target
-                return _success_response(query, request_started, answer=answer, retrieval_used=False, citations=[],
-                                         coating_context=scope, context_status="available")
+        if (session is not None and (getattr(session, "user_id", None) != query.user_id
+                or query.scenario_id not in (None, getattr(session, "scenario_id", None)))):
+            session = None
+    if not documents_only:
+        technical = technical_fact_answer(
+            query.prompt, summarize=query.summarize,
+            target_thickness_um=getattr(session, "target_thickness_um", None),
+            target_min_thickness_um=getattr(session, "target_thickness_min_um", None),
+            target_max_thickness_um=getattr(session, "target_thickness_max_um", None),
+        )
+        if technical is not None:
+            return _success_response(query, request_started, answer=technical, retrieval_used=False, citations=[])
+    if session is not None:
+        target = session_coating_target_answer(query.prompt, session)
+        if target is not None:
+            answer, scope = target
+            return _success_response(query, request_started, answer=answer, retrieval_used=False, citations=[],
+                                     coating_context=scope, context_status="available")
 
     position = reference_position_question(query.prompt)
     previous = dialogue_turns[-1] if dialogue_turns else {}
@@ -2144,6 +2180,9 @@ async def execute_copilot_query(
         nonlocal pipeline, last_translation_model
         if source == target:
             return text
+        prepared = prepared_instruction_translation(text, source_language=source, target_language=target)
+        if prepared is not None:
+            return prepared
         # These language pairs are more reliable from English than from Korean
         # on the existing 27B translator. Validate values and language on BOTH
         # legs; the Korean analysis and public response language stay unchanged.
@@ -2180,9 +2219,12 @@ async def execute_copilot_query(
             # Preserve the original source text; translating the question first can
             # erase the foreign term the user actually asked about.
             normalized = query.prompt
+        elif narrow_language_answer(query.prompt) is not None:
+            # The native wording of these bounded questions already identifies the intent.
+            normalized = query.prompt
         else:
             try:
-                normalized = await _translate(query.prompt, query.language, "ko")
+                normalized = await _translate(question_without_output_preference(query.prompt), query.language, "ko")
             except Exception:
                 # 질문 번역 실패 때 원문으로 손-팁 위험임을 알면 기존 고정 안전 답을 유지한다.
                 if classify(query.prompt) != "hand_tip":
@@ -2201,16 +2243,21 @@ async def execute_copilot_query(
         safety_class = hazard_class((normalized, query.prompt if query.language != "ko" else ""),
                                     previous_class=previous_turn.get("safety_class"), previous_text=previous_turn.get("prompt", ""))
         if translation_request is not None:
-            response_language = translation_request.target_language
             dictionary = lookup_translation_question(query.prompt, recent_turns=translation_history)
             source_language = (translation_request.source_language
                                or (dictionary.source_language if dictionary is not None else None)
                                or "auto")
             if dictionary is not None:
+                response_language = translation_request.target_language
                 translated_answer = dictionary.answer
                 provenance = {"kind": dictionary.source_kind, **dictionary.provenance}
                 answer_source = "glossary"
+            elif translation_request.require_standard:
+                translated_answer = await _translate(unverified_standard_answer(translation_request), "ko", response_language)
+                provenance = None
+                answer_source = "analysis"
             else:
+                response_language = translation_request.target_language
                 pairs, hints = translation_references(translation_request.source_text, source_language, response_language)
                 translated_answer = await _translate(translation_request.source_text, source_language, response_language)
                 target_key = re.sub(r"\s+", "", translated_answer).casefold()
@@ -2218,14 +2265,15 @@ async def execute_copilot_query(
                            if re.sub(r"\s+", "", hint["target"]).casefold() in target_key]
                 provenance = {"kind": "translation_hints", "reference_version": reference_version(), "applied": applied}
                 answer_source = "glossary" if applied else "conversation"
-            glossary_context = {"source_text": translation_request.source_text, "source_language": source_language,
-                                "target_language": response_language, "provenance": provenance}
+            if provenance is not None:
+                glossary_context = {"source_text": translation_request.source_text, "source_language": source_language,
+                                    "target_language": response_language, "provenance": provenance}
             # Explicit translation preserves the whole phrase and its measurements,
             # including Chinese characters. Normal Korean-generation checks remain
             # unchanged for all non-translation answers.
             response = _success_response(analysis_query.model_copy(update={"response_mode": "detailed"}), request_started,
                                          answer=translated_answer, retrieval_used=False, citations=[],
-                                         generated=dictionary is None, model_name=last_translation_model)
+                                         generated=last_translation_model is not None, model_name=last_translation_model)
             response.headers[ANSWER_SOURCE_HEADER] = answer_source
         else:
             try:

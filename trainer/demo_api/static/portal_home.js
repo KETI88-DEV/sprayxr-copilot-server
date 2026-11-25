@@ -32,6 +32,7 @@ function notes(body){
 const verdictNames={pass:'통과',partial:'부분 통과',fail:'실패'};
 function answerCard(title,result,extraClass=''){
  const card=make('div','qa-answer '+extraClass);
+ if(result.verdict==='pass')card.classList.add('qa-answer-pass');
  card.append(make('h4','',title),make('p','qa-answer-text',result.answer));
  if(result.note)card.append(make('p','qa-note',result.note));
  return card;
@@ -43,6 +44,11 @@ function queryAnswers(report,target){
  const before=report.baseline_counts,after=report.retest_counts;
  target.append(make('p','qa-meta',`최초 통과 ${before.pass}개, 부분 통과 ${before.partial}개, 실패 ${before.fail}개`));
  target.append(make('p','qa-meta',`재시험 통과 ${after.pass}개, 부분 통과 ${after.partial}개, 실패 ${after.fail}개`));
+ if(report.followup_counts){
+  const result=report.followup_counts;
+  target.append(make('p','qa-meta',`추가 재시험 ${report.followup_version} · 통과 ${result.pass}개, 부분 통과 ${result.partial}개, 실패 ${result.fail}개`));
+  if(report.followup_environment)target.append(make('p','qa-meta',report.followup_environment));
+ }
  const filter=make('label','qa-filter'),checkbox=make('input');checkbox.type='checkbox';
  filter.append(checkbox,document.createTextNode('최초 시험에서 실패한 질문만 보기'));
  const list=make('div','qa-list');target.append(filter,list);
@@ -57,7 +63,13 @@ function queryAnswers(report,target){
                   make('span','qa-verdict '+item.baseline.verdict,verdictNames[item.baseline.verdict]));
    const answers=make('div','qa-answer-grid');
    answers.append(answerCard('최초 실제 답변',item.baseline));
-   if(item.baseline.verdict!=='pass'){
+   if(item.followup){
+    const status=verdictNames[item.followup.verdict];
+    answers.append(answerCard('추가 재시험 실제 답변 · '+status,item.followup));
+    if(item.followup.verdict!=='pass'&&item.expected_answer){
+     answers.append(answerCard('기대 답변',{answer:item.expected_answer},'qa-observed'));
+    }
+   }else if(item.baseline.verdict!=='pass'){
     if(item.retest?.verdict==='pass')answers.append(answerCard('교정 후 실제 답변 · 통과',item.retest));
     else{
      const status=item.retest?'재시험 '+verdictNames[item.retest.verdict]:'재시험 미실시';

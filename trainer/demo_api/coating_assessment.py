@@ -133,6 +133,18 @@ def normal_band_um(target_um: float) -> list[float]:
     return list(resolve_band(target_um))
 
 
+def _pixel_fill_fraction(corrected_um, target_um: float):
+    return np.clip(corrected_um / target_um, 0.0, 1.0)
+
+
+def uniform_zone_completion_percent(corrected_um: float, target_um: float) -> float:
+    """이미 보정된 두께가 Zone의 모든 화소에서 같다고 가정한 진행률."""
+    if corrected_um < numerical.MIN_PAINTED_UM:
+        return 0.0
+    corrected = min(corrected_um, numerical.MAX_CORRECTED_UM)
+    return 100.0 * float(_pixel_fill_fraction(corrected, target_um))
+
+
 def painted_surface_from_png(raw: bytes) -> np.ndarray:
     """전체 면 높이맵 PNG → float64 [H, W], 좌상단 원점. 칠한 자리의 원시 두께(µm), 그 밖은 0."""
     try:
@@ -202,7 +214,7 @@ def assess_zone(
     counts = [bands[key] for key in numerical.SIX_BAND_KEYS]
     # 과도막 화소도 목표에 도달한 면적에 포함한다.
     coverage_percent = 100.0 * sum(counts[2:]) / zone_pixel_count
-    filled = np.where(painted, np.clip(corrected / target, 0.0, 1.0), 0.0)
+    filled = np.where(painted, _pixel_fill_fraction(corrected, target), 0.0)
     completion_percent = 100.0 * float(filled[mask].sum()) / zone_pixel_count
     # 화면과 같은 진행률로 이동을 판단한다. 화소의 과도막이 다른 화소의 부족분을 채우지는 않는다.
     if completion_percent >= GATE_COMPLETION_PERCENT:

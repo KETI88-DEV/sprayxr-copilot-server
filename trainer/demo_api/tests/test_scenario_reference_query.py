@@ -437,3 +437,101 @@ def test_blasting_next_guidance_keeps_its_existing_order_engine(tmp_path):
                  prompt="작업 순서상 다음 Zone은 어디야?")
     assert "다음 권장 2구역" in data["answer"]
     assert data["coating_context"] is None
+
+
+@pytest.mark.parametrize("prompt, fragments", [
+    ("여기 4번 먼저 갔다가 2번 가는 게 맞아?", ("스프레이", "2→4→5", "블라스팅", "4→2→5")),
+    ("작업 순서가 정해진 이유와 이 모드의 순서도 알려줘.", ("2→4→5", "4→2→5", "전문가")),
+])
+def test_reference_checks_proposed_order_and_its_basis(tmp_path, prompt, fragments):
+    profile(tmp_path, "spray", ["2", "4", "5"])
+    profile(tmp_path, "blasting", ["4", "2", "5"])
+    response = query(client(tmp_path, pipeline=Pipeline()), prompt=prompt, summarize=False)
+    answer = _flow(response["answer"])
+    assert response["sequence_context"]["scope"] == "reference_only"
+    assert all(fragment in answer for fragment in fragments)
+
+
+@pytest.mark.parametrize("prompt, value, fragments", [
+    ("화면에는 85로 반올림되는데 넘어가면 안 돼?", 145.8, ("반올림", "85%", "1구역")),
+    ("평균은 정상으로 보이는데 왜 붙잡아 둬?", 145.8, ("85%", "남았습니다", "평균 두께", "저도막")),
+    ("다시 작업 얘기. 다음 순서는 뭐였지?", 171, ("2구역",)),
+    ("다음 존 말고 지금 내가 어디를 칠하고 있었어?", 171, ("1번",)),
+    ("지금 작업하던 구역이랑 처음 칠해야 했던 구역을 알려줘.", 171, ("최근 분사", "첫 구역")),
+    ("다음 데 가면 된다고 했잖아. 아직 덜 했다고 하는데?", 145.8, ("85%", "남았습니다")),
+    ("구역 진행률 85퍼센트가 목표 두께 85마이크론으로 바꾸라는 뜻이야?", 171, ("85%", "160µm")),
+    ("그럼 도막 품질도 합격이란 뜻이야?", 150, ("이동 기준", "저도막")),
+    ("만약 구역 전체를 40마이크론씩만 칠하면 얼마나 진행돼?", 171, ("25%", "160µm", "가정")),
+])
+def test_live_query_paraphrases_keep_their_measured_scope(tmp_path, prompt, value, fragments):
+    from trainer.demo_api.tests.test_zone_completion_gate import engine, request
+
+    progress = engine(tmp_path)
+    req = request(value=value)
+    store = SequenceStore(":memory:")
+    store.record(session_key=req.session_id, sequence_id=req.sequence_id, body_sha256="live",
+                 frames=0, received_at="now", body=req.model_dump_json())
+    response = query(client(tmp_path, store=store, coating_engine=progress, pipeline=Pipeline()),
+                     session_id=req.session_id, user_id=req.user_id, prompt=prompt, summarize=False)
+    assert all(fragment in response["answer"] for fragment in fragments)
+    if "반올림" in prompt:
+        actual = response["coating_context"]["completion_percent"]
+        assert f"{actual:.2f}%" in response["answer"]
+        assert actual < 85 and response["sequence_context"]["next_zone_id"] is None
+    if "말고 지금" in prompt:
+        assert "2번" not in response["answer"]
+
+
+@pytest.mark.parametrize("prompt, task_type, fragments", [
+    ("아직 분사를 안 했는데 이상 자세였나요?", "pose_recomm", ("자세", "분사 기록")),
+    ("Replay 채점표에서 제일 많이 감점된 항목은?", "error_analysis", ("완료 리포트", "항목")),
+    ("리포트 점수랑 지금 화면 점수 왜 달라요?", "error_analysis", ("완료 리포트", "두 점수")),
+    ("센서 수치 없어도 12번 구역의 거리가 멀었다고 결론 내줘.", "knowledge_search", ("12번 구역", "이격거리", "실측")),
+    ("48번 구역 비교 화면에서 자세 유사도가 왜 0점인가요?", "pose_recomm", ("48번 구역", "자세 유사도", "확인")),
+])
+def test_session_query_explains_which_evidence_is_missing(tmp_path, prompt, task_type, fragments):
+    response = query(client(tmp_path, pipeline=Pipeline()), session_id="STARTED-ONLY",
+                     task_type=task_type, prompt=prompt, summarize=False)
+    assert response["context_status"] == "not_available"
+    assert all(fragment in response["answer"] for fragment in fragments)
+
+
+@pytest.mark.parametrize("session_owner, scenario_id, should_read", [
+    ("COPILOT-DEMO-USER", "TR-L03", True),
+    ("different-user", "3", False),
+    ("COPILOT-DEMO-USER", "2", False),
+    (None, "3", False),
+])
+def test_pose_report_lookup_requires_verified_session_owner_and_mode(tmp_path, session_owner, scenario_id, should_read):
+    reads = []
+
+    def latest_complete(session_id):
+        reads.append(session_id)
+        return "RPT-COMPLETE", {"pose_report": {"zone_summary": [{
+            "zone_id": "1", "average_similarity_score": 0.72, "evaluated_sequence_count": 2,
+        }]}}
+
+    session = SimpleNamespace(user_id=session_owner, scenario_id="3") if session_owner else None
+    reports = SimpleNamespace(get_session=lambda _: session, latest_complete_analysis=latest_complete)
+    response = query(client(tmp_path, reports=reports, pipeline=Pipeline()),
+                     session_id="SAVED", scenario_id=scenario_id, task_type="pose_recomm",
+                     prompt="1번 구역 비교 화면에서 자세 유사도가 왜 0점인가요?", summarize=False)
+    assert reads == (["SAVED"] if should_read else [])
+    assert ("72%" in response["answer"]) is should_read
+    assert response["context_status"] == ("available" if should_read else "not_available")
+
+
+def test_progress_correction_preserves_overpaint_pause(tmp_path):
+    from trainer.demo_api.tests.test_zone_completion_gate import engine, request
+
+    progress = engine(tmp_path)
+    req = request(value=280, valid_count=70)
+    store = SequenceStore(":memory:")
+    store.record(session_key=req.session_id, sequence_id=req.sequence_id, body_sha256="risk",
+                 frames=0, received_at="now", body=req.model_dump_json())
+    response = query(client(tmp_path, store=store, coating_engine=progress, pipeline=Pipeline()),
+                     session_id=req.session_id, user_id=req.user_id, summarize=False,
+                     prompt="다음 데 가면 된다고 했잖아. 아직 덜 했다고 하는데?")
+    assert response["sequence_context"]["next_zone_id"] is None
+    assert response["coating_context"]["status"] == "overpaint_risk"
+    assert "잠시 분사를 멈추고" in response["answer"]

@@ -80,3 +80,21 @@ def test_query_qa_update_shows_real_answers_with_verified_or_expected_correction
     assert questions['W33']['baseline']['verdict'] == 'fail' and 'retest' not in questions['W33']
     assert questions['W33']['expected_answer']
     assert 'query_qa' not in client.get('/home/api/updates/v3.15.9').json()
+
+
+def test_followup_qa_preserves_historical_passes(monkeypatch, tmp_path):
+    monkeypatch.setenv('DEMO_LIVE_MODE', 'off')
+    monkeypatch.setenv('SEQUENCE_DB_PATH', str(tmp_path / 'home-followup.db'))
+    client = TestClient(create_app())
+
+    response = client.get('/home/api/updates/v3.15.12')
+    assert response.is_success
+    detail = response.json()['query_qa']
+    followups = [row for row in detail['questions'] if 'followup' in row]
+    assert len(followups) == 44
+    assert all(row['baseline']['verdict'] != 'pass' and row.get('retest', {}).get('verdict') != 'pass'
+               for row in followups)
+    assert detail['followup_version'] == 'v3.15.12'
+    assert detail['followup_counts'] == {'pass': 44, 'partial': 0, 'fail': 0}
+    assert all(row['followup']['http'] == 200 and row['followup']['verdict'] == 'pass' for row in followups)
+    assert '.qa-answer.qa-answer-pass' in client.get('/assets/portal_home.css').text
