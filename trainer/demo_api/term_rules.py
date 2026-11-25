@@ -18,6 +18,10 @@ _SPACE = re.compile(r"\s+")
 # 긴 것부터 맞춘다. 비슷한 글자를 어림으로 맞추지 않는다: '분사 강도'가 '분사 각도'로, '저도 많이'가 '저도막'으로 바뀐다.
 _TYPOS = {typo: right for right, wrong in _CONFIG.get("오타", {}).items() for typo in wrong}
 _TYPO = re.compile("(?<![가-힣])(?:" + "|".join(map(re.escape, sorted(_TYPOS, key=len, reverse=True))) + ")") if _TYPOS else None
+_FILM_TERMS = frozenset({"습도막", "건조도막"})
+_FILM_MEASUREMENT = re.compile(r"잰|재(?:는|요|야|어|보)|측정")
+_WET_FILM_STAGE = re.compile(r"방금\s*칠(?:하고|한)|(?:칠|도장|분사)\s*직후|칠하자마자")
+_DRY_FILM_STAGE = re.compile(r"(?:마른|건조(?:된|한)?)\s*(?:뒤|후)")
 
 
 def _flat(text: str) -> str:
@@ -31,8 +35,13 @@ def _names(rule: dict) -> list[str]:
 
 def _found(text: str, around: str, *, formal: bool = False) -> list[dict]:
     flat, near = _flat(text), _flat(around)
+    # In a measurement comparison, the wet and dry stages can stand in for
+    # WFT/DFT even when the operator uses no formal coating terminology.
+    film_stages = (_FILM_TERMS if _FILM_MEASUREMENT.search(text) and _WET_FILM_STAGE.search(text)
+                   and _DRY_FILM_STAGE.search(text) else frozenset())
     return [rule for rule in _RULES
-            if any(_flat(alias) in flat for alias in (rule["별칭"] if formal else _names(rule)))
+            if (rule["용어"] in film_stages
+                or any(_flat(alias) in flat for alias in (rule["별칭"] if formal else _names(rule))))
             and not any(_flat(word) in near for word in rule["제외"])]
 
 
@@ -80,7 +89,8 @@ def matched_terms(prompt: str, previous_prompts: Iterable[str] = ()) -> list[dic
     return []
 
 
-_MEANING = re.compile(r"뭐|머[야에예임]|모야|무엇|뜻|의미|정의|이?란\s*[?？]?$|설명|차이|다른가|다르|어떤\s*(?:상태|것|거|현상)")
+_MEANING = re.compile(r"뭐|머[야에예임]|모야|무엇|뜻|의미|정의|이?란\s*[?？]?$|설명|차이|다른가|다르|어떤\s*(?:상태|것|거|현상)"
+                      r"|(?:라는|란)\s*(?:게|건)[^?？.!]*말(?:이야|이니|인가)")
 _NOT_MEANING = re.compile(r"왜|원인|이유|어떻게\s*(?:해|하|칠|재|써|쓰|막|고)|어떡|방법|얼마|몇|언제|어디|기준|적정|순서|문제|영향|결과|위험")
 
 
@@ -94,7 +104,8 @@ def meaning_evidence(prompt: str, rules: list[dict]) -> list[str]:
     if not rules or len(rules) > 2:
         return []
     bare = _flat(prompt).strip("?？!.") in {_flat(alias) for rule in rules for alias in [rule["용어"], *rule["별칭"]]}
-    if not bare and not (_MEANING.search(prompt) and not _NOT_MEANING.search(prompt)):
+    stage_comparison = _FILM_TERMS <= formal and _FILM_MEASUREMENT.search(prompt)
+    if not (bare or stage_comparison or (_MEANING.search(prompt) and not _NOT_MEANING.search(prompt))):
         return []
     return list(dict.fromkeys(chunk for rule in rules for chunk in rule["근거"][:3 if len(rules) == 1 else 2]))
 

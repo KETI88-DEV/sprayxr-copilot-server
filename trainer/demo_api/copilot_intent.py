@@ -6,6 +6,7 @@ import logging
 import re
 from collections.abc import Callable
 
+from trainer.demo_api.query_runtime import explicit_work_process
 from trainer.demo_api.term_rules import routed_terms
 
 logger = logging.getLogger(__name__)
@@ -28,21 +29,36 @@ def _painting_subject(prompt: str) -> bool:
     """도장 낱말이 있는가. 용어 규칙(term_rules.json)에 '경로'로 적은 교육 용어도 도장 낱말이다: 계획 모델이 '오렌지필'을 과일 껍질,
     'DFT'를 푸리에 변환, '신너'를 뜻 모를 말로 보고 잡담으로 답했다(2026-11-20). 별칭(정식 이름)만 보고 구어는 보지 않으며,
     제외어가 있으면 그 용어가 아니다('백화점', '징크스')."""
-    return bool(_PAINTING_SUBJECT.search(prompt) or routed_terms(prompt))
+    return bool(_PAINTING_SUBJECT.search(prompt) or explicit_work_process(prompt) or routed_terms(prompt))
 
 
 def is_off_topic(prompt: str) -> bool:
     return bool(_OFF_TOPIC.search(prompt)) and not _painting_subject(prompt) and not re.search(_COATING_SUBJECT, prompt, re.I)
 _RECORD_REFERENCE = re.compile(r"영역|구역|zone|존|부위|현재|지금|이번|내[ 가]|어디|어느", re.I)
+_COATING_SUBJECT = r"도막|두께|과도막|저도막|coating|thickness"
+_COATING_STATE = r"과하|모자|부족|이상|상태|어때|분석|평가|얇|두껍|과다|괜찮|충분|양호|균일|불량|칠했|잘됐"
+_COATING_EXPLANATION = re.compile(
+    r"뭐|무엇|뜻|의미|정의|원인|이유|왜|방법|어떻게|예방|방지|원리|관계|영향|중요|하려면|개선|해야|고치|맞추|조절"
+    r"|때문|탓|[아어여]서\s*그런\s*(?:거|건)|(?:라는|란)\s*(?:게|건)[^?？.!]*말(?:이야|이니|인가)")
+_VISIBLE_DEFECT = re.compile(r"아래로\s*(?:흘|흐)|흘러내|처짐|눈물\s*처럼|귤\s*껍질\s*처럼|거칠거칠|핀홀")
+_DEFECT_IDENTIFICATION = re.compile(r"이[건게거]|저도막\s*인[가지만]|과도막\s*인[가지만]")
+_EXPLICIT_COATING_RECORD = re.compile(
+    r"리포트|보고서|히트맵|실측|측정[값치]|(?:zone|존|구역)\s*\d|\d+\s*(?:번\s*)?(?:zone|존|구역)", re.I)
+_SPRAY_COATING = re.compile(r"(?:스프레이|spray)\s*(?:로|도장|분사|공정|작업)", re.I)
 
 
 def is_coating_advice_question(prompt: str) -> bool:
-    return bool(re.search(r"도막|두께|과도막|저도막|미도장|coating|thickness", prompt, re.I)
-                and re.search(r"뭐|무엇|뜻|의미|정의|원인|이유|왜|방법|어떻게|예방|방지|원리|관계|영향|중요|하려면|개선|해야|고치|맞추|조절", prompt))
+    if not re.search(_COATING_SUBJECT + r"|미도장", prompt, re.I):
+        return False
+    return bool(_COATING_EXPLANATION.search(prompt) or (
+        _VISIBLE_DEFECT.search(prompt) and _DEFECT_IDENTIFICATION.search(prompt)
+        and not _EXPLICIT_COATING_RECORD.search(prompt)))
 
 
-_COATING_SUBJECT = r"도막|두께|과도막|저도막|coating|thickness"
-_COATING_STATE = r"과하|모자|부족|이상|상태|어때|분석|평가|얇|두껍|과다|괜찮|충분|양호|균일|불량|칠했|잘됐"
+def coating_status_lookup_allowed(prompt: str) -> bool:
+    """Reports answer measurements, while observations need an explanation of the named process."""
+    return not is_coating_advice_question(prompt) and (
+        explicit_work_process(prompt) not in {"blasting", "grinding"} or bool(_SPRAY_COATING.search(prompt)))
 
 
 # 기록 객체(2026-11-17 계획): 이 Zone·Zone N·내 기록·이번에 칠한·방금 분사·제가 칠한. 1인칭·"지금"만으로는 기록 객체가 아니다.
@@ -65,7 +81,7 @@ def _asks_coating_state(prompt: str, subject: str, state: str) -> bool:
 
 
 def is_coating_status_question(prompt: str) -> bool:
-    if is_coating_advice_question(prompt):
+    if not coating_status_lookup_allowed(prompt):
         return False
     if _asks_coating_state(prompt, _COATING_SUBJECT, _COATING_STATE):
         return True

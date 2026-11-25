@@ -15,10 +15,63 @@ import unicodedata
 from collections import Counter
 from typing import Any
 
+from trainer.demo_api.coating_assessment import resolve_band, resolve_target, session_limits, session_target
+from trainer.demo_api.query_runtime import explicit_work_process
 from trainer.demo_api.telemetry_contracts import process_from_tool_type
+from trainer.demo_api.v1_store import SessionRow
 
 _NO_ZONE = {"", "-1", "0", "none", "null", "nan"}
 _METRICS = {"avg_speed_mms": "mm/s", "avg_distance_mm": "mm", "avg_thickness_um": "µm"}
+_THICKNESS_SUBJECT = re.compile(r"도막|두께|마이크론|마이크로\s*미터|[µμu]m\b|정상\s*범위", re.I)
+_NORMAL_BAND = re.compile(r"정상\s*(?:(?:도막|두께)\s*)*범위|허용\s*(?:두께\s*)?범위")
+_UPPER_BOUND = re.compile(r"상한|윗\s*(?:값|한계)|최대\s*(?:값|치|두께)")
+_LOWER_BOUND = re.compile(r"하한|아랫\s*(?:값|한계)|최소\s*(?:값|치|두께)")
+_TARGET_ONLY = re.compile(r"목표\s*(?:두께|값|치)?\s*만")
+_CONFIG_EXCLUSIONS = re.compile(
+    r"실측|실제|측정|채웠|도달|충족|미달|충분|과도막|저도막|원인|이유|왜|방법|원리|"
+    r"어떻게\s*(?:설정|정|변경|조절)|설정\s*하나|변경\s*하나|몇\s*번|더\s*(?:칠|뿌)|"
+    r"진행률|도포율|차이|비교|환산|바꿔|가정|규격"
+)
+
+
+def session_coating_target_answer(
+    prompt: str, session: SessionRow | None,
+) -> tuple[str, dict[str, object]] | None:
+    """Answer only setting lookups for a caller-validated spray session."""
+    if session is None or (session.tool_type is not None and process_from_tool_type(session.tool_type) != "spray"):
+        return None
+    if explicit_work_process(prompt) in {"blasting", "grinding"}:
+        return None
+    band_asked = _NORMAL_BAND.search(prompt)
+    if (not _THICKNESS_SUBJECT.search(prompt) or not (band_asked or "목표" in prompt)
+            or _CONFIG_EXCLUSIONS.search(prompt)):
+        return None
+
+    target = session_target(session)
+    limits = session_limits(session)
+    try:
+        lower, upper = resolve_band(target, **limits)
+    except (TypeError, ValueError):
+        return None
+    basis = "session_target" if limits else resolve_target(target)[1]
+    subject = "이 세션의 기본" if basis == "default_target" else "이 세션의"
+    asks_upper = bool(_UPPER_BOUND.search(prompt))
+    asks_lower = bool(_LOWER_BOUND.search(prompt))
+    if asks_upper and not asks_lower:
+        answer = f"{subject} 정상 도막 두께 상한은 {upper:g}µm입니다."
+    elif asks_lower and not asks_upper:
+        answer = f"{subject} 정상 도막 두께 하한은 {lower:g}µm입니다."
+    elif (band_asked and not _TARGET_ONLY.search(prompt)) or (asks_lower and asks_upper):
+        answer = f"{subject} 정상 도막 두께 범위는 {lower:g}~{upper:g}µm입니다."
+    else:
+        answer = f"{subject} 목표 도막 두께는 {lower:g}µm입니다."
+    return answer, {
+        "scope": "session_target",
+        "analysis_status": "available",
+        "target_thickness_um": lower,
+        "normal_band_um": [lower, upper],
+        "target_basis": basis,
+    }
 
 
 def viewer_definition_context(prompt: str, context: str | None) -> str | None:
