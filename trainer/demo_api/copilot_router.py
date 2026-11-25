@@ -60,7 +60,10 @@ from trainer.demo_api.dialogue import (GENERAL_KNOWLEDGE_LIMIT, INSTRUCTION_REFU
                                        viewer_measurement_answer, viewer_metadata_context, dialogue_turns_for_model, dialogue_resolution_advice, without_hanzi)
 from trainer.demo_api.playback_direction import playback_direction_from_context, playback_direction_answer, simple_direction_question, requested_direction_scope, aggregate_direction, LABELS as DIRECTION_LABELS
 from trainer.demo_api.copilot_live_analysis import current_zone, live_analysis
-from trainer.demo_api.simulator_context import SIMULATOR_CONTEXT, spray_simulator_context, wants_simulator_context, simulator_configuration_facts
+from trainer.demo_api.simulator_context import (
+    SIMULATOR_CONTEXT, spray_simulator_context, wants_simulator_context,
+    simulator_configuration_facts, simulator_record_answer,
+)
 from trainer.demo_api.copilot_session_context import build_query_instruction, session_coating_target_answer, summarize_session, viewer_definition_context
 from trainer.demo_api.context_prompts import context_text, matched_prompt
 from trainer.demo_api.term_rules import fix_typos, matched_terms, meaning_evidence, routed_terms, same_word_lines, term_context, unit_facts, with_document_terms
@@ -97,7 +100,7 @@ from trainer.demo_api.sequence_store import SequenceStore
 from trainer.demo_api.viewer_arm_pose import arm_pose_answer, parse_viewer_arm_pose, zone_pose_summary
 from trainer.demo_api.sequence_analysis import SequenceAnalysisEngine
 from trainer.demo_api.safety_guard import (
-    CLASSES as SAFETY_CLASSES, HIGH_PRESSURE_ANSWER, HIGH_PRESSURE_CITATIONS, classify, fixed_answer_translation, guard_answer, hazard_class,
+    CLASSES as SAFETY_CLASSES, classify, fixed_answer_translation, fixed_safety_answer, guard_answer, hazard_class,
 )
 from trainer.demo_api.reference_order_query import (
     actual_order_intent, answer_session_facts, current_next_answer, is_current_completion_question, is_current_next_question,
@@ -1133,10 +1136,10 @@ async def _execute_copilot_query(
     model_turns = dialogue_turns_for_model(dialogue_turns)
     # 위험 행동을 해도 되는지 묻는 질문은 대화 경로·측정값 짧은 답·뷰어 엔진 답으로 보내지 않고 문서 검색으로 답한 뒤
     # 답을 검사한다(2026-11-14 훈련생 질문 시험 T15). "그럼 해도 돼?"는 같은 대화의 앞 질문으로 본다.
-    if safety_class == "hand_tip":
-        # 손이 건 끝에 닿는 질문은 경로·탭·답변 수준과 상관없이 모델 없이 고정 답이다(v3.4.1 운영: 베트남어 답이 막으라고 했다).
-        return _success_response(query, request_started, answer=HIGH_PRESSURE_ANSWER, retrieval_used=False,
-                                 citations=list(HIGH_PRESSURE_CITATIONS), context_status="available")
+    if fixed := fixed_safety_answer(safety_class):
+        answer, citations = fixed
+        return _success_response(query, request_started, answer=answer, retrieval_used=False,
+                                 citations=citations, context_status="available")
     # 위험 주제 질문은 대화 경로·측정값 짧은 답·뷰어 엔진 답으로 보내지 않고 문서 검색으로 답한 뒤 답을 검사한다.
     safety = safety_class is not None and query.task_type != "error_analysis"
     if safety and query.task_type != "knowledge_search":
@@ -1192,6 +1195,8 @@ async def _execute_copilot_query(
         stated_answer = language_answer or unrelated_definition(query.prompt) or supplied_thickness_answer(query.prompt)
         if stated_answer is not None:
             return _success_response(query, request_started, answer=stated_answer, retrieval_used=False, citations=[])
+        if general_record_answer := simulator_record_answer(query.prompt):
+            return _success_response(query, request_started, answer=general_record_answer, retrieval_used=False, citations=[])
         if not viewer_requested:
             live_answer = await to_thread.run_sync(lambda: answer_session_facts(
                 query, sequences, reports, previous_prompt=str(dialogue_turns[-1].get("prompt", "")) if dialogue_turns else "",
@@ -2226,10 +2231,10 @@ async def execute_copilot_query(
             try:
                 normalized = await _translate(question_without_output_preference(query.prompt), query.language, "ko")
             except Exception:
-                # 질문 번역 실패 때 원문으로 손-팁 위험임을 알면 기존 고정 안전 답을 유지한다.
-                if classify(query.prompt) != "hand_tip":
+                # Preserve a recognized urgent answer when input translation fails.
+                if fixed_safety_answer(classify(query.prompt)) is None:
                     raise
-                logger.warning("copilot question translation failed; hand-on-tip original request_id=%s", query.request_id)
+                logger.warning("copilot question translation failed; safety answer from original request_id=%s", query.request_id)
                 normalized = query.prompt
         if len(normalized) > 8000:
             raise TranslationUnavailableError("Translated question exceeds analysis limit")

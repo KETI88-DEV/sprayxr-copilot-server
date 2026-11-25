@@ -98,3 +98,20 @@ def test_followup_qa_preserves_historical_passes(monkeypatch, tmp_path):
     assert detail['followup_counts'] == {'pass': 44, 'partial': 0, 'fail': 0}
     assert all(row['followup']['http'] == 200 and row['followup']['verdict'] == 'pass' for row in followups)
     assert '.qa-answer.qa-answer-pass' in client.get('/assets/portal_home.css').text
+
+
+def test_new_qa_campaign_uses_distinct_report(monkeypatch, tmp_path):
+    monkeypatch.setenv('DEMO_LIVE_MODE', 'off')
+    monkeypatch.setenv('SEQUENCE_DB_PATH', str(tmp_path / 'home-round2.db'))
+    client = TestClient(create_app())
+
+    first = client.get('/home/api/updates/v3.15.12').json()['query_qa']
+    second = client.get('/home/api/updates/v3.15.13').json()['query_qa']
+    assert len(first['questions']) == len(second['questions']) == 100
+    assert {row['question'] for row in first['questions']}.isdisjoint(
+        row['question'] for row in second['questions']
+    )
+    assert sum(second['baseline_counts'].values()) == 100
+    pending = [row for row in second['questions'] if row['baseline']['verdict'] != 'pass']
+    assert all(row['retest']['answer'] for row in pending)
+    assert sum(second['retest_counts'].values()) == len(pending)

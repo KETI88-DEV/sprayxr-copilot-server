@@ -57,6 +57,7 @@ trainer/demo_api/app.py
 trainer/demo_api/assets/query-voice-ko.wav
 trainer/demo_api/assets/portal_releases.json
 trainer/demo_api/assets/query_api_qa_2026-11-25.json
+trainer/demo_api/assets/query_api_qa_round2_2026-11-25.json
 trainer/demo_api/assets/zone_reference/color/Exam2_01.png
 trainer/demo_api/assets/zone_reference/color/Exam2_02.png
 trainer/demo_api/assets/zone_reference/color/Exam2_03.png
@@ -145,6 +146,7 @@ trainer/demo_api/query_chat.py
 trainer/demo_api/query_language.py
 trainer/demo_api/query_language_rules.py
 trainer/demo_api/query_runtime.py
+trainer/demo_api/query_session_details.py
 trainer/demo_api/query_technical_facts.py
 trainer/demo_api/query_unit_math.py
 trainer/demo_api/quick_answer.py

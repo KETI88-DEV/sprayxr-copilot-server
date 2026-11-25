@@ -5,6 +5,8 @@
 """
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from trainer.demo_api import safety_guard as g
@@ -92,5 +94,17 @@ def test_fixed_sentences_fit_their_class_and_cited_chunks() -> None:
     assert "젖은 손" in electric.answer and electric.citations == ("DOC-doc_0023-C0602", "DOC-doc_0023-C0615")
     for name in ("height", "electric"):
         assert "압력을 뺀" not in g.CLASSES[name].answer, name
+    primary_sources = {
+        "injection_injury": "https://www.graco.com/content/dam/graco/com_documents/FCD/FDC0688/FDC0688EN.pdf",
+        "cutting_wheel_side": "https://www.nortonabrasives.com/en-us/resources/expertise/safety-cutting-vs-grinding",
+        "grinding_wheel_speed": "https://obis.osha.gov/SLTC/etools/shipyard/standard/tools/index_tl.html",
+    }
+    assert set(primary_sources) <= g.CLASSES.keys()
     for name, hazard in g.CLASSES.items():
-        assert hazard.citations, name  # 근거 없는 고정 문장은 두지 않는다
+        if name in primary_sources:
+            assert hazard.source_urls == (primary_sources[name],), name
+            assert not hazard.citations, name
+            assert g.fixed_safety_answer(name) == (hazard.answer, [])
+        else:
+            assert hazard.citations and not hazard.source_urls, name
+            assert all(re.fullmatch(r"DOC-doc_\d{4}-C\d{4}", citation) for citation in hazard.citations), name

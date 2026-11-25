@@ -416,3 +416,34 @@ def test_quoted_text_references_translate_only_the_requested_copy(prompt, source
 
 def test_quoted_text_is_not_extracted_from_an_explanation_question():
     assert _api().parse_translation_request("안내 문구 ‘다음 순서’가 언제 뜨는지 영어로 알려줘.") is None
+
+
+@pytest.mark.parametrize(("prompt", "answer", "source_kind"), [
+    ("작업표에 쓸 ‘표면처리’를 태국어로 번역해줘.", "การเตรียมพื้นผิว", "verified_glossary"),
+    ("VR 화면의 ‘폴 스프레이건’ 베트남어 표기만 알려줘.", "Súng phun sơn cực dài", "tsb_reference"),
+    ("현장 용어집에서 ‘스프레이건 이동 속도’를 인도네시아어로 번역해줘. 항목명만.",
+     "Kecepatan pergerakan pistol semprot", "tsb_reference"),
+    ("Translate “Bo‘yoq qatlami” from Uzbek into Korean.", "도막", "tsb_reference"),
+    ("Translate «максимально допустимого межслойного интервала» from Russian into Vietnamese.",
+     "thời gian cách lớp tối đa", "verified_glossary"),
+])
+def test_label_context_and_local_punctuation_preserve_exact_attested_terms(prompt, answer, source_kind):
+    result = _api().lookup_translation_question(prompt)
+    assert result is not None and result.answer == answer and result.source_kind == source_kind
+
+
+def test_vietnamese_explicit_quoted_translation_passes_only_the_source_sentence():
+    prompt = "Vui lòng dịch câu “Không chạm vào bề mặt vừa sơn.” sang tiếng Trung, chỉ cần câu dịch."
+    request = _api().parse_translation_request(prompt)
+    assert request is not None and request.source_text == "Không chạm vào bề mặt vừa sơn."
+    assert _api().lookup_translation_question(prompt) is None
+    assert request.target_language == "zh"
+
+
+@pytest.mark.parametrize("prompt", [
+    "작업표에 쓸 ‘표면처리’의 목적을 태국어로 알려줘.",
+    "현장 용어집에서 ‘스프레이건 이동 속도’를 찾았어요. 지금 값이 얼마인가요?",
+    "Vui lòng giải thích tại sao không chạm vào bề mặt vừa sơn, bằng tiếng Trung.",
+])
+def test_label_surroundings_do_not_replace_the_actual_question(prompt):
+    assert _api().parse_translation_request(prompt) is None

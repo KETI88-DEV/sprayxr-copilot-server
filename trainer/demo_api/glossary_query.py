@@ -35,18 +35,18 @@ class GlossaryTranslation:
 
 
 _LANGUAGES = {
-    "ko": ("한국어", "한국말", "Korean"),
-    "en": ("영어", "English"),
-    "vi": ("베트남어", "Vietnamese"),
-    "id": ("인도네시아어", "인니어", "Indonesian"),
-    "th": ("태국어", "Thai"),
-    "ne": ("네팔어", "Nepali"),
-    "my": ("미얀마어", "버마어", "Burmese"),
-    "uz": ("우즈베크어", "우즈벡어", "우즈베크", "우즈벡", "Uzbek"),
-    "si": ("싱할라어", "Sinhala"),
-    "ru": ("러시아어", "Russian"),
-    "zh": ("중국어", "Chinese"),
-    "km": ("크메르어", "캄보디아어", "Khmer"),
+    "ko": ("한국어", "한국말", "Korean", "tiếng Hàn"),
+    "en": ("영어", "English", "tiếng Anh"),
+    "vi": ("베트남어", "Vietnamese", "tiếng Việt"),
+    "id": ("인도네시아어", "인니어", "Indonesian", "tiếng Indonesia"),
+    "th": ("태국어", "Thai", "tiếng Thái"),
+    "ne": ("네팔어", "Nepali", "tiếng Nepal"),
+    "my": ("미얀마어", "버마어", "Burmese", "tiếng Myanmar"),
+    "uz": ("우즈베크어", "우즈벡어", "우즈베크", "우즈벡", "Uzbek", "tiếng Uzbek"),
+    "si": ("싱할라어", "Sinhala", "tiếng Sinhala"),
+    "ru": ("러시아어", "Russian", "tiếng Nga"),
+    "zh": ("중국어", "Chinese", "tiếng Trung"),
+    "km": ("크메르어", "캄보디아어", "Khmer", "tiếng Khmer"),
 }
 _ALIASES = {alias.casefold(): code for code, aliases in _LANGUAGES.items() for alias in aliases}
 _LANG = "(?:" + "|".join(
@@ -57,21 +57,32 @@ _END = r"\s*[.!?。！？]*\s*\Z"
 _QUESTION = r"(?:뭐(?:야|예요|에요)|뭐라고\s*(?:해(?:요)?|하나요|하죠)|어떻게\s*(?:말해|말하나요|표현해)|알려\s*(?:줘|주세요))"
 _ACTION = r"(?:하면|번역(?:해\s*(?:줘|주세요)|해|하라|해\s*줄래|해\s*주시겠어요|\s*바람)?|" + _QUESTION + ")"
 _WHAT_IS = rf"what\s+is\s+(?P<subject>.+?)\s+in\s+(?P<language>{_LANG}){_END}"
-_LABEL_ONLY_NOTE = r"(?:\s*[.!。]\s*(?:말\s*붙이지\s*말고|설명(?:은\s*빼고|\s*없이)))?"
-_QUOTED = r'''(?P<subject>"[^"\n]+"|'[^'\n]+'|“[^”\n]+”|‘[^’\n]+’|`[^`\n]+`)'''
-_QUOTE_QUALIFIER = r'''(?:[^"'“‘`\n.!?]{1,44}?(?:의|인|문구|문장|라벨|표시|안내)\s*)?'''
+_LABEL_ONLY_NOTE = (r"(?:\s*[.!。]\s*(?:말\s*붙이지\s*말고|설명(?:은\s*빼고|\s*없이)|"
+                    r"(?:항목명|용어|라벨|표기)\s*만))?")
+_QUOTES = {'"': '"', "'": "'", "“": "”", "‘": "’", "`": "`", "«": "»", "「": "」", "『": "』"}
+_QUOTED = "(?P<subject>" + "|".join(
+    rf"{re.escape(start)}[^{re.escape(end)}\n]+{re.escape(end)}" for start, end in _QUOTES.items()
+) + ")"
+_QUOTE_MARKS = re.escape("".join(_QUOTES))
+_QUOTE_QUALIFIER = (rf"(?:[^{_QUOTE_MARKS}\n.!?]{{1,44}}?"
+                    r"(?:의|인|문구|문장|라벨|표시|안내|에\s*(?:쓸|넣을|표시할)|용어(?:집|표)에서)\s*)?")
 _TERM_QUALIFIER = r"(?:(?:도장\s*현장\s*)?(?:현장\s*)?(?:용어표|용어집)(?:를\s*기준으로|에\s*따라|로)\s*)?"
 _SHORT_LABEL = r"(?:(?:한\s*)?(?:용어|단어(?:\s*/\s*구)?|구절|표기|명칭)\s*만)"
 _PATTERNS = tuple((re.compile(pattern, re.IGNORECASE | re.DOTALL), intent) for pattern, intent in (
     (rf"{_QUOTE_QUALIFIER}{_QUOTED}(?:을|를)?\s*(?P<language>{_LANG})\s*(?:도장\s*)?"
      rf"(?:규격|표준|공식)\s*용어(?:로|로만)\s*(?:정확히\s*)?{_ACTION}{_END}", "standard"),
     (rf"{_QUOTE_QUALIFIER}{_QUOTED}(?:을|를)?\s*(?P<language>{_LANG})\s*(?:으로|로)\s*"
-     rf"(?:[,，]\s*{_SHORT_LABEL}(?:\s*{_QUESTION})?|번역해\s*(?:줘|주세요|줄래|주시겠어요)){_END}", "explicit"),
+     rf"(?:[,，]\s*{_SHORT_LABEL}(?:\s*{_QUESTION})?|번역해\s*(?:줘|주세요|줄래|주시겠어요))"
+     rf"{_LABEL_ONLY_NOTE}{_END}", "explicit"),
+    (rf"{_QUOTE_QUALIFIER}{_QUOTED}(?:을|를)?\s*(?P<language>{_LANG})\s*(?:으로|로)?\s*"
+     rf"{_SHORT_LABEL}\s*(?:{_QUESTION})?{_LABEL_ONLY_NOTE}{_END}", "label"),
     (rf"{_QUOTED}(?:이?라고)\s*(?:써|쓰여|적혀)\s*있는\s*(?:메뉴|버튼|라벨|문구)(?:가|를|의)?\s*"
      rf"(?:무슨\s*뜻인지\s*)?(?P<language>{_LANG})\s*(?:으로|로)\s*(?:짧게\s*)?"
      rf"(?:바꿔\s*쓰고\s*싶어(?:요)?|바꿔\s*(?:줘|주세요)|옮겨\s*(?:줘|주세요)){_END}", "explicit"),
     (rf"{_TERM_QUALIFIER}(?P<subject>.+?)\s*[,，]?\s*(?P<language>{_LANG})\s*(?:으로|로)?\s*"
      rf"{_SHORT_LABEL}\s*(?:{_QUESTION})?{_END}", "label"),
+    (rf"(?:(?:vui\s+lòng|xin(?:\s+hãy)?|hãy)\s+)?dịch(?:\s+câu|\s+cụm\s+từ)?\s*{_QUOTED}\s*"
+     rf"sang\s+(?P<language>{_LANG})(?:\s*[,，]\s*chỉ\s*(?:cần\s*)?(?:câu|bản)\s+dịch)?{_END}", "explicit"),
     (rf"(?:please\s+)?translate\s+(?P<subject>.+?)\s+from\s+(?P<source_language>{_LANG})\s+(?:into|to)\s+(?P<language>{_LANG}){_END}", "explicit"),
     (rf"(?:please\s+)?translate\s+(?P<subject>.+?)\s+(?:into|to)\s+(?P<language>{_LANG}){_END}", "explicit"),
     (_WHAT_IS, "weak"),
@@ -90,7 +101,7 @@ _FOLLOWUP = re.compile(
     rf"(?P<language>{_LANG})\s*(?:(?:으로|로)\s*(?:{_ACTION})?|표기\s*(?:으로|로)?\s*만){_END}",
     re.IGNORECASE,
 )
-_QUOTES = {'"': '"', "'": "'", "“": "”", "‘": "’", "`": "`"}
+_APOSTROPHES = str.maketrans("‘’ʻʼ", "''''")
 
 
 def _language(value: str) -> str | None:
@@ -247,7 +258,7 @@ def unverified_standard_answer(request: TranslationRequest) -> str:
 
 
 def _key(text: str) -> str:
-    return re.sub(r"\s+", "", unicodedata.normalize("NFKC", text)).casefold().replace("ё", "е")
+    return re.sub(r"\s+", "", unicodedata.normalize("NFKC", text)).casefold().translate(_APOSTROPHES).replace("ё", "е")
 
 
 def _result(request: TranslationRequest, candidates: list[dict],

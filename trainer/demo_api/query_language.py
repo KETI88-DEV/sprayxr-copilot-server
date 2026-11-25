@@ -88,6 +88,10 @@ _STANDOFF_AND_TARGET = re.compile(
     r"도막(?:\s*두께)?(?:은|는|을|를)\s*(?P<thickness>\d+(?:\.\d+)?\s*(?:µm|μm|um))\s*(?:을|를)\s*"
     r"목표로\s*하(?:세요|십시오|십시오\s*바랍니다)\s*[.!。]?",
 )
+_DISPLAY_THRESHOLD = re.compile(
+    r"(?P<film>(?:건(?:조)?|습)\s*도막\s*두께)\s*(?P<comparison><=|>=|[<>=≤≥])\s*"
+    r"(?P<limit>\d+(?:\.\d+)?\s*(?:µm|μm|um))\s*인\s*영역(?P<scope>만|을)\s*강조\s*표시합니다\s*[.!。]?",
+)
 
 
 def _expand_spray_gun(text: str, source: str) -> str:
@@ -98,10 +102,23 @@ def _expand_spray_gun(text: str, source: str) -> str:
 
 
 def prepared_instruction_translation(text: str, *, source_language: str, target_language: str) -> str | None:
-    """Localize the bounded standoff/target instruction using active TSB terms."""
-    if source_language not in {"ko", "auto"} or target_language != "vi":
+    """Localize bounded instructions with attested terms and unchanged values."""
+    if source_language not in {"ko", "auto"}:
         return None
-    instruction = _STANDOFF_AND_TARGET.fullmatch(text.strip())
+    text = text.strip()
+    if target_language == "ru":
+        threshold = _DISPLAY_THRESHOLD.fullmatch(text)
+        if threshold is None:
+            return None
+        pairs = term_pairs(threshold["film"], "ko", "ru")
+        if len(pairs) != 1:
+            return None
+        scope = "только " if threshold["scope"] == "만" else ""
+        return (f"Выделяются {scope}области, для которых "
+                f"{pairs[0]['target']} {threshold['comparison']} {threshold['limit']}.")
+    if target_language != "vi":
+        return None
+    instruction = _STANDOFF_AND_TARGET.fullmatch(text)
     if instruction is None:
         return None
     gun_terms = reference_hints("스프레이 건", "ko", target_language)
