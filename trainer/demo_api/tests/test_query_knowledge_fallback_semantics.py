@@ -8,7 +8,7 @@ from trainer.demo_api.tests.test_dialogue_pipeline import pipeline as real_pipel
 
 @pytest.mark.parametrize("mode", ["quick", "detailed"])
 @pytest.mark.parametrize("missing,verdict", [(True, "not_required"), (False, "insufficient")])
-def test_knowledge_fallback_declares_its_limit_and_cannot_publish_model_citations(mode, missing, verdict):
+def test_reviewed_knowledge_fallback_starts_with_the_answer_and_has_no_citations(mode, missing, verdict):
     class InventedCitation(Pipeline):
         def converse_copilot(self, prompt, **kwargs):
             self.conversations.append({"prompt": prompt, **kwargs})
@@ -18,8 +18,7 @@ def test_knowledge_fallback_declares_its_limit_and_cannot_publish_model_citation
     data = response.json()["data"]
     assert response.status_code == 200 and data["degraded"] is False
     assert p.conversations[0]["knowledge_fallback"] is True
-    assert "일반" in data["answer"] and "문서" in data["answer"] and "확인되지" in data["answer"]
-    assert "DOC-" not in data["answer"] and "[근거]" not in data["answer"]
+    assert data["answer"] == "가능한 작업 조건을 확인해야 합니다."
     assert data["citations"] == [] and data["retrieval_used"] is False
     assert response.headers["X-Copilot-Answer-Source"] == "conversation"
 

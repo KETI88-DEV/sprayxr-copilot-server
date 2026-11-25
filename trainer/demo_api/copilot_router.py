@@ -53,7 +53,7 @@ from trainer.demo_api.coating_query import (
     answer_coating_question, answer_distribution_cause, coating_zone_number, drop_contradicted_causes, parse_viewer_coating_context,
     report_coating_context, target_advice_facts, zone_measures)
 from trainer.demo_api.copilot_intent import RECORD_OBJECT, classify_question_intent, coating_status_lookup_allowed, fallback_intent, preset_intent, is_coating_status_question, is_coating_advice_question, is_domain_question, is_general_painting_knowledge, is_explanatory_question, is_off_topic
-from trainer.demo_api.dialogue import (GENERAL_KNOWLEDGE_LIMIT, INSTRUCTION_REFUSAL, asks_for_instructions, authenticated_facts, conversation_key,
+from trainer.demo_api.dialogue import (INSTRUCTION_REFUSAL, asks_for_instructions, authenticated_facts, conversation_key,
                                        drop_misattributed_zones, drop_sentences, drop_ungrounded, guard_generated_answer, has_body, parse_plan, plain_answer,
                                        viewer_claims, zone_fact_numbers,
                                        selected_direction_answer, ungrounded_measurements, viewer_findings_answer,
@@ -1605,10 +1605,6 @@ async def _execute_copilot_query(
                 generated_model = None
             if hedged:
                 answer = hedged_answer(answer, quick=query.response_mode == "quick") or NO_EVIDENCE_ANSWER
-            if (knowledge_scope and not hedged and has_body(answer) and cacheable_candidate(answer)
-                    and answer not in {NO_EVIDENCE_ANSWER, _NO_ANSWER, INSTRUCTION_REFUSAL}
-                    and not answer.startswith((GENERAL_KNOWLEDGE_LIMIT, HEDGED_PREFIX, QUICK_HEDGED_PREFIX))):
-                answer = GENERAL_KNOWLEDGE_LIMIT + answer
             return _success_response(query, request_started, answer=answer, retrieval_used=False, generated=True,
                                      citations=[], context_status="available" if facts or simulator_facts else "not_available",
                                      model_name=generated_model)
