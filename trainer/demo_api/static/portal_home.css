@@ -67,6 +67,7 @@
   white-space: nowrap;
 }
 .qa-verdict.pass { color: #21653c; background: #e7f4ec; }
+.qa-verdict.corrected { color: #075985; background: #e0f2fe; }
 .qa-verdict.partial { color: #775423; background: #fff1d8; }
 .qa-verdict.fail { color: #993736; background: #fce8e8; }
 .qa-answer-grid {

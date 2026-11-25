@@ -61,7 +61,7 @@ function queryAnswers(report,target){
    const question=make('details','qa-question');question.dataset.questionId=item.id;
    const heading=make('summary','qa-question-summary');
    const corrected=item.baseline.verdict!=='pass'&&(item.followup??item.retest)?.verdict==='pass';
-   const verdict=corrected?'pass':item.baseline.verdict;
+   const verdict=corrected?'corrected':item.baseline.verdict;
    heading.append(make('span','qa-id',item.id),make('span','qa-prompt',item.question),
                   make('span','qa-verdict '+verdict,corrected?'교정 완료':verdictNames[verdict]));
    const answers=make('div','qa-answer-grid');
