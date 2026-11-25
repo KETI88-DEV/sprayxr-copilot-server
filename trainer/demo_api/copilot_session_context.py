@@ -22,10 +22,15 @@ from trainer.demo_api.v1_store import SessionRow
 
 _NO_ZONE = {"", "-1", "0", "none", "null", "nan"}
 _METRICS = {"avg_speed_mms": "mm/s", "avg_distance_mm": "mm", "avg_thickness_um": "µm"}
-_THICKNESS_SUBJECT = re.compile(r"도막|두께|마이크론|마이크로\s*미터|[µμu]m\b|정상\s*범위", re.I)
-_NORMAL_BAND = re.compile(r"정상\s*(?:(?:도막|두께)\s*)*범위|허용\s*(?:두께\s*)?범위")
-_UPPER_BOUND = re.compile(r"상한|윗\s*(?:값|한계)|최대\s*(?:값|치|두께)")
-_LOWER_BOUND = re.compile(r"하한|아랫\s*(?:값|한계)|최소\s*(?:값|치|두께)")
+_MICRON_UNIT = r"(?:[µμu]m|미크론|마이크론|마이크로(?:\s*미터)?)"
+_THICKNESS_SUBJECT = re.compile(r"도막|두께|미크론|마이크론|마이크로\s*미터|[µμu]m\b|정상\s*범위", re.I)
+_NORMAL_BAND = re.compile(
+    r"정상\s*(?:(?:도막|두께)\s*)*범위|허용\s*(?:두께\s*)?범위"
+    rf"|몇\s*(?:{_MICRON_UNIT}\s*)?(?:에서|부터)\s*몇\s*(?:{_MICRON_UNIT}\s*)?까지\s*(?:가|는)?\s*정상",
+    re.I,
+)
+_UPPER_BOUND = re.compile(r"상한|윗\s*(?:값|한계)|위(?:쪽)?\s*끝|최대\s*(?:값|치|두께)")
+_LOWER_BOUND = re.compile(r"하한|아랫\s*(?:값|한계)|아래(?:쪽)?\s*끝|최소\s*(?:값|치|두께)")
 _TARGET_ONLY = re.compile(r"목표\s*(?:두께|값|치)?\s*만")
 _CONFIG_EXCLUSIONS = re.compile(
     r"실측|실제|측정|채웠|도달|충족|미달|충분|과도막|저도막|원인|이유|왜|방법|원리|"
@@ -39,21 +44,26 @@ _SETTING_SCOPE_EXCLUSIONS = re.compile(
     r"|(?:구역|존|zone)\s*#?\s*\d+",
     re.I,
 )
-_THICKNESS_UNIT = r"(?:[µμu]m|mm|mil\b|미크론|마이크론|마이크로(?:\s*미터)?)"
+_THICKNESS_UNIT = rf"(?:{_MICRON_UNIT}|mm|mil\b)"
 _SUPPLIED_THICKNESS = re.compile(rf"\d+(?:[.,]\d+)?\s*{_THICKNESS_UNIT}", re.I)
 _SETTING_METHOD = re.compile(r"(?:설정|변경)\s*하나")
+_TRAINING_SCOPE = r"(?:이번|현재|이)\s*(?:(?:스프레이|도장|페인트)\s*)?(?:훈련|세션|작업)"
 # STT can render 도막 as 주막. Only the technical 두께 + setting expression is
 # recognized here so an unrelated question about 주막 stays unchanged.
 _SPOKEN_TARGET = re.compile(
     r"(?:도\s*막|주막|(?:이번|현재|이)\s*(?:세션|훈련)(?:에서|의)?)\s*"
     r"(?:목표\s*)?두께\s*[은는를이가]?\s*"
-    rf"(?:몇(?:\s*{_THICKNESS_UNIT})?|얼마|어느\s*(?:값|수치))\s*으?로\s*(?:해|하|설정|맞[추춰]|정|잡)",
+    rf"(?:몇(?:\s*{_THICKNESS_UNIT})?|얼마|어느\s*(?:값|수치))\s*으?로\s*(?:해|하|설정|맞[추춰]|정|잡)"
+    rf"|^\s*(?:{_TRAINING_SCOPE}(?:에서(?:는)?|은|는|의)?\s*)?(?:도막\s*[은는을를]?\s*)?"
+    rf"몇\s*{_MICRON_UNIT}\s*(?:까지|을|를)?\s*(?:칠(?:해야|하면)|뿌려야|도포해야|맞[추춰])",
     re.I,
 )
 
 
-def session_target_question(prompt: str) -> bool:
+def session_target_question(prompt: str, *, require_training_scope: bool = False) -> bool:
     """Identify a session setting lookup independently of whether a row exists."""
+    if require_training_scope and not re.search(_TRAINING_SCOPE, prompt):
+        return False
     if (_CONFIG_EXCLUSIONS.search(prompt) or _SETTING_SCOPE_EXCLUSIONS.search(prompt)
             or explicit_work_process(prompt) in {"blasting", "grinding"}):
         return False

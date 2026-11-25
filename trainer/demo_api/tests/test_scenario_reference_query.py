@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -275,7 +276,11 @@ def test_current_progress_questions_separate_live_values_from_definitions(prompt
     ("건은 멈추고 3조 쪽으로 넘어감 되냐?", True),
     ("2번 구역 진행률이 벌써 95퍼니까 건 내려놓고 3번으로 가면 되죠?", True),
     ("2번 존 끝? 하고 3번 존 가도 됨? 한 줄만.", True),
+    ("이 정도면 옆 칸으로 넘어가도 될까?", True),
+    ("이제 3번으로 넘어가도 되겠어요?", True),
     ("지금 밥 먹으러 가도 돼?", False),
+    ("그다음 챕터로 넘어가도 될까?", False),
+    ("옆 칸으로 넘어갈 때 어떤 안전 장비가 필요해?", False),
     ("다음 구역에서 준비해야 할 안전 장비는?", False),
 ])
 def test_current_move_paraphrases_dont_capture_unrelated_questions(prompt, expected):
@@ -289,6 +294,22 @@ def test_completion_words_inside_a_rewrite_request_do_not_imply_a_result():
 
     prompt = "'Zone 7을 완료했습니다'는 내가 적어본 UI 문구인데, 철자 자연스럽게 바꿔 줘."
     assert not is_current_completion_question(prompt)
+
+
+@pytest.mark.parametrize("prompt,expected", [
+    ("지금 이 정도면 옆 칸으로 넘어가도 될까?", True),
+    ("여긴 그만 칠해도 돼?", True),
+    ("이 구역은 이쯤에서 마쳐도 될까요?", True),
+    ("이제 3번으로 넘어가도 되겠어요?", True),
+    ("어느 구역부터 칠하면 돼?", False),
+    ("다음 구역은 어디야?", False),
+    ("여기서 그만 칠하면 다음 공정까지 시간은?", False),
+    ("지금 도장 작업에 쓰는 건을 내려놔도 돼?", False),
+])
+def test_live_completion_includes_permission_but_excludes_plan_and_procedure(prompt, expected):
+    from trainer.demo_api.reference_order_query import is_current_completion_question
+
+    assert is_current_completion_question(prompt) is expected
 
 
 def test_position_explicit_mode_overrides_selected_mode_without_falling_back(tmp_path):
@@ -405,6 +426,91 @@ def test_next_zone_respects_explicit_saved_session_target(tmp_path):
                  session_id=req.session_id, prompt="작업 순서상 다음 Zone은 어디야?")
     assert data["coating_context"]["target_thickness_um"] == 200
     assert data["sequence_context"]["next_zone_id"] is None
+
+
+@pytest.mark.parametrize("prompt,value,next_zone", [
+    ("이 정도면 옆 칸으로 넘어가도 될까?", 145.8, None),
+    ("이 정도면 옆 칸으로 넘어가도 될까?", 171, "2"),
+    ("여긴 그만 칠해도 돼?", 145.8, None),
+    ("현재 3번으로 넘어가도 되겠어요?", 171, "2"),
+])
+def test_spoken_move_permission_uses_measured_gate(tmp_path, prompt, value, next_zone):
+    from trainer.demo_api.tests.test_zone_completion_gate import engine, request
+
+    progress = engine(tmp_path)
+    req = request(value=value)
+    store = SequenceStore(":memory:")
+    store.record(session_key=req.session_id, sequence_id=req.sequence_id, body_sha256="move",
+                 frames=0, received_at="now", body=req.model_dump_json())
+    data = query(client(tmp_path, store=store, coating_engine=progress), session_id=req.session_id,
+                 user_id=req.user_id, prompt=prompt, summarize=False)
+
+    assert data["sequence_context"]["current_zone_id"] == "1"
+    assert data["sequence_context"]["next_zone_id"] == next_zone
+    expected = "완료 기준을 넘었습니다" if next_zone else "아직 완료되지 않았습니다"
+    assert expected in data["answer"]
+    if "3번" in prompt:
+        assert "지금 안내되는 다음 구역은 2구역" in data["answer"]
+
+
+def test_spoken_move_permission_does_not_use_another_workers_session(tmp_path):
+    from trainer.demo_api.tests.test_zone_completion_gate import engine, request
+
+    progress = engine(tmp_path)
+    req = request()
+    store = SequenceStore(":memory:")
+    store.record(session_key=req.session_id, sequence_id=req.sequence_id, body_sha256="owner",
+                 frames=0, received_at="now", body=req.model_dump_json())
+    reports = SimpleNamespace(get_session=lambda _: SimpleNamespace(user_id=req.user_id, scenario_id=req.scenario_id))
+    data = query(client(tmp_path, store=store, reports=reports, coating_engine=progress),
+                 session_id=req.session_id, user_id="different-user", prompt="이제 2번으로 넘어가도 될까요?")
+
+    assert data["context_status"] == "not_available"
+    assert data["sequence_context"]["reason_code"] == "session_mismatch"
+    assert data["sequence_context"]["next_zone_id"] is None
+    assert data["coating_context"] is None
+
+
+@pytest.mark.parametrize("with_sequence", [False, True])
+def test_live_thickness_uses_recent_heatmap_instead_of_report(tmp_path, with_sequence):
+    from trainer.demo_api.tests.test_zone_completion_gate import engine, request
+
+    progress = engine(tmp_path)
+    req = request(value=171)
+    store = SequenceStore(":memory:")
+    if with_sequence:
+        store.record(session_key=req.session_id, sequence_id=req.sequence_id, body_sha256="measured",
+                     frames=0, received_at="now", body=req.model_dump_json())
+    data = query(client(tmp_path, store=store, coating_engine=progress), session_id=req.session_id,
+                 user_id=req.user_id, prompt="지금 칠한 도막은 몇 마이크론이야?", summarize=False)
+
+    if with_sequence:
+        assert data["sequence_context"]["scope"] == "current_coating_measurement"
+        measured = re.search(r"누적 히트맵 기준 1구역의 도포부 평균 두께는 ([\d.]+)µm", data["answer"])
+        assert measured and float(measured[1]) == pytest.approx(161, abs=0.3)
+    else:
+        assert data["sequence_context"]["reason_code"] == "no_sequence_for_session"
+        assert data["context_status"] == "not_available"
+
+
+def test_current_thickness_and_session_target_keep_their_sources_separate(tmp_path):
+    from trainer.demo_api.tests.test_zone_completion_gate import engine, request
+
+    progress = engine(tmp_path)
+    req = request(value=171)
+    store = SequenceStore(":memory:")
+    store.record(session_key=req.session_id, sequence_id=req.sequence_id, body_sha256="measure-vs-target",
+                 frames=0, received_at="now", body=req.model_dump_json())
+    reports = SimpleNamespace(get_session=lambda _: SimpleNamespace(
+        user_id=req.user_id, scenario_id=req.scenario_id, target_thickness_um=145,
+    ))
+    data = query(client(tmp_path, store=store, reports=reports, coating_engine=progress), session_id=req.session_id,
+                 user_id=req.user_id, prompt="실제로 칠한 평균 두께랑 목표는 각각 얼마야?", summarize=False)
+
+    measured = re.search(r"도포부 평균 두께는 ([\d.]+)µm", data["answer"])
+    assert measured and float(measured[1]) == pytest.approx(161, abs=0.3)
+    assert "목표 두께는 145µm" in data["answer"]
+    assert data["sequence_context"]["scope"] == "current_coating_measurement"
 
 
 def test_next_zone_replays_saved_absolute_crops_after_engine_restart(tmp_path):

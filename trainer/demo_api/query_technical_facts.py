@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 
-from .coating_assessment import GRADE_WORDS, assess_readings
+from .coating_assessment import GATE_COMPLETION_PERCENT, GRADE_WORDS, assess_readings
 from .query_runtime import explicit_work_process
 from .term_rules import fix_typos, matched_terms
 
@@ -40,6 +40,10 @@ _THICKNESS_GRADE = re.compile(r"과도막|저도막|(?:도막|두께).{0,12}정�
 _EXCESS_FILM = re.compile(r"과도막|과다\s*도막|두껍게\s*(?:칠|발)|굵게\s*(?:왕창\s*)?칠")
 _UNPAINTED = re.compile(r"미도장|안\s*칠한|칠하지\s*않")
 _PROGRESS_OFFSET = re.compile(r"점수|진행률|메워|보상|상쇄")
+_MOVE_CRITERION = re.compile(
+    r"(?:이동\s*기준|(?:구역|zone|존)(?:을|를|으로)?\s*(?:이동|넘어가)(?:는|기)?\s*기준)"
+    r"(?:이|은|는)?\s*\d+(?:\.\d+)?\s*(?:%|퍼센트|프로).{0,24}(?:뜻|의미)", re.I,
+)
 _BLASTING = re.compile(r"블라스트|블라스팅|\bblasting\b", re.I)
 _GRINDING = re.compile(r"그라인딩|그라인더|연삭|\bgrind(?:er|ing)\b", re.I)
 _PAINT_TARGET_ACTION = re.compile(r"올려야|쌓아야|목표|기준|도료를?\s*더|덧칠|더\s*칠")
@@ -440,6 +444,12 @@ def technical_fact_answer(
         return None
     if (answer := _film_inspection_method(prompt, prior_coating=prior_coating)) is not None:
         return answer
+    if _MOVE_CRITERION.search(prompt):
+        return (
+            f"스프레이 훈련에서는 구역 진행률이 {GATE_COMPLETION_PERCENT:g}%에 이르면 다음 구역을 안내합니다. "
+            "진행률은 각 화소에서 목표 두께를 얼마나 채웠는지의 평균입니다. "
+            "목표에 도달한 화소만 세는 목표 두께 도달 면적은 별도 지표입니다."
+        )
     if not _SIMULATION.search(prompt):
         return (
             _coating_definition_answer(prompt)

@@ -36,6 +36,11 @@ _FIRST_REFERENCE_ZONE = re.compile(
 _MOVE_PERMISSION = re.compile(
     r"(?:이동해|옮겨|넘어가)(?:도\s*(?:될|돼|되|괜찮)|면\s*(?:돼|되|된|안\s*돼))|넘어감\s*(?:되|돼)"
 )
+_NEIGHBORING_ZONE = re.compile(r"(?:옆|다음)\s*(?:칸|구역|zone|존|곳|데)(?:\s*(?:으?로|에))?", re.I)
+_NUMBERED_MOVE = re.compile(
+    r"(\d+)\s*번\s*(?:(?:구역|zone|존)\s*)?(?:(?:으?로|에)\s*)?"
+    r"(?:넘어가|이동해|옮겨|가)\s*(?:도|면)\s*(?:될|돼|되|괜찮|안\s*돼|됨)", re.I,
+)
 _LIVE_ZONE = re.compile(r"지금|현재|방금|이제|여기|더\s*칠|구역|\bzone\b|존(?!재|중)", re.I)
 _AREA_METRIC = re.compile(
     r"(?:목표\s*두께\s*(?:도달|이상|충족|넘(?:은|는))|기준\s*두께\s*이상)\s*(?:인\s*)?면적|도달\s*면적"
@@ -143,7 +148,8 @@ def is_current_next_question(prompt: str) -> bool:
     if short_order or _NEXT_ORDER_RESUME.search(prompt):
         return True
     zone_move = _MOVE_PERMISSION.search(prompt) and (
-        _LIVE_ZONE.search(prompt) or re.search(r"진행률|반올림|건(?:을|은)?\s*(?:멈|내려|손에)", prompt))
+        _LIVE_ZONE.search(prompt) or _NEIGHBORING_ZONE.search(prompt)
+        or re.search(r"진행률|반올림|건(?:을|은)?\s*(?:멈|내려|손에)", prompt))
     named_move = _LIVE_ZONE.search(prompt) and re.search(
         r"(?:\d+\s*번\s*(?:구역|zone|존)?|다음\s*(?:데|곳))(?:으?로|에)?\s*가(?:면|도)\s*(?:돼|되|됨|된|안\s*돼)",
         prompt, re.I,
@@ -165,6 +171,9 @@ def is_current_next_question(prompt: str) -> bool:
 
 
 _COMPLETION = re.compile(r"다\s*칠했|다\s*칠한\s*거|완료\s*(?:됐|되었|했|된\s*거|야|인가|냐|\?|$)|끝났|끝냈|넘어가도")
+_STOP_PAINTING = re.compile(
+    r"(?:그만\s*(?:칠|도장|분사)해|이(?:쯤|정도)(?:\s*에서|면)?\s*(?:끝내|마쳐))\s*도\s*(?:될|돼|되|괜찮)"
+)
 _NAMED_ZONE = re.compile(r"(?:zone|존|구역)\s*(\d+)|(\d+)\s*번\s*(?:zone|존|구역)", re.I)
 
 
@@ -173,13 +182,17 @@ def is_current_completion_question(prompt: str) -> bool:
 
     판정 경로가 없으면 문서 검색이 "완료되었습니다"를 지어냈다(2026-11-24 음성 질의 시험, 시퀀스 0개에서도).
     """
-    return bool(not _asks_to_rewrite_text(prompt) and _COMPLETION.search(prompt)
-                and re.search(r"구역|zone|존|지금|현재|여기|이제", prompt, re.I)
-                and not is_knowledge_ask(prompt))
+    if _asks_to_rewrite_text(prompt) or is_knowledge_ask(prompt):
+        return False
+    in_training = re.search(r"구역|zone|존(?!재|중)|지금|현재|여기|여긴|이제", prompt, re.I)
+    if in_training and (_STOP_PAINTING.search(prompt) or _COMPLETION.search(prompt)):
+        return True
+    return bool(_NEIGHBORING_ZONE.search(prompt) and _MOVE_PERMISSION.search(prompt))
 
 
 _PROGRESS_UNAVAILABLE = {
     "session_id_missing": ("session_required", "훈련 세션 ID(session_id)가 없어 현재 구역의 진행 상태를 확인할 수 없습니다. 훈련을 시작한 뒤 세션 ID를 함께 보내 주세요."),
+    "session_mismatch": ("session_mismatch", "질문의 작업자와 훈련 세션이 일치하지 않아 이동 여부를 확인할 수 없습니다. 세션 ID를 확인해 주세요."),
     "playback_live_progress_unavailable": ("analysis_unavailable", "재생 기록에서 현재 도막의 완료 여부를 판정할 자료가 없습니다. 훈련 세션의 분사 기록을 확인해 주세요."),
     "no_sequence_for_session": ("sequence_missing", "아직 받은 분사 기록이 없어 현재 구역의 완료 여부를 확인할 수 없습니다. 분사 시퀀스가 전송된 뒤 다시 질문해 주세요."),
     "current_sequence_unavailable": ("sequence_unavailable", "최근 분사 기록을 읽을 수 없어 현재 구역의 완료 여부를 확인할 수 없습니다. 시퀀스 전송 결과를 확인해 주세요."),
@@ -187,6 +200,7 @@ _PROGRESS_UNAVAILABLE = {
     "zone_unresolved": ("zone_unresolved", "최근 분사 기록에 유효한 구역 번호(Zone ID)가 없어 완료 여부를 확인할 수 없습니다. 구역이 인식된 뒤 다시 질문해 주세요."),
     "sequence_engine_unavailable": ("analysis_unavailable", "구역 진행 분석을 사용할 수 없어 완료 여부를 확인할 수 없습니다. 잠시 후 다시 질문해 주세요."),
     "coating_engine_unavailable": ("analysis_unavailable", "도막 분석을 사용할 수 없어 구역 완료 여부를 확인할 수 없습니다. 잠시 후 다시 질문해 주세요."),
+    "coating_measurement_unavailable": ("analysis_unavailable", "최근 분사 기록의 누적 히트맵에서 칠한 곳의 평균 두께를 확인할 수 없습니다."),
     "progress_metric_unavailable": ("analysis_unavailable", "이 공정의 구역별 진행률 측정값이 없어 현재 진행률을 확인할 수 없습니다."),
     "heatmap_unavailable": ("heatmap_unavailable", "최근 분사 기록에 도막 히트맵이 없어 완료 여부를 확인할 수 없습니다. 히트맵을 포함한 시퀀스가 전송된 뒤 다시 질문해 주세요."),
     "heatmap_map_unavailable": ("heatmap_unavailable", "현재 구역이 속한 면의 도막 히트맵이 없어 완료 여부를 확인할 수 없습니다. 구역의 면 번호와 히트맵을 확인해 주세요."),
@@ -211,10 +225,8 @@ def _progress_unavailable(scope, reason: str):
     return progress_unavailability(reason)[1], scope, None
 
 
-def _first_zone_answer(query, reports, sequence_engine, scope):
+def _first_zone_answer(query, session, sequence_engine, scope):
     """분사 기록이 아직 없으면 세션 시작 응답과 같은 첫 구역을 안내한다(완료 판정은 하지 않는다)."""
-    get_session = getattr(reports, "get_session", None)
-    session = get_session(query.session_id) if callable(get_session) else None
     scenario = query.scenario_id or getattr(session, "scenario_id", None)
     process = "blasting" if getattr(session, "tool_type", None) == "blasting_gun" else "spray"
     if not scenario:
@@ -244,7 +256,8 @@ def _replay_coating_progress(request, sequences, session, coating_engine):
 
 
 def current_next_answer(query, sequences, reports=None, *, sequence_engine=None, coating_engine=None,
-                        ask_quality: bool = False, compare_coating_sources: bool = False):
+                        ask_quality: bool = False, compare_coating_sources: bool = False,
+                        ask_measured_thickness: bool = False):
     """Replay saved physical evidence through the telemetry gate, without DB writes."""
     scope = {"scope": "current_progress", "analysis_status": "not_available",
              "current_zone_id": None, "next_zone_id": None, "can_compare": False}
@@ -253,11 +266,19 @@ def current_next_answer(query, sequences, reports=None, *, sequence_engine=None,
         return _progress_unavailable(scope, "playback_live_progress_unavailable")
     if not query.session_id:
         return _progress_unavailable(scope, "session_id_missing")
+    get_session = getattr(reports, "get_session", None)
+    session = get_session(query.session_id) if callable(get_session) else None
+    owner = getattr(session, "user_id", None)
+    if owner is not None and owner != query.user_id:
+        return _progress_unavailable(scope, "session_mismatch")
+    stored_scenario = getattr(session, "scenario_id", None)
+    if stored_scenario is not None and not _matches_scenario(query.scenario_id, stored_scenario):
+        return _progress_unavailable(scope, "current_scenario_mismatch")
     latest = sequences.latest_sequence_id(query.session_id)
     if not latest:
-        if ask_progress or ask_quality or compare_coating_sources or is_current_completion_question(query.prompt):
+        if ask_progress or ask_quality or compare_coating_sources or ask_measured_thickness or is_current_completion_question(query.prompt):
             return _progress_unavailable(scope, "no_sequence_for_session")
-        return _first_zone_answer(query, reports, sequence_engine, scope)
+        return _first_zone_answer(query, session, sequence_engine, scope)
     body = sequences.load_body(session_key=query.session_id, sequence_id=latest)
     try:
         request = AnalyzeSequenceRequest.model_validate(body)
@@ -267,14 +288,16 @@ def current_next_answer(query, sequences, reports=None, *, sequence_engine=None,
         selected_mode = learning_mode_from_scenario(query.scenario_id)
         if selected_mode is None or selected_mode != request.resolved_mode_id:
             return _progress_unavailable(scope, "current_scenario_mismatch")
-    scope.update(scenario_id=request.scenario_id, sequence_id=request.sequence_id,
-                 process=request.process_type, current_zone_id=request.zone_id)
+    scope.update(scenario_id=request.scenario_id, sequence_id=request.sequence_id, process=request.process_type)
     if str(request.zone_id).lower() in {"", "-1", "0", "none", "null"}:
         return _progress_unavailable(scope, "zone_unresolved")
+    scope["current_zone_id"] = request.zone_id
     if sequence_engine is None:
         return _progress_unavailable(scope, "sequence_engine_unavailable")
     from trainer.demo_api.sequence_analysis import gate_sequence_decision
     decision = sequence_engine.evaluate(request, sequences)
+    if ask_measured_thickness and request.process_type != "spray":
+        return _progress_unavailable(scope, "coating_measurement_unavailable")
     if request.process_type == "blasting":
         if ask_progress or ask_quality or compare_coating_sources:
             return _progress_unavailable(scope, "progress_metric_unavailable")
@@ -284,13 +307,21 @@ def current_next_answer(query, sequences, reports=None, *, sequence_engine=None,
         return decision.text_guide or _PROGRESS_UNKNOWN, scope, None
     if coating_engine is None:
         return _progress_unavailable(scope, "coating_engine_unavailable")
-    get_session = getattr(reports, "get_session", None)
-    session = get_session(query.session_id) if callable(get_session) else None
     progress = _replay_coating_progress(request, sequences, session, coating_engine)
     scope.update(analysis_status="available" if progress.available else "not_available",
                  reason_code=progress.reason, status=progress.status)
     if not progress.available:
         return progress_unavailability(progress.reason)[1], scope, progress.model_dump(mode="json")
+    if ask_measured_thickness:
+        measured = (progress.assessment or {}).get("thickness_um")
+        if measured is None:
+            scope["analysis_status"] = "not_available"
+            return _progress_unavailable(scope, "coating_measurement_unavailable")
+        scope["scope"] = "current_coating_measurement"
+        answer = f"누적 히트맵 기준 {request.zone_id}구역의 도포부 평균 두께는 {measured:g}µm입니다."
+        if "목표" in query.prompt and progress.target_thickness_um is not None:
+            answer += f" 이 세션의 목표 두께는 {progress.target_thickness_um:g}µm입니다."
+        return answer, scope, progress.model_dump(mode="json")
     decision = gate_sequence_decision(request, decision, progress)
     if (progress.zone_id == request.zone_id and progress.status == "complete"
             and progress.recommendation == "move_next_zone"):
@@ -356,11 +387,13 @@ def current_next_answer(query, sequences, reports=None, *, sequence_engine=None,
         if asked and asked != str(request.zone_id):
             guide = f"실시간 진행률은 지금 분사 중인 구역만 확인할 수 있습니다. {guide}"
     elif is_current_completion_question(query.prompt) and progress.zone_id == request.zone_id:
-        # 완료를 물었으면 판정을 먼저 말한다. 다른 구역 번호를 물어도 훈련 중에는 지금 구역만 판정한다.
+        destination = _NUMBERED_MOVE.search(query.prompt)
         named = _NAMED_ZONE.search(query.prompt)
-        asked = (named[1] or named[2]) if named else None
+        asked = (named[1] or named[2]) if named and destination is None else None
         head = (f"지금 구역은 {request.zone_id}구역입니다. 훈련 중에는 지금 구역의 완료만 판정합니다. "
                 if asked and asked != str(request.zone_id) else "")
+        if destination and scope["next_zone_id"] and destination[1] != scope["next_zone_id"]:
+            head = f"지금 안내되는 다음 구역은 {scope['next_zone_id']}구역입니다. "
         verdict = "완료 기준을 넘었습니다." if progress.status == "complete" else "아직 완료되지 않았습니다."
         guide = f"{head}{request.zone_id}구역은 {verdict} {guide}"
     return guide, scope, progress.model_dump(mode="json")
@@ -506,12 +539,34 @@ _PROPOSED_START = re.compile(
 )
 _PLAN_BASIS = re.compile(r"순서.*(?:이유|왜).*?(?:모드|시나리오|피도면).*?(?:순서|알려)")
 _CURRENT_WORK = re.compile(
-    r"(?:지금|현재|최근|방금).{0,35}(?:작업\s*(?:하던|하는|중)|(?:분사|도장)\s*(?:한|중인))\s*(?:구역|존|zone)",
+    r"(?:지금|현재|최근|방금).{0,35}(?:작업\s*(?:하던|하는|중(?:인)?)"
+    r"|(?:분사|도장)\s*(?:한|하던|하는|중(?:인)?)|칠(?:한|하던|하는)|뿌(?:린|리던|리는))"
+    r"\s*(?:구역|존|zone|곳|데)(?=$|[\s은는이가을를과와랑,?.!？。])",
     re.I,
 )
 _CURRENT_WORK_LOOKUP = re.compile(
-    r"(?:지금|현재|최근|방금).{0,35}어디(?:를|에)?\s*(?:도장|칠|분사)(?:을|를)?\s*(?:하|했|고)",
+    r"(?:지금|현재|최근|방금).{0,35}어디(?:를|에)?\s*(?:(?:도장|칠|분사)(?:을|를)?"
+    r"\s*(?:하(?:고\s*있|던|는\s*중|셨)|했|고\s*있)|뿌(?:렸|리고\s*있))"
+    r"|어디(?:를|에)?\s*(?:도장하고|분사하고|칠하고|뿌리고)\s*있었",
     re.I,
+)
+_CURRENT_WORK_PLACE_ASK = re.compile(
+    r"^(?:은|는|이|가|을|를)?\s*(?:어디(?!\s*까지)|(?:어느|어떤)\s*(?:구역|존|zone|곳)"
+    r"|뭐(?=[?.!？。\s]|$|야|지|죠|였|예)|몇\s*(?:번|구역|존|zone)|번호|알려)",
+    re.I,
+)
+_CURRENT_ZONE_SHORT = re.compile(
+    r"\s*(?:지금|현재)\s*(?:작업\s*)?(?:구역|존|zone)(?:\s*(?:의\s*)?번호)?(?:은|는|이|가)?"
+    r"\s*(?:어디(?:야|지|죠|예요)?|몇\s*번(?:이야|이지|이죠|인가요)?)?\s*[?.!？。]*\s*",
+    re.I,
+)
+_LAST_KNOWN_ZONE = re.compile(
+    r"(?:마지막으로|최근에?)\s*(?:번호가\s*)?(?:확인|판정)된\s*(?:구역|존|zone)"
+    r"(?:은|는|이|가|을|를)?\s*(?:어디|어느|뭐|몇|번호|알려)",
+    re.I,
+)
+_QUOTED_LOCATION_EXAMPLE = re.compile(
+    r"""["'“‘][^"'”’]+["'”’](?=[^.!?。！？\n]{0,40}(?:뜻|의미|번역))"""
 )
 _FIRST_WORK = re.compile(r"(?:처음|첫\s*(?:구역|존|zone)|(?:가장|제일)?\s*먼저).{0,20}(?:칠|도장|분사|구역|존|zone)", re.I)
 _THICKNESS = re.compile(r"(?<![\d.+-])(\d{1,5}(?:\.\d{1,6})?)\s*(?:마이크론|마이크로(?:미터)?|[µμu]m)", re.I)
@@ -572,6 +627,11 @@ def _matches_scenario(selected: str | None, stored: object) -> bool:
     return isinstance(stored, str) and mode is not None and mode == learning_mode_from_scenario(stored)
 
 
+def _recorded_zone(body: Mapping) -> str | None:
+    zone = str(body.get("zone_id") or "").strip()
+    return zone if re.fullmatch(r"[1-9][0-9]*", zone) else None
+
+
 def answer_session_facts(query, sequences, reports, *, previous_prompt: str = "",
                          sequence_engine=None, coating_engine=None) -> LiveSessionAnswer | None:
     """Answer measured and reference-only questions without generating missing evidence."""
@@ -606,17 +666,37 @@ def answer_session_facts(query, sequences, reports, *, previous_prompt: str = ""
                 and re.search(r"거리", prompt) and re.search(r"너무\s*멀|너무\s*가깝|결론|단정", prompt))
     pose_before_spray = (re.search(r"자세", prompt) and re.search(r"이상|정상|평가|문제", prompt)
                          and re.search(r"아직|한\s*번도|전혀", prompt) and re.search(r"안\s*(?:쐈|했)|분사", prompt))
-    current_work = _CURRENT_WORK.search(prompt)
-    first_work = current_work and _FIRST_WORK.search(prompt[current_work.end():])
-    current_lookup = (_CURRENT_WORK_LOOKUP.search(prompt) or first_work
-                      or (current_work and re.match(r"(?:은|는|이|가)?\s*(?:어디|어느|뭐|몇\s*번)", prompt[current_work.end():])))
+    # For questions about a quoted example's meaning, match the surrounding text only.
+    location_prompt = _QUOTED_LOCATION_EXAMPLE.sub(" ", prompt)
+    current_work = _CURRENT_WORK.search(location_prompt)
+    after_work = location_prompt[current_work.end():] if current_work else ""
+    first_work = _FIRST_WORK.search(after_work)
+    current_lookup = (
+        _CURRENT_ZONE_SHORT.fullmatch(location_prompt)
+        or _CURRENT_WORK_LOOKUP.search(location_prompt)
+        or first_work
+        or _CURRENT_WORK_PLACE_ASK.match(after_work)
+    )
+    last_known = _LAST_KNOWN_ZONE.search(location_prompt)
     quality = (_QUALITY_VERDICT.search(prompt)
                and (re.search(r"그럼|그러면|이거|현재|지금|이동|도막", prompt) or is_current_next_question(previous_prompt))
                and not re.search(r"방법|규정|절차|문서", prompt))
     if not (detail or plan_lookup or uniform or units or zone_score or report_diff or report_rank
-            or distance or pose_before_spray or current_lookup or quality):
+            or distance or pose_before_spray or current_lookup or last_known or quality):
         return None
+    if detail == "current_coating_measurement":
+        answer, scope, coating = current_next_answer(query, sequences, reports, sequence_engine=sequence_engine,
+                                                     coating_engine=coating_engine, ask_measured_thickness=True)
+        if scope["analysis_status"] != "available":
+            reason = scope.get("reason_code")
+            if reason == "no_sequence_for_session":
+                answer = "아직 받은 분사 기록이 없어 지금 칠한 도막 두께를 확인할 수 없습니다."
+            return LiveSessionAnswer(answer, sequence_context=scope, coating_context=coating, context_status="not_available",
+                                     unavailable_reason=progress_unavailability(reason)[0])
+        return LiveSessionAnswer(answer, sequence_context=scope, coating_context=coating)
     if not (query.session_id or plan_lookup or uniform or units or detail == "project_distribution"):
+        if current_lookup or last_known:
+            return _unavailable("어느 훈련인지 확인할 수 없습니다. 훈련 세션 ID를 보내 주세요.", "session_required")
         return None
     get_session = getattr(reports, "get_session", None)
     session = get_session(query.session_id) if query.session_id and callable(get_session) else None
@@ -793,6 +873,23 @@ def answer_session_facts(query, sequences, reports, *, previous_prompt: str = ""
             f"{zone}번 구역에서 확인된 분사 {len(values)}회의 평균 이격거리는 {sum(values) / len(values):.1f}mm입니다. 거리의 적정 여부는 적용 기준을 함께 확인해야 합니다."
         )
 
+    if last_known:
+        scope = {"scope": "last_located_sequence", "analysis_status": "not_available",
+                 "last_known_zone_id": None, "sequence_id": None, "can_compare": False}
+        has_visible_sequence = False
+        for sequence_id in reversed(sequences.sequence_ids(query.session_id)):
+            prior = sequences.load_body(session_key=query.session_id, sequence_id=sequence_id)
+            if prior is None or not accessible(prior):
+                continue
+            has_visible_sequence = True
+            location = _recorded_zone(prior)
+            if location:
+                scope.update(analysis_status="available", last_known_zone_id=location, sequence_id=sequence_id)
+                return LiveSessionAnswer(f"마지막으로 구역 번호가 확인된 분사 기록은 {location}번 구역입니다.", sequence_context=scope)
+        if has_visible_sequence:
+            return _unavailable("이 훈련의 분사 기록에서 확인된 구역 번호가 없습니다.", "zone_unresolved", scope)
+        return _unavailable("이 훈련에서 확인할 수 있는 분사 기록이 없습니다.", "sequence_missing", scope)
+
     latest = sequences.latest_sequence_id(query.session_id) if pose_before_spray or current_lookup or quality or detail == "coating_sources" else None
     body = sequences.load_body(session_key=query.session_id, sequence_id=latest) if latest else None
     visible_body = body is not None and accessible(body)
@@ -803,11 +900,15 @@ def answer_session_facts(query, sequences, reports, *, previous_prompt: str = ""
         )
 
     if current_lookup:
-        current = body.get("zone_id") if visible_body else None
-        current = str(current) if current and str(current) not in {"-1", "0"} else None
+        current = _recorded_zone(body) if visible_body else None
         scope = {"scope": "current_sequence", "analysis_status": "available", "current_zone_id": current,
                  "sequence_id": latest if visible_body else None, "can_compare": False}
-        answer = f"가장 최근 분사 기록의 구역은 {current}번입니다." if current else "최근 분사 기록에서 현재 구역을 확인할 수 없습니다."
+        if current:
+            answer = f"가장 최근 분사 기록의 구역은 {current}번입니다."
+        elif visible_body:
+            answer = "최근 분사 기록의 구역 번호가 미판정이어서 현재 구역을 확인할 수 없습니다."
+        else:
+            answer = "현재 구역을 확인할 수 있는 분사 기록이 없습니다."
         if first_work:
             setting = body.get("sequence_setting") if visible_body else None
             process = process_from_tool_type(setting.get("tool_type")) if isinstance(setting, Mapping) else None
@@ -824,7 +925,8 @@ def answer_session_facts(query, sequences, reports, *, previous_prompt: str = ""
                 answer += " 이 훈련의 등록된 첫 구역은 확인할 수 없습니다."
         if current is None and "reference_first_zone_id" not in scope:
             scope["analysis_status"] = "not_available"
-            return _unavailable(answer, "zone_unresolved" if latest else "sequence_missing", scope)
+            reason = "zone_unresolved" if visible_body else "sequence_unavailable" if latest else "sequence_missing"
+            return _unavailable(answer, reason, scope)
         return LiveSessionAnswer(answer, sequence_context=scope)
 
     if quality or detail == "coating_sources":

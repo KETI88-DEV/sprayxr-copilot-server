@@ -133,6 +133,16 @@ def test_bare_visual_thickness_question_needs_prior_coating_topic():
     assert technical_fact_answer("눈으로 봤을 때 강판 두께를 잴 수 있어?", prior_coating=True) is None
 
 
+@pytest.mark.parametrize("prompt", [
+    "이동 기준 85%는 무엇을 뜻해?",
+    "구역을 넘어가는 기준이 85퍼센트라는 건 어떤 의미예요?",
+])
+def test_move_threshold_explains_zone_progress_separately_from_area(prompt):
+    answer = technical_fact_answer(prompt)
+
+    assert answer and all(fragment in answer for fragment in ("85%", "각 화소", "평균", "도달 면적"))
+
+
 def test_simulator_inspection_method_uses_record_ui_terms_without_inventing_a_value():
     answer = technical_fact_answer("VR에서 저도막 부위를 판별하는 법을 알려 주세요.")
     assert answer and "히트맵" in answer and "정상 범위" in answer
