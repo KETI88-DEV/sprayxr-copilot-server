@@ -5,6 +5,19 @@
     {
       "published_at": null,
       "date_source": "개발 변경 이력 날짜 · 운영 반영 여부는 서버 버전으로 확인",
+      "url": "https://github.com/KETI88-DEV/sprayxr-copilot-server/releases/tag/v3.15.9",
+      "body": "- API 문서에 필요한 Swagger UI 파일을 서버가 제공합니다. 인터넷이 없는 로컬망에서도 문서를 열고 Try it out으로 로컬 API를 호출할 수 있습니다.",
+      "ui_changes": [
+        "같은 로컬망의 PC에서 DGX Spark의 로컬 IP로 접속해 API 문서를 사용합니다."
+      ],
+      "source": "변경 이력",
+      "date": "2026-11-25",
+      "title": "인터넷 없이 API 문서 열기",
+      "version": "v3.15.9"
+    },
+    {
+      "published_at": null,
+      "date_source": "개발 변경 이력 날짜 · 운영 반영 여부는 서버 버전으로 확인",
       "url": "https://github.com/KETI88-DEV/sprayxr-copilot-server/releases/tag/v3.15.8",
       "body": "- 스프레이 구역 진행률(completion_percent)의 반올림 전 값이 85% 이상이면 다음 구역을 안내합니다. 픽셀별 목표 두께 도달률을 최대 100%로 제한해 공식 구역 전체의 평균을 냅니다.\n- 목표 두께 이상 면적과 기존 정상 범위(기본 160~200µm)에 따른 도막 등급을 품질 정보로 표시하며, 과도막 경고도 제공합니다.",
       "ui_changes": [

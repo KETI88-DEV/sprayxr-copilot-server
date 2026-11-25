@@ -24,7 +24,7 @@ from trainer.demo_api.portal_navigation import portal_document
 from trainer.demo_api import __version__, chat_service as chat_service_mod
 from trainer.demo_api.access_control import AccessControlMiddleware, OperatorCredentials
 from trainer.demo_api.api_call_log import ApiCallStore, ApiCallLoggingMiddleware
-from trainer.demo_api.api_docs import api_docs_document, create_api_docs_router
+from trainer.demo_api.api_docs import DOCS_ASSET_PREFIX, api_docs_document, create_api_docs_router
 from trainer.demo_api.maintenance import create_maintenance_router
 from trainer.demo_api.query_chat import create_query_chat_router
 from trainer.demo_api.portal_home import create_home_router
@@ -561,13 +561,17 @@ def create_app(
     @app.get("/docs", include_in_schema=False)
     async def swagger_docs(request: Request) -> HTMLResponse:
         prefix=request.scope.get("root_path","").rstrip("/")
+        assets = prefix + DOCS_ASSET_PREFIX
         redirect=app.swagger_ui_oauth2_redirect_url
         page=get_swagger_ui_html(
             openapi_url=prefix+(app.openapi_url or "/openapi.json"),
             title=app.title+" - Swagger UI",
+            swagger_js_url=assets + "/swagger-ui-bundle.js",
+            swagger_css_url=assets + "/swagger-ui.css",
+            swagger_favicon_url=assets + "/favicon-32x32.png",
             oauth2_redirect_url=prefix+redirect if redirect else None,
             init_oauth=app.swagger_ui_init_oauth,
-            swagger_ui_parameters=app.swagger_ui_parameters,
+            swagger_ui_parameters={**(app.swagger_ui_parameters or {}), "validatorUrl": None},
         )
         document = api_docs_document(page.body.decode("utf-8"), app.openapi(), root_path=prefix)
         return HTMLResponse(portal_document(document,"docs"),headers={"Cache-Control":"no-store"})

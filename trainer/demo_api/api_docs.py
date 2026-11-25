@@ -6,9 +6,16 @@ import json
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
+DOCS_ASSET_PREFIX = '/docs/assets'
+_STATIC_DIR = Path(__file__).with_name('static')
+_SWAGGER_ASSETS = {
+    'swagger-ui-bundle.js': 'application/javascript',
+    'swagger-ui.css': 'text/css',
+    'favicon-32x32.png': 'image/png',
+}
 _METHODS = {'get', 'post', 'put', 'patch', 'delete', 'head', 'options', 'trace'}
 _CSS = """
 #api-docs-tools{position:sticky;top:calc(var(--copilot-nav-height,52px) + var(--copilot-banner-height,0px));z-index:100;background:#f5f8fd;border-bottom:1px solid #dce4f1;padding:10px 20px;font-family:system-ui,sans-serif;color:#23334b;box-sizing:border-box}
@@ -49,17 +56,25 @@ def api_docs_document(document: str, schema: dict, *, root_path: str = '') -> st
              '<div id="api-docs-results" hidden></div></div></section>')
     document = document.replace('</head>', f'<style>{_CSS}</style></head>', 1)
     document = document.replace('<div id="swagger-ui">', tools + '<div id="swagger-ui">', 1)
-    asset = html.escape(root_path.rstrip('/') + '/docs/assets/api_docs.js', quote=True)
+    asset = html.escape(root_path.rstrip('/') + DOCS_ASSET_PREFIX + '/api_docs.js', quote=True)
     return document.replace('</body>', '<script id="api-docs-index" type="application/json">' + index +
                             f'</script><script defer src="{asset}"></script></body>', 1)
 
 
 def create_api_docs_router() -> APIRouter:
-    router = APIRouter()
+    router = APIRouter(prefix=DOCS_ASSET_PREFIX, include_in_schema=False)
 
-    @router.get('/docs/assets/api_docs.js', include_in_schema=False)
+    @router.get('/api_docs.js')
     def script() -> FileResponse:
-        return FileResponse(Path(__file__).with_name('static') / 'api_docs.js',
+        return FileResponse(_STATIC_DIR / 'api_docs.js',
                             media_type='application/javascript', headers={'Cache-Control': 'no-cache'})
+
+    @router.get('/{filename}')
+    def swagger_asset(filename: str) -> FileResponse:
+        media_type = _SWAGGER_ASSETS.get(filename)
+        if media_type is None:
+            raise HTTPException(status_code=404, detail='Not Found')
+        return FileResponse(_STATIC_DIR / 'swagger-ui' / filename, media_type=media_type,
+                            headers={'Cache-Control': 'no-cache'})
 
     return router

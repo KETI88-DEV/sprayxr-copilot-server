@@ -38,7 +38,7 @@ DB뷰어 학습데이터의 작업자·공정·시나리오·품질 필터는 �
 
 | 페이지 | 용도 |
 |---|---|
-| [API 문서](http://keti-xr-lab.iptime.org:58000/docs) | API별 입력값과 응답 형식을 확인하고 예제로 호출해 볼 수 있습니다. |
+| [API 문서](http://keti-xr-lab.iptime.org:58000/docs) | API별 입력값과 응답 형식을 확인하고 예제로 호출해 볼 수 있습니다. 인터넷이 없는 로컬망에서는 `http://<서버 로컬 IP>:58000/docs`로 접속합니다. |
 | [DB뷰어](http://keti-xr-lab.iptime.org:58000/admin) | 훈련자, 세션, 시퀀스, 질문·답변, 리포트와 호출 이력을 조회합니다. |
 | [3D 모션뷰어](http://keti-xr-lab.iptime.org:58000/motion-viewer) | 훈련 기록을 재생하고 전문가 기준과 비교합니다. |
 | [3D 모션뷰어 v2](http://keti-xr-lab.iptime.org:58000/motion-viewer/v2) | 같은 기록을 큰 3D 장면과 오른쪽 고정 질문 열로 재생합니다. 기존 화면은 그대로 둡니다. |

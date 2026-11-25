@@ -209,6 +209,13 @@ trainer/demo_api/static/motion_viewer_cache.js
 trainer/demo_api/static/portal_home.css
 trainer/demo_api/static/portal_home.html
 trainer/demo_api/static/portal_home.js
+trainer/demo_api/static/swagger-ui/LICENSE
+trainer/demo_api/static/swagger-ui/NOTICE
+trainer/demo_api/static/swagger-ui/SOURCE.txt
+trainer/demo_api/static/swagger-ui/favicon-32x32.png
+trainer/demo_api/static/swagger-ui/swagger-ui-bundle.js
+trainer/demo_api/static/swagger-ui/swagger-ui-bundle.js.LICENSE.txt
+trainer/demo_api/static/swagger-ui/swagger-ui.css
 trainer/demo_api/static/query_chat_presets.js
 trainer/demo_api/static/training_data.js
 trainer/demo_api/static/training_verification.js
