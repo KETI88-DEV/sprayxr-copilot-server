@@ -50,7 +50,7 @@ from fastapi.responses import JSONResponse
 
 from trainer.demo_api.copilot_contracts import CopilotQueryData, CopilotQueryRequest, CopilotResponse
 from trainer.demo_api.coating_query import (
-    answer_coating_question, answer_distribution_cause, drop_contradicted_causes, parse_viewer_coating_context,
+    answer_coating_question, answer_distribution_cause, coating_zone_number, drop_contradicted_causes, parse_viewer_coating_context,
     report_coating_context, target_advice_facts, zone_measures)
 from trainer.demo_api.copilot_intent import RECORD_OBJECT, classify_question_intent, coating_status_lookup_allowed, fallback_intent, preset_intent, is_coating_status_question, is_coating_advice_question, is_domain_question, is_general_painting_knowledge, is_explanatory_question, is_off_topic
 from trainer.demo_api.dialogue import (GENERAL_KNOWLEDGE_LIMIT, INSTRUCTION_REFUSAL, asks_for_instructions, authenticated_facts, conversation_key,
@@ -64,7 +64,9 @@ from trainer.demo_api.simulator_context import (
     SIMULATOR_CONTEXT, spray_simulator_context, wants_simulator_context,
     simulator_configuration_facts, simulator_record_answer,
 )
-from trainer.demo_api.copilot_session_context import build_query_instruction, session_coating_target_answer, summarize_session, viewer_definition_context
+from trainer.demo_api.copilot_session_context import (
+    build_query_instruction, session_coating_target_answer, session_target_question, summarize_session, viewer_definition_context,
+)
 from trainer.demo_api.context_prompts import context_text, matched_prompt
 from trainer.demo_api.term_rules import fix_typos, matched_terms, meaning_evidence, routed_terms, same_word_lines, term_context, unit_facts, with_document_terms
 from trainer.demo_api.pose_query import (
@@ -108,6 +110,7 @@ from trainer.demo_api.reference_order_query import (
     reference_order_answer, reference_position_question, resolve_reference_target,
 )
 from trainer.demo_api.v1_store import V1Store
+from trainer.demo_api.telemetry_contracts import learning_mode_from_scenario
 from trainer.demo_api.record_query import BODY_PART, DIRECTION_WORD, FIRST_FIX, WORST_ZONE, RecordAnswer, RecordFacts, answer_record_question, split_parts, ground_generated, has_record_marker, previous_subject
 from trainer.demo_api.viewer_progress import progress_question, viewer_progress_answer
 from trainer.demo_api.query_runtime import (generation_slot_for, query_model_name, retrieval_question,
@@ -243,6 +246,18 @@ _EVALUATION_QUESTION: Final = re.compile(r"잘한|못한|고쳐야|고칠|개선
 # 훈련 총평("잘한 점과 고칠 점 알려줘"): 판정 모델에 넘기면 문서 검색이 27µm를 "정상 범위"라고 칭찬했다(2026-11-24 음성 질의 시험).
 _SESSION_REVIEW: Final = re.compile(r"(?:잘한|못한|고칠|고쳐야\s*(?:할|될)|개선할|부족한)\s*점|개선점"
                                   r"|(?:지금|현재)\s*(?:뭐가|무엇이|어떤)\s*문제")
+_CURRENT_REVIEW: Final = re.compile(
+    r"^\s*(?:지금|현재|방금)\s*(?:(?:뭐가|무엇이|어떤)\s*문제(?:야|인가요|인지\s*알려\s*줘)?"
+    r"|(?:전체적으로\s*)?(?:어때|어떤지\s*(?:봐\s*줘|알려\s*줘)|상태는\s*어때))\s*[?.!？。]*\s*$"
+)
+_COATING_DEICTIC_ZONE: Final = re.compile(
+    r"(?<![가-힣])(?:이|해당|현재|지금|방금)\s*(?:구역|존|zone)(?=\b|은|는|이|가|을|를|의|에서)", re.I,
+)
+_COATING_ORDINAL_ZONE: Final = re.compile(r"(?<![가-힣])(?:첫|두|세|네|\d+)\s*번\s*째\s*(?:구역|구요|존|zone)?", re.I)
+_UNINTERPRETABLE_INPUT: Final = re.compile(r"(?:[\u1161-\u11a7\u314f-\u3163][\s\u1161-\u11a7\u314f-\u3163]*|([0-9])\1{5,})")
+_BARE_CHOICE: Final = re.compile(r"([1-9][0-9]?)\s*[.)]?")
+_REQUESTED_CHOICE: Final = re.compile(r"골라\s*주|선택해\s*주|번호.{0,8}(?:알려|말해|입력해)\s*주")
+_ZONE_CLARIFICATION: Final = "어느 구역의 문제를 묻는지 확인하기 어렵습니다. 구역 번호를 알려 주세요."
 _SESSION_REVIEW_PENDING: Final = ("세션을 마치면 잘한 점과 고칠 점을 정리해 알려 드립니다. 아직 완료 리포트가 없습니다. 지금은 '전체 자세 유사도는?', "
                                   "'순서 준수율은?', '다음 구역으로 넘어가도 돼?'처럼 하나씩 물어봐 주세요.")
 # Preserve main ebb923c3's narrowly scoped v7.1 diagnostic-scaffold repair.
@@ -1099,10 +1114,24 @@ async def _execute_copilot_query(
     if asks_for_instructions(query.prompt):
         # 지침 공개·무시 요청은 모델에 보내지 않는다(2026-11-14 운영 q41).
         return _success_response(query, request_started, answer=INSTRUCTION_REFUSAL, retrieval_used=False, citations=[])
+    if _UNINTERPRETABLE_INPUT.fullmatch((original_prompt or query.prompt).strip(" \t\r\n?.!？。")):
+        return _success_response(query, request_started,
+            answer="질문의 내용을 확인하기 어렵습니다. 알고 싶은 항목이나 구역 번호를 다시 알려 주세요.",
+            retrieval_used=False, citations=[], context_status="not_available", unavailable_reason="clarification_required")
     dialogue_turns = await to_thread.run_sync(lambda: sequences.recent_query_turns(
         query.session_id or "CHAT:" + query.user_id, limit=6,
         user_id=query.user_id, conversation_key=conversation_id,
     ))
+    number = _BARE_CHOICE.fullmatch(query.prompt.strip()) if query.session_id else None
+    if number:
+        previous = dialogue_turns[-1] if dialogue_turns else {}
+        previous_answer = str(previous.get("answer", ""))
+        if previous.get("answer_source") == "analysis" and previous_answer == _ZONE_CLARIFICATION:
+            query = query.model_copy(update={"prompt": f"{number[1]}번 구역 문제점", "task_type": "error_analysis"})
+        elif not _REQUESTED_CHOICE.search(previous_answer):
+            return _success_response(query, request_started,
+                answer="어떤 번호인지 확인하기 어렵습니다. 구역이나 확인할 항목을 함께 알려 주세요.",
+                retrieval_used=False, citations=[], context_status="not_available", unavailable_reason="clarification_required")
     # 저장된 질문은 사용자가 적은 그대로다. 이어받기가 앞 질문의 용어를 찾도록 이 요청 안에서만 오타를 고쳐 본다.
     dialogue_turns = [{**turn, "prompt": fix_typos(str(turn.get("prompt") or ""))} for turn in dialogue_turns]
     if not dialogue_turns and _UNANCHORED_FOLLOWUP.fullmatch(query.prompt.strip()):
@@ -1209,27 +1238,32 @@ async def _execute_copilot_query(
                                          context_status=live_answer.context_status, unavailable_reason=live_answer.unavailable_reason)
 
     session = None
-    if query.session_id and not documents_only and re.search(r"목표|상한|하한|윗값|아랫값|정상\s*범위", query.prompt):
+    if query.session_id and not documents_only and (
+        session_target_question(query.prompt) or re.search(r"목표|상한|하한|윗값|아랫값|정상\s*범위", query.prompt)
+    ):
         get_session = getattr(reports, "get_session", None)
         session = await to_thread.run_sync(lambda: get_session(query.session_id)) if callable(get_session) else None
         if (session is not None and (getattr(session, "user_id", None) != query.user_id
                 or query.scenario_id not in (None, getattr(session, "scenario_id", None)))):
             session = None
+    if session is not None:
+        target = session_coating_target_answer(query.prompt, session)
+        if target is not None:
+            answer, scope = target
+            available = scope["analysis_status"] == "available"
+            return _success_response(query, request_started, answer=answer, retrieval_used=False, citations=[],
+                                     coating_context=scope, context_status="available" if available else "not_available",
+                                     unavailable_reason=None if available else "analysis_unavailable")
     if not documents_only:
         technical = technical_fact_answer(
             query.prompt, summarize=query.summarize,
             target_thickness_um=getattr(session, "target_thickness_um", None),
             target_min_thickness_um=getattr(session, "target_thickness_min_um", None),
             target_max_thickness_um=getattr(session, "target_thickness_max_um", None),
+            prior_coating=bool(dialogue_turns and re.search(r"도막|\bDFT\b", str(dialogue_turns[-1].get("prompt", "")), re.I)),
         )
         if technical is not None:
             return _success_response(query, request_started, answer=technical, retrieval_used=False, citations=[])
-    if session is not None:
-        target = session_coating_target_answer(query.prompt, session)
-        if target is not None:
-            answer, scope = target
-            return _success_response(query, request_started, answer=answer, retrieval_used=False, citations=[],
-                                     coating_context=scope, context_status="available")
 
     position = reference_position_question(query.prompt)
     previous = dialogue_turns[-1] if dialogue_turns else {}
@@ -1390,11 +1424,35 @@ async def _execute_copilot_query(
         if signed_answer is not None:
             return _success_response(query, request_started, answer=signed_answer, retrieval_used=False, citations=[],
                                      context_status="available")
+    current_review = query.task_type in ("knowledge_search", "error_analysis") and _CURRENT_REVIEW.fullmatch(query.prompt)
     if (query.session_id and not viewer_requested and not documents_only and not explanatory_request
-            and _SESSION_REVIEW.search(query.prompt) and not is_general_painting_knowledge(query.prompt)
+            and (current_review or _SESSION_REVIEW.search(query.prompt)) and not is_general_painting_knowledge(query.prompt)
             and (not is_domain_question(query.prompt) or _MY_RUN.search(query.prompt) or re.search(r"훈련|세션", query.prompt))):
+        current_session = None
+        if current_review:
+            get_session = getattr(reports, "get_session", None)
+            current_session = await to_thread.run_sync(lambda: get_session(query.session_id)) if callable(get_session) else None
+            if current_session is not None:
+                scenario = getattr(current_session, "scenario_id", None)
+                mode = learning_mode_from_scenario(query.scenario_id) if query.scenario_id else None
+                if (getattr(current_session, "user_id", None) != query.user_id
+                        or (query.scenario_id not in (None, scenario)
+                            and (mode is None or not isinstance(scenario, str)
+                                 or mode != learning_mode_from_scenario(scenario)))):
+                    return _success_response(query, request_started,
+                        answer="질문과 일치하는 훈련을 확인할 수 없습니다. 세션과 학습 모드를 확인해 주세요.",
+                        retrieval_used=False, citations=[], context_status="not_available", unavailable_reason="session_mismatch")
         found_report = (await to_thread.run_sync(lambda: reports.latest_complete_analysis(query.session_id))
-                        if reports is not None else None)
+                        if reports is not None and (not current_review or current_session is not None) else None)
+        if not found_report and current_session is not None:
+            guide, scope, coating = await to_thread.run_sync(lambda: current_next_answer(
+                query, sequences, reports, sequence_engine=sequence_engine, coating_engine=coating_engine, ask_quality=True,
+            ))
+            if scope["analysis_status"] == "available":
+                return _success_response(query, request_started,
+                    answer=f"최근 분사 기록을 기준으로 답합니다. {guide} 전체 평가는 완료 리포트에서 확인하세요.",
+                    retrieval_used=False, citations=[], sequence_context=scope, coating_context=coating,
+                    context_status="available")
         return _success_response(query, request_started, answer=_session_findings(found_report) if found_report else _SESSION_REVIEW_PENDING,
                                  retrieval_used=False, citations=[], context_status="available" if found_report else "not_available",
                                  unavailable_reason=None if found_report else "report_unavailable")
@@ -1875,16 +1933,37 @@ async def _execute_copilot_query(
 
     if query.task_type != "knowledge_search" and not knowledge_routed:
         if query.task_type == "error_analysis":
+            prompt = query.prompt
+            zone = coating_zone_number(prompt)
+            if zone is None and (_COATING_DEICTIC_ZONE.search(prompt) or _COATING_ORDINAL_ZONE.search(prompt)):
+                context = (query.context or "").strip()
+                playback = (trusted_coating or {}).get("playback_context") or {}
+                if _COATING_DEICTIC_ZONE.search(prompt):
+                    if context.isascii() and context.isdecimal():
+                        zone = context
+                    elif isinstance(playback, Mapping) and str(playback.get("zone_id", "")).isdecimal():
+                        zone = str(playback["zone_id"])
+                if zone is None:
+                    return _success_response(query, request_started,
+                        answer=_ZONE_CLARIFICATION,
+                        retrieval_used=False, citations=[], context_status="not_available",
+                        unavailable_reason="clarification_required")
+                prompt = f"{zone}번 구역 {prompt}"
             coating = await coating_facts()
             measures = _viewer_measures(query.context, query.prompt)[0]
-            cause = answer_distribution_cause(coating, detailed=True, measures=measures, prompt=query.prompt)
+            cause = answer_distribution_cause(coating, detailed=True, measures=measures, prompt=prompt)
             if cause is None and trusted_coating is not None:
                 # 뷰어 자료에 목표 대비 판정이 없으면(전문가 대비 행뿐) 완료 리포트로 답한다.
                 coating = await report_facts()
-                cause = answer_distribution_cause(coating, detailed=True, prompt=query.prompt)
+                cause = answer_distribution_cause(coating, detailed=True, prompt=prompt)
             if cause is not None:
                 return _success_response(query, request_started, answer=cause, retrieval_used=False, citations=[],
                                          coating_context=coating, context_status="available")
+            if zone is not None:
+                return _success_response(query, request_started,
+                    answer=f"{zone}번 구역의 도막 분석 결과를 확인할 수 없습니다.",
+                    retrieval_used=False, citations=[], context_status="not_available",
+                    unavailable_reason="analysis_unavailable")
         answer = pending_answers.get(query.task_type) or PENDING_TASK_ANSWERS[query.task_type]
         return _success_response(
             query, request_started, answer=answer, retrieval_used=False, citations=[]

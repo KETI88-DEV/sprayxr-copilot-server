@@ -30,6 +30,8 @@ def _saved_run(use_report):
         ],
         "pose_report": {"analysis_status": "unavailable", "average_similarity_score": None, "evaluated_sequence_count": 0},
     }
+    for row in report["coating_zones"]:
+        row.update(target_thickness_um=145, target_basis="session_target", adjustments=[], six_band_counts={})
     stored = SimpleNamespace(user_id="COPILOT-DEMO-USER", scenario_id="3", tool_type="spray_gun",
                              target_thickness_um=145, target_thickness_min_um=145,
                              target_thickness_max_um=190, target_basis="session_target",
@@ -54,6 +56,7 @@ def _saved_run(use_report):
 
 @pytest.mark.parametrize("prompt, fragments", [
     ("직전 분사의 평균 이동 속도랑 이격거리를 cm로 환산해 줘.", ("42cm/s", "29cm")),
+    ("방금 건 이동 속도가 빨랐어? 이격거리는 괜찮았어?", ("420mm/s", "290mm", "적정 여부")),
     ("방금 저장된 분사 시퀀스의 식별자는 뭐야?", ("SEQ-004",)),
     ("기본과 같은 값이어도 이 세션의 정상 범위는 시작 입력에서 생략했나요?", ("145", "190", "명시")),
 ])
@@ -178,4 +181,72 @@ def test_completed_vr_result_cannot_carry_to_another_session_in_one_conversation
     fresh = submit("NEW", "새 훈련에도 앞 기록의 그 점수와 합격이 나왔나요?")
     assert fresh["context_status"] == "not_available"
     assert "78" not in fresh["answer"] and "아직 확인할 수 없습니다" in fresh["answer"]
+    assert not pipeline.calls
+
+
+@pytest.mark.parametrize("task_type", ["error_analysis", "knowledge_search"])
+def test_pass_improvement_uses_recorded_simulator_outcome_and_report(tmp_path, task_type):
+    store, reports = _saved_run(True)
+    submission = reports.get_completion("RPT-RUN")
+    submission.payload.update(vr_score=52, is_pass=False)
+    reports.get_completion = lambda _: submission
+    reports.latest_complete_analysis("RUN")[1]["sequence_report"]["adherence_rate"] = .567
+    pipeline = Pipeline()
+    data = query(client(tmp_path, store=store, reports=reports, pipeline=pipeline),
+                 session_id="RUN", task_type=task_type,
+                 prompt="합격할려면 어떻게 해야하지", summarize=True)
+
+    answer = data["answer"]
+    for expected in ("52점(불합격)", "합격 기준 점수", "확인할 수 없습니다",
+                     "2번", "220µm", "145~190µm", "2→1→3"):
+        assert expected in answer, answer
+    assert "RPT-RUN" not in answer and "이렇게 하면 합격" not in answer
+    assert not pipeline.calls
+
+
+def test_pass_improvement_does_not_use_a_different_report_payload(tmp_path):
+    store, reports = _saved_run(True)
+    submission = reports.get_completion("RPT-RUN")
+    submission.session_id = "DIFFERENT"
+    reports.get_completion = lambda _: submission
+    data = query(client(tmp_path, store=store, reports=reports), session_id="RUN",
+                 task_type="error_analysis", prompt="합격하려면 어떻게 해야 하나요?")
+
+    assert "78점" not in data["answer"]
+    assert "합격 기준 점수" in data["answer"]
+    assert "145~190µm" in data["answer"]
+
+
+def test_session_trajectory_improvement_uses_order_and_direction_separately(tmp_path):
+    store, reports = _saved_run(True)
+    _, analysis = reports.latest_complete_analysis("RUN")
+    analysis["sequence_report"]["direction_summary"]["zone_summary"] = [{
+        "zone_id": "3", "expected_direction": "horizontal", "evaluated_sequence_count": 3,
+        "matched_sequence_count": 0, "direction_error_count": 3,
+    }]
+    pipeline = Pipeline()
+    data = query(client(tmp_path, store=store, reports=reports, pipeline=pipeline),
+                 session_id="RUN", task_type="trajectory_recomm",
+                 prompt="이번 훈련 궤적 어떤 부분을 개선해야되는지 알려줘")
+
+    answer = data["answer"]
+    for expected in ("최초 방문 3→1→2", "대표 권장 2→1→3", "방향 준수율 25%", "3번", "수평"):
+        assert expected in answer, answer
+    assert "도막" not in answer and "자세" not in answer
+    assert not pipeline.calls
+
+
+@pytest.mark.parametrize("task,prompt", [
+    ("error_analysis", "합격할려면 어떻게 해야하지"),
+    ("trajectory_recomm", "이번 훈련 궤적 어떤 부분을 개선해야되는지 알려줘"),
+])
+def test_training_improvement_reports_missing_completed_analysis(tmp_path, task, prompt):
+    store, reports = _saved_run(False)
+    pipeline = Pipeline()
+    data = query(client(tmp_path, store=store, reports=reports, pipeline=pipeline),
+                 session_id="RUN", task_type=task, prompt=prompt)
+
+    assert data["context_status"] == "not_available"
+    assert "완료 리포트" in data["answer"], data["answer"]
+    assert "78점" not in data["answer"] and "3→1→2" not in data["answer"]
     assert not pipeline.calls

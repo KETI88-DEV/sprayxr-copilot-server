@@ -27,6 +27,7 @@ from trainer.demo_api.query_technical_facts import technical_fact_answer
         ("저도막은 어떤 상태인가요?", ("건도막", "못 미친")),
         ("동료가 제트 코치 컷 77 기준이라는데 우리 조선소 표준 수치가 정확히 얼마야?", ("표준서", "기준명")),
         ("우리 현장 작업표준의 허용 도막 두께 수치는 몇 µm인가요?", ("표준서", "기준명")),
+        ("우리 회사 규격에 명시된 도막 판별 기준을 찾아줘.", ("표준서", "기준명")),
         ("블라스팅 할 때 도막이 너무 얇다고 자꾸 신경 쓰이는데, 지금도 160까지 도료를 더 올려야 하나?", ("표면 준비", "160µm", "적용하지")),
         ("그라인딩 작업 기록도 도료 분사 시퀀스처럼 과도막 경고가 뜨는 건가요?", ("스프레이", "그라인딩", "생성하지")),
     ],
@@ -111,3 +112,28 @@ def test_inspection_methods_keep_their_distinct_result_types(question, required)
 ])
 def test_inspection_comparisons_do_not_replace_document_or_off_topic_queries(question):
     assert technical_fact_answer(question) is None
+
+
+@pytest.mark.parametrize("question", [
+    "작업 시 저도막 과도막을 구별하는방법 알려줘",
+    "저도막 부위를 판별하는 법이 궁금해요.",
+    "육안으로 건도막 두께를 알 수 있나요?",
+])
+def test_coating_inspection_method_explains_measurement(question):
+    answer = technical_fact_answer(question)
+    assert answer and "두께계" in answer and "시방" in answer
+    assert "160" not in answer
+
+
+def test_bare_visual_thickness_question_needs_prior_coating_topic():
+    question = "눈으로 봤을때 두께를 어떻게 알지?"
+    assert technical_fact_answer(question) is None
+    answer = technical_fact_answer(question, prior_coating=True)
+    assert answer and "육안" in answer and "두께계" in answer
+    assert technical_fact_answer("눈으로 봤을 때 강판 두께를 잴 수 있어?", prior_coating=True) is None
+
+
+def test_simulator_inspection_method_uses_record_ui_terms_without_inventing_a_value():
+    answer = technical_fact_answer("VR에서 저도막 부위를 판별하는 법을 알려 주세요.")
+    assert answer and "히트맵" in answer and "정상 범위" in answer
+    assert "160" not in answer
