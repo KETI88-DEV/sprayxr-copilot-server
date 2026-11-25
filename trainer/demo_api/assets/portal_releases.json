@@ -5,6 +5,17 @@
     {
       "published_at": null,
       "date_source": "개발 변경 이력 날짜 · 운영 반영 여부는 서버 버전으로 확인",
+      "url": "https://github.com/KETI88-DEV/sprayxr-copilot-server/releases/tag/v3.15.17",
+      "body": "- 일반 지식 답변은 질문에 대한 설명으로 바로 시작합니다.\n- 학습자료를 근거로 작성한 답변은 RAG로, 모델 지식으로 작성한 답변은 LLM으로 표시합니다.\n- 문서나 훈련 기록이 있어야 답할 수 있는 질문에는 확인에 필요한 자료를 안내합니다.",
+      "ui_changes": [],
+      "source": "변경 이력",
+      "date": "2026-11-26",
+      "title": "일반 지식 답변 서두 간소화",
+      "version": "v3.15.17"
+    },
+    {
+      "published_at": null,
+      "date_source": "개발 변경 이력 날짜 · 운영 반영 여부는 서버 버전으로 확인",
       "url": "https://github.com/KETI88-DEV/sprayxr-copilot-server/releases/tag/v3.15.16",
       "body": "- 최근 분사 구역과 마지막으로 확인된 구역을 구분합니다. Zone 미판정이나 분사 기록 없음은 이유를 안내합니다.\n- 구역 이동 질문은 저장된 진행률을 확인합니다. 이동 기준 85%는 각 화소의 목표 두께 충족 정도를 평균한 값에 적용합니다.\n- 세션 목표와 정상 범위의 상·하한, 히트맵의 실제 도막 평균을 구분합니다.\n- 합성 훈련에서 변형 질의 35건을 시험했습니다. 최초 통과 12건·부분 통과 8건·실패 15건, 교정 후 35건 통과입니다.",
       "ui_changes": [],

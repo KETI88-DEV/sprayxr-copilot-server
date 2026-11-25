@@ -16,7 +16,6 @@ INTENTS = ("knowledge", "coating_status", "order_reference", "order_actual", "or
            "order_adherence", "order_direction", "pose_overall", "pose_worst_zone", "pose_zone", "pose_right", "pose_left")
 SCOPES = ("record", "zone", "playback", "unspecified")
 CONTEXT_RELATIONS = ("followup", "new_topic", "unclear")
-GENERAL_KNOWLEDGE_LIMIT = "문서로 확인되지 않은 일반적인 설명입니다. "
 KNOWLEDGE_TASK_CONTEXT = (
     "선박 도장·표면 처리 훈련 지식 설명입니다. 짧은 기술 질문도 그 작업 맥락을 유지하세요. "
     "대상이 모호하면 도장 작업에 관한 해석임을 밝히거나 필요한 범위를 되물으세요. "
