@@ -35,17 +35,17 @@ class GlossaryTranslation:
 
 
 _LANGUAGES = {
-    "ko": ("한국어", "한국말", "Korean", "tiếng Hàn"),
-    "en": ("영어", "English", "tiếng Anh"),
-    "vi": ("베트남어", "Vietnamese", "tiếng Việt"),
-    "id": ("인도네시아어", "인니어", "Indonesian", "tiếng Indonesia"),
-    "th": ("태국어", "Thai", "tiếng Thái"),
+    "ko": ("한국어", "한국말", "Korean", "tiếng Hàn", "bahasa Korea", "韩语", "韩文", "корейский"),
+    "en": ("영어", "English", "tiếng Anh", "bahasa Inggris", "英语", "英文", "английский"),
+    "vi": ("베트남어", "Vietnamese", "tiếng Việt", "bahasa Vietnam", "越南语", "вьетнамский"),
+    "id": ("인도네시아어", "인니어", "Indonesian", "tiếng Indonesia", "bahasa Indonesia", "印尼语", "индонезийский"),
+    "th": ("태국어", "Thai", "tiếng Thái", "bahasa Thai", "泰语", "тайский"),
     "ne": ("네팔어", "Nepali", "tiếng Nepal"),
     "my": ("미얀마어", "버마어", "Burmese", "tiếng Myanmar"),
     "uz": ("우즈베크어", "우즈벡어", "우즈베크", "우즈벡", "Uzbek", "tiếng Uzbek"),
     "si": ("싱할라어", "Sinhala", "tiếng Sinhala"),
-    "ru": ("러시아어", "Russian", "tiếng Nga"),
-    "zh": ("중국어", "Chinese", "tiếng Trung"),
+    "ru": ("러시아어", "Russian", "tiếng Nga", "bahasa Rusia", "俄语", "俄文", "русский"),
+    "zh": ("중국어", "Chinese", "tiếng Trung", "bahasa Mandarin", "中文", "汉语", "китайский"),
     "km": ("크메르어", "캄보디아어", "Khmer", "tiếng Khmer"),
 }
 _ALIASES = {alias.casefold(): code for code, aliases in _LANGUAGES.items() for alias in aliases}
@@ -59,6 +59,9 @@ _ACTION = r"(?:하면|번역(?:해\s*(?:줘|주세요)|해|하라|해\s*줄래|�
 _WHAT_IS = rf"what\s+is\s+(?P<subject>.+?)\s+in\s+(?P<language>{_LANG}){_END}"
 _LABEL_ONLY_NOTE = (r"(?:\s*[.!。]\s*(?:말\s*붙이지\s*말고|설명(?:은\s*빼고|\s*없이)|"
                     r"(?:항목명|용어|라벨|표기)\s*만))?")
+_KEEP_FORMAT_NOTE = (r"(?:\s*[.!。]\s*(?:기호|단위|수치|숫자)"
+                     r"(?:\s*(?:[·,]|와|과|및)\s*(?:기호|단위|수치|숫자)){0,3}(?:는|은)?\s*그대로"
+                     r"(?:\s*유지(?:해\s*(?:줘|주세요)|하세요))?)?")
 _QUOTES = {'"': '"', "'": "'", "“": "”", "‘": "’", "`": "`", "«": "»", "「": "」", "『": "』"}
 _QUOTED = "(?P<subject>" + "|".join(
     rf"{re.escape(start)}[^{re.escape(end)}\n]+{re.escape(end)}" for start, end in _QUOTES.items()
@@ -68,12 +71,26 @@ _QUOTE_QUALIFIER = (rf"(?:[^{_QUOTE_MARKS}\n.!?]{{1,44}}?"
                     r"(?:의|인|문구|문장|라벨|표시|안내|에\s*(?:쓸|넣을|표시할)|용어(?:집|표)에서)\s*)?")
 _TERM_QUALIFIER = r"(?:(?:도장\s*현장\s*)?(?:현장\s*)?(?:용어표|용어집)(?:를\s*기준으로|에\s*따라|로)\s*)?"
 _SHORT_LABEL = r"(?:(?:한\s*)?(?:용어|단어(?:\s*/\s*구)?|구절|표기|명칭)\s*만)"
+_EN_UI_PURPOSE = r"for\s+(?:(?:a|an|the)\s+)?(?:on-screen\s+)?(?:tool\s+selector|menu|button|label|tooltip|caption)"
+# A native translation request still carries the literal source in exactly one
+# quoted span. Only conventional translation/format phrasing can surround it.
+_LOCAL_TRANSLATION_PATTERNS = (
+    rf"(?:please\s+)?translate\s+{_QUOTED}(?:\s+from\s+(?P<source_language>{_LANG}))?"
+    rf"\s+(?:into|to)\s+(?P<language>{_LANG})\s+{_EN_UI_PURPOSE}{_END}",
+    rf"(?:(?:tolong|mohon)\s+)?terjemahkan(?:\s+(?:kalimat|frasa))?\s+{_QUOTED}"
+    rf"\s+ke(?:\s+dalam)?\s+(?P<language>{_LANG})(?:\s*[,.;]\s*(?:cukup|hanya)\s+(?:hasil\s+)?terjemahannya)?{_END}",
+    rf"(?:请\s*)?(?:(?:把|将)\s*)?{_QUOTED}\s*(?:翻译|译)(?:成|为)\s*(?P<language>{_LANG})"
+    rf"(?:\s*[，。,.]\s*只(?:给|要|输出)\s*译文)?{_END}",
+    rf"(?:пожалуйста\s*[,]?\s*)?(?:переведите|переведи|перевести)\s+{_QUOTED}"
+    rf"\s+на\s+(?P<language>{_LANG})(?:\s+язык)?(?:\s*[,.;]\s*только\s+перевод)?{_END}",
+)
 _PATTERNS = tuple((re.compile(pattern, re.IGNORECASE | re.DOTALL), intent) for pattern, intent in (
+    *((pattern, "explicit") for pattern in _LOCAL_TRANSLATION_PATTERNS),
     (rf"{_QUOTE_QUALIFIER}{_QUOTED}(?:을|를)?\s*(?P<language>{_LANG})\s*(?:도장\s*)?"
      rf"(?:규격|표준|공식)\s*용어(?:로|로만)\s*(?:정확히\s*)?{_ACTION}{_END}", "standard"),
     (rf"{_QUOTE_QUALIFIER}{_QUOTED}(?:을|를)?\s*(?P<language>{_LANG})\s*(?:으로|로)\s*"
-     rf"(?:[,，]\s*{_SHORT_LABEL}(?:\s*{_QUESTION})?|번역해\s*(?:줘|주세요|줄래|주시겠어요))"
-     rf"{_LABEL_ONLY_NOTE}{_END}", "explicit"),
+     rf"(?:[,，]\s*{_SHORT_LABEL}(?:\s*{_QUESTION})?|(?:번역해|옮겨)\s*(?:줘|주세요|줄래|주시겠어요))"
+     rf"{_LABEL_ONLY_NOTE}{_KEEP_FORMAT_NOTE}{_END}", "explicit"),
     (rf"{_QUOTE_QUALIFIER}{_QUOTED}(?:을|를)?\s*(?P<language>{_LANG})\s*(?:으로|로)?\s*"
      rf"{_SHORT_LABEL}\s*(?:{_QUESTION})?{_LABEL_ONLY_NOTE}{_END}", "label"),
     (rf"{_QUOTED}(?:이?라고)\s*(?:써|쓰여|적혀)\s*있는\s*(?:메뉴|버튼|라벨|문구)(?:가|를|의)?\s*"
