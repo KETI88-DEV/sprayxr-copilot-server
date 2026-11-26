@@ -68,6 +68,25 @@ def test_query_contract_defaults_to_summary_without_changing_model_default():
 
 
 @pytest.mark.parametrize("mode", ["quick", "detailed"])
+@pytest.mark.parametrize("summary", [True, False])
+def test_generation_focus_is_independent_of_model_and_summary_mode(mode, summary):
+    from trainer.demo_api.copilot_session_context import build_query_instruction
+    from trainer.demo_api.dialogue import conversation_messages
+    from trainer.scripts.answer_semantics import answer_system_prompt
+
+    prompts = [
+        build_query_instruction(QUESTION, client_context=None, session_summary="", recent_turns=[],
+                                response_mode=mode, summarize=summary),
+        answer_system_prompt(detailed=mode == "detailed", has_evidence=True, summarize=summary),
+        *(conversation_messages(QUESTION, recent_turns=[], facts={}, response_mode=mode, summarize=summary,
+                                knowledge_fallback=fallback)[0]["content"] for fallback in (True, False)),
+    ]
+    for prompt in prompts:
+        assert "묻지 않은 관련 지표" in prompt and "결론을 반복" in prompt
+        assert "필요한 안전 안내" in prompt and "답할 수 없는 구체적인 이유" in prompt
+
+
+@pytest.mark.parametrize("mode", ["quick", "detailed"])
 @pytest.mark.parametrize("summary", [None, True, False])
 def test_public_query_summary_and_model_selection_are_independent(mode, summary):
     pipeline = Documents()

@@ -73,16 +73,14 @@ def test_mode_only_reference_question_bypasses_empty_facts_conversation(tmp_path
     profile(tmp_path, "spray", ["1", "3", "2"])
     pipeline = Pipeline()
     data = query(client(tmp_path, pipeline=pipeline), task_type=task, context="스프레이 도장")
-    assert "Zone 1→3→2" in _flow(data["answer"])
-    assert "현재 등록된 기준 순서" in data["answer"]
-    assert "전문가(스프레이 3회) 기준이며 실제 수행·완료 판정은 아닙니다." in data["answer"]
-    assert "학습 모드 3" in data["answer"]
-    assert "스프레이" in data["answer"]
+    assert data["answer"] == "학습 모드 3 · 스프레이: Zone 1 → 3 → 2"
     assert data["context_status"] == "available"
     assert data["retrieval_used"] is False and data["citations"] == []
     context = data["sequence_context"]
     assert context["scope"] == "reference_only" and context["can_compare"] is False
     assert context["recommended_flow"] == ["1", "3", "2"]
+    assert context["reference_basis"] == "measured_expert_runs"
+    assert context["reference_session_count"] == 3
     for key in ("adherence_rate", "position_similarity", "best_reference_similarity", "evaluated_visit_count", "on_track_visit_count", "first_visit_flow"):
         assert context[key] is None
     assert pipeline.calls == []
@@ -92,8 +90,7 @@ def test_unknown_process_shows_both_registered_plans_without_selecting_spray(tmp
     profile(tmp_path, "spray", ["1", "3", "2"])
     profile(tmp_path, "blasting", ["2", "1", "3"])
     data = query(client(tmp_path))
-    assert "스프레이" in data["answer"] and "블라스팅" in data["answer"]
-    assert "1→3→2" in _flow(data["answer"]) and "2→1→3" in _flow(data["answer"])
+    assert data["answer"] == "학습 모드 3 · 스프레이: Zone 1 → 3 → 2 / 블라스팅: Zone 2 → 1 → 3"
     assert data["sequence_context"]["process"] is None
     assert data["sequence_context"]["recommended_flow"] is None
     assert {p["process"] for p in data["sequence_context"]["reference_plans"]} == {"spray", "blasting"}
@@ -202,13 +199,24 @@ def test_painting_order_term_question_is_answered_as_knowledge_not_a_reference_p
     assert data["answer"] == "일반 지식 답변입니다."
 
 
-def test_detailed_reference_answer_is_short_and_has_reference_basis(tmp_path):
+@pytest.mark.parametrize("summarize", [True, False])
+def test_detailed_model_simple_reference_lookup_only_answers_what_was_asked(tmp_path, summarize):
     profile(tmp_path, "spray", ["1", "3", "2"])
-    data = query(client(tmp_path), context=json.dumps({"process": "spray"}), response_mode="detailed")
-    assert "1→3→2" in _flow(data["answer"]) and "3회" in _flow(data["answer"])
+    data = query(client(tmp_path), context=json.dumps({"process": "spray"}),
+                 response_mode="detailed", summarize=summarize)
+    assert data["answer"] == "학습 모드 3 · 스프레이: Zone 1 → 3 → 2"
     assert data["sequence_context"]["reference_basis"] == "measured_expert_runs"
-    assert len(data["answer"]) < 400
-    assert "준수율" not in data["answer"] and "다음 Zone" not in data["answer"]
+
+
+def test_explicit_reference_basis_request_includes_reference_runs(tmp_path):
+    profile(tmp_path, "spray", ["2", "3", "1"], mode=2)
+    data = query(client(tmp_path), scenario_id="2", context="spray",
+                 prompt="권장 Zone 순서와 선정 근거도 알려줘.")
+    assert data["answer"].splitlines() == [
+        "학습 모드 2 · 스프레이: Zone 2 → 3 → 1",
+        "선정 근거는 스프레이 전문가 작업 기록 3회입니다.",
+    ]
+    assert data["sequence_context"]["reference_session_count"] == 3
 
 
 @pytest.mark.parametrize("prompt,position", [

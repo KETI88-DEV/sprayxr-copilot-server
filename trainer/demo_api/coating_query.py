@@ -21,6 +21,9 @@ _SPOKEN_ZONE_NUMBERS = dict(zip(
 ))
 _SPOKEN_ZONE = re.compile(r"(?:\bzone|(?<![가-힣])존)\s+(" + "|".join(_SPOKEN_ZONE_NUMBERS) + r")(?![가-힣])", re.I)
 _EXPERT = re.compile(r"전문가|expert", re.I)
+_GRADE_REQUEST = re.compile(r"판정|등급|저도막|과도막|과하|모자|도막\s*(?:상태|부족|과다)")
+_BASIS_REQUEST = re.compile(r"판정\s*(?:기준|근거)|정상\s*(?:도막\s*)?범위|어떻게\s*판정")
+_CURRENT_VIEW = re.compile(r"지금|현재\s*시점|실시간|재생")
 # 뷰어 기록에 목표 대비 판정이 없을 때 전문가 대비 답 앞에 밝히는 사유. 사유와 다른 말을 하지 않는다.
 _TARGET_MISSING = {
     "height_map_unavailable": "높이맵 원본 없음: 목표 대비 판정 불가.",
@@ -29,8 +32,6 @@ _TARGET_MISSING = {
 }
 _TARGET_NOT_SENT = "목표 대비 판정 자료가 없습니다."
 _VIEWER_NOTE = "최종 높이맵 기준(재생 시점 아님)."
-# 전문가 대비 행이 있는 기록에서만 붙인다(전문가 본인 기록 등은 화면의 '전문가 대비'가 비어 있다).
-_VIEWER_EXPERT_NOTE = " 전문가 비교 두께는 '전문가 대비'를 확인하세요."
 
 
 def _number(value: object) -> float | None:
@@ -147,38 +148,50 @@ def _quick_grades(rows: list[dict[str, Any]], prompt: str, basis: str) -> str:
 
 
 def _grade_answer(rows: list[dict[str, Any]], prompt: str, *, detailed: bool, viewer: bool = False,
-                  expert_rows: bool = False, report_expert: bool = False, quick: bool = False) -> str:
+                  report_expert: bool = False, quick: bool = False) -> str:
     """저장된 행의 등급을 읽어 옮긴다. 등급을 다시 계산하지 않는다."""
     basis = basis_label(rows[0]["target_thickness_um"], rows[0]["target_basis"])
-    if quick and "분포" not in prompt and "미도장" not in prompt and "안 칠" not in prompt:
+    distribution = "분포" in prompt
+    unpainted = "미도장" in prompt or "안 칠" in prompt
+    if quick and not (distribution or unpainted):
         return _quick_grades(rows, prompt, basis)
-    text = [f"{basis}으로 Zone별 도막을 판정했습니다. {RULE_NOTE}"]
-    if coating_zone_number(prompt):
-        text += [f"{_zone_label(row)}: {grade_phrase(row)}"
-                 + (f" · 전문가 대비 {EXPERT_WORDS[row['expert']['status']]}" if report_expert and row.get("expert") else "")
-                 for row in rows]
-    else:
+    text = []
+    show_grade = not (distribution or unpainted) or _GRADE_REQUEST.search(prompt)
+    named_zone = coating_zone_number(prompt)
+    if show_grade and named_zone:
+        text.extend(f"{_zone_label(row)}: {grade_phrase(row)}"
+                    + (f" · {EXPERT_WORDS[row['expert']['status']]}" if report_expert and row.get("expert") else "")
+                    for row in rows)
+    elif show_grade:
         for word, grade in (("저도막", "below"), ("과도막", "above")):
             # grade_phrase의 "저도막(칠한 곳 평균 …)"에서 괄호 부분만 Zone 이름 뒤에 붙인다.
             group = [_zone_label(row) + grade_phrase(row).removeprefix(word) for row in _graded(rows, grade)]
             text.append(f"{word}: " + (_listed(group, detailed=detailed) if group else "없음"))
         text.append(f"정상: {len(_graded(rows, 'normal'))}개")
-        unpainted = [_zone_label(row) for row in _graded(rows, None)]
-        text.append("칠한 곳 없음: " + (_listed(unpainted, detailed=detailed) if unpainted else "0개"))
-    if "분포" in prompt:
-        text.append(distribution_sentence(_sum_bands(rows)) or "")
-    if "미도장" in prompt or "안 칠" in prompt:
+        bare = [_zone_label(row) for row in _graded(rows, None)]
+        if bare:
+            text.append("칠한 곳 없음: " + _listed(bare, detailed=detailed))
+    if distribution:
+        text.append(distribution_sentence(_sum_bands(rows)) or "칠한 곳이 없어 두께 분포를 확인할 수 없습니다.")
+    if unpainted:
         shares = [(row["zone_id"], f"{row['unpainted_fraction'] * 100:.0f}%")
                   for row in sorted(rows, key=lambda row: -row["unpainted_fraction"])]
         # 0%로 적히는 Zone은 "큰 곳"이 아니다.
         largest = [f"Zone {zone_id}({share})" for zone_id, share in shares if share != "0%"][:3]
-        # 미도장 비율에는 합격 기준이 없다. 있다/없다로 판정하지 않고 숫자만 옮긴다.
-        text.append(("미도장 비율이 큰 곳: " + ", ".join(largest) + "." if largest else "판정한 Zone의 미도장 비율은 모두 1% 미만입니다.")
-                    + " 미도장 비율에는 합격 기준이 없어 숫자만 알려 드립니다.")
-    if report_expert and any(row.get("expert") for row in rows):
+        text.append("미도장 비율이 큰 곳: " + ", ".join(largest) + "." if largest else "판정한 Zone의 미도장 비율은 모두 1% 미만입니다.")
+        if re.search(r"합격|불합격|통과", prompt):
+            text.append("미도장 비율만으로는 합격 여부를 판단할 수 없습니다.")
+    if _BASIS_REQUEST.search(prompt):
+        band = rows[0].get("normal_band_um")
+        if (isinstance(band, (list, tuple)) and len(band) == 2
+                and (lower := _number(band[0])) is not None and (upper := _number(band[1])) is not None):
+            text.append(f"칠한 곳 평균 기준 정상 범위는 {lower:g}~{upper:g}µm입니다.")
+        else:
+            text.append(f"{basis}. {RULE_NOTE}")
+    if report_expert and not named_zone and any(row.get("expert") for row in rows):
         text.append(_expert_line(rows, detailed=detailed))
     if viewer:
-        text.append(_VIEWER_NOTE + (_VIEWER_EXPERT_NOTE if expert_rows else ""))
+        text.append(_VIEWER_NOTE if _CURRENT_VIEW.search(prompt) else "최종 높이맵 기준.")
     return "\n".join(line for line in text if line)
 
 
@@ -550,20 +563,19 @@ def answer_coating_question(context: dict[str, Any], prompt: str, *, detailed: b
             target = context.get("target") if isinstance(context.get("target"), Mapping) else {}
             note = _TARGET_MISSING.get(target.get("reason_code"), _TARGET_NOT_SENT) + " 아래는 전문가 기록과 견준 값입니다."
         elif _selected(target_rows, prompt):
-            return _grade_answer(_selected(target_rows, prompt), prompt, detailed=detailed, viewer=True,
-                                 expert_rows=bool(context.get("zones")), quick=quick)
+            return _grade_answer(_selected(target_rows, prompt), prompt, detailed=detailed, viewer=True, quick=quick)
     if context.get("analysis_status") != "available" or not rows:
         return ("도막의 과다·부족 영역을 판단할 신뢰 가능한 Zone별 도막 분석 자료가 없습니다. "
                 "뷰어의 기록을 다시 불러오거나 세션 완료 후 도막 분석 결과를 확인해 주세요.")
     if context.get("comparison_basis") == "saved_coating_report":
         if all("grade" in row for row in rows):
-            return _grade_answer(rows, prompt, detailed=detailed, report_expert=True, quick=quick)
+            return _grade_answer(rows, prompt, detailed=detailed, report_expert=bool(_EXPERT.search(prompt)), quick=quick)
         # 2026-11 이전에 저장된 리포트 행에는 grade가 없다.
         groups = [(label, [row for row in rows if row.get("status") == status])
                   for label, status in (("도막 부족", "under_app"), ("도막 과다", "over_app"))]
         if quick:
             return ", ".join(f"{label} {len(group)}곳" for label, group in groups) + "입니다(저장된 최종 도막 기준)."
-        text = ["분석 가능한 Zone의 저장된 최종 도막 결과를 기준으로 확인했습니다."]
+        text = []
         for label, group in groups:
             text.append(f"{label}: " + (", ".join(f"Map {r.get('map_num', '?')} · Zone {r.get('zone_id')}" for r in group) or "판정된 영역 없음"))
         return "\n".join(text)

@@ -102,17 +102,16 @@ def test_quick_record_answers_keep_the_full_explanation(prompt, tab, data, quick
         assert word in detailed, (word, detailed)
 
 
-def test_a_reference_plan_for_two_processes_fits_one_line() -> None:
+def test_a_reference_plan_for_two_processes_preserves_both_full_flows() -> None:
     class Engine:
         def reference_plan(self, *, scenario_id: str, process: str) -> dict:
             return {"process": process, "flow": list(range(1, 14)), "reference_session_count": 6}
 
     quick, _ = reference_order_answer(Engine(), scenario_id="3", process=None)
     detailed, _ = reference_order_answer(Engine(), scenario_id="3", process=None, detailed=True)
-    line = one_line(quick)
-    _one_line(line)
-    assert "등록 기준 순서" in line and "스프레이 Zone 1→2" in line and "블라스팅 Zone 1→2" in line and "(13개)" in line
-    assert detailed.startswith("학습 모드 3 현재 등록된 기준 순서 — 스프레이: Zone 1 → 2") and "전문가(스프레이 6회" in detailed
+    flow = " → ".join(map(str, range(1, 14)))
+    assert quick == f"학습 모드 3 · 스프레이: Zone {flow} / 블라스팅: Zone {flow}"
+    assert detailed.splitlines() == [quick, "선정 근거는 스프레이 전문가 작업 기록 6회, 블라스팅 전문가 작업 기록 6회입니다."]
 
 
 def test_the_quick_high_pressure_answer_keeps_the_complete_safety_answer_and_translation() -> None:

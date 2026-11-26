@@ -399,13 +399,18 @@ def test_after_complete_pose_recomm_names_the_most_problematic_zone(engine: Coat
     assert quick == worst["answer"]
     assert "평균 자세 유사도는 40%로 세션 평균 57%보다 낮습니다" in worst["answer"]
     assert "오른쪽 위팔 위치가 숙련자 범위를 벗어난 분사가 2회 중 2회였습니다(평균 12cm)" in worst["answer"]
-    assert "이 구역 도막은 기본 목표 160µm 기준으로 과도막(칠한 곳 평균 390µm, 미도장 0%)입니다." in worst["answer"]
-    assert worst["pose_context"]["scope"] == "zone" and worst["pose_context"]["report_id"] == report_id
+    assert "과도막" not in worst["answer"]
+    pose_context = worst["pose_context"]
+    assert pose_context["scope"] == "zone" and pose_context["report_id"] == report_id and pose_context["zone_id"] == "3"
+    saved_coating = pose_context["coating"]
+    assert saved_coating["thickness_um"] == pytest.approx(390, abs=.3)
+    assert saved_coating["thickness_um"] == report["coating_report"]["worst_zones"][0]["thickness_um"]
+    assert (saved_coating["status"], saved_coating["target_basis"]) == ("over_app", "default_target")
 
     zone1 = _ask(client, "이 구역 자세 어땠어?", context="1", mode="detailed")
-    assert zone1["answer"].startswith("1번 구역 결과입니다.")
+    assert zone1["answer"].startswith("1번 구역 자세 유사도는 ")
     assert "숙련자 범위를 벗어난 관절은 없었습니다" in zone1["answer"]
-    assert "정상(칠한 곳 평균" in zone1["answer"]
+    assert "두께" not in zone1["answer"]
 
     # 시퀀스를 가리키면 예전처럼 그 시퀀스를 채점한다.
     sequence = _ask(client, "이 분사 어땠어?", context="SEQ-002")
@@ -687,7 +692,7 @@ def test_pose_question_can_select_a_zone_from_natural_language() -> None:
     )
 
     assert result.context["zone_id"] == "3"
-    assert result.answer.startswith("3번 구역 결과입니다.")
+    assert result.answer.startswith("3번 구역 자세 유사도는 52%입니다.")
 
 
 def test_order_answers_follow_recommended_actual_missing_and_direction_questions() -> None:
@@ -744,7 +749,7 @@ def test_order_adherence_and_unknown_questions_return_distinct_focused_answers()
     adherence = answer_order_question(found, prompt="순서 준수율은 몇 퍼센트야?")
     unknown = answer_order_question(found, prompt="오늘 훈련 어땠어?")
 
-    assert adherence.answer == "순서 준수율은 60%입니다. 구역 방문 5회 중 3회가 권장 순서에 맞았습니다."
+    assert adherence.answer == "순서 준수율은 60%입니다."
     assert "순서 탭에서는" in unknown.answer
     assert unknown.context["scope"] == "help"
     assert adherence.answer != unknown.answer
@@ -817,23 +822,25 @@ def test_zone_without_expert_cells_in_its_mask_has_no_expert_row(tmp_path: Path)
     assert "참고로 전문가" not in result.report["guideline"]
 
 
-def test_coating_status_answer_after_complete_adds_the_expert_line(engine: CoatingProgressEngine, height_map: bytes) -> None:
+def test_coating_status_answer_after_complete_adds_the_expert_line_when_requested(engine: CoatingProgressEngine, height_map: bytes) -> None:
     client = _client(engine)
     _complete_session(client, height_map)
 
-    answer = _ask_knowledge(client, "도막 상태 어때?")["answer"]
+    direct = _ask_knowledge(client, "도막 상태 어때?")["answer"]
+    assert "전문가 대비" not in direct
+    answer = _ask_knowledge(client, "도막 상태와 전문가 대비 결과를 같이 알려줘.")["answer"]
 
     assert "참고(전문가 대비, 보정 전 두께):" in answer
     assert answer.index("저도막:") < answer.index("참고(전문가 대비, 보정 전 두께)")
 
 
-def test_zone_question_appends_the_expert_word(engine: CoatingProgressEngine, height_map: bytes) -> None:
+def test_zone_question_appends_the_expert_word_when_requested(engine: CoatingProgressEngine, height_map: bytes) -> None:
     client = _client(engine)
     _complete_session(client, height_map)
 
-    answer = _ask_knowledge(client, "Zone 3 도막은?")["answer"]
+    answer = _ask_knowledge(client, "Zone 3 도막과 전문가 대비 결과는?")["answer"]
 
-    assert "· 전문가 대비 전문가보다 두꺼운 구역" in answer
+    assert "· 전문가보다 두꺼운 구역" in answer
 
 
 def test_rows_saved_before_round_two_keep_the_old_answer() -> None:
@@ -848,10 +855,17 @@ def test_rows_saved_before_round_two_keep_the_old_answer() -> None:
 
 
 def test_zone_answer_sentence_names_the_expert_comparison(engine: CoatingProgressEngine, height_map: bytes) -> None:
-    client = _client(engine)
+    from trainer.demo_api.pose_query import answer_pose_question
+
+    reports = V1Store(":memory:")
+    client = _client(engine, reports)
     _complete_session(client, height_map)
 
-    assert "전문가 최종 도막과 견주면" in _ask(client, "가장 문제 있는 구역이 어디야?", mode="detailed")["answer"]
+    result = answer_pose_question(
+        reports.latest_complete_analysis(SESSION), prompt="가장 문제가 큰 구역의 자세와 도막은?", context=None,
+    )
+
+    assert "전문가 최종 도막과 견주면" in result.answer
 
 
 def _ask_knowledge(client: TestClient, prompt: str, mode: str = "detailed") -> dict[str, Any]:

@@ -90,11 +90,11 @@ def planning_messages(prompt: str, *, task_type: str, recent_turns: list[dict[st
 def conversation_messages(prompt: str, *, recent_turns: list[dict[str, str]], facts: dict[str, Any], response_mode: str,
                           simulator_context: str = "", summarize: bool = False,
                           knowledge_fallback: bool = False) -> list[dict[str, str]]:
-    from trainer.demo_api.quick_answer import QUERY_SUMMARY_INSTRUCTION
+    from trainer.demo_api.quick_answer import QUERY_FOCUS_INSTRUCTION, QUERY_SUMMARY_INSTRUCTION
     system = (
         ("사용자와 자연스럽게 대화하는 선박 도장·표면 처리 훈련 코치입니다. " if knowledge_fallback else
          "사용자와 자연스럽게 대화하는 AI Co-Pilot입니다. ")
-        + "한국어로 현재 발언에 직접 답하세요. "
+        + "한국어로 현재 발언에 직접 답하세요. " + QUERY_FOCUS_INSTRUCTION +
         "수식·코드 등 특정 표현을 유지하거나 제외하라는 사용자의 명시적 지시는 현재 질문의 맥락대로 따르세요. "
         "요청하지 않은 표기나 계산 결과를 임의로 덧붙이지 마세요. "
         "도장과 무관한 지식·일상·계산 질문에도 답하고, '야'처럼 부르면 자연스럽게 응답하세요. "
@@ -124,7 +124,7 @@ def conversation_messages(prompt: str, *, recent_turns: list[dict[str, str]], fa
         # combine that unrelated system policy with contradictory exceptions.
         system = (
             "사용자와 자연스럽게 대화하는 선박 도장·표면 처리 훈련 코치입니다. " + KNOWLEDGE_TASK_CONTEXT +
-            "현재 질문의 대상·공정·요구와 누적된 사용자 조건에 직접 답하세요. "
+            "현재 질문의 대상·공정·요구와 누적된 사용자 조건에 직접 답하세요. " + QUERY_FOCUS_INSTRUCTION +
             "종류를 물으면 무엇을 기준으로 나눈 유형인지 설명하세요. 대상의 종류 대신 그 대상의 부분·구성요소·관련 용어나 작업 순서를 나열하지 마세요. "
             "분류 기준이 불명확하면 작업 맥락을 밝혀 필요한 범위를 되물으세요. "
             "검증을 마친 검색 문서는 제공되지 않았습니다. 일반 지식으로 가능한 원인·방법·관계를 설명할 수 있습니다. "

@@ -5,6 +5,17 @@
     {
       "published_at": null,
       "date_source": "개발 변경 이력 날짜 · 운영 반영 여부는 서버 버전으로 확인",
+      "url": "https://github.com/KETI88-DEV/sprayxr-copilot-server/releases/tag/v3.15.18",
+      "body": "- 구역 순서만 물으면 ‘학습 모드 2 · 스프레이: Zone 2 → 3 → 1’처럼 한 줄로 답합니다. 여러 공정을 물으면 각 공정의 전체 순서를 안내합니다.\n- 진행률, 다음 구역, 구역별 도막, 자세·순서 유사도는 요청한 수치나 결과를 먼저 표시합니다.\n- 근거와 비교 항목은 질문에 맞춰 답합니다. 안전 경고와 현재 조건에서 확인할 수 없는 이유도 안내합니다.",
+      "ui_changes": [],
+      "source": "변경 이력",
+      "date": "2026-11-26",
+      "title": "구역 순서와 훈련 질의 답변 간소화",
+      "version": "v3.15.18"
+    },
+    {
+      "published_at": null,
+      "date_source": "개발 변경 이력 날짜 · 운영 반영 여부는 서버 버전으로 확인",
       "url": "https://github.com/KETI88-DEV/sprayxr-copilot-server/releases/tag/v3.15.17",
       "body": "- 일반 지식 답변은 질문에 대한 설명으로 바로 시작합니다.\n- 학습자료를 근거로 작성한 답변은 RAG로, 모델 지식으로 작성한 답변은 LLM으로 표시합니다.\n- 문서나 훈련 기록이 있어야 답할 수 있는 질문에는 확인에 필요한 자료를 안내합니다.",
       "ui_changes": [],

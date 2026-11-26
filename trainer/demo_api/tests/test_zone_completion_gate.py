@@ -619,11 +619,13 @@ def test_current_next_query_uses_the_same_gate(
     text, scope, payload = current_next_answer(
         query, store, sequence_engine=SequenceAnalysisEngine(tmp_path), coating_engine=progress)
     assert (scope["status"], scope["next_zone_id"]) == (status, next_zone)
-    assert payload["message"] in text
+    assert (payload["status"], payload["next_zone_id"]) == (status, next_zone)
     if status == "needs_more":
-        assert "84.0%" in text and "이동하세요" not in text
+        assert "84.0%" in payload["message"]
+        assert "완료되지 않았습니다" in text and "보완하세요" in text and "이동하세요" not in text
     else:
-        assert text.endswith(COMPLETE_GUIDE)
+        assert payload["message"].endswith(COMPLETE_GUIDE)
+        assert text == "2구역으로 이동하세요."
 
 
 def test_report_rows_use_the_progress_gate_and_keep_the_below_grade(tmp_path: Path) -> None:

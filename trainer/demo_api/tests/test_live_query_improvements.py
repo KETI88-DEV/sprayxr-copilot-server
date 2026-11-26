@@ -211,6 +211,14 @@ def test_viewer_order_answers_preserve_each_question_type(prompt: str, expected:
     assert expected in _viewer_answer("trajectory_recomm", prompt, context, None)
 
 
+def test_viewer_order_score_keeps_submetrics_for_their_own_questions() -> None:
+    context = {"recommended_flow": ["1", "3", "2"], "selected_flow": ["2", "1"],
+               "adherence_rate": 0.67, "best_reference_similarity": 0.75, "position_similarity": 0.50}
+
+    assert _viewer_answer("trajectory_recomm", "순서 유사도는?", context, "order_adherence") == "전문가 순서 유사도는 67%입니다."
+    assert _viewer_answer("trajectory_recomm", "순번별 유사도는?", context, "order_adherence") == "순번별 유사도 50%."
+
+
 def test_viewer_percent_values_are_not_reinterpreted_as_fractions() -> None:
     context = {"status": "available", "similarity_percent": 1,
                "zones": {"1:3": {"zone_id": "3", "similarity_percent": 1, "corrections": []}}}

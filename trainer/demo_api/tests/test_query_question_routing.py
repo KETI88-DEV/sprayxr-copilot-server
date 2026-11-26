@@ -197,8 +197,8 @@ def test_signed_target_grades_answer_the_coating_question_in_every_tab(task, mod
     data = ask(task, "도막이 과하거나 모자란 영역이 있어?", context(task, target=target_assessment()), mode=mode, pipeline=pipeline)
     answer = data["answer"]
     assert pipeline.calls == [] and data["retrieval_used"] is False
-    assert "저도막: 1개" in answer and "과도막: 1개" in answer and "기본 목표 160µm 기준" in answer
-    assert "전문가 대비" in answer and "최종 높이맵 기준(재생 시점 아님)" in answer
+    assert "저도막: 1개" in answer and "과도막: 1개" in answer and "최종 높이맵 기준" in answer
+    assert "전문가 대비" not in answer and "칠한 곳 평균 기준:" not in answer
     assert "두꺼운 영역" not in answer and "[" not in answer and "픽셀" not in answer
     assert pipeline.calls == [] and data["retrieval_used"] is False
 
@@ -279,12 +279,11 @@ def test_advice_prompt_gets_the_compact_target_facts():
     assert "six_band_counts" not in instruction and "전문가 대비 대표 두께 비교" not in instruction
 
 
-def test_viewer_note_points_to_the_expert_basis_only_when_expert_rows_exist():
-    """전문가 대비 행이 없는 기록(전문가 본인 기록 등)에서 '전문가 대비'를 보라고 하지 않는다."""
+def test_viewer_target_question_uses_the_same_focus_regardless_of_expert_rows():
     with_rows = ask("knowledge_search", "도막이 과하거나 모자란 영역이 있어?", context(target=target_assessment()), mode="detailed")["answer"]
     without = ask("knowledge_search", "도막이 과하거나 모자란 영역이 있어?", context(target=target_assessment(), expert=False), mode="detailed")["answer"]
-    assert "'전문가 대비'" in with_rows
-    assert "저도막: 1개" in without and "최종 높이맵 기준(재생 시점 아님)" in without
+    assert with_rows == without
+    assert "저도막: 1개" in without and "최종 높이맵 기준." in without
     assert "전문가" not in without
 
 

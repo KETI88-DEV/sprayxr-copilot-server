@@ -84,7 +84,7 @@ def test_longest_zone_numbers_and_direction_still_fit(progress, direction) -> No
 
 
 @pytest.mark.parametrize("mode", ["quick", "detailed"])
-def test_current_next_query_keeps_the_full_gate_explanation_in_both_modes(tmp_path: Path, mode: str) -> None:
+def test_current_next_query_answers_directly_and_keeps_the_gate_payload(tmp_path: Path, mode: str) -> None:
     from types import SimpleNamespace
 
     from trainer.demo_api.reference_order_query import current_next_answer
@@ -99,6 +99,9 @@ def test_current_next_query_keeps_the_full_gate_explanation_in_both_modes(tmp_pa
                  frames=0, received_at="now", body=req.model_dump_json())
     query = SimpleNamespace(session_id=req.session_id, context=None, scenario_id=None,
                             prompt="다음 구역은?", response_mode=mode)
-    text, _, payload = current_next_answer(
+    text, scope, payload = current_next_answer(
         query, store, sequence_engine=SequenceAnalysisEngine(tmp_path), coating_engine=progress)
-    assert text.endswith(payload["message"]) and "정상범위 160~200µm" in text
+    assert text == "2구역으로 이동하세요."
+    assert scope["next_zone_id"] == payload["next_zone_id"] == "2"
+    assert payload["status"] == "complete" and payload["recommendation"] == "move_next_zone"
+    assert "정상범위 160~200µm" in payload["message"]

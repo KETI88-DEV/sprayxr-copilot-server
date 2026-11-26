@@ -52,7 +52,7 @@ def test_completion_question_about_another_zone_says_only_the_current_zone_is_ju
     req = request(valid_count=84)
     query = SimpleNamespace(session_id=req.session_id, context=None, scenario_id=None, prompt="2번 구역 완료됐어?")
     text, _, _ = current_next_answer(query, _store(req), sequence_engine=SequenceAnalysisEngine(tmp_path), coating_engine=engine(tmp_path))
-    assert text.startswith("지금 구역은 1구역입니다. 훈련 중에는 지금 구역의 완료만 판정합니다. 1구역은 아직 완료되지 않았습니다.")
+    assert text.startswith("2구역의 완료 여부는 최근 분사 기록으로 확인할 수 없습니다. 1구역은 아직 완료되지 않았습니다.")
 
 
 def test_before_any_sequence_the_next_zone_is_the_registered_first_zone():
@@ -60,7 +60,7 @@ def test_before_any_sequence_the_next_zone_is_the_registered_first_zone():
     reports = SimpleNamespace(get_session=lambda _: SimpleNamespace(scenario_id="3", tool_type="spray_gun"))
     query = SimpleNamespace(session_id="empty", context=None, scenario_id=None, prompt="다음 구역은 어디야?")
     text, scope, payload = current_next_answer(query, SequenceStore(":memory:"), reports, sequence_engine=plans)
-    assert text == "아직 분사 기록이 없습니다. 7구역에서 시작하세요(권장 순서 7 → 4 → 8)."
+    assert text == "첫 권장 구역은 7번입니다."
     assert (scope["next_zone_id"], scope["reason_code"], payload) == ("7", "no_sequence_yet", None)
 
 

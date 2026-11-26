@@ -200,11 +200,13 @@ def test_zone_answer_names_the_basis_it_was_judged_against_and_compares_what_it_
         "coating_report": {"comparison_basis": "session_target", "target_thickness_um": 160.0},
         "coating_zones": [{"zone_id": "1", "status": "under_app", "thickness_um": 33.0, "coverage_percent": 0.0}],
     }
-    answer = pose_query.answer_zone_question(("RPT-1", analysis), context=None).answer
+    answer = pose_query.answer_zone_question(("RPT-1", analysis), context=None, prompt="가장 문제가 큰 구역의 자세와 도막은?").answer
     assert "51%로 세션 평균과 같습니다" in answer and "높습니다" not in answer
     assert "세션 목표 두께 160µm보다 부족합니다" in answer and "전문가 기준" not in answer
     analysis["coating_report"] = {"comparison_basis": "expert_reference", "target_thickness_um": None}
-    assert "전문가 기준보다 부족합니다" in pose_query.answer_zone_question(("RPT-1", analysis), context=None).answer
+    assert "전문가 기준보다 부족합니다" in pose_query.answer_zone_question(
+        ("RPT-1", analysis), context=None, prompt="가장 문제가 큰 구역의 자세와 도막은?",
+    ).answer
 
 
 def test_v2_page_keeps_every_element_the_playback_scripts_use() -> None:

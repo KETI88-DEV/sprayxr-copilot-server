@@ -89,7 +89,7 @@ def test_zone_scope_answers_the_asked_arm_within_that_zone() -> None:
 
 
 def test_zone_scope_without_an_arm_keeps_the_zone_summary() -> None:
-    assert pose_query.answer_pose_question(_report(), prompt="지금 자세는 어때?", context="9").answer.startswith("9번 구역 결과입니다.")
+    assert pose_query.answer_pose_question(_report(), prompt="지금 자세는 어때?", context="9").answer.startswith("9번 구역 자세 유사도는 19%입니다.")
 
 
 def test_question_scoring_does_not_touch_the_real_engine_session() -> None:
@@ -184,9 +184,6 @@ def test_report_answer_names_grades_means_and_unpainted_share(detailed: bool) ->
     answer = coating_query.answer_coating_question(_saved(*_GRADED), "도막이 과하거나 모자란 영역이 있어?", detailed=detailed)
 
     assert answer.split("\n") == [
-        "기본 목표 160µm 기준으로 Zone별 도막을 판정했습니다. "
-        # 966a3d0 정상 범위 기준(기본 160~200µm). 문장은 coating_assessment.RULE_NOTE 그대로다.
-        "칠한 곳 평균 기준: 하한 미만 저도막·하한~상한 정상(경계 포함)·상한 초과 과도막. 기본 160~200µm.",
         "저도막: 1개 — Map 1 · Zone 3(칠한 곳 평균 98µm, 미도장 12%)",
         "과도막: 1개 — Map 1 · Zone 5(칠한 곳 평균 301µm, 미도장 3%)",
         "정상: 1개",
@@ -209,8 +206,21 @@ def test_report_answer_orders_by_distance_from_the_target_and_shortens_the_quick
 def test_a_named_zone_gets_only_its_own_grade() -> None:
     answer = coating_query.answer_coating_question(_saved(*_GRADED), "Zone 5 도막은 어때?", detailed=False)
 
-    assert answer.split("\n")[1:] == ["Map 1 · Zone 5: 과도막(칠한 곳 평균 301µm, 미도장 3%)"]
+    assert answer == "Map 1 · Zone 5: 과도막(칠한 곳 평균 301µm, 미도장 3%)"
     assert "Zone 3" not in answer
+
+
+def test_specific_saved_coating_queries_omit_unasked_summary_rows() -> None:
+    context = _saved(*_GRADED)
+
+    zone = coating_query.answer_coating_question(context, "Zone 5 도막은 어때?", detailed=True)
+    assert zone == "Map 1 · Zone 5: 과도막(칠한 곳 평균 301µm, 미도장 3%)"
+
+    unpainted = coating_query.answer_coating_question(context, "미도장 영역이 있어?", detailed=True)
+    assert unpainted == "미도장 비율이 큰 곳: Zone 7(100%), Zone 3(12%), Zone 5(3%)."
+
+    distribution = coating_query.answer_coating_question(context, "도막 분포는 어때?", detailed=True)
+    assert distribution == "칠한 면적의 두께 분포: 저도막 31%, 정상 35%, 과도막 34%."
 
 
 def test_distribution_and_unpainted_questions_get_numbers() -> None:
@@ -224,13 +234,13 @@ def test_distribution_and_unpainted_questions_get_numbers() -> None:
     # 966a3d0부터 분포는 저도막·정상·과도막 세 묶음이다(coating_assessment.distribution_sentence). 88·100·97
     assert distribution.endswith("칠한 면적의 두께 분포: 저도막 31%, 정상 35%, 과도막 34%.")
     assert "미도장 비율이 큰 곳" not in distribution
-    assert unpainted.endswith("미도장 비율이 큰 곳: Zone 7(100%), Zone 3(12%), Zone 5(3%). 미도장 비율에는 합격 기준이 없어 숫자만 알려 드립니다.")
+    assert unpainted == "미도장 비율이 큰 곳: Zone 7(100%), Zone 3(12%), Zone 5(3%)."
     assert "두께 분포" not in unpainted
     # 0%인 Zone은 "큰 곳"에 넣지 않는다.
     one = coating_query.answer_coating_question(_saved(*_GRADED[2:], _graded("2", "normal", 171.0, 0.004)), "미도장 영역이 있어?", detailed=False)
-    assert one.endswith("미도장 비율이 큰 곳: Zone 7(100%). 미도장 비율에는 합격 기준이 없어 숫자만 알려 드립니다.")
+    assert one == "미도장 비율이 큰 곳: Zone 7(100%)."
     none = coating_query.answer_coating_question(_saved(_GRADED[3]), "미도장 영역이 있어?", detailed=False)
-    assert none.endswith("판정한 Zone의 미도장 비율은 모두 1% 미만입니다. 미도장 비율에는 합격 기준이 없어 숫자만 알려 드립니다.")
+    assert none == "판정한 Zone의 미도장 비율은 모두 1% 미만입니다."
 
 
 def test_old_saved_rows_keep_the_old_answer() -> None:
