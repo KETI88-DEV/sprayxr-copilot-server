@@ -1,4 +1,4 @@
-"""Presentation helpers for finding public API operations without resetting Try it out."""
+"""Offline Swagger presentation and navigation for the public API."""
 from __future__ import annotations
 
 import html
@@ -16,7 +16,20 @@ _SWAGGER_ASSETS = {
     'swagger-ui.css': 'text/css',
     'favicon-32x32.png': 'image/png',
 }
+_DOCS_ASSETS = {'api_docs.js': 'application/javascript', 'api_docs.css': 'text/css'}
 _METHODS = {'get', 'post', 'put', 'patch', 'delete', 'head', 'options', 'trace'}
+_WORKFLOWS = (
+    ('VR 훈련', (
+        ('POST', '/sessions/start', '세션 시작'),
+        ('POST', '/copilot/analyze-sequence', '시퀀스 분석'),
+        ('POST', '/sessions/end', '세션 마감'),
+    )),
+    ('Replay 리포트', (
+        ('POST', '/sessions/complete', '분석 요청'),
+        ('GET', '/sessions/{session_id}/reports/{report_id}', '상태 확인'),
+        ('GET', '/reports/{report_id}', '결과 조회'),
+    )),
+)
 _CSS = """
 #api-docs-tools{position:sticky;top:calc(var(--copilot-nav-height,52px) + var(--copilot-banner-height,0px));z-index:100;background:#f5f8fd;border-bottom:1px solid #dce4f1;padding:10px 20px;font-family:system-ui,sans-serif;color:#23334b;box-sizing:border-box}
 .api-docs-tools-inner{max-width:1460px;margin:auto;position:relative}.api-docs-find{display:flex;align-items:center;gap:10px}.api-docs-find label{font-size:12px;font-weight:700;white-space:nowrap}.api-docs-find input{box-sizing:border-box;min-width:0;width:min(480px,100%);padding:8px 11px;font-size:13px;border:1px solid #bdcbe1;border-radius:7px;background:#fff;color:#172b49}.api-docs-find input:focus{outline:2px solid #8cb1ff;outline-offset:1px}.api-docs-find button{border:0;background:#e3ebf8;border-radius:6px;padding:7px 10px;color:#304b7b;cursor:pointer}.api-docs-find small{font-size:11px;color:#61738f;white-space:nowrap}
@@ -26,6 +39,28 @@ body[data-portal-page=docs] #swagger-ui .opblock,body[data-portal-page=docs] #sw
 body[data-portal-page=docs] .swagger-ui .info .description details{margin:18px 0;padding:13px 16px;border:1px solid #dce4f1;border-radius:9px;background:#f7f9fd}body[data-portal-page=docs] .swagger-ui .info .description summary{font-weight:700;color:#375482;cursor:pointer}body[data-portal-page=docs] .swagger-ui .info .description details[open] summary{margin-bottom:14px}
 @media(max-width:650px){#api-docs-tools{padding:9px 12px}.api-docs-find{gap:7px}.api-docs-find small{display:none}.api-docs-result{grid-template-columns:45px minmax(0,1fr)}.api-docs-result small{grid-column:2}.api-docs-sections a{font-size:11px;padding:5px 8px}}
 """
+
+
+def _workflow_links(entries: list[dict[str, str]]) -> str:
+    by_operation = {(entry['method'], entry['path']): entry['href'] for entry in entries}
+    groups = []
+    for title, steps in _WORKFLOWS:
+        if not all((method, '/api/v1' + path) in by_operation for method, path, _ in steps):
+            continue
+        items = []
+        for method, path, label in steps:
+            href = html.escape(by_operation[method, '/api/v1' + path], quote=True)
+            items.append(
+                f'<li><a href="{href}"><strong>{label}</strong>'
+                f'<code>{method} {path}</code></a></li>'
+            )
+        groups.append(f'<div><h3>{title}</h3><ol>{"".join(items)}</ol></div>')
+    if not groups:
+        return ''
+    return (
+        '<nav class="api-docs-workflows" aria-label="API 연동 흐름">'
+        '<h2>API 연동 흐름</h2>' + ''.join(groups) + '</nav>'
+    )
 
 
 def api_docs_document(document: str, schema: dict, *, root_path: str = '') -> str:
@@ -54,27 +89,31 @@ def api_docs_document(document: str, schema: dict, *, root_path: str = '') -> st
              f'<small id="api-docs-count" role="status">전체 {len(entries)}개 API</small></div>'
              '<nav class="api-docs-sections" aria-label="API 분류 바로가기">' + links + '</nav>'
              '<div id="api-docs-results" hidden></div></div></section>')
-    document = document.replace('</head>', f'<style>{_CSS}</style></head>', 1)
-    document = document.replace('<div id="swagger-ui">', tools + '<div id="swagger-ui">', 1)
-    asset = html.escape(root_path.rstrip('/') + DOCS_ASSET_PREFIX + '/api_docs.js', quote=True)
+    assets = html.escape(root_path.rstrip('/') + DOCS_ASSET_PREFIX, quote=True)
+    document = document.replace(
+        '</head>',
+        f'<style>{_CSS}</style><link rel="stylesheet" href="{assets}/api_docs.css">'
+        f'<script src="{assets}/api_docs.js"></script></head>',
+        1,
+    )
+    document = document.replace(
+        '<div id="swagger-ui">', tools + _workflow_links(entries) + '<div id="swagger-ui">', 1,
+    )
+    document = document.replace('presets: [', 'plugins: [window.copilotApiDocsPlugin],\n        presets: [', 1)
     return document.replace('</body>', '<script id="api-docs-index" type="application/json">' + index +
-                            f'</script><script defer src="{asset}"></script></body>', 1)
+                            '</script></body>', 1)
 
 
 def create_api_docs_router() -> APIRouter:
     router = APIRouter(prefix=DOCS_ASSET_PREFIX, include_in_schema=False)
 
-    @router.get('/api_docs.js')
-    def script() -> FileResponse:
-        return FileResponse(_STATIC_DIR / 'api_docs.js',
-                            media_type='application/javascript', headers={'Cache-Control': 'no-cache'})
-
     @router.get('/{filename}')
     def swagger_asset(filename: str) -> FileResponse:
-        media_type = _SWAGGER_ASSETS.get(filename)
+        media_type = _DOCS_ASSETS.get(filename) or _SWAGGER_ASSETS.get(filename)
         if media_type is None:
             raise HTTPException(status_code=404, detail='Not Found')
-        return FileResponse(_STATIC_DIR / 'swagger-ui' / filename, media_type=media_type,
+        source = _STATIC_DIR / 'swagger-ui' if filename in _SWAGGER_ASSETS else _STATIC_DIR
+        return FileResponse(source / filename, media_type=media_type,
                             headers={'Cache-Control': 'no-cache'})
 
     return router

@@ -1,4 +1,112 @@
-(() => {
+window.copilotApiDocsPlugin = ({React}) => {
+  const h = React.createElement;
+  const headings = /^### (입력 파라미터|출력 파라미터|실행 전 확인: 자동 사용 입력|응답 예시)[ \t]*$/gm;
+  const fieldLine = /^- \x60([^\x60]+)\(([^()\x60]+)\)\x60 : (.+)$/;
+  const fieldPresence = / \*\*\[(필수|선택|필수 키|생략 가능)\]\*\*$/;
+  const defaultLine = /^ +- 기본값: \x60([^\x60]+)\x60$/;
+
+  function splitFields(source) {
+    const notes = [];
+    const fields = [];
+    for (const line of source.trim().split('\n')) {
+      const match = line.match(fieldLine);
+      if (match) {
+        const [, name, type, description] = match;
+        const presence = description.match(fieldPresence)?.[1];
+        fields.push({name, type, presence, description: description.replace(fieldPresence, ''), details: []});
+        continue;
+      }
+      const field = fields.at(-1);
+      const defaultValue = line.match(defaultLine)?.[1];
+      if (!field) {
+        notes.push(line);
+      } else if (defaultValue !== undefined) {
+        field.defaultValue = defaultValue;
+      } else if (/^ {2,}- /.test(line)) {
+        field.details.push(line.trimStart());
+      } else if (line.trim()) {
+        return null;
+      }
+    }
+    return fields.length ? {fields, notes: notes.join('\n').trim()} : null;
+  }
+
+  function overviewParts(source) {
+    const paragraphBreak = source.search(/\n\s*\n/);
+    const paragraph = paragraphBreak === -1 ? source : source.slice(0, paragraphBreak);
+    const firstSentence = paragraph.length > 240 ? paragraph.match(/^.{0,239}?[가-힣]\.(?=\s)/u) : null;
+    const end = firstSentence ? firstSentence[0].length : paragraph.length;
+    return [source.slice(0, end), source.slice(end).trim()];
+  }
+
+  function Panel({title, children}) {
+    const [opened, setOpened] = React.useState(false);
+    return h('details', {
+      className: 'api-docs-panel',
+      onToggle: event => {
+        if (event.target === event.currentTarget && event.currentTarget.open) setOpened(true);
+      },
+    }, h('summary', null, title), opened && h('div', {className: 'api-docs-panel-body'}, children));
+  }
+
+  return {
+    wrapComponents: {
+      Markdown: Markdown => {
+        function FieldTable({source, render}) {
+          const parsed = splitFields(source);
+          if (!parsed) return render(source);
+          return h(React.Fragment, null,
+            parsed.notes && h('div', {className: 'api-docs-field-notes'}, render(parsed.notes)),
+            h('table', {className: 'api-docs-field-table', role: 'table'},
+              h('thead', {role: 'rowgroup'}, h('tr', {role: 'row'},
+                ...['필드', '타입·구분', '설명'].map(label =>
+                  h('th', {key: label, scope: 'col', role: 'columnheader'}, label)))),
+              h('tbody', {role: 'rowgroup'}, ...parsed.fields.map(field =>
+                h('tr', {key: field.name, role: 'row'},
+                  h('th', {scope: 'row', role: 'rowheader'}, h('code', null, field.name)),
+                  h('td', {role: 'cell'},
+                    h('code', {className: 'api-docs-field-type'}, field.type),
+                    field.presence && h('span', {
+                      className: field.presence.startsWith('필수') ? 'api-docs-required' : 'api-docs-optional',
+                    }, field.presence)),
+                  h('td', {role: 'cell'},
+                    render(field.description),
+                    field.defaultValue !== undefined && h('p', {className: 'api-docs-default'},
+                      '기본값 ', h('code', null, field.defaultValue)),
+                    field.details.length > 0 && h('details', {className: 'api-docs-field-details'},
+                      h('summary', null, '허용값·하위 항목'),
+                      h('div', null, render(field.details.join('\n')))),
+                  ),
+                ),
+              )),
+            ),
+          );
+        }
+
+        return function OperationDocumentation(props) {
+          const parts = typeof props.source === 'string' ? props.source.split(headings) : [];
+          if (parts.length < 3) return h(Markdown, props);
+          const render = source => h(Markdown, {...props, source});
+          const [lead, extra] = overviewParts(parts[0].trim());
+          const panels = [];
+          for (let index = 1; index < parts.length; index += 2) {
+            const title = parts[index];
+            const source = parts[index + 1].trim();
+            const fields = title === '입력 파라미터' || title === '출력 파라미터';
+            panels.push(h(Panel, {key: title, title},
+              fields ? h(FieldTable, {source, render}) : render(source)));
+          }
+          return h('div', {className: 'api-docs-operation'},
+            lead && h('div', {className: 'api-docs-operation-lead'}, render(lead)),
+            extra && h(Panel, {title: '연동 설명'}, render(extra)),
+            ...panels);
+        };
+      },
+    },
+  };
+};
+
+document.addEventListener('DOMContentLoaded', () => {
   'use strict';
   const input = document.getElementById('api-docs-search');
   const host = document.getElementById('api-docs-results');
@@ -28,10 +136,10 @@
     || (event.button != null && event.button !== 0);
   function reveal(entry, event) {
     if (nativeClick(event)) return;
-    event.preventDefault();
-    reset();
     const section = sectionFor(entry.tag);
     if (!section) return;
+    event.preventDefault();
+    reset();
     let observer = null, timer = null;
     const select = () => {
       const operation = [...section.querySelectorAll('.opblock')].find(node =>
@@ -98,6 +206,10 @@
     }
   });
   clear.addEventListener('click', () => { reset(); input.focus(); });
+  for (const link of document.querySelectorAll('.api-docs-workflows a')) {
+    const entry = indexed.find(candidate => candidate.href === link.getAttribute('href'));
+    if (entry) link.addEventListener('click', event => reveal(entry, event));
+  }
   tools.querySelectorAll('.api-docs-sections a').forEach(link => link.addEventListener('click', event => {
     if (nativeClick(event)) return;
     event.preventDefault();
@@ -114,4 +226,4 @@
   const measure = () => document.documentElement.style.setProperty('--api-docs-tools-height', `${tools.getBoundingClientRect().height}px`);
   new ResizeObserver(measure).observe(tools);
   measure();
-})();
+});
