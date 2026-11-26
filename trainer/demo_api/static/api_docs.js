@@ -4,6 +4,8 @@ window.copilotApiDocsPlugin = ({React}) => {
   const fieldLine = /^- \x60([^\x60]+)\(([^()\x60]+)\)\x60 : (.+)$/;
   const fieldPresence = / \*\*\[(필수|선택|필수 키|생략 가능)\]\*\*$/;
   const defaultLine = /^ +- 기본값: \x60([^\x60]+)\x60$/;
+  const descriptionLine = /^ {2}> ?(.*)$/;
+  const exampleBlock = /^(.*?)\n\x60{3}(json|text)\n(.*)\n\x60{3}$/s;
 
   function splitFields(source) {
     const notes = [];
@@ -13,17 +15,22 @@ window.copilotApiDocsPlugin = ({React}) => {
       if (match) {
         const [, name, type, description] = match;
         const presence = description.match(fieldPresence)?.[1];
-        fields.push({name, type, presence, description: description.replace(fieldPresence, ''), details: []});
+        fields.push({name, type, presence, description: [description.replace(fieldPresence, '')], details: []});
         continue;
       }
       const field = fields.at(-1);
       const defaultValue = line.match(defaultLine)?.[1];
+      const continuation = line.match(descriptionLine)?.[1];
       if (!field) {
         notes.push(line);
+      } else if (continuation !== undefined) {
+        field.description.push(continuation);
       } else if (defaultValue !== undefined) {
         field.defaultValue = defaultValue;
       } else if (/^ {2,}- /.test(line)) {
         field.details.push(line.trimStart());
+      } else if (line.startsWith('      >')) {
+        field.details.push(line.slice(4));
       } else if (line.trim()) {
         return null;
       }
@@ -51,7 +58,17 @@ window.copilotApiDocsPlugin = ({React}) => {
 
   return {
     wrapComponents: {
-      Markdown: Markdown => {
+      Markdown: (Markdown, {getComponent}) => {
+        function ResponseExample({source, render}) {
+          const match = source.match(exampleBlock);
+          if (!match) return render(source);
+          const [, description, format, example] = match;
+          const HighlightCode = getComponent('HighlightCode', true);
+          return h('div', {className: 'api-docs-response-example'},
+            description.trim() && render(description.trim()),
+            h(HighlightCode, {className: 'example', language: format === 'json' ? 'json' : undefined}, example));
+        }
+
         function FieldTable({source, render}) {
           const parsed = splitFields(source);
           if (!parsed) return render(source);
@@ -59,18 +76,18 @@ window.copilotApiDocsPlugin = ({React}) => {
             parsed.notes && h('div', {className: 'api-docs-field-notes'}, render(parsed.notes)),
             h('table', {className: 'api-docs-field-table', role: 'table'},
               h('thead', {role: 'rowgroup'}, h('tr', {role: 'row'},
-                ...['필드', '타입·구분', '설명'].map(label =>
+                ...['필드', '타입', '필수 여부', '설명'].map(label =>
                   h('th', {key: label, scope: 'col', role: 'columnheader'}, label)))),
               h('tbody', {role: 'rowgroup'}, ...parsed.fields.map(field =>
                 h('tr', {key: field.name, role: 'row'},
                   h('th', {scope: 'row', role: 'rowheader'}, h('code', null, field.name)),
-                  h('td', {role: 'cell'},
-                    h('code', {className: 'api-docs-field-type'}, field.type),
+                  h('td', {role: 'cell'}, h('code', null, field.type)),
+                  h('td', {role: 'cell', className: 'api-docs-field-presence'},
                     field.presence && h('span', {
                       className: field.presence.startsWith('필수') ? 'api-docs-required' : 'api-docs-optional',
                     }, field.presence)),
                   h('td', {role: 'cell'},
-                    render(field.description),
+                    render(field.description.join('\n')),
                     field.defaultValue !== undefined && h('p', {className: 'api-docs-default'},
                       '기본값 ', h('code', null, field.defaultValue)),
                     field.details.length > 0 && h('details', {className: 'api-docs-field-details'},
@@ -92,9 +109,9 @@ window.copilotApiDocsPlugin = ({React}) => {
           for (let index = 1; index < parts.length; index += 2) {
             const title = parts[index];
             const source = parts[index + 1].trim();
-            const fields = title === '입력 파라미터' || title === '출력 파라미터';
-            panels.push(h(Panel, {key: title, title},
-              fields ? h(FieldTable, {source, render}) : render(source)));
+            const Component = title === '응답 예시' ? ResponseExample
+              : title === '입력 파라미터' || title === '출력 파라미터' ? FieldTable : null;
+            panels.push(h(Panel, {key: title, title}, Component ? h(Component, {source, render}) : render(source)));
           }
           return h('div', {className: 'api-docs-operation'},
             lead && h('div', {className: 'api-docs-operation-lead'}, render(lead)),

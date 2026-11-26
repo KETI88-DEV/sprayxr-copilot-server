@@ -412,17 +412,21 @@ def create_v1_router(
         "/sessions/start", response_model=SessionResponse, tags=["1. 세션 관리"],
         summary="1-1. 훈련 세션 시작",
         description=(
-            "VR 훈련 콘텐츠가 시작될 때 한 번 호출합니다. user_id가 처음이면 사용자를 생성하고, "
-            "기존 사용자면 숙련도와 주 사용 손을 갱신한 뒤 세션을 ACTIVE 상태로 저장합니다. "
-            "같은 session_id와 시작 파라미터의 재전송은 기존 회차를 조회하며, 같은 ID에서 "
-            "시작 파라미터가 달라지면 409입니다. 다시하기는 새 session_id로 시작합니다. "
-            "스프레이 정상 도막은 기본 160~200µm입니다. target_thickness_min_um·target_thickness_max_um으로 "
-            "경계값을 포함한 정상범위를 지정할 수 있습니다. 기존 target_thickness_um 단일 값만 보내면 "
-            "그 값부터 1.25배까지 정상으로 봅니다(160 → 160~200). 모두 생략해도 동작합니다. "
-            "응답 data.recommended_flow는 선택 공정·콘텐츠의 등록된 전문가 구역 순서입니다. "
-            "기존 data.first_zone_id·first_zone_guidance도 유지하며 두 recommended_flow 목록은 같습니다. "
-            "tool_type은 생략하면 spray_gun이며 블라스팅 시작 안내에는 blasting_gun을 보냅니다. "
-            "실전·Unit 등 등록된 순서 기준이 없는 콘텐츠는 첫 Zone을 추정하지 않고 null을 반환합니다."
+            "VR 훈련을 시작할 때 한 번 호출합니다.\n\n"
+            "**사용자와 세션**\n\n"
+            "서버는 새로운 `user_id`로 사용자를 등록하고, 기존 사용자의 숙련도와 주 사용 손은 갱신합니다. "
+            "세션은 `ACTIVE` 상태로 저장합니다. 같은 `session_id`와 시작 파라미터를 다시 보내면 기존 회차를 반환합니다. "
+            "같은 ID에 다른 시작 파라미터를 보내면 HTTP 409를 반환합니다. 훈련을 다시 시작할 때는 새 `session_id`를 사용하세요.\n\n"
+            "**스프레이 목표 도막**\n\n"
+            "기본 정상 범위는 160~200µm입니다. `target_thickness_min_um`과 `target_thickness_max_um`을 보내면 "
+            "경계값을 포함한 정상 범위를 직접 지정할 수 있습니다. `target_thickness_um`만 보낼 경우 "
+            "입력값부터 그 값의 1.25배까지 정상 범위로 봅니다(160 → 160~200). 세 값을 모두 생략하면 기본 범위를 사용합니다.\n\n"
+            "**공정과 권장 작업 순서**\n\n"
+            "`tool_type`을 생략하면 `spray_gun`을 사용합니다. 블라스팅 작업 안내가 필요하면 `blasting_gun`을 보내세요. "
+            "`data.recommended_flow`에는 선택 공정·콘텐츠에 등록된 전문가 구역 순서가 담깁니다. "
+            "첫 Zone은 `data.first_zone_id`, 자세한 안내는 `data.first_zone_guidance`에서 확인할 수 있습니다. "
+            "`data.first_zone_guidance.recommended_flow`에는 같은 순서가 담깁니다. "
+            "실전·Unit 등 등록된 순서 기준이 없는 콘텐츠에서 첫 Zone은 `null`입니다."
         ),
     )
     async def sessions_start(body: SessionStartRequest) -> JSONResponse:
@@ -492,7 +496,10 @@ def create_v1_router(
     @router.post(
         "/sessions/end", response_model=SessionResponse, tags=["1. 세션 관리"],
         summary="1-2. 훈련 세션 마감",
-        description="사용자가 콘텐츠를 정상 종료하거나 중도 종료했을 때 호출합니다. 시작 API에서 사용한 session_id를 그대로 보내며, 서버는 종료 시각과 COMPLETED 상태를 기록합니다.",
+        description=(
+            "사용자가 훈련을 마치거나 도중에 종료할 때 호출합니다.\n\n"
+            "시작 요청에 사용한 `session_id`를 그대로 보내세요. 서버는 종료 시각을 기록하고 세션을 `COMPLETED`로 변경합니다."
+        ),
     )
     async def sessions_end(body: SessionEndRequest) -> JSONResponse:
         try:
@@ -541,10 +548,17 @@ def create_v1_router(
         avg_distance_mm: Annotated[float | None, Form(ge=0, allow_inf_nan=False, description="세션 전체 노즐-피도면 이격거리 평균(mm)입니다. 산출하지 않으면 생략합니다.", examples=[255.0])] = None,
         height_map_image: Annotated[UploadFile | None, File(description="세션 종료 시점의 전체 누적 도막 높이맵 PNG입니다. 도막 분석을 사용하지 않으면 생략합니다.")] = None,
     ) -> JSONResponse:
-        """최신 TSB multipart 전송을 받고 `report_id`를 부여해 `pending`으로 시작한다.
+        """훈련 파일을 받아 세션 종합 분석을 비동기로 시작합니다.
 
-        세션 평균 속도·이격거리는 2026-10-08 샘플에 없으므로 선택값이다. 시퀀스별
-        속도·이격거리 평가는 `/copilot/analyze-sequence` 입력을 사용한다.
+        **분석 입력**
+
+        `multipart/form-data`로 훈련 CSV와 세션 정보를 보내세요. 세션 평균 속도·이격거리는 선택 항목입니다.
+        시퀀스별 속도·이격거리 평가에는 `/copilot/analyze-sequence`로 보낸 시퀀스 데이터를 사용합니다.
+
+        **리포트 조회**
+
+        응답의 `report_id`로 처리 상태를 조회하세요. 분석이 진행되는 동안 상태는 `pending`입니다.
+        상태가 `complete`가 되면 최종 리포트를 조회할 수 있습니다.
         """
         if not state.report_storage_available:
             return _error(503, "report storage is unavailable; retry the request")
@@ -617,7 +631,11 @@ def create_v1_router(
         response_model=ApiResponse,
         tags=["5. 최종 평가·리포트"],
         summary="5-2. 리포트 생성 상태 폴링 조회",
-        description="sessions/complete에서 받은 report_id의 처리 상태를 확인합니다. 비동기 분석 중에는 pending이며, 동일 session_id와 report_id 조합을 사용해야 다른 세션의 결과를 잘못 조회하지 않습니다.",
+        description=(
+            "훈련 리포트의 분석 상태를 확인합니다.\n\n"
+            "`/sessions/complete`에서 받은 `report_id`와 해당 훈련의 `session_id`를 함께 보내세요. "
+            "분석 중에는 `pending`이며, `complete`가 되면 상세 조회로 결과를 가져올 수 있습니다."
+        ),
     )
     async def report_status(
         session_id: Annotated[str, ApiPath(description="조회할 리포트가 속한 훈련 세션 식별자입니다.", examples=["3_11000346_1"])],
@@ -638,9 +656,11 @@ def create_v1_router(
         "/reports/{report_id}", response_model=ApiResponse, tags=["5. 최종 평가·리포트"],
         summary="5-3. 최종 종합 리포트 상세 조회",
         description=(
-            "리포트 상태 확인 후 최종 평가 내용을 조회합니다. 분석 엔진 결과가 준비되지 않은 영역은 수치를 임의 생성하지 않고 unavailable과 사유를 명시해 반환합니다.\n\n"
-            "아래 응답 예시는 세 영역(`coating_report`·`sequence_report`·`pose_report`)과 `llm_briefing`이 모두 채워진 **최종 형식**입니다. "
-            "값은 UI 설계용 예시이며, 실제 응답에서 아직 분석하지 못한 영역은 `analysis_status=unavailable`이고 수치는 `null`입니다."
+            "리포트의 처리 상태를 확인한 뒤 최종 평가 결과를 조회합니다.\n\n"
+            "도막(`coating_report`), 작업 순서(`sequence_report`), 자세(`pose_report`)와 "
+            "종합 안내(`llm_briefing`)를 확인할 수 있습니다. 분석 결과가 준비되지 않은 영역은 "
+            "`analysis_status=unavailable`과 사유를 반환하며, 해당 수치는 `null`입니다.\n\n"
+            "응답 예시에는 세 영역과 종합 안내가 모두 채워져 있습니다. 값은 UI 설계용입니다."
         ),
         responses={200: {"description": "완성된 리포트 예시", "content": {"application/json": {
             "example": ApiResponse(message="Session report completed", data=report_example()).model_dump(mode="json")

@@ -100,11 +100,17 @@
 #swagger-ui .api-docs-panel[open] > summary { border-bottom: 1px solid #d5dfed; }
 #swagger-ui .api-docs-panel > summary:hover { background: #edf4ff; }
 #swagger-ui .api-docs-panel-body { padding: 10px 12px; }
-#swagger-ui .api-docs-panel-body code { overflow-wrap: anywhere; }
+#swagger-ui .api-docs-panel-body .renderedMarkdown code,
+#swagger-ui .api-docs-field-table :is(th, td) > code { overflow-wrap: anywhere; }
 
 #swagger-ui .api-docs-operation-lead p { margin: 0 0 3px; line-height: 1.6; }
+#swagger-ui .api-docs-panel-body .renderedMarkdown > :is(p, ul, ol) {
+  margin-block: .7em;
+  line-height: 1.65;
+}
 #swagger-ui .api-docs-panel-body .renderedMarkdown > :first-child { margin-top: 0; }
 #swagger-ui .api-docs-panel-body .renderedMarkdown > :last-child { margin-bottom: 0; }
+#swagger-ui .api-docs-response-example > .renderedMarkdown { margin-bottom: 10px; }
 
 #swagger-ui .api-docs-field-notes {
   margin-bottom: 12px;
@@ -132,19 +138,19 @@
 }
 
 #swagger-ui .api-docs-field-table thead th { background: #eff4fb; }
-#swagger-ui .api-docs-field-table thead th:first-child { width: 23%; }
-#swagger-ui .api-docs-field-table thead th:nth-child(2) { width: 17%; }
+#swagger-ui .api-docs-field-table thead th:first-child { width: 21%; }
+#swagger-ui .api-docs-field-table thead th:nth-child(2) { width: 15%; }
+#swagger-ui .api-docs-field-table thead th:nth-child(3) { width: 11%; }
 #swagger-ui .api-docs-field-table tbody tr:nth-child(even) { background: #f8fafd; }
 #swagger-ui .api-docs-field-table tbody th code { color: #204d86; }
-#swagger-ui .api-docs-field-type { display: block; }
 
 #swagger-ui .api-docs-field-table :is(.api-docs-required, .api-docs-optional) {
   display: inline-block;
-  margin-top: 4px;
   padding: 1px 6px;
   border-radius: 4px;
   font-size: 11px;
   font-weight: 700;
+  white-space: nowrap;
 }
 
 #swagger-ui .api-docs-required { background: #e5efff; color: #204d86; }
@@ -176,11 +182,11 @@
   #swagger-ui .api-docs-field-table tbody { display: block; }
   #swagger-ui .api-docs-field-table tbody tr {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, max-content);
+    grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) max-content;
+    align-items: start;
     padding: 8px;
     border-bottom: 1px solid #e1e8f1;
   }
   #swagger-ui .api-docs-field-table tbody :is(th, td) { padding: 3px; border: 0; }
-  #swagger-ui .api-docs-field-table tbody td:nth-child(2) { max-width: 145px; text-align: right; }
   #swagger-ui .api-docs-field-table tbody td:last-child { grid-column: 1 / -1; }
 }

@@ -420,8 +420,8 @@ def create_telemetry_router(
         tags=["2. 시퀀스 수집·피드백"],
         summary="2-1. 현재 시퀀스 텔레메트리 저장",
         description=(
-            "Trigger ON→OFF 한 번의 현재 시퀀스를 저장합니다. "
-            "cur_sequence_heatmap이 포함된 경우 크롭 내 픽셀은 해당 시점의 전체 누적 두께입니다."
+            "트리거를 눌렀다가 놓을 때까지의 데이터를 하나의 시퀀스로 저장합니다.\n\n"
+            "`cur_sequence_heatmap`을 함께 보내면 이미지에 담긴 각 픽셀값은 해당 시점의 전체 누적 두께로 처리합니다."
         ),
     )
     async def telemetry_sequence(query: TelemetrySequenceRequest) -> JSONResponse:
@@ -433,17 +433,18 @@ def create_telemetry_router(
         tags=["2. 시퀀스 수집·피드백"],
         summary="2-2. 시퀀스 분석 및 속도·이격거리·현재 Zone 도막 가이드",
         description=(
-            "전문가 기준과 비교하여 매 시퀀스마다 speed(slow/ok/fast)와 "
-            "distance(near/ok/far), Zone 작업 순서와 도포 방향 판정을 구조화해 반환합니다. "
-            "이상 판정은 같은 세션의 SSE 채널에도 한 번만 발행됩니다. 학습 모드는 scenario_id, "
-            "스프레이/블라스팅 구분은 sequence_setting.tool_type에서 자동 선택합니다. "
-            "스프레이의 cur_sequence_heatmap은 해당 시점 피도면의 전체 누적 두께입니다. "
-            "이미 누적된 값을 더하지 않고, 현재 시퀀스가 도포한 크롭 영역의 최신 절대 두께로 갱신하여 "
-
-            "추가 도장/다음 Zone 이동/과도장 중단 여부를 coating_progress로 반환합니다. "
-            "도막 등급·분포·조절 후보는 coating_feedback으로 반환합니다. "
-            "같은 변수에 대해 coating_feedback.adjustments와 guide가 다른 방향을 가리키면 "
-            "guide 항목은 available=false, reason=\"coating_adjustment_priority\"로 비웁니다."
+            "현재 시퀀스를 전문가 기준과 비교해 실시간 피드백을 반환합니다.\n\n"
+            "**분석 기준**\n\n"
+            "학습 모드는 `scenario_id`, 스프레이·블라스팅 공정은 `sequence_setting.tool_type`으로 구분합니다. "
+            "응답에는 속도 `speed`(`slow`, `ok`, `fast`)와 이격거리 `distance`(`near`, `ok`, `far`), "
+            "Zone 작업 순서와 도포 방향 판정이 담깁니다. 이상 판정은 같은 세션의 SSE 채널에도 한 번만 전송합니다.\n\n"
+            "**스프레이 도막**\n\n"
+            "`cur_sequence_heatmap`의 픽셀값은 해당 시점 피도면의 전체 누적 두께입니다. "
+            "서버는 현재 시퀀스가 칠한 영역을 잘라낸 이미지의 최신 두께값으로 해당 영역의 기존 값을 갱신합니다.\n\n"
+            "- `coating_progress`는 추가 도장, 다음 Zone 이동 또는 과도장에 따른 중단 여부를 안내합니다.\n"
+            "- `coating_feedback`은 도막 등급, 두께 분포, 조절 후보를 제공합니다. "
+            "`coating_feedback.adjustments`와 `guide`가 같은 변수에 대해 서로 다른 조절 방향을 제안하면, "
+            "해당 `guide` 항목은 `available=false`, `reason=coating_adjustment_priority`로 반환합니다."
         ),
     )
     async def analyze_sequence(query: AnalyzeSequenceRequest) -> JSONResponse:
