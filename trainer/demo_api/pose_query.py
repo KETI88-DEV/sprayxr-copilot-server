@@ -32,7 +32,7 @@ from trainer.scripts import pose_similarity
 logger = logging.getLogger(__name__)
 
 _MCP_TIMEOUT_SEC: Final[float] = 20.0
-# 자세 유사도를 말하는 답에 붙인다. 숙련자끼리 견줘도 중앙값이 69~78%라 70%를 낮은 점수로 읽기 쉽다(2026-11-14 사용자 지적).
+# 척도 해석을 묻는 답에 붙인다. 숙련자끼리 견줘도 중앙값은 69~78%다.
 POSE_SCALE_NOTE: Final[str] = "숙련자 평균 동작 대비 유사도이며, 숙련자도 70% 안팎입니다."
 # 엔진이 교정을 내지 않은 것은 "정상"이 아니다. 엔진 안내문(session_analysis._guideline)과 같은 문장이다.
 NO_CORRECTION_CAVEAT: Final[str] = "교정이 없어도 자세가 정상이라는 뜻은 아닙니다."
@@ -46,6 +46,12 @@ NOT_JOINT: Final = re.compile(r"보호대|보호구|장갑|착용|통증|아프|
                               r"(?<![가-힣])건(?![가-힣])|건\s*(?:각도|을|의|이|은)|스프레이\s*건|도구|노즐|압력|안전", re.I)
 ANGLE_NOTE: Final[str] = "관절 각도 수치는 없으며, 숙련자 평균 위치의 거리·방향을 비교합니다."
 QUICK_ANGLE_NOTE: Final[str] = "관절 각도 수치는 없습니다."  # 빠른 안내는 교정 문장 뒤에 붙인다(한 줄 60자)
+_POSE_SCORE: Final = re.compile(r"유사도|점수|몇\s*(?:%|퍼센트|점)")
+_POSE_SUPPORT: Final = re.compile(r"교정|개선|고쳐|문제|관절")
+_POSE_BASIS: Final = re.compile(r"(?:비교|평가|채점|전문가)\s*기준|(?:유사도|점수).{0,20}(?:의미|뜻|기준|계산)|(?:높은|낮은|좋은|나쁜)\s*점수")
+_POSE_COUNT: Final = re.compile(r"(?:분사|평가|채점)\s*(?:횟수|건수)|몇\s*(?:회|건)")
+_POSE_SESSION_COMPARISON: Final = re.compile(r"세션\s*평균|전체\s*평균")
+_COATING_REQUEST: Final = re.compile(r"도막|두께")
 
 
 def wants_full_list(prompt: str, *, subject: str = r"Zone|존|구역|분사|시퀀스|sequence") -> bool:
@@ -382,7 +388,7 @@ def _coating_sentence(coating: Mapping[str, Any], target_um: object = None) -> s
     return ""
 
 
-def answer_zone_question(found: tuple[str, Mapping[str, Any]] | None, *, context: str | None) -> ZoneAnswer:
+def answer_zone_question(found: tuple[str, Mapping[str, Any]] | None, *, context: str | None, prompt: str = "") -> ZoneAnswer:
     """complete 분석(`found` = (report_id, analysis))으로 구역 질문에 답한다. 구역 번호 `context`면 그 구역을 말한다."""
     target = context.strip() if context and context.strip().isdigit() else None
     if found is None:
@@ -406,15 +412,19 @@ def answer_zone_question(found: tuple[str, Mapping[str, Any]] | None, *, context
     count = int(zone.get("evaluated_sequence_count") or 0)
     score = float(zone["average_similarity_score"])
     session = pose.get("average_similarity_score")
-    answer = f"가장 문제가 큰 구역은 {zone_id}번 구역입니다. " if target is None else f"{zone_id}번 구역 결과입니다. "
-    answer += f"이 구역 분사 {count}회의 평균 자세 유사도는 {score * 100:.0f}%"
-    if isinstance(session, (int, float)):
+    answer = (
+        f"가장 문제가 큰 구역은 {zone_id}번 구역입니다. 평균 자세 유사도는 {score * 100:.0f}%"
+        if target is None else f"{zone_id}번 구역 자세 유사도는 {score * 100:.0f}%"
+    )
+    if (target is None or _POSE_SESSION_COMPARISON.search(prompt)) and isinstance(session, (int, float)):
         # 답에 보이는 정수 %로 견준다. 51%가 51%보다 "높다"고 하지 않는다.
         shown, average = round(score * 100), round(session * 100)
         relation = "낮습니다" if shown < average else "높습니다" if shown > average else "같습니다"
         answer += f"로 세션 평균 {session * 100:.0f}%보다 {relation}." if relation != "같습니다" else f"로 세션 평균과 같습니다."
     else:
         answer += "입니다."
+    if _POSE_COUNT.search(prompt):
+        answer += f" 분사 {count}회를 평가했습니다."
 
     corrections: list[dict[str, Any]] = []
     for joint in zone.get("problem_joints") or []:
@@ -424,23 +434,27 @@ def answer_zone_question(found: tuple[str, Mapping[str, Any]] | None, *, context
             "occurrence_count": joint.get("occurrence_count"), "occurrence_rate": joint.get("occurrence_rate"),
             "average_distance": joint.get("average_distance"),
         })
-    if corrections:
-        top = corrections[0]
-        answer += f" {top['label']} 위치가 숙련자 범위를 벗어난 분사가 {count}회 중 {top['occurrence_count']}회였습니다"
-        distance = top.get("average_distance")
-        answer += f"(평균 {distance * 100:.0f}cm)." if isinstance(distance, (int, float)) else "."
-    else:
-        answer += f" 숙련자 범위를 벗어난 관절은 없었습니다. {NO_CORRECTION_CAVEAT}"
+    if not _POSE_SCORE.search(prompt) or _POSE_SUPPORT.search(prompt):
+        if corrections:
+            top = corrections[0]
+            answer += f" {top['label']} 위치가 숙련자 범위를 벗어난 분사가 {count}회 중 {top['occurrence_count']}회였습니다"
+            distance = top.get("average_distance")
+            answer += f"(평균 {distance * 100:.0f}cm)." if isinstance(distance, (int, float)) else "."
+        else:
+            answer += f" 숙련자 범위를 벗어난 관절은 없었습니다. {NO_CORRECTION_CAVEAT}"
 
     coating = next(
         (item for item in analysis.get("coating_zones") or []
          if isinstance(item, Mapping) and str(item.get("zone_id")) == zone_id),
         None,
     )
-    if coating is not None:
-        report = analysis.get("coating_report") if isinstance(analysis.get("coating_report"), Mapping) else {}
-        answer += _coating_sentence(coating, report.get("target_thickness_um") if report.get("comparison_basis") == "session_target" else None)
-    answer += f" {POSE_SCALE_NOTE}"
+    if _COATING_REQUEST.search(prompt):
+        report = analysis.get("coating_report")
+        target_um = report.get("target_thickness_um") if isinstance(report, Mapping) and report.get("comparison_basis") == "session_target" else None
+        coating_answer = _coating_sentence(coating, target_um) if coating is not None else ""
+        answer += coating_answer or " 이 구역의 도막 평가 자료가 없습니다."
+    if _POSE_BASIS.search(prompt):
+        answer += f" {POSE_SCALE_NOTE}"
 
     return ZoneAnswer(
         analysis_status="available",
@@ -634,7 +648,7 @@ def answer_sequence_question(pose: PoseQueryResult, *, prompt: str, intent: str 
     return f"이 분사에서 {arm} 교정 항목은 나오지 않았습니다. {NO_CORRECTION_CAVEAT}"
 
 
-def _pose_overview(found: tuple[str, Mapping[str, Any]] | None) -> ZoneAnswer:
+def _pose_overview(found: tuple[str, Mapping[str, Any]] | None, *, prompt: str) -> ZoneAnswer:
     if found is None:
         return zone_unavailable("session_report_unavailable")
     report_id, analysis = found
@@ -646,14 +660,15 @@ def _pose_overview(found: tuple[str, Mapping[str, Any]] | None) -> ZoneAnswer:
     ]
     if not isinstance(score, (int, float)) or not zones:
         return zone_unavailable("zone_analysis_unavailable")
-    worst = min(zones, key=_zone_order)
     count = pose.get("evaluated_sequence_count")
-    count_text = f" 분사 {int(count)}회를 평가했으며," if isinstance(count, (int, float)) else ""
-    answer = (
-        f"세션 전체 자세 유사도는 {float(score) * 100:.0f}%입니다."
-        f"{count_text} 가장 낮은 구역은 {worst['zone_id']}번"
-        f"({float(worst['average_similarity_score']) * 100:.0f}%)입니다. {POSE_SCALE_NOTE}"
-    )
+    answer = f"세션 전체 자세 유사도는 {float(score) * 100:.0f}%입니다."
+    if _POSE_COUNT.search(prompt) and isinstance(count, (int, float)):
+        answer += f" 분사 {int(count)}회를 평가했습니다."
+    if not _POSE_SCORE.search(prompt):
+        worst = min(zones, key=_zone_order)
+        answer += f" 가장 낮은 구역은 {worst['zone_id']}번({float(worst['average_similarity_score']) * 100:.0f}%)입니다."
+    if _POSE_BASIS.search(prompt):
+        answer += f" {POSE_SCALE_NOTE}"
     return ZoneAnswer("available", None, answer, {
         "analysis_status": "available", "reason_code": None, "scope": "session",
         "report_id": report_id, "zone_id": None, "sequence_id": None,
@@ -723,23 +738,19 @@ def answer_pose_question(
     """완료 세션의 구조화된 자세 결과를 질문 의도에 맞게 설명한다."""
     target = requested_zone(prompt, context)
     side, part = asked_arm(prompt, intent), asked_part(prompt)
-    if target is not None:
-        # 구역은 어디를 볼지만 정한다. 무엇을 답할지는 질문이 정한다.
-        if side or part:
-            return _body_part_answer(found, side=side, zone_id=target, part=part)
-        return answer_zone_question(found, context=target)
-    lowered = prompt.lower()
     if side or part:
-        answer = _body_part_answer(found, side=side, part=part)
+        answer = _body_part_answer(found, side=side, zone_id=target, part=part)
         return ZoneAnswer(answer.analysis_status, answer.reason_code, angle_note(prompt) + answer.answer, answer.context)
+    if target is not None:
+        return answer_zone_question(found, context=target, prompt=prompt)
+    lowered = prompt.lower()
     if intent == "pose_worst_zone" or any(token in lowered for token in ("문제", "안 좋", "낮", "어디", "어느", "최악")):
-        return answer_zone_question(found, context=None)
+        return answer_zone_question(found, context=None, prompt=prompt)
     if intent == "pose_overall" or any(token in lowered for token in ("전체", "평균", "유사도", "점수", "퍼센트", "자세")):
-        return _pose_overview(found)
+        return _pose_overview(found, prompt=prompt)
     report_id = found[0] if found is not None else None
     return ZoneAnswer("available", None, (
-        "자세 탭에서는 ‘전체 자세 유사도’, ‘가장 문제가 큰 Zone’, "
-        "‘오른손을 어떻게 고쳐?’, ‘왼손을 어떻게 고쳐?’처럼 질문할 수 있습니다."
+        "자세 탭에서는 ‘전체 자세 유사도는?’, ‘오른손을 어떻게 고쳐?’처럼 질문해 주세요."
     ), {
         "analysis_status": "available", "reason_code": None, "scope": "help",
         "report_id": report_id, "zone_id": None, "sequence_id": None,
@@ -747,8 +758,28 @@ def answer_pose_question(
     })
 
 
+def _order_scores(report: Mapping[str, Any], question: str, *, blended_similarity: bool) -> list[str]:
+    closest = report.get("best_reference_similarity")
+    positional = report.get("position_similarity")
+    asks_closest = re.search(r"최근접|가장\s*가까운\s*전문가", question)
+    asks_position = re.search(r"순번\s*별", question)
+    asks_all = re.search(r"모두|전부|세부|통계", question)
+    scores = []
+    if asks_all or not (asks_closest or asks_position) or re.search(r"전체|종합|준수율", question):
+        rate = report.get("adherence_rate")
+        raw_rate = not blended_similarity and ("준수" in question or (closest is None and positional is None))
+        label = "순서 준수율은" if raw_rate else "전문가 순서 유사도는"
+        scores.append(f"{label} {rate * 100:.0f}%입니다" if isinstance(rate, (int, float)) else f"{label} 확인할 수 없습니다")
+    if asks_closest or (asks_all and isinstance(closest, (int, float))):
+        scores.append(f"최근접 전문가 수행 유사도 {closest * 100:.0f}%" if isinstance(closest, (int, float)) else "최근접 전문가 수행 유사도 자료 없음")
+    if asks_position or (asks_all and isinstance(positional, (int, float))):
+        scores.append(f"순번별 유사도 {positional * 100:.0f}%" if isinstance(positional, (int, float)) else "순번별 유사도 자료 없음")
+    return scores
+
+
 def answer_order_question(
     found: tuple[str, Mapping[str, Any]] | None, *, prompt: str | None = None, intent: str | None = None,
+    blended_similarity: bool = False,
 ) -> ZoneAnswer:
     """complete 의 순서 리포트(`sequence_report`)로 "순서 잘 지켰어?"에 답한다. 계산 결과를 문장으로 옮길 뿐이다."""
     if found is None:
@@ -795,15 +826,7 @@ def answer_order_question(
                 parts.extend(gate_lines(gated, order=flow, visited=set(first),
                                         footer='세션이 끝났을 때의 도막 기준입니다.')[0])
         if 'score' in requested:
-            value = report.get('adherence_rate')
-            scores = [f"순서 유사도 {float(value) * 100:.0f}%"] if isinstance(value, (int,float)) else ['순서 유사도 자료 없음']
-            all_scores = bool(re.search(r'모두|전부|수치|통계|세부', question))
-            for label, key, named in [('최근접 전문가 수행', 'best_reference_similarity', r'최근접|가장\s*가까운\s*전문가'),
-                                      ('순번별 통계', 'position_similarity', r'순번\s*별')]:
-                metric = report.get(key)
-                if (all_scores or re.search(named, question)) and isinstance(metric, (int,float)):
-                    scores.append(f'{label} {float(metric) * 100:.0f}%')
-            parts.append(', '.join(scores))
+            parts.extend(_order_scores(report, question, blended_similarity=blended_similarity))
         if 'direction' in requested:
             from trainer.demo_api.playback_direction import LABELS
             summary = report.get('direction_summary')
@@ -814,7 +837,7 @@ def answer_order_question(
                 parts.append(f'도포 방향 준수율 {float(direction) * 100:.0f}%')
             elif not label:
                 parts.append('도포 방향 평가 자료 없음')
-        return ZoneAnswer('available', None, '; '.join(parts) + '.', {
+        return ZoneAnswer('available', None, ' · '.join(parts) + '.', {
             'analysis_status':'available', 'reason_code':None, 'scope':'session', 'report_id':report_id,
             'recommended_flow':flow, 'first_visit_flow':first, 'adherence_rate':report.get('adherence_rate'),
             'deviation_count':report.get('deviation_count'), 'direction_adherence_rate':direction,
@@ -846,7 +869,8 @@ def answer_order_question(
                 "recommended_flow": flow, "first_visit_flow": first, "adherence_rate": rate,
                 "deviation_count": report.get("deviation_count"), "direction_adherence_rate": direction,
             })
-        if intent == "order_actual" or any(token in question for token in ("실제", "수행 순서", "칠한 순서")):
+        if intent == "order_actual" or (intent != "order_adherence"
+                and any(token in question for token in ("실제", "수행 순서", "칠한 순서"))):
             focused = f"이번 세션에서 처음 칠한 순서는 {' → '.join(first) or '없음'}입니다."
             return ZoneAnswer("available", None, focused, {
                 "analysis_status": "available", "reason_code": None, "scope": "session", "report_id": report_id,
@@ -857,7 +881,7 @@ def answer_order_question(
             reference_count = int(report.get("reference_session_count") or 0)
             distributions = report.get("position_distribution") or []
             focused = f"권장 작업 순서는 Zone {' → '.join(flow)}입니다."
-            if reference_count:
+            if reference_count and re.search(r"근거|기준|몇\s*(?:회|건)|어떻게\s*정|왜", question):
                 focused += f" 전문가 {reference_count}회 기준입니다."
             return ZoneAnswer("available", None, focused, {
                 "analysis_status": "available", "reason_code": None, "scope": "session", "report_id": report_id,
@@ -869,25 +893,15 @@ def answer_order_question(
                 "position_distribution": distributions,
             })
         if intent == "order_adherence" or any(token in question for token in ("준수", "유사", "몇 퍼센트", "점수")):
-            closest = report.get("best_reference_similarity")
-            positional = report.get("position_similarity")
-            focused = (
-                f"전문가 순서 유사도는 {rate * 100:.0f}%입니다."
-            )
-            if isinstance(closest, (int, float)) and isinstance(positional, (int, float)):
-                focused += (
-                    f" 가장 가까운 전문가 수행과 {float(closest) * 100:.0f}%, "
-                    f"순번별 통계와 {float(positional) * 100:.0f}% 유사합니다."
-                )
-            else:
-                focused = (
-                    f"순서 준수율은 {rate * 100:.0f}%입니다. "
-                    f"구역 방문 {evaluated}회 중 {on_track}회가 권장 순서에 맞았습니다."
-                )
+            scores = _order_scores(report, question, blended_similarity=blended_similarity)
+            focused = " · ".join(scores) + "."
+            if evaluated and re.search(r"방문\s*(?:횟수|건수)|몇\s*(?:회|건)|근거|어떻게\s*계산", question):
+                focused += f" 구역 방문 {evaluated}회 중 {on_track}회가 권장 순서에 맞았습니다."
             return ZoneAnswer("available", None, focused, {
                 "analysis_status": "available", "reason_code": None, "scope": "session", "report_id": report_id,
-                "recommended_flow": flow, "first_visit_flow": first, "adherence_rate": rate,
+                "recommended_flow": flow, "first_visit_flow": first, "adherence_rate": report.get("adherence_rate"),
                 "deviation_count": report.get("deviation_count"), "direction_adherence_rate": direction,
+                "best_reference_similarity": report.get("best_reference_similarity"), "position_similarity": report.get("position_similarity"),
             })
         return ZoneAnswer("available", None, (
             "순서 탭에서는 ‘권장 Zone 순서’, ‘실제 수행 순서’, ‘누락한 Zone’, "

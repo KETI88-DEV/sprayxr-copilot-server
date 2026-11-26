@@ -10,6 +10,11 @@ import re
 from typing import Final
 
 QUICK_LIMIT: Final = 60
+QUERY_FOCUS_INSTRUCTION: Final = (
+    "첫 문장에 요청한 값·판정·순서 또는 핵심 답을 제시하세요. "
+    "묻지 않은 관련 지표, 배경, 예시, 조언을 덧붙이거나 결론을 반복하지 마세요. "
+    "해석에 필요한 단위·조건과 필요한 안전 안내는 포함하세요. 답할 수 없는 구체적인 이유와 확인할 자료를 전하세요. "
+)
 QUERY_SUMMARY_INSTRUCTION: Final = (
     "핵심 요약: 질문에 직접 답하는 내용만 짧고 명확하게 전달하세요. "
     "가능하면 한두 문장으로 답하되, 요청한 원인·방법·절차·목록의 항목은 빠뜨리지 마세요. "

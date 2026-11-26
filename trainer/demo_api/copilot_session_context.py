@@ -243,13 +243,15 @@ def build_query_instruction(
     summarize: bool = False,
 ) -> str:
     """Add server-owned context without changing the external query contract."""
+    from trainer.demo_api.quick_answer import QUERY_FOCUS_INSTRUCTION, QUERY_SUMMARY_INSTRUCTION
+
     context = (client_context or "").strip()
     parts = [
         "[사용자 질문]",
         prompt,
         "[응답 수준]",
         (
-            "상세 분석: 질문에 먼저 직접 답하고, 필요한 근거와 권장 조치를 충분히 설명하세요. "
+            "상세 분석: 질문에 먼저 직접 답하고, 요청한 근거와 권장 조치를 충분히 설명하세요. "
             "문장 수나 글자 수에 맞춰 답변을 요약하지 말고 필요한 문단과 목록을 유지하세요. "
             "확인된 측정값·단위·적용 조건은 유지하고 현재 데이터에 없는 수치나 원인은 추측하지 마세요."
             if response_mode == "detailed"
@@ -260,11 +262,10 @@ def build_query_instruction(
         ),
     ]
     if summarize:
-        from trainer.demo_api.quick_answer import QUERY_SUMMARY_INSTRUCTION
         parts[3] = ("상세 분석 모델: " if response_mode == "detailed" else "빠른 안내 모델: ") + QUERY_SUMMARY_INSTRUCTION
     parts.extend((
         "[질문 해석]",
-        "질문이 요구한 모든 항목·수치·단위·안전 조건과 명시적으로 요청한 전체 목록·Zone 순서는 유지하세요. "
+        QUERY_FOCUS_INSTRUCTION + "질문이 요구한 모든 항목·수치·단위·안전 조건과 명시적으로 요청한 전체 목록·Zone 순서는 유지하세요. "
         + "현재 발언이 요구하는 정의·원인·방법·비교·종류를 구분해 그 요구에 답하세요. "
         "원인 질문에 뜻만 설명하거나 방법 질문에 상태만 반복하지 마세요. "
         "일반적인 설명과 특정 부위·조건의 특수 사례를 구분하고, 일부 사례를 전체 현상의 정의나 유일한 원인으로 일반화하지 마세요. "

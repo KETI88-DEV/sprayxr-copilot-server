@@ -552,28 +552,15 @@ def _viewer_answer(task_type: str, prompt: str, context: Mapping[str, object], i
         flow = flow if isinstance(flow, list) else []
         if not flow:
             return "현재 재생 기록에서는 전문가 Zone 순서 기준을 계산할 수 없습니다."
-        if len(order_request_fields(prompt)) > 1:
-            report = dict(context)
-            report.update(analysis_status="available", first_visit_flow=context.get("selected_flow") or [])
-            return answer_order_question((None, {"sequence_report":report}), prompt=prompt, intent=selected_intent).answer
-        if selected_intent == "order_direction":
+        if selected_intent == "order_direction" and len(order_request_fields(prompt)) <= 1:
             direction = context.get("direction_summary")
             classification = direction.get("classification") if isinstance(direction, Mapping) else None
             return f"전체 기록의 주요 도포 방향은 {DIRECTION_LABELS.get(classification, '비정형')}입니다." if classification and classification != "unavailable" else "현재 기록에서는 주요 도포 방향을 계산할 수 없습니다."
-        if selected_intent == "order_adherence":
-            adherence = _percent_text(context.get("adherence_rate"))
-            if adherence is None:
-                return "현재 기록의 전문가 순서 유사도를 계산할 수 없습니다."
-            answer = f"현재 기록의 전문가 순서 유사도는 {adherence}입니다."
-            closest = _percent_text(context.get("best_reference_similarity"))
-            positional = _percent_text(context.get("position_similarity"))
-            if closest is not None and positional is not None:
-                answer += f" 가장 가까운 전문가 수행과 {closest}, 순번별 통계와 {positional} 유사합니다."
-            return answer
         # No visit-count or on-track-count is inferred from a blended score.
         report = dict(context)
         report.update({"analysis_status": "available", "first_visit_flow": context.get("selected_flow") or []})
-        return answer_order_question((None, {"sequence_report": report}), prompt=prompt, intent=selected_intent).answer
+        return answer_order_question((None, {"sequence_report": report}), prompt=prompt, intent=selected_intent,
+                                     blended_similarity=True).answer
 
     zones = context.get("zones")
     rows = list(zones.values()) if isinstance(zones, Mapping) else zones if isinstance(zones, list) else []
@@ -1238,7 +1225,8 @@ async def _execute_copilot_query(
                                          context_status=live_answer.context_status, unavailable_reason=live_answer.unavailable_reason)
 
     session = None
-    target_asked = not documents_only and session_target_question(query.prompt, require_training_scope=not query.session_id)
+    target_asked = (not documents_only and not is_current_progress_question(query.prompt)
+                    and session_target_question(query.prompt, require_training_scope=not query.session_id))
     session_problem = None
     if query.session_id and not documents_only and (
         target_asked or re.search(r"목표|상한|하한|윗값|아랫값|정상\s*범위", query.prompt)
@@ -1258,7 +1246,7 @@ async def _execute_copilot_query(
         )
         return _success_response(query, request_started, answer=answer, retrieval_used=False, citations=[],
                                  unavailable_reason=reason)
-    if session is not None:
+    if target_asked and session is not None:
         target = session_coating_target_answer(query.prompt, session)
         if target is not None:
             answer, scope = target
@@ -1319,6 +1307,11 @@ async def _execute_copilot_query(
                     and not _POSE_ASKED.search(query.prompt) and not explanatory_request and not documents_only else None)
     if direct_order and session_order:
         query = query.model_copy(update={"task_type": "trajectory_recomm"})
+    reference_basis_requested = bool(
+        re.search(r"근거|선정\s*기준|(?:어떤|무슨)\s*(?:자료|기준)|몇\s*(?:회|건)", query.prompt)
+        and not re.search(r"근거(?:는|를)?\s*(?:말고|빼고|없이|필요\s*없)|(?:순서|경로)\s*만", query.prompt)
+    )
+
     async def reference_answer(position=None):
         scenario, process = await to_thread.run_sync(
             lambda: resolve_reference_target(query, sequences, reports, facts=facts, position=position)
@@ -1326,7 +1319,7 @@ async def _execute_copilot_query(
         reference_query = query.model_copy(update={"scenario_id": scenario})
         answer, scope = await to_thread.run_sync(lambda: reference_order_answer(
             sequence_engine, scenario_id=scenario, process=process,
-            detailed=True, position=position,
+            detailed=reference_basis_requested, position=position,
         ))
         return _success_response(
             reference_query, request_started, answer=answer, retrieval_used=False,

@@ -43,13 +43,15 @@ _NUMBERED_MOVE = re.compile(
 )
 _LIVE_ZONE = re.compile(r"지금|현재|방금|이제|여기|더\s*칠|구역|\bzone\b|존(?!재|중)", re.I)
 _AREA_METRIC = re.compile(
-    r"(?:목표\s*두께\s*(?:도달|이상|충족|넘(?:은|는))|기준\s*두께\s*이상)\s*(?:인\s*)?면적|도달\s*면적"
+    r"(?:목표\s*두께\s*(?:도달|이상|충족|넘(?:은|는))|기준\s*두께\s*이상)\s*(?:(?:인|칠한|도포한)\s*)?면적|도달\s*면적"
 )
 _NUMERIC_AREA_METRIC = re.compile(
-    r"(\d+(?:\.\d+)?)\s*(?:마이크론|[µμ]m)?\s*(?:을\s*)?(?:이상(?:인)?|넘는|넘은)\s*면적", re.I
+    r"(\d+(?:\.\d+)?)\s*(?:마이크론|마이크로(?:미터)?|[µμ]m)?\s*(?:을\s*)?"
+    r"(?:이상(?:인)?|넘는|넘은)\s*(?:(?:칠한|도포한)\s*)?면적", re.I
 )
 _MEASURED_PROGRESS = re.compile(r"진행률|완료율|얼마나\s*(?:더\s*해야|(?:더\s*)?칠)|(?:칠했|칠한).*(?:퍼센트|%)")
 _PROGRESS_HOLD = re.compile(r"왜\s*(?:아직\s*)?(?:붙잡|못\s*넘어|안\s*넘어|이동.*안)")
+_PROGRESS_GATE_DETAIL = re.compile(r"(?:이동|완료)\s*(?:기준|가능|여부)|남(?:았|은)|얼마나\s*더|다음\s*(?:작업\s*)?순서")
 _GATE_QUESTION = re.compile(
     r"반올림.*(?:넘어|이동|가도|가면)"
     r"|(?:다음\s*(?:데|곳|구역|존|zone)|이동).*?(?:된다|돼|가면|가도).*?(?:덜\s*(?:했|칠)|미완료|아직\s*안\s*끝)",
@@ -239,8 +241,7 @@ def _first_zone_answer(query, session, sequence_engine, scope):
     first = str(plan["flow"][0])
     scope.update(scope="reference_only", analysis_status="available", reason_code="no_sequence_yet",
                  scenario_id=scenario, process=process, next_zone_id=first)
-    flow = " → ".join(str(zone) for zone in plan["flow"])
-    return f"아직 분사 기록이 없습니다. {first}구역에서 시작하세요(권장 순서 {flow}).", scope, None
+    return f"첫 권장 구역은 {first}번입니다.", scope, None
 
 
 def _replay_coating_progress(request, sequences, session, coating_engine):
@@ -255,6 +256,12 @@ def _replay_coating_progress(request, sequences, session, coating_engine):
     )
 
 
+def _coating_hold_advice(progress):
+    if progress.recommendation == "stop_current_zone" or (progress.overpaint_percent or 0) > 0:
+        return "과도막이 있습니다. 잠시 분사를 멈추고 도막 분포를 확인한 뒤 부족한 구간만 보완하세요."
+    return "도막 분포를 확인한 뒤 부족한 부분만 보완하세요."
+
+
 def current_next_answer(query, sequences, reports=None, *, sequence_engine=None, coating_engine=None,
                         ask_quality: bool = False, compare_coating_sources: bool = False,
                         ask_measured_thickness: bool = False):
@@ -262,6 +269,7 @@ def current_next_answer(query, sequences, reports=None, *, sequence_engine=None,
     scope = {"scope": "current_progress", "analysis_status": "not_available",
              "current_zone_id": None, "next_zone_id": None, "can_compare": False}
     ask_progress = is_current_progress_question(query.prompt)
+    ask_completion = is_current_completion_question(query.prompt)
     if (query.context or "").startswith("motion_viewer_"):
         return _progress_unavailable(scope, "playback_live_progress_unavailable")
     if not query.session_id:
@@ -276,7 +284,7 @@ def current_next_answer(query, sequences, reports=None, *, sequence_engine=None,
         return _progress_unavailable(scope, "current_scenario_mismatch")
     latest = sequences.latest_sequence_id(query.session_id)
     if not latest:
-        if ask_progress or ask_quality or compare_coating_sources or ask_measured_thickness or is_current_completion_question(query.prompt):
+        if ask_progress or ask_quality or compare_coating_sources or ask_measured_thickness or ask_completion:
             return _progress_unavailable(scope, "no_sequence_for_session")
         return _first_zone_answer(query, session, sequence_engine, scope)
     body = sequences.load_body(session_key=query.session_id, sequence_id=latest)
@@ -294,13 +302,12 @@ def current_next_answer(query, sequences, reports=None, *, sequence_engine=None,
     scope["current_zone_id"] = request.zone_id
     if sequence_engine is None:
         return _progress_unavailable(scope, "sequence_engine_unavailable")
-    from trainer.demo_api.sequence_analysis import gate_sequence_decision
-    decision = sequence_engine.evaluate(request, sequences)
     if ask_measured_thickness and request.process_type != "spray":
         return _progress_unavailable(scope, "coating_measurement_unavailable")
     if request.process_type == "blasting":
         if ask_progress or ask_quality or compare_coating_sources:
             return _progress_unavailable(scope, "progress_metric_unavailable")
+        decision = sequence_engine.evaluate(request, sequences)
         scope["analysis_status"] = decision.feedback.analysis_status
         if decision.feedback.analysis_status != "available":
             return _progress_unavailable(scope, "sequence_reference_unavailable")
@@ -322,12 +329,10 @@ def current_next_answer(query, sequences, reports=None, *, sequence_engine=None,
         if "목표" in query.prompt and progress.target_thickness_um is not None:
             answer += f" 이 세션의 목표 두께는 {progress.target_thickness_um:g}µm입니다."
         return answer, scope, progress.model_dump(mode="json")
-    decision = gate_sequence_decision(request, decision, progress)
     if (progress.zone_id == request.zone_id and progress.status == "complete"
             and progress.recommendation == "move_next_zone"):
         scope["next_zone_id"] = progress.next_zone_id
-    # The telemetry guide remains short; Query returns the complete gate explanation.
-    guide = decision.detail_guide or decision.text_guide or _PROGRESS_UNKNOWN
+    guide = _PROGRESS_UNKNOWN
     if compare_coating_sources and progress.zone_id == request.zone_id:
         supplied = request.sequence_result.avg_thickness_um
         measured = (progress.assessment or {}).get("thickness_um")
@@ -340,8 +345,7 @@ def current_next_answer(query, sequences, reports=None, *, sequence_engine=None,
         eligibility = "충족했습니다" if progress.status == "complete" else "아직 충족하지 못했습니다"
         grade = coating_assessment.GRADE_WORDS.get((progress.assessment or {}).get("grade"))
         quality = f"현재 도막 등급은 {grade}입니다." if grade else "현재 도막 등급을 확인할 수 없습니다."
-        guide = (f"{request.zone_id}번 구역은 이동 기준 {criterion:g}%를 {eligibility}. "
-                 f"도막 품질은 별도로 평가합니다. {quality}")
+        guide = f"{quality} {request.zone_id}번 구역은 이동 기준 {criterion:g}%를 {eligibility}."
         named = _NAMED_ZONE.search(query.prompt)
         asked = (named[1] or named[2]) if named else None
         if asked and asked != str(request.zone_id):
@@ -353,49 +357,73 @@ def current_next_answer(query, sequences, reports=None, *, sequence_engine=None,
         criterion = coating_assessment.GATE_COMPLETION_PERCENT
         amount = (f"{criterion:g}% 미만" if percentage < criterion and round(percentage, 2) >= criterion
                   else f"{percentage:.2f}%")
-        guide = f"현재 {request.zone_id}구역 진행률은 {amount}입니다."
-        if "반올림" in query.prompt:
-            guide = f"화면에는 반올림된 값이 보일 수 있습니다. 판정에 쓰는 실제 {request.zone_id}구역 진행률은 {amount}입니다."
         area_threshold = _NUMERIC_AREA_METRIC.search(query.prompt)
-        if (_AREA_METRIC.search(query.prompt) or area_threshold) and progress.coverage_percent is not None:
-            if area_threshold and float(area_threshold[1]) != progress.target_thickness_um:
-                guide += f" {area_threshold[1]}µm를 기준으로 한 면적 비율은 확인할 수 없습니다."
-            if progress.target_thickness_um is not None:
-                guide += f" 목표 {progress.target_thickness_um:g}µm 이상인 면적은 {progress.coverage_percent:.2f}%입니다."
-        if scope["next_zone_id"]:
-            guide += f" 이동 기준 {criterion:g}%를 충족해 {scope['next_zone_id']}구역을 안내합니다."
-        elif progress.status == "complete":
-            guide += f" 이동 기준 {criterion:g}%를 충족했습니다."
-        else:
-            remaining = criterion - percentage
-            if round(remaining, 2) > 0:
-                guide += f" 이동 기준 {criterion:g}%까지 {remaining:.2f}%p 남았습니다."
+        area_asked = _AREA_METRIC.search(query.prompt) or area_threshold
+        hold_reason_asked = _PROGRESS_HOLD.search(query.prompt)
+        gate_correction_asked = _GATE_QUESTION.search(query.prompt)
+        gate_asked = (hold_reason_asked or gate_correction_asked or _PROGRESS_GATE_DETAIL.search(query.prompt)
+                      or is_current_next_question(query.prompt) or ask_completion)
+        parts = []
+        if not area_asked or gate_asked or re.search(r"진행률|완료율", query.prompt):
+            if "반올림" in query.prompt:
+                parts.append(f"판정에는 반올림 전 {request.zone_id}구역 진행률 {amount}을 사용합니다.")
             else:
-                guide += f" 반올림 전 진행률이 이동 기준인 {criterion:g}%에 아직 미치지 못했습니다."
-            if _GATE_QUESTION.search(query.prompt):
-                if progress.recommendation == "stop_current_zone" or (progress.overpaint_percent or 0) > 0:
-                    guide += " 잠시 분사를 멈추고 도막 분포를 확인한 뒤 부족한 구간만 보완하세요."
+                parts.append(f"현재 {request.zone_id}구역 진행률은 {amount}입니다.")
+        if area_asked and progress.coverage_percent is not None:
+            if area_threshold and float(area_threshold[1]) != progress.target_thickness_um:
+                parts.append(f"{area_threshold[1]}µm를 기준으로 한 면적 비율은 확인할 수 없습니다.")
+            elif progress.target_thickness_um is not None:
+                parts.append(f"{request.zone_id}구역에서 목표 {progress.target_thickness_um:g}µm 이상인 면적은 {progress.coverage_percent:.2f}%입니다.")
+        if gate_asked:
+            next_zone = scope["next_zone_id"]
+            if next_zone:
+                parts.append(f"이동 기준 {criterion:g}%를 충족해 {next_zone}구역으로 이동할 수 있습니다.")
+                if (progress.assessment or {}).get("grade") == "above":
+                    parts.append("현재 구역은 과도막이므로 더 칠하지 마세요.")
+            elif progress.status == "complete":
+                parts.append(f"이동 기준 {criterion:g}%를 충족했습니다.")
+            else:
+                remaining = criterion - percentage
+                if round(remaining, 2) > 0:
+                    parts.append(f"이동 기준 {criterion:g}%까지 {remaining:.2f}%p 남았습니다.")
                 else:
-                    guide += f" {request.zone_id}구역의 부족한 부분만 보완하세요."
-        if _PROGRESS_HOLD.search(query.prompt) and "평균" in query.prompt and progress.assessment:
+                    parts.append(f"반올림 전 진행률이 이동 기준 {criterion:g}%에 아직 미치지 못했습니다.")
+                if gate_correction_asked or progress.recommendation == "stop_current_zone":
+                    parts.append(_coating_hold_advice(progress))
+        if hold_reason_asked and "평균" in query.prompt and progress.assessment:
             row = progress.assessment
             grade = coating_assessment.GRADE_WORDS.get(row.get("grade"))
             mean = row.get("thickness_um")
             if grade and mean is not None and progress.target_thickness_um is not None:
                 shown = coating_assessment.mean_text(mean, progress.target_thickness_um)
-                guide += f" 칠한 곳의 평균 두께는 {shown}µm로 {grade}입니다."
+                parts.append(f"칠한 곳의 평균 두께는 {shown}µm로 {grade}입니다.")
+        guide = " ".join(parts) or guide
         if asked and asked != str(request.zone_id):
             guide = f"실시간 진행률은 지금 분사 중인 구역만 확인할 수 있습니다. {guide}"
-    elif is_current_completion_question(query.prompt) and progress.zone_id == request.zone_id:
+    elif progress.zone_id == request.zone_id:
         destination = _NUMBERED_MOVE.search(query.prompt)
         named = _NAMED_ZONE.search(query.prompt)
         asked = (named[1] or named[2]) if named and destination is None else None
-        head = (f"지금 구역은 {request.zone_id}구역입니다. 훈련 중에는 지금 구역의 완료만 판정합니다. "
-                if asked and asked != str(request.zone_id) else "")
-        if destination and scope["next_zone_id"] and destination[1] != scope["next_zone_id"]:
-            head = f"지금 안내되는 다음 구역은 {scope['next_zone_id']}구역입니다. "
-        verdict = "완료 기준을 넘었습니다." if progress.status == "complete" else "아직 완료되지 않았습니다."
-        guide = f"{head}{request.zone_id}구역은 {verdict} {guide}"
+        next_zone = scope["next_zone_id"]
+        asks_move = (not ask_completion or is_current_next_question(query.prompt) or destination
+                     or _MOVE_PERMISSION.search(query.prompt))
+        parts = []
+        if ask_completion and asked and asked != str(request.zone_id):
+            parts.append(f"{asked}구역의 완료 여부는 최근 분사 기록으로 확인할 수 없습니다.")
+        different_destination = destination and next_zone and destination[1] != next_zone
+        if different_destination:
+            parts.append(f"지금 안내되는 다음 구역은 {next_zone}구역입니다.")
+        if progress.status == "complete":
+            if ask_completion or not next_zone:
+                parts.append(f"{request.zone_id}구역은 완료 기준을 넘었습니다.")
+            if (progress.assessment or {}).get("grade") == "above":
+                parts.append(f"{request.zone_id}구역은 과도막이므로 더 칠하지 마세요.")
+            if asks_move and not different_destination:
+                parts.append(f"{next_zone}구역으로 이동하세요." if next_zone else "안내할 다음 구역은 없습니다.")
+        else:
+            parts.append(f"{request.zone_id}구역은 아직 완료되지 않았습니다.")
+            parts.append(_coating_hold_advice(progress))
+        guide = " ".join(parts) or guide
     return guide, scope, progress.model_dump(mode="json")
 
 
@@ -510,16 +538,17 @@ def reference_order_answer(engine, *, scenario_id: str | None, process: str | No
                 result = f"Zone {anchor} 다음: Zone {flow[flow.index(anchor) + 1]}"
             lines.append(f"{process_label} {result}")
         return f"{label} 등록 기준 — {'; '.join(lines)}.", context
-    lines = []
-    for plan in plans:
-        process_label = _PROCESS_LABELS[plan["process"]]
-        lines.append(f"{process_label}: Zone " + " → ".join(str(zone) for zone in plan["flow"]))
-    if not detailed:  # 빠른 안내 한 줄(60자): 공정이 둘이면 화살표 목록은 공통 출구(quick_answer)가 앞부분과 개수로 줄인다
-        return label + " 등록 기준 순서: " + ", ".join(line.replace(": Zone", " Zone") for line in lines) + ".", context
-    answer = label + " 현재 등록된 기준 순서 — " + "; ".join(lines) + "."
+    flows = " / ".join(
+        f"{_PROCESS_LABELS[plan['process']]}: Zone " + " → ".join(map(str, plan["flow"]))
+        for plan in plans
+    )
+    answer = f"{label} · {flows}"
     if detailed:
-        counts = ", ".join(f"{_PROCESS_LABELS[plan['process']]} {plan['reference_session_count']}회" for plan in plans)
-        answer += f" 전문가({counts}) 기준이며 실제 수행·완료 판정은 아닙니다."
+        counts = ", ".join(
+            f"{_PROCESS_LABELS[plan['process']]} 전문가 작업 기록 {plan['reference_session_count']}회"
+            for plan in plans
+        )
+        answer += f"\n선정 근거는 {counts}입니다."
     return answer, context
 
 
