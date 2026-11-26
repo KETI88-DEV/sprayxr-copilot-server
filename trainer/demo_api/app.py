@@ -168,8 +168,18 @@ def _openapi_type_label(node: dict[str, Any], components: dict[str, Any]) -> str
 
 
 def _clean_openapi_description(value: object, fallback_name: str) -> str:
-    description = " ".join(str(value or "").split())
+    description = str(value or "").strip()
     return description or f"{fallback_name} 입력값입니다."
+
+
+def _openapi_input_field_lines(
+    name: str, type_label: str, description: str, marker: str, *, indent: str = "",
+) -> list[str]:
+    first, *continuation = description.splitlines()
+    return [
+        f"{indent}- `{name}({type_label})` : {first.strip()} **[{marker}]**",
+        *(f"{indent}  > {line}".rstrip() for line in continuation),
+    ]
 
 
 _OPENAPI_VALUE_GUIDANCE: dict[str, dict[str, str]] = {
@@ -327,10 +337,9 @@ def _openapi_nested_parameter_lines(
             constraints.append("허용값 " + ", ".join(f"`{value}`" for value in values))
         if constraints:
             description += " (" + "; ".join(constraints) + ")"
-        lines.append(
-            f"    - `{child_path}({_openapi_type_label(child, components)})` : "
-            f"{description} **[{marker}]**"
-        )
+        lines.extend(_openapi_input_field_lines(
+            child_path, _openapi_type_label(child, components), description, marker, indent="    ",
+        ))
         lines.extend(
             _openapi_nested_parameter_lines(
                 child_path, child, components, depth=depth + 1
@@ -356,9 +365,9 @@ def _operation_input_lines(
         required = bool(parameter.get("required"))
         marker = "필수" if required else "선택"
         description = _clean_openapi_description(parameter.get("description"), name)
-        lines.append(
-            f"- `{name}({_openapi_type_label(value_schema, components)})` : {description} **[{marker}]**"
-        )
+        lines.extend(_openapi_input_field_lines(
+            name, _openapi_type_label(value_schema, components), description, marker,
+        ))
         lines.extend(_openapi_parameter_details(name, value_schema, components))
         lines.extend(_openapi_nested_parameter_lines(name, value_schema, components))
         seen.add(name)
@@ -382,17 +391,17 @@ def _operation_input_lines(
                             continue
                         marker = "필수" if name in required_names else "선택"
                         description = _clean_openapi_description(prop.get("description"), name)
-                        lines.append(
-                            f"- `{name}({_openapi_type_label(prop, components)})` : {description} **[{marker}]**"
-                        )
+                        lines.extend(_openapi_input_field_lines(
+                            name, _openapi_type_label(prop, components), description, marker,
+                        ))
                         lines.extend(_openapi_parameter_details(name, prop, components))
                         lines.extend(_openapi_nested_parameter_lines(name, prop, components))
                 elif body_schema:
                     marker = "필수" if request_body.get("required") else "선택"
                     description = _clean_openapi_description(body_schema.get("description"), "body")
-                    lines.append(
-                        f"- `body({_openapi_type_label(body_schema, components)})` : {description} **[{marker}]**"
-                    )
+                    lines.extend(_openapi_input_field_lines(
+                        "body", _openapi_type_label(body_schema, components), description, marker,
+                    ))
     return lines
 
 

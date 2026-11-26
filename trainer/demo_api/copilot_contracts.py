@@ -18,12 +18,10 @@ TaskType = Literal["trajectory_recomm", "pose_recomm", "error_analysis", "knowle
 ResponseMode = Literal["quick", "detailed"]
 ContextStatus = Literal["available", "not_available"]
 SUMMARY_DESCRIPTION = (
-    "답변 요약 여부입니다. 생략하면 true이며 VR에서 바로 확인할 핵심 답변을 짧게 제공합니다. "
-    "false이면 필요한 설명·문단·목록을 유지한 전체 본문을 제공합니다. "
-    "response_mode의 모델 선택과 독립적으로 적용합니다. "
-    "요약하더라도 안전 경고·한계·확인된 수치와 단위·Zone 순서는 생략하거나 중간에서 자르지 않습니다. "
-    "질문에 맞춰 이미 구성된 분석·기록의 사실/조치 안내와 고정 안전 답변은 필수 내용이므로 그대로 제공합니다. "
-    "명시적인 문구·문장 번역 요청은 요약하지 않고 전체를 번역합니다."
+    "`response_mode`와 별도로 답변 분량을 지정합니다. 생략하거나 `true`를 보내면 VR용 핵심 요약을, "
+    "`false`를 보내면 필요한 설명·문단·목록을 포함한 전체 답변을 반환합니다.\n\n"
+    "요약에도 안전 경고, 판정 한계, 확인된 수치·단위·Zone 순서와 필요한 조치가 포함됩니다. "
+    "문구나 문장 자체를 번역해 달라는 요청에는 전체 번역을 제공합니다."
 )
 
 
@@ -81,40 +79,40 @@ class CopilotQueryRequest(StrictModel):
     )]
     task_type: Annotated[TaskType, Field(
         description=(
-            "질문 처리 유형입니다. trajectory_recomm은 경로, pose_recomm은 자세, "
-            "error_analysis는 오류 분석, knowledge_search는 일반 지식 검색에 사용합니다. 도막의 실제 상태 질문은 서버가 확인할 수 있는 도막 자료로 답하며, 원인·방법 질문은 지식 설명으로 처리합니다."
+            "경로, 자세, 이상 분석, 일반 지식 중 필요한 작업 유형을 지정합니다.\n\n"
+            "현재 도막 상태는 확인할 수 있는 훈련 자료를 바탕으로 답합니다. "
+            "도막이 생기는 원인이나 작업 방법을 묻는 질문에는 관련 지식을 설명합니다."
         ),
         examples=["knowledge_search"],
     )]
     response_mode: Annotated[ResponseMode, Field(
         description=(
-            "답변 모델 선택입니다. 생략하면 `quick`(빠른 안내)으로 처리합니다.\n\n"
+            "답변을 생성할 모델을 선택합니다. 기본값은 빠른 안내(`quick`)입니다.\n\n"
             "- `quick`: **빠른 안내 · Qwen3-8B 모델**\n"
-            "- `detailed`: **상세 분석 · Qwen3.6-27B 모델**\n"
-            "답변 분량은 별도 `summarize`로 선택합니다. 기본 true는 핵심 요약, false는 전체 본문입니다.\n"
-            "두 모드 모두 생성은 최대 1,024토큰으로 제한하며 인용·안전·수치 검사를 유지합니다.\n\n"
-            "서버에서 확인한 자세·순서 평가 결과는 그대로 사용합니다. "
-            "답변 번역은 분석 모델과 별도로 선택합니다. 일반 지원 언어는 Qwen3-8B, "
-            "네팔어·미얀마어·싱할라어·크메르어는 영어 중간 번역 후 Qwen3.6-27B 번역 경로를 사용합니다. "
-            "언어와 답변 분량에 따라 번역 시간이 추가됩니다."
+            "- `detailed`: **상세 분석 · Qwen3.6-27B 모델**\n\n"
+            "답변 분량은 `summarize`로 지정합니다. 두 모드 모두 최대 1,024토큰을 생성하며 "
+            "인용·안전·수치를 검사합니다. 서버가 계산한 자세·순서 평가값은 그대로 사용합니다.\n\n"
+            "번역 모델은 별도로 선택됩니다. 일반 지원 언어는 Qwen3-8B를 사용합니다. "
+            "네팔어·미얀마어·싱할라어·크메르어는 영어를 거쳐 Qwen3.6-27B로 번역합니다. "
+            "번역 시간은 언어와 답변 분량에 따라 달라집니다."
         ),
         examples=["quick"],
     )] = "quick"
     summarize: Annotated[bool, Field(description=SUMMARY_DESCRIPTION, examples=[True, False])] = True
     language: Annotated[QueryLanguage, Field(
-        description="질문 언어 코드입니다. 생략 시 ko(한국어)입니다. " + LANGUAGE_DESCRIPTION,
+        description="질문 언어를 지정합니다. 기본값은 한국어(`ko`)입니다.\n\n지원 언어 — " + LANGUAGE_DESCRIPTION,
         examples=["ko", "vi"],
     )] = "ko"
     response_language: Annotated[QueryLanguage | None, Field(
-        description=("답변 언어 코드입니다. 생략하거나 null이면 language와 같은 언어로 답합니다. "
-                     "질문과 다른 언어를 지정할 수도 있습니다. " + LANGUAGE_DESCRIPTION),
+        description=("답변을 받을 언어입니다. 생략하거나 `null`을 보내면 질문 언어(`language`)로 답합니다.\n\n"
+                     "지원 언어 — " + LANGUAGE_DESCRIPTION),
         examples=["vi", "en"],
     )] = None
     use_rag: Annotated[RagUsage, Field(
         description=(
-            "지식 검색(RAG) 허용 여부입니다. Y는 관련 문서 검색을 허용하고 N은 문서 검색을 사용하지 않습니다. "
-            "검색을 허용하거나 시도한 것과 실제 답변에 문서 근거를 사용한 것은 다르며, 실제 사용 여부는 retrieval_used로 확인합니다. "
-            "Y/N만 허용하며 소문자 y/n도 입력할 수 있습니다. 생략하면 Y로 처리합니다."
+            "관련 문서 검색(RAG)을 허용하려면 `Y`를, 사용하지 않으려면 `N`을 보냅니다. "
+            "기본값은 `Y`이며 소문자도 허용합니다.\n\n"
+            "답변에 실제로 문서 근거를 사용했는지는 `retrieval_used`에서 확인할 수 있습니다."
         ),
         examples=["Y"],
     )] = "Y"

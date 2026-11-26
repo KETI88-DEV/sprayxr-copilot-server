@@ -57,6 +57,19 @@ def test_docs_search_metadata_cannot_close_its_script_or_inject_links():
     assert '<script>bad()</script>' not in document
 
 
+def test_input_overview_preserves_authored_paragraphs_and_option_lists(monkeypatch, tmp_path):
+    monkeypatch.setenv('DEMO_LIVE_MODE', 'off')
+    monkeypatch.setenv('SEQUENCE_DB_PATH', str(tmp_path / 'docs.db'))
+    schema = TestClient(create_app()).get('/openapi.json').json()
+    query = schema['paths']['/api/v1/copilot/query']['post']['description']
+    fields = query.split('### 입력 파라미터', 1)[1].split('### 출력 파라미터', 1)[0]
+    mode = fields.split('- `response_mode(string)`', 1)[1].split('- `summarize(boolean)`', 1)[0]
+    assert '**[선택]**\n  >\n  > - `quick`' in mode
+    assert '\n  > - `detailed`' in mode
+    assert '\n  >\n  > 답변 분량' in mode
+    assert '\n    - 기본값: `quick`' in mode
+
+
 @pytest.mark.parametrize('prefix', ['', '/copilot'])
 def test_docs_serves_swagger_ui_without_an_external_connection(monkeypatch, tmp_path, prefix):
     monkeypatch.setenv('DEMO_LIVE_MODE', 'off')

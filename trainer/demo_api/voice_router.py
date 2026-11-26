@@ -332,11 +332,31 @@ def create_voice_router(
         response_model=VoiceCopilotResponse,
         tags=["3. AI Co-Pilot 질의"],
         summary="3-2. VR 음성 Co-Pilot 질의",
-        description="HMD에서 녹음한 WAV를 STT로 변환한 뒤 기존 Query와 동일한 경로로 답변합니다. WAV PCM16·mono·15초 이하, 6MiB까지 허용합니다. 입력 샘플레이트는 8~192kHz이며 44.1kHz·48kHz 등은 서버에서 16kHz로 자동 변환합니다. 이미 16kHz인 음성은 그대로 사용합니다. 샘플레이트는 WAV 헤더에서 읽으므로 별도 입력값이 필요 없습니다. stt_latency_ms에는 변환·음성 인식 시간이 포함됩니다. language는 음성 인식 언어이며, response_language를 생략하면 같은 언어로 답합니다. 답변은 텍스트이고 TTS 음성 생성은 포함하지 않습니다. 413은 파일 크기, 422는 WAV 형식·샘플레이트·길이·인식된 발화 유무를 확인하세요. 503의 Speech recognition은 변환·STT 단계, Model/Query translation은 인식 이후 답변 단계의 실패입니다. 선택 헤더 X-Copilot-Conversation으로 텍스트 Query와 같은 대화 이력을 이어갈 수 있습니다.",
+        description=(
+            "HMD에서 녹음한 음성을 텍스트로 인식한 뒤 텍스트 질의와 같은 방식으로 답변합니다.\n\n"
+            "**녹음 파일과 음성 인식**\n\n"
+            "PCM16·모노(mono) WAV를 최대 15초, 6MiB까지 보낼 수 있습니다. "
+            "서버는 WAV 헤더에서 샘플레이트를 읽고 8~192kHz 입력을 16kHz로 맞춥니다. "
+            "44.1kHz·48kHz 등은 자동 변환하며, 16kHz 음성은 그대로 사용합니다. "
+            "`stt_latency_ms`는 변환과 음성 인식에 걸린 시간입니다.\n\n"
+            "**답변 언어와 대화 이력**\n\n"
+            "`language`로 음성 인식 언어를 지정합니다. `response_language`를 생략하면 같은 언어로 답합니다. "
+            "답변은 텍스트로 반환합니다. 선택 요청 헤더 `X-Copilot-Conversation`을 사용하면 "
+            "텍스트 질의와 같은 대화 이력을 이어갈 수 있습니다.\n\n"
+            "**오류가 발생하면 확인할 항목**\n\n"
+            "- HTTP 413은 파일 크기를 확인하세요.\n"
+            "- HTTP 422는 WAV 형식, 샘플레이트, 길이, 인식할 수 있는 발화가 담겼는지 확인하세요.\n"
+            "- HTTP 503에서 메시지가 `Speech recognition`이면 변환·음성 인식 단계에서, "
+            "`Model` 또는 `Query translation`이면 인식 이후 답변 단계에서 문제가 발생한 것입니다."
+        ),
     )
     async def voice_query(
         request: Request,
-        audio: Annotated[UploadFile, File(description="WAV PCM16·mono·최대 15초·6MiB. 8~192kHz 입력을 서버에서 16kHz로 자동 변환합니다(예: 44.1kHz, 48kHz). 샘플레이트는 WAV 헤더에서 읽습니다.")],
+        audio: Annotated[UploadFile, File(description=(
+            "PCM16·모노(mono) WAV 파일입니다. 최대 15초, 6MiB까지 보낼 수 있습니다.\n\n"
+            "서버는 WAV 헤더에서 샘플레이트를 읽습니다. 8~192kHz 범위의 입력을 16kHz로 맞춥니다"
+            "(예: 44.1kHz, 48kHz)."
+        ))],
         user_id: Annotated[str, Form(min_length=1, description="음성 질문을 요청한 훈련자의 고유 식별자입니다.", examples=["1234"])],
         language: Annotated[VoiceLanguage, Form(description="업로드한 음성의 언어 코드(STT)입니다. " + LANGUAGE_DESCRIPTION, examples=["ko"])],
         session_id: Annotated[str | None, Form(description="진행 중인 세션 식별자(CSV 파일명에서 확장자 제외)", examples=["3_11000346_1"])] = None,
