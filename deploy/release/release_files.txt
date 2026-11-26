@@ -173,6 +173,7 @@ trainer/demo_api/simulator.py
 trainer/demo_api/simulator_stub.py
 trainer/demo_api/speech_to_text.py
 trainer/demo_api/static/answer_feedback_admin.js
+trainer/demo_api/static/api_docs.css
 trainer/demo_api/static/api_docs.js
 trainer/demo_api/static/copilot_feedback_admin.js
 trainer/demo_api/static/copilot_feedback.css

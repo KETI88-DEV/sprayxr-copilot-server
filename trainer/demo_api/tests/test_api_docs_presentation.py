@@ -35,7 +35,11 @@ def test_docs_search_indexes_only_public_operations_and_keeps_detailed_rules(mon
     assert all(entry['href'].startswith('#/') for entry in entries)
     assert 'id="api-docs-search"' in document
     assert 'aria-label="API 분류 바로가기"' in document
+    assert 'aria-label="API 연동 흐름"' in document
+    assert 'VR 훈련' in document and 'Replay 리포트' in document
+    assert 'plugins: [window.copilotApiDocsPlugin]' in document
     assert client.get('/docs/assets/api_docs.js').status_code == 200
+    assert client.get('/docs/assets/api_docs.css').status_code == 200
     description = schema['info']['description']
     assert '<details>' in description and '</details>' in description
     assert '누적 히트맵' in description and '접근 제어' in description
@@ -63,6 +67,10 @@ def test_docs_serves_swagger_ui_without_an_external_connection(monkeypatch, tmp_
 
     resources = set(re.findall(r'<(?:script|link)\b[^>]*\b(?:src|href)="([^"]+)"', page.text))
     assert resources and all(url.startswith('/') and not url.startswith('//') for url in resources)
+    for name in ('api_docs.js', 'api_docs.css'):
+        url = f'{prefix}/docs/assets/{name}'
+        assert url in resources
+        assert client.get(url).status_code == 200
     for name, content_types, marker in _SWAGGER_ASSETS:
         url = f'{prefix}/docs/assets/{name}'
         assert url in resources
@@ -84,3 +92,4 @@ def test_docs_swagger_assets_are_packaged_in_the_release():
     release_list = Path(__file__).resolve().parents[3] / 'deploy/release/release_files.txt'
     packaged = set(release_list.read_text(encoding='utf-8').splitlines())
     assert {f'trainer/demo_api/static/swagger-ui/{name}' for name, _, _ in _SWAGGER_ASSETS} <= packaged
+    assert {'trainer/demo_api/static/api_docs.js', 'trainer/demo_api/static/api_docs.css'} <= packaged
